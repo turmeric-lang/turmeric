@@ -11,7 +11,8 @@
 > CSS selectors and node paths): planned 2026-10-11, not started. Open
 > questions A-1 to A-4 and B's cursor-walk question decided 2026-10-16,
 > with A6 (escaping for script, style and srcdoc holes) planned for later.
-> Follow-up D (hiccup: markup as typed data) planned 2026-10-16, not started.
+> Follow-up D (hiccup: markup as typed data) planned 2026-10-16, not started;
+> its open questions D-1 to D-3 decided the same day.
 > See "Follow-ups" at the end.
 
 ## Outcome (2026-10-10)
@@ -288,7 +289,7 @@ its own `turmeric-spices` PR, branched from `main`. PRs are never stacked
 | **B** -- editable tree | In-place mutation of the arena tree, validated so that edits cannot inject structure; streaming SAX rewrite | nothing |
 | **C** -- CSS selectors and node paths | A selector engine in dom-core's C layer, plus `node-css-path` | nothing (independent of B) |
 | **A** -- markup literals | `#html{...}` / `#xml{...}` with `${...}` holes, escaped by construction, rendered to a string or a tree | A1-A2 (string mode) need nothing; A3-A4 (tree mode, in-place re-render) need B1-B2 merged |
-| **D** -- hiccup | Markup as a typed Turmeric value (`Html`), written `(hiccup [:li.item {:href u} name])`, safe by construction, rendered to a string or a tree; and `node->hiccup` back from a parsed DOM | D1 (string mode) needs nothing but the hole classes it shares with A2; D2 (tree mode) needs B1-B2 merged |
+| **D** -- hiccup | Markup as a typed Turmeric value (`Html`), written `(hiccup [:li.item #map{:href u} name])`, safe by construction, rendered to a string or a tree; and `node->hiccup` back from a parsed DOM | D1 (string mode) needs nothing but the hole classes it shares with A2; D2 (tree mode) needs B1-B2 merged |
 
 Suggested order: B, then A and D, with C whenever. B is the substrate the
 others benefit from. A's and D's string modes can start in parallel with B,
@@ -943,8 +944,8 @@ string or a tree with A's escaping guarantees:
 (import dom/hiccup :refer [hiccup hiccup->string])
 
 (defn row->item [r : Row] : Html
-  (hiccup [:li.item {:data-done (.done r)}
-            [:a {:href (.href r)} (.name r)]]))
+  (hiccup [:li.item #map{:data-done (.done r)}
+            [:a #map{:href (.href r)} (.name r)]]))
 
 (println (hiccup->string (hiccup [:ul (map row->item rows)])))
 ```
@@ -961,15 +962,14 @@ Probed with `read-string` / `syntax->string` on the v0.65.2 release:
 - `[...]` is a vector form and `:div` is a keyword, so `[:div ...]` reaches
   a `defmacro*` intact. `:div.card#main` is a single keyword, so the
   CSS-style shorthand can be split at expansion time.
-- `{...}` is curly-infix in every dialect. `{:class "a"}` arrives as the
-  list `(:class "a")`, and `{:class "a" :id "b"}` as
-  `($nfx$ :class "a" :id "b")`. Both keep the pairs in order. In attribute
-  position neither can be a real call (a list headed by a keyword; `$nfx$`),
-  so the macro can read them as a map. `#map{...}` arrives as a map form and
-  works as-is. See D-3.
+- `#map{...}` arrives as a map form, keys and value expressions in order,
+  so it is the attribute syntax (D-3).
+- `{...}` is curly-infix in every dialect, so Clojure's bare `{...}` does
+  not survive: `{:class "a"}` arrives as the list `(:class "a")`, and
+  `{:class "a" :id "b"}` as `($nfx$ :class "a" :id "b")`.
 - A colon splits a keyword: `:svg:rect` reads as `:svg :rect`, and
   `:xlink:href` likewise. Names containing a colon are written as strings:
-  `["svg:rect" ...]`, `{"xlink:href" u}`. HTML rarely needs them;
+  `["svg:rect" ...]`, `#map{"xlink:href" u}`. HTML rarely needs them;
   `[:svg [:rect ...]]` and SVG 2's plain `href` cover most cases.
 - A vector inside an ordinary expression is not hiccup to the outer macro.
   In `[:ul (map (fn [r] [:li r]) rows)]` the inner `[:li r]` is a plain
@@ -1024,17 +1024,30 @@ literal to constructor calls:
   literal tree pays nothing at runtime for validation.
 - `:tag#id.c1.c2` shorthand, merged with an explicit `:class` (joined by a
   space). A second `id` is a compile error.
-- The attribute map is `{...}` or `#map{...}`, with keyword or string keys.
-  A value is a literal or a hole typed through A's classes: `ToAttr`, or
-  `ToUrlAttr` for the URL-bearing names. A dynamic value under an `on*`,
-  `style` or `srcdoc` key is a compile error (A-4). Attributes built at
-  runtime splice in under the reserved key `:attrs*`
-  (`{:class "a" :attrs* extra}`, with `extra : (Cons Attr)`). `*` is not an
-  XML name character, so the key can never collide with a real attribute.
+- The attribute map is a `#map{...}` literal in second position, with
+  keyword or string keys. The macro consumes the form, so its values need
+  not share a type the way a real `Map[K V]`'s do. A value is a literal or a
+  hole typed through A's classes: `ToAttr`, or `ToUrlAttr` for the
+  URL-bearing names. A dynamic value under an `on*`, `style` or `srcdoc` key
+  is a compile error (A-4). Attributes built at runtime splice in under the
+  reserved key `:attrs*` (`#map{:class "a" :attrs* extra}`, with
+  `extra : (Cons Attr)`). `*` is not an XML name character, so the key can
+  never collide with a real attribute.
+- A bare `{...}` in attribute position is a compile error that points at
+  `#map{...}`. The macro recognizes it by curly-infix's output shape (a
+  list headed by a keyword, or `$nfx$`); if that shape ever changes, only
+  the message gets worse, since nothing is accepted on the strength of it.
 - A child that is a string or number literal becomes `HText`. A nested
   vector headed by a keyword or a string recurses. Anything else is a hole
   typed through `ToChild`, with the same instances as A plus
-  `ToChild Html` and `ToChild (Cons Html)`.
+  `ToChild Html` and `ToChild (Cons Html)`. A vector inside such an
+  expression is not rewritten: markup there is written `(hiccup ...)`
+  again (D-1).
+- Nesting the HTML parser would undo is a compile error where the literal
+  shows it (D-2): block content directly in `p`, `a` inside `a`, `form`
+  inside `form`, interactive content inside `a` or `button`, and anything
+  but the table-structure elements directly in `table`, `thead`, `tbody`,
+  `tfoot` or `tr`.
 - A void element (`br`, `img`, `input`, ...) with children is a compile
   error.
 - `[:script "..."]` and `[:style "..."]` take one string literal, which is
@@ -1064,11 +1077,13 @@ and raw-text bodies, so the conversion uses the trusted constructors.
 
 | Phase | Deliverable | Gate |
 |---|---|---|
-| D1 | `dom/hiccup`: `Html`, `Tag`, `AttrName`, `Attr`, `RawBody` and their checking constructors; the `hiccup` macro (keyword and string names, `#id.class` shorthand, `{}` / `#map{}` attributes, `:attrs*`, holes through `ToChild` / `ToAttr` / `ToUrlAttr`); `hiccup->string` | A compile-error table: an invalid literal name, a computed tag, children under a void element, a dynamic value under `on*` / `style` / `srcdoc`, a dynamic `<script>` / `<style>` body, a second `id`. The checking constructors refuse bad names, the code-bearing names and the raw-text tags. A2's escaping and URL tables, applied to hiccup. Once A2 exists, `hiccup` and `#html{}` render byte-identical output for a shared corpus |
+| D1 | `dom/hiccup`: `Html`, `Tag`, `AttrName`, `Attr`, `RawBody` and their checking constructors; the `hiccup` macro (keyword and string names, `#id.class` shorthand, `#map{}` attributes, `:attrs*`, holes through `ToChild` / `ToAttr` / `ToUrlAttr`); `hiccup->string` | A compile-error table: an invalid literal name, a computed tag, children under a void element, a dynamic value under `on*` / `style` / `srcdoc`, a dynamic `<script>` / `<style>` body, a second `id`, a bare `{...}` attribute map, and each D-2 nesting case. The checking constructors refuse bad names, the code-bearing names and the raw-text tags. A2's escaping and URL tables, applied to hiccup. Once A2 exists, `hiccup` and `#html{}` render byte-identical output for a shared corpus |
 | D2 | `hiccup->dom` (needs B1-B2), `hiccup->xml-string`, `ToChild Html` and `HFragment`, `RenderHtml` for `html-response` | For parser-stable trees (D-2), `html-parse-fragment` with context `template` of `hiccup->string h` is `dom-equal?` to `hiccup->dom h`; the same through expat for the XML flavour |
 | D3 | `node->hiccup` | `hiccup->dom (node->hiccup n)` is `dom-equal?` to `n` for every element of both corpora; the guide shows a transform (add `rel="noopener"` to every external `<a>`) |
 
 #### Open questions
+
+All three were decided 2026-10-16.
 
 - **D-1. Hiccup inside an ordinary expression.** In
   `[:ul (map (fn [r] [:li r]) rows)]` the inner vector is out of the
@@ -1077,18 +1092,19 @@ and raw-text bodies, so the conversion uses the trusted constructors.
   rewrite every keyword-headed vector anywhere inside its argument. A
   binding vector starts with a symbol, so `[r rows]` is left alone, and the
   rewrite is what makes hiccup feel like hiccup. Its cost is that a real
-  vector of keywords inside a hiccup body is misread. Recommendation:
-  explicit in D1; revisit with real templates before D2.
+  vector of keywords inside a hiccup body is misread. *Decided: explicit
+  `(hiccup ...)` for now.* Revisit the rewrite with real templates before
+  D2.
 - **D-2. Trees the HTML parser will not reproduce.** `[:p [:div "x"]]`,
   `[:a [:a "y"]]`, and text directly inside `[:table]` are valid `Html`
   values, but a browser re-nests their serialized form, so string mode and
   `hiccup->dom` disagree. This is not a security issue, since the structure
-  is the author's, but it is a correctness surprise. Recommendation: compile
-  errors for the static cases the macro can see (block content in `p`,
-  nested `a` / `form` / interactive content, non-table content directly in
-  `table` / `tbody` / `tr`), documentation for the rest, and D2's gate
-  stated over parser-stable trees.
+  is the author's, but it is a correctness surprise. *Decided: a compile
+  error wherever the literal shows it* (the list under "The `hiccup`
+  macro"). Trees assembled at runtime are documented, not checked, and D2's
+  gate is stated over parser-stable trees.
 - **D-3. Bare `{...}` attribute maps.** Accept them by reading curly-infix's
-  output (`(:k v)` and `($nfx$ ...)`), or require `#map{...}`?
-  Recommendation: accept both, with a test that pins curly-infix's output
-  shape, so a reader change breaks a test rather than every hiccup literal.
+  output (`(:k v)` and `($nfx$ ...)`), or require `#map{...}`? *Decided:
+  `#map{...}` only.* It is the documented map literal, and the attribute
+  syntax then does not depend on how curly-infix rewrites braces. A bare
+  `{...}` is a compile error pointing at `#map{...}`.
