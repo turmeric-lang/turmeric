@@ -60,6 +60,43 @@ specialization cache) is keyed by the bare private name rather than by module,
 so emitting one module's `__error` call finds the other's signature -- here a
 zero-parameter function called with one argument, or the reverse.
 
+## A second symptom: a private call resolved to the other module
+
+Found the same day writing xml-html-parsers-plan B4. turmeric-spices'
+`xml/sax` and `html/sax` each define private `__attrs-acc`, `__event`,
+`__deliver`, `__deliver-chunk`, `__run` and `__push` (and private inline-C
+helpers `__free`, `__feed`, `__next`, ...). A program importing one public
+function from each does not compile:
+
+```sh
+# turmeric-spices at 8764e43 (branch claude/dom-editable-tree)
+cd spices/html
+cat > _pn.tur <<'TUR'
+(defmodule pn (export)
+(import xml/sax  :refer [sax-parse-string])
+(import html/sax :refer [html-sax-parse-string])
+(defn main [] : int 0))
+TUR
+tur emit-c _pn.tur
+# html/src/html/sax.tur:379:4: error: symbol '__push' is private to module 'xml/sax'
+# ... and the same for __attrs-acc, __event, __deliver, __deliver-chunk, __run
+```
+
+Every call inside `html/sax` to one of those six helpers -- its own,
+defined a few lines up -- is resolved to `xml/sax`'s and then rejected as
+private. Swap the two imports and the errors move to `xml/sax`, naming
+`html/sax`. The colliding inline-C helpers resolve correctly; the six that
+fail are the Turmeric-bodied ones. Two toy reductions (private helpers over
+a type both modules import from a third; private helpers that call a
+handler closure, as `__deliver` does) compile and run correctly, so the
+trigger is still unknown -- the same state as the crash above, and very
+likely the same per-name table.
+
+Worked around in the spices by keeping the two SAX modules out of one
+program (nothing needs both). Any new spice module with a private helper
+whose name a sibling module also uses should take a module prefix until
+this is fixed.
+
 ## Workaround
 
 Give module-private helpers a module-specific prefix (`dom/edit` now uses

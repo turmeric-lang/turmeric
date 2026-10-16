@@ -116,7 +116,8 @@ hits under ASan.
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [emit-c-segfault-on-colliding-private-helper](emit-c-segfault-on-colliding-private-helper.md) | medium | A program importing from two modules that each define a private `__error` (zero-argument in one, one-argument in the other) crashes `emit-c` in `emit_value_dispatch`. No diagnostic; renaming one private helper avoids it. Reproduces from turmeric-spices `f54e51b` with one `sed`. |
+| [emit-c-segfault-on-colliding-private-helper](emit-c-segfault-on-colliding-private-helper.md) | medium | A program importing from two modules that each define a private `__error` (zero-argument in one, one-argument in the other) crashes `emit-c` in `emit_value_dispatch`. No diagnostic; renaming one private helper avoids it. Reproduces from turmeric-spices `f54e51b` with one `sed`. A second symptom: importing both spices' `xml/sax` and `html/sax` resolves one module's calls to its own private helpers (`__push`, `__run`, ...) to the other's, then rejects them as private. |
+| [heap-adt-word-slot-missing-cast](heap-adt-word-slot-missing-cast.md) | medium | A `:heap` ADT moves between the `int64_t` word and the typed `tur_adt_T *` uncast in two places -- a parameter returned through `do`/`let`/`if`, and a direct call to a let-bound closure the compiler can see -- which clang rejects (`-Wint-conversion`). Two short single-module repros. |
 
 ## Found prototyping hiccup vector rewriting (filed 2026-10-16)
 
