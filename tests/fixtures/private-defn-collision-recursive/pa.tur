@@ -1,0 +1,15 @@
+;; pa -- private helpers whose names pb reuses.
+(defmodule pa (export pa-count pa-even pa-err shared)
+  ;; self-recursive
+  (defn __go [n : int acc : int] : int
+    (if (= n 0) acc (__go (- n 1) (+ acc 1))))
+  ;; mutually recursive
+  (defn __ev? [n : int] : bool (if (= n 0) true (__od? (- n 1))))
+  (defn __od? [n : int] : bool (if (= n 0) false (__ev? (- n 1))))
+  ;; zero-argument here, one-argument in pb
+  (defn __err [] : int 7)
+  (defn pa-count [] : int (__go 3 0))
+  (defn pa-even [n : int] : bool (__ev? n))
+  (defn pa-err [] : int (__err))
+  ;; exported here, private in pb
+  (defn shared [] : int 1))

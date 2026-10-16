@@ -8828,7 +8828,13 @@ Expr *elab_defn(Elab *e, const Form *call) {
     if (!e->in_stdlib_load && !e->bare_fat_spec_active)
         tur_warn_if_shadows_special_form(name_f->as.sym, name_f->span, "defn");
 
-    Binding *existing = scope_lookup(e->scope, name_f->as.sym);
+    /* private-name-collision-across-modules: another module's private defn
+     * of the same name is neither a forward declaration of this one nor a
+     * redefinition -- treating it as the former rewrote ITS signature in
+     * place (the HRT5 early update below), and that module's calls then met
+     * a function of the wrong arity in the emitter.  Shadow it instead. */
+    Binding *existing = scope_lookup_visible(e, e->scope, name_f->as.sym);
+    if (existing && binding_private_elsewhere(e, existing)) existing = NULL;
     /* bare-fat-result-monomorphization: a specialized clone re-elaborates the
      * same `(defn ...)` Form under a mangled name, so the original (lazy)
      * binding is still in scope under the source name.  Do not treat it as a

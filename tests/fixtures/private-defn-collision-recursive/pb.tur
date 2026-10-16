@@ -1,0 +1,12 @@
+;; pb -- the same private names as pa, with different bodies and arities.
+(defmodule pb (export pb-count pb-even pb-err pb-shared)
+  (defn __go [n : int acc : int] : int
+    (if (= n 0) acc (__go (- n 1) (+ acc 10))))
+  (defn __ev? [n : int] : bool (if (= n 0) false (__od? (- n 1))))
+  (defn __od? [n : int] : bool (if (= n 0) true (__ev? (- n 1))))
+  (defn __err [x : int] : int (* x 2))
+  (defn shared [] : int 2)
+  (defn pb-count [] : int (__go 3 0))
+  (defn pb-even [n : int] : bool (__ev? n))
+  (defn pb-err [] : int (__err 21))
+  (defn pb-shared [] : int (shared)))

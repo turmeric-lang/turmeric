@@ -748,11 +748,12 @@ B4 (`dom/writer`, `xml/transform`, `html/transform`):
 - **Streaming:** `sax-writer-to-file` writes in 64 KiB chunks, and
   `sax-transform-file` streams XML file to file. tur-html has no file SAX
   entry point; `sax-transform-handler` plugs into its push parser instead.
-- Two compiler bugs found on the way:
-  [heap-adt-word-slot-missing-cast](../../reported/heap-adt-word-slot-missing-cast.md),
+- Two compiler bugs found on the way, both fixed the same day:
+  [heap-adt-word-slot-missing-cast](../../archive/heap-adt-word-slot-missing-cast.md),
   and a second symptom of
-  [emit-c-segfault-on-colliding-private-helper](../../reported/emit-c-segfault-on-colliding-private-helper.md)
-  (a program cannot import both spices' SAX modules).
+  [emit-c-segfault-on-colliding-private-helper](../../archive/emit-c-segfault-on-colliding-private-helper.md)
+  (a program could not import both spices' SAX modules). The spices keep
+  their workarounds until a `tur` with the fixes is what their CI builds.
 
 #### What the tree already gives us
 

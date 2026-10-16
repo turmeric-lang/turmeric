@@ -112,13 +112,6 @@ hits under ASan.
 | ~~[load-in-defmodule-claims-file-for-one-module](../archive/load-in-defmodule-claims-file-for-one-module.md)~~ | medium (compile failure) | **RESOLVED 2026-10-16** (archived): a `(load "stdlib/...")` in a `defmodule` body is now spliced at global scope ahead of the module, as if written above it, so two modules that both load `stdlib/string.tur` share one `String` and a load above an `import` no longer ends the header. A user file loaded in a module still splices into it (members, exports); an `import` after one now says why it is out of place. Pinned by `load-stdlib-in-two-modules`, `load-stdlib-above-import-in-module`, `errors/load-user-file-above-import-in-module` |
 | ~~[cps-while-back-edge-grows-the-stack](../archive/cps-while-back-edge-grows-the-stack.md)~~ | medium (stack overflow below `-O2`) | **RESOLVED 2026-10-16** (archived): a CPS-lowered `while` whose body calls a CPS function re-entered its loop helper from a lifted join every iteration, flat only by cc's sibling calls. `emit_continue` now guards the back-edge like the cps->cps tail call -- once the stack is deep it parks the next iteration's arguments in a heap env and bounces a resume-frame thunk to the driver (`__dk_tail_deep` / `__dk_bounce`). Pinned by `cps-while-back-edge-unoptimized` (built at `-O0`, 10^6 iterations) |
 
-## Found implementing the editable DOM, xml-html-parsers-plan B (filed 2026-10-16)
-
-| Report | Severity | One line |
-| --- | --- | --- |
-| [emit-c-segfault-on-colliding-private-helper](emit-c-segfault-on-colliding-private-helper.md) | medium | A program importing from two modules that each define a private `__error` (zero-argument in one, one-argument in the other) crashes `emit-c` in `emit_value_dispatch`. No diagnostic; renaming one private helper avoids it. Reproduces from turmeric-spices `f54e51b` with one `sed`. A second symptom: importing both spices' `xml/sax` and `html/sax` resolves one module's calls to its own private helpers (`__push`, `__run`, ...) to the other's, then rejects them as private. |
-| [heap-adt-word-slot-missing-cast](heap-adt-word-slot-missing-cast.md) | medium | A `:heap` ADT moves between the `int64_t` word and the typed `tur_adt_T *` uncast in two places -- a parameter returned through `do`/`let`/`if`, and a direct call to a let-bound closure the compiler can see -- which clang rejects (`-Wint-conversion`). Two short single-module repros. |
-
 ## Found prototyping hiccup vector rewriting (filed 2026-10-16)
 
 | Report | Severity | One line |

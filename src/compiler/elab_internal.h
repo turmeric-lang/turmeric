@@ -1659,6 +1659,10 @@ bool scope_borrow_conflicts(const Scope *s, Binding *binding, BorrowKind kind);
 bool scope_add_borrow(Scope *s, Binding *binding, BorrowKind kind, Span span);
 void scope_add(Scope *s, Binding *b);
 Binding *scope_lookup(Scope *s, const Symbol *name);
+/* private-name-collision-across-modules: scope_lookup, skipping a binding
+ * private to another module (see elab_core.c). */
+bool binding_private_elsewhere(const Elab *e, const Binding *b);
+Binding *scope_lookup_visible(const Elab *e, Scope *s, const Symbol *name);
 uint32_t scope_idx_newest(const Scope *s, const Symbol *name);
 Binding **collect_free_vars(const Expr *e, Binding **params, uint8_t n_params,
     Binding **self_exclude, uint32_t n_self_exclude, uint32_t *n_out);
