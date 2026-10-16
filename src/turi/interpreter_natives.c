@@ -4000,6 +4000,20 @@ static TuriValue native_r7rs_uc_run(TuriEnv *env, TuriValue *a, uint32_t n, void
     (void)env; (void)ud;
     return turi_int(r7rs_uc_run(r7rs_arg_int(a, n, 0), r7rs_arg_int(a, n, 1), r7rs_arg_int(a, n, 2)));
 }
+/* markdown-library-plan U2: the HTML named character references -- the SAME
+ * generated C stdlib/markdown/entities.tur compiles in
+ * (tools/gen-html-entities.py writes both), registered below over its two
+ * inline-C wrappers.  The name is read only from a cstr value, never from a
+ * word that could be a forged pointer. */
+#include "html_entities.inc"
+static TuriValue native_markdown_entity_find(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    return turi_int(tur_html_entity_find(r7rs_arg_cstr(a, n, 0)));
+}
+static TuriValue native_markdown_entity_cp(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    return turi_int(tur_html_entity_cp(r7rs_arg_int(a, n, 0), r7rs_arg_int(a, n, 1)));
+}
 /* R3: the R7RS prelude's string and character primitives. */
 static void r7rs_put_utf8(char *out, int *n, uint32_t cp) {
     if (cp < 0x80) out[(*n)++] = (char)cp;
@@ -5237,6 +5251,8 @@ void wk_register_stdlib_natives(TuriEnv *env) {
     turi_env_register_native(env, "r7rs-uc-prop__",           native_r7rs_uc_prop,            NULL);
     turi_env_register_native(env, "r7rs-uc-string__",         native_r7rs_uc_string,          NULL);
     turi_env_register_native(env, "r7rs-uc-run__",            native_r7rs_uc_run,             NULL);
+    turi_env_register_native(env, "markdown/-entity-find__", native_markdown_entity_find, NULL);
+    turi_env_register_native(env, "markdown/-entity-cp__",   native_markdown_entity_cp,   NULL);
     turi_env_register_native(env, "int->unit-float",   native_int_to_unit_float, NULL);
     turi_env_register_native(env, "tur-sqrt",          native_tur_sqrt,        NULL);
     turi_env_register_native(env, "int->float",        native_int_to_float,    NULL);

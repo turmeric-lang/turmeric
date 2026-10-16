@@ -1388,6 +1388,14 @@ add_test(
   COMMAND bash tests/check-r7rs-unicode-sync.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# markdown-library-plan U2: the HTML entity table is generated twice --
+# stdlib/markdown/entities.tur's inline C and the interpreter's natives -- and
+# the two copies must be identical.
+add_test(
+  NAME tur_html_entities_sync
+  COMMAND bash tests/check-html-entities-sync.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
 # T0/T1: the shared C of Scheme numbers -- src/compiler/r7rs_bignum.inc and
 # r7rs_numsyntax.inc (the source reader and the interpreter) -- and their
 # copies in stdlib/r7rs/bignum.tur and numsyntax.tur (the compiled back end)
