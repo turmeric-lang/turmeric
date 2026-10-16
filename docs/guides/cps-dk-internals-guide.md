@@ -238,7 +238,8 @@ The memory usage guide measures the cost of
 
 Non-atomic operands are named `__tN` through a 32-slot pending list. It is
 folded leftmost-outermost, so the IR's evaluation order is the source's
-left-to-right order.
+left-to-right order. Past 32 slots `atomize` drops bindings silently
+([report](../reported/cps-ir-pending-list-overflow-drops-bindings.md)).
 
 **`CT_LETRAW` is the most important design choice in the translator.** Any
 subexpression that passes `safe_to_delegate`, a closed list of control-free
@@ -266,7 +267,10 @@ Calls go down a decision ladder in `cps_tail`/`cps_bind` (`EX_CALL`):
 `while` loops with an interior control operator (`build_loop`) lower to a
 helper that takes the loop's carried `^mut` state as parameters. A variable
 that is not set exactly once per iteration, unconditionally, becomes a
-by-reference cell instead. Nested performing loops are still refused. The
+by-reference cell instead. Nested performing loops are still refused. A
+`return` inside such a loop is currently mistranslated as a `break` when code
+follows the loop
+([report](../reported/cps-loop-return-acts-as-break.md)). The
 user-facing limits are listed in the effects guide's
 [Performs inside loops and conditionals](effects-system-guide.md#performs-inside-loops-and-conditionals).
 `TUR_TRACE_CORE=1` prints `[LOOP-CARRIED]` and `[LOOP-REJECT]` lines for this
@@ -640,7 +644,8 @@ Read the `struct DK` comments in that text, or in its committed copy
 - `2` and up: one per effect, assigned by `emit_cps_ir.c:effect_tag` and
   memoized per interned effect symbol. The table holds `CPS_MAX_EFFECTS` (128)
   entries. Past that, `effect_tag` returns 2 for every further effect, which
-  collides with the first one; nothing diagnoses it.
+  collides with the first one; nothing diagnoses it
+  ([report](../reported/effect-tags-collide-past-128-effects.md)).
 
 ### Operations
 
@@ -699,7 +704,9 @@ Read the `struct DK` comments in that text, or in its committed copy
      a helper) or a cloneable wrapper.
 
   `cont?` reads `!k->consumed`, set at every resume site
-  (`__dk_cont_live_word`).
+  (`__dk_cont_live_word`). That covers handler continuations only; `cont?` on
+  a `call/cc` continuation does not link
+  ([report](../reported/cont-pred-on-escape-cont-fails-to-link.md)).
 
 ### Why there is a driver
 
@@ -909,8 +916,10 @@ These are process-wide:
 
 - the atomic `g_dk_hgroup_ctr`;
 - `tur_dk_pinned`;
-- the E2 registry `__tur_cps_reg[256]`. Past 256 entries, a registration is
-  dropped and a later lookup aborts;
+- the E2 registry `__tur_cps_reg[256]`. Registrations past 256 are dropped,
+  and calls through those callbacks fall back to a fresh root and abort with
+  "unhandled effect"
+  ([report](../reported/cps-callback-registry-overflows-past-256.md));
 - `__sk_registry`;
 - `g_dk_case_reopen_hnode`. It is a **plain static** that `dk_perform` sets
   immediately before each case call and a re-opening case reads at entry, so
