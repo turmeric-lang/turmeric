@@ -34,7 +34,7 @@ all four legs green:
 | Leg | c-tests | Bootstraps |
 | --- | --- | --- |
 | ubuntu x86-64 | all pass | 6 of 6 pass |
-| ubuntu arm64 (first run ever) | all pass (`Tests 1094, Success tests 2188`) | 5 of 6 pass; the lazy-bb one (`-p4 -eb`) differs at byte 652165 |
+| ubuntu arm64 (first run ever) | all pass except in lazy-bb mode: `c2mir-bb-gen-test` reads `Tests 1098, Success tests 2185`, with four `long double` tests failing (below) | 5 of 6 pass; the lazy-bb one (`-p4 -eb`) differs at byte 652165 |
 | macOS 15 arm64 (`macos-latest`) | one fails per pass | 0 of 6; all differ at `char 8, line 1` |
 
 On macos-14 the six differed about 880 KB in; on macOS 15 they differ at
@@ -59,11 +59,34 @@ that output under the JIT to compile the same sources again (stage 2), and
 the two `.bmir` files must match. On macOS arm64 they do not. So c2mir built
 by c2mir behaves differently from c2mir built by clang -- a miscompile or
 nondeterminism that no test points at. It is Apple-specific: Linux arm64
-passes the five lazy-func bootstraps and every c-test. Unverified lead: Apple
-arm64 passes variadic arguments differently from AAPCS64, and the other
-failure, `va-struct-args.c`, is a variadic test. Linux arm64's single
-lazy-bb mismatch is a separate signal. It is one run of a parallel (`-p4`)
-test, so it may be nondeterministic; re-run it before reading anything into it.
+passes the five lazy-func bootstraps and every c-test outside lazy-bb mode.
+Unverified lead: Apple arm64 passes variadic arguments differently from
+AAPCS64, and the other failure, `va-struct-args.c`, is a variadic test.
+
+Linux arm64's failures are all in lazy-bb mode (`-eb`), and are a separate
+signal. Four c-tests fail there, every one of them a `long double` test, in
+the job log of run 38852158065:
+- `gcc/20020413-1.c`, `gcc/20030914-1.c` and `gcc/regstack-1.c` abort
+  (`FAIL (code = 134)`);
+- `new/issue186-2.c` prints `FAIL!` (NaN comparisons on float, double and
+  long double).
+
+On aarch64 Linux `long double` is a 128-bit quad, so lazy BB generation's
+handling of it is the first suspect. The lazy-bb bootstrap mismatch may be
+the same cause, since c2mir's own sources use `long double`. It is also one
+run of a parallel (`-p4`) test, so it may be nondeterministic; re-run it
+before reading anything into it.
+
+That run includes mir#10 (`fcdaec59`, which inlines small struct copies).
+That change is not what fails the c-tests:
+- three of the four contain no struct or union, so the code mir#10 changed
+  never runs for them, and their MIR is the same with or without it;
+- the fourth, `20030914-1.c`, does copy structs, but it fails the same way as
+  the other three.
+
+There is no pre-mir#10 arm64 run to compare the bootstrap with, so the
+bootstrap is not settled. A `workflow_dispatch` run of `test.yml` on a branch
+at `456c2e2b` (before mir#10) would settle it.
 
 ## Fix directions
 
