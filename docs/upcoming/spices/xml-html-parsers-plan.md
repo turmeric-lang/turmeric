@@ -9,8 +9,8 @@
 >
 > Follow-ups A-C (markup literals with templated values, an editable tree,
 > CSS selectors and node paths): planned 2026-10-11, not started. Open
-> questions A-1 to A-3 and B's cursor-walk question decided 2026-10-16;
-> A-4 (holes in script/style/srcdoc attributes) raised the same day, open.
+> questions A-1 to A-4 and B's cursor-walk question decided 2026-10-16,
+> with A6 (escaping for script, style and srcdoc holes) planned for later.
 > See "Follow-ups" at the end.
 
 ## Outcome (2026-10-10)
@@ -377,6 +377,11 @@ without reimplementing them in a macro.
      text, inside a doctype: a **compile error** naming the hole. These are the
      places where a spliced value could change the document's structure, and
      no escaping makes them safe.
+   - *the value of an attribute that holds code or markup* -- any `on*`
+     event handler, `style`, `srcdoc`: also a **compile error** (A-4). HTML
+     escaping protects only the attribute layer; the browser decodes the
+     value and hands it to a JavaScript, CSS or HTML parser. A6 adds the
+     escaping that makes some of these positions safe.
 
    It emits the static markup with markers, plus one expression per hole,
    wrapped by context:
@@ -470,21 +475,117 @@ hostile site passes, as it should.
 sections are a raw context, so no holes are allowed inside them. Namespace
 prefixes must be declared inside the literal. An undeclared prefix is an expat
 error at first use, and the context tokenizer can catch the simple cases at
-compile time.
+compile time. The `on*` and `style` rule (A-4) applies to `#xml{}` too,
+because browsers run them in SVG and XHTML served as XML.
+
+#### Later: holes in script, style and srcdoc (A6)
+
+Until A6, a hole in an `on*`, `style` or `srcdoc` attribute, or in a
+`<script>` / `<style>` body, is a compile error (A-4 and the raw-text rule).
+A6 makes the useful positions in them legal by escaping in **layers**: the
+inner language's escaper first, then the HTML attribute escaper for an
+attribute, or nothing more for an element body (the inner escaper already
+keeps `</script` and `</style` out). This is Go `html/template`'s approach.
+Ours differs in two ways: the macro picks the context at compile time, and
+the value's type picks the escaper through a class, not reflection.
+
+Ground rules for every A6 phase:
+
+- **Tokenize what the browser sees.** The macro runs the inner tokenizer
+  over the *entity-decoded* static text, because that is what the
+  JavaScript or CSS parser receives. `onclick="f(&quot;${x}&quot;)"` puts
+  the hole inside a double-quoted JavaScript string.
+- **Quoted attribute values only.** `onclick=${x}` and `style=${x}` stay
+  compile errors.
+- **When in doubt, reject.** A position the inner tokenizer cannot classify
+  is a compile error, never a guess. The standard case is JavaScript's `/`:
+  whether it starts a regex literal or is a division depends on the token
+  before it, and a hole after an ambiguous `/` is rejected.
+- **First use re-checks.** `tpl-site` confirms the attribute name and inner
+  context the macro recorded, as it already does for slot kinds.
+- **An explicit opt-out per language**, like `raw-html` and `trusted-url`:
+  `TrustedJs` and `TrustedCss`, inserted after only the outer layer's
+  escaping. Greppable, and documented as unsafe for untrusted input.
+
+**JavaScript (A6a)** -- in an `on*` attribute, or a `<script>` body whose
+`type` is absent, a JavaScript MIME type, or `module`:
+
+- *Inside a single- or double-quoted string literal:* a `cstr`, `String`
+  or `int` is JS-string-escaped. `\`, both quotes, `` ` ``, `<`, `>`, `&`,
+  `=`, every C0 control and the line terminators U+2028 / U+2029 become
+  `\uXXXX`. Escaping `<` is what keeps `</script` and `<!--` out of an
+  element body.
+- *In expression position* (at the start, or after `(`, `,`, `=`, `:`,
+  `[`, `?`, `!`, `{`, `;`, `return` or an operator): the value becomes a
+  JavaScript *literal* through a `ToJs` class. `int` gives a decimal,
+  `bool` gives `true`/`false`, `cstr`/`String` gives a double-quoted string
+  escaped as above, `(Option T)` gives `null` or the value, and `TrustedJs`
+  is the only instance that writes code. The literal is padded with a space
+  on each side, so `a-${x}` with `x = -1` cannot form `--`.
+- *Template literals (backticks), comments, regex literals:* compile error.
+- `<script type="application/json">` and `application/ld+json` bodies are
+  JSON. A hole in value position goes through `ToJs` too: its literals are
+  valid JSON, and the same `<` escaping applies. Any other `type` is a
+  compile error.
+
+**CSS (A6b)** -- in a `style` attribute or a `<style>` body:
+
+- *Property value position* (after the `:` of a declaration): a value
+  through a `ToCss` class. `int` gives a decimal. `cstr`/`String` passes
+  only if every character is an ASCII letter or digit, or one of
+  `# . - _ % ,` and space; anything else (parens, quotes, `\`, `/`, `;`,
+  `{`, `}`, `<`, so `expression(`, `url(` and `/*` too) renders the
+  invalid value `tur-unsafe`, which the browser drops. Typed values such as
+  `CssColor` or `CssLength` are a natural later addition and would pass
+  unfiltered.
+- *Inside a quoted CSS string:* every character other than an ASCII letter
+  or digit becomes a `\HEX ` escape (`<` gives `\3c `).
+- *Inside `url(...)`*, quoted or not: A-1's scheme allowlist, then
+  percent-encode parens, quotes, whitespace and `\`.
+- *Property names, selectors, at-rules, comments:* compile error.
+
+**srcdoc (A6c)** -- the value is a whole HTML document:
+
+- Only a whole-value hole, `srcdoc="${x}"`. A hole inside static markup
+  (`srcdoc="<p>${x}</p>"`) stays a compile error; supporting it means
+  running the context tokenizer recursively over the decoded value, which
+  can come later if anyone wants it.
+- A `Fragment` (a nested `#html{}`) is rendered with `html->string`, then
+  attribute-escaped: the iframe gets exactly the fragment's markup.
+- A `cstr`/`String` is HTML-text-escaped, then attribute-escaped. It
+  becomes text in the iframe, never markup.
+- `RawHtml` is attribute-escaped only: its markup is live in the iframe, by
+  request, as `raw-html`'s docstring says.
+
+Testing, for all three:
+
+- An escaping table per context against a hostile corpus: both quotes,
+  backtick, `\`, `</script>`, `</style>`, `<!--`, `*/`, U+2028, `-->`,
+  `expression(`, `javascript:`.
+- End to end in a real browser, where a headless Chromium is available
+  (turmeric's `web/` already runs one under Playwright): render each corpus
+  value into each context, load the page, and assert that a sentinel
+  global is never set, and that a JavaScript string hole reads back as
+  exactly the value that went in.
+- Where the contexts line up, compare with Go `html/template`'s output for
+  the same template and value, as a second oracle.
 
 #### Phases
 
 | Phase | Deliverable | Gate |
 |---|---|---|
-| A1 | `dom/markup`: `reader-macros/define` for `html` and `xml`, the `html*` / `xml*` `defmacro*` expanders and their context tokenizer | Each forbidden hole context is a compile error with a message naming it; fixtures for `\}` and `\\` |
+| A1 | `dom/markup`: `reader-macros/define` for `html` and `xml`, the `html*` / `xml*` `defmacro*` expanders and their context tokenizer | Each forbidden hole context is a compile error with a message naming it, including holes in `on*` (any case), `style` and `srcdoc` values (A-4); fixtures for `\}` and `\\` |
 | A2 | `Template` cache, marker recovery, `ToChild` / `ToAttr` / `ToUrlAttr` and their instances, `trusted-url`, `html->string` / `xml->string` | Escaping table: `<`, `&`, `"` and `</script>` in every allowed context. A hostile value never changes the parsed structure: `parse(render(t, v))` has the same shape as `parse(render(t, "x"))` for every corpus string `v`. URL table: `javascript:`, `JavaScript:`, `java\tscript:`, a leading-space/control-char scheme, `data:`, `vbscript:` all render `about:invalid#tur-unsafe`; relative, `http(s):`, `mailto:`, `tel:` pass. Template-context probes: literals opening with `<tr>`, `<td>`, `<col>`, `<option>`, `<caption>` keep that structure (the vendored html5lib slice has only one `template`-context fragment case, so this needs its own fixtures) |
 | A3 | `html->dom` / `Fragment`, nested templates, lists, `raw-html` (needs B1/B2) | Tree mode and string mode agree: `dom-serialize(html->dom t v) == html->string t v` |
 | A4 | `TemplateInstance` and `tpl-update!` | Updating with the same values touches nothing (pinned by a counter); updating one hole rewrites one node |
 | A5 (optional, compiler) | Real spans for `${...}` holes (`read-string-at`, or a built-in `#html{` reader) | A type error in a hole points at the user's line and column |
+| A6a (later) | JavaScript contexts: `on*` attributes and `<script>` bodies (including JSON bodies), the decoding inner tokenizer, `ToJs`, `TrustedJs` | Escaping table and browser check from "Later: holes in script, style and srcdoc"; a hole in a template literal, comment, regex or after an ambiguous `/` is a compile error |
+| A6b (later) | CSS contexts: `style` attributes and `<style>` bodies, `ToCss`, `TrustedCss` | Escaping table and browser check; `expression(`, `url(javascript:` and `;}` in a value hole all render `tur-unsafe` |
+| A6c (later) | Whole-value `srcdoc` holes for `Fragment`, `cstr`/`String` and `RawHtml` | A `cstr` holding `<script>` appears as text in the iframe; a partial `srcdoc` hole is still a compile error |
 
 #### Open questions
 
-A-1 to A-3 were decided 2026-10-16; A-4 is open.
+All four were decided 2026-10-16.
 
 - **A-1.** Should URL-bearing attributes (`href`, `src`, `action`,
   `formaction`, `xlink:href`) require a `Url` type rather than accepting a
@@ -525,20 +626,21 @@ A-1 to A-3 were decided 2026-10-16; A-4 is open.
   verbatim; the only "escape" in `spices/template/src` is the `<%%`
   literal). Fix that in its own small `turmeric-spices` PR -- `<%= %>`
   HTML-escapes by default, `<%== %>` writes raw.
-- **A-4 (open, raised 2026-10-16).** Holes in attributes whose *value* is
-  itself code or markup. The context tokenizer allows a hole in any
-  attribute value, but entity-escaping only protects the HTML layer; the
-  browser decodes the value and then hands it to another parser:
+- **A-4 (raised 2026-10-16).** Holes in attributes whose *value* is itself
+  code or markup. The context tokenizer as first sketched allowed a hole in
+  any attribute value, but entity-escaping only protects the HTML layer;
+  the browser decodes the value and then hands it to another parser:
   - `on*` event handlers: `onclick="go('${x}')"` with
     `x = "'); alert(1); ('"` escapes `'` to `&#39;`, which decodes back to
     `'` before the JavaScript runs.
   - `style`: the value is CSS (`url(...)`, `expression(...)` in old IE).
   - `srcdoc`: the value is an HTML document, so `&lt;script&gt;` decodes to
     a live `<script>` in the iframe.
-  Recommendation: a compile error for a hole in any `on*`, `style` or
-  `srcdoc` attribute in the first cut, alongside the raw-text contexts --
-  the same "no escaping makes this safe" rule. JS- and CSS-context escaping
-  (as Go's `html/template` does) can be a later phase if anyone needs it.
+  *Decided: a compile error for now, real escaping later.* A1 rejects a
+  hole in any `on*`, `style` or `srcdoc` value, beside the raw-text
+  contexts (design step 1, and the A1 gate). Layered JavaScript, CSS and
+  srcdoc escaping is planned as A6a-A6c under "Later: holes in script,
+  style and srcdoc", and is not needed for A1-A5.
 
 ### Follow-up B: an editable tree
 
