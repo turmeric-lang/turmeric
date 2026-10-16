@@ -3,6 +3,8 @@
 **Severity: medium** (clang rejects the emitted C with `-Wint-conversion`; gcc
 warns and the program runs, so a Linux-only check passes and macOS fails).
 
+**Status: RESOLVED 2026-10-16** (see [Resolution](#resolution)).
+
 Found 2026-10-16 implementing turmeric-spices' `dom/writer`
 (xml-html-parsers-plan follow-up B4), with a Release `tur` built from `main`
 at `8c539640`. A `:heap` ADT is held two ways in emitted C: as the `int64_t`
@@ -83,3 +85,30 @@ for an `int64_t` formal when the actual is a closure or `ptr<void>`); a
   `ptr_into_carrier` makes.
 - A fixture per shape; the run.sh `-Wint-conversion` ratchet then pins both
   on gcc as well.
+
+## Resolution
+
+Both shapes asked "what C type is this value?" of something that did not
+know the answer for a parameter.
+
+- **Shape 1.** The `do`/`let` joins (`bridge_control_result_int_ptr`) consult
+  the localvar ctype table for a bare identifier, and that table never holds
+  parameters, so the parameter fell back to its Type -- the typed pointer --
+  and no straddle was seen. The `if`/`match` joins (`if_arm_word_ptr_cast`,
+  `emit_merge_assign_bridged`) consulted only the table. A new helper,
+  `emit_ident_emitted_ctype` (`src/compiler/emit_expr.c`), answers a recorded
+  local from the table and a parameter of the function being emitted from
+  that function's recorded signature (`emit_sig_lookup_param_ctype`); all
+  three joins use it.
+- **Shape 2.** The direct call to a let-bound closure thunk keyed its bridges
+  on the argument's TypeKind, none of which covers a `:heap` ADT. A final
+  branch now compares the thunk's recorded slot with the argument's emitted
+  spelling and casts through `intptr_t` either way, as `ptr_into_carrier`
+  does for the fat-dispatch arm.
+
+**Pinned by** `heap-adt-param-returned-through-join` (`do`, `let`, `do` over
+a `match`, `if`, `match`, nested) and `heap-adt-arg-to-known-closure` (a
+constructor, a let-bound value and a nullary constructor into a known
+closure). The old compiler emits five and three `-Wint-conversion`s for them,
+which the run.sh ratchet fails. The full suite is otherwise unchanged (no
+codegen snapshot moved).

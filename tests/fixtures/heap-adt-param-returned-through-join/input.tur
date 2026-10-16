@@ -1,0 +1,40 @@
+;; heap-adt-word-slot-missing-cast, shape 1: a `:heap` parameter is the
+;; `int64_t` word in C, but returned through a compound form it lands in a
+;; result temp declared `tur_adt_E *` -- and that assignment had no cast
+;; (-Wint-conversion, a hard error under clang).  The do/let joins asked the
+;; localvar table, which never holds parameters, then fell back to the Type;
+;; the if/match joins asked only the table.  Both ask the function's recorded
+;; signature for a parameter now.
+
+(defdata E :heap :copy (A int) (B))
+
+(defn val [e : E] : int (match e (A n) n (B) 0))
+
+(defn via-do [e : E] : E
+  (do (println "do") e))
+
+(defn via-let [e : E] : E
+  (let [k 1] e))
+
+(defn via-match-stmt [e : E] : E
+  (do (match e (A n) nil (B) nil) e))
+
+(defn via-if [e : E c : bool] : E
+  (if c e (B)))
+
+(defn via-match [e : E] : E
+  (match e (A n) e (B) e))
+
+(defn via-nested [e : E c : bool] : E
+  (if c (do (println "then") e) (let [z 2] e)))
+
+(defn main [] : int
+  (println (val (via-do (A 1))))              ; do, 1
+  (println (val (via-let (A 2))))             ; 2
+  (println (val (via-match-stmt (A 3))))      ; 3
+  (println (val (via-if (A 4) true)))         ; 4
+  (println (val (via-if (A 4) false)))        ; 0
+  (println (val (via-match (A 5))))           ; 5
+  (println (val (via-nested (A 6) true)))     ; then, 6
+  (println (val (via-nested (A 7) false)))    ; 7
+  0)

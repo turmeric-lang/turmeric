@@ -2698,6 +2698,28 @@ static const char *control_result_temp_ctype(EmitCtx *ctx, Type type,
     return out;
 }
 
+/* heap-adt-word-slot-missing-cast: the C type a bare identifier was EMITTED
+ * as.  A recorded local or temp answers from the localvar table; a parameter
+ * of the function being emitted answers from that function's recorded
+ * signature -- the table never holds parameters, and a `:heap` parameter is
+ * the `int64_t` word while its Type c-names to `tur_adt_X *`, so a bridge
+ * that fell back to the Type saw no straddle in `(defn f [e : E] : E
+ * (do ... e))` and assigned the word to the typed result temp uncast.  NULL
+ * when neither knows (a lambda body, a fused group: no signature of its own). */
+static const char *emit_ident_emitted_ctype(EmitCtx *ctx, const char *v) {
+    if (!v || !emit_str_is_bare_ident(v)) return NULL;
+    const char *t = emit_localvar_lookup_ctype(v);
+    if (t) return t;
+    if (!ctx->mt_fn_cname || !ctx->fn_params) return NULL;
+    for (uint32_t i = 0; i < ctx->n_fn_params; i++) {
+        char *pn = raw_name_for_binding(ctx->fn_params[i]);
+        bool hit = pn && strcmp(pn, v) == 0;
+        free(pn);
+        if (hit) return emit_sig_lookup_param_ctype(ctx->mt_fn_cname, i);
+    }
+    return NULL;
+}
+
 /* gcc14-int-conversion (carrier-to-typed-param): reconcile a control-form result
  * assignment `tmp = <value>` whose temp C type and value representation straddle
  * the int64<->pointer boundary.  The temp is declared by
@@ -2753,9 +2775,9 @@ static char *bridge_control_result_int_ptr(EmitCtx *ctx, char *v, Type ltype,
     /* A bare local's RECORDED emitted C type is ground truth -- the source-type
      * c-name collides under the carrier duality (a closure carrier declared int64
      * whose fn type c-names to a pointer, which would hide the int64->void*
-     * straddle). */
-    if (emit_str_is_bare_ident(v)) {
-        const char *lvty = emit_localvar_lookup_ctype(v);
+     * straddle).  A parameter's is its recorded signature slot. */
+    {
+        const char *lvty = emit_ident_emitted_ctype(ctx, v);
         if (lvty) vcty = lvty;
     }
     if (!vcty) return v;
@@ -5558,9 +5580,12 @@ static bool expr_is_pbp_param(EmitCtx *ctx, const Expr *struct_expr);
  * the merge temp is the fn element's `void *` (-Wint-conversion, a hard error
  * under clang and gcc 14), and the reverse.  Keyed on what the arm's temp was
  * emitted as.  NULL when no cast is needed. */
-static const char *if_arm_word_ptr_cast(const char *temp_c, const char *arm) {
+static const char *if_arm_word_ptr_cast(EmitCtx *ctx, const char *temp_c,
+                                        const char *arm) {
     if (!temp_c || !arm || !emit_str_is_bare_ident(arm)) return NULL;
-    const char *ac = emit_localvar_lookup_ctype(arm);
+    /* heap-adt-word-slot-missing-cast: a parameter arm too (`(if c e e)` on a
+     * `:heap` parameter `e`, the word, into a `tur_adt_X *` merge temp). */
+    const char *ac = emit_ident_emitted_ctype(ctx, arm);
     if (!ac) return NULL;
     size_t tl = strlen(temp_c), al = strlen(ac);
     bool temp_ptr = tl > 0 && temp_c[tl - 1] == '*';
@@ -5581,8 +5606,9 @@ static const char *if_merge_temp_ctype(const char *tmp, const char *fallback) {
 /* A `match` arm's value into its merge temp, with the word<->pointer cast
  * the two recorded C types call for (mapget/some/fn under clang: a `void *`
  * arm temp into an `int64_t` merge temp). */
-static void emit_merge_assign_bridged(Buf *body, const char *tmp, const char *val) {
-    const char *cast = if_arm_word_ptr_cast(
+static void emit_merge_assign_bridged(EmitCtx *ctx, Buf *body, const char *tmp,
+                                      const char *val) {
+    const char *cast = if_arm_word_ptr_cast(ctx,
         tmp ? emit_localvar_lookup_ctype(tmp) : NULL, val);
     if (cast) buf_printf(body, "%s = (%s)(intptr_t)(%s);\n", tmp, cast, val);
     else      buf_printf(body, "%s = %s;\n", tmp, val);
@@ -5748,10 +5774,10 @@ static char *emit_if_value(EmitCtx *ctx, Buf *body, const Expr *e) {
         } else if (then_is_byptr_param) {
             indent_buf(body, ctx->indent);
             buf_printf(body, "%s = *(%s);\n", tmp, t);
-        } else if (if_arm_word_ptr_cast(if_merge_temp_ctype(tmp, temp_c), t)) {
+        } else if (if_arm_word_ptr_cast(ctx, if_merge_temp_ctype(tmp, temp_c), t)) {
             indent_buf(body, ctx->indent);
             buf_printf(body, "%s = (%s)(intptr_t)(%s);\n", tmp,
-                       if_arm_word_ptr_cast(if_merge_temp_ctype(tmp, temp_c), t), t);
+                       if_arm_word_ptr_cast(ctx, if_merge_temp_ctype(tmp, temp_c), t), t);
         } else {
             indent_buf(body, ctx->indent);
             buf_printf(body, "%s = %s;\n", tmp, t);
@@ -5796,10 +5822,10 @@ static char *emit_if_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             } else if (else_is_byptr_param) {
                 indent_buf(body, ctx->indent);
                 buf_printf(body, "%s = *(%s);\n", tmp, el);
-            } else if (if_arm_word_ptr_cast(if_merge_temp_ctype(tmp, temp_c2), el)) {
+            } else if (if_arm_word_ptr_cast(ctx, if_merge_temp_ctype(tmp, temp_c2), el)) {
                 indent_buf(body, ctx->indent);
                 buf_printf(body, "%s = (%s)(intptr_t)(%s);\n", tmp,
-                           if_arm_word_ptr_cast(if_merge_temp_ctype(tmp, temp_c2), el), el);
+                           if_arm_word_ptr_cast(ctx, if_merge_temp_ctype(tmp, temp_c2), el), el);
             } else {
                 indent_buf(body, ctx->indent);
                 buf_printf(body, "%s = %s;\n", tmp, el);
@@ -11730,6 +11756,36 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                         raw = emit_carrier_bridge_escaping(ctx, body, raw,
                                   CK_CONCRETE, CK_CARRIER,
                                   emit_resolve_type(ctx, e->as.call_.args[i]->type));
+                    } else {
+                        /* heap-adt-word-slot-missing-cast (shape 2): none of the
+                         * kind-keyed bridges above covers a `:heap` ADT actual,
+                         * which is the typed `tur_adt_X *` at the call while the
+                         * lifted thunk's slot is the `int64_t` word -- `(h (A 41))`
+                         * on a let-bound `(mk 1 val)` passed the pointer uncast
+                         * (-Wint-conversion, a hard error under clang).  Key on
+                         * the two EMITTED spellings, the thunk's recorded slot
+                         * and the argument's own, as ptr_into_carrier does. */
+                        const char *slot_ct = emit_sig_lookup_param_ctype(thunk_name, i + 1);
+                        const char *val_ct = emit_ident_emitted_ctype(ctx, raw);
+                        if (!val_ct && arg_e)
+                            val_ct = emit_binding_repr_c_name(ctx, arg_e->type, arg_e);
+                        size_t sl = slot_ct ? strlen(slot_ct) : 0;
+                        size_t vl = val_ct ? strlen(val_ct) : 0;
+                        const char *cast = NULL;
+                        if (sl && vl && strcmp(slot_ct, "int64_t") == 0 && val_ct[vl - 1] == '*')
+                            cast = "int64_t";
+                        else if (sl && vl && slot_ct[sl - 1] == '*' &&
+                                 strncmp(slot_ct, "const ", 6) != 0 &&
+                                 strcmp(val_ct, "int64_t") == 0)
+                            cast = slot_ct;
+                        if (cast) {
+                            Buf cb; buf_init(&cb);
+                            buf_printf(&cb, "(%s)(intptr_t)(%s)", cast, raw);
+                            buf_putc(&cb, '\0');
+                            free(raw);
+                            raw = strdup(cb.data);
+                            buf_free(&cb);
+                        }
                     }
                     arg_strs[i + 1] = raw;
                 }
@@ -20892,7 +20948,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                         bv = match_arm_pbp_deref(ctx, arm->body, e->type, bv);
                         bv = match_arm_carrier_bridge(ctx, body, arm->body, tmp, bv);
                         indent_buf(body, ctx->indent);
-                        emit_merge_assign_bridged(body, tmp, bv);
+                        emit_merge_assign_bridged(ctx, body, tmp, bv);
                         free(bv);
                     } else {
                         emit_stmt(ctx, body, arm->body);
@@ -21017,7 +21073,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                         bv = match_arm_pbp_deref(ctx, arm->body, e->type, bv);
                         bv = match_arm_carrier_bridge(ctx, body, arm->body, tmp, bv);
                         indent_buf(body, ctx->indent);
-                        emit_merge_assign_bridged(body, tmp, bv);
+                        emit_merge_assign_bridged(ctx, body, tmp, bv);
                         free(bv);
                     } else {
                         emit_stmt(ctx, body, arm->body);
@@ -21186,7 +21242,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                             char *bv = emit_value(ctx, body, arm->body);
                             bv = match_arm_carrier_bridge(ctx, body, arm->body, tmp, bv);
                             indent_buf(body, ctx->indent);
-                            emit_merge_assign_bridged(body, tmp, bv);
+                            emit_merge_assign_bridged(ctx, body, tmp, bv);
                             free(bv);
                         } else {
                             emit_stmt(ctx, body, arm->body);
@@ -21876,7 +21932,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                         bv = match_arm_pbp_deref(ctx, arm->body, e->type, bv);
                         bv = match_arm_carrier_bridge(ctx, body, arm->body, tmp, bv);
                         indent_buf(body, ctx->indent);
-                        emit_merge_assign_bridged(body, tmp, bv);
+                        emit_merge_assign_bridged(ctx, body, tmp, bv);
                         free(bv);
                     } else {
                         emit_stmt(ctx, body, arm->body);
@@ -22354,7 +22410,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                         bv = match_arm_pbp_deref(ctx, arm->body, e->type, bv);
                         bv = match_arm_carrier_bridge(ctx, body, arm->body, tmp, bv);
                         indent_buf(body, ctx->indent);
-                        emit_merge_assign_bridged(body, tmp, bv);
+                        emit_merge_assign_bridged(ctx, body, tmp, bv);
                         free(bv);
                     } else {
                         emit_stmt(ctx, body, arm->body);
