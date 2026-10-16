@@ -167,6 +167,26 @@ static TuriValue n_sb_push_byte(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) 
     tur_sb_push_byte(S1, n >= 2 ? a[1].as_int : 0);
     return turi_nil();
 }
+static TuriValue n_sb_push_range(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    tur_sb_push_range(S1, S2, n >= 3 ? a[2].as_int : 0, n >= 4 ? a[3].as_int : 0);
+    return turi_nil();
+}
+static TuriValue n_sb_push_int(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    tur_sb_push_int(S1, n >= 2 ? a[1].as_int : 0);
+    return turi_nil();
+}
+static TuriValue n_sb_push_repeat(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    tur_sb_push_repeat(S1, n >= 2 ? a[1].as_int : 0, n >= 3 ? a[2].as_int : 0);
+    return turi_nil();
+}
+static TuriValue n_sb_push_slice(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    tur_sb_push_slice(S1, S2);
+    return turi_nil();
+}
 static TuriValue n_sb_len(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
     (void)e; (void)ud;
     return turi_int(tur_sb_len(S1));
@@ -264,6 +284,10 @@ void turi_register_string_natives(TuriEnv *env) {
     turi_env_register_native(env, "tur_sb_push_cstr", n_sb_push_cstr, NULL);
     turi_env_register_native(env, "tur_sb_push_string", n_sb_push_string, NULL);
     turi_env_register_native(env, "tur_sb_push_byte", n_sb_push_byte, NULL);
+    turi_env_register_native(env, "tur_sb_push_range", n_sb_push_range, NULL);
+    turi_env_register_native(env, "tur_sb_push_int", n_sb_push_int, NULL);
+    turi_env_register_native(env, "tur_sb_push_repeat", n_sb_push_repeat, NULL);
+    turi_env_register_native(env, "tur_sb_push_slice", n_sb_push_slice, NULL);
     turi_env_register_native(env, "tur_sb_len", n_sb_len, NULL);
     turi_env_register_native(env, "tur_sb_finish", n_sb_finish, NULL);
     turi_env_register_native(env, "tur_string_slice", n_slice, NULL);

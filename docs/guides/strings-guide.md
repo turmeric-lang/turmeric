@@ -185,9 +185,29 @@ Transform (each returns a fresh immutable `String` and borrows its arguments):
 Incremental construction:
 
 - `StringBuilder` (`builder/new`, `builder/push-cstr!`, `builder/push-string!`,
-  `builder/push-byte!`, `builder/len`, `builder/finish`) -- accumulate bytes in
-  linear time, then `builder/finish` freezes them into an immutable `String`.
-  This is the mutable escape hatch; `String` itself stays immutable.
+  `builder/push-byte!`, `builder/push-char!`, `builder/len`, `builder/finish`)
+  -- accumulate bytes in linear time, then `builder/finish` freezes them into an
+  immutable `String`. This is the mutable escape hatch; `String` itself stays
+  immutable.
+- `builder/push-int! b n` writes `n`'s decimal digits, `builder/push-repeat! b c
+  n` writes `n` copies of the character `c`, and `builder/push-slice! b sl`
+  (`stdlib/string-slice.tur`) copies a slice's bytes. None of them makes a
+  temporary `String`, so there is nothing to release.
+- `builder/push! b x` takes any value whose type has a `BuilderPush` instance:
+  `cstr`, `String`, `StringSlice` and `Char` append themselves, an `int` its
+  digits, a `bool` `true` or `false`. There is no float instance yet.
+- `string/of` builds a whole `String` from its arguments in one expression. It
+  expands to one builder, a `builder/push!` per argument, left to right, and
+  `builder/finish`, so the `String` it returns is the only thing to release:
+
+  ```turmeric
+  (let [line (string/of path "\t" depth "\t" (vec-len headings))]
+    (do (println (string/to-cstr line))
+        (string/release line)))
+  ```
+
+  It borrows its arguments. A call that returns a fresh `String`, such as
+  `(int->string n)`, would leak there, so pass `n` itself.
 
 Typeclasses: `Eq`, `Ord` (lexicographic), `Show` (the bytes), `Hash` (content),
 `Clone` (retain), `MapKey` (owned key). Every op has an interpreter native
@@ -421,8 +441,8 @@ frees its argument, and freeing a string literal is UB. The rule:
 
 - Every `string/from-cstr`, `string/concat`, `string/substring`, `string/to-*`,
   `string/trim*`, `string/replace-all`, `string/repeat`, `string/pad-*`,
-  `builder/finish`, `slice/to-string` returns an **owned** String (rc 1) --
-  release it or give it away.
+  `string/of`, `builder/finish`, `slice/to-string` returns an **owned** String
+  (rc 1) -- release it or give it away.
 - Every `string/slice`, `string/slice-cstr`, `slice/sub`, `slice/trim*`,
   `slice/retain` returns an owned slice -- release it.
 - Anything named `*-cstr` that *returns* a cstr gives you a **fresh** buffer to

@@ -295,6 +295,38 @@ void tur_sb_push_byte(void *bp, int64_t c) {
     b->data[b->len++] = (char)(unsigned char)c;
 }
 
+/* Bytes [off, off+len) of String s, clamped to its bounds, as substring is. */
+void tur_sb_push_range(void *bp, void *s, int64_t off, int64_t len) {
+    if (!bp || !s) return;
+    tur_sb *b = (tur_sb *)bp;
+    str_clamp_window(tur_string_len(s), &off, &len);
+    if (len == 0) return;
+    sb_reserve(b, len);
+    memcpy(b->data + b->len, tur_string_cstr(s) + off, (size_t)len);
+    b->len += len;
+}
+
+/* The decimal digits of v, with a leading '-' when negative; no temporary. */
+void tur_sb_push_int(void *bp, int64_t v) {
+    if (!bp) return;
+    tur_sb *b = (tur_sb *)bp;
+    char buf[24]; /* -9223372036854775808 + NUL fits in 21 */
+    int n = snprintf(buf, sizeof(buf), "%lld", (long long)v);
+    if (n <= 0) return;
+    sb_reserve(b, n);
+    memcpy(b->data + b->len, buf, (size_t)n);
+    b->len += n;
+}
+
+/* n copies of the byte c; nothing when n <= 0. */
+void tur_sb_push_repeat(void *bp, int64_t c, int64_t n) {
+    if (!bp || n <= 0) return;
+    tur_sb *b = (tur_sb *)bp;
+    sb_reserve(b, n);
+    memset(b->data + b->len, (unsigned char)c, (size_t)n);
+    b->len += n;
+}
+
 int64_t tur_sb_len(void *bp) { return bp ? ((tur_sb *)bp)->len : 0; }
 
 void *tur_sb_finish(void *bp) {
@@ -381,6 +413,12 @@ void *tur_slice_to_string(void *sl) {
     if (!sl) return tur_string_from_bytes(NULL, 0);
     tur_strslice *s = (tur_strslice *)sl;
     return tur_string_from_bytes(slice_ptr(s), s->len);
+}
+
+void tur_sb_push_slice(void *bp, void *sl) {
+    if (!bp || !sl) return;
+    tur_strslice *s = (tur_strslice *)sl;
+    tur_sb_push_range(bp, s->parent, s->off, s->len);
 }
 
 const char *tur_slice_to_cstr(void *sl) {

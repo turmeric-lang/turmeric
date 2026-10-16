@@ -92,6 +92,12 @@
 
 (extern-c tur_sb_push_byte [b :ptr c :int] :void)
 
+(extern-c tur_sb_push_range [b :ptr s :ptr off :int len :int] :void)
+
+(extern-c tur_sb_push_int [b :ptr v :int] :void)
+
+(extern-c tur_sb_push_repeat [b :ptr c :int n :int] :void)
+
 (extern-c tur_sb_len [b :ptr] :int)
 
 (extern-c tur_sb_finish [b :ptr] :ptr)
@@ -560,6 +566,42 @@
 
 (defn builder/push-char! [b : StringBuilder c : Char] : void
   (tur_sb_push_byte (:: b ptr<void>) (char->int c)))
+;;; builder/push-int! -- append the decimal digits of an int to the builder.
+;;;
+;;; Writes the digits straight into the builder, with a leading - when v is
+;;; negative, so there is no temporary String to release, unlike pushing
+;;; (int->string v).
+;;;
+;;; Parameters:
+;;;   b -- the builder to append to
+;;;   v -- the number to write
+;;;
+;;; Example:
+;;;   (let [b (builder/new)]
+;;;     (do (builder/push-int! b -42)
+;;;         (string/to-cstr (builder/finish b))))  ; => "-42"
+;;;
+;;; Since: markdown-library-plan S5
+(defn builder/push-int! [b : StringBuilder v : int] : void
+  (tur_sb_push_int (:: b ptr<void>) v))
+;;; builder/push-repeat! -- append n copies of the character c to the builder.
+;;;
+;;; Indentation, a rule of dashes, the padding of a column.  Nothing is
+;;; appended when n is 0 or less.  c is one byte, so it should be ASCII.
+;;;
+;;; Parameters:
+;;;   b -- the builder to append to
+;;;   c -- the character to repeat
+;;;   n -- how many copies
+;;;
+;;; Example:
+;;;   (let [b (builder/new)]
+;;;     (do (builder/push-repeat! b #\- 3)
+;;;         (string/to-cstr (builder/finish b))))  ; => "---"
+;;;
+;;; Since: markdown-library-plan S5
+(defn builder/push-repeat! [b : StringBuilder c : Char n : int] : void
+  (tur_sb_push_repeat (:: b ptr<void>) (char->int c) n))
 ;;; char->string -- a fresh one-character String holding c.
 ;;;
 ;;; Parameters:
@@ -809,10 +851,7 @@
 ;;; string/-push-range! -- internal: append s's bytes [i, end) to b.
 
 (defn string/-push-range! [b : StringBuilder s : String i : int end : int] : void
-  (when (< i end)
-    (do
-      (builder/push-byte! b (string/byte-at s i))
-      (string/-push-range! b s (+ i 1) end))))
+  (tur_sb_push_range (:: b ptr<void>) (:: s ptr<void>) i (- end i)))
 ;;; string/-replace-loop -- internal: copy s from start into b, with to in place of each from.
 
 (defn string/-replace-loop [s : String
@@ -877,10 +916,6 @@
 ;;; Since: markdown-library-plan S4
 (defn string/repeat [s : String n : int] : String
   (let [b (builder/new)] (do (string/-repeat-loop b s n) (builder/finish b))))
-;;; string/-push-chars! -- internal: append c to b n times.
-
-(defn string/-push-chars! [b : StringBuilder c : Char n : int] : void
-  (when (> n 0) (do (builder/push-char! b c) (string/-push-chars! b c (- n 1)))))
 ;;; string/pad-start -- s with copies of c in front, to make it width bytes.
 ;;;
 ;;; Lengths are in bytes, as everywhere in String, so c should be ASCII.  A
@@ -902,7 +937,7 @@
 (defn string/pad-start [s : String width : int c : Char] : String
   (let [b (builder/new)]
     (do
-      (string/-push-chars! b c (- width (string/len s)))
+      (builder/push-repeat! b c (- width (string/len s)))
       (builder/push-string! b s)
       (builder/finish b))))
 ;;; string/pad-end -- s with copies of c after it, to make it width bytes.
@@ -926,7 +961,7 @@
   (let [b (builder/new)]
     (do
       (builder/push-string! b s)
-      (string/-push-chars! b c (- width (string/len s)))
+      (builder/push-repeat! b c (- width (string/len s)))
       (builder/finish b))))
 ;; The digits are folded in counting down, not up, because the most negative
 ;; int has no positive twin; string/-signed-int flips the sign afterwards.
@@ -975,6 +1010,86 @@
     (if (>= start n)
       (none)
       (string/-signed-int neg (string/-parse-digits s start n 0)))))
+;; ---- Building from parts (markdown-library-plan S5) -----------------------
+;; One push for every kind of part, so a line of output is one builder and no
+;; temporaries.  StringSlice's instance is in string-slice.tur.  Floats have
+;; no instance until float formatting is settled.
+;;; BuilderPush -- types builder/push! can append; builder/-push-into! appends x to b.
+;;;
+;;; The value comes first because a class method dispatches on its first
+;;; argument; builder/push! puts the builder first, like the other pushes.
+
+(defclass BuilderPush [a]
+  (builder/-push-into! [x : a b : StringBuilder] : void))
+;;; BuilderPush [cstr] -- the bytes up to the NUL.
+
+(definstance BuilderPush [cstr]
+  (builder/-push-into! [x b] (builder/push-cstr! b x)))
+;;; BuilderPush [String] -- the String's bytes; it is borrowed, not released.
+
+(definstance BuilderPush [String]
+  (builder/-push-into! [x b] (builder/push-string! b x)))
+;;; BuilderPush [Char] -- the one character.
+
+(definstance BuilderPush [Char]
+  (builder/-push-into! [x b] (builder/push-char! b x)))
+;;; BuilderPush [int] -- the decimal digits, as builder/push-int!.
+
+(definstance BuilderPush [int]
+  (builder/-push-into! [x b] (builder/push-int! b x)))
+;;; BuilderPush [bool] -- true or false.
+
+(definstance BuilderPush [bool]
+  (builder/-push-into! [x b] (builder/push-cstr! b (if x "true" "false"))))
+;;; builder/push! -- append any BuilderPush value to the builder.
+;;;
+;;; One name for every push: a cstr, String or StringSlice appends its bytes,
+;;; a Char its character, an int its decimal digits and a bool true or false.
+;;; The value is borrowed, so a String passed in is not released.  string/of
+;;; is the usual way to reach this.
+;;;
+;;; Parameters:
+;;;   b -- the builder to append to
+;;;   x -- the value to append
+;;;
+;;; Example:
+;;;   (let [b (builder/new)]
+;;;     (do (builder/push! b "n=")
+;;;         (builder/push! b 42)
+;;;         (string/to-cstr (builder/finish b))))  ; => "n=42"
+;;;
+;;; Since: markdown-library-plan S5
+(defn builder/push! [A] [(BuilderPush A)] [b : StringBuilder x : A] : void
+  (builder/-push-into! x b))
+;;; string/-push-all__ -- internal: (builder/push! b x) for each x, in order.
+
+(defmacro string/-push-all__ [b & ^syntax xs]
+  (if (empty? xs)
+    `(do)
+    `(do (builder/push! ~b ~(first xs)) (string/-push-all__ ~b ~@(rest xs)))))
+;;; string/of -- one fresh String made of all its arguments, in order.
+;;;
+;;; Each argument is any BuilderPush value: a cstr, String, StringSlice,
+;;; Char, int or bool.  It expands to one builder, a builder/push! per
+;;; argument and builder/finish, so nothing in between is allocated, and the
+;;; one String it returns is the only thing to release.  Arguments are
+;;; borrowed and evaluated left to right.  A call that returns a fresh String,
+;;; such as (int->string n), is borrowed too and would leak; pass n itself.
+;;;
+;;; Parameters:
+;;;   xs -- the parts, zero or more
+;;;
+;;; Returns:
+;;;   A fresh owned String; (string/of) is the empty String.
+;;;
+;;; Example:
+;;;   (string/to-cstr (string/of "x=" 3 #\, "ok=" true))  ; => "x=3,ok=true"
+;;;
+;;; Since: markdown-library-plan S5
+(defmacro string/of [& ^syntax xs]
+  (let [b (gensym "sb")]
+    `(let [~b (builder/new)]
+       (do (string/-push-all__ ~b ~@xs) (builder/finish ~b)))))
 ;; ---- Typeclass loads (deferred to here so String + its ops exist first) ----
 ;; typeclass.tur transitively loads stdlib/typeclass-show.tur, whose owned
 ;; `Show` loads this file back -- reentrant, but harmless now that String and

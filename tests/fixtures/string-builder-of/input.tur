@@ -1,0 +1,109 @@
+;; string-builder-of -- markdown-library-plan S5: builder/push-int!,
+;; builder/push-repeat!, builder/push-slice!, the builder/push! typeclass
+;; and the string/of macro.
+;;
+;; string/of borrows its arguments and returns one fresh String, so every
+;; String and slice made here is released and the leak check sees a clean
+;; run.  The macro's builder is a gensym, so the locals named b and sb below
+;; are not captured, and its arguments are pushed left to right.
+
+(load "stdlib/string-slice.tur")
+
+;; print s, then release it
+(defn out [s : String] : void
+  (do (println (string/to-cstr s)) (string/release s)))
+
+;; print n as a side effect, then return it: shows the evaluation order
+(defn tick [n : int] : int
+  (do (println n) n))
+
+(defn push-ints [] : String
+  (let [b (builder/new)]
+    (do (builder/push-int! b 0)
+        (builder/push-char! b #\space)
+        (builder/push-int! b 7)
+        (builder/push-char! b #\space)
+        (builder/push-int! b -42)
+        (builder/push-char! b #\space)
+        (builder/push-int! b 9223372036854775807)
+        (builder/push-char! b #\space)
+        (builder/push-int! b (- (- 0 9223372036854775807) 1))
+        (builder/finish b))))
+
+(defn push-repeats [] : String
+  (let [b (builder/new)]
+    (do (builder/push-repeat! b #\- 5)
+        (builder/push-char! b #\|)
+        (builder/push-repeat! b #\x 0)
+        (builder/push-repeat! b #\x -3)
+        (builder/push-char! b #\|)
+        (builder/push-repeat! b #\space 2)
+        (builder/push-char! b #\|)
+        (builder/finish b))))
+
+;; slices pushed after their parent String is released
+(defn push-slices [] : String
+  (let [s     (string/from-cstr "hello, world")
+        hello (string/slice s 0 5)
+        world (string/slice s 7 5)
+        none  (string/slice s 3 0)
+        b     (builder/new)]
+    (do (string/release s)
+        (builder/push-slice! b world)
+        (builder/push-slice! b none)
+        (builder/push-char! b #\space)
+        (builder/push-slice! b hello)
+        (slice/release hello)
+        (slice/release world)
+        (slice/release none)
+        (builder/finish b))))
+
+;; one builder/push! per kind of part
+(defn push-each [] : String
+  (let [b  (builder/new)
+        s  (string/from-cstr "String")
+        sl (string/slice s 0 3)]
+    (do (builder/push! b "cstr ")
+        (builder/push! b s)
+        (builder/push! b #\space)
+        (builder/push! b sl)
+        (builder/push! b #\space)
+        (builder/push! b -5)
+        (builder/push! b #\space)
+        (builder/push! b true)
+        (builder/push! b #\space)
+        (builder/push! b false)
+        (slice/release sl)
+        (string/release s)
+        (builder/finish b))))
+
+;; string/of as a function's whole body
+(defn greet [name : String n : int] : String
+  (string/of "hello, " name "! you are visitor #" n #\.))
+
+(defn main [] : int
+  (let [name (string/from-cstr "Ada")
+        b    "local b"
+        sb   "local sb"
+        line (string/slice-cstr "  - item" 2 1)]
+    (do
+      (println "-- push-int!")
+      (out (push-ints))
+      (println "-- push-repeat!")
+      (out (push-repeats))
+      (println "-- push-slice!")
+      (out (push-slices))
+      (println "-- push!")
+      (out (push-each))
+      (println "-- string/of")
+      (out (string/of))
+      (out (string/of "one"))
+      (out (string/of 1 #\+ 1 #\= 2 " is " true))
+      (out (string/of "[" line "] " name))
+      (out (greet name 3))
+      (out (string/of b ", " sb))
+      (println "-- string/of evaluates left to right")
+      (out (string/of (tick 1) #\space (tick 2) #\space (tick 3)))
+      (slice/release line)
+      (string/release name)
+      0)))
