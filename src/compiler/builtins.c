@@ -279,27 +279,98 @@ const char *builtin_effect_for_name(const char *name) {
     return NULL;
 }
 
+/* The table's entries grouped by name, each group in table order, so a lookup
+ * tries only the overloads of the name it was given (performance audit E-1).
+ * The interpreter resolves a Saffron dynamic operator's builtin on every
+ * execution, and scanning all of table_ for each `(+ acc 1)` was ~9% of such a
+ * run.  Keyed by the interned Symbol, so builtins_init, which (re)interns the
+ * names, rebuilds it; until then lookups scan as they always did. */
+#define BI_SLOTS 512u   /* a power of two, over twice TABLE_LEN */
+typedef struct { const Symbol *sym; uint16_t first, count; } BiSlot;
+static BiSlot   bi_slot_[BI_SLOTS];
+static uint16_t bi_order_[TABLE_LEN];
+static int      bi_ready_;
+
+static BiSlot *bi_find(const Symbol *sym, int insert) {
+    uint64_t h = (uint64_t)(uintptr_t)sym * UINT64_C(0x9E3779B97F4A7C15);
+    for (uint32_t i = (uint32_t)(h >> 55) & (BI_SLOTS - 1);; i = (i + 1) & (BI_SLOTS - 1)) {
+        if (bi_slot_[i].sym == sym) return &bi_slot_[i];
+        if (!bi_slot_[i].sym) {
+            if (!insert) return NULL;
+            bi_slot_[i].sym = sym;
+            return &bi_slot_[i];
+        }
+    }
+}
+
+static void bi_build(void) {
+    _Static_assert(BI_SLOTS > 2 * TABLE_LEN, "BI_SLOTS too small for table_");
+    memset(bi_slot_, 0, sizeof bi_slot_);
+    for (size_t i = 0; i < TABLE_LEN; i++)
+        if (table_[i].name_sym) bi_find(table_[i].name_sym, 1)->count++;
+    uint16_t off = 0;
+    for (uint32_t s = 0; s < BI_SLOTS; s++) {
+        if (!bi_slot_[s].sym) continue;
+        bi_slot_[s].first = off;
+        off = (uint16_t)(off + bi_slot_[s].count);
+        bi_slot_[s].count = 0;   /* refilled below, as a cursor */
+    }
+    for (size_t i = 0; i < TABLE_LEN; i++) {
+        if (!table_[i].name_sym) continue;
+        BiSlot *b = bi_find(table_[i].name_sym, 0);
+        bi_order_[b->first + b->count++] = (uint16_t)i;
+    }
+    bi_ready_ = 1;
+}
+
 void builtins_init(SymbolTable *st) {
+    bool changed = !bi_ready_;
     for (size_t i = 0; i < TABLE_LEN; i++) {
         StrSlice name = strslice(table_[i].name, (uint32_t)strlen(table_[i].name));
-        table_[i].name_sym = symtab_intern(st, name);
+        const Symbol *sym = symtab_intern(st, name);
+        if (table_[i].name_sym != sym) {
+            table_[i].name_sym = sym;
+            changed = true;
+        }
     }
+    /* Rebuilt only when a name's Symbol moved, i.e. for a new symbol table.
+     * This runs at every elaborate entry, and re-interning into the same table
+     * gives the same Symbols; leaving the index alone then also means a lookup
+     * on another thread never sees it half-built. */
+    if (changed) bi_build();
+}
+
+static bool bi_matches(const BuiltinSpec *s, Type first_arg_type, uint32_t n_args) {
+    if ((int)n_args < s->min_arity) return false;
+    if (s->max_arity >= 0 && (int)n_args > s->max_arity) return false;
+    if (s->arg_type.kind != TY_UNKNOWN && !type_eq(s->arg_type, first_arg_type)) return false;
+    return true;
 }
 
 const BuiltinSpec *builtin_lookup(const Symbol *name, Type first_arg_type,
                                   uint32_t n_args) {
+    if (bi_ready_ && name) {
+        const BiSlot *b = bi_find(name, 0);
+        if (!b) return NULL;
+        for (uint16_t k = 0; k < b->count; k++) {
+            const BuiltinSpec *s = &table_[bi_order_[b->first + k]];
+            if (bi_matches(s, first_arg_type, n_args)) return s;
+        }
+        return NULL;
+    }
     for (size_t i = 0; i < TABLE_LEN; i++) {
         const BuiltinSpec *s = &table_[i];
         if (s->name_sym != name) continue;
-        if ((int)n_args < s->min_arity) continue;
-        if (s->max_arity >= 0 && (int)n_args > s->max_arity) continue;
-        if (s->arg_type.kind != TY_UNKNOWN && !type_eq(s->arg_type, first_arg_type)) continue;
-        return s;
+        if (bi_matches(s, first_arg_type, n_args)) return s;
     }
     return NULL;
 }
 
 const BuiltinSpec *builtin_first_with_name(const Symbol *name) {
+    if (bi_ready_ && name) {
+        const BiSlot *b = bi_find(name, 0);
+        return b ? &table_[bi_order_[b->first]] : NULL;
+    }
     for (size_t i = 0; i < TABLE_LEN; i++) {
         if (table_[i].name_sym == name) return &table_[i];
     }
