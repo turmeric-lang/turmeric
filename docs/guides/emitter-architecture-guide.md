@@ -103,7 +103,7 @@ Out of scope, with the guide that covers each:
 its depth follows the source. Macro expansion can nest far deeper than
 hand-written code, and an ASan frame is many times its normal size. A fixed
 depth limit was tried and failed in both directions
-([emit-depth-guard-loses-race-with-asan-stack](../archive/emit-depth-guard-loses-race-with-asan-stack.md)).
+([emit-depth-guard-loses-race-with-asan-stack](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/emit-depth-guard-loses-race-with-asan-stack.md)).
 So the job runs on a pthread (a Windows thread on `_WIN32`) with a
 `TUR_STACK_MB` stack, default 256 MiB, reserved lazily. The call is
 re-entrant-safe: already on a big stack, it calls the job directly. `tur`'s
@@ -307,7 +307,7 @@ Every value call goes through the tail of `emit_value`:
    Naming the type is not cosmetic. c2mir (the JIT's C front end) cannot parse
    `__auto_type`, and the local-variable side table only records a temp
    whose type is known. See S1 in the
-   [JIT engine plan](../archive/jit-engine-plan.md).
+   [JIT engine plan](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/jit-engine-plan.md).
 2. **Write** `T __ps_N = (call);` and record `__ps_N`'s C type with
    `emit_localvar_record_ctype`.
 3. **Mark** ownership facts about the temp: a raw Vec slot word
@@ -359,14 +359,14 @@ pending drop or region bracket hangs off the call, and the call is not a raw
 slot read. It reports the answer in `tail_call_no_hoist_taken`, and
 `emit_tail` falls back to the hoisted spelling on a refusal. The nearest
 non-tail caller performs the panic check
-([proper-tail-calls plan](../archive/proper-tail-calls-plan.md)).
+([proper-tail-calls plan](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/proper-tail-calls-plan.md)).
 
 **Panic sites.** A direct call to a function whose inline-C body calls
 `tur_panic(` is wrapped so the thread's current site is its source location
 (`emit_site_wrap`; `tur_site_push` / `tur_site_pop`). Inside such a body the
 emitter `#define`s `tur_panic` to `tur_panic_sited` for the length of the
 body. That is why `(vec-get v 9)` reports the caller's line
-([panic-location-names-the-runtime-not-the-call-site](../archive/panic-location-names-the-runtime-not-the-call-site.md)).
+([panic-location-names-the-runtime-not-the-call-site](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/panic-location-names-the-runtime-not-the-call-site.md)).
 
 ---
 
@@ -512,7 +512,7 @@ it splices bodies, and the on-demand runtimes and typedefs that land in
 marker `/* ==== tur: end of fixed runtime preamble ==== */`, so the text above
 the marker is identical for every program and the JIT's split runtime can
 match its hash
-([jit-s2-split-disengages-on-hoisted-inline-c-include](../archive/jit-s2-split-disengages-on-hoisted-inline-c-include.md)).
+([jit-s2-split-disengages-on-hoisted-inline-c-include](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/jit-s2-split-disengages-on-hoisted-inline-c-include.md)).
 
 ### Output bands
 
@@ -556,13 +556,13 @@ initializers, last).
 **Two `main`s.** When a program has no `main` and every top-level form is
 plainly classifiable, the elaborator folds the top-level statements into a
 synthesized `(defn main [] : int (do ... 0))`
-(`elab_toplevel.c`; [cps-toplevel-synthesized-main-bypasses-dk](../archive/cps-toplevel-synthesized-main-bypasses-dk.md)).
+(`elab_toplevel.c`; [cps-toplevel-synthesized-main-bypasses-dk](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/cps-toplevel-synthesized-main-bypasses-dk.md)).
 The emitter then sees a user `main` and emits it with `emit_fn_def`. Only
 when the fold aborts (a top-level `do`, a bare atom, an ambiguous macro call)
 does step 14 synthesize `main` itself; that version is indented 4 and ends in
 `return 0;`. With a user `main`, a top-level *statement* in `body` is dropped
 without a diagnostic, while `tur --interpret` runs it
-([top-level-def-init-dropped](../archive/history/top-level-def-init-dropped.md)
+([top-level-def-init-dropped](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/history/top-level-def-init-dropped.md)
 records this as long-standing behavior).
 
 ### Where the CPS backend plugs in
@@ -808,7 +808,7 @@ inline-C body is only cloned per type when it uses the template form
 
 - a `TUR_REGION_NOTE` for each parameter whose type can be a region node,
   because an opaque body may retain it
-  ([region-escape-through-unhooked-stores](../archive/region-escape-through-unhooked-stores.md));
+  ([region-escape-through-unhooked-stores](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/region-escape-through-unhooked-stores.md));
 - `#define tur_panic(m) tur_panic_sited(m)` ... `#undef tur_panic` when the
   body calls `tur_panic(`.
 
@@ -850,7 +850,7 @@ with exit status 0.
 (`-Wint-conversion`, `-Wincompatible-pointer-types`, `-Wfloat-conversion`,
 `-Wfree-nonheap-object`), so an emitter change that mixes up a pointer and an
 integer fails as a FAIL, not a warning
-([emitted-c-pointer-integer-warnings-unwatched](../archive/emitted-c-pointer-integer-warnings-unwatched.md)).
+([emitted-c-pointer-integer-warnings-unwatched](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/emitted-c-pointer-integer-warnings-unwatched.md)).
 
 ---
 
@@ -908,7 +908,7 @@ marks self tail calls, and `emit_tail` turns each into parameter assignment
 plus `goto __tur_tailcall;`. A non-self tail call is emitted as
 `return f(args);`, and `TUR_MUSTTAIL` is added when `tail_call_musttail_ok`
 proves the signatures identical. The design and its refusals are in the
-[proper-tail-calls plan](../archive/proper-tail-calls-plan.md).
+[proper-tail-calls plan](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/proper-tail-calls-plan.md).
 
 **Closures and thunks.** A `fn` that captures is lifted by the elaborator to
 a file-scope `EX_FN_DEF` with `fd->closure` set. The construction site
@@ -1144,26 +1144,26 @@ general triage flow.
 
 ## Reading the archive
 
-- [emit-value-dispatch-unbounded-recursion](../archive/emit-value-dispatch-unbounded-recursion.md)
-  and [emit-depth-guard-loses-race-with-asan-stack](../archive/emit-depth-guard-loses-race-with-asan-stack.md):
+- [emit-value-dispatch-unbounded-recursion](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/emit-value-dispatch-unbounded-recursion.md)
+  and [emit-depth-guard-loses-race-with-asan-stack](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/emit-depth-guard-loses-race-with-asan-stack.md):
   why emission runs on a sized stack.
-- [jit-engine-plan](../archive/jit-engine-plan.md): S1 (named hoist types, the
+- [jit-engine-plan](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/jit-engine-plan.md): S1 (named hoist types, the
   signature table), S1b (explicit static init), S2 (the fixed preamble and
   its hash).
-- [history/end-to-end-monomorphization-plan](../archive/history/end-to-end-monomorphization-plan.md),
-  [m4-typeclass-per-method-abi-plan](../archive/m4-typeclass-per-method-abi-plan.md)
-  and [history/carrier-crossing-recovery-routing-plan](../archive/history/carrier-crossing-recovery-routing-plan.md):
+- [history/end-to-end-monomorphization-plan](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/history/end-to-end-monomorphization-plan.md),
+  [m4-typeclass-per-method-abi-plan](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/m4-typeclass-per-method-abi-plan.md)
+  and [history/carrier-crossing-recovery-routing-plan](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/history/carrier-crossing-recovery-routing-plan.md):
   the specialization scan, by-value clones, and the recovery chokepoints.
-- [repr-decision-function-plan](../archive/repr-decision-function-plan.md):
+- [repr-decision-function-plan](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/repr-decision-function-plan.md):
   `repr_of` and the repr shadow.
-- [proper-tail-calls-plan](../archive/proper-tail-calls-plan.md): `emit_tail`,
+- [proper-tail-calls-plan](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/proper-tail-calls-plan.md): `emit_tail`,
   the un-hoisted tail call, groups and bouncing.
-- [c-name-accessors-share-static-buffers](../archive/c-name-accessors-share-static-buffers.md):
+- [c-name-accessors-share-static-buffers](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/c-name-accessors-share-static-buffers.md):
   why name accessors return owned strings.
-- [toplevel-def-initializers-run-before-toplevel-expressions](../archive/toplevel-def-initializers-run-before-toplevel-expressions.md)
-  and [history/top-level-def-init-dropped](../archive/history/top-level-def-init-dropped.md):
+- [toplevel-def-initializers-run-before-toplevel-expressions](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/toplevel-def-initializers-run-before-toplevel-expressions.md)
+  and [history/top-level-def-init-dropped](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/history/top-level-def-init-dropped.md):
   where def initializers run.
-- [r7rs-programs-compile-slowly](../archive/r7rs-programs-compile-slowly.md):
+- [r7rs-programs-compile-slowly](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/r7rs-programs-compile-slowly.md):
   the split build (`emit_split.c`, `g_emit_split`).
 
 ---
@@ -1171,13 +1171,13 @@ general triage flow.
 ## Bugs found while writing this guide
 
 Each was reproduced against the compiler this guide describes and filed in
-[`docs/reported/`](../reported/README.md). When one is fixed and archived,
+[`docs/reported/`](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/README.md). When one is fixed and archived,
 update the passage above that describes it and drop it from this list.
 
-- [compiled-args-not-evaluated-left-to-right](../reported/compiled-args-not-evaluated-left-to-right.md) -- Compiled code evaluates a later argument's call before an earlier argument
-- [nil-call-panic-not-propagated](../reported/nil-call-panic-not-propagated.md) -- A panic inside a `: nil` call does not stop its caller
-- [toplevel-statements-dropped-with-user-main](../reported/toplevel-statements-dropped-with-user-main.md) -- Top-level statements are silently dropped when the file defines `main`
-- [float-conversion-checker-passes-on-relative-path](../reported/float-conversion-checker-passes-on-relative-path.md) -- The float-conversion checker passes silently on a relative path
+- [compiled-args-not-evaluated-left-to-right](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/compiled-args-not-evaluated-left-to-right.md) -- Compiled code evaluates a later argument's call before an earlier argument
+- [nil-call-panic-not-propagated](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/nil-call-panic-not-propagated.md) -- A panic inside a `: nil` call does not stop its caller
+- [toplevel-statements-dropped-with-user-main](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/toplevel-statements-dropped-with-user-main.md) -- Top-level statements are silently dropped when the file defines `main`
+- [float-conversion-checker-passes-on-relative-path](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/float-conversion-checker-passes-on-relative-path.md) -- The float-conversion checker passes silently on a relative path
 
 ## Maintenance
 

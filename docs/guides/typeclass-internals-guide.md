@@ -1122,8 +1122,8 @@ The *why* behind most branches in the resolver is in `docs/archive/` and
 ## Bugs found while writing this guide
 
 Each was reproduced against the compiler this guide describes and filed in
-[`docs/reported/`](../reported/README.md). When one is fixed and archived,
+[`docs/reported/`](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/README.md). When one is fixed and archived,
 update the passage above that describes it and drop it from this list.
 
-- [int-receiver-binds-sole-foreign-instance](../reported/int-receiver-binds-sole-foreign-instance.md) -- An `int` argument binds a class's only instance, even a `cstr` one
-- [dict-clone-nested-lambda-cites-wrong-code](../reported/dict-clone-nested-lambda-cites-wrong-code.md) -- The dict-clone nested-lambda error cites TUR-E0311, an unrelated code
+- [int-receiver-binds-sole-foreign-instance](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/int-receiver-binds-sole-foreign-instance.md) -- An `int` argument binds a class's only instance, even a `cstr` one
+- [dict-clone-nested-lambda-cites-wrong-code](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/dict-clone-nested-lambda-cites-wrong-code.md) -- The dict-clone nested-lambda error cites TUR-E0311, an unrelated code

@@ -113,7 +113,7 @@ Two consequences worth knowing:
   is harmless: `load_expand_forms` (`elab_toplevel.c`) hoists a stdlib load
   written inside a `defmodule` body to the level the module sits at, so its
   definitions are global wherever the load is written
-  ([load-in-defmodule-claims-file-for-one-module](../archive/load-in-defmodule-claims-file-for-one-module.md),
+  ([load-in-defmodule-claims-file-for-one-module](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/load-in-defmodule-claims-file-for-one-module.md),
   resolved 2026-10-16). A non-stdlib file loaded in a module body still
   splices into that module, so a second module that loads it gets nothing.
 
@@ -367,7 +367,7 @@ In order, with `separate_compilation` true:
    (a full body scan, not just exported signatures), then the remaining base
    typedefs (pass B). All of them are behind `TUR_TD_`/`TUR_TY_` guards, so
    two headers carrying the same type do not collide
-   ([result-typedef-duplicated-across-modules](../archive/result-typedef-duplicated-across-modules.md)).
+   ([result-typedef-duplicated-across-modules](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/result-typedef-duplicated-across-modules.md)).
 6. Prototypes of the spec clones this module **owns** -- only those with a
    real owning module (`defining_module_name != NULL`), including forced ones.
 7. Prototypes of exported functions and of this module's user instance
@@ -469,7 +469,7 @@ function is an instance method (`owner_instance` set), its binding is not
 `is_from_stdlib`, and the instance's `origin_file_id` does not resolve to a
 path containing `stdlib/`. The header loop declares
 such methods even though they are not exported. History:
-[definstance-not-dispatchable-across-modules](../archive/definstance-not-dispatchable-across-modules.md).
+[definstance-not-dispatchable-across-modules](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/definstance-not-dispatchable-across-modules.md).
 
 The predicate does not detect a non-stdlib file `(load ...)`-ed into several
 modules; each TU then defines the instance externally (see
@@ -555,11 +555,11 @@ Then look at the evidence:
 | `multiple definition of '<fn>__spec__...'` in two module `.c` files | Two modules define generics with the same bare name, instantiated at the same types: clone names are not module-qualified |
 | `multiple definition of '__inst_<Class>_<m>_<T>'` | A `definstance` in a non-stdlib file that several modules `(load ...)` |
 | `incompatible type for argument N of '<fn>__spec__tur_adt_...'` | A forced spec at an aggregate type: the owner's clone takes `int64_t` |
-| `undefined reference to '<mod>__<fn>'` | The module is not in the build set, or inline C spells a mangled name by hand ([cross-module-private-helper-dropped-at-link](../archive/cross-module-private-helper-dropped-at-link.md)) |
+| `undefined reference to '<mod>__<fn>'` | The module is not in the build set, or inline C spells a mangled name by hand ([cross-module-private-helper-dropped-at-link](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/cross-module-private-helper-dropped-at-link.md)) |
 | `undefined reference to 'main'` | No module of a separate executable build defines `main`; `_main.c` does not synthesize one |
-| `static declaration follows non-static declaration`, `conflicting types` | The header prototype and the `.c` definition disagree (linkage or parameter spelling) -- e.g. [sepcomp-cps-entry-wrapper-byptr-agg-param-mismatch](../archive/sepcomp-cps-entry-wrapper-byptr-agg-param-mismatch.md) |
-| `unknown type name 'tur_adt_X'`, `field has incomplete type` | A typedef the header did not carry or ordered wrongly -- e.g. [sepcomp-recursive-byval-fixpoint-adt-incomplete-header-type](../archive/sepcomp-recursive-byval-fixpoint-adt-incomplete-header-type.md) |
-| `redefinition of 'Result__...'` | A monomorph typedef without its include guard ([result-typedef-duplicated-across-modules](../archive/result-typedef-duplicated-across-modules.md)) |
+| `static declaration follows non-static declaration`, `conflicting types` | The header prototype and the `.c` definition disagree (linkage or parameter spelling) -- e.g. [sepcomp-cps-entry-wrapper-byptr-agg-param-mismatch](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/sepcomp-cps-entry-wrapper-byptr-agg-param-mismatch.md) |
+| `unknown type name 'tur_adt_X'`, `field has incomplete type` | A typedef the header did not carry or ordered wrongly -- e.g. [sepcomp-recursive-byval-fixpoint-adt-incomplete-header-type](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/sepcomp-recursive-byval-fixpoint-adt-incomplete-header-type.md) |
+| `redefinition of 'Result__...'` | A monomorph typedef without its include guard ([result-typedef-duplicated-across-modules](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/result-typedef-duplicated-across-modules.md)) |
 | Runtime `tur: unhandled effect (tag N)`, abort | `perform` in one module's TU, `handle` in another's |
 
 ### A worked failure
@@ -618,14 +618,14 @@ A change to header or implementation emission wants a case in
 ## Bugs found while writing this guide
 
 Each was reproduced against the compiler this guide describes and filed in
-[`docs/reported/`](../reported/README.md). When one is fixed and archived,
+[`docs/reported/`](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/README.md). When one is fixed and archived,
 update the passage above that describes it and drop it from this list.
 
-- [sepcomp-cross-module-effect-unhandled](../reported/sepcomp-cross-module-effect-unhandled.md) -- Separately compiled: an effect performed in one module misses a handler in another
-- [spec-clone-names-not-module-qualified](../reported/spec-clone-names-not-module-qualified.md) -- Specializations of same-named generics in two modules collide at link
-- [forced-spec-loses-aggregate-type](../reported/forced-spec-loses-aggregate-type.md) -- A cross-module specialization at a struct type is emitted at `int64_t`
-- [loaded-user-definstance-duplicated-across-tus](../reported/loaded-user-definstance-duplicated-across-tus.md) -- A `definstance` in a file `load`-ed by two modules is defined twice
-- [nested-import-resolves-from-entry-dir](../reported/nested-import-resolves-from-entry-dir.md) -- A nested `import` resolves from the entry file's directory, and says otherwise
+- [sepcomp-cross-module-effect-unhandled](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/sepcomp-cross-module-effect-unhandled.md) -- Separately compiled: an effect performed in one module misses a handler in another
+- [spec-clone-names-not-module-qualified](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/spec-clone-names-not-module-qualified.md) -- Specializations of same-named generics in two modules collide at link
+- [forced-spec-loses-aggregate-type](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/forced-spec-loses-aggregate-type.md) -- A cross-module specialization at a struct type is emitted at `int64_t`
+- [loaded-user-definstance-duplicated-across-tus](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/loaded-user-definstance-duplicated-across-tus.md) -- A `definstance` in a file `load`-ed by two modules is defined twice
+- [nested-import-resolves-from-entry-dir](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/nested-import-resolves-from-entry-dir.md) -- A nested `import` resolves from the entry file's directory, and says otherwise
 
 ## Maintenance
 

@@ -125,7 +125,7 @@ through `r7rs_ns_parse` (`r7rs_numsyntax.inc`), the same parser
 In **user** Scheme source (not the prelude or `stdlib/r7rs/`), a leading `:`
 is an identifier, `[...]` is a list, `true`/`false`/`nil` are identifiers,
 and Turmeric `#` literals, inline C and `@` are refused
-([r7rs-turmeric-syntax-leaks](../archive/r7rs-turmeric-syntax-leaks.md)).
+([r7rs-turmeric-syntax-leaks](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/r7rs-turmeric-syntax-leaks.md)).
 
 ### Load expansion
 
@@ -345,7 +345,7 @@ A file with a `define-library` lowers to exactly one
 `(defmodule my/utils (export ...) imports... body...)` and may hold nothing
 else at top level. Restrictions that remain (one library per file, named by
 its path) are recorded in
-[r7rs-library-file-shape-and-export-rename](../reported/r7rs-library-file-shape-and-export-rename.md).
+[r7rs-library-file-shape-and-export-rename](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/r7rs-library-file-shape-and-export-rename.md).
 `(export (rename a b))` is supported through the clash table or an `any`
 alias.
 
@@ -389,7 +389,7 @@ several pieces in parallel.
 When it applies: `prelude_split_applies` (`src/main.c`) -- a `#lang r7rs`
 entry, a 64-bit host, not `--debug`, not writing a manifest, on Linux and
 macOS by default (`TUR_PRELUDE_SPLIT=1` opts in elsewhere; Windows is off
-until [r7rs-prelude-split-wrong-symbols-on-windows](../reported/r7rs-prelude-split-wrong-symbols-on-windows.md)
+until [r7rs-prelude-split-wrong-symbols-on-windows](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/r7rs-prelude-split-wrong-symbols-on-windows.md)
 closes). `TUR_PRELUDE_SPLIT=0` and `TUR_IMPORT_SPLIT=0` turn the two splits
 off.
 
@@ -500,7 +500,7 @@ are slots 0-3 of `tur_r7rs_dyn`, a `TUR_THREAD_LOCAL` struct of four
 (`TUR_REGION_NOTE_WORDS`), since the slot outlives any region. A fiber
 switch swaps it. It used to be process-global, and a `raise` on one thread
 reached another thread's handler
-([archived report](../archive/r7rs-dynamic-environment-shared-across-threads.md)).
+([archived report](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/r7rs-dynamic-environment-shared-across-threads.md)).
 
 On top of the slots:
 
@@ -520,7 +520,7 @@ A compiled Scheme `main` runs on a 1 GiB thread (64 MiB on 32-bit;
 Dynamic tail calls are proper through the tail-call trampoline
 (`tur_tb_armed_for`, `tur_tb_root`), which is why the continuation capture
 saves and restores that state
-([archived report](../archive/r7rs-tail-call-through-static-call-not-proper.md)).
+([archived report](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/r7rs-tail-call-through-static-call-not-proper.md)).
 
 ---
 
@@ -736,18 +736,18 @@ fixture programs without sanitizers and only compares output. See the
 
 From `docs/reported/` on 2026-10-16:
 
-- [r7rs-library-file-shape-and-export-rename](../reported/r7rs-library-file-shape-and-export-rename.md)
+- [r7rs-library-file-shape-and-export-rename](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/r7rs-library-file-shape-and-export-rename.md)
   -- one library per file, named by its path; held by decision.
-- [r7rs-prelude-split-wrong-symbols-on-windows](../reported/r7rs-prelude-split-wrong-symbols-on-windows.md)
+- [r7rs-prelude-split-wrong-symbols-on-windows](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/r7rs-prelude-split-wrong-symbols-on-windows.md)
   -- fix landed; the split stays off on Windows until a Windows run confirms.
-- [turi-r7rs-strings-and-ports-kept-until-teardown](../reported/turi-r7rs-strings-and-ports-kept-until-teardown.md)
+- [turi-r7rs-strings-and-ports-kept-until-teardown](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/turi-r7rs-strings-and-ports-kept-until-teardown.md)
   -- under `--interpret`, a dropped string's code points and a string port's
   buffer are kept until teardown.
-- [jit-r7rs-threads-lifecycle-exited-1-once](../reported/jit-r7rs-threads-lifecycle-exited-1-once.md)
+- [jit-r7rs-threads-lifecycle-exited-1-once](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/jit-r7rs-threads-lifecycle-exited-1-once.md)
   -- one unreproduced JIT failure of `r7rs-threads-lifecycle`.
 
 The heap-frames design for deep non-tail recursion is on hold:
-[r7rs-heap-frames-plan](../upcoming/hold/r7rs-heap-frames-plan.md).
+[r7rs-heap-frames-plan](https://github.com/turmeric-lang/turmeric/blob/main/docs/upcoming/hold/r7rs-heap-frames-plan.md).
 
 ---
 
@@ -755,11 +755,11 @@ The heap-frames design for deep non-tail recursion is on hold:
 
 | Topic | Archived plan or report |
 |---|---|
-| everything (start here): R0-R10, T0-T8, decisions D1-D11 | [r7rs-lang-plan](../archive/r7rs-lang-plan.md) |
-| the collector, then its threads | [r7rs-gc-plan](../archive/r7rs-gc-plan.md), [r7rs-gc-threads-plan](../archive/r7rs-gc-threads-plan.md) |
-| SRFIs, SRFI 18/216 and `(sicp extras)` | [r7rs-srfi-plan](../archive/r7rs-srfi-plan.md), [r7rs-srfi-18-216-sicp-plan](../archive/r7rs-srfi-18-216-sicp-plan.md) |
-| the split build and its caches | [r7rs-programs-compile-slowly](../archive/r7rs-programs-compile-slowly.md), [r7rs-imported-libraries-recompiled-every-build](../archive/r7rs-imported-libraries-recompiled-every-build.md), [r7rs-split-units-each-compile-the-runtime](../archive/r7rs-split-units-each-compile-the-runtime.md) |
-| escape-only `call/cc`, per-form prompts, the Windows jump | [r7rs-callcc-memory-never-freed](../archive/r7rs-callcc-memory-never-freed.md), [r7rs-toplevel-reentry-reruns-forms](../archive/r7rs-toplevel-reentry-reruns-forms.md), [r7rs-reentrant-callcc-not-on-windows](../archive/r7rs-reentrant-callcc-not-on-windows.md) |
+| everything (start here): R0-R10, T0-T8, decisions D1-D11 | [r7rs-lang-plan](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/r7rs-lang-plan.md) |
+| the collector, then its threads | [r7rs-gc-plan](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/r7rs-gc-plan.md), [r7rs-gc-threads-plan](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/r7rs-gc-threads-plan.md) |
+| SRFIs, SRFI 18/216 and `(sicp extras)` | [r7rs-srfi-plan](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/r7rs-srfi-plan.md), [r7rs-srfi-18-216-sicp-plan](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/r7rs-srfi-18-216-sicp-plan.md) |
+| the split build and its caches | [r7rs-programs-compile-slowly](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/r7rs-programs-compile-slowly.md), [r7rs-imported-libraries-recompiled-every-build](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/r7rs-imported-libraries-recompiled-every-build.md), [r7rs-split-units-each-compile-the-runtime](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/r7rs-split-units-each-compile-the-runtime.md) |
+| escape-only `call/cc`, per-form prompts, the Windows jump | [r7rs-callcc-memory-never-freed](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/r7rs-callcc-memory-never-freed.md), [r7rs-toplevel-reentry-reruns-forms](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/r7rs-toplevel-reentry-reruns-forms.md), [r7rs-reentrant-callcc-not-on-windows](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/r7rs-reentrant-callcc-not-on-windows.md) |
 
 Each other `docs/archive/r7rs-*.md` report explains one rule; the code
 comments usually name the report that introduced it.

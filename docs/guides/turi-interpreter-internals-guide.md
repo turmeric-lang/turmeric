@@ -279,7 +279,7 @@ struct TuriStruct {
   a struct argument as it is bound, recursing through by-value fields and
   stopping at `__rc`, `:heap` and non-struct values. It skips the copy when
   no write can be observed: the type's `AdtDef.field_written` is unset
-  ([turi-immutable-struct-args-copied-per-call](../archive/turi-immutable-struct-args-copied-per-call.md)).
+  ([turi-immutable-struct-args-copied-per-call](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/turi-immutable-struct-args-copied-per-call.md)).
 
 ### Closures and natives
 
@@ -325,7 +325,7 @@ Vec, Set, Map and HAMT are C objects the natives allocate, handed around as
 - **Forgery.** A sandboxed or macro env turns on handle provenance
   (`turi_prov_*`): a native whose signature names a handle argument refuses
   a word that no constructor minted in this env
-  ([turi-sandbox-handles-are-forgeable-integers](../archive/turi-sandbox-handles-are-forgeable-integers.md)).
+  ([turi-sandbox-handles-are-forgeable-integers](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/turi-sandbox-handles-are-forgeable-integers.md)).
 
 ---
 
@@ -368,8 +368,8 @@ struct EvalFrame {
   constrained call binds one `DictBind` per constraint (and per superclass)
   with `frame_bind_constraint_dicts`. Method dispatch inside the body then
   re-resolves the instance the elaborator baked to the carrier
-  representative ([turi-generic-dict-dispatch-bakes-representative-instance](../archive/turi-generic-dict-dispatch-bakes-representative-instance.md),
-  [turi-dict-passing-plan](../archive/turi-dict-passing-plan.md)). The
+  representative ([turi-generic-dict-dispatch-bakes-representative-instance](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/turi-generic-dict-dispatch-bakes-representative-instance.md),
+  [turi-dict-passing-plan](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/turi-dict-passing-plan.md)). The
   [typeclass internals guide](typeclass-internals-guide.md) covers the
   elaborator side.
 - **Three kinds of frame:**
@@ -505,7 +505,7 @@ nest C frames:
   (option and result combinators, seq bridges, comparators, the R7RS
   natives). Each
   callback is a fresh `eval_drive_ex` on top of the native's C frame.
-  [turi-cek-stackless-reentry-plan](../archive/turi-cek-stackless-reentry-plan.md)
+  [turi-cek-stackless-reentry-plan](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/turi-cek-stackless-reentry-plan.md)
   says this re-entry is gone because `option-map` and friends became pure
   Turmeric. But `cmd_eval_h` re-registers `native_option_map` (and the
   other natives) after the preload, so it is the native that runs.
@@ -554,13 +554,13 @@ A preloaded `defn` and a native fight over one global name:
   inline C. For `__inst_*` instance methods it keeps it only when the impl
   is defined in a `stdlib/` file, so a user `Show` with an inline-C body
   does not inherit stdlib's native
-  ([turi-show-instance-with-inline-c-body-prints-a-pointer](../archive/turi-show-instance-with-inline-c-body-prints-a-pointer.md)).
+  ([turi-show-instance-with-inline-c-body-prints-a-pointer](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/turi-show-instance-with-inline-c-body-prints-a-pointer.md)).
 - A defn with a **Turmeric** body overwrites the native.
 - Natives registered **after** the preload overwrite everything, including
   Turmeric bodies. That is why every entry point calls
   `turi_env_register_interpreter_natives` and
   `turi_register_collection_natives` again after `turi_env_preload_*`
-  ([turi-vec-new-filled-native-override-lost](../archive/turi-vec-new-filled-native-override-lost.md)).
+  ([turi-vec-new-filled-native-override-lost](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/turi-vec-new-filled-native-override-lost.md)).
   It is also why a stale native for a function stdlib has since rewritten
   in Turmeric keeps running.
 
@@ -582,7 +582,7 @@ ways:
    loop, and a single straight-line `return <expr>`. It declines anything
    with loops, several returns, `printf`, function-pointer calls or
    `__TUR_CNAME_` splices rather than guessing
-   ([history/turi-inline-c-silent-miscompiles](../archive/history/turi-inline-c-silent-miscompiles.md)).
+   ([history/turi-inline-c-silent-miscompiles](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/history/turi-inline-c-silent-miscompiles.md)).
    `TUR_IC_TRACE=1` logs which matcher claimed each body. An `int` result is
    re-tagged to `TURI_BOOL` for a `: bool` return, and to a `TuriStruct *`
    for a non-opaque ADT return.
@@ -630,7 +630,7 @@ This gives multishot, escaping and nested resume, the analogue of the
 compiled DK chain. When a clause is exactly `(resume k <inert value>)` and
 `k` is not `^multishot`, `ws_case_is_oneshot_resume` takes a fast path: the
 slice is pushed back in place, not cloned, and freed
-([turi-effect-perform-keeps-its-continuation](../archive/turi-effect-perform-keeps-its-continuation.md)).
+([turi-effect-perform-keeps-its-continuation](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/turi-effect-perform-keeps-its-continuation.md)).
 
 **No: the fiber fallback.** `eval_handle` runs the body on a 256 KB
 ucontext stack (`EFFECT_CONT_STACK_SIZE`, `mmap`'d) and `swapcontext`s on
@@ -659,14 +659,14 @@ runtime: the form at 4:21 (EX kind 16) is not work-stack capturable
 through a callback, such as
 `(handle (my-map xs (fn [x] (perform (Pick)))) (Pick [] ^multishot k) ...)`,
 prints 23 compiled and errors on the second `resume` interpreted.
-[turi-multishot-resume-in-while-aborts](../archive/turi-multishot-resume-in-while-aborts.md)
-and [turi-ws-capturable-stale-black-box-arms](../archive/turi-ws-capturable-stale-black-box-arms.md)
+[turi-multishot-resume-in-while-aborts](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/turi-multishot-resume-in-while-aborts.md)
+and [turi-ws-capturable-stale-black-box-arms](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/turi-ws-capturable-stale-black-box-arms.md)
 record earlier gaps of this shape.
 
 ### Delimited control and boundaries
 
 All of these live on the work-stack with heap boundary records, so nesting
-costs no C stack ([history/turi-c-scoped-forms-heap-bounding-plan](../archive/history/turi-c-scoped-forms-heap-bounding-plan.md)):
+costs no C stack ([history/turi-c-scoped-forms-heap-bounding-plan](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/history/turi-c-scoped-forms-heap-bounding-plan.md)):
 
 - **`reset`/`shift`/`shift0`.** `DK_RESET` marks the prompt. An abortive
   `shift` sets `env->aborting`, and its receiver runs through
@@ -742,11 +742,11 @@ might be captured stays until `turi_env_free`. These are the exceptions:
 
 | Since | What | Mechanism |
 |---|---|---|
-| 2026-10-05 | an activation's call frame, its `let`/match-arm frames and bindings, when nothing captured them | `frame_release` from `DK_CALL_RET` ([turi-call-frames-never-reclaimed](../archive/turi-call-frames-never-reclaimed.md)) |
-| 2026-10 | a released frame's tyvar/dict pins; a `defer` snapshot | free lists; the rest is open in [turi-call-pins-and-side-frames-not-reclaimed](../reported/turi-call-pins-and-side-frames-not-reclaimed.md) |
+| 2026-10-05 | an activation's call frame, its `let`/match-arm frames and bindings, when nothing captured them | `frame_release` from `DK_CALL_RET` ([turi-call-frames-never-reclaimed](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/turi-call-frames-never-reclaimed.md)) |
+| 2026-10 | a released frame's tyvar/dict pins; a `defer` snapshot | free lists; the rest is open in [turi-call-pins-and-side-frames-not-reclaimed](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/turi-call-pins-and-side-frames-not-reclaimed.md) |
 | 2026-10-07 | the by-value struct copy, skipped for types nothing writes | `turi_struct_arg_may_be_written` |
-| `#lang r7rs` | `call/cc` images nothing references | the continuation sweep ([r7rs-callcc-memory-never-freed](../archive/r7rs-callcc-memory-never-freed.md)) |
-| 2026-10-14, `#lang r7rs` | dropped closures, frames, bindings and structs (up to 8 fields) | the pool sweep ([turi-dropped-closures-kept-until-teardown](../archive/turi-dropped-closures-kept-until-teardown.md)) |
+| `#lang r7rs` | `call/cc` images nothing references | the continuation sweep ([r7rs-callcc-memory-never-freed](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/r7rs-callcc-memory-never-freed.md)) |
+| 2026-10-14, `#lang r7rs` | dropped closures, frames, bindings and structs (up to 8 fields) | the pool sweep ([turi-dropped-closures-kept-until-teardown](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/turi-dropped-closures-kept-until-teardown.md)) |
 | REPL only | per-turn scratch, when the turn's results can be relocated | scratch promotion (`turi_promote_escaping`, on in `repl_configure_env`) and the TR3 collection sweep after a rewind |
 | always | collection boxes the program never freed | `turi_env_track_collection`, at `turi_env_free` |
 
@@ -964,26 +964,26 @@ header still says nothing calls into it beyond creation; in fact
 
 The interpreter was built in phases, each archived with a status banner:
 
-1. [turi-eval-trampoline-plan](../archive/turi-eval-trampoline-plan.md) and
-   [turi-cek-frame-reuse-tco-plan](../archive/turi-cek-frame-reuse-tco-plan.md):
+1. [turi-eval-trampoline-plan](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/turi-eval-trampoline-plan.md) and
+   [turi-cek-frame-reuse-tco-plan](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/turi-cek-frame-reuse-tco-plan.md):
    the driver and its tail calls (T1-T3, F1-F5).
-2. [turi-interpreter-delimited-control-plan](../archive/turi-interpreter-delimited-control-plan.md):
+2. [turi-interpreter-delimited-control-plan](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/turi-interpreter-delimited-control-plan.md):
    `DK_PROMPT` and `TuriWsCont`.
-3. [turi-cek-stackless-reentry-plan](../archive/turi-cek-stackless-reentry-plan.md)
-   and [history/turi-c-scoped-forms-heap-bounding-plan](../archive/history/turi-c-scoped-forms-heap-bounding-plan.md):
+3. [turi-cek-stackless-reentry-plan](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/turi-cek-stackless-reentry-plan.md)
+   and [history/turi-c-scoped-forms-heap-bounding-plan](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/history/turi-c-scoped-forms-heap-bounding-plan.md):
    `DK_NATIVE_RESUME`, `DK_RESET`, `DK_ESCAPE`, `DK_CATCH_UNWIND`,
    `DK_ATOMICALLY`, and the retirement of the depth guard.
-4. [turi-incremental-elaboration-design](../archive/turi-incremental-elaboration-design.md):
+4. [turi-incremental-elaboration-design](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/turi-incremental-elaboration-design.md):
    `acc_forms`, `elab_session`.
-5. [history/turi-env-owned-value-arena-pool-plan](../archive/history/turi-env-owned-value-arena-pool-plan.md)
-   and [turi-interp-incremental-reclamation-plan](../archive/turi-interp-incremental-reclamation-plan.md):
+5. [history/turi-env-owned-value-arena-pool-plan](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/history/turi-env-owned-value-arena-pool-plan.md)
+   and [turi-interp-incremental-reclamation-plan](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/turi-interp-incremental-reclamation-plan.md):
    the value pool, scratch promotion, the TR3 collection sweep.
-6. [turi-call-frames-never-reclaimed](../archive/turi-call-frames-never-reclaimed.md),
-   [r7rs-callcc-memory-never-freed](../archive/r7rs-callcc-memory-never-freed.md)
-   and [turi-dropped-closures-kept-until-teardown](../archive/turi-dropped-closures-kept-until-teardown.md):
+6. [turi-call-frames-never-reclaimed](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/turi-call-frames-never-reclaimed.md),
+   [r7rs-callcc-memory-never-freed](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/r7rs-callcc-memory-never-freed.md)
+   and [turi-dropped-closures-kept-until-teardown](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/turi-dropped-closures-kept-until-teardown.md):
    the 2026-10 reclamation work.
-7. [turi-parity-post-v1-plan](../archive/turi-parity-post-v1-plan.md) and
-   [turi-interp-stdlib-natives-libturi-plan](../archive/turi-interp-stdlib-natives-libturi-plan.md):
+7. [turi-parity-post-v1-plan](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/turi-parity-post-v1-plan.md) and
+   [turi-interp-stdlib-natives-libturi-plan](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/turi-interp-stdlib-natives-libturi-plan.md):
    the preload and natives moving into `tur_core`.
 
 ---
@@ -991,13 +991,13 @@ The interpreter was built in phases, each archived with a status banner:
 ## Bugs found while writing this guide
 
 Each was reproduced against the compiler this guide describes and filed in
-[`docs/reported/`](../reported/README.md). When one is fixed and archived,
+[`docs/reported/`](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/README.md). When one is fixed and archived,
 update the passage above that describes it and drop it from this list.
 
-- [turi-skips-handler-borrow-capture-check](../reported/turi-skips-handler-borrow-capture-check.md) -- `tur --interpret` skips the effect-handler borrow-capture check
-- [turi-option-map-native-reintroduces-c-recursion](../reported/turi-option-map-native-reintroduces-c-recursion.md) -- The interpreter's native `option-map` re-nests the C stack
-- [turi-ignores-effect-row-errors](../reported/turi-ignores-effect-row-errors.md) -- `tur --interpret` prints effect-row errors and then runs the program anyway
-- [needle-files-without-trailing-newline-assert-nothing](../reported/needle-files-without-trailing-newline-assert-nothing.md) -- Needle files without a trailing newline assert nothing
+- [turi-skips-handler-borrow-capture-check](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/turi-skips-handler-borrow-capture-check.md) -- `tur --interpret` skips the effect-handler borrow-capture check
+- [turi-option-map-native-reintroduces-c-recursion](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/turi-option-map-native-reintroduces-c-recursion.md) -- The interpreter's native `option-map` re-nests the C stack
+- [turi-ignores-effect-row-errors](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/turi-ignores-effect-row-errors.md) -- `tur --interpret` prints effect-row errors and then runs the program anyway
+- [needle-files-without-trailing-newline-assert-nothing](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/needle-files-without-trailing-newline-assert-nothing.md) -- Needle files without a trailing newline assert nothing
 
 ## Maintenance
 

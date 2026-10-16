@@ -162,7 +162,7 @@ skipped.
 
 The design history, including the use-after-free that made the analysis
 necessary, is in
-[byvalue-recursive-adt-boxes-are-never-freed](../archive/byvalue-recursive-adt-boxes-are-never-freed.md).
+[byvalue-recursive-adt-boxes-are-never-freed](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/byvalue-recursive-adt-boxes-are-never-freed.md).
 
 ---
 
@@ -364,7 +364,7 @@ C compiler the jump a recursive walker relies on.
 
 What still leaks -- a consuming callee reached through a borrow, and spines in
 a container -- is
-[byvalue-recursive-shared-copies-leak](../reported/byvalue-recursive-shared-copies-leak.md).
+[byvalue-recursive-shared-copies-leak](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/byvalue-recursive-shared-copies-leak.md).
 
 ---
 
@@ -465,16 +465,16 @@ drops.
 | a confined `letrec` group | `letrec_members_confined`: each member only calls the others |
 | an `async` body bound to a local and spawned once | the spawn (`spawn_owns_env`), when the body settles |
 | a boxed fn field of a by-value struct local | `drop_fnfields_<T>` at scope exit (`drops_fn_fields`) |
-| a closure inside an Option/Result local | `sum_closure_payload_walk`, in the simplest shapes ([report](../reported/sum-closure-payload-never-dropped.md)) |
+| a closure inside an Option/Result local | `sum_closure_payload_walk`, in the simplest shapes ([report](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/sum-closure-payload-never-dropped.md)) |
 | a closure widened to `any` by a `returns_fresh_any_closure` producer | `__tur_any_closure_drop` |
 
 The `{shim, orig}` fat box a bare named `defn` is wrapped in is allocated once
 at file scope; per-call shim boxes are the subject of
-[fn-param-at-type-variable-slot-boxed-per-call](../reported/fn-param-at-type-variable-slot-boxed-per-call.md).
+[fn-param-at-type-variable-slot-boxed-per-call](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/fn-param-at-type-variable-slot-boxed-per-call.md).
 Which fn representation crosses which boundary is in
 [value-representations-guide.md](value-representations-guide.md#representations-fn-typed-values).
 The design history is
-[closure-drop-glue-plan](../archive/closure-drop-glue-plan.md).
+[closure-drop-glue-plan](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/closure-drop-glue-plan.md).
 
 ---
 
@@ -508,7 +508,7 @@ Three rules carry most of the weight:
 
 ---
 
-## rc<T> and weak<T>, from the emitter's side
+## `rc<T>` and `weak<T>`, from the emitter's side
 
 The mechanics are in [gc-guide.md](gc-guide.md); this is what the emitter
 writes and what to watch for.
@@ -606,48 +606,48 @@ retention -- rc blocks, DK reap entries -- count it.
 
 ## Open leak reports, by mechanism
 
-Check [`docs/reported/`](../reported/README.md) for the current list.
+Check [`docs/reported/`](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/README.md) for the current list.
 
 **By-value recursive spines**
 
-- [byvalue-recursive-shared-copies-leak](../reported/byvalue-recursive-shared-copies-leak.md) --
+- [byvalue-recursive-shared-copies-leak](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/byvalue-recursive-shared-copies-leak.md) --
   a spine reaching a consuming callee through a borrow, or held in a container.
 
 **Option/Result boxes**
 
-- [carrier-sum-option-boxes-have-no-owner](../reported/carrier-sum-option-boxes-have-no-owner.md) --
+- [carrier-sum-option-boxes-have-no-owner](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/carrier-sum-option-boxes-have-no-owner.md) --
   carrier cells behind consumers the compiler cannot see through (dictionary
   dispatch, HKT-constrained generics).
-- [sum-closure-payload-never-dropped](../reported/sum-closure-payload-never-dropped.md) --
+- [sum-closure-payload-never-dropped](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/sum-closure-payload-never-dropped.md) --
   a closure in an Option/Result local beyond the simplest shapes.
 
 **Closure envs and fn boxes**
 
-- [async-capturing-body-env-never-freed](../reported/async-capturing-body-env-never-freed.md) --
+- [async-capturing-body-env-never-freed](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/async-capturing-body-env-never-freed.md) --
   a capturing `async` body's env in the shapes the spawn cannot own.
-- [erased-capture-aggregate-box-never-freed](../reported/erased-capture-aggregate-box-never-freed.md) --
+- [erased-capture-aggregate-box-never-freed](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/erased-capture-aggregate-box-never-freed.md) --
   a by-value struct captured as a generic's erased `T`.
-- [fat-shim-arg-to-mutual-cps-pair-leaks](../reported/fat-shim-arg-to-mutual-cps-pair-leaks.md) --
+- [fat-shim-arg-to-mutual-cps-pair-leaks](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/fat-shim-arg-to-mutual-cps-pair-leaks.md) --
   a fat-shim box handed around a mutually recursive CPS pair.
-- [fn-param-at-type-variable-slot-boxed-per-call](../reported/fn-param-at-type-variable-slot-boxed-per-call.md) --
+- [fn-param-at-type-variable-slot-boxed-per-call](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/fn-param-at-type-variable-slot-boxed-per-call.md) --
   a fn parameter boxed into a type-variable slot per call.
 
 **Structs on the carrier ABI**
 
-- [opaque-field-struct-box-never-freed](../reported/opaque-field-struct-box-never-freed.md) --
+- [opaque-field-struct-box-never-freed](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/opaque-field-struct-box-never-freed.md) --
   a `defstruct` with a `defopaque` field (`String` included) boxes per
   construction.
 
 **Continuations (DK)**
 
-- [effect-nontail-resume-copies-held-until-outer-entry](../reported/effect-nontail-resume-copies-held-until-outer-entry.md) --
+- [effect-nontail-resume-copies-held-until-outer-entry](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/effect-nontail-resume-copies-held-until-outer-entry.md) --
   retention, not a leak: copies held until the outermost entry returns.
-- [cloneable-cont-escaped-chain-leaks](../reported/cloneable-cont-escaped-chain-leaks.md) --
+- [cloneable-cont-escaped-chain-leaks](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/cloneable-cont-escaped-chain-leaks.md) --
   an escaped cloneable continuation's wrapper and chain.
 
 **Dynamic dialects**
 
-- [saffron-static-ownership-residue](../reported/saffron-static-ownership-residue.md) --
+- [saffron-static-ownership-residue](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/saffron-static-ownership-residue.md) --
   `any` boxes no static owner reaches, with the Saffron collector off.
 
 ---
@@ -657,35 +657,35 @@ Check [`docs/reported/`](../reported/README.md) for the current list.
 Each rule above was added by one report. The ones that explain *why* a rule
 has the shape it has:
 
-- [byvalue-recursive-adt-boxes-are-never-freed](../archive/byvalue-recursive-adt-boxes-are-never-freed.md) --
+- [byvalue-recursive-adt-boxes-are-never-freed](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/byvalue-recursive-adt-boxes-are-never-freed.md) --
   spine drops, the `:copy` line, lends, own-discharge, provenance.
-- [closure-drop-glue-plan](../archive/closure-drop-glue-plan.md) -- the env
+- [closure-drop-glue-plan](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/closure-drop-glue-plan.md) -- the env
   header, `TUR_CLOSURE_DROP`, non-retaining fn params.
-- [any-struct-box-leak-per-widen](../archive/any-struct-box-leak-per-widen.md)
-  and [any-widen-stored-in-an-adt-field-has-no-owner](../archive/any-widen-stored-in-an-adt-field-has-no-owner.md) --
+- [any-struct-box-leak-per-widen](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/any-struct-box-leak-per-widen.md)
+  and [any-widen-stored-in-an-adt-field-has-no-owner](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/any-widen-stored-in-an-adt-field-has-no-owner.md) --
   `any` drops and the deep `__tur_any_drop`.
-- [reclamation-plan](../archive/reclamation-plan.md) -- RM1, the
+- [reclamation-plan](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/reclamation-plan.md) -- RM1, the
   accessor-whitelist sum-cell drop.
-- [inline-c-option-carrier-box-leaks](../archive/inline-c-option-carrier-box-leaks.md) --
+- [inline-c-option-carrier-box-leaks](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/inline-c-option-carrier-box-leaks.md) --
   the inline-C transfer contract.
-- [value-struct-payload-sum-monomorph-box-has-no-owner](../archive/value-struct-payload-sum-monomorph-box-has-no-owner.md)
-  and [sum-payload-box-leaks-at-match](../archive/sum-payload-box-leaks-at-match.md) --
+- [value-struct-payload-sum-monomorph-box-has-no-owner](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/value-struct-payload-sum-monomorph-box-has-no-owner.md)
+  and [sum-payload-box-leaks-at-match](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/sum-payload-box-leaks-at-match.md) --
   payload boxes.
-- [mut-cell-is-never-freed](../archive/mut-cell-is-never-freed.md),
-  [rc-of-sum-type-drops-no-glue](../archive/rc-of-sum-type-drops-no-glue.md),
-  [history/drop-glue-shallow-nested-owning-aggregate](../archive/history/drop-glue-shallow-nested-owning-aggregate.md).
+- [mut-cell-is-never-freed](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/mut-cell-is-never-freed.md),
+  [rc-of-sum-type-drops-no-glue](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/rc-of-sum-type-drops-no-glue.md),
+  [history/drop-glue-shallow-nested-owning-aggregate](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/history/drop-glue-shallow-nested-owning-aggregate.md).
 
 ---
 
 ## Bugs found while writing this guide
 
 Each was reproduced against the compiler this guide describes and filed in
-[`docs/reported/`](../reported/README.md). When one is fixed and archived,
+[`docs/reported/`](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/README.md). When one is fixed and archived,
 update the passage above that describes it and drop it from this list.
 
-- [adt-fn-field-drop-glue-bare-free](../reported/adt-fn-field-drop-glue-bare-free.md) -- Drop glue frees a closure field with a bare `free()` -- invalid pointer
-- [auto-drop-defers-skipped-on-early-return](../reported/auto-drop-defers-skipped-on-early-return.md) -- Injected scope-exit drops are skipped by an early `return`
-- [regions-off-source-runtime-link-failure](../reported/regions-off-source-runtime-link-failure.md) -- `TUR_REGIONS=0` fails to link when the runtime comes from source
+- [adt-fn-field-drop-glue-bare-free](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/adt-fn-field-drop-glue-bare-free.md) -- Drop glue frees a closure field with a bare `free()` -- invalid pointer
+- [auto-drop-defers-skipped-on-early-return](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/auto-drop-defers-skipped-on-early-return.md) -- Injected scope-exit drops are skipped by an early `return`
+- [regions-off-source-runtime-link-failure](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/regions-off-source-runtime-link-failure.md) -- `TUR_REGIONS=0` fails to link when the runtime comes from source
 
 ## Maintenance
 

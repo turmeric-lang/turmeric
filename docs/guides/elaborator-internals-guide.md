@@ -114,7 +114,7 @@ falls into these groups:
 
 | Group | Fields | Notes |
 |---|---|---|
-| Memory and names | `arena`, `st`, `next_id`, `next_stdlib_id`, `ids_stdlib`, `next_implib_id`, `ids_implib`, `next_gensym_id` | Draw ids through `elab_fresh_id`, never `next_id++`. Stdlib and imported-library forms take ids from their own counters (bases `ELAB_STDLIB_ID_BASE`, `ELAB_IMPLIB_ID_BASE`) so their mangled names do not move with the size of the program, which the split-build C cache depends on ([r7rs-programs-compile-slowly](../archive/r7rs-programs-compile-slowly.md)) |
+| Memory and names | `arena`, `st`, `next_id`, `next_stdlib_id`, `ids_stdlib`, `next_implib_id`, `ids_implib`, `next_gensym_id` | Draw ids through `elab_fresh_id`, never `next_id++`. Stdlib and imported-library forms take ids from their own counters (bases `ELAB_STDLIB_ID_BASE`, `ELAB_IMPLIB_ID_BASE`) so their mangled names do not move with the size of the program, which the split-build C cache depends on ([r7rs-programs-compile-slowly](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/r7rs-programs-compile-slowly.md)) |
 | Scope | `scope` (current), `global`, `fn_entry_outer_scope`, `letrec_self_group` | See the next section |
 | Cached symbols | `sym_let`, `sym_defn`, `sym_caret_linear`, `kw_heap`, ... (several hundred) | Interned once in `elab_init_state`; special-form dispatch compares pointers |
 | Registries | `adt_defs`, `macros`, `typeclass_env`, `effect_env`, `type_alias_*`, `dynvar_entries`, `global_protocols`, `loaded_modules` | Grow for the whole unit; freed at return unless a session keeps them |
@@ -291,7 +291,7 @@ A program with no `main` and loose top-level statements gets one:
 ```
 
 The fold exists so a top-level `handle` reaches the CPS/DK backend like one
-in a user `main` ([cps-toplevel-synthesized-main-bypasses-dk](../archive/cps-toplevel-synthesized-main-bypasses-dk.md)).
+in a user `main` ([cps-toplevel-synthesized-main-bypasses-dk](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/cps-toplevel-synthesized-main-bypasses-dk.md)).
 It is conservative. It aborts, leaving the forms as they were, when any
 user-region form is:
 
@@ -302,7 +302,7 @@ user-region form is:
 - a risky handle shape (`fold_stmt_is_risky`) or an unhandled `perform`;
 - a `def` with a non-trivial initializer that follows a statement (its
   initializer would otherwise run before the statement;
-  [toplevel-def-initializers-run-before-toplevel-expressions](../archive/toplevel-def-initializers-run-before-toplevel-expressions.md)).
+  [toplevel-def-initializers-run-before-toplevel-expressions](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/toplevel-def-initializers-run-before-toplevel-expressions.md)).
 
 It never runs under the interpreter (`g_interpret_mode`), where it would
 make `tur eval` return the `main` closure instead of the expression's value,
@@ -349,14 +349,14 @@ around `elab_form`. Two mechanisms change the order:
   fails, `file_scope_defs` is rolled back, the slot is marked deferred, and it
   is retried after every other form, this time without a capture frame, so a
   real error reports for real
-  ([typeclass-method-resolution-ignores-the-class](../archive/typeclass-method-resolution-ignores-the-class.md)).
+  ([typeclass-method-resolution-ignores-the-class](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/typeclass-method-resolution-ignores-the-class.md)).
 - **Lossy callees (`FwdGenOrder`).** A forward declaration loses a generic
   callee's type parameters and a function-typed parameter's carrier flag. So a
   `defn` that calls such a callee before its definition waits for it.
   `fwd_gen_order_should_defer` parks it, and `tl_flush` elaborates the waiting
   `defn`s a later form names before that form. The scan is over unexpanded
   forms, so a call introduced by a macro is not seen
-  ([forward-call-to-generic-callee-typed-as-placeholder](../archive/forward-call-to-generic-callee-typed-as-placeholder.md)).
+  ([forward-call-to-generic-callee-typed-as-placeholder](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/forward-call-to-generic-callee-typed-as-placeholder.md)).
 
 Between forms, the loop resets `has_defmodule` at every source-file boundary
 and, after the last stdlib form, promotes `tur/` module bindings and macros to
@@ -550,9 +550,9 @@ variables, return-position conflicts).
   `saffron_default_param_kind`: `TY_INT` in a typed file, `TY_ANY` in a
   dynamic one. `Binding.type_is_carrier_default` records that the type is
   "one untyped word", not a claim that the value is an integer
-  ([perform-does-not-typecheck-its-arguments](../archive/perform-does-not-typecheck-its-arguments.md)).
+  ([perform-does-not-typecheck-its-arguments](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/perform-does-not-typecheck-its-arguments.md)).
 - An unannotated `defn` return is inferred from the body in pass 2
-  ([inferred-return-defaults-inconsistently](../archive/inferred-return-defaults-inconsistently.md)),
+  ([inferred-return-defaults-inconsistently](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/inferred-return-defaults-inconsistently.md)),
   but the pass-1 forward declaration says `TY_INT` (see [Pass 1](#pass-1-forward-declarations)).
 - **Implicit type variables (GS4).** An unknown name in a parameter or return
   annotation becomes a named `TY_TYVAR`. The KB-026 pass in `elab_defn` then
@@ -561,7 +561,7 @@ variables, return-position conflicts).
   parameter occurrence is demoted to a `CK_MOVE` type variable. A lone return
   occurrence is "unsupported return type keyword". Setting
   `e->strict_unknown_types` turns the fallback into an error; see
-  [unknown-type-annotation-becomes-implicit-tyvar](../reported/unknown-type-annotation-becomes-implicit-tyvar.md).
+  [unknown-type-annotation-becomes-implicit-tyvar](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/unknown-type-annotation-becomes-implicit-tyvar.md).
 
 So a higher-order parameter must be annotated. This fails, because `f`
 defaults to `int`:
@@ -606,8 +606,8 @@ A call to a generic function does the following in `elab_call_fn_inner`:
      checked against it with `type_eq`. A *provisional* binding yields: one to
      an `open_slot` variable, or to a variable that is not the enclosing
      signature's, is replaced by a later concrete type or signature variable
-     ([open-arg-first-binds-call-result-as-int](../archive/open-arg-first-binds-call-result-as-int.md),
-     [declared-tyvars-are-not-rigid](../archive/declared-tyvars-are-not-rigid.md)).
+     ([open-arg-first-binds-call-result-as-int](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/open-arg-first-binds-call-result-as-int.md),
+     [declared-tyvars-are-not-rigid](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/declared-tyvars-are-not-rigid.md)).
    - **`TY_APP`:** the head and argument are matched recursively on a scratch
      copy (so a failure leaves nothing half-bound). If that fails and the
      expected head is a type variable, it retries with a hole-headed partial
@@ -631,7 +631,7 @@ A call to a generic function does the following in `elab_call_fn_inner`:
    bindings)`. A result variable that nothing bound and that collides with an
    enclosing signature variable is **renamed apart** to `callee.A` and marked
    `open_slot`, so `(ok x)` inside `[A B E]` is not `(Result B B)`
-   ([generic-call-result-leaks-callee-tyvar-names](../archive/generic-call-result-leaks-callee-tyvar-names.md)).
+   ([generic-call-result-leaks-callee-tyvar-names](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/generic-call-result-leaks-callee-tyvar-names.md)).
 5. Record the bindings on the node: `call_.abi_bindings`,
    `call_.n_abi_bindings`. The emitter specializes the callee from them (see
    [monomorphization-abi-guide.md](monomorphization-abi-guide.md)).
@@ -745,7 +745,7 @@ parameter (or, for a Turmeric-bodied callee, a `:heap` node) is wrapped in an
 `EX_ASCRIBE` to `TYPE_INT`, so the emitter's ascription arm notes the word.
 Constructors are exempt. See `elab_call_fn_inner` near
 `call_arg_is_region_node_word`,
-[stdlib-region-store-hooks-unswept](../archive/stdlib-region-store-hooks-unswept.md)
+[stdlib-region-store-hooks-unswept](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/stdlib-region-store-hooks-unswept.md)
 and [regions-internals-guide.md](regions-internals-guide.md).
 
 **Written after elaboration.** Some fields on the same nodes are owned by
@@ -786,8 +786,8 @@ keeps them all. After a failed call the session must be discarded (partial
 definitions may be in its scope); the interpreter replays the committed turns
 into a fresh one (`elab_session_replay`, muted) and falls back to
 whole-program elaboration if that fails. Design:
-[turi-incremental-elaboration-design](../archive/turi-incremental-elaboration-design.md)
-and [playground-session-hygiene-plan](../archive/playground-session-hygiene-plan.md).
+[turi-incremental-elaboration-design](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/turi-incremental-elaboration-design.md)
+and [playground-session-hygiene-plan](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/playground-session-hygiene-plan.md).
 
 ---
 
@@ -817,11 +817,11 @@ lookup, and the resulting `Form` is elaborated in place. So:
   (`substitute_params`). If the template needs it, the result goes through the
   small compile-time evaluator (`ct_eval_form`, `CtEnv`). A `^syntax`
   parameter is passed as data
-  ([macro-args-elaborated-before-expansion](../archive/history/macro-args-elaborated-before-expansion.md)).
+  ([macro-args-elaborated-before-expansion](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/history/macro-args-elaborated-before-expansion.md)).
 - `MACRO_PROCEDURAL` (`defmacro*`): the body is compiled to a function in a
   capability-denied, fuel-limited turi env (`elab_macro_env_get`,
   `src/turi/macro_env.c`), created lazily and disposed with the elaborator
-  ([macro-system-direction-plan](../archive/macro-system-direction-plan.md)).
+  ([macro-system-direction-plan](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/macro-system-direction-plan.md)).
 
 User-facing behaviour is in [macros-guide.md](macros-guide.md).
 
@@ -923,12 +923,12 @@ recorded notes disagree. The emitter guides start there:
 ## Bugs found while writing this guide
 
 Each was reproduced against the compiler this guide describes and filed in
-[`docs/reported/`](../reported/README.md). When one is fixed and archived,
+[`docs/reported/`](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/README.md). When one is fixed and archived,
 update the passage above that describes it and drop it from this list.
 
-- [forward-call-to-unannotated-return-typed-int](../reported/forward-call-to-unannotated-return-typed-int.md) -- A call to a later-defined function with no return annotation is typed `int`
-- [let-bound-nullary-generic-retyped-invalid-c](../reported/let-bound-nullary-generic-retyped-invalid-c.md) -- A `let`-bound call to a nullary generic emits invalid C
-- [int64-float64-return-annotation-rejected](../reported/int64-float64-return-annotation-rejected.md) -- `int64` / `float64` are rejected as return-type annotations
+- [forward-call-to-unannotated-return-typed-int](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/forward-call-to-unannotated-return-typed-int.md) -- A call to a later-defined function with no return annotation is typed `int`
+- [let-bound-nullary-generic-retyped-invalid-c](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/let-bound-nullary-generic-retyped-invalid-c.md) -- A `let`-bound call to a nullary generic emits invalid C
+- [int64-float64-return-annotation-rejected](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/int64-float64-return-annotation-rejected.md) -- `int64` / `float64` are rejected as return-type annotations
 
 ## Maintenance
 

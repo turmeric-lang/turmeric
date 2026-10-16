@@ -567,7 +567,7 @@ Writing good needles:
 - Do not match a path, line or column unless that is the point of the test.
 - **End the file with a newline.** `read` drops a final unterminated line, so
   a one-line `expected.diag` without one asserts nothing. See
-  [needle-files-without-trailing-newline-assert-nothing](../reported/needle-files-without-trailing-newline-assert-nothing.md).
+  [needle-files-without-trailing-newline-assert-nothing](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/needle-files-without-trailing-newline-assert-nothing.md).
 - **Clear the pass cache after editing needles.** `stamp_key` hashes
   `input.tur` and `expected.c` but not `expected.diag`, `unexpected.diag` or
   `flags`. A fixture that passed once keeps passing from its stamp until you
@@ -675,14 +675,14 @@ a new code. See the [experimental flags guide](experimental-flags-guide.md).
 ## Bugs found while writing this guide
 
 Each was reproduced against the compiler this guide describes and filed in
-[`docs/reported/`](../reported/README.md). When one is fixed and archived,
+[`docs/reported/`](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/README.md). When one is fixed and archived,
 update the passage above that describes it and drop it from this list.
 
-- [sweet-exp-diagnostic-columns-not-translated](../reported/sweet-exp-diagnostic-columns-not-translated.md) -- Diagnostics in sweet-exp files report columns of the transformed text
-- [did-you-mean-unbound-symbol-drops-its-code](../reported/did-you-mean-unbound-symbol-drops-its-code.md) -- An unbound-symbol error with a suggestion loses its TUR-E0003 code
-- [diag-code-tables-drift-without-a-check](../reported/diag-code-tables-drift-without-a-check.md) -- The diagnostic-code tables drift apart, and `tur explain` shows it
-- [needle-files-without-trailing-newline-assert-nothing](../reported/needle-files-without-trailing-newline-assert-nothing.md) -- Needle files without a trailing newline assert nothing
-- [run-sh-stamp-cache-ignores-expectation-files](../reported/run-sh-stamp-cache-ignores-expectation-files.md) -- The test harnesses' pass cache ignores a fixture's expectation files
+- [sweet-exp-diagnostic-columns-not-translated](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/sweet-exp-diagnostic-columns-not-translated.md) -- Diagnostics in sweet-exp files report columns of the transformed text
+- [did-you-mean-unbound-symbol-drops-its-code](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/did-you-mean-unbound-symbol-drops-its-code.md) -- An unbound-symbol error with a suggestion loses its TUR-E0003 code
+- [diag-code-tables-drift-without-a-check](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/diag-code-tables-drift-without-a-check.md) -- The diagnostic-code tables drift apart, and `tur explain` shows it
+- [needle-files-without-trailing-newline-assert-nothing](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/needle-files-without-trailing-newline-assert-nothing.md) -- Needle files without a trailing newline assert nothing
+- [run-sh-stamp-cache-ignores-expectation-files](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/run-sh-stamp-cache-ignores-expectation-files.md) -- The test harnesses' pass cache ignores a fixture's expectation files
 
 ## Maintenance
 

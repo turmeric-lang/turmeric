@@ -667,15 +667,15 @@ and [diagnosing the compiler](diagnosing-the-compiler-guide.md).
 ## Bugs found while writing this guide
 
 Each was reproduced against the compiler this guide describes and filed in
-[`docs/reported/`](../reported/README.md). When one is fixed and archived,
+[`docs/reported/`](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/README.md). When one is fixed and archived,
 update the passage above that describes it and drop it from this list.
 
-- [tur-build-intermediate-c-path-collides](../reported/tur-build-intermediate-c-path-collides.md) -- Concurrent `tur build`s of same-named files in different directories swap programs
-- [build-file-and-run-project-ignore-manifest-experiments](../reported/build-file-and-run-project-ignore-manifest-experiments.md) -- Some commands ignore the manifest's `:experiments`
-- [global-flags-parsed-after-double-dash](../reported/global-flags-parsed-after-double-dash.md) -- Global flags after `--` are consumed by `tur` instead of passed to the program
-- [no-color-flag-rejected-everywhere](../reported/no-color-flag-rejected-everywhere.md) -- `--no-color` is documented but rejected in every position
-- [tur-run-dump-output-interleaves-program-output](../reported/tur-run-dump-output-interleaves-program-output.md) -- `tur --dump-* run` interleaves the program's output into the dump
-- [tur-jit-skips-spice-include-discovery](../reported/tur-jit-skips-spice-include-discovery.md) -- `tur jit <file>` does not discover spice includes
+- [tur-build-intermediate-c-path-collides](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/tur-build-intermediate-c-path-collides.md) -- Concurrent `tur build`s of same-named files in different directories swap programs
+- [build-file-and-run-project-ignore-manifest-experiments](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/build-file-and-run-project-ignore-manifest-experiments.md) -- Some commands ignore the manifest's `:experiments`
+- [global-flags-parsed-after-double-dash](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/global-flags-parsed-after-double-dash.md) -- Global flags after `--` are consumed by `tur` instead of passed to the program
+- [no-color-flag-rejected-everywhere](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/no-color-flag-rejected-everywhere.md) -- `--no-color` is documented but rejected in every position
+- [tur-run-dump-output-interleaves-program-output](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/tur-run-dump-output-interleaves-program-output.md) -- `tur --dump-* run` interleaves the program's output into the dump
+- [tur-jit-skips-spice-include-discovery](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/tur-jit-skips-spice-include-discovery.md) -- `tur jit <file>` does not discover spice includes
 
 ## Maintenance
 

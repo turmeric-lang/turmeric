@@ -16,7 +16,7 @@ The user-level picture (what a region is for, when to reach for one) is in
 the [GC guide](gc-guide.md#what-is-not-gc-managed) and the
 [memory usage guide](memory-usage-guide.md#4-bracket-allocation-heavy-phases-in-with-region).
 The design history is the archived
-[regions plan](../archive/regions-plan.md).
+[regions plan](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/regions-plan.md).
 
 > **Trust the code over the comments.** Several comments in this area predate
 > graduation (2026-09-05). `emit_cps_ir.c` says the region predicate "is false
@@ -190,7 +190,7 @@ retires. Measured with `TUR_REGION_STATS=1` on this tree:
 
 The first two fixtures say in their comments that the pop rewinds. It does
 not, so they cannot catch a rewind that corrupts memory. That is the open
-[region-rewind-fixtures-never-rewind](../reported/region-rewind-fixtures-never-rewind.md).
+[region-rewind-fixtures-never-rewind](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/region-rewind-fixtures-never-rewind.md).
 When you write a region fixture, pin the `region-stats` line (the
 `hook.sh` fixtures below show how), not just stdout.
 
@@ -307,7 +307,7 @@ tur_region_pop(__tur_rgn_N);
 The static walk only sees the result. On 2026-09-06, the day after
 graduation, three ordinary programs rewound memory that something still
 pointed into (region-lock-hardening in the
-[regions plan](../archive/regions-plan.md)):
+[regions plan](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/regions-plan.md)):
 
 1. a node pushed into an outer `Vec` from inside `with-region`;
 2. a node hidden behind an erased `:int` field of an admitted record result;
@@ -511,7 +511,7 @@ facts govern regions there:
    call never returns to this frame, so there would be nowhere to put the
    pop. `tailcall_routes_cps_to_cps` returns false for a region scope, and
    the arm's `force_direct` does the same
-   ([region-bracket-lost-when-bt-scope-specializes](../archive/region-bracket-lost-when-bt-scope-specializes.md)).
+   ([region-bracket-lost-when-bt-scope-specializes](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/region-bracket-lost-when-bt-scope-specializes.md)).
    The arm uses `emit_region_scope_reclaims` on the call expression's type
    and emits the same three-way close as `emit_value`, before
    `dk_run(__kont, ...)` delivers the value.
@@ -749,33 +749,33 @@ set by the note makes that pop retire
 
 Open:
 
-- [region-rewind-fixtures-never-rewind](../reported/region-rewind-fixtures-never-rewind.md)
+- [region-rewind-fixtures-never-rewind](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/region-rewind-fixtures-never-rewind.md)
   -- `region-with-region` and `region-scope-value-survives` retire every
   bracket, so they no longer test a rewind.
-- [byvalue-recursive-shared-copies-leak](../reported/byvalue-recursive-shared-copies-leak.md)
-  and [carrier-sum-option-boxes-have-no-owner](../reported/carrier-sum-option-boxes-have-no-owner.md)
+- [byvalue-recursive-shared-copies-leak](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/byvalue-recursive-shared-copies-leak.md)
+  and [carrier-sum-option-boxes-have-no-owner](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/carrier-sum-option-boxes-have-no-owner.md)
   -- leak reports that name a region as the remedy for part of their residue.
 
 Archived, for the *why*:
 
-- [regions-plan](../archive/regions-plan.md) -- the design, the increments,
+- [regions-plan](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/regions-plan.md) -- the design, the increments,
   region-lock-hardening, and the graduation checklist.
-- [region-escape-through-unhooked-stores](../archive/region-escape-through-unhooked-stores.md)
+- [region-escape-through-unhooked-stores](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/region-escape-through-unhooked-stores.md)
   -- the inline-C entry note, the extern-c boundary, the panic jam.
-- [stdlib-region-store-hooks-unswept](../archive/stdlib-region-store-hooks-unswept.md)
+- [stdlib-region-store-hooks-unswept](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/stdlib-region-store-hooks-unswept.md)
   -- the implicit erasure; why a case that erases on the way in tests
   nothing.
-- [region-walk-refuses-every-adt-result](../archive/region-walk-refuses-every-adt-result.md)
+- [region-walk-refuses-every-adt-result](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/region-walk-refuses-every-adt-result.md)
   -- the form-based scalar field check and the path-not-visited-set rule.
-- [region-bracket-lost-when-bt-scope-specializes](../archive/region-bracket-lost-when-bt-scope-specializes.md)
+- [region-bracket-lost-when-bt-scope-specializes](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/region-bracket-lost-when-bt-scope-specializes.md)
   -- why the CPS arm forces cps->direct.
-- [stdlib-list-null-check-retires-regions](../archive/stdlib-list-null-check-retires-regions.md)
+- [stdlib-list-null-check-retires-regions](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/stdlib-list-null-check-retires-regions.md)
   -- the null-test exception.
-- [region-rewind-reuses-only-head-slab](../archive/region-rewind-reuses-only-head-slab.md)
-  and [region-retired-generations-make-shutdown-quadratic](../archive/region-retired-generations-make-shutdown-quadratic.md)
+- [region-rewind-reuses-only-head-slab](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/region-rewind-reuses-only-head-slab.md)
+  and [region-retired-generations-make-shutdown-quadratic](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/region-retired-generations-make-shutdown-quadratic.md)
   -- the spare-slab list, the retired index and the one-pass shutdown.
 
-[frozen-region-aliasing-via-coercing-cast](../archive/frozen-region-aliasing-via-coercing-cast.md)
+[frozen-region-aliasing-via-coercing-cast](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/frozen-region-aliasing-via-coercing-cast.md)
 is about a `frozen` borrow region, an unrelated feature that shares the
 word.
 
@@ -795,12 +795,12 @@ Related guides: [gc-guide](gc-guide.md),
 ## Bugs found while writing this guide
 
 Each was reproduced against the compiler this guide describes and filed in
-[`docs/reported/`](../reported/README.md). When one is fixed and archived,
+[`docs/reported/`](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/README.md). When one is fixed and archived,
 update the passage above that describes it and drop it from this list.
 
-- [region-bracket-blocks-effects](../reported/region-bracket-blocks-effects.md) -- A `perform` inside `with-region` / `bt-scope` cannot reach an outer handler
-- [dead-base-ctor-ignores-regions-off](../reported/dead-base-ctor-ignores-regions-off.md) -- Dead generic-base constructor traps call the region allocator with regions off
-- [regions-off-source-runtime-link-failure](../reported/regions-off-source-runtime-link-failure.md) -- `TUR_REGIONS=0` fails to link when the runtime comes from source
+- [region-bracket-blocks-effects](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/region-bracket-blocks-effects.md) -- A `perform` inside `with-region` / `bt-scope` cannot reach an outer handler
+- [dead-base-ctor-ignores-regions-off](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/dead-base-ctor-ignores-regions-off.md) -- Dead generic-base constructor traps call the region allocator with regions off
+- [regions-off-source-runtime-link-failure](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/regions-off-source-runtime-link-failure.md) -- `TUR_REGIONS=0` fails to link when the runtime comes from source
 
 ## Maintenance
 

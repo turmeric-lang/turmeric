@@ -246,7 +246,7 @@ have been the root cause of silent miscompiles:
    yields the wrong value: the abortive continuation is never discarded. **This
    is currently broken**, not merely a hazard. The direct backend's
    `setjmp`/`longjmp` escape path was deleted with `emit_cps.c`; see
-   [evicted-reset-shift-degrades-to-body-eval](../reported/evicted-reset-shift-degrades-to-body-eval.md).
+   [evicted-reset-shift-degrades-to-body-eval](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/evicted-reset-shift-degrades-to-body-eval.md).
 
 The `cps-oracle-*` fixtures (e.g. `cps-oracle-reset-join-escape`,
 `cps-oracle-reset-both-branch-shift`) were written to assert `direct == cps`

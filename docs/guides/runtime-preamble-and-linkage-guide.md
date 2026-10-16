@@ -140,7 +140,7 @@ a build that broke because a block moved.
 | STM, panics, catch-unwind; `emit_winsock_compat_shim` (gated on `g_needs_winsock`); the deep-stack helper | |
 | CPS / DK machine and friends | gated (see below) |
 | fibers, threads, cancellation, the multi-threaded scheduler, futures, `select`, timers | |
-| rc<T> / GC | in runs bracketed by `emit_rt_defs_begin`/`_end` |
+| `rc<T>` / GC | in runs bracketed by `emit_rt_defs_begin`/`_end` |
 | session-type channels and routers | ends with `tur_role_close` |
 | `/* ==== tur: end of fixed runtime preamble ==== */` | the end marker |
 
@@ -150,7 +150,7 @@ Two things are emitted **after** the marker by every caller, deliberately:
   inline-C bodies. They are per-program, so inside the marked span they would
   make the span differ from the canonical text, and the split would disengage
   for every C-binding spice. That is exactly what
-  [jit-s2-split-disengages-on-hoisted-inline-c-include](../archive/jit-s2-split-disengages-on-hoisted-inline-c-include.md)
+  [jit-s2-split-disengages-on-hoisted-inline-c-include](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/jit-s2-split-disengages-on-hoisted-inline-c-include.md)
   was.
 - `emit_panic_site_slot`: the `tur_cur_site` thread-local. A thread-local
   inside the span is reached through a host accessor call in a split build,
@@ -327,7 +327,7 @@ compiled it again: about 4,200 lines of a 9,300-line TU for a one-line program
 in archive posture, measured 2026-10-16. S2 compiles it once. It started as a
 JIT optimization ([jit-guide](jit-guide.md)) and became the cc path's default
 on Linux and Windows on 2026-10-02
-([plan](../upcoming/cc-path-preamble-split-plan.md)).
+([plan](https://github.com/turmeric-lang/turmeric/blob/main/docs/upcoming/cc-path-preamble-split-plan.md)).
 
 ### The canonical text
 
@@ -390,7 +390,7 @@ The preamble's choice between `#include "hamt.h"` and loose `extern`
 declarations differs from program to program. That is why project includes
 are guarded out of the hosted decls, and why `jit_try_split_preamble` copies
 the program's own quoted includes back in. See
-[cc-path-split-windows-and-hamt-findings](../archive/cc-path-split-windows-and-hamt-findings.md).
+[cc-path-split-windows-and-hamt-findings](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/cc-path-split-windows-and-hamt-findings.md).
 
 ### The three committed files
 
@@ -479,7 +479,7 @@ mechanism layered on top. These compilers keep a thread-local's *address* live
 across a call, and a fiber can resume on another thread. So a thread-local
 that moves with a fiber is read through a `noinline` accessor with a
 memory-clobbering `asm`. See
-[fiber-tls-address-reuse](../archive/fiber-tls-address-reuse.md).
+[fiber-tls-address-reuse](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/fiber-tls-address-reuse.md).
 
 The generator reads `tur_tls.c` with a regex instead of keeping its own table.
 Keep each slot to the two-line shape above: a `__thread` definition, then a
@@ -510,7 +510,7 @@ probes was added after the split silently disengaged and nobody noticed:
 `tests/run.sh` asks the same question (one probe build) and folds the resolved
 preamble mode into its stamp cache key. Before that, an A/B run of the two
 paths reported green for a run that never happened
-([report](../archive/run-sh-stamp-cache-ignores-the-preamble-split-mode.md)).
+([report](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/run-sh-stamp-cache-ignores-the-preamble-split-mode.md)).
 
 ---
 
@@ -620,9 +620,9 @@ pastes, belongs in **both** `TUR_CORE_SOURCES` (so the JIT and the
 interpreter can resolve it) and `TURT_RUNTIME_SOURCES` (so a cc build can link
 it). Two archived reports are about a file that was in only one list:
 `symbols.c` missing from `libturi.a`
-([libturi-symbols-basename-collision](../archive/history/libturi-symbols-basename-collision.md)),
+([libturi-symbols-basename-collision](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/history/libturi-symbols-basename-collision.md)),
 and `contract_handler.c` missing from the lean archive
-([o0-build-cannot-link-contract-handler](../archive/o0-build-cannot-link-contract-handler.md),
+([o0-build-cannot-link-contract-handler](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/o0-build-cannot-link-contract-handler.md),
 hidden at `-O2` because dead-code elimination removed the only reference).
 
 ---
@@ -631,18 +631,18 @@ hidden at `-O2` because dead-code elimination removed the only reference).
 
 | Report | What went wrong | Lesson |
 |---|---|---|
-| [jit-s2-split-disengages-on-hoisted-inline-c-include](../archive/jit-s2-split-disengages-on-hoisted-inline-c-include.md) | hoisted inline-C includes sat inside the marked span; every C-binding spice lost the split | keep per-program text below the marker |
+| [jit-s2-split-disengages-on-hoisted-inline-c-include](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/jit-s2-split-disengages-on-hoisted-inline-c-include.md) | hoisted inline-C includes sat inside the marked span; every C-binding spice lost the split | keep per-program text below the marker |
 | `emit_rt_split_source` comments; the `jit` CI step | the archive-posture flag, then `g_trail_autoloaded`, differed between `emit-rt-split` and a real build; the split disengaged everywhere, twice | a new state input to the preamble joins the forced set |
-| [cc-path-split-windows-and-hamt-findings](../archive/cc-path-split-windows-and-hamt-findings.md) | (1) out-of-line `tur_frame_*` multiplied stack frames by about 6.7x (Windows `STATUS_STACK_OVERFLOW`, reported by bash as exit 127); (2) the frozen `hamt.h` include conflicted with loose externs | the split changes codegen as well as linkage; check inlining-sensitive helpers |
-| [cc-path-preamble-split-plan](../upcoming/cc-path-preamble-split-plan.md), "Where it actually got to" | 16 of the first 20 split failures were duplicated thread-locals: the hosted gcc build took the native branch | both halves must reach one storage |
-| [release-archive-cannot-compile](../archive/release-archive-cannot-compile.md) | the flat release layout matched no `locate_runtime_lib` candidate; source mode then wanted `src/runtime/*.c`, which the release does not ship | `locate_runtime_lib` probes `<exe_dir>` too; install and ship every archive |
-| [o0-build-cannot-link-contract-handler](../archive/o0-build-cannot-link-contract-handler.md) | no archive defined the contract-handler pair; `-O2` hid it | test a link at `-O0` when you add an extern the preamble or stdlib names |
-| [project-mode-rc-runtime-preamble-missing](../archive/history/project-mode-rc-runtime-preamble-missing.md) | project mode had no rc/frame runtime at all | the origin of `tur_runtime.h` and the owner TU |
+| [cc-path-split-windows-and-hamt-findings](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/cc-path-split-windows-and-hamt-findings.md) | (1) out-of-line `tur_frame_*` multiplied stack frames by about 6.7x (Windows `STATUS_STACK_OVERFLOW`, reported by bash as exit 127); (2) the frozen `hamt.h` include conflicted with loose externs | the split changes codegen as well as linkage; check inlining-sensitive helpers |
+| [cc-path-preamble-split-plan](https://github.com/turmeric-lang/turmeric/blob/main/docs/upcoming/cc-path-preamble-split-plan.md), "Where it actually got to" | 16 of the first 20 split failures were duplicated thread-locals: the hosted gcc build took the native branch | both halves must reach one storage |
+| [release-archive-cannot-compile](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/release-archive-cannot-compile.md) | the flat release layout matched no `locate_runtime_lib` candidate; source mode then wanted `src/runtime/*.c`, which the release does not ship | `locate_runtime_lib` probes `<exe_dir>` too; install and ship every archive |
+| [o0-build-cannot-link-contract-handler](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/o0-build-cannot-link-contract-handler.md) | no archive defined the contract-handler pair; `-O2` hid it | test a link at `-O0` when you add an extern the preamble or stdlib names |
+| [project-mode-rc-runtime-preamble-missing](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/history/project-mode-rc-runtime-preamble-missing.md) | project mode had no rc/frame runtime at all | the origin of `tur_runtime.h` and the owner TU |
 | "DEDUP-4b, the project half" comment in `cmd_build_multi` | archive posture with no archive on the link line; graduating regions made it fail on every multi-module executable | an emission posture is a promise the link step must keep |
-| [fiber-tls-address-reuse](../archive/fiber-tls-address-reuse.md) | clang and Windows gcc reused a thread-local's address after a fiber migrated threads | `TUR_TLS_FRESH` for fiber-owned thread-locals |
-| [run-sh-stamp-cache-ignores-the-preamble-split-mode](../archive/run-sh-stamp-cache-ignores-the-preamble-split-mode.md) | an A/B of the two preamble paths stamp-skipped the second run | measure which path a run took; do not assume it |
-| [r7rs-split-units-each-compile-the-runtime](../archive/r7rs-split-units-each-compile-the-runtime.md) | every r7rs unit compiled the collector and the DK machine | `emit_split_once_fns` |
-| [r7rs-prelude-split-wrong-symbols-on-windows](../reported/r7rs-prelude-split-wrong-symbols-on-windows.md) (open) | weak data records resolved to the wrong bytes under GNU ld for PE | no weak data in the r7rs split; `selectany` on PE. The r7rs split stays off on Windows until a Windows run confirms the fix |
+| [fiber-tls-address-reuse](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/fiber-tls-address-reuse.md) | clang and Windows gcc reused a thread-local's address after a fiber migrated threads | `TUR_TLS_FRESH` for fiber-owned thread-locals |
+| [run-sh-stamp-cache-ignores-the-preamble-split-mode](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/run-sh-stamp-cache-ignores-the-preamble-split-mode.md) | an A/B of the two preamble paths stamp-skipped the second run | measure which path a run took; do not assume it |
+| [r7rs-split-units-each-compile-the-runtime](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/r7rs-split-units-each-compile-the-runtime.md) | every r7rs unit compiled the collector and the DK machine | `emit_split_once_fns` |
+| [r7rs-prelude-split-wrong-symbols-on-windows](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/r7rs-prelude-split-wrong-symbols-on-windows.md) (open) | weak data records resolved to the wrong bytes under GNU ld for PE | no weak data in the r7rs split; `selectany` on PE. The r7rs split stays off on Windows until a Windows run confirms the fix |
 
 ---
 
@@ -672,11 +672,11 @@ To find *why* a hash differs, dump the probe from the failing invocation
 ## Bugs found while writing this guide
 
 Each was reproduced against the compiler this guide describes and filed in
-[`docs/reported/`](../reported/README.md). When one is fixed and archived,
+[`docs/reported/`](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/README.md). When one is fixed and archived,
 update the passage above that describes it and drop it from this list.
 
-- [wasm-build-takes-native-archive-posture](../reported/wasm-build-takes-native-archive-posture.md) -- `tur build --target wasm` emits the native-archive form of the runtime
-- [regions-off-source-runtime-link-failure](../reported/regions-off-source-runtime-link-failure.md) -- `TUR_REGIONS=0` fails to link when the runtime comes from source
+- [wasm-build-takes-native-archive-posture](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/wasm-build-takes-native-archive-posture.md) -- `tur build --target wasm` emits the native-archive form of the runtime
+- [regions-off-source-runtime-link-failure](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/regions-off-source-runtime-link-failure.md) -- `TUR_REGIONS=0` fails to link when the runtime comes from source
 
 ## Maintenance
 

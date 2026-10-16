@@ -69,7 +69,7 @@ exist, but only as stacks for threads and async I/O (see
 | `src/compiler/emit_cps_ir.c`, `.h` | Classification (`ensure_S`) and the CT-IR-to-C backend (`emit_cps_ir_try_fn`) |
 | `src/compiler/emit_dk_runtime.c`, `.h` | String emitters for the runtime: the DK machine, the cloneable<->DK bridge, the serial marshaler, the call/cc escape runtime, the `setjmp` selection |
 | `src/compiler/emit_module.c` | Prelude gating; `__dk_enter0` and `__dk_entry_leave`; the per-fiber state swap; `emit_rt_split_source` |
-| `src/compiler/emit_effects.c` | Handler literals and handler tables (`tur_handler_entry_t`), `cont?`, the cloneable reset fallback, and the direct emitter's `reset`/`shift`/`handle` for evicted functions. `emit_effects_handle` past its `Unsafe`-marker short-circuit is leftover fiber-era code that no longer compiles ([report](../reported/evicted-handle-reaches-deleted-fiber-emitter.md)) |
+| `src/compiler/emit_effects.c` | Handler literals and handler tables (`tur_handler_entry_t`), `cont?`, the cloneable reset fallback, and the direct emitter's `reset`/`shift`/`handle` for evicted functions. `emit_effects_handle` past its `Unsafe`-marker short-circuit is leftover fiber-era code that no longer compiles ([report](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/evicted-handle-reaches-deleted-fiber-emitter.md)) |
 | `src/compiler/emit_expr.c` | The poly-wrap `fn_cps` twin; the "this effect operation has no lowering here" error |
 | `src/runtime/generated/tur_rt_split*.{c,h}` | A committed snapshot of the preamble runtime (see [The split runtime](#the-split-runtime)) |
 
@@ -241,7 +241,7 @@ The memory usage guide measures the cost of
 Non-atomic operands are named `__tN` through a 32-slot pending list. It is
 folded leftmost-outermost, so the IR's evaluation order is the source's
 left-to-right order. Past 32 slots `atomize` drops bindings silently
-([report](../reported/cps-ir-pending-list-overflow-drops-bindings.md)).
+([report](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/cps-ir-pending-list-overflow-drops-bindings.md)).
 
 **`CT_LETRAW` is the most important design choice in the translator.** Any
 subexpression that passes `safe_to_delegate`, a closed list of control-free
@@ -272,7 +272,7 @@ that is not set exactly once per iteration, unconditionally, becomes a
 by-reference cell instead. Nested performing loops are still refused. A
 `return` inside such a loop is currently mistranslated as a `break` when code
 follows the loop
-([report](../reported/cps-loop-return-acts-as-break.md)). The
+([report](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/cps-loop-return-acts-as-break.md)). The
 user-facing limits are listed in the effects guide's
 [Performs inside loops and conditionals](effects-system-guide.md#performs-inside-loops-and-conditionals).
 `TUR_TRACE_CORE=1` prints `[LOOP-CARRIED]` and `[LOOP-REJECT]` lines for this
@@ -410,10 +410,10 @@ are **not** guarded:
 - **`reset`/`shift`** in an evicted function silently computes the wrong
   value. The direct emitter evaluates the reset body and applies the shift's
   receiver without aborting
-  ([evicted-reset-shift-degrades-to-body-eval](../reported/evicted-reset-shift-degrades-to-body-eval.md)).
+  ([evicted-reset-shift-degrades-to-body-eval](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/evicted-reset-shift-degrades-to-body-eval.md)).
 - **A `handle` whose body performs nothing** reaches leftover fiber-era code,
   and cc rejects the result
-  ([evicted-handle-reaches-deleted-fiber-emitter](../reported/evicted-handle-reaches-deleted-fiber-emitter.md)).
+  ([evicted-handle-reaches-deleted-fiber-emitter](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/evicted-handle-reaches-deleted-fiber-emitter.md)).
 
 ---
 
@@ -647,7 +647,7 @@ Read the `struct DK` comments in that text, or in its committed copy
   memoized per interned effect symbol. The table holds `CPS_MAX_EFFECTS` (128)
   entries. Past that, `effect_tag` returns 2 for every further effect, which
   collides with the first one; nothing diagnoses it
-  ([report](../reported/effect-tags-collide-past-128-effects.md)).
+  ([report](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/effect-tags-collide-past-128-effects.md)).
 
 ### Operations
 
@@ -708,7 +708,7 @@ Read the `struct DK` comments in that text, or in its committed copy
   `cont?` reads `!k->consumed`, set at every resume site
   (`__dk_cont_live_word`). That covers handler continuations only; `cont?` on
   a `call/cc` continuation does not link
-  ([report](../reported/cont-pred-on-escape-cont-fails-to-link.md)).
+  ([report](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/cont-pred-on-escape-cont-fails-to-link.md)).
 
 ### Why there is a driver
 
@@ -808,10 +808,10 @@ Who sets them:
 
 Known residue is tracked in open reports, for example:
 
-- [effect-nontail-resume-copies-held-until-outer-entry](../reported/effect-nontail-resume-copies-held-until-outer-entry.md)
-- [cloneable-cont-escaped-chain-leaks](../reported/cloneable-cont-escaped-chain-leaks.md)
+- [effect-nontail-resume-copies-held-until-outer-entry](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/effect-nontail-resume-copies-held-until-outer-entry.md)
+- [cloneable-cont-escaped-chain-leaks](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/cloneable-cont-escaped-chain-leaks.md)
 
-Check [`docs/reported/`](../reported/README.md) for the current list.
+Check [`docs/reported/`](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/README.md) for the current list.
 Fixture programs run without LeakSanitizer under `tests/run.sh`. Use
 `tests/run-leak-check.sh` (a `requires.leak-check` marker) to pin a DK leak
 fix.
@@ -890,7 +890,7 @@ A park has to reach the `async` body's own entry. If a direct-style C frame
 sits between the await and that entry, the runtime aborts ("await: a pending
 future would park below a direct-style call"). TUR-W0044 is the compile-time
 warning for the shapes that lead there. See
-[await-parks-only-to-the-nearest-c-frame](../reported/await-parks-only-to-the-nearest-c-frame.md).
+[await-parks-only-to-the-nearest-c-frame](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/await-parks-only-to-the-nearest-c-frame.md).
 
 **Fibers** survive as **stacks** for `fiber-new`, task groups, the scheduler,
 and async I/O and timers (`FiberBlock` in the emitted runtime;
@@ -921,7 +921,7 @@ These are process-wide:
 - the E2 registry `__tur_cps_reg[256]`. Registrations past 256 are dropped,
   and calls through those callbacks fall back to a fresh root and abort with
   "unhandled effect"
-  ([report](../reported/cps-callback-registry-overflows-past-256.md));
+  ([report](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/cps-callback-registry-overflows-past-256.md));
 - `__sk_registry`;
 - `g_dk_case_reopen_hnode`. It is a **plain static** that `dk_perform` sets
   immediately before each case call and a re-opening case reads at entry, so
@@ -1012,27 +1012,27 @@ Tests:
 The design was built in stages, and each stage's plan is archived with a
 status banner. In order:
 
-1. [cps-transform-plan](../archive/history/cps-transform-plan.md):
+1. [cps-transform-plan](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/history/cps-transform-plan.md):
    - CPS0-CPS11;
    - the coloring rule (CPS0.1);
    - the reference DK machine (CPS5);
    - the first codegen wiring.
-2. [cps-ir-to-c-backend-plan](../archive/cps-ir-to-c-backend-plan.md): the
+2. [cps-ir-to-c-backend-plan](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/cps-ir-to-c-backend-plan.md): the
    CT-IR backend and the `__cps` ABI (C0/C1).
-3. [cps-backend-unification-plan](../archive/cps-backend-unification-plan.md)
-   and [cps-backend-direct-lowering-removal-plan](../archive/cps-backend-direct-lowering-removal-plan.md):
+3. [cps-backend-unification-plan](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/cps-backend-unification-plan.md)
+   and [cps-backend-direct-lowering-removal-plan](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/cps-backend-direct-lowering-removal-plan.md):
    folding `emit_cps.c` into the CT-IR backend and deleting it.
-4. [cps-runtime-finish-plan](../archive/cps-runtime-finish-plan.md),
-   [cps-dk-sole-effect-lowering-plan](../archive/cps-dk-sole-effect-lowering-plan.md)
-   and [cps-dk-endgame-remaining-plan](../archive/cps-dk-endgame-remaining-plan.md):
+4. [cps-runtime-finish-plan](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/cps-runtime-finish-plan.md),
+   [cps-dk-sole-effect-lowering-plan](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/cps-dk-sole-effect-lowering-plan.md)
+   and [cps-dk-endgame-remaining-plan](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/cps-dk-endgame-remaining-plan.md):
    - E7 tail-resume trampolining;
    - deleting the fiber effect runtime.
-5. [cps-backend-effectful-callbacks-plan](../archive/cps-backend-effectful-callbacks-plan.md):
+5. [cps-backend-effectful-callbacks-plan](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/cps-backend-effectful-callbacks-plan.md):
    the E2 threading mechanisms.
-6. [history/cps-backend-owning-env-teardown-e3-plan](../archive/history/cps-backend-owning-env-teardown-e3-plan.md)
-   and [cps-backend-env-capture-owning-values-plan](../archive/cps-backend-env-capture-owning-values-plan.md):
+6. [history/cps-backend-owning-env-teardown-e3-plan](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/history/cps-backend-owning-env-teardown-e3-plan.md)
+   and [cps-backend-env-capture-owning-values-plan](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/cps-backend-env-capture-owning-values-plan.md):
    owning captures and env teardown.
-7. [cps-backend-unification-u5-async-substrate-plan](../archive/cps-backend-unification-u5-async-substrate-plan.md):
+7. [cps-backend-unification-u5-async-substrate-plan](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/cps-backend-unification-u5-async-substrate-plan.md):
    `await` on DK. Its architecture section predates the native `CT_AWAIT`
    lowering.
 

@@ -396,7 +396,7 @@ gate and a discharge:
    handle, the inference walk removes `Unsafe` from the body's row: the block
    **discharges** the effect, so a safe wrapper over an unsafe primitive has an
    empty row. That is decision "Option A" in the
-   [effect-row honesty plan](../upcoming/effect-row-honesty-plan.md#3-decision-option-a-for-fxunsafe).
+   [effect-row honesty plan](https://github.com/turmeric-lang/turmeric/blob/main/docs/upcoming/effect-row-honesty-plan.md#3-decision-option-a-for-fxunsafe).
 3. W0033 skips the marker's clause. CPS coloring does **not** skip it:
    `cps_control_walk` seeds on every `EX_HANDLE`, so a function containing an
    `(unsafe ...)` block is colored, and so is every caller:
@@ -460,7 +460,7 @@ rows, never with `effect_row_is_empty` on a type.
 
 ### The effect-row honesty plan
 
-[effect-row-honesty-plan](../upcoming/effect-row-honesty-plan.md) is open.
+[effect-row-honesty-plan](https://github.com/turmeric-lang/turmeric/blob/main/docs/upcoming/effect-row-honesty-plan.md) is open.
 W0 (attributes out of `#fx{}`), W1 (TUR-E0026), W2 (compiler-known
 capabilities), W3 (guide corrections) and W4 (`IO` on `println`, the
 runtime-pure gates) are done and described above. W5 -- whether
@@ -521,19 +521,19 @@ many times a diagnostic prints.
 - **`(unsafe ...)` colors.** The marker handle is a coloring seed, so a safe
   wrapper and all its callers are CPS-colored although nothing can be
   performed (see [Capabilities and `Unsafe`](#capabilities-and-unsafe)).
-- [effect-tags-collide-past-128-effects](../reported/effect-tags-collide-past-128-effects.md)
+- [effect-tags-collide-past-128-effects](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/effect-tags-collide-past-128-effects.md)
   -- the emitter's effect tag table, downstream of rows but keyed on the same
   effects.
-- [cps-effectful-callback-through-multi-arg-or-untyped-param](../reported/cps-effectful-callback-through-multi-arg-or-untyped-param.md)
+- [cps-effectful-callback-through-multi-arg-or-untyped-param](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/cps-effectful-callback-through-multi-arg-or-untyped-param.md)
   -- threading through un-annotated (empty-row) fn parameters.
-- [serial-receiver-effect-under-if-closure-or-leaf](../reported/serial-receiver-effect-under-if-closure-or-leaf.md)
+- [serial-receiver-effect-under-if-closure-or-leaf](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/serial-receiver-effect-under-if-closure-or-leaf.md)
   -- a consumer of `fn_effect_may_escape`.
 
 Closed reports that explain current code:
-[capability-effect-tag-silently-resolves-to-empty-row](../archive/capability-effect-tag-silently-resolves-to-empty-row.md),
-[module-members-skip-effect-row-checking](../archive/module-members-skip-effect-row-checking.md),
-[strict-effects-and-lint-effects-are-indistinguishable](../archive/strict-effects-and-lint-effects-are-indistinguishable.md),
-[strict-effects-w0030-names-synthesized-lambdas](../archive/strict-effects-w0030-names-synthesized-lambdas.md).
+[capability-effect-tag-silently-resolves-to-empty-row](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/capability-effect-tag-silently-resolves-to-empty-row.md),
+[module-members-skip-effect-row-checking](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/module-members-skip-effect-row-checking.md),
+[strict-effects-and-lint-effects-are-indistinguishable](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/strict-effects-and-lint-effects-are-indistinguishable.md),
+[strict-effects-w0030-names-synthesized-lambdas](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/strict-effects-w0030-names-synthesized-lambdas.md).
 
 Related internals guides: [compiler internals](compiler-internals.md),
 [elaborator internals](elaborator-internals-guide.md),
@@ -544,13 +544,13 @@ Related internals guides: [compiler internals](compiler-internals.md),
 ## Bugs found while writing this guide
 
 Each was reproduced against the compiler this guide describes and filed in
-[`docs/reported/`](../reported/README.md). When one is fixed and archived,
+[`docs/reported/`](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/README.md). When one is fixed and archived,
 update the passage above that describes it and drop it from this list.
 
-- [effect-row-merge-overflows-past-32-effects](../reported/effect-row-merge-overflows-past-32-effects.md) -- Effect-row merge overflows a 32-entry stack array
-- [turi-ignores-effect-row-errors](../reported/turi-ignores-effect-row-errors.md) -- `tur --interpret` prints effect-row errors and then runs the program anyway
-- [e0254-emitted-once-per-fixpoint-sweep](../reported/e0254-emitted-once-per-fixpoint-sweep.md) -- TUR-E0254 is printed once per effect-inference sweep
-- [effect-row-non-symbol-items-dropped](../reported/effect-row-non-symbol-items-dropped.md) -- Non-symbol items in an effect row are silently dropped
+- [effect-row-merge-overflows-past-32-effects](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/effect-row-merge-overflows-past-32-effects.md) -- Effect-row merge overflows a 32-entry stack array
+- [turi-ignores-effect-row-errors](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/turi-ignores-effect-row-errors.md) -- `tur --interpret` prints effect-row errors and then runs the program anyway
+- [e0254-emitted-once-per-fixpoint-sweep](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/e0254-emitted-once-per-fixpoint-sweep.md) -- TUR-E0254 is printed once per effect-inference sweep
+- [effect-row-non-symbol-items-dropped](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/effect-row-non-symbol-items-dropped.md) -- Non-symbol items in an effect row are silently dropped
 
 ## Maintenance
 

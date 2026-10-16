@@ -604,14 +604,14 @@ no `:cmake-deps`. A project consumes such an install as a library through
 ## Bugs found while writing this guide
 
 Each was reproduced against the compiler this guide describes and filed in
-[`docs/reported/`](../reported/README.md). When one is fixed and archived,
+[`docs/reported/`](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/README.md). When one is fixed and archived,
 update the passage above that describes it and drop it from this list.
 
-- [add-cmake-manifest-rewrite-loses-keys](../reported/add-cmake-manifest-rewrite-loses-keys.md) -- `tur add-cmake` rewrites `build.tur` and drops what it does not model
-- [build-opts-c-flags-never-consumed](../reported/build-opts-c-flags-never-consumed.md) -- `:build-opts :c-flags` (and `:no-stdlib`) are parsed but never used
-- [tur-run-cmake-marker-skips-after-failed-configure](../reported/tur-run-cmake-marker-skips-after-failed-configure.md) -- `tur run` skips the cmake-deps build after a failed configure
-- [manifest-reader-error-exits-zero](../reported/manifest-reader-error-exits-zero.md) -- A broken `build.tur` prints an error but `tur check` exits 0
-- [tur-add-cannot-edit-sweet-manifest](../reported/tur-add-cannot-edit-sweet-manifest.md) -- `tur add` cannot edit a `build.tur.sweet` manifest
+- [add-cmake-manifest-rewrite-loses-keys](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/add-cmake-manifest-rewrite-loses-keys.md) -- `tur add-cmake` rewrites `build.tur` and drops what it does not model
+- [build-opts-c-flags-never-consumed](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/build-opts-c-flags-never-consumed.md) -- `:build-opts :c-flags` (and `:no-stdlib`) are parsed but never used
+- [tur-run-cmake-marker-skips-after-failed-configure](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/tur-run-cmake-marker-skips-after-failed-configure.md) -- `tur run` skips the cmake-deps build after a failed configure
+- [manifest-reader-error-exits-zero](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/manifest-reader-error-exits-zero.md) -- A broken `build.tur` prints an error but `tur check` exits 0
+- [tur-add-cannot-edit-sweet-manifest](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/tur-add-cannot-edit-sweet-manifest.md) -- `tur add` cannot edit a `build.tur.sweet` manifest
 
 ## Maintenance
 
