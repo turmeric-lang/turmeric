@@ -1,0 +1,34 @@
+;; opaque-field-struct-box-never-freed: a struct with a POINTER opaque field is
+;; a by-value product now.  Its slot is the int64 word, and every read hands the
+;; field back as the `void *` the opaque is: from a field access, through a
+;; function returning the opaque, and out of a Vec element.  run.sh fails on a
+;; -Wint-conversion warning in the emitted C, so a missing cast would show.  (A
+;; `:heap` record's opaque field takes the cast read too; the
+;; saffron-record-opaque-ptr-field and r7rs fixtures cover that path.)
+(defopaque Hnd :ptr<void>)
+
+(defn mk-handle [] : Hnd
+  ```c
+  static int64_t cell = 42;
+  return &cell;
+  ```)
+
+(defn handle-value [h : Hnd] : int
+  ```c
+  return *(int64_t *)h;
+  ```)
+
+(defstruct Holder :copy [h : Hnd n : int])
+
+(defn holder-handle [x : Holder] : Hnd (.h x))
+
+(defn main [] : int
+  (let [x (Holder (mk-handle) 7)
+        v (vec-new)]
+    (do
+      (vec-push! v x)
+      (println (handle-value (holder-handle x)))
+      (println (handle-value (.h (vec-get v 0))))
+      (println (.n (vec-get v 0)))
+      (vec-free v)
+      0)))

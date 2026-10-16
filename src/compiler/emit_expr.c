@@ -18508,7 +18508,13 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     bool fld_aggregate =
                         (fld_rty.kind == TY_APP || fld_rty.kind == TY_STRUCT ||
                          fld_rty.kind == TY_ADT) &&
-                        !type_is_heap_struct(fld_rty) && !type_is_heap_adt(fld_rty);
+                        !type_is_heap_struct(fld_rty) && !type_is_heap_adt(fld_rty) &&
+                        /* opaque-field-struct-box-never-freed: an opaque is ONE
+                         * word, not an inline aggregate, so it takes the cast read
+                         * below -- a pointer opaque's int64 slot read back as the
+                         * `void *` the accessor returns. */
+                        !(fld_rty.kind == TY_ADT && fld_rty.as.adt_.def &&
+                          fld_rty.as.adt_.def->is_opaque);
                     const char *heap_fld_cast =
                         (fld_rcty && strcmp(fld_rcty, "int64_t") != 0 &&
                          cty && strcmp(cty, "int64_t") == 0)
