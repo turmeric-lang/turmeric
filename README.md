@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/turmeric-lang/turmeric/actions/workflows/ci.yml/badge.svg)](https://github.com/turmeric-lang/turmeric/actions/workflows/ci.yml)
 
-**Latest release:** `v0.65.2` -- New `--timings` flag breaks down where a compile's time goes, and the stdlib gains string search, split, join and lines helpers on String, StringSlice and cstr.
+**Latest release:** `v0.65.3` -- String gains trims, replace-all, repeat, pad and parse-int helpers, StringBuilder grows push-int!/push-repeat!/push-slice!/push!, and a new stdlib/unicode.tur adds Unicode classes, case folding and UTF-8 decoding.
 
 ## What
 
