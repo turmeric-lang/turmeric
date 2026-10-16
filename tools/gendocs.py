@@ -1166,7 +1166,6 @@ em { color: var(--green); font-style: italic; }
   margin-bottom: 1.25rem;
   transition: background 0.15s, border-color 0.15s;
 }
-.def-card:hover { background: var(--bg-hover); border-color: var(--border-mid); }
 .def-card:target { border-color: var(--gold); }
 
 .def-card-header {
@@ -1346,7 +1345,7 @@ details.internal-section summary {
   padding: 1rem 1.25rem;
   transition: background 0.15s, border-color 0.15s;
 }
-.index-card:hover { background: var(--bg-hover); border-color: var(--border-mid); text-decoration: none; }
+a.index-card:hover { background: var(--bg-hover); border-color: var(--border-mid); text-decoration: none; }
 .index-card h3 {
   font-family: 'Iosevka', 'Fira Code', monospace;
   font-size: 0.95rem;
