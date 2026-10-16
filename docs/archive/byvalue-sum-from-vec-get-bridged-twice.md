@@ -1,5 +1,9 @@
 # A 16-byte by-value sum read with `vec-get` is unboxed twice as a call argument
 
+**RESOLVED 2026-10-16** -- see [Resolution](#resolution-2026-10-16). Pinned by
+`tests/fixtures/byvalue-aggregate-element-as-call-arg` and
+`tests/fixtures/inline-c-option-wrapped-producer-as-call-arg`.
+
 **Severity: medium** (a hard cc error on the default path for an ordinary
 shape; the workaround is one `let`). Found 2026-10-16 writing turmeric-spices'
 `signal/tuning` tests, where `(degree? (vec-get entries 0) 0)` over a
@@ -86,3 +90,33 @@ A pass-by-pointer (> 16 byte) aggregate escapes because arm 1 emits
 - Either way, pin it with a fixture that passes `(vec-get v i)` of a
   one-word-payload `:copy` sum to a by-value parameter, plus the same through a
   HAMT value reader, since `mwb_arg_is_carrier_accessor` covers both.
+
+## Resolution (2026-10-16)
+
+Fixing it showed the defect was wider than filed. Any 9..16-byte by-value
+aggregate handed straight to a by-value parameter could be dereferenced twice:
+
+| Argument | Second bridge came from |
+| --- | --- |
+| `(vec-get v i)` of a one-word-payload sum, or of a two-word `defstruct` | the multiword-element-boxing arm (`emit_expr.c`) |
+| `(map-get m k)` of the same | `map-get` is a macro around a `let`, whose own lowering bridges its tail into a by-value temp |
+| an inline-C `(Option T)` / `(Result T E)` producer inside a `let`, `do` or `if` | the wrapper's lowering, as for `map-get` |
+
+In every row the inline-C straddle forward-mirror arm then bridged `raw` a
+second time. It asks whether the argument EXPRESSION produces a carrier
+(`fn_body_tail_byvalue_carrier_type`), which stays true through a wrapper or
+after another arm has converted `raw`.
+
+The fix keeps that arm's condition as it was, because in the per-argument
+`else if` chain the condition also claims the argument: an earlier attempt
+that tightened it let a later arm spill a `vec-of` element into a mistyped
+temp (`typeclass-applied-class-var-result` and two others, "invalid
+initializer"). The two new tests guard only the bridge itself:
+
+- `mwb_bridged`, set when the multiword-element-boxing arm converts `raw`;
+- the argument, through ascriptions, is a direct `EX_CALL`
+  (`expr_strip_ascribe`), the only shape whose `raw` still holds the carrier.
+
+`tests/run.sh` 3862 passed, 0 failed. The two fixtures also pass under
+`run-jit.sh`; under `run-turi.sh` the first passes and the second is the
+inline-C carve-out. Both fail to compile on the unfixed `main`.
