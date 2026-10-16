@@ -1,0 +1,137 @@
+==== headings and quotes ====
+<h1>Title</h1>
+<h2>Sub #not-closing</h2>
+<h1>Setext one</h1>
+<h2>Setext
+two</h2>
+<blockquote>
+<p>quoted *text*
+lazy line</p>
+<blockquote>
+<p>nested</p>
+</blockquote>
+</blockquote>
+
+----
+document [1-10]
+  heading 1 [1-1] text=Title
+  heading 2 [2-2] text=Sub #not-closing
+  heading 1 [3-4] text=Setext one
+  heading 2 [5-7] text=Setext\ntwo
+  block quote [8-10]
+    paragraph [8-9] text=quoted *text*\nlazy line
+    block quote [10-10]
+      paragraph [10-10] text=nested
+==== lists ====
+<ul>
+<li>a</li>
+<li>b</li>
+</ul>
+<ol start="3">
+<li>
+<p>three</p>
+</li>
+<li>
+<p>four</p>
+<p>still four</p>
+</li>
+</ol>
+<ul>
+<li>outer
+<ul>
+<li>inner</li>
+<li>inner two</li>
+</ul>
+</li>
+</ul>
+<ul>
+<li>
+<pre><code>code in item
+</code></pre>
+</li>
+</ul>
+
+----
+document [1-12]
+  bullet list, tight 1 [1-2]
+    item [1-1]
+      paragraph [1-1] text=a
+    item [2-2]
+      paragraph [2-2] text=b
+  ordered list, loose 3 [4-7]
+    item [4-4]
+      paragraph [4-4] text=three
+    item [5-7]
+      paragraph [5-5] text=four
+      paragraph [7-7] text=still four
+  bullet list, tight 1 [9-11]
+    item [9-11]
+      paragraph [9-9] text=outer
+      bullet list, tight 1 [10-11]
+        item [10-10]
+          paragraph [10-10] text=inner
+        item [11-11]
+          paragraph [11-11] text=inner two
+  bullet list, tight 1 [12-12]
+    item [12-12]
+      indented code [12-12] text=code in item\n
+==== code ====
+<pre><code>one
+
+two
+</code></pre>
+<pre><code class="language-py&amp;x">print(1 &lt; 2)
+</code></pre>
+<pre><code>	unclosed
+</code></pre>
+
+----
+document [1-10]
+  indented code [1-3] text=one\n\ntwo\n
+  fenced code [6-8] info=py&x # z text=print(1 < 2)\n
+  fenced code [9-10] info= text=	unclosed\n
+==== html ====
+<script>
+var x = 1;
+</script>
+<!-- a
+comment -->
+<div class="x">
+*not inline*
+<custom-tag a='1'>
+<hr />
+
+----
+document [1-11]
+  html block [1-3] text=<script>\nvar x = 1;\n</script>
+  html block [4-5] text=<!-- a\ncomment -->
+  html block [6-7] text=<div class="x">\n*not inline*
+  html block [9-9] text=<custom-tag a='1'>
+  thematic break [11-11]
+==== references ====
+<p>text after</p>
+
+----
+document [1-8]
+  paragraph [6-6] text=text after
+ref [foo bar] -> /url title=the "title"
+ref [baz] -> a b title=single
+ref [only] -> /x
+==== tag filter ====
+<div>
+&lt;script>alert(1)&lt;/script>
+<b>bold</b>
+</div>
+
+----
+document [1-4]
+  html block [1-4] text=<div>\n<script>alert(1)</script>\n<b>bold</b>\n</div>
+==== escaped html ====
+&lt;div&gt;
+&lt;i&gt;x&lt;/i&gt; &amp; y
+&lt;/div&gt;
+
+----
+document [1-3]
+  html block [1-3] text=<div>\n<i>x</i> & y\n</div>
+a &lt; b &amp; &quot;c&quot; &gt; d
