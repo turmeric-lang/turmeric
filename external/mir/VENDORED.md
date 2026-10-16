@@ -180,8 +180,7 @@ full history mirrored there) plus three fixes on fix/make-one-ret-distinct-targe
     headers, which the `__attribute__` change reaches where they use the
     same erase idiom.
 
-  d9f75585 (turmeric-lang/mir#7, not merged yet -- move the pin to its
-    merge commit) -- c2mir had no 128-bit integer:
+  d9f75585 (merged as 654322cc, turmeric-lang/mir#7) -- c2mir had no 128-bit integer:
     x86-64 did not declare __uint128_t at all and aarch64 declared it as a
     layout-only struct, so user inline C doing arithmetic on one failed to
     parse and `tur jit` fell back to cc with TUR-W0070
@@ -201,7 +200,7 @@ full history mirrored there) plus three fixes on fix/make-one-ret-distinct-targe
     __SIZEOF_INT128__ also sends mir-hash.h down its __uint128_t path in
     the self-compiled c2mir of the bootstrap tests.
 
-  8056049 (turmeric-lang/mir#8, stacked on #7) -- c2mir converted to _Bool
+  8056049 (merged as 11b8d969, turmeric-lang/mir#8) -- c2mir converted to _Bool
     by casting to MIR_T_U8, keeping the low 8 bits: `bool b = 256L` and
     `(bool) 0.5` were false in initialization, assignment, compound
     assignment, ++/--, casts, arguments and returns, in generated code, the
@@ -214,7 +213,7 @@ full history mirrored there) plus three fixes on fix/make-one-ret-distinct-targe
     Covered by c-tests/new/bool-conversion.c there,
     tests/fixtures/jit-inline-c-bool-conversion here.
 
-  d81ebcc3 (turmeric-lang/mir#9, stacked on #8) -- an element of a union's
+  d81ebcc3 (merged as 456c2e2b, turmeric-lang/mir#9) -- an element of a union's
     array member got its element type's alias, not the union's, so MIR-gen
     let `u.words[0]` read memory from before `u.ld = x`: wrong answers in
     generated code on every target (the interpreter ignores aliases), and
@@ -224,4 +223,20 @@ full history mirrored there) plus three fixes on fix/make-one-ret-distinct-targe
     union alias; the __int128 change's ld_pow2 workaround is removed.
     Covered by c-tests/new/union-array-member-alias.c there,
     tests/fixtures/jit-inline-c-union-array-pun here.
+
+  cbf0f524 (merged as fcdaec59, turmeric-lang/mir#10) -- c2mir's block_move
+    called libc memcpy for every struct or union copy over 5 bytes, and
+    MIR-gen keeps the call, so a 16-byte value passed or returned by value
+    cost a libc call per parameter and per return: 550 million 16-byte
+    memcpy calls in a JIT'd Saffron loop where gcc's build of the same C
+    makes 2, 35% of its profile (performance audit WP4 E-3,
+    docs/artifacts/perf-audit-2026-10/wp4-engines.md).  A copy of at most
+    four words -- a word being the type's alignment, capped at 8 bytes -- is
+    now word loads followed by word stores.  The callers pass the alignment,
+    so every access is aligned on targets that require it, and the loads all
+    come first, so an exact self-overlap is still right.  Not a correctness
+    fix, so nothing in the generated C depends on it.  `tur jit`:
+    bench-saffron-dyn-tail 3.27 s -> 2.42 s, tailcall-dyn-deep
+    1.28 s -> 980 ms, no corpus row slower.  Covered by
+    c-tests/new/block-move-small.c there.
 ```

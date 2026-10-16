@@ -2,4 +2,4 @@
 # Written by tools/update-mir.sh; do not edit by hand.  Sourced by that script
 # and read by cmake/mir.cmake.
 MIR_REPOSITORY=https://github.com/turmeric-lang/mir
-MIR_COMMIT=d81ebcc3e3895ca126ccd1cbe43f4092c4f95f58
+MIR_COMMIT=fcdaec590b23935b46e5cc9030b10db99b2583e2
