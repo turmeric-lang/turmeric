@@ -91,6 +91,23 @@ fails if those do not add up.
 `TUR_TEST_FILTER` (or `JIT_FILTER`, which wins), `TUR_TEST_SHARD`, and
 `TUR_TEST_LIST=1` (list only), as in `tests/run.sh`.
 
+### `tests/run-markdown-spec.sh`
+
+The CommonMark and GFM spec examples through `tur/markdown` (ctest
+`tur_markdown_spec`). They live in a sibling checkout of
+[turmeric-lang/commonmark-spec](https://github.com/turmeric-lang/commonmark-spec),
+which the script PASS-skips without. Clone it to `../commonmark-spec` at the
+commit in `tests/markdown-spec/PINNED`, or point `MD_SPEC_DIR` at a checkout.
+
+- **Engines.** `MD_SPEC_ENGINE` picks them: `compiled`, `interpret`, `jit`,
+  `both` (compiled and interpret, the default) or `all`.
+- **What fails.** Only a regression: an example in
+  `tests/markdown-spec/ratchet.txt` that no longer passes on some engine.
+- **Arguments** go to `tests/markdown-spec/run.py`:
+  - `--only c12,c13` runs those examples (`c` CommonMark, `g` GFM);
+  - `--show N` prints input, expected and actual for the first N failures;
+  - `--update` adds newly passing examples to the ratchet.
+
 ### ctest
 
 ```sh
@@ -198,6 +215,7 @@ the same thing:
 | R7RS suites | `ctest --test-dir build -R "$(python3 tests/ctest-parts.py pattern r7rs --leg linux)"` |
 | Float conversions | `ctest --test-dir build -R "$(python3 tests/ctest-parts.py pattern fconv --leg linux)"` |
 | Generic spec matrix 1/2, 2/2 | the `gsm` part: `ctest --test-dir build -R "$(python3 tests/ctest-parts.py pattern gsm --leg linux)"` |
+| Leak check | the `leak` part, Linux only: `bash tests/run-leak-check.sh` (the ctest target `tur_leak_check`) |
 | Interpreter without JIT | `bash tests/run-turi.sh`, on a Debug build configured with `-DTUR_JIT=OFF` |
 | JIT engine | `ctest --test-dir build` on a JIT build; the fixture part is `bash tests/run-jit.sh` |
 | Whole runtime preamble (cc path) | `TUR_PREAMBLE_SPLIT=0 bash tests/run.sh` |

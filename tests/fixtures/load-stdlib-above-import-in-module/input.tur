@@ -1,0 +1,13 @@
+;; load-in-defmodule-claims-file-for-one-module: a stdlib load placed ABOVE
+;; the module's import.  It used to splice its definitions into the module
+;; body, which ended the header scan, so the `import` below it was taken for a
+;; body form ("import is only allowed inside defmodule").  A stdlib load in a
+;; module body is now spliced ahead of the module and leaves the header alone.
+(defmodule prog
+  (load "stdlib/string.tur")
+  (import strmod/greet :refer [greet])
+
+(defn main [] : int
+  (println (string/to-cstr (greet)))  ;; hi
+  0)
+) ;; end

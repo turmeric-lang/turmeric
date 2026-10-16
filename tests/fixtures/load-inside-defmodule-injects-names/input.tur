@@ -1,6 +1,8 @@
 ;; load-inside-defmodule-injects-names -- a (load "path") placed INSIDE a
-;; defmodule body splices the loaded file's top-level forms into the module's
-;; scope, so names it defines are visible to subsequent body forms. Before the
+;; defmodule body makes the loaded file's names visible to subsequent body
+;; forms. A stdlib file like this one is spliced at global scope ahead of the
+;; module (load-in-defmodule-claims-file-for-one-module); a user file is
+;; spliced into the module's own scope. Before the
 ;; fix, the load survived the preprocessor (which only walked the compilation
 ;; unit's top level) and reached elab_load, leaving stdlib/arrow.tur's >>>
 ;; unresolved ("unknown function or operator '>>>'"). See

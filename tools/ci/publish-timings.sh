@@ -15,7 +15,8 @@
 # benchmarks/audit/bench-rows.py writes to `bench-<year>.jsonl`: their own
 # file, so the tripwire can read a year of history cheaply and the suite
 # views never see them.  With --bench, an empty timings file is not a reason
-# to skip the publish.
+# to skip the publish -- nor with a non-empty --loc or --docs (a docs-only
+# push to main runs no suite but still has this commit's counts).
 #
 # --loc, --docs and --bench go in the SAME commit rather than through a second
 # invocation.  Two pushes to one branch from one job is two chances to be
@@ -84,6 +85,12 @@ if [ -s "$INPUT" ]; then
     ROWS="$(wc -l < "$INPUT_ABS" | tr -d ' ')"
 elif [ -n "$BENCH_INPUT" ] && [ -s "$BENCH_INPUT" ]; then
     echo "publish-timings: $INPUT is missing or empty; publishing the bench rows alone" >&2
+elif { [ -n "$LOC_INPUT" ] && [ -s "$LOC_INPUT" ]; } \
+     || { [ -n "$DOCS_INPUT" ] && [ -s "$DOCS_INPUT" ]; }; then
+    # A docs-only push to main runs no suite, so it has no timings -- but it
+    # is the commit that moves the doc counts, and its line counts are as
+    # real as any other commit's.
+    echo "publish-timings: $INPUT is missing or empty; publishing the line/doc counts alone" >&2
 else
     echo "publish-timings: $INPUT is missing or empty; nothing to publish" >&2
     exit 0

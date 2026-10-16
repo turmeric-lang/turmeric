@@ -157,6 +157,7 @@ pseudo-code can opt out by marking its opening fence ```` ```turmeric no-check `
 - **[hamt-guide.md](hamt-guide.md)** -- Persistent hash maps with structural sharing (HAMT)
 - **[frame-guide.md](frame-guide.md)** -- In-memory columnar dataframes with `tur-frame` -- building, querying, joining, and exporting via the Arrow C Data Interface
 - **[stats-guide.md](stats-guide.md)** -- Statistics spice for Turmeric -- descriptive stats, distributions, hypothesis tests, OLS regression, and resampling
+- **[markdown-guide.md](markdown-guide.md)** -- Parse CommonMark Markdown into a document tree with `tur/markdown`, render it as HTML, and walk its blocks
 - **[json-guide.md](json-guide.md)** -- Compile-time `#json(...)` reader macro and runtime `tur/json` library for parsing and serializing JSON
 - **[schema-guide.md](schema-guide.md)** -- Validate untyped boundary data with composable schema values using `stdlib/schema.tur`, with accumulating, path-tagged errors
 - **[ecs-guide.md](ecs-guide.md)** -- Building games and simulations with `tur-ecs` and the `tur-ecs-raylib` companion

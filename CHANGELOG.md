@@ -2,6 +2,36 @@
 
 All notable changes to Turmeric are documented here.
 
+## [0.65.3] -- 2026-10-16
+
+### Added
+
+- **String and StringSlice helpers: trims, replace, repeat, pad, parse-int.**
+  `string/trim-start`, `string/trim-end`, `string/replace-all`, `string/repeat`,
+  `string/pad-start`, `string/pad-end` and `string/parse-int`, plus zero-copy
+  `slice/trim`, `slice/trim-start`, `slice/trim-end` and `slice/parse-int`.
+  `parse-int` returns `(some n)` only when the whole input is an optional sign
+  then digits.
+- **`builder/push!` and friends append without temporaries.**
+  `builder/push-int!`, `builder/push-repeat!` and `builder/push-slice!` write
+  digits, repeated characters and slice bytes straight into a `StringBuilder`;
+  `builder/push!` appends any `BuilderPush` value (cstr, String, StringSlice,
+  Char, int or bool).
+- **`stdlib/unicode.tur` adds Unicode classes, folding and UTF-8 decoding.**
+  `unicode/space?` and `unicode/punct?` test Unicode whitespace and punctuation,
+  `unicode/fold-case` does full case folding into a fresh String, and
+  `utf8/decode-at` / `utf8/decode-before` decode the code point at or just
+  before a byte index, mapping invalid bytes to U+FFFD per maximal subpart.
+
+### Changed
+
+- **Region shutdown is one pass.** Retiring a region no longer scans the
+  ownership registry per arena, so programs that retire many regions shut down
+  in time proportional to the arenas, not the square.
+- **c2mir inlines small struct and union copies.** A copy of at most four words
+  is emitted as word loads and stores instead of a libc `memcpy` call, removing
+  a call per by-value parameter and return in JIT'd code.
+
 ## [0.65.2] -- 2026-10-16
 
 ### Added

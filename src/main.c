@@ -3451,13 +3451,28 @@ static bool buf_put_quoted(Buf *b, const char *s) {
  *
  * Returns 0 on success, 2 on cc failure or a failed exe settle.  Does not touch
  * the generated-C temp file (the caller owns that lifecycle). */
+/* Copy a file's bytes to stderr (a held-back cc output; see link_command_run). */
+static void replay_to_stderr(const char *path) {
+    FILE *f = fopen(path, "rb");
+    if (!f) return;
+    char chunk[4096];
+    size_t got;
+    while ((got = fread(chunk, 1, sizeof chunk, f)) > 0) fwrite(chunk, 1, got, stderr);
+    fclose(f);
+}
+
+/* `cc_stderr_path`: NULL lets cc write to tur's stderr.  A path sends cc's
+ * stderr there and keeps tur's own "cc invocation failed" line quiet: a
+ * caller that may retry decides later whether the output is worth showing,
+ * and must replay it when it is (replay_to_stderr) -- a warning is the
+ * user's either way. */
 static int link_command_run(const char *cc, const char *cc_flags,
                             const char *inputs,
                             const Buf *aux_includes, const Buf *aux_sources,
                             const Buf *autolink, bool needs_asan,
                             const Buf *cmake_flags,
                             const char **include_dirs, int n_include_dirs,
-                            const char *out_path) {
+                            const char *out_path, const char *cc_stderr_path) {
     Buf cmd;
     buf_init(&cmd);
     bool quoted_ok = true;
@@ -3489,6 +3504,13 @@ static int link_command_run(const char *cc, const char *cc_flags,
 #ifdef _WIN32
     buf_puts(&cmd, " -lpthread -lws2_32 -lshlwapi");
 #endif
+    if (cc_stderr_path) {
+        buf_puts(&cmd, " 2>");
+        if (!buf_put_quoted(&cmd, cc_stderr_path)) {
+            buf_free(&cmd);
+            return 2;
+        }
+    }
     buf_putc(&cmd, '\0');
     /* TUR_SHOW_CC=1: print the assembled cc command.  A link error names the
      * library it could not find, never the flags that failed to find it -- this
@@ -3505,7 +3527,8 @@ static int link_command_run(const char *cc, const char *cc_flags,
         return 2;
     }
     if (sys_rc != 0) {
-        fprintf(stderr, "tur: cc invocation failed (status %d)\n", sys_rc);
+        if (!cc_stderr_path)
+            fprintf(stderr, "tur: cc invocation failed (status %d)\n", sys_rc);
         return 2;
     }
     return 0;
@@ -4441,11 +4464,56 @@ static int cmd_build_once(const char *input, const char *out_path,
      * where they survive and mean the same thing. */
     hoist_tur_include_directives(emit_c);
 
+    /* performance-audit C-1 (fix #7): gcc spends most of a small build PARSING
+     * prelude definitions the program never reaches, and only then drops
+     * them -- 0.14 s of `triangle/fib`'s 0.16 s cc
+     * (docs/artifacts/perf-audit-2026-10/wp1-compile-latency.md).  Hand it the
+     * unit jit_prune already makes for c2mir: the program half keeps only what
+     * something live names (src/compiler/jit_prune.h), so cc parses what it
+     * compiles.  The prune runs after the include hoist: the hoisted prefix
+     * sits before the decls region, and everything before the program half is
+     * a root.
+     *
+     * A reference the scan misses cannot pass silently.  The compile fails,
+     * the full unit is compiled instead under TUR-W0071 (after the link
+     * below), and tests/run.sh fails any fixture that needed that retry.
+     *
+     * Not for wasm (emcc), --debug (a debugging session reads the unit whole)
+     * or an r7rs prelude split (its program unit is already the small half).
+     * TUR_CC_NO_PRUNE=1 opts out, as TUR_JIT_NO_PRUNE=1 does for both. */
+    Buf cc_full;
+    buf_init(&cc_full);
+    bool cc_pruned = false;
+    {
+        const char *off = getenv("TUR_CC_NO_PRUNE");
+        bool disabled = off && *off && strcmp(off, "0") != 0;
+        if (!disabled && !wasm_target && !prelude_split && !g_emit_debug_lines) {
+            prof_enter(PROF_EMIT);
+            buf_write(&cc_full, emit_c->data, emit_c->len);
+            JitPruneStats ps;
+            memset(&ps, 0, sizeof ps);
+            cc_pruned = used_split ? jit_prune_split_source(emit_c, &ps)
+                                   : jit_prune_full_source(emit_c, &ps);
+            if (!cc_pruned) {
+                buf_free(&cc_full);
+                buf_init(&cc_full);
+            } else if (getenv("TUR_SHOW_CC")) {
+                fprintf(stderr,
+                        "tur: pruned the C unit: %zu -> %zu bytes (%u of %u "
+                        "definitions, %u includes dropped)\n",
+                        ps.bytes_before, ps.bytes_after, ps.nodes_dropped,
+                        ps.nodes, ps.includes_dropped);
+            }
+            prof_exit(PROF_EMIT);
+        }
+    }
+
     if (!tf || fwrite(emit_c->data, 1, emit_c->len, tf) != emit_c->len) {
         fprintf(stderr, "tur: write failed\n");
         if (tf) fclose(tf);
         buf_free(&split_c);
         buf_free(&csrc);
+        buf_free(&cc_full);
         buf_free(&split_lib);
         buf_free(&split_imp);
         return 2;
@@ -4470,10 +4538,14 @@ static int cmd_build_once(const char *input, const char *out_path,
         }
         bool al_ok = scan_autolink_markers(&both, &autolink);
         buf_free(&both);
-        if (!al_ok) { buf_free(&csrc); buf_free(&autolink); buf_free(&split_lib); buf_free(&split_imp); return 2; }
+        if (!al_ok) { buf_free(&csrc); buf_free(&cc_full); buf_free(&autolink); buf_free(&split_lib); buf_free(&split_imp); return 2; }
     } else {
-        if (!scan_autolink_markers(&csrc, &autolink)) {
-            buf_free(&csrc); buf_free(&autolink); return 2;
+        /* The UNPRUNED text: a pruned non-split unit has lost the markers of
+         * the definitions it dropped, and the link line stays what it was
+         * before the prune existed.  Split, csrc was never pruned. */
+        const Buf *al_src = (cc_pruned && !used_split) ? &cc_full : &csrc;
+        if (!scan_autolink_markers(al_src, &autolink)) {
+            buf_free(&csrc); buf_free(&cc_full); buf_free(&autolink); return 2;
         }
     }
     buf_free(&csrc);
@@ -4535,6 +4607,7 @@ static int cmd_build_once(const char *input, const char *out_path,
     if (wasm_target && !collect_web_link_flags(input, &cmake_flags)) {
         buf_free(&cmake_flags); buf_free(&aux_includes); buf_free(&aux_sources);
         buf_free(&autolink);
+        buf_free(&cc_full);
         return 2;
     }
 
@@ -4641,6 +4714,7 @@ static int cmd_build_once(const char *input, const char *out_path,
             *retry_whole = true;
             buf_free(&split_lib);
             buf_free(&split_imp);
+            buf_free(&cc_full);
             buf_free(&aux_includes);
             buf_free(&aux_sources);
             buf_free(&autolink);
@@ -4665,10 +4739,48 @@ static int cmd_build_once(const char *input, const char *out_path,
     }
     buf_free(&split_lib);
     buf_free(&split_imp);
+    /* A pruned unit is compiled first with cc's stderr held back.  If that
+     * fails, the unit as emitted decides:
+     *   - it fails too: the program itself is wrong, and only ITS errors are
+     *     shown, exactly as without the prune;
+     *   - it builds: the prune dropped something live, a bug in jit_prune.
+     *     TUR-W0071 says so with the pruned attempt's errors, and
+     *     tests/run.sh fails a fixture that hits it. */
+    char cc_err[1100];
+    cc_err[0] = '\0';
+    if (cc_pruned && tmpl[0] &&
+        (size_t)snprintf(cc_err, sizeof cc_err, "%s.err", tmpl) >= sizeof cc_err)
+        cc_err[0] = '\0';
     int link_rc = link_command_run(cc, cc_flags, inputs, &aux_includes,
                                    &aux_sources, &autolink, autolink_needs_asan,
                                    &cmake_flags, include_dirs, n_include_dirs,
-                                   out_path);
+                                   out_path, cc_err[0] ? cc_err : NULL);
+    if (link_rc == 0 && cc_err[0]) {
+        replay_to_stderr(cc_err);   /* its warnings are the user's */
+    } else if (link_rc != 0 && cc_pruned) {
+        FILE *rf = fopen_nofollow_w(tmpl);
+        if (rf && fwrite(cc_full.data, 1, cc_full.len, rf) == cc_full.len) {
+            fclose(rf);
+            link_rc = link_command_run(cc, cc_flags, inputs, &aux_includes,
+                                       &aux_sources, &autolink, autolink_needs_asan,
+                                       &cmake_flags, include_dirs, n_include_dirs,
+                                       out_path, NULL);
+            if (link_rc == 0) {
+                fprintf(stderr,
+                        "tur: warning: TUR-W0071: the pruned C unit failed to "
+                        "compile where the full unit builds, so the full unit "
+                        "was used. This is a bug in the prune "
+                        "(TUR_CC_NO_PRUNE=1 skips it); the pruned unit's cc "
+                        "output was:\n");
+                if (cc_err[0]) replay_to_stderr(cc_err);
+            }
+        } else {
+            if (rf) fclose(rf);
+            if (cc_err[0]) replay_to_stderr(cc_err);   /* no retry: show why */
+        }
+    }
+    if (cc_err[0]) unlink(cc_err);
+    buf_free(&cc_full);
     if (link_rc != 0 && prelude_split) *retry_whole = true;
     buf_free(&aux_includes);
     buf_free(&aux_sources);
@@ -9015,7 +9127,7 @@ static int cmd_link(const char *out, const char **inputs, int n_inputs,
     }
     int link_rc = link_command_run(cc, cc_flags.data, inputs_joined.data,
                                    NULL, &aux_sources, &autolink, needs_asan,
-                                   &cmake_flags, NULL, 0, out);
+                                   &cmake_flags, NULL, 0, out, NULL);
     buf_free(&inputs_joined);
     buf_free(&autolink);
     buf_free(&cmake_flags);

@@ -888,6 +888,20 @@ run_happy() {
             rm -f "$exe"
             return
         fi
+        # TUR-W0071 from `tur build`: the pruned C unit (performance-audit
+        # C-1, src/compiler/jit_prune.h) did not compile and the full unit was
+        # built instead.  The binary is right, but the prune dropped something
+        # live -- a bug the retry would otherwise hide.  run-jit.sh fails the
+        # same way for the JIT's prune.
+        if grep -q 'TUR-W0071' "$out_dir/actual.stderr" 2>/dev/null; then
+            {
+                echo "FAIL $name — built only on the full-unit retry (TUR-W0071)"
+                cat "$out_dir/actual.stderr"
+            } > "$log_file"
+            write_result "FAIL" "$name" "pruned unit failed to compile" "$log_file"
+            rm -f "$exe"
+            return
+        fi
         if [ -f "$dir/input.stdin" ]; then
             _run_timed "$fixture_timeout" "${run_env[@]}" "$exe" "${run_args_arr[@]}" < "$dir/input.stdin" > "$actual_stdout" 2>> "$actual_stderr"
         else
