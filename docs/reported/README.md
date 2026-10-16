@@ -52,6 +52,12 @@ directory is worse for triage than no index.
 | --- | --- | --- |
 | [contract-purity-check-skipped-when-checks-off](contract-purity-check-skipped-when-checks-off.md) | low-medium | TUR-E0375 (a contract predicate with side effects) is raised only from the code that builds the runtime check. So a Release `tur`, or `--no-contracts` on any build, accepts an impure `:pre`, `:post` or refinement predicate that a Debug `tur` rejects. Only `:invariant` is checked regardless of the gate. |
 
+## Found designing the CommonMark parser's node arena (filed 2026-10-16)
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [opaque-field-struct-box-never-freed](opaque-field-struct-box-never-freed.md) | medium (leak) | A `defstruct` with a `defopaque` field, `String` included, is on the carrier ABI (`adt_is_byvalue_product_d` rejects the field), so every construction mallocs a box that nothing frees: in a `let`, as a result, or as a `Vec` element (`vec-free` frees only the buffer). Laying the field out by value fixes it and moves 6 of 3860 fixtures, but it is the ABI change the 2026-10-11 opaque-sibling fix declined. Workaround: one-int `defstruct` ids, nullary `defdata` kinds, `String`s in a pool. |
+
 ## Found writing `stdlib/unicode.tur` (filed 2026-10-16)
 
 | Report | Severity | One line |
