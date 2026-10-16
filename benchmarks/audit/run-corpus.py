@@ -29,6 +29,14 @@ a fixture is its own expected.stdout; for everything else it lives under
 benchmarks/audit/expected/.  `--pin` writes missing pins (two runs, which must
 agree), and never overwrites one unless `--repin`.
 
+Every run's working directory is the checkout the measured `tur` belongs to
+(the one whose stdlib it reads), not necessarily this one, which supplies the
+corpus, the programs and the pins.  An explicit `(load "stdlib/re.tur")` reads
+the cwd's copy first, so running a before `tur` from the after checkout gave
+it the after stdlib: a stdlib fix measured as no change.  On WSL the runs also
+leave out the Windows PATH entries WSL appends, which gcc's collect2 searches
+for its linker on every link (see path_without_windows).
+
 Self-timing programs print nanosecond values that cannot be pinned verbatim.
 A corpus line saying `cols=1,2,5` compares only those comma-separated columns
 of each output line (lines without a comma are compared whole);
@@ -68,6 +76,45 @@ CORPUS = os.path.join(ROOT, "benchmarks", "audit", "corpus.txt")
 PIN_DIR = os.path.join(ROOT, "benchmarks", "audit", "expected")
 ENGINES = ("cc", "jit", "interp")
 SANITIZER_SYMBOLS = ("__asan_init", "__tsan_init", "__ubsan_handle_")
+RUN_CWD = ROOT  # the measured tur's checkout; set in main()
+RUN_ENV = None  # the runs' environment (None: ours); set in main()
+PATH_DROPPED = 0
+
+
+def on_wsl():
+    return ("microsoft" in platform.release().lower()
+            or os.path.exists("/proc/sys/fs/binfmt_misc/WSLInterop"))
+
+
+def path_without_windows(path):
+    """PATH less the Windows directories WSL appends (appendWindowsPath).
+
+    gcc's collect2 looks for each of its linker names in every PATH
+    directory, and on WSL most of them are /mnt/c over 9P: ~65 ms of every
+    link on the WP0 box (an empty program's link, 85 ms -> 19 ms), which a
+    Linux machine never pays.  Returns (new PATH, entries dropped)."""
+    keep = [p for p in path.split(":") if not p.startswith("/mnt/")]
+    return ":".join(keep), path.count(":") + 1 - len(keep)
+
+
+def tur_checkout(tur):
+    """The directory a tur takes its stdlib from, less the `stdlib/`.
+
+    TUR_STDLIB_DIR when it holds a stdlib, else the driver's own walk-up
+    (find_stdlib_beside_exe, src/main.c): up to 8 levels from the binary for
+    stdlib/macros.tur.  None for an installed layout or no stdlib at all."""
+    env = os.environ.get("TUR_STDLIB_DIR")
+    if env and os.path.exists(os.path.join(env, "macros.tur")):
+        return os.path.dirname(os.path.abspath(env))
+    d = os.path.dirname(os.path.realpath(tur))
+    for _ in range(8):
+        if os.path.exists(os.path.join(d, "stdlib", "macros.tur")):
+            return d
+        up = os.path.dirname(d)
+        if up == d:
+            break
+        d = up
+    return None
 
 
 # --------------------------------------------------------------------------
@@ -178,13 +225,13 @@ def build_launcher(dest):
 
 
 def run_once(argv, timeout, stdout_path, stdin="-"):
-    """Run argv from the repo root under rusage-run.
+    """Run argv from the measured tur's checkout under rusage-run.
 
     Returns (rc, wall_s, user_s, sys_s, maxrss_kib, stdout_bytes); rc is None
     on timeout and negative for a signal.  stdout goes to a file, so a large
     output does not sit in a pipe buffer while the clock runs."""
     r = subprocess.run([LAUNCHER, str(max(1, int(timeout + 0.999))), stdin, stdout_path] + argv,
-                       cwd=ROOT, capture_output=True, text=True)
+                       cwd=RUN_CWD, env=RUN_ENV, capture_output=True, text=True)
     fields = r.stdout.split()
     if r.returncode != 0 or len(fields) != 5:
         sys.exit(f"run-corpus: rusage-run failed on {argv}: {r.stdout}{r.stderr}")
@@ -309,6 +356,8 @@ def header(tur, args):
         "dirty": bool(git("status", "--porcelain", "--untracked-files=no")),
         "tur": os.path.relpath(tur, ROOT),
         "tur_version": first_line([tur, "--version"]),
+        "run_cwd": RUN_CWD,
+        "windows_path_entries_dropped": PATH_DROPPED,
         "cc": first_line([os.environ.get("CC", "cc"), "--version"]),
         "host": platform.node(),
         "kernel": platform.release(),
@@ -341,11 +390,24 @@ def main():
     ap.add_argument("--pin", action="store_true", help="write missing pins")
     ap.add_argument("--repin", action="store_true", help="overwrite existing pins")
     ap.add_argument("--allow-sanitized", action="store_true")
+    ap.add_argument("--keep-windows-path", action="store_true",
+                    help="on WSL, run with the Windows PATH entries (a default WSL user's builds)")
     args = ap.parse_args()
 
     tur = os.path.abspath(os.path.join(ROOT, args.tur) if not os.path.isabs(args.tur) else args.tur)
     if not os.access(tur, os.X_OK):
         sys.exit(f"run-corpus: no tur at {tur}")
+    global RUN_CWD, RUN_ENV, PATH_DROPPED
+    RUN_CWD = tur_checkout(tur) or ROOT
+    if on_wsl() and not args.keep_windows_path:
+        clean, PATH_DROPPED = path_without_windows(os.environ.get("PATH", ""))
+        if PATH_DROPPED:
+            RUN_ENV = dict(os.environ, PATH=clean)
+            print(f"run-corpus: WSL -- running without the {PATH_DROPPED} Windows PATH entries, "
+                  "each ~65 ms of every link (--keep-windows-path keeps them)", file=sys.stderr)
+    if os.path.realpath(RUN_CWD) != os.path.realpath(ROOT):
+        print(f"run-corpus: running from {RUN_CWD}, the checkout {args.tur} reads its "
+              "stdlib from; the corpus, programs and pins are this checkout's", file=sys.stderr)
     san = sanitizer_symbols(tur)
     if san is None:
         print("run-corpus: WARNING -- no `nm`, cannot check for a sanitized tur", file=sys.stderr)

@@ -104,6 +104,24 @@ change, or a suspected regression, gets a before/after from this box.
 3. Two checkouts, each a Release `-DTUR_JIT=ON` build of **all targets** (`tur
    build` links the runtime archives `--target tur` does not produce). A `tur`
    reads the stdlib beside it, so a stdlib change needs its own tree.
+   `run-corpus.py` runs each `tur` from its own checkout, because an explicit
+   `(load "stdlib/re.tur")` reads the working directory's copy first. Until
+   2026-10-16 every run started in the after checkout, so the before side of
+   a fix to a module that programs `load` (rather than one the prelude loads,
+   as it does `vec.tur`) measured the fix too.
+4. **The Windows `PATH` is left out.** WSL appends the host's `PATH`
+   (`appendWindowsPath`; 27 of the distro's 36 entries, all under `/mnt/c`),
+   and gcc's `collect2` probes every `PATH` directory for each of its linker
+   names, over 9P. That is **~65 ms of every link**: an empty program's link
+   is 85 ms with it and 19 ms without, and its `tur build` 131 ms against
+   79 ms (2026-10-16, main at `b5d80d56d`). A Linux machine never pays it.
+   `run-corpus.py` drops those entries on WSL (`--keep-windows-path` keeps
+   them) and records how many in `meta.json`. **Every cc `build` row taken
+   before 2026-10-16 carries the extra ~50-65 ms**, WP0's baseline and WP1's
+   C-1 figures (an empty build's "151 ms, 135 of it cc") included. A same-day
+   A/B paid it on both sides, so its deltas stand and its percentages are
+   understated. Run, `emit`, `jit` and `interp` rows invoke no linker and are
+   unaffected.
 
 **The run** (inside the WSL distro; refs reach `/srv/perf/turmeric` from the
 Windows clone through its `win` remote):

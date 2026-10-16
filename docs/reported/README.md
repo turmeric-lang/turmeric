@@ -34,6 +34,12 @@ sentence above does not cover them. If you touch this file, check
 `ls docs/reported/` against it -- an index that silently omits a quarter of the
 directory is worse for triage than no index.
 
+## Found measuring `re/replace-all` on the WP0 box (filed 2026-10-16)
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [stdlib-load-reads-cwd-copy-first](stdlib-load-reads-cwd-copy-first.md) | low-medium (silent wrong stdlib) | `(load "stdlib/re.tur")` reads the working directory's `stdlib/re.tur` before the stdlib the `tur` resolved, while the prelude comes from the resolved one. So running a `tur` from inside another checkout mixes two stdlibs, silently. `load_path_key` already keys such a load by the resolved stdlib's file; the read does not follow it. |
+
 ## Found writing the CPS/DK internals guide (filed 2026-10-16)
 
 | Report | Severity | One line |
