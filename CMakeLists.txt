@@ -1094,6 +1094,16 @@ add_test(
   COMMAND bash tests/run-hamt-del-lineage.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# In-place HAMT transients (performance audit R-5).  Compiles
+# tests/test_hamt_transient.c with ASan/UBSan (+LSan on Linux): random
+# transient set / update / delete sequences against an array model, over
+# spread, deep and fully colliding hashes; the source map, a map derived from
+# it and a second transient keep their own contents; nothing leaks.
+add_test(
+  NAME tur_hamt_transient
+  COMMAND bash tests/run-hamt-transient.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
 # collections-cannot-hold-rc-values, map side, step (b): caller-supplied VALUE
 # ownership ops.  Value ownership used to be a bool selecting the hardcoded
 # boxed-value refcount, which an rc<T> value cannot use.  Compiles
