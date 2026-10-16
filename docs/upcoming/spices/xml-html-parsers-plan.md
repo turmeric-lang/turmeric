@@ -11,6 +11,7 @@
 > CSS selectors and node paths): planned 2026-10-11, not started. Open
 > questions A-1 to A-4 and B's cursor-walk question decided 2026-10-16,
 > with A6 (escaping for script, style and srcdoc holes) planned for later.
+> Follow-up D (hiccup: markup as typed data) planned 2026-10-16, not started.
 > See "Follow-ups" at the end.
 
 ## Outcome (2026-10-10)
@@ -278,19 +279,20 @@ has to hold before the next phase builds on it.
 
 ## Follow-ups (planned 2026-10-11)
 
-Three additions on top of the shipped spices. Each is its own
-`turmeric-spices` PR, branched from `main`. PRs are never stacked (see
-CLAUDE.md).
+Four additions on top of the shipped spices (D added 2026-10-16). Each is
+its own `turmeric-spices` PR, branched from `main`. PRs are never stacked
+(see CLAUDE.md).
 
 | Follow-up | What | Depends on |
 |---|---|---|
 | **B** -- editable tree | In-place mutation of the arena tree, validated so that edits cannot inject structure; streaming SAX rewrite | nothing |
 | **C** -- CSS selectors and node paths | A selector engine in dom-core's C layer, plus `node-css-path` | nothing (independent of B) |
 | **A** -- markup literals | `#html{...}` / `#xml{...}` with `${...}` holes, escaped by construction, rendered to a string or a tree | A1-A2 (string mode) need nothing; A3-A4 (tree mode, in-place re-render) need B1-B2 merged |
+| **D** -- hiccup | Markup as a typed Turmeric value (`Html`), written `(hiccup [:li.item {:href u} name])`, safe by construction, rendered to a string or a tree; and `node->hiccup` back from a parsed DOM | D1 (string mode) needs nothing but the hole classes it shares with A2; D2 (tree mode) needs B1-B2 merged |
 
-Suggested order: B, then A, with C whenever. B is the substrate both of the
-others benefit from. A's string mode can start in parallel with B, because it
-needs only the parsers and the escaper.
+Suggested order: B, then A and D, with C whenever. B is the substrate the
+others benefit from. A's and D's string modes can start in parallel with B,
+because they need only the escaper and the hole classes they share.
 
 ### Follow-up A: markup literals with templated values (`#html{...}`, `#xml{...}`)
 
@@ -672,7 +674,7 @@ structure.
 | **In-place mutation of the arena tree** | O(1) link/unlink; O(attrs) for set-attr; O(len) to copy a new string into the arena | Same handles, same serializer, same selectors; arena keeps every old borrow valid | **Chosen.** |
 | Persistent tree with path copying (zipper, structural sharing) | O(depth) node copies per edit, plus a refcount or GC for shared subtrees | The arena frees in one pass and has no per-node lifetime, so sharing across versions means either never freeing or adding refcounts to every node; `Node` stops being a plain pointer | Rejected. The cheapness is illusory once lifetime is accounted for. |
 | Rebuild from a transformed SAX stream | O(n) per pass, O(depth) memory | Excellent for "rename/drop/insert as it streams by" on big documents; useless for "change one attribute in a tree I already hold" | **Also ship**, as the streaming counterpart (B4). |
-| Rebuild the whole DOM from a Turmeric-side value (hiccup tree) per edit | O(n) per edit | That is follow-up A's builder, not an update mechanic | Covered by A. |
+| Rebuild the whole DOM from a Turmeric-side value (hiccup tree) per edit | O(n) per edit | That is a builder, not an update mechanic | Covered by D (hiccup). |
 
 #### Ownership after mutation -- the arena makes it simple
 
@@ -929,3 +931,164 @@ for the tree it was computed on.
 | C2 | Matcher, `select` / `select-first` / `node-matches-selector?` / `node-closest`, `query` | Ported test tables pass on XML and HTML; differential fuzz agrees with the naive oracle |
 | C3 | `node-css-path` | Round-trip property over both corpora |
 | C4 | `:has()` with a step budget | Its own fixtures, including a pathological input that hits the budget |
+
+### Follow-up D: hiccup -- markup as typed data (planned 2026-10-16)
+
+#### Goal
+
+Build markup from Turmeric values, Clojure-hiccup style, and render it to a
+string or a tree with A's escaping guarantees:
+
+```turmeric
+(import dom/hiccup :refer [hiccup hiccup->string])
+
+(defn row->item [r : Row] : Html
+  (hiccup [:li.item {:data-done (.done r)}
+            [:a {:href (.href r)} (.name r)]]))
+
+(println (hiccup->string (hiccup [:ul (map row->item rows)])))
+```
+
+A writes markup and splices values into it. D goes the other way: the tree
+*is* a Turmeric value (`Html`) that ordinary functions build, map, filter
+and `match` on before it is rendered. That is what A cannot give, and why
+B's options table sends "rebuild from a Turmeric-side value" here.
+
+#### What the reader hands a macro (checked 2026-10-16)
+
+Probed with `read-string` / `syntax->string` on the v0.65.2 release:
+
+- `[...]` is a vector form and `:div` is a keyword, so `[:div ...]` reaches
+  a `defmacro*` intact. `:div.card#main` is a single keyword, so the
+  CSS-style shorthand can be split at expansion time.
+- `{...}` is curly-infix in every dialect. `{:class "a"}` arrives as the
+  list `(:class "a")`, and `{:class "a" :id "b"}` as
+  `($nfx$ :class "a" :id "b")`. Both keep the pairs in order. In attribute
+  position neither can be a real call (a list headed by a keyword; `$nfx$`),
+  so the macro can read them as a map. `#map{...}` arrives as a map form and
+  works as-is. See D-3.
+- A colon splits a keyword: `:svg:rect` reads as `:svg :rect`, and
+  `:xlink:href` likewise. Names containing a colon are written as strings:
+  `["svg:rect" ...]`, `{"xlink:href" u}`. HTML rarely needs them;
+  `[:svg [:rect ...]]` and SVG 2's plain `href` cover most cases.
+- A vector inside an ordinary expression is not hiccup to the outer macro.
+  In `[:ul (map (fn [r] [:li r]) rows)]` the inner `[:li r]` is a plain
+  vector. See D-1.
+
+#### Design
+
+**One typed tree, safe by construction.**
+
+```turmeric
+(defopaque Tag      ...)    ;; a validated element name
+(defopaque AttrName ...)    ;; a validated attribute name
+(defopaque Attr     ...)    ;; a name and an escaped value
+(defopaque RawBody  ...)    ;; a raw-text body: a checked literal or a Trusted* value
+
+(defdata Html
+  (HElem     Tag (Cons Attr) (Cons Html))
+  (HRawText  Tag (Cons Attr) RawBody)    ;; script, style and the other raw-text elements
+  (HText     String)                     ;; escaped at render
+  (HRaw      RawHtml)                    ;; A's raw-html opt-out
+  (HList     (Cons Html))                ;; siblings with no wrapper
+  (HFragment Fragment))                  ;; a #html{} value spliced in (D2)
+```
+
+`Html`'s constructors are public, so callers can `match` on and rebuild
+trees. Every field that could carry unsafe bytes is an opaque type with a
+checking constructor, so any `Html` value is safe to render, whoever built
+it:
+
+- `tag` and `attr-name` take a `cstr` and return an `Option`. Both follow
+  the XML `Name` production for both flavours. That is stricter than HTML
+  needs, and it rules out the `<x onload=...>` name injection that B's
+  `BadName` exists for.
+- `tag` refuses the raw-text elements (`script`, `style`, `xmp`, `iframe`,
+  `noembed`, `noframes`, `plaintext`). They are reachable only through
+  `HRawText`, whose `RawBody` comes from a literal the macro checked (no
+  `</script` or `</style`), or after A6 from a `TrustedJs` / `TrustedCss`.
+- `attr-name` refuses A-4's code-bearing names (`on*`, `style`, `srcdoc`).
+  The macro can still write them with a literal value it checked; a runtime
+  value for one waits for A6.
+- `(attr n v)` builds an `Attr` through `ToAttr`, and runs A-1's scheme
+  allowlist when `n` is URL-bearing, so trees built at runtime and literals
+  written with the macro apply the same rule.
+
+**The `hiccup` macro** is a `defmacro*` beside A's `html*`. It lowers a
+literal to constructor calls:
+
+- `[name attrs? child...]` becomes `HElem`. `name` must be a keyword or a
+  string literal; a computed tag is a compile error, and a caller who needs
+  one uses `tag` and the constructors. The macro validates every literal
+  name at expansion time and emits unchecked constructors for them, so a
+  literal tree pays nothing at runtime for validation.
+- `:tag#id.c1.c2` shorthand, merged with an explicit `:class` (joined by a
+  space). A second `id` is a compile error.
+- The attribute map is `{...}` or `#map{...}`, with keyword or string keys.
+  A value is a literal or a hole typed through A's classes: `ToAttr`, or
+  `ToUrlAttr` for the URL-bearing names. A dynamic value under an `on*`,
+  `style` or `srcdoc` key is a compile error (A-4). Attributes built at
+  runtime splice in under the reserved key `:attrs*`
+  (`{:class "a" :attrs* extra}`, with `extra : (Cons Attr)`). `*` is not an
+  XML name character, so the key can never collide with a real attribute.
+- A child that is a string or number literal becomes `HText`. A nested
+  vector headed by a keyword or a string recurses. Anything else is a hole
+  typed through `ToChild`, with the same instances as A plus
+  `ToChild Html` and `ToChild (Cons Html)`.
+- A void element (`br`, `img`, `input`, ...) with children is a compile
+  error.
+- `[:script "..."]` and `[:style "..."]` take one string literal, which is
+  checked. A hole there is a compile error until A6.
+
+**Rendering.** `hiccup->string` follows the HTML serialization rules (void
+elements, boolean attributes, raw-text bodies) and shares its text and
+attribute escaping with dom-core's `escape_into` and A2's string mode.
+`hiccup->xml-string` writes `<x/>` for an empty element, has no void list,
+and treats the raw-text elements as ordinary elements whose text is
+escaped. `hiccup->dom` (D2) builds nodes in a `Document` through B's
+mutators. The names are already valid, so B's checks cannot fail on them.
+
+**Composition with A, both ways.** `ToChild Html` lets a `#html{}` hole take
+hiccup, and `HFragment` lets hiccup take a `#html{}` value. A and D share
+the hole classes and the escapers: whichever of A2 and D1 lands first puts
+them in a small `dom/holes` module, and the other imports it. `tourist`'s
+`html-response` (A-3) takes either, through a `RenderHtml` class with
+`Fragment` and `Html` instances.
+
+**DOM to hiccup (D3).** `node->hiccup : Node -> Html` converts a parsed tree.
+This is the hickory direction: parse, transform as data with ordinary
+functions and `match`, then render. A parser can only produce valid names
+and raw-text bodies, so the conversion uses the trusted constructors.
+
+#### Phases
+
+| Phase | Deliverable | Gate |
+|---|---|---|
+| D1 | `dom/hiccup`: `Html`, `Tag`, `AttrName`, `Attr`, `RawBody` and their checking constructors; the `hiccup` macro (keyword and string names, `#id.class` shorthand, `{}` / `#map{}` attributes, `:attrs*`, holes through `ToChild` / `ToAttr` / `ToUrlAttr`); `hiccup->string` | A compile-error table: an invalid literal name, a computed tag, children under a void element, a dynamic value under `on*` / `style` / `srcdoc`, a dynamic `<script>` / `<style>` body, a second `id`. The checking constructors refuse bad names, the code-bearing names and the raw-text tags. A2's escaping and URL tables, applied to hiccup. Once A2 exists, `hiccup` and `#html{}` render byte-identical output for a shared corpus |
+| D2 | `hiccup->dom` (needs B1-B2), `hiccup->xml-string`, `ToChild Html` and `HFragment`, `RenderHtml` for `html-response` | For parser-stable trees (D-2), `html-parse-fragment` with context `template` of `hiccup->string h` is `dom-equal?` to `hiccup->dom h`; the same through expat for the XML flavour |
+| D3 | `node->hiccup` | `hiccup->dom (node->hiccup n)` is `dom-equal?` to `n` for every element of both corpora; the guide shows a transform (add `rel="noopener"` to every external `<a>`) |
+
+#### Open questions
+
+- **D-1. Hiccup inside an ordinary expression.** In
+  `[:ul (map (fn [r] [:li r]) rows)]` the inner vector is out of the
+  macro's reach, so it reads as a plain vector and fails to typecheck.
+  Either require an explicit `(hiccup [:li r])` there, or have the macro
+  rewrite every keyword-headed vector anywhere inside its argument. A
+  binding vector starts with a symbol, so `[r rows]` is left alone, and the
+  rewrite is what makes hiccup feel like hiccup. Its cost is that a real
+  vector of keywords inside a hiccup body is misread. Recommendation:
+  explicit in D1; revisit with real templates before D2.
+- **D-2. Trees the HTML parser will not reproduce.** `[:p [:div "x"]]`,
+  `[:a [:a "y"]]`, and text directly inside `[:table]` are valid `Html`
+  values, but a browser re-nests their serialized form, so string mode and
+  `hiccup->dom` disagree. This is not a security issue, since the structure
+  is the author's, but it is a correctness surprise. Recommendation: compile
+  errors for the static cases the macro can see (block content in `p`,
+  nested `a` / `form` / interactive content, non-table content directly in
+  `table` / `tbody` / `tr`), documentation for the rest, and D2's gate
+  stated over parser-stable trees.
+- **D-3. Bare `{...}` attribute maps.** Accept them by reading curly-infix's
+  output (`(:k v)` and `($nfx$ ...)`), or require `#map{...}`?
+  Recommendation: accept both, with a test that pins curly-infix's output
+  shape, so a reader change breaks a test rather than every hiccup literal.
