@@ -2035,6 +2035,20 @@ static void interp (MIR_context_t ctx, MIR_item_t func_item, va_list va, MIR_val
       break;
     }
   }
+#if defined(__APPLE__) && defined(__aarch64__)
+  /* va now points where the shim's incoming stack args begin.  Every vararg is
+     on the stack after the named args passed there, so step over those --
+     otherwise va_arg returns the first of them.  By memcpy: va_list is char *
+     for clang but a one-pointer struct for c2m (the bootstrap compiles this
+     file with it), and a cast either way would break type-based aliasing. */
+  if (func->vararg_p) {
+    char *area;
+
+    memcpy (&area, &va, sizeof (area));
+    area += interp_shim_named_stack_size (func);
+    memcpy (&va, &area, sizeof (area));
+  }
+#endif
 #if VA_LIST_IS_ARRAY_P
   interp_arr_varg (ctx, func_item, results, nargs, arg_vals, va);
 #else

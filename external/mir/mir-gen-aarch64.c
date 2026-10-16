@@ -996,9 +996,7 @@ static void target_machinize (gen_ctx_t gen_ctx) {
         gen_delete_insn (gen_ctx, insn);
       }
     } else if (code == MIR_VA_START) {
-#if !defined(__APPLE__)
       MIR_op_t treg_op = _MIR_new_var_op (ctx, gen_new_temp_reg (gen_ctx, MIR_T_I64, func));
-#endif
       MIR_op_t prev_sp_op = _MIR_new_var_op (ctx, gen_new_temp_reg (gen_ctx, MIR_T_I64, func));
       MIR_op_t va_op = insn->ops[0];
       MIR_reg_t va_reg;
@@ -1022,8 +1020,14 @@ static void target_machinize (gen_ctx_t gen_ctx) {
       gen_mov (gen_ctx, insn, MIR_MOV, prev_sp_op,
                _MIR_new_var_mem_op (ctx, MIR_T_I64, 16, FP_HARD_REG, MIR_NON_VAR, 1));
 #if defined(__APPLE__)
+      /* arg_area = prev_sp + mem_size: every vararg is on the stack, after the
+         named args that did not fit in registers (machinize_call puts both in
+         8-byte slots from the outgoing sp).  Pointing at prev_sp itself made
+         va_arg return the first named stack arg instead. */
+      new_insn = MIR_new_insn (ctx, MIR_ADD, treg_op, prev_sp_op, MIR_new_int_op (ctx, mem_size));
+      gen_add_insn_before (gen_ctx, insn, new_insn);
       gen_mov (gen_ctx, insn, MIR_MOV,
-               _MIR_new_var_mem_op (ctx, MIR_T_I64, 0, va_reg, MIR_NON_VAR, 1), prev_sp_op);
+               _MIR_new_var_mem_op (ctx, MIR_T_I64, 0, va_reg, MIR_NON_VAR, 1), treg_op);
 #else
       /* mem64[va_reg].__stack = prev_sp + mem_size */
       new_insn = MIR_new_insn (ctx, MIR_ADD, treg_op, prev_sp_op, MIR_new_int_op (ctx, mem_size));

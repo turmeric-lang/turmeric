@@ -1,5 +1,11 @@
 # The MIR fork's CI goes green whatever the C tests say
 
+**RESOLVED 2026-10-16** by turmeric-lang/mir#12 (merged as `fa8a5d69`) and
+re-synced into `external/mir/` the same day -- see *Resolution* at the end.
+The fork's CI now fails on every failing c-test and bootstrap. The hidden
+failures had three causes: a harness bug (the macOS bootstraps) and two real
+miscompiles, one of which reached turmeric's linux-aarch64 JIT.
+
 **Severity: medium (test coverage).** In `turmeric-lang/mir`'s `make test`, a
 failing c-test or a failed c2mir bootstrap prints `FAIL` and the job still
 passes. Since the fork's first CI run, the macOS arm64 leg has printed **six
@@ -111,3 +117,38 @@ merging.
 3. Find the macOS arm64 bootstrap mismatch. `cmp -l` the two `.bmir` files,
    map the first differing byte back to the function, and compare that
    function's stage-1 and stage-2 MIR.
+
+## Resolution
+
+turmeric-lang/mir#12, merged as `fa8a5d69`:
+
+- **The gate (fork only, not vendored).** `runtests.sh` records each failing
+  test and exits 1; the bootstrap recipes exit 1 on a mismatch and keep the
+  `.bmir` files; `test.yml` runs `make -k test`, and a final "List failures"
+  step repeats the failing lines at the end of the log.
+- **macOS bootstraps: a harness bug, not a miscompile.** On Darwin the
+  clang-built `c2m` is compiled with
+  `-DADDITIONAL_INCLUDE_PATH=<xcrun SDK>/usr/include`, but
+  `C2M_BOOTSTRAP_FLAGS` lacked it. So the stage-1 c2mir read the Command Line
+  Tools SDK instead, and stage 2 parsed different headers. Fixed in
+  `GNUmakefile`; reproduced on Linux by giving stage 1 an extra header
+  directory (`differ: char 8, line 1`, as on macOS 15).
+- **Linux arm64 lazy-bb: 128-bit long doubles lost their upper half.** AAPCS64
+  preserves only the low 64 bits of v8-v15 across a call. The register
+  allocator consults `call_used_hard_regs[MIR_T_UNDEF]` only, so it kept long
+  doubles in v8-v15 across calls, and native code in between -- the lazy
+  generation hooks, any C callee -- clobbered the upper half. That is all
+  seven 128-bit c-test failures and the bootstrap mismatch (the self-compiled
+  c2mir wrote 2^64 as `0.0L`; reproduced under qemu-user, deterministic, and
+  present before mir#10 as found above). `target_hard_reg_type_ok_p` now keeps
+  a 16-byte `MIR_T_LD` out of v8-v15. This reached turmeric:
+  `TUR_JIT_GEN=lazy`, the default, sends every function's first call through
+  the C hook. Covered by `c-tests/new/ldouble-live-across-calls.c`.
+- **macOS `va-struct-args.c`: `va_arg` returned a named argument.** On Apple
+  every vararg is on the stack after the named args that did not fit in
+  registers, and `va_start` pointed at the first of those, in the generator
+  (`mir-gen-aarch64.c`) and the interpreter (`mir-interp.c`,
+  `mir-aarch64.c`) alike. The variadic lead above was right for this test,
+  not for the bootstraps.
+
+mir#12's own run was green on all four legs with the gate in place.

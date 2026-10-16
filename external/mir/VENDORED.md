@@ -28,9 +28,9 @@ submodule would have needed `--recursive` everywhere and checks out the whole
 1. Make the fix in the fork, with a test under its `c-tests/` or `mir-tests/`,
    and merge it there. **Keep PRs against the fork to one at a time** and batch
    fixes into it: the fork's matrix runs on every push to an open PR, and its
-   macOS leg shares the org's macOS runners with turmeric's own CI. A green run
-   there does not mean the C tests passed -- read the log for `FAIL`. See the
-   "MIR fork" rule in `CLAUDE.md`.
+   macOS leg shares the org's macOS runners with turmeric's own CI. Since
+   mir#12 a failing c-test or bootstrap fails it, and its last step lists the
+   failures. See the "MIR fork" rule in `CLAUDE.md`.
 2. Re-sync: `bash tools/update-mir.sh <commit>`. The script copies the file list,
    rewrites `UPSTREAM`, and checks that the three TUs still compile from the copy.
 3. Add the fix to the log below, rebuild with `-DTUR_JIT=ON`, and run
@@ -240,4 +240,28 @@ full history mirrored there) plus three fixes on fix/make-one-ret-distinct-targe
     bench-saffron-dyn-tail 3.27 s -> 2.42 s, tailcall-dyn-deep
     1.28 s -> 980 ms, no corpus row slower.  Covered by
     c-tests/new/block-move-small.c there.
+
+  cfa79a5 (merged as fa8a5d69, turmeric-lang/mir#12) -- on aarch64 the
+    register allocator kept a 128-bit long double in v8-v15 across calls:
+    target_call_used_hard_reg_p marks them clobbered for MIR_T_LD, but the
+    allocator only ever consults call_used_hard_regs[MIR_T_UNDEF].  AAPCS64
+    preserves only the low 64 bits of v8-v15, so native code in between --
+    the lazy generation hooks (TUR_JIT_GEN=lazy, the default, runs one on
+    every function's first call) or any C callee -- zeroed the upper half.
+    Silent wrong long double values on linux-aarch64 only (Apple's long
+    double is 8 bytes).  Found as seven 128-bit c-test failures and a
+    bootstrap mismatch in lazy-bb mode once the fork's CI got an arm64 leg
+    (docs/archive/mir-fork-ci-test-failures-never-fail-the-job.md).
+    target_hard_reg_type_ok_p now keeps a 16-byte MIR_T_LD out of v8-v15.
+    Covered by c-tests/new/ldouble-live-across-calls.c there.
+
+  1a752b8, 54a5c01 (merged as fa8a5d69, turmeric-lang/mir#12) -- on Apple
+    arm64 every vararg is on the stack after the named args that did not
+    fit in registers, but va_start pointed at the first of those named
+    args, so va_arg returned it -- in generated code and in the
+    interpreter alike.  The generator now uses prev_sp + mem_size, as the
+    non-Apple __stack already did; the interpreter steps its va_list by
+    the shim's own count of named stack bytes (by memcpy: va_list is char *
+    for clang but a struct for c2m).  Covered by c-tests/new/va-struct-args.c
+    there, an upstream test that had failed on every macOS run of the fork.
 ```

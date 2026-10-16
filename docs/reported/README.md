@@ -55,12 +55,6 @@ hits under ASan.
 | [typed-list-byvalue-adt-element-unboxed](typed-list-byvalue-adt-element-unboxed.md) | medium-high | A by-value `defdata` as a `(List A)` element is never boxed: `list-map` with a lambda returning one segfaults (the fat shim returns the struct by value through the int64 carrier ABI, and `list-first`'s spec dereferences the word), and `list-of` with such elements fails in cc. `:heap` types work. |
 | [macro-time-forward-reference-typed-int](macro-time-forward-reference-typed-int.md) | low-medium | In a `:for-macros` module or a `defmacro*`'s `letrec`, a call to a function defined later is typed with `int` parameters, so mutually recursive `Syntax` walkers fail at definition time. Compiled and interpreted code handle the same forward reference. Workaround: one self-recursive function with a mode argument. |
 
-## Found reworking the MIR fork's CI (filed 2026-10-16)
-
-| Report | Severity | One line |
-| --- | --- | --- |
-| [mir-fork-ci-test-failures-never-fail-the-job](mir-fork-ci-test-failures-never-fail-the-job.md) | medium (test coverage) | In `turmeric-lang/mir`, `c-tests/runtests.sh` never exits non-zero and every bootstrap recipe ends `&& echo Passed \|\| echo FAIL`, so failures print and the job passes. The macOS arm64 leg has hidden six bootstrap mismatches and one failing c-test per pass since the fork's first run (upstream `a8ab7c31`). The first Linux arm64 run hides seven 128-bit (`long double`, `__int128`) c-test failures and a bootstrap mismatch. All of them are in lazy-bb mode, and all were there before mir#10. |
-
 ## Found splitting the `release` and `tsan` build trees (filed 2026-10-15)
 
 | Report | Severity | One line |

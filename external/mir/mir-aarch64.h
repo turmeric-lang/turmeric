@@ -73,6 +73,14 @@ static const MIR_reg_t TEMP_LDOUBLE_HARD_REG2 = V17_HARD_REG;
 
 static inline int target_hard_reg_type_ok_p (MIR_reg_t hard_reg, MIR_type_t type) {
   assert (hard_reg <= MAX_HARD_REG);
+  /* AAPCS64 preserves only the low 64 bits of v8-v15 across a call, and the
+     allocator treats them as call-saved for every type (it consults
+     call_used_hard_regs[MIR_T_UNDEF] only).  A 128-bit long double kept there
+     across a call into native code -- or across the lazy generation hooks --
+     loses its upper half, so it never gets one of them. */
+  if (type == MIR_T_LD && __SIZEOF_LONG_DOUBLE__ == 16 && hard_reg >= V8_HARD_REG
+      && hard_reg <= V15_HARD_REG)
+    return FALSE;
   return MIR_fp_type_p (type) ? hard_reg >= V0_HARD_REG : hard_reg < V0_HARD_REG;
 }
 
