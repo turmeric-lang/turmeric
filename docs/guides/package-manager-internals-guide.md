@@ -383,8 +383,9 @@ generated `.gitignore`; whether to commit it is a project decision.
 
 ### Collecting the closure
 
-`pkg_collect_transitive_cmake_deps(root, manifest, include_workspace_siblings,
-...)` unions the root's `:cmake-deps` (first, so its declarations win) with
+The closure is collected by `pkg_collect_transitive_cmake_deps`, whose
+arguments are the root, its manifest and `include_workspace_siblings`. It
+unions the root's `:cmake-deps` (first, so its declarations win) with
 those of every spice in the `:spices` closure, walked with a worklist and a
 `realpath`-keyed visited set. All three callers pass
 `pkg_workspace_wide_cmake_deps()`, which is false unless
