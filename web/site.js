@@ -304,27 +304,6 @@ customElements.define('site-nav', SiteNav);
 customElements.define('site-footer', SiteFooter);
 customElements.define('site-sidebar', SiteSidebar);
 
-// ── REVEAL ON SCROLL ────────────────────────────────────────────────────────
-
-const revealTargets = Array.from(document.querySelectorAll('.reveal'));
-let revealPending = revealTargets.length;
-
-const revealObs = new IntersectionObserver(entries => {
-  entries.forEach(e => {
-    if (e.isIntersecting) {
-      e.target.classList.add('visible');
-      revealObs.unobserve(e.target);
-      revealPending--;
-      if (revealPending <= 0) revealObs.disconnect();
-    }
-  });
-}, { threshold: 0.08, rootMargin: '0px 0px -40px 0px' });
-
-revealTargets.forEach((el, i) => {
-  el.style.transitionDelay = (i === 0 ? 0.1 : 0) + 's';
-  revealObs.observe(el);
-});
-
 // ── INSTALL METHOD TABS ────────────────────────────────────────────────────
 
 // Homepage "01 -- Install" step: one tablist switching between install methods.

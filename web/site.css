@@ -37,7 +37,6 @@ t-icon {
 t-icon svg { display: block; width: 1em; height: 1em; }
 
 /* ── BASE ──────────────────────────────── */
-html { scroll-behavior: smooth; }
 
 body {
   background: var(--bg-base);
@@ -523,17 +522,6 @@ footer {
   transition: color 0.12s;
 }
 .footer-links a:hover { color: var(--text-sec); }
-
-/* ── REVEAL ANIMATIONS ─────────────────── */
-.reveal {
-  opacity: 0;
-  transform: translateY(20px);
-  transition: opacity 0.55s ease, transform 0.55s ease;
-}
-.reveal.visible {
-  opacity: 1;
-  transform: none;
-}
 
 /* ── HAMBURGER ─────────────────────────── */
 .nav-hamburger {

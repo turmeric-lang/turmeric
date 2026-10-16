@@ -194,7 +194,7 @@ h1 em { font-style: italic; color: var(--gold-bright); }
 </div>
 
 <!-- ── TOUR INDEX ─────────────────────── -->
-<div class="tour-index reveal">
+<div class="tour-index">
   <div class="tour-index-grid">
     <a href="#neoteric" class="tour-index-card">
       <span class="tour-stop-num">01</span>
@@ -272,7 +272,7 @@ h1 em { font-style: italic; color: var(--gold-bright); }
 <hr class="divider">
 
 <!-- ── 01 SWEET-EXP SYNTAX ────────────────── -->
-<div class="split-section reveal" id="neoteric">
+<div class="split-section" id="neoteric">
   <div>
     <p class="section-label">01 -- Sweet-Exp Syntax</p>
     <h2 class="section-title">Choose your syntax to taste</h2>
@@ -315,7 +315,7 @@ let [xs [1 2 3 4 5]]
 <hr class="divider">
 
 <!-- ── 02 ALGEBRAIC EFFECTS ───────────────── -->
-<div class="split-section reverse reveal" id="effects">
+<div class="split-section reverse" id="effects">
   <div>
     <p class="section-label">02 -- Algebraic Effects</p>
     <h2 class="section-title">Let the consumer determine how <code>handle</code> side-effects themselves.</h2>
@@ -367,7 +367,7 @@ handle compute()
 <hr class="divider">
 
 <!-- ── 03 TYPECLASSES ─────────────────────── -->
-<div class="split-section reveal" id="typeclasses">
+<div class="split-section" id="typeclasses">
   <div>
     <p class="section-label">03 -- Typeclasses</p>
     <h2 class="section-title">Like operator overloading on steroids</h2>
@@ -416,7 +416,7 @@ display(Blue())    ;; =&gt; "blue"</div></div>
 <hr class="divider">
 
 <!-- ── 04 ADTS, GADTS & PATTERN MATCHING ──── -->
-<div class="split-section reverse reveal" id="adts">
+<div class="split-section reverse" id="adts">
   <div>
     <p class="section-label">04 -- ADTs, GADTs &amp; Pattern Matching</p>
     <h2 class="section-title">Writing data structures is made easy, while making sure nothing goes unchecked.</h2>
@@ -466,7 +466,7 @@ println $ eval(Mul(Add(Lit(2) Lit(3)) Lit(4)))
 <hr class="divider">
 
 <!-- ── 05 DELIMITED CONTINUATIONS ─────────── -->
-<div class="split-section reveal" id="continuations">
+<div class="split-section" id="continuations">
   <div>
     <p class="section-label">05 -- Delimited Continuations</p>
     <h2 class="section-title">Write your own flow-control primitives.</h2>
@@ -516,7 +516,7 @@ println
 <hr class="divider">
 
 <!-- ── 06 MACRO SYSTEM ────────────────────── -->
-<div class="split-section reverse reveal" id="macros">
+<div class="split-section reverse" id="macros">
   <div>
     <p class="section-label">06 -- Macro System</p>
     <h2 class="section-title">Compile-time transforms without losing type safety.</h2>
@@ -565,7 +565,7 @@ defn sign [n : int] : str
 <hr class="divider">
 
 <!-- ── 07 REFERENCE COUNTING ──────────────── -->
-<div class="split-section reveal" id="rc">
+<div class="split-section" id="rc">
   <div>
     <p class="section-label">07 -- Reference Counting</p>
     <h2 class="section-title">Optional reference counting means less manual memory bookkeeping.</h2>
@@ -603,7 +603,7 @@ let [data rc/of(42)]
 <hr class="divider">
 
 <!-- ── 08 OPTIONAL GC ─────────────────────── -->
-<div class="split-section reverse reveal" id="gc">
+<div class="split-section reverse" id="gc">
   <div>
     <p class="section-label">08 -- Optional GC</p>
     <h2 class="section-title">Garbage collection, but only when you want it.</h2>
@@ -659,7 +659,7 @@ gc-disable!()</div></div>
 <hr class="divider">
 
 <!-- ── 09 HIGHER-ORDER FUNCTIONS ──────────── -->
-<div class="split-section reveal" id="hof">
+<div class="split-section" id="hof">
   <div>
     <p class="section-label">09 -- Higher-Order Functions</p>
     <h2 class="section-title">Create functions with context: Closures.</h2>
@@ -705,7 +705,7 @@ let [nums [1 2 3 4 5]]
 <hr class="divider">
 
 <!-- ── 10 REFINEMENT TYPES ────────────────── -->
-<div class="split-section reverse reveal" id="refinements">
+<div class="split-section reverse" id="refinements">
   <div>
     <p class="section-label">10 -- Refinement Types</p>
     <h2 class="section-title">Check <em>values</em> at compile-time when possible&hellip;</h2>
@@ -752,7 +752,7 @@ safe-div(10 0)
 <hr class="divider">
 
 <!-- ── 11 CONTRACT TYPES ──────────────────── -->
-<div class="split-section reveal" id="contracts">
+<div class="split-section" id="contracts">
   <div>
     <p class="section-label">11 -- Contract Types</p>
     <h2 class="section-title">&hellip;and check values at run-time when needed.</h2>
@@ -792,7 +792,7 @@ safe-div(10 0)   ;; contract violated: y != 0</div></div>
 <hr class="divider">
 
 <!-- ── 12 SPICE -- PACKAGE MANAGER ────────── -->
-<div class="split-section reverse reveal" id="spice">
+<div class="split-section reverse" id="spice">
   <div>
     <p class="section-label">12 -- Spice -- Package Manager</p>
     <h2 class="section-title">One file tracks your project's dependencies.</h2>
@@ -829,7 +829,7 @@ safe-div(10 0)   ;; contract violated: y != 0</div></div>
 <hr class="divider">
 
 <!-- ── 13 STRUCTURAL TYPING ───────────────── -->
-<div class="split-section reveal" id="structural">
+<div class="split-section" id="structural">
   <div>
     <p class="section-label">13 -- Structural Typing</p>
     <h2 class="section-title">Union types make sure every branch of a conditional is covered.</h2>
@@ -885,7 +885,7 @@ show-type("hello")   ;; =&gt; "cstr"</div></div>
 <hr class="divider">
 
 <!-- ── 14 TROWEL -- THE EDITOR ────────────── -->
-<div class="split-section reverse reveal" id="trowel">
+<div class="split-section reverse" id="trowel">
   <div>
     <p class="section-label">14 -- Trowel -- The Editor</p>
     <h2 class="section-title">One download, with nothing else to install.</h2>
@@ -903,7 +903,7 @@ show-type("hello")   ;; =&gt; "cstr"</div></div>
 </div>
 
 <!-- ── CTA ───────────────────────────── -->
-<div class="cta-section reveal">
+<div class="cta-section">
   <div class="cta-box">
     <h2 class="cta-title">Ready to try Turmeric?</h2>
     <p class="cta-desc">Open the playground and try any of these features right in your browser -- or download Trowel and build them locally.</p>
