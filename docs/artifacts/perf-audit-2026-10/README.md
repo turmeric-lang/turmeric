@@ -104,6 +104,11 @@ change, or a suspected regression, gets a before/after from this box.
 3. Two checkouts, each a Release `-DTUR_JIT=ON` build of **all targets** (`tur
    build` links the runtime archives `--target tur` does not produce). A `tur`
    reads the stdlib beside it, so a stdlib change needs its own tree.
+   `run-corpus.py` runs each `tur` from its own checkout, because an explicit
+   `(load "stdlib/re.tur")` reads the working directory's copy first. Until
+   2026-10-16 every run started in the after checkout, so the before side of
+   a fix to a module that programs `load` (rather than one the prelude loads,
+   as it does `vec.tur`) measured the fix too.
 
 **The run** (inside the WSL distro; refs reach `/srv/perf/turmeric` from the
 Windows clone through its `win` remote):

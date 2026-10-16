@@ -15,7 +15,12 @@
 #                           checkout (a tur reads the stdlib beside it, so a
 #                           stdlib fix needs its own tree), e.g.
 #                           /srv/perf/main/build-release/tur and
-#                           /srv/perf/fix/build-release/tur
+#                           /srv/perf/fix/build-release/tur.  run-corpus.py
+#                           runs each from its own checkout, so an explicit
+#                           (load "stdlib/...") reads that tree's copy too; a
+#                           program new in the after tree that loads another
+#                           new non-stdlib file will not find it on the
+#                           before side.
 #   --sweeps N              sweeps per side (default 3, as WP0)
 #   RUN_CORPUS_ARGS         passed to run-corpus.py, e.g. --only 'triangle|sized'
 #                           or --engines cc,jit or --corpus benchmarks/audit/tracked.txt
@@ -32,7 +37,7 @@ set -u
 cd "$(dirname "$0")/../.."
 
 usage() {
-    sed -n '2,30p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '2,/^$/p' "$0" | sed 's/^# \{0,1\}//'
     exit 2
 }
 [ $# -ge 3 ] || usage
