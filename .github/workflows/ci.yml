@@ -13,6 +13,16 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  # One full run of `main` a day, macOS legs included.  A push to main skips
+  # every macOS job (see MACOS_LEGS below), so this is what still tests main's
+  # own tip on macOS -- two PRs green on their own can still break each other
+  # once both land -- and what keeps the macOS series on ci-metrics fed.
+  # 11:17 UTC: no CI run started between 10:00 and 14:00 UTC in the two weeks
+  # to 2026-10-16, and it clears the nightly macOS workflows (04:30-06:10).
+  # A schedule always runs on the default branch, so ci-metrics stays out of
+  # reach as the note above requires.
+  schedule:
+    - cron: "17 11 * * *"
 
 # C-5 in docs/upcoming/security-audit-plan.md.  The repo's default workflow
 # token is already `read`, so this block grants nothing new today -- it moves
@@ -34,6 +44,19 @@ permissions:
 # serialized: every merge is tested on its own, and its `publish-timings` rows
 # reach ci-metrics.  (A shared `main` group would also silently drop queued
 # runs -- GitHub keeps only the newest pending run per group.)
+#
+# MACOS_LEGS: but a push to main runs its Linux and Windows jobs only.  The
+# account runs at most 20 jobs at once, 5 of them macOS, and one full run is
+# 26 jobs and ~270 runner-minutes, ~80 of them macOS -- so the macOS slots cap
+# throughput at about four full runs an hour.  On 2026-10-16 fifteen full runs
+# arrived between 06:00 and 08:30, nine of them merges; the account sat at exactly
+# 20/5 running for three hours, and jobs queued 3-85 min before starting
+# (6 s jobs included) while running at their usual length.  Each merge had just
+# passed the macOS legs on its PR, so a merge's macOS run mostly repeated them.
+# The jobs with an `os` matrix (`test`, `jit`, `tvm`) build it with
+# fromJSON(...) so a push drops the macos-latest leg before any job is
+# created -- a job-level `if:` cannot see `matrix`, and a step-level one would
+# still hold the runner.  The daily `schedule` run above keeps macOS on main.
 concurrency:
   group: ${{ github.event_name == 'pull_request' && format('ci-pr-{0}', github.event.pull_request.number) || format('ci-run-{0}', github.run_id) }}
   cancel-in-progress: true
@@ -63,8 +86,16 @@ jobs:
   # docs-lint (below) always runs: it holds the ctest checks that read docs/
   # and need no build, which a docs-only PR would otherwise never reach.
   #
-  # Pushes to main, and anything this step cannot classify, count as code:
-  # main keeps its full run per merge, and the gate fails open.
+  # Pushes to main are classified the same way, over the whole push: merging
+  # a docs-only PR gets the docs-only run its PR got.  Before 2026-10-16 every
+  # push counted as code, and that morning six docs-only merges in 41 minutes
+  # (#1221-#1226) each ran all 26 jobs -- ~1,600 runner-minutes of a queue
+  # that was already at the account's 20-job cap (MACOS_LEGS at the top).
+  # A docs-only push still publishes its line and doc counts: publish-timings
+  # runs after skipped jobs, and publishes the counts without suite rows.
+  #
+  # The daily schedule, and anything this step cannot classify, count as code,
+  # so the gate fails open.
   changes:
     name: Classify changed paths
     runs-on: ubuntu-latest
@@ -74,15 +105,30 @@ jobs:
     steps:
       # A pull_request run checks out the merge commit; its first parent is
       # the base branch tip, so HEAD^1..HEAD is exactly the PR's change.
+      #
+      # A push diffs github.event.before..HEAD instead: everything the push
+      # moved main by, whether that is one merge commit or several rebased
+      # ones (HEAD^1 would see only the last).  `before` is fetched on its own
+      # at depth 1 -- a diff of two trees needs no history between them.  An
+      # all-zero `before` (a branch creation) or one that cannot be fetched (a
+      # force-push's discarded tip) leaves the run classified as code.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 2
       - id: classify
+        env:
+          BEFORE: ${{ github.event.before }}
         run: |
           code=true
           guides=true
-          if [ "$GITHUB_EVENT_NAME" = pull_request ] \
-             && files=$(git diff --name-only HEAD^1 HEAD) && [ -n "$files" ]; then
+          files=
+          if [ "$GITHUB_EVENT_NAME" = pull_request ]; then
+            files=$(git diff --name-only HEAD^1 HEAD) || files=
+          elif [ "$GITHUB_EVENT_NAME" = push ] && [ -n "${BEFORE//0/}" ] \
+               && git fetch --no-tags --depth=1 origin "$BEFORE"; then
+            files=$(git diff --name-only "$BEFORE" HEAD) || files=
+          fi
+          if [ -n "$files" ]; then
             echo "$files"
             not_inert=$(awk '!/^docs\// && (!/\.md$/ || /^(tests|web|src|stdlib)\//)' <<<"$files")
             [ -n "$not_inert" ] || code=false
@@ -210,8 +256,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
-        part: [fixtures, aux, r7rs, fconv, gsm1, gsm2]
+        # No macOS leg on a push to main: MACOS_LEGS at the top.  The exclude
+        # rows below that name macos-latest then match nothing, which GitHub
+        # ignores.
+        os: ${{ fromJSON(github.event_name == 'push' && '["ubuntu-latest"]' || '["ubuntu-latest", "macos-latest"]') }}
+        part: [fixtures, aux, r7rs, fconv, gsm1, gsm2, leak]
         exclude:
           # The two extra parts are LINUX ONLY, and the reason is the macOS
           # runner POOL, not macOS CPU.  Measured over two runs on 2026-10-01:
@@ -230,6 +279,11 @@ jobs:
             part: gsm1
           - os: macos-latest
             part: gsm2
+          # Not for the pool reason: LeakSanitizer is Linux-only, and on macOS
+          # run-leak-check.sh prints a SKIP and exits in 0 s.  It stays in the
+          # macOS `aux` part, where that costs nothing.
+          - os: macos-latest
+            part: leak
         include:
           # ctest_part names the row in tests/ctest-parts.py to take the pattern
           # from; it differs from `part` only where one ctest test is split
@@ -260,6 +314,15 @@ jobs:
             job_name: Generic spec matrix 2/2
             ctest_part: gsm
             gsm_shard: 2/2
+          # tur_leak_check: RUN_SERIAL (it fans out across nproc itself), so
+          # inside `aux` it was a barrier, and it grew from ~110 s to ~350 s
+          # median on Linux between 2026-10-08 and 2026-10-16 as fixtures opted
+          # in with requires.leak-check.  The Linux aux ctest step went from
+          # 14.0 min (2026-10-06) to 22.8 (2026-10-16), the slowest job in a
+          # run; tur_leak_check was ~5 min of that, all of it serial.
+          - part: leak
+            job_name: Leak check
+            ctest_part: leak
         # Sharding the fixture corpus itself is still off, but the blockers
         # that kept it off are not blockers any more.  run.sh has always
         # supported it (TUR_TEST_SHARD="i/N" partitions round-robin by fixture
@@ -393,6 +456,38 @@ jobs:
           "$GIT" clone --depth 1 \
             "https://github.com/${{ github.repository_owner }}/turmeric-spices" \
             ../turmeric-spices
+
+      # The CommonMark and GFM spec examples tur_markdown_spec renders
+      # (markdown-library-plan 6.1).  Unlike turmeric-spices this IS pinned:
+      # the examples are test inputs whose expected output the ratchet in
+      # tests/markdown-spec/ratchet.txt records, so they move only when
+      # tests/markdown-spec/PINNED does.  Only the aux part runs the suite.
+      - name: Check out commonmark-spec (sibling, pinned)
+        if: matrix.part == 'aux'
+        run: |
+          if [ -x /usr/bin/git ]; then GIT=/usr/bin/git; else GIT=git; fi
+          pin="$(sed -n '1s/^\([0-9a-f]\{40\}\).*/\1/p' tests/markdown-spec/PINNED)"
+          "$GIT" init -q ../commonmark-spec
+          "$GIT" -C ../commonmark-spec fetch -q --depth 1 \
+            "https://github.com/${{ github.repository_owner }}/commonmark-spec" "$pin"
+          "$GIT" -C ../commonmark-spec checkout -q FETCH_HEAD
+
+      # commonmark.js, the reference tur_markdown_diff compares tur/markdown's
+      # HTML with (markdown-library-plan M2), at the versions
+      # tests/markdown-spec/oracle/package-lock.json pins.  The same node and
+      # setup-node pin as the web job.  Without these the test PASS-skips.
+      - name: Set up Node (for tur_markdown_diff)
+        if: matrix.part == 'aux'
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: tests/markdown-spec/oracle/package-lock.json
+
+      - name: Install commonmark.js (for tur_markdown_diff)
+        if: matrix.part == 'aux'
+        working-directory: tests/markdown-spec/oracle
+        run: npm ci --ignore-scripts --no-audit --no-fund
 
       - name: Smoke check (tur --version must not hang)
         run: |
@@ -591,6 +686,16 @@ jobs:
           pattern="$(python3 tests/ctest-parts.py pattern gsm --leg "$TUR_CI_LEG")"
           ctest --output-on-failure --progress --test-dir build -R "$pattern" --no-tests=error --output-junit results-gsm.xml --test-output-size-passed 262144 --test-output-truncation head
 
+      - name: Run the leak check
+        if: matrix.part == 'leak'
+        # tur_leak_check on its own, Linux only -- see its matrix `include`
+        # row.  Same shape as the float lint above: one RUN_SERIAL target that
+        # fans out across nproc on its own, so no -j, and out of `aux` so the
+        # ~160 suites there stop waiting behind it.
+        run: |
+          pattern="$(python3 tests/ctest-parts.py pattern leak --leg "$TUR_CI_LEG")"
+          ctest --output-on-failure --progress --test-dir build -R "$pattern" --no-tests=error --output-junit results-leak.xml --test-output-size-passed 262144 --test-output-truncation head
+
       # `always()`, NOT `continue-on-error` on the ctest steps: a suite that
       # regressed into a timeout is exactly the signal this exists to catch, so
       # the timings must be collected on a red run too -- but making the test
@@ -606,8 +711,8 @@ jobs:
           # dashboard -- which is exactly how this would have shipped broken.
           # A glob, not a list of names: each part runs exactly one of the
           # ctest steps above and so writes exactly one results-*.xml
-          # (results-main / -aux / -r7rs / -fconv / -gsm).  Naming them all
-          # would make the collector warn about the ones this part never wrote,
+          # (results-main / -aux / -r7rs / -fconv / -gsm / -leak).  Naming them
+          # all would make the collector warn about the ones this part never wrote,
           # on every run of every part -- and it is a glob rather than a list
           # for that reason, so a part added later needs no edit here.  If the
           # glob matches nothing -- a ctest step that died before writing -- the
@@ -671,10 +776,11 @@ jobs:
       # pre-exists, so each one's restore is always a `restore-keys` prefix hit on
       # some OTHER part or run. A part's own saved cache is therefore only ever
       # read through that prefix, which means three near-identical copies per OS
-      # per sha already serve every part; `fconv` and the two `gsm` jobs saving
-      # three MORE would add 50% to this job's cache entries (6 -> 9 per run) and
-      # buy nothing but eviction pressure against the repo's 10 GB budget, at up
-      # to 500 MB each. They still RESTORE, so their builds stay warm.
+      # per sha already serve every part; `fconv`, `leak` and the two `gsm` jobs
+      # saving four MORE would add 67% to this job's cache entries (6 -> 10 per
+      # run) and buy nothing but eviction pressure against the repo's 10 GB
+      # budget, at up to 500 MB each. They still RESTORE, so their builds stay
+      # warm.
       - name: Save ccache
         if: always() && (matrix.part == 'fixtures' || matrix.part == 'aux' || matrix.part == 'r7rs')
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -741,7 +847,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        # No macOS leg on a push to main: MACOS_LEGS at the top.
+        os: ${{ fromJSON(github.event_name == 'push' && '["ubuntu-latest"]' || '["ubuntu-latest", "macos-latest"]') }}
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -1299,12 +1406,16 @@ jobs:
   # a git push.
   publish-timings:
     name: Publish suite timings
-    needs: [test, jit, web-smoke]
+    # `changes` for its `code` output only: on a docs-only push the three jobs
+    # that write timings are skipped, and the counts publish alone (below).
+    needs: [changes, test, jit, web-smoke]
     # always(): a red run's timings are the interesting ones (a suite that
     # regressed into a timeout), so publish regardless of upstream job status.
-    # Restricted to main pushes: PR runs -- especially from forks, whose token
-    # is read-only -- collect and upload artifacts but must never write.
-    if: always() && github.event_name == 'push' && github.ref == 'refs/heads/main'
+    # Restricted to main pushes and the daily schedule (which always runs on
+    # main, and is the only main run that still carries macOS rows -- see
+    # MACOS_LEGS at the top): PR runs -- especially from forks, whose token is
+    # read-only -- collect and upload artifacts but must never write.
+    if: always() && (github.event_name == 'push' || github.event_name == 'schedule') && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
       # Scoped to this job rather than declared workflow-wide: a top-level block
@@ -1361,11 +1472,18 @@ jobs:
           # log and are separated at query time rather than at write time.
           find timings-artifacts -name 'timings.jsonl' -print0 \
             | xargs -0 cat > all-timings.jsonl 2>/dev/null || true
-          if [ ! -s all-timings.jsonl ]; then
-            echo "::warning::no suite timings collected; nothing to publish"
-            exit 0
+          # No suite rows is expected on a docs-only push (`changes` said
+          # code=false, so nothing ran to time) and a fault anywhere else.
+          # Either way the line and doc counts above are still this commit's,
+          # and publish-timings.sh publishes them without suite rows -- a
+          # docs-only merge is exactly the commit that moves the doc counts.
+          if [ -s all-timings.jsonl ]; then
+            echo "collected $(wc -l < all-timings.jsonl) rows from $(find timings-artifacts -name timings.jsonl | wc -l) leg(s)"
+          elif [ "${{ needs.changes.outputs.code }}" = false ]; then
+            echo "docs-only push: no suite timings by design; publishing the line and doc counts alone"
+          else
+            echo "::warning::no suite timings collected; publishing the line and doc counts alone"
           fi
-          echo "collected $(wc -l < all-timings.jsonl) rows from $(find timings-artifacts -name timings.jsonl | wc -l) leg(s)"
           bash tools/ci/publish-timings.sh all-timings.jsonl --loc repo-loc.jsonl --docs docs-counts.jsonl
 
   windows:
@@ -1894,7 +2012,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        # No macOS leg on a push to main: MACOS_LEGS at the top.
+        os: ${{ fromJSON(github.event_name == 'push' && '["ubuntu-latest"]' || '["ubuntu-latest", "macos-latest"]') }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 

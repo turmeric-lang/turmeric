@@ -537,29 +537,29 @@ Effects interact with Turmeric's `defer` mechanism:
 ## The Prompt Model and Unbounded Capture (CPS substrate)
 
 Delimited control in Turmeric is built on a single **multi-prompt** substrate
-(the Dybvig--Peyton-Jones--Sabry model); see
-[`cps-transform-plan.md`](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/history/cps-transform-plan.md). The operators you
-already use map onto prompts and sub-continuations:
+(the Dybvig--Peyton-Jones--Sabry model). On the compiled path that substrate is
+the DK continuation chain; the
+[CPS and DK internals guide](cps-dk-internals-guide.md) describes it in full.
+The operators you already use map onto prompts and sub-continuations:
 
 | Operator | Prompt action |
 |---|---|
 | `reset` | push a fresh prompt |
 | `shift` | capture the sub-continuation up to the nearest prompt; **re-install** that prompt on resume |
 | `shift0` | capture up to the nearest prompt; **do not** re-install it on resume |
+| `handle` / `perform` | `handle` pushes a handler marker per case; `perform` captures up to the nearest marker for its effect. A deep handler re-installs itself on resume; `handle-shallow` does not |
 | `call/cc*` | capture a **multi-shot** sub-continuation (re-enter it any number of times) |
-| undelimited `call/cc` | capture up to the **implicit root prompt** at program entry |
+| undelimited `call/cc` | a one-shot upward escape to the `call/cc` site, at any depth |
 
 Two properties of the substrate matter in practice:
 
-- **Unbounded capture.** A continuation is a heap-reified closure chain, not a
-  fixed-size native-stack snapshot. Capturing it is O(1) and works at any call
-  depth -- the fiber fast path's 16-frame ceiling (`tur_cont_alloc` returning
-  `NULL` past `TUR_CONT_MAX_CAPTURED_FRAMES`) does not apply on this path. This is what lets
-  `call/cc` reach all the way back to the top of the program.
+- **Unbounded capture.** A continuation is a heap-reified chain of frames, not
+  a fixed-size native-stack snapshot, so a `perform` captures correctly at any
+  call depth.
 
-- **Implicit root prompt.** There is a prompt around program entry, so a bare
-  `call/cc` with no enclosing `reset` still has something to capture up to and
-  resume.
+- **Implicit root prompt.** Every entry from direct-style code into a colored
+  function seeds a root prompt. A capture that finds no enclosing `reset` still
+  has a boundary to capture up to, and `await` suspends to it.
 
 Performance is meant to be preserved by **selectivity**: functions that can
 reach a control operator (`shift`/`perform`/`call/cc`/...) are CPS-converted
@@ -587,7 +587,10 @@ own and none reachable through a named callee
 reason it was colored (`control`, `callee` or `indirect`). The census also
 shows why the fix is not a one-line narrowing: an empty effect row on a
 function type does not yet mean "pure". This paragraph changes again when
-R-1's fix lands. See the plan for the full model.
+R-1's fix lands. The
+[CPS and DK internals guide](cps-dk-internals-guide.md#stage-1-coloring) has
+the full coloring rule and the reasons a colored function may still be emitted
+direct-style.
 
 ### Performs inside loops and conditionals
 

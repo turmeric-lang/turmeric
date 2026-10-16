@@ -60,8 +60,14 @@ PARTS = {
         # default -- which is the property that makes a dropped suite hard.
         # Adding a name to this pattern WITHOUT adding a part that runs it is
         # the drift --check exists to catch.
-        "aux":      ("exclude", r"^tur_tests$|r7rs|^tur_generic_spec_matrix$|^tur_emitted_float_conversions$|^tur_jit_fixture_tests$|^tur_repl_spice_jit$"),
+        "aux":      ("exclude", r"^tur_tests$|r7rs|^tur_generic_spec_matrix$|^tur_emitted_float_conversions$|^tur_leak_check$|^tur_jit_fixture_tests$|^tur_repl_spice_jit$"),
         "fconv":    ("include", r"^tur_emitted_float_conversions$"),
+        # RUN_SERIAL because it fans out across nproc internally, so inside
+        # `aux` it was a barrier -- ~350 s of one by 2026-10-16, and growing
+        # with every requires.leak-check marker.  Linux only: LeakSanitizer is,
+        # and on macOS the harness exits with a SKIP in 0 s, so it stays in
+        # that leg's `aux` at no cost.
+        "leak":     ("include", r"^tur_leak_check$"),
         # 4066 live cells at ~1.5s of CPU each, RUN_SERIAL because it fans out
         # internally.  Two jobs, TUR_GSM_SHARD=i/2, which between them run the
         # whole matrix.

@@ -1,0 +1,148 @@
+;; markdown-library-plan M1: the CommonMark block parser and the HTML renderer.
+;; Each document is rendered, then its tree is walked with the public API:
+;; every block's kind, source lines and text.  Inline syntax has its own
+;; fixture, markdown-inlines.
+(load "stdlib/markdown.tur")
+
+;; ---- Printing ----------------------------------------------------------------
+
+(defn block-name [b : MdBlock] : cstr
+  (match b
+    (MdDocument) "document"
+    (MdBlockQuote) "block quote"
+    (MdList o s t) (if o (if t "ordered list, tight" "ordered list, loose") (if t "bullet list, tight" "bullet list, loose"))
+    (MdItem) "item"
+    (MdParagraph) "paragraph"
+    (MdHeading l) "heading"
+    (MdThematicBreak) "thematic break"
+    (MdCodeBlock f) (if f "fenced code" "indented code")
+    (MdHtmlBlock) "html block"))
+
+(defn block-detail [b : MdBlock] : int
+  (match b
+    (MdList o s t) s
+    (MdHeading l) l
+    _ 0))
+
+;; A String with each line feed shown as \n, so a block's text fits on a line.
+(defn push-visible! [out : StringBuilder s : String] : void
+  (let [^mut i 0]
+    (while (< i (string/len s))
+      (do
+        (if (= (string/byte-at s i) 10)
+          (builder/push-cstr! out "\\n")
+          (builder/push-byte! out (string/byte-at s i)))
+        (set! i (+ i 1))))))
+
+(defn show-block [d : MdDoc id : MdBlockId depth : int] : void
+  (let [b     (markdown/block d id)
+        lines (markdown/block-lines d id)
+        out   (builder/new)]
+    (do
+      (builder/push-repeat! out (int->char 32) (* 2 depth))
+      (builder/push-cstr! out (block-name b))
+      (when (> (block-detail b) 0)
+        (do (builder/push-cstr! out " ") (builder/push-int! out (block-detail b))))
+      (builder/push-cstr! out " [")
+      (builder/push-int! out (pair-fst lines))
+      (builder/push-cstr! out "-")
+      (builder/push-int! out (pair-snd lines))
+      (builder/push-cstr! out "]")
+      (match (markdown/code-info d id)
+        (Some info)
+        (do (builder/push-cstr! out " info=") (push-visible! out info) (string/release info))
+        (None)
+        nil)
+      (match (markdown/block-text d id)
+        (Some t)
+        (do (builder/push-cstr! out " text=") (push-visible! out t) (string/release t))
+        (None)
+        nil)
+      (let [line (builder/finish out)]
+        (do (println (string/to-cstr line)) (string/release line))))))
+
+(defn walk [d : MdDoc id : MdBlockId depth : int] : void
+  (let [kids   (markdown/children d id)
+        ^mut i 0]
+    (do
+      (show-block d id depth)
+      (while (< i (vec-len kids))
+        (do (walk d (vec-get kids i) (+ depth 1)) (set! i (+ i 1))))
+      (vec-free kids))))
+
+;; The link reference definitions the parser collected: label, destination, title.
+(defn show-refs [d : MdDoc] : void
+  (let [^mut i 0]
+    (while (< i (vec-len (.refs d)))
+      (let [r   (vec-get (.refs d) i)
+            out (builder/new)]
+        (do
+          (builder/push-cstr! out "ref [")
+          (push-visible! out (vec-get (.strs d) (.label r)))
+          (builder/push-cstr! out "] -> ")
+          (push-visible! out (vec-get (.strs d) (.dest r)))
+          (when (>= (.title r) 0)
+            (do (builder/push-cstr! out " title=") (push-visible! out (vec-get (.strs d) (.title r)))))
+          (let [line (builder/finish out)]
+            (do (println (string/to-cstr line)) (string/release line)))
+          (set! i (+ i 1)))))))
+
+(defn print-html [h : String] : void (println (string/to-cstr h)))
+
+(defn show-doc [name : cstr src : cstr opts : MdHtmlOpts] : void
+  (let [s (string/from-cstr src)
+        d (markdown/parse s (markdown/commonmark-opts))
+        h (markdown/render-html d opts)]
+    (do
+      (string/release s)
+      (let [banner (string/of "==== " name " ====")]
+        (do (println (string/to-cstr banner)) (string/release banner)))
+      (print-html h)
+      (println "----")
+      (walk d (markdown/root d) 0)
+      (show-refs d)
+      (string/release h)
+      (markdown/doc-free d))))
+
+(defn pass [] : MdHtmlOpts (MdHtmlOpts (MdRawPass)))
+
+;; ---- Documents -----------------------------------------------------------------
+
+(defn main [] : int
+  (do
+    ;; Headings: ATX with a closing run, setext of both levels, and a paragraph
+    ;; that a lazy line continues inside a block quote.
+    (show-doc "headings and quotes"
+              "# Title ##\n## Sub #not-closing\nSetext one\n===\nSetext\ntwo\n---\n> quoted *text*\nlazy line\n> > nested\n"
+              (pass))
+    ;; Lists: tight and loose, an ordered list starting at 3, a nested list,
+    ;; and an item that holds an indented code block.
+    (show-doc "lists"
+              "- a\n- b\n\n3) three\n4) four\n\n   still four\n\n* outer\n  + inner\n  + inner two\n-     code in item\n"
+              (pass))
+    ;; Code: an indented block keeps an inner blank line and drops trailing
+    ;; ones; a fence's info string resolves references; a tab expands to the
+    ;; next stop of four.
+    (show-doc "code"
+              "    one\n\n    two\n    \n\n~~~ py&amp;x \\# z\nprint(1 < 2)\n~~~\n```\n\tunclosed\n"
+              (pass))
+    ;; HTML blocks of kinds 1, 2, 6 and 7, and a thematic break.
+    (show-doc "html"
+              "<script>\nvar x = 1;\n</script>\n<!-- a\ncomment -->\n<div class=\"x\">\n*not inline*\n\n<custom-tag a='1'>\n\n***\n"
+              (pass))
+    ;; Link reference definitions are taken out of the paragraphs that start
+    ;; with them; a paragraph left with nothing is dropped.  Labels match
+    ;; without regard to case (the first definition wins), destinations and
+    ;; titles have their escapes resolved, and a destination is percent-encoded.
+    ;; CR LF and lone CR line endings.
+    (show-doc "references"
+              "[Foo  Bar]: /url \"the \\\"title\\\"\"\r\n[FOO bar]: /second\r\n[baz]:\r\n  <a b>\r\n'single'\rtext after\n\n[only]: /x\n"
+              (pass))
+    ;; Raw HTML under the three renderer settings.
+    (show-doc "tag filter" "<div>\n<script>alert(1)</script>\n<b>bold</b>\n</div>\n" (markdown/default-html-opts))
+    (show-doc "escaped html" "<div>\n<i>x</i> & y\n</div>\n" (MdHtmlOpts (MdRawEscape)))
+    ;; Text is escaped; markdown/escape-html is the same escaping.
+    (let [raw (string/from-cstr "a < b & \"c\" > d")
+          e   (markdown/escape-html raw)]
+      (do (println (string/to-cstr e)) (string/release e) (string/release raw)))
+    0))

@@ -2,7 +2,9 @@
 
 > **Status:** in progress. Phases S and J are done: S1 (#1200), S2 (#1209),
 > S3 (#1210), S4 (#1213) and S5 (#1216); J1-J3 (#1201, #1202, #1207) and J4
-> (#1208). Phase U is done too: U1 (#1217) and U2. Phase M is still plan.
+> (#1208). Phase U is done too: U1 (#1217) and U2 (#1220). Phase M is under
+> way: M1, the block parser (#1229), and M2, the inline parser, are built
+> (section 6.4, "M1 as built" and "M2 as built"), and all of CommonMark passes.
 > Written 2026-10-15; its open questions were settled with the author the same
 > day (section 8). It started as "would
 > `tools/gendocs.py` be a candidate to move to Turmeric?" A straight gendocs port
@@ -523,6 +525,135 @@ a `SlugMode`, for READMEs that are read on GitHub.
   JavaScript, and the notebook's parser plus renderers come to 4.7k.
 - **Performance target:** all guides plus the spice READMEs parse and render in
   under a second compiled. The block-subset spike took 48ms.
+
+**M1 as built.**
+- **The ratchet.** Every example in the block sections passes on the compiled
+  engine, the JIT and the interpreter, except those whose expected HTML needs
+  inline syntax: emphasis, code spans, links, inline raw HTML, escapes and
+  entities in text. Link reference definitions are parsed and taken out of
+  their paragraphs; they show up only once M2 resolves links. That is 347 of
+  the 652 CommonMark examples and 2 of the 24 GFM ones, all byte-identical to
+  the spec's HTML. The 676 run leak-clean under LeakSanitizer.
+- **The tree is an arena, not a `defdata Block` of `String`s** (the deviation
+  from 6.2). Blocks are `MdNode` values in a `(Vec MdNode)`, linked by index,
+  and their text is a `(Vec String)` pool that `markdown/doc-free` releases.
+  Two compiler leaks ruled out the planned shape:
+  - a struct or sum with a `String` field is a heap box nothing frees
+    (`docs/archive/opaque-field-struct-box-never-freed.md`, fixed since);
+  - an `Option` of a struct passed down a recursive walk leaks its box
+    (`fresh-option-arg-to-self-call-leaks.md`).
+
+  Nothing in a node owns memory, so the parser builds and frees the tree with
+  no ownership bookkeeping.
+- **The public view is typed.**
+  - `MdBlockId` is a one-int struct, not an `:int`.
+  - `markdown/block` returns `MdBlock`, a by-value sum carrying the kind's
+    facts: `(MdHeading level)`, `(MdList ordered start tight)`,
+    `(MdCodeBlock fenced)`.
+  - `markdown/children` returns a `(Vec MdBlockId)` rather than first-child /
+    next-sibling Options, for the second leak above.
+  - Text comes out through `markdown/block-text`, `markdown/code-info` and
+    `markdown/block-lines`, each a fresh `String` or a pair of line numbers.
+- **Names.** The types are `MdDoc`, `MdOpts` and `MdHtmlOpts`, prefixed because
+  stdlib files are `load`ed into one namespace. `MdHtmlOpts` has `raw-html`
+  only; M3 adds the heading-id mode. `MdRawTagFilter`, the default, is
+  implemented for HTML blocks, and M2 applies it to inline raw HTML.
+- **Inline content until M2.** A paragraph's or heading's text is written
+  escaped, with soft breaks, and hard breaks after two trailing spaces.
+- **Where the code is.**
+  - `stdlib/markdown/block.tur` is the port of commonmark.js's `blocks.js`
+    (about 1,300 lines).
+  - `stdlib/markdown/html.tur` is the renderer.
+  - `stdlib/markdown/inline.tur` holds what link reference definitions are
+    made of: unescaping, the label / destination / title scanners, label
+    normalisation, and the HTML tag scanner behind HTML block kind 7. M2
+    builds the inline parser on the same scanners, and renames this file
+    `scan.tur`.
+- **The runner.** `tests/markdown-spec/run.py` generates one program holding
+  every example, so a crash costs only its own example, and runs it on each
+  engine. It normalises HTML with its own rules, written from the spec's
+  description since upstream's `normalize.py` is not in the spec repository.
+  `tests/run-markdown-spec.sh` wraps it, and is ctest `tur_markdown_spec` in
+  the `aux` part. CI fetches the spec repository at `tests/markdown-spec/PINNED`.
+- **Compiler friction found and filed:**
+  - `forward-call-with-rc-argument-rejected.md`: a call to a later `defn`
+    taking an `rc<T>` is a type error, so `block.tur` defines callees before
+    callers, and the renderer recurses through one function;
+  - `vec-push-of-with-expression-emits-invalid-c.md`, worked around with a
+    `let`;
+  - the two leaks above.
+
+**M2 as built.**
+- **Conformance.** All 652 CommonMark examples pass on the compiled engine,
+  the JIT and the interpreter, byte-identical to the spec's HTML. So do 3 of
+  the 24 GFM ones: the tag-filter example joins now that the filter applies to
+  inline HTML, and the rest are M3's extensions. The 676 run leak-clean under
+  LeakSanitizer.
+- **Checked against commonmark.js too.** The spec's examples show only the
+  cases someone wrote down, so the HTML was also compared with commonmark.js
+  0.31.2's:
+  - over every Markdown file in this repository (2,218 files, 30 MB), which
+    came out identical;
+  - over 180,000 random documents built from Markdown's punctuation, tags,
+    entities, percent escapes, and non-ASCII letters and spaces. 20,000 of
+    them were also run under ASan, UBSan and LeakSanitizer, which found
+    nothing.
+
+  Every difference is a place where commonmark.js matches JavaScript's `\s`
+  or calls `trim()`, both of which take in U+00A0, and the spec says spaces
+  and tabs: the trimmed ends of a paragraph or heading, the end of an HTML
+  block kind 7 start line, the space before a closing tag's `>`, and a fence's
+  first info word. One difference is deliberate: raw HTML inside an image's
+  alt text is escaped, as cmark does, where commonmark.js writes it into the
+  attribute unescaped.
+
+  The comparison is ctest `tur_markdown_diff` (`tests/run-markdown-diff.sh`):
+  - Every tracked Markdown file is rendered, plus the spice READMEs and 30,000
+    random documents from fixed seeds.
+  - commonmark.js and its dependencies are pinned by
+    `tests/markdown-spec/oracle/package-lock.json`.
+  - CI's `aux` part installs node with the web job's `setup-node` pin, then
+    runs `npm ci`. Without them the test skips.
+  - Node was already a CI dependency through the web job. What this adds is
+    four small npm packages, for tests only.
+- **The inline tree is an arena too.** Inlines are `MdInl` values in a
+  `(Vec MdInl)` on the `MdDoc`, linked by index, and `MdNode.inl` is a
+  block's root.
+  - A text inline is a byte range of a pool `String`, usually the block's
+    trimmed text, so taking delimiters off a run moves an end index.
+  - A code span, a character reference, and a link's destination and title
+    each get a pool `String` of their own.
+  - After the scan, adjacent text inlines over consecutive bytes are joined,
+    so an unmatched `*` leaves `a*b` one text inline. commonmark.js leaves it
+    as three.
+- **The parser.** `stdlib/markdown/inline.tur` (about 730 lines) is the port
+  of commonmark.js's `inlines.js`: one left-to-right scan with a delimiter
+  stack and a bracket stack, both index-linked `Vec`s, then
+  `processEmphasis` with its fourteen openers-bottom slots.
+- **The scanners.** M1's `inline.tur` is now `scan.tur`, holding the scanners
+  both parsers share. It gained:
+  - the inline HTML scanners: open and closing tags, comments, processing
+    instructions, CDATA and declarations;
+  - the URI and email autolink scanners;
+  - URL normalisation, as commonmark.js's mdurl does it: an existing `%XX`
+    stays, and any byte outside the URL-safe set is percent-encoded. Link
+    reference definitions' destinations get it too.
+- **The public view.**
+  - `MdInlineId` is a one-int struct.
+  - `markdown/inline` returns an `MdInline`: `MdText`, `MdCode`, `MdEmph`,
+    `MdStrong`, `MdLink`, `MdImage`, `MdHtmlInline`, `MdSoftBreak` or
+    `MdHardBreak`. It is `MdHtmlInline` because `MdRawHtml` is the renderer's
+    option type. Strikethrough joins with M3.
+  - `markdown/inlines` and `markdown/inline-children` return a
+    `(Vec MdInlineId)`, as `markdown/children` does for blocks.
+  - `markdown/inline-text`, `markdown/link-dest` and `markdown/link-title`
+    each return a fresh `String` or `(none)`.
+- **Speed.** M1's 3.1 MB corpus parses and renders in 0.17 s compiled, inlines
+  included; blocks alone took 0.11 s. This repository's 30 MB of Markdown
+  takes 2.0 s.
+- **No new compiler friction.** M1's two workarounds held: callees are
+  defined before their callers, and the inline renderer recurses through one
+  function.
 
 ### 6.5 M4 -- docs pipeline cut-over
 

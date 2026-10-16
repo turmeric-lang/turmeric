@@ -71,6 +71,18 @@ defmodule geom/vector
   (`geom/vector`, `db/postgres/conn`).
 - An optional docstring may follow the name:
   `(defmodule geom/vector "2-D vector math" ...)`.
+- A `(load ...)` in a module body is expanded in place, once per
+  compilation, with one exception for the stdlib:
+  - A **stdlib** file (`(load "stdlib/string.tur")`) is spliced at global
+    scope, ahead of the module, exactly as if the load were written above the
+    `defmodule`. The stdlib is shared, so two modules that both load
+    `stdlib/string.tur` see the same `String` and the same functions.
+  - **Any other** file is spliced into the module, so its definitions are
+    the module's members and can be exported. That is how a module is split
+    across files.
+- A module's `import`s come before its first definition. A user-file
+  `(load ...)` above an `import` splices definitions in and ends that section,
+  so put it after the imports.
 
 ### Name → file-path convention
 

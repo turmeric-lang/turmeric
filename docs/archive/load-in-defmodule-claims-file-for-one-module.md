@@ -1,5 +1,10 @@
 # A `load` inside a `defmodule` claims the file for that module alone
 
+**RESOLVED 2026-10-16** -- see [Resolution](#resolution-2026-10-16). Pinned by
+`tests/fixtures/load-stdlib-in-two-modules`,
+`tests/fixtures/load-stdlib-above-import-in-module` and
+`tests/fixtures/errors/load-user-file-above-import-in-module`.
+
 **Severity: medium** (compile failure for a documented shape; the workaround is
 to load before every `defmodule` that needs the file). Found 2026-10-16 writing
 turmeric-spices' `signal/tuning`, whose API returns `(Result Scale String)`.
@@ -101,3 +106,41 @@ and this one now keeps them from collapsing back onto stdlib `String`.
 - Shape D: either hoist `load` items before the header scan ends, or give the
   stray-`import` diagnostic a variant naming the cause ("`import` must come
   before the module's definitions; a `(load ...)` above it added some").
+
+## Resolution (2026-10-16)
+
+Fix direction 1, scoped to the stdlib.
+
+- `load_expand_forms` (`src/compiler/elab_toplevel.c`) no longer splices a
+  `(load "stdlib/...")` item of a `defmodule` body into the module. It expands
+  the load at the level the module sits at, ahead of the module, so it is the
+  same as writing the load above the `defmodule`. The stdlib is shared
+  infrastructure (one `String`, one set of instances), so its definitions are
+  global wherever the load is written, and the compilation-global visited set
+  is correct for them again.
+- A non-stdlib file loaded in a module body still splices into the module,
+  so a module split across files keeps its members and its exports. A
+  `(load "src/lib/helpers.tur")` whose `defn` the module exports was checked
+  to work as before.
+- Shape D is fixed for stdlib loads by the same change: a hoisted load
+  splices nothing into the header, so an `import` below it stays in the
+  header. For a user-file load above an `import`, `elab_toplevel_import`
+  (`elab_module.c`) now says what happened when it is reached inside a module
+  body: "import must come before the module's first definition ... (a
+  `(load ...)` above it splices definitions in, which ends the import
+  section)". A top-level `import` keeps its old message
+  (`errors/module-import-outside`).
+
+All eight placements in the repro table (shapes A-D, with the library's load
+inside or above its `defmodule`) print `hi`. turmeric-spices' `signal/tuning`
+and its test, with both `stdlib/string.tur` loads moved back inside their
+modules, pass; on unfixed `main` they fail as reported. The spices' existing
+in-module stdlib loads (`signal` examples 08 and 09, the `template` fixtures)
+produce identical output.
+
+`load-inside-defmodule-injects-names`'s snapshot was regenerated: the
+`stdlib/arrow.tur` names it loads are now global (`__arrow_pair_first`, not
+`prog____arrow_pair_first`), and the lambda helpers spliced with them are
+renumbered. Its output is unchanged. The module guide documents the rule.
+`tests/run.sh`: 3863 passed, 0 failed. `run-turi.sh` on `load|module`
+fixtures: 103 passed, 0 failed, 29 skipped.

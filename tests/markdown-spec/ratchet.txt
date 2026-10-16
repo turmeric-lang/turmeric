@@ -1,0 +1,5 @@
+# tests/markdown-spec/ratchet.txt -- spec examples tur/markdown passes,
+# on every engine tests/run-markdown-spec.sh runs.  Maintained by
+# tests/markdown-spec/run.py --update; the list only grows.
+commonmark-0.31.2: 1-652
+gfm-0.29-extensions: 203 492 652

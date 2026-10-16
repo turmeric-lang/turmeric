@@ -697,6 +697,155 @@ static HamtNode *node_insert(HamtNode *n, uint64_t hash, void *key, void *val,
 }
 
 /* ============================================================================
+ * In-place insert, for transients
+ * ============================================================================
+ *
+ * node_insert_mut CONSUMES the caller's reference to `n` and returns an owned
+ * reference to the node that replaces it -- often `n` itself, changed in place.
+ *
+ * A node may be changed in place only when nothing else can reach it, and the
+ * reference count says when: a transient owns its root, and a node at
+ * ref_count 1 under a node it owns is reachable through that parent alone.  A
+ * shared node (ref_count > 1) that has to change is copied first, which
+ * retains each of its children; they then read as shared too, so the
+ * copy-on-write runs down the rest of the path.  Each node is copied at most
+ * once per transient, the first time an insert changes it, and changed in
+ * place from then on.  The persistent path copies every node on the path on
+ * every insert and then releases the old path (performance audit R-5).
+ *
+ * Key and value hooks run as the persistent insert's do, net: a copy retains
+ * what it duplicates, and replacing a value releases the old one.  `*added`
+ * is set when the key was not in the tree.
+ */
+
+/* Make `n` safe to change: itself when we hold its only reference, else a
+ * private copy, with our reference to the shared original dropped (its other
+ * owners keep it alive). */
+static HamtNode *node_own(HamtNode *n) {
+    if (n->ref_count == 1) return n;
+    HamtNode *c = n;
+    switch (n->type) {
+        case HAMT_NODE_BITMAP:    c = bitmap_node_copy(n); break;
+        case HAMT_NODE_ARRAY:     c = array_node_copy(n); break;
+        case HAMT_NODE_COLLISION: c = collision_node_copy(n); break;
+    }
+    tur_hamt_node_release(n);
+    return c;
+}
+
+static HamtNode *node_insert_mut(HamtNode *n, uint64_t hash, void *key, void *val,
+                                 uint32_t level, bool *added) {
+    uint32_t chunk = hash_chunk(hash, level);
+
+    if (!n) {
+        *added = true;
+        return collision_node_create(chunk, hash, key, val);
+    }
+
+    switch (n->type) {
+        case HAMT_NODE_BITMAP: {
+            uint32_t bitmap = n->as.bitmap.bitmap;
+            uint32_t bit = UINT32_C(1) << chunk;
+            uint32_t idx = popcount32(bitmap & (bit - 1));
+
+            if (bitmap & bit) {
+                n = node_own(n);
+                n->as.bitmap.children[idx] =
+                    node_insert_mut(n->as.bitmap.children[idx], hash, key, val,
+                                    level + 1, added);
+                return n;
+            }
+
+            /* A new slot: a node one child larger.  Ours, its children move
+             * across and it is freed; shared, they are retained into the new
+             * node and our reference to it is dropped. */
+            uint32_t count = popcount32(bitmap);
+            HamtNode *g = bitmap_node_create(bitmap | bit);
+            memcpy(g->as.bitmap.children, n->as.bitmap.children,
+                   sizeof(HamtNode *) * idx);
+            g->as.bitmap.children[idx] = collision_node_create(chunk, hash, key, val);
+            memcpy(g->as.bitmap.children + idx + 1, n->as.bitmap.children + idx,
+                   sizeof(HamtNode *) * (count - idx));
+            if (n->ref_count == 1) {
+                free(n);
+            } else {
+                for (uint32_t i = 0; i < count; i++)
+                    tur_hamt_node_retain(n->as.bitmap.children[i]);
+                tur_hamt_node_release(n);
+            }
+            *added = true;
+            return g;
+        }
+
+        case HAMT_NODE_ARRAY: {
+            n = node_own(n);
+            n->as.array.children[chunk] =
+                node_insert_mut(n->as.array.children[chunk], hash, key, val,
+                                level + 1, added);
+            return n;
+        }
+
+        case HAMT_NODE_COLLISION: {
+            uint32_t existing_chunk = hash_chunk(n->as.collision.entries->hash, level);
+
+            if (existing_chunk != chunk) {
+                /* Different slot at this level: a bitmap node over the two,
+                 * which takes over our reference to `n`, shared or not. */
+                uint32_t new_bitmap = (UINT32_C(1) << existing_chunk) | (UINT32_C(1) << chunk);
+                HamtNode *b = bitmap_node_create(new_bitmap);
+                HamtNode *fresh = collision_node_create(chunk, hash, key, val);
+                bool fresh_first = chunk < existing_chunk;
+                b->as.bitmap.children[fresh_first ? 0 : 1] = fresh;
+                b->as.bitmap.children[fresh_first ? 1 : 0] = n;
+                *added = true;
+                return b;
+            }
+
+            uint32_t pos = 0;
+            HamtEntry *e = n->as.collision.entries;
+            while (e && !(e->hash == hash && keys_equal(e->key, key))) {
+                e = e->next;
+                pos++;
+            }
+            if (e) {
+                /* Update.  A copy keeps the entries in order, so the match is
+                 * at the same position in it. */
+                n = node_own(n);
+                e = n->as.collision.entries;
+                while (pos--) e = e->next;
+                val_release_hook(e->val);  /* the old value's reference goes */
+                e->val = val;
+                *added = false;
+                return n;
+            }
+
+            if (n->as.collision.entries->hash == hash) {
+                /* True hash collision: one more entry on the chain. */
+                n = node_own(n);
+                HamtEntry *ne = (HamtEntry *)hamt_malloc(sizeof(HamtEntry));
+                ne->hash = hash;
+                ne->key = key;
+                ne->val = val;
+                ne->next = n->as.collision.entries;
+                n->as.collision.entries = ne;
+                *added = true;
+                return n;
+            }
+
+            /* Same chunk here, different full hash: they part at a deeper
+             * level, under a single-slot bitmap node, as node_insert does.
+             * The recursion takes over our reference to `n`. */
+            HamtNode *inner = node_insert_mut(n, hash, key, val, level + 1, added);
+            HamtNode *wrapper = bitmap_node_create(UINT32_C(1) << chunk);
+            wrapper->as.bitmap.children[0] = inner;
+            return wrapper;
+        }
+    }
+
+    return n;
+}
+
+/* ============================================================================
  * Delete operation
  * ============================================================================
  */
@@ -1867,11 +2016,13 @@ void tur_hamt_dump_dot_stderr(Hamt *m) {
  * Transient mode — mutable batch-construction wrapper
  * ---------------------------------------------------------------------------
  *
- * A transient is a mutable view over HAMT nodes. For Phase P4 v1 we use
- * a simple strategy: the transient wraps the immutable root and delegates
- * to the existing functional set/del operations but avoids allocating a
- * new Hamt shell on every operation.  The token field guards against use
- * after tur_hamt_persistent() invalidates the transient.
+ * A transient is a mutable view over HAMT nodes.  It holds one reference to
+ * the root of the map it came from; tur_hamt_transient_set inserts in place
+ * (node_insert_mut), copying a node only the first time it changes one the
+ * source map still shares, and never path-copying a node it already owns.
+ * tur_hamt_transient_del still runs the persistent delete, saving only the
+ * Hamt shell.  The token field guards against use after tur_hamt_persistent()
+ * invalidates the transient.
  */
 
 static uint64_t g_transient_token = 1;  /* monotonically increasing */
@@ -1907,18 +2058,12 @@ void tur_hamt_transient_set(HamtTransient *t, uint64_t hash, void *key, void *va
     tur_region_note_escape(key);
     tur_region_note_escape(val);
 
-    /* Check if key already exists in the current tree */
-    bool exists = node_has(t->root, hash, key, 0);
-
-    HamtNode *new_root = node_insert(t->root, hash, key, val, 0);
-    if (new_root == t->root) return;
-
-    /* Release old root; node_insert returned a new root with ref_count=1 */
-    if (t->root) {
-        tur_hamt_node_release(t->root);
-    }
-    t->root = new_root;
-    if (!exists) {
+    /* In place: t owns its root, so node_insert_mut takes that reference and
+     * hands back the root to keep, copying only nodes still shared with the
+     * map the transient came from. */
+    bool added = false;
+    t->root = node_insert_mut(t->root, hash, key, val, 0, &added);
+    if (added) {
         t->count++;
     }
 }
@@ -1938,10 +2083,10 @@ void tur_hamt_transient_del(HamtTransient *t, uint64_t hash, void *key) {
     if (t->root) {
         tur_hamt_node_release(t->root);
     }
+    /* node_delete returns a fresh root at ref_count 1 (or NULL), and t is its
+     * only owner -- retaining it again, as this used to, left every node of
+     * the tree one reference short of ever being freed. */
     t->root = new_root;
-    if (new_root) {
-        tur_hamt_node_retain(new_root);
-    }
     t->count--;
 }
 

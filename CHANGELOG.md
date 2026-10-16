@@ -2,6 +2,92 @@
 
 All notable changes to Turmeric are documented here.
 
+## [0.65.5] -- 2026-10-16
+
+### Added
+
+- **`stdlib/markdown.tur` now parses and renders inline syntax.** Emphasis and
+  strong via the delimiter-run algorithm, code spans, backslash escapes,
+  character references, inline and reference links and images with nested
+  brackets, autolinks, raw inline HTML, and hard and soft breaks. The `raw-HTML`
+  option now applies to inline HTML, and image alt text escapes raw HTML.
+
+## [0.65.4] -- 2026-10-16
+
+### Added
+
+- **`stdlib/markdown.tur` parses CommonMark blocks and renders HTML.** Covers
+  paragraphs, ATX and setext headings, thematic breaks, indented and fenced
+  code, HTML blocks, block quotes, tight and loose lists, link reference
+  definitions, tabs and lazy lines. Inline syntax (emphasis, links) is not
+  parsed yet; text renders escaped with soft and hard breaks.
+
+### Changed
+
+- **cc builds compile far less C.** `tur build` now hands gcc only the
+  definitions your program can reach instead of the whole prelude, cutting most
+  of the time small builds spent parsing and dropping dead code.
+- **`turi` looks up builtins by name.** The interpreter indexes builtin
+  overloads and skips redundant string compares on the hot path, speeding loops
+  like mandel by several percent.
+
+### Fixed
+
+- **A stdlib `load` inside a `defmodule` body is now global.** Previously the
+  first module to load a stdlib file claimed its definitions, so importers lost
+  names like `String` or found `string/...` functions private.
+- **A 9..16-byte by-value aggregate argument compiles.** Passing one straight to
+  a by-value parameter -- from `vec-get`, `map-get` or an inline-C producer --
+  no longer fails in cc with "aggregate value used where an integer was
+  expected".
+- **CPS `while` loops no longer overflow the stack below -O2.** A loop body that
+  calls a CPS function grew the C stack every iteration under `--debug`, `-O0`
+  or ASan; the back edge now bounces through the heap once the stack runs deep.
+- **A match arm returning an inline-C `(Option T)` / `(Result T E)` yields the
+  right value.** The carrier box was assigned to the result temp, so `(Option
+  String)` printed garbage and by-value temps failed in cc.
+- **JIT fixes for aarch64 and Apple arm64.** 128-bit long doubles are no longer
+  zeroed across calls on linux-aarch64, and `va_arg` no longer returns a stale
+  argument in generated and interpreted code on Apple arm64.
+
+### Docs
+
+- **A full set of compiler-internals guides.** New contributor guides cover the
+  emitter, elaborator, CPS/DK lowering, emitted-code ownership, the runtime
+  preamble and linkage, typeclasses, separate compilation, the package manager,
+  the build driver, diagnostics, r7rs and monomorphization, with the
+  compiler-internals map rewritten to match today's code.
+
+## [0.65.3] -- 2026-10-16
+
+### Added
+
+- **String and StringSlice helpers: trims, replace, repeat, pad, parse-int.**
+  `string/trim-start`, `string/trim-end`, `string/replace-all`, `string/repeat`,
+  `string/pad-start`, `string/pad-end` and `string/parse-int`, plus zero-copy
+  `slice/trim`, `slice/trim-start`, `slice/trim-end` and `slice/parse-int`.
+  `parse-int` returns `(some n)` only when the whole input is an optional sign
+  then digits.
+- **`builder/push!` and friends append without temporaries.**
+  `builder/push-int!`, `builder/push-repeat!` and `builder/push-slice!` write
+  digits, repeated characters and slice bytes straight into a `StringBuilder`;
+  `builder/push!` appends any `BuilderPush` value (cstr, String, StringSlice,
+  Char, int or bool).
+- **`stdlib/unicode.tur` adds Unicode classes, folding and UTF-8 decoding.**
+  `unicode/space?` and `unicode/punct?` test Unicode whitespace and punctuation,
+  `unicode/fold-case` does full case folding into a fresh String, and
+  `utf8/decode-at` / `utf8/decode-before` decode the code point at or just
+  before a byte index, mapping invalid bytes to U+FFFD per maximal subpart.
+
+### Changed
+
+- **Region shutdown is one pass.** Retiring a region no longer scans the
+  ownership registry per arena, so programs that retire many regions shut down
+  in time proportional to the arenas, not the square.
+- **c2mir inlines small struct and union copies.** A copy of at most four words
+  is emitted as word loads and stores instead of a libc `memcpy` call, removing
+  a call per by-value parameter and return in JIT'd code.
+
 ## [0.65.2] -- 2026-10-16
 
 ### Added

@@ -157,6 +157,7 @@ pseudo-code can opt out by marking its opening fence ```` ```turmeric no-check `
 - **[hamt-guide.md](hamt-guide.md)** -- Persistent hash maps with structural sharing (HAMT)
 - **[frame-guide.md](frame-guide.md)** -- In-memory columnar dataframes with `tur-frame` -- building, querying, joining, and exporting via the Arrow C Data Interface
 - **[stats-guide.md](stats-guide.md)** -- Statistics spice for Turmeric -- descriptive stats, distributions, hypothesis tests, OLS regression, and resampling
+- **[markdown-guide.md](markdown-guide.md)** -- Parse CommonMark Markdown into a document tree with `tur/markdown`, render it as HTML, and walk its blocks
 - **[json-guide.md](json-guide.md)** -- Compile-time `#json(...)` reader macro and runtime `tur/json` library for parsing and serializing JSON
 - **[schema-guide.md](schema-guide.md)** -- Validate untyped boundary data with composable schema values using `stdlib/schema.tur`, with accumulating, path-tagged errors
 - **[ecs-guide.md](ecs-guide.md)** -- Building games and simulations with `tur-ecs` and the `tur-ecs-raylib` companion
@@ -218,6 +219,7 @@ pseudo-code can opt out by marking its opening fence ```` ```turmeric no-check `
 - **[tur-watch-guide.md](tur-watch-guide.md)** -- Cross-platform filesystem watching with debounce and coalescing for CLI tools
 - **[tvm-guide.md](tvm-guide.md)** -- Install, switch between, and pin Turmeric compiler releases the same way nvm does for Node
 - **[compiler-flags-guide.md](compiler-flags-guide.md)** -- Diagnostic and debug flags accepted by `tur`; list of removed `-X` feature flags
+- **[tur-compile-link-guide.md](tur-compile-link-guide.md)** -- Splitting `tur build` into a cacheable object compile plus a cheap link -- `tur compile`, `tur link`, `--split-build`, and how `--runtime=` decides how the runtime is linked
 - **[test-runner-contract.md](test-runner-contract.md)** -- Test framework API and contract
 - **[running-tests-guide.md](running-tests-guide.md)** -- Running the tests: which harness runs what, narrowing a run to one fixture, every harness variable, the fixture marker files, and the local command for each CI job
 - **[test-suite-portability-guide.md](test-suite-portability-guide.md)** -- Fixture-suite pitfalls: portability, parallel ctest, sanitizers and heap probes, and which harness actually leak-checks what
@@ -233,14 +235,52 @@ pseudo-code can opt out by marking its opening fence ```` ```turmeric no-check `
 
 ## Compiler Internals
 
-- **[compiler-internals.md](compiler-internals.md)** -- End-to-end walkthrough of the `tur` compiler pipeline and source layout in `src/`, aimed at contributors
+Start with the map, then the guide for the stage you are changing.
+
+- **[compiler-internals.md](compiler-internals.md)** -- The map: the pipeline, the pass schedule, the source layout in `src/`, and one paragraph per subsystem linking its deep-dive guide
+
+**Front end and types**
+
+- **[elaborator-internals-guide.md](elaborator-internals-guide.md)** -- How reader forms become the typed `Expr` IR: the `Elab` state and scopes, the two-pass top-level driver and the synthesized `main`, call-site-local type inference, the `Expr`/`Type` data model, and the checklist for adding a form
+- **[typeclass-internals-guide.md](typeclass-internals-guide.md)** -- How a method call picks its instance, how constrained generics reach it (monomorphs, dict clones, captured dictionaries), superclasses and defaults, instances across modules, and how `definstance` lowers to a C dictionary
+- **[effect-rows-internals-guide.md](effect-rows-internals-guide.md)** -- How effect rows are represented, parsed, inferred and checked: `EffectRow`, the `EffectEnv`, the elaborator's effect checks, the effect-row pass, capabilities and `Unsafe`
+- **[refinement-solver-internals-guide.md](refinement-solver-internals-guide.md)** -- How the in-house refinement solver chain works and how to debug an obligation (also listed under Refinement Types)
+
+**Code generation**
+
+- **[emitter-architecture-guide.md](emitter-architecture-guide.md)** -- How the C emitter builds a translation unit: the `emit_value`/`emit_stmt` contract, the call hoist and panic checks, `EmitCtx`, the phase order of `emit_program`, ABI specializations, inline C, and adding an emit arm
+- **[cps-dk-internals-guide.md](cps-dk-internals-guide.md)** -- How the compiled path lowers effects and delimited control: coloring, the CT-IR, the `__cps` ABI, the DK continuation machine, who frees what, and the debugging tools
 - **[value-representations-guide.md](value-representations-guide.md)** -- The representation inventory and the producer/boundary matrix -- the live scoreboard for the representation-consolidation campaign
+- **[type-erasure-guide.md](type-erasure-guide.md)** -- Snapshot of where the `tur` compiler collapses higher-level types down to `int64_t` at the C boundary, and the three mechanisms it uses
+- **[name-mangling-guide.md](name-mangling-guide.md)** -- How Turmeric turns source names into valid C identifiers -- the injective scheme, the legacy fold, and when each applies
+- **[separate-compilation-internals-guide.md](separate-compilation-internals-guide.md)** -- How modules are found, loaded and resolved, which builds split into one C unit per module, what goes in each `.h`/`.c`, who owns a specialization or instance across units, and how to read the link errors
+
+**Memory**
+
+- **[emitted-code-ownership-guide.md](emitted-code-ownership-guide.md)** -- Who frees what in emitted direct-style C: move tracking, drop glue, by-value recursive spines, scope-exit frees, closure environments, boxes, and the leak-check workflow
+- **[regions-internals-guide.md](regions-internals-guide.md)** -- How region brackets work: generations, rewind vs retire, the static walk and the escape note, the store-hook rule and every place it is applied
 - **[gc-guide.md](gc-guide.md)** -- How memory is managed -- reference counting, the Bacon-Rajan cycle collector, arenas, and what is (and isn't) GC-managed
 - **[ownership-guide.md](ownership-guide.md)** -- Which ownership strategy to reach for -- persistent-immutable, single-owner mutable, linear/affine handles, `rc<T>` for genuine sharing, and `weak<T>` to break the resulting cycles
-- **[name-mangling-guide.md](name-mangling-guide.md)** -- How Turmeric turns source names into valid C identifiers -- the injective scheme, the legacy fold, and when each applies
-- **[type-erasure-guide.md](type-erasure-guide.md)** -- Snapshot of where the `tur` compiler collapses higher-level types down to `int64_t` at the C boundary, and the three mechanisms it uses
-- **[typeclass-internals-guide.md](typeclass-internals-guide.md)** -- How `definstance` lowers to a C dictionary struct + singleton, how method-field C types are resolved, and the closure-handle convention
+
+**Runtime, driver and tooling**
+
+- **[runtime-preamble-and-linkage-guide.md](runtime-preamble-and-linkage-guide.md)** -- Where the C runtime every program needs comes from: the emitted preamble and its gates, the runtime archives, the S2 split runtime, and which copy each build path links
+- **[build-driver-internals-guide.md](build-driver-internals-guide.md)** -- How `tur` turns a command line into a binary: dispatch and flag parsing, the compile entry points and the real pass schedule, invoking `cc`, `tur run`, every cache and what invalidates it
+- **[package-manager-internals-guide.md](package-manager-internals-guide.md)** -- How `tur` reads `build.tur`, resolves `:spices` and workspace siblings, writes and honours `tur.lock`, and generates and consumes the `:cmake-deps` CMake project
+- **[diagnostics-internals-guide.md](diagnostics-internals-guide.md)** -- How errors and warnings are reported: the `DiagCode` tables, the `diag_emit` family, spans, the terminal/JSON/LSP sinks, `tur explain`, the `errors/` fixture harness, and adding a code
+- **[jit-guide.md](jit-guide.md)** -- The in-process MIR JIT end to end (also listed under Performance)
+
+**Other front ends**
+
+- **[turi-interpreter-internals-guide.md](turi-interpreter-internals-guide.md)** -- How the tree-walking interpreter works: values and frames, the stackless driver, natives and inline C, its effect runtimes, what memory it keeps, and adding a form or native
 - **[turi-parity-guide.md](turi-parity-guide.md)** -- Feature-by-feature parity matrix between the compiled Turmeric path (`tur`) and the tree-walking interpreter (`turi`)
+- **[r7rs-implementation-guide.md](r7rs-implementation-guide.md)** -- How a `#lang r7rs` file becomes a Turmeric program: the lowering and its rename table, values, libraries and the split build, `call/cc`, the collector, and SRFIs
+
+**Working on the compiler**
+
+- **[diagnosing-the-compiler-guide.md](diagnosing-the-compiler-guide.md)** -- Narrowing a suspected compiler bug: ruling out the environment, finding the failing stage, the dump flags, three-way back-end comparison, the float and leak checks
+- **[experimental-flags-guide.md](experimental-flags-guide.md)** -- The `--enable=<name>` surface for in-flight compiler features, the two lifecycles, the TUR-W006x warnings, and `tur experiments`
+- **[release-process-guide.md](release-process-guide.md)** -- How releases are cut: the `cut-*-release` commands, their shared flow, and the ordering that makes a failed cut recoverable
 
 ## Interoperability
 
@@ -275,9 +315,9 @@ pseudo-code can opt out by marking its opening fence ```` ```turmeric no-check `
 - Tutorials → [snake-game-tutorial.md](snake-game-tutorial.md), [minikanren-1-relations-and-queries.md](minikanren-1-relations-and-queries.md), [parsec-tutorial.md](parsec-tutorial.md), [parser-combinators-tutorial.md](parser-combinators-tutorial.md), [datalog-01-concepts.md](datalog-01-concepts.md)
 - Package Management → [package-management-guide.md](package-management-guide.md), [consuming-spices-guide.md](consuming-spices-guide.md), [developing-spices-guide.md](developing-spices-guide.md), [using-turmeric-from-cmake.md](using-turmeric-from-cmake.md), [mise-asdf-guide.md](mise-asdf-guide.md), [turmeric-spices](https://github.com/turmeric-lang/turmeric-spices)
 - Editor and IDE → [vim-guide.md](vim-guide.md), [vscode-guide.md](vscode-guide.md), [lsp-guide.md](lsp-guide.md), [time-travel-tracing-guide.md](time-travel-tracing-guide.md), [ai-assistant-integration-guide.md](ai-assistant-integration-guide.md), [devcontainer-guide.md](devcontainer-guide.md), [formatter-guide.md](formatter-guide.md), [notebook-guide.md](notebook-guide.md)
-- CLI Tools → [tur-new-guide.md](tur-new-guide.md), [tur-run-guide.md](tur-run-guide.md), [tvm-guide.md](tvm-guide.md), [compiler-flags-guide.md](compiler-flags-guide.md), [autodoc-guide.md](autodoc-guide.md)
+- CLI Tools → [tur-new-guide.md](tur-new-guide.md), [tur-run-guide.md](tur-run-guide.md), [tvm-guide.md](tvm-guide.md), [compiler-flags-guide.md](compiler-flags-guide.md), [tur-compile-link-guide.md](tur-compile-link-guide.md), [autodoc-guide.md](autodoc-guide.md)
 - Performance → [performance-guide.md](performance-guide.md), [memory-usage-guide.md](memory-usage-guide.md), [monomorphization-abi-guide.md](monomorphization-abi-guide.md), [jit-guide.md](jit-guide.md)
-- Compiler Internals → [compiler-internals.md](compiler-internals.md), [value-representations-guide.md](value-representations-guide.md), [name-mangling-guide.md](name-mangling-guide.md), [type-erasure-guide.md](type-erasure-guide.md), [typeclass-internals-guide.md](typeclass-internals-guide.md), [turi-parity-guide.md](turi-parity-guide.md)
+- Compiler Internals → [compiler-internals.md](compiler-internals.md), [elaborator-internals-guide.md](elaborator-internals-guide.md), [typeclass-internals-guide.md](typeclass-internals-guide.md), [effect-rows-internals-guide.md](effect-rows-internals-guide.md), [emitter-architecture-guide.md](emitter-architecture-guide.md), [cps-dk-internals-guide.md](cps-dk-internals-guide.md), [value-representations-guide.md](value-representations-guide.md), [separate-compilation-internals-guide.md](separate-compilation-internals-guide.md), [emitted-code-ownership-guide.md](emitted-code-ownership-guide.md), [regions-internals-guide.md](regions-internals-guide.md), [runtime-preamble-and-linkage-guide.md](runtime-preamble-and-linkage-guide.md), [build-driver-internals-guide.md](build-driver-internals-guide.md), [package-manager-internals-guide.md](package-manager-internals-guide.md), [diagnostics-internals-guide.md](diagnostics-internals-guide.md), [turi-interpreter-internals-guide.md](turi-interpreter-internals-guide.md), [r7rs-implementation-guide.md](r7rs-implementation-guide.md), [diagnosing-the-compiler-guide.md](diagnosing-the-compiler-guide.md)
 - Interoperability → [c-integration-guide.md](c-integration-guide.md), [ffi-guide.md](ffi-guide.md), [eval-api.md](eval-api.md), [inline-c-results-guide.md](inline-c-results-guide.md), [sandboxing-guide.md](sandboxing-guide.md)
 - Reference → [bibliography.md](bibliography.md), [style-guide.md](style-guide.md)
 

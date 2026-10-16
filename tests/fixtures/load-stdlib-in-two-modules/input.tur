@@ -1,0 +1,17 @@
+;; load-in-defmodule-claims-file-for-one-module: the entry module and the
+;; module it imports both `(load "stdlib/string.tur")` inside their defmodule
+;; bodies.  The load-visited set is compilation-global, so the file used to be
+;; spliced into whichever module was expanded first and was a no-op for the
+;; other: here the LIBRARY lost `String` ("unsupported return type keyword
+;; 'String'").  A stdlib file loaded in a module body is now spliced at global
+;; scope ahead of the module, so both share one String.
+(defmodule prog
+  (import strmod/greet :refer [greet])
+  (load "stdlib/string.tur")
+
+(defn main [] : int
+  (let [s (greet)]
+    (println (string/to-cstr s))     ;; hi
+    (println (string/len s)))        ;; 2
+  0)
+) ;; end

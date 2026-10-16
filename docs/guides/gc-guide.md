@@ -261,16 +261,27 @@ larger `--n` and a fresh `--seed` for a session.
 returned from inline C is *not* on the RC path. If your inline-C code
 `malloc`s, your inline-C code frees.
 
-This includes **boxed sum-type payloads.** A `defdata` constructor with a
-heap payload (`(Cons 1 rest)`, `(Full 7)`) emits a `ctor_*` `malloc`, but a
-bare non-`rc<T>` box is never auto-freed on *any* path -- matching it and
-consuming the payload does not drop the box. This is the memory model, not a
-`match`-teardown bug: e.g. a plain `(defdata List (Nil) (Cons :int :List))`
-built and matched leaks its `Cons` boxes by design. Opt a boxed value into
-managed lifetime by wrapping it in `rc<T>`, or use the substructural
-(`^linear`/`^unique`) path. The compiled program's *runtime* is not
-leak-checked (only the `emit-c`/`build` codegen path is), so these leaks pass
-the suite silently.
+**Boxed sum-type payloads depend on the type's layout.** A non-recursive sum
+with scalar payloads (`(defdata Slot (Empty) (Full :int))`, so `(Full 7)`) is
+a by-value C struct and allocates nothing. Two kinds of `defdata` do:
+
+- A **by-value recursive** type -- the default, e.g. a plain
+  `(defdata List (Nil) (Cons :int :List))` -- boxes each recursive link, and
+  those boxes are freed: the type gets drop glue, and the compiler frees a
+  spine at its owning local's scope exit, after a lend to a non-retaining
+  callee, or inside a consuming callee. The shapes that still leak are under
+  "Known gaps" below. Declared `:copy`, the type gets no drop glue and leaks
+  its links by design; build such values inside `with-region`.
+- A **`:heap`** type's `ctor_*` `malloc`s a node that is never auto-freed
+  outside a region -- matching it and consuming the payload does not drop it.
+  Opt into managed lifetime with `rc<T>` or a `with-region` bracket, or use
+  the substructural (`^linear`/`^unique`) path.
+
+Who frees what in emitted code is mapped in
+[emitted-code-ownership-guide.md](emitted-code-ownership-guide.md). The
+compiled program's *runtime* is not leak-checked by `tests/run.sh` (only the
+`emit-c`/`build` codegen path is), so these leaks pass the suite silently; use
+`tests/run-leak-check.sh`.
 
 **Boxes without walkers.** `RCK_OPAQUE` blocks are RC-managed (they get
 freed when the count hits zero) but the cycle collector cannot see through

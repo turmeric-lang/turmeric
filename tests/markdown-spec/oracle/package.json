@@ -1,0 +1,8 @@
+{
+  "name": "tur-markdown-oracle",
+  "private": true,
+  "description": "commonmark.js, the reference tests/markdown-spec/diff.py compares tur/markdown against. Install with `npm ci` here.",
+  "dependencies": {
+    "commonmark": "0.31.2"
+  }
+}

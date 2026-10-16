@@ -1,0 +1,388 @@
+;;; markdown/html -- render a parsed Markdown document as HTML.
+;;;
+;;; The CommonMark spec's HTML, as commonmark.js writes it: the blocks, then
+;;; each paragraph's and heading's inline tree.  An image's alt text is its
+;;; inlines as plain text, escaped.
+;;;
+;;; Since: markdown-library-plan M1
+;; The document types, the block parser and the inline parser.
+(load "stdlib/markdown/inline.tur")
+;;; MdRawHtml -- what the renderer does with raw HTML in the document.
+;;;
+;;; MdRawPass writes it through.  MdRawTagFilter, the default, is GitHub's
+;;; behaviour: it writes it through but escapes the < that opens one of nine
+;;; tags (title, textarea, style, xmp, iframe, noembed, noframes, script,
+;;; plaintext).  MdRawEscape writes all raw HTML as text.
+
+(defdata MdRawHtml :copy (MdRawPass) (MdRawTagFilter) (MdRawEscape))
+;;; MdHtmlOpts -- options for markdown/render-html.
+
+(defstruct MdHtmlOpts :copy [raw-html : MdRawHtml])
+;;; MdRen -- internal: renderer state; whether the output ends with a line feed.
+
+(defstruct MdRen [nl : bool])
+;; ---- Output ------------------------------------------------------------------------
+;;; md/-out! -- internal: append a literal and note whether it ends the line.
+
+(defn md/-out! [^borrow r : rc<MdRen> b : StringBuilder s : cstr] : void
+  (do (builder/push-cstr! b s) (set! (.nl r) false)))
+;;; md/-cr! -- internal: start a new line unless the output is at one.
+
+(defn md/-cr! [^borrow r : rc<MdRen> b : StringBuilder] : void
+  (when (not (.nl r)) (do (builder/push-byte! b 10) (set! (.nl r) true))))
+;;; md/-ends-nl? -- internal: does [i, end) of s end with a line feed?
+
+(defn md/-ends-nl? [s : String i : int end : int] : bool
+  (and (> end i) (= (string/byte-at s (- end 1)) 10)))
+;;; md/-escape-of -- internal: the entity that stands for byte c in HTML text, or "" when c needs none.
+
+(defn md/-escape-of [c : int] : cstr
+  (cond (= c 38) "&amp;"
+        (= c 60) "&lt;"
+        (= c 62) "&gt;"
+        (= c 34) "&quot;"
+        :else    ""))
+;;; md/-push-escaped! -- internal: append [i, end) of s with & < > and " escaped.
+
+(defn md/-push-escaped! [b : StringBuilder s : String i0 : int end : int] : void
+  (let [^mut i   i0
+        ^mut run i0]
+    (do
+      (while (< i end)
+        (let [c (string/byte-at s i)]
+          (do
+            (when (or (= c 38) (= c 60) (= c 62) (= c 34))
+              (do
+                (string/-push-range! b s run i)
+                (builder/push-cstr! b (md/-escape-of c))
+                (set! run (+ i 1))))
+            (set! i (+ i 1)))))
+      (string/-push-range! b s run end))))
+;;; md/-text! -- internal: append [i, end) of s escaped, tracking the line end.
+
+(defn md/-text! [^borrow r : rc<MdRen>
+                 b : StringBuilder
+                 s : String
+                 i : int
+                 end : int] : void
+  (when (> end i)
+    (do (md/-push-escaped! b s i end) (set! (.nl r) (md/-ends-nl? s i end)))))
+;;; md/-raw! -- internal: append [i, end) of s as it is, tracking the line end.
+
+(defn md/-raw! [^borrow r : rc<MdRen>
+                b : StringBuilder
+                s : String
+                i : int
+                end : int] : void
+  (when (> end i)
+    (do (string/-push-range! b s i end) (set! (.nl r) (md/-ends-nl? s i end)))))
+;; ---- Raw HTML ------------------------------------------------------------------------
+;;; md/-filtered-tag? -- internal: does the < at i of s open (or close) one of the nine tags the tag filter escapes?
+
+(defn md/-filtered-tag? [s : String i : int end : int] : bool
+  (let [ns    (if (= (md/-byte s (+ i 1)) 47) (+ i 2) (+ i 1))
+        name  (md/-lower-run s ns end)
+        after (+ ns (string/len name))
+        c     (md/-byte s after)
+        hit   (and (md/-word-in? "|title|textarea|style|xmp|iframe|noembed|noframes|script|plaintext|"
+                     name)
+                (or (md/-ws? c)
+                  (= c 62)
+                  (and (= c 47) (= (md/-byte s (+ after 1)) 62))))]
+    (do (string/release name) hit)))
+;;; md/-tag-filtered! -- internal: append [i, end) of s, escaping the < of a filtered tag.
+
+(defn md/-tag-filtered! [^borrow r : rc<MdRen>
+                         b : StringBuilder
+                         s : String
+                         i0 : int
+                         end : int] : void
+  (let [^mut i   i0
+        ^mut run i0]
+    (do
+      (while (< i end)
+        (do
+          (when (and (= (string/byte-at s i) 60) (md/-filtered-tag? s i end))
+            (do
+              (string/-push-range! b s run i)
+              (builder/push-cstr! b "&lt;")
+              (set! run (+ i 1))))
+          (set! i (+ i 1))))
+      (string/-push-range! b s run end)
+      (when (> end i0) (set! (.nl r) (md/-ends-nl? s i0 end))))))
+;;; md/-raw-html! -- internal: append raw HTML [i, end) of s as the options say.
+
+(defn md/-raw-html! [^borrow r : rc<MdRen>
+                     b : StringBuilder
+                     opts : MdHtmlOpts
+                     s : String
+                     i : int
+                     end : int] : void
+  (match (.raw-html opts)
+    (MdRawPass)
+    (md/-raw! r b s i end)
+    (MdRawTagFilter)
+    (md/-tag-filtered! r b s i end)
+    (MdRawEscape)
+    (md/-text! r b s i end)))
+;; ---- Inlines ------------------------------------------------------------------------------
+;;; md/-pool -- internal: the document's pool String i (borrowed).
+
+(defn md/-pool [d : MdDoc i : int] : String (vec-get (.strs d) i))
+;;; md/-pool-escaped! -- internal: append pool String v escaped, or nothing when v is -1.
+
+(defn md/-pool-escaped! [d : MdDoc b : StringBuilder v : int] : void
+  (when (>= v 0)
+    (let [s (md/-pool d v)] (md/-push-escaped! b s 0 (string/len s)))))
+;;; md/-has-pool? -- internal: is v a pool String that is not empty?
+
+(defn md/-has-pool? [d : MdDoc v : int] : bool
+  (and (>= v 0) (> (string/len (md/-pool d v)) 0)))
+;;; md/-inl-open! -- internal: what comes before inline n's children; all of a leaf.  In alt text (alt) only text is written.
+
+(defn md/-inl-open! [d : MdDoc
+                     ^borrow r : rc<MdRen>
+                     b : StringBuilder
+                     opts : MdHtmlOpts
+                     alt : bool
+                     n : MdInl] : void
+  (match (.kind n)
+    (MdIText)
+    (md/-text! r b (md/-pool d (.str n)) (.start n) (.end n))
+    (MdISoftBreak)
+    (do (builder/push-byte! b 10) (set! (.nl r) true))
+    (MdIHardBreak)
+    (do (when (not alt) (md/-out! r b "<br />")) (md/-cr! r b))
+    (MdICode)
+    (do
+      (when (not alt) (md/-out! r b "<code>"))
+      (md/-text! r b (md/-pool d (.str n)) (.start n) (.end n))
+      (when (not alt) (md/-out! r b "</code>")))
+    (MdIEmph)
+    (when (not alt) (md/-out! r b "<em>"))
+    (MdIStrong)
+    (when (not alt) (md/-out! r b "<strong>"))
+    (MdILink)
+    (when (not alt)
+      (do
+        (md/-out! r b "<a href=\"")
+        (md/-pool-escaped! d b (.dest n))
+        (when (md/-has-pool? d (.title n))
+          (do (md/-out! r b "\" title=\"") (md/-pool-escaped! d b (.title n))))
+        (md/-out! r b "\">")))
+    (MdIImage)
+    (when (not alt)
+      (do
+        (md/-out! r b "<img src=\"")
+        (md/-pool-escaped! d b (.dest n))
+        (md/-out! r b "\" alt=\"")))
+    (MdIHtml)
+    (if alt
+      (md/-text! r b (md/-pool d (.str n)) (.start n) (.end n))
+      (md/-raw-html! r b opts (md/-pool d (.str n)) (.start n) (.end n)))
+    (MdIRoot)
+    nil))
+;;; md/-inl-close! -- internal: what comes after inline n's children.
+
+(defn md/-inl-close! [d : MdDoc
+                      ^borrow r : rc<MdRen>
+                      b : StringBuilder
+                      alt : bool
+                      n : MdInl] : void
+  (when (not alt)
+    (match (.kind n)
+      (MdIEmph)
+      (md/-out! r b "</em>")
+      (MdIStrong)
+      (md/-out! r b "</strong>")
+      (MdILink)
+      (md/-out! r b "</a>")
+      (MdIImage)
+      (do
+        (when (md/-has-pool? d (.title n))
+          (do (md/-out! r b "\" title=\"") (md/-pool-escaped! d b (.title n))))
+        (md/-out! r b "\" />"))
+      _
+      nil)))
+;;; md/-render-inl! -- internal: render inline i and everything under it; alt is true inside an image's alt text.
+
+(defn md/-render-inl! [d : MdDoc
+                       ^borrow r : rc<MdRen>
+                       b : StringBuilder
+                       opts : MdHtmlOpts
+                       alt : bool
+                       i : int] : void
+  (let [n     (vec-get (.inls d) i)
+        inner (or alt (match (.kind n) (MdIImage) true _ false))]
+    (do
+      (md/-inl-open! d r b opts alt n)
+      (let [^mut c (.first-child n)]
+        (while (>= c 0)
+          (do
+            (md/-render-inl! d r b opts inner c)
+            (set! c (.next (vec-get (.inls d) c))))))
+      (md/-inl-close! d r b alt n))))
+;;; md/-inline! -- internal: a paragraph's or heading's inlines.
+
+(defn md/-inline! [d : MdDoc
+                   ^borrow r : rc<MdRen>
+                   b : StringBuilder
+                   opts : MdHtmlOpts
+                   n : MdNode] : void
+  (when (>= (.inl n) 0) (md/-render-inl! d r b opts false (.inl n))))
+;; ---- Blocks ------------------------------------------------------------------------------
+;;; md/-tight-para? -- internal: is node i a paragraph in an item of a tight list (written without <p>)?
+
+(defn md/-tight-para? [d : MdDoc i : int] : bool
+  (let [p (.parent (vec-get (.nodes d) i))
+        g (if (>= p 0) (.parent (vec-get (.nodes d) p)) -1)]
+    (and (>= g 0)
+      (md/-list? (.kind (vec-get (.nodes d) g)))
+      (.tight (.list (vec-get (.nodes d) g))))))
+;;; md/-text-of -- internal: node n's pool String (borrowed).
+
+(defn md/-text-of [d : MdDoc n : MdNode] : String (vec-get (.strs d) (.text n)))
+;;; md/-render-code! -- internal: <pre><code>, with a language class from the info string's first word.
+
+(defn md/-render-code! [d : MdDoc
+                        ^borrow r : rc<MdRen>
+                        b : StringBuilder
+                        n : MdNode] : void
+  (do
+    (md/-cr! r b)
+    (md/-out! r b "<pre><code")
+    (when (>= (.info n) 0)
+      (let [info   (vec-get (.strs d) (.info n))
+            ^mut w 0]
+        (do
+          (while (and (< w (string/len info))
+                   (not (md/-ws? (string/byte-at info w))))
+            (set! w (+ w 1)))
+          (when (> w 0)
+            (do
+              (md/-out! r b " class=\"language-")
+              (md/-push-escaped! b info 0 w)
+              (md/-out! r b "\""))))))
+    (md/-out! r b ">")
+    (let [s (md/-text-of d n)] (md/-text! r b s 0 (string/len s)))
+    (md/-out! r b "</code></pre>")
+    (md/-cr! r b)))
+;;; md/-render-heading! -- internal: <h1> to <h6>.
+
+(defn md/-render-heading! [d : MdDoc
+                           ^borrow r : rc<MdRen>
+                           b : StringBuilder
+                           opts : MdHtmlOpts
+                           n : MdNode] : void
+  (do
+    (md/-cr! r b)
+    (md/-out! r b "<h")
+    (builder/push-int! b (.level n))
+    (md/-out! r b ">")
+    (md/-inline! d r b opts n)
+    (md/-out! r b "</h")
+    (builder/push-int! b (.level n))
+    (md/-out! r b ">")
+    (md/-cr! r b)))
+;;; md/-render-para! -- internal: <p>, left out in a tight list.
+
+(defn md/-render-para! [d : MdDoc
+                        ^borrow r : rc<MdRen>
+                        b : StringBuilder
+                        opts : MdHtmlOpts
+                        i : int
+                        n : MdNode] : void
+  (if (md/-tight-para? d i)
+    (md/-inline! d r b opts n)
+    (do
+      (md/-cr! r b)
+      (md/-out! r b "<p>")
+      (md/-inline! d r b opts n)
+      (md/-out! r b "</p>")
+      (md/-cr! r b))))
+;;; md/-render-html-block! -- internal: an HTML block, as the raw-HTML option says.
+
+(defn md/-render-html-block! [d : MdDoc
+                              ^borrow r : rc<MdRen>
+                              b : StringBuilder
+                              opts : MdHtmlOpts
+                              n : MdNode] : void
+  (let [s (md/-text-of d n)]
+    (do (md/-cr! r b) (md/-raw-html! r b opts s 0 (string/len s)) (md/-cr! r b))))
+;;; md/-open-list! -- internal: <ul>, or <ol> with a start attribute unless it starts at 1.
+
+(defn md/-open-list! [^borrow r : rc<MdRen> b : StringBuilder l : MdListData] : void
+  (do
+    (md/-cr! r b)
+    (cond (not (.ordered l)) (md/-out! r b "<ul>")
+          (= (.start l) 1)   (md/-out! r b "<ol>")
+          :else              (do
+                               (md/-out! r b "<ol start=\"")
+                               (builder/push-int! b (.start l))
+                               (md/-out! r b "\">")))
+    (md/-cr! r b)))
+;;; md/-render-open! -- internal: what comes before node i's children; all of a leaf block.
+
+(defn md/-render-open! [d : MdDoc
+                        ^borrow r : rc<MdRen>
+                        b : StringBuilder
+                        opts : MdHtmlOpts
+                        i : int] : void
+  (let [n (vec-get (.nodes d) i)]
+    (match (.kind n)
+      (MdKParagraph)
+      (md/-render-para! d r b opts i n)
+      (MdKHeading)
+      (md/-render-heading! d r b opts n)
+      (MdKThematicBreak)
+      (do (md/-cr! r b) (md/-out! r b "<hr />") (md/-cr! r b))
+      (MdKBlockQuote)
+      (do (md/-cr! r b) (md/-out! r b "<blockquote>") (md/-cr! r b))
+      (MdKList)
+      (md/-open-list! r b (.list n))
+      (MdKItem)
+      (md/-out! r b "<li>")
+      (MdKCodeBlock)
+      (md/-render-code! d r b n)
+      (MdKHtmlBlock)
+      (md/-render-html-block! d r b opts n)
+      (MdKDocument)
+      nil)))
+;;; md/-render-close! -- internal: what comes after node i's children.
+
+(defn md/-render-close! [d : MdDoc
+                         ^borrow r : rc<MdRen>
+                         b : StringBuilder
+                         i : int] : void
+  (let [n (vec-get (.nodes d) i)]
+    (match (.kind n)
+      (MdKBlockQuote)
+      (do (md/-cr! r b) (md/-out! r b "</blockquote>") (md/-cr! r b))
+      (MdKList)
+      (do
+        (md/-cr! r b)
+        (md/-out! r b (if (.ordered (.list n)) "</ol>" "</ul>"))
+        (md/-cr! r b))
+      (MdKItem)
+      (do (md/-out! r b "</li>") (md/-cr! r b))
+      _
+      nil)))
+;;; md/-render! -- internal: render node i and everything under it.
+
+(defn md/-render! [d : MdDoc
+                   ^borrow r : rc<MdRen>
+                   b : StringBuilder
+                   opts : MdHtmlOpts
+                   i : int] : void
+  (do
+    (md/-render-open! d r b opts i)
+    (let [^mut c (.first-child (vec-get (.nodes d) i))]
+      (while (>= c 0)
+        (do (md/-render! d r b opts c) (set! c (.next (vec-get (.nodes d) c))))))
+    (md/-render-close! d r b i)))
+;;; md/-render-doc -- internal: the HTML of document d.
+
+(defn md/-render-doc [d : MdDoc opts : MdHtmlOpts] : String
+  (let [r (rc/of (MdRen true))
+        b (builder/new)]
+    (do (md/-render! d r b opts 0) (builder/finish b))))

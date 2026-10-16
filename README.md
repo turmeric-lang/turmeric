@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/turmeric-lang/turmeric/actions/workflows/ci.yml/badge.svg)](https://github.com/turmeric-lang/turmeric/actions/workflows/ci.yml)
 
-**Latest release:** `v0.65.2` -- New `--timings` flag breaks down where a compile's time goes, and the stdlib gains string search, split, join and lines helpers on String, StringSlice and cstr.
+**Latest release:** `v0.65.5` -- `stdlib/markdown.tur` now parses CommonMark inline syntax -- emphasis, links, code spans and more -- and renders it to HTML.
 
 ## What
 

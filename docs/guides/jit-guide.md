@@ -216,9 +216,12 @@ requirements, so it must be set on the consumer too) and **PUBLIC** on
    preamble text for a declarations-only region, because that runtime is
    already resident in the host via `tur_rt_split.c`. `TUR_JIT_NO_SPLIT=1`
    opts out.
-4. **Prune.** c2mir compiles every definition it is handed, where cc drops an
-   unreferenced `static` function, so without this every program would compile
-   the whole auto-loaded prelude. `jit_prune_split_source` (split TU) or
+4. **Prune.** c2mir compiles every definition it is handed, so without this
+   every program would compile the whole auto-loaded prelude. (cc drops an
+   unreferenced `static` function, but only after parsing it, which was most
+   of a small `tur build`; `tur build` therefore hands cc the same pruned unit,
+   with the same W0071 retry, and `TUR_CC_NO_PRUNE=1` turns off that one
+   alone.) `jit_prune_split_source` (split TU) or
    `jit_prune_full_source` (a TU the split declined -- every `#lang r7rs` and
    `#lang saffron` program) drops the program half's `static` functions,
    objects, fat boxes and `extern` declarations that nothing live names, and on
