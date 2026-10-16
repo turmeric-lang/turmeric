@@ -467,6 +467,96 @@
 ;;; Since: markdown-library-plan S3
 (defn slice/release-all [v : (Vec StringSlice)] : void
   (do (slice/-release-loop v 0 (vec-len v)) (vec-free v)))
+;; ---- Zero-copy trims and parse-int (markdown-library-plan S4) --------------
+;; The trims return a sub-slice of sl over the same parent String: no bytes
+;; are copied, and the caller releases the new slice as well as sl.
+;;; slice/-trim-end-loop -- internal: the index past the last non-space byte in [lo, i).
+
+(defn slice/-trim-end-loop [sl : StringSlice lo : int i : int] : int
+  (if (and (> i lo) (space? (int->char (slice/byte-at sl (- i 1)))))
+    (slice/-trim-end-loop sl lo (- i 1))
+    i))
+;;; slice/trim -- a view of sl without its leading and trailing ASCII whitespace.
+;;;
+;;; string/trim without the copy.  Whitespace is char.tur's space?, the set
+;;; string/trim strips.  An all-whitespace slice gives an empty one.
+;;;
+;;; Parameters:
+;;;   sl -- the slice to trim (borrowed)
+;;;
+;;; Returns:
+;;;   A fresh StringSlice over the same parent; release it with slice/release.
+;;;
+;;; Example:
+;;;   (slice/to-cstr (slice/trim (string/slice (string/from-cstr "| a b |") 1 5)))  ; => "a b"
+;;;
+;;; Since: markdown-library-plan S4
+(defn slice/trim [sl : StringSlice] : StringSlice
+  (let [i (slice/span-while sl 0 space?)]
+    (slice/sub sl i (- (slice/-trim-end-loop sl i (slice/len sl)) i))))
+;;; slice/trim-start -- a view of sl without its leading ASCII whitespace.
+;;;
+;;; Parameters:
+;;;   sl -- the slice to trim (borrowed)
+;;;
+;;; Returns:
+;;;   A fresh StringSlice over the same parent; release it with slice/release.
+;;;
+;;; Example:
+;;;   (slice/to-cstr (slice/trim-start (string/slice (string/from-cstr "   code") 0 7)))  ; => "code"
+;;;
+;;; Since: markdown-library-plan S4
+(defn slice/trim-start [sl : StringSlice] : StringSlice
+  (let [i (slice/span-while sl 0 space?)] (slice/sub sl i (- (slice/len sl) i))))
+;;; slice/trim-end -- a view of sl without its trailing ASCII whitespace.
+;;;
+;;; Parameters:
+;;;   sl -- the slice to trim (borrowed)
+;;;
+;;; Returns:
+;;;   A fresh StringSlice over the same parent; release it with slice/release.
+;;;
+;;; Example:
+;;;   (slice/to-cstr (slice/trim-end (string/slice (string/from-cstr "# Hi  ") 0 6)))  ; => "# Hi"
+;;;
+;;; Since: markdown-library-plan S4
+(defn slice/trim-end [sl : StringSlice] : StringSlice
+  (slice/sub sl 0 (slice/-trim-end-loop sl 0 (slice/len sl))))
+;;; slice/-parse-digits -- internal: string/-parse-digits for a slice.
+
+(defn slice/-parse-digits [sl : StringSlice i : int n : int acc : int] : (Option int)
+  (if (>= i n)
+    (some acc)
+    (let [d (char->digit (int->char (slice/byte-at sl i)))]
+      (if (or (< d 0)
+            (< acc -922337203685477580)
+            (and (= acc -922337203685477580) (> d 8)))
+        (none)
+        (slice/-parse-digits sl (+ i 1) n (- (* acc 10) d))))))
+;;; slice/parse-int -- the decimal integer sl spells, or (none).
+;;;
+;;; string/parse-int for a slice, with no copy: an optional + or -, then one
+;;; or more digits, and nothing else in the slice.  Out of the 64-bit int
+;;; range is (none).  An ordered list item's start number, sliced out of
+;;; its line, parses straight from the view.
+;;;
+;;; Parameters:
+;;;   sl -- the slice to parse (borrowed)
+;;;
+;;; Returns:
+;;;   (some n) when sl is exactly a decimal integer n, else (none).
+;;;
+;;; Example:
+;;;   (slice/parse-int (string/slice (string/from-cstr "12. item") 0 2))  ; => (some 12)
+;;;
+;;; Since: markdown-library-plan S4
+(defn slice/parse-int [sl : StringSlice] : (Option int)
+  (let [n     (slice/len sl)
+        neg   (slice/byte-is? sl 0 #\-)
+        start (if (or neg (slice/byte-is? sl 0 #\+)) 1 0)]
+    (if (>= start n)
+      (none)
+      (string/-signed-int neg (slice/-parse-digits sl start n 0)))))
 ;;; slice/compare -- lexicographic byte compare of two slices: -1, 0, or 1.
 ;;;
 ;;; Since: v2

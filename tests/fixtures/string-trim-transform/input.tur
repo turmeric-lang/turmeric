@@ -1,0 +1,153 @@
+;; string-trim-transform -- markdown-library-plan S4: one-sided trims and the
+;; zero-copy slice trims, replace-all, repeat, pad-start/pad-end, and
+;; parse-int on String and StringSlice.
+;;
+;; Every String and slice made here is released, so the leak check sees a
+;; clean run.  Each trimmed slice retains its parent, so the input String is
+;; released before the slices are read.
+
+(load "stdlib/string-slice.tur")
+
+;; s's bytes [i, n) onto b, with tab, LF and CR spelled \t, \n and \r, so
+;; expected.stdout holds no control characters (the checkout forces LF)
+(defn push-escaped [b : StringBuilder s : String i : int] : void
+  (when (< i (string/len s))
+    (do (if (string/byte-is? s i #\tab)
+          (builder/push-cstr! b "\\t")
+          (if (string/byte-is? s i #\newline)
+            (builder/push-cstr! b "\\n")
+            (if (string/byte-is? s i #\return)
+              (builder/push-cstr! b "\\r")
+              (builder/push-byte! b (string/byte-at s i)))))
+        (push-escaped b s (+ i 1)))))
+
+;; "[s]", escaped, then release s
+(defn dump [s : String] : void
+  (let [b (builder/new)]
+    (do (builder/push-cstr! b "[")
+        (push-escaped b s 0)
+        (builder/push-cstr! b "]")
+        (string/release s)
+        (let [out (builder/finish b)]
+          (do (println (string/to-cstr out))
+              (string/release out))))))
+
+;; the same for a slice, then release the slice
+(defn dump-slice [sl : StringSlice] : void
+  (do (dump (slice/to-string sl))
+      (slice/release sl)))
+
+(defn dump-int [o : (Option int)] : void
+  (match o
+    (Some v) (println v)
+    (None) (println "none")))
+
+;; f applied to a fresh String of c, which is released after
+(defn with-str [c : cstr f : (fn [String] void)] : void
+  (let [s (string/from-cstr c)]
+    (do (f s) (string/release s))))
+
+(defn trims [c : cstr] : void
+  (with-str c (fn [s : String] : void
+                (do (dump (string/trim-start s))
+                    (dump (string/trim-end s))
+                    (dump (string/trim s))))))
+
+;; the slice trims over the whole of c, with the String released first
+(defn slice-trims [c : cstr] : void
+  (let [s  (string/from-cstr c)
+        sl (string/slice s 0 (string/len s))
+        a  (slice/trim-start sl)
+        b  (slice/trim-end sl)
+        t  (slice/trim sl)]
+    (do (string/release s)
+        (slice/release sl)
+        (dump-slice a)
+        (dump-slice b)
+        (dump-slice t))))
+
+(defn rep [c : cstr from : cstr to : cstr] : void
+  (let [s (string/from-cstr c)
+        f (string/from-cstr from)
+        t (string/from-cstr to)]
+    (do (dump (string/replace-all s f t))
+        (string/release s)
+        (string/release f)
+        (string/release t))))
+
+(defn rpt [c : cstr n : int] : void
+  (with-str c (fn [s : String] : void (dump (string/repeat s n)))))
+
+(defn pads [c : cstr width : int ch : Char] : void
+  (with-str c (fn [s : String] : void
+                (do (dump (string/pad-start s width ch))
+                    (dump (string/pad-end s width ch))))))
+
+(defn parse [c : cstr] : void
+  (with-str c (fn [s : String] : void (dump-int (string/parse-int s)))))
+
+;; slice/parse-int on bytes [off, off+len) of c
+(defn parse-slice [c : cstr off : int len : int] : void
+  (let [s  (string/from-cstr c)
+        sl (string/slice s off len)]
+    (do (dump-int (slice/parse-int sl))
+        (slice/release sl)
+        (string/release s))))
+
+(defn main [] : int
+  (do
+    (println "-- trims: start, end, both")
+    (trims "  \t a b \r\n")
+    (trims "ab")
+    (trims " \n\r\t ")
+    (trims "")
+    (println "-- slice trims: start, end, both")
+    (slice-trims "  | cell |  ")
+    (slice-trims "x")
+    (slice-trims "   ")
+    (println "-- replace-all")
+    (rep "a&b&&c&" "&" "&amp;")
+    (rep "aaaa" "aa" "b")
+    (rep "aaa" "aa" "b")
+    (rep "abc" "" "X")
+    (rep "a-b-c" "-" "")
+    (rep "ab" "abc" "X")
+    (rep "ab" "ab" "abab")
+    (rep "" "a" "b")
+    (println "-- repeat")
+    (rpt "ab" 3)
+    (rpt "ab" 1)
+    (rpt "ab" 0)
+    (rpt "ab" -2)
+    (rpt "" 5)
+    (println "-- pad-start, pad-end")
+    (pads "42" 5 #\0)
+    (pads "abc" 3 #\.)
+    (pads "abcdef" 4 #\.)
+    (pads "" 2 #\space)
+    (pads "x" -1 #\.)
+    (println "-- parse-int")
+    (parse "0")
+    (parse "-042")
+    (parse "+7")
+    (parse "-0")
+    (parse "9223372036854775807")
+    (parse "-9223372036854775808")
+    (parse "9223372036854775808")
+    (parse "-9223372036854775809")
+    (parse "99999999999999999999")
+    (parse "")
+    (parse "-")
+    (parse "+")
+    (parse " 1")
+    (parse "1 ")
+    (parse "12.")
+    (parse "0x10")
+    (parse "1_000")
+    (parse "--1")
+    (println "-- slice/parse-int")
+    (parse-slice "12. item" 0 2)
+    (parse-slice "12. item" 0 3)
+    (parse-slice "x-5y" 1 2)
+    (parse-slice "x-5y" 1 0)
+    0))

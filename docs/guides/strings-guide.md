@@ -162,10 +162,25 @@ Split, join and lines:
   `fs.tur` and `string.tur`; `fs.tur` itself stays free of `String`, so a
   program that loads it and defines its own `show` is unaffected.
 
-Transform (each returns a fresh immutable `String`):
+Transform (each returns a fresh immutable `String` and borrows its arguments):
 
-- `string/concat`, `string/substring`, `string/to-upper`, `string/to-lower`,
-  `string/trim`.
+- `string/concat`, `string/substring`, `string/to-upper`, `string/to-lower`.
+- `string/trim`, `string/trim-start`, `string/trim-end` -- strip ASCII
+  whitespace (space, tab, LF, VT, FF, CR: `char.tur`'s `space?`) from both
+  ends, the front, or the back.
+- `string/replace-all s from to` -- a literal replace, left to right, never
+  overlapping and never re-scanning `to`. An empty `from` matches nothing, so
+  `s` comes back as a copy. For a pattern, use `re/replace-all`.
+- `string/repeat s n` -- `s` `n` times; `n` of 0 or less is the empty string.
+- `string/pad-start s width c`, `string/pad-end s width c` -- pad with `c` to
+  `width` bytes. A longer `s` comes back unchanged, never cut.
+- `string/parse-int s` -- `(some n)` when the whole of `s` is a decimal
+  integer (an optional sign, then digits), else `(none)`, including when it
+  does not fit in 64 bits. Unlike `str->int-checked`, it takes a `String`,
+  skips no spaces and never clamps.
+- Zero-copy: `slice/trim`, `slice/trim-start` and `slice/trim-end` return a
+  sub-slice over the same parent, and `slice/parse-int` parses a slice
+  without copying it, such as an ordered list item's start number.
 
 Incremental construction:
 
@@ -277,7 +292,9 @@ Surface: `string/slice` / `string/slice-cstr` (construct), `slice/sub` (O(1)
 sub-view), `slice/len` / `slice/empty?` / `slice/byte-at` / `slice/byte-is?` /
 `slice/char-at` / `slice/compare` / `slice/eq?` / `slice/hash` (query), the
 search functions (`slice/index-of`, `slice/span-while` and the rest, as
-above), `slice/to-string` / `slice/to-cstr`
+above), `slice/split-char`, `slice/trim` / `slice/trim-start` /
+`slice/trim-end` (O(1) sub-views), `slice/parse-int`, `slice/to-string` /
+`slice/to-cstr`
 (materialize), `slice/retain` / `slice/release` (share/drop). Typeclasses `Eq`,
 `Ord`, `Show`, `Hash`. Compiled and `--interpret` behave identically.
 
@@ -293,7 +310,7 @@ above), `slice/to-string` / `slice/to-cstr`
 ## Lifetimes -- the rules
 
 - A freshly constructed `String` (`from-cstr`, `concat`, `substring`, `to-*`,
-  `trim`, `builder/finish`) has refcount 1 and is owned by its creator. Release
+  `trim`, `replace-all`, `builder/finish`) has refcount 1 and is owned by its creator. Release
   it with `string/release`, or hand ownership to a container.
 - `string/retain` hands out a second owning handle; balance every `retain` with a
   `release`.
@@ -403,10 +420,11 @@ frees its argument, and freeing a string literal is UB. The rule:
 ### The short rules
 
 - Every `string/from-cstr`, `string/concat`, `string/substring`, `string/to-*`,
-  `string/trim`, `builder/finish`, `slice/to-string` returns an **owned** String
-  (rc 1) -- release it or give it away.
-- Every `string/slice`, `string/slice-cstr`, `slice/sub`, `slice/retain` returns
-  an owned slice -- release it.
+  `string/trim*`, `string/replace-all`, `string/repeat`, `string/pad-*`,
+  `builder/finish`, `slice/to-string` returns an **owned** String (rc 1) --
+  release it or give it away.
+- Every `string/slice`, `string/slice-cstr`, `slice/sub`, `slice/trim*`,
+  `slice/retain` returns an owned slice -- release it.
 - Anything named `*-cstr` that *returns* a cstr gives you a **fresh** buffer to
   free/adopt; anything named `to-cstr` that borrows is valid only for its
   source's lifetime.
