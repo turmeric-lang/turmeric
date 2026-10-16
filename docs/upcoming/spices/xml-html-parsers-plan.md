@@ -8,8 +8,10 @@
 > typed handles over an `:int` carrier, a self-contained `ownstr` module).
 >
 > Follow-ups A-C (markup literals with templated values, an editable tree,
-> CSS selectors and node paths): planned 2026-10-11, not started. See
-> "Follow-ups" at the end.
+> CSS selectors and node paths): planned 2026-10-11, not started. Open
+> questions A-1 to A-3 and B's cursor-walk question decided 2026-10-16;
+> A-4 (holes in script/style/srcdoc attributes) raised the same day, open.
+> See "Follow-ups" at the end.
 
 ## Outcome (2026-10-10)
 
@@ -385,8 +387,8 @@ without reimplementing them in a macro.
    ```
 
 2. **First use (runtime, once per literal).** `tpl-site` parses the marked
-   string with lexbor (`html-parse-fragment`, context `body`, or the context
-   given by `#html[tr]{...}`-style syntax if needed) or expat. It walks the
+   string with lexbor (`html-parse-fragment` with context `template`, see
+   A-2) or expat. It walks the
    tree once and records, per marker, a path (child indices from the fragment
    root) and the kind of slot. It checks that each marker index appears
    exactly once and in the slot the macro predicted. A disagreement is a bug
@@ -413,12 +415,13 @@ without reimplementing them in a macro.
 
 #### Typing the holes
 
-Two typeclasses, chosen by the macro from the hole's context, so the
+Three typeclasses, chosen by the macro from the hole's context, so the
 *position* picks the class and the *type* picks the instance:
 
 ```turmeric
-(defclass ToChild [T] (to-child [x : T] : Child))
-(defclass ToAttr  [T] (to-attr  [x : T] : AttrVal))
+(defclass ToChild   [T] (to-child    [x : T] : Child))
+(defclass ToAttr    [T] (to-attr     [x : T] : AttrVal))
+(defclass ToUrlAttr [T] (to-url-attr [x : T] : AttrVal))   ;; URL-bearing attrs, see A-1
 
 ;; children
 (definstance ToChild cstr      ...)   ;; text node -- escaped by construction
@@ -435,6 +438,12 @@ Two typeclasses, chosen by the macro from the hole's context, so the
 (definstance ToAttr int   ...)
 (definstance ToAttr bool  ...)        ;; HTML boolean attribute: present or absent
 (definstance ToAttr (Option T) ...)   ;; None drops the whole attribute
+
+;; URL-bearing attribute values (href, src, action, ...; list under A-1)
+(definstance ToUrlAttr cstr       ...)   ;; scheme-checked, then escaped
+(definstance ToUrlAttr String     ...)
+(definstance ToUrlAttr TrustedUrl ...)   ;; explicit opt-out: escaped, not checked
+(definstance ToUrlAttr (Option T) ...)   ;; None drops the whole attribute
 ```
 
 A `Node` or `Fragment` in attribute position has no instance, so it is a
@@ -447,11 +456,13 @@ resulting nodes are spliced in. So it can never unbalance the surrounding
 template. It is still not sanitized: a `<script>` in it survives, and the
 docstring says so in the words the Security section uses.
 
-What this does **not** do: decide that a URL is safe. `href=${x}` with
-`x = "javascript:..."` is escaped correctly and is still a script URL.
-Contextual URL filtering belongs with the sanitizer follow-up. Open question
-A-1 below is whether `href`/`src`/`action` holes should take a `Url` type
-instead of a `cstr`.
+**URL attributes are scheme-checked** (decided under A-1). Escaping alone
+would leave `href=${x}` with `x = "javascript:..."` a correctly escaped
+script URL, so holes in URL-bearing attributes go through `ToUrlAttr`, which
+checks the scheme before escaping. `(trusted-url s)` wraps a `cstr` as
+`TrustedUrl` to skip the check -- the same explicit, greppable act as
+`raw-html`. This is a scheme check, not sanitization: a `https:` URL to a
+hostile site passes, as it should.
 
 #### `#xml{...}`
 
@@ -466,22 +477,68 @@ compile time.
 | Phase | Deliverable | Gate |
 |---|---|---|
 | A1 | `dom/markup`: `reader-macros/define` for `html` and `xml`, the `html*` / `xml*` `defmacro*` expanders and their context tokenizer | Each forbidden hole context is a compile error with a message naming it; fixtures for `\}` and `\\` |
-| A2 | `Template` cache, marker recovery, `ToChild` / `ToAttr` and their instances, `html->string` / `xml->string` | Escaping table: `<`, `&`, `"` and `</script>` in every allowed context. A hostile value never changes the parsed structure: `parse(render(t, v))` has the same shape as `parse(render(t, "x"))` for every corpus string `v` |
+| A2 | `Template` cache, marker recovery, `ToChild` / `ToAttr` / `ToUrlAttr` and their instances, `trusted-url`, `html->string` / `xml->string` | Escaping table: `<`, `&`, `"` and `</script>` in every allowed context. A hostile value never changes the parsed structure: `parse(render(t, v))` has the same shape as `parse(render(t, "x"))` for every corpus string `v`. URL table: `javascript:`, `JavaScript:`, `java\tscript:`, a leading-space/control-char scheme, `data:`, `vbscript:` all render `about:invalid#tur-unsafe`; relative, `http(s):`, `mailto:`, `tel:` pass. Template-context probes: literals opening with `<tr>`, `<td>`, `<col>`, `<option>`, `<caption>` keep that structure (the vendored html5lib slice has only one `template`-context fragment case, so this needs its own fixtures) |
 | A3 | `html->dom` / `Fragment`, nested templates, lists, `raw-html` (needs B1/B2) | Tree mode and string mode agree: `dom-serialize(html->dom t v) == html->string t v` |
 | A4 | `TemplateInstance` and `tpl-update!` | Updating with the same values touches nothing (pinned by a counter); updating one hole rewrites one node |
 | A5 (optional, compiler) | Real spans for `${...}` holes (`read-string-at`, or a built-in `#html{` reader) | A type error in a hole points at the user's line and column |
 
 #### Open questions
 
+A-1 to A-3 were decided 2026-10-16; A-4 is open.
+
 - **A-1.** Should URL-bearing attributes (`href`, `src`, `action`,
   `formaction`, `xlink:href`) require a `Url` type rather than accepting a
-  `cstr`? That is safer, but it adds friction to every link. A middle road is
-  to accept `cstr` and reject a `javascript:` scheme at render time.
+  `cstr`? *Decided: accept `cstr`, check the scheme, offer an explicit
+  opt-out.* No `Url` type exists in either repo, and requiring one taxes
+  every link. Instead:
+  - The macro already knows the attribute name, so it picks `ToUrlAttr`
+    for `href`, `src`, `action`, `formaction`, `xlink:href`, `poster`,
+    `cite`, and `srcset` (each comma-separated candidate checked). Nothing
+    is looked up by name at runtime.
+  - The check is an **allowlist**, not a `javascript:` denylist: strip
+    leading C0 controls and spaces, drop ASCII tab/LF/CR anywhere (as the
+    URL parser does), then a value with no scheme (relative) or a scheme of
+    `http`, `https`, `mailto` or `tel` (ASCII case-insensitive) passes.
+    Anything else renders `about:invalid#tur-unsafe`. That is the Closure /
+    Go `html/template` approach: a denylist misses the next scheme, and
+    substituting a dead URL beats panicking inside a request handler.
+  - `(trusted-url s) : TrustedUrl` skips the check (still escaped).
 - **A-2.** Should the fragment context be selectable (`#html[tr]{<td>..}`),
   or should templates that start with `<td>`/`<tr>`/`<option>` be detected
-  and given the right context automatically? lit-html does the latter.
+  and given the right context automatically? *Decided: neither -- always
+  parse with `template` as the fragment context.* That is what lit-html
+  actually does: the "in template" insertion mode accepts `<tr>`, `<td>`,
+  `<col>`, `<option>` and `<caption>` at the top level, so no syntax and no
+  sniffing are needed. `html-parse-fragment` already takes the context tag.
+  Two edges, both handled in the macro's context tokenizer:
+  - a literal whose first tag is `<!doctype` or `<html>` is a whole
+    document: parse it with `html-parse`, not as a fragment;
+  - a top-level `<head>` or `<body>` would be silently dropped in template
+    context, so it is a compile error pointing at the whole-document form.
 - **A-3.** Should `tourist`'s `render-html` move onto `#html{}` once A2 lands?
-  That would retire the unescaped ERB path for HTML responses.
+  *Decided: add, don't replace.* `render-html` renders a template *file*
+  against an `env : int` at runtime; `#html{}` is a literal in the source,
+  so it cannot stand in one for one. When A2 lands, `tourist` gains
+  `html-response : Fragment -> Response`, and its guide and examples move to
+  it. `render-html` stays for file-based views. Separately, and not waiting
+  on A: the `template` spice escapes nothing (`<%= x %>` writes `x`
+  verbatim; the only "escape" in `spices/template/src` is the `<%%`
+  literal). Fix that in its own small `turmeric-spices` PR -- `<%= %>`
+  HTML-escapes by default, `<%== %>` writes raw.
+- **A-4 (open, raised 2026-10-16).** Holes in attributes whose *value* is
+  itself code or markup. The context tokenizer allows a hole in any
+  attribute value, but entity-escaping only protects the HTML layer; the
+  browser decodes the value and then hands it to another parser:
+  - `on*` event handlers: `onclick="go('${x}')"` with
+    `x = "'); alert(1); ('"` escapes `'` to `&#39;`, which decodes back to
+    `'` before the JavaScript runs.
+  - `style`: the value is CSS (`url(...)`, `expression(...)` in old IE).
+  - `srcdoc`: the value is an HTML document, so `&lt;script&gt;` decodes to
+    a live `<script>` in the iframe.
+  Recommendation: a compile error for a hole in any `on*`, `style` or
+  `srcdoc` attribute in the first cut, alongside the raw-text contexts --
+  the same "no escaping makes this safe" rule. JS- and CSS-context escaping
+  (as Go's `html/template` does) can be a later phase if anyone needs it.
 
 ### Follow-up B: an editable tree
 
@@ -621,10 +678,11 @@ injected structure through breaks that equality.
 
 `find-all` (and `select`, below) return a `(Cons Node)` snapshot, so editing
 while iterating one is safe. The cursor-style C walks (`turdom_next_in(root,
-from)`) are not: detaching `from` mid-walk ends the walk early. Either do not
-export a cursor walk, or document that a detached cursor ends iteration (it
-does -- `from->parent` is NULL -- but that is an accident to be pinned with a
-test, not a contract).
+from)`) are not: detaching `from` mid-walk ends the walk early.
+*Decided 2026-10-16: the cursor walk is not exported.* Snapshots are the
+only public traversal, so there is no edit-while-walking contract to keep.
+Revisit only if a caller needs O(1)-memory traversal of a tree it is not
+editing.
 
 #### Streaming edits (B4)
 
