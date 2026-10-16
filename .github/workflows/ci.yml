@@ -409,6 +409,23 @@ jobs:
             "https://github.com/${{ github.repository_owner }}/commonmark-spec" "$pin"
           "$GIT" -C ../commonmark-spec checkout -q FETCH_HEAD
 
+      # commonmark.js, the reference tur_markdown_diff compares tur/markdown's
+      # HTML with (markdown-library-plan M2), at the versions
+      # tests/markdown-spec/oracle/package-lock.json pins.  The same node and
+      # setup-node pin as the web job.  Without these the test PASS-skips.
+      - name: Set up Node (for tur_markdown_diff)
+        if: matrix.part == 'aux'
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: tests/markdown-spec/oracle/package-lock.json
+
+      - name: Install commonmark.js (for tur_markdown_diff)
+        if: matrix.part == 'aux'
+        working-directory: tests/markdown-spec/oracle
+        run: npm ci --ignore-scripts --no-audit --no-fund
+
       - name: Smoke check (tur --version must not hang)
         run: |
           # A fresh `tur --version` returns effectively instantly. If a startup

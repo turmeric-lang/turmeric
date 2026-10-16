@@ -605,8 +605,17 @@ a `SlugMode`, for READMEs that are read on GitHub.
   block kind 7 start line, the space before a closing tag's `>`, and a fence's
   first info word. One difference is deliberate: raw HTML inside an image's
   alt text is escaped, as cmark does, where commonmark.js writes it into the
-  attribute unescaped. The comparison needs node and npm, so it was a one-off
-  rather than part of the suite.
+  attribute unescaped.
+
+  The comparison is ctest `tur_markdown_diff` (`tests/run-markdown-diff.sh`):
+  - Every tracked Markdown file is rendered, plus the spice READMEs and 30,000
+    random documents from fixed seeds.
+  - commonmark.js and its dependencies are pinned by
+    `tests/markdown-spec/oracle/package-lock.json`.
+  - CI's `aux` part installs node with the web job's `setup-node` pin, then
+    runs `npm ci`. Without them the test skips.
+  - Node was already a CI dependency through the web job. What this adds is
+    four small npm packages, for tests only.
 - **The inline tree is an arena too.** Inlines are `MdInl` values in a
   `(Vec MdInl)` on the `MdDoc`, linked by index, and `MdNode.inl` is a
   block's root.

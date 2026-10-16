@@ -324,5 +324,11 @@ compiled and under `--interpret`, and compares the result with the spec's HTML.
   byte for byte. Three of the GFM examples pass; the rest wait for M3's
   extensions.
 
+`tests/run-markdown-diff.sh` (ctest `tur_markdown_diff`) goes past the spec's
+examples. It renders every Markdown file in the repository, and 30,000 random
+documents, both here and with commonmark.js 0.31.2, the implementation this
+library was ported from, and fails on any difference. It needs node and
+`npm ci` in `tests/markdown-spec/oracle`, and skips without them.
+
 See the [running-tests guide](running-tests-guide.md#testsrun-markdown-specsh)
 for the script's options.
