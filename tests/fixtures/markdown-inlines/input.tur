@@ -1,0 +1,137 @@
+;; markdown-library-plan M2: the CommonMark inline parser.  Each document is
+;; rendered, then the inlines of each paragraph and heading are walked with
+;; the public API: every inline's kind, its text, and a link's destination
+;; and title.
+(load "stdlib/markdown.tur")
+
+;; ---- Printing ----------------------------------------------------------------
+
+(defn inline-name [k : MdInline] : cstr
+  (match k
+    (MdText) "text"
+    (MdCode) "code"
+    (MdEmph) "emph"
+    (MdStrong) "strong"
+    (MdLink) "link"
+    (MdImage) "image"
+    (MdHtmlInline) "html"
+    (MdSoftBreak) "softbreak"
+    (MdHardBreak) "hardbreak"))
+
+;; Append an optional String as name=[s], then release it.
+(defn push-field! [out : StringBuilder name : cstr o : (Option String)] : void
+  (match o
+    (Some s)
+    (do
+      (builder/push-cstr! out name)
+      (builder/push-cstr! out "[")
+      (builder/push-string! out s)
+      (builder/push-cstr! out "]")
+      (string/release s))
+    (None)
+    nil))
+
+(defn show-inline [d : MdDoc id : MdInlineId depth : int] : void
+  (let [out    (builder/new)
+        kids   (markdown/inline-children d id)
+        ^mut i 0]
+    (do
+      (builder/push-repeat! out (int->char 32) (* 2 depth))
+      (builder/push-cstr! out (inline-name (markdown/inline d id)))
+      (push-field! out " " (markdown/inline-text d id))
+      (push-field! out " dest=" (markdown/link-dest d id))
+      (push-field! out " title=" (markdown/link-title d id))
+      (let [line (builder/finish out)]
+        (do (println (string/to-cstr line)) (string/release line)))
+      (while (< i (vec-len kids))
+        (do (show-inline d (vec-get kids i) (+ depth 1)) (set! i (+ i 1))))
+      (vec-free kids))))
+
+;; Every paragraph's and heading's inlines, depth first through the blocks.
+(defn walk [d : MdDoc id : MdBlockId] : void
+  (let [ins    (markdown/inlines d id)
+        kids   (markdown/children d id)
+        ^mut i 0
+        ^mut j 0]
+    (do
+      (when (> (vec-len ins) 0) (println "-- block"))
+      (while (< i (vec-len ins))
+        (do (show-inline d (vec-get ins i) 1) (set! i (+ i 1))))
+      (while (< j (vec-len kids))
+        (do (walk d (vec-get kids j)) (set! j (+ j 1))))
+      (vec-free ins)
+      (vec-free kids))))
+
+(defn show-doc [name : cstr src : cstr opts : MdHtmlOpts] : void
+  (let [s (string/from-cstr src)
+        d (markdown/parse s (markdown/commonmark-opts))
+        h (markdown/render-html d opts)]
+    (do
+      (string/release s)
+      (let [banner (string/of "==== " name " ====")]
+        (do (println (string/to-cstr banner)) (string/release banner)))
+      (println (string/to-cstr h))
+      (walk d (markdown/root d))
+      (string/release h)
+      (markdown/doc-free d))))
+
+(defn pass [] : MdHtmlOpts (MdHtmlOpts (MdRawPass)))
+
+;; ---- Documents -----------------------------------------------------------------
+
+(defn main [] : int
+  (do
+    ;; Emphasis: the delimiter-run rules.  _ does not work inside a word, the
+    ;; rule of three lets **bar** sit inside *...*, an unmatched run stays
+    ;; text (and joins the text around it), and *** opens both at once.
+    (show-doc "emphasis"
+              "*a* **b** ***c*** _d_ __e__\nfoo_bar_ *foo**bar**baz* **foo*bar**\n*a **b** c* *unclosed and ** loose\n"
+              (pass))
+    ;; Code spans strip one space from each end and read a line ending as a
+    ;; space; an unmatched run of backticks is literal.  Backslash escapes,
+    ;; a backslash before a line ending (a hard break), two trailing spaces
+    ;; (a hard break), and character references, valid and not.
+    (show-doc "code, escapes and references"
+              "`` a ` b `` and ` x ` and `two\nlines` and ```unclosed\n\\*not em\\* \\a \\\nhard  \nsoft &copy; &#65; &#x42; &nosuch; &#0;\n"
+              (pass))
+    ;; Links: inline, with each title quoting; an angle-bracket destination
+    ;; with a space (percent-encoded); an empty one; brackets inside the text;
+    ;; no link inside a link; an image inside one; full, collapsed and
+    ;; shortcut references matched without regard to case; a missing one.  A
+    ;; destination is unescaped, then percent-encoded where it is not URL-safe
+    ;; (an existing %XX stays).  A link's brackets bound the emphasis inside.
+    (show-doc "links"
+              "[inline](/u \"t &amp; \\\"q\\\"\") [single](/s 'q') [paren](/p (r)) [angle](</a b>) [empty]()\n[a [nested] b](/n) [outer [inner](/i)](/o) [![img](/i.png)](/l)\n[Full][REF] [ref][] [Ref] [missing] [enc](/&auml;\\*?q=a%20b&c) *[a*](/u)\n\n[ref]: /r \"R\"\n"
+              (pass))
+    ;; Images: the alt text is the inlines as plain text, so emphasis and
+    ;; code lose their tags and raw HTML is escaped.
+    (show-doc "images"
+              "![alt *emph* `code` <b>](/p.png \"T\") ![](/e) ![a ![b](/b) c](/x)\n"
+              (pass))
+    ;; Autolinks: a URI with its query kept, a scheme in any case, an email
+    ;; address (mailto: added).  With a space a URI is not one; <not auto> is
+    ;; not one either, but is an HTML tag.
+    (show-doc "autolinks"
+              "<http://a.b/c?d=e&f> <MAILTO:X@Y.Z> <me@ex.org> <a+b:c> <http://a b> <not auto>\n"
+              (pass))
+    ;; Unicode: punctuation and spaces past ASCII count for the flanking
+    ;; rules -- a * between a letter and a curly quote, or before a no-break
+    ;; space, opens nothing; one before an em dash after a space does -- and
+    ;; labels match by Unicode case folding (U+1E9E folds to ss).
+    (show-doc "unicode"
+              "a*\u{201C}foo\u{201D}*b\n\n*\u{A0}a*\n\n*\u{2014}x\u{2014}*\n\n[\u{1E9E}]\n\n[SS]: /ss\n"
+              (pass))
+    ;; Inline raw HTML -- an open tag, a closing tag, a comment, a processing
+    ;; instruction -- under the three renderer settings.
+    (show-doc "raw html, passed"
+              "a <b>bold</b> <script>x</script> <!-- c --> <?pi?> <a  href='x'>\n"
+              (pass))
+    (show-doc "raw html, tag filter"
+              "a <b>bold</b> <script>x</script> <!-- c --> <?pi?> <a  href='x'>\n"
+              (markdown/default-html-opts))
+    (show-doc "raw html, escaped"
+              "a <b>bold</b> <script>x</script> <!-- c --> <?pi?> <a  href='x'>\n"
+              (MdHtmlOpts (MdRawEscape)))
+    ;; Headings carry inlines too.
+    (show-doc "heading" "## A *b* `c` [d](/e)\n" (pass))
+    0))

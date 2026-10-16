@@ -1,7 +1,7 @@
 ;; markdown-library-plan M1: the CommonMark block parser and the HTML renderer.
 ;; Each document is rendered, then its tree is walked with the public API:
-;; every block's kind, source lines and text.  Inline syntax is not parsed
-;; yet (M2), so emphasis and links come out as escaped text.
+;; every block's kind, source lines and text.  Inline syntax has its own
+;; fixture, markdown-inlines.
 (load "stdlib/markdown.tur")
 
 ;; ---- Printing ----------------------------------------------------------------
@@ -133,7 +133,8 @@
     ;; Link reference definitions are taken out of the paragraphs that start
     ;; with them; a paragraph left with nothing is dropped.  Labels match
     ;; without regard to case (the first definition wins), destinations and
-    ;; titles have their escapes resolved.  CR LF and lone CR line endings.
+    ;; titles have their escapes resolved, and a destination is percent-encoded.
+    ;; CR LF and lone CR line endings.
     (show-doc "references"
               "[Foo  Bar]: /url \"the \\\"title\\\"\"\r\n[FOO bar]: /second\r\n[baz]:\r\n  <a b>\r\n'single'\rtext after\n\n[only]: /x\n"
               (pass))

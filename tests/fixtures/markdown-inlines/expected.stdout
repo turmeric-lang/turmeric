@@ -1,0 +1,229 @@
+==== emphasis ====
+<p><em>a</em> <strong>b</strong> <em><strong>c</strong></em> <em>d</em> <strong>e</strong>
+foo_bar_ <em>foo<strong>bar</strong>baz</em> <strong>foo*bar</strong>
+<em>a <strong>b</strong> c</em> *unclosed and ** loose</p>
+
+-- block
+  emph
+    text [a]
+  text [ ]
+  strong
+    text [b]
+  text [ ]
+  emph
+    strong
+      text [c]
+  text [ ]
+  emph
+    text [d]
+  text [ ]
+  strong
+    text [e]
+  softbreak
+  text [foo_bar_ ]
+  emph
+    text [foo]
+    strong
+      text [bar]
+    text [baz]
+  text [ ]
+  strong
+    text [foo*bar]
+  softbreak
+  emph
+    text [a ]
+    strong
+      text [b]
+    text [ c]
+  text [ *unclosed and ** loose]
+==== code, escapes and references ====
+<p><code>a ` b</code> and <code>x</code> and <code>two lines</code> and ```unclosed
+*not em* \a <br />
+hard<br />
+soft © A B &amp;nosuch; �</p>
+
+-- block
+  code [a ` b]
+  text [ and ]
+  code [x]
+  text [ and ]
+  code [two lines]
+  text [ and ```unclosed]
+  softbreak
+  text [*not em]
+  text [* \a ]
+  hardbreak
+  text [hard]
+  hardbreak
+  text [soft ]
+  text [©]
+  text [ ]
+  text [A]
+  text [ ]
+  text [B]
+  text [ &nosuch; ]
+  text [�]
+==== links ====
+<p><a href="/u" title="t &amp; &quot;q&quot;">inline</a> <a href="/s" title="q">single</a> <a href="/p" title="r">paren</a> <a href="/a%20b">angle</a> <a href="">empty</a>
+<a href="/n">a [nested] b</a> [outer <a href="/i">inner</a>](/o) <a href="/l"><img src="/i.png" alt="img" /></a>
+<a href="/r" title="R">Full</a> <a href="/r" title="R">ref</a> <a href="/r" title="R">Ref</a> [missing] <a href="/%C3%A4*?q=a%20b&amp;c">enc</a> *<a href="/u">a*</a></p>
+
+-- block
+  link dest=[/u] title=[t & "q"]
+    text [inline]
+  text [ ]
+  link dest=[/s] title=[q]
+    text [single]
+  text [ ]
+  link dest=[/p] title=[r]
+    text [paren]
+  text [ ]
+  link dest=[/a%20b]
+    text [angle]
+  text [ ]
+  link dest=[]
+    text [empty]
+  softbreak
+  link dest=[/n]
+    text [a [nested] b]
+  text [ [outer ]
+  link dest=[/i]
+    text [inner]
+  text [](/o) ]
+  link dest=[/l]
+    image dest=[/i.png]
+      text [img]
+  softbreak
+  link dest=[/r] title=[R]
+    text [Full]
+  text [ ]
+  link dest=[/r] title=[R]
+    text [ref]
+  text [ ]
+  link dest=[/r] title=[R]
+    text [Ref]
+  text [ [missing] ]
+  link dest=[/%C3%A4*?q=a%20b&c]
+    text [enc]
+  text [ *]
+  link dest=[/u]
+    text [a*]
+==== images ====
+<p><img src="/p.png" alt="alt emph code &lt;b&gt;" title="T" /> <img src="/e" alt="" /> <img src="/x" alt="a b c" /></p>
+
+-- block
+  image dest=[/p.png] title=[T]
+    text [alt ]
+    emph
+      text [emph]
+    text [ ]
+    code [code]
+    text [ ]
+    html [<b>]
+  text [ ]
+  image dest=[/e]
+  text [ ]
+  image dest=[/x]
+    text [a ]
+    image dest=[/b]
+      text [b]
+    text [ c]
+==== autolinks ====
+<p><a href="http://a.b/c?d=e&amp;f">http://a.b/c?d=e&amp;f</a> <a href="MAILTO:X@Y.Z">MAILTO:X@Y.Z</a> <a href="mailto:me@ex.org">me@ex.org</a> <a href="a+b:c">a+b:c</a> &lt;http://a b&gt; <not auto></p>
+
+-- block
+  link dest=[http://a.b/c?d=e&f]
+    text [http://a.b/c?d=e&f]
+  text [ ]
+  link dest=[MAILTO:X@Y.Z]
+    text [MAILTO:X@Y.Z]
+  text [ ]
+  link dest=[mailto:me@ex.org]
+    text [me@ex.org]
+  text [ ]
+  link dest=[a+b:c]
+    text [a+b:c]
+  text [ <http://a b> ]
+  html [<not auto>]
+==== unicode ====
+<p>a*“foo”*b</p>
+<p>* a*</p>
+<p><em>—x—</em></p>
+<p><a href="/ss">ẞ</a></p>
+
+-- block
+  text [a*“foo”*b]
+-- block
+  text [* a*]
+-- block
+  emph
+    text [—x—]
+-- block
+  link dest=[/ss]
+    text [ẞ]
+==== raw html, passed ====
+<p>a <b>bold</b> <script>x</script> <!-- c --> <?pi?> <a  href='x'></p>
+
+-- block
+  text [a ]
+  html [<b>]
+  text [bold]
+  html [</b>]
+  text [ ]
+  html [<script>]
+  text [x]
+  html [</script>]
+  text [ ]
+  html [<!-- c -->]
+  text [ ]
+  html [<?pi?>]
+  text [ ]
+  html [<a  href='x'>]
+==== raw html, tag filter ====
+<p>a <b>bold</b> &lt;script>x&lt;/script> <!-- c --> <?pi?> <a  href='x'></p>
+
+-- block
+  text [a ]
+  html [<b>]
+  text [bold]
+  html [</b>]
+  text [ ]
+  html [<script>]
+  text [x]
+  html [</script>]
+  text [ ]
+  html [<!-- c -->]
+  text [ ]
+  html [<?pi?>]
+  text [ ]
+  html [<a  href='x'>]
+==== raw html, escaped ====
+<p>a &lt;b&gt;bold&lt;/b&gt; &lt;script&gt;x&lt;/script&gt; &lt;!-- c --&gt; &lt;?pi?&gt; &lt;a  href='x'&gt;</p>
+
+-- block
+  text [a ]
+  html [<b>]
+  text [bold]
+  html [</b>]
+  text [ ]
+  html [<script>]
+  text [x]
+  html [</script>]
+  text [ ]
+  html [<!-- c -->]
+  text [ ]
+  html [<?pi?>]
+  text [ ]
+  html [<a  href='x'>]
+==== heading ====
+<h2>A <em>b</em> <code>c</code> <a href="/e">d</a></h2>
+
+-- block
+  text [A ]
+  emph
+    text [b]
+  text [ ]
+  code [c]
+  text [ ]
+  link dest=[/e]
+    text [d]
