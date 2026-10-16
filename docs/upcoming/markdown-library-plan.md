@@ -539,7 +539,7 @@ a `SlugMode`, for READMEs that are read on GitHub.
   and their text is a `(Vec String)` pool that `markdown/doc-free` releases.
   Two compiler leaks ruled out the planned shape:
   - a struct or sum with a `String` field is a heap box nothing frees
-    (`docs/reported/opaque-field-struct-box-never-freed.md`);
+    (`docs/archive/opaque-field-struct-box-never-freed.md`, fixed since);
   - an `Option` of a struct passed down a recursive walk leaks its box
     (`fresh-option-arg-to-self-call-leaks.md`).
 
