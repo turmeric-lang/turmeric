@@ -11,7 +11,7 @@ which pass does what, where every subsystem lives in `src/`, and which guide
 covers each one in depth. Start here, then follow the "Deep dive" links.
 
 > **Trust the code over the header comments.** Many file and function
-> comments in `src/` predate later consolidations. Examples: `pass.h` says
+> comments in `src/` predate later consolidations. `pass.h` says
 > `PASS_EFFECT_LOWER` turns `perform`/`handle` into `shift`/`reset`; it
 > does not. `core_passes[]` calls `PASS_EFFECT_ROW_INFER` a "stub slot"; it
 > is a full checker. Where a comment and this guide disagree, read the code.
@@ -63,7 +63,7 @@ flowchart TD
   STD -->|"Form** prepended"| EL
   EL -->|"Expr* (EX_PROGRAM)"| KC
   KC --> EFL
-  EFL -->|"ctx->effect_env"| EFC
+  EFL -->|"EffectEnv"| EFC
   EFC --> CPS
   CPS -->|"near-identity copy"| BC
   BC --> SP
@@ -71,67 +71,67 @@ flowchart TD
   EM -->|"Buf: C99 text"| CC
   EM -->|"Buf: C99 text"| JIT
   CC --> BIN
-  EL -.->|"elaborate, effect rows, lifetimes; no emit"| TURI
+  EL -.->|"same elaborator, then effect rows and lifetimes"| TURI
 ```
 
-All six core passes share one `PassContext` (`src/runtime/pass.h`):
+The passes share one `PassContext` (`src/runtime/pass.h`): the `arena` and
+symbol table `st` for the whole compile, the input `forms` (the first
+`stdlib_prefix` of them are autoloaded stdlib), the `tc_env` typeclass
+registry, the program `prog`, the `effect_env` (`NULL` until
+`PASS_EFFECT_LOWER`), and module-lookup settings (`module_base_dir`,
+`include_dirs`, `separate_compilation`, `reader_macros`).
 
-| Field | Meaning |
-|---|---|
-| `arena` | bump allocator for the whole compile; freed at the end of `compile_to_c` |
-| `st` | the `SymbolTable`; symbols are interned, so compare `Symbol*` with `==` |
-| `forms`, `nforms`, `stdlib_prefix` | input to elaboration; the first `stdlib_prefix` forms are autoloaded stdlib |
-| `tc_env` | the `TypeClassEnv`, filled during elaboration |
-| `prog` | the `EX_PROGRAM`, set by `PASS_ELABORATE`, replaced by `PASS_CPS` |
-| `effect_env` | the `EffectEnv`, `NULL` until `PASS_EFFECT_LOWER` |
-| `module_base_dir`, `include_dirs`, `separate_compilation`, `reader_macros` | module lookup and mode |
+**Compiler data lives in one arena per compile.** `compile_to_c` creates an
+`Arena` and a `SymbolTable`, allocates every `Form`, `Expr`, `Binding` and
+most types in it, and frees both at the end. Symbols are interned, so
+`Symbol*` compares with `==`. Function types' per-argument arrays live in a
+separate process-lifetime arena in `types.c`. Process-global tables (the
+diagnostic state, the emitter's signature and spec tables, the CPS cache)
+are reset per compile or emission, because `tur test <dir>`, project builds,
+`tur lsp` and `tur mcp` compile many programs in one process.
 
 ---
 
 ## The pass schedule
 
 `run_core_passes` (`src/main.c`) walks `core_passes[]` and calls
-`run_core_pass` for each, charging the time to the pass's `--timings` zone
+`run_core_pass` for each, charging the time to its `--timings` zone
 (`pass_zone`). A pass returns 0 to continue, 1 to fail, or 2 to stop
-successfully (only `tur audit-spans` does that).
+successfully (only `tur audit-spans` does that). In builds without `NDEBUG`
+each arm also asserts `kind_verify_program`.
 
 | Pass | Function(s) | What it really does |
 |---|---|---|
-| `PASS_ELABORATE` | `elaborate_program` (`elab_toplevel.c`), then `mono_specs_resolve_program` | Forms to typed IR. Inside it: `(load ...)` splicing, `#lang r7rs` lowering, macro expansion, typeclass resolution, move/linear checks and refinement discharge. Afterwards, outside the elaborator but inside this arm: the by-value lens spec resolution, `--dump-mono-specs`, and `tur audit-spans`' `span_audit_program` |
-| `PASS_KIND_CHECK` | `kind_check_pass` | Top-level only: infers class parameter kinds from instances, checks instance type arguments and GADT return types against them (TUR-E0012), and runs an occurs check on `defrec`. Most kind errors are caught earlier, in the elaborator. `--dump-kinds` |
+| `PASS_ELABORATE` | `elaborate_program` (`elab_toplevel.c`), then `mono_specs_resolve_program` | Forms to typed IR. Inside it: `(load ...)` splicing, `#lang r7rs` lowering, macro expansion, typeclass resolution, move/linear checks and refinement discharge. After it, in the same arm: lens spec resolution, `--dump-mono-specs`, and `tur audit-spans`' `span_audit_program` |
+| `PASS_KIND_CHECK` | `kind_check_pass` | Top-level only: infers class parameter kinds from instances, checks instance type arguments and GADT return types (TUR-E0012), and runs an occurs check on `defrec`. Most kind errors are caught earlier, in the elaborator. `--dump-kinds` |
 | `PASS_EFFECT_LOWER` | `effect_env_new`, `effect_env_register_builtin_unsafe`, `effect_env_register_builtin_capabilities`, `effect_lower` | Builds the `EffectEnv`. `effect_lower` returns its input unchanged; effects are **not** rewritten to `shift`/`reset` |
 | `PASS_EFFECT_ROW_INFER` | `effect_check_pass` | Registers `defeffect`s, resolves declared rows (TUR-E0026), infers every function's row by whole-program fixpoint, checks declared against inferred. `--dump-effects` |
 | `PASS_CPS` | `cps_dump_coloring`, `cps_ir_dump_program`, `cps_transform`, `cps_dump_clone_plan` | The CPS dumps, then `cps_transform`: a near-identity tree copy recording **legacy** metadata. The coloring the backend uses is computed later, by the emitter |
 | `PASS_BORROW_CHECK` | `borrow_check_program`, `borrow_check_effect_handler_captures`, `lifetime_check_program` | `borrow_check_program` returns at once: `borrow_check_enabled` defaults to false and nothing calls `borrow_check_set_enabled`. The two always-on checks reject a handler case that captures an outer borrow, and run lifetime elision plus the outlives-cycle check |
 
-In builds without `NDEBUG`, each arm also asserts `kind_verify_program`.
-
 **After the list**, `compile_to_c` (whole-program builds only) runs:
 
 1. `resolve_rcgc_from_archive` -- whether the preamble defines the rc/GC
    runtime or only declares it for `libturt_runtime.a`.
-2. `srfi_prune_program` -- drops `stdlib/srfi/` definitions that nothing
-   reaches. It is not a core pass because separate compilation and REPL
-   sessions must keep every definition.
+2. `srfi_prune_program` -- drops unreached `stdlib/srfi/` definitions. It is
+   not a core pass because separate compilation and REPL sessions must keep
+   every definition.
 3. The optional `#lang r7rs` library/client split (`emit_split.c`).
-4. `emit_program`, the emitter. CPS coloring and classification run inside
-   it (see [CPS: coloring and the CT-IR](#cps-coloring-and-the-ct-ir)).
-5. `emit_exports_manifest`, when a manifest sink is set (`--shared`, the
-   REPL's spice build).
+4. `emit_program`, inside which CPS coloring and classification run (see
+   [CPS: coloring and the CT-IR](#cps-coloring-and-the-ct-ir)).
+5. `emit_exports_manifest`, only when the REPL's in-process spice build has
+   set a manifest sink. `--shared` project builds write theirs from
+   `compile_to_implementation`.
 
 `compile_to_h` and `compile_to_implementation` run the same six passes and
-then call `emit_header` / `emit_implementation` instead.
+then `emit_header` / `emit_implementation`. **The interpreter runs a
+subset:** `turi_eval_impl` (`src/turi/eval.c`) calls
+`elaborate_program_session`, `effect_check_pass` and
+`lifetime_check_program`, and never `PASS_CPS`, the handler-capture check or
+the emitter. **`tur check` emits C:** it calls `compile_to_c` with a
+throwaway buffer, so an emission-time error is still a `check` error.
 
-**The interpreter runs a subset.** `turi_eval_impl` (`src/turi/eval.c`)
-calls `elaborate_program_session`, then `effect_check_pass` and
-`lifetime_check_program`. It never runs `PASS_CPS`, the handler-capture
-check, or the emitter.
-
-**`tur check` emits C.** It calls `compile_to_c` with a throwaway buffer,
-so an emission-time error is still a `check` error.
-
-Deep dive:
-[build-driver-internals-guide.md](build-driver-internals-guide.md).
+Deep dive: [build-driver-internals-guide.md](build-driver-internals-guide.md).
 
 ---
 
@@ -139,20 +139,18 @@ Deep dive:
 
 ```ascii
 src/
-+-- main.c            driver: flags, subcommands, compile_to_c/_h/_implementation,
++-- main.c            driver: flags, subcommands, compile_to_c/_h/_impl...,
 |                     cc invocation, tur jit, project builds (~14.7k lines)
 +-- jit_engine.c/.h   in-process MIR JIT engine (TUR_JIT builds only)
-+-- jit_win_prelude.h c2mir-on-MinGW compatibility prelude
 +-- platform_*.h      Windows shims: dl, fs, mman, proc, ucontext over Fibers
-+-- source_literal.h  embedding paths in generated Turmeric source
-+-- tur_argcheck.h    grammars for manifest text that reaches a command line
-+-- compiler/         front end, elaborator, emitter, and the tools that share them
++-- jit_win_prelude.h, source_literal.h, tur_argcheck.h   small helpers
++-- compiler/         front end, elaborator, emitter, and tools that share them
 |   +-- reader.c reader_macros.c lang_dialects.c forms.c symbols.c
 |   +-- stdlib_autoload.c scheme_lower.c
 |   +-- elab.h elab_internal.h elab_*.c (18 files)
 |   +-- expr.c/.h types.c/.h typeclass.c/.h builtins.c/.h
 |   +-- mono_specs.c refine_*.c (10 files) trail_c.h
-|   +-- emit.h emit_internal.h emit_*.c (10 files)
+|   +-- emit.h emit_internal.h emit_*.c (9 files)
 |   +-- mangle.c stack_guard.c jit_prune.c
 |   +-- diag.c/.h span_audit.c prof.c
 |   +-- pkg.c spice_search.c global.c install.c justrun.c
@@ -183,7 +181,7 @@ src/
 |---|---|
 | `tur_core` | OBJECT library: every source in `TUR_CORE_SOURCES`, shared by `tur`, `libturi` and many unit tests |
 | `tur` | `main.c` + `lsp/mcp.c` + `tur_core` (+ `tur_jit_obj` under `TUR_JIT`) |
-| `libturi.a` | `tur_core` as a static library, for C embedders and fixture programs that autolink `-lturi` |
+| `libturi.a` | `tur_core` as a static library, for C embedders and programs that autolink `-lturi` |
 | `libturt_runtime.a` | a lean, unsanitized archive of the runtime TUs programs link (`hamt`, `rc`, `gc`, `region`, ...) |
 | `libturt_preamble.a` | the generated preamble runtime (`tur_rt_split.c`), linked by `--runtime=split` |
 | `tur_jit_obj` | `jit_engine.c` + `turi/jit_ffi.c`, kept out of `tur_core` so MIR does not reach its other consumers |
@@ -207,21 +205,20 @@ name, so ccache hits), picks how the runtime is linked, and runs one `cc`.
 (`cmd_build_project`, `cmd_build_multi_files`) and `tur jit` (`cmd_jit`) live
 here too.
 
-Deep dive:
-[build-driver-internals-guide.md](build-driver-internals-guide.md).
+Deep dive: [build-driver-internals-guide.md](build-driver-internals-guide.md).
 
 ---
 
 ## Reader: forms, symbols, dialects
 
 `read_all` / `read_all_with_registry` (`reader.c`) turn a `SourceFile` into
-a `Form**`. `Form` (`forms.h`) is the raw syntax tree: `F_NIL`, `F_BOOL`,
-`F_INT`, `F_FLOAT`, `F_STR`, `F_SYM`, `F_KEYWORD`, `F_LIST`, `F_VEC`, `F_MAP`,
-`F_SET`, `F_CBLOCK` (an inline C block), the quote family (`F_QUOTE`,
-`F_QUASIQUOTE`, `F_UNQUOTE`, `F_UNQUOTE_SPLICING`), `F_TYPE_ANN`,
-`F_CONTRACT_TYPE`, `F_READER_COND`, `F_RANGE_VAR`, and the data literals
-`F_MAP_LITERAL`, `F_SET_LITERAL`, `F_ROW_LITERAL`. Each form carries a
-`Span` (file id, line, column, offset).
+a `Form**`. `Form` (`forms.h`) is the raw syntax tree: atoms (`F_NIL`,
+`F_BOOL`, `F_INT`, `F_FLOAT`, `F_STR`, `F_SYM`, `F_KEYWORD`), collections
+(`F_LIST`, `F_VEC`, `F_MAP`, `F_SET`), `F_CBLOCK` (an inline C block), the
+quote family (`F_QUOTE`, `F_QUASIQUOTE`, `F_UNQUOTE`, `F_UNQUOTE_SPLICING`),
+`F_TYPE_ANN`, `F_CONTRACT_TYPE`, `F_READER_COND`, `F_RANGE_VAR`, and the
+data literals `F_MAP_LITERAL`, `F_SET_LITERAL`, `F_ROW_LITERAL`. Each form
+carries a `Span`: file id, line, and column and byte-offset ranges.
 
 The `#lang` line picks a pair: a `ReaderType` (`READER_TURMERIC`,
 `READER_CURLY_INFIX`, `READER_NEOTERIC`, `READER_SWEET`, `READER_R7RS`,
@@ -229,37 +226,30 @@ The `#lang` line picks a pair: a `ReaderType` (`READER_TURMERIC`,
 `LANG_R7RS`). Both enums live in `diag.h`. `lang_dialects.c` owns the table
 of legal bases (`lang_base_lookup`); `main.c:detect_and_adjust_lang` strips
 the line. Sweet-expressions are a preprocessing step inside `reader.c` that
-records a `SweetMap` so diagnostics point at the original text.
-
+records a `SweetMap`, so diagnostics point at the original text.
 `reader_macros.c` holds the `#`-dispatch registry: the builtins
 (`reader_macros_install_builtins`) and user `reader-macros/define` forms.
-`symbols.c` interns names (`symtab_intern`).
-
 User-facing reference: [reader-forms-guide.md](reader-forms-guide.md).
 
-### Stdlib autoload
+**Stdlib autoload.** Before elaboration, `tur_stdlib_prepend_forms`
+(`stdlib_autoload.c`) reads and prepends `autoload_files_[]`: 34 files
+today -- `macros`, `safe`, `contract`, `hamt`, eleven `typeclass-*` stubs,
+`char`, the collections (`map`, `vec`, `slice`, `set`, `mutmap`, `grid`,
+`zipper`), `option`, `result`, `pair`, `tuple`, `list`, `json`, `schema`,
+`sym`, `unique`, `trail` and `region`. A language prelude
+(`g_lang_prelude`, e.g. R7RS's) is appended last. Project mode loads the same
+list through `main.c:load_project_prelude`, via the shared accessor
+`tur_stdlib_autoload_files`. `tur check --no-auto-stdlib` matters only when
+the checked file is itself on the list: that file and the ones after it are
+skipped, so it can be checked alone.
 
-Before elaboration, `tur_stdlib_prepend_forms` (`stdlib_autoload.c`) reads
-and prepends the autoload list, `autoload_files_[]`. Today that is 34 files:
-`macros.tur`, `safe.tur`, `contract.tur`, `hamt.tur`, eleven
-`typeclass-*.tur` stubs, `char.tur`, the collections (`map`, `vec`, `slice`,
-`set`, `mutmap`, `grid`, `zipper`), `option`, `result`, `pair`, `tuple`,
-`list`, `json`, `schema`, `sym`, `unique`, `trail` and `region`. When the
-entry file's language has a prelude (`g_lang_prelude`, e.g. the R7RS one) it
-is appended last. Project mode loads the same list through
-`load_project_prelude` in `main.c`, via the shared accessor
-`tur_stdlib_autoload_files`. `--no-auto-stdlib` skips it.
-
-### Scheme lowering
-
-`scheme_lower_program` (`scheme_lower.c`) is a `Form` -> `Form` rewrite of
-the R7RS core forms (`define`, `lambda`, named `let`, `do`, `cond`, `case`,
-`define-values`, ...) onto Turmeric forms, applied only to forms whose file
-is `LANG_R7RS`. The elaborator calls it after `(load ...)` splicing, both for
-the entry program (`elab_toplevel.c`) and for imported modules
-(`elab_module.c`).
-
-Deep dive: [r7rs-implementation-guide.md](r7rs-implementation-guide.md).
+**Scheme lowering.** `scheme_lower_program` (`scheme_lower.c`) rewrites the
+R7RS core forms (`define`, `lambda`, named `let`, `do`, `cond`, `case`,
+`define-values`, ...) into Turmeric forms, `Form` to `Form`, for forms whose
+file is `LANG_R7RS`. The elaborator calls it after `(load ...)` splicing,
+for the entry program (`elab_toplevel.c`) and for imported modules
+(`elab_module.c`). Deep dive:
+[r7rs-implementation-guide.md](r7rs-implementation-guide.md).
 
 ---
 
@@ -271,7 +261,7 @@ Deep dive: [r7rs-implementation-guide.md](r7rs-implementation-guide.md).
 folds loose top-level statements into a synthesized `main`, forward-declares
 every `defn` (pass 1), then elaborates each form (pass 2). `elab_form`
 dispatches on the `Form` tag; a list goes to `elab_call`, which tries special
-forms, then macros, then bindings, then typeclass methods, and finally the
+forms, then macros, then bindings, then typeclass methods, and only then the
 builtin operator table. Type inference is call-site-local. Lambdas are
 lifted into file-scope `EX_FN_DEF`s as they are elaborated.
 
@@ -296,21 +286,17 @@ lifted into file-scope `EX_FN_DEF`s as they are elaborated.
 | `elab_global.c` | multi-party protocols (`defprotocol`); projection is in `project.c` |
 | `elab_reflect.c` | the `^reflect` totality gate (`reflected-measures` experiment) |
 
-**Macros.** There is no separate expansion pass: `elab_call_inner` expands a
-macro call in place. `defmacro` templates are substituted and, if needed, run
-through `elab_macros.c`'s small evaluator (`ct_eval_form`). `defmacro*`
+There is no separate macro-expansion pass: `elab_call_inner` expands a macro
+call in place. `defmacro` templates are substituted and, if needed, run
+through `elab_macros.c`'s small evaluator (`ct_eval_form`); `defmacro*`
 bodies run in a capability-denied, fuel-limited turi env
-(`elab_macro_env_get`, implemented in `src/turi/macro_env.c`).
+(`elab_macro_env_get`, implemented in `src/turi/macro_env.c`). Refinement
+obligations are created and discharged here too (from `elab_fns.c` and
+`elab_call.c`; see [Refinement solver](#refinement-solver)), and
+`mono_specs.c` collects the lens specializations that
+`mono_specs_resolve_program` resolves right after.
 
-**Refinements** are discharged during elaboration, from `elab_fns.c` and
-`elab_call.c`, by the in-house solver in `refine_*.c`. See
-[Refinement solver](#refinement-solver).
-
-**`mono_specs.c`** keeps the van Laarhoven lens specialization registry that
-elaboration fills and `mono_specs_resolve_program` resolves right after it.
-
-Deep dive:
-[elaborator-internals-guide.md](elaborator-internals-guide.md).
+Deep dive: [elaborator-internals-guide.md](elaborator-internals-guide.md).
 
 ### The IR: expr.h
 
@@ -367,13 +353,11 @@ There are 61 `TY_*` kinds:
 
 `TY_STRUCT` is never a `Type.kind` any more: `StructDef` was deleted, and the
 constant survives only as the `any`-box reflection tag that `type-of`
-reports as "struct". `AdtDef`/`CtorDef` describe user types.
-
-`CopyKind` is `CK_UNIQUE` (alias `CK_MOVE`), `CK_COPY`, `CK_UNSIZED`,
-`CK_LINEAR`, `CK_MULTISHOT`. `SubstructKind` is `SK_STRUCTURAL`,
-`SK_AFFINE`, `SK_RELEVANT`, `SK_LINEAR`. The C spelling, mangle token and
-layout of each payload-free kind come from one table,
-`TY_SIMPLE_REPR_ROWS` in `types.c`.
+reports as "struct". `AdtDef`/`CtorDef` describe user types. `CopyKind` is
+`CK_UNIQUE` (alias `CK_MOVE`), `CK_COPY`, `CK_UNSIZED`, `CK_LINEAR`,
+`CK_MULTISHOT`; `SubstructKind` is `SK_STRUCTURAL`, `SK_AFFINE`,
+`SK_RELEVANT`, `SK_LINEAR`. The C spelling, mangle token and layout of each
+payload-free kind come from one table, `TY_SIMPLE_REPR_ROWS` in `types.c`.
 
 ### Typeclasses
 
@@ -381,12 +365,12 @@ layout of each payload-free kind come from one table,
 `TypeClassInstance`, `TypeClassEnv` (one per compile, in
 `PassContext.tc_env`). Resolution happens in `elab_typeclasses.c`: a
 resolved method call is a direct `EX_CALL` to the instance method, with an
-`EX_DICT` annotation. Constrained generics are monomorphized by default;
-dictionaries (`dict_<Class>_<T>` structs and their singletons) are passed
-only where monomorphization cannot reach, such as a rank-2 use.
+`EX_DICT` annotation. Constrained generics are monomorphized by default.
+Every live instance still emits `__inst_*` functions and a
+`dict_<Class>_<T>` struct with a singleton, but a dictionary is passed at
+run time only where monomorphization cannot reach, such as a rank-2 use.
 
-Deep dive:
-[typeclass-internals-guide.md](typeclass-internals-guide.md).
+Deep dive: [typeclass-internals-guide.md](typeclass-internals-guide.md).
 
 ### Built-in operators: builtins.c
 
@@ -394,28 +378,26 @@ Deep dive:
 ...) to arity, argument and result types, a `BuiltinShape` that says how to
 print the C, and an optional effect name (`"IO"`). `builtin_lookup` picks the
 first row matching the name, the first argument's type and the arity. The
-elaborator reaches the table last, after bindings, and builds an
-`EX_BUILTIN`; `emit_core.c:emit_builtin` and `turi/eval.c` both switch on
-the shape.
+result is an `EX_BUILTIN`; `emit_core.c:emit_builtin` and `turi/eval.c` both
+switch on its shape.
 
 ---
 
-## Refinement solver
+## Analyses inside and after elaboration
+
+### Refinement solver
 
 `refine_collect.c` turns each refinement crossing point into a normalized
 verification condition (`refine_vc.c`). `refine_discharge.c` runs the staged
 in-house solver (`refine_solver*.c`: syntactic S0, congruence closure S1,
 linear arithmetic S2, Nelson-Oppen S3) and memoizes results. A proven
 obligation drops its runtime check in `emit_fns.c`; any other outcome keeps
-it. `refine_smtlib.c` serializes VCs for debugging and `tur smt`. There is
-no SMT dependency in any build.
+it. `refine_smtlib.c` writes VCs as SMT-LIB2 for debugging and parses
+SMT-LIB2 scripts for `tur smt`. There is no SMT dependency in any build.
 
-Deep dive:
-[refinement-solver-internals-guide.md](refinement-solver-internals-guide.md).
+Deep dive: [refinement-solver-internals-guide.md](refinement-solver-internals-guide.md).
 
----
-
-## Effects and effect rows
+### Effects and effect rows
 
 `effect.c` holds the data model: `Effect`, `EffectRow`, `EffectEnv`, and the
 row algebra. The elaborator parses `#fx{...}` into unresolved rows and does
@@ -426,30 +408,25 @@ capabilities; `effect_lower` itself is a no-op. `PASS_EFFECT_ROW_INFER`
 coloring, the CT-IR translator and the emitter read the results
 (`FnDef.inferred_effect_row`).
 
-Deep dive:
-[effect-rows-internals-guide.md](effect-rows-internals-guide.md).
+Deep dive: [effect-rows-internals-guide.md](effect-rows-internals-guide.md).
 User-facing: [effects-system-guide.md](effects-system-guide.md).
 
----
-
-## CPS: coloring and the CT-IR
+### CPS: coloring and the CT-IR
 
 There is one lowering for effects and delimited control on the compiled
 path: functions that can reach a control operator are emitted in
 continuation-passing style over a heap chain of `DK` nodes. Everything else
 is plain direct-style C.
 
-### cps.c / cps.h
-
-Home of the **coloring** analysis (`cps_color_program`): which functions can
-dynamically reach a control operator and so must be CPS-lowered. The backend
-runs it at emission time, not from this pass. Function bodies are emitted
-before the preamble is generated, so the first query is
-`emit_cps_ir_try_fn`, which `emit_fn_def_body` calls for the first function
-the item loop emits. That call runs `ensure_S`: it colors the tree being
-emitted, classifies the colored functions into the set `S` the backend can
-lower, and caches the result keyed on the program and `EmitCtx` addresses.
-Later queries, including the preamble gate
+**cps.c / cps.h.** Home of the **coloring** analysis (`cps_color_program`):
+which functions can dynamically reach a control operator and so must be
+CPS-lowered. The backend runs it at emission time, not from this pass.
+Function bodies are emitted before the preamble is generated, so the first
+query is `emit_cps_ir_try_fn`, which `emit_fn_def_body` calls for the first
+function the item loop emits. That call runs `ensure_S`: it colors the tree
+being emitted, classifies the colored functions into the set `S` the backend
+can lower, and caches the result keyed on the program and `EmitCtx`
+addresses. Later queries, including the preamble gate
 `emit_cps_ir_program_has_emittable`, read the cache. `emit_cps_ir_forget`
 clears it at the start and end of every top-level emission.
 
@@ -458,26 +435,20 @@ near-identity tree copy that records legacy metadata (`may_capture`,
 `is_cps`, the cloneable `live_captures` plan dumped by `--dump-clone-plan`).
 Only the opt-in `--cps-path` wrappers and the dumps read that metadata. The
 returned tree does replace `ctx->prog`, and its `source_fn_def` retargeting
-is relied on, so the pass cannot simply be deleted.
+is relied on, so the pass cannot simply be deleted. `cps.c` also exports
+`cps_visit_children`, the one shared enumeration of an expression's
+evaluated operands; the coloring and the effect checker fall back to it.
 
-`cps.c` also exports `cps_visit_children`, the one shared enumeration of an
-expression's evaluated operands; the coloring and the effect checker fall
-back to it.
-
-### cps_ir.c / cps_ir.h
-
-The CT-IR: an A-normal-form IR with explicit continuations, produced for each
-colored function by `cps_ir_translate_fn` and consumed by
-`src/compiler/emit_cps_ir.c`. Effects reach it as
+**cps_ir.c / cps_ir.h.** The CT-IR: an A-normal-form IR with explicit
+continuations, produced for each colored function by `cps_ir_translate_fn`
+and consumed by `src/compiler/emit_cps_ir.c`. Effects reach it as
 `EX_PERFORM`/`EX_HANDLE`/`EX_RESUME`, which it turns into
 `CT_PERFORM`/`CT_HANDLE`/`CT_RESUME` directly. `--dump-cps` prints it.
 
 Deep dive: [cps-dk-internals-guide.md](cps-dk-internals-guide.md) covers
 the coloring, the CT-IR, the emitted ABI and the DK runtime end to end.
 
----
-
-## Borrows and lifetimes
+### Borrows and lifetimes
 
 Moves, linear and affine use, and uniqueness are checked **in the
 elaborator** (`elab_core.c`, `binding_mark_moved` and friends), because they
@@ -486,13 +457,9 @@ always-on checks: `borrow_check_effect_handler_captures` (a handler case
 body cannot read an outer borrow) and `lifetime_check_program`, which uses
 `lifetimes.c` (the outlives graph) and `lifetime_elision.c` (Rust-like
 elision rules). The general walker, `borrow_check_program`, is disabled.
+User-facing: [borrow-checking-and-lifetimes-guide.md](borrow-checking-and-lifetimes-guide.md).
 
-User-facing:
-[borrow-checking-and-lifetimes-guide.md](borrow-checking-and-lifetimes-guide.md).
-
----
-
-## SRFI pruning
+### SRFI pruning
 
 `srfi_prune_program` (`srfi_prune.c`) drops each top-level definition from a
 `stdlib/srfi/` file that nothing outside those files reaches, transitively,
@@ -533,20 +500,18 @@ static C before c2mir sees it), and `passes/rc_elision.c`, whose
 `tcg_emit_def`) to drop redundant `rc` clone/drop pairs just before a body
 is emitted.
 
-Deep dives:
-
-- [emitter-architecture-guide.md](emitter-architecture-guide.md) -- the
-  value/statement contract, phase order, output bands, ABI specializations.
-- [emitted-code-ownership-guide.md](emitted-code-ownership-guide.md) -- who
-  frees what in emitted C.
-- [value-representations-guide.md](value-representations-guide.md) -- the
-  C representation of each kind of value and the boundaries between them.
-- [type-erasure-guide.md](type-erasure-guide.md) -- where types collapse to
-  `int64_t`.
-- [monomorphization-abi-guide.md](monomorphization-abi-guide.md) --
-  `__spec_*` clones and the by-value ABI.
-- [name-mangling-guide.md](name-mangling-guide.md) -- source names to C
-  identifiers.
+Deep dives: [emitter-architecture-guide.md](emitter-architecture-guide.md)
+(the value/statement contract, phase order, output bands, ABI
+specializations);
+[emitted-code-ownership-guide.md](emitted-code-ownership-guide.md) (who
+frees what);
+[value-representations-guide.md](value-representations-guide.md) (the C
+representation of each kind of value and the boundaries between them);
+[type-erasure-guide.md](type-erasure-guide.md) (where types collapse to
+`int64_t`); [monomorphization-abi-guide.md](monomorphization-abi-guide.md)
+(`__spec_*` clones and the by-value ABI);
+[name-mangling-guide.md](name-mangling-guide.md) (source names to C
+identifiers).
 
 ### Runtime preamble and linkage
 
@@ -560,8 +525,7 @@ split (`tools/gen-runtime-split.py`) commits one canonical emission to
 `runtime.c`, `cps_prompt.c`, `stm.c`, `scheduler.c` and `timer_wheel.c` in
 `tur_core`, and backs `libturt_preamble.a`.
 
-Deep dive:
-[runtime-preamble-and-linkage-guide.md](runtime-preamble-and-linkage-guide.md).
+Deep dive: [runtime-preamble-and-linkage-guide.md](runtime-preamble-and-linkage-guide.md).
 
 ### Regions
 
@@ -577,48 +541,18 @@ Deep dive: [regions-internals-guide.md](regions-internals-guide.md).
 ### Separate compilation
 
 `compile_to_h` and `compile_to_implementation` emit a `.h`/`.c` pair per
-module (`emit_header`, `emit_implementation`). Stdlib bindings that are not
-exported are made `static` per TU. `cmd_build_multi_files` (`main.c`) runs
-two passes so cross-module borrow-spec clones get forced into their owning
-module, then writes a runtime owner TU and links.
+module (`emit_header`, `emit_implementation`). Each TU carries its own copy
+of the stdlib prelude, and the emitter treats `is_from_stdlib` bindings
+specially so a multi-TU link sees no duplicate symbols.
+`cmd_build_multi_files` (`main.c`) runs two passes so cross-module
+borrow-spec clones are forced into their owning module, then writes a
+runtime owner TU and links.
 
-Deep dive:
-[separate-compilation-internals-guide.md](separate-compilation-internals-guide.md).
-
----
-
-## Diagnostics: diag.c / diag.h
-
-`diag_emit(level, span, fmt, ...)` reports a message. The variants are
-`diag_emit_with_code` (a `DiagCode` such as `TUR_E0012_KIND_MISMATCH`),
-`diag_emit_with_notes`, `diag_emit_with_suggestion` and
-`diag_emit_multi_span`. `diag_had_error()` is the failure sentinel every
-pass checks; `diag_reset()` clears it per compile. Output is a colored
-terminal snippet, JSON (`--json-diagnostics`, `diag_emit_json`), or an LSP
-capture (`diag_lsp_begin`/`diag_lsp_flush`). `diag_explain(code, out)` looks
-up `tur explain` text in the `diag_explanations_[]` table. `diag.c` also
-owns the source-file registry (`diag_register_file`) that maps a span's file
-id to text.
-
-Deep dive: [diagnostics-internals-guide.md](diagnostics-internals-guide.md).
+Deep dive: [separate-compilation-internals-guide.md](separate-compilation-internals-guide.md).
 
 ---
 
-## Package manager: pkg.c and friends
-
-`pkg.c` reads `build.tur` / `build.tur.sweet` (`pkg_manifest_read`), reads
-and writes `tur.lock` (`pkg_lock_read`, `pkg_lock_write`), fetches spices
-(`pkg_git_fetch`, `pkg_fetch_all`), and generates `cmake/CMakeLists.txt` for
-`:cmake-deps`. `spice_search.c` computes the module search path for a file
-inside a spice. `global.c` and `install.c` implement `tur install` and
-friends; `justrun.c` is the Justfile runner behind `tur run <recipe>`.
-
-Deep dive:
-[package-manager-internals-guide.md](package-manager-internals-guide.md).
-
----
-
-## Host runtime: src/runtime/
+## Runtime code: src/runtime/ and src/async/
 
 | File | Role |
 |---|---|
@@ -627,40 +561,49 @@ Deep dive:
 | `globals.c` | most global flags (`g_strict_effects`, `g_dump_effects`, `g_cps_path`, `g_opt_regions`, `g_lang_prelude`, ...); a few, like `g_dump_kinds`, live in `main.c` |
 | `experiments.c` | the `EXPERIMENTS[]` registry behind `--enable=<name>` and `tur experiments`; `experiment_warn_if_used` |
 | `rc.c`, `arc.c` | `rc<T>`/`weak<T>` control blocks (`rc_strong_increment`, `rc_strong_decrement`, `rc_upgrade`); atomic variant |
-| `gc.c`, `rc_free_queue.c` | Bacon-Rajan cycle collector over `rc` (`gc_collect`, `gc_auto`; it runs synchronously at allocation checkpoints, not on a thread); deferred frees |
+| `gc.c`, `rc_free_queue.c` | Bacon-Rajan cycle collector over `rc` (`gc_collect`; in auto mode also at allocation checkpoints, `gc_on_alloc_checkpoint`; no background thread); deferred frees |
 | `rt_alloc.c` | the runtime archive's allocator hook |
-| `region.c`, `r7gc.c` | region generations; the conservative collector of compiled `#lang r7rs` programs. Both are pasted into programs from `region_rt_embed.c`, generated at build time |
-| `hamt.c`, `tur_string.c`, `symbols.c`, `trail.c` | persistent maps, owned strings, the runtime symbol intern table, the backtracking trail -- linked into programs from `libturt_runtime.a` or compiled beside them via `__tur_autolink__` |
+| `region.c`, `r7gc.c` | region generations; the conservative collector of compiled `#lang r7rs` programs. The emitter pastes their source into programs from `region_rt_embed.c`, which the build generates from these files (`build/src/generated/`); `region.c` is also in `libturt_runtime.a` |
+| `hamt.c`, `tur_string.c`, `symbols.c`, `trail.c` | persistent maps, owned strings, the runtime symbol table, the backtracking trail -- linked from `libturt_runtime.a` or compiled beside a program via `__tur_autolink__` |
 | `contract_handler.c` | the contract-violation handler registry programs call by extern |
 | `tur_tls.c`, `tur_atomics.c` | thread-local state and atomics for front ends without them (the JIT) |
 | `ffi_dispatch.c`, `ffi_dispatch_thunk.c` | generated FFI trampolines (`tools/gen_ffi_dispatch.py`) for the interpreter |
-| `image.c`, `serial.c` | the application-image header codec; the host copy of the TSER continuation wire format (only the fuzzer calls it; compiled programs get theirs from `emit_dk_runtime.c`) |
-| `generated/` | the committed S2 runtime split (see above) |
+| `image.c`, `serial.c` | the application-image header codec; the host copy of the TSER continuation wire format (only the fuzzer calls it; programs get theirs from `emit_dk_runtime.c`) |
 
 Deep dive for memory management: [gc-guide.md](gc-guide.md).
 
+**src/async/.** `fiber.c` provides cooperative stacks (`tur_fiber_new`,
+`tur_fiber_resume`, `tur_fiber_yield`, `tur_fiber_done`, `tur_fiber_free`)
+over the hand-written context switch `tur_ctx_swap` in `fiber_ctx_*.S`.
+`reactor.c` is the evented I/O reactor (`tur_reactor_*`) behind
+`stdlib/reactor.tur`; programs that use it autolink `-lturi`. `io.c` is the
+backend interface (`async_io.h`), with `io_epoll.c` (Linux), `io_kqueue.c`
+(macOS/BSD) and `io_iocp.c` (Windows; despite its name, a `select()`
+backend). `tur_sjlj_x64_win.S` is the DK trampoline's landing pad on
+Windows. Compiled programs get their async/await scheduler, STM and timers
+from the emitted preamble, not from this directory. Deep dive:
+[reactor-guide.md](reactor-guide.md).
+
+### Code that is not on any live path
+
+Several files look important and are not. Do not extend them; check before
+deleting, since some are kept for a unit test.
+
+| File | Status |
+|---|---|
+| `src/runtime/interp.c` | An old Form-to-Form macro interpreter. Compiled into `tur_core`, but nothing calls it. The real macro evaluators are `elab_macros.c` and `turi/macro_env.c` |
+| `src/runtime/cps_rt.c` | The CPS4 `TurKont` trampoline. In `tur_core`, used only by `tests/cps_rt_unit.c` |
+| `src/runtime/cps_prompt.c` | The original reference DK machine; built only into the `tur_cps_prompt_unit` test. The emitted machine has diverged far from it |
+| `src/runtime/runtime.c`, `stm.c`, `src/async/scheduler.c`, `timer_wheel.c` | Replaced by `generated/tur_rt_split.c`; built by no target |
+| `src/async/atomic_queue.c` | Built, but its only consumer is the unbuilt `scheduler.c` |
+| `src/passes/effect_lower.c` | Returns its input unchanged |
+| `borrow_check_program` | Disabled (see [Borrows and lifetimes](#borrows-and-lifetimes)) |
+
 ---
 
-## Async runtime: src/async/
+## The other engines: turi and the JIT
 
-`fiber.c` provides cooperative stacks (`tur_fiber_new`, `tur_fiber_resume`,
-`tur_fiber_yield`, `tur_fiber_done`, `tur_fiber_free`) over the hand-written
-context switch `tur_ctx_swap` in `fiber_ctx_*.S`. `reactor.c` is the evented
-I/O reactor (`tur_reactor_*`) behind `stdlib/reactor.tur`; programs that use
-it autolink `-lturi`. `io.c` is the backend interface (`async_io.h`), with
-`io_epoll.c` (Linux), `io_kqueue.c` (macOS/BSD) and `io_iocp.c` (Windows,
-a stub). `tur_sjlj_x64_win.S` is the DK trampoline's landing pad on Windows.
-
-Compiled programs get their async/await scheduler, STM and timers from the
-emitted preamble, not from this directory. `scheduler.c` and
-`timer_wheel.c` are built by no target; `atomic_queue.c` is built, but its
-only consumer is `scheduler.c`.
-
-Deep dive: [reactor-guide.md](reactor-guide.md).
-
----
-
-## Interpreter: src/turi/
+### Interpreter: src/turi/
 
 `turi_eval_impl` (`eval.c`) parses, elaborates with the same elaborator,
 runs the effect-row and lifetime checks, and then walks the `Expr` tree
@@ -679,12 +622,9 @@ and `ffi_thunk.c` (REPL spice images), `jit_ffi.c`, `jit_ffi_hook.c` and
 `inline_c_jit.c` (c2mir-backed FFI and inline C), `r7rs_embed.c` (R7RS
 `eval`), `docstrings.c`.
 
-Deep dive:
-[turi-interpreter-internals-guide.md](turi-interpreter-internals-guide.md).
+Deep dive: [turi-interpreter-internals-guide.md](turi-interpreter-internals-guide.md).
 
----
-
-## JIT: jit_engine.c
+### JIT: jit_engine.c
 
 Under `-DTUR_JIT=ON` (the default on 64-bit x86-64 and arm64), `tur jit`
 compiles the emitted C in process through MIR's c2mir front end
@@ -696,15 +636,43 @@ Deep dive: [jit-guide.md](jit-guide.md).
 
 ---
 
-## Editor tooling, CLI helpers and the web build
+## Supporting subsystems
+
+### Diagnostics: diag.c / diag.h
+
+`diag_emit(level, span, fmt, ...)` reports a message. The variants are
+`diag_emit_with_code` (a `DiagCode` such as `TUR_E0012_KIND_MISMATCH`),
+`diag_emit_with_notes`, `diag_emit_with_suggestion` and
+`diag_emit_multi_span`. `diag_had_error()` is the failure sentinel every
+pass checks; `diag_reset()` clears it per compile. Output is a colored
+terminal snippet, JSON (`--json-diagnostics`, `diag_emit_json`), or an LSP
+capture (`diag_lsp_begin`/`diag_lsp_flush`). `diag_explain(code, out)` looks
+up `tur explain` text in the `diag_explanations_[]` table. `diag.c` also
+owns the source-file registry (`diag_register_file`) that maps a span's
+file id to text.
+
+Deep dive: [diagnostics-internals-guide.md](diagnostics-internals-guide.md).
+
+### Package manager: pkg.c and friends
+
+`pkg.c` reads `build.tur` / `build.tur.sweet` (`pkg_manifest_read`), reads
+and writes `tur.lock` (`pkg_lock_read`, `pkg_lock_write`), fetches spices
+(`pkg_git_fetch`, `pkg_fetch_all`), and generates `cmake/CMakeLists.txt` for
+`:cmake-deps` (`pkg_gen_cmake_deps`). `spice_search.c` computes the module
+search path for a file inside a spice. `global.c` and `install.c` implement
+`tur install` and friends; `justrun.c` is the Justfile runner behind
+`tur run <recipe>`.
+
+Deep dive: [package-manager-internals-guide.md](package-manager-internals-guide.md).
+
+### Editor tooling, CLI helpers and the web build
 
 - **`src/lsp/`** -- `tur lsp`: `lsp.c` (handlers and dispatch), `lsp_io.c`
   (framing), `lsp_collect.c` and `lsp_scope.c` (symbol and scope tables,
   filled by hooks in `compile_to_c`), `lsp_docs.c`, `lsp_json.c`,
   `lsp_util.c`, `lsp_session.c`/`lsp_sink.c` (one dispatch, two
-  transports). `mcp.c` is `tur mcp`; it is linked into `tur` only. Both
-  servers compile many programs in one process, so any file-scope state must
-  be reset per compile. See [lsp-guide.md](lsp-guide.md).
+  transports). `mcp.c` is `tur mcp`, linked into `tur` only. See
+  [lsp-guide.md](lsp-guide.md).
 - **`src/cli/`** -- `completion.c` (`tur completion`), `demangle.c`
   (`tur demangle`), `lsp_lite.c` (`tur lsp-lite`, newline-delimited JSON).
 - **`src/web/`** -- `wasm_glue.c` exports the `turi_wasm_*` API and
@@ -712,38 +680,8 @@ Deep dive: [jit-guide.md](jit-guide.md).
   LSP analysis in the browser (and natively under the
   `tur_lsp_wasm_backend_unit` test); `tutorial.c` is the REPL tutorial
   engine. The WASM build is `tur run wasm` (CMake `-DTUR_WASM=ON`).
-- **Other compiler-side tools** -- `fmt.c` (`tur format`/`tur fmt`, works
-  on `Form`s only), `span_audit.c` (`tur audit-spans`), `prof.c`
-  (`--timings` zones).
-
----
-
-## Code that is not on any live path
-
-Several files look important and are not. Do not extend them; check before
-deleting, since some are kept for a unit test.
-
-| File | Status |
-|---|---|
-| `src/runtime/interp.c` | An old Form-to-Form macro interpreter. Compiled into `tur_core` but nothing calls it. The real macro evaluators are `elab_macros.c` and `turi/macro_env.c` |
-| `src/runtime/cps_rt.c` | The CPS4 `TurKont` trampoline. In `tur_core`, used only by `tests/cps_rt_unit.c` |
-| `src/runtime/cps_prompt.c` | The original reference DK machine; built only into the `tur_cps_prompt_unit` test. The emitted machine has diverged far from it |
-| `src/runtime/runtime.c`, `stm.c`, `src/async/scheduler.c`, `timer_wheel.c` | Replaced by `generated/tur_rt_split.c`; built by no target |
-| `src/passes/effect_lower.c` | Returns its input unchanged |
-| `borrow_check_program` | Disabled (see [Borrows and lifetimes](#borrows-and-lifetimes)) |
-
----
-
-## Memory and lifetime of compiler data
-
-Each `compile_to_c` call is a self-contained unit. It creates one `Arena`
-and one `SymbolTable`, allocates every `Form`, `Expr`, `Binding` and most
-types in that arena, and frees both at the end. Function types' per-argument
-arrays live in a separate, process-lifetime type arena in `types.c`.
-Process-global tables (the diagnostic state, the emitter's signature and
-spec tables, the CPS cache) are reset at the start of each compile or
-emission, because `tur test <dir>`, `tur check <dir>`, project builds, the
-LSP and MCP all compile many programs in one process.
+- **Other tools** -- `fmt.c` (`tur format`/`tur fmt`, works on `Form`s
+  only), `span_audit.c` (`tur audit-spans`), `prof.c` (`--timings`).
 
 ---
 
@@ -754,11 +692,11 @@ LSP and MCP all compile many programs in one process.
 2. Add it to `core_passes[]` in `src/main.c`, at the position where it
    should run.
 3. Add a `case PASS_YOUR_PASS:` to `run_core_pass` in `src/main.c`. Return
-   1 on failure after reporting with `diag_emit` /
-   `diag_emit_with_code`; check `diag_had_error()` if you call code that
-   reports without returning a status. If the pass rewrites the IR, add the
-   `kind_verify_program` assertion under `#ifndef NDEBUG` like the other
-   arms, and propagate kind information onto replacement nodes.
+   1 on failure after reporting with `diag_emit` / `diag_emit_with_code`;
+   check `diag_had_error()` if you call code that reports without returning
+   a status. If the pass rewrites the IR, add the `kind_verify_program`
+   assertion under `#ifndef NDEBUG` like the other arms, and propagate kind
+   information onto replacement nodes.
 4. Give it a `--timings` zone: a `PROF_*` value in `src/compiler/prof.h`
    (in pipeline order), its name in `k_zone_names[]` in `prof.c`, and a case
    in `pass_zone` in `main.c`. `pass_zone` has no `default:` arm, so
@@ -772,8 +710,8 @@ LSP and MCP all compile many programs in one process.
 7. Decide whether the interpreter needs it too. `turi_eval_impl` in
    `src/turi/eval.c` runs its own subset of passes and will not pick a new
    one up from `core_passes[]`.
-8. Reset any file-scope state at the start of each run (see
-   [Memory and lifetime of compiler data](#memory-and-lifetime-of-compiler-data)).
+8. Reset any file-scope state at the start of each run: one process
+   compiles many programs (see [High-level picture](#high-level-picture)).
 
 Before adding a pass, check whether the work belongs in the elaborator
 (it needs scope state) or the emitter (it needs to know what was printed).
@@ -830,17 +768,15 @@ Most recent analyses landed in one of those two.
 | `tur emit-c f.tur` | the generated C |
 | `tur expand f.tur` | macro expansions, while checking |
 | `--timings` | time per zone (read, elaborate, typeclass, refine, emit, cc, ...) |
-| `--dump-kinds` | kind annotations after `PASS_KIND_CHECK` |
-| `--dump-effects` | the inferred effect row of every `defn` |
+| `--dump-kinds`, `--dump-effects` | kinds after `PASS_KIND_CHECK`; each `defn`'s inferred effect row |
 | `--dump-cps-coloring`, `--dump-cps`, `--dump-clone-plan` | CPS coloring, the CT-IR, the cloneable capture plan |
-| `--dump-mono-specs` | the lens specialization registry |
-| `--emit-abi-trace` | the ABI path chosen per call site |
+| `--dump-mono-specs`, `--emit-abi-trace` | the lens spec registry; the ABI path chosen per call site |
 | `tur audit-spans f.tur` | IR nodes missing a breakpoint span |
 | `tur explain TUR-E####` | the long text for a diagnostic code |
 | `TUR_SHOW_CC=1` | the `cc` command and split-build decisions |
 
 There is no general IR dump; `expr_print` (`expr.c`) exists but nothing
-calls it. Call it from a debugger. More techniques are in
+calls it, so call it from a debugger. More techniques are in
 [diagnosing-the-compiler-guide.md](diagnosing-the-compiler-guide.md) and
 [debugging-guide.md](debugging-guide.md).
 
@@ -849,7 +785,6 @@ calls it. Call it from a debugger. More techniques are in
 ## Further reading
 
 - [effects-system-guide.md](effects-system-guide.md) -- algebraic effects
-  in depth
 - [hkt-guide.md](hkt-guide.md) -- higher-kinded types
 - [substructural-types-guide.md](substructural-types-guide.md) -- linear,
   affine and relevant types
