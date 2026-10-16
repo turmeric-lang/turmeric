@@ -1,0 +1,184 @@
+;;; tur/unicode -- Unicode classes, case folding and UTF-8 decoding for String.
+;;;
+;;; What a Markdown parser needs past ASCII: CommonMark's Unicode whitespace
+;;; and punctuation, full Unicode case folding, and the code point on either
+;;; side of a byte index.  A Char here holds a whole code point, not a byte.
+;;;
+;;; The tables are the ones behind #lang r7rs's (scheme char):
+;;; tools/gen-r7rs-unicode.py generates them into stdlib/r7rs/unicode.tur
+;;; from the Unicode Character Database that tools/fetch-ucd.sh pins
+;;; (Unicode 16.0.0).  The interpreter registers natives over the same
+;;; generated C, so compiled code, the JIT and the interpreter agree.
+;;;
+;;; Since: markdown-library-plan U
+;; Char, Option and Pair are autoloaded; String comes from string.tur.
+(load "stdlib/string.tur")
+
+(load "stdlib/r7rs/unicode.tur")
+;; ---- Classes ---------------------------------------------------------------
+;;; unicode/space? -- is c Unicode whitespace, as CommonMark defines it?
+;;;
+;;; CommonMark 0.31: a character in the Zs general category, or tab, line
+;;; feed, form feed or carriage return.  That is narrower than char.tur's
+;;; space? on ASCII (no vertical tab) and wider past it (no-break space,
+;;; the em space, the ideographic space...).
+;;;
+;;; Parameters:
+;;;   c -- the code point to test
+;;;
+;;; Returns:
+;;;   true when c is Unicode whitespace.
+;;;
+;;; Example:
+;;;   (unicode/space? (int->char 0x3000))  ; => true (ideographic space)
+;;;
+;;; Since: markdown-library-plan U
+(defn unicode/space? [c : Char] : bool (= (r7rs-uc-prop__ (char->int c) 5) 1))
+;;; unicode/punct? -- is c Unicode punctuation, as CommonMark defines it?
+;;;
+;;; CommonMark 0.31: a character in a P (punctuation) or S (symbol) general
+;;; category.  Every ASCII punctuation character is one, so this agrees with
+;;; char.tur's punct? on ASCII; past it, it takes in quotation marks, dashes,
+;;; currency signs, arrows and the replacement character U+FFFD.
+;;;
+;;; Parameters:
+;;;   c -- the code point to test
+;;;
+;;; Returns:
+;;;   true when c is Unicode punctuation.
+;;;
+;;; Example:
+;;;   (unicode/punct? (int->char 0x201C))  ; => true (left double quotation mark)
+;;;
+;;; Since: markdown-library-plan U
+(defn unicode/punct? [c : Char] : bool (= (r7rs-uc-prop__ (char->int c) 6) 1))
+;; ---- Case folding ----------------------------------------------------------
+;;; unicode/fold-case -- s with full Unicode case folding applied.
+;;;
+;;; CaseFolding.txt's C and F mappings, so the result can be longer than s:
+;;; "Stra\xc3\x9fe" and "STRASSE" both fold to "strasse".  Two strings that
+;;; fold to the same bytes match without regard to case, which is how
+;;; CommonMark matches link reference labels.  Invalid UTF-8 is copied
+;;; through unchanged.  The fold stops at a NUL byte.
+;;;
+;;; Parameters:
+;;;   s -- the String to fold (borrowed)
+;;;
+;;; Returns:
+;;;   A fresh owned String.
+;;;
+;;; Example:
+;;;   (string/to-cstr (unicode/fold-case (string/from-cstr "HeLLo")))  ; => "hello"
+;;;
+;;; Since: markdown-library-plan U
+(defn unicode/fold-case [s : String] : String
+  (string/adopt-cstr (r7rs-uc-string__ (string/to-cstr s) 2)))
+;; ---- UTF-8 decoding --------------------------------------------------------
+;; An invalid sequence decodes as U+FFFD covering its maximal valid prefix,
+;; at least one byte, as the Unicode Standard recommends (section 3.9) and
+;; as CommonMark's replacement of invalid input expects.
+;;
+;; The byte ranges are in decimal, because tur fmt prints integers that way:
+;;   0-127 (0x00-0x7F) is ASCII and 128-191 (0x80-0xBF) the continuation
+;;   bytes; 194-223 (0xC2-0xDF), 224-239 (0xE0-0xEF) and 240-244
+;;   (0xF0-0xF4) lead 2-, 3- and 4-byte sequences.  After 224 (0xE0) the
+;;   second byte is at least 160 (0xA0), and after 240 (0xF0) at least 144
+;;   (0x90): no overlong forms.  After 237 (0xED) it is at most 159 (0x9F),
+;;   no surrogates; after 244 (0xF4) at most 143 (0x8F), nothing past
+;;   U+10FFFF.  65533 is U+FFFD.
+;;; utf8/-in? -- internal: is b in [lo, hi]?
+
+(defn utf8/-in? [b : int lo : int hi : int] : bool (and (>= b lo) (<= b hi)))
+;;; utf8/-len -- internal: the sequence length a lead byte announces, or 0 for a byte that cannot lead.
+
+(defn utf8/-len [b : int] : int
+  (cond (< b 128)             1
+        (utf8/-in? b 194 223) 2
+        (utf8/-in? b 224 239) 3
+        (utf8/-in? b 240 244) 4
+        :else                 0))
+;;; utf8/-second-lo -- internal: the smallest valid second byte after lead b.
+
+(defn utf8/-second-lo [b : int] : int (if (= b 224) 160 (if (= b 240) 144 128)))
+;;; utf8/-second-hi -- internal: the largest valid second byte after lead b.
+
+(defn utf8/-second-hi [b : int] : int (if (= b 237) 159 (if (= b 244) 143 191)))
+;;; utf8/-bad -- internal: U+FFFD, paired with the index end.
+
+(defn utf8/-bad [end : int] : (Pair Char int) (pair (int->char 65533) end))
+;;; utf8/-tail -- internal: fold the continuation bytes [j, end) of s into cp.
+
+(defn utf8/-tail [s : String j : int end : int cp : int] : (Pair Char int)
+  (if (>= j end)
+    (pair (int->char cp) end)
+    (let [b (string/byte-at s j)]
+      (if (utf8/-in? b 128 191)
+        (utf8/-tail s (+ j 1) end (+ (* cp 64) (- b 128)))
+        (utf8/-bad j)))))
+;;; utf8/-lead -- internal: decode the n-byte sequence whose lead byte b0 is at i.
+
+(defn utf8/-lead [s : String i : int b0 : int n : int] : (Pair Char int)
+  (let [b1   (string/byte-at s (+ i 1))
+        mark (if (= n 2) 192 (if (= n 3) 224 240))]
+    (if (utf8/-in? b1 (utf8/-second-lo b0) (utf8/-second-hi b0))
+      (utf8/-tail s (+ i 2) (+ i n) (+ (* (- b0 mark) 64) (- b1 128)))
+      (utf8/-bad (+ i 1)))))
+;;; utf8/-step -- internal: the code point at in-range index i, and the index past it.
+
+(defn utf8/-step [s : String i : int] : (Pair Char int)
+  (let [b0 (string/byte-at s i)
+        n  (utf8/-len b0)]
+    (cond (= n 1) (pair (int->char b0) (+ i 1))
+          (= n 0) (utf8/-bad (+ i 1))
+          :else   (utf8/-lead s i b0 n))))
+;;; utf8/decode-at -- the code point that starts at byte index i of s.
+;;;
+;;; Decodes the UTF-8 sequence at i.  A byte that cannot start a sequence,
+;;; an overlong form, a surrogate or a sequence cut short decodes as U+FFFD,
+;;; covering the bytes up to where it went wrong, so a scan that follows the
+;;; returned index always moves forward.
+;;;
+;;; Parameters:
+;;;   s -- the String to read (borrowed)
+;;;   i -- a byte index into s
+;;;
+;;; Returns:
+;;;   (some (pair c next)): the code point and the index just past it.
+;;;   (none) when i is out of range.
+;;;
+;;; Example:
+;;;   (utf8/decode-at (string/from-cstr "\xc3\xa9t\xc3\xa9") 0)  ; => (some (pair #\x00E9 2))
+;;;
+;;; Since: markdown-library-plan U
+(defn utf8/decode-at [s : String i : int] : (Option (Pair Char int))
+  (if (or (< i 0) (>= i (string/len s))) (none) (some (utf8/-step s i))))
+;;; utf8/-start-before -- internal: the lead byte's index for the code point ending at i, at most 4 bytes back.
+
+(defn utf8/-start-before [s : String i : int j : int] : int
+  (if (and (> j 0) (> j (- i 4)) (utf8/-in? (string/byte-at s j) 128 191))
+    (utf8/-start-before s i (- j 1))
+    j))
+;;; utf8/decode-before -- the code point that ends just before byte index i of s.
+;;;
+;;; The mirror of utf8/decode-at, for looking left: the character before a
+;;; delimiter run, say.  When the bytes before i are not the end of a valid
+;;; sequence, the byte at i - 1 decodes as U+FFFD on its own.
+;;;
+;;; Parameters:
+;;;   s -- the String to read (borrowed)
+;;;   i -- a byte index into s; the code point ends at i - 1
+;;;
+;;; Returns:
+;;;   (some (pair c start)): the code point and the index of its first byte.
+;;;   (none) when i is 0 or less, or past the end of s.
+;;;
+;;; Example:
+;;;   (utf8/decode-before (string/from-cstr "a\xc3\xa9") 3)  ; => (some (pair #\x00E9 1))
+;;;
+;;; Since: markdown-library-plan U
+(defn utf8/decode-before [s : String i : int] : (Option (Pair Char int))
+  (if (or (<= i 0) (> i (string/len s)))
+    (none)
+    (let [j (utf8/-start-before s i (- i 1))
+          p (utf8/-step s j)]
+      (some (if (= (pair-snd p) i) (pair (pair-fst p) j) (utf8/-bad (- i 1)))))))
