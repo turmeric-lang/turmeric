@@ -109,8 +109,13 @@ Two consequences worth knowing:
   Verified: `tur run sub/app.tur` fails with
   `load: cannot open 'helpers.tur'`, and the same command from `sub/` works.
 - **The first load claims the file.** Because the set is global, a second
-  module's `load` of the same path splices nothing. That is open as
-  [load-in-defmodule-claims-file-for-one-module](../reported/load-in-defmodule-claims-file-for-one-module.md).
+  module's `load` of the same path splices nothing. For a `stdlib/` path this
+  is harmless: `load_expand_forms` (`elab_toplevel.c`) hoists a stdlib load
+  written inside a `defmodule` body to the level the module sits at, so its
+  definitions are global wherever the load is written
+  ([load-in-defmodule-claims-file-for-one-module](../archive/load-in-defmodule-claims-file-for-one-module.md),
+  resolved 2026-10-16). A non-stdlib file loaded in a module body still
+  splices into that module, so a second module that loads it gets nothing.
 
 A `load` that survives to elaboration (inside a `defn` or `let` body) reaches
 `elab_load` (`elab_module.c`), which is a hard error.
