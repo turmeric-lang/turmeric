@@ -7,9 +7,12 @@
 > same PR as this text.** **O6 closed 2026-10-17 and the plan is archived:**
 > the last check, a post-move release's attestation, passed on v0.65.5's
 > `macos-arm64` asset with `--repo turmeric-lang/turmeric` (O6 item 4, 6.2).
-> The "Still owed" cells in section 0a for `asdf-turmeric`, `turmeric-godot`
-> and `trowel` name prose sweeps in those repos, which redirects keep
-> working; they were not re-checked at archiving. Written in
+> The sibling repos were re-checked at archiving (section 0a): `mir`,
+> `smt-lib-benchmarks` and `trowel` carry no old-owner references left to fix.
+> `asdf-turmeric` and `turmeric-godot` still do, in their own trees. Both
+> resolve through GitHub's transfer redirects (O2), so nothing is broken by
+> the owner, but one `turmeric-godot` README link is dead for another reason.
+> Written in
 > answer to "what is a good option for moving turmeric repos out of my
 > rjungemann account -- a free-tier GH org?" The short answer is **yes, GitHub
 > Free for organizations is sufficient and costs nothing here**, and section 1
@@ -85,11 +88,11 @@ resolves a URL into it at build or install time.
 
 | Tier | Repo | Owner now | Transferred | Still owed |
 | --- | --- | --- | --- | --- |
-| 1 | `smt-lib-benchmarks` | `turmeric-lang` | **2026-10-02** | Class B doc sweep |
-| 1 | `mir` | `turmeric-lang` | **2026-10-02** | `tools/update-mir.sh:34` default, `VENDORED.md` prose |
-| 1 | `asdf-turmeric` | `turmeric-lang` | **2026-10-02** | `lib/utils.bash`, `README.md`, `bin/help.overview` |
-| 1 | `turmeric-godot` | `turmeric-lang` | **2026-10-02** | `build.yml:36,107`, `README.md` |
-| 2 | `trowel` | `turmeric-lang` | **2026-10-02** | cask name (4.3); `CMakeLists.txt:219`. **Its 7 secrets carried over** -- see 2.1 |
+| 1 | `smt-lib-benchmarks` | `turmeric-lang` | **2026-10-02** | nothing -- no old-owner references (checked 2026-10-17) |
+| 1 | `mir` | `turmeric-lang` | **2026-10-02** | nothing -- the fork has no old-owner references, `tools/update-mir.sh` uses the org, and `VENDORED.md`'s "formerly `rjungemann/mir`" is deliberate (checked 2026-10-17) |
+| 1 | `asdf-turmeric` | `turmeric-lang` | **2026-10-02** | still owed (checked 2026-10-17 at 45c0bcd): the `TURMERIC_REPO` default at `lib/utils.bash:13` (redirected; `curl` runs with `--location`), five `README.md` references, `bin/help.overview:5` |
+| 1 | `turmeric-godot` | `turmeric-lang` | **2026-10-02** | still owed (checked 2026-10-17 at 04dd018): `build.yml:36,107` clone `rjungemann/turmeric` (redirected), and four `README.md` links -- one, to `docs/upcoming/godot-binding-refresh-plan.md`, is dead because that plan is now in `docs/archive/` |
+| 2 | `trowel` | `turmeric-lang` | **2026-10-02** | nothing -- `CMakeLists.txt` and `Casks/` use the org; `README.md`'s two mentions are its "moved from" note (checked 2026-10-17 at 67f4174). **Its 7 secrets carried over** -- see 2.1 |
 | 3 | `turmeric-spices` | `turmeric-lang` | **2026-10-02** | nothing -- its 3 hardcoded refs were fixed in turmeric-spices #81 (5d66d78) |
 | 3 | `turmeric` | `turmeric-lang` | **2026-10-02** | nothing -- O4 + O5 done, O6 item 4 verified 2026-10-17; `SENTRY_DSN` org-wide |
 
