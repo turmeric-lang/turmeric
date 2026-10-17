@@ -6,7 +6,7 @@ a second defect behind the same reactor-guide examples: a captureless
 callback crashed the reactor. Both are fixed. See "Resolution" at the end.
 
 **Severity: low-medium (compile failure in cc, not a wrong answer).**
-**Discovered:** 2026-10-10, spiking `docs/upcoming/spices/nng-async-plan.md`
+**Discovered:** 2026-10-10, spiking `docs/archive/nng-async-plan.md`
 against v0.63.9 (the prebuilt release `turmeric-spices/scripts/install-tur.sh`
 fetches, which matches `main` at `f53e73ed`).
 

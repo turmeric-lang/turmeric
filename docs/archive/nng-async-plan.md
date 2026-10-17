@@ -1,8 +1,8 @@
 # Plan: `tur-nng` Async Interface (NG5: poll fds, aio, contexts)
 
-> Status: revision 2 (2026-10-10). NG-A, NG-B and NG-C are implemented on the
-> turmeric-spices branch `claude/async-nng-spice-plan-qfbicy` (not yet merged).
-> See "Implementation record" for where the code departs from this text. The
+> Status: DONE -- archived 2026-10-17. NG-A, NG-B and NG-C merged to
+> turmeric-spices `main` as #91 (ca78cb0, 2026-10-10). See "Implementation
+> record" for where the code departs from this text. The
 > design was first spiked end to end against tur v0.63.9 and nng v1.12.4 (see
 > "Spike record").
 > Tracks: `docs/archive/nng-spice-plan.md` NG5 follow-ups (aio + ctx, reactor fd).
@@ -745,7 +745,7 @@ land before NG-B if the concurrent REP server is wanted first.
    showed every definite leak was a submit, `aio-wait` or `ctx-close`
    result used in statement position. The same is true of today's
    `send-str`. That is
-   [carrier-sum-option-boxes-have-no-owner](../../reported/carrier-sum-option-boxes-have-no-owner.md)
+   [carrier-sum-option-boxes-have-no-owner](../reported/carrier-sum-option-boxes-have-no-owner.md)
    (open, compiler-side). It is 16 bytes a call, which matters for a hot
    submit loop. Bind and inspect results there. Do not reshape the API
    around it.
@@ -806,7 +806,7 @@ each one.
 ### Found on the way
 
 Both are **resolved** on `main` after v0.63.9 and archived in
-[nil-argument-to-ptr-param-emits-void-expression](../../archive/nil-argument-to-ptr-param-emits-void-expression.md):
+[nil-argument-to-ptr-param-emits-void-expression](nil-argument-to-ptr-param-emits-void-expression.md):
 
 - `tur check` accepted `nil` for a `ptr<void>` parameter, and cc then rejected
   `((void)0)`. A literal `nil` there is now the null pointer.
@@ -822,8 +822,8 @@ plan captures something, so the second defect never reached them.
 
 ## Implementation record (2026-10-10)
 
-NG-A, NG-B and NG-C are on the turmeric-spices branch
-`claude/async-nng-spice-plan-qfbicy`, one commit each. Together they add 82
+NG-A, NG-B and NG-C were built on the turmeric-spices branch
+`claude/async-nng-spice-plan-qfbicy`, one commit each, and merged as #91. Together they add 82
 assertions in 8 suites and nine compile-fail fixtures, green on tur v0.63.9
 (release) and on a sanitized Debug tur from `main`.
 
@@ -845,7 +845,7 @@ Where the code departs from the text above:
   LeakSanitizer in spices CI, and `ctx_test` does not. It was checked by hand
   with `TUR_CC_FLAGS=-fsanitize=address,undefined`: clean, and a deliberate
   `nng_msg` leak is caught. See
-  [spice-suites-without-libturi-run-unsanitized](../../reported/spice-suites-without-libturi-run-unsanitized.md).
+  [spice-suites-without-libturi-run-unsanitized](../reported/spice-suites-without-libturi-run-unsanitized.md).
 
 ---
 

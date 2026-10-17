@@ -1,10 +1,12 @@
 ## Try Turmeric: Load project from zip
 
-> **Status:** Landed in v1. This file carries the v2 plan forward as
-> reference for future enhancements (drop overlay polish, iOS Safari
-> validation, larger-project support).
+> **Status:** DONE -- archived 2026-10-17. Landed in v1 (`readStoreZip` /
+> `parseProjectZip` / `applyProjectLoad` in `web/main.js`, tests in
+> `web/tests/mobile.load.spec.js`). The v2 ideas below (drop overlay polish,
+> iOS Safari validation, larger-project support) were never scheduled; they
+> stay here as reference, and a new plan picks them up if one is wanted.
 >
-> **Predecessor:** [`docs/archive/try-turmeric-multi-tab-and-projects-plan.md`](../archive/try-turmeric-multi-tab-and-projects-plan.md)
+> **Predecessor:** [`docs/archive/try-turmeric-multi-tab-and-projects-plan.md`](try-turmeric-multi-tab-and-projects-plan.md)
 > (§4 of the multi-tab + projects plan)
 
 ## Status (as of 2026-06-28)

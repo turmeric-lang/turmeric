@@ -30,7 +30,7 @@ Only Phase 1.5 remains.
 
 
 > **Type:** Web platform / Try Turmeric
-> **Predecessor:** [`docs/archive/try-turmeric-pwa-mobile-plan.md`](../../archive/try-turmeric-pwa-mobile-plan.md)
+> **Predecessor:** [`docs/archive/try-turmeric-pwa-mobile-plan.md`](try-turmeric-pwa-mobile-plan.md)
 
 ## Goal
 
@@ -356,7 +356,7 @@ mode) and avoids any privacy footgun -- user code never leaves the tab.
 ## 4. Load project from zip
 
 **Landed.** Split out into its own plan at
-[`docs/upcoming/v2/try-turmeric-load-project-from-zip-plan.md`](../v2/try-turmeric-load-project-from-zip-plan.md)
+[`docs/archive/try-turmeric-load-project-from-zip-plan.md`](try-turmeric-load-project-from-zip-plan.md)
 for any follow-on work (drop overlay polish, iOS Safari validation,
 larger-project support). The summary: `web/main.js` has a store-only
 ZIP reader (`readStoreZip()`), `parseProjectZip()` for

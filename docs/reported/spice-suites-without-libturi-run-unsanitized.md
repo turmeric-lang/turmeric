@@ -8,7 +8,7 @@ the suites that pull in libturi are, for example through `stdlib/reactor.tur`.
 A leak in any other suite passes CI with no diagnostic.
 
 Found 2026-10-10 while implementing NG-C of
-[nng-async-plan](../upcoming/spices/nng-async-plan.md).
+[nng-async-plan](../archive/nng-async-plan.md).
 
 ## Repro
 

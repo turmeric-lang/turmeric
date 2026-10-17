@@ -1,7 +1,9 @@
 # Stress-fixture tiering -- small counts per PR, full counts nightly
 
-> **Status: IMPLEMENTED 2026-10-04 -- archive once the first nightly confirms
-> T4** (section 8). The expensive set turned out to be ONE fixture,
+> **Status: DONE -- archived 2026-10-17.** Implemented 2026-10-04; T4 was
+> confirmed by the first scheduled nightly, run 37310521913 on 2026-10-05,
+> whose "Run the stress fixtures at full size" step passed (section 8.3).
+> The expensive set turned out to be ONE fixture,
 > `r7rs-tail-calls`; it now runs 1e6 per PR and its 1e7 twin runs nightly
 > under a new `requires.stress` marker (mechanism B). Section 3's suggested
 > per-PR value of ~1e5 is WRONG for r7rs and section 8.2 says why.
@@ -254,7 +256,7 @@ fixture wrote a `.time` file (all skipped, or all stamp-cache hits): with
 `nullglob` on, the `ls` guard got no operand and succeeded, and `cat` then
 read stdin. Fixed with an array guard.
 
-**Still to observe:** the first scheduled nightly after merge -- its
-`stress.log` should show `r7rs-tail-calls-stress` passing under both
-harnesses. Archive this plan then.
+**Observed 2026-10-05:** the first scheduled nightly after merge (run
+37310521913) passed "Run the stress fixtures at full size", so
+`r7rs-tail-calls-stress` passed under both harnesses. Archived 2026-10-17.
 
