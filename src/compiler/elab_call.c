@@ -1780,9 +1780,17 @@ static bool call_collect_type_bindings(const Type *expected, Type actual,
                  * back the unfixed V, which collapsed to `int` and retyped the
                  * enclosing generic's declared `A` result -- so at `A := (fn
                  * ...)` its caller thin-called the fat handle it returned. */
+                /* nested-generic-tyvar-name-capture: not for an OPEN slot,
+                 * which fixes nothing (the first branch's rule).  A binding
+                 * spelled `B := B` may be the callee's `B` bound to the
+                 * enclosing signature's same-named `B` -- `f : (fn [A] B)`
+                 * forwarded inside `list-map [A B]` -- and `(list-nil)`'s
+                 * open `A` then replaced it: the inner spec read `B := float`
+                 * and called a float -> int `f` as returning a double. */
                 if (bindings[idx].type.kind == TY_TYVAR &&
                     bindings[idx].type.as.tyvar_.name == expected->as.tyvar_.name &&
                     actual.kind == TY_TYVAR && actual.as.tyvar_.name &&
+                    !actual.as.tyvar_.open_slot &&
                     actual.as.tyvar_.name != expected->as.tyvar_.name &&
                     g_call_cb_elab && ng_tyvar_in_sig(g_call_cb_elab, actual.as.tyvar_.name)) {
                     bindings[idx].type = actual;
