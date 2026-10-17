@@ -19,7 +19,8 @@
     (MdHtmlBlock) "html block"
     (MdTable c) "table"
     (MdTableRow h) "table row"
-    (MdTableCell a) "table cell"))
+    (MdTableCell a) "table cell"
+    (MdMathBlock) "math block"))
 
 (defn block-detail [b : MdBlock] : int
   (match b
