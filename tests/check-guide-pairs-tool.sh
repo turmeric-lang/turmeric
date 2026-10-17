@@ -36,14 +36,19 @@ if ! "$TUR" build tools/check-guide-pairs.tur -o "$WORK/cgp" > "$WORK/build.log"
 fi
 
 NAME="sample-report"
+# The report is stdout.  stderr is kept apart: `tur run` passes on the C
+# compiler's warnings about the generated code there, and clang (macOS's cc)
+# has some that gcc does not.
 "$TUR" run tools/check-guide-pairs.tur -- --tur "$TUR" --strict-unpaired --verbose \
-  tests/guide-pairs/sample.md > "$WORK/out.txt" 2>&1
+  tests/guide-pairs/sample.md > "$WORK/out.txt" 2> "$WORK/err.txt"
 RC=$?
 sed -E -e 's#[^ ]*/tur-guide-pairs-[0-9]+/#<scratch>/#g' \
        -e 's#^(Checker +: ).* \(#\1<tur> (#' "$WORK/out.txt" > "$WORK/got.txt"
 if [ "$RC" -ne 1 ]; then
+  cat "$WORK/err.txt"
   fail "$NAME" "exit $RC, expected 1"
 elif ! diff -u tests/guide-pairs/expected.txt "$WORK/got.txt"; then
+  cat "$WORK/err.txt"
   fail "$NAME" "report differs from tests/guide-pairs/expected.txt"
 else
   pass "$NAME"
