@@ -656,13 +656,31 @@ reduction introduces (`len(Nil)`) unfold in turn, up to a **fuel** of 8 per
 obligation (`TUR_REFLECT_FUEL=<n>` overrides it). Running out costs
 completeness only: the obligation stays Unknown, reports `TUR-W0385` beside
 the usual `TUR-W0372`, and keeps its runtime check. A `match` on a
-*variable* unfolds only where the hypotheses already pin the variable's
-constructor -- inside a `match` arm of the function being proved, whose tag
-fact `(= (#dt/tag xs) k)` selects the arm and whose binders are the
-`.field` selectors the arm's variables are bound to. Anywhere else,
-`(len xs)` for a parameter `xs` is exactly as opaque as before. Call-site
-crossings do not receive an arm's tag facts today (see the plan), so this
-mostly serves return refinements.
+*variable* unfolds where the hypotheses pin what the variable is:
+
+- a name a `let` binds to a constructor term selects against that term,
+  exactly as if it were written in place -- `(let [b (Cons 3 (Nil))]
+  (head-of b))` proves, through a chain of bindings too;
+- inside a `match` arm -- of the function being proved, or of a caller at a
+  call-site crossing -- the arm's tag fact `(= (#dt/tag xs) k)` selects the
+  arm, and its binders are the `.field` selectors the arm's variables are
+  bound to.
+
+Anywhere else -- a parameter nothing has matched, a value a function call
+returns, a top-level `def` -- `(len xs)` is exactly as opaque as before.
+
+There is **no induction**. Inside a `Cons` arm, `(len xs)` unfolds to
+`1 + (len t)`, but `(len t) >= 0` is a fact about every list and no finite
+unfolding yields it, so `(> (len xs) 0)` stays unknown there. State such a
+contract as a non-recursive shape predicate instead -- `(nonempty? xs)`,
+`true` on `Cons` and `false` on `Nil` -- which the arm's tag fact decides
+outright.
+
+A `float` measure proves through **comparisons**, not arithmetic: a
+real-sorted `+ - * /` rounds in double, so the solver treats it as an opaque
+term (see the first item under "Limits"). A summing measure therefore proves only
+at its base case, while one built from `<`/`>` -- a maximum, an "every element
+below" -- proves at any depth the fuel reaches.
 
 `if`, `let`, `do` and guarded arms are supported; an `if` has no term in the
 logic, so a body under one is admitted as a proposition,
@@ -697,13 +715,13 @@ the bounded model search, which otherwise declines any VC that mentions an
 uninterpreted function, runs when every such function is a constructor or a
 reflected measure the encoder unfolded, and evaluates each application by
 its own equation. `(> (len (Cons 1 (Cons 2 (Cons 3 (Nil))))) 3)` is
-`TUR-E0371` "false for the value given here".
+`TUR-E0371` "false for the value given here", and so is the same list bound
+by a `let` first: the binding's equation defines the variable for the search.
 
 `--dump-reflect` prints one line per site (`reflect len: TOTAL dec=0`, or
 `REJECTED gate=... reason=...`). Without the flag, `^reflect` warns that it
-is ignored and the measure stays opaque. The plan, with what the first cut
-settled and what is still open (non-ground unfolding, counterexamples
-through a reflected measure), is
+is ignored and the measure stays opaque. The plan, with what each phase
+settled and what graduation waits on, is
 [reflected-measures-plan.md](https://github.com/turmeric-lang/turmeric/blob/main/docs/upcoming/reflected-measures-plan.md)
 (the docs pack carries guides, not plans, so the link is by URL).
 

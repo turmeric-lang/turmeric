@@ -4805,6 +4805,135 @@ static void rt_cs_push(const Elab *e, const Form **hyps, uint32_t *n,
     hyps[(*n)++] = h;
 }
 
+/* Does a binder -- a name, or every symbol of a destructuring pattern or a
+ * parameter vector -- name something the environment has hypotheses about? */
+static bool rt_binder_in_env(RefineEnv *env, const Form *f, uint32_t depth) {
+    if (!f || depth >= RT_CS_PATH_MAX_DEPTH) return false;
+    if (f->tag == F_SYM) return rt_env_has_name(env, f->as.sym);
+    if (f->tag != F_LIST && f->tag != F_VEC) return false;
+    for (uint32_t i = 0; i < f->as.list.len; i++)
+        if (rt_binder_in_env(env, f->as.list.items[i], depth + 1)) return true;
+    return false;
+}
+
+/* One binding of a `let` vector, in the shape elab_let accepts (the walk
+ * rt_bvec_rebinds makes): `^ann`* name [type-ann] init.  `bare` is the plain
+ * `name init` shape, the only one whose equation is claimed as a fact. */
+#define RT_LET_MAX_BINDS 32
+typedef struct RtLetBind {
+    const Form *name;    /* a symbol, or a destructuring pattern */
+    const Form *init;
+    uint32_t    start;   /* index in the vector of the binding's first item */
+    bool        bare;
+} RtLetBind;
+
+/* The bindings of `bv`, or -1 for a shape not recognised (or too many). */
+static int rt_let_binds(const Form *bv, RtLetBind *out) {
+    uint32_t i = 0, len = bv->as.list.len, k = 0;
+    while (i < len) {
+        uint32_t start = i;
+        bool bare = true;
+        const Form *cur = bv->as.list.items[i];
+        while (cur->tag == F_SYM && cur->as.sym && cur->as.sym->name[0] == '^') {
+            bare = false;
+            if (++i >= len) return -1;
+            cur = bv->as.list.items[i];
+        }
+        i++;
+        if (i < len) {
+            const Form *ann = bv->as.list.items[i];
+            if (ann->tag == F_TYPE_ANN ||
+                (ann->tag == F_KEYWORD && ann->as.sym &&
+                 typekind_from_symbol(ann->as.sym->name) != TY_UNKNOWN)) {
+                bare = false;
+                i++;
+            }
+        }
+        if (i >= len || k >= RT_LET_MAX_BINDS) return -1;
+        out[k].name  = cur;
+        out[k].init  = bv->as.list.items[i++];
+        out[k].start = start;
+        out[k].bare  = bare && cur->tag == F_SYM && cur->as.sym;
+        k++;
+    }
+    return (int)k;
+}
+
+/* Does any binding of `bv` (walked as rt_bvec_rebinds walks it, with no cap)
+ * bind a name the environment has hypotheses about? */
+static bool rt_bvec_names_in_env(RefineEnv *env, const Form *bv) {
+    uint32_t i = 0, len = bv->as.list.len;
+    while (i < len) {
+        const Form *cur = bv->as.list.items[i];
+        while (cur->tag == F_SYM && cur->as.sym && cur->as.sym->name[0] == '^') {
+            if (++i >= len) return false;
+            cur = bv->as.list.items[i];
+        }
+        if (rt_binder_in_env(env, cur, 0)) return true;
+        i++;
+        if (i < len) {
+            const Form *ann = bv->as.list.items[i];
+            if (ann->tag == F_TYPE_ANN ||
+                (ann->tag == F_KEYWORD && ann->as.sym &&
+                 typekind_from_symbol(ann->as.sym->name) != TY_UNKNOWN))
+                i++;
+        }
+        i++;   /* the init */
+    }
+    return false;
+}
+
+/* `(let [<bindings from `from` on>] body...)` -- what runs below binding
+ * `from - 1` of `node`, for rt_cs_push to ask whether it rebinds a name. */
+static const Form *rt_let_rest(Elab *e, const Form *node, const RtLetBind *bs,
+                               int nb, int from) {
+    const Form *bv = node->as.list.items[1];
+    uint32_t vs = from < nb ? bs[from].start : bv->as.list.len;
+    uint32_t vn = bv->as.list.len - vs;
+    Form **vitems = (Form **)arena_alloc(e->arena, (vn ? vn : 1) * sizeof(Form *));
+    for (uint32_t i = 0; i < vn; i++) vitems[i] = bv->as.list.items[vs + i];
+    uint32_t len = node->as.list.len;
+    Form **items = (Form **)arena_alloc(e->arena, len * sizeof(Form *));
+    for (uint32_t i = 0; i < len; i++) items[i] = node->as.list.items[i];
+    items[1] = form_vec(e->arena, bv->span, vitems, vn);
+    return form_list(e->arena, node->span, items, len);
+}
+
+/* Does `node` itself bind a name the environment has hypotheses about, in
+ * scope below it?  A `fn`'s parameters, a named `let`'s or `letrec`'s names,
+ * a `handle` clause head's.  (An unnamed `let` and a `match` arm are judged
+ * where rt_collect_path_conds handles them, child by child.)  Conservative
+ * about WHICH child is below: an init that runs before its name is bound
+ * still counts, which only costs a crossing. */
+static bool rt_node_binder_shadows_env(RefineEnv *env, const Form *node) {
+    if (!env || node->tag != F_LIST || node->as.list.len < 2) return false;
+    Form *const *it = node->as.list.items;
+    uint32_t len = node->as.list.len;
+    if (rt_head_is(node, "fn")) {
+        /* (fn [params] ...) or (fn name [params] ...) */
+        for (uint32_t i = 1; i < len && i <= 2; i++) {
+            if (it[i]->tag == F_VEC) return rt_binder_in_env(env, it[i], 0);
+            if (it[i]->tag != F_SYM || rt_env_has_name(env, it[i]->as.sym)) return true;
+        }
+        return false;
+    }
+    if (rt_head_is(node, "let") || rt_head_is(node, "letrec") || rt_head_is(node, "loop")) {
+        uint32_t bi = 1;
+        if (it[1]->tag == F_SYM) {
+            if (rt_env_has_name(env, it[1]->as.sym)) return true;
+            bi = 2;
+        }
+        if (bi >= len || it[bi]->tag != F_VEC) return false;
+        return rt_bvec_names_in_env(env, it[bi]);
+    }
+    if (rt_head_is(node, "handle") || rt_head_is(node, "handle-shallow")) {
+        for (uint32_t i = 2; i < len; i += 2)
+            if (rt_binder_in_env(env, it[i], 0)) return true;
+        return false;
+    }
+    return false;
+}
+
 /* `*shadowed` is set when a binder on the path rebinds a name the environment
  * already has hypotheses about.  The caller must then abandon the crossing
  * entirely, not merely drop a fact: the encoder has ONE FLAT NAMESPACE, so the
@@ -4859,29 +4988,58 @@ static bool rt_collect_path_conds(Elab *e, RefineEnv *env, const Form *node,
         return false;
     }
 
-    /* (let [x v] body) -- `x = v` is a fact for a call in the BODY, and no
-     * fact at all for a call inside `v` itself, which runs first.
+    /* (let [x1 v1 ... xk vk] body...) -- sequential, so `xi = vi` is a fact
+     * for a call in a LATER init or in the body, and no fact at all for a call
+     * inside `vi` itself, which runs first.
      *
-     * A binding that SHADOWS a name in scope contributes nothing rather than
-     * declining the whole path: the equation would be `x = <something
-     * mentioning x>` in one flat namespace -- false for every x, and a false
-     * hypothesis proves the goal.  The return-obligation splitter alpha-renames
-     * instead, which it can because it also rewrites the body; here there is no
-     * body to rewrite, only a call form to leave alone, so dropping the one
-     * fact is the honest answer.  Every other condition on the path stays. */
-    if (rt_head_is(node, "let") && node->as.list.len == 3) {
-        const Form *binds = node->as.list.items[1];
-        const Form *body  = node->as.list.items[2];
-        if (binds && binds->tag == F_VEC && binds->as.list.len == 2 &&
-            binds->as.list.items[0]->tag == F_SYM &&
-            binds->as.list.items[0]->as.sym) {
-            const Form *x = binds->as.list.items[0];
-            const Form *v = binds->as.list.items[1];
-            if (rt_collect_path_conds(e, env, v, target, hyps, n, shadowed, rel, depth + 1))
-                return true;
-            if (!rt_collect_path_conds(e, env, body, target, hyps, n, shadowed, rel, depth + 1))
-                return false;
-            if (rt_env_has_name(env, x->as.sym)) { *shadowed = true; return true; }
+     * A binding in scope at the call that shadows a name the ENVIRONMENT has
+     * hypotheses about abandons the crossing (`*shadowed`) -- whatever its
+     * shape: `^mut`, annotated, destructured, or one of several.  Until
+     * 2026-10-17 only a lone bare binding was asked, so `(let [y 1 x -5] ...)`
+     * or `(let [^mut x -5] ...)` under a parameter `x > 0` "proved"
+     * `(needs-pos x)`.
+     *
+     * Only a bare `x v` binding contributes its equation, and not when `v`
+     * mentions `x`: that equation would be `x = <something mentioning x>` in
+     * one flat namespace -- false for every x, and a false hypothesis proves
+     * the goal.  `(let [x 1] (let [x (+ x 1)] (needs-five x)))` was proven
+     * that way.  The return-obligation splitter alpha-renames instead, which
+     * it can because it also rewrites the body; here there is no body to
+     * rewrite, only a call form to leave alone, so dropping the one fact is
+     * the honest answer.  A fact about an earlier binding that a later one
+     * rebinds is dropped by rt_cs_push.  Every other condition on the path
+     * stays. */
+    if (rt_head_is(node, "let") && node->as.list.len >= 3 &&
+        node->as.list.items[1]->tag == F_VEC) {
+        RtLetBind bs[RT_LET_MAX_BINDS];
+        int nb = rt_let_binds(node->as.list.items[1], bs);
+        if (nb < 0) {
+            /* More bindings than the table holds, or a shape elab_let would
+             * not accept: claim no equation, but a name it binds still
+             * shadows (conservatively, wherever the call is). */
+            for (uint32_t i = 1; i < node->as.list.len; i++)
+                if (rt_collect_path_conds(e, env, node->as.list.items[i], target,
+                                          hyps, n, shadowed, rel, depth + 1)) {
+                    if (rt_bvec_names_in_env(env, node->as.list.items[1])) *shadowed = true;
+                    return true;
+                }
+            return false;
+        }
+        int in_scope = -1;   /* the bindings in scope at the call */
+        for (int j = 0; j < nb && in_scope < 0; j++)
+            if (rt_collect_path_conds(e, env, bs[j].init, target, hyps, n, shadowed,
+                                      rel, depth + 1))
+                in_scope = j;
+        for (uint32_t i = 2; i < node->as.list.len && in_scope < 0; i++)
+            if (rt_collect_path_conds(e, env, node->as.list.items[i], target, hyps, n,
+                                      shadowed, rel, depth + 1))
+                in_scope = nb;
+        if (in_scope < 0) return false;
+        for (int j = 0; j < in_scope; j++)
+            if (rt_binder_in_env(env, bs[j].name, 0)) { *shadowed = true; return true; }
+        for (int j = 0; j < in_scope; j++) {
+            const Form *x = bs[j].name, *v = bs[j].init;
+            if (!bs[j].bare || rt_form_mentions_name(e, v, x->as.sym->name, 0)) continue;
             /* A bound FUNCTION is not an arithmetic fact, and asserting it
              * actively costs: the encoder abstracts the lambda to an
              * uninterpreted symbol, and `refine_model_search` declines any VC
@@ -4893,10 +5051,11 @@ static bool rt_collect_path_conds(Elab *e, RefineEnv *env, const Form *node,
              * The general shape of that hazard is worth remembering: adding a
              * hypothesis can never make a goal easier to PROVE incorrectly,
              * but it can make it harder to REFUTE. Hypotheses are not free. */
-            if (!rt_head_is(v, "fn")) rt_cs_push(e, hyps, n, rt_form_eq(e, node->span, x, v), body);
-            return true;
+            if (rt_head_is(v, "fn")) continue;
+            rt_cs_push(e, hyps, n, rt_form_eq(e, node->span, x, v),
+                       rt_let_rest(e, node, bs, nb, j + 1));
         }
-        /* A wider binding list: descend without claiming any equation. */
+        return true;
     }
 
     /* (match scrut pat [when g] body ...) -- an arm contributes what selected
@@ -4992,8 +5151,10 @@ static bool rt_collect_path_conds(Elab *e, RefineEnv *env, const Form *node,
 
     for (uint32_t i = 0; i < node->as.list.len; i++)
         if (rt_collect_path_conds(e, env, node->as.list.items[i], target, hyps,
-                                  n, shadowed, rel, depth + 1))
+                                  n, shadowed, rel, depth + 1)) {
+            if (rt_node_binder_shadows_env(env, node)) *shadowed = true;
             return true;
+        }
     return false;
 }
 

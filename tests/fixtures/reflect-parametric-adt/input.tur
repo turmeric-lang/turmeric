@@ -1,0 +1,28 @@
+;; reflected-measures: a measure over a PARAMETRIC data type (instantiated at
+;; int) -- the unwrap-without-a-check shape.  `opt-unwrap` demands a `Som`; a
+;; caller that matched one already has the tag fact the measure's arm is
+;; selected from, and a constructor-built argument unfolds directly.  Every
+;; obligation proves under --strict-refine.
+(defdata Opt [T] (Som [v : T]) (Non))
+
+(defn ^reflect som? [o : (Opt int)] : bool
+  (match o
+    (Som _) true
+    (Non) false))
+
+(defn opt-unwrap [o : #refine{ x : (Opt int) | (som? x) }] : int
+  (match o
+    (Som v) v
+    (Non) -1))
+
+(defn get-or [o : (Opt int) d : int] : int
+  (match o
+    (Som _) (opt-unwrap o)
+    (Non) d))
+
+(defn main [] : int
+  (println (get-or (Som 4) 0))
+  (println (get-or (Non) 9))
+  (println (opt-unwrap (Som 5)))
+  (println "reflect-parametric-adt")
+  0)

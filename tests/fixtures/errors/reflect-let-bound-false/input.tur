@@ -1,0 +1,20 @@
+;; reflected-measures: a FALSE crossing over a `let`-bound list is refuted
+;; with a counterexample, as the same call with the term written inline is
+;; (errors/reflect-len-depth-false).  The VC carries `(= b (Cons 3 Nil))`, and
+;; the bounded model search cannot evaluate a constructor application, so it
+;; used to decline and the call stayed unknown.  It now reads that hypothesis
+;; as DEFINING `b`: nothing reads b's value except `(len b)`, which evaluates
+;; by its own definitional equation (model_ctor_defns).
+(defdata Lst [] (Cons [hd : int tl : Lst]) (Nil))
+
+(defn ^reflect len [xs : Lst] : int
+  (match xs
+    (Nil) 0
+    (Cons _ t) (+ 1 (len t))))
+
+(defn needs-two [xs : #refine{ v : Lst | (= (len v) 2) }] : int 2)
+
+(defn main [] : int
+  (let [b (Cons 3 (Nil))]
+    (println (needs-two b)))
+  0)

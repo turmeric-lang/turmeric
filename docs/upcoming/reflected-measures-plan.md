@@ -6,10 +6,10 @@
 > first cut (2026-09-29), RF4 and RF6.1 the next day; RF6.2 is deliberately
 > untouched (see "Landed" below). Taken off hold by
 > direct request ("execute the plan"), not by one of the triggers below.
-> **One item is outstanding:** RF3's two-seed fuzz acceptance passes but its
-> population never reaches the RF3/RF4 encoder -- see "What graduation waits
-> on".
-> **Last Updated:** 2026-10-02
+> **Nothing technical is outstanding**; graduation waits on a consumer. The
+> advisory `expires_at` 0.64.0 passed at that cut with no review recorded --
+> see "What graduation waits on".
+> **Last Updated:** 2026-10-17
 >
 > **RF0 decision (recorded 2026-09-29):** a `^reflect`ed function -- and only
 > such a function -- must be shown total (pure, structurally recursive in one
@@ -47,6 +47,53 @@ fixed it, so Bool measures now run to the same fuel limit as Int ones
 ([reflect-bool-measure-cube-blowup](../archive/reflect-bool-measure-cube-blowup.md)).
 `examples/reflected-measures` is the end-to-end program for the feature.
 
+**2026-10-17: a `let`-bound argument unfolds as the term it is bound to.**
+`(let [b (Cons 3 (Nil))] (head-of b))` was unknown although the VC carried
+`(= b (Cons 3 Nil))`: `rf_match_pat` asked the hypotheses only for a tag
+fact. It now selects against the term a hypothesis equates the name to
+(`rf_canon`), which is RF4's own "unfold at that form" as written below. Three
+changes came with it:
+
+- **Refutation.** A false crossing over a `let`-bound list is `TUR-E0371` with
+  a model, as the inline term is. The model search reads `(= b <constructor
+  term>)` as *defining* `b` when nothing reads b's value except applications,
+  which evaluate by their own equations (`model_ctor_defns`). A second
+  definition, a self-mention, or a cycle declines.
+- **Multi-binding lets.** Call-site path facts came from a lone bare `let`
+  binding with one body form only. A `let` of several bare bindings, or with
+  several body forms, now gives one fact per binding, in order.
+- **Two soundness fixes in the same collector**, both "proved under
+  `--strict-refine`, panicked at run time" (a crossing never elides the
+  callee's check):
+  - `(let [x 1] (let [x (+ x 1)] (needs-five x)))` asserted `x = (+ x 1)` in
+    the flat namespace. A binding that mentions its own name now contributes
+    no fact.
+  - A binder that shadows a refined name abandoned the crossing only when it
+    was a lone bare `let` binding or a `match` binder. A multi-binding,
+    `^mut` or annotated `let` binding, or a `fn` parameter, let `(needs-pos x)`
+    read the parameter's `x > 0` of an `x` that is -5. Every such crossing is
+    now abandoned -- which `--strict-refine` does not report
+    ([refine-abandoned-crossing-silent-under-strict](../reported/refine-abandoned-crossing-silent-under-strict.md)).
+
+Fixtures: `reflect-let-bound`, `errors/reflect-let-bound-false`,
+`refine-let-multi-binding`, `errors/refine-crossing-self-shadow-let`, and
+`tests/run-flags.sh` `refine-crossing-shadowing-binders`. The fuzzer's
+`shape_reflect` gained a `let_bound` kind (single, chained, nested,
+self-shadowing and `^mut`-reassigned bindings, at a return obligation and at a
+crossing).
+
+The same day the example was made honest again
+([report](../archive/reflected-measures-example-float-contract-no-longer-proves.md)).
+Since float-proofs-assume-exact-reals (2026-10-08) a real-sorted `+` is opaque
+to S2, so its summing Float contract had gone unknown. `within-cutoff` is now
+stated over the comparison-only `slowest`, and `tests/run-flags.sh`
+`example-reflected-measures` runs `check --strict-refine` and `run` on it.
+Seven more fixtures exercise shapes the list-only ones did not:
+`reflect-typestate`, `reflect-shape-predicate`, `reflect-parametric-adt`,
+`reflect-stack-machine` (+ `errors/reflect-stack-machine-underflow`),
+`reflect-tree-measures`, `reflect-index-bound`, and
+`reflect-float-comparison-measure` (+ `errors/reflect-float-comparison-false`).
+
 Three things the first cut settled that the phases below did not predict:
 
 - **`if` needs no term.** The logic has no if-then-else, so a body under an
@@ -78,7 +125,7 @@ proves from the precondition's unfolding plus `t = (.tl xs)`) proves, its
 sibling `errors/reflect-nonground-no-tag` stays unknown. The fixture
 returns a `bool` because two pre-existing bugs surfaced on the way: a
 refined **ADT** result type miscompiles outright
-(`docs/reported/refined-adt-return-type-miscompiles.md`, filed, unrelated
+([refined-adt-return-type-miscompiles](../archive/refined-adt-return-type-miscompiles.md), filed then, since archived; unrelated
 to reflection), and a `match` arm's binders were declared at the result
 refinement's sort instead of their field's, which in a `bool`-returning
 body dropped every `(= t (.tl xs))` as a Bool/Int mismatch -- fixed in
@@ -556,10 +603,13 @@ below, which supersedes this section for anything forward-looking.
 
 ## What graduation waits on
 
-The row is `prototype`, `introduced 0.57.0`, `expires_at 0.61.0` -- advisory,
-and it never blocks a release. Reviewed at the v0.59.0 cut (2026-10-02); not
-due, nothing changed. Three things stand between here and graduating, in
-order of how much they should weigh:
+The row is `prototype`, `introduced 0.57.0`, `expires_at 0.64.0` -- advisory,
+and it never blocks a release. Reviewed at the v0.59.0 cut (2026-10-02), when
+it read 0.61.0; bumped to 0.64.0 at the v0.62.0 cut (2026-10-03, "waiting on a
+consumer"). The 0.64.0 cut (2026-10-10) passed it with no review, so the
+decision -- graduate, shelve, or bump with a reason -- is open as of 0.65.5.
+Three things stood between here and graduating, in order of how much they
+should weigh. Only item 2 is still open:
 
 1. ~~**RF3's fuzz acceptance, as this plan wrote it.**~~ **Discharged
    2026-10-03.** The 2026-10-02 run passed but never generated a recursive
@@ -584,7 +634,11 @@ order of how much they should weigh:
 2. **Still no consumer.** Nothing in `stdlib/` or on the v1 track writes
    `^reflect`. Graduating makes always-on a feature with no caller, which
    freezes a surface against zero usage evidence. The three triggers below
-   are unchanged and none has fired.
+   are unchanged and none has fired. The first of them cannot fire while the
+   gate exists: a `^reflect` in a stdlib file warns in every program that
+   loads it -- "ignored" without the flag (`elab_fns.c`, the `^reflect`
+   attribute block), `TUR-W0060` with it -- so a stdlib consumer realistically
+   lands in the same change as graduation.
 3. ~~**Two known completeness limits, each a decision about what to freeze.**
    `(= r true)` stays unknown where bare `r` proves, and an RF4 fact that
    proves at a return obligation is unknown at a call-site crossing.~~
@@ -594,6 +648,25 @@ order of how much they should weigh:
    gets the arm's constructor facts behind the guards described under
    "One thing to know about crossings". RF6.2 (`ENC_MAX_PROPAGATE` as a well-founded budget) remains
    deliberately not done -- no real program has hit the depth-4 cutoff.
+
+What graduating would freeze, as measured 2026-10-17 (the passing shapes are
+fixtures; see the dated note under "Landed"):
+
+- **Proves:** ground and `let`-bound constructor terms, to the fuel limit;
+  variables a `match` arm pins (RF4), at return obligations and at crossings;
+  non-recursive shape and typestate predicates over any data type, parametric
+  ones included; measures with extra non-decreasing arguments
+  (`reflect-stack-machine`); measures calling other reflected measures.
+- **Does not:** anything needing induction (`len t >= 0`); a value returned by
+  a function call or held by a top-level `def` (globals are not refinement
+  facts at all, reflected or not:
+  [refine-top-level-def-not-a-fact](../reported/refine-top-level-def-not-a-fact.md));
+  a `float` measure that does arithmetic;
+  a reflected function that builds data (`app` is `TUR-E0384` at the purity
+  gate, whose walk admits "literals, if/let/do/match, arithmetic, and calls to
+  functions already known pure"); a refined RETURN type on the measure itself (it makes
+  the measure impure for predicates, `TUR-E0375`, so a lemma cannot be
+  attached that way).
 
 ## The trigger for a consumer
 

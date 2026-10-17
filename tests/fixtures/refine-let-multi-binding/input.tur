@@ -1,0 +1,16 @@
+;; A multi-binding `let` gives a call in its body one fact per binding, as the
+;; same bindings written as nested lets do.  The crossing's path collector used
+;; to claim an equation only for a lone bare binding, so `(let [a 1 b (+ a 1)]
+;; (needs-two b))` was unknown -- an error under --strict-refine -- while
+;; `(let [a 1] (let [b (+ a 1)] ...))` proved.  A call in a LATER binding's
+;; init sees the earlier bindings' facts too.
+(defn needs-two [x : #refine{ v : int | (= v 2) }] : int x)
+
+(defn main [] : int
+  (let [a 1
+        b (+ a 1)]
+    (println (needs-two b)))
+  (let [a 1
+        b (needs-two (+ a 1))]
+    (println b))
+  0)
