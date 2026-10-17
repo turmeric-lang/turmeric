@@ -1568,7 +1568,7 @@
   ```)
 ;; =============================================================================
 ;; Server settings: read timeout and per-server limits
-;; (docs/upcoming/spices/tourist-on-stdlib-httpd-plan.md H1)
+;; (docs/archive/tourist-on-stdlib-httpd-plan.md H1)
 ;; =============================================================================
 ;;; httpd-set-read-timeout! -- set how long the server waits on a client.
 ;;;

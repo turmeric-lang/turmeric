@@ -92,7 +92,7 @@ Coupling to carry:
   `cd vscode-syntax-ext` instructions. Rewrite them to `git clone` the new
   repo (and prefer `Plug 'turmeric-lang/vim-turmeric'` style lines). Guides link by GitHub URL, so the links must point at the new repo.
 - Smaller refs: `CODEOWNERS`, `tools/ci/collect-loc.py` (LOC buckets),
-  `docs/upcoming/github-org-move-plan.md` and `security-audit-plan.md`.
+  `docs/archive/github-org-move-plan.md` and `security-audit-plan.md`.
 
 ### 2. tvm (`turmeric-lang/tvm`)
 

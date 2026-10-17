@@ -120,7 +120,7 @@ jobs:
           echo "rc=$rc" >> "$GITHUB_OUTPUT"
           exit 0
 
-      # The full-size stress fixtures (docs/upcoming/stress-fixture-tiering-plan.md).
+      # The full-size stress fixtures (docs/archive/stress-fixture-tiering-plan.md).
       # A fixture carrying `requires.stress` is the 1e7 twin of a per-PR fixture
       # that runs 1e6; every harness skips it unless TUR_STRESS=1, and this is
       # the only place that sets it.  Both paths, because the cost and the

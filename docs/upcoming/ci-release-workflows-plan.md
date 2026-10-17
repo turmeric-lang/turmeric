@@ -11,7 +11,7 @@
 > a one-shot cut instead -- the author's call, 2026-10-05: an interactive
 > review PR was more mess than the review was worth, and the one-shot shape
 > also needs no PAT. That brings it close to
-> [release-in-actions-plan](release-in-actions-plan.md); the differences are
+> [release-in-actions-plan](../archive/release-in-actions-plan.md); the differences are
 > that notes come from the Mistral API, and `release.yml` is dispatched
 > unchanged rather than extracted into a reusable workflow. One of the two
 > plans should be archived once a real release has gone through.
@@ -206,4 +206,10 @@ worth a `dry_run` look before letting either publish.
 - [ ] Slim the `/cut-*-release` skills to `gh workflow run release-cut.yml -f
       bump=<level>` (a `dry_run` first when the range is large), keeping their
       "Things to refuse".
-- [ ] Archive this plan or release-in-actions-plan.
+- [x] Archive this plan or release-in-actions-plan. release-in-actions-plan
+      was archived 2026-10-17.
+- [ ] Carried from release-in-actions-plan R3: `release.yml`'s docs job clones
+      no `turmeric-spices`, so `genspices.py` finds nothing and the release's
+      `turmeric-docs-<tag>.tar.gz` ships no spice pages (v0.65.5 has only
+      `docs/html/spices/index.html`). It also runs `genpack.py` without the
+      `--strict-links` the `Justfile` recipe uses.

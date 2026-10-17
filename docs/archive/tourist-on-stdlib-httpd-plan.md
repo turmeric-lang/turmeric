@@ -1,14 +1,18 @@
 # Plan: tourist on stdlib httpd, and the Express-shaped middleware set
 
-> Status: implemented (2026-10-10), on branch
-> `claude/tourist-stdlib-httpd-plan-vwqnhc` in both repos, not yet merged.
-> H0 skipped (optional); H1-H5 done. Deviations: spices/httpd's
-> `:tur-version` floor is a comment (dev builds report v0.64.0, which would
-> refuse); `serve-static!` gained stdlib's dotfile refusal along with ETag/304;
-> `set-cookie!` returns nothing (an empty name queues nothing); per-route
-> checks use a `guarded` combinator, since sub-apps take no `use!`; tourist's
-> `router-free` is `pattern-free` (a compiler name clash, see
-> `docs/reported/module-export-and-loaded-global-share-c-name.md`).
+> Status: DONE -- archived 2026-10-17. H0 skipped (optional); H1-H5 merged
+> as turmeric #1139 (stdlib httpd, first released in v0.64.1) and
+> turmeric-spices #98. The last open item, spices/httpd's `:tur-version`
+> floor, is `">=0.64.1"` in turmeric-spices #108 (checked against the
+> release binaries: v0.64.1 passes every httpd CI stage, v0.64.0 now stops
+> with TUR-E0621). Deviations: `serve-static!` gained stdlib's dotfile
+> refusal along with ETag/304; `set-cookie!` returns nothing (an empty name
+> queues nothing); per-route checks use a `guarded` combinator, since
+> sub-apps take no `use!`; tourist's `router-free` is `pattern-free`. That
+> rename began as a workaround for a compiler name clash
+> ([module-export-and-loaded-global-share-c-name](module-export-and-loaded-global-share-c-name.md),
+> fixed 2026-10-11) and is kept: it shipped in tourist 0.3.0 and names
+> what it frees.
 > Scope: turmeric `stdlib/httpd.tur` (connection upgrade, new middleware);
 > `spices/httpd/` (becomes a typed layer over stdlib httpd);
 > `spices/tourist/` and `spices/tourist-session/` (move onto it).

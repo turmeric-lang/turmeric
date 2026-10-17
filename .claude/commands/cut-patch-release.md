@@ -336,21 +336,6 @@ just tell them to follow it on the Actions page. Do not block
 waiting for the release workflow to finish -- it takes 1-2 minutes
 per matrix leg and the user can check on it themselves.
 
-**On the first release cut after the 2026-10-02 org move**, verify a published
-asset's attestation once the workflow finishes -- O6 item 4 of
-[docs/upcoming/github-org-move-plan.md](../../docs/upcoming/github-org-move-plan.md),
-the one path no test covers:
-
-```sh
-gh release download "v<NEW>" --repo turmeric-lang/turmeric -p '*macos-arm64.tar.gz'
-gh attestation verify "turmeric-v<NEW>-macos-arm64.tar.gz" --repo turmeric-lang/turmeric
-```
-
-A 404 means the post-move form is `--owner turmeric-lang` instead, and
-`README.md` plus all three `cut-*-release.md` files are documenting the wrong
-command. Report that rather than leaving it wrong -- a verification failure
-here reads to users as a compromised download.
-
 End by reporting:
 - The new version
 - The commit SHA of the bump commit

@@ -354,7 +354,7 @@ inside libturi, which the gate linked uninstrumented. Fixed the same day.
 
 ## Found refining the nng async plan (filed 2026-10-10)
 
-Spiking [nng-async-plan](../upcoming/spices/nng-async-plan.md) against v0.63.9
+Spiking [nng-async-plan](../archive/nng-async-plan.md) against v0.63.9
 turned up one compiler defect. The reactor guide's examples were affected by
 it. It is resolved, along with a second defect fixing it exposed. Implementing
 the plan's NG-C turned up a test-coverage gap in spices CI, which is open.
