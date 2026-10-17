@@ -4,9 +4,12 @@
 > O2 (redirect verification) RESOLVED; O3 (org pre-staging) done; Tiers 1-3
 > transferred, spices before turmeric per 4.1; **O4 (the Class A owner
 > literals) and O5 (the 502-occurrence Class B doc sweep) both landed in the
-> same PR as this text.** What remains is **O6**, and of its four checks three
-> are done -- only "verify a release cut under the org" is genuinely
-> outstanding, since it needs a release. Written in
+> same PR as this text.** **O6 closed 2026-10-17 and the plan is archived:**
+> the last check, a post-move release's attestation, passed on v0.65.5's
+> `macos-arm64` asset with `--repo turmeric-lang/turmeric` (O6 item 4, 6.2).
+> The "Still owed" cells in section 0a for `asdf-turmeric`, `turmeric-godot`
+> and `trowel` name prose sweeps in those repos, which redirects keep
+> working; they were not re-checked at archiving. Written in
 > answer to "what is a good option for moving turmeric repos out of my
 > rjungemann account -- a free-tier GH org?" The short answer is **yes, GitHub
 > Free for organizations is sufficient and costs nothing here**, and section 1
@@ -87,8 +90,8 @@ resolves a URL into it at build or install time.
 | 1 | `asdf-turmeric` | `turmeric-lang` | **2026-10-02** | `lib/utils.bash`, `README.md`, `bin/help.overview` |
 | 1 | `turmeric-godot` | `turmeric-lang` | **2026-10-02** | `build.yml:36,107`, `README.md` |
 | 2 | `trowel` | `turmeric-lang` | **2026-10-02** | cask name (4.3); `CMakeLists.txt:219`. **Its 7 secrets carried over** -- see 2.1 |
-| 3 | `turmeric-spices` | `turmeric-lang` | **2026-10-02** | its own repo's 3 hardcoded refs (`ci.yml:36,373,404`) -- a spices-side PR |
-| 3 | `turmeric` | `turmeric-lang` | **2026-10-02** | O6: verify a post-move release's attestation. O4 + O5 done; `SENTRY_DSN` org-wide |
+| 3 | `turmeric-spices` | `turmeric-lang` | **2026-10-02** | nothing -- its 3 hardcoded refs were fixed in turmeric-spices #81 (5d66d78) |
+| 3 | `turmeric` | `turmeric-lang` | **2026-10-02** | nothing -- O4 + O5 done, O6 item 4 verified 2026-10-17; `SENTRY_DSN` org-wide |
 
 Every transfer was verified afterwards, not assumed: for all five, an
 old-path `git clone --depth 1` and `git ls-remote` still succeed, and the
@@ -742,9 +745,10 @@ CI going green proves almost nothing here. Check by hand:
    that did. The remaining question is not verification but whether to create
    real `homebrew-*` tap repos so the short form works.
 4. **Attestation:** DONE 2026-10-02, and it found a real documentation bug --
-   see 6.2. Still outstanding: the same check on a release cut *after* the
-   move, to confirm `--repo turmeric-lang/turmeric` is the right form going
-   forward.
+   see 6.2. The post-move half is DONE 2026-10-17: `gh attestation verify
+   turmeric-v0.65.5-macos-arm64.tar.gz --repo turmeric-lang/turmeric`
+   succeeded (digest `sha256:e1fe8454...`; build and signer workflow
+   `turmeric-lang/turmeric/.github/workflows/release.yml@refs/tags/v0.65.5`).
 
 ## 6. Two traps worth naming
 
@@ -803,9 +807,9 @@ Two consequences worth keeping in view:
 - A user reporting a 404 here has used the wrong flag. Say so explicitly;
   "verification failed" on a release binary is exactly the message that makes
   someone assume compromise.
-- The post-move form is still **unverified** -- it cannot be tested until a
-  release is cut under the org. Treat `--repo turmeric-lang/turmeric` as the
-  expectation, not a measurement, until then (O6 item 4).
+- The post-move form is **verified** (2026-10-17, v0.65.5): `--repo
+  turmeric-lang/turmeric` succeeds, with the policy pinning both the source
+  owner and the source repository to `turmeric-lang` (O6 item 4).
 
 ## 7. What this plan does not do
 
