@@ -915,13 +915,6 @@ CSS = """\
   --green-line:    rgba(69,111,32,0.25);
 }
 
-/* /theme.js sets this for the two frames around a switch, so the page
-   repaints at once instead of each transition fading on its own clock. */
-.theme-switching,
-.theme-switching *,
-.theme-switching *::before,
-.theme-switching *::after { transition: none !important; }
-
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
 html { font-size: 16px; }
@@ -969,7 +962,6 @@ em { color: var(--green); font-style: italic; }
   color: var(--text-sec);
   padding: 6px 12px;
   border-radius: 6px;
-  transition: color 0.12s, background 0.12s;
   white-space: nowrap;
 }
 .site-header .nav-links a:hover { color: var(--text-primary); background: var(--bg-hover); text-decoration: none; }
@@ -1006,7 +998,6 @@ em { color: var(--green); font-style: italic; }
   background: transparent;
   color: var(--text-sec);
   cursor: pointer;
-  transition: color 0.12s, background 0.12s;
 }
 .theme-toggle:hover { color: var(--text-primary); background: var(--bg-hover); }
 .theme-toggle:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
@@ -1025,7 +1016,6 @@ em { color: var(--green); font-style: italic; }
   padding: 7px 14px;
   border-radius: 7px;
   white-space: nowrap;
-  transition: color 0.12s, background 0.12s, border-color 0.12s;
 }
 .btn-ghost {
   color: var(--text-sec);
@@ -1052,7 +1042,6 @@ em { color: var(--green); font-style: italic; }
   padding: 0.3rem 0.65rem;
   font-size: 0.875rem;
   width: 220px;
-  transition: border-color 0.15s, width 0.2s;
   font-family: inherit;
 }
 .search-input:focus { outline: none; border-color: var(--gold); width: 280px; }
@@ -1131,7 +1120,6 @@ em { color: var(--green); font-style: italic; }
   color: var(--text-primary);
   font-family: inherit;
   margin-bottom: 1rem;
-  transition: color 0.12s;
 }
 .sidebar a.sidebar-back:hover { color: var(--gold-bright); text-decoration: none; }
 /* "Up" links -- All Guides / All Modules / All Spices. One row, directly under
@@ -1180,7 +1168,6 @@ em { color: var(--green); font-style: italic; }
   border-radius: 8px;
   padding: 1.25rem 1.5rem;
   margin-bottom: 1.25rem;
-  transition: background 0.15s, border-color 0.15s;
 }
 .def-card:target { border-color: var(--gold); }
 
@@ -1359,7 +1346,6 @@ details.internal-section summary {
   border: 1px solid var(--border);
   border-radius: 8px;
   padding: 1rem 1.25rem;
-  transition: background 0.15s, border-color 0.15s;
 }
 a.index-card:hover { background: var(--bg-hover); border-color: var(--border-mid); text-decoration: none; }
 .index-card h3 {
@@ -1398,7 +1384,6 @@ a.index-card:hover { background: var(--bg-hover); border-color: var(--border-mid
   height: 2px;
   background: var(--text-sec);
   margin: 4px 0;
-  transition: background 0.15s;
 }
 .hamburger:hover span { background: var(--text-primary); }
 

@@ -220,10 +220,7 @@ section {
   height: 100%;
   background: var(--gold-fill);
   border-radius: 2px;
-  transform-origin: left;
-  animation: growBar 1.2s ease both;
 }
-@keyframes growBar { from { transform: scaleX(0); } to { transform: scaleX(1); } }
 
 .bench-compare { margin-top: 10px; font-size: 12px; color: var(--text-dim); font-family: 'Iosevka', monospace; }
 
@@ -315,7 +312,6 @@ section {
   margin-bottom: -1px;
   padding: 0 0 9px;
   cursor: pointer;
-  transition: color 0.12s, border-color 0.12s;
 }
 .install-tab:hover { color: var(--text-sec); }
 .install-tab.active {
@@ -365,7 +361,6 @@ section {
   font-weight: 400;
   color: var(--text-dim);
   letter-spacing: 0.02em;
-  transition: color 0.14s;
 }
 .infl-item:hover,
 .infl-item:focus-visible { color: var(--text-sec); }
