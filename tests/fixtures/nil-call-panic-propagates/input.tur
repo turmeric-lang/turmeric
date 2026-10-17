@@ -1,0 +1,29 @@
+;; nil-call-panic-not-propagated: a panic inside a `: nil` call did not stop
+;; its caller.  A call with a value gets its panic-signal check where it is
+;; hoisted into a temp; a nil call has none to hoist, so its caller printed
+;; "after boom" before a later call noticed the signal.  Both the direct
+;; emitter (`work`) and the CPS backend (`work-cps`, which performs) skipped it.
+(defeffect Ask [] : int)
+
+(defn boom [n : int] : nil
+  (when (> n 0) (panic "boom")))
+
+(defn work [n : int] : int
+  (boom n)
+  (println "after boom")
+  n)
+
+(defn work-cps [] : int
+  (let [n (perform (Ask))]
+    (boom n)
+    (println "after boom (cps)")
+    n))
+
+(defn main [] : int
+  (let [r (catch-unwind (fn [] (work 1)))]
+    (println (if (ok? r) "ok" "caught")))
+  (let [r (catch-unwind (fn [] (handle (work-cps) (Ask [] k) (resume k 1))))]
+    (println (if (ok? r) "ok" "caught")))
+  (let [r (catch-unwind (fn [] (work 0)))]
+    (println (if (ok? r) "ok" "caught")))
+  0)

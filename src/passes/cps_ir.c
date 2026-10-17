@@ -889,7 +889,12 @@ static bool case_call_runs_direct(CpsB *b, const Binding *fn) {
  * (call_slot_nonretaining), so a capturing closure bound here is dead once the
  * call returns and its env may be reaped at the entry boundary. */
 typedef struct { Expr *expr; CVar x; bool reap_ok; } PendItem;
-typedef struct { PendItem items[32]; uint32_t n; } Pending;
+/* cps-ir-pending-list-overflow-drops-bindings: arena-backed and growable
+ * (pend_push).  It was `PendItem items[32]`, and atomize dropped the 33rd
+ * binding while still returning its name, so cc met an undeclared `__tN`.
+ * A copy (`Pending pp = hp;`) shares the buffer, which is safe: each copy
+ * appends only past its own `n`, and only one of them is live at a time. */
+typedef struct { PendItem *items; uint32_t n, cap; } Pending;
 
 /* forward decls */
 static CTerm *cps_tail(CpsB *b, Expr *e, CKont kont);
@@ -1438,16 +1443,10 @@ static CTerm *cps_bind_let_init(CpsB *b, const Expr *let, uint32_t idx, CVar bx,
 /* handle-over-effectful-fn-field-in-arg-let-evicted: the registry-threaded
  * effectful fn-value calls (E2a / E2c) ATOMIZE their arguments -- a non-atomic
  * one becomes a pending CPS binding folded around the call -- so they never
- * needed atomic arguments, only room in the Pending array (32, and atomize
- * silently drops past it; one slot is the E2c field-load callee).  Requiring
- * call_args_atomic evicted `(.run s (let [v 1.25] v))` -- and with it every
- * handler and performer of the effect. */
-static bool call_args_pendable(const Expr *e) {
-    uint32_t non_atomic = 0;
-    for (uint32_t i = 0; i < e->as.call_.n_args; i++)
-        if (!is_atomic(e->as.call_.args[i])) non_atomic++;
-    return non_atomic + 1 < 32;
-}
+ * need atomic arguments.  Requiring call_args_atomic evicted
+ * `(.run s (let [v 1.25] v))` -- and with it every handler and performer of
+ * the effect.  (They used to need room in a 32-entry Pending array, checked
+ * by a call_args_pendable guard; the array grows now.) */
 
 /* mutual-tail-call-through-guard-grows-the-stack: an argument the direct
  * emitter spells with no call in it -- an atom, a quoted symbol, or either one
@@ -2555,6 +2554,20 @@ static bool call_args_delegatable(CpsB *b, const Expr *e) {
     return true;
 }
 
+static void pend_push(CpsB *b, Pending *p, Expr *e, CVar x, bool reap_ok) {
+    if (p->n == p->cap) {
+        uint32_t cap = p->cap ? p->cap * 2 : 32;
+        PendItem *items = arena_alloc(b->a, cap * sizeof(PendItem));
+        if (p->n) memcpy(items, p->items, p->n * sizeof(PendItem));
+        p->items = items;
+        p->cap = cap;
+    }
+    p->items[p->n].expr = e;
+    p->items[p->n].x = x;
+    p->items[p->n].reap_ok = reap_ok;
+    p->n++;
+}
+
 static CAtom atomize(CpsB *b, Expr *e, Pending *p) {
     if (is_atomic(e)) {
         /* cps-while-native read-after-set: a straight-line read of a carried var
@@ -2566,7 +2579,7 @@ static CAtom atomize(CpsB *b, Expr *e, Pending *p) {
         return atom_of(e);
     }
     CVar x = fresh_cvar(b, e ? &e->type : NULL);
-    if (p->n < 32) { p->items[p->n].expr = e; p->items[p->n].x = x; p->n++; }
+    pend_push(b, p, e, x, false);
     return atom_cvar(x);
 }
 
@@ -2580,13 +2593,12 @@ static CAtom *fncps_atomize_args(CpsB *b, const Expr *e, Pending *pp) {
     CAtom *args = arena_alloc(b->a, (n ? n : 1) * sizeof(CAtom));
     for (uint32_t i = 0; i < n; i++) {
         Expr *a = e->as.call_.args[i];
-        if (a && a->kind == EX_DICT && pp->n < 32) {
+        if (a && a->kind == EX_DICT) {
             Type *wt = arena_alloc(b->a, sizeof(Type));
             memset(wt, 0, sizeof(Type));
             wt->kind = TY_INT;
             CVar x = fresh_cvar(b, wt);
-            pp->items[pp->n].expr = a; pp->items[pp->n].x = x;
-            pp->items[pp->n].reap_ok = false; pp->n++;
+            pend_push(b, pp, a, x, false);
             args[i] = atom_cvar(x);
             continue;
         }
@@ -4627,6 +4639,68 @@ static void loop_rs_scan(CpsB *b, const Expr *e, uint32_t *mask, bool in_branch)
         return NULL; \
     } while (0)
 
+/* Does `e` contain a `return` of the enclosing function?  Not one inside a
+ * nested `fn`, which returns from that fn. */
+static bool expr_has_return(const Expr *e, int depth) {
+    e = ascribe_peel(e);
+    if (!e || depth > 256) return depth > 256;   /* too deep to tell: assume so */
+    #define HR(x) expr_has_return((x), depth + 1)
+    switch (e->kind) {
+        case EX_RETURN:   return true;
+        case EX_CALL:
+            if (e->as.call_.fn_expr && HR(e->as.call_.fn_expr)) return true;
+            for (uint32_t i = 0; i < e->as.call_.n_args; i++)
+                if (HR(e->as.call_.args[i])) return true;
+            return false;
+        case EX_BUILTIN:
+            for (uint32_t i = 0; i < e->as.builtin.n; i++)
+                if (HR(e->as.builtin.args[i])) return true;
+            return false;
+        case EX_DO:
+            for (uint32_t i = 0; i < e->as.do_.n; i++)
+                if (HR(e->as.do_.items[i])) return true;
+            return false;
+        case EX_LET: case EX_LETREC:
+            for (uint32_t i = 0; i < e->as.let_.n; i++)
+                if (HR(e->as.let_.bindings[i].init)) return true;
+            return HR(e->as.let_.body);
+        case EX_IF:
+            return HR(e->as.if_.cond) || HR(e->as.if_.then_)
+                || (e->as.if_.else_or_null && HR(e->as.if_.else_or_null));
+        case EX_MATCH:
+            if (HR(e->as.match_.scrutinee)) return true;
+            for (uint32_t i = 0; i < e->as.match_.n_arms; i++)
+                if ((e->as.match_.arms[i].guard && HR(e->as.match_.arms[i].guard)) ||
+                    HR(e->as.match_.arms[i].body))
+                    return true;
+            return false;
+        case EX_HANDLE:
+            if (e->as.handle_.handle) {
+                HandleExpr *h = e->as.handle_.handle;
+                if (HR(h->body)) return true;
+                for (uint8_t i = 0; i < h->n_cases; i++)
+                    if (HR(h->cases[i].body)) return true;
+            }
+            return false;
+        case EX_PERFORM: {
+            PerformExpr *pf = e->as.perform_.perform;
+            for (uint8_t i = 0; pf && i < pf->n_args; i++)
+                if (HR(pf->args[i])) return true;
+            return false;
+        }
+        case EX_RESUME: {
+            ResumeExpr *rs = e->as.resume_.resume;
+            return rs && (HR(rs->k) || HR(rs->value));
+        }
+        case EX_WHILE:    return HR(e->as.while_.cond) || HR(e->as.while_.body);
+        case EX_SET:      return HR(e->as.set_.value);
+        case EX_CAST:     return HR(e->as.cast_.expr);
+        case EX_REINTERPRET: return HR(e->as.reinterpret_.expr);
+        default:          return false;
+    }
+    #undef HR
+}
+
 static CTerm *build_loop(CpsB *b, Expr *e, CVar x, CTerm *rest) {
     (void)x;   /* the while's unit result is subsumed by the loop's exit delivery */
     Expr *cond = e->as.while_.cond;
@@ -4659,6 +4733,15 @@ static CTerm *build_loop(CpsB *b, Expr *e, CVar x, CTerm *rest) {
         /* A control-free loop followed by statements keeps its whole-form
          * delegation; the join reification is for loops that perform. */
         if (safe_to_delegate(b, e)) LOOP_REJECT();
+        /* cps-loop-return-acts-as-break: in join mode the helper's KK_RET is
+         * the join -- the code after the loop -- and a `return` in the body
+         * lowers to a delivery to KK_RET too, so it left only the loop: the
+         * function went on to run what followed (1003 where the interpreter
+         * printed 103).  Telling the two apart needs a continuation past the
+         * join, which the helper does not have; refuse the loop rather than
+         * compute a wrong value.  A loop that is the function's last form
+         * (plain mode) is unaffected: there KK_RET is the function's own. */
+        if (expr_has_return(body, 0)) LOOP_REJECT();
         join_mode = true;
         unit_exit = true;
         CVar j = fresh_cvar(b, x.type);
@@ -5073,7 +5156,7 @@ static Expr *rank2_hoist_args(CpsB *b, Expr *e, Pending *pp) {
     uint32_t n = e->as.call_.n_args, need = 0;
     for (uint32_t i = 0; i < n; i++)
         if (!rank2_atomic_arg(e->as.call_.args[i])) need++;
-    if (!need || pp->n + need > 32 || n > CPS_FNCPS_MAX_ARGS) return e;
+    if (!need || n > CPS_FNCPS_MAX_ARGS) return e;
     if (!fncps_forall_call_ok_as(fn, e, true)) return e;
     Expr *c = arena_alloc(b->a, sizeof(Expr));
     *c = *e;
@@ -5083,10 +5166,7 @@ static Expr *rank2_hoist_args(CpsB *b, Expr *e, Pending *pp) {
         if (rank2_atomic_arg(a)) { na[i] = a; continue; }
         CVar y = fresh_cvar(b, &a->type);
         na[i] = cvar_expr(b, &y, &a->type, a->span);
-        pp->items[pp->n].expr = a;
-        pp->items[pp->n].x = y;
-        pp->items[pp->n].reap_ok = false;
-        pp->n++;
+        pend_push(b, pp, a, y, false);
     }
     c->as.call_.args = na;
     return c;
@@ -5170,10 +5250,9 @@ static CTerm *delegate_call_atomized(CpsB *b, Expr *e, CVar x, CTerm *rest,
             nargs[i] = a;
             continue;
         }
-        if (p.n >= 32) return NULL;
         CVar y = fresh_cvar(b, &a->type);
         nargs[i] = cvar_expr(b, &y, &a->type, a->span);
-        p.items[p.n].expr = a; p.items[p.n].x = y; p.n++;
+        pend_push(b, &p, a, y, false);
     }
     Expr *call = arena_alloc(b->a, sizeof(Expr));
     *call = *e;
@@ -5311,8 +5390,7 @@ static CTerm *cps_tail(CpsB *b, Expr *e, CKont kont) {
              * continuation the way an effectful-row one does
              * (call_through_fat_param); the dispatch calls an unregistered --
              * pure -- value directly. */
-            if (!call_is_effectful_fnvalue(e) && call_threads_via_registry(e)
-                && call_args_pendable(e)) {
+            if (!call_is_effectful_fnvalue(e) && call_threads_via_registry(e)) {
                 Pending pp = {0};
                 const Binding *pf = e->as.call_.fn_binding;
                 uint32_t n = e->as.call_.n_args;
@@ -5335,8 +5413,7 @@ static CTerm *cps_tail(CpsB *b, Expr *e, CKont kont) {
                  * A call through a threadable let-bound lambda likewise
                  * (cps_ir_thread_local_add). */
                 const Binding *pf = e->as.call_.fn_binding;
-                if (pf && (cps_ir_thread_param_has(pf) || cps_ir_thread_local_has(pf))
-                    && call_args_pendable(e)) {
+                if (pf && (cps_ir_thread_param_has(pf) || cps_ir_thread_local_has(pf))) {
                     Pending pp = {0};
                     uint32_t n = e->as.call_.n_args;
                     CAtom *args = arena_alloc(b->a, (n ? n : 1) * sizeof(CAtom));
@@ -5356,8 +5433,7 @@ static CTerm *cps_tail(CpsB *b, Expr *e, CKont kont) {
                  * reaches the caller's handler.  The field-stored fn-value is
                  * force-registered (emit_cps_ir.c registration loop). */
                 if (!pf && e->as.call_.fn_expr
-                    && e->as.call_.fn_expr->kind == EX_GET_FIELD
-                    && call_args_pendable(e)) {
+                    && e->as.call_.fn_expr->kind == EX_GET_FIELD) {
                     Pending pp = {0};
                     CAtom fnatom = atomize(b, e->as.call_.fn_expr, &pp);
                     uint32_t n = e->as.call_.n_args;
@@ -5849,8 +5925,7 @@ static CTerm *cps_bind(CpsB *b, Expr *e, CVar x, CTerm *rest) {
             /* An empty-row call through a fat thread param, in BIND position:
              * the continuation `rest` reified as a heap join, threaded to the
              * value's entry via the registry (see cps_tail). */
-            if (!call_is_effectful_fnvalue(e) && call_threads_via_registry(e)
-                && call_args_pendable(e)) {
+            if (!call_is_effectful_fnvalue(e) && call_threads_via_registry(e)) {
                 Pending pp = {0};
                 const Binding *pf = e->as.call_.fn_binding;
                 uint32_t n = e->as.call_.n_args;
@@ -5876,8 +5951,7 @@ static CTerm *cps_bind(CpsB *b, Expr *e, CVar x, CTerm *rest) {
                  * threading it to the fn-value's __cps (via the registry).  Same shape
                  * as a colored-callee non-tail call (below), but via_registry. */
                 const Binding *pf = e->as.call_.fn_binding;
-                if (pf && (cps_ir_thread_param_has(pf) || cps_ir_thread_local_has(pf))
-                    && call_args_pendable(e)) {
+                if (pf && (cps_ir_thread_param_has(pf) || cps_ir_thread_local_has(pf))) {
                     Pending pp = {0};
                     uint32_t n = e->as.call_.n_args;
                     CAtom *args = arena_alloc(b->a, (n ? n : 1) * sizeof(CAtom));
@@ -5899,8 +5973,7 @@ static CTerm *cps_bind(CpsB *b, Expr *e, CVar x, CTerm *rest) {
                  * `(.f obj args)` -- reify `rest` as a heap join and thread it to
                  * the field-load callee via the registry (fn_atom key). */
                 if (!pf && e->as.call_.fn_expr
-                    && e->as.call_.fn_expr->kind == EX_GET_FIELD
-                    && call_args_pendable(e)) {
+                    && e->as.call_.fn_expr->kind == EX_GET_FIELD) {
                     Pending pp = {0};
                     CAtom fnatom = atomize(b, e->as.call_.fn_expr, &pp);
                     uint32_t n = e->as.call_.n_args;
@@ -6628,10 +6701,10 @@ bool cps_ir_param_call_threads(const Binding *p, const Expr *call) {
     if (!p || !call || call->kind != EX_CALL || call->as.call_.fn_binding != p)
         return false;
     if (call_is_effectful_fnvalue(call))
-        return cps_ir_thread_param_has(p) && call_args_pendable(call);
+        return cps_ir_thread_param_has(p);
     /* An empty-row call through a fat thread param threads too (the dispatch
      * calls an unregistered value directly). */
-    if (call_through_fat_param(call) && cps_ir_thread_param_has(p) && call_args_pendable(call))
+    if (call_through_fat_param(call) && cps_ir_thread_param_has(p))
         return true;
     return fncps_param_call_ok_hoisted(p, call);
 }

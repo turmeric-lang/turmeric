@@ -10228,24 +10228,12 @@ Expr *elab_defn(Elab *e, const Form *call) {
     if (call->as.list.len >= body_start + 1) {
         Form *maybe_row = call->as.list.items[body_start];
         if (maybe_row->tag == F_MAP) {
-            warn_legacy_fx_row(maybe_row);
-            uint8_t n_sym = (uint8_t)maybe_row->as.list.len;
-            const Symbol **syms = (const Symbol **)arena_alloc(e->arena,
-                                    (n_sym ? n_sym : 1) * sizeof(Symbol *));
-            uint8_t n_valid = 0;
-            for (uint32_t j = 0; j < maybe_row->as.list.len; j++) {
-                Form *item = maybe_row->as.list.items[j];
-                if (item->tag == F_SYM) {
-                    /* `Construct` / `ByVal` are no longer plucked here: they
-                     * are `^construct` / `^byval` before the name now, and
-                     * left in the row they are TUR-E0026 like any other name
-                     * no defeffect declares (with a hint saying where they
-                     * went -- effect_check.c). */
-                    syms[n_valid++] = item->as.sym;
-                }
-            }
-            declared_effect_row_defn = effect_row_unresolved(e->arena, syms, n_valid,
-                                                             maybe_row->span);
+            /* `Construct` / `ByVal` are no longer plucked here: they are
+             * `^construct` / `^byval` before the name now, and left in the
+             * row they are TUR-E0026 like any other name no defeffect
+             * declares (with a hint saying where they went --
+             * effect_check.c). */
+            declared_effect_row_defn = elab_fx_row_from_form(e, maybe_row);
             body_start++;  /* skip past the effect row map */
         }
     }
@@ -10536,6 +10524,14 @@ Expr *elab_defn(Elab *e, const Form *call) {
                 return_kind = TY_INT;
             } else if (kw->len == 5 && memcmp(kw->name, "float", 5) == 0) {
                 return_kind = TY_FLOAT;
+            } else if ((kw->len == 5 && memcmp(kw->name, "int64", 5) == 0) ||
+                       (kw->len == 7 && memcmp(kw->name, "float64", 7) == 0)) {
+                /* int64-float64-return-annotation-rejected: the long spellings
+                 * of int / float, as a parameter annotation already reads them
+                 * (typekind_from_symbol).  The sized-kind branch below skips
+                 * TY_INT / TY_FLOAT, so these fell through to the type-variable
+                 * path and KB-026 rejected them. */
+                return_kind = kw->len == 5 ? TY_INT : TY_FLOAT;
             } else if (kw->len == 4 && memcmp(kw->name, "bool", 4) == 0) {
                 return_kind = TY_BOOL;
             } else if (kw->len == 4 && memcmp(kw->name, "void", 4) == 0) {
@@ -13537,19 +13533,7 @@ Expr *elab_fn(Elab *e, const Form *call) {
     if (call->as.list.len >= params_idx + 2) {
         Form *maybe_row = call->as.list.items[params_idx + 1];
         if (maybe_row->tag == F_MAP) {
-            warn_legacy_fx_row(maybe_row);
-            uint8_t n_sym = (uint8_t)maybe_row->as.list.len;
-            const Symbol **syms = (const Symbol **)arena_alloc(e->arena,
-                                    (n_sym ? n_sym : 1) * sizeof(Symbol *));
-            uint8_t n_valid = 0;
-            for (uint32_t j = 0; j < maybe_row->as.list.len; j++) {
-                Form *item = maybe_row->as.list.items[j];
-                if (item->tag == F_SYM) {
-                    syms[n_valid++] = item->as.sym;
-                }
-            }
-            declared_effect_row_fn = effect_row_unresolved(e->arena, syms, n_valid,
-                                                           maybe_row->span);
+            declared_effect_row_fn = elab_fx_row_from_form(e, maybe_row);
             body_start = params_idx + 2;
         }
     }
@@ -13610,6 +13594,10 @@ Expr *elab_fn(Elab *e, const Form *call) {
                 return_kind = TY_INT;
             } else if (kw->len == 5 && memcmp(kw->name, "float", 5) == 0) {
                 return_kind = TY_FLOAT;
+            } else if ((kw->len == 5 && memcmp(kw->name, "int64", 5) == 0) ||
+                       (kw->len == 7 && memcmp(kw->name, "float64", 7) == 0)) {
+                /* int64-float64-return-annotation-rejected (see elab_defn) */
+                return_kind = kw->len == 5 ? TY_INT : TY_FLOAT;
             } else if (kw->len == 4 && memcmp(kw->name, "bool", 4) == 0) {
                 return_kind = TY_BOOL;
             } else if (kw->len == 4 && memcmp(kw->name, "void", 4) == 0) {

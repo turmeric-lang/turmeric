@@ -865,6 +865,39 @@ static void bins_clear(PkgManifest *m) {
     pkg_web_opts_free(&m->web);
 }
 
+/* A sweet-exp manifest writes one key per indented line, and the sweet
+ * preprocessor wraps each such line in a list: `  :version "0.1.0"` under
+ * `defpackage "x"` reads as `(:version "0.1.0")`.  The slot walk below takes
+ * flat keyword/value pairs, so it skipped every one of those -- a
+ * `tur init --sweet` manifest's `:version`, and any `:spices` or
+ * `:cmake-deps` written the same way, were silently not in effect.  Splice a
+ * keyword-headed line list back into the defpackage's own items; the forms
+ * keep their spans, so `tur add` can still find them in the source. */
+static const Form *pkg_dp_unwrap_sweet_lines(Arena *a, const Form *dp) {
+    uint32_t n = dp->as.list.len, m = 0;
+    for (uint32_t i = 0; i < n; i++) {
+        const Form *it = dp->as.list.items[i];
+        bool line = i >= 2 && it->tag == F_LIST && it->as.list.len >= 1 &&
+                    it->as.list.items[0]->tag == F_KEYWORD;
+        m += line ? it->as.list.len : 1;
+    }
+    if (m == n) return dp;
+    Form **items = (Form **)arena_alloc(a, m * sizeof(Form *));
+    uint32_t k = 0;
+    for (uint32_t i = 0; i < n; i++) {
+        Form *it = dp->as.list.items[i];
+        bool line = i >= 2 && it->tag == F_LIST && it->as.list.len >= 1 &&
+                    it->as.list.items[0]->tag == F_KEYWORD;
+        if (line) {
+            for (uint32_t j = 0; j < it->as.list.len; j++)
+                items[k++] = it->as.list.items[j];
+        } else {
+            items[k++] = it;
+        }
+    }
+    return form_list(a, dp->span, items, m);
+}
+
 bool pkg_manifest_read_status(const char *path, PkgManifest *out,
                               PkgManifestStatus *status) {
     memset(out, 0, sizeof(*out));
@@ -963,9 +996,16 @@ bool pkg_manifest_read_status(const char *path, PkgManifest *out,
     uint32_t nforms = 0;
     Form **forms = read_all(&arena, &st, &file, &nforms);
 
+    /* manifest-reader-error-exits-zero: the file exists, so a reader error
+     * (or a file with no forms) is MALFORMED, not "no manifest here".  These
+     * two returns used to leave the status ABSENT, and every caller carried
+     * on as if outside a project: `tur check` printed the reader's `error:`
+     * and exited 0. */
     if (!forms || diag_had_error() || nforms == 0) {
         symtab_free(&st);
         arena_free(&arena);
+        if (status) *status = PKG_MANIFEST_MALFORMED;
+        pkg_manifest_mark_malformed(path);
         return false;
     }
 
@@ -985,8 +1025,12 @@ bool pkg_manifest_read_status(const char *path, PkgManifest *out,
         fprintf(stderr, "spice: no (defpackage ...) form found in '%s'\n", path);
         symtab_free(&st);
         arena_free(&arena);
+        if (status) *status = PKG_MANIFEST_MALFORMED;
+        pkg_manifest_mark_malformed(path);
         return false;
     }
+    if (file.reader_type == READER_SWEET)
+        dp = (Form *)pkg_dp_unwrap_sweet_lines(&arena, dp);
 
     /* items[1] is the package name symbol or string */
     Form *name_form = dp->as.list.items[1];
@@ -2836,20 +2880,15 @@ bool pkg_fetch_all(const char *project_dir,
                     struct stat pst;
                     if (stat(abs_path, &pst) == 0 && S_ISDIR(pst.st_mode)) {
                         char mp[4096];
-                        int mn = snprintf(mp, sizeof(mp), "%s/build.tur",
-                                          abs_path);
-                        if (mn > 0 && (size_t)mn < sizeof(mp)) {
-                            struct stat mst;
-                            if (stat(mp, &mst) == 0 && S_ISREG(mst.st_mode))
-                                path_ok = true;
-                        }
+                        path_ok = pkg_resolve_manifest_path(abs_path, mp,
+                                                            sizeof(mp));
                     }
                 }
                 if (!path_ok) {
                     fprintf(stderr,
                         "spice: '%s' declares :path \"%s\" but the "
                         "directory does not exist or contains no "
-                        "build.tur (from %s)\n",
+                        "build.tur or build.tur.sweet (from %s)\n",
                         it->name, it->path, it->from);
                     ok = false;
                 }
@@ -5826,26 +5865,54 @@ static Form *pkg_build_spice_val(Arena *a, SymbolTable *st,
                    : form_map(a, SPAN_UNKNOWN, items, n);
 }
 
-/* Return a new defpackage Form (F_LIST) with a new spice entry appended.
- * If :spices already exists in dp, the new key/val are appended to the map.
- * If :spices is absent, a new :spices #{} map is added. */
-static Form *pkg_defpackage_add_spice(Arena *a, SymbolTable *st,
-                                       const Form *dp,
-                                       const char *spice_name,
-                                       const char *url, const char *ref,
-                                       const char *path, const char *subdir,
-                                       bool optional) {
+/* Builds the value of one map entry; `literal` asks for the `#map{...}`
+ * spelling, to match the map the entry joins. */
+typedef Form *(*PkgEntryValFn)(Arena *a, SymbolTable *st, bool literal,
+                               const void *ctx);
+
+/* A form built here has SPAN_UNKNOWN -- offset 0 -- and fmt_print reads the
+ * comments it re-emits from the SOURCE GAPS between spans.  So a gap ending
+ * at a built form, or starting after one, ran from the top of the file, and
+ * `tur add` / `tur add-cmake` printed the manifest's leading comment a second
+ * time inside the map they had extended.  Pin a built form (and everything
+ * built inside it) zero-width at `at`, the closing delimiter of the form it
+ * joins: its gaps are then the ones beside that delimiter, where it now sits.
+ * fmt never reads `line`; it marks the form as placed. */
+static void pkg_anchor_built(Form *f, const Span *at) {
+    if (!f || f->span.line != 0) return;
+    f->span = *at;
+    if (f->span.off_end > f->span.off_start) f->span.off_start = f->span.off_end - 1;
+    f->span.off_end = f->span.off_start;
+    switch (f->tag) {
+        case F_LIST: case F_VEC: case F_MAP: case F_MAP_LITERAL:
+        case F_SET: case F_SET_LITERAL:
+            for (uint32_t i = 0; i < f->as.list.len; i++)
+                pkg_anchor_built(f->as.list.items[i], at);
+            break;
+        default:
+            break;
+    }
+}
+
+/* Return a new defpackage Form (F_LIST) with `entry_key` -> a built value
+ * appended to the map under `:slot`.  If the slot exists, the entry is
+ * appended to its map; if it is absent, `:slot #{entry}` is added. */
+static Form *pkg_defpackage_add_map_entry(Arena *a, SymbolTable *st,
+                                          const Form *dp, const char *slot,
+                                          const char *entry_name,
+                                          PkgEntryValFn build_val,
+                                          const void *ctx) {
     Form *entry_key = form_str(a, SPAN_UNKNOWN,
-                               spice_name, (uint32_t)strlen(spice_name));
+                               entry_name, (uint32_t)strlen(entry_name));
     uint32_t n = dp->as.list.len;
 
-    /* Find :spices keyword index */
-    int spices_val_idx = -1;
+    /* Find the slot keyword's index */
+    int slot_val_idx = -1;
     for (uint32_t i = 0; i + 1 < n; i++) {
         const Form *kf = dp->as.list.items[i];
         if (kf->tag == F_KEYWORD &&
-            strcmp(kf->as.sym->name, "spices") == 0) {
-            spices_val_idx = (int)(i + 1);
+            strcmp(kf->as.sym->name, slot) == 0) {
+            slot_val_idx = (int)(i + 1);
             break;
         }
     }
@@ -5853,8 +5920,8 @@ static Form *pkg_defpackage_add_spice(Arena *a, SymbolTable *st,
     /* Preserve the original form's span so comment gap extraction works. */
     Span orig_span = dp->span;
 
-    if (spices_val_idx >= 0) {
-        /* Extend existing :spices map.
+    if (slot_val_idx >= 0) {
+        /* Extend the existing map.
          *
          * Both spellings have to be handled here: `#{...}` is F_MAP and
          * `#map{...}` is F_MAP_LITERAL. Reading only F_MAP silently produced
@@ -5865,10 +5932,9 @@ static Form *pkg_defpackage_add_spice(Arena *a, SymbolTable *st,
          *
          * Rebuild with the tag the manifest already had, so adding a dep does
          * not silently respell the user's `#map{...}` as `#{...}`. */
-        const Form *old_map = dp->as.list.items[spices_val_idx];
+        const Form *old_map = dp->as.list.items[slot_val_idx];
         bool is_literal = (old_map->tag == F_MAP_LITERAL);
-        Form *entry_val = pkg_build_spice_val(a, st, url, ref, path, subdir,
-                                              optional, is_literal);
+        Form *entry_val = build_val(a, st, is_literal, ctx);
         uint32_t map_n = (old_map->tag == F_MAP || is_literal)
                        ? old_map->as.list.len : 0;
         Form **new_map_items = (Form **)arena_alloc(
@@ -5878,21 +5944,28 @@ static Form *pkg_defpackage_add_spice(Arena *a, SymbolTable *st,
                    map_n * sizeof(Form *));
         new_map_items[map_n]     = entry_key;
         new_map_items[map_n + 1] = entry_val;
+        /* The rebuilt map keeps the old one's span (its delimiters are where
+         * they were); the new entry sits just before its closing brace. */
         Form *new_map = is_literal
-            ? form_map_literal(a, SPAN_UNKNOWN, new_map_items, map_n + 2)
-            : form_map(a, SPAN_UNKNOWN, new_map_items, map_n + 2);
+            ? form_map_literal(a, old_map->span, new_map_items, map_n + 2)
+            : form_map(a, old_map->span, new_map_items, map_n + 2);
+        pkg_anchor_built(entry_key, &old_map->span);
+        pkg_anchor_built(entry_val, &old_map->span);
 
         Form **new_dp = (Form **)arena_alloc(a, n * sizeof(Form *));
         memcpy(new_dp, dp->as.list.items, n * sizeof(Form *));
-        new_dp[spices_val_idx] = new_map;
+        new_dp[slot_val_idx] = new_map;
         return form_list(a, orig_span, new_dp, n);
     } else {
-        /* Append :spices #{ entry } */
-        Form *kw = form_keyword(a, SPAN_UNKNOWN, pkg_intern(st, "spices"));
-        Form *entry_val = pkg_build_spice_val(a, st, url, ref, path, subdir,
-                                              optional, false);
-        Form *new_map_items[2] = { entry_key, entry_val };
+        /* Append :slot #{ entry } */
+        Form *kw = form_keyword(a, SPAN_UNKNOWN, pkg_intern(st, slot));
+        Form *entry_val = build_val(a, st, false, ctx);
+        Form **new_map_items = (Form **)arena_alloc(a, 2 * sizeof(Form *));
+        new_map_items[0] = entry_key;
+        new_map_items[1] = entry_val;
         Form *new_map = form_map(a, SPAN_UNKNOWN, new_map_items, 2);
+        pkg_anchor_built(kw, &dp->span);
+        pkg_anchor_built(new_map, &dp->span);
 
         Form **new_dp = (Form **)arena_alloc(a, (n + 2) * sizeof(Form *));
         memcpy(new_dp, dp->as.list.items, n * sizeof(Form *));
@@ -5902,18 +5975,109 @@ static Form *pkg_defpackage_add_spice(Arena *a, SymbolTable *st,
     }
 }
 
-/* Read build.tur, add a spice entry, and write back preserving comments.
- * Returns true on success. */
-static bool pkg_build_tur_add_spice(const char *build_path,
-                                     const char *spice_name,
-                                     const char *url, const char *ref,
-                                     const char *path, const char *subdir,
-                                     bool optional) {
+/* One entry to append to a map slot of the defpackage: `:slot` gets
+ * `"entry_name" <build_val(...)>`. */
+typedef struct {
+    const char   *slot;
+    const char   *entry_name;
+    PkgEntryValFn build_val;
+    const void   *ctx;
+} PkgSlotAppend;
+
+/* tur-add-cannot-edit-sweet-manifest: a `build.tur.sweet` is edited as TEXT.
+ * The formatter path below would rewrite the whole file as s-expressions and
+ * read comments at offsets of the preprocessed text, so instead the entry is
+ * printed as a delimited form (`#map{...}` reads the same in sweet-exp) and
+ * inserted into the original source: before the slot map's closing brace, or,
+ * with no such slot, as a new line after the defpackage's last item, at its
+ * items' indentation.  `forms` were read from `body` (the text past the
+ * `#lang` line, at offset `head` of `src`) through the sweet preprocessor. */
+static bool pkg_sweet_splice_entry(Arena *a, SymbolTable *st, const Form *dp,
+                                   const PkgSlotAppend *ap, const char *src,
+                                   size_t src_len, size_t head, Buf *out) {
+    const SourceFile *xf = diag_source_file(dp->span.file_id);
+    const SweetMap *xmap = xf ? xf->xform_map : NULL;
+    #define ORIG(x) (head + (xmap ? sweet_map_translate_offset(xmap, (x)) : (x)))
+    dp = pkg_dp_unwrap_sweet_lines(a, dp);
+    uint32_t n = dp->as.list.len;
+    const Form *slot_val = NULL;
+    for (uint32_t i = 0; i + 1 < n; i++) {
+        const Form *kf = dp->as.list.items[i];
+        if (kf->tag == F_KEYWORD && strcmp(kf->as.sym->name, ap->slot) == 0) {
+            slot_val = dp->as.list.items[i + 1];
+            break;
+        }
+    }
+    Buf entry; buf_init(&entry);
+    size_t at;
+    if (slot_val) {
+        if (slot_val->tag != F_MAP && slot_val->tag != F_MAP_LITERAL) {
+            buf_free(&entry);
+            return false;
+        }
+        /* The map's own text is delimiter-based, so its closing brace is the
+         * last `}` inside its translated span. */
+        size_t lo = ORIG(slot_val->span.off_start);
+        at = ORIG(slot_val->span.off_end);
+        if (at > src_len) at = src_len;
+        while (at > lo && src[at - 1] != '}') at--;
+        if (at <= lo) { buf_free(&entry); return false; }
+        at--;   /* the brace itself; the entry goes in front of it */
+        Form *val = ap->build_val(a, st, slot_val->tag == F_MAP_LITERAL, ap->ctx);
+        if (slot_val->as.list.len > 0) buf_putc(&entry, ' ');
+        Form *key = form_str(a, SPAN_UNKNOWN, ap->entry_name,
+                             (uint32_t)strlen(ap->entry_name));
+        form_print(&entry, key);
+        buf_putc(&entry, ' ');
+        form_print(&entry, val);
+    } else {
+        const Form *last = dp->as.list.items[n - 1];
+        at = ORIG(last->span.off_end);
+        if (at > src_len) at = src_len;
+        while (at < src_len && src[at] != '\n') at++;
+        /* The indentation of the line holding the first keyword item. */
+        size_t ind_from = 0, ind_len = 2;
+        bool have_ind = false;
+        for (uint32_t i = 1; i < n && !have_ind; i++) {
+            if (dp->as.list.items[i]->tag != F_KEYWORD) continue;
+            size_t k = ORIG(dp->as.list.items[i]->span.off_start);
+            size_t ls = k;
+            while (ls > 0 && src[ls - 1] != '\n') ls--;
+            size_t e = ls;
+            while (e < k && (src[e] == ' ' || src[e] == '\t')) e++;
+            if (e == k && e > ls) { ind_from = ls; ind_len = e - ls; have_ind = true; }
+        }
+        buf_putc(&entry, '\n');
+        if (have_ind) buf_write(&entry, src + ind_from, ind_len);
+        else          buf_puts(&entry, "  ");
+        buf_printf(&entry, ":%s #map{", ap->slot);
+        Form *key = form_str(a, SPAN_UNKNOWN, ap->entry_name,
+                             (uint32_t)strlen(ap->entry_name));
+        form_print(&entry, key);
+        buf_putc(&entry, ' ');
+        form_print(&entry, ap->build_val(a, st, true, ap->ctx));
+        buf_putc(&entry, '}');
+    }
+    #undef ORIG
+    buf_write(out, src, at);
+    buf_write(out, entry.data, entry.len);
+    buf_write(out, src + at, src_len - at);
+    buf_free(&entry);
+    return true;
+}
+
+/* Read build.tur (or build.tur.sweet), append `ap`'s entry to the
+ * defpackage, and write it back.  A plain manifest goes through the
+ * formatter, which keeps the file's comments and every key it does not
+ * touch; a sweet one is spliced as text (pkg_sweet_splice_entry).  `who`
+ * prefixes the error messages.  Returns true on success. */
+static bool pkg_build_tur_edit(const char *build_path, const char *who,
+                               const PkgSlotAppend *ap) {
     /* 1. Read raw source (keep for comment preservation). */
     FILE *f = fopen(build_path, "rb");
     if (!f) {
-        fprintf(stderr, "tur add: cannot open '%s': %s\n",
-                build_path, strerror(errno));
+        fprintf(stderr, "%s: cannot open '%s': %s\n",
+                who, build_path, strerror(errno));
         return false;
     }
     fseek(f, 0, SEEK_END);
@@ -5927,17 +6091,27 @@ static bool pkg_build_tur_add_spice(const char *build_path,
     fclose(f);
     src[sz] = '\0';
 
-    /* 2. Parse into Form AST. */
+    /* 2. Parse into Form AST, with the reader the manifest reader uses: the
+     * extension picks sweet-exp, and a `#lang` line is stripped first. */
     Arena arena;
     arena_init(&arena, 0);
     SymbolTable st;
     symtab_init(&st, &arena);
 
+    const char *body = src;
+    size_t      body_len = (size_t)sz;
+    {
+        const char *bad = NULL;
+        size_t bad_len = 0;
+        (void)detect_lang(src, (size_t)sz, &body, &body_len, &bad, &bad_len);
+    }
     SourceFile file = {0};
     file.path    = build_path;
-    file.src     = src;
-    file.len     = (uint32_t)sz;
+    file.src     = body;
+    file.len     = (uint32_t)body_len;
     file.file_id = 0;
+    file.reader_type = reader_type_from_extension(build_path);
+    const bool sweet = file.reader_type == READER_SWEET;
     diag_register_file(&file);
     diag_reset();
 
@@ -5945,14 +6119,14 @@ static bool pkg_build_tur_add_spice(const char *build_path,
     Form **forms = read_all(&arena, &st, &file, &nforms);
 
     if (!forms || diag_had_error() || nforms == 0) {
-        fprintf(stderr, "tur add: failed to parse '%s'\n", build_path);
+        fprintf(stderr, "%s: failed to parse '%s'\n", who, build_path);
         free(src);
         symtab_free(&st);
         arena_free(&arena);
         return false;
     }
 
-    /* 3. Find the defpackage form and mutate it. */
+    /* 3. Find the defpackage form. */
     int dp_idx = -1;
     for (uint32_t i = 0; i < nforms; i++) {
         const Form *frm = forms[i];
@@ -5966,28 +6140,38 @@ static bool pkg_build_tur_add_spice(const char *build_path,
         }
     }
     if (dp_idx < 0) {
-        fprintf(stderr, "tur add: no (defpackage ...) form in '%s'\n",
-                build_path);
+        fprintf(stderr, "%s: no (defpackage ...) form in '%s'\n",
+                who, build_path);
         free(src);
         symtab_free(&st);
         arena_free(&arena);
         return false;
     }
 
-    forms[dp_idx] = pkg_defpackage_add_spice(
-            &arena, &st, forms[dp_idx],
-            spice_name, url, ref, path, subdir, optional);
-
-    /* 4. Re-emit with comment preservation. */
+    /* 4. Re-emit: spliced text for sweet, the formatter otherwise. */
     Buf out;
     buf_init(&out);
-    FmtOptions opts = {0};
-    opts.indent_width = 2;
-    opts.line_width   = 80;
-    opts.src          = src;
-    opts.src_len      = (size_t)sz;
-    if (fmt_print(&out, forms, nforms, opts) != 0) {
-        fprintf(stderr, "tur add: formatter failed\n");
+    bool ok;
+    if (sweet) {
+        ok = pkg_sweet_splice_entry(&arena, &st, forms[dp_idx], ap, src,
+                                    (size_t)sz, (size_t)(body - src), &out);
+        if (!ok)
+            fprintf(stderr, "%s: could not find where to add the entry in "
+                            "'%s'; add it to :%s by hand\n",
+                    who, build_path, ap->slot);
+    } else {
+        forms[dp_idx] = pkg_defpackage_add_map_entry(
+                &arena, &st, forms[dp_idx], ap->slot, ap->entry_name,
+                ap->build_val, ap->ctx);
+        FmtOptions opts = {0};
+        opts.indent_width = 2;
+        opts.line_width   = 80;
+        opts.src          = src;
+        opts.src_len      = (size_t)sz;
+        ok = fmt_print(&out, forms, nforms, opts) == 0;
+        if (!ok) fprintf(stderr, "%s: formatter failed\n", who);
+    }
+    if (!ok) {
         buf_free(&out);
         free(src);
         symtab_free(&st);
@@ -6000,8 +6184,8 @@ static bool pkg_build_tur_add_spice(const char *build_path,
     snprintf(tmp_path, sizeof(tmp_path), "%s.tmp.%d", build_path, (int)getpid());
     FILE *wf = fopen(tmp_path, "wb");
     if (!wf) {
-        fprintf(stderr, "tur add: cannot write '%s': %s\n",
-                tmp_path, strerror(errno));
+        fprintf(stderr, "%s: cannot write '%s': %s\n",
+                who, tmp_path, strerror(errno));
         buf_free(&out);
         free(src);
         symtab_free(&st);
@@ -6012,7 +6196,7 @@ static bool pkg_build_tur_add_spice(const char *build_path,
     fclose(wf);
 
     if (rename(tmp_path, build_path) != 0) {
-        fprintf(stderr, "tur add: rename failed: %s\n", strerror(errno));
+        fprintf(stderr, "%s: rename failed: %s\n", who, strerror(errno));
         unlink(tmp_path);
         buf_free(&out);
         free(src);
@@ -6026,6 +6210,74 @@ static bool pkg_build_tur_add_spice(const char *build_path,
     symtab_free(&st);
     arena_free(&arena);
     return true;
+}
+
+/* `tur add`: one `:spices` entry. */
+typedef struct {
+    const char *name, *url, *ref, *path, *subdir;
+    bool optional;
+} PkgSpiceEntry;
+
+static Form *pkg_spice_entry_val(Arena *a, SymbolTable *st, bool literal,
+                                 const void *ctx) {
+    const PkgSpiceEntry *se = (const PkgSpiceEntry *)ctx;
+    return pkg_build_spice_val(a, st, se->url, se->ref, se->path, se->subdir,
+                               se->optional, literal);
+}
+
+static bool pkg_build_tur_add_spice(const char *build_path,
+                                     const char *spice_name,
+                                     const char *url, const char *ref,
+                                     const char *path, const char *subdir,
+                                     bool optional) {
+    PkgSpiceEntry se = { spice_name, url, ref, path, subdir, optional };
+    PkgSlotAppend ap = { "spices", spice_name, pkg_spice_entry_val, &se };
+    return pkg_build_tur_edit(build_path, "tur add", &ap);
+}
+
+/* add-cmake-manifest-rewrite-loses-keys: `tur add-cmake`, one `:cmake-deps`
+ * entry, spliced in the way `tur add` splices a spice.  It used to rebuild
+ * the whole file from the parsed PkgManifest (pkg_manifest_write), which
+ * models only some keys: comments, `:experiments []` (which suppresses the
+ * user's experiments file), `:members`, `:subdir` and `:exports` were lost. */
+typedef struct {
+    const char *url, *ref;
+    char *const *opts;   /* "KEY=VALUE" */
+    int n_opts;
+} PkgCmakeEntry;
+
+static Form *pkg_cmake_entry_val(Arena *a, SymbolTable *st, bool literal,
+                                 const void *ctx) {
+    const PkgCmakeEntry *ce = (const PkgCmakeEntry *)ctx;
+    Form **items = (Form **)arena_alloc(a, 6 * sizeof(Form *));
+    uint32_t n = 0;
+    items[n++] = form_keyword(a, SPAN_UNKNOWN, pkg_intern(st, "url"));
+    items[n++] = form_str(a, SPAN_UNKNOWN, ce->url, (uint32_t)strlen(ce->url));
+    if (ce->ref) {
+        items[n++] = form_keyword(a, SPAN_UNKNOWN, pkg_intern(st, "ref"));
+        items[n++] = form_str(a, SPAN_UNKNOWN, ce->ref,
+                              (uint32_t)strlen(ce->ref));
+    }
+    uint32_t n_opt_items = 0;
+    Form **opt_items = (Form **)arena_alloc(
+        a, (ce->n_opts ? (size_t)ce->n_opts : 1) * 2 * sizeof(Form *));
+    for (int i = 0; i < ce->n_opts; i++) {
+        const char *eq = strchr(ce->opts[i], '=');
+        if (!eq || eq == ce->opts[i]) continue;
+        Symbol const *k = symtab_intern(
+            st, strslice(ce->opts[i], (uint32_t)(eq - ce->opts[i])));
+        opt_items[n_opt_items++] = form_keyword(a, SPAN_UNKNOWN, k);
+        opt_items[n_opt_items++] = form_str(a, SPAN_UNKNOWN, eq + 1,
+                                            (uint32_t)strlen(eq + 1));
+    }
+    if (n_opt_items > 0) {
+        items[n++] = form_keyword(a, SPAN_UNKNOWN, pkg_intern(st, "options"));
+        items[n++] = literal
+            ? form_map_literal(a, SPAN_UNKNOWN, opt_items, n_opt_items)
+            : form_map(a, SPAN_UNKNOWN, opt_items, n_opt_items);
+    }
+    return literal ? form_map_literal(a, SPAN_UNKNOWN, items, n)
+                   : form_map(a, SPAN_UNKNOWN, items, n);
 }
 
 /* ================================================================== */
@@ -6320,30 +6572,9 @@ int cmd_pkg_add_cmake(int argc, char **argv) {
         }
     }
 
-    m.cmake_deps = (PkgCmakeDep *)realloc(m.cmake_deps,
-        (m.n_cmake_deps + 1) * sizeof(PkgCmakeDep));
-    if (!m.cmake_deps) { pkg_manifest_free(&m); return 1; }
-    PkgCmakeDep *nd = &m.cmake_deps[m.n_cmake_deps++];
-    memset(nd, 0, sizeof(*nd));
-    nd->name = tur_strdup(name_buf);
-    nd->url  = tur_strdup(url);
-    if (ref) nd->ref = tur_strdup(ref);
-
-    if (n_opts > 0) {
-        nd->opts   = (PkgCmakeOpt *)malloc(n_opts * sizeof(PkgCmakeOpt));
-        nd->n_opts = 0;
-        for (int i = 0; i < n_opts; i++) {
-            char *eq = strchr(opts[i], '=');
-            if (!eq) continue;
-            *eq = '\0';
-            nd->opts[nd->n_opts].key = tur_strdup(opts[i]);
-            nd->opts[nd->n_opts].val = tur_strdup(eq + 1);
-            nd->n_opts++;
-            *eq = '=';
-        }
-    }
-
-    if (!pkg_manifest_write(manifest_path, &m)) {
+    PkgCmakeEntry ce = { url, ref, opts, n_opts };
+    PkgSlotAppend ap = { "cmake-deps", name_buf, pkg_cmake_entry_val, &ce };
+    if (!pkg_build_tur_edit(manifest_path, "tur add-cmake", &ap)) {
         pkg_manifest_free(&m);
         return 1;
     }

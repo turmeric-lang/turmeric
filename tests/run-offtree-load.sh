@@ -77,6 +77,32 @@ else
 fi
 
 # ------------------------------------------------------------------ #
+# 4. A cwd with its own stdlib/ does not shadow the resolved stdlib    #
+#    (stdlib-load-reads-cwd-copy-first).  The cwd copy used to be read  #
+#    first, so a build run from another checkout mixed its own prelude  #
+#    with that checkout's explicitly loaded modules.  The decoy defines #
+#    only `re/decoy`; the real stdlib/re.tur does not, so the call must #
+#    be unbound on both engines.                                       #
+# ------------------------------------------------------------------ #
+mkdir -p "$WORK/shadow/stdlib"
+printf '(defn re/decoy [] : int 41)\n' > "$WORK/shadow/stdlib/re.tur"
+cat > "$WORK/shadow/probe.tur" <<'EOF'
+(load "stdlib/re.tur")
+(defn main [] : int
+  (println (re/decoy))
+  0)
+EOF
+for mode in run --interpret; do
+    out="$(cd "$WORK/shadow" && ASAN_OPTIONS=detect_leaks=0 "$TUR" $mode probe.tur 2>&1)"
+    rc=$?
+    if [ "$rc" -ne 0 ] && ! printf '%s' "$out" | grep -qx "41"; then
+        ok "$mode: a cwd stdlib/ copy does not shadow the resolved stdlib"
+    else
+        bad "$mode: a cwd stdlib/ copy does not shadow the resolved stdlib" "rc=$rc out=[$out]"
+    fi
+done
+
+# ------------------------------------------------------------------ #
 # Summary                                                            #
 # ------------------------------------------------------------------ #
 echo

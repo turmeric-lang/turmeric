@@ -1,0 +1,14 @@
+;; dead-base-ctor-ignores-regions-off: a :heap generic whose type parameter is
+;; phantom gets a dead base constructor (emit_flush_dead_base_ctor_traps), which
+;; called tur_region_alloc_or_malloc unconditionally -- undeclared under
+;; TUR_REGIONS=0, an error on gcc 14+ / clang 16+.  tests/run-regions-seam.sh
+;; runs this with regions off.
+(defstruct PBox :heap [V] [a : int b : int])
+
+(defn pbox-new [V] [a : int b : int] : (PBox V)
+  (PBox a b))
+
+(defn main [] : int
+  (let [p (pbox-new 1 2)]
+    (println (.a p)))
+  0)

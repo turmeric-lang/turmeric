@@ -1906,17 +1906,7 @@ Expr *elab_defdata(Elab *e, const Form *call) {
             ctor->fields[fi].effect_row = NULL;
             if (field_effect_forms && field_effect_forms[fi]) {
                 Form *row_form = field_effect_forms[fi];
-                warn_legacy_fx_row(row_form);
-                uint8_t n_sym = (uint8_t)row_form->as.list.len;
-                const Symbol **syms = (const Symbol **)arena_alloc(e->arena,
-                                        (n_sym ? n_sym : 1) * sizeof(Symbol *));
-                uint8_t n_valid = 0;
-                for (uint32_t j = 0; j < row_form->as.list.len; j++) {
-                    Form *item = row_form->as.list.items[j];
-                    if (item->tag == F_SYM) syms[n_valid++] = item->as.sym;
-                }
-                ctor->fields[fi].effect_row =
-                    effect_row_unresolved(e->arena, syms, n_valid, row_form->span);
+                ctor->fields[fi].effect_row = elab_fx_row_from_form(e, row_form);
             }
 
             /* CONV-S5: a :copy ADT requires every variant's payload to be

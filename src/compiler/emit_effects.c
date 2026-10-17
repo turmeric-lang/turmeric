@@ -95,699 +95,76 @@ bool emit_handle_is_pure_unsafe(const HandleExpr *h) {
     return h && h->is_unsafe_marker;
 }
 
+bool emit_handle_is_inert(const HandleExpr *h) {
+    return h && (h->is_unsafe_marker || h->no_clause_reachable);
+}
+
+void emit_handle_no_lowering(const Expr *e) {
+    diag_emit(DIAG_ERROR, e->span,
+              "this `handle` has no lowering here: the enclosing function left "
+              "the CPS backend's supported subset, and the direct emitter "
+              "cannot install a handler. Run with TUR_TRACE_EVICT=1 to see "
+              "which form evicted the function: SIG-REJECT is a parameter or "
+              "result type the backend cannot thread (such as `(Vec int)`), "
+              "SIG-TAINT a call to a function rejected for one. Moving the "
+              "`handle` into a function whose signature the backend accepts "
+              "usually avoids it. This is a compiler limitation, not a mistake "
+              "in this expression.");
+}
+
+/* emit_effects_handle's walk: report every effect operation under a handle
+ * the direct emitter cannot lower through emit_value's own located error,
+ * which is all emit_value does for one (nothing is emitted). */
+typedef struct { EmitCtx *ctx; int n; } HandlePerformWalk;
+
+static bool handle_report_performs(const Expr *c, void *ud) {
+    HandlePerformWalk *w = (HandlePerformWalk *)ud;
+    if (c->kind == EX_PERFORM || c->kind == EX_WITH_HANDLER) {
+        Buf scratch; buf_init(&scratch);
+        free(emit_value(w->ctx, &scratch, c));
+        buf_free(&scratch);
+        w->n++;
+        return false;
+    }
+    return cps_visit_children(c, handle_report_performs, ud);
+}
+
 char *emit_effects_handle(EmitCtx *ctx, Buf *body, const Expr *e) {
-    /* (handle body (E [params] k) handler ...)
+    /* (handle body (E [params] k) handler ...) on the DIRECT emitter.
      *
-     * Phase 19D: Deep-handler continuation capture semantics.
-     * The body runs in a new fiber. When an effect is performed,
-     * the fiber yields to the parent dispatch loop, which calls
-     * the matching handler case function with k = (int64_t)fiber.
-     * (resume k v) resumes the fiber via tur_effect_cont_resume.
-     * Handler case functions receive outer captures via __env.
-     */
+     * A handle lowers on the DK backend (emit_cps_ir); one that reaches here
+     * belongs to a function the backend evicted.  Two shapes are still sound,
+     * because nothing under them suspends, so no continuation is captured and
+     * the body can run in place:
+     *
+     *  - the `(unsafe ...)` desugar (defopaque-struct-payload-fails-through-
+     *    unsafe-helper): the built-in Unsafe effect is a compile-time marker,
+     *    never performed.  Emitting the body directly also keeps its real C
+     *    type -- a by-value struct return used to be truncated through the
+     *    fiber's int64 result slot;
+     *  - a handle none of whose clauses the body can reach (TUR-W0033 for
+     *    every clause; effect_check records it).
+     *
+     * Statement position is emit_stmt's EX_HANDLE case, which emit_stmt's the
+     * body so its side effects still run.
+     *
+     * Anything else would need a handler installed in direct code.  That was
+     * the fiber effect runtime, deleted 2026-07-19; this function kept its
+     * emitter, and an inert-looking `handle` over a `(Vec int)`-taking
+     * function got C naming TurEffectCaptureCtx and FiberBlock::eff_ctx
+     * (evicted-handle-reaches-deleted-fiber-emitter).  Report it at the
+     * handle, as `perform` reports its own case. */
     HandleExpr *h = e->as.handle_.handle;
-
-    /* defopaque-struct-payload-fails-through-unsafe-helper: the built-in
-     * `Unsafe` effect is a pure compile-time marker -- it is never actually
-     * `perform`ed, so this handle's fiber-lift never suspends; it exists only
-     * to discharge the Unsafe row from the body's effect type.  Routing the
-     * body result through the fiber's `int64_t` result slot truncates a
-     * by-value struct return (e.g. `(unsafe (dense-get d i))` whose element
-     * type is a struct -- "aggregate value used where an integer was
-     * expected").  Emit the body directly in the current context instead:
-     * semantically identical (nothing suspends, so no continuation is ever
-     * captured) and it preserves the body's real C type.  Any genuine effect
-     * the body performs is handled by an enclosing handle exactly as it would
-     * have been after the Unsafe dispatch forwarded it to the parent. */
-    if (emit_handle_is_pure_unsafe(h)) {
-        /* Value position: emit the body and return its value directly.  Its C
-         * type is whatever the body produces (e.g. a per-instantiation struct
-         * return `Pos`), so no carrier truncation occurs.  Statement position
-         * (where the result is discarded) is handled in emit_stmt's EX_HANDLE
-         * case, which emit_stmt's the body so its side effects still run. */
+    if (emit_handle_is_inert(h))
         return emit_value(ctx, body, h->body);
-    }
-
-    /* F2.4 tail: shallow effect handlers (`handle-shallow`) on the fiber fallback.
-     * The intercept EffectHandlerFrame stays installed for the fiber's whole
-     * lifetime, so deep re-catches every perform.  For a shallow handler we make
-     * the per-handle dispatch DECLINE its own effect once its case has run (a
-     * `shallow_consumed` flag on the capture ctx): a subsequent same-effect
-     * perform then falls through to the existing bubble-up path, which forwards it
-     * to the enclosing handler and re-dispatches the inner body with that
-     * handler's resume value -- exactly the interpreter's shallow semantics.  See
-     * the dispatch emission below (Step 6), all gated on `h->shallow`. */
-
-    bool returns_value = (e->type.kind != TY_NIL);
-
-    /* Allocate unique IDs for this handle expression */
-    int handle_id = ctx->tmp_n++;
-
-    /* ----------------------------------------------------------------
-     * Step 1: Collect outer variables captured by handler case bodies.
-     * ---------------------------------------------------------------- */
-    /* Collect captures for each case body plus the handle body */
-    Binding **all_caps = NULL;
-    uint32_t n_all_caps = 0, c_all_caps = 0;
-
-    /* Collect captures from handle body (for body fiber function) */
-    uint32_t n_body_caps = 0;
-    Binding **body_caps = collect_handle_captures(h->body, &n_body_caps);
-    for (uint32_t ci = 0; ci < n_body_caps; ci++) {
-        bool already = false;
-        for (uint32_t ai = 0; ai < n_all_caps; ai++)
-            if (all_caps[ai] == body_caps[ci]) { already = true; break; }
-        if (!already) {
-            if (n_all_caps >= c_all_caps) {
-                c_all_caps = (c_all_caps == 0) ? 8 : c_all_caps * 2;
-                all_caps = (Binding **)realloc(all_caps, c_all_caps * sizeof(Binding *));
-            }
-            all_caps[n_all_caps++] = body_caps[ci];
-        }
-    }
-    free(body_caps);
-
-    /* Collect captures from handler case bodies (they use outer vars + k + effect params) */
-    /* Handler case bodies are emitted as separate static fns; outer vars are captured via __env */
-    Binding ***case_caps = (Binding ***)malloc(h->n_cases * sizeof(Binding **));
-    uint32_t *case_ncaps = (uint32_t *)malloc(h->n_cases * sizeof(uint32_t));
-    for (uint8_t ci = 0; ci < h->n_cases; ci++) {
-        HandleCase *c = &h->cases[ci];
-        case_caps[ci] = collect_handle_captures(c->body, &case_ncaps[ci]);
-        /* Filter out k_binding and param_bindings (those are local to the handler fn) */
-        uint32_t filtered = 0;
-        for (uint32_t j = 0; j < case_ncaps[ci]; j++) {
-            Binding *b = case_caps[ci][j];
-            bool is_local = false;
-            if (c->k_binding && b == c->k_binding) is_local = true;
-            for (uint32_t p = 0; p < c->n_params && !is_local; p++)
-                if (c->param_bindings && c->param_bindings[p] == b) is_local = true;
-            if (!is_local) case_caps[ci][filtered++] = b;
-        }
-        case_ncaps[ci] = filtered;
-        /* Add to all_caps */
-        for (uint32_t j = 0; j < case_ncaps[ci]; j++) {
-            bool already = false;
-            for (uint32_t ai = 0; ai < n_all_caps; ai++)
-                if (all_caps[ai] == case_caps[ci][j]) { already = true; break; }
-            if (!already) {
-                if (n_all_caps >= c_all_caps) {
-                    c_all_caps = (c_all_caps == 0) ? 8 : c_all_caps * 2;
-                    all_caps = (Binding **)realloc(all_caps, c_all_caps * sizeof(Binding *));
-                }
-                all_caps[n_all_caps++] = case_caps[ci][j];
-            }
-        }
-    }
-
-    bool has_captures = (n_all_caps > 0);
-
-    /* ----------------------------------------------------------------
-     * Step 2: Emit env struct type (if captures exist).
-     * ---------------------------------------------------------------- */
-    char env_type_name[64];
-    snprintf(env_type_name, sizeof(env_type_name), "__HEnv_%d", handle_id);
-    char env_var_name[64];
-    snprintf(env_var_name, sizeof(env_var_name), "__henv_%d", handle_id);
-
-    Buf *hbuf = ctx->pending_handler_fns;
-
-    if (has_captures) {
-        buf_printf(hbuf, "typedef struct %s %s;\n", env_type_name, env_type_name);
-        buf_printf(hbuf, "struct %s {\n", env_type_name);
-        for (uint32_t ci = 0; ci < n_all_caps; ci++) {
-            Binding *b = all_caps[ci];
-            char *raw = raw_name_for_binding(b);
-            /* ET2: poly fn params (TY_FORALL) must be stored as tur_poly_fn_t */
-            if (b->is_poly_fn) {
-                buf_printf(hbuf, "    tur_poly_fn_t %s;\n", raw);
-            } else {
-                /* When the captured binding is a function parameter whose
-                 * type is a pass-by-pointer struct (Phase D: size > 16
-                 * bytes), the param arrives at the function as `const T *`;
-                 * the env field must match that shape so the fill
-                 * `env->b = b;` and writeback `b = env->b;` compile, and so
-                 * that captured-binding field accesses (which emit `->`
-                 * for pass-by-ptr struct receivers) remain valid through
-                 * the env. Let-bound captures still store the struct value
-                 * by value -- the local was declared by value, not as a
-                 * pointer. */
-                bool is_param = false;
-                if (ctx->fn_params) {
-                    for (uint32_t pi = 0; pi < ctx->n_fn_params; pi++) {
-                        if (ctx->fn_params[pi] == b) { is_param = true; break; }
-                    }
-                }
-                /* Resolve through the current ABI specialization so a
-                 * captured `:A` binding inside a per-instantiation clone
-                 * picks up the concrete C type (e.g. struct Pos), not
-                 * the int64_t carrier. Without this, the env-fill
-                 * `__henv->v = v;` and writeback `v = __henv->v;` would
-                 * be int64_t-vs-struct mismatches at C compile time --
-                 * the closure-env counterpart of the per-instantiation
-                 * monomorphization fix at emit_module.c (see archived
-                 * generic-inline-c-struct-arg-monomorphises-to-int64). */
-                Type resolved_ty = emit_resolve_type(ctx, b->type);
-                if (is_param && type_struct_pass_by_ptr(resolved_ty)) {
-                    buf_printf(hbuf, "    const %s *%s;\n",
-                               type_c_name(resolved_ty), raw);
-                } else {
-                    buf_printf(hbuf, "    %s %s;\n",
-                               type_c_name(resolved_ty), raw);
-                }
-            }
-            free(raw);
-        }
-        buf_printf(hbuf, "};\n\n");
-    }
-
-    /* ----------------------------------------------------------------
-     * Step 3: Allocate names for handler functions, body fn, dispatch fn.
-     * ---------------------------------------------------------------- */
-    char **hfn_names = (char **)malloc(h->n_cases * sizeof(char *));
-    for (uint8_t i = 0; i < h->n_cases; i++) {
-        hfn_names[i] = (char *)malloc(48);
-        snprintf(hfn_names[i], 48, "__effect_handler_%d", ctx->tmp_n++);
-    }
-    char body_fn_name[64];
-    snprintf(body_fn_name, sizeof(body_fn_name), "__handle_body_%d", handle_id);
-    char dispatch_fn_name[64];
-    snprintf(dispatch_fn_name, sizeof(dispatch_fn_name), "__dispatch_%d", handle_id);
-
-    /* ----------------------------------------------------------------
-     * Step 4: Emit handler case functions (static, file-scope).
-     * Handler receives outer captures via __env (cast to HEnv*).
-     * ---------------------------------------------------------------- */
-    for (uint8_t i = 0; i < h->n_cases; i++) {
-        HandleCase *c = &h->cases[i];
-
-        /* Emit handler body with handle_captures context for outer var access.
-         * Use temp buffers so nested handles emit their static fns at file scope
-         * (before this function), not inside it. Pattern mirrors emit_fn_def. */
-        {
-            Buf hfn_buf; buf_init(&hfn_buf);
-            Buf hfn_pending; buf_init(&hfn_pending);
-
-            /* Cast __env to typed env pointer if we have captures */
-            if (has_captures) {
-                buf_printf(&hfn_buf,
-                    "    %s *%s = (%s *)__env;\n",
-                    env_type_name, env_var_name, env_type_name);
-            }
-
-            /* Unpack effect arguments into named locals */
-            for (uint32_t j = 0; j < c->n_params; j++) {
-                if (c->param_bindings && c->param_bindings[j]) {
-                    const char *ctype = type_c_name(c->param_bindings[j]->type);
-                    char *raw = raw_name_for_binding(c->param_bindings[j]);
-                    /* Unpack the effect arg from the int64 slot: a by-value
-                     * aggregate arrived boxed (deref), a float was
-                     * bit-reinterpreted by the perform side (reinterpret back --
-                     * a plain cast would numerically convert the bits),
-                     * everything else is a plain cast. */
-                    char src[48];
-                    snprintf(src, sizeof(src), "__effect_args[%d]", j);
-                    char *ld = eff_slot_load(c->param_bindings[j]->type, src);
-                    /* A fn-value payload is referenced (indirect call, emit_value)
-                     * by its RAW id-less name -- name_for_binding's TY_FN-non-boxed
-                     * path -- so declare it the same way; otherwise the declaration
-                     * (`f_<id>`) and the use (`f`) diverge and `f` is undeclared. */
-                    bool fnval = c->param_bindings[j]->type.kind == TY_FN
-                                 && !c->param_bindings[j]->type.as.fn.boxed;
-                    if (fnval)
-                        buf_printf(&hfn_buf, "    %s %s = %s;\n", ctype, raw, ld);
-                    else
-                        buf_printf(&hfn_buf, "    %s %s_%u = %s;\n",
-                                   ctype, raw, (unsigned)c->param_bindings[j]->id, ld);
-                    free(ld);
-                    free(raw);
-                }
-            }
-
-            /* Bind k - now it's a fiber pointer cast to int64_t */
-            if (c->k_binding) {
-                char *raw = raw_name_for_binding(c->k_binding);
-                buf_printf(&hfn_buf,
-                    "    int64_t %s_%u = __k;\n",
-                    raw, (unsigned)c->k_binding->id);
-                free(raw);
-            }
-
-            EmitCtx hctx = *ctx;
-            hctx.file = &hfn_buf;
-            hctx.pending_handler_fns = &hfn_pending;
-            hctx.indent = 4;
-            hctx.fn_params = NULL;
-            hctx.n_fn_params = 0;
-            hctx.closure = NULL;
-            hctx.env_var_name = has_captures ? env_var_name : NULL;
-            hctx.defer_captures = NULL;
-            hctx.n_defer_captures = 0;
-            hctx.frame_var = NULL;
-            hctx.return_emitted = false;
-            hctx.handle_captures = has_captures ? all_caps : NULL;
-            hctx.n_handle_captures = has_captures ? n_all_caps : 0;
-            hctx.handle_env_name = has_captures ? env_var_name : NULL;
-            /* Tier C (P2): this fiber handler fn returns the int64 effect ABI, not
-             * the outer function's C return type -- so a pending-panic propagation
-             * return is `(int64_t){0}`, and an aggregate result is boxed below. */
-            hctx.current_fn_ret_ctype = "int64_t";
-
-            /* Emit handler case body.
-             * Phase 19D: for non-never, non-nil bodies, or nil bodies ending in
-             * fiber-resume, use emit_value so the fiber result is returned.
-             * For never-typed or nil bodies that don't resume, use emit_stmt + return 0. */
-            if (!c->body) {
-                buf_puts(&hfn_buf, "    return 0;\n");
-            } else if (c->body->type.kind == TY_NEVER) {
-                /* Never-returning body: emit as stmt (panic, discontinue, etc.) */
-                emit_stmt(&hctx, &hfn_buf, c->body);
-                buf_puts(&hfn_buf, "    return 0; /* unreachable */\n");
-            } else {
-                char *hret = emit_value(&hctx, &hfn_buf, c->body);
-                /* Check if the value is nil placeholder (atom_nil = ((void)0)) */
-                bool is_nil_placeholder = (strcmp(hret, "((void)0)") == 0);
-                if (is_nil_placeholder) {
-                    /* Body is nil-typed and doesn't produce a fiber result */
-                    free(hret);
-                    buf_puts(&hfn_buf, "    return 0;\n");
-                } else {
-                    /* Store the handle result into the int64 ABI: a by-value
-                     * aggregate boxed, a float bit-reinterpreted (the
-                     * resume/perform/handle side unpacks with the inverse). */
-                    char *sv = eff_slot_store(c->body->type, hret);
-                    buf_printf(&hfn_buf, "    return %s;\n", sv);
-                    free(sv); free(hret);
-                }
-            }
-
-            ctx->tmp_n = hctx.tmp_n;
-
-            /* Flush inner pending fns BEFORE this handler function */
-            if (hfn_pending.len > 0) {
-                buf_write(hbuf, hfn_pending.data, hfn_pending.len);
-            }
-            buf_free(&hfn_pending);
-
-            /* Now emit forward decl + function definition */
-            buf_printf(hbuf,
-                "static int64_t %s(int64_t *__effect_args, int __n_effect_args,"
-                " int64_t __k, void *__env);\n", hfn_names[i]);
-            buf_printf(hbuf,
-                "static int64_t %s(int64_t *__effect_args, int __n_effect_args,"
-                " int64_t __k, void *__env) {\n", hfn_names[i]);
-            buf_write(hbuf, hfn_buf.data, hfn_buf.len);
-            buf_puts(hbuf, "}\n\n");
-            buf_free(&hfn_buf);
-        }
-    }
-
-    /* ----------------------------------------------------------------
-     * Step 5: Emit handle body fiber function.
-     * This is called as the fiber's entry_fn. It accesses the env
-     * via tur_current_fiber->eff_ctx->body_env.
-     *
-     * Use a temporary buffer + nested pending_hfns so that inner
-     * handles write their static functions BEFORE this function
-     * (not inside it). Pattern mirrors emit_fn_def.
-     * ---------------------------------------------------------------- */
-    {
-        Buf fn_buf; buf_init(&fn_buf);
-        Buf inner_pending; buf_init(&inner_pending);
-
-        if (has_captures) {
-            buf_printf(&fn_buf,
-                "    TurEffectCaptureCtx *__cap = (TurEffectCaptureCtx *)tur_current_fiber->eff_ctx;\n");
-            buf_printf(&fn_buf,
-                "    %s *%s = (%s *)__cap->body_env;\n",
-                env_type_name, env_var_name, env_type_name);
-        }
-
-        EmitCtx bctx = *ctx;
-        bctx.file = &fn_buf;
-        bctx.pending_handler_fns = &inner_pending;
-        bctx.indent = 4;
-        bctx.fn_params = NULL;
-        bctx.n_fn_params = 0;
-        bctx.closure = NULL;
-        bctx.env_var_name = has_captures ? env_var_name : NULL;
-        bctx.defer_captures = NULL;
-        bctx.n_defer_captures = 0;
-        bctx.frame_var = NULL;
-        bctx.return_emitted = false;
-        bctx.handle_captures = has_captures ? all_caps : NULL;
-        bctx.n_handle_captures = has_captures ? n_all_caps : 0;
-        bctx.handle_env_name = has_captures ? env_var_name : NULL;
-        /* Tier C (P2): the body fiber fn is void (it stores into
-         * tur_current_fiber->result), so a pending-panic propagation is a bare
-         * `return;`, not a typed zero of the outer function's return type. */
-        bctx.current_fn_ret_ctype = "void";
-
-        if (h->body->type.kind == TY_NIL || h->body->type.kind == TY_NEVER) {
-            emit_stmt(&bctx, &fn_buf, h->body);
-            buf_puts(&fn_buf, "    tur_current_fiber->result = 0;\n");
-        } else {
-            char *bret = emit_value(&bctx, &fn_buf, h->body);
-            /* Store the body result into the int64 fiber result slot: a by-value
-             * aggregate boxed, a float bit-reinterpreted (a plain cast would
-             * truncate the fraction); the handle-site / resume unpacks it. */
-            char *sv = eff_slot_store(h->body->type, bret);
-            buf_printf(&fn_buf, "    tur_current_fiber->result = %s;\n", sv);
-            free(sv);
-            free(bret);
-        }
-
-        ctx->tmp_n = bctx.tmp_n;
-
-        /* Emit defer thunks registered during handle body emission.
-         * They were queued on bctx but not yet flushed. Emit them to
-         * inner_pending so they appear before the body function in hbuf. */
-        if (bctx.pending_defer_thunks != ctx->pending_defer_thunks) {
-            /* Extract only the NEW thunks (those prepended during body emit) */
-            DeferThunk *new_thunks = bctx.pending_defer_thunks;
-            if (new_thunks) {
-                DeferThunk *p = new_thunks;
-                while (p->next != ctx->pending_defer_thunks) p = p->next;
-                p->next = NULL;  /* terminate new-thunks list */
-                /* Use bctx so name_for_binding resolves handle captures correctly */
-                EmitCtx thunk_ctx = bctx;
-                thunk_ctx.pending_defer_thunks = new_thunks;
-                emit_pending_defer_thunks(&thunk_ctx, &inner_pending, &inner_pending);
-                /* emit_pending_defer_thunks freed the new thunks; ctx unchanged */
-            }
-        }
-
-        /* Flush nested pending handler fns before the body function */
-        if (inner_pending.len > 0) {
-            buf_write(hbuf, inner_pending.data, inner_pending.len);
-        }
-        buf_free(&inner_pending);
-
-        /* Forward declaration */
-        buf_printf(hbuf, "static void %s(void);\n", body_fn_name);
-        /* Function definition */
-        buf_printf(hbuf, "static void %s(void) {\n", body_fn_name);
-        /* Emit body content */
-        buf_write(hbuf, fn_buf.data, fn_buf.len);
-        buf_puts(hbuf, "}\n\n");
-        buf_free(&fn_buf);
-    }
-
-    /* ----------------------------------------------------------------
-     * Step 6: Emit dispatch function.
-     * ---------------------------------------------------------------- */
-    buf_printf(hbuf, "static int64_t %s(void *__ctx_void, int64_t __k_int, int64_t __resume_val);\n",
-               dispatch_fn_name);
-
-    /* MS1: Emit multishot wrapper helpers (env struct + cont_fn + clone_fn).
-     * These are emitted after the dispatch fn forward declaration so they can
-     * call dispatch_fn_name, and before the dispatch fn body that calls them. */
-    for (uint8_t i = 0; i < h->n_cases; i++) {
-        HandleCase *ms_c = &h->cases[i];
-        if (ms_c->cont_kind != CK_MULTISHOT) continue;
-        /* Env struct: captures the dispatch context + fiber, plus a snapshot of
-         * the fiber's suspended-at-perform stack image so each resume re-runs an
-         * INDEPENDENT copy of the continuation (true multishot).  See
-         * docs/archive/history/turi-effect-multishot-degenerate-resume.md. */
-        buf_printf(hbuf, "struct __ms_env_%d_%d { void *__ctx; int64_t __k_int; "
-                         "FiberBlock *__fiber; char *__stack_image; size_t __image_size; "
-                         "ucontext_t __saved_ctx; };\n",
-                   handle_id, (int)i);
-        /* Continuation function: restore the fiber to its captured perform point,
-         * then dispatch_fn(ctx, k_int, v) resumes that fresh copy. */
-        buf_printf(hbuf,
-            "static int64_t __ms_cont_fn_%d_%d(void *__env, int64_t __v) {\n",
-            handle_id, (int)i);
-        buf_printf(hbuf,
-            "    struct __ms_env_%d_%d *__e = (struct __ms_env_%d_%d *)__env;\n",
-            handle_id, (int)i, handle_id, (int)i);
-        buf_puts(hbuf,
-            "    if (__e->__fiber && __e->__stack_image) {\n"
-            "        memcpy(__e->__fiber->stack, __e->__stack_image, __e->__image_size);\n"
-            "        __e->__fiber->ctx = __e->__saved_ctx;\n"
-            "        __e->__fiber->done = 0;\n"
-            "    }\n");
-        buf_printf(hbuf,
-            "    return %s(__e->__ctx, __e->__k_int, __v);\n", dispatch_fn_name);
-        buf_puts(hbuf, "}\n");
-        /* Clone function: shallow copy.  The stack image is written once at
-         * capture and only read on restore, so clones safely share it. */
-        buf_printf(hbuf,
-            "static void *__ms_env_clone_%d_%d(const void *__env) {\n",
-            handle_id, (int)i);
-        buf_printf(hbuf,
-            "    struct __ms_env_%d_%d *__orig = (struct __ms_env_%d_%d *)__env;\n",
-            handle_id, (int)i, handle_id, (int)i);
-        buf_printf(hbuf,
-            "    struct __ms_env_%d_%d *__copy = (struct __ms_env_%d_%d *)malloc(sizeof(struct __ms_env_%d_%d));\n",
-            handle_id, (int)i, handle_id, (int)i, handle_id, (int)i);
-        buf_puts(hbuf, "    if (__copy) *__copy = *__orig;\n");
-        buf_puts(hbuf, "    return __copy;\n");
-        buf_puts(hbuf, "}\n");
-    }
-
-    buf_printf(hbuf, "static int64_t %s(void *__ctx_void, int64_t __k_int, int64_t __resume_val) {\n",
-               dispatch_fn_name);
-    buf_puts(hbuf, "    TurEffectCaptureCtx *__dcap = (TurEffectCaptureCtx *)__ctx_void;\n");
-    buf_puts(hbuf, "    FiberBlock *__fiber = (FiberBlock *)(intptr_t)__k_int;\n");
-    buf_puts(hbuf, "    int64_t __r = tur_fiber_block_resume(__fiber, __resume_val);\n");
-    buf_puts(hbuf, "    if (__fiber->done) { return __fiber->result; }\n");
-    buf_puts(hbuf, "    if (!__dcap->has_pending_effect) return __r;\n");
-    /* Dispatch to matching handler case.  F2: a shallow handler guards every case
-     * on `!shallow_consumed` and sets the flag when it matches, so once its case
-     * has run, a later same-effect perform matches no case and falls through to
-     * the bubble-up else branch (forward to the enclosing handler). */
-    const char *sh_guard = h->shallow ? "!__dcap->shallow_consumed && " : "";
-    for (uint8_t i = 0; i < h->n_cases; i++) {
-        HandleCase *c = &h->cases[i];
-        if (i == 0)
-            buf_printf(hbuf, "    if (%sstrcmp(__dcap->eff_name, \"%s\") == 0) {\n",
-                       sh_guard, c->effect_name->name);
-        else
-            buf_printf(hbuf, "    } else if (%sstrcmp(__dcap->eff_name, \"%s\") == 0) {\n",
-                       sh_guard, c->effect_name->name);
-        if (h->shallow)
-            buf_puts(hbuf, "        __dcap->shallow_consumed = true;\n");
-        if (c->cont_kind == CK_MULTISHOT) {
-            /* MS1: wrap fiber k in a tur_cloneable_cont for snapshot-safe multi-shot. */
-            buf_printf(hbuf,
-                "        struct __ms_env_%d_%d *__ms_e = (struct __ms_env_%d_%d *)malloc(sizeof(struct __ms_env_%d_%d));\n",
-                handle_id, (int)i, handle_id, (int)i, handle_id, (int)i);
-            buf_puts(hbuf, "        if (!__ms_e) abort();\n");
-            buf_printf(hbuf, "        __ms_e->__ctx = __ctx_void; __ms_e->__k_int = __k_int;\n");
-            /* Snapshot the fiber's stack at the perform point so each resume can
-             * restore and re-run an independent copy (true multishot). */
-            buf_puts(hbuf,
-                "        __ms_e->__fiber = __fiber;\n"
-                "        __ms_e->__image_size = __fiber->stack_size;\n"
-                "        __ms_e->__stack_image = (char *)malloc(__fiber->stack_size);\n"
-                "        if (!__ms_e->__stack_image) abort();\n"
-                "        memcpy(__ms_e->__stack_image, __fiber->stack, __fiber->stack_size);\n"
-                "        __ms_e->__saved_ctx = __fiber->ctx;\n");
-            buf_printf(hbuf,
-                "        int64_t __k_ms = (int64_t)(intptr_t)tur_cloneable_cont_alloc(__ms_cont_fn_%d_%d, __ms_e, __ms_env_clone_%d_%d, free);\n",
-                handle_id, (int)i, handle_id, (int)i);
-            if (has_captures)
-                buf_printf(hbuf,
-                    "        return %s(__dcap->eff_args, __dcap->eff_n_args, __k_ms, __dcap->body_env);\n",
-                    hfn_names[i]);
-            else
-                buf_printf(hbuf,
-                    "        return %s(__dcap->eff_args, __dcap->eff_n_args, __k_ms, NULL);\n",
-                    hfn_names[i]);
-        } else if (has_captures)
-            buf_printf(hbuf,
-                "        return %s(__dcap->eff_args, __dcap->eff_n_args, __k_int, __dcap->body_env);\n",
-                hfn_names[i]);
-        else
-            buf_printf(hbuf,
-                "        return %s(__dcap->eff_args, __dcap->eff_n_args, __k_int, NULL);\n",
-                hfn_names[i]);
-    }
-    if (h->n_cases > 0) {
-        buf_puts(hbuf, "    } else {\n");
-        /* Phase 19D: bubble unhandled effect to outer fiber if possible */
-        buf_puts(hbuf, "        /* Phase 19D: bubble up unhandled effect to outer fiber */\n");
-        buf_puts(hbuf, "        FiberBlock *__outer_f = tur_current_fiber;\n");
-        buf_puts(hbuf, "        if (__outer_f && __outer_f->eff_ctx) {\n");
-        buf_puts(hbuf, "            TurEffectCaptureCtx *__outer_cap = (TurEffectCaptureCtx *)__outer_f->eff_ctx;\n");
-        buf_puts(hbuf, "            __outer_cap->eff_name = __dcap->eff_name;\n");
-        buf_puts(hbuf, "            int __bun = __dcap->eff_n_args < 8 ? __dcap->eff_n_args : 8;\n");
-        buf_puts(hbuf, "            for (int __bi = 0; __bi < __bun; __bi++) __outer_cap->eff_args[__bi] = __dcap->eff_args[__bi];\n");
-        buf_puts(hbuf, "            __outer_cap->eff_n_args = __dcap->eff_n_args;\n");
-        buf_puts(hbuf, "            __outer_cap->has_pending_effect = true;\n");
-        buf_puts(hbuf, "            tur_fiber_block_yield(0);\n");
-        buf_puts(hbuf, "            __outer_cap->has_pending_effect = false;\n");
-        /* Recursively dispatch inner fiber with the value the outer handler provided */
-        buf_printf(hbuf, "            return %s(__ctx_void, __k_int, __outer_f->arg);\n",
-                   dispatch_fn_name);
-        buf_puts(hbuf, "        }\n");
-        buf_puts(hbuf, "        fprintf(stderr, \"dispatch: unhandled effect: %s\\n\", __dcap->eff_name);\n");
-        buf_puts(hbuf, "        abort();\n");
-        buf_puts(hbuf, "    }\n");
-    }
-    buf_puts(hbuf, "    return 0;\n");
-    buf_puts(hbuf, "}\n\n");
-
-    /* ----------------------------------------------------------------
-     * Step 7: Inline code -- set up fiber and run dispatch.
-     * ---------------------------------------------------------------- */
-    char *result = fresh_tmp(ctx);
-
-    /* Alloc env struct if needed */
-    if (has_captures) {
-        indent_buf(body, ctx->indent);
-        buf_printf(body, "%s *%s = (%s *)malloc(sizeof(%s));\n",
-                   env_type_name, env_var_name, env_type_name, env_type_name);
-        /* Populate env fields */
-        for (uint32_t ci = 0; ci < n_all_caps; ci++) {
-            Binding *b = all_caps[ci];
-            char *raw = raw_name_for_binding(b);
-            char *cur_name = name_for_binding(ctx, b);
-            indent_buf(body, ctx->indent);
-            buf_printf(body, "%s->%s = %s;\n", env_var_name, raw, cur_name);
-            free(raw);
-            free(cur_name);
-        }
-    }
-
-    /* Alloc TurEffectCaptureCtx */
-    char cap_var[64];
-    snprintf(cap_var, sizeof(cap_var), "__cap_%d", handle_id);
-    indent_buf(body, ctx->indent);
-    buf_printf(body, "TurEffectCaptureCtx %s;\n", cap_var);
-    indent_buf(body, ctx->indent);
-    buf_printf(body, "%s.has_pending_effect = false;\n", cap_var);
-    indent_buf(body, ctx->indent);
-    buf_printf(body, "%s.eff_name = NULL;\n", cap_var);
-    indent_buf(body, ctx->indent);
-    buf_printf(body, "%s.eff_n_args = 0;\n", cap_var);
-    indent_buf(body, ctx->indent);
-    buf_printf(body, "%s.dispatch = %s;\n", cap_var, dispatch_fn_name);
-    indent_buf(body, ctx->indent);
-    buf_printf(body, "%s.shallow_consumed = false;\n", cap_var);  /* F2 */
-    indent_buf(body, ctx->indent);
-    buf_printf(body, "%s.body_env = %s;\n", cap_var,
-               has_captures ? env_var_name : "NULL");
-
-    /* Create the body fiber */
-    char fiber_var[64];
-    snprintf(fiber_var, sizeof(fiber_var), "__fiber_%d", handle_id);
-    indent_buf(body, ctx->indent);
-    buf_printf(body, "FiberBlock *%s = tur_fiber_block_new(%s, 0);\n",
-               fiber_var, body_fn_name);
-    indent_buf(body, ctx->indent);
-    buf_printf(body, "%s->eff_ctx = &%s;\n", fiber_var, cap_var);
-
-    /* Set up intercept frame (handler_fn == NULL means fiber-intercept) */
-    char frame_var[64];
-    snprintf(frame_var, sizeof(frame_var), "__eff_frame_%d", handle_id);
-    char chain_var[64];
-    snprintf(chain_var, sizeof(chain_var), "__eff_chain_%d", handle_id);
-
-    /* The intercept frame must be installed in the FIBER's effect handler chain,
-     * not the current chain.  We install it before starting the fiber by setting
-     * fiber->effect_handler_chain directly.
-     * parent is set to the current chain so effects not handled here can bubble up. */
-    char parent_chain_var[64];
-    snprintf(parent_chain_var, sizeof(parent_chain_var), "__parent_chain_%d", handle_id);
-    indent_buf(body, ctx->indent);
-    buf_printf(body,
-        "EffectHandlerFrame *%s = (tur_current_fiber"
-        " ? (EffectHandlerFrame *)tur_current_fiber->effect_handler_chain"
-        " : global_effect_handler_chain);\n", parent_chain_var);
-    indent_buf(body, ctx->indent);
-    buf_printf(body, "EffectHandlerFrame %s;\n", frame_var);
-    indent_buf(body, ctx->indent);
-    buf_printf(body, "%s.parent = %s;\n", frame_var, parent_chain_var);
-    indent_buf(body, ctx->indent);
-    buf_printf(body, "%s.n_cases = %d;\n", frame_var, h->n_cases);
-    for (uint8_t i = 0; i < h->n_cases; i++) {
-        HandleCase *c = &h->cases[i];
-        indent_buf(body, ctx->indent);
-        buf_printf(body, "%s.cases[%d].effect_name = \"%s\";\n",
-                   frame_var, i, c->effect_name->name);
-        indent_buf(body, ctx->indent);
-        /* NULL handler_fn = intercept case (fiber yields to dispatch loop) */
-        buf_printf(body, "%s.cases[%d].handler_fn = NULL;\n", frame_var, i);
-        indent_buf(body, ctx->indent);
-        buf_printf(body, "%s.cases[%d].env = NULL;\n", frame_var, i);
-    }
-    indent_buf(body, ctx->indent);
-    buf_printf(body, "%s->effect_handler_chain = &%s;\n", fiber_var, frame_var);
-
-    /* Start the dispatch loop -- first call resumes with 0 to start body */
-    indent_buf(body, ctx->indent);
-    if (returns_value) {
-        /* Load the handle result out of the int64 ABI returned by dispatch: a
-         * boxed aggregate deref'd, a float bit-reinterpreted (a plain cast would
-         * numerically convert the double's bits), everything else a plain cast. */
-        Buf dcall; buf_init(&dcall);
-        buf_printf(&dcall, "%s(&%s, (int64_t)(intptr_t)%s, 0)",
-                   dispatch_fn_name, cap_var, fiber_var);
-        buf_putc(&dcall, '\0');
-        char *ld = eff_slot_load(e->type, dcall.data);
-        buf_printf(body, "%s %s = %s;\n", type_c_name(e->type), result, ld);
-        free(ld);
-        buf_free(&dcall);
-    } else {
-        buf_printf(body, "%s(&%s, (int64_t)(intptr_t)%s, 0);\n",
-                   dispatch_fn_name, cap_var, fiber_var);
-    }
-
-    /* Phase 19D: Write env fields back to outer locals (so mutations in handler
-     * are visible in the outer scope after dispatch). Must be done BEFORE freeing
-     * the env, so do this unconditionally while env is still valid. */
-    if (has_captures) {
-        indent_buf(body, ctx->indent);
-        buf_puts(body, "/* Phase 19D: write-back env captures to outer locals */\n");
-        for (uint32_t ci = 0; ci < n_all_caps; ci++) {
-            Binding *b = all_caps[ci];
-            char *raw = raw_name_for_binding(b);
-            char *cur_name = name_for_binding(ctx, b);
-            indent_buf(body, ctx->indent);
-            buf_printf(body, "%s = %s->%s;\n", cur_name, env_var_name, raw);
-            free(raw);
-            free(cur_name);
-        }
-    }
-
-    /* If fiber is done, free it.  If not (k was stored), it lives on.
-     * Cache `done` into a local FIRST: freeing the fiber and then reading
-     * `fiber->done` again to decide whether to free the env is a
-     * use-after-free (it only "worked" because the freed slot was not yet
-     * reused). Reading the flag once up front, and freeing the env before
-     * the fiber, keeps the teardown sound. */
-    char done_var[80];
-    snprintf(done_var, sizeof(done_var), "__fiber_done_%d", handle_id);
-    indent_buf(body, ctx->indent);
-    buf_printf(body, "bool %s = %s->done;\n", done_var, fiber_var);
-
-    /* Free env if we allocated it and fiber is done (for immediate-resume case).
-     * If fiber is NOT done (k stored), leak env for v1 -- it must stay alive
-     * as long as the fiber might be resumed. Done before the fiber free so the
-     * cached flag (not the freed fiber) gates it. */
-    if (has_captures) {
-        indent_buf(body, ctx->indent);
-        buf_printf(body, "if (%s) { free(%s); }\n", done_var, env_var_name);
-    }
-
-    indent_buf(body, ctx->indent);
-    buf_printf(body, "if (%s) { free(%s->stack); free(%s); }\n",
-               done_var, fiber_var, fiber_var);
-
-    /* Cleanup */
-    for (uint8_t i = 0; i < h->n_cases; i++) free(hfn_names[i]);
-    free(hfn_names);
-    for (uint8_t i = 0; i < h->n_cases; i++) free(case_caps[i]);
-    free(case_caps);
-    free(case_ncaps);
-    free(all_caps);
-
-    (void)chain_var;  /* named but unused; kept for symmetry with frame_var */
-
-    if (returns_value) return result;
-    free(result);
+    /* A `perform` under the handle names the shape that evicted the function
+     * at its own site (the known-shapes list is there), as when the fiber
+     * emitter walked into it; report the handle itself only when there is
+     * none -- the SIG-REJECT case. */
+    HandlePerformWalk w = { ctx, 0 };
+    cps_visit_children(e, handle_report_performs, &w);
+    if (w.n == 0)
+        emit_handle_no_lowering(e);
     return atom_nil();
 }
 
@@ -1575,13 +952,23 @@ char *emit_effects_cont_pred(EmitCtx *ctx, Buf *body, const Expr *e) {
      * wrapper around one, and __dk_cont_live_word tells them apart as
      * __dk_resume_word does (cont-query-on-wrapped-handler-k-reads-past-
      * wrapper).  Both used to call fiber-runtime helpers deleted 2026-07-19,
-     * so either failed to link.  Any other cont flavor keeps tur_cont_consumed. */
+     * so either failed to link. */
     char *inner = emit_value(ctx, body, e->as.cont_pred_.expr);
     char *tmp = fresh_tmp(ctx);
     indent_buf(body, ctx->indent);
     const Type *kt = &e->as.cont_pred_.expr->type;
-    if (kt->kind == TY_CONT && kt->as.cont.flavor != CONT_EFFECT) {
-        buf_printf(body, "bool %s = !tur_cont_consumed((tur_cont *)(intptr_t)%s);\n", tmp, inner);
+    int flavor = kt->kind == TY_CONT ? kt->as.cont.flavor : CONT_EFFECT;
+    if (flavor == CONT_ESCAPE) {
+        /* cont-pred-on-escape-cont-fails-to-link: a call/cc / escape k is the
+         * `tur_escape_cont` landing pad, invocable while its prompt is on the
+         * stack -- the test tur_escape_resume makes before it longjmps.  The
+         * other non-effect flavors went to the deleted fiber runtime's
+         * tur_cont_consumed, so `(cont? k)` failed to link. */
+        buf_printf(body, "bool %s = tur_escape_is_live((int64_t)(intptr_t)(%s));\n",
+                   tmp, inner);
+    } else if (flavor == CONT_CLONEABLE || flavor == CONT_SERIAL) {
+        /* A cloneable or serial k is multi-shot: it never becomes consumed. */
+        buf_printf(body, "bool %s = (intptr_t)(%s) != 0;\n", tmp, inner);
     } else {
         buf_printf(body, "bool %s = __dk_cont_live_word((intptr_t)(%s));\n", tmp, inner);
     }

@@ -634,7 +634,10 @@ remain evict the function to the direct emitter, with a located error at the
   (perform ...)))` -- assign the performed value to a `let` first);
 - a loop that sits inside a handler clause and performs an effect handled
   further out (hoisting the loop into a helper does not escape this one: the
-  helper is evicted with its caller).
+  helper is evicted with its caller);
+- a `return` inside a `while` that performs, when more code follows the loop
+  (make the loop the function's last form, or carry the result out in a
+  `^mut` and test it after the loop).
 
 `TUR_TRACE_EVICT=1` prints which form evicted which function, and
 `TUR_TRACE_CORE=1` names the form the structural check rejected.

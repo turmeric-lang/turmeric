@@ -114,6 +114,14 @@ void emit_cps_callcc_prelude(Buf *out) {
 "    TUR_LONGJMP(cc->buf);\n"
 "    return 0; /* unreachable */\n"
 "}\n"
+"/* (cont? k) on a call/cc / escape k: invocable iff tur_escape_resume would\n"
+" * accept it.  The live set is the runtime's, so the program half asks here\n"
+" * rather than reading its own copy (cont-pred-on-escape-cont-fails-to-link). */\n"
+"static bool tur_escape_is_live(int64_t k) {\n"
+"    tur_escape_cont *cc = (tur_escape_cont *)(intptr_t)k;\n"
+"    for (int i = 0; i < tur_escape_live_n && cc; i++) if (tur_escape_live[i] == cc) return cc->valid;\n"
+"    return false;\n"
+"}\n"
 "/* An `any`-typed call/cc: the resume value is a 16-byte box, and `result`\n"
 " * carries one word -- so (k v) hands over a heap copy's address and the\n"
 " * landing reads and frees it (emit_callcc).  One malloc per escape. */\n"
@@ -163,7 +171,15 @@ void emit_cps_cloneable_bridge_prelude(Buf *out) {
 void emit_dk_resume_word_prelude(Buf *out, bool bridged) {
     buf_puts(out,
 "__attribute__((unused, noinline))\n"
-"static intptr_t __dk_resume_word(intptr_t k, intptr_t w) {\n");
+"static intptr_t __dk_resume_word(intptr_t k, intptr_t w) {\n"
+/* resume-of-non-continuation-int-crashes: an `int` k may be any number, and
+ * a small one was dereferenced as a DK.  No chain or wrapper lives in the
+ * first page, so report it as the interpreter does instead of crashing. */
+"    if ((uintptr_t)k < 4096) {\n"
+"        fflush(stdout);\n"
+"        fprintf(stderr, \"tur: resume: not a continuation (%lld)\\n\", (long long)k);\n"
+"        abort();\n"
+"    }\n");
     if (bridged)
         buf_puts(out,
 "    if (*(int64_t (* const *)(void *, int64_t))k == __dk_cont_fn)\n"
@@ -181,7 +197,7 @@ void emit_dk_resume_word_prelude(Buf *out, bool bridged) {
     buf_puts(out,
 "__attribute__((unused, noinline))\n"
 "static bool __dk_cont_live_word(intptr_t k) {\n"
-"    if (!k) return false;   /* 0 is not a continuation */\n");
+"    if ((uintptr_t)k < 4096) return false;   /* nor is any small number */\n");
     if (bridged)
         buf_puts(out,
 "    if (*(int64_t (* const *)(void *, int64_t))k == __dk_cont_fn) return true;\n");
@@ -1122,11 +1138,24 @@ void emit_cps_runtime_prelude(Buf *out) {
     buf_puts(out,
 "/* E2a: direct-entry -> CPS-entry registry (probes/e2a-registry-probe.c). */\n"
 "typedef intptr_t (*__tur_cps_fn)();\n"
-"static struct { intptr_t direct; __tur_cps_fn cps; } __tur_cps_reg[256];\n"
+/* cps-callback-registry-overflows-past-256: the registry grows.  It was a
+ * 256-entry array that dropped every later registration, so the 257th
+ * threadable callback missed its lookup, took the direct entry (a fresh DK
+ * root) and aborted with "unhandled effect".  A miss cannot be made loud at
+ * the fat dispatch: a PURE fn-value in an effectful slot is never registered
+ * and takes that same direct entry on purpose. */
+"static struct { intptr_t direct; __tur_cps_fn cps; } *__tur_cps_reg;\n"
 "static int __tur_cps_reg_n = 0;\n"
+"static int __tur_cps_reg_cap = 0;\n"
 "__attribute__((unused)) static void __tur_cps_register(intptr_t direct, __tur_cps_fn cps) {\n"
-"    if (__tur_cps_reg_n < 256) { __tur_cps_reg[__tur_cps_reg_n].direct = direct;\n"
-"        __tur_cps_reg[__tur_cps_reg_n].cps = cps; __tur_cps_reg_n++; }\n"
+"    if (__tur_cps_reg_n == __tur_cps_reg_cap) {\n"
+"        int cap = __tur_cps_reg_cap ? __tur_cps_reg_cap * 2 : 256;\n"
+"        void *grown = realloc(__tur_cps_reg, (size_t)cap * sizeof(*__tur_cps_reg));\n"
+"        if (!grown) { fprintf(stderr, \"tur: out of memory registering a CPS entry\\n\"); abort(); }\n"
+"        __tur_cps_reg = grown; __tur_cps_reg_cap = cap;\n"
+"    }\n"
+"    __tur_cps_reg[__tur_cps_reg_n].direct = direct;\n"
+"    __tur_cps_reg[__tur_cps_reg_n].cps = cps; __tur_cps_reg_n++;\n"
 "}\n"
 "__attribute__((unused)) static __tur_cps_fn __tur_cps_lookup(intptr_t direct) {\n"
 "    for (int i = 0; i < __tur_cps_reg_n; i++)\n"

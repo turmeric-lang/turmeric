@@ -156,7 +156,8 @@ def main():
     ap.add_argument("--c", action="store_true",
                     help="inputs are already-emitted C files")
     ap.add_argument("--jobs", type=int, default=os.cpu_count() or 2)
-    ap.add_argument("--tur", default=os.path.join(REPO, "build", "tur"))
+    ap.add_argument("--tur", default=os.path.join(REPO, "build", "tur"),
+                    type=os.path.abspath)
     ap.add_argument("--shard", default=os.environ.get("TUR_FCONV_SHARD"),
                     help='run a round-robin slice of --corpus, as "i/N" '
                          '(default: $TUR_FCONV_SHARD; unset runs everything)')
@@ -189,7 +190,17 @@ def main():
         if args.corpus:
             inputs = shard_slice(list(corpus_inputs()), shard_index, shard_total)
         else:
-            inputs = args.files
+            # float-conversion-checker-passes-on-relative-path: lint_tur runs
+            # `tur emit-c` from the repo root, so a path relative to the
+            # caller's directory named nothing there -- the emit failed, was
+            # read as "not a program", and the run reported 0 programs and
+            # success.  Resolve against the caller's directory first.
+            inputs = [os.path.abspath(p) for p in args.files]
+            missing = [p for p in inputs if not os.path.isfile(p)]
+            if missing:
+                for p in missing:
+                    print("check-emitted-float-conversions: no such file: %s" % p)
+                return 2
         workdir = tempfile.mkdtemp(prefix="fconv-")
         try:
             with ThreadPoolExecutor(max_workers=args.jobs) as pool:
@@ -211,6 +222,12 @@ def main():
             print("    %s" % text)
     print("check-emitted-float-conversions: %d program(s) checked%s, %d finding(s)"
           % (checked, shard_label(shard_index, shard_total), n))
+    # Files the caller named, none of which turned out to be a program this
+    # check applies to: that checked nothing, so it must not read as a pass.
+    if args.files and not args.corpus and checked == 0:
+        print("check-emitted-float-conversions: none of the %d file(s) given "
+              "compiled to a program -- nothing was checked" % len(args.files))
+        return 2
     return 1 if n else 0
 
 

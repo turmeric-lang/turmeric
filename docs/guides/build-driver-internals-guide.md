@@ -100,24 +100,25 @@ A global flag reaches its `g_*` global through one of three routes:
 
 | Route | Flags | Notes |
 |---|---|---|
-| `parse_*` helpers (`parse_no_color`, `parse_debug_build`, `parse_no_abi_cache`, ...) | `--no-color`, `--panic-abort`, `--warn-unused-result`, `--lint-panic`, `--no-contracts`, `--debug`, `-Werror=...`, `--no-auto-spice`, `--no-abi-cache`, `--no-r7rs-gc`, `--no-saffron-gc` | Each scans the **whole** `argv` and returns a bool; they do not remove anything |
-| The strip loop in `tur_main_inner` | the flags above (except `--no-color` and `--no-abi-cache`), plus every `--dump-*`, `--strict-*`, `--lint-*`, `--enable=`, `--macro-caps=`, `--json`, `--explain`, `-X<name>`, ... | Sets the global (or confirms the helper did) and shifts the flag out of `argv` so the subcommand parser never sees it |
+| `parse_*` helpers (`parse_no_color`, `parse_debug_build`, `parse_no_abi_cache`, ...) | `--no-color`, `--panic-abort`, `--warn-unused-result`, `--lint-panic`, `--no-contracts`, `--debug`, `-Werror=...`, `--no-auto-spice`, `--no-abi-cache`, `--no-r7rs-gc`, `--no-saffron-gc` | Each scans `argv` up to the first `--` and returns a bool; they do not remove anything |
+| The strip loop in `tur_main_inner` | the flags above (except `--no-abi-cache`), plus every `--dump-*`, `--strict-*`, `--lint-*`, `--enable=`, `--macro-caps=`, `--json`, `--explain`, `-X<name>`, ... | Sets the global (or confirms the helper did) and shifts the flag out of `argv` so the subcommand parser never sees it |
 | Per-command parsers | `-I`, `-o`, `--build-dir`/`-B`, `--runtime=`, `--shared`, `--engine`, ... | Local to each `if (strcmp(cmd, ...))` arm |
 
 Because of the strip loop, a global flag is accepted before **or** after the
 subcommand: `tur --strict-effects check f.tur` and
-`tur check f.tur --strict-effects` are the same. Two consequences that bite:
+`tur check f.tur --strict-effects` are the same. Two details:
 
-- **Neither the helpers nor the strip loop stop at `--`.** `tur run f.tur --
-  a --strict-effects b` turns on `--strict-effects` for the compile and hands
-  the program only `a b`.
-- **`--no-color` is read but never stripped.** `parse_no_color` sees it
-  anywhere, but the token stays in `argv`, and every compile subcommand's
-  parser then rejects it as unknown (`tur check f.tur --no-color` exits 2;
-  `tur --no-color check f.tur` treats `--no-color` as the subcommand and
-  exits 64). In practice color is decided by `stderr_is_tty()` alone.
+- **Both stop at `--`.** `argc` is cut at the first `--` while they run,
+  and the tail (the `--` included) is put back afterwards, so
+  `tur run f.tur -- a --strict-effects b` compiles with the default flags and
+  hands the program all three words. Until 2026-10-17 neither stopped there
+  ([global-flags-parsed-after-double-dash](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/global-flags-parsed-after-double-dash.md)).
+- **`--no-color` is read and stripped** like the others. It used to stay in
+  `argv`, so a trailing one was an unknown flag to the subcommand (exit 2) and
+  a leading one was taken for the subcommand (exit 64)
+  ([no-color-flag-rejected-everywhere](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/no-color-flag-rejected-everywhere.md)).
 
-`--no-abi-cache` is the other flag a helper reads and the strip loop leaves
+`--no-abi-cache` is the one flag a helper reads and the strip loop leaves
 in `argv`, so a subcommand parser that rejects unknown dashes has to skip it
 by name. The `build`, `compile` and `emit-c --output-dir` arms do; the
 single-file `emit-c`, `check` and `expand` arms do not, so `tur emit-c f.tur
@@ -337,7 +338,7 @@ zone). With `TUR_SHOW_CC=1`, the command is printed first:
 
 ```
 CC: cc -O2 -std=c99 -Wall -fno-strict-aliasing -Wno-misleading-indentation
-    -fwrapv -o 'h1' '/tmp/tur-build/hello_tur.c' .../src/runtime/hamt.c ... -lm
+    -fwrapv -o 'h1' '/tmp/tur-build/hello_tur-<hash>.c' .../src/runtime/hamt.c ... -lm
 ```
 
 | Piece | Where it comes from |
@@ -449,13 +450,15 @@ shares stdout. Anything the compiler printed to a buffered stdout -- a
 On a terminal stdout is line-buffered, so the order comes out right.
 Redirected, it is fully buffered: the child's output lands at whatever
 buffer boundary the parent's writes had reached, and the rest of the dump
-follows when the parent exits. `tur --dump-effects run f.tur > out` puts the
+followed when the parent exited: `tur --dump-effects run f.tur > out` put the
 program's `hi` in the middle of a dump line.
 
-Of the dumps in `run_core_pass`, only `--dump-mono-specs` is followed by a
-flush (and its comment still says "execv"). A new compile-time report that
-prints to stdout either flushes itself, or the fix goes in `RUN_ENTRY` (an
-`fflush(NULL)` before `system()` covers every dump at once).
+So `RUN_ENTRY` (and the stdin branch of `cmd_run`) calls `fflush(NULL)`
+before `system()`, which covers every dump at once, and `cc_system` does the
+same before each toolchain subprocess. A new compile-time report that prints
+to stdout needs no flush of its own. Until 2026-10-17 only
+`--dump-mono-specs` flushed
+([tur-run-dump-output-interleaves-program-output](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/tur-run-dump-output-interleaves-program-output.md)).
 
 ### Auto-spice discovery
 
@@ -472,7 +475,7 @@ Commands Inside a Spice"). Two helpers do it:
 | `check`, `expand`, `audit-spans`, `emit-c`, `emit-h` | yes | yes | yes |
 | `run <file>` | yes | yes | yes |
 | `build <file>`, `compile <file>` | yes | yes (the arm reads the manifest itself) | **no** |
-| `jit <file>` | **no** (only `-I`) | yes | yes |
+| `jit <file>` | yes | yes | yes |
 | `build <dir>` | from the manifest | yes (`discover_manifest_reader_macros` per module) | yes |
 | `run` (project mode) | from the manifest | from the manifest | **no** |
 
@@ -486,9 +489,10 @@ So a project with `:experiments [reflected-measures]` gets the gate under
 `tur build src/main.tur`, `tur compile src/main.tur` and a bare `tur run`
 compile with it off (and say "`^reflect` is ignored").
 
-`tur jit <file>` likewise resolves no intra-spice import that
-`tur run --engine jit <file>` resolves, because the `run` arm walks for
-includes before delegating and `cmd_jit` does not.
+`cmd_jit` walks for spice includes as the `run` arm does before delegating
+to it; until 2026-10-17 it did not, so `tur jit <file>` missed intra-spice
+imports `tur run --engine jit <file>` resolved
+([tur-jit-skips-spice-include-discovery](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/tur-jit-skips-spice-include-discovery.md)).
 
 `--no-auto-spice` sets `g_no_auto_spice`, which turns off the include walk
 only; reader macros and experiments still apply. CLAUDE.md's statement that
@@ -533,7 +537,7 @@ to `tur build <file>` run inside a project.
 
 | Cache | Location | Key | Invalidated by |
 |---|---|---|---|
-| Intermediate C | `$TMPDIR/tur-build/<sanitized input>.c` | the input path as typed | overwritten every build; kept for ccache |
+| Intermediate C | `$TMPDIR/tur-build/<sanitized base name>-<hash>.c` | xxHash64 of the input's real path | overwritten every build; kept for ccache |
 | r7rs library-unit object | `$TMPDIR/tur-build/prelude/<hash>.o` | xxHash64 of `TUR_VERSION`, `$CC`, the compile flags (less `-I` dirs that hold no headers, `dir_may_supply_headers`) and the unit's text | a different text or flags; LRU-pruned past 24 objects unused for 24 h (`prelude_cache_prune`) |
 | r7rs library-unit emission | `$TMPDIR/tur-build/prelude/<key>.lib` | `split_lib_cache_init`: the `tur` binary (path, dev, inode, size, mtime), the command line less inputs/outputs/`-I`, every `TUR_*` variable except `TUR_SHOW_CC` and `TUR_SPLIT_LIB_CACHE`, the experiments, the emission globals, and the path and content of every stdlib file the unit is written from | any of those changing; a program that reads a module of its own or would put its own item in the unit is never cached; pruned past 32 entries. `TUR_SPLIT_LIB_CACHE=0` disables, `=verify` re-emits and compares |
 | ABI clone index | `<build-dir>/.tur-abi-cache/index` (or `<emit-c dir>/.tur-abi-cache/`) | -- | rewritten by every separate-compilation build. **Nothing reads it back**: clones are recomputed each build, so `--no-abi-cache`/`TUR_NO_ABI_CACHE` only skips the write |
@@ -542,11 +546,13 @@ to `tur build <file>` run inside a project.
 
 Three properties of the intermediate-C cache are worth knowing:
 
-- **It is keyed on the path string, not the file.** Two concurrent
-  `tur build m.tur` (or `tur run m.tur`) from different directories write
-  the same `$TMPDIR/tur-build/m_tur.c`, and either `cc` can compile the other
-  one's program. The fixture suite never sees it because every fixture has a
-  distinct path.
+- **It is keyed on the file, not the path string.** The name carries a hash
+  of the input's real path (`m_tur-<16 hex>.c`), so two concurrent
+  `tur build m.tur` from different directories write different files. Until
+  2026-10-17 it was the path as typed, and either `cc` could compile the
+  other one's program
+  ([tur-build-intermediate-c-path-collides](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/tur-build-intermediate-c-path-collides.md)).
+  Two concurrent builds of the *same* file still share one name.
 - The same prefix holds the object, `.c` and `.link` sidecar of a
   `tur build --split-build` (`<stem>.o`), which the `build` arm deletes
   after the link. They are keyed on the stem alone.
@@ -673,12 +679,7 @@ Each was reproduced against the compiler this guide describes and filed in
 [`docs/reported/`](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/README.md). When one is fixed and archived,
 update the passage above that describes it and drop it from this list.
 
-- [tur-build-intermediate-c-path-collides](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/tur-build-intermediate-c-path-collides.md) -- Concurrent `tur build`s of same-named files in different directories swap programs
 - [build-file-and-run-project-ignore-manifest-experiments](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/build-file-and-run-project-ignore-manifest-experiments.md) -- Some commands ignore the manifest's `:experiments`
-- [global-flags-parsed-after-double-dash](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/global-flags-parsed-after-double-dash.md) -- Global flags after `--` are consumed by `tur` instead of passed to the program
-- [no-color-flag-rejected-everywhere](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/no-color-flag-rejected-everywhere.md) -- `--no-color` is documented but rejected in every position
-- [tur-run-dump-output-interleaves-program-output](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/tur-run-dump-output-interleaves-program-output.md) -- `tur --dump-* run` interleaves the program's output into the dump
-- [tur-jit-skips-spice-include-discovery](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/tur-jit-skips-spice-include-discovery.md) -- `tur jit <file>` does not discover spice includes
 
 ## Maintenance
 

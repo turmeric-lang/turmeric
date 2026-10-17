@@ -103,6 +103,10 @@ fi
 # panic strands is retired by its bracket and by the catch boundary; with
 # regions off there is nothing to strand and the depth reads 0 all the same:
 #   region-catch-retires-stranded-generation.
+# The dead generic-base constructor (dead-base-ctor-ignores-regions-off): a
+# phantom-parameter `:heap` generic's base ctor called the region allocator
+# whatever the hatch said, which is undeclared with regions off:
+#   heap-phantom-generic-dead-base-ctor.
 FIXTURES="
 refined-nonempty
 constrained-defn-cons-return-monomorphize
@@ -122,6 +126,7 @@ region-escape-via-erasure
 region-escape-via-inline-c
 region-escape-via-callcc
 region-catch-retires-stranded-generation
+heap-phantom-generic-dead-base-ctor
 "
 
 for fx in $FIXTURES; do
@@ -132,18 +137,23 @@ for fx in $FIXTURES; do
         fail "$fx" "fixture missing (input.tur or expected.stdout)"
         continue
     fi
-    out=$(TUR_REGIONS=0 $TIMEOUT "$TUR" run "$input" 2>"$WORKDIR/err")
+    # A call to a region function the hatch left undeclared is an error on
+    # gcc 14+ / clang 16+ but only a warning (and a truncated pointer) on older
+    # compilers, so make it an error everywhere: dead-base-ctor-ignores-
+    # regions-off passed this harness on gcc 13.
+    out=$(CC="${CC:-cc} -Werror=implicit-function-declaration" \
+          TUR_REGIONS=0 $TIMEOUT "$TUR" run "$input" 2>"$WORKDIR/err")
     rc=$?
     if [ "$rc" -ne 0 ] && [ -z "$out" ]; then
         fail "$fx" "did not run with regions off: $(tail -2 "$WORKDIR/err" | head -1)"
         continue
     fi
-    if [ "$out" = "$(cat "$expected")" ]; then
-        pass "$fx"
-    else
+    if [ "$out" != "$(cat "$expected")" ]; then
         fail "$fx" "output differs with TUR_REGIONS=0 (vs committed default-on expected.stdout)"
         diff <(printf '%s\n' "$out") "$expected" | head -10
+        continue
     fi
+    pass "$fx"
 done
 
 echo

@@ -14,5 +14,3 @@
       (println (args/get-int res "count"))
       (args/result-free res))
     (args/spec-free spec)))
-
-(main)

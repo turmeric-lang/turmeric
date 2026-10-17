@@ -1,0 +1,13 @@
+;; cps-ir-pending-list-overflow-drops-bindings: atomize kept 32 pending
+;; bindings per expression and dropped the rest while still returning their
+;; names, so a colored call with 34 computed arguments emitted an undeclared
+;; __t33.  The Pending list grows now.
+(defeffect Ask [] : int)
+(defn sum-ask [a0 : int a1 : int a2 : int a3 : int a4 : int a5 : int a6 : int a7 : int a8 : int a9 : int a10 : int a11 : int a12 : int a13 : int a14 : int a15 : int a16 : int a17 : int a18 : int a19 : int a20 : int a21 : int a22 : int a23 : int a24 : int a25 : int a26 : int a27 : int a28 : int a29 : int a30 : int a31 : int a32 : int a33 : int] : int
+  (+ (perform (Ask)) (+ a0 a33)))
+(defn run [x : int] : int
+  (handle (sum-ask (+ x 0) (+ x 1) (+ x 2) (+ x 3) (+ x 4) (+ x 5) (+ x 6) (+ x 7) (+ x 8) (+ x 9) (+ x 10) (+ x 11) (+ x 12) (+ x 13) (+ x 14) (+ x 15) (+ x 16) (+ x 17) (+ x 18) (+ x 19) (+ x 20) (+ x 21) (+ x 22) (+ x 23) (+ x 24) (+ x 25) (+ x 26) (+ x 27) (+ x 28) (+ x 29) (+ x 30) (+ x 31) (+ x 32) (+ x 33))
+    (Ask [] k) (resume k 1000)))
+(defn main [] : int
+  (println (run 1))
+  0)

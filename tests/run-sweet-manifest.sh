@@ -101,6 +101,54 @@ fi
 rm -f "$INIT_REFUSE_ERR"
 rm -rf "$INIT_DIR"
 
+# SW6: `tur add` / `tur add-cmake` edit a build.tur.sweet, and what they add
+# is in effect.  Two defects stacked here (tur-add-cannot-edit-sweet-manifest):
+# the editor read the file with the s-expr reader (`unexpected character
+# '#'`), and the manifest reader skipped every key written on its own indented
+# line -- the preprocessor wraps `  :spices ...` as `(:spices ...)` -- so even
+# a hand-written sweet `:spices` entry did nothing.  The second add of each
+# kind must extend the slot, not add a second one, and the comment stays.
+ED=$(mktemp -d -t tur-sweet-edit.XXXXXX)
+mkdir -p "$ED/proj/src" "$ED/dep1" "$ED/dep2"
+printf '(defpackage dep1 :name "dep1" :version "0.1.0")\n' >"$ED/dep1/build.tur"
+printf '(defpackage dep2 :name "dep2" :version "0.1.0")\n' >"$ED/dep2/build.tur"
+cat >"$ED/proj/build.tur.sweet" <<'EOF'
+#lang sweet-exp
+;; keep this comment
+defpackage "proj"
+  :version "0.1.0"
+EOF
+printf '(defn main [] : int 0)\n' >"$ED/proj/src/main.tur"
+ed_bad=""
+( cd "$ED/proj" &&
+  "$TUR" add ../dep1 --path &&
+  "$TUR" add ../dep2 --path &&
+  "$TUR" add-cmake https://example.invalid/fmt.git --ref 10.0.0 &&
+  "$TUR" add-cmake https://example.invalid/zlib.git ) >/dev/null 2>&1 ||
+    ed_bad="an add command failed"
+dry=$( cd "$ED/proj" && "$TUR" fetch --dry-run 2>&1 )
+case "$dry" in
+    *"2 cmake"*"2 :path"*) ;;
+    *) ed_bad="$ed_bad; fetch --dry-run does not see 2 cmake + 2 :path deps" ;;
+esac
+[ "$(grep -c '^ *:spices' "$ED/proj/build.tur.sweet")" = 1 ] ||
+    ed_bad="$ed_bad; :spices is not one slot"
+[ "$(grep -c '^ *:cmake-deps' "$ED/proj/build.tur.sweet")" = 1 ] ||
+    ed_bad="$ed_bad; :cmake-deps is not one slot"
+grep -q 'keep this comment' "$ED/proj/build.tur.sweet" ||
+    ed_bad="$ed_bad; the comment was lost"
+if [ -z "$ed_bad" ]; then
+    echo "PASS SW6: tur add / add-cmake edit build.tur.sweet, and the deps are read"
+    PASS=$((PASS + 1))
+else
+    echo "FAIL SW6: $ed_bad"
+    echo "  build.tur.sweet:"; sed 's/^/    /' "$ED/proj/build.tur.sweet"
+    echo "  fetch --dry-run:"; printf '%s\n' "$dry" | sed 's/^/    /'
+    FAIL=$((FAIL + 1))
+    FAILED+=("SW6: sweet manifest edit")
+fi
+rm -rf "$ED"
+
 echo
 echo "summary: $PASS passed, $FAIL failed"
 if [ "$FAIL" -ne 0 ]; then

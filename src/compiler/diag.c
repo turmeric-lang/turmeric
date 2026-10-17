@@ -432,6 +432,7 @@ const char *diag_code_to_string(DiagCode code) {
         case TUR_E0310_UNKNOWN_EXPERIMENT:        return "TUR-E0310";
         case TUR_E0311_UNKNOWN_ENGINE:            return "TUR-E0311";
         case TUR_E0312_SAFFRON_STATIC_ONLY:       return "TUR-E0312";
+        case TUR_E0313_DICT_PASS_NESTED_LAMBDA:   return "TUR-E0313";
         case TUR_W0060_EXPERIMENTAL_PROTOTYPE:    return "TUR-W0060";
         case TUR_W0061_EXPERIMENTAL_BETA:         return "TUR-W0061";
         case TUR_E0023_BIND_VOID_EXPRESSION:      return "TUR-E0023";
@@ -441,6 +442,7 @@ const char *diag_code_to_string(DiagCode code) {
         case TUR_E0622_TUR_VERSION_MALFORMED:     return "TUR-E0622";
         case TUR_W0623_TUR_VERSION_ABOVE_CEILING: return "TUR-W0623";
         case TUR_W0624_NO_ENTRY_POINT_NEAR_MISS:   return "TUR-W0624";
+        case TUR_W0625_TOPLEVEL_MAIN_CALL_DROPPED: return "TUR-W0625";
         case TUR_W0706_IMAGE_GLOBAL_UNREGISTERED:  return "TUR-W0706";
         case TUR_E0332_SWEET_DOLLAR_IN_BRACKETS:   return "TUR-E0332";
         case TUR_E0716_TAILCALL_NOT_TAIL:          return "TUR-E0716";
@@ -616,6 +618,7 @@ DiagCode diag_code_from_string(const char *s) {
     if (strcmp(s, "TUR-E0310") == 0) return TUR_E0310_UNKNOWN_EXPERIMENT;
     if (strcmp(s, "TUR-E0311") == 0) return TUR_E0311_UNKNOWN_ENGINE;
     if (strcmp(s, "TUR-E0312") == 0) return TUR_E0312_SAFFRON_STATIC_ONLY;
+    if (strcmp(s, "TUR-E0313") == 0) return TUR_E0313_DICT_PASS_NESTED_LAMBDA;
     if (strcmp(s, "TUR-W0060") == 0) return TUR_W0060_EXPERIMENTAL_PROTOTYPE;
     if (strcmp(s, "TUR-W0061") == 0) return TUR_W0061_EXPERIMENTAL_BETA;
     if (strcmp(s, "TUR-E0023") == 0) return TUR_E0023_BIND_VOID_EXPRESSION;
@@ -625,6 +628,7 @@ DiagCode diag_code_from_string(const char *s) {
     if (strcmp(s, "TUR-E0622") == 0) return TUR_E0622_TUR_VERSION_MALFORMED;
     if (strcmp(s, "TUR-W0623") == 0) return TUR_W0623_TUR_VERSION_ABOVE_CEILING;
     if (strcmp(s, "TUR-W0624") == 0) return TUR_W0624_NO_ENTRY_POINT_NEAR_MISS;
+    if (strcmp(s, "TUR-W0625") == 0) return TUR_W0625_TOPLEVEL_MAIN_CALL_DROPPED;
     if (strcmp(s, "TUR-W0706") == 0) return TUR_W0706_IMAGE_GLOBAL_UNREGISTERED;
     if (strcmp(s, "TUR-E0332") == 0) return TUR_E0332_SWEET_DOLLAR_IN_BRACKETS;
     if (strcmp(s, "TUR-E0716") == 0) return TUR_E0716_TAILCALL_NOT_TAIL;
@@ -2806,6 +2810,40 @@ static const DiagExplanation diag_explanations_[] = {
       "`with-region` is the odd one out precisely because its proof reads the\n"
       "one thing Saffron makes `any`: the inferred result type of the body.\n",
     },
+    { TUR_W0625_TOPLEVEL_MAIN_CALL_DROPPED,
+      "TUR-W0625: a top-level `(main)` in a file that defines `main` is ignored\n"
+      "\n"
+      "`main` is the program's entry point.  Every top-level form runs first,\n"
+      "in source order, and then `main` does -- in the compiled program and\n"
+      "under `tur --interpret` alike.  A trailing `(main)`, the script habit,\n"
+      "would therefore run it a second time, so it is dropped.\n"
+      "\n"
+      "  (defn main [] : int (println \"hi\") 0)\n"
+      "  (main)          ; TUR-W0625: remove it -- main already runs\n",
+    },
+    { TUR_E0313_DICT_PASS_NESTED_LAMBDA,
+      "TUR-E0313: a class method on a constrained type variable is called\n"
+      "from a nested lambda that is applied in place\n"
+      "\n"
+      "Passing a constrained generic where a `forall` with a constraint is\n"
+      "expected hands it its dictionary at run time.  Every place in the body\n"
+      "that dispatches on the constrained variable has to be able to reach\n"
+      "that dictionary.  A lambda APPLIED WHERE IT IS WRITTEN --\n"
+      "`((fn [z : A] (f z)) x)` -- is lifted to a top-level function and called\n"
+      "by name, with no closure env, so a dispatch inside it cannot see the\n"
+      "dictionary.  The compiler refuses rather than guess an instance.\n"
+      "\n"
+      "  (defn say [A] [(Describe A)] [x : A] : cstr\n"
+      "    (let [f (fn [y : A] : cstr (describe y))]\n"
+      "      ((fn [z : A] : cstr (f z)) x)))        ; refused when passed as a forall\n"
+      "\n"
+      "Fix: dispatch in the function body itself, or pass the inner lambda as\n"
+      "a value to another call:\n"
+      "\n"
+      "  (defn say [A] [(Describe A)] [x : A] : cstr\n"
+      "    (let [f (fn [y : A] : cstr (describe y))]\n"
+      "      (f x)))\n",
+    },
     /* XF: prototype experimental feature in use */
     { TUR_W0060_EXPERIMENTAL_PROTOTYPE,
       "TUR-W0060: experimental feature (prototype) in use\n"
@@ -3895,18 +3933,29 @@ void diag_emit_with_notes(DiagLevel level, Span span, const char *message,
 /* Emit diagnostic with suggestion (Phase 8) */
 void diag_emit_with_suggestion(DiagLevel level, Span span, const char *message,
                                const DiagSuggestion *suggestion) {
+    diag_emit_with_suggestion_code(level, span, DIAG_CODE_NONE, message,
+                                   suggestion);
+}
+
+/* did-you-mean-unbound-symbol-drops-its-code: the same, carrying the primary
+ * message's code.  Without it the unbound-symbol error had TUR-E0003 only
+ * when no near-miss name existed -- in the header, in the JSON and in the
+ * LSP alike -- so a tool filtering by code missed the more helpful half. */
+void diag_emit_with_suggestion_code(DiagLevel level, Span span, DiagCode code,
+                                    const char *message,
+                                    const DiagSuggestion *suggestion) {
     if (diag_intercept(level)) return;
     if (level == DIAG_ERROR) had_error_ = true;
 
     if (lsp_collect_) {
-        lsp_append(level, DIAG_CODE_NONE, span, message);
+        lsp_append(level, code, span, message);
         if (suggestion && suggestion->text)
             lsp_append(DIAG_HELP, DIAG_CODE_NONE, span, suggestion->text);
         return;
     }
 
     if (diag_sink_fn_) {
-        diag_sink_dispatch(level, DIAG_CODE_NONE, span, message);
+        diag_sink_dispatch(level, code, span, message);
         if (suggestion && suggestion->text)
             diag_sink_dispatch(DIAG_HELP, DIAG_CODE_NONE, span, suggestion->text);
         return;
@@ -3914,7 +3963,7 @@ void diag_emit_with_suggestion(DiagLevel level, Span span, const char *message,
 
     /* Phase 8: If JSON output is enabled, emit in JSON format */
     if (json_output_) {
-        diag_emit_json(level, span, DIAG_CODE_NONE, message);
+        diag_emit_json(level, span, code, message);
         if (suggestion && suggestion->text) {
             diag_emit_json(DIAG_HELP, span, DIAG_CODE_NONE, suggestion->text);
         }
@@ -3930,7 +3979,13 @@ void diag_emit_with_suggestion(DiagLevel level, Span span, const char *message,
     const char *help_color = use_color_ ? COLOR_GREEN : "";
     
     /* Print primary error */
-    fprintf(stderr, "%s%s:%u:%u: %s%s: %s\n", color, path, span.line, span.col_start, level_name(level), reset, message);
+    if (code != DIAG_CODE_NONE)
+        fprintf(stderr, "%s%s:%u:%u: %s [%s]%s: %s\n", color, path, span.line,
+                span.col_start, level_name(level), diag_code_to_string(code),
+                reset, message);
+    else
+        fprintf(stderr, "%s%s:%u:%u: %s%s: %s\n", color, path, span.line,
+                span.col_start, level_name(level), reset, message);
 
     /* Print snippet */
     if (f && span.off_start <= f->len) {

@@ -949,6 +949,50 @@ fi
 rm -f "$MSG2_OUT"
 rm -rf "$MSG2"
 
+# add-cmake-manifest-rewrite-loses-keys: `tur add-cmake` splices its entry
+# into the existing text, as `tur add` does.  It used to rewrite the whole
+# file from the parsed manifest, dropping comments, `:experiments []` (which
+# suppresses the user's experiments file), `:members` and `:exports`.  The
+# leading comment must also appear exactly once: the formatter used to copy it
+# into the map it extended.
+ACK=$(mktemp -d)
+mkdir -p "$ACK/proj/src"
+cat >"$ACK/proj/build.tur" <<'EOF'
+;; my project manifest -- keep this comment
+(defpackage proj
+  :name "proj"
+  :version "0.1.0"
+  :experiments []
+  :members ["x" "y"]
+  :exports [proj/core]
+  :cmake-deps #map{"zlib" #map{:url "https://example.invalid/zlib.git"}})
+EOF
+printf '(defn main [] : int 0)\n' >"$ACK/proj/src/main.tur"
+( cd "$ACK/proj" && "$LS6_ABS_TUR" add-cmake https://example.invalid/fmt.git \
+      --ref 10.0.0 --opt FMT_TEST=OFF ) >/dev/null 2>&1
+ack_rc=$?
+ack_bad=""
+[ "$ack_rc" -eq 0 ] || ack_bad="exit $ack_rc"
+for needle in ':experiments []' ':members ["x" "y"]' ':exports [proj/core]' \
+              '"zlib"' '"fmt"' ':ref "10.0.0"' ':FMT_TEST "OFF"'; do
+    grep -qF -- "$needle" "$ACK/proj/build.tur" || ack_bad="$ack_bad; lost $needle"
+done
+[ "$(grep -cF 'keep this comment' "$ACK/proj/build.tur")" = 1 ] ||
+    ack_bad="$ack_bad; the comment is not there exactly once"
+# The rewritten manifest must still read.
+( cd "$ACK/proj" && "$LS6_ABS_TUR" check src/main.tur ) >/dev/null 2>&1 ||
+    ack_bad="$ack_bad; the rewritten manifest no longer reads"
+if [ -z "$ack_bad" ]; then
+    echo "PASS add-cmake-keeps-unmodelled-keys"
+    PASS=$((PASS + 1))
+else
+    echo "FAIL add-cmake-keeps-unmodelled-keys --$ack_bad"
+    echo "  build.tur:"; sed 's/^/    /' "$ACK/proj/build.tur"
+    FAIL=$((FAIL + 1))
+    FAILED+=("add-cmake-keeps-unmodelled-keys")
+fi
+rm -rf "$ACK"
+
 # LS6 case C: `tur fetch --dry-run` classifies each dep and writes no
 # lock file.  The bogus URL would error out on a real fetch; --dry-run
 # proves it was never contacted.
@@ -1586,8 +1630,38 @@ else
     FAILED+=("absent-manifest-is-not-malformed")
 fi
 
+# A manifest the READER rejects, or one with no `(defpackage ...)`, is
+# malformed too.  Both used to return before the malformed verdict was
+# recorded, so `tur check` printed the reader's `error:` and exited 0.
+# docs/archive/manifest-reader-error-exits-zero.md
+MF_RD=$(mktemp -d)
+mkdir -p "$MF_RD/src"
+cat >"$MF_RD/src/main.tur" <<'EOF'
+(defn main [] : int 0)
+EOF
+for mf_rd_case in 'unterminated|(defpackage bad
+  :name "bad"
+  :version "0.1.0"' \
+                  'no-defpackage|(def x 1)'; do
+    mf_rd_name=${mf_rd_case%%|*}
+    printf '%s\n' "${mf_rd_case#*|}" >"$MF_RD/build.tur"
+    MF_RD_ERR=$(mktemp)
+    ( cd "$MF_RD" && "$LS6_ABS_TUR" check src/main.tur ) >/dev/null 2>"$MF_RD_ERR"
+    mf_rd_rc=$?
+    if [ "$mf_rd_rc" -ne 0 ] && grep -F -q "TUR-E0624" "$MF_RD_ERR"; then
+        echo "PASS malformed-manifest-$mf_rd_name-fails-tur-check"
+        PASS=$((PASS + 1))
+    else
+        echo "FAIL malformed-manifest-$mf_rd_name-fails-tur-check -- exit $mf_rd_rc"
+        echo "  stderr:"; sed 's/^/    /' "$MF_RD_ERR"
+        FAIL=$((FAIL + 1))
+        FAILED+=("malformed-manifest-$mf_rd_name-fails-tur-check")
+    fi
+    rm -f "$MF_RD_ERR"
+done
+
 rm -f "$MF_ERR" "$MF_OK_ERR" "$MF_NONE_ERR"
-rm -rf "$MF_DIR" "$MF_NONE"
+rm -rf "$MF_DIR" "$MF_NONE" "$MF_RD"
 
 # ---------------------------------------------------------------------------
 # `tur build src/` and `tur check src/` must handle a NESTED module layout.

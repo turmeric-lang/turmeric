@@ -96,9 +96,13 @@ root:
 | `app`               | `app.tur`                  |
 
 The compiler resolves imports by translating the module name to a path under
-the importing file's directory. The convention is not strictly enforced (the
-name in the `defmodule` form is the canonical identifier), but breaking it
-will produce confusing "module not found" errors.
+the project root: the directory of the file being compiled. That holds for a
+nested import too, so `a/x.tur` imports its sibling as `(import a/y)`, not
+`(import y)`. After the root, the search tries the stdlib and then each `-I`
+include directory (spice `src/` trees); a "module not found" error lists every
+path it tried. The convention is not strictly enforced (the name in the
+`defmodule` form is the canonical identifier), but breaking it will produce
+confusing "module not found" errors.
 
 ---
 
@@ -474,9 +478,10 @@ inside the `defmodule` form.
 
 ### `module 'foo/bar' not found`
 
-The compiler couldn't locate `foo/bar.tur` relative to the importing file's
-directory. Check the path or use an absolute path via the project's
-`module_base_dir`.
+The compiler couldn't locate `foo/bar.tur` under the project root (the
+directory of the file being compiled), the stdlib, or an `-I` directory. The
+error lists each path it tried. A nested import resolves from the root too:
+inside `a/x.tur`, a sibling is `(import a/y)`.
 
 ### `circular import: module 'foo' is already being loaded`
 

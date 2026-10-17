@@ -1063,19 +1063,7 @@ static TypeClassMethod *parse_typeclass_method(Elab *e, Form *method_form, Span 
         Form *maybe_row = method_form->as.list.items[ret_idx];
         if (maybe_row->tag == F_MAP) {
             /* #{Effect...} effect-row annotation -- parse and store it. */
-            warn_legacy_fx_row(maybe_row);
-            uint8_t n_sym = (uint8_t)maybe_row->as.list.len;
-            const Symbol **syms = (const Symbol **)arena_alloc(e->arena,
-                                    (n_sym ? n_sym : 1) * sizeof(Symbol *));
-            uint8_t n_valid = 0;
-            for (uint32_t j = 0; j < maybe_row->as.list.len; j++) {
-                Form *item = maybe_row->as.list.items[j];
-                if (item->tag == F_SYM) {
-                    syms[n_valid++] = item->as.sym;
-                }
-            }
-            method_effect_row = effect_row_unresolved(e->arena, syms, n_valid,
-                                                      maybe_row->span);
+            method_effect_row = elab_fx_row_from_form(e, maybe_row);
             ret_idx++;
         }
     }
@@ -8640,8 +8628,25 @@ found_method:;
             rrk == TY_UINT8  || rrk == TY_UINT16 || rrk == TY_UINT32 ||
             rrk == TY_UINT64 ||
             (rrk == TY_ADT && obj->type.as.adt_.def != NULL));
+        /* int-receiver-binds-sole-foreign-instance: the `:int` exclusion above
+         * exists because an int may be a carrier word standing for an erased
+         * value -- but only for a value an int word CAN stand for.  A lone
+         * fallback whose head is a primitive no carrier word holds (a cstr,
+         * a float, a bool, nil) is not that: `(shout 5)` with only
+         * `Shout [cstr]` in scope cast 5 to `const char *` and segfaulted
+         * after `tur check` passed.  Measured over every fixture before this
+         * went in, the lone fallbacks an int receiver reaches have type-
+         * variable or applied heads only; those still bind. */
+        bool int_recv_foreign_head = false;
+        if (rrk == TY_INT && !obj_is_abstract_tyvar && fallback_count == 1 &&
+            best_inst && best_inst->n_type_args > 0) {
+            TypeKind hk = best_inst->type_args[0].kind;
+            int_recv_foreign_head =
+                hk == TY_CSTR || hk == TY_FLOAT || hk == TY_FLOAT32 ||
+                hk == TY_FLOAT64 || hk == TY_BOOL || hk == TY_NIL;
+        }
         if (!exact_match_found && fallback_count >= 1 &&
-            concrete_distinct_receiver) {
+            (concrete_distinct_receiver || int_recv_foreign_head)) {
             const char *cn = best_inst ? best_inst->typeclass->name->name : "?";
             /* Attribute a macro-emitted `.method` call (e.g. derive-show's
              * `(.show (.field __p))`) to the USER's derive call site rather than

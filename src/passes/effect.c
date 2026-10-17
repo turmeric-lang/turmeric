@@ -21,7 +21,7 @@ EffectRow *effect_row_single(Arena *a, Effect *effect) {
 }
 
 /* Create a concrete effect row from multiple effects */
-EffectRow *effect_row_concrete(Arena *a, Effect **effects, uint8_t n_effects) {
+EffectRow *effect_row_concrete(Arena *a, Effect **effects, uint32_t n_effects) {
     EffectRow *row = arena_alloc(a, sizeof(EffectRow));
     row->kind = ERK_CONCRETE;
     row->as.concrete.effects = arena_alloc(a, n_effects * sizeof(Effect *));
@@ -41,12 +41,12 @@ EffectRow *effect_row_union(Arena *a, EffectRow *left, EffectRow *right) {
 
 /* Create an unresolved (symbolic) effect row from an array of symbol names. */
 EffectRow *effect_row_unresolved(Arena *a, const Symbol **sym_names,
-                                 uint8_t n_sym_names, Span span) {
+                                 uint32_t n_sym_names, Span span) {
     if (n_sym_names == 0) return effect_row_empty(a);
     EffectRow *row = arena_alloc(a, sizeof(EffectRow));
     row->kind = ERK_UNRESOLVED;
     row->as.unresolved.sym_names = arena_alloc(a, n_sym_names * sizeof(Symbol *));
-    for (uint8_t i = 0; i < n_sym_names; i++) {
+    for (uint32_t i = 0; i < n_sym_names; i++) {
         row->as.unresolved.sym_names[i] = sym_names[i];
     }
     row->as.unresolved.n_sym_names = n_sym_names;
@@ -66,7 +66,7 @@ uint8_t effect_row_unknown_names(const EffectRow *row, EffectEnv *env,
                                  const Symbol **out, uint8_t cap) {
     if (!row || row->kind != ERK_UNRESOLVED) return 0;
     uint8_t n = 0;
-    for (uint8_t i = 0; i < row->as.unresolved.n_sym_names; i++) {
+    for (uint32_t i = 0; i < row->as.unresolved.n_sym_names; i++) {
         const Symbol *name = row->as.unresolved.sym_names[i];
         if (!name || name->len == 0 || !row_name_is_effect(name)) continue;
         if (effect_env_lookup(env, name)) continue;
@@ -82,7 +82,7 @@ EffectRow *effect_row_resolve(EffectRow *row, EffectEnv *env, Arena *a) {
     if (row->as.unresolved.n_sym_names == 0) return effect_row_empty(a);
 
     EffectRow *result = effect_row_empty(a);
-    for (uint8_t i = 0; i < row->as.unresolved.n_sym_names; i++) {
+    for (uint32_t i = 0; i < row->as.unresolved.n_sym_names; i++) {
         const Symbol *name = row->as.unresolved.sym_names[i];
         if (!name || name->len == 0) continue;
         /* Lowercase first character → row variable; uppercase → concrete effect. */
@@ -127,7 +127,7 @@ bool effect_row_is_runtime_pure(const EffectRow *row) {
     case ERK_EMPTY:
         return true;
     case ERK_CONCRETE:
-        for (uint8_t i = 0; i < row->as.concrete.n_effects; i++) {
+        for (uint32_t i = 0; i < row->as.concrete.n_effects; i++) {
             const Effect *eff = row->as.concrete.effects[i];
             if (!eff || !eff->is_capability) return false;
         }
@@ -146,15 +146,15 @@ EffectRow *effect_row_without_capabilities(Arena *a, EffectRow *row) {
     if (!row) return row;
     switch (row->kind) {
     case ERK_CONCRETE: {
-        uint8_t n = row->as.concrete.n_effects, kept = 0;
-        for (uint8_t i = 0; i < n; i++)
+        uint32_t n = row->as.concrete.n_effects, kept = 0;
+        for (uint32_t i = 0; i < n; i++)
             if (row->as.concrete.effects[i] && !row->as.concrete.effects[i]->is_capability)
                 kept++;
         if (kept == n) return row;
         if (kept == 0) return effect_row_empty(a);
         Effect **keep = arena_alloc(a, kept * sizeof(Effect *));
-        uint8_t k = 0;
-        for (uint8_t i = 0; i < n; i++)
+        uint32_t k = 0;
+        for (uint32_t i = 0; i < n; i++)
             if (row->as.concrete.effects[i] && !row->as.concrete.effects[i]->is_capability)
                 keep[k++] = row->as.concrete.effects[i];
         return effect_row_concrete(a, keep, kept);
@@ -183,7 +183,7 @@ bool effect_row_contains(EffectRow *row, Effect *effect) {
         case ERK_EMPTY:
             return false;
         case ERK_CONCRETE: {
-            for (uint8_t i = 0; i < row->as.concrete.n_effects; i++) {
+            for (uint32_t i = 0; i < row->as.concrete.n_effects; i++) {
                 if (effect_ptr_eq(row->as.concrete.effects[i], effect)) {
                     return true;
                 }
@@ -222,7 +222,7 @@ bool effect_row_is_subset(EffectRow *r1, EffectRow *r2) {
     
     if (r1->kind == ERK_CONCRETE && r2->kind == ERK_CONCRETE) {
         /* Check each effect in r1 is in r2 */
-        for (uint8_t i = 0; i < r1->as.concrete.n_effects; i++) {
+        for (uint32_t i = 0; i < r1->as.concrete.n_effects; i++) {
             Effect *e = r1->as.concrete.effects[i];
             if (!effect_row_contains(r2, e)) {
                 return false;
@@ -244,10 +244,10 @@ bool effect_row_is_subset(EffectRow *r1, EffectRow *r2) {
 static bool effect_row_concrete_equal(EffectRow *r1, EffectRow *r2) {
     if (r1->as.concrete.n_effects != r2->as.concrete.n_effects) return false;
     
-    for (uint8_t i = 0; i < r1->as.concrete.n_effects; i++) {
+    for (uint32_t i = 0; i < r1->as.concrete.n_effects; i++) {
         Effect *e = r1->as.concrete.effects[i];
         bool found = false;
-        for (uint8_t j = 0; j < r2->as.concrete.n_effects; j++) {
+        for (uint32_t j = 0; j < r2->as.concrete.n_effects; j++) {
             if (effect_ptr_eq(e, r2->as.concrete.effects[j])) {
                 found = true;
                 break;
@@ -273,14 +273,21 @@ EffectRow *effect_row_merge(Arena *a, EffectRow *r1, EffectRow *r2) {
             return r1; /* or r2, they're equal */
         }
         
-        /* Merge: collect all unique effects from both */
-        Effect *all_effects[32]; /* Max effects in a row for now */
-        uint8_t n_all = 0;
+        /* Merge: collect all unique effects from both.
+         * effect-row-merge-overflows-past-32-effects: sized from the inputs.
+         * This was a 32-entry stack array, so one function performing 33
+         * distinct effects wrote past it.  No row size is bounded upstream. */
+        size_t n_cap = (size_t)r1->as.concrete.n_effects +
+                       r2->as.concrete.n_effects;
+        Effect *all_small[32];
+        Effect **all_effects = n_cap <= 32 ? all_small
+            : arena_alloc(a, n_cap * sizeof(Effect *));
+        uint32_t n_all = 0;
         
         /* Add from r1 */
-        for (uint8_t i = 0; i < r1->as.concrete.n_effects; i++) {
+        for (uint32_t i = 0; i < r1->as.concrete.n_effects; i++) {
             bool already = false;
-            for (uint8_t j = 0; j < n_all; j++) {
+            for (uint32_t j = 0; j < n_all; j++) {
                 if (effect_ptr_eq(all_effects[j], r1->as.concrete.effects[i])) {
                     already = true;
                     break;
@@ -292,9 +299,9 @@ EffectRow *effect_row_merge(Arena *a, EffectRow *r1, EffectRow *r2) {
         }
         
         /* Add from r2 */
-        for (uint8_t i = 0; i < r2->as.concrete.n_effects; i++) {
+        for (uint32_t i = 0; i < r2->as.concrete.n_effects; i++) {
             bool already = false;
-            for (uint8_t j = 0; j < n_all; j++) {
+            for (uint32_t j = 0; j < n_all; j++) {
                 if (effect_ptr_eq(all_effects[j], r2->as.concrete.effects[i])) {
                     already = true;
                     break;
@@ -316,9 +323,11 @@ EffectRow *effect_row_merge(Arena *a, EffectRow *r1, EffectRow *r2) {
  * Only ERK_CONCRETE rows are modified; other kinds are returned unchanged. */
 EffectRow *effect_row_remove(EffectRow *row, const Symbol *effect_name, Arena *a) {
     if (!row || row->kind != ERK_CONCRETE) return row;
-    Effect *keep[32];
-    uint8_t n_keep = 0;
-    for (uint8_t i = 0; i < row->as.concrete.n_effects; i++) {
+    Effect *keep_small[32];   /* the whole array, before the overflow fix */
+    Effect **keep = row->as.concrete.n_effects <= 32 ? keep_small
+        : arena_alloc(a, row->as.concrete.n_effects * sizeof(Effect *));
+    uint32_t n_keep = 0;
+    for (uint32_t i = 0; i < row->as.concrete.n_effects; i++) {
         Effect *eff = row->as.concrete.effects[i];
         if (eff->name != effect_name) {
             keep[n_keep++] = eff;
@@ -341,7 +350,7 @@ void effect_row_print(Buf *b, EffectRow *row) {
             break;
         case ERK_CONCRETE:
             buf_puts(b, "{");
-            for (uint8_t i = 0; i < row->as.concrete.n_effects; i++) {
+            for (uint32_t i = 0; i < row->as.concrete.n_effects; i++) {
                 if (i > 0) buf_puts(b, ", ");
                 buf_printf(b, "%s", row->as.concrete.effects[i]->name->name);
             }
@@ -359,7 +368,7 @@ void effect_row_print(Buf *b, EffectRow *row) {
             break;
         case ERK_UNRESOLVED:
             buf_puts(b, "#{");
-            for (uint8_t i = 0; i < row->as.unresolved.n_sym_names; i++) {
+            for (uint32_t i = 0; i < row->as.unresolved.n_sym_names; i++) {
                 if (i > 0) buf_puts(b, " ");
                 buf_printf(b, "%s", row->as.unresolved.sym_names[i]->name);
             }
@@ -379,7 +388,7 @@ void effect_row_collect_names(EffectRow *row, const Symbol **out,
         case ERK_EMPTY:
             break;
         case ERK_UNRESOLVED:
-            for (uint8_t i = 0; i < row->as.unresolved.n_sym_names; i++) {
+            for (uint32_t i = 0; i < row->as.unresolved.n_sym_names; i++) {
                 const Symbol *s = row->as.unresolved.sym_names[i];
                 bool dup = false;
                 for (uint8_t j = 0; j < *n; j++) if (out[j] == s) { dup = true; break; }
@@ -387,7 +396,7 @@ void effect_row_collect_names(EffectRow *row, const Symbol **out,
             }
             break;
         case ERK_CONCRETE:
-            for (uint8_t i = 0; i < row->as.concrete.n_effects; i++) {
+            for (uint32_t i = 0; i < row->as.concrete.n_effects; i++) {
                 const Symbol *s = row->as.concrete.effects[i]->name;
                 bool dup = false;
                 for (uint8_t j = 0; j < *n; j++) if (out[j] == s) { dup = true; break; }

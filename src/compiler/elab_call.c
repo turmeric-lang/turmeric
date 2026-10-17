@@ -9888,9 +9888,9 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
                          * that dispatches a constraint method into a
                          * dict-capturing closure (Phase 2), and itself rejects
                          * any residual un-lowerable nested dispatch with
-                         * TUR-E0311 (so both this site and the Gap B composition
+                         * TUR-E0313 (so both this site and the Gap B composition
                          * site are covered).  A NULL return here is therefore
-                         * either that E0311 (already emitted) or a benign
+                         * either that E0313 (already emitted) or a benign
                          * build-failure -- only emit the generic diagnostic when
                          * make_dict_clone did NOT already emit one. */
                         bool had_err_before = diag_had_error();
@@ -11651,7 +11651,7 @@ static bool dict_clone_dispatch_in_nested_lambda(const Expr *e,
  * recursive walk (dict_clone_lower_nested_mappers) descending into it, not
  * hoisted here.  A dispatch reached through a lambda boundary this scan cannot
  * cross (a direct-call lifted lambda) simply is not found here and falls through
- * to the TUR-E0311 guard. */
+ * to the TUR-E0313 guard. */
 /* Route B (constrained-hkt-lifted-lambda-keeps-representative-instance): does
  * this call dispatch a typeclass method on the clone's constrained type
  * variable?  Two shapes qualify:
@@ -11660,7 +11660,7 @@ static bool dict_clone_dispatch_in_nested_lambda(const Expr *e,
  *     constraint var in its RESULT -- a bare TY_TYVAR, or the head of a
  *     `(m b)` TY_APP spine (`pure`, `empty`).
  * Returns the dispatched class when it is one of `cs`'s constraints, else NULL.
- * Shared by the mapper scanner, the E0311 guard, and (mirrored) the emit-side
+ * Shared by the mapper scanner, the E0313 guard, and (mirrored) the emit-side
  * env-dict index so the three never disagree. */
 static const TypeClass *call_dispatched_constraint_class(const Expr *e,
                                                          const ConstraintSet *cs) {
@@ -12014,7 +12014,7 @@ static void dict_clone_lower_nested_mappers(Elab *e, Expr *node,
  * commonly, let-bound to a temp and applied through it (`let [t __fn_N] (t x)`).
  * Its typeclass dispatch is stranded in `__fn_N`, which has no closure env to
  * carry the clone's dict, so the nested-mapper lowering below cannot reach it
- * and it trips the TUR-E0311 guard.  These helpers beta-reduce such an
+ * and it trips the TUR-E0313 guard.  These helpers beta-reduce such an
  * application in place -- `(__fn_N x)` becomes `(let [y x] (show y))`, splicing
  * `__fn_N`'s body into the enclosing mapper where the existing depth-0 lowering
  * captures the dict.  Beta-reduction is semantically neutral here (single
@@ -12144,7 +12144,7 @@ static void lower_one_mapper(Elab *e, Expr *node, FnDef *M, bool capturing,
     /* 0. Beta-reduce any directly-applied captureless lifted lambda in M's body
      * so a typeclass dispatch stranded inside one (`((fn [y] (show y)) x)`)
      * surfaces at depth-0 where steps 1-3 can capture the dict, instead of
-     * tripping the TUR-E0311 guard. */
+     * tripping the TUR-E0313 guard. */
     flatten_applied_lifted(e, M->body, cs, NULL, 0, 0);
     /* 1. Lower deeper mappers in M's body; collect the dicts they need forwarded. */
     Binding *fwd[MAX_FN_CONSTRAINTS];
@@ -12525,7 +12525,7 @@ Binding *make_dict_clone(Elab *e, Binding *inner_b, Span span) {
      * idempotent (`dict_env_converted`) and each clone's env-build reuses the
      * memoized dict binding declared as that clone's leading param.  A dispatch
      * this walk cannot reach (e.g. inside a directly-applied lifted lambda) is
-     * left untouched and caught by the TUR-E0311 guard at the pass site.  The
+     * left untouched and caught by the TUR-E0313 guard at the pass site.  The
      * top-level clone body has each dict as a real PARAM, so its own returned
      * capture set is discarded. */
     Binding *top_caps[MAX_FN_CONSTRAINTS];
@@ -12554,13 +12554,13 @@ Binding *make_dict_clone(Elab *e, Binding *inner_b, Span span) {
      * inner lambda as a value to another call, are always supported. */
     if (dict_clone_dispatch_in_nested_lambda(cf->body, inner_b->fn_constraints,
                                              false)) {
-        diag_emit(DIAG_ERROR, span,
+        diag_emit_with_code(DIAG_ERROR, span, TUR_E0313_DICT_PASS_NESTED_LAMBDA,
             "forall-dict-pass: '%s' dispatches a typeclass method on its "
             "constrained type variable from inside a directly-applied nested "
             "lambda that cannot be lowered (a lifted lambda called by name, with "
             "no closure env to carry the dict). Bind the method directly in the "
             "function body with a `let`, or pass the inner lambda as a value to "
-            "another call, instead (TUR-E0311)",
+            "another call, instead",
             inner_b->name ? inner_b->name->name : "?");
         return NULL;
     }

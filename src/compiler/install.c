@@ -493,18 +493,17 @@ static int do_install_spec(const InstallSpec *spec) {
     }
 
     /* ---------------------------------------------------------------- */
-    /* 2. Read build.tur                                                */
+    /* 2. Read build.tur (or build.tur.sweet)                            */
     /* ---------------------------------------------------------------- */
     char build_path[4096];
-    snprintf(build_path, sizeof(build_path), "%s/build.tur", src_dir);
-
-    struct stat st;
-    if (stat(build_path, &st) != 0) {
-        fprintf(stderr, "tur %s: no build.tur at '%s'\n", verb, src_dir);
+    if (!pkg_resolve_manifest_path(src_dir, build_path, sizeof(build_path))) {
+        fprintf(stderr, "tur %s: no build.tur or build.tur.sweet at '%s'\n",
+                verb, src_dir);
         free(resolved_sha);
         return 1;
     }
 
+    struct stat st;
     PkgManifest m;
     memset(&m, 0, sizeof(m));
     if (!pkg_manifest_read(build_path, &m)) {
@@ -1167,10 +1166,9 @@ static void list_print_json(const TurState *state,
         buf_puts(&b, "      \"exports\": [");
         if (have_src) {
             char manifest[4096];
-            snprintf(manifest, sizeof(manifest),
-                     "%s/build.tur", src_dir);
             PkgManifest m; memset(&m, 0, sizeof(m));
-            if (pkg_manifest_read(manifest, &m)) {
+            if (pkg_resolve_manifest_path(src_dir, manifest, sizeof(manifest)) &&
+                pkg_manifest_read(manifest, &m)) {
                 for (int j = 0; j < m.n_exports; j++) {
                     if (j) buf_putc(&b, ',');
                     buf_putc(&b, '"');
@@ -1299,8 +1297,8 @@ int cmd_pkg_list(int argc, char **argv) {
         bool have_manifest = false;
         if (have_src) {
             char manifest[4096];
-            snprintf(manifest, sizeof(manifest), "%s/build.tur", src_dir);
-            if (pkg_manifest_read(manifest, &m)) have_manifest = true;
+            if (pkg_resolve_manifest_path(src_dir, manifest, sizeof(manifest)) &&
+                pkg_manifest_read(manifest, &m)) have_manifest = true;
         }
 
         /* binaries line */

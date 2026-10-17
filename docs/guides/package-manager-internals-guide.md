@@ -53,9 +53,9 @@ User-facing material lives elsewhere:
    `<root>/cmake/CMakeLists.txt`; configuring it writes
    `cmake/spice-deps-manifest.json` (or `-wasm.json`), whose `-I/-L/-l`
    tokens every later C compile reads -- whether or not they are current.
-5. **Build options.** `:link-libs`, `:link-flags`, `:c-sources` and
-   `:c-includes` reach the cc line; `:c-flags` and `:no-stdlib` are parsed and
-   validated but nothing reads them.
+5. **Build options.** `:c-flags`, `:link-libs`, `:link-flags`, `:c-sources`
+   and `:c-includes` reach the cc line; `:no-stdlib` is parsed and validated
+   but nothing reads it.
 
 ---
 
@@ -88,7 +88,7 @@ Tests that pin this area: `tests/unit/pkg_hash.c` (tree hash),
 | `tur fetch` | `pkg.c:cmd_pkg_fetch` | yes | always (`pkg_fetch_all`) | always | yes, unless `--frozen` |
 | `tur add <url>` | `pkg.c:cmd_pkg_add` | yes | yes | no | on success |
 | `tur add-cmake` | `pkg.c:cmd_pkg_add_cmake` | no | no | no (prints "run `tur fetch`") | no |
-| `tur run` (project) | `main.c:cmd_run` | yes, verifies | only if a dep dir is missing | only if `cmake/CMakeLists.txt` is absent | after a fetch or cmake build |
+| `tur run` (project) | `main.c:cmd_run` | yes, verifies | only if a dep dir is missing | only if the JSON manifest is absent | after a fetch or cmake build |
 | `tur build <dir>` | `main.c` dir branch | yes, verifies | never | only if this arm's JSON manifest is absent | after a cmake build |
 | `tur test` | `main.c:cmd_test` | no | never | never | no |
 | `tur install` | `install.c:do_install_spec` | no | direct deps only, unpinned | never | no (writes `state.tur`) |
@@ -168,27 +168,46 @@ recorded in sticky process state (`pkg_manifest_mark_malformed_slot`) and
 re-emitted as TUR-E0624 by `pkg_manifest_reassert()`, which `main.c` calls
 right after each `diag_reset()`, beside `pkg_tur_version_reassert()`.
 
-Two early returns bypass that bookkeeping: a **reader** error (an unbalanced
-paren) and a file with **no `defpackage` form** both return `false` with the
-status still `ABSENT` and nothing marked. The reader error prints `error:`,
-but `tur check` on a file in that spice still exits 0. Any new early return in
-this function must mark the manifest malformed.
+Every return past the `fopen` marks the manifest malformed, the **reader**
+error (an unbalanced paren) and the file with **no `defpackage` form**
+included. Those two used to return with the status still `ABSENT`, so the
+reader's `error:` printed and `tur check` exited 0
+([manifest-reader-error-exits-zero](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/manifest-reader-error-exits-zero.md)).
+Any new early return in this function must mark the manifest malformed too.
 
 ### Writing it
 
 There are two writers, and they are not equivalent:
 
-- `pkg.c:pkg_build_tur_add_spice` (used by `tur add`) re-reads the file into
-  forms, splices the new `:spices` entry in, and re-emits through `fmt_print`
-  with the original source for comment preservation. It keeps the map's
-  `#map{}`/`#{}` spelling. It does not set a reader type or strip `#lang`,
-  so it cannot parse a `build.tur.sweet`.
-- `pkg.c:pkg_manifest_write` regenerates the file from the struct. It is used
-  by the scaffold and by `tur add-cmake`. It writes only what the struct
+- `pkg.c:pkg_build_tur_edit` (used by `tur add` and `tur add-cmake`)
+  re-reads the file into forms, replaces the `defpackage` with an edited
+  copy, and re-emits through `fmt_print` with the original source for comment
+  preservation. Both commands append one entry to a map slot through
+  `pkg_defpackage_add_map_entry`, which keeps the map's `#map{}`/`#{}`
+  spelling and anchors the new forms at the map's closing brace
+  (`pkg_anchor_built`): `fmt_print` reads comments from the source gaps
+  between spans, and a built form's offset-0 span used to make it re-emit
+  the file's leading comment inside the map. It reads with the manifest
+  reader's dialect (the extension, after stripping `#lang`). A
+  `build.tur.sweet` is not reformatted at all: `pkg_sweet_splice_entry`
+  prints the entry as a delimited `#map{...}` and inserts it into the
+  original text, before the slot's closing brace or as a new line after the
+  defpackage's last item. Until 2026-10-17 neither command could edit a sweet
+  manifest
+  ([tur-add-cannot-edit-sweet-manifest](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/tur-add-cannot-edit-sweet-manifest.md)).
+
+A sweet manifest writes one key per indented line, which the sweet
+preprocessor wraps as a list: `  :version "0.1.0"` reads as
+`(:version "0.1.0")`. `pkg_dp_unwrap_sweet_lines` splices those back into the
+defpackage before the slot walk. Without it every such key was skipped, so a
+`tur init --sweet` manifest's `:version`, `:spices` and `:cmake-deps` were
+not in effect.
+- `pkg.c:pkg_manifest_write` regenerates the file from the struct. Only the
+  scaffold uses it, on a fresh manifest. It writes only what the struct
   models, and not all of that: comments, `:members`, an empty
   `:experiments []`, a spice's `:subdir` and `:global`, and the symbol vectors
-  of a `:exports` map are all lost, and a `:global` spice comes back as
-  `#{:url ""}`, which the next read rejects.
+  of a `:exports` map are all lost. `tur add-cmake` used it until 2026-10-17
+  ([add-cmake-manifest-rewrite-loses-keys](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/add-cmake-manifest-rewrite-loses-keys.md)).
 
 ---
 
@@ -479,7 +498,7 @@ and the native-only block in the separate-compilation path of
 | Command | Regenerates and builds when |
 |---|---|
 | `tur fetch` | every run |
-| `tur run` | `cmake/CMakeLists.txt` does not exist |
+| `tur run` | the native JSON manifest does not exist |
 | `tur build <dir>` | this arm's JSON manifest does not exist |
 | `tur test`, `tur check`, single-file `tur build` | never |
 
@@ -491,11 +510,12 @@ machine. CMake only rewrites the JSON on a successful configure, so a failed
 `tur fetch` leaves the old one in force. Run `tur fetch` after changing
 `:cmake-deps`, and never commit `cmake/`.
 
-The two markers also disagree. A failed configure leaves `CMakeLists.txt`
-behind and no JSON, so `tur run` fails once and then, on the next run,
-skips the dependency build and compiles with no dependency flags at all;
-`tur build <dir>` retries. Reproduced with a `:path` cmake-dep whose
-`CMakeLists.txt` calls `message(FATAL_ERROR ...)`.
+Both commands key on the JSON, which a failed configure never writes, and
+both remove it when the dependency build after a successful configure fails,
+so the next run retries. `tur run` used to key on `CMakeLists.txt`, which is
+written before the configure: after one failure it skipped the dependency
+build for good and compiled with no dependency flags
+([tur-run-cmake-marker-skips-after-failed-configure](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/tur-run-cmake-marker-skips-after-failed-configure.md)).
 
 ---
 
@@ -507,7 +527,7 @@ skips the dependency build and compiles with no dependency flags at all;
 | `:link-flags` | the same, verbatim (one entry may be several tokens) | root only |
 | `:c-includes` | `main.c:collect_spice_aux_c`, as quoted `-I<spice dir>/<entry>` | root and the whole `:spices` closure |
 | `:c-sources` | `collect_spice_aux_c`, as extra TUs | root and the whole closure, each source once by `realpath` |
-| `:c-flags` | **nowhere** | -- |
+| `:c-flags` | `main.c:append_manifest_link_flags`, verbatim, ahead of the link libraries; that buffer reaches the compile as well as the link | root only |
 | `:no-stdlib` | **nowhere** | -- |
 
 The link vectors are grammar-checked at read time (`check_link_vec`,
@@ -587,8 +607,9 @@ no `:cmake-deps`. A project consumes such an install as a library through
    `false`, set `bad_slot` so TUR-E0624 names it.
 4. **Free it** in `pkg_manifest_free` and in the slot's `*_clear` helper;
    copy it in `deep_copy_cmake_dep` for a cmake-dep field.
-5. **Round-trip it** in `pkg_manifest_write`, or `tur add-cmake` and the
-   scaffold will drop it.
+5. **Round-trip it** in `pkg_manifest_write` if the scaffold should write
+   it. `tur add` and `tur add-cmake` edit the existing text and keep every
+   key.
 6. **Consume it** from every path that should honour it. Check both
    `collect_build_aux` and the separate-compilation block of `tur build <dir>`
    (they were once hand-copied twins, which is how `:link-libs` reached one and
@@ -607,11 +628,7 @@ Each was reproduced against the compiler this guide describes and filed in
 [`docs/reported/`](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/README.md). When one is fixed and archived,
 update the passage above that describes it and drop it from this list.
 
-- [add-cmake-manifest-rewrite-loses-keys](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/add-cmake-manifest-rewrite-loses-keys.md) -- `tur add-cmake` rewrites `build.tur` and drops what it does not model
 - [build-opts-c-flags-never-consumed](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/build-opts-c-flags-never-consumed.md) -- `:build-opts :c-flags` (and `:no-stdlib`) are parsed but never used
-- [tur-run-cmake-marker-skips-after-failed-configure](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/tur-run-cmake-marker-skips-after-failed-configure.md) -- `tur run` skips the cmake-deps build after a failed configure
-- [manifest-reader-error-exits-zero](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/manifest-reader-error-exits-zero.md) -- A broken `build.tur` prints an error but `tur check` exits 0
-- [tur-add-cannot-edit-sweet-manifest](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/tur-add-cannot-edit-sweet-manifest.md) -- `tur add` cannot edit a `build.tur.sweet` manifest
 
 ## Maintenance
 

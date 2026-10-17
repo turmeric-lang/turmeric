@@ -1,0 +1,5 @@
+;; resume-of-non-continuation-int-crashes: a literal is never a continuation,
+;; so `resume` of one is refused where it is written.
+(defn main [] : int
+  (println (resume 5 6))
+  0)

@@ -74,5 +74,3 @@
         (println "real-in-range: ok")
         (println "real-in-range: FAIL"))
       0)))
-
-(main)

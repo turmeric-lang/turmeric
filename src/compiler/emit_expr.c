@@ -13063,8 +13063,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                          * rather than re-reading R2's claim. */
                         buf_printf(body, "%s *%s = (%s *)%s(sizeof(%s));\n",
                                    cn, tmp, cn,
-                                   regions_enabled() ? "tur_region_alloc_or_malloc"
-                                                     : "malloc",
+                                   region_alloc_fn(),
                                    cn);
                         indent_buf(body, ctx->indent);
                         buf_printf(body, "*%s = (%s);\n", tmp, arg_strs[i]);
@@ -18137,11 +18136,16 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                       "this effect operation has no lowering here: the enclosing "
                       "function left the CPS backend's supported subset, and the "
                       "direct emitter cannot lower `perform`. Run with "
-                      "TUR_TRACE_EVICT=1 to see which form evicted the function. "
+                      "TUR_TRACE_EVICT=1 to see which form evicted the function: "
+                      "SIG-REJECT is a parameter or result type the backend "
+                      "cannot thread (such as `(Vec int)`), SIG-TAINT a call to "
+                      "a function rejected for one. "
                       "Known unsupported shapes: a `while` nested inside a `while` "
                       "that performs, a `set!` whose value itself performs when the "
-                      "assignment is conditional, and a `while` that performs an "
-                      "outer-handled effect from inside a handler clause. "
+                      "assignment is conditional, a `while` that performs an "
+                      "outer-handled effect from inside a handler clause, and a "
+                      "`return` inside a `while` that performs and is followed "
+                      "by more code. "
                       "Restructuring so the loop body returns a status and the "
                       "effect is performed after the loop usually avoids them. This is a "
                       "compiler limitation, not a mistake in this expression.");

@@ -1,0 +1,13 @@
+;; adt-fn-field-drop-glue-bare-free: dropping an `rc` of a struct whose fn
+;; field holds a CAPTURING closure released the field with a bare `free()`.
+;; The handle points past its 8-byte drop-glue header, so glibc aborted with
+;; "free(): invalid pointer".  The drop glue releases it through
+;; TUR_CLOSURE_DROP now.  Leak-checked: the env is freed too.
+(defstruct H [f : (fn [int] int) n : int])
+
+(defn main [] : int
+  (let [k 10
+        r (rc/of (H (fn [x : int] : int (+ x k)) 1))]
+    (println (.n r))
+    (println ((.f r) 5)))
+  0)

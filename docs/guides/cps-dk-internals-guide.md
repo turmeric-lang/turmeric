@@ -238,10 +238,11 @@ The memory usage guide measures the cost of
 - `cps_tail(e, kont)` delivers `e`'s value to `kont`.
 - `cps_bind(e, x, rest)` binds it to `x` and continues with `rest`.
 
-Non-atomic operands are named `__tN` through a 32-slot pending list. It is
-folded leftmost-outermost, so the IR's evaluation order is the source's
-left-to-right order. Past 32 slots `atomize` drops bindings silently
-([report](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/cps-ir-pending-list-overflow-drops-bindings.md)).
+Non-atomic operands are named `__tN` through a pending list (`Pending`,
+grown by `pend_push`). It is folded leftmost-outermost, so the IR's
+evaluation order is the source's left-to-right order. It held 32 slots until
+2026-10-17, past which `atomize` dropped bindings silently
+([report](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/cps-ir-pending-list-overflow-drops-bindings.md)).
 
 **`CT_LETRAW` is the most important design choice in the translator.** Any
 subexpression that passes `safe_to_delegate`, a closed list of control-free
@@ -269,11 +270,11 @@ Calls go down a decision ladder in `cps_tail`/`cps_bind` (`EX_CALL`):
 `while` loops with an interior control operator (`build_loop`) lower to a
 helper that takes the loop's carried `^mut` state as parameters. A variable
 that is not set exactly once per iteration, unconditionally, becomes a
-by-reference cell instead. Nested performing loops are still refused. A
-`return` inside such a loop is currently mistranslated as a `break` when code
-follows the loop
-([report](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/cps-loop-return-acts-as-break.md)). The
-user-facing limits are listed in the effects guide's
+by-reference cell instead. Nested performing loops are still refused, and so
+is a `return` inside such a loop when code follows it: the helper's own
+continuation is the code after the loop, so the return would act as a `break`
+([cps-loop-return-acts-as-break](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/cps-loop-return-acts-as-break.md)).
+The user-facing limits are listed in the effects guide's
 [Performs inside loops and conditionals](effects-system-guide.md#performs-inside-loops-and-conditionals).
 `TUR_TRACE_CORE=1` prints `[LOOP-CARRIED]` and `[LOOP-REJECT]` lines for this
 step, and `[CTX-REJECT]` lines for cloneable and serial contexts that cannot
@@ -404,16 +405,18 @@ along with `[E2-COLOR]` threadability lines. The categories are:
 a `BODY-*` build error. That check was later deleted as unreachable; the
 `emit_value` error above is what fires instead.)
 
-That error only guards `perform` and `with-handler`. Two other evicted shapes
-are **not** guarded:
+That error guards `perform` and `with-handler`. An evicted `handle` goes
+through `emit_effects_handle`: one whose every clause is unreachable
+(TUR-W0033, recorded as `HandleExpr.no_clause_reachable`) or the `(unsafe ...)`
+marker emits its body in place, since nothing under it suspends. Any other
+reports each `perform` under it with the error above, or, with none, a located
+error at the handle. Its fiber-era body is gone
+([evicted-handle-reaches-deleted-fiber-emitter](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/evicted-handle-reaches-deleted-fiber-emitter.md)).
 
-- **`reset`/`shift`** in an evicted function silently computes the wrong
-  value. The direct emitter evaluates the reset body and applies the shift's
-  receiver without aborting
-  ([evicted-reset-shift-degrades-to-body-eval](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/evicted-reset-shift-degrades-to-body-eval.md)).
-- **A `handle` whose body performs nothing** reaches leftover fiber-era code,
-  and cc rejects the result
-  ([evicted-handle-reaches-deleted-fiber-emitter](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/evicted-handle-reaches-deleted-fiber-emitter.md)).
+One evicted shape is **not** guarded: **`reset`/`shift`** in an evicted
+function silently computes the wrong value. The direct emitter evaluates the
+reset body and applies the shift's receiver without aborting
+([evicted-reset-shift-degrades-to-body-eval](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/evicted-reset-shift-degrades-to-body-eval.md)).
 
 ---
 
@@ -705,10 +708,13 @@ Read the `struct DK` comments in that text, or in its committed copy
   4. **`__dk_resume_word`** for a `k` that left its case (stored, or passed to
      a helper) or a cloneable wrapper.
 
-  `cont?` reads `!k->consumed`, set at every resume site
-  (`__dk_cont_live_word`). That covers handler continuations only; `cont?` on
-  a `call/cc` continuation does not link
-  ([report](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/cont-pred-on-escape-cont-fails-to-link.md)).
+  `cont?` on a handler continuation reads `!k->consumed`, set at every resume
+  site (`__dk_cont_live_word`); a word in the first page is no continuation,
+  so it answers false and `__dk_resume_word` reports and aborts
+  ([resume-of-non-continuation-int-crashes](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/resume-of-non-continuation-int-crashes.md)).
+  On a `call/cc` continuation it asks the runtime's live set
+  (`tur_escape_is_live`); a cloneable or serial continuation is always live
+  ([cont-pred-on-escape-cont-fails-to-link](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/cont-pred-on-escape-cont-fails-to-link.md)).
 
 ### Why there is a driver
 
@@ -918,10 +924,11 @@ These are process-wide:
 
 - the atomic `g_dk_hgroup_ctr`;
 - `tur_dk_pinned`;
-- the E2 registry `__tur_cps_reg[256]`. Registrations past 256 are dropped,
-  and calls through those callbacks fall back to a fresh root and abort with
-  "unhandled effect"
-  ([report](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/cps-callback-registry-overflows-past-256.md));
+- the E2 registry `__tur_cps_reg`, grown with `realloc` by
+  `__tur_cps_register`. It was a 256-entry array until 2026-10-17, which
+  dropped later registrations, so calls through those callbacks fell back to a
+  fresh root and aborted with "unhandled effect"
+  ([report](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/cps-callback-registry-overflows-past-256.md));
 - `__sk_registry`;
 - `g_dk_case_reopen_hnode`. It is a **plain static** that `dk_perform` sets
   immediately before each case call and a re-opening case reads at entry, so

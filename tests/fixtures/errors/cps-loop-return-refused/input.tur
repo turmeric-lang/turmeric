@@ -1,0 +1,20 @@
+;; cps-loop-return-acts-as-break: a `return` inside a CPS-lowered `while`
+;; that is followed by more code left only the loop -- the loop helper's
+;; return continuation is the code after the loop -- so this printed 1003
+;; where the interpreter prints 103.  The CPS backend refuses the loop now,
+;; so the perform gets the located "no lowering here" error rather than a
+;; wrong value.  (Compiled only: the interpreter runs it correctly.)
+(defeffect Tick [n : int] : int)
+
+(defn scan [] : int
+  (let [^mut i 0]
+    (while (< i 10)
+      (when (= (perform (Tick i)) 1)
+        (return (+ 100 i)))
+      (set! i (+ i 1)))
+    (+ 1000 i)))
+
+(defn main [] : int
+  (println (handle (scan)
+             (Tick [n] k) (resume k (if (= n 3) 1 0))))
+  0)

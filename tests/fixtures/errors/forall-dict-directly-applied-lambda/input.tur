@@ -1,0 +1,16 @@
+;; dict-clone-nested-lambda-cites-wrong-code: passing `say` as a constrained
+;; forall hands it its Describe dictionary at run time, and the dispatch inside
+;; the directly-applied lambda cannot reach it.  The refusal carries its own
+;; code, TUR-E0313; its text used to cite TUR-E0311 (unknown :engine value)
+;; and was emitted with no code at all.
+(defclass Describe [a] (describe [x : a] : cstr))
+(definstance Describe [int] (describe [x] "an int"))
+(definstance Describe [bool] (describe [x] "a bool"))
+(defn say [A] [(Describe A)] [x : A] : cstr
+  (let [f (fn [y : A] : cstr (describe y))]
+    ((fn [z : A] : cstr (f z)) x)))
+(defn use-both [f (forall [a] [(Describe a)] (-> a cstr))] : int
+  (println (f 42))
+  (println (f true))
+  0)
+(defn main [] : int (use-both say))
