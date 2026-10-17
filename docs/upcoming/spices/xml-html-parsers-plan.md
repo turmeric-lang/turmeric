@@ -14,6 +14,8 @@
 > Follow-up D (hiccup: markup as typed data) planned 2026-10-16, not started;
 > its open questions D-1 to D-3 decided the same day. D-1 was revised after a
 > prototype: phase D1b rewrites markup vectors in result positions.
+> Follow-up B: B1-B4 implemented 2026-10-16 on turmeric-spices branch
+> `claude/dom-editable-tree` (see "Status" under follow-up B).
 > See "Follow-ups" at the end.
 
 ## Outcome (2026-10-10)
@@ -648,6 +650,111 @@ All four were decided 2026-10-16.
 
 ### Follow-up B: an editable tree
 
+#### Status (2026-10-16)
+
+B1-B4 are implemented on turmeric-spices branch `claude/dom-editable-tree`
+(dom-core, tur-xml and tur-html 0.2.0). Where the code differs from the sketch
+below, B1-B2 first:
+
+- **Validation lives in C.** `turdom_check_*` hold the rules and the
+  `turdom_edit_*` entry points check then mutate in one call, so nothing can
+  skip a check by calling functions in the wrong order; `dom/edit` maps error
+  codes to `EditError`. The raw mutators stay unchecked, for the parsers.
+- **`EditError` has nine cases**, not five: `BadPlacement` (a second root or
+  doctype, top-level text, a doctype in an element or after the root, an
+  element under an HTML raw-text element, a child of an HTML void element,
+  CDATA or a PI in an HTML document), `Detached` (the reference node has no
+  parent), `WrongKind` (e.g. `set-value!` on an element) and `OutOfMemory`
+  join the original five.
+- **More is refused than the sketch listed**, each found by the fuzz or the
+  spec: the `plaintext` element (its end tag is never recognized, so it would
+  swallow every later sibling); `<!--` in `<script>` text (the script-data
+  escape states can stop `</script>` from closing it); CDATA and PIs in HTML
+  documents (its parser produces neither -- `<![CDATA[` inside SVG reads as
+  text); `\r` in comments, CDATA, PI data and raw text (it cannot be escaped
+  there and comes back as `\n`); `]]>` in CDATA (it comes back as two
+  sections); PI data starting with whitespace; and in XML, a prefix bound to
+  two URIs on one element.
+- **Serializer changes.** The XML serializer declares the namespace of a node
+  an edit created or renamed wherever its prefix is unbound, tracking scope
+  as it walks; nodes from a parser are never touched, so parsed trees
+  serialize exactly as before. The HTML serializer escapes `\r` as `&#13;`
+  (parsed HTML never holds one).
+- **HTML elements made by `create-element` go in the XHTML namespace**, as
+  `createElement` does and as the parser builds them; otherwise an edited
+  tree never compares equal to a reparse.
+- **API additions:** `set-attr-ns!`, `rename-ns!`, `create-cdata`,
+  `create-pi`, `dom-flavor`, `edit-error-message`; `create-text`,
+  `node-import` and `node-clone` return `Result` (XML text can be invalid; a
+  cross-flavour import validates the subtree); `dom-compact` returns
+  `(Option Document)`.
+- **The cycle check skips childless nodes**, which cannot be ancestors, so
+  building a deep chain one append at a time stays linear rather than
+  O(depth) per insert.
+- **B2's round-trip property, as tested.** For XML it holds exactly over
+  random edit sequences, except that the parser lists namespace declarations
+  before other attributes, so the fuzz keeps `xmlns` attributes out of its
+  pools. For HTML it cannot hold for every valid edit, because the tree
+  builder re-nests some trees on purpose (a `<div>` in a `<p>`, an HTML
+  element inside `<svg>`); the fuzz checks it over trees a predicate says the
+  parser keeps, and counts the rest (about 6.5% of iterations). 18,000
+  iterations per flavour held.
+
+B3 (`html/edit`): `set-inner-html!` parses with the fragment algorithm in the
+element's own context, imports the result and places it with the `dom/edit`
+checks, so a refused call changes nothing -- `BadContent` for markup that
+would close a raw-text element early, `BadPlacement` for a void element,
+`WrongKind` for an SVG/MathML element or an XML document. Every html5lib
+fragment test runs a second time through it.
+
+B4 (`dom/writer`, `xml/transform`, `html/transform`):
+
+- **The gate holds as written only with namespaces off.** With namespaces
+  on, SAX names are Clark names and `xmlns` attributes are not reported, so
+  the writer has to choose prefixes and the bytes differ from
+  `dom-serialize`. The gates as tested:
+  - XML, namespaces off: the identity output IS `dom-serialize` of the same
+    document, byte for byte -- unit tests, every xmltest `valid/sa`
+    document (`fixtures/conformance.tur`, which CI fetches), and a fuzz
+    property;
+  - XML, namespaces on: the output parses to the same event stream;
+  - HTML: the SAX stream is tokenizer-level, so the gate is too -- the
+    output tokenizes to the same events. 1,554 of 1,709 html5lib inputs
+    pass; each of the other 155 is checked to be a refusal the writer makes
+    on purpose (a `<plaintext>` start tag; a comment holding `<!--`; raw
+    text holding `<!--` or a `</script` lookalike -- html5lib's script-data
+    tests are most of them). Ordinary pages parse to the same tree.
+- **Ownership:** the transform owns the event it is given (returns it or
+  releases it); the driver writes every returned event, then releases it.
+  `sax-event-retain` (dom/event) is how the driver hands over the input
+  event. The bridge to C passes only `cstr`s, so the SAX driver's per-chunk
+  region still rewinds the event nodes.
+- **The C writer holds each start tag until the next event**, so `xmlns`
+  attributes on a tag are in scope for its own Clark names, and a transform
+  can choose prefixes by writing one. Otherwise it reuses a binding in scope
+  or declares one (a default for an element, `nsN` for an attribute), and a
+  plain name under a writer-made default gets `xmlns=""`.
+- **XML names are Names, not QNames**, for elements, attributes and PI
+  targets: a namespaces-off document may use `a:b:c` (xmltest's `valid/sa/012`
+  has an attribute named `:`; the fuzz found a PI target `xp:ml`).
+- **More is refused than the B2 checks:** a duplicate attribute, and in XML
+  an end tag that does not match, a second root, text outside it, a missing
+  root at the end. `WriteError` is `(Rejected EditError)` or `(IoFailed)`;
+  transforms fail with `TransformError` (`InputError`, `OutputError`).
+- **HTML specifics:** an end tag right after a void element's start (`<br/>`)
+  is written self-closed, so it tokenizes alike and parses to one `<br>`; a
+  doctype keeps its public and system ids (the tree serializer drops them),
+  so the quirks mode survives.
+- **Streaming:** `sax-writer-to-file` writes in 64 KiB chunks, and
+  `sax-transform-file` streams XML file to file. tur-html has no file SAX
+  entry point; `sax-transform-handler` plugs into its push parser instead.
+- Two compiler bugs found on the way, both fixed the same day:
+  [heap-adt-word-slot-missing-cast](../../archive/heap-adt-word-slot-missing-cast.md),
+  and a second symptom of
+  [emit-c-segfault-on-colliding-private-helper](../../archive/emit-c-segfault-on-colliding-private-helper.md)
+  (a program could not import both spices' SAX modules). The spices keep
+  their workarounds until a `tur` with the fixes is what their CI builds.
+
 #### What the tree already gives us
 
 The arena tree in `c/dom/turdom.c` is closer to editable than the "read-only"
@@ -807,7 +914,7 @@ streaming DOM serializer.
 | B1 | C mutators in `turdom.c` (detached nodes, link/unlink, insert-before, attr set/remove, value set, rename, clone, import, compact, garbage counter), all iterative | C-level unit test; ASan clean; `dom-live-bytes` returns to 0 after `dom-free` of an edited document |
 | B2 | `dom/edit` module and `EditError`, with every validation above | One fixture per `EditError` case, including a `</script>` breakout and a `<x onload=...>` name injection; a fuzz pass of random edit sequences holding `parse(serialize(d)) == d` for both flavours |
 | B3 | `set-inner-html!` / `node-outer-html` in `tur-html` via `html-parse-fragment` + `node-import` | html5lib fragment cases reparsed through `set-inner-html!` match |
-| B4 | `SaxWriter`, `sax-transform` | Identity transform reproduces `dom-serialize` of the same input byte for byte |
+| B4 | `SaxWriter`, `sax-transform` | Identity transform reproduces `dom-serialize` of the same input byte for byte (namespaces off; with namespaces on and for HTML, the same events back -- see Status) |
 
 ### Follow-up C: CSS selectors and node paths
 

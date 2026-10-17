@@ -37,8 +37,14 @@ static void elab_forward_declare_defns(Elab *e, Form *const *items,
         if ((uint32_t)f->as.list.len <= name_idx) continue;
         Form *fn_name_f = f->as.list.items[name_idx];
         if (fn_name_f->tag != F_SYM) continue;
-        /* Check not already defined */
-        if (scope_lookup(&e->global, fn_name_f->as.sym)) continue;
+        /* Check not already defined -- by this module or one it can see.  A
+         * same-named defn PRIVATE to another module is not ours: declaring
+         * over it is what lets this module's recursive helper call itself
+         * (private-name-collision-across-modules). */
+        {
+            Binding *prev = scope_lookup_visible(e, &e->global, fn_name_f->as.sym);
+            if (prev && !binding_private_elsewhere(e, prev)) continue;
+        }
         /* SS3a / general: scan for return-type annotation in the defn
          * form to get the real result_kind for the forward declaration.
          * Without this, recursive functions declared :nil infer TY_INT
@@ -2121,8 +2127,8 @@ void elab_force_load_module(Elab *e, const char *module_name) {
 Binding *elab_lookup_sym(Elab *e, const Symbol *sym, Span span, bool *had_error) {
     *had_error = false;
 
-    /* Direct scope lookup */
-    Binding *b = scope_lookup(e->scope, sym);
+    /* Direct scope lookup, past another module's same-named private defn */
+    Binding *b = scope_lookup_visible(e, e->scope, sym);
     if (b) {
         /* The `tur/` namespace is implicitly imported everywhere, so a binding
          * defined in a `tur/` module is globally visible regardless of its

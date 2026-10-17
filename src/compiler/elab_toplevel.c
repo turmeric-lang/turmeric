@@ -2797,7 +2797,8 @@ void elab_pre_declare_toplevel_defn(Elab *ep, Arena *arena, Form *f) {
                              * see the original binding (with is_from_stdlib set
                              * correctly) and either reuse it as a forward decl or
                              * emit the shadow diagnostic. */
-                            if (!scope_lookup(&ep->global, name_f->as.sym)) {
+                            Binding *prev_g = scope_lookup_visible(ep, &ep->global, name_f->as.sym);
+                            if (!prev_g || binding_private_elsewhere(ep, prev_g)) {
                                 Binding *b = binding_new(ep, name_f->as.sym, fn_type, false, true, f->span);
                                 scope_add(&ep->global, b);
                             }

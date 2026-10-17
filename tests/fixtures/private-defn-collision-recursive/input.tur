@@ -1,0 +1,23 @@
+;; private-name-collision-across-modules: every module's top-level defns,
+;; private ones included, share the global scope.  pa and pb each define
+;; private __go (self-recursive), __ev?/__od? (mutually recursive) and __err
+;; (zero-argument in pa, one-argument in pb), and pb privately reuses pa's
+;; exported `shared`.  pb's forward-declare pass used to skip every name pa
+;; had bound, so pb's recursive calls resolved to pa's helpers and failed as
+;; "symbol '__go' is private to module 'pa'"; and pb's defn took pa's
+;; binding for its own forward declaration and rewrote its signature, which
+;; crashed the emitter when the arities differed.  A binding private to
+;; another module is now skipped by lookup and shadowed by the new defn.
+(defmodule prog
+  (import pa :refer [pa-count pa-even pa-err shared])
+  (import pb :refer [pb-count pb-even pb-err pb-shared])
+  (defn main [] : int
+    (println (pa-count))                 ; 3
+    (println (pb-count))                 ; 30
+    (println (if (pa-even 4) 1 0))       ; 1
+    (println (if (pb-even 4) 1 0))       ; 0 (pb inverts)
+    (println (pa-err))                   ; 7
+    (println (pb-err))                   ; 42
+    (println (shared))                   ; 1 -- pa's export, not pb's private
+    (println (pb-shared))                ; 2
+    0))

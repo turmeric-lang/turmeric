@@ -1,0 +1,21 @@
+;; heap-adt-word-slot-missing-cast, shape 2: calling a let-bound closure the
+;; compiler can see (`(let [h (mk 1 val)] (h (A 41)))`) is a direct call to
+;; the lambda's lifted function, whose parameter is the `int64_t` word; the
+;; `:heap` argument went in as `tur_adt_E *` uncast (-Wint-conversion, a hard
+;; error under clang).  The direct call keys its bridge on the two emitted
+;; spellings now -- the thunk's recorded slot and the argument's own.
+
+(defdata E :heap :copy (A int) (B))
+
+(defn val [e : E] : int (match e (A n) n (B) 0))
+
+(defn mk [k : int f : (fn [E] int)] : (fn [E] int)
+  (fn [e : E] : int (+ k (f e))))
+
+(defn main [] : int
+  (let [h (mk 1 val)
+        e (A 10)]
+    (println (h (A 41)))      ; a constructor argument: 42
+    (println (h e))           ; a let-bound argument: 11
+    (println (h (B))))        ; 1
+  0)

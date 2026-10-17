@@ -1,0 +1,6 @@
+;; qb -- a private one-argument __error over a :copy sum (see input.tur).
+(defmodule qb (export qb-run EE A B C)
+  (defdata EE :copy (A) (B) (C))
+  (defn __error [rc : int] : EE (cond (= rc 1) (A) (= rc 2) (B) :else (C)))
+  (defn __done [rc : int] : (Result nil EE) (if (= rc 0) (Ok nil) (Err (__error rc))))
+  (defn qb-run [rc : int] : int (match (__done rc) (Ok _) 0 (Err (A)) 1 (Err (B)) 2 (Err _) 3)))

@@ -1,0 +1,16 @@
+;; private-name-collision-across-modules, the crash: qb and qa each define a
+;; private __error -- one argument and a :copy sum result in qb, none and a
+;; struct result in qa.  Loading qa second, its defn found qb's binding,
+;; took it for its own forward declaration and rewrote its arity and types
+;; in place (elab_defn's early update); qb's `(Err (__error rc))` was then a
+;; call of a zero-argument function with one argument, and emit-c crashed in
+;; emit_value_dispatch.  Another module's private defn is shadowed now.
+(defmodule prog
+  (import qb :refer [qb-run])
+  (import qa :refer [qa-run])
+  (defn main [] : int
+    (println (qa-run true))     ; 5
+    (println (qa-run false))    ; 1
+    (println (qb-run 0))        ; 0
+    (println (qb-run 2))        ; 2
+    0))

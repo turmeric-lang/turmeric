@@ -518,6 +518,48 @@ Binding *scope_lookup(Scope *s, const Symbol *name) {
     return NULL;
 }
 
+/* private-name-collision-across-modules: is `b` private to a module OTHER
+ * than the one being elaborated?  Mirrors elab_lookup_sym's visibility rule:
+ * a binding of no module, an exported one, and one from the implicitly
+ * imported `tur/` namespace are visible everywhere. */
+bool binding_private_elsewhere(const Elab *e, const Binding *b) {
+    const Symbol *m = b ? b->defining_module_name : NULL;
+    if (!m || m == e->current_module_name || b->is_exported) return false;
+    if (m->len >= 4 && memcmp(m->name, "tur/", 4) == 0) return false;
+    return true;
+}
+
+/* The newest binding of `name` that the module being elaborated can see.
+ * Every module's top-level defns share the global scope, private ones
+ * included, so two modules with a private helper of the same name stack two
+ * bindings there and the one loaded LAST answers scope_lookup -- a module
+ * whose own helper lies under it resolved its calls to the other module's,
+ * and then rejected them as private (or, through elab_defn, took that
+ * binding for its own forward declaration and rewrote its signature).  This
+ * skips bindings private to another module; when nothing visible remains it
+ * falls back to the newest binding of any kind, so the caller can still
+ * report a private one.  NULL when `name` is unbound. */
+Binding *scope_lookup_visible(const Elab *e, Scope *s, const Symbol *name) {
+    Binding *first = NULL;
+    for (Scope *cur = s; cur; cur = cur->parent) {
+        if (cur->idx) {
+            for (uint32_t i = scope_idx_newest(cur, name); i; i = cur->prev[i - 1]) {
+                Binding *b = cur->bindings[i - 1];
+                if (!first) first = b;
+                if (!binding_private_elsewhere(e, b)) return b;
+            }
+            continue;
+        }
+        for (uint32_t i = cur->n; i > 0; i--) {
+            Binding *b = cur->bindings[i - 1];
+            if (b->name != name) continue;
+            if (!first) first = b;
+            if (!binding_private_elsewhere(e, b)) return b;
+        }
+    }
+    return first;
+}
+
 /* Edge 1 + letrec-sibling-closure-not-captured + letrec-mutual-recursion-
  * between-capturing-closures: is a call from a letrec init's own top-level
  * body to group member `b` recursion (left to the recursion machinery) rather
