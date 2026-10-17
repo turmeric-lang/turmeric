@@ -16,15 +16,14 @@ Unlike `-X`, which conflated "in development", "stable but opt-in", and
 every flag carries a hard expiry by which it must graduate or be removed.
 
 > **The registry is small by design.** Run `tur experiments` for the
-> authoritative current set (at the time of writing it holds two rows:
+> authoritative current set (at the time of writing it holds one row:
 > `reflected-measures` -- `^reflect` on a defn admits a total measure's
 > defining equation to the refinement solver, see
 > [reflected-measures-plan.md](https://github.com/turmeric-lang/turmeric/blob/main/docs/upcoming/reflected-measures-plan.md)
-> and the refinement guide's "Reflected measures" section; and
-> `repl-jit-inline-c` -- the interpreter compiles an inline-C defn it cannot
-> run, see [aot-compiled-repl-plan.md](https://github.com/turmeric-lang/turmeric/blob/main/docs/upcoming/aot-compiled-repl-plan.md)
-> and the REPL guide's "Inline-C at the prompt" section); this guide
-> describes how the mechanism behaves for whatever rows are present.
+> and the refinement guide's "Reflected measures" section.
+> `repl-jit-inline-c` graduated on 2026-10-17 and is always on, see the REPL
+> guide's "Inline-C at the prompt" section); this guide describes how the
+> mechanism behaves for whatever rows are present.
 
 ## Opting in
 

@@ -1,9 +1,11 @@
 # Plan: Compiled evaluation at the `tur repl` prompt
 
 > **Status:** C0 landed 2026-09-30. **C1 landed 2026-10-02** behind
-> `--enable=repl-jit-inline-c`, and went **beta on 2026-10-04** (advisory
-> `expires_at` 0.65.0) once its value boundary closed and its surface was
-> frozen as the "Supported subset" under C1. C2 was investigated 2026-10-02 and
+> `--enable=repl-jit-inline-c`, went **beta on 2026-10-04** once its value
+> boundary closed and its surface was frozen as the "Supported subset" under
+> C1, and **graduated 2026-10-17** (0.65 line, past its advisory `expires_at`
+> of 0.65.0): on by default on every `TUR_JIT` build, with
+> `TUR_REPL_JIT_INLINE_C=0` as the off switch. C2 was investigated 2026-10-02 and
 > again 2026-10-04 (findings under C2) and is not started. **Rewritten 2026-09-29.** The 2026-06-28 draft (in
 > git history) proposed compiling each prompt form with a `cc` subprocess into
 > a `.so` and `dlopen`ing it. It predates the in-process MIR JIT (graduated
@@ -11,8 +13,8 @@
 > draft planned to build, and the draft had design flaws this version fixes
 > (see "Why not the 2026-06-28 draft"). The file name is historical: nothing
 > here is ahead-of-time compiled any more.
-> **Last Updated:** 2026-10-04
-> **Track:** post-v1. C0 (a bug fix) and C1 (an experiment) have landed.
+> **Last Updated:** 2026-10-17
+> **Track:** post-v1. C0 (a bug fix) and C1 (graduated) have landed.
 > **Type:** REPL / interpreter (`src/turi/`) / JIT (`src/jit_engine.c`) /
 > emitter (REPL-mode globals).
 > **Requires:** a `TUR_JIT` build. Since 2026-10-02 that is the default on
@@ -59,7 +61,8 @@ error: eval: inline-C not supported in interpreter mode (function uses a native 
 
 The same `c-mix` in a file prints `97` under `tur jit`. Until C0 landed, adding
 a `for` loop to the body made things worse: the REPL could not even read the
-form. Since C1, `tur repl --enable=repl-jit-inline-c` prints `97` too.
+form. Since C1, `tur repl` prints `97` too (behind
+`--enable=repl-jit-inline-c` until C1 graduated on 2026-10-17).
 
 ## What already exists
 
@@ -143,15 +146,65 @@ The REPL now asks `reader_open_depth` (`src/compiler/reader.c`) whether the
 input is complete, and keeps a blank line typed inside a fence or string.
 C1 and C2 could not be tested at an interactive prompt without it.
 
-### C1 -- JIT the inline-C `defn`s the interpreter cannot run (LANDED 2026-10-02, BETA 2026-10-04)
+### C1 -- JIT the inline-C `defn`s the interpreter cannot run (LANDED 2026-10-02, BETA 2026-10-04, GRADUATED 2026-10-17)
 
 The smallest change that closes the gap. The interpreter stays the evaluator,
-and only the inline-C bodies it refuses get compiled. Experiment
-`repl-jit-inline-c` (a prototype from 0.59.0, beta since 2026-10-04, advisory
-`expires_at` 0.65.0); it applies wherever turi
-runs, so `tur repl` and `tur --interpret` alike. With it on, the `c-mix`
-example above prints `97` at the prompt and under `--interpret`. Try Turmeric
-has no JIT and is unchanged.
+and only the inline-C bodies it refuses get compiled. It was experiment
+`repl-jit-inline-c` (a prototype from 0.59.0, beta from 2026-10-04, advisory
+`expires_at` 0.65.0) and is now always on; it applies wherever turi runs with
+the inline-C capability, so `tur repl` and `tur --interpret` alike. The
+`c-mix` example above prints `97` at the prompt and under `--interpret`. Try
+Turmeric has no JIT and is unchanged.
+
+**Graduation (2026-10-17).** The row left `EXPERIMENTS[]` for `GRADUATED[]`,
+so a lingering `--enable=repl-jit-inline-c` is a `TUR-W0063` no-op for one
+minor line (eligible to age out at 0.66.0). The frozen "Supported subset"
+below is the shipped surface. `TUR_REPL_JIT_INLINE_C=0` restores the "inline-C
+not supported" error, for bisection and for the two harnesses that test the
+pattern executor on its own (`run-interp-show-inline-c.sh`,
+`run-interp-inline-c-constructor.sh`); `tests/turi/repl-jit-inline-c.sh` keeps
+that off path covered, at the prompt and under `--interpret`.
+
+**Re-measured at the graduation** (Debug, x86-64 Linux, `main` at
+`52ce19d7`): the 842 fixtures with user inline-C, an `expected.stdout`, and no
+args, stdin or flags, under `tur --interpret`, with the JIT off
+(`TUR_REPL_JIT_INLINE_C=0`) and on. Off: 321 pass. On: 379 pass. No fixture
+that passes with it off fails with it on. Of the 58 that pass only with it on,
+`run-turi.sh` now runs 52 (the 46 below plus six); the rest are skipped there
+by a marker, measure the process heap, or pass by luck (next paragraph). 14
+fixtures crash either way; those are interpreter crashes in the inline-C
+carve-out and have nothing to do with the JIT.
+
+What graduation accepted, rather than fixed:
+
+- **Four programs crash with the JIT on** that failed cleanly ("inline-C not
+  supported") with it off, and since the graduation nobody has to opt in to
+  reach them:
+  - `typeclass-unsafe-passbyptr-struct-arg` and `option-result-c-abi` are
+    `:int` handle stand-ins, which CLAUDE.md already forbids. The second
+    returns a compiled Option box as `:int`, and `(:: ... (Option int))`
+    then has `try_retag_carrier_struct` (`src/turi/eval.c`) read it as an
+    interpreter struct.
+  - `re-union-patterns` is the ownership row: compiled code that `free`s a
+    `cstr` argument the interpreter owns. Correctly typed code can write
+    that, so it is the one gap left in the boundary; copying `cstr` arguments
+    into compiled code would close it.
+  - `defer-cps-abortive-handler` is not the JIT's at all: its `note` is an
+    in-subset `cstr -> int` body, and compiling it only lets the program run
+    far enough to reach an interpreter use-after-free that reproduces with no
+    inline-C anywhere:
+    [turi-defer-in-stored-continuation-use-after-free](../reported/turi-defer-in-stored-continuation-use-after-free.md).
+
+  The two `:int`-result crashes recorded on 2026-10-04,
+  `closure-drop-affine-chain-autodrop` and `httpd-mw-fold-many`, now pass.
+  They still launder a compiled handle through `:int`, so they pass by luck
+  and are not in `run-turi.sh`'s list.
+- **Macro-time evaluation is unaffected.** The macro env denies
+  `TURI_CAP_INLINE_C`, and `eval_apply_driven` checks that capability before
+  the JIT is reached, so a `defmacro*` never compiles C mid-compile.
+- **Embedders still cannot reach it.** Only `tur`'s `main.c` installs the
+  compile hook, so libturi embedders (the notebook spice) keep the error:
+  [notebook-cells-cannot-call-inline-c-spices](../reported/notebook-cells-cannot-call-inline-c-spices.md).
 
 **As built.** `src/turi/inline_c_jit.{h,c}` is the MIR-free half, in
 `tur_core`. The compile is a hook that `tur` registers from `main.c` on a
@@ -265,7 +318,7 @@ Each refusal is an error value naming the argument, and the session carries
 on. Together they turn 22 of the 26 crashes into refusals and give up the 14
 lucky passes.
 
-**Supported subset (frozen for the beta).**
+**Supported subset (frozen for the beta; the graduated surface).**
 
 | | Supported | Refused, cleanly | Outside the subset -- undefined, not detected |
 | --- | --- | --- | --- |
@@ -291,12 +344,14 @@ at `59d1dfe5c`). Of the fixtures with user inline-C, 766 have an
 | no flag | 311 | 455 | -- |
 | C1 as landed (measured at `4fb2606bb`, 760 fixtures) | 370 | 390 | 26 |
 | C1 with the value boundary | 357 | 409 | 4 (the column above) |
+| at the graduation (Debug, x86-64 Linux, 842 fixtures; see C1's "Re-measured") | 379 | 463 | 4 (see "What graduation accepted") |
 
 No fixture that passes without the flag fails with it. **`run-turi.sh` now runs
-the 46 that pass only with the flag** (`TURI_INLINEC_JIT_RUN`), with
-`--enable=repl-jit-inline-c`, on any build whose `tur` carries the JIT engine;
-without one they stay in the carve-out. Each was checked stable across three
-consecutive runs.
+the 46 that pass only with the flag** (`TURI_INLINEC_JIT_RUN`) on any build
+whose `tur` carries the JIT engine -- with `--enable=repl-jit-inline-c` until
+the graduation, with no flag since; without an engine they stay in the
+carve-out. Each was checked stable across three consecutive runs. The
+graduation re-measure added six more (52), checked the same way.
 
 The failures that remain are mostly not C1's to fix: 120 struct/ADT/closure
 signatures, about 20 bodies that call Turmeric code, and the interpreter gaps
@@ -306,7 +361,10 @@ flag.
 **Test.** `tests/turi/repl-jit-inline-c.sh` (ctest `tur_repl_jit_inline_c`,
 registered on `TUR_JIT` builds, in the `test` job's aux part). It covers:
 
-- the gate off;
+- the off switch (`TUR_REPL_JIT_INLINE_C=0`, the gate before the graduation),
+  at the prompt and under `--interpret`;
+- the default on, with no lifecycle warning, and the old `--enable` accepted
+  as a `TUR-W0063` no-op;
 - loop and branch bodies;
 - a hoisted `#include`;
 - float, cstr and bool signatures;
@@ -627,7 +685,7 @@ Only needed if C2 misses its latency budget. Candidates, safest first:
 | Phase | Gate | Lands | Tests |
 | --- | --- | --- | --- |
 | C0 | none (bug fix) | landed 2026-09-30 | `tests/turi/repl-multiline-input.sh`: every repro in the report, piped, asserting on the evaluated output (the failure exits 0) |
-| C1 | `repl-jit-inline-c` | landed 2026-10-02; beta 2026-10-04 | `tests/turi/repl-jit-inline-c.sh` (ctest `tur_repl_jit_inline_c`, `TUR_JIT` builds): the gate off, loop and branch bodies, a hoisted `#include`, float/cstr/bool signatures, a cached second call, redefinition dropping the cache, refusal of a body that calls a Turmeric function and of a struct parameter, the value boundary, `--interpret`. It probes the binary for the JIT and PASS-skips without it. `tests/run-turi.sh` runs the 46 corpus fixtures that need it (`TURI_INLINEC_JIT_RUN`) |
+| C1 | `repl-jit-inline-c` (graduated; `TUR_REPL_JIT_INLINE_C=0` turns it off) | landed 2026-10-02; beta 2026-10-04; graduated 2026-10-17 | `tests/turi/repl-jit-inline-c.sh` (ctest `tur_repl_jit_inline_c`, `TUR_JIT` builds): the off switch, the old `--enable` as a no-op, loop and branch bodies, a hoisted `#include`, float/cstr/bool signatures, a cached second call, redefinition dropping the cache, refusal of a body that calls a Turmeric function and of a struct parameter, the value boundary, `--interpret`. It probes the binary for the JIT and PASS-skips without it. `tests/run-turi.sh` runs the 52 corpus fixtures that need it (`TURI_INLINEC_JIT_RUN`) |
 | C2 | `compiled-repl` | post-v1 | Transcript diff: run each transcript in a corpus through the interpreted and the compiled REPL and fail on any difference, as the engine triangle does. See the corpus list below. Latency: a new `benchmarks/repl-turn/` |
 | C3, C4 | as C2 | after C2 | as needed |
 
@@ -646,7 +704,7 @@ The C2 transcript corpus covers:
 
 - **C0 (met 2026-09-30):** every repro in the report evaluates correctly,
   piped and interactive.
-- **C1 (met 2026-10-02):** on a JIT build with the experiment on, the `c-mix`
+- **C1 (met 2026-10-02; graduated 2026-10-17):** on a JIT build with the experiment on, the `c-mix`
   example above prints `97` at the prompt and under `--interpret`.
   Unsupported signatures get a clean error that names the type.
 - **C2:**

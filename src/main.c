@@ -13212,6 +13212,15 @@ static int tur_main_inner(int argc, char **argv) {
         const char *__rgn = getenv("TUR_REGIONS");
         if (__rgn && __rgn[0] == '0') g_opt_regions = false;
         else if (__rgn && __rgn[0] == '1') g_opt_regions = true;
+        /* The interpreter's inline-C JIT is ON by default since graduation
+         * out of --enable=repl-jit-inline-c (2026-10-17).  `=0` restores the
+         * "inline-C not supported" error -- the pre-graduation default -- for
+         * bisection and for the harnesses that test the pattern executor on
+         * its own (run-interp-*-inline-c*.sh); tests/turi/repl-jit-inline-c.sh
+         * keeps that path covered. */
+        const char *__ijit = getenv("TUR_REPL_JIT_INLINE_C");
+        if (__ijit && __ijit[0] == '0') g_opt_repl_jit_inline_c = false;
+        else if (__ijit && __ijit[0] == '1') g_opt_repl_jit_inline_c = true;
     }
 
 #ifdef _WIN32
@@ -13253,7 +13262,7 @@ static int tur_main_inner(int argc, char **argv) {
      * only; without it every consumer keeps the non-JIT fallback behavior. */
     tur_jit_ffi_install();
     /* aot-compiled-repl-plan C1: the interpreter's compiler for inline-C
-     * defns it cannot run.  Inert until --enable=repl-jit-inline-c. */
+     * defns it cannot run.  Inert under TUR_REPL_JIT_INLINE_C=0. */
     turi_set_inline_c_jit_hook(&g_repl_inline_c_jit_hook);
 #endif
 

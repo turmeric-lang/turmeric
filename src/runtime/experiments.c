@@ -440,29 +440,16 @@ static const ExperimentDescriptor EXPERIMENTS[] = {
      * callee returning an alias into a writer) closed with this change.  No
      * bisection hatch is kept, so the gate-off fixture retires rather than
      * inverts.  The name moves to GRADUATED[] below. */
-    /* repl-jit-inline-c (aot-compiled-repl-plan C1) -- the interpreter
+    /* repl-jit-inline-c GRADUATED 2026-10-17, in the 0.65 line (introduced
+     * 0.59.0, beta 2026-10-04, advisory expires_at 0.65.0).  The interpreter
      * compiles an inline-C defn it cannot run, through the real emitter and
-     * the in-process MIR engine, on that defn's first call; `tur repl` and
-     * `tur --interpret` alike.  Needs a TUR_JIT build (the default on 64-bit
-     * x86-64/arm64); without one the hook is absent and today's "inline-C not
-     * supported" error stands.
-     *
-     * BETA since 2026-10-04 (prototype 0.59.0-0.62.0).  The surface is frozen
-     * as the plan's C1 "Supported subset": a defn whose whole body is
-     * inline-C, fixed arity, scalar or pointer signature, calling nothing
-     * else; at the call a pointer parameter takes only nil or a handle an
-     * earlier JIT'd call returned, and an int-class parameter refuses a word
-     * addressing the interpreter's own memory.  expires_at moves 0.62.0 ->
-     * 0.65.0 for the soak.  Graduating it is a bet that C2 (whole compiled
-     * turns, post-v1) does not replace it; C2 removes the value boundary
-     * altogether, but C1 stays the cheap path for `tur --interpret`. */
-    { "repl-jit-inline-c",
-      "the interpreter JIT-compiles an inline-C defn it cannot run, on its first call (needs a TUR_JIT build)",
-      "docs/upcoming/aot-compiled-repl-plan.md",
-      "0.59.0",                  /* introduced */
-      "0.65.0",                  /* expires_at -- advisory; never blocks a release */
-      XF_LIFECYCLE_BETA,
-      &g_opt_repl_jit_inline_c },
+     * the in-process MIR engine, on its first call -- `tur repl` and
+     * `tur --interpret` alike, on any TUR_JIT build.  The beta's frozen
+     * "Supported subset" is the shipped surface; the plan's C2 (whole compiled
+     * turns, post-v1) replaces it only at the prompt, so it stays the path for
+     * `tur --interpret`.  TUR_REPL_JIT_INLINE_C=0 restores the "inline-C not
+     * supported" error, for bisection and for the harnesses that test the
+     * pattern executor on its own.  The name moves to GRADUATED[] below. */
     { 0 }, /* sentinel so the array is never zero-length (C forbids that);
             * experiment_count() subtracts it off. */
 };
@@ -558,6 +545,12 @@ static const char *const GRADUATED[] = {
      * write and enable, so it keeps the full window.  Eligible to age out at
      * 0.62.0.  See docs/archive/loop-invariants-plan.md. */
     "loop-invariants",
+    /* graduated 2026-10-17, in the 0.65 line.  No source syntax, but it
+     * shipped as a listed `--enable` row from 0.59.0 and the REPL guide told
+     * users to pass it, so a wrapper script or experiments.tur may name it:
+     * it keeps the full window.  Eligible to age out at 0.66.0.
+     * See docs/upcoming/aot-compiled-repl-plan.md (C1). */
+    "repl-jit-inline-c",
     NULL,
 };
 

@@ -256,14 +256,17 @@ fixture_inline_c_runs() {
     eval "[ \"\${TURI_ICRUN_${key}:-0}\" = \"1\" ]"
 }
 
-# aot-compiled-repl-plan C1 (repl-jit-inline-c, beta): inline-C fixtures that
-# run under --interpret when the interpreter may JIT-compile the inline-C defns
-# it cannot run itself.  On a TUR_JIT build (the default on 64-bit x86-64 and
-# arm64) each runs with --enable=repl-jit-inline-c; on a build with no engine
-# it stays in the carve-out.  Measured 2026-10-04: every one fails without the
-# flag and passes with it, three runs in a row.  An entry belongs here only if
-# that holds -- a fixture that passes only by handing interpreter memory to
-# compiled code is exactly what C1's value boundary refuses.
+# aot-compiled-repl-plan C1 (repl-jit-inline-c, graduated 2026-10-17): inline-C
+# fixtures that run under --interpret because the interpreter JIT-compiles the
+# inline-C defns it cannot run itself.  On a TUR_JIT build (the default on
+# 64-bit x86-64 and arm64) each runs, with no flag since the graduation; on a
+# build with no engine it stays in the carve-out.  Measured 2026-10-04 (46)
+# and re-measured at the graduation (six more): every one fails without the
+# JIT (TUR_REPL_JIT_INLINE_C=0) and passes with it, three runs in a row.  An
+# entry belongs here only if that holds, and only for an in-subset signature --
+# a fixture that passes only by handing interpreter memory to compiled code, or
+# a compiled handle laundered through `:int` back to the interpreter
+# (closure-drop-affine-chain-autodrop, httpd-mw-fold-many), passes by luck.
 TURI_INLINEC_JIT_RUN="
 async-sleep
 backtrack-depth
@@ -276,11 +279,13 @@ backtrack-sudoku
 closure-slot-ptr-void-param-sinks
 condvar-basic
 cps-backend-ptr
+defer-cps-caught-panic
 effect-extern-c-row
 effect-row-capability
 eqmap-cstr-content
 fat-param-direct-call
 fat-param-nullary-closure
+forward-call-typed-heap-param
 gc-heap-struct-rc
 gde-generic-dict-eq-map
 ghe1-bare-method-dispatch
@@ -293,9 +298,13 @@ inline-c-multi-include-hoist
 inline-c-optional-hoisted-include
 inline-c-variadic-definition
 io-deprecated-names
+jit-inline-c-bool-conversion
 jit-inline-c-struct-stmtexpr-slot
+jit-inline-c-union-array-pun
+jit-uint128-arith
 letrec-self-in-nested-closure
 letrec-self-recursive-carrier-float-return
+nil-arg-to-ptr-param-inline-c
 poly-fat-float-closure-eqmap
 poly-fn-typeclass-capturing-closure
 rc-free-queue-deep-cascade
@@ -502,11 +511,8 @@ run_turi_fixture() {
     # a real bug the carve hides; see
     # docs/archive/history/turi-inline-c-silent-miscompiles.md.  Every other fixture is
     # now run for real under --interpret (no allowlist gate).
-    local jit_flag=""
     if fixture_has_inline_c "$dir" && ! fixture_inline_c_runs "$name" &&
-       fixture_inline_c_jit_runs "$name"; then
-        jit_flag="--enable=repl-jit-inline-c"
-    elif fixture_has_inline_c "$dir" && ! fixture_inline_c_runs "$name"; then
+       ! fixture_inline_c_jit_runs "$name"; then
         printf 'SKIP %s (inline-c carve-out)\n' "$name"
         echo "SKIP_INLINEC" > "$RESULTS_DIR/$(printf '%s' "$name" | tr '/ ' '__').result"
         return
@@ -537,18 +543,18 @@ run_turi_fixture() {
     local rc=0
     if [ -f "$dir/input.stdin" ]; then
         if command -v timeout >/dev/null 2>&1; then
-            timeout "$fixture_timeout" "$TUR" $fixture_flags $jit_flag --interpret "$input" \
+            timeout "$fixture_timeout" "$TUR" $fixture_flags --interpret "$input" \
                 < "$dir/input.stdin" > "$actual_stdout" 2> "$actual_stderr" || rc=$?
         else
-            "$TUR" $fixture_flags $jit_flag --interpret "$input" \
+            "$TUR" $fixture_flags --interpret "$input" \
                 < "$dir/input.stdin" > "$actual_stdout" 2> "$actual_stderr" || rc=$?
         fi
     else
         if command -v timeout >/dev/null 2>&1; then
-            timeout "$fixture_timeout" "$TUR" $fixture_flags $jit_flag --interpret "$input" \
+            timeout "$fixture_timeout" "$TUR" $fixture_flags --interpret "$input" \
                 > "$actual_stdout" 2> "$actual_stderr" || rc=$?
         else
-            "$TUR" $fixture_flags $jit_flag --interpret "$input" \
+            "$TUR" $fixture_flags --interpret "$input" \
                 > "$actual_stdout" 2> "$actual_stderr" || rc=$?
         fi
     fi

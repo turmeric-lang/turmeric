@@ -1,11 +1,17 @@
 #!/usr/bin/env bash
 # tests/turi/repl-jit-inline-c.sh -- aot-compiled-repl-plan C1.
 #
-# With --enable=repl-jit-inline-c on a TUR_JIT build, an inline-C defn the
-# interpreter cannot run (try_exec_simple_inline_c declines its body) is
-# compiled in process on its first call and called through its __ffi shim.
-# Every body below has a loop, which the pattern executor does not run, so
-# each one exercises the compiled path rather than the executor.
+# On a TUR_JIT build an inline-C defn the interpreter cannot run
+# (try_exec_simple_inline_c declines its body) is compiled in process on its
+# first call and called through its __ffi shim.  Every body below has a loop,
+# which the pattern executor does not run, so each one exercises the compiled
+# path rather than the executor.
+#
+# repl-jit-inline-c graduated 2026-10-17, so that is the default.  The
+# pre-graduation default -- the "inline-C not supported" error -- survives as
+# TUR_REPL_JIT_INLINE_C=0, and the first case below keeps it covered (the
+# experimental-flags guide: a kept hatch keeps a harness).  The old
+# `--enable=repl-jit-inline-c` is a TUR-W0063 no-op for one minor line.
 #
 # Asserts on the evaluated output, never on exit status alone: a feature that
 # silently did nothing would still exit 0.
@@ -73,19 +79,27 @@ C_MIX=(
     '  ```)'
 )
 
-# --- Gate off: today's error, unchanged ----------------------------------
-out="$(printf '%s\n' "${C_MIX[@]}" '(c-mix 3 4)' ':quit' | repl_out)"
-has   "gate off: the interpreter still refuses" \
+# --- TUR_REPL_JIT_INLINE_C=0: the pre-graduation error, unchanged ------------
+out="$(printf '%s\n' "${C_MIX[@]}" '(c-mix 3 4)' ':quit' \
+       | TUR_REPL_JIT_INLINE_C=0 repl_out)"
+has   "hatch off: the interpreter still refuses" \
       "inline-C not supported in interpreter mode" "$out"
-lacks "gate off: nothing compiled" "93345" "$out"
+lacks "hatch off: nothing compiled" "93345" "$out"
 
-# --- Gate on: a loop body runs ---------------------------------------------
+# --- Default: a loop body runs ----------------------------------------------
 out="$(printf '%s\n' "${C_MIX[@]}" '(c-mix 3 4)' '(c-mix 0 1)' ':quit' \
-       | repl_out --enable=repl-jit-inline-c)"
+       | repl_out)"
 has   "loop body: compiled and called"     "=> 93345" "$out"
 has   "loop body: second call (cached)"    "=> 993"   "$out"
 lacks "loop body: no refusal"              "inline-C not supported" "$out"
-has   "experiment lifecycle warning fires" "repl-jit-inline-c" "$out"
+lacks "graduated: no lifecycle warning"    "TUR-W006" "$out"
+
+# --- The retired flag is a graduated no-op ----------------------------------
+out="$(printf '%s\n' "${C_MIX[@]}" '(c-mix 3 4)' ':quit' \
+       | repl_out --enable=repl-jit-inline-c)"
+has   "old --enable: TUR-W0063, not an unknown-name error" "TUR-W0063" "$out"
+lacks "old --enable: not TUR-E0310"        "TUR-E0310" "$out"
+has   "old --enable: still compiled"       "=> 93345"  "$out"
 
 # --- Branches, a hoisted #include, and every scalar result kind ------------
 # The float probe uses 7.1, not an integer (CLAUDE.md): 7.1 * 2.5^2 = 44.375.
@@ -120,7 +134,7 @@ out="$(printf '%s\n' \
     '  ```)' \
     '(all-even 4 8)' \
     '(all-even 4 7)' \
-    ':quit' | repl_out --enable=repl-jit-inline-c)"
+    ':quit' | repl_out)"
 has "hoisted #include: isupper"      "=> 3"      "$out"
 has "float args and result"          "=> 44.375" "$out"
 has "cstr result (negative)"         '=> "neg"'  "$out"
@@ -137,7 +151,7 @@ out="$(printf '%s\n' "${C_MIX[@]}" '(c-mix 3 4)' \
     '  return t;' \
     '  ```)' \
     '(c-mix 3 4)' \
-    ':quit' | repl_out --enable=repl-jit-inline-c)"
+    ':quit' | repl_out)"
 # 3 -> 115 -> 4259
 has "redefinition: first body"      "=> 93345" "$out"
 has "redefinition: new body called" "=> 4259"  "$out"
@@ -162,7 +176,7 @@ out="$(printf '%s\n' \
     '  ```)' \
     '(px (Pt 1 2))' \
     '(+ 3 4)' \
-    ':quit' | repl_out --enable=repl-jit-inline-c)"
+    ':quit' | repl_out)"
 has "refusal: body calling a Turmeric defn" \
     "could not be compiled by the REPL JIT" "$out"
 has "refusal: session continues"           "=> 5"  "$out"
@@ -209,7 +223,7 @@ out="$(printf '%s\n' \
     '  return (int64_t)(intptr_t)c;' \
     '  ```)' \
     '(cell-get (:: (cell-addr 43) ptr<void>))' \
-    ':quit' | repl_out --enable=repl-jit-inline-c)"
+    ':quit' | repl_out)"
 has "boundary: a compiled handle round-trips"  "=> 41" "$out"
 has "boundary: nil reaches a pointer param"    "=> -1" "$out"
 has "boundary: interpreter value refused at a pointer param" \
@@ -241,8 +255,12 @@ cat > "$WORK/prog.tur" <<'EOF'
   0)
 EOF
 out="$(TUR_NO_AUTO_SPICE=1 TMPDIR="$WORK" "$TUR" --interpret \
-       --enable=repl-jit-inline-c "$WORK/prog.tur" 2>&1)"
+       "$WORK/prog.tur" 2>&1)"
 has "--interpret: compiled and called" "93345" "$out"
+out="$(TUR_REPL_JIT_INLINE_C=0 TUR_NO_AUTO_SPICE=1 TMPDIR="$WORK" "$TUR" \
+       --interpret "$WORK/prog.tur" 2>&1)"
+has "--interpret, hatch off: refused" \
+    "inline-C not supported in interpreter mode" "$out"
 
 # --- No scratch file is left behind -----------------------------------------
 left=$(find "$WORK" -name 'tur-repl-jit-*' | head -1)

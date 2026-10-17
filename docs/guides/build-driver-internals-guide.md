@@ -88,7 +88,8 @@ once for the whole driver rather than rationed per phase.
    It is the only global-flag parser that stops at `--`.
 2. Reads the representation and memory seams (`TUR_ADT_SLAB`,
    `TUR_SR1_SUM_BYVALUE`, `TUR_SR2_APP_SUM_BYVALUE`, `TUR_OPTION_NICHE`,
-   `TUR_REGIONS`). See [section 8](#8-environment-variables).
+   `TUR_REGIONS`) and the interpreter's inline-C JIT switch
+   (`TUR_REPL_JIT_INLINE_C`). See [section 8](#8-environment-variables).
 3. Records `g_argv0`, `g_main_argc`, `g_main_argv`, and calls
    `resolve_stdlib_root`, which `setenv`s `TUR_STDLIB_DIR` (without
    overwriting) so every later subsystem sees one stdlib root.
@@ -587,6 +588,7 @@ only elsewhere are noted.
 | `TUR_DOCS_DIR` | where `tur docs` looks |
 | `TUR_NO_AUTO_SPICE`, `TUR_BIN` | the REPL's discovery opt-out and subprocess binary (read in `src/turi/`) |
 | `TUR_STACK_MB` | the driver's stack (read in `stack_guard.c`) |
+| `TUR_REPL_JIT_INLINE_C=0` | the interpreter refuses an inline-C defn it cannot run instead of JIT-compiling it (the `repl-jit-inline-c` graduation's off switch; see the [REPL guide](repl.md#inline-c-at-the-prompt)) |
 
 **Representation and memory seams** (two-way, `0`/`1`; for bisection, not
 features): `TUR_SR1_SUM_BYVALUE`, `TUR_SR2_APP_SUM_BYVALUE`,

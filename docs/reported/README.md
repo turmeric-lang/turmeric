@@ -34,6 +34,12 @@ sentence above does not cover them. If you touch this file, check
 `ls docs/reported/` against it -- an index that silently omits a quarter of the
 directory is worse for triage than no index.
 
+## Found graduating `repl-jit-inline-c` (filed 2026-10-17)
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [turi-defer-in-stored-continuation-use-after-free](turi-defer-in-stored-continuation-use-after-free.md) | high (memory safety) | Under `tur --interpret`, a handler case that stores `k`, then a `resume` after the `handle` exits, is a heap-use-after-free when the performing function has a pending `defer`: the `defer` sends the `handle` to the single-shot fiber runtime, which frees its continuation when the case returns (`eval_handle`, `eval.c:3864`). Compiled is fine; so is the interpreter without the `defer`. Surfaced by `defer-cps-abortive-handler` once the inline-C JIT let it run. |
+
 ## Found measuring `re/replace-all` on the WP0 box (filed 2026-10-16)
 
 | Report | Severity | One line |
