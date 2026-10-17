@@ -5598,23 +5598,6 @@ let docsNavCollapsed = false;
 const docsScrollByRef = new Map();
 
 /**
- * Assign scrollTop without the smooth animation `.docs-article` sets in CSS.
- *
- * Restoring a remembered offset under `scroll-behavior: smooth` glides down
- * the page on every reopen, which reads as the pane scrolling by itself rather
- * than as returning you to your place.
- */
-function docsSetScroll(article, top) {
-    try {
-        article.scrollTo({ top, behavior: 'instant' });
-    } catch {
-        // 'instant' is not universally accepted by scrollTo's options form;
-        // the plain assignment still lands, it just animates.
-        article.scrollTop = top;
-    }
-}
-
-/**
  * Record where the article column is scrolled to for the page it is showing.
  *
  * Refuses to record while the pane is closed. A hidden element reports
@@ -6044,7 +6027,7 @@ async function showDocsPage(refWithAnchor, { updateHash = true } = {}) {
         const target = article.querySelector(`#${CSS.escape(anchor)}`);
         if (target) { target.scrollIntoView({ block: 'start' }); return; }
     }
-    docsSetScroll(article, docsScrollByRef.get(ref) || 0);
+    article.scrollTop = docsScrollByRef.get(ref) || 0;
 }
 
 /** The turmeric-lang.com URL for a pack ref, for the "open on the site" link. */

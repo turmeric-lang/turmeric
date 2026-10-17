@@ -111,10 +111,6 @@
     --ansi-14: #39c5cf;
     --ansi-15: #ffffff;
 
-    /* Transitions */
-    --transition-fast:   0.1s ease;
-    --transition-normal: 0.12s ease;
-
     /* Fonts */
     --font-family:  'DM Sans', sans-serif;
     --font-serif:   'Cormorant Garamond', Georgia, serif;
@@ -349,7 +345,6 @@ pre {
     text-decoration: none;
     padding: 5px 10px;
     border-radius: 5px;
-    transition: color var(--transition-normal), background var(--transition-normal);
     font-weight: 400;
 }
 
@@ -428,7 +423,6 @@ pre {
     z-index: 5;
     touch-action: none;
     user-select: none;
-    transition: background 120ms;
 }
 
 .split-handle:hover,
@@ -575,7 +569,6 @@ body.split-dragging * {
     border-bottom: 1.5px solid transparent;
     color: var(--text-dim);
     cursor: pointer;
-    transition: color var(--transition-normal), border-color var(--transition-normal);
     height: 100%;
     display: flex;
     align-items: center;
@@ -621,7 +614,6 @@ body.split-dragging * {
     color: var(--text-dim);
     border-radius: 3px;
     opacity: 0;
-    transition: opacity var(--transition-normal), background var(--transition-normal), color var(--transition-normal);
     flex-shrink: 0;
 }
 .tab-button:hover .tab-close,
@@ -756,12 +748,6 @@ body.split-dragging * {
 .dot.offline { background: var(--error-color); }
 .dot.loading {
     background: var(--gold-fill);
-    animation: pulse 0.8s infinite;
-}
-
-@keyframes pulse {
-    0%, 100% { opacity: 1; }
-    50% { opacity: 0.4; }
 }
 
 /* Analysis indicator. The footer is a two-item flex row (WASM status | cursor
@@ -931,7 +917,6 @@ body.split-dragging * {
     border-top: 1px solid var(--border-mid);
     background: var(--bg-surface);
     flex-shrink: 0;
-    transition: border-color 0.15s, box-shadow 0.15s;
 }
 
 .repl-input-row:focus-within {
@@ -943,12 +928,6 @@ body.split-dragging * {
 .repl-input-row.waiting {
     border-top-color: var(--gold);
     box-shadow: 0 -2px 16px color-mix(in srgb, var(--gold) 18%, transparent);
-    animation: replWait 1.8s ease-in-out infinite;
-}
-
-@keyframes replWait {
-    0%, 100% { box-shadow: 0 -2px 16px color-mix(in srgb, var(--gold) 18%, transparent); }
-    50%       { box-shadow: 0 -2px 24px color-mix(in srgb, var(--gold) 35%, transparent); }
 }
 
 .repl-prompt {
@@ -958,7 +937,6 @@ body.split-dragging * {
     user-select: none;
     white-space: nowrap;
     opacity: 0.9;
-    transition: opacity 0.15s;
 }
 
 .repl-input-row:focus-within .repl-prompt {
@@ -1164,7 +1142,6 @@ body.split-dragging * {
     gap: 8px;
     padding: 6px 14px;
     cursor: pointer;
-    transition: background var(--transition-fast);
     border-bottom: 1px solid var(--border);
 }
 
@@ -1277,7 +1254,6 @@ body.split-dragging * {
     color: var(--text-dim);
     text-decoration: none;
     letter-spacing: 0.02em;
-    transition: color var(--transition-fast);
 }
 
 .doc-open-link:hover {
@@ -1315,7 +1291,6 @@ body.split-dragging * {
     border-radius: var(--radius-md);
     color: var(--text-sec);
     cursor: pointer;
-    transition: color var(--transition-normal), background var(--transition-normal), border-color var(--transition-normal);
     line-height: 1;
     letter-spacing: 0.01em;
 }
@@ -1378,7 +1353,6 @@ body.split-dragging * {
     background-repeat: no-repeat;
     background-position: right 6px center;
     outline: none;
-    transition: border-color var(--transition-normal), color var(--transition-normal);
 }
 
 .select:hover {
@@ -1403,7 +1377,6 @@ body.split-dragging * {
     color: var(--text-sec);
     cursor: pointer;
     border-radius: var(--radius-md);
-    transition: all var(--transition-normal);
 }
 
 .btn-close:hover {
@@ -1448,12 +1421,6 @@ body.split-dragging * {
        the same failure as the docs topbar, one level in. */
     max-height: min(90vh, 100%);
     overflow-y: auto;
-    animation: slideIn 0.18s ease-out;
-}
-
-@keyframes slideIn {
-    from { opacity: 0; transform: translateY(12px); }
-    to   { opacity: 1; transform: translateY(0); }
 }
 
 .overlay-header {
@@ -1484,7 +1451,6 @@ body.split-dragging * {
     border: 1px solid var(--border);
     border-radius: var(--radius-md);
     padding: var(--spacing-md);
-    transition: border-color var(--transition-normal);
 }
 
 .tutorial-card:hover {
@@ -1540,7 +1506,6 @@ body.split-dragging * {
     border-radius: 50%;
     width: 28px;
     height: 28px;
-    animation: spin 0.7s linear infinite;
 }
 
 .spinner.large {
@@ -1548,8 +1513,6 @@ body.split-dragging * {
     height: 44px;
     border-width: 3px;
 }
-
-@keyframes spin { to { transform: rotate(360deg); } }
 
 .loading-spinner {
     display: flex;
@@ -1651,7 +1614,6 @@ body.split-dragging * {
     height: 100%;
     background: var(--gold-fill);
     border-radius: 2px;
-    transition: width 0.3s ease;
     width: 0%;
 }
 
@@ -2114,7 +2076,6 @@ body.split-dragging * {
     border-radius: var(--radius-lg);
     box-shadow: var(--shadow-lg);
     overflow: hidden;
-    animation: slideIn 0.18s ease-out;
 }
 
 .docs-topbar {
@@ -2359,7 +2320,6 @@ body.split-dragging * {
     min-width: 0;
     overflow-y: auto;
     padding: 24px 32px 64px;
-    scroll-behavior: smooth;
     /* The shared guide stylesheet sizes for a full-width page; a panel wants
        a comfortable measure, centred. */
     max-width: none;
@@ -2390,7 +2350,6 @@ body.split-dragging * {
     border-radius: var(--radius-md);
     cursor: pointer;
     opacity: 0;
-    transition: opacity var(--transition-normal), color var(--transition-normal);
 }
 
 .docs-article pre:hover .docs-load-btn,

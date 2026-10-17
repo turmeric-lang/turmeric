@@ -205,10 +205,3 @@
   --status-warn-subtle: rgba(146,91,0,0.10);
   --status-fail-subtle: rgba(184,57,43,0.10);
 }
-
-/* public/theme.js sets this for the two frames around a switch, so the page
- * repaints at once instead of each transition fading on its own clock. */
-.theme-switching,
-.theme-switching *,
-.theme-switching *::before,
-.theme-switching *::after { transition: none !important; }

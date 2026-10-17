@@ -107,7 +107,6 @@ body.page-ci nav {
   color: var(--text-sec);
   padding: 6px 12px;
   border-radius: 6px;
-  transition: color 0.12s, background 0.12s;
 }
 .nav-links a:hover { color: var(--text-primary); background: var(--bg-hover); }
 .nav-links a.active { color: var(--gold-bright); }
@@ -138,7 +137,6 @@ body.page-ci nav {
   background: transparent;
   color: var(--text-sec);
   cursor: pointer;
-  transition: color 0.12s, background 0.12s;
 }
 .theme-toggle:hover { color: var(--text-primary); background: var(--bg-hover); }
 .theme-toggle:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
@@ -158,7 +156,6 @@ body.page-ci nav {
   border: 1px solid var(--border-str);
   background: transparent;
   cursor: pointer;
-  transition: all 0.12s;
 }
 .btn-ghost:hover { color: var(--text-primary); background: var(--bg-hover); }
 
@@ -172,7 +169,6 @@ body.page-ci nav {
   border: 1px solid var(--gold-fill);
   background: var(--gold-fill);
   cursor: pointer;
-  transition: all 0.12s;
 }
 .btn-gold:hover { background: var(--gold-fill-hover); border-color: var(--gold-fill-hover); }
 .btn-gold:active { transform: scale(0.98); }
@@ -187,7 +183,6 @@ body.page-ci nav {
   padding: 12px 28px;
   border-radius: 8px;
   cursor: pointer;
-  transition: all 0.14s;
   display: flex;
   align-items: center;
   gap: 8px;
@@ -381,7 +376,6 @@ body.page-ci nav {
   color: var(--text-dim);
   border: none;
   cursor: pointer;
-  transition: all 0.14s;
 }
 .seg-btn:hover { color: var(--text-sec); background: var(--bg-hover); }
 .seg-btn.active {
@@ -496,7 +490,6 @@ footer {
   font-size: 13.5px;
   color: var(--text-sec);
   margin-bottom: 10px;
-  transition: color 0.12s;
   font-weight: 300;
 }
 .footer-col a:hover { color: var(--text-primary); }
@@ -519,7 +512,6 @@ footer {
 .footer-links a {
   font-size: 12.5px;
   color: var(--text-dim);
-  transition: color 0.12s;
 }
 .footer-links a:hover { color: var(--text-sec); }
 
@@ -542,7 +534,6 @@ footer {
   height: 2px;
   background: var(--text-sec);
   border-radius: 2px;
-  transition: transform 0.2s ease, opacity 0.2s ease;
 }
 nav.nav-open .nav-hamburger span:nth-child(1) { transform: translateY(7px) rotate(45deg); }
 nav.nav-open .nav-hamburger span:nth-child(2) { opacity: 0; }
@@ -563,13 +554,10 @@ nav.nav-open .nav-hamburger span:nth-child(3) { transform: translateY(-7px) rota
   -webkit-backdrop-filter: blur(12px);
   border-bottom: 1px solid var(--border);
   opacity: 0;
-  transform: translateY(-6px);
   pointer-events: none;
-  transition: opacity 0.18s ease, transform 0.18s ease;
 }
 nav.nav-open .nav-mobile-panel {
   opacity: 1;
-  transform: translateY(0);
   pointer-events: auto;
 }
 /* On a page whose sidebar is serving as the drawer, the panel would be a second
@@ -580,7 +568,6 @@ nav.nav-drawer .nav-mobile-panel { display: none; }
   color: var(--text-sec);
   padding: 10px 12px;
   border-radius: 6px;
-  transition: color 0.12s, background 0.12s;
 }
 .nav-mobile-panel a:hover { color: var(--text-primary); background: var(--bg-hover); }
 .nav-mobile-panel a.active { color: var(--gold-bright); }
@@ -694,7 +681,6 @@ nav.nav-drawer .nav-mobile-panel { display: none; }
   background: transparent;
   color: var(--text-dim);
   cursor: pointer;
-  transition: color 0.12s, background 0.12s, border-color 0.12s;
   flex-shrink: 0;
 }
 .copy-btn:hover { color: var(--text-sec); background: var(--bg-hover); border-color: var(--border-str); }
@@ -730,7 +716,6 @@ site-sidebar a.sidebar-back {
   font-size: 0.85rem;
   color: var(--text-primary);
   margin-bottom: 1rem;
-  transition: color 0.12s;
 }
 site-sidebar a.sidebar-back:hover { color: var(--gold-bright); }
 site-sidebar .sidebar-divider {
@@ -789,7 +774,6 @@ body:has(site-sidebar) {
     z-index: 100;
     background: var(--bg-surface);
     transform: translateX(-100%);
-    transition: transform 0.2s ease;
   }
   site-sidebar.is-open { transform: translateX(0); }
 }
