@@ -1,342 +1,274 @@
 # Dynamic Var Adoption -- Spices Plan
 
-> **Status:** Proposed (revised 2026-06-24)
+> **Status:** Proposed, nothing started. **Revised 2026-10-17** against
+> turmeric v0.65.5 and turmeric-spices `main` 7465a08. The 2026-06-24 revision
+> had six targets; four are dropped here, because they rested on facts that
+> were wrong when written or have changed since (see "What changed"). What is
+> left is tourist:
+> - **SPA-1** (the per-thread Conn slot) needs nothing from the compiler and
+>   can start now.
+> - **SPA-2** (the request context) can start now on the pool and spawn
+>   servers tourist runs on, with two decisions open.
 >
-> **Prerequisite:** DV0-DV4 complete (`-Xdynamic-vars`); see
-> [docs/archive/history/dynamic-vars-plan.md](../../archive/history/dynamic-vars-plan.md)
-> and [docs/guides/dynamic-vars-guide.md](../../guides/dynamic-vars-guide.md).
+> **Prerequisites:** none. `defdynamic`, `binding` and `spawn-conveying` are
+> always on: `-Xdynamic-vars` has been an accept-and-warn no-op since v0.24.0
+> (`src/runtime/globals.c:194`). `(def ^thread-local ...)` (mutable-globals G4b,
+> 2026-08-05) is the per-thread form the old text waited on as `defthreadlocal`.
+> See [dynamic-vars-guide](../../guides/dynamic-vars-guide.md) and
+> [mutable-globals-guide](../../guides/mutable-globals-guide.md).
 >
-> **Sibling plan:** [dynvar-adoption-plan.md](../dynvar-adoption-plan.md)
-> covers compiler-tree adoption and lands the C-level dynvar runtime API
-> and the `defthreadlocal` form. **Do not start the spices work until
-> ADO-0 and ADO-0b in the sibling plan are in.** Several spice targets
-> here re-classify from "dynvar" to "thread-local" and need the new form
-> to land cleanly.
+> **Sibling plan:** [dynvar-adoption-plan](../dynvar-adoption-plan.md) covers
+> the compiler tree. Nothing here waits on it any more. Its ADO-0b
+> (`defthreadlocal`) is covered by `^thread-local`, and ADO-0 (the C-side
+> dynvar API) mattered only to the ansi target dropped below.
 >
-> **Scope:** Replace ambient handles, threaded ctx/conn params, and
-> hand-rolled "current X" globals in selected spices with either
-> `defdynamic` (scope unwind matters) or `defthreadlocal` (per-thread
-> isolation only). Singleton-busting and test-replacement only; no API
+> **Found while revising, filed as reports:**
+> - [dynvar-binding-not-swapped-on-fiber-switch](../../reported/dynvar-binding-not-swapped-on-fiber-switch.md):
+>   a `binding` is per thread, not per fiber.
+> - [defdynamic-generic-adt-root-emitted-before-its-type](../../reported/defdynamic-generic-adt-root-emitted-before-its-type.md):
+>   a `(Option T)` dynvar does not compile.
+> - [unknown-type-annotation-becomes-implicit-tyvar](../../reported/unknown-type-annotation-becomes-implicit-tyvar.md):
+>   a 2026-10-17 note; `option<T>` is not a type in an annotation, so write
+>   `(Option T)`.
+>
+> **Scope:** replace hand-rolled "current X" state and threaded context
+> parameters in spices with `defdynamic` (when scope restore matters) or
+> `^thread-local` (when per-thread isolation is the whole point). No API
 > redesign beyond what these forms naturally remove.
 
 ---
 
-## Motivation
+## What changed since the 2026-06-24 revision
 
-Several spices independently re-invent the binding-stack pattern: tourist
-threads `Ctx` through every handler, postgres threads `Conn`, raygui
-hand-rolls a state save/restore around C statics. The dynvar machinery
-exists -- the work here is conversion, not design.
+Every row was measured on 2026-10-17. The probes ran on the v0.65.5 release
+binary.
 
-The first research pass uncovered two cross-cutting decisions that drive
-this revision:
-
-- **Some spice targets want thread-local, not dynvar.** Notably ansi's
-  color-mode flag (set once by CLI parsing per process, never overridden
-  in scope) and opengl's `*gl-program*` / `*gl-vao*` / `*gl-vbo*` (the GL
-  driver already owns the real state; a TLS mirror is enough). The
-  `defthreadlocal` form from the sibling plan covers them without paying
-  binding-stack overhead.
-- **The "carry context to spawned worker" question is the deciding test.**
-  Dynvars are conveyed to child threads on `spawn-conveying`; thread-
-  locals are not. tourist's `*current-ctx*` MUST be conveyed (a worker
-  thread handling the request needs the parent's ctx); mock-time MUST
-  NOT (parallel tests must not inherit each other's clock). Use this as
-  the primary classifier when borderline.
-
-Non-goals: rewriting spice APIs, removing typed handles, or "everything
-should be a dynvar." Each target below has a concrete win that justifies
-the change.
+| The old text said | The tree says |
+| --- | --- |
+| Prerequisite: DV0-DV4 behind `-Xdynamic-vars`. | Always on. The flag is a no-op. |
+| Wait for the sibling plan's `defthreadlocal` (ADO-0b). | `(def ^mut ^thread-local s : (Option Ctx) (None))` works today, one copy per thread. It lowers to a `pthread_key_t`, because plain `__thread` is shared by every thread under `tur jit` (`src/compiler/expr.h:274-286`). |
+| Open question: with an explicit `defn main`, the root initializer is not emitted. | Fixed. The initializer goes through `def_init_body` (`src/compiler/emit_module.c:20714-20727`). Every probe below uses an explicit `main` and reads the root correctly. |
+| A: httpd is the producer; tourist exports `*current-ctx*` for httpd to bind. | tourist builds and frees the `Ctx` itself, in `__tourist-handler` (`spices/tourist/src/tourist/app.tur:395-400`), so httpd is not involved. spices/httpd has also become a typed layer over stdlib httpd (turmeric-spices #98). The cross-spice declaration question goes away. |
+| A: about 29 functions take `[ctx : Ctx]`. | 80 `ctx : Ctx` annotations across tourist, tourist-session and tourist-ws (the sweep below). |
+| A: `(defdynamic *current-ctx* :ptr<Ctx> nil-ctx)`. | `Ctx` is `(defopaque Ctx :int)`, and a `:Ctx` dynvar works, including `spawn-conveying`. A `(Option Ctx)` dynvar does not compile (report above). |
+| B: raygui "already manipulates C statics with hand-rolled save/restore". | `gui-set-state` / `gui-set-style` / `gui-load-style` are plain setters over raygui's own C globals (`spices/raygui/src/raygui/core.tur:110-228`). Nothing saves or restores, and a dynvar cannot change what raygui's C reads. |
+| C: ansi has a stdout sink and a color-mode flag to convert. | ansi `printf`s to stdout (`spices/ansi/src/ansi/color.tur:27-95`), and there is no color-mode state: `term-no-color?` reads `$NO_COLOR` on every call (`spices/ansi/src/ansi/term.tur:43`). |
+| C: color mode should be thread-local, because "workers read the same default". | That is backwards. A worker thread's copy starts from the default, so a `--no-color` set on the main thread would be ignored on every other thread. A process-wide setting is a plain `^mut` global. |
+| D: `*valkey-client* :ptr<ValkeyClient>`. | `Client` is `(defopaque Client :int :linear)` (`spices/valkey/src/valkey/client.tur:21`), and `defdynamic` refuses linear types (`TUR-E0603`). |
+| E: postgres `Conn` is `^borrow`-typed. | It is `(defopaque Conn :int :linear)` (`spices/postgres/src/postgres/db.tur:29`). Same refusal. |
+| F: `(defthreadlocal *gl-program* :int 0)`. | `Program`, `Vao` and `Vbo` are `:linear` defopaques (`spices/opengl/src/opengl/types.tur:37-51`), and an `:int` cache of one is the stand-in CLAUDE.md forbids. |
+| (not known) | tourist keeps the current request's Conn in a hand-rolled `static __thread int64_t` (`app.tur:533-545`). That is the pattern `^thread-local` replaces: it is shared under `tur jit`, and it types the Conn as `:int`. This is SPA-1. |
+| (not known) | A `binding` does not move with its fiber. That is safe on the pool and spawn servers, where one worker thread owns a request end to end. It is wrong on a fiber-per-request server. This is decision 2 under SPA-2. |
 
 ---
 
-## Dynvar vs. thread-local -- decision rubric (cross-reference)
+## Dynvar vs. thread-local -- the rubric
 
-See the sibling plan for the full rubric. Quick form:
+- **Dynvar** when callers want scoped override with automatic restore, nested
+  overrides should compose, and a child started with `spawn-conveying` should
+  see the parent's binding.
+- **Thread-local** when per-thread isolation is the point, no caller wants a
+  nested override, and a new thread should start from the initializer.
+- **Plain global** (`^mut`, `^atomic` if read across threads) when the value is
+  process-wide, such as a setting read once from the CLI.
+- **Leave alone** when the explicit parameter is load-bearing. That covers a
+  `:linear` handle, whose linearity is the safety property, and an explicit
+  target such as a canvas or a writer, where passing it is the API.
 
-- **Dynvar** when callers want lexical / dynamic scope with auto-restore,
-  nested overrides should compose, and (for spawn) the child should inherit
-  the parent's binding.
-- **Thread-local** when per-thread isolation is enough, no caller wants a
-  binding stack, and (for spawn) the child should start from the default.
-- **Leave alone** when the global is set once from a CLI flag or the
-  explicit threading is load-bearing.
-
----
-
-## Targets (revised, classified)
-
-### A. `tourist` + `httpd` -- request context -- **dynvar**, HIGH payoff
-
-**Sites:** `../turmeric-spices/spices/tourist/src/tourist/app.tur:79-88`
-and ~29 handler/middleware/matcher functions that take `[ctx : Ctx]` as
-their first parameter. `httpd` is the producer (sets per-request state in
-its worker thread).
-
-**Var (in a new `tourist/src/tourist/dynvars.tur`):**
-
-```turmeric
-(defdynamic *current-ctx* :ptr<Ctx> nil-ctx)
-```
-
-**Why dynvar (not thread-local):**
-
-- Scope unwind matters: middleware wraps a downstream handler and wants
-  the ctx restored on return. A binding stack is the natural fit.
-- `spawn-conveying` semantics matter: if a handler spawns a background
-  worker mid-request, the child thread should inherit the request's ctx.
-  This is exactly the property thread-locals don't give us.
-
-**Conversion:** unchanged from the prior revision:
-
-1. Declare `*current-ctx*` in tourist.
-2. `httpd`'s request dispatch wraps the user handler in
-   `(binding [*current-ctx* req-ctx] (user-handler))`.
-3. Tourist's middleware/matcher API gains an arg-less reader
-   (`(current-ctx)`) and old explicit-ctx entry points become thin
-   wrappers that pass `*current-ctx*`.
-4. Migrate handlers opportunistically -- both call styles work during
-   transition.
-
-**Caveat:** `Ctx` must be non-substructural to be carried by a dynvar
-(TUR-E0603 rejects substructurals). Today it is; preserve that.
-
-**Estimated size:** medium-large; touches both spices, but the change
-per call site is mechanical.
-
-### B. `raygui` -- GUI state and style stack -- **dynvar**, HIGH payoff, low risk
-
-**Sites:** `../turmeric-spices/spices/raygui/src/raygui/core.tur:102-206`.
-`gui-set-state` / `gui-set-style` / `gui-load-style` already manipulate C
-statics with hand-rolled save/restore.
-
-**Vars:**
-
-```turmeric
-(defdynamic *gui-state* :ptr<GuiState> default-gui-state)
-(defdynamic *gui-style* :ptr<GuiStyle> default-gui-style)
-```
-
-**Why dynvar (not thread-local):** the existing pattern IS a binding
-stack -- `(with-style s ...)` / `(with-state s ...)` should pop back on
-exit, including on early return. Thread-locality alone wouldn't deliver
-that.
-
-**Conversion:** convert the existing setter/getter pairs to read/write
-the dynvar; offer `with-state` / `with-style` macros that expand to
-`binding`. Keep the underlying C `Raygui*` calls -- only the Turmeric
-wrapper changes.
-
-**Estimated size:** medium; isolated to one spice.
-
-### C. `ansi` -- terminal sink (dynvar) + color mode (thread-local) -- MEDIUM payoff
-
-**Sites:** `../turmeric-spices/spices/ansi/src/ansi/color.tur:27-95`.
-Every color/style helper writes to stdout via `printf`.
-
-**Revised: split into two vars with different shapes.**
-
-```turmeric
-(defdynamic       *ansi-sink*       :ptr<FILE> stdout-handle)
-(defthreadlocal   *ansi-color-mode* :int       0)   ; 0 = auto, 1 = always, 2 = never
-```
-
-**Why split:**
-
-- `*ansi-sink*` is scope-shaped: tests want to capture output for a
-  block, then restore. Spawn semantics matter too -- a worker writing
-  ansi-colored progress should inherit the parent's capture sink.
-  Dynvar.
-- `*ansi-color-mode*` is set once at startup from `--no-color` and read
-  on every emit. No call site wants `(binding [*ansi-color-mode* 2]
-  ...)` for a single println. A `_Thread_local int` is cheaper, and
-  conveying it to spawned workers gains nothing because they read the
-  same default. Thread-local.
-
-**Why the sink dynvar pairs with the compiler plan:** the sibling plan's
-ADO-4 (`*current-out*`) lands the C-side dynvar API and the
-extern-dynvar declaration form. Ansi's sink reuses that machinery if it
-wants the same FILE* under the hood, or stands on its own as a
-Turmeric-side dynvar if the spice prefers its own carrier.
-
-**Estimated size:** small; ~10-15 emit sites.
-
-### D. `valkey` -- Redis client handle -- **dynvar**, MEDIUM payoff
-
-**Sites:** `../turmeric-spices/spices/valkey/src/valkey/` (cmd, reply,
-client, pubsub modules). Pub/sub and queue helpers thread the client.
-
-**Var:**
-
-```turmeric
-(defdynamic *valkey-client* :ptr<ValkeyClient> nil-client)
-```
-
-**Why dynvar:** request-scoped client selection (different namespaces
-per tenant) and `(with-client c ...)` are the use cases; both want scope
-unwind. Workers spawned to run a pipelined batch should inherit the
-caller's client -- another reason dynvar over thread-local.
-
-**Conversion:** same shape as tourist; add arg-less readers, keep the
-explicit-client API as wrappers.
-
-**Estimated size:** medium.
-
-### E. `postgres` -- connection handle -- **dynvar**, MEDIUM payoff, design question
-
-**Sites:** `../turmeric-spices/spices/postgres/src/postgres/db.tur:197-322`.
-25+ functions take `[^borrow conn : Conn]`.
-
-**Var:**
-
-```turmeric
-(defopaque ConnHandle :ptr<void>)        ; non-substructural carrier
-(defdynamic *current-conn* :ConnHandle nil-conn)
-```
-
-**Why dynvar (not thread-local):** `(with-transaction ...)` IS a binding
-stack -- nested transactions, savepoints, and per-test fixture
-connections all want scope unwind. A pooled worker that spawns helpers
-mid-transaction wants the connection conveyed.
-
-**Design caveat:** `Conn` is `^borrow`-typed today and `defdynamic`
-rejects substructural types (TUR-E0603). The dynvar must carry a
-non-substructural handle (a `defopaque` wrapper). Linearity then shifts
-from the type system to discipline at the dynvar boundary -- production
-code continues to use the typed API; the dynvar is the test/scoping
-seam, not the primary handle.
-
-**Decision required before starting:** are we OK with the dynvar
-carrying an un-borrowed handle, or do we want to lift the substructural
-restriction on `defdynamic` for this case? Recommend the former -- the
-restriction exists for sound reasons.
-
-**Estimated size:** medium, plus the design call.
-
-### F. `opengl` -- current program / VAO / VBO -- **thread-local** (revised), LOW payoff
-
-**Sites:** `../turmeric-spices/spices/opengl/src/opengl/shaders.tur:147-150`
-and bind helpers.
-
-**Revised classification:** thread-local, not dynvar. The driver owns
-the real GL state machine and is itself thread-local-by-context.
-Mirroring it into a Turmeric dynvar gains nothing -- nested
-`(with-program p ...)` does not save/restore the *driver's* state on
-its own, and conveying a program handle to a spawned worker is
-incorrect (workers need their own GL context). What's actually wanted
-is per-thread cached values to avoid redundant glUseProgram calls; a
-thread-local gives exactly that.
-
-**Vars:**
-
-```turmeric
-(defthreadlocal *gl-program* :int 0)
-(defthreadlocal *gl-vao*     :int 0)
-(defthreadlocal *gl-vbo*     :int 0)
-```
-
-**With-program style helpers:** still possible via a hand-written
-try/finally (`set!` + cleanup), but no longer a `binding` form. Document
-the GL-context caveat alongside.
-
-**Estimated size:** small per var; defer unless someone is actively
-hitting the redundant-bind issue.
-
-### Explicitly skipped
-
-- `math`, `linalg`, `regex`, `json`, `frame`: pure/data, no ambient state.
-- `c-dsl`, `glsl`: compile-time codegen, no runtime singleton.
-- `ecs`/`ecs-raylib`: the world pointer is a candidate, but ECS APIs
-  already lean on an explicit world; the win is smaller than tourist's
-  ctx threading. Revisit after A.
+Two type rules from the probes:
+- Spell an optional type `(Option T)`, never `option<T>` (that becomes an
+  implicit type variable).
+- A dynvar cannot hold an `(Option T)` until its report is resolved.
 
 ---
 
-## Phases (revised)
+## Targets
 
-| Phase | Targets | Gate |
-|---|---|---|
-| -- | (sibling plan ADO-0 + ADO-0b must be in) | C-side dynvar API + `defthreadlocal` form available |
-| SPA-1 | C (ansi sink dynvar + color-mode thread-local) | smallest spice; validates both forms in one spice |
-| SPA-2 | B (raygui state stack) | self-contained; deletes existing boilerplate |
-| SPA-3 | A (tourist + httpd ctx) | biggest payoff; coordinate across both spices |
-| SPA-4 | D (valkey client) | mirrors A on smaller scope |
-| SPA-5 | E (postgres) | gated on the substructural-vs-dynvar design call |
-| SPA-6 | F (opengl) as thread-local | only if a real consumer asks for it |
+### SPA-1. tourist's current-request Conn -> `^thread-local` -- small, do first
 
-Each phase is independently shippable in `../turmeric-spices/`. Stop at
-any phase where the next target's payoff falls below its conversion
-cost -- the goal is leverage, not coverage.
+**Sites:** `spices/tourist/src/tourist/app.tur:533-559`, which are
+`__tourist-conn-cell`, `tourist-request-conn` and `__tourist-handler-conn`.
+
+**Today:**
+- A `static __thread int64_t cur` lives behind a mode-switch `:int` function.
+- `tourist-request-conn` casts that slot to a `Conn`, so outside a request it
+  returns a null handle.
+- The slot is never cleared, so it holds the previous request's Conn until the
+  next request overwrites it.
+
+**Change:**
+
+```turmeric
+(def ^mut ^thread-local current-conn : (Option Conn) (None))
+```
+
+- `__tourist-handler-conn` sets `(Some conn)` before the dispatch and `(None)`
+  after it.
+- Add `tourist-current-conn : (Option Conn)`.
+- Keep `tourist-request-conn : Conn` as a wrapper that panics outside a request
+  (document it), and move tourist-ws's `ws-route!` to the new reader.
+
+**Why thread-local and not a dynvar:**
+- One worker thread owns the request end to end (`app.tur:519-524`).
+- A helper thread must not inherit the socket: writing to the Conn from a
+  second thread races the worker.
+- No caller wants a nested override.
+
+**Wins:**
+- Correct under `tur jit`.
+- A typed Conn instead of an `:int` carrier.
+- No stale Conn between requests.
+
+**Tests** (in `spices/tourist/tests/`):
+- Two threads set distinct Conns and each reads back only its own.
+- The slot reads `(None)` after a request completes.
+- The first CI run must use the spices CI's sanitized Debug `tur`, so that
+  reading the stored `(Option Conn)` more than once is shown not to free its
+  box. The release-binary probe read it twice without trouble, but it ran
+  unsanitized.
+
+**Size:** small. It is one file plus a test.
+
+### SPA-2. tourist's request context -> dynvar -- medium-large, two decisions open
+
+**Sites:**
+- `__tourist-handler` (`app.tur:395-400`) creates and frees the Ctx.
+- The 80 `ctx : Ctx` annotations (sweep below):
+  - tourist: `param` 21, `request` 17, `routing` 7, `app` 6, `middleware` 5,
+    `static` 1;
+  - tourist-session: `ctx` 13, `csrf` 7, `mw` 2;
+  - tourist-ws: `route` 1.
+
+**Var** (root per decision 1):
+
+```turmeric
+(defdynamic *current-ctx* :Ctx (null-ctx))
+```
+
+**Conversion:**
+1. `__tourist-handler` wraps the dispatch in
+   `(binding [*current-ctx* ctx] ...)`, between `tourist-ctx-new` and
+   `tourist-ctx-free`. tourist owns both ends, and httpd does not change.
+2. Add an argument-less reader, `(current-ctx) : (Option Ctx)`. Keep the
+   explicit-ctx entry points as they are, and migrate handlers when convenient,
+   since both call styles work side by side.
+3. `use-around!` middleware binds over the downstream call. Nested `binding`
+   forms compose and restore.
+
+**Why a dynvar:** the old reasons still hold. A binding restores around
+middleware, and a helper thread started with `spawn-conveying` sees the
+request's ctx. The probe confirms both: a conveyed child sees the binding, and a
+plain spawn sees the root.
+
+**Decision 1 -- the "no request" root.**
+
+- (a) `(Option Ctx)` is the shape CLAUDE.md prefers, but a dynvar of it does
+  not compile today.
+- (b) The alternative is a null `Ctx` as the root. `(current-ctx)` would then
+  turn it into `(Option Ctx)`, so the sentinel never leaves that one function.
+  tourist already uses a null handle for `Pattern` (`types.tur:78`).
+
+Recommend (b) now, and move to (a) if the compiler comes to admit `(Option T)`
+dynvars. Its report lists both outcomes.
+
+**Decision 2 -- fiber servers.** Dynvar bindings do not move with fibers.
+- Today nothing can hit this. spices/httpd exposes only pool, spawn and
+  thread servers (`spices/httpd/src/httpd/server.tur:383-607`). stdlib's
+  `httpd-new-async`, which runs a fiber per request
+  (`stdlib/httpd.tur:3529-3543`), is not reachable from tourist.
+- So: land SPA-2 with a comment at the `binding` site, and a line in tourist's
+  README, saying tourist must not run on a fiber server until the fiber report
+  is fixed.
+- Alternatively, fix the compiler first. Recommend the comment and README note:
+  there is no fiber path for it to break.
+
+**A third point to settle in review: conveyed children vs. the Ctx's
+lifetime.** `tourist-ctx-free` runs when the handler returns. A conveyed child
+that outlives the request would read a freed Ctx. So the rule should be "join
+what you convey before you return", stated in the reader's docstring.
+
+**Caveat retained:** `Ctx` must stay non-substructural, a `defopaque` without
+`:linear`, or `TUR-E0603` refuses the dynvar.
+
+**Tests** (in `spices/tourist/tests/`):
+- Nested middleware sees the binding, and it is restored afterwards.
+- A `spawn-conveying` child that is joined before the handler returns sees the
+  ctx.
+- A plain spawn sees the root.
+- `(current-ctx)` outside a request is `(None)`.
+
+**Size:** medium-large. Each call-site change is mechanical.
 
 ---
 
-## Spice-tree sweep -- classify before adopting
+## Dropped targets
 
-Before SPA-3 (the largest target) lands, do one read-only sweep across
-`../turmeric-spices/spices/*/src/` for `static` C globals, hand-rolled
-"current X" wrappers, and any function with `[ctx : T]` / `[conn : T]`
-threading through more than ~5 sites. Classify each into:
-
-- **dynvar candidate** (scope unwind + spawn-convey both matter)
-- **thread-local candidate** (per-thread, no scope, no convey)
-- **leave alone** (set-once-CLI, hot path, or already-threaded explicit)
-
-Land the classification table as an appendix to this plan rather than a
-separate doc -- the goal is to keep the conversion decisions
-co-located with the conversion work.
-
----
-
-## Sequencing relative to the compiler-tree plan
-
-The compiler-tree plan ([dynvar-adoption-plan.md](../dynvar-adoption-plan.md))
-must land ADO-0 (C-level runtime API) and ADO-0b (`defthreadlocal`) before
-any spice phase starts -- those are hard prerequisites for SPA-1 (ansi's
-thread-local color mode and sink dynvar) and SPA-6 (opengl thread-locals).
-The mock-time and diag-mode phases (ADO-1, ADO-2) on the compiler side are
-safe to run in parallel with SPA-1 and SPA-2; SPA-3 (tourist) still wants
-the compiler-side output-sink work (ADO-4) bedded in first because
-tourist tests will reuse that capture machinery.
+- **B. raygui.** There is no binding stack to replace, and raygui's C reads
+  its own globals. If someone wants scoped GUI state, the tool is a
+  `with-gui-state` combinator that saves with `gui-get-state`, sets the new
+  state, and restores it with `defer`. That is not a dynvar and not this
+  plan. Separately, the setters take `state : int` with a 0-3 convention; an
+  enum ADT is the CLAUDE.md fix.
+- **C. ansi.** There is no sink or mode state to convert.
+  - An output sink that tests can capture belongs to a stdlib output type
+    (the sibling plan's ADO-4 `*current-out*`), which ansi would adopt rather
+    than define.
+  - Color mode needs no new state. If it ever gets some, make it a
+    process-wide `^mut` global holding a `ColorMode` ADT, not a thread-local
+    and not an `:int`.
+- **D. valkey, E. postgres, F. opengl.** Their handles are `:linear` by
+  design. A dynvar or thread-local could carry one only through an erasing
+  wrapper. That is the `:int` stand-in CLAUDE.md forbids, and it would give up
+  the linearity check that keeps the handles safe. Scoped helpers such as
+  `with-transaction` keep taking the handle explicitly.
+- **Unchanged from before:**
+  - math, linalg, regex, json and frame are pure data.
+  - c-dsl and glsl are compile-time only.
+  - ecs leans on an explicit world; revisit it after SPA-2.
 
 ---
 
-## Test plan per phase
+## Phases
 
-- Add a fixture under
-  `../turmeric-spices/spices/<spice>/tests/dynvar-adopt/` (or
-  `tls-adopt/` for thread-local targets) that exercises both the root /
-  default value and an override.
-- For A and D, add a `spawn-conveying` fixture: parent binds a fake,
-  child worker sees it. Doubles as a real-world DV3 smoke test outside
-  the existing convey-isolation fixture in this repo.
-- For F (opengl thread-locals) and the ansi color-mode thread-local,
-  add a two-thread fixture asserting isolation -- two threads with
-  distinct values, neither leaks into the other. This is the property
-  a thread-local exists to provide.
-- Each spice's existing suite must stay green
-  (`bash tests/run.sh 2>&1 | grep "^FAIL"` empty) after each phase.
+| Phase | Target | Needs | Gate |
+| --- | --- | --- | --- |
+| SPA-1 | tourist Conn slot -> `^thread-local` | nothing | none |
+| SPA-2 | tourist request context -> dynvar | decisions 1 and 2 | pool and spawn servers only, until the fiber report is fixed |
+
+Each phase is one turmeric-spices PR, and each stands alone.
+
+---
+
+## Appendix: spice-tree sweep (2026-10-17, turmeric-spices `main` 7465a08)
+
+The old text asked for this sweep before the tourist work. Here it is.
+
+- **`defdynamic` / `binding`:** none, in any spice.
+- **Hand-rolled thread-locals in Turmeric source:** one,
+  `tourist/app.tur:540` (SPA-1). `html/c/html/turhtml.c:110-112` keeps the
+  DOM entry points' error state per thread in a vendored C file. That is the
+  right tool there, so leave it alone.
+- **Parameters threaded more than five times,** by `name : Type`. Counts are
+  annotations, in any parameter position:
+
+| Count | Parameter | Spice | Class |
+| --- | --- | --- | --- |
+| 80 | `ctx : Ctx` | tourist, tourist-session, tourist-ws | dynvar candidate (SPA-2) |
+| 44 | `c : Canvas` | plutovg | leave alone -- the drawing target is the API |
+| 31 | `conn : Conn` | httpd (4 files), postgres (3), ws-server (1) | leave alone -- postgres's is `:linear`, and httpd's is the per-request socket (SPA-1 covers tourist's slot for it) |
+| 23 | `w : SaxWriter` | dom-core | leave alone -- explicit writer |
+| 17 | `c : Client` | valkey | leave alone -- `:linear` |
+| 12 | `c : NngCtx` | nng | leave alone -- `:linear` |
+| 7 | `db : Db` | sqlite | leave alone -- `:linear` |
+| 9, 9, 6, 6, 6, 6, 5 | `w : Wav`, `conn : WsConn`, `w : Window`, `conn : TlsConn`, `c : PNCounter`, `c : DotContext`, `ctx : TlsCtx` | wav; tourist-ws, ws-client, ws-server; opengl; httpd, tls; crdt | leave alone -- explicit values or handles, no ambient state |
 
 ---
 
 ## Open questions
 
-- **Cross-spice dynvar declarations.** `*current-ctx*` belongs to
-  tourist but is set by httpd. Either tourist exports the var and
-  httpd imports it, or both depend on a small shared
-  `tourist-dynvars` spice. Recommend the export-from-tourist route --
-  fewer moving parts, and httpd already depends on tourist in
-  practice.
-- **`Ctx` shape compatibility.** Confirm `Ctx` is non-substructural
-  and that a `:ptr<Ctx>` (or the existing handle representation) fits
-  the dynvar type rules without lifting TUR-E0603.
-- **`extern-dynvar` and `extern-threadlocal` across spice boundaries.**
-  The sibling plan's Phase 0 makes the runtime symbol externally
-  linkable; confirm the spice loader and ABI cache cope when a spice
-  declares an `extern-dynvar` whose definition lives in another spice
-  (rather than in the runtime). If this turns out to require an extra
-  loader hop, prefer keeping each spice's dynvars self-contained.
-- **Root-init known bug.** The DV2 "root-value initializer not emitted
-  when explicit `defn main` is present" limitation still applies. For
-  targets whose root must be a real handle (default sink, default
-  state, default client), either fix the root-init bug first or
-  initialize from spice glue before user code runs.
+- **`tourist-request-conn`'s signature.** Keep the panicking `: Conn` reader
+  beside the new `(Option Conn)` one, or change it in a minor bump? Recommend
+  keeping both for one release.
+- **Should a conveyed child be able to outlive the request?** The answer above
+  is "no, join it first". The alternative is reference-counting the Ctx, which
+  is a bigger change than this plan wants.
