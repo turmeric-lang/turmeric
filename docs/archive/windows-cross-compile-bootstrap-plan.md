@@ -1,6 +1,15 @@
 # Windows Cross-Compile Bootstrap Plan (no Windows machine)
 
-**Status:** Draft. Companion to `windows-support-plan.md`.
+**Status:** SUPERSEDED -- archived 2026-10-17. Not implemented. WIN0 chose
+MinGW/UCRT64 over the MSVC ABI this plan targets (see
+[windows-support-plan](windows-support-plan.md#toolchain-mingwucrt64-not-clang-cl)),
+and Windows now builds and tests on native runners instead of xwin + wine from
+Linux: `ci.yml` runs the "Windows build + suite" and "Windows JIT build" jobs
+under MSYS2/UCRT64, and `release.yml` ships `windows-x86_64.zip`. None of the
+"Concrete next steps" below exist (no `TUR_RUN_WRAPPER`, no
+`cmake/toolchain-windows-clang.cmake`). What is left for Windows is in
+[windows-remaining-plan](../upcoming/windows-remaining-plan.md). The body below
+is the original 2026-06-25 draft, unedited.
 
 **Last updated:** 2026-06-25
 
