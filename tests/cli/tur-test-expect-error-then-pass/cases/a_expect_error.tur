@@ -1,0 +1,4 @@
+;; tur-test-expect-error: TUR-E0001
+;; A test that must fail to compile: its error leaves the diagnostics' error
+;; flag set while `tur test` reads the manifest for the next file.
+(defn main [] : int (+ 1 "two"))
