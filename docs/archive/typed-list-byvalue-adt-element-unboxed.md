@@ -90,7 +90,7 @@ recognised only multi-field records. It now also recognises any non-`:heap`
 defdata constructor value whose name, field count and constructor match the
 type's own. The `:heap` case still fails the same way under the interpreter;
 it is filed as
-[turi-list-of-heap-adt-element-not-retagged](../reported/turi-list-of-heap-adt-element-not-retagged.md).
+[turi-list-of-heap-adt-element-not-retagged](turi-list-of-heap-adt-element-not-retagged.md) (since resolved).
 
 **Pinned by** `list-byvalue-adt-elements`: `list-map` to a one-field
 defdata through a lambda, a named function and a capturing closure;

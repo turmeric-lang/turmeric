@@ -152,7 +152,7 @@ hits under ASan.
 | Report | Severity | One line |
 | --- | --- | --- |
 | ~~[nested-generic-tyvar-name-capture](../archive/nested-generic-tyvar-name-capture.md)~~ | high (silent wrong value) | **RESOLVED 2026-10-17** (archived): two defects. The elaborator let `(list-nil)`'s open `A` replace onto__'s `B := B` (list-map's `B`), taking the coincidental spelling for an unfixed self-binding; an open slot no longer replaces a binding there. And a `__h1` twin clone borrowed its sibling's `list-first` clone through the cross-spec fallback, whose carrier parameters matched; the call's own bindings must now match the clone's. Pinned by `generic-forward-nullary-arg-tyvar-name` |
-| [turi-list-of-heap-adt-element-not-retagged](turi-list-of-heap-adt-element-not-retagged.md) | medium | Under `tur --interpret`, a `:heap` defdata passed through `list-of` reads back as a bare word ("match: no arm matched"); the re-tag skips `:heap` types because their words may be native handles. Compiled is fine. |
+| ~~[turi-list-of-heap-adt-element-not-retagged](../archive/turi-list-of-heap-adt-element-not-retagged.md)~~ | medium | **RESOLVED 2026-10-17** (archived): `EX_CONS_LIST` records the struct words it strips the tag from in an always-on set, and `(:: w A)` re-tags a `:heap` type's word only when the set holds it, so a native handle is never read as a struct. Pinned by `list-of-heap-adt-elements` |
 
 ## Found splitting the `release` and `tsan` build trees (filed 2026-10-15)
 
