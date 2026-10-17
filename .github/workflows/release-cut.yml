@@ -187,13 +187,12 @@ jobs:
           sudo apt-get update || { sleep 20; sudo apt-get update; }
           sudo apt-get install -y libedit-dev
 
+      # No pip install: the doc generators render Markdown with tur/markdown,
+      # through the native tur built below (markdown-library-plan M4).
       - name: Set up Python (for gendocs)
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: '3.12'
-
-      - name: Install Python doc deps (markdown)
-        run: python3 -m pip install --require-hashes -r tools/requirements.txt
 
       - name: Set up Emscripten
         uses: mymindstorm/setup-emsdk@4528d102f7230f0e7b276855c01ea1159be0e984 # v16
@@ -275,21 +274,25 @@ jobs:
           python-version: '3.12'
 
       # C-5 (docs/upcoming/security-audit-plan.md): `markdown` is pinned with
-      # hashes in THIS repo's tools/requirements.txt.  The workspace here is the
-      # turmeric-spices checkout, which carries no requirements file, and this
-      # step used to `pip install markdown` with no version at all -- so fetch
-      # just that one file from this repo and install from it.  The path is
-      # outside web/dist, so none of it reaches the deploy.
+      # hashes in THIS repo's tools/spices-site-requirements.txt.  The workspace
+      # here is the turmeric-spices checkout, which carries no requirements
+      # file, and this step used to `pip install markdown` with no version at
+      # all -- so fetch just that one file from this repo and install from it.
+      # The path is outside web/dist, so none of it reaches the deploy.
+      #
+      # This job is the pin's last user.  turmeric's own generators render
+      # with tur/markdown since markdown-library-plan M4; the spices repo's
+      # copies of genguides.py and genspices.py still import python-markdown.
       - name: Fetch the pinned doc requirements
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           path: .turmeric-pins
-          sparse-checkout: tools/requirements.txt
+          sparse-checkout: tools/spices-site-requirements.txt
           sparse-checkout-cone-mode: false
           persist-credentials: false
 
       - name: Install Python doc deps (markdown)
-        run: python3 -m pip install --require-hashes -r .turmeric-pins/tools/requirements.txt
+        run: python3 -m pip install --require-hashes -r .turmeric-pins/tools/spices-site-requirements.txt
 
       - name: Set up Node
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0

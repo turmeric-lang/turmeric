@@ -138,12 +138,12 @@ How a key lowers depends on its form:
         k (hamt/hash-str "name")]
     (map-get m k))             ; => 1
   ```
-```sweet-exp
-let [m #map{:name 1 :age 2}
-        k (hamt/hash-str "name")]
-  map-get(m k)
-; => 1
-```
+  ```sweet-exp
+  let [m #map{:name 1 :age 2}
+          k (hamt/hash-str "name")]
+    map-get(m k)
+  ; => 1
+  ```
 
 - A literal whose keys are all **string literals** lowers to a *content-keyed*
   map. The string itself is the key (compared by content, not by pointer or
@@ -155,11 +155,11 @@ let [m #map{:name 1 :age 2}
   (let [m #map{"name" 1 "age" 2}]
     (:: (map-get m "name") :int))   ; => 1
   ```
-```sweet-exp
-let [m #map{"name" 1 "age" 2}]
-  ::(map-get(m "name") :int)
-; => 1
-```
+  ```sweet-exp
+  let [m #map{"name" 1 "age" 2}]
+    ::(map-get(m "name") :int)
+  ; => 1
+  ```
 
   A direct `(hamt-of "k" v ...)` call with string keys is content-keyed too --
   there is one `hamt-of` builder for every key type (the old `smap-of` /

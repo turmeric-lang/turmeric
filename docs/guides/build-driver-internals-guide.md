@@ -68,7 +68,7 @@ side of the commands covered here is in
 | `src/compiler/pkg.c` | Manifest reading, fetch, cmake deps (see the [package manager internals](package-manager-internals-guide.md)) |
 | `src/turi/spice_loader.c` | The REPL's `.tur-repl-cache/` |
 | `src/platform_fs.h` | `tur_temp_dir` |
-| `src/cli/completion.c` | `tur completion zsh|bash` -- embedded scripts |
+| `src/cli/completion.c` | `tur completion zsh\|bash` -- embedded scripts |
 | `src/cli/demangle.c`, `lsp_lite.c` | `tur demangle`, `tur lsp-lite` |
 
 ---
@@ -211,9 +211,9 @@ also undersell.
 1. `read_entire_file`, then `detect_and_adjust_lang` for the `#lang` line.
 2. Per-unit resets: `diag_reset`, `experiment_reset_warnings`,
    `pkg_tur_version_reassert`, `pkg_manifest_reassert`,
-   `refine_discharge_reset`. These exist because `tur test`, `tur check
-   <dir>`, project builds and the LSP loop over files in one process; a
-   stale `had_error_` would fail every later file.
+   `refine_discharge_reset`. These exist because `tur test`,
+   `tur check <dir>`, project builds and the LSP loop over files in one
+   process; a stale `had_error_` would fail every later file.
 3. `diag_register_file`, a fresh `Arena` and `SymbolTable`.
 4. Reader macros from the manifest are loaded into a **strict** registry
    (a duplicate `reader-macros/define` is an error here, not in the REPL).

@@ -4,9 +4,12 @@
 > S3 (#1210), S4 (#1213) and S5 (#1216); J1-J3 (#1201, #1202, #1207) and J4
 > (#1208). Phase U is done too: U1 (#1217) and U2 (#1220). Phase M is under
 > way: M1, the block parser (#1229), M2, the inline parser (#1240), and M3,
-> the GFM extensions and heading ids, are built (section 6.4, "M1 as built"
-> to "M3 as built"). All of CommonMark and all of the GFM extension examples
-> pass.
+> the GFM extensions and heading ids (#1246), are built (section 6.4, "M1 as
+> built" to "M3 as built"). All of CommonMark and all of the GFM extension
+> examples pass. M4 is built too (section 6.5, "M4 as built"): this
+> repository's docs pipeline renders with `tur/markdown`, and python-markdown
+> is left only on the spices site's deploy, which runs turmeric-spices's own
+> generators.
 > Written 2026-10-15; its open questions were settled with the author the same
 > day (section 8). It started as "would
 > `tools/gendocs.py` be a candidate to move to Turmeric?" A straight gendocs port
@@ -780,6 +783,109 @@ a `SlugMode`, for READMEs that are read on GitHub.
    in-job build with ccache, the way those two do it: `release.yml`'s `docs`
    job and `release-cut.yml`'s spices-site job. Both stay independent of the
    release builds and run in parallel with them.
+
+**M4 as built.**
+
+- **The renderer tool.** `tools/md/render.tur`, about 220 lines, is
+  `render --list=FILE`. For each `X.md` the file names it writes `X.html`, the
+  fragment, and `X.json`: the headings (level, id and content HTML) and every
+  raw-HTML block and inline it passed through, with the line each starts on.
+  It renders with the GFM extensions, the tag filter and `(MdSlugPython)`.
+  - `tools/mdrender.py` drives it. It builds the tool with `tur build` on
+    first use and caches the build in the system temp directory, keyed on the
+    `tur` binary and every stdlib source. Then it writes a run's pages to a
+    scratch directory and runs the tool once over all of them. It takes
+    `tur` from `$TUR`, `./build/tur` or `PATH`.
+  - All 173 guides render in 0.35 s. The first build of a session takes
+    about 8 s with the Debug `tur`.
+  - The headings come back as the toc tokens python-markdown used to give:
+    the nesting is redone in Python, and a heading's `name` is its HTML with
+    the tags stripped. The library gains `markdown/heading-html` for that
+    HTML.
+  - Front matter and a hand-written contents section are blanked out rather
+    than cut, so the raw-HTML report's line numbers are the file's.
+  - ctest `tur_md_render` (`tests/check-mdrender.sh`) checks the tool and the
+    driver together.
+- **The generators.** `genguides.py` and `genspices.py` each make one batch
+  call, and genguides' process pool is gone. The site-layout post-processing
+  stays in Python: the syntax toggles, mermaid, the table scroll wrappers and
+  the Contents box. `render_task_lists` becomes `mark_task_items`, which only
+  adds the `task-item` class the CSS draws the renderer's checkboxes by.
+- **The workarounds** from 1.1 are deleted: `dedent_indented_fences`,
+  `unquote_blockquote_fences`, `widen_nested_fences` (and its block reader),
+  the info-string marker strip, `render_task_lists`, the `LAZY_OL` tweak and
+  `unrendered_fences`. genguides loses 325 lines and gains 87.
+  `tools/check-guide-pairs.py` loses its blockquoted-fence check, which
+  existed only because python-markdown could not render a quoted fence.
+- **The diff gate.** A one-off script, not committed, rendered every guide
+  and spice README both ways. It compared block structure, visible text,
+  heading ids and names, and the page chrome.
+  - **Headings did not move.** Every heading id and name is the same on all
+    173 guides. So every anchor still resolves, the Contents boxes and
+    sidebars are byte-identical, and so are the docs pack's index entries
+    for the guides. M3 counted 17 guides whose headings python-markdown
+    found differently, but it ran python-markdown without genguides'
+    workarounds. With them, as on the live site, it found CommonMark's
+    headings.
+  - **51 guides changed structure; 122 did not.** In each change the new
+    page is the one GitHub shows:
+    - **Lists**, most of the changes. CommonMark nests a list at two spaces
+      of indent, where python-markdown wanted four. It also keeps a fence,
+      table or paragraph inside the item it is indented under; genguides
+      used to dedent a fence out of the item, which split the list. The two
+      lists section 2 left alone (`macros-guide.md`,
+      `value-representations-guide.md`) render as GitHub's with no source
+      change.
+    - **Block quotes** split as on GitHub, on the three pages 1.1 names.
+    - **Extended autolinks** turn bare URLs into links (3 pages).
+    - **`\|` in a table cell** is a pipe. python-markdown kept the
+      backslash on 16 pages.
+    - **A wrapped line starting `128.`** (or `121.`) stays text.
+      python-markdown read it as a new ordered list and dropped the number
+      (`thread-pool-guide.md`, `sicp-guide.md`).
+    - **Emphasis** nests differently in one paragraph
+      (`stateful-refinements-guide.md`).
+  - **It found source bugs, which GitHub renders broken too.** All are
+    fixed here:
+    - **A `|` inside a code span in a table cell** splits the cell under
+      GFM; python-markdown's tables extension respected the backticks.
+      4 guides now write `\|`.
+    - **`<dir>` starting a list item's continuation line** opens an HTML
+      block, since `dir` is a block-level tag name
+      (`build-driver-internals-guide.md`). The raw-HTML report found it.
+    - **A sweet-exp block at column 0** after the list item holding its
+      turmeric twin ended the list and broke the toggle
+      (`data-literals-guide.md`, 2 pairs).
+    - **A wrapped line starting `+ `** became a nested list
+      (`syntax-guide.md`).
+    - **A code span meant to show Ctrl+`** did not (`devcontainer-guide.md`).
+  - **Spice READMEs: 45 of 52 are unchanged.** The other 7 render as on
+    GitHub: run-on lists become lists (`linalg`, `stats`), fences stay in
+    their items, and `scscm` gains its task-list checkboxes and
+    strikethrough. One source bug is left in turmeric-spices:
+    `signal/README.md` puts `|g| < 1` in table code spans.
+- **Raw HTML.** The guides' build fails on any raw-HTML node, naming its file
+  and line, unless the guide's front matter says `raw-html: allow`. No guide
+  does. In a spice README it is a warning, since the README lives in the
+  spices repository. Neither has any today.
+- **The pin.** No `pip install` is left on this repository's docs path.
+  - `ci.yml`'s web-smoke job, `release.yml`'s docs job and `release-cut.yml`'s
+    deploy-web job no longer install it. `tests/tools/check_gendocs_parse.py`
+    drops its `markdown` stub. `gendocs.py --emit-tur` needs no pip package.
+  - `release.yml`'s docs job now builds a native `tur`, as decision 5 says.
+    It uses web-smoke's configure line and ccache settings, so restoring
+    web-smoke's cache from `main` makes the build mostly cache hits.
+    `release-cut.yml`'s deploy-web job already built one.
+  - **One user is left: `release-cut.yml`'s deploy-spices job.** It runs the
+    turmeric-spices repository's own copies of `genguides.py` and
+    `genspices.py`, which still import python-markdown. So the pin moves to
+    `tools/spices-site-requirements.txt`, which says so, and that job
+    installs it from there.
+  - **Not done:** moving those copies onto `tur/markdown`. That is
+    turmeric-spices work. The job then needs a `tur` (item 6), and the pin
+    and its install go.
+- **Speed.** A `genguides.py` run takes about as long as before, about 10 s
+  here. That is now mostly `git log` dating the pages.
 
 ### 6.6 M5 -- other consumers
 

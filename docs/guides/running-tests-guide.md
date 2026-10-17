@@ -53,7 +53,7 @@ its output is not truncated.
 
 | Variable | Meaning | Example |
 | --- | --- | --- |
-| `TUR_TEST_FILTER` | Regex; run only fixtures whose name (path under `tests/fixtures/`) matches | `TUR_TEST_FILTER='^(arith|r7rs-srfi-1)$'` |
+| `TUR_TEST_FILTER` | Regex; run only fixtures whose name (path under `tests/fixtures/`) matches | `TUR_TEST_FILTER='^(arith\|r7rs-srfi-1)$'` |
 | `TUR_TEST_EXCLUDE` | Regex; leave out matching fixtures (applied after the filter) | `TUR_TEST_EXCLUDE='^r7rs-'` |
 | `TUR_TEST_SUITE` | `happy`, `errors` (negative fixtures under `errors/`), or `snapshots` (fixtures with `expected.c`) | `TUR_TEST_SUITE=errors` |
 | `TUR_TEST_SHARD` | `i/N`: run the i-th of N disjoint slices | `TUR_TEST_SHARD=2/3` |
@@ -144,6 +144,16 @@ part sets up both.
     for each comparison);
   - `--no-corpus` leaves out the files;
   - `--show N` prints the first N differences, with the input.
+
+### `tests/check-mdrender.sh`
+
+The docs generators' Markdown renderer (ctest `tur_md_render`):
+`tools/md/render.tur`, built and run by `tools/mdrender.py`. It renders a few
+pages in one batch and checks the HTML, the headings the page chrome is built
+from, and the raw-HTML report the guides' build fails on. It takes `tur` as
+its argument, else `$TUR`, else `./build/tur`. The first run builds the
+renderer, which takes a few seconds; later runs reuse the build until `tur` or
+a stdlib source changes.
 
 ### ctest
 
