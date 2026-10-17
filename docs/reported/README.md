@@ -34,6 +34,13 @@ sentence above does not cover them. If you touch this file, check
 `ls docs/reported/` against it -- an index that silently omits a quarter of the
 directory is worse for triage than no index.
 
+## Found revisiting the dynvar spices plan (filed 2026-10-17)
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [dynvar-binding-not-swapped-on-fiber-switch](dynvar-binding-not-swapped-on-fiber-switch.md) | medium-high (silent wrong value) | A `defdynamic` binding is per thread, not per fiber: `tur_fiber_block_resume` swaps the r7rs dynamic environment and the region escape list but not the `TurDynFrame` chains. Two fibers that bind and yield read each other's values, and the thread ends up reading a frame whose binding has exited. Nothing in the tree binds across a yield yet. |
+| [defdynamic-generic-adt-root-emitted-before-its-type](defdynamic-generic-adt-root-emitted-before-its-type.md) | low-medium (cc failure) | `(defdynamic *v* :(Option int) ...)` type-checks, then cc fails on `unknown type name 'tur_adt_Option__int'`: the dynvar root is emitted before the instantiation's struct. A plain `defdata` is refused with `TUR-E0603` instead. |
+
 ## Found reviewing the `reflected-measures` graduation (filed 2026-10-17)
 
 | Report | Severity | One line |
@@ -258,7 +265,7 @@ not fixed there.
 | ~~[cont-query-on-wrapped-handler-k-reads-past-wrapper](../archive/cont-query-on-wrapped-handler-k-reads-past-wrapper.md)~~ | medium (out-of-bounds read) | **RESOLVED 2026-10-13** (archived): both `cont?` lowerings call `__dk_cont_live_word`, which checks for a `__dk_cont_fn` wrapper before reading `consumed` off a bare chain; a wrapper is live before and after a resume. Pinned by `cont-query-wrapped-handler-k` (leak-checked) |
 | [resume-of-non-continuation-int-crashes](resume-of-non-continuation-int-crashes.md) | low-medium | `(resume k v)` with `k` a plain int (`(h 5 6)`) segfaults compiled (`__dk_resume_word` dereferences it); the interpreter says "not a continuation"; `(cont? 5)` does the same through `__dk_cont_live_word`. `int` stays accepted because a stored or untyped handler `k` is still carried as one. |
 | ~~[effect-cont-aggregate-result-untyped](../archive/effect-cont-aggregate-result-untyped.md)~~ | low | **RESOLVED 2026-10-13** (archived): the cont type carries the whole written result type (`Type.as.cont.returns_full`), which `elab_make_resume` prefers to the scalar ladder, so an aggregate resume is typed and crosses the slot boxed. Pinned by `effect-cont-aggregate-result` (leak-checked) |
-| [unknown-type-annotation-becomes-implicit-tyvar](unknown-type-annotation-becomes-implicit-tyvar.md) | low (policy) | `[k : zork]` -- any unknown type name, capitalized too -- is an implicit type variable, so a typo is never reported; KB-026 finds the single-occurrence case but demotes it to another tyvar. |
+| [unknown-type-annotation-becomes-implicit-tyvar](unknown-type-annotation-becomes-implicit-tyvar.md) | low (policy) | `[k : zork]` -- any unknown type name, capitalized too -- is an implicit type variable, so a typo is never reported; KB-026 finds the single-occurrence case but demotes it to another tyvar. The commonest instance is `option<T>` / `Option<T>` / `vec<T>`, the spelling CLAUDE.md uses: none of them is a type, so the parameter is unchecked (2026-10-17 note). |
 
 ## Found fixing resume-of-cont-typed-param-is-a-no-op (filed 2026-10-12)
 

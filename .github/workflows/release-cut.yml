@@ -273,26 +273,29 @@ jobs:
         with:
           python-version: '3.12'
 
-      # C-5 (docs/upcoming/security-audit-plan.md): `markdown` is pinned with
-      # hashes in THIS repo's tools/spices-site-requirements.txt.  The workspace
-      # here is the turmeric-spices checkout, which carries no requirements
-      # file, and this step used to `pip install markdown` with no version at
-      # all -- so fetch just that one file from this repo and install from it.
-      # The path is outside web/dist, so none of it reaches the deploy.
-      #
-      # This job is the pin's last user.  turmeric's own generators render
-      # with tur/markdown since markdown-library-plan M4; the spices repo's
-      # copies of genguides.py and genspices.py still import python-markdown.
-      - name: Fetch the pinned doc requirements
+      # No pip install: the spices repo's genguides.py and genspices.py render
+      # Markdown with tur/markdown, as this repo's do (markdown-library-plan
+      # M4), so they need a tur and no Python package.  This one is built from
+      # the release being cut, beside the workspace in .turmeric/ -- outside
+      # web/dist, so none of it reaches the deploy.  A Release build of the
+      # one target, as deploy-web makes.
+      - name: Check out turmeric (for tur)
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          path: .turmeric-pins
-          sparse-checkout: tools/spices-site-requirements.txt
-          sparse-checkout-cone-mode: false
+          ref: ${{ needs.prepare.outputs.sha }}
+          path: .turmeric
           persist-credentials: false
 
-      - name: Install Python doc deps (markdown)
-        run: python3 -m pip install --require-hashes -r .turmeric-pins/tools/spices-site-requirements.txt
+      - name: Install dependencies (Linux)
+        run: |
+          sudo rm -f /etc/apt/sources.list.d/google-chrome*
+          sudo apt-get update || { sleep 20; sudo apt-get update; }
+          sudo apt-get install -y libedit-dev
+
+      - name: Build native tur (Release; renders the Markdown)
+        run: |
+          cmake -S .turmeric -B .turmeric/build -DCMAKE_BUILD_TYPE=Release -DCMAKE_POLICY_VERSION_MINIMUM=3.5
+          cmake --build .turmeric/build -j --target tur
 
       - name: Set up Node
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -304,6 +307,8 @@ jobs:
       # Mirrors the spices repo's `tur run deploy-web` recipe: render guides +
       # spice pages, copy them with the static assets into web/dist, deploy.
       - name: Generate spice docs
+        env:
+          TUR: ${{ github.workspace }}/.turmeric/build/tur
         run: |
           python3 tools/genguides.py docs/guides/ --out docs/html/guides/
           python3 tools/genspices.py --out docs/html/ --emit-json docs/html/doc-names-spices.json

@@ -75,14 +75,8 @@ test.describe('docs pane across launches', () => {
         await page.waitForFunction(
             () => document.querySelector('#docs-article h1')?.textContent === 'beta');
 
-        // `behavior: 'instant'` for the same reason docsSetScroll uses it:
-        // `.docs-article` sets `scroll-behavior: smooth`, so a plain
-        // `scrollTop =` assignment ANIMATES, and the rAF-coalesced handler
-        // banks wherever the animation happens to be one frame in (34px, on
-        // the run that caught this).
         await page.evaluate(() => {
-            document.getElementById('docs-article')
-                .scrollTo({ top: 400, behavior: 'instant' });
+            document.getElementById('docs-article').scrollTop = 400;
         });
         await page.waitForFunction(
             () => document.getElementById('docs-article').scrollTop === 400);
