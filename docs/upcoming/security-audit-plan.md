@@ -57,7 +57,7 @@
 > **Related:** [sandboxing-guide](../guides/sandboxing-guide.md) (the
 > promise WP3 audits), [consuming-spices-guide](../guides/consuming-spices-guide.md#security)
 > (the promise WP7 audits), [ci-release-workflows-plan](ci-release-workflows-plan.md)
-> and [release-in-actions-plan](release-in-actions-plan.md) (WP7 lands
+> and [release-in-actions-plan](../archive/release-in-actions-plan.md) (WP7 lands
 > alongside them), `docs/reported/README.md` (where findings go).
 
 ## 0. Summary

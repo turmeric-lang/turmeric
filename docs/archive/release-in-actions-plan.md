@@ -1,6 +1,28 @@
 # Release in Actions -- one-shot patch/minor/major cuts, with LM-drafted notes
 
-> **Status: PROPOSED 2026-09-27; nothing landed as of 2026-09-28.** R1-R5 are
+> **SUPERSEDED -- archived 2026-10-17. Not implemented as written.**
+> [ci-release-workflows-plan](../upcoming/ci-release-workflows-plan.md) was
+> executed instead (2026-10-05): the one-shot `release-cut.yml` plus
+> `tools/release_prepare.py`, which has cut every release since v0.63.1. How
+> this plan's phases came out:
+>
+> - **R1** (one bump implementation): `release_prepare.py --apply` writes
+>   `VERSION`, `stdlib/VERSION`, `wasm_glue.h` and `sw.js`. The `Justfile`
+>   `bump-*` recipes were left in place.
+> - **R2** (LM-drafted notes): in `release_prepare.py`, over the Mistral API.
+> - **R3**: the `release-build.yml` extraction was dropped; `release.yml` is
+>   dispatched unchanged. **Its docs-job fixes did not land** -- `release.yml`
+>   still clones no `turmeric-spices` and runs `genpack.py` without
+>   `--strict-links`, so the v0.65.5 `turmeric-docs-*.tar.gz` holds a spices
+>   `index.html` and no spice pages. Carried into ci-release-workflows-plan's
+>   checklist.
+> - **R4**: `release-cut.yml`.
+> - **R5** (slim the skills, rewrite the guide section): still open, in
+>   ci-release-workflows-plan's checklist.
+>
+> The body below is the original proposal, unedited.
+>
+> **Original status: PROPOSED 2026-09-27; nothing landed as of 2026-09-28.** R1-R5 were
 > all open: no `release-cut.yml`, `release-build.yml` or `tools/release/`; the
 > `Justfile` `bump-*` recipes and the `cut-*-release` skills are unchanged, and
 > v0.56.1/v0.56.2 were cut by the local flow. One change since writing:
@@ -10,7 +32,7 @@
 > major)", the open question of which LM writes the release notes (Cloudflare
 > Workers AI vs. a Mistral API key), and the requirement that docstrings be
 > regenerated as part of the release.
-> **2026-10-05:** [ci-release-workflows-plan](ci-release-workflows-plan.md)
+> **2026-10-05:** [ci-release-workflows-plan](../upcoming/ci-release-workflows-plan.md)
 > was executed instead -- one shot like this plan, but notes over the Mistral
 > API and `release.yml` dispatched unchanged rather than extracted. It
 > measured Mistral: GLM at `reasoning_effort: low` won there too. Section 3.3's
