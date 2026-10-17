@@ -40,6 +40,16 @@ Checked against `main` 9ac3cd43; line numbers are from that commit.
     compatibility. This is code-only.
 
   Any of the three makes the struct comment short and true.
+- **Decided 2026-10-17: drop the duplicate, option (b).** Stop writing
+  `:sha256` on cmake rows. Concretely:
+  - `pkg_cmake_build` stops copying the git SHA into it (`pkg.c:4619`);
+  - the reader ignores a `:sha256` on a cmake row, which also keeps
+    `--frozen` from flagging old locks;
+  - the internals guide's lock sample and its "A cmake row's `:sha256` is
+    just the git SHA again" bullet are updated in the same PR;
+  - the change gets a CHANGELOG line, since the lock format changes.
+
+  Options (a) and (c) are still open.
 
 ### 2. The `pkg.h` file header (`pkg.h:4-17`)
 

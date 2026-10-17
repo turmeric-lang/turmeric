@@ -96,6 +96,18 @@ pass-pipeline region of `main.c` turned up the rest.
   (`effect_lower.c:113`). Removing the pass would keep the original type.
   Confirm nothing has come to depend on that type before deleting the pass. If
   something has, that dependency is a bug in its own right.
+- **Decided 2026-10-17: look into deleting `effect_lower`.** This is an
+  investigation first, not yet a decision to delete. Work through:
+  1. `main.c:755` is the only caller. Check that the tests and the turi /
+     WASM builds do not link or call `effect_lower`.
+  2. Find out whether anything downstream reads an `EX_DISCONTINUE` node's
+     type. That is the one difference removing the pass would make.
+  3. Delete the call, then run the suite and the CPS/effects fixtures under
+     both JIT builds.
+
+  If all of that comes back clean, delete `effect_lower.{c,h}` and rename the
+  pass. If something does depend on `TYPE_NIL`, file that dependency as its
+  own report and keep the pass until it is fixed.
 
 ### 7. "(v1 stub)" on the kind checker (`main.c:736`)
 

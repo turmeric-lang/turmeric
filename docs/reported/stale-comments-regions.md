@@ -32,6 +32,10 @@ emitted programs, comments included (`cmake/embed_region_runtime.cmake` ->
 Batch items 1-4 into **one** change with one regen. Item 13 describes a
 structural fix that removes this cost for good.
 
+**Decided 2026-10-17: strip the comments (item 13's second bullet).** Land
+that first. Its one-time regen then also absorbs items 1-4, and comment fixes
+in these files cost nothing from then on.
+
 ## Changes
 
 ### 1. `region.h:34-35`: "shippable behind a flag"
@@ -181,7 +185,11 @@ Two changes would remove whole classes of the items above.
   `emit_embedded_runtime_source`, makes these files' comments free to
   maintain. It needs one regen when it lands, and then never again for a
   comment edit. Line directives are not affected, because none are emitted
-  for these sources.
+  for these sources. **Decided 2026-10-17: do this.** Strip only `/* ... */`
+  and `//` comments outside string and character literals, keep the line
+  breaks, and leave `#` directives and `emit_embedded_runtime_source`'s
+  local-`#include` dropping exactly as they are. The one regen covers
+  the 157 snapshots and `tools/gen-runtime-split.py` with its new hash.
 
 ## When this is fixed
 

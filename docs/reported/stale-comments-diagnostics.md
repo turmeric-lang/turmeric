@@ -27,14 +27,21 @@ prefixes `tur explain` accepts. Both have several stale comments.
   The uncoded "'x' is deprecated" use-site warning (`elab_module.c:2182`) is
   also promoted.
 - **Change (comment):** state the per-site reality, the way the guide does.
-- **Change (structure, optional; behaviour decision):** add one helper,
-  `diag_deprecation_level()` (returns `g_werror_deprecated ? DIAG_ERROR :
-  DIAG_WARNING`), and call it from `elab_structs.c`, `elab_module.c` and
-  `warn_legacy_fx_row`. The band comment would then become true for every
-  code except D0001, which stays a hard error and should say so in its own
-  enum comment. This makes `--Werror=deprecated` promote D0002/D0003, which
-  changes behaviour, so it is the maintainer's call. If D0002/D0003 should
-  stay unpromotable, say why at `warn_legacy_fx_row`.
+- **Change (structure):** add one helper, `diag_deprecation_level()`
+  (returns `g_werror_deprecated ? DIAG_ERROR : DIAG_WARNING`), and call it
+  from `elab_structs.c`, `elab_module.c` and `warn_legacy_fx_row`. The band
+  comment would then become true for every code except D0001, which stays a
+  hard error and should say so in its own enum comment.
+- **Decided 2026-10-17: promote the two warnings.** `--Werror=deprecated`
+  should promote D0002 and D0003 too, so take the helper above, including
+  `warn_legacy_fx_row`. This changes behaviour, so it needs three things:
+  - a CHANGELOG line;
+  - a sentence in the D0002/D0003 explanations (`diag.c:2686-2726`) saying
+    they become errors under `--Werror=deprecated`, as the D0004 one already
+    does;
+  - an `errors/` fixture per code with a `flags` file holding
+    `--Werror=deprecated`. `tests/fixtures/errors/deprecated-as-error` is the
+    pattern.
 
 ### 2. `tur explain TUR-D0001` describes the code as a promotable warning (`diag.c:2664-2684`)
 
@@ -79,8 +86,12 @@ comment is right). These comments say otherwise:
   `diag_looks_like_code` rejects the `I` prefix. So `tur explain TUR-I0379`
   elaborates the string as source and prints "unbound symbol 'TUR-I0379'".
   The guide shows this.
+- **Decided 2026-10-17: make `tur explain` accept `I` codes.**
 - **Change (code, one character):** accept `'I'` in `diag_looks_like_code`
-  and its comment. Alternatively, derive the accepted prefixes from the table
+  and its comment. The REPL's `:explain` and the playground share the
+  function, so they get the fix too. A `tests/run-flags.sh` check that `tur
+  explain TUR-I0379` exits 0 and prints the explanation would pin it, next to
+  the E0012/E0013 checks. Alternatively, derive the accepted prefixes from the table
   so they cannot disagree. The open
   [diag-code-tables-drift-without-a-check](diag-code-tables-drift-without-a-check.md)
   covers the tables more generally.
