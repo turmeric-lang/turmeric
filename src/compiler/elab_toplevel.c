@@ -2610,6 +2610,9 @@ void elab_pre_declare_toplevel_defn(Elab *ep, Arena *arena, Form *f) {
                                          * an int (cc: "aggregate value used where
                                          * an integer was expected"). */
                                         return_kind = TY_ANY;
+                                    } else if (kw->len == 6 && memcmp(kw->name, "Syntax", 6) == 0) {
+                                        /* macro-time-forward-reference-typed-int */
+                                        return_kind = TY_SYNTAX;
                                     } else {
                                         /* bare-adt-forward-decl-inference: a non-parametric
                                          * user type name -- `: T` for a `defdata` /

@@ -7786,6 +7786,16 @@ static void emit_any_cast_bind_check(EmitCtx *ctx, Buf *body, const Expr *e,
     }
 }
 
+/* A concrete, non-`:heap` ADT or ADT monomorph: a result passed by value. */
+static bool byvalue_aggregate_result(Type t) {
+    if (t.kind == TY_APP)
+        return type_app_is_concrete_adt(&t) && !type_is_heap_adt(t) &&
+               !type_is_heap_struct(t);
+    if (t.kind == TY_ADT)
+        return t.as.adt_.def != NULL && !type_is_heap_adt(t) && !type_is_heap_struct(t);
+    return false;
+}
+
 /* fnsan-fat-closure-at-tyvar-sink: the adapter for a { adapter, handle }
  * wrapper around a fat closure `inner` headed for a `^fat` slot whose declared
  * fn type has type variables, when the callee this call selects reads those
@@ -7800,11 +7810,16 @@ static void emit_any_cast_bind_check(EmitCtx *ctx, Buf *body, const Expr *e,
 static char *fat_closure_tyvar_sink_adapter(EmitCtx *ctx, const Expr *inner,
                                             const Type *fnty, uint8_t arity) {
     const Type *sk = ctx->fat_box_sink_type;
-    if (!sk || sk->kind != TY_FN || sk->as.fn.arity != arity ||
-        !ctx->fat_box_sink_erased_mask)
+    if (!sk || sk->kind != TY_FN || sk->as.fn.arity != arity)
         return NULL;
     Type rt = emit_resolve_type(ctx, emit_fn_result_type_from_type(*fnty));
     if (rt.kind == TY_NIL || rt.kind == TY_NEVER) return NULL;
+    /* typed-list-byvalue-adt-element-unboxed: a sink whose only type
+     * variable is the result still needs the wrapper when the closure answers
+     * a by-value aggregate there (the elaborator marks only that case). */
+    if (!ctx->fat_box_sink_erased_mask &&
+        !(ctx->fat_box_sink_erased_res && byvalue_aggregate_result(rt)))
+        return NULL;
     Type ps[MAX_FN_ARITY];
     for (uint8_t i = 0; i < arity; i++)
         ps[i] = emit_resolve_type(ctx, emit_fn_arg_type_from_type(*fnty, i));
@@ -7829,9 +7844,16 @@ static char *fat_closure_tyvar_sink_adapter(EmitCtx *ctx, const Expr *inner,
     Type srt = emit_resolve_type(ctx, emit_fn_result_type_from_type(*sk));
     const char *arc = ctx->fat_box_sink_erased_res
         ? "int64_t" : thunk_result_slot_c_spelling(type_c_name(srt));
-    return ensure_call_adapter_ex(ctx, ctx->thunk_typedefs ? ctx->thunk_typedefs
-                                                           : ctx->file,
-                                  EMIT_ADAPT_FAT_SLOT1, crc, cpc, arc, apc, arity);
+    Buf *tdo = ctx->thunk_typedefs ? ctx->thunk_typedefs : ctx->file;
+    char *ad = ensure_call_adapter_ex(ctx, tdo, EMIT_ADAPT_FAT_SLOT1, crc, cpc,
+                                      arc, apc, arity);
+    /* typed-list-byvalue-adt-element-unboxed: the scalar adapter declines a
+     * by-value aggregate result; a sink reading the result as the word wants
+     * it heap-boxed. */
+    if (!ad && typed_ok && ctx->fat_box_sink_erased_res)
+        ad = ensure_boxres_word_adapter(ctx, tdo, EMIT_ADAPT_FAT_SLOT1, rt, crc,
+                                        cpc, apc, arity);
+    return ad;
 }
 
 char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
@@ -19672,6 +19694,14 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                         typed_shim = ensure_call_adapter_ex(
                             ctx, ctx->thunk_typedefs ? ctx->thunk_typedefs : ctx->file,
                             EMIT_ADAPT_BARE_SLOT1, rrc, rpc, arc, apc, (uint8_t)arity);
+                    /* typed-list-byvalue-adt-element-unboxed: the scalar adapter
+                     * declines a by-value aggregate result; a consumer reading
+                     * the result as the word wants it heap-boxed. */
+                    if (differs && !typed_shim && strcmp(arc, "int64_t") == 0)
+                        typed_shim = ensure_boxres_word_adapter(
+                            ctx, ctx->thunk_typedefs ? ctx->thunk_typedefs : ctx->file,
+                            EMIT_ADAPT_BARE_SLOT1, fnt_result, rrc, rpc, apc,
+                            (uint8_t)arity);
                 }
             }
             /* An erased-result sink reads slot 0's result as a carrier: box a
@@ -22581,9 +22611,10 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     buf_printf(&cell,
                         "__tur_cons_of(((union { %s d; int64_t i; }){.d = (%s)}).i, %s)",
                         cty, head, tail);
-                } else if (g_sr1_sum_byvalue &&
-                           emit_type_is_byvalue_sum(
-                               ctx, e->as.cons_list_.items[i]->type)) {
+                } else if (emit_type_is_byvalue_adt(ctx, e->as.cons_list_.items[i]->type) &&
+                           (g_sr1_sum_byvalue ||
+                            !emit_type_is_byvalue_sum(
+                                ctx, e->as.cons_list_.items[i]->type))) {
                     /* SR1: a by-value AGGREGATE head does not survive
                      * `(int64_t)(intptr_t)` either -- a cast from a struct is not
                      * a coercion, it is a hard C error ("aggregate value used
@@ -22594,7 +22625,10 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                      * same crossing a by-value ADT already makes into a carrier
                      * ctor field slot.  Before SR1 only a single-variant product
                      * could be by-value, and one never reached a variadic rest
-                     * slot in the suite; a by-value sum does. */
+                     * slot in the suite; a by-value sum does.  A by-value
+                     * product does too, `(list-of (B "a") (B "b"))` over a
+                     * one-constructor defdata
+                     * (typed-list-byvalue-adt-element-unboxed). */
                     char *boxed = emit_carrier_bridge_escaping(
                         ctx, body, head, CK_CONCRETE, CK_CARRIER,
                         emit_resolve_type(ctx, e->as.cons_list_.items[i]->type));

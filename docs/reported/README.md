@@ -123,8 +123,15 @@ hits under ASan.
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [typed-list-byvalue-adt-element-unboxed](typed-list-byvalue-adt-element-unboxed.md) | medium-high | A by-value `defdata` as a `(List A)` element is never boxed: `list-map` with a lambda returning one segfaults (the fat shim returns the struct by value through the int64 carrier ABI, and `list-first`'s spec dereferences the word), and `list-of` with such elements fails in cc. `:heap` types work. |
-| [macro-time-forward-reference-typed-int](macro-time-forward-reference-typed-int.md) | low-medium | In a `:for-macros` module or a `defmacro*`'s `letrec`, a call to a function defined later is typed with `int` parameters, so mutually recursive `Syntax` walkers fail at definition time. Compiled and interpreted code handle the same forward reference. Workaround: one self-recursive function with a mode argument. |
+| ~~[typed-list-byvalue-adt-element-unboxed](../archive/typed-list-byvalue-adt-element-unboxed.md)~~ | medium-high | **RESOLVED 2026-10-17** (archived): a by-value `defdata` result crossing into a generic `(fn [A] B)` -- from a bare function, a lambda or a capturing closure -- is heap-boxed by a slot-0 adapter when the callee reads `B` as the word (`ensure_boxres_word_adapter`), and `list-of`'s rest bridges a by-value product as it already did a sum. Under `tur --interpret` the rest cell's constructor value is re-tagged. Pinned by `list-byvalue-adt-elements` |
+| ~~[macro-time-forward-reference-typed-int](../archive/macro-time-forward-reference-typed-int.md)~~ | low-medium | **RESOLVED 2026-10-17** (archived): the forward-declare pre-pass (module, entry file, `letrec`) now commits a `Syntax` parameter and result, so mutually recursive `Syntax` walkers in a `:for-macros` module or a `defmacro*`'s `letrec` work in any order. Pinned by `macro-time-forward-reference-syntax` |
+
+## Found fixing the by-value `(List A)` element report (filed 2026-10-17)
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [nested-generic-tyvar-name-capture](nested-generic-tyvar-name-capture.md) | high (silent wrong value) | A generic calling a generic whose type variables share its names gets the wrong bindings: `list-map`'s inner `list-map-onto__` clone is `B := float` for a `float -> int` map, so `(list-map floats (fn [f : float] : int 7))` answers the bits of 7.1, and a `float -> defdata` map segfaults. Renaming the inner variables fixes it. |
+| [turi-list-of-heap-adt-element-not-retagged](turi-list-of-heap-adt-element-not-retagged.md) | medium | Under `tur --interpret`, a `:heap` defdata passed through `list-of` reads back as a bare word ("match: no arm matched"); the re-tag skips `:heap` types because their words may be native handles. Compiled is fine. |
 
 ## Found splitting the `release` and `tsan` build trees (filed 2026-10-15)
 

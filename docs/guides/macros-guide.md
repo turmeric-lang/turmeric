@@ -222,6 +222,10 @@ Facts that matter in practice:
                       acc))]
       (int->syntax (walk 0 0))))
   ```
+  The names of one `letrec` may call each other in any order, and so may
+  the defns of a `:for-macros` module, `Syntax` parameters and results
+  included: a mutually recursive walker over a form needs no particular
+  definition order.
   A `(def helper (fn ...))` also works, but its self-call resolves by
   runtime dispatch (a TUR-W0040 note) and types `:int`, so an
   `(if p stx (helper ...))` will not unify -- prefer `letrec`.
