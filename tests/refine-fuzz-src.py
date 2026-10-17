@@ -1071,6 +1071,10 @@ class Gen:
             has a variable in it;
           * RF4: a match over a list PARAMETER whose refinement is a reflected
             measure, so the arm is selected from a tag fact;
+          * a `let`-BOUND list -- single, chained, nested, self-shadowing and
+            `^mut`-reassigned bindings -- read in a return obligation and at
+            a crossing, so the selection through a binding's equation and the
+            model search's let-defined variables are both on the line;
           * a SABOTAGED sibling for each rung -- a refinement the measure does
             not satisfy (off by one, a zeroed head) -- so a wrong unfolding is a
             BUG_soundness, not a silent agreement;
@@ -1114,7 +1118,8 @@ class Gen:
                "                   (FzNil) true\n"
                "                   (FzCons h2 _) (and (<= h h2) (fz-sorted? t)))))"]
         kind = self.rng.choice(["len_ground", "len_param", "sum", "allpos",
-                                "rf4", "rf4", "sorted_rf4", "nonexh", "impure"])
+                                "rf4", "rf4", "sorted_rf4", "nonexh", "impure",
+                                "let_bound", "let_bound"])
         ret_ty = "int"
         pre_cond = None
         if kind == "len_ground":
@@ -1169,6 +1174,51 @@ class Gen:
             pred = self.rng.choice(["(= r 1)", "(>= r 0)"])
             if self.rng.random() < 0.5:
                 pre_cond = "(> p %s)" % z
+        elif kind == "let_bound":
+            # The measure reads a `let`-bound name, not a written constructor
+            # term: the unfolding selects through the binding's equation
+            # (rf_canon), and a chained binding (`b` built on `a`) through two.
+            # `shadow` rebinds `b` in terms of itself and `mut` reassigns it --
+            # the flat-namespace and stale-fact hazards, whose honest length
+            # differs from what a leaked outer fact would claim.  Half the
+            # cases read the measure in a RETURN obligation (a false proof
+            # elides the check: BUG_soundness); half pass the list to a refined
+            # callee, a CROSSING, where the model search's let-defined
+            # variables are what refutes it (a wrong refutation is
+            # SUSPICIOUS_over_refute).
+            d1 = self.rng.randint(0, 4)
+            d2 = self.rng.randint(0, 3)
+            layout = self.rng.choice(["single", "chain", "nested", "shadow", "mut"])
+            a_lst = lst([elem() for _ in range(d1)])
+            b_on_a = "a"
+            for e in reversed(["p"] + [elem() for _ in range(d2)]):
+                b_on_a = "(FzCons %s %s)" % (e, b_on_a)
+            if layout == "single":
+                n = d1 + 1
+                wrap = "(let [b %s]\n    %%s)" % lst([elem() for _ in range(d1)], head="p")
+            elif layout == "chain":
+                n = d1 + d2 + 1
+                wrap = "(let [a %s\n        b %s]\n    %%s)" % (a_lst, b_on_a)
+            elif layout == "nested":
+                n = d1 + d2 + 1
+                wrap = "(let [a %s]\n    (let [b %s]\n      %%s))" % (a_lst, b_on_a)
+            elif layout == "shadow":
+                n = d1 + 1
+                wrap = "(let [b %s]\n    (let [b (FzCons p b)]\n      %%s))" % a_lst
+            else:
+                n = 0
+                wrap = "(let [^mut b %s]\n    (set! b (FzNil))\n    %%s)" % lst(
+                    [elem() for _ in range(d1)], head="p")
+            want = self.rng.choice([n, n, n + 1, max(n - 1, 0)])
+            if self.rng.random() < 0.5:
+                body = wrap % "(fz-len b)"
+                pred = self.rng.choice(["(= r %d)" % want, "(> r %d)" % (want - 1),
+                                        "(< r %d)" % (want + 1)])
+            else:
+                pre.append("(defn fz-need [xs : #refine{ v : FzLst | (= (fz-len v) %d) }]"
+                           " : int\n  (fz-len xs))" % want)
+                body = wrap % "(fz-need b)"
+                pred = "(>= r 0)"
         elif kind == "nonexh":
             # RF2: `^non-exhaustive` is an unchecked promise the ordinary match
             # checker accepts, so only the reflection gate stands between it and

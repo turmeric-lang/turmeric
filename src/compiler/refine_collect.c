@@ -822,6 +822,17 @@ static int rf_match_pat(Enc *E, const Form *pat, const Form *v, RfEnv *env) {
         const Form *ph = pat->as.list.items[0];
         if (ph->tag != F_SYM || !ph->as.sym) return -1;
         if (!rf_form_is_ctor_app(E, v)) {
+            /* A name the hypotheses equate to a constructor term -- the
+             * caller's `(let [b (Cons 3 (Nil))] ...)` puts `(= b (Cons 3
+             * (Nil)))` on the path -- selects against that term, exactly as
+             * if the caller had written it inline. */
+            const Form *cv = rf_canon(E, v, 0);
+            if (cv != v && rf_form_is_ctor_app(E, cv)) {
+                E->vc->reflect_arms_by_hyp++;
+                return rf_match_pat(E, pat, cv, env);
+            }
+        }
+        if (!rf_form_is_ctor_app(E, v)) {
             /* RF4: not a constructor term -- ask the hypotheses for its tag,
              * select by tag, and bind the arm's variables to the field
              * selectors the caller's own arm hypotheses are written with. */

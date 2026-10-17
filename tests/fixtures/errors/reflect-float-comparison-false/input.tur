@@ -1,0 +1,18 @@
+;; reflected-measures: the comparison-only Float measure of
+;; reflect-float-comparison-measure, at a round whose slowest lap (20.875) is
+;; over the 20.75 bound.  It must not prove; under --strict-refine the kept
+;; check is an error.  (It is unknown rather than refuted with a model; either
+;; keeps the runtime check, which fires.)
+(defdata Laps [] (Lap [secs : float rest : Laps]) (NoLaps))
+
+(defn ^reflect slowest [l : Laps] : float
+  (match l
+    (NoLaps) 0.0
+    (Lap t r) (let [m (slowest r)]
+                (if (> t m) t m))))
+
+(defn all-under [l : #refine{ v : Laps | (< (slowest v) 20.75) }] : float 1.25)
+
+(defn main [] : int
+  (println (all-under (Lap 19.25 (Lap 20.875 (Lap 18.75 (NoLaps))))))
+  0)

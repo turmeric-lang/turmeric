@@ -11,13 +11,20 @@ Each API function states its contract with a recursive measure over the board:
 | `podium` | `(>= (size v) 3)` | Int |
 | `certify` | `(valid? v)` -- every score in 0..10 | Bool |
 | `winner` | `(ranked? v)` -- best first | Bool |
-| `within-cutoff` | `(< (lap-total v) 60.5)` | Float (Real) |
+| `within-cutoff` | `(< (slowest v) 20.75)` -- every lap under the bound | Float (Real), comparisons only |
 | `panel-size` | returns `#refine{ r : int \| (= r 5) }` | in-place return obligation |
 | `runner-up-ranked?` | ranked in, `r` out, over a *variable* board | non-ground (RF4) |
+| `podium` on a `let`-bound board | `(>= (size v) 3)` | the binding's equation selects the arm |
 
 Without `^reflect` every one of these is an opaque symbol to the solver and
 each call site keeps a runtime check (TUR-W0372). With it, every obligation
-in the file proves at compile time.
+in the file proves at compile time. CI checks that claim (`tests/run-flags.sh`,
+`example-reflected-measures`).
+
+A Float measure proves through **comparisons**, not arithmetic. A float `+`
+rounds in double, so `(+ t (lap-total r))` is an opaque term to the solver and
+a summing measure proves only at the empty round. `slowest` selects with `>`,
+which double computes exactly, so it proves at any depth the fuel reaches.
 
 ```sh
 tur run examples/reflected-measures/src/main.tur
@@ -26,8 +33,11 @@ tur check --dump-reflect   examples/reflected-measures/src/main.tur  # totality 
 tur check --dump-refine=json examples/reflected-measures/src/main.tur
 ```
 
-`build.tur` declares `:experiments ["reflected-measures"]`, so no
-`--enable=` flag is needed.
+`build.tur` declares `:experiments ["reflected-measures"]`, so the commands
+above need no `--enable=` flag. `tur build <file>`, `tur compile` and
+project-mode `tur run` do not read it yet
+([report](../../docs/reported/build-file-and-run-project-ignore-manifest-experiments.md));
+pass `--enable=reflected-measures` to those.
 
 ## Things to try
 
@@ -39,3 +49,6 @@ tur check --dump-refine=json examples/reflected-measures/src/main.tur
 - Pass `winner` a nine-entry board: unfolding runs out of fuel (8 unfoldings
   per obligation by default) and the check fails with `TUR-W0385`.
   `TUR_REFLECT_FUEL=16` raises the budget.
+- Write `within-cutoff`'s contract over a reflected sum instead,
+  `(< (lap-total v) 60.5)` with `^reflect` on `lap-total`: the check stays
+  (`TUR-W0372`), because a float `+` is opaque to the solver.

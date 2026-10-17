@@ -1,0 +1,50 @@
+;; reflected-measures: a measure applied to a `let`-BOUND name unfolds exactly
+;; as at the constructor term the name is bound to.  The crossing's path puts
+;; `(= b (Cons 3 (Cons 4 (Nil))))` among the hypotheses, and rf_match_pat
+;; selects the arm against that term (rf_canon) where it used to ask only for a
+;; tag fact and decline.  Before, every call below was TUR-W0372 -- an error
+;; under --strict-refine -- although the same calls with the term written
+;; inline proved.
+;;
+;; Also pinned: a chained multi-binding `let` (`b` built on `a`, two equations
+;; deep), and a `let` with more than one body form.  Call-site path facts used
+;; to come from a lone bare binding with one body form only.
+(defdata Lst [] (Cons [hd : int tl : Lst]) (Nil))
+
+(defn ^reflect len [xs : Lst] : int
+  (match xs
+    (Nil) 0
+    (Cons _ t) (+ 1 (len t))))
+
+(defn head-of [xs : #refine{ v : Lst | (> (len v) 0) }] : int
+  (match xs
+    (Nil) -1
+    (Cons h _) h))
+
+(defn needs-three [xs : #refine{ v : Lst | (= (len v) 3) }] : int
+  (len xs))
+
+;; A non-recursive measure over a non-list ADT selects the same way.
+(defdata Conn [] (Open [fd : int]) (Closed))
+
+(defn ^reflect open? [c : Conn] : bool
+  (match c
+    (Open _) true
+    (Closed) false))
+
+(defn send [c : #refine{ v : Conn | (open? v) }] : int
+  (match c
+    (Open fd) fd
+    (Closed) -1))
+
+(defn main [] : int
+  (let [b (Cons 3 (Cons 4 (Nil)))]
+    (println (head-of b)))
+  (let [a (Cons 1 (Nil))
+        b (Cons 2 (Cons 5 a))]
+    (println (needs-three b)))
+  (let [c (Open 7)]
+    (println "sending")
+    (println (send c)))
+  (println "reflect-let-bound")
+  0)

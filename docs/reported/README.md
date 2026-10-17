@@ -51,18 +51,25 @@ on `main` 3d9e02a2.
 | [cmake-dir-markers-print-link-flag-warnings](cmake-dir-markers-print-link-flag-warnings.md) | low | CMake's `::@(0x...)` directory markers in nng's link interface print five "dropping link flag ... the shell would read as syntax" warnings per nng program today: the shell-safety check runs before the silent `::` skip |
 | [cmake-dep-path-through-missing-cmake-dir](cmake-dep-path-through-missing-cmake-dir.md) | medium | A dependency spice's `:path` cmake-dep is joined onto `<spice>/cmake/` and not normalized, so `add_subdirectory` fails unless that gitignored directory happens to exist. Live shape: `opengl`'s `:path "../cmake-deps/opengl"` |
 
+## Found closing the inline-C JIT's `cstr` ownership gap (filed 2026-10-17)
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [turi-null-cstr-ascribed-int-stays-a-cstr](turi-null-cstr-ascribed-int-stays-a-cstr.md) | medium (silent wrong value) | Under `tur --interpret`, `(:: s int)` on a `cstr` keeps the string tag (`eval_unary_post`, `eval.c:8793` converts only floats), so `(= (:: s int) 0)` is `false` for a null `s` and prints empty where compiled prints `0`. `re/compile-union`'s null check misses on an empty list, which is `re-union-patterns`' one wrong line. Compiled is fine. |
+
 ## Found graduating `repl-jit-inline-c` (filed 2026-10-17)
 
 | Report | Severity | One line |
 | --- | --- | --- |
 | [turi-defer-in-stored-continuation-use-after-free](turi-defer-in-stored-continuation-use-after-free.md) | high (memory safety) | Under `tur --interpret`, a handler case that stores `k`, then a `resume` after the `handle` exits, is a heap-use-after-free when the performing function has a pending `defer`: the `defer` sends the `handle` to the single-shot fiber runtime, which frees its continuation when the case returns (`eval_handle`, `eval.c:3864`). Compiled is fine; so is the interpreter without the `defer`. Surfaced by `defer-cps-abortive-handler` once the inline-C JIT let it run. |
 
-## Found revisiting the dynvar spices plan (filed 2026-10-17)
+## Found revisiting the two dynvar plans (filed 2026-10-17)
 
 | Report | Severity | One line |
 | --- | --- | --- |
 | [dynvar-binding-not-swapped-on-fiber-switch](dynvar-binding-not-swapped-on-fiber-switch.md) | medium-high (silent wrong value) | A `defdynamic` binding is per thread, not per fiber: `tur_fiber_block_resume` swaps the r7rs dynamic environment and the region escape list but not the `TurDynFrame` chains. Two fibers that bind and yield read each other's values, and the thread ends up reading a frame whose binding has exited. Nothing in the tree binds across a yield yet. |
-| [defdynamic-generic-adt-root-emitted-before-its-type](defdynamic-generic-adt-root-emitted-before-its-type.md) | low-medium (cc failure) | `(defdynamic *v* :(Option int) ...)` type-checks, then cc fails on `unknown type name 'tur_adt_Option__int'`: the dynvar root is emitted before the instantiation's struct. A plain `defdata` is refused with `TUR-E0603` instead. |
+| [defdynamic-generic-adt-root-emitted-before-its-type](defdynamic-generic-adt-root-emitted-before-its-type.md) | low-medium (cc failure) | `(defdynamic *v* :(Option int) ...)` type-checks, then cc fails on `unknown type name 'tur_adt_Option__int'`: the dynvar root is emitted before the instantiation's struct. A plain `defdata` is refused with `TUR-E0603` instead -- even a payload-free enum, which keeps `*log-level*` from being typed as one. |
+| [time-capability-now-is-32-bit](time-capability-now-is-32-bit.md) | medium (silent wrong value) | The Time capability's `now` slot is `int (*)(void)`, so `Real-Time` returns epoch milliseconds wrapped to 32 bits (measured `1254165568` beside `now-ms`'s `1792255528626`), and only to the second. The slots take no context, which is why `Mock-Time` is a process-wide singleton. `capability.tur` `load`s `time.tur`, so importing both defines `Time` twice. |
 
 ## Found executing the open reports (filed 2026-10-17)
 
@@ -72,11 +79,25 @@ on `main` 3d9e02a2.
 | ~~[session-projection-branches-a-role-that-cannot-learn-the-choice](../archive/session-projection-branches-a-role-that-cannot-learn-the-choice.md)~~ | medium | **RESOLVED 2026-10-17** (archived), filed and fixed the same day: a non-deciding role whose choice branches differ got a `Branch` even with a third role in the protocol, where nothing carries the choice to it; it is TUR-E0220 now. Found when needle files started being read. Pinned by `errors/session-project-nonprojectable` |
 | ~~[hamt-xxh64-ignores-bytes-past-the-last-stripe](../archive/hamt-xxh64-ignores-bytes-past-the-last-stripe.md)~~ | medium | **RESOLVED 2026-10-17** (archived), filed and fixed the same day: `tur_hamt_hash_xxh64` mixed in nothing after the last whole 32-byte stripe (nor the length) for inputs of 32+ bytes, so paths, cache keys and long HAMT string keys that agreed on their stripes collided. Found when `stable_c_path` started hashing real paths |
 
+## Found reviewing the `reflected-measures` graduation (filed 2026-10-17)
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [refine-abandoned-crossing-silent-under-strict](refine-abandoned-crossing-silent-under-strict.md) | low-medium (diagnostic honesty) | A crossing under a binder that shadows a refined name is skipped outright (`if (cs_skip) continue;`): no obligation, no `TUR-W0372`, so `--strict-refine` passes a program whose check then panics. Deliberate in `crossing-shadowed-binder-false-proof`, but strict mode reads the silence as success; since 2026-10-17 every binder shape takes this path |
+| [refine-top-level-def-not-a-fact](refine-top-level-def-not-a-fact.md) | low (completeness) | `(def n 5)` then `(needs-pos n)` is unknown: a global's value never enters a VC, because it could be `set!`. Constant tables are where compile-time-checked data lives, and a `^reflect` measure over a `def`-bound term stays opaque while the same term inline or `let`-bound proves |
+| ~~[reflected-measures-example-float-contract-no-longer-proves](../archive/reflected-measures-example-float-contract-no-longer-proves.md)~~ | low (programs) / medium (graduation review) | **RESOLVED 2026-10-17** (archived): the contract is stated over the comparison-only `slowest`, and `tests/run-flags.sh` `example-reflected-measures` runs the example under `--strict-refine`. Original row: `tur check --strict-refine examples/reflected-measures/src/main.tur` exits 1: `within-cutoff`'s `(< (lap-total v) 60.5)` is unknown since the float-proofs-assume-exact-reals fix made real-sorted `+` opaque, so a summing Float measure proves only at its base case (a comparison-only one still proves). The README and header comment say every contract proves; nothing runs the example. The guide's reflect section is also stale the other way (crossings, RF4 and RF6.1 have landed) |
+
 ## Found measuring `re/replace-all` on the WP0 box (filed 2026-10-16)
 
 | Report | Severity | One line |
 | --- | --- | --- |
 | ~~[stdlib-load-reads-cwd-copy-first](../archive/stdlib-load-reads-cwd-copy-first.md)~~ | low-medium (silent wrong stdlib) | **RESOLVED 2026-10-17** (archived): a `stdlib/<rest>` load reads the resolved stdlib when the cwd copy is a different file; the same file keeps its written path. Pinned by `run-offtree-load.sh` case 4 |
+
+## Found correcting CLAUDE.md's type spellings (filed 2026-10-17)
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [typed-ptr-pointee-not-checked-at-calls](typed-ptr-pointee-not-checked-at-calls.md) | medium (silent loss of type checking) | A `ptr<Foo>` parameter or return type accepts a `ptr<Bar>`, although `type_eq` compares pointees (`types.c:278-284`); a `ptr<int>` parameter's error prints `expected ptr<void>`, so the pointee seems to be dropped before the call check. CLAUDE.md now steers handles to `defopaque` until it is fixed. |
 
 ## Found writing the CPS/DK internals guide (filed 2026-10-16)
 

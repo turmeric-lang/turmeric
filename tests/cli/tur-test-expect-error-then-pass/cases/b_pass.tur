@@ -1,0 +1,3 @@
+;; Read after a_expect_error.tur.  Its manifest read must not inherit that
+;; test's error (manifest-read-inherits-previous-test-error).
+(defn main [] : int 0)

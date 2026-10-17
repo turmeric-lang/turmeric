@@ -13,7 +13,7 @@
 > draft planned to build, and the draft had design flaws this version fixes
 > (see "Why not the 2026-06-28 draft"). The file name is historical: nothing
 > here is ahead-of-time compiled any more.
-> **Last Updated:** 2026-10-17
+> **Last Updated:** 2026-10-17 (C1's `cstr` arguments are copied)
 > **Track:** post-v1. C0 (a bug fix) and C1 (graduated) have landed.
 > **Type:** REPL / interpreter (`src/turi/`) / JIT (`src/jit_engine.c`) /
 > emitter (REPL-mode globals).
@@ -177,18 +177,22 @@ carve-out and have nothing to do with the JIT.
 
 What graduation accepted, rather than fixed:
 
-- **Four programs crash with the JIT on** that failed cleanly ("inline-C not
-  supported") with it off, and since the graduation nobody has to opt in to
-  reach them:
+- **Four programs crashed with the JIT on** (three since 2026-10-17) that
+  failed cleanly ("inline-C not supported") with it off, and since the
+  graduation nobody has to opt in to reach them:
   - `typeclass-unsafe-passbyptr-struct-arg` and `option-result-c-abi` are
     `:int` handle stand-ins, which CLAUDE.md already forbids. The second
     returns a compiled Option box as `:int`, and `(:: ... (Option int))`
     then has `try_retag_carrier_struct` (`src/turi/eval.c`) read it as an
     interpreter struct.
-  - `re-union-patterns` is the ownership row: compiled code that `free`s a
-    `cstr` argument the interpreter owns. Correctly typed code can write
-    that, so it is the one gap left in the boundary; copying `cstr` arguments
-    into compiled code would close it.
+  - `re-union-patterns` was the ownership row: compiled code that `free`s a
+    `cstr` argument the interpreter owns (`str-free` over a `str-concat`
+    result, from `(load "stdlib/str.tur")`). Correctly typed code can write
+    that, so it was the one gap left in the boundary. **Closed 2026-10-17** by
+    the boundary's third check (below): a string the interpreter made goes
+    over as a copy. The fixture now runs to the end; its one wrong line is an
+    interpreter divergence with nothing to do with the JIT,
+    [turi-null-cstr-ascribed-int-stays-a-cstr](../reported/turi-null-cstr-ascribed-int-stays-a-cstr.md).
   - `defer-cps-abortive-handler` is not the JIT's at all: its `note` is an
     in-subset `cstr -> int` body, and compiling it only lets the program run
     far enough to reach an interpreter use-after-free that reproduces with no
@@ -299,11 +303,11 @@ memory, or SIGSEGV), and 14 more passed only because the interpreter happened
 to lay a value out the way compiled code reads it (cons cells, Result) -- luck,
 not a contract.
 
-Two call-time checks now close what the runtime can see
+Three call-time checks now close what the runtime can see
 (`src/turi/inline_c_jit.c`, "The value boundary"):
 
 1. **Provenance for pointers.** Every non-zero result of a JIT'd call
-   declared `ptr<void>` is recorded. A `ptr<void>` parameter accepts only nil
+   declared `ptr<void>` (or, since 2026-10-17, `cstr`) is recorded. A `ptr<void>` parameter accepts only nil
    or one of those: a handle compiled code made may go back to compiled code,
    and nothing else may. (`make-cell` then `cell-get` round-trips; a packed
    existential is refused, and so is an address a defn returned as `:int`.)
@@ -313,21 +317,34 @@ Two call-time checks now close what the runtime can see
 2. **No interpreter memory in an int-class slot.** A word that addresses the
    interpreter's value arenas (`arena_owns` on `value_scratch`/`value_perm`) or
    a collection it tracks is refused, whatever the parameter's declared type.
+3. **A string argument is the callee's (added 2026-10-17).** A `cstr` value
+   the interpreter made reaches compiled code as a `malloc`'d copy, whatever
+   the parameter's declared type, so compiled code may read, free or keep it,
+   as it may a string a compiled caller hands over. Before, it got the
+   interpreter's own string: freeing it was a bad free that ended the session,
+   and keeping it read garbage once the arena moved on (measured: a string
+   kept in one REPL turn read back wrong on the next). A string compiled code
+   returned (recorded by check 1) goes back as itself, so a buffer compiled
+   code made keeps its identity and its writes. The cost is a leak of
+   strlen+1 bytes per call when compiled code only reads the copy; nothing
+   can tell that from a body that frees it. The copies are made only once
+   every argument has passed, so a refused call allocates none.
 
 Each refusal is an error value naming the argument, and the session carries
-on. Together they turn 22 of the 26 crashes into refusals and give up the 14
-lucky passes.
+on. Checks 1 and 2 turned 22 of the 26 crashes into refusals and gave up the
+14 lucky passes; check 3 turned the ownership row's crash into a run.
 
 **Supported subset (frozen for the beta; the graduated surface).**
 
 | | Supported | Refused, cleanly | Outside the subset -- undefined, not detected |
 | --- | --- | --- | --- |
 | Shape | a `defn` whose whole body is inline-C, fixed arity, written out (not by a macro) | a body calling another Turmeric definition; variadic; macro-written; partial inline-C | -- |
-| Parameters | int-class numbers, `float`, `bool`, `cstr` (borrowed), `ptr<void>` holding nil or a JIT'd handle | struct/ADT/closure/collection types by name; at the call, an interpreter value in a pointer slot or interpreter memory in any int-class slot | an `:int` that smuggles a handle from somewhere else (CLAUDE.md "No lazy `:int` stand-ins" already forbids it) |
+| Parameters | int-class numbers, `float`, `bool`, `cstr` (the callee's own copy, unless compiled code made it), `ptr<void>` holding nil or a JIT'd handle | struct/ADT/closure/collection types by name; at the call, an interpreter value in a pointer slot or interpreter memory in any int-class slot | an `:int` that smuggles a handle from somewhere else (CLAUDE.md "No lazy `:int` stand-ins" already forbids it) |
 | Result | int-class, `float`, `bool`, `cstr`, unit, `ptr<void>` | any other type | -- |
-| Ownership | compiled code reads its arguments | -- | compiled code that `free`s or keeps a `cstr` argument (it belongs to the interpreter) |
+| Ownership | compiled code reads its arguments, and may `free` or keep a `cstr` argument (check 3, since 2026-10-17) | -- | -- |
 
-The four fixture crashes left are all in the last column:
+The four fixture crashes left on 2026-10-04 were all in the last column
+(`re-union-patterns`' ownership crash closed on 2026-10-17, by check 3):
 `typeclass-unsafe-passbyptr-struct-arg` (`__build [lst : int]` walks an
 interpreter cons list it was handed as `:int`), `re-union-patterns`
 (`str-free` frees an interpreter `cstr`), and `closure-drop-affine-chain-autodrop`
@@ -345,6 +362,7 @@ at `59d1dfe5c`). Of the fixtures with user inline-C, 766 have an
 | C1 as landed (measured at `4fb2606bb`, 760 fixtures) | 370 | 390 | 26 |
 | C1 with the value boundary | 357 | 409 | 4 (the column above) |
 | at the graduation (Debug, x86-64 Linux, 842 fixtures; see C1's "Re-measured") | 379 | 463 | 4 (see "What graduation accepted") |
+| with the `cstr` copy, check 3 (2026-10-17, Debug, x86-64 Linux, 843 fixtures) | 380 | 463 | 3 (`re-union-patterns` now runs to the end) |
 
 No fixture that passes without the flag fails with it. **`run-turi.sh` now runs
 the 46 that pass only with the flag** (`TURI_INLINEC_JIT_RUN`) on any build
@@ -374,6 +392,10 @@ registered on `TUR_JIT` builds, in the `test` job's aux part). It covers:
 - the value boundary: a compiled handle round-trips through `ptr<void>`, nil
   passes, a packed existential is refused at a pointer parameter, a vec is
   refused at an `:int` parameter, and a plain number still passes;
+- a string argument is the callee's: compiled code frees a literal and a
+  `str-concat` result (one through an un-annotated parameter) with no bad
+  free, a string kept in one turn reads back right in the next, and a string
+  compiled code made comes back with compiled code's write to it;
 - `--interpret`;
 - no scratch file left behind.
 

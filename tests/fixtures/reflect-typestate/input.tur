@@ -1,0 +1,31 @@
+;; reflected-measures: a NON-recursive measure over a sum type is a typestate
+;; check.  `send` demands a writable connection; the solver decides it at a
+;; constructor-built argument (RF3), and -- the case that matters for real
+;; code -- at a VARIABLE inside the caller's own `match` arm, whose tag fact
+;; selects the measure's arm (RF4 at a crossing).  The Draining arm also
+;; carries the measure's own comparison, so the caller's `if` guard is what
+;; makes the call provable.  Every crossing proves under --strict-refine.
+(defdata Conn [] (Open [fd : int]) (Closed) (Draining [fd : int left : int]))
+
+(defn ^reflect writable? [c : Conn] : bool
+  (match c
+    (Open _) true
+    (Closed) false
+    (Draining _ n) (> n 0)))
+
+(defn send [c : #refine{ v : Conn | (writable? v) }] : int 1)
+
+(defn maybe-send [c : Conn] : int
+  (match c
+    (Open _) (send c)
+    (Closed) 0
+    (Draining _ n) (if (> n 0) (send c) 0)))
+
+(defn main [] : int
+  (println (send (Open 3)))
+  (println (send (Draining 3 2)))
+  (println (maybe-send (Closed)))
+  (println (maybe-send (Draining 4 0)))
+  (println (maybe-send (Open 5)))
+  (println "reflect-typestate")
+  0)

@@ -1,0 +1,15 @@
+;; A crossing's path facts live in ONE flat namespace, so a binding that
+;; mentions the name it rebinds -- `(let [x (+ x 1)] ...)` under an outer `x`
+;; -- would be asserted as `x = (+ x 1)`: false for every x, a contradiction
+;; that "proved" (needs-five x) under --strict-refine for an x that is 2.  The
+;; outer `x = 1` was already dropped for being rebound below
+;; (errors/refine-crossing-shadowed-let); the inner equation is now dropped
+;; too, so nothing is known about `x` and the call is no longer proved: it is
+;; reported as not holding for every input, as the sibling is.
+(defn needs-five [x : #refine{ v : int | (= v 5) }] : int x)
+
+(defn main [] : int
+  (let [x 1]
+    (let [x (+ x 1)]
+      (println (needs-five x))))
+  0)

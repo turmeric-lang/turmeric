@@ -303,8 +303,9 @@ static bool parse_spices(const Form *map, PkgManifest *m) {
         s->is_global = form_bool_val(map_get_kw(val, "global"));
         if (s->is_global && (s->url || s->path)) {
             /* diag_emit, not fprintf: pkg_manifest_read judges the read by
-             * diag_had_error(), so a bare stderr write would leave the
-             * manifest ACCEPTED with a message nobody acted on. */
+             * the errors it emitted (diag_error_serial), so a bare stderr
+             * write would leave the manifest ACCEPTED with a message nobody
+             * acted on. */
             diag_emit(DIAG_ERROR, val->span,
                 "spice \"%s\" declares :global true together with %s -- a "
                 "global dep resolves from the installed-spice registry, so it "
@@ -993,6 +994,15 @@ bool pkg_manifest_read_status(const char *path, PkgManifest *out,
     file.reader_type = reader_type_from_extension(path);
     diag_register_file(&file);
 
+    /* manifest-read-inherits-previous-test-error: whether THIS read failed is
+     * a question about the errors it emitted, not about diag_had_error(),
+     * which a caller's earlier compile may have left set.  `tur test` reads
+     * each file's manifest before cmd_build's diag_reset(), so the file after
+     * a passing `tur-test-expect-error` test found the flag still up, marked
+     * a sound build.tur malformed, and the sticky TUR-E0624 failed every
+     * remaining file of the run. */
+    uint64_t err_serial0 = diag_error_serial();
+
     uint32_t nforms = 0;
     Form **forms = read_all(&arena, &st, &file, &nforms);
 
@@ -1001,7 +1011,7 @@ bool pkg_manifest_read_status(const char *path, PkgManifest *out,
      * two returns used to leave the status ABSENT, and every caller carried
      * on as if outside a project: `tur check` printed the reader's `error:`
      * and exited 0. */
-    if (!forms || diag_had_error() || nforms == 0) {
+    if (!forms || diag_error_serial() != err_serial0 || nforms == 0) {
         symtab_free(&st);
         arena_free(&arena);
         if (status) *status = PKG_MANIFEST_MALFORMED;
@@ -1081,8 +1091,8 @@ bool pkg_manifest_read_status(const char *path, PkgManifest *out,
                 bad_slot = bad_slot ? bad_slot : ":authors";
         } else if (strcmp(kw, "spices") == 0) {
             /* The slot parsers all return bool and none of these used to be
-             * checked, so a broken slot was visible only in the trailing
-             * diag_had_error() sweep -- all-or-nothing, with no record of WHICH
+             * checked, so a broken slot was visible only in the
+             * trailing error check -- all-or-nothing, with no record of WHICH
              * slot broke.  Keep the first failing slot name for the sticky
              * verdict; parsing still continues so the user sees every slot's
              * diagnostic in one pass rather than one per edit-compile cycle. */
@@ -1276,7 +1286,7 @@ bool pkg_manifest_read_status(const char *path, PkgManifest *out,
         }
     }
 
-    bool ok = !diag_had_error();
+    bool ok = diag_error_serial() == err_serial0;
     symtab_free(&st);
     arena_free(&arena);
 

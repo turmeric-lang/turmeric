@@ -2,7 +2,7 @@
 ;; recursive measures the refinement solver can actually evaluate.
 ;;
 ;; Every precondition below is written in terms of a recursive function over
-;; the Board list: `size`, `points`, `valid?`, `ranked?`, `lap-total`.  Without
+;; a list: `size`, `points`, `valid?`, `ranked?`, `slowest`.  Without
 ;; `^reflect` each of them is an uninterpreted symbol to the solver -- it can
 ;; compare `(size b)` to itself, but cannot tell that `(size (Entry 9 ...))`
 ;; is 1 or more -- so every call site falls to TUR-W0372 and keeps a runtime
@@ -18,6 +18,13 @@
 ;;                                      own defn elaborates
 ;;   3. non-ground unfolding (RF4)   -- a match arm's tag/selector facts pick
 ;;                                      the measure's arm for a variable board
+;;   4. a `let`-bound board          -- the binding's equation picks the arm,
+;;                                      as the written term would
+;;
+;; A Float measure proves through comparisons, not arithmetic: a float `+`
+;; rounds in double, so the solver treats it as opaque.  That is why the
+;; timed round's contract is on `slowest` (built from `>`) and `lap-total`,
+;; a sum, is an ordinary function.
 ;;
 ;; Run it (the manifest enables the experiment):
 ;;
@@ -69,8 +76,15 @@
                   (Empty) true
                   (Entry s2 _) (and (>= s s2) (ranked? r)))))
 
-;;; lap-total -- total time of a timed round (a Real-sorted measure).
-(defn ^reflect lap-total [^borrow l : Laps] : float
+;;; slowest -- the slowest lap of a timed round (a Real-sorted measure).
+(defn ^reflect slowest [^borrow l : Laps] : float
+  (match l
+    (NoLaps) 0.0
+    (Lap t r) (let [m (slowest r)]
+                (if (> t m) t m))))
+
+;;; lap-total -- total time of a timed round (not reflected: see the header).
+(defn lap-total [^borrow l : Laps] : float
   (match l
     (NoLaps) 0.0
     (Lap t r) (+ t (lap-total r))))
@@ -103,8 +117,8 @@
                                  (Empty) (+ a c)
                                  (Entry d _) (+ a (+ c d))))))
 
-;;; within-cutoff -- a timed round counts only under the 60.5s cutoff.
-(defn within-cutoff [l : #refine{ v : Laps | (< (lap-total v) 60.5) }] : float
+;;; within-cutoff -- a timed round counts only if every lap beat 20.75s.
+(defn within-cutoff [l : #refine{ v : Laps | (< (slowest v) 20.75) }] : float
   (lap-total l))
 
 ;; ---------------------------------------------------------------------------
@@ -143,7 +157,11 @@
   (println (certify (Entry 9 (Entry 8 (Entry 8 (Entry 7 (Entry 6 (Empty))))))))
   (println "runner-up board ranked:")
   (println (runner-up-ranked? (Entry 9 (Entry 8 (Entry 8 (Entry 7 (Entry 6 (Empty))))))))
-  ;; The timed round: a Float measure, Real arithmetic.
+  ;; The timed round: a Float measure, decided by comparisons.
   (println "timed round:")
   (println (within-cutoff (Lap 19.25 (Lap 20.5 (Lap 18.75 (NoLaps))))))
+  ;; 4. The heat's board is bound first; podium's contract still proves.
+  (let [heat (Entry 7 (Entry 6 (Entry 6 (Empty))))]
+    (println "heat podium:")
+    (println (podium heat)))
   0)

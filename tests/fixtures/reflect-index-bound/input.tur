@@ -1,0 +1,21 @@
+;; reflected-measures: an index bounded by a measure of ANOTHER parameter,
+;; `(< v (len xs))`.  The crossing in `main` proves at a constructor-built
+;; list.  The recursive call inside `nth` proves too: the Cons arm's tag fact
+;; unfolds `len xs` to `1 + len t` (RF4), and the `if` that skipped index 0
+;; supplies `i != 0`, so `0 <= i - 1 < len t`.
+(defdata Lst [] (Cons [hd : int tl : Lst]) (Nil))
+
+(defn ^reflect len [^borrow xs : Lst] : int
+  (match xs
+    (Nil) 0
+    (Cons _ t) (+ 1 (len t))))
+
+(defn nth [^borrow xs : Lst i : #refine{ v : int | (and (>= v 0) (< v (len xs))) }] : int
+  (match xs
+    (Nil) -1
+    (Cons h t) (if (= i 0) h (nth t (- i 1)))))
+
+(defn main [] : int
+  (println (nth (Cons 5 (Cons 6 (Cons 7 (Nil)))) 2))
+  (println "reflect-index-bound")
+  0)

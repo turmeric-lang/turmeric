@@ -1,0 +1,3 @@
+(defpackage tur-test-expect-error-then-pass
+  :name    "tur-test-expect-error-then-pass"
+  :version "0.1.0")
