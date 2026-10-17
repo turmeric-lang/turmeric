@@ -256,7 +256,7 @@ what a block is:
 | `(MdTableCell align)` | a table cell; `align` is `(MdAlignNone)`, `(MdAlignLeft)`, `(MdAlignCenter)` or `(MdAlignRight)` |
 | `(MdMathBlock)` | a `$$` display formula, with [math](#math) on |
 
-Three more accessors read a block's details:
+Four more accessors read a block's details:
 
 - `markdown/block-text` returns a leaf block's text as `(some s)`, a fresh
   `String`, or `(none)` for a container block. That is a paragraph's or
@@ -265,6 +265,8 @@ Three more accessors read a block's details:
   section has the parsed form.
 - `markdown/code-info` returns a fenced code block's info string, such as
   `"python"`.
+- `markdown/list-marker` returns a list's marker as a `Char`: the bullet (`-`,
+  `+` or `*`) or the delimiter after an ordered list's numbers (`.` or `)`).
 - `markdown/block-lines` returns the source lines a block spans, as
   `(pair first last)`.
 

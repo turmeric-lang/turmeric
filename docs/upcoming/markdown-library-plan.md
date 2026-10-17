@@ -954,13 +954,16 @@ library half, then M5b in turmeric-spices once a `tur` with M5a is on `main`.
     -- which three fixtures here did. Nothing outside does.
   - Off in `markdown/default-opts`: the guides use `$` in shell examples, so
     the docs site leaves it off.
+- **`markdown/list-marker`**: a list's bullet or delimiter, as a `Char`. The
+  notebook's API hands it out as a list's info, and nothing public had it.
 - **`markdown/render-block-html`**: one block and everything in it, as the
   whole document's HTML has it. A heading keeps its document-wide id, and the
   root's children rendered in turn are the document. The notebook renders
   its prose this way, a block at a time between its cells.
 - **Tests.** Fixture `markdown-math` covers the rules, the API and
   `render-block-html`, compiled and under `--interpret`, and carries
-  `requires.leak-check`. The spec examples run with math off, as before.
+  `requires.leak-check`; `markdown-blocks` prints each list's marker. The
+  spec examples run with math off, as before.
 
 ## 7. Compiler friction the spikes found
 

@@ -1,7 +1,7 @@
 ;; markdown-library-plan M1: the CommonMark block parser and the HTML renderer.
 ;; Each document is rendered, then its tree is walked with the public API:
-;; every block's kind, source lines and text.  Inline syntax has its own
-;; fixture, markdown-inlines.
+;; every block's kind, source lines and text, and a list's marker.  Inline
+;; syntax has its own fixture, markdown-inlines.
 (load "stdlib/markdown.tur")
 
 ;; ---- Printing ----------------------------------------------------------------
@@ -55,6 +55,11 @@
       (match (markdown/code-info d id)
         (Some info)
         (do (builder/push-cstr! out " info=") (push-visible! out info) (string/release info))
+        (None)
+        nil)
+      (match (markdown/list-marker d id)
+        (Some c)
+        (do (builder/push-cstr! out " marker=") (builder/push-char! out c))
         (None)
         nil)
       (match (markdown/block-text d id)

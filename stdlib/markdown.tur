@@ -308,6 +308,28 @@
       (none)
       (let [s (vec-get (.strs d) t)]
         (some (string/substring s 0 (string/len s)))))))
+;;; markdown/list-marker -- a list's marker: a bullet list's bullet, or the delimiter after an ordered list's numbers.
+;;;
+;;; Parameters:
+;;;   d  -- the document
+;;;   id -- a block of d
+;;;
+;;; Returns:
+;;;   (some c): #\-, #\+ or #\* for a bullet list, #\. or #\) for an ordered
+;;;   one; (none) for any other block.
+;;;
+;;; Example:
+;;;   (markdown/list-marker d id)  ; => (some #\)) for "1) one\n2) two"
+;;;
+;;; Since: markdown-library-plan M5
+(defn markdown/list-marker [d : MdDoc id : MdBlockId] : (Option Char)
+  (let [n (md/-node-of d id)
+        l (.list n)]
+    (match (.kind n)
+      (MdKList)
+      (some (int->char (if (.ordered l) (.delim l) (.bullet l))))
+      _
+      (none))))
 ;;; markdown/block-lines -- the source lines a block spans.
 ;;;
 ;;; Parameters:

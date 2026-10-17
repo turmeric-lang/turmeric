@@ -53,26 +53,26 @@ document [1-10]
 
 ----
 document [1-12]
-  bullet list, tight 1 [1-2]
+  bullet list, tight 1 [1-2] marker=-
     item [1-1]
       paragraph [1-1] text=a
     item [2-2]
       paragraph [2-2] text=b
-  ordered list, loose 3 [4-7]
+  ordered list, loose 3 [4-7] marker=)
     item [4-4]
       paragraph [4-4] text=three
     item [5-7]
       paragraph [5-5] text=four
       paragraph [7-7] text=still four
-  bullet list, tight 1 [9-11]
+  bullet list, tight 1 [9-11] marker=*
     item [9-11]
       paragraph [9-9] text=outer
-      bullet list, tight 1 [10-11]
+      bullet list, tight 1 [10-11] marker=+
         item [10-10]
           paragraph [10-10] text=inner
         item [11-11]
           paragraph [11-11] text=inner two
-  bullet list, tight 1 [12-12]
+  bullet list, tight 1 [12-12] marker=-
     item [12-12]
       indented code [12-12] text=code in item\n
 ==== code ====
