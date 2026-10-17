@@ -318,9 +318,10 @@ TRAP_ONLY_PROBES = frozenset({
 KNOWN_PROBES = [
     # generator-thunk-call-site-returns-void-ptr-not-carrier: FIXED
     # 2026-10-03, pinned by tests/fixtures/generator-thunk-call-site-carrier.
-    # Kept as a regression probe.  Reduced from the nightly's case 376 at seed
-    # 20261003: a generator yield of an immediately-applied closure inside a
-    # generic body (the generic thunk around it turned out incidental).
+    # Kept as a regression probe.  Reduced from the nightly's case 373 at seed
+    # 20261003 (filed as 376, the progress count): a generator yield of an
+    # immediately-applied closure inside a generic body (the generic thunk
+    # around it turned out incidental).
     #
     # 2-tuple on purpose: the symptom is a TRAP, which run_case classifies
     # `fnptr_trap` and known_probes already counts as firing.  It is NOT a
@@ -1796,20 +1797,26 @@ def known_probes(tur, workdir):
 
 
 
-def _progress(i, n, kind, extra=""):
+def _progress(case, done, total, kind, extra=""):
     """Report a case the moment it finishes.  Every non-ok verdict prints its
-    own line; ok cases print a heartbeat every 25 so a long session is
-    visibly alive under a pipe or ctest -V.  Flushed, because stdout is
-    block-buffered under a pipe and nothing would show until exit."""
+    own line, naming the case by its index: that is what --first and a corpus
+    row replay, and `done` drifts from it once --jobs runs cases out of order.
+    ok cases print a heartbeat every 25 so a long session is visibly alive
+    under a pipe or ctest -V.  Flushed, because stdout is block-buffered under
+    a pipe and nothing would show until exit."""
     if kind != "ok":
-        print("  case %6d/%d  %s%s" % (i, n, kind, extra), flush=True)
-    elif (i + 1) % 25 == 0 or i + 1 == n:
-        print("  %6d/%d done" % (i + 1, n), flush=True)
+        print("  case %6d  %s%s" % (case, kind, extra), flush=True)
+    elif (done + 1) % 25 == 0 or done + 1 == total:
+        print("  %6d/%d done" % (done + 1, total), flush=True)
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--n", type=int, default=200, help="cases to generate")
     ap.add_argument("--seed", type=int, default=1)
+    ap.add_argument("--first", type=int, default=0,
+                    help="run cases --first..--n-1 only: a case's program "
+                         "depends on (seed, index) alone, so this replays "
+                         "one finding without the cases before it")
     ap.add_argument("--jobs", type=int, default=max(1, (os.cpu_count() or 2) - 1))
     ap.add_argument("--legs", type=int, default=3, help="max legs per program")
     ap.add_argument("--tur", default=os.path.join(REPO, "build", "tur"))
@@ -1833,6 +1840,8 @@ def main():
                     help="print the seam x payload verdict table and exit "
                          "(deterministic; the one-command view of the axis)")
     args = ap.parse_args()
+    if not 0 <= args.first < args.n:
+        ap.error("--first must be at least 0 and below --n")
     global FORCE_CROSSING
     FORCE_CROSSING = args.crossing
     if args.seam:
@@ -1868,15 +1877,18 @@ def main():
                             args.legs, args.emit_known,
                             args.seam_frac, args.seam)
 
-        print("type_fuzz_src: %d cases, seed %d, max %d legs, %d job(s)%s%s"
-              % (args.n, args.seed, args.legs, args.jobs,
+        total = args.n - args.first
+        cases = ("%d cases" % total if not args.first
+                 else "cases %d..%d" % (args.first, args.n - 1))
+        print("type_fuzz_src: %s, seed %d, max %d legs, %d job(s)%s%s"
+              % (cases, args.seed, args.legs, args.jobs,
                  ", emit-known" if args.emit_known else "",
                  (", seam=%s only" % args.seam) if args.seam
                  else (", seam-frac %.2f" % args.seam_frac
                        if args.seam_frac else ", seams off")))
         print("type_fuzz_src: " + fuzz_arm.armed_env(dict(os.environ))[1])
         with ThreadPoolExecutor(max_workers=args.jobs) as pool:
-            futs = {pool.submit(job, i): i for i in range(args.n)}
+            futs = {pool.submit(job, i): i for i in range(args.first, args.n)}
             done = 0
             for fut in as_completed(futs):
                 i = futs[fut]
@@ -1888,7 +1900,7 @@ def main():
                 if detail and detail[0]:
                     extra = "  tags=" + " | ".join(
                         ",".join(sorted(leg.tags)) for _j, _k, leg, *_ in detail[0])
-                _progress(done, args.n, kind, extra)
+                _progress(i, done, total, kind, extra)
                 done += 1
         findings.sort(key=lambda t: t[1])
 
@@ -1918,7 +1930,7 @@ def main():
                         f.write(";;   %s\n" % ln)
                     f.write(s2)
 
-        print("\ntype_fuzz_src: %d cases" % args.n)
+        print("\ntype_fuzz_src: %s" % cases)
         for k in sorted(counts):
             print("  %-28s : %d" % (k, counts[k]))
 

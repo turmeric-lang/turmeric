@@ -198,8 +198,9 @@ disagreement. They find the combinations nobody wrote a fixture for.
 | `tests/saffron-fuzz-src.py` | the Saffron dialect |
 
 All take `--n` (cases), `--seed`, `--jobs`, `--tur` and `--save-dir` (keep
-the generated programs). A small run is a reasonable smoke test after a change
-in the relevant area:
+the generated programs). A case's program depends only on the seed and its
+index, so `--first K --n K+1` reruns case K alone. A small run is a reasonable
+smoke test after a change in the relevant area:
 
 ```sh
 python3 tests/type-fuzz-src.py --n 50 --seed 1 --tur build/tur --save-dir /tmp/fuzz
