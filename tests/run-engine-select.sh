@@ -148,6 +148,27 @@ TUR_EOF
 out=$(cd "$tmp/mi" && "$TUR_ABS" run src/args.tur -- a b c 2>&1)
 chk "interp-arg-passthrough" "3" "$out"
 
+# 12. tur-jit-skips-spice-include-discovery: `tur jit <file>` walks up to the
+#     enclosing build.tur and puts the spice's src/ on the search path, as
+#     `tur run --engine jit` and every other per-file command do.  A file
+#     outside src/ importing a module under it is the shape that broke.
+if [ "$have_jit" = "1" ]; then
+    mk_project "$tmp/sj" "" ""
+    mkdir -p "$tmp/sj/src/demo" "$tmp/sj/other"
+    cat > "$tmp/sj/src/demo/util.tur" <<'TUR_EOF'
+(defmodule demo/util
+  (export answer)
+  (defn answer [] : int 42))
+TUR_EOF
+    cat > "$tmp/sj/other/main.tur" <<'TUR_EOF'
+(defmodule main
+  (import demo/util :refer [answer])
+  (defn main [] : int (println (answer)) 0))
+TUR_EOF
+    out=$(cd "$tmp/sj" && "$TUR_ABS" jit other/main.tur 2>&1)
+    chk "jit-discovers-spice-includes" "42" "$out"
+fi
+
 echo "engine-select summary: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ] || exit 1
 exit 0

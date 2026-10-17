@@ -2,7 +2,8 @@
  *
  * One call, start to finish:
  *
- *   1. The gate: experiment `repl-jit-inline-c` on, and a host hook present.
+ *   1. The gate: g_opt_repl_jit_inline_c (on by default; TUR_REPL_JIT_INLINE_C=0
+ *      turns it off), and a host hook present.
  *   2. The cache: one entry per FnDef, holding either the compiled shim or
  *      the reason it could not be had.  A redefinition elaborates a NEW FnDef,
  *      so it misses the cache and compiles afresh; the old entry, and the old
@@ -40,7 +41,6 @@
 #include "expr.h"
 #include "forms.h"
 #include "types.h"
-#include "../runtime/experiments.h"
 #include "../runtime/globals.h"
 
 #include <stdarg.h>
@@ -213,7 +213,7 @@ static void compile_entry(TuriEnv *env, FnDef *fn, uint32_t param_offset,
 
     if (fn->is_variadic) {
         entry_refuse(e, "eval: inline-C defn '%s' is variadic; the REPL JIT "
-                        "(repl-jit-inline-c) cannot call it yet", name);
+                        "cannot call it yet", name);
         return;
     }
     for (uint32_t i = param_offset; i < fn->n_params; i++) {
@@ -225,8 +225,8 @@ static void compile_entry(TuriEnv *env, FnDef *fn, uint32_t param_offset,
             slot_type_name(&t, fn->params[i] ? fn->params[i]->type
                                              : fn->param_types[i]);
             entry_refuse(e, "eval: inline-C defn '%s' takes a parameter of "
-                            "type %s; the REPL JIT (repl-jit-inline-c) passes "
-                            "only int-class, float, cstr and bool values",
+                            "type %s; the REPL JIT passes only int-class, "
+                            "float, cstr and bool values",
                          name, t.data);
             buf_free(&t);
             return;
@@ -238,8 +238,8 @@ static void compile_entry(TuriEnv *env, FnDef *fn, uint32_t param_offset,
         buf_init(&t);
         slot_type_name(&t, rt);
         entry_refuse(e, "eval: inline-C defn '%s' returns %s; the REPL JIT "
-                        "(repl-jit-inline-c) returns only int-class, float, "
-                        "cstr, bool and unit results", name, t.data);
+                        "returns only int-class, float, cstr, bool and unit "
+                        "results", name, t.data);
         buf_free(&t);
         return;
     }
@@ -248,9 +248,9 @@ static void compile_entry(TuriEnv *env, FnDef *fn, uint32_t param_offset,
     buf_init(&defn);
     if (!defn_source_slice(fn, &defn) && !defn_source_form(env, name, &defn)) {
         buf_free(&defn);
-        entry_refuse(e, "eval: inline-C defn '%s': the REPL JIT "
-                        "(repl-jit-inline-c) could not find its source form "
-                        "(a defn written by a macro is not supported)", name);
+        entry_refuse(e, "eval: inline-C defn '%s': the REPL JIT could not "
+                        "find its source form (a defn written by a macro is "
+                        "not supported)", name);
         return;
     }
     Buf prog;
@@ -267,10 +267,9 @@ static void compile_entry(TuriEnv *env, FnDef *fn, uint32_t param_offset,
     if (rc != 0 || !image || !manifest) {
         free(manifest);
         entry_refuse(e, "eval: inline-C defn '%s' could not be compiled by the "
-                        "REPL JIT (repl-jit-inline-c); see the diagnostics "
-                        "above.  Only the defn itself is compiled, so a body "
-                        "that calls another Turmeric definition is not "
-                        "supported", name);
+                        "REPL JIT; see the diagnostics above.  Only the defn "
+                        "itself is compiled, so a body that calls another "
+                        "Turmeric definition is not supported", name);
         return;
     }
     char *cname = manifest_cname(manifest, name);
@@ -293,8 +292,7 @@ static void compile_entry(TuriEnv *env, FnDef *fn, uint32_t param_offset,
     /* The image stays resident either way (see the header comment). */
     if (!shim) {
         entry_refuse(e, "eval: inline-C defn '%s' compiled, but the REPL JIT "
-                        "(repl-jit-inline-c) found no call shim for it",
-                     name);
+                        "found no call shim for it", name);
         return;
     }
     e->shim = shim;
@@ -379,12 +377,6 @@ bool turi_inline_c_jit_try(TuriEnv *env, FnDef *fn, uint32_t param_offset,
         !fn->body || fn->body->kind != EX_INLINE_C)
         return false;
 
-    static bool warned = false;
-    if (!warned) {
-        experiment_warn_if_used("repl-jit-inline-c");
-        warned = true;
-    }
-
     JitEntry *e = cache_find(fn);
     if (!e) {
         e = cache_add(fn);
@@ -436,19 +428,19 @@ bool turi_inline_c_jit_try(TuriEnv *env, FnDef *fn, uint32_t param_offset,
                         result = turi_errorf(
                             "eval: inline-C defn '%s' argument %u is not a "
                             "handle compiled code returned; the REPL JIT "
-                            "(repl-jit-inline-c) passes a pointer parameter "
-                            "only a value an earlier JIT'd call returned, or "
-                            "nil", name, (unsigned)k);
+                            "passes a pointer parameter only a value an "
+                            "earlier JIT'd call returned, or nil",
+                            name, (unsigned)k);
                         ok = false;
                         goto next_arg;
                     }
                     if (interp_heap_word(env, v->as_int)) {
                         result = turi_errorf(
                             "eval: inline-C defn '%s' argument %u is a value "
-                            "the interpreter allocated; the REPL JIT "
-                            "(repl-jit-inline-c) cannot hand it to compiled "
-                            "code, which would read, free or keep it as if "
-                            "compiled code had made it", name, (unsigned)k);
+                            "the interpreter allocated; the REPL JIT cannot "
+                            "hand it to compiled code, which would read, free "
+                            "or keep it as if compiled code had made it",
+                            name, (unsigned)k);
                         ok = false;
                         goto next_arg;
                     }

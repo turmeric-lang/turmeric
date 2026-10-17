@@ -516,9 +516,12 @@ the current role:
 - A message `(-> From To T)` projects to `Send T rest` for `From`, and
   `Recv T rest` for `To`. For any other role R, it is transparent (role R
   keeps its own remaining protocol).
-- Choice branches that a role does not participate in must be _uniform_
-  across branches (mergeability condition). If they are not, the compiler
-  emits `TUR-E0220`.
+- A choice projects to `Choose` for its decider. A role that does not take
+  part in it must project the branches identically (_uniform_, the
+  mergeability condition), and gets that projection. A role whose branches
+  differ gets `Branch` only in a two-role protocol, where the choice travels
+  on the one channel between it and the decider; with a third role nothing
+  carries the choice to it, and the compiler emits `TUR-E0220`.
 - A timed receive `(timeout (-> From To T) [ok ...] [expired ...])` projects
   to `Recv T (Timeout ok expired)` for `To`. Every other role must project
   the two branches identically (`TUR-E0220` otherwise); `From` gets

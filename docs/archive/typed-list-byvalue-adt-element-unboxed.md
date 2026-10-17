@@ -103,5 +103,5 @@ segfaults, and `(list-map floats (fn [f : float] : int 7))` answers
 `4619679907765970534` (the bits of the 7.1 left in xmm0). There the inner
 `list-map-onto__` clone binds `B := float`, its caller's `A`, and calls `f`
 as `double (*)(void *, double)`. That is
-[nested-generic-tyvar-name-capture](../reported/nested-generic-tyvar-name-capture.md),
+[nested-generic-tyvar-name-capture](nested-generic-tyvar-name-capture.md) (since resolved),
 and possibly also behind the unminimized `list-foldl` warning noted above.

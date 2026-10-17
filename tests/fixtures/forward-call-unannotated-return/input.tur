@@ -1,0 +1,18 @@
+;; forward-call-to-unannotated-return-typed-int: a call to a defn defined
+;; LATER whose return type is inferred was typed with the pass-1 forward
+;; decl's `int` placeholder, so `(half 7.1)` printed 3 and `(greet)` printed
+;; the string's address.  Such a defn now counts as "lossy" for the
+;; forward-generation order, so its callers are elaborated after its body.
+(defn main [] : int
+  (println (half 7.1))
+  (println (greet))
+  (println (ev 10))
+  0)
+
+(defn half [x : float] (/ x 2.0))
+(defn greet [] "hi")
+
+;; An unannotated mutually recursive pair is a cycle: it is broken at its
+;; first member, as it was before.
+(defn ev [n : int] (if (= n 0) 1 (od (- n 1))))
+(defn od [n : int] (if (= n 0) 0 (ev (- n 1))))

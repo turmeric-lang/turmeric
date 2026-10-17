@@ -1,0 +1,17 @@
+;; evicted-handle-reaches-deleted-fiber-emitter: `loud` is evicted from the CPS
+;; backend by its `(Vec int)` parameter (SIG-REJECT), and its `handle` CAN be
+;; reached, so the direct emitter has no way to install it.  The error is
+;; located at the `perform` and names SIG-REJECT; it used to be cc errors about
+;; the deleted fiber runtime when no perform sat under the handle, and the
+;; same located error otherwise.
+;;
+;; requires.compiled: the interpreter handles it (prints 42).
+(defeffect Ask [] : int)
+
+(defn loud [xs : (Vec int)] : int
+  (handle (+ 1 (perform (Ask)))
+    (Ask [] k) (resume k 41)))
+
+(defn main [] : int
+  (println (loud (vec-new)))
+  0)

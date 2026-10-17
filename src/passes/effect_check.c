@@ -137,10 +137,10 @@ static const Symbol *s_current_analysis_module = NULL;
 static EffectRow *filter_cross_module_private(Arena *a, EffectRow *row) {
     if (!row || row->kind != ERK_CONCRETE || !s_current_analysis_module)
         return row;
-    uint8_t n = row->as.concrete.n_effects;
-    Effect **filtered = arena_alloc(a, n * sizeof(Effect *));
-    uint8_t k = 0;
-    for (uint8_t i = 0; i < n; i++) {
+    uint32_t n = row->as.concrete.n_effects;
+    Effect **filtered = arena_alloc(a, (n ? n : 1) * sizeof(Effect *));
+    uint32_t k = 0;
+    for (uint32_t i = 0; i < n; i++) {
         Effect *eff = row->as.concrete.effects[i];
         if (eff && eff->is_private
             && eff->defining_module_name
@@ -245,6 +245,30 @@ typedef struct {
     Arena *a; EffectRow *row; const FnIndex *idx; EffectEnv *env; EffectRowSubst *subst;
 } CollectUd;
 static bool collect_visit(const Expr *c, void *ud);
+
+/* e0254-emitted-once-per-fixpoint-sweep: collect_effects_in_expr walks every
+ * body once per sweep of the inference fixpoint, and again from the later
+ * checks, so the occurs-check error it raises at a call printed once per walk
+ * (3 copies for errors/effect-row-occurs).  The call sites reported this pass;
+ * a site prints once.  A non-empty set also fails the pass: the error used to
+ * leave effect_check_pass's result at 0, so `tur --interpret` printed it and
+ * then ran the program. */
+static const Expr **s_e0254_sites;
+static uint32_t s_e0254_n, s_e0254_cap;
+
+static bool e0254_first_report(const Expr *site) {
+    for (uint32_t i = 0; i < s_e0254_n; i++)
+        if (s_e0254_sites[i] == site) return false;
+    if (s_e0254_n == s_e0254_cap) {
+        uint32_t nc = s_e0254_cap ? s_e0254_cap * 2 : 8;
+        const Expr **ns = realloc(s_e0254_sites, nc * sizeof *ns);
+        if (!ns) return true;
+        s_e0254_sites = ns;
+        s_e0254_cap = nc;
+    }
+    s_e0254_sites[s_e0254_n++] = site;
+    return true;
+}
 
 static EffectRow *collect_effects_in_expr(Arena *a, Expr *e,
                                           EffectRow *row,
@@ -418,7 +442,8 @@ static EffectRow *collect_effects_in_expr(Arena *a, Expr *e,
                     }
                 }
                 if (actual_row) {
-                    if (!effect_row_unify(param_row, actual_row, subst, a)) {
+                    if (!effect_row_unify(param_row, actual_row, subst, a) &&
+                        e0254_first_report(e)) {
                         diag_emit_with_code(DIAG_ERROR, e->span,
                             TUR_E0254_INFINITE_EFFECT_ROW,
                             "occurs-check failure: unifying effect row variable '%s' with "
@@ -533,7 +558,7 @@ static EffectRow *collect_effects_in_expr(Arena *a, Expr *e,
                 callee->binding->type.kind == TY_FN) {
                 EffectRow *cdecl = callee->binding->type.as.fn.effect_row;
                 if (cdecl && cdecl->kind == ERK_CONCRETE) {
-                    for (uint8_t ci = 0; ci < cdecl->as.concrete.n_effects; ci++) {
+                    for (uint32_t ci = 0; ci < cdecl->as.concrete.n_effects; ci++) {
                         Effect *ceff = cdecl->as.concrete.effects[ci];
                         if (ceff && ceff->is_capability) {
                             row = effect_row_merge(a, row, effect_row_single(a, ceff));
@@ -900,7 +925,7 @@ int effect_row_check_declared(FnDef *fd, Arena *a) {
     Span fn_span = fd->binding ? fd->binding->span : (Span){0, 0, 0, 0, 0, 0};
 
     if (inferred->kind == ERK_CONCRETE) {
-        for (uint8_t i = 0; i < inferred->as.concrete.n_effects; i++) {
+        for (uint32_t i = 0; i < inferred->as.concrete.n_effects; i++) {
             Effect *eff = inferred->as.concrete.effects[i];
             if (!effect_row_contains(declared, eff)) {
                 /* Build a human-readable declared-row string. */
@@ -961,7 +986,7 @@ static int effect_row_check_over_annotated(FnDef *fd, Arena *a) {
     if (!inferred) inferred = effect_row_empty(a);
 
     Span fn_span = fd->binding ? fd->binding->span : (Span){0, 0, 0, 0, 0, 0};
-    for (uint8_t i = 0; i < declared->as.concrete.n_effects; i++) {
+    for (uint32_t i = 0; i < declared->as.concrete.n_effects; i++) {
         Effect *eff = declared->as.concrete.effects[i];
         /* stdlib-effect-rows: a capability tag (e.g. #{FS}) marks a function's
          * authority, not an effect it `perform`s, so it is justified by its
@@ -973,7 +998,7 @@ static int effect_row_check_over_annotated(FnDef *fd, Arena *a) {
              * is not over-annotated -- Write's presence covers IO. */
             bool covered_by_subeffect = false;
             if (inferred->kind == ERK_CONCRETE) {
-                for (uint8_t j = 0; j < inferred->as.concrete.n_effects; j++) {
+                for (uint32_t j = 0; j < inferred->as.concrete.n_effects; j++) {
                     if (effect_is_subeffect(inferred->as.concrete.effects[j], eff)) {
                         covered_by_subeffect = true;
                         break;
@@ -1466,11 +1491,12 @@ static void check_unreachable_handlers_in_expr(
          * that merely prints look reachable. */
         EffectRow *body_row = effect_row_without_capabilities(a,
             collect_effects_in_expr(a, h->body, effect_row_empty(a), idx, env, subst));
+        bool none_reachable = h->n_cases > 0;
         for (uint8_t i = 0; i < h->n_cases; i++) {
             const Symbol *eff_name = h->cases[i].effect_name;
-            if (!eff_name) continue;
-            Effect *eff = effect_env_lookup(env, eff_name);
-            if (!eff) continue;
+            Effect *eff = eff_name ? effect_env_lookup(env, eff_name) : NULL;
+            if (!eff) { none_reachable = false; continue; }
+            if (effect_row_contains(body_row, eff)) none_reachable = false;
             if (!effect_row_contains(body_row, eff)) {
                 Span span = h->cases[i].body
                             ? h->cases[i].body->span
@@ -1482,6 +1508,7 @@ static void check_unreachable_handlers_in_expr(
                     eff_name->name, eff_name->name);
             }
         }
+        h->no_clause_reachable = none_reachable;
         check_unreachable_handlers_in_expr(a, h->body, idx, env);
         for (uint8_t i = 0; i < h->n_cases; i++)
             check_unreachable_handlers_in_expr(a, h->cases[i].body, idx, env);
@@ -1725,6 +1752,7 @@ int effect_check_pass(Arena *a, Expr *program, EffectEnv *env) {
 
     uint32_t n_items = 0;
     Expr **items = effect_check_items(program, &n_items);
+    s_e0254_n = 0;
 
     /* --- Step -1: Populate the effect env from EX_DEFECT nodes.
      * PASS_EFFECT_LOWER creates a fresh empty env; we scan the elaborated AST
@@ -1996,6 +2024,10 @@ int effect_check_pass(Arena *a, Expr *program, EffectEnv *env) {
         check_unreachable_handlers_in_expr(a, item->as.fn_def_.fn->body, &idx, env);
     }
 
+    if (s_e0254_n > 0) rc = 1;
+    free(s_e0254_sites);
+    s_e0254_sites = NULL;
+    s_e0254_n = s_e0254_cap = 0;
     free(idx.slots);
     free(items);
     return rc;

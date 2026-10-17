@@ -1809,6 +1809,14 @@ const char *region_free_fn(void) {
     return regions_enabled() ? "tur_region_free" : "free";
 }
 
+/* The allocation-side twin: what a `:heap` node allocation site calls.
+ * dead-base-ctor-ignores-regions-off: one site (the dead generic-base
+ * constructor trap) spelled `tur_region_alloc_or_malloc` unconditionally,
+ * which is undeclared under TUR_REGIONS=0; every site asks here now. */
+const char *region_alloc_fn(void) {
+    return regions_enabled() ? "tur_region_alloc_or_malloc" : "malloc";
+}
+
 static bool sr3_option_niche(void) {
     /* The niche is layered ON TOP of SR2: narrowing `(Option P)` to its payload
      * pointer only means anything if that Option is a by-value parametric sum in
@@ -2681,7 +2689,7 @@ static void emit_registered_adt_app_rec(Buf *out, uint32_t idx) {
              * Gated, so a default build emits the identical malloc. */
             buf_printf(out, "    %s *__r = (%s *)%s(sizeof(%s));\n",
                        adt_inst_name, adt_inst_name,
-                       regions_enabled() ? "tur_region_alloc_or_malloc" : "malloc",
+                       region_alloc_fn(),
                        adt_inst_name);
             if (!flat) buf_printf(out, "    __r->tag = %u;\n", ctor->tag);
             for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {

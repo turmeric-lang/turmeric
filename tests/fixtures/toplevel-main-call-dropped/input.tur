@@ -1,0 +1,10 @@
+;; toplevel-statements-dropped-with-user-main: top-level statements run before
+;; a user `main` now, so a script-style trailing `(main)` would run it twice
+;; (the interpreter already did; compiled, it called C's `main` with no
+;; arguments and failed in cc).  It is dropped in both engines with TUR-W0625,
+;; and `main` runs once.
+(defn main [] : int
+  (println "main ran")
+  0)
+
+(main)

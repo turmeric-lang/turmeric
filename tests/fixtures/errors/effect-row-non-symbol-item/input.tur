@@ -1,0 +1,6 @@
+;; effect-row-non-symbol-items-dropped: the row parsers kept only symbols and
+;; dropped anything else without a word, so `#fx{:Ask}` was the EMPTY row.
+;; A non-symbol item is TUR-E0026 at the item now.
+(defeffect Ask [] : int)
+(defn f [] #fx{:Ask} : int 0)
+(defn main [] : int (f))

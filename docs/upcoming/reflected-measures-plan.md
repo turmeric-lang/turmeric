@@ -125,7 +125,7 @@ proves from the precondition's unfolding plus `t = (.tl xs)`) proves, its
 sibling `errors/reflect-nonground-no-tag` stays unknown. The fixture
 returns a `bool` because two pre-existing bugs surfaced on the way: a
 refined **ADT** result type miscompiles outright
-(`docs/reported/refined-adt-return-type-miscompiles.md`, filed, unrelated
+([refined-adt-return-type-miscompiles](../archive/refined-adt-return-type-miscompiles.md), filed then, since archived; unrelated
 to reflection), and a `match` arm's binders were declared at the result
 refinement's sort instead of their field's, which in a `bool`-returning
 body dropped every `(= t (.tl xs))` as a Bool/Int mismatch -- fixed in

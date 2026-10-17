@@ -2477,6 +2477,7 @@ DynVarEntry *dynvar_lookup(const Elab *e, const Symbol *name);
  * (elab_toplevel.c).  Returns the form's length when there is no name. */
 uint32_t elab_defn_name_index(const Elab *ep, const Form *f);
 void warn_legacy_fx_row(Form *f);
+EffectRow *elab_fx_row_from_form(Elab *e, Form *row);
 
 /* elab_sessions.c */
 Expr *elab_session_make(Elab *e, const Form *call);

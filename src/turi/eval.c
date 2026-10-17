@@ -7044,8 +7044,9 @@ static bool try_exec_simple_inline_c(TuriEnv *env,
      *   for (int i = 0; i < 2; i++) if (xs[i] % 2 != 0) return 0;
      *   return 1;
      * was claimed as `return 0` -- false for every input, rc=0, no warning.
-     * Declining gives the clean "inline-C not supported" error instead (and,
-     * with --enable=repl-jit-inline-c, the compiled answer). */
+     * Declining gives the compiled answer instead on a JIT build
+     * (repl-jit-inline-c), and the clean "inline-C not supported" error
+     * without one. */
     bool sr_has_flow = ic_body_has_word(body, "for") ||
                        ic_body_has_word(body, "while") ||
                        ic_body_has_word(body, "do") ||
@@ -11587,8 +11588,9 @@ static TuriValue eval_apply_driven(TuriEnv *env, TuriClosure *cl,
             }
         }
         /* aot-compiled-repl-plan C1: the pattern executor declined, so this
-         * body is about to be "inline-C not supported".  With
-         * --enable=repl-jit-inline-c on a JIT build, compile it instead.
+         * body is about to be "inline-C not supported".  On a JIT build,
+         * compile it instead (repl-jit-inline-c, graduated 2026-10-17;
+         * TUR_REPL_JIT_INLINE_C=0 keeps the error).
          * User code only: the stdlib's inline-C is answered by native
          * overrides (above) or by interpreter intercepts the error path runs
          * first (the session channel templates, gc_force), and none of it
@@ -13259,6 +13261,17 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
     case EX_CONT_PRED: {
         TuriValue k = eval_expr(env, frame, e->as.cont_pred_.expr);
         if (turi_is_error(k) || env_signaled(env)) return k;
+        /* cont-pred-on-escape-cont-fails-to-link: the other flavors are an int
+         * word, as compiled.  A call/cc / escape k is live while its boundary
+         * is on the stack; a cloneable or serial k is multi-shot and never
+         * consumed.  Both used to answer false. */
+        const Type *kt = &e->as.cont_pred_.expr->type;
+        if (kt->kind == TY_CONT && k.tag == TURI_INT) {
+            if (kt->as.cont.flavor == CONT_ESCAPE)
+                return turi_bool(escape_is_live(env, (const void *)(intptr_t)k.as_int));
+            if (kt->as.cont.flavor == CONT_CLONEABLE || kt->as.cont.flavor == CONT_SERIAL)
+                return turi_bool(k.as_int != 0);
+        }
         return turi_bool(k.tag == TURI_EFFECT_CONT && k.as_cont != NULL);
     }
 
@@ -16970,6 +16983,7 @@ static TuriValue turi_eval_impl(TuriEnv *env, const char *src, const char *path,
      * turn's defeffects into the shared env is harmless.  The builtin
      * `Unsafe` is registered as the compiled pipeline does (PASS_EFFECT_LOWER
      * in main.c), for the same parity reason. */
+    int eff_rc = 0;
     {
         EffectEnv *eff_env = (EffectEnv *)env->effect_env;
         if (!eff_env) {
@@ -16981,9 +16995,12 @@ static TuriValue turi_eval_impl(TuriEnv *env, const char *src, const char *path,
                                                      &env->st);
             env->effect_env = eff_env;
         }
-        effect_check_pass(eval_arena, prog, eff_env);
-        /* Warnings are emitted as a side-effect; ignore hard errors in
-         * interpreter mode (they would already be caught as elaboration errors). */
+        /* turi-ignores-effect-row-errors: a hard error here (TUR-E0009, ...)
+         * stops the turn below, as PASS_EFFECT_ROW_INFER stops the compiled
+         * pipeline.  It used to be ignored on the theory that elaboration
+         * already caught it; it did not, so the program printed the error and
+         * then ran to completion with exit 0. */
+        eff_rc = effect_check_pass(eval_arena, prog, eff_env);
     }
 
     /* 6c. Run the always-on lifetime pass (elision + outlives-cycle check).
@@ -16994,8 +17011,14 @@ static TuriValue turi_eval_impl(TuriEnv *env, const char *src, const char *path,
      * outlives cycle -- a shape no positive program contains -- so running it
      * here closes the parity gap without affecting any well-formed program.
      * The full move/borrow checker is intentionally left to the elaborator
-     * (which the interpreter already shares). */
-    if (!lifetime_check_program(prog)) {
+     * (which the interpreter already shares).
+     *
+     * turi-skips-handler-borrow-capture-check: the always-on check that a
+     * handler case does not capture a borrow runs here too, as it does in
+     * PASS_BORROW_CHECK; `errors/effect-handler-borrow` printed 42 and exited
+     * 0 under --interpret. */
+    if (eff_rc != 0 || !borrow_check_effect_handler_captures(prog) ||
+        !lifetime_check_program(prog)) {
         env->n_acc_forms = acc_committed;   /* TR2: uncommit this turn's forms */
         if (env->elab_session) {            /* see the discard note above */
             elab_session_free(env->elab_session);

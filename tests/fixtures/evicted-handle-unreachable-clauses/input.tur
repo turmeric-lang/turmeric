@@ -1,0 +1,17 @@
+;; evicted-handle-reaches-deleted-fiber-emitter: a `(Vec int)` parameter
+;; evicts `quiet` from the CPS backend (SIG-REJECT), so its `handle`s reach the
+;; direct emitter, which still held the fiber-era lowering and emitted C naming
+;; the deleted TurEffectCaptureCtx.  None of their clauses is reachable
+;; (TUR-W0033), so nothing under them suspends and each body now runs in
+;; place -- in value position and in statement position.
+(defeffect Ask [] : int)
+
+(defn quiet [xs : (Vec int)] : int
+  (handle (println "in body")
+    (Ask [] k) (resume k 41))
+  (handle (+ 5 (vec-len xs))
+    (Ask [] k) (resume k 41)))
+
+(defn main [] : int
+  (println (quiet (vec-new)))
+  0)

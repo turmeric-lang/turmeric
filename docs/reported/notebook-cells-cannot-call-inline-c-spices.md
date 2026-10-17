@@ -46,16 +46,19 @@ reader -- is loops and pointer work, which it declines by design (refusing
 rather than guessing; see
 [turi-inline-c-silent-miscompiles](../archive/history/turi-inline-c-silent-miscompiles.md)).
 
-The route that runs such a body is the `repl-jit-inline-c` experiment
-(`--enable=repl-jit-inline-c`, BETA, aot-compiled-repl-plan C1): the
-interpreter compiles the defn through the real emitter and the in-process MIR
-engine on its first call. An embedder cannot reach it:
+The route that runs such a body is the inline-C JIT (`repl-jit-inline-c`,
+aot-compiled-repl-plan C1, graduated 2026-10-17): the interpreter compiles the
+defn through the real emitter and the in-process MIR engine on its first call.
+An embedder cannot reach it:
 
 - the compile hook is installed by the `tur` binary only
   (`turi_set_inline_c_jit_hook(&g_repl_inline_c_jit_hook)`, `src/main.c`), and
   the hook's implementation lives in `main.c` too;
-- the experiment gate is `g_opt_repl_jit_inline_c`, set by `--enable=` /
-  `build.tur` / the user config, none of which a `tur build`-ed program reads;
+- ~~the experiment gate is `g_opt_repl_jit_inline_c`, set by `--enable=` /
+  `build.tur` / the user config, none of which a `tur build`-ed program
+  reads~~ -- no longer an obstacle: since the graduation the gate defaults on
+  in every process that links the runtime, embedders included, so the hook
+  above is the whole of the first gap;
 - its supported subset is "a defn whose whole body is inline-C, fixed arity,
   scalar or pointer signature, calling nothing else", which several of these
   bodies exceed (stats' `random-n` calls the `static inline` `pcg32_*`

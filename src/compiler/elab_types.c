@@ -1341,18 +1341,10 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
                 const Symbol *one[1] = { eff_f->as.sym };
                 handled_row = effect_row_unresolved(e->arena, one, 1, eff_f->span);
             } else if (eff_f->tag == F_MAP) {
-                warn_legacy_fx_row(eff_f);
-                uint8_t n_sym = (uint8_t)eff_f->as.list.len;
-                const Symbol **syms = (const Symbol **)arena_alloc(e->arena,
-                                        (n_sym ? n_sym : 1) * sizeof(Symbol *));
-                uint8_t n_valid = 0;
-                for (uint32_t j = 0; j < eff_f->as.list.len; j++) {
-                    Form *item = eff_f->as.list.items[j];
-                    if (item->tag == F_SYM) syms[n_valid++] = item->as.sym;
-                }
-                handled_row = effect_row_unresolved(e->arena, syms, n_valid,
-                                                    eff_f->span);
-                if (n_valid == 1) single_name = syms[0]->name;  /* still single */
+                handled_row = elab_fx_row_from_form(e, eff_f);
+                if (handled_row->kind == ERK_UNRESOLVED &&
+                    handled_row->as.unresolved.n_sym_names == 1)  /* still single */
+                    single_name = handled_row->as.unresolved.sym_names[0]->name;
             } else {
                 diag_emit(DIAG_ERROR, eff_f->span,
                           "(handler E V R): effect position must be an effect name "
@@ -1722,17 +1714,7 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
             EffectRow *fn_effect_row = NULL;
             if (idx < form->as.list.len && form->as.list.items[idx]->tag == F_MAP) {
                 Form *row_form = form->as.list.items[idx++];
-                warn_legacy_fx_row(row_form);
-                uint8_t n_row_sym = (uint8_t)row_form->as.list.len;
-                const Symbol **row_syms = (const Symbol **)arena_alloc(e->arena,
-                    (n_row_sym ? n_row_sym : 1) * sizeof(Symbol *));
-                uint8_t n_row_valid = 0;
-                for (uint32_t rj = 0; rj < row_form->as.list.len; rj++) {
-                    Form *item = row_form->as.list.items[rj];
-                    if (item->tag == F_SYM) row_syms[n_row_valid++] = item->as.sym;
-                }
-                fn_effect_row = effect_row_unresolved(e->arena, row_syms, n_row_valid,
-                                                      row_form->span);
+                fn_effect_row = elab_fx_row_from_form(e, row_form);
             }
             /* Return type — must be the last element */
             if (idx >= form->as.list.len) {

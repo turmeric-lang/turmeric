@@ -1,0 +1,17 @@
+;; adt-fn-field-drop-glue-bare-free: a recursive `defdata` whose fields hold
+;; closures -- one capturing, one not -- is released at scope exit by
+;; drop_localowned_ / drop_glue_, which freed each fn field with a bare
+;; `free()` of a pointer past its header ("free(): invalid pointer").
+(defdata Chain [] (Link [f : (fn [int] int) tl : Chain]) (End))
+
+(defn run [c : Chain x : int] : int
+  (match c
+    (Link f tl) (run tl (f x))
+    (End) x))
+
+(defn main [] : int
+  (let [k 10
+        c (Link (fn [x : int] : int (+ x k))
+                (Link (fn [x : int] : int (* x 2)) (End)))]
+    (println (run c 1)))
+  0)

@@ -13,7 +13,9 @@
 #   - Parse-time validation: a missing source, a non-.c extension, and an
 #     absolute path each fail the build with a DIAG_ERROR (not a segfault).
 #   - Manifest round-trip: :c-sources / :c-includes survive read -> write
-#     (via `tur add-cmake`, which rewrites build.tur through pkg_manifest_write).
+#     (via `tur add-cmake`, which splices its entry into build.tur through the
+#     comment-preserving formatter; it used pkg_manifest_write until
+#     add-cmake-manifest-rewrite-loses-keys).
 #
 # Owned by its own ctest target; the fixtures carry requires.dedicated-runner
 # (and live under tests/fixtures/spices/, which the by-value run.sh does not
@@ -169,6 +171,41 @@ else
     echo "  CC: $sb_cc"
     FAIL=$((FAIL + 1)); FAILED+=("shared build-opts")
 fi
+
+# --- :build-opts :c-flags must reach the compile -------------------------------
+# build-opts-c-flags-never-consumed: :c-flags was parsed, validated and
+# documented, and no build path read it, so `-DMY_ANSWER=42` there left the
+# inline-C body with an undeclared MY_ANSWER.
+CF=$(mktemp -d -t tur-c-flags.XXXXXX)
+mkdir -p "$CF/src"
+cat >"$CF/build.tur" <<'EOF'
+(defpackage cf
+  :name "cf"
+  :version "0.1.0"
+  :build-opts #map{:c-flags ["-DMY_ANSWER=42"]})
+EOF
+cat >"$CF/src/main.tur" <<'EOF'
+(defn answer [] : int
+  ```c
+  return MY_ANSWER;
+  ```)
+(defn main [] : int
+  (println (answer))
+  0)
+EOF
+cf_out=""
+if "$TUR" build "$CF" >"$CF/build.log" 2>&1; then
+    cf_out=$("$CF/build/bin/cf" 2>&1)
+fi
+if [ "$cf_out" = "42" ]; then
+    echo "PASS c-flags: :build-opts :c-flags reach the compile"
+    PASS=$((PASS + 1))
+else
+    echo "FAIL c-flags: :c-flags did not reach the compile (out=[$cf_out])"
+    sed 's/^/    /' "$CF/build.log" | tail -n 5
+    FAIL=$((FAIL + 1)); FAILED+=("c-flags")
+fi
+rm -rf "$CF"
 
 # definstance-not-dispatchable-across-modules: a typeclass instance defined in
 # one module of a spice must be dispatchable from another.  The method is never

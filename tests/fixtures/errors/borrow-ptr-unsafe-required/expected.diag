@@ -1,1 +1,1 @@
-cannot borrow from ptr<void> outside (unsafe ../..)
+cannot borrow from ptr<void> outside (unsafe ...)

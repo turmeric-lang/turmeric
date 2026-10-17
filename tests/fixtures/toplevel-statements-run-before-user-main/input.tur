@@ -1,0 +1,16 @@
+;; toplevel-statements-dropped-with-user-main: with a user `main`, top-level
+;; statements were compiled into nothing -- `tur --interpret` ran them, in
+;; source order, before `main`, and the compiled program skipped them.  They
+;; run from `main`'s prologue now, after *args* is built.  The second `main`
+;; shape (a handle, so the CPS backend's entry wrapper) is covered by the
+;; same prologue sentinel.
+(defeffect Ask [] : int)
+
+(println "first")
+
+(defn main [] : int
+  (println (handle (+ 1 (perform (Ask))) (Ask [] k) (resume k 41)))
+  0)
+
+(println "second")
+(println (list-length *args*))

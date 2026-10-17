@@ -940,6 +940,13 @@ void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
             indent_buf(body, ctx->indent);
             if (e->type.kind == TY_NIL) {
                 buf_printf(body, "%s;\n", v);
+                /* nil-call-panic-not-propagated: a non-nil call gets its
+                 * panic-signal check where emit_value hoists it; a `: nil`
+                 * call has no value to hoist, so it returned before that check
+                 * and the caller ran its next statements -- `after boom` under
+                 * `catch-unwind` -- before a later call noticed.  Its check
+                 * goes here, after the call. */
+                emit_panic_signal_return(ctx, body);
             } else {
                 buf_printf(body, "(void)(%s);\n", v);
             }
@@ -1714,7 +1721,7 @@ void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
              * pure-Unsafe path and made it emit `handle->body`, a pointer read
              * from the wrong union member. */
             if (e->kind == EX_HANDLE && e->as.handle_.handle &&
-                emit_handle_is_pure_unsafe(e->as.handle_.handle)) {
+                emit_handle_is_inert(e->as.handle_.handle)) {
                 emit_stmt(ctx, body, e->as.handle_.handle->body);
                 return;
             }

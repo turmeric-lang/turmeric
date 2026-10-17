@@ -2575,11 +2575,18 @@ static void dk_free(DK *k) { if (tur_dk_pinned) return; while (k) { DK *n = k->b
 __attribute__((unused)) static void dk_free_node(DK *k) { if (tur_dk_pinned) return; if (k && k->env_drop) k->env_drop(k->env); else if (k && k->env_owned) free((void *)k->env); free(k); }
 /* E2a: direct-entry -> CPS-entry registry (probes/e2a-registry-probe.c). */
 typedef intptr_t (*__tur_cps_fn)();
-static struct { intptr_t direct; __tur_cps_fn cps; } __tur_cps_reg[256];
+static struct { intptr_t direct; __tur_cps_fn cps; } *__tur_cps_reg;
 static int __tur_cps_reg_n = 0;
+static int __tur_cps_reg_cap = 0;
 __attribute__((unused)) static void __tur_cps_register(intptr_t direct, __tur_cps_fn cps) {
-    if (__tur_cps_reg_n < 256) { __tur_cps_reg[__tur_cps_reg_n].direct = direct;
-        __tur_cps_reg[__tur_cps_reg_n].cps = cps; __tur_cps_reg_n++; }
+    if (__tur_cps_reg_n == __tur_cps_reg_cap) {
+        int cap = __tur_cps_reg_cap ? __tur_cps_reg_cap * 2 : 256;
+        void *grown = realloc(__tur_cps_reg, (size_t)cap * sizeof(*__tur_cps_reg));
+        if (!grown) { fprintf(stderr, "tur: out of memory registering a CPS entry\n"); abort(); }
+        __tur_cps_reg = grown; __tur_cps_reg_cap = cap;
+    }
+    __tur_cps_reg[__tur_cps_reg_n].direct = direct;
+    __tur_cps_reg[__tur_cps_reg_n].cps = cps; __tur_cps_reg_n++;
 }
 __attribute__((unused)) static __tur_cps_fn __tur_cps_lookup(intptr_t direct) {
     for (int i = 0; i < __tur_cps_reg_n; i++)
@@ -3275,13 +3282,18 @@ static intptr_t dk_perform(int tag, intptr_t arg, DK *k) {
 }
 __attribute__((unused, noinline))
 static intptr_t __dk_resume_word(intptr_t k, intptr_t w) {
+    if ((uintptr_t)k < 4096) {
+        fflush(stdout);
+        fprintf(stderr, "tur: resume: not a continuation (%lld)\n", (long long)k);
+        abort();
+    }
     ((DK *)k)->consumed = 1;   /* (cont? k), as emit_resume marks it */
     return dk_invoke((DK *)k, w);
 }
 
 __attribute__((unused, noinline))
 static bool __dk_cont_live_word(intptr_t k) {
-    if (!k) return false;   /* 0 is not a continuation */
+    if ((uintptr_t)k < 4096) return false;   /* nor is any small number */
     return !((DK *)k)->consumed;
 }
 
@@ -8148,6 +8160,7 @@ static void * hamt_slnew(void) {
 
 static void hamt_slfree(void * m) {
         tur_hamt_free((void *)(intptr_t)(m));
+        if (tur_panicking) return;
 }
 
 static void * hamt_slretain(void * m) {
@@ -8204,10 +8217,12 @@ static int64_t hamt_slhash_hyptr(void * ptr) {
 
 static void hamt_sliter_hyinit(void * iter, void * m) {
         tur_hamt_iter_init((void *)(intptr_t)(iter), (void *)(intptr_t)(m));
+        if (tur_panicking) return;
 }
 
 static void hamt_sliter_hyfree(void * iter) {
         tur_hamt_iter_free((void *)(intptr_t)(iter));
+        if (tur_panicking) return;
 }
 
 static bool hamt_sliter_hynext(void * iter, void * hash_out, void * key_out, void * val_out) {
@@ -8220,6 +8235,7 @@ static void * hamt_sliter_hyalloc(void * m) {
 
 static void hamt_sliter_hydestroy_ex(void * box) {
         tur_hamt_iter_destroy((void *)(intptr_t)(box));
+        if (tur_panicking) return;
 }
 
 static bool hamt_sliter_hyadvance_ex(void * box) {
@@ -8272,6 +8288,7 @@ static const char * hamt_slshow(void * m) {
 
 static void hamt_sldump(void * m) {
         tur_hamt_dump_dot_stderr((void *)(intptr_t)(m));
+        if (tur_panicking) return;
 }
 
 static void * hamt_sltransient(void * m) {
@@ -8280,10 +8297,12 @@ static void * hamt_sltransient(void * m) {
 
 static void hamt_sltransient_hyset_ex(void * t, int64_t hash, void * key, void * val) {
         tur_hamt_transient_set((void *)(intptr_t)(t), hash, (void *)(intptr_t)(key), (void *)(intptr_t)(val));
+        if (tur_panicking) return;
 }
 
 static void hamt_sltransient_hydel_ex(void * t, int64_t hash, void * key) {
         tur_hamt_transient_del((void *)(intptr_t)(t), hash, (void *)(intptr_t)(key));
+        if (tur_panicking) return;
 }
 
 static void * hamt_slpersistent_ex(void * t) {
@@ -8694,6 +8713,7 @@ static bool map_hyeq_hydriver(int64_t m1, int64_t m2, int64_t val_cmp) {
             bool result_1001058 = __ps_138;
             (void)result_1001058;
             hamt_sliter_hydestroy_ex((void *)(intptr_t)(iter_1001056));
+            if (tur_panicking) return ((bool)0);
             bool __t139;
             __t139 = result_1001058;
             __t132 = __t139;
@@ -9505,6 +9525,7 @@ static bool set_hyeq_hydriver(int64_t s1, int64_t s2) {
             bool result_1001441 = __ps_189;
             (void)result_1001441;
             hamt_sliter_hydestroy_ex((void *)(intptr_t)(iter_1001439));
+            if (tur_panicking) return ((bool)0);
             bool __t190;
             __t190 = result_1001441;
             __t183 = __t190;
@@ -10461,7 +10482,9 @@ static int64_t schema_slalt(int64_t a, int64_t b) {
                 tur_adt_Vec__int * _un_unv_1001572 = __ps_212;
                 (void)_un_unv_1001572;
                 vec_hypush_ex((int64_t)(intptr_t)((int64_t)(intptr_t)((int64_t)(intptr_t)(_un_unv_1001572))), _un_unvw_1001571);
+                if (tur_panicking) return ((int64_t)0);
                 vec_hypush_ex((int64_t)(intptr_t)((int64_t)(intptr_t)((int64_t)(intptr_t)(_un_unv_1001572))), b);
+                if (tur_panicking) return ((int64_t)0);
                 tur_adt_Vec__int * __t213;
                 __t213 = _un_unv_1001572;
                 __t211 = __t213;
@@ -10980,6 +11003,7 @@ static int64_t with_hyuntrailed(int64_t body) {
         tur_frame __frame_226;
         tur_frame_init(&__frame_226, NULL);
         untrailed_hybegin();
+        if (tur_panicking) { tur_panicking = 0; tur_frame_fire_lifo(&__frame_226); tur_panicking = 1; return ((int64_t)0); }
         tur_frame_push_defer(&__frame_226, __defer_227, NULL);
         int64_t __t228;
         int64_t __ps_229 = (((int64_t (*)(void*))(intptr_t)((int64_t *)((void *)(intptr_t)(body)))[0])((void *)(intptr_t)(body)));
@@ -11135,6 +11159,7 @@ static tur_adt_Vec__int * vec_new__spec__tur_adt_Vec__int__(void) {
 
 static void __defer_227(void *__env) {
     untrailed_hyend();
+    /* panic-return-signal: ret ctype unknown; no propagation here */
 }
 
 static void __defer_222(void *__env) {

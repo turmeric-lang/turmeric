@@ -40,8 +40,8 @@ Related guides, not repeated here:
 
 1. **Same front end.** Every entry point ends in `turi_eval_impl`
    (`src/turi/eval.c`). It parses, runs the same elaborator as the compiled
-   path (`elaborate_program_session`), then `effect_check_pass` and
-   `lifetime_check_program`. It does **not** run `PASS_CPS`, any emitter, or
+   path (`elaborate_program_session`), then `effect_check_pass`,
+   `borrow_check_effect_handler_captures` and `lifetime_check_program`. It does **not** run `PASS_CPS`, any emitter, or
    a C compiler. The interpreter walks the elaborated `Expr` tree directly.
 2. **Values** are a 16-byte tagged union, `TuriValue` (`src/turi/value.h`).
    Structs and ADT values are heap `TuriStruct`s. Most stdlib handles (Vec,
@@ -60,8 +60,9 @@ Related guides, not repeated here:
    evaluated as a black box by the recursive `eval_expr_impl`.
 5. **Natives.** Stdlib functions whose bodies are inline C are replaced at
    runtime by C natives registered under the same name. User inline C runs
-   only if a small pattern executor recognises the body, or under
-   `--enable=repl-jit-inline-c`; otherwise it is a clean error.
+   only if a small pattern executor recognises the body, or -- on a
+   `TUR_JIT` build -- once the inline-C JIT compiles it; otherwise it is a
+   clean error.
 6. **Effects** have two runtimes:
    - a capturable `handle` runs on the work-stack behind a `DK_PROMPT`, and
      `perform` captures a heap `TuriWsCont` (multishot, escaping, nested);
@@ -194,7 +195,10 @@ A turn:
    walks `env->acc_turns` turn by turn.
 6. Runs `effect_check_pass` with a **session-scoped** `EffectEnv`
    (`env->effect_env`), so effects declared in earlier turns resolve.
-7. Runs `lifetime_check_program`.
+7. Runs `borrow_check_effect_handler_captures` and `lifetime_check_program`.
+   An error from step 6 or 7 ends the turn before anything is evaluated, as
+   it ends the compiled build
+   ([turi-ignores-effect-row-errors](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/turi-ignores-effect-row-errors.md)).
 8. Publishes the turn's `TypeClassEnv` to `env->last_tc_env` **before**
    evaluating; runtime dictionary dispatch reads it.
 9. Evaluates program items: first the file-scope defs (`[0, n_fsd)`,
@@ -216,7 +220,7 @@ A turn:
 | `PASS_EFFECT_LOWER` | Only its `EffectEnv` setup; `effect_lower` is a no-op anyway |
 | `PASS_EFFECT_ROW_INFER` | `effect_check_pass` |
 | `PASS_CPS` | Not run |
-| `PASS_BORROW_CHECK` | Only `lifetime_check_program`. `borrow_check_program` is disabled process-wide (`borrow_check_enabled` is never set), so skipping it costs no parity. `borrow_check_effect_handler_captures` is **not** run, so a handler case that reads an outer borrow is rejected compiled but runs here: `tests/fixtures/errors/effect-handler-borrow` prints 42 under `--interpret` instead of its diagnostic |
+| `PASS_BORROW_CHECK` | `borrow_check_effect_handler_captures` and `lifetime_check_program`. `borrow_check_program` is disabled process-wide (`borrow_check_enabled` is never set), so skipping it costs no parity. The handler-capture check used to be skipped, so `errors/effect-handler-borrow` printed 42 under `--interpret` ([turi-skips-handler-borrow-capture-check](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/turi-skips-handler-borrow-capture-check.md)) |
 | Emission, cc, link | Not run |
 
 The elaborator itself branches on `g_interpret_mode` in a few places. That
@@ -467,8 +471,7 @@ the leaf path and thunks. Its dispatch order is the inline-C ladder:
    native;
 3. an inline-C body the pattern executor recognises
    (`try_exec_simple_inline_c`);
-4. a user inline-C body under `repl-jit-inline-c`:
-   `turi_inline_c_jit_try`;
+4. any other user inline-C body, on a JIT build: `turi_inline_c_jit_try`;
 5. otherwise a Turmeric body: build the frame, then
    `eval_drive_ex(..., &seed)`. The `DriveSeed` makes the drive start with
    the activation's `DK_CALL_RET`.
@@ -586,10 +589,13 @@ ways:
    `TUR_IC_TRACE=1` logs which matcher claimed each body. An `int` result is
    re-tagged to `TURI_BOOL` for a `: bool` return, and to a `TuriStruct *`
    for a non-opaque ADT return.
-3. **`--enable=repl-jit-inline-c`** (beta; needs a `TUR_JIT` build). The
-   defn's own source goes through the real emitter and MIR on its first
-   call, and is called through its `__ffi` shim (`inline_c_jit.c`, hook
-   installed from `main.c`). User bindings only; never stdlib.
+3. **The inline-C JIT** (`repl-jit-inline-c`, graduated 2026-10-17; needs a
+   `TUR_JIT` build, and `TUR_REPL_JIT_INLINE_C=0` turns it off). The defn's
+   own source goes through the real emitter and MIR on its first call, and
+   is called through its `__ffi` shim (`inline_c_jit.c`, hook installed from
+   `main.c`). User bindings only; never stdlib. An env without
+   `TURI_CAP_INLINE_C` (the macro env, a sandbox) is refused before it, so
+   macro expansion never compiles C.
 4. **`EX_INLINE_C` intercepts** in `eval_expr_impl`: the exact
    `gc_force();`/`gc_enable();`/`gc_disable();` one-liners, the session
    channel templates (`eval_session_intercept`), and a top-level block with
@@ -940,8 +946,8 @@ header still says nothing calls into it beyond creation; in fact
   - fixtures marked `requires.compiled`, `requires.tur-only`,
     `requires.dedicated-runner`, `requires.spices` (when the sibling
     checkout is absent), `requires.tsan` or `requires.stress`;
-  - fixtures with user inline C, except a list it runs with
-    `--enable=repl-jit-inline-c` on JIT builds.
+  - fixtures with user inline C, except a list it runs on JIT builds
+    (`TURI_INLINEC_JIT_RUN`, the ones the inline-C JIT makes pass).
 
   `requires.interp-only` fixtures run **only** here. `stderr.compiled-only`
   limits the check to stdout and exit. Use `TURI_FILTER='<regex>'` to
@@ -994,10 +1000,7 @@ Each was reproduced against the compiler this guide describes and filed in
 [`docs/reported/`](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/README.md). When one is fixed and archived,
 update the passage above that describes it and drop it from this list.
 
-- [turi-skips-handler-borrow-capture-check](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/turi-skips-handler-borrow-capture-check.md) -- `tur --interpret` skips the effect-handler borrow-capture check
 - [turi-option-map-native-reintroduces-c-recursion](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/turi-option-map-native-reintroduces-c-recursion.md) -- The interpreter's native `option-map` re-nests the C stack
-- [turi-ignores-effect-row-errors](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/turi-ignores-effect-row-errors.md) -- `tur --interpret` prints effect-row errors and then runs the program anyway
-- [needle-files-without-trailing-newline-assert-nothing](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/needle-files-without-trailing-newline-assert-nothing.md) -- Needle files without a trailing newline assert nothing
 
 ## Maintenance
 

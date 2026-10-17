@@ -1645,8 +1645,9 @@ if(TUR_JIT)
   # an alarm that can fire first destroys the diagnostic it exists to protect.
   # Raising this one means raising the alarm in .github/workflows/ci.yml too.
   set_tests_properties(tur_repl_spice_jit PROPERTIES RUN_SERIAL TRUE TIMEOUT 600)
-  # aot-compiled-repl-plan C1: --enable=repl-jit-inline-c compiles an inline-C
-  # defn the interpreter cannot run, at the prompt and under --interpret.  A
+  # aot-compiled-repl-plan C1 (repl-jit-inline-c, graduated 2026-10-17): the
+  # interpreter compiles an inline-C defn it cannot run, at the prompt and
+  # under --interpret; the script also keeps TUR_REPL_JIT_INLINE_C=0 covered.  A
   # short script (a dozen REPL sessions); it runs in the `test` job's aux part,
   # not the `jit` job, like any newly registered suite (tests/ctest-parts.py).
   add_test(

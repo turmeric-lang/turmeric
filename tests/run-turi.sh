@@ -144,7 +144,19 @@ _tur_hash_stdin() {
 export TUR_STDLIB_HASH="$(find stdlib -type f 2>/dev/null | LC_ALL=C sort |
     while IFS= read -r _f; do printf '%s\n' "$_f"; cat "$_f"; done | _tur_hash_stdin)"
 
-stamp_key() { echo "$(_tur_hash_file "$1")-${TUR_MTIME}-${TUR_STDLIB_HASH}"; }
+# run-sh-stamp-cache-ignores-expectation-files: the key covers the WHOLE
+# fixture directory -- the expectation files, `flags` and the `requires.*` /
+# `known.*` markers as well as the input -- less the outputs the harnesses
+# write there.  It used to hash only the input, so tightening an expectation
+# kept serving the old PASS until TUR_FORCE=1.
+_tur_fixture_hash() {
+    local d; d="$(dirname "$1")"
+    find "$d" -maxdepth 1 -type f ! -name 'actual.*' ! -name 'turi.*' \
+         ! -name '*.result' 2>/dev/null | LC_ALL=C sort |
+        while IFS= read -r _f; do printf '%s\n' "${_f##*/}"; cat "$_f"; done |
+        _tur_hash_stdin
+}
+stamp_key() { echo "$(_tur_hash_file "$1")-$(_tur_fixture_hash "$1")-${TUR_MTIME}-${TUR_STDLIB_HASH}"; }
 stamp_check() {
     [ "$TUR_FORCE" = "1" ] && return 1
     local sf="$STAMP_CACHE/$(printf '%s' "$1" | tr '/ ' '__').stamp"
@@ -256,14 +268,17 @@ fixture_inline_c_runs() {
     eval "[ \"\${TURI_ICRUN_${key}:-0}\" = \"1\" ]"
 }
 
-# aot-compiled-repl-plan C1 (repl-jit-inline-c, beta): inline-C fixtures that
-# run under --interpret when the interpreter may JIT-compile the inline-C defns
-# it cannot run itself.  On a TUR_JIT build (the default on 64-bit x86-64 and
-# arm64) each runs with --enable=repl-jit-inline-c; on a build with no engine
-# it stays in the carve-out.  Measured 2026-10-04: every one fails without the
-# flag and passes with it, three runs in a row.  An entry belongs here only if
-# that holds -- a fixture that passes only by handing interpreter memory to
-# compiled code is exactly what C1's value boundary refuses.
+# aot-compiled-repl-plan C1 (repl-jit-inline-c, graduated 2026-10-17): inline-C
+# fixtures that run under --interpret because the interpreter JIT-compiles the
+# inline-C defns it cannot run itself.  On a TUR_JIT build (the default on
+# 64-bit x86-64 and arm64) each runs, with no flag since the graduation; on a
+# build with no engine it stays in the carve-out.  Measured 2026-10-04 (46)
+# and re-measured at the graduation (six more): every one fails without the
+# JIT (TUR_REPL_JIT_INLINE_C=0) and passes with it, three runs in a row.  An
+# entry belongs here only if that holds, and only for an in-subset signature --
+# a fixture that passes only by handing interpreter memory to compiled code, or
+# a compiled handle laundered through `:int` back to the interpreter
+# (closure-drop-affine-chain-autodrop, httpd-mw-fold-many), passes by luck.
 TURI_INLINEC_JIT_RUN="
 async-sleep
 backtrack-depth
@@ -276,11 +291,13 @@ backtrack-sudoku
 closure-slot-ptr-void-param-sinks
 condvar-basic
 cps-backend-ptr
+defer-cps-caught-panic
 effect-extern-c-row
 effect-row-capability
 eqmap-cstr-content
 fat-param-direct-call
 fat-param-nullary-closure
+forward-call-typed-heap-param
 gc-heap-struct-rc
 gde-generic-dict-eq-map
 ghe1-bare-method-dispatch
@@ -293,9 +310,13 @@ inline-c-multi-include-hoist
 inline-c-optional-hoisted-include
 inline-c-variadic-definition
 io-deprecated-names
+jit-inline-c-bool-conversion
 jit-inline-c-struct-stmtexpr-slot
+jit-inline-c-union-array-pun
+jit-uint128-arith
 letrec-self-in-nested-closure
 letrec-self-recursive-carrier-float-return
+nil-arg-to-ptr-param-inline-c
 poly-fat-float-closure-eqmap
 poly-fn-typeclass-capturing-closure
 rc-free-queue-deep-cascade
@@ -454,17 +475,28 @@ run_turi_error_fixture() {
 
     local flags=""; [ -f "$dir/flags" ] && flags=$(cat "$dir/flags")
     local err="$dir/turi.stderr"
+    local rc
     if command -v timeout >/dev/null 2>&1; then
-        timeout 15 "$TUR" $flags --interpret "$dir/input.tur" >/dev/null 2>"$err" || true
+        timeout 15 "$TUR" $flags --interpret "$dir/input.tur" >/dev/null 2>"$err"
     else
-        "$TUR" $flags --interpret "$dir/input.tur" >/dev/null 2>"$err" || true
+        "$TUR" $flags --interpret "$dir/input.tur" >/dev/null 2>"$err"
     fi
+    rc=$?
 
     local missing=0 needle
-    while IFS= read -r needle; do
+    while IFS= read -r needle || [ -n "$needle" ]; do
         [ -z "$needle" ] && continue
         grep -F -q "$needle" "$err" || missing=1
     done < "$needles"
+
+    # turi-ignores-effect-row-errors: an errors/ fixture must FAIL, as run.sh
+    # requires of the compile.  Ignoring the status let the interpreter print
+    # the diagnostic and then run the program to exit 0, and still pass.
+    if [ "$rc" -eq 0 ]; then
+        echo "FAIL $name -- the interpreter exited 0 on an errors/ fixture"
+        echo "FAIL" > "$RESULTS_DIR/$rkey.result"
+        return
+    fi
 
     if [ "$missing" -eq 0 ]; then
         stamp_write "$name" "$dir/input.tur"
@@ -502,11 +534,8 @@ run_turi_fixture() {
     # a real bug the carve hides; see
     # docs/archive/history/turi-inline-c-silent-miscompiles.md.  Every other fixture is
     # now run for real under --interpret (no allowlist gate).
-    local jit_flag=""
     if fixture_has_inline_c "$dir" && ! fixture_inline_c_runs "$name" &&
-       fixture_inline_c_jit_runs "$name"; then
-        jit_flag="--enable=repl-jit-inline-c"
-    elif fixture_has_inline_c "$dir" && ! fixture_inline_c_runs "$name"; then
+       ! fixture_inline_c_jit_runs "$name"; then
         printf 'SKIP %s (inline-c carve-out)\n' "$name"
         echo "SKIP_INLINEC" > "$RESULTS_DIR/$(printf '%s' "$name" | tr '/ ' '__').result"
         return
@@ -537,18 +566,18 @@ run_turi_fixture() {
     local rc=0
     if [ -f "$dir/input.stdin" ]; then
         if command -v timeout >/dev/null 2>&1; then
-            timeout "$fixture_timeout" "$TUR" $fixture_flags $jit_flag --interpret "$input" \
+            timeout "$fixture_timeout" "$TUR" $fixture_flags --interpret "$input" \
                 < "$dir/input.stdin" > "$actual_stdout" 2> "$actual_stderr" || rc=$?
         else
-            "$TUR" $fixture_flags $jit_flag --interpret "$input" \
+            "$TUR" $fixture_flags --interpret "$input" \
                 < "$dir/input.stdin" > "$actual_stdout" 2> "$actual_stderr" || rc=$?
         fi
     else
         if command -v timeout >/dev/null 2>&1; then
-            timeout "$fixture_timeout" "$TUR" $fixture_flags $jit_flag --interpret "$input" \
+            timeout "$fixture_timeout" "$TUR" $fixture_flags --interpret "$input" \
                 > "$actual_stdout" 2> "$actual_stderr" || rc=$?
         else
-            "$TUR" $fixture_flags $jit_flag --interpret "$input" \
+            "$TUR" $fixture_flags --interpret "$input" \
                 > "$actual_stdout" 2> "$actual_stderr" || rc=$?
         fi
     fi
@@ -616,7 +645,7 @@ run_turi_fixture() {
     # differently on purpose; the fixture's stdout and exit still count.
     if [ -f "$dir/expected.stderr" ] && [ ! -f "$dir/stderr.compiled-only" ]; then
         local missing=0
-        while IFS= read -r needle; do
+        while IFS= read -r needle || [ -n "$needle" ]; do
             [ -z "$needle" ] && continue
             if ! grep -F -q -- "$needle" "$actual_stderr"; then
                 [ $missing -eq 0 ] && echo "FAIL $name -- expected stderr substring not found:"
@@ -638,7 +667,7 @@ run_turi_fixture() {
 
 export TUR STAMP_CACHE RESULTS_DIR TUR_FORCE TUR_MTIME
 export -f run_turi_fixture fixture_inline_c_runs fixture_inline_c_jit_runs fixture_has_inline_c stamp_check stamp_write stamp_key
-export -f _tur_hash_file _tur_mtime
+export -f _tur_hash_file _tur_mtime _tur_hash_stdin _tur_fixture_hash
 export -f run_turi_error_fixture err_in_denyset marker_skip record_result
 
 # Build list of all fixture dirs (top-level and one subdirectory deep).

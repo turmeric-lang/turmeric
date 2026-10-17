@@ -1,0 +1,10 @@
+;; int64-float64-return-annotation-rejected: `int64` / `float64` are the long
+;; spellings of int / float, accepted as parameter types but rejected as a
+;; return type ("unsupported return type keyword") by the defn and fn ladders.
+(defn h [x : int] : int64 x)
+(defn g [x : float] : float64 (* x 2.0))
+(defn main [] : int
+  (println (h 3))
+  (println (g 7.1))
+  (println ((fn [y : float] : float64 (+ y 0.25)) 3.25))
+  0)

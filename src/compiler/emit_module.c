@@ -5073,8 +5073,9 @@ void emit_flush_dead_base_ctor_traps(EmitCtx *ctx, Buf *out) {
                 buf_printf(out, "%sint64_t _%u", a ? ", " : "", a);
             char *sname = mangle_adt_name(bd->name);
             buf_printf(out, ") {\n"
-                "    %s __r = (%s)tur_region_alloc_or_malloc("
-                "sizeof(struct tur_adt_%s));\n", ptr_name, ptr_name, sname);
+                "    %s __r = (%s)%s("
+                "sizeof(struct tur_adt_%s));\n", ptr_name, ptr_name,
+                region_alloc_fn(), sname);
             const CtorDef *c0 = bd->n_ctors > 0 ? bd->ctors[0] : NULL;
             for (uint32_t a = 0; c0 && a < arity && a < c0->n_fields; a++) {
                 const char *fn2 = c0->fields[a].name;
@@ -11438,6 +11439,42 @@ static void emit_fn_forward_decls(EmitCtx *ctx, Buf *out,
     }
 }
 
+/* toplevel-statements-dropped-with-user-main: with a user `main`, the
+ * top-level statements collected in `body` used to be dropped -- the
+ * interpreter runs them, in source order, before calling `main`; the compiled
+ * program skipped them without a word.  They become a function of their own,
+ * called from `main`'s prologue where it left TUR_TOPLEVEL_STMTS_SENTINEL
+ * (after static init and *args*, as on the synthesized-main path).  The call
+ * declares it at block scope, since `main` is written before `body` is
+ * complete.  With no statements the sentinel is simply removed, so such a
+ * program's C is what it was. */
+static void emit_toplevel_stmts_for_user_main(Buf *file, const Buf *body) {
+    const char *sent = TUR_TOPLEVEL_STMTS_SENTINEL;
+    size_t slen = strlen(sent);
+    const char *call = body->len
+        ? "    { extern int __tur_toplevel_stmts(void); (void)__tur_toplevel_stmts(); }\n"
+        : "";
+    Buf patched; buf_init(&patched);
+    const char *p = file->data;
+    const char *end = file->data ? file->data + file->len : NULL;
+    while (p && p < end) {
+        const char *hit = NULL;   /* no memmem on MinGW */
+        for (const char *q = p; q + slen <= end; q++)
+            if (*q == sent[0] && memcmp(q, sent, slen) == 0) { hit = q; break; }
+        if (!hit) { buf_write(&patched, p, (size_t)(end - p)); break; }
+        buf_write(&patched, p, (size_t)(hit - p));
+        buf_puts(&patched, call);
+        p = hit + slen;
+    }
+    if (body->len) {
+        buf_puts(&patched, "int __tur_toplevel_stmts(void) {\n");
+        buf_write(&patched, body->data, body->len);
+        buf_puts(&patched, "    return 0;\n}\n");
+    }
+    buf_free(file);
+    *file = patched;
+}
+
 /* prelude-macros (Defect B / F3): emit the user-callable runtime `cons`
  * cons-cell builder into a translation unit's preamble when g_uses_cons is set.
  * Wrapped in an include guard so a TU that pulls the definition in through more
@@ -11514,14 +11551,19 @@ static void emit_adt_glue_field_drops(Buf *out, const AdtDef *def,
         } else if (k == TY_FN && ctor->fields[fi].full_type &&
                    ctor->fields[fi].full_type->kind == TY_FN &&
                    ctor->fields[fi].full_type->as.fn.boxed) {
-            /* closure-drop-glue S2 (Model U): a boxed fn-field owns a heap fat
+            /* closure-drop-glue S2 (Model U): a boxed fn-field owns a fat
              * handle (a `{shim, fn}` box for a bare fn, or a capturing closure
              * env).  The struct is move-only (needs_drop_glue), so the handle has
-             * a single owner -- free it.  (A capturing env with OWNING captures
-             * leaks those captures for now; a scalar-capture env and a bare-fn
-             * shim box are freed whole.  An UNboxed nullary/>4-arg fn field is a
-             * plain fn pointer -- not heap -- and is NOT matched here.) */
-            buf_printf(out, "    if (s->%s) free((void *)(intptr_t)s->%s);\n", mp, mp);
+             * a single owner -- release it.  (An UNboxed nullary/>4-arg fn field
+             * is a plain fn pointer -- not heap -- and is NOT matched here.)
+             *
+             * adt-fn-field-drop-glue-bare-free: the handle points PAST its
+             * 8-byte drop-glue header, so a bare `free` of it is an interior
+             * free (glibc: "free(): invalid pointer").  TUR_CLOSURE_DROP
+             * recovers the header, as drop_fnfields_ below does: a NULL glue
+             * frees the base, an env's glue walks its owning captures, and a
+             * static or stack box's keep glue frees nothing. */
+            buf_printf(out, "    if (s->%s) TUR_CLOSURE_DROP(s->%s);\n", mp, mp);
         }
         free(mp);
     }
@@ -12032,7 +12074,7 @@ static void emit_adt_typedef_and_ctors(Buf *out, const AdtDef *def,
              * kept its plain malloc. */
             buf_printf(out, "    %s *__r = (%s *)%s(sizeof(%s));\n",
                        adt_c_name, adt_c_name,
-                       regions_enabled() ? "tur_region_alloc_or_malloc" : "malloc",
+                       region_alloc_fn(),
                        adt_c_name);
             if (!flat) buf_printf(out, "    __r->tag = %u;\n", ctor->tag);
             for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
@@ -14034,7 +14076,7 @@ void ensure_saffron_dyn_runtime(EmitCtx *ctx) {
      * call. */
     buf_printf(out,
         "        __tur_dyn_cons *__c = (__tur_dyn_cons *)%s(sizeof *__c);\n",
-        regions_enabled() ? "tur_region_alloc_or_malloc" : "malloc");
+        region_alloc_fn());
     buf_puts(out,
         "        __c->head = __a[__i]; __c->tail = __t; __t = __c;\n"
         "    }\n"
@@ -20180,8 +20222,7 @@ static int emit_program_inner(Buf *out, const Expr *program) {
                      * to one belongs in all three. */
                     buf_printf(&early_file, "    %s *__r = (%s *)%s(sizeof(%s));\n",
                                adt_c_name, adt_c_name,
-                               regions_enabled() ? "tur_region_alloc_or_malloc"
-                                                 : "malloc",
+                               region_alloc_fn(),
                                adt_c_name);
                     if (!flat) buf_printf(&early_file, "    __r->tag = %u;\n", ctor->tag);
                     for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
@@ -21508,6 +21549,7 @@ static int emit_program_inner(Buf *out, const Expr *program) {
         buf_init(ctx.pending_handler_fns);
     }
 
+    if (user_has_main && !split_lib) emit_toplevel_stmts_for_user_main(&file, &body);
     if (file.len) { buf_write(out, file.data, file.len); buf_putc(out, '\n'); }
     /* Defer thunk bodies: after the globals in `file`, which they may name. */
     if (defer_thunk_defs.len) { buf_write(out, defer_thunk_defs.data, defer_thunk_defs.len); buf_putc(out, '\n'); }
@@ -21567,9 +21609,8 @@ static int emit_program_inner(Buf *out, const Expr *program) {
         buf_puts(out, "    return 0;\n");
         buf_puts(out, "}\n");
     } else if (def_init_body.len) {
-        /* Gap F: when the user has their own main(), `body` is silently
-         * dropped (pre-existing behaviour for top-level non-def
-         * statements after a user main). The def initializers in
+        /* Gap F: when the user has their own main(), `body` runs from it
+         * (emit_toplevel_stmts_for_user_main). The def initializers in
          * `def_init_body` are wired into an init function so they run
          * before the user's main() body does.
          *
@@ -23306,6 +23347,7 @@ static int emit_implementation_inner(Buf *out, const char *module_name, const Ex
     /* Defer thunk env-structs + functions, before the bodies that reference them. */
     if (impl_defer_thunks.len) { buf_write(out, impl_defer_thunks.data, impl_defer_thunks.len); buf_putc(out, '\n'); }
     buf_free(&impl_defer_thunks);
+    if (user_has_main) emit_toplevel_stmts_for_user_main(&file, &body);
     if (file.len) { buf_write(out, file.data, file.len); buf_putc(out, '\n'); }
     /* Defer thunk bodies: after the globals in `file`, which they may name. */
     if (impl_defer_thunk_defs.len) { buf_write(out, impl_defer_thunk_defs.data, impl_defer_thunk_defs.len); buf_putc(out, '\n'); }

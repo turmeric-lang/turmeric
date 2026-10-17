@@ -1155,6 +1155,15 @@ char *emit_store_int_ptr_bridge(EmitCtx *ctx, const char *target_c,
  * trampoline.  Shared with the CPS emitter, whose own cps->direct call sites
  * bypass emit_value and so bypassed the check. */
 void emit_panic_signal_return(EmitCtx *ctx, Buf *body);
+
+/* toplevel-statements-dropped-with-user-main: a user `main`'s prologue writes
+ * this line where the program's top-level statements must run -- after static
+ * init and *args*, before the body.  emit_program_inner replaces it with the
+ * call to the statements' function when the program has any, and deletes it
+ * otherwise, so a program without them emits exactly what it did before.
+ * (The statements are collected after `main` has been written, which is why
+ * the prologue cannot decide by itself.) */
+#define TUR_TOPLEVEL_STMTS_SENTINEL "/*@tur-toplevel-stmts@*/\n"
 /* defer-skipped-on-panic-in-cps-function: set by the CPS emitter while it
  * renders a `__cps` body.  `pending` says whether any defer is pending at the
  * current point AND `body` is the buffer that body is being written into (a
@@ -1720,6 +1729,11 @@ bool dict_slot_param_is_word_scalar(const struct TypeClass *tc, int slot,
                                     const FnDef *mi, uint32_t j);
 /* Does `t` mention a type variable anywhere (through applications)? */
 bool emit_abi_type_is_open(const struct Type *t);
+/* May a call recorded only under a sibling outer spec borrow that spec's
+ * clone here, as far as its type bindings say?  They must resolve under the
+ * active spec to the clone's (emit_core.c). */
+bool cross_spec_clone_bindings_fit_call(struct EmitCtx *ctx, const struct Expr *call,
+                                        const char *clone_name);
 /* True when `call` dispatches through a runtime dict slot that returns the
  * int64 word (see dict_slot_result_is_word_scalar). */
 bool emit_call_dispatches_word_result(struct EmitCtx *ctx, const struct Expr *call);
@@ -1935,6 +1949,11 @@ void emit_temp_decl(EmitCtx *ctx, Buf *body, Type type, const char *name, const 
  * body's real C type instead of truncating a by-value struct result through
  * the fiber's int64_t result slot).  See emit_effects_handle. */
 bool emit_handle_is_pure_unsafe(const struct HandleExpr *h);
+/* A handle the direct emitter can lower by emitting its body: the (unsafe ...)
+ * marker, or one whose every clause is unreachable (TUR-W0033). */
+bool emit_handle_is_inert(const struct HandleExpr *h);
+/* The located error for any other handle that reaches the direct emitter. */
+void emit_handle_no_lowering(const struct Expr *e);
 
 /* ------------ emit_stmt.c: statement-position emission ------------ */
 void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e);

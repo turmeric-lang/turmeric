@@ -175,6 +175,37 @@ run_spice_walk_case() {  # <fixture> <member> <binary> <expected-output>
 run_spice_walk_case spice-cycle-three-hop     a   a   "three-hop-ok"
 run_spice_walk_case spice-diamond-shared-dep  app app "diamond-ok"
 
+# 6. tur-run-cmake-marker-skips-after-failed-configure: `tur run` took the
+#    generated cmake/CMakeLists.txt -- written before the configure that can
+#    fail -- as "deps built", so after one failure every later run skipped the
+#    dep build and compiled with no dep flags.  A dep whose configure always
+#    fails must fail the SECOND run the same way as the first.
+if command -v cmake >/dev/null 2>&1; then
+    FC="$WORK/failcfg"
+    mkdir -p "$FC/src" "$FC/dep"
+    cat >"$FC/build.tur" <<'EOF'
+(defpackage failcfg
+  :name "failcfg"
+  :version "0.1.0"
+  :cmake-deps #map{"dep" #map{:path "../dep" :targets ["dep"]}})
+EOF
+    printf 'cmake_minimum_required(VERSION 3.10)\nproject(dep C)\nmessage(FATAL_ERROR "failcfg-configure-boom")\n' \
+        >"$FC/dep/CMakeLists.txt"
+    printf '(defn main [] : int 0)\n' >"$FC/src/main.tur"
+    for i in 1 2; do
+        ( cd "$FC" && timeout 120 "$TUR_ABS" run ) >"$WORK/failcfg$i.log" 2>&1
+    done
+    if grep -q "failcfg-configure-boom" "$WORK/failcfg1.log" &&
+       grep -q "failcfg-configure-boom" "$WORK/failcfg2.log"; then
+        pass "run-retries-failed-cmake-dep-build"
+    else
+        fail "run-retries-failed-cmake-dep-build" \
+             "second run did not retry the dep configure: $(tail -n 5 "$WORK/failcfg2.log")"
+    fi
+else
+    echo "SKIP run-retries-failed-cmake-dep-build (no cmake)"
+fi
+
 echo
 echo "transitive-cmake-deps: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

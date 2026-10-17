@@ -38,6 +38,11 @@ fi
 # The interpreter keeps its closures for the process lifetime by design
 # (CLAUDE.md leak policy); a bad-free is still reported with leaks off.
 export ASAN_OPTIONS="${ASAN_OPTIONS:+$ASAN_OPTIONS:}detect_leaks=0"
+# These cases test try_exec_simple_inline_c on its own -- that it claims or
+# declines a body -- so the inline-C JIT (repl-jit-inline-c, on by default on
+# a JIT build since 2026-10-17) is held off.  With it on, a declined body is
+# compiled and answers, and the decline the cases check is never visible.
+export TUR_REPL_JIT_INLINE_C=0
 
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT

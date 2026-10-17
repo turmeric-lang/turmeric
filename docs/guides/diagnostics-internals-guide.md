@@ -172,7 +172,8 @@ now only mentioned in comments.
 |---|---|---|---|
 | `diag_emit(level, span, fmt, ...)` | no | -- | 1215 |
 | `diag_emit_with_code(level, span, code, fmt, ...)` | yes | -- | 318 |
-| `diag_emit_with_suggestion(level, span, msg, &sug)` | no | `help:` text, `try:` replacement, `see:` URL | 4 |
+| `diag_emit_with_suggestion(level, span, msg, &sug)` | no | `help:` text, `try:` replacement, `see:` URL | 2 |
+| `diag_emit_with_suggestion_code(level, span, code, msg, &sug)` | yes | the same | 2 |
 | `diag_emit_with_notes(level, span, msg, notes, n)` | no | notes with their own spans | 1 |
 | `diag_emit_multi_span(...)` | no | primary label, secondary spans | 0 |
 | `diag_emitv` | no | the `va_list` form of `diag_emit` | 0 outside `diag.c` |
@@ -197,9 +198,9 @@ in JSON, and 512 for the LSP and the embed sink.
   after the coded one. This is the house idiom, with about 50 `DIAG_NOTE`
   calls written this way. A note is its own record in every sink, at its own
   span.
-- **Avoid `diag_emit_with_suggestion` and `diag_emit_with_notes` for a coded
-  diagnostic.** Neither takes a `DiagCode`, so the code is lost in all four
-  sinks. The did-you-mean path below shows the result.
+- **A coded diagnostic with a suggestion:** `diag_emit_with_suggestion_code`.
+  The plain `diag_emit_with_suggestion` and `diag_emit_with_notes` take no
+  `DiagCode`, so with them the code is lost in all four sinks.
 
 ### Suggestions, did-you-mean and `see:`
 
@@ -211,11 +212,11 @@ file that defines the function. The other two are the unbound-symbol check.
 The one did-you-mean in the compiler is in the `F_SYM` arm of
 `elab_toplevel.c:elab_form_impl`. It walks the scope chain for the binding
 with the smallest `sym_levenshtein_distance` below 3. When it finds one, it
-calls `diag_emit_with_suggestion` with a `doc_url`. When it finds none, it
-calls `diag_emit_with_code`. The two outputs differ:
+calls `diag_emit_with_suggestion_code` with TUR-E0003 and a `doc_url`. When
+it finds none, it calls `diag_emit_with_code`. Both carry the code:
 
 ```
-didyoumean.tur:3:5: error: unbound symbol 'coumt'
+didyoumean.tur:3:5: error [TUR-E0003]: unbound symbol 'coumt'
 1 | (defn main [] : int
 2 |   (let [count 1]
 3 |     coumt)
@@ -227,8 +228,9 @@ didyoumean.tur:3:5: help: see: https://turmeric-lang.dev/docs/errors/TUR-E0003
 unbound.tur:3:5: error [TUR-E0003]: unbound symbol 'zzzqqq'
 ```
 
-The suggested case loses `[TUR-E0003]`, and its JSON and LSP records have
-an empty `code`.
+Until 2026-10-17 the suggested case lost `[TUR-E0003]`, and its JSON and LSP
+records had an empty `code`
+([did-you-mean-unbound-symbol-drops-its-code](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/did-you-mean-unbound-symbol-drops-its-code.md)).
 
 The `see:` line is printed only when `DiagSuggestion.doc_url` is set. Only
 the two TUR-E0003 sites set it, and both hard-code the URL. **No page in
@@ -565,13 +567,13 @@ Writing good needles:
   diagnostic you did not mean. The phrase alone survives a code change that
   should have failed.
 - Do not match a path, line or column unless that is the point of the test.
-- **End the file with a newline.** `read` drops a final unterminated line, so
-  a one-line `expected.diag` without one asserts nothing. See
-  [needle-files-without-trailing-newline-assert-nothing](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/needle-files-without-trailing-newline-assert-nothing.md).
-- **Clear the pass cache after editing needles.** `stamp_key` hashes
-  `input.tur` and `expected.c` but not `expected.diag`, `unexpected.diag` or
-  `flags`. A fixture that passed once keeps passing from its stamp until you
-  run with `TUR_FORCE=1`.
+- End the file with a newline. Both harnesses read an unterminated last line
+  now, but a needle loop written as a bare `while read -r` drops it, and a
+  one-line file then asserts nothing
+  ([needle-files-without-trailing-newline-assert-nothing](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/needle-files-without-trailing-newline-assert-nothing.md)).
+- Editing a needle re-runs the fixture: `stamp_key` hashes every file in the
+  fixture directory except the outputs the harness writes there
+  ([run-sh-stamp-cache-ignores-expectation-files](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/run-sh-stamp-cache-ignores-expectation-files.md)).
 
 A real fixture, `errors/tailcall-argument-position/expected.diag`:
 
@@ -597,8 +599,10 @@ The same directories run under `tur $flags --interpret input.tur`. The needles
 come from `expected.diag`, or from `expected.stderr` when there is none. A
 fixture with neither fails as "asserts nothing". Differences from `run.sh`:
 
-- **The exit status is not checked** (`|| true`), and `unexpected.diag` is
-  not read.
+- `unexpected.diag` is not read. The exit status is checked: an interpreter
+  that prints the diagnostic and then runs the program to exit 0 fails the
+  fixture, as it does in `run.sh`
+  ([turi-ignores-effect-row-errors](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/turi-ignores-effect-row-errors.md)).
 - `requires.compiled` skips the fixture. Use it when only the compiled path
   diagnoses the program, as all the `tailcall-*` fixtures do.
 - `TURI_ERRORS_DENY` lists fixtures whose interpreter diagnostics diverge.
@@ -620,8 +624,8 @@ no sender
 on Session
 ```
 
-Its marker says it "asserts the diagnostic and the nonzero exit". Only the
-first half is true, because `run-turi.sh` ignores the exit status.
+Its marker says it "asserts the diagnostic and the nonzero exit", and
+`run-turi.sh` checks both.
 
 Elaboration errors look the same on both engines, since the interpreter
 elaborates through the same `diag_emit*` calls. Runtime errors from the
@@ -679,10 +683,7 @@ Each was reproduced against the compiler this guide describes and filed in
 update the passage above that describes it and drop it from this list.
 
 - [sweet-exp-diagnostic-columns-not-translated](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/sweet-exp-diagnostic-columns-not-translated.md) -- Diagnostics in sweet-exp files report columns of the transformed text
-- [did-you-mean-unbound-symbol-drops-its-code](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/did-you-mean-unbound-symbol-drops-its-code.md) -- An unbound-symbol error with a suggestion loses its TUR-E0003 code
 - [diag-code-tables-drift-without-a-check](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/diag-code-tables-drift-without-a-check.md) -- The diagnostic-code tables drift apart, and `tur explain` shows it
-- [needle-files-without-trailing-newline-assert-nothing](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/needle-files-without-trailing-newline-assert-nothing.md) -- Needle files without a trailing newline assert nothing
-- [run-sh-stamp-cache-ignores-expectation-files](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/run-sh-stamp-cache-ignores-expectation-files.md) -- The test harnesses' pass cache ignores a fixture's expectation files
 
 ## Maintenance
 

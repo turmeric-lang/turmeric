@@ -71,20 +71,20 @@ To abandon an incomplete expression, enter a blank line.
 
 ---
 
-## Inline-C at the prompt (experimental)
+## Inline-C at the prompt
 
 The REPL is the tree-walking interpreter, so it runs an inline-C body only when
 it recognises the shape: a simple `return` of an arithmetic expression, a field
 accessor, a flat constructor. Any other body -- a loop, a branch with two
 returns, a library call -- is `inline-C not supported in interpreter mode`.
 
-On a build with the JIT engine (the default on 64-bit x86-64 and arm64),
-`--enable=repl-jit-inline-c` compiles such a defn instead, the first time it
-is called. Its own source goes through the real compiler and the in-process
-MIR engine, so `#include`s, the C library, and loops all work:
+On a build with the JIT engine (the default on 64-bit x86-64 and arm64), the
+REPL compiles such a defn instead, the first time it is called. Its own source
+goes through the real compiler and the in-process MIR engine, so `#include`s,
+the C library, and loops all work:
 
 ````
-$ tur repl --enable=repl-jit-inline-c
+$ tur repl
 > (defn count-upper [s : cstr] : int
     ```c
     #include <ctype.h>
@@ -99,7 +99,14 @@ $ tur repl --enable=repl-jit-inline-c
 
 The first call costs one compile (~135 ms on a Release build); later calls go
 straight to the compiled function, and redefining the defn compiles the new
-body on its next call. `tur --interpret` honours the same flag.
+body on its next call. `tur --interpret` does the same.
+
+This was the `repl-jit-inline-c` experiment until it graduated on 2026-10-17;
+`--enable=repl-jit-inline-c` is now accepted as a no-op (`TUR-W0063`) for one
+minor line, so drop it from your scripts. `TUR_REPL_JIT_INLINE_C=0` turns the
+compile off and brings back the `inline-C not supported` error -- useful for
+telling a JIT problem from an interpreter one. A build without the JIT engine
+(`-DTUR_JIT=OFF`, Try Turmeric) always gives the error.
 
 Limits, each reported as an error value:
 

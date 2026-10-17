@@ -1,4 +1,4 @@
 module 'nonexistent/module' not found
 searched:
-(importing file's directory)
+(project root)
 hint: this looks like an intra-spice import.

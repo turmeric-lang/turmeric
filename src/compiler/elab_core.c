@@ -3710,7 +3710,7 @@ bool effect_row_contains_symbol(const EffectRow *row, const Symbol *name) {
     case ERK_EMPTY:
         return false;
     case ERK_CONCRETE:
-        for (uint8_t i = 0; i < row->as.concrete.n_effects; i++) {
+        for (uint32_t i = 0; i < row->as.concrete.n_effects; i++) {
             Effect *eff = row->as.concrete.effects[i];
             if (eff && eff->name == name) return true;
         }
@@ -3721,7 +3721,7 @@ bool effect_row_contains_symbol(const EffectRow *row, const Symbol *name) {
         return effect_row_contains_symbol(row->as.union_.left, name) ||
                effect_row_contains_symbol(row->as.union_.right, name);
     case ERK_UNRESOLVED:
-        for (uint8_t i = 0; i < row->as.unresolved.n_sym_names; i++) {
+        for (uint32_t i = 0; i < row->as.unresolved.n_sym_names; i++) {
             if (row->as.unresolved.sym_names[i] == name) return true;
         }
         return false;

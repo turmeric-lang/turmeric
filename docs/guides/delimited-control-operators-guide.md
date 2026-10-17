@@ -22,8 +22,10 @@ Every delimited control operator has **two halves**:
 - A **delimiter** (`reset` / `reset0`) marks a boundary on the stack: "the
   captured continuation reaches this far and no further."
 - A **capture** operator (`shift` / `shift0`) grabs the slice of stack from the
-  capture site *up to* the nearest enclosing delimiter, reifies it as a callable
-  function `k`, and hands it to your body.
+  capture site *up to* the nearest enclosing delimiter. Base `shift` and
+  `shift0` take a receiver `f` and a value `x` and are abortive: the slice is
+  discarded and the delimiter returns `(f x)`. `cloneable-shift` hands the
+  slice to its receiver as a callable continuation `k`.
 
 The whole family is one runtime mechanism. What distinguishes the operators is
 the answer to two questions:
@@ -52,10 +54,52 @@ motivating use case in this codebase.
 
 ## `shift` / `reset` -- static, re-delimiting
 
-This is the well-behaved default (Danvy--Filinski semantics):
+A base `shift` takes a **receiver** and a **value**: `(shift f x)`. It is
+**abortive**: the context between the `shift` and the nearest enclosing
+`reset` is discarded, and the `reset` returns `f` applied to `x`. The
+expression `(shift f x)` has the type of `f`'s codomain.
 
-- When `shift` captures, the surrounding `reset` **stays in place**.
-- When you invoke the captured `k`, its body is **re-wrapped in a fresh
+```turmeric
+(reset
+  (+ 1 (shift (fn [v : int] (* 2 v)) 10)))
+;; the (+ 1 _) context is discarded; the reset returns (* 2 10)
+;; => 20
+```
+```sweet-exp
+reset
+  {1 +
+     (shift
+       (fn [v : int] {2 * v})
+       10)}
+;; => 20
+```
+
+Note what is **not** there: base `shift` does not bind the captured
+continuation as a `k` the body can call. Danvy--Filinski's
+`(shift k (k (k 10)))` is not a Turmeric form -- both engines reject it with
+`unbound symbol 'k'`. When you want the continuation itself, use
+`cloneable-shift` / `cloneable-reset`, whose receiver is handed the captured
+context as a callable `cont`:
+
+```turmeric
+(cloneable-reset
+  (+ 1 (cloneable-shift (fn [k : cont] (k (k 10))) 0)))
+;; k = (fn [x] (+ 1 x)), re-delimited on each call
+;; => (+ 1 (+ 1 10)) = 12, all surfacing inside the reset
+```
+```sweet-exp
+cloneable-reset
+  {1 +
+     (cloneable-shift
+       (fn [k : cont] k(k(10)))
+       0)}
+;; => 12
+```
+
+Either way, the delimiter is static:
+
+- When a `shift` captures, the surrounding `reset` **stays in place**.
+- When a captured `k` is invoked, its body is **re-wrapped in a fresh
   `reset`** -- the delimiter is reinstated around the resumed computation.
 
 Because every invocation of `k` is freshly delimited, captured continuations
@@ -64,20 +108,9 @@ statically-enclosing prompt. This is exactly why `shift`/`reset` is the right
 lowering target for resumable effect handlers (each `resume` runs inside a
 fresh handler scope).
 
-```turmeric
-(reset
-  (+ 1 (shift k (k (k 10)))))
-;; k = (fn [x] (+ 1 x)), re-delimited on each call
-;; => (+ 1 (+ 1 10)) = 12, all surfacing inside the reset
-```
-```sweet-exp
-reset
-  {1 +
-     shift(k
-       k(k(10)))}
-;; k = (fn [x] {1 + x}), re-delimited on each call
-;; => {1 + {1 + 10}} = 12, all surfacing inside the reset
-```
+The examples in this guide are pinned by the
+`delimited-control-guide-examples` fixture, so a change to either engine
+that breaks one fails the suite.
 
 ## `shift0` / `reset0` -- pops the prompt
 

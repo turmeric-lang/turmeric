@@ -1,1 +1,1 @@
-TUR_E0020_AMBIGUOUS_DISPATCH
+error [TUR-E0020]: ambiguous method dispatch: '.fmap'

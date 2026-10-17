@@ -270,15 +270,16 @@ static void drop_glue_tur_adt_Lst(void *ptr) {
 }
 ```
 
-> **Known defect: the boxed-fn arm.** A capturing closure is allocated with an
-> 8-byte header and its handle points *past* it (see
-> [Closure environments](#closure-environments)). `drop_fnfields_<T>` knows
-> this and calls `TUR_CLOSURE_DROP`; `emit_adt_glue_field_drops` still emits a
-> bare `free`. Any path that reaches the full glue with a capturing closure in
-> a fn field -- `rc/of` of such a struct, or a recursive ADT with a fn field
-> going out of scope -- aborts with `free(): invalid pointer` (ASan:
-> `attempting free on address which was not malloc()-ed`). Confirmed
-> 2026-10-16 while writing this guide; not yet filed under `docs/reported/`.
+> **The boxed-fn arm.** A capturing closure is allocated with an 8-byte header
+> and its handle points *past* it (see
+> [Closure environments](#closure-environments)), so a fn field is released
+> with `TUR_CLOSURE_DROP`, never a bare `free` -- in `drop_fnfields_<T>` and in
+> `emit_adt_glue_field_drops` alike. The latter emitted a bare `free` until
+> 2026-10-17, so `rc/of` of such a struct, or a recursive ADT with a fn field
+> going out of scope, aborted with `free(): invalid pointer`
+> ([adt-fn-field-drop-glue-bare-free](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/adt-fn-field-drop-glue-bare-free.md);
+> pinned by `closure-field-drop-glue-rc-struct` and
+> `closure-field-drop-glue-defdata`).
 
 ### Regions vs drop glue
 
@@ -685,7 +686,6 @@ Each was reproduced against the compiler this guide describes and filed in
 [`docs/reported/`](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/README.md). When one is fixed and archived,
 update the passage above that describes it and drop it from this list.
 
-- [adt-fn-field-drop-glue-bare-free](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/adt-fn-field-drop-glue-bare-free.md) -- Drop glue frees a closure field with a bare `free()` -- invalid pointer
 - [auto-drop-defers-skipped-on-early-return](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/auto-drop-defers-skipped-on-early-return.md) -- Injected scope-exit drops are skipped by an early `return`
 - [regions-off-source-runtime-link-failure](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/regions-off-source-runtime-link-failure.md) -- `TUR_REGIONS=0` fails to link when the runtime comes from source
 

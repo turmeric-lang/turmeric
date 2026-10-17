@@ -4197,6 +4197,43 @@ bool emit_call_dispatches_word_result(EmitCtx *ctx, const Expr *call) {
     return false;
 }
 
+/* nested-generic-tyvar-name-capture: the call's own type bindings, resolved
+ * under the active spec, must be the sibling clone's.  The arguments cannot
+ * tell `(List int)` from `(List float)` -- both ride the carrier -- and in a
+ * carrier body the call is typed as the carrier word too.  So inside the int
+ * -> float `list-map-onto__` twin, `(list-first xs)` (no clone at `A := int`)
+ * borrowed the float -> int sibling's `list_first__spec__double_int64_t` and
+ * read each int element as a double.  Both sides name the CALLEE's variables,
+ * so matching them by name is sound.  Not for a dictionary-dispatched method
+ * call, which emit_call_name re-resolves to the active spec's instance. */
+bool cross_spec_clone_bindings_fit_call(EmitCtx *ctx, const Expr *call,
+                                        const char *clone_name) {
+    if (!ctx || !call || call->kind != EX_CALL || !clone_name ||
+        call->as.call_.dict_arg)
+        return true;
+    const EmitAbiSpecialization *sp = NULL;
+    for (uint32_t i = 0; i < ctx->n_abi_specializations && !sp; i++)
+        if (ctx->abi_specializations[i].clone_name &&
+            strcmp(ctx->abi_specializations[i].clone_name, clone_name) == 0)
+            sp = &ctx->abi_specializations[i];
+    if (!sp || sp->binding != call->as.call_.fn_binding) return true;
+    for (uint8_t bi = 0; bi < call->as.call_.n_abi_bindings; bi++) {
+        const AbiTypeBinding *cb = &call->as.call_.abi_bindings[bi];
+        if (!cb->name) continue;
+        Type have_t = emit_resolve_type(ctx, cb->type);
+        if (emit_abi_type_is_open(&have_t) || have_t.kind == TY_UNKNOWN) continue;
+        for (uint8_t k = 0; k < sp->n_bindings; k++) {
+            if (!sp->bindings[k].name || strcmp(sp->bindings[k].name, cb->name) != 0)
+                continue;
+            const char *want = emit_type_c_name(ctx, emit_resolve_type(ctx, sp->bindings[k].type));
+            const char *have = emit_type_c_name(ctx, have_t);
+            if (want && have && strcmp(want, have) != 0) return false;
+            break;
+        }
+    }
+    return true;
+}
+
 /* constrained-generic-relay-borrows-sibling-clone: a call recorded only under
  * a SIBLING outer spec -- `(ei v)` inside `eu`, minted `ei__spec__W` under
  * `eu__spec__W` and nothing under `eu__spec__int` (no ABI change at int) --
@@ -4207,6 +4244,7 @@ bool emit_call_dispatches_word_result(EmitCtx *ctx, const Expr *call) {
 static bool cross_spec_clone_fits_call(EmitCtx *ctx, const Expr *call,
                                        const char *clone_name) {
     if (!ctx || !call || call->kind != EX_CALL || !clone_name) return true;
+    if (!cross_spec_clone_bindings_fit_call(ctx, call, clone_name)) return false;
     const EmitAbiSpecialization *sp = NULL;
     for (uint32_t i = 0; i < ctx->n_abi_specializations && !sp; i++)
         if (ctx->abi_specializations[i].clone_name &&

@@ -142,8 +142,10 @@ registration of a name returns the existing effect unchanged.
    `PROV_FX_EXPLICIT`. Bare `#{...}` and `@{...}` are tagged
    `PROV_FX_LEGACY`/`PROV_FX_AT_LEGACY`; `warn_legacy_fx_row` turns those into
    TUR-D0002/TUR-D0003 the first time a site consumes one.
-2. **Elaborator.** Each annotation site walks the `F_MAP`, keeps the `F_SYM`
-   items, and calls `effect_row_unresolved(arena, names, n, span)`:
+2. **Elaborator.** Each annotation site hands the `F_MAP` to
+   `elab_fx_row_from_form` (`elab_effects.c`), which keeps the `F_SYM` items,
+   reports any other item as TUR-E0026 at the item, and calls
+   `effect_row_unresolved(arena, names, n, span)`:
 
    | Annotation | Parsed in | Stored on |
    |---|---|---|
@@ -292,7 +294,7 @@ is suppressed for it).
 | TUR-E0026 | `resolve_declared_row` | an uppercase row name no `defeffect` declares; hints for `stdlib/effects.tur` names, moved attributes (`Construct`/`ByVal`/`NonExhaustive`), and a did-you-mean within edit distance 2 |
 | TUR-E0009 | `effect_row_check_declared` | the inferred row is not a subset of a declared row; one error per offending effect |
 | TUR-E0009 | `check_call_site_rows_in_expr` (ER4) | a fn argument's non-empty row is not a subset of an indexed callee's concrete or empty parameter row |
-| TUR-E0254 | `collect_effects_in_expr` (ER2) | a row variable would be bound to a row containing itself |
+| TUR-E0254 | `collect_effects_in_expr` (ER2) | a row variable would be bound to a row containing itself. Printed once per call site, though every sweep re-walks the call (`e0254_first_report`), and it fails the pass |
 | TUR-W0031 | `effect_row_check_over_annotated` | a declared, non-capability effect is never inferred (nor any descendant of it); skipped for instance methods |
 | TUR-W0030 | `effect_row_check_unannotated` | `--strict-effects`: no declared row, non-empty inferred row; not for forwarding wrappers |
 | TUR-W0032 | `effect_row_check_var_always_concrete` | `--strict-effects`: the declared row is a bare variable and the inferred row, minus capabilities, is concrete and non-empty |
@@ -494,9 +496,6 @@ many times a diagnostic prints.
 - **A declared row variable admits anything.** `effect_row_is_subset` returns
   true for any `ERK_VAR`, so `#fx{e}` never produces TUR-E0009; only
   `--strict-effects` (W0032) notices a concrete body.
-- **Non-symbol row items vanish.** `#fx{:FS}` or `#fx{"Ask"}` resolve to
-  `#fx{}` with no diagnostic (the `F_SYM` filter at each parse site), the same
-  silent narrowing TUR-E0026 closed for unknown names.
 - **Effect hierarchy is one-directional.** A declared parent covers a
   performed child, but a `handle` clause for a parent removes nothing from the
   row (`effect_row_remove` matches names exactly).
@@ -505,19 +504,15 @@ many times a diagnostic prints.
 - **Registered but never emitted:** TUR-W0034, TUR-E0250 and TUR-E0253 have
   `tur explain` text and no emit site. TUR-E0008 is the reverse: emitted, but
   not a registered code.
-- **Fixed-size buffers.** `effect_row_merge` and `effect_row_remove` build
-  their result in an unchecked `Effect *[32]` stack array, so a row of more
-  than 32 distinct effects overflows it (ASan reports a stack-buffer-overflow
-  in `effect_row_merge` from `effect_check_pass`; unfiled).
-  `EffectRowSubst` silently drops bindings past 32, and
-  `effect_row_collect_names` truncates at 32 names.
-- **TUR-E0254 repeats.** It is emitted from inside the inference walk, so it
-  prints once per fixpoint sweep plus once per later walk that reaches the
-  call (3 copies for `errors/effect-row-occurs`; unfiled).
-- **The interpreter does not stop on row errors.** `turi_eval_impl` ignores
-  `effect_check_pass`'s result, so `tur --interpret` prints a TUR-E0009 and
-  then runs the program, exit 0; `tests/run-turi.sh` only greps the
-  diagnostic text (unfiled).
+- **Fixed-size buffers.** `EffectRowSubst` silently drops bindings past 32,
+  and `effect_row_collect_names` truncates at 32 names (a handler's handled
+  set, compared and printed by name). `effect_row_merge` and
+  `effect_row_remove` size their buffers from their inputs, and a row's count
+  is 32-bit, since
+  [effect-row-merge-overflows-past-32-effects](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/effect-row-merge-overflows-past-32-effects.md)
+  (a 33rd effect wrote past a 32-entry stack array); the six row parsers no
+  longer drop non-symbol items either
+  ([effect-row-non-symbol-items-dropped](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/effect-row-non-symbol-items-dropped.md)).
 - **`(unsafe ...)` colors.** The marker handle is a coloring seed, so a safe
   wrapper and all its callers are CPS-colored although nothing can be
   performed (see [Capabilities and `Unsafe`](#capabilities-and-unsafe)).
@@ -547,10 +542,7 @@ Each was reproduced against the compiler this guide describes and filed in
 [`docs/reported/`](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/README.md). When one is fixed and archived,
 update the passage above that describes it and drop it from this list.
 
-- [effect-row-merge-overflows-past-32-effects](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/effect-row-merge-overflows-past-32-effects.md) -- Effect-row merge overflows a 32-entry stack array
-- [turi-ignores-effect-row-errors](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/turi-ignores-effect-row-errors.md) -- `tur --interpret` prints effect-row errors and then runs the program anyway
-- [e0254-emitted-once-per-fixpoint-sweep](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/e0254-emitted-once-per-fixpoint-sweep.md) -- TUR-E0254 is printed once per effect-inference sweep
-- [effect-row-non-symbol-items-dropped](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/effect-row-non-symbol-items-dropped.md) -- Non-symbol items in an effect row are silently dropped
+None open.
 
 ## Maintenance
 

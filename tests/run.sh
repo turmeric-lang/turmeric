@@ -610,15 +610,23 @@ export TUR_CONFIG_HASH
 
 echo "run.sh: preamble=$TUR_PREAMBLE_MODE cc=${CC:-cc} config=$TUR_CONFIG_HASH"
 
+# run-sh-stamp-cache-ignores-expectation-files: the key covers the WHOLE
+# fixture directory -- expected.c (so a regenerated snapshot re-checks), the
+# expectation files, `flags`, the `requires.*` / `known.*` markers -- less the
+# outputs the harnesses write there.  It used to hash only the input and
+# expected.c, so a tightened expectation kept serving the old PASS until
+# TUR_FORCE=1.  tests/run-turi.sh keys its stamps the same way.
+_tur_fixture_hash() {
+    local d; d="$(dirname "$1")"
+    find "$d" -maxdepth 1 -type f ! -name 'actual.*' ! -name 'turi.*' \
+         ! -name '*.result' 2>/dev/null | LC_ALL=C sort |
+        while IFS= read -r _f; do printf '%s\n' "${_f##*/}"; cat "$_f"; done |
+        _tur_hash_stdin
+}
+
 stamp_key() {
     local input="$1"
-    local dir
-    dir="$(dirname "$input")"
-    # Incorporate the expected.c snapshot hash (if present) so that regenerating
-    # snapshots invalidates the stamp and forces a fresh codegen check.
-    local ec_hash=""
-    [ -f "$dir/expected.c" ] && ec_hash="$(_tur_hash_file "$dir/expected.c")"
-    echo "$(_tur_hash_file "$input")-${ec_hash}-${TUR_MTIME}-${TUR_STDLIB_HASH}-${TUR_CONFIG_HASH}"
+    echo "$(_tur_hash_file "$input")-$(_tur_fixture_hash "$input")-${TUR_MTIME}-${TUR_STDLIB_HASH}-${TUR_CONFIG_HASH}"
 }
 
 stamp_check() {
@@ -835,7 +843,7 @@ run_happy() {
     # For the interpreter path they are passed after -- to `tur run`.
     local run_args_arr=()
     if [ -f "$dir/run.args" ]; then
-        while IFS= read -r _ra; do
+        while IFS= read -r _ra || [ -n "$_ra" ]; do
             [ -z "$_ra" ] && continue
             run_args_arr+=("$_ra")
         done < "$dir/run.args"
@@ -1107,7 +1115,7 @@ run_happy() {
 
     if [ -f "$dir/expected.stderr" ]; then
         local missing=0
-        while IFS= read -r needle; do
+        while IFS= read -r needle || [ -n "$needle" ]; do
             [ -z "$needle" ] && continue
             if ! grep -F -q "$needle" "$actual_stderr"; then
                 {
@@ -1132,7 +1140,7 @@ run_happy() {
     # a TUR-W0033 that used to fire on a clause that runs.
     if [ -f "$dir/unexpected.stderr" ]; then
         local present=0
-        while IFS= read -r needle; do
+        while IFS= read -r needle || [ -n "$needle" ]; do
             [ -z "$needle" ] && continue
             if grep -F -q "$needle" "$actual_stderr"; then
                 {
@@ -1234,7 +1242,7 @@ run_negative() {
 
     if [ -f "$dir/expected.diag" ]; then
         local missing=0
-        while IFS= read -r needle; do
+        while IFS= read -r needle || [ -n "$needle" ]; do
             [ -z "$needle" ] && continue
             if ! grep -F -q "$needle" "$dir/actual.stderr"; then
                 {
@@ -1260,7 +1268,7 @@ run_negative() {
     # TUR-W0033 "unreachable" on the handler whose effect is the refusal.
     if [ -f "$dir/unexpected.diag" ]; then
         local present=0
-        while IFS= read -r needle; do
+        while IFS= read -r needle || [ -n "$needle" ]; do
             [ -z "$needle" ] && continue
             if grep -F -q "$needle" "$dir/actual.stderr"; then
                 {
@@ -1299,7 +1307,7 @@ export TUR_FORCE TUR_STAMP_CACHE
 export TUR_TSAN TUR_STRESS _tur_timeout_bin TUR_MTIME TUR_STDLIB_HASH TUR_CONFIG_HASH
 export -f matches_filter matches_shard write_result no_input_fail run_happy run_negative run_happy_worker run_negative_worker
 export -f note_sanitizer
-export -f _tur_hash_file _tur_mtime stamp_key stamp_check stamp_write _run_timed
+export -f _tur_hash_file _tur_mtime _tur_hash_stdin _tur_fixture_hash stamp_key stamp_check stamp_write _run_timed
 
 # Happy fixtures: tests/fixtures/* except tests/fixtures/errors, PLUS the
 # fixtures one level down inside a GROUP directory.
