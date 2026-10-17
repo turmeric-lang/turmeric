@@ -34,6 +34,23 @@ sentence above does not cover them. If you touch this file, check
 `ls docs/reported/` against it -- an index that silently omits a quarter of the
 directory is worse for triage than no index.
 
+## Found planning `wss://` for tur-nng (filed 2026-10-17)
+
+[nng-tls-plan](../upcoming/spices/nng-tls-plan.md) turns TLS on inside the
+nng spice's native build and shares mbedTLS with `tls` / `http` / `ws-client`.
+Spiking it through `tur fetch` turned up four gaps in how `:cmake-deps` are
+merged across spices, and building one repro turned up a fifth. The plan works
+around the two it hits. Every repro below is offline and was re-run verbatim
+on `main` 3d9e02a2.
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [cmake-deps-duplicate-keeps-first-options](cmake-deps-duplicate-keeps-first-options.md) | medium | Two spices declaring one `:cmake-deps` name with the same `:url` / `:ref` but different `:options` (or `:wasm-options`, `:targets`, ...): the copy collected first is built and the other is dropped silently (`append_cmake_dep_with_conflict_check`, `pkg.c:3634`). Which one wins depends on the consumer's `:spices` order. Live as `mbedtls` (http / tls / ws-client, equivalent today) and `raylib` (`sdf-raylib`'s copy lacks the web options) |
+| [cmake-deps-no-cross-spice-override-or-order](cmake-deps-no-cross-spice-override-or-order.md) | low | Expressiveness hole: a spice cannot override an option on a dependency another spice declares (the `:override` the transitive-cmake-deps plan anticipated), and its own entries are always configured before its `:spices`' entries, so `if (TARGET mbedtls)` in its CMake misses a dependency's mbedTLS. Why `wss://` is not a separate spice |
+| [cmake-dep-link-walk-stops-at-archive](cmake-dep-link-walk-stops-at-archive.md) | medium | `_tur_walk_iface` stops at a linkable archive, so when a later entry's static library needs an earlier entry's archives, only the first is repeated after it and GNU ld fails with undefined references. Latent until nng links mbedTLS; workaround is listing the targets on the consuming entry |
+| [cmake-dir-markers-print-link-flag-warnings](cmake-dir-markers-print-link-flag-warnings.md) | low | CMake's `::@(0x...)` directory markers in nng's link interface print five "dropping link flag ... the shell would read as syntax" warnings per nng program today: the shell-safety check runs before the silent `::` skip |
+| [cmake-dep-path-through-missing-cmake-dir](cmake-dep-path-through-missing-cmake-dir.md) | medium | A dependency spice's `:path` cmake-dep is joined onto `<spice>/cmake/` and not normalized, so `add_subdirectory` fails unless that gitignored directory happens to exist. Live shape: `opengl`'s `:path "../cmake-deps/opengl"` |
+
 ## Found closing the inline-C JIT's `cstr` ownership gap (filed 2026-10-17)
 
 | Report | Severity | One line |
