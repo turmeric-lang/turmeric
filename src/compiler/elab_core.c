@@ -219,10 +219,17 @@ uint32_t fwd_decl_scan_params(Arena *arena, const Form *params_f, TypeKind **out
                  * "function 'loop' arg 2: expected int, got any" -- the annotation
                  * silently not taking effect.  `cstr` and `float` accumulators
                  * worked, which is what localised it here. */
+                /* macro-time-forward-reference-typed-int: and `Syntax`, the
+                 * copyable Form* handle a defmacro* helper walks.  Left on the
+                 * int placeholder, a call to a later helper over Syntax -- a
+                 * mutually recursive walker in a :for-macros module or a
+                 * defmacro* letrec -- failed "arg 1: expected int, got
+                 * Syntax" at its definition.  (letrec's return-kind peek
+                 * already resolved `: Syntax`; this is the parameter half.) */
                 if (k != TY_UNKNOWN && k != TY_INT &&
                     (typekind_is_numeric(k) || k == TY_BOOL || k == TY_CSTR ||
                      k == TY_NIL || k == TY_PTR_VOID || k == TY_SYM ||
-                     k == TY_ANY)) {
+                     k == TY_ANY || k == TY_SYNTAX)) {
                     arg_kinds[arity - 1] = k;
                 } else {
                     arg_kinds[arity - 1] = TY_INT;   /* compound: the placeholder */
