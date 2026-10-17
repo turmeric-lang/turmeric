@@ -34,6 +34,12 @@ sentence above does not cover them. If you touch this file, check
 `ls docs/reported/` against it -- an index that silently omits a quarter of the
 directory is worse for triage than no index.
 
+## Found reviewing the `reflected-measures` graduation (filed 2026-10-17)
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [reflected-measures-example-float-contract-no-longer-proves](reflected-measures-example-float-contract-no-longer-proves.md) | low (programs) / medium (graduation review) | `tur check --strict-refine examples/reflected-measures/src/main.tur` exits 1: `within-cutoff`'s `(< (lap-total v) 60.5)` is unknown since the float-proofs-assume-exact-reals fix made real-sorted `+` opaque, so a summing Float measure proves only at its base case (a comparison-only one still proves). The README and header comment say every contract proves; nothing runs the example. The guide's reflect section is also stale the other way (crossings, RF4 and RF6.1 have landed) |
+
 ## Found measuring `re/replace-all` on the WP0 box (filed 2026-10-16)
 
 | Report | Severity | One line |
