@@ -993,9 +993,10 @@ library half, then M5b in turmeric-spices once a `tur` with M5a is on `main`.
   only where GitHub renders differently: `` **`code`** `` renders, tight lists
   lose their `<p>`, and code blocks keep their final line feed.
   LeakSanitizer finds nothing in `md-parse` or `parse-string`.
-- **Versioning.** The spice is 0.3.0. Its `:tur-version` floor waits for the
-  turmeric release after v0.65.5, the first with M5a: a floor above what
-  `main` reports would fail the spices CI, which builds `tur` from `main`.
+- **Versioning.** The spice is 0.3.0 and needs turmeric v0.66.0, the first
+  release with M3 and M5a; turmeric-spices#112 declares it as the spice's
+  `:tur-version` floor. Under v0.65.5 the adapter does not compile: that
+  release's `tur/markdown` has neither the GFM extensions nor math.
 
 ## 7. Compiler friction the spikes found
 
