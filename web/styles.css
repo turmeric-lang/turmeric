@@ -748,6 +748,12 @@ body.split-dragging * {
 .dot.offline { background: var(--error-color); }
 .dot.loading {
     background: var(--gold-fill);
+    animation: pulse 0.8s infinite;
+}
+
+@keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.4; }
 }
 
 /* Analysis indicator. The footer is a two-item flex row (WASM status | cursor
@@ -928,6 +934,12 @@ body.split-dragging * {
 .repl-input-row.waiting {
     border-top-color: var(--gold);
     box-shadow: 0 -2px 16px color-mix(in srgb, var(--gold) 18%, transparent);
+    animation: replWait 1.8s ease-in-out infinite;
+}
+
+@keyframes replWait {
+    0%, 100% { box-shadow: 0 -2px 16px color-mix(in srgb, var(--gold) 18%, transparent); }
+    50%       { box-shadow: 0 -2px 24px color-mix(in srgb, var(--gold) 35%, transparent); }
 }
 
 .repl-prompt {
@@ -1421,6 +1433,12 @@ body.split-dragging * {
        the same failure as the docs topbar, one level in. */
     max-height: min(90vh, 100%);
     overflow-y: auto;
+    animation: slideIn 0.18s ease-out;
+}
+
+@keyframes slideIn {
+    from { opacity: 0; transform: translateY(12px); }
+    to   { opacity: 1; transform: translateY(0); }
 }
 
 .overlay-header {
@@ -1506,6 +1524,7 @@ body.split-dragging * {
     border-radius: 50%;
     width: 28px;
     height: 28px;
+    animation: spin 0.7s linear infinite;
 }
 
 .spinner.large {
@@ -1513,6 +1532,8 @@ body.split-dragging * {
     height: 44px;
     border-width: 3px;
 }
+
+@keyframes spin { to { transform: rotate(360deg); } }
 
 .loading-spinner {
     display: flex;
@@ -2076,6 +2097,7 @@ body.split-dragging * {
     border-radius: var(--radius-lg);
     box-shadow: var(--shadow-lg);
     overflow: hidden;
+    animation: slideIn 0.18s ease-out;
 }
 
 .docs-topbar {

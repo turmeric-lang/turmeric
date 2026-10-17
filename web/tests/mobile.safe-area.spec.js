@@ -36,10 +36,21 @@ async function applyInsets(page, { top = SAFE_TOP, bottom = SAFE_BOTTOM } = {}) 
     await page.evaluate(() => new Promise(requestAnimationFrame));
 }
 
-/** Open the docs pane and give it a frame to lay out. */
+/**
+ * Open the docs pane and wait for it to settle.
+ *
+ * .docs-shell animates in with `transform: translateY(12px)`, so a rect read
+ * on the frame after openDocsPane() is 12px off and every assertion here is
+ * about exact geometry. Waiting on the animation rather than on a sleep keeps
+ * that from turning into a flake.
+ */
 async function openDocs(page) {
     await page.evaluate(() => window.turmericApp.openDocsPane());
-    await page.evaluate(() => new Promise(requestAnimationFrame));
+    await page.evaluate(async () => {
+        const shell = document.querySelector('.docs-shell');
+        await Promise.all(shell.getAnimations().map(a => a.finished.catch(() => {})));
+        await new Promise(requestAnimationFrame);
+    });
 }
 
 const boxOf = (page, sel) => page.evaluate((s) => {
@@ -145,6 +156,7 @@ test.describe('PWA safe-area insets', () => {
             const filler = document.createElement('div');
             filler.style.height = '2000px';
             content.appendChild(filler);
+            await Promise.all(content.getAnimations().map(a => a.finished.catch(() => {})));
             await new Promise(requestAnimationFrame);
             const box = content.getBoundingClientRect();
             filler.remove();

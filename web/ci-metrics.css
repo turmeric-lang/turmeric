@@ -79,7 +79,12 @@
   border: 2px solid var(--border-str);
   border-top-color: var(--gold);
   border-radius: 50%;
+  animation: ci-spin 0.7s linear infinite;
   flex: none;
+}
+@keyframes ci-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) {
+  .ci-spinner { animation-duration: 2.4s; }
 }
 
 /* ── TAB BAR ───────────────────────────── */

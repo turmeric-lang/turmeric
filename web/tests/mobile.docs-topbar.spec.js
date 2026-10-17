@@ -21,10 +21,20 @@ async function openTry(page) {
     await page.waitForFunction(() => !!window.turmericApp, null, { timeout: 30_000 });
 }
 
-/** Open the docs pane and give it a frame to lay out. */
+/**
+ * Open the docs pane and let the shell's entry animation finish.
+ *
+ * `.docs-shell` animates in with `transform: translateY(12px)`, so a rect read
+ * on the frame after openDocsPane() is offset -- and every assertion here is
+ * about exact geometry.
+ */
 async function openDocs(page) {
     await page.evaluate(() => window.turmericApp.openDocsPane());
-    await page.evaluate(() => new Promise(requestAnimationFrame));
+    await page.evaluate(async () => {
+        const shell = document.querySelector('.docs-shell');
+        await Promise.all(shell.getAnimations().map(a => a.finished.catch(() => {})));
+        await new Promise(requestAnimationFrame);
+    });
 }
 
 test.describe('docs topbar Contents toggle', () => {
