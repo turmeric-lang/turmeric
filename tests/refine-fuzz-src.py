@@ -1426,20 +1426,26 @@ def self_test(tur):
 
 
 
-def _progress(i, n, kind, extra=""):
+def _progress(case, done, total, kind, extra=""):
     """Report a case the moment it finishes.  Every non-ok verdict prints its
-    own line; ok cases print a heartbeat every 25 so a long session is
-    visibly alive under a pipe or ctest -V.  Flushed, because stdout is
-    block-buffered under a pipe and nothing would show until exit."""
+    own line, naming the case by its index: that is what --first and a corpus
+    row replay, and `done` drifts from it once --jobs runs cases out of order.
+    ok cases print a heartbeat every 25 so a long session is visibly alive
+    under a pipe or ctest -V.  Flushed, because stdout is block-buffered under
+    a pipe and nothing would show until exit."""
     if kind != "ok":
-        print("  case %6d/%d  %s%s" % (i, n, kind, extra), flush=True)
-    elif (i + 1) % 25 == 0 or i + 1 == n:
-        print("  %6d/%d done" % (i + 1, n), flush=True)
+        print("  case %6d  %s%s" % (case, kind, extra), flush=True)
+    elif (done + 1) % 25 == 0 or done + 1 == total:
+        print("  %6d/%d done" % (done + 1, total), flush=True)
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--n", type=int, default=300, help="cases to generate")
     ap.add_argument("--seed", type=int, default=1)
+    ap.add_argument("--first", type=int, default=0,
+                    help="run cases --first..--n-1 only: a case's program "
+                         "depends on (seed, index) alone, so this replays "
+                         "one finding without the cases before it")
     ap.add_argument("--jobs", type=int, default=max(1, (os.cpu_count() or 2) - 1))
     ap.add_argument("--mode", choices=["int", "float", "both"], default="both")
     ap.add_argument("--tur", default=os.path.join(REPO, "build", "tur"))
@@ -1450,6 +1456,8 @@ def main():
                     help="generate only this shape (e.g. `loop` -- the "
                          "loop-invariants-plan LI5 population)")
     args = ap.parse_args()
+    if not 0 <= args.first < args.n:
+        ap.error("--first must be at least 0 and below --n")
 
     tur = os.path.abspath(args.tur)
     if not os.path.exists(tur):
@@ -1477,12 +1485,15 @@ def main():
         return one_case(tur, workdir, i, args.seed * 1000003 + i, mode,
                         args.only_shape)
 
-    print("refine_fuzz_src: %d cases, seed %d, mode %s, %d job(s)"
-          % (args.n, args.seed, args.mode, args.jobs))
+    total = args.n - args.first
+    cases = ("%d cases" % total if not args.first
+             else "cases %d..%d" % (args.first, args.n - 1))
+    print("refine_fuzz_src: %s, seed %d, mode %s, %d job(s)"
+          % (cases, args.seed, args.mode, args.jobs))
     print("refine_fuzz_src: " + fuzz_arm.armed_env(dict(os.environ))[1])
     try:
         with ThreadPoolExecutor(max_workers=args.jobs) as pool:
-            futs = {pool.submit(job, i): i for i in range(args.n)}
+            futs = {pool.submit(job, i): i for i in range(args.first, args.n)}
             done = 0
             for fut in as_completed(futs):
                 i = futs[fut]
@@ -1494,7 +1505,7 @@ def main():
                     findings.append((kind, i, src, off, on))
                 # skip_* verdicts are routine here (a generated program the
                 # checker rejects); only BUG/SUSPICIOUS earn their own line.
-                _progress(done, args.n,
+                _progress(i, done, total,
                           kind if kind.startswith(("BUG", "SUSPICIOUS")) else "ok")
                 done += 1
         findings.sort(key=lambda t: t[1])
@@ -1513,7 +1524,7 @@ def main():
                     % (kind, args.seed, i, off.kind, off.stdout,
                        on.kind, on.stdout))
 
-    print("\nrefine_fuzz_src: %d cases" % args.n)
+    print("\nrefine_fuzz_src: %s" % cases)
     for k in sorted(counts):
         print("  %-28s : %d" % (k, counts[k]))
     print("  %-28s : %d proven, %d refuted"

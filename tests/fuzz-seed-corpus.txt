@@ -2,12 +2,18 @@
 #
 # Format: <harness> <seed> [<cases>] [# note]
 #   harness is one of: type saffron refine regions
-#   cases   is optional: the --n the seed needs.  A case's program depends only
-#           on (seed, case index), so a finding at index k needs k+1.  Omit it
-#           when k is below the harness's smoke N (40 for type); replay never
-#           runs fewer than smoke N.  A nightly runs --n 400, so most findings
-#           need it -- and each one costs that many cases on every smoke run,
-#           so prefer a smoke-reachable seed when several find the same shape.
+#   cases   is optional.  A case's program depends only on (seed, case index),
+#           so a finding at index k is replayed by any run that reaches k.
+#           Omit it when k is below the harness's smoke N (40 for type): the
+#           smoke-size replay covers it.  Past smoke N -- a nightly runs --n
+#           400, so most findings land there -- write the range k-k, which
+#           replays case k alone (the driver's --first).  A bare count is the
+#           --n to run from case 0 (never fewer than smoke N); it costs that
+#           many cases on every smoke run, so prefer a range.
+#           k is the index in the finding's saved directory name
+#           (BUG_...-000373), or a `case k` line from a driver since
+#           2026-10-17.  Before that, those lines printed how many cases had
+#           finished, which drifts from k under --jobs.
 #   blank lines and lines starting with # are ignored
 #
 # Why this file exists
@@ -28,7 +34,7 @@
 # Appending a row
 # ---------------
 #   type 20260912   # nested class dispatch, wrong instance on a float leg
-#   type 20260917 99   # same, but found at case index 98
+#   type 20260917 98-98   # same, but found at case index 98
 #
 # Remove a row only when its harness or driver no longer accepts the seed
 # (a generator change can make an old seed generate different programs --
@@ -55,5 +61,7 @@
 #            case 34  class_nested + class_thru
 type 20260913   # found constrained-generic-float-result-into-generic (case 8)
 type 20260918   # found constrained-generic-float-result-into-generic (case 7)
-type 20261003 400   # found generator-thunk-call-site-returns-void-ptr-not-carrier (case 376);
-#                     400 is the nightly's own --n, where it was found
+type 20261003 373-373   # found generator-thunk-call-site-returns-void-ptr-not-carrier;
+#                         filed as case 376, the progress count, but the program
+#                         (tags closure_ret,gbody,gid,scalar_bool,thin_hof,thunk)
+#                         is case 373
