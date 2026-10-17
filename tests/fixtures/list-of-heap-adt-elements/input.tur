@@ -1,0 +1,39 @@
+;; list-of-heap-adt-elements -- a `:heap` defdata through list-of's variadic
+;; rest, read back with list-first / list-rest.
+;;
+;; turi-list-of-heap-adt-element-not-retagged (docs/archive/): under
+;; `tur --interpret` the rest cell keeps a constructor value's struct pointer
+;; without its tag, and `(:: w A)` re-tagged only non-`:heap` types, because
+;; a `:heap` type's word may be a native handle (a MutableMap) that must not
+;; be read as a struct.  The element came back a bare word and no match arm
+;; took it.  The interpreter now remembers the struct words a rest cell
+;; stripped.  The compiled path was already right.
+(load "stdlib/list-typed.tur")
+
+(defdata Box :heap (B cstr))
+(defdata Shape :heap (Circle int) (Rect int int))
+(defdata Wrap :heap [A] (W A))
+(defstruct Pt :heap [x : int y : int])
+
+(defn box-str [b : Box] : cstr (match b (B s) s))
+
+(defn area [s : Shape] : int
+  (match s
+    (Circle r) (* 3 (* r r))
+    (Rect w h) (* w h)))
+
+(defn wrap-val [w : (Wrap int)] : int (match w (W v) v))
+
+(defn main [] : int
+  (let [bs (list-of (B "a") (B "b"))
+        ss (list-of (Circle 2) (Rect 4 5))
+        ws (list-of (W 7) (W 8))
+        ps (list-of (Pt 1 2) (Pt 3 4))]
+    (println (box-str (list-first bs)))                 ; a
+    (println (box-str (list-first (list-rest bs))))     ; b
+    (println (area (list-first ss)))                    ; 12
+    (println (area (list-first (list-rest ss))))        ; 20
+    (println (wrap-val (list-first (list-rest ws))))    ; 8
+    (println (.y (list-first (list-rest ps))))          ; 4
+    (println (list-count bs))                           ; 2
+    0))

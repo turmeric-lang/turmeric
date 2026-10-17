@@ -306,36 +306,36 @@ static void prov_grow(TuriProvSet *s) {
     s->cap  = ncap;
 }
 
-void turi_prov_register(TuriEnv *env, TuriHandleKind kind, const void *ptr) {
-    if (!env || !env->provenance_on || !ptr || kind == TURI_HK_NONE) return;
-    TuriProvSet *s = (TuriProvSet *)env->prov;
+/* The set operations, on a set rather than an env: the provenance registry
+ * and the tagless-struct set below share them.  A NULL `*sp` is the empty
+ * set, allocated on first insert. */
+static void pset_add(void **sp, uint8_t kind, const void *ptr) {
+    TuriProvSet *s = (TuriProvSet *)*sp;
     if (!s) {
         s = (TuriProvSet *)calloc(1, sizeof(TuriProvSet));
         if (!s) return;
-        env->prov = s;
+        *sp = s;
     }
     if ((s->count + 1) * 2 >= s->cap) prov_grow(s);
     if (!s->cap) return;   /* grow failed under OOM */
     size_t mask = s->cap - 1;
     size_t h = prov_hash(ptr) & mask;
     while (s->ents[h].ptr) {
-        if (s->ents[h].ptr == ptr && s->ents[h].kind == (uint8_t)kind) return;
+        if (s->ents[h].ptr == ptr && s->ents[h].kind == kind) return;
         h = (h + 1) & mask;
     }
     s->ents[h].ptr  = ptr;
-    s->ents[h].kind = (uint8_t)kind;
+    s->ents[h].kind = kind;
     s->count++;
 }
 
-bool turi_prov_check(TuriEnv *env, TuriHandleKind kind, const void *ptr) {
-    if (!env || !env->provenance_on) return true;   /* not enforcing */
-    if (!ptr) return true;                           /* NULL / nil handle is fine */
-    TuriProvSet *s = (TuriProvSet *)env->prov;
+static bool pset_has(const void *set, uint8_t kind, const void *ptr) {
+    const TuriProvSet *s = (const TuriProvSet *)set;
     if (!s || !s->cap) return false;
     size_t mask = s->cap - 1;
     size_t h = prov_hash(ptr) & mask;
     while (s->ents[h].ptr) {
-        if (s->ents[h].ptr == ptr && s->ents[h].kind == (uint8_t)kind) return true;
+        if (s->ents[h].ptr == ptr && s->ents[h].kind == kind) return true;
         h = (h + 1) & mask;
     }
     return false;
@@ -343,9 +343,8 @@ bool turi_prov_check(TuriEnv *env, TuriHandleKind kind, const void *ptr) {
 
 /* Forget every entry for `ptr` (all kinds).  Uses backward-shift deletion to
  * keep the open-addressing probe chains intact. */
-void turi_prov_forget(TuriEnv *env, const void *ptr) {
-    if (!env || !env->provenance_on || !ptr) return;
-    TuriProvSet *s = (TuriProvSet *)env->prov;
+static void pset_forget(void *set, const void *ptr) {
+    TuriProvSet *s = (TuriProvSet *)set;
     if (!s || !s->cap) return;
     size_t mask = s->cap - 1;
     for (;;) {
@@ -366,6 +365,45 @@ void turi_prov_forget(TuriEnv *env, const void *ptr) {
         }
         /* Loop again in case ptr was registered under several kinds. */
     }
+}
+
+static void pset_free(void **sp) {
+    TuriProvSet *s = (TuriProvSet *)*sp;
+    if (!s) return;
+    free(s->ents);
+    free(s);
+    *sp = NULL;
+}
+
+void turi_prov_register(TuriEnv *env, TuriHandleKind kind, const void *ptr) {
+    if (!env || !env->provenance_on || !ptr || kind == TURI_HK_NONE) return;
+    pset_add(&env->prov, (uint8_t)kind, ptr);
+}
+
+bool turi_prov_check(TuriEnv *env, TuriHandleKind kind, const void *ptr) {
+    if (!env || !env->provenance_on) return true;   /* not enforcing */
+    if (!ptr) return true;                           /* NULL / nil handle is fine */
+    return pset_has(env->prov, (uint8_t)kind, ptr);
+}
+
+void turi_prov_forget(TuriEnv *env, const void *ptr) {
+    if (!env || !env->provenance_on || !ptr) return;
+    pset_forget(env->prov, ptr);
+}
+
+/* turi-list-of-heap-adt-element-not-retagged: the struct words a variadic
+ * rest cell (EX_CONS_LIST) stripped the tag from.  Unlike the provenance
+ * registry this is always on -- it is what lets `(:: w A)` re-tag a `:heap`
+ * defdata value read back out of such a cell without dereferencing a word
+ * that might be a native handle instead.  An entry is dropped when the
+ * struct is freed (pool_reclaim_one). */
+static void tagless_struct_note(TuriEnv *env, const TuriStruct *s) {
+    if (env && s) pset_add(&env->tagless_structs, (uint8_t)TURI_HK_STRUCT, s);
+}
+
+static bool tagless_struct_known(const TuriEnv *env, uintptr_t p) {
+    return env && p && pset_has(env->tagless_structs, (uint8_t)TURI_HK_STRUCT,
+                                (const void *)p);
 }
 
 /* A tagged value about to lose its tag -- handed to a native, which may store
@@ -582,11 +620,9 @@ void turi_prov_track_native(TuriEnv *env, const TuriNativeHandleRow *sig,
 /* Release the provenance registry at env teardown (called from turi_env_free). */
 void turi_prov_free(TuriEnv *env) {
     if (env && g_prov_native_env == env) g_prov_native_env = NULL;
-    if (!env || !env->prov) return;
-    TuriProvSet *s = (TuriProvSet *)env->prov;
-    free(s->ents);
-    free(s);
-    env->prov = NULL;
+    if (!env) return;
+    pset_free(&env->prov);
+    pset_free(&env->tagless_structs);
 }
 
 void turi_prov_enable_and_seed(TuriEnv *env) {
@@ -8623,20 +8659,26 @@ static TuriValue try_retag_carrier_struct(TuriEnv *env, EvalFrame *frame,
      * A)` meets a one-field or multi-constructor type the record check below
      * refuses -- read back the bare word and no match arm took it.  It is
      * recognised by its constructor, which must be one of the type's own.
-     * Left alone, as below: a `:heap` type (its words may be native handles,
-     * a MutableMap) and a type whose constructors carry no fields (a
-     * `defopaque`, an enumeration).  Word 0 is read first and compared as a
-     * name, as below, so a carrier box shorter than a TuriStruct is never read
-     * past it unless it names one of the constructors. */
+     * Left alone: a type whose constructors carry no fields (a `defopaque`,
+     * an enumeration).  Word 0 is read first and compared as a name, as
+     * below, so a carrier box shorter than a TuriStruct is never read past it
+     * unless it names one of the constructors.
+     *
+     * turi-list-of-heap-adt-element-not-retagged: a `:heap` type's word may
+     * be a native handle rather than a TuriStruct (a MutableMap), and reading
+     * one as a struct overran it.  It is re-tagged only when it is a struct
+     * a rest cell recorded stripping (tagless_struct_note), which is known
+     * without reading it. */
     {
         const AdtDef *cd = rt.kind == TY_ADT ? rt.as.adt_.def
                          : rt.kind == TY_APP ? type_adt_app_def(&rt) : NULL;
         uintptr_t cp = (uintptr_t)(intptr_t)v.as_int;
         bool has_fields = false;
-        for (uint32_t ci = 0; cd && !cd->is_heap && cd->ctors && ci < cd->n_ctors; ci++)
+        for (uint32_t ci = 0; cd && cd->ctors && ci < cd->n_ctors; ci++)
             if (cd->ctors[ci] && cd->ctors[ci]->n_fields) has_fields = true;
-        if (has_fields && cp >= 0x1000 &&
-            (!env || !env->provenance_on ||
+        bool known = cd && cd->is_heap && tagless_struct_known(env, cp);
+        if (has_fields && cp >= 0x1000 && (!cd->is_heap || known) &&
+            (known || !env || !env->provenance_on ||
              turi_prov_check(env, TURI_HK_STRUCT, (const void *)cp))) {
             TuriStruct *cs = (TuriStruct *)cp;
             for (uint32_t ci = 0; (uintptr_t)cs->name >= 0x1000 && ci < cd->n_ctors; ci++) {
@@ -12966,6 +13008,10 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
             cell[0] = iv.as_int;  /* head: raw value carrier */
             cell[1] = tail;       /* tail: previously-built cell (or nil) */
             tail = (int64_t)(intptr_t)cell;
+            /* turi-list-of-heap-adt-element-not-retagged: a struct head loses
+             * its tag here; remember that the word is one. */
+            if (iv.tag == TURI_STRUCT && iv.as_struct)
+                tagless_struct_note(env, iv.as_struct);
             /* S-5: the head drops its tag here and `head`/`tail` walk the cell,
              * so both are minted handles in a provenance-tracked env. */
             turi_prov_note_value(env, iv);
@@ -16326,6 +16372,7 @@ static void pool_reclaim_one(void *obj, int kind, void *ud) {
         TuriStruct *s = (TuriStruct *)obj;
         uint32_t n = s->n_fields;
         if (n > TURI_STRUCT_FREE_MAX || s->fields != (n ? (TuriValue *)(s + 1) : NULL)) break;
+        pset_forget(env->tagless_structs, s);   /* no longer a struct word */
         size_t bytes = sizeof *s + (size_t)n * sizeof(TuriValue);
         memset(s, 0, bytes);
         *(void **)s = env->struct_free[n];

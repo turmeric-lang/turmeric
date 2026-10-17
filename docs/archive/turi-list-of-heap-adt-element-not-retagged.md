@@ -1,4 +1,4 @@
-# `tur --interpret`: a `:heap` defdata through `list-of` comes back as a bare word
+# `tur --interpret`: a `:heap` defdata through `list-of` comes back as a bare word -- RESOLVED
 
 **Severity: medium (interpreter-only wrong behaviour).** Under
 `tur --interpret`, `(list-first (list-of (B "a")))` with a `:heap` `Box`
@@ -42,3 +42,26 @@ which fixed the same shape for a non-`:heap` defdata; reproduces on `main` at
   up the tag of.
 - Or have `EX_CONS_LIST` box a `TURI_STRUCT` element the way the carrier
   re-tag can recognise safely.
+
+## Resolution
+
+Resolved 2026-10-17 with the first fix direction: the interpreter now knows
+which words are struct pointers without reading them.
+
+- `EX_CONS_LIST` records each struct head whose tag it strips in
+  `env->tagless_structs`. It is a pointer set like the provenance registry
+  and shares its code (`pset_add` / `pset_has` / `pset_forget`, factored out
+  of `turi_prov_*`), but it is always on.
+- `pool_reclaim_one` forgets a struct when it goes back to the free list, so
+  a reused block is never taken for the value that used to live there.
+- `try_retag_carrier_struct` re-tags a `:heap` type's word only when the set
+  holds it. It then still checks name, field count and constructor, as for a
+  by-value type. A `MutableMap` handle, which is never in the set, is not
+  read.
+
+**Pinned by** `list-of-heap-adt-elements`: `list-of` over a one-field, a
+multi-constructor and a parametric `:heap` defdata and a `:heap` defstruct,
+read back with `list-first` / `list-rest`. It passes on both engines; the old
+interpreter fails with "match: no arm matched". `mutmap-eq` and
+`mutmap-typed-consumer`, the fixtures the first attempt overran, still pass
+under ASan, and so do `tur_eval_sandbox` and `tur_security_driver`.

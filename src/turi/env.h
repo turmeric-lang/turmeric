@@ -387,6 +387,10 @@ typedef struct TuriEnv {
      * the per-native handle-signature column the dispatch reads. */
     bool        provenance_on;
     void       *prov;            /* TuriProvSet* (defined in eval.c); NULL = empty */
+    /* turi-list-of-heap-adt-element-not-retagged: the struct words a variadic
+     * rest cell stored without their tag, so `(:: w A)` can re-tag one of a
+     * `:heap` type safely.  Always on; a TuriProvSet* like `prov`. */
+    void       *tagless_structs;
     /* Return-signal state: set by EX_RETURN, cleared by function application */
     bool        returning;
     TuriValue   return_value;
