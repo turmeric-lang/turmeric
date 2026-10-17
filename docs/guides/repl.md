@@ -119,9 +119,12 @@ Limits, each reported as an error value:
   `make-cell` / `cell-get` pair works. An argument that is memory the
   interpreter allocated (a vec it built, say) is refused, whatever the
   parameter's type.
-- A `cstr` argument is borrowed: the C body may read it, but must not `free` it
-  or keep it after it returns. An `:int` that smuggles a handle in from
-  somewhere else is not checked; give the handle a real type.
+- A string the interpreter made reaches the C body as its own copy, so the
+  body may read it, `free` it or keep it after it returns. If it only reads it,
+  the copy is never freed (a few bytes per call). A string an earlier compiled
+  call returned goes back as itself, so writes to it are visible. An `:int`
+  that smuggles a handle in from somewhere else is not checked; give the
+  handle a real type.
 - The inline-C must be the defn's whole body, and the defn must be written
   out, not produced by a macro.
 
