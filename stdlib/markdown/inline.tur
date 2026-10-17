@@ -40,7 +40,7 @@
    image : bool
    active : bool
    after : bool])
-;;; MdIP -- the inline parser for one block: the document, the subject's pool index and length, the position, the root inline, the two stacks, and whether strikethrough and extended autolinks are on.
+;;; MdIP -- the inline parser for one block: the document, the subject's pool index and length, the position, the root inline, the two stacks, and whether strikethrough, extended autolinks and math are on.
 
 (defstruct MdIP
   [doc : MdDoc
@@ -53,7 +53,8 @@
    dv : (Vec MdDelim)
    bv : (Vec MdBracket)
    tilde : bool
-   autolinks : bool])
+   autolinks : bool
+   math : bool])
 ;;; md/-new-delims -- internal: an empty delimiter Vec.
 
 (defn md/-new-delims [] : (Vec MdDelim) (vec-new))
@@ -555,6 +556,58 @@
       (do
         (md/-ip-own! ip (MdICode) (md/-code-contents (md/-ip-s ip) after close))
         (set! (.pos ip) (+ close n))))))
+;; ---- Math (markdown-library-plan M5) ----------------------------------------------------------
+;; With math on, $...$ is an inline formula and $$...$$ a display one.  The
+;; rules are the notebook spice's, whose parser this replaces: the opening $
+;; has neither whitespace nor a digit after it, so "$5 and $10" stays text
+;; (a formula that starts with a digit is written ${2^n}$), and the closing
+;; $ has no whitespace before it.  A $$ formula may have spaces inside its
+;; delimiters.  Neither crosses a line ending, a backslash pair never closes
+;; one, and what is inside is kept as written, TeX's backslashes and all.
+;;; md/-math-ws? -- internal: is c a space, a tab or a line ending, or past the subject's end (-1)?
+
+(defn md/-math-ws? [c : int] : bool (or (< c 0) (= c 32) (= c 9) (= c 10)))
+;;; md/-math-closes-at? -- internal: does the closing $ (n = 1) or $$ (n = 2) of a formula whose contents start at a sit at j?
+
+(defn md/-math-closes-at? [^borrow ip : rc<MdIP> a : int n : int j : int] : bool
+  (and (= (md/-ip-c ip j) 36)
+    (if (= n 2)
+      (= (md/-ip-c ip (+ j 1)) 36)
+      (and (> j a) (not (md/-math-ws? (md/-ip-c ip (- j 1))))))))
+;;; md/-math-close -- internal: where the closing $ (n = 1) or $$ (n = 2) of a formula whose contents start at a is, or -1.
+
+(defn md/-math-close [^borrow ip : rc<MdIP> a : int n : int] : int
+  (let [^mut j   a
+        ^mut hit -1]
+    (do
+      (while (and (< hit 0) (< j (.len ip)) (not (= (md/-ip-c ip j) 10)))
+        (cond (= (md/-ip-c ip j) 92)         (set! j (+ j 2))
+              (md/-math-closes-at? ip a n j) (set! hit j)
+              :else                          (set! j (+ j 1))))
+      hit)))
+;;; md/-parse-dollar! -- internal: a $ -- an inline formula, a display one at $$, or (false) neither.
+
+(defn md/-parse-dollar! [^borrow ip : rc<MdIP>] : bool
+  (let [start (.pos ip)
+        n     (if (= (md/-ip-c ip (+ start 1)) 36) 2 1)
+        a     (+ start n)
+        c     (md/-ip-c ip a)
+        z     (cond (= n 2)                              (md/-math-close ip a n)
+                    (or (md/-math-ws? c) (md/-digit? c)) -1
+                    :else                                (md/-math-close ip a n))
+        s     (md/-ip-s ip)
+        ia    (if (and (= n 2) (>= z 0)) (md/-skip-ws s a z) a)
+        iz    (if (and (= n 2) (>= z 0)) (md/-trim-end-index s ia z) z)]
+    (if (and (>= z 0) (> iz ia))
+      (do
+        (md/-ip-leaf! ip
+          (if (= n 2) (MdIMathDisplay) (MdIMath))
+          (.subj ip)
+          ia
+          iz)
+        (set! (.pos ip) (+ z n))
+        true)
+      false)))
 ;;; md/-cp-before -- internal: the code point before byte i of s, or a line feed at the start.
 
 (defn md/-cp-before [s : String i : int] : int
@@ -1128,6 +1181,10 @@
     true
     (MdIHtml)
     true
+    (MdIMath)
+    true
+    (MdIMathDisplay)
+    true
     _
     false))
 ;;; md/-is-link? -- internal: is inline i a link?
@@ -1185,7 +1242,8 @@
 (defn md/-ip-special? [^borrow ip : rc<MdIP> c : int] : bool
   (or (md/-special? c)
     (and (= c 126) (.tilde ip))
-    (and (.autolinks ip) (or (= c 58) (= c 119)))))
+    (and (.autolinks ip) (or (= c 58) (= c 119)))
+    (and (= c 36) (.math ip))))
 ;;; md/-parse-string! -- internal: a run of plain text; whether there was one.
 
 (defn md/-parse-string! [^borrow ip : rc<MdIP>] : bool
@@ -1216,6 +1274,7 @@
                       (and (= c 126) (.tilde ip))     (do
                                                         (md/-parse-delim! ip c)
                                                         true)
+                      (and (= c 36) (.math ip))       (md/-parse-dollar! ip)
                       (and (= c 58) (.autolinks ip))  (md/-url-match! ip)
                       (and (= c 119) (.autolinks ip)) (md/-www-match! ip)
                       (= c 91)                        (do
@@ -1279,7 +1338,8 @@
                         (md/-new-delims)
                         (md/-new-brackets)
                         (.strikethrough (.opts d))
-                        (.autolinks (.opts d))))]
+                        (.autolinks (.opts d))
+                        (.math (.opts d))))]
         (do
           (while (< (.pos ip) (.len ip)) (md/-parse-inline! ip))
           (md/-process-emphasis! ip -1)

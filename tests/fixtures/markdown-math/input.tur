@@ -1,0 +1,203 @@
+;; markdown-library-plan M5: TeX math, with MdOpts's math field on -- $...$
+;; and $$...$$ in text and $$ display blocks, by the notebook spice's rules --
+;; and markdown/render-block-html.  Each document is rendered, then walked
+;; with the public API: every block's kind, lines and TeX, then every
+;; inline's kind and text.
+(load "stdlib/markdown.tur")
+
+;; ---- Printing ----------------------------------------------------------------
+
+(defn block-name [b : MdBlock] : cstr
+  (match b
+    (MdDocument) "document"
+    (MdBlockQuote) "block quote"
+    (MdList o s t) (if o "ordered list" "bullet list")
+    (MdItem k) "item"
+    (MdParagraph) "paragraph"
+    (MdHeading l) "heading"
+    (MdThematicBreak) "thematic break"
+    (MdCodeBlock f) "code"
+    (MdHtmlBlock) "html block"
+    (MdTable c) "table"
+    (MdTableRow h) "row"
+    (MdTableCell a) "cell"
+    (MdMathBlock) "math block"))
+
+(defn inline-name [k : MdInline] : cstr
+  (match k
+    (MdText) "text"
+    (MdCode) "code"
+    (MdEmph) "emph"
+    (MdStrong) "strong"
+    (MdLink) "link"
+    (MdImage) "image"
+    (MdHtmlInline) "html"
+    (MdSoftBreak) "softbreak"
+    (MdHardBreak) "hardbreak"
+    (MdStrikethrough) "strikethrough"
+    (MdMath display) (if display "math display" "math")))
+
+;; A String with each line feed shown as \n, so a block's TeX fits on a line.
+(defn push-visible! [out : StringBuilder s : String] : void
+  (let [^mut i 0]
+    (while (< i (string/len s))
+      (do
+        (if (= (string/byte-at s i) 10)
+          (builder/push-cstr! out "\\n")
+          (builder/push-byte! out (string/byte-at s i)))
+        (set! i (+ i 1))))))
+
+;; Append an optional String as name=[s], then release it.
+(defn push-field! [out : StringBuilder name : cstr o : (Option String)] : void
+  (match o
+    (Some s)
+    (do
+      (builder/push-cstr! out name)
+      (builder/push-cstr! out "[")
+      (push-visible! out s)
+      (builder/push-cstr! out "]")
+      (string/release s))
+    (None)
+    nil))
+
+(defn print-line [out : StringBuilder] : void
+  (let [line (builder/finish out)]
+    (do (println (string/to-cstr line)) (string/release line))))
+
+(defn show-inline [d : MdDoc id : MdInlineId depth : int] : void
+  (let [out    (builder/new)
+        kids   (markdown/inline-children d id)
+        ^mut i 0]
+    (do
+      (builder/push-repeat! out (int->char 32) (* 2 depth))
+      (builder/push-cstr! out (inline-name (markdown/inline d id)))
+      (push-field! out " " (markdown/inline-text d id))
+      (print-line out)
+      (while (< i (vec-len kids))
+        (do (show-inline d (vec-get kids i) (+ depth 1)) (set! i (+ i 1))))
+      (vec-free kids))))
+
+(defn show-block [d : MdDoc id : MdBlockId depth : int] : void
+  (let [b      (markdown/block d id)
+        lines  (markdown/block-lines d id)
+        out    (builder/new)
+        ins    (markdown/inlines d id)
+        ^mut i 0]
+    (do
+      (builder/push-repeat! out (int->char 32) (* 2 depth))
+      (builder/push-cstr! out (block-name b))
+      (builder/push-cstr! out " [")
+      (builder/push-int! out (pair-fst lines))
+      (builder/push-cstr! out "-")
+      (builder/push-int! out (pair-snd lines))
+      (builder/push-cstr! out "]")
+      (match b
+        (MdMathBlock)
+        (push-field! out " tex=" (markdown/block-text d id))
+        _
+        nil)
+      (print-line out)
+      (while (< i (vec-len ins))
+        (do (show-inline d (vec-get ins i) (+ depth 1)) (set! i (+ i 1))))
+      (vec-free ins))))
+
+(defn walk [d : MdDoc id : MdBlockId depth : int] : void
+  (let [kids   (markdown/children d id)
+        ^mut i 0]
+    (do
+      (show-block d id depth)
+      (while (< i (vec-len kids))
+        (do (walk d (vec-get kids i) (+ depth 1)) (set! i (+ i 1))))
+      (vec-free kids))))
+
+(defn banner [name : cstr] : void
+  (let [b (string/of "==== " name " ====")]
+    (do (println (string/to-cstr b)) (string/release b))))
+
+(defn show-doc [name : cstr src : cstr opts : MdOpts] : void
+  (let [s (string/from-cstr src)
+        d (markdown/parse s opts)
+        h (markdown/render-html d (markdown/default-html-opts))]
+    (do
+      (string/release s)
+      (banner name)
+      (println (string/to-cstr h))
+      (println "----")
+      (walk d (markdown/root d) 0)
+      (string/release h)
+      (markdown/doc-free d))))
+
+(defn math-opts [] : MdOpts (with (markdown/default-opts) [math true]))
+
+(defn math [name : cstr src : cstr] : void (show-doc name src (math-opts)))
+
+;; Each of the root's children through markdown/render-block-html, which put
+;; together must be the whole document's HTML -- heading ids included.
+(defn show-blocks [name : cstr src : cstr] : void
+  (let [s      (string/from-cstr src)
+        d      (markdown/parse s (math-opts))
+        opts   (MdHtmlOpts (MdRawTagFilter) (MdSlugPython))
+        whole  (markdown/render-html d opts)
+        kids   (markdown/children d (markdown/root d))
+        joined (builder/new)
+        ^mut i 0]
+    (do
+      (string/release s)
+      (banner name)
+      (while (< i (vec-len kids))
+        (let [h (markdown/render-block-html d (vec-get kids i) opts)]
+          (do
+            (println "-- block")
+            (println (string/to-cstr h))
+            (builder/push-string! joined h)
+            (string/release h)
+            (set! i (+ i 1)))))
+      (let [all (builder/finish joined)]
+        (do
+          (println (if (string/eq? all whole)
+                     "the blocks make the document"
+                     "the blocks differ from the document"))
+          (string/release all)))
+      (vec-free kids)
+      (string/release whole)
+      (markdown/doc-free d))))
+
+;; ---- Documents -----------------------------------------------------------------
+
+(defn main [] : int
+  (do
+    ;; $...$ is an inline formula and $$...$$ a display one; what is inside
+    ;; is TeX as written.  A $$ formula may have spaces inside its delimiters.
+    (math "inline"
+      "Euler: $e^{i\\pi} + 1 = 0$, and $$ \\int_0^1 x\\,dx $$ in a line.\n")
+    ;; Not formulas: a $ before a digit (so prices stay text, and a formula
+    ;; that starts with a digit is written ${...}$), a $ with a space inside
+    ;; it, an escaped \$, one that would cross a line ending, and $ in a code
+    ;; span.  A formula that opens first holds a code span as TeX.
+    (math "not math"
+      "$5 and $10. $2^n$ starts with a digit; ${2^n}$ does not.\n$ x$ and $x $ have spaces,\n\\$x$ is escaped,\na formula $does not\ncross$ a line, `$a$` is code, and $a `b` c$ is math.\n")
+    ;; A backslash pair never closes a formula: \$ stays inside, and the $
+    ;; after \\ closes it.
+    (math "backslashes" "$a\\$b$ and $\\\\$ and $\\{x\\}$\n")
+    ;; A display block: $$ alone on its line, up to a closing $$ line; the
+    ;; TeX keeps its line breaks and the indentation past the opener's.
+    (math "display block" "$$\n\\frac{a}{b}\n  = c\n$$\n\n  $$\n    w\n  $$\n")
+    ;; $$, a formula and $$ on one line are a block by themselves; with
+    ;; nothing between them they are text.
+    (math "one line" "$$ x = 1 $$\n\n$$$$\n")
+    ;; A $$ line interrupts a paragraph, and works in containers.
+    (math "interrupts" "Before\n$$\nx\n$$\nafter\n")
+    (math "containers" "> $$\n> y\n> $$\n\n- item\n\n  $$\n  z\n  $$\n")
+    ;; A $$ line that no $$ line closes before its container ends is text.
+    (math "unclosed" "$$\nnot closed\n\n# Heading\n\n> $$\n> x\n\n$$ ok $$\n")
+    ;; In a table cell \| is a pipe, inside a formula too.
+    (math "table" "| f | g |\n| --- | --- |\n| $a\\|b$ | $c$ |\n")
+    ;; With math off -- markdown/default-opts -- all of it is text.
+    (show-doc "math off"
+      "Euler: $e^{i\\pi}$ and $$x$$.\n\n$$\ny\n$$\n"
+      (markdown/default-opts))
+    ;; markdown/render-block-html, one top-level block at a time: the second
+    ;; heading keeps the id it has in the whole document.
+    (show-blocks "render-block-html"
+      "# A\n\n$$\nx\n$$\n\n# A\n\n- p\n- q\n")
+    0))

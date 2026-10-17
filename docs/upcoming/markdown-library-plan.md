@@ -9,7 +9,9 @@
 > examples pass. M4 is built too (#1249, section 6.5, "M4 as built"): the
 > docs pipeline renders with `tur/markdown`, here and, since
 > turmeric-spices#107, in turmeric-spices, and python-markdown is gone from
-> both.
+> both. M5 has begun: the library half of the notebook consumer -- TeX math
+> and `markdown/render-block-html` -- is built (section 6.6, "M5a as
+> built"); the notebook spice moving onto it is next.
 > Written 2026-10-15; its open questions were settled with the author the same
 > day (section 8). It started as "would
 > `tools/gendocs.py` be a candidate to move to Turmeric?" A straight gendocs port
@@ -914,6 +916,54 @@ a `SlugMode`, for READMEs that are read on GitHub.
   these tools move to Turmeric.
 - **Terminal rendering:** `markdown/render-ansi` for `tur doc`, the REPL's
   `(doc ...)` and spice READMEs on the command line. Later.
+
+What M5 can do now (2026-10-17): the notebook is the one consumer that
+exists. Literate `.tur.md` is still a plan (`reader-envelopes-...` says "not
+yet implemented"), so its agreement test has nothing to test; the fence
+scanners move only with their tools; terminal rendering is "later". So M5 is
+the notebook, in two PRs that cannot be stacked: M5a in this repository, the
+library half, then M5b in turmeric-spices once a `tur` with M5a is on `main`.
+
+**M5a as built.**
+
+- **Math.** `MdOpts`'s `math` field, reserved since M1, now does something.
+  The rules are the notebook's (its `cmark.tur`), so its notebooks parse as
+  they did:
+  - `$...$` is an inline formula. The opening `$` has neither whitespace nor
+    a digit after it, so `$5 and $10` stays text, and the closing `$` has no
+    whitespace before it.
+  - `$$...$$` in a paragraph is a display formula, and may have spaces inside
+    its delimiters. The notebook read it as `$...$` plus a stray `$`.
+  - Neither crosses a line ending, a backslash pair never closes one, and the
+    TeX inside is kept as written.
+  - A line of `$$` opens a display block that runs, like a fenced code block,
+    to a closing `$$` line, and loses the opener's indentation from each
+    line. A line of `$$ x $$` is one by itself. Either interrupts a paragraph
+    and works in containers. The notebook's parser read a block quote's or
+    list item's content as one paragraph, so it found none there.
+  - **An unclosed `$$` line is text**, as in the notebook (its test 24). The
+    CommonMark algorithm has no lookahead, so `md/-parse-blocks` parses
+    again with the opener's line in `no-math` when a formula ends without
+    its `$$`. Each pass adds a line, and a document without a stray `$$`
+    parses once.
+  - Rendered as the notebook does, for KaTeX's auto-render:
+    `<span class="math inline">$x$</span>`, and `math display` with `$$`.
+  - The API gains `(MdMathBlock)` and `(MdMath display)`. `markdown/block-text`
+    and `markdown/inline-text` give the TeX. **This breaks a `match` that
+    lists every `MdBlock` or `MdInline` case** -- exhaustiveness is an error
+    -- which three fixtures here did. Nothing outside does.
+  - Off in `markdown/default-opts`: the guides use `$` in shell examples, so
+    the docs site leaves it off.
+- **`markdown/list-marker`**: a list's bullet or delimiter, as a `Char`. The
+  notebook's API hands it out as a list's info, and nothing public had it.
+- **`markdown/render-block-html`**: one block and everything in it, as the
+  whole document's HTML has it. A heading keeps its document-wide id, and the
+  root's children rendered in turn are the document. The notebook renders
+  its prose this way, a block at a time between its cells.
+- **Tests.** Fixture `markdown-math` covers the rules, the API and
+  `render-block-html`, compiled and under `--interpret`, and carries
+  `requires.leak-check`; `markdown-blocks` prints each list's marker. The
+  spec examples run with math off, as before.
 
 ## 7. Compiler friction the spikes found
 

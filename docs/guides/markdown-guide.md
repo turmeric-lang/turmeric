@@ -11,7 +11,7 @@ out as HTML. It follows the [CommonMark spec](https://spec.commonmark.org/0.31.2
 version 0.31.2, and is checked against the spec's own examples. On top of that
 it has GitHub's four extensions -- tables, strikethrough, extended autolinks
 and task list items -- as [cmark-gfm](https://github.com/github/cmark-gfm),
-GitHub's renderer, implements them.
+GitHub's renderer, implements them, and TeX math for the notebook spice.
 
 It is pure Turmeric apart from the Unicode and HTML-entity tables, which the
 interpreter carries as natives. So the same program runs compiled, under
@@ -28,6 +28,7 @@ Phase M):
 | M2 | Inline syntax: emphasis and strong emphasis, code spans, links and images (inline and by reference), autolinks, raw inline HTML, backslash escapes, entities, hard and soft breaks | Done |
 | M3 | The GFM extensions (tables, strikethrough, extended autolinks, task lists), heading ids, `markdown/headings` and `markdown/code-blocks` | Done |
 | M4 | The docs site renders its guides and spice READMEs with it (`tools/md/render.tur`), in place of python-markdown | Done |
+| M5 | TeX math (`$...$`, `$$...$$` and `$$` blocks) and `markdown/render-block-html`, for the notebook spice; the notebook moving onto the library | Math and the renderer done; the notebook next |
 
 All of CommonMark is in, and so are the extensions: every one of the
 CommonMark spec's 652 examples passes, and so does every one of the 24 GFM
@@ -85,6 +86,12 @@ items without `<p>`. The paragraph matters here: without it, the indented line
 after the blank line would continue the second item, making the list loose,
 rather than start a code block.
 
+`markdown/render-block-html` writes one block, and everything in it, as
+`markdown/render-html` would write it in place: a heading keeps the id it has
+in the whole document, and a paragraph in a tight list still has no `<p>`. So
+rendering each of the root's children in turn gives the document's HTML, which
+is how a page can put something of its own between blocks.
+
 Any `String` parses, because Markdown has no syntax errors. Lines may end in LF,
 CR or CR LF, and a NUL byte reads as U+FFFD.
 
@@ -108,8 +115,7 @@ beyond CommonMark:
 - `(markdown/default-opts)` turns the four GFM extensions on and math off.
 - `(markdown/commonmark-opts)` turns everything off.
 
-`math` is not implemented yet: setting it changes nothing. It is there for the
-notebook, which comes later in the plan (section 6.6).
+[Math](#math) has what `math` turns on.
 
 `markdown/render-html` takes an `MdHtmlOpts` with two fields. The first,
 `raw-html`, says what to do with HTML written into the document:
@@ -182,6 +188,51 @@ quirks. `tests/run-markdown-diff.sh` holds the two to the same HTML (see
 `(markdown/commonmark-opts)` turns all four off, and `MdOpts` turns each on or
 off by itself.
 
+## Math
+
+With `MdOpts`'s `math` field on, the parser reads TeX formulas, and the
+renderer writes each one with its dollar signs in a span, for
+[KaTeX's auto-render](https://katex.org/docs/autorender) to find:
+
+| Written | Is | Rendered as |
+| --- | --- | --- |
+| `$x^2$` in a paragraph | an inline formula | `<span class="math inline">$x^2$</span>` |
+| `$$x^2$$` in a paragraph | a display formula | `<span class="math display">$$x^2$$</span>` |
+| a line `$$`, the formula's lines, a line `$$` | a display block | the same span, on its own line |
+| a line `$$ x^2 $$` | a display block | the same |
+
+The rules are the notebook spice's, so its notebooks read as they did:
+
+- **Opening and closing.** The `$` that opens an inline formula has neither a
+  space nor a digit after it, and the `$` that closes it has no space before
+  it. So `$5 and $10` stays text. A formula that starts with a digit is
+  written in braces: `${2^n}$`.
+- **What is inside** is TeX as written. Backslashes stay, nothing in it is
+  Markdown, and a backslash pair never closes a formula, so `$a\$b$` holds
+  `a\$b`. A `$$` formula may have spaces inside its delimiters.
+- **Line endings.** A formula in a paragraph does not cross one. A display
+  formula that spans lines is a block.
+- **Blocks.** A `$$` line can sit up to three spaces in and interrupt a
+  paragraph, and works inside block quotes and list items. The block runs to
+  the next line that is `$$` and nothing else (indented at most three
+  spaces). Each line loses as much indentation as the opening line had, as a
+  fenced code block's do. A `$$` line that nothing closes before its container
+  ends is ordinary text, so a stray one cannot swallow the rest of a document.
+- **Escaping.** `\$` is a dollar sign, as any escaped punctuation is.
+
+A display block is an `(MdMathBlock)` block whose `markdown/block-text` is its
+TeX; an inline one is an `(MdMath display)` inline whose
+`markdown/inline-text` is its TeX, with `display` true for `$$`. Math is off in
+`(markdown/default-opts)`: the docs site leaves it off, since its guides use
+`$` in shell examples. Turn it on with `with`:
+
+```turmeric
+(markdown/parse src (with (markdown/default-opts) [math true]))
+```
+```sweet-exp
+markdown/parse src with(markdown/default-opts() [math true])
+```
+
 ## Walking the tree
 
 The document is a tree of blocks. `markdown/root` is the document block, and
@@ -203,16 +254,19 @@ what a block is:
 | `(MdTable columns)` | a table, holding its rows |
 | `(MdTableRow header)` | a table row, holding its cells; `header` is true for the first |
 | `(MdTableCell align)` | a table cell; `align` is `(MdAlignNone)`, `(MdAlignLeft)`, `(MdAlignCenter)` or `(MdAlignRight)` |
+| `(MdMathBlock)` | a `$$` display formula, with [math](#math) on |
 
-Three more accessors read a block's details:
+Four more accessors read a block's details:
 
 - `markdown/block-text` returns a leaf block's text as `(some s)`, a fresh
   `String`, or `(none)` for a container block. That is a paragraph's or
   heading's source text (trimmed, with its inline syntax still in it), a code
-  block's contents, or an HTML block's HTML. The next section has the parsed
-  form.
+  block's contents, an HTML block's HTML, or a display formula's TeX. The next
+  section has the parsed form.
 - `markdown/code-info` returns a fenced code block's info string, such as
   `"python"`.
+- `markdown/list-marker` returns a list's marker as a `Char`: the bullet (`-`,
+  `+` or `*`) or the delimiter after an ordered list's numbers (`.` or `)`).
 - `markdown/block-lines` returns the source lines a block spans, as
   `(pair first last)`.
 
@@ -393,13 +447,14 @@ is:
 | `(MdLink)` | a link, autolinks and extended autolinks included | inlines, a destination and a title |
 | `(MdImage)` | an image | its alt text, as inlines, a destination and a title |
 | `(MdSoftBreak)`, `(MdHardBreak)` | a line ending, and one written as a break (`<br />`) | nothing |
+| `(MdMath display)` | a formula, with [math](#math) on; `display` is true for `$$...$$` | its TeX |
 
 Three accessors read an inline's details, each as `(some s)`, a fresh
 `String`, or `(none)`:
 
-- `markdown/inline-text` returns what a text, code or raw-HTML inline holds. A
-  text inline's escapes and character references are resolved, and a code
-  span's line endings are spaces.
+- `markdown/inline-text` returns what a text, code, raw-HTML or math inline
+  holds. A text inline's escapes and character references are resolved, and a
+  code span's line endings are spaces.
 - `markdown/link-dest` returns a link's or image's destination as the HTML has
   it: escapes resolved and the URL percent-encoded.
 - `markdown/link-title` returns its title, or `(none)` when it has none.

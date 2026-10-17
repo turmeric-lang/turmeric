@@ -6,8 +6,10 @@
 ;;; markdown/default-opts it adds GitHub's four extensions -- tables,
 ;;; strikethrough, extended autolinks and task list items -- as cmark-gfm
 ;;; 0.29.0.gfm.13 implements them, and passes the 24 GFM extension examples.
-;;; The renderer can give headings ids by python-markdown's rule or GitHub's
-;;; (MdSlugMode).  tests/run-markdown-spec.sh runs the spec's examples.
+;;; MdOpts's math field adds TeX math -- $...$, $$...$$ and $$ display blocks
+;;; -- written out for KaTeX's auto-render to find.  The renderer can give
+;;; headings ids by python-markdown's rule or GitHub's (MdSlugMode).
+;;; tests/run-markdown-spec.sh runs the spec's examples.
 ;;;
 ;;; The tree is walked by id: markdown/children and markdown/block for
 ;;; blocks, then markdown/inlines, markdown/inline-children and
@@ -104,12 +106,7 @@
 ;;;   (markdown/doc-free d)
 ;;;
 ;;; Since: markdown-library-plan M1
-(defn markdown/doc-free [d : MdDoc] : void
-  (do
-    (string/release-all (.strs d))
-    (vec-free (.nodes d))
-    (vec-free (.refs d))
-    (vec-free (.inls d))))
+(defn markdown/doc-free [d : MdDoc] : void (md/-free-doc d))
 ;;; markdown/escape-html -- s with & < > and " replaced by their HTML entities.
 ;;;
 ;;; Parameters:
@@ -147,6 +144,8 @@
 ;;; (MdHeading level): 1 to 6.  (MdCodeBlock fenced).
 ;;; (MdTable columns), (MdTableRow header?) and (MdTableCell alignment) are a
 ;;; GFM table: its rows are its children, and a row's cells are its children.
+;;; (MdMathBlock) is a $$ display formula, with math on; markdown/block-text
+;;; has its TeX.
 
 (defdata MdBlock
   :copy
@@ -161,7 +160,8 @@
   (MdHtmlBlock)
   (MdTable int)
   (MdTableRow bool)
-  (MdTableCell MdAlign))
+  (MdTableCell MdAlign)
+  (MdMathBlock))
 ;;; md/-node-of -- internal: the arena node behind id.
 
 (defn md/-node-of [d : MdDoc id : MdBlockId] : MdNode
@@ -263,13 +263,16 @@
       (MdKTableRow)
       (MdTableRow (= (.level n) 1))
       (MdKTableCell)
-      (MdTableCell (md/-align (.level n))))))
+      (MdTableCell (md/-align (.level n)))
+      (MdKMathBlock)
+      (MdMathBlock))))
 ;;; markdown/block-text -- a leaf block's text.
 ;;;
 ;;; A paragraph's or heading's source text, trimmed, with its inner line
 ;;; endings and its inline syntax kept (markdown/inlines has it parsed); a
 ;;; table cell's, the same, with each \| written as |; a code block's
-;;; contents, ending in a line feed; or an HTML block's HTML.
+;;; contents, ending in a line feed; an HTML block's HTML; or a display
+;;; formula's TeX, ending in a line feed.
 ;;;
 ;;; Parameters:
 ;;;   d  -- the document
@@ -305,6 +308,28 @@
       (none)
       (let [s (vec-get (.strs d) t)]
         (some (string/substring s 0 (string/len s)))))))
+;;; markdown/list-marker -- a list's marker: a bullet list's bullet, or the delimiter after an ordered list's numbers.
+;;;
+;;; Parameters:
+;;;   d  -- the document
+;;;   id -- a block of d
+;;;
+;;; Returns:
+;;;   (some c): #\-, #\+ or #\* for a bullet list, #\. or #\) for an ordered
+;;;   one; (none) for any other block.
+;;;
+;;; Example:
+;;;   (markdown/list-marker d id)  ; => (some #\)) for "1) one\n2) two"
+;;;
+;;; Since: markdown-library-plan M5
+(defn markdown/list-marker [d : MdDoc id : MdBlockId] : (Option Char)
+  (let [n (md/-node-of d id)
+        l (.list n)]
+    (match (.kind n)
+      (MdKList)
+      (some (int->char (if (.ordered l) (.delim l) (.bullet l))))
+      _
+      (none))))
 ;;; markdown/block-lines -- the source lines a block spans.
 ;;;
 ;;; Parameters:
@@ -320,6 +345,26 @@
 ;;; Since: markdown-library-plan M1
 (defn markdown/block-lines [d : MdDoc id : MdBlockId] : (Pair int int)
   (let [n (md/-node-of d id)] (pair (.start-line n) (.end-line n))))
+;;; markdown/render-block-html -- the HTML for one block and everything in it, as markdown/render-html writes it in place.
+;;;
+;;; A heading keeps the id it has in the whole document's HTML, and a
+;;; paragraph of a tight list is still written without <p>, so rendering
+;;; each of the root's children in turn gives the document's HTML.
+;;;
+;;; Parameters:
+;;;   d    -- the document (borrowed)
+;;;   id   -- a block of d
+;;;   opts -- how to treat raw HTML and give headings ids
+;;;
+;;; Returns:
+;;;   A fresh owned String.
+;;;
+;;; Example:
+;;;   (markdown/render-block-html d id (markdown/default-html-opts))  ; => "<p>Hi</p>\n"
+;;;
+;;; Since: markdown-library-plan M5
+(defn markdown/render-block-html [d : MdDoc id : MdBlockId opts : MdHtmlOpts] : String
+  (md/-render-block d opts (.ix id)))
 ;;; md/-blocks-of -- internal: the blocks for which keep? holds, in document order, as MdBlockIds.
 
 (defn md/-blocks-of [d : MdDoc keep? : (fn [MdKind] bool)] : (Vec MdBlockId)
@@ -444,12 +489,13 @@
 (defstruct MdInlineId :copy [ix : int])
 ;;; MdInline -- what an inline is.
 ;;;
-;;; MdText, MdCode and MdHtmlInline carry text (markdown/inline-text).
+;;; MdText, MdCode, MdHtmlInline and MdMath carry text (markdown/inline-text).
 ;;; MdEmph, MdStrong, MdStrikethrough, MdLink and MdImage hold inlines
 ;;; (markdown/inline-children).  A link's or image's destination and title
 ;;; come from markdown/link-dest and markdown/link-title, and an image's
 ;;; children are its alt text.  An autolink, extended ones included (www.,
-;;; scheme:// or an email address), is an MdLink.
+;;; scheme:// or an email address), is an MdLink.  (MdMath display) is a
+;;; formula, with math on: $...$, or $$...$$ when display is true.
 
 (defdata MdInline
   :copy
@@ -462,7 +508,8 @@
   (MdHtmlInline)
   (MdSoftBreak)
   (MdHardBreak)
-  (MdStrikethrough))
+  (MdStrikethrough)
+  (MdMath bool))
 ;;; md/-inl-of -- internal: the arena inline behind id.
 
 (defn md/-inl-of [d : MdDoc id : MdInlineId] : MdInl
@@ -544,12 +591,17 @@
     (MdHardBreak)
     (MdIStrike)
     (MdStrikethrough)
+    (MdIMath)
+    (MdMath false)
+    (MdIMathDisplay)
+    (MdMath true)
     (MdIRoot)
     (MdText)))
-;;; markdown/inline-text -- the text of a text, code or raw-HTML inline.
+;;; markdown/inline-text -- the text of a text, code, raw-HTML or math inline.
 ;;;
 ;;; A text inline's escapes and character references are resolved; a code
-;;; span's contents have their line endings as spaces; raw HTML is as written.
+;;; span's contents have their line endings as spaces; raw HTML is as
+;;; written, and so is a formula's TeX, without its $ delimiters.
 ;;;
 ;;; Parameters:
 ;;;   d  -- the document

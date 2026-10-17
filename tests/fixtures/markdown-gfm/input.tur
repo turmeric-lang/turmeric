@@ -33,7 +33,8 @@
     (MdHtmlBlock) "html block"
     (MdTable c) "table"
     (MdTableRow h) (if h "header row" "row")
-    (MdTableCell a) "cell"))
+    (MdTableCell a) "cell"
+    (MdMathBlock) "math block"))
 
 (defn inline-name [k : MdInline] : cstr
   (match k
@@ -46,7 +47,8 @@
     (MdHtmlInline) "html"
     (MdSoftBreak) "softbreak"
     (MdHardBreak) "hardbreak"
-    (MdStrikethrough) "strikethrough"))
+    (MdStrikethrough) "strikethrough"
+    (MdMath d) "math"))
 
 ;; Append an optional String as name=[s], then release it.
 (defn push-field! [out : StringBuilder name : cstr o : (Option String)] : void

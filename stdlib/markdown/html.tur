@@ -150,6 +150,25 @@
 
 (defn md/-has-pool? [d : MdDoc v : int] : bool
   (and (>= v 0) (> (string/len (md/-pool d v)) 0)))
+;;; md/-math! -- internal: a formula, [i, end) of s, in a span with its $ or $$ delimiters (display) for KaTeX's auto-render to find; just its text in alt text.
+
+(defn md/-math! [^borrow r : rc<MdRen>
+                 b : StringBuilder
+                 alt : bool
+                 display : bool
+                 s : String
+                 i : int
+                 end : int] : void
+  (if alt
+    (md/-text! r b s i end)
+    (do
+      (md/-out! r
+        b
+        (if display
+          "<span class=\"math display\">$$"
+          "<span class=\"math inline\">$"))
+      (md/-text! r b s i end)
+      (md/-out! r b (if display "$$</span>" "$</span>")))))
 ;;; md/-inl-open! -- internal: what comes before inline n's children; all of a leaf.  In alt text (alt) only text is written.
 
 (defn md/-inl-open! [d : MdDoc
@@ -194,6 +213,10 @@
     (if alt
       (md/-text! r b (md/-pool d (.str n)) (.start n) (.end n))
       (md/-raw-html! r b opts (md/-pool d (.str n)) (.start n) (.end n)))
+    (MdIMath)
+    (md/-math! r b alt false (md/-pool d (.str n)) (.start n) (.end n))
+    (MdIMathDisplay)
+    (md/-math! r b alt true (md/-pool d (.str n)) (.start n) (.end n))
     (MdIRoot)
     nil))
 ;;; md/-inl-close! -- internal: what comes after inline n's children.
@@ -358,6 +381,17 @@
     (let [s (md/-text-of d n)] (md/-text! r b s 0 (string/len s)))
     (md/-out! r b "</code></pre>")
     (md/-cr! r b)))
+;;; md/-render-math-block! -- internal: a display formula, on its own line; its text's final line feed is left out.
+
+(defn md/-render-math-block! [d : MdDoc
+                              ^borrow r : rc<MdRen>
+                              b : StringBuilder
+                              n : MdNode] : void
+  (let [s (md/-text-of d n)
+        e (if (md/-ends-nl? s 0 (string/len s))
+            (- (string/len s) 1)
+            (string/len s))]
+    (do (md/-cr! r b) (md/-math! r b false true s 0 e) (md/-cr! r b))))
 ;;; md/-render-heading! -- internal: <h1> to <h6>, with the next heading id when there is one and it is not empty.
 
 (defn md/-render-heading! [d : MdDoc
@@ -514,6 +548,8 @@
       (md/-render-row-open! d r b i n)
       (MdKTableCell)
       (md/-render-cell! d r b opts n)
+      (MdKMathBlock)
+      (md/-render-math-block! d r b n)
       (MdKDocument)
       nil)))
 ;;; md/-render-close! -- internal: what comes after node i's children.
@@ -564,9 +600,28 @@
 ;;; md/-render-doc -- internal: the HTML of document d.
 
 (defn md/-render-doc [d : MdDoc opts : MdHtmlOpts] : String
-  (let [r (rc/of (MdRen true (md/-heading-ids d opts) 0))
+  (md/-render-block d opts 0))
+;;; md/-headings-before -- internal: how many headings come before block i in document order.
+
+(defn md/-headings-before [d : MdDoc i : int] : int
+  (let [^mut j 0
+        ^mut k 0]
+    (do
+      (while (and (>= j 0) (not (= j i)))
+        (do
+          (match (.kind (vec-get (.nodes d) j))
+            (MdKHeading)
+            (set! k (+ k 1))
+            _
+            nil)
+          (set! j (md/-block-next d j))))
+      k)))
+;;; md/-render-block -- internal: the HTML of block i and everything in it, as the whole document's would have it: its headings keep the ids they get there.
+
+(defn md/-render-block [d : MdDoc opts : MdHtmlOpts i : int] : String
+  (let [r (rc/of (MdRen true (md/-heading-ids d opts) (md/-headings-before d i)))
         b (builder/new)]
     (do
-      (md/-render! d r b opts 0)
+      (md/-render! d r b opts i)
       (string/release-all (.ids r))
       (builder/finish b))))

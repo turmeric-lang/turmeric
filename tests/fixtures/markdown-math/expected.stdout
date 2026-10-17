@@ -1,0 +1,183 @@
+==== inline ====
+<p>Euler: <span class="math inline">$e^{i\pi} + 1 = 0$</span>, and <span class="math display">$$\int_0^1 x\,dx$$</span> in a line.</p>
+
+----
+document [1-1]
+  paragraph [1-1]
+    text [Euler: ]
+    math [e^{i\pi} + 1 = 0]
+    text [, and ]
+    math display [\int_0^1 x\,dx]
+    text [ in a line.]
+==== not math ====
+<p>$5 and $10. $2^n$ starts with a digit; <span class="math inline">${2^n}$</span> does not.
+$ x$ and $x $ have spaces,
+$x$ is escaped,
+a formula $does not
+cross$ a line, <code>$a$</code> is code, and <span class="math inline">$a `b` c$</span> is math.</p>
+
+----
+document [1-5]
+  paragraph [1-5]
+    text [$5 and $10. $2^n$ starts with a digit; ]
+    math [{2^n}]
+    text [ does not.]
+    softbreak
+    text [$ x$ and $x $ have spaces,]
+    softbreak
+    text [$x$ is escaped,]
+    softbreak
+    text [a formula $does not]
+    softbreak
+    text [cross$ a line, ]
+    code [$a$]
+    text [ is code, and ]
+    math [a `b` c]
+    text [ is math.]
+==== backslashes ====
+<p><span class="math inline">$a\$b$</span> and <span class="math inline">$\\$</span> and <span class="math inline">$\{x\}$</span></p>
+
+----
+document [1-1]
+  paragraph [1-1]
+    math [a\$b]
+    text [ and ]
+    math [\\]
+    text [ and ]
+    math [\{x\}]
+==== display block ====
+<span class="math display">$$\frac{a}{b}
+  = c$$</span>
+<span class="math display">$$  w$$</span>
+
+----
+document [1-8]
+  math block [1-4] tex=[\frac{a}{b}\n  = c\n]
+  math block [6-8] tex=[  w\n]
+==== one line ====
+<span class="math display">$$x = 1$$</span>
+<p>$$$$</p>
+
+----
+document [1-3]
+  math block [1-1] tex=[x = 1\n]
+  paragraph [3-3]
+    text [$$$$]
+==== interrupts ====
+<p>Before</p>
+<span class="math display">$$x$$</span>
+<p>after</p>
+
+----
+document [1-5]
+  paragraph [1-1]
+    text [Before]
+  math block [2-4] tex=[x\n]
+  paragraph [5-5]
+    text [after]
+==== containers ====
+<blockquote>
+<span class="math display">$$y$$</span>
+</blockquote>
+<ul>
+<li>
+<p>item</p>
+<span class="math display">$$z$$</span>
+</li>
+</ul>
+
+----
+document [1-9]
+  block quote [1-3]
+    math block [1-3] tex=[y\n]
+  bullet list [5-9]
+    item [5-9]
+      paragraph [5-5]
+        text [item]
+      math block [7-9] tex=[z\n]
+==== unclosed ====
+<p>$$
+not closed</p>
+<h1>Heading</h1>
+<blockquote>
+<p>$$
+x</p>
+</blockquote>
+<span class="math display">$$ok$$</span>
+
+----
+document [1-9]
+  paragraph [1-2]
+    text [$$]
+    softbreak
+    text [not closed]
+  heading [4-4]
+    text [Heading]
+  block quote [6-7]
+    paragraph [6-7]
+      text [$$]
+      softbreak
+      text [x]
+  math block [9-9] tex=[ok\n]
+==== table ====
+<table>
+<thead>
+<tr>
+<th>f</th>
+<th>g</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><span class="math inline">$a|b$</span></td>
+<td><span class="math inline">$c$</span></td>
+</tr>
+</tbody>
+</table>
+
+----
+document [1-3]
+  table [1-3]
+    row [1-1]
+      cell [1-1]
+        text [f]
+      cell [1-1]
+        text [g]
+    row [3-3]
+      cell [3-3]
+        math [a|b]
+      cell [3-3]
+        math [c]
+==== math off ====
+<p>Euler: $e^{i\pi}$ and $$x$$.</p>
+<p>$$
+y
+$$</p>
+
+----
+document [1-5]
+  paragraph [1-1]
+    text [Euler: $e^{i\pi}$ and $$x$$.]
+  paragraph [3-5]
+    text [$$]
+    softbreak
+    text [y]
+    softbreak
+    text [$$]
+==== render-block-html ====
+-- block
+<h1 id="a">A</h1>
+
+-- block
+<span class="math display">$$x$$</span>
+
+-- block
+<h1 id="a_1">A</h1>
+
+-- block
+<ul>
+<li>p</li>
+<li>q</li>
+</ul>
+
+the blocks make the document

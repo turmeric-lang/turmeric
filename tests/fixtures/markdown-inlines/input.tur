@@ -17,7 +17,8 @@
     (MdHtmlInline) "html"
     (MdSoftBreak) "softbreak"
     (MdHardBreak) "hardbreak"
-    (MdStrikethrough) "strikethrough"))
+    (MdStrikethrough) "strikethrough"
+    (MdMath d) "math"))
 
 ;; Append an optional String as name=[s], then release it.
 (defn push-field! [out : StringBuilder name : cstr o : (Option String)] : void

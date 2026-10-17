@@ -30,7 +30,8 @@
   (MdKHtmlBlock)
   (MdKTable)
   (MdKTableRow)
-  (MdKTableCell))
+  (MdKTableCell)
+  (MdKMathBlock))
 ;;; MdListData -- a list's or list item's marker: kind, bullet or delimiter byte, start number, tightness, and the item's content column.
 
 (defstruct MdListData
@@ -59,7 +60,8 @@
 ;;; item's task box (0 none, 1 unchecked, 2 checked), 1 on a paragraph once
 ;;; it has failed to become a table's header (cmark-gfm's TABLE_VISITED), and 2
 ;;; on the paragraph of the lines above a table's header, which cmark-gfm never
-;;; reads link reference definitions from.
+;;; reads link reference definitions from, and 1 on a display formula that its
+;;; closing $$ ended.
 
 (defstruct MdNode
   :copy
@@ -97,7 +99,9 @@
   (MdILink)
   (MdIImage)
   (MdIHtml)
-  (MdIStrike))
+  (MdIStrike)
+  (MdIMath)
+  (MdIMathDisplay))
 ;;; MdInl -- one inline in the arena.
 ;;;
 ;;; parent, first-child, last-child, prev and next are inline-arena indices,
@@ -121,8 +125,8 @@
 ;;; MdOpts -- what markdown/parse recognises beyond CommonMark.
 ;;;
 ;;; The GitHub Flavored Markdown extensions -- tables, strikethrough, extended
-;;; autolinks and task list items, as cmark-gfm 0.29 implements them -- and $
-;;; and $$ math, which nothing reads yet.
+;;; autolinks and task list items, as cmark-gfm 0.29 implements them -- and
+;;; TeX math: $...$ and $$...$$ in text, and a $$ display block.
 
 (defstruct MdOpts
   :copy
@@ -158,7 +162,8 @@
    indent : int
    blank : bool
    partial-tab : bool
-   all-closed : bool])
+   all-closed : bool
+   no-math : (Vec int)])
 ;;; MdCont -- a container's answer to a line: it continues, it does not, or it consumed the line.
 
 (defdata MdCont :copy (MdMatched) (MdUnmatched) (MdLineDone))
@@ -216,7 +221,17 @@
 ;;; md/-accepts-lines? -- internal: does a block of kind k take text lines?
 
 (defn md/-accepts-lines? [k : MdKind] : bool
-  (match k (MdKParagraph) true (MdKCodeBlock) true (MdKHtmlBlock) true _ false))
+  (match k
+    (MdKParagraph)
+    true
+    (MdKCodeBlock)
+    true
+    (MdKHtmlBlock)
+    true
+    (MdKMathBlock)
+    true
+    _
+    false))
 ;;; md/-can-contain? -- internal: can a block of kind parent hold a child of kind child?
 
 (defn md/-can-contain? [parent : MdKind child : MdKind] : bool
@@ -660,6 +675,20 @@
       (do
         (vec-set! (md/-strs st) t (string/substring s 0 (- len 1)))
         (string/release s)))))
+;;; md/-finalize-math! -- internal: a display formula's text loses its first line, which is the opening $$ line's (empty) rest.
+
+(defn md/-finalize-math! [^borrow st : rc<MdSt> i : int] : void
+  (let [t   (md/-take-text! st i)
+        s   (md/-str st t)
+        len (string/len s)
+        a   (match (string/index-of-char s (int->char 10))
+              (Some p)
+              (+ p 1)
+              (None)
+              len)]
+    (do
+      (vec-set! (md/-strs st) t (string/substring s a (- len a)))
+      (string/release s))))
 ;;; md/-finalize-kind! -- internal: the per-kind work when node i closes.
 
 (defn md/-finalize-kind! [^borrow st : rc<MdSt> i : int] : void
@@ -676,6 +705,8 @@
     (md/-finalize-code! st i)
     (MdKHtmlBlock)
     (md/-finalize-html! st i)
+    (MdKMathBlock)
+    (md/-finalize-math! st i)
     _
     nil))
 ;;; md/-finalize! -- internal: close node i, ending at line, and make its parent the tip.
@@ -758,7 +789,11 @@
         (if (and (<= (.indent st) 3)
               (>= run (.len f))
               (md/-rest-blank? st (+ (.nn st) run)))
-          (do (md/-finalize! st i (.line-no st)) (MdLineDone))
+          (do
+            (when (md/-math-block? (md/-kind st i))
+              (md/-put! st i (with (md/-node st i) [level 1])))
+            (md/-finalize! st i (.line-no st))
+            (MdLineDone))
           (let [^mut k (.off f)]
             (do
               (while (and (> k 0) (md/-space-tab? (md/-at st (.offset st))))
@@ -809,6 +844,8 @@
     (MdKThematicBreak)
     (MdUnmatched)
     (MdKCodeBlock)
+    (md/-continue-code st i)
+    (MdKMathBlock)
     (md/-continue-code st i)
     (MdKHtmlBlock)
     (md/-continue-html st i)
@@ -912,6 +949,95 @@
               (md/-advance-next-nonspace! st)
               (md/-advance! st run false)
               (MdLeafStart)))))
+      (MdNoStart))))
+;; ---- Display formulas (markdown-library-plan M5) -----------------------------------
+;; With math on, a line of $$ (up to three spaces in, then only spaces and
+;; tabs) opens a display formula that runs, like a fenced code block, to a
+;; closing $$ line; a line holding $$, the formula and $$ is one by itself.
+;; Either can interrupt a paragraph.  A $$ line that no $$ line closes before
+;; its container ends opens nothing: md/-parse-blocks parses again with that
+;; line in no-math, so a stray $$ cannot swallow the rest of a document.  The
+;; rules are the notebook spice's, whose parser this replaces.
+;;; md/-math? -- internal: is $ math on?
+
+(defn md/-math? [^borrow st : rc<MdSt>] : bool (.math (.opts (.doc st))))
+;;; md/-math-block? -- internal: is k a display formula?
+
+(defn md/-math-block? [k : MdKind] : bool (match k (MdKMathBlock) true _ false))
+;;; md/-int-in? -- internal: does v hold x?
+
+(defn md/-int-in? [v : (Vec int) x : int] : bool
+  (let [^mut i   0
+        ^mut hit false]
+    (do
+      (while (and (not hit) (< i (vec-len v)))
+        (do (when (= (vec-get v i) x) (set! hit true)) (set! i (+ i 1))))
+      hit)))
+;;; md/-backslash-pair? -- internal: is offset j of the line a backslash with a character after it?
+
+(defn md/-backslash-pair? [^borrow st : rc<MdSt> j : int] : bool
+  (and (= (md/-at st j) 92) (>= (md/-at st (+ j 1)) 0)))
+;;; md/-closing-dollars? -- internal: is offset j of the line a $$ with only spaces and tabs after it?
+
+(defn md/-closing-dollars? [^borrow st : rc<MdSt> j : int] : bool
+  (and (= (md/-at st j) 36)
+    (= (md/-at st (+ j 1)) 36)
+    (md/-rest-blank? st (+ j 2))))
+;;; md/-math-close-at -- internal: where a $$ that ends the current line (but for spaces and tabs) starts, searching from offset i past any backslash pair; -1 when there is none.
+
+(defn md/-math-close-at [^borrow st : rc<MdSt> i0 : int] : int
+  (let [^mut j   i0
+        ^mut hit -1]
+    (do
+      (while (and (< hit 0) (>= (md/-at st j) 0))
+        (cond (md/-backslash-pair? st j)  (set! j (+ j 2))
+              (md/-closing-dollars? st j) (set! hit j)
+              :else                       (set! j (+ j 1))))
+      hit)))
+;;; md/-start-math -- internal: with math on, $$ alone on its line opens a display formula, and $$, a formula and $$ on one line are one.
+
+(defn md/-start-math [^borrow st : rc<MdSt>] : MdStart
+  (let [p     (.nn st)
+        after (+ p 2)]
+    (if (and (md/-math? st)
+          (not (md/-indented? st))
+          (= (md/-at st p) 36)
+          (= (md/-at st (+ p 1)) 36))
+      (if (md/-rest-blank? st after)
+        (if (md/-int-in? (.no-math st) (.line-no st))
+          (MdNoStart)
+          (let [off (.indent st)]
+            (do
+              (md/-close-unmatched! st)
+              (let [b (md/-add-child! st (MdKMathBlock))]
+                (do
+                  (md/-put! st
+                    b
+                    (with (md/-node st b) [fence (MdFence true 36 2 off)]))
+                  (md/-advance-to-end! st)
+                  (MdLeafStart))))))
+        (let [z (md/-math-close-at st after)]
+          (if (< z 0)
+            (MdNoStart)
+            ;; a and e bound the formula in the source, its spaces trimmed.
+            (let [ls (.line-start st)
+                  a  (md/-trim-index (md/-src st) (+ ls after) (+ ls z))
+                  e  (md/-trim-end-index (md/-src st) a (+ ls z))]
+              (if (> e a)
+                (do
+                  (md/-close-unmatched! st)
+                  (let [b   (md/-add-child! st (MdKMathBlock))
+                        buf (vec-get (.bufs st) (.buf (md/-node st b)))]
+                    (do
+                      ;; An empty first line, as the opening line of a block leaves.
+                      (builder/push-byte! buf 10)
+                      (string/-push-range! buf (md/-src st) a e)
+                      (builder/push-byte! buf 10)
+                      (md/-put! st b (with (md/-node st b) [level 1]))
+                      (md/-finalize! st b (.line-no st))
+                      (md/-advance-to-end! st)
+                      (MdLeafStart))))
+                (MdNoStart))))))
       (MdNoStart))))
 ;;; md/-has-at? -- internal: do the bytes of needle occur in s at index i?
 
@@ -1399,6 +1525,7 @@
     (do
       (when (md/-no-start? r) (set! r (md/-start-atx st)))
       (when (md/-no-start? r) (set! r (md/-start-fence st)))
+      (when (md/-no-start? r) (set! r (md/-start-math st)))
       (when (md/-no-start? r) (set! r (md/-start-html st container)))
       (when (md/-no-start? r) (set! r (md/-start-setext st container)))
       (when (md/-no-start? r) (set! r (md/-start-break st)))
@@ -1410,6 +1537,7 @@
 
 (defn md/-maybe-special? [c : int] : bool
   (or (= c 35)
+    (= c 36)
     (= c 96)
     (= c 126)
     (= c 42)
@@ -1602,9 +1730,52 @@
                   (+ e 2)
                   (+ e 1)))))))
       (.line-no st))))
+;;; md/-free-doc -- internal: release a document and everything it holds.
+
+(defn md/-free-doc [d : MdDoc] : void
+  (do
+    (string/release-all (.strs d))
+    (vec-free (.nodes d))
+    (vec-free (.refs d))
+    (vec-free (.inls d))))
+;;; md/-open-math-lines -- internal: the opening lines of the display formulas no closing $$ ended.
+
+(defn md/-open-math-lines [d : MdDoc] : (Vec int)
+  (let [out    (md/-new-ints)
+        ^mut i 0]
+    (do
+      (while (< i (vec-len (.nodes d)))
+        (let [n (vec-get (.nodes d) i)]
+          (do
+            (when (and (md/-math-block? (.kind n)) (= (.level n) 0))
+              (vec-push! out (.start-line n)))
+            (set! i (+ i 1)))))
+      out)))
 ;;; md/-parse-blocks -- internal: the block structure of src.
+;;;
+;;; Parsed again, with their $$ lines as text, while a display formula is
+;;; left open; see "Display formulas" above.
 
 (defn md/-parse-blocks [src : String opts : MdOpts] : MdDoc
+  (let [no-math   (md/-new-ints)
+        ^mut d    (md/-parse-once src opts no-math)
+        ^mut open (md/-open-math-lines d)]
+    (do
+      (while (> (vec-len open) 0)
+        (let [^mut k 0]
+          (do
+            (while (< k (vec-len open))
+              (do (vec-push! no-math (vec-get open k)) (set! k (+ k 1))))
+            (vec-free open)
+            (md/-free-doc d)
+            (set! d (md/-parse-once src opts no-math))
+            (set! open (md/-open-math-lines d)))))
+      (vec-free open)
+      (vec-free no-math)
+      d)))
+;;; md/-parse-once -- internal: the block structure of src, with no display formula opening on the lines in no-math.
+
+(defn md/-parse-once [src : String opts : MdOpts no-math : (Vec int)] : MdDoc
   (let [doc (MdDoc (md/-new-nodes)
               (md/-new-strs)
               (md/-new-refs)
@@ -1625,7 +1796,8 @@
                      0
                      false
                      false
-                     true))]
+                     true
+                     no-math))]
     (do
       (vec-push! (.strs doc) (md/-copy-source src))
       (vec-push! (.nodes doc) (md/-new-node (MdKDocument) -1 1))
