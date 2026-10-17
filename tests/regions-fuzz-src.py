@@ -499,12 +499,18 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--n", type=int, default=100, help="programs to generate")
     ap.add_argument("--seed", type=int, default=1)
+    ap.add_argument("--first", type=int, default=0,
+                    help="run programs --first..--n-1 only: a program depends "
+                         "on (seed, index) alone, so this replays one finding "
+                         "without the programs before it")
     ap.add_argument("--cases", type=int, default=6, help="brackets per program")
     ap.add_argument("--jobs", type=int, default=max(1, (os.cpu_count() or 2) - 1))
     ap.add_argument("--tur", default=os.path.join(REPO, "build", "tur"))
     ap.add_argument("--save-dir", default=None, help="write failing programs here")
     ap.add_argument("--self-test", action="store_true")
     args = ap.parse_args()
+    if not 0 <= args.first < args.n:
+        ap.error("--first must be at least 0 and below --n")
 
     tur = os.path.abspath(args.tur)
     build = os.path.dirname(tur)
@@ -520,9 +526,11 @@ def main():
     print("regions-fuzz-src: reference arm " +
           fuzz_arm.armed_env(dict(os.environ))[1], flush=True)
 
-    programs = [gen_program(args.seed, i, args.cases) for i in range(args.n)]
+    programs = [(i, gen_program(args.seed, i, args.cases))
+                for i in range(args.first, args.n)]
+    total = len(programs)
     kinds = {}
-    for _, _, _, _, cases in programs:
+    for _, (_, _, _, _, cases) in programs:
         for c in cases:
             kinds[c.kind] = kinds.get(c.kind, 0) + 1
 
@@ -537,7 +545,7 @@ def main():
     # Report each program the moment it finishes (as_completed, not map
     # order), flushed: under a pipe or ctest nothing showed until exit.
     with concurrent.futures.ThreadPoolExecutor(max_workers=args.jobs) as ex:
-        futs = [ex.submit(work, item) for item in enumerate(programs)]
+        futs = [ex.submit(work, item) for item in programs]
         done = 0
         for fut in concurrent.futures.as_completed(futs):
             i, src, problems, on = fut.result()
@@ -555,11 +563,13 @@ def main():
                     with open(fn, "w") as f:
                         f.write(src)
                     print(f"  saved {fn}", flush=True)
-            elif done % 10 == 0 or done == args.n:
-                print(f"  {done}/{args.n} programs done", flush=True)
+            elif done % 10 == 0 or done == total:
+                print(f"  {done}/{total} programs done", flush=True)
 
-    print(f"regions-fuzz-src: {args.n} programs x {args.cases} cases, seed {args.seed}: "
-          f"{args.n - failures} passed, {failures} failed; "
+    which = (f"{total} programs" if not args.first
+             else f"programs {args.first}..{args.n - 1}")
+    print(f"regions-fuzz-src: {which} x {args.cases} cases, seed {args.seed}: "
+          f"{total - failures} passed, {failures} failed; "
           f"runtime rewinds={total_rw} retires={total_rt}")
     print("  case kinds: " + ", ".join(f"{k}={v}" for k, v in sorted(kinds.items())))
     return 1 if failures else 0
