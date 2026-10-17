@@ -1245,7 +1245,7 @@ GUIDE_CSS = '''\
     .code-toggle { border:1px solid var(--border); border-radius:4px; margin-bottom:1rem; overflow:hidden; }
     .code-card-bar { background:var(--bg-surface); border-bottom:1px solid var(--border); padding:0.35rem 0.75rem; display:flex; align-items:center; }
     .code-syntax-toggle { margin-left:auto; display:flex; border:1px solid var(--border); border-radius:4px; overflow:hidden; font-family:"Iosevka","Fira Code",monospace; font-size:11px; }
-    .seg-btn { padding:3px 10px; background:transparent; color:var(--text-sec); border:none; cursor:pointer; transition:all 0.14s; }
+    .seg-btn { padding:3px 10px; background:transparent; color:var(--text-sec); border:none; cursor:pointer; }
     .seg-btn:hover { color:var(--text-primary); }
     .seg-btn.active { color:var(--gold-bright); background:var(--bg-hover); }
     .code-card-body { }
@@ -1694,7 +1694,7 @@ def render_index(categories: list[dict], all_stems: set[str], out_dir: Path,
     .index-card ul li a {{ color:var(--text-primary); }}
     .index-card ul li a:hover {{ color:var(--gold); }}
     .recent-tablist {{ display:inline-flex; border:1px solid var(--border); border-radius:4px; overflow:hidden; margin-bottom:0.6rem; font-family:system-ui; font-size:0.8rem; }}
-    .recent-tablist .seg-btn {{ padding:4px 12px; background:transparent; color:var(--text-sec); border:none; cursor:pointer; font:inherit; transition:all 0.14s; }}
+    .recent-tablist .seg-btn {{ padding:4px 12px; background:transparent; color:var(--text-sec); border:none; cursor:pointer; font:inherit; }}
     .recent-tablist .seg-btn + .seg-btn {{ border-left:1px solid var(--border); }}
     .recent-tablist .seg-btn:hover {{ color:var(--text-primary); }}
     .recent-tablist .seg-btn.active {{ color:var(--gold-bright); background:var(--bg-hover); }}
