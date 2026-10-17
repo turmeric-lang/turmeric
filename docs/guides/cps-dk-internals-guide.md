@@ -270,11 +270,11 @@ Calls go down a decision ladder in `cps_tail`/`cps_bind` (`EX_CALL`):
 `while` loops with an interior control operator (`build_loop`) lower to a
 helper that takes the loop's carried `^mut` state as parameters. A variable
 that is not set exactly once per iteration, unconditionally, becomes a
-by-reference cell instead. Nested performing loops are still refused. A
-`return` inside such a loop is currently mistranslated as a `break` when code
-follows the loop
-([report](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/cps-loop-return-acts-as-break.md)). The
-user-facing limits are listed in the effects guide's
+by-reference cell instead. Nested performing loops are still refused, and so
+is a `return` inside such a loop when code follows it: the helper's own
+continuation is the code after the loop, so the return would act as a `break`
+([cps-loop-return-acts-as-break](../archive/cps-loop-return-acts-as-break.md)).
+The user-facing limits are listed in the effects guide's
 [Performs inside loops and conditionals](effects-system-guide.md#performs-inside-loops-and-conditionals).
 `TUR_TRACE_CORE=1` prints `[LOOP-CARRIED]` and `[LOOP-REJECT]` lines for this
 step, and `[CTX-REJECT]` lines for cloneable and serial contexts that cannot

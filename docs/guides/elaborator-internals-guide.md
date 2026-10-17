@@ -332,9 +332,10 @@ It also pre-declares one `def` shape, `(def ^mut x : any ...)`
 The forward declaration is deliberately incomplete. A compound parameter
 type is the `TY_INT` placeholder, and **an unannotated return is `TY_INT`**
 in a typed file (`TY_ANY` in a dynamic one). Pass 2's `elab_defn` replaces
-the binding's type with the real one, but a caller elaborated earlier has
-already been typed against the placeholder. So annotate the return type of
-any function you call above its definition.
+the binding's type with the real one, but a caller elaborated earlier would
+already have been typed against the placeholder, so such a callee counts as
+lossy for the ordering below and its callers wait for its body
+([forward-call-to-unannotated-return-typed-int](../archive/forward-call-to-unannotated-return-typed-int.md)).
 
 ### Pass 2: order, deferral and retry
 
@@ -351,8 +352,10 @@ around `elab_form`. Two mechanisms change the order:
   real error reports for real
   ([typeclass-method-resolution-ignores-the-class](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/typeclass-method-resolution-ignores-the-class.md)).
 - **Lossy callees (`FwdGenOrder`).** A forward declaration loses a generic
-  callee's type parameters and a function-typed parameter's carrier flag. So a
-  `defn` that calls such a callee before its definition waits for it.
+  callee's type parameters, a function-typed parameter's carrier flag, and an
+  inferred return type (`fgo_return_unannotated`). So a `defn` that calls such
+  a callee before its definition waits for it. A cycle of them (an
+  unannotated mutually recursive pair) is broken at its first member.
   `fwd_gen_order_should_defer` parks it, and `tl_flush` elaborates the waiting
   `defn`s a later form names before that form. The scan is over unexpanded
   forms, so a call introduced by a macro is not seen
@@ -929,7 +932,6 @@ Each was reproduced against the compiler this guide describes and filed in
 [`docs/reported/`](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/README.md). When one is fixed and archived,
 update the passage above that describes it and drop it from this list.
 
-- [forward-call-to-unannotated-return-typed-int](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/forward-call-to-unannotated-return-typed-int.md) -- A call to a later-defined function with no return annotation is typed `int`
 - [let-bound-nullary-generic-retyped-invalid-c](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/let-bound-nullary-generic-retyped-invalid-c.md) -- A `let`-bound call to a nullary generic emits invalid C
 
 ## Maintenance

@@ -16939,6 +16939,7 @@ static TuriValue turi_eval_impl(TuriEnv *env, const char *src, const char *path,
      * turn's defeffects into the shared env is harmless.  The builtin
      * `Unsafe` is registered as the compiled pipeline does (PASS_EFFECT_LOWER
      * in main.c), for the same parity reason. */
+    int eff_rc = 0;
     {
         EffectEnv *eff_env = (EffectEnv *)env->effect_env;
         if (!eff_env) {
@@ -16950,9 +16951,12 @@ static TuriValue turi_eval_impl(TuriEnv *env, const char *src, const char *path,
                                                      &env->st);
             env->effect_env = eff_env;
         }
-        effect_check_pass(eval_arena, prog, eff_env);
-        /* Warnings are emitted as a side-effect; ignore hard errors in
-         * interpreter mode (they would already be caught as elaboration errors). */
+        /* turi-ignores-effect-row-errors: a hard error here (TUR-E0009, ...)
+         * stops the turn below, as PASS_EFFECT_ROW_INFER stops the compiled
+         * pipeline.  It used to be ignored on the theory that elaboration
+         * already caught it; it did not, so the program printed the error and
+         * then ran to completion with exit 0. */
+        eff_rc = effect_check_pass(eval_arena, prog, eff_env);
     }
 
     /* 6c. Run the always-on lifetime pass (elision + outlives-cycle check).
@@ -16963,8 +16967,14 @@ static TuriValue turi_eval_impl(TuriEnv *env, const char *src, const char *path,
      * outlives cycle -- a shape no positive program contains -- so running it
      * here closes the parity gap without affecting any well-formed program.
      * The full move/borrow checker is intentionally left to the elaborator
-     * (which the interpreter already shares). */
-    if (!lifetime_check_program(prog)) {
+     * (which the interpreter already shares).
+     *
+     * turi-skips-handler-borrow-capture-check: the always-on check that a
+     * handler case does not capture a borrow runs here too, as it does in
+     * PASS_BORROW_CHECK; `errors/effect-handler-borrow` printed 42 and exited
+     * 0 under --interpret. */
+    if (eff_rc != 0 || !borrow_check_effect_handler_captures(prog) ||
+        !lifetime_check_program(prog)) {
         env->n_acc_forms = acc_committed;   /* TR2: uncommit this turn's forms */
         if (env->elab_session) {            /* see the discard note above */
             elab_session_free(env->elab_session);

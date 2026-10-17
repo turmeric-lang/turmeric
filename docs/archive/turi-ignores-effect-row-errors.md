@@ -1,5 +1,8 @@
 # `tur --interpret` prints effect-row errors and then runs the program anyway
 
+**RESOLVED 2026-10-17** -- see [Resolution](#resolution-2026-10-17). Pinned by
+`tests/run-turi.sh`, whose errors pass now requires a non-zero exit.
+
 **Severity:** low-medium. A program the compiler rejects runs to completion and
 exits 0 under the interpreter, after printing the error.
 
@@ -29,3 +32,12 @@ diagnostic text, so it passes whether or not execution continues.
   pipeline does.
 - Have `run-turi.sh`'s errors pass also require a non-zero exit, as `run.sh`
   does.
+
+## Resolution (2026-10-17)
+
+`turi_eval_impl` (`src/turi/eval.c`) keeps `effect_check_pass`'s result and
+stops the turn on an error, with the same cleanup as the other checks there,
+so the interpreter exits 1 after TUR-E0009 as the compiled path does.
+`tests/run-turi.sh`'s errors pass now requires a non-zero exit too; an
+`errors/` fixture the interpreter runs to exit 0 fails with "the interpreter
+exited 0 on an errors/ fixture".

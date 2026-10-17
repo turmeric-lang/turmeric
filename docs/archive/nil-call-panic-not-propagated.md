@@ -1,5 +1,8 @@
 # A panic inside a `: nil` call does not stop its caller
 
+**RESOLVED 2026-10-17** -- see [Resolution](#resolution-2026-10-17). Pinned by
+`nil-call-panic-propagates`.
+
 **Severity:** medium. After a call to a `: nil` function panics, the compiled
 caller keeps running its next statements before the panic is noticed.
 
@@ -39,3 +42,21 @@ Not yet checked: whether functions emitted by the CPS backend
 - Emit the panic check after a `nil` call in statement position, the same
   check the value path emits. Keep the elision only where the callee is
   provably non-panicking.
+
+## Resolution (2026-10-17)
+
+Both backends now check the panic signal after a `: nil` call in statement
+position, as they already did after a call with a value:
+
+- direct emitter: `emit_stmt` (`src/compiler/emit_stmt.c`) follows the bare
+  `boom(n);` with `emit_panic_signal_return`, which fires the function's open
+  defer frames and returns;
+- CPS backend: the `CT_LETRAW` nil arm (`src/compiler/emit_cps_ir.c`) follows
+  the statement with `cps_panic_check` when it is a call. The open question in
+  the report was answered by measuring it: the CPS path had the same gap.
+
+The check is unconditional, like the value path's; a callee that cannot panic
+costs one predictable branch. The `expected.c` snapshots were regenerated.
+
+Pinned by `nil-call-panic-propagates`, which covers a direct and a CPS-lowered
+caller, and checks that a `: nil` call that does not panic still runs on.

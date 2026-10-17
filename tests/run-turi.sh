@@ -144,7 +144,19 @@ _tur_hash_stdin() {
 export TUR_STDLIB_HASH="$(find stdlib -type f 2>/dev/null | LC_ALL=C sort |
     while IFS= read -r _f; do printf '%s\n' "$_f"; cat "$_f"; done | _tur_hash_stdin)"
 
-stamp_key() { echo "$(_tur_hash_file "$1")-${TUR_MTIME}-${TUR_STDLIB_HASH}"; }
+# run-sh-stamp-cache-ignores-expectation-files: the key covers the WHOLE
+# fixture directory -- the expectation files, `flags` and the `requires.*` /
+# `known.*` markers as well as the input -- less the outputs the harnesses
+# write there.  It used to hash only the input, so tightening an expectation
+# kept serving the old PASS until TUR_FORCE=1.
+_tur_fixture_hash() {
+    local d; d="$(dirname "$1")"
+    find "$d" -maxdepth 1 -type f ! -name 'actual.*' ! -name 'turi.*' \
+         ! -name '*.result' 2>/dev/null | LC_ALL=C sort |
+        while IFS= read -r _f; do printf '%s\n' "${_f##*/}"; cat "$_f"; done |
+        _tur_hash_stdin
+}
+stamp_key() { echo "$(_tur_hash_file "$1")-$(_tur_fixture_hash "$1")-${TUR_MTIME}-${TUR_STDLIB_HASH}"; }
 stamp_check() {
     [ "$TUR_FORCE" = "1" ] && return 1
     local sf="$STAMP_CACHE/$(printf '%s' "$1" | tr '/ ' '__').stamp"
@@ -454,17 +466,28 @@ run_turi_error_fixture() {
 
     local flags=""; [ -f "$dir/flags" ] && flags=$(cat "$dir/flags")
     local err="$dir/turi.stderr"
+    local rc
     if command -v timeout >/dev/null 2>&1; then
-        timeout 15 "$TUR" $flags --interpret "$dir/input.tur" >/dev/null 2>"$err" || true
+        timeout 15 "$TUR" $flags --interpret "$dir/input.tur" >/dev/null 2>"$err"
     else
-        "$TUR" $flags --interpret "$dir/input.tur" >/dev/null 2>"$err" || true
+        "$TUR" $flags --interpret "$dir/input.tur" >/dev/null 2>"$err"
     fi
+    rc=$?
 
     local missing=0 needle
-    while IFS= read -r needle; do
+    while IFS= read -r needle || [ -n "$needle" ]; do
         [ -z "$needle" ] && continue
         grep -F -q "$needle" "$err" || missing=1
     done < "$needles"
+
+    # turi-ignores-effect-row-errors: an errors/ fixture must FAIL, as run.sh
+    # requires of the compile.  Ignoring the status let the interpreter print
+    # the diagnostic and then run the program to exit 0, and still pass.
+    if [ "$rc" -eq 0 ]; then
+        echo "FAIL $name -- the interpreter exited 0 on an errors/ fixture"
+        echo "FAIL" > "$RESULTS_DIR/$rkey.result"
+        return
+    fi
 
     if [ "$missing" -eq 0 ]; then
         stamp_write "$name" "$dir/input.tur"
@@ -616,7 +639,7 @@ run_turi_fixture() {
     # differently on purpose; the fixture's stdout and exit still count.
     if [ -f "$dir/expected.stderr" ] && [ ! -f "$dir/stderr.compiled-only" ]; then
         local missing=0
-        while IFS= read -r needle; do
+        while IFS= read -r needle || [ -n "$needle" ]; do
             [ -z "$needle" ] && continue
             if ! grep -F -q -- "$needle" "$actual_stderr"; then
                 [ $missing -eq 0 ] && echo "FAIL $name -- expected stderr substring not found:"
@@ -638,7 +661,7 @@ run_turi_fixture() {
 
 export TUR STAMP_CACHE RESULTS_DIR TUR_FORCE TUR_MTIME
 export -f run_turi_fixture fixture_inline_c_runs fixture_inline_c_jit_runs fixture_has_inline_c stamp_check stamp_write stamp_key
-export -f _tur_hash_file _tur_mtime
+export -f _tur_hash_file _tur_mtime _tur_hash_stdin _tur_fixture_hash
 export -f run_turi_error_fixture err_in_denyset marker_skip record_result
 
 # Build list of all fixture dirs (top-level and one subdirectory deep).

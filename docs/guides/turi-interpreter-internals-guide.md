@@ -40,8 +40,8 @@ Related guides, not repeated here:
 
 1. **Same front end.** Every entry point ends in `turi_eval_impl`
    (`src/turi/eval.c`). It parses, runs the same elaborator as the compiled
-   path (`elaborate_program_session`), then `effect_check_pass` and
-   `lifetime_check_program`. It does **not** run `PASS_CPS`, any emitter, or
+   path (`elaborate_program_session`), then `effect_check_pass`,
+   `borrow_check_effect_handler_captures` and `lifetime_check_program`. It does **not** run `PASS_CPS`, any emitter, or
    a C compiler. The interpreter walks the elaborated `Expr` tree directly.
 2. **Values** are a 16-byte tagged union, `TuriValue` (`src/turi/value.h`).
    Structs and ADT values are heap `TuriStruct`s. Most stdlib handles (Vec,
@@ -194,7 +194,10 @@ A turn:
    walks `env->acc_turns` turn by turn.
 6. Runs `effect_check_pass` with a **session-scoped** `EffectEnv`
    (`env->effect_env`), so effects declared in earlier turns resolve.
-7. Runs `lifetime_check_program`.
+7. Runs `borrow_check_effect_handler_captures` and `lifetime_check_program`.
+   An error from step 6 or 7 ends the turn before anything is evaluated, as
+   it ends the compiled build
+   ([turi-ignores-effect-row-errors](../archive/turi-ignores-effect-row-errors.md)).
 8. Publishes the turn's `TypeClassEnv` to `env->last_tc_env` **before**
    evaluating; runtime dictionary dispatch reads it.
 9. Evaluates program items: first the file-scope defs (`[0, n_fsd)`,
@@ -216,7 +219,7 @@ A turn:
 | `PASS_EFFECT_LOWER` | Only its `EffectEnv` setup; `effect_lower` is a no-op anyway |
 | `PASS_EFFECT_ROW_INFER` | `effect_check_pass` |
 | `PASS_CPS` | Not run |
-| `PASS_BORROW_CHECK` | Only `lifetime_check_program`. `borrow_check_program` is disabled process-wide (`borrow_check_enabled` is never set), so skipping it costs no parity. `borrow_check_effect_handler_captures` is **not** run, so a handler case that reads an outer borrow is rejected compiled but runs here: `tests/fixtures/errors/effect-handler-borrow` prints 42 under `--interpret` instead of its diagnostic |
+| `PASS_BORROW_CHECK` | `borrow_check_effect_handler_captures` and `lifetime_check_program`. `borrow_check_program` is disabled process-wide (`borrow_check_enabled` is never set), so skipping it costs no parity. The handler-capture check used to be skipped, so `errors/effect-handler-borrow` printed 42 under `--interpret` ([turi-skips-handler-borrow-capture-check](../archive/turi-skips-handler-borrow-capture-check.md)) |
 | Emission, cc, link | Not run |
 
 The elaborator itself branches on `g_interpret_mode` in a few places. That
@@ -994,10 +997,7 @@ Each was reproduced against the compiler this guide describes and filed in
 [`docs/reported/`](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/README.md). When one is fixed and archived,
 update the passage above that describes it and drop it from this list.
 
-- [turi-skips-handler-borrow-capture-check](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/turi-skips-handler-borrow-capture-check.md) -- `tur --interpret` skips the effect-handler borrow-capture check
 - [turi-option-map-native-reintroduces-c-recursion](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/turi-option-map-native-reintroduces-c-recursion.md) -- The interpreter's native `option-map` re-nests the C stack
-- [turi-ignores-effect-row-errors](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/turi-ignores-effect-row-errors.md) -- `tur --interpret` prints effect-row errors and then runs the program anyway
-- [needle-files-without-trailing-newline-assert-nothing](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/needle-files-without-trailing-newline-assert-nothing.md) -- Needle files without a trailing newline assert nothing
 
 ## Maintenance
 

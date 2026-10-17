@@ -442,6 +442,7 @@ const char *diag_code_to_string(DiagCode code) {
         case TUR_E0622_TUR_VERSION_MALFORMED:     return "TUR-E0622";
         case TUR_W0623_TUR_VERSION_ABOVE_CEILING: return "TUR-W0623";
         case TUR_W0624_NO_ENTRY_POINT_NEAR_MISS:   return "TUR-W0624";
+        case TUR_W0625_TOPLEVEL_MAIN_CALL_DROPPED: return "TUR-W0625";
         case TUR_W0706_IMAGE_GLOBAL_UNREGISTERED:  return "TUR-W0706";
         case TUR_E0332_SWEET_DOLLAR_IN_BRACKETS:   return "TUR-E0332";
         case TUR_E0716_TAILCALL_NOT_TAIL:          return "TUR-E0716";
@@ -627,6 +628,7 @@ DiagCode diag_code_from_string(const char *s) {
     if (strcmp(s, "TUR-E0622") == 0) return TUR_E0622_TUR_VERSION_MALFORMED;
     if (strcmp(s, "TUR-W0623") == 0) return TUR_W0623_TUR_VERSION_ABOVE_CEILING;
     if (strcmp(s, "TUR-W0624") == 0) return TUR_W0624_NO_ENTRY_POINT_NEAR_MISS;
+    if (strcmp(s, "TUR-W0625") == 0) return TUR_W0625_TOPLEVEL_MAIN_CALL_DROPPED;
     if (strcmp(s, "TUR-W0706") == 0) return TUR_W0706_IMAGE_GLOBAL_UNREGISTERED;
     if (strcmp(s, "TUR-E0332") == 0) return TUR_E0332_SWEET_DOLLAR_IN_BRACKETS;
     if (strcmp(s, "TUR-E0716") == 0) return TUR_E0716_TAILCALL_NOT_TAIL;
@@ -2807,6 +2809,17 @@ static const DiagExplanation diag_explanations_[] = {
       "\n"
       "`with-region` is the odd one out precisely because its proof reads the\n"
       "one thing Saffron makes `any`: the inferred result type of the body.\n",
+    },
+    { TUR_W0625_TOPLEVEL_MAIN_CALL_DROPPED,
+      "TUR-W0625: a top-level `(main)` in a file that defines `main` is ignored\n"
+      "\n"
+      "`main` is the program's entry point.  Every top-level form runs first,\n"
+      "in source order, and then `main` does -- in the compiled program and\n"
+      "under `tur --interpret` alike.  A trailing `(main)`, the script habit,\n"
+      "would therefore run it a second time, so it is dropped.\n"
+      "\n"
+      "  (defn main [] : int (println \"hi\") 0)\n"
+      "  (main)          ; TUR-W0625: remove it -- main already runs\n",
     },
     { TUR_E0313_DICT_PASS_NESTED_LAMBDA,
       "TUR-E0313: a class method on a constrained type variable is called\n"

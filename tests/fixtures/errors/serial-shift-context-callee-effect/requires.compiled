@@ -1,0 +1,1 @@
+TUR-E0706 is the CPS backend refusing an effect in a serial-shift context callee; the interpreter has no such limit and runs the program (42), as input.tur says.

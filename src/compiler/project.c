@@ -88,6 +88,37 @@ static bool role_eq(const char *a, const char *b) {
 
 /* ---- recursive projection helper ---- */
 
+/* The whole protocol being projected (session_project), for the choice rule
+ * below: whether a role other than two given ones takes part anywhere. */
+static const GlobalInteraction *s_proj_root;
+
+static bool gi_mentions_other_role(const GlobalInteraction *g, const char *a,
+                                   const char *b, int depth) {
+    if (!g || depth > 4096) return false;
+    #define OTHER(r) ((r) && !role_eq((r), a) && !role_eq((r), b))
+    switch (g->kind) {
+    case GI_MSG:
+        if (OTHER(g->msg.from) || OTHER(g->msg.to)) return true;
+        return gi_mentions_other_role(g->msg.rest, a, b, depth + 1);
+    case GI_CHOICE:
+        if (OTHER(g->choice.decider)) return true;
+        for (int i = 0; i < g->choice.n_branches; i++)
+            if (gi_mentions_other_role(g->choice.branches[i].body, a, b, depth + 1))
+                return true;
+        return gi_mentions_other_role(g->choice.rest, a, b, depth + 1);
+    case GI_LOOP:
+        return gi_mentions_other_role(g->loop.body, a, b, depth + 1) ||
+               gi_mentions_other_role(g->loop.rest, a, b, depth + 1);
+    case GI_TIMEOUT:
+        if (OTHER(g->timed.from) || OTHER(g->timed.to)) return true;
+        return gi_mentions_other_role(g->timed.ok, a, b, depth + 1) ||
+               gi_mentions_other_role(g->timed.expired, a, b, depth + 1);
+    default:
+        return false;
+    }
+    #undef OTHER
+}
+
 static Type *project_inner(Elab *e, GlobalInteraction *step, const char *role,
                             LoopEntry *loops, int n_loops,
                             GlobalInteraction *end_cont, Span span);
@@ -171,9 +202,26 @@ static Type *project_inner(Elab *e, GlobalInteraction *step, const char *role,
             if (proto_equal(b0, b1)) {
                 /* Branches are equal -- role is uninvolved in the choice */
                 return b0;
-            } else {
-                /* Branches differ -- role is notified (Branch) */
+            } else if (!gi_mentions_other_role(s_proj_root, step->choice.decider,
+                                               role, 0)) {
+                /* Branches differ -- role is notified (Branch).  Only the
+                 * decider's peer can be: the choice travels on their channel,
+                 * which is the whole protocol when it has these two roles. */
                 return arena_type(e, type_branch(b0, b1));
+            } else {
+                /* session-project-nonprojectable (found when needle files
+                 * started being read): a third role that behaves differently
+                 * in the branches has no way to learn which one was taken --
+                 * nothing carries the choice to it -- so it is not
+                 * projectable, as the session-types guide specifies.  It used
+                 * to project to a Branch it could never be offered. */
+                diag_emit_with_code(DIAG_ERROR, span, TUR_E0220_GLOBAL_NOT_PROJECTABLE,
+                                    "project: role '%s' behaves differently in the "
+                                    "branches of the choice made by '%s', but cannot "
+                                    "learn which branch was taken; make its protocol "
+                                    "the same in every branch",
+                                    role, step->choice.decider);
+                return NULL;
             }
         }
     }
@@ -303,5 +351,9 @@ static Type *project_inner(Elab *e, GlobalInteraction *step, const char *role,
 Type *session_project(Elab *e, GlobalInteraction *step, const char *role, Span span) {
     LoopEntry empty_loops[PROJ_MAX_LOOP_DEPTH];
     (void)empty_loops; /* quiet unused-variable warning when used as pointer */
-    return project_inner(e, step, role, empty_loops, 0, NULL, span);
+    const GlobalInteraction *saved_root = s_proj_root;
+    s_proj_root = step;
+    Type *t = project_inner(e, step, role, empty_loops, 0, NULL, span);
+    s_proj_root = saved_root;
+    return t;
 }

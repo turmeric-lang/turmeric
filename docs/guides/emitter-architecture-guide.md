@@ -329,20 +329,11 @@ Every value call goes through the tail of `emit_value`:
 6. **Drain** the pending drops, push this temp as a pending drop if it is
    itself an owned argument, and close the region bracket on the normal path.
 
-**A `: nil` call is not checked.** `emit_value` returns early for a `nil` or
-`!` call, before the hoist, so no `if (tur_panicking)` follows it. The
-statements after it run with the panic pending, until the next value call's
-check returns. Under `catch-unwind` that is observable:
-
-```turmeric
-(defn boom [n : int] : nil (when (> n 0) (panic "boom")))
-(defn work [n : int] : int (boom n) (println "after boom") n)
-```
-
-emits `boom(n); puts("after boom"); ...`, so `(catch-unwind (fn []
-(work 1)))` prints `after boom` on the compiled path and not under
-`tur --interpret`. Like the ordering hazard, this is a defect, not a
-convention.
+**A `: nil` call is checked too.** It has no value to hoist, so `emit_value`
+returns before the check above; `emit_stmt` writes the bare call and then the
+same `emit_panic_signal_return`. Without it the statements after the call ran
+with the panic pending -- `after boom` printed under `catch-unwind`
+([nil-call-panic-not-propagated](../archive/nil-call-panic-not-propagated.md)).
 
 **`call_ret_note` protocol.** A builder sets the note as the *last* thing
 before returning its call string (`note_call_ret`). `emit_value` copies and
@@ -560,10 +551,13 @@ synthesized `(defn main [] : int (do ... 0))`
 The emitter then sees a user `main` and emits it with `emit_fn_def`. Only
 when the fold aborts (a top-level `do`, a bare atom, an ambiguous macro call)
 does step 14 synthesize `main` itself; that version is indented 4 and ends in
-`return 0;`. With a user `main`, a top-level *statement* in `body` is dropped
-without a diagnostic, while `tur --interpret` runs it
-([top-level-def-init-dropped](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/history/top-level-def-init-dropped.md)
-records this as long-standing behavior).
+`return 0;`. With a user `main`, the top-level statements in `body` go into
+`int __tur_toplevel_stmts(void)`, which C `main` calls where
+`TUR_TOPLEVEL_STMTS_SENTINEL` marks it -- after `*args*` is bound, before the
+user's body -- so they run first, in source order, as under `tur --interpret`
+(`emit_toplevel_stmts_for_user_main`). A bare `(main)` in such a file is
+dropped by the elaborator with TUR-W0625
+([toplevel-statements-dropped-with-user-main](../archive/toplevel-statements-dropped-with-user-main.md)).
 
 ### Where the CPS backend plugs in
 
@@ -1176,8 +1170,6 @@ Each was reproduced against the compiler this guide describes and filed in
 update the passage above that describes it and drop it from this list.
 
 - [compiled-args-not-evaluated-left-to-right](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/compiled-args-not-evaluated-left-to-right.md) -- Compiled code evaluates a later argument's call before an earlier argument
-- [nil-call-panic-not-propagated](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/nil-call-panic-not-propagated.md) -- A panic inside a `: nil` call does not stop its caller
-- [toplevel-statements-dropped-with-user-main](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/toplevel-statements-dropped-with-user-main.md) -- Top-level statements are silently dropped when the file defines `main`
 
 ## Maintenance
 

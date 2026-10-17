@@ -1,5 +1,8 @@
 # `return` inside a CPS-lowered `while` acts as `break`
 
+**RESOLVED 2026-10-17** -- see [Resolution](#resolution-2026-10-17). Pinned by
+`errors/cps-loop-return-refused`.
+
 **Severity:** medium-high. A silent wrong value on the default build: the
 compiled program and `tur --interpret` disagree, and nothing warns.
 
@@ -68,3 +71,20 @@ continuation is the function's, and `return` happens to be correct.
   a wrong value.
 - Add a fixture (`expected.stdout` = `103`) so `run.sh`, `run-turi.sh` and
   `run-jit.sh` all pin it.
+
+## Resolution (2026-10-17)
+
+Refused, per the second fix direction: `build_loop` (`src/passes/cps_ir.c`)
+rejects a join-mode loop -- one with code after it -- whose body contains a
+`return` (`expr_has_return`). The function then cannot be CPS-lowered, and
+since its loop performs, it gets the located "this effect operation has no
+lowering here" error, whose "Known unsupported shapes" list now names this one.
+A wrong value became a compile error. A plain-mode loop (the last form of its
+function) was already correct and still lowers. The interpreter runs the
+program correctly (`103`).
+
+Threading the function's own continuation into the loop helper (the first fix
+direction) would make the shape compile; nothing needs it yet.
+
+Pinned by `errors/cps-loop-return-refused` (`requires.compiled`: the
+interpreter accepts the program).

@@ -45,5 +45,3 @@
     (show-res (mk-res 1))
     (show-res (mk-res -1))
     0))
-
-(main)

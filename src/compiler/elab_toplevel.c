@@ -2141,11 +2141,40 @@ static bool fgo_ann_is_fn_type(const Elab *e, const Form *a) {
            a->as.list.items[0]->as.sym == e->sym_fn;
 }
 
+/* forward-call-to-unannotated-return-typed-int: does the defn whose params
+ * vector is item `pi` leave its return type to inference?  Its pass-1 forward
+ * decl then returns the `int` placeholder, so a caller elaborated before the
+ * body read a float result as an int and a string as its address.  Skips what
+ * elab_defn reads between the params and the return type: an `#fx{...}` row,
+ * the `#reads` / `#writes` frames (either order) and a `^fat` result marker.
+ * A trailing keyword is the body, as there (saffron-dynamic-surface-pass). */
+static bool fgo_return_unannotated(const Elab *e, const Form *f, uint32_t pi) {
+    uint32_t n = f->as.list.len, b = pi + 1;
+    if (b < n && f->as.list.items[b]->tag == F_MAP) b++;
+    for (int slot = 0; slot < 2 && b < n; slot++) {
+        const Form *a = f->as.list.items[b];
+        if (a->tag == F_LIST && (a->fx_prov == (uint8_t)PROV_READS ||
+                                 a->fx_prov == (uint8_t)PROV_WRITES))
+            b++;
+        else
+            break;
+    }
+    if (b < n && f->as.list.items[b]->tag == F_SYM &&
+        f->as.list.items[b]->as.sym == e->sym_caret_fat)
+        b++;
+    if (b >= n) return false;   /* no body: elab_defn reports it */
+    const Form *r = f->as.list.items[b];
+    if (r->tag == F_TYPE_ANN) return false;
+    if (r->tag == F_KEYWORD && b + 1 < n) return false;
+    return true;
+}
+
 /* The name of a `(defn ...)` form, or NULL.  `*lossy` says whether a caller
  * elaborated before it gets a forward decl too lossy to call it through: it
  * declares type parameters, or a function-typed parameter (the forward decl
  * has no FA_POLY_FN flag, so a bare function argument is not wrapped into the
- * `tur_poly_fn_t` the definition takes -- invalid C).  Skips the attributes
+ * `tur_poly_fn_t` the definition takes -- invalid C), or leaves its return
+ * type to inference (fgo_return_unannotated).  Skips the attributes
  * elab_defn accepts before the name.  Two vectors after the name are
  * `[TypeVars] [params]`, the same test the pass-1 forward decl uses. */
 static const Symbol *fgo_defn_name(const Elab *e, const Form *f, bool *lossy) {
@@ -2183,6 +2212,8 @@ static const Symbol *fgo_defn_name(const Elab *e, const Form *f, bool *lossy) {
                 fgo_ann_is_fn_type(e, p))
                 *lossy = true;
         }
+        if (!*lossy && fgo_return_unannotated(e, f, k + 1))
+            *lossy = true;   /* inferred return: the decl says `int` */
     }
     return f->as.list.items[k]->as.sym;
 }
@@ -3163,6 +3194,59 @@ Expr *elaborate_program_session(Arena *arena, SymbolTable *st,
      * graduated), which is what regressed the interpreter eval/REPL value
      * display; suppress it under g_interpret_mode to restore correct value
      * semantics while keeping the compiled-path fold. */
+    /* toplevel-statements-dropped-with-user-main: top-level statements now
+     * run before a user `main` (emit_toplevel_stmts_for_user_main), so a
+     * script-style trailing `(main)` would run `main` twice -- which is what
+     * the interpreter already did -- and, compiled, would call C's own
+     * `int main(int, char **)` with no arguments.  `main` is the entry point;
+     * the call is dropped, in both engines, with TUR-W0625.  Only when the
+     * same form list defines `main`: a REPL turn that calls it still runs it. */
+    if (stdlib_prefix <= nforms) {
+        const Symbol *main_sym = intern_cstr(st, "main");
+        bool defines_main = false;
+        for (uint32_t i = stdlib_prefix; i < nforms && !defines_main; i++) {
+            const Form *f = forms[i];
+            if (!f || f->tag != F_LIST || f->as.list.len < 3) continue;
+            const Form *h = f->as.list.items[0];
+            if (h->tag != F_SYM || h->as.sym != e.sym_defn) continue;
+            uint32_t ni = 1;   /* skip ^attr prefix syms */
+            while (ni < f->as.list.len && f->as.list.items[ni]->tag == F_SYM
+                   && f->as.list.items[ni]->as.sym->name[0] == '^') ni++;
+            if (ni < f->as.list.len && f->as.list.items[ni]->tag == F_SYM &&
+                f->as.list.items[ni]->as.sym == main_sym)
+                defines_main = true;
+        }
+        uint32_t n_main_calls = 0;
+        for (uint32_t i = stdlib_prefix; defines_main && i < nforms; i++) {
+            const Form *f = forms[i];
+            if (f && f->tag == F_LIST && f->as.list.len == 1 &&
+                f->as.list.items[0]->tag == F_SYM &&
+                f->as.list.items[0]->as.sym == main_sym)
+                n_main_calls++;
+        }
+        if (n_main_calls > 0) {
+            Form **kept = (Form **)arena_alloc(arena, nforms * sizeof(Form *));
+            uint32_t nk = 0;
+            for (uint32_t i = 0; i < nforms; i++) {
+                Form *f = forms[i];
+                if (i >= stdlib_prefix && f && f->tag == F_LIST &&
+                    f->as.list.len == 1 && f->as.list.items[0]->tag == F_SYM &&
+                    f->as.list.items[0]->as.sym == main_sym) {
+                    diag_emit_with_code(DIAG_WARNING, f->span,
+                                        TUR_W0625_TOPLEVEL_MAIN_CALL_DROPPED,
+                                        "this top-level `(main)` is ignored: "
+                                        "`main` is the program's entry point "
+                                        "and already runs after the top-level "
+                                        "forms; remove the call");
+                    continue;
+                }
+                kept[nk++] = f;
+            }
+            forms = (Form *const *)kept;
+            nforms = nk;
+        }
+    }
+
     if (!g_interpret_mode
         && !separate_compilation && stdlib_prefix <= nforms) {
         /* Collect every defmacro name (user + stdlib) so a macro-headed

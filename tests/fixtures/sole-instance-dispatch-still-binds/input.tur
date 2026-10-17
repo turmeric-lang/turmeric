@@ -1,0 +1,15 @@
+;; Control for errors/int-receiver-sole-cstr-instance: a lone instance still
+;; binds when the receiver IS its type, and an int receiver still binds an
+;; int instance when a cstr one sits beside it.
+(defclass Shout [a] (shout [x : a] : int))
+(definstance Shout [cstr] (shout [x] (do (println x) 1)))
+
+(defclass Twice [a] (twice [x : a] : a))
+(definstance Twice [int] (twice [x] (* x 2)))
+(definstance Twice [float] (twice [x] (* x 2.0)))
+
+(defn main [] : int
+  (println (shout "hi"))
+  (println (twice 21))
+  (println (twice 1.25))
+  0)

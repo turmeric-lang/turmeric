@@ -1,0 +1,10 @@
+;; int-receiver-binds-sole-foreign-instance: with only `Shout [cstr]` in
+;; scope, `(shout 5)` bound that instance -- `:int` is left out of the
+;; "distinct receiver" check because an int may be an erased carrier word, and
+;; the ambiguity check needs two candidates -- so the C cast 5 to
+;; `const char *` and the program segfaulted after `tur check` passed.
+(defclass Shout [a] (shout [x : a] : int))
+(definstance Shout [cstr] (shout [x] (do (println x) 0)))
+(defn main [] : int
+  (shout 5)
+  0)

@@ -8154,6 +8154,7 @@ static void * hamt_slnew(void) {
 
 static void hamt_slfree(void * m) {
         tur_hamt_free((void *)(intptr_t)(m));
+        if (tur_panicking) return;
 }
 
 static void * hamt_slretain(void * m) {
@@ -8210,10 +8211,12 @@ static int64_t hamt_slhash_hyptr(void * ptr) {
 
 static void hamt_sliter_hyinit(void * iter, void * m) {
         tur_hamt_iter_init((void *)(intptr_t)(iter), (void *)(intptr_t)(m));
+        if (tur_panicking) return;
 }
 
 static void hamt_sliter_hyfree(void * iter) {
         tur_hamt_iter_free((void *)(intptr_t)(iter));
+        if (tur_panicking) return;
 }
 
 static bool hamt_sliter_hynext(void * iter, void * hash_out, void * key_out, void * val_out) {
@@ -8226,6 +8229,7 @@ static void * hamt_sliter_hyalloc(void * m) {
 
 static void hamt_sliter_hydestroy_ex(void * box) {
         tur_hamt_iter_destroy((void *)(intptr_t)(box));
+        if (tur_panicking) return;
 }
 
 static bool hamt_sliter_hyadvance_ex(void * box) {
@@ -8278,6 +8282,7 @@ static const char * hamt_slshow(void * m) {
 
 static void hamt_sldump(void * m) {
         tur_hamt_dump_dot_stderr((void *)(intptr_t)(m));
+        if (tur_panicking) return;
 }
 
 static void * hamt_sltransient(void * m) {
@@ -8286,10 +8291,12 @@ static void * hamt_sltransient(void * m) {
 
 static void hamt_sltransient_hyset_ex(void * t, int64_t hash, void * key, void * val) {
         tur_hamt_transient_set((void *)(intptr_t)(t), hash, (void *)(intptr_t)(key), (void *)(intptr_t)(val));
+        if (tur_panicking) return;
 }
 
 static void hamt_sltransient_hydel_ex(void * t, int64_t hash, void * key) {
         tur_hamt_transient_del((void *)(intptr_t)(t), hash, (void *)(intptr_t)(key));
+        if (tur_panicking) return;
 }
 
 static void * hamt_slpersistent_ex(void * t) {
@@ -8699,6 +8706,7 @@ static bool map_hyeq_hydriver(int64_t m1, int64_t m2, int64_t val_cmp) {
             bool result_1001058 = __ps_139;
             (void)result_1001058;
             hamt_sliter_hydestroy_ex((void *)(intptr_t)(iter_1001056));
+            if (tur_panicking) return ((bool)0);
             bool __t140;
             __t140 = result_1001058;
             __t133 = __t140;
@@ -9510,6 +9518,7 @@ static bool set_hyeq_hydriver(int64_t s1, int64_t s2) {
             bool result_1001441 = __ps_190;
             (void)result_1001441;
             hamt_sliter_hydestroy_ex((void *)(intptr_t)(iter_1001439));
+            if (tur_panicking) return ((bool)0);
             bool __t191;
             __t191 = result_1001441;
             __t184 = __t191;
@@ -10466,7 +10475,9 @@ static int64_t schema_slalt(int64_t a, int64_t b) {
                 tur_adt_Vec__int * _un_unv_1001572 = __ps_213;
                 (void)_un_unv_1001572;
                 vec_hypush_ex((int64_t)(intptr_t)((int64_t)(intptr_t)((int64_t)(intptr_t)(_un_unv_1001572))), _un_unvw_1001571);
+                if (tur_panicking) return ((int64_t)0);
                 vec_hypush_ex((int64_t)(intptr_t)((int64_t)(intptr_t)((int64_t)(intptr_t)(_un_unv_1001572))), b);
+                if (tur_panicking) return ((int64_t)0);
                 tur_adt_Vec__int * __t214;
                 __t214 = _un_unv_1001572;
                 __t212 = __t214;
@@ -10985,6 +10996,7 @@ static int64_t with_hyuntrailed(int64_t body) {
         tur_frame __frame_227;
         tur_frame_init(&__frame_227, NULL);
         untrailed_hybegin();
+        if (tur_panicking) { tur_panicking = 0; tur_frame_fire_lifo(&__frame_227); tur_panicking = 1; return ((int64_t)0); }
         tur_frame_push_defer(&__frame_227, __defer_228, NULL);
         int64_t __t229;
         int64_t __ps_230 = (((int64_t (*)(void*))(intptr_t)((int64_t *)((void *)(intptr_t)(body)))[0])((void *)(intptr_t)(body)));
@@ -11268,6 +11280,7 @@ static tur_adt_Point * over_px__lens_29dc1a87dc9f86df(tur_poly_fn_t h, tur_adt_P
 
 static void __defer_228(void *__env) {
     untrailed_hyend();
+    /* panic-return-signal: ret ctype unknown; no propagation here */
 }
 
 static void __defer_223(void *__env) {

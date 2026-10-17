@@ -7903,6 +7903,7 @@ static void * hamt_slnew(void) {
 
 static void hamt_slfree(void * m) {
         tur_hamt_free((void *)(intptr_t)(m));
+        if (tur_panicking) return;
 }
 
 static void * hamt_slretain(void * m) {
@@ -7959,10 +7960,12 @@ static int64_t hamt_slhash_hyptr(void * ptr) {
 
 static void hamt_sliter_hyinit(void * iter, void * m) {
         tur_hamt_iter_init((void *)(intptr_t)(iter), (void *)(intptr_t)(m));
+        if (tur_panicking) return;
 }
 
 static void hamt_sliter_hyfree(void * iter) {
         tur_hamt_iter_free((void *)(intptr_t)(iter));
+        if (tur_panicking) return;
 }
 
 static bool hamt_sliter_hynext(void * iter, void * hash_out, void * key_out, void * val_out) {
@@ -7975,6 +7978,7 @@ static void * hamt_sliter_hyalloc(void * m) {
 
 static void hamt_sliter_hydestroy_ex(void * box) {
         tur_hamt_iter_destroy((void *)(intptr_t)(box));
+        if (tur_panicking) return;
 }
 
 static bool hamt_sliter_hyadvance_ex(void * box) {
@@ -8027,6 +8031,7 @@ static const char * hamt_slshow(void * m) {
 
 static void hamt_sldump(void * m) {
         tur_hamt_dump_dot_stderr((void *)(intptr_t)(m));
+        if (tur_panicking) return;
 }
 
 static void * hamt_sltransient(void * m) {
@@ -8035,10 +8040,12 @@ static void * hamt_sltransient(void * m) {
 
 static void hamt_sltransient_hyset_ex(void * t, int64_t hash, void * key, void * val) {
         tur_hamt_transient_set((void *)(intptr_t)(t), hash, (void *)(intptr_t)(key), (void *)(intptr_t)(val));
+        if (tur_panicking) return;
 }
 
 static void hamt_sltransient_hydel_ex(void * t, int64_t hash, void * key) {
         tur_hamt_transient_del((void *)(intptr_t)(t), hash, (void *)(intptr_t)(key));
+        if (tur_panicking) return;
 }
 
 static void * hamt_slpersistent_ex(void * t) {
@@ -8448,6 +8455,7 @@ static bool map_hyeq_hydriver(int64_t m1, int64_t m2, int64_t val_cmp) {
             bool result_1001058 = __ps_110;
             (void)result_1001058;
             hamt_sliter_hydestroy_ex((void *)(intptr_t)(iter_1001056));
+            if (tur_panicking) return ((bool)0);
             bool __t111;
             __t111 = result_1001058;
             __t104 = __t111;
@@ -9259,6 +9267,7 @@ static bool set_hyeq_hydriver(int64_t s1, int64_t s2) {
             bool result_1001441 = __ps_161;
             (void)result_1001441;
             hamt_sliter_hydestroy_ex((void *)(intptr_t)(iter_1001439));
+            if (tur_panicking) return ((bool)0);
             bool __t162;
             __t162 = result_1001441;
             __t155 = __t162;
@@ -10215,7 +10224,9 @@ static int64_t schema_slalt(int64_t a, int64_t b) {
                 tur_adt_Vec__int * _un_unv_1001572 = __ps_184;
                 (void)_un_unv_1001572;
                 vec_hypush_ex((int64_t)(intptr_t)((int64_t)(intptr_t)((int64_t)(intptr_t)(_un_unv_1001572))), _un_unvw_1001571);
+                if (tur_panicking) return ((int64_t)0);
                 vec_hypush_ex((int64_t)(intptr_t)((int64_t)(intptr_t)((int64_t)(intptr_t)(_un_unv_1001572))), b);
+                if (tur_panicking) return ((int64_t)0);
                 tur_adt_Vec__int * __t185;
                 __t185 = _un_unv_1001572;
                 __t183 = __t185;
@@ -10734,6 +10745,7 @@ static int64_t with_hyuntrailed(int64_t body) {
         tur_frame __frame_198;
         tur_frame_init(&__frame_198, NULL);
         untrailed_hybegin();
+        if (tur_panicking) { tur_panicking = 0; tur_frame_fire_lifo(&__frame_198); tur_panicking = 1; return ((int64_t)0); }
         tur_frame_push_defer(&__frame_198, __defer_199, NULL);
         int64_t __t200;
         int64_t __ps_201 = (((int64_t (*)(void*))(intptr_t)((int64_t *)((void *)(intptr_t)(body)))[0])((void *)(intptr_t)(body)));
@@ -10958,11 +10970,17 @@ int main(int argc, char **argv) {
                     void * fb_8 = __ps_207;
                     (void)fb_8;
                     scheduler_hymt_hyspawn((void *)(intptr_t)(sched_6), (void *)(intptr_t)(fa_7));
+                    /* panic-return-signal: ret ctype unknown; no propagation here */
                     scheduler_hymt_hyspawn((void *)(intptr_t)(sched_6), (void *)(intptr_t)(fb_8));
+                    /* panic-return-signal: ret ctype unknown; no propagation here */
                     thread_hysleep(INT64_C(100));
+                    /* panic-return-signal: ret ctype unknown; no propagation here */
                     scheduler_hymt_hyfree((void *)(intptr_t)(sched_6));
+                    /* panic-return-signal: ret ctype unknown; no propagation here */
                     fiber_hyfree((void *)(intptr_t)(fa_7));
+                    /* panic-return-signal: ret ctype unknown; no propagation here */
                     fiber_hyfree((void *)(intptr_t)(fb_8));
+                    /* panic-return-signal: ret ctype unknown; no propagation here */
                 }
             }
             int64_t __t208;
@@ -11000,6 +11018,7 @@ static tur_adt_Vec__int * vec_new__spec__tur_adt_Vec__int__(void) {
 
 static void __defer_199(void *__env) {
     untrailed_hyend();
+    /* panic-return-signal: ret ctype unknown; no propagation here */
 }
 
 static void __defer_194(void *__env) {

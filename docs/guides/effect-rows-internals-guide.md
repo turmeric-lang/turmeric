@@ -294,7 +294,7 @@ is suppressed for it).
 | TUR-E0026 | `resolve_declared_row` | an uppercase row name no `defeffect` declares; hints for `stdlib/effects.tur` names, moved attributes (`Construct`/`ByVal`/`NonExhaustive`), and a did-you-mean within edit distance 2 |
 | TUR-E0009 | `effect_row_check_declared` | the inferred row is not a subset of a declared row; one error per offending effect |
 | TUR-E0009 | `check_call_site_rows_in_expr` (ER4) | a fn argument's non-empty row is not a subset of an indexed callee's concrete or empty parameter row |
-| TUR-E0254 | `collect_effects_in_expr` (ER2) | a row variable would be bound to a row containing itself |
+| TUR-E0254 | `collect_effects_in_expr` (ER2) | a row variable would be bound to a row containing itself. Printed once per call site, though every sweep re-walks the call (`e0254_first_report`), and it fails the pass |
 | TUR-W0031 | `effect_row_check_over_annotated` | a declared, non-capability effect is never inferred (nor any descendant of it); skipped for instance methods |
 | TUR-W0030 | `effect_row_check_unannotated` | `--strict-effects`: no declared row, non-empty inferred row; not for forwarding wrappers |
 | TUR-W0032 | `effect_row_check_var_always_concrete` | `--strict-effects`: the declared row is a bare variable and the inferred row, minus capabilities, is concrete and non-empty |
@@ -513,13 +513,6 @@ many times a diagnostic prints.
   (a 33rd effect wrote past a 32-entry stack array); the six row parsers no
   longer drop non-symbol items either
   ([effect-row-non-symbol-items-dropped](../archive/effect-row-non-symbol-items-dropped.md)).
-- **TUR-E0254 repeats.** It is emitted from inside the inference walk, so it
-  prints once per fixpoint sweep plus once per later walk that reaches the
-  call (3 copies for `errors/effect-row-occurs`; unfiled).
-- **The interpreter does not stop on row errors.** `turi_eval_impl` ignores
-  `effect_check_pass`'s result, so `tur --interpret` prints a TUR-E0009 and
-  then runs the program, exit 0; `tests/run-turi.sh` only greps the
-  diagnostic text (unfiled).
 - **`(unsafe ...)` colors.** The marker handle is a coloring seed, so a safe
   wrapper and all its callers are CPS-colored although nothing can be
   performed (see [Capabilities and `Unsafe`](#capabilities-and-unsafe)).
@@ -549,8 +542,7 @@ Each was reproduced against the compiler this guide describes and filed in
 [`docs/reported/`](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/README.md). When one is fixed and archived,
 update the passage above that describes it and drop it from this list.
 
-- [turi-ignores-effect-row-errors](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/turi-ignores-effect-row-errors.md) -- `tur --interpret` prints effect-row errors and then runs the program anyway
-- [e0254-emitted-once-per-fixpoint-sweep](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/e0254-emitted-once-per-fixpoint-sweep.md) -- TUR-E0254 is printed once per effect-inference sweep
+None open.
 
 ## Maintenance
 

@@ -2918,9 +2918,9 @@ static bool collect_web_link_flags(const char *input, Buf *out) {
     bool ok = true;
     if (proj_root) {
         char mpath[4096];
-        snprintf(mpath, sizeof(mpath), "%s/build.tur", proj_root);
         PkgManifest m;
-        if (pkg_manifest_read(mpath, &m)) {
+        if (pkg_resolve_manifest_path(proj_root, mpath, sizeof(mpath)) &&
+            pkg_manifest_read(mpath, &m)) {
             ok = pkg_web_check_gl_agreement(&m.web, m.cmake_deps,
                                             m.n_cmake_deps);
             if (ok) pkg_web_compose_link_flags(&m.web, out);

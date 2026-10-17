@@ -1,5 +1,8 @@
 # `tur add-cmake` rewrites `build.tur` and drops what it does not model
 
+**RESOLVED 2026-10-17** -- see [Resolution](#resolution-2026-10-17). Pinned by
+`add-cmake-keeps-unmodelled-keys` (`tests/spice-resolver-tests.sh`).
+
 **Severity:** high. Running one command silently loses parts of a project's
 manifest, and some of the losses change behavior.
 
@@ -50,3 +53,20 @@ existing text (`pkg_build_tur_add_spice`).
   does.
 - Until then, refuse to rewrite a manifest that contains keys the writer
   does not round-trip.
+
+## Resolution (2026-10-17)
+
+`tur add-cmake` no longer regenerates the file. It edits the existing text the
+way `tur add` does, through the shared `pkg_build_tur_edit`
+(`src/compiler/pkg.c`): `pkg_defpackage_add_map_entry` adds one entry to the
+`:cmake-deps` map, creating the slot if it is missing, and the rest of the
+file -- comments, `:experiments []`, `:members`, `:subdir`, `:exports`,
+`:global` -- is left as it was. The entry carries `:url`, `:ref` and any
+`--opt` values as an `:options` map (`pkg_cmake_entry_val`).
+`pkg_manifest_write` is no longer on this path.
+
+Pinned by `add-cmake-keeps-unmodelled-keys` in
+`tests/spice-resolver-tests.sh`: `add-cmake --ref 10.0.0 --opt FMT_TEST=OFF`
+on a manifest with a comment, `:experiments []`, `:members`, `:exports` and an
+existing `:cmake-deps` entry must keep all of them, keep the comment exactly
+once, and leave a manifest that still reads.

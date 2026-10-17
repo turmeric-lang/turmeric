@@ -1,5 +1,8 @@
 # Needle files without a trailing newline assert nothing
 
+**RESOLVED 2026-10-17** -- see [Resolution](#resolution-2026-10-17). The
+needle loops in both harnesses read an unterminated last line.
+
 **Severity:** medium (test coverage). 39 fixtures' expected diagnostics or
 stderr are never checked, and at least one hides a real interpreter bug.
 
@@ -57,3 +60,25 @@ still reports `PASS`.
   the same change.
 - Expect some of the 39 fixtures to start failing once their needle is read.
   Each such failure is a real divergence that was hidden.
+
+## Resolution (2026-10-17)
+
+Every needle loop in `tests/run.sh` (errors and positive passes, and the
+`run.args` reader) and `tests/run-turi.sh` reads an unterminated last line:
+`while IFS= read -r needle || [ -n "$needle" ]; do`. The 43 files were also
+given their trailing newline, so an older harness reads them too.
+
+Reading the needles surfaced what they had been hiding:
+
+- `errors/effect-handler-borrow` under the interpreter --
+  [turi-skips-handler-borrow-capture-check](turi-skips-handler-borrow-capture-check.md);
+- `errors/session-project-nonprojectable`: the projection gave a role that
+  cannot learn the choice a `Branch` --
+  [session-projection-branches-a-role-that-cannot-learn-the-choice](session-projection-branches-a-role-that-cannot-learn-the-choice.md);
+- needles that had drifted from the diagnostics they were written against,
+  and were updated to the error the fixture still raises at the intended
+  site: `errors/borrow-moved`, `copy-use-after-move` and `ref-use-after-move`
+  (TUR-E0201, with the location), `borrow-ptr-unsafe-required` (the message
+  ends `(unsafe ...)`), `hkt-multi-instance` (the needle named the enum,
+  `TUR_E0020_AMBIGUOUS_DISPATCH`, not the printed `TUR-E0020`), and the
+  `panic-defer` / `panic-ref` stderr, which now carries the panic's location.

@@ -246,6 +246,30 @@ typedef struct {
 } CollectUd;
 static bool collect_visit(const Expr *c, void *ud);
 
+/* e0254-emitted-once-per-fixpoint-sweep: collect_effects_in_expr walks every
+ * body once per sweep of the inference fixpoint, and again from the later
+ * checks, so the occurs-check error it raises at a call printed once per walk
+ * (3 copies for errors/effect-row-occurs).  The call sites reported this pass;
+ * a site prints once.  A non-empty set also fails the pass: the error used to
+ * leave effect_check_pass's result at 0, so `tur --interpret` printed it and
+ * then ran the program. */
+static const Expr **s_e0254_sites;
+static uint32_t s_e0254_n, s_e0254_cap;
+
+static bool e0254_first_report(const Expr *site) {
+    for (uint32_t i = 0; i < s_e0254_n; i++)
+        if (s_e0254_sites[i] == site) return false;
+    if (s_e0254_n == s_e0254_cap) {
+        uint32_t nc = s_e0254_cap ? s_e0254_cap * 2 : 8;
+        const Expr **ns = realloc(s_e0254_sites, nc * sizeof *ns);
+        if (!ns) return true;
+        s_e0254_sites = ns;
+        s_e0254_cap = nc;
+    }
+    s_e0254_sites[s_e0254_n++] = site;
+    return true;
+}
+
 static EffectRow *collect_effects_in_expr(Arena *a, Expr *e,
                                           EffectRow *row,
                                           const FnIndex *idx,
@@ -418,7 +442,8 @@ static EffectRow *collect_effects_in_expr(Arena *a, Expr *e,
                     }
                 }
                 if (actual_row) {
-                    if (!effect_row_unify(param_row, actual_row, subst, a)) {
+                    if (!effect_row_unify(param_row, actual_row, subst, a) &&
+                        e0254_first_report(e)) {
                         diag_emit_with_code(DIAG_ERROR, e->span,
                             TUR_E0254_INFINITE_EFFECT_ROW,
                             "occurs-check failure: unifying effect row variable '%s' with "
@@ -1725,6 +1750,7 @@ int effect_check_pass(Arena *a, Expr *program, EffectEnv *env) {
 
     uint32_t n_items = 0;
     Expr **items = effect_check_items(program, &n_items);
+    s_e0254_n = 0;
 
     /* --- Step -1: Populate the effect env from EX_DEFECT nodes.
      * PASS_EFFECT_LOWER creates a fresh empty env; we scan the elaborated AST
@@ -1996,6 +2022,10 @@ int effect_check_pass(Arena *a, Expr *program, EffectEnv *env) {
         check_unreachable_handlers_in_expr(a, item->as.fn_def_.fn->body, &idx, env);
     }
 
+    if (s_e0254_n > 0) rc = 1;
+    free(s_e0254_sites);
+    s_e0254_sites = NULL;
+    s_e0254_n = s_e0254_cap = 0;
     free(idx.slots);
     free(items);
     return rc;

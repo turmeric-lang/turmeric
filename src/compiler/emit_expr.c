@@ -18117,8 +18117,10 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                       "TUR_TRACE_EVICT=1 to see which form evicted the function. "
                       "Known unsupported shapes: a `while` nested inside a `while` "
                       "that performs, a `set!` whose value itself performs when the "
-                      "assignment is conditional, and a `while` that performs an "
-                      "outer-handled effect from inside a handler clause. "
+                      "assignment is conditional, a `while` that performs an "
+                      "outer-handled effect from inside a handler clause, and a "
+                      "`return` inside a `while` that performs and is followed "
+                      "by more code. "
                       "Restructuring so the loop body returns a status and the "
                       "effect is performed after the loop usually avoids them. This is a "
                       "compiler limitation, not a mistake in this expression.");

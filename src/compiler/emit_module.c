@@ -11348,6 +11348,42 @@ static void emit_fn_forward_decls(EmitCtx *ctx, Buf *out,
     }
 }
 
+/* toplevel-statements-dropped-with-user-main: with a user `main`, the
+ * top-level statements collected in `body` used to be dropped -- the
+ * interpreter runs them, in source order, before calling `main`; the compiled
+ * program skipped them without a word.  They become a function of their own,
+ * called from `main`'s prologue where it left TUR_TOPLEVEL_STMTS_SENTINEL
+ * (after static init and *args*, as on the synthesized-main path).  The call
+ * declares it at block scope, since `main` is written before `body` is
+ * complete.  With no statements the sentinel is simply removed, so such a
+ * program's C is what it was. */
+static void emit_toplevel_stmts_for_user_main(Buf *file, const Buf *body) {
+    const char *sent = TUR_TOPLEVEL_STMTS_SENTINEL;
+    size_t slen = strlen(sent);
+    const char *call = body->len
+        ? "    { extern int __tur_toplevel_stmts(void); (void)__tur_toplevel_stmts(); }\n"
+        : "";
+    Buf patched; buf_init(&patched);
+    const char *p = file->data;
+    const char *end = file->data ? file->data + file->len : NULL;
+    while (p && p < end) {
+        const char *hit = NULL;   /* no memmem on MinGW */
+        for (const char *q = p; q + slen <= end; q++)
+            if (*q == sent[0] && memcmp(q, sent, slen) == 0) { hit = q; break; }
+        if (!hit) { buf_write(&patched, p, (size_t)(end - p)); break; }
+        buf_write(&patched, p, (size_t)(hit - p));
+        buf_puts(&patched, call);
+        p = hit + slen;
+    }
+    if (body->len) {
+        buf_puts(&patched, "int __tur_toplevel_stmts(void) {\n");
+        buf_write(&patched, body->data, body->len);
+        buf_puts(&patched, "    return 0;\n}\n");
+    }
+    buf_free(file);
+    *file = patched;
+}
+
 /* prelude-macros (Defect B / F3): emit the user-callable runtime `cons`
  * cons-cell builder into a translation unit's preamble when g_uses_cons is set.
  * Wrapped in an include guard so a TU that pulls the definition in through more
@@ -21422,6 +21458,7 @@ static int emit_program_inner(Buf *out, const Expr *program) {
         buf_init(ctx.pending_handler_fns);
     }
 
+    if (user_has_main && !split_lib) emit_toplevel_stmts_for_user_main(&file, &body);
     if (file.len) { buf_write(out, file.data, file.len); buf_putc(out, '\n'); }
     /* Defer thunk bodies: after the globals in `file`, which they may name. */
     if (defer_thunk_defs.len) { buf_write(out, defer_thunk_defs.data, defer_thunk_defs.len); buf_putc(out, '\n'); }
@@ -21481,9 +21518,8 @@ static int emit_program_inner(Buf *out, const Expr *program) {
         buf_puts(out, "    return 0;\n");
         buf_puts(out, "}\n");
     } else if (def_init_body.len) {
-        /* Gap F: when the user has their own main(), `body` is silently
-         * dropped (pre-existing behaviour for top-level non-def
-         * statements after a user main). The def initializers in
+        /* Gap F: when the user has their own main(), `body` runs from it
+         * (emit_toplevel_stmts_for_user_main). The def initializers in
          * `def_init_body` are wired into an init function so they run
          * before the user's main() body does.
          *
@@ -23220,6 +23256,7 @@ static int emit_implementation_inner(Buf *out, const char *module_name, const Ex
     /* Defer thunk env-structs + functions, before the bodies that reference them. */
     if (impl_defer_thunks.len) { buf_write(out, impl_defer_thunks.data, impl_defer_thunks.len); buf_putc(out, '\n'); }
     buf_free(&impl_defer_thunks);
+    if (user_has_main) emit_toplevel_stmts_for_user_main(&file, &body);
     if (file.len) { buf_write(out, file.data, file.len); buf_putc(out, '\n'); }
     /* Defer thunk bodies: after the globals in `file`, which they may name. */
     if (impl_defer_thunk_defs.len) { buf_write(out, impl_defer_thunk_defs.data, impl_defer_thunk_defs.len); buf_putc(out, '\n'); }

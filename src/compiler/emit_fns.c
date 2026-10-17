@@ -6508,6 +6508,7 @@ static void emit_fn_def_body(EmitCtx *ctx, Buf *file, const Expr *e) {
         buf_puts(file, "}\n");
         ctx->indent -= 4;
     }
+    if (is_main) buf_puts(file, TUR_TOPLEVEL_STMTS_SENTINEL);
 
     /* Phase 9 follow-up: Run last-use elision analysis on the function body
      * before emitting.  This marks eligible EX_RC_CLONE/EX_RC_DROP nodes so

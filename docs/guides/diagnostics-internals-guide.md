@@ -567,13 +567,13 @@ Writing good needles:
   diagnostic you did not mean. The phrase alone survives a code change that
   should have failed.
 - Do not match a path, line or column unless that is the point of the test.
-- **End the file with a newline.** `read` drops a final unterminated line, so
-  a one-line `expected.diag` without one asserts nothing. See
-  [needle-files-without-trailing-newline-assert-nothing](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/needle-files-without-trailing-newline-assert-nothing.md).
-- **Clear the pass cache after editing needles.** `stamp_key` hashes
-  `input.tur` and `expected.c` but not `expected.diag`, `unexpected.diag` or
-  `flags`. A fixture that passed once keeps passing from its stamp until you
-  run with `TUR_FORCE=1`.
+- End the file with a newline. Both harnesses read an unterminated last line
+  now, but a needle loop written as a bare `while read -r` drops it, and a
+  one-line file then asserts nothing
+  ([needle-files-without-trailing-newline-assert-nothing](../archive/needle-files-without-trailing-newline-assert-nothing.md)).
+- Editing a needle re-runs the fixture: `stamp_key` hashes every file in the
+  fixture directory except the outputs the harness writes there
+  ([run-sh-stamp-cache-ignores-expectation-files](../archive/run-sh-stamp-cache-ignores-expectation-files.md)).
 
 A real fixture, `errors/tailcall-argument-position/expected.diag`:
 
@@ -599,8 +599,10 @@ The same directories run under `tur $flags --interpret input.tur`. The needles
 come from `expected.diag`, or from `expected.stderr` when there is none. A
 fixture with neither fails as "asserts nothing". Differences from `run.sh`:
 
-- **The exit status is not checked** (`|| true`), and `unexpected.diag` is
-  not read.
+- `unexpected.diag` is not read. The exit status is checked: an interpreter
+  that prints the diagnostic and then runs the program to exit 0 fails the
+  fixture, as it does in `run.sh`
+  ([turi-ignores-effect-row-errors](../archive/turi-ignores-effect-row-errors.md)).
 - `requires.compiled` skips the fixture. Use it when only the compiled path
   diagnoses the program, as all the `tailcall-*` fixtures do.
 - `TURI_ERRORS_DENY` lists fixtures whose interpreter diagnostics diverge.
@@ -622,8 +624,8 @@ no sender
 on Session
 ```
 
-Its marker says it "asserts the diagnostic and the nonzero exit". Only the
-first half is true, because `run-turi.sh` ignores the exit status.
+Its marker says it "asserts the diagnostic and the nonzero exit", and
+`run-turi.sh` checks both.
 
 Elaboration errors look the same on both engines, since the interpreter
 elaborates through the same `diag_emit*` calls. Runtime errors from the
@@ -682,8 +684,6 @@ update the passage above that describes it and drop it from this list.
 
 - [sweet-exp-diagnostic-columns-not-translated](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/sweet-exp-diagnostic-columns-not-translated.md) -- Diagnostics in sweet-exp files report columns of the transformed text
 - [diag-code-tables-drift-without-a-check](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/diag-code-tables-drift-without-a-check.md) -- The diagnostic-code tables drift apart, and `tur explain` shows it
-- [needle-files-without-trailing-newline-assert-nothing](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/needle-files-without-trailing-newline-assert-nothing.md) -- Needle files without a trailing newline assert nothing
-- [run-sh-stamp-cache-ignores-expectation-files](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/run-sh-stamp-cache-ignores-expectation-files.md) -- The test harnesses' pass cache ignores a fixture's expectation files
 
 ## Maintenance
 

@@ -949,6 +949,50 @@ fi
 rm -f "$MSG2_OUT"
 rm -rf "$MSG2"
 
+# add-cmake-manifest-rewrite-loses-keys: `tur add-cmake` splices its entry
+# into the existing text, as `tur add` does.  It used to rewrite the whole
+# file from the parsed manifest, dropping comments, `:experiments []` (which
+# suppresses the user's experiments file), `:members` and `:exports`.  The
+# leading comment must also appear exactly once: the formatter used to copy it
+# into the map it extended.
+ACK=$(mktemp -d)
+mkdir -p "$ACK/proj/src"
+cat >"$ACK/proj/build.tur" <<'EOF'
+;; my project manifest -- keep this comment
+(defpackage proj
+  :name "proj"
+  :version "0.1.0"
+  :experiments []
+  :members ["x" "y"]
+  :exports [proj/core]
+  :cmake-deps #map{"zlib" #map{:url "https://example.invalid/zlib.git"}})
+EOF
+printf '(defn main [] : int 0)\n' >"$ACK/proj/src/main.tur"
+( cd "$ACK/proj" && "$LS6_ABS_TUR" add-cmake https://example.invalid/fmt.git \
+      --ref 10.0.0 --opt FMT_TEST=OFF ) >/dev/null 2>&1
+ack_rc=$?
+ack_bad=""
+[ "$ack_rc" -eq 0 ] || ack_bad="exit $ack_rc"
+for needle in ':experiments []' ':members ["x" "y"]' ':exports [proj/core]' \
+              '"zlib"' '"fmt"' ':ref "10.0.0"' ':FMT_TEST "OFF"'; do
+    grep -qF -- "$needle" "$ACK/proj/build.tur" || ack_bad="$ack_bad; lost $needle"
+done
+[ "$(grep -cF 'keep this comment' "$ACK/proj/build.tur")" = 1 ] ||
+    ack_bad="$ack_bad; the comment is not there exactly once"
+# The rewritten manifest must still read.
+( cd "$ACK/proj" && "$LS6_ABS_TUR" check src/main.tur ) >/dev/null 2>&1 ||
+    ack_bad="$ack_bad; the rewritten manifest no longer reads"
+if [ -z "$ack_bad" ]; then
+    echo "PASS add-cmake-keeps-unmodelled-keys"
+    PASS=$((PASS + 1))
+else
+    echo "FAIL add-cmake-keeps-unmodelled-keys --$ack_bad"
+    echo "  build.tur:"; sed 's/^/    /' "$ACK/proj/build.tur"
+    FAIL=$((FAIL + 1))
+    FAILED+=("add-cmake-keeps-unmodelled-keys")
+fi
+rm -rf "$ACK"
+
 # LS6 case C: `tur fetch --dry-run` classifies each dep and writes no
 # lock file.  The bogus URL would error out on a real fetch; --dry-run
 # proves it was never contacted.

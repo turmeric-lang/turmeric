@@ -10353,8 +10353,12 @@ static void emit_letraw(CE *ce, const CTerm *t) {
          * like a void EX_CALL -- so its side effect must be realized here, or the
          * op is silently dropped (a delegated `(close ch)` never runs, leaking the
          * channel).  Emit it as a statement, same as the EX_CALL case. */
-        if (le && (le->kind == EX_CALL || le->kind == EX_INLINE_C) && rhs && rhs[0])
+        if (le && (le->kind == EX_CALL || le->kind == EX_INLINE_C) && rhs && rhs[0]) {
             ce_line(ce, "%s;", rhs);
+            /* nil-call-panic-not-propagated (CPS half): the direct emitter's
+             * statement-position check, for the same un-hoisted call. */
+            if (le->kind == EX_CALL) cps_panic_check(ce);
+        }
         ce_line(ce, "%s = 0;", bn);
     } else if (t->as.letraw.x.ty == TY_FN) {
         /* A boxed fn value (a fat closure / fn-pointer word, e.g. a cross-function
@@ -15078,6 +15082,7 @@ static bool emit_cps_ir_try_fn_impl(EmitCtx *ctx, Buf *file, const Expr *e) {
         buf_puts(file, "        _c->next = g_tur_args;\n");
         buf_puts(file, "        g_tur_args = (int64_t)(intptr_t)_c;\n");
         buf_puts(file, "    }\n");
+        buf_puts(file, TUR_TOPLEVEL_STMTS_SENTINEL);
         buf_puts(file, "    __dk_entry_depth++;\n");
     /* r7rs-callcc-memory-never-freed: where this entry's registrations
      * start, so a nested exit can drop them (__dk_reap_drop_to). */

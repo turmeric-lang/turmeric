@@ -1155,6 +1155,15 @@ char *emit_store_int_ptr_bridge(EmitCtx *ctx, const char *target_c,
  * trampoline.  Shared with the CPS emitter, whose own cps->direct call sites
  * bypass emit_value and so bypassed the check. */
 void emit_panic_signal_return(EmitCtx *ctx, Buf *body);
+
+/* toplevel-statements-dropped-with-user-main: a user `main`'s prologue writes
+ * this line where the program's top-level statements must run -- after static
+ * init and *args*, before the body.  emit_program_inner replaces it with the
+ * call to the statements' function when the program has any, and deletes it
+ * otherwise, so a program without them emits exactly what it did before.
+ * (The statements are collected after `main` has been written, which is why
+ * the prologue cannot decide by itself.) */
+#define TUR_TOPLEVEL_STMTS_SENTINEL "/*@tur-toplevel-stmts@*/\n"
 /* defer-skipped-on-panic-in-cps-function: set by the CPS emitter while it
  * renders a `__cps` body.  `pending` says whether any defer is pending at the
  * current point AND `body` is the buffer that body is being written into (a

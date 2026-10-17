@@ -4639,6 +4639,68 @@ static void loop_rs_scan(CpsB *b, const Expr *e, uint32_t *mask, bool in_branch)
         return NULL; \
     } while (0)
 
+/* Does `e` contain a `return` of the enclosing function?  Not one inside a
+ * nested `fn`, which returns from that fn. */
+static bool expr_has_return(const Expr *e, int depth) {
+    e = ascribe_peel(e);
+    if (!e || depth > 256) return depth > 256;   /* too deep to tell: assume so */
+    #define HR(x) expr_has_return((x), depth + 1)
+    switch (e->kind) {
+        case EX_RETURN:   return true;
+        case EX_CALL:
+            if (e->as.call_.fn_expr && HR(e->as.call_.fn_expr)) return true;
+            for (uint32_t i = 0; i < e->as.call_.n_args; i++)
+                if (HR(e->as.call_.args[i])) return true;
+            return false;
+        case EX_BUILTIN:
+            for (uint32_t i = 0; i < e->as.builtin.n; i++)
+                if (HR(e->as.builtin.args[i])) return true;
+            return false;
+        case EX_DO:
+            for (uint32_t i = 0; i < e->as.do_.n; i++)
+                if (HR(e->as.do_.items[i])) return true;
+            return false;
+        case EX_LET: case EX_LETREC:
+            for (uint32_t i = 0; i < e->as.let_.n; i++)
+                if (HR(e->as.let_.bindings[i].init)) return true;
+            return HR(e->as.let_.body);
+        case EX_IF:
+            return HR(e->as.if_.cond) || HR(e->as.if_.then_)
+                || (e->as.if_.else_or_null && HR(e->as.if_.else_or_null));
+        case EX_MATCH:
+            if (HR(e->as.match_.scrutinee)) return true;
+            for (uint32_t i = 0; i < e->as.match_.n_arms; i++)
+                if ((e->as.match_.arms[i].guard && HR(e->as.match_.arms[i].guard)) ||
+                    HR(e->as.match_.arms[i].body))
+                    return true;
+            return false;
+        case EX_HANDLE:
+            if (e->as.handle_.handle) {
+                HandleExpr *h = e->as.handle_.handle;
+                if (HR(h->body)) return true;
+                for (uint8_t i = 0; i < h->n_cases; i++)
+                    if (HR(h->cases[i].body)) return true;
+            }
+            return false;
+        case EX_PERFORM: {
+            PerformExpr *pf = e->as.perform_.perform;
+            for (uint8_t i = 0; pf && i < pf->n_args; i++)
+                if (HR(pf->args[i])) return true;
+            return false;
+        }
+        case EX_RESUME: {
+            ResumeExpr *rs = e->as.resume_.resume;
+            return rs && (HR(rs->k) || HR(rs->value));
+        }
+        case EX_WHILE:    return HR(e->as.while_.cond) || HR(e->as.while_.body);
+        case EX_SET:      return HR(e->as.set_.value);
+        case EX_CAST:     return HR(e->as.cast_.expr);
+        case EX_REINTERPRET: return HR(e->as.reinterpret_.expr);
+        default:          return false;
+    }
+    #undef HR
+}
+
 static CTerm *build_loop(CpsB *b, Expr *e, CVar x, CTerm *rest) {
     (void)x;   /* the while's unit result is subsumed by the loop's exit delivery */
     Expr *cond = e->as.while_.cond;
@@ -4671,6 +4733,15 @@ static CTerm *build_loop(CpsB *b, Expr *e, CVar x, CTerm *rest) {
         /* A control-free loop followed by statements keeps its whole-form
          * delegation; the join reification is for loops that perform. */
         if (safe_to_delegate(b, e)) LOOP_REJECT();
+        /* cps-loop-return-acts-as-break: in join mode the helper's KK_RET is
+         * the join -- the code after the loop -- and a `return` in the body
+         * lowers to a delivery to KK_RET too, so it left only the loop: the
+         * function went on to run what followed (1003 where the interpreter
+         * printed 103).  Telling the two apart needs a continuation past the
+         * join, which the helper does not have; refuse the loop rather than
+         * compute a wrong value.  A loop that is the function's last form
+         * (plain mode) is unaffected: there KK_RET is the function's own. */
+        if (expr_has_return(body, 0)) LOOP_REJECT();
         join_mode = true;
         unit_exit = true;
         CVar j = fresh_cvar(b, x.type);

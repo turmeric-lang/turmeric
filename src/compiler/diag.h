@@ -470,6 +470,11 @@ typedef enum DiagCode {
      * is a near-miss of `main` (`-main`, `main-`, `Main`, `_main`) is the
      * tell that an entry point was intended; warn at its definition. */
     TUR_W0624_NO_ENTRY_POINT_NEAR_MISS,
+    /* toplevel-statements-dropped-with-user-main: a bare top-level `(main)`
+     * in a file that defines `main`.  Top-level statements run before `main`
+     * now, so the call would run it twice (and, compiled, call C's `main`
+     * with no arguments); it is dropped in both engines. */
+    TUR_W0625_TOPLEVEL_MAIN_CALL_DROPPED,
     /* application-image-dumps-plan AI3.1: the `init` root of a
      * with-image-cache-after-init expansion writes a top-level global that no
      * `defimage-global` declared.  init runs only on a cold start and the

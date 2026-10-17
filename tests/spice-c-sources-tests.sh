@@ -13,7 +13,9 @@
 #   - Parse-time validation: a missing source, a non-.c extension, and an
 #     absolute path each fail the build with a DIAG_ERROR (not a segfault).
 #   - Manifest round-trip: :c-sources / :c-includes survive read -> write
-#     (via `tur add-cmake`, which rewrites build.tur through pkg_manifest_write).
+#     (via `tur add-cmake`, which splices its entry into build.tur through the
+#     comment-preserving formatter; it used pkg_manifest_write until
+#     add-cmake-manifest-rewrite-loses-keys).
 #
 # Owned by its own ctest target; the fixtures carry requires.dedicated-runner
 # (and live under tests/fixtures/spices/, which the by-value run.sh does not

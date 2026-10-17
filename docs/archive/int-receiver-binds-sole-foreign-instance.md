@@ -1,5 +1,9 @@
 # An `int` argument binds a class's only instance, even a `cstr` one
 
+**RESOLVED 2026-10-17** -- see [Resolution](#resolution-2026-10-17). Pinned by
+`errors/int-receiver-sole-cstr-instance` and
+`sole-instance-dispatch-still-binds`.
+
 **Severity:** high. `tur check` accepts a call whose argument type has no
 instance. The emitted C reinterprets the value as the instance's type, and the
 program segfaults (or cc fails).
@@ -39,3 +43,20 @@ whatever its head type.
   than binding it.
 - Keep the carrier allowance only for heads the int carrier can actually
   represent.
+
+## Resolution (2026-10-17)
+
+`elab_method_call_impl` (`src/compiler/elab_typeclasses.c`) keeps the carrier
+allowance for an `int` receiver only where an int word can stand for the
+instance's head. When the lone fallback's head is a primitive no carrier word
+holds -- `cstr`, a float kind, `bool`, `nil` -- the call is reported as
+TUR-E0015 (no instance), the same error a distinct concrete receiver gets.
+Measured over every fixture before the change, the lone fallbacks an int
+receiver reaches have type-variable or applied heads only, and those still
+bind. A lone by-value struct head was left alone: cc already rejects that
+program, so it is not silent.
+
+Pinned by `errors/int-receiver-sole-cstr-instance` (TUR-E0015) and the control
+`sole-instance-dispatch-still-binds` (a lone instance still binds a receiver of
+its own type, and an int receiver still picks `Twice [int]` beside
+`Twice [float]`).

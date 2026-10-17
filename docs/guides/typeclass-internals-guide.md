@@ -254,13 +254,14 @@ crashed at runtime when the layouts differed. The whitelist of "concrete"
 receivers is in the `concrete_distinct_receiver` test. `:int` is excluded
 from it, because a `:int` receiver cannot be told apart from an erased value.
 
-> **Known gap.** That exclusion still leaves the old silent bind for an
-> `:int` receiver with exactly **one** name-matching instance of some other
-> type. With only `Shout [cstr]` in scope, `(shout 5)` passes `tur check`,
-> emits `__inst_Shout_shout_cstr((const char *)(intptr_t)(INT64_C(5)))`, and
-> the program segfaults when the method reads `x`. With only a struct
-> instance the same call fails in `cc` instead. The ambiguity guard below
-> fires only for two or more fallbacks.
+The exclusion is narrowed for a lone fallback: an `:int` receiver whose only
+name-matching instance has a head no carrier word can hold -- `cstr`, a float
+kind, `bool`, `nil` -- is TUR-E0015 too (`int_recv_foreign_head`). With only
+`Shout [cstr]` in scope, `(shout 5)` used to pass `tur check` and segfault
+([int-receiver-binds-sole-foreign-instance](../archive/int-receiver-binds-sole-foreign-instance.md)).
+A lone instance with a type-variable or applied head still binds, and so does a
+lone struct instance, which `cc` rejects rather than running. The ambiguity
+guard below fires for two or more fallbacks.
 
 ### Return-directed resolution (`elab_try_return_dispatch`)
 
@@ -1125,4 +1126,5 @@ Each was reproduced against the compiler this guide describes and filed in
 [`docs/reported/`](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/README.md). When one is fixed and archived,
 update the passage above that describes it and drop it from this list.
 
-- [int-receiver-binds-sole-foreign-instance](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/int-receiver-binds-sole-foreign-instance.md) -- An `int` argument binds a class's only instance, even a `cstr` one
+None open.
+
