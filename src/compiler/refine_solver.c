@@ -583,6 +583,95 @@ static void collect_lits(const VCTerm *t, MVal *out, uint32_t *n, uint32_t cap) 
     for (uint32_t i = 0; i < t->n; i++) collect_lits(t->kids[i], out, n, cap);
 }
 
+static bool model_is_ctor_const(const RefineVC *vc, uint32_t v) {
+    for (uint32_t j = 0; j < vc->n_ctor_consts; j++)
+        if (vc->ctor_consts[j] == v) return true;
+    return false;
+}
+
+/* Is `h` the hypothesis `(= v <constructor term>)` -- a nullary constructor
+ * or a constructor application -- for a non-constant variable v? */
+static bool model_ctor_defn(const RefineVC *vc, const VCTerm *h, uint32_t *v) {
+    if (h->op != VC_EQ || h->n != 2) return false;
+    for (int s = 0; s < 2; s++) {
+        const VCTerm *x = h->kids[s], *t = h->kids[1 - s];
+        if (x->op != VC_VAR || x->sort != VS_INT || model_is_ctor_const(vc, x->as.idx))
+            continue;
+        bool ctor = (t->op == VC_APP && t->as.idx < vc->n_ufuncs &&
+                     vc->ufuncs[t->as.idx].is_ctor && !vc->ufuncs[t->as.idx].reflected) ||
+                    (t->op == VC_VAR && model_is_ctor_const(vc, t->as.idx));
+        if (ctor) { *v = x->as.idx; return true; }
+    }
+    return false;
+}
+
+/* The term side of v's defining hypothesis `h`. */
+static const VCTerm *model_defn_term(const VCTerm *h, uint32_t v) {
+    return (h->kids[0]->op == VC_VAR && h->kids[0]->as.idx == v) ? h->kids[1] : h->kids[0];
+}
+
+/* Does variable `v` occur in `t` -- `outside_apps`: other than inside the
+ * argument list of an application? */
+static bool model_var_occurs(const VCTerm *t, uint32_t v, bool outside_apps) {
+    if (!t) return false;
+    if (t->op == VC_VAR) return t->as.idx == v;
+    if (t->op == VC_APP && outside_apps) return false;
+    for (uint32_t i = 0; i < t->n; i++)
+        if (model_var_occurs(t->kids[i], v, outside_apps)) return true;
+    return false;
+}
+
+/* The variables a constructor term DEFINES -- what a caller's
+ * `(let [b (Cons 3 (Nil))] ...)` asserts as `(= b (Cons 3 Nil))`.  The search
+ * cannot evaluate a constructor application (it has no value of its own), and
+ * it does not need to when nothing reads v's VALUE: every other occurrence of
+ * v is an argument of an application, and an application evaluates by its
+ * definitional equation, never by its arguments.  Such a v denotes its term;
+ * the defining hypothesis holds by construction, and the interpretation is
+ * the one the inline `(Cons 3 (Nil))` gets.
+ *
+ * Declined, so the hypothesis is evaluated (and fails) as before: a second
+ * definition of v (two terms, possibly distinct); a term that mentions v, or
+ * definitions that do in a cycle (no finite term satisfies `b = (Cons 1 b)`,
+ * so a "model" of it would refute a goal the hypotheses make vacuous). */
+static void model_ctor_defns(const RefineVC *vc, uint32_t *defn_hyp) {
+    uint32_t nv = vc->n_vars;
+    for (uint32_t v = 0; v < nv; v++) defn_hyp[v] = UINT32_MAX;
+    for (uint32_t i = 0; i < vc->n_hyps; i++) {
+        uint32_t v;
+        if (!model_ctor_defn(vc, vc->hyps[i], &v)) continue;
+        defn_hyp[v] = defn_hyp[v] == UINT32_MAX ? i : UINT32_MAX - 1;
+    }
+    for (uint32_t v = 0; v < nv; v++) {
+        uint32_t d = defn_hyp[v];
+        if (d >= vc->n_hyps) { defn_hyp[v] = UINT32_MAX; continue; }
+        bool ok = !model_var_occurs(vc->goal, v, true) &&
+                  !model_var_occurs(model_defn_term(vc->hyps[d], v), v, false);
+        for (uint32_t i = 0; ok && i < vc->n_hyps; i++)
+            if (i != d) ok = !model_var_occurs(vc->hyps[i], v, true);
+        if (!ok) defn_hyp[v] = UINT32_MAX;
+    }
+    /* Acyclic: a definition is grounded when every defined variable its term
+     * mentions is.  nv rounds settle any chain. */
+    bool grounded[MODEL_MAX_VARS] = {0};
+    for (uint32_t round = 0; round < nv; round++) {
+        bool changed = false;
+        for (uint32_t v = 0; v < nv; v++) {
+            if (grounded[v] || defn_hyp[v] == UINT32_MAX) continue;
+            const VCTerm *t = model_defn_term(vc->hyps[defn_hyp[v]], v);
+            bool g = true;
+            for (uint32_t w = 0; g && w < nv; w++)
+                if (w != v && defn_hyp[w] != UINT32_MAX && !grounded[w] &&
+                    model_var_occurs(t, w, false))
+                    g = false;
+            if (g) { grounded[v] = true; changed = true; }
+        }
+        if (!changed) break;
+    }
+    for (uint32_t v = 0; v < nv; v++)
+        if (!grounded[v]) defn_hyp[v] = UINT32_MAX;
+}
+
 static void add_cand_int(MVal *c, uint32_t *n, int64_t v) {
     if (*n >= MODEL_MAX_CANDS) return;
     for (uint32_t i = 0; i < *n; i++) if (c[i].i == v) return;
@@ -639,15 +728,17 @@ RefineModel *refine_model_search(RefineVC *vc, Arena *a) {
     uint32_t n_cand[MODEL_MAX_VARS];
     uint32_t nv = vc->n_vars;
     bool is_const[MODEL_MAX_VARS];
+    uint32_t defn_hyp[MODEL_MAX_VARS];
+    model_ctor_defns(vc, defn_hyp);
     for (uint32_t v = 0; v < nv; v++) {
         uint32_t *n = &n_cand[v]; *n = 0;
         MVal *c = cand[v];
         /* RF6: a nullary constructor (`Nil`) is a free constant.  One fixed
          * value no literal can collide with, distinct per constant -- not a
-         * dimension of the search, and not a binding worth printing. */
-        is_const[v] = false;
-        for (uint32_t j = 0; j < vc->n_ctor_consts; j++)
-            if (vc->ctor_consts[j] == v) { is_const[v] = true; break; }
+         * dimension of the search, and not a binding worth printing.  A
+         * variable a constructor term defines is fixed the same way: its
+         * value is the term, which nothing evaluates (model_ctor_defns). */
+        is_const[v] = model_is_ctor_const(vc, v) || defn_hyp[v] != UINT32_MAX;
         if (is_const[v]) { add_cand_int(c, n, INT64_MIN / 2 + (int64_t)v); continue; }
         switch (vc->vars[v].sort) {
             case VS_BOOL:
@@ -695,8 +786,11 @@ RefineModel *refine_model_search(RefineVC *vc, Arena *a) {
 
         EvalCtx E = { vals, false, defs, n_defs, 0 };
         bool sat = true;
-        for (uint32_t i = 0; i < vc->n_hyps && sat; i++)
-            if (!eval_bool(&E, vc->hyps[i])) sat = false;
+        for (uint32_t i = 0; i < vc->n_hyps && sat; i++) {
+            bool defining = false;
+            for (uint32_t v = 0; v < nv && !defining; v++) defining = defn_hyp[v] == i;
+            if (!defining && !eval_bool(&E, vc->hyps[i])) sat = false;
+        }
         if (sat && !E.fail && !eval_bool(&E, vc->goal) && !E.fail) {
             RefineModel *m = (RefineModel *)arena_alloc(a, sizeof(RefineModel));
             uint32_t n_shown = 0;

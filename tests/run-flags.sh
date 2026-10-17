@@ -1988,6 +1988,45 @@ else
     pass "jit-ffi-enable-noop"
 fi
 
+# refine-crossing-shadowing-binders: a crossing under ANY binder that rebinds a
+# refined parameter is abandoned, never proved from the parameter's hypothesis
+# -- the encoder's namespace is flat, so the call's `x` would read the outer
+# `x > 0`.  Only a lone bare `let` binding and a `match` arm used to be asked;
+# a multi-binding `let`, a `^mut` or annotated binding and a `fn` parameter all
+# "proved" (needs-pos x) of an x that is -5.  A skipped crossing has no
+# diagnostic to pin, so this reads --dump-refine=json.  The last body shadows
+# nothing and must still prove, so the grep cannot pass by matching nothing.
+SHADOW_INPUT=$(mktemp /tmp/tur-shadow-XXXXXX.tur)
+shadow_bad=""
+for body in "(let [y 1 x -5] (needs-pos x))" \
+            "(let [^mut x -5] (needs-pos x))" \
+            "(let [x : int -5] (needs-pos x))" \
+            "(let [g (fn [x : int] : int (needs-pos x))] (g -5))" \
+            "(let [y 1] (needs-pos x))"; do
+    cat > "$SHADOW_INPUT" << EOF
+(defn needs-pos [x : #refine{ v : int | (> v 0) }] : int x)
+(defn f [x : #refine{ v : int | (> v 0) }] : int
+  $body)
+(defn main [] : int (println (f 3)) 0)
+EOF
+    out=$("$TUR" check --dump-refine=json "$SHADOW_INPUT" 2>/dev/null) || true
+    proven=no
+    if echo "$out" | grep -A3 -F "\"what\": \"argument 1 of 'needs-pos' in 'f'\"" |
+            grep -qF '"verdict": "proven"'; then
+        proven=yes
+    fi
+    case "$body" in
+        "(let [y 1] (needs-pos x))") [ "$proven" = yes ] || shadow_bad="$shadow_bad [control not proven: $body]" ;;
+        *)                           [ "$proven" = no ]  || shadow_bad="$shadow_bad [proven: $body]" ;;
+    esac
+done
+rm -f "$SHADOW_INPUT"
+if [ -n "$shadow_bad" ]; then
+    fail "refine-crossing-shadowing-binders" "$shadow_bad"
+else
+    pass "refine-crossing-shadowing-binders"
+fi
+
 # ---------------------------------------------------------------------------
 # Summary
 # ---------------------------------------------------------------------------
