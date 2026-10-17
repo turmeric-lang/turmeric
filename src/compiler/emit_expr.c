@@ -543,7 +543,8 @@ static const EmitAbiSpecialization *find_matched_abi_spec(
     if (!saw_call && active_outer != NULL && other_clone &&
         !(fn_binding && fn_binding->is_construct_template) &&
         !emit_call_abstract_under_active_spec(ctx, e) &&
-        emit_spec_clone_belongs_to(ctx, other_clone, fn_binding)) {
+        emit_spec_clone_belongs_to(ctx, other_clone, fn_binding) &&
+        cross_spec_clone_bindings_fit_call(ctx, e, other_clone)) {
         fallback_clone = other_clone;
         saw_call = true;
     }

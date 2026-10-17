@@ -1720,6 +1720,11 @@ bool dict_slot_param_is_word_scalar(const struct TypeClass *tc, int slot,
                                     const FnDef *mi, uint32_t j);
 /* Does `t` mention a type variable anywhere (through applications)? */
 bool emit_abi_type_is_open(const struct Type *t);
+/* May a call recorded only under a sibling outer spec borrow that spec's
+ * clone here, as far as its type bindings say?  They must resolve under the
+ * active spec to the clone's (emit_core.c). */
+bool cross_spec_clone_bindings_fit_call(struct EmitCtx *ctx, const struct Expr *call,
+                                        const char *clone_name);
 /* True when `call` dispatches through a runtime dict slot that returns the
  * int64 word (see dict_slot_result_is_word_scalar). */
 bool emit_call_dispatches_word_result(struct EmitCtx *ctx, const struct Expr *call);

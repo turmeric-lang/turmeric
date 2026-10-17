@@ -1,0 +1,34 @@
+;; generic-forward-nullary-arg-tyvar-name -- a generic forwarding its fn
+;; parameter to another generic whose type variables share its names, next to
+;; a nullary generic argument such as (list-nil).
+;;
+;; nested-generic-tyvar-name-capture (docs/archive/): inside list-map [A B],
+;; (list-map-onto__ xs f (list-nil)) bound onto__'s B to B from f, and then
+;; (list-nil)'s open A replaced it -- the binding was spelled B := B, which
+;; the elaborator took for an unfixed self-binding.  The float -> int spec
+;; called f as returning a double and printed the bits of 7.1; a float ->
+;; defdata map segfaulted.  With both directions in one program the two
+;; list-map-onto__ clones share a C name (every parameter is the carrier), and
+;; the int -> float twin borrowed the other's double list-first clone.
+(load "stdlib/list-typed.tur")
+
+(defdata Shape (Circle float) (Rect int int))
+
+(defn area [s : Shape] : float
+  (match s
+    (Circle r) (* r r)
+    (Rect w h) (as float (* w h))))
+
+(defn inner [A B] [x : A f : (fn [A] B) acc : (List B)] : B (f x))
+(defn outer [A B] [x : A f : (fn [A] B)] : B (inner x f (list-nil)))
+
+(defn main [] : int
+  (let [fs (list-of 7.1 2.25)
+        ns (list-of 3 4)]
+    (println (list-first (list-map fs (fn [f : float] : int 7))))          ; 7
+    (println (list-first (list-map ns (fn [n : int] : float (+ (as float n) 0.25)))))  ; 3.25
+    (println (list-first (list-map fs (fn [f : float] : float (* f 2.0)))))  ; 14.2
+    (println (area (list-first (list-map fs (fn [f : float] : Shape (Circle f))))))  ; 50.41
+    (println (outer 7.1 (fn [f : float] : int 7)))                         ; 7
+    (println (outer 3 (fn [n : int] : float (+ (as float n) 0.5))))      ; 3.5
+    0))
