@@ -422,9 +422,10 @@ extern bool g_opt_reflected_measures;
  * argument position, rejection reason.  A diagnostic knob, not an
  * experiment (same footing as --dump-write-frames). */
 extern bool g_dump_reflect;
-/* aot-compiled-repl-plan C1: `--enable=repl-jit-inline-c`.  An inline-C defn
- * the interpreter cannot run is compiled in process on its first call, on a
- * host that registered a compiler (turi/inline_c_jit.h; TUR_HAVE_JIT `tur`). */
+/* aot-compiled-repl-plan C1 (repl-jit-inline-c, graduated 2026-10-17; on by
+ * default, TUR_REPL_JIT_INLINE_C=0 turns it off).  An inline-C defn the
+ * interpreter cannot run is compiled in process on its first call, on a host
+ * that registered a compiler (turi/inline_c_jit.h; TUR_HAVE_JIT `tur`). */
 extern bool g_opt_repl_jit_inline_c;
 extern bool g_opt_r7rs_gc;
 /* SR2a: a MULTI-VARIANT parametric sum monomorph -- `(Opt2 int)`, `(PRes

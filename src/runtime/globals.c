@@ -135,7 +135,7 @@ bool g_opt_regions = true;       /* graduated 2026-09-05; TUR_REGIONS=0 restores
 bool g_opt_reflected_measures = false; /* reflected-measures RF0: --enable=reflected-measures */
 bool g_dump_reflect = false;           /* reflected-measures RF5: --dump-reflect */
 bool g_opt_r7rs = false;         /* r7rs (graduated 2026-10-01): this build contains an r7rs TU; set by the `#lang r7rs` line, never by a flag.  emit_module.c's r7rs_gc_active reads it to pick the collector opt-out (docs/archive/r7rs-lang-plan.md) */
-bool g_opt_repl_jit_inline_c = false; /* aot-compiled-repl-plan C1: `--enable=repl-jit-inline-c` */
+bool g_opt_repl_jit_inline_c = true; /* repl-jit-inline-c (graduated 2026-10-17): turi JIT-compiles an inline-C defn it cannot run; TUR_REPL_JIT_INLINE_C=0 restores the "inline-C not supported" error (aot-compiled-repl-plan C1) */
 bool g_opt_r7rs_gc = true;       /* r7rs-gc (graduated 2026-09-25): a compiled `#lang r7rs` program's allocator is the collector; TUR_R7RS_GC=0 or --no-r7rs-gc opts out (docs/archive/r7rs-gc-plan.md) */
 bool g_opt_saffron_gc = true;   /* any-widen-stored-in-an-adt-field-has-no-owner (2026-09-28): a compiled single-unit `#lang saffron` program's allocator is the r7rs-gc collector; TUR_SAFFRON_GC=0 or --no-saffron-gc opts out */
 bool g_opt_dynamic_any = false;  /* graduated 2026-09-10 as g_opt_saffron; set by any dynamic-language `#lang` file, not by a flag */

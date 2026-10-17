@@ -7044,8 +7044,9 @@ static bool try_exec_simple_inline_c(TuriEnv *env,
      *   for (int i = 0; i < 2; i++) if (xs[i] % 2 != 0) return 0;
      *   return 1;
      * was claimed as `return 0` -- false for every input, rc=0, no warning.
-     * Declining gives the clean "inline-C not supported" error instead (and,
-     * with --enable=repl-jit-inline-c, the compiled answer). */
+     * Declining gives the compiled answer instead on a JIT build
+     * (repl-jit-inline-c), and the clean "inline-C not supported" error
+     * without one. */
     bool sr_has_flow = ic_body_has_word(body, "for") ||
                        ic_body_has_word(body, "while") ||
                        ic_body_has_word(body, "do") ||
@@ -11587,8 +11588,9 @@ static TuriValue eval_apply_driven(TuriEnv *env, TuriClosure *cl,
             }
         }
         /* aot-compiled-repl-plan C1: the pattern executor declined, so this
-         * body is about to be "inline-C not supported".  With
-         * --enable=repl-jit-inline-c on a JIT build, compile it instead.
+         * body is about to be "inline-C not supported".  On a JIT build,
+         * compile it instead (repl-jit-inline-c, graduated 2026-10-17;
+         * TUR_REPL_JIT_INLINE_C=0 keeps the error).
          * User code only: the stdlib's inline-C is answered by native
          * overrides (above) or by interpreter intercepts the error path runs
          * first (the session channel templates, gc_force), and none of it

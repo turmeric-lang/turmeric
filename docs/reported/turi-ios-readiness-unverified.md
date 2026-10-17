@@ -91,9 +91,9 @@ at runtime.
 
 ### 5. Inline-C bodies have no path
 
-The interpreter cannot run a user inline-C body. Its only remedy,
-`--enable=repl-jit-inline-c` (C1, `src/turi/inline_c_jit.c`), compiles the
-body with MIR. On iOS an inline-C `defn` is therefore simply not callable.
+The interpreter cannot run a user inline-C body. Its only remedy, the
+inline-C JIT (`repl-jit-inline-c`, C1, `src/turi/inline_c_jit.c`; always on
+since it graduated 2026-10-17), compiles the body with MIR. On iOS an inline-C `defn` is therefore simply not callable.
 `tests/run-turi.sh` already skips every fixture whose program contains user
 inline-C, so the suite does not measure this gap -- see "Finding the turi
 gaps" below.

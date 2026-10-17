@@ -38,6 +38,11 @@ set -u
 cd "$(dirname "$0")/.."
 
 TUR="${TUR:-./build/tur}"
+# The rows above are about what the interpreter ITSELF does with the body, so
+# the inline-C JIT (repl-jit-inline-c, on by default on a JIT build since
+# 2026-10-17) is held off: it would otherwise compile a body the executor
+# declines, and the "clean diagnostic" outcome would never be seen.
+export TUR_REPL_JIT_INLINE_C=0
 if [ ! -x "$TUR" ]; then
     echo "run-interp-show-inline-c: $TUR not built" >&2
     exit 2

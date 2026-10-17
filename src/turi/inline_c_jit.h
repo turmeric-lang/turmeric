@@ -2,9 +2,10 @@
  *
  * The tree-walking interpreter runs an inline-C `defn` only when its body
  * matches a pattern try_exec_simple_inline_c recognises; every other body is
- * "inline-C not supported in interpreter mode".  With the `repl-jit-inline-c`
- * experiment on, and a host that can compile C in process (a TUR_JIT build of
- * `tur`), such a defn is instead compiled on its FIRST call: its own source
+ * "inline-C not supported in interpreter mode".  On a host that can compile C
+ * in process (a TUR_JIT build of `tur`), such a defn is instead compiled on
+ * its FIRST call (repl-jit-inline-c, graduated 2026-10-17; off under
+ * TUR_REPL_JIT_INLINE_C=0): its own source
  * form goes through the real emitter and the MIR engine, and the resulting
  * function is called through its exact-signature `__ffi` shim.
  *
