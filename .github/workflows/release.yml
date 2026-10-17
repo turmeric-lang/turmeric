@@ -377,16 +377,42 @@ jobs:
   docs:
     name: Package docs
     runs-on: ubuntu-latest
+    # The generators render Markdown with tur/markdown (markdown-library-plan
+    # M4), so this job builds a native tur, and needs no Python package.  It
+    # builds it as ci.yml's web-smoke job does -- same configure line, same
+    # ccache settings -- so restoring that job's cache from main makes the
+    # build mostly cache hits.  Restore only: a tag run's cache would never be
+    # read again.  Independent of the release builds, so it still runs
+    # alongside them.
+    env:
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_MAXSIZE: 500M
+      CCACHE_NOHASHDIR: "1"
+      CCACHE_BASEDIR: ${{ github.workspace }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # genguides.py dates each guide from the commit that added it.
           fetch-depth: 0
 
-      - name: Install doc generator dependencies
-        # C-5: --require-hashes.  This job builds the turmeric-docs tarball the
-        # release publishes, so its Python inputs are release inputs.
-        run: python3 -m pip install --require-hashes -r tools/requirements.txt
+      - name: Install build dependencies
+        run: |
+          sudo rm -f /etc/apt/sources.list.d/google-chrome*
+          sudo apt-get update || { sleep 20; sudo apt-get update; }
+          sudo apt-get install -y libedit-dev ccache
+
+      - name: Restore ccache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ github.workspace }}/.ccache
+          key: ccache-web-${{ runner.os }}-${{ github.sha }}
+          restore-keys: |
+            ccache-web-${{ runner.os }}-
+
+      - name: Build native tur (renders the Markdown)
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DCMAKE_C_COMPILER_LAUNCHER=ccache
+          cmake --build build -j --target tur
 
       - name: Build the docs and the docs pack
         run: |

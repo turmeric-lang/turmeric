@@ -15,17 +15,15 @@ the stdlib would have rendered with a wrong signature on the next
 Also pins how docstring prose renders: its Markdown `code` spans become
 <code> on the API pages, and nothing else in it is read as Markdown.
 
-Runs without the `markdown` package (a stub stands in for it), because the
-docstring parser and gendocs' own inline renderer are what is under test, not
-the guide renderer the package backs.
+Needs no `tur`: the docstring parser and gendocs' own inline renderer are what
+is under test, not the guide renderer (tools/mdrender.py), which only builds
+its tool when a guide is rendered.
 """
 import os
 import sys
-import types
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.join(ROOT, 'tools'))
-sys.modules.setdefault('markdown', types.ModuleType('markdown'))
 
 from gendocs import _parse_def_line, _extract_return_type  # noqa: E402
 

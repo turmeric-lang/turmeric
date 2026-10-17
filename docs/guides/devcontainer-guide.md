@@ -46,7 +46,7 @@ Docker must be running.
 3. VS Code builds the Docker image on the first run (a few minutes). Subsequent
    opens reuse the cached image.
 
-4. Once attached, open a terminal (`Ctrl+`` ` ``) -- the project is at
+4. Once attached, open a terminal (`` Ctrl+` ``) -- the project is at
    `/workspaces/turmeric` and `tur` is already on `PATH`.
 
 ### Run project tasks

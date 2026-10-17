@@ -23,15 +23,6 @@ import re
 import sys
 from pathlib import Path
 
-try:
-    import markdown as md_lib
-except ImportError:  # pragma: no cover -- preflight, not a code path
-    sys.exit(
-        "error: tools/genspices.py needs the 'markdown' package\n"
-        "       install it with:  python3 -m pip install -r tools/requirements.txt\n"
-        "       (or:  python3 -m pip install markdown)"
-    )
-
 sys.path.insert(0, str(Path(__file__).parent))
 from genguides import (SIDEBAR_DRAWER_JS_SRC, GUIDE_RUNTIME_JS_SRC,
                        font_links, theme_head, script_tag, sidebar_drawer,
@@ -39,6 +30,7 @@ from genguides import (SIDEBAR_DRAWER_JS_SRC, GUIDE_RUNTIME_JS_SRC,
                        inject_syntax_toggles, wrap_tables, toc_tokens_to_sidebar,
                        build_page_header, build_sidebar, MAIN_SITE)
 from gendocs import render_tree, collect_doc_entries
+import mdrender
 import packlib
 
 # Single source of truth for this generator's repo links -- a transfer
@@ -225,36 +217,37 @@ def absolutize_repo_links(text: str, spice_dir: Path) -> str:
     return _MD_LINK_RE.sub(fix, text)
 
 
-def render_front_page(meta: SpiceMeta, out_dir: Path, style_rel: str,
-                      pack_dir: Path | None = None) -> dict | None:
-    """Render docs/html/spices/<name>/index.html from the spice's README.md.
+def front_page_source(meta: SpiceMeta) -> tuple[str, str]:
+    """A spice's front-page Markdown, and the label its footer names it by.
 
-    When `pack_dir` is given, the same rendered body is also written into the
-    docs pack as `spices/<name>.html` -- one rendering pass, two wrappers, so
-    the site page and Try's in-app pane cannot drift. Returns the pack index
-    entry (or None when not emitting a pack).
+    The README, or a stub when the spice has none, with its links fixed up by
+    absolutize_repo_links (which keeps every line where it was).
     """
-    out_dir.mkdir(parents=True, exist_ok=True)
     readme = meta['path'] / 'README.md'
-
     if readme.is_file():
         text = readme.read_text(encoding='utf-8')
         source_label = f'spices/{meta["name"]}/README.md'
     else:
         text = STUB_FRONT_PAGE.format(name=meta['name'], github=GITHUB_BASE)
         source_label = '(no README -- stub)'
+    return absolutize_repo_links(text, meta['path']), source_label
 
-    text = absolutize_repo_links(text, meta['path'])
-    text = re.sub(r'^(`{3,})(turmeric|sweet-exp)\s+no-check\b[^\n]*', r'\1\2', text,
-                  flags=re.MULTILINE)
-    conv = md_lib.Markdown(
-        extensions=['fenced_code', 'tables', 'toc'],
-        extension_configs={'toc': {'permalink': False}},
-    )
-    body_html = conv.convert(text)
-    body_html = inject_syntax_toggles(body_html)
+
+def render_front_page(meta: SpiceMeta, page: dict, source_label: str,
+                      out_dir: Path, style_rel: str,
+                      pack_dir: Path | None = None) -> dict | None:
+    """Write docs/html/spices/<name>/index.html from the spice's rendered README.
+
+    `page` is the README as tools/mdrender.py renders it. When `pack_dir` is
+    given, the same body is also written into the docs pack as
+    `spices/<name>.html` -- one rendering pass, two wrappers, so the site page
+    and Try's in-app pane cannot drift. Returns the pack index entry (or None
+    when not emitting a pack).
+    """
+    out_dir.mkdir(parents=True, exist_ok=True)
+    body_html = inject_syntax_toggles(page['html'])
     body_html = wrap_tables(body_html)
-    toc_tokens = getattr(conv, 'toc_tokens', [])
+    toc_tokens = page['toc_tokens']
 
     sidebar_items = toc_tokens_to_sidebar(toc_tokens)
     sidebar_html = build_sidebar(
@@ -486,13 +479,26 @@ def main() -> None:
 
     print(f'Generating docs for {len(metas)} spices into {out_dir}/')
     write_page_scripts(out_dir, SPICE_PAGE_SCRIPTS)
+
+    # Every front page through the renderer in one run (tools/mdrender.py).
+    sources = {meta['name']: front_page_source(meta) for meta in metas}
+    pages = mdrender.render_batch({name: text for name, (text, _) in sources.items()})
+    # Raw HTML is reported, not refused: a README is read on GitHub as well,
+    # and lives in the spices repository. The guides' build fails on it.
+    for meta in metas:
+        for r in pages[meta['name']]['raw_html']:
+            snippet = ' '.join(r['html'].split())[:60]
+            print(f'warning: spices/{meta["name"]}/README.md:{r["line"]}: '
+                  f'raw HTML: {snippet}', file=sys.stderr)
+
     all_entries: list[dict] = []
     pack_entries: list[dict] = []
     for meta in metas:
         print(f'-> {meta["name"]}')
         spice_out = out_dir / meta['name']
         # Front page links to /docs/html/api/style.css via two-level relative path
-        front = render_front_page(meta, spice_out, style_rel='../../api/style.css',
+        front = render_front_page(meta, pages[meta['name']], sources[meta['name']][1],
+                                  spice_out, style_rel='../../api/style.css',
                                   pack_dir=pack_dir)
         if front:
             pack_entries.append(front)

@@ -379,8 +379,8 @@ jobs:
           # C-5: pinned to an exact version.  Version only, not a digest: this
           # is an inline install with no requirements file to carry hashes,
           # PyYAML ships a per-platform wheel matrix that would need all of
-          # them, and unlike tools/requirements.txt nothing here reaches a
-          # released artifact -- it is a test harness dependency on one leg.
+          # them, and nothing here reaches a released artifact -- it is a test
+          # harness dependency on one leg.
           python3 -m pip install 'pyyaml==6.0.3' || python3 -m pip install --break-system-packages 'pyyaml==6.0.3' || true
 
       # Restore + explicit save (not the combined cache action): the combined
@@ -2137,17 +2137,13 @@ jobs:
           restore-keys: |
             ccache-web-${{ runner.os }}-
 
+      # No pip install: the doc generators need only the standard library.
+      # They render Markdown with tur/markdown, through the native tur built
+      # below (markdown-library-plan M4).
       - name: Set up Python (for gendocs)
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: '3.12'
-
-      - name: Install Python doc deps (markdown)
-        # C-5: --require-hashes, and NOT --upgrade.  `--upgrade` against a
-        # floor-only requirement took whatever PyPI served that morning; the
-        # file is pinned with digests now, so upgrading past the pin is
-        # exactly what must not happen.
-        run: python3 -m pip install --require-hashes -r tools/requirements.txt
 
       - name: Set up Emscripten
         uses: mymindstorm/setup-emsdk@4528d102f7230f0e7b276855c01ea1159be0e984 # v16

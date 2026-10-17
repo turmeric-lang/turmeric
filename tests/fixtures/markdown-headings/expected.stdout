@@ -47,22 +47,22 @@
 </code></pre>
 
 ---- headings
-h1 [1-1] text=[Install] python=[install] github=[install]
-h2 [2-2] text=[Install] python=[install_1] github=[install-1]
-h3 [3-3] text=[Résumé, ﬁle & “quotes”] python=[resume-file-quotes] github=[résumé-ﬁle--quotes]
-h4 [4-4] text=[tur build fast now] python=[tur-build-fast-now] github=[tur-build-fast-now-]
-h2 [5-5] text=[In a quote] python=[in-a-quote] github=[in-a-quote]
-h2 [6-6] text=[In a list] python=[in-a-list] github=[in-a-list]
-h1 [8-8] text=[x_1] python=[x_1] github=[x_1]
-h1 [9-9] text=[x] python=[x] github=[x]
-h1 [10-10] text=[x] python=[x_2] github=[x-1]
-h1 [11-11] text=[] python=[_1] github=[]
-h2 [12-13] text=[Setext heading] python=[setext-heading] github=[setext-heading]
-h1 [14-14] text=[Привет мир] python=[_2] github=[привет-мир]
+h1 [1-1] text=[Install] html=[Install] python=[install] github=[install]
+h2 [2-2] text=[Install] html=[Install] python=[install_1] github=[install-1]
+h3 [3-3] text=[Résumé, ﬁle & “quotes”] html=[Résumé, ﬁle &amp; “quotes”] python=[resume-file-quotes] github=[résumé-ﬁle--quotes]
+h4 [4-4] text=[tur build fast now] html=[<code>tur build</code> <em>fast</em> <a href="/n">now</a> <img src="/l.png" alt="logo" />] python=[tur-build-fast-now] github=[tur-build-fast-now-]
+h2 [5-5] text=[In a quote] html=[In a quote] python=[in-a-quote] github=[in-a-quote]
+h2 [6-6] text=[In a list] html=[In a list] python=[in-a-list] github=[in-a-list]
+h1 [8-8] text=[x_1] html=[x_1] python=[x_1] github=[x_1]
+h1 [9-9] text=[x] html=[x] python=[x] github=[x]
+h1 [10-10] text=[x] html=[x] python=[x_2] github=[x-1]
+h1 [11-11] text=[] html=[] python=[_1] github=[]
+h2 [12-13] text=[Setext heading] html=[Setext heading] python=[setext-heading] github=[setext-heading]
+h1 [14-14] text=[Привет мир] html=[Привет мир] python=[_2] github=[привет-мир]
 ids under MdNoIds: 0
 ---- code blocks
 code [16-16] info=none text=[indented code
 ]
 code [18-20] info=[c fenced] text=[int x;
 ]
-text of the last block: none
+text of the last block: none, html: none

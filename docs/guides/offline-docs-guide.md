@@ -273,13 +273,21 @@ the pack does not carry (plans under `docs/upcoming/`, notes under
 
 ### Dependencies
 
-The guide and spice generators need the Python `markdown` package:
+The generators need Python 3.10 or later and a `tur`, and no Python package.
+The guide and spice generators render Markdown with `tur/markdown`, the
+stdlib's CommonMark and GFM renderer, so the pages match what GitHub shows
+for the same source. `tools/mdrender.py` builds the renderer,
+`tools/md/render.tur`, with `tur build` the first time it is needed, and keeps
+the build in the system temp directory until `tur` or a stdlib source
+changes. It takes `tur` from `$TUR`, then `./build/tur`, then `PATH`, and
+without one it stops and says how to build one.
 
-```sh
-python3 -m pip install -r tools/requirements.txt
-```
-
-Without it they stop with that instruction rather than half-generating.
+The guides' build fails on raw HTML: a guide uses none on purpose, and a
+Turmeric type such as `ptr<void>` written outside a code span is a tag the
+browser hides. Put such text in a code span, or write `\<` for a literal `<`.
+A page that means its HTML says `raw-html: allow` in its front matter. Raw
+HTML in a spice README is reported as a warning, since the README lives in
+the spices repository.
 
 ## Where things live
 
@@ -288,6 +296,8 @@ Without it they stop with that instruction rather than half-generating.
 | `tools/genguides.py` | guide markdown -> site pages + pack fragments |
 | `tools/gendocs.py` | stdlib docstrings -> API pages + pack fragments + `docstrings.tur` |
 | `tools/genspices.py` | sibling spice checkout -> spice pages + pack fragments |
+| `tools/mdrender.py` | builds and runs the Markdown renderer for both generators |
+| `tools/md/render.tur` | the renderer: each page's HTML, headings and raw HTML |
 | `tools/packlib.py` | fragment writing, search strings, pack link rewriting |
 | `tools/genpack.py` | merge, check, budget |
 | `tools/check-pack-spices.py` | refuse to deploy a pack with no spice pages |

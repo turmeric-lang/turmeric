@@ -13,8 +13,8 @@ This guide is the front door to Turmeric's surface syntax. It teaches you to
    **curly-infix** is enabled here too -- `{a + b}` reads as `(+ a b)` in
    every dialect, no `#lang` directive required.
 2. The **sweet-expression** dialect activated by `#lang turmeric/sweet`
-   (legacy alias: `#lang sweet-exp`) or a `.tur.sweet` extension (indentation
-   + neoteric + `$` + curly-infix).
+   (legacy alias: `#lang sweet-exp`) or a `.tur.sweet` extension
+   (indentation + neoteric + `$` + curly-infix).
 
 The `#lang` line names one base dialect and nothing else; see
 [Part 2.5](#part-25----lang-base-dialects).

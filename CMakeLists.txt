@@ -845,8 +845,8 @@ add_test(
 # tools/gendocs.py read `[a : int] : int` as two parameters and a return type
 # of ':' -- 53% of the stdlib's signatures -- while the fused `[a :int]` was
 # fine (gendocs-misparses-the-spaced-annotation-form).  Both spellings, the
-# untyped form and the compound/variadic/#fx cases, without the renderer's
-# `markdown` dependency.
+# untyped form and the compound/variadic/#fx cases, without building the
+# guide renderer.
 add_test(
   NAME tur_gendocs_parse_lint
   COMMAND bash tests/check-gendocs-parse.sh
@@ -1436,6 +1436,15 @@ add_test(
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
 set_tests_properties(tur_markdown_diff PROPERTIES TIMEOUT 720)
+# markdown-library-plan M4: the renderer the docs generators run --
+# tools/md/render.tur, built and driven by tools/mdrender.py -- gives back each
+# page's HTML, its headings as toc tokens (python-markdown's ids and names) and
+# the raw HTML it passed through, with line numbers.
+add_test(
+  NAME tur_md_render
+  COMMAND bash tests/check-mdrender.sh $<TARGET_FILE:tur>
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
 # T0/T1: the shared C of Scheme numbers -- src/compiler/r7rs_bignum.inc and
 # r7rs_numsyntax.inc (the source reader and the interpreter) -- and their
 # copies in stdlib/r7rs/bignum.tur and numsyntax.tur (the compiled back end)

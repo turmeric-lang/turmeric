@@ -1052,7 +1052,7 @@ whole pipeline. Representative cases:
 
 | Fixture | Exercises |
 |---|---|
-| `refine-proved` | S0/S2 -- `x > 0 |= 2x > 0`, check elided |
+| `refine-proved` | S0/S2 -- `x > 0 \|= 2x > 0`, check elided |
 | `refine-measure-euf` | S1+S3 -- measure-as-uninterpreted, Nelson-Oppen |
 | `refine-call-site` | argument crossings, sibling-parameter substitution |
 | `refine-result-propagation` | using a callee's return refinement as a fact |
