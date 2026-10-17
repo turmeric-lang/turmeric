@@ -9,9 +9,12 @@
 > examples pass. M4 is built too (#1249, section 6.5, "M4 as built"): the
 > docs pipeline renders with `tur/markdown`, here and, since
 > turmeric-spices#107, in turmeric-spices, and python-markdown is gone from
-> both. M5 has begun: the library half of the notebook consumer -- TeX math
-> and `markdown/render-block-html` -- is built (section 6.6, "M5a as
-> built"); the notebook spice moving onto it is next.
+> both. M5's one consumer that exists today, the notebook, is done: the
+> library half -- TeX math and `markdown/render-block-html` -- is built
+> (#1266, section 6.6, "M5a as built"), and the notebook spice parses with
+> `tur/markdown` (turmeric-spices#111, "M5b as built"). The rest of M5 waits
+> on its consumers: literate `.tur.md`, the fence scanners' tools moving to
+> Turmeric, and terminal rendering.
 > Written 2026-10-15; its open questions were settled with the author the same
 > day (section 8). It started as "would
 > `tools/gendocs.py` be a candidate to move to Turmeric?" A straight gendocs port
@@ -964,6 +967,36 @@ library half, then M5b in turmeric-spices once a `tur` with M5a is on `main`.
   `render-block-html`, compiled and under `--interpret`, and carries
   `requires.leak-check`; `markdown-blocks` prints each list's marker. The
   spec examples run with math off, as before.
+
+**M5b as built** (turmeric-spices#111).
+
+- **The adapter.** `notebook/cmark` keeps its API -- `md-parse`, node
+  handles, `md-tag-*`, `md-node-*`, `md-source-span`, `md-emit` and
+  `md-emit-html` -- and drops the 2,084-line subset parser behind it, most
+  of it inline C. `md-parse` reads the notebook with `tur/markdown`
+  (CommonMark, the GFM extensions and math), copies the tree into the
+  spice's node records, and frees the document. The module is 757 lines,
+  and its inline C only manages the records.
+- **Prose is full CommonMark and GFM**: reference links, HTML blocks (new
+  tags `md-tag-html-block` and `md-tag-html-inline`), emphasis around code
+  spans, and `$$...$$` in a line as display math.
+- **`md-emit` gives a block's lines as written** (`markdown/block-lines`), so
+  saving a notebook keeps its prose exactly. The old emitter normalised it;
+  a setext heading came back as ATX. A link reference definition is no block
+  of its own, so it becomes a paragraph node with no HTML and is kept too.
+- **`md-emit-html` is `markdown/render-block-html`**, a block at a time:
+  GitHub's layout, so a tight list has no `<p>` and a table writes one cell
+  per line.
+- **Checked against the old parser** on the spice's six example notebooks
+  and its README. The cells, their lines and the round trip are the same on
+  all seven. The prose HTML is identical on four, and on the rest differs
+  only where GitHub renders differently: `` **`code`** `` renders, tight lists
+  lose their `<p>`, and code blocks keep their final line feed.
+  LeakSanitizer finds nothing in `md-parse` or `parse-string`.
+- **Versioning.** The spice is 0.3.0 and needs turmeric v0.66.0, the first
+  release with M3 and M5a; turmeric-spices#112 declares it as the spice's
+  `:tur-version` floor. Under v0.65.5 the adapter does not compile: that
+  release's `tur/markdown` has neither the GFM extensions nor math.
 
 ## 7. Compiler friction the spikes found
 
