@@ -42,3 +42,30 @@ only inside a `#row{...}` element.
 
 Either way, run the corpus first. Single-occurrence unknown names may
 already exist in fixtures or spices as deliberate erased parameters.
+
+## 2026-10-17: `option<T>` is the case most people will hit
+
+The spelling the project's own prose uses for these types is not a type in an
+annotation. Measured on v0.65.5 with `tur check`, each of these parameter
+annotations accepts a `cstr` argument with no diagnostic:
+
+| Annotation | Result |
+| --- | --- |
+| `[x : option<int>]` | accepted -- implicit type variable |
+| `[x : Option<int>]` | accepted -- implicit type variable |
+| `[x : vec<int>]`, `[x : Vec<int>]` | accepted -- implicit type variable |
+| `[x : (Option int)]` | `TUR-E0001: expected (Option int), got cstr` |
+
+As a typed `def`, `(def ^mut s : option<Ctx> (None))` is accepted, but the
+global's type is then a type variable. Every later `(set! s (Some c))` fails
+with `value type (Option Ctx) does not match binding type tyvar`, and
+`(match s ...)` fails with `scrutinee must be an ADT type, got tyvar`.
+`defdynamic` reports the same annotation as `TUR-E0603` (substructural), which
+sends the reader looking in the wrong place.
+
+No `.tur` source in either repository writes the angle-bracket spelling today.
+It appears only in prose: CLAUDE.md uses `option<T>` / `result<T,E>` seven
+times, and several guides use `Option<int>`. Prose is where new code copies its
+spellings from. So direction 1 above has a concrete first target: when the
+unknown head of an angle-bracket annotation is `option`, `Option`, `result`,
+`Result`, `vec` or `Vec`, suggest the s-expression spelling `(Option T)`.
