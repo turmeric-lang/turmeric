@@ -156,7 +156,7 @@ execute 'colorscheme turmeric-' . (&background ==# 'light' ? 'light' : 'dark')
 | `turmericMeta` | `PreProc` | Metadata annotations (`^linear`) |
 | `turmericLineComment` | `Comment` | `;` and `;;` line comments |
 | `turmericDocComment` | `SpecialComment` | `;;;` docstring comments |
-| `turmericBlockComment` | `Comment` | `#| ... |#` block comments |
+| `turmericBlockComment` | `Comment` | `#\| ... \|#` block comments |
 | `turmericTodo` | `Todo` | `TODO`, `FIXME`, `HACK`, `NOTE`, `XXX` |
 | `turmericQuote` | `Special` | `'`, `` ` `` |
 | `turmericUnquote` | `Special` | `~` |

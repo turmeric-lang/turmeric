@@ -64,19 +64,9 @@
 
   function apply(theme, notify) {
     if (root.getAttribute('data-theme') === theme) { sync(); return; }
-    // Without this every element with a `transition: color/background` fades
-    // on its own clock, and the page repaints as a ripple instead of at once.
-    if (notify) root.classList.add('theme-switching');
     root.setAttribute('data-theme', theme);
     sync();
     if (!notify) return;
-    if (window.requestAnimationFrame) {
-      window.requestAnimationFrame(function () {
-        window.requestAnimationFrame(function () { root.classList.remove('theme-switching'); });
-      });
-    } else {
-      root.classList.remove('theme-switching');
-    }
     var ev;
     try { ev = new CustomEvent('tur-themechange', { detail: { theme: theme } }); }
     catch (e) { ev = document.createEvent('CustomEvent'); ev.initCustomEvent('tur-themechange', false, false, { theme: theme }); }

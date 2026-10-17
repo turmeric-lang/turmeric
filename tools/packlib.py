@@ -67,7 +67,7 @@ def search_string(*parts: str, prose: str = '') -> str:
 
 
 def heading_names(toc_tokens: list) -> list[str]:
-    """Flatten a python-markdown toc_tokens tree into a list of heading names."""
+    """Flatten a toc_tokens tree (tools/mdrender.py) into a list of heading names."""
     out = []
     for tok in toc_tokens:
         name = (tok.get('name') or '').strip()

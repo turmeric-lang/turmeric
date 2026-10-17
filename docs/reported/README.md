@@ -34,6 +34,13 @@ sentence above does not cover them. If you touch this file, check
 `ls docs/reported/` against it -- an index that silently omits a quarter of the
 directory is worse for triage than no index.
 
+## Found revisiting the dynvar spices plan (filed 2026-10-17)
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [dynvar-binding-not-swapped-on-fiber-switch](dynvar-binding-not-swapped-on-fiber-switch.md) | medium-high (silent wrong value) | A `defdynamic` binding is per thread, not per fiber: `tur_fiber_block_resume` swaps the r7rs dynamic environment and the region escape list but not the `TurDynFrame` chains. Two fibers that bind and yield read each other's values, and the thread ends up reading a frame whose binding has exited. Nothing in the tree binds across a yield yet. |
+| [defdynamic-generic-adt-root-emitted-before-its-type](defdynamic-generic-adt-root-emitted-before-its-type.md) | low-medium (cc failure) | `(defdynamic *v* :(Option int) ...)` type-checks, then cc fails on `unknown type name 'tur_adt_Option__int'`: the dynvar root is emitted before the instantiation's struct. A plain `defdata` is refused with `TUR-E0603` instead. |
+
 ## Found executing the open reports (filed 2026-10-17)
 
 | Report | Severity | One line |
@@ -131,8 +138,15 @@ hits under ASan.
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [typed-list-byvalue-adt-element-unboxed](typed-list-byvalue-adt-element-unboxed.md) | medium-high | A by-value `defdata` as a `(List A)` element is never boxed: `list-map` with a lambda returning one segfaults (the fat shim returns the struct by value through the int64 carrier ABI, and `list-first`'s spec dereferences the word), and `list-of` with such elements fails in cc. `:heap` types work. |
-| [macro-time-forward-reference-typed-int](macro-time-forward-reference-typed-int.md) | low-medium | In a `:for-macros` module or a `defmacro*`'s `letrec`, a call to a function defined later is typed with `int` parameters, so mutually recursive `Syntax` walkers fail at definition time. Compiled and interpreted code handle the same forward reference. Workaround: one self-recursive function with a mode argument. |
+| ~~[typed-list-byvalue-adt-element-unboxed](../archive/typed-list-byvalue-adt-element-unboxed.md)~~ | medium-high | **RESOLVED 2026-10-17** (archived): a by-value `defdata` result crossing into a generic `(fn [A] B)` -- from a bare function, a lambda or a capturing closure -- is heap-boxed by a slot-0 adapter when the callee reads `B` as the word (`ensure_boxres_word_adapter`), and `list-of`'s rest bridges a by-value product as it already did a sum. Under `tur --interpret` the rest cell's constructor value is re-tagged. Pinned by `list-byvalue-adt-elements` |
+| ~~[macro-time-forward-reference-typed-int](../archive/macro-time-forward-reference-typed-int.md)~~ | low-medium | **RESOLVED 2026-10-17** (archived): the forward-declare pre-pass (module, entry file, `letrec`) now commits a `Syntax` parameter and result, so mutually recursive `Syntax` walkers in a `:for-macros` module or a `defmacro*`'s `letrec` work in any order. Pinned by `macro-time-forward-reference-syntax` |
+
+## Found fixing the by-value `(List A)` element report (filed 2026-10-17)
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [nested-generic-tyvar-name-capture](nested-generic-tyvar-name-capture.md) | high (silent wrong value) | A generic calling a generic whose type variables share its names gets the wrong bindings: `list-map`'s inner `list-map-onto__` clone is `B := float` for a `float -> int` map, so `(list-map floats (fn [f : float] : int 7))` answers the bits of 7.1, and a `float -> defdata` map segfaults. Renaming the inner variables fixes it. |
+| [turi-list-of-heap-adt-element-not-retagged](turi-list-of-heap-adt-element-not-retagged.md) | medium | Under `tur --interpret`, a `:heap` defdata passed through `list-of` reads back as a bare word ("match: no arm matched"); the re-tag skips `:heap` types because their words may be native handles. Compiled is fine. |
 
 ## Found splitting the `release` and `tsan` build trees (filed 2026-10-15)
 
@@ -251,7 +265,7 @@ not fixed there.
 | ~~[cont-query-on-wrapped-handler-k-reads-past-wrapper](../archive/cont-query-on-wrapped-handler-k-reads-past-wrapper.md)~~ | medium (out-of-bounds read) | **RESOLVED 2026-10-13** (archived): both `cont?` lowerings call `__dk_cont_live_word`, which checks for a `__dk_cont_fn` wrapper before reading `consumed` off a bare chain; a wrapper is live before and after a resume. Pinned by `cont-query-wrapped-handler-k` (leak-checked) |
 | ~~[resume-of-non-continuation-int-crashes](../archive/resume-of-non-continuation-int-crashes.md)~~ | low-medium | **RESOLVED 2026-10-17** (archived): a literal `k` is TUR-E0001; at run time a first-page word is reported (`resume: not a continuation`) and `cont?` of it is false. Pinned by `resume-of-non-continuation-reports` and `errors/resume-of-literal-refused` |
 | ~~[effect-cont-aggregate-result-untyped](../archive/effect-cont-aggregate-result-untyped.md)~~ | low | **RESOLVED 2026-10-13** (archived): the cont type carries the whole written result type (`Type.as.cont.returns_full`), which `elab_make_resume` prefers to the scalar ladder, so an aggregate resume is typed and crosses the slot boxed. Pinned by `effect-cont-aggregate-result` (leak-checked) |
-| [unknown-type-annotation-becomes-implicit-tyvar](unknown-type-annotation-becomes-implicit-tyvar.md) | low (policy) | `[k : zork]` -- any unknown type name, capitalized too -- is an implicit type variable, so a typo is never reported; KB-026 finds the single-occurrence case but demotes it to another tyvar. |
+| [unknown-type-annotation-becomes-implicit-tyvar](unknown-type-annotation-becomes-implicit-tyvar.md) | low (policy) | `[k : zork]` -- any unknown type name, capitalized too -- is an implicit type variable, so a typo is never reported; KB-026 finds the single-occurrence case but demotes it to another tyvar. The commonest instance is `option<T>` / `Option<T>` / `vec<T>`, the spelling CLAUDE.md uses: none of them is a type, so the parameter is unchecked (2026-10-17 note). |
 
 ## Found fixing resume-of-cont-typed-param-is-a-no-op (filed 2026-10-12)
 

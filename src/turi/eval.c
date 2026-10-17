@@ -8615,6 +8615,37 @@ static TuriValue try_retag_carrier_struct(TuriEnv *env, EvalFrame *frame,
         if (frame_lookup_tyvar(frame, ty->as.tyvar_.name, &r) && r.kind != TY_TYVAR)
             rt = r;
     }
+    /* typed-list-byvalue-adt-element-unboxed: a by-value defdata constructor
+     * value is a TuriStruct too (adt_ctor_native), named for its constructor
+     * and carrying it in `ctor`.  A variadic rest cell (EX_CONS_LIST) keeps
+     * only its pointer, so `(list-first (list-of (B "a")))` -- whose `(:: w
+     * A)` meets a one-field or multi-constructor type the record check below
+     * refuses -- read back the bare word and no match arm took it.  It is
+     * recognised by its constructor, which must be one of the type's own.
+     * Left alone, as below: a `:heap` type (its words may be native handles,
+     * a MutableMap) and a type whose constructors carry no fields (a
+     * `defopaque`, an enumeration).  Word 0 is read first and compared as a
+     * name, as below, so a carrier box shorter than a TuriStruct is never read
+     * past it unless it names one of the constructors. */
+    {
+        const AdtDef *cd = rt.kind == TY_ADT ? rt.as.adt_.def
+                         : rt.kind == TY_APP ? type_adt_app_def(&rt) : NULL;
+        uintptr_t cp = (uintptr_t)(intptr_t)v.as_int;
+        bool has_fields = false;
+        for (uint32_t ci = 0; cd && !cd->is_heap && cd->ctors && ci < cd->n_ctors; ci++)
+            if (cd->ctors[ci] && cd->ctors[ci]->n_fields) has_fields = true;
+        if (has_fields && cp >= 0x1000 &&
+            (!env || !env->provenance_on ||
+             turi_prov_check(env, TURI_HK_STRUCT, (const void *)cp))) {
+            TuriStruct *cs = (TuriStruct *)cp;
+            for (uint32_t ci = 0; (uintptr_t)cs->name >= 0x1000 && ci < cd->n_ctors; ci++) {
+                const CtorDef *c = cd->ctors[ci];
+                if (c && c->name && strcmp(cs->name, c->name) == 0 &&
+                    cs->n_fields == c->n_fields && cs->ctor == c)
+                    return turi_struct_val(cs);
+            }
+        }
+    }
     if (rt.kind != TY_ADT || !rt.as.adt_.def) return v;
     const AdtDef *d = rt.as.adt_.def;
     if (d->is_heap || !d->name) return v;

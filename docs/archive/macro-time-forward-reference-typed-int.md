@@ -1,5 +1,7 @@
 # Macro-time code types a forward function reference as `int`
 
+**Status: RESOLVED 2026-10-17** (see [Resolution](#resolution)).
+
 **Severity: low-medium (expressiveness).** In code elaborated for macro
 time -- a `defmacro*` body's `letrec`, or a module imported `:for-macros`
 -- a call to a function defined *later* is typed with `int` parameters.
@@ -56,3 +58,26 @@ typed correctly.
   elaborating any body, as the compiled path does.
 - In `letrec`, bind each name to its declared fn type before elaborating
   any init.
+
+## Resolution
+
+Not macro time as such: the forward-declare pre-pass. Every pre-pass that
+declares a function before its body is elaborated (a module's, the entry
+file's, and `letrec`'s) types parameters through `fwd_decl_scan_params`
+(`src/compiler/elab_core.c`), which commits a parameter's kind only for a
+short list of bare type names and leaves the rest on the `int` placeholder.
+`Syntax` was not on the list. The same shape compiled outside macro time
+only because `Syntax` hardly appears there; a `cstr` walker was always fine.
+Under `tur --interpret` it failed the same way, since a `:for-macros`
+import is elaborated by the same pre-pass whatever the engine.
+
+`TY_SYNTAX` joins the committed kinds (a bare `Syntax` determines it
+completely), and the module and entry pre-passes resolve a `: Syntax`
+result too -- `letrec`'s return peek already did.
+
+**Pinned by** `macro-time-forward-reference-syntax`: a `:for-macros` module
+with a mutually recursive walker returning `int` and one returning
+`Syntax`, each callee defined after its caller, and the `letrec` form inside
+a `defmacro*`. Both engines pass it; the old compiler reports "expected int,
+got Syntax" twice. `docs/guides/macros-guide.md` says definition order no
+longer matters.

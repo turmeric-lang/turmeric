@@ -1,14 +1,18 @@
-# Python packages the docs generators need.
+# python-markdown, for the spices site's deploy and nothing else.
 #
-#   python3 -m pip install -r tools/requirements.txt
+#   python3 -m pip install --require-hashes -r tools/spices-site-requirements.txt
 #
-# `tur run docs` (genguides.py / genspices.py) renders guide and spice markdown
-# with this; without it the recipe stops with an install hint rather than
-# half-generating the site and the docs pack.
+# This repository's docs generators no longer use it: genguides.py and
+# genspices.py render Markdown with tur/markdown (tools/mdrender.py,
+# markdown-library-plan M4), and need no Python package at all.  The one
+# install left is release-cut.yml's deploy-spices job, which runs the
+# turmeric-spices repository's OWN copies of genguides.py and genspices.py;
+# those still import `markdown`.  Delete this file, and that job's install
+# step, once they move to tur/markdown too.
 #
 # C-5 in docs/upcoming/security-audit-plan.md: pinned exactly, with hashes.
 # This used to read `markdown>=3.4` -- a floor with no ceiling and no digest --
-# and it is installed inside release.yml's `docs` job, which builds the
+# and it was installed inside release.yml's `docs` job, which builds the
 # turmeric-docs tarball the release publishes.  That made "whatever PyPI serves
 # this morning" a build input of a released artifact.
 #

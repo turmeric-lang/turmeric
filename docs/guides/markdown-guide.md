@@ -27,6 +27,7 @@ Phase M):
 | M1 | Block structure: paragraphs, ATX and setext headings, thematic breaks, indented and fenced code, the seven kinds of HTML block, block quotes, lists (tight and loose), link reference definitions, tabs, lazy continuation lines | Done |
 | M2 | Inline syntax: emphasis and strong emphasis, code spans, links and images (inline and by reference), autolinks, raw inline HTML, backslash escapes, entities, hard and soft breaks | Done |
 | M3 | The GFM extensions (tables, strikethrough, extended autolinks, task lists), heading ids, `markdown/headings` and `markdown/code-blocks` | Done |
+| M4 | The docs site renders its guides and spice READMEs with it (`tools/md/render.tur`), in place of python-markdown | Done |
 
 All of CommonMark is in, and so are the extensions: every one of the
 CommonMark spec's 652 examples passes, and so does every one of the 24 GFM
@@ -270,12 +271,16 @@ returns a fresh `(Vec MdBlockId)`, which the caller frees with `vec-free`.
   `markdown/code-info`, `markdown/block-text` and `markdown/block-lines` read
   each one's info string, contents and source lines.
 
-Two more read the headings:
+Three more read the headings:
 
 - `markdown/heading-text` returns a heading's content as plain text, for a
   table of contents: the text of its inlines, code spans included, with raw
   HTML and images' alt text left out and each run of whitespace one space. It
   is `(none)` for a block that is not a heading.
+- `markdown/heading-html` returns a heading's content as HTML, as
+  `markdown/render-html` writes it under an `MdHtmlOpts`: what goes between
+  the heading's tags, for a contents list that keeps the code spans and
+  emphasis. It is `(none)` for a block that is not a heading.
 - `markdown/heading-ids` returns the ids `markdown/render-html` gives the
   headings under an `MdHtmlOpts`, one per heading in the same order as
   `markdown/headings`. It is a fresh `(Vec String)`, released with
@@ -486,6 +491,20 @@ https://spec.commonmark.org/
 An image's alt text is its children. The HTML renderer writes them as plain
 text: emphasis and code lose their tags, and raw HTML is escaped, as cmark
 does it. (commonmark.js writes raw HTML there unescaped, into the attribute.)
+
+## The docs site
+
+This site's guide pages and spice front pages are rendered with this library.
+`tools/md/render.tur` is a small batch program over it: it renders every page
+of a run in one go, with the GFM extensions, the tag filter and
+`(MdSlugPython)`. So a guide reads as it does on GitHub, and keeps the anchors
+python-markdown gave it before. For each page it also writes the page's
+headings, which the contents box and the sidebar are built from, and every
+raw-HTML node it passed through, which the guides' build refuses.
+`tools/mdrender.py` builds it with `tur build` and runs it for
+`tools/genguides.py` and `tools/genspices.py`; ctest `tur_md_render` checks
+the two together. The [offline docs guide](offline-docs-guide.md#dependencies)
+says what the generators need.
 
 ## Conformance
 

@@ -1,0 +1,46 @@
+;; list-byvalue-adt-elements -- a by-value (default) defdata as the element of
+;; a stdlib/list-typed (List A), built by list-map and by list-of.
+;;
+;; typed-list-byvalue-adt-element-unboxed (docs/archive/): the generic
+;; list-map called its function through the word-returning carrier ABI, so a
+;; by-value Box result was stored unboxed in the cons cell and list-first's
+;; `*(tur_adt_Box *)word` read faulted -- for a bare function and for a
+;; capturing closure alike.  list-of's variadic rest cast a one-constructor
+;; aggregate to int64_t, a hard cc error.  Each element is now heap-boxed
+;; where it crosses into the carrier.
+(load "stdlib/list-typed.tur")
+(load "stdlib/str-build.tur")
+
+(defdata Box (B cstr))
+(defdata Shape (Circle int) (Rect int int))
+
+(defn box-str [b : Box] : cstr (match b (B s) s))
+
+(defn area [s : Shape] : int
+  (match s
+    (Circle r) (* 3 (* r r))
+    (Rect w h) (* w h)))
+
+(defn wrap [s : cstr] : Box (B s))
+
+(defn shape-of [n : int] : Shape
+  (if (= 0 (mod n 2)) (Circle n) (Rect n 10)))
+
+(defn main [] : int
+  (let [xs     (list-of "a" "b")
+        prefix "pre-"
+        bare   (list-map xs (fn [s : cstr] : Box (B s)))
+        named  (list-map xs wrap)
+        closed (list-map xs (fn [s : cstr] : Box (B (str-concat prefix s))))
+        lit    (list-of (B "x") (B "y"))
+        shapes (list-map (list-of 2 3) shape-of)
+        mixed  (list-of (Circle 1) (Rect 4 5))]
+    (println (box-str (list-first bare)))                   ; a
+    (println (box-str (list-first (list-rest named))))      ; b
+    (println (box-str (list-first (list-rest closed))))     ; pre-b
+    (println (box-str (list-first (list-rest lit))))        ; y
+    (println (list-foldl shapes 0
+                         (fn [acc : int s : Shape] : int (+ acc (area s)))))  ; 12+30
+    (println (area (list-first (list-rest mixed))))         ; 20
+    (println (list-count closed))                           ; 2
+    0))

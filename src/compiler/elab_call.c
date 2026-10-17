@@ -10426,12 +10426,22 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
                      * Marked here; the emitter wraps it in a word adapter only
                      * when the selected callee reads words and the closure's
                      * thunk does not take them.  Only at a sink proven not to
-                     * keep it: the wrapper borrows the handle. */
+                     * keep it: the wrapper borrows the handle.
+                     * typed-list-byvalue-adt-element-unboxed: likewise a
+                     * closure answering a by-value aggregate for a bare type
+                     * variable result -- `list-map`'s `(fn [A] B)` at a
+                     * defdata `B` -- which such a callee reads as the boxed
+                     * carrier word. */
                     else if (((ak == TY_FN && args[i]->type.as.fn.boxed) ||
                               (arg_is_typed_fat_param(args[i]) &&
                                fn_binding && fn_binding->body_is_inline_c)) &&
                              sink_is_nonretaining &&
-                             sink_fn_has_tyvar_param(&fn_type, fn_arg_idx_fat)) {
+                             (sink_fn_has_tyvar_param(&fn_type, fn_arg_idx_fat) ||
+                              (ak == TY_FN && args[i]->type.as.fn.result_full_type &&
+                               type_is_byvalue_aggregate_result(
+                                   *args[i]->type.as.fn.result_full_type) &&
+                               sink_fn_result_is_bare_tyvar(&fn_type,
+                                                            fn_arg_idx_fat)))) {
                         Expr *w = expr_new(e->arena, EX_FN_TO_FAT, TYPE_PTR_VOID,
                                            args[i]->span);
                         w->as.fn_to_fat_.inner = args[i];

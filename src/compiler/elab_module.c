@@ -133,6 +133,8 @@ static void elab_forward_declare_defns(Elab *e, Form *const *items,
                 /* r7rs-lang-plan R7: an annotated `: any` result, like the
                  * unannotated dynamic default below it. */
                 else if (strcmp(kn, "any") == 0) fwd_result_kind = TY_ANY;
+                /* macro-time-forward-reference-typed-int: a Syntax walker. */
+                else if (strcmp(kn, "Syntax") == 0) fwd_result_kind = TY_SYNTAX;
                 /* forward-call-to-aggregate-result-types-as-carrier: a bare
                  * type name -- `: Box` for a registered defstruct / defdata /
                  * defopaque -- rides the forward decl as that ADT, as the

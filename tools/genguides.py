@@ -6,7 +6,7 @@ Usage:
     python3 tools/genguides.py docs/guides/ [--out docs/html/guides/]
                                             [--emit-pack web/public/docs-pack/]
 
-Two consumers, one rendering pass. `build_guide_body` converts a guide's
+Two consumers, one rendering pass. `build_guide_bodies` converts each guide's
 markdown into its article body exactly once; `render_guide` wraps that body in
 site chrome for docs/html/guides/, and `emit_pack_fragment` writes the same
 body -- chrome-free, links rewritten into the pack's `#doc=` URL space -- into
@@ -24,16 +24,8 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import packlib  # noqa: E402  (sibling module, path fixed up just above)
-
-try:
-    import markdown as md_lib
-except ImportError:  # pragma: no cover -- preflight, not a code path
-    sys.exit(
-        "error: tools/genguides.py needs the 'markdown' package\n"
-        "       install it with:  python3 -m pip install -r tools/requirements.txt\n"
-        "       (or:  python3 -m pip install markdown)"
-    )
+import mdrender  # noqa: E402  (sibling module, path fixed up just above)
+import packlib  # noqa: E402
 
 
 # The Turmeric repo on GitHub. Single source of truth for this generator --
@@ -1004,7 +996,7 @@ GUIDE_JS_CORE = '''\
 
   // ---- Mermaid diagrams ---------------------------------------------------
   //
-  // `build_guide_body` has already turned every ```mermaid fence into a
+  // `finish_guide_body` has already turned every ```mermaid fence into a
   // `<pre class="mermaid">`. Mermaid itself is NOT bundled: it is ~3 MB, and
   // the docs pack is precached wholesale by Try Turmeric's service worker, so
   // vendoring it would grow every offline install by half again for a feature
@@ -1253,7 +1245,7 @@ GUIDE_CSS = '''\
     .code-toggle { border:1px solid var(--border); border-radius:4px; margin-bottom:1rem; overflow:hidden; }
     .code-card-bar { background:var(--bg-surface); border-bottom:1px solid var(--border); padding:0.35rem 0.75rem; display:flex; align-items:center; }
     .code-syntax-toggle { margin-left:auto; display:flex; border:1px solid var(--border); border-radius:4px; overflow:hidden; font-family:"Iosevka","Fira Code",monospace; font-size:11px; }
-    .seg-btn { padding:3px 10px; background:transparent; color:var(--text-sec); border:none; cursor:pointer; transition:all 0.14s; }
+    .seg-btn { padding:3px 10px; background:transparent; color:var(--text-sec); border:none; cursor:pointer; }
     .seg-btn:hover { color:var(--text-primary); }
     .seg-btn.active { color:var(--gold-bright); background:var(--bg-hover); }
     .code-card-body { }
@@ -1261,27 +1253,21 @@ GUIDE_CSS = '''\
     .guide-content .code-toggle pre { border:none; border-radius:0; margin-bottom:0; }'''
 
 
-# A GFM task-list item as it appears AFTER markdown conversion. python-markdown
-# ships no task-list extension, so `- [ ] text` reaches the HTML as a literal
-# `<li>[ ] text`. Matching post-conversion is what keeps the source a plain
-# bullet list -- which GitHub already renders as a checklist on its own -- and
-# costs no new package in tools/requirements.txt.
-_TASK_ITEM_RE = re.compile(r'<li>\[([ xX])\]\s+')
+# A GFM task-list item as tur/markdown writes it: `<li>` then the disabled
+# checkbox, with a `<p>` between them in a loose list. The renderer writes the
+# box (as GitHub does); the class is what the guide CSS draws it by.
+_TASK_ITEM_RE = re.compile(r'<li>(\s*(?:<p>)?<input type="checkbox")')
 
 
-def render_task_lists(body_html: str) -> str:
-    """Render `- [ ]` / `- [x]` list items as real, disabled checkboxes."""
-    def sub(m: re.Match) -> str:
-        checked = ' checked' if m.group(1) in 'xX' else ''
-        return f'<li class="task-item"><input type="checkbox" disabled{checked}> '
-
-    return _TASK_ITEM_RE.sub(sub, body_html)
+def mark_task_items(body_html: str) -> str:
+    """Give each task-list item the `task-item` class the guide CSS styles."""
+    return _TASK_ITEM_RE.sub(r'<li class="task-item">\1', body_html)
 
 
-# A ```mermaid fence, as python-markdown's fenced_code leaves it. Mermaid
-# renders from `<pre class="mermaid">`, not from the `<pre><code>` pair every
-# other fence becomes, so the block is unwrapped here rather than in the
-# browser -- one rewrite at build time instead of a DOM fixup on every page.
+# A ```mermaid fence, as the renderer writes it. Mermaid renders from
+# `<pre class="mermaid">`, not from the `<pre><code>` pair every other fence
+# becomes, so the block is unwrapped here rather than in the browser -- one
+# rewrite at build time instead of a DOM fixup on every page.
 #
 # The escaping stays: mermaid reads `textContent`, which the browser has
 # already decoded, so `A --&gt; B` arrives at the parser as `A --> B`. Leaving
@@ -1361,228 +1347,13 @@ _MANUAL_TOC_RE = re.compile(
 
 
 def strip_manual_toc(text: str) -> str:
-    """Remove a hand-written Table of Contents section from guide markdown."""
-    return _MANUAL_TOC_RE.sub('', text, count=1)
+    """Blank out a hand-written Table of Contents section from guide markdown.
 
-
-_LANG_FENCE_OPEN_RE = re.compile(r'(?m)^(`{3})(turmeric|sweet-exp)([^\n]*)\n')
-
-
-def _read_fenced_block(text: str, pos: int) -> tuple[str, int]:
-    """Read a markdown fenced block whose opening fence's newline is at `pos`.
-
-    Returns (content, end) where `end` is just past the closing fence line.
-
-    A markdown block closes at a column-0 bare ``` line. Turmeric inline-C
-    blocks use ``` to toggle a C span (```c opens; ``` or ```) closes) and may
-    be indented or written inline, so track the C span and only treat a bare
-    ``` as the block close when not inside one. This is the same scan
-    tools/check-guide-pairs.py uses to delimit blocks.
+    Blank lines rather than nothing, so the lines after it keep their numbers
+    in the renderer's raw-HTML report.
     """
-    n = len(text)
-    i = pos
-    line_start = pos
-    in_c = False
-    while i < n:
-        if text.startswith('```', i):
-            at_col0 = (i == line_start)
-            after = text[i + 3] if i + 3 < n else '\n'
-            if in_c:
-                in_c = False
-                i += 3
-                continue
-            if after.isalnum():           # info string -> opens a (C) span
-                in_c = True
-                i += 3
-                continue
-            if at_col0:                   # bare ``` at column 0 -> block close
-                j = text.find('\n', i)
-                end = (j + 1) if j != -1 else n
-                return text[pos:i], end
-            i += 3
-            continue
-        if text[i] == '\n':
-            line_start = i + 1
-        i += 1
-    return text[pos:], n
-
-
-def widen_nested_fences(text: str) -> str:
-    """Re-fence turmeric/sweet-exp blocks that contain inline-C fences.
-
-    Turmeric's inline-C syntax puts ``` runs *inside* a code block. The project
-    style closes an inline-C body with ```) on the same line, which markdown
-    ignores -- but a module-level inline-C block legitimately closes with a bare
-    ``` at column 0, and python-markdown's fenced_code reads that as the end of
-    the *enclosing* turmeric block. Everything after it then renders as prose
-    instead of code (docs/guides/thread-pool-guide.md is the case in the tree).
-
-    Widening the enclosing fence to five backticks makes the inner
-    three-backtick runs ordinary content, so the block survives intact. Only
-    blocks that actually contain a nested run are touched.
-    """
-    out = []
-    pos = 0
-    for m in _LANG_FENCE_OPEN_RE.finditer(text):
-        if m.start() < pos:
-            continue  # inside a block already consumed
-        content, end = _read_fenced_block(text, m.end())
-        if '```' not in content:
-            continue
-        out.append(text[pos:m.start()])
-        out.append(f'`````{m.group(2)}{m.group(3)}\n{content}`````\n')
-        pos = end
-    if not out:
-        return text
-    out.append(text[pos:])
-    return ''.join(out)
-
-
-_FENCE_LINE_RE = re.compile(r'^( {0,3})(`{3,}|~{3,})([^\n]*)$')
-
-
-def dedent_indented_fences(text: str) -> str:
-    """Move a fence indented by 1-3 spaces to column 0.
-
-    CommonMark lets a fence sit at a list item's content column -- two spaces
-    under `- `, three under `2. ` -- and GitHub renders it inside the item.
-    python-markdown's fenced_code only knows a column-0 fence, and its lists
-    want four-space continuation besides, so such a block rendered as running
-    text -- in sixteen guides when this was written, most often as one
-    inline <code> span flattening the snippet into a sentence.  Dedented, it
-    renders as a code block with its language class (so the turmeric/sweet-exp
-    toggles apply), directly after the list item.
-
-    Only fences OUTSIDE a column-0 fenced block are touched: a turmeric block's
-    inline C legitimately holds indented ``` runs.
-    """
-    lines = text.split('\n')
-    out = []
-    i = 0
-    outer = None                           # (char, len) of an open column-0 fence
-    while i < len(lines):
-        ln = lines[i]
-        m = _FENCE_LINE_RE.match(ln)
-        if outer:
-            if m and not m.group(1) and m.group(2)[0] == outer[0] and \
-               len(m.group(2)) >= outer[1] and not m.group(3).strip():
-                outer = None
-            out.append(ln)
-            i += 1
-            continue
-        if not m:
-            out.append(ln)
-            i += 1
-            continue
-        indent, fence = m.group(1), m.group(2)
-        if not indent:
-            outer = (fence[0], len(fence))
-            out.append(ln)
-            i += 1
-            continue
-        # An indented opening fence: find its closer at the same indent.
-        j = i + 1
-        while j < len(lines):
-            c = _FENCE_LINE_RE.match(lines[j])
-            if c and c.group(1) == indent and c.group(2)[0] == fence[0] and \
-               len(c.group(2)) >= len(fence) and not c.group(3).strip():
-                break
-            j += 1
-        if j >= len(lines):                # unclosed: leave it as it is
-            out.append(ln)
-            i += 1
-            continue
-        n = len(indent)
-        for k in range(i, j + 1):
-            row = lines[k]
-            lead = len(row) - len(row.lstrip(' '))
-            out.append(row[min(n, lead):])
-        i = j + 1
-    return '\n'.join(out)
-
-
-_QUOTED_FENCE_OPEN_RE = re.compile(r'^( {0,3}(?:>[ \t]?)+)(`{3,}|~{3,})[^\n`]*$')
-
-
-def unquote_blockquote_fences(text: str) -> str:
-    """Render a fenced block inside a blockquote as code.
-
-    python-markdown's fenced_code is a preprocessor over the whole text, and it
-    only knows a fence that starts at column 0. Inside a blockquote every line
-    starts with `>`, so the fence is never seen: the opening ```sh renders as a
-    literal paragraph, a `# comment` in the snippet becomes an <h1> -- and a
-    TOC entry -- and `<tag>` reaches the HTML as an element.  The source is
-    ordinary CommonMark (GitHub renders it), so the guide is not what is wrong.
-
-    The blockquote parser DOES recurse into block processing, and an indented
-    code block is a block processor, so the fence is rewritten into that form:
-    same quote prefix, four more spaces per line, a bare quoted line in place of
-    each fence (an indented block cannot interrupt a paragraph).  The info
-    string's language is dropped; nothing in a guide highlights by it outside
-    the turmeric/sweet-exp toggles, which never appear quoted.  An unclosed
-    fence is left alone.
-    """
-    lines = text.split('\n')
-    out = []
-    i = 0
-    while i < len(lines):
-        m = _QUOTED_FENCE_OPEN_RE.match(lines[i])
-        if not m:
-            out.append(lines[i])
-            i += 1
-            continue
-        prefix, fence = m.group(1), m.group(2)
-        quote = prefix.rstrip()
-        close_re = re.compile(r'^%s{%d,}[ \t]*$' % (re.escape(fence[0]), len(fence)))
-        body, j, closed = [], i + 1, False
-        while j < len(lines):
-            ln = lines[j]
-            if ln.rstrip() == quote:
-                inner = ''
-            elif ln.startswith(prefix):
-                inner = ln[len(prefix):]
-            else:
-                break                      # the blockquote ended first
-            if close_re.match(inner):
-                closed = True
-                break
-            body.append(inner)
-            j += 1
-        if not closed:
-            out.append(lines[i])
-            i += 1
-            continue
-        out.append(quote)
-        out.extend(quote + '     ' + b if b.strip() else quote for b in body)
-        out.append(quote)
-        i = j + 1
-    return '\n'.join(out)
-
-
-def unrendered_fences(body_html: str) -> list:
-    """Fences the renderer never saw, left in the output as text.
-
-    The signature is a ``` run that STARTS a line of prose -- right after a
-    <p> or <li>, or at the head of a line inside one -- with code spans and
-    <pre> blocks removed first, since backticks legitimately survive there.  A
-    run in the middle of a sentence or a table cell is prose that mentions
-    backticks, not a fence, and is left alone.
-
-    The second signature is the same failure one step later: when the opening
-    fence line is not a fence (an info string fenced_code rejects), the three
-    backticks pair up as an inline code span, so a paragraph OPENS with a
-    <code> that runs across a line break -- the info string and the code,
-    flattened into one sentence.
-
-    Returns a short excerpt per occurrence."""
-    def excerpt(text, m):
-        return text[max(0, m.start() - 40):m.end() + 60].replace('\n', ' ')
-    found = [excerpt(body_html, m)
-             for m in re.finditer(r'<p><code>[^<]*\n', body_html)]
-    prose = re.sub(r'<pre\b.*?</pre>|<code\b.*?</code>', '', body_html, flags=re.S)
-    found += [excerpt(prose, m)
-              for m in re.finditer(r'(?:<p>|<li>|\n)[ \t]*(```)', prose)]
-    return found
+    return _MANUAL_TOC_RE.sub(lambda m: '\n' * m.group(0).count('\n'), text,
+                              count=1)
 
 
 def _count_toc_entries(tokens: list) -> int:
@@ -1645,57 +1416,29 @@ def toc_tokens_to_sidebar(tokens: list) -> str:
     return '\n'.join(items)
 
 
-def build_guide_body(stem: str, src: Path, meta: dict | None = None) -> dict:
-    """Render one guide's markdown to its article body -- the single rendering pass.
+def guide_source(src: Path, meta: dict | None = None) -> tuple[str, str, dict]:
+    """A guide's Markdown as the renderer sees it.
 
-    The returned ``body`` still carries the source's raw ``href="other.md"``
-    cross-links: each consumer rewrites them into its own URL space
-    (``rewrite_links_site`` for docs/html/, ``rewrite_links_pack`` for the docs
-    pack). Everything else about the body -- the syntax toggles, the in-body
-    Contents box, the heading anchors -- is identical for both, which is what
-    keeps the site and the pack from drifting.
-
-    Returns a dict with: stem, title, body, toc_tokens, meta.
+    Returns (text, body, meta). `text` is what is rendered: the source with
+    its front matter and any hand-written contents section blanked out, so
+    the renderer's line numbers are the file's. `body` is the source after
+    its front matter, and `meta` the front matter unless the caller gave it.
     """
     raw = src.read_text(encoding='utf-8')
-    fm_meta, text = parse_front_matter(raw)
+    fm_meta, body = parse_front_matter(raw)
     if meta is None:
         meta = fm_meta
+    text = '\n' * raw[:len(raw) - len(body)].count('\n') + body
+    return strip_manual_toc(text), body, meta
 
-    # First, so the marker stripping below sees a list item's fence too.
-    text = dedent_indented_fences(text)
 
-    # Drop every checker marker from an opening fence's info string.
-    #
-    # `no-check`, `no-manifest-check` and anything check-guide-pairs.py grows
-    # next are instructions to *that* tool; python-markdown's fenced_code only
-    # accepts a single bare word after the fence, so a marker left in place
-    # stops the line being a fence at all. The block then renders as a literal
-    # paragraph and its closing ``` opens a new one, swallowing the prose and
-    # headings that follow until the next fence -- silently, because nothing
-    # errors. Matching the markers generically rather than by name is what
-    # keeps the next one from repeating it.
-    text = re.sub(r'^(`{3,})(turmeric|sweet-exp)[ \t]+(?!\{)[^\n]*', r'\1\2', text,
-                  flags=re.MULTILINE)
-    text = strip_manual_toc(text)
-    text = widen_nested_fences(text)
-    text = unquote_blockquote_fences(text)
-
-    conv = md_lib.Markdown(extensions=['fenced_code', 'tables', 'toc'],
-                            extension_configs={'toc': {'permalink': False}})
-    # Keep an ordered list's own first number. A fence inside a list item
-    # (dedented above) ends the list for python-markdown, so the items after
-    # it open a new <ol>, which would otherwise restart at 1. The `lazy_ol`
-    # keyword is ignored by Markdown 3.x, and the sane_lists extension that
-    # sets this also stops `-` and `1.` lists merging, so set it directly.
-    conv.parser.blockprocessors['olist'].LAZY_OL = False
-    body_html = conv.convert(text)
-    fence_errors = unrendered_fences(body_html)
-    body_html = inject_syntax_toggles(body_html)
-    body_html = render_task_lists(body_html)
+def finish_guide_body(stem: str, page: dict, body: str, meta: dict) -> dict:
+    """Turn one rendered guide into its article body and page facts."""
+    body_html = inject_syntax_toggles(page['html'])
+    body_html = mark_task_items(body_html)
     body_html = wrap_tables(body_html)
     body_html = render_mermaid_blocks(body_html)
-    toc_tokens = getattr(conv, 'toc_tokens', [])
+    toc_tokens = page['toc_tokens']
 
     # In-body "Contents" box, inserted right after the page title (first <h1>),
     # or at the top of the content when the guide has no <h1>.
@@ -1712,7 +1455,7 @@ def build_guide_body(stem: str, src: Path, meta: dict | None = None) -> dict:
     if fm_title:
         title = fm_title
     else:
-        title_match = re.match(r'^#\s+(.+)', text, re.MULTILINE)
+        title_match = re.match(r'^#\s+(.+)', body, re.MULTILINE)
         title = title_match.group(1) if title_match else stem.replace('-', ' ').title()
 
     return {
@@ -1721,8 +1464,37 @@ def build_guide_body(stem: str, src: Path, meta: dict | None = None) -> dict:
         'body': body_html,
         'toc_tokens': toc_tokens,
         'meta': meta,
-        'fence_errors': fence_errors,
+        'raw_html': page['raw_html'],
     }
+
+
+def build_guide_bodies(jobs: list) -> list[dict]:
+    """Render guides' markdown to their article bodies -- the single rendering pass.
+
+    `jobs` holds one (stem, src, meta) per guide, and every guide goes through
+    tur/markdown in one run of its renderer (tools/mdrender.py): CommonMark
+    plus the GFM extensions, as GitHub renders the same source, with
+    python-markdown's heading ids so existing anchors keep working.
+
+    Each returned ``body`` still carries the source's raw ``href="other.md"``
+    cross-links: each consumer rewrites them into its own URL space
+    (``rewrite_links_site`` for docs/html/, ``rewrite_links_pack`` for the docs
+    pack). Everything else about the body -- the syntax toggles, the in-body
+    Contents box, the heading anchors -- is identical for both, which is what
+    keeps the site and the pack from drifting.
+
+    Returns one dict per job, in order, with: stem, title, body, toc_tokens,
+    meta, raw_html.
+    """
+    prepared = [(stem, *guide_source(src, meta)) for stem, src, meta in jobs]
+    pages = mdrender.render_batch({stem: text for stem, text, _, _ in prepared})
+    return [finish_guide_body(stem, pages[stem], body, meta)
+            for stem, _, body, meta in prepared]
+
+
+def build_guide_body(stem: str, src: Path, meta: dict | None = None) -> dict:
+    """build_guide_bodies for one guide."""
+    return build_guide_bodies([(stem, src, meta)])[0]
 
 
 # `[text](other-guide.md)` and `[text](other-guide.md#anchor)`, as they appear
@@ -1745,12 +1517,6 @@ def rewrite_links_site(body_html: str) -> str:
         return f'href="{Path(href).name}.html{frag}"'
 
     return _MD_HREF_RE.sub(rewrite, body_html)
-
-
-def _build_guide_body_job(job: tuple) -> dict:
-    """Process-pool entry point for build_guide_body -- must be top-level to pickle."""
-    stem, src, meta = job
-    return build_guide_body(stem, src, meta)
 
 
 def render_guide(stem: str, src: Path, out: Path, all_stems: set,
@@ -1928,7 +1694,7 @@ def render_index(categories: list[dict], all_stems: set[str], out_dir: Path,
     .index-card ul li a {{ color:var(--text-primary); }}
     .index-card ul li a:hover {{ color:var(--gold); }}
     .recent-tablist {{ display:inline-flex; border:1px solid var(--border); border-radius:4px; overflow:hidden; margin-bottom:0.6rem; font-family:system-ui; font-size:0.8rem; }}
-    .recent-tablist .seg-btn {{ padding:4px 12px; background:transparent; color:var(--text-sec); border:none; cursor:pointer; font:inherit; transition:all 0.14s; }}
+    .recent-tablist .seg-btn {{ padding:4px 12px; background:transparent; color:var(--text-sec); border:none; cursor:pointer; font:inherit; }}
     .recent-tablist .seg-btn + .seg-btn {{ border-left:1px solid var(--border); }}
     .recent-tablist .seg-btn:hover {{ color:var(--text-primary); }}
     .recent-tablist .seg-btn.active {{ color:var(--gold-bright); background:var(--bg-hover); }}
@@ -2113,22 +1879,12 @@ def main() -> None:
                       for date, src in edited[:10]]
 
     print('Generating guides:')
-    # Markdown conversion is the other half of the runtime (~17s of the
-    # original ~34s, essentially all of it inside markdown's inline
-    # treeprocessor) and it is pure CPU, so it needs processes rather than
-    # threads. Only build_guide_body is farmed out: render_guide is cheap
-    # f-string assembly plus the file write, and keeping it -- and its
-    # per-guide print -- in the parent is what keeps stdout and the write
-    # order byte-identical to the serial version. `ex.map` preserves order,
-    # so `docs` is built in md_files order either way.
-    n_md_workers = min(os.cpu_count() or 1, len(md_files)) or 1
-    jobs = [(src.stem, src, meta_by_stem.get(src.stem, {})) for src in md_files]
-    if n_md_workers > 1 and len(jobs) > 1:
-        from concurrent.futures import ProcessPoolExecutor
-        with ProcessPoolExecutor(max_workers=n_md_workers) as ex:
-            built = list(ex.map(_build_guide_body_job, jobs))
-    else:
-        built = [_build_guide_body_job(j) for j in jobs]
+    # One run of the renderer for every guide (tools/mdrender.py), rather
+    # than a process per guide: it takes well under a second for the lot.
+    # render_guide stays in this loop, so stdout and the write order follow
+    # md_files.
+    built = build_guide_bodies(
+        [(src.stem, src, meta_by_stem.get(src.stem, {})) for src in md_files])
 
     docs = []
     for src, doc in zip(md_files, built):
@@ -2139,16 +1895,22 @@ def main() -> None:
                  recent_updated=recent_updated)
     print(f'Done: {len(md_files)} guides + index → {out_dir}')
 
-    # A fence the renderer never saw turns the rest of its block into prose --
-    # headings out of `#` comments, elements out of `<placeholders>` -- with
-    # no error.  genpack's fragment check only notices when the stray text
-    # happens to look like an unclosed tag, so fail on the cause here.
-    bad = [(doc['stem'], e) for doc in docs for e in doc.get('fence_errors', [])]
-    for stem, excerpt in bad:
-        print(f'error: {stem}.md: a code fence rendered as text: ...{excerpt}...',
-              file=sys.stderr)
+    # Raw HTML in a guide is an accident until a page says otherwise: no
+    # guide uses it on purpose, and Turmeric type syntax such as `ptr<void>`
+    # or `<name>` written outside a code span is a tag to the browser, which
+    # hides it. So any the renderer passed through fails the build, unless the
+    # guide's front matter says `raw-html: allow` (markdown-library-plan 6.2).
+    bad = [(doc['stem'], r) for doc in docs
+           if doc['meta'].get('raw-html') != 'allow' for r in doc['raw_html']]
+    for stem, r in bad:
+        snippet = ' '.join(r['html'].split())[:60]
+        print(f'error: {stem}.md:{r["line"]}: raw HTML: {snippet}', file=sys.stderr)
     if bad:
-        sys.exit(f'error: {len(bad)} unrendered code fence(s); see above')
+        sys.exit(f'error: {len(bad)} raw HTML node(s) in the guides; see above.\n'
+                 '       Put Turmeric syntax in a code span, or write \\< for a '
+                 'literal <.\n'
+                 '       A page that means it says `raw-html: allow` in its '
+                 'front matter.')
 
     if args.emit_pack:
         emit_pack_guides(docs, guides_dir, Path(args.emit_pack),

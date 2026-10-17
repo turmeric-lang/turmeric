@@ -58,14 +58,11 @@ async function articleScrollTop(page) {
  *
  * Returns the real offset rather than the requested one: a short fragment
  * clamps, and a test that assumed its request took effect would pass by
- * comparing 0 to 0. `behavior: 'instant'` because .docs-article sets
- * scroll-behavior: smooth, which would otherwise still be animating when the
- * assertion reads back.
+ * comparing 0 to 0.
  */
 async function scrollArticle(page, top) {
     await page.evaluate((t) => {
-        const a = document.getElementById('docs-article');
-        a.scrollTo({ top: t, behavior: 'instant' });
+        document.getElementById('docs-article').scrollTop = t;
     }, top);
     await settleArticle(page);
     return articleScrollTop(page);

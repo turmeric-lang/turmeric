@@ -118,7 +118,6 @@
   border-radius: 7px;
   padding: 8px 18px;
   cursor: pointer;
-  transition: color 0.12s, background 0.12s;
 }
 .ci-tab:hover { color: var(--text-sec); }
 .ci-tab.is-active { color: var(--text-primary); background: var(--bg-hover); }
@@ -242,7 +241,6 @@
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  transition: color 0.12s, background 0.12s, border-color 0.12s;
 }
 .ci-chip:hover { color: var(--text-primary); background: var(--bg-hover); }
 .ci-chip[aria-pressed="true"] {

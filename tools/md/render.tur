@@ -1,0 +1,234 @@
+;; tools/md/render.tur -- the docs site's Markdown renderer
+;; (markdown-library-plan M4).
+;;
+;; Usage: render --list=FILE
+;;
+;; FILE names one Markdown file per line.  For each X.md this writes two
+;; files beside it:
+;;
+;; - X.html, the page's HTML fragment: tur/markdown with the GFM extensions
+;;   and the tag filter, and python-markdown's heading ids (MdSlugPython),
+;;   which keep the site's anchors and inbound links working.
+;; - X.json, what the page's generator needs besides the HTML:
+;;     {"headings": [{"level": 2, "id": "...", "html": "..."}, ...],
+;;      "raw_html": [{"line": 12, "html": "<b>"}, ...]}
+;;   headings is in document order; html is the heading's content as the
+;;   page writes it.  raw_html is every raw-HTML block and inline the page
+;;   passes through, with the line it starts on (an inline's is its
+;;   paragraph's first line), so the generator can refuse the accidental
+;;   ones: Turmeric type syntax such as ptr<void> outside a code span is a
+;;   tag to the browser, which hides it.
+;;
+;; tools/genguides.py and tools/genspices.py build this once per run with
+;; `tur build` and hand it every page at once.  Exit status 0, or 2 when a
+;; file cannot be read or written.
+(load "stdlib/markdown.tur")
+
+(load "stdlib/fs-string.tur")
+
+(load "stdlib/args.tur")
+
+(defn page-opts [] : MdHtmlOpts (MdHtmlOpts (MdRawTagFilter) (MdSlugPython)))
+
+;; ---- JSON ----------------------------------------------------------------------
+(defn hex-digit [n : int] : int (if (< n 10) (+ n 48) (+ n 87)))
+
+;; Append byte c of a JSON string literal: a quote or backslash escaped, a
+;; control byte as \u00XX, anything else (UTF-8 included) as it is.
+(defn push-json-byte! [out : StringBuilder c : int] : void
+  (if (or (= c 34) (= c 92))
+    (do (builder/push-byte! out 92) (builder/push-byte! out c))
+    (if (< c 32)
+      (do
+        (builder/push-cstr! out "\\u00")
+        (builder/push-byte! out (hex-digit (/ c 16)))
+        (builder/push-byte! out (hex-digit (- c (* 16 (/ c 16))))))
+      (builder/push-byte! out c))))
+
+;; Append s as a JSON string literal.
+(defn push-json-string! [out : StringBuilder s : String] : void
+  (let [n      (string/len s)
+        ^mut i 0]
+    (do
+      (builder/push-byte! out 34)
+      (while (< i n)
+        (do (push-json-byte! out (string/byte-at s i)) (set! i (+ i 1))))
+      (builder/push-byte! out 34))))
+
+;; ---- Headings ------------------------------------------------------------------
+(defn heading-level [d : MdDoc id : MdBlockId] : int
+  (match (markdown/block d id) (MdHeading l) l _ 0))
+
+(defn push-headings! [out : StringBuilder d : MdDoc] : void
+  (let [hs     (markdown/headings d)
+        ids    (markdown/heading-ids d (page-opts))
+        ^mut k 0]
+    (do
+      (builder/push-cstr! out "\"headings\": [")
+      (while (< k (vec-len hs))
+        (let [h (vec-get hs k)]
+          (do
+            (when (> k 0) (builder/push-cstr! out ", "))
+            (builder/push-cstr! out "{\"level\": ")
+            (builder/push-int! out (heading-level d h))
+            (builder/push-cstr! out ", \"id\": ")
+            (push-json-string! out (vec-get ids k))
+            (builder/push-cstr! out ", \"html\": ")
+            (match (markdown/heading-html d h (page-opts))
+              (Some s)
+              (do (push-json-string! out s) (string/release s))
+              (None)
+              (builder/push-cstr! out "\"\""))
+            (builder/push-cstr! out "}")
+            (set! k (+ k 1)))))
+      (builder/push-cstr! out "]")
+      (string/release-all ids)
+      (vec-free hs))))
+
+;; ---- Raw HTML ------------------------------------------------------------------
+;; One raw-HTML entry, with a comma before it unless it is the first.
+(defn push-raw! [out : StringBuilder first : bool line : int s : String] : void
+  (do
+    (when (not first) (builder/push-cstr! out ", "))
+    (builder/push-cstr! out "{\"line\": ")
+    (builder/push-int! out line)
+    (builder/push-cstr! out ", \"html\": ")
+    (push-json-string! out s)
+    (builder/push-cstr! out "}")))
+
+;; The raw-HTML inlines under the inlines ins, at line; returns how many
+;; entries have been written, starting from count.
+(defn push-raw-inlines! [out : StringBuilder
+                         d : MdDoc
+                         ins : (Vec MdInlineId)
+                         line : int
+                         count : int] : int
+  (let [^mut n count
+        ^mut i 0]
+    (do
+      (while (< i (vec-len ins))
+        (let [id (vec-get ins i)]
+          (do
+            (match (markdown/inline d id)
+              (MdHtmlInline)
+              (match (markdown/inline-text d id)
+                (Some s)
+                (do
+                  (push-raw! out (= n 0) line s)
+                  (string/release s)
+                  (set! n (+ n 1)))
+                (None)
+                nil)
+              _
+              (let [kids (markdown/inline-children d id)]
+                (do
+                  (set! n (push-raw-inlines! out d kids line n))
+                  (vec-free kids))))
+            (set! i (+ i 1)))))
+      n)))
+
+;; The raw HTML at and under block id; returns the running count.
+(defn push-raw-blocks! [out : StringBuilder
+                        d : MdDoc
+                        id : MdBlockId
+                        count : int] : int
+  (let [line   (pair-fst (markdown/block-lines d id))
+        ins    (markdown/inlines d id)
+        kids   (markdown/children d id)
+        ^mut n (match (markdown/block d id)
+                 (MdHtmlBlock)
+                 (match (markdown/block-text d id)
+                   (Some s)
+                   (do
+                     (push-raw! out (= count 0) line s)
+                     (string/release s)
+                     (+ count 1))
+                   (None)
+                   count)
+                 _
+                 count)
+        ^mut i 0]
+    (do
+      (set! n (push-raw-inlines! out d ins line n))
+      (while (< i (vec-len kids))
+        (do
+          (set! n (push-raw-blocks! out d (vec-get kids i) n))
+          (set! i (+ i 1))))
+      (vec-free ins)
+      (vec-free kids)
+      n)))
+
+;; ---- One page ------------------------------------------------------------------
+;; path with its .md suffix replaced by ext.
+(defn sibling [path : String ext : cstr] : String
+  (let [n    (string/len path)
+        stem (if (string/ends-with? path (string/from-cstr ".md"))
+               (string/substring path 0 (- n 3))
+               (string/substring path 0 n))
+        out  (string/concat stem (string/from-cstr ext))]
+    (do (string/release stem) out)))
+
+(defn write-file [path : String text : String] : bool
+  (match (fs/write-text (string/to-cstr path) (string/to-cstr text))
+    (Ok u)
+    true
+    (Err e)
+    (do
+      (eprintln (string/to-cstr (string/of "render: cannot write " path)))
+      false)))
+
+(defn render-page [path : String] : bool
+  (match (fs/read-string (string/to-cstr path))
+    (Ok src)
+    (let [d    (markdown/parse src (markdown/default-opts))
+          html (markdown/render-html d (page-opts))
+          meta (builder/new)
+          hp   (sibling path ".html")
+          jp   (sibling path ".json")]
+      (do
+        (builder/push-cstr! meta "{")
+        (push-headings! meta d)
+        (builder/push-cstr! meta ",\n \"raw_html\": [")
+        (push-raw-blocks! meta d (markdown/root d) 0)
+        (builder/push-cstr! meta "]}\n")
+        (let [json (builder/finish meta)
+              ok   (and (write-file hp html) (write-file jp json))]
+          (do
+            (string/release json)
+            (string/release html)
+            (string/release hp)
+            (string/release jp)
+            (string/release src)
+            (markdown/doc-free d)
+            ok))))
+    (Err e)
+    (do
+      (eprintln (string/to-cstr (string/of "render: cannot read " path)))
+      false)))
+
+(defn render-list [list : cstr] : int
+  (match (fs/read-string list)
+    (Ok text)
+    (let [paths    (string/lines text)
+          ^mut bad 0
+          ^mut i   0]
+      (do
+        (while (< i (vec-len paths))
+          (let [p (vec-get paths i)]
+            (do
+              (when (and (> (string/len p) 0) (not (render-page p)))
+                (set! bad (+ bad 1)))
+              (set! i (+ i 1)))))
+        (string/release-all paths)
+        (string/release text)
+        (if (> bad 0) 2 0)))
+    (Err e)
+    (do (eprintln "render: cannot read the list") 2)))
+
+(defn main [] : int
+  (let [spec (args/spec-option (args/spec-new) "--list" "string" (none))
+        res  (args/parse spec *args*)
+        rc   (if (args/error? res)
+               (do (eprintln (args/error-msg res)) 2)
+               (render-list (args/get-str res "list")))]
+    (do (args/result-free res) (args/spec-free spec) rc)))

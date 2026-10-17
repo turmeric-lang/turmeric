@@ -1758,6 +1758,12 @@ char *ensure_variadic_rest_fatshim(EmitCtx *ctx, Type result_type,
                                    const char *rest_c);
 char *ensure_carrier_fatshim(EmitCtx *ctx,
                              Type result_type, Type *param_types, uint8_t n_params);
+/* typed-list-byvalue-adt-element-unboxed: box a by-value aggregate result
+ * for a consumer reading it as the word.  `slot` is EMIT_ADAPT_BARE_SLOT1 or
+ * EMIT_ADAPT_FAT_SLOT1; NULL when the signature does not qualify. */
+char *ensure_boxres_word_adapter(EmitCtx *ctx, Buf *out, const char *slot,
+                                 Type result_type, const char *crc,
+                                 const char **cpc, const char **apc, uint8_t n);
 /* hkt-generic-forwarded-bind-continuation-segfaults: slot-0 shim that boxes a
  * by-value aggregate result into the carrier for an erased-result sink; NULL
  * when the signature does not qualify.  Caller-owned name. */

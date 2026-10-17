@@ -375,6 +375,31 @@
             true))
     _
     (none)))
+;;; markdown/heading-html -- a heading's content as markdown/render-html writes it, for a table of contents.
+;;;
+;;; The HTML between the heading's tags: its inlines rendered with opts,
+;;; so the raw-HTML rule is the page's.  No id is in it; markdown/heading-ids
+;;; has those.
+;;;
+;;; Parameters:
+;;;   d    -- the document
+;;;   id   -- a block of d
+;;;   opts -- the options the document is (or would be) rendered with
+;;;
+;;; Returns:
+;;;   (some s), a fresh owned String, or (none) when the block is not a heading.
+;;;
+;;; Example:
+;;;   (markdown/heading-html d id (markdown/default-html-opts))
+;;;   ; => (some "Use <code>make</code>") for "## Use `make`"
+;;;
+;;; Since: markdown-library-plan M4
+(defn markdown/heading-html [d : MdDoc id : MdBlockId opts : MdHtmlOpts] : (Option String)
+  (match (.kind (md/-node-of d id))
+    (MdKHeading)
+    (some (md/-heading-html d opts (.ix id)))
+    _
+    (none)))
 ;;; markdown/heading-ids -- the id markdown/render-html gives each heading.
 ;;;
 ;;; One per heading, in the order markdown/headings lists them, by the rule

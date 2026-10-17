@@ -2610,6 +2610,97 @@ char *ensure_boxres_fatshim_ex(EmitCtx *ctx, Type result_type,
     return name;
 }
 
+/* typed-list-byvalue-adt-element-unboxed: slot 0 of a box whose function
+ * returns a by-value aggregate, read by a consumer that calls it as
+ * `int64_t (*)(void *, apc...)` -- a generic HOF whose result position is a
+ * type variable, `list-map`'s `(fn [A] B)` at B := a defdata.  Handed the
+ * aggregate by value through that word-returning cast, the consumer stored
+ * the struct's first eightbyte in the cons cell and the reader dereferenced
+ * it as the carrier box.  This adapter calls the function at its own
+ * signature (`crc (*)(cpc...)`), converting each argument from the
+ * consumer's spelling as ensure_call_adapter_ex does, heap-boxes the result
+ * as ensure_boxres_fatshim does, and returns the box pointer.  `slot` is
+ * EMIT_ADAPT_BARE_SLOT1 (slot 1 holds a bare function, an EX_FN_TO_FAT box)
+ * or EMIT_ADAPT_FAT_SLOT1 (slot 1 holds a capturing closure's handle, called
+ * through its own slot 0).  `result_type` gates it: a concrete, non-`:heap`
+ * aggregate.  A position that would need converting an aggregate returns
+ * NULL. */
+char *ensure_boxres_word_adapter(EmitCtx *ctx, Buf *out, const char *slot,
+                                 Type result_type, const char *crc,
+                                 const char **cpc, const char **apc, uint8_t n) {
+    if (!ctx || !out || !crc || !*crc) return NULL;
+    bool fat1 = slot == EMIT_ADAPT_FAT_SLOT1;
+    if (!fat1 && slot != EMIT_ADAPT_BARE_SLOT1) return NULL;
+    bool agg = false;
+    if (result_type.kind == TY_APP)
+        agg = type_app_is_concrete_adt(&result_type) &&
+              !type_is_heap_adt(result_type) && !type_is_heap_struct(result_type);
+    else if (result_type.kind == TY_ADT)
+        agg = result_type.as.adt_.def != NULL &&
+              !type_is_heap_adt(result_type) && !type_is_heap_struct(result_type);
+    if (!agg || word_adapter_scalar_ok(crc) || strcmp(crc, "void") == 0) return NULL;
+    if (strcmp(crc, type_c_name(result_type)) != 0) return NULL;
+    for (uint8_t i = 0; i < n; i++) {
+        if (!cpc[i] || !apc[i]) return NULL;
+        if (strcmp(cpc[i], apc[i]) == 0 && *cpc[i]) continue;
+        if (!word_adapter_scalar_ok(cpc[i]) || !word_adapter_scalar_ok(apc[i]))
+            return NULL;
+    }
+    Buf nb; buf_init(&nb);
+    buf_puts(&nb, fat1 ? "__tur_adaptbox2_" : "__tur_adaptbox1_");
+    append_sanitized_c_token(&nb, crc);
+    for (uint8_t i = 0; i < n; i++) {
+        buf_putc(&nb, '_');
+        append_sanitized_c_token(&nb, cpc[i]);
+    }
+    buf_puts(&nb, "_as");
+    for (uint8_t i = 0; i < n; i++) {
+        buf_putc(&nb, '_');
+        append_sanitized_c_token(&nb, apc[i]);
+    }
+    buf_putc(&nb, '\0');
+    char *name = strdup(nb.data);
+    buf_free(&nb);
+    if (!name) { fprintf(stderr, "tur: oom\n"); abort(); }
+    for (uint32_t i = 0; i < ctx->n_fatshim_names; i++)
+        if (strcmp(ctx->fatshim_names[i], name) == 0) return name;
+    if (ctx->n_fatshim_names >= ctx->cap_fatshim_names) {
+        uint32_t new_cap = ctx->cap_fatshim_names ? ctx->cap_fatshim_names * 2 : 8;
+        char **nn = (char **)realloc(ctx->fatshim_names, new_cap * sizeof(char *));
+        if (!nn) { fprintf(stderr, "tur: oom\n"); abort(); }
+        ctx->fatshim_names = nn;
+        ctx->cap_fatshim_names = new_cap;
+    }
+    ctx->fatshim_names[ctx->n_fatshim_names++] = strdup(name);
+    if (!ctx->fatshim_names[ctx->n_fatshim_names - 1]) { fprintf(stderr, "tur: oom\n"); abort(); }
+    buf_printf(out, "static int64_t %s(void *__e", name);
+    for (uint8_t i = 0; i < n; i++) buf_printf(out, ", %s a%u", apc[i], (unsigned)i);
+    buf_puts(out, ") {\n");
+    buf_printf(out, "    %s *__b = (%s *)malloc(sizeof(%s));\n", crc, crc, crc);
+    if (fat1) {
+        buf_puts(out, "    void *__h = (void *)(intptr_t)((int64_t *)__e)[1];\n");
+        buf_printf(out, "    *__b = ((%s (*)(void *", crc);
+        for (uint8_t i = 0; i < n; i++) buf_printf(out, ", %s", cpc[i]);
+        buf_puts(out, "))(intptr_t)((int64_t *)__h)[0])(__h");
+    } else {
+        buf_printf(out, "    *__b = ((%s (*)(", crc);
+        if (n == 0) buf_puts(out, "void");
+        for (uint8_t i = 0; i < n; i++) buf_printf(out, i ? ", %s" : "%s", cpc[i]);
+        buf_puts(out, "))(intptr_t)((int64_t *)__e)[1])(");
+    }
+    for (uint8_t i = 0; i < n; i++) {
+        char an[16];
+        snprintf(an, sizeof an, "a%u", (unsigned)i);
+        if (fat1 || i) buf_puts(out, ", ");
+        if (strcmp(apc[i], cpc[i]) == 0) buf_puts(out, an);
+        else emit_scalar_word_conv(out, apc[i], cpc[i], an);
+    }
+    buf_puts(out, ");\n");
+    buf_puts(out, "    TUR_REGION_NOTE_WORDS(__b, sizeof *__b);\n");
+    buf_puts(out, "    return (int64_t)(intptr_t)__b;\n}\n");
+    return name;
+}
+
 /* fnsan-nil-closure-into-erased-result: slot 0 of a { shim, handle } wrapper
  * around a capturing closure that returns nil, for a slot whose consumers
  * call it as `int64_t (*)(void *, int64_t...)` (its declared result is a type
