@@ -1,0 +1,5 @@
+587a12bb54d95ac37241377e6ddc93ea0e45439b
+# The commit of github/cmark-gfm (tag 0.29.0.gfm.13) that tur_markdown_diff
+# compares tur/markdown's GFM output with.  CI fetches exactly this commit into
+# ../cmark-gfm; locally, clone github/cmark-gfm there and check this commit
+# out, or the GFM half of the comparison PASS-skips.  diff.py builds it.

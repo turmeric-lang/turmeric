@@ -40,7 +40,7 @@
    image : bool
    active : bool
    after : bool])
-;;; MdIP -- the inline parser for one block: the document, the subject's pool index and length, the position, the root inline, and the two stacks.
+;;; MdIP -- the inline parser for one block: the document, the subject's pool index and length, the position, the root inline, the two stacks, and whether strikethrough and extended autolinks are on.
 
 (defstruct MdIP
   [doc : MdDoc
@@ -51,7 +51,9 @@
    delims : int
    brackets : int
    dv : (Vec MdDelim)
-   bv : (Vec MdBracket)])
+   bv : (Vec MdBracket)
+   tilde : bool
+   autolinks : bool])
 ;;; md/-new-delims -- internal: an empty delimiter Vec.
 
 (defn md/-new-delims [] : (Vec MdDelim) (vec-new))
@@ -199,10 +201,12 @@
       (when (>= top 0) (md/-dl-put! ip top (with (md/-dl ip top) [next id])))
       (set! (.delims ip) id))))
 ;; ---- Emphasis (spec section 6.2, "process emphasis") -----------------------------------
-;;; md/-bottom-index -- internal: which openers-bottom slot a closer uses: by byte, whether it can also open, and its original length mod 3.
+;;; md/-bottom-index -- internal: which openers-bottom slot a closer uses: by byte, whether it can also open, and its original length mod 3 (a ~ closer, as cmark-gfm keeps it, by its length mod 3 alone).
 
 (defn md/-bottom-index [c : MdDelim] : int
-  (+ (if (= (.cc c) 95) 2 8) (if (.can-open c) 3 0) (mod (.orig c) 3)))
+  (if (= (.cc c) 126)
+    (+ 14 (mod (.orig c) 3))
+    (+ (if (= (.cc c) 95) 2 8) (if (.can-open c) 3 0) (mod (.orig c) 3))))
 ;;; md/-find-opener -- internal: the nearest opener below closer that can pair with it, stopping at stop1 or stop2, or -1.
 
 (defn md/-find-opener [^borrow ip : rc<MdIP>
@@ -246,6 +250,29 @@
         (let [nx (.next (md/-dl ip closer))]
           (do (md/-inl-unlink! v ci) (md/-remove-delim! ip closer) nx))
         closer))))
+;;; md/-pair-tilde! -- internal: a ~ opener and closer: strikethrough when they are the same length (cmark-gfm's rule), either way taking every delimiter from the closer down to the opener off the stack; the closer to look at next.
+
+(defn md/-pair-tilde! [^borrow ip : rc<MdIP> opener : int closer : int] : int
+  (let [o   (md/-dl ip opener)
+        c   (md/-dl ip closer)
+        res (.next c)
+        v   (md/-ip-v ip)
+        oi  (.node o)
+        ci  (.node c)]
+    (do
+      (when (= (.count o) (.count c))
+        (let [del (md/-inl-new! v (MdIStrike) -1 0 0)]
+          (do
+            (md/-inl-move-until! v oi ci del)
+            (md/-inl-insert-after! v oi del)
+            (md/-inl-unlink! v oi)
+            (md/-inl-unlink! v ci))))
+      (let [^mut dl closer]
+        (while (and (>= dl 0) (not (= dl opener)))
+          (let [pv (.prev (md/-dl ip dl))]
+            (do (md/-remove-delim! ip dl) (set! dl pv)))))
+      (md/-remove-delim! ip opener)
+      res)))
 ;;; md/-emph-step! -- internal: handle the closer at closer; the next closer to look at.
 
 (defn md/-emph-step! [^borrow ip : rc<MdIP>
@@ -256,18 +283,20 @@
         slot   (md/-bottom-index c)
         opener (md/-find-opener ip closer stack-bottom (vec-get bottoms slot))]
     (if (>= opener 0)
-      (md/-pair-delims! ip opener closer)
+      (if (= (.cc c) 126)
+        (md/-pair-tilde! ip opener closer)
+        (md/-pair-delims! ip opener closer))
       (let [nx (.next c)]
         (do
           (vec-set! bottoms slot (.prev c))
           (when (not (.can-open c)) (md/-remove-delim! ip closer))
           nx)))))
-;;; md/-new-bottoms -- internal: the fourteen openers-bottom slots, each stack-bottom.
+;;; md/-new-bottoms -- internal: the openers-bottom slots, each stack-bottom: fourteen for * and _, three for ~.
 
 (defn md/-new-bottoms [stack-bottom : int] : (Vec int)
   (let [v      (md/-new-ints)
         ^mut i 0]
-    (do (while (< i 14) (do (vec-push! v stack-bottom) (set! i (+ i 1)))) v)))
+    (do (while (< i 17) (do (vec-push! v stack-bottom) (set! i (+ i 1)))) v)))
 ;;; md/-process-emphasis! -- internal: pair the delimiter runs above stack-bottom into emphasis, then drop them all.
 
 (defn md/-process-emphasis! [^borrow ip : rc<MdIP> stack-bottom : int] : void
@@ -534,14 +563,39 @@
 
 (defn md/-cp-at [s : String i : int] : int
   (match (utf8/decode-at s i) (Some p) (char->int (pair-fst p)) (None) 10))
-;;; md/-parse-delim! -- internal: a run of * or _: a text inline, and a delimiter when it can open or close emphasis (the flanking rules, spec 6.2).
+;;; md/-cp-before-skip -- internal: the code point before byte i of s as cmark-gfm reads it with strikethrough on, past any ~ to the left; a line feed at the start, or when a ~ or a broken sequence is all there is.
+
+(defn md/-cp-before-skip [s : String i : int] : int
+  (if (<= i 0)
+    10
+    (let [^mut j (- i 1)]
+      (do
+        (while (and (> j 0)
+                 (let [b (string/byte-at s j)]
+                   (or (= b 126) (and (>= b 128) (< b 192)))))
+          (set! j (- j 1)))
+        (if (or (< (md/-utf8-next s j i) 0) (= (string/byte-at s j) 126))
+          10
+          (md/-cp-at s j))))))
+;;; md/-cp-after-skip -- internal: the code point at byte i of s (which is n bytes long) as cmark-gfm reads it with strikethrough on, past any ~; a line feed at the end or at a broken sequence.
+
+(defn md/-cp-after-skip [s : String i0 : int n : int] : int
+  (let [^mut i i0]
+    (do
+      (while (and (< i n) (= (string/byte-at s i) 126)) (set! i (+ i 1)))
+      (if (or (>= i n) (< (md/-utf8-next s i n) 0)) 10 (md/-cp-at s i)))))
+;;; md/-parse-delim! -- internal: a run of *, _ or ~: a text inline, and a delimiter when it can open or close (the flanking rules, spec 6.2); with strikethrough on, a ~ next to the run is looked past, as cmark-gfm does.
 
 (defn md/-parse-delim! [^borrow ip : rc<MdIP> cc : int] : void
   (let [start  (.pos ip)
         n      (md/-ip-run ip start cc)
         s      (md/-ip-s ip)
-        before (md/-cp-before s start)
-        after  (md/-cp-at s (+ start n))
+        before (if (.tilde ip)
+                 (md/-cp-before-skip s start)
+                 (md/-cp-before s start))
+        after  (if (.tilde ip)
+                 (md/-cp-after-skip s (+ start n) (.len ip))
+                 (md/-cp-at s (+ start n)))
         aw     (unicode/space? (int->char after))
         ap     (unicode/punct? (int->char after))
         bw     (unicode/space? (int->char before))
@@ -553,7 +607,8 @@
         node   (md/-ip-text! ip start (+ start n))]
     (do
       (set! (.pos ip) (+ start n))
-      (when (or opens closes) (md/-push-delim! ip cc n node opens closes)))))
+      (when (and (or opens closes) (or (not (= cc 126)) (= n 1) (= n 2)))
+        (md/-push-delim! ip cc n node opens closes)))))
 ;;; md/-parse-open-bracket! -- internal: a [, which may open a link.
 
 (defn md/-parse-open-bracket! [^borrow ip : rc<MdIP>] : void
@@ -613,6 +668,505 @@
     (if (> e 0)
       (do (md/-ip-own! ip (MdIText) (builder/finish b)) (set! (.pos ip) e) true)
       (do (string/release (builder/finish b)) false))))
+;; ---- GFM extended autolinks (markdown-library-plan M3) --------------------------------------
+;; A port of cmark-gfm's extensions/autolink.c: www. and scheme:// links found
+;; while scanning (at a w or a :), and email addresses found in the text
+;; afterwards.  The byte rules, quirks included, are cmark-gfm's.
+;;; md/-al-alpha? -- internal: an ASCII letter?
+
+(defn md/-al-alpha? [c : int] : bool
+  (or (and (>= c 65) (<= c 90)) (and (>= c 97) (<= c 122))))
+;;; md/-al-alnum? -- internal: an ASCII letter or digit?
+
+(defn md/-al-alnum? [c : int] : bool
+  (or (md/-al-alpha? c) (and (>= c 48) (<= c 57))))
+;;; md/-al-space? -- internal: cmark's isspace: space, tab, LF, VT, FF or CR.
+
+(defn md/-al-space? [c : int] : bool (or (= c 32) (and (>= c 9) (<= c 13))))
+;;; md/-hostchar? -- internal: is the character at byte i of s (before end) a valid host character: neither Unicode space nor punctuation?
+
+(defn md/-hostchar? [s : String i : int end : int] : bool
+  (and (< i end)
+    (match (utf8/decode-at s i)
+      (Some p)
+      (let [c (pair-fst p)]
+        (and (not (unicode/space? c)) (not (unicode/punct? c))))
+      (None)
+      false)))
+;;; md/-al-trail? -- internal: is c one of the bytes autolink_delim trims off a link's end: ? ! . , : * _ ~ ' and ".
+
+(defn md/-al-trail? [c : int] : bool
+  (or (= c 63)
+    (= c 33)
+    (= c 46)
+    (= c 44)
+    (= c 58)
+    (= c 42)
+    (= c 95)
+    (= c 126)
+    (= c 39)
+    (= c 34)))
+;;; md/-al-entity-cut -- internal: the link [a, a+n) of s ends in ;: its length without the &name; it ends in, or with only the ; gone.
+
+(defn md/-al-entity-cut [s : String a : int n : int] : int
+  (if (< n 2)
+    (- n 1)
+    (let [^mut e (- n 2)]
+      (do
+        (while (and (> e 0) (md/-al-alpha? (string/byte-at s (+ a e))))
+          (set! e (- e 1)))
+        (if (and (< e (- n 2)) (= (string/byte-at s (+ a e)) 38)) e (- n 1))))))
+;;; md/-al-delim -- internal: cmark-gfm's autolink_delim: the link [a, a+n) of s cut at a <, then trimmed of trailing punctuation, an unmatched ) and an entity-like &name;; its new length.
+
+(defn md/-al-delim [s : String a : int n0 : int] : int
+  (let [^mut n       n0
+        ^mut i       0
+        ^mut opening 0
+        ^mut closing 0
+        ^mut go      true]
+    (do
+      (while (< i n)
+        (let [c (string/byte-at s (+ a i))]
+          (cond (= c 60) (do (set! n i) (set! i n))
+                (= c 40) (do (set! opening (+ opening 1)) (set! i (+ i 1)))
+                (= c 41) (do (set! closing (+ closing 1)) (set! i (+ i 1)))
+                :else    (set! i (+ i 1)))))
+      (while (and go (> n 0))
+        (let [c (string/byte-at s (+ a (- n 1)))]
+          (cond (and (= c 41) (<= closing opening)) (set! go false)
+                (= c 41)                            (do
+                                                      (set! closing
+                                                        (- closing 1))
+                                                      (set! n (- n 1)))
+                (md/-al-trail? c)                   (set! n (- n 1))
+                (= c 59)                            (set! n
+                                                      (md/-al-entity-cut s a n))
+                :else                               (set! go false))))
+      n)))
+;;; md/-al-domain-stop? -- internal: does a domain end at byte i of s (before end): neither a host character nor a -?
+
+(defn md/-al-domain-stop? [s : String i : int end : int] : bool
+  (and (not (= (string/byte-at s i) 45)) (not (md/-hostchar? s i end))))
+;;; md/-check-domain -- internal: cmark-gfm's check_domain over [a, a+size) of s: the length of the domain there, or 0 when an underscore sits in its last two labels or (unless allow-short) it has no dot.
+
+(defn md/-check-domain [s : String a : int size : int allow-short : bool] : int
+  (let [^mut i   1
+        ^mut np  0
+        ^mut us1 0
+        ^mut us2 0
+        ^mut go  true]
+    (do
+      (while (and go (< i (- size 1)))
+        (do
+          (when (and (= (string/byte-at s (+ a i)) 92) (< i (- size 2)))
+            (set! i (+ i 1)))
+          (let [c (string/byte-at s (+ a i))]
+            (cond (= c 95)                                   (set! us2
+                                                               (+ us2 1))
+                  (= c 46)                                   (do
+                                                               (set! us1 us2)
+                                                               (set! us2 0)
+                                                               (set! np
+                                                                 (+ np 1)))
+                  (md/-al-domain-stop? s (+ a i) (+ a size)) (set! go false)
+                  :else                                      nil))
+          (when go (set! i (+ i 1)))))
+      (cond (and (or (> us1 0) (> us2 0)) (<= np 10)) 0
+            allow-short                               i
+            (> np 0)                                  i
+            :else                                     0))))
+;;; md/-al-extend -- internal: from n, past every byte of [a, a+size) of s that is not a space or a <.
+
+(defn md/-al-extend [s : String a : int n0 : int size : int] : int
+  (let [^mut n n0]
+    (do
+      (while (and (< n size)
+               (not (md/-al-space? (string/byte-at s (+ a n))))
+               (not (= (string/byte-at s (+ a n)) 60)))
+        (set! n (+ n 1)))
+      n)))
+;;; md/-al-node! -- internal: a detached link to dest-raw (normalised) whose text is bytes [a, b) of pool String str; its index.
+
+(defn md/-al-node! [^borrow ip : rc<MdIP>
+                    str : int
+                    a : int
+                    b : int
+                    dest-raw : String] : int
+  (let [v    (md/-ip-v ip)
+        dest (md/-ip-add-str! ip (md/-normalize-uri dest-raw))
+        node (md/-inl-new! v (MdILink) -1 0 0)
+        text (md/-inl-new! v (MdIText) str a b)]
+    (do
+      (string/release dest-raw)
+      (vec-set! v node (with (vec-get v node) [dest dest]))
+      (md/-inl-append! v node text)
+      node)))
+;;; md/-al-link! -- internal: append a link to dest-raw (normalised) holding the subject's bytes [a, b) as its text.
+
+(defn md/-al-link! [^borrow ip : rc<MdIP> a : int b : int dest-raw : String] : void
+  (md/-inl-append! (md/-ip-v ip)
+    (.root ip)
+    (md/-al-node! ip (.subj ip) a b dest-raw)))
+;;; md/-www-match! -- internal: at a w, a www. link: after a space, one of *_~( or the start, with a domain of two or more labels; whether there was one.
+
+(defn md/-www-match! [^borrow ip : rc<MdIP>] : bool
+  (let [s    (md/-ip-s ip)
+        p    (.pos ip)
+        size (- (.len ip) p)
+        pc   (md/-ip-c ip (- p 1))]
+    (if (or (>= (.brackets ip) 0)
+          (and (> p 0)
+            (not (or (= pc 42)
+                   (= pc 95)
+                   (= pc 126)
+                   (= pc 40)
+                   (md/-al-space? pc))))
+          (< size 4)
+          (not (md/-has-cstr-at? s "www." p)))
+      false
+      (let [d (md/-check-domain s p size false)]
+        (if (= d 0)
+          false
+          (let [n (md/-al-delim s p (md/-al-extend s p d size))]
+            (if (= n 0)
+              false
+              (let [raw (builder/new)]
+                (do
+                  (builder/push-cstr! raw "http://")
+                  (string/-push-range! raw s p (+ p n))
+                  (md/-al-link! ip p (+ p n) (builder/finish raw))
+                  (set! (.pos ip) (+ p n))
+                  true)))))))))
+;;; md/-unput! -- internal: take n bytes back off the end of the root's trailing text inlines (cmark_node_unput), dropping any left empty.
+
+(defn md/-unput! [^borrow ip : rc<MdIP> n0 : int] : void
+  (let [v      (md/-ip-v ip)
+        ^mut n n0
+        ^mut c (.last-child (vec-get v (.root ip)))]
+    (while (and (> n 0)
+             (>= c 0)
+             (match (.kind (vec-get v c)) (MdIText) true _ false))
+      (let [t   (vec-get v c)
+            len (- (.end t) (.start t))]
+        (do
+          (if (<= len n)
+            (do (set! n (- n len)) (md/-inl-unlink! v c))
+            (do (vec-set! v c (with t [end (- (.end t) n)])) (set! n 0)))
+          (set! c (.prev t)))))))
+;;; md/-scheme-at? -- internal: does [a, a+len) of s start with the k-byte scheme sch (any case) followed by a host character?
+
+(defn md/-scheme-at? [s : String a : int len : int sch : cstr k : int] : bool
+  (and (> len k) (md/-ci-cstr-at? s sch a) (md/-hostchar? s (+ a k) (+ a len))))
+;;; md/-safe-scheme? -- internal: does [a, a+len) of s start with http://, https:// or ftp:// (any case) followed by a host character?
+
+(defn md/-safe-scheme? [s : String a : int len : int] : bool
+  (or (md/-scheme-at? s a len "http://" 7)
+    (md/-scheme-at? s a len "https://" 8)
+    (md/-scheme-at? s a len "ftp://" 6)))
+;;; md/-url-match! -- internal: at a :, a link whose scheme (http, https or ftp) is the letters just before it, followed by // and a domain; whether there was one.
+
+(defn md/-url-match! [^borrow ip : rc<MdIP>] : bool
+  (let [s    (md/-ip-s ip)
+        p    (.pos ip)
+        size (- (.len ip) p)]
+    (if (or (>= (.brackets ip) 0)
+          (< size 4)
+          (not (= (md/-ip-c ip (+ p 1)) 47))
+          (not (= (md/-ip-c ip (+ p 2)) 47)))
+      false
+      (let [^mut rw 0]
+        (do
+          (while (and (< rw p) (md/-al-alpha? (md/-ip-c ip (- p rw 1))))
+            (set! rw (+ rw 1)))
+          (if (not (md/-safe-scheme? s (- p rw) (+ size rw)))
+            false
+            (let [d (md/-check-domain s (+ p 3) (- size 3) true)]
+              (if (= d 0)
+                false
+                (let [n (md/-al-delim s p (md/-al-extend s p (+ 3 d) size))]
+                  (if (= n 0)
+                    false
+                    (do
+                      (md/-unput! ip rw)
+                      (md/-al-link! ip
+                        (- p rw)
+                        (+ p n)
+                        (string/substring s (- p rw) (+ n rw)))
+                      (set! (.pos ip) (+ p n))
+                      true)))))))))))
+;; ---- GFM email autolinks: after parsing --------------------------------------------------
+;; cmark-gfm finds email addresses in a pass over the finished tree: the text
+;; inlines outside links, adjacent ones joined first.  postprocess_text's
+;; state is ported as it stands, including what a second @ carries over.
+;;; md/-is-text? -- internal: is inline i a text inline?
+
+(defn md/-is-text? [v : (Vec MdInl) i : int] : bool
+  (and (>= i 0) (match (.kind (vec-get v i)) (MdIText) true _ false)))
+;;; md/-byte-index -- internal: the first index of byte c in [i, end) of s, or -1.
+
+(defn md/-byte-index [s : String c : int i : int end : int] : int
+  (let [^mut j i]
+    (do
+      (while (and (< j end) (not (= (string/byte-at s j) c))) (set! j (+ j 1)))
+      (if (< j end) j -1))))
+;;; md/-text-has-at? -- internal: does text inline i hold an @?
+
+(defn md/-text-has-at? [^borrow ip : rc<MdIP> i : int] : bool
+  (let [n (vec-get (md/-ip-v ip) i)]
+    (>= (md/-byte-index (vec-get (.strs (.doc ip)) (.str n))
+          64
+          (.start n)
+          (.end n))
+      0)))
+;;; md/-consolidate! -- internal: cmark's text consolidation where it can matter: when text inline i and the text inlines straight after it hold an @ between them, join them into one over a fresh pool String.
+
+(defn md/-consolidate! [^borrow ip : rc<MdIP> i : int] : void
+  (let [v       (md/-ip-v ip)
+        ^mut j  i
+        ^mut at false]
+    (do
+      (while (md/-is-text? v j)
+        (do
+          (when (md/-text-has-at? ip j) (set! at true))
+          (set! j (.next (vec-get v j)))))
+      (when (and at (not (= (.next (vec-get v i)) j)))
+        (let [b      (builder/new)
+              ^mut k i]
+          (do
+            (while (md/-is-text? v k)
+              (let [n  (vec-get v k)
+                    nx (.next n)]
+                (do
+                  (string/-push-range! b
+                    (vec-get (.strs (.doc ip)) (.str n))
+                    (.start n)
+                    (.end n))
+                  (when (not (= k i)) (md/-inl-unlink! v k))
+                  (set! k nx))))
+            (let [s  (builder/finish b)
+                  ln (string/len s)
+                  t  (md/-ip-add-str! ip s)]
+              (vec-set! v i (with (vec-get v i) [str t start 0 end ln])))))))))
+;;; md/-al-protocol? -- internal: cmark-gfm's validate_protocol: does the k-byte protocol p end just before the rw bytes rewound from the @ at at, with a non-alphanumeric byte or the start of the scan (mr bytes back) before it?
+
+(defn md/-al-protocol? [s : String p : cstr k : int at : int rw : int mr : int] : bool
+  (let [left (- mr rw)
+        from (- at rw k)]
+    (cond (> k left)                        false
+          (not (md/-has-cstr-at? s p from)) false
+          (= k left)                        true
+          :else                             (not (md/-al-alnum? (string/byte-at s
+                                                                  (- from 1)))))))
+;;; MdMailScan -- internal: postprocess_text's walk left from an @: how many bytes it took, and whether a mailto: or xmpp: it passed means no mailto: is added (auto false) and a / may follow the domain (xmpp).
+
+(defstruct MdMailScan :copy [rw : int auto : bool xmpp : bool])
+;;; MdMailEnd -- internal: postprocess_text's walk right from an @: the length it took, the dots it has passed, and whether it stopped at another @.
+
+(defstruct MdMailEnd :copy [le : int np : int at : bool])
+;;; MdMailHit -- internal: an email address postprocess_text found -- the bytes [a, b), and whether to add mailto: -- or, when found is false, where to look for the next @.
+
+(defstruct MdMailHit
+  :copy
+  [found : bool a : int b : int auto : bool next : int])
+;;; md/-mail-local? -- internal: can byte c come before the @ of an email address: a letter, a digit, or one of . + - _?
+
+(defn md/-mail-local? [c : int] : bool
+  (or (md/-al-alnum? c) (= c 46) (= c 43) (= c 45) (= c 95)))
+;;; md/-mail-rewind -- internal: postprocess_text's walk left from the @ at at, over at most mr bytes, carrying on from sc's auto and xmpp.
+
+(defn md/-mail-rewind [s : String at : int mr : int sc : MdMailScan] : MdMailScan
+  (let [^mut r  (with sc [rw 0])
+        ^mut go true]
+    (do
+      (while (and go (< (.rw r) mr))
+        (let [k (.rw r)
+              c (string/byte-at s (- at k 1))]
+          (cond (md/-mail-local? c)                      (set! r
+                                                           (with r [rw (+ k 1)]))
+                (not (= c 58))                           (set! go false)
+                (md/-al-protocol? s "mailto:" 7 at k mr) (set! r
+                                                           (with r
+                                                             [rw
+                                                              (+ k 1)
+                                                              auto
+                                                              false]))
+                (md/-al-protocol? s "xmpp:" 5 at k mr)   (set! r
+                                                           (with r
+                                                             [rw
+                                                              (+ k 1)
+                                                              auto
+                                                              false
+                                                              xmpp
+                                                              true]))
+                :else                                    (set! go false))))
+      r)))
+;;; md/-mail-dot? -- internal: is byte i of s a dot with a letter or digit after it, before end?
+
+(defn md/-mail-dot? [s : String i : int end : int] : bool
+  (and (= (string/byte-at s i) 46)
+    (< (+ i 1) end)
+    (md/-al-alnum? (string/byte-at s (+ i 1)))))
+;;; md/-mail-domain -- internal: postprocess_text's walk right from the @ at at, before end, counting dots on from np0; a / is allowed when xmpp.
+
+(defn md/-mail-domain [s : String at : int end : int np0 : int xmpp : bool] : MdMailEnd
+  (let [^mut le   1
+        ^mut np   np0
+        ^mut stop 0]
+    (do
+      (while (and (= stop 0) (< (+ at le) end))
+        (let [c (string/byte-at s (+ at le))]
+          (cond (md/-al-alnum? c)               (set! le (+ le 1))
+                (= c 64)                        (set! stop 2)
+                (md/-mail-dot? s (+ at le) end) (do
+                                                  (set! np (+ np 1))
+                                                  (set! le (+ le 1)))
+                (or (= c 45) (= c 95))          (set! le (+ le 1))
+                (and xmpp (= c 47))             (set! le (+ le 1))
+                :else                           (set! stop 1))))
+      (MdMailEnd le np (= stop 2)))))
+;;; md/-mail-check -- internal: the end of postprocess_text for the @ at at, whose walks gave sc and m: the address, or where to look next.
+
+(defn md/-mail-check [s : String at : int m : MdMailEnd sc : MdMailScan] : MdMailHit
+  (let [le (.le m)
+        ec (string/byte-at s (+ at le -1))]
+    (if (or (< le 2)
+          (= (.np m) 0)
+          (and (not (md/-al-alpha? ec)) (not (= ec 46))))
+      (MdMailHit false 0 0 true (+ at le))
+      (let [n (md/-al-delim s at le)]
+        (if (= n 0)
+          (MdMailHit false 0 0 true (+ at 1))
+          (MdMailHit true (- at (.rw sc)) (+ at n) (.auto sc) 0))))))
+;;; md/-mail-link! -- internal: a detached link for the email address [a, b) of pool String str (whose text is s), with mailto: added when auto; its index.
+
+(defn md/-mail-link! [^borrow ip : rc<MdIP>
+                      str : int
+                      s : String
+                      a : int
+                      b : int
+                      auto : bool] : int
+  (let [raw (builder/new)]
+    (do
+      (when auto (builder/push-cstr! raw "mailto:"))
+      (string/-push-range! raw s a b)
+      (md/-al-node! ip str a b (builder/finish raw)))))
+;;; md/-mail-find -- internal: postprocess_text from the @ at at0, in text whose scan starts at p0 and ends at end: the email address there, or where to look next.
+;;;
+;;; A second @ in the domain moves the search to it, keeping what the first
+;;; walk left found (a mailto: or xmpp:, and the dots), as cmark-gfm's goto does.
+
+(defn md/-mail-find [s : String p0 : int at0 : int end : int] : MdMailHit
+  (let [^mut p   p0
+        ^mut at  at0
+        ^mut sc  (MdMailScan 0 true false)
+        ^mut np  0
+        ^mut hit (MdMailHit false 0 0 true (+ at0 1))
+        ^mut go  true]
+    (do
+      (while go
+        (do
+          (set! sc (md/-mail-rewind s at (- at p) sc))
+          (if (= (.rw sc) 0)
+            (do (set! hit (with hit [next (+ at 1)])) (set! go false))
+            (let [m (md/-mail-domain s at end np (.xmpp sc))]
+              (if (.at m)
+                (do
+                  (set! np (.np m))
+                  (set! p (+ at 1))
+                  (set! at (+ at (.le m))))
+                (do (set! hit (md/-mail-check s at m sc)) (set! go false)))))))
+      hit)))
+;;; md/-email-text! -- internal: cmark-gfm's postprocess_text on text inline t0: each email address in it becomes a mailto: link (xmpp: and mailto: ones keep their own scheme); the last inline it left in t0's place.
+
+(defn md/-email-text! [^borrow ip : rc<MdIP> t0 : int] : int
+  (let [v         (md/-ip-v ip)
+        str       (.str (vec-get v t0))
+        s         (vec-get (.strs (.doc ip)) str)
+        z         (.end (vec-get v t0))
+        ^mut t    t0
+        ^mut last t0
+        ^mut st   (.start (vec-get v t0))
+        ^mut p    (.start (vec-get v t0))
+        ^mut go   true]
+    (do
+      (while go
+        (let [at (if (< p z) (md/-byte-index s 64 p z) -1)]
+          (if (< at 0)
+            (set! go false)
+            (let [h (md/-mail-find s p at z)]
+              (if (not (.found h))
+                (set! p (.next h))
+                (let [link (md/-mail-link! ip str s (.a h) (.b h) (.auto h))]
+                  (do
+                    ;; t keeps the text before the address, and a new text
+                    ;; inline after the link takes the rest.
+                    (md/-inl-insert-after! v t link)
+                    (vec-set! v t (with (vec-get v t) [start st end (.a h)]))
+                    (when (= st (.a h)) (md/-inl-unlink! v t))
+                    (set! last link)
+                    (if (< (.b h) z)
+                      (let [post (md/-inl-new! v (MdIText) str (.b h) z)]
+                        (do
+                          (md/-inl-insert-after! v link post)
+                          (set! t post)
+                          (set! last post)
+                          (set! st (.b h))
+                          (set! p (.b h))))
+                      (set! go false)))))))))
+      last)))
+;;; md/-inl-leaf? -- internal: is an inline of kind k a leaf, which cmark's iterator enters but never exits?
+
+(defn md/-inl-leaf? [k : MdIKind] : bool
+  (match k
+    (MdIText)
+    true
+    (MdISoftBreak)
+    true
+    (MdIHardBreak)
+    true
+    (MdICode)
+    true
+    (MdIHtml)
+    true
+    _
+    false))
+;;; md/-is-link? -- internal: is inline i a link?
+
+(defn md/-is-link? [v : (Vec MdInl) i : int] : bool
+  (match (.kind (vec-get v i)) (MdILink) true _ false))
+;;; md/-email-pass! -- internal: cmark-gfm's autolink postprocess for one block: an email address in a text inline becomes a link, unless it is inside a link.
+;;;
+;;; The walk is cmark's iterator, enter and exit events, and "inside a link"
+;;; is its one flag: the exit of a link inside a link clears it, so the rest
+;;; of the outer link's text is searched too.
+
+(defn md/-email-pass! [^borrow ip : rc<MdIP>] : void
+  (let [v            (md/-ip-v ip)
+        root         (.root ip)
+        ^mut i       (.first-child (vec-get v root))
+        ^mut enter   true
+        ^mut in-link false]
+    (while (>= i 0)
+      (do
+        (if in-link
+          (when (and (not enter) (md/-is-link? v i)) (set! in-link false))
+          (when enter
+            (cond (md/-is-link? v i) (set! in-link true)
+                  (md/-is-text? v i) (do
+                                       (md/-consolidate! ip i)
+                                       ;; Carry on after what the text became; a
+                                       ;; link it ends with is passed over whole.
+                                       (set! i (md/-email-text! ip i))
+                                       (set! enter false))
+                  :else              nil)))
+        (if (and enter (not (md/-inl-leaf? (.kind (vec-get v i)))))
+          (let [fc (.first-child (vec-get v i))]
+            (if (>= fc 0) (set! i fc) (set! enter false)))
+          (let [nx (.next (vec-get v i))
+                p  (.parent (vec-get v i))]
+            (cond (>= nx 0)  (do (set! i nx) (set! enter true))
+                  (= p root) (set! i -1)
+                  :else      (do (set! i p) (set! enter false)))))))))
 ;;; md/-special? -- internal: can byte c start something other than plain text?
 
 (defn md/-special? [c : int] : bool
@@ -626,13 +1180,19 @@
     (= c 38)
     (= c 42)
     (= c 95)))
+;;; md/-ip-special? -- internal: can byte c start something other than plain text, with this block's extensions?
+
+(defn md/-ip-special? [^borrow ip : rc<MdIP> c : int] : bool
+  (or (md/-special? c)
+    (and (= c 126) (.tilde ip))
+    (and (.autolinks ip) (or (= c 58) (= c 119)))))
 ;;; md/-parse-string! -- internal: a run of plain text; whether there was one.
 
 (defn md/-parse-string! [^borrow ip : rc<MdIP>] : bool
   (let [start  (.pos ip)
         ^mut j start]
     (do
-      (while (and (< j (.len ip)) (not (md/-special? (md/-ip-c ip j))))
+      (while (and (< j (.len ip)) (not (md/-ip-special? ip (md/-ip-c ip j))))
         (set! j (+ j 1)))
       (if (> j start)
         (do (md/-ip-text! ip start j) (set! (.pos ip) j) true)
@@ -641,20 +1201,35 @@
 
 (defn md/-parse-inline! [^borrow ip : rc<MdIP>] : void
   (let [c       (md/-ip-c ip (.pos ip))
-        handled (cond (= c 10)               (do (md/-parse-newline! ip) true)
-                      (= c 92)               (do (md/-parse-backslash! ip) true)
-                      (= c 96)               (do (md/-parse-backticks! ip) true)
-                      (or (= c 42) (= c 95)) (do (md/-parse-delim! ip c) true)
-                      (= c 91)               (do
-                                               (md/-parse-open-bracket! ip)
-                                               true)
-                      (= c 33)               (do (md/-parse-bang! ip) true)
-                      (= c 93)               (do
-                                               (md/-parse-close-bracket! ip)
-                                               true)
-                      (= c 60)               (md/-parse-lt! ip)
-                      (= c 38)               (md/-parse-entity! ip)
-                      :else                  (md/-parse-string! ip))]
+        handled (cond (= c 10)                        (do
+                                                        (md/-parse-newline! ip)
+                                                        true)
+                      (= c 92)                        (do
+                                                        (md/-parse-backslash! ip)
+                                                        true)
+                      (= c 96)                        (do
+                                                        (md/-parse-backticks! ip)
+                                                        true)
+                      (or (= c 42) (= c 95))          (do
+                                                        (md/-parse-delim! ip c)
+                                                        true)
+                      (and (= c 126) (.tilde ip))     (do
+                                                        (md/-parse-delim! ip c)
+                                                        true)
+                      (and (= c 58) (.autolinks ip))  (md/-url-match! ip)
+                      (and (= c 119) (.autolinks ip)) (md/-www-match! ip)
+                      (= c 91)                        (do
+                                                        (md/-parse-open-bracket! ip)
+                                                        true)
+                      (= c 33)                        (do
+                                                        (md/-parse-bang! ip)
+                                                        true)
+                      (= c 93)                        (do
+                                                        (md/-parse-close-bracket! ip)
+                                                        true)
+                      (= c 60)                        (md/-parse-lt! ip)
+                      (= c 38)                        (md/-parse-entity! ip)
+                      :else                           (md/-parse-string! ip))]
     (when (not handled)
       (do (md/-ip-text! ip (.pos ip) (+ (.pos ip) 1)) (md/-ip-advance! ip 1)))))
 ;; ---- After parsing ------------------------------------------------------------------------
@@ -702,11 +1277,14 @@
                         -1
                         -1
                         (md/-new-delims)
-                        (md/-new-brackets)))]
+                        (md/-new-brackets)
+                        (.strikethrough (.opts d))
+                        (.autolinks (.opts d))))]
         (do
           (while (< (.pos ip) (.len ip)) (md/-parse-inline! ip))
           (md/-process-emphasis! ip -1)
           (md/-merge-text! (.inls d) root)
+          (when (.autolinks ip) (md/-email-pass! ip))
           (vec-free (.dv ip))
           (vec-free (.bv ip)))))))
 ;;; md/-parse-inlines! -- internal: parse every paragraph and heading still in the tree.
@@ -722,6 +1300,8 @@
                     (MdKParagraph)
                     true
                     (MdKHeading)
+                    true
+                    (MdKTableCell)
                     true
                     _
                     false))

@@ -11,12 +11,15 @@
     (MdDocument) "document"
     (MdBlockQuote) "block quote"
     (MdList o s t) (if o (if t "ordered list, tight" "ordered list, loose") (if t "bullet list, tight" "bullet list, loose"))
-    (MdItem) "item"
+    (MdItem k) "item"
     (MdParagraph) "paragraph"
     (MdHeading l) "heading"
     (MdThematicBreak) "thematic break"
     (MdCodeBlock f) (if f "fenced code" "indented code")
-    (MdHtmlBlock) "html block"))
+    (MdHtmlBlock) "html block"
+    (MdTable c) "table"
+    (MdTableRow h) "table row"
+    (MdTableCell a) "table cell"))
 
 (defn block-detail [b : MdBlock] : int
   (match b
@@ -104,7 +107,7 @@
       (string/release h)
       (markdown/doc-free d))))
 
-(defn pass [] : MdHtmlOpts (MdHtmlOpts (MdRawPass)))
+(defn pass [] : MdHtmlOpts (MdHtmlOpts (MdRawPass) (MdNoIds)))
 
 ;; ---- Documents -----------------------------------------------------------------
 
@@ -140,7 +143,7 @@
               (pass))
     ;; Raw HTML under the three renderer settings.
     (show-doc "tag filter" "<div>\n<script>alert(1)</script>\n<b>bold</b>\n</div>\n" (markdown/default-html-opts))
-    (show-doc "escaped html" "<div>\n<i>x</i> & y\n</div>\n" (MdHtmlOpts (MdRawEscape)))
+    (show-doc "escaped html" "<div>\n<i>x</i> & y\n</div>\n" (MdHtmlOpts (MdRawEscape) (MdNoIds)))
     ;; Text is escaped; markdown/escape-html is the same escaping.
     (let [raw (string/from-cstr "a < b & \"c\" > d")
           e   (markdown/escape-html raw)]

@@ -3,8 +3,10 @@
 > **Status:** in progress. Phases S and J are done: S1 (#1200), S2 (#1209),
 > S3 (#1210), S4 (#1213) and S5 (#1216); J1-J3 (#1201, #1202, #1207) and J4
 > (#1208). Phase U is done too: U1 (#1217) and U2 (#1220). Phase M is under
-> way: M1, the block parser (#1229), and M2, the inline parser, are built
-> (section 6.4, "M1 as built" and "M2 as built"), and all of CommonMark passes.
+> way: M1, the block parser (#1229), M2, the inline parser (#1240), and M3,
+> the GFM extensions and heading ids, are built (section 6.4, "M1 as built"
+> to "M3 as built"). All of CommonMark and all of the GFM extension examples
+> pass.
 > Written 2026-10-15; its open questions were settled with the author the same
 > day (section 8). It started as "would
 > `tools/gendocs.py` be a candidate to move to Turmeric?" A straight gendocs port
@@ -654,6 +656,102 @@ a `SlugMode`, for READMEs that are read on GitHub.
 - **No new compiler friction.** M1's two workarounds held: callees are
   defined before their callers, and the inline renderer recurses through one
   function.
+
+**M3 as built.**
+- **Conformance.** All 676 examples, the 652 CommonMark ones and the 24 GFM
+  ones, pass on the compiled engine, the JIT and the interpreter. All but two
+  are byte-identical to the spec's HTML. The two task-list examples differ
+  only in attribute order, which the spec's normalisation ignores; ours is
+  cmark-gfm's output byte for byte.
+- **GFM is cmark-gfm 0.29.0.gfm.13's, quirks included.** That is the renderer
+  GitHub runs, and where the GFM spec's prose and cmark-gfm differ, cmark-gfm
+  is what readers see. The quirks that show:
+  - A table's header is the last line of a paragraph. The lines above it stay
+    a paragraph, and cmark-gfm never reads link reference definitions out of
+    it.
+  - With strikethrough on, `~` is a "skip character". A `*` or `_` run reads
+    past the tildes beside it when it decides whether it can open or close,
+    so `_a_~b` is not emphasis.
+  - Task boxes follow cmark-gfm's generated scanner, which differs from the
+    `.re` source it was generated from:
+    - `[X]` counts;
+    - an ordered marker is digits and then any one character;
+    - the box is looked for from the start of the line, so an item inside a
+      block quote gets none;
+    - the item is checked when `[x]` or `[X]` appears anywhere on its line.
+  - Email autolinks are found in a pass after the inline parse, over adjacent
+    text joined first. cmark-gfm's "inside a link" is one flag, which a nested
+    autolink's exit clears.
+- **Checked against cmark-gfm.** `tur_markdown_diff` has a second half. It
+  builds cmark-gfm from a checkout at the commit
+  `tests/markdown-spec/oracle/cmark-gfm.pin` names, with the bundle driver
+  `oracle/gfmrender.c`. CI fetches the checkout next to the repository, as it
+  does commonmark-spec.
+  - It renders this repository's Markdown, and 30,000 random GFM documents of
+    table rows, tildes, URLs, email addresses and task boxes, both ways.
+  - cmark-gfm's core is CommonMark 0.29, so a document counts only when the
+    two agree on it with the extensions off, both as written and with its
+    tildes removed. That leaves out about 0.2%.
+  - 0 differ. Before the comparison became a test, it ran over 450,000 more
+    random documents, also with 0 differences. Every difference it found
+    along the way was one of the quirks above, or a CommonMark 0.29 difference
+    the filter now leaves out.
+  - 20,000 GFM documents also ran under ASan, UBSan and LeakSanitizer, which
+    found nothing.
+- **Heading ids (section 6.3).** `MdHtmlOpts` has a second field,
+  `heading-ids : MdSlugMode`, which is `(MdNoIds)`, `(MdSlugPython)` or
+  `(MdSlugGitHub)`.
+  - `markdown/default-html-opts` writes no ids. Section 6.3's "default" is
+    read as the default rule, the one the docs use. The default output stays
+    the CommonMark spec's and cmark-gfm's, which have none, so the spec runner
+    and the cmark-gfm comparison compare like for like. M4 asks for
+    `(MdSlugPython)`.
+  - python-markdown's rule needs NFKD, so `stdlib/markdown/slug-data.tur` is a
+    new generated table, in U2's pattern.
+    - `tools/gen-md-slug-data.py` writes it from the Unicode Character
+      Database that `tools/fetch-ucd.sh` pins (Unicode 16.0.0).
+    - The same C is `src/turi/md_slug_data.inc`, for the interpreter's
+      natives, and ctest `tur_md_slug_data_sync` keeps the two the same.
+    - It also holds the combining marks, which GitHub's rule keeps.
+  - **Checked against python-markdown 3.11**, configured as `genguides.py`
+    configures it, over every heading in this repository's 2,286 Markdown
+    files.
+    - The 26,860 headings both parsers find, matched by text, get the same id.
+    - 2,216 files get the same id sequence. The other 70 differ only where
+      the parsers find different headings: python-markdown reads `#map{` at
+      the start of a line as a heading, and its `fenced_code` does not work
+      inside a list. That is M4's list to work through.
+    - In `docs/guides/`, 157 of 174 files already match.
+  - The slug functions alone match python-markdown's `slugify` and
+    github-slugger 2.0's `slug` on 20,000 random strings each. Over every
+    code point, the GitHub rule differs from github-slugger only on
+    characters newer than the Unicode version github-slugger was built from.
+- **The API** keeps M1's and M2's shape, ids and accessors, rather than 6.2's
+  `(Vec HeadingInfo)` and `(Vec CodeBlockInfo)`. It was written while a
+  struct with a `String` field still leaked its box
+  (`opaque-field-struct-box-never-freed`, fixed since by #1243). Records of
+  that kind can go on top now, if a consumer in M4 or M5 wants them.
+  - `markdown/headings` and `markdown/code-blocks` return a
+    `(Vec MdBlockId)`: every block of the kind, in document order.
+  - `markdown/heading-text` returns a heading's plain text, and
+    `markdown/heading-ids` its ids under an `MdHtmlOpts`, one per heading.
+    The level, contents, info string and lines come from M1's accessors.
+  - `MdBlock` gains `(MdTable columns)`, `(MdTableRow header)` and
+    `(MdTableCell MdAlign)`, and `(MdItem)` becomes `(MdItem MdTask)`.
+    `MdInline` gains `(MdStrikethrough)`.
+- **Size.** About 1,700 lines of Turmeric: the GFM blocks in `block.tur`,
+  autolinks and strikethrough in `inline.tur`, and `slug.tur`. The generated
+  table comes on top.
+- **Compiler friction:**
+  - `duplicate-defn-across-loaded-files-reaches-the-c-compiler.md`. A helper
+    named like one in `scan.tur` compiled to C with two definitions, where
+    the same clash within one file is a diagnostic.
+  - `tur fmt` lines up a `cond`'s bodies past its widest test. A test that
+    wraps pushes every body far to the right, so the new code keeps each test
+    to one line, using helpers.
+  - Emitted C is compiled as C99, which has trigraphs: `??!` in a string
+    literal is `|`. The NFKD table's text had one, which shifted every byte
+    after it. The generator now escapes each `?`.
 
 ### 6.5 M4 -- docs pipeline cut-over
 

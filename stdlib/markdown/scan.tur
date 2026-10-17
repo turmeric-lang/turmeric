@@ -418,6 +418,37 @@
   (let [n (string/from-cstr lit)
         r (string/starts-with-at? s n i)]
     (do (string/release n) r)))
+;;; md/-utf8-next -- internal: the index past the well-formed UTF-8 sequence at i, when it ends by end; else -1.
+
+(defn md/-utf8-next [s : String i : int end : int] : int
+  (match (utf8/decode-at s i)
+    (Some p)
+    (let [n (pair-snd p)]
+      (cond (> n end)                                                                                                              -1
+            (not (= (char->int (pair-fst p)) 65533))                                                                               n
+            (and (= n (+ i 3))
+              (= (string/byte-at s i) 239)
+              (= (string/byte-at s (+ i 1)) 191)
+              (= (string/byte-at s (+ i 2)) 189))                                                                                  n
+            :else                                                                                                                  -1))
+    (None)
+    -1))
+;;; md/-ci-cstr-at? -- internal: do the bytes of lit, which is lower case, occur in s at i, ignoring ASCII case?
+
+(defn md/-ci-cstr-at? [s : String lit : cstr i : int] : bool
+  (let [n       (string/from-cstr lit)
+        k       (string/len n)
+        ^mut j  0
+        ^mut ok (and (>= i 0) (<= (+ i k) (string/len s)))]
+    (do
+      (while (and ok (< j k))
+        (do
+          (when (not (= (md/-lower (string/byte-at s (+ i j)))
+                       (string/byte-at n j)))
+            (set! ok false))
+          (set! j (+ j 1))))
+      (string/release n)
+      ok)))
 ;;; md/-comment-end -- internal: the end of the HTML comment whose < is at i: <!-->, <!---> or <!-- ... -->.
 
 (defn md/-comment-end [s : String i : int end : int] : int
@@ -612,3 +643,103 @@
   (let [raw (md/-unescape s i end)
         out (md/-normalize-uri raw)]
     (do (string/release raw) out)))
+;; ---- GFM tables (markdown-library-plan M3) -------------------------------------
+;; The row and delimiter-row scanners of cmark-gfm's table extension
+;; (extensions/ext_scanners.re), over one line [i, end) with no line ending.
+;;; md/-byte-in -- internal: byte j of s when it is before end, else -1.
+
+(defn md/-byte-in [s : String j : int end : int] : int
+  (if (< j end) (string/byte-at s j) -1))
+;;; md/-table-space? -- internal: a table's space character: space, tab, VT or FF.
+
+(defn md/-table-space? [b : int] : bool (or (= b 32) (= b 9) (= b 11) (= b 12)))
+;;; md/-skip-table-space -- internal: past the table spaces from i.
+
+(defn md/-skip-table-space [s : String i0 : int end : int] : int
+  (let [^mut i i0]
+    (do (while (md/-table-space? (md/-byte-in s i end)) (set! i (+ i 1))) i)))
+;;; md/-table-marker-end -- internal: past a delimiter-row cell at i (spaces, an optional :, one or more -, an optional :, spaces), or -1.
+
+(defn md/-table-marker-end [s : String i : int end : int] : int
+  (let [^mut j (md/-skip-table-space s i end)]
+    (do
+      (when (= (md/-byte-in s j end) 58) (set! j (+ j 1)))
+      (let [d j]
+        (do
+          (while (= (md/-byte-in s j end) 45) (set! j (+ j 1)))
+          (if (= j d)
+            -1
+            (do
+              (when (= (md/-byte-in s j end) 58) (set! j (+ j 1)))
+              (md/-skip-table-space s j end))))))))
+;;; md/-table-start? -- internal: is [i, end) of s a delimiter row: cells of dashes with optional colons, separated by pipes?
+
+(defn md/-table-start? [s : String i : int end : int] : bool
+  (let [p0     (if (= (md/-byte-in s i end) 124) (+ i 1) i)
+        ^mut e (md/-table-marker-end s p0 end)
+        ^mut r -1]
+    (do
+      (while (< r 0)
+        (cond (< e 0)                       (set! r 0)
+              (= (md/-byte-in s e end) 124) (let [p (+ e 1)]
+                                              (if (>= (md/-skip-table-space s
+                                                        p
+                                                        end)
+                                                    end)
+                                                (set! r 1)
+                                                (set! e
+                                                  (md/-table-marker-end s p end))))
+              :else                         (set! r (if (>= e end) 1 0))))
+      (= r 1))))
+;;; md/-cell-end -- internal: the end of a table cell's text at i: before the first pipe that no backslash precedes.
+
+(defn md/-cell-end [s : String i : int end : int] : int
+  (let [^mut j i]
+    (do
+      (while (and (< j end)
+               (or (not (= (string/byte-at s j) 124))
+                 (and (> j i) (= (string/byte-at s (- j 1)) 92))))
+        (set! j (+ j 1)))
+      j)))
+;;; md/-pipe-len -- internal: the length of the pipe and spaces at i, or 0 when there is no pipe.
+
+(defn md/-pipe-len [s : String i : int end : int] : int
+  (if (= (md/-byte-in s i end) 124)
+    (- (md/-skip-table-space s (+ i 1) end) i)
+    0))
+;;; md/-cell-text -- internal: a table cell's text [a, b) of s: each backslash-pipe as a pipe, trimmed, as a fresh String.
+
+(defn md/-cell-text [s : String a : int b : int] : String
+  (let [out    (builder/new)
+        ^mut i a]
+    (do
+      (while (< i b)
+        (do
+          (when (not (and (= (string/byte-at s i) 92)
+                       (= (md/-byte-in s (+ i 1) b) 124)))
+            (builder/push-byte! out (string/byte-at s i)))
+          (set! i (+ i 1))))
+      (let [raw (builder/finish out)
+            t   (string/trim raw)]
+        (do (string/release raw) t)))))
+;;; md/-new-cells -- internal: an empty Vec of cell texts.
+
+(defn md/-new-cells [] : (Vec String) (vec-new))
+;;; md/-row-cells -- internal: the cells of the table row [i, end) of s, each a fresh String, or (none) when it is not a row.
+
+(defn md/-row-cells [s : String i : int end : int] : (Option (Vec String))
+  (let [cells       (md/-new-cells)
+        ^mut offset (+ i (md/-pipe-len s i end))
+        ^mut go     true]
+    (do
+      (while (and go (< offset end))
+        (let [ce (md/-cell-end s offset end)
+              pm (md/-pipe-len s ce end)]
+          (do
+            (when (or (> ce offset) (> pm 0))
+              (vec-push! cells (md/-cell-text s offset ce)))
+            (set! offset (+ ce pm))
+            (when (= pm 0) (set! go false)))))
+      (if (or (not (= offset end)) (= (vec-len cells) 0))
+        (do (string/release-all cells) (none))
+        (some cells)))))

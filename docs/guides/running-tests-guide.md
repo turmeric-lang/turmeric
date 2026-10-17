@@ -110,20 +110,38 @@ commit in `tests/markdown-spec/PINNED`, or point `MD_SPEC_DIR` at a checkout.
 
 ### `tests/run-markdown-diff.sh`
 
-`tur/markdown`'s HTML against commonmark.js 0.31.2's, the implementation it was
-ported from (ctest `tur_markdown_diff`). It renders every Markdown file git
-tracks here, every README in `../turmeric-spices` when that checkout is present,
-and 30,000 random documents from fixed seeds. Every document whose HTML differs
-fails the run.
+`tur/markdown`'s HTML against the reference implementations' (ctest
+`tur_markdown_diff`). It renders every Markdown file git tracks here, every
+README in `../turmeric-spices` when that checkout is present, and random
+documents from fixed seeds, then makes two comparisons. Every document whose
+HTML differs fails the run.
 
-- **Setup.** It needs node, and commonmark.js installed from the pinned
-  lockfile: `(cd tests/markdown-spec/oracle && npm ci)`. Without either it
-  PASS-skips. CI's `aux` part installs both.
-- **What it compares against.** `tests/markdown-spec/oracle/render.js` patches
-  the places where commonmark.js departs from the spec, following cmark there,
-  and says why at each. So every difference it reports is a finding.
+- **Plain CommonMark, against commonmark.js 0.31.2**, the implementation
+  `tur/markdown` was ported from, over 30,000 random documents.
+  - *Setup:* node, and commonmark.js installed from the pinned lockfile:
+    `(cd tests/markdown-spec/oracle && npm ci)`.
+  - *The reference:* `tests/markdown-spec/oracle/render.js` patches the places
+    where commonmark.js departs from the spec, following cmark there, and says
+    why at each. So every difference it reports is a finding.
+- **The GFM extensions, against cmark-gfm**, GitHub's renderer, over 30,000
+  random documents made of table rows, tildes, URLs, email addresses and task
+  boxes.
+  - *Setup:* a checkout of [github/cmark-gfm](https://github.com/github/cmark-gfm)
+    at `../cmark-gfm`, at the commit in `tests/markdown-spec/oracle/cmark-gfm.pin`
+    (`--cmark-gfm DIR` points elsewhere), and cmake. The script builds it, with
+    `tests/markdown-spec/oracle/gfmrender.c`, in a temporary directory, which
+    takes about 15 seconds.
+  - *What it leaves out:* cmark-gfm's core is CommonMark 0.29. So a document
+    is compared only when the two renderers agree on it with the extensions
+    off, both as written and with its tildes removed. The summary line says
+    how many documents that leaves out.
+
+Each comparison PASS-skips on its own when its reference is missing. CI's `aux`
+part sets up both.
+
 - **Arguments** go to `tests/markdown-spec/diff.py`:
-  - `--seeds 4,5` and `--docs N` pick the random documents (`--docs` per seed);
+  - `--seeds 4,5` and `--docs N` pick the random documents (`--docs` per seed,
+    for each comparison);
   - `--no-corpus` leaves out the files;
   - `--show N` prints the first N differences, with the input.
 

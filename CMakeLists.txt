@@ -1406,6 +1406,15 @@ add_test(
   COMMAND bash tests/check-html-entities-sync.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# markdown-library-plan 6.3: the Unicode data behind the heading ids (NFKD's
+# ASCII and the combining marks) is generated twice too --
+# stdlib/markdown/slug-data.tur's inline C and the interpreter's natives -- and
+# the two copies must be identical.
+add_test(
+  NAME tur_md_slug_data_sync
+  COMMAND bash tests/check-md-slug-data-sync.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
 # markdown-library-plan 6.1: the CommonMark and GFM spec examples through
 # tur/markdown, compiled and under --interpret, against the ratchet in
 # tests/markdown-spec/ratchet.txt.  PASS-skips without the sibling

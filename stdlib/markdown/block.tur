@@ -27,7 +27,10 @@
   (MdKHeading)
   (MdKThematicBreak)
   (MdKCodeBlock)
-  (MdKHtmlBlock))
+  (MdKHtmlBlock)
+  (MdKTable)
+  (MdKTableRow)
+  (MdKTableCell))
 ;;; MdListData -- a list's or list item's marker: kind, bullet or delimiter byte, start number, tightness, and the item's content column.
 
 (defstruct MdListData
@@ -47,8 +50,16 @@
 ;;; parent, first-child, last-child, prev and next are arena indices, -1 for
 ;;; none.  buf is the block's StringBuilder index while it takes lines, text
 ;;; and info are String-pool indices (-1 for none), and start-line and
-;;; end-line are 1-based source lines.  inl is the root of a paragraph's or
-;;; heading's inline tree in the document's inline arena, -1 for none.
+;;; end-line are 1-based source lines.  inl is the root of a paragraph's,
+;;; heading's or table cell's inline tree in the document's inline arena, -1
+;;; for none.
+;;;
+;;; level is a heading's level, a table's column count, 1 on a table's header
+;;; row, a table cell's alignment (0 none, 1 left, 2 center, 3 right), a list
+;;; item's task box (0 none, 1 unchecked, 2 checked), 1 on a paragraph once
+;;; it has failed to become a table's header (cmark-gfm's TABLE_VISITED), and 2
+;;; on the paragraph of the lines above a table's header, which cmark-gfm never
+;;; reads link reference definitions from.
 
 (defstruct MdNode
   :copy
@@ -85,7 +96,8 @@
   (MdIStrong)
   (MdILink)
   (MdIImage)
-  (MdIHtml))
+  (MdIHtml)
+  (MdIStrike))
 ;;; MdInl -- one inline in the arena.
 ;;;
 ;;; parent, first-child, last-child, prev and next are inline-arena indices,
@@ -106,14 +118,28 @@
    end : int
    dest : int
    title : int])
-;;; MdDoc -- a parsed document: the block arena, its String pool, its link reference definitions and the inline arena.
+;;; MdOpts -- what markdown/parse recognises beyond CommonMark.
+;;;
+;;; The GitHub Flavored Markdown extensions -- tables, strikethrough, extended
+;;; autolinks and task list items, as cmark-gfm 0.29 implements them -- and $
+;;; and $$ math, which nothing reads yet.
+
+(defstruct MdOpts
+  :copy
+  [tables : bool
+   strikethrough : bool
+   autolinks : bool
+   tasklists : bool
+   math : bool])
+;;; MdDoc -- a parsed document: the block arena, its String pool, its link reference definitions, the inline arena and the options it was parsed with.
 
 (defstruct MdDoc
   :copy
   [nodes : (Vec MdNode)
    strs : (Vec String)
    refs : (Vec MdRef)
-   inls : (Vec MdInl)])
+   inls : (Vec MdInl)
+   opts : MdOpts])
 ;;; MdSt -- the parser: the document being built, the open leaf's builders, and the cursor in the current line.
 
 (defstruct MdSt
@@ -271,6 +297,18 @@
       (if (>= nx 0)
         (md/-put! st nx (with (md/-node st nx) [prev b]))
         (when (>= p 0) (md/-put! st p (with (md/-node st p) [last-child b])))))))
+;;; md/-insert-before! -- internal: put node b just before node a, under a's parent.
+
+(defn md/-insert-before! [^borrow st : rc<MdSt> a : int b : int] : void
+  (let [an (md/-node st a)
+        pv (.prev an)
+        p  (.parent an)]
+    (do
+      (md/-put! st b (with (md/-node st b) [parent p prev pv next a]))
+      (md/-put! st a (with an [prev b]))
+      (if (>= pv 0)
+        (md/-put! st pv (with (md/-node st pv) [next b]))
+        (when (>= p 0) (md/-put! st p (with (md/-node st p) [first-child b])))))))
 ;; ---- The current line ------------------------------------------------------------
 ;;; md/-src -- internal: the parser's copy of the source (borrowed).
 
@@ -456,12 +494,12 @@
     (let [^mut c (.first-child (md/-node st i))]
       (while (>= c 0)
         (do (md/-paragraphs st c out) (set! c (.next (md/-node st c))))))))
-;;; md/-strip-paragraph! -- internal: remove the definitions at the start of paragraph i.
+;;; md/-strip-paragraph! -- internal: remove the definitions at the start of paragraph i, unless it holds the lines above a table's header.
 
 (defn md/-strip-paragraph! [^borrow st : rc<MdSt> i : int] : void
   (let [t (.text (md/-node st i))
         s (md/-str st t)]
-    (when (= (md/-byte s 0) 91)
+    (when (and (= (md/-byte s 0) 91) (not (= (.level (md/-node st i)) 2)))
       (let [pos (md/-strip-ref-defs! st s)]
         (when (> pos 0)
           (do
@@ -734,6 +772,30 @@
 (defn md/-continue-html [^borrow st : rc<MdSt> i : int] : MdCont
   (let [t (.html-type (md/-node st i))]
     (if (and (.blank st) (or (= t 6) (= t 7))) (MdUnmatched) (MdMatched))))
+;; ---- GFM tables (markdown-library-plan M3) ------------------------------------------
+;; cmark-gfm's table extension.  A paragraph whose last line is a header row
+;; becomes a table when the next line is a delimiter row with as many cells;
+;; the lines before the header stay a paragraph.  Each following line that is
+;; a row adds a row, padded or cut to the header's width, until a blank line or
+;; another block's start.  Rows and cells are closed when made, so the table
+;; stays the open block.
+;;; md/-tables? -- internal: are GFM tables on?
+
+(defn md/-tables? [^borrow st : rc<MdSt>] : bool (.tables (.opts (.doc st))))
+;;; md/-line-cells -- internal: the cells of the current line from its first non-space, or (none).
+
+(defn md/-line-cells [^borrow st : rc<MdSt>] : (Option (Vec String))
+  (md/-row-cells (md/-src st) (+ (.line-start st) (.nn st)) (.line-end st)))
+;;; md/-continue-table -- internal: a table continues on any non-blank line that is a row.
+
+(defn md/-continue-table [^borrow st : rc<MdSt>] : MdCont
+  (if (.blank st)
+    (MdUnmatched)
+    (match (md/-line-cells st)
+      (Some cells)
+      (do (string/release-all cells) (MdMatched))
+      (None)
+      (MdUnmatched))))
 ;;; md/-continue -- internal: does the current line continue open block i?
 
 (defn md/-continue [^borrow st : rc<MdSt> i : int] : MdCont
@@ -752,6 +814,8 @@
     (md/-continue-html st i)
     (MdKParagraph)
     (if (.blank st) (MdUnmatched) (MdMatched))
+    (MdKTable)
+    (md/-continue-table st)
     _
     (MdMatched)))
 ;; ---- Block starts ----------------------------------------------------------------------
@@ -1106,6 +1170,228 @@
 ;;; md/-no-start? -- internal: is r MdNoStart?
 
 (defn md/-no-start? [r : MdStart] : bool (match r (MdNoStart) true _ false))
+;; ---- GFM table and task-list starts (markdown-library-plan M3) ---------------------------
+;;; md/-para-text! -- internal: paragraph i's lines so far, as a fresh String; its builder is spent.
+
+(defn md/-para-text! [^borrow st : rc<MdSt> i : int] : String
+  (builder/finish (vec-get (.bufs st) (.buf (md/-node st i)))))
+;;; md/-para-refill! -- internal: give paragraph i a fresh builder holding s.
+
+(defn md/-para-refill! [^borrow st : rc<MdSt> i : int s : String] : void
+  (let [b (builder/new)]
+    (do
+      (builder/push-string! b s)
+      (vec-set! (.bufs st) (.buf (md/-node st i)) b))))
+;;; md/-last-line-start -- internal: where the last line of s (which ends in a line feed) starts.
+
+(defn md/-last-line-start [s : String] : int
+  (let [^mut j (- (string/len s) 1)]
+    (do
+      (while (and (> j 0) (not (= (string/byte-at s (- j 1)) 10)))
+        (set! j (- j 1)))
+      j)))
+;;; md/-align-of -- internal: a delimiter cell's alignment: 1 left, 2 center, 3 right, 0 none.
+
+(defn md/-align-of [c : String] : int
+  (let [n (string/len c)
+        l (and (> n 0) (= (string/byte-at c 0) 58))
+        r (and (> n 0) (= (string/byte-at c (- n 1)) 58))]
+    (cond (and l r) 2 l 1 r 3 :else 0)))
+;;; md/-add-row! -- internal: a closed table row under table, on line; its index.
+
+(defn md/-add-row! [^borrow st : rc<MdSt> table : int header : bool line : int] : int
+  (let [id (vec-len (md/-nodes st))
+        n  (with (md/-new-node (MdKTableRow) table line)
+             [open false end-line line level (if header 1 0)])]
+    (do (vec-push! (md/-nodes st) n) (md/-append-child! st table id) id)))
+;;; md/-add-cell! -- internal: a closed cell under row holding s (which the pool takes over), with alignment align.
+
+(defn md/-add-cell! [^borrow st : rc<MdSt>
+                     row : int
+                     s : String
+                     align : int
+                     line : int] : void
+  (let [id (vec-len (md/-nodes st))
+        t  (md/-add-str! st s)
+        n  (with (md/-new-node (MdKTableCell) row line)
+             [open false end-line line text t level align])]
+    (do (vec-push! (md/-nodes st) n) (md/-append-child! st row id))))
+;;; md/-col-align -- internal: the alignment of column i of table, from its header row.
+
+(defn md/-col-align [^borrow st : rc<MdSt> table : int i : int] : int
+  (let [^mut c (.first-child (md/-node st (.first-child (md/-node st table))))
+        ^mut k 0]
+    (do
+      (while (and (>= c 0) (< k i))
+        (do (set! c (.next (md/-node st c))) (set! k (+ k 1))))
+      (if (< c 0) 0 (.level (md/-node st c))))))
+;;; md/-make-table! -- internal: turn paragraph para into a table with header cells hdr and delimiter cells delim; its lines before ls (the header's start in text) stay a paragraph.
+
+(defn md/-make-table! [^borrow st : rc<MdSt>
+                       para : int
+                       text : String
+                       ls : int
+                       hdr : (Vec String)
+                       delim : (Vec String)] : void
+  (let [hline (- (.line-no st) 1)]
+    (do
+      (when (> ls 0)
+        (let [pid (vec-len (md/-nodes st))
+              pt  (md/-add-str! st (md/-cell-text text 0 ls))
+              pn  (with (md/-new-node (MdKParagraph)
+                          (.parent (md/-node st para))
+                          (.start-line (md/-node st para)))
+                    [open false end-line (- hline 1) text pt level 2])]
+          (do (vec-push! (md/-nodes st) pn) (md/-insert-before! st para pid))))
+      (md/-put! st
+        para
+        (with (md/-node st para)
+          [kind (MdKTable) buf -1 level (vec-len hdr) start-line hline]))
+      (let [row    (md/-add-row! st para true hline)
+            ^mut i 0]
+        (while (< i (vec-len hdr))
+          (do
+            (md/-add-cell! st
+              row
+              (vec-get hdr i)
+              (md/-align-of (vec-get delim i))
+              hline)
+            (set! i (+ i 1)))))
+      (md/-advance-to-end! st))))
+;;; md/-table-header! -- internal: the current line, a delimiter row under paragraph para whose last line is a header row of as many cells, starts a table.
+
+(defn md/-table-header! [^borrow st : rc<MdSt> para : int] : MdStart
+  (let [s (md/-src st)
+        a (+ (.line-start st) (.nn st))
+        z (.line-end st)]
+    (if (or (= (.level (md/-node st para)) 1) (not (md/-table-start? s a z)))
+      (MdNoStart)
+      (match (md/-row-cells s a z)
+        (None)
+        (MdNoStart)
+        (Some delim)
+        (let [text (md/-para-text! st para)
+              ls   (md/-last-line-start text)
+              ok   (match (md/-row-cells text ls (- (string/len text) 1))
+                     (Some hdr)
+                     (if (= (vec-len hdr) (vec-len delim))
+                       (do
+                         (md/-close-unmatched! st)
+                         (md/-make-table! st para text ls hdr delim)
+                         (vec-free hdr)
+                         true)
+                       (do (string/release-all hdr) false))
+                     (None)
+                     false)]
+          (do
+            (when (not ok)
+              (do
+                (md/-para-refill! st para text)
+                (md/-put! st para (with (md/-node st para) [level 1]))))
+            (string/release text)
+            (string/release-all delim)
+            (if ok (MdLeafStart) (MdNoStart))))))))
+;;; md/-table-row! -- internal: the current line, under table, is a row: cells up to the table's width, the missing ones empty.
+
+(defn md/-table-row! [^borrow st : rc<MdSt> table : int] : MdStart
+  (match (md/-line-cells st)
+    (None)
+    (MdNoStart)
+    (Some cells)
+    (let [ncol   (.level (md/-node st table))
+          row    (md/-add-row! st table false (.line-no st))
+          ^mut i 0]
+      (do
+        (md/-close-unmatched! st)
+        (while (< i ncol)
+          (do
+            (md/-add-cell! st
+              row
+              (if (< i (vec-len cells)) (vec-get cells i) (string/from-cstr ""))
+              (md/-col-align st table i)
+              (.line-no st))
+            (set! i (+ i 1))))
+        (while (< i (vec-len cells))
+          (do (string/release (vec-get cells i)) (set! i (+ i 1))))
+        (vec-free cells)
+        (md/-advance-to-end! st)
+        (MdLeafStart)))))
+;;; md/-start-table -- internal: a table's header or one of its rows, with tables on and the line not indented.
+
+(defn md/-start-table [^borrow st : rc<MdSt> container : int] : MdStart
+  (if (or (not (md/-tables? st)) (md/-indented? st))
+    (MdNoStart)
+    (match (md/-kind st container)
+      (MdKParagraph)
+      (md/-table-header! st container)
+      (MdKTable)
+      (md/-table-row! st container)
+      _
+      (MdNoStart))))
+;;; md/-table-candidate? -- internal: could the current line start a table header or row under container (so the quick start filter must not skip it)?
+
+(defn md/-table-candidate? [^borrow st : rc<MdSt> container : int] : bool
+  (and (md/-tables? st)
+    (match (md/-kind st container)
+      (MdKTable)
+      true
+      (MdKParagraph)
+      (= (.level (md/-node st container)) 0)
+      _
+      false)))
+;;; md/-task-any-char -- internal: the index past the one character at i before end, which is not a line feed and is well-formed UTF-8, or -1.
+
+(defn md/-task-any-char [s : String i : int end : int] : int
+  (let [c (md/-byte-in s i end)]
+    (if (or (< c 0) (= c 10)) -1 (md/-utf8-next s i end))))
+;;; md/-task-ordinal-end -- internal: the index past an ordered list marker as the task scanner reads it -- digits, then any one character, which is the byte after them or, when spaces follow, their last digit -- or -1.
+
+(defn md/-task-ordinal-end [s : String i0 : int z : int] : int
+  (let [^mut i i0]
+    (do
+      (while (md/-digit? (md/-byte-in s i z)) (set! i (+ i 1)))
+      (if (and (>= (- i i0) 2) (md/-table-space? (md/-byte-in s i z)))
+        i
+        (md/-task-any-char s i z)))))
+;;; md/-task-box-at -- internal: whether the current line holds a task list item's box, scanned from the line's start as cmark-gfm's generated scanner does: spaces, then -, + or * or digits and any one character, then spaces, [ ], [x] or [X], and a space.
+
+(defn md/-task-box-at [^borrow st : rc<MdSt>] : bool
+  (let [s      (md/-src st)
+        z      (.line-end st)
+        ^mut i (md/-skip-table-space s (.line-start st) z)
+        c      (md/-byte-in s i z)]
+    (do
+      (cond (or (= c 45) (= c 43) (= c 42)) (set! i (+ i 1))
+            (md/-digit? c)                  (set! i
+                                              (md/-task-ordinal-end s i z))
+            :else                           (set! i -1))
+      (if (or (< i 0) (not (md/-table-space? (md/-byte-in s i z))))
+        false
+        (let [b (md/-skip-table-space s i z)
+              x (md/-byte-in s (+ b 1) z)]
+          (and (= (md/-byte-in s b z) 91)
+            (or (= x 32) (= x 120) (= x 88))
+            (= (md/-byte-in s (+ b 2) z) 93)
+            (md/-table-space? (md/-byte-in s (+ b 3) z))))))))
+;;; md/-task-box! -- internal: with task lists on, mark item container as a task when its line holds a box, checked when the line holds [x] or [X] anywhere, and step past the box.
+
+(defn md/-task-box! [^borrow st : rc<MdSt> container : int] : void
+  (when (and (.tasklists (.opts (.doc st)))
+          (match (md/-kind st container) (MdKItem) true _ false))
+    (when (md/-task-box-at st)
+      (let [s  (md/-src st)
+            ls (.line-start st)
+            le (.line-end st)
+            x  (or (>= (md/-find-from s "[x]" ls le) 0)
+                 (>= (md/-find-from s "[X]" ls le) 0))]
+        (do
+          (md/-put! st
+            container
+            (with (md/-node st container) [level (if x 2 1)]))
+          (md/-advance! st 3 false)
+          ;; The text after the box starts at the next non-space, which add-text
+          ;; reads from nn (cmark-gfm finds it again the same way).
+          (md/-find-next-nonspace! st))))))
 ;;; md/-try-starts -- internal: the block starts in the spec's order of precedence.
 
 (defn md/-try-starts [^borrow st : rc<MdSt> container : int] : MdStart
@@ -1118,6 +1404,7 @@
       (when (md/-no-start? r) (set! r (md/-start-break st)))
       (when (md/-no-start? r) (set! r (md/-start-item st container)))
       (when (md/-no-start? r) (set! r (md/-start-indented st)))
+      (when (md/-no-start? r) (set! r (md/-start-table st container)))
       r)))
 ;;; md/-maybe-special? -- internal: can byte c begin a block start (a quick filter)?
 
@@ -1166,15 +1453,22 @@
         (do
           (md/-find-next-nonspace! st)
           (if (and (not (md/-indented? st))
-                (not (md/-maybe-special? (md/-at st (.nn st)))))
-            (do (md/-advance-next-nonspace! st) (set! go false))
+                (not (md/-maybe-special? (md/-at st (.nn st))))
+                (not (md/-table-candidate? st container)))
+            (do
+              (md/-task-box! st container)
+              (md/-advance-next-nonspace! st)
+              (set! go false))
             (match (md/-try-starts st container)
               (MdContainerStart)
               (set! container (.tip st))
               (MdLeafStart)
               (do (set! container (.tip st)) (set! go false))
               (MdNoStart)
-              (do (md/-advance-next-nonspace! st) (set! go false))))))
+              (do
+                (md/-task-box! st container)
+                (md/-advance-next-nonspace! st)
+                (set! go false))))))
       container)))
 ;;; md/-has? -- internal: does s contain the bytes of needle?
 
@@ -1310,8 +1604,12 @@
       (.line-no st))))
 ;;; md/-parse-blocks -- internal: the block structure of src.
 
-(defn md/-parse-blocks [src : String] : MdDoc
-  (let [doc (MdDoc (md/-new-nodes) (md/-new-strs) (md/-new-refs) (md/-new-inls))
+(defn md/-parse-blocks [src : String opts : MdOpts] : MdDoc
+  (let [doc (MdDoc (md/-new-nodes)
+              (md/-new-strs)
+              (md/-new-refs)
+              (md/-new-inls)
+              opts)
         st  (rc/of (MdSt doc
                      (md/-new-bufs)
                      0

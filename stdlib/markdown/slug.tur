@@ -1,0 +1,277 @@
+;;; markdown/slug -- heading ids: python-markdown's toc rule, and GitHub's.
+;;;
+;;; markdown/render-html gives each heading an id when its MdHtmlOpts says to
+;;; (markdown-library-plan 6.3).  Both rules start from the heading as the
+;;; renderer writes it, with its comments and tags taken out and its
+;;; character references decoded: a link keeps its text, an image loses its
+;;; alt text.
+;;;
+;;; - MdSlugPython is the toc extension of python-markdown 3.11, which builds
+;;;   this site's guides.  Whitespace runs become one space, NFKD is applied
+;;;   and what is not ASCII dropped, everything but letters, digits, _, - and
+;;;   whitespace is removed, the ends are trimmed, the rest is lower-cased,
+;;;   and each run of - and whitespace becomes one -.  A repeated id gets _1,
+;;;   _2 and so on, and an empty one is _1.
+;;; - MdSlugGitHub is GitHub's, as github-slugger 2.0 reproduces it.  The
+;;;   text is lower-cased, everything but word characters (letters and other
+;;;   Alphabetic characters, combining marks, decimal digits and connector
+;;;   punctuation), - and the space is removed, and each space becomes a -.
+;;;   A repeated id gets -1, -2 and so on.
+;;;
+;;; Since: markdown-library-plan M3
+;; The NFKD and mark tables, and the scanners: entity decoding and, through
+;; it, the Unicode classes.
+(load "stdlib/markdown/slug-data.tur")
+
+(load "stdlib/markdown/scan.tur")
+;; ---- The heading's text ----------------------------------------------------------
+;;; md/-cut-spans -- internal: s with each span from open to the first close at or after it taken out, earliest first, until none is left (python-markdown's strip_tags); a fresh String.
+
+(defn md/-cut-spans [s0 : String open : cstr close : cstr clen : int] : String
+  (let [^mut s  (string/substring s0 0 (string/len s0))
+        ^mut go true]
+    (do
+      (while go
+        (let [a (md/-find-from s open 0 (string/len s))
+              z (if (< a 0) -1 (md/-find-from s close a (string/len s)))]
+          (if (< z 0)
+            (set! go false)
+            (let [b (builder/new)]
+              (do
+                (string/-push-range! b s 0 a)
+                (string/-push-range! b s (+ z clen) (string/len s))
+                (string/release s)
+                (set! s (builder/finish b)))))))
+      s)))
+;;; md/-py-space? -- internal: is code point c whitespace to Python's str.split: White_Space, or a separator U+001C to U+001F?
+
+(defn md/-py-space? [c : int] : bool
+  (or (and (>= c 28) (<= c 31)) (= (r7rs-uc-prop__ c 3) 1)))
+;;; md/-collapse-space -- internal: s with each run of whitespace one space and none at either end (Python's ' '.join(s.split())); a fresh String.
+
+(defn md/-collapse-space [s : String] : String
+  (let [b        (builder/new)
+        n        (string/len s)
+        ^mut i   0
+        ^mut gap false
+        ^mut any false]
+    (do
+      (while (< i n)
+        (match (utf8/decode-at s i)
+          (Some p)
+          (let [j (pair-snd p)]
+            (do
+              (if (md/-py-space? (char->int (pair-fst p)))
+                (set! gap true)
+                (do
+                  (when (and gap any) (builder/push-byte! b 32))
+                  (string/-push-range! b s i j)
+                  (set! gap false)
+                  (set! any true)))
+              (set! i j)))
+          (None)
+          (set! i n)))
+      (builder/finish b))))
+;;; md/-decode-refs -- internal: s with its character references decoded (Python's html.unescape, for what the renderer writes); a fresh String.
+
+(defn md/-decode-refs [s : String] : String
+  (let [b      (builder/new)
+        n      (string/len s)
+        ^mut i 0]
+    (do
+      (while (< i n)
+        (let [e (if (= (string/byte-at s i) 38) (md/-push-entity! b s i n) 0)]
+          (if (> e 0)
+            (set! i e)
+            (do (builder/push-byte! b (string/byte-at s i)) (set! i (+ i 1))))))
+      (builder/finish b))))
+;;; md/-heading-plain -- internal: a heading's HTML as text: comments, then tags, taken out, whitespace runs collapsed when collapse is true, and references decoded; a fresh String.
+
+(defn md/-heading-plain [html : String collapse : bool] : String
+  (let [c1 (md/-cut-spans html "<!--" "-->" 3)
+        c2 (md/-cut-spans c1 "<" ">" 1)
+        c3 (if collapse
+             (md/-collapse-space c2)
+             (string/substring c2 0 (string/len c2)))
+        t  (md/-decode-refs c3)]
+    (do (string/release c1) (string/release c2) (string/release c3) t)))
+;; ---- python-markdown's rule ---------------------------------------------------------
+;;; md/-py-ascii-space? -- internal: is ASCII byte c whitespace to Python's \s and strip?
+
+(defn md/-py-ascii-space? [c : int] : bool
+  (or (and (>= c 9) (<= c 13)) (= c 32) (and (>= c 28) (<= c 31))))
+;;; md/-py-keep? -- internal: does ASCII byte c survive the removal of [^\w\s-]: a letter, a digit, _, - or whitespace?
+
+(defn md/-py-keep? [c : int] : bool
+  (or (md/-alpha? c) (md/-digit? c) (= c 95) (= c 45) (md/-py-ascii-space? c)))
+;;; md/-py-tidy -- internal: the end of slugify: ASCII s with whitespace stripped from its ends, lower-cased, and each run of - and whitespace one -; a fresh String.
+
+(defn md/-py-tidy [s : String] : String
+  (let [b        (builder/new)
+        ^mut a   0
+        ^mut z   (string/len s)
+        ^mut run false]
+    (do
+      (while (and (< a z) (md/-py-ascii-space? (string/byte-at s a)))
+        (set! a (+ a 1)))
+      (while (and (> z a) (md/-py-ascii-space? (string/byte-at s (- z 1))))
+        (set! z (- z 1)))
+      (while (< a z)
+        (let [c (string/byte-at s a)]
+          (do
+            (if (or (= c 45) (md/-py-ascii-space? c))
+              (when (not run) (do (builder/push-byte! b 45) (set! run true)))
+              (do (builder/push-byte! b (md/-lower c)) (set! run false)))
+            (set! a (+ a 1)))))
+      (builder/finish b))))
+;;; md/-slug-python -- internal: python-markdown's slugify(text, "-"); a fresh String.
+
+(defn md/-slug-python [text : String] : String
+  (let [a      (builder/new)
+        n      (string/len text)
+        ^mut i 0]
+    (do
+      (while (< i n)
+        (match (utf8/decode-at text i)
+          (Some p)
+          (let [c      (char->int (pair-fst p))
+                ^mut k 0
+                ^mut x (markdown/-nfkd-ascii__ c 0)]
+            (do
+              (while (>= x 0)
+                (do
+                  (when (md/-py-keep? x) (builder/push-byte! a x))
+                  (set! k (+ k 1))
+                  (set! x (markdown/-nfkd-ascii__ c k))))
+              (set! i (pair-snd p))))
+          (None)
+          (set! i n)))
+      (let [s   (builder/finish a)
+            out (md/-py-tidy s)]
+        (do (string/release s) out)))))
+;;; md/-id-index -- internal: the index of s in ids, or -1.
+
+(defn md/-id-index [ids : (Vec String) s : String] : int
+  (let [^mut i   0
+        ^mut hit -1]
+    (do
+      (while (and (< hit 0) (< i (vec-len ids)))
+        (do (when (string/eq? (vec-get ids i) s) (set! hit i)) (set! i (+ i 1))))
+      hit)))
+;;; md/-id-count-at -- internal: the index of the _ that starts the _digits s ends in, or -1 (python-markdown's IDCOUNT_RE).
+
+(defn md/-id-count-at [s : String] : int
+  (let [n      (string/len s)
+        ^mut i n]
+    (do
+      (while (and (> i 0) (md/-digit? (string/byte-at s (- i 1))))
+        (set! i (- i 1)))
+      (if (and (< i n) (> i 0) (= (string/byte-at s (- i 1)) 95)) (- i 1) -1))))
+;;; md/-push-incremented! -- internal: append the decimal number in bytes [a, z) of s plus one, without leading zeros, as Python's int(...) + 1 writes it.
+
+(defn md/-push-incremented! [b : StringBuilder s : String a0 : int z : int] : void
+  (let [^mut a a0
+        ^mut k (- z 1)]
+    (do
+      (while (and (< a (- z 1)) (= (string/byte-at s a) 48)) (set! a (+ a 1)))
+      ;; The last digit that is not 9 goes up by one and the 9s after it become
+      ;; 0s; when all are 9s, a 1 goes in front of the 0s.
+      (while (and (>= k a) (= (string/byte-at s k) 57)) (set! k (- k 1)))
+      (if (< k a)
+        (builder/push-byte! b 49)
+        (do
+          (string/-push-range! b s a k)
+          (builder/push-byte! b (+ (string/byte-at s k) 1))))
+      (builder/push-repeat! b (int->char 48) (- z (+ k 1))))))
+;;; md/-next-python-id -- internal: python-markdown's next candidate after id s: its _N count plus one, or s with _1 added; a fresh String.
+
+(defn md/-next-python-id [s : String] : String
+  (let [u (md/-id-count-at s)
+        b (builder/new)]
+    (do
+      (if (< u 0)
+        (do
+          (string/-push-range! b s 0 (string/len s))
+          (builder/push-cstr! b "_1"))
+        (do
+          (string/-push-range! b s 0 (+ u 1))
+          (md/-push-incremented! b s (+ u 1) (string/len s))))
+      (builder/finish b))))
+;;; md/-add-python-id! -- internal: python-markdown's unique(id, ids): push id onto ids, or the first next candidate ids does not hold, when id is empty or taken.  Takes id.
+
+(defn md/-add-python-id! [ids : (Vec String) id0 : String] : void
+  (let [^mut id id0]
+    (do
+      (while (or (= (string/len id) 0) (>= (md/-id-index ids id) 0))
+        (let [nx (md/-next-python-id id)] (do (string/release id) (set! id nx))))
+      (vec-push! ids id))))
+;; ---- GitHub's rule -----------------------------------------------------------------
+;;; md/-gh-connector? -- internal: is c connector punctuation (Pc): _ and the eight others?
+
+(defn md/-gh-connector? [c : int] : bool
+  (or (= c 95)
+    (= c 8255)
+    (= c 8256)
+    (= c 8276)
+    (= c 65075)
+    (= c 65076)
+    (and (>= c 65101) (<= c 65103))
+    (= c 65343)))
+;;; md/-gh-keep? -- internal: does code point c stay in a GitHub id: a word character (Alphabetic, a combining mark, a decimal digit or connector punctuation), a - or a space?
+
+(defn md/-gh-keep? [c : int] : bool
+  (or (= c 32)
+    (= c 45)
+    (= (r7rs-uc-prop__ c 0) 1)
+    (>= (r7rs-uc-prop__ c 4) 0)
+    (= (markdown/-mark__ c) 1)
+    (md/-gh-connector? c)))
+;;; md/-slug-github -- internal: github-slugger's slug of text: lower case, what md/-gh-keep? refuses removed, and each space a -; a fresh String.
+
+(defn md/-slug-github [text : String] : String
+  (let [low    (string/adopt-cstr (r7rs-uc-string__ (string/to-cstr text) 1))
+        b      (builder/new)
+        n      (string/len low)
+        ^mut i 0]
+    (do
+      (while (< i n)
+        (match (utf8/decode-at low i)
+          (Some p)
+          (let [c (char->int (pair-fst p))
+                j (pair-snd p)]
+            (do
+              (when (md/-gh-keep? c)
+                (if (= c 32)
+                  (builder/push-byte! b 45)
+                  (string/-push-range! b low i j)))
+              (set! i j)))
+          (None)
+          (set! i n)))
+      (string/release low)
+      (builder/finish b))))
+;;; md/-github-candidate! -- internal: slug-N for the next count N of the slug at o in counts, which goes up by one; a fresh String.
+
+(defn md/-github-candidate! [counts : (Vec int) o : int slug : String] : String
+  (let [n (+ (vec-get counts o) 1)
+        b (builder/new)]
+    (do
+      (vec-set! counts o n)
+      (string/-push-range! b slug 0 (string/len slug))
+      (builder/push-cstr! b "-")
+      (builder/push-int! b n)
+      (builder/finish b))))
+;;; md/-add-github-id! -- internal: github-slugger's occurrence count: push slug onto ids, or slug-N for the next count of slug that ids does not hold, with a 0 count onto counts.  Takes slug.
+
+(defn md/-add-github-id! [ids : (Vec String) counts : (Vec int) slug : String] : void
+  (let [o (md/-id-index ids slug)]
+    (if (< o 0)
+      (do (vec-push! ids slug) (vec-push! counts 0))
+      (let [^mut r (md/-github-candidate! counts o slug)]
+        (do
+          (while (>= (md/-id-index ids r) 0)
+            (do
+              (string/release r)
+              (set! r (md/-github-candidate! counts o slug))))
+          (string/release slug)
+          (vec-push! ids r)
+          (vec-push! counts 0))))))

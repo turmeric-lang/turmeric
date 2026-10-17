@@ -1,0 +1,282 @@
+==== tables ====
+<table>
+<thead>
+<tr>
+<th align="left">Left</th>
+<th align="center">Center</th>
+<th align="right">Right</th>
+<th>None</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td align="left">a</td>
+<td align="center"><em>b</em></td>
+<td align="right"><code>c | d</code></td>
+<td>e | f</td>
+</tr>
+<tr>
+<td align="left">short</td>
+<td align="center"></td>
+<td align="right"></td>
+<td></td>
+</tr>
+<tr>
+<td align="left">one</td>
+<td align="center">two</td>
+<td align="right">three</td>
+<td>four</td>
+</tr>
+<tr>
+<td align="left">no pipes</td>
+<td align="center"></td>
+<td align="right"></td>
+<td></td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p>quoted</p>
+</blockquote>
+
+----
+document [1-7]
+  table, columns 4 [1-6]
+    header row [1-1]
+      cell left [1-1]
+        text [Left]
+      cell center [1-1]
+        text [Center]
+      cell right [1-1]
+        text [Right]
+      cell [1-1]
+        text [None]
+    row [3-3]
+      cell left [3-3]
+        text [a]
+      cell center [3-3]
+        emph
+          text [b]
+      cell right [3-3]
+        code [c | d]
+      cell [3-3]
+        text [e | f]
+    row [4-4]
+      cell left [4-4]
+        text [short]
+      cell center [4-4]
+      cell right [4-4]
+      cell [4-4]
+    row [5-5]
+      cell left [5-5]
+        text [one]
+      cell center [5-5]
+        text [two]
+      cell right [5-5]
+        text [three]
+      cell [5-5]
+        text [four]
+    row [6-6]
+      cell left [6-6]
+        text [no pipes]
+      cell center [6-6]
+      cell right [6-6]
+      cell [6-6]
+  block quote [7-7]
+    paragraph [7-7]
+      text [quoted]
+==== table starts ====
+<p>Intro line
+[x]: /u</p>
+<table>
+<thead>
+<tr>
+<th>head a</th>
+<th>head b</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>cell</td>
+<td></td>
+</tr>
+</tbody>
+</table>
+<p>| a | b |
+| - |
+| c | d |</p>
+<p>[x]</p>
+
+----
+document [1-11]
+  paragraph [1-2]
+    text [Intro line]
+    softbreak
+    text [[x]: /u]
+  table, columns 2 [3-5]
+    header row [3-3]
+      cell [3-3]
+        text [head a]
+      cell [3-3]
+        text [head b]
+    row [5-5]
+      cell [5-5]
+        text [cell]
+      cell [5-5]
+  paragraph [7-9]
+    text [| a | b |]
+    softbreak
+    text [| - |]
+    softbreak
+    text [| c | d |]
+  paragraph [11-11]
+    text [[x]]
+==== strikethrough ====
+<p><del>two</del> <del>one</del> ~~~three~~~ ~~mixed~ x<del>in</del>y
+<em>a</em><del>b</del> _c_~d ~~not closed</p>
+
+----
+document [1-2]
+  paragraph [1-2]
+    strikethrough
+      text [two]
+    text [ ]
+    strikethrough
+      text [one]
+    text [ ~~~three~~~ ~~mixed~ x]
+    strikethrough
+      text [in]
+    text [y]
+    softbreak
+    emph
+      text [a]
+    strikethrough
+      text [b]
+    text [ _c_~d ~~not closed]
+==== autolinks ====
+<p>Visit <a href="http://www.commonmark.org/help">www.commonmark.org/help</a>, <a href="https://example.com/a_(b)?c=d">https://example.com/a_(b)?c=d</a>. or <a href="FTP://files.example.org">FTP://files.example.org</a>!
+(<a href="http://www.paren.example">www.paren.example</a>) <a href="http://www.ent.example/">www.ent.example/</a>&amp; www.x_y.z_w http://
+Mail <a href="mailto:foo.bar+baz@mail.example">foo.bar+baz@mail.example</a>, <a href="mailto:x@y.zz">mailto:x@y.zz</a> or <a href="xmpp:me@chat.example/home">xmpp:me@chat.example/home</a>.
+a@b and a@b.c- stay text; <a href="/u">www.inside.example</a> too.</p>
+
+----
+document [1-4]
+  paragraph [1-4]
+    text [Visit ]
+    link dest=[http://www.commonmark.org/help]
+      text [www.commonmark.org/help]
+    text [, ]
+    link dest=[https://example.com/a_(b)?c=d]
+      text [https://example.com/a_(b)?c=d]
+    text [. or ]
+    link dest=[FTP://files.example.org]
+      text [FTP://files.example.org]
+    text [!]
+    softbreak
+    text [(]
+    link dest=[http://www.paren.example]
+      text [www.paren.example]
+    text [) ]
+    link dest=[http://www.ent.example/]
+      text [www.ent.example/]
+    text [&]
+    text [ www.x_y.z_w http://]
+    softbreak
+    text [Mail ]
+    link dest=[mailto:foo.bar+baz@mail.example]
+      text [foo.bar+baz@mail.example]
+    text [, ]
+    link dest=[mailto:x@y.zz]
+      text [mailto:x@y.zz]
+    text [ or ]
+    link dest=[xmpp:me@chat.example/home]
+      text [xmpp:me@chat.example/home]
+    text [.]
+    softbreak
+    text [a@b and a@b.c- stay text; ]
+    link dest=[/u]
+      text [www.inside.example]
+    text [ too.]
+==== task lists ====
+<ul>
+<li><input type="checkbox" disabled="" /> open</li>
+<li><input type="checkbox" checked="" disabled="" /> done</li>
+<li><input type="checkbox" checked="" disabled="" /> also done
+<ul>
+<li><input type="checkbox" disabled="" /> nested</li>
+</ul>
+</li>
+<li>[ ]</li>
+<li>[] not a box</li>
+</ul>
+<ol>
+<li><input type="checkbox" checked="" disabled="" /> ordered</li>
+</ol>
+
+----
+document [1-8]
+  bullet list [1-6]
+    task item [ ] [1-1]
+      paragraph [1-1]
+        text [open]
+    task item [x] [2-2]
+      paragraph [2-2]
+        text [done]
+    task item [x] [3-4]
+      paragraph [3-3]
+        text [also done]
+      bullet list [4-4]
+        task item [ ] [4-4]
+          paragraph [4-4]
+            text [nested]
+    item [5-5]
+      paragraph [5-5]
+        text [[ ]]
+    item [6-6]
+      paragraph [6-6]
+        text [[] not a box]
+  ordered list [8-8]
+    task item [x] [8-8]
+      paragraph [8-8]
+        text [ordered]
+==== tag filter ====
+&lt;style>
+p { }
+&lt;/style>
+<p>A &lt;title>t&lt;/title>, &lt;TEXTAREA> and <b>bold</b>.</p>
+
+----
+document [1-5]
+  html block [1-3]
+  paragraph [5-5]
+    text [A ]
+    html [<title>]
+    text [t]
+    html [</title>]
+    text [, ]
+    html [<TEXTAREA>]
+    text [ and ]
+    html [<b>]
+    text [bold]
+    html [</b>]
+    text [.]
+==== extensions off ====
+<p>| a |
+|---|
+~~s~~ www.a.example x@y.zz</p>
+<ul>
+<li>[ ] x</li>
+</ul>
+
+----
+document [1-4]
+  paragraph [1-3]
+    text [| a |]
+    softbreak
+    text [|---|]
+    softbreak
+    text [~~s~~ www.a.example x@y.zz]
+  bullet list [4-4]
+    item [4-4]
+      paragraph [4-4]
+        text [[ ] x]

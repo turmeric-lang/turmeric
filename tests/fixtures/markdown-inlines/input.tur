@@ -16,7 +16,8 @@
     (MdImage) "image"
     (MdHtmlInline) "html"
     (MdSoftBreak) "softbreak"
-    (MdHardBreak) "hardbreak"))
+    (MdHardBreak) "hardbreak"
+    (MdStrikethrough) "strikethrough"))
 
 ;; Append an optional String as name=[s], then release it.
 (defn push-field! [out : StringBuilder name : cstr o : (Option String)] : void
@@ -75,7 +76,7 @@
       (string/release h)
       (markdown/doc-free d))))
 
-(defn pass [] : MdHtmlOpts (MdHtmlOpts (MdRawPass)))
+(defn pass [] : MdHtmlOpts (MdHtmlOpts (MdRawPass) (MdNoIds)))
 
 ;; ---- Documents -----------------------------------------------------------------
 
@@ -131,7 +132,7 @@
               (markdown/default-html-opts))
     (show-doc "raw html, escaped"
               "a <b>bold</b> <script>x</script> <!-- c --> <?pi?> <a  href='x'>\n"
-              (MdHtmlOpts (MdRawEscape)))
+              (MdHtmlOpts (MdRawEscape) (MdNoIds)))
     ;; Headings carry inlines too.
     (show-doc "heading" "## A *b* `c` [d](/e)\n" (pass))
     0))
