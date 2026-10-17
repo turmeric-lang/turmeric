@@ -65,3 +65,21 @@ First decide whether an `(Option T)` belongs in a dynvar at all.
    `Shape` is, and name the alternative in the diagnostic.
 
 Either way, the dynamic-vars guide should say which ADTs a dynvar can carry.
+
+## 2026-10-17: a payload-free `defdata` is refused too
+
+Measured on v0.65.5: `TUR-E0603` also refuses an enum with no payloads at all.
+
+```turmeric
+(defdata LogLevel (Debug) (Info) (Warn) (Error))
+(defdynamic *lv* :LogLevel (Info))
+;; error [TUR-E0603]: defdynamic: '*lv*' -- dynamic vars may not hold
+;; substructural (linear or move-only) types
+```
+
+No constructor carries anything that could be duplicated or freed twice, so
+"move-only" is stricter than the rule needs. It is what keeps
+[dynvar-adoption-plan](../upcoming/dynvar-adoption-plan.md) ADO-1 from typing
+`*log-level*` as an enum; the plan uses a `defopaque` newtype instead. When
+this is decided, admitting payload-free ADTs is a separate, smaller question
+than admitting `(Option T)`.
