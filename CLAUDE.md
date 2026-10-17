@@ -106,13 +106,13 @@ Typing a request handle, response handle, ctx, server, connection, file,
 socket, callback function pointer, option value, result value, cons cell,
 HAMT map, vector, struct handle, or any other distinct kind of thing as
 `:int` because "it's a pointer under the hood" is **not allowed**. The
-language has `defopaque`, `defstruct`, `:ptr<T>`, `:fn`, `option<T>`,
-`result<T,E>`, parametric types, and typeclasses for a reason. Reaching for
+language has `defopaque`, `defstruct`, `:ptr<T>`, `:fn`, `(Option T)`,
+`(Result T E)`, parametric types, and typeclasses for a reason. Reaching for
 `:int` is throwing all of that away and exporting an API the type checker
 cannot help anyone use correctly.
 
 This is the same defect the `tour-tourist` middleware shipped --
-`(fn [req : int] : int)` instead of `(fn [ctx : Ctx] : option<Response>)` --
+`(fn [req : int] : int)` instead of `(fn [ctx : Ctx] : (Option Response))` --
 and the kind of thing that gets noticed downstream months later when
 something tries to actually compose against it. **Do not ship more of it.**
 
@@ -120,12 +120,15 @@ If you are about to write `:int` for a parameter or return type, **stop**
 and answer:
 
 - Is this value an opaque handle to a thing of a specific kind? -> `defopaque`
-  newtype, or a `:ptr<TheStruct>`. Never `:int`.
+  newtype. Never `:int`. (A `:ptr<TheStruct>` is meant to work too, but today
+  a `ptr<Foo>` parameter accepts a `ptr<Bar>` --
+  [typed-ptr-pointee-not-checked-at-calls](docs/reported/typed-ptr-pointee-not-checked-at-calls.md)
+  -- so prefer `defopaque` until that is fixed.)
 - Is it a callback / function pointer? -> spell out the function type, e.g.
-  `(fn [Request] option<Response>)`. Never `:int`.
+  `(fn [Request] (Option Response))`. Never `:int`.
 - Is it a boolean? -> `:bool`. Never `:int` with 0/1 convention.
-- Is it nullable / optional? -> `option<T>`. Never `:int` with a 0 sentinel.
-- Is it a tagged union? -> `result<T,E>` or a real ADT. Never `:int` with a
+- Is it nullable / optional? -> `(Option T)`. Never `:int` with a 0 sentinel.
+- Is it a tagged union? -> `(Result T E)` or a real ADT. Never `:int` with a
   status-code convention.
 - Is it genuinely a machine integer with no further structure (length,
   count, byte, port, file descriptor we cannot wrap right now)? -> `:int` is
@@ -134,7 +137,16 @@ and answer:
 The **only** legitimate `:int` is "this really is a number, not a stand-in
 for something else." Everything else gets a real type.
 
-Returning `option<T>` / `result<T,E>` from an **inline-C** body is
+**Spell parameterized types the way the checker reads them:** `(Option T)`,
+`(Result T E)`, `(List T)` (from `stdlib/list-typed.tur`). The angle-bracket
+forms `option<T>`, `Option<T>`, `vec<T>` and `list<T>` are **not** types in an
+annotation. An unknown name there becomes an implicit type variable, so a
+parameter written `[x : option<int>]` accepts a `cstr` with no diagnostic
+([unknown-type-annotation-becomes-implicit-tyvar](docs/reported/unknown-type-annotation-becomes-implicit-tyvar.md)),
+and `result<T,E>` does not even parse as one type. `ptr<T>` and `rc<T>` are
+built-in and do resolve, with the `ptr<T>` pointee caveat above.
+
+Returning `(Option T)` / `(Result T E)` from an **inline-C** body is
 first-class -- there is no "inline-C can't easily build a result, so I'll
 return `:int`" escape hatch. The codegen preamble carries typed builders
 (`tur_ok_ptr` / `tur_err_int` / `tur_some_ptr` / `tur_none`, and the
@@ -250,7 +262,7 @@ frees its closures/registered natives (process-lifetime), so the harnesses
 that exercise it (`run-turi.sh`, `run-flags.sh`) and their ctest targets
 default to `ASAN_OPTIONS=detect_leaks=0`. Override with
 `ASAN_OPTIONS=detect_leaks=1 bash tests/<harness>.sh` to opt back in. See
-[docs/asan-debug-leaks-plan.md](docs/asan-debug-leaks-plan.md).
+[docs/archive/history/asan-debug-leaks-plan.md](docs/archive/history/asan-debug-leaks-plan.md).
 
 #### macOS startup hang -- outdated ASan runtime
 
@@ -705,7 +717,7 @@ produce no `tur.lock` entries.
   nested `src/<pkg>/`), skips the manifest itself, resolves the include
   path from the project's own `src/` plus each `:spices` dep's `src/`, and
   validates that every declared `:exports` module has a backing source
-  file. See [docs/manifest-driven-build-descent-plan.md](docs/manifest-driven-build-descent-plan.md).
+  file. See [docs/archive/history/manifest-driven-build-descent-plan.md](docs/archive/history/manifest-driven-build-descent-plan.md).
 
 See [docs/guides/developing-spices-guide.md](docs/guides/developing-spices-guide.md#per-file-commands-inside-a-spice)
 for the full rules.
@@ -1406,7 +1418,7 @@ Because of this, the old workaround "declare the rest as `:int` and cast the
 opaque handles back inside the body" is **no longer needed** -- write the real
 type. A bare `:int` rest now also rejects opaque/struct/ADT values; pass the
 declared type instead. For a mix of distinct handle types, prefer two explicit
-`:list<T>` parameters over a single untyped rest.
+`(List T)` parameters (from `stdlib/list-typed.tur`) over a single untyped rest.
 
 Rules for `& rest`:
 

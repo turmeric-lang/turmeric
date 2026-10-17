@@ -62,6 +62,12 @@ directory is worse for triage than no index.
 | --- | --- | --- |
 | ~~[stdlib-load-reads-cwd-copy-first](../archive/stdlib-load-reads-cwd-copy-first.md)~~ | low-medium (silent wrong stdlib) | **RESOLVED 2026-10-17** (archived): a `stdlib/<rest>` load reads the resolved stdlib when the cwd copy is a different file; the same file keeps its written path. Pinned by `run-offtree-load.sh` case 4 |
 
+## Found correcting CLAUDE.md's type spellings (filed 2026-10-17)
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [typed-ptr-pointee-not-checked-at-calls](typed-ptr-pointee-not-checked-at-calls.md) | medium (silent loss of type checking) | A `ptr<Foo>` parameter or return type accepts a `ptr<Bar>`, although `type_eq` compares pointees (`types.c:278-284`); a `ptr<int>` parameter's error prints `expected ptr<void>`, so the pointee seems to be dropped before the call check. CLAUDE.md now steers handles to `defopaque` until it is fixed. |
+
 ## Found writing the CPS/DK internals guide (filed 2026-10-16)
 
 | Report | Severity | One line |
