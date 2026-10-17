@@ -33,6 +33,8 @@ User-facing material lives elsewhere:
 > checked out; both stopped being true for `:spices` (see
 > [What the lock actually does](#what-the-lock-actually-does)). Where this
 > guide and the code disagree, fix the guide.
+> The stale comments found so far in this area, each with a fix, are
+> listed in [stale-comments-package-manager](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/stale-comments-package-manager.md).
 
 ---
 
