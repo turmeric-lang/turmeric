@@ -1,5 +1,7 @@
 # More than 32 computed operands in one CPS expression drops bindings
 
+**RESOLVED 2026-10-17** -- see [Resolution](#resolution-2026-10-17). Pinned by `cps-pending-bindings-past-32`.
+
 **Severity:** low. The build fails in cc on an undeclared temporary, and only
 for an expression with more than 32 non-atomic operands inside a function the
 CPS backend lowers.
@@ -50,3 +52,11 @@ guard.
 - make `atomize` record overflow, and have the callers turn an overflowed
   `Pending` into `CT_UNSUPPORTED` so the function is evicted with a reason
   instead of emitting an unbound name.
+
+## Resolution (2026-10-17)
+
+`Pending` (`src/passes/cps_ir.c`) is arena-backed and grows through
+`pend_push`; every append site uses it. A copy (`Pending pp = hp;`) shares the
+buffer, which is safe because each copy appends only past its own `n` and only
+one is live at a time. `call_args_pendable`, which guarded two call shapes
+against the old cap, is gone.

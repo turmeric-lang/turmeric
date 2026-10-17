@@ -1,5 +1,7 @@
 # `int64` / `float64` are rejected as return-type annotations
 
+**RESOLVED 2026-10-17** -- see [Resolution](#resolution-2026-10-17). Pinned by `int64-float64-return-annotation`.
+
 **Severity:** low-medium. Documented type names
 ([sized-primitives-guide](../guides/sized-primitives-guide.md) lists `int64` as
 the long form of `i64`) work for parameters but not for return types.
@@ -33,3 +35,10 @@ to the implicit-type-variable path, which the KB-026 check rejects.
 - Accept the alias names explicitly in the return-type ladder, using the
   same table the parameter path uses. Better, share one resolver between
   parameters and returns.
+
+## Resolution (2026-10-17)
+
+The `defn` and `fn` return-type ladders (`src/compiler/elab_fns.c`) take
+`int64` / `float64` as the long spellings of `int` / `float`, the kinds
+`typekind_from_symbol` gives them on a parameter. A shared parameter/return
+resolver is still the better shape; this keeps the two in step by name.

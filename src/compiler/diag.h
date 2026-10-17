@@ -355,6 +355,14 @@ typedef enum DiagCode {
      * keeps regions in full.  The two dialects link; they just do not each get
      * the other's guarantees. */
     TUR_E0312_SAFFRON_STATIC_ONLY,
+    /* dict-clone-nested-lambda-cites-wrong-code: a rank-2 / forall-dict pass
+     * of a constrained generic whose body dispatches a class method on the
+     * constrained variable from inside a DIRECTLY-APPLIED nested lambda
+     * (`((fn [z : A] (f z)) x)`).  That lambda is lifted and called by name
+     * with no env to carry the dictionary, so make_dict_clone refuses rather
+     * than resolve to the carrier-representative instance.  The message used
+     * to end "(TUR-E0311)", which is the unknown-:engine code. */
+    TUR_E0313_DICT_PASS_NESTED_LAMBDA,
     TUR_W0060_EXPERIMENTAL_PROTOTYPE,
     TUR_W0061_EXPERIMENTAL_BETA,
     /* RT3 (refinement-types-plan): static discharge of `#refine{...}`
@@ -773,6 +781,9 @@ void diag_emit_with_notes(DiagLevel level, Span span, const char *message,
                           DiagNote *notes, size_t note_count);
 void diag_emit_with_suggestion(DiagLevel level, Span span, const char *message,
                                const DiagSuggestion *suggestion);
+void diag_emit_with_suggestion_code(DiagLevel level, Span span, DiagCode code,
+                                    const char *message,
+                                    const DiagSuggestion *suggestion);
 
 /* Multi-span diagnostics for complex errors */
 void diag_emit_multi_span(DiagLevel level, const char *message,

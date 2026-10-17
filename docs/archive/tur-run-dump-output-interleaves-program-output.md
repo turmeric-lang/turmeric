@@ -1,5 +1,7 @@
 # `tur --dump-* run` interleaves the program's output into the dump
 
+**RESOLVED 2026-10-17** -- see [Resolution](#resolution-2026-10-17). Pinned by `tests/run-flags.sh` (`dump-then-run-output-ordered`).
+
 **Severity:** low. With stdout redirected, a dump's buffered text and the
 program's output come out in the wrong order, mid-line.
 
@@ -26,3 +28,9 @@ dump text does.
   already notes that stdout must be flushed before running a program
   ([build-driver-internals-guide](../guides/build-driver-internals-guide.md));
   this path misses it.
+
+## Resolution (2026-10-17)
+
+`RUN_ENTRY` and the stdin branch of `cmd_run` call `fflush(NULL)` before
+`system()`, and so does `cc_system` before every toolchain subprocess. The
+repro's `hi` is now the last line of the redirected output.

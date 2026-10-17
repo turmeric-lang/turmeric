@@ -77,6 +77,44 @@ void warn_legacy_fx_row(Form *f) {
     f->fx_prov = (uint8_t)PROV_FX_EXPLICIT;
 }
 
+/* The one reader of a written effect row (`#fx{A B e}`), shared by every site
+ * that takes one: a defn, a `fn`, a `(fn [...] #fx{...} R)` type, a struct
+ * field and a class method.  Warns on a legacy spelling, then collects the
+ * names into an ERK_UNRESOLVED row that effect_row_resolve finishes once the
+ * effect environment exists.
+ *
+ * effect-row-non-symbol-items-dropped: an item that is not a symbol --
+ * `#fx{:Ask}`, `#fx{"Ask" 7}` -- is TUR-E0026 at the item.  Each site used to
+ * keep only the symbols and drop the rest without a word, so a typo made the
+ * row EMPTY, the least checked annotation there is.
+ *
+ * effect-row-merge-overflows-past-32-effects: the count is not truncated to
+ * eight bits on the way in, which the six copies of this loop each did. */
+EffectRow *elab_fx_row_from_form(Elab *e, Form *row) {
+    warn_legacy_fx_row(row);
+    uint32_t n = row->as.list.len;
+    const Symbol **syms = (const Symbol **)arena_alloc(e->arena,
+                            (n ? n : 1) * sizeof(Symbol *));
+    uint32_t n_valid = 0;
+    for (uint32_t j = 0; j < n; j++) {
+        Form *item = row->as.list.items[j];
+        if (item->tag == F_SYM) {
+            syms[n_valid++] = item->as.sym;
+        } else if (item->tag == F_KEYWORD) {
+            diag_emit_with_code(DIAG_ERROR, item->span,
+                TUR_E0026_UNKNOWN_EFFECT_IN_ROW,
+                "':%s' in an effect row is a keyword, not an effect name; "
+                "write `%s`", item->as.sym->name, item->as.sym->name);
+        } else {
+            diag_emit_with_code(DIAG_ERROR, item->span,
+                TUR_E0026_UNKNOWN_EFFECT_IN_ROW,
+                "an effect row lists effect names (`#fx{Ask Log}`) and row "
+                "variables (`#fx{Ask e}`); this item is neither");
+        }
+    }
+    return effect_row_unresolved(e->arena, syms, n_valid, row->span);
+}
+
 /* Phase 18: Delimited continuations */
 
 /* CF2: Derive the delimited-continuation result type for shift/shift0.

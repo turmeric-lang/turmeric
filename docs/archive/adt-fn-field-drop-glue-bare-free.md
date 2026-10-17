@@ -1,5 +1,7 @@
 # Drop glue frees a closure field with a bare `free()` -- invalid pointer
 
+**RESOLVED 2026-10-17** -- see [Resolution](#resolution-2026-10-17). Pinned by `closure-field-drop-glue-rc-struct`, `closure-field-drop-glue-defdata`.
+
 **Severity:** high. The program crashes on an ordinary (non-sanitized) build:
 glibc aborts with `free(): invalid pointer` when a struct or ADT holding a
 capturing closure is dropped.
@@ -52,3 +54,18 @@ already uses for the same kind of field.
 
 Found while writing
 [emitted-code-ownership-guide](../guides/emitted-code-ownership-guide.md).
+
+## Resolution (2026-10-17)
+
+`emit_adt_glue_field_drops` (`src/compiler/emit_module.c`) releases a boxed fn
+field with `TUR_CLOSURE_DROP`, as `drop_fnfields_<T>` already did. That covers
+both glue functions that call it, `drop_glue_<T>` and `drop_localowned_<T>`.
+
+The static-box question in the fix directions answers itself: every fat box
+carries the 8-byte header. A capturing env's header is its drop glue, a
+malloc'd `{shim, fn}` box's is NULL (free the base), and a static or stack
+box's is `__tur_fatbox_keep`, which frees nothing. `tur_closure_drop` reads
+that header, so all three are released correctly.
+
+Both repros are fixtures, and both carry `requires.leak-check`; they are
+clean under ASan + LeakSanitizer with the env freed.

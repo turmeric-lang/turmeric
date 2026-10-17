@@ -1063,19 +1063,7 @@ static TypeClassMethod *parse_typeclass_method(Elab *e, Form *method_form, Span 
         Form *maybe_row = method_form->as.list.items[ret_idx];
         if (maybe_row->tag == F_MAP) {
             /* #{Effect...} effect-row annotation -- parse and store it. */
-            warn_legacy_fx_row(maybe_row);
-            uint8_t n_sym = (uint8_t)maybe_row->as.list.len;
-            const Symbol **syms = (const Symbol **)arena_alloc(e->arena,
-                                    (n_sym ? n_sym : 1) * sizeof(Symbol *));
-            uint8_t n_valid = 0;
-            for (uint32_t j = 0; j < maybe_row->as.list.len; j++) {
-                Form *item = maybe_row->as.list.items[j];
-                if (item->tag == F_SYM) {
-                    syms[n_valid++] = item->as.sym;
-                }
-            }
-            method_effect_row = effect_row_unresolved(e->arena, syms, n_valid,
-                                                      maybe_row->span);
+            method_effect_row = elab_fx_row_from_form(e, maybe_row);
             ret_idx++;
         }
     }

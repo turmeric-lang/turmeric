@@ -1,2 +1,3 @@
 Did you mean 'count'?
 see: https://turmeric-lang.dev/docs/errors/TUR-E0003
+error [TUR-E0003]: unbound symbol

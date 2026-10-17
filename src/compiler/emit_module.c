@@ -4982,8 +4982,9 @@ void emit_flush_dead_base_ctor_traps(EmitCtx *ctx, Buf *out) {
                 buf_printf(out, "%sint64_t _%u", a ? ", " : "", a);
             char *sname = mangle_adt_name(bd->name);
             buf_printf(out, ") {\n"
-                "    %s __r = (%s)tur_region_alloc_or_malloc("
-                "sizeof(struct tur_adt_%s));\n", ptr_name, ptr_name, sname);
+                "    %s __r = (%s)%s("
+                "sizeof(struct tur_adt_%s));\n", ptr_name, ptr_name,
+                region_alloc_fn(), sname);
             const CtorDef *c0 = bd->n_ctors > 0 ? bd->ctors[0] : NULL;
             for (uint32_t a = 0; c0 && a < arity && a < c0->n_fields; a++) {
                 const char *fn2 = c0->fields[a].name;
@@ -11423,14 +11424,19 @@ static void emit_adt_glue_field_drops(Buf *out, const AdtDef *def,
         } else if (k == TY_FN && ctor->fields[fi].full_type &&
                    ctor->fields[fi].full_type->kind == TY_FN &&
                    ctor->fields[fi].full_type->as.fn.boxed) {
-            /* closure-drop-glue S2 (Model U): a boxed fn-field owns a heap fat
+            /* closure-drop-glue S2 (Model U): a boxed fn-field owns a fat
              * handle (a `{shim, fn}` box for a bare fn, or a capturing closure
              * env).  The struct is move-only (needs_drop_glue), so the handle has
-             * a single owner -- free it.  (A capturing env with OWNING captures
-             * leaks those captures for now; a scalar-capture env and a bare-fn
-             * shim box are freed whole.  An UNboxed nullary/>4-arg fn field is a
-             * plain fn pointer -- not heap -- and is NOT matched here.) */
-            buf_printf(out, "    if (s->%s) free((void *)(intptr_t)s->%s);\n", mp, mp);
+             * a single owner -- release it.  (An UNboxed nullary/>4-arg fn field
+             * is a plain fn pointer -- not heap -- and is NOT matched here.)
+             *
+             * adt-fn-field-drop-glue-bare-free: the handle points PAST its
+             * 8-byte drop-glue header, so a bare `free` of it is an interior
+             * free (glibc: "free(): invalid pointer").  TUR_CLOSURE_DROP
+             * recovers the header, as drop_fnfields_ below does: a NULL glue
+             * frees the base, an env's glue walks its owning captures, and a
+             * static or stack box's keep glue frees nothing. */
+            buf_printf(out, "    if (s->%s) TUR_CLOSURE_DROP(s->%s);\n", mp, mp);
         }
         free(mp);
     }
@@ -11941,7 +11947,7 @@ static void emit_adt_typedef_and_ctors(Buf *out, const AdtDef *def,
              * kept its plain malloc. */
             buf_printf(out, "    %s *__r = (%s *)%s(sizeof(%s));\n",
                        adt_c_name, adt_c_name,
-                       regions_enabled() ? "tur_region_alloc_or_malloc" : "malloc",
+                       region_alloc_fn(),
                        adt_c_name);
             if (!flat) buf_printf(out, "    __r->tag = %u;\n", ctor->tag);
             for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
@@ -13943,7 +13949,7 @@ void ensure_saffron_dyn_runtime(EmitCtx *ctx) {
      * call. */
     buf_printf(out,
         "        __tur_dyn_cons *__c = (__tur_dyn_cons *)%s(sizeof *__c);\n",
-        regions_enabled() ? "tur_region_alloc_or_malloc" : "malloc");
+        region_alloc_fn());
     buf_puts(out,
         "        __c->head = __a[__i]; __c->tail = __t; __t = __c;\n"
         "    }\n"
@@ -20089,8 +20095,7 @@ static int emit_program_inner(Buf *out, const Expr *program) {
                      * to one belongs in all three. */
                     buf_printf(&early_file, "    %s *__r = (%s *)%s(sizeof(%s));\n",
                                adt_c_name, adt_c_name,
-                               regions_enabled() ? "tur_region_alloc_or_malloc"
-                                                 : "malloc",
+                               region_alloc_fn(),
                                adt_c_name);
                     if (!flat) buf_printf(&early_file, "    __r->tag = %u;\n", ctor->tag);
                     for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {

@@ -89,7 +89,7 @@ struct EffectRow {
     union {
         struct {
             Effect **effects;    /* Array of effects in this row */
-            uint8_t n_effects;
+            uint32_t n_effects;
         } concrete;
         struct {
             const Symbol *var_name;  /* Effect variable name */
@@ -100,7 +100,7 @@ struct EffectRow {
         } union_;
         struct {
             const Symbol **sym_names; /* Unresolved symbolic names */
-            uint8_t n_sym_names;
+            uint32_t n_sym_names;
             /* The `#fx{...}` form the names came from, so a name no
              * `defeffect` declares can be reported where it was written
              * (TUR-E0026).  Zero for a row with no source form. */
@@ -120,7 +120,7 @@ EffectRow *effect_row_empty(Arena *a);
 EffectRow *effect_row_single(Arena *a, Effect *effect);
 
 /* Create a concrete effect row from multiple effects */
-EffectRow *effect_row_concrete(Arena *a, Effect **effects, uint8_t n_effects);
+EffectRow *effect_row_concrete(Arena *a, Effect **effects, uint32_t n_effects);
 
 /* Create an effect row union */
 EffectRow *effect_row_union(Arena *a, EffectRow *left, EffectRow *right);
@@ -131,7 +131,7 @@ EffectRow *effect_row_union(Arena *a, EffectRow *left, EffectRow *right);
  * `span` is the `#fx{...}` form the names were read from (TUR-E0026 points
  * at it); pass a zero Span when there is none. */
 EffectRow *effect_row_unresolved(Arena *a, const Symbol **sym_names,
-                                 uint8_t n_sym_names, Span span);
+                                 uint32_t n_sym_names, Span span);
 
 /* ET4: Returns true if `child` is the same as `parent_eff` or is a descendant via ^extends */
 bool effect_is_subeffect(const Effect *child, const Effect *parent_eff);

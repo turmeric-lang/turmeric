@@ -1,5 +1,7 @@
 # The shift/reset guide documents a `shift` form neither engine accepts
 
+**RESOLVED 2026-10-17** -- see [Resolution](#resolution-2026-10-17). Pinned by `delimited-control-guide-examples`.
+
 **Severity:** medium (documentation). The main user guide for delimited
 control teaches a syntax and semantics that do not exist, and the behavior
 that does exist is described only in a later "abortive shift" subsection.
@@ -55,3 +57,14 @@ Either:
 
 In either case, make every example in the guide a fixture, or at least
 compile-check it, so the guide cannot drift from the language again.
+
+## Resolution (2026-10-17)
+
+The guide was fixed, not the language. "`shift` / `reset`" now opens with the
+abortive `(shift receiver value)` form, says plainly that
+`(shift k (k (k 10)))` is not a Turmeric form, and shows `cloneable-shift` for
+a `k` the body can call (`(k (k 10))` under `(+ 1 _)` gives 12). The overview
+says the same, and `async-await-guide.md`'s "Desugaring" notes that its
+`(shift k body)` is notation. Every example in the guide is in the
+`delimited-control-guide-examples` fixture, so an engine change that breaks
+one fails `run.sh` and `run-turi.sh`.

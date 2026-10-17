@@ -186,6 +186,12 @@ reset
 ;; The scheduler later resumes k with the result of fetch(2)
 ```
 
+The `(shift k body)` spelling above is Danvy--Filinski notation for "bind the
+captured continuation as `k`", used here to show the shape. It is not a
+Turmeric form: base `shift` is the abortive `(shift receiver value)`, and a
+continuation the body can call comes from `cloneable-shift`. See the
+[delimited control operators guide](delimited-control-operators-guide.md#shift--reset----static-re-delimiting).
+
 ### Comparison to Threads
 
 | Feature | Threads | Async/Await |

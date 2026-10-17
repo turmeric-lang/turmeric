@@ -168,11 +168,12 @@ recorded in sticky process state (`pkg_manifest_mark_malformed_slot`) and
 re-emitted as TUR-E0624 by `pkg_manifest_reassert()`, which `main.c` calls
 right after each `diag_reset()`, beside `pkg_tur_version_reassert()`.
 
-Two early returns bypass that bookkeeping: a **reader** error (an unbalanced
-paren) and a file with **no `defpackage` form** both return `false` with the
-status still `ABSENT` and nothing marked. The reader error prints `error:`,
-but `tur check` on a file in that spice still exits 0. Any new early return in
-this function must mark the manifest malformed.
+Every return past the `fopen` marks the manifest malformed, the **reader**
+error (an unbalanced paren) and the file with **no `defpackage` form**
+included. Those two used to return with the status still `ABSENT`, so the
+reader's `error:` printed and `tur check` exited 0
+([manifest-reader-error-exits-zero](../archive/manifest-reader-error-exits-zero.md)).
+Any new early return in this function must mark the manifest malformed too.
 
 ### Writing it
 
@@ -610,7 +611,6 @@ update the passage above that describes it and drop it from this list.
 - [add-cmake-manifest-rewrite-loses-keys](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/add-cmake-manifest-rewrite-loses-keys.md) -- `tur add-cmake` rewrites `build.tur` and drops what it does not model
 - [build-opts-c-flags-never-consumed](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/build-opts-c-flags-never-consumed.md) -- `:build-opts :c-flags` (and `:no-stdlib`) are parsed but never used
 - [tur-run-cmake-marker-skips-after-failed-configure](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/tur-run-cmake-marker-skips-after-failed-configure.md) -- `tur run` skips the cmake-deps build after a failed configure
-- [manifest-reader-error-exits-zero](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/manifest-reader-error-exits-zero.md) -- A broken `build.tur` prints an error but `tur check` exits 0
 - [tur-add-cannot-edit-sweet-manifest](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/tur-add-cannot-edit-sweet-manifest.md) -- `tur add` cannot edit a `build.tur.sweet` manifest
 
 ## Maintenance

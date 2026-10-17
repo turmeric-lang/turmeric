@@ -1586,8 +1586,38 @@ else
     FAILED+=("absent-manifest-is-not-malformed")
 fi
 
+# A manifest the READER rejects, or one with no `(defpackage ...)`, is
+# malformed too.  Both used to return before the malformed verdict was
+# recorded, so `tur check` printed the reader's `error:` and exited 0.
+# docs/archive/manifest-reader-error-exits-zero.md
+MF_RD=$(mktemp -d)
+mkdir -p "$MF_RD/src"
+cat >"$MF_RD/src/main.tur" <<'EOF'
+(defn main [] : int 0)
+EOF
+for mf_rd_case in 'unterminated|(defpackage bad
+  :name "bad"
+  :version "0.1.0"' \
+                  'no-defpackage|(def x 1)'; do
+    mf_rd_name=${mf_rd_case%%|*}
+    printf '%s\n' "${mf_rd_case#*|}" >"$MF_RD/build.tur"
+    MF_RD_ERR=$(mktemp)
+    ( cd "$MF_RD" && "$LS6_ABS_TUR" check src/main.tur ) >/dev/null 2>"$MF_RD_ERR"
+    mf_rd_rc=$?
+    if [ "$mf_rd_rc" -ne 0 ] && grep -F -q "TUR-E0624" "$MF_RD_ERR"; then
+        echo "PASS malformed-manifest-$mf_rd_name-fails-tur-check"
+        PASS=$((PASS + 1))
+    else
+        echo "FAIL malformed-manifest-$mf_rd_name-fails-tur-check -- exit $mf_rd_rc"
+        echo "  stderr:"; sed 's/^/    /' "$MF_RD_ERR"
+        FAIL=$((FAIL + 1))
+        FAILED+=("malformed-manifest-$mf_rd_name-fails-tur-check")
+    fi
+    rm -f "$MF_RD_ERR"
+done
+
 rm -f "$MF_ERR" "$MF_OK_ERR" "$MF_NONE_ERR"
-rm -rf "$MF_DIR" "$MF_NONE"
+rm -rf "$MF_DIR" "$MF_NONE" "$MF_RD"
 
 # ---------------------------------------------------------------------------
 # `tur build src/` and `tur check src/` must handle a NESTED module layout.

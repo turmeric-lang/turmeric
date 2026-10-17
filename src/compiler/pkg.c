@@ -963,9 +963,16 @@ bool pkg_manifest_read_status(const char *path, PkgManifest *out,
     uint32_t nforms = 0;
     Form **forms = read_all(&arena, &st, &file, &nforms);
 
+    /* manifest-reader-error-exits-zero: the file exists, so a reader error
+     * (or a file with no forms) is MALFORMED, not "no manifest here".  These
+     * two returns used to leave the status ABSENT, and every caller carried
+     * on as if outside a project: `tur check` printed the reader's `error:`
+     * and exited 0. */
     if (!forms || diag_had_error() || nforms == 0) {
         symtab_free(&st);
         arena_free(&arena);
+        if (status) *status = PKG_MANIFEST_MALFORMED;
+        pkg_manifest_mark_malformed(path);
         return false;
     }
 
@@ -985,6 +992,8 @@ bool pkg_manifest_read_status(const char *path, PkgManifest *out,
         fprintf(stderr, "spice: no (defpackage ...) form found in '%s'\n", path);
         symtab_free(&st);
         arena_free(&arena);
+        if (status) *status = PKG_MANIFEST_MALFORMED;
+        pkg_manifest_mark_malformed(path);
         return false;
     }
 

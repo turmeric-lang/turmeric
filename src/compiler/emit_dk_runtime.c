@@ -1122,11 +1122,24 @@ void emit_cps_runtime_prelude(Buf *out) {
     buf_puts(out,
 "/* E2a: direct-entry -> CPS-entry registry (probes/e2a-registry-probe.c). */\n"
 "typedef intptr_t (*__tur_cps_fn)();\n"
-"static struct { intptr_t direct; __tur_cps_fn cps; } __tur_cps_reg[256];\n"
+/* cps-callback-registry-overflows-past-256: the registry grows.  It was a
+ * 256-entry array that dropped every later registration, so the 257th
+ * threadable callback missed its lookup, took the direct entry (a fresh DK
+ * root) and aborted with "unhandled effect".  A miss cannot be made loud at
+ * the fat dispatch: a PURE fn-value in an effectful slot is never registered
+ * and takes that same direct entry on purpose. */
+"static struct { intptr_t direct; __tur_cps_fn cps; } *__tur_cps_reg;\n"
 "static int __tur_cps_reg_n = 0;\n"
+"static int __tur_cps_reg_cap = 0;\n"
 "__attribute__((unused)) static void __tur_cps_register(intptr_t direct, __tur_cps_fn cps) {\n"
-"    if (__tur_cps_reg_n < 256) { __tur_cps_reg[__tur_cps_reg_n].direct = direct;\n"
-"        __tur_cps_reg[__tur_cps_reg_n].cps = cps; __tur_cps_reg_n++; }\n"
+"    if (__tur_cps_reg_n == __tur_cps_reg_cap) {\n"
+"        int cap = __tur_cps_reg_cap ? __tur_cps_reg_cap * 2 : 256;\n"
+"        void *grown = realloc(__tur_cps_reg, (size_t)cap * sizeof(*__tur_cps_reg));\n"
+"        if (!grown) { fprintf(stderr, \"tur: out of memory registering a CPS entry\\n\"); abort(); }\n"
+"        __tur_cps_reg = grown; __tur_cps_reg_cap = cap;\n"
+"    }\n"
+"    __tur_cps_reg[__tur_cps_reg_n].direct = direct;\n"
+"    __tur_cps_reg[__tur_cps_reg_n].cps = cps; __tur_cps_reg_n++;\n"
 "}\n"
 "__attribute__((unused)) static __tur_cps_fn __tur_cps_lookup(intptr_t direct) {\n"
 "    for (int i = 0; i < __tur_cps_reg_n; i++)\n"

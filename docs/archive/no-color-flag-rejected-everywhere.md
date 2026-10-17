@@ -1,5 +1,7 @@
 # `--no-color` is documented but rejected in every position
 
+**RESOLVED 2026-10-17** -- see [Resolution](#resolution-2026-10-17). Pinned by `tests/run-flags.sh` (`no-color-flag-accepted`).
+
 **Severity:** low. `tur --help` and the shell completions advertise
 `--no-color`, but no command accepts it.
 
@@ -24,3 +26,9 @@ command name (leading position).
 
 - Strip `--no-color` with the other global flags and set the diagnostics color
   mode from it. Add a `run-flags.sh` case for both positions.
+
+## Resolution (2026-10-17)
+
+The global strip loop in `src/main.c` removes `--no-color` after
+`parse_no_color` has read it, so it is accepted before or after the
+subcommand like the other global flags.

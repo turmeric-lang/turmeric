@@ -1,5 +1,7 @@
 # Non-symbol items in an effect row are silently dropped
 
+**RESOLVED 2026-10-17** -- see [Resolution](#resolution-2026-10-17). Pinned by `errors/effect-row-non-symbol-item`.
+
 **Severity:** low-medium. A typo in an effect annotation silently makes the
 row **empty**. That is the most permissive-looking and least checked
 annotation there is, and nothing warns.
@@ -31,3 +33,10 @@ diagnostic. The filter appears in `elab_defn`, `elab_fn`,
 
 - Raise TUR-E0026 (unresolved effect) or a new code on any non-symbol item,
   pointing at the item's span. Share one row-item parser between the sites.
+
+## Resolution (2026-10-17)
+
+The six row parsers share one reader, `elab_fx_row_from_form`
+(`src/compiler/elab_effects.c`), which reports a non-symbol item as
+TUR-E0026 at the item's span. A keyword gets a hint to drop the colon
+(`':Ask' in an effect row is a keyword, not an effect name; write `Ask``).

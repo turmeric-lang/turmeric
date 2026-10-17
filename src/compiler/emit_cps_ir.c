@@ -4890,7 +4890,7 @@ static void expr_collect_effects_acc(const Expr *e, EffAcc *acc) {
                     const struct EffectRow *fr = (ffidx < fac->n_fields)
                         ? fac->fields[ffidx].effect_row : NULL;
                     if (fr && fr->kind == ERK_CONCRETE)
-                        for (uint8_t i = 0; i < fr->as.concrete.n_effects; i++)
+                        for (uint32_t i = 0; i < fr->as.concrete.n_effects; i++)
                             if (fr->as.concrete.effects[i])
                                 mark_effect(fr->as.concrete.effects[i]->name, acc->plo, acc->phi);
                 } else if (acc->callees && acc->callee_overflow) {
@@ -4913,7 +4913,7 @@ static void expr_collect_effects_acc(const Expr *e, EffAcc *acc) {
                 ft = &e->as.call_.fn_expr->type;
             const struct EffectRow *row = ft ? ft->as.fn.effect_row : NULL;
             if (row && row->kind == ERK_CONCRETE)
-                for (uint8_t i = 0; i < row->as.concrete.n_effects; i++)
+                for (uint32_t i = 0; i < row->as.concrete.n_effects; i++)
                     if (row->as.concrete.effects[i])
                         mark_effect(row->as.concrete.effects[i]->name, acc->plo, acc->phi);
             /* E2 threadability probe: is count_target passed here as arg[i] to a

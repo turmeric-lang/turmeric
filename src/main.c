@@ -200,6 +200,7 @@ static size_t source_stem_len(const char *name, size_t len) {
  * charges the wall time the driver spends waiting on it to "cc".  The time is
  * wall time: pieces compiled in parallel overlap, and their CPU is not summed. */
 static int cc_system(const char *cmd) {
+    fflush(NULL);   /* the child's output must not overtake ours */
     prof_enter(PROF_CC);
     int rc = system(cmd);
     prof_exit(PROF_CC);
@@ -2675,13 +2676,22 @@ static FILE *fopen_nofollow_w(const char *path) {
 #endif
 }
 
+/* tur-build-intermediate-c-path-collides: the name is the input's base name,
+ * sanitized, then a hash of its REAL path -- `m_tur-<16 hex>.c`.  It used to
+ * be the path as typed, so two concurrent `tur build m.tur` in different
+ * directories wrote, compiled and linked the same file and could swap
+ * programs.  Still one stable name per source file, which is what ccache
+ * needs. */
 static void stable_c_path(const char *input, char *out, size_t cap) {
     const char *prefix = stable_c_prefix();
     size_t plen = strlen(prefix);
     if (plen + 3 >= cap) { out[0] = '\0'; return; }
     memcpy(out, prefix, plen);
     size_t i = plen;
-    for (const char *p = input; *p && i < cap - 3; p++) {
+    const char *base = input;
+    for (const char *p = input; *p; p++)
+        if (*p == '/' || *p == '\\') base = p + 1;
+    for (const char *p = base; *p && i < cap - 21; p++) {
         char c = *p;
         if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
             (c >= '0' && c <= '9') || c == '-') {
@@ -2690,6 +2700,15 @@ static void stable_c_path(const char *input, char *out, size_t cap) {
             out[i++] = '_';
         }
     }
+    /* The hash reads 8-byte words, so it gets an aligned copy. */
+    char *real = realpath(input, NULL);
+    Buf key; buf_init(&key);
+    buf_puts(&key, real ? real : input);
+    uint64_t h = tur_hamt_hash_xxh64(key.data, key.len);
+    buf_free(&key);
+    free(real);
+    if (i + 20 >= cap) { out[0] = '\0'; return; }
+    i += (size_t)snprintf(out + i, cap - i, "-%016llx", (unsigned long long)h);
     out[i++] = '.';
     out[i++] = 'c';
     out[i] = '\0';
@@ -5970,8 +5989,23 @@ static int cmd_jit(int argc, char **argv) {
     buf_init(&csrc);
     struct timespec _tj0, _tj1;
     clock_gettime(CLOCK_MONOTONIC, &_tj0);
+    /* tur-jit-skips-spice-include-discovery: the enclosing spice's `src/` and
+     * its deps' go on the search path, as for every other per-file command
+     * (`tur run --engine jit` resolved what `tur jit` could not).
+     * --no-auto-spice is honoured inside. */
+    char **jit_owned = NULL;
+    int    n_jit_owned = 0;
+    Ls2ResolverCtx jit_ls2 = {0};
+    if (strcmp(input, "-") != 0)
+        auto_append_spice_includes(input, &user_inc, &n_user_inc,
+                                   &jit_owned, &n_jit_owned, &jit_ls2);
+    ls2_resolver_ctx_set(&jit_ls2);
     int rc = compile_to_c(input, &csrc, (const char **)user_inc, n_user_inc,
                           (const char **)jit_rm, jit_rm_n);
+    ls2_resolver_ctx_set(NULL);
+    ls2_resolver_ctx_dispose(&jit_ls2);
+    for (int i = 0; i < n_jit_owned; i++) free(jit_owned[i]);
+    free(jit_owned);
     clock_gettime(CLOCK_MONOTONIC, &_tj1);
     /* Turmeric front-end time (read -> elaborate -> emit C); the engine's
      * own c2mir+link time is added below so compile_ms is invocation-to-
@@ -6876,6 +6910,10 @@ static int cmd_run(int argc, char **argv) {
             }                                                            \
         }                                                                \
         buf_putc(&_cmd, '\0');                                           \
+        /* tur-run-dump-output-interleaves-program-output: a --dump-* \
+         * report still in tur's stdout buffer would land after the     \
+         * program's own output, mid-line, once stdout is a file. */    \
+        fflush(NULL);                                                    \
         prof_enter(PROF_RUN);                                            \
         int _sys = _q ? system(_cmd.data) : 2;                           \
         prof_exit(PROF_RUN);                                             \
@@ -6948,6 +6986,7 @@ static int cmd_run(int argc, char **argv) {
             buf_putc(&run_cmd, '\0');
             if (!rq)
                 fprintf(stderr, "tur run: an argument was too long to quote\n");
+            fflush(NULL);   /* as RUN_ENTRY: a dump first, then the program */
             prof_enter(PROF_RUN);
             int sys = rq ? system(run_cmd.data) : 2;
             prof_exit(PROF_RUN);
@@ -13257,6 +13296,18 @@ static int tur_main_inner(int argc, char **argv) {
     turi_set_inline_c_jit_hook(&g_repl_inline_c_jit_hook);
 #endif
 
+    /* global-flags-parsed-after-double-dash: everything from the first `--`
+     * on belongs to the program, so the global flags are parsed and stripped
+     * from the words before it only.  `argc` is cut there for the parse, and
+     * the tail (the `--` included, which the commands that forward arguments
+     * look for) is put back after the strip loop below.  The strip only moves
+     * words below the cut, so the tail is never touched in between. */
+    int dd_at = argc;
+    for (int i = 1; i < argc; i++)
+        if (strcmp(argv[i], "--") == 0) { dd_at = i; break; }
+    const int dd_tail = argc - dd_at;
+    argc = dd_at;
+
     /* Phase 8: Check for global flags before command */
     bool no_color = parse_no_color(argc, argv);
     bool explain_mode = false;
@@ -13702,8 +13753,23 @@ static int tur_main_inner(int argc, char **argv) {
                     "or ~/.config/turmeric/experiments.tur) is now the "
                     "acknowledgment. Remove the flag.\n");
             return 2;
+        } else if (strcmp(argv[i], "--no-color") == 0) {
+            /* no-color-flag-rejected-everywhere: already parsed into
+             * `no_color`; it was never stripped, so a trailing one reached
+             * the command's parser as an unknown flag and a leading one was
+             * taken for the command name. */
+            for (int j = i; j < argc - 1; j++) {
+                argv[j] = argv[j + 1];
+            }
+            argc--;
+            i--;
         }
     }
+    /* Put the program's words back (see dd_at above). */
+    if (dd_tail > 0 && argc != dd_at)
+        memmove(&argv[argc], &argv[dd_at], (size_t)dd_tail * sizeof(argv[0]));
+    argc += dd_tail;
+    argv[argc] = NULL;
     
         /* Initialize diagnostics - use color unless --no-color or --json-diagnostics specified */
         /* JSON output disables color */

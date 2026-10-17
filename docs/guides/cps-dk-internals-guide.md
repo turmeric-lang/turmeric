@@ -238,10 +238,11 @@ The memory usage guide measures the cost of
 - `cps_tail(e, kont)` delivers `e`'s value to `kont`.
 - `cps_bind(e, x, rest)` binds it to `x` and continues with `rest`.
 
-Non-atomic operands are named `__tN` through a 32-slot pending list. It is
-folded leftmost-outermost, so the IR's evaluation order is the source's
-left-to-right order. Past 32 slots `atomize` drops bindings silently
-([report](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/cps-ir-pending-list-overflow-drops-bindings.md)).
+Non-atomic operands are named `__tN` through a pending list (`Pending`,
+grown by `pend_push`). It is folded leftmost-outermost, so the IR's
+evaluation order is the source's left-to-right order. It held 32 slots until
+2026-10-17, past which `atomize` dropped bindings silently
+([report](../archive/cps-ir-pending-list-overflow-drops-bindings.md)).
 
 **`CT_LETRAW` is the most important design choice in the translator.** Any
 subexpression that passes `safe_to_delegate`, a closed list of control-free
@@ -918,10 +919,11 @@ These are process-wide:
 
 - the atomic `g_dk_hgroup_ctr`;
 - `tur_dk_pinned`;
-- the E2 registry `__tur_cps_reg[256]`. Registrations past 256 are dropped,
-  and calls through those callbacks fall back to a fresh root and abort with
-  "unhandled effect"
-  ([report](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/cps-callback-registry-overflows-past-256.md));
+- the E2 registry `__tur_cps_reg`, grown with `realloc` by
+  `__tur_cps_register`. It was a 256-entry array until 2026-10-17, which
+  dropped later registrations, so calls through those callbacks fell back to a
+  fresh root and aborted with "unhandled effect"
+  ([report](../archive/cps-callback-registry-overflows-past-256.md));
 - `__sk_registry`;
 - `g_dk_case_reopen_hnode`. It is a **plain static** that `dk_perform` sets
   immediately before each case call and a re-opening case reads at entry, so

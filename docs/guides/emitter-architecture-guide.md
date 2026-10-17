@@ -841,10 +841,11 @@ The emitter writes a few comments that tools parse. Do not reword them.
 the AST for float<->integer value conversions, and skips hand-written inline C
 (the two inline-C markers) and the preamble. Any conversion it reports in
 emitter-written code is a bug unless spelled `TUR_AS(T, x)`. It runs
-`tur emit-c` with the repo root as the working directory, so pass absolute
-paths or run it from the root: a relative path that does not resolve there
-is treated as "not a program" and the run reports `0 program(s) checked`
-with exit status 0.
+`tur emit-c` with the repo root as the working directory, so it resolves each
+named file against the caller's directory first; a file that does not exist,
+or a list in which nothing compiled to a program, exits 2. Until 2026-10-17 a
+relative path from elsewhere checked nothing and exited 0
+([float-conversion-checker-passes-on-relative-path](../archive/float-conversion-checker-passes-on-relative-path.md)).
 
 `tests/run.sh` also ratchets the C compiler's warnings on every fixture build
 (`-Wint-conversion`, `-Wincompatible-pointer-types`, `-Wfloat-conversion`,
@@ -1177,7 +1178,6 @@ update the passage above that describes it and drop it from this list.
 - [compiled-args-not-evaluated-left-to-right](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/compiled-args-not-evaluated-left-to-right.md) -- Compiled code evaluates a later argument's call before an earlier argument
 - [nil-call-panic-not-propagated](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/nil-call-panic-not-propagated.md) -- A panic inside a `: nil` call does not stop its caller
 - [toplevel-statements-dropped-with-user-main](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/toplevel-statements-dropped-with-user-main.md) -- Top-level statements are silently dropped when the file defines `main`
-- [float-conversion-checker-passes-on-relative-path](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/float-conversion-checker-passes-on-relative-path.md) -- The float-conversion checker passes silently on a relative path
 
 ## Maintenance
 

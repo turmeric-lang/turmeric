@@ -1,5 +1,7 @@
 # Effect-row merge overflows a 32-entry stack array
 
+**RESOLVED 2026-10-17** -- see [Resolution](#resolution-2026-10-17). Pinned by `effect-row-forty-effects`.
+
 **Severity:** medium (compiler memory safety). One function that performs more
 than 32 distinct effects writes past a stack array inside the compiler. Debug
 builds abort under ASan; Release builds corrupt the stack.
@@ -33,3 +35,17 @@ check. `effect_row_remove` uses another `Effect *keep[32]`. A row's own
 - Size both arrays from the inputs' `n_effects` (heap or VLA), or check the
   bound and raise a located error.
 - Add a fixture with 40 effects in one row.
+
+## Resolution (2026-10-17)
+
+`effect_row_merge` and `effect_row_remove` (`src/passes/effect.c`) size their
+buffers from their inputs (a 32-entry stack buffer while that suffices, the
+arena past it). The row counts were 8-bit as well -- `n_effects`,
+`n_sym_names`, `effect_row_concrete`'s parameter and the row parsers' locals
+-- so a 256th effect would have wrapped; they are 32-bit now, with every
+loop over them.
+
+The fixture performs 40 effects from one function and discards each result.
+The repro's shape -- summing them -- now type-checks, but running it needs a
+continuation that captures more than 16 values, which is a separate limit:
+[cps-continuation-past-16-captures-loses-its-env](../reported/cps-continuation-past-16-captures-loses-its-env.md).

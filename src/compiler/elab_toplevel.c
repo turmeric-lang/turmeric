@@ -645,7 +645,8 @@ static Expr *elab_form_impl(Elab *e, Form *f) {
                              "for the keyword's value (a map key, say) write the symbol '%s",
                              f->as.sym->name, f->as.sym->name + 1);
                     DiagSuggestion sug = { sug_text, NULL, "https://turmeric-lang.dev/docs/errors/TUR-E0003" };
-                    diag_emit_with_suggestion(DIAG_ERROR, f->span, msg, &sug);
+                    diag_emit_with_suggestion_code(DIAG_ERROR, f->span,
+                                                   TUR_E0003_UNBOUND_SYMBOL, msg, &sug);
                     return NULL;
                 }
                 /* Phase 8: Enhanced unbound symbol diagnostic with suggestions */
@@ -686,7 +687,8 @@ static Expr *elab_form_impl(Elab *e, Form *f) {
                         NULL,
                         "https://turmeric-lang.dev/docs/errors/TUR-E0003"
                     };
-                    diag_emit_with_suggestion(DIAG_ERROR, f->span, msg, &sug);
+                    diag_emit_with_suggestion_code(DIAG_ERROR, f->span,
+                                                   TUR_E0003_UNBOUND_SYMBOL, msg, &sug);
                 } else {
                     diag_emit_with_code(DIAG_ERROR, f->span, TUR_E0003_UNBOUND_SYMBOL,
                                         "unbound symbol '%s'", shown);

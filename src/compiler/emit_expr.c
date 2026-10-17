@@ -13041,8 +13041,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                          * rather than re-reading R2's claim. */
                         buf_printf(body, "%s *%s = (%s *)%s(sizeof(%s));\n",
                                    cn, tmp, cn,
-                                   regions_enabled() ? "tur_region_alloc_or_malloc"
-                                                     : "malloc",
+                                   region_alloc_fn(),
                                    cn);
                         indent_buf(body, ctx->indent);
                         buf_printf(body, "*%s = (%s);\n", tmp, arg_strs[i]);

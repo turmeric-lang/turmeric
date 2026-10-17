@@ -60,6 +60,7 @@ static uint64_t xxh64_finalize(uint64_t acc, uint64_t input) {
 
 uint64_t tur_hamt_hash_xxh64(const void *data, size_t len) {
     const uint8_t *p = (const uint8_t *)data;
+    const size_t total = len;
     uint64_t acc = 0;
 
     if (len >= 32) {
@@ -97,27 +98,36 @@ uint64_t tur_hamt_hash_xxh64(const void *data, size_t len) {
         acc = xxh64_round(acc, v2);
         acc = xxh64_round(acc, v3);
         acc = xxh64_round(acc, v4);
+        acc += (uint64_t)total;
     } else {
         acc = XXH_PRIME64_5 + len;
+    }
 
-        while (len >= 8) {
-            uint64_t k = *(uint64_t *)p;
-            acc = xxh64_round(acc, k);
-            p += 8;
-            len -= 8;
-        }
+    /* The bytes past the last 32-byte stripe.  These loops used to sit in the
+     * short-input branch only, so an input of 32 bytes or more was hashed on
+     * its whole stripes alone: any two that agreed there collided, whatever
+     * followed (and its length was never mixed in either).  Every path under
+     * one fixtures directory shares its first 32 bytes, which is how
+     * tur-build's intermediate-C names (stable_c_path) collided; the cache
+     * keys and HAMT string keys hashed here had the same blind spot.  An input
+     * under 32 bytes hashes exactly as before. */
+    while (len >= 8) {
+        uint64_t k = *(uint64_t *)p;
+        acc = xxh64_round(acc, k);
+        p += 8;
+        len -= 8;
+    }
 
-        if (len >= 4) {
-            acc = xxh64_round(acc, *(uint32_t *)p);
-            p += 4;
-            len -= 4;
-        }
+    if (len >= 4) {
+        acc = xxh64_round(acc, *(uint32_t *)p);
+        p += 4;
+        len -= 4;
+    }
 
-        while (len > 0) {
-            acc = xxh64_round(acc, *p);
-            p += 1;
-            len -= 1;
-        }
+    while (len > 0) {
+        acc = xxh64_round(acc, *p);
+        p += 1;
+        len -= 1;
     }
 
     return xxh64_finalize(acc, len);

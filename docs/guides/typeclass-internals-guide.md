@@ -1056,7 +1056,7 @@ Every message below is real `tur check` output, trimmed to its first line.
 | Instance names a method the class does not have | `error: method implementation name 'm' doesn't match any method of 'C'` | Fix the name |
 | Subclass instance without its superclass instance | `error [TUR-E0393]: (definstance Mono [int]) requires a Semi [int] instance ('Semi' is a superclass of 'Mono'); none is in scope. ...` | Add the superclass instance |
 | Instance for a foreign class and a foreign type | `error [TUR-E0013]: orphan instance: typeclass 'C' is defined in a different module and none of the type arguments belong to this module ...` | Move the instance, or wrap the type in a local newtype |
-| A constrained generic passed rank-2 whose constraint method is dispatched inside a lambda the dict-clone walk cannot reach | `error: forall-dict-pass: 'say' dispatches a typeclass method on its constrained type variable from inside a directly-applied nested lambda that cannot be lowered ... (TUR-E0311)` | Call the method directly in the body. The "(TUR-E0311)" in this text is a wrong code: the registered TUR-E0311 is "unknown :engine value", and this diagnostic carries no code |
+| A constrained generic passed rank-2 whose constraint method is dispatched inside a lambda the dict-clone walk cannot reach | `error [TUR-E0313]: forall-dict-pass: 'say' dispatches a typeclass method on its constrained type variable from inside a directly-applied nested lambda that cannot be lowered ...` | Call the method directly in the body. Until 2026-10-17 the text cited "(TUR-E0311)" (the unknown-`:engine` code) and the diagnostic carried no code ([dict-clone-nested-lambda-cites-wrong-code](../archive/dict-clone-nested-lambda-cites-wrong-code.md)) |
 | `check` is clean but `cc` reports `call to undeclared function '__inst_...'` or a dict-slot type mismatch | (none from `tur`) | A resolver/emitter disagreement -- a bug. Reduce it and compare `tur emit-c` against the shapes in this guide |
 
 When a resolved call does something unexpected, read the emitted C first:
@@ -1126,4 +1126,3 @@ Each was reproduced against the compiler this guide describes and filed in
 update the passage above that describes it and drop it from this list.
 
 - [int-receiver-binds-sole-foreign-instance](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/int-receiver-binds-sole-foreign-instance.md) -- An `int` argument binds a class's only instance, even a `cstr` one
-- [dict-clone-nested-lambda-cites-wrong-code](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/dict-clone-nested-lambda-cites-wrong-code.md) -- The dict-clone nested-lambda error cites TUR-E0311, an unrelated code

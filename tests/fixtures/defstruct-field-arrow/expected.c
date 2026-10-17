@@ -2575,11 +2575,18 @@ static void dk_free(DK *k) { if (tur_dk_pinned) return; while (k) { DK *n = k->b
 __attribute__((unused)) static void dk_free_node(DK *k) { if (tur_dk_pinned) return; if (k && k->env_drop) k->env_drop(k->env); else if (k && k->env_owned) free((void *)k->env); free(k); }
 /* E2a: direct-entry -> CPS-entry registry (probes/e2a-registry-probe.c). */
 typedef intptr_t (*__tur_cps_fn)();
-static struct { intptr_t direct; __tur_cps_fn cps; } __tur_cps_reg[256];
+static struct { intptr_t direct; __tur_cps_fn cps; } *__tur_cps_reg;
 static int __tur_cps_reg_n = 0;
+static int __tur_cps_reg_cap = 0;
 __attribute__((unused)) static void __tur_cps_register(intptr_t direct, __tur_cps_fn cps) {
-    if (__tur_cps_reg_n < 256) { __tur_cps_reg[__tur_cps_reg_n].direct = direct;
-        __tur_cps_reg[__tur_cps_reg_n].cps = cps; __tur_cps_reg_n++; }
+    if (__tur_cps_reg_n == __tur_cps_reg_cap) {
+        int cap = __tur_cps_reg_cap ? __tur_cps_reg_cap * 2 : 256;
+        void *grown = realloc(__tur_cps_reg, (size_t)cap * sizeof(*__tur_cps_reg));
+        if (!grown) { fprintf(stderr, "tur: out of memory registering a CPS entry\n"); abort(); }
+        __tur_cps_reg = grown; __tur_cps_reg_cap = cap;
+    }
+    __tur_cps_reg[__tur_cps_reg_n].direct = direct;
+    __tur_cps_reg[__tur_cps_reg_n].cps = cps; __tur_cps_reg_n++;
 }
 __attribute__((unused)) static __tur_cps_fn __tur_cps_lookup(intptr_t direct) {
     for (int i = 0; i < __tur_cps_reg_n; i++)
@@ -6112,7 +6119,7 @@ typedef tur_adt_Cell Cell;
 static void drop_glue_tur_adt_Cell(void *ptr) {
     if (!ptr) return;
     tur_adt_Cell *s = (tur_adt_Cell *)ptr;
-    if (s->f) free((void *)(intptr_t)s->f);
+    if (s->f) TUR_CLOSURE_DROP(s->f);
     tur_region_free(ptr);
 }
 

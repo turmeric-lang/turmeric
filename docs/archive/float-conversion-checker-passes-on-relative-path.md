@@ -1,5 +1,7 @@
 # The float-conversion checker passes silently on a relative path
 
+**RESOLVED 2026-10-17** -- see [Resolution](#resolution-2026-10-17). A tooling change, checked by hand.
+
 **Severity:** low (tooling). CLAUDE.md tells contributors to run
 `python3 tests/check-emitted-float-conversions.py FILE.tur` as the mechanism
 check for float<->int conversions. Run from outside the repo root with a
@@ -26,3 +28,10 @@ the file is counted as nothing to check.
 
 - Resolve every input path to an absolute path before changing directory.
 - Exit non-zero when an explicit file list results in zero programs checked.
+
+## Resolution (2026-10-17)
+
+`tests/check-emitted-float-conversions.py` resolves every named file (and
+`--tur`) to an absolute path before `tur emit-c` runs from the repo root. A
+named file that does not exist exits 2, and so does a file list in which
+nothing compiled to a program. `--corpus` is unchanged.

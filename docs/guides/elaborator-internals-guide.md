@@ -501,7 +501,10 @@ Things that are not what they look like:
   and `float64` to `TY_INT` and `TY_FLOAT`, but `i64` and `f64` (and the
   literal suffixes) to the distinct kinds `TY_INT64` and `TY_FLOAT64`. Both
   spell `int64_t`/`double` in C, but `type_eq` tells them apart, so a plain
-  `3` is rejected for an `i64` parameter.
+  `3` is rejected for an `i64` parameter. The `defn` and `fn` return ladders
+  spell `int64` / `float64` out as `int` / `float` aliases; until 2026-10-17
+  they rejected them as return types
+  ([int64-float64-return-annotation-rejected](../archive/int64-float64-return-annotation-rejected.md)).
 - **`TY_TYVAR` is every named type variable**, not only GADT ones as its
   comment says. `tyvar_.name` is interned; `open_slot` marks a variable that
   nothing fixed (a constructor's free slot, or a callee's renamed-apart result
@@ -928,7 +931,6 @@ update the passage above that describes it and drop it from this list.
 
 - [forward-call-to-unannotated-return-typed-int](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/forward-call-to-unannotated-return-typed-int.md) -- A call to a later-defined function with no return annotation is typed `int`
 - [let-bound-nullary-generic-retyped-invalid-c](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/let-bound-nullary-generic-retyped-invalid-c.md) -- A `let`-bound call to a nullary generic emits invalid C
-- [int64-float64-return-annotation-rejected](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/int64-float64-return-annotation-rejected.md) -- `int64` / `float64` are rejected as return-type annotations
 
 ## Maintenance
 

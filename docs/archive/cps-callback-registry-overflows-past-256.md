@@ -1,5 +1,7 @@
 # More than 256 threadable callbacks: the rest abort with "unhandled effect"
 
+**RESOLVED 2026-10-17** -- see [Resolution](#resolution-2026-10-17). Pinned by `cps-callback-registry-past-256`.
+
 **Severity:** medium-low. A correct program aborts at run time once it has
 more than 256 effectful callbacks that the CPS backend threads, and nothing
 diagnoses the cause.
@@ -51,3 +53,14 @@ take.)
 - Make the fat dispatch's lookup miss as loud as `__tur_cps_lookup_checked`.
   Then any future miss names the function instead of reporting an unhandled
   effect.
+
+## Resolution (2026-10-17)
+
+The E2 registry (`src/compiler/emit_dk_runtime.c`) is a pointer grown with
+`realloc` by `__tur_cps_register`, starting at 256 entries. The split-runtime
+artifacts (`src/runtime/generated/`) are regenerated, and 157 `expected.c`
+snapshots move with the preamble.
+
+The second fix direction -- make the fat dispatch's lookup miss loud -- does
+not hold: a PURE fn-value passed to an effectful slot is never registered and
+takes the same direct entry on purpose, so a miss there is not an error.

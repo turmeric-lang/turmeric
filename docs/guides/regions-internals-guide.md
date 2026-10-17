@@ -145,8 +145,9 @@ which may still read a value in a retired generation
 
 ### Where region memory comes from
 
-`tur_region_alloc_or_malloc` is spelled at exactly these emitted sites. All
-but the last are gated on `regions_enabled()`:
+`tur_region_alloc_or_malloc` is spelled at exactly these emitted sites, each
+through `types.c:region_alloc_fn()`, which answers `malloc` when
+`regions_enabled()` is false:
 
 | Site | Allocates |
 |---|---|
@@ -155,7 +156,7 @@ but the last are gated on `regions_enabled()`:
 | `emit_module.c:emit_program_inner` | The third, early-file copy of the heap ctor emitter |
 | `emit_expr.c:emit_value_dispatch` | The SR4 per-link box for a recursive ctor field |
 | `emit_module.c:ensure_saffron_dyn_runtime` | The dynamic-call rest-list cells |
-| `emit_module.c:emit_flush_dead_base_ctor_traps` | The base ctor of a phantom-only parametric `:heap` ADT -- **not** gated; see [Tools](#turn-regions-off-tur_regions0) |
+| `emit_module.c:emit_flush_dead_base_ctor_traps` | The base ctor of a phantom-only parametric `:heap` ADT (ungated until 2026-10-17: [dead-base-ctor-ignores-regions-off](../archive/dead-base-ctor-ignores-regions-off.md)) |
 
 The ctor emitters carry comments saying they mirror each other: a change to
 one belongs in all three. The free side mirrors the allocation side.
@@ -576,17 +577,16 @@ either skipped or spelled as `TUR_REGION_*` macros that now expand to
 nothing. It is the bisection hatch: a wrong answer that disappears under it
 is a lock or hook bug; one that stays is something else.
 
-Two caveats, both measured on this tree, where only the `tur` target is
-built (no `libturt_runtime.a` or `libturi.a`):
+One caveat, measured on this tree, where only the `tur` target is built (no
+`libturt_runtime.a` or `libturi.a`): `hamt.c` is autolinked from source into
+every program that loads the stdlib, and it calls `tur_region_note_escape`
+unconditionally. With regions off nothing pastes `region.c`, so
+`TUR_REGIONS=0 tur build` fails to link (`undefined reference to
+tur_region_note_escape`) unless a runtime archive supplies the symbol.
 
-- `hamt.c` is autolinked from source into every program that loads the
-  stdlib, and it calls `tur_region_note_escape` unconditionally. With
-  regions off nothing pastes `region.c`, so `TUR_REGIONS=0 tur build`
-  fails to link (`undefined reference to tur_region_note_escape`) unless a
-  runtime archive supplies the symbol.
-- `emit_flush_dead_base_ctor_traps` spells `tur_region_alloc_or_malloc`
-  without consulting `regions_enabled()`. Under `TUR_REGIONS=0`, a
-  phantom-only parametric `:heap` ADT then calls an undeclared function.
+`tests/run-regions-seam.sh` builds its population with
+`-Werror=implicit-function-declaration`, so a region call left undeclared
+under `TUR_REGIONS=0` fails there on any compiler; gcc 13 only warns.
 
 ### The poison backstop
 
@@ -799,7 +799,6 @@ Each was reproduced against the compiler this guide describes and filed in
 update the passage above that describes it and drop it from this list.
 
 - [region-bracket-blocks-effects](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/region-bracket-blocks-effects.md) -- A `perform` inside `with-region` / `bt-scope` cannot reach an outer handler
-- [dead-base-ctor-ignores-regions-off](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/dead-base-ctor-ignores-regions-off.md) -- Dead generic-base constructor traps call the region allocator with regions off
 - [regions-off-source-runtime-link-failure](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/regions-off-source-runtime-link-failure.md) -- `TUR_REGIONS=0` fails to link when the runtime comes from source
 
 ## Maintenance
@@ -808,8 +807,8 @@ Update this guide in the same change when you:
 
 - add or remove a **store hook** anywhere (stdlib, emitter, host runtime):
   fix the hooked-set tables, and the CLAUDE.md list if it names the site;
-- add an **allocation site** that calls `tur_region_alloc_or_malloc`, or a
-  free path that must use `tur_region_free`;
+- add an **allocation site** (spell it `region_alloc_fn()`), or a free path
+  that must use `tur_region_free` (`region_free_fn()`);
 - **widen or narrow the static walk**, or change `emit_region_word_can_be_node`
   or `region_ascription_erases_node`;
 - change where a bracket is emitted (a new CPS arm, a new region-scope name);

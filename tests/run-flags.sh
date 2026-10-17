@@ -1988,6 +1988,45 @@ else
     pass "jit-ffi-enable-noop"
 fi
 
+# no-color-flag-rejected-everywhere: `--no-color` is in --help and the shell
+# completions, but the global strip loop never removed it, so a trailing one
+# was an unknown flag to the command (exit 2) and a leading one was taken for
+# the command name (exit 64).  Both positions are accepted now.
+printf '(defn main [] : int 0)\n' > "$TMP_FFI_DIR/nocolor.tur"
+"$TUR" check "$TMP_FFI_DIR/nocolor.tur" --no-color >/dev/null 2>&1; rc_trail=$?
+"$TUR" --no-color check "$TMP_FFI_DIR/nocolor.tur" >/dev/null 2>&1; rc_lead=$?
+if [ "$rc_trail" -ne 0 ] || [ "$rc_lead" -ne 0 ]; then
+    fail "no-color-flag-accepted" "trailing exit $rc_trail, leading exit $rc_lead (want 0, 0)"
+else
+    pass "no-color-flag-accepted"
+fi
+
+# global-flags-parsed-after-double-dash: everything after `--` is the
+# program's.  The global strip loop used to consume `--strict-effects` and
+# `--no-contracts` there, so the program saw 2 arguments and the compile
+# changed; it sees all 4 now.
+printf '(defn main [] : int\n  (println (list-length *args*))\n  0)\n' \
+    > "$TMP_FFI_DIR/nargs.tur"
+out=$("$TUR" run "$TMP_FFI_DIR/nargs.tur" -- a --strict-effects --no-contracts b 2>&1); rc=$?
+if [ $rc -ne 0 ] || [ "$out" != "4" ]; then
+    fail "global-flags-stop-at-double-dash" "want 4 program arguments, got exit $rc: $out"
+else
+    pass "global-flags-stop-at-double-dash"
+fi
+
+# tur-run-dump-output-interleaves-program-output: a --dump-* report written to
+# tur's buffered stdout has to reach a redirected stdout before the program's
+# own output does, not after it, mid-line.
+printf '(defn main [] : int\n  (println "hi-from-program")\n  0)\n' \
+    > "$TMP_FFI_DIR/dumprun.tur"
+"$TUR" --dump-effects run "$TMP_FFI_DIR/dumprun.tur" > "$TMP_FFI_DIR/dumprun.out" 2>/dev/null; rc=$?
+last=$(tail -n 1 "$TMP_FFI_DIR/dumprun.out")
+if [ $rc -ne 0 ] || [ "$last" != "hi-from-program" ]; then
+    fail "dump-then-run-output-ordered" "exit $rc; the program's line was not last (last line: '$last')"
+else
+    pass "dump-then-run-output-ordered"
+fi
+
 # ---------------------------------------------------------------------------
 # Summary
 # ---------------------------------------------------------------------------

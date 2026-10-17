@@ -1,0 +1,28 @@
+;; shift-guide-examples-use-a-form-neither-engine-accepts: the examples of
+;; docs/guides/delimited-control-operators-guide.md, as written there.  The
+;; guide used to teach `(shift k (k (k 10)))`, which both engines reject; a
+;; change to the guide's examples belongs here too, and an engine change that
+;; breaks one fails the suite.
+
+;; `shift` / `reset`: base shift is abortive -- the (+ 1 _) context is
+;; discarded and the reset returns the receiver applied to the value.
+(defn abortive-shift [] : int
+  (reset
+    (+ 1 (shift (fn [v : int] (* 2 v)) 10))))
+
+;; cloneable-shift hands its receiver the captured context as a callable k.
+(defn twice-k [] : int
+  (cloneable-reset
+    (+ 1 (cloneable-shift (fn [k : cont] (k (k 10))) 0))))
+
+;; `shift0` / `reset0`: the expression has f's codomain type.
+(defn is-zero [n : int] : bool
+  (reset
+    (shift0 (fn [v : int] (= v 0)) n)))
+
+(defn main [] : int
+  (println (abortive-shift))
+  (println (twice-k))
+  (println (is-zero 0))
+  (println (is-zero 3))
+  0)

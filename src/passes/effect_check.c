@@ -137,10 +137,10 @@ static const Symbol *s_current_analysis_module = NULL;
 static EffectRow *filter_cross_module_private(Arena *a, EffectRow *row) {
     if (!row || row->kind != ERK_CONCRETE || !s_current_analysis_module)
         return row;
-    uint8_t n = row->as.concrete.n_effects;
-    Effect **filtered = arena_alloc(a, n * sizeof(Effect *));
-    uint8_t k = 0;
-    for (uint8_t i = 0; i < n; i++) {
+    uint32_t n = row->as.concrete.n_effects;
+    Effect **filtered = arena_alloc(a, (n ? n : 1) * sizeof(Effect *));
+    uint32_t k = 0;
+    for (uint32_t i = 0; i < n; i++) {
         Effect *eff = row->as.concrete.effects[i];
         if (eff && eff->is_private
             && eff->defining_module_name
@@ -533,7 +533,7 @@ static EffectRow *collect_effects_in_expr(Arena *a, Expr *e,
                 callee->binding->type.kind == TY_FN) {
                 EffectRow *cdecl = callee->binding->type.as.fn.effect_row;
                 if (cdecl && cdecl->kind == ERK_CONCRETE) {
-                    for (uint8_t ci = 0; ci < cdecl->as.concrete.n_effects; ci++) {
+                    for (uint32_t ci = 0; ci < cdecl->as.concrete.n_effects; ci++) {
                         Effect *ceff = cdecl->as.concrete.effects[ci];
                         if (ceff && ceff->is_capability) {
                             row = effect_row_merge(a, row, effect_row_single(a, ceff));
@@ -900,7 +900,7 @@ int effect_row_check_declared(FnDef *fd, Arena *a) {
     Span fn_span = fd->binding ? fd->binding->span : (Span){0, 0, 0, 0, 0, 0};
 
     if (inferred->kind == ERK_CONCRETE) {
-        for (uint8_t i = 0; i < inferred->as.concrete.n_effects; i++) {
+        for (uint32_t i = 0; i < inferred->as.concrete.n_effects; i++) {
             Effect *eff = inferred->as.concrete.effects[i];
             if (!effect_row_contains(declared, eff)) {
                 /* Build a human-readable declared-row string. */
@@ -961,7 +961,7 @@ static int effect_row_check_over_annotated(FnDef *fd, Arena *a) {
     if (!inferred) inferred = effect_row_empty(a);
 
     Span fn_span = fd->binding ? fd->binding->span : (Span){0, 0, 0, 0, 0, 0};
-    for (uint8_t i = 0; i < declared->as.concrete.n_effects; i++) {
+    for (uint32_t i = 0; i < declared->as.concrete.n_effects; i++) {
         Effect *eff = declared->as.concrete.effects[i];
         /* stdlib-effect-rows: a capability tag (e.g. #{FS}) marks a function's
          * authority, not an effect it `perform`s, so it is justified by its
@@ -973,7 +973,7 @@ static int effect_row_check_over_annotated(FnDef *fd, Arena *a) {
              * is not over-annotated -- Write's presence covers IO. */
             bool covered_by_subeffect = false;
             if (inferred->kind == ERK_CONCRETE) {
-                for (uint8_t j = 0; j < inferred->as.concrete.n_effects; j++) {
+                for (uint32_t j = 0; j < inferred->as.concrete.n_effects; j++) {
                     if (effect_is_subeffect(inferred->as.concrete.effects[j], eff)) {
                         covered_by_subeffect = true;
                         break;
