@@ -34,6 +34,12 @@ sentence above does not cover them. If you touch this file, check
 `ls docs/reported/` against it -- an index that silently omits a quarter of the
 directory is worse for triage than no index.
 
+## Found closing the inline-C JIT's `cstr` ownership gap (filed 2026-10-17)
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [turi-null-cstr-ascribed-int-stays-a-cstr](turi-null-cstr-ascribed-int-stays-a-cstr.md) | medium (silent wrong value) | Under `tur --interpret`, `(:: s int)` on a `cstr` keeps the string tag (`eval_unary_post`, `eval.c:8793` converts only floats), so `(= (:: s int) 0)` is `false` for a null `s` and prints empty where compiled prints `0`. `re/compile-union`'s null check misses on an empty list, which is `re-union-patterns`' one wrong line. Compiled is fine. |
+
 ## Found graduating `repl-jit-inline-c` (filed 2026-10-17)
 
 | Report | Severity | One line |

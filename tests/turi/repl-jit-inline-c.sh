@@ -242,6 +242,63 @@ else
     echo "FAIL: boundary: an :int result is refused"; FAIL=$((FAIL + 1))
 fi
 
+# --- A string argument is the callee's ---------------------------------------
+# A string the interpreter made reaches compiled code as a malloc'd copy, so
+# compiled code may free or keep it.  Freeing the interpreter's own string was
+# a bad free that took the session down, and a kept one read back garbage once
+# the arena moved on.  A string compiled code returned goes back as itself.
+out="$(printf '%s\n' \
+    '(defn eat [s : cstr] : int' \
+    '  ```c' \
+    '  #include <stdlib.h>' \
+    '  int64_t n = 0;' \
+    '  for (const char *p = s; *p; p++) n++;' \
+    '  free((void *)s);' \
+    '  return n;' \
+    '  ```)' \
+    '(eat "hello")' \
+    '(defn eat-word [s] : int' \
+    '  ```c' \
+    '  #include <stdlib.h>' \
+    '  int64_t n = 0;' \
+    '  for (const char *p = (const char *)(intptr_t)s; *p; p++) n++;' \
+    '  free((void *)(intptr_t)s);' \
+    '  return n;' \
+    '  ```)' \
+    '(eat-word (str-concat "ab" "cdefg"))' \
+    '(defn stash [s mode : int] : int' \
+    '  ```c' \
+    '  static char *kept = 0;' \
+    '  int64_t n = 0;' \
+    '  if (mode == 0) { kept = (char *)(intptr_t)s; return 0; }' \
+    '  for (int i = 0; i < 3 && kept[i]; i++) n = n * 256 + (unsigned char)kept[i];' \
+    '  return n;' \
+    '  ```)' \
+    '(stash (str-concat "ab" "c") 0)' \
+    '(str-concat "zzzzzzzz" "yyyyyyyyyy")' \
+    '(stash 0 1)' \
+    '(defn mk-buf [] : cstr' \
+    '  ```c' \
+    '  #include <stdlib.h>' \
+    '  #include <string.h>' \
+    '  char *b = malloc(4);' \
+    '  for (int i = 0; i < 1; i++) strcpy(b, "abc");' \
+    '  return b;' \
+    '  ```)' \
+    '(defn poke [s : cstr] : int' \
+    '  ```c' \
+    '  for (int i = 0; i < 1; i++) ((char *)s)[0] = (char)88;' \
+    '  return 0;' \
+    '  ```)' \
+    '(let [b (mk-buf)] (do (poke b) b))' \
+    ':quit' | repl_out)"
+has   "cstr copy: compiled code frees a literal argument"      "=> 5" "$out"
+has   "cstr copy: compiled code frees a str-concat result"     "=> 7" "$out"
+lacks "cstr copy: no bad free"                   "AddressSanitizer" "$out"
+# "abc" read back as three bytes: 0x616263.
+has   "cstr copy: a kept string survives the turn"       "=> 6382179" "$out"
+has   "cstr copy: a compiled-made string keeps its identity" '=> "Xbc"' "$out"
+
 # --- tur --interpret runs it too --------------------------------------------
 cat > "$WORK/prog.tur" <<'EOF'
 (defn c-mix [a : int b : int] : int

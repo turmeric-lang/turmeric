@@ -302,14 +302,14 @@ static void compile_entry(TuriEnv *env, FnDef *fn, uint32_t param_offset,
  * (ptr<void>, `:int`, an un-annotated parameter), and an interpreter value can
  * reach compiled code through one as a bare word: compiled code then reads it
  * with the compiled layout and frees or keeps memory the interpreter allocated
- * from its own arenas, which takes the REPL process down.  Two checks close
+ * from its own arenas, which takes the REPL process down.  Three checks close
  * the cases the runtime can see; see the plan's C1 "Supported subset".
  *
  * 1. Words compiled code has handed back: every non-zero result of a JIT'd
- *    call declared `ptr<void>`.  A pointer parameter accepts only these and
- *    nil -- a handle compiled code made is safe to hand back to compiled
- *    code.  Only pointer results: recording every int-class one let any
- *    number a JIT'd call had returned (a counter, an address laundered
+ *    call declared `ptr<void>` or `cstr`.  A pointer parameter accepts only
+ *    these and nil -- a handle compiled code made is safe to hand back to
+ *    compiled code.  Only pointer results: recording every int-class one let
+ *    any number a JIT'd call had returned (a counter, an address laundered
  *    through `:int`) pass as a handle, and grew the table with every
  *    distinct number.  Open addressing, process-lifetime, like the images
  *    the handles point into. */
@@ -369,6 +369,31 @@ static bool interp_heap_word(const TuriEnv *env, int64_t w) {
     for (const TuriCollBuf *c = env->coll_bufs; c; c = c->next)
         if (c->box == p) return true;
     return false;
+}
+
+/* 3. A string argument compiled code did not make goes over as a malloc'd
+ *    copy, whatever the parameter's declared type.  The interpreter's own
+ *    string lives in its value arenas or in the program's source, so compiled
+ *    code that freed it (a `str-free` over a `str-concat` result) was a bad
+ *    free, and compiled code that kept it read memory an arena reset had
+ *    reused.  The copy is the callee's, as a string a compiled caller hands
+ *    over is: it may read, free or keep it.  Nothing frees it when compiled
+ *    code only reads it, which costs strlen+1 bytes per call.  A string
+ *    compiled code returned (recorded by check 1) goes back as itself, so a
+ *    buffer compiled code made keeps its identity and its writes. */
+static bool copy_cstr_args(const FnDef *fn, uint32_t param_offset,
+                           const TuriValue *args, uint32_t n_args,
+                           int64_t *iv) {
+    for (uint32_t k = 0; k < n_args; k++) {
+        if (args[k].tag != TURI_CSTR || !args[k].as_cstr ||
+            slot_class(fn->param_types[param_offset + k].kind, false) != 'i' ||
+            origin_has(iv[k]))
+            continue;
+        char *copy = strdup(args[k].as_cstr);
+        if (!copy) return false;
+        iv[k] = (int64_t)(intptr_t)copy;
+    }
+    return true;
 }
 
 bool turi_inline_c_jit_try(TuriEnv *env, FnDef *fn, uint32_t param_offset,
@@ -458,6 +483,10 @@ bool turi_inline_c_jit_try(TuriEnv *env, FnDef *fn, uint32_t param_offset,
                                  "scalar", name, (unsigned)k);
     next_arg:;
     }
+    if (ok && !copy_cstr_args(fn, param_offset, args, n_args, iv)) {
+        result = turi_error("eval: out of memory");
+        ok = false;
+    }
     if (ok) {
         int64_t out_i = 0;
         double  out_f = 0.0;
@@ -466,7 +495,7 @@ bool turi_inline_c_jit_try(TuriEnv *env, FnDef *fn, uint32_t param_offset,
         switch (rt.kind) {
             case TY_NIL:     result = turi_nil(); break;
             case TY_BOOL:    result = turi_bool(out_i != 0); break;
-            case TY_CSTR:    result = turi_cstr((const char *)(intptr_t)out_i); break;
+            case TY_CSTR:    result = turi_cstr((const char *)(intptr_t)out_i); origin_add(out_i); break;
             case TY_FLOAT:
             case TY_FLOAT32:
             case TY_FLOAT64: result = turi_float(out_f); break;
