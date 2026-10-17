@@ -1721,7 +1721,7 @@ void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
              * pure-Unsafe path and made it emit `handle->body`, a pointer read
              * from the wrong union member. */
             if (e->kind == EX_HANDLE && e->as.handle_.handle &&
-                emit_handle_is_pure_unsafe(e->as.handle_.handle)) {
+                emit_handle_is_inert(e->as.handle_.handle)) {
                 emit_stmt(ctx, body, e->as.handle_.handle->body);
                 return;
             }

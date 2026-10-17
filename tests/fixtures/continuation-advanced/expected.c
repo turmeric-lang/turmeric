@@ -3296,13 +3296,18 @@ extern void ** tur_tls_cur_shift_reset_ptr(void);
 #endif
 __attribute__((unused, noinline))
 static intptr_t __dk_resume_word(intptr_t k, intptr_t w) {
+    if ((uintptr_t)k < 4096) {
+        fflush(stdout);
+        fprintf(stderr, "tur: resume: not a continuation (%lld)\n", (long long)k);
+        abort();
+    }
     ((DK *)k)->consumed = 1;   /* (cont? k), as emit_resume marks it */
     return dk_invoke((DK *)k, w);
 }
 
 __attribute__((unused, noinline))
 static bool __dk_cont_live_word(intptr_t k) {
-    if (!k) return false;   /* 0 is not a continuation */
+    if ((uintptr_t)k < 4096) return false;   /* nor is any small number */
     return !((DK *)k)->consumed;
 }
 

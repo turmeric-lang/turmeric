@@ -1,0 +1,11 @@
+;; resume-of-non-continuation-int-crashes: an `int` k stays accepted (it is how
+;; a handler k travels through a `^mut` cell or an untyped helper), so `(h 5 6)`
+;; type-checks -- and `__dk_resume_word` dereferenced 5 as a DK chain and
+;; segfaulted, and `(cont? 5)` did the same.  No chain lives in the first page:
+;; cont? answers false and resume reports, as the interpreter does.
+(defn h [k : int v : int] : int (resume k v))
+
+(defn main [] : int
+  (println (cont? 5))
+  (println (h 5 6))
+  0)

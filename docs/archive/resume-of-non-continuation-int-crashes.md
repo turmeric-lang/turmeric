@@ -1,5 +1,8 @@
 # `resume` of an `int` that is not a continuation crashes compiled
 
+**RESOLVED 2026-10-17** -- see [Resolution](#resolution-2026-10-17). Pinned by
+`resume-of-non-continuation-reports` and `errors/resume-of-literal-refused`.
+
 **Severity: low-medium.** It needs a program that resumes a number. That is
 a misuse, but the compiler accepts it, and the result is a segfault rather
 than a diagnostic. Noted 2026-10-12 in
@@ -55,3 +58,23 @@ CLAUDE.md "no lazy `:int` stand-ins" problem in miniature.
 2. **Cheaper interim:** refuse `resume` when `k` is a literal or an
    arithmetic expression, which can never be a continuation. That catches
    the obvious misuse without touching the carrier spellings.
+
+## Resolution (2026-10-17)
+
+Both halves, without narrowing what an `int` k may carry:
+
+- **Static (fix direction 2):** `elab_resume` refuses a literal `k` (int,
+  float, bool, string) with TUR-E0001 at the literal.
+- **Run time:** `__dk_resume_word` reports `tur: resume: not a continuation
+  (N)` and aborts for a word in the first page, where no chain or wrapper can
+  live, instead of dereferencing it. `__dk_cont_live_word` answers false for
+  the same words, so `(cont? 5)` is `false` compiled, as interpreted. The split
+  artifacts were regenerated.
+
+Fix direction 1 (a real type for a stored handler continuation, then a warning
+on `resume` of a plain `int`) is not done. `(fn [k : int] ... (resume k v))` is
+an established spelling in the fixtures, so `int` stays accepted.
+
+Pinned by `resume-of-non-continuation-reports` (prints `false`, then the
+report and a non-zero exit, on both engines) and
+`errors/resume-of-literal-refused`.

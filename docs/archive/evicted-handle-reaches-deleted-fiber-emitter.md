@@ -1,5 +1,8 @@
 # An evicted `handle` with no reachable `perform` emits C for the deleted fiber runtime
 
+**RESOLVED 2026-10-17** -- see [Resolution](#resolution-2026-10-17). Pinned by
+`evicted-handle-unreachable-clauses` and `errors/evicted-handle-over-perform`.
+
 **Severity:** low. The build fails with raw cc errors instead of a located
 diagnostic, and only when nothing under the `handle` can perform.
 
@@ -58,3 +61,26 @@ that.
   Then delete the fiber body. It cannot produce compilable C any more.
 - Mention `SIG-REJECT`/`SIG-TAINT` in the `emit_value` error text, or print the
   evicting function's `[EVICT]` category in the error itself.
+
+## Resolution (2026-10-17)
+
+The fiber-era body of `emit_effects_handle` (`src/compiler/emit_effects.c`) is
+deleted. A `handle` that reaches the direct emitter now takes one of three
+paths:
+
+- **Inert** (`emit_handle_is_inert`): the `(unsafe ...)` marker, or a handle
+  none of whose clauses the body can reach. `check_unreachable_handlers_in_expr`
+  (`src/passes/effect_check.c`) records the second case on the new
+  `HandleExpr.no_clause_reachable` when it issues TUR-W0033 for every clause.
+  Nothing under such a handle suspends, so its body is emitted in place, in
+  value position and (through `emit_stmt`) in statement position.
+- **A `perform` under it:** each one reports the existing located "this effect
+  operation has no lowering here" error at its own site, as the fiber walk used
+  to, so the list of known shapes still points at the real cause.
+- **Neither:** a located error at the handle itself (`emit_handle_no_lowering`).
+
+The side issue is fixed too: the `perform` error (and the new handle error)
+now say what SIG-REJECT and SIG-TAINT mean.
+
+Pinned by `evicted-handle-unreachable-clauses` (both positions run and print)
+and `errors/evicted-handle-over-perform` (`requires.compiled`).

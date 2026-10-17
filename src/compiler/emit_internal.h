@@ -1938,6 +1938,11 @@ void emit_temp_decl(EmitCtx *ctx, Buf *body, Type type, const char *name, const 
  * body's real C type instead of truncating a by-value struct result through
  * the fiber's int64_t result slot).  See emit_effects_handle. */
 bool emit_handle_is_pure_unsafe(const struct HandleExpr *h);
+/* A handle the direct emitter can lower by emitting its body: the (unsafe ...)
+ * marker, or one whose every clause is unreachable (TUR-W0033). */
+bool emit_handle_is_inert(const struct HandleExpr *h);
+/* The located error for any other handle that reaches the direct emitter. */
+void emit_handle_no_lowering(const struct Expr *e);
 
 /* ------------ emit_stmt.c: statement-position emission ------------ */
 void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e);

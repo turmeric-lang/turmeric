@@ -1,0 +1,24 @@
+;; cont-pred-on-escape-cont-fails-to-link: `(cont? k)` on a call/cc, a
+;; cloneable-shift or a serial-shift continuation emitted the deleted fiber
+;; runtime's tur_cont_consumed, so the program failed to link; the interpreter
+;; answered false for all three.  `cont?` asks whether k can still be invoked:
+;; an escape k while its call/cc is on the stack, and a cloneable or serial k
+;; always (they are multi-shot).
+(load "stdlib/serial.tur")
+
+(defn inside [] : int
+  (call/cc (fn [k] (if (cont? k) 1 2))))
+
+(defn clone-recv [k : cont<int>] : int (if (cont? k) 3 4))
+(defn cloneable [] : int
+  (cloneable-reset (+ 0 (cloneable-shift clone-recv 0))))
+
+(defn serial-recv [k : serial-cont] : int (if (cont? k) 5 6))
+(defn serial [] : int
+  (serial-reset (+ 0 (serial-shift serial-recv 0))))
+
+(defn main [] : int
+  (println (inside))
+  (println (cloneable))
+  (println (serial))
+  0)

@@ -3169,6 +3169,18 @@ Expr *elab_resume(Elab *e, const Form *call) {
     Expr *k = elab_form(e, call->as.list.items[1]);
     if (!k) return NULL;
 
+    /* resume-of-non-continuation-int-crashes: an `int` k stays accepted --
+     * it is how a handler k is still carried through a `^mut` cell or an
+     * untyped helper parameter -- but a literal never is one.  The run-time
+     * half of the check is in __dk_resume_word. */
+    if (k->kind == EX_INT_LIT || k->kind == EX_FLOAT_LIT ||
+        k->kind == EX_BOOL_LIT || k->kind == EX_CSTR_LIT) {
+        diag_emit_with_code(DIAG_ERROR, k->span, TUR_E0001_TYPE_MISMATCH,
+            "resume takes an effect handler continuation, got a literal; "
+            "resume the `k` a handler clause binds");
+        return NULL;
+    }
+
     /* resume-of-cont-typed-param-is-a-no-op: `resume` resumes an effect
      * handler continuation.  A `cont`-typed k is one only when it is
      * `effect-cont` (CONT_EFFECT); view that one as its int64 carrier, keeping

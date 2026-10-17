@@ -114,6 +114,14 @@ void emit_cps_callcc_prelude(Buf *out) {
 "    TUR_LONGJMP(cc->buf);\n"
 "    return 0; /* unreachable */\n"
 "}\n"
+"/* (cont? k) on a call/cc / escape k: invocable iff tur_escape_resume would\n"
+" * accept it.  The live set is the runtime's, so the program half asks here\n"
+" * rather than reading its own copy (cont-pred-on-escape-cont-fails-to-link). */\n"
+"static bool tur_escape_is_live(int64_t k) {\n"
+"    tur_escape_cont *cc = (tur_escape_cont *)(intptr_t)k;\n"
+"    for (int i = 0; i < tur_escape_live_n && cc; i++) if (tur_escape_live[i] == cc) return cc->valid;\n"
+"    return false;\n"
+"}\n"
 "/* An `any`-typed call/cc: the resume value is a 16-byte box, and `result`\n"
 " * carries one word -- so (k v) hands over a heap copy's address and the\n"
 " * landing reads and frees it (emit_callcc).  One malloc per escape. */\n"
@@ -163,7 +171,15 @@ void emit_cps_cloneable_bridge_prelude(Buf *out) {
 void emit_dk_resume_word_prelude(Buf *out, bool bridged) {
     buf_puts(out,
 "__attribute__((unused, noinline))\n"
-"static intptr_t __dk_resume_word(intptr_t k, intptr_t w) {\n");
+"static intptr_t __dk_resume_word(intptr_t k, intptr_t w) {\n"
+/* resume-of-non-continuation-int-crashes: an `int` k may be any number, and
+ * a small one was dereferenced as a DK.  No chain or wrapper lives in the
+ * first page, so report it as the interpreter does instead of crashing. */
+"    if ((uintptr_t)k < 4096) {\n"
+"        fflush(stdout);\n"
+"        fprintf(stderr, \"tur: resume: not a continuation (%lld)\\n\", (long long)k);\n"
+"        abort();\n"
+"    }\n");
     if (bridged)
         buf_puts(out,
 "    if (*(int64_t (* const *)(void *, int64_t))k == __dk_cont_fn)\n"
@@ -181,7 +197,7 @@ void emit_dk_resume_word_prelude(Buf *out, bool bridged) {
     buf_puts(out,
 "__attribute__((unused, noinline))\n"
 "static bool __dk_cont_live_word(intptr_t k) {\n"
-"    if (!k) return false;   /* 0 is not a continuation */\n");
+"    if ((uintptr_t)k < 4096) return false;   /* nor is any small number */\n");
     if (bridged)
         buf_puts(out,
 "    if (*(int64_t (* const *)(void *, int64_t))k == __dk_cont_fn) return true;\n");

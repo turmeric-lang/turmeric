@@ -1338,7 +1338,30 @@ static void load_expand_forms(LoadExpandCtx *lx, Elab *e, Arena *arena,
 
         char *src_raw = NULL;
         size_t src_len = 0;
-        if (elab_read_file(path_buf, &src_raw, &src_len) != 0) {
+        /* stdlib-load-reads-cwd-copy-first: a `stdlib/<rest>` load means the
+         * resolved stdlib's <rest> -- load_path_key above already keys it that
+         * way, and the prelude comes from there -- but the read below tried the
+         * cwd-relative path first.  Run from a directory with its own
+         * `stdlib/` (another checkout), a build mixed its prelude with that
+         * directory's modules.  When the resolved stdlib has the file and the
+         * cwd copy is a different file, read the stdlib's.  When they are the
+         * same file (the in-tree build run from the repo root) the path stays
+         * as written, so diagnostics and emitted paths do not move. */
+        {
+            const char *sdir = e->module_stdlib_dir;
+            if (sdir && strncmp(path_buf, "stdlib/", 7) == 0) {
+                char alt[4096], ra[4096], rp[4096];
+                int an = snprintf(alt, sizeof(alt), "%s/%s", sdir, path_buf + 7);
+                if (an > 0 && (size_t)an < sizeof(alt) &&
+                    realpath(alt, ra) != NULL &&
+                    !(realpath(path_buf, rp) != NULL && strcmp(ra, rp) == 0) &&
+                    elab_read_file(alt, &src_raw, &src_len) == 0) {
+                    memcpy(path_buf, alt, (size_t)an + 1);
+                    plen = (uint32_t)an;
+                }
+            }
+        }
+        if (!src_raw && elab_read_file(path_buf, &src_raw, &src_len) != 0) {
             /* Off-tree fallback (one-off-script-print-and-annotation-ergonomics,
              * Finding 3): a freestanding `/tmp/foo.tur` that does
              * `(load "stdlib/math.tur")` cannot find the file cwd-relative when

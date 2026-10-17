@@ -1,5 +1,8 @@
 # An explicit `(load "stdlib/...")` reads the working directory's copy first
 
+**RESOLVED 2026-10-17** -- see [Resolution](#resolution-2026-10-17). Pinned by
+case 4 of `tests/run-offtree-load.sh`.
+
 **Severity:** low-medium (silent wrong stdlib; mixed-version builds).
 **Filed:** 2026-10-16, found measuring `re/replace-all` on the WP0 box (#1238).
 
@@ -49,3 +52,18 @@ resolved stdlib's file while the text spliced in is the cwd's.
   notice. Check the web build, which sets `TUR_STDLIB_DIR` itself.
 - Or keep cwd-first, and warn once when the cwd copy and the resolved
   stdlib's copy are different files.
+
+## Resolution (2026-10-17)
+
+The `load` expansion (`src/compiler/elab_toplevel.c`) reads a
+`stdlib/<rest>` load from the resolved stdlib when that file exists and the
+cwd-relative copy is a different file (`realpath` differs), matching the dedup
+key `load_path_key` already used. When they are the same file -- the in-tree
+build run from the repo root -- the path stays as written, so diagnostics and
+emitted paths do not move, and the suite is unchanged. With no resolved root
+(`module_stdlib_dir` is the literal `"stdlib"`) nothing changes. The off-tree
+fallback after a failed read is unchanged.
+
+Pinned by case 4 of `tests/run-offtree-load.sh`: a cwd with a decoy
+`stdlib/re.tur` no longer shadows the real one, under `tur run` and
+`--interpret`.

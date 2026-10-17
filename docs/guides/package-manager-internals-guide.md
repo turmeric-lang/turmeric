@@ -53,9 +53,9 @@ User-facing material lives elsewhere:
    `<root>/cmake/CMakeLists.txt`; configuring it writes
    `cmake/spice-deps-manifest.json` (or `-wasm.json`), whose `-I/-L/-l`
    tokens every later C compile reads -- whether or not they are current.
-5. **Build options.** `:link-libs`, `:link-flags`, `:c-sources` and
-   `:c-includes` reach the cc line; `:c-flags` and `:no-stdlib` are parsed and
-   validated but nothing reads them.
+5. **Build options.** `:c-flags`, `:link-libs`, `:link-flags`, `:c-sources`
+   and `:c-includes` reach the cc line; `:no-stdlib` is parsed and validated
+   but nothing reads it.
 
 ---
 
@@ -88,7 +88,7 @@ Tests that pin this area: `tests/unit/pkg_hash.c` (tree hash),
 | `tur fetch` | `pkg.c:cmd_pkg_fetch` | yes | always (`pkg_fetch_all`) | always | yes, unless `--frozen` |
 | `tur add <url>` | `pkg.c:cmd_pkg_add` | yes | yes | no | on success |
 | `tur add-cmake` | `pkg.c:cmd_pkg_add_cmake` | no | no | no (prints "run `tur fetch`") | no |
-| `tur run` (project) | `main.c:cmd_run` | yes, verifies | only if a dep dir is missing | only if `cmake/CMakeLists.txt` is absent | after a fetch or cmake build |
+| `tur run` (project) | `main.c:cmd_run` | yes, verifies | only if a dep dir is missing | only if the JSON manifest is absent | after a fetch or cmake build |
 | `tur build <dir>` | `main.c` dir branch | yes, verifies | never | only if this arm's JSON manifest is absent | after a cmake build |
 | `tur test` | `main.c:cmd_test` | no | never | never | no |
 | `tur install` | `install.c:do_install_spec` | no | direct deps only, unpinned | never | no (writes `state.tur`) |
@@ -498,7 +498,7 @@ and the native-only block in the separate-compilation path of
 | Command | Regenerates and builds when |
 |---|---|
 | `tur fetch` | every run |
-| `tur run` | `cmake/CMakeLists.txt` does not exist |
+| `tur run` | the native JSON manifest does not exist |
 | `tur build <dir>` | this arm's JSON manifest does not exist |
 | `tur test`, `tur check`, single-file `tur build` | never |
 
@@ -510,11 +510,12 @@ machine. CMake only rewrites the JSON on a successful configure, so a failed
 `tur fetch` leaves the old one in force. Run `tur fetch` after changing
 `:cmake-deps`, and never commit `cmake/`.
 
-The two markers also disagree. A failed configure leaves `CMakeLists.txt`
-behind and no JSON, so `tur run` fails once and then, on the next run,
-skips the dependency build and compiles with no dependency flags at all;
-`tur build <dir>` retries. Reproduced with a `:path` cmake-dep whose
-`CMakeLists.txt` calls `message(FATAL_ERROR ...)`.
+Both commands key on the JSON, which a failed configure never writes, and
+both remove it when the dependency build after a successful configure fails,
+so the next run retries. `tur run` used to key on `CMakeLists.txt`, which is
+written before the configure: after one failure it skipped the dependency
+build for good and compiled with no dependency flags
+([tur-run-cmake-marker-skips-after-failed-configure](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/tur-run-cmake-marker-skips-after-failed-configure.md)).
 
 ---
 
@@ -526,7 +527,7 @@ skips the dependency build and compiles with no dependency flags at all;
 | `:link-flags` | the same, verbatim (one entry may be several tokens) | root only |
 | `:c-includes` | `main.c:collect_spice_aux_c`, as quoted `-I<spice dir>/<entry>` | root and the whole `:spices` closure |
 | `:c-sources` | `collect_spice_aux_c`, as extra TUs | root and the whole closure, each source once by `realpath` |
-| `:c-flags` | **nowhere** | -- |
+| `:c-flags` | `main.c:append_manifest_link_flags`, verbatim, ahead of the link libraries; that buffer reaches the compile as well as the link | root only |
 | `:no-stdlib` | **nowhere** | -- |
 
 The link vectors are grammar-checked at read time (`check_link_vec`,
@@ -628,7 +629,6 @@ Each was reproduced against the compiler this guide describes and filed in
 update the passage above that describes it and drop it from this list.
 
 - [build-opts-c-flags-never-consumed](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/build-opts-c-flags-never-consumed.md) -- `:build-opts :c-flags` (and `:no-stdlib`) are parsed but never used
-- [tur-run-cmake-marker-skips-after-failed-configure](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/tur-run-cmake-marker-skips-after-failed-configure.md) -- `tur run` skips the cmake-deps build after a failed configure
 
 ## Maintenance
 

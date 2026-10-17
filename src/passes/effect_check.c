@@ -1491,11 +1491,12 @@ static void check_unreachable_handlers_in_expr(
          * that merely prints look reachable. */
         EffectRow *body_row = effect_row_without_capabilities(a,
             collect_effects_in_expr(a, h->body, effect_row_empty(a), idx, env, subst));
+        bool none_reachable = h->n_cases > 0;
         for (uint8_t i = 0; i < h->n_cases; i++) {
             const Symbol *eff_name = h->cases[i].effect_name;
-            if (!eff_name) continue;
-            Effect *eff = effect_env_lookup(env, eff_name);
-            if (!eff) continue;
+            Effect *eff = eff_name ? effect_env_lookup(env, eff_name) : NULL;
+            if (!eff) { none_reachable = false; continue; }
+            if (effect_row_contains(body_row, eff)) none_reachable = false;
             if (!effect_row_contains(body_row, eff)) {
                 Span span = h->cases[i].body
                             ? h->cases[i].body->span
@@ -1507,6 +1508,7 @@ static void check_unreachable_handlers_in_expr(
                     eff_name->name, eff_name->name);
             }
         }
+        h->no_clause_reachable = none_reachable;
         check_unreachable_handlers_in_expr(a, h->body, idx, env);
         for (uint8_t i = 0; i < h->n_cases; i++)
             check_unreachable_handlers_in_expr(a, h->cases[i].body, idx, env);

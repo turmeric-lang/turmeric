@@ -1,5 +1,8 @@
 # `tur run` skips the cmake-deps build after a failed configure
 
+**RESOLVED 2026-10-17** -- see [Resolution](#resolution-2026-10-17). Pinned by
+`run-retries-failed-cmake-dep-build` (`tests/run-transitive-cmake-deps.sh`).
+
 **Severity:** medium. After one failed dependency build, every later `tur run`
 builds with no dependency flags at all, and the real error is gone.
 
@@ -29,3 +32,15 @@ symbol, which points away from the real cause.
 - Use the same marker as `tur build <dir>`
   (`cmake/<pkg_cmake_manifest_name(target)>`), and remove a stale
   `CMakeLists.txt` when the build fails.
+
+## Resolution (2026-10-17)
+
+`cmd_run` (`src/main.c`) keys "deps built" on the dep manifest the compile
+reads (`cmake/<pkg_cmake_manifest_name(NULL)>`), as `tur build <dir>` already
+did. CMake writes that only on a successful configure. A configure can
+succeed and the build after it still fail, so both commands also remove the
+manifest when the dependency build fails, and the next run retries.
+
+Pinned by `run-retries-failed-cmake-dep-build` in
+`tests/run-transitive-cmake-deps.sh`: a `:path` dep whose configure always
+fails must fail the second `tur run` the same way as the first.

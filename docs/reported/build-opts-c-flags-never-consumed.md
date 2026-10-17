@@ -1,7 +1,16 @@
 # `:build-opts :c-flags` (and `:no-stdlib`) are parsed but never used
 
-**Severity:** medium. The documented way to pass C compiler flags from a
-manifest does nothing, silently.
+**Narrowed 2026-10-17:** `:c-flags` now reaches the compile.
+`append_manifest_link_flags` (`src/main.c`) appends it verbatim ahead of the
+link libraries, into the buffer every build path passes to the compile as well
+as the link; `tests/spice-c-sources-tests.sh` ("c-flags") pins the repro below.
+What is left is `:no-stdlib`, which is still parsed, validated and
+round-tripped, and read by nothing. It has no defined meaning to implement:
+decide what it should do (skip the auto-loaded prelude? link without
+`libturi`?) or reject `:no-stdlib true` until it does something.
+
+**Severity:** low now (was medium). A documented key does nothing,
+silently.
 
 ## Repro
 

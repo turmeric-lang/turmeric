@@ -659,7 +659,8 @@ int turi_env_set_search_path_for(TuriEnv *env, const char *path) {
         return 0;
     }
 
-    /* The importing file's directory: what `tur run <path>` searches first. */
+    /* The entry file's directory -- the project root every import, nested
+     * ones too, resolves under: what `tur run <path>` searches first. */
     const char *sep = strrchr(path, '/');
 #ifdef _WIN32
     const char *bs = strrchr(path, '\\');

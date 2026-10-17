@@ -1,5 +1,8 @@
 # `(cont? k)` on a `call/cc` continuation fails to link
 
+**RESOLVED 2026-10-17** -- see [Resolution](#resolution-2026-10-17). Pinned by
+`cont-pred-every-flavor`.
+
 **Severity:** low-medium. A documented predicate on a documented continuation
 fails the build with a linker error rather than a diagnostic.
 
@@ -47,3 +50,24 @@ moved to `__dk_cont_live_word` when the fiber runtime was deleted
   `__dk_cont_live_word` uses (a wrapper is always live).
 - Decide and document what `cont?` means for an escape continuation, and make
   `turi` agree. Add a fixture for each flavor.
+
+## Resolution (2026-10-17)
+
+`cont?` asks whether `k` can still be invoked, and both engines now answer
+that for every flavor:
+
+- **call/cc / escape** (`CONT_ESCAPE`): true while its prompt is on the stack,
+  the same test `tur_escape_resume` makes before it longjmps. Compiled, through
+  a new `tur_escape_is_live` in the DK prelude (`emit_dk_runtime.c`). The live
+  set belongs to the runtime half under the preamble split, so the program
+  cannot read it directly; the split artifacts were regenerated. Interpreted,
+  through `escape_is_live`.
+- **cloneable / serial**: always true. They are multi-shot and never consumed.
+- **effect** (`CONT_EFFECT`): unchanged, `__dk_cont_live_word`.
+
+`emit_effects_cont_pred` no longer emits the deleted `tur_cont_consumed`. The
+serial flavor, which the report left unverified, failed to link the same way.
+The interpreter used to answer false for all three.
+
+Pinned by `cont-pred-every-flavor` (`1`, `3`, `5`), which passes compiled
+(split and whole preamble), under `tur jit` and under `--interpret`.

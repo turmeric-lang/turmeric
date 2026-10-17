@@ -1503,6 +1503,11 @@ typedef struct HandleExpr {
      * (preserving the body's real C type).  A dedicated flag avoids reading
      * post-lowering case data, which is not reliably populated at emit time. */
     bool is_unsafe_marker;
+    /* evicted-handle-reaches-deleted-fiber-emitter: set by effect_check when
+     * the body performs none of the clauses' effects (TUR-W0033 for every
+     * clause).  Nothing under it suspends, so an evicted function's direct
+     * emitter can emit the body in place (emit_handle_is_inert). */
+    bool no_clause_reachable;
 } HandleExpr;
 
 /* Resume expression: (resume k value) */

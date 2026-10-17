@@ -13228,6 +13228,17 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
     case EX_CONT_PRED: {
         TuriValue k = eval_expr(env, frame, e->as.cont_pred_.expr);
         if (turi_is_error(k) || env_signaled(env)) return k;
+        /* cont-pred-on-escape-cont-fails-to-link: the other flavors are an int
+         * word, as compiled.  A call/cc / escape k is live while its boundary
+         * is on the stack; a cloneable or serial k is multi-shot and never
+         * consumed.  Both used to answer false. */
+        const Type *kt = &e->as.cont_pred_.expr->type;
+        if (kt->kind == TY_CONT && k.tag == TURI_INT) {
+            if (kt->as.cont.flavor == CONT_ESCAPE)
+                return turi_bool(escape_is_live(env, (const void *)(intptr_t)k.as_int));
+            if (kt->as.cont.flavor == CONT_CLONEABLE || kt->as.cont.flavor == CONT_SERIAL)
+                return turi_bool(k.as_int != 0);
+        }
         return turi_bool(k.tag == TURI_EFFECT_CONT && k.as_cont != NULL);
     }
 

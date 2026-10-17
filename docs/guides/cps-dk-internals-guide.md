@@ -405,16 +405,18 @@ along with `[E2-COLOR]` threadability lines. The categories are:
 a `BODY-*` build error. That check was later deleted as unreachable; the
 `emit_value` error above is what fires instead.)
 
-That error only guards `perform` and `with-handler`. Two other evicted shapes
-are **not** guarded:
+That error guards `perform` and `with-handler`. An evicted `handle` goes
+through `emit_effects_handle`: one whose every clause is unreachable
+(TUR-W0033, recorded as `HandleExpr.no_clause_reachable`) or the `(unsafe ...)`
+marker emits its body in place, since nothing under it suspends. Any other
+reports each `perform` under it with the error above, or, with none, a located
+error at the handle. Its fiber-era body is gone
+([evicted-handle-reaches-deleted-fiber-emitter](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/evicted-handle-reaches-deleted-fiber-emitter.md)).
 
-- **`reset`/`shift`** in an evicted function silently computes the wrong
-  value. The direct emitter evaluates the reset body and applies the shift's
-  receiver without aborting
-  ([evicted-reset-shift-degrades-to-body-eval](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/evicted-reset-shift-degrades-to-body-eval.md)).
-- **A `handle` whose body performs nothing** reaches leftover fiber-era code,
-  and cc rejects the result
-  ([evicted-handle-reaches-deleted-fiber-emitter](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/evicted-handle-reaches-deleted-fiber-emitter.md)).
+One evicted shape is **not** guarded: **`reset`/`shift`** in an evicted
+function silently computes the wrong value. The direct emitter evaluates the
+reset body and applies the shift's receiver without aborting
+([evicted-reset-shift-degrades-to-body-eval](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/evicted-reset-shift-degrades-to-body-eval.md)).
 
 ---
 
@@ -706,10 +708,13 @@ Read the `struct DK` comments in that text, or in its committed copy
   4. **`__dk_resume_word`** for a `k` that left its case (stored, or passed to
      a helper) or a cloneable wrapper.
 
-  `cont?` reads `!k->consumed`, set at every resume site
-  (`__dk_cont_live_word`). That covers handler continuations only; `cont?` on
-  a `call/cc` continuation does not link
-  ([report](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/cont-pred-on-escape-cont-fails-to-link.md)).
+  `cont?` on a handler continuation reads `!k->consumed`, set at every resume
+  site (`__dk_cont_live_word`); a word in the first page is no continuation,
+  so it answers false and `__dk_resume_word` reports and aborts
+  ([resume-of-non-continuation-int-crashes](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/resume-of-non-continuation-int-crashes.md)).
+  On a `call/cc` continuation it asks the runtime's live set
+  (`tur_escape_is_live`); a cloneable or serial continuation is always live
+  ([cont-pred-on-escape-cont-fails-to-link](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/cont-pred-on-escape-cont-fails-to-link.md)).
 
 ### Why there is a driver
 

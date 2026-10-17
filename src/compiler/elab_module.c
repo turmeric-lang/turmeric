@@ -670,6 +670,11 @@ static ElabModule *elab_load_module_impl(Elab *e, const Symbol *name, Span impor
      * (module_read_named): a Scheme `define-library` needs no `.tur`
      * spelling to be importable. */
     char path_buf[4096];
+    /* nested-import-resolves-from-entry-dir: `base` is the PROJECT ROOT (the
+     * entry file's directory), for nested imports too.  A module name is a
+     * path under the root (module-system-guide, "Name -> file-path
+     * convention"), so `a/x.tur` importing its sibling writes `(import a/y)`.
+     * The search listing used to call this "importing file's directory". */
     const char *base = e->module_base_dir ? e->module_base_dir : ".";
     int plen = snprintf(path_buf, sizeof(path_buf), "%s/%s.tur", base, name->name);
     if (plen < 0 || (size_t)plen >= sizeof(path_buf)) {
@@ -691,7 +696,7 @@ static ElabModule *elab_load_module_impl(Elab *e, const Symbol *name, Span impor
         char attempted[8192];
         int alen = 0;
         int w = snprintf(attempted + alen, sizeof(attempted) - (size_t)alen,
-                         "    %s    (importing file's directory)\n", path_buf);
+                         "    %s    (project root)\n", path_buf);
         if (w > 0 && (size_t)w < sizeof(attempted) - (size_t)alen) alen += w;
 
         /* Fallback: try the stdlib directory (e.g. for `import turi/eval`). */
@@ -1313,7 +1318,7 @@ static bool parse_import_spec(Elab *e, const Form *f, ImportSpec *out) {
 }
 
 /* Stage 3: resolve a module name to its file path, mirroring exactly the
- * search order elab_load_module walks below (importing file's directory ->
+ * search order elab_load_module walks below (project root ->
  * stdlib dir -> each -I include dir), but probing for existence only.
  * Keep the two in lockstep: a module resolvable by one must be resolvable
  * by the other. */
@@ -1420,8 +1425,7 @@ static bool elab_apply_import(Elab *e, const ImportSpec *imp) {
                                       mpath, sizeof(mpath))) {
             diag_emit(DIAG_ERROR, imp->span,
                       ":for-macros module '%s' not found (searched the "
-                      "importing file's directory, the stdlib, and the "
-                      "-I include dirs)",
+                      "project root, the stdlib, and the -I include dirs)",
                       imp->module_name->name);
             return false;
         }

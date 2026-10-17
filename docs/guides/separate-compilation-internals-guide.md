@@ -217,8 +217,11 @@ Scheme library lookup) walks the same order and must stay in lockstep.
 **Row 1 is the entry file's directory, not the importing file's.** It is set
 once per compile and not updated for nested imports. Verified: with
 `app.tur` importing `a/x`, and `a/x.tur` importing `y`, the compiler looks for
-`./y.tur` next to `app.tur`, not `a/y.tur`. The "not found" diagnostic still
-labels the row `(importing file's directory)`.
+`./y.tur` next to `app.tur`, not `a/y.tur`. That is the design -- a module
+name is a path under the project root -- and the "not found" diagnostic
+labels the row `(project root)`. It used to say `(importing file's
+directory)`
+([nested-import-resolves-from-entry-dir](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/nested-import-resolves-from-entry-dir.md)).
 
 A "not found" lists every path tried and adds a hint: with no `-I` dirs, that
 this looks like an intra-spice import; for a Scheme `(import (two a))`, that a
@@ -625,7 +628,6 @@ update the passage above that describes it and drop it from this list.
 - [spec-clone-names-not-module-qualified](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/spec-clone-names-not-module-qualified.md) -- Specializations of same-named generics in two modules collide at link
 - [forced-spec-loses-aggregate-type](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/forced-spec-loses-aggregate-type.md) -- A cross-module specialization at a struct type is emitted at `int64_t`
 - [loaded-user-definstance-duplicated-across-tus](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/loaded-user-definstance-duplicated-across-tus.md) -- A `definstance` in a file `load`-ed by two modules is defined twice
-- [nested-import-resolves-from-entry-dir](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/nested-import-resolves-from-entry-dir.md) -- A nested `import` resolves from the entry file's directory, and says otherwise
 
 ## Maintenance
 

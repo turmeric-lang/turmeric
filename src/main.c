@@ -2876,6 +2876,14 @@ static void append_manifest_link_flags(const char *proj_root, Buf *cmake_flags) 
          * -- a token that reached here cannot carry shell syntax.  They stay
          * unquoted because `:link-flags` is documented as the verbatim
          * sibling: `-framework Cocoa` is one entry and two arguments. */
+        /* build-opts-c-flags-never-consumed: `:c-flags` was parsed, checked
+         * (check_link_vec) and documented, and no build read it -- a
+         * `-DMY_ANSWER=42` there was dropped.  It rides the same buffer, which
+         * every caller passes to the compile as well as the link. */
+        for (int i = 0; i < pm.n_c_flags; i++) {
+            if (pm.c_flags[i] && pm.c_flags[i][0])
+                buf_printf(cmake_flags, " %s", pm.c_flags[i]);
+        }
         for (int i = 0; i < pm.n_link_libs; i++) {
             if (pm.link_libs[i] && pm.link_libs[i][0])
                 buf_printf(cmake_flags, " -l%s", pm.link_libs[i]);
@@ -7200,13 +7208,23 @@ static int cmd_run(int argc, char **argv) {
         mu.cmake_deps   = closure_deps;
         mu.n_cmake_deps = n_closure_deps;
 
-        char cmake_lists[4096];
-        snprintf(cmake_lists, sizeof(cmake_lists), "%s/cmake/CMakeLists.txt", root);
+        /* tur-run-cmake-marker-skips-after-failed-configure: keyed on the dep
+         * manifest the compile reads, as `tur build <dir>` is.  The shared
+         * cmake/CMakeLists.txt is written BEFORE the configure that can fail,
+         * so after one failure every later `tur run` skipped the dep build
+         * and compiled with no -I/-L/-l at all, failing far from the cause.
+         * CMake writes the manifest only on a successful configure. */
+        char cmake_marker[4096];
+        snprintf(cmake_marker, sizeof(cmake_marker), "%s/cmake/%s", root,
+                 pkg_cmake_manifest_name(NULL));
         struct stat _cmst;
-        bool cmake_built = (stat(cmake_lists, &_cmst) == 0);
+        bool cmake_built = (stat(cmake_marker, &_cmst) == 0);
         if (!cmake_built) {
             if (!pkg_gen_cmake_deps(root, &mu) ||
                 !pkg_cmake_build(root, &mu, &lock, NULL)) {
+                /* A configure that succeeded wrote the manifest even though
+                 * the build after it failed; drop it so the next run retries. */
+                (void)remove(cmake_marker);
                 fprintf(stderr, "tur run: cmake dependency build failed\n");
                 pkg_cmake_deps_free(closure_deps, n_closure_deps);
                 pkg_lock_free(&lock);
@@ -8608,6 +8626,11 @@ static int cmd_build_project(const char *root_in, const char *out_path,
                             && pkg_cmake_build(root, &mu, &lock, target)) {
                             pkg_lock_write(lock_path, &lock);
                         } else {
+                            /* The configure may have written the manifest
+                             * before the build failed; drop it so the next
+                             * build retries rather than skipping the deps
+                             * (tur-run-cmake-marker-skips-after-failed-configure). */
+                            (void)remove(cmake_marker);
                             fprintf(stderr,
                                 "tur build: cmake dependency build failed\n");
                             pkg_cmake_deps_free(closure, n_closure);
