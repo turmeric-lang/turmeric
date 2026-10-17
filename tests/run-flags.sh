@@ -2027,6 +2027,28 @@ else
     pass "refine-crossing-shadowing-binders"
 fi
 
+# example-reflected-measures: the feature's end-to-end example claims every
+# contract in it proves under --strict-refine.  Nothing ran it, so when float
+# arithmetic became opaque to the solver its Float contract went unknown and
+# the claim stayed false unnoticed
+# (docs/archive/reflected-measures-example-float-contract-no-longer-proves.md).
+# Its build.tur enables the experiment; `check` and `run <file>` read it.
+EX_RM=examples/reflected-measures/src/main.tur
+out=$("$TUR" check --strict-refine "$EX_RM" 2>&1); rc=$?
+if [ $rc -ne 0 ]; then
+    fail "example-reflected-measures" "tur check --strict-refine exited $rc: $(echo "$out" | grep -F 'error' | head -2)"
+else
+    out=$("$TUR" run "$EX_RM" 2>/dev/null)
+    want=$(printf '%s\n' "average:" 7 "podium total:" 25 "panel size:" 5 "winner:" 9 \
+                         "certified total:" 38 "runner-up board ranked:" true \
+                         "timed round:" 58.5 "heat podium:" 19)
+    if [ "$out" != "$want" ]; then
+        fail "example-reflected-measures" "tur run printed: $(echo "$out" | tr '\n' ' ')"
+    else
+        pass "example-reflected-measures"
+    fi
+fi
+
 # ---------------------------------------------------------------------------
 # Summary
 # ---------------------------------------------------------------------------

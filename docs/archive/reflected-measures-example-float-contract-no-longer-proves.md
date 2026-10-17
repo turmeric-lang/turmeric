@@ -1,5 +1,17 @@
 # `examples/reflected-measures` no longer passes `--strict-refine`: its Float contract stays unknown
 
+**Resolved 2026-10-17.** `within-cutoff`'s contract is now stated over
+`slowest`, a comparison-only Float measure that proves at depth, and
+`lap-total` is an ordinary (unreflected) sum. The README and header say why a
+summing Float measure does not prove. `tests/run-flags.sh`
+`example-reflected-measures` runs `tur check --strict-refine` and `tur run` on
+the example, so the next solver change that narrows the fragment fails CI.
+The guide and plan drift below was fixed in the same change, and the example
+gained a `let`-bound call for the bound-variable work that landed beside it
+(see the plan's 2026-10-17 note). Fixtures `reflect-float-comparison-measure`
+and `errors/reflect-float-comparison-false` pin both sides of the Float
+boundary.
+
 **Severity:** low for programs (the check is kept and the program prints the
 right answer), medium for the `reflected-measures` graduation review. The
 feature's one end-to-end program claims more than the solver proves, and
