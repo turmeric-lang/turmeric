@@ -1,0 +1,29 @@
+;; reflected-measures: two measures over a binary tree, one built on the
+;; other.  `balanced?` calls `height` on both subtrees -- a call to ANOTHER
+;; reflected function, at a strict subterm -- and `height`'s body is a `let`
+;; over an `if`, admitted as a proposition.  Both contracts prove at
+;; constructor-built trees.  `^borrow` lets one subtree feed two calls.
+(defdata Tree [] (Node [l : Tree v : int r : Tree]) (Leaf))
+
+(defn ^reflect height [^borrow t : Tree] : int
+  (match t
+    (Leaf) 0
+    (Node l _ r) (let [hl (height l)
+                       hr (height r)]
+                   (if (> hl hr) (+ 1 hl) (+ 1 hr)))))
+
+(defn ^reflect balanced? [^borrow t : Tree] : bool
+  (match t
+    (Leaf) true
+    (Node l _ r) (and (<= (- (height l) (height r)) 1)
+                      (and (<= (- (height r) (height l)) 1)
+                           (and (balanced? l) (balanced? r))))))
+
+(defn needs-balanced [t : #refine{ v : Tree | (balanced? v) }] : int 1)
+(defn needs-short [t : #refine{ v : Tree | (<= (height v) 2) }] : int 2)
+
+(defn main [] : int
+  (println (needs-balanced (Node (Node (Leaf) 1 (Leaf)) 2 (Node (Leaf) 3 (Leaf)))))
+  (println (needs-short (Node (Node (Leaf) 1 (Leaf)) 2 (Leaf))))
+  (println "reflect-tree-measures")
+  0)

@@ -1,0 +1,29 @@
+;; reflected-measures: "non-empty" stated as a SHAPE predicate proves where the
+;; recursive `(> (len v) 0)` cannot.  Inside the caller's Cons arm, `len`
+;; unfolds to `1 + len(t)` with `len(t)` unknown -- `len(t) >= 0` needs
+;; induction, which bounded unfolding does not do.  `nonempty?` is not
+;; recursive, so the arm's tag fact decides it outright.  Without `^reflect`
+;; both calls below are unknown.
+(defdata Lst [] (Cons [hd : int tl : Lst]) (Nil))
+
+(defn ^reflect nonempty? [xs : Lst] : bool
+  (match xs
+    (Nil) false
+    (Cons _ _) true))
+
+(defn head-of [xs : #refine{ v : Lst | (nonempty? v) }] : int
+  (match xs
+    (Nil) -1
+    (Cons h _) h))
+
+(defn first-or-zero [xs : Lst] : int
+  (match xs
+    (Nil) 0
+    (Cons _ _) (head-of xs)))
+
+(defn main [] : int
+  (println (first-or-zero (Cons 7 (Nil))))
+  (println (first-or-zero (Nil)))
+  (println (head-of (Cons 1 (Nil))))
+  (println "reflect-shape-predicate")
+  0)

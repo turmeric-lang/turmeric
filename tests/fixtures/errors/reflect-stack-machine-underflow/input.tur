@@ -1,0 +1,19 @@
+;; reflected-measures: the stack-safety check of reflect-stack-machine REFUTES
+;; a program that adds with one value on the stack -- a compile error naming
+;; the false predicate, not an unknown.  Every symbol in the VC is a
+;; constructor or the unfolded measure, so the bounded model search evaluates
+;; it (RF6.1).
+(defdata Prog [] (Push [n : int k : Prog]) (Add [k : Prog]) (Pop [k : Prog]) (Halt))
+
+(defn ^reflect safe? [p : Prog d : int] : bool
+  (match p
+    (Halt) (>= d 1)
+    (Push _ k) (safe? k (+ d 1))
+    (Add k) (and (>= d 2) (safe? k (- d 1)))
+    (Pop k) (and (>= d 1) (safe? k (- d 1)))))
+
+(defn run [p : #refine{ v : Prog | (safe? v 0) }] : int 0)
+
+(defn main [] : int
+  (println (run (Push 1 (Add (Halt)))))
+  0)

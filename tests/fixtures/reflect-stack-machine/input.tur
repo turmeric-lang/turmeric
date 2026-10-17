@@ -1,0 +1,28 @@
+;; reflected-measures: a literal program checked for stack safety at compile
+;; time.  `safe?` recurses structurally on the instruction list (position 0)
+;; while threading the stack depth through an ordinary int argument -- the
+;; termination gate asks only that ONE fixed position decrease.  The sibling
+;; errors/reflect-stack-machine-underflow is the same check refuting a program
+;; that pops an empty stack.
+(defdata Prog [] (Push [n : int k : Prog]) (Add [k : Prog]) (Pop [k : Prog]) (Halt))
+
+;;; safe? -- running p from stack depth d never underflows and ends non-empty.
+(defn ^reflect safe? [p : Prog d : int] : bool
+  (match p
+    (Halt) (>= d 1)
+    (Push _ k) (safe? k (+ d 1))
+    (Add k) (and (>= d 2) (safe? k (- d 1)))
+    (Pop k) (and (>= d 1) (safe? k (- d 1)))))
+
+(defn run [p : #refine{ v : Prog | (safe? v 0) }] : int
+  (match p
+    (Push n _) n
+    (Add _) 0
+    (Pop _) 0
+    (Halt) 0))
+
+(defn main [] : int
+  (println (run (Push 1 (Push 2 (Add (Halt))))))
+  (println (run (Push 7 (Push 8 (Pop (Halt))))))
+  (println "reflect-stack-machine")
+  0)
