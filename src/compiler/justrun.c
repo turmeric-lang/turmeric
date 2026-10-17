@@ -3021,6 +3021,7 @@ int usage_justrun(void) {
         "  tur run --init                 write a starter Justfile into cwd\n"
         "  tur run --init --force         overwrite an existing Justfile\n"
         "  tur run <file.tur> [-- <args>] compile and run a .tur file\n"
+        "  tur run --release <file.tur>   the same, compiled at -O3 (default -O2)\n"
         "\n"
         "`tur just` is a synonym for `tur run`: every form above accepts\n"
         "either spelling.\n"

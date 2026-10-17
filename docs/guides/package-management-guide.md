@@ -451,8 +451,8 @@ deflockfile
 ### Run the project
 
 ```sh
-tur run                   # debug build + run
-tur run --release         # release build + run
+tur run                   # build at -O2 + run
+tur run --release         # build at -O3 + run
 tur run --offline         # skip network; fail if any spice is missing
 tur run -- --flag arg     # pass arguments to the binary
 tur run src/other.tur     # run a specific file (no build.tur required)
@@ -686,7 +686,7 @@ tur audit                  # list every origin the build fetches code from
 tur build <dir>            # compile a project directory
 tur build <file.tur>       # compile a single file
 tur run                    # compile and execute
-tur run --release          # compile (release) and execute
+tur run --release          # compile at -O3 and execute
 tur run --offline          # run without network access
 tur test <dir>             # run all .tur test files in a directory
 

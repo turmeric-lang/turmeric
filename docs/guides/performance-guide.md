@@ -6,7 +6,7 @@ description: Writing fast Turmeric programs -- numerical computation, data struc
 
 # Turmeric Performance Guide
 
-Turmeric compiles to optimised C99 (release builds use `-O2` by default). This
+Turmeric compiles to optimised C99 (`-O2` by default, `-O3` with `--release`). This
 means its performance ceiling is close to hand-written C, but the patterns you
 choose matter. This guide covers the major performance dimensions -- numerical
 computation, data structures, string processing, concurrency, memory and GC,
@@ -26,6 +26,11 @@ build-release/tur build prog.tur -o prog
 
 The debug build (`tur run build`, `build/tur`) inserts contract checks and
 disables optimisations; its timing numbers are not meaningful for comparison.
+
+That is the build of the compiler. The program it compiles is built at `-O2`
+by `tur build` and `tur run`, and at `-O3` by `tur build --release` and
+`tur run --release`. `TUR_CC_FLAGS` replaces either. `-march=native` is never
+on by default, because its binaries need the machine that built them.
 
 ---
 

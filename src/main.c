@@ -962,6 +962,13 @@ static Buf *g_split_lib_sink = NULL;
  * that unit declines; the build is then the two units above. */
 static Buf *g_split_imp_sink = NULL;
 
+/* `tur run --release` / `tur build --release`: compile the program at -O3
+ * instead of -O2 (decision 2 of docs/archive/performance-audit-plan.md; WP2
+ * measured -O3 at ~6% on the corpus).  -march=native is never on by default
+ * -- its binaries need the machine that built them.  TUR_CC_FLAGS still
+ * replaces the defaults whole, and the wasm target keeps emcc's -O2. */
+static bool g_cc_release = false;
+
 /* Does a split build write the imported-library unit?  Wherever the split
  * applies; TUR_IMPORT_SPLIT=0 turns it off (the imported libraries are then
  * the program's, as they were). */
@@ -4587,6 +4594,8 @@ static int cmd_build_once(const char *input, const char *out_path,
              * them and the link fails.  -Og keeps that DCE while preserving
              * line-accurate stepping. */
             cc_flags = "-g -Og -std=c99 -Wall -fno-strict-aliasing";
+        else if (g_cc_release)
+            cc_flags = "-O3 -std=c99 -Wall -fno-strict-aliasing";
         else
             cc_flags = "-O2 -std=c99 -Wall -fno-strict-aliasing";
     }
@@ -6808,7 +6817,9 @@ static int cmd_run(int argc, char **argv) {
             if (!explicit_file) explicit_file = argv[i];
         }
     }
-    (void)release; /* passed to compiler when --release build is supported */
+    /* Read where cmd_build_once picks its default cc flags.  A non-cc engine
+     * (tur jit, the interpreter) has no cc step for it to change. */
+    g_cc_release = release;
 
     /* spice_inc_dirs: populated below during project-mode setup.
      * RUN_ENTRY captures these via the enclosing scope.  User-supplied
@@ -8155,7 +8166,9 @@ static int cmd_build_multi_files(char **tur_files, int n_files,
 
     /* See the note on -fno-strict-aliasing and the GCC-14 warning policy above. */
     const char *cc_flags = getenv("TUR_CC_FLAGS");
-    if (!cc_flags || !*cc_flags) cc_flags = "-O2 -std=c99 -Wall -fno-strict-aliasing";
+    if (!cc_flags || !*cc_flags)
+        cc_flags = g_cc_release ? "-O3 -std=c99 -Wall -fno-strict-aliasing"
+                                : "-O2 -std=c99 -Wall -fno-strict-aliasing";
 
     /* Collect cmake dep flags from cmake/spice-deps-manifest.json if present,
      * then the project's own `:build-opts :link-libs` / `:link-flags`.
@@ -8982,7 +8995,8 @@ static int cmd_compile(const char *input, const char *out_obj,
     if (!cc_flags || !*cc_flags) {
         cc_flags = g_emit_debug_lines
             ? "-g -Og -std=c99 -Wall -fno-strict-aliasing"
-            : "-O2 -std=c99 -Wall -fno-strict-aliasing";
+            : g_cc_release ? "-O3 -std=c99 -Wall -fno-strict-aliasing"
+                           : "-O2 -std=c99 -Wall -fno-strict-aliasing";
     }
 
     Buf cmake_flags;  buf_init(&cmake_flags);
@@ -9107,7 +9121,8 @@ static int cmd_link(const char *out, const char **inputs, int n_inputs,
     const char *cc = getenv("CC");
     if (!cc || !*cc) cc = "cc";
     const char *base_flags = getenv("TUR_CC_FLAGS");
-    if (!base_flags || !*base_flags) base_flags = "-O2 -fno-strict-aliasing";
+    if (!base_flags || !*base_flags)
+        base_flags = g_cc_release ? "-O3 -fno-strict-aliasing" : "-O2 -fno-strict-aliasing";
     Buf cc_flags; buf_init(&cc_flags);
     buf_puts(&cc_flags, base_flags);
     if (shared) buf_puts(&cc_flags, " -shared -fPIC");
@@ -11657,6 +11672,8 @@ static int usage_build(void) {
         "  -I <dir>          add include directory for module resolution\n"
         "                    (repeat to add multiple; intra-spice imports usually\n"
         "                    want `-I src` from the spice root)\n"
+        "  --release         compile at -O3 (the default is -O2; TUR_CC_FLAGS\n"
+        "                    replaces either)\n"
         "  -B, --build-dir <d>  route generated .c/.h/.o + final artifact into <d>\n"
         "                    (subdirs: obj/, bin/, lib/). Defaults to\n"
         "                    <project-root>/build or <cwd>/build. Override layers:\n"
@@ -11713,7 +11730,7 @@ static int usage_run(void) {
         "\n"
         "flags:\n"
         "  -I <dir>    add an include directory for module resolution\n"
-        "  --release   optimized build\n"
+        "  --release   compile at -O3 (the default is -O2)\n"
         "  --offline   skip dependency fetch\n"
         "  --          pass remaining arguments to the program\n"
         "\n"
@@ -14113,6 +14130,8 @@ static int tur_main_inner(int argc, char **argv) {
                 shared = true;
             } else if (strcmp(argv[i], "--bundle-deps") == 0) {
                 g_build_bundle_deps = true;
+            } else if (strcmp(argv[i], "--release") == 0) {
+                g_cc_release = true;
             } else if (strcmp(argv[i], "--split-build") == 0) {
                 split_build = 1;
             } else if (strcmp(argv[i], "--no-split-build") == 0) {
