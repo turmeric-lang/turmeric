@@ -2,6 +2,56 @@
 
 All notable changes to Turmeric are documented here.
 
+## [0.66.0] -- 2026-10-17
+
+### Added
+
+- **`stdlib/markdown.tur` gains the GFM extensions and heading ids.** Tables,
+  strikethrough, extended autolinks and task list items, matching cmark-gfm.
+  `MdHtmlOpts` gains `heading-ids` -- `MdNoIds` (default), `MdSlugPython`
+  (python-markdown's toc rule) and `MdSlugGitHub` (GitHub's slugger).
+- **`stdlib/markdown.tur` renders TeX math and block HTML.** The reserved `math`
+  option now parses `$...$` inline and `$$...$$` display formulas, keeping the
+  TeX as written. New `markdown/render-block-html` renders a single block, and
+  `markdown/list-marker` returns a list's bullet or delimiter as a Char.
+- **`tur run --release` and `tur build --release` compile at -O3.** The default
+  stays -O2; `--release` was previously parsed away or a usage error.
+  `TUR_CC_FLAGS` still replaces the defaults, and `--debug` wins.
+- **The interpreter's inline-C JIT is on by default.** In a TUR_JIT build, `tur
+  repl` and `tur --interpret` compile an inline-C defn the interpreter cannot
+  run on its first call, with no flag. `TUR_REPL_JIT_INLINE_C=0` restores the
+  old error for bisection.
+- **Reflected measures unfold through let-bound names.** A measure applied to a
+  name the hypotheses equate to a constructor term now selects the arm as if the
+  term were inline, so more `--strict-refine` contracts prove and false ones get
+  a counterexample model.
+
+### Changed
+
+- **`re/replace-all` and HAMT batch inserts are linear.** `re/replace-all`
+  copies each byte once instead of rebuilding the string per match, and
+  transient map inserts change nodes in place instead of path-copying.
+
+### Fixed
+
+- **A struct with an opaque field no longer leaks a box.** A `defstruct` with a
+  `defopaque` field (including `String`) is laid out by value, so constructions,
+  copies and Vec elements stop leaking memory.
+- **Two modules may each define a private helper of the same name.** The later
+  module no longer resolves its recursive calls to the other's helper, so
+  `xml/sax` and `html/sax` can be imported together.
+- **Nested generic calls keep same-spelled type variables apart.** `(list-map
+  floats (fn [f : float] : int 7))` returned the bits of a float, and a
+  float-to-defdata map segfaulted; a by-value `defdata` entering a `(List A)` --
+  via a bare function, a closure or `list-of` -- is boxed correctly in all three
+  engines.
+- **A batch of smaller checker and runtime fixes.** `int64`/`float64` are
+  accepted as return annotations; effect rows work past 32 effects; top-level
+  statements run before a user `main`; `cont?` on a call/cc continuation is
+  answered from the live set; a `: nil` call's panic propagates in both
+  backends; and `tur test` no longer marks a sound `build.tur` malformed after a
+  `tur-test-expect-error` test.
+
 ## [0.65.5] -- 2026-10-16
 
 ### Added
