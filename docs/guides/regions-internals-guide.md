@@ -26,6 +26,8 @@ The design history is the archived
 > There is no flag any more. Regions are on unless `TUR_REGIONS=0` was set
 > when `tur` ran. Two fixtures also claim to rewind and never do (see
 > [When does a generation actually rewind?](#when-does-a-generation-actually-rewind)).
+> The stale comments found so far in this area, each with a fix, are
+> listed in [stale-comments-regions](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/stale-comments-regions.md).
 
 ---
 

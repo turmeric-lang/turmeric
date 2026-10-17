@@ -29,6 +29,8 @@ This guide is the mechanism underneath them.
 > longer does: `emit_rt_split_source` forces the archive posture itself. Where a
 > comment and this guide disagree, read the code. If the code disagrees with
 > this guide, fix the guide.
+> The stale comments found so far in this area, each with a fix, are
+> listed in [stale-comments-runtime-preamble](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/stale-comments-runtime-preamble.md).
 
 **"Split" means four different things in this codebase.** This guide is about
 the first one.

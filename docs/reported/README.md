@@ -34,6 +34,31 @@ sentence above does not cover them. If you touch this file, check
 `ls docs/reported/` against it -- an index that silently omits a quarter of the
 directory is worse for triage than no index.
 
+## Found auditing the guides' "Trust the code over the comments" notes (filed 2026-10-17)
+
+Six internals guides open with a "Trust the code over the comments" warning
+that names a few stale comments. Each report below takes one guide, checks
+every named comment against `main` 9ac3cd43, and adds what a sweep of the same
+files found: comments naming functions that no longer exist, `docs/` paths
+that moved, and flags that graduated. Each item comes with the comment
+rewrite, or a structural change where a comment only exists to paper over the
+code's shape. The same few patterns recur across all six: measured counts
+written into comments; tombstones for deleted code; flag-era wording left
+after graduation; "these N copies mirror each other" comments over code that
+could be one helper; and doc comments on forward declarations that drifted
+from their definitions. 29 `docs/` citations in `src/` are dead again after
+the 2026-08-13 sweep. The emitter report proposes a docs-lint line that would
+keep it at zero.
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [stale-comments-emitter](stale-comments-emitter.md) | low | `emit_value_dispatch` "~10k lines over 124 cases" (12,965 over 120). The "Final assembly order" lists 9 bands; the code writes about 21. `emit_join_coerce` is `bridge_control_result_int_ptr`. `emit_effects.c`'s header names a deleted runtime. `emit_internal.h`'s "emit_core.c" section holds about 133 prototypes defined elsewhere. Plus tombstones, missing names and 12 dead citations |
+| [stale-comments-package-manager](stale-comments-package-manager.md) | low | `PkgLockEntry.sha256` "SHA-256 of the archive" is a `tree1:` hash, a git-SHA fallback, or (cmake) `:resolved` again. `pkg.h` says cmake deps are pinned. `pkg_sha256_file` is dead. The user guides' lockfile samples show shapes `tur` never writes (sweet-exp, `:subdir`). **Decided 2026-10-17:** drop the duplicate `:sha256` from cmake rows |
+| [stale-comments-runtime-preamble](stale-comments-runtime-preamble.md) | low | Four comments (`rt_split_embed.h`, `emit_rt_split_source`'s own header, `cmd_emit_rt_split`, `cmd_jit`) say a missing runtime archive disengages S2, but `emit_rt_split_source` forces the posture. A redundant setter call; a doc comment on the wrong function; proposes a table for the forced-input set |
+| [stale-comments-build-driver](stale-comments-build-driver.md) | low | The `PASS_EFFECT_ROW_INFER` "stub slot" is the effect checker. `tur run` uses `system()`, not `execv`. The add-a-pass recipe misses `pass_zone`. `effect_lower` lowers nothing. VBM "registry-only" survives in `main.c` / `globals.c`. Two dead `needs_hamt` fields. Three copies of the per-unit reset. **Decided 2026-10-17:** look into deleting `effect_lower` (investigation steps in item 6) |
+| [stale-comments-regions](stale-comments-regions.md) | low | Eight comments still describe `--enable=regions` (`region.h`, `types.h`, `globals.h`, `emit_cps_ir.c`, `preload.c`, `stdlib_autoload.c`, both CMakeLists). The heap ctor emitters say "two" copies and a "default malloc". Notes that `region.h` edits regen 157 snapshots plus the S2 hash, and proposes one ctor-body helper plus comment-stripping at embed time. **Decided 2026-10-17:** strip comments at embed time, first |
+| [stale-comments-diagnostics](stale-comments-diagnostics.md) | low / low-medium | The `D` band "warning, promoted by `--Werror=deprecated`" matches no D code. **`tur explain TUR-D0001` (user-visible) calls a hard error a promotable warning.** Explain-prefix comments say `TUR-E` only, `TUR-I0379` is unexplainable, and `diag_explain` documents a nonexistent `code_str`. **Decided 2026-10-17:** `--Werror=deprecated` promotes D0002/D0003; `tur explain` accepts `I` codes |
+
 ## Found planning `wss://` for tur-nng (filed 2026-10-17)
 
 [nng-tls-plan](../upcoming/spices/nng-tls-plan.md) turns TLS on inside the

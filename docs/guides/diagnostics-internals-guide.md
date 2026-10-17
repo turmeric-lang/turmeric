@@ -20,6 +20,8 @@ the [LSP guide](lsp-guide.md).
 > `main.c` predate later changes (the deprecation band's severity, which
 > prefixes `tur explain` accepts). Where a comment and this guide disagree,
 > read the code. If the code disagrees with this guide, fix the guide.
+> The stale comments found so far in this area, each with a fix, are
+> listed in [stale-comments-diagnostics](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/stale-comments-diagnostics.md).
 
 ---
 
