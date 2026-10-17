@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/turmeric-lang/turmeric/actions/workflows/ci.yml/badge.svg)](https://github.com/turmeric-lang/turmeric/actions/workflows/ci.yml)
 
-**Latest release:** `v0.65.5` -- `stdlib/markdown.tur` now parses CommonMark inline syntax -- emphasis, links, code spans and more -- and renders it to HTML.
+**Latest release:** `v0.66.0` -- `stdlib/markdown.tur` gains GFM tables, strikethrough and task lists plus TeX math rendering, and `tur run --release` / `tur build --release` now compile at -O3.
 
 ## What
 
