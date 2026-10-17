@@ -40,12 +40,13 @@ directory is worse for triage than no index.
 | --- | --- | --- |
 | [turi-defer-in-stored-continuation-use-after-free](turi-defer-in-stored-continuation-use-after-free.md) | high (memory safety) | Under `tur --interpret`, a handler case that stores `k`, then a `resume` after the `handle` exits, is a heap-use-after-free when the performing function has a pending `defer`: the `defer` sends the `handle` to the single-shot fiber runtime, which frees its continuation when the case returns (`eval_handle`, `eval.c:3864`). Compiled is fine; so is the interpreter without the `defer`. Surfaced by `defer-cps-abortive-handler` once the inline-C JIT let it run. |
 
-## Found revisiting the dynvar spices plan (filed 2026-10-17)
+## Found revisiting the two dynvar plans (filed 2026-10-17)
 
 | Report | Severity | One line |
 | --- | --- | --- |
 | [dynvar-binding-not-swapped-on-fiber-switch](dynvar-binding-not-swapped-on-fiber-switch.md) | medium-high (silent wrong value) | A `defdynamic` binding is per thread, not per fiber: `tur_fiber_block_resume` swaps the r7rs dynamic environment and the region escape list but not the `TurDynFrame` chains. Two fibers that bind and yield read each other's values, and the thread ends up reading a frame whose binding has exited. Nothing in the tree binds across a yield yet. |
-| [defdynamic-generic-adt-root-emitted-before-its-type](defdynamic-generic-adt-root-emitted-before-its-type.md) | low-medium (cc failure) | `(defdynamic *v* :(Option int) ...)` type-checks, then cc fails on `unknown type name 'tur_adt_Option__int'`: the dynvar root is emitted before the instantiation's struct. A plain `defdata` is refused with `TUR-E0603` instead. |
+| [defdynamic-generic-adt-root-emitted-before-its-type](defdynamic-generic-adt-root-emitted-before-its-type.md) | low-medium (cc failure) | `(defdynamic *v* :(Option int) ...)` type-checks, then cc fails on `unknown type name 'tur_adt_Option__int'`: the dynvar root is emitted before the instantiation's struct. A plain `defdata` is refused with `TUR-E0603` instead -- even a payload-free enum, which keeps `*log-level*` from being typed as one. |
+| [time-capability-now-is-32-bit](time-capability-now-is-32-bit.md) | medium (silent wrong value) | The Time capability's `now` slot is `int (*)(void)`, so `Real-Time` returns epoch milliseconds wrapped to 32 bits (measured `1254165568` beside `now-ms`'s `1792255528626`), and only to the second. The slots take no context, which is why `Mock-Time` is a process-wide singleton. `capability.tur` `load`s `time.tur`, so importing both defines `Time` twice. |
 
 ## Found executing the open reports (filed 2026-10-17)
 
