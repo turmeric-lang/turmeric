@@ -197,7 +197,7 @@ A turn:
 7. Runs `borrow_check_effect_handler_captures` and `lifetime_check_program`.
    An error from step 6 or 7 ends the turn before anything is evaluated, as
    it ends the compiled build
-   ([turi-ignores-effect-row-errors](../archive/turi-ignores-effect-row-errors.md)).
+   ([turi-ignores-effect-row-errors](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/turi-ignores-effect-row-errors.md)).
 8. Publishes the turn's `TypeClassEnv` to `env->last_tc_env` **before**
    evaluating; runtime dictionary dispatch reads it.
 9. Evaluates program items: first the file-scope defs (`[0, n_fsd)`,
@@ -219,7 +219,7 @@ A turn:
 | `PASS_EFFECT_LOWER` | Only its `EffectEnv` setup; `effect_lower` is a no-op anyway |
 | `PASS_EFFECT_ROW_INFER` | `effect_check_pass` |
 | `PASS_CPS` | Not run |
-| `PASS_BORROW_CHECK` | `borrow_check_effect_handler_captures` and `lifetime_check_program`. `borrow_check_program` is disabled process-wide (`borrow_check_enabled` is never set), so skipping it costs no parity. The handler-capture check used to be skipped, so `errors/effect-handler-borrow` printed 42 under `--interpret` ([turi-skips-handler-borrow-capture-check](../archive/turi-skips-handler-borrow-capture-check.md)) |
+| `PASS_BORROW_CHECK` | `borrow_check_effect_handler_captures` and `lifetime_check_program`. `borrow_check_program` is disabled process-wide (`borrow_check_enabled` is never set), so skipping it costs no parity. The handler-capture check used to be skipped, so `errors/effect-handler-borrow` printed 42 under `--interpret` ([turi-skips-handler-borrow-capture-check](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/turi-skips-handler-borrow-capture-check.md)) |
 | Emission, cc, link | Not run |
 
 The elaborator itself branches on `g_interpret_mode` in a few places. That

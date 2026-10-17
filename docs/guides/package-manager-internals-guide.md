@@ -172,7 +172,7 @@ Every return past the `fopen` marks the manifest malformed, the **reader**
 error (an unbalanced paren) and the file with **no `defpackage` form**
 included. Those two used to return with the status still `ABSENT`, so the
 reader's `error:` printed and `tur check` exited 0
-([manifest-reader-error-exits-zero](../archive/manifest-reader-error-exits-zero.md)).
+([manifest-reader-error-exits-zero](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/manifest-reader-error-exits-zero.md)).
 Any new early return in this function must mark the manifest malformed too.
 
 ### Writing it
@@ -194,7 +194,7 @@ There are two writers, and they are not equivalent:
   original text, before the slot's closing brace or as a new line after the
   defpackage's last item. Until 2026-10-17 neither command could edit a sweet
   manifest
-  ([tur-add-cannot-edit-sweet-manifest](../archive/tur-add-cannot-edit-sweet-manifest.md)).
+  ([tur-add-cannot-edit-sweet-manifest](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/tur-add-cannot-edit-sweet-manifest.md)).
 
 A sweet manifest writes one key per indented line, which the sweet
 preprocessor wraps as a list: `  :version "0.1.0"` reads as
@@ -207,7 +207,7 @@ not in effect.
   models, and not all of that: comments, `:members`, an empty
   `:experiments []`, a spice's `:subdir` and `:global`, and the symbol vectors
   of a `:exports` map are all lost. `tur add-cmake` used it until 2026-10-17
-  ([add-cmake-manifest-rewrite-loses-keys](../archive/add-cmake-manifest-rewrite-loses-keys.md)).
+  ([add-cmake-manifest-rewrite-loses-keys](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/add-cmake-manifest-rewrite-loses-keys.md)).
 
 ---
 

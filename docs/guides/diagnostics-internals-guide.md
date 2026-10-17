@@ -230,7 +230,7 @@ unbound.tur:3:5: error [TUR-E0003]: unbound symbol 'zzzqqq'
 
 Until 2026-10-17 the suggested case lost `[TUR-E0003]`, and its JSON and LSP
 records had an empty `code`
-([did-you-mean-unbound-symbol-drops-its-code](../archive/did-you-mean-unbound-symbol-drops-its-code.md)).
+([did-you-mean-unbound-symbol-drops-its-code](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/did-you-mean-unbound-symbol-drops-its-code.md)).
 
 The `see:` line is printed only when `DiagSuggestion.doc_url` is set. Only
 the two TUR-E0003 sites set it, and both hard-code the URL. **No page in
@@ -570,10 +570,10 @@ Writing good needles:
 - End the file with a newline. Both harnesses read an unterminated last line
   now, but a needle loop written as a bare `while read -r` drops it, and a
   one-line file then asserts nothing
-  ([needle-files-without-trailing-newline-assert-nothing](../archive/needle-files-without-trailing-newline-assert-nothing.md)).
+  ([needle-files-without-trailing-newline-assert-nothing](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/needle-files-without-trailing-newline-assert-nothing.md)).
 - Editing a needle re-runs the fixture: `stamp_key` hashes every file in the
   fixture directory except the outputs the harness writes there
-  ([run-sh-stamp-cache-ignores-expectation-files](../archive/run-sh-stamp-cache-ignores-expectation-files.md)).
+  ([run-sh-stamp-cache-ignores-expectation-files](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/run-sh-stamp-cache-ignores-expectation-files.md)).
 
 A real fixture, `errors/tailcall-argument-position/expected.diag`:
 
@@ -602,7 +602,7 @@ fixture with neither fails as "asserts nothing". Differences from `run.sh`:
 - `unexpected.diag` is not read. The exit status is checked: an interpreter
   that prints the diagnostic and then runs the program to exit 0 fails the
   fixture, as it does in `run.sh`
-  ([turi-ignores-effect-row-errors](../archive/turi-ignores-effect-row-errors.md)).
+  ([turi-ignores-effect-row-errors](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/turi-ignores-effect-row-errors.md)).
 - `requires.compiled` skips the fixture. Use it when only the compiled path
   diagnoses the program, as all the `tailcall-*` fixtures do.
 - `TURI_ERRORS_DENY` lists fixtures whose interpreter diagnostics diverge.

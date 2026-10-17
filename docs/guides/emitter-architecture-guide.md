@@ -333,7 +333,7 @@ Every value call goes through the tail of `emit_value`:
 returns before the check above; `emit_stmt` writes the bare call and then the
 same `emit_panic_signal_return`. Without it the statements after the call ran
 with the panic pending -- `after boom` printed under `catch-unwind`
-([nil-call-panic-not-propagated](../archive/nil-call-panic-not-propagated.md)).
+([nil-call-panic-not-propagated](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/nil-call-panic-not-propagated.md)).
 
 **`call_ret_note` protocol.** A builder sets the note as the *last* thing
 before returning its call string (`note_call_ret`). `emit_value` copies and
@@ -557,7 +557,7 @@ does step 14 synthesize `main` itself; that version is indented 4 and ends in
 user's body -- so they run first, in source order, as under `tur --interpret`
 (`emit_toplevel_stmts_for_user_main`). A bare `(main)` in such a file is
 dropped by the elaborator with TUR-W0625
-([toplevel-statements-dropped-with-user-main](../archive/toplevel-statements-dropped-with-user-main.md)).
+([toplevel-statements-dropped-with-user-main](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/toplevel-statements-dropped-with-user-main.md)).
 
 ### Where the CPS backend plugs in
 
@@ -839,7 +839,7 @@ emitter-written code is a bug unless spelled `TUR_AS(T, x)`. It runs
 named file against the caller's directory first; a file that does not exist,
 or a list in which nothing compiled to a program, exits 2. Until 2026-10-17 a
 relative path from elsewhere checked nothing and exited 0
-([float-conversion-checker-passes-on-relative-path](../archive/float-conversion-checker-passes-on-relative-path.md)).
+([float-conversion-checker-passes-on-relative-path](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/float-conversion-checker-passes-on-relative-path.md)).
 
 `tests/run.sh` also ratchets the C compiler's warnings on every fixture build
 (`-Wint-conversion`, `-Wincompatible-pointer-types`, `-Wfloat-conversion`,

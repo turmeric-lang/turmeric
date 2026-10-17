@@ -335,7 +335,7 @@ in a typed file (`TY_ANY` in a dynamic one). Pass 2's `elab_defn` replaces
 the binding's type with the real one, but a caller elaborated earlier would
 already have been typed against the placeholder, so such a callee counts as
 lossy for the ordering below and its callers wait for its body
-([forward-call-to-unannotated-return-typed-int](../archive/forward-call-to-unannotated-return-typed-int.md)).
+([forward-call-to-unannotated-return-typed-int](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/forward-call-to-unannotated-return-typed-int.md)).
 
 ### Pass 2: order, deferral and retry
 
@@ -507,7 +507,7 @@ Things that are not what they look like:
   `3` is rejected for an `i64` parameter. The `defn` and `fn` return ladders
   spell `int64` / `float64` out as `int` / `float` aliases; until 2026-10-17
   they rejected them as return types
-  ([int64-float64-return-annotation-rejected](../archive/int64-float64-return-annotation-rejected.md)).
+  ([int64-float64-return-annotation-rejected](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/int64-float64-return-annotation-rejected.md)).
 - **`TY_TYVAR` is every named type variable**, not only GADT ones as its
   comment says. `tyvar_.name` is interned; `open_slot` marks a variable that
   nothing fixed (a constructor's free slot, or a callee's renamed-apart result

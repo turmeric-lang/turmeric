@@ -112,11 +112,11 @@ subcommand: `tur --strict-effects check f.tur` and
   and the tail (the `--` included) is put back afterwards, so
   `tur run f.tur -- a --strict-effects b` compiles with the default flags and
   hands the program all three words. Until 2026-10-17 neither stopped there
-  ([global-flags-parsed-after-double-dash](../archive/global-flags-parsed-after-double-dash.md)).
+  ([global-flags-parsed-after-double-dash](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/global-flags-parsed-after-double-dash.md)).
 - **`--no-color` is read and stripped** like the others. It used to stay in
   `argv`, so a trailing one was an unknown flag to the subcommand (exit 2) and
   a leading one was taken for the subcommand (exit 64)
-  ([no-color-flag-rejected-everywhere](../archive/no-color-flag-rejected-everywhere.md)).
+  ([no-color-flag-rejected-everywhere](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/no-color-flag-rejected-everywhere.md)).
 
 `--no-abi-cache` is the one flag a helper reads and the strip loop leaves
 in `argv`, so a subcommand parser that rejects unknown dashes has to skip it
@@ -458,7 +458,7 @@ before `system()`, which covers every dump at once, and `cc_system` does the
 same before each toolchain subprocess. A new compile-time report that prints
 to stdout needs no flush of its own. Until 2026-10-17 only
 `--dump-mono-specs` flushed
-([tur-run-dump-output-interleaves-program-output](../archive/tur-run-dump-output-interleaves-program-output.md)).
+([tur-run-dump-output-interleaves-program-output](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/tur-run-dump-output-interleaves-program-output.md)).
 
 ### Auto-spice discovery
 
@@ -492,7 +492,7 @@ compile with it off (and say "`^reflect` is ignored").
 `cmd_jit` walks for spice includes as the `run` arm does before delegating
 to it; until 2026-10-17 it did not, so `tur jit <file>` missed intra-spice
 imports `tur run --engine jit <file>` resolved
-([tur-jit-skips-spice-include-discovery](../archive/tur-jit-skips-spice-include-discovery.md)).
+([tur-jit-skips-spice-include-discovery](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/tur-jit-skips-spice-include-discovery.md)).
 
 `--no-auto-spice` sets `g_no_auto_spice`, which turns off the include walk
 only; reader macros and experiments still apply. CLAUDE.md's statement that
@@ -551,7 +551,7 @@ Three properties of the intermediate-C cache are worth knowing:
   `tur build m.tur` from different directories write different files. Until
   2026-10-17 it was the path as typed, and either `cc` could compile the
   other one's program
-  ([tur-build-intermediate-c-path-collides](../archive/tur-build-intermediate-c-path-collides.md)).
+  ([tur-build-intermediate-c-path-collides](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/tur-build-intermediate-c-path-collides.md)).
   Two concurrent builds of the *same* file still share one name.
 - The same prefix holds the object, `.c` and `.link` sidecar of a
   `tur build --split-build` (`<stem>.o`), which the `build` arm deletes

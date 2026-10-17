@@ -156,7 +156,7 @@ through `types.c:region_alloc_fn()`, which answers `malloc` when
 | `emit_module.c:emit_program_inner` | The third, early-file copy of the heap ctor emitter |
 | `emit_expr.c:emit_value_dispatch` | The SR4 per-link box for a recursive ctor field |
 | `emit_module.c:ensure_saffron_dyn_runtime` | The dynamic-call rest-list cells |
-| `emit_module.c:emit_flush_dead_base_ctor_traps` | The base ctor of a phantom-only parametric `:heap` ADT (ungated until 2026-10-17: [dead-base-ctor-ignores-regions-off](../archive/dead-base-ctor-ignores-regions-off.md)) |
+| `emit_module.c:emit_flush_dead_base_ctor_traps` | The base ctor of a phantom-only parametric `:heap` ADT (ungated until 2026-10-17: [dead-base-ctor-ignores-regions-off](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/dead-base-ctor-ignores-regions-off.md)) |
 
 The ctor emitters carry comments saying they mirror each other: a change to
 one belongs in all three. The free side mirrors the allocation side.

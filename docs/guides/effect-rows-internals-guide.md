@@ -509,10 +509,10 @@ many times a diagnostic prints.
   set, compared and printed by name). `effect_row_merge` and
   `effect_row_remove` size their buffers from their inputs, and a row's count
   is 32-bit, since
-  [effect-row-merge-overflows-past-32-effects](../archive/effect-row-merge-overflows-past-32-effects.md)
+  [effect-row-merge-overflows-past-32-effects](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/effect-row-merge-overflows-past-32-effects.md)
   (a 33rd effect wrote past a 32-entry stack array); the six row parsers no
   longer drop non-symbol items either
-  ([effect-row-non-symbol-items-dropped](../archive/effect-row-non-symbol-items-dropped.md)).
+  ([effect-row-non-symbol-items-dropped](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/effect-row-non-symbol-items-dropped.md)).
 - **`(unsafe ...)` colors.** The marker handle is a coloring seed, so a safe
   wrapper and all its callers are CPS-colored although nothing can be
   performed (see [Capabilities and `Unsafe`](#capabilities-and-unsafe)).

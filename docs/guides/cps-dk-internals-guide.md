@@ -242,7 +242,7 @@ Non-atomic operands are named `__tN` through a pending list (`Pending`,
 grown by `pend_push`). It is folded leftmost-outermost, so the IR's
 evaluation order is the source's left-to-right order. It held 32 slots until
 2026-10-17, past which `atomize` dropped bindings silently
-([report](../archive/cps-ir-pending-list-overflow-drops-bindings.md)).
+([report](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/cps-ir-pending-list-overflow-drops-bindings.md)).
 
 **`CT_LETRAW` is the most important design choice in the translator.** Any
 subexpression that passes `safe_to_delegate`, a closed list of control-free
@@ -273,7 +273,7 @@ that is not set exactly once per iteration, unconditionally, becomes a
 by-reference cell instead. Nested performing loops are still refused, and so
 is a `return` inside such a loop when code follows it: the helper's own
 continuation is the code after the loop, so the return would act as a `break`
-([cps-loop-return-acts-as-break](../archive/cps-loop-return-acts-as-break.md)).
+([cps-loop-return-acts-as-break](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/cps-loop-return-acts-as-break.md)).
 The user-facing limits are listed in the effects guide's
 [Performs inside loops and conditionals](effects-system-guide.md#performs-inside-loops-and-conditionals).
 `TUR_TRACE_CORE=1` prints `[LOOP-CARRIED]` and `[LOOP-REJECT]` lines for this
@@ -923,7 +923,7 @@ These are process-wide:
   `__tur_cps_register`. It was a 256-entry array until 2026-10-17, which
   dropped later registrations, so calls through those callbacks fell back to a
   fresh root and aborted with "unhandled effect"
-  ([report](../archive/cps-callback-registry-overflows-past-256.md));
+  ([report](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/cps-callback-registry-overflows-past-256.md));
 - `__sk_registry`;
 - `g_dk_case_reopen_hnode`. It is a **plain static** that `dk_perform` sets
   immediately before each case call and a re-opening case reads at entry, so

@@ -277,7 +277,7 @@ static void drop_glue_tur_adt_Lst(void *ptr) {
 > `emit_adt_glue_field_drops` alike. The latter emitted a bare `free` until
 > 2026-10-17, so `rc/of` of such a struct, or a recursive ADT with a fn field
 > going out of scope, aborted with `free(): invalid pointer`
-> ([adt-fn-field-drop-glue-bare-free](../archive/adt-fn-field-drop-glue-bare-free.md);
+> ([adt-fn-field-drop-glue-bare-free](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/adt-fn-field-drop-glue-bare-free.md);
 > pinned by `closure-field-drop-glue-rc-struct` and
 > `closure-field-drop-glue-defdata`).
 
