@@ -6,10 +6,10 @@
 > way: M1, the block parser (#1229), M2, the inline parser (#1240), and M3,
 > the GFM extensions and heading ids (#1246), are built (section 6.4, "M1 as
 > built" to "M3 as built"). All of CommonMark and all of the GFM extension
-> examples pass. M4 is built too (section 6.5, "M4 as built"): this
-> repository's docs pipeline renders with `tur/markdown`, and python-markdown
-> is left only on the spices site's deploy, which runs turmeric-spices's own
-> generators.
+> examples pass. M4 is built too (#1249, section 6.5, "M4 as built"): the
+> docs pipeline renders with `tur/markdown`, here and, since
+> turmeric-spices#107, in turmeric-spices, and python-markdown is gone from
+> both.
 > Written 2026-10-15; its open questions were settled with the author the same
 > day (section 8). It started as "would
 > `tools/gendocs.py` be a candidate to move to Turmeric?" A straight gendocs port
@@ -876,14 +876,25 @@ a `SlugMode`, for READMEs that are read on GitHub.
     It uses web-smoke's configure line and ccache settings, so restoring
     web-smoke's cache from `main` makes the build mostly cache hits.
     `release-cut.yml`'s deploy-web job already built one.
-  - **One user is left: `release-cut.yml`'s deploy-spices job.** It runs the
+  - **One user was left: `release-cut.yml`'s deploy-spices job.** It runs the
     turmeric-spices repository's own copies of `genguides.py` and
-    `genspices.py`, which still import python-markdown. So the pin moves to
-    `tools/spices-site-requirements.txt`, which says so, and that job
-    installs it from there.
-  - **Not done:** moving those copies onto `tur/markdown`. That is
-    turmeric-spices work. The job then needs a `tur` (item 6), and the pin
-    and its install go.
+    `genspices.py`, which still imported python-markdown. So #1249 moved the
+    pin to `tools/spices-site-requirements.txt`, for that job alone.
+- **The spices site** (turmeric-spices#107, merged together with this
+  repository's change to `release-cut.yml`).
+  - turmeric-spices carries verbatim copies of `tools/mdrender.py` and
+    `tools/md/render.tur`, and its `genguides.py` and `genspices.py` render
+    through them: guide pages, spice front pages and the guide summaries on
+    its landing page.
+  - So `mdrender.py` names neither repository's layout. The tool sits beside
+    it, and `tur` is `$TUR`, then the checkout's (turmeric's `build/`, or the
+    release turmeric-spices's `scripts/install-tur.sh` unpacks into
+    `vendor/tur/`), then `PATH`'s. The build cache is keyed on the stdlib that
+    `tur` compiles against, found from the binary, not on this checkout's
+    `stdlib/`.
+  - deploy-spices builds a Release `tur` from the release being cut, as item 6
+    says, and `tools/spices-site-requirements.txt` and its install are gone.
+    No job installs python-markdown now.
 - **Speed.** A `genguides.py` run takes about as long as before, about 10 s
   here. That is now mostly `git log` dating the pages.
 

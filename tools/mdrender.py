@@ -6,6 +6,11 @@ this module, which runs tools/md/render.tur (markdown-library-plan M4): the
 stdlib's CommonMark + GFM renderer, the same rules GitHub renders the sources
 with. It replaced python-markdown, the docs path's one third-party package.
 
+turmeric-spices carries a verbatim copy of this file and of md/render.tur, for
+its own genguides.py and genspices.py, so nothing here names either
+repository's layout beyond where each keeps a `tur`. Change both copies
+together.
+
 `render_batch` takes every page of a run at once, so the renderer starts once
 per generator. It writes the sources into a scratch directory, runs the tool
 over them, and reads back each page's HTML fragment, its headings (as the
@@ -13,10 +18,12 @@ nested toc tokens the page chrome is built from) and the raw HTML it passed
 through.
 
 The tool is compiled with `tur build` on first use and cached under the
-system temp directory, keyed on the `tur` binary and every source it is built
-from, so a second generator in the same `tur run docs` reuses it; a cached
+system temp directory, keyed on the `tur` binary, the tool and the stdlib it
+compiles against, so a second generator in the same run reuses it; a cached
 build a week old is deleted when the next one is made. `tur` is found as
-$TUR, then ./build/tur under the repository, then on PATH.
+$TUR, then in the checkout (turmeric's build/, or the release turmeric-spices's
+scripts/install-tur.sh unpacks into vendor/tur/), then on PATH. It needs a
+stdlib with markdown/heading-html: turmeric main, or a release made after M4.
 """
 
 import hashlib
@@ -29,41 +36,71 @@ import tempfile
 import time
 from pathlib import Path
 
-REPO = Path(__file__).resolve().parent.parent
-TOOL_SRC = REPO / 'tools' / 'md' / 'render.tur'
+HERE = Path(__file__).resolve().parent
+REPO = HERE.parent
+TOOL_SRC = HERE / 'md' / 'render.tur'
+
+_EXE = 'tur.exe' if os.name == 'nt' else 'tur'
+# Where a checkout keeps a tur of its own: turmeric's build tree, and the two
+# layouts of the release turmeric-spices's scripts/install-tur.sh unpacks.
+_CHECKOUT_TURS = (Path('build') / _EXE,
+                  Path('vendor') / 'tur' / 'bin' / _EXE,
+                  Path('vendor') / 'tur' / _EXE)
 
 
 def find_tur() -> Path:
-    """The `tur` that builds the renderer: $TUR, ./build/tur, or PATH."""
+    """The `tur` that builds the renderer: $TUR, the checkout's, or PATH's."""
     env = os.environ.get('TUR')
     if env:
         return Path(env)
-    local = REPO / 'build' / ('tur.exe' if os.name == 'nt' else 'tur')
-    if local.is_file():
-        return local
+    for rel in _CHECKOUT_TURS:
+        if (REPO / rel).is_file():
+            return REPO / rel
     found = shutil.which('tur')
     if found:
         return Path(found)
     sys.exit(
         'error: rendering Markdown needs a tur binary (tools/md/render.tur)\n'
-        '       build one:  cmake -S . -B build && cmake --build build -j\n'
+        '       in turmeric, build one:  cmake -S . -B build && cmake --build build -j\n'
+        '       in turmeric-spices, fetch one:  ./scripts/install-tur.sh\n'
         '       or point TUR at one:  TUR=/path/to/tur'
     )
+
+
+def _stdlib_dir(tur: Path) -> Path | None:
+    """The stdlib `tur` compiles against, as near as can be told from outside.
+
+    $TUR_STDLIB_DIR, else beside the binary: a release's share/turmeric/stdlib
+    (or the flat stdlib/ of older ones), or a build tree's ../stdlib. None when
+    none of those holds markdown.tur.
+    """
+    env = os.environ.get('TUR_STDLIB_DIR')
+    bin_dir = tur.resolve().parent
+    for cand in ([Path(env)] if env else []) + [
+            bin_dir.parent / 'share' / 'turmeric' / 'stdlib',
+            bin_dir / 'stdlib',
+            bin_dir.parent / 'stdlib']:
+        if (cand / 'markdown.tur').is_file():
+            return cand
+    return None
 
 
 def _cache_key(tur: Path) -> str:
     """A digest of what the built renderer depends on.
 
     The `tur` binary (by path, size and mtime: rebuilding it changes the
-    compiler) and the bytes of the tool and every stdlib source, since the
-    tool's `load`s reach well past stdlib/markdown/.
+    compiler), the tool's bytes, and every source of the stdlib it compiles
+    against, since the tool's `load`s reach well past stdlib/markdown/.
     """
     h = hashlib.sha256()
     st = tur.stat()
     h.update(f'{tur.resolve()}\0{st.st_size}\0{st.st_mtime_ns}\0'.encode())
-    for p in [TOOL_SRC, *sorted((REPO / 'stdlib').rglob('*.tur'))]:
-        h.update(str(p.relative_to(REPO)).encode() + b'\0')
-        h.update(p.read_bytes())
+    h.update(TOOL_SRC.read_bytes())
+    stdlib = _stdlib_dir(tur)
+    if stdlib is not None:
+        for p in sorted(stdlib.rglob('*.tur')):
+            h.update(str(p.relative_to(stdlib)).encode() + b'\0')
+            h.update(p.read_bytes())
     return h.hexdigest()[:20]
 
 
@@ -88,7 +125,9 @@ def build_tool() -> Path:
     if r.returncode != 0 or not tmp.is_file():
         tmp.unlink(missing_ok=True)
         sys.stderr.write(r.stdout + r.stderr)
-        sys.exit(f'error: {tur} build {TOOL_SRC.relative_to(REPO)} failed')
+        sys.exit(f'error: {tur} build {TOOL_SRC.relative_to(REPO)} failed\n'
+                 '       the renderer needs tur/markdown with markdown/heading-html:\n'
+                 '       a tur from turmeric main, or a release made after it')
     os.replace(tmp, exe)
     now = time.time()
     for old in cache.glob('render-*'):
