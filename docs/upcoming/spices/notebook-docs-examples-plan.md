@@ -434,7 +434,7 @@ present -- if `plot` is not installed, the plot example test is skipped,
 not failed.
 
 The guide improvements are validated by the existing
-`check-guide-pairs.py` CI check, which verifies that every code block in
+`check-guide-pairs.tur` CI check, which verifies that every code block in
 a guide has a matching toggle pair (turmeric + sweet-exp). The new
 sections must follow the same toggle-pair convention as the existing
 guide.

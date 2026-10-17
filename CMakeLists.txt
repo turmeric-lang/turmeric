@@ -508,10 +508,17 @@ add_test(
 )
 set_tests_properties(tur_guestbook_smoke PROPERTIES SKIP_RETURN_CODE 2)
 # parse-check subcommand: AST-equality of turmeric + sweet-exp file pairs,
-# the backing check for tools/check-guide-pairs.py.
+# the backing check for tools/check-guide-pairs.tur.
 add_test(
   NAME tur_parse_check_tests
   COMMAND bash tests/run-parse-check.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+# tools/check-guide-pairs.tur against tests/guide-pairs/sample.md, which seeds
+# one outcome per check, and its exit statuses.
+add_test(
+  NAME tur_check_guide_pairs_tool
+  COMMAND bash tests/check-guide-pairs-tool.sh $<TARGET_FILE:tur>
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
 add_test(

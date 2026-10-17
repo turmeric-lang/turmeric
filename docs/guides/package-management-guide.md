@@ -113,7 +113,7 @@ Turmeric source file evaluated at build time. The top-level form is
 > is the canonical one to type.
 >
 > Manifest snippets in the guides are checked, not just proofread:
-> `tools/check-guide-pairs.py` shape-checks every fenced block in `README.md`
+> `tools/check-guide-pairs.tur` shape-checks every fenced block in `README.md`
 > and `docs/guides/` whose first form is `(defpackage ...)` by running
 > `tur fetch --dry-run` over it. A ```` ```turmeric no-check ```` fence does
 > **not** opt out of that -- `no-check` only means "this block has no sweet-exp

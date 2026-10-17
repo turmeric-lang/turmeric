@@ -797,4 +797,4 @@ file, and the fix is recent.
 Examples in this guide are compiled and run by
 `tests/fixtures/docs-introducing-saffron-examples`, and every
 s-expression/sweet-expression pair is checked to read to the same AST by
-`tools/check-guide-pairs.py`.
+`tools/check-guide-pairs.tur`.

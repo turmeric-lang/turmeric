@@ -11,7 +11,7 @@
 ;; Keep it in step with the guide: if an example changes there, change it here.
 ;;
 ;; The guide also carries a sweet-exp twin of every example. Those are pinned
-;; by `tools/check-guide-pairs.py`, which parse-checks each pair to the same
+;; by `tools/check-guide-pairs.tur`, which parse-checks each pair to the same
 ;; AST, so this fixture only needs the s-expression side.
 ;;
 ;; No requires.compiled -- the guide describes the language, not a back end, so

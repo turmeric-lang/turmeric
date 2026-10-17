@@ -12,9 +12,10 @@
 > both. M5's one consumer that exists today, the notebook, is done: the
 > library half -- TeX math and `markdown/render-block-html` -- is built
 > (#1266, section 6.6, "M5a as built"), and the notebook spice parses with
-> `tur/markdown` (turmeric-spices#111, "M5b as built"). The rest of M5 waits
-> on its consumers: literate `.tur.md`, the fence scanners' tools moving to
-> Turmeric, and terminal rendering.
+> `tur/markdown` (turmeric-spices#111, "M5b as built"). The one fence
+> scanner, `tools/check-guide-pairs`, is a Turmeric tool on `tur/markdown`
+> now ("M5c as built"). The rest of M5 waits on its consumers: literate
+> `.tur.md` and terminal rendering.
 > Written 2026-10-15; its open questions were settled with the author the same
 > day (section 8). It started as "would
 > `tools/gendocs.py` be a candidate to move to Turmeric?" A straight gendocs port
@@ -914,9 +915,10 @@ a `SlugMode`, for READMEs that are read on GitHub.
   and requires them to agree. It reads the examples from the same sibling
   checkout as 6.1 and skips the same way when that checkout is absent. That is the plan's own "two `.tur.md` dialects
   that disagree" concern, as a test.
-- **Fence scanners:** `tools/check-guide-pairs.py` and `tools/doctest.py` find
-  fences with their own scans. `markdown/code-blocks` replaces those whenever
-  these tools move to Turmeric.
+- **Fence scanners:** `tools/check-guide-pairs.py` found fences with its own
+  scan; it is a Turmeric tool on `tur/markdown` now ("M5c as built").
+  `tools/doctest.py`, listed here first, reads the `;;;` docstrings of `.tur`
+  files and never Markdown, so it has no fences to find.
 - **Terminal rendering:** `markdown/render-ansi` for `tur doc`, the REPL's
   `(doc ...)` and spice READMEs on the command line. Later.
 
@@ -997,6 +999,46 @@ library half, then M5b in turmeric-spices once a `tur` with M5a is on `main`.
   release with M3 and M5a; turmeric-spices#112 declares it as the spice's
   `:tur-version` floor. Under v0.65.5 the adapter does not compile: that
   release's `tur/markdown` has neither the GFM extensions nor math.
+
+**M5c as built.**
+
+- **`tools/check-guide-pairs.tur` replaces `tools/check-guide-pairs.py`**:
+  the same checks, command line and report, run with
+  `tur run tools/check-guide-pairs.tur -- ...`. CI's check-guides job and
+  `tur run check-guides` / `check-spices` call it, and the job no longer
+  sets up Python. Two small changes: `-v` is gone (`--verbose` stays), and
+  the default `tur` is `$TUR`, then the checkout's, then PATH's, as
+  `tools/mdrender.py` finds one, where the Python checker tried PATH first.
+- **The blocks are `tur/markdown`'s.** The Python checker found fences with
+  column-0 regular expressions and its own inline-C-aware block reader. Now
+  a block is what the docs site renders: a pair is a ```` ```turmeric ````
+  block whose next sibling in its container is a ```` ```sweet-exp ````
+  block, so fences in list items and block quotes are checked, and a
+  ```` ```turmeric ```` line inside another fence is no longer taken for a
+  block. An early-closing fence is a block whose inline C is still open
+  where CommonMark ends it.
+- **What it found.** On the README and the guides it agrees with the Python
+  checker on every pair and manifest that one saw (950 and 27), and finds
+  the 3 pairs in list items too. One of those did not parse-check: its
+  sweet-exp side wrote `::(map-get(m "name") :int)`, which the reader takes
+  for `::` and a separate list
+  ([neoteric-ascription-reads-as-two-forms](../reported/neoteric-ascription-reads-as-two-forms.md)).
+  `data-literals-guide.md` now writes `:: map-get(m "name") :int`, and the
+  `no-check` pair above it, wrong the same way twice, is fixed and checked.
+  On the spice READMEs the two checkers report the same lines.
+- **The manifest check runs.** The Python checker ran `tur fetch --dry-run`
+  from a scratch directory with the `tur` path as given, so CI's relative
+  `--tur build/tur` named nothing there, the run failed to start, and every
+  manifest snippet passed unchecked. The port makes the path absolute. The
+  27 manifests do parse.
+- **Tests.** `tests/check-guide-pairs-tool.sh` (ctest
+  `tur_check_guide_pairs_tool`, and a step of check-guides) runs the tool
+  over `tests/guide-pairs/sample.md`, which seeds one outcome per check, and
+  compares its report with `expected.txt`, then checks the exit statuses.
+- **Not moved:** turmeric-spices keeps an older copy of the Python checker
+  for its `just check-docs`, which no CI runs. The spice READMEs fail strict
+  mode today under either checker: 57 unpaired blocks and 3 pairs that do
+  not parse-check.
 
 ## 7. Compiler friction the spikes found
 

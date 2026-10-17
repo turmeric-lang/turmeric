@@ -404,12 +404,12 @@ docs-tarball: docs
 # README.md is in the list on purpose: it is the front door, and its manifest
 # snippet is the first thing a new user copies.
 check-guides:
-    python3 tools/check-guide-pairs.py README.md docs/guides/
+    tur run tools/check-guide-pairs.tur -- README.md docs/guides/
 
 # Strict check for spice READMEs: every `turmeric block must have an adjacent
 # `sweet-exp sibling (or be marked `turmeric no-check`).
 check-spices:
-    python3 tools/check-guide-pairs.py --spices
+    tur run tools/check-guide-pairs.tur -- --spices
 
 # Run both guide and spice README checks.
 check-docs: check-guides check-spices

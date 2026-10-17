@@ -4,7 +4,7 @@
 # `tur parse-check <a> <b>` reads two files and compares the form trees they
 # produce. Arg 1 is read as turmeric, arg 2 as sweet-exp, unless an explicit
 # `#lang` directive overrides. Exit codes: 0 equal, 1 mismatch, 2 read error.
-# This backs tools/check-guide-pairs.py.
+# This backs tools/check-guide-pairs.tur.
 set -u
 cd "$(dirname "$0")/.."
 

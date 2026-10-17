@@ -1,0 +1,34 @@
+ok    tests/guide-pairs/sample.md:9
+FAIL  tests/guide-pairs/sample.md:18
+      parse-check failed: tur: parse-check mismatch between <scratch>/pair.tur and <scratch>/pair.sweet
+--- <scratch>/pair.tur ---
+(+ 1 2)
+--- <scratch>/pair.sweet ---
+(- 1 2)
+FAIL  tests/guide-pairs/sample.md:27
+      sweet-exp block is empty
+FAIL  tests/guide-pairs/sample.md:35
+      turmeric block contains non-ASCII character at offset 12: '—'
+ok    tests/guide-pairs/sample.md:56
+ok    tests/guide-pairs/sample.md:63
+FAIL  tests/guide-pairs/sample.md:44
+      turmeric block (```turmeric) has no adjacent ```sweet-exp sibling
+      add a sweet-exp companion, or mark as ```turmeric no-check
+ok    tests/guide-pairs/sample.md:72 (manifest)
+FAIL  tests/guide-pairs/sample.md:78
+      manifest snippet does not parse: build.tur:3:11: error: build.tur: :spices must be a map -- use `#map{...}` (a bare `{...}` is curly-infix arithmetic, not a map)
+FAIL  tests/guide-pairs/sample.md:110
+      a ``` line inside this block (inline C closing on a line of
+      its own) ends the block early for CommonMark and GitHub;
+      fence the block with four backticks: ````turmeric ... ````
+
+Files checked    : 1
+Files with pairs : 1
+Pairs found      : 6
+Pairs ok         : 3
+Pairs failed     : 3
+Unpaired blocks  : 1
+Manifests found  : 2
+Manifests failed : 1
+Early-closing fences: 1
+Checker          : <tur> (parse-check + manifest dry-run)

@@ -1,0 +1,886 @@
+;; tools/check-guide-pairs.tur -- check the Turmeric code blocks of the guides,
+;; the README and the spice READMEs.
+;;
+;; Usage: tur run tools/check-guide-pairs.tur -- [options] PATH...
+;;
+;;   PATH               a .md file, or a directory: its *.md files (README.md
+;;                      left out) and each subdirectory's README.md
+;;   --tur PATH         the tur that runs the parse and manifest checks;
+;;                      by default $TUR, build/tur, build-release/tur, then
+;;                      PATH's.  With none, only the basic checks run.
+;;   --verbose          list the blocks that pass as well
+;;   --strict-unpaired  also fail a ```turmeric block with no ```sweet-exp
+;;                      block after it, unless it is ```turmeric no-check
+;;   --require-pairs    fail when no pair is found at all
+;;   --spices           check ../turmeric-spices/spices/*/README.md, with
+;;                      --strict-unpaired
+;;
+;; The blocks are tur/markdown's (markdown-library-plan M5): the parser the
+;; docs site renders with, and the same CommonMark GitHub renders with.  So
+;; a fence in a list item or a block quote is checked, and a ```turmeric
+;; line inside another fence is not.
+;;
+;; - Pairs.  A ```turmeric block with nothing after the language, then a
+;;   ```sweet-exp block likewise, next in the same container with only blank
+;;   lines between.  Both must be non-empty and ASCII, and `tur parse-check`
+;;   must read them to the same AST.
+;; - Unpaired blocks, with --strict-unpaired, as above.
+;; - Manifests.  A turmeric, sweet-exp or lisp block whose first form is
+;;   (defpackage ...) is shape-checked as a build.tur (build.tur.sweet for
+;;   sweet-exp) with `tur fetch --dry-run`, which touches no network.  Only
+;;   the manifest's own diagnostics count, less "not found (resolved to":
+;;   a snippet names paths in its reader's project.  These are the snippets
+;;   most often pasted verbatim, and 107 of them once rotted unnoticed
+;;   (docs/archive/spice-guides-bare-brace-manifest-syntax.md).  Opt out
+;;   with no-manifest-check; no-check only says a block has no sweet-exp
+;;   twin, which is true of most manifests.
+;; - Early-closing fences.  A turmeric, sweet-exp or lisp block whose inline
+;;   C is still open where the block ends.  Inline C closing with ``` on a
+;;   line of its own closes the enclosing three-backtick block instead, so
+;;   on GitHub and on the docs site the rest of the code renders as prose.
+;;   Fence such a block with four backticks: ````turmeric ... ````.
+;;
+;; Exit status 0; 1 when a check fails, or --require-pairs finds no pair; 2
+;; for a usage error, a file that cannot be read or a --tur that is missing.
+(load "stdlib/markdown.tur")
+
+(load "stdlib/fs-string.tur")
+
+(load "stdlib/args.tur")
+
+(load "stdlib/process.tur")
+
+(load "stdlib/env.tur")
+
+(load "stdlib/list.tur")
+
+(def spices-root "../turmeric-spices/spices")
+
+;; ---- Strings -------------------------------------------------------------------
+(defn str-is? [s : String c : cstr] : bool
+  (let [t (string/from-cstr c)
+        r (string/eq? s t)]
+    (do (string/release t) r)))
+
+(defn say [s : String] : void
+  (do (println (string/to-cstr s)) (string/release s)))
+
+(defn blank? [s : String] : bool
+  (let [n      (string/len s)
+        ^mut i 0]
+    (do
+      (while (and (< i n)
+               (let [c (string/byte-at s i)]
+                 (or (= c 32) (and (>= c 9) (<= c 13)))))
+        (set! i (+ i 1)))
+      (= i n))))
+
+;; The offset of s's first non-ASCII byte, or -1.
+(defn non-ascii-at [s : String] : int
+  (let [n      (string/len s)
+        ^mut i 0]
+    (do
+      (while (and (< i n) (< (string/byte-at s i) 128)) (set! i (+ i 1)))
+      (if (< i n) i -1))))
+
+;; The UTF-8 sequence that starts at byte i of s.
+(defn char-at [s : String i : int] : String
+  (let [n      (string/len s)
+        ^mut j (+ i 1)]
+    (do
+      (while (and (< j n)
+               (>= (string/byte-at s j) 128)
+               (< (string/byte-at s j) 192))
+        (set! j (+ j 1)))
+      (string/substring s i (- j i)))))
+
+(defn word-byte? [c : int] : bool
+  (or (and (>= c 48) (<= c 57))
+    (and (>= c 65) (<= c 90))
+    (and (>= c 97) (<= c 122))
+    (= c 95)))
+
+;; Whether some line of s, past its indentation and an optional (, starts
+;; with the word defpackage.
+(defn manifest? [s : String] : bool
+  (let [n       (string/len s)
+        word    (string/from-cstr "defpackage")
+        ^mut i  0
+        ^mut ok false]
+    (do
+      (while (and (not ok) (< i n))
+        (let [^mut j i]
+          (do
+            (while (and (< j n)
+                     (or (= (string/byte-at s j) 32) (= (string/byte-at s j) 9)))
+              (set! j (+ j 1)))
+            (when (and (< j n) (= (string/byte-at s j) 40)) (set! j (+ j 1)))
+            (when (and (string/starts-with-at? s word j)
+                    (or (>= (+ j 10) n)
+                      (not (word-byte? (string/byte-at s (+ j 10))))))
+              (set! ok true))
+            (match (string/index-of-char-from s (int->char 10) i)
+              (Some e)
+              (set! i (+ e 1))
+              (None)
+              (set! i n)))))
+      (string/release word)
+      ok)))
+
+;; Whether s leaves an inline-C span open: a ``` run followed by a letter or
+;; digit opens one, and the next ``` run closes it.
+(defn c-span-open? [s : String] : bool
+  (let [n         (string/len s)
+        ^mut i    0
+        ^mut in-c false]
+    (do
+      (while (< i n)
+        (if (and (<= (+ i 3) n)
+              (= (string/byte-at s i) 96)
+              (= (string/byte-at s (+ i 1)) 96)
+              (= (string/byte-at s (+ i 2)) 96))
+          (do
+            (if in-c
+              (set! in-c false)
+              (when (and (< (+ i 3) n) (word-byte? (string/byte-at s (+ i 3))))
+                (set! in-c true)))
+            (set! i (+ i 3)))
+          (set! i (+ i 1))))
+      in-c)))
+
+;; ---- Blocks --------------------------------------------------------------------
+(defdata Lang :copy (LangTurmeric) (LangSweet) (LangLisp) (LangOther))
+
+(defn lang-of [w : String] : Lang
+  (if (str-is? w "turmeric")
+    (LangTurmeric)
+    (if (str-is? w "sweet-exp")
+      (LangSweet)
+      (if (str-is? w "lisp") (LangLisp) (LangOther)))))
+
+(defn turmeric? [l : Lang] : bool (match l (LangTurmeric) true _ false))
+
+(defn sweet? [l : Lang] : bool (match l (LangSweet) true _ false))
+
+(defn checked-lang? [l : Lang] : bool (match l (LangOther) false _ true))
+
+;; A code block as the checks see it.  bare: nothing in the info string past
+;; the language.  paired: the next block in its container is a bare
+;; ```sweet-exp block, which is then the next Fence of the list.
+(defstruct Fence
+  :copy
+  [id : MdBlockId
+   lang : Lang
+   bare : bool
+   no-check : bool
+   no-manifest : bool
+   paired : bool])
+
+;; Code block id as a Fence, not yet paired.
+(defn fence-of [d : MdDoc id : MdBlockId] : Fence
+  (match (markdown/code-info d id)
+    (Some info)
+    (let [tab       (string/from-cstr "\t")
+          space     (string/from-cstr " ")
+          flat      (string/replace-all info tab space)
+          words     (string/split flat space)
+          ^mut lang (LangOther)
+          ^mut seen false
+          ^mut bare true
+          ^mut nc   false
+          ^mut nm   false
+          ^mut i    0]
+      (do
+        (while (< i (vec-len words))
+          (let [w (vec-get words i)]
+            (do
+              (when (> (string/len w) 0)
+                (if seen
+                  (do
+                    (set! bare false)
+                    (when (str-is? w "no-check") (set! nc true))
+                    (when (str-is? w "no-manifest-check") (set! nm true)))
+                  (do (set! seen true) (set! lang (lang-of w)))))
+              (set! i (+ i 1)))))
+        (string/release-all words)
+        (string/release flat)
+        (string/release space)
+        (string/release tab)
+        (string/release info)
+        (Fence id lang bare nc nm false)))
+    (None)
+    (Fence id (LangOther) true false false false)))
+
+(defn code-block? [d : MdDoc id : MdBlockId] : bool
+  (match (markdown/block d id) (MdCodeBlock f) true _ false))
+
+(defn bare-sweet? [d : MdDoc id : MdBlockId] : bool
+  (if (code-block? d id)
+    (let [f (fence-of d id)] (and (sweet? (.lang f)) (.bare f)))
+    false))
+
+;; Append every code block under block id to out, in document order.
+(defn collect-fences! [d : MdDoc id : MdBlockId out : (Vec Fence)] : void
+  (let [kids   (markdown/children d id)
+        n      (vec-len kids)
+        ^mut i 0]
+    (do
+      (while (< i n)
+        (let [k (vec-get kids i)]
+          (do
+            (if (code-block? d k)
+              ;; Bound before the push: vec-push! of a with expression
+              ;; emits invalid C (docs/reported/vec-push-of-with-expression-emits-invalid-c.md).
+              (let [f (with (fence-of d k)
+                        [paired
+                         (if (< (+ i 1) n)
+                           (bare-sweet? d (vec-get kids (+ i 1)))
+                           false)])]
+                (vec-push! out f))
+              (collect-fences! d k out))
+            (set! i (+ i 1)))))
+      (vec-free kids))))
+
+(defn fence-text [d : MdDoc f : Fence] : String
+  (match (markdown/block-text d (.id f))
+    (Some s)
+    s
+    (None)
+    (string/from-cstr "")))
+
+(defn fence-line [d : MdDoc f : Fence] : int
+  (pair-fst (markdown/block-lines d (.id f))))
+
+(defn fence-info [d : MdDoc f : Fence] : String
+  (match (markdown/code-info d (.id f)) (Some s) s (None) (string/from-cstr "")))
+
+;; ---- Running tur ---------------------------------------------------------------
+;; tur: the binary, when there is one.  dir: a scratch directory of this
+;; run's, holding the pair files and, in manifest/, one manifest at a time.
+(defstruct Ctx
+  :copy
+  [tur : (Option cstr) dir : cstr verbose : bool strict : bool])
+
+(defn scratch [ctx : Ctx name : cstr] : String (string/of (.dir ctx) "/" name))
+
+;; s, trimmed, as a fresh String.
+(defn trimmed [s : cstr] : String
+  (let [t (string/from-cstr s)
+        r (string/trim t)]
+    (do (string/release t) r)))
+
+(defn write! [path : String text : String] : bool
+  (match (fs/write-text (string/to-cstr path) (string/to-cstr text))
+    (Ok u)
+    true
+    (Err e)
+    false))
+
+;; What is wrong with a pair by `tur parse-check`, if anything.
+(defn parse-check [ctx : Ctx tur : cstr a : String b : String] : (Option String)
+  (let [pa (scratch ctx "pair.tur")
+        pb (scratch ctx "pair.sweet")
+        r  (if (and (write! pa a) (write! pb b))
+             (match (process/output (process/default-opts)
+                      tur
+                      "parse-check"
+                      (string/to-cstr pa)
+                      (string/to-cstr pb))
+               (Ok o)
+               (let [msg (match (.status o)
+                           (Exited c)
+                           (if (= c 0)
+                             (none)
+                             (let [e   (trimmed (.err o))
+                                   out (trimmed (.out o))
+                                   m   (string/of "parse-check failed: "
+                                         (if (string/empty? e) out e))]
+                               (do
+                                 (string/release e)
+                                 (string/release out)
+                                 (some m))))
+                           (Signaled s)
+                           (some (string/from-cstr "parse-check was killed")))]
+                 (do (fs/free-cstr (.out o)) (fs/free-cstr (.err o)) msg))
+               (Err e)
+               (some (string/of "parse-check could not run: "
+                       (io-error/message e))))
+             (some (string/from-cstr "cannot write the pair to the scratch directory")))]
+    (do (string/release pa) (string/release pb) r)))
+
+;; The first line of text that starts with "name:" and is not about a path
+;; that does not exist.
+(defn manifest-error [text : String name : cstr] : (Option String)
+  (let [lines      (string/lines text)
+        prefix     (string/of name ":")
+        unresolved (string/from-cstr "not found (resolved to")
+        ^mut found (none)
+        ^mut i     0]
+    (do
+      (while (< i (vec-len lines))
+        (let [l (vec-get lines i)]
+          (do
+            (when (and (match found (Some x) false (None) true)
+                    (string/starts-with? l prefix)
+                    (not (string/contains? l unresolved)))
+              (set! found (some (string/substring l 0 (string/len l)))))
+            (set! i (+ i 1)))))
+      (string/release-all lines)
+      (string/release prefix)
+      (string/release unresolved)
+      found)))
+
+;; What is wrong with a manifest snippet by `tur fetch --dry-run`, if anything.
+(defn check-manifest [ctx : Ctx tur : cstr text : String sweet : bool] : (Option String)
+  (let [name (if sweet "build.tur.sweet" "build.tur")
+        dir  (scratch ctx "manifest")
+        path (string/of dir "/" name)
+        opts (ProcOpts (none) (some (string/to-cstr dir)) (none))
+        r    (if (write! path text)
+               (match (process/output opts tur "fetch" "--dry-run")
+                 (Ok o)
+                 (let [both (string/of (.err o) (.out o))
+                       bad  (manifest-error both name)]
+                   (do
+                     (string/release both)
+                     (fs/free-cstr (.out o))
+                     (fs/free-cstr (.err o))
+                     (match bad
+                       (Some l)
+                       (let [m (string/of "manifest snippet does not parse: " l)]
+                         (do (string/release l) (some m)))
+                       (None)
+                       (none))))
+                 (Err e)
+                 (some (string/of "manifest check could not run: "
+                         (io-error/message e))))
+               (some (string/from-cstr "cannot write the manifest to the scratch directory")))]
+    (do
+      (match (fs/rm (string/to-cstr path)) (Ok u) nil (Err e) nil)
+      (string/release path)
+      (string/release dir)
+      r)))
+
+;; ---- One file ------------------------------------------------------------------
+(defstruct Tally
+  :copy
+  [pairs : int
+   ok : int
+   failed : int
+   unpaired : int
+   manifests : int
+   bad-man : int
+   early : int])
+
+(defn tally-zero [] : Tally (Tally 0 0 0 0 0 0 0))
+
+(defn tally-add [a : Tally b : Tally] : Tally
+  (Tally (+ (.pairs a) (.pairs b))
+    (+ (.ok a) (.ok b))
+    (+ (.failed a) (.failed b))
+    (+ (.unpaired a) (.unpaired b))
+    (+ (.manifests a) (.manifests b))
+    (+ (.bad-man a) (.bad-man b))
+    (+ (.early a) (.early b))))
+
+(defn fail-at [path : cstr line : int] : void
+  (say (string/of "FAIL  " path ":" line)))
+
+;; Print s as a detail line under a FAIL, then release it.
+(defn detail [s : String] : void
+  (do (say (string/of "      " s)) (string/release s)))
+
+;; The basic checks of one side of a pair, appended to errs.
+(defn check-side! [errs : (Vec String) side : cstr s : String] : void
+  (do
+    (when (blank? s) (vec-push! errs (string/of side " block is empty")))
+    (let [at (non-ascii-at s)]
+      (when (>= at 0)
+        (let [c (char-at s at)
+              m (string/of side
+                  " block contains non-ASCII character at offset "
+                  at
+                  ": '"
+                  c
+                  "'")]
+          (do (string/release c) (vec-push! errs m)))))))
+
+;; Check the pair that starts at fences[j]; true when it passes.
+(defn check-pair [ctx : Ctx path : cstr d : MdDoc fences : (Vec Fence) j : int] : bool
+  (let [f    (vec-get fences j)
+        a    (fence-text d f)
+        b    (fence-text d (vec-get fences (+ j 1)))
+        errs (:: (vec-new) (Vec String))]
+    (do
+      (check-side! errs "turmeric" a)
+      (check-side! errs "sweet-exp" b)
+      (when (= (vec-len errs) 0)
+        (match (.tur ctx)
+          (Some tur)
+          (match (parse-check ctx tur a b)
+            (Some e)
+            (vec-push! errs e)
+            (None)
+            nil)
+          (None)
+          nil))
+      (let [ok (= (vec-len errs) 0)]
+        (do
+          (if ok
+            (when (.verbose ctx)
+              (say (string/of "ok    " path ":" (fence-line d f))))
+            (do
+              (fail-at path (fence-line d f))
+              (let [^mut k 0]
+                (while (< k (vec-len errs))
+                  (do (detail (vec-get errs k)) (set! k (+ k 1)))))))
+          ;; detail released each error; only the vector is left.
+          (vec-free errs)
+          (string/release a)
+          (string/release b)
+          ok)))))
+
+(defn check-pairs [ctx : Ctx path : cstr d : MdDoc fences : (Vec Fence)] : Tally
+  (let [^mut t (tally-zero)
+        ^mut j 0]
+    (do
+      (while (< j (vec-len fences))
+        (let [f (vec-get fences j)]
+          (do
+            (when (and (turmeric? (.lang f)) (.bare f) (.paired f))
+              (set! t
+                (if (check-pair ctx path d fences j)
+                  (with t [pairs (+ (.pairs t) 1) ok (+ (.ok t) 1)])
+                  (with t [pairs (+ (.pairs t) 1) failed (+ (.failed t) 1)]))))
+            (set! j (+ j 1)))))
+      t)))
+
+(defn check-unpaired [path : cstr d : MdDoc fences : (Vec Fence)] : int
+  (let [^mut n 0
+        ^mut j 0]
+    (do
+      (while (< j (vec-len fences))
+        (let [f (vec-get fences j)]
+          (do
+            (when (and (turmeric? (.lang f))
+                    (not (.no-check f))
+                    (not (.paired f)))
+              (let [info (fence-info d f)]
+                (do
+                  (fail-at path (fence-line d f))
+                  (detail (string/of "turmeric block (```"
+                            info
+                            ") has no adjacent ```sweet-exp sibling"))
+                  (detail (string/from-cstr "add a sweet-exp companion, or mark as ```turmeric no-check"))
+                  (string/release info)
+                  (set! n (+ n 1)))))
+            (set! j (+ j 1)))))
+      n)))
+
+(defn check-manifests [ctx : Ctx
+                       tur : cstr
+                       path : cstr
+                       d : MdDoc
+                       fences : (Vec Fence)] : Tally
+  (let [^mut t (tally-zero)
+        ^mut j 0]
+    (do
+      (while (< j (vec-len fences))
+        (let [f    (vec-get fences j)
+              text (fence-text d f)]
+          (do
+            (when (and (checked-lang? (.lang f))
+                    (not (.no-manifest f))
+                    (manifest? text))
+              (match (check-manifest ctx tur text (sweet? (.lang f)))
+                (Some e)
+                (do
+                  (fail-at path (fence-line d f))
+                  (detail e)
+                  (set! t
+                    (with t
+                      [manifests
+                       (+ (.manifests t) 1)
+                       bad-man
+                       (+ (.bad-man t) 1)])))
+                (None)
+                (do
+                  (when (.verbose ctx)
+                    (say (string/of "ok    "
+                           path
+                           ":"
+                           (fence-line d f)
+                           " (manifest)")))
+                  (set! t (with t [manifests (+ (.manifests t) 1)])))))
+            (string/release text)
+            (set! j (+ j 1)))))
+      t)))
+
+(defn check-early [path : cstr d : MdDoc fences : (Vec Fence)] : int
+  (let [^mut n 0
+        ^mut j 0]
+    (do
+      (while (< j (vec-len fences))
+        (let [f    (vec-get fences j)
+              text (fence-text d f)]
+          (do
+            (when (and (checked-lang? (.lang f)) (c-span-open? text))
+              (do
+                (fail-at path (fence-line d f))
+                (detail (string/from-cstr "a ``` line inside this block (inline C closing on a line of"))
+                (detail (string/from-cstr "its own) ends the block early for CommonMark and GitHub;"))
+                (detail (string/from-cstr "fence the block with four backticks: ````turmeric ... ````"))
+                (set! n (+ n 1))))
+            (string/release text)
+            (set! j (+ j 1)))))
+      n)))
+
+;; Every check on one file, or (none) when it cannot be read.
+(defn check-file [ctx : Ctx path : cstr] : (Option Tally)
+  (match (fs/read-string path)
+    (Ok src)
+    (let [d      (markdown/parse src (markdown/default-opts))
+          fences (:: (vec-new) (Vec Fence))]
+      (do
+        (collect-fences! d (markdown/root d) fences)
+        (let [t1 (check-pairs ctx path d fences)
+              un (if (.strict ctx) (check-unpaired path d fences) 0)
+              t2 (match (.tur ctx)
+                   (Some tur)
+                   (check-manifests ctx tur path d fences)
+                   (None)
+                   (tally-zero))
+              ea (check-early path d fences)]
+          (do
+            (vec-free fences)
+            (markdown/doc-free d)
+            (string/release src)
+            (some (with (tally-add t1 t2) [unpaired un early ea]))))))
+    (Err e)
+    (do
+      (eprintln (string/to-cstr (string/of "check-guide-pairs: cannot read "
+                                  path)))
+      (none))))
+
+;; ---- Files ---------------------------------------------------------------------
+(defn md-name? [name : cstr] : bool
+  (let [s (string/from-cstr name)
+        x (string/from-cstr ".md")
+        r (string/ends-with? s x)]
+    (do (string/release s) (string/release x) r)))
+
+(defn cstr-is? [a : cstr b : cstr] : bool
+  (let [s (string/from-cstr a)
+        r (str-is? s b)]
+    (do (string/release s) r)))
+
+(defn push-new! [out : (Vec String) p : String] : void
+  (let [^mut i   0
+        ^mut dup false]
+    (do
+      (while (< i (vec-len out))
+        (do
+          (when (string/eq? (vec-get out i) p) (set! dup true))
+          (set! i (+ i 1))))
+      (if dup (string/release p) (vec-push! out p)))))
+
+;; The files a PATH argument names, appended to out: a .md file itself, or a
+;; directory's *.md files and its subdirectories' README.md, each in name
+;; order.  include-readme keeps the directory's own README.md.
+(defn collect-files! [out : (Vec String) raw : cstr include-readme : bool] : void
+  (if (fs/dir? raw)
+    (match (fs/read-dir raw)
+      (Ok names)
+      (let [^mut i 0
+            ^mut k 0]
+        (do
+          (while (< i (vec-len names))
+            (let [name (vec-get names i)
+                  p    (fs/path-join raw name)]
+              (do
+                (when (and (md-name? name)
+                        (fs/file? p)
+                        (or include-readme (not (cstr-is? name "README.md"))))
+                  (push-new! out (string/from-cstr p)))
+                (fs/free-cstr p)
+                (set! i (+ i 1)))))
+          (while (< k (vec-len names))
+            (let [sub    (fs/path-join raw (vec-get names k))
+                  readme (fs/path-join sub "README.md")]
+              (do
+                (when (and (fs/dir? sub) (fs/file? readme))
+                  (push-new! out (string/from-cstr readme)))
+                (fs/free-cstr readme)
+                (fs/free-cstr sub)
+                (set! k (+ k 1)))))
+          (fs/paths-free names)))
+      (Err e)
+      (eprintln (string/to-cstr (string/of "check-guide-pairs: cannot list "
+                                  raw))))
+    (if (md-name? raw)
+      (push-new! out (string/from-cstr raw))
+      (eprintln (string/to-cstr (string/of "warning: skipping "
+                                  raw
+                                  " (not a .md file or directory)"))))))
+
+;; ---- Finding tur ---------------------------------------------------------------
+(defn has-slash? [p : cstr] : bool
+  (let [s (string/from-cstr p)
+        r (match (string/index-of-char s (int->char 47))
+            (Some i)
+            true
+            (None)
+            false)]
+    (do (string/release s) r)))
+
+;; Whether p is "".
+(defn cstr-empty? [p : cstr] : bool
+  (let [s (string/from-cstr p)
+        r (string/empty? s)]
+    (do (string/release s) r)))
+
+;; Whether p is an absolute path.
+(defn cstr-starts-slash? [p : cstr] : bool
+  (let [s (string/from-cstr p)
+        r (and (> (string/len s) 0) (= (string/byte-at s 0) 47))]
+    (do (string/release s) r)))
+
+;; p made absolute, so that it still names the binary from the scratch
+;; directory `tur fetch` runs in.  A bare name is left to the PATH search.
+(defn absolute [p : cstr] : cstr
+  (if (or (not (has-slash? p)) (cstr-starts-slash? p))
+    (fs/dup-cstr p)
+    (match (process/cwd)
+      (Ok cwd)
+      (let [r (fs/path-join cwd p)] (do (fs/free-cstr cwd) r))
+      (Err e)
+      (fs/dup-cstr p))))
+
+;; The first dir/tur on PATH.
+(defn tur-on-path [] : (Option cstr)
+  (match (env/get "PATH")
+    (Some path)
+    (let [s          (string/from-cstr path)
+          colon      (string/from-cstr ":")
+          dirs       (string/split s colon)
+          ^mut found (none)
+          ^mut i     0]
+      (do
+        (while (and (match found (Some x) false (None) true)
+                 (< i (vec-len dirs)))
+          (let [c (fs/path-join (string/to-cstr (vec-get dirs i)) "tur")]
+            (do
+              (if (and (> (string/len (vec-get dirs i)) 0) (fs/file? c))
+                (do (set! found (some (absolute c))) (fs/free-cstr c))
+                (fs/free-cstr c))
+              (set! i (+ i 1)))))
+        (string/release-all dirs)
+        (string/release colon)
+        (string/release s)
+        found))
+    (None)
+    (none)))
+
+(defn find-tur [] : (Option cstr)
+  (match (env/get "TUR")
+    (Some t)
+    (some (absolute t))
+    (None)
+    (if (fs/file? "build/tur")
+      (some (absolute "build/tur"))
+      (if (fs/file? "build-release/tur")
+        (some (absolute "build-release/tur"))
+        (tur-on-path)))))
+
+;; ---- Main ----------------------------------------------------------------------
+(defn usage [] : void
+  (do
+    (println "usage: tur run tools/check-guide-pairs.tur -- [options] PATH...")
+    (println "  --tur PATH         the tur for parse-check and fetch --dry-run")
+    (println "  --verbose          list the blocks that pass as well")
+    (println "  --strict-unpaired  fail a ```turmeric block with no ```sweet-exp twin")
+    (println "  --require-pairs    fail when no pair is found")
+    (println "  --spices           check ../turmeric-spices/spices/*/README.md, strictly")))
+
+(defn print-count [label : cstr n : int] : void (say (string/of label n)))
+
+;; Print the summary; the exit status.
+(defn summarize [ctx : Ctx
+                 files : int
+                 with-pairs : int
+                 t : Tally
+                 require : bool] : int
+  (do
+    (println "")
+    (print-count "Files checked    : " files)
+    (print-count "Files with pairs : " with-pairs)
+    (print-count "Pairs found      : " (.pairs t))
+    (print-count "Pairs ok         : " (.ok t))
+    (print-count "Pairs failed     : " (.failed t))
+    (when (.strict ctx) (print-count "Unpaired blocks  : " (.unpaired t)))
+    (print-count "Manifests found  : " (.manifests t))
+    (print-count "Manifests failed : " (.bad-man t))
+    (print-count "Early-closing fences: " (.early t))
+    (match (.tur ctx)
+      (Some tur)
+      (say (string/of "Checker          : "
+             tur
+             " (parse-check + manifest dry-run)"))
+      (None)
+      (println "Checker          : basic only (tur binary not found; skipped parse-check)"))
+    (if (> (+ (.failed t) (.unpaired t) (.bad-man t) (.early t)) 0)
+      1
+      (if (and require (= (.pairs t) 0))
+        (do (eprintln "error: no pairs found") 1)
+        0))))
+
+;; Check every file; the exit status.
+(defn run [ctx : Ctx files : (Vec String) require : bool] : int
+  (let [^mut t      (tally-zero)
+        ^mut paired 0
+        ^mut bad    false
+        ^mut i      0]
+    (do
+      (while (< i (vec-len files))
+        (do
+          (match (check-file ctx (string/to-cstr (vec-get files i)))
+            (Some ft)
+            (do
+              (when (> (.pairs ft) 0) (set! paired (+ paired 1)))
+              (set! t (tally-add t ft)))
+            (None)
+            (set! bad true))
+          (set! i (+ i 1))))
+      (let [rc (summarize ctx (vec-len files) paired t require)] (if bad 2 rc)))))
+
+;; The scratch directory, under $TMPDIR, named for this process.
+(defn make-scratch [] : (Option cstr)
+  (let [base (match (env/get "TMPDIR") (Some t) t (None) "/tmp")
+        name (string/of "tur-guide-pairs-" (:: (process/pid) int))
+        dir  (fs/path-join base (string/to-cstr name))
+        sub  (fs/path-join dir "manifest")]
+    (do
+      (string/release name)
+      (match (fs/mkdirp sub)
+        (Ok u)
+        (do (fs/free-cstr sub) (some dir))
+        (Err e)
+        (do (fs/free-cstr sub) (fs/free-cstr dir) (none))))))
+
+;; Each result is matched where it is made: that frees its box, which
+;; handing it to a helper to drop would not.
+(defn remove-scratch [dir : cstr] : void
+  (let [a (fs/path-join dir "pair.tur")
+        b (fs/path-join dir "pair.sweet")
+        m (fs/path-join dir "manifest")]
+    (do
+      (match (fs/rm a) (Ok u) nil (Err e) nil)
+      (match (fs/rm b) (Ok u) nil (Err e) nil)
+      (match (fs/rmdir m) (Ok u) nil (Err e) nil)
+      (match (fs/rmdir dir) (Ok u) nil (Err e) nil)
+      (fs/free-cstr a)
+      (fs/free-cstr b)
+      (fs/free-cstr m))))
+
+(defn arg-spec [] : ArgSpec
+  (args/spec-option (args/spec-flag (args/spec-flag (args/spec-flag (args/spec-flag (args/spec-new)
+                                                                      "--verbose")
+                                                      "--strict-unpaired")
+                                      "--require-pairs")
+                      "--spices")
+    "--tur"
+    "string"
+    (some "")))
+
+;; The positional arguments, in order.
+(defn positionals [res : ArgResult] : (Vec String)
+  (let [out    (:: (vec-new) (Vec String))
+        ^mut l (args/positional res)]
+    (do
+      (while (not (= l 0))
+        (do
+          (vec-push! out (string/from-cstr (:: (list-head l) cstr)))
+          (set! l (list-tail l))))
+      ;; args/positional lists them last first.
+      (let [n      (vec-len out)
+            ^mut i 0]
+        (while (< i (/ n 2))
+          (let [a (vec-get out i)]
+            (do
+              (vec-set! out i (vec-get out (- n 1 i)))
+              (vec-set! out (- n 1 i) a)
+              (set! i (+ i 1))))))
+      out)))
+
+(defn main-run [res : ArgResult
+                paths : (Vec String)
+                tur : (Option cstr)
+                spices : bool] : int
+  (match (make-scratch)
+    (Some dir)
+    (let [ctx    (Ctx tur
+                   dir
+                   (args/get-bool res "verbose")
+                   (or spices (args/get-bool res "strict-unpaired")))
+          files  (:: (vec-new) (Vec String))
+          ^mut i 0]
+      (do
+        (while (< i (vec-len paths))
+          (do
+            (collect-files! files (string/to-cstr (vec-get paths i)) spices)
+            (set! i (+ i 1))))
+        (let [rc (run ctx files (args/get-bool res "require-pairs"))]
+          (do
+            (remove-scratch dir)
+            (fs/free-cstr dir)
+            (match tur (Some p) (fs/free-cstr p) (None) nil)
+            (string/release-all files)
+            (string/release-all paths)
+            rc))))
+    (None)
+    (do
+      (eprintln "check-guide-pairs: cannot make a scratch directory")
+      (string/release-all paths)
+      2)))
+
+(defn main-with [res : ArgResult] : int
+  (let [spices (args/get-bool res "spices")
+        paths  (positionals res)]
+    (do
+      (when spices (vec-push! paths (string/from-cstr spices-root)))
+      (if (and spices (not (fs/dir? spices-root)))
+        (do
+          (eprintln (string/to-cstr (string/of "error: "
+                                      spices-root
+                                      " not found. Clone the sibling repo next to this checkout.")))
+          (string/release-all paths)
+          1)
+        (if (= (vec-len paths) 0)
+          (do
+            (eprintln "check-guide-pairs: no paths given (use --spices or pass a path)")
+            (string/release-all paths)
+            2)
+          ;; args has no optional option without a default, so "" is unset.
+          (let [given (args/get-str res "tur")
+                tur   (if (cstr-empty? given)
+                        (find-tur)
+                        (some (absolute given)))]
+            (match tur
+              (Some p)
+              (if (and (has-slash? p) (not (fs/file? p)))
+                (do
+                  (eprintln (string/to-cstr (string/of "check-guide-pairs: no tur at "
+                                              p)))
+                  (string/release-all paths)
+                  2)
+                (main-run res paths tur spices))
+              (None)
+              (main-run res paths tur spices))))))))
+
+(defn main [] : int
+  (let [spec (arg-spec)
+        res  (args/parse spec *args*)
+        rc   (if (args/error? res)
+               (do (eprintln (args/error-msg res)) (usage) 2)
+               (if (args/has? res "help") (do (usage) 0) (main-with res)))]
+    (do (args/result-free res) (args/spec-free spec) rc)))
