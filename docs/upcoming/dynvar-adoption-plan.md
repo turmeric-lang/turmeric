@@ -21,7 +21,7 @@
 > (revised 2026-10-17). It no longer waits on anything here.
 >
 > **Reports that bear on this plan:**
-> - [dynvar-binding-not-swapped-on-fiber-switch](../reported/dynvar-binding-not-swapped-on-fiber-switch.md):
+> - [dynvar-binding-not-swapped-on-fiber-switch](../archive/dynvar-binding-not-swapped-on-fiber-switch.md) (resolved 2026-10-18):
 >   a `binding` is per thread, not per fiber. ADO-1 makes `*log-level*`
 >   bindings mean something, so it makes this bug observable in async code.
 > - [defdynamic-generic-adt-root-emitted-before-its-type](../reported/defdynamic-generic-adt-root-emitted-before-its-type.md):

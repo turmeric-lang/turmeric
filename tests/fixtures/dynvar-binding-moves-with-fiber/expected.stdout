@@ -1,0 +1,9 @@
+A before yield: A
+main between:   root
+B before yield: B
+A after yield:  A
+main after A:   root
+C sees:         root
+main in M:      M
+B after yield:  B
+main at end:    root

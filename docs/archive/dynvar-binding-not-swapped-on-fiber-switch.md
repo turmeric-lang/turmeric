@@ -1,5 +1,22 @@
 # A `binding` does not move with its fiber: interleaved fibers corrupt the dynvar binding chain
 
+**Resolved 2026-10-18** (fix direction 1). `tur_fiber_block_resume` now swaps
+each dynvar's chain head on both sides of the switch, as it already swapped
+the escapes and the r7rs dynamic environment. Each TU that has `defdynamic`s
+registers a `TurDynSwap` from its static initializer (`_tur_dyn_swap_tu`,
+emitted beside the keys in `emit_module.c`). The fiber keeps its heads in a
+`TurDynSave` per TU (`FiberBlock.dynsave`), which is made only once a head
+differs, so a fiber that never binds allocates nothing. A program with no
+`defdynamic` pays one NULL test per switch. It is a registry rather than one
+hook pointer because every TU of a multi-TU build has its own keys
+(any-type-ids-are-per-tu is the same lesson). A new fiber starts from the root.
+
+The repro below is `tests/fixtures/dynvar-binding-moves-with-fiber`. It is
+leak-checked, and it also checks that a fresh fiber resumed inside a `binding`
+reads the root. Every line now prints the "Expected" column, under cc and
+`tur jit`. The dynamic-vars guide's "Thread Isolation" section says fibers
+are isolated too.
+
 **Severity: medium-high (silent wrong value, and a read through a frame whose
 binding has exited).** A `defdynamic` binding is per thread, not per fiber. Two
 fibers that bind the same var and yield in between read each other's values,

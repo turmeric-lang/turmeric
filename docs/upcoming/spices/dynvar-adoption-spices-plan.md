@@ -23,7 +23,7 @@
 > dynvar API) mattered only to the ansi target dropped below.
 >
 > **Found while revising, filed as reports:**
-> - [dynvar-binding-not-swapped-on-fiber-switch](../../reported/dynvar-binding-not-swapped-on-fiber-switch.md):
+> - [dynvar-binding-not-swapped-on-fiber-switch](../../archive/dynvar-binding-not-swapped-on-fiber-switch.md) (resolved 2026-10-18):
 >   a `binding` is per thread, not per fiber.
 > - [defdynamic-generic-adt-root-emitted-before-its-type](../../reported/defdynamic-generic-adt-root-emitted-before-its-type.md):
 >   a `(Option T)` dynvar does not compile.
