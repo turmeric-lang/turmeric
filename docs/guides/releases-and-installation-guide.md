@@ -166,10 +166,14 @@ users should use Option 3 or Option 4.
 ### Option 3: Homebrew (source build)
 
 ```sh
-brew install --HEAD rjungemann/turmeric
-# (if a tap isn't published yet:)
-brew install --HEAD https://raw.githubusercontent.com/turmeric-lang/turmeric/main/Formula/turmeric.rb
+brew tap turmeric-lang/turmeric
+brew install --HEAD turmeric-lang/turmeric/turmeric
 ```
+
+The formula lives in the
+[`turmeric-lang/homebrew-turmeric`](https://github.com/turmeric-lang/homebrew-turmeric)
+tap repo; it still builds from `main` of this repo, and releases are still cut
+here.
 
 The formula builds from the latest commit on `main` (CMake source build,
 ~10s on modern hardware). It installs:
@@ -441,7 +445,9 @@ failed attempt's history is preserved.
 
 ## See also
 
-- `Formula/turmeric.rb` -- the Homebrew formula.
+- `Formula/turmeric.rb` -- the Homebrew formula. The maintained copy now lives
+  in the `turmeric-lang/homebrew-turmeric` tap; this one is kept for one
+  release for people who tapped this repo by URL, then removed.
 - `.github/workflows/release.yml` -- the release pipeline.
 - `src/main.c` (`resolve_stdlib_root`) -- the stdlib-discovery logic
   that makes both the tarball and Homebrew layouts work without code
