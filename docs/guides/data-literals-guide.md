@@ -57,7 +57,7 @@ elements of a vector must unify to one type, and all map values to one type
 element). Elements are stored through an `:int` carrier slot, so reads
 recover the type with an ascription:
 
-```turmeric no-check
+```turmeric
 [1.5 2.5 3.5]                 ; Vec[float]
 (:: (vec-get fs 0) :float)    ; => 1.5
 
@@ -67,11 +67,11 @@ recover the type with an ascription:
 ```sweet-exp
 [1.5 2.5 3.5]
 ; Vec[float]
-::(vec-get(fs 0) :float)
+:: vec-get(fs 0) :float
 ; => 1.5
 #map{1 "one" 2 "two"}
 ; Map[int cstr]
-::(map-get(m 1) :cstr)
+:: map-get(m 1) :cstr
 ; => "one"
 ```
 
@@ -157,7 +157,7 @@ How a key lowers depends on its form:
   ```
   ```sweet-exp
   let [m #map{"name" 1 "age" 2}]
-    ::(map-get(m "name") :int)
+    :: map-get(m "name") :int
   ; => 1
   ```
 

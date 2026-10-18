@@ -42,12 +42,13 @@ Note: all guide content must be ASCII-only. Use `--` (double hyphen), never em d
 ## Coverage
 
 Every `turmeric` + `sweet-exp` toggle pair is **machine-verified**: the two sides
-must read to the same AST. `tools/check-guide-pairs.py` extracts each pair and
-runs `tur parse-check <turmeric> <sweet-exp>` (exit 0 = same AST), so a drifted
+must read to the same AST. `tools/check-guide-pairs.tur` finds each pair with
+`tur/markdown`, the parser the site renders with, and runs
+`tur parse-check <turmeric> <sweet-exp>` (exit 0 = same AST), so a drifted
 sweet-exp block fails the check.
 
-Run `tur run check-guides` (or `python3 tools/check-guide-pairs.py docs/guides/`) to
-verify all pairs and see current coverage. A pair that is genuinely illustrative
+Run `tur run check-guides` (or `tur run tools/check-guide-pairs.tur -- docs/guides/`)
+to verify all pairs and see current coverage. A pair that is genuinely illustrative
 pseudo-code can opt out by marking its opening fence ```` ```turmeric no-check ````.
 
 ## Getting Started

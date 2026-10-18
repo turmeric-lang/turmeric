@@ -34,6 +34,12 @@ sentence above does not cover them. If you touch this file, check
 `ls docs/reported/` against it -- an index that silently omits a quarter of the
 directory is worse for triage than no index.
 
+## Found porting `tools/check-guide-pairs` to Turmeric (filed 2026-10-17)
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [neoteric-ascription-reads-as-two-forms](neoteric-ascription-reads-as-two-forms.md) | low | In neoteric / sweet-exp, `::(x :int)` reads as the symbol `::` and a separate list -- `read_keyword` (`reader.c:863`) returns `::` without the neoteric-bracket check every other atom gets. TUR-E0003 in a body; a guide pair that does not parse-check. Workaround: `:: x :int` |
+
 ## Found auditing the guides' "Trust the code over the comments" notes (filed 2026-10-17)
 
 Six internals guides open with a "Trust the code over the comments" warning
