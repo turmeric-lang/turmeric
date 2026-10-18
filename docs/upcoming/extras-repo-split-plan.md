@@ -53,7 +53,7 @@ directory; it is the work an extraction has to carry.
 | `external/mir/` | 99 | Vendored MIR (`VENDORED.md`) | Keep |
 | `web/` | 86 | Try Turmeric, the marketing site, the worker | Keep: wasm build, docs pack and CI page are all coupled to the compiler |
 | `docs/archive/` | ~23 MB | Resolved reports and plans | Keep; it is the paper trail |
-| `mobile-try.png` (root) | 1 | Stray screenshot at the repo root | Move under `docs/` or delete |
+| `mobile-try.png` (root) | 1 | Stray screenshot at the repo root, referenced by nothing | **Deleted** (step 1) |
 
 Not worth extracting: `tests/fixtures/` (100 MB, but it *is* the compiler's
 test suite), `src/`, `stdlib/`, `tools/`.
@@ -185,7 +185,7 @@ reversible until the in-tree copy is deleted.
 
 1. **Dedupe in place** (no new repo): choose the surviving Vim pack and VS
    Code extension, merge the duplicates, delete the losers, update guides.
-   Also move `mobile-try.png` out of the root.
+   Also delete the stray `mobile-try.png` (done).
 2. **Homebrew tap**: create `homebrew-turmeric`, copy `Formula/`, update the
    README, delete `Formula/` after one release.
 3. **Editors**: create the three editor repos, each with its history
