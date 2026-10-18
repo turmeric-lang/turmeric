@@ -163,19 +163,6 @@ web/pw.local.config.js
 /memory/
 core
 
-# Performance comparison build artifacts and generated output
-performance-comparison/benchmarks/*/c/
-performance-comparison/benchmarks/*/turi/*
-!performance-comparison/benchmarks/*/turi/*.tur
-performance-comparison/benchmarks/*/turmeric/*
-!performance-comparison/benchmarks/*/turmeric/*.tur
-performance-comparison/analysis/
-performance-comparison/results/processed/
-performance-comparison/results/raw/
-performance-comparison/results/validation_report.json
-performance-comparison/benchmarks/rust-workspace/target/
-performance-comparison/inputs/large/
-
 # Test fixture runtime artifacts (interpreter stdout/stderr captured per run).
 # The harness diffs against expected.stdout, not these files.
 tests/fixtures/*/turi.stdout

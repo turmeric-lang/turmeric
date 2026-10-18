@@ -9,7 +9,7 @@ datalog's at 150 ms against 0.6 ms). Two or more sweeps taken under the same
 conditions can: each merged row is the best across sweeps, and `spread` is
 how far the next-best sweep's best is from it. A row whose spread is over
 --noisy (default 10%, the reproducibility rule of
-performance-comparison/scripts/check_reproducibility.py and the plan's WP6)
+check_reproducibility.py in turmeric-lang/benchmarks and the plan's WP6)
 is marked, not dropped: its number was not reproduced.
 
 Usage:

@@ -1,5 +1,0 @@
-{
-  "small":  { "haystack_size": 10000,   "needle": "hello" },
-  "medium": { "haystack_size": 100000,  "needle": "hello" },
-  "large":  { "haystack_size": 1000000, "needle": "hello" }
-}
