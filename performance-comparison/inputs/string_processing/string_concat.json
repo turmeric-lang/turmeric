@@ -1,5 +1,0 @@
-{
-  "small":  { "n": 1000,   "chunk_size": 10 },
-  "medium": { "n": 10000,  "chunk_size": 10 },
-  "large":  { "n": 100000, "chunk_size": 10 }
-}

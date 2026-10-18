@@ -1,5 +1,0 @@
-{
-  "small":  { "file_size": 1048576,   "n_reads": 1000 },
-  "medium": { "file_size": 10485760,  "n_reads": 5000 },
-  "large":  { "file_size": 104857600, "n_reads": 10000 }
-}

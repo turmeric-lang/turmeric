@@ -501,7 +501,8 @@ See [threading-guide.md](threading-guide.md) and [stm-guide.md](stm-guide.md).
 ## Memory and allocation
 
 > Corrected on 2026-08-20, and again on 2026-10-14. The GC-pressure scripts
-> this section once referenced do exist, but under `performance-comparison/`,
+> this section once referenced do exist, but in the
+> [benchmarks repo](https://github.com/turmeric-lang/benchmarks) under `performance-comparison/`,
 > not at the top level: `performance-comparison/scripts/run_all.sh memory`
 > runs the cross-language `alloc_churn` benchmark, and `analyze_results.py`
 > sits beside it (the 2026-08-20 note said neither existed). That suite
@@ -717,18 +718,19 @@ corpus runs under all three harnesses (`tests/run.sh`, `tests/run-turi.sh`,
 
 ## Cross-language comparison
 
-A separate suite, `performance-comparison/` at the project root, runs the
+A separate suite, `performance-comparison/` in the
+[turmeric-lang/benchmarks](https://github.com/turmeric-lang/benchmarks) repo, runs the
 same 21 benchmarks (numerical, data structures, string processing,
 concurrency, memory, recursion, I/O, real-world, micro) across up to nine
 columns: C, Turmeric (`tur build`), turi (`tur --interpret`), `tur jit`,
 Rust, Haskell, Clojure, Racket, and Python. This is the `scripts/run_all.sh`
-/ `aggregate_results.py` / `check_environment.sh` harness -- it lives under
-`performance-comparison/`, not the top-level `benchmarks/` this guide's
+/ `aggregate_results.py` / `check_environment.sh` harness -- it lives in
+the benchmarks repo, not the top-level `benchmarks/` this guide's
 methodology section otherwise describes, and answers a different question:
 not "did this Turmeric change regress," but "how does Turmeric's output
 compare to a native-compiled, a JVM-hosted, and a scripting-language peer
 doing the same work." See
-[performance-comparison/README.md](https://github.com/turmeric-lang/turmeric/blob/main/performance-comparison/README.md)
+[performance-comparison/README.md](https://github.com/turmeric-lang/benchmarks/blob/main/performance-comparison/README.md)
 and its `docs/methodology.md` for the full setup, same-algorithm ground
 rules, and how to run it.
 
@@ -836,7 +838,7 @@ How to read it:
   a slow drift visible, not to gate.
 - **"Noisy" means the three reps disagreed by more than 10%** (the coefficient
   of variation, as `performance-comparison/scripts/check_reproducibility.py`
-  computes it). A noisy night over its bound gets a `::notice::` instead of a
+  in the benchmarks repo computes it). A noisy night over its bound gets a `::notice::` instead of a
   warning, and counts as noise until the next nights confirm it.
 - **Changing `tracked.txt` breaks a series' continuity**, so change it
   deliberately; a program's history keys on its name.

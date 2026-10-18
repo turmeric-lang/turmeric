@@ -1,5 +1,0 @@
-{
-  "small":  { "width": 100, "height": 75 },
-  "medium": { "width": 400, "height": 300 },
-  "large":  { "width": 800, "height": 600 }
-}

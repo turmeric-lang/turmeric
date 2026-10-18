@@ -1,5 +1,0 @@
-{
-  "small":  { "n_threads": 4,  "messages": 1000 },
-  "medium": { "n_threads": 8,  "messages": 10000 },
-  "large":  { "n_threads": 16, "messages": 100000 }
-}
