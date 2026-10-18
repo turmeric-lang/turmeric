@@ -1,6 +1,33 @@
 # Separately compiled: an effect performed in one module misses a handler in another
 
-**Severity:** high. The program builds cleanly and aborts at run time. The same
+**Narrowed 2026-10-18 (fix direction 2): refused at build time, no longer a
+run-time abort.** Under separate compilation the effect checker
+(`src/passes/effect_check.c`, "sepcomp-cross-module-effect-unhandled")
+indexes the other modules' callees this unit reaches. It infers their rows in
+the same fixpoint, registering an effect declared over there so its `perform`
+counts. It then rejects at the call site a call whose callee can perform a
+user effect:
+
+```
+./myapp.tur:6:7: error: `ask-effect` (module effects/ask) can perform the
+effect `Ask`, and this call crosses into it from another module of a
+separately compiled build. ... Handle `Ask` inside effects/ask, or build the
+program as one unit (`tur run` or `tur build <main.tur>`), which threads it.
+```
+
+Capability tags and Unsafe cross freely. A module that handles its own effect
+builds and runs. Both cases are in `tests/run-build-project.sh`
+(`build-project-sepcomp-*`). Found on the way: a module that failed to compile
+after another had compiled leaked that module's borrow specs, and the Debug
+`tur`'s LeakSanitizer turned the compile error's exit 1 into 141
+(`free_borrow_specs`, `src/main.c`).
+
+**Severity is now medium** (a correct program is refused, with a remedy).
+What is left is fix direction 1: thread the effect across units. That means
+exported `__cps` entries, an importer that colors imported callees by their
+rows, and effect tags agreed program-wide.
+
+**Original severity:** high. The program builds cleanly and aborts at run time. The same
 modules built as one translation unit work (that is how the
 `module-cross-module-effect` fixture passes).
 

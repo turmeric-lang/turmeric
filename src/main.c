@@ -762,6 +762,7 @@ static int run_core_pass(PassContext *ctx, PassKind kind) {
             break;
         case PASS_EFFECT_ROW_INFER:
             /* P19-2: effect-row inference and validation pass. */
+            effect_check_set_separate_compilation(ctx->separate_compilation);
             if (effect_check_pass(ctx->arena, ctx->prog, ctx->effect_env) != 0)
                 return 1;
             /* ER6: --dump-effects: print inferred effect row for each defn. */
@@ -7805,6 +7806,23 @@ static char **collect_used_attr_modules(const char *entry_path,
  * the library (see cmd_build_project's n_own). */
 static bool g_build_bundle_deps = false;
 
+/* The per-module borrow specs pass 1 collects, and the arrays holding them.
+ * Every exit frees them: an early one used to free only the outer arrays, so a
+ * module failing after another had compiled leaked that module's specs, and
+ * the Debug tur's LeakSanitizer turned the compile error's exit 1 into 141. */
+static void free_borrow_specs(BorrowSpecInfo **all, uint32_t *n_all, int n_files) {
+    for (int i = 0; all && n_all && i < n_files; i++) {
+        for (uint32_t bi = 0; bi < n_all[i]; bi++) {
+            free(all[i][bi].clone_name);
+            free(all[i][bi].owning_module);
+            free(all[i][bi].fn_symbol);
+        }
+        free(all[i]);
+    }
+    free(all);
+    free(n_all);
+}
+
 static int cmd_build_multi_files(char **tur_files, int n_files,
                                  int n_own, int n_exported,
                                  const char *dir, const char *src_root,
@@ -7938,7 +7956,7 @@ static int cmd_build_multi_files(char **tur_files, int n_files,
             free_reader_macro_paths(rm_p, rm_n);
             for (int j = 0; j < n_files; j++) { free(h_files[j]); free(c_files[j]); free(mod_names[j]); }
             free(h_files); free(c_files); free(mod_names);
-            free(all_borrow); free(all_n_borrow);
+            free_borrow_specs(all_borrow, all_n_borrow, n_files);
             free_tur_files(tur_files, n_files);
             return 1;
         }
@@ -7948,7 +7966,7 @@ static int cmd_build_multi_files(char **tur_files, int n_files,
             free_reader_macro_paths(rm_p, rm_n);
             for (int j = 0; j < n_files; j++) { free(h_files[j]); free(c_files[j]); free(mod_names[j]); }
             free(h_files); free(c_files); free(mod_names);
-            free(all_borrow); free(all_n_borrow);
+            free_borrow_specs(all_borrow, all_n_borrow, n_files);
             free_tur_files(tur_files, n_files);
             return 1;
         }
@@ -7967,7 +7985,7 @@ static int cmd_build_multi_files(char **tur_files, int n_files,
             free_reader_macro_paths(rm_p, rm_n);
             for (int j = 0; j < n_files; j++) { free(h_files[j]); free(c_files[j]); free(mod_names[j]); }
             free(h_files); free(c_files); free(mod_names);
-            free(all_borrow); free(all_n_borrow);
+            free_borrow_specs(all_borrow, all_n_borrow, n_files);
             free_tur_files(tur_files, n_files);
             return 1;
         }
@@ -7982,7 +8000,7 @@ static int cmd_build_multi_files(char **tur_files, int n_files,
             free_reader_macro_paths(rm_p, rm_n);
             for (int j = 0; j < n_files; j++) { free(h_files[j]); free(c_files[j]); free(mod_names[j]); }
             free(h_files); free(c_files); free(mod_names);
-            free(all_borrow); free(all_n_borrow);
+            free_borrow_specs(all_borrow, all_n_borrow, n_files);
             free_tur_files(tur_files, n_files);
             return 1;
         }
@@ -8051,7 +8069,7 @@ static int cmd_build_multi_files(char **tur_files, int n_files,
             for (int j = 0; j < n_files; j++) { free(h_files[j]); free(c_files[j]); free(mod_names[j]); }
             free(h_files); free(c_files); free(mod_names);
             free(forced_for[i]); free(forced_for); free(n_forced_for); free(cap_forced_for);
-            free(all_borrow); free(all_n_borrow);
+            free_borrow_specs(all_borrow, all_n_borrow, n_files);
             free_tur_files(tur_files, n_files);
             return 1;
         }
@@ -8062,7 +8080,7 @@ static int cmd_build_multi_files(char **tur_files, int n_files,
             for (int j = 0; j < n_files; j++) { free(h_files[j]); free(c_files[j]); free(mod_names[j]); }
             free(h_files); free(c_files); free(mod_names);
             free(forced_for[i]); free(forced_for); free(n_forced_for); free(cap_forced_for);
-            free(all_borrow); free(all_n_borrow);
+            free_borrow_specs(all_borrow, all_n_borrow, n_files);
             free_tur_files(tur_files, n_files);
             return 1;
         }
@@ -8082,7 +8100,7 @@ static int cmd_build_multi_files(char **tur_files, int n_files,
             for (int j = 0; j < n_files; j++) { free(h_files[j]); free(c_files[j]); free(mod_names[j]); }
             free(h_files); free(c_files); free(mod_names);
             free(forced_for[i]); free(forced_for); free(n_forced_for); free(cap_forced_for);
-            free(all_borrow); free(all_n_borrow);
+            free_borrow_specs(all_borrow, all_n_borrow, n_files);
             free_tur_files(tur_files, n_files);
             return 1;
         }
@@ -8094,7 +8112,7 @@ static int cmd_build_multi_files(char **tur_files, int n_files,
             for (int j = 0; j < n_files; j++) { free(h_files[j]); free(c_files[j]); free(mod_names[j]); }
             free(h_files); free(c_files); free(mod_names);
             free(forced_for[i]); free(forced_for); free(n_forced_for); free(cap_forced_for);
-            free(all_borrow); free(all_n_borrow);
+            free_borrow_specs(all_borrow, all_n_borrow, n_files);
             free_tur_files(tur_files, n_files);
             return 1;
         }
@@ -8138,16 +8156,8 @@ static int cmd_build_multi_files(char **tur_files, int n_files,
     }
 
     /* Free borrow and forced spec arrays. */
-    for (int i = 0; i < n_files; i++) {
-        for (uint32_t bi = 0; bi < all_n_borrow[i]; bi++) {
-            free(all_borrow[i][bi].clone_name);
-            free(all_borrow[i][bi].owning_module);
-            free(all_borrow[i][bi].fn_symbol);
-        }
-        free(all_borrow[i]);
-        free(forced_for[i]);
-    }
-    free(all_borrow); free(all_n_borrow);
+    for (int i = 0; i < n_files; i++) free(forced_for[i]);
+    free_borrow_specs(all_borrow, all_n_borrow, n_files);
     free(forced_for); free(n_forced_for); free(cap_forced_for);
 
     /* build-output-directory-plan: _main.c / tur_runtime.{c,h} all land in

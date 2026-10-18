@@ -1041,6 +1041,56 @@ EOF
     fi
 done
 
+# sepcomp-cross-module-effect-unhandled: `tur build <dir>` compiles each module
+# as its own C unit, and an effect cannot reach a handler across that
+# boundary.  A call into another module that can perform a user effect is
+# refused at the call site (it used to build and abort "unhandled effect" at
+# run time); a module that handles its own effect still builds and runs.
+SEPDIR="$WORK/sepcomp-effect"
+mkdir -p "$SEPDIR/effects"
+cat > "$SEPDIR/effects/ask.tur" <<'EOF'
+(defmodule effects/ask
+  (export ask-effect ask-handled)
+  (defeffect Ask [] :int)
+  (defn ask-effect [] : int
+    (perform (Ask)))
+  (defn ask-handled [] : int
+    (handle (ask-effect) (Ask [] k) (resume k 41))))
+EOF
+cat > "$SEPDIR/myapp.tur" <<'EOF'
+(defmodule myapp
+  (import effects/ask :as ea)
+  (defn run [] : int
+    (handle (ea/ask-effect) (Ask [] k) (resume k 99)))
+  (defn main [] : int
+    (println (run))
+    0))
+EOF
+sep_out=$(cd "$SEPDIR" && "$TUR" build . 2>&1)
+sep_rc=$?
+if [ $sep_rc -eq 1 ] &&
+   grep -q 'can perform the effect `Ask`, and this call crosses' <<< "$sep_out" &&
+   grep -q 'myapp.tur:4:' <<< "$sep_out"; then
+    pass "build-project-sepcomp-cross-module-effect-refused"
+else
+    fail "build-project-sepcomp-cross-module-effect-refused" "rc=$sep_rc out=$sep_out"
+fi
+cat > "$SEPDIR/myapp.tur" <<'EOF'
+(defmodule myapp
+  (import effects/ask :as ea)
+  (defn main [] : int
+    (println (+ 1 (ea/ask-handled)))
+    0))
+EOF
+rm -rf "$SEPDIR/build"
+sep_out=$(cd "$SEPDIR" && "$TUR" build . -o "$WORK/sepbin" 2>&1 && "$WORK/sepbin" 2>&1)
+sep_rc=$?
+if [ $sep_rc -eq 0 ] && [ "$(tail -1 <<< "$sep_out")" = "42" ]; then
+    pass "build-project-sepcomp-module-handles-own-effect"
+else
+    fail "build-project-sepcomp-module-handles-own-effect" "rc=$sep_rc out=$sep_out"
+fi
+
 echo
 echo "summary: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]
