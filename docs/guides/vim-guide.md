@@ -13,17 +13,20 @@ and Neovim. It lives in `vim-syntax/` at the repo root.
 
 ### Manual (no plugin manager)
 
-Copy or symlink the two directories into `~/.vim` (Vim) or `~/.config/nvim`
-(Neovim):
+Copy or symlink the three directories into `~/.vim` (Vim) or `~/.config/nvim`
+(Neovim). `ftplugin` sets the comment string, two-space indent and Lisp
+indentation words:
 
 ```sh
 # Vim
 cp -r vim-syntax/syntax   ~/.vim/syntax/
 cp -r vim-syntax/ftdetect ~/.vim/ftdetect/
+cp -r vim-syntax/ftplugin ~/.vim/ftplugin/
 
 # Neovim
 cp -r vim-syntax/syntax   ~/.config/nvim/syntax/
 cp -r vim-syntax/ftdetect ~/.config/nvim/ftdetect/
+cp -r vim-syntax/ftplugin ~/.config/nvim/ftplugin/
 ```
 
 Alternatively, symlink the whole plugin directory so updates are picked up

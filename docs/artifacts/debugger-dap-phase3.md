@@ -22,8 +22,8 @@ tur dap        # speaks DAP on stdin/stdout
 ```
 
 You normally do not run this by hand -- an editor spawns it. The bundled VS Code
-stub lives in [editors/vscode-turmeric/](../../editors/vscode-turmeric/); copy it
-into `~/.vscode/extensions/`, open a `.tur` file, and press F5. A minimal
+wiring lives in [vscode-syntax-ext/](../../vscode-syntax-ext/) (`extension.js`);
+install that extension, open a `.tur` file, and press F5. A minimal
 `launch.json`:
 
 ```jsonc

@@ -282,8 +282,8 @@ survey cited moved between 81e12de4 and dc95b2fdc.
   WP1** by declaring both extensions `"supported": "limited"` and listing
   `turmeric.serverPath` in `restrictedConfigurations`, so Restricted Mode
   ignores the folder's value while highlighting and formatting keep working.
-  `editors/vscode-turmeric` takes its adapter path from the launch
-  configuration (`extension.js:14-16`), which Restricted Mode covers by
+  The debug wiring (now in `vscode-syntax-ext/extension.js`) takes its adapter
+  path from the launch configuration (`TurmericAdapterFactory`), which Restricted Mode covers by
   refusing to debug.
 - **`main` has no branch protection** (`GET /branches/main/protection` ->
   `404 Branch not protected`). Worth a decision given that the workflow is

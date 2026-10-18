@@ -13,11 +13,14 @@
     "vscode-languageclient": "^9.0.1"
   },
   "activationEvents": [
-    "onLanguage:turmeric"
+    "onLanguage:turmeric",
+    "onDebugResolve:turmeric",
+    "onDebugDynamicConfigurations:turmeric"
   ],
   "categories": [
     "Programming Languages",
-    "Formatters"
+    "Formatters",
+    "Debuggers"
   ],
   "keywords": [
     "turmeric",
@@ -32,7 +35,7 @@
       "restrictedConfigurations": [
         "turmeric.serverPath"
       ],
-      "description": "turmeric.serverPath names the executable started as the language server. In an untrusted workspace the folder's own value is ignored and your user setting is used, so a repository cannot redirect the server to another binary by shipping a .vscode/settings.json. Syntax highlighting and formatting are unaffected."
+      "description": "turmeric.serverPath names the executable started as the language server, and a launch configuration's `tur` names the debug adapter executable. In an untrusted workspace the folder's own serverPath is ignored and your user setting is used, so a repository cannot redirect the server to another binary by shipping a .vscode/settings.json; starting a debug session means trusting the repository, because the adapter path comes from its launch configuration. Syntax highlighting, formatting and breakpoint registration are declarative and safe in an untrusted workspace."
     }
   },
   "contributes": {
@@ -50,9 +53,97 @@
           "turmeric"
         ],
         "extensions": [
-          ".tur"
+          ".tur",
+          ".tur.sweet"
         ],
         "configuration": "./language-configuration.json"
+      }
+    ],
+    "breakpoints": [
+      {
+        "language": "turmeric"
+      }
+    ],
+    "debuggers": [
+      {
+        "type": "turmeric",
+        "label": "Turmeric (interpreter)",
+        "languages": [
+          "turmeric"
+        ],
+        "configurationAttributes": {
+          "launch": {
+            "required": [
+              "program"
+            ],
+            "properties": {
+              "program": {
+                "type": "string",
+                "description": "Absolute path to the .tur file to debug.",
+                "default": "${file}"
+              },
+              "args": {
+                "type": "array",
+                "description": "Arguments passed to the program (visible as *args*).",
+                "items": {
+                  "type": "string"
+                },
+                "default": []
+              },
+              "stopOnEntry": {
+                "type": "boolean",
+                "description": "Pause at the first executable node.",
+                "default": true
+              },
+              "tur": {
+                "type": "string",
+                "description": "Path to the tur binary (defaults to 'tur' on PATH).",
+                "default": "tur"
+              }
+            }
+          }
+        },
+        "initialConfigurations": [
+          {
+            "type": "turmeric",
+            "request": "launch",
+            "name": "Debug current Turmeric file",
+            "program": "${file}",
+            "stopOnEntry": true
+          }
+        ],
+        "configurationSnippets": [
+          {
+            "label": "Turmeric: Launch current file",
+            "description": "Debug the active .tur file under the interpreter",
+            "body": {
+              "type": "turmeric",
+              "request": "launch",
+              "name": "Debug ${1:current} Turmeric file",
+              "program": "^\"\\${file}\"",
+              "stopOnEntry": true
+            }
+          }
+        ]
+      },
+      {
+        "type": "lldb",
+        "label": "Turmeric Native (CodeLLDB)",
+        "configurationSnippets": [
+          {
+            "label": "Turmeric: Debug Native (CodeLLDB)",
+            "description": "Debug a compiled Turmeric binary using CodeLLDB with pretty-printers",
+            "body": {
+              "type": "lldb",
+              "request": "launch",
+              "name": "Debug Turmeric Native (CodeLLDB)",
+              "program": "^\"\\${workspaceFolder}/build/\\${fileBasenameNoExtension}\"",
+              "initCommands": [
+                "command script import ^\"\\${workspaceFolder}/tools/debug/turmeric_lldb.py\""
+              ]
+            }
+          }
+        ]
       }
     ],
     "configuration": {
@@ -69,7 +160,10 @@
       {
         "language": "turmeric",
         "scopeName": "source.turmeric",
-        "path": "./syntaxes/turmeric.tmLanguage.json"
+        "path": "./syntaxes/turmeric.tmLanguage.json",
+        "embeddedLanguages": {
+          "meta.embedded.block.c": "c"
+        }
       },
       {
         "scopeName": "markdown.embedding.turmeric",

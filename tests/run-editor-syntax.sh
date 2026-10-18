@@ -27,8 +27,8 @@ cd "$(dirname "$0")/.."
 ROOT="$PWD"
 fails=0
 
-VIMDIR="$ROOT/editors/vim-turmeric"
-TMGRAMMAR="$ROOT/editors/vscode-turmeric/syntaxes/turmeric.tmLanguage.json"
+VIMDIR="$ROOT/vim-syntax"
+TMGRAMMAR="$ROOT/vscode-syntax-ext/syntaxes/turmeric.tmLanguage.json"
 
 SAMPLE="$(mktemp -d)/sample.tur"
 cat > "$SAMPLE" <<'EOF'
@@ -131,7 +131,7 @@ fi
 if ! command -v python3 >/dev/null 2>&1; then
     echo "SKIP: python3 not available -- TextMate grammar not exercised"
 else
-    if python3 - "$TMGRAMMAR" "$ROOT/editors/vscode-turmeric/package.json" <<'PY'
+    if python3 - "$TMGRAMMAR" "$ROOT/vscode-syntax-ext/package.json" <<'PY'
 import json, re, sys
 gpath, ppath = sys.argv[1], sys.argv[2]
 g = json.load(open(gpath))            # raises if malformed
