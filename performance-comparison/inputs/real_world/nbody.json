@@ -1,5 +1,0 @@
-{
-  "small":  { "n_bodies": 5,  "steps": 1000 },
-  "medium": { "n_bodies": 10, "steps": 10000 },
-  "large":  { "n_bodies": 20, "steps": 50000 }
-}

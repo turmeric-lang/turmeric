@@ -90,7 +90,6 @@ GENERATED = (
 # handful under tests/benchmarks/ is counted for what it is.
 BENCH = (
     "benchmarks/",
-    "performance-comparison/",
     "tests/benchmarks/",
 )
 

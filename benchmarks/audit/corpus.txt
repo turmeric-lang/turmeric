@@ -12,7 +12,7 @@
 #          (compare only lines N, M of every group of P).
 #
 # Pins live in benchmarks/audit/expected/ (a fixture's pin is its own
-# expected.stdout).  Turmeric programs only: performance-comparison/ is not in
+# expected.stdout).  Turmeric programs only: the cross-language suite (turmeric-lang/benchmarks) is not in
 # the corpus.  Not in it, and why:
 #
 #   benchmarks/bench-capture-restore.tur   SX0(a)'s sweep; > 120 s, owned by run-capture-curve.sh
