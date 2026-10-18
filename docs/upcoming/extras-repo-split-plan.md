@@ -1,18 +1,38 @@
 # Extras to break out into their own repos
 
-> Status: in progress (2026-10-17). Step 1 (dedupe in place) is done; no
-> repo has been created yet. This is the audit and the sequencing; each
-> extraction is its own small PR plus a matching PR in the new repo.
+> Status: soaking (2026-10-18). Every extraction has shipped; what is left is
+> the cleanup after a one-minor-version soak (see "Soak and cleanup" below).
+> v0.67.0 is the first release carrying tvm as a release asset; the cleanup
+> lands once v0.68.0 is out.
 >
-> Step 1 corrected the plan's premise: the `editors/` copies of both grammars
-> were the NEWER ones (Sep 24 vs Sep 16; they carry the `#lang r7rs` layer and
-> `.tur.sweet`) and the ones `tests/run-editor-syntax.sh` exercised. So the
-> grammars in `vim-syntax/` and `vscode-syntax-ext/` (the directories the
-> guides point at, which stay) were replaced by the `editors/` ones, the
-> `ftplugin` and the DAP wiring were folded in, and `editors/` was deleted.
-> `vim-syntax/colors/` still links the old group names; the new syntax links
-> standard groups, so the themes apply, but those stale links are dead weight
-> to clean up when the Vim repo is cut.
+> | Step | New repo | Compiler-side PRs |
+> |---|---|---|
+> | 1. Dedupe in place | -- | #1275 |
+> | 2. Homebrew tap | `turmeric-lang/homebrew-turmeric` | #1276 |
+> | 3. Editors | `vim-turmeric`, `turmeric-mode`, `vscode-turmeric` | #1277 (palette contract), #1279 (removal) |
+> | 4. Benchmarks + bench box | `turmeric-lang/benchmarks` | #1278 |
+> | 5. tvm | `turmeric-lang/tvm` | #1280 (release asset), cleanup pending |
+>
+> Where it departed from the text below:
+>
+> - **No history.** Every new repo started from one fresh commit; the
+>   `git filter-repo` mechanics below were dropped.
+> - **The dedupe was inverted.** The `editors/` copies of both grammars were
+>   the NEWER ones (Sep 24 vs Sep 16; they carry the `#lang r7rs` layer and
+>   `.tur.sweet`) and the ones `tests/run-editor-syntax.sh` exercised. They
+>   replaced the grammars in `vim-syntax/` and `vscode-syntax-ext/`, with the
+>   `ftplugin` and the DAP wiring folded in.
+> - **Palette contract.** `web/editor-palette.json` plus
+>   `tests/check-editor-palette.py` (ctest `tur_editor_palette`, which checks
+>   `web/main.js`). Each editor repo's CI runs the same script against the
+>   JSON on this repo's `main`, not a pinned tag; pin it if `main` churn ever
+>   reddens an editor repo for no reason of its own.
+> - **The editor test was deleted, not split here.** `vim-turmeric` and
+>   `vscode-turmeric` each carry their half as `tests/run.sh`.
+> - **tvm's install test stayed here.** `tvm/tests/install-script.sh` drives
+>   `web/worker.js`'s `/install` route, so it belongs with the Worker. It
+>   honors `TVM_SRC` (a checkout of `turmeric-lang/tvm`) for when `tvm/` is
+>   gone. `release.yml` pins tvm by commit (`TVM_REF`), not by tag.
 
 ## Why
 
@@ -188,9 +208,7 @@ reversible until the in-tree copy is deleted.
    Also delete the stray `mobile-try.png` (done).
 2. **Homebrew tap**: create `homebrew-turmeric`, copy `Formula/`, update the
    README, delete `Formula/` after one release.
-3. **Editors**: create the three editor repos, each with its history
-   (`git filter-repo --path ... ` on a scratch clone, so blame survives),
-   add the palette-sync check, move the test, rewrite the guides, delete the
+3. **Editors**: create the three editor repos, add the palette-sync check, move the test, rewrite the guides, delete the
    in-tree copies.
 4. **Benchmarks + bench box**: same recipe; `Justfile` and docs updated.
 5. **tvm**: last, because it touches the install path. Land the
@@ -199,10 +217,42 @@ reversible until the in-tree copy is deleted.
    `curl -fsSL turmeric-lang.com/install | sh` end to end on macOS and Linux
    from a clean `$HOME`; only then remove `tvm/` and the in-tree CI job.
 
+## Soak and cleanup
+
+One minor version (v0.67.x) of overlap, so anyone who tapped, cloned or linked
+the old in-tree paths has a release to notice the move in. Once **v0.68.0** is
+cut, one PR against `main`:
+
+- **tvm.** Delete `tvm/` except what the Worker test needs: move
+  `tvm/tests/install-script.sh` to `tests/` and point it at a
+  `turmeric-lang/tvm` checkout via `TVM_SRC`. In `ci.yml`, replace the `tvm`
+  job's `sh tvm/tests/run.sh` (that suite now runs in the tvm repo's CI) with
+  a thin job that checks out `turmeric-lang/tvm` at the `TVM_REF` pinned in
+  `release.yml` and runs the install test. Drop the `/tvm/` CODEOWNERS entry.
+  Repoint the docs: `README.md`, `web/index.html` (Install step links
+  `tvm/README.md`), `docs/guides/tvm-guide.md`, `quickstart.md`,
+  `releases-and-installation-guide.md`, `mise-asdf-guide.md`,
+  `introducing-saffron.md`.
+- **The Worker's fallback** to `raw/<TAG>/tvm/` stays: it is what keeps
+  `/install` working for a pinned pre-v0.67.0 tag, and costs nothing.
+- **Homebrew.** Delete `Formula/` and its CODEOWNERS entry, and the README's
+  re-tap note for people who tapped this repo by URL.
+- **Editor stubs.** Delete `vim-syntax/README.md`, `emacs/README.md` and
+  `vscode-syntax-ext/README.md`.
+
+Before that PR, still open:
+
+- **Linux end to end.** `curl -fsSL turmeric-lang.com/install | sh` from a
+  clean `$HOME` was verified on macOS against v0.67.0; Linux has not been run.
+- **tvm's own hint is stale.** `install.sh` (in `turmeric-lang/tvm`) prints
+  `tvm install 0.23.1` as its example. Fix it there, then bump `TVM_REF`.
+- **Vim colorschemes** in `vim-turmeric` still link the old syntax group
+  names. Harmless (the syntax links standard groups) but dead weight.
+- **VS Code Marketplace.** `vscode-turmeric` now says publisher
+  `turmeric-lang`; that publisher has to exist before `vsce publish`.
+
 ## Common mechanics for every extraction
 
-- Preserve history with `git filter-repo --path <dir>` on a throwaway clone;
-  do not hand-copy files.
 - Leave a stub `README` pointing at the new repo in the old location for one
   release, then delete it.
 - Sweep references by anchored pattern (path, not bare name), and run
