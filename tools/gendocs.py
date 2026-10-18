@@ -917,7 +917,10 @@ CSS = """\
 
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
-html { font-size: 16px; }
+/* The sticky .site-header is 60px tall and the page scrolls on the window, so
+   without this a #section link lands its heading underneath the header. The
+   extra 1rem leaves the heading some air below the bar. */
+html { font-size: 16px; scroll-padding-top: calc(60px + 1rem); }
 
 body {
   font-family: 'DM Sans', system-ui, -apple-system, sans-serif;
