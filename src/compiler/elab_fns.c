@@ -7251,6 +7251,80 @@ static void rt_lint_class_leniency(Elab *e, RefineCallSite *cs, uint32_t p,
               "existed");
 }
 
+/* refine-abandoned-crossing-silent-under-strict: a crossing under a binder
+ * that shadows a refined name gets no path facts -- they would speak about
+ * the outer binding while the argument names the inner one, the false proof
+ * crossing-shadowed-binder-false-proof removed.  It used to get nothing at
+ * all: no obligation in the dump and no TUR-W0372, so `--strict-refine`
+ * passed a program whose check then panicked.
+ *
+ * Each refined argument is decided against an environment with the caller's
+ * sorts and none of its facts, so nothing it proves leans on the shadowed
+ * binding: `(needs-pos 7)` still proves.  A closed refutation is the ordinary
+ * TUR-E0371.  Anything else is "unknown" -- an open counterexample here
+ * ignores the path, so it is not offered -- and reports where an unknown
+ * crossing reports: under --strict-refine (an error there), or when no
+ * runtime check backs it (a `#reads` measure). */
+static void rt_report_shadowed_crossing(Elab *e, RefineCallSite *cs,
+                                        const Binding *callee, const Form *cf,
+                                        uint32_t n_args, const RefineSubst *subst,
+                                        uint32_t n_subst) {
+    if (!callee->refine_param_preds) return;
+    RefineEnv *bare = NULL;
+    if (cs->env) {
+        bare = (RefineEnv *)arena_alloc(e->arena, sizeof(*bare));
+        *bare = *cs->env;
+        bare->head = NULL;
+    }
+    const char *cname = cs->callee_display ? cs->callee_display
+                      : (callee->name ? callee->name->name : "?");
+    for (uint32_t p = 0; p < callee->n_refine_params && p < n_args; p++) {
+        const Form *pred = callee->refine_param_preds[p];
+        if (!pred) continue;
+        const Form *arg = cf->as.list.items[cs->arg_offset + p];
+        TypeKind pk = (callee->type.kind == TY_FN && callee->type.as.fn.arg_kinds &&
+                       p < callee->type.as.fn.arity)
+                    ? callee->type.as.fn.arg_kinds[p] : TY_INT;
+        char what[160];
+        if (cs->caller_name)
+            snprintf(what, sizeof(what), "argument %u of '%s' in '%s'",
+                     p + 1, cname, cs->caller_name);
+        else
+            snprintf(what, sizeof(what), "argument %u of '%s'", p + 1, cname);
+        const char *what_owned = arena_strdup(e->arena, what, strlen(what));
+        RefineObligation *ob = refine_collect_obligation(
+            &e->refine_obs, pred, callee->refine_param_vars[p], arg,
+            rt_sort_of_kind(pk), type_name(type_simple(pk, CK_COPY)),
+            cs->loc, bare, what_owned, cs->caller_name);
+        if (!ob) continue;
+        refine_obligation_set_subst(ob, e->arena, subst, n_subst);
+        refine_obligation_set_frozen(ob, cs->frozen_names, cs->n_frozen);
+        bool reads_crossing = rt_pred_reads_measure(e, pred);
+        ob->runtime_guarded  = !reads_crossing;
+        ob->reads_no_runtime = reads_crossing;
+        ob->quiet = true;
+        if (refine_discharge_one(ob, e->arena)) continue;   /* holds with no facts */
+        if (ob->refuted && ob->refuted_closed) {
+            diag_emit_with_code(DIAG_ERROR, ob->loc, TUR_E0371_REFINE_NOT_PROVED,
+                                "refinement on %s cannot be proved statically", what);
+            refine_emit_obligation_notes(ob, e->arena, true, true);
+            continue;
+        }
+        ob->counterex  = NULL;
+        ob->decided_by = "declined: a binder on the path shadows a refined name";
+        if (g_strict_refine || !ob->runtime_guarded)
+            diag_emit_with_code(g_strict_refine ? DIAG_ERROR : DIAG_WARNING, ob->loc,
+                                TUR_W0372_REFINE_UNKNOWN,
+                                "refinement on %s could not be decided statically "
+                                "(a binder on the path to this call shadows a "
+                                "refined name, so its facts are not used); %s", what,
+                                reads_crossing
+                                  ? "no runtime fallback for an impure #reads "
+                                    "measure -- rename the shadowing binder"
+                                  : "runtime check kept");
+    }
+}
+
 void refine_resolve_call_sites(Elab *e) {
     if (!e) return;
     rt_body_writes_reset();
@@ -7307,7 +7381,6 @@ void refine_resolve_call_sites(Elab *e) {
          * several crossings share one caller's env. */
         bool cs_skip = false;
         RefineHyp *cs_saved = rt_push_cs_path_conds(e, cs, &cs_skip);
-        if (cs_skip) continue;   /* shadowed binder: no honest answer here */
 
         /* Every callee parameter name maps to the caller's argument in that
          * slot, so a predicate mentioning a SIBLING parameter is checked
@@ -7320,6 +7393,12 @@ void refine_resolve_call_sites(Elab *e) {
             subst[n_subst].name = callee->refine_param_names[p];
             subst[n_subst].form = cf->as.list.items[cs->arg_offset + p];
             n_subst++;
+        }
+
+        if (cs_skip) {   /* shadowed binder: decided without the path */
+            if (has_inst_preds)
+                rt_report_shadowed_crossing(e, cs, callee, cf, n_args, subst, n_subst);
+            continue;
         }
 
         uint32_t n_slots = has_inst_preds ? callee->n_refine_params : 0;

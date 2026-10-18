@@ -374,15 +374,15 @@ fa42ece.
 
 ## Found on the way
 
-All five are filed in `docs/reported/`; none blocks this plan.
+All five were filed in `docs/reported/`; two are resolved since; none blocks this plan.
 
 | Report | Severity | Effect here |
 | --- | --- | --- |
 | [cmake-deps-duplicate-keeps-first-options](../../reported/cmake-deps-duplicate-keeps-first-options.md) | medium | why the sibling `mbedtls` entries are edited |
 | [cmake-deps-no-cross-spice-override-or-order](../../reported/cmake-deps-no-cross-spice-override-or-order.md) | low | why TLS is not a separate spice or an opt-in |
 | [cmake-dep-link-walk-stops-at-archive](../../reported/cmake-dep-link-walk-stops-at-archive.md) | medium | why the `nng` entry lists the mbedTLS targets |
-| [cmake-dir-markers-print-link-flag-warnings](../../reported/cmake-dir-markers-print-link-flag-warnings.md) | low | five warnings per nng program today, six with TLS |
-| [cmake-dep-path-through-missing-cmake-dir](../../reported/cmake-dep-path-through-missing-cmake-dir.md) | medium | none (nng has no `:path` deps); found building a repro |
+| [cmake-dir-markers-print-link-flag-warnings](../../archive/cmake-dir-markers-print-link-flag-warnings.md) | low | resolved 2026-10-18: the markers are dropped, so no warnings |
+| [cmake-dep-path-through-missing-cmake-dir](../../archive/cmake-dep-path-through-missing-cmake-dir.md) | medium | resolved 2026-10-18; none here (nng has no `:path` deps) |
 
 ## See also
 

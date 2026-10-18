@@ -46,3 +46,37 @@ shape is less rare than it was.
   does for return obligations, and keep the proof.
 - `tests/run-flags.sh` `refine-crossing-shadowing-binders` pins today's
   behaviour (the crossing is not proved). Extend it to expect the W0372.
+
+## Resolution (2026-10-18)
+
+The first fix direction, plus one change so that a shadowed crossing which
+needs no facts still proves.
+
+A crossing under a shadowing binder is still not given the path's facts:
+those would speak about the outer binding, which is the false proof
+crossing-shadowed-binder-false-proof removed. Instead of `continue`,
+`refine_resolve_call_sites` (`src/compiler/elab_fns.c`) now hands it to
+`rt_report_shadowed_crossing`. That function records each refined argument as
+an obligation and decides it against an environment that has the caller's
+sorts and none of its hypotheses, so nothing it proves leans on the shadowed
+binding:
+
+- **Proved:** `(let [x 5] (needs-pos 7))` still proves, under
+  `--strict-refine` too.
+- **A closed refutation:** `(needs-pos -5)` under a shadowing binder is the
+  ordinary TUR-E0371, as it is without one.
+- **Otherwise:** the verdict is `unknown`, with `decided_by` "declined: a
+  binder on the path shadows a refined name". It reports TUR-W0372 wherever
+  an unknown crossing does: as an error under `--strict-refine`, and as a
+  warning when no runtime check backs the crossing (a `#reads` measure). An
+  open counterexample is not offered, because it ignores the path.
+
+The repro is now `error [TUR-W0372]: ... (a binder on the path to this call
+shadows a refined name, so its facts are not used); runtime check kept` under
+`--strict-refine`. Without the flag it is quiet, as before, since the runtime
+check remains. `--dump-refine=json` lists the crossing.
+
+Pinned by `tests/run-flags.sh` `refine-crossing-shadowing-binders`, extended
+as this report asked. It checks the four shadowing bodies for an `unknown`
+verdict and a W0372 under strict. It also checks that `(let [x 5] (needs-pos
+7))` and the unshadowed control prove and pass `--strict-refine`.

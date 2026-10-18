@@ -1743,6 +1743,122 @@ fi
 
 rm -f "$NEST_ERR" "$NEST_BERR"; rm -rf "$NEST"
 
+# cmake-dir-markers-print-link-flag-warnings: a target_link_libraries from
+# another directory makes CMake wrap the entry in `::@(<dir id>)` ... `::@`
+# markers on INTERFACE_LINK_LIBRARIES.  They reached the manifest's
+# link_flags, and the build's shell-syntax check warned "dropping link flag
+# '::@(0x...)' ... the shell would read as syntax" on every build -- for a
+# token that was always going to be skipped.  The walk drops them now, and a
+# manifest that still carries one (an older fetch) builds without the warning.
+# Hermetic: a :path cmake-dep, no network.
+MK=$(mktemp -d)
+mkdir -p "$MK/deps/mid/sub" "$MK/app/src"
+cat >"$MK/deps/mid/CMakeLists.txt" <<'EOF'
+cmake_minimum_required(VERSION 3.13)
+project(mid C)
+add_library(mid STATIC mid.c)
+target_include_directories(mid PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+add_subdirectory(sub)
+EOF
+printf 'target_link_libraries(mid INTERFACE m)\n' >"$MK/deps/mid/sub/CMakeLists.txt"
+printf '#include <math.h>\nlong mid_answer(void) { return (long)floor(42.5); }\n' >"$MK/deps/mid/mid.c"
+printf 'long mid_answer(void);\n' >"$MK/deps/mid/mid.h"
+cat >"$MK/app/build.tur" <<'EOF'
+(defpackage app
+  :name "app"
+  :version "0.1.0"
+  :cmake-deps #map{
+    "mid" #map{:path "../../deps/mid" :targets ["mid"]}})
+EOF
+cat >"$MK/app/src/main.tur" <<'EOF'
+(defn answer [] : int
+  ```c
+  #include "mid.h"
+  return (int64_t)mid_answer();
+  ```)
+(defn main [] : int
+  (println (answer))
+  0)
+EOF
+MK_ERR=$(mktemp)
+( cd "$MK/app" && "$TUR_ABS" fetch ) >/dev/null 2>"$MK_ERR"
+mk_rc=$?
+MK_MAN="$MK/app/cmake/spice-deps-manifest.json"
+MK_OUT=$( cd "$MK/app" && "$TUR_ABS" run src/main.tur 2>"$MK_ERR.run" )
+mk_run=$?
+# An older manifest that still carries a marker builds without the warning too.
+[ -f "$MK_MAN" ] && sed -i.bak 's/libmid.a",/libmid.a", "::@(0x1)",/' "$MK_MAN"
+MK_OUT2=$( cd "$MK/app" && "$TUR_ABS" run src/main.tur 2>"$MK_ERR.run2" )
+if [ "$mk_rc" -eq 0 ] && [ "$mk_run" -eq 0 ] && [ "$MK_OUT" = "42" ] \
+   && [ "$MK_OUT2" = "42" ] \
+   && [ -f "$MK_MAN.bak" ] && ! grep -qF '::@' "$MK_MAN.bak" \
+   && grep -qF '::@(0x1)' "$MK_MAN" \
+   && ! grep -qF 'dropping link flag' "$MK_ERR.run" "$MK_ERR.run2"; then
+    echo "PASS cmake-dir-markers-dropped-without-a-warning"
+    PASS=$((PASS + 1))
+else
+    echo "FAIL cmake-dir-markers-dropped-without-a-warning (fetch rc=$mk_rc run rc=$mk_run out='$MK_OUT' out2='$MK_OUT2')"
+    echo "  fetch stderr:"; sed 's/^/    /' "$MK_ERR"
+    echo "  run stderr:"; cat "$MK_ERR.run" "$MK_ERR.run2" 2>/dev/null | sed 's/^/    /'
+    [ -f "$MK_MAN.bak" ] && { echo "  manifest:"; sed 's/^/    /' "$MK_MAN.bak"; }
+    FAIL=$((FAIL + 1))
+    FAILED+=("cmake-dir-markers-dropped-without-a-warning")
+fi
+rm -f "$MK_ERR" "$MK_ERR.run" "$MK_ERR.run2"; rm -rf "$MK"
+
+# cmake-dep-path-through-missing-cmake-dir: a dependency spice declares a
+# `:path` cmake-dep, written relative to its own generated `cmake/` dir.  The
+# consumer joined it onto `<spice>/cmake/` and, when realpath() failed because
+# that gitignored directory did not exist (a fresh checkout), handed CMake
+# `<spice>/cmake/../../deps/midcore` -- which the OS cannot walk through the
+# missing `cmake/`, so add_subdirectory failed.  The join is collapsed
+# lexically now.  `midspice/cmake/` must not exist for this to test anything.
+PC=$(mktemp -d)
+mkdir -p "$PC/deps/midcore" "$PC/midspice/src" "$PC/app2/src"
+printf 'cmake_minimum_required(VERSION 3.13)\nproject(midcore C)\nadd_library(mid STATIC mid.c)\ntarget_include_directories(mid PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})\n' \
+    >"$PC/deps/midcore/CMakeLists.txt"
+printf 'long mid_answer(void) { return 42; }\n' >"$PC/deps/midcore/mid.c"
+printf 'long mid_answer(void);\n' >"$PC/deps/midcore/mid.h"
+cat >"$PC/midspice/build.tur" <<'EOF'
+(defpackage midspice
+  :name "midspice"
+  :version "0.1.0"
+  :cmake-deps #map{
+    "midcore" #map{:path "../../deps/midcore" :targets ["mid"]}})
+EOF
+cat >"$PC/app2/build.tur" <<'EOF'
+(defpackage app2
+  :name "app2"
+  :version "0.1.0"
+  :spices #map{"midspice" #map{:path "../midspice"}})
+EOF
+cat >"$PC/app2/src/main.tur" <<'EOF'
+(defn answer [] : int
+  ```c
+  #include "mid.h"
+  return (int64_t)mid_answer();
+  ```)
+(defn main [] : int
+  (println (answer))
+  0)
+EOF
+PC_ERR=$(mktemp)
+( cd "$PC/app2" && "$TUR_ABS" fetch ) >"$PC_ERR" 2>&1
+PC_OUT=$( cd "$PC/app2" && "$TUR_ABS" run src/main.tur 2>>"$PC_ERR" )
+if [ ! -d "$PC/midspice/cmake" ] && [ "$PC_OUT" = "42" ] \
+   && ! grep -qF 'not an existing directory' "$PC_ERR" \
+   && ! grep -qF 'midspice/cmake/..' "$PC/app2/cmake/CMakeLists.txt"; then
+    echo "PASS cmake-dep-path-through-missing-cmake-dir"
+    PASS=$((PASS + 1))
+else
+    echo "FAIL cmake-dep-path-through-missing-cmake-dir (out='$PC_OUT')"
+    sed 's/^/    /' "$PC_ERR"
+    [ -f "$PC/app2/cmake/CMakeLists.txt" ] && grep -n 'add_subdirectory' "$PC/app2/cmake/CMakeLists.txt" | sed 's/^/    /'
+    FAIL=$((FAIL + 1))
+    FAILED+=("cmake-dep-path-through-missing-cmake-dir")
+fi
+rm -f "$PC_ERR"; rm -rf "$PC"
+
 echo
 echo "summary: $PASS passed, $FAIL failed"
 if [ "$FAIL" -ne 0 ]; then

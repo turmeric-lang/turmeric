@@ -1989,19 +1989,26 @@ else
 fi
 
 # refine-crossing-shadowing-binders: a crossing under ANY binder that rebinds a
-# refined parameter is abandoned, never proved from the parameter's hypothesis
-# -- the encoder's namespace is flat, so the call's `x` would read the outer
-# `x > 0`.  Only a lone bare `let` binding and a `match` arm used to be asked;
-# a multi-binding `let`, a `^mut` or annotated binding and a `fn` parameter all
-# "proved" (needs-pos x) of an x that is -5.  A skipped crossing has no
-# diagnostic to pin, so this reads --dump-refine=json.  The last body shadows
-# nothing and must still prove, so the grep cannot pass by matching nothing.
+# refined parameter is never proved from the parameter's hypothesis -- the
+# encoder's namespace is flat, so the call's `x` would read the outer `x > 0`.
+# Only a lone bare `let` binding and a `match` arm used to be asked; a
+# multi-binding `let`, a `^mut` or annotated binding and a `fn` parameter all
+# "proved" (needs-pos x) of an x that is -5.
+#
+# refine-abandoned-crossing-silent-under-strict: such a crossing used to be
+# skipped outright -- no obligation, no TUR-W0372 -- so `--strict-refine`
+# passed these programs and their checks panicked at run time.  It is decided
+# without the path's facts now: "unknown" in the dump and a W0372 under
+# --strict-refine, while one that holds with no facts at all still proves
+# (`(needs-pos 7)`).  The unshadowed control must prove too, so the greps
+# cannot pass by matching nothing.
 SHADOW_INPUT=$(mktemp /tmp/tur-shadow-XXXXXX.tur)
 shadow_bad=""
 for body in "(let [y 1 x -5] (needs-pos x))" \
             "(let [^mut x -5] (needs-pos x))" \
             "(let [x : int -5] (needs-pos x))" \
             "(let [g (fn [x : int] : int (needs-pos x))] (g -5))" \
+            "(let [x 5] (needs-pos 7))" \
             "(let [y 1] (needs-pos x))"; do
     cat > "$SHADOW_INPUT" << EOF
 (defn needs-pos [x : #refine{ v : int | (> v 0) }] : int x)
@@ -2010,14 +2017,18 @@ for body in "(let [y 1 x -5] (needs-pos x))" \
 (defn main [] : int (println (f 3)) 0)
 EOF
     out=$("$TUR" check --dump-refine=json "$SHADOW_INPUT" 2>/dev/null) || true
-    proven=no
-    if echo "$out" | grep -A3 -F "\"what\": \"argument 1 of 'needs-pos' in 'f'\"" |
-            grep -qF '"verdict": "proven"'; then
-        proven=yes
-    fi
+    verdict=$(echo "$out" | grep -A3 -F "\"what\": \"argument 1 of 'needs-pos' in 'f'\"" |
+              grep -oE '"verdict": "[a-z]+"' | head -1)
+    strict_out=$("$TUR" check --strict-refine "$SHADOW_INPUT" 2>&1); strict_rc=$?
     case "$body" in
-        "(let [y 1] (needs-pos x))") [ "$proven" = yes ] || shadow_bad="$shadow_bad [control not proven: $body]" ;;
-        *)                           [ "$proven" = no ]  || shadow_bad="$shadow_bad [proven: $body]" ;;
+        "(let [y 1] (needs-pos x))"|"(let [x 5] (needs-pos 7))")
+            { [ "$verdict" = '"verdict": "proven"' ] && [ "$strict_rc" -eq 0 ]; } ||
+                shadow_bad="$shadow_bad [not proven under strict: $body ($verdict, rc=$strict_rc)]" ;;
+        *)
+            { [ "$verdict" = '"verdict": "unknown"' ] && [ "$strict_rc" -ne 0 ] &&
+              [[ "$strict_out" == *'TUR-W0372'* ]] &&
+              [[ "$strict_out" == *'shadows a refined name'* ]]; } ||
+                shadow_bad="$shadow_bad [not an unknown W0372 under strict: $body ($verdict, rc=$strict_rc)]" ;;
     esac
 done
 rm -f "$SHADOW_INPUT"

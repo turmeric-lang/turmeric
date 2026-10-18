@@ -72,8 +72,9 @@ changes came with it:
     was a lone bare `let` binding or a `match` binder. A multi-binding,
     `^mut` or annotated `let` binding, or a `fn` parameter, let `(needs-pos x)`
     read the parameter's `x > 0` of an `x` that is -5. Every such crossing is
-    now abandoned -- which `--strict-refine` does not report
-    ([refine-abandoned-crossing-silent-under-strict](../reported/refine-abandoned-crossing-silent-under-strict.md)).
+    now decided without the path's facts: an `unknown` crossing and a
+    TUR-W0372, which `--strict-refine` makes an error (archived:
+    [refine-abandoned-crossing-silent-under-strict](../archive/refine-abandoned-crossing-silent-under-strict.md)).
 
 Fixtures: `reflect-let-bound`, `errors/reflect-let-bound-false`,
 `refine-let-multi-binding`, `errors/refine-crossing-self-shadow-let`, and
