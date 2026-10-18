@@ -2322,4 +2322,18 @@ void tur_warn_if_shadows_special_form(const Symbol *name, Span span,
  * docs/guides/structs-guide.md (legacy pointer/struct migration). */
 const char *tur_legacy_form_hint(const char *name);
 
+/* compiled-args-not-evaluated-left-to-right: true when `e`'s value is read
+ * from mutable state -- a `^mut` binding (global or local), a field, a
+ * dereference, a dynamic var -- directly or through a pure builtin, cast,
+ * ascription or `if` over such reads.  Such an operand must be read where it
+ * is evaluated: a later operand's call or assignment can change it.  A
+ * literal or an immutable binding cannot change, so it is false there.  Used
+ * by the emitter's argument spill (emit_arg_value) and by the elaborator's
+ * operand hoist (elab_hoist_control_operands). */
+bool expr_reads_mutable(const Expr *e);
+/* The value kinds that spill sets copy into a temp: scalars, whose copy is
+ * just a read.  An aggregate is left alone (its copy is an ownership
+ * question). */
+bool type_kind_is_order_spillable(TypeKind k);
+
 #endif

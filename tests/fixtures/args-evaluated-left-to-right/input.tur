@@ -1,0 +1,55 @@
+;; compiled-args-not-evaluated-left-to-right: an earlier argument that reads
+;; mutable state is read before a later argument's call runs, in every call
+;; shape -- builtin operator, defn, inline-C callee, closure, generic,
+;; struct and ADT constructor, a ^mut local, a computed read.  Each line is
+;; 1 - 5 = -4 when the arguments run left to right (101 - 5 = 96 when the
+;; read happens after `bump`).
+(def ^mut counter 1)
+
+(defn bump [] : int
+  (set! counter (+ counter 100))
+  5)
+
+(defn sub [a : int b : int] : int (- a b))
+
+(defn csub [a : int b : int] : int
+  ```c
+  return a - b;
+  ```)
+
+(defn gsub [T] [a : T b : T f : (fn [T T] T)] : T (f a b))
+
+(defstruct P [x : int y : int])
+
+(defdata Two (MkTwo int int))
+
+(defn two-diff [t : Two] : int
+  (match t
+    (MkTwo a b) (- a b)))
+
+(defn main [] : int
+  (println (- counter (bump)))
+  (set! counter 1)
+  (println (sub counter (bump)))
+  (set! counter 1)
+  (println (csub counter (bump)))
+  (set! counter 1)
+  (let [f (fn [a : int b : int] : int (- a b))]
+    (println (f counter (bump))))
+  (set! counter 1)
+  (println (gsub counter (bump) sub))
+  (set! counter 1)
+  (let [p (P counter (bump))]
+    (println (- (. p x) (. p y))))
+  (set! counter 1)
+  (println (two-diff (MkTwo counter (bump))))
+  (let [^mut m 1]
+    (println (sub m (do (set! m 50) 5))))
+  (set! counter 1)
+  (println (sub (- (* counter 2) 1) (bump)))
+  (set! counter 1)
+  (println (< counter (bump)))
+  ;; a later argument that only reads: nothing to reorder
+  (set! counter 1)
+  (println (sub counter counter))
+  0)

@@ -1171,7 +1171,7 @@ Each was reproduced against the compiler this guide describes and filed in
 [`docs/reported/`](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/README.md). When one is fixed and archived,
 update the passage above that describes it and drop it from this list.
 
-- [compiled-args-not-evaluated-left-to-right](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/compiled-args-not-evaluated-left-to-right.md) -- Compiled code evaluates a later argument's call before an earlier argument
+- [compiled-args-not-evaluated-left-to-right](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/compiled-args-not-evaluated-left-to-right.md) -- (resolved 2026-10-18) Compiled code evaluated a later argument's call before an earlier argument; `emit_arg_value` now spills an earlier mutable read
 
 ## Maintenance
 

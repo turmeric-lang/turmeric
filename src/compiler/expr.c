@@ -661,3 +661,42 @@ void expr_print(Buf *b, const Expr *e) {
             break;
     }
 }
+
+/* compiled-args-not-evaluated-left-to-right: see expr.h. */
+bool expr_reads_mutable(const Expr *e) {
+    if (!e) return false;
+    switch (e->kind) {
+        case EX_VAR:
+            return e->as.var.binding && e->as.var.binding->is_mut;
+        case EX_GET_FIELD:
+        case EX_DEREF:
+        case EX_DYNVAR_READ:
+            return true;
+        case EX_ASCRIBE:
+            return expr_reads_mutable(e->as.ascribe_.inner);
+        case EX_CAST:
+            return expr_reads_mutable(e->as.cast_.expr);
+        case EX_BUILTIN:
+            for (uint32_t i = 0; i < e->as.builtin.n; i++)
+                if (expr_reads_mutable(e->as.builtin.args[i])) return true;
+            return false;
+        case EX_IF:
+            return expr_reads_mutable(e->as.if_.cond) ||
+                   expr_reads_mutable(e->as.if_.then_) ||
+                   expr_reads_mutable(e->as.if_.else_or_null);
+        default:
+            return false;
+    }
+}
+
+bool type_kind_is_order_spillable(TypeKind k) {
+    switch (k) {
+        case TY_BOOL: case TY_INT: case TY_FLOAT: case TY_CSTR: case TY_SYM:
+        case TY_INT8: case TY_INT16: case TY_INT32: case TY_INT64:
+        case TY_UINT8: case TY_UINT16: case TY_UINT32: case TY_UINT64:
+        case TY_FLOAT32: case TY_FLOAT64: case TY_PTR_VOID:
+            return true;
+        default:
+            return false;
+    }
+}

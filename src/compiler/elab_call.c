@@ -712,15 +712,29 @@ Expr *elab_hoist_control_operands(Elab *e, Expr *node) {
         ((OP) && (cps_expr_uses_control(OP)                                    \
                   || (!lazy_op && e->unit_has_user_effect                       \
                       && saffron_operand_has_call(OP))))
-    uint32_t n_hoist = 0;
+    /* compiled-args-not-evaluated-left-to-right: the hoisted operands run in
+     * a `let` BEFORE the node, so an earlier operand left in place would be
+     * read after them -- `(P counter (bump))` built P from the counter bump
+     * had already changed.  An earlier operand that reads mutable state is
+     * bound out too, in order, so it is read where it is evaluated.  Only a
+     * scalar (expr.h, type_kind_is_order_spillable); a literal or an
+     * immutable binding needs nothing. */
+    bool hoist[32] = { false };
+    uint32_t n_hoist = 0, last_hoist = 0;
     for (uint32_t i = 0; i < n_slots; i++)
-        if (SAFFRON_HOIST_OPERAND(*slots[i])) n_hoist++;
+        if (SAFFRON_HOIST_OPERAND(*slots[i])) { hoist[i] = true; n_hoist++; last_hoist = i; }
     if (n_hoist == 0) return node;
+    for (uint32_t i = 0; i < last_hoist; i++)
+        if (!hoist[i] && expr_reads_mutable(*slots[i]) &&
+            type_kind_is_order_spillable((*slots[i])->type.kind)) {
+            hoist[i] = true;
+            n_hoist++;
+        }
 
     LetBinding *lbs = (LetBinding *)arena_alloc(e->arena, n_hoist * sizeof(LetBinding));
     uint32_t h = 0;
     for (uint32_t i = 0; i < n_slots; i++) {
-        if (!SAFFRON_HOIST_OPERAND(*slots[i])) continue;
+        if (!hoist[i]) continue;
         *slots[i] = elab_bind_control_temp(e, *slots[i], &lbs[h]);
         h++;
     }

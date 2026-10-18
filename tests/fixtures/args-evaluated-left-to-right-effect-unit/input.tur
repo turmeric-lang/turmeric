@@ -1,0 +1,33 @@
+;; compiled-args-not-evaluated-left-to-right, in a unit that declares an
+;; effect.  There the elaborator hoists a constructor's call-bearing operand
+;; into a `let` ahead of the constructor (elab_hoist_control_operands); an
+;; earlier operand that reads mutable state must be hoisted with it, in order,
+;; or the constructor is built from the value the call already changed.
+(defeffect Ask [] : int)
+
+(def ^mut counter 1)
+
+(defn bump [] : int
+  (set! counter (+ counter 100))
+  5)
+
+(defn ask-five [] : int (perform (Ask)))
+
+(defstruct P [x : int y : int])
+
+(defdata Two (MkTwo int int))
+
+(defn two-diff [t : Two] : int
+  (match t
+    (MkTwo a b) (- a b)))
+
+(defn main [] : int
+  (let [p (P counter (bump))]
+    (println (- (. p x) (. p y))))
+  (set! counter 1)
+  (println (two-diff (MkTwo counter (bump))))
+  (set! counter 1)
+  (println (handle (let [p (P counter (+ (bump) (ask-five)))]
+                     (- (. p x) (. p y)))
+             (Ask [] k) (resume k 0)))
+  0)

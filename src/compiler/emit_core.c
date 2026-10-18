@@ -2775,6 +2775,93 @@ char *fresh_tmp(EmitCtx *ctx) {
     return p;
 }
 
+/* compiled-args-not-evaluated-left-to-right: an argument list is evaluated
+ * left to right, but emit_value returns a C expression and hoists only the
+ * parts that need a statement (a call that can panic, a `do`, a `let`).  So
+ * in `(+ counter (bump))` the earlier argument came back as the text
+ * `counter`, the later one's call was hoisted into a statement that ran at
+ * once, and the final expression read `counter` after `bump()` had changed
+ * it.
+ *
+ * emit_arg_value emits argument i of a list and, when its value can change
+ * under a later argument, spills it into a temp on the spot, so it is read
+ * where it is evaluated.  Its value can change when it reads mutable state (a
+ * `^mut` binding, a field, a dereference, a dynamic var, or a pure
+ * combination of them) and a later argument is not itself such a plain read:
+ * anything else can run a call or an assignment.  A literal, an immutable
+ * binding and a temp are never spilled, so the emitted C changes only at the
+ * lists that could have been read out of order.  Only scalar values are
+ * spilled; an aggregate keeps the old order, since a struct copy is an
+ * ownership question too.  The raw value is spilled, before any bridge the
+ * caller wraps around it, so the temp has the value's own representation. */
+/* True when emitting `e` cannot run anything: a literal, a read, or a pure
+ * builtin over them.  Everything else may call or assign. */
+static bool emit_arg_is_plain(const Expr *e) {
+    if (!e) return true;
+    switch (e->kind) {
+        case EX_NIL_LIT: case EX_BOOL_LIT: case EX_INT_LIT: case EX_FLOAT_LIT:
+        case EX_CSTR_LIT: case EX_VAR: case EX_DYNVAR_READ:
+            return true;
+        case EX_GET_FIELD:
+            return emit_arg_is_plain(e->as.get_field_.struct_expr);
+        case EX_ASCRIBE:
+            return emit_arg_is_plain(e->as.ascribe_.inner);
+        case EX_CAST:
+            return emit_arg_is_plain(e->as.cast_.expr);
+        case EX_BUILTIN:
+            if (e->as.builtin.spec->shape == BS_PRINTLN_INT ||
+                e->as.builtin.spec->shape == BS_PRINTLN_FLOAT ||
+                e->as.builtin.spec->shape == BS_PRINTLN_BOOL ||
+                e->as.builtin.spec->shape == BS_PRINTLN_CSTR ||
+                e->as.builtin.spec->shape == BS_PRINTLN_UINT ||
+                e->as.builtin.spec->shape == BS_PRINTLN_FLOAT32)
+                return false;
+            for (uint32_t i = 0; i < e->as.builtin.n; i++)
+                if (!emit_arg_is_plain(e->as.builtin.args[i])) return false;
+            return true;
+        default:
+            return false;
+    }
+}
+
+static const char *emit_arg_spill_ctype(const Expr *e, const char *text) {
+    if (!type_kind_is_order_spillable(e->type.kind)) return NULL;
+    /* A bare name with a recorded C type is spelled the way it was declared
+     * (a float can ride an int64_t carrier, and converting it would change
+     * the value, not just the order). */
+    bool ident = text && *text && (isalpha((unsigned char)*text) || *text == '_');
+    for (const char *q = text; ident && *q; q++)
+        if (!isalnum((unsigned char)*q) && *q != '_') ident = false;
+    if (ident) {
+        const char *rec = emit_localvar_lookup_ctype(text);
+        if (rec) return rec;
+    }
+    return type_c_name(e->type);
+}
+
+char *emit_arg_keep_order(EmitCtx *ctx, Buf *body, Expr *const *args,
+                          uint32_t n, uint32_t i, const Expr *emitted, char *v) {
+    if (!v || !emitted || !expr_reads_mutable(emitted)) return v;
+    bool later = false;
+    for (uint32_t j = i + 1; j < n && !later; j++)
+        if (!emit_arg_is_plain(args[j])) later = true;
+    if (!later) return v;
+    const char *ct = emit_arg_spill_ctype(emitted, v);
+    if (!ct) return v;
+    char *tmp = fresh_tmp(ctx);
+    indent_buf(body, ctx->indent);
+    buf_printf(body, "%s %s = (%s);\n", ct, tmp, v);
+    emit_localvar_record_ctype(tmp, ct);
+    free(v);
+    return tmp;
+}
+
+char *emit_arg_value(EmitCtx *ctx, Buf *body, Expr *const *args,
+                     uint32_t n, uint32_t i) {
+    return emit_arg_keep_order(ctx, body, args, n, i, args[i],
+                               emit_value(ctx, body, args[i]));
+}
+
 /* Phase 4 v1: Generate a fresh frame variable name */
 /* defer-frame-chain-must-not-escape: frame -> lexical parent side table.  Frame
  * names are unique per emission (fresh_frame), so no reset is needed and a
@@ -5553,7 +5640,7 @@ char *emit_builtin(EmitCtx *ctx, Buf *body, const Expr *e) {
     }
     for (uint32_t i = 0; i < n; i++) {
         ctx->region_erasure_compare_only = ((int32_t)i == compare_only_arg);
-        arg_strs[i] = emit_value(ctx, body, args[i]);
+        arg_strs[i] = emit_arg_value(ctx, body, args, n, i);
         ctx->region_erasure_compare_only = false;
     }
 
