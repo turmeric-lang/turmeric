@@ -1,6 +1,26 @@
 ## Turmeric Godot Binding -- Shipping Breadth Plan (Tier 5)
 
-> **Status:** Draft Plan
+> **Status:** On hold. The plan sat in `docs/upcoming/hold/` until the
+> 2026-10-16 flatten; each phase lands on its own once a demand appears.
+> Checked 2026-10-18 against turmeric-godot `main`:
+>
+> - **T5.A is partly built, and broken as written.**
+>   `.github/workflows/build.yml` ad-hoc signs the macOS library on every
+>   build, and signs it for distribution and submits it to `notarytool` when
+>   the `APPLE_*` secrets are set. But both steps run
+>   `find examples/spike/bin -name '*.dylib'`, and the macOS build writes
+>   `libturmeric-godot.macos.<target>.framework/libturmeric-godot.macos.<target>`
+>   (SConstruct), which has no `.dylib` suffix, so neither step finds a file
+>   to sign. The certificate-setup docs, signing the per-script AOT libraries
+>   at export time, and the Gatekeeper test are not done.
+> - **T5.B-T5.D** are split out into the Android, iOS and web plans; none is
+>   started.
+> - **T5.E** is not started.
+> - **T5.F** is partly there. Its precondition, the breakpoint debugger,
+>   shipped 2026-06-28. Paused-frame locals now reach Godot's debugger as
+>   strings (`turi_debug_frame_locals`), but `_debug_get_globals` returns an
+>   empty dictionary and there is no expandable tree for nested values.
+>
 > **Last Updated:** 2026-06-25
 > **Type:** Integration / Game Engine -- post-v1 follow-up to
 > [godot-language-binding-plan.md](../archive/godot-language-binding-plan.md).

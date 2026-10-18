@@ -1,11 +1,18 @@
 ---
 title: CPS backend -- ref<T> scope-exit auto-drop in colored functions (O1-b)
 category: Planning
-status: P1 landed (generalized to all owning locals -- rc + ref); P2 single-shot-crossing slice landed; only P2 abortive + P3 multi-shot crossing still fall back. Substrate (cps-tramp-resume, owning-cloneable-capture) graduated to always-on 2026-07-19.
 description: A `ref<T>` (also `weak`/`lref`) local gets a `(defer (drop! r))` injected at let scope exit (elab_forms.c). In an uncolored function the direct path fires it through the tur_frame LIFO defer stack. In a colored (CPS-emitted) function there is no equivalent: `EX_DEFER` has no CT-IR lowering case, so the whole function falls back, and even if it were lowered the injected drop lands textually after the control op, which `owning_dropped_before_control` rejects. This plan defines and implements ref scope-exit drop under CPS: P1 hoists the drop to last-use for a ref that does not cross a control op (self-contained, no runtime); P2/P3 (a ref live across an abortive or resumable control op) ride the DK-teardown / clone-drop discipline from the env-capture plan. Sound on the fallback today -- missed coverage, not a correctness gap.
 ---
 
 # CPS backend -- ref<T> scope-exit auto-drop (O1-b)
+
+> **Status:** On hold. P1 landed and was generalized to all owning locals (rc
+> and ref); P2's single-shot-crossing slice landed. Only P2's abortive case and
+> P3 (multi-shot crossing) still fall back, and they wait for a real
+> crossing-ref case (see "Phasing / recommendation"). The fallback is sound --
+> missed coverage, not a correctness gap. The substrate (cps-tramp-resume,
+> owning-cloneable-capture) graduated to always-on 2026-07-19. The plan sat in
+> `docs/upcoming/hold/` until the 2026-10-16 flatten.
 
 > **Progress note (2026-07-22) -- re-verified; plan was under-reporting. Two
 > things have moved since the 2026-07-19 note below.**

@@ -6,7 +6,14 @@ description: Rewritten after refinement types landed. What the shipped `#refine{
 
 # ECS Refinement-Typed APIs -- Plan
 
-> **Status 2026-07-26 -- rewritten.** The previous revision of this file was
+> **Status:** RE0, RE1 and RE3 done (2026-07-25/26; RE1 shipped as
+> `ecs/sized-refined`). RE2 is recorded and left unstarted by decision
+> (2026-10-02, see RE2): nothing blocks it, but it would tie `tur-ecs` to the
+> `loop-invariants` prototype for no runtime gain. The plan sat in
+> `docs/upcoming/v1/` until the 2026-10-16 flatten. With RE2 parked, nothing
+> here is scheduled, so it is a candidate for `docs/archive/`.
+>
+> **Rewritten 2026-07-26.** The previous revision of this file was
 > written while refinement types were still unbuilt, and it is wrong in ways
 > that matter: it assumed a `(refine T P)` type former that never shipped, it
 > described the ECS accessors as `option`-returning when they are not, and it

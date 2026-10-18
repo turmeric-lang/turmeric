@@ -1,6 +1,10 @@
 ## Turmeric Godot Binding -- Android Support Plan
 
-> **Status:** Draft Plan
+> **Status:** On hold, not started. The plan sat in `docs/upcoming/hold/`
+> until the 2026-10-16 flatten; it lands when a real demand to ship Android
+> builds appears. Checked 2026-10-18 against turmeric-godot `main`: CI builds
+> macOS arm64, Linux x86_64/arm64 and Windows x86_64 only, and no
+> `.gdextension` lists an `android.*` library.
 > **Last Updated:** 2026-06-26
 > **Type:** Integration / Game Engine -- post-v1 follow-up to
 > [godot-language-binding-plan.md](../archive/godot-language-binding-plan.md).

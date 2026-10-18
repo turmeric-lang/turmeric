@@ -1,16 +1,26 @@
 # Windows Support -- Remaining Work
 
-**Status (revised 2026-09-04):** WIN0 (compiler/runtime), WIN1 (generated-code
-portability), and the hard core of WIN3 (async I/O + fiber context switches) are
-done and **merged to `main`** -- squash-merged as `7a16ef1de` ("Windows Bringup
-(#682)").
-
-**The `windows-bringup` branch is live again, and is where the current work is.**
-An earlier revision of this header said it was "~900 commits behind main; do not
-work from it" -- that was true when written and is no longer. It has since been
-merged up twice (most recently 584 commits, v0.33.2 -> v0.43.0) and carries the
-JIT bring-up, the `__builtin_setjmp` fiber fix, the `-ldl` autolink fix, and the
-CI change below.
+> **Status:** WIN0 (compiler/runtime), WIN1 (generated-code portability), the
+> hard core of WIN3 (async I/O + fiber context switches) and WIN2's milestone
+> (the turmeric-godot GDExtension loads in a stock Godot on Windows,
+> 2026-08-04) are done and on `main`. Checked 2026-10-18:
+>
+> - **The `windows-bringup` branch is gone.** It was squash-merged once as
+>   `7a16ef1de` ("Windows Bringup (#682)"), merged up from `main` twice, and
+>   merged into `main` for good on 2026-09-04 (PR #805), carrying the JIT
+>   bring-up, the `__builtin_setjmp` fiber fix, the `-ldl` autolink fix and
+>   the CI change below. Windows work happens on `main`; the `windows` job in
+>   `.github/workflows/ci.yml` runs the fixture suite.
+> - **WIN2's AOT path has run.** The "never run" note under WIN2 predates
+>   2026-09-10, when Windows was where AOT was first driven end to end
+>   (turmeric-godot#4 and `88197f74f`; see
+>   [godot-binding-refresh-plan](../archive/godot-binding-refresh-plan.md)).
+>   The AOT gaps left are not Windows-specific and are tracked in
+>   [godot-aot-staged-build-lacks-godot-natives](../reported/godot-aot-staged-build-lacks-godot-natives.md).
+> - **Open:** the shim-toolchain question under WIN2; `-Werror` is still off
+>   for Windows builds (`src/CMakeLists.txt`); the pipe-fd reactor fixtures
+>   stay skipped behind `requires.posix-apis`, since Windows `select()` cannot
+>   poll pipes; WIN4 is deferred.
 
 `tur.exe` builds under MSYS2/UCRT64, and `tur build` compiles and runs real
 programs. Measured on `windows-bringup` with gcc 16.1.0, Debug:

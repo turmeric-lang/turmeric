@@ -1,6 +1,13 @@
 # Plan: Wilkinson-Style Formula DSL for tur-stats
 
-> **Status:** Draft
+> **Status:** On hold, not started; every phase in "Phase Status" is
+> Pending. The plan sat in `docs/upcoming/hold/` until the 2026-10-16
+> flatten. Checked 2026-10-18 against turmeric-spices `main`: there is no
+> `stats-formula` spice, `tur-stats` is still 0.1.0, and `tur-frame`, its one
+> dependency, is 0.2.0. Before SF0, retype `formula-terms` and
+> `identity-term` in "Result Types": their frame and column handles, cons
+> list and 0/1 flag are all `:int`, which CLAUDE.md's no-`:int`-stand-ins
+> rule forbids.
 > **Last Updated:** 2026-05-26
 > **Type:** Spice Design
 > **Spice Location:** `turmeric-spices/spices/stats-formula`
