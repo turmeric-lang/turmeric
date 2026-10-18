@@ -3297,6 +3297,18 @@ static bool __dk_cont_live_word(intptr_t k) {
     return !((DK *)k)->consumed;
 }
 
+typedef struct TurDynSave { struct TurDynSave *next; const void *owner; void *heads[]; } TurDynSave;
+typedef struct TurDynSwap { void (*swap)(TurDynSave **); struct TurDynSwap *next; } TurDynSwap;
+static TurDynSwap *g_tur_dyn_swaps = 0;
+static void tur_dyn_swap_register(TurDynSwap *s) {
+    s->next = g_tur_dyn_swaps; g_tur_dyn_swaps = s;
+}
+static TurDynSave *tur_dyn_save_new(TurDynSave **slot, const void *owner, int n) {
+    TurDynSave *s = (TurDynSave *)calloc(1, sizeof(TurDynSave) + (size_t)n * sizeof(void *));
+    if (!s) { fprintf(stderr, "tur: oom\n"); abort(); }
+    s->owner = owner; s->next = *slot; *slot = s;
+    return s;
+}
 /* Phase T21: FiberBlock */
 #ifdef __clang__
 #pragma clang diagnostic push
@@ -3326,6 +3338,7 @@ struct FiberBlock {
     tur_jmp_buf *dk_driver;
     void *esc_live; int esc_live_n, esc_live_cap;
     int64_t r7dyn[8];
+    TurDynSave *dynsave;
 };
 
 #if defined(__GNUC__) || defined(__clang__)
@@ -3527,9 +3540,11 @@ static int64_t tur_fiber_block_resume(FiberBlock *f, int64_t arg) {
     __dk_reap_n = f->dk_reap_n; __dk_reap_cap = f->dk_reap_cap; __dk_entry_depth = f->dk_entry_depth;
     void *_dk_pp = (void *)g_dk_pend_perform; g_dk_pend_perform = (DKPendPerform *)f->dk_pend;
     g_dk_driver = f->dk_driver;   /* the fiber's own landing, on its own stack */
+    for (TurDynSwap *_ds = g_tur_dyn_swaps; _ds; _ds = _ds->next) _ds->swap(&f->dynsave);
     TUR_GC_FIBER_ENTER((void *)&_dk_save);
     swapcontext(&f->caller_ctx, &f->ctx);
     TUR_GC_FIBER_LEAVE();
+    for (TurDynSwap *_ds = g_tur_dyn_swaps; _ds; _ds = _ds->next) _ds->swap(&f->dynsave);
     f->dk_reap_v = __dk_reap_v; f->dk_reap_kind = __dk_reap_kind;
     f->dk_reap_n = __dk_reap_n; f->dk_reap_cap = __dk_reap_cap; f->dk_entry_depth = __dk_entry_depth;
     __dk_reap_v = _dk_rv; __dk_reap_kind = _dk_rk;
@@ -3579,6 +3594,7 @@ static void tur_fiber_local_set(FiberBlock *f, int64_t key, int64_t value) {
 static void tur_fiber_block_free(FiberBlock *f) {
     if (!f) return;
     tur_fiber_local_free(f);
+    while (f->dynsave) { TurDynSave *_n = f->dynsave->next; free(f->dynsave); f->dynsave = _n; }
     free(f->stack); free(f);
 }
 
