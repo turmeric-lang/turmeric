@@ -2263,9 +2263,10 @@ function minimapColors(fb) {
 // opaque RED on any parse failure -- rgba() strings are NOT supported here.
 // Always use #RRGGBB or #RRGGBBAA.
 //
-// The editor ports -- vscode-syntax-ext/themes/, vim-syntax/colors/ and
-// emacs/ -- carry both themes too. A change to a token color here is a change
-// to those.
+// The editor ports -- the VS Code, Vim and Emacs packs -- carry both themes
+// too. The token colors are written down once, in web/editor-palette.json;
+// tests/check-editor-palette.py (ctest `tur_editor_palette`) fails when this
+// block, that file, or an editor theme disagree. Change the JSON first.
 const MONACO_THEMES = {
     dark: {
         base: 'vs-dark',

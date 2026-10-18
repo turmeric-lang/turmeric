@@ -1,0 +1,27 @@
+{
+  "_comment": "The Turmeric editor palette: the one place the token colors are written down. web/main.js (Monaco) and every editor pack (Vim, Emacs, VS Code) must carry these. tests/check-editor-palette.py enforces it; the editor repos run the same script against a pinned copy of this file.",
+  "dark": {
+    "background": "0C0A08",
+    "foreground": "EAE0D2",
+    "comment": "48433D",
+    "string": "D9735A",
+    "number": "A8C98A",
+    "keyword": "EFA030",
+    "keywordOperator": "C4A0E8",
+    "type": "7AC4B8",
+    "operator": "6A5F58",
+    "delimiter": "5A5448"
+  },
+  "light": {
+    "background": "FBF8F2",
+    "foreground": "2A2016",
+    "comment": "A39682",
+    "string": "AE3C26",
+    "number": "456F20",
+    "keyword": "965500",
+    "keywordOperator": "7748AE",
+    "type": "127065",
+    "operator": "8A7D6C",
+    "delimiter": "9F927F"
+  }
+}
