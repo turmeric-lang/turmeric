@@ -1564,6 +1564,21 @@ add_test(
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
 set_tests_properties(tur_editor_syntax PROPERTIES TIMEOUT 300)
+# The editor palette contract: web/editor-palette.json against the Monaco theme
+# in web/main.js and the Vim / Emacs / VS Code themes.  The editor packs are
+# headed for their own repos, which run this same script against a pinned copy.
+add_test(
+  NAME tur_editor_palette
+  COMMAND python3 tests/check-editor-palette.py web/editor-palette.json
+          --main-js web/main.js
+          dark=vscode-syntax-ext/themes/turmeric-dark-color-theme.json
+          dark=vim-syntax/colors/turmeric-dark.vim
+          dark=emacs/turmeric-dark-theme.el
+          light=vscode-syntax-ext/themes/turmeric-light-color-theme.json
+          light=vim-syntax/colors/turmeric-light.vim
+          light=emacs/turmeric-light-theme.el
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
 # RP4: integration test for the FFI binding layer. Builds a fixture
 # spice with several signature shapes and calls each export from the
 # REPL, asserting correct results, qualified-name routing, and clear
