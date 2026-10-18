@@ -54,7 +54,8 @@ static void cont_mark_consumed(Expr *k);
  * `#{...}`) or PROV_FX_AT_LEGACY (`@{...}`), emit the corresponding
  * deprecation warning and clear the provenance so a single source location
  * warns at most once.  `#fx{...}` (PROV_FX_EXPLICIT) and non-effect-row uses
- * are silent. */
+ * are silent.  Under --Werror=deprecated the warning is an error; the callers
+ * carry on, and the recorded error fails the compile once elaboration ends. */
 void warn_legacy_fx_row(Form *f) {
     if (!f || f->tag != F_MAP) return;
     DiagCode code;
@@ -71,7 +72,7 @@ void warn_legacy_fx_row(Form *f) {
         default:
             return;
     }
-    diag_emit_with_code(DIAG_WARNING, f->span, code,
+    diag_emit_with_code(elab_deprecation_level(), f->span, code,
         "%s effect row is deprecated; prefer #fx{...} "
         "(run tools/migrate-fx-rows.py to rewrite)", spelling);
     f->fx_prov = (uint8_t)PROV_FX_EXPLICIT;

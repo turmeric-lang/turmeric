@@ -1,0 +1,59 @@
+;; defdynamic-generic-adt-root-emitted-before-its-type: a dynvar of a generic
+;; ADT instantiation type-checked, then cc stopped on "unknown type name
+;; 'tur_adt_Option__int'" -- the by-value root and the spawn snapshot's slot
+;; were emitted ahead of the monomorph's struct.  The monomorph is flushed
+;; before the dynvar block now, and a generic call in a root, a `binding`
+;; override or a `set!` is specialized at the var's type (it was emitted as
+;; the carrier base).  Binds, reads twice, and rebinds each, so the read path
+;; is shown not to free a box something else still owns; the fixture is
+;; leak-checked.  *a* and *b* take a bare `(None)` / `(none)` root, which the
+;; var's declared type now grounds.
+
+(defopaque Ctx :int)
+(defn ctx-id [c : Ctx] : int (:: c int))
+
+(defdynamic *n* :(Option int) (:: (None) :(Option int)))
+(defdynamic *s* :(Option cstr) (:: (None) :(Option cstr)))
+(defdynamic *c* :(Option Ctx) (:: (None) :(Option Ctx)))
+
+(defdynamic *a* :(Option int) (None))
+(defdynamic *b* :(Option int) (none))
+
+(defn show-n [] : int (unwrap-or *n* -1))
+(defn show-s [] : cstr (unwrap-or *s* "none"))
+(defn show-c [] : int (match *c* (Some x) (ctx-id x) (None) -1))
+(defn show-a [] : int (unwrap-or *a* -1))
+(defn show-b [] : int (unwrap-or *b* -1))
+
+(defn main [] : int
+  (println (show-n))                          ;; -1
+  (binding [*n* (some 7)]
+    (println (show-n))                        ;; 7
+    (println (show-n))                        ;; 7
+    (binding [*n* (some 8)]
+      (println (show-n)))                     ;; 8
+    (println (show-n)))                       ;; 7
+  (println (show-n))                          ;; -1
+  (binding [*s* (some "hello")]
+    (println (show-s))                        ;; hello
+    (println (show-s)))                       ;; hello
+  (println (show-s))                          ;; none
+  (binding [*c* (some (:: 42 Ctx))]
+    (println (show-c))                        ;; 42
+    (println (show-c)))                       ;; 42
+  (println (show-c))                          ;; -1
+  (println (show-a))                          ;; -1
+  (println (show-b))                          ;; -1
+  (binding [*a* (some 3)
+            *b* (some 4)]
+    (println (show-a))                        ;; 3
+    (println (show-b))                        ;; 4
+    (set! *a* (some 31))
+    (println (show-a))                        ;; 31
+    (binding [*a* (none)]
+      (println (show-a)))                     ;; -1
+    (println (show-a))                        ;; 31
+    (set! *b* (None))
+    (println (show-b)))                       ;; -1
+  (println (show-a))                          ;; -1
+  0)

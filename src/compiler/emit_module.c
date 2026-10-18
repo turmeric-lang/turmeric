@@ -9531,6 +9531,39 @@ static void emit_abi_scan_expr(EmitCtx *ctx, const Expr *e,
              * some other call happened to keep `vec_hynew` alive. */
             emit_abi_scan_expr(ctx, e->as.rc_of_.expr, items, n_items);
             break;
+        /* defdynamic-generic-adt-root-emitted-before-its-type: a dynvar's root
+         * and each `binding` override were never scanned, so a generic call
+         * there -- `(some 7)` for an `(Option int)` var -- was never
+         * registered and emitted as the carrier base, its int64 word then
+         * stored into the by-value slot.  The slot is typed like a let
+         * binding, so its value-tail constructs register the same way. */
+        case EX_DEFDYNAMIC: {
+            const Type *vt = &e->as.defdynamic_.entry->value_type;
+            if (vt->kind == TY_APP && !type_uses_carrier_abi(*vt))
+                emit_abi_scan_construct_tail(ctx, e->as.defdynamic_.root_expr,
+                                             vt, items, n_items);
+            emit_abi_scan_expr(ctx, e->as.defdynamic_.root_expr, items, n_items);
+            break;
+        }
+        case EX_DYNVAR_BINDING:
+            for (uint32_t i = 0; i < e->as.dynvar_binding_.n_pairs; i++) {
+                const DynBinding *p = &e->as.dynvar_binding_.pairs[i];
+                const Type *vt = &p->entry->value_type;
+                if (vt->kind == TY_APP && !type_uses_carrier_abi(*vt))
+                    emit_abi_scan_construct_tail(ctx, p->override_expr, vt,
+                                                 items, n_items);
+                emit_abi_scan_expr(ctx, p->override_expr, items, n_items);
+            }
+            emit_abi_scan_expr(ctx, e->as.dynvar_binding_.body, items, n_items);
+            break;
+        case EX_DYNVAR_SET: {
+            const Type *vt = &e->as.dynvar_set_.entry->value_type;
+            if (vt->kind == TY_APP && !type_uses_carrier_abi(*vt))
+                emit_abi_scan_construct_tail(ctx, e->as.dynvar_set_.value, vt,
+                                             items, n_items);
+            emit_abi_scan_expr(ctx, e->as.dynvar_set_.value, items, n_items);
+            break;
+        }
         default:
             break;
     }
@@ -20354,6 +20387,15 @@ static int emit_program_inner(Buf *out, const Expr *program) {
                 DynVarEntry *entry = e->as.defdynamic_.entry;
                 char *mname = mangle_dynvar_name(entry->name->name);
                 const char *ctype = type_c_name(entry->value_type);
+                /* defdynamic-generic-adt-root-emitted-before-its-type: a
+                 * `(Option int)` root is a static OBJECT of the monomorph, as is
+                 * the snapshot slot below, so the complete struct must precede
+                 * it.  The monomorph is registered on demand (type_c_name just
+                 * did) and otherwise flushed after this block: flush it here,
+                 * as the record-field pre-flush above does.  The later flush's
+                 * guards make it a no-op. */
+                if (entry->value_type.kind == TY_APP)
+                    type_codegen_emit_adt_apps(&early_file);
                 buf_printf(&early_file, "static %s _dynvar_root_%s;\n", ctype, mname);
                 buf_printf(&early_file, "static pthread_key_t _dynvar_key_%s;\n", mname);
                 /* DV3: destructor walks chain and frees heap frames on thread exit. */

@@ -1,0 +1,30 @@
+;; vec-push-of-with-expression-emits-invalid-c: `(vec-push! v (with n0 [b 2]))`
+;; boxed the element twice -- the by-value-tail arm of the argument loop
+;; bridged the `with` result to its carrier word, and the uniform-carrier arm
+;; after it boxed that box pointer again, `*__t = (int64_t)(intptr_t)(__t0)`
+;; into a `tur_adt_N` cell.  cc: "incompatible types when assigning to type
+;; 'tur_adt_N' from type 'long int'".  Binding the `with` in a `let` first
+;; worked.  Each operand shape is pushed inline here and read back; the
+;; fixture is leak-checked, since the double box also leaked its outer cell.
+
+(defstruct N :copy [a : int b : int c : int])
+
+(defn new-ns [] : (Vec N) (vec-new))
+(defn mk-n [x : int] : N (N x (* 2 x) (* 3 x)))
+
+(defn main [] : int
+  (let [v  (new-ns)
+        n0 (N 1 0 0)]
+    (do (vec-push! v (with n0 [b 2]))           ;; a `with` result
+        (vec-push! v (N 4 5 6))                 ;; a constructor call
+        (vec-push! v (mk-n 7))                  ;; a function result
+        (vec-push! v (with (mk-n 10) [c 99]))   ;; `with` over a call
+        (println (.b (vec-get v 0)))            ;; 2
+        (println (.a (vec-get v 0)))            ;; 1
+        (println (.c (vec-get v 1)))            ;; 6
+        (println (.b (vec-get v 2)))            ;; 14
+        (println (.c (vec-get v 3)))            ;; 99
+        (println (.b (vec-get v 3)))            ;; 20
+        (println (vec-len v))                   ;; 4
+        (vec-free v)
+        0)))

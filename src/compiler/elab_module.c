@@ -2240,7 +2240,7 @@ Binding *elab_lookup_sym(Elab *e, const Symbol *sym, Span span, bool *had_error)
          * --Werror=deprecated the diagnostic is promoted to an error so
          * the elaborator stops compilation. */
         if (b->is_deprecated && b->name != e->current_fn_name) {
-            DiagLevel sev = g_werror_deprecated ? DIAG_ERROR : DIAG_WARNING;
+            DiagLevel sev = elab_deprecation_level();
             if (b->deprecation_message) {
                 diag_emit(sev, span,
                           "'%s' is deprecated: %s",

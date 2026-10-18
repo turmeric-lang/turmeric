@@ -14567,8 +14567,15 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                  * slot (TY_TYVAR/FORALL/EXISTS); a concrete by-value ADT param
                  * (pk==TY_ADT emitted by value) takes the aggregate directly and is
                  * excluded.  A matched concrete spec resolves the param to the real
-                 * C type and carries its own bridges, so it is excluded. */
-                if (!needs_fn_cast && !matched_spec &&
+                 * C type and carries its own bridges, so it is excluded.
+                 *
+                 * vec-push-of-with-expression-emits-invalid-c: not when the
+                 * by-value-tail arm above already bridged the argument to its
+                 * carrier word, as every other carrier seam here checks.  A
+                 * `(with n0 [...])` operand took both: boxed there, then the box
+                 * pointer boxed again here -- `*__t = (int64_t)(intptr_t)(__t0)`
+                 * into a `tur_adt_N` cell, which cc rejects. */
+                if (!needs_fn_cast && !matched_spec && !arg_carrier_boxed &&
                     fn_binding->type.kind == TY_FN && emit_arg) {
                     Type rarg = emit_resolve_type(ctx, emit_arg->type);
                     /* vec-of-any-repr-decision-ice: an `any` argument joins this

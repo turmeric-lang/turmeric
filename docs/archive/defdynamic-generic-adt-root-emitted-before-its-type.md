@@ -83,3 +83,36 @@ No constructor carries anything that could be duplicated or freed twice, so
 `*log-level*` as an enum; the plan uses a `defopaque` newtype instead. When
 this is decided, admitting payload-free ADTs is a separate, smaller question
 than admitting `(Option T)`.
+
+## Resolution (2026-10-18)
+
+The first fix direction: an `(Option T)` belongs in a dynvar. There were three
+gaps, and the repro hit only the first.
+
+1. **Order.** The dynvar block in `src/compiler/emit_module.c` now flushes the
+   monomorphized ADT definitions (`type_codegen_emit_adt_apps`) before it
+   declares a root of a `TY_APP` type. The root and the DV3 snapshot slot
+   then see the complete struct.
+2. **Specialization.** The emitter's ABI scan (`emit_abi_scan_expr`) had no
+   case for `EX_DEFDYNAMIC`, `EX_DYNVAR_BINDING` or `EX_DYNVAR_SET`. A generic
+   call there, such as `(some 7)` in a `binding` override, was never
+   registered. It was emitted as the carrier base, and its int64 word was
+   stored into the by-value slot, which cc rejects. The three nodes are now
+   scanned like a let binding of the var's type.
+3. **Expected type.** The root, each `binding` override and a `set!` value are
+   elaborated with the var's declared type on the expected-type channel, as a
+   let annotation is. A bare `(None)` or `(none)` root no longer needs the
+   `::` ascription.
+
+Pinned by:
+- `defdynamic-option-root`: `(Option int)`, `(Option cstr)` and `(Option
+  Ctx)` vars, each bound, read twice and rebound. It also has bare `(None)` /
+  `(none)` roots, `set!` and a nested `(none)` override. It is leak-checked,
+  and passes under `tur run`, `tur --interpret` and `tur jit`.
+- `defdynamic-option-convey`: an `(Option Ctx)` var through
+  `spawn-conveying`.
+
+The dynamic-vars guide now says which ADTs a dynvar can carry. The other
+question here, whether a payload-free `defdata` should be admitted past
+`TUR-E0603`, is still open. It moved to
+[defdynamic-refuses-payload-free-defdata](../reported/defdynamic-refuses-payload-free-defdata.md).

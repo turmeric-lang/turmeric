@@ -125,3 +125,48 @@ Remove the example topics from the guide's "Trust the code over the comments"
 paragraph. Remove "whatever the `diag.h` comment says" from its "Prefixes and
 bands" section. If item 4 lands, also remove the `tur explain TUR-I0379`
 example from the `tur explain` section.
+
+## Resolution (2026-10-18)
+
+All seven items, as the report and its 2026-10-17 decisions describe.
+
+1. **Severity.** A new helper, `elab_deprecation_level()`
+   (`src/compiler/elab_internal.h`), returns `DIAG_ERROR` under
+   `--Werror=deprecated` and `DIAG_WARNING` otherwise. It sits next to the
+   flag's `extern` there rather than in `diag.c`, which does not see the
+   runtime globals. The use-site warning (`elab_module.c`), TUR-D0004
+   (`elab_structs.c`) and `warn_legacy_fx_row` (D0002/D0003) all call it, so
+   **D0002 and D0003 are now promoted.** The callers of `warn_legacy_fx_row`
+   carry on after it. The recorded error fails the compile once elaboration
+   ends, with one diagnostic at the row. The band comment in `diag.h` now
+   says this, and the D0001 enum comment says it is an error. The CHANGELOG
+   has an `[Unreleased]` entry, and the D0002/D0003 explanations say they
+   become errors under the flag.
+2. **D0001 explanation.** Reworded as an error that no flag turns off ("no
+   longer accepted"). It now says it was a warning in v0.18/v0.19 and keeps
+   its D prefix, and the `--Werror=deprecated` sentence is gone.
+3. **Explain-prefix comments.** `looks_like_diag_code_` and its orphan
+   "Phase 8" comment are deleted. `cmd_explain` calls `diag_looks_like_code`
+   directly and carries the Phase 8 comment. The `cmd_explain` and
+   `diag_code_from_string` comments name every prefix.
+4. **`I` codes.** `diag_looks_like_code` accepts `I`. Retired codes have no
+   explanation entry, so accepting the prefix alone would only have turned
+   "unbound symbol" into "no explanation". TUR-I0379 got a short entry that
+   says it is retired. The REPL's bare `:explain` captured only `TUR-E`/`TUR-W`
+   codes, and now captures any prefix `diag_looks_like_code` accepts, so a D
+   code is explainable there too.
+5. **`diag_explain`'s comment** documents `code` and `out`.
+6. **What `--Werror=deprecated` covers** is listed once, at
+   `g_werror_deprecated` in `src/runtime/globals.c`. The two `main.c`
+   comments and the `elab_internal.h` declaration point there.
+7. **Dead citation** points at `docs/archive/history/control-flow-completeness-plan.md`.
+
+The guide edits from "When this is fixed" are done, and its `tur explain`
+section notes that a new prefix has to be added to `diag_looks_like_code`.
+
+Pinned by:
+- `errors/deprecated-fx-row-hash-as-error` and
+  `errors/deprecated-fx-row-at-as-error` (`flags`: `--Werror=deprecated`);
+- `tests/run-flags.sh`: `tur-explain-d0001-is-an-error`,
+  `tur-explain-TUR-D0002-promoted`, `tur-explain-TUR-D0003-promoted` and
+  `tur-explain-i-prefix`.

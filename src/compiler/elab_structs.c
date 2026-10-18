@@ -3621,7 +3621,7 @@ Expr *elab_match(Elab *e, const Form *call) {
                 }
             }
             if (nonexhaustive_optout) {
-                diag_emit_with_code(g_werror_deprecated ? DIAG_ERROR : DIAG_WARNING,
+                diag_emit_with_code(elab_deprecation_level(),
                     marker->span, TUR_D0004_NONEXHAUSTIVE_FX_MARKER,
                     "'#fx{NonExhaustive}' is deprecated; write "
                     "(match ^non-exhaustive scrutinee ...) -- it is a match "

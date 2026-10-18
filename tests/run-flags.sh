@@ -116,6 +116,44 @@ for code in TUR-E0001 TUR-E0002 TUR-E0003 TUR-E0004 TUR-E0005 \
     fi
 done
 
+# tur-explain-d0001-is-an-error (stale-comments-diagnostics item 2): D0001 has
+# been a hard error since fn-type-bare-identifier-plan Phase 4; its text used
+# to call it a warning that --Werror=deprecated promotes.
+out=$("$TUR" explain TUR-D0001 2>&1); rc=$?
+if [ $rc -ne 0 ]; then
+    fail "tur-explain-d0001-is-an-error" "non-zero exit ($rc)"
+elif grep -q "Werror\|triggering this warning\|is deprecated" <<< "$out"; then
+    fail "tur-explain-d0001-is-an-error" "explanation still describes a promotable warning"
+elif ! grep -q "no longer accepted" <<< "$out"; then
+    fail "tur-explain-d0001-is-an-error" "explanation does not say the colon is rejected"
+else
+    pass "tur-explain-d0001-is-an-error"
+fi
+
+# tur-explain-d0002-d0003-promoted (item 1): both legacy effect-row spellings
+# are promoted by --Werror=deprecated, and their explanations say so.
+for code in TUR-D0002 TUR-D0003; do
+    out=$("$TUR" explain "$code" 2>&1); rc=$?
+    if [ $rc -ne 0 ]; then
+        fail "tur-explain-${code}-promoted" "non-zero exit ($rc)"
+    elif ! grep -q -- "--Werror=deprecated" <<< "$out"; then
+        fail "tur-explain-${code}-promoted" "explanation does not mention --Werror=deprecated"
+    else
+        pass "tur-explain-${code}-promoted"
+    fi
+done
+
+# tur-explain-i-prefix (item 4): the I prefix is a diagnostic code, not source.
+# It used to be elaborated as a snippet: "unbound symbol 'TUR-I0379'".
+out=$("$TUR" explain TUR-I0379 2>&1); rc=$?
+if [ $rc -ne 0 ]; then
+    fail "tur-explain-i-prefix" "non-zero exit ($rc): $out"
+elif ! grep -q "^TUR-I0379:" <<< "$out"; then
+    fail "tur-explain-i-prefix" "output is not the I0379 explanation: $out"
+else
+    pass "tur-explain-i-prefix"
+fi
+
 # tur-explain-unknown-code: --explain TUR-E9999 should exit non-zero
 out=$("$TUR" --explain TUR-E9999 2>&1); rc=$?
 if [ $rc -eq 0 ]; then

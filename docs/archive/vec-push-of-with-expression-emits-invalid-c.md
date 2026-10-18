@@ -55,3 +55,19 @@ spelled as `tur_adt_N` and is boxed once.
    function result, each inline, into a `Vec` of a three-field `:copy` struct,
    and read them back. The fixture should be leak-checked, since the
    double-boxed form would also leak its outer box.
+
+## Resolution (2026-10-18)
+
+The first fix direction, on the bridge side. The argument loop of a call
+through a uniform-carrier `fn` (`src/compiler/emit_expr.c`) has two arms that
+bridge a by-value operand to its carrier word. The by-value-tail arm, which a
+`(with n0 [...])` operand takes, spills the aggregate into a box and sets
+`arg_carrier_boxed`. The uniform-carrier arm after it did not check that flag,
+so it boxed the box pointer again. It now skips an operand the earlier arm
+already bridged, as every other carrier seam in that loop does. One box, and
+the outer cell no longer leaks.
+
+Pinned by `vec-push-inline-copy-struct`. It pushes a `with` result, a
+constructor call, a function result, and a `with` over a call, each inline,
+into a `(Vec N)` of a three-field `:copy` struct, and reads each back. It is
+leak-checked (`requires.leak-check`).

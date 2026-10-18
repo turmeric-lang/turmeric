@@ -451,13 +451,15 @@ const char *diag_code_to_string(DiagCode code) {
 }
 
 /* Phase HKT-P5: Return true if `s` looks like a diagnostic code string
- * of the form "TUR-E" (or W or D) followed by one or more decimal digits. */
+ * of the form "TUR-E" (or W, D or I) followed by one or more decimal digits. */
 bool diag_looks_like_code(const char *s) {
     if (!s) return false;
-    /* Accept TUR-E####, TUR-W#### and TUR-D#### (deprecation band) */
+    /* Accept TUR-E####, TUR-W####, TUR-D#### (deprecation band) and
+     * TUR-I#### (the retired TUR-I0379): every prefix diag_code_from_string
+     * knows, so `tur explain` reaches each code the table has. */
     if (strncmp(s, "TUR-", 4) != 0) return false;
     const char *p = s + 4;
-    if (*p != 'E' && *p != 'W' && *p != 'D') return false;
+    if (*p != 'E' && *p != 'W' && *p != 'D' && *p != 'I') return false;
     p++;
     if (*p == '\0') return false;   /* need at least one digit */
     while (*p) {
@@ -1908,6 +1910,14 @@ static const DiagExplanation diag_explanations_[] = {
       "  The post-loop fact `p AND (not c)` is only offered once BOTH\n"
       "  obligations are proved.\n",
     },
+    /* Retired, but `tur explain` accepts the I prefix, so say what it was. */
+    { TUR_I0379_REFINE_ORACLE_MISMATCH,
+      "TUR-I0379: Refinement oracle mismatch (retired)\n"
+      "\n"
+      "Retired in 0.32.5 and never emitted since.  It reported a disagreement\n"
+      "between the refinement checker and the Z3 oracle that a dev build could\n"
+      "once link.  The oracle is gone; the code stays reserved and is not\n"
+      "reused.\n" },
     { TUR_E0378_REFINE_IN_FN_TYPE,
       "TUR-E0378: Refinement written inside a function type\n"
       "\n"
@@ -2661,16 +2671,19 @@ static const DiagExplanation diag_explanations_[] = {
       "Suppress with -Wno-dynvar-earmuffs if your project intentionally omits\n"
       "this convention.\n",
     },
-    /* fn-type-bare-identifier-plan Phase 3: redundant colon inside (fn ...) */
+    /* fn-type-bare-identifier-plan: a colon inside (fn ...), an error since
+     * Phase 4 (stale-comments-diagnostics item 2: this text still described
+     * the Phase 3 warning). */
     { TUR_D0001_FN_TYPE_COLON,
-      "TUR-D0001: leading colon inside a (fn ...) type is deprecated\n"
+      "TUR-D0001: leading colon inside a (fn ...) type is no longer accepted\n"
       "\n"
       "Inside a (fn [params...] result) *type* expression, position alone\n"
       "tells the elaborator which forms are parameter types and which is the\n"
-      "result type.  The leading ':' on each inner type is therefore\n"
-      "redundant and is being phased out.\n"
+      "result type, so a leading ':' on an inner type is an error.  It was a\n"
+      "deprecation warning in v0.18 and v0.19; the code keeps its D prefix so\n"
+      "tooling that keys on it keeps working.  No flag turns it off.\n"
       "\n"
-      "Example triggering this warning:\n"
+      "Example triggering this error:\n"
       "  (defn compose [^fat f : (fn [:float] #{} :float)] : ptr<void> ...)\n"
       "                            ^^^^^^         ^^^^^^  redundant colons\n"
       "\n"
@@ -2679,8 +2692,7 @@ static const DiagExplanation diag_explanations_[] = {
       "\n"
       "The structural colon between the binder (^fat f) and its type stays;\n"
       "only the *inner* types inside (fn ...) lose theirs.  Run\n"
-      "tools/rewrite_fn_type_colons.py to migrate a tree automatically.\n"
-      "Promoted to an error under --Werror=deprecated.\n",
+      "tools/rewrite_fn_type_colons.py to migrate a tree automatically.\n",
     },
     /* fx-row-syntax-rename-plan Phase 2: bare #{...} effect row */
     { TUR_D0002_FX_ROW_LEGACY_HASH,
@@ -2700,7 +2712,8 @@ static const DiagExplanation diag_explanations_[] = {
       "  (defn read-line [] #fx{Unsafe IO} : cstr ...)\n"
       "\n"
       "Migration is fully mechanical -- run tools/migrate-fx-rows.py to\n"
-      "rewrite a tree.  The legacy form is removed in a future release.\n",
+      "rewrite a tree.  Under --Werror=deprecated it is an error.  The legacy\n"
+      "form is removed in a future release.\n",
     },
     /* fx-row-syntax-rename-plan Phase 2: @{...} effect row */
     { TUR_D0003_FX_ROW_LEGACY_AT,
@@ -2721,8 +2734,8 @@ static const DiagExplanation diag_explanations_[] = {
       "Fix: rewrite as `#fx{...}`:\n"
       "  (defn read-line [] #fx{Unsafe IO} : cstr ...)\n"
       "\n"
-      "Run tools/migrate-fx-rows.py to rewrite a tree.  Removed in a future\n"
-      "release.\n",
+      "Run tools/migrate-fx-rows.py to rewrite a tree.  Under\n"
+      "--Werror=deprecated it is an error.  Removed in a future release.\n",
     },
     /* effect-row-honesty-plan W0 */
     { TUR_D0004_NONEXHAUSTIVE_FX_MARKER,

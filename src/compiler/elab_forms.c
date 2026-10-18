@@ -4509,7 +4509,12 @@ Expr *elab_set(Elab *e, const Form *call) {
             return NULL;
         }
 
+        /* The var's declared type is the value's expected type, as for a
+         * `binding` override (elab_binding). */
+        Type *prev_expected = e->expected_type;
+        e->expected_type = &entry->value_type;
         Expr *value = elab_form(e, call->as.list.items[2]);
+        e->expected_type = prev_expected;
         if (!value) return NULL;
 
         /* TUR-E0602: type must match declared value type */

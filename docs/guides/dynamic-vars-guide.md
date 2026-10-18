@@ -56,6 +56,16 @@ value is the initial value visible on any thread that has never called
 - The type is fixed; all overrides must match exactly.
 - Substructural types (`^linear`, `^affine`, `^unique`) are rejected --
   dynamic vars may be read by any number of callers.
+- Which ADTs a dynvar can carry: an instantiation of a stdlib generic ADT,
+  such as `(Option int)`, `(Option cstr)` or `(Option Ctx)`, works. A user
+  `defdata` is move-only by default, so it is refused with `TUR-E0603`, even
+  one whose constructors carry no payload
+  ([defdynamic-refuses-payload-free-defdata](../reported/defdynamic-refuses-payload-free-defdata.md));
+  a `defopaque` newtype is the usual stand-in.
+- The declared type is the expected type of the root, of every `binding`
+  override and of a `set!` value, so a generic call whose type variable is
+  only on its result needs no ascription: `(defdynamic *v* :(Option int)
+  (None))`, `(binding [*v* (none)] ...)`.
 
 By convention, names use `*earmuffs*` to signal dynamic scope. The compiler
 warns (`TUR-W0600`) if earmuffs are omitted.
