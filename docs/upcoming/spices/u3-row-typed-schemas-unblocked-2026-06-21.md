@@ -1,13 +1,18 @@
 ---
 title: Track C U3 (row-typed schemas) — compiler blockers retired by turmeric #479–#483
 category: Spice-uplift blocker assessment (Track C / U3)
-status: UNBLOCKED -- every compiler prerequisite verified present. Targets 1-3 shipped except the `http` CLIENT half; target 4 (json) is moot.
 verified-on: turmeric main @ 99cc8b32 (post #479/#480/#481/#482/#483; built from source)
 verified-by: turmeric-spices Claude (Track C, branch claude/track-c-u3-turmeric-cgmo6u)
 plan: docs/archive/spices-type-features-uplift-plan.md (Phase U3)
 ---
 
 # U3 — row-typed schemas: unblocked as of turmeric main @ 99cc8b32
+
+> **Status:** One item open: the `http` client half of target 3. Every
+> compiler prerequisite is present, targets 1-3 otherwise shipped, and target 4
+> (`json`) is moot. Re-checked 2026-10-18 against turmeric-spices `main`:
+> `spices/http/src/http/` still holds only `client`, `error`, `request` and
+> `response`, with no `typed.tur`.
 
 ## TL;DR
 

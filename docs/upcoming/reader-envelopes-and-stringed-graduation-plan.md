@@ -1,10 +1,17 @@
 # Reader Envelopes: `stringed` Graduation + Literate `.tur.md`
 
-Status: plan (feasibility assessed against the tree, not yet implemented).
-Introduced: 2026-09-08
-Supersedes: `reader-layers-decommission-and-at-exp-literate-plan.md` (never
-committed; its literate design put literate mode on the base-dialect axis,
-which this plan replaces -- see "Why literate is neither a layer nor a base").
+> **Status:** On hold. Part 1 (graduate `stringed`) is done -- in v0.49.0,
+> then superseded by the decommission of the layer axis. Part 2 (the envelope
+> axis and literate `.tur.md`) and Part 3 (the `turmeric/at-exp` base dialect)
+> are not implemented; checked 2026-10-18, nothing in `src/` handles either.
+> The plan sat in `docs/upcoming/hold/` until the 2026-10-16 flatten. Literate
+> `.tur.md` is one of the consumers the rest of
+> [markdown-library-plan](markdown-library-plan.md)'s M5 waits on.
+> **Introduced:** 2026-09-08
+> **Supersedes:** `reader-layers-decommission-and-at-exp-literate-plan.md`
+> (never committed; its literate design put literate mode on the base-dialect
+> axis, which this plan replaces -- see "Why literate is neither a layer nor a
+> base").
 
 ## Overview
 

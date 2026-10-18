@@ -1,9 +1,12 @@
 # Compile the runtime preamble once on the cc path
 
-**Status: steps 1-5 done on Linux and Windows. The split is the DEFAULT there
-as of 2026-10-02. macOS is still opt-in, and that is the one step left.** See
-"Step 5: the flip" below for the re-measured win, a binary-size regression the
-flip would have shipped, and the preconditions a default build checks.
+> **Status:** Steps 1-5 done on Linux and Windows; the split is the DEFAULT
+> there as of 2026-10-02. macOS is still opt-in (`TUR_PREAMBLE_SPLIT=1`), and
+> that is the one step left -- see "What the macOS flip still needs". Re-checked
+> 2026-10-18: `preamble_split_auto_applies` in `src/main.c` still applies the
+> split by default only under `__linux__` / `_WIN32`. See "Step 5: the flip"
+> below for the re-measured win, a binary-size regression the flip would have
+> shipped, and the preconditions a default build checks.
 
 History: steps 1-4 landed 2026-09-06/07 (PR #838). `tur build --runtime=split` /
 `TUR_RUNTIME=split` emits the decls region and links `libturt_preamble.a`
