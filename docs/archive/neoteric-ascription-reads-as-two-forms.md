@@ -38,3 +38,16 @@ do: when `r->neoteric_enabled` and `peek_neoteric_bracket(r)` finds a bracket,
 return `read_neoteric_bracket(r, sym_form, bracket)`. Add a parse-check case
 to `tests/run-parse-check.sh` (`::(x :int)` against `(:: x :int)`). Nothing in
 the guides spells `::(` any more, so no guide changes with it.
+
+## Resolution (2026-10-18)
+
+The first fix direction: the `::` branch of `read_keyword`
+(`src/compiler/reader.c`) checks `peek_neoteric_bracket` before returning, as
+the symbol, number and string readers do, and hands a following bracket to
+`read_neoteric_bracket`. `::(x :int)` now reads as `(:: x :int)` in every
+neoteric dialect; plain s-expression files are unchanged (no neoteric).
+
+Pinned by `tests/run-parse-check.sh` `parse-check-neoteric-ascription`
+(`::(x :int)` and `::(map-get(m "name") :int)` against their s-expressions)
+and the `neoteric-ascription-sweet` fixture, which compiles and runs the
+report's `defn f` body on both engines.

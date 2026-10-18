@@ -1,0 +1,23 @@
+;; turi-null-cstr-ascribed-int-stays-a-cstr: under `tur --interpret`,
+;; `(:: s int)` on a NULL `cstr` kept the string tag, so the null check
+;; `(= (:: s int) 0)` -- the idiom `re/compile-union` uses -- answered false,
+;; and printing it printed an empty line where the compiled program prints 0.
+;; No inline-C, so tests/run-turi.sh runs it too.
+
+(defn mk [] : cstr (:: 0 cstr))
+
+(defn cstr-null? [s : cstr] : bool (= (:: s int) 0))
+
+(defn main [] : int
+  (let [p (mk)
+        q (:: 0 cstr)
+        s "abc"]
+    (println (= (:: p int) 0))      ;; true
+    (println (= (:: q int) 0))      ;; true
+    (println (:: p int))            ;; 0
+    (println (cstr-null? p))             ;; true
+    (println (cstr-null? s))             ;; false
+    (println (= (:: s int) 0))      ;; false
+    (println (as int32 (:: p int))) ;; 0
+    (println (if (cstr-null? p) "null" s)))
+  0)

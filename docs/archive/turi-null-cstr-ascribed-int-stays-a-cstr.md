@@ -63,3 +63,22 @@ below), so the two directions are not symmetric.
 
 Pin it with the repro above as a fixture with no inline-C, so
 `tests/run-turi.sh` runs it.
+
+## Resolution (2026-10-18)
+
+The first fix direction. `eval_unary_post` (`src/turi/eval.c`) re-tags a NULL
+`cstr` ascribed to an int-class type (`int`, `int64`, and the narrow ints) as
+`turi_int(0)`, in the `EX_ASCRIBE` arm and the `EX_REINTERPRET` arm both. The
+null check `(= (:: s int) 0)` answers `true` and `(println (:: s int))` prints
+`0`, as compiled does. `re-union-patterns` under `tur --interpret` now prints
+`empty-no` (before: `empty-yes`) and matches its `expected.stdout` end to end.
+
+A non-null `cstr` still keeps its string tag through `(:: s int)`. That is the
+second fix direction, deliberately not taken: as a `TURI_INT` holding an arena
+address it would be refused by the inline-C JIT's value boundary (check 2)
+where today it is copied (check 3), and `re.tur`'s `(str-free (:: s int))`
+depends on the copy. The difference only shows when a program prints or
+compares the address itself.
+
+Pinned by the `turi-null-cstr-ascribed-int` fixture (no inline-C, so
+`tests/run-turi.sh` runs it as well as `run.sh`).

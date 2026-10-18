@@ -192,7 +192,7 @@ What graduation accepted, rather than fixed:
     the boundary's third check (below): a string the interpreter made goes
     over as a copy. The fixture now runs to the end; its one wrong line is an
     interpreter divergence with nothing to do with the JIT,
-    [turi-null-cstr-ascribed-int-stays-a-cstr](../reported/turi-null-cstr-ascribed-int-stays-a-cstr.md).
+    [turi-null-cstr-ascribed-int-stays-a-cstr](../archive/turi-null-cstr-ascribed-int-stays-a-cstr.md).
   - `defer-cps-abortive-handler` is not the JIT's at all: its `note` is an
     in-subset `cstr -> int` body, and compiling it only lets the program run
     far enough to reach an interpreter use-after-free that reproduces with no

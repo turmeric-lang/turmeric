@@ -34,6 +34,12 @@ sentence above does not cover them. If you touch this file, check
 `ls docs/reported/` against it -- an index that silently omits a quarter of the
 directory is worse for triage than no index.
 
+## Found executing the open reports (filed 2026-10-18)
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [defmodule-file-loaded-and-imported-defined-twice](defmodule-file-loaded-and-imported-defined-twice.md) | low-medium (cc failure) | `(load "m.tur")` of a `(defmodule m ...)` file and an `(import m)` elsewhere define the module twice: only `import` registers a module (`elab_load_module_impl`), so the import reads the file again. cc fails on `redefinition of 'm__twice'`; the stdlib shape (`load "stdlib/capability.tur"` then `import time`) is "defopaque: 'Time' is already defined" |
+
 ## Found working the high and medium-high reports (filed 2026-10-18)
 
 | Report | Severity | One line |
@@ -44,7 +50,7 @@ directory is worse for triage than no index.
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [neoteric-ascription-reads-as-two-forms](neoteric-ascription-reads-as-two-forms.md) | low | In neoteric / sweet-exp, `::(x :int)` reads as the symbol `::` and a separate list -- `read_keyword` (`reader.c:863`) returns `::` without the neoteric-bracket check every other atom gets. TUR-E0003 in a body; a guide pair that does not parse-check. Workaround: `:: x :int` |
+| ~~[neoteric-ascription-reads-as-two-forms](../archive/neoteric-ascription-reads-as-two-forms.md)~~ | low | **RESOLVED 2026-10-18** (archived): `read_keyword`'s `::` branch checks for a neoteric bracket like every other atom, so `::(x :int)` reads as `(:: x :int)`. Pinned by `run-parse-check.sh` `parse-check-neoteric-ascription` and `neoteric-ascription-sweet` |
 
 ## Found auditing the guides' "Trust the code over the comments" notes (filed 2026-10-17)
 
@@ -92,7 +98,7 @@ on `main` 3d9e02a2.
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [turi-null-cstr-ascribed-int-stays-a-cstr](turi-null-cstr-ascribed-int-stays-a-cstr.md) | medium (silent wrong value) | Under `tur --interpret`, `(:: s int)` on a `cstr` keeps the string tag (`eval_unary_post`, `eval.c:8793` converts only floats), so `(= (:: s int) 0)` is `false` for a null `s` and prints empty where compiled prints `0`. `re/compile-union`'s null check misses on an empty list, which is `re-union-patterns`' one wrong line. Compiled is fine. |
+| ~~[turi-null-cstr-ascribed-int-stays-a-cstr](../archive/turi-null-cstr-ascribed-int-stays-a-cstr.md)~~ | medium (silent wrong value) | **RESOLVED 2026-10-18** (archived): under `tur --interpret` a NULL `cstr` ascribed to an int type is `0`, so the `(= (:: s int) 0)` null check holds and `re-union-patterns` matches end to end; a non-null `cstr` keeps its tag (the JIT value boundary copies it). Pinned by `turi-null-cstr-ascribed-int` |
 
 ## Found graduating `repl-jit-inline-c` (filed 2026-10-17)
 
@@ -105,7 +111,7 @@ on `main` 3d9e02a2.
 | Report | Severity | One line |
 | --- | --- | --- |
 | [defdynamic-generic-adt-root-emitted-before-its-type](defdynamic-generic-adt-root-emitted-before-its-type.md) | low-medium (cc failure) | `(defdynamic *v* :(Option int) ...)` type-checks, then cc fails on `unknown type name 'tur_adt_Option__int'`: the dynvar root is emitted before the instantiation's struct. A plain `defdata` is refused with `TUR-E0603` instead -- even a payload-free enum, which keeps `*log-level*` from being typed as one. |
-| [time-capability-now-is-32-bit](time-capability-now-is-32-bit.md) | medium (silent wrong value) | The Time capability's `now` slot is `int (*)(void)`, so `Real-Time` returns epoch milliseconds wrapped to 32 bits (measured `1254165568` beside `now-ms`'s `1792255528626`), and only to the second. The slots take no context, which is why `Mock-Time` is a process-wide singleton. `capability.tur` `load`s `time.tur`, so importing both defines `Time` twice. |
+| ~~[time-capability-now-is-32-bit](../archive/time-capability-now-is-32-bit.md)~~ | medium (silent wrong value) | **RESOLVED 2026-10-18** (archived): the Time slots are `int64_t (*now)(void *self)` / `sleep(void *self, int)`; `Real-Time` reads the wall clock as `now-ms` does, each `Mock-Time` keeps its own clock (no singleton), and `make-Time` takes `(c-fn [] i64)`. The load-then-import half is [defmodule-file-loaded-and-imported-defined-twice](defmodule-file-loaded-and-imported-defined-twice.md). Pinned by `capability-module-roundtrip` |
 
 ## Found executing the open reports (filed 2026-10-17)
 

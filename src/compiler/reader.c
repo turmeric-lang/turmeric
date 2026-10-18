@@ -867,7 +867,14 @@ static Form *read_keyword(Reader *r) {
         Span span = span_from_to(r, start_line, start_col, start_off, end);
         StrSlice name = strslice(r->src + start_off, (uint32_t)(end - start_off)); /* "::" */
         const Symbol *sym = symtab_intern(r->st, name);
-        return form_sym(r->arena, span, sym);
+        Form *f = form_sym(r->arena, span, sym);
+        /* neoteric-ascription-reads-as-two-forms: `::(x :int)` is
+         * `(:: x :int)`, as `+(x 1)` is `(+ x 1)`. */
+        if (r->neoteric_enabled) {
+            int bracket = peek_neoteric_bracket(r);
+            if (bracket != -1) return read_neoteric_bracket(r, f, bracket);
+        }
+        return f;
     }
 
     /* `: type-expr` — space-separated or fused-paren compound type annotation */
