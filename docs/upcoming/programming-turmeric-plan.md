@@ -1,5 +1,10 @@
 # Programming Turmeric -- Book Outline Plan
 
+> **Status:** On hold, outline only -- no chapter has been written. The plan
+> sat in `docs/upcoming/hold/` until the 2026-10-16 flatten. The outline was
+> written against v0.16.0 and the tree is at 0.66.0 (checked 2026-10-18), so
+> the first step when it is picked up is the refresh the note below asks for.
+
 NOTE: This plan is up-to-date with turmeric v0.16.0. If the version is later than this, then revisit the features and adjust the outline accordingly.
 
 Inspired by *Programming Ruby* (the Pickaxe), adapted for Turmeric's character:

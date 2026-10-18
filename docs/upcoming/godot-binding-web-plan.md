@@ -1,6 +1,11 @@
 ## Turmeric Godot Binding -- Web Export Plan
 
-> **Status:** Draft Plan
+> **Status:** On hold, not started. The plan sat in `docs/upcoming/hold/`
+> until the 2026-10-16 flatten. Still blocked on
+> [`wasm-spices-plan.md`](wasm-spices-plan.md), which is only partly built:
+> its `:web` manifest block and raylib's browser frame loop exist, but not the
+> HTML app shell (W1). Checked 2026-10-18 against turmeric-godot `main`: CI
+> builds desktop targets only, and no `.gdextension` lists a `web.*` library.
 > **Last Updated:** 2026-06-26
 > **Type:** Integration / Game Engine -- post-v1 follow-up to
 > [godot-language-binding-plan.md](../archive/godot-language-binding-plan.md).

@@ -1,6 +1,11 @@
 ## Turmeric Godot Binding -- iOS Support Plan
 
-> **Status:** Draft Plan
+> **Status:** On hold, not started. The plan sat in `docs/upcoming/hold/`
+> until the 2026-10-16 flatten; it lands when a real demand to ship iOS builds
+> appears, and needs the distribution signing of T5.A in
+> [godot-binding-shipping-breadth-plan.md](godot-binding-shipping-breadth-plan.md)
+> to work first. Checked 2026-10-18 against turmeric-godot `main`: CI builds
+> desktop targets only, and no `.gdextension` lists an `ios.*` library.
 > **Last Updated:** 2026-06-26
 > **Type:** Integration / Game Engine -- post-v1 follow-up to
 > [godot-language-binding-plan.md](../archive/godot-language-binding-plan.md).

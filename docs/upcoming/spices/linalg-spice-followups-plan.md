@@ -1,6 +1,11 @@
 # Follow-up Plan: tur-linalg v0.2, tur-linalg-sparse, and BLAS backend
 
-> **Status:** Draft Plan
+> **Status:** On hold, not started. The plan sat in `docs/upcoming/hold/`
+> until the 2026-10-16 flatten. Its prerequisite, `tur-linalg` v0.1.0, has
+> shipped. Checked 2026-10-18 against turmeric-spices `main`: `tur-linalg` is
+> still 0.1.0, with Cholesky, LU and QR in `linalg/decomp` and none of the
+> v0.2 items (SVD, eigendecomposition, iterative solvers, tiled multiply, BLAS
+> backend); there is no `linalg-sparse` or `stats-multivariate` spice.
 > **Last Updated:** 2026-05-27
 > **Type:** Spice Follow-up
 > **Depends on:** [linalg-spice-plan.md](../../archive/linalg-spice-plan.md) (v0.1.0 complete, tagged `linalg-v0.1.0`)

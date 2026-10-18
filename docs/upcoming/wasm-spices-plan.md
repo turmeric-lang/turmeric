@@ -1,6 +1,24 @@
 # Emscripten Spice Support + Web-App Scaffold Plan
 
-> **Status:** Draft Plan (revised)
+> **Status:** Partly built; the rest is on hold. The plan sat in
+> `docs/upcoming/hold/` until the 2026-10-16 flatten. Checked 2026-10-18:
+>
+> - **Built 2026-09-30.** The W1.5 raylib spike (section 12). In this repo,
+>   `a5edd6df8`: `tur build --target wasm` builds cmake deps with `emcmake`,
+>   a dep's `:wasm-options` apply to that configure only, and the `:web`
+>   manifest block (`:gl :canvas :audio :threads :heap :main-loop`, including
+>   the `:asyncify` loop mode) composes the `emcc` link line
+>   (`pkg_web_compose_link_flags` in `src/compiler/pkg.c`), with
+>   `tests/fixtures/region-escape-via-main-loop` pinning the closure ABI. In
+>   turmeric-spices#78, raylib declares its web arm and ships `raylib/web`
+>   (`run-main-loop`, `cancel-main-loop`, `with-web-game-loop`).
+> - **Not built.** W0's per-spice `:web :supported` stubs and the dep-graph
+>   error; W1's HTML/JS app shell, `*args*` from the query string and asset
+>   preloading; the rest of W2 (canvas sizing and HiDPI, key capture, the
+>   audio unlock overlay, the loading indicator, the `raygui` port); W3-W7.
+> - **Open:** whether dropping pre-WebGL2 devices is acceptable (section 12,
+>   "What remains genuinely open").
+>
 > **Last Updated:** 2026-09-30
 > **Type:** Tooling / Web Platform
 > **Driving goal of this revision:** ship a raylib game written in Turmeric
