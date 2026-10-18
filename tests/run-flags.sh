@@ -2026,8 +2026,8 @@ EOF
                 shadow_bad="$shadow_bad [not proven under strict: $body ($verdict, rc=$strict_rc)]" ;;
         *)
             { [ "$verdict" = '"verdict": "unknown"' ] && [ "$strict_rc" -ne 0 ] &&
-              echo "$strict_out" | grep -qF 'TUR-W0372' &&
-              echo "$strict_out" | grep -qF 'shadows a refined name'; } ||
+              [[ "$strict_out" == *'TUR-W0372'* ]] &&
+              [[ "$strict_out" == *'shadows a refined name'* ]]; } ||
                 shadow_bad="$shadow_bad [not an unknown W0372 under strict: $body ($verdict, rc=$strict_rc)]" ;;
     esac
 done
