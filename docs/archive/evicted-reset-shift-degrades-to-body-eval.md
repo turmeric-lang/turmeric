@@ -1,5 +1,21 @@
 # A `reset`/`shift` in a function the CPS backend evicts silently degrades to body-eval
 
+**Resolved 2026-10-18** (fix direction 2, with direction 1 as the fallback).
+`emit_effects_reset` (`src/compiler/emit_effects.c`) lowers a reset whose body
+holds a base `shift`/`shift0` (`reset_body_has_base_shift`) onto a `setjmp`
+landing. It pushes a `tur_shift_reset_ctx`, sets `ctx->in_shift_escape`
+while the body is emitted, and pops the context on both arms.
+`emit_shift_escape_abort` stores the receiver's value bit for bit, at the
+reset's C type (`ctx->shift_escape_ctype`, so a `double` is not converted),
+and longjmps to the innermost landing. It is guarded on the stack head. A
+reset whose result is not a scalar of at most a word is refused with a located
+error naming `TUR_TRACE_EVICT`.
+
+`reset-shift-in-evicted-function` pins an evicted reset in a branch, through
+`shift0`, at a float result, and nested inside another reset. It prints what
+the interpreter and the non-evicted function print, on cc and `tur jit`, with
+no float/int conversion in the emitted C.
+
 **Severity:** medium-high. The program compiles cleanly and computes the wrong
 value. This is a regression of
 [direct-reset-shift-degrades-out-of-subset](../archive/history/direct-reset-shift-degrades-out-of-subset.md):

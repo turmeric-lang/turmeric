@@ -1,0 +1,37 @@
+;; evicted-reset-shift-degrades-to-body-eval: a `reset` / `shift` in a
+;; function the CPS backend evicts (here, for its `(Vec int)` parameter) is
+;; lowered by the direct emitter.  The shift is abortive -- the reset's value
+;; is the receiver's, and the `(+ 1 [])` context is discarded -- exactly as
+;; in a function the backend keeps.
+(defn twice [v : int] : int (* 2 v))
+(defn halve [v : float] : float (/ v 2.0))
+
+(defn plain [x : int] : int
+  (reset (+ 1 (shift twice x))))
+
+(defn with-vec [xs : (Vec int) x : int] : int
+  (reset (+ 1 (shift twice x))))
+
+;; the shift sits in a branch: taken, it aborts; not taken, the context runs
+(defn branchy [xs : (Vec int) c : bool] : int
+  (reset (+ 10 (if c (shift twice 3) 5))))
+
+;; shift0, a float result, and a reset nested in another
+(defn with-vec0 [xs : (Vec int) x : int] : int
+  (reset (+ 1 (shift0 twice x))))
+
+(defn with-vec-float [xs : (Vec int) x : float] : float
+  (reset (+ 1.5 (shift halve x))))
+
+(defn nested [xs : (Vec int) x : int] : int
+  (reset (+ 100 (reset (+ 1 (shift twice x))))))
+
+(defn main [] : int
+  (println (plain 10))
+  (println (with-vec (vec-new) 10))
+  (println (branchy (vec-new) true))
+  (println (branchy (vec-new) false))
+  (println (with-vec0 (vec-new) 10))
+  (println (with-vec-float (vec-new) 7.1))
+  (println (nested (vec-new) 10))
+  0)
