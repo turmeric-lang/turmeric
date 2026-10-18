@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/turmeric-lang/turmeric/actions/workflows/ci.yml/badge.svg)](https://github.com/turmeric-lang/turmeric/actions/workflows/ci.yml)
 
-**Latest release:** `v0.67.0` -- Separate compilation now rejects cross-module effects at the call site instead of aborting at runtime, and argument evaluation, fiber dynvars and reset/shift in evicted functions are fixed.
+**Latest release:** `v0.67.1` -- Docs site section links now land below the sticky topbar instead of hiding behind it.
 
 ## What
 

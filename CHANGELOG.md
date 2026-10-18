@@ -2,6 +2,15 @@
 
 All notable changes to Turmeric are documented here.
 
+## [0.67.1] -- 2026-10-18
+
+### Fixed
+
+- **Section links on the docs site land below the sticky topbar.** Following a
+  link to a `#section` heading no longer hides the heading behind the 60px
+  header bar; fragment loads, in-page clicks and `scrollIntoView` all scroll to
+  a clear position.
+
 ## [0.67.0] -- 2026-10-18
 
 ### Changed
