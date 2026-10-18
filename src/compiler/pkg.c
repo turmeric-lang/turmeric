@@ -3393,7 +3393,9 @@ static void emit_link_iface_helper(FILE *f) {
     "      if(_ill)\n"
     "        foreach(_e IN LISTS _ill)\n"
     "          string(REGEX REPLACE \"^\\\\$<LINK_ONLY:(.*)>$\" \"\\\\1\" _e \"${_e}\")\n"
-    "          if(NOT _e MATCHES \"^\\\\$<\")\n"
+    "          # ::@(<dir id>) ... ::@ bracket entries a target_link_libraries\n"
+    "          # from another directory added; markers, not link inputs.\n"
+    "          if(NOT _e MATCHES \"^\\\\$<\" AND NOT _e MATCHES \"^::@\")\n"
     "            if(TARGET \"${_e}\")\n"
     "              get_target_property(_ty \"${_e}\" TYPE)\n"
     "              if(_ty IN_LIST _TUR_LINKABLE)\n"
@@ -3638,6 +3640,41 @@ char *pkg_resolve_spice_dep_dir(const char *root_project_dir,
     return tur_strdup(dep_dir);
 }
 
+/* cmake-dep-path-through-missing-cmake-dir: collapse the `.` and `dir/..`
+ * components of a '/'-separated path in place, by text alone.  For a join
+ * realpath() could not settle: `<spice>/cmake/../cmake-deps/foo` names
+ * `<spice>/cmake-deps/foo` whether or not the gitignored `cmake/` exists,
+ * but the operating system resolves `cmake/..` one component at a time and
+ * fails at the missing directory.  A leading `..` of a relative path is
+ * kept; one above an absolute root is dropped, as the kernel would. */
+static void path_collapse_dots(char *p) {
+    size_t len = strlen(p);
+    if (len == 0 || len >= 4096) return;
+    char tmp[4096];
+    memcpy(tmp, p, len + 1);
+    bool abs_path = (tmp[0] == '/');
+    const char *comps[1024];
+    int n = 0;
+    for (char *tok = strtok(tmp, "/"); tok; tok = strtok(NULL, "/")) {
+        if (strcmp(tok, ".") == 0) continue;
+        if (strcmp(tok, "..") == 0) {
+            if (n > 0 && strcmp(comps[n - 1], "..") != 0) { n--; continue; }
+            if (abs_path) continue;
+        }
+        if (n < (int)(sizeof comps / sizeof comps[0])) comps[n++] = tok;
+    }
+    size_t at = 0;
+    if (abs_path) p[at++] = '/';
+    for (int i = 0; i < n; i++) {
+        size_t cl = strlen(comps[i]);
+        if (i > 0) p[at++] = '/';
+        memcpy(p + at, comps[i], cl);
+        at += cl;
+    }
+    if (at == 0) p[at++] = '.';
+    p[at] = '\0';
+}
+
 /* Append `dep` (deep-copied) into *out_deps, applying conflict-detection
  * keyed on `dep->name`.  `origin_dir` is reported in conflict diagnostics
  * (typically the manifest directory the dep was read from). */
@@ -3697,9 +3734,11 @@ static bool append_cmake_dep_with_conflict_check(PkgCmakeDep **out_deps,
      * `tur fetch` (it is "."), so joining alone would leave a relative path
      * that the emitter would then join against project_dir a second time,
      * inserting `cmake/` twice. realpath() settles both the absoluteness and
-     * the `..` normalization; if the directory does not exist there is
-     * nothing to resolve, so the unnormalized join is kept and CMake reports
-     * it verbatim, which is the more useful error. */
+     * the `..` normalization.  When it fails the join is collapsed
+     * lexically instead (path_collapse_dots): a dependency spice's `cmake/`
+     * is gitignored and absent in a fresh checkout, and the OS cannot walk
+     * `cmake/..` through it (cmake-dep-path-through-missing-cmake-dir).  If
+     * the dep directory itself is missing, CMake then reports that path. */
     if ((*out_deps)[*out_n].path && (*out_deps)[*out_n].path[0] != '/'
         && origin_dir) {
         char joined[4096];
@@ -3718,7 +3757,11 @@ static bool append_cmake_dep_with_conflict_check(PkgCmakeDep **out_deps,
                      origin_dir, (*out_deps)[*out_n].path);
         }
         char resolved[4096];
-        const char *final = realpath(joined, resolved) ? resolved : joined;
+        const char *final = resolved;
+        if (!realpath(joined, resolved)) {
+            path_collapse_dots(joined);
+            final = joined;
+        }
         free((*out_deps)[*out_n].path);
         (*out_deps)[*out_n].path = tur_strdup(final);
     }
@@ -4916,10 +4959,18 @@ void pkg_cmake_manifest_free(PkgCmakeManifest *m) {
  * The two skips are not silent losses relative to the old behavior: before
  * link_flags existed, INTERFACE_LINK_LIBRARIES was not read at all, so every
  * one of these entries was dropped. */
+/* A link-flag token append_link_flag_token drops without a word: empty, an
+ * unevaluated genex, or anything with `::` -- a namespaced target name, or
+ * one of CMake's `::@(<dir id>)` / `::@` directory markers. */
+static bool link_flag_token_skipped(const char *tok) {
+    if (!tok || !tok[0]) return true;
+    if (strstr(tok, "$<")) return true;     /* unevaluated genex */
+    if (strstr(tok, "::")) return true;     /* namespaced target / ::@ marker */
+    return false;
+}
+
 static void append_link_flag_token(Buf *buf, const char *tok) {
-    if (!tok || !tok[0]) return;
-    if (strstr(tok, "$<")) return;          /* unevaluated genex */
-    if (strstr(tok, "::")) return;          /* namespaced target name */
+    if (link_flag_token_skipped(tok)) return;
     /* An Apple framework arrives from INTERFACE_LINK_LIBRARIES as an absolute
      * path to the .framework *directory* (raylib reports OpenGL that way).
      * That cannot be passed through as a link input -- ld rejects it with
@@ -4981,9 +5032,15 @@ void pkg_cmake_manifest_append_cc_flags(const PkgCmakeManifest *m, Buf *buf) {
         }
         /* After link_libs: a dep's own artifact must precede the transitive
          * libraries it depends on for static archive resolution. */
-        for (int j = 0; j < e->n_link_flags; j++)
+        for (int j = 0; j < e->n_link_flags; j++) {
+            /* cmake-dir-markers-print-link-flag-warnings: a token that is
+             * skipped anyway never reaches the shell, so it is not checked
+             * for shell syntax -- a `::@(0x...)` marker drew a "the shell
+             * would read as syntax" warning on every build. */
+            if (link_flag_token_skipped(e->link_flags[j])) continue;
             if (cmake_manifest_token_ok(e->link_flags[j], "link flag"))
                 append_link_flag_token(buf, e->link_flags[j]);
+        }
     }
 }
 

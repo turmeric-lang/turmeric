@@ -58,7 +58,7 @@ before `midcore` (line 83), and `top`'s configure prints
 links, because the final link order happens to come out right. nng would have
 fallen through to `find_package(MbedTLS REQUIRED)` instead.) Running it needs
 `midspice/cmake/` to exist first:
-[cmake-dep-path-through-missing-cmake-dir](cmake-dep-path-through-missing-cmake-dir.md).
+[cmake-dep-path-through-missing-cmake-dir](../archive/cmake-dep-path-through-missing-cmake-dir.md).
 
 ## Fix directions
 

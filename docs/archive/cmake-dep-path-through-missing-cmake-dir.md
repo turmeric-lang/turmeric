@@ -74,3 +74,22 @@ caught.
   `<spice>/cmake/../cmake-deps/foo` becomes `<spice>/cmake-deps/foo`.
 - Add the missing fixture: a dependency spice whose `cmake/` directory does
   not exist, declaring a `:path` cmake-dep. The repro above is that fixture.
+
+## Resolution (2026-10-18)
+
+The first fix direction. When `realpath()` cannot settle the joined
+`<origin_dir>/cmake/<path>` in `append_cmake_dep_with_conflict_check`
+(`src/compiler/pkg.c`), the join is now collapsed lexically
+(`path_collapse_dots`): `.` components are dropped and each `dir/..` pair is
+removed. A leading `..` of a relative path is kept, and one above an absolute
+root is dropped. The result no longer depends on the gitignored `cmake/`
+existing, so `<spice>/cmake/../../deps/midcore` becomes `<R>/deps/midcore`.
+`realpath()` is still tried first, so a path through an existing symlink
+resolves as before. On Windows, `realpath` is `_fullpath`, which was already
+lexical.
+
+Pinned by `tests/spice-resolver-tests.sh`
+`cmake-dep-path-through-missing-cmake-dir`, the missing fixture this report
+asked for. A dependency spice whose `cmake/` does not exist declares a `:path`
+cmake-dep. The consumer fetches and runs (`42`), and its generated
+CMakeLists has no `midspice/cmake/..` in it.

@@ -52,3 +52,26 @@ silent skip.
 - Or, in `pkg_cmake_manifest_append_cc_flags`, skip `::` tokens before the
   shell-safety check, keeping the check for tokens that will actually be
   used.
+
+## Resolution (2026-10-18)
+
+Both fix directions.
+
+- **At the source.** `_tur_walk_iface` (`emit_link_iface_helper`,
+  `src/compiler/pkg.c`) skips any `INTERFACE_LINK_LIBRARIES` entry matching
+  `^::@`, so a freshly generated `spice-deps-manifest.json` no longer carries
+  the markers.
+- **At the consumer.** `pkg_cmake_manifest_append_cc_flags` skips the link-flag
+  tokens `append_link_flag_token` drops anyway before it runs the
+  shell-safety check: empty tokens, unevaluated genexes, and anything with
+  `::` (a namespaced target or a marker). Both functions share one predicate,
+  `link_flag_token_skipped`. A manifest from an older fetch that still holds a
+  marker builds without the warning, and a skipped token never reaches the
+  shell, so the check loses nothing.
+
+Pinned by `tests/spice-resolver-tests.sh`
+`cmake-dir-markers-dropped-without-a-warning`, which needs no network. Its
+`:path` cmake-dep adds `m` to a target from a subdirectory, which is how CMake
+produces the `::@(<dir id>)` ... `::@` pair. The test checks that the manifest
+has no marker, that the program links and prints `42`, and that a manifest
+with a marker spliced back in builds with no "dropping link flag" line.
