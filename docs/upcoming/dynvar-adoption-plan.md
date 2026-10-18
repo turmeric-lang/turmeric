@@ -26,8 +26,9 @@
 >   bindings mean something, so it makes this bug observable in async code.
 > - [defdynamic-generic-adt-root-emitted-before-its-type](../reported/defdynamic-generic-adt-root-emitted-before-its-type.md):
 >   a `(Option T)` dynvar does not compile.
-> - [time-capability-now-is-32-bit](../reported/time-capability-now-is-32-bit.md):
->   filed while checking the old mock-time target.
+> - [time-capability-now-is-32-bit](../archive/time-capability-now-is-32-bit.md)
+>   (resolved 2026-10-18): filed while checking the old mock-time target. The
+>   Time slots take `self` now, so `Mock-Time` has no singleton.
 
 ---
 
@@ -45,7 +46,7 @@ Every row was measured on 2026-10-17.
 | **B.** `(defdynamic *diag-mode* :int 0)` for human / JSON / LSP diagnostics. | The same category error. Diagnostic mode is `diag.c` state inside the compiler (`diag_set_json_output`, `diag_lsp_begin/flush/end`, `src/compiler/diag.h:877-914`). The `:int` 0/1/2 encoding was also the stand-in CLAUDE.md forbids. |
 | **C.** Replace the HAMT comparator hooks' hand-rolled save/restore with dynvars. | The hooks are already C `_Thread_local`s (`src/runtime/hamt.c:284-296`), saved and restored inside each C entry point (`:321-330`, uses from `:1244`). No Turmeric code binds them, and they are read on every key comparison. A dynvar would add a `pthread_getspecific` to that hot path and buy nothing. |
 | **D.** A thread-local symbol table for test isolation. | A correctness regression. `Sym` identity is process-wide by contract: one mutex-guarded table whose pointers live forever (`src/runtime/symbols.c:1-7`), and `sym=?` is pointer equality (`stdlib/sym.tur:57-60`). Per-thread tables would make the same symbol compare unequal across threads. |
-| **E.** A thread-local mock-time singleton. | It treats a symptom. `Mock-Time` is already a capability value, but its `now`/`sleep` slots take no context, so they read a process-wide singleton (`stdlib/time.tur:66-75`). A thread-local copy would hide a `Mock-Time` from any worker thread the capability is handed to. The fix is a `self` argument on the slots, which [time-capability-now-is-32-bit](../reported/time-capability-now-is-32-bit.md) lists alongside the 32-bit `now` it found. |
+| **E.** A thread-local mock-time singleton. | It treats a symptom. `Mock-Time` is already a capability value, but its `now`/`sleep` slots take no context, so they read a process-wide singleton (`stdlib/time.tur:66-75`). A thread-local copy would hide a `Mock-Time` from any worker thread the capability is handed to. The fix is a `self` argument on the slots, which [time-capability-now-is-32-bit](../archive/time-capability-now-is-32-bit.md) lists alongside the 32-bit `now` it found. |
 | (not known) | `stdlib/dynvar.tur`'s four vars have no readers, and its docs describe functions that do not exist (below). This is the new scope. |
 
 ---
@@ -152,7 +153,7 @@ Each phase is one PR and stands alone.
 | Site | What | Class |
 | --- | --- | --- |
 | `random.tur:61-280` (six) | `static int seeded` around libc `srand` / `rand` | ADO-2 |
-| `time.tur:67` | `__tur_mock_time_singleton` | the time report: give the slots a `self` |
+| ~~`time.tur:67`~~ | ~~`__tur_mock_time_singleton`~~ | Done 2026-10-18: the slots take a `self` (the time report) |
 | `test/capability.tur:172` | `__tur_test_time_value` | the same shape as the mock clock; fix it alongside |
 | `term.tur:125, 144` | `have_saved` (saved termios) | leave alone -- the terminal is process-wide state |
 | `httpd.tur:1851` | `warned` (warn-once flag) | leave alone |

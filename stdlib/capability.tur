@@ -50,12 +50,29 @@ typedef struct __tur_cap_random {
     int (*next_float)(void);
 } __tur_cap_random;
 
-/* now: milliseconds since the epoch.  Same layout as the time module's
- * __tur_time_cap, so a Real-Time / Mock-Time handle is read here directly. */
+/* now: milliseconds since the epoch (64-bit: epoch milliseconds are past
+ * INT32_MAX).  Each slot takes the capability itself, so an implementation
+ * reads its own state -- a Mock-Time's clock -- from it.  Same layout as the
+ * time module's __tur_time_cap, so a Real-Time / Mock-Time handle is read
+ * here directly. */
 typedef struct __tur_cap_time {
-    int (*now)(void);
-    void (*sleep)(int ms);
+    int64_t (*now)(void *self);
+    void (*sleep)(void *self, int ms);
 } __tur_cap_time;
+
+/* make-Time's capability: the slots forward to the two context-free `c-fn`
+ * callbacks it was built from, each called through its own type. */
+typedef struct __tur_cap_time_fns {
+    __tur_cap_time cap;
+    int64_t (*now_fn)(void);
+    void (*sleep_fn)(int32_t ms);
+} __tur_cap_time_fns;
+static int64_t __tur_cap_time_fns_now(void *self) {
+    return ((__tur_cap_time_fns *)self)->now_fn();
+}
+static void __tur_cap_time_fns_sleep(void *self, int ms) {
+    ((__tur_cap_time_fns *)self)->sleep_fn((int32_t)ms);
+}
 ```
 ;; ============================================================================
 ;; Capability handle types
@@ -217,7 +234,7 @@ typedef struct __tur_cap_time {
 ;;; handle and one built here are interchangeable.
 ;;;
 ;;; Parameters:
-;;;   now_fn   -- () -> current time in milliseconds since epoch
+;;;   now_fn   -- () -> i64; the current time in milliseconds since the epoch
 ;;;   sleep_fn -- (ms) -> nil; sleeps for ms milliseconds
 ;;;
 ;;; Returns:
@@ -228,11 +245,13 @@ typedef struct __tur_cap_time {
 ;;;
 ;;; Since: Phase 16
 
-(defn make-Time [now_fn : (c-fn [] i32) sleep_fn : (c-fn [i32] nil)] : Time
+(defn make-Time [now_fn : (c-fn [] i64) sleep_fn : (c-fn [i32] nil)] : Time
   ```c
-  __tur_cap_time* time = (__tur_cap_time*)malloc(sizeof(__tur_cap_time));
-  time->now = (int (*)(void))now_fn;
-  time->sleep = (void (*)(int))sleep_fn;
+  __tur_cap_time_fns* time = (__tur_cap_time_fns*)malloc(sizeof(__tur_cap_time_fns));
+  time->cap.now = __tur_cap_time_fns_now;
+  time->cap.sleep = __tur_cap_time_fns_sleep;
+  time->now_fn = (int64_t (*)(void))now_fn;
+  time->sleep_fn = (void (*)(int32_t))sleep_fn;
   return (void*)time;
   ```)
 ;;; Time-free -- free a Time capability allocated by make-Time.
@@ -479,7 +498,7 @@ typedef struct __tur_cap_time {
 
 (defn time-now [t : Time] : int
   ```c
-  return ((__tur_cap_time*)t)->now();
+  return ((__tur_cap_time*)t)->now(t);
   ```)
 ;;; time-sleep -- sleep for ms milliseconds via a Time capability.
 ;;;
@@ -494,5 +513,5 @@ typedef struct __tur_cap_time {
 
 (defn time-sleep [t : Time ms : int] : nil
   ```c
-  ((__tur_cap_time*)t)->sleep((int)ms);
+  ((__tur_cap_time*)t)->sleep(t, (int)ms);
   ```)

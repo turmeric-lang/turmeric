@@ -8923,6 +8923,10 @@ static TuriValue eval_unary_post(TuriEnv *env, EvalFrame *frame,
          * word printed as the string's address. */
         if (rk == TY_CSTR && v.tag == TURI_INT)
             return turi_cstr_from_carrier(env, v.as_int);   /* S-5 */
+        /* turi-null-cstr-ascribed-int-stays-a-cstr: the reverse, for NULL
+         * only (the EX_ASCRIBE arm below says why). */
+        if ((rk == TY_INT || rk == TY_INT64) && v.tag == TURI_CSTR && !v.as_cstr)
+            return turi_int(0);
         return v;
     }
     case EX_ASCRIBE:
@@ -8961,9 +8965,15 @@ static TuriValue eval_unary_post(TuriEnv *env, EvalFrame *frame,
                 union { int64_t i; double d; } u; u.d = v.as_float;
                 return turi_int(u.i);
             }
+            /* turi-null-cstr-ascribed-int-stays-a-cstr: a NULL `cstr` is the
+             * word 0, as compiled -- the `(= (:: s int) 0)` null check.  A
+             * non-null one keeps its tag: the inline-C JIT's value boundary
+             * copies a `cstr` argument and would refuse an arena address. */
+            if (v.tag == TURI_CSTR && !v.as_cstr) return turi_int(0);
             return v;
         case TY_INT8: case TY_INT16: case TY_INT32:
             if (v.tag == TURI_FLOAT) return turi_int((int64_t)v.as_float);
+            if (v.tag == TURI_CSTR && !v.as_cstr) return turi_int(0);
             return v;
         case TY_CSTR:
             /* S-5: a word re-tagged as a string must be one that lost its tag. */

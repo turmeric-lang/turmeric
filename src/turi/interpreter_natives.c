@@ -4918,8 +4918,8 @@ static TuriValue native_run_raytracer(TuriEnv *e, TuriValue *a, uint32_t n, void
     return turi_int(checksum);
 }
 
-/* stdlib/time.tur natives.  time.tur's bodies are inline-C (nanosleep, a
- * __tur_mock_cap singleton struct), which the interpreter cannot run.  The
+/* stdlib/time.tur natives.  time.tur's bodies are inline-C (nanosleep, the
+ * __tur_mock_cap struct), which the interpreter cannot run.  The
  * Mock-Time capability is the only deterministic, printable clock; model it as
  * a one-word heap cell holding the current mock time (ms).  sleep-ms is a no-op
  * under --interpret (deterministic; the interpreter has no wall clock to

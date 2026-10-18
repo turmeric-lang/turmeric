@@ -1,0 +1,18 @@
+#lang sweet-exp
+
+;; neoteric-ascription-reads-as-two-forms: `::(x :int)` is `(:: x :int)`, as
+;; `+(x 1)` is `(+ x 1)`.  The `::` reader returned the symbol without the
+;; neoteric-bracket check every other atom makes, so this body read as the
+;; symbol `::` and then a list: TUR-E0003 "unbound symbol '::'".
+
+defn f [x : int] : int
+  ::(+(x 1) :int)
+
+defn lookup [m : (Map cstr int)] : int
+  ::(map-get(m "name") :int)
+
+defn main [] : int
+  println(f(41))
+  println $ lookup $ map-assoc (map-new) "name" 7
+  println ::({2 * 3} :int)
+  0

@@ -24,7 +24,9 @@
 (defn fixed-int [lo : i32 hi : i32] : i32 {hi - lo})
 (defn fixed-float [] : i32 2500)
 
-(defn fake-now [] : i32 1234)
+;; Past INT32_MAX, as every epoch-milliseconds reading is: the slot is 64-bit
+;; (time-capability-now-is-32-bit).
+(defn fake-now [] : i64 1792255528626)
 (defn show-slept [ms : int] : nil
   ```c printf("slept %d\n", (int)ms); ```)
 (defn fake-sleep [ms : i32] : nil (show-slept (as int ms)))
@@ -68,14 +70,29 @@
     (println (rng-next-float rng))         ;; 2500
     (Random-free rng))
   (let [clock (make-Time fake-now fake-sleep)]
-    (println (time-now clock))             ;; 1234
+    (println (time-now clock))             ;; 1792255528626
     (time-sleep clock 250)                 ;; slept 250
     (Time-free clock))
-  ;; The time module's own handle, read by the same helper.
-  (let [mock (Mock-Time)]
+  ;; The time module's own handle, read by the same helper.  Each Mock-Time
+  ;; keeps its own clock: the slots take the capability, so there is no
+  ;; process-wide mock to share.
+  (let [mock  (Mock-Time)
+        other (Mock-Time)]
     (mock-time-set mock 1000)
-    (println (time-now mock))              ;; 1000
+    (mock-time-set other 1792255528626)
+    (time-sleep mock 250)
+    (println (time-now mock))              ;; 1250
+    (println (time-now other))             ;; 1792255528626
+    (Mock-Time-free other)
     (Mock-Time-free mock))
+  ;; Real-Time's `now` reads the wall clock in milliseconds, as now-ms does.
+  (let [clock (Real-Time)
+        a     (time-now clock)
+        b     (now-ms)]
+    (println (> a 1700000000000))          ;; true
+    (println (<= a b))                     ;; true
+    (println (< (- b a) 60000))            ;; true
+    (Real-Time-free clock))
   (let [fs  (make-FileSystem mem-read mem-write mem-delete mem-list)
         buf (make-buf 8)]
     (println (fs-read fs "x" buf 8))       ;; 0

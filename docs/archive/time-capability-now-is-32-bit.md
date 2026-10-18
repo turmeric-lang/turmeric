@@ -76,3 +76,38 @@ cannot reach its own `current_time` field. Hence the docstring rule at
 3. **Let one module own `Time`.** For example, `capability.tur` could
    `(import time :refer [Time])` instead of `load`ing the file, so that
    importing both modules works.
+
+## Resolution (2026-10-18)
+
+Fix directions 1 and 2. Direction 3 is filed on its own, because it is not
+about time:
+[defmodule-file-loaded-and-imported-defined-twice](../reported/defmodule-file-loaded-and-imported-defined-twice.md).
+
+- **`now` is 64-bit.** The slot is `int64_t (*now)(void *self)` in
+  `__tur_time_cap`, `__tur_mock_cap` (`stdlib/time.tur`) and
+  `__tur_cap_time` (`stdlib/capability.tur`). `Real-Time`'s `now` reads
+  `__tur_wall_clock_ms`, a file-scope helper that `now-ms` now calls too, so
+  the two agree and both have millisecond resolution. A Mock-Time's clock is
+  an `int64_t`, and `mock-time-set` stores it without the `(int)` cast.
+  `make-Time` takes `(c-fn [] i64)`.
+- **The slots take `self`.** `__tur_mock_time_now` / `_sleep` read and move
+  the handle's own `current_time`, and `__tur_mock_time_singleton` is gone, so
+  any number of Mock-Times can be live at once. `time-now` and `time-sleep`
+  pass the handle. `make-Time`'s callbacks still take no context: its handle
+  is a larger struct that keeps them, and its two slots are trampolines that
+  call each one through its own type, so `-fsanitize=function` stays clean.
+- **CPU clock.** `HighRes-Time`'s `now` and `get-cpu-time` share
+  `__tur_cpu_clock_ms`, which widens `clock()` before the multiply (a 32-bit
+  `clock_t` overflowed `now * 1000` after 36 minutes) and no longer truncates
+  to `int`.
+
+Pinned by `capability-module-roundtrip`: a `make-Time` callback returning
+`1792255528626`, two Mock-Times read through `time-now` with different
+clocks, and a Real-Time whose `now` is within a minute before `now-ms`.
+Checked under `tur run`, `tur jit`, and clang `-fsanitize=function`.
+
+`stdlib/test/capability.tur`'s `Test-Time` has the same process-wide clock
+shape (`__tur_test_time_value`), and the dynvar-adoption plan lists it beside
+this one. Its API is untyped (`:int` handles, a handle-less
+`testtime-reset`), so giving it a `self` changes its signatures; it is left
+for that plan.

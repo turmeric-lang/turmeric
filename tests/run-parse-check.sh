@@ -95,6 +95,18 @@ RC=$?
 if [ "$RC" -eq 0 ]; then pass "$NAME"; else fail "$NAME" "expected exit 0, got $RC"; fi
 
 # ---------------------------------------------------------------------------
+# Test: the ascription operator takes a neoteric bracket like any atom --
+# `::(x :int)` reads as `(:: x :int)`, not as `::` then `(x :int)`
+# (neoteric-ascription-reads-as-two-forms).
+# ---------------------------------------------------------------------------
+NAME="parse-check-neoteric-ascription"
+printf '(:: x :int)\n(:: (map-get m "name") :int)\n' > "$TMPDIR_PC/as.tur"
+printf '::(x :int)\n::(map-get(m "name") :int)\n' > "$TMPDIR_PC/as.sweet"
+"$TUR" parse-check "$TMPDIR_PC/as.tur" "$TMPDIR_PC/as.sweet" > /dev/null 2>&1
+RC=$?
+if [ "$RC" -eq 0 ]; then pass "$NAME"; else fail "$NAME" "expected exit 0, got $RC"; fi
+
+# ---------------------------------------------------------------------------
 # Test: genuinely different ASTs exit 1
 # ---------------------------------------------------------------------------
 NAME="parse-check-mismatch"

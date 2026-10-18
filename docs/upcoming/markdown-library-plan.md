@@ -1022,7 +1022,7 @@ library half, then M5b in turmeric-spices once a `tur` with M5a is on `main`.
   the 3 pairs in list items too. One of those did not parse-check: its
   sweet-exp side wrote `::(map-get(m "name") :int)`, which the reader takes
   for `::` and a separate list
-  ([neoteric-ascription-reads-as-two-forms](../reported/neoteric-ascription-reads-as-two-forms.md)).
+  ([neoteric-ascription-reads-as-two-forms](../archive/neoteric-ascription-reads-as-two-forms.md)).
   `data-literals-guide.md` now writes `:: map-get(m "name") :int`, and the
   `no-check` pair above it, wrong the same way twice, is fixed and checked.
   On the spice READMEs the two checkers report the same lines.
