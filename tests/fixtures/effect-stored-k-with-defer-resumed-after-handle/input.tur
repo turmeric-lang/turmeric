@@ -1,0 +1,18 @@
+;; turi-defer-in-stored-continuation-use-after-free: a case stores `k` and
+;; returns, and the stored `k` is resumed after the `handle` has exited.  The
+;; performing function has a pending `defer`, which sends the interpreter's
+;; `handle` to its fiber runtime; that runtime freed the continuation when the
+;; case returned, so the later resume read freed memory.  No inline C, so
+;; tests/run-turi.sh runs it under the interpreter too.
+(defeffect Ask [] : int)
+
+(defn w4 [] : int
+  (defer (println "w4: defer ran"))
+  (+ 1 (perform (Ask))))
+
+(defn main [] : int
+  (let [^mut saved 0]
+    (println (handle (w4) (Ask [] k) (do (set! saved k) 0)))
+    (println "before resume")
+    (println (resume saved 5)))
+  0)
