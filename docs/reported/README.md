@@ -34,6 +34,12 @@ sentence above does not cover them. If you touch this file, check
 `ls docs/reported/` against it -- an index that silently omits a quarter of the
 directory is worse for triage than no index.
 
+## Found working the high and medium-high reports (filed 2026-10-18)
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [turi-stdlib-hof-effectful-callback-false-w0033](turi-stdlib-hof-effectful-callback-false-w0033.md) | low (diagnostic noise) | Under `tur --interpret`, a `handle` around a stdlib higher-order call (`option-map`, `with-region`, `bt-scope`) whose lambda performs the effect warns TUR-W0033 "unreachable"; the program is correct. The per-turn effect pass does not index the stdlib's preload-turn definitions, so the fn-argument row charge (`effect_check.c:469`, `if (callee && ...)`) never runs. `tur check` / `tur run` are clean. |
+
 ## Found porting `tools/check-guide-pairs` to Turmeric (filed 2026-10-17)
 
 | Report | Severity | One line |
