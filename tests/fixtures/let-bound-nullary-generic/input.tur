@@ -1,0 +1,29 @@
+;; let-bound-nullary-generic-retyped-invalid-c: `(let [o (mk)] ...)` where
+;; `mk` is `(defn mk [A] [] : (Option A) ...)`.  S4 pinned the binder to
+;; `(Option int)` from the later `(unwrap-or o 7)`, but left the `(mk)` call
+;; ungrounded, so it was emitted on the int64 carrier and cc met
+;; `tur_adt_Option__int o = <int64 word>` ("invalid initializer").  The
+;; initializer is grounded with the binder now.
+
+(defstruct P [a : int b : int])
+
+(defn mk [A] [] : (Option A) (none))
+(defn mk2 [A] [x : A] : (Option A) (some x))
+(defn mkr [A] [] : (Result A cstr) (err "no"))
+
+(defn main [] : int
+  (let [o (mk)
+        f (mk)
+        q (mk2 4)
+        r (mkr)
+        v (vec-new)]
+    (println (unwrap-or o 7))                         ;; 7
+    (println (unwrap-or o 8))                         ;; 8
+    (println (match o (Some x) (+ x 1) (None) 0))     ;; 0
+    (println (+ 0.25 (unwrap-or f 7.1)))              ;; 7.35
+    (println (unwrap-or q 7))                         ;; 4
+    (println (if (ok? r) 1 2))                        ;; 2
+    (vec-push! v (P 1 2))
+    (println (.b (vec-get v 0)))                      ;; 2
+    (vec-free v))
+  0)

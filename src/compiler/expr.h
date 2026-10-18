@@ -138,6 +138,11 @@ struct Binding {
      * un-monomorphized body (a `ctor_Cons` that is never emitted).  NULL
      * everywhere else. */
     struct Expr *closure_head_init;
+    /* let-bound-nullary-generic-retyped-invalid-c: a let binding's
+     * initializer when it is a call, so S4 (elab_call.c), which pins the
+     * binder's open type from a later sibling argument, can ground that call
+     * to the same instantiation.  NULL everywhere else. */
+    struct Expr *let_init;
     /* fn-value-fat-normalization (effect-row increment): for a `__borrowc`
      * hoist temp of a CAPTURING closure, the lifted lambda's binding.  A
      * dedicated field, NOT closure_fn_binding -- that one carries direct-call

@@ -1,0 +1,24 @@
+;; defmodule-file-loaded-and-imported-defined-twice: `(load "m.tur")` spliced
+;; the module in, and `(import m)` read and elaborated the file again -- only
+;; an import registered a module -- so every member was defined twice: cc
+;; failed on `redefinition of 'lib_slm__twice'`.  A loaded defmodule is
+;; registered now, and the import reuses it.
+;;
+;; The stdlib shape is the second load: stdlib/capability.tur loads
+;; stdlib/time.tur, so importing `time` beside it was "defopaque: 'Time' is
+;; already defined".
+(load "tests/fixtures/load-then-import-same-module/lib/m.tur")
+(load "stdlib/capability.tur")
+
+(defmodule prog
+  (import lib/m :refer [twice])
+  (import lib/n :refer [thrice])
+  (import time :refer [Mock-Time Mock-Time-free mock-time-set])
+  (defn main [] : int
+    (println (twice 21))                 ;; 42
+    (println (thrice 5))                 ;; 15
+    (let [clock (Mock-Time)]
+      (mock-time-set clock 1792255528626)
+      (println (time-now clock))         ;; 1792255528626
+      (Mock-Time-free clock))
+    0))

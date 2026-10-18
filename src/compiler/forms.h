@@ -128,6 +128,18 @@ typedef enum FxProvenance {
     PROV_MACRO_ARG,
 } FxProvenance;
 
+/* fmt-rewrites-hex-literals-and-string-escapes: how an F_INT or F_STR
+ * literal was spelled, so `tur fmt` prints it back the way it was written.
+ * The value is the same whatever the spelling; only the formatter reads it. */
+typedef enum LitSpelling {
+    LIT_SPELL_PLAIN      = 0,  /* a decimal int; a string with no escape >= 0x80 */
+    LIT_SPELL_HEX        = 1,  /* F_INT: `0x...` */
+    LIT_SPELL_BIN        = 2,  /* F_INT: `0b...` */
+    LIT_SPELL_RADIX_MASK = 3,
+    LIT_SPELL_NEG        = 4,  /* F_INT: a `0x` / `0b` literal written with a `-` */
+    LIT_SPELL_HIGH_ESC   = 8,  /* F_STR: an escape wrote a byte >= 0x80 */
+} LitSpelling;
+
 struct Form;
 typedef struct Form Form;
 
@@ -141,6 +153,7 @@ struct Form {
     Span          span;
     LiteralSuffix lit_suffix; /* Phase N: type suffix for F_INT/F_FLOAT; LIT_SUF_NONE otherwise */
     uint8_t       fx_prov;    /* FxProvenance: only meaningful for F_MAP forms */
+    uint8_t       lit_spell;  /* LitSpelling: only meaningful for F_INT / F_STR */
     union {
         bool          b;
         int64_t       i;

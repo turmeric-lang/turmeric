@@ -81,7 +81,7 @@ cannot reach its own `current_time` field. Hence the docstring rule at
 
 Fix directions 1 and 2. Direction 3 is filed on its own, because it is not
 about time:
-[defmodule-file-loaded-and-imported-defined-twice](../reported/defmodule-file-loaded-and-imported-defined-twice.md).
+[defmodule-file-loaded-and-imported-defined-twice](defmodule-file-loaded-and-imported-defined-twice.md).
 
 - **`now` is 64-bit.** The slot is `int64_t (*now)(void *self)` in
   `__tur_time_cap`, `__tur_mock_cap` (`stdlib/time.tur`) and

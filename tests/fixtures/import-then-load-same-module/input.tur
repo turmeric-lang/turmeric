@@ -1,0 +1,11 @@
+;; defmodule-file-loaded-and-imported-defined-twice, the other order: the
+;; entry imports lib/m, then imports lib/n, whose top-level `(load ...)` of
+;; lib/m.tur used to splice a second copy of the module in.  The import now
+;; marks the file it reads in the load-visited set.
+(defmodule prog
+  (import lib/m :refer [twice])
+  (import lib/n :refer [thrice])
+  (defn main [] : int
+    (println (twice 21))                 ;; 42
+    (println (thrice 5))                 ;; 15
+    0))

@@ -53,6 +53,22 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# Test: --stdin keeps a literal's spelling.  `0xFF` printed from its value was
+# `255`, and `\x` escapes of bytes 0x80 and up came back as raw UTF-8, so an
+# ASCII file stopped being ASCII (fmt-rewrites-hex-literals-and-string-escapes).
+# Hex digits print upper case; a string written in raw UTF-8 stays raw.
+# ---------------------------------------------------------------------------
+NAME="fmt-stdin-literal-spelling"
+INPUT='(f 0xFF 0xff 0b101 -0x10 0xFFFFFFFFFFFFFFFF 0x1Fu8 255 "caf\xc3\xa9" "a\x1bb")'
+EXPECTED='(f 0xFF 0xFF 0b101 -0x10 0xFFFFFFFFFFFFFFFF 0x1Fu8 255 "caf\xc3\xa9" "a\x1bb")'
+ACTUAL=$(printf '%s\n' "$INPUT" | "$TUR" fmt --stdin 2>/dev/null)
+if [ "$ACTUAL" = "$EXPECTED" ]; then
+    pass "$NAME"
+else
+    fail "$NAME" "expected '$EXPECTED', got '$ACTUAL'"
+fi
+
+# ---------------------------------------------------------------------------
 # Test: --stdin exit code is 0 on success
 # ---------------------------------------------------------------------------
 NAME="fmt-stdin-exit-ok"

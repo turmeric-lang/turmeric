@@ -1,0 +1,12 @@
+;; duplicate-defn-across-loaded-files-reaches-the-c-compiler: two `load`ed
+;; files that each define `helper` were compiled to C with two definitions of
+;; it, and cc stopped on "conflicting types for 'helper'".  The same mistake in
+;; one file was already `defn: 'helper' is already defined`; loaded files share
+;; the top-level namespace, so it is that error now too, with a note at the
+;; first definition.
+(load "tests/fixtures/errors/defn-duplicate-across-loaded-files/a.tur")
+(load "tests/fixtures/errors/defn-duplicate-across-loaded-files/b.tur")
+(defn main [] : int
+  (do (println (use-a))
+      (println (use-b))
+      0))

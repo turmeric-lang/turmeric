@@ -629,6 +629,134 @@ static ElabModule *elab_load_module(Elab *e, const Symbol *name, Span import_spa
     return m;
 }
 
+/* Append an empty registry entry for `name`; returns its index (the array
+ * may move, so callers re-acquire the pointer by index). */
+static uint32_t module_registry_add(Elab *e, const Symbol *name) {
+    if (e->n_loaded_modules >= e->cap_loaded_modules) {
+        e->cap_loaded_modules = e->cap_loaded_modules ? e->cap_loaded_modules * 2 : 8;
+        e->loaded_modules = (ElabModule *)realloc(e->loaded_modules,
+                             e->cap_loaded_modules * sizeof(ElabModule));
+        if (!e->loaded_modules) { fprintf(stderr, "tur: oom\n"); abort(); }
+    }
+    uint32_t idx = e->n_loaded_modules++;
+    e->loaded_modules[idx] = (ElabModule){0};
+    e->loaded_modules[idx].name = name;
+    return idx;
+}
+
+/* Fill `slot`'s export tables from the module `name` just elaborated:
+ * the bindings, macros and effects it defines and exports, plus its
+ * (export-from ...) re-exports.  `loaded_defmod` is its DefModule (NULL for
+ * a file with none).  The import path calls it after elaborating the file;
+ * elab_defmodule calls it for a module a `(load ...)` spliced in, so a later
+ * import of that name finds the same tables
+ * (defmodule-file-loaded-and-imported-defined-twice). */
+static void module_collect_exports(Elab *e, ElabModule *slot, const Symbol *name,
+                                   const DefModule *loaded_defmod) {
+    /* Collect exported bindings: those in the global scope owned by this
+     * module, plus any this module re-exports via (export-from ...).  A
+     * re-exported entry is the DEFINING module's Binding, not a copy -- the
+     * consumer resolves to the same mangled symbol it would have reached by
+     * importing the defining module directly, so re-export costs no wrapper
+     * and no indirection. */
+    uint32_t n_reexp = (loaded_defmod != NULL) ? loaded_defmod->n_reexports : 0;
+    uint32_t n_exp = 0;
+    for (uint32_t i = 0; i < e->global.n; i++) {
+        Binding *b = e->global.bindings[i];
+        if (b->defining_module_name == name && b->is_exported) n_exp++;
+    }
+    Binding **exp_arr = (n_exp == 0 && n_reexp == 0) ? NULL :
+        (Binding **)arena_alloc(e->arena, (n_exp + n_reexp) * sizeof(Binding *));
+    uint32_t idx = 0;
+    for (uint32_t i = 0; i < e->global.n; i++) {
+        Binding *b = e->global.bindings[i];
+        if (b->defining_module_name == name && b->is_exported)
+            exp_arr[idx++] = b;
+    }
+    for (uint32_t i = 0; i < n_reexp; i++) {
+        /* Already validated in elab_defmodule, which proved the source module
+         * EXPORTS this name.  Deliberately not re-checking defining_module_name
+         * against the source here: in a chain (low -> mid -> hi) the binding hi
+         * re-exports from mid was defined by low, so that check would break the
+         * second hop.  A name with no binding is a re-exported MACRO, collected
+         * by the macro pass below instead. */
+        Binding *rb = scope_lookup(&e->global, loaded_defmod->reexports[i]);
+        if (rb && rb->is_exported)
+            exp_arr[idx++] = rb;
+    }
+
+    slot->exports   = exp_arr;
+    slot->n_exports = idx;
+
+    /* Phase M4: Collect exported macros from this module.
+     * A macro is exported if its defining_module_name matches this module's name
+     * AND its name appears in the module's (export ...) list. */
+    slot->exported_macros   = NULL;
+    slot->n_exported_macros = 0;
+    if (loaded_defmod != NULL
+        && (loaded_defmod->n_exports > 0 || loaded_defmod->n_reexports > 0)) {
+        /* A macro qualifies either by being defined here and named in the
+         * export list, or by being named in an (export-from src ...) whose
+         * src defines it -- the re-export case forwards the MacroDef itself,
+         * so an importer expands the original definition. */
+        uint32_t n_mexp = 0;
+        for (uint32_t i = 0; i < e->n_macros; i++) {
+            MacroDef *m = e->macros[i];
+            if (m->defining_module_name == name) {
+                for (uint32_t j = 0; j < loaded_defmod->n_exports; j++) {
+                    if (loaded_defmod->exports[j] == m->name) { n_mexp++; break; }
+                }
+                continue;
+            }
+            for (uint32_t j = 0; j < loaded_defmod->n_reexports; j++) {
+                if (loaded_defmod->reexports[j] == m->name) { n_mexp++; break; }
+            }
+        }
+        if (n_mexp > 0) {
+            struct MacroDef **mexp_arr =
+                (struct MacroDef **)arena_alloc(e->arena, n_mexp * sizeof(struct MacroDef *));
+            uint32_t midx = 0;
+            for (uint32_t i = 0; i < e->n_macros; i++) {
+                MacroDef *m = e->macros[i];
+                if (m->defining_module_name == name) {
+                    for (uint32_t j = 0; j < loaded_defmod->n_exports; j++) {
+                        if (loaded_defmod->exports[j] == m->name) {
+                            mexp_arr[midx++] = m; break;
+                        }
+                    }
+                    continue;
+                }
+                for (uint32_t j = 0; j < loaded_defmod->n_reexports; j++) {
+                    if (loaded_defmod->reexports[j] == m->name) {
+                        mexp_arr[midx++] = m; break;
+                    }
+                }
+            }
+            slot->exported_macros   = mexp_arr;
+            slot->n_exported_macros = midx;
+        }
+    }
+
+    /* PR5-3-D: Collect exported effects for this module. */
+    {
+        uint32_t n_eeff = 0;
+        for (uint32_t i = 0; i < e->effect_env->n_effects; i++) {
+            Effect *eff = e->effect_env->effects[i];
+            if (eff->defining_module_name == name && eff->is_exported) n_eeff++;
+        }
+        Effect **eeff_arr = (n_eeff == 0) ? NULL :
+            (Effect **)arena_alloc(e->arena, n_eeff * sizeof(Effect *));
+        uint32_t eidx = 0;
+        for (uint32_t i = 0; i < e->effect_env->n_effects; i++) {
+            Effect *eff = e->effect_env->effects[i];
+            if (eff->defining_module_name == name && eff->is_exported)
+                eeff_arr[eidx++] = eff;
+        }
+        slot->exported_effects   = eeff_arr;
+        slot->n_exported_effects = n_eeff;
+    }
+}
+
 static ElabModule *elab_load_module_impl(Elab *e, const Symbol *name, Span import_span) {
     /* SB2: Reject imports in sandboxed environments. */
     if (e->sandboxed) {
@@ -645,25 +773,32 @@ static ElabModule *elab_load_module_impl(Elab *e, const Symbol *name, Span impor
                       "circular import: module '%s' is already being loaded", name->name);
             return NULL;
         }
+        /* defmodule-file-loaded-and-imported-defined-twice: a `(load ...)`
+         * spliced this module in already.  Reading its file again would define
+         * every member twice, so the import takes that definition -- unless
+         * the search path names a different file, which would be a second
+         * module of the same name. */
+        if (existing->from_load) {
+            char rpath[4096];
+            if (existing->path_key
+                && elab_module_resolve_path(e, name, rpath, sizeof rpath)
+                && elab_path_key(e, rpath) != existing->path_key) {
+                diag_emit(DIAG_ERROR, import_span,
+                          "module '%s' is already defined by the loaded file '%s', "
+                          "but this import resolves to '%s'",
+                          name->name, existing->path_key->name, rpath);
+                diag_emit(DIAG_NOTE, import_span,
+                          "a program holds one module per name: drop the (load ...) "
+                          "or the import, or rename one of the modules");
+                return NULL;
+            }
+        }
         return existing;
     }
 
     /* Reserve a registry slot first (for circular-import detection). */
-    if (e->n_loaded_modules >= e->cap_loaded_modules) {
-        e->cap_loaded_modules = e->cap_loaded_modules ? e->cap_loaded_modules * 2 : 8;
-        e->loaded_modules = (ElabModule *)realloc(e->loaded_modules,
-                             e->cap_loaded_modules * sizeof(ElabModule));
-        if (!e->loaded_modules) { fprintf(stderr, "tur: oom\n"); abort(); }
-    }
-    uint32_t slot_idx = e->n_loaded_modules++;
+    uint32_t slot_idx = module_registry_add(e, name);
     ElabModule *slot = &e->loaded_modules[slot_idx];
-    slot->name = name;
-    slot->exports = NULL;
-    slot->n_exports = 0;
-    slot->exported_macros = NULL;
-    slot->n_exported_macros = 0;
-    slot->exported_effects = NULL;
-    slot->n_exported_effects = 0;
     slot->is_loading = true;
 
     /* Build file path: 'geom/vector' -> '{base_dir}/geom/vector.tur'
@@ -918,6 +1053,13 @@ static ElabModule *elab_load_module_impl(Elab *e, const Symbol *name, Span impor
     diag_register_file(sfile);
     diag_set_file_origin(sfile->file_id, import_span);
 
+    /* defmodule-file-loaded-and-imported-defined-twice: the file is this
+     * module's now, so a `(load ...)` of it expanded later -- by a module
+     * imported after this one -- is the no-op a second load of it would be. */
+    slot = &e->loaded_modules[slot_idx];
+    slot->path_key = elab_path_key(e, path_copy);
+    elab_load_path_mark(e, slot->path_key);
+
     /* Parse the source into forms.
      *
      * Transitive-RM (T1): pass the shared `user_macros` registry so the
@@ -1090,108 +1232,7 @@ static ElabModule *elab_load_module_impl(Elab *e, const Symbol *name, Span impor
      * by index before writing the collected exports back into it. */
     slot = &e->loaded_modules[slot_idx];
 
-    /* Collect exported bindings: those in the global scope owned by this
-     * module, plus any this module re-exports via (export-from ...).  A
-     * re-exported entry is the DEFINING module's Binding, not a copy -- the
-     * consumer resolves to the same mangled symbol it would have reached by
-     * importing the defining module directly, so re-export costs no wrapper
-     * and no indirection. */
-    uint32_t n_reexp = (loaded_defmod != NULL) ? loaded_defmod->n_reexports : 0;
-    uint32_t n_exp = 0;
-    for (uint32_t i = 0; i < e->global.n; i++) {
-        Binding *b = e->global.bindings[i];
-        if (b->defining_module_name == name && b->is_exported) n_exp++;
-    }
-    Binding **exp_arr = (n_exp == 0 && n_reexp == 0) ? NULL :
-        (Binding **)arena_alloc(e->arena, (n_exp + n_reexp) * sizeof(Binding *));
-    uint32_t idx = 0;
-    for (uint32_t i = 0; i < e->global.n; i++) {
-        Binding *b = e->global.bindings[i];
-        if (b->defining_module_name == name && b->is_exported)
-            exp_arr[idx++] = b;
-    }
-    for (uint32_t i = 0; i < n_reexp; i++) {
-        /* Already validated in elab_defmodule, which proved the source module
-         * EXPORTS this name.  Deliberately not re-checking defining_module_name
-         * against the source here: in a chain (low -> mid -> hi) the binding hi
-         * re-exports from mid was defined by low, so that check would break the
-         * second hop.  A name with no binding is a re-exported MACRO, collected
-         * by the macro pass below instead. */
-        Binding *rb = scope_lookup(&e->global, loaded_defmod->reexports[i]);
-        if (rb && rb->is_exported)
-            exp_arr[idx++] = rb;
-    }
-
-    slot->exports   = exp_arr;
-    slot->n_exports = idx;
-
-    /* Phase M4: Collect exported macros from this module.
-     * A macro is exported if its defining_module_name matches this module's name
-     * AND its name appears in the module's (export ...) list. */
-    slot->exported_macros   = NULL;
-    slot->n_exported_macros = 0;
-    if (loaded_defmod != NULL
-        && (loaded_defmod->n_exports > 0 || loaded_defmod->n_reexports > 0)) {
-        /* A macro qualifies either by being defined here and named in the
-         * export list, or by being named in an (export-from src ...) whose
-         * src defines it -- the re-export case forwards the MacroDef itself,
-         * so an importer expands the original definition. */
-        uint32_t n_mexp = 0;
-        for (uint32_t i = 0; i < e->n_macros; i++) {
-            MacroDef *m = e->macros[i];
-            if (m->defining_module_name == name) {
-                for (uint32_t j = 0; j < loaded_defmod->n_exports; j++) {
-                    if (loaded_defmod->exports[j] == m->name) { n_mexp++; break; }
-                }
-                continue;
-            }
-            for (uint32_t j = 0; j < loaded_defmod->n_reexports; j++) {
-                if (loaded_defmod->reexports[j] == m->name) { n_mexp++; break; }
-            }
-        }
-        if (n_mexp > 0) {
-            struct MacroDef **mexp_arr =
-                (struct MacroDef **)arena_alloc(e->arena, n_mexp * sizeof(struct MacroDef *));
-            uint32_t midx = 0;
-            for (uint32_t i = 0; i < e->n_macros; i++) {
-                MacroDef *m = e->macros[i];
-                if (m->defining_module_name == name) {
-                    for (uint32_t j = 0; j < loaded_defmod->n_exports; j++) {
-                        if (loaded_defmod->exports[j] == m->name) {
-                            mexp_arr[midx++] = m; break;
-                        }
-                    }
-                    continue;
-                }
-                for (uint32_t j = 0; j < loaded_defmod->n_reexports; j++) {
-                    if (loaded_defmod->reexports[j] == m->name) {
-                        mexp_arr[midx++] = m; break;
-                    }
-                }
-            }
-            slot->exported_macros   = mexp_arr;
-            slot->n_exported_macros = midx;
-        }
-    }
-
-    /* PR5-3-D: Collect exported effects for this module. */
-    {
-        uint32_t n_eeff = 0;
-        for (uint32_t i = 0; i < e->effect_env->n_effects; i++) {
-            Effect *eff = e->effect_env->effects[i];
-            if (eff->defining_module_name == name && eff->is_exported) n_eeff++;
-        }
-        Effect **eeff_arr = (n_eeff == 0) ? NULL :
-            (Effect **)arena_alloc(e->arena, n_eeff * sizeof(Effect *));
-        uint32_t eidx = 0;
-        for (uint32_t i = 0; i < e->effect_env->n_effects; i++) {
-            Effect *eff = e->effect_env->effects[i];
-            if (eff->defining_module_name == name && eff->is_exported)
-                eeff_arr[eidx++] = eff;
-        }
-        slot->exported_effects   = eeff_arr;
-        slot->n_exported_effects = n_eeff;
-    }
+    module_collect_exports(e, slot, name, loaded_defmod);
 
     slot->is_loading = false;
     return slot;
@@ -2099,6 +2140,26 @@ Expr *elab_defmodule(Elab *e, const Form *call) {
     /* Reset module context */
     e->current_module_name = NULL;
     e->current_module = NULL;
+
+    /* defmodule-file-loaded-and-imported-defined-twice: a defmodule that no
+     * import is loading arrived through a `(load ...)` splice (or is the entry
+     * file's own).  Register it, so an `(import <name>)` reuses this definition
+     * rather than reading the file again.  An entry an import made is left
+     * alone; a load-made one is refreshed (a REPL turn that redefines it). */
+    {
+        ElabModule *em = elab_find_loaded_module(e, mod->name);
+        if (!em || em->from_load) {
+            const SourceFile *sf = diag_source_file(call->span.file_id);
+            const Symbol *key = (sf && sf->path) ? elab_path_key(e, sf->path) : NULL;
+            if (!em) {
+                uint32_t idx = module_registry_add(e, mod->name);
+                em = &e->loaded_modules[idx];
+            }
+            em->from_load = true;
+            em->path_key  = key;
+            module_collect_exports(e, em, mod->name, mod);
+        }
+    }
 
     Expr *out = expr_new(e->arena, EX_DEFMODULE, TYPE_NIL, call->span);
     out->as.defmodule_.mod = mod;

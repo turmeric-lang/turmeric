@@ -418,13 +418,17 @@ static Form *read_string(Reader *r) {
 
     char *buf = (char *)arena_alloc_aligned(r->arena, out_len + 1, 1);
     size_t bi = 0;
+    bool high_esc = false;   /* an escape wrote a byte >= 0x80 (LIT_SPELL_HIGH_ESC) */
     while (peek(r) != -1 && peek(r) != '"') {
         int c = advance(r);
         if (c == '\\') {
             int e = advance(r);
             char out;
             if (!r->scheme_enabled) {
-                bi += (size_t)read_base_escape(r, e, buf + bi);
+                size_t nb = (size_t)read_base_escape(r, e, buf + bi);
+                for (size_t k = 0; k < nb; k++)
+                    if ((unsigned char)buf[bi + k] >= 0x80) high_esc = true;
+                bi += nb;
                 continue;
             }
             /* r7rs-lang-plan R1: the R7RS 6.7 escape set.  `\a`, `\b` and
@@ -492,6 +496,7 @@ static Form *read_string(Reader *r) {
 
     Span span = span_from_to(r, start_line, start_col, start_off, r->pos);
     Form *f = form_new(r->arena, F_STR, span);
+    if (high_esc) f->lit_spell = LIT_SPELL_HIGH_ESC;
     f->as.s.p = buf;
     f->as.s.len = (uint32_t)bi;
     
@@ -586,10 +591,12 @@ static Form *read_number(Reader *r, int sign) {
     /* The delimited decimal lexeme, for recovering a float value with strtod. */
     size_t num_start = 0, num_end = 0;
 
+    uint8_t spell = LIT_SPELL_PLAIN;
     /* 0x / 0b prefixes - these are always integers */
     if (peek(r) == '0' && (peek2(r) == 'x' || peek2(r) == 'X')) {
         advance(r); advance(r);
         bitpattern = true;
+        spell = LIT_SPELL_HEX;
         int d;
         while ((d = hex_digit(peek(r))) >= 0) {
             mag_push(&mag, &mag_overflow, 16, (uint64_t)d);
@@ -599,6 +606,7 @@ static Form *read_number(Reader *r, int sign) {
     } else if (peek(r) == '0' && (peek2(r) == 'b' || peek2(r) == 'B')) {
         advance(r); advance(r);
         bitpattern = true;
+        spell = LIT_SPELL_BIN;
         while (peek(r) == '0' || peek(r) == '1') {
             mag_push(&mag, &mag_overflow, 2, (uint64_t)(advance(r) - '0'));
             any = true;
@@ -729,6 +737,8 @@ static Form *read_number(Reader *r, int sign) {
          * defined for INT64_MIN's magnitude where `-ival` was UB. */
         ival = (sign < 0) ? (int64_t)(~mag + 1u) : (int64_t)mag;
         atom = form_int(r->arena, span, ival);
+        if (spell != LIT_SPELL_PLAIN && sign < 0) spell |= LIT_SPELL_NEG;
+        atom->lit_spell = spell;
         /* Overflow checks for small integer types */
         if (lit_suf == LIT_SUF_I8 && (ival < -128 || ival > 127)) {
             diag_emit(DIAG_ERROR, span, "integer literal overflows int8 range (-128..127)");

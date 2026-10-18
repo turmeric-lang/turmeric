@@ -1,0 +1,4 @@
+;; A module imported first, then loaded by a module imported after it.
+(defmodule lib/m
+  (export twice)
+  (defn twice [x : int] : int (* 2 x)))

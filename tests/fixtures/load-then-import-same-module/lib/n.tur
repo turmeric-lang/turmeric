@@ -1,0 +1,8 @@
+;; An imported module that loads lib/m as well, then imports it: the entry
+;; already spliced the file, so this load is a no-op and the import takes
+;; that definition.
+(load "tests/fixtures/load-then-import-same-module/lib/m.tur")
+(defmodule lib/n
+  (import lib/m :refer [twice])
+  (export thrice)
+  (defn thrice [x : int] : int (+ x (twice x))))

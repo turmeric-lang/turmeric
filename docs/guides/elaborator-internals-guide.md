@@ -651,9 +651,17 @@ Two follow-ups change already-elaborated arguments:
 - **Forward element inference (S4).** When a sibling fixes a variable, a
   *local* `let` binding passed at a generic slot has its `Binding.type`
   rewritten (`(let [v (vec-new)] (vec-push! v 7.1) ...)` makes `v` a
-  `(Vec float)`). This rewrites the binding, not its initializer, so it is
-  safe only when the initializer's representation does not depend on the
-  variable; a heap pointer such as `Vec` qualifies.
+  `(Vec float)`). When the initializer is a call still open in the same
+  variables (`(let [o (mk)] (unwrap-or o 7))` for a nullary
+  `(defn mk [A] [] : (Option A) ...)`), that call is grounded with it, as an
+  open argument is: the binding's `let_init` points at it, and its
+  `abi_bindings` and `type` are recorded. Without that, a by-value result
+  such as `(Option int)` was declared by value and initialized from the
+  carrier word (archived:
+  [let-bound-nullary-generic-retyped-invalid-c](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/let-bound-nullary-generic-retyped-invalid-c.md)).
+  An initializer of another shape is not rewritten, so the rewrite is still
+  only safe for it when its representation does not depend on the variable;
+  a heap pointer such as `Vec` qualifies.
 
 All of this is per call. Nothing flows sideways between sibling calls, and
 nothing flows from a later use back to an earlier one except through the S4
@@ -932,7 +940,9 @@ Each was reproduced against the compiler this guide describes and filed in
 [`docs/reported/`](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/README.md). When one is fixed and archived,
 update the passage above that describes it and drop it from this list.
 
-- [let-bound-nullary-generic-retyped-invalid-c](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/let-bound-nullary-generic-retyped-invalid-c.md) -- A `let`-bound call to a nullary generic emits invalid C
+None open: the one filed here,
+[let-bound-nullary-generic-retyped-invalid-c](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/let-bound-nullary-generic-retyped-invalid-c.md),
+is fixed and archived.
 
 ## Maintenance
 
