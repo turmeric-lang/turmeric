@@ -74,3 +74,35 @@ the file again.
    `time.tur`, but it is a load-only file (no `defmodule`) and `import` is
    only allowed inside one, so that means turning `capability.tur` into a
    module, which changes how `io.tur` and every user reach it.
+
+## Resolution (2026-10-18)
+
+Fix direction 1, with direction 2's error for the case where the two routes
+name different files.
+
+- **A loaded defmodule is registered.** When `elab_defmodule`
+  (`src/compiler/elab_module.c`) finishes a module that no import is loading,
+  it adds it to `e->loaded_modules` (`module_registry_add`), marked
+  `from_load`, with the canonical path of its file (`path_key`, the key
+  `(load ...)` dedups on) and its export tables. The tables are filled by
+  `module_collect_exports`, the code the import path already ran, moved into
+  a helper so both routes build them the same way. A later `import` of that
+  name finds the entry and reuses it, so nothing is defined twice.
+- **Different files are refused.** If the import's search path names a file
+  other than the loaded one, the import is a located error ("module 'm' is
+  already defined by the loaded file ..., but this import resolves to ...").
+  When the search path names no file at all, the import takes the loaded
+  module, so `(load "vendor/m.tur")` then `(import m)` works.
+- **The other order.** An import marks the file it reads in the load-visited
+  set (`elab_load_path_mark`), so a `(load ...)` of that file expanded later --
+  a module imported after it that loads it -- is the no-op a second load of
+  it already was.
+
+A `(load ...)` of a defmodule file *inside* another module's body is still
+"only one defmodule is allowed per file", a separate limit this does not
+change.
+
+Pinned by `load-then-import-same-module` (a user module and the stdlib shape:
+`stdlib/capability.tur` loaded beside `(import time ...)`),
+`import-then-load-same-module`, and
+`errors/load-and-import-name-different-files`.

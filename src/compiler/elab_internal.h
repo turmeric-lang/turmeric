@@ -175,6 +175,13 @@ typedef struct ElabModule {
     Effect      **exported_effects;
     uint32_t      n_exported_effects;
     bool          is_loading;    /* circular import detection */
+    /* defmodule-file-loaded-and-imported-defined-twice: the canonical path of
+     * the file that defined the module (elab_path_key), and whether that
+     * definition arrived through a `(load ...)` splice rather than an import.
+     * An import of a name a load already defined reuses this entry instead of
+     * reading the file a second time. */
+    const Symbol *path_key;
+    bool          from_load;
 } ElabModule;
 
 /* Forward-declared so this header doesn't drag in reader_macros.h. */
@@ -1828,6 +1835,14 @@ Form *elab_macro_env_call_proc(Elab *e, MacroDef *macro,
  * Implemented in src/turi/macro_env.c. */
 bool elab_macro_env_import(Elab *e, const Symbol *module_name,
                            const char *path, Span span);
+
+/* defmodule-file-loaded-and-imported-defined-twice: the canonical key of a
+ * source path -- the one `(load ...)` dedups on -- and a way to add one to
+ * the load-visited set.  An import marks the file it reads, so a `(load ...)`
+ * of that file expanded later is a no-op, as a second load of it would be.
+ * elab_toplevel.c. */
+const Symbol *elab_path_key(Elab *e, const char *path);
+void elab_load_path_mark(Elab *e, const Symbol *key);
 
 /* Stage 3: resolve a module name to its file path using the same search
  * order elab_load_module uses (importing file's dir -> stdlib dir -> each

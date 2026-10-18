@@ -1,0 +1,7 @@
+;; Loads lib/m, which the entry imported already: the import marked the file,
+;; so this load is a no-op rather than a second copy of every member.
+(load "tests/fixtures/import-then-load-same-module/lib/m.tur")
+(defmodule lib/n
+  (import lib/m :refer [twice])
+  (export thrice)
+  (defn thrice [x : int] : int (+ x (twice x))))

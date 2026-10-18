@@ -1,0 +1,4 @@
+;; A different file that defines a module of the same name.
+(defmodule lib/m
+  (export twice)
+  (defn twice [x : int] : int (* 3 x)))

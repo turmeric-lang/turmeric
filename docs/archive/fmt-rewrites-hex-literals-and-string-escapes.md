@@ -54,3 +54,25 @@ printf '(defn main [] : int\n  (do (println "caf\\xc3\\xa9") (println 0xFF) 0))\
    source that really contains UTF-8 is a style decision.
 3. **Guard both.** A `tests/run-fmt.sh` case that formats `0xFF`, `0b101` and
    `"\xc3\xa9"` and checks they come back unchanged.
+
+## Resolution (2026-10-18)
+
+Fix directions 1 and 2, keyed on how the source spelled the literal.
+
+- **Integers.** The reader records the radix of a `0x` / `0b` literal, and
+  whether it was written with a `-`, in a new `Form.lit_spell`
+  (`LitSpelling`, `src/compiler/forms.h`; it fits in padding beside
+  `fx_prov`). `fmt_num_literal` prints such a literal back in its radix: hex
+  digits in upper case, the bit pattern as the reader reads it (so
+  `0xFFFFFFFFFFFFFFFF` stays itself), a `-0x10` as its sign and magnitude, a
+  type suffix kept. Leading zeros (`0x00FF`) are not kept.
+- **Strings.** When an escape wrote a byte 0x80 or up (`\xNN`, octal,
+  `\u{...}`), the reader marks the string `LIT_SPELL_HIGH_ESC`, and
+  `print_str_escaped_b` prints every such byte as `\xNN`, so an ASCII file
+  stays ASCII. A string whose UTF-8 was written raw stays raw, which settles
+  the style question by following the source.
+
+Pinned by `tests/run-fmt.sh` `fmt-stdin-literal-spelling` (`0xFF`, `0xff`,
+`0b101`, `-0x10`, `0xFFFFFFFFFFFFFFFF`, `0x1Fu8`, `"caf\xc3\xa9"`).
+`fmt-bootstrap-stdlib` still passes, so stdlib files can now keep a hex
+literal; `stdlib/unicode.tur`'s decimal byte ranges are left as they are.

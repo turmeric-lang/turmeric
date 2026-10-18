@@ -1,0 +1,2 @@
+module 'lib/m' is already defined by the loaded file
+but this import resolves to

@@ -147,13 +147,34 @@ static void fmt_num_literal(Buf *b, const Form *f) {
         else if (v > 32 && v < 127) buf_printf(b, "#\\%c", (char)v);
         else                      buf_printf(b, "#\\u%llx", (unsigned long long)v);
         return;
+    } else if ((f->lit_spell & LIT_SPELL_RADIX_MASK) != LIT_SPELL_PLAIN) {
+        /* fmt-rewrites-hex-literals-and-string-escapes: a `0x` / `0b` literal
+         * keeps its radix.  The digits are the bit pattern, as the reader
+         * reads them, so `0xFFFFFFFFFFFFFFFF` stays itself; a `-0x10` keeps
+         * its sign and prints the magnitude. */
+        uint64_t u = (uint64_t)f->as.i;
+        bool neg = (f->lit_spell & LIT_SPELL_NEG) != 0;
+        if (neg) u = ~u + 1u;
+        if (neg) buf_putc(b, '-');
+        if ((f->lit_spell & LIT_SPELL_RADIX_MASK) == LIT_SPELL_HEX) {
+            buf_printf(b, "0x%llX", (unsigned long long)u);
+        } else {
+            char bits[65];
+            int n = 0;
+            do { bits[n++] = (char)('0' + (u & 1u)); u >>= 1; } while (u && n < 64);
+            buf_puts(b, "0b");
+            while (n > 0) buf_putc(b, bits[--n]);
+        }
     } else {
         buf_printf(b, "%lld", (long long)f->as.i);
     }
     buf_puts(b, lit_suffix_str(f->lit_suffix));
 }
 
-static void print_str_escaped_b(Buf *b, StrSlice s) {
+/* `high_esc`: the source wrote bytes >= 0x80 as escapes
+ * (LIT_SPELL_HIGH_ESC), so they go back out as `\xNN` and an ASCII file
+ * stays ASCII.  A string whose UTF-8 was written raw keeps it raw. */
+static void print_str_escaped_b(Buf *b, StrSlice s, bool high_esc) {
     buf_putc(b, '"');
     for (uint32_t i = 0; i < s.len; i++) {
         char c = s.p[i];
@@ -164,7 +185,7 @@ static void print_str_escaped_b(Buf *b, StrSlice s) {
             case '\t': buf_puts(b, "\\t");  break;
             case '\r': buf_puts(b, "\\r");  break;
             default:
-                if ((unsigned char)c < 0x20)
+                if ((unsigned char)c < 0x20 || (high_esc && (unsigned char)c >= 0x80))
                     buf_printf(b, "\\x%02x", (unsigned char)c);
                 else
                     buf_putc(b, c);
@@ -223,7 +244,8 @@ static void fmt_form_flat(Buf *b, const Form *f) {
         case F_BOOL:  buf_puts(b, f->as.b ? "true" : "false"); break;
         case F_INT:
         case F_FLOAT: fmt_num_literal(b, f); break;
-        case F_STR:   print_str_escaped_b(b, f->as.s); break;
+        case F_STR:   print_str_escaped_b(b, f->as.s,
+                                          (f->lit_spell & LIT_SPELL_HIGH_ESC) != 0); break;
         case F_SYM:
             buf_write(b, f->as.sym->name, f->as.sym->len);
             break;

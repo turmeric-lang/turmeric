@@ -1811,6 +1811,7 @@ Expr *elab_let(Elab *e, const Form *call) {
                 }
             }
         }
+        if (init && init->kind == EX_CALL) b->let_init = init;
         /* Phase HRT4: propagate poly fn metadata through let-bindings.
          * (let [g f] ...) where f is is_poly_fn → g inherits is_poly_fn.
          * (let [g id] ...) where id is a global TY_FN → g.source_binding = id. */

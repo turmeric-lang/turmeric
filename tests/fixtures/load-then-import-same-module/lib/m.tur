@@ -1,0 +1,4 @@
+;; A module the entry program both loads and imports.
+(defmodule lib/m
+  (export twice)
+  (defn twice [x : int] : int (* 2 x)))

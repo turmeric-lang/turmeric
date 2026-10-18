@@ -9030,15 +9030,23 @@ Expr *elab_defn(Elab *e, const Form *call) {
              * the later body, and cc met two C functions named `f`.  Mirrors
              * elab_def's rule: an earlier REPL/playground turn's defn is
              * replaced (PS4, elab_prior_turn_global); a duplicate within one
-             * turn or one file is an error.  Scoped to one file on purpose --
-             * a name from an import, an extern-c or a native stub has no claim
-             * and keeps the old behaviour -- and to user code: a stdlib load
-             * keeps its own rules (MF3 above). */
+             * turn or one file is an error.  A name from an extern-c or a
+             * native stub has no claim and keeps the old behaviour, and a
+             * stdlib load keeps its own rules (MF3 above).
+             *
+             * duplicate-defn-across-loaded-files-reaches-the-c-compiler: the
+             * claim may come from another file -- two `load`ed files, or the
+             * entry and one it loads, are one namespace, so the second defn
+             * is the same duplicate.  The scope is the module the name is
+             * defined in instead: a defn of another module's exported name
+             * keeps the old behaviour.  "The same form" (a speculative defn
+             * re-elaborated) is its whole span, file included. */
             const Span *claim = &existing->defn_claim;
-            if (!e->in_stdlib_load && claim->line != 0 &&
-                claim->file_id == call->span.file_id &&
-                (claim->off_start != call->span.off_start ||
-                 claim->off_end != call->span.off_end) &&
+            bool same_form = claim->file_id == call->span.file_id &&
+                             claim->off_start == call->span.off_start &&
+                             claim->off_end == call->span.off_end;
+            if (!e->in_stdlib_load && claim->line != 0 && !same_form &&
+                existing->defining_module_name == e->current_module_name &&
                 !elab_prior_turn_global(e, existing)) {
                 diag_emit(DIAG_ERROR, name_f->span,
                           "defn: '%s' is already defined",

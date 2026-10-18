@@ -1,0 +1,3 @@
+;; A second helper, in another loaded file.
+(defn helper [x : int] : int (* x 10))
+(defn use-b [] : int (helper 4))

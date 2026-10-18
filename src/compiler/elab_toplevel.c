@@ -1167,6 +1167,14 @@ static void load_dedup_register(Elab *e, const Symbol *key) {
     e->load_expanded_paths[e->n_load_expanded_paths++] = key;
 }
 
+const Symbol *elab_path_key(Elab *e, const char *path) {
+    return load_path_key(e->st, path, e->module_stdlib_dir);
+}
+
+void elab_load_path_mark(Elab *e, const Symbol *key) {
+    load_dedup_register(e, key);
+}
+
 /* security-audit-plan WP3: a capability-restricted interpreter env (no
  * TURI_CAP_IMPORT -- Env/new-sandboxed, the macro env) refuses `(load "path")`
  * in the forms it is handed, exactly as elab_load_module refuses `import`.

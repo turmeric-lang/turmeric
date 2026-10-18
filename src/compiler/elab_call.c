@@ -10768,6 +10768,28 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
                     inst.substruct = vb->type.substruct;
                     vb->type = inst;
                     args[i]->type = inst;
+                    /* let-bound-nullary-generic-retyped-invalid-c: the binder's
+                     * initializer, a generic call still open in the same
+                     * variables (`(mk)` for `(defn mk [A] [] : (Option A) ...)`),
+                     * is grounded to match, as a nullary argument is
+                     * (ng_ground_nullary_arg).  Left on the carrier, a by-value
+                     * binder was initialized from its int64 word:
+                     * `tur_adt_Option__int o = __ps_202;`. */
+                    Expr *li = vb->let_init;
+                    if (li && li->kind == EX_CALL && !li->as.call_.abi_bindings &&
+                        call_type_has_named_tyvar(&li->type)) {
+                        CallTypeBinding lscratch[16];
+                        uint8_t ln = 0;
+                        if (call_collect_type_bindings(&li->type, inst, lscratch, &ln) &&
+                            ln > 0) {
+                            AbiTypeBinding *saved = (AbiTypeBinding *)arena_alloc(
+                                e->arena, ln * sizeof(AbiTypeBinding));
+                            for (uint8_t bi = 0; bi < ln; bi++) saved[bi] = lscratch[bi];
+                            li->as.call_.abi_bindings   = saved;
+                            li->as.call_.n_abi_bindings = ln;
+                            li->type = inst;
+                        }
+                    }
                 }
             }
         }

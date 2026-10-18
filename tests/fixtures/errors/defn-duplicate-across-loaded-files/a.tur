@@ -1,0 +1,3 @@
+;; Defines helper/2; b.tur defines helper/1.
+(defn helper [x : int y : int] : int (+ x y))
+(defn use-a [] : int (helper 1 2))
