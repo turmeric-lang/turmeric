@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/turmeric-lang/turmeric/actions/workflows/ci.yml/badge.svg)](https://github.com/turmeric-lang/turmeric/actions/workflows/ci.yml)
 
-**Latest release:** `v0.66.0` -- `stdlib/markdown.tur` gains GFM tables, strikethrough and task lists plus TeX math rendering, and `tur run --release` / `tur build --release` now compile at -O3.
+**Latest release:** `v0.67.0` -- Separate compilation now rejects cross-module effects at the call site instead of aborting at runtime, and argument evaluation, fiber dynvars and reset/shift in evicted functions are fixed.
 
 ## What
 
