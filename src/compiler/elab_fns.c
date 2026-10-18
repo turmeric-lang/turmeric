@@ -9040,12 +9040,23 @@ Expr *elab_defn(Elab *e, const Form *call) {
              * is the same duplicate.  The scope is the module the name is
              * defined in instead: a defn of another module's exported name
              * keeps the old behaviour.  "The same form" (a speculative defn
-             * re-elaborated) is its whole span, file included. */
+             * re-elaborated) is its whole span, file included.
+             *
+             * One cross-file shape is still a replacement, not a duplicate: a
+             * stdlib file defining a name first claimed OUTSIDE the stdlib.
+             * The interpreter's preload stubs (src/turi/preload.c, e.g.
+             * `(defn none? [r :int] :bool false)`) are exactly that, and the
+             * REPL's `:type` re-elaborates the whole session source -- stubs,
+             * then the stdlib they stand in for -- as one unit. */
             const Span *claim = &existing->defn_claim;
             bool same_form = claim->file_id == call->span.file_id &&
                              claim->off_start == call->span.off_start &&
                              claim->off_end == call->span.off_end;
+            bool stdlib_replaces_stub = claim->file_id != call->span.file_id &&
+                                        elab_file_is_stdlib(call->span.file_id) &&
+                                        !elab_file_is_stdlib(claim->file_id);
             if (!e->in_stdlib_load && claim->line != 0 && !same_form &&
+                !stdlib_replaces_stub &&
                 existing->defining_module_name == e->current_module_name &&
                 !elab_prior_turn_global(e, existing)) {
                 diag_emit(DIAG_ERROR, name_f->span,

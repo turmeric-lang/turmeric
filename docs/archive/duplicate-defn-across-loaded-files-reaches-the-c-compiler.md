@@ -69,6 +69,15 @@ keeps the old behaviour, as do extern-c and native stubs (no claim) and the
 auto-loaded stdlib (`in_stdlib_load`). A stdlib file the user loads is checked
 like any other loaded file, which is the second direction.
 
+One cross-file shape is still allowed as a replacement: a stdlib file
+defining a name that was first claimed outside the stdlib
+(`stdlib_replaces_stub`). The interpreter's preload stubs
+(`src/turi/preload.c`, for example `(defn none? [r :int] :bool false)`) work
+this way, and the REPL's `:type` re-elaborates the whole session source,
+stubs first and then the stdlib that replaces them, as one unit. Without the
+exemption, `:type 42` failed with "'none?' is already defined"
+(`tur_repl_smoke` and the browser meta-commands test caught it on #1286).
+
 The two-file repro is now `defn: 'helper' is already defined` at `b.tur`,
 with a note at `a.tur`'s definition. Pinned by
 `errors/defn-duplicate-across-loaded-files`.
