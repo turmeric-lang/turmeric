@@ -10608,7 +10608,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                 buf_printf(&cb, "))(intptr_t)(%s))(", pv);
                 free(pv);
                 for (uint32_t i = 0; i < ps->n_params; i++) {
-                    char *av = emit_value(ctx, body, e->as.call_.args[i]);
+                    char *av = emit_arg_value(ctx, body, e->as.call_.args, e->as.call_.n_args, i);
                     const char *pc = emit_type_c_name(ctx, ps->param_types[i]);
                     TypeKind pk = ps->param_types[i].kind;
                     /* Pointer-carrying scalars round-trip through intptr_t
@@ -10952,7 +10952,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                             buf_printf(&out, ", %s", arg_ct[i]);
                         buf_printf(&out, ", %s", fn_ptr_val);
                         for (uint32_t i = 0; i < n; i++) {
-                            char *av = emit_value(ctx, body, e->as.call_.args[i]);
+                            char *av = emit_arg_value(ctx, body, e->as.call_.args, e->as.call_.n_args, i);
                             if (slot_is_wide[i])
                                 av = fat_dispatch_box_arg(ctx, body,
                                     e->as.call_.args[i], arg_slot_ty[i], av);
@@ -10988,7 +10988,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                                    "((void *)(intptr_t)(%s)",
                                    fn_ptr_val, fn_ptr_val);
                         for (uint32_t i = 0; i < n; i++) {
-                            char *av = emit_value(ctx, body, e->as.call_.args[i]);
+                            char *av = emit_arg_value(ctx, body, e->as.call_.args, e->as.call_.n_args, i);
                             if (slot_is_wide[i]) {
                                 av = fat_dispatch_box_arg(ctx, body,
                                     e->as.call_.args[i], arg_slot_ty[i], av);
@@ -11063,7 +11063,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     resolved_arg_ty[i] = rt;
                 }
                 for (uint32_t i = 0; i < e->as.call_.n_args; i++) {
-                    char *raw = emit_value(ctx, body, e->as.call_.args[i]);
+                    char *raw = emit_arg_value(ctx, body, e->as.call_.args, e->as.call_.n_args, i);
                     /* Apply same function-ptr → int64_t cast as the direct-call path:
                      * C99 forbids implicit conversion from function pointer to integer.
                      * Track which args were cast so the signature uses int64_t, not
@@ -11245,7 +11245,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                 if (n && !arg_strs) { fprintf(stderr, "tur: oom\n"); abort(); }
                 const char *poly_param_ctype[MAX_FN_ARITY];
                 for (uint32_t i = 0; i < n; i++) {
-                    char *raw = emit_value(ctx, body, e->as.call_.args[i]);
+                    char *raw = emit_arg_value(ctx, body, e->as.call_.args, e->as.call_.n_args, i);
                     if (!phase_f_concrete) {
                         /* Generic carrier path: apply poly_arg_mask / needs_cast wrapping */
                         if (e->as.call_.poly_arg_mask & ARG_IDX_BIT(i)) {
@@ -11940,7 +11940,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     if (!arg_strs) { fprintf(stderr, "tur: oom\n"); abort(); }
                     for (uint32_t i = 0; i < n; i++) {
                         arg_types[i] = emit_resolve_type(ctx, e->as.call_.args[i]->type);
-                        arg_strs[i] = emit_value(ctx, body, e->as.call_.args[i]);
+                        arg_strs[i] = emit_arg_value(ctx, body, e->as.call_.args, e->as.call_.n_args, i);
                         /* SR-fat-abi: a wide by-value aggregate slot is int64
                          * (box pointer) in the typedef now -- convert. */
                         arg_strs[i] = fat_dispatch_box_arg(ctx, body,
@@ -12212,7 +12212,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                         } else {
                             arg_types[i] = e->as.call_.args[i]->type;
                         }
-                        arg_strs[i] = emit_value(ctx, body, e->as.call_.args[i]);
+                        arg_strs[i] = emit_arg_value(ctx, body, e->as.call_.args, e->as.call_.n_args, i);
                         /* SR-fat-abi: see the CY2 twin above. */
                         arg_strs[i] = fat_dispatch_box_arg(ctx, body,
                             e->as.call_.args[i], arg_types[i], arg_strs[i]);
@@ -12399,7 +12399,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     char **arg_strs = (char **)malloc(n * sizeof(char *));
                     if (!arg_strs) { fprintf(stderr, "tur: oom\n"); abort(); }
                     for (uint32_t i = 0; i < n; i++) {
-                        arg_strs[i] = emit_value(ctx, body, e->as.call_.args[i]);
+                        arg_strs[i] = emit_arg_value(ctx, body, e->as.call_.args, e->as.call_.n_args, i);
                     }
                     /* lambda-head-called-through-resolved-signature: the head
                      * is a lambda LITERAL from this body, lifted ONCE, so its
@@ -12817,7 +12817,9 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                             }
                         }
                     }
-                    arg_strs[i] = emit_value(ctx, body, arg);
+                    arg_strs[i] = emit_arg_keep_order(ctx, body, e->as.call_.args,
+                                                      e->as.call_.n_args, i, arg,
+                                                      emit_value(ctx, body, arg));
                     ctx->fat_box_sink_type = fbs_prev_t;
                     ctx->fat_box_sink_erased_mask = fbs_prev_m;
                     ctx->fat_box_sink_erased_res = fbs_prev_r;
@@ -13884,7 +13886,9 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                         }
                     }
                 }
-                char *raw = emit_value(ctx, body, emit_arg);
+                char *raw = emit_arg_keep_order(ctx, body, e->as.call_.args,
+                                                e->as.call_.n_args, i, emit_arg,
+                                                emit_value(ctx, body, emit_arg));
                 ctx->fat_box_sink_type = fbs_prev_t;
                 ctx->fat_box_sink_erased_mask = fbs_prev_m;
                 ctx->fat_box_sink_erased_res = fbs_prev_r;
@@ -18187,7 +18191,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
             /* Evaluate each item into a temp so side effects happen before the call */
             char **item_vals = malloc(n * sizeof(char *));
             for (uint32_t i = 0; i < n; i++) {
-                item_vals[i] = emit_value(ctx, body, e->as.set_lit_.items[i]);
+                item_vals[i] = emit_arg_value(ctx, body, e->as.set_lit_.items, n, i);
             }
             Buf lit; buf_init(&lit);
             buf_printf(&lit, "tur_set_from_items(%u, (int64_t[]){", n);

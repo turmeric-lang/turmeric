@@ -1,5 +1,26 @@
 # A `perform` inside `with-region` / `bt-scope` cannot reach an outer handler
 
+**Resolved 2026-10-18,** by not bracketing a thunk that can perform. This is
+neither fix direction exactly. Routing the bracket cps->cps needs a
+region-popping continuation frame and a region note on DK frames. Instead,
+`region_scope_call_bracketed` (`src/compiler/emit_cps_ir.c`) keeps the bracket
+only when no argument of the `with-region` / `bt-scope` call can reach an
+effect op (`fnvalue_arg_reaches_effect_op`). Otherwise the call takes the
+ordinary routing, threaded cps->cps, as it does under `TUR_REGIONS=0`. The
+tailcall routing, the force-direct decision and the push/pop all ask it.
+
+The price is the rewind for that call. A thunk that performs allocates
+outside any generation, which is the lock's documented failure mode: a
+saving lost, never a stale read. The test is syntactic, so a thunk whose
+`perform` is handled inside it loses its bracket too. It also settles the
+note at the end of this report: no DK continuation is captured inside a
+bracket, so none can carry a node out of one.
+
+`region-bracket-effect-reaches-outer-handler` pins an abortive case, a
+resuming one, one through a named function under `bt-scope`, and a handler
+inside the thunk. Each prints what `--interpret` and `TUR_REGIONS=0` print,
+on cc and `tur jit`.
+
 **Severity:** medium-high. A correct program aborts at run time on the default
 build. The same program prints the right answer with regions off and under
 the interpreter.

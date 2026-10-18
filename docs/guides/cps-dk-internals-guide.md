@@ -413,10 +413,14 @@ reports each `perform` under it with the error above, or, with none, a located
 error at the handle. Its fiber-era body is gone
 ([evicted-handle-reaches-deleted-fiber-emitter](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/evicted-handle-reaches-deleted-fiber-emitter.md)).
 
-One evicted shape is **not** guarded: **`reset`/`shift`** in an evicted
-function silently computes the wrong value. The direct emitter evaluates the
-reset body and applies the shift's receiver without aborting
-([evicted-reset-shift-degrades-to-body-eval](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/evicted-reset-shift-degrades-to-body-eval.md)).
+**`reset`/`shift`** in an evicted function lowers onto a `setjmp` escape
+landing (`emit_effects_reset`). A base `shift` stores its receiver's value on
+the `tur_cur_shift_reset` stack and longjmps to the innermost reset, so the
+abort is the same as on the backend. It used to evaluate the body and carry
+on with the wrong value
+([evicted-reset-shift-degrades-to-body-eval](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/evicted-reset-shift-degrades-to-body-eval.md)).
+The value rides an int64 slot, so a reset whose result is not a scalar gets a
+located error instead. `reset-shift-in-evicted-function` pins it.
 
 ---
 

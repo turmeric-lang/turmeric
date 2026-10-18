@@ -2583,6 +2583,40 @@ static CAtom atomize(CpsB *b, Expr *e, Pending *p) {
     return atom_cvar(x);
 }
 
+/* compiled-args-not-evaluated-left-to-right: in a list whose non-atomic
+ * operands are bound ahead of the node, an atomic operand stays where it is
+ * and is read AFTER every binding.  That is harmless for a literal or an
+ * immutable binding, but a `^mut` read must then be bound too, in order,
+ * whenever a later operand is: `(P counter (+ (bump) (ask)))` built P from
+ * the counter `bump` had already changed.  `bound_later` says whether an
+ * operand after this one is bound. */
+static bool atom_must_bind_in_order(const Expr *a, bool bound_later) {
+    const Expr *pa = ascribe_peel(a);
+    return bound_later && pa && expr_reads_mutable(pa) &&
+           type_kind_is_order_spillable(pa->type.kind);
+}
+
+/* atomize() for operand i of a list: a `^mut` scalar read is bound in order
+ * when a later operand of the list will be bound (atom_must_bind_in_order). */
+static bool later_operand_bound(Expr *const *ops, uint32_t n, uint32_t i) {
+    for (uint32_t j = i + 1; j < n; j++)
+        if (!is_atomic(ops[j])) return true;
+    return false;
+}
+static CAtom atomize_operand(CpsB *b, Expr *const *ops, uint32_t n, uint32_t i,
+                             Pending *p) {
+    Expr *e = ops[i];
+    if (is_atomic(e) && atom_must_bind_in_order(e, later_operand_bound(ops, n, i))) {
+        const Expr *pe = ascribe_peel(e);
+        for (uint32_t r = 0; r < b->rs_n; r++)
+            if (b->rs_nodes[r] == pe) return atom_cvar(b->rs_cvars[r]);
+        CVar x = fresh_cvar(b, &pe->type);
+        pend_push(b, p, e, x, false);
+        return atom_cvar(x);
+    }
+    return atomize(b, e, p);
+}
+
 /* Atomize every argument of a `fn_cps` call, left to right.  A dictionary
  * argument (a constrained rank-2 call's leading one) is bound at the int64
  * word the direct emitter renders it as -- `(int64_t)(intptr_t)(&dict_..)` --
@@ -2602,7 +2636,7 @@ static CAtom *fncps_atomize_args(CpsB *b, const Expr *e, Pending *pp) {
             args[i] = atom_cvar(x);
             continue;
         }
-        args[i] = atomize(b, a, pp);
+        args[i] = atomize_operand(b, e->as.call_.args, n, i, pp);
     }
     return args;
 }
@@ -2668,7 +2702,7 @@ static CAtom atomize_call_arg(CpsB *b, Expr *call, uint32_t i, Pending *p) {
     if (cps_ir_rank2_handed_on(call, i))
         return atom_of(ascribe_peel(call->as.call_.args[i]->as.poly_wrap_.inner));
     uint32_t before = p->n;
-    CAtom a = atomize(b, call->as.call_.args[i], p);
+    CAtom a = atomize_operand(b, call->as.call_.args, call->as.call_.n_args, i, p);
     if (p->n == before + 1)
         p->items[before].reap_ok = call_slot_nonretaining(call, i);
     return a;
@@ -2906,7 +2940,8 @@ static CTerm *build_perform(CpsB *b, Expr *e, CVar x, CTerm *cont, Pending *p) {
     t->as.perform.resumable_payload = pf->resumable_payload;
     t->as.perform.n = pf->n_args;
     CAtom *args = arena_alloc(b->a, (pf->n_args ? pf->n_args : 1) * sizeof(CAtom));
-    for (uint32_t i = 0; i < pf->n_args; i++) args[i] = atomize(b, pf->args[i], p);
+    for (uint32_t i = 0; i < pf->n_args; i++)
+        args[i] = atomize_operand(b, pf->args, pf->n_args, i, p);
     t->as.perform.args = args;
     t->as.perform.x = x;
     t->as.perform.body = cont;
@@ -5161,9 +5196,15 @@ static Expr *rank2_hoist_args(CpsB *b, Expr *e, Pending *pp) {
     Expr *c = arena_alloc(b->a, sizeof(Expr));
     *c = *e;
     Expr **na = arena_alloc(b->a, n * sizeof(Expr *));
+    uint32_t last_bound = 0;
+    for (uint32_t i = 0; i < n; i++)
+        if (!rank2_atomic_arg(e->as.call_.args[i])) last_bound = i;
     for (uint32_t i = 0; i < n; i++) {
         Expr *a = e->as.call_.args[i];
-        if (rank2_atomic_arg(a)) { na[i] = a; continue; }
+        if (rank2_atomic_arg(a) && !atom_must_bind_in_order(a, i < last_bound)) {
+            na[i] = a;
+            continue;
+        }
         CVar y = fresh_cvar(b, &a->type);
         na[i] = cvar_expr(b, &y, &a->type, a->span);
         pend_push(b, pp, a, y, false);
@@ -5243,10 +5284,18 @@ static CTerm *delegate_call_atomized(CpsB *b, Expr *e, CVar x, CTerm *rest,
     if (!all_scalar) return NULL;
     Pending p = {0};
     Expr **nargs = arena_alloc(b->a, n * sizeof(Expr *));
+    uint32_t last_bound = 0;
     for (uint32_t i = 0; i < n; i++) {
         Expr *a = e->as.call_.args[i];
         const Expr *pa = ascribe_peel(a);
-        if (is_atomic(a) || is_widened_literal(a) || (pa && pa->kind == EX_DICT)) {
+        if (!(is_atomic(a) || is_widened_literal(a) || (pa && pa->kind == EX_DICT)))
+            last_bound = i;
+    }
+    for (uint32_t i = 0; i < n; i++) {
+        Expr *a = e->as.call_.args[i];
+        const Expr *pa = ascribe_peel(a);
+        if ((is_atomic(a) || is_widened_literal(a) || (pa && pa->kind == EX_DICT)) &&
+            !atom_must_bind_in_order(a, i < last_bound)) {
             nargs[i] = a;
             continue;
         }
@@ -5374,7 +5423,7 @@ static CTerm *cps_tail(CpsB *b, Expr *e, CKont kont) {
             Pending p = {0};
             CAtom *args = arena_alloc(b->a, (e->as.builtin.n ? e->as.builtin.n : 1) * sizeof(CAtom));
             for (uint32_t i = 0; i < e->as.builtin.n; i++)
-                args[i] = atomize(b, e->as.builtin.args[i], &p);
+                args[i] = atomize_operand(b, e->as.builtin.args, e->as.builtin.n, i, &p);
             CVar x = fresh_cvar(b, &e->type);
             CTerm *ac = new_term(b, CT_APPCONT);
             ac->as.appcont.kont = kont; ac->as.appcont.v = atom_cvar(x);
@@ -5913,7 +5962,7 @@ static CTerm *cps_bind(CpsB *b, Expr *e, CVar x, CTerm *rest) {
             Pending p = {0};
             CAtom *args = arena_alloc(b->a, (e->as.builtin.n ? e->as.builtin.n : 1) * sizeof(CAtom));
             for (uint32_t i = 0; i < e->as.builtin.n; i++)
-                args[i] = atomize(b, e->as.builtin.args[i], &p);
+                args[i] = atomize_operand(b, e->as.builtin.args, e->as.builtin.n, i, &p);
             CTerm *t = new_term(b, CT_LETPRIM);
             t->as.letprim.x = x; t->as.letprim.op = builtin_name(e);
             t->as.letprim.spec = e->as.builtin.spec;

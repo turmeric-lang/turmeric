@@ -528,13 +528,20 @@ in one is a CT_LETRAW delegated to `emit_value`, which emits the stripped
 erasure and type-variable notes as usual (checked with a `keep-gen`-style
 store in a colored named function).
 
-**A `perform` cannot cross a bracket.** Because the bracket forces the
-cps->direct arm, the thunk runs in direct style under the bracket call. A
-`perform` inside it does not reach a handler outside the bracket; the
-program aborts with `tur: unhandled effect (tag N)`. With a user forwarder
-of the same shape, or under `TUR_REGIONS=0`, the same program reaches the
-handler. A `handle` *inside* the thunk works and the bracket still
-rewinds. So a bracket is not yet transparent to effects that cross it.
+**A thunk that can perform is not bracketed.** The bracket lives on the
+cps->direct arm, where the thunk runs in direct style under the bracket call
+and its plain entry seeds a fresh DK root. A `perform` inside it would not
+reach a handler outside the bracket. It used to abort with
+`tur: unhandled effect (tag N)`
+([region-bracket-blocks-effects](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/region-bracket-blocks-effects.md)).
+So `region_scope_call_bracketed` (`emit_cps_ir.c`) keeps the bracket only for
+a thunk that cannot reach an effect op (`fnvalue_arg_reaches_effect_op`). A
+thunk that can is routed like any other call, threaded cps->cps, exactly as
+under `TUR_REGIONS=0`. The cost is the rewind for that call: nothing it
+allocates is reclaimed at the bracket. That is the lock's failure mode
+anyway, a saving lost rather than a stale read. The test is syntactic, so a
+thunk whose `perform` is handled inside it loses its bracket too.
+`region-bracket-effect-reaches-outer-handler` pins all of these shapes.
 
 ## Interaction with call/cc stack images
 
@@ -549,9 +556,10 @@ the re-entered continuation printed garbage where `TUR_REGIONS=0` printed 7.
 
 The DK machine's heap continuations (the compiled path's `shift` /
 `handle` captures) carry no region note of their own. Today that is covered
-by the point above: a capture inside a bracket cannot be delivered to a
-handler outside it. If that changes, the frames a captured continuation
-holds become a new escape route, and they need the note.
+by the point above: a thunk that can capture is never bracketed, so no
+continuation is captured inside a bracket. If brackets ever go around such
+a thunk, the frames a captured continuation holds become a new escape route,
+and they need the note.
 
 ---
 
@@ -800,7 +808,7 @@ Each was reproduced against the compiler this guide describes and filed in
 [`docs/reported/`](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/README.md). When one is fixed and archived,
 update the passage above that describes it and drop it from this list.
 
-- [region-bracket-blocks-effects](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/region-bracket-blocks-effects.md) -- A `perform` inside `with-region` / `bt-scope` cannot reach an outer handler
+- [region-bracket-blocks-effects](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/region-bracket-blocks-effects.md) -- (resolved 2026-10-18) A `perform` inside `with-region` / `bt-scope` could not reach an outer handler
 - [regions-off-source-runtime-link-failure](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/regions-off-source-runtime-link-failure.md) -- `TUR_REGIONS=0` fails to link when the runtime comes from source
 
 ## Maintenance

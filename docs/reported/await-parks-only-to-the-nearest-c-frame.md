@@ -68,8 +68,16 @@ on the way; what is left is a may-await function the CPS backend evicts for
 some other reason.** See "Fixed 2026-10-09" at the end for what changed and
 the shape that still gives a wrong answer.
 
-**Severity: medium-high (silent wrong answer), in two narrow shapes.** A
-pending `await` parks by shifting to the nearest root prompt. That is the
+**Severity: low (was medium-high), re-rated 2026-10-18.** There is no silent
+wrong answer left (2026-10-09). The two shapes still open after the ninth
+pass, a rank-2 call with a struct position or more than eight arguments and a
+float-result dict-clone, draw `TUR-W0044` at compile time and are refused at
+run time. The index row already said low. This line still carried the
+original rating, which is what a severity sort of the reports reads. The
+original description follows.
+
+**Original severity: medium-high (silent wrong answer), in two narrow
+shapes.** A pending `await` parks by shifting to the nearest root prompt. That is the
 async body's root only while every frame between the await and the body is
 on the DK chain. A C-stack frame in between -- a direct-style call, a non-tail
 `resume` -- puts a nearer root (or the end of a resumed copy) in the way, so

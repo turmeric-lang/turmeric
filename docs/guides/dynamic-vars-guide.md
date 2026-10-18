@@ -156,6 +156,15 @@ show-locale()        ; prints en-US -- binding was restored when use-fr returned
 A spawned thread (via `spawn`) starts with no binding frames; all var reads
 return root values.
 
+Fibers are isolated the same way. A `binding` belongs to the fiber that runs
+it, so it is safe to hold one across a yield or a park: an `async` body, a
+`reactor` or `scheduler` fiber, a per-request fiber under `httpd-new-async`.
+While the fiber is suspended, the code that resumed it sees its own bindings,
+and when the fiber resumes it sees its own again, on whichever thread resumes
+it. A new fiber starts from the root values, as a new thread does. It does not
+see the bindings of the code that created it or first resumes it. Fixture:
+`tests/fixtures/dynvar-binding-moves-with-fiber`.
+
 ## Conveying Bindings to Child Threads
 
 `spawn-conveying` (from `stdlib/dynvar.tur`) starts a new thread with a

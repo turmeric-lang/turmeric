@@ -1,0 +1,64 @@
+;; dynvar-binding-not-swapped-on-fiber-switch: a `binding` belongs to the
+;; fiber that runs it.  Two fibers bind the same var and yield in between;
+;; each must read its own value on both sides of the yield, the resumer must
+;; read its own between and after, and a fresh fiber starts from the root.
+(defdynamic *ctx* :cstr "root")
+
+(defn show [tag : cstr v : cstr] : nil
+  ```c
+  printf("%s%s\n", tag, v); fflush(stdout);
+  ```)
+
+(defn yield! [] : nil
+  ```c
+  tur_fiber_block_yield(0);
+  ```)
+
+(defn fiber-new-fn [fn : ptr<void> stack-size : int] : ptr<void>
+  ```c
+  return (void *)tur_fiber_block_new((void(*)(void))fn, (size_t)stack_size);
+  ```)
+
+(defn fiber-resume-fn [f : ptr<void> arg : int] : int
+  ```c
+  return tur_fiber_block_resume((FiberBlock *)f, (int64_t)arg);
+  ```)
+
+(defn fiber-free-fn [f : ptr<void>] : nil
+  ```c
+  tur_fiber_block_free((FiberBlock *)f);
+  ```)
+
+(defn body-a [] : nil
+  (binding [*ctx* "A"]
+    (show "A before yield: " *ctx*)
+    (yield!)
+    (show "A after yield:  " *ctx*)))
+
+(defn body-b [] : nil
+  (binding [*ctx* "B"]
+    (show "B before yield: " *ctx*)
+    (yield!)
+    (show "B after yield:  " *ctx*)))
+
+(defn body-c [] : nil
+  (show "C sees:         " *ctx*))
+
+(defn main [] : int
+  (let [a (fiber-new-fn body-a 0)
+        b (fiber-new-fn body-b 0)
+        c (fiber-new-fn body-c 0)]
+    (fiber-resume-fn a 0)
+    (show "main between:   " *ctx*)
+    (fiber-resume-fn b 0)
+    (fiber-resume-fn a 0)
+    (show "main after A:   " *ctx*)
+    (binding [*ctx* "M"]
+      (fiber-resume-fn c 0)
+      (show "main in M:      " *ctx*))
+    (fiber-resume-fn b 0)
+    (show "main at end:    " *ctx*)
+    (fiber-free-fn a)
+    (fiber-free-fn b)
+    (fiber-free-fn c)
+    0))

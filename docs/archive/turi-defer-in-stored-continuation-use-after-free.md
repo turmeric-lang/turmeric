@@ -1,5 +1,27 @@
 # `tur --interpret`: resuming a stored `k` whose body has a pending `defer` is a heap-use-after-free
 
+**Resolved 2026-10-18** (fix direction 2, the "keep it alive" half). The fiber
+runtime no longer frees a continuation a case may have kept.
+`fiber_handle_k_may_escape` (`src/turi/eval.c`) scans each case of the
+`handle`. A `k` used only as the continuation of a `resume` or `discontinue`
+cannot outlive the case. Any other use of it, or any form the scan does not
+model, means the case may have kept it. Such a cont is allocated from the env's
+permanent value pool and outlives the `handle` (`handle_exited`). A later
+`(resume saved v)` runs the body on its own stack and dispatches any further
+perform in the handle's own frame. The stack is unmapped when the body
+finishes. The struct stays until env teardown, so a second resume reads `done`
+and gives the existing "already been resumed" error instead of reading freed
+memory. Every other cont is freed at the handle's exit, as before.
+
+The repro below is `tests/fixtures/effect-stored-k-with-defer-resumed-after-handle`.
+It has no inline C, so `run-turi.sh` runs it too. It prints `0`,
+`before resume`, `w4: defer ran`, `6` on cc, `tur jit` and `tur --interpret`,
+and it is clean under the Debug `tur`'s ASan and LeakSanitizer.
+
+Fix direction 1 (make `defer` work-stack capturable) is not done. The fiber
+runtime still fires an abandoned body's defers at the wrong time, which is now
+[turi-fiber-handle-defers-fire-at-the-wrong-time](../reported/turi-fiber-handle-defers-fire-at-the-wrong-time.md).
+
 **Severity:** high (memory safety, interpreter only). Under `tur --interpret` a
 handler case that stores its continuation and returns, followed by a
 `(resume saved v)` after the `handle` has exited, reads freed memory when the

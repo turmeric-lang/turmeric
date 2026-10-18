@@ -564,13 +564,15 @@ typedef struct EmitCtx {
      * causes EX_PANIC/EX_PANIC_WITH to emit tur_panic_abort instead of
      * tur_panic so that no setjmp/longjmp unwinding is attempted. */
     bool no_unwind;
-    /* direct-reset-shift-degrades fix: true while emitting the body of a base
-     * (reset ...) that is lowered via the setjmp/longjmp escape path (branch-
-     * capable).  A base `shift`/`shift0` emitted with this set aborts to the
-     * innermost reset (tur_cur_shift_reset) instead of returning its operand.
-     * Cleared across a nested DK-lowered reset (emit_cps_reset) so its shifts
-     * still feed the DK abort-value model. */
+    /* evicted-reset-shift-degrades-to-body-eval: true while emitting the body
+     * of a base (reset ...) the direct emitter lowers onto the setjmp/longjmp
+     * escape landing (emit_effects_reset) -- a reset in a function the CPS
+     * backend evicted.  A base `shift`/`shift0` emitted with this set aborts
+     * to the innermost reset (tur_cur_shift_reset) instead of returning its
+     * value into the context.  `shift_escape_ctype` is that reset's C result
+     * type, which the abort value is carried at. */
     bool in_shift_escape;
+    const char *shift_escape_ctype;
     /* Phase M3: when true, each module is compiled to its own .c/.h pair;
      * exported functions are not static and headers are export-filtered. */
     bool separate_compilation;
@@ -1500,6 +1502,15 @@ bool catch_box_binding_reader_confined(const Expr *body, const Binding *b,
                                        TypeKind scope_result);
 bool expr_has_multishot_handler(const Expr *e);
 char *fresh_tmp(EmitCtx *ctx);
+/* compiled-args-not-evaluated-left-to-right: emit argument i of an argument
+ * list, spilled into a temp when it reads mutable state that a later argument
+ * could change before the call.  See emit_core.c. */
+char *emit_arg_value(EmitCtx *ctx, Buf *body, Expr *const *args,
+                     uint32_t n, uint32_t i);
+/* The same for a value already emitted: `v` is `emitted`'s text (argument
+ * i, or what the caller emitted for it); returns v or the temp. */
+char *emit_arg_keep_order(EmitCtx *ctx, Buf *body, Expr *const *args,
+                          uint32_t n, uint32_t i, const Expr *emitted, char *v);
 char *fresh_frame(EmitCtx *ctx);
 /* defer-frame-chain-must-not-escape: the lexical parent of each emitted
  * `tur_frame` (recorded where the frame is declared, i.e. the `saved_frame`

@@ -3567,6 +3567,12 @@ struct TuriEffectCont {
     /* handle expression and frame for re-dispatching on multiple performs */
     const HandleExpr  *handle_expr;
     EvalFrame         *handle_frame;
+
+    /* turi-defer-in-stored-continuation-use-after-free: the `handle` has
+     * returned while a case may still hold `k` (fiber_handle_k_may_escape),
+     * so the cont outlived it and a later `(resume saved v)` runs the body on
+     * its own stack from wherever it is called. */
+    bool               handle_exited;
 };
 
 /* Internal handler frame stored on TuriEnv.handler_stack. */
@@ -3680,11 +3686,25 @@ static TuriValue eval_resume_cont(TuriEnv *env, EvalFrame *frame,
         env->handler_stack = hf.prev;
 
     if (cont->done) {
+        /* A cont kept past its handle owns its stack until the body ends.  The
+         * struct stays: `k` may still be held, and a second resume must read
+         * `done` and refuse, not read freed memory. */
+        if (cont->handle_exited && cont->body_stack) {
+#ifndef __EMSCRIPTEN__
+            munmap(cont->body_stack, EFFECT_CONT_STACK_SIZE);
+#else
+            free(cont->body_stack);
+#endif
+            cont->body_stack = NULL;
+        }
         return cont->body_result;
     }
 
-    /* Body performed again; dispatch handler body recursively. */
-    return eval_handle_inner(env, frame, cont->handle_expr, cont);
+    /* Body performed again; dispatch handler body recursively.  Once the
+     * handle has returned, its cases run in the handle's own frame (kept by
+     * frame_escape), not the resume site's. */
+    return eval_handle_inner(env, cont->handle_exited ? cont->handle_frame : frame,
+                             cont->handle_expr, cont);
 }
 
 /* Dispatch the handler case for the current perform signal on cont. */
@@ -3813,11 +3833,98 @@ struct TuriHandlerVal {
     const HandleCase  *cases[TURI_MAX_HANDLER_CASES];
 };
 
+/* turi-defer-in-stored-continuation-use-after-free: can a case of this
+ * fiber handle keep its `k` past the case?  The fiber runtime used to free the
+ * cont unconditionally when the handle returned, so `(set! saved k)` followed
+ * by a `(resume saved v)` after the handle read freed memory.  A `k` used only
+ * as the continuation of a `resume` / `discontinue` cannot outlive the case;
+ * any other use of it -- stored, passed, captured -- may, and so may anything
+ * this scan does not model (the default).  Conservative in the safe direction:
+ * a false "may escape" only keeps a cont alive. */
+static bool fiber_k_stays_local(const Expr *e, const Binding *k) {
+    if (!e) return true;
+    switch (e->kind) {
+        case EX_INT_LIT: case EX_FLOAT_LIT: case EX_BOOL_LIT: case EX_NIL_LIT:
+        case EX_CSTR_LIT: case EX_SYM_LIT:
+            return true;
+        case EX_VAR:
+            return e->as.var.binding != k;
+        case EX_RESUME: {
+            const ResumeExpr *re = e->as.resume_.resume;
+            if (!re) return false;
+            if (!(re->k && re->k->kind == EX_VAR && re->k->as.var.binding == k) &&
+                !fiber_k_stays_local(re->k, k))
+                return false;
+            return fiber_k_stays_local(re->value, k);
+        }
+        case EX_DISCONTINUE: {
+            const DiscontinueExpr *de = e->as.discontinue_.discontinue;
+            if (!de) return false;
+            if (!(de->k && de->k->kind == EX_VAR && de->k->as.var.binding == k) &&
+                !fiber_k_stays_local(de->k, k))
+                return false;
+            return fiber_k_stays_local(de->exception, k);
+        }
+        case EX_ASCRIBE:
+            return fiber_k_stays_local(e->as.ascribe_.inner, k);
+        case EX_CAST:
+            return fiber_k_stays_local(e->as.cast_.expr, k);
+        case EX_IF:
+            return fiber_k_stays_local(e->as.if_.cond, k) &&
+                   fiber_k_stays_local(e->as.if_.then_, k) &&
+                   fiber_k_stays_local(e->as.if_.else_or_null, k);
+        case EX_DO:
+            for (uint32_t i = 0; i < e->as.do_.n; i++)
+                if (!fiber_k_stays_local(e->as.do_.items[i], k)) return false;
+            return true;
+        case EX_LET: case EX_LETREC:
+            for (uint32_t i = 0; i < e->as.let_.n; i++)
+                if (!fiber_k_stays_local(e->as.let_.bindings[i].init, k)) return false;
+            return fiber_k_stays_local(e->as.let_.body, k);
+        case EX_WHILE:
+            return fiber_k_stays_local(e->as.while_.cond, k) &&
+                   fiber_k_stays_local(e->as.while_.body, k);
+        case EX_SET:
+            return fiber_k_stays_local(e->as.set_.value, k);
+        case EX_BUILTIN:
+            for (uint32_t i = 0; i < e->as.builtin.n; i++)
+                if (!fiber_k_stays_local(e->as.builtin.args[i], k)) return false;
+            return true;
+        case EX_CALL:
+            if (e->as.call_.fn_expr && !fiber_k_stays_local(e->as.call_.fn_expr, k))
+                return false;
+            for (uint32_t i = 0; i < e->as.call_.n_args; i++)
+                if (!fiber_k_stays_local(e->as.call_.args[i], k)) return false;
+            return true;
+        default:
+            return false;
+    }
+}
+
+static bool fiber_handle_k_may_escape(const HandleExpr *h) {
+    for (uint8_t i = 0; i < h->n_cases; i++) {
+        const HandleCase *hc = &h->cases[i];
+        if (hc->k_binding && !fiber_k_stays_local(hc->body, hc->k_binding))
+            return true;
+    }
+    return false;
+}
+
 /* Evaluate a (handle BODY cases...) expression. */
 static TuriValue eval_handle(TuriEnv *env, EvalFrame *frame,
                               const HandleExpr *h) {
-    /* Allocate and initialise the continuation. */
-    TuriEffectCont *cont = (TuriEffectCont *)calloc(1, sizeof(TuriEffectCont));
+    /* Allocate and initialise the continuation.  One a case may keep
+     * (fiber_handle_k_may_escape) can outlive this call, so it lives in the
+     * env's permanent value pool, released at teardown like the other values
+     * that escape; every other one is malloc'd and freed on the way out. */
+    bool k_may_escape = fiber_handle_k_may_escape(h);
+    TuriEffectCont *cont;
+    if (k_may_escape) {
+        cont = (TuriEffectCont *)turi_val_perm_alloc_aligned(env, sizeof(TuriEffectCont), 16);
+        memset(cont, 0, sizeof(TuriEffectCont));
+    } else {
+        cont = (TuriEffectCont *)calloc(1, sizeof(TuriEffectCont));
+    }
     if (!cont) return turi_error("eval: out of memory allocating continuation");
 
     cont->env          = env;
@@ -3834,13 +3941,13 @@ static TuriValue eval_handle(TuriEnv *env, EvalFrame *frame,
                                     PROT_READ | PROT_WRITE,
                                     MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     if (cont->body_stack == MAP_FAILED) {
-        free(cont);
+        if (!k_may_escape) free(cont);
         return turi_error("eval: mmap failed for continuation stack");
     }
 #else
     cont->body_stack = (char *)malloc(EFFECT_CONT_STACK_SIZE);
     if (!cont->body_stack) {
-        free(cont);
+        if (!k_may_escape) free(cont);
         return turi_error("eval: malloc failed for continuation stack");
     }
 #endif
@@ -3892,6 +3999,23 @@ static TuriValue eval_handle(TuriEnv *env, EvalFrame *frame,
         result = eval_handle_inner(env, frame, h, cont);
     }
 
+    /* A case that may have kept `k` keeps the cont: it can be resumed after
+     * this returns, and must at least be able to say it is finished.  Its
+     * stack goes when the body ends (eval_resume_cont); the struct stays, like
+     * the interpreter's other values that escape.  Every other cont is freed
+     * here, as before. */
+    if (k_may_escape) {
+        cont->handle_exited = true;
+        if (cont->done) {
+#ifndef __EMSCRIPTEN__
+            munmap(cont->body_stack, EFFECT_CONT_STACK_SIZE);
+#else
+            free(cont->body_stack);
+#endif
+            cont->body_stack = NULL;
+        }
+        return result;
+    }
 #ifndef __EMSCRIPTEN__
     munmap(cont->body_stack, EFFECT_CONT_STACK_SIZE);
 #else

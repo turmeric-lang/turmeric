@@ -276,10 +276,13 @@ have been the root cause of silent miscompiles:
    CPS backend cannot lower the enclosing function, the function goes to the
    direct emitter. There `emit_effects_reset` just evaluates its body, and the
    enclosed `shift` collapses to "apply the receiver and carry on", so the reset
-   yields the wrong value: the abortive continuation is never discarded. **This
-   is currently broken**, not merely a hazard. The direct backend's
-   `setjmp`/`longjmp` escape path was deleted with `emit_cps.c`; see
-   [evicted-reset-shift-degrades-to-body-eval](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/evicted-reset-shift-degrades-to-body-eval.md).
+   yields the wrong value: the abortive continuation is never discarded. That
+   happened from 2026-07-12, when the `setjmp`/`longjmp` escape path was
+   deleted with `emit_cps.c`, until 2026-10-18, when `emit_effects_reset` got
+   it back
+   ([evicted-reset-shift-degrades-to-body-eval](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/evicted-reset-shift-degrades-to-body-eval.md)).
+   A reset with a non-scalar result in an evicted function is refused with a
+   located error. Pinned by `reset-shift-in-evicted-function`.
 
 The `cps-oracle-*` fixtures (e.g. `cps-oracle-reset-join-escape`,
 `cps-oracle-reset-both-branch-shift`) were written to assert `direct == cps`

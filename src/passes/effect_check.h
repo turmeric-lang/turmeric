@@ -29,6 +29,11 @@
  */
 int effect_check_pass(Arena *a, Expr *program, EffectEnv *env);
 
+/* sepcomp-cross-module-effect-unhandled: tell the pass the unit is one module
+ * of a separately compiled build, so it infers rows for the other modules'
+ * callees and refuses a call that would carry a user effect across. */
+void effect_check_set_separate_compilation(bool on);
+
 /* Validate a single function definition against its declared effect row.
  * Emits TUR-E0009 for each effect that is inferred but not declared.
  * Does nothing when fd->binding->type.as.fn.effect_row is NULL (unannotated

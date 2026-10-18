@@ -593,16 +593,131 @@ char *emit_effects_discontinue(EmitCtx *ctx, Buf *body, const Expr *e) {
  * Region A -- delimited / cloneable / serial continuations
  * ========================================================================= */
 
+/* evicted-reset-shift-degrades-to-body-eval: does `e` hold a base shift or
+ * shift0 the direct emitter would lower in place -- lexically, outside a
+ * nested function body?  (A shift under a nested reset counts too: that
+ * reset installs its own landing, and an extra one here costs one setjmp.) */
+static bool reset_body_has_base_shift(const Expr *e) {
+    if (!e) return false;
+    switch (e->kind) {
+        case EX_SHIFT: case EX_SHIFT0:
+            return true;
+        case EX_RESET:
+            return reset_body_has_base_shift(e->as.reset_.body);
+        case EX_LET: case EX_LETREC:
+            for (uint32_t i = 0; i < e->as.let_.n; i++)
+                if (reset_body_has_base_shift(e->as.let_.bindings[i].init)) return true;
+            return reset_body_has_base_shift(e->as.let_.body);
+        case EX_IF:
+            return reset_body_has_base_shift(e->as.if_.cond) ||
+                   reset_body_has_base_shift(e->as.if_.then_) ||
+                   reset_body_has_base_shift(e->as.if_.else_or_null);
+        case EX_DO:
+            for (uint32_t i = 0; i < e->as.do_.n; i++)
+                if (reset_body_has_base_shift(e->as.do_.items[i])) return true;
+            return false;
+        case EX_WHILE:
+            return reset_body_has_base_shift(e->as.while_.cond) ||
+                   reset_body_has_base_shift(e->as.while_.body);
+        case EX_SET:
+            return reset_body_has_base_shift(e->as.set_.value);
+        case EX_BUILTIN:
+            for (uint32_t i = 0; i < e->as.builtin.n; i++)
+                if (reset_body_has_base_shift(e->as.builtin.args[i])) return true;
+            return false;
+        case EX_CALL:
+            for (uint32_t i = 0; i < e->as.call_.n_args; i++)
+                if (reset_body_has_base_shift(e->as.call_.args[i])) return true;
+            return false;
+        case EX_ASCRIBE:
+            return reset_body_has_base_shift(e->as.ascribe_.inner);
+        case EX_CAST:
+            return reset_body_has_base_shift(e->as.cast_.expr);
+        default:
+            /* A form this does not walk: the CPS translation's own scan
+             * (cps_expr_contains_shift) is the conservative answer. */
+            return e->kind != EX_FN && e->kind != EX_CLOSURE &&
+                   e->kind != EX_FN_DEF && cps_expr_contains_shift(e);
+    }
+}
+
 char *emit_effects_reset(EmitCtx *ctx, Buf *body, const Expr *e) {
     /* (reset body) - establish a continuation boundary and run body.
      *
-     * cps-backend-direct-lowering-removal D3: the CPS lowering of a base reset
-     * (emit_cps_reset) is deleted. Every reset whose body can dynamically reach
-     * a base shift bound to it is now colored and emitted natively by the CT-IR
-     * backend (emit_cps_ir.c), so it never reaches this wrapper. What remains
-     * here is the sole surviving behavior: a reset with no reachable shift (or
-     * one self-delimited by an inner reset/operator) just evaluates its body. */
-    return emit_value(ctx, body, e->as.reset_.body);
+     * cps-backend-direct-lowering-removal D3 deleted the direct emitter's
+     * reset lowering (emit_cps.c) on the reading that every reset whose body
+     * can reach a shift is colored and emitted by the CT-IR backend.  It is,
+     * until its function is EVICTED (a parameter `fn_sig_ok` refuses, an
+     * export, an inline-C body), and then it lands here.  Evaluating the body
+     * made the shift's receiver an ordinary call whose value flowed back into
+     * the context: `(reset (+ 1 (shift twice x)))` was 21, not 20
+     * (evicted-reset-shift-degrades-to-body-eval).
+     *
+     * So a reset whose body holds a base shift gets the escape landing back.
+     * A base shift is abortive: it computes the receiver's value, stores it on
+     * the tur_cur_shift_reset stack and longjmps here, discarding the context
+     * from wherever it is, a branch included.  The thread-local stack makes
+     * the innermost reset the target; `prev` restores the enclosing one.
+     *
+     * The value rides the context's int64 slot, so the result must be a
+     * scalar of at most a word.  A reset of any other type is refused with a
+     * located error rather than computed wrongly.  A reset with no shift in
+     * reach just evaluates its body, as before. */
+    const Expr *rb = e->as.reset_.body;
+    if (!reset_body_has_base_shift(rb)) return emit_value(ctx, body, rb);
+    const char *ct = emit_type_c_name(ctx, emit_resolve_type(ctx, e->type));
+    if (!type_kind_is_order_spillable(e->type.kind) || !ct) {
+        diag_emit(DIAG_ERROR, e->span,
+                  "this `reset` has no lowering here: its function left the "
+                  "CPS backend's supported subset, and the direct emitter "
+                  "carries an abortive `shift`'s value back to its `reset` "
+                  "only for a scalar result (int, float, bool, cstr, a "
+                  "pointer). Run with TUR_TRACE_EVICT=1 to see which form "
+                  "evicted the function; a signature the backend accepts, or a "
+                  "scalar result, avoids it. This is a compiler limitation, "
+                  "not a mistake in this expression.");
+        char *tmp = fresh_tmp(ctx);
+        indent_buf(body, ctx->indent);
+        buf_printf(body, "int64_t %s = 0; /* reset: no lowering (error above) */\n", tmp);
+        return tmp;
+    }
+    char *rs  = fresh_tmp(ctx);
+    char *res = fresh_tmp(ctx);
+    indent_buf(body, ctx->indent);
+    buf_printf(body, "tur_shift_reset_ctx %s;\n", rs);
+    indent_buf(body, ctx->indent);
+    buf_printf(body, "%s %s;\n", ct, res);
+    indent_buf(body, ctx->indent);
+    buf_printf(body, "%s.prev = tur_cur_shift_reset;\n", rs);
+    indent_buf(body, ctx->indent);
+    buf_printf(body, "tur_cur_shift_reset = &%s;\n", rs);
+    indent_buf(body, ctx->indent);
+    buf_printf(body, "if (TUR_SETJMP(%s.buf) == 0) {\n", rs);
+    ctx->indent += 4;
+    bool saved_escape = ctx->in_shift_escape;
+    const char *saved_ct = ctx->shift_escape_ctype;
+    ctx->in_shift_escape = true;
+    ctx->shift_escape_ctype = ct;
+    char *v = emit_value(ctx, body, rb);
+    ctx->in_shift_escape = saved_escape;
+    ctx->shift_escape_ctype = saved_ct;
+    indent_buf(body, ctx->indent);
+    buf_printf(body, "%s = %s;\n", res, v);
+    free(v);
+    ctx->indent -= 4;
+    indent_buf(body, ctx->indent);
+    buf_puts(body, "} else {\n");
+    /* Read through the stack's head: it is memory, unlike a local the
+     * longjmp could have left stale in a register. */
+    indent_buf(body, ctx->indent + 4);
+    buf_printf(body, "memcpy(&%s, &tur_cur_shift_reset->result, sizeof %s);\n", res, res);
+    indent_buf(body, ctx->indent);
+    buf_puts(body, "}\n");
+    indent_buf(body, ctx->indent);
+    buf_printf(body, "tur_cur_shift_reset = %s.prev;\n", rs);
+    emit_localvar_record_ctype(res, ct);
+    free(rs);
+    return res;
 }
 
 char *emit_effects_cloneable_reset(EmitCtx *ctx, Buf *body, const Expr *e) {
@@ -737,11 +852,21 @@ char *emit_effects_cloneable_reset(EmitCtx *ctx, Buf *body, const Expr *e) {
  * no-op and the shift's value flows on as before (the DK abort-value model, or
  * the legacy degrade). */
 static void emit_shift_escape_abort(EmitCtx *ctx, Buf *body, const char *result) {
-    if (!ctx->in_shift_escape) return;
+    if (!ctx->in_shift_escape || !ctx->shift_escape_ctype) return;
+    /* The value is copied at the reset's own C type, bit for bit: a cast
+     * through int64_t would convert a double's value.  Guarded on the stack
+     * head, so a shift reached with no landing live keeps its old value. */
     indent_buf(body, ctx->indent);
-    buf_printf(body, "tur_cur_shift_reset->result = (int64_t)(%s);\n", result);
-    indent_buf(body, ctx->indent);
+    buf_printf(body, "if (tur_cur_shift_reset) {\n");
+    indent_buf(body, ctx->indent + 4);
+    buf_printf(body, "%s __sv = (%s)(%s);\n",
+               ctx->shift_escape_ctype, ctx->shift_escape_ctype, result);
+    indent_buf(body, ctx->indent + 4);
+    buf_puts(body, "memcpy(&tur_cur_shift_reset->result, &__sv, sizeof __sv);\n");
+    indent_buf(body, ctx->indent + 4);
     buf_puts(body, "TUR_LONGJMP(tur_cur_shift_reset->buf);\n");
+    indent_buf(body, ctx->indent);
+    buf_puts(body, "}\n");
 }
 
 char *emit_effects_shift(EmitCtx *ctx, Buf *body, const Expr *e) {

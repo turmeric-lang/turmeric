@@ -16194,6 +16194,28 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
      * zero call sites.  See docs/archive/cps-dk-sole-effect-lowering-plan.md
      * Stage G.  FiberBlock (concurrency) and tur_handler_table_t (DK handler
      * values) stay. */
+    /* dynvar-binding-not-swapped-on-fiber-switch: a `binding` belongs to the
+     * code that runs it, so a fiber's dynvar chain heads move with the fiber,
+     * like the escapes and the r7rs dynamic environment below.  The keys are
+     * per program (emitted with the defdynamics, below the fixed preamble), so
+     * each TU that has any registers a swap here from its static initializer,
+     * and tur_fiber_block_resume runs every registered swap on both sides of
+     * the switch.  A registry rather than one hook, for the reason the `any`
+     * type rows are one: on a multi-TU build every TU has its own keys.  The
+     * fiber keeps one TurDynSave per TU, made the first time a head differs,
+     * so a program with no defdynamic pays one NULL test per switch. */
+    buf_puts(out, "typedef struct TurDynSave { struct TurDynSave *next; const void *owner; void *heads[]; } TurDynSave;\n");
+    buf_puts(out, "typedef struct TurDynSwap { void (*swap)(TurDynSave **); struct TurDynSwap *next; } TurDynSwap;\n");
+    emit_rt_global(out, shared,
+                   "TurDynSwap *g_tur_dyn_swaps = 0;\n",
+                   "TurDynSwap *g_tur_dyn_swaps");
+    buf_puts(out, "static void tur_dyn_swap_register(TurDynSwap *s) {\n");
+    buf_puts(out, "    s->next = g_tur_dyn_swaps; g_tur_dyn_swaps = s;\n}\n");
+    buf_puts(out, "static TurDynSave *tur_dyn_save_new(TurDynSave **slot, const void *owner, int n) {\n");
+    buf_puts(out, "    TurDynSave *s = (TurDynSave *)calloc(1, sizeof(TurDynSave) + (size_t)n * sizeof(void *));\n");
+    buf_puts(out, "    if (!s) { fprintf(stderr, \"tur: oom\\n\"); abort(); }\n");
+    buf_puts(out, "    s->owner = owner; s->next = *slot; *slot = s;\n");
+    buf_puts(out, "    return s;\n}\n");
         /* Phase T21-A/B / P19-8: FiberBlock — cooperative fiber runtime via ucontext_t.
      * tur_current_fiber is thread-local; set/restored by tur_fiber_block_resume.
      * The per-fiber effect handler fields are gone (fiber effect runtime deleted). */
@@ -16248,6 +16270,9 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
      * the escapes.  calloc's zero is the empty one.  Raw words: the type
      * is declared only in a unit with the escape runtime. */
     buf_puts(out, "    int64_t r7dyn[8];\n");
+    /* dynvar-binding-not-swapped-on-fiber-switch: the fiber's own dynvar
+     * chain heads, one TurDynSave per TU with defdynamics (NULL: the root). */
+    buf_puts(out, "    TurDynSave *dynsave;\n");
     buf_puts(out, "};\n\n");
     emit_rt_tls(out, shared, "TUR_THREAD_LOCAL FiberBlock *tur_current_fiber = NULL;\n", "TUR_THREAD_LOCAL FiberBlock *tur_current_fiber",
                 "tur_current_fiber", "void **", "tur_tls_current_fiber_ptr", "FiberBlock **");
@@ -16497,9 +16522,11 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     }
     /* r7rs-gc: the collector scans this thread's own stack from here while
      * the fiber runs on its (heap-allocated) stack. */
+    buf_puts(out, "    for (TurDynSwap *_ds = g_tur_dyn_swaps; _ds; _ds = _ds->next) _ds->swap(&f->dynsave);\n");
     buf_puts(out, "    TUR_GC_FIBER_ENTER((void *)&_dk_save);\n");
     buf_puts(out, "    swapcontext(&f->caller_ctx, &f->ctx);\n");
     buf_puts(out, "    TUR_GC_FIBER_LEAVE();\n");
+    buf_puts(out, "    for (TurDynSwap *_ds = g_tur_dyn_swaps; _ds; _ds = _ds->next) _ds->swap(&f->dynsave);\n");
     buf_puts(out, "    f->dk_reap_v = __dk_reap_v; f->dk_reap_kind = __dk_reap_kind;\n");
     buf_puts(out, "    f->dk_reap_n = __dk_reap_n; f->dk_reap_cap = __dk_reap_cap; f->dk_entry_depth = __dk_entry_depth;\n");
     buf_puts(out, "    __dk_reap_v = _dk_rv; __dk_reap_kind = _dk_rk;\n");
@@ -16552,6 +16579,7 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "static void tur_fiber_block_free(FiberBlock *f) {\n");
     buf_puts(out, "    if (!f) return;\n");
     buf_puts(out, "    tur_fiber_local_free(f);\n");
+    buf_puts(out, "    while (f->dynsave) { TurDynSave *_n = f->dynsave->next; free(f->dynsave); f->dynsave = _n; }\n");
     buf_puts(out, "    free(f->stack); free(f);\n");
     buf_puts(out, "}\n\n");
     /* Phase T22: Fiber cancellation */
@@ -20375,6 +20403,46 @@ static int emit_program_inner(Buf *out, const Expr *program) {
                 snprintf(initfn, sizeof(initfn), "_dynvar_init_%s", mname);
                 static_init_register(initfn, STATIC_INIT_KEYS);
                 free(mname);
+            }
+
+            /* dynvar-binding-not-swapped-on-fiber-switch: this TU's half of
+             * the fiber swap (TurDynSwap, the fixed preamble).  Exchanges the
+             * thread's chain head for each key with the fiber's saved one; run
+             * on both sides of a switch, so the fiber's heads go in on resume
+             * and come back out on yield.  The fiber's save is made only once
+             * a head differs from it, so a fiber that never binds allocates
+             * nothing. */
+            {
+                uint32_t n_dyn = 0;
+                for (uint32_t i = 0; i < n_items; i++)
+                    if (items[i]->kind == EX_DEFDYNAMIC) n_dyn++;
+                buf_puts(&early_file,
+                    "static void _tur_dyn_swap_tu(TurDynSave **slot);\n"
+                    "static TurDynSwap _tur_dyn_swap_node = { _tur_dyn_swap_tu, 0 };\n"
+                    "static void _tur_dyn_swap_tu(TurDynSave **slot) {\n"
+                    "    TurDynSave *s = *slot;\n"
+                    "    while (s && s->owner != (const void *)&_tur_dyn_swap_node) s = s->next;\n"
+                    "    void *t;\n");
+                uint32_t k = 0;
+                for (uint32_t i = 0; i < n_items; i++) {
+                    const Expr *e = items[i];
+                    if (e->kind != EX_DEFDYNAMIC) continue;
+                    char *mname = mangle_dynvar_name(e->as.defdynamic_.entry->name->name);
+                    buf_printf(&early_file,
+                        "    t = pthread_getspecific(_dynvar_key_%s);\n"
+                        "    if (t != (s ? s->heads[%u] : 0)) {\n"
+                        "        if (!s) s = tur_dyn_save_new(slot, (const void *)&_tur_dyn_swap_node, %u);\n"
+                        "        pthread_setspecific(_dynvar_key_%s, s->heads[%u]);\n"
+                        "        s->heads[%u] = t;\n"
+                        "    }\n",
+                        mname, k, n_dyn, mname, k, k);
+                    free(mname);
+                    k++;
+                }
+                buf_puts(&early_file,
+                    "}\n"
+                    "static void _tur_dyn_swap_init(void) { tur_dyn_swap_register(&_tur_dyn_swap_node); }\n\n");
+                static_init_register("_tur_dyn_swap_init", STATIC_INIT_KEYS);
             }
 
             /* DV3: _TurDynSnap struct -- one field pair per dynamic var. */

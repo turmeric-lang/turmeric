@@ -197,7 +197,10 @@ What graduation accepted, rather than fixed:
     in-subset `cstr -> int` body, and compiling it only lets the program run
     far enough to reach an interpreter use-after-free that reproduces with no
     inline-C anywhere:
-    [turi-defer-in-stored-continuation-use-after-free](../reported/turi-defer-in-stored-continuation-use-after-free.md).
+    [turi-defer-in-stored-continuation-use-after-free](../archive/turi-defer-in-stored-continuation-use-after-free.md)
+    (resolved 2026-10-18). Past it, the fixture still diverges under the
+    interpreter on the timing of an abandoned body's defers:
+    [turi-fiber-handle-defers-fire-at-the-wrong-time](../reported/turi-fiber-handle-defers-fire-at-the-wrong-time.md).
 
   The two `:int`-result crashes recorded on 2026-10-04,
   `closure-drop-affine-chain-autodrop` and `httpd-mw-fold-many`, now pass.

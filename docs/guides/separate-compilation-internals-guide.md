@@ -563,7 +563,7 @@ Then look at the evidence:
 | `static declaration follows non-static declaration`, `conflicting types` | The header prototype and the `.c` definition disagree (linkage or parameter spelling) -- e.g. [sepcomp-cps-entry-wrapper-byptr-agg-param-mismatch](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/sepcomp-cps-entry-wrapper-byptr-agg-param-mismatch.md) |
 | `unknown type name 'tur_adt_X'`, `field has incomplete type` | A typedef the header did not carry or ordered wrongly -- e.g. [sepcomp-recursive-byval-fixpoint-adt-incomplete-header-type](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/sepcomp-recursive-byval-fixpoint-adt-incomplete-header-type.md) |
 | `redefinition of 'Result__...'` | A monomorph typedef without its include guard ([result-typedef-duplicated-across-modules](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/result-typedef-duplicated-across-modules.md)) |
-| Runtime `tur: unhandled effect (tag N)`, abort | `perform` in one module's TU, `handle` in another's |
+| ``error: `f` (module m) can perform the effect `E`, and this call crosses into it from another module`` | A call into another module whose callee can perform a user effect. Refused at build time since 2026-10-18; before, it built and aborted at run time with `tur: unhandled effect (tag N)` |
 
 ### A worked failure
 
@@ -599,7 +599,7 @@ this guide was written; link the reports here once they are.
 | Spec clone names are not module-qualified, so same-named generics of two modules collide at link | `emit_module.c:emit_abi_clone_name` |
 | A forced spec at an aggregate type is emitted with `int64_t` parameters and result | `ForcedAbiSpec` / `BorrowSpecInfo` carry `TypeKind`; `emit_type_from_kind` in `emit_header_inner` and `emit_implementation_inner` |
 | A user file `load`ed by two modules duplicates its instance methods | `emit_module.c:emit_inst_method_wants_external` (the residual recorded in the definstance report) |
-| An effect performed in one module's TU is not handled by a `handle` in another's | per-TU coloring; `static` `__cps` twins; the entry wrapper's fresh root continuation |
+| An effect performed in one module's TU cannot reach a `handle` in another's. It is refused at the call site, not threaded | per-TU coloring; `static` `__cps` twins; the entry wrapper's fresh root continuation; the refusal is `effect_check.c` (`foreign_check`) |
 | Nested imports resolve against the entry file's directory, and the diagnostic calls it the importing file's | `elab_module.c:elab_load_module_impl` (`module_base_dir`) |
 
 ---
@@ -624,7 +624,7 @@ Each was reproduced against the compiler this guide describes and filed in
 [`docs/reported/`](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/README.md). When one is fixed and archived,
 update the passage above that describes it and drop it from this list.
 
-- [sepcomp-cross-module-effect-unhandled](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/sepcomp-cross-module-effect-unhandled.md) -- Separately compiled: an effect performed in one module misses a handler in another
+- [sepcomp-cross-module-effect-unhandled](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/sepcomp-cross-module-effect-unhandled.md) -- Separately compiled: an effect performed in one module cannot reach a handler in another (refused at build time since 2026-10-18)
 - [spec-clone-names-not-module-qualified](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/spec-clone-names-not-module-qualified.md) -- Specializations of same-named generics in two modules collide at link
 - [forced-spec-loses-aggregate-type](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/forced-spec-loses-aggregate-type.md) -- A cross-module specialization at a struct type is emitted at `int64_t`
 - [loaded-user-definstance-duplicated-across-tus](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/loaded-user-definstance-duplicated-across-tus.md) -- A `definstance` in a file `load`-ed by two modules is defined twice

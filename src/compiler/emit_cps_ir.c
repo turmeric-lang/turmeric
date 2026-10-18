@@ -3897,6 +3897,29 @@ static bool expr_reaches_effect_op(const Expr *e, EffReach *u) {
     if (e->kind == EX_FN_DEF || e->kind == EX_FN || e->kind == EX_CLOSURE) return false;
     return cps_visit_children(e, expr_reaches_effect_op_visit, u);
 }
+/* region-bracket-blocks-effects: is this region-scope call (`with-region` /
+ * `bt-scope`) bracketed here?  The bracket lives on the cps->direct arm --
+ * push, call the thunk through its plain entry, pop -- and a plain entry seeds
+ * a fresh DK root.  A `perform` inside a thunk entered that way never saw a
+ * handler installed OUTSIDE the bracket: `(handle (with-region (fn []
+ * (perform (Bail 9)))) ...)` aborted "unhandled effect".  So a thunk that can
+ * reach an effect op is not bracketed: the call takes the ordinary routing,
+ * threaded cps->cps, exactly as it does with regions off.  That costs the
+ * rewind (the bracket is an optimisation: a generation not rewound is a
+ * saving lost, never a stale read), and it keeps a DK continuation, which
+ * carries no region note, from crossing a bracket at all.  A thunk that
+ * cannot perform keeps its bracket. */
+static bool region_scope_call_bracketed(const Binding *fn, const Expr *call) {
+    if (!emit_binding_is_region_scope(fn)) return false;
+    if (!call || call->kind != EX_CALL) return true;
+    EffReach u = {0};
+    bool performs = false;
+    for (uint32_t i = 0; i < call->as.call_.n_args && !performs; i++)
+        performs = fnvalue_arg_reaches_effect_op(call->as.call_.args[i], &u);
+    free(u.seen);
+    return !performs;
+}
+
 static bool fn_body_reaches_effect_op(const FnDef *fd) {
     EffReach u = {0};
     (void)eff_reach_first_visit(&u, fd);
@@ -4161,7 +4184,7 @@ static bool tailcall_routes_cps_to_cps(const CTerm *t) {
         char *rr = emit_reresolve_method_call(g_emit_ctx, t->as.tailcall.call_expr);
         if (rr) { free(rr); return false; }
     }
-    if (emit_binding_is_region_scope(fn)) return false;
+    if (region_scope_call_bracketed(fn, t->as.tailcall.call_expr)) return false;
     if (binding_in_s(fn)) return true;
     SEnt *fe = NULL;
     for (size_t i = 0; i < g_ents_n; i++)
@@ -9653,7 +9676,8 @@ static void emit_term_inner(CE *ce, const CTerm *t) {
              * default-path routing moves.  The residual asymmetry -- a colored
              * mono-template emitting CPS specs of a direct-style base -- is not
              * fixed here; it is the general shape this is a local answer to. */
-            bool force_direct = emit_binding_is_region_scope(t->as.tailcall.fn);
+            bool force_direct = region_scope_call_bracketed(t->as.tailcall.fn,
+                                                            t->as.tailcall.call_expr);
             if (!rr && !force_direct && (callee_colored || clone_is_cps)) {
                 /* cps->cps: both colored and emitted -- thread the continuation
                  * straight through, no trampoline.  The threaded continuation is
@@ -9881,7 +9905,8 @@ static void emit_term_inner(CE *ce, const CTerm *t) {
                  * refuse every time. */
                 int  rgn_id = -1;
                 bool rgn_reclaim = false;
-                if (emit_binding_is_region_scope(t->as.tailcall.fn) &&
+                if (region_scope_call_bracketed(t->as.tailcall.fn,
+                                                t->as.tailcall.call_expr) &&
                     crt && crt->kind != TY_NIL && crt->kind != TY_NEVER) {
                     const Expr *rce = t->as.tailcall.call_expr;
                     rgn_reclaim = rce ? emit_region_scope_reclaims(ce->ctx, &rce->type)

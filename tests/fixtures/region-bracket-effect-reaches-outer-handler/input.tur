@@ -1,0 +1,20 @@
+;; region-bracket-blocks-effects: a `perform` inside a `with-region` /
+;; `bt-scope` thunk reaches a handler installed outside the bracket -- an
+;; abortive case, a resuming one, and the same through a named function.  A
+;; handler inside the thunk keeps working too.
+(defeffect Bail [code : int] : int)
+(defeffect Ask [] : int)
+
+(defn asks [] : int (+ 5 (perform (Ask))))
+
+(defn main [] : int
+  (println (handle (with-region (fn [] : int (+ 5 (perform (Bail 9)))))
+             (Bail [c] k) c))
+  (println (handle (with-region (fn [] : int (+ 5 (perform (Ask)))))
+             (Ask [] k) (resume k 37)))
+  (println (handle (bt-scope (fn [] : int (asks)))
+             (Ask [] k) (resume k 1)))
+  (println (with-region (fn [] : int
+                          (handle (+ 5 (perform (Ask)))
+                            (Ask [] k) (resume k 2)))))
+  0)
