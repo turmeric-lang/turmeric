@@ -52,15 +52,20 @@ tag from source instead (needs `cmake` and a C compiler).
 # tap cache by name and will otherwise keep serving the stale one:
 brew untap rjungemann/turmeric 2>/dev/null || true
 
-brew tap turmeric-lang/turmeric https://github.com/turmeric-lang/turmeric
+brew tap turmeric-lang/turmeric
 brew install --HEAD turmeric-lang/turmeric/turmeric
 ```
 
-**The tap URL is not optional.** `brew tap user/repo` resolves to
-`github.com/user/homebrew-repo`, and there is no `homebrew-turmeric` repo --
-`Formula/turmeric.rb` lives in this one. Spelling the URL out is what points
-the tap at the right place; without it the tap fails before `install` is
-reached.
+The formula lives in its own tap repo,
+[`turmeric-lang/homebrew-turmeric`](https://github.com/turmeric-lang/homebrew-turmeric),
+so the bare tap name resolves. **If you tapped it before by spelling out this
+repo's URL**, that tap still points here and will stop receiving updates once
+`Formula/` is removed from this repo (after the next release). Re-point it:
+
+```sh
+brew untap turmeric-lang/turmeric
+brew tap turmeric-lang/turmeric
+```
 
 The Homebrew formula is **`--HEAD`-only**: it builds whatever is on `main` at
 that moment and verifies no checksum. That is useful for tracking development
