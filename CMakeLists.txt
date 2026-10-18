@@ -1552,31 +1552,14 @@ add_test(
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
 set_tests_properties(tur_turi_pool_sweep PROPERTIES TIMEOUT 720 DEPENDS tur)
-# saffron-lang-plan S8: the editor syntax packs.  The vim half is ACTUALLY
-# LOADED in a real Vim and queried for highlight groups -- which is what caught
-# the fused-vs-spaced annotation bug.  The vscode half is structure and pattern
-# checks only: there is no TextMate engine here, so it validates the JSON, that
-# the grammar is wired into package.json, and each regex against inputs it must
-# and must not match.  Skips cleanly without vim or python3.
-add_test(
-  NAME tur_editor_syntax
-  COMMAND bash tests/run-editor-syntax.sh
-  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
-)
-set_tests_properties(tur_editor_syntax PROPERTIES TIMEOUT 300)
 # The editor palette contract: web/editor-palette.json against the Monaco theme
-# in web/main.js and the Vim / Emacs / VS Code themes.  The editor packs are
-# headed for their own repos, which run this same script against a pinned copy.
+# in web/main.js.  The Vim, Emacs and VS Code packs live in their own repos
+# (vim-turmeric, turmeric-mode, vscode-turmeric), whose CI runs the same script
+# against this file.
 add_test(
   NAME tur_editor_palette
   COMMAND python3 tests/check-editor-palette.py web/editor-palette.json
           --main-js web/main.js
-          dark=vscode-syntax-ext/themes/turmeric-dark-color-theme.json
-          dark=vim-syntax/colors/turmeric-dark.vim
-          dark=emacs/turmeric-dark-theme.el
-          light=vscode-syntax-ext/themes/turmeric-light-color-theme.json
-          light=vim-syntax/colors/turmeric-light.vim
-          light=emacs/turmeric-light-theme.el
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
 # RP4: integration test for the FFI binding layer. Builds a fixture

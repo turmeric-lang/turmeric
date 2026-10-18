@@ -7,59 +7,44 @@ description: Vim / Neovim syntax highlighting installation and configuration
 # Vim Syntax Highlighting for Turmeric
 
 The Turmeric Vim plugin provides syntax highlighting for `.tur` files in Vim
-and Neovim. It lives in `vim-syntax/` at the repo root.
+and Neovim. It lives in its own repo,
+[turmeric-lang/vim-turmeric](https://github.com/turmeric-lang/vim-turmeric).
 
 ## Installation
-
-### Manual (no plugin manager)
-
-Copy or symlink the three directories into `~/.vim` (Vim) or `~/.config/nvim`
-(Neovim). `ftplugin` sets the comment string, two-space indent and Lisp
-indentation words:
-
-```sh
-# Vim
-cp -r vim-syntax/syntax   ~/.vim/syntax/
-cp -r vim-syntax/ftdetect ~/.vim/ftdetect/
-cp -r vim-syntax/ftplugin ~/.vim/ftplugin/
-
-# Neovim
-cp -r vim-syntax/syntax   ~/.config/nvim/syntax/
-cp -r vim-syntax/ftdetect ~/.config/nvim/ftdetect/
-cp -r vim-syntax/ftplugin ~/.config/nvim/ftplugin/
-```
-
-Alternatively, symlink the whole plugin directory so updates are picked up
-automatically:
-
-```sh
-# Vim
-ln -s "$(pwd)/vim-syntax" ~/.vim/pack/turmeric/start/turmeric
-
-# Neovim
-ln -s "$(pwd)/vim-syntax" ~/.config/nvim/pack/turmeric/start/turmeric
-```
 
 ### vim-plug
 
 ```vim
-Plug '/path/to/turmeric/vim-syntax'
+Plug 'turmeric-lang/vim-turmeric'
 ```
 
 ### lazy.nvim
 
 ```lua
-{
-  dir = "/path/to/turmeric/vim-syntax",
-  ft = "tur",
-}
+{ "turmeric-lang/vim-turmeric", ft = "turmeric" }
 ```
 
 ### packer.nvim
 
 ```lua
-use { "/path/to/turmeric/vim-syntax", ft = "tur" }
+use { "turmeric-lang/vim-turmeric", ft = "turmeric" }
 ```
+
+### Native packages (no plugin manager)
+
+```sh
+# Vim
+git clone https://github.com/turmeric-lang/vim-turmeric ~/.vim/pack/turmeric/start/vim-turmeric
+
+# Neovim
+git clone https://github.com/turmeric-lang/vim-turmeric ~/.local/share/nvim/site/pack/turmeric/start/vim-turmeric
+```
+
+### Manual
+
+Clone the repo, then copy its `syntax`, `ftdetect` and `ftplugin` directories
+into `~/.vim` (Vim) or `~/.config/nvim` (Neovim). `ftplugin` sets the comment
+string, two-space indent and Lisp indentation words.
 
 ## Features
 
@@ -113,14 +98,9 @@ file is the correct fallback -- no additional configuration is needed.
 
 ## Color schemes
 
-`vim-syntax/colors/` carries the two themes turmeric-lang.com uses, ported
+The plugin's `colors/` directory carries the two themes turmeric-lang.com uses, ported
 from the Try Turmeric editor: `turmeric-dark` and `turmeric-light`. Both need
-a true-color terminal. Copy the directory next to `syntax/` and pick one:
-
-```sh
-cp -r vim-syntax/colors ~/.vim/colors/            # Vim
-cp -r vim-syntax/colors ~/.config/nvim/colors/    # Neovim
-```
+a true-color terminal. A plugin manager or native package puts them on the runtimepath for you, so just pick one:
 
 ```vim
 set termguicolors
@@ -200,7 +180,7 @@ configuration is needed once Treesitter supports Turmeric.
   comments may mis-highlight.
 - C inline blocks (`` ```c ... ``` ``) are highlighted as `PreProc` rather
   than embedded C syntax. Embedded language highlighting is possible with
-  `:syn include` but requires `vim-syntax/syntax/turmeric.vim` to be
+  `:syn include` but requires the plugin's `syntax/turmeric.vim` to be
   restructured as a cluster.
 - The plugin itself is syntax-only. For hover docs, go-to-definition, and
   diagnostics, wire up the compiler's built-in language server (`tur lsp`)
@@ -212,8 +192,6 @@ configuration is needed once Treesitter supports Turmeric.
 
 ## See also
 
-- `vim-syntax/` -- Plugin source
-- `vim-syntax/syntax/turmeric.vim` -- Syntax definitions
-- `vim-syntax/ftdetect/turmeric.vim` -- File type detection
+- [turmeric-lang/vim-turmeric](https://github.com/turmeric-lang/vim-turmeric) -- Plugin source (syntax, filetype detection, colorschemes)
 - [vscode-guide.md](vscode-guide.md) -- VS Code extension
 - [formatter-guide.md](formatter-guide.md) -- `tur format` CLI
