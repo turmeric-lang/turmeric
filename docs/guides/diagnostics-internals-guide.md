@@ -19,7 +19,7 @@ the [LSP guide](lsp-guide.md).
 > **Trust the code over the comments.** Where a comment and this guide
 > disagree, read the code. If the code disagrees with this guide, fix the
 > guide. The last batch of stale comments in this area was fixed in
-> [stale-comments-diagnostics](../archive/stale-comments-diagnostics.md).
+> [stale-comments-diagnostics](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/stale-comments-diagnostics.md).
 
 ---
 

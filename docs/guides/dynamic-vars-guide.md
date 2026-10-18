@@ -60,7 +60,7 @@ value is the initial value visible on any thread that has never called
   such as `(Option int)`, `(Option cstr)` or `(Option Ctx)`, works. A user
   `defdata` is move-only by default, so it is refused with `TUR-E0603`, even
   one whose constructors carry no payload
-  ([defdynamic-refuses-payload-free-defdata](../reported/defdynamic-refuses-payload-free-defdata.md));
+  ([defdynamic-refuses-payload-free-defdata](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/defdynamic-refuses-payload-free-defdata.md));
   a `defopaque` newtype is the usual stand-in.
 - The declared type is the expected type of the root, of every `binding`
   override and of a `set!` value, so a generic call whose type variable is
