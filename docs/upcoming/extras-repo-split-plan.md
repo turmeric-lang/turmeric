@@ -1,8 +1,18 @@
 # Extras to break out into their own repos
 
-> Status: proposed (2026-10-16). Nothing moved. This is the audit and the
-> sequencing; each extraction is its own small PR plus a matching PR in the
-> new repo.
+> Status: in progress (2026-10-17). Step 1 (dedupe in place) is done; no
+> repo has been created yet. This is the audit and the sequencing; each
+> extraction is its own small PR plus a matching PR in the new repo.
+>
+> Step 1 corrected the plan's premise: the `editors/` copies of both grammars
+> were the NEWER ones (Sep 24 vs Sep 16; they carry the `#lang r7rs` layer and
+> `.tur.sweet`) and the ones `tests/run-editor-syntax.sh` exercised. So the
+> grammars in `vim-syntax/` and `vscode-syntax-ext/` (the directories the
+> guides point at, which stay) were replaced by the `editors/` ones, the
+> `ftplugin` and the DAP wiring were folded in, and `editors/` was deleted.
+> `vim-syntax/colors/` still links the old group names; the new syntax links
+> standard groups, so the themes apply, but those stale links are dead weight
+> to clean up when the Vim repo is cut.
 
 ## Why
 
@@ -43,7 +53,7 @@ directory; it is the work an extraction has to carry.
 | `external/mir/` | 99 | Vendored MIR (`VENDORED.md`) | Keep |
 | `web/` | 86 | Try Turmeric, the marketing site, the worker | Keep: wasm build, docs pack and CI page are all coupled to the compiler |
 | `docs/archive/` | ~23 MB | Resolved reports and plans | Keep; it is the paper trail |
-| `mobile-try.png` (root) | 1 | Stray screenshot at the repo root | Move under `docs/` or delete |
+| `mobile-try.png` (root) | 1 | Stray screenshot at the repo root, referenced by nothing | **Deleted** (step 1) |
 
 Not worth extracting: `tests/fixtures/` (100 MB, but it *is* the compiler's
 test suite), `src/`, `stdlib/`, `tools/`.
@@ -175,7 +185,7 @@ reversible until the in-tree copy is deleted.
 
 1. **Dedupe in place** (no new repo): choose the surviving Vim pack and VS
    Code extension, merge the duplicates, delete the losers, update guides.
-   Also move `mobile-try.png` out of the root.
+   Also delete the stray `mobile-try.png` (done).
 2. **Homebrew tap**: create `homebrew-turmeric`, copy `Formula/`, update the
    README, delete `Formula/` after one release.
 3. **Editors**: create the three editor repos, each with its history

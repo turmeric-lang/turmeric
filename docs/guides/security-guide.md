@@ -136,19 +136,19 @@ Tracked as D-3 in the
 ### Editor trust support
 
 Whatever the CLI promises, an editor integration should declare its posture so
-the editor can enforce it. Both VS Code extensions in this repository declare
-`capabilities.untrustedWorkspaces`:
+the editor can enforce it. The VS Code extension in this repository
+(`vscode-syntax-ext`) declares `capabilities.untrustedWorkspaces` as
+**limited**, for both of its executables:
 
-- `vscode-syntax-ext` (highlighting, formatting, LSP client) is **limited**,
-  with `turmeric.serverPath` listed as a restricted configuration. In VS Code's
-  Restricted Mode the workspace cannot redirect the language server to another
-  executable; highlighting still works.
-- `editors/vscode-turmeric` (debugging over DAP) is **limited**. Its adapter
-  executable comes from the workspace's launch configuration, so debugging a
-  repository means trusting it.
+- Highlighting, formatting and the LSP client: `turmeric.serverPath` is listed
+  as a restricted configuration. In VS Code's Restricted Mode the workspace
+  cannot redirect the language server to another executable; highlighting
+  still works.
+- Debugging over DAP: the adapter executable comes from the workspace's launch
+  configuration, so debugging a repository means trusting it.
 
 That gives Restricted Mode users the same protection Go's extension gives them,
-and it costs two blocks of JSON.
+and it costs one block of JSON.
 
 ---
 

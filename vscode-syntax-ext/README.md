@@ -170,6 +170,57 @@ let
   body
 ```
 
+## Debugging
+
+The extension also drives the Turmeric interpreter debugger through the Debug
+Adapter Protocol: it declares the `turmeric` debug type and launches `tur dap`
+as the adapter. All the debugging work happens in the compiler. Put `tur` on
+your `PATH` (or set `"tur": "/abs/path/to/tur"` in the launch config), open a
+`.tur` file and press **F5**. With no `launch.json`, VS Code debugs the current
+file and stops on entry. To customize, add a `.vscode/launch.json`:
+
+```jsonc
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "type": "turmeric",
+      "request": "launch",
+      "name": "Debug current Turmeric file",
+      "program": "${file}",
+      "args": [],
+      "stopOnEntry": true
+      // "tur": "/abs/path/to/tur"   // optional: override the tur binary
+    }
+  ]
+}
+```
+
+Supported: source breakpoints (and conditional breakpoints of the form
+`<name> <op> <literal>`, e.g. `i == 3`), step over / into / out, continue, the
+call stack, per-frame locals, `evaluate` for single names, and program stdout
+in the Debug Console. Not yet: setting a value from the Variables view, and
+expanding structured values.
+
+To debug a native binary built by `tur build --debug`, install CodeLLDB
+(`vadimcn.vscode-lldb`) and import the LLDB pretty-printers, so `Option`,
+`Result` and `Cons` locals render as Turmeric values:
+
+```jsonc
+{
+  "type": "lldb",
+  "request": "launch",
+  "name": "Debug Turmeric Native (CodeLLDB)",
+  "program": "${workspaceFolder}/build/${fileBasenameNoExtension}",
+  "initCommands": [
+    "command script import ${workspaceFolder}/tools/debug/turmeric_lldb.py"
+  ]
+}
+```
+
+The protocol details are in
+[debugger-dap-phase3](https://github.com/turmeric-lang/turmeric/blob/main/docs/artifacts/debugger-dap-phase3.md).
+
 ## Testing
 
 The extension comes with a comprehensive test file:
