@@ -11,14 +11,17 @@ The Turmeric VS Code extension provides syntax highlighting for `.tur` files
 document formatting via `tur format`, and a language client that launches the
 compiler's built-in language server (`tur lsp`).
 
-The extension lives in `vscode-syntax-ext/` at the repo root.
+The extension lives in its own repo,
+[turmeric-lang/vscode-turmeric](https://github.com/turmeric-lang/vscode-turmeric). It also wires up the
+interpreter debugger (`tur dap`); see the [debugging guide](debugging-guide.md).
 
 ## Installation
 
 ### From source
 
 ```sh
-cd vscode-syntax-ext
+git clone https://github.com/turmeric-lang/vscode-turmeric
+cd vscode-turmeric
 
 # Option A: copy to extensions directory
 mkdir -p ~/.vscode/extensions/turmeric-syntax-0.2.0
@@ -112,7 +115,7 @@ points it at the executable to use.
 ## Building a `.vsix`
 
 ```sh
-cd vscode-syntax-ext
+cd vscode-turmeric
 npm install -g @vscode/vsce
 vsce package
 # produces turmeric-syntax-X.Y.Z.vsix
@@ -120,8 +123,8 @@ vsce package
 
 ## See also
 
-- `vscode-syntax-ext/` -- Extension source
-- `vscode-syntax-ext/syntaxes/turmeric.tmLanguage.json` -- TextMate grammar
-- `vscode-syntax-ext/language-configuration.json` -- Bracket / comment config
+- [turmeric-lang/vscode-turmeric](https://github.com/turmeric-lang/vscode-turmeric) -- Extension source
+  (`syntaxes/turmeric.tmLanguage.json` is the TextMate grammar,
+  `language-configuration.json` the bracket / comment config)
 - [formatter-guide.md](formatter-guide.md) -- the `tur format` CLI the
   extension's formatter shells out to

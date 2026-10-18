@@ -293,10 +293,8 @@ call ale#linter#Define('tur', {
 
 ### VS Code
 
-The bundled VS Code extension (`vscode-syntax-ext/`) provides syntax
-highlighting only. To add LSP diagnostics, install a generic LSP client such as
-[vscode-glspc](https://marketplace.visualstudio.com/items?itemName=coc-extensions.coc-glspc)
-or configure `vscode-languageclient` in your own extension wrapper.
+The [VS Code extension](https://github.com/turmeric-lang/vscode-turmeric) provides syntax highlighting,
+formatting and an LSP client that spawns `tur lsp` (see below).
 
 A minimal `settings.json` entry using the
 [multi-lsp](https://marketplace.visualstudio.com/items?itemName=iehiehieh.multi-lsp)
@@ -314,7 +312,7 @@ extension:
 }
 ```
 
-The bundled extension in `vscode-syntax-ext/` already speaks LSP natively via
+The [`vscode-turmeric` extension](https://github.com/turmeric-lang/vscode-turmeric) already speaks LSP natively via
 `vscode-languageclient`, spawning `tur lsp` over stdio; the `turmeric.serverPath`
 setting overrides which `tur` it uses. The multi-lsp recipe above is only needed
 if you would rather drive the server yourself.

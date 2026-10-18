@@ -206,9 +206,9 @@ need the native route below.
 
 `tur dap` speaks the Debug Adapter Protocol, so any DAP client can drive the
 same debugger with breakpoints in the gutter, a call-stack view, and locals.
-The repository ships a VS Code extension for it (`vscode-syntax-ext/`, the same
+The [`vscode-turmeric` extension](https://github.com/turmeric-lang/vscode-turmeric) drives it (it is also the
 one that provides highlighting and the language server); its
-[README](https://github.com/turmeric-lang/turmeric/blob/main/vscode-syntax-ext/README.md#debugging)
+[README](https://github.com/turmeric-lang/vscode-turmeric/blob/main/README.md#debugging)
 covers `launch.json`. With the extension installed, open a `.tur` file and
 press **F5**.
 

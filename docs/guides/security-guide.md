@@ -136,8 +136,8 @@ Tracked as D-3 in the
 ### Editor trust support
 
 Whatever the CLI promises, an editor integration should declare its posture so
-the editor can enforce it. The VS Code extension in this repository
-(`vscode-syntax-ext`) declares `capabilities.untrustedWorkspaces` as
+the editor can enforce it. The VS Code extension
+([`vscode-turmeric`](https://github.com/turmeric-lang/vscode-turmeric)) declares `capabilities.untrustedWorkspaces` as
 **limited**, for both of its executables:
 
 - Highlighting, formatting and the LSP client: `turmeric.serverPath` is listed

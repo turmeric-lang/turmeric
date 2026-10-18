@@ -1552,18 +1552,6 @@ add_test(
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
 set_tests_properties(tur_turi_pool_sweep PROPERTIES TIMEOUT 720 DEPENDS tur)
-# saffron-lang-plan S8: the editor syntax packs.  The vim half is ACTUALLY
-# LOADED in a real Vim and queried for highlight groups -- which is what caught
-# the fused-vs-spaced annotation bug.  The vscode half is structure and pattern
-# checks only: there is no TextMate engine here, so it validates the JSON, that
-# the grammar is wired into package.json, and each regex against inputs it must
-# and must not match.  Skips cleanly without vim or python3.
-add_test(
-  NAME tur_editor_syntax
-  COMMAND bash tests/run-editor-syntax.sh
-  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
-)
-set_tests_properties(tur_editor_syntax PROPERTIES TIMEOUT 300)
 # RP4: integration test for the FFI binding layer. Builds a fixture
 # spice with several signature shapes and calls each export from the
 # REPL, asserting correct results, qualified-name routing, and clear

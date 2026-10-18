@@ -21,8 +21,8 @@ to it and maps DAP requests onto that API.
 tur dap        # speaks DAP on stdin/stdout
 ```
 
-You normally do not run this by hand -- an editor spawns it. The bundled VS Code
-wiring lives in [vscode-syntax-ext/](../../vscode-syntax-ext/) (`extension.js`);
+You normally do not run this by hand -- an editor spawns it. The VS Code
+wiring lives in the [vscode-turmeric](https://github.com/turmeric-lang/vscode-turmeric) extension (`extension.js`);
 install that extension, open a `.tur` file, and press F5. A minimal
 `launch.json`:
 
