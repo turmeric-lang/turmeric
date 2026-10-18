@@ -17,8 +17,11 @@ import { GH_REPO } from './repo.js';
 //   2. It is checksum-verified, and fails closed when it cannot be.
 //   3. It works on Linux, which the Homebrew one-liner never did.
 //
-// tvm itself is fetched at the release TAG rather than from main, so the
-// bootstrap does not reintroduce the very thing it removes. That is the same
+// tvm itself is fetched from the release's own assets (the workflow attaches
+// the tvm.sh / install.sh it tested with, pinned to a commit of
+// turmeric-lang/tvm), or for older releases from the tagged tree, rather than
+// from main, so the bootstrap does not reintroduce the very thing it removes.
+// Either way it is pinned to the release. That is the same
 // trust root as the release (whoever can move the tag can move the assets),
 // not a stronger one -- the guarantee being added here is "a pinned, verified
 // artifact", not "a second independent signer".
@@ -38,6 +41,7 @@ set -eu
 REPO="${GH_REPO}"
 API="\${TUR_INSTALL_API:-https://api.github.com/repos/\$REPO}"
 RAW="\${TUR_INSTALL_RAW:-https://raw.githubusercontent.com/\$REPO}"
+ASSETS="\${TUR_INSTALL_ASSETS:-https://github.com/\$REPO/releases/download}"
 
 have() { command -v "\$1" >/dev/null 2>&1; }
 
@@ -59,7 +63,7 @@ TAG="\$(fetch "\$API/releases/latest" \\
 if [ -z "\$TAG" ]; then
   echo "Could not determine the latest Turmeric release." >&2
   echo "Check https://github.com/\$REPO/releases and install with tvm:" >&2
-  echo "  https://github.com/\$REPO/blob/main/tvm/README.md" >&2
+  echo "  https://github.com/turmeric-lang/tvm#readme" >&2
   exit 1
 fi
 VER="\${TAG#v}"
@@ -70,11 +74,16 @@ TMP="\$(mktemp -d "\${TMPDIR:-/tmp}/tur-install.XXXXXX")"
 trap 'rm -rf "\$TMP"' EXIT INT TERM
 mkdir -p "\$TMP/tvm"
 for f in tvm.sh install.sh; do
-  fetch "\$RAW/\$TAG/tvm/\$f" > "\$TMP/tvm/\$f" || {
-    echo "Could not download tvm/\$f at \$TAG." >&2; exit 1; }
+  # tvm lives in turmeric-lang/tvm; the release workflow attaches the copy it
+  # was tested with to each release. A release cut BEFORE that move has no such
+  # asset but still has tvm/ in its tagged tree, so fall back to that.
+  if ! fetch "\$ASSETS/\$TAG/\$f" > "\$TMP/tvm/\$f" 2>/dev/null || [ ! -s "\$TMP/tvm/\$f" ]; then
+    fetch "\$RAW/\$TAG/tvm/\$f" > "\$TMP/tvm/\$f" || {
+      echo "Could not download \$f for \$TAG." >&2; exit 1; }
+  fi
   # A proxy that 200s an error page would otherwise be sourced as a shell
   # script. Non-empty is a weak check, but it is the cheap one worth having.
-  [ -s "\$TMP/tvm/\$f" ] || { echo "tvm/\$f downloaded empty." >&2; exit 1; }
+  [ -s "\$TMP/tvm/\$f" ] || { echo "\$f downloaded empty." >&2; exit 1; }
 done
 
 sh "\$TMP/tvm/install.sh"

@@ -480,6 +480,22 @@ jobs:
           path: artifacts
           merge-multiple: true
 
+      # tvm lives in turmeric-lang/tvm. The /install bootstrap (web/worker.js)
+      # downloads tvm.sh and install.sh from THIS release, so the installer a
+      # user runs is the one tested with this compiler. They are pinned to a
+      # commit, not a branch, and fetched BEFORE the checksum and attestation
+      # steps so they are covered by both. Bump TVM_REF to ship a tvm change.
+      - name: Attach tvm
+        env:
+          TVM_REF: 8c5f225d0cc17efc53de926258c9f02ad41bbde6
+        run: |
+          for f in tvm.sh install.sh; do
+            curl -fsSL "https://raw.githubusercontent.com/turmeric-lang/tvm/${TVM_REF}/${f}" \
+              -o "artifacts/${f}"
+            test -s "artifacts/${f}"
+          done
+          sh -n artifacts/tvm.sh && sh -n artifacts/install.sh
+
       - name: Generate checksums
         run: |
           cd artifacts

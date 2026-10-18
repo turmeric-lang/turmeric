@@ -94,10 +94,16 @@ fi
 mkdir -p "$WORK/api/releases"
 printf '{"tag_name": "%s", "name": "%s"}\n' "$TAG" "$VER" > "$WORK/api/releases/latest"
 
-# raw.githubusercontent.com/<repo>/<tag>/tvm/ -- tvm taken from THIS checkout,
-# which is what makes this a test of the tvm in the tree rather than of main.
+# tvm taken from THIS checkout (or TVM_SRC, a checkout of turmeric-lang/tvm),
+# which is what makes this a test of that tvm rather than of main. It is served
+# two ways, as GitHub does: as release assets (releases cut after tvm moved to
+# its own repo) and from raw.githubusercontent.com/<repo>/<tag>/tvm/ (older
+# tags, where tvm/ is still in the tagged tree).
+TVM_SRC="${TVM_SRC:-$ROOT/tvm}"
 mkdir -p "$WORK/raw/$TAG/tvm"
-cp "$ROOT/tvm/tvm.sh" "$ROOT/tvm/install.sh" "$WORK/raw/$TAG/tvm/"
+cp "$TVM_SRC/tvm.sh" "$TVM_SRC/install.sh" "$WORK/raw/$TAG/tvm/"
+# Marked, so a run can tell which of the two sources it was handed.
+echo '# served-from-raw-tag' >> "$WORK/raw/$TAG/tvm/tvm.sh"
 
 # A release: one tarball plus the sha256sums.txt the workflow generates.
 STAGE="$WORK/stage"
@@ -119,8 +125,10 @@ RELDIR="$WORK/releases/$TAG"
 mkdir -p "$RELDIR"
 ASSET="turmeric-$TAG-$TARGET.tar.gz"
 ( cd "$STAGE" && tar -czf "$RELDIR/$ASSET" . )
+cp "$TVM_SRC/tvm.sh" "$TVM_SRC/install.sh" "$RELDIR/"
 ( cd "$RELDIR" && { sha256sum "$ASSET" 2>/dev/null || shasum -a 256 "$ASSET"; } > sha256sums.txt )
 
+export TUR_INSTALL_ASSETS="file://$WORK/releases"
 export HOME="$WORK/home"; mkdir -p "$HOME"
 export TVM_DIR="$WORK/home/.tvm"
 export TUR_INSTALL_API="file://$WORK/api"
@@ -145,6 +153,13 @@ if [ -x "$TVM_DIR/versions/$VER/bin/tur" ]; then
   fi
 else
   bad "install lays down a runnable tur"
+fi
+
+# A release that carries tvm as an asset must be bootstrapped from it.
+if grep -q "served-from-raw-tag" "$TVM_DIR/tvm.sh" 2>/dev/null; then
+  bad "a release with tvm assets bootstraps from the assets"
+else
+  ok "a release with tvm assets bootstraps from the assets"
 fi
 
 # install.sh wires the shell rc, which is how `tur` reaches a new shell's PATH.
@@ -176,6 +191,34 @@ if grep -qi "checksum mismatch" "$WORK/run2.log"; then
   ok "the refusal says it was a checksum mismatch"
 else
   bad "the refusal says it was a checksum mismatch"
+fi
+
+# --- 3. a release cut before tvm moved --------------------------------------
+# No tvm assets on the release; tvm/ is still in the tagged tree. Restore the
+# good tarball first, since step 2 tampered with it.
+rm -rf "$TVM_DIR" "$STAGE/bin/tur"
+cat > "$STAGE/bin/tur" <<EOF
+#!/bin/sh
+case "\$1" in
+  --version|-V) echo "turmeric $VER" ;;
+  *) echo "tur($VER): \$*" ;;
+esac
+EOF
+chmod +x "$STAGE/bin/tur"
+( cd "$STAGE" && tar -czf "$RELDIR/$ASSET" . )
+( cd "$RELDIR" && { sha256sum "$ASSET" 2>/dev/null || shasum -a 256 "$ASSET"; } > sha256sums.txt )
+rm -f "$RELDIR/tvm.sh" "$RELDIR/install.sh"
+
+if sh "$WORK/install.sh" >"$WORK/run3.log" 2>&1; then
+  ok "an old release (no tvm assets) falls back to tvm/ in its tagged tree"
+else
+  bad "an old release (no tvm assets) falls back to tvm/ in its tagged tree"
+  sed 's/^/    /' "$WORK/run3.log" | tail -20
+fi
+if grep -q "served-from-raw-tag" "$TVM_DIR/tvm.sh" 2>/dev/null; then
+  ok "the fallback used the tagged tree's tvm"
+else
+  bad "the fallback used the tagged tree's tvm"
 fi
 
 echo "------------------------------------"
