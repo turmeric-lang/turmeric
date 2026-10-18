@@ -2,6 +2,42 @@
 
 All notable changes to Turmeric are documented here.
 
+## [0.67.0] -- 2026-10-18
+
+### Changed
+
+- **BREAKING -- A cross-module effect is refused under separate compilation.**
+  `tur build <dir>` now errors at the call site when a module performs an effect
+  that only another module's handler could catch, naming the remedy (handle it
+  in that module, or build as one unit). Such programs previously built cleanly
+  and aborted with "unhandled effect".
+- **Editor packs moved to their own repos.** The Vim, Emacs and VS Code syntaxes
+  now live in turmeric-lang/vim-turmeric, turmeric-mode and vscode-turmeric; the
+  old directories keep a stub README for one release. The guides point at the
+  new homes.
+- **`/install` downloads `tvm.sh` and `install.sh` from the release assets.**
+  The Homebrew docs now point at the turmeric-lang/homebrew-turmeric tap, and
+  the bare tap name resolves without a URL.
+
+### Fixed
+
+- **Arguments are evaluated left to right when a later one has a call.** `(+
+  counter (bump))` read `counter` after `bump` ran, in all three engines; an
+  earlier argument that reads mutable state is now read before a later
+  argument's call.
+- **`defdynamic` bindings move with their fiber.** Two fibers that bind and
+  yield no longer read each other's dynamic values, and a thread is not left
+  reading a binding whose frame has exited.
+- **`turi` keeps a fiber continuation a handler case may have stored.** A `set!`
+  of `k` inside a handle case followed by a resume after the handle no longer
+  reads freed memory.
+- **`reset`/`shift` work in a function the CPS backend evicts.** `(reset (+ 1
+  (shift twice 10)))` now evaluates to 20, not 21; a reset whose result is not a
+  scalar is refused with a located error instead of computed wrongly.
+- **A `perform` inside a `with-region` or `bt-scope` thunk reaches an outer
+  handler.** The thunk is no longer bracketed when an argument can reach an
+  effect op, so the program runs instead of aborting with "unhandled effect".
+
 ## [0.66.0] -- 2026-10-17
 
 ### Added
