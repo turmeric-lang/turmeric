@@ -1,0 +1,27 @@
+;; witness-dispatch-skips-arg-coercions: stdlib Comonad's `extend` through the
+;; class.  Its two instances (identity, pair) share the :int carrier, so a
+;; bare `(extend w f)` is ambiguous and the call names its instance with a
+;; witness -- which used to fail in cc, the function crossing as `void *`
+;; where `tur_poly_fn_t` is expected.
+(load "stdlib/comonad.tur")
+
+(defn add-k [k : int] : ptr<void>
+  (fn [wa : int] : int (+ (.extract @identity wa) k)))
+
+(defn main [] : int
+  (let [w (__identity_new 42)
+        k 100]
+    ;; extend f (Identity a) = Identity (f (Identity a))
+    (println (.extract @identity (.extend @identity w (fn [wa : int] : int (+ (.extract @identity wa) 1)))))  ; 43
+    ;; a capturing closure, let-bound and returned from a function
+    (let [cap (fn [wa : int] : int (+ (.extract @identity wa) k))]
+      (println (.extract @identity (.extend @identity w cap))))                                             ; 142
+    (println (.extract @identity (.extend @identity w (add-k 7))))                                          ; 49
+    ;; law: extract (extend w f) = f w
+    (let [f (fn [wa : int] : int (* (.extract @identity wa) 2))]
+      (println (= (.extract @identity (.extend @identity w f)) (f w)))))                                    ; true
+  ;; extend f (e, a) = (e, f (e, a))
+  (let [p (__pair_new 7 100)]
+    (println (.extract @pair (.extend @pair p (fn [wa : int] : int (+ (__pair_env wa) (.extract @pair wa))))))  ; 107
+    (println (__pair_env (.extend @pair p (fn [wa : int] : int 0)))))                                        ; 7
+  0)

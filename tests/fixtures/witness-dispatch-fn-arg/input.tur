@@ -1,0 +1,26 @@
+;; witness-dispatch-skips-arg-coercions: a `@Type` witness call hands its
+;; function argument to the instance's `: fn` parameter as a tur_poly_fn_t,
+;; exactly as a receiver-dispatched call does.  It used to pass the lambda as
+;; a bare `void *`, so cc rejected the program -- and the witness is the route
+;; TUR-E0020 recommends when instances share a carrier, as these two do.
+(defclass Cm [^w] (ex [wa] : int) (ext [wa f : fn] : int))
+(definstance Cm [box] (ex [wa] wa) (ext [wa f] (f wa)))
+(definstance Cm [twice] (ex [wa] wa) (ext [wa f] (f (f wa))))
+
+(defn inc [x : int] : int (+ x 1))
+
+(defn main [] : int
+  (let [k     100
+        cap   (fn [wa : int] : int (+ wa k))
+        plain (fn [wa : int] : int (* wa 2))]
+    ;; an inline lambda
+    (println (.ext @box 41 (fn [wa : int] : int (+ wa 1))))   ; 42
+    (println (.ext @twice 40 (fn [wa : int] : int (+ wa 1)))) ; 42
+    ;; a let-bound capturing closure
+    (println (.ext @box 1 cap))                               ; 101
+    (println (.ext @twice 1 cap))                             ; 201
+    ;; a let-bound captureless lambda
+    (println (.ext @box 21 plain))                            ; 42
+    ;; a named top-level function
+    (println (.ext @twice 5 inc)))                            ; 7
+  0)
