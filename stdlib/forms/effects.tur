@@ -1,0 +1,293 @@
+;;; tur/forms/effects -- algebraic effects: perform, handle, resume.
+;;;
+;;; An effect is an operation the code asks its caller to carry out. `defeffect`
+;;; declares one (`(defeffect Ask [] : int)` -- a name, its parameters, and the
+;;; type of the answer). `(perform (Ask))` raises it from anywhere below a
+;;; handler, and the nearest `handle` that has a clause for `Ask` takes over: the
+;;; clause receives the arguments and a continuation `k`, which is "the rest of
+;;; the body, waiting for an answer". `(resume k v)` gives the answer back and the
+;;; body carries on from the `perform`; a clause that never resumes ends the body
+;;; early, and its value becomes the value of the whole `handle`. This is how
+;;; logging, configuration, failure and generators are written without threading
+;;; extra arguments. effects-system-guide has the walkthrough.
+;;;
+;;; Only a `perform` written directly at top level, with no handler around it, is
+;;; caught by the compiler (TUR-E0008). One inside a function is not: if nothing
+;;; above it handles the effect, the program aborts when it gets there
+;;; (`tur: unhandled effect (tag 2)`, exit status 134, when compiled;
+;;; `unhandled effect: Ask`, exit status 1, interpreted). A function may declare
+;;; the effects it performs with `#fx{Ask}`; one that performs an effect missing
+;;; from its declared row is TUR-E0009, and `handle` removes the effects it
+;;; handles from the row.
+;;;
+;;; The compiled program lowers effects through a CPS backend. A function that
+;;; leaves its supported subset -- one whose body uses `discontinue`, say -- is
+;;; rejected with `this effect operation has no lowering here`;
+;;; `TUR_TRACE_EVICT=1` names the form that caused it. The interpreter has no such
+;;; limit. Several of the forms below differ between the two or are unfinished --
+;;; see docs/reported/effect-forms-gaps.md.
+;; Reference only: tools/gendocs.py reads the ;;@ lines, the compiler skips them.
+
+;;; perform -- raise an effect and wait for the handler's answer.
+;;;
+;;; The argument is the effect's constructor, applied to its parameters:
+;;; `(perform (Say "hi"))`. The effect must have been declared with `defeffect`
+;;; (an unknown name is `perform: unknown effect`), the argument count must match
+;;; (TUR-E0002) and each argument's type must match the declaration (TUR-E0001).
+;;; Control passes to the nearest enclosing `handle` with a clause for the effect;
+;;; if that clause calls `resume`, the `perform` evaluates to the value it passes,
+;;; with the type the effect declares.
+;;;
+;;; Parameters:
+;;;   (Effect arg ...) -- the declared effect, applied to its arguments
+;;;
+;;; Returns:
+;;;   The value the handler resumes with, of the effect's declared result type.
+;;;
+;;; Example:
+;;;   (defeffect Ask [] : int)
+;;;   (println (handle (+ 1 (perform (Ask))) (Ask [] k) (resume k 41)))  ; prints 42
+;;@form (perform (Effect arg ...))
+
+;;; handle -- run an expression with handlers for the effects it performs.
+;;;
+;;; The first argument is the body. Each pair after it is a clause head
+;;; `(Effect [param ...] k)` and the expression to run when the body performs
+;;; that effect: the params bind the effect's arguments (their number must match
+;;; the declaration, TUR-E0002) and `k` the continuation. A clause that ends in
+;;; `(resume k v)` hands `v` back to the `perform` and the body continues; a
+;;; clause that does not resume abandons the rest of the body, and its value is the
+;;; value of the `handle`. If the body finishes without performing, the `handle`
+;;; has the body's value -- there is no separate return clause. Every clause body
+;;; must have the type of the whole `handle` (TUR-E0252), or not return at all.
+;;; A clause for an effect the body never performs is the warning TUR-W0033.
+;;;
+;;; The handler is deep: it stays in place for the whole of the continuation, so
+;;; one `handle` answers every `perform` of that effect in the body. Clause bodies
+;;; run outside it -- a clause that performs an effect reaches the next `handle`
+;;; out, which can be a clause of an outer handler -- and `resume` may be called
+;;; in a non-tail position: `(* 2 (resume k 10))` doubles whatever the rest of the
+;;; body produced. Resuming `k` twice is TUR-E0201 unless it was marked
+;;; `^multishot`; `^linear` makes resuming it exactly once a requirement
+;;; (TUR-E0100 when a path does not, TUR-E0101 for a second use). See `resume`.
+;;;
+;;; Defers in the body run when the body is abandoned or finishes. When a clause
+;;; does not resume, the compiled program runs them as the `handle` returns; the
+;;; interpreter runs them later, at the end of an enclosing scope
+;;; (docs/reported/turi-fiber-handle-defers-fire-at-the-wrong-time.md).
+;;;
+;;; Parameters:
+;;;   body   -- the expression to run
+;;;   clause -- an `(Effect [param ...] k)` head followed by its handler expression,
+;;;             repeated; the head may be `(Effect [param ...] ^multishot k)`
+;;;
+;;; Returns:
+;;;   The body's value, or the value of the clause that took over.
+;;;
+;;; Example:
+;;;   (defeffect Ask [] : int)
+;;;   (defeffect Log [msg : cstr] : nil)
+;;;   (println (handle (do (perform (Log "a")) (+ (perform (Ask)) (perform (Ask))))
+;;;              (Ask [] k) (resume k 5)
+;;;              (Log [m] k) (do (println m) (resume k nil))))  ; prints a, then 10
+;;@form (handle body (Effect [param ...] k) handler-expr ...)
+
+;;; handle-shallow -- like handle, but the handler answers only one perform.
+;;;
+;;; A shallow handler is taken down after it has run once: the continuation `k` a
+;;; clause resumes runs without it, so the next `perform` of that effect reaches
+;;; an enclosing handler (or aborts as unhandled if there is none). Where a deep
+;;; `handle` is one fixed answer for the whole body, this lets a clause choose
+;;; what handles the rest, by wrapping the `resume` in another `handle`. The syntax
+;;; and the typing rules are those of `handle`. Because the body can still
+;;; perform the effect after the handler has gone, `handle-shallow` does not
+;;; remove the effect from the enclosing function's declared row: a function
+;;; declared `#fx{}` that handles only shallowly is TUR-E0009.
+;;;
+;;; Compiled, a `handle-shallow` statement at the top level of a file is
+;;; rejected (`no lowering here`) although the same `handle` is accepted; put it
+;;; in a function.
+;;;
+;;; Parameters:
+;;;   body   -- the expression to run
+;;;   clause -- an `(Effect [param ...] k)` head followed by its handler expression,
+;;;             repeated
+;;;
+;;; Returns:
+;;;   The body's value, or the value of the clause that took over.
+;;;
+;;; Example:
+;;;   (defeffect Op [] : int)
+;;;   (defn two [] #fx{Op} : int (+ (perform (Op)) (perform (Op))))
+;;;   (defn main [] : int
+;;;     (println (handle (handle-shallow (two) (Op [] k) (resume k 5))
+;;;                (Op [] k) (resume k 100)))  ; prints 105: the second perform goes outward
+;;;     0)
+;;@form (handle-shallow body (Effect [param ...] k) handler-expr ...)
+
+;;; resume -- continue the body from the perform with a value.
+;;;
+;;; Valid only on the continuation a handler clause binds (`k` in
+;;; `(Effect [p] k)`); a literal is TUR-E0001, and a continuation made by
+;;; `shift`, `call/cc` or the cloneable and serial variants is called instead,
+;;; `(k v)`. `(k v)` on a handler continuation is the same as `(resume k v)`. The
+;;; value becomes the result of the `perform`. The `resume` expression itself
+;;; yields what the rest of the body, and so the `handle`, produces -- not the
+;;; value passed in -- which is why a clause can do more work after it:
+;;; `(+ 100 (resume k 1))`.
+;;;
+;;; A continuation is one-shot: resuming it twice is TUR-E0201. Mark it
+;;; `^multishot` -- `(Flip [] ^multishot k)` -- to resume it any number of times,
+;;; each running the rest of the body afresh; `(+ (resume k 10) (resume k 20))`
+;;; explores two answers (the standard way to write search and backtracking).
+;;; `^linear` demands exactly one resume or `discontinue` on every path. A
+;;; `^multishot` continuation cannot be resumed inside `atomically` (TUR-E0502).
+;;; Not checked: the value is not compared with the effect's declared result
+;;; type, so `(resume k "x")` for an effect that answers `int` compiles and
+;;; delivers the string's address as an integer.
+;;;
+;;; Parameters:
+;;;   k     -- the continuation bound by the handler clause
+;;;   value -- the value the `perform` evaluates to
+;;;
+;;; Returns:
+;;;   The value the rest of the body produces.
+;;;
+;;; Example:
+;;;   (defeffect Ask [] : int)
+;;;   (println (handle (+ 1 (perform (Ask))) (Ask [] k) (* 2 (resume k 10))))  ; prints 22
+;;;   (println (handle (+ 1 (perform (Ask)))
+;;;              (Ask [] ^multishot k) (+ (resume k 10) (resume k 20))))  ; prints 32
+;;@form (resume k value)
+
+;;; discontinue -- abort the body from a handler clause with an exception.
+;;;
+;;; Meant to resume the continuation by raising a failure at the `perform`
+;;; instead of returning a value, so that the body's cleanup runs. It is typed
+;;; `nil`, so a `handle` whose clause is a bare `discontinue` must itself be of
+;;; type `nil` (TUR-E0252 otherwise). Not usable today: the compiled program
+;;; rejects any function that contains it (`unsupported form: EX_DISCONTINUE`
+;;; under `TUR_TRACE_EVICT=1`, then `no lowering here`), and the interpreter
+;;; aborts with `*** stack smashing detected ***`. To end the body early, leave
+;;; the clause without resuming it; for a failure the caller sees, return a
+;;; `Result` from the clause. Like `resume`, it consumes the continuation, so
+;;; using `k` afterwards is TUR-E0201 (TUR-E0101 for a `^linear` one), and it
+;;; satisfies the `^linear` requirement.
+;;;
+;;; Parameters:
+;;;   k         -- the continuation bound by the handler clause
+;;;   exception -- the failure to raise at the `perform`, normally a string
+;;@form (discontinue k exception)
+
+;;; try-with -- another spelling of handle.
+;;;
+;;; Exactly `handle`: the body, then `(Effect [param ...] k)` clauses each followed
+;;; by its expression, with the same typing, `resume` and `^multishot` rules. The
+;;; name is there for readers who know it from OCaml, and for async code, where
+;;; `(try-with (await (fetch-file path)) (FileError [p] k) (resume k default))` reads as an
+;;; exception handler (async-await-guide). Compiled, a `try-with` statement at the
+;;; top level of a file is rejected (`no lowering here`) although `handle` there
+;;; is accepted; inside a function it behaves like `handle`.
+;;;
+;;; Parameters:
+;;;   body   -- the expression to run
+;;;   clause -- an `(Effect [param ...] k)` head followed by its handler expression,
+;;;             repeated
+;;;
+;;; Returns:
+;;;   The body's value, or the value of the clause that took over.
+;;;
+;;; Example:
+;;;   (defeffect Ask [] : int)
+;;;   (defn main [] : int
+;;;     (println (try-with (+ 1 (perform (Ask))) (Ask [] k) (resume k 41)))  ; prints 42
+;;;     0)
+;;@form (try-with body (Effect [param ...] k) handler-expr ...)
+
+;;; with-handler -- run a body under a handler value.
+;;;
+;;; With exactly two arguments, the first is a handler value and the second the
+;;; body: `(with-handler h body)`. A handler value is built by `(handler (Effect
+;;; [param ...] k) expr)`, by `compose-handlers`, or is a variable or parameter
+;;; holding one, so a handler can be defined once and applied to many bodies or
+;;; passed to a function. Its type is `(handler Effect Param Result)`: the effect,
+;;; the type of its first parameter (`int` when it has none) and the type its
+;;; clause produces. A non-handler first argument is `first argument must be a
+;;; handler value`. With any other number of arguments it is `handle`, body first.
+;;;
+;;; `(with-handler (handler ...) body)` with a literal handler removes the effect
+;;; from the enclosing function's row like `handle`; a handler held in a variable
+;;; removes nothing, so a function declared `#fx{}` that applies a variable
+;;; handler is TUR-E0009. Compiled, a `with-handler` statement at the top level of
+;;; a file is rejected (`no lowering here`); inside a function it works.
+;;;
+;;; Parameters:
+;;;   handler -- a handler value
+;;;   body    -- the expression to run under it
+;;;
+;;; Returns:
+;;;   The body's value, or the value of the clause that took over.
+;;;
+;;; Example:
+;;;   (defeffect Ask [] : int)
+;;;   (defn ask-plus [n : int] : int (+ n (perform (Ask))))
+;;;   (defn main [] : int
+;;;     (let [h (handler (Ask [] k) (resume k 41))]
+;;;       (println (with-handler h (ask-plus 1))))  ; prints 42
+;;;     0)
+;;@form (with-handler handler body)
+;;@form (with-handler body (Effect [param ...] k) handler-expr ...)
+
+;;; compose-handlers -- combine two handler values into one.
+;;;
+;;; `(compose-handlers h1 h2)` is a handler that handles what either does; both
+;;; arguments must be handler values (`first argument must be a handler value`
+;;; otherwise). They must handle different effects: an effect in both is
+;;; TUR-E0251. The design (first-class-handlers-semantics) says
+;;; `(with-handler (compose-handlers h1 h2) body)` means
+;;; `(with-handler h1 (with-handler h2 body))`, h1 outermost. Today that holds only
+;;; while no clause performs an effect the other handler answers: a clause of one
+;;; handler that performs an effect of the other aborts as unhandled, whichever
+;;; way round they are composed and on both engines, where the nested form works.
+;;; Nest `with-handler`s when one handler's clauses need the other.
+;;;
+;;; Parameters:
+;;;   h1 -- a handler value
+;;;   h2 -- a handler value for different effects
+;;;
+;;; Returns:
+;;;   A handler value to pass to `with-handler`.
+;;;
+;;; Example:
+;;;   (defeffect Ask [] : int)
+;;;   (defeffect Log [msg : cstr] : nil)
+;;;   (defn both [] : int
+;;;     (with-handler (compose-handlers (handler (Ask [] k) (resume k 41))
+;;;                                     (handler (Log [m] k) (do (println m) (resume k nil))))
+;;;       (do (perform (Log "hi")) (+ 1 (perform (Ask))))))
+;;;   (println (both))  ; prints hi, then 42
+;;@form (compose-handlers h1 h2)
+
+;;; cont? -- can this continuation still be invoked?
+;;;
+;;; True for a continuation that has not been used up: a handler clause's `k`
+;;; before it is resumed, an escape continuation while its `call/cc` is still on
+;;; the stack, and a cloneable or serial continuation always, since those can be
+;;; invoked repeatedly. Anything that is not a continuation -- `5` -- gives false.
+;;; Compiled, a handler's `k` is false once it has been resumed, even a
+;;; `^multishot` one, so it cannot guard a second `resume`; the interpreter still
+;;; answers true after a resume, and calling `cont?` on a `^multishot`
+;;; continuation between two `resume`s makes the second one fail with `this
+;;; continuation has already been resumed`. Use it before the first use.
+;;;
+;;; Parameters:
+;;;   k -- a continuation, or any value
+;;;
+;;; Returns:
+;;;   `true` if `k` can still be invoked, else `false`.
+;;;
+;;; Example:
+;;;   (cont? 5)  ; => false
+;;;   (defeffect Ask [] : int)
+;;;   (println (handle (+ 1 (perform (Ask))) (Ask [] k) (if (cont? k) (resume k 41) 0)))  ; prints 42
+;;@form (cont? k)

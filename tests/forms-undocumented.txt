@@ -56,17 +56,6 @@ open
 &
 &mut
 
-# Effects and handlers
-perform
-handle
-handle-shallow
-resume
-discontinue
-try-with
-with-handler
-compose-handlers
-cont?
-
 # Delimited and undelimited continuations
 shift
 reset
