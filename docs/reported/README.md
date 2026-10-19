@@ -34,6 +34,12 @@ sentence above does not cover them. If you touch this file, check
 `ls docs/reported/` against it -- an index that silently omits a quarter of the
 directory is worse for triage than no index.
 
+## Found surveying guide coverage of the language primitives (filed 2026-10-19)
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [missing-guides-for-language-primitives](missing-guides-for-language-primitives.md) | low-medium (documentation) | Of 163 reserved forms and builtins searched across 174 guides, six groups have no user-facing guide: the unsafe primitives (`ptr-*`, `raw-*`, `transmute`, ...), the operators (`+.` and friends are in no guide at all), the builtin `rc`/`weak`/`ref` forms, the `panic-payload-*` forms, the handler variants (`handle-shallow`, `try-with`, `discontinue`, `compose-handlers`), and the threading macros, `let*` and `defrec`. Each gap names where its guide or section should go. |
+
 ## Found executing the open reports (filed 2026-10-18)
 
 | Report | Severity | One line |
