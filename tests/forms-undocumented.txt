@@ -9,8 +9,6 @@
 # docs/reported/api-docs-miss-language-primitives.md tracks the work.
 
 # Definitions
-defprotocol
-make-protocol
 
 # Binding and control
 let
@@ -33,7 +31,6 @@ binding
 
 # Functions and values
 fn
-make-session
 
 
 # Effects and handlers
