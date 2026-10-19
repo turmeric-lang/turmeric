@@ -9,9 +9,6 @@
 # docs/reported/api-docs-miss-language-primitives.md tracks the work.
 
 # Definitions
-defclass
-definstance
-defeffect
 defprotocol
 make-protocol
 extern-c
