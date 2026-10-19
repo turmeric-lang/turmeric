@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/turmeric-lang/turmeric/actions/workflows/ci.yml/badge.svg)](https://github.com/turmeric-lang/turmeric/actions/workflows/ci.yml)
 
-**Latest release:** `v0.67.1` -- Docs site section links now land below the sticky topbar instead of hiding behind it.
+**Latest release:** `v0.67.2` -- Fixes a double definition when a module is both loaded and imported, plus `tur explain` on info codes and `(Option T)` dynamic vars.
 
 ## What
 
