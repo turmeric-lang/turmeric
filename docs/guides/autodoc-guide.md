@@ -122,6 +122,47 @@ global, so an export list never names one.
 `(doc 'fmap)` prints the method -- unless a function of the same name exists,
 which keeps the name.
 
+### Special forms and builtins
+
+A name the compiler implements itself -- `+`, `ptr-add`, `rc/of`, `handle` --
+has no definition for a docstring to sit on. Document it in `stdlib/forms/`
+with a `;;;` block over a **doc-only declaration**: a `;;@builtin` line in the
+`defn` signature grammar for something called like a function, or a `;;@form`
+line holding the syntax as written for a special form. Both are `;;` comments,
+so the compiler skips them; `tools/gendocs.py` reads them.
+
+```turmeric
+;;; ptr-add -- advance a pointer by a number of BYTES.
+;;;
+;;; `(char *)p + n`: the offset is in bytes, not words.
+;;;
+;;; Parameters:
+;;;   p -- the base address
+;;;   n -- the offset in bytes
+;;;
+;;; Returns:
+;;;   The address `n` bytes past `p`.
+;;;
+;;; Example:
+;;;   (let [p (raw-malloc 16)] (raw-free p))
+;;@builtin (ptr-add [p : ptr<void> n : int] : ptr<void>)
+
+;;; unsafe -- run code that uses the unsafe builtins.
+;;; ...
+;;@form (unsafe body ...)
+```
+
+Consecutive declaration lines for one name are one entry: a form with several
+shapes, or a builtin with several overloads, writes one line per shape and the
+card shows them all. The doc-lookup entry carries the signature too, since
+there is no source to read it from, and a stdlib entry wins over the one-line
+builtin table in `src/turi/docstrings.c` (`tur_doc_prefer`).
+
+`tests/check-forms-documented.sh` (ctest `tur_forms_documented_lint`) keeps
+the set complete: every reserved special form and public builtin must be
+documented, or be listed in `tests/forms-undocumented.txt`, which may only
+shrink; and a declaration must name something the compiler knows.
+
 ### Module docstrings
 
 A contiguous `;;;` block at the very top of a file -- **before the first real
@@ -206,26 +247,33 @@ to its docstring via a static table:
 
 ```
 tur> (doc cons)
-cons -- prepend a value to a list.
+cons -- allocate a cons cell: a head word and a tail.
+
+(cons [head :T tail :int] :int)
+
+The cell is the `{head, tail}` pair of 8-byte words that `*args*`,
+variadic rest parameters and tur/list's untyped lists are built from.  The
+head may be any word-sized value; the tail is another cell or 0, the empty
+list.  Read it back with `car` / `cdr` (tur/list).  The result is a bare
+`int`, so the type checker cannot help; prefer `(List T)` from
+tur/list-typed in new code.
 
 Parameters:
-  value  the element to prepend
-  next   the existing list (or nil-value for empty)
+  head -- the first element
+  tail -- the rest of the list, or 0
 
 Returns:
-  A new Cons cell pointing to next.
+  The new cell, as an `int`.
 
 Example:
-  (cons 1 (cons 2 (nil-value)))  ; => (1 2)
-
-Since: Phase B1
+  (car (cdr (cons 1 (cons 2 0))))  ; => 2
 ```
 
 `(doc name)` accepts a bare symbol (`(doc cons)`), a quoted one
 (`(doc 'cons)`), or a string (`(doc "cons")`). The macro reads the name at
 expansion time and expands to `(doc-print "cons")`, which prints the entry --
-or the builtin's description for a special form like `let` -- or a
-"No documentation found." message.
+or, for a special form with no stdlib entry yet, its one-line description
+from `src/turi/docstrings.c` -- or a "No documentation found." message.
 
 `doc-print` and `doc-lookup` are interpreter natives, available in `tur repl`,
 `tur --interpret`, and the web playground with no import. They read the

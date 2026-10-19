@@ -827,6 +827,12 @@ The separator can also be any non-comment, non-blank, non-definition form
   and lists the instances itself. See
   [autodoc-guide](docs/guides/autodoc-guide.md#typeclasses).
 - **Typeclass instances** (`definstance`): single-line summary
+- **Special forms and compiler builtins**: a full docstring over a
+  `;;@builtin (name [params] : ret)` or `;;@form (syntax ...)` line in
+  `stdlib/forms/`. A new reserved form or builtin must get one, or a line in
+  `tests/forms-undocumented.txt` (`tests/check-forms-documented.sh` fails
+  otherwise). See
+  [autodoc-guide](docs/guides/autodoc-guide.md#special-forms-and-builtins).
 
 ## Generated Docs
 
