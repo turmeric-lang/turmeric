@@ -899,7 +899,7 @@ CSS = """\
   --text-dim:      #978874;
 
   --scrim:         rgba(42,32,22,0.35);
-  --logo-filter:   brightness(0.74) saturate(1.15);
+  --logo-filter:   brightness(0.80) saturate(1.2);
 
   --syn-kw:        #965500;
   --syn-str:       #AE3C26;
