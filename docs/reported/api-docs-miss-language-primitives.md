@@ -17,6 +17,23 @@ change, on branch `claude/typeclass-api-docs-1mmix5`.
 
 ## 1. Compiler primitives have no API reference
 
+> **Narrowed 2026-10-19:** the decision is the doc-only stdlib file. Pages
+> under `stdlib/forms/` hold `;;;` blocks over `;;@builtin` / `;;@form`
+> declaration lines -- `;;` comments the compiler skips and `tools/gendocs.py`
+> reads (autodoc-guide, "Special forms and builtins"), so the site, `(doc ...)`
+> and `tur doc` read one source, doctests included; a stdlib entry now wins
+> over the one-line C table (`tur_doc_prefer`). **Every public builtin in
+> `table_` is documented** (`tur/forms/operators`, `unsafe`, `references`,
+> `core`; `bit-shr` in `tur/bits`). The drift check exists:
+> `tests/check-forms-documented.sh` (ctest `tur_forms_documented_lint`).
+> **Left: 100 special forms**, listed by group in
+> `tests/forms-undocumented.txt` -- the definition forms, binding and control,
+> casts and existentials, effects and handlers, continuations, generators and
+> STM, panics, and the GC counters. Writing the builtin pages turned up five
+> implementation bugs, filed separately (`integer-mod-by-zero-...`,
+> `sized-int-arithmetic-...`, `unsafe-builtins-...`, `ref-weak-builtins-...`,
+> `show-line-of-option-...`).
+
 The API pages and `stdlib/docstrings.tur` are generated from stdlib `;;;`
 docstrings only, so anything the compiler implements itself has no source for
 `tools/gendocs.py` to read.

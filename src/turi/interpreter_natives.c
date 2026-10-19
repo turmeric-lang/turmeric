@@ -6557,8 +6557,7 @@ static TuriValue native_doc_print(TuriEnv *env, TuriValue *args, uint32_t n,
     if (!turi_env_has_cap(env, TURI_CAP_IO))
         return turi_error("doc-print: capability denied (io)");
     const char *name = (n >= 1 && args[0].tag == TURI_CSTR) ? args[0].as_cstr : NULL;
-    const char *doc  = name ? turi_doc_lookup_builtin(name) : NULL;
-    if (!doc && name) doc = tur_docstring_lookup(name);
+    const char *doc  = name ? tur_doc_prefer(name, tur_docstring_lookup(name)) : NULL;
     puts(doc ? doc : "No documentation found.");
     return turi_nil();
 }

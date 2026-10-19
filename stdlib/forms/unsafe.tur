@@ -1,0 +1,339 @@
+;;; tur/forms/unsafe -- the unsafe block, raw pointers, raw memory and dynamic loading.
+;;;
+;;; The compiler implements these itself (src/compiler/elab_unsafe.c), so
+;;; there is nothing to import.  This file is reference only: it declares
+;;; nothing the compiler reads.
+;;;
+;;; Every builtin here is refused outside an enclosing `(unsafe ...)` block or
+;;; a function declared `#fx{Unsafe}`.  None is checked at run time: a bad
+;;; pointer or offset is undefined behaviour, exactly as in C.
+;;;
+;;; Pointers are `ptr<void>`, and the pointer builtins read and write whole
+;;; 8-byte words (`int64_t`): `ptr-deref` is `*(int64_t *)p`, the unchecked
+;;; array builtins index in words, and `ptr-add` / `ptr-sub` offset in bytes.
+;;; A `ptr<void>` from `raw-malloc` is move-typed: passing it to a function
+;;; consumes it (TUR-E0201 on a second use), while the builtins here borrow it.
+;;;
+;;; Some of these misbehave today, on one engine or both -- see
+;;; docs/reported/unsafe-builtins-wrong-or-engine-dependent.md.
+;; Reference only: tools/gendocs.py reads the ;;@ lines, the compiler skips them.
+
+;;; unsafe -- run code that uses the unsafe builtins.
+;;;
+;;; Evaluates the body forms in order and returns the last one's value.
+;;; Inside it, the builtins on this page and calls to `#fx{Unsafe}` functions
+;;; are allowed.  The block discharges the `Unsafe` effect: a function whose
+;;; unsafe code is all inside `(unsafe ...)` has no `Unsafe` in its row, so a
+;;; safe wrapper over an unsafe primitive is an ordinary function to its
+;;; callers.  A function annotated `#fx{Unsafe}` gets the same permission for
+;;; its whole body, and its callers need a block of their own.
+;;;
+;;; Lints: an empty block warns; a block of more than 20 forms warns (change
+;;; the limit with `--lint-unsafe-max-lines=N`); `--lint-unsafe` also warns
+;;; on a nested block.
+;;;
+;;; Parameters:
+;;;   body -- the forms to evaluate
+;;;
+;;; Returns:
+;;;   The value of the last body form.
+;;;
+;;; Example:
+;;;   (unsafe (+ 1 2))  ; => 3
+;;@form (unsafe body ...)
+
+;;; raw-malloc -- allocate uninitialized memory.
+;;;
+;;; C's `malloc`.  Release the block with `raw-free`.  The result is
+;;; move-typed; see the module notes.
+;;;
+;;; Parameters:
+;;;   size -- the number of bytes
+;;;
+;;; Returns:
+;;;   A pointer to the block, or a null pointer when allocation fails.
+;;;
+;;; Example:
+;;;   (let [p (raw-malloc 8)] (ptr-write p 42) (let [v (ptr-deref p)] (raw-free p) v))  ; => 42
+;;@builtin (raw-malloc [size : int] : ptr<void>)
+
+;;; raw-free -- release memory from raw-malloc or raw-realloc.
+;;;
+;;; C's `free`.  A null pointer is a no-op; freeing anything else twice is
+;;; undefined behaviour.
+;;;
+;;; Parameters:
+;;;   p -- the block to release
+;;;
+;;; Example:
+;;;   (let [p (raw-malloc 8)] (raw-free p))
+;;@builtin (raw-free [p : ptr<void>] : nil)
+
+;;; raw-realloc -- resize a block, keeping its contents.
+;;;
+;;; C's `realloc`: the block may move, so use the returned pointer and not
+;;; `p`.  Not implemented by the interpreter yet (it returns nil).
+;;;
+;;; Parameters:
+;;;   p    -- the block to resize (or a null pointer, to allocate)
+;;;   size -- the new size in bytes
+;;;
+;;; Returns:
+;;;   The resized block, or a null pointer when allocation fails (`p` is then
+;;;   still valid).
+;;;
+;;; Example:
+;;;   (let [p (raw-realloc (raw-malloc 8) 64)] (array-set-unchecked p 7 3) (let [v (array-get-unchecked p 7)] (raw-free p) v))  ; => 3
+;;@builtin (raw-realloc [p : ptr<void> size : int] : ptr<void>)
+
+;;; raw-memcpy -- copy bytes between two blocks.
+;;;
+;;; C's `memcpy`: the blocks must not overlap.
+;;;
+;;; Parameters:
+;;;   dest -- where to copy to
+;;;   src  -- where to copy from
+;;;   n    -- the number of bytes
+;;;
+;;; Example:
+;;;   (let [p (raw-malloc 8) q (raw-malloc 8)] (ptr-write p 1234) (raw-memcpy q p 8) (let [v (ptr-deref q)] (raw-free p) (raw-free q) v))  ; => 1234
+;;@builtin (raw-memcpy [dest : ptr<void> src : ptr<void> n : int] : nil)
+
+;;; raw-memset -- fill bytes with one value.
+;;;
+;;; C's `memset`: the low 8 bits of `byte` are written to each of the `n`
+;;; bytes at `dest`.
+;;;
+;;; Parameters:
+;;;   dest -- the block to fill
+;;;   byte -- the fill value
+;;;   n    -- the number of bytes
+;;;
+;;; Example:
+;;;   (let [p (raw-malloc 16)] (raw-memset p 0 16) (let [v (array-get-unchecked p 1)] (raw-free p) v))  ; => 0
+;;@builtin (raw-memset [dest : ptr<void> byte : int n : int] : nil)
+
+;;; ptr-deref -- read the 8-byte word a pointer points at.
+;;;
+;;; `*(int64_t *)p`.  The word is returned as an `int`, whatever was stored.
+;;;
+;;; Parameters:
+;;;   p -- the address to read
+;;;
+;;; Returns:
+;;;   The word at `p`.
+;;;
+;;; Example:
+;;;   (let [x 41] (ptr-deref (ptr-of x)))  ; => 41
+;;@builtin (ptr-deref [p : ptr<void>] : int)
+
+;;; ptr-write -- store an 8-byte word through a pointer.
+;;;
+;;; `*(int64_t *)p = value`.
+;;;
+;;; Parameters:
+;;;   p     -- the address to write
+;;;   value -- the word to store
+;;;
+;;; Example:
+;;;   (let [p (raw-malloc 8)] (ptr-write p 7) (let [v (ptr-deref p)] (raw-free p) v))  ; => 7
+;;@builtin (ptr-write [p : ptr<void> value : int] : nil)
+
+;;; ptr-add -- advance a pointer by a number of BYTES.
+;;;
+;;; `(char *)p + n`: the offset is in bytes, not words -- the second word of
+;;; a block is `(ptr-add p 8)`.
+;;;
+;;; Parameters:
+;;;   p -- the base address
+;;;   n -- the offset in bytes
+;;;
+;;; Returns:
+;;;   The address `n` bytes past `p`.
+;;;
+;;; Example:
+;;;   (let [p (raw-malloc 16)] (ptr-write (ptr-add p 8) 7) (let [v (array-get-unchecked p 1)] (raw-free p) v))  ; => 7
+;;@builtin (ptr-add [p : ptr<void> n : int] : ptr<void>)
+
+;;; ptr-sub -- move a pointer back by a number of BYTES.
+;;;
+;;; `(char *)p - n`.
+;;;
+;;; Parameters:
+;;;   p -- the base address
+;;;   n -- the offset in bytes
+;;;
+;;; Returns:
+;;;   The address `n` bytes before `p`.
+;;;
+;;; Example:
+;;;   (let [p (raw-malloc 16)] (ptr-write p 5) (let [v (ptr-deref (ptr-sub (ptr-add p 8) 8))] (raw-free p) v))  ; => 5
+;;@builtin (ptr-sub [p : ptr<void> n : int] : ptr<void>)
+
+;;; ptr-null? -- is a pointer null?
+;;;
+;;; The interpreter answers wrongly today; see the module notes.
+;;;
+;;; Parameters:
+;;;   p -- the pointer to test
+;;;
+;;; Returns:
+;;;   `true` for a null pointer.
+;;;
+;;; Example:
+;;;   (let [p (raw-malloc 8)] (let [n (ptr-null? p)] (raw-free p) n))  ; => false
+;;@builtin (ptr-null? [p : ptr<void>] : bool)
+
+;;; ptr-of -- the address of a value.
+;;;
+;;; C's `&`.  The pointer is good only while the value's storage is live --
+;;; the address of a local is dangling once its scope ends.
+;;;
+;;; Parameters:
+;;;   x -- the value whose address is wanted
+;;;
+;;; Returns:
+;;;   A pointer to `x`.
+;;;
+;;; Example:
+;;;   (let [x 41] (ptr-deref (ptr-of x)))  ; => 41
+;;@builtin (ptr-of [x : T] : ptr<void>)
+
+;;; array-get-unchecked -- read word `i` of a block, with no bounds check.
+;;;
+;;; `((int64_t *)p)[i]`: the index counts 8-byte words, not bytes.
+;;;
+;;; Parameters:
+;;;   p -- the block
+;;;   i -- the word index
+;;;
+;;; Returns:
+;;;   The word at index `i`.
+;;;
+;;; Example:
+;;;   (let [p (raw-malloc 24)] (array-set-unchecked p 2 99) (let [v (array-get-unchecked p 2)] (raw-free p) v))  ; => 99
+;;@builtin (array-get-unchecked [p : ptr<void> i : int] : int)
+
+;;; array-set-unchecked -- write word `i` of a block, with no bounds check.
+;;;
+;;; `((int64_t *)p)[i] = value`.
+;;;
+;;; Parameters:
+;;;   p     -- the block
+;;;   i     -- the word index
+;;;   value -- the word to store
+;;;
+;;; Example:
+;;;   (let [p (raw-malloc 24)] (array-set-unchecked p 0 1) (let [v (ptr-deref p)] (raw-free p) v))  ; => 1
+;;@builtin (array-set-unchecked [p : ptr<void> i : int value : int] : nil)
+
+;;; unsafe-cast -- a C cast to int.
+;;;
+;;; `(int64_t)x`.  The target type is required but not read yet: the result is
+;;; always an `int`, converted as C converts (a `float` truncates, `true` is 1).
+;;;
+;;; Parameters:
+;;;   x    -- the value to convert
+;;;   type -- the target type (currently ignored)
+;;;
+;;; Returns:
+;;;   `x` as an `int`.
+;;;
+;;; Example:
+;;;   (unsafe-cast true :int)  ; => 1
+;;@form (unsafe-cast x type)
+
+;;; reinterpret -- meant to reinterpret a value's bits as another type.
+;;;
+;;; The target type must have the same size as `x`'s, checked at compile time.
+;;; Today the result is an `int` converted as `unsafe-cast` converts, not a
+;;; bit-for-bit copy; use `float->bits` / `bits->float` (tur/bits) for a
+;;; float's bit pattern.
+;;;
+;;; Parameters:
+;;;   x    -- the value
+;;;   type -- the target type, a primitive kind such as `:int`
+;;;
+;;; Returns:
+;;;   An `int`.
+;;@form (reinterpret x type)
+
+;;; transmute -- meant to reinterpret a value's bits as another type.
+;;;
+;;; The target type must have the same size as `x`'s, checked at compile time
+;;; (`(transmute (:: 1 :int32) :int)` is an error), and the result has the
+;;; target type.  Today the compiled conversion is a C cast, not a
+;;; bit-for-bit copy, and the interpreter passes `x` through unchanged; use
+;;; `float->bits` / `bits->float` (tur/bits) for a float's bit pattern.
+;;;
+;;; Parameters:
+;;;   x    -- the value
+;;;   type -- the target type, a primitive kind such as `:float`
+;;;
+;;; Returns:
+;;;   `x` as the target type.
+;;@form (transmute x type)
+
+;;; c-call -- call a C function declared with extern-c.
+;;;
+;;; The function must be in scope from an `extern-c` declaration.  The
+;;; result is typed `int`, whatever the declaration says; calling the
+;;; `extern-c` name directly keeps its declared types and needs no
+;;; `(unsafe ...)`.
+;;;
+;;; Parameters:
+;;;   f    -- the extern-c function's name
+;;;   args -- its arguments
+;;;
+;;; Returns:
+;;;   The C function's result, as an `int`.
+;;;
+;;; Example:
+;;;   (extern-c labs [x : int] : int)
+;;;   (unsafe (c-call labs -5))  ; prints 5
+;;@form (c-call f args ...)
+
+;;; dlopen -- load a shared library at run time.
+;;;
+;;; POSIX `dlopen(path, RTLD_LAZY)`.  Look symbols up with `dlsym` and call
+;;; them through `call-ptr`; see ffi-guide.  Needs the FFI capability under a
+;;; sandboxed interpreter.
+;;;
+;;; Parameters:
+;;;   path -- the library's file name or path
+;;;
+;;; Returns:
+;;;   A library handle, or a null pointer when it cannot be loaded.
+;;;
+;;; Example:
+;;;   (let [h (dlopen "libm.so.6")] (let [ok (not (ptr-null? h))] (dlclose h) ok))  ; => true  ; doctest: needs libm.so.6 (Linux)
+;;@builtin (dlopen [path : cstr] : ptr<void>)
+
+;;; dlsym -- look a symbol up in a loaded library.
+;;;
+;;; POSIX `dlsym`.
+;;;
+;;; Parameters:
+;;;   h    -- the handle from `dlopen`
+;;;   name -- the symbol's name
+;;;
+;;; Returns:
+;;;   The symbol's address, or a null pointer when the library lacks it.
+;;;
+;;; Example:
+;;;   (let [h (dlopen "libm.so.6")] (let [ok (not (ptr-null? (dlsym h "cos")))] (dlclose h) ok))  ; => true  ; doctest: needs libm.so.6 (Linux)
+;;@builtin (dlsym [h : ptr<void> name : cstr] : ptr<void>)
+
+;;; dlclose -- release a library handle from dlopen.
+;;;
+;;; POSIX `dlclose`.  Addresses from `dlsym` on it may be invalid afterwards.
+;;;
+;;; Parameters:
+;;;   h -- the handle to release
+;;;
+;;; Returns:
+;;;   0 on success, non-zero on failure.
+;;;
+;;; Example:
+;;;   (dlclose (dlopen "libm.so.6"))  ; => 0  ; doctest: needs libm.so.6 (Linux)
+;;@builtin (dlclose [h : ptr<void>] : int)

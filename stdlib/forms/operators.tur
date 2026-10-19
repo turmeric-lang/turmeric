@@ -1,0 +1,392 @@
+;;; tur/forms/operators -- arithmetic, comparison, logical and bitwise operators.
+;;;
+;;; The compiler implements these itself (src/compiler/builtins.c), so every
+;;; program has them and there is nothing to import.  This file is reference
+;;; only: it declares nothing the compiler reads.
+;;;
+;;; An operator picks its overload from the type of its FIRST argument, and
+;;; every other argument must have that type.  There is no implicit
+;;; int-to-float promotion: `(+ 1 2.5)` is TUR-E0042.  Convert first with
+;;; `int->float` / `float->int` (tur/math).
+;;;
+;;; In the signatures, `N` stands for any numeric kind -- `int` (64-bit
+;;; signed), `float` (64-bit), `float32`, or a sized integer (`int8` `int16`
+;;; `int32` `uint8` `uint16` `uint32` `uint64`).  `int` arithmetic wraps on
+;;; overflow (two's complement).  For a type with no builtin row, `+ - * /`
+;;; fall back to its `Num` instance (tur/typeclass); see numeric-tower-guide.
+;; Reference only: tools/gendocs.py reads the ;;@builtin lines, the compiler skips them.
+
+;;; + -- add numbers, left to right.
+;;;
+;;; Takes two or more arguments.  On a type with a `Num` instance and no
+;;; builtin row, `(+ a b c)` is `(add (add a b) c)`.
+;;;
+;;; Parameters:
+;;;   a    -- the first addend; its type selects the overload
+;;;   b    -- the second addend, of the same type
+;;;   more -- further addends, of the same type
+;;;
+;;; Returns:
+;;;   The sum, of the arguments' type.
+;;;
+;;; Example:
+;;;   (+ 1 2 3)      ; => 6
+;;;   (+ 1.5 2.25)   ; => 3.75
+;;@builtin (+ [a : N b : N & more : N] : N)
+
+;;; - -- subtract numbers, left to right.
+;;;
+;;; Takes two or more arguments: `(- a b c)` is `(a - b) - c`.  There is no
+;;; one-argument negation on the builtin kinds -- `(- x)` is TUR-E0006; write
+;;; `(- 0 x)` or a negative literal.  On a type with a `Num` instance,
+;;; `(- x)` is its `neg`.
+;;;
+;;; Parameters:
+;;;   a    -- the minuend; its type selects the overload
+;;;   b    -- the first subtrahend, of the same type
+;;;   more -- further subtrahends, of the same type
+;;;
+;;; Returns:
+;;;   The difference, of the arguments' type.
+;;;
+;;; Example:
+;;;   (- 10 3 2)     ; => 5
+;;;   (- 7.5 0.25)   ; => 7.25
+;;@builtin (- [a : N b : N & more : N] : N)
+
+;;; * -- multiply numbers, left to right.
+;;;
+;;; Parameters:
+;;;   a    -- the first factor; its type selects the overload
+;;;   b    -- the second factor, of the same type
+;;;   more -- further factors, of the same type
+;;;
+;;; Returns:
+;;;   The product, of the arguments' type.
+;;;
+;;; Example:
+;;;   (* 2 3 4)      ; => 24
+;;;   (* 1.5 2.5)    ; => 3.75
+;;@builtin (* [a : N b : N & more : N] : N)
+
+;;; / -- divide two numbers.
+;;;
+;;; Exactly two arguments.  Integer division truncates toward zero, and an
+;;; integer division by zero prints `division by zero` and aborts the
+;;; program.  Float division follows IEEE 754: dividing by zero gives `inf`,
+;;; `-inf` or `nan`, with no check.
+;;;
+;;; Parameters:
+;;;   a -- the dividend; its type selects the overload
+;;;   b -- the divisor, of the same type
+;;;
+;;; Returns:
+;;;   The quotient, of the arguments' type.
+;;;
+;;; Example:
+;;;   (/ 7 2)        ; => 3
+;;;   (/ -7 2)       ; => -3
+;;;   (/ 7.5 2.0)    ; => 3.75
+;;;   (/ 1.0 0.0)    ; => inf
+;;@builtin (/ [a : N b : N] : N)
+
+;;; mod -- the remainder of an integer division.
+;;;
+;;; Integer kinds only (`int` and the sized integers); `(mod 7.5 2.0)` is
+;;; TUR-E0006.  The result has the sign of the dividend, as C's `%` does, so
+;;; `(mod -7 3)` is -1, not 2.  A zero divisor is not checked in compiled
+;;; code -- see docs/reported/integer-mod-by-zero-and-min-div-minus-one-crash.md.
+;;;
+;;; Parameters:
+;;;   a -- the dividend
+;;;   b -- the divisor, of the same type
+;;;
+;;; Returns:
+;;;   `a` minus `(* (/ a b) b)`.
+;;;
+;;; Example:
+;;;   (mod 7 3)      ; => 1
+;;;   (mod -7 3)     ; => -1
+;;@builtin (mod [a : int b : int] : int)
+
+;;; = -- are two values equal?
+;;;
+;;; Defined on the numeric kinds, `bool`, and `Sym` (keywords such as `:a`,
+;;; compared by identity).  Not on `cstr` -- use `cstr-eq?` -- and not on
+;;; structs or ADTs: `=` does not dispatch to `Eq`; call `eq?` for those.
+;;; Floats compare by IEEE 754, so a `nan` equals nothing, itself included.
+;;;
+;;; Parameters:
+;;;   a -- the first value
+;;;   b -- the second value, of the same type
+;;;
+;;; Returns:
+;;;   `true` when they are equal.
+;;;
+;;; Example:
+;;;   (= 3 3)        ; => true
+;;;   (= 1.5 2.5)    ; => false
+;;;   (= :a :a)      ; => true
+;;@builtin (= [a : T b : T] : bool)
+
+;;; not= -- are two values different?
+;;;
+;;; The negation of `=`, on the same types.
+;;;
+;;; Parameters:
+;;;   a -- the first value
+;;;   b -- the second value, of the same type
+;;;
+;;; Returns:
+;;;   `true` when they are not equal.
+;;;
+;;; Example:
+;;;   (not= 1 2)     ; => true
+;;;   (not= :a :a)   ; => false
+;;@builtin (not= [a : T b : T] : bool)
+
+;;; < -- is a less than b?
+;;;
+;;; Numeric kinds only, and exactly two arguments: `(< 1 2 3)` is TUR-E0006,
+;;; write `(and (< 1 2) (< 2 3))`.
+;;;
+;;; Parameters:
+;;;   a -- the left operand
+;;;   b -- the right operand, of the same type
+;;;
+;;; Returns:
+;;;   `true` when a < b.
+;;;
+;;; Example:
+;;;   (< 1 2)        ; => true
+;;;   (< 2.5 1.5)    ; => false
+;;@builtin (< [a : N b : N] : bool)
+
+;;; > -- is a greater than b?
+;;;
+;;; Numeric kinds only, exactly two arguments.
+;;;
+;;; Parameters:
+;;;   a -- the left operand
+;;;   b -- the right operand, of the same type
+;;;
+;;; Returns:
+;;;   `true` when a > b.
+;;;
+;;; Example:
+;;;   (> 2 1)        ; => true
+;;;   (> 1.5 2.5)    ; => false
+;;@builtin (> [a : N b : N] : bool)
+
+;;; <= -- is a less than or equal to b?
+;;;
+;;; Numeric kinds only, exactly two arguments.
+;;;
+;;; Parameters:
+;;;   a -- the left operand
+;;;   b -- the right operand, of the same type
+;;;
+;;; Returns:
+;;;   `true` when a <= b.
+;;;
+;;; Example:
+;;;   (<= 2 2)       ; => true
+;;;   (<= 3 2)       ; => false
+;;@builtin (<= [a : N b : N] : bool)
+
+;;; >= -- is a greater than or equal to b?
+;;;
+;;; Numeric kinds only, exactly two arguments.
+;;;
+;;; Parameters:
+;;;   a -- the left operand
+;;;   b -- the right operand, of the same type
+;;;
+;;; Returns:
+;;;   `true` when a >= b.
+;;;
+;;; Example:
+;;;   (>= 2 2)       ; => true
+;;;   (>= 1 2)       ; => false
+;;@builtin (>= [a : N b : N] : bool)
+
+;;; and -- logical and, short-circuiting.
+;;;
+;;; Takes two or more `bool`s and evaluates them left to right, stopping at
+;;; the first `false`; the rest are not evaluated.  Only `bool` -- an `int`
+;;; is not truthy, `(and 1 0)` is TUR-E0006.
+;;;
+;;; Parameters:
+;;;   a    -- the first condition
+;;;   b    -- the second condition
+;;;   more -- further conditions
+;;;
+;;; Returns:
+;;;   `true` when every argument is `true`.
+;;;
+;;; Example:
+;;;   (and true false)                     ; => false
+;;;   (and (< 1 2) (< 2 3) (< 3 4))        ; => true
+;;;   (and false (= (/ 1 0) 0))            ; => false
+;;@builtin (and [a : bool b : bool & more : bool] : bool)
+
+;;; or -- logical or, short-circuiting.
+;;;
+;;; Takes two or more `bool`s and evaluates them left to right, stopping at
+;;; the first `true`; the rest are not evaluated.
+;;;
+;;; Parameters:
+;;;   a    -- the first condition
+;;;   b    -- the second condition
+;;;   more -- further conditions
+;;;
+;;; Returns:
+;;;   `true` when any argument is `true`.
+;;;
+;;; Example:
+;;;   (or false true)                      ; => true
+;;;   (or true (= (/ 1 0) 0))              ; => true
+;;@builtin (or [a : bool b : bool & more : bool] : bool)
+
+;;; not -- logical negation.
+;;;
+;;; Only `bool`: `(not 0)` is TUR-E0006.
+;;;
+;;; Parameters:
+;;;   b -- the condition to negate
+;;;
+;;; Returns:
+;;;   `true` when b is `false`.
+;;;
+;;; Example:
+;;;   (not true)     ; => false
+;;;   (not (= 1 2))  ; => true
+;;@builtin (not [b : bool] : bool)
+
+;;; +. -- add floats.
+;;;
+;;; `+` restricted to `float`: an `int` (or `float32`) argument is TUR-E0006
+;;; instead of selecting integer arithmetic.  Use it where the checker should
+;;; insist the operands are floats.
+;;;
+;;; Parameters:
+;;;   a    -- the first addend
+;;;   b    -- the second addend
+;;;   more -- further addends
+;;;
+;;; Returns:
+;;;   The sum.
+;;;
+;;; Example:
+;;;   (+. 1.5 2.25)  ; => 3.75
+;;@builtin (+. [a : float b : float & more : float] : float)
+
+;;; -. -- subtract floats.
+;;;
+;;; `-` restricted to `float`; see `+.`.
+;;;
+;;; Parameters:
+;;;   a    -- the minuend
+;;;   b    -- the first subtrahend
+;;;   more -- further subtrahends
+;;;
+;;; Returns:
+;;;   The difference.
+;;;
+;;; Example:
+;;;   (-. 7.5 0.25)  ; => 7.25
+;;@builtin (-. [a : float b : float & more : float] : float)
+
+;;; *. -- multiply floats.
+;;;
+;;; `*` restricted to `float`; see `+.`.
+;;;
+;;; Parameters:
+;;;   a    -- the first factor
+;;;   b    -- the second factor
+;;;   more -- further factors
+;;;
+;;; Returns:
+;;;   The product.
+;;;
+;;; Example:
+;;;   (*. 1.5 2.5)   ; => 3.75
+;;@builtin (*. [a : float b : float & more : float] : float)
+
+;;; /. -- divide floats.
+;;;
+;;; `/` restricted to `float`; IEEE 754, so a zero divisor gives `inf` or
+;;; `nan`.  See `+.`.
+;;;
+;;; Parameters:
+;;;   a -- the dividend
+;;;   b -- the divisor
+;;;
+;;; Returns:
+;;;   The quotient.
+;;;
+;;; Example:
+;;;   (/. 7.5 2.0)   ; => 3.75
+;;@builtin (/. [a : float b : float] : float)
+
+;;; bit-and -- bitwise and of two integers.
+;;;
+;;; Defined on every integer kind; both arguments have the same kind.
+;;;
+;;; Parameters:
+;;;   a -- the first operand
+;;;   b -- the second operand
+;;;
+;;; Returns:
+;;;   The bits set in both.
+;;;
+;;; Example:
+;;;   (bit-and 12 10)  ; => 8
+;;@builtin (bit-and [a : int b : int] : int)
+
+;;; bit-or -- bitwise or of two integers.
+;;;
+;;; Defined on every integer kind; both arguments have the same kind.
+;;;
+;;; Parameters:
+;;;   a -- the first operand
+;;;   b -- the second operand
+;;;
+;;; Returns:
+;;;   The bits set in either.
+;;;
+;;; Example:
+;;;   (bit-or 12 10)   ; => 14
+;;@builtin (bit-or [a : int b : int] : int)
+
+;;; bit-xor -- bitwise exclusive or of two integers.
+;;;
+;;; Defined on every integer kind; both arguments have the same kind.
+;;;
+;;; Parameters:
+;;;   a -- the first operand
+;;;   b -- the second operand
+;;;
+;;; Returns:
+;;;   The bits set in exactly one.
+;;;
+;;; Example:
+;;;   (bit-xor 12 10)  ; => 6
+;;@builtin (bit-xor [a : int b : int] : int)
+
+;;; bit-shl -- shift an integer left.
+;;;
+;;; Defined on every integer kind.  Bits shifted past the top are lost.  A
+;;; shift count that is negative or not less than the width is undefined, as
+;;; in C.  The right shift, `bit-shr`, is in tur/bits.
+;;;
+;;; Parameters:
+;;;   a -- the value to shift
+;;;   n -- how many bit positions
+;;;
+;;; Returns:
+;;;   a shifted left by n, zero-filled.
+;;;
+;;; Example:
+;;;   (bit-shl 1 4)    ; => 16
+;;@builtin (bit-shl [a : int n : int] : int)

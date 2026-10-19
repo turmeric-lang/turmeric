@@ -188,6 +188,14 @@ const char *tur_docstring_lookup(const char *name) {
     return tur_docstring_lookup_in(path, name);
 }
 
+const char *tur_doc_prefer(const char *name, const char *from_stdlib) {
+    if (!name) return NULL;
+    const char *builtin = turi_doc_lookup_builtin(name);
+    if (from_stdlib && !(builtin && strcmp(from_stdlib, name) == 0))
+        return from_stdlib;
+    return builtin ? builtin : from_stdlib;
+}
+
 /* The builtin table lives here, not in repl.c, because the interpreter's
  * `doc-print` native uses it: anything interpreter_natives.c references is
  * linked into every libturi embedder, and repl.c would drag readline in with
@@ -202,7 +210,7 @@ const char *turi_doc_lookup_builtin(const char *sym) {
         {"mod",      "(mod a b) -- integer remainder"},
         /* Comparison */
         {"=",        "(= a b) -- equality"},
-        {"!=",       "(!= a b) -- inequality"},
+        {"not=",     "(not= a b) -- inequality"},
         {"<",        "(< a b) -- less-than"},
         {">",        "(> a b) -- greater-than"},
         {"<=",       "(<= a b) -- less-than-or-equal"},
@@ -213,7 +221,6 @@ const char *turi_doc_lookup_builtin(const char *sym) {
         {"or",       "(or a b ...) -- short-circuit logical or"},
         /* I/O */
         {"println",  "(println x) -- print value with trailing newline; #fx{IO}"},
-        {"print",    "(print x) -- print value without trailing newline"},
         {"eprintln", "(eprintln x) -- print value to stderr with trailing newline; #fx{IO}"},
         {"eprint",   "(eprint x) -- print value to stderr without trailing newline; #fx{IO}"},
         /* Core special forms */

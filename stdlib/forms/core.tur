@@ -1,0 +1,68 @@
+;;; tur/forms/core -- println, eprintln, eprint and cons, the remaining builtin functions.
+;;;
+;;; The compiler implements these itself (src/compiler/builtins.c), so every
+;;; program has them and there is nothing to import.  This file is reference
+;;; only: it declares nothing the compiler reads.
+;;;
+;;; The printers take one argument of a primitive type: `int`, `float`,
+;;; `bool`, `cstr`, a sized integer, or `float32`.  Anything else -- a `Sym`,
+;;; an `Option`, a struct, a vector -- is TUR-E0006.  Print such a value with
+;;; `show-line` (tur/typeclass-show, for a type with a `Show` instance), or
+;;; turn it into a `cstr` first (`sym->str`, `int->str`, ...).  A `float`
+;;; prints with C's `%g`: six significant digits, so 3.14159265 prints as
+;;; 3.14159 and 1234567.5 as 1.23457e+06.  All three carry the `IO`
+;;; capability, so a function declared `#fx{}` cannot call them.
+;; Reference only: tools/gendocs.py reads the ;;@ lines, the compiler skips them.
+
+;;; println -- print a value to stdout, then a newline.
+;;;
+;;; Parameters:
+;;;   x -- the value; its type selects the format (see the module notes)
+;;;
+;;; Example:
+;;;   (println 42)        ; prints 42
+;;;   (println 2.5)       ; prints 2.5
+;;;   (println true)      ; prints true
+;;;   (println "hello")   ; prints hello
+;;@builtin (println [x : T] : nil)
+
+;;; eprintln -- print a value to stderr, then a newline.
+;;;
+;;; `println`'s formats, on stderr: for diagnostics that must not mix with a
+;;; program's output.
+;;;
+;;; Parameters:
+;;;   x -- the value
+;;;
+;;; Example:
+;;;   (eprintln "warning: no input")   ; prints to stderr
+;;@builtin (eprintln [x : T] : nil)
+
+;;; eprint -- print a value to stderr, with no newline.
+;;;
+;;; Parameters:
+;;;   x -- the value
+;;;
+;;; Example:
+;;;   (eprint "progress: ")   ; prints to stderr
+;;@builtin (eprint [x : T] : nil)
+
+;;; cons -- allocate a cons cell: a head word and a tail.
+;;;
+;;; The cell is the `{head, tail}` pair of 8-byte words that `*args*`,
+;;; variadic rest parameters and tur/list's untyped lists are built from.  The
+;;; head may be any word-sized value; the tail is another cell or 0, the empty
+;;; list.  Read it back with `car` / `cdr` (tur/list).  The result is a bare
+;;; `int`, so the type checker cannot help; prefer `(List T)` from
+;;; tur/list-typed in new code.
+;;;
+;;; Parameters:
+;;;   head -- the first element
+;;;   tail -- the rest of the list, or 0
+;;;
+;;; Returns:
+;;;   The new cell, as an `int`.
+;;;
+;;; Example:
+;;;   (car (cdr (cons 1 (cons 2 0))))  ; => 2
+;;@builtin (cons [head : T tail : int] : int)

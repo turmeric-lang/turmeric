@@ -12005,11 +12005,8 @@ static int print_doc_result(const char *sym, const char *doc, char *owned) {
 /* E5 / OD4: tur doc <symbol> -- print documentation for a builtin, special
  * form, or stdlib definition. */
 static int cmd_doc_cli(const char *sym) {
-    const char *builtin = turi_doc_lookup_builtin(sym);
-    if (builtin) return print_doc_result(sym, builtin, NULL);
-
-    const char *from_stdlib = stdlib_docstring_lookup(sym);
-    if (from_stdlib) return print_doc_result(sym, from_stdlib, NULL);
+    const char *doc = tur_doc_prefer(sym, stdlib_docstring_lookup(sym));
+    if (doc) return print_doc_result(sym, doc, NULL);
 
     if (use_json_output)
         fprintf(stderr, "{\"error\":\"no documentation for '%s'\"}\n", sym);

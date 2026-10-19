@@ -859,6 +859,15 @@ add_test(
   COMMAND bash tests/check-gendocs-parse.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# Every reserved special form and public compiler builtin has an API entry
+# (a `;;@form` / `;;@builtin` declaration under stdlib/forms/) or is listed in
+# tests/forms-undocumented.txt, which may only shrink
+# (api-docs-miss-language-primitives).  Reads src/ and stdlib/; no build needed.
+add_test(
+  NAME tur_forms_documented_lint
+  COMMAND bash tests/check-forms-documented.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
 # tools/ci/collect-docs.py's running report totals, which /ci's "reports
 # archived minus filed" chart differences: a `git mv` to docs/archive/ counts as
 # archived, and a report archived and another filed in one merge are not paired
