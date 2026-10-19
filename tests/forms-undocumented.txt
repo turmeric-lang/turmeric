@@ -12,10 +12,6 @@
 defclass
 definstance
 defeffect
-deftype
-defalias
-defkind
-defrec
 defprotocol
 make-protocol
 extern-c
