@@ -20,15 +20,21 @@
 ;; Loading this file still gives you Ord, because the autoload already did.
 ;; Show class + primitive Show instances live in stdlib/typeclass-show.tur
 ;; (loaded at the END of this file -- see the header note).
-;;; Num -- typeclass for numeric arithmetic.
+;;; Num -- numeric types: the four arithmetic operations and negation.
 ;;;
 ;;; Parameters:
 ;;;   a -- the numeric type
 ;;;
-;;; Returns:
-;;;   Every method is closed over the instance type `a`: `add`/`sub`/`mul`/
-;;;   `div`/`neg` take and return `a`, so a `Num` instance for a non-integer
-;;;   type (Rational, Complex, a user newtype) types correctly at call sites.
+;;; Methods:
+;;;   add -- `x` + `y`
+;;;   sub -- `x` - `y`
+;;;   mul -- `x` * `y`
+;;;   div -- `x` / `y`, truncating for the integer instances
+;;;   neg -- `x` negated
+;;;
+;;; Every method is closed over the instance type `a`: each takes and returns
+;;; `a`, so a `Num` instance for a non-integer type (Rational, Complex, a user
+;;; newtype) types correctly at call sites.
 ;;;
 ;;; Example:
 ;;;   (add 2 3)          ; => 5      (Num [int])
@@ -124,13 +130,16 @@
   (mul [x y] (* x y))
   (div [x y] (/ x y))
   (neg [x] (- 0.0 x)))
-;;; Clone -- typeclass for deep copying a value.
+;;; Clone -- values that can be copied into an independently owned value.
 ;;;
 ;;; Parameters:
 ;;;   a -- the type to clone
 ;;;
-;;; Returns:
-;;;   A copy of x; for primitive types this is the identity.
+;;; Methods:
+;;;   clone -- a copy of `x` the caller owns; the identity for a primitive.
+;;;
+;;; The same class as the auto-loaded stdlib/typeclass-clone.tur declares;
+;;; this module adds the primitive instances.
 ;;;
 ;;; Example:
 ;;;   (clone 42)  ; => 42
@@ -174,7 +183,7 @@
 ;;; Clone [float32] -- Clone instance for float32 (trivial copy).
 
 (definstance Clone [float32] (clone [x] x))
-;;; SINCE: Phase HKT H3
+;; SINCE: Phase HKT H3
 ;; Higher-kinded typeclasses — require kind '* -> *' type constructor parameters.
 ;;
 ;; These typeclasses follow the Haskell/PureScript convention.  In Turmeric v1
@@ -182,13 +191,16 @@
 ;; container values, which are heap pointers, can be returned without a full
 ;; parameterised type system.  Callers may cast the result to the concrete
 ;; container pointer type using inline C or ptr<void> helpers.
-;;; Functor -- map a function over a container without changing its shape.
+;;; Functor -- map a function over every element of a container, keeping its shape.
 ;;;
 ;;; Parameters:
 ;;;   ^f -- the type constructor (kind * -> *)
 ;;;
-;;; Returns:
-;;;   A new container of the same shape with transformed elements (:int pointer).
+;;; Methods:
+;;;   fmap -- `container` with `g` applied to each element, same shape.
+;;;
+;;; The same class the auto-loaded stdlib/typeclass-functor.tur declares (a
+;;; redeclaration must match it); that page carries the laws and examples.
 ;;;
 ;;; Since: Phase HKT H3
 ;; Functor — map a function over a container without changing its shape.
@@ -197,13 +209,18 @@
 
 
 (defclass Functor [^f] (fmap [container : (f a) g : (fn [a] b)] : (f b)))
-;;; Applicative -- container with a pure constructor and ap combinator.
+;;; Applicative -- a Functor that can lift a plain value and apply a wrapped function.
 ;;;
 ;;; Parameters:
 ;;;   ^f -- the type constructor (kind * -> *)
 ;;;
-;;; Returns:
-;;;   pure returns a wrapped value; ap applies wrapped functions (:int pointer).
+;;; Methods:
+;;;   pure -- `x` in the minimal context (dispatches on the expected return
+;;;           type).
+;;;   ap   -- apply the function inside `ff` to the value inside `fa`.
+;;;
+;;; The same class the auto-loaded stdlib/typeclass-applicative.tur declares (a
+;;; redeclaration must match it); that page carries the laws and examples.
 ;;;
 ;;; Since: Phase HKT H3
 ;; Applicative — container with a pure constructor and ap combinator.
@@ -214,13 +231,17 @@
   [(Functor f)]
   (pure [x : a] : (f a))
   (ap [ff : (f (fn [a] b)) fa : (f a)] : (f b)))
-;;; Monad -- typeclass for sequencing computations with bind.
+;;; Monad -- an Applicative whose next step can depend on the previous result.
 ;;;
 ;;; Parameters:
 ;;;   ^m -- the type constructor (kind * -> *)
 ;;;
-;;; Returns:
-;;;   bind chains a monadic value with a continuation (:int pointer).
+;;; Methods:
+;;;   bind -- run `ma` and continue with the computation `k` builds from its
+;;;           result (flatMap).
+;;;
+;;; The same class the auto-loaded stdlib/typeclass-monad.tur declares (a
+;;; redeclaration must match it); that page carries the laws and examples.
 ;;;
 ;;; Since: Phase HKT H3
 ;; Monad — sequencing with flatMap/bind.
@@ -230,13 +251,22 @@
 (defclass Monad [^m]
   [(Applicative m)]
   (bind [ma : (m a) k : (fn [a] (m b))] : (m b)))
-;;; Foldable -- reduce a container to a summary value.
+;;; Foldable -- containers that can be reduced to a single summary value.
 ;;;
 ;;; Parameters:
-;;;   ^t -- the type constructor (kind * -> *)
+;;;   ^t -- the container's type constructor (kind * -> *)
 ;;;
-;;; Returns:
-;;;   foldl and foldr return an accumulated summary value (:int).
+;;; Methods:
+;;;   foldl -- combine the elements of `ta` first to last: starting from
+;;;            `init`, each step calls `fn` with the accumulator and the next
+;;;            element.
+;;;   foldr -- combine the elements of `ta` last to first: starting from
+;;;            `init`, each step calls `fn` with the next element and the
+;;;            accumulator.
+;;;
+;;; The one stdlib instance is rc's (stdlib/rc.tur, which declares the same
+;;; class): an rc holds a single value x, so foldl is `(fn init x)` and
+;;; foldr is `(fn x init)`.
 ;;;
 ;;; Since: Phase HKT H3
 ;; Foldable — reduce a container to a summary value.
@@ -246,13 +276,21 @@
 (defclass Foldable [^t]
   (foldl [ta : (t a) init : b fn : (fn [b a] b)] : b)
   (foldr [ta : (t a) init : b fn : (fn [a b] b)] : b))
-;;; Traversable -- map with effects, collecting results.
+;;; Traversable -- containers you can map over with an effect, collecting the results.
 ;;;
 ;;; Parameters:
-;;;   ^t -- the type constructor (kind * -> *)
+;;;   ^t -- the container's type constructor (kind * -> *)
 ;;;
-;;; Returns:
-;;;   traverse returns a container wrapped in an applicative effect (:int pointer).
+;;; Methods:
+;;;   traverse -- apply the effectful `fn` to each element of `ta` and
+;;;               return the effect of the whole new container -- e.g. an
+;;;               Option of a list that is none if any element gave none.
+;;;
+;;; The v1 signature is the simplified `traverse [ta fn] :int` (the Haskell
+;;; one is `Applicative f => (a -> f b) -> t a -> f (t b)`), and the stdlib
+;;; ships no instance yet.
+;;;
+;;; Superclasses: Functor and Foldable, as in Haskell.
 ;;;
 ;;; Since: Phase HKT H3
 ;; Traversable — map with effects, collecting results.
@@ -261,19 +299,23 @@
 
 ;; Superclasses: Functor and Foldable, as in Haskell.
 (defclass Traversable [^t] [(Functor t) (Foldable t)] (traverse [ta fn] : int))
-;;; SINCE: Phase HKT H7
+;; SINCE: Phase HKT H7
 ;; Alternative — typeclass for types with an "empty" value and a way to combine alternatives.
 ;; Similar to MonadPlus/ApplicativePlus in Haskell.
 ;;   empty :: f a           (the empty/zero value)
 ;;   alt-or :: f a -> f a -> f a   (combine two alternatives)
 ;; In v1: empty [a] :int (a is a type witness for dispatch, ignored by impl) and alt-or [a b] :int
-;;; Alternative -- typeclass for containers with an empty value and choice.
+;;; Alternative -- an Applicative with a failure value and a first-success choice.
 ;;;
 ;;; Parameters:
 ;;;   ^f -- the type constructor (kind * -> *)
 ;;;
-;;; Returns:
-;;;   empty returns the zero/empty container; alt-or combines two alternatives (:int pointer).
+;;; Methods:
+;;;   empty  -- the failing/empty value; `a` only picks the instance.
+;;;   alt-or -- `x` if it succeeded, else `y`.
+;;;
+;;; The same class the auto-loaded stdlib/typeclass-alternative.tur declares (a
+;;; redeclaration must match it); that page carries the laws and examples.
 ;;;
 ;;; Since: Phase HKT H7
 
@@ -282,18 +324,22 @@
   [(Applicative f)]
   (empty [a] : (f a))
   (alt-or [x : (f a) y : (f a)] : (f a)))
-;;; SINCE: Phase HKT H5
+;; SINCE: Phase HKT H5
 ;; Bifunctor — map over both sides of a binary type constructor.
 ;;   The canonical signature is:
 ;;     bimap :: (a -> c) -> (b -> d) -> f a b -> f c d
 ;;   In v1: simplified to bimap [container fn-left fn-right] :int
-;;; Bifunctor -- map over both sides of a binary type constructor.
+;;; Bifunctor -- map over both type arguments of a two-parameter type at once.
 ;;;
 ;;; Parameters:
 ;;;   ^^f -- the type constructor (kind * -> * -> *)
 ;;;
-;;; Returns:
-;;;   bimap returns a new container with both sides transformed (:int pointer).
+;;; Methods:
+;;;   bimap -- `container` with `fn-left` applied on one side and
+;;;            `fn-right` on the other.
+;;;
+;;; The same class the auto-loaded stdlib/typeclass-bifunctor.tur declares (a
+;;; redeclaration must match it); that page carries the laws and examples.
 ;;;
 ;;; Since: Phase HKT H5
 
@@ -301,13 +347,16 @@
 (defclass Bifunctor [^^f]
   (bimap [container : (f a b) fn-left : (fn [a] c) fn-right : (fn [b] d)]
     : (f c d)))
-;;; Display -- typeclass for human-readable string formatting.
+;;; Display -- values with a human-readable text form (Rust's Display).
 ;;;
 ;;; Parameters:
 ;;;   a -- the type to display
 ;;;
-;;; Returns:
-;;;   A :cstr suitable for end-user output.
+;;; Methods:
+;;;   display -- `x` as a :cstr for end-user output.
+;;;
+;;; Example:
+;;;   (display 42)   ; => "42"
 ;;;
 ;;; Since: Phase R0
 ;; Phase R0: Display and Debug typeclasses for formatting
@@ -315,25 +364,31 @@
 
 
 (defclass Display [a] (display [x] : cstr))
-;;; Debug -- typeclass for debug string formatting.
+;;; Debug -- values with a diagnostic text form (Rust's Debug).
 ;;;
 ;;; Parameters:
 ;;;   a -- the type to debug-print
 ;;;
-;;; Returns:
-;;;   A :cstr suitable for diagnostic output.
+;;; Methods:
+;;;   debug -- `x` as a :cstr for diagnostic output; a string comes back
+;;;            quoted.
+;;;
+;;; Example:
+;;;   (debug "hi")   ; => "\"hi\""
 ;;;
 ;;; Since: Phase R0
 ;; Debug - debug string representation (like Rust's Debug)
 
 (defclass Debug [a] (debug [x] : cstr))
-;;; Error -- typeclass for types that represent errors.
+;;; Error -- values that describe an error.
 ;;;
 ;;; Parameters:
 ;;;   a -- the error type
 ;;;
-;;; Returns:
-;;;   error-message returns a :cstr description; error-cause returns a :ptr<void> cause or NULL.
+;;; Methods:
+;;;   error-message -- a :cstr description of the error `x`.
+;;;   error-cause   -- the underlying cause of `x` as :ptr<void>, or NULL
+;;;                    when there is none.
 ;;;
 ;;; Since: Phase R0
 ;; Phase R0: Error typeclass (extends Show)
@@ -635,14 +690,18 @@
     /* In v1, result doesn't carry cause information */
     return NULL;
     ```))
-;;; From -- typeclass for value conversion from type A to type B.
+;;; From -- conversion of a value of type a into type b.
 ;;;
 ;;; Parameters:
 ;;;   a -- the source type
 ;;;   b -- the target type
 ;;;
-;;; Returns:
-;;;   The converted value as :int (int64_t holds pointers in v1).
+;;; Methods:
+;;;   from -- `x` converted to b, returned as the :int carrier (int64_t
+;;;           holds pointers in v1).
+;;;
+;;; The stdlib declares no From or Into instance; both classes are for user
+;;; conversions.
 ;;;
 ;;; Since: Phase R0
 ;; Phase R0: From/Into conversion typeclasses
@@ -650,14 +709,15 @@
 ;; Note: return type is :int (int64_t holds pointers in v1)
 
 (defclass From [a b] (from [x] : int))
-;;; Into -- typeclass for value conversion from type A to type B (derived from From).
+;;; Into -- conversion of a value of type a into type b; the counterpart of From.
 ;;;
 ;;; Parameters:
 ;;;   a -- the source type
 ;;;   b -- the target type
 ;;;
-;;; Returns:
-;;;   The converted value as :int (int64_t holds pointers in v1).
+;;; Methods:
+;;;   into -- `x` converted to b, returned as the :int carrier (int64_t
+;;;           holds pointers in v1).
 ;;;
 ;;; Since: Phase R0
 ;; Into[A B] - conversion from A to B (blanket derived from From[A B])

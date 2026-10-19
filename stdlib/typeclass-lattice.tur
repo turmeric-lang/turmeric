@@ -30,6 +30,9 @@
 ;;; Parameters:
 ;;;   a -- the type being combined
 ;;;
+;;; Methods:
+;;;   combine -- the associative operation on `x` and `y`
+;;;
 ;;; Laws:
 ;;;   associativity -- (combine (combine x y) z) = (combine x (combine y z))
 ;;;
@@ -43,6 +46,10 @@
 ;;;
 ;;; Parameters:
 ;;;   a -- the type being combined
+;;;
+;;; Methods:
+;;;   mempty -- the identity element (nullary; dispatched by the expected
+;;;            type)
 ;;;
 ;;; Laws:
 ;;;   identity -- (combine (mempty) x) = x = (combine x (mempty))
@@ -274,6 +281,9 @@
 ;;; Parameters:
 ;;;   a -- the type being joined
 ;;;
+;;; Methods:
+;;;   join -- the least upper bound of `x` and `y`
+;;;
 ;;; Laws:
 ;;;   associativity -- (join (join x y) z) = (join x (join y z))
 ;;;   commutativity -- (join x y) = (join y x)
@@ -290,6 +300,9 @@
 ;;; Parameters:
 ;;;   a -- the type being met
 ;;;
+;;; Methods:
+;;;   meet -- the greatest lower bound of `x` and `y`
+;;;
 ;;; Laws:
 ;;;   associativity, commutativity, idempotence -- as for join
 ;;;
@@ -301,6 +314,9 @@
 
 ;;; BoundedJoin -- a JoinSemilattice with a least element.
 ;;;
+;;; Methods:
+;;;   bottom -- the least element (nullary; dispatched by the expected type)
+;;;
 ;;; Laws:
 ;;;   identity -- (join (bottom) x) = x
 ;;;
@@ -311,6 +327,9 @@
 (defclass BoundedJoin [a] [(JoinSemilattice a)] (bottom [] : a))
 
 ;;; BoundedMeet -- a MeetSemilattice with a greatest element.
+;;;
+;;; Methods:
+;;;   top -- the greatest element (nullary; dispatched by the expected type)
 ;;;
 ;;; Laws:
 ;;;   identity -- (meet (top) x) = x

@@ -1,28 +1,53 @@
-;;; tur/comonad -- Comonad typeclass -- the categorical dual of Monad.
+;;; tur/comonad -- the Comonad typeclass, the categorical dual of Monad.
 ;;;
-;;; Provides extract, extend, and duplicate operations.
+;;; A comonad is a value in a context you can always read from (`extract`)
+;;; and that can compute a new context from every position of an old one
+;;; (`extend`).  A Monad builds context up; a Comonad consumes it -- the
+;;; shape behind cellular automata, zippers and "value plus environment".
+;;;
+;;; Ships two instances, both over a heap cell held as an :int carrier: the
+;;; Identity comonad (`identity`) and the Pair/environment comonad (`pair`).
+;;; Because both instances share that carrier, a call names its instance
+;;; with a witness: `(.extract @identity w)`.
 ;;;
 ;;; Since: Phase CA0
 ;; Phase CA0: Comonad typeclass -- dual of Monad.
-;;
-;; Laws:
-;;   extract (extend f w) = f w           (left identity)
-;;   extend extract w     = w             (right identity)
-;;   extend f (extend g w) = extend (fn [w'] (f (extend g w'))) w  (associativity)
 ;;
 ;; In v1: all container values are int64_t (holding heap pointers).
 ;; extract :: w a -> a
 ;; extend  :: (w a -> b) -> w a -> w b
 ;; duplicate :: w a -> w (w a)   (derived: extend id)
-;;; Comonad -- typeclass dual to Monad; supports extract and extend.
+;;; Comonad -- a value in a context: read the focus, or recompute every position.
 ;;;
 ;;; Parameters:
 ;;;   ^w -- the comonadic type constructor (kind * -> *)
 ;;;
-;;; Returns:
-;;;   extract returns the focused value (:int); extend applies a function at
-;;;   every position and returns a new container (:int); duplicate wraps each
-;;;   position in its own context (:int).
+;;; Methods:
+;;;   extract   -- the value at the focus of `wa`.  Never fails: a comonad
+;;;                always has a focused value, which is what makes it the dual
+;;;                of a Monad's `pure`.
+;;;   extend    -- run `f` on `wa` as seen from every position and collect the
+;;;                results in a context of the same shape, focused where `wa`
+;;;                was.  `f` receives the whole context, not just one value,
+;;;                so it can look at neighbours (a grid cell's surroundings, a
+;;;                zipper's left and right).  `f` is a `:fn` carrier, so a
+;;;                capturing closure works.
+;;;   duplicate -- a context whose every position holds `wa` refocused there:
+;;;                `(extend wa (fn [x] x))`.
+;;;
+;;; Laws:
+;;;   (extract (extend w f))         = (f w)
+;;;   (extend w extract)             = w
+;;;   (extend (extend w g) f)        = (extend w (fn [x] (f (extend x g))))
+;;;   (extract (duplicate w))        = w
+;;;
+;;; Example:
+;;;   (.extract @identity (__identity_new 42))                         ; => 42
+;;;   (.extract @pair (__pair_new 7 100))                              ; => 100
+;;;   (.extract @identity (.extract @identity (.duplicate @identity (__identity_new 42))))  ; => 42
+;;;
+;;; Every method is declared over the :int carrier, so a value built by one
+;;; instance must be read back through the same one.
 ;;;
 ;;; Since: Phase CA0
 (defclass Comonad [^w]

@@ -10,7 +10,26 @@
 ;; requiring the user to import stdlib/typeclass.tur.
 ;; The full typeclass.tur (Eq + Ord + Show + Num + primitive instances) is
 ;; still available on demand via (load "stdlib/typeclass.tur").
-;;; Eq -- typeclass for equality comparison.
+;;; Eq -- values that can be compared for equality.
+;;;
+;;; Parameters:
+;;;   a -- the type compared
+;;;
+;;; Methods:
+;;;   eq? -- true when `x` and `y` are equal.  Collections compare
+;;;          element-wise through their element type's own Eq instance.
+;;;
+;;; Laws:
+;;;   (eq? x x)                                 = true
+;;;   (eq? x y)                                 = (eq? y x)
+;;;   (eq? x y) and (eq? y z) imply (eq? x z)
+;;;
+;;; Example:
+;;;   (eq? 3 3)       ; => true
+;;;   (eq? "a" "b")   ; => false
+;;;
+;;; Superclass of Ord, and the partner of Hash: two values that are `eq?` must
+;;; hash alike.
 ;;;
 ;;; Since: Phase 15
 (defclass Eq [a] (eq? [x y] : bool))

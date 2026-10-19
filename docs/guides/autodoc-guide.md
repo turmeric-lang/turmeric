@@ -9,7 +9,7 @@ description: Writing `;;;` docstrings and generating API docs with `tools/gendoc
 Turmeric's documentation system has three layers:
 
 1. **`;;;` docstrings** -- triple-semicolon comments above any `defn`, `defmacro`,
-   `defstruct`, `definstance`, or `defopaque`.
+   `defstruct`, `defclass`, `definstance`, or `defopaque`.
 2. **HTML API docs** -- `tools/gendocs.py` parses the docstrings and emits a
    styled site under `docs/html/api/`.
 3. **Runtime `(doc name)`** -- looks up the docstring for a name at the REPL or
@@ -52,6 +52,8 @@ a blank line or any non-`;;;` line resets the buffer.
 | `Parameters:` block | If non-zero arity | One `;;;   name -- desc` line per param |
 | `Returns:` | Yes, unless `:void` | Describe the return value |
 | `Example:` | Yes | At least one usage example with `; => result` |
+| `Methods:` | On a `defclass` | One `;;;   name -- desc` line per method |
+| `Laws:` | On a `defclass` with laws | The equations, one per line |
 | `Since:` | When known | Phase tag, e.g. `Phase B1` |
 
 ### Conventions
@@ -60,6 +62,13 @@ a blank line or any non-`;;;` line resets the buffer.
   greppable.
 - Blank `;;;` lines separate sections, like Python docstrings.
 - Examples use `; => result` to show expected output.
+- Prose is kept. Paragraphs between the summary and the first section render
+  under the summary; paragraphs after a section (`Superclass: Eq.`, a
+  `Note:`) render after the example. A section ends at the next header or at
+  an **unindented** paragraph after a blank line, so keep section bodies
+  indented.
+- Inside prose, an indented run renders as a code block, and lines starting
+  with `- ` render as a bullet list.
 - **ASCII only** -- use `--` (double hyphen), never em dashes. The Turmeric
   parser hangs on non-ASCII bytes.
 - Internal helpers (e.g. `tur-contract-check`, `__functor_*`) get a one-liner
@@ -71,13 +80,55 @@ a blank line or any non-`;;;` line resets the buffer.
 |---|---|
 | Exported / public API | Full block (summary + Parameters + Returns + Example + Since) |
 | Internal helpers | Single-line `;;; name -- what it does` |
+| Typeclasses (`defclass`) | Summary + Parameters (the type parameters) + Methods + Laws + Example + Since |
 | Typeclass instances (`definstance`) | Single-line summary |
+
+### Typeclasses
+
+A `defclass` docstring documents the class and every method. The generator
+reads the method signatures from the form itself, so a `Methods:` entry only
+has to say what the method does; the card shows each signature with its
+description, the `Laws:` block verbatim, and an **Instances** line listing
+every type the stdlib gives an instance, linked to that `definstance`.
+
+```turmeric
+;;; Functor -- map a function over every element of a container, keeping its shape.
+;;;
+;;; Parameters:
+;;;   ^f -- the container's type constructor (kind * -> *)
+;;;
+;;; Methods:
+;;;   fmap -- a container of the same shape as `container` with `g` applied to
+;;;           each element.
+;;;
+;;; Laws:
+;;;   (fmap c (fn [x] x))      = c
+;;;   (fmap (fmap c g) h)      = (fmap c (fn [x] (h (g x))))
+;;;
+;;; Example:
+;;;   (unwrap-or (fmap (some 20) (fn [x : int] : int (+ x 1))) 0)   ; => 21
+;;;
+;;; Since: Phase CCL
+(defclass Functor [^f] (fmap [container : (f a) g : (fn [a] b)] : (f b)))
+```
+
+A `Methods:` entry may name several methods that share a description
+(`lt? lte? -- ...`). A method can instead be documented in place, with a `;;;`
+block directly above it inside the class body; that wins over a `Methods:`
+entry for the same name. A class is always listed as public API: classes are
+global, so an export list never names one.
+
+`(doc 'Functor)` prints the class with its method signatures, and
+`(doc 'fmap)` prints the method -- unless a function of the same name exists,
+which keeps the name.
 
 ### Module docstrings
 
 A contiguous `;;;` block at the very top of a file -- **before the first real
 definition** -- becomes the module docstring. Terminate it with a `;;` line or
-any non-comment, non-blank form (e.g. `(defmodule ...)`, `(export ...)`).
+any non-comment, non-blank form (e.g. `(defmodule ...)`, `(export ...)`). A
+blank line also terminates it when its summary names the module
+(`;;; tur/list -- ...`), so the first definition's own block can follow.
 
 ```turmeric
 ;;; tur/list -- untyped singly-linked Cons/nil list.
@@ -132,8 +183,9 @@ Each per-module page has:
 - The module docstring as a header paragraph.
 - A sidebar TOC of exported names with anchor links.
 - One card per exported definition: kind badge (`defn` / `defmacro` /
-  `defstruct` / `definstance`), signature, summary, Parameters, Returns,
-  Example, Since.
+  `defstruct` / `defclass` / `definstance`), signature, summary, description,
+  Parameters, Methods (a class), Returns, Laws, Example, notes, Instances (a
+  class), Since.
 - A collapsed "Internal" section for non-exported definitions.
 
 ### Single-module regen

@@ -9,6 +9,25 @@
 ;;; Since: stdlib-hkt-consolidation T1
 ;; Bifunctor -- map over both sides of a binary type constructor.
 ;;   bimap :: (a -> c) -> (b -> d) -> f a b -> f c d
+;;; Bifunctor -- map over both type arguments of a two-parameter type at once.
+;;;
+;;; Parameters:
+;;;   ^^f -- the type constructor (kind * -> * -> *), e.g. Result
+;;;
+;;; Methods:
+;;;   bimap -- `container` with `fn-left` applied on one side and `fn-right`
+;;;            on the other.  Which side is "left" is the instance's: Result's
+;;;            follows Haskell's Either, so `fn-left` maps an err and
+;;;            `fn-right` an ok.
+;;;
+;;; Laws:
+;;;   (bimap c (fn [x] x) (fn [y] y))   = c
+;;;
+;;; Example:
+;;;   (ok-val (bimap (:: (ok 20) (Result int int)) (fn [e : int] : int (- 0 e)) (fn [x : int] : int (+ x 1))))   ; => 21
+;;;   (err-val (bimap (:: (err 5) (Result int int)) (fn [e : int] : int (- 0 e)) (fn [x : int] : int (+ x 1))))  ; => -5
+;;;
+;;; Since: Phase HKT H5
 (defclass Bifunctor [^^f]
   (bimap [container : (f a b) fn-left : (fn [a] c) fn-right : (fn [b] d)]
     : (f c d)))

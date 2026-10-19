@@ -10,6 +10,29 @@
 ;; Monad -- sequencing with flatMap/bind.
 ;;   bind :: m a -> (a -> m b) -> m b
 ;;   fn is declared :fn so capturing closures can be passed.
+;;; Monad -- an Applicative whose next step can depend on the previous result.
+;;;
+;;; Parameters:
+;;;   ^m -- the computation's type constructor (kind * -> *)
+;;;
+;;; Methods:
+;;;   bind -- run `ma`, hand its result to `k`, and return the computation `k`
+;;;           builds -- flatMap / `>>=`.  The instance decides what "run"
+;;;           means: Option and Result short-circuit on none / err without
+;;;           calling `k`.  `k` is a `:fn` carrier, so a capturing closure works.
+;;;
+;;; Laws:
+;;;   (bind (pure x) k)                = (k x)
+;;;   (bind m pure)                    = m
+;;;   (bind (bind m k) h)              = (bind m (fn [x] (bind (k x) h)))
+;;;
+;;; Example:
+;;;   (unwrap-or (bind (some 20) (fn [x : int] : (Option int) (some (+ x 1)))) 0)   ; => 21
+;;;
+;;; Superclass: Applicative, so an `[^Monad M]` body may also `pure`, `ap`
+;;; and `fmap`.  For effects without a monad, see the effects-vs-monads guide.
+;;;
+;;; Since: Phase HKT H3
 (defclass Monad [^m]
   [(Applicative m)]
   (bind [ma : (m a) k : (fn [a] (m b))] : (m b)))

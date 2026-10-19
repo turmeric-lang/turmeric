@@ -34,6 +34,12 @@ sentence above does not cover them. If you touch this file, check
 `ls docs/reported/` against it -- an index that silently omits a quarter of the
 directory is worse for triage than no index.
 
+## Found writing the typeclass API docs (filed 2026-10-19)
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [witness-dispatch-skips-arg-coercions](witness-dispatch-skips-arg-coercions.md) | medium (cc failure) | A `@Type` witness call (`(.ext @box 41 (fn ...))`) passes a lambda to a `: fn` method parameter as a bare `void *` and cc rejects it; the witness branch of `elab_method_call` skips the poly-wrap / fat-shim / `any` coercions the receiver path applies. Stdlib `Comonad`'s `extend` is uncallable through the class because of it. |
+
 ## Found executing the open reports (filed 2026-10-18)
 
 | Report | Severity | One line |

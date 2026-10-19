@@ -9,13 +9,17 @@
 ;; without requiring the user to import stdlib/typeclass.tur.
 ;; The full typeclass.tur (with all Clone primitive instances) is still
 ;; available on demand via (load "stdlib/typeclass.tur").
-;;; Clone -- typeclass for deep copying a value.
+;;; Clone -- values that can be copied into an independently owned value.
 ;;;
 ;;; Parameters:
 ;;;   a -- the type to clone
 ;;;
-;;; Returns:
-;;;   A copy of x; for primitive types this is the identity.
+;;; Methods:
+;;;   clone -- a copy of `x` the caller owns.  For a primitive this is `x`
+;;;            itself; for a refcounted handle (String, rc) it is a retain.
+;;;
+;;; Partner of Drop: a captured value that is Clone and Drop is retained when
+;;; captured and released when the closure env dies.
 ;;;
 ;;; Example:
 ;;;   (clone 42)  ; => 42

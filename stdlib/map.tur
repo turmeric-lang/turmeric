@@ -360,10 +360,24 @@
   ua.i = a; ub.i = b;
   return ua.f == ub.f;
   ```)
-;;; MapKey -- per-key-type carrier boxing + a carrier-ABI comparator.
+;;; MapKey -- key types a typed Map can carry: how to box a key and compare it.
 ;;;
 ;;; Parameters:
 ;;;   a -- the key type
+;;;
+;;; Methods:
+;;;   mk-box    -- `x` as the HAMT's one-word int64 carrier --
+;;;                identity for a one-word key, a bit reinterpret (never a
+;;;                numeric conversion) for a float key, a boxed ref for String.
+;;;   mk-cmp    -- a carrier-ABI comparator bool(int64, int64), returned as a
+;;;                raw function pointer; `x` only picks the instance.  It
+;;;                unboxes exactly as mk-box boxed.
+;;;   mk-owned? -- 1 when the boxed carrier is owned by the map and must be
+;;;                released with it (String), else 0.
+;;;
+;;; The map accessors (map-assoc, map-get, ...) dispatch on (Hash K) and
+;;; (MapKey K) together; see the design note above for why the carrier is
+;;; fixed per key type.
 ;;;
 ;;; Since: WKC (float32-map-key-carrier-plan)
 

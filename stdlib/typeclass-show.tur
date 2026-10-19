@@ -14,13 +14,21 @@
 ;;;
 ;;; Since: v2 (show-owned-result-plan, stage 4)
 (load "stdlib/string.tur")
-;;; Show -- typeclass for an owned-String representation.
+;;; Show -- values that render themselves as an owned String.
 ;;;
 ;;; Parameters:
 ;;;   a -- the type to render
 ;;;
-;;; Returns:
-;;;   A fresh owned String (refcount 1); the caller string/releases it.
+;;; Methods:
+;;;   show -- a fresh owned String (refcount 1) rendering `x` --
+;;;           `[1 2 3]` for a Vec, `#\A` for a Char.  The caller
+;;;           `string/release`s it.
+;;;
+;;; Example:
+;;;   (let [s (show 42)] (println (string/to-cstr s)) (string/release s))   ; prints 42
+;;;
+;;; For human-facing text without the ownership step, see Display (cstr) in
+;;; stdlib/typeclass.tur.
 ;;;
 ;;; Since: Phase 15 (owned since stage 4)
 
