@@ -1,0 +1,118 @@
+;;; tur/forms/sessions -- typed conversations between concurrent parties: make-session, defprotocol, make-protocol.
+;;;
+;;; A session type describes a conversation -- who sends what, who answers, when it
+;;; ends -- as a type, so the compiler can check that each party follows it.
+;;; `make-session` creates the two ends of a two-party channel from a protocol
+;;; written as a type (`Send`, `Recv`, `Choose`, `Branch`, `Rec`, `Close`).
+;;; `defprotocol` declares a protocol among three or more named roles, or two,
+;;; and `make-protocol` creates one endpoint per role. An endpoint is linear: every
+;;; operation (`send`, `recv`, `close`, ...) consumes it and returns the endpoint at
+;;; the next step, and dropping or reusing one is an error (TUR-E0100, TUR-E0212).
+;;; The other end has to run somewhere else; `session-spawn` and `session-join` in
+;;; `stdlib/session.tur` start it on a thread (compiled) or a fiber
+;;; (`--interpret`). session-types-guide is the reference for the operations,
+;;; recursion, choice, timeouts and the projection rules.
+;; Reference only: tools/gendocs.py reads the ;;@ lines, the compiler skips them.
+
+;;; make-session -- create the two ends of a typed channel.
+;;;
+;;; `(make-session (Send int Close))` returns a pair `[a b]`. `a` is a
+;;; `Session[Send int Close]`; `b` has the dual protocol, `Session[Recv int Close]`,
+;;; worked out for you. Bind them with a vector pattern, `(let [[s r] (make-session
+;;; ...)] ...)`. The protocol is built from `(Send T P)`, `(Recv T P)`, `(Choose P
+;;; Q)` and `(Branch P Q)` (the sender picks with `choose-left` / `choose-right`; the
+;;; receiver matches `(offer ch)`), `(Rec self P)` for a loop, and `Close`. Then
+;;; `(send ch v)` and `(recv ch)` (which returns `[value ch]`) advance an
+;;; endpoint, and `(close ch)` ends it once the protocol is finished. The checker
+;;; rejects an operation that does not match the current step (`send is not valid on
+;;; Session[Close]`, `close is not valid on Session[Recv[int, Close]] -- protocol is not
+;;; yet complete`) and an endpoint dropped unused (TUR-E0100). A message travels as
+;;; one machine word: ints, bools, floats, strings and pointers do, a by-value
+;;; struct is rejected (TUR-E0212). Not checked: the payload of a `send` against the
+;;; protocol's type -- `(send s 7.25)` on a `(Send int Close)` is accepted and
+;;; arrives as 7 when compiled (7.25 interpreted) -- and the number of names in
+;;; the destructuring pattern, so `[a b c]` for a pair ignores `c`
+;;; (docs/reported/session-forms-gaps.md). Run a protocol under `--interpret`
+;;; first: it reports a deadlock where the compiled program would hang.
+;;;
+;;; Parameters:
+;;;   protocol -- the protocol, as a type for the first endpoint
+;;;
+;;; Returns:
+;;;   A pair of linear endpoints, the second with the dual protocol.
+;;;
+;;; Example:
+;;;   (load "stdlib/session.tur")
+;;;   (defn main [] : int
+;;;     (let [[s r] (make-session (Send int Close))]
+;;;       (let [t (session-spawn (fn [] (let [[n r] (recv r)] (println n) (close r))))]
+;;;         (let [s (send s 42)]
+;;;           (close s)
+;;;           (session-join t))))  ; prints 42
+;;;     0)
+;;@form (make-session protocol)
+
+;;; defprotocol -- declare a global protocol among named roles.
+;;;
+;;; `(defprotocol Ping [A B] (-> A B int) (-> B A int))` names the roles in a vector
+;;; and lists the interactions in order: `(-> From To type)` is one message. At
+;;; least two roles are required (`a global protocol requires at least 2 roles`), a
+;;; role used in a step must be declared (TUR-E0223), and a choice or timeout that a
+;;; role cannot follow without being told is not projectable (TUR-E0220). A step
+;;; that may time out is `(timeout (-> A B int) [ok ...] [expired ...])`; only the
+;;; receiver learns whether the deadline passed, so every other role must continue
+;;; the same way in both branches. The compiler projects the protocol onto each
+;;; role, which is the type of that role's endpoint, `(Role Ping A)`; a function
+;;; written for a role is checked against it (TUR-E0222). It declares a type and
+;;; produces no value.
+;;;
+;;; Parameters:
+;;;   Name  -- the protocol's name
+;;;   roles -- `[A B ...]`, the participants
+;;;   steps -- `(-> From To type)` interactions, and `(timeout ...)` steps
+;;;
+;;; Example:
+;;;   (defprotocol Ping [A B]
+;;;     (-> A B int)
+;;;     (-> B A int))
+;;@form (defprotocol Name [role ...] step ...)
+
+;;; make-protocol -- create one endpoint per role of a protocol.
+;;;
+;;; `(make-protocol Ping)` returns the endpoints, one per role in the order
+;;; the roles were declared: `(let [[ra rb] (make-protocol Ping)] ...)`. `ra` has
+;;; type `(Role Ping A)` and `rb` `(Role Ping B)`. Each is linear. `(send-to ch B
+;;; 42)` sends to a named role and `(recv-from ch A)` receives from one, both
+;;; returning the advanced endpoint (`recv-from` as `[value ch]`), and `(close ch)`
+;;; ends it; `recv-timeout-from` is the bounded wait for a timed step. Give each
+;;; role its own thread with `session-spawn`. An unknown protocol is
+;;; `make-protocol: unknown protocol 'Nope'`. Not checked: the number of endpoints
+;;; destructured, so `[a b]` for a three-role protocol silently leaves one out.
+;;;
+;;; Parameters:
+;;;   Name -- a protocol declared with `defprotocol`
+;;;
+;;; Returns:
+;;;   The role endpoints, one per role, each linear.
+;;;
+;;; Example:
+;;;   (load "stdlib/session.tur")
+;;;   (defprotocol Ping [A B]
+;;;     (-> A B int)
+;;;     (-> B A int))
+;;;   (defn role-a [^linear ch : (Role Ping A)] : nil
+;;;     (let [ch (send-to ch B 42)]
+;;;       (let [[v ch] (recv-from ch B)]
+;;;         (println v)
+;;;         (close ch))))
+;;;   (defn role-b [^linear ch : (Role Ping B)] : nil
+;;;     (let [[v ch] (recv-from ch A)]
+;;;       (let [ch (send-to ch A (+ v 1))]
+;;;         (close ch))))
+;;;   (defn main [] : int
+;;;     (let [[ra rb] (make-protocol Ping)]
+;;;       (let [t (session-spawn (fn [] (role-b rb)))]
+;;;         (role-a ra)  ; prints 43
+;;;         (session-join t)))
+;;;     0)
+;;@form (make-protocol Name)

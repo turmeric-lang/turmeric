@@ -1,0 +1,163 @@
+;;; tur/forms/datatypes -- declaring records, sums and newtypes: defstruct, defdata, defgadt, defopaque.
+;;;
+;;; Four forms declare a new nominal type. `defstruct` is a record: all of its
+;;; fields at once. `defdata` is a sum: one of several constructors, each with its
+;;; own payload, taken apart with `match`. `defgadt` is a sum whose constructors
+;;; also say what type index they produce, so `match` can learn something from the
+;;; arm that fired. `defopaque` is a newtype: a distinct type that is, at run time,
+;;; nothing but its representation. Each introduces constructor functions with the
+;;; type's name; the type name itself works as an annotation.
+;;;
+;;; Declare a type at file scope. A `defstruct` or `defdata` written inside a
+;;; function body is accepted by the checker and the interpreter, but the compiled
+;;; program does not build (`unknown type name 'tur_adt_Point'`)
+;;; (docs/reported/definition-forms-gaps.md); a `defopaque` there is fine.
+;;;
+;;; A name that an auto-loaded stdlib module already defines (`Pair`, `Option`,
+;;; ...) or that an earlier form of the file defined cannot be defined again
+;;; (`'Pair' is already defined by an auto-loaded stdlib module ... pick a
+;;; distinct name`). The copy kind decides how values are used: `:copy` values
+;;; are reused freely (every field must itself be copyable), a `:move` value --
+;;; the default -- may be used once (TUR-E0201 on a second use), and a `:linear`
+;;; one must be consumed exactly once (TUR-E0100 if dropped). structs-guide,
+;;; sum-types-guide, gadts-guide and opaques-guide cover each at length.
+;; Reference only: tools/gendocs.py reads the ;;@ lines, the compiler skips them.
+
+;;; defstruct -- declare a record type.
+;;;
+;;; `(defstruct Name [field : Type ...])` declares a record and binds `Name` as a
+;;; constructor: `(Name a b)` builds one, `(.field s)` reads a field, and
+;;; `(set! (.field s) v)` writes one of a `^mut` binding. An annotation between the
+;;; name and the fields sets the copy kind: `:copy`, `:move` (the default) or
+;;; `:linear`; `:heap` keeps the value behind a pointer, so that sharing it is the
+;;; point (an interior-mutable node); `:no-auto-ctor` stops the name being bound as
+;;; a constructor when it is already a value elsewhere (use `make-struct`). Type
+;;; parameters go in a vector before the fields, `(defstruct Duo [A B] [fst : A snd :
+;;; B])`. A struct is passed to a function by value, so a callee that changes its
+;;; parameter changes its own copy. Field types are checked at construction
+;;; (`expected int, got float`) and an unknown field is `no typeclass method found
+;;; for 'y'`. Field names are meant to be distinct but a repeated one is not
+;;; rejected (docs/reported/definition-forms-gaps.md).
+;;;
+;;; Parameters:
+;;;   Name   -- the type's name, which is also its constructor
+;;;   kind   -- optional: `:copy`, `:move`, `:linear`, `:heap`, `:no-auto-ctor`
+;;;   [A ..] -- optional type parameters
+;;;   fields -- `[name : Type ...]`
+;;;
+;;; Example:
+;;;   (defstruct Point :copy [x : int y : int])
+;;;   (defn sum-pt [p : Point] : int (+ (.x p) (.y p)))
+;;;   (sum-pt (Point 3 4))  ; => 7  ; ; doctest: a type declared inside the test body does not build when compiled
+;;@form (defstruct Name [field : Type ...])
+;;@form (defstruct Name :copy [field : Type ...])
+;;@form (defstruct Name [A ...] [field : A ...])
+
+;;; make-struct -- build a struct value, by position or by field name.
+;;;
+;;; `(make-struct Name v1 v2 ...)` supplies every field in declaration order, as
+;;; `(Name v1 v2 ...)` does; the count must match. `(make-struct Name :y 2 :x 1)`
+;;; names the fields and may give them in any order. Keyword construction is
+;;; strict: a missing field is TUR-E0292, an unknown one TUR-E0294, a repeated one
+;;; TUR-E0293, and mixing positions with keywords TUR-E0299. A call with too few
+;;; positional values is a partial application -- `((Point 5) 6)` is the point
+;;; (5, 6) -- which keyword calls do not do. Use `make-struct` for a struct
+;;; declared `:no-auto-ctor`, or where the name `Name` is a value in scope.
+;;;
+;;; Parameters:
+;;;   Name   -- the struct's name
+;;;   values -- one per field, or `:field value` pairs
+;;;
+;;; Returns:
+;;;   The new struct.
+;;;
+;;; Example:
+;;;   (defstruct Pt2 :copy [x : int y : int])
+;;;   (.x (make-struct Pt2 :y 2 :x 1))  ; => 1  ; ; doctest: a type declared inside the test body does not build when compiled
+;;;   (.y (make-struct Pt2 5 6))  ; => 6  ; ; doctest: a type declared inside the test body does not build when compiled
+;;@form (make-struct Name value ...)
+;;@form (make-struct Name :field value ...)
+
+;;; defdata -- declare a sum type.
+;;;
+;;; `(defdata Name (Ctor payload ...) ...)` declares a type that is one of its
+;;; constructors. A payload is a keyword type (`(Circle :int)`), a type parameter
+;;; or another type; a constructor may carry nothing, `(Red)`. A record-style
+;;; constructor names its fields, `(Rect [w : int h : int])`, and is built by
+;;; position or by keyword, `(Rect :h 4 :w 3)`. Type parameters follow the name in a
+;;; vector, `(defdata Tree [a] (Leaf) (Node (Tree a) a (Tree a)))`, and `:copy`
+;;; or `:move` (the default) goes right after the name. Constructors are ordinary
+;;; functions, `(Circle 2)`, and `match` takes a value apart: leaving a constructor
+;;; out of a `match` is the error `match: non-exhaustive patterns`, which names the
+;;; constructor, unless the `match` is marked `^non-exhaustive`.
+;;;
+;;; Parameters:
+;;;   Name    -- the type's name
+;;;   [A ..]  -- optional type parameters
+;;;   (Ctor ...) -- one constructor with its payload types, or none
+;;;
+;;; Example:
+;;;   (defdata Shape (Circle :int) (Rect :int :int))
+;;;   (defn area [s : Shape] : int (match s (Circle r) (* 3 (* r r)) (Rect w h) (* w h)))
+;;;   (area (Rect 3 4))  ; => 12  ; ; doctest: a type declared inside the test body does not build when compiled
+;;@form (defdata Name (Ctor payload ...) ...)
+;;@form (defdata Name :copy [A ...] (Ctor payload ...) ...)
+
+;;; defgadt -- declare a sum whose constructors have their own result types.
+;;;
+;;; `(defgadt Expr [a] (Lit int : (Expr int)) (IsZero (Expr int) : (Expr bool)))`
+;;; lists constructors as `(Ctor payload ... : ResultType)`. The result type fixes
+;;; the type parameter, so the type system tracks which kind of value each
+;;; constructor makes: `(IsZero ...)` is an `(Expr bool)` and passing it where an
+;;; `(Expr int)` is wanted is TUR-E0001. A `match` on an `(Expr int)` need only
+;;; list the constructors that can produce one -- `eval-int` over `Lit` and `Add`
+;;; is exhaustive -- and inside an arm the checker knows what the parameter is.
+;;; Equality proofs (`Equal`, `Refl`) are built on this (see `coerce`).
+;;;
+;;; Parameters:
+;;;   Name   -- the type's name
+;;;   [a ..] -- the type parameters the constructors index
+;;;   (Ctor payload ... : Result) -- constructors with their result types
+;;;
+;;; Example:
+;;;   (defgadt Expr [a]
+;;;     (Lit int : (Expr int))
+;;;     (Add (Expr int) (Expr int) : (Expr int))
+;;;     (IsZero (Expr int) : (Expr bool)))
+;;;   (defn eval-int [e : (Expr int)] : int
+;;;     (match e (Lit n) n (Add l r) (+ (eval-int l) (eval-int r))))
+;;;   (eval-int (Add (Lit 2) (Lit 40)))  ; => 42  ; ; doctest: a type declared inside the test body does not build when compiled
+;;@form (defgadt Name [a ...] (Ctor payload ... : Result) ...)
+
+;;; defopaque -- declare a newtype.
+;;;
+;;; `(defopaque Fd :int)` makes `Fd` a type with exactly the representation of its
+;;; base and no operations: it does not unify with `int` or with another opaque
+;;; of the same base (`expected Fd, got int`; `expected Fd, got Pid`), and
+;;; `(+ (:: 1 Fd) 1)` is a type error. Cross the boundary with `::`, `(:: n Fd)`
+;;; to wrap and `(:: fd :int)` to unwrap, which costs nothing. Use it for handles
+;;; and branded ids. The base is `:int`, `:ptr<void>` or `:ptr`; `:linear` or
+;;; `:affine` after it makes the value exactly-once or at-most-once, so
+;;; `(defopaque Tok :int :linear)` must be consumed. A phantom type parameter goes
+;;; before the base: `(defopaque Tagged [A] :int)` is written `(Tagged int)`.
+;;;
+;;; A float base is a trap: `(defopaque Celsius :float)` compiles to an `int64_t`
+;;; handle and `::` to or from it converts the number instead of reinterpreting
+;;; it, so `(raw (mk 21.5))` is 21 compiled (21.5 interpreted) and opaques-guide's
+;;; `celsius->kelvin` example prints `4.62674e+18`. Wrap a float in a `defstruct`
+;;; until that is fixed (docs/reported/definition-forms-gaps.md). An unknown base
+;;; such as `:string` is accepted without a diagnostic.
+;;;
+;;; Parameters:
+;;;   Name   -- the type's name
+;;;   [A ..] -- optional phantom type parameters
+;;;   base   -- the representation: `:int`, `:ptr<void>` or `:ptr`
+;;;   marks  -- optional: `:linear` or `:affine`
+;;;
+;;; Example:
+;;;   (defopaque Fd :int)
+;;;   (defn fd-num [fd : Fd] : int (:: fd :int))
+;;;   (fd-num (:: 3 Fd))  ; => 3
+;;@form (defopaque Name base)
+;;@form (defopaque Name [A ...] base)
+;;@form (defopaque Name base :linear)

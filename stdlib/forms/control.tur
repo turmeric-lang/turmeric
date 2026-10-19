@@ -1,0 +1,365 @@
+;;; tur/forms/control -- binding, branching, looping, early exit and cleanup.
+;;;
+;;; The forms every function body is made of. They are special forms, so they
+;;; are always available and take their arguments unevaluated where the syntax
+;;; says so (`quote`, the arms of `case` and `match`). Definitions (`defn`, `def`,
+;;; `defstruct`, ...) are on tur/forms/definitions; effects and continuations
+;;; have pages of their own.
+;;;
+;;; Where the compiled program and the interpreter (`tur --interpret`, the REPL,
+;;; the playground) differ, an entry says so. Guides: binding-forms-guide,
+;;; sum-types-guide (for `match`), macros-guide (`gensym`), dynamic-vars-guide
+;;; (`binding`), error-handling-guide (`defer`). Defects found while writing
+;;; this page are in docs/reported/control-forms-gaps.md.
+;; Reference only: tools/gendocs.py reads the ;;@ lines, the compiler skips them.
+
+;;; let -- bind local names, then evaluate a body.
+;;;
+;;; The binding vector holds `name value` pairs, and each value sees the names
+;;; bound before it, so `(let [x 1 y (+ x 1)] ...)` works. A binding may carry a
+;;; type, `x : int 3` (or fused, `x :int 3`), and a leading `^mut` makes the name
+;;; assignable with `set!`. A name bound twice shadows the earlier one. The body
+;;; is one or more forms and the value is the last. `(let name [i 0] ...)` is a
+;;; named let: `name` is a function of the bound names, so the body can loop by
+;;; calling it. Vector destructuring, `(let [[a b] v] ...)`, does not bind the
+;;; elements today: it binds the vector itself. A `ref`, `rc` or owning field
+;;; bound here is released when the body ends.
+;;;
+;;; Parameters:
+;;;   bindings -- a vector of `name value` pairs (with optional `^mut` and type)
+;;;   body     -- the forms evaluated with the names in scope
+;;;
+;;; Returns:
+;;;   The value of the last body form.
+;;;
+;;; Example:
+;;;   (let [x 1 y (+ x 1)] (* x y))  ; => 2
+;;;   (let loop [i 5 acc 0] (if (= i 0) acc (loop (- i 1) (+ acc i))))  ; => 15
+;;@form (let [name value ...] body ...)
+;;@form (let name [name value ...] body ...)
+
+;;; let* -- let with the bindings spelled as strictly sequential.
+;;;
+;;; It desugars to nested `let`s, one per binding, and `let` already lets each
+;;; value see the names before it, so the two behave the same. It exists for code
+;;; written in the Scheme style.
+;;;
+;;; Parameters:
+;;;   bindings -- a vector of `name value` pairs
+;;;   body     -- the forms evaluated with the names in scope
+;;;
+;;; Returns:
+;;;   The value of the last body form.
+;;;
+;;; Example:
+;;;   (let* [a 1 b (+ a 1)] (+ a b))  ; => 3
+;;@form (let* [name value ...] body ...)
+
+;;; letrec -- bind names that can refer to each other.
+;;;
+;;; For local functions that call each other: each `fn` can call any of the
+;;; others, including ones bound later in the same vector. A plain `let` cannot,
+;;; because a name is visible only after its binding.
+;;;
+;;; Parameters:
+;;;   bindings -- a vector of `name (fn ...)` pairs
+;;;   body     -- the forms evaluated with the names in scope
+;;;
+;;; Returns:
+;;;   The value of the last body form.
+;;;
+;;; Example:
+;;;   (letrec [ev? (fn [n : int] : bool (if (= n 0) true (od? (- n 1)))) od? (fn [n : int] : bool (if (= n 0) false (ev? (- n 1))))] (ev? 10))  ; => true
+;;@form (letrec [name value ...] body ...)
+
+;;; if -- choose between two expressions.
+;;;
+;;; The condition must be a `bool`: `(if 1 2 3)` is `if condition must be bool,
+;;; got int`. Both branches must have the same type (`if branches have
+;;; mismatched types`). With no else branch the form has type `nil`, so it can
+;;; be used for effect but not as a value to print or add to. Only the branch
+;;; taken is evaluated.
+;;;
+;;; Parameters:
+;;;   cond -- a `bool` expression
+;;;   then -- evaluated when `cond` is true
+;;;   else -- evaluated otherwise (optional)
+;;;
+;;; Returns:
+;;;   The value of the branch taken.
+;;;
+;;; Example:
+;;;   (if (< 1 2) 10 20)  ; => 10
+;;@form (if cond then else)
+;;@form (if cond then)
+
+;;; do -- evaluate forms in order.
+;;;
+;;; Runs each form and returns the last one's value. `(do)` with nothing in it is
+;;; `nil`. Use it where one form is expected but several steps are needed, such
+;;; as an `if` branch or a `handle` clause body. A `defer` directly inside a `do`
+;;; belongs to that `do`'s scope when compiled.
+;;;
+;;; Parameters:
+;;;   forms -- the forms to run
+;;;
+;;; Returns:
+;;;   The value of the last form.
+;;;
+;;; Example:
+;;;   (do 1 2 3)  ; => 3
+;;@form (do form ...)
+
+;;; while -- repeat a body while a condition holds.
+;;;
+;;; The condition is re-evaluated before every pass and must be a `bool`. The
+;;; body may have several forms. The loop has type `nil`, so it is a statement:
+;;; keep its result in a `^mut` variable the body updates with `set!`. A
+;;; `defer` in the body fires at the end of each pass when compiled; the
+;;; interpreter holds them until the function ends.
+;;;
+;;; Parameters:
+;;;   cond -- a `bool` expression tested before each pass
+;;;   body -- the forms to repeat
+;;;
+;;; Example:
+;;;   (let [^mut n 0] (while (< n 3) (set! n (+ n 1))) n)  ; => 3
+;;@form (while cond body ...)
+
+;;; set! -- assign to a mutable place.
+;;;
+;;; Targets: a local bound `^mut`; a global declared `(def ^mut name ...)`; a
+;;; struct field, `(set! (.x p) v)`, where `p` is a `^mut` struct binding or an
+;;; `rc` to the struct; and a dynamic variable, inside a `binding` frame
+;;; (TUR-E0601 with none, TUR-E0605 inside `atomically`). Assigning to a name not
+;;; bound `^mut` is `'x' is immutable; use ^mut at the binding site`, and the
+;;; value must have the binding's type (`value type float does not match binding
+;;; type int`). The form has type `nil`.
+;;;
+;;; Parameters:
+;;;   target -- the name, or `(.field place)`, to assign
+;;;   value  -- the new value
+;;;
+;;; Example:
+;;;   (let [^mut x 1] (set! x 5) x)  ; => 5
+;;@form (set! name value)
+;;@form (set! (.field place) value)
+
+;;; return -- leave the enclosing function early with a value.
+;;;
+;;; Valid only inside a function or `fn` body (at module top level it is `return
+;;; is not allowed at module top level`). It returns from the nearest function
+;;; or lambda, not from the nearest loop or `let`, and deferred cleanups
+;;; registered by the code it leaves still run. The value is not checked against
+;;; the declared return type: `(defn f [] : int (return "a") 1)` compiles, and
+;;; returns a pointer read as an `int` when compiled. A `ref` or `rc` owned by a
+;;; `let` that `return` jumps out of is not released (see
+;;; docs/reported/auto-drop-defers-skipped-on-early-return.md).
+;;;
+;;; Parameters:
+;;;   value -- the value to return
+;;;
+;;; Example:
+;;;   (defn first-neg [a : int b : int] : int
+;;;     (when (< a 0) (return a))
+;;;     (if (< b 0) b 0))
+;;;   (first-neg -2 5)  ; prints -2
+;;@form (return value)
+
+;;; defer -- run a body when the enclosing scope exits.
+;;;
+;;; Registers cleanup to run later, last registered first. The scope is the
+;;; function body or the `let` body it appears in, and it runs on normal exit,
+;;; on `return`, and while a panic unwinds. The variables it reads are captured
+;;; when `defer` runs, not when the cleanup fires: after
+;;; `(let [^mut x 10] (defer (println x)) (set! x 20))` the cleanup prints 10.
+;;; Inside a `do`, `when` or `while` body, the compiled program fires it at the
+;;; end of that block (each pass, for a loop); the interpreter fires it when the
+;;; function ends. A defer that panics while one is already unwinding aborts the
+;;; program.
+;;;
+;;; Parameters:
+;;;   body -- the forms to run at scope exit
+;;;
+;;; Example:
+;;;   (defn f [] : int
+;;;     (defer (println "first registered"))
+;;;     (defer (println "second registered"))
+;;;     (println "body")
+;;;     0)
+;;;   ; calling (f) prints: body, second registered, first registered
+;;@form (defer body ...)
+
+;;; quote -- produce a symbol without evaluating it.
+;;;
+;;; `(quote hello)`, or `'hello`, is the `Sym` for the name, usable with
+;;; `sym->str` and `=`. It is how a macro or DSL helper builds names. Quoting a
+;;; list is not supported as data today: `(quote (+ 1 2))` evaluates the list and
+;;; gives 3 on both engines.
+;;;
+;;; Parameters:
+;;;   x -- a symbol or literal, not evaluated
+;;;
+;;; Returns:
+;;;   The symbol (a `Sym`), or the literal.
+;;;
+;;; Example:
+;;;   (sym->str (quote hello))  ; => "hello"
+;;@form (quote x)
+
+;;; case -- pick a result by comparing a value with constants.
+;;;
+;;; Each `test result` pair is tried in order and the first test equal to the
+;;; value wins; tests are evaluated expressions (`(* k 2)` works) and compared
+;;; with `=`, so they must be numbers, booleans or `Sym`s, not strings. A final
+;;; `:else` (or bare `else`) result is the default. With no default and no match
+;;; the form is `nil`, so when the results are values the missing default is `if
+;;; branches have mismatched types`; results that are statements need no
+;;; default. For patterns that bind variables, use `match`.
+;;;
+;;; Parameters:
+;;;   value -- the expression to compare
+;;;   arms  -- `test result` pairs, then an optional `:else result`
+;;;
+;;; Returns:
+;;;   The result of the first matching arm, or of `:else`.
+;;;
+;;; Example:
+;;;   (case :b :a 1 :b 2 :else 0)  ; => 2
+;;;   (case 7 1 10 2 20 :else 0)  ; => 0
+;;@form (case value test result ... :else default)
+
+;;; match -- take a value apart by pattern.
+;;;
+;;; Arms are flat `pattern result` pairs, tried in order. A pattern is a
+;;; constructor with variables, `(Circle r)` or `(Some v)` / `(None)`; an integer
+;;; literal; a variable that binds the value; or `_`, which matches anything. A
+;;; variable may carry a guard, `x when (< x 0)`. Every arm must have the same
+;;; type. On an algebraic data type the compiler checks exhaustiveness:
+;;; `non-exhaustive patterns -- constructor 'Rect' of 'Shape' not covered` is an
+;;; error (`^non-exhaustive` opts out). A match on literals is not checked: with
+;;; no matching arm the compiled program crashes and the interpreter stops with
+;;; `match: no arm matched`, so end it with `_`.
+;;;
+;;; Parameters:
+;;;   value -- the expression to match
+;;;   arms  -- `pattern result` pairs
+;;;
+;;; Returns:
+;;;   The result of the first matching arm.
+;;;
+;;; Example:
+;;;   (match 5 0 "zero" _ "many")  ; => "many"
+;;;   (match -4 x when (< x 0) "neg" _ "pos")  ; => "neg"
+;;@form (match value pattern result ...)
+
+;;; -> -- thread a value through calls as the first argument.
+;;;
+;;; `(-> x (f a) g)` is `(g (f x a))`: each step receives the previous value as
+;;; its first argument, and a bare name is called with it alone. `(-> x)` is `x`.
+;;;
+;;; Parameters:
+;;;   x     -- the value to thread
+;;;   steps -- calls, or names of one-argument functions
+;;;
+;;; Returns:
+;;;   The result of the last step.
+;;;
+;;; Example:
+;;;   (-> 5 (+ 1) (* 2))  ; => 12
+;;@form (-> x step ...)
+
+;;; ->> -- thread a value through calls as the last argument.
+;;;
+;;; Like `->`, but each step receives the previous value as its LAST argument:
+;;; `(->> 5 (- 100))` is `(- 100 5)`.
+;;;
+;;; Parameters:
+;;;   x     -- the value to thread
+;;;   steps -- calls, or names of one-argument functions
+;;;
+;;; Returns:
+;;;   The result of the last step.
+;;;
+;;; Example:
+;;;   (->> 5 (- 100))  ; => 95
+;;@form (->> x step ...)
+
+;;; ^tailcall -- assert that a call is a tail call.
+;;;
+;;; Marks the call that follows as one that must run in constant stack, in tail
+;;; position of its function; if it is not, compilation fails with TUR-E0716
+;;; (`tur explain TUR-E0716`) instead of overflowing the stack later. Write it
+;;; around the call, `(^tailcall (f x))`, or as a prefix, `^tailcall (f x)`. A
+;;; call in an argument position, like `(+ 1 (^tailcall (f x)))`, is the error.
+;;; The interpreter does not check it: it accepts that program and runs it.
+;;;
+;;; Parameters:
+;;;   call -- the call that must be in tail position
+;;;
+;;; Example:
+;;;   (defn count-down [n : int acc : int] : int
+;;;     (if (= n 0) acc (^tailcall (count-down (- n 1) (+ acc 1)))))
+;;;   (count-down 1000000 0)  ; prints 1000000, with no stack growth
+;;@form (^tailcall call)
+
+;;; gensym -- make a fresh symbol for a macro to bind.
+;;;
+;;; Used inside a `defmacro` template, where it runs at expansion time: each
+;;; call returns a name that cannot collide with a user's, so the macro's own
+;;; binding cannot capture a variable of the same name at the call site. It takes
+;;; an optional string or symbol as a prefix. Outside a macro it has no value
+;;; (`(gensym) has no runtime value`).
+;;;
+;;; Parameters:
+;;;   prefix -- an optional string or symbol to start the name with
+;;;
+;;; Returns:
+;;;   A fresh symbol, unique in the program.
+;;;
+;;; Example:
+;;;   (defmacro safe [e] (let [t (gensym "tmp")] `(let [~t 99] (+ ~t ~e))))
+;;;   (let [tmp 1] (safe tmp))  ; prints 100; a hand-written `tmp` would give 198
+;;@form (gensym)
+;;@form (gensym prefix)
+
+;;; binding -- rebind dynamic variables for the extent of a body.
+;;;
+;;; The variables are those declared with `defdynamic`. Inside the body, and in
+;;; every function it calls, the variable reads as the new value; when the body
+;;; ends the old value returns. Bindings nest, and they are per thread. `set!` of
+;;; a dynamic variable is allowed only while a `binding` frame is active.
+;;;
+;;; Parameters:
+;;;   bindings -- a vector of `*var* value` pairs
+;;;   body     -- the forms evaluated with the new values
+;;;
+;;; Returns:
+;;;   The value of the last body form.
+;;;
+;;; Example:
+;;;   (defdynamic *depth* :int 0)
+;;;   (defn show [] : int *depth*)
+;;;   (binding [*depth* 5] (show))  ; prints 5; outside, (show) is 0
+;;@form (binding [*var* value ...] body ...)
+
+;;; fn -- an anonymous function that can capture variables.
+;;;
+;;; `(fn [x : int] : int (* x 2))`: a parameter vector with types, an optional
+;;; return type, then the body. It captures the variables it uses from the
+;;; enclosing scope, and it is a value: bind it, pass it, return it. `return`
+;;; inside it leaves the lambda, not the function around it. The Greek letter
+;;; lambda (U+03BB) is accepted as a spelling of `fn`. Write a lambda with its
+;;; own parentheses even in sweet-expression files, so its end stays visible.
+;;;
+;;; Parameters:
+;;;   params -- a vector of `name : type`
+;;;   body   -- the forms evaluated when the function is called
+;;;
+;;; Returns:
+;;;   A function value.
+;;;
+;;; Example:
+;;;   ((fn [x : int] : int (* x 2)) 4)  ; => 8
+;;;   (let [k 10 f (fn [x : int] : int (+ x k))] (f 1))  ; => 11
+;;@form (fn [name : type ...] : type body ...)

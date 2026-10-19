@@ -1,0 +1,98 @@
+;;; tur/forms/generators -- resumable bodies that yield values one at a time.
+;;;
+;;; `(gen [] body ...)` makes a generator: a body that runs until a `yield`,
+;;; hands that value out, and picks up where it left off the next time it is
+;;; asked. The compiler turns the body into a C state machine, so a yield
+;;; allocates nothing. The body does not start until the first `gen-next`.
+;;;
+;;; `gen-next` returns the yielded value as a pointer-sized word, or a null
+;;; pointer once the body has finished; `gen-unwrap` and `gen-some?` in tur/gen
+;;; read that word, and `gen-for-each`, `gen-collect` and `gen-nth` there consume
+;;; a whole generator. The lazy `Seq` combinators (tur/seq) are built on these.
+;;; See generators-guide.
+;;;
+;;; Limits today (the post-1.0 CPS pass lifts them): the capture vector must be
+;;; empty, a generator cannot contain another generator, `yield` cannot appear in
+;;; a `match` arm (TUR-E0702) or in a recursive generator (TUR-E0703), and there
+;;; is no type to annotate a generator parameter with -- a function that takes
+;;; one cannot call `gen-next` on it. Consume a generator where it is made, or
+;;; through the tur/gen macros. See docs/reported/generator-forms-gaps.md for
+;;; what else falls short.
+;; Reference only: tools/gendocs.py reads the ;;@ lines, the compiler skips them.
+
+;;; gen -- create a generator from a body.
+;;;
+;;; The capture vector is always `[]`: the body sees the variables around it, and
+;;; the compiler works out which ones from the body itself (`(gen [x] ...)` is an
+;;; error). The body runs lazily, a `yield` at a time. Locals that the body
+;;; reads are copied into the generator when it is created, so a later `set!` of
+;;; the outer variable is not seen by the compiled generator (the interpreter
+;;; sees it), and `set!` of a captured variable inside the body changes only the
+;;; generator's copy (a `set!` of a captured variable the body never reads does
+;;; not compile). Keep a generator's state in `let` bindings made inside the
+;;; body.
+;;;
+;;; Parameters:
+;;;   []   -- the capture vector, which must be empty
+;;;   body -- the forms to run; `yield` hands a value out
+;;;
+;;; Returns:
+;;;   A generator. Drive it with `gen-next`.
+;;;
+;;; Example:
+;;;   (let [g (gen [] (yield 1) (yield 2))] (gen-next g) (gen-unwrap (gen-next g)))  ; => 2
+;;@form (gen [] body ...)
+
+;;; yield -- hand a value out of a generator body and pause.
+;;;
+;;; Valid only inside a `gen` body (anywhere else is `yield is only valid inside
+;;; a gen body`). The first `yield` fixes the generator's element type: ints,
+;;; floats and strings work, but a later `yield` of a different type is not
+;;; checked and comes out as raw bits. A `yield` inside a nested `fn` literal in
+;;; the body does not compile (the interpreter accepts it). A `yield` form has
+;;; type void, so `(let [r (yield 1)] ...)` is TUR-E0023.
+;;;
+;;; Parameters:
+;;;   value -- the value to yield
+;;;
+;;; Example:
+;;;   (let [g (gen [] (yield 7.25))] (gen-unwrap (gen-next g)))  ; => 7.25
+;;@form (yield value)
+
+;;; gen-next -- run a generator to its next yield.
+;;;
+;;; Starts or resumes the body and returns what it yields, as a pointer-sized
+;;; word. When the body runs off its end the result is a null pointer
+;;; (`gen-some?` is false for it) and every later call returns null again.
+;;; Passing something that is not a generator is a compile error. Reading a
+;;; null result with `gen-unwrap` crashes the compiled program (the interpreter
+;;; returns 0), so test with `gen-some?` first.
+;;;
+;;; Parameters:
+;;;   g -- the generator to advance
+;;;
+;;; Returns:
+;;;   The next yielded value as a `ptr<void>`, or null when finished.
+;;;
+;;; Example:
+;;;   (let [g (gen [] (yield 1))] (gen-unwrap (gen-next g)))  ; => 1
+;;@builtin (gen-next [g : generator] : ptr<void>)
+
+;;; gen-done? -- has a generator run to its end?
+;;;
+;;; False for a fresh generator, and still false after the last `yield` has been
+;;; taken: it turns true only after a `gen-next` drives the body past its end and
+;;; gets null back. A loop that tests `gen-done?` before each `gen-next` therefore
+;;; makes one more `gen-next` call than there are values and must check
+;;; `gen-some?` on each result.
+;;;
+;;; Parameters:
+;;;   g -- the generator to ask
+;;;
+;;; Returns:
+;;;   `true` once the body has finished, else `false`.
+;;;
+;;; Example:
+;;;   (let [g (gen [] (yield 1))] (gen-next g) (gen-done? g))  ; => false
+;;;   (let [g (gen [] (yield 1))] (gen-next g) (gen-next g) (gen-done? g))  ; => true
+;;@builtin (gen-done? [g : generator] : bool)

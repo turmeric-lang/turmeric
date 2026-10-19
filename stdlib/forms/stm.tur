@@ -1,0 +1,57 @@
+;;; tur/forms/stm -- software transactional memory: stm blocks and retry.
+;;;
+;;; A transaction reads and writes `TVar`s (tur/stm: `tvar/new`, `tvar/read`,
+;;; `tvar/write`, `tvar/swap`, `tvar/cas`, `tvar/modify`) as if it were alone.
+;;; `(atomically (stm ...))` runs it: the writes commit together, or -- if another
+;;; thread committed to something the transaction read -- the attempt is thrown
+;;; away and the body runs again. There are no locks to take and no deadlock, but
+;;; the body can run more than once, so keep effects such as printing out of it.
+;;; stm-guide has the mechanics, stm-tutorial the walkthrough.
+;;;
+;;; The `tvar/*` forms are accepted only lexically inside an `stm` block
+;;; (TUR-E0009). A function that touches a TVar must contain its own `stm`, even
+;;; if every caller already holds one. A value read from a TVar is a pointer-sized
+;;; word: ascribe it, `(:: (tvar/read tv) :int)`. Floats work too.
+;; Reference only: tools/gendocs.py reads the ;;@ lines, the compiler skips them.
+
+;;; stm -- a transactional block: the body that `atomically` runs.
+;;;
+;;; Evaluates its forms in order and yields the last one's value, like `do`, but
+;;; inside it the `tvar/*` forms work and see one consistent snapshot. Put
+;;; `stm` directly under `atomically`, or in a function that is called from an
+;;; `atomically` body. An `stm` nested in a running transaction joins it: its
+;;; writes belong to the same commit. A nested `atomically` does not -- it is a
+;;; transaction of its own that commits first and cannot see the outer one's
+;;; uncommitted writes. An `stm` that is not under an `atomically` at all
+;;; crashes the compiled program (the interpreter reports `tvar/read used outside
+;;; of an atomically block`). Do not `set!` a dynamic variable inside one
+;;; (TUR-E0605): a retry cannot undo it.
+;;;
+;;; Parameters:
+;;;   body -- the forms of the transaction
+;;;
+;;; Returns:
+;;;   The value of the last form, once the transaction has committed.
+;;;
+;;; Example:
+;;;   (atomically (stm 1 2 3))  ; => 3
+;;;   (let [tv (tvar/new 42)] (:: (atomically (stm (tvar/read tv))) :int))  ; => 42
+;;@form (stm body ...)
+
+;;; retry -- abandon this attempt and run the transaction again later.
+;;;
+;;; Used to wait for a condition: `(when (= (:: (tvar/read flag) :int) 0) (retry))`.
+;;; The runtime parks the thread until another transaction commits to something
+;;; this one has read (no busy-waiting), then runs the body again from the top.
+;;; If nothing ever does, the compiled program waits forever; the interpreter,
+;;; which cannot wait on another thread, stops with `transaction requested retry
+;;; with no way to make progress`. `retry` is not an exit: the rest of the attempt
+;;; still runs, so a `println` after it repeats on every attempt, and a retry
+;;; that has read no TVar spins instead of parking. Put it last on its path, and
+;;; prefer `check`, which is `retry` unless a condition holds. `retry` has type
+;;; `nil`, so both arms of an `if` around it must be `nil`. `or-else` tries an
+;;; alternative instead of waiting.
+;;;
+;;; Example:
+;;;   (atomically (stm (or-else (stm (retry) 1) (stm 2))))  ; => 2
+;;@form (retry)

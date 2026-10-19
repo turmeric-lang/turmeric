@@ -1,0 +1,124 @@
+;;; tur/forms/classes -- interfaces and effects: defclass, definstance, defeffect.
+;;;
+;;; `defclass` declares an interface -- a set of methods over one or more types --
+;;; and `definstance` says how one type provides it. A call to a method picks the
+;;; instance from the types of its arguments, at compile time, with no run-time
+;;; lookup. `defeffect` declares an operation that code can ask its caller to
+;;; carry out; `perform` and `handle` use it (tur/forms/effects). The three share a
+;;; shape -- a name, a parameter list, then a body of signatures -- and a rule: a
+;;; name an auto-loaded stdlib module already defines cannot be defined again.
+;; Reference only: tools/gendocs.py reads the ;;@ lines, the compiler skips them.
+
+;;; defclass -- declare a typeclass.
+;;;
+;;; `(defclass Describe [a] (describe [x : a] : cstr))` declares a class over the
+;;; type `a` with one method. Each method is a signature, `(name [params] : Ret)`;
+;;; a body after the return type is the method's default, used by every instance
+;;; that does not supply its own: `(shout [x : a] : cstr "default")`. A class over
+;;; a type constructor marks the parameter `^f` (kind `* -> *`, as `Functor`) or
+;;; `^^f` (`* -> * -> *`, as `Bifunctor`). Four optional pieces follow the
+;;; parameter vector:
+;;;
+;;;   Superclasses   `[(Semi a)]` right after the parameters, so a `Mono` constraint
+;;;                  also licenses `Semi`'s methods and every `Mono` instance needs
+;;;                  a `Semi` one (TUR-E0393 `requires a Semi [int]` otherwise).
+;;;   Associated     `(type Elem : Type)` in the body; each instance binds it with
+;;;   types          `(type Elem = int)`.
+;;;   Dependencies   `| (c -> e)` after the parameters says the first determines
+;;;                  the second; an instance that breaks it is an error.
+;;;   Several types  `[c e]`, a multi-parameter class.
+;;;
+;;; A method used on a type with no instance is `TUR-E0015: no instance of
+;;; typeclass 'Describe' for type ...`. A method named like an ordinary function is
+;;; warned (TUR-W0039). Document a class with `;;;` lines giving `Parameters:`,
+;;; `Methods:` and `Laws:` (autodoc-guide); typeclass-guide covers the rest.
+;;;
+;;; Parameters:
+;;;   Name   -- the class
+;;;   params -- the type (or `^f` constructor) variables, in a vector
+;;;   supers -- optional: `[(Super a) ...]`
+;;;   body   -- method signatures, with optional defaults and `(type Name : Type)`
+;;;
+;;; Example:
+;;;   (defclass Describe [a]
+;;;     (describe [x : a] : cstr)
+;;;     (shout [x : a] : cstr "default shout"))
+;;;   (definstance Describe [int] (describe [x] "an int"))
+;;;   (describe 7)  ; => "an int"
+;;;   (shout 7)  ; => "default shout"
+;;@form (defclass Name [a ...] (method [param ...] : Ret) ...)
+;;@form (defclass Name [a] [(Super a) ...] (method [param ...] : Ret) ...)
+;;@form (defclass Name [a b] | (a -> b) (method [param ...] : Ret) ...)
+
+;;; definstance -- provide a typeclass for a type.
+;;;
+;;; `(definstance Describe [int] (describe [x] "an int"))` says how `int` is
+;;; `Describe`. The head is the class and the type in a vector; the body gives each
+;;; method, whose signature is taken from the class (a parameter list with no types,
+;;; `[x]`, is enough). A method left out falls back to the class's default, and a
+;;; body of the wrong type is TUR-E0708. A type constructor takes
+;;; its constraints in a second vector: `(definstance Describe [(Option A)]
+;;; [(Describe A)] (describe [x] "option"))` is an instance for every `Option` whose
+;;; element is itself `Describe`. A partially applied head fixes some arguments and
+;;; leaves others free with `_`: `(definstance Functor [(Result _ B)] ...)`. An
+;;; instance that needs a superclass instance which is missing is TUR-E0393, and
+;;; defining the same instance twice is `TUR-E0025: instance Describe [int] is
+;;; already defined` (reloading the file in the REPL replaces it). Method bodies
+;;; may be inline C (typeclass-guide).
+;;;
+;;; Parameters:
+;;;   Class       -- the class
+;;;   [Type ...]  -- the type(s) it is implemented for
+;;;   constraints -- optional: `[(C A) ...]` on the type's parameters
+;;;   methods     -- one `(name [params] body)` per method to implement
+;;;
+;;; Example:
+;;;   (defclass Semi [a] (comb [x : a y : a] : a))
+;;;   (defclass Mono [a] [(Semi a)] (zero [] : a))
+;;;   (definstance Semi [int] (comb [x y] (+ x y)))
+;;;   (definstance Mono [int] (zero [] 0))
+;;;   (defn fold3 [^Mono A] [x : A y : A z : A] : A (comb (comb (comb (zero) x) y) z))
+;;;   (fold3 1 2 3)  ; => 6
+;;@form (definstance Class [Type ...] (method [param ...] body) ...)
+;;@form (definstance Class [Type] [(C A) ...] (method [param ...] body) ...)
+
+;;; defeffect -- declare an algebraic effect.
+;;;
+;;; `(defeffect Log [msg : cstr] : nil)` declares an operation `Log` with named,
+;;; typed parameters and a result type. Code raises it with `(perform (Log "x"))`,
+;;; which evaluates to the result type, and a `handle` decides what happens
+;;; (tur/forms/effects). A function lists the effects it may perform in its row,
+;;; `#fx{Log}`; naming one no `defeffect` declares is TUR-E0026. Declaring a name
+;;; twice is `defeffect: 'Ask' is already defined`, and a declaration with no result
+;;; type is `defeffect requires (defeffect Name [params...] result-type)`.
+;;;
+;;; Three markers adjust it. `^private`, before the name, keeps the effect inside
+;;; its module. `^extends Parent`, after the result type, makes it a kind of `Parent`: a
+;;; function declared `#fx{IO}` may perform `(defeffect Say [s : cstr] : nil ^extends
+;;; IO)`. `^capability` makes it a tag for authority rather than an operation: a
+;;; `#fx{FS}` annotation says a function touches the file system, nothing performs
+;;; or handles it, and a pure caller of such a function is TUR-E0009. `IO`, `FS`,
+;;; `Net`, `Proc` and `Rand` are capability tags the compiler knows already
+;;; (stdlib/effects.tur documents them). A `defeffect` written inside a function
+;;; body is accepted but a `perform` of it is `no lowering here` when compiled; declare
+;;; effects at file scope.
+;;;
+;;; Parameters:
+;;;   Name   -- the effect
+;;;   params -- `[name : Type ...]`, possibly empty
+;;;   Ret    -- the type `perform` evaluates to
+;;;   marks  -- optional: `^private` before the name, `^extends Parent` and
+;;;             `^capability` after the result type
+;;;
+;;; Example:
+;;;   (defeffect Ask [] : int)
+;;;   (defeffect Emit [msg : cstr n : int] : nil)
+;;;   (defn go [] #fx{Ask Emit} : int
+;;;     (perform (Emit "got" 1))
+;;;     (+ 1 (perform (Ask))))
+;;;   (println (handle (go)
+;;;     (Ask [] k) (resume k 41)
+;;;     (Emit [m n] k) (do (println m) (println n) (resume k nil))))  ; prints got, 1, then 42
+;;@form (defeffect Name [param : Type ...] : Ret)
+;;@form (defeffect Name [param : Type ...] : Ret ^extends Parent)
+;;@form (defeffect Name [] : nil ^capability)

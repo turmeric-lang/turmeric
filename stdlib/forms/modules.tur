@@ -1,0 +1,126 @@
+;;; tur/forms/modules -- splitting a program into files: defmodule, import, export, load.
+;;;
+;;; A module is one file that opens with `defmodule`. Everything defined inside
+;;; is private to it unless an `export` names it, so a library keeps a small
+;;; public surface. Another file brings a module in with `import` (inside its own
+;;; `defmodule`), and `load` splices the text of a plain file in place. The stdlib
+;;; modules named `tur/...` are loaded for every program and need no import.
+;;; module-system-guide has the whole story, including how names become C symbols.
+;;;
+;;; The name of a module is the path of its file under the project root:
+;;; `geom/vec` is `geom/vec.tur`, found relative to the directory of the file
+;;; being compiled, then the stdlib, then each `-I` directory. Nothing enforces
+;;; the match, but a mismatch is a confusing `module not found`.
+;; Reference only: tools/gendocs.py reads the ;;@ lines, the compiler skips them.
+
+;;; defmodule -- start a module.
+;;;
+;;; `(defmodule geom/vec ...)` opens a module: the name, an optional docstring
+;;; (`(defmodule geom/vec "2-D vectors" ...)`), and then, in order, its `import`s,
+;;; its `export`s and its definitions. It must be the first form in its file
+;;; (`defmodule must be the first form in the file`) and there is one per file. The
+;;; body is a list of definitions, not of statements: a call or other expression
+;;; directly in it is TUR-E0711, because there is no place for it to run. Legal
+;;; direct children are `defn`, `defmacro`, `defstruct`, `defdata`, `defopaque`,
+;;; `deftype`, `defalias`, `defclass`, `definstance`, `defeffect`, `def` (its
+;;; initializer does run), `extern-c`, `import`, `export` and `export-from`, a bare
+;;; inline-C block, and `defer`, which runs when the process exits. Put anything
+;;; that must run in `main`. Everything defined in a module is private to it until
+;;; exported; the module is reachable under its own name from top level without an
+;;; import, as `(inner/f)`, and then only through its exports.
+;;;
+;;; Parameters:
+;;;   name -- the module's name, a symbol; `/` nests it
+;;;   body -- imports, exports and definitions
+;;;
+;;; Example:
+;;;   (defmodule geom/vec
+;;;     (export dotp scale)
+;;;     (defn helper [a : int] : int (* a 2))
+;;;     (defn dotp [a : int b : int] : int (+ (* a b) (helper 0)))
+;;;     (defn scale [a : int] : int (helper a)))
+;;@form (defmodule name body ...)
+;;@form (defmodule name "docstring" body ...)
+
+;;; import -- use another module's exported names.
+;;;
+;;; Written inside a `defmodule`, before its first definition (outside one it is
+;;; `import is only allowed inside defmodule`). `(import geom/vec)` makes the
+;;; exports available fully qualified, `(geom/vec/scale 4)`. `(import geom/vec :as
+;;; v)` gives the module a short name, `(v/scale 4)`. `(import geom/vec :refer
+;;; [dotp])` brings selected names in unqualified, `(dotp 2 5)`; a referred name
+;;; that is also a stdlib macro, such as `dot`, means the macro. `(import math
+;;; :for-macros)` makes the module's functions callable by `defmacro*` bodies at
+;;; compile time only, and cannot be combined with `:as` or `:refer`. Only
+;;; exported names are visible: `(v/helper 5)` for a private one is `symbol
+;;; 'helper' is not exported from module 'geom/vec'`. A module that cannot be found
+;;; is `module 'nope/missing' not found`, listing every path tried, and two modules
+;;; that import each other are `circular import: module 'a' is already being
+;;; loaded`; move the shared part to a third module.
+;;;
+;;; Parameters:
+;;;   module -- the module's name
+;;;   :as    -- optional: a short prefix for the module's names
+;;;   :refer -- optional: a vector of names to bring in unqualified
+;;;
+;;; Example:
+;;;   (defmodule app
+;;;     (import geom/vec :as v)
+;;;     (import geom/vec :refer [dotp])
+;;;     (defn main [] : int
+;;;       (println (v/scale 5))
+;;;       (println (dotp 2 5))
+;;;       0))
+;;@form (import module)
+;;@form (import module :as alias)
+;;@form (import module :refer [name ...])
+;;@form (import module :for-macros)
+
+;;; export -- say which names other modules may use.
+;;;
+;;; `(export name ...)` inside a `defmodule` lists the functions, macros, types and
+;;; constants the module makes public; everything else stays private. Exporting a
+;;; name the module does not define is `exported symbol 'x' is not defined in this
+;;; module`, and outside a `defmodule` the form is `export is only allowed inside
+;;; defmodule`. An effect is exported as `(export (effect Write))` and imported with
+;;; `:refer [(effect Write)]`. `(export-from other name ...)` re-exports names that
+;;; `other`, which must already be imported, exports; it emits no wrapper, so the
+;;; consumer calls the original directly. A name that two exported symbols turn
+;;; into the same C name is reported with both. C names, and `(export-as "c_name")`
+;;; to choose one, are in module-system-guide.
+;;;
+;;; Parameters:
+;;;   name -- a function, macro, type or constant defined in this module
+;;;
+;;; Example:
+;;;   (defmodule geom
+;;;     (import geom/vec :refer [dotp scale])
+;;;     (export geom-version)
+;;;     (export-from geom/vec dotp scale)
+;;;     (defn geom-version [] : int 2))
+;;@form (export name ...)
+;;@form (export-from module name ...)
+
+;;; load -- splice another file in.
+;;;
+;;; `(load "helper.tur")` reads the file and elaborates its forms here, once per
+;;; compilation, as if they had been written in its place. It must be at top level
+;;; or directly in a `defmodule` (`load is only valid at the top level or directly
+;;; in a defmodule body`). A path beginning `stdlib/` is the standard library, found
+;;; from any directory: `(load "stdlib/equal.tur")`, which lets a program use a
+;;; module that is not loaded by default. Any other path is relative to the
+;;; directory you run `tur` from, not to the file that contains the `load`, so
+;;; the same program can find `helper.tur` from one directory and fail with
+;;; `load: cannot open 'helper.tur'` from another. In a module body a stdlib file is
+;;; spliced at file scope, ahead of the module, and shared by every module that
+;;; loads it; another file is spliced into the module, so its definitions become
+;;; the module's and can be exported. Prefer `import` for code you want to name
+;;; and hide; `load` is for flat helper files and the stdlib.
+;;;
+;;; Parameters:
+;;;   path -- a string: `stdlib/...`, or a file relative to the working directory
+;;;
+;;; Example:
+;;;   (load "stdlib/equal.tur")
+;;;   (println (coerce (Refl) 5))  ; prints 5
+;;@form (load path)
