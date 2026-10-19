@@ -98,11 +98,3 @@ serial-reset
 call/cc
 call/cc*
 escape
-
-# Generators and STM
-gen
-yield
-gen-next
-gen-done?
-stm
-retry

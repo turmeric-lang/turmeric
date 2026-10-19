@@ -61,6 +61,8 @@ directory is worse for triage than no index.
 | Report | Severity | One line |
 | --- | --- | --- |
 | [panic-forms-gaps](panic-forms-gaps.md) | medium | `panic-payload-downcast` is typed `ptr<void>` but emits no value, so using its result is a C error; compiled `catch-panic-of` with a non-matching payload type and no outer boundary swallows the panic and yields an `ok` result (the interpreter aborts, as documented); compiled `panic-with` reports the generated C file and line; `(catch-unwind 5)` segfaults; the interpreter's `panic-payload-*` accessors return placeholders |
+| [generator-forms-gaps](generator-forms-gaps.md) | medium | A compiled generator copies the variables it captures (`(set! n 2)` after creation is not seen; the interpreter shares), a `set!` of a captured variable the body never reads fails to build (`'n_3' undeclared`; `collect_free_vars` skips an `EX_SET` target), `yield` types are unchecked (a second `yield 2.5` reads as an int), `yield` in a nested `fn` does not compile, `gen-unwrap` of an exhausted generator segfaults, and a generator has no parameter type |
+| [stm-forms-gaps](stm-forms-gaps.md) | medium | A bare `stm` (no `atomically`) segfaults when compiled (the interpreter errors); `retry` does not end the attempt -- code after it still runs, and with an empty read set it spins instead of parking; a nested `atomically` is silently a separate transaction (the inner read misses the outer's write, the outer's commit overwrites the inner's) |
 
 ## Found executing the open reports (filed 2026-10-18)
 
