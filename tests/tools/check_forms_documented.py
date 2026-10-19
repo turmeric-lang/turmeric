@@ -110,6 +110,8 @@ SRC = """;;; tur/forms/demo -- a demo page.
 ;;
 ;;; ptr-add -- advance a pointer.
 ;;;
+;;; The offset is in bytes.
+;;;
 ;;; Example:
 ;;;   (ptr-add p 8)
 ;;@builtin (ptr-add [p : ptr<void> n : int] : ptr<void>)
@@ -143,6 +145,9 @@ for ok, what in [
     (_build_doc_entry(defs['unsafe']).split('\n')[2:4] ==
      ['(unsafe body ...)', '(unsafe [Eff ...] body ...)'],
      "the doc-lookup entry carries the syntax"),
+    (_build_doc_entry(defs['ptr-add']).split('\n')[2:5] ==
+     ['(ptr-add [p :ptr<void> n :int] :ptr<void>)', '', 'The offset is in bytes.'],
+     "the doc-lookup entry carries the prose under the signature"),
 ]:
     if not ok:
         fails.append(f"gendocs declaration parser: {what}")

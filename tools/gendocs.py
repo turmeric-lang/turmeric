@@ -2509,6 +2509,10 @@ def _build_doc_entry(defn):
     if defn.get('kind') in ('form', 'builtin'):
         # A form or builtin has no source to read its shape from.
         parts += [''] + _render_signature(defn).split('\n')
+    # The prose the page renders under the summary; `(doc ...)` and `tur doc`
+    # show the same text the site does.
+    if doc.get('description'):
+        parts += [''] + doc['description'].split('\n')
 
     if doc['deprecated']:
         parts.append('')
@@ -2533,6 +2537,9 @@ def _build_doc_entry(defn):
         parts.append('Example:')
         for line in doc['example'].splitlines():
             parts.append(f'  {line}')
+
+    if doc.get('notes'):
+        parts += [''] + doc['notes'].split('\n')
 
     if doc['since']:
         parts.append('')
