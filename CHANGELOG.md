@@ -2,6 +2,35 @@
 
 All notable changes to Turmeric are documented here.
 
+## [0.67.4] -- 2026-10-19
+
+### Added
+
+- **API reference for every compiler builtin and special form.** All 163
+  reserved forms and public builtins -- operators like `+.`, the unsafe and
+  reference primitives, GC knobs (`gc!`, `gc-enable!`), panic forms
+  (`panic-with`, `catch-panic-of`), generators (`gen`, `yield`), STM (`stm`,
+  `retry`), control (`let`, `match`, `->`), effects (`perform`, `handle`),
+  continuations (`shift`, `call/cc`), types, definitions, modules, FFI and
+  sessions -- now have a full entry: signature, semantics, parameters, returns
+  and a doctest-verified example.
+
+### Changed
+
+- **Doc lookups prefer the stdlib entry over the one-liner table.** `tur doc`,
+  `(doc ...)`, the REPL's `:doc` and the playground panel used to consult the
+  builtin one-liner table first, hiding a documented form behind its summary;
+  they now show the full entry, so `tur doc let` and `:doc +` print the real
+  reference.
+
+### Docs
+
+- **Doc entries carry the prose, not just the summary.** The text between a
+  form's summary and its first section, and the notes after its example, now
+  appear in `tur doc` and `(doc ...)` output -- the same text the HTML card
+  shows. The autodoc guide documents the `;;@builtin` / `;;@form` declaration
+  convention and the drift check that keeps every name covered.
+
 ## [0.67.3] -- 2026-10-19
 
 ### Fixed
