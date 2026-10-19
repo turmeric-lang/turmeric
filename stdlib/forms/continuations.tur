@@ -1,0 +1,278 @@
+;;; tur/forms/continuations -- capturing "the rest of the computation": shift, call/cc and friends.
+;;;
+;;; A continuation is the work still to do after some point in a program. These
+;;; forms capture it and decide what to do with it: throw it away (an early
+;;; exit), call it once, call it many times (backtracking, search), or turn it
+;;; into bytes and run it in another process. They differ in how far the capture
+;;; reaches and in what the continuation `k` is allowed to do:
+;;;
+;;;   shift / reset                   up to the nearest `reset`; `k` optional
+;;;   shift0                          the abortive `shift` only; takes no `k`
+;;;   cloneable-shift / -reset        up to the nearest cloneable-reset; `k` many times
+;;;   serial-shift / -reset           as above, and `k` can be written to bytes
+;;;   call/cc, escape                 up to the call itself; `k` leaves, once
+;;;   call/cc*                        up to the nearest cloneable-reset; `k` many times
+;;;
+;;; The type of `k` says which kind it is: `cont` (callable any number of times),
+;;; `serial-cont`, `escape-cont<T>` (what `call/cc` and `escape` pass; an
+;;; unannotated `(fn [k] ...)` gets it) and, for a handler clause, `effect-cont`
+;;; (see tur/forms/effects). A continuation is invoked by calling it, `(k v)`;
+;;; `resume` is for handler continuations only. The capture forms take a
+;;; receiving function, `(shift (fn [k : cont] ...) x)`, not Danvy and Filinski's
+;;; `(shift k body)`, which binds a name.
+;;; delimited-control-operators-guide compares them; serializable-continuations-guide
+;;; covers the serial pair. Several of these forms differ between the compiler
+;;; and the interpreter, or are unfinished -- see
+;;; docs/reported/continuation-forms-gaps.md.
+;; Reference only: tools/gendocs.py reads the ;;@ lines, the compiler skips them.
+
+;;; reset -- mark how far a shift reaches.
+;;;
+;;; Evaluates its body forms in order and yields the last one's value, unless a
+;;; `shift` inside them (in the body itself or in a function it calls) captures
+;;; the context: then the `reset` yields whatever that `shift` produces, and the
+;;; rest of the body is gone or is held in `k`. Resets nest; a `shift` belongs to
+;;; the nearest. A `reset` takes on the flavor the shifts inside it need: around a
+;;; `shift` whose receiver takes a `serial-cont` it is a `serial-reset`, and
+;;; around one that takes a `cont` it is a `cloneable-reset`, with their rules on
+;;; what may be captured. `call/cc` and `escape` are not stopped by a `reset`:
+;;; `(+ 1 (escape (fn [k] (reset (+ 10 (k 5))))))` is 6.
+;;;
+;;; A compiler fault to know about: a function that holds two or more resets
+;;; that stay abortive (a `reset` with no `shift`, or with a `shift` or `shift0`
+;;; that takes a value, counts) and also a `cloneable-shift`, `serial-shift`,
+;;; `call/cc*`, `call/cc` or `escape` does not compile -- TUR-E0710 for
+;;; `cloneable-shift` and `call/cc*`, TUR-E0706 for `serial-shift`, an internal
+;;; error for `call/cc` and `escape`. The interpreter runs it.
+;;; Give each reset its own function. See docs/reported/continuation-forms-gaps.md.
+;;;
+;;; Parameters:
+;;;   body -- one or more expressions
+;;;
+;;; Returns:
+;;;   The value of the last body form, or the result of the `shift` that fired.
+;;;
+;;; Example:
+;;;   (reset (+ 1 2))  ; => 3  ; doctest: two abortive resets in one function stop the compiled build
+;;@form (reset body ...)
+
+;;; shift -- capture the context up to the nearest reset.
+;;;
+;;; `(shift f x)` takes a function `f` and a value `x`. Two shapes, chosen by
+;;; the type of `f`'s parameter. With a plain value, `(shift (fn [v : int] (* 2
+;;; v)) 10)`, the shift is abortive: the context between the `shift` and the
+;;; `reset` is thrown away and the `reset` yields `(f x)`, so
+;;; `(reset (+ 1 (shift (fn [v : int] (* 2 v)) 10)))` is 20 -- the `(+ 1 _)` never
+;;; happens. `x` must have the type `f` expects (TUR-E0001) and the expression has
+;;; `f`'s result type. With a continuation, `(shift (fn [k : cont] ...) x)`, `f`
+;;; receives the discarded context as a function `k` and may call it any number
+;;; of times: `(reset (+ 1 (shift (fn [k : cont] (k (k 10))) 0)))` is 12. `x` then
+;;; only gives the type of the hole; its value is not used. If `f` never uses `k`
+;;; the shift is abortive again, and what `f` returns is the value of the `reset`.
+;;; The first argument must be a function (`shift requires a function as first
+;;; argument`).
+;;;
+;;; Without any `reset` around it the interpreter stops with `shift used outside
+;;; of any reset boundary`; the compiled program reports nothing and behaves
+;;; differently according to what else the program contains (it may end the
+;;; whole program). Keep every `shift` under a `reset`.
+;;;
+;;; Parameters:
+;;;   f -- a function taking a value, or a `cont`
+;;;   x -- the value passed to `f`, or the type of the hole when `f` takes a `cont`
+;;;
+;;; Returns:
+;;;   The result type of `f`; at run time the `reset` yields it.
+;;;
+;;; Example:
+;;;   (reset (+ 1 (shift (fn [v : int] (* 2 v)) 10)))  ; => 20
+;;;   (reset (+ 1 (shift (fn [k : cont] (k (k 10))) 0)))  ; => 12
+;;@form (shift f x)
+
+;;; shift0 -- like shift, but the receiver is not delimited by the reset it took.
+;;;
+;;; `(shift0 f x)` has the syntax and typing of the abortive `shift`: `f` takes a
+;;; value, the context up to the nearest `reset` is discarded, and the `reset`
+;;; yields `(f x)`; the expression has `f`'s result type. A receiver that takes a
+;;; continuation is TUR-E0001 -- use `shift`. The guides say a `shift0` pops the
+;;; reset it captured to, so that a `shift` inside `f` reaches the next one out.
+;;; Today that does not show: `(reset (+ 100 (reset (+ 10 (shift0 (fn [v : int]
+;;; (shift (fn [w : int] (* 1000 w)) v)) 5)))))` is 5100 on both engines, the
+;;; same as with `shift`, where popping the reset would give 5000.
+;;;
+;;; Parameters:
+;;;   f -- a function taking a value
+;;;   x -- the value passed to `f`
+;;;
+;;; Returns:
+;;;   The result type of `f`.
+;;;
+;;; Example:
+;;;   (reset (shift0 (fn [v : int] (= v 0)) 0))  ; => true  ; doctest: two abortive resets in one function stop the compiled build
+;;@form (shift0 f x)
+
+;;; cloneable-reset -- the boundary for cloneable-shift.
+;;;
+;;; Evaluates its body forms and yields the last one's value, or what a
+;;; `cloneable-shift` inside returned. Everything the continuation captures must
+;;; implement `Clone` (TUR-E0014: `captured binding 'x' does not implement
+;;; Clone`); a plain integer, float or string always does. A plain `reset` around
+;;; a `cloneable-shift` is accepted and has the same effect.
+;;;
+;;; Parameters:
+;;;   body -- one or more expressions
+;;;
+;;; Returns:
+;;;   The value of the last body form, or the result of the `cloneable-shift`.
+;;;
+;;; Example:
+;;;   (cloneable-reset (* 2 (cloneable-shift (fn [k : cont] (+ (k 3) (k 4))) 0)))  ; => 14
+;;@form (cloneable-reset body ...)
+
+;;; cloneable-shift -- capture the context as a continuation callable many times.
+;;;
+;;; `(cloneable-shift f x)` calls `f` with the context between here and the nearest
+;;; `cloneable-reset` as a `cont`, and the `cloneable-reset` yields what `f`
+;;; returns. Calling `(k v)` runs the rest of the body with `v` where the shift
+;;; was and returns its value, so `(+ (k 3) (k 4))` in `(* 2 [])` is 6 + 8 = 14,
+;;; and `(k (k 10))` in `(+ 1 [])` is 12. `k` can be called any number of times, in
+;;; any order; a `f` that never calls it just returns, and its value is the
+;;; result of the reset (`99` for `(cloneable-reset (+ 1 (cloneable-shift (fn [k :
+;;; cont] 99) 5)))`). `x` gives the type of the hole; its value is not used. The
+;;; shift must be inside a `cloneable-reset` (TUR-E0016), and the code between
+;;; them must be a shape the native backend can copy: arithmetic, `let` and `if`
+;;; around the shift work, but a shift as the middle argument of a call to a
+;;; function, `(add3 1 (cloneable-shift ...) 2)`, is TUR-E0710 `cloneable-shift
+;;; context is not capturable`, as is a context nested more than a few frames
+;;; deep. Compiled and interpreted programs agree on every case here.
+;;;
+;;; Parameters:
+;;;   f -- a function taking the continuation, `(fn [k : cont] ...)`
+;;;   x -- a value whose type is the type of the hole
+;;;
+;;; Returns:
+;;;   The type of the hole; at run time the reset yields what `f` returns.
+;;;
+;;; Example:
+;;;   (cloneable-reset (+ 1 (cloneable-shift (fn [k : cont] (k (k 10))) 0)))  ; => 12
+;;@form (cloneable-shift f x)
+
+;;; serial-reset -- the boundary for serial-shift.
+;;;
+;;; Like `cloneable-reset`, but the continuation can be turned into bytes, so
+;;; every value it captures must be `Serializable` (the error is `does not
+;;; implement Serializable`). Evaluates its body forms and yields the last one's
+;;; value, or what a `serial-shift` returned.
+;;;
+;;; Parameters:
+;;;   body -- one or more expressions
+;;;
+;;; Returns:
+;;;   The value of the last body form, or the result of the `serial-shift`.
+;;;
+;;; Example:
+;;;   (serial-reset (+ 10 (serial-shift (fn [k : serial-cont] (k 5)) 0)))  ; => 15
+;;@form (serial-reset body ...)
+
+;;; serial-shift -- capture the context as a continuation that can be saved.
+;;;
+;;; `(serial-shift f x)` calls `f` with the context up to the nearest `serial-reset`
+;;; as a `serial-cont` and the reset yields what `f` returns, as `cloneable-shift`
+;;; does: `(k v)` runs the rest of the body, as many times as you like. What
+;;; `cloneable-shift` cannot do is `stdlib/serial.tur`: `serial-cont->bytes` writes
+;;; `k` out, `bytes->serial-cont` reads it back as a `(Result serial-cont cstr)`
+;;; (in another process, given the same program), `serial-resume-owned` runs and
+;;; frees it, and `cont-to-file` / `cont-from-file` keep the bytes on disk. A
+;;; `serial-shift` outside a `serial-reset` is TUR-E0019. Calling `k` works on
+;;; both engines; the byte functions are inline C that the interpreter cannot call
+;;; with a continuation, so a save and restore runs only in a compiled program.
+;;; `x` gives the type of the hole and is not otherwise used.
+;;;
+;;; Parameters:
+;;;   f -- a function taking the continuation, `(fn [k : serial-cont] ...)`
+;;;   x -- a value whose type is the type of the hole
+;;;
+;;; Returns:
+;;;   The type of the hole; at run time the reset yields what `f` returns.
+;;;
+;;; Example:
+;;;   (serial-reset (let [x 42] (+ x (serial-shift (fn [k : serial-cont] (k 100)) 0))))  ; => 142
+;;@form (serial-shift f x)
+
+;;; call/cc -- leave a computation early by calling k.
+;;;
+;;; `(call/cc f)` calls `f` with `k`, a one-shot continuation that leads back to
+;;; the `call/cc` itself. If `f` returns, that value is the value of the
+;;; `call/cc` (`(+ 1 (call/cc (fn [k] 99)))` is 100). If `f`, or anything it
+;;; calls, evaluates `(k v)`, control jumps straight back and the `call/cc` has
+;;; the value `v`; the rest of `f` is abandoned: `(+ 1 (call/cc (fn [k] (+ 100
+;;; (k 41)))))` is 42. It needs no `reset`, and an intervening `reset` does not
+;;; stop it. `k` is valid only while the `call/cc` is running: calling it
+;;; afterwards stops the program with `continuation invoked after its call/cc
+;;; prompt returned`. The parameter can be written `(fn [k] ...)`, which gives it
+;;; the `escape-cont` type, or `(fn [k : escape-cont<int>] ...)`; `^linear` makes
+;;; it an error not to call `k` (TUR-E0100) or to call it twice (TUR-E0101),
+;;; which an unannotated `k` does not check. For a continuation that can be called
+;;; again use `call/cc*`.
+;;;
+;;; Known faults of the compiled program (docs/reported/continuation-forms-gaps.md):
+;;; a float passed to `k` comes out as garbage, a function with two or more
+;;; abortive `reset`s as well as a `call/cc` is an internal error (`EX_CALLCC
+;;; reached the direct emitter`), and a non-function argument is not rejected.
+;;;
+;;; Parameters:
+;;;   f -- a function taking `k`
+;;;
+;;; Returns:
+;;;   The value `f` returns, or the value passed to `k`.
+;;;
+;;; Example:
+;;;   (+ 1 (call/cc (fn [k] (+ 100 (k 41)))))  ; => 42
+;;@form (call/cc f)
+
+;;; call/cc* -- capture a continuation that can be called more than once.
+;;;
+;;; `(call/cc* f)` calls `f` with the context up to the nearest enclosing
+;;; `cloneable-reset` as a `cont`, so it is `(cloneable-shift f 0)` and is what
+;;; backtracking and search use. Inside `(cloneable-reset (+ 10 (call/cc* (fn [k :
+;;; cont] (+ (k 1) (k 2))))))` the continuation is `(+ 10 _)` and the result is 11
+;;; + 12 = 23. As with `cloneable-shift`, an `f` that returns without calling `k`
+;;; ends the reset with its value: `(fn [k : cont] 5)` makes the whole reset 5, not
+;;; 15 -- unlike `call/cc`, whose normal return continues the surrounding code.
+;;; With no enclosing `cloneable-reset` it supplies its own around the call, so
+;;; `k` is the identity continuation. The captures must be `Clone` and the
+;;; context capturable (TUR-E0014, TUR-E0710), as for `cloneable-shift`.
+;;;
+;;; Parameters:
+;;;   f -- a function taking the continuation, `(fn [k : cont] ...)`
+;;;
+;;; Returns:
+;;;   The value `f` returns, as the result of the enclosing reset.
+;;;
+;;; Example:
+;;;   (cloneable-reset (+ 10 (call/cc* (fn [k : cont] (+ (k 1) (k 2))))))  ; => 23
+;;@form (call/cc* f)
+
+;;; escape -- leave a computation early, with a value.
+;;;
+;;; `(escape f)` is `call/cc` for the common case of bailing out of deep code:
+;;; `f` receives `k`, and `(k v)` unwinds to the `escape` with `v` as its value,
+;;; abandoning everything in between. It is the same undelimited, one-shot
+;;; capture; the difference the guides draw (`escape` does not put a prompt back
+;;; when it unwinds) shows up only for code that mixes it with `shift`, and no
+;;; example tried distinguishes the two. Use it for early return without threading
+;;; an `Option` through every call. `k` can be passed down to a recursive helper
+;;; as an `escape-cont<T>`.
+;;;
+;;; Parameters:
+;;;   f -- a function taking `k`
+;;;
+;;; Returns:
+;;;   The value `f` returns, or the value passed to `k`.
+;;;
+;;; Example:
+;;;   (+ 1 (escape (fn [k] (+ 100 (k 41)))))  ; => 42
+;;;   (defn walk [exit : escape-cont<int> n : int] : int
+;;;     (if (= n 0) (exit 7) (+ 1 (walk exit {n - 1}))))
+;;;   (println (escape (fn [exit : escape-cont<int>] (walk exit 5))))  ; prints 7
+;;@form (escape f)

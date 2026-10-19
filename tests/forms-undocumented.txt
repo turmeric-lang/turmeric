@@ -55,15 +55,3 @@ pack
 open
 &
 &mut
-
-# Delimited and undelimited continuations
-shift
-reset
-shift0
-cloneable-shift
-cloneable-reset
-serial-shift
-serial-reset
-call/cc
-call/cc*
-escape
