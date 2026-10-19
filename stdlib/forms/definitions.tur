@@ -69,7 +69,10 @@
 ;;; last body form. Each parameter is `name : Type`; the return type after the
 ;;; vector is optional and inferred when left out, and a parameter without a type
 ;;; is generic (`(defn ident [x] x)`). A call with too few arguments is a partial
-;;; application. The body may use a nested `defn`, which is lifted to file scope.
+;;; application. A `defn` inside a body is lifted to file scope, so the enclosing
+;;; function and later code can call it -- but it cannot call itself or a sibling
+;;; (`unknown function or operator 'fact'` compiled), so write a recursive helper
+;;; at file scope.
 ;;;
 ;;; Between the name and the parameters, and after the parameters, sit the
 ;;; optional parts:

@@ -9,12 +9,8 @@
 # docs/reported/api-docs-miss-language-primitives.md tracks the work.
 
 # Definitions
-defstruct
-defdata
-defgadt
 defclass
 definstance
-defopaque
 defeffect
 deftype
 defalias
@@ -51,7 +47,6 @@ binding
 
 # Functions and values
 fn
-make-struct
 make-session
 call-ptr
 
