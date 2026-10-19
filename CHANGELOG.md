@@ -2,7 +2,7 @@
 
 All notable changes to Turmeric are documented here.
 
-## [Unreleased]
+## [0.67.2] -- 2026-10-19
 
 ### Changed
 
@@ -14,16 +14,33 @@ All notable changes to Turmeric are documented here.
 
 ### Fixed
 
-- **`tur explain TUR-I0379` explains the code.** It used to compile the
-  argument as source and report "unbound symbol". `tur explain TUR-D0001` no
-  longer describes the code as a warning: it has been an error since the
-  colon was removed from `(fn ...)` types. The REPL's bare `:explain` now
-  also picks up a deprecation (`TUR-D`) code.
+- **`tur explain TUR-I0379` explains the code.** It used to compile the argument
+  as source and report "unbound symbol". `tur explain TUR-D0001` no longer
+  describes the code as a warning: it has been an error since the colon was
+  removed from `(fn ...)` types. The REPL's bare `:explain` now also picks up a
+  deprecation (`TUR-D`) code.
 - **A dynamic var can hold an `(Option T)`.** `(defdynamic *v* :(Option int)
-  ...)` type-checked and then failed in the C compiler; it now works, and a
-  bare `(None)` / `(none)` root needs no `::` ascription.
-- **Pushing a `with` result onto a vector compiles.** `(vec-push! v (with p
-  [x 1]))` boxed the struct twice and failed in the C compiler.
+  ...)` type-checked and then failed in the C compiler; it now works, and a bare
+  `(None)` / `(none)` root needs no `::` ascription.
+- **Pushing a `with` result onto a vector compiles.** `(vec-push! v (with p [x
+  1]))` boxed the struct twice and failed in the C compiler.
+- **A module is no longer defined twice when both loaded and imported.** `(load
+  "m.tur")` beside `(import m)` reuses the loaded module instead of reading the
+  file again; a load and an import naming different files for one module is a
+  located error. A `defn` redefined across loaded files in one module is still
+  caught, and the REPL's `:type` works again now that a stdlib file may replace
+  a preload stub defn.
+- **Neoteric `::(...)` reads as one form.** `::(x :int)` now reads as `(:: x
+  :int)` instead of the symbol `::` and a separate list. Under `tur
+  --interpret`, a NULL `cstr` ascribed to an int type is the word 0, so `(= (::
+  s int) 0)` null checks hold.
+- **CMake `::@` directory markers no longer print link-flag warnings.** A
+  dependency spice whose gitignored `cmake/` directory is missing also resolves
+  its `:path` cmake dependency without handing an unnormalized path to
+  `add_subdirectory`.
+- **The light-mode logo is clean saffron, not muddy ochre.** The recolor filter
+  no longer drains the logo's chroma; it now matches the "Try it" button's brand
+  hue on the docs site and Try Turmeric.
 
 ## [0.67.1] -- 2026-10-18
 
