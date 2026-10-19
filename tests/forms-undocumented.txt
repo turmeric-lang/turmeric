@@ -60,21 +60,6 @@ make-struct
 make-session
 call-ptr
 
-# Types, casts and existentials
-::
-?
-as
-cast
-coerce
-is?
-type-of
-type-app
-forall
-exists
-pack
-open
-&
-&mut
 
 # Effects and handlers
 perform

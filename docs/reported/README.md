@@ -61,6 +61,7 @@ directory is worse for triage than no index.
 | Report | Severity | One line |
 | --- | --- | --- |
 | [panic-forms-gaps](panic-forms-gaps.md) | medium | `panic-payload-downcast` is typed `ptr<void>` but emits no value, so using its result is a C error; compiled `catch-panic-of` with a non-matching payload type and no outer boundary swallows the panic and yields an `ok` result (the interpreter aborts, as documented); compiled `panic-with` reports the generated C file and line; `(catch-unwind 5)` segfaults; the interpreter's `panic-payload-*` accessors return placeholders |
+| [type-forms-gaps](type-forms-gaps.md) | medium | `?` is rejected on the typed `(Result T E)` (its helpers take a `ptr<void>` carrier) and cannot run interpreted at all; a `forall` parameter accepts a non-generic function (`inc` for `(forall [a] (-> a a))`) and reads garbage; `&mut` of a non-`^mut` variable mutates it, `set!` under a live `&` borrow is accepted (compiled and interpreted differ), `&` of a literal is a C error; `type-of` of a sized number is `unknown` compiled; `coerce` returns `x` at its own type; `type-app` is TUR-E0012 in a type position; the interpreter picks the wrong instance for packed `defopaque` values |
 
 ## Found executing the open reports (filed 2026-10-18)
 
