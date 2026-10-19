@@ -1236,9 +1236,9 @@ if grep -qi "catch runtime errors\|raise a runtime error\|error handler clause" 
     fail "repl-doc-no-exceptions" "the removed try/catch/throw docs are still in the :doc table"
 elif [ "$(echo "$out" | grep -c "no documentation for")" -lt 3 ]; then
     fail "repl-doc-no-exceptions" "expected try/catch/throw to report no documentation"
-elif ! grep -q "abort with an unrecoverable error" <<< "$out"; then
+elif ! grep -q "unrecoverable error" <<< "$out"; then
     fail "repl-doc-no-exceptions" ":doc panic did not describe the panic form"
-elif ! grep -q "catch-unwind thunk" <<< "$out"; then
+elif ! grep -q "turning any panic into an err result" <<< "$out"; then
     fail "repl-doc-no-exceptions" ":doc catch-unwind did not describe the Result-returning form"
 else
     pass "repl-doc-no-exceptions"

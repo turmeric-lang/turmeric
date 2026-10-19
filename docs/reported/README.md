@@ -56,6 +56,12 @@ directory is worse for triage than no index.
 | [ref-weak-builtins-stubbed](ref-weak-builtins-stubbed.md) | low-medium | `weak?` is always `true` (a Phase 9 placeholder on both engines) and `ref?` tests the value for non-null, so `(ref? 7)` is `true`; `upgrade` returns a `ptr<void>` no `Option` function accepts; the interpreter's `rc->ptr` returns the payload, so reading through it segfaults `tur`; and an `lref/new` cell consumed by `deref` is never freed. `stdlib/weak.tur` is the working surface |
 | [show-line-of-option-dispatches-show-int](show-line-of-option-dispatches-show-int.md) | low-medium | No `Show` instance exists for `Option`, yet `(show-line (some 1))` compiles -- the class variable binds to the int carrier, so `Show[int]` prints the box's address; interpreted, it fails with `unknown infix builtin '>'`. A struct with no instance is refused (TUR-E0001) as it should be |
 
+## Found documenting the special forms (filed 2026-10-19)
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [panic-forms-gaps](panic-forms-gaps.md) | medium | `panic-payload-downcast` is typed `ptr<void>` but emits no value, so using its result is a C error; compiled `catch-panic-of` with a non-matching payload type and no outer boundary swallows the panic and yields an `ok` result (the interpreter aborts, as documented); compiled `panic-with` reports the generated C file and line; `(catch-unwind 5)` segfaults; the interpreter's `panic-payload-*` accessors return placeholders |
+
 ## Found executing the open reports (filed 2026-10-18)
 
 | Report | Severity | One line |
