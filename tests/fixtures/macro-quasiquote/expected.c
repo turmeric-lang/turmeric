@@ -7154,7 +7154,7 @@ static dict_Hash_Sym dict_Hash_Sym_singleton = {
 static int64_t __inst_Hash_hash_T(tur_tagged_t x) {
         if ((TUR_GETTAG(x)) == (3)) {
             {
-tur_tagged_t __t5 = (x); __tur_any_cast_check_at(TUR_GETTAG(__t5), 3, "typeclass-hash.tur", 103);
+tur_tagged_t __t5 = (x); __tur_any_cast_check_at(TUR_GETTAG(__t5), 3, "typeclass-hash.tur", 108);
                 int64_t x_1000867 = (int64_t)(intptr_t)TUR_UNTAG(__t5);
                 (void)x_1000867;
                 return __inst_Hash_hash_int(x_1000867);
@@ -7162,7 +7162,7 @@ tur_tagged_t __t5 = (x); __tur_any_cast_check_at(TUR_GETTAG(__t5), 3, "typeclass
         } else {
             if ((TUR_GETTAG(x)) == (5)) {
                 {
-tur_tagged_t __t6 = (x); __tur_any_cast_check_at(TUR_GETTAG(__t6), 5, "typeclass-hash.tur", 105);
+tur_tagged_t __t6 = (x); __tur_any_cast_check_at(TUR_GETTAG(__t6), 5, "typeclass-hash.tur", 110);
                     const char * x_1000868 = (const char *)(intptr_t)TUR_UNTAG(__t6);
                     (void)x_1000868;
                     return __inst_Hash_hash_cstr(x_1000868);
@@ -7170,7 +7170,7 @@ tur_tagged_t __t6 = (x); __tur_any_cast_check_at(TUR_GETTAG(__t6), 5, "typeclass
             } else {
                 if ((TUR_GETTAG(x)) == (4)) {
                     {
-tur_tagged_t __t7 = (x); __tur_any_cast_check_at(TUR_GETTAG(__t7), 4, "typeclass-hash.tur", 107);
+tur_tagged_t __t7 = (x); __tur_any_cast_check_at(TUR_GETTAG(__t7), 4, "typeclass-hash.tur", 112);
                         double x_1000869 = ((union { int64_t i; double d; }){.i = TUR_UNTAG(__t7)}).d;
                         (void)x_1000869;
                         return __inst_Hash_hash_float(x_1000869);
@@ -7178,7 +7178,7 @@ tur_tagged_t __t7 = (x); __tur_any_cast_check_at(TUR_GETTAG(__t7), 4, "typeclass
                 } else {
                     if ((TUR_GETTAG(x)) == (2)) {
                         {
-tur_tagged_t __t8 = (x); __tur_any_cast_check_at(TUR_GETTAG(__t8), 2, "typeclass-hash.tur", 109);
+tur_tagged_t __t8 = (x); __tur_any_cast_check_at(TUR_GETTAG(__t8), 2, "typeclass-hash.tur", 114);
                             bool x_1000870 = (bool)(intptr_t)TUR_UNTAG(__t8);
                             (void)x_1000870;
                             return __inst_Hash_hash_bool(x_1000870);
@@ -7186,7 +7186,7 @@ tur_tagged_t __t8 = (x); __tur_any_cast_check_at(TUR_GETTAG(__t8), 2, "typeclass
                     } else {
                         if ((TUR_GETTAG(x)) == (58)) {
                             {
-tur_tagged_t __t9 = (x); __tur_any_cast_check_at(TUR_GETTAG(__t9), 58, "typeclass-hash.tur", 111);
+tur_tagged_t __t9 = (x); __tur_any_cast_check_at(TUR_GETTAG(__t9), 58, "typeclass-hash.tur", 116);
                                 const struct __tur_sym * x_1000871 = (const struct __tur_sym *)(intptr_t)TUR_UNTAG(__t9);
                                 (void)x_1000871;
                                 return __inst_Hash_hash_Sym(x_1000871);
@@ -7414,7 +7414,7 @@ static dict_MapKey_Sym dict_MapKey_Sym_singleton = {
 static int64_t __inst_MapKey_mk_hybox_T(tur_tagged_t x) {
         if ((TUR_GETTAG(x)) == (3)) {
             {
-tur_tagged_t __t19 = (x); __tur_any_cast_check_at(TUR_GETTAG(__t19), 3, "map.tur", 456);
+tur_tagged_t __t19 = (x); __tur_any_cast_check_at(TUR_GETTAG(__t19), 3, "map.tur", 470);
                 int64_t x_1001002 = (int64_t)(intptr_t)TUR_UNTAG(__t19);
                 (void)x_1001002;
                 return __inst_MapKey_mk_hybox_int(x_1001002);
@@ -7422,7 +7422,7 @@ tur_tagged_t __t19 = (x); __tur_any_cast_check_at(TUR_GETTAG(__t19), 3, "map.tur
         } else {
             if ((TUR_GETTAG(x)) == (5)) {
                 {
-tur_tagged_t __t20 = (x); __tur_any_cast_check_at(TUR_GETTAG(__t20), 5, "map.tur", 458);
+tur_tagged_t __t20 = (x); __tur_any_cast_check_at(TUR_GETTAG(__t20), 5, "map.tur", 472);
                     const char * x_1001003 = (const char *)(intptr_t)TUR_UNTAG(__t20);
                     (void)x_1001003;
                     return __inst_MapKey_mk_hybox_cstr(x_1001003);
@@ -7430,7 +7430,7 @@ tur_tagged_t __t20 = (x); __tur_any_cast_check_at(TUR_GETTAG(__t20), 5, "map.tur
             } else {
                 if ((TUR_GETTAG(x)) == (4)) {
                     {
-tur_tagged_t __t21 = (x); __tur_any_cast_check_at(TUR_GETTAG(__t21), 4, "map.tur", 460);
+tur_tagged_t __t21 = (x); __tur_any_cast_check_at(TUR_GETTAG(__t21), 4, "map.tur", 474);
                         double x_1001004 = ((union { int64_t i; double d; }){.i = TUR_UNTAG(__t21)}).d;
                         (void)x_1001004;
                         return __inst_MapKey_mk_hybox_float(x_1001004);
@@ -7438,7 +7438,7 @@ tur_tagged_t __t21 = (x); __tur_any_cast_check_at(TUR_GETTAG(__t21), 4, "map.tur
                 } else {
                     if ((TUR_GETTAG(x)) == (2)) {
                         {
-tur_tagged_t __t22 = (x); __tur_any_cast_check_at(TUR_GETTAG(__t22), 2, "map.tur", 462);
+tur_tagged_t __t22 = (x); __tur_any_cast_check_at(TUR_GETTAG(__t22), 2, "map.tur", 476);
                             bool x_1001005 = (bool)(intptr_t)TUR_UNTAG(__t22);
                             (void)x_1001005;
                             return __inst_MapKey_mk_hybox_bool(x_1001005);
@@ -7446,7 +7446,7 @@ tur_tagged_t __t22 = (x); __tur_any_cast_check_at(TUR_GETTAG(__t22), 2, "map.tur
                     } else {
                         if ((TUR_GETTAG(x)) == (58)) {
                             {
-tur_tagged_t __t23 = (x); __tur_any_cast_check_at(TUR_GETTAG(__t23), 58, "map.tur", 464);
+tur_tagged_t __t23 = (x); __tur_any_cast_check_at(TUR_GETTAG(__t23), 58, "map.tur", 478);
                                 const struct __tur_sym * x_1001006 = (const struct __tur_sym *)(intptr_t)TUR_UNTAG(__t23);
                                 (void)x_1001006;
                                 return __inst_MapKey_mk_hybox_Sym(x_1001006);
@@ -7463,7 +7463,7 @@ tur_tagged_t __t23 = (x); __tur_any_cast_check_at(TUR_GETTAG(__t23), 58, "map.tu
 static int64_t __inst_MapKey_mk_hycmp_T(tur_tagged_t x) {
         if ((TUR_GETTAG(x)) == (3)) {
             {
-tur_tagged_t __t24 = (x); __tur_any_cast_check_at(TUR_GETTAG(__t24), 3, "map.tur", 467);
+tur_tagged_t __t24 = (x); __tur_any_cast_check_at(TUR_GETTAG(__t24), 3, "map.tur", 481);
                 int64_t x_1001007 = (int64_t)(intptr_t)TUR_UNTAG(__t24);
                 (void)x_1001007;
                 return __inst_MapKey_mk_hycmp_int(x_1001007);
@@ -7471,7 +7471,7 @@ tur_tagged_t __t24 = (x); __tur_any_cast_check_at(TUR_GETTAG(__t24), 3, "map.tur
         } else {
             if ((TUR_GETTAG(x)) == (5)) {
                 {
-tur_tagged_t __t25 = (x); __tur_any_cast_check_at(TUR_GETTAG(__t25), 5, "map.tur", 469);
+tur_tagged_t __t25 = (x); __tur_any_cast_check_at(TUR_GETTAG(__t25), 5, "map.tur", 483);
                     const char * x_1001008 = (const char *)(intptr_t)TUR_UNTAG(__t25);
                     (void)x_1001008;
                     return __inst_MapKey_mk_hycmp_cstr(x_1001008);
@@ -7479,7 +7479,7 @@ tur_tagged_t __t25 = (x); __tur_any_cast_check_at(TUR_GETTAG(__t25), 5, "map.tur
             } else {
                 if ((TUR_GETTAG(x)) == (4)) {
                     {
-tur_tagged_t __t26 = (x); __tur_any_cast_check_at(TUR_GETTAG(__t26), 4, "map.tur", 471);
+tur_tagged_t __t26 = (x); __tur_any_cast_check_at(TUR_GETTAG(__t26), 4, "map.tur", 485);
                         double x_1001009 = ((union { int64_t i; double d; }){.i = TUR_UNTAG(__t26)}).d;
                         (void)x_1001009;
                         return __inst_MapKey_mk_hycmp_float(x_1001009);
@@ -7487,7 +7487,7 @@ tur_tagged_t __t26 = (x); __tur_any_cast_check_at(TUR_GETTAG(__t26), 4, "map.tur
                 } else {
                     if ((TUR_GETTAG(x)) == (2)) {
                         {
-tur_tagged_t __t27 = (x); __tur_any_cast_check_at(TUR_GETTAG(__t27), 2, "map.tur", 473);
+tur_tagged_t __t27 = (x); __tur_any_cast_check_at(TUR_GETTAG(__t27), 2, "map.tur", 487);
                             bool x_1001010 = (bool)(intptr_t)TUR_UNTAG(__t27);
                             (void)x_1001010;
                             return __inst_MapKey_mk_hycmp_bool(x_1001010);
@@ -7495,7 +7495,7 @@ tur_tagged_t __t27 = (x); __tur_any_cast_check_at(TUR_GETTAG(__t27), 2, "map.tur
                     } else {
                         if ((TUR_GETTAG(x)) == (58)) {
                             {
-tur_tagged_t __t28 = (x); __tur_any_cast_check_at(TUR_GETTAG(__t28), 58, "map.tur", 475);
+tur_tagged_t __t28 = (x); __tur_any_cast_check_at(TUR_GETTAG(__t28), 58, "map.tur", 489);
                                 const struct __tur_sym * x_1001011 = (const struct __tur_sym *)(intptr_t)TUR_UNTAG(__t28);
                                 (void)x_1001011;
                                 return __inst_MapKey_mk_hycmp_Sym(x_1001011);
@@ -7512,7 +7512,7 @@ tur_tagged_t __t28 = (x); __tur_any_cast_check_at(TUR_GETTAG(__t28), 58, "map.tu
 static int64_t __inst_MapKey_mk_hyowned_qu_T(tur_tagged_t x) {
         if ((TUR_GETTAG(x)) == (3)) {
             {
-tur_tagged_t __t29 = (x); __tur_any_cast_check_at(TUR_GETTAG(__t29), 3, "map.tur", 478);
+tur_tagged_t __t29 = (x); __tur_any_cast_check_at(TUR_GETTAG(__t29), 3, "map.tur", 492);
                 int64_t x_1001012 = (int64_t)(intptr_t)TUR_UNTAG(__t29);
                 (void)x_1001012;
                 return __inst_MapKey_mk_hyowned_qu_int(x_1001012);
@@ -7520,7 +7520,7 @@ tur_tagged_t __t29 = (x); __tur_any_cast_check_at(TUR_GETTAG(__t29), 3, "map.tur
         } else {
             if ((TUR_GETTAG(x)) == (5)) {
                 {
-tur_tagged_t __t30 = (x); __tur_any_cast_check_at(TUR_GETTAG(__t30), 5, "map.tur", 480);
+tur_tagged_t __t30 = (x); __tur_any_cast_check_at(TUR_GETTAG(__t30), 5, "map.tur", 494);
                     const char * x_1001013 = (const char *)(intptr_t)TUR_UNTAG(__t30);
                     (void)x_1001013;
                     return __inst_MapKey_mk_hyowned_qu_cstr(x_1001013);
@@ -7528,7 +7528,7 @@ tur_tagged_t __t30 = (x); __tur_any_cast_check_at(TUR_GETTAG(__t30), 5, "map.tur
             } else {
                 if ((TUR_GETTAG(x)) == (4)) {
                     {
-tur_tagged_t __t31 = (x); __tur_any_cast_check_at(TUR_GETTAG(__t31), 4, "map.tur", 482);
+tur_tagged_t __t31 = (x); __tur_any_cast_check_at(TUR_GETTAG(__t31), 4, "map.tur", 496);
                         double x_1001014 = ((union { int64_t i; double d; }){.i = TUR_UNTAG(__t31)}).d;
                         (void)x_1001014;
                         return __inst_MapKey_mk_hyowned_qu_float(x_1001014);
@@ -7536,7 +7536,7 @@ tur_tagged_t __t31 = (x); __tur_any_cast_check_at(TUR_GETTAG(__t31), 4, "map.tur
                 } else {
                     if ((TUR_GETTAG(x)) == (2)) {
                         {
-tur_tagged_t __t32 = (x); __tur_any_cast_check_at(TUR_GETTAG(__t32), 2, "map.tur", 484);
+tur_tagged_t __t32 = (x); __tur_any_cast_check_at(TUR_GETTAG(__t32), 2, "map.tur", 498);
                             bool x_1001015 = (bool)(intptr_t)TUR_UNTAG(__t32);
                             (void)x_1001015;
                             return __inst_MapKey_mk_hyowned_qu_bool(x_1001015);
@@ -7544,7 +7544,7 @@ tur_tagged_t __t32 = (x); __tur_any_cast_check_at(TUR_GETTAG(__t32), 2, "map.tur
                     } else {
                         if ((TUR_GETTAG(x)) == (58)) {
                             {
-tur_tagged_t __t33 = (x); __tur_any_cast_check_at(TUR_GETTAG(__t33), 58, "map.tur", 486);
+tur_tagged_t __t33 = (x); __tur_any_cast_check_at(TUR_GETTAG(__t33), 58, "map.tur", 500);
                                 const struct __tur_sym * x_1001016 = (const struct __tur_sym *)(intptr_t)TUR_UNTAG(__t33);
                                 (void)x_1001016;
                                 return __inst_MapKey_mk_hyowned_qu_Sym(x_1001016);
