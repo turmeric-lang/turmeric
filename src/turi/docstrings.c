@@ -210,7 +210,7 @@ const char *turi_doc_lookup_builtin(const char *sym) {
         {"mod",      "(mod a b) -- integer remainder"},
         /* Comparison */
         {"=",        "(= a b) -- equality"},
-        {"!=",       "(!= a b) -- inequality"},
+        {"not=",     "(not= a b) -- inequality"},
         {"<",        "(< a b) -- less-than"},
         {">",        "(> a b) -- greater-than"},
         {"<=",       "(<= a b) -- less-than-or-equal"},
@@ -221,7 +221,6 @@ const char *turi_doc_lookup_builtin(const char *sym) {
         {"or",       "(or a b ...) -- short-circuit logical or"},
         /* I/O */
         {"println",  "(println x) -- print value with trailing newline; #fx{IO}"},
-        {"print",    "(print x) -- print value without trailing newline"},
         {"eprintln", "(eprintln x) -- print value to stderr with trailing newline; #fx{IO}"},
         {"eprint",   "(eprint x) -- print value to stderr without trailing newline; #fx{IO}"},
         /* Core special forms */

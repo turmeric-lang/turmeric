@@ -644,13 +644,21 @@ def _parse_doc_decl(kind, shapes):
             'exported': not name.startswith('__'), 'shapes': shapes}
     if kind == 'builtin':
         # (name [params] : ret) -- the defn signature grammar, closing paren
-        # dropped first so it is not read as part of the return type.
-        rest = shapes[0][shapes[0].index(name) + len(name):].rstrip()
-        rest = rest[:-1] if rest.endswith(')') else rest
-        inner, end = _find_bracket(rest)
-        if inner is not None:
-            defn['params'] = _parse_params('[' + inner + ']')
-            defn['return_type'] = _return_type_after_bracket(rest[end:])
+        # dropped first so it is not read as part of the return type.  An
+        # overloaded builtin (`+` on int, float, ...) writes one line per
+        # overload; the first is the one `params` / `return_type` report.
+        defn['overloads'] = []
+        for shape in shapes:
+            rest = shape[shape.index(name) + len(name):].rstrip()
+            rest = rest[:-1] if rest.endswith(')') else rest
+            inner, end = _find_bracket(rest)
+            if inner is not None:
+                defn['overloads'].append(
+                    {'params': _parse_params('[' + inner + ']'),
+                     'return_type': _return_type_after_bracket(rest[end:])})
+        if defn['overloads']:
+            defn['params'] = defn['overloads'][0]['params']
+            defn['return_type'] = defn['overloads'][0]['return_type']
     return defn
 
 
@@ -1670,6 +1678,10 @@ def _render_signature(defn):
     if kind == 'form':
         # A special form's syntax, as written, one line per shape.
         return '\n'.join(defn.get('shapes') or [f'({name} ...)'])
+
+    if kind == 'builtin' and len(defn.get('overloads') or []) > 1:
+        return '\n'.join(_render_signature(dict(defn, kind='defn', **o))
+                         for o in defn['overloads'])
 
     if kind == 'defstruct':
         # LT4: include :linear / :copy / :move annotation if present

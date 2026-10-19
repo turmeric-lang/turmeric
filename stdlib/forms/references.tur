@@ -1,0 +1,236 @@
+;;; tur/forms/references -- ref<T>, lref<T>, rc<T> and weak<T>, the builtin reference forms.
+;;;
+;;; The compiler implements these itself (src/compiler/elab_memory.c), so
+;;; there is nothing to import.  This file is reference only: it declares
+;;; nothing the compiler reads.
+;;;
+;;; - `ref<T>` is a single-owner heap cell.  A `ref` bound by `let` is freed
+;;;   when its scope exits (or earlier, by `drop!`), and is unique: binding or
+;;;   passing it moves it, and a second use is TUR-E0201.
+;;; - `lref<T>` is the linear version: it must be consumed exactly once.
+;;; - `rc<T>` is a shared, reference-counted cell.  `rc/clone` adds an owner
+;;;   and `rc/drop` releases one; an `rc` bound by `let` is released at scope
+;;;   exit.  Field access reads through it: `(.x r)` on an `rc<Point>`.
+;;; - `weak<T>` observes an `rc<T>` without owning it -- the way to break an
+;;;   `rc` cycle.
+;;;
+;;; For `weak<T>`, prefer tur/weak (`rc/downgrade`, `weak/upgrade`,
+;;; `weak/alive?`, `weak/drop`): the builtin `upgrade`, `weak?` and `ref?`
+;;; are unfinished -- see docs/reported/ref-weak-builtins-stubbed.md.  When to
+;;; use which: ownership-guide.
+;; Reference only: tools/gendocs.py reads the ;;@ lines, the compiler skips them.
+
+;;; ref -- allocate a single-owner heap cell holding a value.
+;;;
+;;; The cell is freed when the binding's scope exits, unless `drop!` frees
+;;; it first or it is moved into an `rc` by `rc/from-ref`.
+;;;
+;;; Parameters:
+;;;   x -- the initial value
+;;;
+;;; Returns:
+;;;   A `ref<T>` owning a fresh cell.
+;;;
+;;; Example:
+;;;   (let [r (ref 42)] (deref r))  ; => 42
+;;@builtin (ref [x : T] : ref<T>)
+
+;;; deref -- read the value a reference points at.
+;;;
+;;; Accepts `ref<T>`, `lref<T>`, `rc<T>`, `&T`, `&mut T` and `ptr<T>`.  `@x`
+;;; is the same read.  Reading a `ref` or `rc` does not consume it; reading an
+;;; `lref` does -- that is how an `lref` is used up.
+;;;
+;;; Parameters:
+;;;   r -- the reference to read through
+;;;
+;;; Returns:
+;;;   The value it points at.
+;;;
+;;; Example:
+;;;   (let [r (ref 1.5)] (deref r))  ; => 1.5
+;;;   (let [r (rc/of 7)] @r)         ; => 7
+;;@builtin (deref [r : ref<T>] : T)
+
+;;; drop! -- free a ref<T> now.
+;;;
+;;; Releases the cell before its scope ends; the scope-exit free is then
+;;; skipped.  Only `ref<T>` -- an `rc` is released with `rc/drop`.
+;;;
+;;; Parameters:
+;;;   r -- the reference to free (consumed)
+;;;
+;;; Example:
+;;;   (let [r (ref 7)] (let [v (deref r)] (drop! r) v))  ; => 7
+;;@builtin (drop! [r : ref<T>] : nil)
+
+;;; ref? -- unfinished: meant to ask whether a value is a ref<T>.
+;;;
+;;; Today it tests the value for being non-null, whatever its type, so
+;;; `(ref? 7)` is `true`.  A value's type is known at compile time; there is
+;;; nothing to ask at run time.
+;;;
+;;; Parameters:
+;;;   x -- any value
+;;;
+;;; Returns:
+;;;   A `bool`; see above.
+;;@builtin (ref? [x : T] : bool)
+
+;;; lref/new -- allocate a linear heap cell holding a value.
+;;;
+;;; The `lref<T>` must be consumed exactly once -- by `deref`, by moving it
+;;; into a struct field or a call -- or the program does not compile.  Its
+;;; cell is not freed when `deref` consumes it today (8 bytes per
+;;; `lref/new`); see docs/reported/ref-weak-builtins-stubbed.md.
+;;;
+;;; Parameters:
+;;;   x -- the initial value
+;;;
+;;; Returns:
+;;;   An `lref<T>` owning a fresh cell.
+;;;
+;;; Example:
+;;;   (let [p (lref/new 99)] (deref p))  ; => 99
+;;@builtin (lref/new [x : T] : lref<T>)
+
+;;; rc/of -- allocate a reference-counted cell holding a value.
+;;;
+;;; The new `rc` has a strong count of 1.  A linear or unique value cannot be
+;;; shared, so wrapping one is an error (TUR-E0103, TUR-E0202).
+;;;
+;;; Parameters:
+;;;   x -- the value to share
+;;;
+;;; Returns:
+;;;   An `rc<T>` with strong count 1.
+;;;
+;;; Example:
+;;;   (let [r (rc/of 42)] (deref r))  ; => 42
+;;@builtin (rc/of [x : T] : rc<T>)
+
+;;; rc/clone -- add an owner to an rc.
+;;;
+;;; Increments the strong count and returns a second handle to the same cell.
+;;; Each handle is released on its own.
+;;;
+;;; Parameters:
+;;;   r -- the rc to share (not consumed)
+;;;
+;;; Returns:
+;;;   Another `rc<T>` to the same cell.
+;;;
+;;; Example:
+;;;   (let [r (rc/of 42) s (rc/clone r)] (rc/strong-count r))  ; => 2
+;;@builtin (rc/clone [r : rc<T>] : rc<T>)
+
+;;; rc/drop -- release one owner of an rc.
+;;;
+;;; Decrements the strong count; the value is freed when it reaches 0.  The
+;;; handle is not released again at scope exit.
+;;;
+;;; Parameters:
+;;;   r -- the handle to release (consumed)
+;;;
+;;; Example:
+;;;   (let [r (rc/of 42) s (rc/clone r)] (rc/drop s) (rc/strong-count r))  ; => 1
+;;@builtin (rc/drop [r : rc<T>] : nil)
+
+;;; rc/strong-count -- how many owners an rc has.
+;;;
+;;; For assertions and debugging; a weak observer is not counted.
+;;;
+;;; Parameters:
+;;;   r -- the rc to inspect
+;;;
+;;; Returns:
+;;;   The strong count.
+;;;
+;;; Example:
+;;;   (let [r (rc/of 42)] (rc/strong-count r))  ; => 1
+;;@builtin (rc/strong-count [r : rc<T>] : int)
+
+;;; rc->ptr -- borrow a raw pointer to an rc's value.
+;;;
+;;; The pointer is valid while the rc lives.  Reading through it needs the
+;;; unsafe builtins (tur/forms/unsafe).  The interpreter returns the value
+;;; itself rather than its address today.
+;;;
+;;; Parameters:
+;;;   r -- the rc
+;;;
+;;; Returns:
+;;;   A `ptr<void>` to the value.
+;;;
+;;; Example:
+;;;   (let [r (rc/of 5)] (unsafe (ptr-deref (rc->ptr r))))  ; => 5
+;;@builtin (rc->ptr [r : rc<T>] : ptr<void>)
+
+;;; rc/from-ref -- turn a single-owner ref into a shared rc.
+;;;
+;;; Moves the cell's value into a new `rc` with strong count 1; the `ref` is
+;;; consumed.
+;;;
+;;; Parameters:
+;;;   r -- the ref to convert (consumed)
+;;;
+;;; Returns:
+;;;   An `rc<T>` holding the value.
+;;;
+;;; Example:
+;;;   (let [r (rc/from-ref (ref 9))] (deref r))  ; => 9
+;;@builtin (rc/from-ref [r : ref<T>] : rc<T>)
+
+;;; ref/from-rc -- turn an rc back into a single-owner ref.
+;;;
+;;; The rc must be unique: a strong count of 1 and no weak observers,
+;;; checked at run time -- otherwise the program panics
+;;; (`ref/from-rc requires unique rc ...`).
+;;;
+;;; Parameters:
+;;;   r -- the rc to convert (consumed)
+;;;
+;;; Returns:
+;;;   A `ref<T>` holding the value.
+;;;
+;;; Example:
+;;;   (let [x (ref/from-rc (rc/of 11))] (deref x))  ; => 11
+;;@builtin (ref/from-rc [r : rc<T>] : ref<T>)
+
+;;; weak -- a non-owning observer of an rc.
+;;;
+;;; The `weak<T>` holds no strong count, so it never keeps the value alive.
+;;; `rc/downgrade` (tur/weak) is the same operation, with `weak/upgrade`,
+;;; `weak/alive?` and `weak/drop` to use and release it.
+;;;
+;;; Parameters:
+;;;   r -- the rc to observe (not consumed)
+;;;
+;;; Returns:
+;;;   A `weak<T>` on the same cell.
+;;@builtin (weak [r : rc<T>] : weak<T>)
+
+;;; upgrade -- unfinished: try to get an owning rc back from a weak.
+;;;
+;;; Returns a `ptr<void>` -- null once the value is gone -- that no `Option`
+;;; function accepts, and the strong handle it takes on success cannot be
+;;; released.  Use `weak/upgrade` (tur/weak), which returns an
+;;; `(Option rc<T>)`.
+;;;
+;;; Parameters:
+;;;   w -- the weak to upgrade
+;;;
+;;; Returns:
+;;;   A `ptr<void>`; see above.
+;;@builtin (upgrade [w : weak<T>] : ptr<void>)
+
+;;; weak? -- unfinished: meant to ask whether a value is a weak<T>.
+;;;
+;;; Always `true` today, whatever the argument.
+;;;
+;;; Parameters:
+;;;   x -- any value
+;;;
+;;; Returns:
+;;;   `true`.
+;;@builtin (weak? [x : T] : bool)

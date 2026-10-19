@@ -1,0 +1,129 @@
+# Special forms and builtins with no API reference yet.
+#
+# tests/check-forms-documented.sh fails on a reserved form or public builtin
+# that is neither documented in stdlib/ nor listed here, and on a name listed
+# here that is documented now -- so this list only shrinks.  To document one,
+# add a `;;;` block over a `;;@form` / `;;@builtin` line in stdlib/forms/
+# (see the files there) and delete its line below.
+#
+# docs/reported/api-docs-miss-language-primitives.md tracks the work.
+
+# Definitions
+def
+define
+defn
+defmacro
+defstruct
+defdata
+defgadt
+defclass
+definstance
+defopaque
+defeffect
+deftype
+defalias
+defdynamic
+defkind
+defrec
+defprotocol
+make-protocol
+extern-c
+
+# Modules and loading
+defmodule
+import
+export
+load
+
+# Binding and control
+let
+let*
+letrec
+if
+do
+while
+set!
+return
+defer
+quote
+case
+match
+->
+->>
+^tailcall
+gensym
+binding
+
+# Functions and values
+fn
+make-struct
+make-session
+call-ptr
+
+# Types, casts and existentials
+::
+?
+as
+cast
+coerce
+is?
+type-of
+type-app
+forall
+exists
+pack
+open
+&
+&mut
+
+# Effects and handlers
+perform
+handle
+handle-shallow
+resume
+discontinue
+try-with
+with-handler
+compose-handlers
+cont?
+
+# Delimited and undelimited continuations
+shift
+reset
+shift0
+cloneable-shift
+cloneable-reset
+serial-shift
+serial-reset
+call/cc
+call/cc*
+escape
+
+# Generators and STM
+gen
+yield
+gen-next
+gen-done?
+stm
+retry
+
+# Panics
+panic
+panic-with
+catch-panic-of
+catch-unwind
+panic-payload-type
+panic-payload-value
+panic-payload-file
+panic-payload-line
+panic-payload-downcast
+
+# Garbage collector
+gc!
+gc-auto!
+gc-enable!
+gc-disable!
+gc-collections
+gc-objects-freed
+gc-live-blocks
+gc-candidate-high-water
