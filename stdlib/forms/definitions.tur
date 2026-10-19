@@ -1,0 +1,177 @@
+;;; tur/forms/definitions -- naming values, functions, macros and dynamic variables: def, defn, defmacro, defdynamic.
+;;;
+;;; These are the forms a file is mostly made of. `def` binds a value, `defn` a
+;;; function, `defmacro` a piece of syntax that runs at compile time, and
+;;; `defdynamic` a variable whose value depends on who called you. The forms that
+;;; declare types live elsewhere: `defstruct`, `defdata`, `defopaque` and the like
+;;; are in tur/forms/datatypes; `defclass`, `definstance` and `defeffect` in
+;;; tur/forms/classes.
+;;;
+;;; A definition is not an expression: it produces no value, so a function whose
+;;; body ends with one has nothing to return (TUR-E0713 -- usually a missing close
+;;; paren). A `defn` or `def` inside a function body is allowed and stays visible
+;;; after it. A name defined twice at one level is an error (`'f' is already
+;;; defined`), and so is a name an auto-loaded stdlib module already owns. A name
+;;; that is also a special form, such as `return`, is warned (TUR-W0042) because
+;;; the bare call always means the form.
+;; Reference only: tools/gendocs.py reads the ;;@ lines, the compiler skips them.
+
+;;; def -- bind a name to a value.
+;;;
+;;; `(def name init)` evaluates `init` once and binds `name` to it for the rest of
+;;; the file, or for the rest of the function body it appears in. The value may be
+;;; a number, a string, the result of a call, or a function (`(def inc (fn [n :
+;;; int] : int (+ n 1)))`). A call that supplies too few arguments gives a
+;;; function awaiting the rest, so `(def add5 (add 5))` names a partial
+;;; application. A top-level `def` is evaluated when the program starts, in source
+;;; order, before `main`. The binding cannot be changed (`set!: 'x' is
+;;; immutable`) unless it is written `(def ^mut name init)`, and defining the
+;;; same name twice is `def: 'x' is already defined`. `define` is the same form.
+;;;
+;;; A type may be written before the initializer, `(def x : int 41)`. Take care
+;;; with it: unlike `let`, a top-level `def` does not compare the annotation with
+;;; the initializer, so `(def x : int 7.1)` stores the bits of 7.1 and prints
+;;; 4619679907765970534 on both engines, and `(def y : float 3)` is 1.4822e-323
+;;; (docs/reported/definition-forms-gaps.md). Write the initializer in the type
+;;; you declare, or leave the annotation off.
+;;;
+;;; Parameters:
+;;;   name -- the name to bind; `^mut name` makes it assignable
+;;;   type -- optional: `: T` before the initializer
+;;;   init -- the value
+;;;
+;;; Example:
+;;;   (def x 41)
+;;;   (def ^mut counter 0)
+;;;   (defn bump [] : int (set! counter (+ counter 1)) counter)
+;;;   (println (+ x (bump)))  ; prints 42
+;;@form (def name init)
+;;@form (def name : type init)
+
+;;; define -- another spelling of def.
+;;;
+;;; `(define name init)` is `(def name init)` and takes the same forms and the same
+;;; `^mut` marker. Use `def`; `define` is there for programs written in the
+;;; Scheme style.
+;;;
+;;; Parameters:
+;;;   name -- the name to bind
+;;;   init -- the value
+;;;
+;;; Example:
+;;;   (define y 5)
+;;;   (println y)  ; prints 5
+;;@form (define name init)
+
+;;; defn -- define a function.
+;;;
+;;; `(defn name [param ...] : Ret body ...)` defines a function that returns its
+;;; last body form. Each parameter is `name : Type`; the return type after the
+;;; vector is optional and inferred when left out, and a parameter without a type
+;;; is generic (`(defn ident [x] x)`). A call with too few arguments is a partial
+;;; application. The body may use a nested `defn`, which is lifted to file scope.
+;;;
+;;; Between the name and the parameters, and after the parameters, sit the
+;;; optional parts:
+;;;
+;;;   Type variables     `(defn first-of [A B] [a : A b : B] : A a)` -- a vector of
+;;;                      names before the parameter vector. A lowercase single
+;;;                      letter in an annotation (`x : a`) is a type variable too.
+;;;                      Note that an unknown type name is also taken as a type
+;;;                      variable, with no warning
+;;;                      (docs/reported/unknown-type-annotation-becomes-implicit-tyvar.md).
+;;;   Class constraints  `(defn tell [^Describe a] [x : a] : cstr ...)` or
+;;;                      `(defn tell [a] [(Describe a)] [x : a] ...)`; using a
+;;;                      class method on an unconstrained variable is TUR-E0015.
+;;;   Effect row         `#fx{}` after the parameters says what the function may
+;;;                      do. `#fx{}` is pure; a body that prints under it is TUR-E0009,
+;;;                      and an effect no `defeffect` declares is TUR-E0026.
+;;;   Rest parameter     `& rest : T` last, collecting the extra arguments.
+;;;   Parameter marks    `^mut n : int` lets the body `set!` the parameter, `^borrow`,
+;;;                      `^linear` and friends set its ownership.
+;;;   Function marks    `(defn ^deprecated "use dbl" old-dbl [x : float] ...)` warns
+;;;                      at every call. `(^tailcall (f ...))` in the body requires a
+;;;                      tail call.
+;;;
+;;; The return type is checked: a body of the wrong type is TUR-E0709, and
+;;; mixing an `int` with a `float` in one operation is TUR-E0042.
+;;;
+;;; Parameters:
+;;;   name   -- the function's name
+;;;   params -- `[name : Type ...]`, with optional leading type-variable and
+;;;             constraint vectors and `& rest : T`
+;;;   Ret    -- optional: `: Type` after the parameters
+;;;   body   -- the forms that make the result
+;;;
+;;; Example:
+;;;   (defn sq [x : int] : int (* x x))
+;;;   (sq 9)  ; => 81
+;;;   (defn first-of [A B] [a : A b : B] : A a)
+;;;   (first-of 3.25 "s")  ; => 3.25
+;;@form (defn name [param ...] : Ret body ...)
+;;@form (defn name [A ...] [param ...] : Ret body ...)
+
+;;; defmacro -- define syntax that runs at compile time.
+;;;
+;;; `(defmacro name [param ...] template)` makes `name` a form. A call receives its
+;;; arguments unevaluated and the macro returns code that takes the call's place;
+;;; that code is then checked and compiled exactly as if it had been written
+;;; there, so a wrong expansion is an ordinary type error with a note naming the
+;;; macro. The template is usually a quasiquoted form: a backquote starts it, `~e`
+;;; substitutes the argument `e`, and `~@xs` splices a list into the surrounding
+;;; form. `& xs` collects the extra arguments, and a `^syntax` parameter receives
+;;; the raw form to take apart with `first` / `rest` / `empty?`. A macro may
+;;; expand to a definition (`(make-adder add5 5)` below). Macros are unhygienic: a
+;;; name the template binds captures a same-named one at the call site (`tmp` in
+;;; `(let [tmp 99] ...)` becomes 99 even if the caller passed their own `tmp`), so
+;;; mint binders with `(gensym)`. A call with the wrong number of arguments is
+;;; `macro 'bad' expects 1 arguments, got 0`; recursion stops at 256 expansions.
+;;; macros-guide has the rest, including `defmacro*` for macros that compute their
+;;; expansion.
+;;;
+;;; Parameters:
+;;;   name     -- the macro's name
+;;;   params   -- `[name ...]`, optionally `& rest`; `^syntax` marks a raw form
+;;;   template -- the code to produce, usually a quasiquoted form
+;;;
+;;; Example:
+;;;   (defmacro twice [e] `(do ~e ~e))
+;;;   (defmacro sum-of [& xs] `(+ ~@xs))
+;;;   (defmacro make-adder [name n] `(defn ~name [x : int] : int (+ x ~n)))
+;;;   (make-adder add5 5)
+;;;   (twice (println "hi"))  ; prints hi twice
+;;;   (println (sum-of 1 2 3 4))  ; prints 10
+;;;   (println (add5 10))  ; prints 15
+;;@form (defmacro name [param ...] template)
+
+;;; defdynamic -- define a variable whose value depends on the caller.
+;;;
+;;; `(defdynamic *level* :int 1)` declares a dynamic variable with a fixed type and
+;;; a root value. Reading `*level*` anywhere gives the value set by the nearest
+;;; enclosing `binding` in the current thread, however far up the call chain it
+;;; is, or the root value if there is none. That passes a log level, locale or
+;;; request id through deep calls without a parameter. It is written at the top
+;;; level of a file (`defdynamic: '*x*' must be declared at module top level`),
+;;; and by convention its name has earmuffs (TUR-W0600 without). Every `binding`
+;;; override must have exactly the declared type (TUR-E0602). `set!` of one needs
+;;; an active `binding` (TUR-E0601), changes only the current thread's frame, and
+;;; is refused inside `atomically` (TUR-E0605). The type cannot be linear, affine
+;;; or unique, and a user `defdata` is refused as a dynamic type (TUR-E0603);
+;;; `defopaque` is the usual stand-in. See tur/forms/control for `binding` and
+;;; dynamic-vars-guide for threads and handlers. A compiled program drops a
+;;; `binding` whose whole body is one call to a function returning `nil`:
+;;; `(binding [*level* 3] (show))` never calls `show`
+;;; (docs/reported/definition-forms-gaps.md); give the body a second form or
+;;; return a value.
+;;;
+;;; Parameters:
+;;;   name -- the variable, written with earmuffs
+;;;   type -- its type, as a keyword or type form
+;;;   root -- the value outside any `binding`
+;;;
+;;; Example:
+;;;   (defdynamic *level* :int 1)
+;;;   (defn level-plus [n : int] : int (+ *level* n))
+;;;   (println (level-plus 1))  ; prints 2
+;;;   (println (binding [*level* 3] (level-plus 1)))  ; prints 4
+;;@form (defdynamic name type root)

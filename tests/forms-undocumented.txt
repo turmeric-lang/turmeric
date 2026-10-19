@@ -9,10 +9,6 @@
 # docs/reported/api-docs-miss-language-primitives.md tracks the work.
 
 # Definitions
-def
-define
-defn
-defmacro
 defstruct
 defdata
 defgadt
@@ -22,7 +18,6 @@ defopaque
 defeffect
 deftype
 defalias
-defdynamic
 defkind
 defrec
 defprotocol
