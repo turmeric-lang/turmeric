@@ -26,7 +26,9 @@ test.describe('Try Turmeric REPL meta-commands', () => {
 
         await submitAtPrompt(page, ':doc +');
 
-        await expect(page.locator('#console')).toContainText('(+ a b ...) -- add numbers', { timeout: 10_000 });
+        // `+` has a stdlib entry (stdlib/forms/operators.tur), which wins over
+        // the builtin one-liner `(+ a b ...) -- add numbers`.
+        await expect(page.locator('#console')).toContainText('+ -- add numbers, left to right.', { timeout: 10_000 });
     });
 
     test('handles :type locally and displays type', async ({ page }) => {
