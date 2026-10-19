@@ -35,27 +35,7 @@ import
 export
 load
 
-# Binding and control
-let
-let*
-letrec
-if
-do
-while
-set!
-return
-defer
-quote
-case
-match
-->
-->>
-^tailcall
-gensym
-binding
-
 # Functions and values
-fn
 make-struct
 make-session
 call-ptr
