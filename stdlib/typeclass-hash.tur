@@ -12,13 +12,18 @@
 ;; Auto-loaded so that map.tur (and #map{...} / hamt-of lowering) can route
 ;; content-keyed maps through (Hash K) for primitive K without requiring the
 ;; user to import stdlib/typeclass.tur.
-;;; Hash -- typeclass for hashing a value to an integer.
+;;; Hash -- values that hash to an integer, for content-keyed maps and sets.
 ;;;
 ;;; Parameters:
 ;;;   a -- the type to hash
 ;;;
-;;; Returns:
-;;;   An :int hash value suitable for use as a HAMT key.
+;;; Methods:
+;;;   hash -- an :int hash of `x`, suitable as a HAMT key.
+;;;
+;;; Laws:
+;;;   (eq? x y) implies (= (hash x) (hash y))
+;;;
+;;; The converse is not required: unequal values may collide.
 ;;;
 ;;; Example:
 ;;;   (hash 42)   ; => 42

@@ -743,7 +743,8 @@ for the full workflow + cache layout + troubleshooting guide.
 ## Docstring Standard (`;;;`)
 
 Use `;;;` (triple-semicolon) as the doc-comment marker. A docstring block
-immediately precedes a `defn`, `defmacro`, `defstruct`, or `definstance`.
+immediately precedes a `defn`, `defmacro`, `defstruct`, `defclass`, or
+`definstance`.
 
 ### Module docstrings
 
@@ -798,6 +799,8 @@ The separator can also be any non-comment, non-blank, non-definition form
 | `Parameters:` block | If non-zero arity | One `;;;   name -- desc` line per param |
 | `Returns:` | Yes, unless `:void` | Describe the return value |
 | `Example:` | Yes | At least one usage example |
+| `Methods:` | On a `defclass` | One `;;;   name -- desc` line per method |
+| `Laws:` | On a `defclass` with laws | The equations, one per line |
 | `Since:` | When known | Phase tag, e.g. `Phase B1` |
 
 ### Conventions
@@ -810,11 +813,19 @@ The separator can also be any non-comment, non-blank, non-definition form
 - **ASCII only** -- use `--` (double hyphen), never em dashes (`--`)
 - A non-`;;;` line resets the docstring buffer; the `;;;` block must be
   immediately above the definition it documents
+- Prose paragraphs render too: before the first section under the summary,
+  after a section as notes. A section ends at an **unindented** paragraph
+  after a blank line, so indent section bodies.
 
 ### Docstring Levels
 
 - **Exported / public API**: full docstring (summary + params + returns + example + since)
 - **Internal helpers**: single-line `;;; name -- what it does`
+- **Typeclasses** (`defclass`): summary + `Parameters:` (the type
+  parameters) + `Methods:` + `Laws:` + `Example:` + `Since:`. The page shows
+  each method's signature (read from the form) beside its `Methods:` entry,
+  and lists the instances itself. See
+  [autodoc-guide](docs/guides/autodoc-guide.md#typeclasses).
 - **Typeclass instances** (`definstance`): single-line summary
 
 ## Generated Docs

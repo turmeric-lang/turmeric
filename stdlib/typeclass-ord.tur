@@ -18,24 +18,37 @@
 ;;;
 ;;; Since: lattice-vocabulary-plan L1
 
-;;; Ord -- typeclass for total ordering.
+;;; Ord -- values with a total order.
 ;;;
 ;;; Parameters:
 ;;;   a -- the type to order
 ;;;
 ;;; Methods:
-;;;   lt? lte? gt? gte? -- the four comparisons; every instance implements them
+;;;   lt?  -- `x` sorts strictly before `y`
+;;;   lte? -- `x` sorts before `y` or is equal to it
+;;;   gt?  -- `x` sorts strictly after `y`
+;;;   gte? -- `x` sorts after `y` or is equal to it
 ;;;
-;;; `max` / `min` are ordinary constrained generics over Ord (defined below),
-;;; not methods -- so an instance implements nothing extra to get them.
+;;; Every instance implements all four; they must agree with each other and
+;;; with `eq?`.  `max` / `min` are ordinary constrained generics over Ord
+;;; (defined below), not methods -- so an instance implements nothing extra to
+;;; get them.
+;;;
+;;; Laws:
+;;;   (lte? x x)                                  = true
+;;;   (lte? x y) and (lte? y x) imply (eq? x y)
+;;;   (lte? x y) and (lte? y z) imply (lte? x z)
+;;;   (lte? x y) or (lte? y x)                    = true
+;;;   (lt? x y)                                   = (gt? y x)
+;;;
+;;; Example:
+;;;   (lt? 2 3)       ; => true
+;;;   (max 2.5 7.1)   ; => 7.1
+;;;   (min "a" "b")   ; => "a"
 ;;;
 ;;; Superclass: Eq.  A `[^Ord A]` constraint also licenses `eq?`, and every
 ;;; `Ord` instance needs an `Eq` instance for the same type (TUR-E0393
 ;;; otherwise).
-;;;
-;;; Example:
-;;;   (max 2.5 7.1)   ; => 7.1
-;;;   (min "a" "b")   ; => "a"
 ;;;
 ;;; Since: Phase 15 (max/min: lattice-vocabulary-plan L1)
 ;; Ord typeclass - ordering.  typeclass-eq.tur is auto-loaded first, so the

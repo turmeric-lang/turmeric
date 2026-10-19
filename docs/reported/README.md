@@ -34,6 +34,12 @@ sentence above does not cover them. If you touch this file, check
 `ls docs/reported/` against it -- an index that silently omits a quarter of the
 directory is worse for triage than no index.
 
+## Found writing the typeclass API docs (filed 2026-10-19)
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [api-docs-miss-language-primitives](api-docs-miss-language-primitives.md) | medium (documentation) | The API site documents none of the ~137 special forms or ~40 compiler builtins, and `(doc ...)` has a one-liner for only 32 forms (`shift`, `handle-shallow`, `ptr-*`, `raw-*`, `transmute`, `rc/of`, ... have nothing); `deftype`/`defdynamic`/`def`/`defalias` never render (the `tur/refine` page is empty); generic structs lose their fields, `defdata` its payloads, `defgadt` reads result types as constructors, `defeffect`/`defopaque` lose their declarations; and `char=?` is published as `char`. Groups 2-4 are `tools/gendocs.py` fixes; group 1 needs a decision on where primitive docs live. |
+
 ## Found executing the open reports (filed 2026-10-18)
 
 | Report | Severity | One line |

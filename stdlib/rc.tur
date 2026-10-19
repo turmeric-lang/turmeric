@@ -65,7 +65,7 @@
 
 (definstance Functor [rc]
   (fmap [container g] (rc/of (g (rc-payload container)))))
-;;; SINCE: Phase HKT §6
+;; SINCE: Phase HKT S6
 ;; Foldable class stub.  Unlike Functor/Clone (auto-loaded via
 ;; typeclass-functor.tur / typeclass-clone.tur), Foldable is not auto-loaded,
 ;; so rc.tur declares it locally to keep the module self-contained and
@@ -73,7 +73,18 @@
 ;; so the idempotent-redefinition rule accepts both when typeclass.tur is also
 ;; loaded.  Declaring Foldable here also makes rc its owning module for the
 ;; instance below.
-;;; Foldable -- reduce a container to a summary value.
+;;; Foldable -- containers that can be reduced to a single summary value.
+;;;
+;;; Parameters:
+;;;   ^t -- the container's type constructor (kind * -> *)
+;;;
+;;; Methods:
+;;;   foldl -- combine the elements of `ta` first to last, starting from `init`
+;;;   foldr -- combine the elements of `ta` last to first, ending in `init`
+;;;
+;;; The same class stdlib/typeclass.tur declares; declared here too so rc.tur
+;;; stays standalone.  An rc holds one value x, so its instance below is
+;;; `(fn init x)` for foldl and `(fn x init)` for foldr.
 ;;;
 ;;; Since: Phase HKT S6
 
@@ -117,7 +128,7 @@
 (definstance Foldable [rc]
   (foldl [ta init f] (f init (rc-payload ta)))
   (foldr [ta init f] (f (rc-payload ta) init)))
-;;; SINCE: Phase B1
+;; SINCE: Phase B1
 ;; Clone instance for the built-in rc type (TY_RC) -- shallow clone.
 ;;
 ;; (definstance Clone [rc] ...) registers against TY_RC so that captured

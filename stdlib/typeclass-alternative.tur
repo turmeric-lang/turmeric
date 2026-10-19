@@ -11,6 +11,28 @@
 ;;   alt-or :: f a -> f a -> f a   (first-match choice)
 ;; Superclass: Applicative, as in Haskell.  stdlib/typeclass.tur re-declares
 ;; this class and must carry the same preamble (a redeclaration compares it).
+;;; Alternative -- an Applicative with a failure value and a first-success choice.
+;;;
+;;; Parameters:
+;;;   ^f -- the container's type constructor (kind * -> *)
+;;;
+;;; Methods:
+;;;   empty  -- the failing/empty value -- none for Option.  `a` only picks
+;;;             the instance; it is not read.
+;;;   alt-or -- `x` if it succeeded, else `y` -- the first some, the first
+;;;             parse that matched.
+;;;
+;;; Laws:
+;;;   (alt-or (empty w) x)        = x
+;;;   (alt-or x (empty w))        = x
+;;;   (alt-or (alt-or x y) z)     = (alt-or x (alt-or y z))
+;;;
+;;; Example:
+;;;   (unwrap-or (alt-or (none) (some 7)) 0)   ; => 7
+;;;
+;;; Superclass: Applicative.
+;;;
+;;; Since: Phase HKT H7
 (defclass Alternative [^f]
   [(Applicative f)]
   (empty [a] : (f a))

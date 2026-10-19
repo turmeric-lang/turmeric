@@ -492,13 +492,13 @@
 ;;;   arr    -- lift a plain function (b -> c) into an arrow a b c.
 ;;;   >>>    -- left-to-right composition: run the left arrow, then the right.
 ;;;   <<<    -- right-to-left composition (flipped >>>).
+;;;   first  -- act on the first component of a pair, passing the second through.
+;;;   second -- act on the second component of a pair, passing the first through.
 ;;;
 ;;; `>>>` and `<<<` spell their arrows -- `(a b c)` is the arrow from b to c,
 ;;; `(fn [b] c)` at the `(->)` head -- so a call with concrete functions
 ;;; specializes the instance at their element types, and the composed closure
 ;;; is called at exactly those types.
-;;;   first  -- act on the first component of a pair, passing the second through.
-;;;   second -- act on the second component of a pair, passing the first through.
 ;;;
 ;;; Superclass: Category, so an `[^Arrow A]` body may also use `ident`/`comp`.
 ;;;

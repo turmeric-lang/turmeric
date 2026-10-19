@@ -830,10 +830,10 @@
 ;;; Parameters:
 ;;;   a -- the tree type
 ;;;
-;;; Returns:
-;;;   plate-branch?  -- can x have children?
-;;;   plate-children -- x's children, in order
-;;;   plate-rebuild  -- x rebuilt with the given children
+;;; Methods:
+;;;   plate-branch?  -- can `x` have children?
+;;;   plate-children -- `x`'s children, in order
+;;;   plate-rebuild  -- `x` rebuilt with `kids` as its children, in order
 ;;;
 ;;; Example:
 ;;;   (definstance Plated [Tree]

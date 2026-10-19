@@ -9,6 +9,30 @@
 ;; Applicative -- container with a pure constructor and an ap combinator.
 ;;   pure :: a -> f a
 ;;   ap   :: f (a -> b) -> f a -> f b
+;;; Applicative -- a Functor that can lift a plain value and apply a wrapped function.
+;;;
+;;; Parameters:
+;;;   ^f -- the container's type constructor (kind * -> *)
+;;;
+;;; Methods:
+;;;   pure -- `x` in the minimal context -- `some` for Option, `ok` for
+;;;           Result.  Dispatches on its return type, so the expected type has
+;;;           to be known: `(:: (pure 5) (Option int))`.
+;;;   ap   -- apply the function inside `ff` to the value inside `fa`.  The
+;;;           contexts combine the way the instance says -- for Option, a none
+;;;           on either side gives none.
+;;;
+;;; Laws:
+;;;   (ap (pure (fn [x] x)) v)   = v
+;;;   (ap (pure f) (pure x))     = (pure (f x))
+;;;   (fmap v f)                 = (ap (pure f) v)
+;;;
+;;; Example:
+;;;   (unwrap-or (ap (some (fn [x : int] : int (* x 2))) (some 21)) 0)   ; => 42
+;;;
+;;; Superclass: Functor, so an `[^Applicative F]` body may also `fmap`.
+;;;
+;;; Since: Phase HKT H3
 (defclass Applicative [^f]
   [(Functor f)]
   (pure [x : a] : (f a))
