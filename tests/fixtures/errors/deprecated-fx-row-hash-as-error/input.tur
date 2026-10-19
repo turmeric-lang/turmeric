@@ -1,0 +1,10 @@
+; stale-comments-diagnostics item 1: --Werror=deprecated promotes the
+; legacy `#{...}` effect-row spelling (TUR-D0002) to an error, as it does
+; every other promotable deprecation.  It used to stay a warning, and this
+; program built and ran.
+(defn f [] #{IO} : int
+  (do (println 1) 2))
+
+(defn main [] : int
+  (println (f))
+  0)

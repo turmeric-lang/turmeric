@@ -25,8 +25,9 @@
 > **Found while revising, filed as reports:**
 > - [dynvar-binding-not-swapped-on-fiber-switch](../../archive/dynvar-binding-not-swapped-on-fiber-switch.md) (resolved 2026-10-18):
 >   a `binding` is per thread, not per fiber.
-> - [defdynamic-generic-adt-root-emitted-before-its-type](../../reported/defdynamic-generic-adt-root-emitted-before-its-type.md):
->   a `(Option T)` dynvar does not compile.
+> - [defdynamic-generic-adt-root-emitted-before-its-type](../../archive/defdynamic-generic-adt-root-emitted-before-its-type.md)
+>   (resolved 2026-10-18): a `(Option T)` dynvar did not compile. It does now,
+>   so tourist's "no request in flight" root can be an `(Option Ctx)`.
 > - [unknown-type-annotation-becomes-implicit-tyvar](../../reported/unknown-type-annotation-becomes-implicit-tyvar.md):
 >   a 2026-10-17 note; `option<T>` is not a type in an annotation, so write
 >   `(Option T)`.
@@ -50,7 +51,7 @@ binary.
 | Open question: with an explicit `defn main`, the root initializer is not emitted. | Fixed. The initializer goes through `def_init_body` (`src/compiler/emit_module.c:20714-20727`). Every probe below uses an explicit `main` and reads the root correctly. |
 | A: httpd is the producer; tourist exports `*current-ctx*` for httpd to bind. | tourist builds and frees the `Ctx` itself, in `__tourist-handler` (`spices/tourist/src/tourist/app.tur:395-400`), so httpd is not involved. spices/httpd has also become a typed layer over stdlib httpd (turmeric-spices #98). The cross-spice declaration question goes away. |
 | A: about 29 functions take `[ctx : Ctx]`. | 80 `ctx : Ctx` annotations across tourist, tourist-session and tourist-ws (the sweep below). |
-| A: `(defdynamic *current-ctx* :ptr<Ctx> nil-ctx)`. | `Ctx` is `(defopaque Ctx :int)`, and a `:Ctx` dynvar works, including `spawn-conveying`. A `(Option Ctx)` dynvar does not compile (report above). |
+| A: `(defdynamic *current-ctx* :ptr<Ctx> nil-ctx)`. | `Ctx` is `(defopaque Ctx :int)`, and a `:Ctx` dynvar works, including `spawn-conveying`. A `(Option Ctx)` dynvar did not compile until 2026-10-18 (report above); it does now, and conveys. |
 | B: raygui "already manipulates C statics with hand-rolled save/restore". | `gui-set-state` / `gui-set-style` / `gui-load-style` are plain setters over raygui's own C globals (`spices/raygui/src/raygui/core.tur:110-228`). Nothing saves or restores, and a dynvar cannot change what raygui's C reads. |
 | C: ansi has a stdout sink and a color-mode flag to convert. | ansi `printf`s to stdout (`spices/ansi/src/ansi/color.tur:27-95`), and there is no color-mode state: `term-no-color?` reads `$NO_COLOR` on every call (`spices/ansi/src/ansi/term.tur:43`). |
 | C: color mode should be thread-local, because "workers read the same default". | That is backwards. A worker thread's copy starts from the default, so a `--no-color` set on the main thread would be ignored on every other thread. A process-wide setting is a plain `^mut` global. |
@@ -162,14 +163,15 @@ plain spawn sees the root.
 
 **Decision 1 -- the "no request" root.**
 
-- (a) `(Option Ctx)` is the shape CLAUDE.md prefers, but a dynvar of it does
-  not compile today.
+- (a) `(Option Ctx)` is the shape CLAUDE.md prefers. A dynvar of it did not
+  compile until 2026-10-18; it does now, with a bare `(None)` root, and
+  `spawn-conveying` carries it (`tests/fixtures/defdynamic-option-convey`).
 - (b) The alternative is a null `Ctx` as the root. `(current-ctx)` would then
   turn it into `(Option Ctx)`, so the sentinel never leaves that one function.
   tourist already uses a null handle for `Pattern` (`types.tur:78`).
 
-Recommend (b) now, and move to (a) if the compiler comes to admit `(Option T)`
-dynvars. Its report lists both outcomes.
+This recommended (b) while (a) did not compile. Now that it does, (a) is
+open: re-decide when the work starts.
 
 **Decision 2 -- fiber servers.** Dynvar bindings do not move with fibers.
 - Today nothing can hit this. spices/httpd exposes only pool, spawn and

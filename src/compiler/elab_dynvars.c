@@ -110,9 +110,16 @@ Expr *elab_defdynamic(Elab *e, const Form *call) {
                             "*earmuffs* convention (e.g. *%s*)", name->name, name->name);
     }
 
-    /* Elaborate the root (initial) expression */
+    /* Elaborate the root (initial) expression.  The declared type rides the
+     * expected-type channel, as a let annotation's does, so a generic call
+     * whose type variable lives only on its result -- `(None)`, `(none)` --
+     * takes the dynvar's type instead of the bare `Option`, which TUR-E0602
+     * below refused (defdynamic-generic-adt-root-emitted-before-its-type). */
     Form *root_f = call->as.list.items[name_idx + 2];
+    Type *prev_expected = e->expected_type;
+    e->expected_type = vtype;
     Expr *root_expr = elab_form(e, root_f);
+    e->expected_type = prev_expected;
     if (!root_expr) return NULL;
 
     /* TUR-E0602: root-expr type must match declared value type */
@@ -242,7 +249,13 @@ Expr *elab_binding(Elab *e, const Form *call) {
         }
         DynVarEntry *entry = b->dynvar_entry;
 
+        /* The var's declared type is the override's expected type, as for
+         * the root above: `(binding [*n* (none)] ...)` on an `(Option int)`
+         * var types `none` at `(Option int)`. */
+        Type *prev_expected = e->expected_type;
+        e->expected_type = &entry->value_type;
         Expr *override_expr = elab_form(e, expr_f);
+        e->expected_type = prev_expected;
         if (!override_expr) return NULL;
 
         /* TUR-E0602: override type must match declared value type */

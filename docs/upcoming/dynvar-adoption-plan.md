@@ -24,8 +24,11 @@
 > - [dynvar-binding-not-swapped-on-fiber-switch](../archive/dynvar-binding-not-swapped-on-fiber-switch.md) (resolved 2026-10-18):
 >   a `binding` is per thread, not per fiber. ADO-1 makes `*log-level*`
 >   bindings mean something, so it makes this bug observable in async code.
-> - [defdynamic-generic-adt-root-emitted-before-its-type](../reported/defdynamic-generic-adt-root-emitted-before-its-type.md):
->   a `(Option T)` dynvar does not compile.
+> - [defdynamic-generic-adt-root-emitted-before-its-type](../archive/defdynamic-generic-adt-root-emitted-before-its-type.md)
+>   (resolved 2026-10-18): a `(Option T)` dynvar did not compile. It does now,
+>   and a bare `(None)` root needs no ascription.
+> - [defdynamic-refuses-payload-free-defdata](../reported/defdynamic-refuses-payload-free-defdata.md):
+>   split out of the report above; keeps `*log-level*` off an enum ADT.
 > - [time-capability-now-is-32-bit](../archive/time-capability-now-is-32-bit.md)
 >   (resolved 2026-10-18): filed while checking the old mock-time target. The
 >   Time slots take `self` now, so `Mock-Time` has no singleton.
@@ -82,8 +85,8 @@ is exactly what callers want from a log level.
   stand-in CLAUDE.md forbids. An enum ADT would be the natural type, but a
   dynvar cannot hold one today: measured on v0.65.5,
   `(defdata LogLevel (Debug) (Info) (Warn) (Error))` is refused by `TUR-E0603`
-  as move-only, even with no payloads (the note in
-  [defdynamic-generic-adt-root-emitted-before-its-type](../reported/defdynamic-generic-adt-root-emitted-before-its-type.md)).
+  as move-only, even with no payloads
+  ([defdynamic-refuses-payload-free-defdata](../reported/defdynamic-refuses-payload-free-defdata.md)).
   What does work is `(defopaque LogLevel :int)`, with named values
   (`log-level-debug` ... `log-level-error`) and a comparison helper. That is a
   real type, and a `defopaque` dynvar compiles and conveys. Use it, and move to

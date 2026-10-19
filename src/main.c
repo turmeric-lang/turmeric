@@ -12584,8 +12584,8 @@ static bool parse_warn_unused_result(int argc, char **argv) {
     return enabled;
 }
 
-/* F4 (cross-plan-followups): --Werror=deprecated flag promotes
- * ^deprecated use-site warnings to errors. */
+/* F4 (cross-plan-followups): --Werror=deprecated -- what it promotes is
+ * listed at g_werror_deprecated (runtime/globals.c). */
 static bool parse_werror_deprecated(int argc, char **argv) {
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--Werror=deprecated") == 0 ||
@@ -12639,14 +12639,6 @@ static bool parse_no_contracts(int argc, char **argv) {
         }
     }
     return false;
-}
-
-/* Phase 8: Handle --explain flag - compile code snippet and show detailed error */
-
-/* Phase HKT-P5: Return true if `s` looks like a diagnostic code string
- * of the form "TUR-E" followed by one or more decimal digits. */
-static bool looks_like_diag_code_(const char *s) {
-    return diag_looks_like_code(s);
 }
 
 /* XF3 (experimental-flag-mechanism-plan): `tur experiments` -- list the
@@ -13103,10 +13095,13 @@ static int cmd_dialects(int argc, char **argv) {
     return 0;
 }
 
+/* Phase 8: `tur explain <arg>` / `--explain <arg>` -- explain a diagnostic
+ * code, or compile a code snippet and show its diagnostics in detail. */
 static int cmd_explain(const char *code) {
-    /* Phase HKT-P5: If the argument looks like a diagnostic code (TUR-E####),
-     * look it up in the explanation table instead of compiling a snippet. */
-    if (looks_like_diag_code_(code)) {
+    /* Phase HKT-P5: If the argument looks like a diagnostic code
+     * (TUR-E/W/D/I####), look it up in the explanation table instead of
+     * compiling a snippet. */
+    if (diag_looks_like_code(code)) {
         DiagCode dc = diag_code_from_string(code);
         if (dc == DIAG_CODE_NONE || !diag_explain(dc, stdout)) {
             fprintf(stderr, "tur: no explanation for '%s'\n", code);
@@ -13361,7 +13356,7 @@ static int tur_main_inner(int argc, char **argv) {
     g_no_contracts = parse_no_contracts(argc, argv);
     /* Debugger Phase 4: --debug emits `#line` directives + builds with -g -O0. */
     g_emit_debug_lines = parse_debug_build(argc, argv);
-    /* F4: --Werror=deprecated promotes ^deprecated warnings to errors */
+    /* F4: --Werror=deprecated -- see g_werror_deprecated (runtime/globals.c) */
     g_werror_deprecated = parse_werror_deprecated(argc, argv);
     /* Phase C: --Werror=inline-c-narrow-params promotes narrow-param warnings */
     g_werror_inline_c_narrow_params = parse_werror_inline_c_narrow_params(argc, argv);

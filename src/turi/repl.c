@@ -92,8 +92,9 @@ static void repl_diag_sink(struct TuriEnv *env, int level, const char *code,
                            const char *message, void *ud) {
     (void)env; (void)ud;
 
-    /* Capture the first TUR-E#### or TUR-W#### code */
-    if (g_last_diag_code[0] == '\0' && code && (strncmp(code, "TUR-E", 5) == 0 || strncmp(code, "TUR-W", 5) == 0)) {
+    /* Capture the first diagnostic code, of any prefix `:explain` accepts --
+     * a TUR-D#### deprecation is as explainable as an E or W code. */
+    if (g_last_diag_code[0] == '\0' && code && diag_looks_like_code(code)) {
         strncpy(g_last_diag_code, code, sizeof(g_last_diag_code) - 1);
         g_last_diag_code[sizeof(g_last_diag_code) - 1] = '\0';
     }

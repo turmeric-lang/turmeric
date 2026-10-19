@@ -32,8 +32,16 @@ extern uint32_t g_unsafe_total_lines;
 /* Phase R6: Result/panic linting flags */
 extern bool g_warn_unused_result;
 /* F4 (cross-plan-followups): --Werror=deprecated promotes ^deprecated
- * warnings to errors so a clean build can gate against new uses. */
+ * warnings to errors so a clean build can gate against new uses.  What it
+ * covers is listed at its definition (globals.c). */
 extern bool g_werror_deprecated;
+
+/* The level of a promotable deprecation diagnostic: a warning, or an error
+ * under --Werror=deprecated.  Every deprecation-band site but TUR-D0001
+ * (a hard error since fn-type-bare-identifier-plan Phase 4) uses it. */
+static inline DiagLevel elab_deprecation_level(void) {
+    return g_werror_deprecated ? DIAG_ERROR : DIAG_WARNING;
+}
 extern bool g_lint_panic;
 /* Phase C2: --no-contracts -- strip contract checks during elaboration */
 extern bool g_no_contracts;

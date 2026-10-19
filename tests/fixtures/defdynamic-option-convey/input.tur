@@ -1,0 +1,31 @@
+;; defdynamic-generic-adt-root-emitted-before-its-type: an (Option Ctx) dynvar
+;; is conveyed by value.  A plain spawn-conveying child sees the root (None),
+;; a child spawned inside a binding sees the override, and the parent still
+;; reads it after the join.
+(defopaque Ctx :int)
+(defdynamic *ctx* :(Option Ctx) (None))
+(defn show [] : int (match *ctx* (Some c) (:: c int) (None) -1))
+
+(defn thread-join [t : ptr<void>] : nil
+  ```c
+  TurThreadHandle *h = (TurThreadHandle *)t;
+  pthread_join(h->tid, NULL);
+  pthread_mutex_destroy(&h->state->cancel_mutex);
+  pthread_cond_destroy(&h->state->cancel_cond);
+  free(h->state);
+  free(h);
+  ```)
+
+(defn spawn-conveying [f : ptr<void>] : ptr<void>
+  ```c
+  return (void *)(intptr_t)_tur_spawn_conveying((int64_t)(intptr_t)f);
+  ```)
+
+(defn main [] : int
+  (let [t0 (spawn-conveying (fn [] (println (show))))]
+    (thread-join t0))
+  (binding [*ctx* (some (:: 42 Ctx))]
+    (let [t (spawn-conveying (fn [] (println (show))))]
+      (thread-join t)
+      (println (show))
+      0)))

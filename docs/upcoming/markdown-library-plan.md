@@ -591,7 +591,7 @@ a `SlugMode`, for READMEs that are read on GitHub.
     taking an `rc<T>` is a type error, so `block.tur` defines callees before
     callers, and the renderer recurses through one function;
   - `vec-push-of-with-expression-emits-invalid-c.md`, worked around with a
-    `let`;
+    `let` (fixed 2026-10-18, now in `docs/archive/`; the `let` can go);
   - the two leaks above.
 
 **M2 as built.**

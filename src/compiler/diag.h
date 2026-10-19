@@ -204,7 +204,8 @@ typedef enum DiagCode {
     /* DV0: Dynamic var naming warning */
     TUR_W0600_DYNVAR_NO_EARMUFFS,        /* defdynamic name does not use *earmuffs* convention */
     /* CF3/CF4 (control-flow-completeness-plan): gated / unsupported control-flow.
-     * E07xx band reserved in Phase CF0; see docs/control-flow-completeness-plan.md. */
+     * E07xx band reserved in Phase CF0; see
+     * docs/archive/history/control-flow-completeness-plan.md. */
     TUR_E0700_CALLCC_GATED,              /* RETIRED (call-cc-completion CC5): call/cc is now real + ungated on the CPS substrate. Code reserved, no longer emitted. */
     TUR_E0701_ESCAPE_GATED,             /* RETIRED (call-cc-completion CC5): escape is now real + ungated on the CPS substrate. Code reserved, no longer emitted. */
     /* CF5 (control-flow-completeness-plan): always-on generator limitation diagnostics */
@@ -298,13 +299,15 @@ typedef enum DiagCode {
      * cannot be, because the same function may also be called with genuine
      * boxes.  Erased parameters there have no decidable convention. */
     TUR_E0715_NICHE_ELEMENT_ERASED_COMPARATOR,
-    /* Deprecation band (TUR-D####): syntax accepted for backward
-     * compatibility but slated for removal.  Emitted as DIAG_WARNING;
-     * promoted to DIAG_ERROR under --Werror=deprecated. */
-    /* fn-type-bare-identifier-plan Phase 3: a leading colon on a type
-     * inside a (fn ...) type expression is redundant -- position alone
-     * marks the param/result slots as types.  Drop the colon:
-     * (fn [:int] :int) -> (fn [int] int). */
+    /* Deprecation band (TUR-D####): syntax slated for removal, or already
+     * removed.  D0002-D0004 are emitted at elab_deprecation_level()
+     * (elab_internal.h): a warning, promoted to an error under
+     * --Werror=deprecated.  D0001 is the exception, below. */
+    /* fn-type-bare-identifier-plan: a leading colon on a type inside a
+     * (fn ...) type expression -- (fn [:int] :int) for (fn [int] int).  A
+     * deprecation warning in Phase 3; since Phase 4 a hard error whatever
+     * the flags (reject_fn_type_colon).  It keeps its D prefix so tooling
+     * that keys on the code keeps working. */
     TUR_D0001_FN_TYPE_COLON,
     /* fx-row-syntax-rename-plan Phase 2: bare `#{...}` as an effect row is
      * deprecated; prefer `#fx{...}`.  Emitted from elaboration when an
@@ -950,16 +953,17 @@ DiagSinkFn diag_get_sink(void **out_ud);
 /* Phase HKT-P5: Look up a long-form explanation for a diagnostic code.
  * If an explanation exists, writes it to `out` and returns true.
  * If no explanation is registered for `code`, returns false without writing.
- * `code_str` must be a string like "TUR-E0012" (as returned by
- * diag_code_to_string); `code` is the corresponding DiagCode enum value. */
+ * `code` is a DiagCode enum value (diag_code_from_string parses one from
+ * its "TUR-E0012" spelling); `out` is the stream the text is written to. */
 bool diag_explain(DiagCode code, FILE *out);
 
-/* Phase HKT-P5: Parse a TUR-E#### string into its DiagCode.
+/* Phase HKT-P5: Parse a TUR-<prefix>#### string into its DiagCode -- any
+ * prefix in the table, including the retired TUR-I0379.
  * Returns DIAG_CODE_NONE if the string is not recognised. */
 DiagCode diag_code_from_string(const char *s);
 
 /* Phase HKT-P5: Return true if `s` looks like a diagnostic code string
- * of the form "TUR-E" (or W or D) followed by one or more decimal digits. */
+ * of the form "TUR-E" (or W, D or I) followed by one or more decimal digits. */
 bool diag_looks_like_code(const char *s);
 
 #endif

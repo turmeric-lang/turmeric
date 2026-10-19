@@ -16,12 +16,10 @@ compiler itself misbehaves (a crash, a hang, invalid C), see
 [diagnosing the compiler](diagnosing-the-compiler-guide.md). Editor setup is in
 the [LSP guide](lsp-guide.md).
 
-> **Trust the code over the comments.** Several comments in `diag.h` and
-> `main.c` predate later changes (the deprecation band's severity, which
-> prefixes `tur explain` accepts). Where a comment and this guide disagree,
-> read the code. If the code disagrees with this guide, fix the guide.
-> The stale comments found so far in this area, each with a fix, are
-> listed in [stale-comments-diagnostics](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/stale-comments-diagnostics.md).
+> **Trust the code over the comments.** Where a comment and this guide
+> disagree, read the code. If the code disagrees with this guide, fix the
+> guide. The last batch of stale comments in this area was fixed in
+> [stale-comments-diagnostics](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/stale-comments-diagnostics.md).
 
 ---
 
@@ -106,11 +104,12 @@ The enum holds 115 `E` (error) codes, 26 `W` (warning), 4 `D`
 (deprecation) and 1 `I` (`TUR-I0379`, retired).
 
 **The prefix does not set the severity.** The call site picks the
-`DiagLevel`. `--strict-refine` turns `TUR-W0372` into an error. The `D` band
-is mixed, whatever the `diag.h` comment says. `--Werror=deprecated` promotes
-`TUR-D0004`, and the uncoded "'x' is deprecated" warning. `TUR-D0002` and
-`D0003` are always warnings (`elab_effects.c`). `TUR-D0001` is always an
-error (`elab_types.c:reject_fn_type_colon`).
+`DiagLevel`. `--strict-refine` turns `TUR-W0372` into an error. In the `D`
+band, `TUR-D0002`, `D0003` and `D0004`, and the uncoded "'x' is deprecated"
+warning, are emitted at `elab_deprecation_level()` (`elab_internal.h`): a
+warning, or an error under `--Werror=deprecated`. `TUR-D0001` is always an
+error (`elab_types.c:reject_fn_type_colon`). A new promotable deprecation
+calls the same helper.
 
 **Numbers are unique per prefix, not across prefixes.** `TUR-E0706` and
 `TUR-W0706` are unrelated, and so are `TUR-E0624` and `TUR-W0624`.
@@ -493,19 +492,15 @@ which reset protects which gate.
 
 `tur explain <arg>` and `tur --explain <arg>` both reach `main.c:cmd_explain`:
 
-1. If `diag_looks_like_code(arg)` (that is, `TUR-` then `E`, `W` or `D`,
-   then digits), it calls `diag_code_from_string`, then `diag_explain`. It
-   prints the text, or `tur: no explanation for '<arg>'` and exits 1.
+1. If `diag_looks_like_code(arg)` (that is, `TUR-` then `E`, `W`, `D` or
+   `I`, then digits), it calls `diag_code_from_string`, then `diag_explain`.
+   It prints the text, or `tur: no explanation for '<arg>'` and exits 1.
 2. Otherwise it treats `arg` as **source code**: it reads and elaborates it
    as `<explain>`, prints any diagnostics, and exits 0 if there are none.
 
-`diag_looks_like_code` does not accept `I`, so `tur explain TUR-I0379` goes
-down the second path:
-
-```
-$ tur explain TUR-I0379
-<explain>:1:1: error [TUR-E0003]: unbound symbol 'TUR-I0379'
-```
+A new prefix has to be added to `diag_looks_like_code` as well as to the
+table; one it does not accept is elaborated as source, and comes back as
+"unbound symbol 'TUR-X0001'".
 
 The REPL's `:explain [code]` (`turi/repl.c`) and the playground
 (`web/wasm_glue.c`) use the same three functions. Bare `:explain` explains

@@ -217,8 +217,11 @@ bool g_no_proc_macros = false;
 bool g_turi_stdlib_preload = false;
 
 /* F4 (cross-plan-followups): --Werror=deprecated promotes deprecation
- * warnings emitted by elab_lookup_sym to errors so a clean build can
- * gate against new uses of deprecated APIs. */
+ * warnings to errors so a clean build can gate against new uses.  Read
+ * through elab_deprecation_level() (elab_internal.h) by the uncoded
+ * "'x' is deprecated" use-site warning (elab_lookup_sym), TUR-D0002 and
+ * TUR-D0003 (warn_legacy_fx_row) and TUR-D0004 (the #fx{NonExhaustive}
+ * match marker).  TUR-D0001 is a hard error with or without it. */
 bool g_werror_deprecated = false;
 
 /* Phase C: --Werror=inline-c-narrow-params promotes narrow-param-in-inline-C

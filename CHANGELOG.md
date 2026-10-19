@@ -2,6 +2,29 @@
 
 All notable changes to Turmeric are documented here.
 
+## [Unreleased]
+
+### Changed
+
+- **`--Werror=deprecated` also promotes the legacy effect-row spellings.**
+  `#{...}` (TUR-D0002) and `@{...}` (TUR-D0003) are now errors under the flag,
+  like every other promotable deprecation; they used to stay warnings. A build
+  that passes the flag and still uses either spelling now fails --
+  `tools/migrate-fx-rows.py` rewrites them.
+
+### Fixed
+
+- **`tur explain TUR-I0379` explains the code.** It used to compile the
+  argument as source and report "unbound symbol". `tur explain TUR-D0001` no
+  longer describes the code as a warning: it has been an error since the
+  colon was removed from `(fn ...)` types. The REPL's bare `:explain` now
+  also picks up a deprecation (`TUR-D`) code.
+- **A dynamic var can hold an `(Option T)`.** `(defdynamic *v* :(Option int)
+  ...)` type-checked and then failed in the C compiler; it now works, and a
+  bare `(None)` / `(none)` root needs no `::` ascription.
+- **Pushing a `with` result onto a vector compiles.** `(vec-push! v (with p
+  [x 1]))` boxed the struct twice and failed in the C compiler.
+
 ## [0.67.1] -- 2026-10-18
 
 ### Fixed
