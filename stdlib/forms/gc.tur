@@ -1,0 +1,131 @@
+;;; tur/forms/gc -- control the cycle collector and read what it did.
+;;;
+;;; Memory is reference-counted (`rc<T>`, `ref<T>`); the collector exists only to
+;;; reclaim `rc<T>` cycles, which counting alone never frees. It is off by
+;;; default, so a program that never calls these runs the pure reference-count
+;;; path with no collector overhead. Collection is never started by a timer or
+;;; a background thread: your code asks for it (`gc!`), or opts into collection
+;;; at allocation checkpoints (`gc-auto!`). Breaking cycles with `weak<T>` is
+;;; the other option, and the only one with the collector disabled.
+;;;
+;;; The compiler lowers all of these to calls into the runtime, so each is
+;;; available in every program. Interpreted (`tur --interpret`, the REPL, the
+;;; playground) the knobs do nothing and the counters read as 0 -- and a counter
+;;; there is not a usable `int`: `(>= (gc-collections) 0)` fails with
+;;; `unknown infix builtin '>='`. Use a compiled program to observe the
+;;; collector. The full picture, with the modes, is gc-guide.
+;; Reference only: tools/gendocs.py reads the ;;@ lines, the compiler skips them.
+
+;;; gc-enable! -- turn the collector on, in manual mode.
+;;;
+;;; Collection then runs only when the program calls `gc!`. Enabling does not
+;;; start automatic collection -- that is `gc-auto!`.
+;;;
+;;; Returns:
+;;;   Nothing (`nil`).
+;;;
+;;; Example:
+;;;   (gc-enable!)
+;;;   (gc!)
+;;;   (>= (gc-collections) 1)  ; => true
+;;@builtin (gc-enable! [] : nil)
+
+;;; gc-disable! -- turn the collector off.
+;;;
+;;; Back to the default: `gc!` returns immediately and cycles accumulate. The
+;;; reference counts themselves keep working; only cycle collection stops.
+;;;
+;;; Returns:
+;;;   Nothing (`nil`).
+;;;
+;;; Example:
+;;;   (gc-enable!)
+;;;   (gc-disable!)
+;;;   (let [n (gc-collections)] (gc!) (= (gc-collections) n))  ; => true
+;;@builtin (gc-disable! [] : nil)
+
+;;; gc-auto! -- collect automatically at allocation checkpoints.
+;;;
+;;; Switches the collector on in automatic mode: it runs when the buffer of
+;;; candidate cycle roots fills, or after a fixed number of allocations, with no
+;;; `gc!` anywhere. The check sits at allocation sites and never on the
+;;; reference-count decrement path. Opt-in only: no program gets this unless it
+;;; calls `gc-auto!`.
+;;;
+;;; Returns:
+;;;   Nothing (`nil`).
+;;;
+;;; Example:
+;;;   (gc-auto!)
+;;;   (>= (gc-live-blocks) 0)  ; => true
+;;@builtin (gc-auto! [] : nil)
+
+;;; gc! -- run one collection now.
+;;;
+;;; Reclaims strong `rc<T>` cycles (trial deletion over the candidate roots)
+;;; and blocks that only a `weak<T>` still keeps alive. It does nothing while
+;;; the collector is disabled, so call `gc-enable!` first. A cycle routed
+;;; through an opaque handle the collector cannot walk is not reclaimed. Set
+;;; `TUR_GC_TRACE=1` in the environment to print one line per collection to
+;;; stderr: `[gc] #1 mode=1 candidates=0 freed=0 live=0->0`.
+;;;
+;;; Returns:
+;;;   Nothing (`nil`).
+;;;
+;;; Example:
+;;;   (gc-enable!)
+;;;   (gc!)
+;;;   (>= (gc-collections) 1)  ; => true
+;;@builtin (gc! [] : nil)
+
+;;; gc-collections -- how many collections have run.
+;;;
+;;; Counts every collection since the program started, whether started by `gc!`
+;;; or automatically.
+;;;
+;;; Returns:
+;;;   The count, an `int`.
+;;;
+;;; Example:
+;;;   (gc-enable!)
+;;;   (gc!)
+;;;   (>= (gc-collections) 1)  ; => true
+;;@builtin (gc-collections [] : int)
+
+;;; gc-objects-freed -- how many blocks the collector has reclaimed.
+;;;
+;;; Counts reference-count blocks freed by collection. Blocks freed because
+;;; their last owner went away do not count -- those never needed the collector.
+;;;
+;;; Returns:
+;;;   The count, an `int`.
+;;;
+;;; Example:
+;;;   (>= (gc-objects-freed) 0)  ; => true
+;;@builtin (gc-objects-freed [] : int)
+
+;;; gc-live-blocks -- how many reference-count blocks are alive right now.
+;;;
+;;; An instantaneous count of the `rc<T>` blocks currently allocated. It sits
+;;; near zero right after a collection, so on its own it says little; compare
+;;; it with `gc-candidate-high-water`.
+;;;
+;;; Returns:
+;;;   The count, an `int`.
+;;;
+;;; Example:
+;;;   (let [r (rc/of 7)] (>= (gc-live-blocks) 1))  ; => true
+;;@builtin (gc-live-blocks [] : int)
+
+;;; gc-candidate-high-water -- the peak size of the candidate-root buffer.
+;;;
+;;; The number to watch to learn whether the collector keeps up. A value that
+;;; stays at the suspect threshold (128) means each collection empties the
+;;; buffer before it overflows; one that keeps climbing means it does not.
+;;;
+;;; Returns:
+;;;   The peak occupancy, an `int`.
+;;;
+;;; Example:
+;;;   (>= (gc-candidate-high-water) 0)  ; => true
+;;@builtin (gc-candidate-high-water [] : int)

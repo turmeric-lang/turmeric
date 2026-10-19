@@ -117,13 +117,3 @@ panic-payload-value
 panic-payload-file
 panic-payload-line
 panic-payload-downcast
-
-# Garbage collector
-gc!
-gc-auto!
-gc-enable!
-gc-disable!
-gc-collections
-gc-objects-freed
-gc-live-blocks
-gc-candidate-high-water
