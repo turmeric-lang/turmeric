@@ -13,12 +13,6 @@ defprotocol
 make-protocol
 extern-c
 
-# Modules and loading
-defmodule
-import
-export
-load
-
 # Binding and control
 let
 let*
