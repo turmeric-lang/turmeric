@@ -39,7 +39,6 @@ directory is worse for triage than no index.
 | Report | Severity | One line |
 | --- | --- | --- |
 | [api-docs-miss-language-primitives](api-docs-miss-language-primitives.md) | medium (documentation) | The API site documents none of the ~137 special forms or ~40 compiler builtins, and `(doc ...)` has a one-liner for only 32 forms (`shift`, `handle-shallow`, `ptr-*`, `raw-*`, `transmute`, `rc/of`, ... have nothing); `deftype`/`defdynamic`/`def`/`defalias` never render (the `tur/refine` page is empty); generic structs lose their fields, `defdata` its payloads, `defgadt` reads result types as constructors, `defeffect`/`defopaque` lose their declarations; and `char=?` is published as `char`. Groups 2-4 are `tools/gendocs.py` fixes; group 1 needs a decision on where primitive docs live. |
-| [witness-dispatch-skips-arg-coercions](witness-dispatch-skips-arg-coercions.md) | medium (cc failure) | A `@Type` witness call (`(.ext @box 41 (fn ...))`) passes a lambda to a `: fn` method parameter as a bare `void *` and cc rejects it; the witness branch of `elab_method_call` skips the poly-wrap / fat-shim / `any` coercions the receiver path applies. Stdlib `Comonad`'s `extend` is uncallable through the class because of it. |
 
 ## Found executing the open reports (filed 2026-10-18)
 
