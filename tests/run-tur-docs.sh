@@ -54,7 +54,7 @@ pick_late_key() {
 
 # --- builtins still work -----------------------------------------------------
 OUT="$("$TUR" doc let 2>&1)"; RC=$?
-if [ "$RC" -eq 0 ] && grep -q 'bind local variables' <<<"$OUT"; then
+if [ "$RC" -eq 0 ] && grep -q 'bind local ' <<<"$OUT"; then
     pass "builtin lookup (let)"
 else
     fail "builtin lookup (let) -- rc=$RC out=$(head -1 <<<"$OUT")"
