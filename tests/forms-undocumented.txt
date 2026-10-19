@@ -106,14 +106,3 @@ gen-next
 gen-done?
 stm
 retry
-
-# Panics
-panic
-panic-with
-catch-panic-of
-catch-unwind
-panic-payload-type
-panic-payload-value
-panic-payload-file
-panic-payload-line
-panic-payload-downcast
