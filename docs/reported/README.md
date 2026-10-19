@@ -60,7 +60,7 @@ directory is worse for triage than no index.
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [panic-forms-gaps](panic-forms-gaps.md) | medium | `panic-payload-downcast` is typed `ptr<void>` but emits no value, so using its result is a C error; compiled `catch-panic-of` with a non-matching payload type and no outer boundary swallows the panic and yields an `ok` result (the interpreter aborts, as documented); compiled `panic-with` reports the generated C file and line; `(catch-unwind 5)` segfaults; the interpreter\'s `panic-payload-*` accessors return placeholders |
+| [panic-forms-gaps](panic-forms-gaps.md) | medium | `panic-payload-downcast` is typed `ptr<void>` but emits no value, so using its result is a C error; compiled `catch-panic-of` with a non-matching payload type and no outer boundary swallows the panic and yields an `ok` result (the interpreter aborts, as documented); compiled `panic-with` reports the generated C file and line; `(catch-unwind 5)` segfaults; the interpreter's `panic-payload-*` accessors return placeholders |
 
 ## Found executing the open reports (filed 2026-10-18)
 
