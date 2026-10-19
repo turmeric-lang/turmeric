@@ -51,8 +51,9 @@
   --scrim:         rgba(0,0,0,0.55);     /* behind an open drawer */
   --shadow-card:   0 0 0 1px rgba(212,139,28,0.06), 0 32px 64px rgba(0,0,0,0.4);
   --shadow-pop:    0 8px 24px rgba(0,0,0,0.5);   /* tooltips, popovers */
-  /* The logo SVGs are one amber (#EFA030). Light mode darkens them in place
-   * rather than shipping a second set of files. */
+  /* The logo SVGs are one amber (#EFA030). Light mode re-steps them in place
+   * with a filter rather than shipping a second set of files; see the light
+   * block for why its values are what they are. */
   --logo-filter:   none;
 
   /* Syntax highlight */
@@ -161,7 +162,14 @@
   --scrim:         rgba(42,32,22,0.35);
   --shadow-card:   0 0 0 1px rgba(148,86,2,0.06), 0 24px 48px rgba(60,40,15,0.12);
   --shadow-pop:    0 8px 24px rgba(60,40,15,0.16);
-  --logo-filter:   brightness(0.74) saturate(1.15);
+  /* -> #CA7F13. The light sibling of the dark relationship: there the logo
+   * sits one step BRIGHTER than --gold-fill, here one step DEEPER, at the
+   * same chroma (OKLCH L .66 C .14 H 67 against the button's .71 / .14 / 72)
+   * and >= 3:1 on base. brightness() alone also drains chroma -- the old
+   * brightness(0.74) saturate(1.15) gave a muddy #B97516 (C .13) that read
+   * brown beside the button -- so the saturate() has to make that back.
+   * Tune the two together, and re-check the rendered color, not one alone. */
+  --logo-filter:   brightness(0.80) saturate(1.2);
 
   --syn-kw:        #965500;
   --syn-str:       #AE3C26;
