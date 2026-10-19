@@ -11,7 +11,6 @@
 # Definitions
 defprotocol
 make-protocol
-extern-c
 
 # Binding and control
 let
@@ -35,7 +34,6 @@ binding
 # Functions and values
 fn
 make-session
-call-ptr
 
 
 # Effects and handlers
