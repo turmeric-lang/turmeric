@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/turmeric-lang/turmeric/actions/workflows/ci.yml/badge.svg)](https://github.com/turmeric-lang/turmeric/actions/workflows/ci.yml)
 
-**Latest release:** `v0.67.2` -- Fixes a double definition when a module is both loaded and imported, plus `tur explain` on info codes and `(Option T)` dynamic vars.
+**Latest release:** `v0.67.3` -- Fixes `@Type` witness-dispatch calls skipping argument coercions, and documents typeclasses (`defclass` cards, methods, laws, instances) in the API docs and `(doc ...)`.
 
 ## What
 
