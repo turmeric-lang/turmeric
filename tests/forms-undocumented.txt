@@ -7,51 +7,6 @@
 # (see the files there) and delete its line below.
 #
 # docs/reported/api-docs-miss-language-primitives.md tracks the work.
-
-# Definitions
-def
-define
-defn
-defmacro
-defstruct
-defdata
-defgadt
-defclass
-definstance
-defopaque
-defeffect
-deftype
-defalias
-defdynamic
-defkind
-defrec
-defprotocol
-make-protocol
-extern-c
-
-# Modules and loading
-defmodule
-import
-export
-load
-
-# Functions and values
-make-struct
-make-session
-call-ptr
-
-# Types, casts and existentials
-::
-?
-as
-cast
-coerce
-is?
-type-of
-type-app
-forall
-exists
-pack
-open
-&
-&mut
+#
+# The list is empty: all 163 reserved forms and builtins are documented.  A new
+# one needs a page entry, or a line here until it has one.

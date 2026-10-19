@@ -26,13 +26,20 @@ change, on branch `claude/typeclass-api-docs-1mmix5`.
 > `table_` is documented** (`tur/forms/operators`, `unsafe`, `references`,
 > `core`; `bit-shr` in `tur/bits`). The drift check exists:
 > `tests/check-forms-documented.sh` (ctest `tur_forms_documented_lint`).
-> **Left: 100 special forms**, listed by group in
-> `tests/forms-undocumented.txt` -- the definition forms, binding and control,
-> casts and existentials, effects and handlers, continuations, generators and
-> STM, panics, and the GC counters. Writing the builtin pages turned up five
-> implementation bugs, filed separately (`integer-mod-by-zero-...`,
-> `sized-int-arithmetic-...`, `unsafe-builtins-...`, `ref-weak-builtins-...`,
-> `show-line-of-option-...`).
+>
+> **Every reserved special form is documented too** (2026-10-19): 163 of 163
+> names, on the pages under `stdlib/forms/` (`gc`, `panics`, `generators`, `stm`,
+> `control`, `effects`, `continuations`, `types`, `definitions`, `datatypes`,
+> `typedefs`, `classes`, `modules`, `ffi`, `sessions`, beside the builtin pages).
+> `tests/forms-undocumented.txt` is empty, so the drift check now fails on any
+> new reserved name without an entry. Checking the examples on both engines found
+> a number of implementation bugs, each filed with a repro: `panic-forms-gaps`,
+> `generator-forms-gaps`, `stm-forms-gaps`, `control-forms-gaps`,
+> `effect-forms-gaps`, `continuation-forms-gaps`, `type-forms-gaps`,
+> `definition-forms-gaps`, `module-and-ffi-forms-gaps`, `session-forms-gaps`
+> (and, for the builtins, `integer-mod-by-zero-...`, `sized-int-arithmetic-...`,
+> `unsafe-builtins-...`, `ref-weak-builtins-...`, `show-line-of-option-...`).
+> Groups 2-4 below are still open.
 
 The API pages and `stdlib/docstrings.tur` are generated from stdlib `;;;`
 docstrings only, so anything the compiler implements itself has no source for

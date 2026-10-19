@@ -1,0 +1,85 @@
+;;; tur/forms/ffi -- calling C: extern-c and call-ptr.
+;;;
+;;; Two forms reach C code. `extern-c` declares a C function you link against, so
+;;; the compiler calls it by name. `call-ptr` calls a function whose address you
+;;; hold at run time, usually one found with `dlopen` and `dlsym`. Both trust the
+;;; signature you write: nothing checks it against a header, and a wrong one is a
+;;; crash or a garbage value, not a diagnostic. c-integration-guide covers
+;;; `extern-c`, inline C and linking; ffi-guide covers `call-ptr`, callbacks and the
+;;; interpreter's JIT thunks. Wrapping a C library as a package is in
+;;; developing-spices-guide.
+;; Reference only: tools/gendocs.py reads the ;;@ lines, the compiler skips them.
+
+;;; extern-c -- declare a C function to call.
+;;;
+;;; `(extern-c strlen [s : cstr] : int)` says that a C function `strlen` exists
+;;; at link time, taking a `cstr` and returning an `int`; afterwards `(strlen "abc")`
+;;; calls it. The parameter list is `[name : Type ...]` (the stdlib writes it
+;;; `[s :cstr]`) and the type after it is the result. Types map to C as `:int` to
+;;; `int64_t`, `:int8` ... `:uint64` to the exact-width types, `:float` and
+;;; `:float64` to `double`, `:float32` to `float`, `:bool`, `:cstr` to `const char *`,
+;;; `:ptr` to `void *`, and `:void` (result only). Declare the width the C function
+;;; really has: the emitted C carries your prototype beside the system headers',
+;;; so `(extern-c getpid [] : int)` is a C error (`conflicting types for 'getpid'`)
+;;; and `: int32` is right; and a result narrower than `int` must be converted
+;;; before it is combined with an `int` (`(as int (getpid))`). A call is checked
+;;; against the declaration: a wrong argument type is TUR-E0001 and a wrong count
+;;; TUR-E0002. A variadic function is declared with its fixed arguments and the
+;;; rest pass unchecked: `(extern-c printf [fmt : cstr n : int] : int32)` then
+;;; `(printf "n=%lld\n" 7)`.
+;;;
+;;; The older shorthand, `(extern-c fopen [^cstr ^cstr] :ptr)`, is common in the
+;;; stdlib and works for `^cstr`, `^ptr` and `^int`, but it does not understand
+;;; every type: `(extern-c sqrt [^float] :float)` declares an integer parameter, so
+;;; `(sqrt 4)` compiles and returns garbage, and `[^]` for no arguments makes a
+;;; function of one (docs/reported/module-and-ffi-forms-gaps.md). Write the named
+;;; form. A symbol that is not in libc or a linked library is a linker error
+;;; when compiled; under `--interpret` it needs a JIT build, and an unknown name is
+;;; called as if it returned 0. Libraries beyond libc are linked with `-l` or a
+;;; spice's `:cmake-deps`.
+;;;
+;;; Parameters:
+;;;   name   -- the C function or global's name
+;;;   params -- `[name : Type ...]`, possibly empty
+;;;   Ret    -- the result type
+;;;
+;;; Example:
+;;;   (extern-c strlen [s : cstr] : int)
+;;;   (extern-c atof [s : cstr] : float)
+;;;   (println (strlen "hello"))  ; prints 5
+;;;   (println (atof "3.25"))  ; prints 3.25
+;;@form (extern-c name [param : Type ...] : Ret)
+
+;;; call-ptr -- call a C function through its address.
+;;;
+;;; `(call-ptr p [T1 T2 -> R] arg ...)` calls the function at address `p` as a C
+;;; function taking `T1 T2` and returning `R`, and is typed `R`. The address is
+;;; a `ptr<void>` from `dlsym` or a raw `:int`. The signature is positional types,
+;;; `->`, and one result: `(call-ptr p [:float -> :float] 27.0)`. It and `dlopen`,
+;;; `dlsym`, `dlclose` need an enclosing `(unsafe ...)` block
+;;; (`dlopen requires an enclosing (unsafe ...) block`); the argument count must
+;;; match the signature (`call-ptr: signature declares 2 parameters, got 1
+;;; argument`) and a number is accepted for a float slot. Widths are exact. The
+;;; value of a C `int` function declared `-> :int` is read as 64 bits and is
+;;; garbage for a negative result; declare `:int32`. A struct passed or returned
+;;; by value names a `defstruct`. `dlsym` gives a null pointer for a missing name
+;;; (`ptr-null?` tests it); calling one is a crash. Compiled it is a plain cast and
+;;; call; `--interpret` needs a JIT build. See ffi-guide for callbacks
+;;; (`callback-ptr`) and struct-by-value rules.
+;;;
+;;; Parameters:
+;;;   p         -- the function's address
+;;;   signature -- `[T ... -> R]`, positional parameter types then the result
+;;;   args      -- the arguments
+;;;
+;;; Returns:
+;;;   The C function's result, as `R`.
+;;;
+;;; Example:
+;;;   (defn main [] : int
+;;;     (unsafe
+;;;       (let [h (dlopen "libm.so.6")
+;;;             p (dlsym h "cbrt")]
+;;;         (println (call-ptr p [:float -> :float] 27.0))))  ; prints 3
+;;;     0)
+;;@form (call-ptr p [T ... -> R] arg ...)

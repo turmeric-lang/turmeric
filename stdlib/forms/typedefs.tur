@@ -1,0 +1,101 @@
+;;; tur/forms/typedefs -- naming types: defalias, deftype, defrec, defkind.
+;;;
+;;; Four forms bind a name at the type level, and they do different jobs.
+;;; `defalias` is a plain synonym: the new name and its target are the same type
+;;; everywhere. `deftype` binds a recursive type constructor, such as the fixed
+;;; point `Fix`, and also names a refinement. `defrec` declares a recursive type
+;;; constructor by name, and `defkind` records a kind for documentation. Records,
+;;; sums and newtypes are in tur/forms/datatypes. A name an auto-loaded stdlib
+;;; module already defines cannot be defined again.
+;; Reference only: tools/gendocs.py reads the ;;@ lines, the compiler skips them.
+
+;;; defalias -- give a type another name.
+;;;
+;;; `(defalias Name type)` makes `Name` mean exactly `type`. It is transparent: a
+;;; value of the alias and a value of the target are interchangeable, the alias
+;;; never shows up in unification, and an error message names the target. The
+;;; target can be any type: a primitive (`:int`), an applied type
+;;; (`(Cons int)`), a struct or ADT name, a function type (`(fn [int] bool)`), or a
+;;; refinement (`#refine{ q : int | (not= q 0) }`), which then travels with the
+;;; name, so a call `(inv 0)` for `(defn inv [d : NonZero] ...)` is TUR-E0371.
+;;; An alias takes no parameters: `(defalias Box [a] (Cons a))` is `type
+;;; parameters are not supported`, so name a generic shape with `defstruct` or
+;;; `defdata`. Use this, not `deftype`, to name a type that is not recursive.
+;;;
+;;; Parameters:
+;;;   Name   -- the alias
+;;;   type   -- the type it stands for
+;;;
+;;; Example:
+;;;   (defalias Sample :int)
+;;;   (defalias Pred (fn [int] bool))
+;;;   (defn twice [s : Sample] : Sample (* s 2))
+;;;   (defn test [f : Pred x : int] : bool (f x))
+;;;   (twice 21)  ; => 42
+;;;   (test (fn [n : int] : bool (> n 0)) 3)  ; => true
+;;@form (defalias Name type)
+
+;;; deftype -- bind a recursive type constructor, or name a refinement.
+;;;
+;;; With a parameter vector and a body, `(deftype Fix [^f] (f (Fix f)))` binds a
+;;; recursive type: `Fix f` is `f` applied to itself again, which lets one write
+;;; folds and unfolds over any functor. A parameter marked `^f` is a type
+;;; constructor (kind `* -> *`); `^f ^a` takes a constructor and a type, as in
+;;; `(deftype Free [^f ^a] (f ((Free f) a)))`, and `^&cols` takes a row. This is
+;;; how the stdlib defines `Fix` and `Free`. The bound name is a type of its own, not
+;;; a synonym of the body, so a non-recursive body such as `(fn [cstr] nil)` does
+;;; not unify with its uses -- name that with `defalias`.
+;;;
+;;; With a refinement as the body, `(deftype Small #refine{ q : int | (< q 10) })`
+;;; names a refinement type: `(double-small 4)` for `[n : Small]` is accepted and
+;;; `(double-small 40)` is TUR-E0371 `the predicate (< q 10) is false for the value
+;;; given here`; an argument the solver can neither prove nor refute is accepted
+;;; (refinement-types-guide). `stdlib/refine.tur` defines `Nat`, `Pos`, `NonZero`, `Byte` and
+;;; `Percent` this way. A bare refinement body is bound transparently, as
+;;; `defalias` would; prefer `defalias` for it in new code.
+;;;
+;;; Parameters:
+;;;   Name   -- the type's name
+;;;   params -- optional: a vector of type parameters, `^f` for a constructor
+;;;   body   -- the type, mentioning `Name` if it is recursive
+;;;
+;;; Example:
+;;;   (deftype Small #refine{ q : int | (< q 10) })
+;;;   (defn double-small [n : Small] : int (* n 2))
+;;;   (double-small 4)  ; => 8
+;;@form (deftype Name [param ...] body)
+;;@form (deftype Name #refine{ x : type | predicate })
+
+;;; defrec -- declare a recursive type constructor by name.
+;;;
+;;; `(defrec Fix [^f])` registers `Fix` as a recursive type constructor of kind
+;;; `* -> *`. In this version the body, `(defrec Name [params] body)`, is accepted
+;;; and not used: nothing is
+;;; unfolded or checked, so `defrec` is a placeholder, and `deftype` is the form
+;;; that gives `Fix` and `Free` their meaning. It produces no value.
+;;;
+;;; Parameters:
+;;;   Name   -- the type constructor's name
+;;;   params -- optional: a vector of type parameters
+;;;   body   -- optional, ignored
+;;;
+;;; Example:
+;;;   (defrec Fix [^f])
+;;@form (defrec Name [param ...])
+
+;;; defkind -- name a kind.
+;;;
+;;; `(defkind Unary (* -> *))` is meant to give a name to a kind (the "type of a
+;;; type constructor") such as `* -> *` for documentation. It is read and ignored
+;;; today: the name is not recorded or enforced, a use of `Unary` is not checked
+;;; against it, and the second argument may be any form. It produces no value
+;;; (hkt-guide lists it among the limitations). Kinds are written directly where
+;;; they are needed, as `^f` on a parameter or `(f :: * -> *)` in a `forall`.
+;;;
+;;; Parameters:
+;;;   Name -- the kind alias
+;;;   kind -- the kind, such as `(* -> *)`
+;;;
+;;; Example:
+;;;   (defkind Binary (* -> * -> *))
+;;@form (defkind Name kind)
