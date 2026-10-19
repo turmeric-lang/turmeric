@@ -36,6 +36,7 @@
 #include "ffi_thunk.h"     /* RP4: install per-export TuriNativeFn bindings */
 #include "platform_fs.h"   /* setenv/unsetenv on Windows */
 #include "lang_dialects.h" /* lang_traits: a dialect's prelude and name */
+#include "docstrings.h"    /* :doc -- tur_doc_prefer over the stdlib table */
 
 #include <ctype.h>
 #include <errno.h>
@@ -692,7 +693,8 @@ cleanup_noses:
  * :doc <sym>  — print a brief description for known builtins / env bindings
  * ---------------------------------------------------------------------- */
 
-/* turi_doc_lookup_builtin lives in turi/docstrings.c. */
+/* The documentation itself comes from tur_doc_prefer (turi/docstrings.c):
+ * the stdlib table's entry, else the builtin one-liner. */
 
 
 static void cmd_doc(TuriEnv *env, const char *sym) {
@@ -705,7 +707,7 @@ static void cmd_doc(TuriEnv *env, const char *sym) {
         return;
     }
 
-    const char *d = turi_doc_lookup_builtin(sym);
+    const char *d = tur_doc_prefer(sym, tur_docstring_lookup(sym));
     if (d) {
         printf("%s\n", d);
         return;

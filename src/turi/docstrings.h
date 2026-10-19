@@ -31,4 +31,14 @@ const char *tur_docstring_lookup(const char *name);
  * declared in turi/repl.h, which has always exported it. */
 const char *turi_doc_lookup_builtin(const char *sym);
 
+/* The documentation to show for `name`, given its stdlib-table entry
+ * (`from_stdlib`, NULL when there is none): the stdlib entry, which carries
+ * signature, Parameters, Returns and Example, else the builtin one-liner.
+ * A stdlib entry that is only the bare name -- a definition with no docstring,
+ * such as macros.tur's `when` -- says less than the one-liner, so the
+ * one-liner wins there.  NULL when neither has anything.  Every doc front end
+ * (`tur doc`, `doc-print`, the REPL's `:doc`, the playground panel) answers
+ * through this, so they cannot disagree. */
+const char *tur_doc_prefer(const char *name, const char *from_stdlib);
+
 #endif /* TURI_DOCSTRINGS_H */

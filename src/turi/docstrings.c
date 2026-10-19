@@ -188,6 +188,14 @@ const char *tur_docstring_lookup(const char *name) {
     return tur_docstring_lookup_in(path, name);
 }
 
+const char *tur_doc_prefer(const char *name, const char *from_stdlib) {
+    if (!name) return NULL;
+    const char *builtin = turi_doc_lookup_builtin(name);
+    if (from_stdlib && !(builtin && strcmp(from_stdlib, name) == 0))
+        return from_stdlib;
+    return builtin ? builtin : from_stdlib;
+}
+
 /* The builtin table lives here, not in repl.c, because the interpreter's
  * `doc-print` native uses it: anything interpreter_natives.c references is
  * linked into every libturi embedder, and repl.c would drag readline in with

@@ -476,6 +476,34 @@ def parse_tur_file(path):
             i += 1
             continue
 
+        dm = DOC_DECL_RE.match(stripped)
+        if dm:
+            # A doc-only declaration of something the compiler implements
+            # itself (a special form or builtin); see DOC_DECL_RE.  A form
+            # with several shapes writes one `;;@form` line per shape.
+            if not first_def_seen:
+                if module['docstring'] is None and pending_module_doc:
+                    module['docstring'] = _parse_docstring(pending_module_doc)
+                    pending_module_doc = None
+                first_def_seen = True
+            shapes = [dm.group(2)]
+            j = i + 1
+            while j < len(lines):
+                nm = DOC_DECL_RE.match(lines[j].strip())
+                if not nm or nm.group(1) != dm.group(1) or \
+                        _doc_decl_name(nm.group(2)) != _doc_decl_name(dm.group(2)):
+                    break
+                shapes.append(nm.group(2))
+                j += 1
+            defn = _parse_doc_decl(dm.group(1), shapes)
+            if defn:
+                defn['docstring'] = _parse_docstring(doc_buf) if doc_buf else None
+                defn['line'] = i + 1
+                module['definitions'].append(defn)
+            doc_buf = []
+            i = j
+            continue
+
         sm = scheme_def_re.match(line)
         if sm:
             if not first_def_seen:
@@ -584,6 +612,46 @@ def parse_tur_file(path):
         i += 1
 
     return module
+
+
+# A doc-only declaration: documentation for a name the compiler implements
+# itself, so there is no definition for a docstring to sit on.  It is a `;;`
+# comment, so the file holding it is a valid, empty program -- it loads,
+# formats and checks like any stdlib file -- while gendocs reads it as a
+# definition:
+#
+#   ;;@builtin (ptr-add [p : ptr<void> n : int] : ptr<void>)
+#   ;;@form    (unsafe body ...)
+#
+# `builtin` takes a defn-style signature, parsed and rendered like one; `form`
+# takes its syntax verbatim, one line per shape.  See stdlib/forms/.
+DOC_DECL_RE = re.compile(r'^;;@(form|builtin)\s+(\(.*\))\s*$')
+
+
+def _doc_decl_name(shape):
+    """The declared name: the head of `(name ...)` -- any token, since names
+    like `+.`, `not=` and `rc->ptr` are outside the defn name pattern."""
+    m = re.match(r'\(\s*([^\s\[\]()]+)', shape)
+    return m.group(1) if m else None
+
+
+def _parse_doc_decl(kind, shapes):
+    """A definition dict for a `;;@form` / `;;@builtin` declaration, or None."""
+    name = _doc_decl_name(shapes[0])
+    if not name:
+        return None
+    defn = {'kind': kind, 'name': name, 'params': [], 'return_type': None,
+            'exported': not name.startswith('__'), 'shapes': shapes}
+    if kind == 'builtin':
+        # (name [params] : ret) -- the defn signature grammar, closing paren
+        # dropped first so it is not read as part of the return type.
+        rest = shapes[0][shapes[0].index(name) + len(name):].rstrip()
+        rest = rest[:-1] if rest.endswith(')') else rest
+        inner, end = _find_bracket(rest)
+        if inner is not None:
+            defn['params'] = _parse_params('[' + inner + ']')
+            defn['return_type'] = _return_type_after_bracket(rest[end:])
+    return defn
 
 
 def _parse_scheme_def(form, text):
@@ -1199,6 +1267,9 @@ em { color: var(--green); font-style: italic; }
 }
 .kind-defn      { background: color-mix(in srgb, var(--gold) 15%, transparent); color: var(--gold-bright); }
 .kind-defmacro  { background: color-mix(in srgb, var(--syn-str) 15%, transparent); color: var(--syn-str); }
+/* What the compiler implements itself (stdlib/forms/): a special form, a builtin. */
+.kind-form      { background: color-mix(in srgb, var(--syn-kw) 15%, transparent); color: var(--syn-kw); }
+.kind-builtin   { background: color-mix(in srgb, var(--syn-kw) 10%, transparent); color: var(--syn-kw); }
 .kind-defstruct { background: color-mix(in srgb, var(--syn-num) 12%, transparent); color: var(--syn-num); }
 .kind-definstance { background: color-mix(in srgb, var(--syn-type) 12%, transparent); color: var(--syn-type); }
 
@@ -1596,6 +1667,10 @@ def _render_signature(defn):
     params = defn['params']
     ret = defn['return_type']
 
+    if kind == 'form':
+        # A special form's syntax, as written, one line per shape.
+        return '\n'.join(defn.get('shapes') or [f'({name} ...)'])
+
     if kind == 'defstruct':
         # LT4: include :linear / :copy / :move annotation if present
         struct_ann = defn.get('struct_ann', '')
@@ -1946,6 +2021,9 @@ def _build_doc_entry(defn):
         summary = '[affine] ' + summary
 
     parts = [summary]
+    if defn.get('kind') in ('form', 'builtin'):
+        # A form or builtin has no source to read its shape from.
+        parts += [''] + _render_signature(defn).split('\n')
 
     if doc['deprecated']:
         parts.append('')

@@ -714,13 +714,10 @@ EMSCRIPTEN_KEEPALIVE
 const char *turi_doc_lookup(const char *name) {
     if (!g_env || !name) return NULL;
 
-    /* Check built-in documentation first (e.g. +, -, let, fn, etc.) */
-    const char *builtin_doc = turi_doc_lookup_builtin(name);
-    if (builtin_doc) return builtin_doc;
-
     /* The Emscripten link embeds stdlib/ at /stdlib, the module's cwd is "/",
      * so this is the same file `tur doc` reads from an install. */
-    return tur_docstring_lookup_in(WASM_STDLIB_ROOT "/docstrings.tur", name);
+    return tur_doc_prefer(
+        name, tur_docstring_lookup_in(WASM_STDLIB_ROOT "/docstrings.tur", name));
 }
 
 static void wasm_diag_sink(struct TuriEnv *env, int level, const char *code,
