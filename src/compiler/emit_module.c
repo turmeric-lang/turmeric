@@ -9002,6 +9002,19 @@ static void emit_abi_scan_construct_tail(EmitCtx *ctx, const Expr *e,
     }
 }
 
+/* Scan a value stored into a slot of declared type `slot`: a let binding's
+ * init, a dynvar's root, a `binding` override or a dynvar `set!` value.  When
+ * the slot is a by-value app, the value-tail constructs register with the
+ * slot's type as the result override first (CONV-S1 seam 4 (a), at EX_LET
+ * below), then the value is scanned as usual. */
+static void emit_abi_scan_slot_init(EmitCtx *ctx, const Expr *init,
+                                    const Type *slot,
+                                    const Expr **items, uint32_t n_items) {
+    if (slot && slot->kind == TY_APP && !type_uses_carrier_abi(*slot))
+        emit_abi_scan_construct_tail(ctx, init, slot, items, n_items);
+    emit_abi_scan_expr(ctx, init, items, n_items);
+}
+
 static void emit_abi_scan_expr(EmitCtx *ctx, const Expr *e,
                                const Expr **items, uint32_t n_items) {
     if (!e) return;
@@ -9041,10 +9054,8 @@ static void emit_abi_scan_expr(EmitCtx *ctx, const Expr *e,
                  * Only value-tail positions are visited -- args/conditions are left
                  * to the normal scan (a `none` ARG must stay on its own ABI). */
                 const Binding *lb = e->as.let_.bindings[i].binding;
-                if (lb && lb->type.kind == TY_APP && !type_uses_carrier_abi(lb->type))
-                    emit_abi_scan_construct_tail(ctx, e->as.let_.bindings[i].init,
-                                                 &lb->type, items, n_items);
-                emit_abi_scan_expr(ctx, e->as.let_.bindings[i].init, items, n_items);
+                emit_abi_scan_slot_init(ctx, e->as.let_.bindings[i].init,
+                                        lb ? &lb->type : NULL, items, n_items);
             }
             emit_abi_scan_expr(ctx, e->as.let_.body, items, n_items);
             break;
@@ -9536,34 +9547,25 @@ static void emit_abi_scan_expr(EmitCtx *ctx, const Expr *e,
          * there -- `(some 7)` for an `(Option int)` var -- was never
          * registered and emitted as the carrier base, its int64 word then
          * stored into the by-value slot.  The slot is typed like a let
-         * binding, so its value-tail constructs register the same way. */
-        case EX_DEFDYNAMIC: {
-            const Type *vt = &e->as.defdynamic_.entry->value_type;
-            if (vt->kind == TY_APP && !type_uses_carrier_abi(*vt))
-                emit_abi_scan_construct_tail(ctx, e->as.defdynamic_.root_expr,
-                                             vt, items, n_items);
-            emit_abi_scan_expr(ctx, e->as.defdynamic_.root_expr, items, n_items);
+         * binding, so it is scanned the same way. */
+        case EX_DEFDYNAMIC:
+            emit_abi_scan_slot_init(ctx, e->as.defdynamic_.root_expr,
+                                    &e->as.defdynamic_.entry->value_type,
+                                    items, n_items);
             break;
-        }
         case EX_DYNVAR_BINDING:
             for (uint32_t i = 0; i < e->as.dynvar_binding_.n_pairs; i++) {
                 const DynBinding *p = &e->as.dynvar_binding_.pairs[i];
-                const Type *vt = &p->entry->value_type;
-                if (vt->kind == TY_APP && !type_uses_carrier_abi(*vt))
-                    emit_abi_scan_construct_tail(ctx, p->override_expr, vt,
-                                                 items, n_items);
-                emit_abi_scan_expr(ctx, p->override_expr, items, n_items);
+                emit_abi_scan_slot_init(ctx, p->override_expr,
+                                        &p->entry->value_type, items, n_items);
             }
             emit_abi_scan_expr(ctx, e->as.dynvar_binding_.body, items, n_items);
             break;
-        case EX_DYNVAR_SET: {
-            const Type *vt = &e->as.dynvar_set_.entry->value_type;
-            if (vt->kind == TY_APP && !type_uses_carrier_abi(*vt))
-                emit_abi_scan_construct_tail(ctx, e->as.dynvar_set_.value, vt,
-                                             items, n_items);
-            emit_abi_scan_expr(ctx, e->as.dynvar_set_.value, items, n_items);
+        case EX_DYNVAR_SET:
+            emit_abi_scan_slot_init(ctx, e->as.dynvar_set_.value,
+                                    &e->as.dynvar_set_.entry->value_type,
+                                    items, n_items);
             break;
-        }
         default:
             break;
     }
