@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/turmeric-lang/turmeric/actions/workflows/ci.yml/badge.svg)](https://github.com/turmeric-lang/turmeric/actions/workflows/ci.yml)
 
-**Latest release:** `v0.67.3` -- Fixes `@Type` witness-dispatch calls skipping argument coercions, and documents typeclasses (`defclass` cards, methods, laws, instances) in the API docs and `(doc ...)`.
+**Latest release:** `v0.67.4` -- Documents every compiler builtin and special form (163 names) in the API docs, and makes `tur doc` / `(doc ...)` show the full stdlib entry instead of the one-liner table.
 
 ## What
 
