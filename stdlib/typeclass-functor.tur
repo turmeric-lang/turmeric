@@ -9,11 +9,23 @@
 ;; without requiring the user to import stdlib/typeclass.tur.
 ;; The full typeclass.tur (with all typeclasses) is still available on demand
 ;; via (load "stdlib/typeclass.tur").
-;;; Functor -- typeclass for mapping over a container.
+;;; Functor -- map a function over every element of a container, keeping its shape.
 ;;;
-;;; fmap applies a typed fat-closure to all values inside the container
-;;; without changing its shape.  fn is :fn (tur_poly_fn_t) so that
-;;; capturing closures can be passed directly.
+;;; Parameters:
+;;;   ^f -- the container's type constructor (kind * -> *): Option, Cons,
+;;;         (Result _ B), Parser, ...
+;;;
+;;; Methods:
+;;;   fmap -- a container of the same shape as `container` with `g` applied to
+;;;           each element.  `g` is a `:fn` carrier (tur_poly_fn_t), so a
+;;;           capturing closure can be passed directly.
+;;;
+;;; Laws:
+;;;   (fmap c (fn [x] x))      = c
+;;;   (fmap (fmap c g) h)      = (fmap c (fn [x] (h (g x))))
+;;;
+;;; Example:
+;;;   (unwrap-or (fmap (some 20) (fn [x : int] : int (+ x 1))) 0)   ; => 21
 ;;;
 ;;; Since: Phase CCL
 (defclass Functor [^f] (fmap [container : (f a) g : (fn [a] b)] : (f b)))

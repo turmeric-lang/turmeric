@@ -12,6 +12,30 @@
 ;;   catch-error :: m a -> (e -> m a) -> m a (recover from a failure)
 ;; handler is declared :fn so capturing closures can be passed.
 ;; Superclass: Monad, so a `[^MonadError M]` body may also `bind`.
+;;; MonadError -- a Monad with an error channel you can raise into and recover from.
+;;;
+;;; Parameters:
+;;;   ^m -- the computation's type constructor (kind * -> *), e.g. (Result _ B)
+;;;
+;;; Methods:
+;;;   throw-error -- a failed computation carrying `err` -- an err for Result.
+;;;   catch-error -- `ma` unchanged if it succeeded; otherwise the computation
+;;;                  `handler` builds from the error.  `handler` is a `:fn`
+;;;                  carrier, so a capturing closure works.
+;;;
+;;; Both methods return the :int carrier, so ascribe the result to read it:
+;;; `(:: (catch-error ma h) (Result int int))`.
+;;;
+;;; Laws:
+;;;   (catch-error (throw-error e) h)    = (h e)
+;;;   (catch-error (pure x) h)           = (pure x)
+;;;
+;;; Example:
+;;;   (ok-val (:: (catch-error (:: (err 5) (Result int int)) (fn [e : int] : (Result int int) (ok (* e -1)))) (Result int int)))   ; => -5
+;;;
+;;; Superclass: Monad.
+;;;
+;;; Since: stdlib-hkt-consolidation T4
 (defclass MonadError [^m]
   [(Monad m)]
   (throw-error [err] : int)

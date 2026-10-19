@@ -7157,6 +7157,223 @@ static void saffron_mint_constraint_any_instances(Elab *e, const TypeClassInstan
 
 PROF_TYPECLASS_WRAP(Expr *, elab_method_call, (Elab *e, const Form *call), (e, call))
 
+/* The argument coercions a typeclass method call applies before it calls the
+ * instance impl, against that impl's parameter list: a `: fn` (rank-N)
+ * parameter gets its argument wrapped as EX_POLY_WRAP so it crosses as a
+ * tur_poly_fn_t, an `is_fat` (arrow-head) parameter gets a bare function
+ * shimmed into a fat-closure box, and an `any` parameter gets its argument
+ * boxed.  params[0] is the receiver (*obj_io); params[i+1] matches args[i].
+ *
+ * Shared by the receiver-dispatch path and the `@Type` witness path of
+ * elab_method_call.  The witness path used to build its call from the bare
+ * elaborated arguments, so a lambda reached a `: fn` parameter as `void *`
+ * and cc rejected the call -- the route TUR-E0020 itself recommends
+ * (docs/archive/witness-dispatch-skips-arg-coercions.md).
+ *
+ * first_arg_item is the index in `call` of the first argument after the
+ * receiver: 2 for `(.m obj args...)`, 3 for `(.m @T obj args...)`.  Sets
+ * *has_poly_params_out when any `: fn` parameter was seen.  Returns false
+ * after a diagnostic. */
+static bool method_call_coerce_args(Elab *e, const Form *call,
+                                    uint32_t first_arg_item, FnDef *method,
+                                    bool obj_is_abstract_tyvar, Expr **obj_io,
+                                    Expr **args, uint32_t n_args,
+                                    bool *has_poly_params_out) {
+    Expr *obj = *obj_io;
+    /* Phase HRT3/HRT4: For methods with rank-N (poly fn) parameters, wrap matching args
+     * as EX_POLY_WRAP so they can be passed as tur_poly_fn_t.
+     * params[0] is the receiver (obj), so method param i+1 matches arg i.
+     * Phase HRT4: if the arg is already is_poly_fn, use pass-through (wrapper_binding=NULL). */
+    bool has_poly_params = false;
+    /* Check params[0] which corresponds to obj (the first/receiver argument). */
+    if (method->n_params > 0 && method->params[0]->is_poly_fn) {
+        has_poly_params = true;
+        Binding *inner_b = poly_arg_fn_binding(obj);
+        if (!inner_b) {
+            /* Phase CCL (symmetric with the args path below): a fat closure --
+             * a capturing or non-capturing lambda (boxed TY_FN) or a ptr<void>
+             * closure handle -- is wrapped for tur_poly_fn_t packing rather than
+             * rejected.  Reached when a typed-fn element param lands in params[0]
+             * (Bifunctor `bimap [g h x]`, whose first param is a mapper fn, not
+             * the HKT receiver). */
+            if (obj->type.kind == TY_PTR_VOID ||
+                (obj->type.kind == TY_FN && obj->type.as.fn.boxed)) {
+                Expr *cwrap = expr_new(e->arena, EX_POLY_WRAP, TYPE_PTR_VOID, obj->span);
+                cwrap->as.poly_wrap_.inner = obj;
+                cwrap->as.poly_wrap_.wrapper_binding = NULL;
+                cwrap->as.poly_wrap_.is_closure = true;
+                poly_wrap_stamp_carrier_erased(cwrap, method->params[0]);
+                obj = cwrap;
+            } else {
+                diag_emit(DIAG_ERROR, call->as.list.items[first_arg_item - 1]->span,
+                          "rank-N typeclass method argument must be a named function");
+                return false;
+            }
+        } else {
+            Expr *wrap = expr_new(e->arena, EX_POLY_WRAP, TYPE_PTR_VOID, obj->span);
+            wrap->as.poly_wrap_.inner = obj;
+            poly_wrap_stamp_carrier_erased(wrap, method->params[0]);
+            if (inner_b->is_poly_fn) {
+                wrap->as.poly_wrap_.wrapper_binding = NULL; /* HRT4: pass-through */
+            } else if (!inner_b->is_global) {
+                /* Receiver-position twin of the local-binding pass-through in
+                 * the args loop below (Bifunctor `bimap [g h x]` puts a mapper
+                 * fn in params[0]): a local cannot be named from a file-scope
+                 * wrapper, so pack the runtime value inline. */
+                wrap->as.poly_wrap_.wrapper_binding = NULL;
+                wrap->as.poly_wrap_.is_closure = true;
+            } else {
+                uint32_t inner_arity = (inner_b->type.kind == TY_FN)
+                    ? (uint8_t)inner_b->type.as.fn.arity : 1;
+                Binding *wrapper_b = make_poly_wrapper(e, inner_b, inner_arity, obj->span, false);
+                if (!wrapper_b) return false;
+                wrap->as.poly_wrap_.wrapper_binding = wrapper_b;
+            }
+            obj = wrap;
+        }
+    }
+    for (uint32_t i = 0; i < n_args; i++) {
+        uint8_t param_idx = 1 + (uint8_t)i;  /* params[0] is the receiver */
+        if (param_idx < method->n_params && method->params[param_idx]->is_poly_fn) {
+            has_poly_params = true;
+            Binding *inner_b = poly_arg_fn_binding(args[i]);
+            if (!inner_b) {
+                /* Phase CCL: no named-function binding found.  If the argument
+                 * is a fat closure (TY_PTR_VOID, or CRU B-1's boxed TY_FN
+                 * closure value — capturing or non-capturing lambda), wrap it
+                 * for tur_poly_fn_t packing in the emitter. */
+                if (args[i]->type.kind == TY_PTR_VOID ||
+                    (args[i]->type.kind == TY_FN && args[i]->type.as.fn.boxed)) {
+                    Expr *orig2 = args[i];
+                    Expr *cwrap = expr_new(e->arena, EX_POLY_WRAP, TYPE_PTR_VOID, orig2->span);
+                    cwrap->as.poly_wrap_.inner = orig2;
+                    cwrap->as.poly_wrap_.wrapper_binding = NULL;
+                    cwrap->as.poly_wrap_.is_closure = true;
+                    poly_wrap_stamp_carrier_erased(cwrap, method->params[param_idx]);
+                    args[i] = cwrap;
+                    continue;
+                }
+                diag_emit(DIAG_ERROR, call->as.list.items[first_arg_item + i]->span,
+                          "rank-N typeclass method argument must be a named function or closure");
+                return false;
+            }
+            Expr *orig = args[i];
+            Expr *wrap = expr_new(e->arena, EX_POLY_WRAP, TYPE_PTR_VOID, orig->span);
+            wrap->as.poly_wrap_.inner = orig;
+            poly_wrap_stamp_carrier_erased(wrap, method->params[param_idx]);
+            /* constrained-hkt-byvalue-carriers: when the receiver is the ABSTRACT
+             * type constructor of a constrained poly fn, this method call lowers to
+             * a dictionary-slot dispatch, whose method pointer returns the int64
+             * carrier -- and the instance impl invokes this `:fn` argument through
+             * `((int64_t (*)(void*, int64_t))k.fn)(...)`.  A continuation returning
+             * a by-value aggregate (e.g. `(fn [v] (some (dbl v)))` at `(Option
+             * int)`) therefore had a struct-returning thunk cast to an
+             * int64-returning pointer: an x86-64 return-ABI mismatch (RAX:RDX vs
+             * RAX) that handed the instance garbage, which the caller then
+             * dereferenced -- the Gap 2 segfault.
+             *
+             * Ask for the carrier-spill shim so the thunk boxes its aggregate
+             * return, matching the carrier ABI on both sides.  Only the abstract
+             * receiver opts in: a CONCRETE receiver resolves to the instance's own
+             * by-value entry point and must keep consuming the struct directly,
+             * which is what the existing gate protects.  The shim is itself
+             * defensive -- ensure_aggregate_spill_shim returns NULL unless the
+             * result really is a by-value aggregate -- so this is a no-op for
+             * carrier-returning continuations. */
+            {
+                /* The receiver is `(m int)` -- a TY_APP spine headed by the
+                 * abstract constructor -- not a bare TY_TYVAR, so walk to the
+                 * head before comparing against this body's constraint var. */
+                Type rcv = obj->type;
+                while (rcv.kind == TY_APP && rcv.as.app.fn) rcv = *rcv.as.app.fn;
+                bool rcv_is_ambient_ctor =
+                    rcv.kind == TY_TYVAR && rcv.as.tyvar_.name &&
+                    e->cur_hkt_constraint_tyvar &&
+                    strcmp(rcv.as.tyvar_.name, e->cur_hkt_constraint_tyvar) == 0;
+                /* catch-error-ascribed-result-types-handler-by-value: an
+                 * INLINE-C instance body is the same carrier consumer -- it
+                 * cannot be re-specialised, and `MonadError [(Result _ B)]`'s
+                 * `catch-error` returns `handler.fn(handler.env, ...)` as the
+                 * int64 word -- so a continuation whose result an enclosing
+                 * ascription grounded to a by-value aggregate must box it
+                 * too.  Without this, the handler's shim returned the struct
+                 * and the caller dereferenced its first word as a pointer. */
+                bool impl_is_inline_c = method && method->body &&
+                                        method->body->kind == EX_INLINE_C;
+                if (obj_is_abstract_tyvar || rcv_is_ambient_ctor || impl_is_inline_c)
+                    wrap->as.poly_wrap_.boxes_aggregate = true;
+            }
+            if (inner_b->is_poly_fn) {
+                wrap->as.poly_wrap_.wrapper_binding = NULL; /* HRT4: pass-through */
+            } else if (!inner_b->is_global) {
+                /* CRU: a *capturing closure VALUE* bound to a local reaching a
+                 * `:fn` typeclass-method param.  make_poly_wrapper would emit a
+                 * file-scope wrapper statically referencing the local env var
+                 * (out of scope at file scope -> uncompilable C).  Pack the
+                 * runtime closure inline instead; the is_closure emit path reads
+                 * the thunk from the box's slot 0 at runtime, so a capturing
+                 * closure round-trips correctly.
+                 *
+                 * local-fn-value-into-rank2-slot-gets-a-by-name-wrapper: this
+                 * used to admit only a binding WITH a closure_fn_binding, so a
+                 * fn-typed PARAMETER (`f : (fn [any] any)` forwarded into
+                 * `fmap`) and a let-bound NON-capturing lambda still took the
+                 * by-name wrapper and died with `'f' undeclared`.  Every
+                 * non-global binding has the same problem and the same answer:
+                 * the value in the local already IS what the carrier reads (a
+                 * fat box for a parameter or capturing closure; the emitter's
+                 * bare-fnptr shim covers the unboxed let-bound lambda). */
+                wrap->as.poly_wrap_.wrapper_binding = NULL;
+                wrap->as.poly_wrap_.is_closure = true;
+            } else {
+                uint32_t inner_arity = (inner_b->type.kind == TY_FN)
+                    ? (uint8_t)inner_b->type.as.fn.arity : 1;
+                Binding *wrapper_b = make_poly_wrapper(e, inner_b, inner_arity, args[i]->span, false);
+                if (!wrapper_b) return false;
+                wrap->as.poly_wrap_.wrapper_binding = wrapper_b;
+            }
+            args[i] = wrap;
+        }
+    }
+
+    /* Arrow head (and any fat-closure method parameter): auto-shim a bare
+     * (non-capturing) function argument into a fat-closure box, mirroring the
+     * `^fat` coercion the regular call path applies (elab_call.c).  A capturing
+     * closure (boxed TY_FN) or an already-fat :ptr<void> handle passes through.
+     * params[0] is the receiver (obj); params[i+1] matches args[i]. */
+    if (method->n_params > 0 && method->params[0] &&
+        method->params[0]->is_fat) {
+        obj = arrow_fat_shim(e, obj);
+    }
+    for (uint32_t i = 0; i < n_args; i++) {
+        uint8_t pidx = 1 + (uint8_t)i;
+        if (pidx < method->n_params && method->params[pidx] &&
+            method->params[pidx]->is_fat) {
+            args[i] = arrow_fat_shim(e, args[i]);
+        }
+    }
+
+    /* A <: any, as elab_call_fn's argument loop spells it: an argument whose
+     * instance parameter is `any` crosses as a BOX.  The static dispatch path
+     * never did this, so a lambda handed to a Saffron `g : fn` extra (an `any`
+     * parameter -- tc_fn_param_type) reached the `tur_tagged_t` slot as a bare
+     * function pointer, and cc refused it (saffron-dyn-witness-fn-arity-
+     * defaults-unary, the direct-dispatch half). */
+    for (uint32_t i = 0; i < n_args; i++) {
+        uint8_t pidx = 1 + (uint8_t)i;
+        if (pidx < method->n_params && method->params[pidx] &&
+            method->params[pidx]->type.kind == TY_ANY && args[i] &&
+            args[i]->type.kind != TY_ANY && args[i]->type.kind != TY_NEVER) {
+            Expr *w = elab_coerce_to_any(e, args[i]);
+            if (w) args[i] = w;
+        }
+    }
+
+    *obj_io = obj;
+    *has_poly_params_out = has_poly_params;
+    return true;
+}
+
 static Expr *elab_method_call_impl(Elab *e, const Form *call) {
 
     /* call is (.method obj arg1 arg2 ...)
@@ -7322,6 +7539,15 @@ static Expr *elab_method_call_impl(Elab *e, const Form *call) {
                 args_w[i] = elab_form(e, call->as.list.items[3 + i]);
                 if (!args_w[i]) return NULL;
             }
+            /* witness-dispatch-skips-arg-coercions: the same coercions the
+             * receiver path applies, or a lambda reaches a `: fn` parameter
+             * as `void *`.  A witness names a concrete instance, so the
+             * receiver is never the abstract constructor here. */
+            bool w_has_poly_params = false;
+            if (!method_call_coerce_args(e, call, 3, witness_method_fn, false,
+                                         &obj_w, args_w, n_args_w,
+                                         &w_has_poly_params))
+                return NULL;
 
             /* Determine result type from the method's binding.
              *
@@ -9340,194 +9566,10 @@ resolved_user_fallback:;
         if (synth) return synth;
     }
 
-    /* Phase HRT3/HRT4: For methods with rank-N (poly fn) parameters, wrap matching args
-     * as EX_POLY_WRAP so they can be passed as tur_poly_fn_t.
-     * params[0] is the receiver (obj), so method param i+1 matches arg i.
-     * Phase HRT4: if the arg is already is_poly_fn, use pass-through (wrapper_binding=NULL). */
     bool has_poly_params = false;
-    /* Check params[0] which corresponds to obj (the first/receiver argument). */
-    if (best_method->n_params > 0 && best_method->params[0]->is_poly_fn) {
-        has_poly_params = true;
-        Binding *inner_b = poly_arg_fn_binding(obj);
-        if (!inner_b) {
-            /* Phase CCL (symmetric with the args path below): a fat closure --
-             * a capturing or non-capturing lambda (boxed TY_FN) or a ptr<void>
-             * closure handle -- is wrapped for tur_poly_fn_t packing rather than
-             * rejected.  Reached when a typed-fn element param lands in params[0]
-             * (Bifunctor `bimap [g h x]`, whose first param is a mapper fn, not
-             * the HKT receiver). */
-            if (obj->type.kind == TY_PTR_VOID ||
-                (obj->type.kind == TY_FN && obj->type.as.fn.boxed)) {
-                Expr *cwrap = expr_new(e->arena, EX_POLY_WRAP, TYPE_PTR_VOID, obj->span);
-                cwrap->as.poly_wrap_.inner = obj;
-                cwrap->as.poly_wrap_.wrapper_binding = NULL;
-                cwrap->as.poly_wrap_.is_closure = true;
-                poly_wrap_stamp_carrier_erased(cwrap, best_method->params[0]);
-                obj = cwrap;
-            } else {
-                diag_emit(DIAG_ERROR, call->as.list.items[1]->span,
-                          "rank-N typeclass method argument must be a named function");
-                return NULL;
-            }
-        } else {
-            Expr *wrap = expr_new(e->arena, EX_POLY_WRAP, TYPE_PTR_VOID, obj->span);
-            wrap->as.poly_wrap_.inner = obj;
-            poly_wrap_stamp_carrier_erased(wrap, best_method->params[0]);
-            if (inner_b->is_poly_fn) {
-                wrap->as.poly_wrap_.wrapper_binding = NULL; /* HRT4: pass-through */
-            } else if (!inner_b->is_global) {
-                /* Receiver-position twin of the local-binding pass-through in
-                 * the args loop below (Bifunctor `bimap [g h x]` puts a mapper
-                 * fn in params[0]): a local cannot be named from a file-scope
-                 * wrapper, so pack the runtime value inline. */
-                wrap->as.poly_wrap_.wrapper_binding = NULL;
-                wrap->as.poly_wrap_.is_closure = true;
-            } else {
-                uint32_t inner_arity = (inner_b->type.kind == TY_FN)
-                    ? (uint8_t)inner_b->type.as.fn.arity : 1;
-                Binding *wrapper_b = make_poly_wrapper(e, inner_b, inner_arity, obj->span, false);
-                if (!wrapper_b) return NULL;
-                wrap->as.poly_wrap_.wrapper_binding = wrapper_b;
-            }
-            obj = wrap;
-        }
-    }
-    for (uint32_t i = 0; i < n_args; i++) {
-        uint8_t param_idx = 1 + (uint8_t)i;  /* params[0] is the receiver */
-        if (param_idx < best_method->n_params && best_method->params[param_idx]->is_poly_fn) {
-            has_poly_params = true;
-            Binding *inner_b = poly_arg_fn_binding(args[i]);
-            if (!inner_b) {
-                /* Phase CCL: no named-function binding found.  If the argument
-                 * is a fat closure (TY_PTR_VOID, or CRU B-1's boxed TY_FN
-                 * closure value — capturing or non-capturing lambda), wrap it
-                 * for tur_poly_fn_t packing in the emitter. */
-                if (args[i]->type.kind == TY_PTR_VOID ||
-                    (args[i]->type.kind == TY_FN && args[i]->type.as.fn.boxed)) {
-                    Expr *orig2 = args[i];
-                    Expr *cwrap = expr_new(e->arena, EX_POLY_WRAP, TYPE_PTR_VOID, orig2->span);
-                    cwrap->as.poly_wrap_.inner = orig2;
-                    cwrap->as.poly_wrap_.wrapper_binding = NULL;
-                    cwrap->as.poly_wrap_.is_closure = true;
-                    poly_wrap_stamp_carrier_erased(cwrap, best_method->params[param_idx]);
-                    args[i] = cwrap;
-                    continue;
-                }
-                diag_emit(DIAG_ERROR, call->as.list.items[2 + i]->span,
-                          "rank-N typeclass method argument must be a named function or closure");
-                return NULL;
-            }
-            Expr *orig = args[i];
-            Expr *wrap = expr_new(e->arena, EX_POLY_WRAP, TYPE_PTR_VOID, orig->span);
-            wrap->as.poly_wrap_.inner = orig;
-            poly_wrap_stamp_carrier_erased(wrap, best_method->params[param_idx]);
-            /* constrained-hkt-byvalue-carriers: when the receiver is the ABSTRACT
-             * type constructor of a constrained poly fn, this method call lowers to
-             * a dictionary-slot dispatch, whose method pointer returns the int64
-             * carrier -- and the instance impl invokes this `:fn` argument through
-             * `((int64_t (*)(void*, int64_t))k.fn)(...)`.  A continuation returning
-             * a by-value aggregate (e.g. `(fn [v] (some (dbl v)))` at `(Option
-             * int)`) therefore had a struct-returning thunk cast to an
-             * int64-returning pointer: an x86-64 return-ABI mismatch (RAX:RDX vs
-             * RAX) that handed the instance garbage, which the caller then
-             * dereferenced -- the Gap 2 segfault.
-             *
-             * Ask for the carrier-spill shim so the thunk boxes its aggregate
-             * return, matching the carrier ABI on both sides.  Only the abstract
-             * receiver opts in: a CONCRETE receiver resolves to the instance's own
-             * by-value entry point and must keep consuming the struct directly,
-             * which is what the existing gate protects.  The shim is itself
-             * defensive -- ensure_aggregate_spill_shim returns NULL unless the
-             * result really is a by-value aggregate -- so this is a no-op for
-             * carrier-returning continuations. */
-            {
-                /* The receiver is `(m int)` -- a TY_APP spine headed by the
-                 * abstract constructor -- not a bare TY_TYVAR, so walk to the
-                 * head before comparing against this body's constraint var. */
-                Type rcv = obj->type;
-                while (rcv.kind == TY_APP && rcv.as.app.fn) rcv = *rcv.as.app.fn;
-                bool rcv_is_ambient_ctor =
-                    rcv.kind == TY_TYVAR && rcv.as.tyvar_.name &&
-                    e->cur_hkt_constraint_tyvar &&
-                    strcmp(rcv.as.tyvar_.name, e->cur_hkt_constraint_tyvar) == 0;
-                /* catch-error-ascribed-result-types-handler-by-value: an
-                 * INLINE-C instance body is the same carrier consumer -- it
-                 * cannot be re-specialised, and `MonadError [(Result _ B)]`'s
-                 * `catch-error` returns `handler.fn(handler.env, ...)` as the
-                 * int64 word -- so a continuation whose result an enclosing
-                 * ascription grounded to a by-value aggregate must box it
-                 * too.  Without this, the handler's shim returned the struct
-                 * and the caller dereferenced its first word as a pointer. */
-                bool impl_is_inline_c = best_method && best_method->body &&
-                                        best_method->body->kind == EX_INLINE_C;
-                if (obj_is_abstract_tyvar || rcv_is_ambient_ctor || impl_is_inline_c)
-                    wrap->as.poly_wrap_.boxes_aggregate = true;
-            }
-            if (inner_b->is_poly_fn) {
-                wrap->as.poly_wrap_.wrapper_binding = NULL; /* HRT4: pass-through */
-            } else if (!inner_b->is_global) {
-                /* CRU: a *capturing closure VALUE* bound to a local reaching a
-                 * `:fn` typeclass-method param.  make_poly_wrapper would emit a
-                 * file-scope wrapper statically referencing the local env var
-                 * (out of scope at file scope -> uncompilable C).  Pack the
-                 * runtime closure inline instead; the is_closure emit path reads
-                 * the thunk from the box's slot 0 at runtime, so a capturing
-                 * closure round-trips correctly.
-                 *
-                 * local-fn-value-into-rank2-slot-gets-a-by-name-wrapper: this
-                 * used to admit only a binding WITH a closure_fn_binding, so a
-                 * fn-typed PARAMETER (`f : (fn [any] any)` forwarded into
-                 * `fmap`) and a let-bound NON-capturing lambda still took the
-                 * by-name wrapper and died with `'f' undeclared`.  Every
-                 * non-global binding has the same problem and the same answer:
-                 * the value in the local already IS what the carrier reads (a
-                 * fat box for a parameter or capturing closure; the emitter's
-                 * bare-fnptr shim covers the unboxed let-bound lambda). */
-                wrap->as.poly_wrap_.wrapper_binding = NULL;
-                wrap->as.poly_wrap_.is_closure = true;
-            } else {
-                uint32_t inner_arity = (inner_b->type.kind == TY_FN)
-                    ? (uint8_t)inner_b->type.as.fn.arity : 1;
-                Binding *wrapper_b = make_poly_wrapper(e, inner_b, inner_arity, args[i]->span, false);
-                if (!wrapper_b) return NULL;
-                wrap->as.poly_wrap_.wrapper_binding = wrapper_b;
-            }
-            args[i] = wrap;
-        }
-    }
-
-    /* Arrow head (and any fat-closure method parameter): auto-shim a bare
-     * (non-capturing) function argument into a fat-closure box, mirroring the
-     * `^fat` coercion the regular call path applies (elab_call.c).  A capturing
-     * closure (boxed TY_FN) or an already-fat :ptr<void> handle passes through.
-     * params[0] is the receiver (obj); params[i+1] matches args[i]. */
-    if (best_method->n_params > 0 && best_method->params[0] &&
-        best_method->params[0]->is_fat) {
-        obj = arrow_fat_shim(e, obj);
-    }
-    for (uint32_t i = 0; i < n_args; i++) {
-        uint8_t pidx = 1 + (uint8_t)i;
-        if (pidx < best_method->n_params && best_method->params[pidx] &&
-            best_method->params[pidx]->is_fat) {
-            args[i] = arrow_fat_shim(e, args[i]);
-        }
-    }
-
-    /* A <: any, as elab_call_fn's argument loop spells it: an argument whose
-     * instance parameter is `any` crosses as a BOX.  The static dispatch path
-     * never did this, so a lambda handed to a Saffron `g : fn` extra (an `any`
-     * parameter -- tc_fn_param_type) reached the `tur_tagged_t` slot as a bare
-     * function pointer, and cc refused it (saffron-dyn-witness-fn-arity-
-     * defaults-unary, the direct-dispatch half). */
-    for (uint32_t i = 0; i < n_args; i++) {
-        uint8_t pidx = 1 + (uint8_t)i;
-        if (pidx < best_method->n_params && best_method->params[pidx] &&
-            best_method->params[pidx]->type.kind == TY_ANY && args[i] &&
-            args[i]->type.kind != TY_ANY && args[i]->type.kind != TY_NEVER) {
-            Expr *w = elab_coerce_to_any(e, args[i]);
-            if (w) args[i] = w;
-        }
-    }
+    if (!method_call_coerce_args(e, call, 2, best_method, obj_is_abstract_tyvar,
+                                 &obj, args, n_args, &has_poly_params))
+        return NULL;
 
     /* Allocate arguments array with obj prepended */
     Expr **call_args = (Expr **)arena_alloc(e->arena, (n_args + 1) * sizeof(Expr *));

@@ -17,4 +17,20 @@
 ;;; use is a compile-time use-after-move), so the env is its sole owner.
 ;;;
 ;;; Since: v2 (Model R)
+;;
+;;; Drop -- values that own a resource to release when the value dies.
+;;;
+;;; Parameters:
+;;;   a -- the owning type
+;;;
+;;; Methods:
+;;;   drop -- release what `x` owns -- decrement a refcount, free a unique
+;;;           pointer, walk a nested owner.  The closure drop-glue calls it
+;;;           when a capturing env is freed; `x` is not used afterwards.
+;;;
+;;; Implement Drop only for a type that really owns something.  Pair it with
+;;; Clone for a shareable (refcounted) type; leave Clone off to make the type
+;;; move-only.
+;;;
+;;; Since: v2 (Model R)
 (defclass Drop [a] (drop [x] : void))

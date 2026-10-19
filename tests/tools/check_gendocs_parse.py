@@ -155,9 +155,189 @@ for want in ('read slot <code>i</code> of <code>v</code>.', 'the <code>Vec</code
         fails += 1
         print(f"FAIL gendocs-inline: def card lacks {want!r}")
 
+# A typeclass is documented as a class.  Measured before: `defclass` was not a
+# definition kind at all, so a class's docstring and every method signature
+# were dropped -- tur/comonad's page listed two instances and never mentioned
+# `extract` -- and the docstring's prose (anything that was not a Parameters /
+# Returns / Example line) was dropped from every page.
+from gendocs import (_parse_defclass, _parse_docstring, _class_method_rows,  # noqa: E402
+                     attach_class_instances, emit_docstrings_tur, collect_doc_entries)
+
+CLASS_CASES = [
+    # (source lines, name, type_params, superclasses, [(method, params, return)])
+    (['(defclass Comonad [^w]', '  (extract [wa] : int)', '  (extend [wa f : fn] : int)',
+      '  (duplicate [wa] : int))'],
+     'Comonad', ['^w'], [],
+     [('extract', [('wa', None)], ':int'), ('extend', [('wa', None), ('f', ':fn')], ':int'),
+      ('duplicate', [('wa', None)], ':int')]),
+    (['(defclass Arrow [a]', '  [(Category a)]', '  (>>> [f : (a b c) g : (a c d)] : (a b d))',
+      '  (first [f] : a))'],
+     'Arrow', ['a'], ['(Category a)'],
+     [('>>>', [('f', ':(a b c)'), ('g', ':(a c d)')], ':(a b d)'), ('first', [('f', None)], ':a')]),
+    (['(defclass MonadError [^m] [(Monad m)] (throw-error [err] : int)',
+      '  (catch-error [ma [handler :fn]] : int))  ; a (comment) with parens'],
+     'MonadError', ['^m'], ['(Monad m)'],
+     [('throw-error', [('err', None)], ':int'),
+      ('catch-error', [('ma', None), ('handler', ':fn')], ':int')]),          # grouped param
+    (['(defclass Bifunctor [^^f]',
+      '  (bimap [container : (f a b) fn-left : (fn [a] c) fn-right : (fn [b] d)]',
+      '    : (f c d)))'],
+     'Bifunctor', ['^^f'], [],
+     [('bimap', [('container', ':(f a b)'), ('fn-left', ':(fn [a] c)'),
+                 ('fn-right', ':(fn [b] d)')], ':(f c d)')]),                # wrapped return
+    (['(defclass Traversable [^t] [(Functor t) (Foldable t)] (traverse [ta fn] : int))'],
+     'Traversable', ['^t'], ['(Functor t)', '(Foldable t)'],
+     [('traverse', [('ta', None), ('fn', None)], ':int')]),
+]
+for lines, want_name, want_tp, want_sup, want_methods in CLASS_CASES:
+    name, extra = _parse_defclass(lines)
+    got_methods = [(m['name'], m['params'], m['return_type']) for m in extra.get('methods', [])]
+    if (name, extra.get('type_params'), extra.get('superclasses'), got_methods) != \
+            (want_name, want_tp, want_sup, want_methods):
+        fails += 1
+        print(f"FAIL gendocs-defclass: {lines[0]}\n     got {name!r} {extra!r}")
+
+# A spice documents a method in place, and declares an associated type.
+name, extra = _parse_defclass([
+    '(defclass StorageOps [S]',
+    '  (type Elem : Type)',
+    '  ;;; storage-get -- read the element at idx.',
+    '  ;;; Panics on an empty slot.',
+    '  (storage-get [s : S idx : Slot] : Elem)',
+    '  (storage-has? [s : S idx : Slot] : bool))',
+])
+meths = {m['name']: m for m in extra['methods']}
+for ok, what in [
+    (extra['assoc_types'] == ['(type Elem : Type)'], f"assoc type: {extra['assoc_types']!r}"),
+    (meths['storage-get']['doc'] is not None
+     and meths['storage-get']['doc']['summary_full'] ==
+     'storage-get -- read the element at idx. Panics on an empty slot.',
+     "an in-body ;;; block documents the method below it"),
+    (meths['storage-has?']['doc'] is None, "the doc does not leak to the next method"),
+]:
+    if not ok:
+        fails += 1
+        print(f"FAIL gendocs-defclass (in-body docs): {what}")
+
+for text, want in [
+    ('(definstance Functor [Option] (fmap [c g] c))', 'Functor[Option]'),
+    ('(definstance Arrow [(->)]', 'Arrow[(->)]'),              # was 'Arrow[]'
+    ('(definstance ArrowLoop [(->)] (arrow-loop [f] f))', 'ArrowLoop[(->)]'),  # was '[f]'
+    ('(definstance Functor [(Result _ B)]', 'Functor[(Result _ B)]'),
+    ('(definstance From [int cstr] (from [x] x))', 'From[int cstr]'),
+]:
+    got = _parse_def_line('definstance', text)[0]
+    if got != want:
+        fails += 1
+        print(f"FAIL gendocs-definstance: {text}: got {got!r}, want {want!r}")
+
+doc = _parse_docstring([
+    ';;; Ord -- values with a total order,',
+    ';;; wrapped onto a second line.',
+    ';;;',
+    ';;; Prose before any section.',
+    ';;;',
+    ';;; Parameters:',
+    ';;;   a -- the type to order',
+    ';;;',
+    ';;; Methods:',
+    ';;;   lt?  -- strictly before',
+    ';;;           and continued',
+    ';;;   gt? gte? -- after',
+    ';;;',
+    ';;; Superclass: Eq.',
+    ';;;',
+    ';;; Laws:',
+    ';;;   (lte? x x) = true',
+    ';;;',
+    ';;; Returns: void',
+    ';;;',
+    ';;; Example:',
+    ';;;   (lt? 2 3)   ; => true',
+    ';;;   (gt? 3 2)   ; => true',
+    ';;;',
+    ';;; Note: after the example.',
+    ';;;',
+    ';;; Since: Phase 15',
+])
+for key, want in [
+    ('summary', 'Ord -- values with a total order,'),
+    ('summary_full', 'Ord -- values with a total order, wrapped onto a second line.'),
+    ('description', 'Prose before any section.'),
+    ('params', [('a', 'the type to order')]),           # the unindented prose left it
+    ('methods', [('lt?', 'strictly before and continued'), ('gt? gte?', 'after')]),
+    ('laws', '(lte? x x) = true'),
+    ('returns', 'void'),                                # was dropped: same-line body
+    ('example', '(lt? 2 3)   ; => true\n(gt? 3 2)   ; => true'),   # every line dedented
+    ('notes', 'Superclass: Eq.\n\nNote: after the example.'),
+    ('since', 'Phase 15'),
+]:
+    if doc.get(key) != want:
+        fails += 1
+        print(f"FAIL gendocs-docstring: {key}: got {doc.get(key)!r}, want {want!r}")
+
+MOD = """;;; tur/shapes -- the module summary.
+;;;
+;;; Since: Phase 1
+
+;;; Shape -- things with an area.
+;;;
+;;; Methods:
+;;;   area -- the area of `s`
+(defclass Shape [a] (area [s] : float))
+;;; Shape [Sq] -- squares.
+(definstance Shape [Sq] (area [s] 1.0))
+(defn area-of [x] : float (area x))
+"""
+with tempfile.TemporaryDirectory() as td:
+    path = os.path.join(td, 'shapes.tur')   # tur/shapes, as its summary says
+    with open(path, 'w') as f:
+        f.write(MOD.replace('(defn area-of', '(export area-of)\n(defn area-of'))
+    mod = parse_tur_file(path)
+defs = {d['name']: d for d in mod['definitions']}
+shape = defs.get('Shape', {})
+attach_class_instances([mod], link_other_modules=True)
+card = _render_def_card(shape) if shape else ''
+for ok, what in [
+    (mod['docstring'] and mod['docstring']['summary'].startswith('tur/shapes'),
+     "a blank line ends the module docstring before the class's own block"),
+    (shape.get('kind') == 'defclass' and shape.get('exported'),
+     "the class is found and public despite the export list"),
+    (_class_method_rows(shape) == [('(area [s] :float)', 'the area of `s`')],
+     f"method rows: {_class_method_rows(shape) if shape else None!r}"),
+    ('<dt><code>(area [s] :float)</code></dt>' in card, "the card lists the method signature"),
+    ('the area of <code>s</code>' in card, "the card carries the method description"),
+    ('href="#Shape_Sq_"' in card, "the card links the instance in its own module"),
+]:
+    if not ok:
+        fails += 1
+        print(f"FAIL gendocs-defclass (module): {what}")
+
+# `(doc 'Shape)` answers with the class, not the first instance the scan met;
+# `(doc 'area)` names the method only because no definition claims `area`.
+with tempfile.TemporaryDirectory() as td:
+    out = os.path.join(td, 'docstrings.tur')
+    emit_docstrings_tur([mod], out, verified_names=set())
+    table = open(out).read()
+entries = {e['name']: e for e in collect_doc_entries([mod])}
+for ok, what in [
+    ('{"Shape", "Shape -- things with an area.' in table, "doc-lookup Shape is the class"),
+    ('(area [s] :float) -- the area of `s`' in table, "the class entry lists its methods"),
+    (entries.get('Shape', {}).get('kind') == 'defclass', "doc-names Shape is the class"),
+    (entries.get('area', {}).get('kind') == 'method', "an unclaimed method name is a key"),
+]:
+    if not ok:
+        fails += 1
+        print(f"FAIL gendocs-defclass (lookup): {what}")
+mod['definitions'].append({'kind': 'defn', 'name': 'area', 'params': [], 'return_type': None,
+                           'exported': True, 'docstring': None, 'line': 1})
+if {e['name']: e for e in collect_doc_entries([mod])}['area']['kind'] != 'defn':
+    fails += 1
+    print("FAIL gendocs-defclass (lookup): a defn keeps a key a method also names")
+
 if fails:
     print(f"gendocs-parse: {fails} case(s) failed")
     sys.exit(1)
 print(f"PASS check-gendocs-parse ({len(CASES)} signatures, both spellings; "
       f"{len(SCHEME_CASES)} Scheme forms and a define-library; "
-      f"{len(INLINE_CASES)} inline-code cases)")
+      f"{len(INLINE_CASES)} inline-code cases; {len(CLASS_CASES)} defclass forms)")

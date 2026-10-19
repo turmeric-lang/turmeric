@@ -192,18 +192,40 @@ def _extract_return_type(line):
     return _return_type_after_bracket(line[bracket_end + 1:])
 
 
+def _dedent_block(lines):
+    """Strip blank edges and the common leading indent from a block of lines."""
+    while lines and not lines[0].strip():
+        lines = lines[1:]
+    while lines and not lines[-1].strip():
+        lines = lines[:-1]
+    indents = [len(l) - len(l.lstrip()) for l in lines if l.strip()]
+    cut = min(indents) if indents else 0
+    return '\n'.join(l[cut:] for l in lines)
+
+
 def _parse_docstring(lines):
     """
     Parse a list of ';;; ...' lines into structured sections.
     Returns a dict:
       {
-        'summary': str,
+        'summary': str,            # the first line, as lookup tables show it
+        'summary_full': str,       # the first paragraph, joined (a wrapped summary)
+        'description': str,        # prose between the summary and the first section
         'params': [(name, desc), ...],
+        'methods': [(name, desc), ...],   # a defclass's `Methods:` section
+        'laws': str,               # a defclass's `Laws:` section, verbatim
         'returns': str,
         'example': str,
+        'notes': str,              # prose after the first section
         'since': str,
         'raw': str,   # full text for --emit-tur
       }
+
+    A section runs until the next header, or until a blank line followed by an
+    UNINDENTED line: section bodies are indented, so an unindented paragraph
+    after a gap is prose again (`Superclass: Eq.`, `Note: ...`), not one more
+    parameter or example line.  Prose is never dropped: before the first
+    section it is the description, after it the notes.
     """
     if not lines:
         return None
@@ -223,12 +245,29 @@ def _parse_docstring(lines):
     # Remove leading 'name -- ' from summary for display
     # but keep the full text for raw
 
-    sections = {'summary': summary, 'params': [], 'returns': '',
-                 'example': '', 'since': '', 'deprecated': '',
-                 'raw': '\n'.join(stripped)}
+    # A summary that wraps continues on the following unindented lines, up to
+    # the first blank line or section header.
+    headers = ('Parameters:', 'Methods:', 'Laws:', 'Returns:', 'Example:',
+               'Since:', 'Deprecated:')
+    summary_lines = [summary]
+    k = 1
+    while (k < len(stripped) and stripped[k].strip()
+           and not stripped[k][0].isspace()
+           and not stripped[k].startswith(headers)):
+        summary_lines.append(stripped[k])
+        k += 1
+
+    sections = {'summary': summary, 'summary_full': ' '.join(summary_lines),
+                'description': '', 'params': [], 'methods': [], 'laws': '',
+                'returns': '', 'example': '', 'notes': '', 'since': '',
+                'deprecated': '', 'raw': '\n'.join(stripped)}
 
     current_section = None
+    seen_section = False
+    prev_blank = False
     buf = []
+    prose = {'description': [], 'notes': []}
+    method_indent = None
 
     def flush():
         nonlocal buf
@@ -237,40 +276,45 @@ def _parse_docstring(lines):
         return text
 
     def _flush_section():
-        if current_section == 'returns':
-            sections['returns'] = flush()
-        elif current_section == 'example':
-            sections['example'] = flush()
-        elif current_section == 'deprecated':
-            sections['deprecated'] = flush()
+        nonlocal buf
+        if current_section in ('returns', 'deprecated'):
+            sections[current_section] = flush()
+        elif current_section in ('example', 'laws'):
+            # Code: drop the common indent, not just the first line's, or a
+            # multi-line example renders with its first line out of step.
+            sections[current_section] = _dedent_block(buf)
+            buf = []
 
-    for line in stripped[1:]:
-        if line.startswith('Parameters:'):
+    for line in stripped[k:]:
+        header = next((h for h in headers if line.startswith(h)), None)
+        if header:
             _flush_section()
-            current_section = 'params'
-            continue
-        elif line.startswith('Returns:'):
-            _flush_section()
-            current_section = 'returns'
-            continue
-        elif line.startswith('Example:'):
-            _flush_section()
-            current_section = 'example'
-            continue
-        elif line.startswith('Since:'):
-            _flush_section()
-            sections['since'] = line[len('Since:'):].strip()
-            current_section = None
-            continue
-        elif line.startswith('Deprecated:'):
-            _flush_section()
-            current_section = 'deprecated'
-            rest = line[len('Deprecated:'):].strip()
-            if rest:
+            seen_section = True
+            prev_blank = False
+            rest = line[len(header):].strip()
+            current_section = {'Parameters:': 'params', 'Methods:': 'methods',
+                               'Laws:': 'laws', 'Returns:': 'returns',
+                               'Example:': 'example', 'Since:': None,
+                               'Deprecated:': 'deprecated'}[header]
+            if header == 'Since:':
+                sections['since'] = rest
+            elif header == 'Methods:':
+                method_indent = None
+            elif rest and current_section in ('deprecated', 'returns', 'example', 'laws'):
+                # `Returns: void` -- the body on the header line itself.
                 buf.append(rest)
             continue
 
-        if current_section == 'params':
+        if current_section and line.strip() and prev_blank and not line[0].isspace():
+            # An unindented paragraph after a gap leaves the section.
+            _flush_section()
+            current_section = None
+
+        prev_blank = not line.strip()
+
+        if current_section is None:
+            prose['notes' if seen_section else 'description'].append(line)
+        elif current_section == 'params':
             stripped_line = line.strip()
             if stripped_line:
                 # Format: '  name -- description'
@@ -279,16 +323,40 @@ def _parse_docstring(lines):
                     sections['params'].append((m.group(1), m.group(2)))
                 else:
                     sections['params'].append(('', stripped_line))
-        elif current_section == 'returns':
-            buf.append(line)
-        elif current_section == 'example':
-            buf.append(line)
-        elif current_section == 'deprecated':
+        elif current_section == 'methods':
+            stripped_line = line.strip()
+            if stripped_line:
+                # '  name -- description', several names allowed
+                # ('  lt? lte? gt? gte? -- ...').  A line indented deeper than
+                # the entries continues the one above it.
+                indent = len(line) - len(line.lstrip())
+                m = re.match(r'^(.+?)\s+--\s+(.*)', stripped_line)
+                if m and (method_indent is None or indent <= method_indent):
+                    method_indent = indent
+                    sections['methods'].append((m.group(1), m.group(2)))
+                elif sections['methods']:
+                    name, desc = sections['methods'][-1]
+                    sections['methods'][-1] = (name, f'{desc} {stripped_line}'.strip())
+                else:
+                    sections['methods'].append(('', stripped_line))
+        else:
             buf.append(line)
 
     _flush_section()
+    sections['description'] = _dedent_prose(prose['description'])
+    sections['notes'] = _dedent_prose(prose['notes'])
 
     return sections
+
+
+def _dedent_prose(lines):
+    """Prose lines with blank edges trimmed; indentation is kept, because an
+    indented run inside prose is a code block (see _prose_html)."""
+    while lines and not lines[0].strip():
+        lines = lines[1:]
+    while lines and not lines[-1].strip():
+        lines = lines[:-1]
+    return '\n'.join(lines)
 
 
 def strip_line_comment(line):
@@ -454,7 +522,7 @@ def parse_tur_file(path):
     # ------------------------------------------------------------------
     doc_buf = []  # accumulated ';;;' lines
     def_re = re.compile(
-        r'^\s*\(\s*(defn|defmacro|defstruct|defdata|defgadt|definstance|defopaque|defeffect)\s+'
+        r'^\s*\(\s*(defn|defmacro|defstruct|defdata|defgadt|defclass|definstance|defopaque|defeffect)\s+'
     )
     # r7rs-lang-plan R9: the Scheme definition forms, documented as the
     # Turmeric kinds they correspond to.  Parameters are untyped, like a
@@ -546,6 +614,35 @@ def parse_tur_file(path):
                 first_def_seen = True
 
             kind = m.group(1)
+
+            if kind == 'defclass':
+                # The methods are the class's API, so read the whole form --
+                # through its last method, `;;;` method docs included -- and
+                # resume scanning after it.
+                j = i + 1
+                depth = strip_line_comment(line).count('(') - strip_line_comment(line).count(')')
+                while depth > 0 and j < len(lines):
+                    code = strip_line_comment(lines[j])
+                    depth += code.count('(') - code.count(')')
+                    j += 1
+                name, extra = _parse_defclass(lines[i:j])
+                if name:
+                    module['definitions'].append({
+                        'kind': kind,
+                        'name': name,
+                        'params': [],
+                        'return_type': None,
+                        # A class and its methods are global -- no export list
+                        # names one -- so the class is always public API.
+                        'exported': not name.startswith('__'),
+                        'docstring': _parse_docstring(doc_buf) if doc_buf else None,
+                        'line': i + 1,
+                        **extra,
+                    })
+                doc_buf = []
+                i = j
+                continue
+
             # Parse the name + rest from this line (may span lines)
             def_text = line
             j = i + 1
@@ -590,6 +687,16 @@ def parse_tur_file(path):
             doc_buf = []
             i += 1
             continue
+
+        # A blank line also ends a module docstring -- one whose summary names
+        # the module -- so the first definition's own `;;;` block after the
+        # gap is not merged into it (typeclass-ord.tur's Ord, which used to
+        # vanish into the module text).
+        if (not stripped and doc_buf and not first_def_seen
+                and module['docstring'] is None and pending_module_doc is None
+                and _names_module(doc_buf[0], module)):
+            pending_module_doc = list(doc_buf)
+            doc_buf = []
 
         # Non-;;; lines that reset the docstring buffer:
         # - blank lines with content that isn't a comment
@@ -662,6 +769,116 @@ def _parse_doc_decl(kind, shapes):
     return defn
 
 
+def _defclass_members(lines):
+    """
+    Split a defclass form, given as its raw source lines, into its top-level
+    members: [(opener, text, doc_lines), ...] where opener is '[' (the type
+    parameter vector, the superclass vector) or '(' (a method, or an
+    associated `(type Name : Kind)`).
+
+    doc_lines are the `;;;` lines directly above a member -- a method may be
+    documented in place, inside the class body, as well as in the class's
+    `Methods:` section.  `;` comments are code-stripped before counting
+    parentheses, so a `(` in a comment cannot unbalance the form.
+    """
+    members = []
+    pending_doc = []
+    depth = 0
+    cur = None  # [opener, chars, doc]
+    for line in lines:
+        s = line.strip()
+        if s.startswith(';;;'):
+            if depth == 1 and cur is None:
+                pending_doc.append(s)
+            continue
+        code = strip_line_comment(line)
+        in_str = False
+        for ch in code:
+            if ch == '"':
+                in_str = not in_str
+            if not in_str and ch in '([':
+                depth += 1
+                if depth == 2 and cur is None:
+                    cur = [ch, [], pending_doc]
+                    pending_doc = []
+            if cur is not None:
+                cur[1].append(ch)
+            if not in_str and ch in ')]':
+                depth -= 1
+                if depth == 1 and cur is not None:
+                    members.append((cur[0], ' '.join(''.join(cur[1]).split()), cur[2]))
+                    cur = None
+                if depth <= 0:
+                    return members
+        if cur is not None:
+            cur[1].append(' ')
+        elif s and not s.startswith(';'):
+            pending_doc = []
+    return members
+
+
+def _parse_defclass(lines):
+    """
+    Parse a `(defclass Name [params] [(Super a) ...] (method [args] : T) ...)`
+    form from its raw source lines.  Returns (name, extra) where extra holds
+    'type_params', 'superclasses', 'assoc_types' and 'methods'; each method is
+    {'name', 'params', 'return_type', 'doc'} with 'doc' the parsed `;;;` block
+    written above it inside the class body (or None).
+    """
+    m = re.search(r'\(\s*defclass\s+([^\s\[\]()]+)', lines[0])
+    if not m:
+        return None, {}
+    name = m.group(1)
+    extra = {'type_params': [], 'superclasses': [], 'assoc_types': [], 'methods': []}
+    vectors = 0
+    for opener, text, doc in _defclass_members(lines):
+        if opener == '[':
+            inner = text[1:-1].strip()
+            if vectors == 0 and '(' not in inner:
+                extra['type_params'] = inner.split()
+            else:
+                extra['superclasses'] = re.findall(r'\([^()]*\)', inner)
+            vectors += 1
+            continue
+        mm = re.match(r'\(\s*([^\s\[\]()]+)', text)
+        if not mm:
+            continue
+        mname = mm.group(1)
+        body = text[mm.end():-1]   # drop the method form's closing paren
+        if mname == 'type':
+            # An associated type: `(type Storage : Type)`.
+            extra['assoc_types'].append(f'(type {body.strip()})')
+            continue
+        inner, end = _find_bracket(body)
+        params = []
+        ret = None
+        if inner is not None:
+            # A grouped parameter `[ma [handler :fn]]` reads as its members;
+            # a vector inside a type, `(fn [a] b)`, is one token and stays.
+            flat = ' '.join(t[1:-1] if t.startswith('[') and t.endswith(']') else t
+                            for t in _split_sig_tokens(inner))
+            params = _parse_params('[' + flat + ']')
+            ret = _return_type_after_bracket(body[end:])
+        extra['methods'].append({
+            'name': mname,
+            'params': params,
+            'return_type': ret,
+            'doc': _parse_docstring(doc) if doc else None,
+        })
+    return name, extra
+
+
+def _names_module(first_doc_line, module):
+    """True when a `;;; name -- ...` line's name is this module: its full
+    name, last segment, or file stem (`tur/typeclass-ord`, `app`)."""
+    m = re.match(r';;;\s+(\S+)\s+--\s', first_doc_line)
+    if not m:
+        return False
+    name = m.group(1)
+    full = module.get('name') or ''
+    return name in (full, full.rsplit('/', 1)[-1], module.get('file_stem'))
+
+
 def _parse_scheme_def(form, text):
     """r7rs-lang-plan R9: (kind, name, params) for a Scheme definition, or None.
 
@@ -732,9 +949,13 @@ def _parse_def_line(kind, text):
     rest = text[m.end():]
 
     if kind == 'definstance':
-        # (definstance TypeName [TypeParam] ...)
-        type_m = re.search(r'\[\s*([\w/\-!?<>*+]+)', rest)
-        type_param = type_m.group(1) if type_m else ''
+        # (definstance ClassName [Type] ...).  The head may be compound --
+        # `[(->)]`, `[(Result _ B)]`, `[int cstr]` -- so take the whole
+        # balanced vector, not its first word: the first-word regex this
+        # replaced read `[(->)]` as empty and then grabbed a METHOD's
+        # parameter vector (`ArrowLoop[f]`).
+        head, _ = _find_bracket(rest)
+        type_param = ' '.join(head.split()) if head is not None else ''
         return name + '[' + type_param + ']', [], None, {}
 
     extra = {}
@@ -1280,6 +1501,7 @@ em { color: var(--green); font-style: italic; }
 .kind-builtin   { background: color-mix(in srgb, var(--syn-kw) 10%, transparent); color: var(--syn-kw); }
 .kind-defstruct { background: color-mix(in srgb, var(--syn-num) 12%, transparent); color: var(--syn-num); }
 .kind-definstance { background: color-mix(in srgb, var(--syn-type) 12%, transparent); color: var(--syn-type); }
+.kind-defclass  { background: color-mix(in srgb, var(--green) 14%, transparent); color: var(--green); }
 
 /* LT4: badge for linear types and ^linear / lref<T> annotations */
 .linear-badge {
@@ -1337,9 +1559,42 @@ em { color: var(--green); font-style: italic; }
 
 .def-returns { font-size: 0.875rem; color: var(--text-primary); }
 
+/* Docstring prose: the description under a summary and the notes after the
+   sections (_prose_html).  An indented run inside it is a code block. */
+.def-prose { font-size: 0.9rem; color: var(--text-primary); line-height: 1.6; margin: 0.5rem 0; }
+.def-prose-list { font-size: 0.9rem; line-height: 1.6; margin: 0.5rem 0 0.5rem 1.25rem; }
+.def-prose-code {
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.45rem 0.75rem;
+  margin: 0.4rem 0 0.6rem;
+  font-family: 'Iosevka', 'Fira Code', monospace;
+  font-size: 0.8rem;
+  overflow-x: auto;
+  white-space: pre;
+  color: var(--text-primary);
+}
+
+/* A defclass card's methods: each signature, then what it does. */
+.method-list { margin: 0; }
+.method-list dt {
+  font-family: 'Iosevka', 'Fira Code', monospace;
+  font-size: 0.85rem;
+  color: var(--gold-bright);
+  margin-top: 0.5rem;
+  overflow-x: auto;
+}
+.method-list dt:first-child { margin-top: 0; }
+.method-list dd { margin: 0.15rem 0 0 1.25rem; }
+.method-list dd .def-prose { margin: 0.15rem 0; }
+.def-instances { font-size: 0.875rem; line-height: 1.9; }
+.def-instances a { text-decoration: none; }
+
 /* A docstring's `code` spans (_inline_html).  The same chip the guides draw
    (genguides GUIDE_CSS), so a name reads the same in prose on either page. */
 .def-card p code, .param-table td code, .module-doc p code,
+.def-card li code, .def-instances code,
 .internal-item-summary code, .index-card p code {
   font-family: 'Iosevka', 'Fira Code', monospace;
   font-size: 0.85em;
@@ -1620,6 +1875,109 @@ def _inline_html(text):
     return ''.join(out)
 
 
+def _prose_html(text, indent='  '):
+    """
+    Render docstring prose (a description or notes block) as HTML.
+
+    Paragraphs are separated by blank lines.  Within one, unindented lines
+    are running text and join into a <p>; an indented run is a code block and
+    keeps its lines (a law, a signature, a snippet under `Two caveats:`); a
+    paragraph whose lines open with `- ` is a bullet list, its indented
+    lines continuing the item above.
+    """
+    if not text.strip():
+        return ''
+    out = []
+    paras, cur = [], []
+    for line in text.split('\n'):
+        if line.strip():
+            cur.append(line)
+        elif cur:
+            paras.append(cur)
+            cur = []
+    if cur:
+        paras.append(cur)
+
+    def bullet(l):
+        return l.startswith('- ') or l.startswith('* ')
+
+    for para in paras:
+        if bullet(para[0]):
+            items = []
+            for l in para:
+                if bullet(l) or not items:
+                    items.append(l[2:].strip() if bullet(l) else l.strip())
+                else:
+                    items[-1] += ' ' + l.strip()
+            out.append(f'{indent}<ul class="def-prose-list">'
+                       + ''.join(f'<li>{_inline_html(it)}</li>' for it in items)
+                       + '</ul>\n')
+            continue
+        run, run_code = [], None
+        for l in para + [None]:
+            is_code = l is not None and l[0].isspace()
+            if run and (l is None or is_code != run_code):
+                if run_code:
+                    out.append(f'{indent}<pre class="def-prose-code">'
+                               f'{html_module.escape(_dedent_block(run))}</pre>\n')
+                else:
+                    out.append(f'{indent}<p class="def-prose">'
+                               f'{_inline_html(" ".join(s.strip() for s in run))}</p>\n')
+                run = []
+            if l is not None:
+                run.append(l)
+                run_code = is_code
+    return ''.join(out)
+
+
+def _method_signature(method):
+    """`(extract [wa] :int)` -- a class method, spelled like a defn signature."""
+    param_str = ' '.join(
+        (f"& {p}" + t[3:] if t.startswith('...') else f"{p} {t}") if t else p
+        for p, t in method['params']
+    )
+    sig = f"({method['name']} [{param_str}]"
+    if method.get('return_type'):
+        sig += f" {method['return_type']}"
+    return sig + ")"
+
+
+def _class_method_rows(defn):
+    """
+    A defclass's methods as [(signature, description)], in source order.
+
+    A method's description is the `;;;` block written above it in the class
+    body, else its entry in the class docstring's `Methods:` section (an entry
+    may name several methods: `lt? lte? gt? gte? -- ...`).  `Methods:` entries
+    that name no source method -- prose about a derived operation, a typo --
+    are kept at the end with no signature rather than silently dropped.
+    """
+    doc = defn.get('docstring') or {}
+    by_name = {}
+    for names, desc in doc.get('methods', []):
+        for n in names.split():
+            by_name.setdefault(n, desc)
+    rows, used = [], set()
+    for meth in defn.get('methods', []):
+        mdoc = meth.get('doc')
+        if mdoc:
+            desc = mdoc.get('summary_full') or mdoc.get('summary') or ''
+            dash = desc.find(' -- ')
+            if dash != -1 and desc[:dash].strip() == meth['name']:
+                desc = desc[dash + 4:]
+            rest = mdoc.get('description') or ''
+            desc = (desc + ('\n\n' + rest if rest else '')).strip()
+        else:
+            desc = by_name.get(meth['name'], '')
+        if meth['name'] in by_name:
+            used.add(meth['name'])
+        rows.append((_method_signature(meth), desc))
+    for names, desc in doc.get('methods', []):
+        if not any(n in used for n in names.split()):
+            rows.append((names, desc))
+    return rows
+
+
 def _sidebar_tip(defn) -> str:
     """Tooltip for a sidebar definition link: its docstring summary if it has
     one, else a plain 'jump to' so every entry carries something useful."""
@@ -1709,7 +2067,14 @@ def _render_signature(defn):
 
     if kind == 'definstance':
         # name is like 'Functor[list]'
-        return f"(definstance {name.replace('[', ' [').replace(']', ']')})"
+        return f"(definstance {name.replace('[', ' [', 1)})"
+
+    if kind == 'defclass':
+        # The class header; its methods follow in the card's Methods section.
+        sig = f"(defclass {name} [{' '.join(defn.get('type_params', []))}]"
+        if defn.get('superclasses'):
+            sig += f" [{' '.join(defn['superclasses'])}]"
+        return sig + ")"
 
     param_str = ' '.join(
         (f"& {p}" + t[3:] if t.startswith('...') else f"{p} {t}") if t else p
@@ -1758,7 +2123,7 @@ def _render_def_card(defn, anchor_prefix=''):
 
     if doc:
         # Summary: strip leading 'name -- '
-        summary = doc['summary']
+        summary = doc.get('summary_full') or doc['summary']
         dash_idx = summary.find(' -- ')
         if dash_idx != -1:
             summary = summary[dash_idx + 4:]
@@ -1769,9 +2134,13 @@ def _render_def_card(defn, anchor_prefix=''):
             h += '  <p class="def-deprecated"><span class="def-deprecated-label">Deprecated</span> '
             h += f'{_inline_html(doc["deprecated"])}</p>\n'
 
+        h += _prose_html(doc.get('description', ''))
+
         if doc['params']:
+            # A class's parameters are its type parameters (`^f -- ...`).
+            label = 'Type parameters' if kind == 'defclass' else 'Parameters'
             h += '  <div class="def-section">\n'
-            h += '    <div class="def-section-label">Parameters</div>\n'
+            h += f'    <div class="def-section-label">{label}</div>\n'
             h += '    <table class="param-table">\n'
             for pname, pdesc in doc['params']:
                 h += f'    <tr><td>{html_module.escape(pname)}</td>'
@@ -1779,10 +2148,20 @@ def _render_def_card(defn, anchor_prefix=''):
             h += '    </table>\n'
             h += '  </div>\n'
 
+    if kind == 'defclass':
+        h += _render_class_sections(defn)
+
+    if doc:
         if doc['returns']:
             h += '  <div class="def-section">\n'
             h += '    <div class="def-section-label">Returns</div>\n'
             h += f'    <p class="def-returns">{_inline_html(doc["returns"])}</p>\n'
+            h += '  </div>\n'
+
+        if doc.get('laws'):
+            h += '  <div class="def-section">\n'
+            h += '    <div class="def-section-label">Laws</div>\n'
+            h += f'    <pre class="def-example">{html_module.escape(doc["laws"])}</pre>\n'
             h += '  </div>\n'
 
         if doc['example']:
@@ -1791,10 +2170,69 @@ def _render_def_card(defn, anchor_prefix=''):
             h += f'    <pre class="def-example">{html_module.escape(doc["example"])}</pre>\n'
             h += '  </div>\n'
 
+        if doc.get('notes'):
+            h += '  <div class="def-section def-notes">\n'
+            h += _prose_html(doc['notes'], indent='    ')
+            h += '  </div>\n'
+
+    if kind == 'defclass':
+        h += _render_class_instances(defn)
+
+    if doc:
         if doc['since']:
             h += f'  <p class="def-since">Since: {_inline_html(doc["since"])}</p>\n'
 
     h += '</div>\n'
+    return h
+
+
+def _render_class_sections(defn):
+    """A defclass card's Associated types and Methods sections."""
+    h = ''
+    if defn.get('assoc_types'):
+        h += '  <div class="def-section">\n'
+        h += '    <div class="def-section-label">Associated types</div>\n'
+        h += ('    <pre class="def-example">'
+              + html_module.escape('\n'.join(defn['assoc_types'])) + '</pre>\n')
+        h += '  </div>\n'
+
+    rows = _class_method_rows(defn)
+    if rows:
+        h += '  <div class="def-section">\n'
+        h += '    <div class="def-section-label">Methods</div>\n'
+        h += '    <dl class="method-list">\n'
+        for sig, desc in rows:
+            if sig:
+                h += f'      <dt><code>{html_module.escape(sig)}</code></dt>\n'
+            h += '      <dd>'
+            if desc:
+                h += '\n' + _prose_html(desc, indent='        ') + '      '
+            h += '</dd>\n'
+        h += '    </dl>\n'
+        h += '  </div>\n'
+
+    return h
+
+
+def _render_class_instances(defn):
+    """A defclass card's Instances line: every type the rendered tree gives an
+    instance, linked to the definstance it names."""
+    h = ''
+    instances = defn.get('instances') or []
+    if instances:
+        h += '  <div class="def-section">\n'
+        h += '    <div class="def-section-label">Instances</div>\n'
+        links = []
+        for type_name, href, module_name in instances:
+            label = f'<code>{html_module.escape(type_name)}</code>'
+            title = html_module.escape(f'{defn["name"]} [{type_name}] in {module_name}', quote=True)
+            if href:
+                links.append(f'<a href="{html_module.escape(href, quote=True)}" '
+                             f'title="{title}">{label}</a>')
+            else:
+                links.append(f'<span title="{title}">{label}</span>')
+        h += f'    <p class="def-instances">{", ".join(links)}</p>\n'
+        h += '  </div>\n'
     return h
 
 
@@ -1827,18 +2265,20 @@ def build_module_content(module, brand='stdlib'):
 
     if module.get('docstring'):
         md = module['docstring']
-        summary = md['summary']
+        summary = md.get('summary_full') or md['summary']
         dash_idx = summary.find(' -- ')
         if dash_idx != -1:
             summary = summary[dash_idx + 4:]
         content += '  <div class="module-doc">\n'
         if summary:
             content += f'    <p class="module-doc-summary">{_inline_html(summary)}</p>\n'
+        content += _prose_html(md.get('description', ''), indent='    ')
         if md.get('example'):
             content += '    <div class="def-section">\n'
             content += '      <div class="def-section-label">Example</div>\n'
             content += f'      <pre class="def-example">{html_module.escape(md["example"])}</pre>\n'
             content += '    </div>\n'
+        content += _prose_html(md.get('notes', ''), indent='    ')
         if md.get('deprecated'):
             content += '    <p class="def-deprecated"><span class="def-deprecated-label">Deprecated</span> '
             content += f'{_inline_html(md["deprecated"])}</p>\n'
@@ -2010,9 +2450,42 @@ def _escape_tur_string(s):
             .replace('\t', '\\t'))
 
 
+def _class_keys(modules):
+    """Names every parsed defclass declares.  A definstance's lookup key is its
+    class name (`Functor[Option]` -> `Functor`), so without this the first
+    instance the scan met -- often in another module -- answered `(doc
+    'Functor)` instead of the class."""
+    return {d['name'] for m in modules for d in m['definitions'] if d['kind'] == 'defclass'}
+
+
+def _method_doc_entries(modules):
+    """
+    [(key, summary, text)] for each class method: `(doc 'extract)` should say
+    what `extract` is even though no defn of that name exists.  Callers add an
+    entry only for a key nothing else claims -- a method name such as `drop` or
+    `first` is also an ordinary function somewhere, and that one keeps it.
+    """
+    out = []
+    for module in modules:
+        for d in module['definitions']:
+            if d['kind'] != 'defclass':
+                continue
+            rows = dict(_class_method_rows(d))
+            for meth in d.get('methods', []):
+                sig = _method_signature(meth)
+                desc = ' '.join((rows.get(sig) or '').split())
+                summary = f"{meth['name']} -- {d['name']} method" + (f': {desc}' if desc else '.')
+                text = '\n'.join([summary, '', 'Signature:', f'  {sig}', '',
+                                  f"Class: {_render_signature(d)} in {module['name']}"])
+                out.append((meth['name'], summary, text))
+    return out
+
+
 def _build_doc_entry(defn):
     """Build the full text for a doc entry."""
     doc = defn['docstring']
+    if defn.get('kind') == 'defclass':
+        return _build_class_doc_entry(defn)
     if not doc:
         return defn['name']
 
@@ -2065,6 +2538,28 @@ def _build_doc_entry(defn):
         parts.append('')
         parts.append(f'Since: {doc["since"]}')
 
+    return '\n'.join(parts)
+
+
+def _build_class_doc_entry(defn):
+    """The doc-lookup text for a defclass: its header, then every method's
+    signature with what it does, then the laws and example."""
+    doc = defn['docstring'] or {}
+    parts = [doc.get('summary') or defn['name'], '', _render_signature(defn)]
+    if doc.get('deprecated'):
+        parts += ['', 'Deprecated:'] + [f'  {l}' for l in doc['deprecated'].splitlines()]
+    rows = _class_method_rows(defn)
+    if rows:
+        parts += ['', 'Methods:']
+        for sig, desc in rows:
+            desc = ' '.join(desc.split())
+            parts.append(f'  {sig} -- {desc}' if sig and desc else f'  {sig or desc}')
+    if doc.get('laws'):
+        parts += ['', 'Laws:'] + [f'  {l}' for l in doc['laws'].splitlines()]
+    if doc.get('example'):
+        parts += ['', 'Example:'] + [f'  {l}' for l in doc['example'].splitlines()]
+    if doc.get('since'):
+        parts += ['', f'Since: {doc["since"]}']
     return '\n'.join(parts)
 
 
@@ -2136,11 +2631,14 @@ def emit_docstrings_tur(modules, out_path, verified_names=None):
     rather than emitting an empty one; see read_verified_manifest.
     """
     entries = []
+    class_keys = _class_keys(modules)
     for module in modules:
         for defn in module['definitions']:
             name = defn['name']
             # Strip typeclass bracket suffix for lookup key
             key = re.sub(r'\[.*\]$', '', name)
+            if defn['kind'] == 'definstance' and key in class_keys:
+                continue   # the class itself answers for its name
             text = _build_doc_entry(defn)
             entries.append((key, text))
         # MD3: also register the module name itself as a doc-lookup key
@@ -2161,6 +2659,9 @@ def emit_docstrings_tur(modules, out_path, verified_names=None):
                 parts.append('')
                 parts.append(f'Since: {mod_doc["since"]}')
             entries.append((module['name'], '\n'.join(parts)))
+
+    # Class methods last, so any definition of the same name keeps its key.
+    entries += [(key, text) for key, _summary, text in _method_doc_entries(modules)]
 
     # Deduplicate: keep the first entry for each key
     seen = {}
@@ -2248,12 +2749,15 @@ def collect_doc_entries(modules, *, spice=None):
     """
     entries = []
     seen = set()
+    class_keys = _class_keys(modules)
     for module in modules:
         for defn in module['definitions']:
             name = defn['name']
             key = re.sub(r'\[.*\]$', '', name)
             if key in seen:
                 continue
+            if defn['kind'] == 'definstance' and key in class_keys:
+                continue   # the class itself answers for its name
             seen.add(key)
 
             doc = defn['docstring']
@@ -2276,6 +2780,15 @@ def collect_doc_entries(modules, *, spice=None):
                 if spice:
                     entry['spice'] = spice
                 entries.append(entry)
+
+    # Class methods last, so any definition of the same name keeps its key.
+    for key, summary, _text in _method_doc_entries(modules):
+        if key not in seen:
+            seen.add(key)
+            entry = {'name': key, 'summary': summary, 'kind': 'method'}
+            if spice:
+                entry['spice'] = spice
+            entries.append(entry)
 
     return entries
 
@@ -2400,6 +2913,48 @@ def collect_tur_files(source):
     return files
 
 
+def attach_class_instances(modules, *, link_other_modules):
+    """
+    Give every defclass the instances the parsed tree declares for it, as
+    defn['instances'] = [(type, href, module name), ...]: "which types are
+    Functors?" is the first thing a reader of a class asks, and the instances
+    are spread over the modules that own the types.
+
+    An instance in the class's own module links to its card (`#anchor`).  One
+    in another module links to that page only when link_other_modules: the
+    stdlib pages are siblings and spell the link `../api/<page>`, which both
+    resolves on the site and is the form genpack rewrites into the docs pack.
+    A spice's pages live elsewhere, so there the type is listed unlinked.
+    """
+    by_class = {}
+    for module in modules:
+        for d in module['definitions']:
+            if d['kind'] != 'definstance':
+                continue
+            cls, _, type_name = d['name'].partition('[')
+            type_name = type_name[:-1] if type_name.endswith(']') else type_name
+            if type_name:
+                anchor = re.sub(r'[^a-zA-Z0-9_\-]', '_', d['name'])
+                by_class.setdefault(cls, []).append((type_name, module, anchor))
+    for module in modules:
+        for d in module['definitions']:
+            if d['kind'] != 'defclass':
+                continue
+            seen, out = set(), []
+            for type_name, owner, anchor in by_class.get(d['name'], []):
+                if type_name in seen:
+                    continue
+                seen.add(type_name)
+                if owner is module:
+                    href = '#' + anchor
+                elif link_other_modules:
+                    href = f'../api/{module_page_name(owner)}#{anchor}'
+                else:
+                    href = None
+                out.append((type_name, href, owner['name']))
+            d['instances'] = out
+
+
 def render_tree(source, out_dir, *, brand='stdlib', brand_label=None,
                 emit_tur=None, emit_json=None, extra_json_entries=None,
                 emit_pack=None, pack_section='api', pack_slug_prefix='',
@@ -2484,6 +3039,8 @@ def render_tree(source, out_dir, *, brand='stdlib', brand_label=None,
                   f'distinct (defmodule ...) name', file=sys.stderr)
             sys.exit(1)
         seen_pages[page] = module.get('rel_path') or module['file_path']
+
+    attach_class_instances(modules, link_other_modules=(brand == 'stdlib'))
 
     # Render per-module pages
     for module in modules:
