@@ -2,6 +2,25 @@
 
 All notable changes to Turmeric are documented here.
 
+## [0.67.3] -- 2026-10-19
+
+### Fixed
+
+- **Witness dispatch now coerces arguments like receiver dispatch.** A `@Type`
+  witness call -- the route TUR-E0020 recommends when instances share a carrier
+  -- passed lambdas bare and skipped `: fn`, fat-box and `any` coercions, so
+  calls like `(.ext @box 41 (fn ...))` failed in the C compiler. `Comonad`'s
+  `extend`, whose two instances share a carrier, can now be called through the
+  class.
+
+### Docs
+
+- **Typeclasses render in the API docs.** `defclass` cards now show the class
+  docstring, method signatures with their docs, the `Laws:` block, and links to
+  every `definstance`. `(doc 'Comonad)` prints the class and its methods instead
+  of whichever instance the scan met first, and `(doc 'extract)` resolves the
+  method.
+
 ## [0.67.2] -- 2026-10-19
 
 ### Changed
