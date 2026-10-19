@@ -40,6 +40,16 @@ directory is worse for triage than no index.
 | --- | --- | --- |
 | [missing-guides-for-language-primitives](missing-guides-for-language-primitives.md) | low-medium (documentation) | Of 163 reserved forms and builtins searched across 174 guides, six groups have no user-facing guide: the unsafe primitives (`ptr-*`, `raw-*`, `transmute`, ...), the operators (`+.` and friends are in no guide at all), the builtin `rc`/`weak`/`ref` forms, the `panic-payload-*` forms, the handler variants (`handle-shallow`, `try-with`, `discontinue`, `compose-handlers`), and the threading macros, `let*` and `defrec`. Each gap names where its guide or section should go. |
 
+## Found documenting the compiler builtins (filed 2026-10-19)
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [integer-mod-by-zero-and-min-div-minus-one-crash](integer-mod-by-zero-and-min-div-minus-one-crash.md) | medium | `/` guards a zero divisor; compiled `(mod a 0)` has no guard (`Illegal instruction`, no message), and `INT64_MIN` divided or `mod` by -1 traps -- compiled, and on the interpreter it kills the `tur` process itself (SIGFPE in `eval_builtin`), REPL and playground included |
+| [sized-int-arithmetic-not-wrapped-to-width](sized-int-arithmetic-not-wrapped-to-width.md) | medium | `+ - *` and `bit-shr` on `uint8` ... `int32` are not reduced to the type's width: `(+ x y)` on two `uint8`s prints 300 on both engines; stored through a `: uint8` return it is 44 compiled and still 300 interpreted; `bit-shr` on a negative `int8` shifts the sign-extended 64 bits |
+| [unsafe-builtins-wrong-or-engine-dependent](unsafe-builtins-wrong-or-engine-dependent.md) | medium | `transmute` and `reinterpret` are a C value conversion compiled (`(transmute 1.5 :int)` is 1) and the identity interpreted (1.5) -- neither reinterprets bits; interpreted, `ptr-null?` reads the pointer as a `_Bool` (wrong answer, UBSan) and `raw-realloc` has no arm, so it returns nil and leaks the block |
+| [ref-weak-builtins-stubbed](ref-weak-builtins-stubbed.md) | low-medium | `weak?` is always `true` (a Phase 9 placeholder on both engines) and `ref?` tests the value for non-null, so `(ref? 7)` is `true`; `upgrade` returns a `ptr<void>` no `Option` function accepts; the interpreter's `rc->ptr` returns the payload, so reading through it segfaults `tur`; and an `lref/new` cell consumed by `deref` is never freed. `stdlib/weak.tur` is the working surface |
+| [show-line-of-option-dispatches-show-int](show-line-of-option-dispatches-show-int.md) | low-medium | No `Show` instance exists for `Option`, yet `(show-line (some 1))` compiles -- the class variable binds to the int carrier, so `Show[int]` prints the box's address; interpreted, it fails with `unknown infix builtin '>'`. A struct with no instance is refused (TUR-E0001) as it should be |
+
 ## Found executing the open reports (filed 2026-10-18)
 
 | Report | Severity | One line |
