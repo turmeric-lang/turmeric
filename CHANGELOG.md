@@ -2,6 +2,38 @@
 
 All notable changes to Turmeric are documented here.
 
+## [0.67.5] -- 2026-10-20
+
+### Changed
+
+- **A project's `:experiments` now apply in every command that compiles or
+  evaluates a file.** `tur build <file>`, `tur compile`, project-mode `tur run`,
+  `--interpret`, `tur eval --file`, `trace` and DAP launches used to skip the
+  manifest's experiment gates, so a source could compile with a gate on under
+  `check` but off under `build`.
+
+### Fixed
+
+- **Integer `/` and `mod` abort on a zero divisor and wrap a divisor of `-1`.**
+  `INT64_MIN / -1` and `INT64_MIN % -1` used to trap the process, and compiled
+  `mod` had no zero guard at all -- it died with an illegal instruction and no
+  message. Division by zero now aborts with a diagnostic, and a divisor of `-1`
+  wraps (`INT64_MIN / -1` is `INT64_MIN`, mod is `0`), matching `-fwrapv`
+  semantics.
+- **A constrained call on an ADT-headed applied type with no instance is now an
+  error.** `(show-line (some 1))` used to slip past the call-site check, print a
+  pointer compiled, and fail with a confusing interpreter error. It is now
+  TUR-E0001 on both engines; single-parameter classes only.
+- **`tur explain` covers every diagnostic code.** Codes like `E0020`, `W0037`
+  through `W0039`, `E0400` and `E0401` could not be looked up by name, and 27
+  codes had no explanation text; all now resolve and print one.
+
+### Docs
+
+- **The `/` and `mod` reference entries document the checked behavior.** The
+  operators' entries now state that a zero divisor aborts and a divisor of `-1`
+  wraps, dropping the old "not checked in compiled code" caveat.
+
 ## [0.67.4] -- 2026-10-19
 
 ### Added

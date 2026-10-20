@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/turmeric-lang/turmeric/actions/workflows/ci.yml/badge.svg)](https://github.com/turmeric-lang/turmeric/actions/workflows/ci.yml)
 
-**Latest release:** `v0.67.4` -- Documents every compiler builtin and special form (163 names) in the API docs, and makes `tur doc` / `(doc ...)` show the full stdlib entry instead of the one-liner table.
+**Latest release:** `v0.67.5` -- Integer `/` and `mod` now abort cleanly on a zero divisor (and wrap `INT64_MIN / -1`), and a project's `:experiments` apply in every `tur` command that compiles or evaluates a file.
 
 ## What
 
