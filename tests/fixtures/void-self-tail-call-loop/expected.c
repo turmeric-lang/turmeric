@@ -325,6 +325,18 @@ static void tur_handler_table_free(tur_handler_table_t *t) {
 /* IT4: tagged union runtime representation */
 typedef struct { int64_t tag; int64_t val; } tur_tagged_t;
 #define TUR_AS(T, x)    ((T)(x))
+static inline int64_t tur_idiv(int64_t a, int64_t b) {
+    if (b == 0) { fprintf(stderr, "division by zero\n"); abort(); }
+    return b == -1 ? (int64_t)(0 - (uint64_t)a) : a / b;
+}
+static inline int64_t tur_imod(int64_t a, int64_t b) {
+    if (b == 0) { fprintf(stderr, "modulo by zero\n"); abort(); }
+    return b == -1 ? 0 : a % b;
+}
+static inline uint64_t tur_umod(uint64_t a, uint64_t b) {
+    if (b == 0) { fprintf(stderr, "modulo by zero\n"); abort(); }
+    return a % b;
+}
 #define TUR_ANY_UNRESOLVED_TAG (-1)
 static inline int64_t tur_any_unresolved_tag(void) {
     fprintf(stderr, "tur: internal error: a value was widened to `any` while its type was still an unresolved type variable -- the box would carry no usable type tag.  Please report this.\n");
@@ -10785,7 +10797,7 @@ static void count_hydown(int64_t n) {
 static void count_hyup(int64_t i, int64_t n) {
         __tur_tailcall:;
         if ((i) < (n)) {
-            if (((i) % (INT64_C(250000))) == (INT64_C(0))) {
+            if ((tur_imod(i, INT64_C(250000))) == (INT64_C(0))) {
                 printf("%lld\n", (long long)(i));
             } else {
             }

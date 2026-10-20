@@ -1,0 +1,20 @@
+#lang saffron
+;; `/` and `mod` through `any` -- the dynamic path (__tur_dyn_arith) had the
+;; same two holes as the typed builtins: INT64_MIN / -1 and % -1 trapped, and
+;; `mod` by zero said "division by zero". An `any` int is a full int64 (the
+;; tag rides beside it), so INT64_MIN reaches the divide.
+;;
+;; See docs/archive/integer-mod-by-zero-and-min-div-minus-one-crash.md.
+;; No requires.compiled: both back ends answer alike.
+
+(defn dq [a b] (/ a b))
+(defn dr [a b] (mod a b))
+
+(defn main []
+  (let [lo (- (- 0 9223372036854775807) 1)
+        m1 (- 0 (/ 4 4))]
+    (println (dq lo m1))     ; INT64_MIN wraps
+    (println (dr lo m1))     ; 0
+    (println (dq -7 2))      ; -3
+    (println (dr -7 2))      ; -1
+    0))

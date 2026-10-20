@@ -96,6 +96,19 @@
 #include "jit_ffi.h"    /* jit-ffi-c2mir-plan: provider + sig vocabulary */
 #include "inline_c_jit.h"  /* aot-compiled-repl-plan C1 */
 
+/* Integer `/` and `mod` on the interpreter's int64 carrier, for a divisor the
+ * caller has already checked is not zero.  INT64_MIN / -1 and INT64_MIN % -1
+ * raise SIGFPE on x86-64 -- which kills the `tur` process, REPL and playground
+ * included -- although C only calls them overflow.  A divisor of -1 is
+ * answered without dividing, as the compiled preamble's tur_idiv / tur_imod do:
+ * the quotient is the negation, wrapped; the remainder is 0. */
+static inline int64_t turi_idiv_nz(int64_t a, int64_t b) {
+    return b == -1 ? (int64_t)(0 - (uint64_t)a) : a / b;
+}
+static inline int64_t turi_imod_nz(int64_t a, int64_t b) {
+    return b == -1 ? 0 : a % b;
+}
+
 /* T1 (turi-eval-trampoline-plan): small inline arg/field buffer with a heap
  * spill above it.  Keeps the per-call scratch off the C stack for the common
  * low-arity case while bounding deep-recursion frame growth -- the dominant
@@ -4487,10 +4500,10 @@ static TuriValue ts_cont_resume(TuriEnv *env, TuriCont *c, int64_t w) {
             case '/':
                 if (fr->hole_index == 0) {
                     if (e0 == 0) return turi_error("eval: cont resume: division by zero");
-                    v = v / e0;
+                    v = turi_idiv_nz(v, e0);
                 } else {
                     if (v == 0) return turi_error("eval: cont resume: division by zero");
-                    v = e0 / v;
+                    v = turi_idiv_nz(e0, v);
                 }
                 break;
             default: return turi_errorf("eval: cont resume: bad op '%c'", fr->op);
@@ -4542,10 +4555,10 @@ static int cont_fold_advance(ContFoldState *s, TuriValue *fn, TuriValue **args,
             case '/':
                 if (fr->hole_index == 0) {
                     if (e0 == 0) { *err = turi_error("eval: cont resume: division by zero"); return 2; }
-                    v = v / e0;
+                    v = turi_idiv_nz(v, e0);
                 } else {
                     if (v == 0) { *err = turi_error("eval: cont resume: division by zero"); return 2; }
-                    v = e0 / v;
+                    v = turi_idiv_nz(e0, v);
                 }
                 break;
             default: *err = turi_errorf("eval: cont resume: bad op '%c'", fr->op); return 2;
@@ -5264,7 +5277,7 @@ static TuriValue eval_builtin(TuriEnv *env, const BuiltinSpec *spec,
         bool is_float = (args[0].tag == TURI_FLOAT);
         if (!is_float) {
             if (args[1].as_int == 0) return turi_error("eval: division by zero");
-            return turi_int(args[0].as_int / args[1].as_int);
+            return turi_int(turi_idiv_nz(args[0].as_int, args[1].as_int));
         } else {
             return turi_float(args[0].as_float / args[1].as_float);
         }
@@ -5320,7 +5333,7 @@ static TuriValue eval_builtin(TuriEnv *env, const BuiltinSpec *spec,
         }
         if (strcmp(op, "%") == 0) {
             if (args[1].as_int == 0) return turi_error("eval: modulo by zero");
-            return turi_int(args[0].as_int % args[1].as_int);
+            return turi_int(turi_imod_nz(args[0].as_int, args[1].as_int));
         }
         /* Phase C bitwise ops (bit-and/or/xor/shl/shr).  Builtins.c registers
          * these for every integer kind; under --interpret every integer is an
@@ -5661,8 +5674,8 @@ static int64_t ic_apply_binop(const char *op, int oplen, int64_t a, int64_t b) {
     }
     switch (op[0]) {
     case '+': return a + b;  case '-': return a - b;
-    case '*': return a * b;  case '/': return b ? a / b : 0;
-    case '%': return b ? a % b : 0;
+    case '*': return a * b;  case '/': return b ? turi_idiv_nz(a, b) : 0;
+    case '%': return b ? turi_imod_nz(a, b) : 0;
     case '<': return a < b;  case '>': return a > b;
     case '&': return a & b;  case '|': return a | b;  case '^': return a ^ b;
     default:  return 0;

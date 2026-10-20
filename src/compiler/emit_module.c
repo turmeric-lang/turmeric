@@ -12316,6 +12316,25 @@ static void emit_closure_fat_runtime(Buf *out, bool guarded) {
      * from an accidental value conversion (tests/check-emitted-float-
      * conversions.py). */
     buf_puts(out, "#define TUR_AS(T, x)    ((T)(x))\n");
+    /* Integer `/` and `mod`.  A zero divisor has no value, and INT64_MIN / -1
+     * (and % -1) traps on x86-64 although C only calls it overflow, so neither
+     * is left to the bare operator.  A divisor of -1 is answered without
+     * dividing: the quotient is the negation, wrapped the way -fwrapv wraps
+     * + - *, and the remainder is 0.  Signed kinds ride int64_t (a narrower
+     * operand widens losslessly); the unsigned `/` keeps the bare operator
+     * behind its zero test, and `mod` takes the unsigned remainder. */
+    buf_puts(out, "static inline int64_t tur_idiv(int64_t a, int64_t b) {\n"
+                  "    if (b == 0) { fprintf(stderr, \"division by zero\\n\"); abort(); }\n"
+                  "    return b == -1 ? (int64_t)(0 - (uint64_t)a) : a / b;\n"
+                  "}\n"
+                  "static inline int64_t tur_imod(int64_t a, int64_t b) {\n"
+                  "    if (b == 0) { fprintf(stderr, \"modulo by zero\\n\"); abort(); }\n"
+                  "    return b == -1 ? 0 : a % b;\n"
+                  "}\n"
+                  "static inline uint64_t tur_umod(uint64_t a, uint64_t b) {\n"
+                  "    if (b == 0) { fprintf(stderr, \"modulo by zero\\n\"); abort(); }\n"
+                  "    return a % b;\n"
+                  "}\n");
     buf_puts(out, "#define TUR_ANY_UNRESOLVED_TAG (-1)\n");
     buf_puts(out, "static inline int64_t tur_any_unresolved_tag(void) {\n"
                   "    fprintf(stderr, \"tur: internal error: a value was widened to `any` "
@@ -13858,9 +13877,7 @@ void ensure_saffron_dyn_runtime(EmitCtx *ctx) {
          * both answer; the signed `>>` here gave `(bit-shr -8 1)` = -4 through
          * `any` and 9223372036854775804 everywhere else. */
         "            case TUR_DYNOP_SHR:  return TUR_TAG(TUR_DYNTAG_INT, (int64_t)((uint64_t)__x >> __y));\n"
-        "            default:\n"
-        "                if (__y == 0) { fprintf(stderr, \"division by zero\\n\"); abort(); }\n"
-        "                return TUR_TAG(TUR_DYNTAG_INT, __x % __y);\n"
+        "            default:            return TUR_TAG(TUR_DYNTAG_INT, tur_imod(__x, __y));\n"
         "            }\n"
         "        }\n"
         "    }\n"
@@ -13879,12 +13896,11 @@ void ensure_saffron_dyn_runtime(EmitCtx *ctx) {
         "        case TUR_DYNOP_ADD: return TUR_TAG(TUR_DYNTAG_INT, __x + __y);\n"
         "        case TUR_DYNOP_SUB: return TUR_TAG(TUR_DYNTAG_INT, __x - __y);\n"
         "        case TUR_DYNOP_MUL: return TUR_TAG(TUR_DYNTAG_INT, __x * __y);\n"
-        /* BS_DIV_CHECK's guard, in the compiled path's own words: `/` on two
-         * ints emits the zero test and aborts, so the dynamic route does the
-         * same rather than inventing a second convention. */
+        /* `/` on two ints is the typed builtin's own helper, so the dynamic
+         * route aborts on a zero divisor and wraps INT64_MIN / -1 the same
+         * way rather than inventing a second convention. */
         "        default:\n"
-        "            if (__y == 0) { fprintf(stderr, \"division by zero\\n\"); abort(); }\n"
-        "            return TUR_TAG(TUR_DYNTAG_INT, __x / __y);\n"
+        "            return TUR_TAG(TUR_DYNTAG_INT, tur_idiv(__x, __y));\n"
         "        }\n"
         "    }\n"
         "}\n");

@@ -1,0 +1,1 @@
+the interpreter reports a zero divisor as an error value, so its exit status differs

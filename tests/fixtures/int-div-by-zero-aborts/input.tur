@@ -1,0 +1,12 @@
+;; Integer `/` by zero keeps its abort and its message through the move of the
+;; signed rows onto tur_idiv (which also owns the INT64_MIN / -1 case).
+;;
+;; See docs/archive/integer-mod-by-zero-and-min-div-minus-one-crash.md.
+;; requires.compiled: see int-mod-by-zero-aborts.
+
+(defn q [a : int b : int] : int (/ a b))
+
+(defn main [] : int
+  (do
+    (println (q 7 (- 1 1)))   ; aborts here
+    0))

@@ -1,0 +1,12 @@
+;; The unsigned `mod` rows took the bare `%` too, so a zero divisor was SIGFPE
+;; (x86-64) with no message. The unsigned `mod` goes through tur_umod now.
+;;
+;; See docs/archive/integer-mod-by-zero-and-min-div-minus-one-crash.md.
+;; requires.compiled: see int-mod-by-zero-aborts.
+
+(defn r [a : uint32 b : uint32] : uint32 (mod a b))
+
+(defn main [] : int
+  (do
+    (println (r (:: 7 :uint32) (:: 0 :uint32)))   ; aborts here
+    0))

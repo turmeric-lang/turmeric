@@ -1,0 +1,15 @@
+;; `(mod a 0)` had no guard: the compiled program died with "Illegal
+;; instruction" (SIGILL, exit 132) and no message. `/` always printed
+;; "division by zero" and aborted; `mod` now says "modulo by zero" the same way
+;; (and the interpreter's `eval: modulo by zero` is its twin).
+;;
+;; See docs/archive/integer-mod-by-zero-and-min-div-minus-one-crash.md.
+;; requires.compiled: the interpreter reports this as an error value, not an
+;; abort, so the exit status differs.
+
+(defn r [a : int b : int] : int (mod a b))
+
+(defn main [] : int
+  (do
+    (println (r 7 (- 1 1)))   ; aborts here
+    0))

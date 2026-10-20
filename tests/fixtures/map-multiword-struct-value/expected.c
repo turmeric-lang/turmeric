@@ -325,6 +325,18 @@ static void tur_handler_table_free(tur_handler_table_t *t) {
 /* IT4: tagged union runtime representation */
 typedef struct { int64_t tag; int64_t val; } tur_tagged_t;
 #define TUR_AS(T, x)    ((T)(x))
+static inline int64_t tur_idiv(int64_t a, int64_t b) {
+    if (b == 0) { fprintf(stderr, "division by zero\n"); abort(); }
+    return b == -1 ? (int64_t)(0 - (uint64_t)a) : a / b;
+}
+static inline int64_t tur_imod(int64_t a, int64_t b) {
+    if (b == 0) { fprintf(stderr, "modulo by zero\n"); abort(); }
+    return b == -1 ? 0 : a % b;
+}
+static inline uint64_t tur_umod(uint64_t a, uint64_t b) {
+    if (b == 0) { fprintf(stderr, "modulo by zero\n"); abort(); }
+    return a % b;
+}
 #define TUR_ANY_UNRESOLVED_TAG (-1)
 static inline int64_t tur_any_unresolved_tag(void) {
     fprintf(stderr, "tur: internal error: a value was widened to `any` while its type was still an unresolved type variable -- the box would carry no usable type tag.  Please report this.\n");
@@ -8196,7 +8208,7 @@ static int64_t __inst_Num_mul_int(int64_t x, int64_t y) {
 }
 
 static int64_t __inst_Num_div_int(int64_t x, int64_t y) {
-        return ((y) ? ((x) / (y)) : (fprintf(stderr, "division by zero\n"), abort(), 0));
+        return tur_idiv(x, y);
 }
 
 static int64_t __inst_Num_neg_int(int64_t x) {
@@ -8216,7 +8228,7 @@ static int8_t __inst_Num_mul_int8(int8_t x, int8_t y) {
 }
 
 static int8_t __inst_Num_div_int8(int8_t x, int8_t y) {
-        return ((y) ? ((x) / (y)) : (fprintf(stderr, "division by zero\n"), abort(), 0));
+        return tur_idiv(x, y);
 }
 
 static int8_t __inst_Num_neg_int8(int8_t x) {
@@ -8236,7 +8248,7 @@ static int16_t __inst_Num_mul_int16(int16_t x, int16_t y) {
 }
 
 static int16_t __inst_Num_div_int16(int16_t x, int16_t y) {
-        return ((y) ? ((x) / (y)) : (fprintf(stderr, "division by zero\n"), abort(), 0));
+        return tur_idiv(x, y);
 }
 
 static int16_t __inst_Num_neg_int16(int16_t x) {
@@ -8256,7 +8268,7 @@ static int32_t __inst_Num_mul_int32(int32_t x, int32_t y) {
 }
 
 static int32_t __inst_Num_div_int32(int32_t x, int32_t y) {
-        return ((y) ? ((x) / (y)) : (fprintf(stderr, "division by zero\n"), abort(), 0));
+        return tur_idiv(x, y);
 }
 
 static int32_t __inst_Num_neg_int32(int32_t x) {
@@ -8964,13 +8976,13 @@ static void * __inst_Show_show_Char(int64_t x) {
                     builder_slpush_hycstr_ex((void *)(intptr_t)(b_2000673), "u");
                     if (tur_panicking) return ((void *)0);
                     if ((n_2000674) > (INT64_C(15))) {
-                        int64_t __ps_105 = (show_hyhex_hydigit_un_un(((INT64_C(16)) ? ((n_2000674) / (INT64_C(16))) : (fprintf(stderr, "division by zero\n"), abort(), 0))));
+                        int64_t __ps_105 = (show_hyhex_hydigit_un_un(tur_idiv(n_2000674, INT64_C(16))));
                         if (tur_panicking) return ((void *)0);
                         builder_slpush_hychar_ex((void *)(intptr_t)(b_2000673), __ps_105);
                         if (tur_panicking) return ((void *)0);
                     } else {
                     }
-                    int64_t __ps_106 = (show_hyhex_hydigit_un_un((n_2000674) % (INT64_C(16))));
+                    int64_t __ps_106 = (show_hyhex_hydigit_un_un(tur_imod(n_2000674, INT64_C(16))));
                     if (tur_panicking) return ((void *)0);
                     builder_slpush_hychar_ex((void *)(intptr_t)(b_2000673), __ps_106);
                     if (tur_panicking) return ((void *)0);
