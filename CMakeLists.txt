@@ -543,6 +543,14 @@ add_test(
   COMMAND bash tests/check-typekind-mangle-exhaustive.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# diag-code-tables-drift-without-a-check: every DiagCode round-trips through
+# diag_code_to_string / diag_code_from_string and has `tur explain` text (or
+# is on the shrink-only tests/diag-explain-missing.txt).  Source-text check.
+add_test(
+  NAME tur_diag_code_tables
+  COMMAND python3 tests/check-diag-code-tables.py
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
 # Same report, behavioural half: compile programs that instantiate one ADT at
 # two type arguments and assert the two monomorphs do not land on one C name
 # (and that no #ifndef-guarded name is defined twice with differing bodies).

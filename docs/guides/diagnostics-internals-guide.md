@@ -87,16 +87,24 @@ A coded diagnostic needs four things to agree:
 | `diag.c:diag_code_from_string` | `if (strcmp(s, "TUR-E0716") == 0) ...` | `tur explain`, REPL `:explain`, the playground |
 | `diag.c:diag_explanations_[]` | `{ TUR_E0716_..., "TUR-E0716: ...\n..." }` | `diag_explain` |
 
-They are four hand-maintained lists. As of this writing they disagree:
+They are four hand-maintained lists, and `tests/check-diag-code-tables.py`
+(ctest `tur_diag_code_tables`) holds them together from the source text. It
+requires that:
 
-| Gap | Codes | Effect |
-|---|---|---|
-| No `code_to_string` case | E0400, E0401 | Would render as a bare `error:`. Neither is emitted today |
-| No `code_from_string` row | E0020, W0037, W0038, W0039 | `tur explain` says "no explanation", even if one is added |
-| No explanation | 30 codes, e.g. E0006, E0711, E0712, E0713, W0041, W0624 | `tur explain` says "no explanation" |
+- every enum member has a `diag_code_to_string` case, and the string is the
+  one its name spells (`TUR_E0716_...` is `"TUR-E0716"`);
+- `diag_code_to_string` has no `default:` arm, so `-Wswitch` flags a member
+  added without a case;
+- every enum member has a `diag_code_from_string` row that parses that string
+  back to it;
+- every enum member has a `diag_explanations_[]` entry, or is listed in
+  `tests/diag-explain-missing.txt`.
 
-The cross-check is a few lines of Python over the two files. There is no CI
-check for it (see [`tur explain`](#tur-explain)).
+That list holds only codes that are never emitted today (`TUR-E0700` and
+`E0701` are retired; `E0370`, `E0376`, `E0400`, `E0401` and `E0704` are
+unused). It can only shrink: a code that gains text, or leaves the enum,
+fails the check until its line is deleted. A new code gets its text, not a
+line there.
 
 ### Prefixes and bands
 
@@ -511,11 +519,14 @@ literals: a header line `TUR-XNNNN: Title`, a blank line, prose, usually an
 `Example:` block, and often a `See docs/...` pointer. There is no generated
 page and no other copy.
 
-**What keeps it in sync.** Very little. `tests/run-flags.sh` (ctest
-`tur_flags_tests`) checks that 12 hard-coded `E` codes have an explanation. It
-also checks that `TUR-E9999` exits non-zero and that the snippet mode works.
-No check compares the enum with the three tables. `tests/check-docs-lint.sh`
-covers `docs/reported/` and the SRFI table, not codes.
+**What keeps it in sync.** `tests/check-diag-code-tables.py` (ctest
+`tur_diag_code_tables`) compares the enum with the three tables, as described
+under [The enum and its four tables](#the-enum-and-its-four-tables).
+`tests/run-flags.sh` (ctest `tur_flags_tests`) checks the user-visible half:
+that a sample of codes, including the `I` prefix, are found and printed by
+`tur explain`, that `TUR-E9999` exits non-zero, and that the snippet mode
+works. `tests/check-docs-lint.sh` covers `docs/reported/` and the SRFI table,
+not codes.
 
 ---
 
@@ -646,7 +657,9 @@ TUR-E0716 commit (`72c37c1c5`) touched, generalized:
 4. **`diag.c:diag_code_from_string`.** Add the `strcmp` row. Without it
    `tur explain` and `:explain` cannot find the code.
 5. **`diag.c:diag_explanations_[]`.** Add the long form, in the format
-   above, with an example of the mistake and the fix.
+   above, with an example of the mistake and the fix. Steps 3 to 5 are
+   checked: `python3 tests/check-diag-code-tables.py` fails on a code
+   missing from any of them.
 6. **The emit site.** Use `diag_emit_with_code`, and add follow-up
    `DIAG_NOTE`/`DIAG_HELP` lines with plain `diag_emit`. Pick the level at
    the site. If a flag escalates it, read the flag there (see the
@@ -680,7 +693,6 @@ Each was reproduced against the compiler this guide describes and filed in
 update the passage above that describes it and drop it from this list.
 
 - [sweet-exp-diagnostic-columns-not-translated](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/sweet-exp-diagnostic-columns-not-translated.md) -- Diagnostics in sweet-exp files report columns of the transformed text
-- [diag-code-tables-drift-without-a-check](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/diag-code-tables-drift-without-a-check.md) -- The diagnostic-code tables drift apart, and `tur explain` shows it
 
 ## Maintenance
 

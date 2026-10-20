@@ -116,6 +116,27 @@ for code in TUR-E0001 TUR-E0002 TUR-E0003 TUR-E0004 TUR-E0005 \
     fi
 done
 
+# diag-code-tables-drift-without-a-check: TUR-E0020, TUR-W0037..W0039 and
+# TUR-E0400/E0401 were missing from diag_code_from_string, so `tur explain`
+# said "no explanation" for codes it knew how to print (E0020 and W0037 now
+# also have text), and an `I`-prefixed code was evaluated as source ("unbound
+# symbol 'TUR-I0379'") instead of being looked up.  The table-level guard is
+# tests/check-diag-code-tables.py; this pins the user-visible half.
+for code in TUR-E0006 TUR-E0020 TUR-W0037 TUR-W0041; do
+    out=$("$TUR" explain "$code" 2>&1); rc=$?
+    if [ $rc -ne 0 ] || ! grep -q "^$code:" <<< "$out"; then
+        fail "tur-explain-${code}-found" "explanation not printed (exit=$rc): $out"
+    else
+        pass "tur-explain-${code}-found"
+    fi
+done
+out=$("$TUR" explain TUR-I0379 2>&1); rc=$?
+if [ $rc -ne 0 ] || ! grep -q "^TUR-I0379:" <<< "$out" || grep -q "unbound symbol" <<< "$out"; then
+    fail "tur-explain-i-prefix-is-a-code" "TUR-I0379 was not looked up as a code (exit=$rc): $out"
+else
+    pass "tur-explain-i-prefix-is-a-code"
+fi
+
 # tur-explain-d0001-is-an-error (stale-comments-diagnostics item 2): D0001 has
 # been a hard error since fn-type-bare-identifier-plan Phase 4; its text used
 # to call it a warning that --Werror=deprecated promotes.
