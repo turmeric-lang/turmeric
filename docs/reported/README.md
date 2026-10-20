@@ -3269,3 +3269,9 @@ the `__int128` work only surfaced them.  Both resolved the same day.
   the shape.
 - A report that is fully resolved moves to `docs/archive/`, never stays here
   with a RESOLVED status line.
+
+## Found triaging a Sentry report (filed 2026-10-20)
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [tsan-nightly-exit-1-2026-10-18](tsan-nightly-exit-1-2026-10-18.md) | unknown (untriaged) | Sentry `turmeric-ci` 7784962154: the nightly TSan run of 2026-10-18 (head `7af0e323`) exited **1**, not 66, so it is a harness failure (build, stdout mismatch or timeout), probably not a race report. The event names no fixture; the cause is in the attached `tsan.log`. Lists the steps to triage it |
