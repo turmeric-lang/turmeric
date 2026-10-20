@@ -1,0 +1,43 @@
+;; Integer `/` and `mod` by -1.
+;;
+;; INT64_MIN / -1 and INT64_MIN % -1 trap on x86-64 (idiv raises #DE) although
+;; C only calls them overflow, so a bare `(a) / (b)` took the compiled program
+;; down with "Illegal instruction", and under `--interpret` took down the `tur`
+;; process itself (SIGFPE in eval_builtin) -- REPL and playground included.
+;;
+;; Both engines now answer a divisor of -1 without dividing, the way -fwrapv
+;; defines overflow for + - *: the quotient is the negation, wrapped
+;; (INT64_MIN stays INT64_MIN), and the remainder is 0.
+;;
+;; See docs/archive/integer-mod-by-zero-and-min-div-minus-one-crash.md.
+;;
+;; The divisor is built at run time (m1) so no C compiler folds the trap away.
+
+(defn q [a : int b : int] : int (/ a b))
+(defn r [a : int b : int] : int (mod a b))
+(defn r32 [a : int32 b : int32] : int32 (mod a b))
+(defn ur [a : uint64 b : uint64] : uint64 (mod a b))
+(defn ur8 [a : uint8 b : uint8] : uint8 (mod a b))
+
+(defn main [] : int
+  (let [lo (- (- 0 9223372036854775807) 1)
+        m1 (- 0 (/ 4 4))]
+    ;; The traps.
+    (println (q lo m1))      ; INT64_MIN wraps
+    (println (r lo m1))      ; 0
+    ;; Negative controls: -1 is not special for anything else.
+    (println (q 7 m1))       ; -7
+    (println (r 7 m1))       ; 0
+    (println (q lo 1))       ; INT64_MIN
+    (println (r lo 2))       ; 0
+    ;; Truncating division, remainder takes the dividend's sign.
+    (println (q -7 2))       ; -3
+    (println (r -7 2))       ; -1
+    (println (q 7 -2))       ; -3
+    (println (r 7 -2))       ; 1
+    ;; Sized kinds: INT32_MIN % -1 trapped on its own 32-bit idiv.
+    (println (r32 (:: -2147483648 :int32) (:: m1 :int32)))   ; 0
+    ;; Unsigned `mod` is the plain unsigned remainder.
+    (println (ur (:: 9223372036854775807 :uint64) (:: 10 :uint64)))   ; 7
+    (println (ur8 (:: 200 :uint8) (:: 7 :uint8)))                     ; 4
+    0))

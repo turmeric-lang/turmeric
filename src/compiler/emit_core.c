@@ -5647,6 +5647,11 @@ char *emit_builtin(EmitCtx *ctx, Buf *body, const Expr *e) {
     Buf out; buf_init(&out);
     switch (spec->shape) {
         case BS_BIN_INFIX:
+            /* integer `mod`: the preamble helper checks the divisor (zero
+             * aborts, -1 would trap INT64_MIN % -1) */
+            if (builtin_int_divmod_helper(spec))
+                buf_printf(&out, "%s(%s, %s)", builtin_int_divmod_helper(spec),
+                           arg_strs[0], arg_strs[1]);
             /* bit-shr is documented (stdlib/docstrings.tur) as a LOGICAL
              * (unsigned) right shift, but its int64_t operand is signed --
              * a bare ">>" is an arithmetic shift on virtually every real C
@@ -5654,7 +5659,7 @@ char *emit_builtin(EmitCtx *ctx, Buf *body, const Expr *e) {
              * by no other builtin (grep src/compiler/builtins.c), so this
              * cast is exact to bit-shr and cannot affect any other operator
              * sharing BS_BIN_INFIX. */
-            if (strcmp(spec->c_op, ">>") == 0)
+            else if (strcmp(spec->c_op, ">>") == 0)
                 buf_printf(&out, "(int64_t)((uint64_t)(%s) >> (uint64_t)(%s))",
                            arg_strs[0], arg_strs[1]);
             else
@@ -5680,6 +5685,11 @@ char *emit_builtin(EmitCtx *ctx, Buf *body, const Expr *e) {
              * -Wliteral-conversion on a constant divisor. */
             if (builtin_div_is_ieee(spec)) {
                 buf_printf(&out, "(%s) / (%s)", arg_strs[0], arg_strs[1]);
+            } else if (builtin_int_divmod_helper(spec)) {
+                /* signed: INT64_MIN / -1 traps too, so the helper owns both
+                 * checks (see tur_idiv in the preamble) */
+                buf_printf(&out, "%s(%s, %s)", builtin_int_divmod_helper(spec),
+                           arg_strs[0], arg_strs[1]);
             } else {
                 buf_printf(&out, "((%s) ? ((%s) / (%s)) : (fprintf(stderr, \"division by zero\\n\"), abort(), 0))",
                            arg_strs[1], arg_strs[0], arg_strs[1]);

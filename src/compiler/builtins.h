@@ -102,6 +102,18 @@ int builtin_describe(const char *name, char *out, size_t cap);
  * this to emit a bare `(a) / (b)` for the float rows. */
 bool builtin_div_is_ieee(const BuiltinSpec *spec);
 
+/* The runtime-preamble helper that spells an integer `/` or `mod` row, or NULL
+ * when the row is spelled some other way.
+ *
+ * "tur_idiv" / "tur_imod" for the signed kinds, "tur_umod" for the unsigned
+ * `mod`.  Each aborts on a zero divisor (`division by zero` / `modulo by
+ * zero`); the signed ones also answer a divisor of -1 without dividing, since
+ * INT64_MIN / -1 traps on x86-64 although C calls it overflow.  The unsigned
+ * `/` row (and the float rows) keep the BS_DIV_CHECK text, so they return NULL.
+ * Callers emit `helper(a, b)`; the helpers are defined once in the preamble
+ * (emit_module.c), so neither operand is repeated in the output. */
+const char *builtin_int_divmod_helper(const BuiltinSpec *spec);
+
 /* stdlib-os-surface-plan P0.5: the print family's destination.  Every
  * BS_PRINTLN_* row is `println` (stdout, trailing newline) unless its c_op
  * says otherwise: "stderr" is `eprintln`, "stderr-nonl" is `eprint`. */

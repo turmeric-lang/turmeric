@@ -8032,9 +8032,14 @@ static char *prim_expr(const BuiltinSpec *sp, char **as, uint32_t n) {
     Buf b; buf_init(&b);
     switch (sp->shape) {
         case BS_BIN_INFIX:
+            /* integer `mod`: the preamble helper checks the divisor, as in
+             * emit_core.c's BS_BIN_INFIX case. */
+            if (builtin_int_divmod_helper(sp))
+                buf_printf(&b, "%s(%s, %s)", builtin_int_divmod_helper(sp),
+                           as[0], as[1]);
             /* bit-shr is documented as a LOGICAL (unsigned) right shift;
              * see the matching comment in emit_core.c's BS_BIN_INFIX case. */
-            if (strcmp(sp->c_op, ">>") == 0)
+            else if (strcmp(sp->c_op, ">>") == 0)
                 buf_printf(&b, "(int64_t)((uint64_t)(%s) >> (uint64_t)(%s))", as[0], as[1]);
             else
                 buf_printf(&b, "(%s) %s (%s)", as[0], sp->c_op, as[1]);
@@ -8054,6 +8059,9 @@ static char *prim_expr(const BuiltinSpec *sp, char **as, uint32_t n) {
              * division by zero is an IEEE 754 value, not an error. */
             if (builtin_div_is_ieee(sp)) {
                 buf_printf(&b, "(%s) / (%s)", as[0], as[1]);
+            } else if (builtin_int_divmod_helper(sp)) {
+                buf_printf(&b, "%s(%s, %s)", builtin_int_divmod_helper(sp),
+                           as[0], as[1]);
             } else {
                 buf_printf(&b,
                     "((%s) ? ((%s) / (%s)) : "
@@ -12028,8 +12036,8 @@ static const char *cloneable_frame_expr(const char *op, bool hole_left) {
     if (strcmp(op, "*") == 0) return "env * value";
     if (strcmp(op, "-") == 0) return hole_left ? "value - env" : "env - value";
     if (hole_left)  /* "/" hole-left: value / env */
-        return "(env) ? (value / env) : (fprintf(stderr, \"division by zero\\n\"), abort(), 0)";
-    return "(value) ? (env / value) : (fprintf(stderr, \"division by zero\\n\"), abort(), 0)";
+        return "tur_idiv(value, env)";
+    return "tur_idiv(env, value)";
 }
 
 /* U4 serial: the stable marshaler tag for an arithmetic context frame (op + hole
@@ -12179,12 +12187,10 @@ static char *emit_cloneable_pure_arm(CE *ce, const CTerm *t) {
             else if (strcmp(op, "-") == 0)
                 buf_printf(&b, fr->hole_left ? "((%s) - (%s))" : "((%s) - (%s))",
                            fr->hole_left ? acc : opv, fr->hole_left ? opv : acc);
-            else /* "/" -- guard div-by-zero exactly like cloneable_frame_expr */
-                buf_printf(&b,
-                    "((%s) ? ((%s) / (%s)) : (fprintf(stderr, \"division by zero\\n\"), abort(), 0))",
-                    fr->hole_left ? opv : acc,
-                    fr->hole_left ? acc : opv,
-                    fr->hole_left ? opv : acc);
+            else /* "/" -- the same helper as cloneable_frame_expr */
+                buf_printf(&b, "tur_idiv(%s, %s)",
+                           fr->hole_left ? acc : opv,
+                           fr->hole_left ? opv : acc);
             free(opv);
         }
         char *nv = strdup(b.data);

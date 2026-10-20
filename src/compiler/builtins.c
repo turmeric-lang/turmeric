@@ -434,6 +434,21 @@ bool builtin_div_is_ieee(const BuiltinSpec *spec) {
     return spec->arg_type.kind == TY_FLOAT || spec->arg_type.kind == TY_FLOAT32;
 }
 
+static bool builtin_int_kind_is_signed(TypeKind k) {
+    return k == TY_INT || k == TY_INT8 || k == TY_INT16 || k == TY_INT32 ||
+           k == TY_INT64;
+}
+
+const char *builtin_int_divmod_helper(const BuiltinSpec *spec) {
+    if (!spec) return NULL;
+    TypeKind k = spec->arg_type.kind;
+    if (spec->shape == BS_DIV_CHECK)
+        return builtin_int_kind_is_signed(k) ? "tur_idiv" : NULL;
+    if (spec->shape == BS_BIN_INFIX && spec->c_op && strcmp(spec->c_op, "%") == 0)
+        return builtin_int_kind_is_signed(k) ? "tur_imod" : "tur_umod";
+    return NULL;
+}
+
 uint32_t builtin_collect_with_name(const Symbol *name,
                                    const BuiltinSpec **out,
                                    uint32_t max_out) {
