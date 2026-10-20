@@ -73,8 +73,10 @@
 ;;;
 ;;; Exactly two arguments.  Integer division truncates toward zero, and an
 ;;; integer division by zero prints `division by zero` and aborts the
-;;; program.  Float division follows IEEE 754: dividing by zero gives `inf`,
-;;; `-inf` or `nan`, with no check.
+;;; program.  Dividing the smallest `int` by -1 wraps, like `+ - *`: the
+;;; quotient stays that smallest value instead of trapping.  Float division
+;;; follows IEEE 754: dividing by zero gives `inf`, `-inf` or `nan`, with no
+;;; check.
 ;;;
 ;;; Parameters:
 ;;;   a -- the dividend; its type selects the overload
@@ -94,8 +96,9 @@
 ;;;
 ;;; Integer kinds only (`int` and the sized integers); `(mod 7.5 2.0)` is
 ;;; TUR-E0006.  The result has the sign of the dividend, as C's `%` does, so
-;;; `(mod -7 3)` is -1, not 2.  A zero divisor is not checked in compiled
-;;; code -- see docs/reported/integer-mod-by-zero-and-min-div-minus-one-crash.md.
+;;; `(mod -7 3)` is -1, not 2.  A zero divisor prints `modulo by zero` and
+;;; aborts the program (an error under `--interpret`), and `(mod a -1)` is 0
+;;; for every `a`, the smallest `int` included.
 ;;;
 ;;; Parameters:
 ;;;   a -- the dividend
@@ -107,6 +110,7 @@
 ;;; Example:
 ;;;   (mod 7 3)      ; => 1
 ;;;   (mod -7 3)     ; => -1
+;;;   (mod 7 -1)     ; => 0
 ;;@builtin (mod [a : int b : int] : int)
 
 ;;; = -- are two values equal?
