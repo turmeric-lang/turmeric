@@ -11300,9 +11300,24 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
              * head and would false-positive on a present instance.  Ground
              * opaque/struct/ADT/primitive receivers (the common case, and the
              * one the http-handler `^Encode T` defns hit) are matched precisely,
-             * so this only narrows coverage, never miscatches. */
-            if (concrete.kind == TY_TYVAR || concrete.kind == TY_UNKNOWN ||
-                concrete.kind == TY_APP) continue;
+             * so this only narrows coverage, never miscatches.
+             *
+             * An applied type whose head is a lowered ADT (`(Option int)`,
+             * `(Result T E)`) is the exception: typeclass_env_lookup_instance
+             * matches those by constructor (CONV-S1), so a missing instance is
+             * a real one.  Left unchecked, the specialization re-resolved its
+             * body against the baked representative instance -- `Show[int]` --
+             * and handed it the aggregate's address:
+             * `(show-line (some 1))` printed a pointer
+             * (docs/archive/show-line-of-option-dispatches-show-int.md). */
+            if (concrete.kind == TY_TYVAR || concrete.kind == TY_UNKNOWN)
+                continue;
+            if (concrete.kind == TY_APP) {
+                const Type *head = &concrete;
+                while (head->kind == TY_APP && head->as.app.fn)
+                    head = head->as.app.fn;
+                if (head->kind != TY_ADT) continue;
+            }
             TypeClassInstance *inst = typeclass_env_lookup_instance(
                 &e->typeclass_env, con->typeclass, &concrete, 1);
             if (!inst) {
