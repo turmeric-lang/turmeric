@@ -88,6 +88,7 @@ not a trap.
 Pinned by `int-div-mod-minus-one` (both engines, int / int32 / uint64 / uint8),
 `saffron-any-div-mod-minus-one` (the `any` path, both engines), and
 `int-div-by-zero-aborts`, `int-mod-by-zero-aborts`, `int-umod-by-zero-aborts`
-(compiled: exit 134 and the message). Every snapshot and the split runtime
+(compiled: a nonzero exit and the message -- `abort()` is 134 on POSIX but
+not on Windows, so the exit is not pinned). Every snapshot and the split runtime
 (`src/runtime/generated/`) were regenerated in the same change: the preamble
 gained the three helpers.
