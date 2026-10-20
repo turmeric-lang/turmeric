@@ -11309,14 +11309,20 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
              * body against the baked representative instance -- `Show[int]` --
              * and handed it the aggregate's address:
              * `(show-line (some 1))` printed a pointer
-             * (docs/archive/show-line-of-option-dispatches-show-int.md). */
+             * (docs/archive/show-line-of-option-dispatches-show-int.md).
+             *
+             * Only for a single-parameter class.  This lookup passes ONE type
+             * argument, and an instance of `StorageOps [S E]` carries two
+             * (`[(Dense Pos) Pos]`), so it could never match: a multi-parameter
+             * class would be refused for an instance that exists. */
             if (concrete.kind == TY_TYVAR || concrete.kind == TY_UNKNOWN)
                 continue;
             if (concrete.kind == TY_APP) {
                 const Type *head = &concrete;
                 while (head->kind == TY_APP && head->as.app.fn)
                     head = head->as.app.fn;
-                if (head->kind != TY_ADT) continue;
+                if (head->kind != TY_ADT || con->typeclass->n_type_params != 1)
+                    continue;
             }
             TypeClassInstance *inst = typeclass_env_lookup_instance(
                 &e->typeclass_env, con->typeclass, &concrete, 1);

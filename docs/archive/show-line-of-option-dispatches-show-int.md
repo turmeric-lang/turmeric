@@ -55,6 +55,12 @@ its constructor (CONV-S1). The call never reached it.
   `no 'Show' instance for '(Option int)' in constrained call to 'show-line'`.
   An applied type with a struct head (`(Vec int)`) is still left to the
   existing machinery.
+- **Single-parameter classes only.** The discharge passes one type argument to
+  the lookup, and an instance of a two-parameter class carries two, so it could
+  never match: the first version of this change refused
+  `typeclass-bounded-wrapper-heterogeneous-dispatch`'s `any-get` on
+  `(Dense Pos)` although `StorageOps [(Dense Pos) Pos]` exists. That fixture
+  is now the standing control for the restriction.
 - **Pinned** by `errors/show-line-of-option-no-instance` and
   `errors/show-line-of-result-no-instance`, and by
   `constrained-call-adt-instance-ok` as the negative control: a user enum with

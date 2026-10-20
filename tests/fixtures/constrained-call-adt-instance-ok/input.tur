@@ -1,0 +1,21 @@
+;; The negative control for show-line-of-option-no-instance.  Refusing an
+;; applied ADT with no instance must not refuse one that has an instance: a
+;; user enum with a Show instance goes through `show-line` as before, and
+;; Option's Eq instance still answers `eq?` on (Option int).
+;;
+;; See docs/archive/show-line-of-option-dispatches-show-int.md.
+(load "stdlib/typeclass-show.tur")
+
+(defdata Color [] (Red) (Green))
+(definstance Show [Color]
+  (show [x] : String
+    (match x
+      (Red) (string/from-cstr "red")
+      (Green) (string/from-cstr "green"))))
+
+(defn main [] : int
+  (show-line (Red))
+  (show-line (Green))
+  (println (eq? (some 1) (some 1)))
+  (println (eq? (some 1) (some 2)))
+  0)

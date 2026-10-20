@@ -1,0 +1,17 @@
+;; show-line-of-option-dispatches-show-int: there is no Show instance for
+;; Option, so a constrained call on one is refused at the call site, like a
+;; struct with no instance (constrained-defn-callsite-no-instance).
+;;
+;; The discharge check used to skip every APPLIED type, so `(Option int)` slipped
+;; through: the specialization re-resolved its body against the representative
+;; instance the elaborator baked -- Show[int] -- and handed it the aggregate's
+;; address.  Compiled, `(show-line (some 1))` printed a pointer
+;; (140733233789344 in the report); interpreted it failed with
+;; "unknown infix builtin '>'".
+;;
+;; See docs/archive/show-line-of-option-dispatches-show-int.md.
+(load "stdlib/typeclass-show.tur")
+
+(defn main [] : int
+  (show-line (some 1))
+  0)

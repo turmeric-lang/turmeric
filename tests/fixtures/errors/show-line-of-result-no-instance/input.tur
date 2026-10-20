@@ -1,0 +1,11 @@
+;; The same hole for a two-parameter ADT: `Result` has no Show instance either.
+;; The error type of `(ok 1)` is still unresolved, and the refusal does not
+;; depend on it being known (expected.diag pins the head, not how the open
+;; type variable is spelled).
+;;
+;; See docs/archive/show-line-of-option-dispatches-show-int.md.
+(load "stdlib/typeclass-show.tur")
+
+(defn main [] : int
+  (show-line (ok 1))
+  0)
