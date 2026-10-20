@@ -4948,39 +4948,71 @@ static void apply_user_config_experiments(const PkgManifest *m_or_null) {
     experiments_read_user_config();
 }
 
-static char **discover_manifest_reader_macros(const char *input_path,
-                                              int *n_out) {
-    *n_out = 0;
-    if (!input_path) return NULL;
+/* Find the spice enclosing `input_path`, read its manifest and apply the
+ * experiments that go with it: the user-level file (suppressed if the manifest
+ * declares :experiments) and the manifest's own list.  CLI --enable= ran
+ * earlier and wins.  Returns true with `*m` filled and `*root_out` set (the
+ * caller frees both); false when there is no readable manifest, in which case
+ * the user-level file has been applied and nothing is owned.
+ *
+ * Every command that compiles or evaluates a file reaches the project's
+ * experiments through here (directly, or via discover_manifest_reader_macros),
+ * so a project's `:experiments` means the same thing to all of them. */
+static bool load_manifest_apply_experiments(const char *input_path,
+                                            char **root_out,
+                                            PkgManifest *m) {
+    *root_out = NULL;
+    memset(m, 0, sizeof(*m));
+    if (!input_path) return false;
     char *sroot = find_spice_root(input_path);
     if (!sroot) {
         /* No enclosing project: the user-level experiments file applies
          * unconditionally (nothing to suppress it). */
         apply_user_config_experiments(NULL);
-        return NULL;
+        return false;
     }
     char mp[4096];
     if (!pkg_resolve_manifest_path(sroot, mp, sizeof(mp))) {
         apply_user_config_experiments(NULL);
         free(sroot);
-        return NULL;
+        return false;
     }
-    PkgManifest m;
-    memset(&m, 0, sizeof(m));
-    char **out = NULL;
-    if (pkg_manifest_read(mp, &m)) {
-        /* User file first (suppressed if the manifest declares :experiments),
-         * then the manifest's own list, then -- earlier -- CLI --enable=.
-         * Precedence is by source rank, so the read order does not matter for
-         * the source column; we read user-config first only to skip it when
-         * the manifest carries the key. */
-        apply_user_config_experiments(&m);
-        apply_manifest_experiments(&m);
-        out = resolve_manifest_reader_macros(sroot, &m, n_out);
-    } else {
+    if (!pkg_manifest_read(mp, m)) {
         /* Manifest present but unreadable -- treat as no project key. */
         apply_user_config_experiments(NULL);
+        pkg_manifest_free(m);
+        free(sroot);
+        return false;
     }
+    /* User file first (suppressed if the manifest declares :experiments),
+     * then the manifest's own list, then -- earlier -- CLI --enable=.
+     * Precedence is by source rank, so the read order does not matter for
+     * the source column; we read user-config first only to skip it when
+     * the manifest carries the key. */
+    apply_user_config_experiments(m);
+    apply_manifest_experiments(m);
+    *root_out = sroot;
+    return true;
+}
+
+/* The experiments half on its own, for a command that has no use for the
+ * manifest's reader macros (the interpreter file-eval arms). */
+static void apply_enclosing_manifest_experiments(const char *input_path) {
+    char *sroot = NULL;
+    PkgManifest m;
+    if (load_manifest_apply_experiments(input_path, &sroot, &m)) {
+        pkg_manifest_free(&m);
+        free(sroot);
+    }
+}
+
+static char **discover_manifest_reader_macros(const char *input_path,
+                                              int *n_out) {
+    *n_out = 0;
+    char *sroot = NULL;
+    PkgManifest m;
+    if (!load_manifest_apply_experiments(input_path, &sroot, &m)) return NULL;
+    char **out = resolve_manifest_reader_macros(sroot, &m, n_out);
     pkg_manifest_free(&m);
     free(sroot);
     return out;
@@ -7075,6 +7107,14 @@ static int cmd_run(int argc, char **argv) {
      * free this. */
     rm_paths_owned = resolve_manifest_reader_macros(root, &m, &n_rm_paths);
     rm_paths       = (const char **)rm_paths_owned;
+
+    /* The manifest is already in hand, so apply its `:experiments` (and the
+     * user experiments file, which it suppresses when it declares the key)
+     * here rather than through discover_manifest_reader_macros.  Without this
+     * `tur run` in a project compiled with the project's gates off, where
+     * `tur run src/main.tur` had them on. */
+    apply_user_config_experiments(&m);
+    apply_manifest_experiments(&m);
 
     /* Read lock file. */
     char lock_path[4096];
@@ -10006,6 +10046,10 @@ static int cmd_eval_h(const char *path, bool use_color,
                       const EvalHooks *hooks,
                       char **user_inc, int n_user_inc) {
     g_interpret_mode = true;
+    /* The enclosing project's `:experiments` apply to a file run through the
+     * interpreter as they do to one that is checked or compiled.  Before the
+     * env is built: experiments are read while it elaborates. */
+    apply_enclosing_manifest_experiments(path);
     turi_init(use_color);
     TuriEnv *env = turi_env_new();
     if (!env) {
@@ -14317,19 +14361,14 @@ static int tur_main_inner(int argc, char **argv) {
         } else {
             /* RM4: auto-discover the spice manifest containing `input` so
              * `:reader-macros [...]` entries apply when building a single
-             * file from inside a project. No-op when there is no manifest. */
-            char *b_root = find_spice_root(input);
+             * file from inside a project. No-op when there is no manifest.
+             * The shared helper also applies the manifest's `:experiments`
+             * (and the user experiments file): a hand-rolled copy of this
+             * walk skipped them, so `tur build f.tur` compiled with a
+             * project's gates off where `tur check f.tur` had them on. */
             char **b_rm  = NULL;
             int    b_n   = 0;
-            if (b_root) {
-                char mp[4096];
-                (void)pkg_resolve_manifest_path(b_root, mp, sizeof(mp));
-                PkgManifest bm; memset(&bm, 0, sizeof(bm));
-                if (pkg_manifest_read(mp, &bm)) {
-                    b_rm = resolve_manifest_reader_macros(b_root, &bm, &b_n);
-                }
-                pkg_manifest_free(&bm);
-            }
+            b_rm = discover_manifest_reader_macros(input, &b_n);
             /* Mirror emit-c / emit-h / check / run: widen the include
              * path with the enclosing spice's src/ and every declared
              * `:spices` dep's src/. Short-circuits when --no-auto-spice
@@ -14375,7 +14414,6 @@ static int tur_main_inner(int argc, char **argv) {
             for (int i = 0; i < n_b_owned; i++) free(b_owned[i]);
             free(b_owned);
             free_reader_macro_paths(b_rm, b_n);
-            free(b_root);
         }
         free(build_inc);
         return rc;
@@ -14438,17 +14476,10 @@ static int tur_main_inner(int argc, char **argv) {
                 free(bd);
             }
         }
-        /* Reader macros + spice include auto-discovery, mirroring cmd_build. */
-        char *c_root = find_spice_root(input);
+        /* Reader macros, experiments + spice include auto-discovery,
+         * mirroring cmd_build. */
         char **c_rm = NULL; int c_n = 0;
-        if (c_root) {
-            char mp[4096];
-            (void)pkg_resolve_manifest_path(c_root, mp, sizeof(mp));
-            PkgManifest cm; memset(&cm, 0, sizeof(cm));
-            if (pkg_manifest_read(mp, &cm))
-                c_rm = resolve_manifest_reader_macros(c_root, &cm, &c_n);
-            pkg_manifest_free(&cm);
-        }
+        c_rm = discover_manifest_reader_macros(input, &c_n);
         char **c_owned = NULL; int n_c_owned = 0;
         Ls2ResolverCtx c_ls2 = {0};
         auto_append_spice_includes(input, &comp_inc, &n_comp_inc,
@@ -14461,7 +14492,6 @@ static int tur_main_inner(int argc, char **argv) {
         for (int i = 0; i < n_c_owned; i++) free(c_owned[i]);
         free(c_owned);
         free_reader_macro_paths(c_rm, c_n);
-        free(c_root);
         free(comp_inc);
         return rc;
     }

@@ -100,6 +100,46 @@ assert_exit 2 "A. unknown :experiments name aborts with TUR-E0310" \
 assert_exit 2 "A. unknown :experiments name aborts 'tur run <file>' too" \
     "$XDG_EMPTY" "$S4" run src/input.tur
 
+# A project's :experiments must reach EVERY command that compiles or evaluates
+# a file, not just the ones that happened to share a code path.  `tur build
+# <file>`, `tur compile`, project-mode `tur run` and the interpreter's file
+# arms each read the manifest themselves and never applied :experiments, so one
+# source compiled with an experiment on under `check` and off under `build`
+# (docs/archive/build-file-and-run-project-ignore-manifest-experiments.md).
+# An unknown name is the registry-independent probe: a command that applies the
+# manifest aborts with TUR-E0310 and exit 2; one that skips it carries on.
+assert_manifest_experiments_applied() {
+    local label="$1"; shift
+    local err rc
+    err=$(mktemp)
+    ( cd "$S4" && XDG_CONFIG_HOME="$XDG_EMPTY" "$TUR" "$@" >/dev/null 2>"$err" </dev/null )
+    rc=$?
+    if [ "$rc" -eq 2 ] && grep -q "TUR-E0310" "$err"; then
+        pass "A. manifest :experiments applied by '$label'"
+    else
+        failed "A. manifest :experiments applied by '$label' -- expected exit 2 with TUR-E0310, got exit $rc"
+        echo "  cmd: (cd $S4; tur $*)"
+        echo "  stderr:"; sed 's/^/    /' "$err" | head -5
+    fi
+    rm -f "$err"
+}
+assert_manifest_experiments_applied "check <file>"      check src/input.tur
+assert_manifest_experiments_applied "expand <file>"     expand src/input.tur
+assert_manifest_experiments_applied "emit-c <file>"     emit-c src/input.tur
+assert_manifest_experiments_applied "emit-h <file>"     emit-h src/input.tur
+assert_manifest_experiments_applied "run <file>"        run src/input.tur
+assert_manifest_experiments_applied "run (project)"     run
+assert_manifest_experiments_applied "build <file>"      build src/input.tur -o "$WORK/xp-out"
+assert_manifest_experiments_applied "build <dir>"       build . -o "$WORK/xp-out-dir"
+assert_manifest_experiments_applied "compile <file>"    compile src/input.tur -o "$WORK/xp.o"
+assert_manifest_experiments_applied "jit <file>"        jit src/input.tur
+assert_manifest_experiments_applied "test <dir>"        test src
+assert_manifest_experiments_applied "--interpret <file>" --interpret src/input.tur
+assert_manifest_experiments_applied "interpret <file>"  interpret src/input.tur
+assert_manifest_experiments_applied "debug <file>"      debug src/input.tur
+assert_manifest_experiments_applied "eval --file"       eval --file src/input.tur
+assert_manifest_experiments_applied "trace <file>"      trace src/input.tur -o "$WORK/xp.trace"
+
 # --- B. user file with an unknown experiment name -> TUR-E0310 + path ------
 XDG_BAD="$WORK/xdg-bad"; mkdir -p "$XDG_BAD/turmeric"
 printf ':enable [not-a-real-experiment]\n' > "$XDG_BAD/turmeric/experiments.tur"
