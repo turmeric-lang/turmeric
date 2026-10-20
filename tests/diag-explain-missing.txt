@@ -1,0 +1,15 @@
+# Diagnostic codes that have no `tur explain` text yet.
+#
+# tests/check-diag-code-tables.py requires every DiagCode to have an entry in
+# diag_explanations_ (src/compiler/diag.c) or a line here.  This list may only
+# shrink: when you add the text for a code, delete its line (the check fails
+# if you do not), and a NEW code gets its text rather than a line here.
+#
+# One enum member name per line; `#` starts a comment.
+TUR_E0400_CONTRACT_VIOLATED
+TUR_E0401_POSTCOND_VIOLATED
+TUR_E0700_CALLCC_GATED
+TUR_E0701_ESCAPE_GATED
+TUR_E0704_HANDLER_COMPOSE_UNIMPL
+TUR_E0370_REFINE_ILL_TYPED
+TUR_E0376_REFINE_TYPE_PARAM

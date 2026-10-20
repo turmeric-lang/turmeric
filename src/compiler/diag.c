@@ -446,8 +446,16 @@ const char *diag_code_to_string(DiagCode code) {
         case TUR_W0706_IMAGE_GLOBAL_UNREGISTERED:  return "TUR-W0706";
         case TUR_E0332_SWEET_DOLLAR_IN_BRACKETS:   return "TUR-E0332";
         case TUR_E0716_TAILCALL_NOT_TAIL:          return "TUR-E0716";
-        default:                          return "";
+        case TUR_E0400_CONTRACT_VIOLATED:          return "TUR-E0400";
+        case TUR_E0401_POSTCOND_VIOLATED:          return "TUR-E0401";
+        /* No `default:` -- a member added to the enum without a case is a
+         * -Wswitch warning here, and tests/check-diag-code-tables.py fails on
+         * it too.  This is the only switch over DiagCode that returns a
+         * string for every member, so it is the one that keeps the others
+         * honest. */
+        case DIAG_CODE_NONE:                       return "";
     }
+    return "";
 }
 
 /* Phase HKT-P5: Return true if `s` looks like a diagnostic code string
@@ -490,6 +498,7 @@ DiagCode diag_code_from_string(const char *s) {
     if (strcmp(s, "TUR-E0017") == 0) return TUR_E0017_CONT_ESCAPE_ASYNC;
     if (strcmp(s, "TUR-E0018") == 0) return TUR_E0018_NOT_SERIALIZABLE;
     if (strcmp(s, "TUR-E0019") == 0) return TUR_E0019_SERIAL_SHIFT_OUTSIDE_RESET;
+    if (strcmp(s, "TUR-E0020") == 0) return TUR_E0020_AMBIGUOUS_DISPATCH;
     if (strcmp(s, "TUR-E0021") == 0) return TUR_E0021_PRIVATE_EFFECT;
     if (strcmp(s, "TUR-E0022") == 0) return TUR_E0022_AWAIT_LIVE_NOT_SEND;
     if (strcmp(s, "TUR-E0025") == 0) return TUR_E0025_DUPLICATE_INSTANCE;
@@ -529,6 +538,9 @@ DiagCode diag_code_from_string(const char *s) {
     if (strcmp(s, "TUR-W0034") == 0) return TUR_W0034_ROW_VAR_GENERALISED;
     /* U6: inline-C outside Unsafe annotation */
     if (strcmp(s, "TUR-W0036") == 0) return TUR_W0036_INLINE_C_MISSING_UNSAFE;
+    if (strcmp(s, "TUR-W0037") == 0) return TUR_W0037_INLINE_C_NARROW_PARAM;
+    if (strcmp(s, "TUR-W0038") == 0) return TUR_W0038_LINT_PANIC_SITE;
+    if (strcmp(s, "TUR-W0039") == 0) return TUR_W0039_METHOD_DEFN_CLASH;
     if (strcmp(s, "TUR-W0040") == 0) return TUR_W0040_EVAL_UNKNOWN_CALL_RUNTIME_DISPATCH;
     if (strcmp(s, "TUR-W0041") == 0) return TUR_W0041_HIGH_ARITY;
     if (strcmp(s, "TUR-W0042") == 0) return TUR_W0042_SHADOWS_SPECIAL_FORM;
@@ -634,6 +646,8 @@ DiagCode diag_code_from_string(const char *s) {
     if (strcmp(s, "TUR-W0706") == 0) return TUR_W0706_IMAGE_GLOBAL_UNREGISTERED;
     if (strcmp(s, "TUR-E0332") == 0) return TUR_E0332_SWEET_DOLLAR_IN_BRACKETS;
     if (strcmp(s, "TUR-E0716") == 0) return TUR_E0716_TAILCALL_NOT_TAIL;
+    if (strcmp(s, "TUR-E0400") == 0) return TUR_E0400_CONTRACT_VIOLATED;
+    if (strcmp(s, "TUR-E0401") == 0) return TUR_E0401_POSTCOND_VIOLATED;
     return DIAG_CODE_NONE;
 }
 
@@ -3233,6 +3247,274 @@ static const DiagExplanation diag_explanations_[] = {
       "\n"
       "Removing the annotation always silences the error.  It does not make the\n"
       "call a tail call; it only stops asking.\n",
+    },
+    { TUR_E0006_OPERATOR_LOOKUP_FAILED,
+      "TUR-E0006: Operator lookup failed\n"
+      "\n"
+      "No overload of a builtin operator matches the call: the operator has no row\n"
+      "for this number of arguments, or none for the type of the first argument.\n"
+      "The error is followed by a note per overload that does exist.\n"
+      "\n"
+      "Example of the problem:\n"
+      "  (mod 7.5 2.0)   ; TUR-E0006: `mod` has integer rows only\n"
+      "\n"
+      "Convert the arguments to a type one of the listed overloads takes, or use a\n"
+      "function that is defined for your type.\n"
+    },
+    { TUR_E0020_AMBIGUOUS_DISPATCH,
+      "TUR-E0020: Ambiguous method dispatch\n"
+      "\n"
+      "A method call cannot be resolved to a single instance.  There are three\n"
+      "shapes:\n"
+      "\n"
+      "  - Two typeclasses declare a method with the same name, and both have an\n"
+      "    instance for the receiver's type.  Which one runs would depend on the\n"
+      "    order of the two definstance forms.  Give each class's method a\n"
+      "    distinct name.\n"
+      "\n"
+      "  - The receiver is `any`.  The box holds one type at run time and the\n"
+      "    instance cannot be chosen from it here.  Narrow it first with\n"
+      "    (if (is? x T) (.m x) ...), unbox it with (cast x T), or pin the\n"
+      "    instance with a type witness: (.m @T x).\n"
+      "\n"
+      "  - The receiver is `any` and the method names its class variable only in\n"
+      "    its result.  The instance is then chosen by the expected result type,\n"
+      "    not by the receiver.  Spell the receiver in the class so the method\n"
+      "    dispatches on it.\n"
+    },
+    { TUR_E0022_AWAIT_LIVE_NOT_SEND,
+      "TUR-E0022: Non-Send binding live across an await\n"
+      "\n"
+      "Every binding in scope at an `await` must be Send.  After the await the\n"
+      "function may be resumed on a different OS thread, so a value that is not\n"
+      "Send could be touched from two threads at once -- an rc<T>, for one, whose\n"
+      "reference count is not atomic.\n"
+      "\n"
+      "The check is conservative: it looks at every binding in scope at the await\n"
+      "point, not only at the ones used afterwards.\n"
+      "\n"
+      "Narrow the non-Send binding's scope so it has ended before the await, or\n"
+      "use a Send type.\n"
+    },
+    { TUR_E0105_BORROW_ESCAPES_SCOPE,
+      "TUR-E0105: Borrow outlives the value it points to\n"
+      "\n"
+      "A reference borrows a value that does not live long enough.  The error\n"
+      "comes in two forms:\n"
+      "\n"
+      "  - a function returns a borrow of one of its own locals, which ends when\n"
+      "    the function returns;\n"
+      "  - a binding holds a borrow of a value from an inner scope, which ends\n"
+      "    before the binding does.\n"
+      "\n"
+      "Return or store an owned value instead of the borrow, or declare the\n"
+      "borrowed value in a scope that encloses every use of the borrow.\n"
+    },
+    { TUR_E0106_CYCLIC_LIFETIME,
+      "TUR-E0106: Cyclic lifetime constraints\n"
+      "\n"
+      "A function's lifetime annotations require two lifetimes to each outlive the\n"
+      "other ('a and 'b in the message).  No assignment of lifetimes satisfies\n"
+      "that.  Remove or relax one of the outlives bounds.\n"
+    },
+    { TUR_W0037_INLINE_C_NARROW_PARAM,
+      "TUR-W0037: Narrow parameter reaches an inline-C body\n"
+      "\n"
+      "A defn parameter of a narrow numeric type (int8, int16, int32, uint8,\n"
+      "uint16, uint32 or float32) is used by an inline-C body.  The C code sees\n"
+      "the parameter at its narrow C type (int16_t, ...), not as the int64_t the\n"
+      "body may have been written for, so arithmetic and printf formats can\n"
+      "silently change meaning.\n"
+      "\n"
+      "Add explicit casts in the body where the width matters, or declare the\n"
+      "parameter as int.  The warning is an error under\n"
+      "--Werror=inline-c-narrow-params.\n"
+    },
+    { TUR_W0038_LINT_PANIC_SITE,
+      "TUR-W0038: Panic call site outside the allow-list\n"
+      "\n"
+      "Reported only under --lint-panic.  The call can panic (panic, the contract\n"
+      "macros, result-unwrap and option-unwrap) and is not covered by a\n"
+      "`;; #lint-panic-allow` comment.  For result-unwrap and option-unwrap the\n"
+      "message also points at result-must / option-must, the preferred spellings.\n"
+      "\n"
+      "Add the allow comment if the panic is intended, or handle the failure case\n"
+      "instead.\n"
+    },
+    { TUR_W0039_METHOD_DEFN_CLASH,
+      "TUR-W0039: A free defn shares its name with a typeclass method\n"
+      "\n"
+      "A bare call (name ...) dispatches to the typeclass method when the receiver\n"
+      "type has an instance, and falls back to the free defn otherwise, so which\n"
+      "one runs depends on the argument's type.\n"
+      "\n"
+      "Rename one of them, or use the dotted form (.name ...) to force method\n"
+      "dispatch.\n"
+    },
+    { TUR_W0040_EVAL_UNKNOWN_CALL_RUNTIME_DISPATCH,
+      "TUR-W0040: Unknown name will be dispatched at run time\n"
+      "\n"
+      "Reported when code is evaluated (the interpreter, the REPL, an embedder):\n"
+      "the called name is neither bound nor a registered native.  The call is left\n"
+      "to runtime dispatch, because natives can be registered after elaboration,\n"
+      "but a misspelled name is only found when that call actually runs.\n"
+      "\n"
+      "Check the spelling.  If the function is an embedder native, register it\n"
+      "before the code is loaded.\n"
+    },
+    { TUR_W0041_HIGH_ARITY,
+      "TUR-W0041: Function has many positional parameters\n"
+      "\n"
+      "A defn has more than 16 positional parameters.  There is no hard limit, but\n"
+      "a call that wide is hard to read and easy to get wrong.\n"
+      "\n"
+      "Prefer a defstruct options value, or a `& rest :type` variadic for an\n"
+      "unknown number of same-typed values.  See the Function Arity Style Guide in\n"
+      "CLAUDE.md.\n"
+    },
+    { TUR_E0375_REFINE_EFFECTFUL,
+      "TUR-E0375: Contract predicate has side effects\n"
+      "\n"
+      "The predicate of a contract must be pure.  Contract checks are conditional\n"
+      "on the build: --no-contracts strips them, a release build drops them unless\n"
+      "--keep-contracts, and static refinement discharge elides the ones it can\n"
+      "prove.  A predicate with side effects therefore makes the program behave\n"
+      "differently depending on whether its own contracts were compiled in.\n"
+      "\n"
+      "Only a predicate PROVEN impure is reported; one the analysis merely does not\n"
+      "model is left alone.\n"
+      "\n"
+      "Move the side effect out of the predicate and compare values it computed.\n"
+    },
+    { TUR_E0621_TUR_VERSION_BELOW_FLOOR,
+      "TUR-E0621: Spice requires a newer tur\n"
+      "\n"
+      "The project's build.tur declares a :tur-version range whose lower bound is\n"
+      "newer than this compiler.  The compiler stops rather than let the real\n"
+      "failure surface later as an error about perfectly valid source (new syntax,\n"
+      "experiments or manifest keys it does not have).\n"
+      "\n"
+      "Upgrade the compiler, or use a revision of the spice that supports this\n"
+      "version.\n"
+    },
+    { TUR_E0622_TUR_VERSION_MALFORMED,
+      "TUR-E0622: :tur-version is not a valid version range\n"
+      "\n"
+      "The :tur-version value in build.tur must be comma-separated comparators or\n"
+      "a caret range, for example:\n"
+      "\n"
+      "  \">=0.32.2\"\n"
+      "  \">=0.32.2, <0.35.0\"\n"
+      "  \"^0.32\"\n"
+      "\n"
+      "`~`, `*` and `||` are not supported.  The compiler refuses to compile until\n"
+      "the range is valid.\n"
+    },
+    { TUR_W0623_TUR_VERSION_ABOVE_CEILING,
+      "TUR-W0623: Spice was tested against an older tur\n"
+      "\n"
+      "The :tur-version range in build.tur has an upper bound below this compiler.\n"
+      "This is advisory: the build continues, because a hard error would break\n"
+      "every spice at every compiler release until its author bumped a number.\n"
+      "\n"
+      "If something breaks, report it upstream rather than assuming it is your\n"
+      "build.\n"
+    },
+    { TUR_W0624_NO_ENTRY_POINT_NEAR_MISS,
+      "TUR-W0624: No main, and a function that looks like one\n"
+      "\n"
+      "The program has no `main` and no top-level statements, so the synthesized\n"
+      "entry point does nothing and the program prints nothing.  A function that\n"
+      "is never called looks like the intended entry point.\n"
+      "\n"
+      "Name it `main`, or call it from a top-level form.\n"
+    },
+    { TUR_E0702_YIELD_IN_MATCH_ARM,
+      "TUR-E0702: yield inside a match arm\n"
+      "\n"
+      "`yield` is not supported inside a `match` arm.  This is a 1.0 limitation:\n"
+      "the generator state machine cannot save and restore a match-arm position\n"
+      "without the CPS pass planned after 1.0.\n"
+      "\n"
+      "Example of the problem:\n"
+      "  (defn gen-by-flag [flag : int] : int\n"
+      "    (gen []\n"
+      "      (match flag\n"
+      "        0 (yield 42)       ; TUR-E0702\n"
+      "        _ (yield 99))))\n"
+      "\n"
+      "Compute the value outside the match and yield it once.\n"
+    },
+    { TUR_E0703_YIELD_IN_RECURSIVE_GEN,
+      "TUR-E0703: yield inside a recursive generator\n"
+      "\n"
+      "`yield` is not supported inside a generator that calls itself.  This is a\n"
+      "1.0 limitation: it needs the CPS pass planned after 1.0.\n"
+      "\n"
+      "Restructure the traversal as a loop with an explicit stack, or collect the\n"
+      "elements first and yield them from a non-recursive generator.\n"
+    },
+    { TUR_E0705_POLY_CLOSURE_RESULT_TYVAR,
+      "TUR-E0705: Polymorphic closure-returning function at a float type\n"
+      "\n"
+      "A function returns a closure whose result type is the function's own type\n"
+      "parameter, and it is specialized at a floating-point type.  The body\n"
+      "dispatches a captured closure whose intermediate result types are erased to\n"
+      "the integer-register closure ABI, so a float specialization would read the\n"
+      "wrong register (xmm0 versus rax) -- a miscompile, so it is refused.\n"
+      "\n"
+      "Write one monomorphic defn per concrete result type.\n"
+    },
+    { TUR_E0711_MODULE_TOPLEVEL_EXPR,
+      "TUR-E0711: Expression at a defmodule's top level\n"
+      "\n"
+      "A (defmodule m ...) body holds definitions.  An expression there is never\n"
+      "evaluated: a module has no side-effect position.\n"
+      "\n"
+      "Example of the problem:\n"
+      "  (defmodule m\n"
+      "    (export f)\n"
+      "    (println \"hi\")          ; TUR-E0711\n"
+      "    (defn f [] : int 1))\n"
+      "\n"
+      "Move the expression into a function (main, or one main calls).  For a test\n"
+      "suite, call the block from the module's entry point.\n"
+    },
+    { TUR_E0712_EXPR_NESTING_TOO_DEEP,
+      "TUR-E0712: Expression nesting exhausted the compiler's stack\n"
+      "\n"
+      "An expression is nested so deeply that the compiler ran out of stack while\n"
+      "elaborating it.  The message names the depth reached and the stack size.\n"
+      "\n"
+      "Raise the stack with the TUR_STACK_MB environment variable, or split the\n"
+      "expression into helper functions or `let` bindings.  If a macro generated\n"
+      "it, have the macro emit a flatter form.\n"
+    },
+    { TUR_E0713_DEFINITION_IN_TAIL_POSITION,
+      "TUR-E0713: Function ends with a definition\n"
+      "\n"
+      "The last form of a function body is a definition (a defn, for example), so\n"
+      "the function has no value to return.\n"
+      "\n"
+      "Example of the problem:\n"
+      "  (defn f [] : int\n"
+      "    (defn g [] : int 1))     ; TUR-E0713: f ends with a definition\n"
+      "\n"
+      "This is most often a missing close paren on the enclosing defn, which\n"
+      "leaves the definitions that follow it inside its body.  Check the parens,\n"
+      "or end the body with an expression.\n"
+    },
+    { TUR_W0706_IMAGE_GLOBAL_UNREGISTERED,
+      "TUR-W0706: Write to a global that an image does not hold\n"
+      "\n"
+      "The image written by with-image-cache-after-init is the continuation that\n"
+      "runs `loop`.  A top-level global that `init` (or anything it calls) writes\n"
+      "is not in that image unless a defimage-global declared it, and init is\n"
+      "exactly the code a warm start skips, so the write is silently absent after\n"
+      "the image is loaded.\n"
+      "\n"
+      "Declare the global with (defimage-global name :T initial) and track it at\n"
+      "the top of main, or thread the value through the captured continuation.\n"
     },
 };
 
