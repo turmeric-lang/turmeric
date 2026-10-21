@@ -5221,6 +5221,34 @@ static bool is_blocked_builtin(TuriCaps caps, BuiltinShape shape) {
     }
 }
 
+/* transmute / reinterpret: copy `v`'s bits into the builtin's result type, as
+ * the compiled union does.  Every float kind is held as a double here, so a
+ * float32 is narrowed before its 32 bits are read (and widened after). */
+static TuriValue turi_bitcast_builtin(const Expr *be, TuriValue v) {
+    TypeKind src = be->as.builtin.args[0]->type.kind;
+    TypeKind dst = be->type.kind;
+    bool dst_f = dst == TY_FLOAT || dst == TY_FLOAT64 || dst == TY_FLOAT32;
+    if (v.tag == TURI_FLOAT && !dst_f) {
+        if (src == TY_FLOAT32) {
+            float f = (float)v.as_float; int32_t i;
+            memcpy(&i, &f, sizeof i);
+            return turi_int(i);
+        }
+        int64_t i; memcpy(&i, &v.as_float, sizeof i);
+        return turi_int(i);
+    }
+    if (dst_f && (v.tag == TURI_INT || v.tag == TURI_BOOL)) {
+        if (dst == TY_FLOAT32) {
+            uint32_t bits = (uint32_t)v.as_int; float f;
+            memcpy(&f, &bits, sizeof f);
+            return turi_float((double)f);
+        }
+        double d; memcpy(&d, &v.as_int, sizeof d);
+        return turi_float(d);
+    }
+    return v;
+}
+
 static TuriValue eval_builtin(TuriEnv *env, const BuiltinSpec *spec,
                                TuriValue *args, uint32_t n) {
     BuiltinShape shape = spec->shape;
@@ -5356,6 +5384,11 @@ static TuriValue eval_builtin(TuriEnv *env, const BuiltinSpec *spec,
 
     case BS_PREFIX_UNARY: {
         const char *op = spec->c_op;
+        /* ptr-null? shares `not`'s c_op "!", but its operand is a pointer
+         * word: reading its low byte as a bool answered `true` for most
+         * live blocks (unsafe-builtins-wrong-or-engine-dependent). */
+        if (spec->name && strcmp(spec->name, "ptr-null?") == 0)
+            return turi_bool(args[0].as_int == 0);
         if (op && strcmp(op, "!") == 0) return turi_bool(!args[0].as_bool);
         if (op && strcmp(op, "&") == 0) {
             /* ptr-of: emulate &var by boxing the value into a pool cell that
@@ -5369,9 +5402,17 @@ static TuriValue eval_builtin(TuriEnv *env, const BuiltinSpec *spec,
     }
 
     case BS_UNSAFE_CAST:
+        /* `(int64_t)x`, converted as the compiled cast converts: a float
+         * truncates, a bool is 0 or 1. */
+        if (args[0].tag == TURI_FLOAT) return turi_int((int64_t)args[0].as_float);
+        if (args[0].tag == TURI_BOOL)  return turi_int(args[0].as_bool ? 1 : 0);
+        if (args[0].tag == TURI_NIL)   return turi_int(0);
+        return turi_int(args[0].as_int);
+
     case BS_REINTERPRET:
     case BS_TRANSMUTE:
-        /* All three are C-style casts; in the interpreter, pass the value through. */
+        /* A bit copy into the result type, which this function does not see:
+         * the DK_BUILTIN_ARG driver applies turi_bitcast_builtin to this. */
         return args[0];
 
     case BS_PREFIX_UNARY_FREE:
@@ -5485,6 +5526,13 @@ static TuriValue eval_builtin(TuriEnv *env, const BuiltinSpec *spec,
         void *p = (void *)(intptr_t)args[0].as_int;
         if (p) free(p);
         return turi_nil();
+    }
+    case BS_RAW_REALLOC: {
+        void   *p  = (void *)(intptr_t)args[0].as_int;
+        int64_t sz = args[1].as_int;
+        void   *q  = realloc(p, (size_t)(sz > 0 ? sz : 0));
+        TuriValue v = {0}; v.tag = TURI_INT; v.as_int = (int64_t)(intptr_t)q;
+        return v;
     }
     case BS_PTR_DEREF: {
         int64_t *p = (int64_t *)(intptr_t)args[0].as_int;
@@ -11541,6 +11589,9 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                     have_apply = true;   /* result returns to this DK_CONT_FOLD */
                 } else {
                     cur = eval_builtin(env, spec, acc, n);
+                    if ((spec->shape == BS_TRANSMUTE || spec->shape == BS_REINTERPRET) &&
+                        !turi_is_error(cur))
+                        cur = turi_bitcast_builtin(be, cur);
                     TURI_DRIVE_FREE_OWN(acc_epoch, acc, acc_own); len--;
                 }
                 break;

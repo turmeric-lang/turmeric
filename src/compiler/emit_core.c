@@ -7,6 +7,8 @@
 #include "diag.h"         /* diag_file_path (emit_site_push_text) */
 #include "emit_cps_ir.h"  /* emit_cps_ir_addr_taken_any (emit_fn_value_calls_sited) */
 
+int type_size_bytes(TypeKind kind);  /* elab_core.c; the transmute bit-cast */
+
 /* ------------ helpers ------------ */
 
 /* Gap E: count items a single top-level Expr contributes after flattening.
@@ -5747,20 +5749,33 @@ char *emit_builtin(EmitCtx *ctx, Buf *body, const Expr *e) {
         /* Phase U3: Unsafe primitives - type casting */
         case BS_UNSAFE_CAST:
             /* unsafe-cast: C-style cast from one type to another
-             * arg0 = value to cast, arg1 = type keyword (we ignore it and cast to int64_t for v1)
-             * Emit: (int64_t)arg0 */
-            buf_printf(&out, "((int64_t)%s)", arg_strs[0]);
+             * arg0 = value to cast (the target type is not read for v1)
+             * Emit: TUR_AS(int64_t, arg0) -- a value conversion on purpose
+             * (a float truncates), unlike transmute's bit copy below. */
+            buf_printf(&out, "TUR_AS(int64_t, %s)", arg_strs[0]);
             break;
         case BS_REINTERPRET:
-            /* reinterpret: bitwise reinterpretation - same as unsafe-cast for v1
-             * Emit: (int64_t)arg0 */
-            buf_printf(&out, "((int64_t)%s)", arg_strs[0]);
+        case BS_TRANSMUTE: {
+            /* reinterpret / transmute: a bit-for-bit copy into the result
+             * type; size equality is verified at elaboration time.  A C cast
+             * keeps the bits between two integer or pointer kinds, but it
+             * CONVERTS a float's value, so a float crossing to or from a
+             * non-float kind goes through a union instead
+             * (unsafe-builtins-wrong-or-engine-dependent). */
+            Type src = e->as.builtin.args[0]->type;
+            bool src_f = src.kind == TY_FLOAT || src.kind == TY_FLOAT32 ||
+                         src.kind == TY_FLOAT64;
+            bool dst_f = e->type.kind == TY_FLOAT || e->type.kind == TY_FLOAT32 ||
+                         e->type.kind == TY_FLOAT64;
+            int src_sz = type_size_bytes(src.kind);
+            if (src_f != dst_f && src_sz > 0 &&
+                src_sz == type_size_bytes(e->type.kind))
+                buf_printf(&out, "(((union { %s s; %s t; }){ .s = %s }).t)",
+                           type_c_name(src), type_c_name(e->type), arg_strs[0]);
+            else
+                buf_printf(&out, "((%s)%s)", type_c_name(e->type), arg_strs[0]);
             break;
-        case BS_TRANSMUTE:
-            /* transmute: bitwise reinterpretation; size equality verified at
-             * elaboration time. Cast through the result type. */
-            buf_printf(&out, "((%s)%s)", type_c_name(e->type), arg_strs[0]);
-            break;
+        }
         /* Phase U3: Unsafe primitives - unchecked array ops */
         case BS_ARRAY_GET_UNCHECKED:
             /* array-get-unchecked: *(ptr + index)
