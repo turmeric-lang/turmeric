@@ -324,7 +324,7 @@ have no report: see the plan's section 5.
 | Report | Severity | One line |
 | --- | --- | --- |
 | [generic-returned-lambda-builds-heap-app](generic-returned-lambda-builds-heap-app.md) | medium | A lambda RETURNED by a generic whose body builds a `:heap` parametric value (`(make-struct Box :v y)`, `tcons-of`) is lifted once at the carrier ABI and calls the dead base constructor; a captured float stored that way prints garbage. A lambda stored into a record field is fine. |
-| [bare-parametric-instance-ctor-arg-unbridged](bare-parametric-instance-ctor-arg-unbridged.md) | low-medium | `(definstance C [Rose] (m [r ks] (make-struct Rose ... :kids ks)))` passes the erased `int64_t` `ks` straight to the representative monomorph constructor's typed-pointer parameter: a warning under gcc 13, an error under clang. |
+| ~~[bare-parametric-instance-ctor-arg-unbridged](../archive/bare-parametric-instance-ctor-arg-unbridged.md)~~ | low-medium | **RESOLVED 2026-10-21** (archived): the monomorph-ctor argument loop reads a bare identifier's emitted C type through `emit_ident_emitted_ctype`, which knows the enclosing function's parameters, so the erased method's carrier `ks` is bridged into the typed `kids` slot. Pinned by `bare-parametric-instance-ctor-arg` (`hook.sh`, built unpruned)
 
 ## Found by the performance audit's WP2 (filed 2026-10-14)
 

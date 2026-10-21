@@ -13509,7 +13509,16 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                          * ctor whose field -- a type variable instantiated to a
                          * fn type -- is the int64 carrier got the handle
                          * uncast.  Read the argument's spelling off its
-                         * expression, or off the temp's recorded C type. */
+                         * expression, or off the temp's recorded C type.
+                         *
+                         * bare-parametric-instance-ctor-arg-unbridged: or off
+                         * the enclosing function's signature, for a PARAMETER
+                         * (the localvar table never holds one).  A method of an
+                         * instance on a bare parametric `:heap` type is emitted
+                         * once, at the erased carrier signature, so its
+                         * `(Cons A)` parameter is the int64 word while the
+                         * representative monomorph ctor's slot is the typed
+                         * pointer. */
                         if (!arg_cty && arg) {
                             const Expr *ac = arg;
                             while (ac && ac->kind == EX_ASCRIBE)
@@ -13518,7 +13527,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                                        ac->kind == EX_FN_TO_FAT))
                                 arg_cty = "void *";
                             else if (emit_str_is_bare_ident(av))
-                                arg_cty = emit_localvar_lookup_ctype(av);
+                                arg_cty = emit_ident_emitted_ctype(ctx, av);
                         }
                         if (arg_cty) {
                             size_t sl = strlen(slot_cty);

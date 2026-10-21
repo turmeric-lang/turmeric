@@ -1,5 +1,8 @@
 # An instance on a bare parametric `:heap` type passes a carrier word to its typed constructor
 
+**RESOLVED 2026-10-21** -- see [Resolution](#resolution-2026-10-21). Pinned by
+`bare-parametric-instance-ctor-arg`.
+
 **Severity: low-medium.** A `-Wint-conversion` warning under gcc 13 (which
 `tests/run.sh` treats as a failure) and a hard error under clang 15+ and gcc
 14. The interpreter is unaffected.
@@ -48,3 +51,25 @@ the `(T *)(intptr_t)` bridge the ordinary call-argument path applies.
    as `bridge_control_result_int_ptr` does for merge temps.
 2. Or specialize an instance method on a bare parametric type per
    instantiation, so `ks` arrives typed.
+
+## Resolution (2026-10-21)
+
+Fix direction 1. The monomorph-ctor arm already bridged an int64<->pointer
+straddle at a field slot -- it compares the slot's recorded C type
+(`emit_sig_lookup_param_ctype`) with the argument's -- but it found the
+argument's C type only for an explicit cast, an active spec's parameter, a
+closure, or a bare LOCAL (`emit_localvar_lookup_ctype`). The localvar table
+never holds parameters, so `ks` -- a parameter of the erased method -- had no
+known C type and went across bare. The bare-identifier lookup is now
+`emit_ident_emitted_ctype`, which answers a parameter from the enclosing
+function's recorded signature (the same lookup `bridge_control_result_int_ptr`
+uses), and the existing cast fires:
+`ctor_Rose_Rose__int(..., (tur_adt_Cons__Rose__int *)(intptr_t)(ks))`.
+
+The defect is now invisible to a default `tur build`: the base
+`__inst_Pl_pr_Rose` is unreferenced (the call goes to its spec), so the
+link-time prune drops it before cc sees it. It was still in `tur emit-c`
+output and in any unpruned build. `bare-parametric-instance-ctor-arg` is
+therefore a `hook.sh` fixture that builds with `TUR_CC_NO_PRUNE=1` and fails
+on cc's `-Wint-conversion` / `-Wincompatible-pointer-types`; it fails on the
+pre-fix compiler and passes on both engines after.
