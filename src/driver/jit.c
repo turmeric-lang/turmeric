@@ -16,8 +16,12 @@
 #include "jit_engine.h"   /* J1: tur jit (TUR_HAVE_JIT builds only) */
 #include "mono_specs.h"   /* VBM1: --dump-mono-specs registry dump */
 
-/* Everything from here to the matching TUR_HAVE_JIT #endif really is
- * engine-only; the guard opens here rather than above the split helpers. */
+/* All of this file is the engine's.  A build configured -DTUR_JIT=OFF (or on
+ * a host the default leaves off) compiles only the cmd_jit stub at the end.
+ * The split helpers the cc path calls in every build -- jit_try_split_preamble
+ * and cmd_emit_rt_split -- live in preamble_split.c; when they sat inside the
+ * JIT code, one of them landed under this guard and broke every JIT-less
+ * build. */
 #ifdef TUR_HAVE_JIT
 
 #ifdef _WIN32
@@ -121,7 +125,6 @@ static int jit_sdk_include_dirs(char *inc0, size_t cap0,
 #endif
     return n;
 }
-#endif /* TUR_HAVE_JIT */
 
 /* J1 (docs/archive/jit-engine-plan.md section 3.2): `tur jit <file>` --
  * compile and execute in process via c2mir + MIR-gen, no cc subprocess, no
@@ -177,21 +180,8 @@ int cmd_jit(int argc, char **argv) {
     int jit_rm_n = 0;
     char **jit_rm = discover_manifest_reader_macros(input, &jit_rm_n);
     /* The `jit` experiment GRADUATED 2026-08-17 -- `tur jit` no longer needs
-     * `--enable=jit`.  The BUILD-TIME gate below is the one that remains: a
-     * build configured -DTUR_JIT=OFF (or on a host the default leaves off)
-     * carries no engine. */
-#ifndef TUR_HAVE_JIT
-    (void)passthrough_start;   /* used only by the engine path below */
-    (void)timing_json;
-    fprintf(stderr,
-            "tur: this build carries no JIT engine; reconfigure with "
-            "-DTUR_JIT=ON\n"
-            "     (the default on 64-bit x86-64/arm64; MIR is vendored under "
-            "external/mir)\n");
-    free_reader_macro_paths(jit_rm, jit_rm_n);
-    free(user_inc);
-    return 2;
-#else
+     * `--enable=jit`.  The BUILD-TIME gate is the one that remains: a build
+     * with no engine compiles the stub at the end of this file instead. */
 
     refine_discharge_reset();
     g_emit_for_link = true;
@@ -431,10 +421,8 @@ int cmd_jit(int argc, char **argv) {
      * call site it was written for. */
     mono_specs_reset();
     return cmd_run(argc, argv);
-#endif /* TUR_HAVE_JIT */
 }
 
-#ifdef TUR_HAVE_JIT
 /* ------------------------------------------------------------------ */
 /* J2 (jit-engine-plan 3.3): the REPL's in-process spice build.        */
 /* ------------------------------------------------------------------ */
@@ -954,4 +942,16 @@ static int repl_inline_c_jit_build(const char *name, const char *src,
 const TuriInlineCJitHook g_repl_inline_c_jit_hook = {
     repl_inline_c_jit_build, repl_jit_hook_sym,
 };
+#else /* !TUR_HAVE_JIT */
+
+int cmd_jit(int argc, char **argv) {
+    (void)argc; (void)argv;
+    fprintf(stderr,
+            "tur: this build carries no JIT engine; reconfigure with "
+            "-DTUR_JIT=ON\n"
+            "     (the default on 64-bit x86-64/arm64; MIR is vendored under "
+            "external/mir)\n");
+    return 2;
+}
+
 #endif /* TUR_HAVE_JIT */
