@@ -612,7 +612,9 @@ skip, both counted:
   `requires.dedicated-runner`, `requires.spices` (when `../turmeric-spices` is
   absent) and `requires.tsan` (when `TUR_TSAN` is not `1`) -- the same set
   `run.sh` honours -- applied by one helper (`marker_skip`) to **both** the
-  positive pass and the `errors/` diag pass.
+  positive pass and the `errors/` diag pass. `requires.jit` is skipped when
+  the `tur` under test carries no JIT (the probe is `TURI_HAS_JIT`): a call to
+  a C function through `extern-c` has no interpreter FFI to reach there.
 
 The `errors/` pass asserts `expected.diag`, or `run.sh`'s other substring
 file `expected.stderr`; an `errors/` fixture with neither is a **FAIL**

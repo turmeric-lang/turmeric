@@ -864,6 +864,7 @@ PASS-skip it under certain conditions:
 | `requires.spices` | the sibling `../turmeric-spices/` checkout is absent |
 | `requires.musttail` | the fixture compiler (`$CC`) does not honour `TUR_MUSTTAIL` -- probed once per run with the same gate the emitter writes; today only clang on x86-64/aarch64 passes it |
 | `requires.posix-apis` | `TUR_HOST_WINDOWS=1` (an MSYS2 `MSYSTEM`); the fixture's inline-C needs a POSIX API MinGW lacks -- `pipe()`, `fork()`, `getppid()`. Applies to negative fixtures too |
+| `requires.jit` | (`run-turi.sh` only) the `tur` under test carries no JIT, so `--interpret` has no FFI to call a C function through `extern-c` |
 
 `tests/run-turi.sh` honours the same six markers (`requires.compiled`,
 `requires.tur-only`, `requires.dedicated-runner`, `requires.spices`,

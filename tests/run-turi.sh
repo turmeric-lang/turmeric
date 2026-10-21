@@ -413,6 +413,8 @@ done <<< "$TURI_ERRORS_DENY"
 #   requires.spices           -- needs the sibling ../turmeric-spices checkout
 #   requires.tsan             -- TSan-only fixture
 #   requires.stress           -- nightly-only full-size twin (TUR_STRESS=1)
+#   requires.jit              -- needs the interpreter's FFI, which only a
+#                                TUR_JIT build carries (TURI_HAS_JIT, above)
 # Returns 0 (and has printed + recorded the skip) when the fixture is skipped.
 # ---------------------------------------------------------------------------
 record_result() {   # record_result <name> <kind>
@@ -427,6 +429,8 @@ marker_skip() {     # marker_skip <dir> <name>
         why="requires.spices; sibling checkout absent"
     elif [ -f "$dir/requires.tsan" ] && [ "${TUR_TSAN:-0}" != "1" ]; then why="requires.tsan"
     elif [ -f "$dir/requires.stress" ] && [ "${TUR_STRESS:-0}" != "1" ]; then why="requires.stress"
+    elif [ -f "$dir/requires.jit" ] && [ "$TURI_HAS_JIT" != "1" ]; then
+        why="requires.jit; this tur carries no JIT"
     fi
     [ -n "$why" ] || return 1
     printf 'SKIP %s (%s)\n' "$name" "$why"
