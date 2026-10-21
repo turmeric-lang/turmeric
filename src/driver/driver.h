@@ -175,9 +175,7 @@ void collect_spice_aux_c(const char *root, Buf *includes, Buf *sources);
 void resolve_project_include_dirs(const char *dir,
                                   const char ***out_dirs, int *out_n);
 
-/* == main.c ================================================================ */
-
-/* -- moving to driver/pipeline.c -- */
+/* == driver/pipeline.c ===================================================== */
 extern bool g_dump_kinds;
 extern bool g_audit_spans;
 extern int g_audit_span_holes;
@@ -205,6 +203,8 @@ int compile_to_implementation(const char *path, Buf *out_c, const char *module_n
                               Buf *out_manifest,
                               const ForcedAbiSpec *forced, uint32_t n_forced,
                               BorrowSpecInfo **out_borrow_specs, uint32_t *out_n_borrow_specs);
+
+/* == main.c ================================================================ */
 
 /* -- moving to driver/cc.c -- */
 extern int g_runtime_mode;

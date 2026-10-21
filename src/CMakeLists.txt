@@ -551,6 +551,7 @@ set(TUR_DRIVER_SOURCES
   driver/compile_link.c
   driver/jit.c
   driver/paths.c
+  driver/pipeline.c
   driver/spice.c
   driver/worker.c
 )
