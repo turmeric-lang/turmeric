@@ -1189,6 +1189,33 @@ else
     fail "build-project-loaded-definstance-reached-by-importer" "rc=$inst_rc out=$inst_out"
 fi
 
+# wasm-build-takes-native-archive-posture: a locatable runtime archive is a
+# NATIVE libturt_runtime.a, which emcc cannot link and is never given -- so a
+# `--target wasm` build must keep the full runtime replica in its C whatever
+# is locatable.  A stub emcc on PATH captures the C it is handed, so this
+# needs no Emscripten; any archive TUR_RUNTIME_LIB names triggers the probe.
+WASMDIR="$WORK/wasm"
+mkdir -p "$WASMDIR/bin" "$WASMDIR/lib"
+: > "$WASMDIR/lib/libturt_runtime.a"
+cat > "$WASMDIR/bin/emcc" <<'EOF'
+#!/usr/bin/env bash
+for a in "$@"; do case "$a" in *.c) cat "$a" >> "$(dirname "$0")/../seen.c";; esac; done
+exit 0
+EOF
+chmod +x "$WASMDIR/bin/emcc"
+printf '(defn main [] : int\n  (println 42)\n  0)\n' > "$WASMDIR/hello.tur"
+wasm_out=$(cd "$WASMDIR" && PATH="$WASMDIR/bin:$PATH" \
+           TUR_RUNTIME_LIB="$WASMDIR/lib/libturt_runtime.a" \
+           TUR_RCGC_FROM_ARCHIVE=1 \
+           "$TUR" build --target wasm hello.tur -o hello.js 2>&1)
+wasm_rc=$?
+if [ $wasm_rc -eq 0 ] && [ -s "$WASMDIR/seen.c" ] &&
+   ! grep -q 'definitions live in the runtime archive' "$WASMDIR/seen.c"; then
+    pass "build-wasm-keeps-runtime-replica"
+else
+    fail "build-wasm-keeps-runtime-replica" "rc=$wasm_rc out=$wasm_out"
+fi
+
 echo
 echo "summary: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

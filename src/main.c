@@ -946,6 +946,10 @@ static bool jit_try_split_preamble(Buf *csrc, Buf *out);
 /* True while emitting C that `tur` itself will go on to compile and link. */
 static bool g_emit_for_link = false;
 
+/* True while emitting C for `tur build --target wasm`.  emcc links that, and
+ * no native runtime archive can go on its link line. */
+static bool g_emit_for_wasm = false;
+
 /* J2: when non-NULL, compile_to_c also appends the exports manifest of the
  * compiled program here (set only by the REPL's in-process spice build). */
 static Buf *g_manifest_sink = NULL;
@@ -1076,6 +1080,10 @@ static void resolve_rcgc_from_archive(void) {
 
     if (opt && strcmp(opt, "0") == 0)     { emit_set_rcgc_from_archive(false); return; }
     if (g_runtime_mode == TUR_RT_SOURCE)  { emit_set_rcgc_from_archive(false); return; }
+    /* wasm-build-takes-native-archive-posture: a locatable archive is a
+     * NATIVE libturt_runtime.a, which emcc cannot link and is never given, so
+     * a wasm build keeps the replica -- TUR_RCGC_FROM_ARCHIVE=1 included. */
+    if (g_emit_for_wasm)                  { emit_set_rcgc_from_archive(false); return; }
     if (!g_emit_for_link && !forced_on)   { emit_set_rcgc_from_archive(false); return; }
 
     char libdir[4096], libname[128];
@@ -4402,6 +4410,7 @@ static int cmd_build_once(const char *input, const char *out_path,
     /* DEDUP-4b: `tur` links this output, so the rc<T>/GC runtime may come
      * from the archive rather than being replicated into the preamble. */
     g_emit_for_link = true;
+    g_emit_for_wasm = target && strcmp(target, "wasm") == 0;
     Buf csrc;
     buf_init(&csrc);
     /* used-attr-whole-program: this single-file/whole-program path inlines only
@@ -4431,6 +4440,7 @@ static int cmd_build_once(const char *input, const char *out_path,
     if (try_split) { g_split_lib_sink = &split_lib; g_split_imp_sink = &split_imp; }
     int rc = compile_to_c(input, &csrc, include_dirs, n_include_dirs,
                           reader_macro_paths, n_reader_macro_paths);
+    g_emit_for_wasm = false;
     g_split_lib_sink = NULL;
     g_split_imp_sink = NULL;
     if (n_used_mods > 0) used_modules_ctx_set(NULL);
