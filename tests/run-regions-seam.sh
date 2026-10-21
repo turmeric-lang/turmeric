@@ -29,6 +29,11 @@
 #      committed expected.stdout -- which is the DEFAULT-ON expectation, so
 #      this is also the output-equality assertion the pre-flip harness made,
 #      with the arms swapped.
+#   3. The runtime from SOURCE with regions OFF (`--runtime=source`, no
+#      archive): hamt.c is host runtime and calls the region note directly,
+#      but the program pastes no region runtime on this arm, so it failed to
+#      link (regions-off-source-runtime-link-failure).  Every other check here
+#      links the archive, which carries region.o, and could not see it.
 #
 # `region-scope-adt-result`, `-shapes`, `-vec-scalar`, `-nontail-cps` and
 # `region-shutdown-order` are deliberately NOT listed: they are hook-driven
@@ -155,6 +160,22 @@ for fx in $FIXTURES; do
     fi
     pass "$fx"
 done
+
+# --- 3. Regions OFF with the runtime compiled from source. -------------------
+src_fx="hamt-basic"
+src_dir="tests/fixtures/$src_fx"
+if TUR_REGIONS=0 $TIMEOUT "$TUR" build --runtime=source "$src_dir/input.tur" \
+        -o "$WORKDIR/src-off" >/dev/null 2>"$WORKDIR/err"; then
+    out=$($TIMEOUT "$WORKDIR/src-off" 2>/dev/null)
+    if [ "$out" = "$(cat "$src_dir/expected.stdout")" ]; then
+        pass "$src_fx (--runtime=source, regions off)"
+    else
+        fail "$src_fx (--runtime=source, regions off)" "output differs from expected.stdout"
+    fi
+else
+    fail "$src_fx (--runtime=source, regions off)" \
+        "did not build: $(grep -m1 -E 'error|undefined' "$WORKDIR/err")"
+fi
 
 echo
 echo "regions-seam summary: $PASS passed, $FAIL failed"
