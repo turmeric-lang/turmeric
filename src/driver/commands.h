@@ -48,12 +48,12 @@ int cmd_compile(const char *input, const char *out_obj,
 int cmd_link(const char *out, const char **inputs, int n_inputs,
              bool shared, const char *extra_link_flags);
 
-/* == main.c ================================================================ */
-
-/* -- moving to driver/cmd_run.c -- */
+/* == driver/cmd_run.c ====================================================== */
 int cmd_run(int argc, char **argv);
 int cmd_test(const char *dir);
 int cmd_check_dir(const char *dir);
+
+/* == main.c ================================================================ */
 
 /* -- moving to driver/jit.c -- */
 int cmd_jit(int argc, char **argv);

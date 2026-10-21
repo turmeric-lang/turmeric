@@ -547,6 +547,7 @@ set(TUR_DRIVER_SOURCES
   driver/cmd_eval.c
   driver/cmd_format.c
   driver/cmd_misc.c
+  driver/cmd_run.c
   driver/compile_link.c
   driver/worker.c
 )
