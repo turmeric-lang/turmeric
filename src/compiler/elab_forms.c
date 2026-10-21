@@ -994,6 +994,32 @@ Expr *elab_let(Elab *e, const Form *call) {
              * type-level operations (send/recv/offer/choose-*) already emit their
              * own diagnostics before returning. */
             uint32_t n_elems = vec_pat->as.list.len;
+            /* A session pair has exactly two endpoints and a recv pair a value
+             * and an endpoint; a make-protocol pair has one endpoint per role.
+             * Any other pattern length used to bind the surplus names as ints
+             * or drop the missing roles, and the only diagnostic was TUR-E0100
+             * for the endpoints that were named. */
+            if (init_v->type.kind == TY_SESSION_PAIR ||
+                init_v->type.kind == TY_SESSION_RECV_PAIR) {
+                Type *fst_t = init_v->type.as.session_.fst;
+                bool role_pair = init_v->type.kind == TY_SESSION_PAIR &&
+                                 fst_t && fst_t->kind == TY_ROLE;
+                uint32_t want = role_pair
+                    ? (uint32_t)fst_t->as.role_.global_type->as.global_.n_roles
+                    : 2;
+                if (n_elems != want) {
+                    const char *what =
+                        role_pair ? "make-protocol gives one endpoint per role"
+                        : init_v->type.kind == TY_SESSION_PAIR
+                            ? "make-session gives two endpoints"
+                            : "recv gives the value and the advanced endpoint";
+                    diag_emit_with_code(DIAG_ERROR, vec_span, TUR_E0002_ARITY_MISMATCH,
+                                        "%s: the pattern binds %u name%s, expected %u",
+                                        what, (unsigned)n_elems,
+                                        n_elems == 1 ? "" : "s", (unsigned)want);
+                    rc = -1; break;
+                }
+            }
             /* SS2: For session pair types we track the first binding so vi=1 can
              * reference vi=0's C name via __TUR_CAP_0__. */
             uint32_t first_bind_idx = n_binds;

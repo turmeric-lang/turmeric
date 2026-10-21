@@ -1,0 +1,11 @@
+;; session-forms-gaps 1: the value a `send` passes must be the protocol's
+;; message type.  A float on a (Send int Close) step was value-cast to 7
+;; compiled and passed through as 7.25 interpreted; now it is TUR-E0212.
+(load "stdlib/session.tur")
+(defn main [] : int
+  (let [[s r] (make-session (Send int Close))]
+    (let [t (session-spawn (fn [] (let [[n r] (recv r)] (println n) (close r))))]
+      (let [s (send s 7.25)]
+        (close s)
+        (session-join t))))
+  0)

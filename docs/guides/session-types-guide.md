@@ -89,12 +89,12 @@ let [[v b] recv(b)]  ; v = 42, b advances from Recv<int,Close> to Close
 
 **close** -- consume the channel after the protocol ends (type `Close`).
 
-> **Payload types: use `int` or `bool` for now.** The compiled runtime carries
-> every message as an `int64_t`. A `float` payload is **silently truncated**
-> (`7.25` arrives as `7`); a `cstr` or a delegated endpoint fails to build on
-> macOS; a by-value struct fails to build everywhere. All four type-check, and
-> all four are correct under `tur --interpret`. See
-> [session-payloads-are-int64-only](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/session-payloads-are-int64-only.md).
+The value a `send` passes must have the type the protocol names for that
+message: `(send a 7.25)` on `(Send int Close)` is `TUR-E0212`. Which payload
+types can travel at all is under [Payload types](#payload-types) below.
+
+A `[...]` pattern on `make-session` or `recv` binds exactly two names, and one
+on `make-protocol` one name per role; any other count is `TUR-E0002`.
 
 ### Choice: choose-left, choose-right, offer
 

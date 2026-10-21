@@ -2526,6 +2526,12 @@ SessPayloadClass session_payload_class(Type t);
 /* Emit TUR-E0212 naming `op` and the payload type when the class is
  * SESS_PAY_UNSUPPORTED; returns false in that case. */
 bool session_payload_supported(Elab *e, Type t, Span span, const char *op);
+/* elab_effects.c: would storing a `got` value into a one-word slot declared
+ * `want` be rejected by an ordinary call?  The `perform` argument rule (exact
+ * primitives, no scalar into a pointer, nominal aggregates; silent wherever a
+ * type variable or `any` leaves the answer to inference), shared with `send`. */
+bool elab_word_slot_mismatch(const Type *want, const Type *got,
+                             bool *scalar_into_pointer);
 /* Arena-allocated C expression converting `inner` (a C expression of the
  * payload's C type) to the int64 word, and back from a word to the payload
  * type.  `inner` need not be NUL-terminated: pass its length. */
