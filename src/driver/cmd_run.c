@@ -22,6 +22,73 @@ static int decode_exit_status(int status) {
     return 1;
 }
 
+/* engine-selection-plan E2/E3: delegate a resolved non-cc engine.
+ * The subcommand arms keep their existing bodies (`cmd_jit` / `cmd_eval_inc`);
+ * this adapts `tur run`'s normalized "entry + includes + program args"
+ * request to each.  Unsatisfiable configurations are HARD errors -- a
+ * project that declares an engine has declared a semantic requirement,
+ * and quietly running a different one is the worst available outcome
+ * (the JIT's own runtime TUR-W0070 cc fallback is unchanged: that one is
+ * a per-program capability miss with a warning attached, not a
+ * misconfiguration). */
+static int run_delegate_engine(const char *engine, const char *entry,
+                               char **user_inc, int n_user_inc,
+                               int argc, char **argv,
+                               int passthrough_start) {
+    if (getenv("TUR_VERBOSE") && *getenv("TUR_VERBOSE"))
+        fprintf(stderr, "tur run: engine '%s' for %s\n", engine, entry);
+    if (strcmp(engine, "interp") == 0) {
+        /* The user's -I dirs are threaded through, and cmd_eval_h runs the
+         * same per-file spice walk-up `tur check` does (a dir already on the
+         * list is not added twice), so an interpreted spice resolves its
+         * intra- and cross-spice imports; program args after `--` become
+         * *args*.  This comment used to claim the walk-up happened while
+         * dropping -I -- neither was true (see
+         * docs/archive/interpret-takes-no-include-path-or-spice-discovery.md). */
+        char **prog_argv = (passthrough_start >= 0) ? argv + passthrough_start
+                                                    : NULL;
+        int    prog_argc = (passthrough_start >= 0) ? argc - passthrough_start
+                                                    : 0;
+        return cmd_eval_inc(entry, stderr_is_tty(), user_inc, n_user_inc,
+                            prog_argv, prog_argc, /*debug=*/false);
+    }
+    /* jit */
+#ifndef TUR_HAVE_JIT
+    (void)user_inc; (void)n_user_inc;
+    fprintf(stderr,
+            "tur run: engine \"jit\" is configured, but this build carries "
+            "no JIT engine\n"
+            "     reconfigure with -DTUR_JIT=ON (the default on 64-bit "
+            "x86-64/arm64),\n"
+            "     or override the engine: --engine cc / TUR_ENGINE=cc\n");
+    return 2;
+#else
+    /* Rebuild a `tur jit` argv: {argv0, "jit", -I <d>..., entry, --, rest}.
+     * cmd_jit performs its own manifest discovery (P0) and TUR-W0070 cc
+     * fallback. */
+    int cap = 3 + 2 * n_user_inc + 1 +
+              (passthrough_start >= 0 ? 1 + (argc - passthrough_start) : 0);
+    char **jargv = (char **)malloc((size_t)(cap + 1) * sizeof(char *));
+    if (!jargv) return 2;
+    int n = 0;
+    jargv[n++] = argv[0];
+    jargv[n++] = (char *)"jit";
+    for (int i = 0; i < n_user_inc; i++) {
+        jargv[n++] = (char *)"-I";
+        jargv[n++] = user_inc[i];
+    }
+    jargv[n++] = (char *)entry;
+    if (passthrough_start >= 0) {
+        jargv[n++] = (char *)"--";
+        for (int i = passthrough_start; i < argc; i++) jargv[n++] = argv[i];
+    }
+    jargv[n] = NULL;
+    int rc = cmd_jit(n, jargv);
+    free(jargv);
+    return rc;
+#endif
+}
+
 int cmd_run(int argc, char **argv) {
     /* tur run [-I <dir>...] [--release] [--offline] [<file>] [-- <args>...] */
     bool        release           = false;

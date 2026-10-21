@@ -270,10 +270,6 @@ void drv_obj_sibling_path(const char *obj, const char *suffix,
 /* == main.c ================================================================ */
 
 /* -- moving to driver/jit.c -- */
-int run_delegate_engine(const char *engine, const char *entry,
-                        char **user_inc, int n_user_inc,
-                        int argc, char **argv,
-                        int passthrough_start);
 #ifdef TUR_HAVE_JIT
 extern const TurSpiceJitHook g_repl_jit_hook;
 extern const TuriInlineCJitHook g_repl_inline_c_jit_hook;
