@@ -27,8 +27,9 @@
 > - [defdynamic-generic-adt-root-emitted-before-its-type](../archive/defdynamic-generic-adt-root-emitted-before-its-type.md)
 >   (resolved 2026-10-18): a `(Option T)` dynvar did not compile. It does now,
 >   and a bare `(None)` root needs no ascription.
-> - [defdynamic-refuses-payload-free-defdata](../reported/defdynamic-refuses-payload-free-defdata.md):
->   split out of the report above; keeps `*log-level*` off an enum ADT.
+> - [defdynamic-refuses-payload-free-defdata](../archive/defdynamic-refuses-payload-free-defdata.md)
+>   (resolved 2026-10-21): split out of the report above. A payload-free
+>   `defdata` is admitted now, so `*log-level*` can be an enum ADT.
 > - [time-capability-now-is-32-bit](../archive/time-capability-now-is-32-bit.md)
 >   (resolved 2026-10-18): filed while checking the old mock-time target. The
 >   Time slots take `self` now, so `Mock-Time` has no singleton.
@@ -82,15 +83,14 @@ is exactly what callers want from a log level.
   `Real-Logger` and `Simple-Logger`, so one `binding` quiets a whole subsystem;
   `Null-Logger` is unaffected. Write the answer into the module docstring.
 - **Type:** `*log-level*` is an `:int` with a 0-3 convention, which is the
-  stand-in CLAUDE.md forbids. An enum ADT would be the natural type, but a
-  dynvar cannot hold one today: measured on v0.65.5,
-  `(defdata LogLevel (Debug) (Info) (Warn) (Error))` is refused by `TUR-E0603`
-  as move-only, even with no payloads
-  ([defdynamic-refuses-payload-free-defdata](../reported/defdynamic-refuses-payload-free-defdata.md)).
-  What does work is `(defopaque LogLevel :int)`, with named values
-  (`log-level-debug` ... `log-level-error`) and a comparison helper. That is a
-  real type, and a `defopaque` dynvar compiles and conveys. Use it, and move to
-  the ADT if `TUR-E0603` comes to admit payload-free ADTs.
+  stand-in CLAUDE.md forbids. Make it the enum ADT,
+  `(defdata LogLevel (Debug) (Info) (Warn) (Error))`, with a rank helper for
+  the comparison. Until 2026-10-21 `TUR-E0603` refused it as move-only even
+  with no payloads, and this bullet recommended a `(defopaque LogLevel :int)`
+  instead; a payload-free `defdata` is admitted now
+  ([defdynamic-refuses-payload-free-defdata](../archive/defdynamic-refuses-payload-free-defdata.md),
+  pinned by the `defdynamic-payload-free-defdata` fixture, which is this
+  shape).
 - **Fibers:** once a binding changes behavior, the fiber report becomes
   observable. A `binding [*log-level* 0]` in one async handler leaks into the
   others on that thread. Say so in `log.tur`'s docstring until the report is

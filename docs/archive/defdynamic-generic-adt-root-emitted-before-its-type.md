@@ -115,4 +115,4 @@ Pinned by:
 The dynamic-vars guide now says which ADTs a dynvar can carry. The other
 question here, whether a payload-free `defdata` should be admitted past
 `TUR-E0603`, is still open. It moved to
-[defdynamic-refuses-payload-free-defdata](../reported/defdynamic-refuses-payload-free-defdata.md).
+[defdynamic-refuses-payload-free-defdata](defdynamic-refuses-payload-free-defdata.md) (since fixed).
