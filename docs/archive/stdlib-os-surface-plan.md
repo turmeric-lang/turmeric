@@ -1,8 +1,8 @@
 # stdlib OS surface -- the fs / io / process / time gaps a typical user hits
 
-> **Status: P0-P2 IMPLEMENTED 2026-10-04** (P3 open). Its three open questions
-> were answered by the author the same day; see section 7, and section 8 for
-> where the implementation departs from the text below. Written in response to "is the stdlib
+> **Status: IMPLEMENTED** -- P0-P2 on 2026-10-04, P3 on 2026-10-21. Its three
+> open questions were answered by the author the same day; see section 7, and
+> sections 8 and 9 for where the implementation departs from the text below. Written in response to "is the stdlib
 > missing fs, os, or posix-related functions that a typical user would expect
 > to see?" The answer was yes; this is the plan, ordered quick wins and pre-v1
 > work first.
@@ -275,7 +275,8 @@ read stdout and stderr concurrently (`poll`), not one then the other.
 
 ## 5. P3 -- POSIX breadth (post-v1)
 
-Ordered by expected demand. None is started before P0-P2 land.
+Ordered by expected demand. None is started before P0-P2 land. (All five
+landed 2026-10-21; see section 9.)
 
 1. **Symlinks and permissions.** `fs/lstat`, `fs/symlink?`, `fs/readlink`,
    `fs/symlink`, `fs/chmod` (taking a `Mode` value, not a raw octal int),
@@ -383,3 +384,82 @@ from the sections above, and why:
   (`scripts/run-shard.sh`). Swapping those local helpers for `fs/read-text`
   et al. is optional cleanup, and can only land after this branch merges
   (spices CI builds against turmeric `main`).
+
+## 9. Implementation notes (P3, 2026-10-21)
+
+Landed as one PR. Every new function has a full docstring and a fixture
+(`fs-symlink-perms`, `time-dates-iso8601`, `net-blocking-tcp`,
+`signal-handle-poll`, `os-misc-surface`), and each fixture passes compiled
+and under `tur jit`. The Windows branches were
+compile- and link-checked against the emitted C with `x86_64-w64-mingw32-gcc`;
+no Windows run-time test was possible from the Linux sandbox. Where the code
+departs from section 5, and why:
+
+- **P3.1 `Mode`** is a `defopaque` over the permission bits. Turmeric has no
+  octal literal, so it is built from its `ls` spelling (`mode/parse
+  "rw-r--r--"`, which also reads s/S/t/T) and adjusted with `mode/with` /
+  `mode/without` over two small ADTs (`PermClass`: `PermUser` / `PermGroup` /
+  `PermOther`; `Perm`: `PermRead` / `PermWrite` / `PermExec`). `mode/format`,
+  `mode/has?`, and `mode/of-bits` / `mode/bits` (interop) complete it.
+  `fs/chmod` takes a `Mode`, and `fs/stat-perms` answers one.
+- **P3.1 `StatInfo`** gained an atime slot (`fs/stat-atime`) and
+  `fs/stat-kind` (a `FileKind` ADT). Without that, what `fs/lstat` answers
+  could only be read through magic `st_mode` masks.
+- **P3.1 also delivers P2.2's promised symlink option**, as two functions
+  (`fs/walk-follow`, `fs/walk-fn-follow`) rather than an options value with a
+  single flag. A directory already on the path from root, compared by
+  (device, inode), is reported but not entered, so a link cycle ends. On
+  Windows `st_ino` is always 0, so there the identity is the volume serial
+  number plus the file index.
+- **P3.1 on Windows:** `fs/lstat` is `fs/stat` (no lstat), `fs/symlink?`
+  reads the reparse-point attribute, `fs/readlink` is `ENOSYS`, `fs/realpath`
+  resolves `.`/`..` but not links, `fs/symlink` without the privilege is
+  `EPERM`, and `fs/chmod` keeps only the owner-write bit. Each docstring says
+  so.
+- **P3.2 `DateTime`** is a `:copy` struct of eight ints. `offset` holds
+  minutes east of UTC, and `datetime->ms` is the inverse of both
+  `utc-parts` and `local-parts`. `format-iso8601` writes `.mmm` only when the
+  millis are not 0, and writes an expanded signed year outside 0-9999.
+  `parse-iso8601` also accepts a bare date (midnight UTC), a missing zone
+  (UTC), `+HHMM` / `+HH`, and any fraction length. It range-checks every
+  field, including the day against its month. `local-parts` calls `tzset`
+  each time, so a `TZ` set at run time takes effect. There is no weekday:
+  constructor names are global, and `Monday` ... `Sunday` would collide with
+  user code.
+- **P3.3 `Socket`** changed from a one-field struct to a linear `defopaque`,
+  so it rides a `(Result Socket IoError)` as one word. This is the same
+  change `FileHandle` got in P1, and nothing in either repo constructed a
+  `Socket`. `socket-close` is `^deprecated` in favour of `net/close`.
+  `net/tcp-listen` takes a host to bind, and `net/local-port` reports the
+  port picked for port 0. `net/shutdown-write` (half-close) was added so a
+  peer reading to end of stream can finish. Sockets are close-on-exec and
+  never raise SIGPIPE (`MSG_NOSIGNAL` / `SO_NOSIGPIPE`). A name that does not
+  resolve is `EHOSTUNREACH`. `io-error/connection-refused?` joins the
+  predicates.
+- **P3.4 lives in `process.tur`** (beside `Signal`), not a new module. Beyond
+  the plan's `signal/handle` / `signal/on-interrupt` it has
+  `signal/pending?` (peek), `signal/take!` (test and clear),
+  `signal/interrupted?`, `signal/ignore` and `signal/reset`. Deliveries
+  between polls coalesce. The handler is installed without `SA_RESTART`, so
+  a signal cuts a blocking `net/accept` / `net/recv` short with an
+  `io-error/interrupted?` error (new predicate), and the waiting loop can
+  look at the flag. `net/send` still retries `EINTR`, so a partial send is
+  never lost.
+- **P3.5 `os/*`** is a new `stdlib/os.tur` with opaque `Uid` / `Gid`
+  (`uid->int` / `gid->int`); on Windows `os/uid` / `os/gid` are `ENOSYS`.
+  `term/is-tty-fd?` takes an `Fd`, `file-sync` is fflush + fsync (`_commit`
+  on Windows), and `fs/touch` is utimensat, else create.
+- **Found on the way:** `env/set` / `env/unset` called `setenv` /
+  `unsetenv`, which MinGW lacks, so any Windows program using them failed to
+  link. They now have `_putenv_s` branches.
+- **Found on the way, under `tur jit`** (`signal-handle-poll` hung there).
+  First, the JIT compiles a function on its first call, and a signal
+  handler's first call is a delivery, so MIR-gen ran inside the handler.
+  `signal/handle` now calls its handler once, through a `volatile` pointer,
+  before installing it. Second, a process-directed signal went to one of
+  the two `tur` threads idle in `pthread_join` (the big-stack wait and the
+  JIT's entry-thread wait) instead of the program's thread. That also meant
+  a signal the program blocked for `reactor-add-signal`'s signalfd killed
+  `tur jit`. Both waits now block asynchronous signals
+  (`src/compiler/stack_guard.c`, `src/jit_engine.c`), pinned by
+  `tests/fixtures/reactor-signal-process-directed`. The JIT guide has both.

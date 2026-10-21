@@ -47,9 +47,10 @@
 ;;;   path -- NUL-terminated path cstr
 ;;;
 ;;; Returns:
-;;;   (Ok info) -- a StatInfo over a { size mtime mode } triple; inspect it
-;;;   with fs/stat-size, fs/stat-mtime, fs/stat-mode and release it with
-;;;   fs/stat-free -- or (Err e) when the path is inaccessible.
+;;;   (Ok info) -- a StatInfo; inspect it with fs/stat-size, fs/stat-mtime,
+;;;   fs/stat-atime, fs/stat-mode, fs/stat-perms and fs/stat-kind, and release
+;;;   it with fs/stat-free -- or (Err e) when the path is inaccessible.  A
+;;;   symlink is followed; fs/lstat describes the link itself.
 ;;;
 ;;; Example:
 ;;;   (match (fs/stat "/etc/hosts")
@@ -66,11 +67,13 @@
   #include <errno.h>
   struct stat st;
   if (stat(path, &st) != 0) return tur_err_int(errno);
-  int64_t *info = malloc(3 * sizeof(int64_t));
+  /* { size mtime mode atime } -- fs/lstat fills the same layout */
+  int64_t *info = malloc(4 * sizeof(int64_t));
   if (!info) return tur_err_int(ENOMEM);
   info[0] = (int64_t)st.st_size;
   info[1] = (int64_t)st.st_mtime;
   info[2] = (int64_t)st.st_mode;
+  info[3] = (int64_t)st.st_atime;
   return tur_ok_ptr(info);
   ```)
 ;;; fs/stat-free -- free the stat result returned by fs/stat.
@@ -138,6 +141,240 @@
   ```c
   return ((int64_t*)(intptr_t)s)[2];
   ```)
+;;; fs/stat-atime -- extract the last-access time from a stat result.
+;;;
+;;; Parameters:
+;;;   s -- a StatInfo from fs/stat or fs/lstat
+;;;
+;;; Returns:
+;;;   Last access time as a Unix timestamp in seconds (:int).  Many systems
+;;;   mount with relatime or noatime, so it can lag behind the last read.
+;;;
+;;; Example:
+;;;   (fs/stat-atime info)  ; => 1747123456
+;;;
+;;; Since: stdlib-os-surface P3
+(defn fs/stat-atime [s : StatInfo] : int
+  ```c
+  return ((int64_t*)(intptr_t)s)[3];
+  ```)
+;; ============================================================================
+;; stdlib-os-surface-plan P3.1: permission bits as a Mode value
+;; ============================================================================
+;;; Mode -- the permission bits of a file (rwx for user / group / other, plus
+;;; setuid, setgid and sticky).
+;;;
+;;; A Mode, not a raw octal int, so fs/chmod's signature says what it takes and
+;;; a byte count cannot be passed for one.  Build one with mode/parse
+;;; ("rw-r--r--"), adjust it with mode/with / mode/without, read it with
+;;; mode/has? or mode/format.  mode/of-bits and mode/bits convert to and from
+;;; the st_mode integer for interop.
+;;;
+;;; Since: stdlib-os-surface P3
+(defopaque Mode :int)
+;;; PermClass -- whose permission a Mode bit grants: the owning user, the
+;;; owning group, or everyone else.
+;;;
+;;; Since: stdlib-os-surface P3
+(defdata PermClass :copy (PermUser) (PermGroup) (PermOther))
+;;; Perm -- one permission: read, write or execute (search, on a directory).
+;;;
+;;; Since: stdlib-os-surface P3
+(defdata Perm :copy (PermRead) (PermWrite) (PermExec))
+;;; mode/of-bits -- a Mode from st_mode-style permission bits.
+;;;
+;;; Parameters:
+;;;   bits -- permission bits; everything above the low 12 (the file type in a
+;;;           full st_mode) is dropped
+;;;
+;;; Returns:
+;;;   The Mode.
+;;;
+;;; Example:
+;;;   (mode/format (mode/of-bits 420))  ; => "rw-r--r--" (420 is octal 644)
+;;;
+;;; Since: stdlib-os-surface P3
+(defn mode/of-bits [bits : int] : Mode (:: (bit-and bits 4095) :Mode))
+;;; mode/bits -- the permission bits of a Mode, as an int (octal 7777 at most).
+;;;
+;;; Parameters:
+;;;   m -- a Mode
+;;;
+;;; Returns:
+;;;   The bits, for interop with C APIs that take a mode_t.
+;;;
+;;; Example:
+;;;   (mode/bits (mode/of-bits 493))  ; => 493 (octal 755)
+;;;
+;;; Since: stdlib-os-surface P3
+(defn mode/bits [m : Mode] : int (:: m :int))
+;;; mode/bit -- the single st_mode bit for who + perm (internal).
+(defn mode/bit [who : PermClass p : Perm] : int
+  (bit-shl (match p (PermRead) 4 (PermWrite) 2 (PermExec) 1)
+           (match who (PermUser) 6 (PermGroup) 3 (PermOther) 0)))
+;;; mode/has? -- does a Mode grant a permission to a class?
+;;;
+;;; Parameters:
+;;;   m   -- a Mode
+;;;   who -- PermUser, PermGroup or PermOther
+;;;   p   -- PermRead, PermWrite or PermExec
+;;;
+;;; Returns:
+;;;   true when the bit is set.
+;;;
+;;; Example:
+;;;   (mode/has? (mode/of-bits 420) (PermUser) (PermWrite))  ; => true
+;;;
+;;; Since: stdlib-os-surface P3
+(defn mode/has? [m : Mode who : PermClass p : Perm] : bool
+  (not (= (bit-and (mode/bits m) (mode/bit who p)) 0)))
+;;; mode/with -- a Mode with one more permission granted (chmod who+p).
+;;;
+;;; Parameters:
+;;;   m   -- the starting Mode
+;;;   who -- PermUser, PermGroup or PermOther
+;;;   p   -- PermRead, PermWrite or PermExec
+;;;
+;;; Returns:
+;;;   m with the bit set.
+;;;
+;;; Example:
+;;;   (mode/format (mode/with (mode/of-bits 420) (PermUser) (PermExec)))  ; => "rwxr--r--"
+;;;
+;;; Since: stdlib-os-surface P3
+(defn mode/with [m : Mode who : PermClass p : Perm] : Mode
+  (mode/of-bits (bit-or (mode/bits m) (mode/bit who p))))
+;;; mode/without -- a Mode with one permission removed (chmod who-p).
+;;;
+;;; Parameters:
+;;;   m   -- the starting Mode
+;;;   who -- PermUser, PermGroup or PermOther
+;;;   p   -- PermRead, PermWrite or PermExec
+;;;
+;;; Returns:
+;;;   m with the bit cleared.
+;;;
+;;; Example:
+;;;   (mode/format (mode/without (mode/of-bits 420) (PermOther) (PermRead)))  ; => "rw-r-----"
+;;;
+;;; Since: stdlib-os-surface P3
+(defn mode/without [m : Mode who : PermClass p : Perm] : Mode
+  (mode/of-bits (bit-and (mode/bits m) (bit-xor 4095 (mode/bit who p)))))
+;;; mode/parse -- a Mode from its ls(1) spelling, e.g. "rwxr-xr-x".
+;;;
+;;; Nine characters, rwx for user, group and other, '-' for an unset bit.  The
+;;; execute slots also take ls's s / S (setuid, setgid: with and without
+;;; execute) and t / T (sticky).
+;;;
+;;; Parameters:
+;;;   s -- the nine-character permission string
+;;;
+;;; Returns:
+;;;   (Some mode), or None when s is not exactly that shape.
+;;;
+;;; Example:
+;;;   (mode/parse "rw-r--r--")  ; => (Some mode) with bits 420 (octal 644)
+;;;
+;;; Since: stdlib-os-surface P3
+(defn mode/parse [s : cstr] : (Option Mode)
+  ```c
+  if (!s || strlen(s) != 9) return tur_none();
+  int64_t bits = 0;
+  for (int cls = 0; cls < 3; cls++) {
+    const char *t = s + cls * 3;
+    int shift = 6 - cls * 3;
+    if (t[0] == 'r') bits |= 4 << shift; else if (t[0] != '-') return tur_none();
+    if (t[1] == 'w') bits |= 2 << shift; else if (t[1] != '-') return tur_none();
+    /* the special bit this class's execute slot can carry: setuid, setgid, sticky */
+    char lo = cls == 2 ? 't' : 's', up = cls == 2 ? 'T' : 'S';
+    int special = 04000 >> cls;
+    if (t[2] == 'x') bits |= 1 << shift;
+    else if (t[2] == lo) bits |= (1 << shift) | special;
+    else if (t[2] == up) bits |= special;
+    else if (t[2] != '-') return tur_none();
+  }
+  return tur_some_int(bits);
+  ```)
+;;; mode/format -- the ls(1) spelling of a Mode, e.g. "rwxr-xr-x".
+;;;
+;;; Parameters:
+;;;   m -- a Mode
+;;;
+;;; Returns:
+;;;   A fresh nine-character heap cstr the caller owns (release with free).
+;;;   Setuid / setgid / sticky show as s / S / t / T, as ls prints them.
+;;;
+;;; Example:
+;;;   (mode/format (mode/of-bits 493))  ; => "rwxr-xr-x"
+;;;
+;;; Since: stdlib-os-surface P3
+(defn mode/format [m : Mode] : cstr
+  ```c
+  char *out = (char *)malloc(10);
+  if (!out) return NULL;
+  for (int cls = 0; cls < 3; cls++) {
+    int shift = 6 - cls * 3;
+    char *t = out + cls * 3;
+    int special = (int)(m & (04000 >> cls));
+    int x = (int)(m & (1 << shift));
+    t[0] = (m & (4 << shift)) ? 'r' : '-';
+    t[1] = (m & (2 << shift)) ? 'w' : '-';
+    if (special) t[2] = cls == 2 ? (x ? 't' : 'T') : (x ? 's' : 'S');
+    else t[2] = x ? 'x' : '-';
+  }
+  out[9] = '\0';
+  return out;
+  ```)
+;;; fs/stat-perms -- the permission bits of a stat result, as a Mode.
+;;;
+;;; Parameters:
+;;;   s -- a StatInfo from fs/stat or fs/lstat
+;;;
+;;; Returns:
+;;;   The Mode (the file-type bits of st_mode are dropped).
+;;;
+;;; Example:
+;;;   (mode/format (fs/stat-perms info))  ; => "rw-r--r--"
+;;;
+;;; Since: stdlib-os-surface P3
+(defn fs/stat-perms [s : StatInfo] : Mode (mode/of-bits (fs/stat-mode s)))
+;;; FileKind -- what a stat result describes.
+;;;
+;;; KindSymlink only ever comes from fs/lstat: fs/stat follows the link.
+;;; KindOther covers devices, FIFOs and sockets.
+;;;
+;;; Since: stdlib-os-surface P3
+(defdata FileKind :copy (KindFile) (KindDir) (KindSymlink) (KindOther))
+;;; fs/stat-kind-code -- 0 file, 1 dir, 2 symlink, 3 other (internal).
+(defn fs/stat-kind-code [s : StatInfo] : int
+  ```c
+  #include <sys/stat.h>
+  mode_t m = (mode_t)((int64_t*)(intptr_t)s)[2];
+  if (S_ISREG(m)) return 0;
+  if (S_ISDIR(m)) return 1;
+#ifdef S_ISLNK
+  if (S_ISLNK(m)) return 2;
+#endif
+  return 3;
+  ```)
+;;; fs/stat-kind -- whether a stat result is a file, directory, symlink or other.
+;;;
+;;; Parameters:
+;;;   s -- a StatInfo from fs/stat or fs/lstat
+;;;
+;;; Returns:
+;;;   KindFile, KindDir, KindSymlink (from fs/lstat only) or KindOther.
+;;;
+;;; Example:
+;;;   (match (fs/stat-kind info) (KindDir) (println "dir") _ (println "not a dir"))
+;;;
+;;; Since: stdlib-os-surface P3
+(defn fs/stat-kind [s : StatInfo] : FileKind
+  (let [c (fs/stat-kind-code s)]
+    (cond (= c 0) (KindFile)
+          (= c 1) (KindDir)
+          (= c 2) (KindSymlink)
+          :else   (KindOther))))
 ;;; fs/exists? -- test whether a path exists.
 ;;;
 ;;; Parameters:
@@ -999,3 +1236,406 @@
       (Ok out)
       (Err e)
       (do (fs/paths-free out) (Err e)))))
+;; ============================================================================
+;; stdlib-os-surface-plan P3.1: symlinks and permissions
+;; ============================================================================
+;;; fs/lstat -- file metadata for a path, without following a final symlink.
+;;;
+;;; The same StatInfo as fs/stat, except that when path is a symlink it
+;;; describes the link itself: fs/stat-kind answers KindSymlink and
+;;; fs/stat-size is the length of the target path.  Windows has no lstat;
+;;; there this is fs/stat (use fs/symlink? to ask about a link).
+;;;
+;;; Parameters:
+;;;   path -- NUL-terminated path cstr
+;;;
+;;; Returns:
+;;;   (Ok info) -- release it with fs/stat-free -- or (Err e).
+;;;
+;;; Example:
+;;;   (match (fs/lstat "/tmp/link")
+;;;     (Ok s)  (do (println (fs/stat-size s)) (fs/stat-free s))
+;;;     (Err e) (println (io-error/message e)))
+;;;
+;;; Since: stdlib-os-surface P3
+(defn fs/lstat [path : cstr]
+  #fx{FS}
+  : (Result StatInfo IoError)
+  ```c
+  #include <sys/stat.h>
+  #include <errno.h>
+  struct stat st;
+#ifdef _WIN32
+  if (stat(path, &st) != 0) return tur_err_int(errno);
+#else
+  if (lstat(path, &st) != 0) return tur_err_int(errno);
+#endif
+  int64_t *info = malloc(4 * sizeof(int64_t));
+  if (!info) return tur_err_int(ENOMEM);
+  info[0] = (int64_t)st.st_size;
+  info[1] = (int64_t)st.st_mtime;
+  info[2] = (int64_t)st.st_mode;
+  info[3] = (int64_t)st.st_atime;
+  return tur_ok_ptr(info);
+  ```)
+;;; fs/symlink? -- test whether a path is a symbolic link.
+;;;
+;;; Does not follow the link, so a dangling link is still a symlink.
+;;;
+;;; Parameters:
+;;;   path -- NUL-terminated path cstr
+;;;
+;;; Returns:
+;;;   true if path is a symlink (on Windows: a reparse point -- a symlink or a
+;;;   junction), false otherwise, including when path does not exist.
+;;;
+;;; Example:
+;;;   (fs/symlink? "/tmp/link")  ; => true
+;;;
+;;; Since: stdlib-os-surface P3
+(defn fs/symlink? [path : cstr]
+  #fx{FS}
+  : bool
+  ```c
+  #include <sys/stat.h>
+#ifdef _WIN32
+  DWORD a = GetFileAttributesA(path);
+  return a != INVALID_FILE_ATTRIBUTES && (a & FILE_ATTRIBUTE_REPARSE_POINT) != 0;
+#else
+  struct stat st;
+  if (lstat(path, &st) != 0) return false;
+  return S_ISLNK(st.st_mode);
+#endif
+  ```)
+;;; fs/readlink -- the target a symbolic link points at.
+;;;
+;;; One level only, exactly as stored in the link (a relative target stays
+;;; relative); fs/realpath resolves the whole chain.
+;;;
+;;; Parameters:
+;;;   path -- the symlink
+;;;
+;;; Returns:
+;;;   (Ok target) -- a fresh heap cstr the caller owns (release with free) --
+;;;   or (Err e): EINVAL when path is not a symlink.  ENOSYS on Windows.
+;;;
+;;; Example:
+;;;   (match (fs/readlink "/tmp/link")
+;;;     (Ok t)  (println t)
+;;;     (Err e) (println (io-error/message e)))
+;;;
+;;; Since: stdlib-os-surface P3
+(defn fs/readlink [path : cstr]
+  #fx{FS}
+  : (Result cstr IoError)
+  ```c
+  #include <errno.h>
+#ifdef _WIN32
+  (void)path;
+  return tur_err_int(ENOSYS);
+#else
+  size_t cap = 256;
+  for (;;) {
+    char *buf = (char *)malloc(cap);
+    if (!buf) return tur_err_int(ENOMEM);
+    ssize_t n = readlink(path, buf, cap);
+    if (n < 0) { int e = errno; free(buf); return tur_err_int(e); }
+    /* readlink does not NUL-terminate, and a full buffer may be truncated */
+    if ((size_t)n < cap) { buf[n] = '\0'; return tur_ok_ptr(buf); }
+    free(buf);
+    cap *= 2;
+  }
+#endif
+  ```)
+;;; fs/symlink -- create a symbolic link at link-path pointing at target.
+;;;
+;;; target is stored as given and need not exist; a relative target is
+;;; resolved against the link's directory when the link is followed.
+;;;
+;;; Parameters:
+;;;   target    -- what the link points at
+;;;   link-path -- where to create the link
+;;;
+;;; Returns:
+;;;   (Ok nil), or (Err e) -- EEXIST when link-path is taken.  On Windows a
+;;;   symlink needs Developer Mode or administrator rights; without them this
+;;;   is an EPERM error rather than a copy or a junction.
+;;;
+;;; Example:
+;;;   (fs/symlink "data.txt" "/tmp/proj/latest")  ; => (Ok nil)
+;;;
+;;; Since: stdlib-os-surface P3
+(defn fs/symlink [target : cstr link-path : cstr]
+  #fx{FS}
+  : (Result nil IoError)
+  ```c
+  #include <errno.h>
+#ifdef _WIN32
+  /* 0x1 SYMBOLIC_LINK_FLAG_DIRECTORY, 0x2 ..._ALLOW_UNPRIVILEGED_CREATE (the
+   * Developer Mode path; older Windows rejects the flag with
+   * ERROR_INVALID_PARAMETER, so retry once without it). */
+  DWORD a = GetFileAttributesA(target);
+  DWORD flags = (a != INVALID_FILE_ATTRIBUTES && (a & FILE_ATTRIBUTE_DIRECTORY)) ? 0x1 : 0x0;
+  if (CreateSymbolicLinkA(link_path, target, flags | 0x2)) return tur_ok_int(0);
+  DWORD w = GetLastError();
+  if (w == ERROR_INVALID_PARAMETER && CreateSymbolicLinkA(link_path, target, flags))
+    return tur_ok_int(0);
+  if (w == ERROR_INVALID_PARAMETER) w = GetLastError();
+  if (w == ERROR_ALREADY_EXISTS || w == ERROR_FILE_EXISTS) return tur_err_int(EEXIST);
+  if (w == ERROR_PATH_NOT_FOUND) return tur_err_int(ENOENT);
+  return tur_err_int(EPERM);
+#else
+  return symlink(target, link_path) == 0 ? tur_ok_int(0) : tur_err_int(errno);
+#endif
+  ```)
+;;; fs/chmod -- set a file's permission bits.
+;;;
+;;; Parameters:
+;;;   path -- the file or directory (a symlink is followed)
+;;;   mode -- the new permissions, e.g. (mode/with (fs/stat-perms s) (PermUser) (PermExec))
+;;;
+;;; Returns:
+;;;   (Ok nil), or (Err e) -- EPERM when the caller does not own the file.
+;;;   Windows keeps only one bit: without PermWrite for PermUser the file
+;;;   becomes read-only; the other bits are ignored there.
+;;;
+;;; Example:
+;;;   (match (mode/parse "rwxr-xr-x")
+;;;     (Some m) (fs/chmod "/tmp/run.sh" m)
+;;;     (None)   (Err (io-error/of-code 22)))
+;;;
+;;; Since: stdlib-os-surface P3
+(defn fs/chmod [path : cstr mode : Mode]
+  #fx{FS}
+  : (Result nil IoError)
+  ```c
+  #include <sys/stat.h>
+  #include <errno.h>
+#ifdef _WIN32
+  int wmode = _S_IREAD | ((mode & 0200) ? _S_IWRITE : 0);
+  return _chmod(path, wmode) == 0 ? tur_ok_int(0) : tur_err_int(errno);
+#else
+  return chmod(path, (mode_t)mode) == 0 ? tur_ok_int(0) : tur_err_int(errno);
+#endif
+  ```)
+;;; fs/realpath -- the absolute, canonical form of a path.
+;;;
+;;; Resolves ".", ".." and every symlink on the way; the path must exist.
+;;;
+;;; Parameters:
+;;;   path -- a relative or absolute path
+;;;
+;;; Returns:
+;;;   (Ok abs) -- a fresh heap cstr the caller owns (release with free) --
+;;;   or (Err e), e.g. not-found when a component is missing.  On Windows
+;;;   this is GetFullPathName: "." and ".." are resolved, symlinks are not.
+;;;
+;;; Example:
+;;;   (match (fs/realpath ".")
+;;;     (Ok p)  (println p)
+;;;     (Err e) (println (io-error/message e)))
+;;;
+;;; Since: stdlib-os-surface P3
+(defn fs/realpath [path : cstr]
+  #fx{FS}
+  : (Result cstr IoError)
+  ```c
+  #include <errno.h>
+  #include <stdlib.h>
+#ifdef _WIN32
+  if (GetFileAttributesA(path) == INVALID_FILE_ATTRIBUTES) return tur_err_int(ENOENT);
+  char *out = _fullpath(NULL, path, 0);
+  if (!out) return tur_err_int(errno ? errno : ENOMEM);
+  return tur_ok_ptr(out);
+#else
+  char *out = realpath(path, NULL);
+  if (!out) return tur_err_int(errno);
+  return tur_ok_ptr(out);
+#endif
+  ```)
+;;; fs/file-dev -- the volume a path lives on, for cycle checks (internal).
+;;
+;; With fs/file-ino it names a file uniquely.  -1 when the path cannot be
+;; opened.  stat's st_ino is always 0 on MinGW, so Windows asks the handle.
+(defn fs/file-dev [path : cstr]
+  #fx{FS}
+  : int
+  ```c
+  #include <sys/stat.h>
+#ifdef _WIN32
+  HANDLE h = CreateFileA(path, 0, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                         NULL, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, NULL);
+  if (h == INVALID_HANDLE_VALUE) return -1;
+  BY_HANDLE_FILE_INFORMATION fi;
+  BOOL ok = GetFileInformationByHandle(h, &fi);
+  CloseHandle(h);
+  return ok ? (int64_t)fi.dwVolumeSerialNumber : -1;
+#else
+  struct stat st;
+  if (stat(path, &st) != 0) return -1;
+  return (int64_t)st.st_dev;
+#endif
+  ```)
+;;; fs/file-ino -- the file's number on its volume, for cycle checks (internal).
+(defn fs/file-ino [path : cstr]
+  #fx{FS}
+  : int
+  ```c
+  #include <sys/stat.h>
+#ifdef _WIN32
+  HANDLE h = CreateFileA(path, 0, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                         NULL, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, NULL);
+  if (h == INVALID_HANDLE_VALUE) return -1;
+  BY_HANDLE_FILE_INFORMATION fi;
+  BOOL ok = GetFileInformationByHandle(h, &fi);
+  CloseHandle(h);
+  return ok ? (int64_t)(((uint64_t)fi.nFileIndexHigh << 32) | fi.nFileIndexLow) : -1;
+#else
+  struct stat st;
+  if (stat(path, &st) != 0) return -1;
+  return (int64_t)st.st_ino;
+#endif
+  ```)
+;;; fs/walk-on-path? -- is (dev, ino) one of the directories being walked (internal).
+;;
+;; anc holds the identities of root and every directory between it and the
+;; current one, as dev, ino pairs.
+(defn fs/walk-on-path? [anc : (Vec int) dev : int ino : int i : int] : bool
+  (cond (>= i (vec-len anc)) false
+        (and (= (vec-get anc i) dev) (= (vec-get anc (+ i 1)) ino)) true
+        :else (fs/walk-on-path? anc dev ino (+ i 2))))
+;;; fs/walk-follow-names -- fs/walk-names, following symlinks (internal).
+(defn fs/walk-follow-names [dir : cstr
+                            names : (Vec cstr)
+                            i : int
+                            f : (fn [cstr bool] nil)
+                            anc : (Vec int)]
+  #fx{FS}
+  : (Result nil IoError)
+  (if (>= i (vec-len names))
+    (io-error/ok-unit)
+    (let [full   (fs/path-join dir (vec-get names i))
+          is-dir (fs/dir? full)
+          dev    (fs/file-dev full)
+          ino    (fs/file-ino full)]
+      (f full is-dir)
+      ;; A directory already on the path from root is a link cycle: it is
+      ;; reported (above) but not entered again.
+      (let [r (if (and is-dir (not (fs/walk-on-path? anc dev ino 0)))
+                (match (fs/read-dir full)
+                  (Ok sub)
+                  (do (vec-push! anc dev)
+                      (vec-push! anc ino)
+                      (let [rr (fs/walk-follow-names full sub 0 f anc)]
+                        (vec-pop! anc)
+                        (vec-pop! anc)
+                        (fs/paths-free sub)
+                        rr))
+                  (Err e)
+                  (Err e))
+                (io-error/ok-unit))]
+        (fs/free-cstr full)
+        (match r (Ok _) (fs/walk-follow-names dir names (+ i 1) f anc) (Err e) (Err e))))))
+;;; fs/walk-fn-follow -- fs/walk-fn that descends into symlinked directories.
+;;;
+;;; The same visit order and callback as fs/walk-fn, but a symlink to a
+;;; directory is reported with is-dir? true and walked into.  A link that
+;;; leads back to a directory already on the path from root (a cycle) is
+;;; reported once and not entered, so the walk always ends; the same tree
+;;; reached through two different links is visited twice, as find -L does.
+;;;
+;;; Parameters:
+;;;   root -- the directory to walk
+;;;   f    -- (fn [path is-dir] nil), called once per entry
+;;;
+;;; Returns:
+;;;   (Ok nil), or (Err e) for the first directory that could not be read.
+;;;
+;;; Example:
+;;;   (fs/walk-fn-follow "/tmp/proj" (fn [p : cstr d : bool] : nil (println p)))
+;;;
+;;; Since: stdlib-os-surface P3
+(defn fs/walk-fn-follow [root : cstr f : (fn [cstr bool] nil)]
+  #fx{FS}
+  : (Result nil IoError)
+  (match (fs/read-dir root)
+    (Ok names)
+    (let [anc (vec-new)]
+      (vec-push! anc (fs/file-dev root))
+      (vec-push! anc (fs/file-ino root))
+      (let [r (fs/walk-follow-names root names 0 f anc)]
+        (fs/paths-free names)
+        (vec-free anc)
+        r))
+    (Err e)
+    (Err e)))
+;;; fs/walk-follow -- fs/walk that descends into symlinked directories.
+;;;
+;;; The vector form of fs/walk-fn-follow (same order and cycle rule).
+;;;
+;;; Parameters:
+;;;   root -- the directory to walk
+;;;
+;;; Returns:
+;;;   (Ok paths) -- a (Vec cstr) of fresh heap paths; release it with
+;;;   fs/paths-free -- or (Err e).
+;;;
+;;; Example:
+;;;   (match (fs/walk-follow "/tmp/proj")
+;;;     (Ok v)  (do (println (vec-len v)) (fs/paths-free v))
+;;;     (Err e) (println (io-error/message e)))
+;;;
+;;; Since: stdlib-os-surface P3
+(defn fs/walk-follow [root : cstr]
+  #fx{FS}
+  : (Result (Vec cstr) IoError)
+  (let [out (vec-new)]
+    (match (fs/walk-fn-follow root
+             (fn [p : cstr d : bool] : nil (vec-push! out (fs/dup-cstr p))))
+      (Ok _)
+      (Ok out)
+      (Err e)
+      (do (fs/paths-free out) (Err e)))))
+;; ============================================================================
+;; stdlib-os-surface-plan P3.5: fs/touch
+;; ============================================================================
+;;; fs/touch -- create a file if missing, else set its access and
+;;; modification times to now.
+;;;
+;;; Never truncates.  Works on a directory too (times only).
+;;;
+;;; Parameters:
+;;;   path -- the file to touch
+;;;
+;;; Returns:
+;;;   (Ok nil), or (Err e) -- not-found when the parent directory is missing.
+;;;
+;;; Example:
+;;;   (fs/touch "/tmp/stamp")  ; => (Ok nil)
+;;;
+;;; Since: stdlib-os-surface P3
+(defn fs/touch [path : cstr]
+  #fx{FS}
+  : (Result nil IoError)
+  ```c
+  #include <errno.h>
+  #include <fcntl.h>
+  #include <sys/stat.h>
+  #include <sys/utime.h>  /* tur:optional -- Windows only (_utime) */
+#ifdef _WIN32
+  if (_utime(path, NULL) == 0) return tur_ok_int(0);
+  if (errno != ENOENT) return tur_err_int(errno);
+  FILE *f = fopen(path, "ab");
+  if (!f) return tur_err_int(errno);
+  fclose(f);
+  return tur_ok_int(0);
+#else
+  if (utimensat(AT_FDCWD, path, NULL, 0) == 0) return tur_ok_int(0);
+  if (errno != ENOENT) return tur_err_int(errno);
+  /* missing: creating it stamps both times with now */
+  int fd = open(path, O_WRONLY | O_CREAT | O_CLOEXEC, 0666);
+  if (fd < 0) return tur_err_int(errno);
+  close(fd);
+  return tur_ok_int(0);
+#endif
+  ```)

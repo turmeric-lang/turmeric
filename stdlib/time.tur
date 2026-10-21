@@ -29,7 +29,13 @@
     now-ms
     monotonic-ns
     sleep-ms
-    get-cpu-time)
+    get-cpu-time
+    DateTime
+    utc-parts
+    local-parts
+    datetime->ms
+    format-iso8601
+    parse-iso8601)
   ;; File-scope C helpers for the Time-capability constructors below.  The
   ;; now/sleep implementations MUST live at file scope: a Time struct stores
   ;; their addresses and outlives the constructor call, so they cannot be
@@ -96,6 +102,67 @@
   }
   static void __tur_mock_time_sleep(void *self, int ms) {
       ((__tur_mock_cap *)self)->current_time += ms;
+  }
+
+  /* ---- Civil dates (stdlib-os-surface P3.2) ----
+   * Proleptic Gregorian calendar, no time-zone database: UTC is pure
+   * arithmetic, local time comes from localtime_r.  The two conversions are
+   * Howard Hinnant's days_from_civil / civil_from_days, exact over the whole
+   * int64 range a DateTime can describe. */
+  static int64_t __tur_floor_div(int64_t a, int64_t b) {
+      int64_t q = a / b;
+      if ((a % b != 0) && ((a < 0) != (b < 0))) q--;
+      return q;
+  }
+  /* Days since 1970-01-01 of year-month-day (month 1-12). */
+  static int64_t __tur_days_from_civil(int64_t y, int64_t m, int64_t d) {
+      y -= m <= 2;
+      int64_t era = (y >= 0 ? y : y - 399) / 400;
+      int64_t yoe = y - era * 400;
+      int64_t doy = (153 * (m + (m > 2 ? -3 : 9)) + 2) / 5 + d - 1;
+      int64_t doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+      return era * 146097 + doe - 719468;
+  }
+  static void __tur_civil_from_days(int64_t z, int64_t *y, int64_t *m, int64_t *d) {
+      z += 719468;
+      int64_t era = (z >= 0 ? z : z - 146096) / 146097;
+      int64_t doe = z - era * 146097;
+      int64_t yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+      int64_t doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+      int64_t mp = (5 * doy + 2) / 153;
+      *d = doy - (153 * mp + 2) / 5 + 1;
+      *m = mp < 10 ? mp + 3 : mp - 9;
+      *y = yoe + era * 400 + (*m <= 2);
+  }
+  /* The UTC fields of epoch milliseconds ms:
+   * out = { year month day hour minute second millis }. */
+  static void __tur_utc_fields(int64_t ms, int64_t out[7]) {
+      int64_t days = __tur_floor_div(ms, 86400000LL);
+      int64_t rem = ms - days * 86400000LL;
+      __tur_civil_from_days(days, &out[0], &out[1], &out[2]);
+      out[3] = rem / 3600000LL;
+      out[4] = rem / 60000LL % 60;
+      out[5] = rem / 1000LL % 60;
+      out[6] = rem % 1000LL;
+  }
+  static int __tur_is_leap(int64_t y) {
+      return (y % 4 == 0 && y % 100 != 0) || y % 400 == 0;
+  }
+  static int64_t __tur_days_in_month(int64_t y, int64_t m) {
+      static const int dim[12] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
+      return (m == 2 && __tur_is_leap(y)) ? 29 : dim[m - 1];
+  }
+  /* Parse between lo and hi decimal digits at *pp into *out; advance *pp.
+   * Answers the digit count, 0 when there were fewer than lo. */
+  static int __tur_parse_digits(const char **pp, int lo, int hi, int64_t *out) {
+      const char *p = *pp;
+      int64_t v = 0;
+      int n = 0;
+      while (n < hi && *p >= '0' && *p <= '9') { v = v * 10 + (*p - '0'); p++; n++; }
+      if (n < lo) return 0;
+      *pp = p;
+      *out = v;
+      return n;
   }
   ```
   ;;; Time -- opaque handle to a Time capability struct (now/sleep closures).
@@ -343,4 +410,262 @@
   (defn get-cpu-time [] : int
     ```c
     return __tur_cpu_clock_ms();
-    ```))
+    ```)
+  ;; ============================================================================
+  ;; stdlib-os-surface-plan P3.2: calendar dates
+  ;; ============================================================================
+  ;;; DateTime -- a calendar date and time of day, with its UTC offset.
+  ;;;
+  ;;; Fields:
+  ;;;   year   -- the full year, e.g. 2026 (proleptic Gregorian; may be <= 0)
+  ;;;   month  -- 1-12
+  ;;;   day    -- 1-31
+  ;;;   hour   -- 0-23
+  ;;;   minute -- 0-59
+  ;;;   second -- 0-59 (60 only when parsed from a leap-second timestamp)
+  ;;;   millis -- 0-999
+  ;;;   offset -- minutes east of UTC that the other fields are expressed in:
+  ;;;             0 from utc-parts, the zone's offset from local-parts
+  ;;;             (e.g. 120 for UTC+2, -300 for UTC-5)
+  ;;;
+  ;;; A plain :copy value: build one with (DateTime y mo d h mi s ms offset),
+  ;;; read a field with (.year dt).  datetime->ms turns it back into an
+  ;;; instant.
+  ;;;
+  ;;; Since: stdlib-os-surface P3
+  (defstruct DateTime :copy [year : int
+                             month : int
+                             day : int
+                             hour : int
+                             minute : int
+                             second : int
+                             millis : int
+                             offset : int])
+  ;;; utc-parts -- the UTC calendar fields of an instant.
+  ;;;
+  ;;; Pure arithmetic: no time-zone lookup.  Spelled time/utc-parts under a
+  ;;; plain (import time).
+  ;;;
+  ;;; Parameters:
+  ;;;   ms -- milliseconds since the Unix epoch, as now-ms answers them
+  ;;;         (negative for instants before 1970)
+  ;;;
+  ;;; Returns:
+  ;;;   A DateTime with offset 0.
+  ;;;
+  ;;; Example:
+  ;;;   (.year (time/utc-parts 0))  ; => 1970
+  ;;;
+  ;;; Since: stdlib-os-surface P3
+  (defn utc-parts [ms : int] : DateTime
+    ```c
+    int64_t f[7];
+    __tur_utc_fields(ms, f);
+    DateTime dt;
+    dt.year = f[0]; dt.month = f[1]; dt.day = f[2];
+    dt.hour = f[3]; dt.minute = f[4]; dt.second = f[5]; dt.millis = f[6];
+    dt.offset = 0;
+    return dt;
+    ```)
+  ;;; local-parts -- the local-time calendar fields of an instant.
+  ;;;
+  ;;; Uses the process's time zone (TZ, else the system's; re-read on every
+  ;;; call) through localtime_r -- localtime_s on Windows -- including
+  ;;; daylight saving in force at that instant.  When the platform cannot convert the instant
+  ;;; (Windows refuses times before 1970) the answer is utc-parts's.
+  ;;; Spelled time/local-parts under a plain (import time).
+  ;;;
+  ;;; Parameters:
+  ;;;   ms -- milliseconds since the Unix epoch
+  ;;;
+  ;;; Returns:
+  ;;;   A DateTime whose offset is the zone's offset from UTC at ms, in
+  ;;;   minutes east (so datetime->ms gives ms back).
+  ;;;
+  ;;; Example:
+  ;;;   (.offset (time/local-parts (time/now-ms)))  ; => 120 in UTC+2
+  ;;;
+  ;;; Since: stdlib-os-surface P3
+  (defn local-parts [ms : int]
+    #fx{IO}
+    : DateTime
+    ```c
+    int64_t f[7];
+    int64_t secs = __tur_floor_div(ms, 1000);
+    time_t t = (time_t)secs;
+    struct tm tm;
+    DateTime dt;
+    /* tzset first: localtime_r need not re-read TZ, so without it a zone set
+     * at run time (env/set "TZ" ...) would be ignored after the first call. */
+  #ifdef _WIN32
+    _tzset();
+    int ok = localtime_s(&tm, &t) == 0;
+  #else
+    tzset();
+    int ok = localtime_r(&t, &tm) != NULL;
+  #endif
+    if (!ok) {
+      __tur_utc_fields(ms, f);
+      dt.year = f[0]; dt.month = f[1]; dt.day = f[2];
+      dt.hour = f[3]; dt.minute = f[4]; dt.second = f[5]; dt.millis = f[6];
+      dt.offset = 0;
+      return dt;
+    }
+    dt.year = (int64_t)tm.tm_year + 1900;
+    dt.month = tm.tm_mon + 1;
+    dt.day = tm.tm_mday;
+    dt.hour = tm.tm_hour;
+    dt.minute = tm.tm_min;
+    dt.second = tm.tm_sec;
+    dt.millis = ms - secs * 1000;
+    /* The offset without tm_gmtoff (absent on Windows): the local fields read
+     * as if they were UTC, minus the instant itself. */
+    int64_t as_utc = __tur_days_from_civil(dt.year, dt.month, dt.day) * 86400
+                     + dt.hour * 3600 + dt.minute * 60 + dt.second;
+    dt.offset = __tur_floor_div(as_utc - secs, 60);
+    return dt;
+    ```)
+  ;;; days-from-civil -- days since 1970-01-01 of a calendar date (internal).
+  (defn days-from-civil [y : int m : int d : int] : int
+    ```c
+    return __tur_days_from_civil(y, m, d);
+    ```)
+  ;;; datetime->ms -- the instant a DateTime names, in epoch milliseconds.
+  ;;;
+  ;;; The inverse of utc-parts and local-parts: the fields are read in the
+  ;;; DateTime's own offset.  Out-of-range fields are not rejected; they
+  ;;; carry (minute 90 is an hour and a half).  Spelled time/datetime->ms
+  ;;; under a plain (import time).
+  ;;;
+  ;;; Parameters:
+  ;;;   dt -- the DateTime
+  ;;;
+  ;;; Returns:
+  ;;;   Milliseconds since the Unix epoch.
+  ;;;
+  ;;; Example:
+  ;;;   (time/datetime->ms (DateTime 1970 1 2 0 0 0 0 0))  ; => 86400000
+  ;;;
+  ;;; Since: stdlib-os-surface P3
+  (defn datetime->ms [dt : DateTime] : int
+    (+ (* (days-from-civil (.year dt) (.month dt) (.day dt)) 86400000)
+       (* (.hour dt) 3600000)
+       (* (- (.minute dt) (.offset dt)) 60000)
+       (* (.second dt) 1000)
+       (.millis dt)))
+  ;;; format-iso8601 -- an ISO 8601 / RFC 3339 timestamp for a DateTime.
+  ;;;
+  ;;; YYYY-MM-DDTHH:MM:SS, then .mmm when millis is not 0, then Z for offset 0
+  ;;; or +HH:MM / -HH:MM.  A year outside 0-9999 is written in the expanded
+  ;;; form, signed and at least six digits (+010000-01-01T...).
+  ;;; parse-iso8601 reads every string this writes.
+  ;;;
+  ;;; Parameters:
+  ;;;   dt -- the DateTime
+  ;;;
+  ;;; Returns:
+  ;;;   A fresh heap cstr the caller owns (release with free).
+  ;;;
+  ;;; Example:
+  ;;;   (time/format-iso8601 (time/utc-parts 1500))  ; => "1970-01-01T00:00:01.500Z"
+  ;;;
+  ;;; Since: stdlib-os-surface P3
+  (defn format-iso8601 [dt : DateTime] : cstr
+    ```c
+    char *out = (char *)malloc(80);
+    if (!out) return NULL;
+    int n;
+    if (dt.year >= 0 && dt.year <= 9999)
+      n = snprintf(out, 80, "%04lld", (long long)dt.year);
+    else
+      n = snprintf(out, 80, "%+07lld", (long long)dt.year);
+    n += snprintf(out + n, 80 - n, "-%02lld-%02lldT%02lld:%02lld:%02lld",
+                  (long long)dt.month, (long long)dt.day, (long long)dt.hour,
+                  (long long)dt.minute, (long long)dt.second);
+    if (dt.millis != 0) n += snprintf(out + n, 80 - n, ".%03lld", (long long)dt.millis);
+    if (dt.offset == 0) {
+      snprintf(out + n, 80 - n, "Z");
+    } else {
+      long long off = dt.offset < 0 ? -(long long)dt.offset : (long long)dt.offset;
+      snprintf(out + n, 80 - n, "%c%02lld:%02lld", dt.offset < 0 ? '-' : '+', off / 60, off % 60);
+    }
+    return out;
+    ```)
+  ;;; parse-iso8601-raw -- the parse, with month 0 for a rejected string (internal).
+  (defn parse-iso8601-raw [s : cstr] : DateTime
+    ```c
+    DateTime dt;
+    memset(&dt, 0, sizeof dt);
+    DateTime bad = dt;                 /* month 0: rejected */
+    const char *p = s;
+    if (!p) return bad;
+    int64_t v, sign = 1;
+    /* year: four digits, or a sign and four or more (the expanded form) */
+    if (*p == '+' || *p == '-') {
+      sign = *p == '-' ? -1 : 1;
+      p++;
+      if (!__tur_parse_digits(&p, 4, 12, &v)) return bad;
+    } else if (!__tur_parse_digits(&p, 4, 4, &v)) {
+      return bad;
+    }
+    dt.year = sign * v;
+    if (*p++ != '-' || !__tur_parse_digits(&p, 2, 2, &dt.month)) return bad;
+    if (*p++ != '-' || !__tur_parse_digits(&p, 2, 2, &dt.day)) return bad;
+    if (dt.month < 1 || dt.month > 12) return bad;
+    if (dt.day < 1 || dt.day > __tur_days_in_month(dt.year, dt.month)) return bad;
+    if (*p == '\0') return dt;        /* a date alone: midnight UTC */
+    if (*p != 'T' && *p != 't' && *p != ' ') return bad;
+    p++;
+    if (!__tur_parse_digits(&p, 2, 2, &dt.hour)) return bad;
+    if (*p++ != ':' || !__tur_parse_digits(&p, 2, 2, &dt.minute)) return bad;
+    if (*p == ':') {
+      p++;
+      if (!__tur_parse_digits(&p, 2, 2, &dt.second)) return bad;
+      if (*p == '.' || *p == ',') {
+        p++;
+        int64_t frac;
+        int nd = __tur_parse_digits(&p, 1, 3, &frac);
+        if (!nd) return bad;
+        while (nd < 3) { frac *= 10; nd++; }
+        dt.millis = frac;
+        while (*p >= '0' && *p <= '9') p++;   /* finer than a millisecond: dropped */
+      }
+    }
+    if (dt.hour > 23 || dt.minute > 59 || dt.second > 60) return bad;
+    if (*p == 'Z' || *p == 'z') {
+      p++;
+    } else if (*p == '+' || *p == '-') {
+      int64_t osign = *p == '-' ? -1 : 1, oh, om = 0;
+      p++;
+      if (!__tur_parse_digits(&p, 2, 2, &oh)) return bad;
+      if (*p == ':') p++;
+      if (*p >= '0' && *p <= '9' && !__tur_parse_digits(&p, 2, 2, &om)) return bad;
+      if (oh > 23 || om > 59) return bad;
+      dt.offset = osign * (oh * 60 + om);
+    }
+    if (*p != '\0') return bad;
+    return dt;
+    ```)
+  ;;; parse-iso8601 -- read an ISO 8601 / RFC 3339 timestamp.
+  ;;;
+  ;;; Accepts YYYY-MM-DD (midnight UTC), or that followed by T (or t, or a
+  ;;; space) and HH:MM, optional :SS, optional .fraction (or ,fraction;
+  ;;; digits past milliseconds are dropped), then an optional zone: Z, +HH:MM,
+  ;;; +HHMM or +HH (a missing zone is read as UTC).  The year may be the
+  ;;; signed expanded form format-iso8601 writes.  Every field is range
+  ;;; checked, including the day against its month.
+  ;;;
+  ;;; Parameters:
+  ;;;   s -- the timestamp text
+  ;;;
+  ;;; Returns:
+  ;;;   (Some dt) with the offset the text gave, or None when s is not a
+  ;;;   valid timestamp.
+  ;;;
+  ;;; Example:
+  ;;;   (time/parse-iso8601 "2026-10-21T09:30:00+02:00")  ; => (Some dt) with hour 9, offset 120
+  ;;;
+  ;;; Since: stdlib-os-surface P3
+  (defn parse-iso8601 [s : cstr] : (Option DateTime)
+    (let [dt (parse-iso8601-raw s)]
+      (if (= (.month dt) 0) (None) (Some dt)))))

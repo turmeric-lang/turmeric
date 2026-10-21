@@ -1,18 +1,21 @@
 ---
 title: Files and Processes
 category: Data Structures and Libraries
-description: Read and write files, walk directories, read stdin line by line, and run child processes with the typed fs / io / process stdlib -- every failure is a (Result T IoError)
+description: Read and write files, walk directories, manage symlinks and permissions, read stdin line by line, run child processes, handle signals, speak TCP and work with calendar dates through the typed fs / io / process / net / time / os stdlib -- every failure is a (Result T IoError)
 ---
 
 # Files and Processes
 
-Four on-demand stdlib modules cover the operating system:
+These on-demand stdlib modules cover the operating system:
 
 | Module | Namespace | Load with |
 |---|---|---|
-| `stdlib/fs.tur` | paths: `fs/read-text`, `fs/write-text`, `fs/stat`, `fs/mkdirp`, `fs/walk`, ... | `(load "stdlib/fs.tur")` |
-| `stdlib/io.tur` | streams and handles: `file-open`, `file-read-line`, `io/read-line`, ... | `(load "stdlib/io.tur")` |
-| `stdlib/process.tur` | children: `process/run`, `process/output`, `process/spawn`, ... | `(load "stdlib/process.tur")` |
+| `stdlib/fs.tur` | paths: `fs/read-text`, `fs/write-text`, `fs/stat`, `fs/mkdirp`, `fs/walk`, `fs/symlink`, `fs/chmod`, ... | `(load "stdlib/fs.tur")` |
+| `stdlib/io.tur` | streams and handles: `file-open`, `file-read-line`, `file-sync`, `io/read-line`, ... | `(load "stdlib/io.tur")` |
+| `stdlib/process.tur` | children and signals: `process/run`, `process/output`, `process/spawn`, `signal/handle`, ... | `(load "stdlib/process.tur")` |
+| `stdlib/net.tur` | blocking TCP: `net/tcp-connect`, `net/tcp-listen`, `net/accept`, `net/send`, `net/recv` | `(load "stdlib/net.tur")` |
+| `stdlib/os.tur` | the machine and user: `os/hostname`, `os/uid`, `os/gid` | `(load "stdlib/os.tur")` |
+| `stdlib/time.tur` | clocks and dates: `time/now-ms`, `time/utc-parts`, `time/format-iso8601`, ... | `(import time)` |
 | `stdlib/fs-string.tur` | a whole file as an owned `String`: `fs/read-string` | `(load "stdlib/fs-string.tur")` |
 
 To print diagnostics without touching stdout, use the `eprintln` / `eprint`
@@ -36,8 +39,9 @@ Every operation that can fail returns `(Result T IoError)`. `IoError`
 ```
 
 `io-error/message` is the `strerror(3)` text; `io-error/not-found?`,
-`io-error/exists?` and `io-error/permission?` replace comparing against errno
-constants, and `io-error/code` gives the raw number for interop. Operations
+`io-error/exists?`, `io-error/permission?`, `io-error/connection-refused?` and
+`io-error/interrupted?` replace comparing against errno constants, and
+`io-error/code` gives the raw number for interop. Operations
 with no useful success value -- `fs/mkdir`, `fs/rm`, `fs/write-text`,
 `process/chdir`, ... -- return `(Result nil IoError)`.
 
@@ -51,9 +55,9 @@ released with `free`, except the owned `String` from `fs/read-string`
 (`(load "stdlib/fs-string.tur")`), which is released with `string/release`;
 a `(Vec cstr)` from `fs/glob`, `fs/walk`, `fs/read-dir`
 or `fs/read-lines` with `fs/paths-free` (strings and vector together), and
-`env/all`'s with `env/all-free`. `FileHandle` and `ChildHandle` are linear:
-close a file exactly once with `file-close`, reap a child exactly once with
-`process/wait`.
+`env/all`'s with `env/all-free`. `FileHandle`, `ChildHandle` and `Socket` are
+linear: close a file exactly once with `file-close`, reap a child exactly once
+with `process/wait`, close a socket exactly once with `net/close`.
 
 ## Files
 
@@ -83,7 +87,9 @@ close a file exactly once with `file-close`, reap a child exactly once with
 `file-write`, `file-write-str`, `file-seek` (with a `SeekFrom`:
 `SeekStart` / `SeekCurrent` / `SeekEnd`) and `file-tell` round out the
 handle API. `file-close` returns a Result too: a buffered write that fails
-surfaces there.
+surfaces there. `file-sync` goes further and asks the OS to put the data on
+disk before it returns. `fs/touch` creates an empty file, or bumps an
+existing one's times without truncating it.
 
 ## Directories
 
@@ -96,6 +102,46 @@ symlinks on POSIX.
 (fs/walk-fn "src" (fn [path : cstr dir : bool] : nil
                     (when (not dir) (println path))))
 ```
+
+`fs/walk-follow` and `fs/walk-fn-follow` do descend into symlinked
+directories. A link back to a directory already on the path from the root is
+reported but not entered, so a cycle cannot loop the walk.
+
+## Symlinks and permissions
+
+```turmeric
+(load "stdlib/fs.tur")
+
+(fs/symlink "config.prod.toml" "config.toml")   ; target, then the link
+(fs/symlink? "config.toml")                     ; => true
+(fs/readlink "config.toml")                     ; => (Ok "config.prod.toml")
+(fs/realpath "config.toml")                     ; => (Ok "/srv/app/config.prod.toml")
+```
+
+`fs/stat` follows a link and `fs/lstat` describes the link itself. Read either
+`StatInfo` with `fs/stat-kind` (`KindFile` / `KindDir` / `KindSymlink` /
+`KindOther`), `fs/stat-size`, `fs/stat-mtime`, `fs/stat-atime` and
+`fs/stat-perms`.
+
+Permissions are a `Mode` value, not an octal integer. Build one from its `ls`
+spelling, or adjust the bits you read:
+
+```turmeric
+;; chmod u+x
+(match (fs/stat "run.sh")
+  (Ok s)  (let [r (fs/chmod "run.sh" (mode/with (fs/stat-perms s) (PermUser) (PermExec)))]
+            (fs/stat-free s)
+            r)
+  (Err e) (Err e))
+
+(match (mode/parse "rw-r-----")
+  (Some m) (fs/chmod "secret.txt" m)
+  (None)   (Err (io-error/of-code 22)))
+```
+
+`mode/has?`, `mode/without` and `mode/format` (back to `"rwxr-xr-x"`) take
+the same `PermUser` / `PermGroup` / `PermOther` and `PermRead` / `PermWrite`
+/ `PermExec` arguments.
 
 ## Stdin
 
@@ -141,9 +187,99 @@ stdin text (`input`), working directory (`cwd`) and environment (`env`).
 `process/wait` give you the child in between -- `process/kill` it with a
 `Signal` via `process/child-pid`.
 
+## Signals
+
+A synchronous program can catch a signal instead of dying of it. The handler
+only records that the signal arrived, because running arbitrary code inside a
+signal handler is not safe. The program polls:
+
+```turmeric
+(load "stdlib/process.tur")
+
+(defn work-loop [n : int] : int
+  (if (signal/interrupted?)
+    (do (eprintln "stopping") n)
+    (do (step) (work-loop (+ n 1)))))
+
+(defn main [] : int
+  (signal/on-interrupt)          ; Ctrl+C no longer kills the program
+  (work-loop 0)
+  0)
+```
+
+`signal/handle` catches any `Signal`. `signal/pending?` peeks at it, and
+`signal/take!` reports it and clears it. `signal/ignore` and `signal/reset`
+set the other two dispositions. A caught signal also wakes a blocking
+`net/accept` or `net/recv` with an `io-error/interrupted?` error, so a server
+waiting for its next client can check the flag and shut down. Do not combine
+`signal/handle` with `reactor-add-signal` for the same signal.
+
+## TCP sockets
+
+`stdlib/net.tur` is blocking, one call at a time. Programs on the cooperative
+scheduler use `stdlib/async_socket.tur` instead.
+
+```turmeric
+(load "stdlib/net.tur")
+
+(defn fetch [host : cstr] : int
+  (match (net/tcp-connect host 80)
+    (Ok s)  (do (net/send s "GET / HTTP/1.0\r\n\r\n")
+                (match (net/recv s 4096)
+                  (Ok o)  (match o (Some text) (println text) (None) (println "<closed>"))
+                  (Err e) (eprintln (io-error/message e)))
+                (net/close s)
+                0)
+    (Err e) (do (eprintln (io-error/message e)) 1)))
+```
+
+A server is `net/tcp-listen` (port 0 picks a free port, which
+`net/local-port` reports), then `net/accept` in a loop. `net/recv` answers
+`(Ok (None))` once the peer closes, and `net/shutdown-write` is the half-close
+that tells the peer you are done sending. Writing to a closed peer is an
+`EPIPE` error, never a SIGPIPE.
+
+## Dates and times
+
+`(import time)` brings the clocks (`time/now-ms`, `time/monotonic-ns`) and
+calendar dates. A `DateTime` is a plain struct, with fields `year`, `month`,
+`day`, `hour`, `minute`, `second`, `millis` and `offset` (minutes east of
+UTC):
+
+```turmeric
+(defmodule app
+  (import time)
+  (defn main [] : int
+    (let [now (time/now-ms)
+          utc (time/utc-parts now)
+          loc (time/local-parts now)]       ; the process's time zone (TZ)
+      (println (time/format-iso8601 utc))   ; 2026-10-21T09:30:00.123Z
+      (println (time/format-iso8601 loc))   ; 2026-10-21T11:30:00.123+02:00
+      (println (= (time/datetime->ms loc) now)))  ; true
+    (match (time/parse-iso8601 "2026-10-21T11:30:00+02:00")
+      (Some dt) (println (.hour dt))        ; 11
+      (None)    (println "not a timestamp"))
+    0))
+```
+
+There is no time-zone database: UTC is computed directly, and local time comes
+from the C library (`localtime_r`).
+
+## The machine and the user
+
+`stdlib/os.tur`: `os/hostname` answers `(Result cstr IoError)`, and `os/uid` /
+`os/gid` answer typed `Uid` / `Gid` values (`uid->int` / `gid->int` for the
+number). `term/is-tty-fd?` (`stdlib/term.tur`) asks whether any `Fd` is a
+terminal.
+
 ## Windows
 
 Each function has a Windows branch or reports an `IoError` there.
 `process/output` is not implemented on Windows yet and answers `ENOSYS`;
 `process/kill` maps only `SigKill` / `SigTerm` (both to `TerminateProcess`);
-`fs/walk` follows symlinked directories there (no `lstat`).
+`fs/walk` follows symlinked directories there (no `lstat`). `fs/lstat` is
+`fs/stat`, `fs/readlink` answers `ENOSYS`, `fs/realpath` does not resolve
+links, and `fs/symlink` needs Developer Mode or administrator rights (`EPERM`
+otherwise). `fs/chmod` keeps only the owner-write bit (read-only or not).
+`signal/handle` catches only `SigInt` and `SigTerm`. `os/uid` / `os/gid` answer
+`ENOSYS`, because Windows has no numeric user ids.
