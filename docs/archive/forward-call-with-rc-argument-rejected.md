@@ -76,7 +76,7 @@ Fix direction 1: the forward declaration carries the parameter's real type.
   checked exactly as a call to an already-defined callee. That includes one
   gap the two share: an `rc<U>` argument is accepted for an `rc<S>` parameter
   in both directions, because the call check compares kinds. Noted in
-  [typed-ptr-pointee-not-checked-at-calls](../reported/typed-ptr-pointee-not-checked-at-calls.md),
+  [typed-ptr-pointee-not-checked-at-calls](typed-ptr-pointee-not-checked-at-calls.md) (resolved 2026-10-21),
   which is the same hole for `ptr<T>`.
 - **Pinned** by `forward-call-rc-param` (borrowed mutual recursion, an owning
   rc parameter, an `rc<int>`, a letrec lambda) and

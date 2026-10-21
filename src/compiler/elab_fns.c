@@ -12047,6 +12047,14 @@ Expr *elab_defn(Elab *e, const Form *call) {
         /* committed-applied-return-vs-scalar: the dispatcher compares the
          * declared return by kind, so an applied side never met a scalar one.
          * A monomorphic defn has no crossing to ground it. */
+        /* typed-ptr-pointee-not-checked-at-calls, the return side: a body that
+         * returns a `ptr<Bar>` under `: ptr<Foo>` (and an `rc<U>` under
+         * `: rc<S>`) was accepted, as the kind is all the checks above read. */
+        if (rc == RET_CONFLICT_NONE && !return_unannotated &&
+            ret_cls == RET_CLASS_COMMITTED && return_app_type &&
+            (return_kind == TY_PTR_VOID || return_kind == TY_RC) &&
+            type_pointee_conflict(return_app_type, &body->type))
+            rc = RET_CONFLICT_NOMINAL;
         if (rc == RET_CONFLICT_NONE && !return_unannotated &&
             ret_cls == RET_CLASS_COMMITTED && !return_adt_def &&
             return_type_applied_scalar_conflict(
@@ -12077,7 +12085,9 @@ Expr *elab_defn(Elab *e, const Form *call) {
         }
         if (rc != RET_CONFLICT_NONE) {
             Buf wb; buf_init(&wb);
-            if (!return_adt_def && return_kind == TY_APP && return_app_type)
+            if (!return_adt_def && return_app_type &&
+                (return_kind == TY_APP || return_kind == TY_PTR_VOID ||
+                 return_kind == TY_RC))
                 type_print(&wb, *return_app_type);
             else if (!return_adt_def && return_kind == TY_TYVAR && return_tyvar_type)
                 type_print(&wb, *return_tyvar_type);

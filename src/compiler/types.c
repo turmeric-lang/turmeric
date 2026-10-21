@@ -3448,13 +3448,21 @@ static void type_name_buf(Buf *b, Type t) {
         /* Phase 9: rc<T> and weak<T> */
         case TY_RC: {
             buf_puts(b, "rc<");
-            type_name_buf(b, type_from_kind(t.as.rc.inner));
+            /* the ADT's own name, not the kind's `<adt>`: `expected rc<S>, got
+             * rc<U>` rather than two identical `rc<<adt>>`. */
+            if (t.as.rc.inner == TY_ADT && t.as.rc.adt_def && t.as.rc.adt_def->name)
+                buf_puts(b, t.as.rc.adt_def->name);
+            else
+                type_name_buf(b, type_from_kind(t.as.rc.inner));
             buf_puts(b, ">");
             break;
         }
         case TY_WEAK: {
             buf_puts(b, "weak<");
-            type_name_buf(b, type_from_kind(t.as.rc.inner));
+            if (t.as.rc.inner == TY_ADT && t.as.rc.adt_def && t.as.rc.adt_def->name)
+                buf_puts(b, t.as.rc.adt_def->name);
+            else
+                type_name_buf(b, type_from_kind(t.as.rc.inner));
             buf_puts(b, ">");
             break;
         }

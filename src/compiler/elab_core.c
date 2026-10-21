@@ -216,7 +216,9 @@ bool fwd_decl_apply_ref_params(Elab *e, Arena *arena, Type *fn_type, const Form 
         const char *nm = t->as.sym->name;
         uint32_t len = t->as.sym->len;
         uint32_t prefix = 0;
+        bool is_ptr = false;
         if (len > 3 && memcmp(nm, "rc<", 3) == 0) prefix = 3;
+        else if (len > 4 && memcmp(nm, "ptr<", 4) == 0) { prefix = 4; is_ptr = true; }
         else if (len > 4 && memcmp(nm, "ref<", 4) == 0) prefix = 4;
         else if (len > 5 && (memcmp(nm, "weak<", 5) == 0 || memcmp(nm, "lref<", 5) == 0)) prefix = 5;
         if (prefix == 0 || nm[len - 1] != '>' || len - prefix - 1 == 0) continue;
@@ -225,6 +227,11 @@ bool fwd_decl_apply_ref_params(Elab *e, Arena *arena, Type *fn_type, const Form 
         if (inner_len >= sizeof inner) continue;
         memcpy(inner, nm + prefix, inner_len);
         inner[inner_len] = '\0';
+        /* typed-ptr-pointee-not-checked-at-calls: a typed `ptr<T>` parameter's
+         * pointee rides the forward declaration too, so a caller above the defn
+         * is checked against it.  `ptr<void>` is the untyped pointer and has
+         * nothing to commit. */
+        if (is_ptr && strcmp(inner, "void") == 0) continue;
         TypeKind ik = typekind_from_symbol(inner);
         bool settled = ik != TY_UNKNOWN &&
                        (typekind_is_numeric(ik) || ik == TY_BOOL || ik == TY_CSTR);
@@ -232,8 +239,10 @@ bool fwd_decl_apply_ref_params(Elab *e, Arena *arena, Type *fn_type, const Form 
             const AdtDef *d = e->adt_defs[ai];
             if (d->n_type_params == 0 && strcmp(d->name, inner) == 0) settled = true;
         }
-        if (!settled) { unsettled = true; continue; }
-        Type *rt = rc_family_type_from_keyword_name(e, nm, len, t->span, NULL, NULL, NULL, 0);
+        if (!settled) { if (!is_ptr) unsettled = true; continue; }
+        Type *rt = is_ptr
+            ? ptr_type_from_keyword_name(e, nm, len, t->span, NULL, NULL, NULL, 0)
+            : rc_family_type_from_keyword_name(e, nm, len, t->span, NULL, NULL, NULL, 0);
         if (!rt) continue;
         fn_type->as.fn.arg_kinds[slot - 1] = (uint8_t)rt->kind;
         if (!fn_type->as.fn.arg_full_types) {

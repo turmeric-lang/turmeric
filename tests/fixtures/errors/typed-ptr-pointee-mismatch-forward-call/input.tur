@@ -1,0 +1,12 @@
+;; typed-ptr-pointee-not-checked-at-calls: the caller is written ABOVE the
+;; callee, so the check reads the pointee off the forward declaration.
+(defstruct Foo [a : int])
+(defstruct Bar [b : int])
+(defn mk-bar [] : ptr<Bar>
+  ```c
+  return 0;
+  ```)
+(defn main [] : int
+  (println (f (mk-bar)))
+  0)
+(defn f [x : ptr<Foo>] : int 0)

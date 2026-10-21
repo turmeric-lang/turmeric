@@ -177,7 +177,8 @@ on `main` 3d9e02a2.
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [typed-ptr-pointee-not-checked-at-calls](typed-ptr-pointee-not-checked-at-calls.md) | medium (silent loss of type checking) | A `ptr<Foo>` parameter or return type accepts a `ptr<Bar>`, although `type_eq` compares pointees (`types.c:278-284`); a `ptr<int>` parameter's error prints `expected ptr<void>`, so the pointee seems to be dropped before the call check. CLAUDE.md now steers handles to `defopaque` until it is fixed. |
+| ~~[typed-ptr-pointee-not-checked-at-calls](../archive/typed-ptr-pointee-not-checked-at-calls.md)~~ | medium (silent loss of type checking) | **RESOLVED 2026-10-21** (archived): `type_pointee_conflict` compares the pointee of a `ptr<T>` / `rc<T>` at a call to a defn (callee above or below the caller), at a defn's return and at a `let` annotation; the diagnostic prints the declared type. The corpus had no real mismatch. A call through a closure value is the narrower [typed-ptr-pointee-not-checked-through-closures](typed-ptr-pointee-not-checked-through-closures.md). Pinned by six `errors/` fixtures and a positive control |
+| [typed-ptr-pointee-not-checked-through-closures](typed-ptr-pointee-not-checked-through-closures.md) | low-medium | Narrowed from typed-ptr-pointee-not-checked-at-calls: `(let [f (fn [x : ptr<Foo>] : int 1)] (f (mk-bar)))` is accepted -- the closure-call path has no declared full type to compare, so a `ptr<Bar>` goes into a `ptr<Foo>` lambda parameter (a defn with the same signature is TUR-E0001) |
 
 ## Found writing the CPS/DK internals guide (filed 2026-10-16)
 
