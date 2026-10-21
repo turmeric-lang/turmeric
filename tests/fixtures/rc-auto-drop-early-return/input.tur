@@ -1,11 +1,29 @@
 ;; Phase 9 auto-drop: return should still fire rc auto-drop defer at scope exit.
+;;
+;; auto-drop-defers-skipped-on-early-return: it did not -- the injected drop
+;; sits after the let's body and was never registered when the `return` left
+;; -- and the old output (just the strong count) could not tell.  Count the
+;; live rc blocks around the calls: each early return must release its block.
 
-(defn rc-auto-drop-early-return [flag : bool]
+(defn rc-auto-drop-early-return [flag : bool] : int
   (let [x (rc/of 42)]
     (if flag
         (return (rc/strong-count x))
         0)))
 
-(defn main []
-  (println (rc-auto-drop-early-return true))
+;; A nested let: both scopes' drops run on the way out.
+(defn nested-early-return [flag : bool] : int
+  (let [a (rc/of 1)]
+    (let [b (rc/of 2)]
+      (if flag
+          (return (+ (rc/strong-count a) (rc/strong-count b)))
+          0))))
+
+(defn main [] : int
+  (let [before (gc-live-blocks)]
+    (println (rc-auto-drop-early-return true))   ; 1
+    (println (rc-auto-drop-early-return false))  ; 0
+    (println (nested-early-return true))         ; 2
+    (println (nested-early-return false))        ; 0
+    (println (- (gc-live-blocks) before)))       ; 0: every block released
   0)

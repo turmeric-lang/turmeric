@@ -149,12 +149,12 @@
 ;;;
 ;;; Valid only inside a function or `fn` body (at module top level it is `return
 ;;; is not allowed at module top level`). It returns from the nearest function
-;;; or lambda, not from the nearest loop or `let`, and deferred cleanups
-;;; registered by the code it leaves still run. The value is not checked against
-;;; the declared return type: `(defn f [] : int (return "a") 1)` compiles, and
-;;; returns a pointer read as an `int` when compiled. A `ref` or `rc` owned by a
-;;; `let` that `return` jumps out of is not released (see
-;;; docs/reported/auto-drop-defers-skipped-on-early-return.md).
+;;; or lambda, not from the nearest loop or `let`. The value is computed first;
+;;; then the deferred cleanups registered by the code it leaves run, and a
+;;; `ref` or `rc` owned by a `let` it jumps out of is released (unless the
+;;; value is that binding). The value is not checked against the declared
+;;; return type: `(defn f [] : int (return "a") 1)` compiles, and returns a
+;;; pointer read as an `int` when compiled.
 ;;;
 ;;; Parameters:
 ;;;   value -- the value to return

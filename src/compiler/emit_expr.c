@@ -6027,7 +6027,11 @@ static char *emit_do_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             buf_printf(body, "%s %s;\n", type_c_name(e->type), result_tmp);
         }
 
-        /* Emit all items, registering defers */
+        /* Emit all items, registering defers.  The trailing injected drops
+         * are pending until pushed, for a `return` in the items before them
+         * (auto-drop-defers-skipped-on-early-return). */
+        uint32_t drops_at = emit_do_trailing_drop_glue(e);
+        emit_frame_note_pending_drops(frame_var, e);
         bool emitted_diverging = false;  /* Track if we've emitted a return/throw/panic */
         for (uint32_t i = 0; i < n; i++) {
             const Expr *it = e->as.do_.items[i];
@@ -6039,6 +6043,7 @@ static char *emit_do_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             }
 
             if (it->kind == EX_DEFER) {
+                if (i == drops_at) emit_frame_clear_pending_drops(frame_var);
                 emit_frame_push_defer(ctx, body, frame_var, it);
             } else if (last_yields_value && (int)i == last_value_idx) {
                 char *bv = emit_value(ctx, body, it);
@@ -6063,15 +6068,20 @@ static char *emit_do_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             buf_printf(body, "tur_frame_fire_lifo(&%s);\n", frame_var);
         }
 
+        emit_frame_clear_pending_drops(frame_var);
         ctx->frame_var = saved_frame;
         free(frame_var);
         return result_tmp ? result_tmp : atom_nil();
     }
 
-    /* Emit non-defer items and register defer thunks */
+    /* Emit non-defer items and register defer thunks (the trailing injected
+     * drops pending until pushed, as above). */
+    uint32_t drops_at = emit_do_trailing_drop_glue(e);
+    emit_frame_note_pending_drops(frame_var, e);
     for (uint32_t i = 0; i < n; i++) {
         const Expr *it = e->as.do_.items[i];
         if (it->kind == EX_DEFER) {
+            if (i == drops_at) emit_frame_clear_pending_drops(frame_var);
             emit_frame_push_defer(ctx, body, frame_var, it);
         } else if ((int)i == last_value_idx) {
             continue; /* emitted as value below */
@@ -6106,6 +6116,7 @@ static char *emit_do_value(EmitCtx *ctx, Buf *body, const Expr *e) {
     buf_printf(body, "tur_frame_fire_lifo(&%s);\n", frame_var);
 
     /* Restore frame state */
+    emit_frame_clear_pending_drops(frame_var);
     ctx->frame_var = saved_frame;
     free(frame_var);
 

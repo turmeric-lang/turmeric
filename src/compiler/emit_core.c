@@ -2887,6 +2887,119 @@ const char *emit_frame_parent(const char *frame) {
             return g_frame_parents[i].parent;
     return NULL;
 }
+/* auto-drop-defers-skipped-on-early-return: frame -> the injected scope-exit
+ * drops (`is_drop_glue` defers) its `do` has not registered yet.  elab_let
+ * appends them AFTER the body, so they are pushed only once control reaches
+ * them, and a `return` from inside the body left without them: every owned
+ * `ref` / `rc` / owning field of an enclosing `let` leaked once per early
+ * exit.  A do-emitter notes its trailing drops here while it emits the items
+ * ahead of them and clears the note once it pushes them; the `return` emitter
+ * runs the noted drops along its own frame chain (emit_frame_run_pending_drops).
+ * Keyed by frame like g_frame_parents, so a lambda body -- which starts with no
+ * frame -- never sees its enclosing function's. */
+static struct { char *frame; const Expr *const *items; uint32_t n; } *g_frame_drops = NULL;
+static uint32_t g_frame_drops_n = 0, g_frame_drops_cap = 0;
+
+uint32_t emit_do_trailing_drop_glue(const Expr *e) {
+    uint32_t k = e->as.do_.n;
+    while (k > 0 && e->as.do_.items[k - 1]->kind == EX_DEFER &&
+           e->as.do_.items[k - 1]->as.defer_.is_drop_glue)
+        k--;
+    return k;
+}
+
+void emit_frame_note_pending_drops(const char *frame, const Expr *e) {
+    if (!frame) return;
+    uint32_t k = emit_do_trailing_drop_glue(e);
+    if (k == e->as.do_.n) return;
+    if (g_frame_drops_n == g_frame_drops_cap) {
+        g_frame_drops_cap = g_frame_drops_cap ? g_frame_drops_cap * 2 : 64;
+        g_frame_drops = (void *)realloc(g_frame_drops,
+            g_frame_drops_cap * sizeof(*g_frame_drops));
+        if (!g_frame_drops) { fprintf(stderr, "tur: oom\n"); abort(); }
+    }
+    g_frame_drops[g_frame_drops_n].frame = strdup(frame);
+    g_frame_drops[g_frame_drops_n].items = (const Expr *const *)e->as.do_.items + k;
+    g_frame_drops[g_frame_drops_n].n = e->as.do_.n - k;
+    g_frame_drops_n++;
+}
+
+void emit_frame_clear_pending_drops(const char *frame) {
+    if (!frame) return;
+    for (uint32_t i = g_frame_drops_n; i-- > 0; )
+        if (strcmp(g_frame_drops[i].frame, frame) == 0) g_frame_drops[i].n = 0;
+}
+
+/* Does `v`, in a position whose value leaves the scope (a `return`'s value),
+ * hand over `b` itself -- the binding, or an owning field read off it?  Then
+ * the early exit is a move and `b`'s drop must not run: `(return x)` on an
+ * owned `x` was correct before only because the drop was skipped. */
+static bool emit_value_moves_binding(const Expr *v, const Binding *b) {
+    while (v && v->kind == EX_ASCRIBE) v = v->as.ascribe_.inner;
+    if (!v) return false;
+    switch (v->kind) {
+        case EX_VAR:       return v->as.var.binding == b;
+        case EX_GET_FIELD: return emit_value_moves_binding(v->as.get_field_.struct_expr, b);
+        case EX_DO:
+            return v->as.do_.n > 0 &&
+                   emit_value_moves_binding(v->as.do_.items[v->as.do_.n - 1], b);
+        case EX_LET: case EX_LETREC:
+            return emit_value_moves_binding(v->as.let_.body, b);
+        case EX_IF:
+            return emit_value_moves_binding(v->as.if_.then_, b) ||
+                   emit_value_moves_binding(v->as.if_.else_or_null, b);
+        case EX_MAKE_STRUCT:
+            for (uint32_t i = 0; i < v->as.make_struct_.n_fields; i++)
+                if (emit_value_moves_binding(v->as.make_struct_.field_values[i], b))
+                    return true;
+            return false;
+        case EX_CALL:
+            if (!v->as.call_.ctor) return false;
+            for (uint32_t i = 0; i < v->as.call_.n_args; i++)
+                if (emit_value_moves_binding(v->as.call_.args[i], b)) return true;
+            return false;
+        default:           return false;
+    }
+}
+
+/* The binding an injected drop discharges: the root local of `(drop! x)`,
+ * `(rc/drop x)`, `(drop! (.f o))` or a Drop-method call on `x`. */
+static const Binding *emit_drop_glue_root(const Expr *d) {
+    const Expr *arg = NULL;
+    if (d->kind == EX_RC_DROP) arg = d->as.rc_drop_.expr;
+    else if (d->kind == EX_BUILTIN && d->as.builtin.n == 1) arg = d->as.builtin.args[0];
+    else if (d->kind == EX_CALL && d->as.call_.n_args == 1) arg = d->as.call_.args[0];
+    while (arg && (arg->kind == EX_ASCRIBE || arg->kind == EX_GET_FIELD))
+        arg = arg->kind == EX_ASCRIBE ? arg->as.ascribe_.inner
+                                      : arg->as.get_field_.struct_expr;
+    return arg && arg->kind == EX_VAR ? arg->as.var.binding : NULL;
+}
+
+bool emit_frame_has_pending_drops(const EmitCtx *ctx) {
+    for (const char *f = ctx->frame_var; f; f = emit_frame_parent(f))
+        for (uint32_t i = g_frame_drops_n; i-- > 0; )
+            if (g_frame_drops[i].n > 0 && strcmp(g_frame_drops[i].frame, f) == 0)
+                return true;
+    return false;
+}
+
+void emit_frame_run_pending_drops(EmitCtx *ctx, Buf *body, const Expr *ret_value) {
+    for (const char *f = ctx->frame_var; f; f = emit_frame_parent(f)) {
+        for (uint32_t i = g_frame_drops_n; i-- > 0; ) {
+            if (g_frame_drops[i].n == 0 || strcmp(g_frame_drops[i].frame, f) != 0)
+                continue;
+            /* LIFO, as tur_frame_fire_lifo would have run them. */
+            for (uint32_t j = g_frame_drops[i].n; j-- > 0; ) {
+                const Expr *d = g_frame_drops[i].items[j]->as.defer_.body;
+                const Binding *root = emit_drop_glue_root(d);
+                if (root && ret_value && emit_value_moves_binding(ret_value, root))
+                    continue;
+                emit_stmt(ctx, body, d);
+            }
+        }
+    }
+}
+
 char *fresh_frame(EmitCtx *ctx) {
     char *p = (char *)malloc(24);
     if (!p) { fprintf(stderr, "tur: oom\n"); abort(); }

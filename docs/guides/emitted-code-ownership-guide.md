@@ -380,14 +380,20 @@ the body fires them. Every other trailing free is a leak on that path, never a
 use-after-free. The emitted `if (tur_panicking) return ...;` after each call
 skips them as well.
 
-The injected `defer`s do not cover the gap. `emit_do_value` registers a defer
-with `tur_frame_push_defer` *when control reaches it*, and the auto-drops sit
-after the body's value, so an early `return` inside the body fires a frame
-chain that does not yet hold them. Measured: a `(let [r (ref 5)] (if flag
-(return (deref r)) 0))` leaks 8 bytes on the `return` path under
-LeakSanitizer, and the `rc<T>` / rc-field equivalents leave `gc-live-blocks`
-one higher per call. The fixture `rc-auto-drop-early-return` prints a strong
-count and does not observe this.
+The injected `defer`s are covered on a `return`. `emit_do_value` registers a
+defer with `tur_frame_push_defer` *when control reaches it*, and the
+auto-drops (`is_drop_glue`) sit after the body's value, so the frame chain an
+early `return` fires does not hold them yet. Each do-emitter (`emit_do_value`,
+`emit_stmt`'s `EX_DO` arm, `emit_tail_drop_hoist_do`) therefore notes its
+trailing drop-glue run against its frame (`emit_frame_note_pending_drops`)
+while it emits the items ahead of it, and clears the note once it pushes them.
+The `return` emitter computes its value first, fires the frame chain, then
+emits every noted drop along that chain inline, innermost first
+(`emit_frame_run_pending_drops`) -- except a binding the value moves out, so
+`(return x)` on an owned `rc` still hands it over. The note is keyed by frame,
+so a lambda body, which starts with no frame, never sees its enclosing
+function's. Pinned by `ref-auto-drop-early-return` (leak-checked) and
+`rc-auto-drop-early-return` (`gc-live-blocks` around the calls).
 
 ### The tail path
 
@@ -411,7 +417,7 @@ could be wrong.
 
 | Shape | Declined by | Leak |
 |---|---|---|
-| early `return` / `throw` / panic out of the `let` body | `emit_let_value`, defer timing | every non-`any` free of the scope |
+| early `return` / `throw` / panic out of the `let` body | `emit_let_value`, defer timing | every free of the scope that is neither an `any` drop nor, on a `return`, an injected drop-glue defer |
 | `(rc/drop b)` in one branch only | `is_binding_consumed` | `b` on the other branch |
 | `(set! h h)`, or `(rc/drop h)` then `(set! h v)` | `elab_set_rc_release` | see [ownership-guide.md](ownership-guide.md#reassigning-an-rct-binding-with-set) |
 | a closure returning a pointer or struct, or a sum with inline C in its body | `let_binding_env_freeable` | the env |
@@ -686,7 +692,6 @@ Each was reproduced against the compiler this guide describes and filed in
 [`docs/reported/`](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/README.md). When one is fixed and archived,
 update the passage above that describes it and drop it from this list.
 
-- [auto-drop-defers-skipped-on-early-return](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/auto-drop-defers-skipped-on-early-return.md) -- Injected scope-exit drops are skipped by an early `return`
 - [regions-off-source-runtime-link-failure](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/regions-off-source-runtime-link-failure.md) -- `TUR_REGIONS=0` fails to link when the runtime comes from source
 
 ## Maintenance
