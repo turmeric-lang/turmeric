@@ -156,8 +156,11 @@ revive the worker, reconcile the two lists first.
    hits print the usage and exit 64.
 3. A leading `-` or no hit returns NULL and the token is used as is.
 
-`CANONICAL_COMMANDS[]` does not list `jit`, `emit-rt-split` or
-`completion`, so those three dispatch on an exact spelling only. A token that
+`jit`, `emit-rt-split` and `completion` are in `HIDDEN_COMMANDS[]`, not
+`CANONICAL_COMMANDS[]`, so those three dispatch on an exact spelling only:
+listing them would make `tur comp` and `tur j` ambiguous. All three lists
+also filter the "external commands" listing under `tur --help`, so a
+`tur-<name>` that a built-in shadows is not advertised. A token that
 matches no arm of the `strcmp` chain falls to `try_external_subcommand`,
 which `execv`s the first executable `tur-<name>` on `$PATH` with the
 remaining arguments (on Windows, `_spawnv` and wait).
@@ -621,18 +624,20 @@ and [diagnosing the compiler](diagnosing-the-compiler-guide.md).
 1. Add an arm to the `strcmp` chain in `tur_main_inner`, before the
    `try_external_subcommand` fall-through. Put the body in a `cmd_<name>`.
 2. Add the name to `CANONICAL_COMMANDS[]` so prefix resolution knows it --
-   and check the new name does not make an existing prefix ambiguous.
+   and check the new name does not make an existing prefix ambiguous. A name
+   that would (as `completion` would for `tur comp`) goes in
+   `HIDDEN_COMMANDS[]` instead, and dispatches on its exact spelling only.
+   Either list also keeps a `tur-<name>` on `$PATH` out of the "external
+   commands" listing (`list_external_subcommands`).
 3. Write `usage_<name>`: `--help` returns 0 through it; error paths return
    `usage_error(usage_<name>)` (exit 2). Add a line to `usage()`.
 4. If it compiles a file, call `auto_append_spice_includes` and
    `discover_manifest_reader_macros`, set the LS2 context around the
    compile (`ls2_resolver_ctx_set`), and dispose of both afterwards. Copy
    an existing arm (`emit-h` is the shortest).
-5. Add it to `list_external_subcommands`'s `builtins[]`, so a `tur-<name>`
-   on `$PATH` is not advertised as an external command.
-6. Add it to both scripts in `src/cli/completion.c` (the zsh `commands=(...)`
+5. Add it to both scripts in `src/cli/completion.c` (the zsh `commands=(...)`
    list with a description, and bash's `__tur_commands`).
-7. Document it in the user guide for its area, and in
+6. Document it in the user guide for its area, and in
    [compiler-flags-guide.md](compiler-flags-guide.md) if it takes flags.
 
 ### A new global flag

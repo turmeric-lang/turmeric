@@ -11498,6 +11498,58 @@ static int cmd_worker(void) {
 
 #endif /* _WIN32 */
 
+/* Top-level subcommands, in canonical spelling. Kept in one place so
+ * resolve_command() can prefix-match against them; the actual dispatch
+ * chain in main() still uses strcmp against these same names. */
+static const char *const CANONICAL_COMMANDS[] = {
+    "emit-c", "emit-h", "emit-cmake", "check", "expand", "audit-spans",
+    "lsp", "mcp", "dap", "trace", "lsp-lite",
+    "build", "compile", "link", "run", "repl", "worker", "interpret", "debug",
+    "eval", "doc", "docs", "image-info", "image-verify", "explain",
+    "format", "fmt", "parse-check", "test", "demangle",
+    "new", "init", "add", "add-cmake", "fetch", "audit",
+    "install", "uninstall", "list", "upgrade", "experiments", "dialects",
+    "smt",
+    NULL,
+};
+
+/* Built-in subcommands that dispatch on their exact spelling only.  They stay
+ * out of CANONICAL_COMMANDS[] because prefix resolution would change under
+ * them: `completion` would make `tur comp` (today `compile`) ambiguous, and
+ * `jit` would do the same to `tur j` (today the `just` alias of `run`).
+ * `emit-rt-split` is the generator tools/gen-runtime-split.py runs, not a
+ * command anyone types.  They still shadow a `tur-<name>` on $PATH. */
+static const char *const HIDDEN_COMMANDS[] = {
+    "jit", "completion", "emit-rt-split",
+    NULL,
+};
+
+/* Alternate spellings that dispatch to a canonical command.  `tur just` is a
+ * synonym for `tur run`: the task-runner mode reads a Justfile, so `just` is
+ * the name muscle memory reaches for.  Aliases participate in the same
+ * prefix resolution as canonical names, and resolve straight to the
+ * canonical spelling so every downstream dispatch arm sees one name. */
+static const struct { const char *alias; const char *canonical; }
+COMMAND_ALIASES[] = {
+    { "just", "run" },
+    { NULL,   NULL  },
+};
+
+/* Sentinel: `tok` is a prefix of more than one canonical command. */
+static const char *const COMMAND_AMBIGUOUS = (const char *)(intptr_t)-1;
+
+/* True when `name` is a built-in subcommand in any spelling dispatch accepts:
+ * canonical, hidden, or an alias. */
+static bool is_builtin_command(const char *name) {
+    for (int i = 0; CANONICAL_COMMANDS[i] != NULL; i++)
+        if (strcmp(name, CANONICAL_COMMANDS[i]) == 0) return true;
+    for (int i = 0; HIDDEN_COMMANDS[i] != NULL; i++)
+        if (strcmp(name, HIDDEN_COMMANDS[i]) == 0) return true;
+    for (int i = 0; COMMAND_ALIASES[i].alias != NULL; i++)
+        if (strcmp(name, COMMAND_ALIASES[i].alias) == 0) return true;
+    return false;
+}
+
 /* GS-M2: scan $PATH for `tur-*` executables and print them as an
  * "External commands:" block beneath the built-in usage. Built-in
  * subcommands always win at dispatch time, so we filter any `tur-<name>`
@@ -11506,16 +11558,6 @@ static int cmd_worker(void) {
 static void list_external_subcommands(void) {
     const char *path_env = getenv("PATH");
     if (!path_env || !*path_env) return;
-
-    static const char *const builtins[] = {
-        "build", "compile", "link",
-        "emit-c", "emit-h", "emit-cmake", "run", "just", "repl", "worker",
-        "eval", "doc", "docs", "explain", "test", "check", "expand", "format", "fmt",
-        "parse-check", "audit-spans", "debug", "dap", "trace", "lsp-lite",
-        "init", "add", "add-cmake", "fetch", "audit",
-        "install", "uninstall", "list", "upgrade", "smt",
-        NULL,
-    };
 
     char **names = NULL;
     int n_names = 0, cap_names = 0;
@@ -11538,13 +11580,7 @@ static void list_external_subcommands(void) {
                         if (!(isalnum((unsigned char)*q) || *q == '-' || *q == '_'))
                             goto skip;
                     }
-                    {
-                        bool shadowed = false;
-                        for (int i = 0; builtins[i]; i++) {
-                            if (strcmp(cmd, builtins[i]) == 0) { shadowed = true; break; }
-                        }
-                        if (shadowed) continue;
-                    }
+                    if (is_builtin_command(cmd)) continue;
                     {
                         char full[8192];
                         snprintf(full, sizeof(full), "%s/%s", dir, de->d_name);
@@ -11594,35 +11630,6 @@ cleanup:
     for (int i = 0; i < n_names; i++) free(names[i]);
     free(names);
 }
-
-/* Top-level subcommands, in canonical spelling. Kept in one place so
- * resolve_command() can prefix-match against them; the actual dispatch
- * chain in main() still uses strcmp against these same names. */
-static const char *const CANONICAL_COMMANDS[] = {
-    "emit-c", "emit-h", "emit-cmake", "check", "expand", "audit-spans",
-    "lsp", "mcp", "dap", "trace", "lsp-lite",
-    "build", "compile", "link", "run", "repl", "worker", "interpret", "debug",
-    "eval", "doc", "docs", "image-info", "image-verify", "explain",
-    "format", "fmt", "parse-check", "test", "demangle",
-    "new", "init", "add", "add-cmake", "fetch", "audit",
-    "install", "uninstall", "list", "upgrade", "experiments", "dialects",
-    "smt",
-    NULL,
-};
-
-/* Alternate spellings that dispatch to a canonical command.  `tur just` is a
- * synonym for `tur run`: the task-runner mode reads a Justfile, so `just` is
- * the name muscle memory reaches for.  Aliases participate in the same
- * prefix resolution as canonical names, and resolve straight to the
- * canonical spelling so every downstream dispatch arm sees one name. */
-static const struct { const char *alias; const char *canonical; }
-COMMAND_ALIASES[] = {
-    { "just", "run" },
-    { NULL,   NULL  },
-};
-
-/* Sentinel: `tok` is a prefix of more than one canonical command. */
-static const char *const COMMAND_AMBIGUOUS = (const char *)(intptr_t)-1;
 
 /* Resolve a bare argv[1] token to a canonical command name.
  *   - exact match wins outright.
