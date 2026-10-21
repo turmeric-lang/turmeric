@@ -18077,13 +18077,19 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                 free(vslot);
                 free(frame);
             }
-            /* Emit body */
-            char *bval = emit_value(ctx, body, e->as.dynvar_binding_.body);
-            if (!nil_result) {
+            /* Emit body.  A nil body is a statement: its value expression is
+             * never written out, so `(binding [*level* 8] (show))` whose whole
+             * body is one call to a nil function dropped the call
+             * (definition-forms-gaps 2).  emit_stmt writes it, as a nil `let`
+             * body is written. */
+            if (nil_result) {
+                emit_stmt(ctx, body, e->as.dynvar_binding_.body);
+            } else {
+                char *bval = emit_value(ctx, body, e->as.dynvar_binding_.body);
                 indent_buf(body, ctx->indent);
                 buf_printf(body, "%s = %s;\n", result_tmp, bval);
+                free(bval);
             }
-            free(bval);
             /* Leaving the binding scope: unregister the guards an early
              * `return` inside the body would have popped. */
             for (uint32_t pi = 0; pi < n_pairs && ctx->n_dynvar_guards > 0; pi++) {

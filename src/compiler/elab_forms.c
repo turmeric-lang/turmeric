@@ -349,6 +349,21 @@ static const Symbol *splice_body_def_head(Elab *e, const Form *f) {
  *   (def x : float 7.1)  =>  (let [x : float 7.1] <rest>)
  */
 Form *splice_internal_defines(Elab *e, Form **items, uint32_t n, Span span) {
+    /* definition-forms-gaps 3: every body window passes through here before
+     * its first form is elaborated, so this is where the `defn`s nested in it
+     * are declared -- all of them, before any body, as Pass 1 declares the
+     * top-level ones -- so two nested defns can call each other.  A nested
+     * defn lands at file scope (elab_defn); the declaration is that global
+     * binding, and is idempotent. */
+    if (e->scope != &e->global) {
+        for (uint32_t i = 0; i < n; i++) {
+            Form *f = items[i];
+            if (f && f->tag == F_LIST && f->as.list.len >= 3 &&
+                f->as.list.items[0]->tag == F_SYM &&
+                f->as.list.items[0]->as.sym == e->sym_defn)
+                elab_pre_declare_toplevel_defn(e, e->arena, f);
+        }
+    }
     /* Pre-scan: bail out fast when no defines are present. */
     bool has_define = false;
     for (uint32_t i = 0; i < n; i++) {

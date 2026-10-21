@@ -9073,6 +9073,16 @@ Expr *elab_defn(Elab *e, const Form *call) {
      * redefinition -- treating it as the former rewrote ITS signature in
      * place (the HRT5 early update below), and that module's calls then met
      * a function of the wrong arity in the emitter.  Shadow it instead. */
+    /* definition-forms-gaps 3: a defn nested in a body is lifted to file scope,
+     * but nothing declared its name before its body was elaborated -- Pass 1
+     * forward-declares only top-level forms -- so a nested `fact` calling
+     * itself was `unknown function or operator 'fact'`.  Declare it the way
+     * Pass 1 would (a sibling nested defn is declared by the body-window scan
+     * in splice_internal_defines, which is what lets two of them recurse
+     * mutually). */
+    if (e->scope != &e->global && !e->bare_fat_spec_active &&
+        !scope_lookup_visible(e, e->scope, name_f->as.sym))
+        elab_pre_declare_toplevel_defn(e, e->arena, (Form *)call);
     Binding *existing = scope_lookup_visible(e, e->scope, name_f->as.sym);
     if (existing && binding_private_elsewhere(e, existing)) existing = NULL;
     /* bare-fat-result-monomorphization: a specialized clone re-elaborates the
@@ -14795,6 +14805,17 @@ static bool extern_c_aggregate_ok(const Type *t, Span span) {
     return false;
 }
 
+/* The integer kinds, for elab_def's int/float annotation check. */
+static bool def_kind_is_integer(TypeKind k) {
+    switch (k) {
+        case TY_INT: case TY_INT8: case TY_INT16: case TY_INT32: case TY_INT64:
+        case TY_UINT8: case TY_UINT16: case TY_UINT32: case TY_UINT64:
+            return true;
+        default:
+            return false;
+    }
+}
+
 /* Phase 2: extern-c — (extern-c name [param1 param2 ...] : return-type)
  * Declares an external C function. For phase 2, we don't support capture.
  * Example: (extern-c printf [^cstr fmt] : int)
@@ -15417,6 +15438,39 @@ Expr *elab_def(Elab *e, const Form *call) {
 
         TypeKind src_kind = init->type.kind;
         TypeKind dst_kind = declared_type->kind;
+        /* definition-forms-gaps 1: an int/float pair is the `::` rule's
+         * ambiguity, not a representation-equal pair.  The same-size test
+         * below took `(def x : int 7.1)` for one and stored the bits of 7.1
+         * (4619679907765970534; `(def y : float 3)` was 1.4822e-323) on both
+         * engines, where the same annotation on a `let` is an error.  Reject it
+         * as `let` does; an integer LITERAL under `: float` is the number. */
+        {
+            bool src_flt = src_kind == TY_FLOAT || src_kind == TY_FLOAT32 ||
+                           src_kind == TY_FLOAT64;
+            bool dst_flt = dst_kind == TY_FLOAT || dst_kind == TY_FLOAT32 ||
+                           dst_kind == TY_FLOAT64;
+            bool src_num = src_flt || def_kind_is_integer(src_kind) ||
+                           src_kind == TY_BOOL;
+            bool dst_num = dst_flt || def_kind_is_integer(dst_kind) ||
+                           dst_kind == TY_BOOL;
+            if (src_num && dst_num && src_flt != dst_flt) {
+                if (dst_flt && init->kind == EX_INT_LIT) {
+                    Expr *lit = expr_new(e->arena, EX_FLOAT_LIT, *declared_type,
+                                         init->span);
+                    lit->as.f = (double)init->as.i;
+                    init = lit;
+                    src_kind = dst_kind;
+                } else {
+                    diag_emit(DIAG_ERROR, init_f->span,
+                              "%s '%s': type annotation does not match "
+                              "initializer (annotated %s, got %s)",
+                              kw, name_f->as.sym->name,
+                              typekind_to_string(dst_kind),
+                              typekind_to_string(src_kind));
+                    return NULL;
+                }
+            }
+        }
         if (src_kind != dst_kind) {
             int src_size = type_size_bytes(src_kind);
             int dst_size = type_size_bytes(dst_kind);

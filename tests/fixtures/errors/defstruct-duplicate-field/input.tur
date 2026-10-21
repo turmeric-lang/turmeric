@@ -1,0 +1,4 @@
+;; definition-forms-gaps 6: field names are distinct; the second `x` was
+;; accepted and unreachable.
+(defstruct P [x : int x : int])
+(defn main [] : int 0)

@@ -1,0 +1,5 @@
+;; definition-forms-gaps 1: `(def x : int 7.1)` reinterpreted the float's bits
+;; (4619679907765970534) on both engines; a `let` with the same annotation has
+;; always been an error, and now a top-level def is too.
+(def x : int 7.1)
+(defn main [] : int 0)

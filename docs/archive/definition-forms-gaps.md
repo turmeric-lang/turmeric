@@ -1,5 +1,11 @@
 # The definition forms: `def : T` reinterprets a float, a one-call `binding` body is dropped, and a float-backed `defopaque` truncates
 
+**RESOLVED 2026-10-21** -- see [Resolution](#resolution-2026-10-21). Pinned by
+`def-annotation-float-literal`, `dynvar-binding-nil-call-body`,
+`nested-defn-recursion`, `nested-type-defs-in-body` and `defopaque-float-base`
+(both engines), and `errors/def-annotation-int-float-mismatch`,
+`errors/defstruct-duplicate-field` and `errors/defopaque-unknown-base`.
+
 **Severity: high (three silent wrong results).** Found 2026-10-19 checking the
 examples for the definition forms' API reference (`stdlib/forms/definitions.tur`
 and `datatypes.tur`). Each repro was run on `tur run` and `tur --interpret`.
@@ -114,3 +120,39 @@ this file. opaques-guide's own `celsius->kelvin` example (`defopaque Celsius
   `(defn f [x : blah] : int 1)` is accepted
   ([unknown-type-annotation-becomes-implicit-tyvar](unknown-type-annotation-becomes-implicit-tyvar.md),
   already filed).
+
+## Resolution (2026-10-21)
+
+1. **`(def x : int 7.1)`** is `def 'x': type annotation does not match
+   initializer (annotated int, got float)`, as a `let` already was. `elab_def`
+   (`src/compiler/elab_fns.c`) applies the int/float rule before the
+   same-size test that built the `EX_REINTERPRET`; an integer LITERAL under
+   `: float` is the number (`(def y : float 3)` is 3.0), as `(:: 3 :float)` is.
+2. **A one-call `nil` body in a `binding`** is emitted: `EX_DYNVAR_BINDING`
+   (`src/compiler/emit_expr.c`) emits a nil body as a statement
+   (`emit_stmt`), where it used to take the value expression and write
+   nothing.
+3. **A nested `defn` can call itself and its siblings.** Every `defn` in a
+   body window is declared (`elab_pre_declare_toplevel_defn`) from
+   `splice_internal_defines`, which every body passes through before its first
+   form is elaborated, and `elab_defn` declares its own name when it was not
+   reached that way. The declarations are the global bindings the lifted
+   functions are given anyway.
+4. **A `defstruct` / `defdata` / `defgadt` in a body is hoisted** to file scope
+   like a nested `defn` (`elab_hoist_nested_type_def`,
+   `src/compiler/elab_call.c`): the `EX_DEFDATA` is registered with
+   `elab_register_file_def` and the body gets a nil in its place.
+5. **A float-backed `defopaque`** records its base (`AdtDef.opaque_base_is_float`)
+   and `::` between it and a float is an `EX_REINTERPRET` through the int64
+   carrier (`elab_ascribe`), so `(raw (mk 21.5))` is 21.5 and opaques-guide's
+   `celsius->kelvin` prints 294.65. `check-emitted-float-conversions.py`
+   reports nothing on the report's program. A float-backed opaque stored in a
+   struct field or a collection still travels as its int64 bits, which is
+   what the handle is.
+6. **Smaller things.** A repeated field name in a record constructor is
+   `defdata: record-style variant 'P' declares field 'x' twice` (every
+   `defstruct` lowers through it), and an unknown `defopaque` base keyword
+   (`:string`) is `defopaque: unknown base type :string`. The unknown-annotation
+   type-variable hole stays with
+   [unknown-type-annotation-becomes-implicit-tyvar](unknown-type-annotation-becomes-implicit-tyvar.md).
+

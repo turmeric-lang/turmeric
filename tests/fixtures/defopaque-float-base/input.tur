@@ -1,0 +1,13 @@
+;; definition-forms-gaps 5: a float-backed defopaque is an int64_t handle
+;; holding the float's bits, so `::` to and from it is a bit reinterpret.  It
+;; was a C value conversion: (raw (mk 21.5)) printed 21 and (raw (:: 21.7
+;; Celsius)) read an integer's bits (4.6e18).
+(defopaque Celsius :float)
+(defn mk [x : float] : Celsius (:: x Celsius))
+(defn raw [c : Celsius] : float (:: c :float))
+(defn celsius->kelvin [c : Celsius] : float {(raw c) +. 273.15})
+(defn main [] : int
+  (println (raw (mk 21.5)))
+  (println (raw (:: 21.7 Celsius)))
+  (println (celsius->kelvin (mk 20.25)))
+  0)

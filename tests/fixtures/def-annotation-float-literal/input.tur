@@ -1,0 +1,13 @@
+;; definition-forms-gaps 1: a top-level `(def x : T init)` whose annotation and
+;; initializer are an int and a float.  An integer LITERAL under `: float` is the
+;; number (3 -> 3.0); the bits of 7.1 were stored under `: int` before, and the
+;; bits of 3 under `: float` (1.4822e-323).  Unannotated and matching defs are
+;; unchanged.
+(def y : float 3)
+(def z : float 7.25)
+(def n : int 4)
+(defn main [] : int
+  (println (+. y 0.5))
+  (println z)
+  (println n)
+  0)
