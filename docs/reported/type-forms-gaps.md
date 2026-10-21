@@ -1,37 +1,16 @@
-# The type forms: `?` does not work on `Result`, a `forall` argument is not checked, and `&mut` ignores `^mut`
+# The type forms: a `forall` argument is trusted, `&mut` ignores `^mut`, and `type-of` names no sized kind
 
 **Severity: medium.** Found 2026-10-19 checking the examples for the type, cast,
 existential and borrow forms' API reference (`stdlib/forms/types.tur`). Each repro
 below was run on `tur run` and `tur --interpret`.
 
-## 1. `?` cannot be used on the language's `Result`
+**Narrowed 2026-10-21.** `?` on a typed `Result` / `Option` and `coerce` with an
+applied `(Equal a b)` proof annotation are resolved: see
+[question-op-typed-sums-and-coerce-proof](../archive/question-op-typed-sums-and-coerce-proof.md).
+Two checks were tried and reverted because the corpus relies on the permissive
+behavior (below).
 
-```turmeric
-(defn halve [n : int] : (Result int cstr)
-  (if (= (mod n 2) 0) (ok (/ n 2)) (err "odd")))
-(defn quarter [n : int] : (Result int cstr)
-  (let [h (? (halve n))]
-    (halve h)))
-```
-
-`tur check`: `TUR-E0001: function '__tur-q-is-err?' arg 1: expected ptr<void>, got
-(Result int cstr)`. `(let [x (? (ok 1))] (ok x))` is the same. The helpers
-`__tur-q-is-err?` / `__tur-q-ok-val` (`stdlib/result.tur:198`, `:207`) take a
-`ptr<void>` and read a `struct { int tag; int64_t payload; }`, which is the layout
-of the old pointer-carried Result. `(Result T E)` is now a by-value ADT. The only
-program that exercises `?` is `tests/fixtures/result-question-op`, which builds its
-own carriers in inline C. Erasing a real Result with `(:: (ok 21) ptr<void>)` gets
-past the check, but nothing can read it back (`(:: r (Result int int))` is a C type
-error). error-handling-guide documents `?` as the early-return operator for
-`Result`.
-
-Interpreted, `?` cannot run at all: the fixture above under `tur --interpret`
-stops with `defn: '__tur-q-is-err?' is already defined by an auto-loaded stdlib
-module` (the REPL JIT recompiles the inline-C helper). Fix: lower `?` to a `match`
-on the typed Result (and an `Option` twin), keep the carrier path only if the
-fixture needs it.
-
-## 2. `rank-2 forall` does not check that the argument is generic
+## 1. `rank-2 forall` does not check that the argument is generic (trusted)
 
 ```turmeric
 (defn both [f (forall [a] (-> a a)) x : int s : cstr] : int
@@ -45,9 +24,15 @@ Accepted. `tur run` prints `i` (the string's address plus one, read as text) and
 generic (`(defn id [x] x)`) prints `hi` and 5. Only a non-function (TUR-E0001) and
 a capturing closure ("rank-2 argument must be a named function") are rejected.
 hrt-guide says the callee instantiates `a` for each use; the caller's obligation to
-pass something generic is not checked.
+pass something generic is not checked. **Tried 2026-10-21 and reverted:** the check
+(each parameter the forall types by a bound variable must be a type variable, `any`
+or un-annotated in the named function passed) rejects ten-odd existing fixtures
+(`hrt-rank2-annotation`, `hrt-forall-constraint-show`, `currying-rank2-partial`,
+...) that pass an `int`-only function and apply it at `int`. Decision: keep it
+trusted (documented on the `forall` page) or migrate those fixtures to generic
+functions and enforce it.
 
-## 3. `&mut` and `&` do not enforce what the guide says
+## 2. `&mut` and `&` do not enforce what the guide says
 
 ```turmeric
 (defn main [] : int
@@ -68,11 +53,14 @@ pass something generic is not checked.
 - `(let [r &7.25] (println @r))`: C compiler error `lvalue required as unary '&'
   operand`; interpreted prints 7.25. A borrow of a literal should be an error or
   borrow a temporary.
-- borrow-checking-and-lifetimes-guide writes dereference as `(@ r)` and `(set! (@ r)
-  v)`; that spelling is `expression in call head has type 'int', which is not
-  callable`. The working spelling, in every fixture, is `@r` and `(set! @r v)`.
+- **Tried 2026-10-21 and reverted:** rejecting `&mut` of a non-`^mut` local and `&`
+  of a literal broke `borrow-basic`, `errors/borrow-conflict` and
+  `saffron-borrowed-struct-key-widened` (a literal borrowed as a call argument,
+  `(peek-key m (& 4.25))`, is deliberate there); only `let r &7.25` fails, in the
+  C compiler. A narrower rule (a `set!` through the borrow) is the way in.
+- (The guide's `(@ r)` spelling is fixed: it is `@r` and `(set! @r v)`.)
 
-## 4. `any` and sized numbers: `type-of` says `unknown`, and the engines disagree
+## 3. `any` and sized numbers: `type-of` says `unknown`, and the engines disagree
 
 ```turmeric
 (defn main [] : int
@@ -90,22 +78,17 @@ name for a sized kind (`unknown`), though `is?` and `cast` do distinguish them. 
 (archived `any-narrowing-broken-for-parametric-receivers` records the
 interpreter's side as a deliberate limit).
 
-## 5. `coerce` cannot change a type, and a parametrised proof type is rejected
+## 4. `coerce` cannot change a type
 
-```turmeric
-(load "stdlib/equal.tur")
-(defn conv [eq : Equal x : int] : float (coerce eq x))          ; TUR-E0707
-(defn same [eq : (Equal int int) x : int] : int (coerce eq x))  ; coerce requires an (Equal a b) proof
-```
+`(defn conv [eq : Equal x : int] : float (coerce eq x))` is TUR-E0707: `elab_coerce`
+(`src/compiler/elab_structs.c`) returns `x` at its own type, so `(Equal a b)`'s `b` is
+never the result type, despite its comment ("x : a -> x : b") and gadts-cookbook.
+The applied annotation `(Equal int int)` is accepted now (and checked against `x`'s
+type). Taking `b` as the result type needs a retyping node; the proof cannot exist
+when `a` and `b` differ, so such a branch is vacuous. Decide: implement the
+retype, or document `coerce` as an assertion that returns its argument.
 
-`elab_coerce` (`src/compiler/elab_structs.c:2908`) checks the first argument is an
-ADT named `Equal` and returns `x` as it was, so `(Equal a b)`'s `b` is never the
-result type, despite its comment ("x : a -> x : b") and gadts-cookbook. The second
-line fails because only the bare `Equal` annotation produces the ADT type the check
-looks for; `(Equal int int)` is a type application. The only working shape is
-`(coerce (Refl) x)` with the result at `x`'s own type.
-
-## 6. `type-app` is unusable in a type position
+## 5. `type-app` is unusable in a type position
 
 `(defn f [x : (type-app Option int)] ...)` is `TUR-E0012: cannot apply a type of
 kind '*' as a type constructor`, for `Option`, `Result` and a user `defdata` alike;
@@ -113,7 +96,7 @@ kind '*' as a type constructor`, for `Option`, `Result` and a user `defdata` ali
 fixture uses it in a program (`tests/fixtures/type-app` is a bare top-level
 statement). Either make the annotation form work or retire the form.
 
-## 7. The interpreter picks the wrong instance for packed `defopaque` values
+## 6. The interpreter picks the wrong instance for packed `defopaque` values
 
 ```turmeric
 (defclass Shape [a] (area [x : a] : int))
@@ -132,7 +115,7 @@ cannot tell two opaque `:int` types apart.
 `tests/fixtures/exists-open-witness-dispatch` carries `requires.compiled` for this.
 Two packed values of different machine types (`int`, `cstr`) work on both.
 
-## 8. Smaller things
+## 7. Smaller things
 
 - `(as uint8 300.7)`, `(as int8 -129.5)`, `(as int 1e30)`: compiled saturates (255,
   -128, `INT64_MAX`), interpreted wraps or takes the C result (44, 127,
@@ -140,18 +123,16 @@ Two packed values of different machine types (`int`, `cstr`) work on both.
   one behaviour for both (sized-primitives-guide documents only the integer
   wrap).
 - `(:: "hi" :int)` is the string's address compiled and the string interpreted.
-- hrt-guide spells `pack` and `open` as `(pack int 0)` and `(open c as [s v] v)`;
-  neither is accepted (`(pack value (exists ...))` and `(open e [a v] body)` are,
-  as existential-types-guide says).
+- (hrt-guide's `pack` / `open` spellings are fixed.)
 
 ## Fix directions
 
-1. Re-base `?` on the typed `Result` / `Option` and give it an interpreter path
-   and a fixture on both.
-2. Require the argument of a `forall` parameter to be generic (instantiate it at
-   a fresh type and check), or document that it is trusted.
-3. Reject `&mut` of a non-`^mut` binding, assignment to a borrowed variable and
-   `&` of a literal; make the interpreter's field borrow write through.
-4. Name sized kinds in `type-of`; make `is?`/`cast` agree between engines or
-   document the interpreter limit.
-5. Give `coerce` the result type of the proof, or document it as an assertion.
+1. Decide whether a `forall` argument is trusted or checked (migrating the
+   fixtures), and whether `&mut` of a non-`^mut` local is an error (a `set!` through
+   the borrow is the narrow form).
+2. Name sized kinds in `type-of` (the table is `emit_any_type_name_table` in
+   `emit_module.c`; it changes every program that uses `any`, so it regenerates the
+   snapshots) and make `is?`/`cast` agree between engines or document the interpreter
+   limit.
+3. Give `coerce` the result type of the proof, or document it as an assertion.
+4. Make `type-app` work in a type position or retire it.

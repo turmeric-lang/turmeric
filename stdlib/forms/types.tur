@@ -85,28 +85,33 @@
 ;;;   (:: 7.1 :float32)  ; => 7.1
 ;;@form (:: expr type)
 
-;;; ? -- return early from a function when a Result is an error.
+;;; ? -- return early from a function when a Result (or Option) is an error.
 ;;;
 ;;; `(? expr)`, or `?(expr)` in neoteric syntax, evaluates `expr` once. If it is
-;;; an error the enclosing function returns it unchanged; otherwise the `?` is
-;;; the ok value. It is written inside a function body (`? operator is only
-;;; allowed inside a function body`) and the function must itself return a
-;;; Result. A non-Result operand such as `(? 5)` is TUR-E0001.
+;;; an error the enclosing function returns it; otherwise the `?` is the ok value.
+;;; It is written inside a function body (`? operator is only allowed inside a
+;;; function body`) and the function must itself return the same kind of value.
+;;; A non-Result operand such as `(? 5)` is TUR-E0001.
 ;;;
-;;; Today it works only on a Result carried as a `ptr<void>` -- the layout the
-;;; helpers `__tur-q-is-err?` and `__tur-q-ok-val` in stdlib/result.tur read -- and
-;;; not on the `(Result T E)` that `ok`, `err` and `match` use: a call such as
-;;; `(? (halve n))` with `halve` returning `(Result int cstr)` is `TUR-E0001:
-;;; function '__tur-q-is-err?' arg 1: expected ptr<void>, got (Result int cstr)`.
-;;; Interpreted, the same helper cannot be loaded at all. Until that is fixed use
-;;; `match` on the Result (error-handling-guide).
-;;; docs/reported/type-forms-gaps.md has the repro.
+;;; An operand statically typed `(Result T E)` -- a variable, or a call of a named
+;;; function that returns one -- lowers to `(if (err? q) (return (Err (err-val q)))
+;;; (ok-val q))`, so the error type must agree and the ok type may differ; a
+;;; `(Option T)` operand lowers the same way with `None` and `unwrap`. That works
+;;; on every engine. Any other operand (a call whose result type is not known
+;;; without elaborating it, or a Result carried as a `ptr<void>`) takes the
+;;; older route through the `__tur-q-is-err?` / `__tur-q-ok-val` helpers in
+;;; stdlib/result.tur, which read the pointer layout and do not run interpreted;
+;;; bind such a value to a typed variable first.
 ;;;
 ;;; Parameters:
-;;;   expr -- a Result value
+;;;   expr -- a Result or Option value
 ;;;
 ;;; Returns:
 ;;;   The ok payload; the error is returned from the function instead.
+;;;
+;;; Example:
+;;;   (defn halve [n : int] : (Result int cstr) (if (= (mod n 2) 0) (ok (/ n 2)) (err "odd")))
+;;;   (defn quarter [n : int] : (Result int cstr) (let [h (? (halve n))] (halve h)))
 ;;@form (? expr)
 
 ;;; cast -- take a value out of an any, checking its type.
@@ -177,13 +182,15 @@
 ;;;
 ;;; `(coerce proof x)` evaluates `proof`, which must be a value of the `Equal`
 ;;; type (`(Refl)` after `(load "stdlib/equal.tur")`, or a parameter annotated
-;;; with the bare name `Equal`), and returns `x`. Nothing is converted and no code
-;;; is emitted. In the form the guides describe (gadts-guide, gadts-cookbook),
-;;; `proof` witnesses `(Equal a b)` and `x : a` is accepted as a `b`. What is
-;;; implemented only returns `x` at its own type: `(defn conv [eq : Equal x : int]
-;;; : float (coerce eq x))` is TUR-E0707, and a parameter written `eq : (Equal int
-;;; int)` is rejected as `coerce requires an (Equal a b) proof`. A session channel
-;;; cannot be coerced. A first argument that is not an `Equal` is that same message.
+;;; with the bare name `Equal` or applied, `(Equal int int)`), and returns `x`.
+;;; Nothing is converted and no code is emitted. In the form the guides describe
+;;; (gadts-guide, gadts-cookbook), `proof` witnesses `(Equal a b)` and `x : a` is
+;;; accepted as a `b`. What is implemented returns `x` at its own type: `(defn
+;;; conv [eq : Equal x : int] : float (coerce eq x))` is TUR-E0707 -- the result
+;;; type is not taken from the proof's `b`. An applied proof checks only that its
+;;; `a` is `x`'s type when both are concrete (`coerce: the proof is about a value
+;;; of type ...`). A session channel cannot be coerced. A first argument that is
+;;; not an `Equal` is `coerce requires an (Equal a b) proof`.
 ;;;
 ;;; Parameters:
 ;;;   proof -- an `Equal` value

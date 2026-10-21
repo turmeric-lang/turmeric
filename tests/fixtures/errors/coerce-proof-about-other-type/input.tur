@@ -1,0 +1,5 @@
+;;; An applied proof `(Equal int int)` is about an int; the value coerced is a
+;;; string.
+(load "stdlib/equal.tur")
+(defn bad [eq : (Equal int int)] : cstr (coerce eq "hi"))
+(defn main [] : int (println (bad (Refl))) 0)

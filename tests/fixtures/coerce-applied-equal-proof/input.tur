@@ -1,0 +1,13 @@
+;;; A proof parameter written `(Equal int int)` is a type application of the
+;;; bare `Equal` ADT; coerce accepted only the bare spelling, so the natural
+;;; annotation was `coerce requires an (Equal a b) proof`.
+(load "stdlib/equal.tur")
+
+(defn same [eq : (Equal int int) x : int] : int (coerce eq x))
+(defn bare [eq : Equal x : int] : int (coerce eq x))
+
+(defn main [] : int
+  (println (same (Refl) 5))
+  (println (bare (Refl) 6))
+  (println (coerce (Refl) 7))
+  0)

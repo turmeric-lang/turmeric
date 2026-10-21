@@ -5059,6 +5059,36 @@ Expr *elab_return(Elab *e, const Form *call) {
  * unwrapped ok type; `elab_if` accepts NEVER as compatible with any type and
  * propagates the other branch's type as the result.
  */
+static Form *question_call1(Elab *e, Span span, Form *f, Form *a) {
+    Form *items[2] = { f, a };
+    return form_list(e->arena, span, items, 2);
+}
+
+/* The static type of a `?` operand when it is a typed `Result` / `Option`:
+ * "Result", "Option", or NULL (anything else, or not known without elaborating
+ * it).  Only a variable and a call of a named function are read -- the operand
+ * is elaborated once, by the lowering. */
+static const char *question_operand_sum(Elab *e, const Form *inner) {
+    Type t;
+    memset(&t, 0, sizeof t);
+    t.kind = TY_UNKNOWN;
+    if (inner->tag == F_SYM) {
+        Binding *b = scope_lookup(e->scope, inner->as.sym);
+        if (b) t = b->type;
+    } else if (inner->tag == F_LIST && inner->as.list.len >= 1 &&
+               inner->as.list.items[0]->tag == F_SYM) {
+        Binding *b = scope_lookup(e->scope, inner->as.list.items[0]->as.sym);
+        if (b && b->type.kind == TY_FN && b->type.as.fn.result_full_type)
+            t = *b->type.as.fn.result_full_type;
+    }
+    /* `(Result int cstr)` is an application: peel it to the constructor's ADT. */
+    while (t.kind == TY_APP && t.as.app.fn) t = *t.as.app.fn;
+    if (t.kind != TY_ADT || !t.as.adt_.def || !t.as.adt_.def->name) return NULL;
+    if (strcmp(t.as.adt_.def->name, "Result") == 0) return "Result";
+    if (strcmp(t.as.adt_.def->name, "Option") == 0) return "Option";
+    return NULL;
+}
+
 Expr *elab_question(Elab *e, const Form *call) {
     if (e->fn_body_depth == 0) {
         diag_emit(DIAG_ERROR, call->span,
@@ -5104,6 +5134,42 @@ Expr *elab_question(Elab *e, const Form *call) {
     const Symbol *q_sym = symtab_intern(e->st,
         strslice(q_name, (uint32_t)strlen(q_name)));
     Form *q_sym_f = form_sym(e->arena, span, q_sym);
+
+    /* A operand statically typed `(Result T E)` or `(Option T)` -- the language's
+     * own by-value sums -- lowers to a `match` on it.  The helpers below read the
+     * layout of the old pointer-carried Result (`struct { int tag; int64_t
+     * payload; } *`), so a typed value failed their `ptr<void>` argument check
+     * and `?` could not be used on the type error-handling-guide documents it
+     * for.  The match is plain Turmeric, so it runs under --interpret too. */
+    {
+        const char *kind = question_operand_sum(e, inner);
+        if (kind) {
+            bool is_res = strcmp(kind, "Result") == 0;
+            /* (if (err? q) (return (Err (err-val q))) (ok-val q)), or
+             * (if (none? q) (return (None)) (unwrap q)): a branch that
+             * `return`s joins with any other, which a `match` arm does not. */
+            #define QSYM(n) form_sym(e->arena, span, intern_cstr(e->st, (n)))
+            #define QCALL1(f, a) question_call1(e, span, (f), (a))
+            Form *test_f = QCALL1(QSYM(is_res ? "err?" : "none?"), q_sym_f);
+            Form *fail_val;
+            if (is_res) {
+                fail_val = QCALL1(QSYM("Err"), QCALL1(QSYM("err-val"), q_sym_f));
+            } else {
+                Form *_n[1] = { QSYM("None") };
+                fail_val = form_list(e->arena, span, _n, 1);
+            }
+            Form *ret_f = QCALL1(form_sym(e->arena, span, e->sym_return), fail_val);
+            Form *ok_f = QCALL1(QSYM(is_res ? "ok-val" : "unwrap"), q_sym_f);
+            Form *if_i[4] = { form_sym(e->arena, span, e->sym_if), test_f, ret_f, ok_f };
+            Form *if_f2 = form_list(e->arena, span, if_i, 4);
+            #undef QCALL1
+            #undef QSYM
+            Form *bv_items[2] = { q_sym_f, inner };
+            Form *bv = form_vec(e->arena, span, bv_items, 2);
+            Form *li[3] = { form_sym(e->arena, span, e->sym_let), bv, if_f2 };
+            return elab_form(e, form_list(e->arena, span, li, 3));
+        }
+    }
 
     /* The ? lowering routes through two stdlib helpers --
      * __tur-q-is-err? and __tur-q-ok-val (defined in stdlib/result.tur) --

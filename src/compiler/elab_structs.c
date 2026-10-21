@@ -2967,16 +2967,41 @@ Expr *elab_coerce(Elab *e, const Form *call) {
     }
     Expr *eq = elab_form(e, call->as.list.items[1]);
     if (!eq) return NULL;
-    /* Verify eq has type Equal */
-    if (eq->type.kind != TY_ADT ||
-        !eq->type.as.adt_.def ||
-        strcmp(eq->type.as.adt_.def->name, "Equal") != 0) {
+    /* Verify eq has type Equal.  A parametrised annotation `(Equal int int)` is a
+     * type application of the bare ADT, which only the bare `Equal` spelling used
+     * to satisfy; peel it, keeping the first argument (the type `x` has). */
+    const Type *proof_lhs = NULL;
+    Type eqt = eq->type;
+    if (eqt.kind == TY_APP && eqt.as.app.fn && eqt.as.app.arg) {
+        const Type *head = eqt.as.app.fn;
+        if (head->kind == TY_APP && head->as.app.fn && head->as.app.arg) {
+            proof_lhs = head->as.app.arg;      /* ((Equal a) b) */
+            head = head->as.app.fn;
+        }
+        if (head->kind == TY_ADT) eqt = *head;
+    }
+    if (eqt.kind != TY_ADT ||
+        !eqt.as.adt_.def ||
+        strcmp(eqt.as.adt_.def->name, "Equal") != 0) {
         diag_emit(DIAG_ERROR, call->as.list.items[1]->span,
                   "coerce requires an (Equal a b) proof as first argument");
         return NULL;
     }
     Expr *x = elab_form(e, call->as.list.items[2]);
     if (!x) return NULL;
+    /* The value is read at the proof's left type: a concrete scalar that is not
+     * x's own is a proof about some other value. */
+    if (proof_lhs && proof_lhs->kind != TY_TYVAR && proof_lhs->kind != TY_UNKNOWN &&
+        x->type.kind != TY_TYVAR && x->type.kind != TY_UNKNOWN &&
+        proof_lhs->kind != x->type.kind &&
+        !(proof_lhs->kind == TY_INT && x->type.kind == TY_INT64)) {
+        diag_emit_with_code(DIAG_ERROR, call->as.list.items[2]->span,
+                            TUR_E0001_TYPE_MISMATCH,
+                            "coerce: the proof is about a value of type %s, but this value "
+                            "has type %s",
+                            type_name(*proof_lhs), type_name(x->type));
+        return NULL;
+    }
     /* SS1: Reject coerce whose source is a session channel.
      * Reinterpreting a Session endpoint at a different protocol step would
      * strand the linear resource; the Equal witness is insufficient to make
