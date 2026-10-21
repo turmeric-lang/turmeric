@@ -421,6 +421,40 @@ document.addEventListener('DOMContentLoaded', function(){
       });
     }
 
+    // ---- Recently Added / Recently Updated pages ---------------------------
+    // Each panel ships every row, all but the first page `hidden`, and its
+    // first | prev | next | last pager hidden too, so the page reads as page 1
+    // with no JS. A dead end is aria-disabled rather than disabled, so the
+    // button you just pressed keeps focus on reaching the first or last page.
+    document.querySelectorAll('.recent-panel').forEach(function(panel){
+      var pager = panel.querySelector('.recent-pager');
+      if (!pager) return;
+      var rows = Array.prototype.slice.call(panel.querySelectorAll('li'));
+      var size = Number(pager.dataset.pageSize) || 10;
+      var last = Math.max(0, Math.ceil(rows.length / size) - 1);
+      var status = pager.querySelector('.recent-page-status');
+      var page = 0;
+
+      function show(p) {
+        page = Math.max(0, Math.min(last, p));
+        rows.forEach(function(li, i){ li.hidden = Math.floor(i / size) !== page; });
+        pager.querySelectorAll('button').forEach(function(b){
+          var back = b.dataset.page === 'first' || b.dataset.page === 'prev';
+          var dead = back ? page === 0 : page === last;
+          b.setAttribute('aria-disabled', dead ? 'true' : 'false');
+        });
+        if (status) status.textContent = 'page ' + (page + 1) + ' of ' + (last + 1);
+      }
+
+      pager.addEventListener('click', function(e){
+        var b = e.target.closest('button');
+        if (!b || b.getAttribute('aria-disabled') === 'true') return;
+        show({ first: 0, prev: page - 1, next: page + 1, last: last }[b.dataset.page]);
+      });
+      pager.hidden = false;
+      show(0);
+    });
+
     // ---- Filter box ---------------------------------------------------------
     var input = document.querySelector('.search-input');
     if (!input) return;
@@ -1588,6 +1622,12 @@ def _fmt_desc(text: str) -> str:
     return _fmt_inline(text)
 
 
+# Rows per page of the Recently Added / Recently Updated tabs. Ten, the length
+# each list had before it had pages, and the length of the matching sections
+# in Try Turmeric's docs pane (DOCS_RECENT_COUNT in web/main.js).
+RECENT_PAGE_SIZE = 10
+
+
 def render_index(categories: list[dict], all_stems: set[str], out_dir: Path,
                  recent: list[dict] | None = None,
                  recent_updated: list[dict] | None = None) -> None:
@@ -1642,12 +1682,41 @@ def render_index(categories: list[dict], all_stems: set[str], out_dir: Path,
     sidebar_html = build_sidebar(
         toc=f'      <h3>Categories</h3>\n      <ul>{sidebar_cats}</ul>')
 
+    # "<title> (<date>) -- <description>", one row each. The description is
+    # the part that gives: it takes whatever width the title and date leave
+    # and ellipsizes there, so a long one costs the row nothing but its tail.
+    # The row's title attribute carries the whole description for hover.
+    # Rows past the first page ship `hidden`, so without JS the panel reads as
+    # its first page -- the same ten rows it listed before it had pages.
     def dated_items(entries: list[dict]) -> str:
-        return ''.join(
-            f'<li><a href="{r["stem"]}.html">{_fmt_inline(r["label"])}</a>'
-            f'<span style="color:var(--text-sec)"> -- {r["date"]}</span></li>'
-            for r in entries
-        )
+        out = []
+        for i, r in enumerate(entries):
+            desc = r.get('desc', '').replace('—', '--')
+            out.append(
+                f'<li title="{_html.escape(desc, quote=True)}"'
+                f'{" hidden" if i >= RECENT_PAGE_SIZE else ""}>'
+                f'<a href="{r["stem"]}.html">{_fmt_inline(r["label"])}</a>'
+                f'<span class="recent-date">&nbsp;({r["date"]})</span>'
+                + (f'<span class="recent-desc">&nbsp;-- {_fmt_desc(desc)}</span>'
+                   if desc else '')
+                + '</li>')
+        return ''.join(out)
+
+    # first | prev | next | last, under a panel with more than one page. Shipped
+    # `hidden`: guide-index.js reveals it once it can turn the pages, so a page
+    # read without JS never shows controls that do nothing.
+    def pager(heading: str, entries: list[dict]) -> str:
+        pages = -(-len(entries) // RECENT_PAGE_SIZE)
+        if pages <= 1:
+            return ''
+        sep = '<span class="recent-pager-sep" aria-hidden="true">|</span>'
+        buttons = sep.join(
+            f'<button type="button" data-page="{name}">{name}</button>'
+            for name in ('first', 'prev', 'next', 'last'))
+        return (f'<nav class="recent-pager" aria-label="{heading} pages"'
+                f' data-page-size="{RECENT_PAGE_SIZE}" hidden>{buttons}'
+                f'<span class="recent-page-status" aria-live="polite">'
+                f'page 1 of {pages}</span></nav>')
 
     # What arrived, then what changed, as two tabs of one card. The dates are
     # the two ends of each guide's git history -- first commit and last -- so a
@@ -1668,10 +1737,11 @@ def render_index(categories: list[dict], all_stems: set[str], out_dir: Path,
         for i, (slug, heading, _) in enumerate(tabs)
     )
     panels = ''.join(
-        f'<ul class="recent-panel" role="tabpanel" id="{slug}"'
-        f' aria-labelledby="{slug}-tab" style="list-style:none;margin:0"'
-        f'{"" if i == 0 else " hidden"}>{dated_items(entries)}</ul>'
-        for i, (slug, _, entries) in enumerate(tabs)
+        f'<div class="recent-panel" role="tabpanel" id="{slug}"'
+        f' aria-labelledby="{slug}-tab"{"" if i == 0 else " hidden"}>'
+        f'<ul style="list-style:none;margin:0">{dated_items(entries)}</ul>'
+        f'{pager(heading, entries)}</div>'
+        for i, (slug, heading, entries) in enumerate(tabs)
     )
     recent_html = f'''\
       <div class="index-card recent-tabs" style="display:block;margin-bottom:1.5rem">
@@ -1699,6 +1769,18 @@ def render_index(categories: list[dict], all_stems: set[str], out_dir: Path,
     .recent-tablist .seg-btn:hover {{ color:var(--text-primary); }}
     .recent-tablist .seg-btn.active {{ color:var(--gold-bright); background:var(--bg-hover); }}
     .recent-tablist .seg-btn:focus-visible {{ outline:2px solid var(--gold); outline-offset:-2px; }}
+    .recent-panel li {{ display:flex; align-items:baseline; white-space:nowrap; min-width:0; }}
+    .recent-panel li[hidden] {{ display:none; }}
+    .recent-panel li a {{ flex:0 1 auto; min-width:0; overflow:hidden; text-overflow:ellipsis; }}
+    .recent-panel .recent-date {{ flex:none; color:var(--text-sec); }}
+    .recent-panel .recent-desc {{ flex:1 1 0; min-width:0; overflow:hidden; text-overflow:ellipsis; color:var(--text-sec); }}
+    .recent-pager {{ display:flex; flex-wrap:wrap; align-items:baseline; gap:0.4rem; margin-top:0.6rem; font-family:system-ui; font-size:0.8rem; color:var(--text-dim); }}
+    .recent-pager[hidden] {{ display:none; }}
+    .recent-pager button {{ padding:0; background:none; border:none; font:inherit; color:var(--gold); cursor:pointer; }}
+    .recent-pager button:hover {{ color:var(--gold-bright); text-decoration:underline; }}
+    .recent-pager button[aria-disabled="true"] {{ color:var(--text-dim); cursor:default; text-decoration:none; }}
+    .recent-pager button:focus-visible {{ outline:2px solid var(--gold); outline-offset:2px; }}
+    .recent-page-status {{ margin-left:0.6rem; }}
   </style>
 </head>
 <body>
@@ -1859,12 +1941,18 @@ def main() -> None:
         m = meta_by_stem.get(src.stem, {})
         return m.get('title', src.stem.replace('-', ' ').title()).strip()
 
+    def dated_entry(src: Path, date: str) -> dict:
+        return {'stem': src.stem, 'label': label_for(src), 'date': date,
+                'desc': meta_by_stem.get(src.stem, {}).get('description', '').strip()}
+
+    # Every dated guide, not just the newest ten: the index pages through
+    # them RECENT_PAGE_SIZE at a time, so the last page is the oldest guides
+    # rather than nothing past the tenth.
     dated: list[tuple[str, Path]] = [
         (d, src) for src, d in zip(md_files, creation_dates) if d
     ]
     dated.sort(key=lambda t: t[0], reverse=True)
-    recent = [{'stem': src.stem, 'label': label_for(src), 'date': date}
-              for date, src in dated[:10]]
+    recent = [dated_entry(src, date) for date, src in dated]
 
     # A guide whose newest commit is the one that added it has not been updated
     # -- it is new, which the card above already says. Listing it in both would
@@ -1875,8 +1963,7 @@ def main() -> None:
         if (mod := modified_dates.get(src.stem)) and mod != add
     ]
     edited.sort(key=lambda t: t[0], reverse=True)
-    recent_updated = [{'stem': src.stem, 'label': label_for(src), 'date': date}
-                      for date, src in edited[:10]]
+    recent_updated = [dated_entry(src, date) for date, src in edited]
 
     print('Generating guides:')
     # One run of the renderer for every guide (tools/mdrender.py), rather
