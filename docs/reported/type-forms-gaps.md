@@ -124,7 +124,10 @@ Two packed values of different machine types (`int`, `cstr`) work on both.
   `INT64_MIN`). A float outside the target's range has no defined result in C; pick
   one behaviour for both (sized-primitives-guide documents only the integer
   wrap).
-- `(:: "hi" :int)` is the string's address compiled and the string interpreted.
+- `(:: "hi" :int)` is the string's address compiled and the string interpreted;
+  and since the address is exposed, two identical literals compare equal under
+  `tur run` and unequal under `tur jit`
+  ([cstr-literal-address-differs-by-engine](cstr-literal-address-differs-by-engine.md)).
 - (hrt-guide's `pack` / `open` spellings are fixed.)
 
 ## Fix directions

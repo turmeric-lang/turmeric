@@ -51,12 +51,12 @@ wrong as C. The program depends on an accident of the cc path.
 ## Resolution (2026-10-21)
 
 Fix directions 1 and 3. Direction 2 (one `static const char[]` per distinct
-literal text, so the cc behaviour becomes a guarantee) is not taken: plain
-Turmeric cannot observe a literal's address -- `=` refuses a `cstr`
-(TUR-E0006) -- so the only programs that depend on it reach through inline C
-or an erasing ascription, and promising literal identity would rewrite every
-emitted string literal (and every snapshot) to support a property the
-language never offered.
+literal text, so the cc behaviour becomes a guarantee) was not taken, on the
+grounds that plain Turmeric cannot observe a literal's address and that it would
+rewrite every snapshot. **Both reasons were wrong** (corrected 2026-10-21): an
+erasing `(:: s :int)` is plain Turmeric and observes it, and snapshot churn is
+not a reason to defer under the fixture policy. That remaining divergence is open
+as [cstr-literal-address-differs-by-engine](../reported/cstr-literal-address-differs-by-engine.md).
 
 1. **The example.** `examples/datalog/indexed.tur` keys its EAVT index on an
    interned attribute id: `attr-id` keeps a table of the names it has seen,
