@@ -1944,6 +1944,29 @@ static int cmd_emit_c(const char *path,
     return rc;
 }
 
+/* J6: a borrower's BorrowSpecInfo as the owner's ForcedAbiSpec.  The strings
+ * are borrowed: valid until the BorrowSpecInfo is freed. */
+static void forced_spec_from_borrow(ForcedAbiSpec *fs, const BorrowSpecInfo *bsi) {
+    fs->clone_name  = bsi->clone_name;
+    fs->fn_symbol   = bsi->fn_symbol;
+    fs->result_kind = bsi->result_kind;
+    fs->result_adt  = bsi->result_adt;
+    fs->n_args      = bsi->n_args;
+    for (uint8_t ai = 0; ai < bsi->n_args; ai++) {
+        fs->arg_kinds[ai] = bsi->arg_kinds[ai];
+        fs->arg_adts[ai]  = bsi->arg_adts[ai];
+    }
+}
+
+/* Free one BorrowSpecInfo's malloc'd strings (not the entry itself). */
+static void borrow_spec_free_fields(BorrowSpecInfo *bsi) {
+    free(bsi->clone_name);
+    free(bsi->owning_module);
+    free(bsi->fn_symbol);
+    free(bsi->result_adt);
+    for (uint8_t ai = 0; ai < bsi->n_args; ai++) free(bsi->arg_adts[ai]);
+}
+
 /* Phase B: emit per-module .h and .c files to a directory.
  * Usage: tur emit-c --output-dir <dir> <file1.tur> [<file2.tur> ...]
  * Each input produces <dir>/<module>.h and <dir>/<module>.c.
@@ -2044,12 +2067,7 @@ static int cmd_emit_c_to_dir(const char *out_dir, char **inputs, int n_inputs,
                         if (!nf) { fprintf(stderr, "tur: oom\n"); rc = 2; break; }
                         ecd_forced[owner] = nf; ecd_cap_forced[owner] = nc;
                     }
-                    ForcedAbiSpec *fs = &ecd_forced[owner][ecd_n_forced[owner]++];
-                    fs->clone_name = bsi->clone_name;
-                    fs->fn_symbol  = bsi->fn_symbol;
-                    fs->result_kind = bsi->result_kind;
-                    fs->n_args = bsi->n_args;
-                    for (uint8_t ai = 0; ai < bsi->n_args; ai++) fs->arg_kinds[ai] = bsi->arg_kinds[ai];
+                    forced_spec_from_borrow(&ecd_forced[owner][ecd_n_forced[owner]++], bsi);
                 }
             }
             for (int i = 0; i < n_inputs && rc == 0; i++) {
@@ -2111,11 +2129,8 @@ static int cmd_emit_c_to_dir(const char *out_dir, char **inputs, int n_inputs,
     }
 
     for (int i = 0; i < n_inputs; i++) {
-        for (uint32_t bi = 0; bi < ecd_n_borrow[i]; bi++) {
-            free(ecd_borrow[i][bi].clone_name);
-            free(ecd_borrow[i][bi].owning_module);
-            free(ecd_borrow[i][bi].fn_symbol);
-        }
+        for (uint32_t bi = 0; bi < ecd_n_borrow[i]; bi++)
+            borrow_spec_free_fields(&ecd_borrow[i][bi]);
         free(ecd_borrow[i]);
         free(ecd_mod_names[i]); free(ecd_h_paths[i]); free(ecd_c_paths[i]);
     }
@@ -7871,11 +7886,8 @@ static bool g_build_bundle_deps = false;
  * the Debug tur's LeakSanitizer turned the compile error's exit 1 into 141. */
 static void free_borrow_specs(BorrowSpecInfo **all, uint32_t *n_all, int n_files) {
     for (int i = 0; all && n_all && i < n_files; i++) {
-        for (uint32_t bi = 0; bi < n_all[i]; bi++) {
-            free(all[i][bi].clone_name);
-            free(all[i][bi].owning_module);
-            free(all[i][bi].fn_symbol);
-        }
+        for (uint32_t bi = 0; bi < n_all[i]; bi++)
+            borrow_spec_free_fields(&all[i][bi]);
         free(all[i]);
     }
     free(all);
@@ -8100,13 +8112,8 @@ static int cmd_build_multi_files(char **tur_files, int n_files,
                 forced_for[owner] = nf;
                 cap_forced_for[owner] = nc;
             }
-            ForcedAbiSpec *fs = &forced_for[owner][n_forced_for[owner]++];
-            fs->clone_name = bsi->clone_name; /* borrow (valid until all_borrow freed) */
-            fs->fn_symbol  = bsi->fn_symbol;
-            fs->result_kind = bsi->result_kind;
-            fs->n_args = bsi->n_args;
-            for (uint8_t ai = 0; ai < bsi->n_args; ai++)
-                fs->arg_kinds[ai] = bsi->arg_kinds[ai];
+            /* borrows bsi's strings (valid until all_borrow freed) */
+            forced_spec_from_borrow(&forced_for[owner][n_forced_for[owner]++], bsi);
         }
     }
 
