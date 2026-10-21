@@ -1,0 +1,36 @@
+;; forward-call-rc-param -- a call to a defn defined LATER in the file whose
+;; parameter is an `rc<S>` used to fail "function 'b' arg 1: expected int, got
+;; rc<<adt>>": the forward declaration left the parameter as the int
+;; placeholder, so rc-threaded mutual recursion could not be written.  The
+;; forward decl now carries the rc type and the `^borrow` flag, so a borrowed
+;; rc stays the caller's (and is dropped once, at main's scope exit).  See
+;; docs/archive/forward-call-with-rc-argument-rejected.md.
+(defstruct S [n : int])
+
+;; Mutual recursion through a borrowed rc.
+(defn ping [^borrow st : rc<S> k : int] : int
+  (if (= k 0) (.n st) (pong st (- k 1))))
+(defn pong [^borrow st : rc<S> k : int] : int
+  (ping st k))
+
+;; An owning rc parameter, called before its definition.
+(defn first-call [st : rc<S>] : int (later st))
+(defn later [st : rc<S>] : int (+ (.n st) 1))
+
+;; A scalar pointee.
+(defn bump-twice [^borrow r : rc<int>] : int (bump-once r))
+(defn bump-once [^borrow r : rc<int>] : int 42)
+
+(defn main [] : int
+  (let [st (rc/of (S 7))]
+    (do (println (ping st 3))
+        (println (pong st 2))))
+  (println (first-call (rc/of (S 9))))
+  (let [r (rc/of 5)]
+    (println (bump-twice r)))
+  ;; A letrec lambda over an rc parameter.
+  (let [st (rc/of (S 11))]
+    (letrec [f (fn [^borrow s : rc<S> k : int] : int
+                 (if (= k 0) (.n s) (f s (- k 1))))]
+      (println (f st 4))))
+  0)

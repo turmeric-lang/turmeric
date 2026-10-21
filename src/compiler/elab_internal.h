@@ -1664,6 +1664,7 @@ TypeKind typekind_from_symbol(const char *name);
 uint32_t fwd_decl_scan_params(Arena *arena, const Form *params_f, TypeKind **out_arg_kinds);
 bool fwd_decl_scan_variadic(const Form *params_f, TypeKind *rest_kind);
 void fwd_decl_apply_variadic(Elab *e, Arena *arena, Type *fn_type, const Form *params_f);
+bool fwd_decl_apply_ref_params(Elab *e, Arena *arena, Type *fn_type, const Form *params_f);
 bool typekind_is_numeric(TypeKind k);
 int type_size_bytes(TypeKind kind);
 bool typekind_is_concrete_for_disjoint(TypeKind k);
@@ -1750,6 +1751,7 @@ Type *elab_fwd_compound_result_type(Elab *e, const Form *f, uint32_t name_idx,
 void elab_fwd_note_pending_result(Elab *e, Binding *b, const Form *f,
                                   uint32_t name_idx, uint32_t params_idx,
                                   const Form *ret_f);
+void elab_fwd_note_pending_params(Elab *e, Binding *b, const Form *params_f);
 void elab_fwd_refresh_pending(Elab *e);
 const Symbol *intern_cstr(SymbolTable *st, const char *s);
 bool binding_mark_moved(Binding *b, Span use_span);

@@ -167,6 +167,84 @@ void fwd_decl_apply_variadic(Elab *e, Arena *arena, Type *fn_type, const Form *p
     fn_type->as.fn.arg_full_types[n - 1] = rt;
 }
 
+/* forward-call-with-rc-argument-rejected: give a forward-declared fn type the
+ * reference-family parameters (`rc<S>`, `weak<S>`, `ref<S>`, `lref<S>`) and the
+ * `^borrow` flags its definition will have.  fwd_decl_scan_params left such a
+ * slot the TY_INT placeholder, and the call check has no rc hatch, so a caller
+ * written ABOVE `(defn b [^borrow st : rc<S> ...] ...)` failed "expected int,
+ * got rc<<adt>>" -- rc-threaded mutual recursion could not be written.  The
+ * flag matters as much as the type: whether the argument is lent or moved at
+ * the call is the callee's `^borrow`, which the placeholder hid.
+ *
+ * Only a pointee a bare name settles without the elaborator is committed: a
+ * scalar, or a registered non-generic ADT / struct (RF0 has stubbed every
+ * top-level type by the time the top-level pre-pass runs).  Anything else
+ * keeps the placeholder, and the return is true so the caller can retry: a
+ * module has no RF0, so its own `defstruct S` is unregistered at its pre-pass
+ * (elab_fwd_note_pending_result keeps the decl and retries at each defn).
+ * `rc<A>` over a type parameter never settles and keeps the old behaviour. */
+bool fwd_decl_apply_ref_params(Elab *e, Arena *arena, Type *fn_type, const Form *params_f) {
+    if (!fn_type || fn_type->kind != TY_FN || !params_f || params_f->tag != F_VEC) return false;
+    uint32_t arity = fn_type->as.fn.arity;
+    if (arity == 0 || !fn_type->as.fn.arg_kinds) return false;
+    bool unsettled = false;
+    TypeKind rest_kind;
+    bool skip_amp = fwd_decl_scan_variadic(params_f, &rest_kind);
+    uint32_t slot = 0;
+    bool pending_borrow = false;
+    for (uint32_t pi = 0; pi < params_f->as.list.len; pi++) {
+        const Form *p = params_f->as.list.items[pi];
+        if (p->tag == F_SYM && p->as.sym->name && p->as.sym->name[0] == '^') {
+            if (strcmp(p->as.sym->name, "^borrow") == 0) pending_borrow = true;
+            continue;
+        }
+        if (skip_amp && p->tag == F_SYM && strcmp(p->as.sym->name, "&") == 0)
+            continue;
+        if (p->tag != F_KEYWORD && p->tag != F_TYPE_ANN) {
+            /* A new parameter slot; a pending `^borrow` marks it. */
+            if (slot >= arity) return unsettled;
+            if (pending_borrow && fn_type->as.fn.arg_flags)
+                FN_ARG_SET(fn_type->as.fn, slot, FA_BORROW, true);
+            pending_borrow = false;
+            slot++;
+            continue;
+        }
+        if (slot == 0) continue;
+        const Form *t = p;
+        if (p->tag == F_TYPE_ANN && p->as.list.len >= 1) t = p->as.list.items[0];
+        if (t->tag != F_SYM && t->tag != F_KEYWORD) continue;
+        const char *nm = t->as.sym->name;
+        uint32_t len = t->as.sym->len;
+        uint32_t prefix = 0;
+        if (len > 3 && memcmp(nm, "rc<", 3) == 0) prefix = 3;
+        else if (len > 4 && memcmp(nm, "ref<", 4) == 0) prefix = 4;
+        else if (len > 5 && (memcmp(nm, "weak<", 5) == 0 || memcmp(nm, "lref<", 5) == 0)) prefix = 5;
+        if (prefix == 0 || nm[len - 1] != '>' || len - prefix - 1 == 0) continue;
+        char inner[128];
+        uint32_t inner_len = len - prefix - 1;
+        if (inner_len >= sizeof inner) continue;
+        memcpy(inner, nm + prefix, inner_len);
+        inner[inner_len] = '\0';
+        TypeKind ik = typekind_from_symbol(inner);
+        bool settled = ik != TY_UNKNOWN &&
+                       (typekind_is_numeric(ik) || ik == TY_BOOL || ik == TY_CSTR);
+        for (uint32_t ai = 0; !settled && ai < e->n_adt_defs; ai++) {
+            const AdtDef *d = e->adt_defs[ai];
+            if (d->n_type_params == 0 && strcmp(d->name, inner) == 0) settled = true;
+        }
+        if (!settled) { unsettled = true; continue; }
+        Type *rt = rc_family_type_from_keyword_name(e, nm, len, t->span, NULL, NULL, NULL, 0);
+        if (!rt) continue;
+        fn_type->as.fn.arg_kinds[slot - 1] = (uint8_t)rt->kind;
+        if (!fn_type->as.fn.arg_full_types) {
+            fn_type->as.fn.arg_full_types = (Type **)arena_alloc(arena, arity * sizeof(Type *));
+            for (uint32_t i = 0; i < arity; i++) fn_type->as.fn.arg_full_types[i] = NULL;
+        }
+        fn_type->as.fn.arg_full_types[slot - 1] = rt;
+    }
+    return unsettled;
+}
+
 uint32_t fwd_decl_scan_params(Arena *arena, const Form *params_f, TypeKind **out_arg_kinds) {
     *out_arg_kinds = NULL;
     uint32_t arity = 0;

@@ -3141,6 +3141,8 @@ Expr *elab_letrec(Elab *e, const Form *call) {
                     placeholder = type_fn(arg_kinds, (uint8_t)arity, ret_kind);
                     /* r7rs-lang-plan R7: a variadic lambda's rest shape. */
                     fwd_decl_apply_variadic(e, e->arena, &placeholder, params_f);
+                    /* forward-call-with-rc-argument-rejected */
+                    fwd_decl_apply_ref_params(e, e->arena, &placeholder, params_f);
                     /* W1 (letrec self-recursion): the scalar ret_kind peek
                      * above resolves only int/bool/void/nil/cstr and collapses
                      * every other declared return -- a :copy struct, a (Vec T),
