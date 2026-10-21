@@ -1,5 +1,7 @@
 # Two identical string literals share an address under cc but not under `tur jit`
 
+**RESOLVED 2026-10-21** -- see [Resolution](#resolution-2026-10-21).
+
 **Severity:** low-medium (engine divergence; silent wrong answer). Found
 2026-10-14 by the performance audit's WP0 output-parity check
 ([performance-audit-plan](../archive/performance-audit-plan.md)), which
@@ -45,3 +47,33 @@ wrong as C. The program depends on an accident of the cc path.
 3. **At least:** say in the inline-C guide that a literal's address is not a
    stable identity across engines, and have the corpus parity check (the
    audit's `run-corpus.py`) keep catching it.
+
+## Resolution (2026-10-21)
+
+Fix directions 1 and 3. Direction 2 (one `static const char[]` per distinct
+literal text, so the cc behaviour becomes a guarantee) is not taken: plain
+Turmeric cannot observe a literal's address -- `=` refuses a `cstr`
+(TUR-E0006) -- so the only programs that depend on it reach through inline C
+or an erasing ascription, and promising literal identity would rewrite every
+emitted string literal (and every snapshot) to support a property the
+language never offered.
+
+1. **The example.** `examples/datalog/indexed.tur` keys its EAVT index on an
+   interned attribute id: `attr-id` keeps a table of the names it has seen,
+   compares by `strcmp`, and returns the same small integer for equal
+   contents whatever their address. The asserts and `idb-q-ea` call it where
+   they called `cstr->int`. `tur run` and `tur jit` both print `Alice` and
+   `25` now. (`tur --interpret` still stops at `db-assert!`'s third argument,
+   `the REPL JIT cannot pass this value as a C scalar`, before and after this
+   change: a `:heap` value word handed to an inline-C `:int` parameter, not
+   this defect.) The other four datalog examples already compared names with
+   `strcmp` and agree across engines.
+2. **The docs.** jit-guide gains "Two identical string literals are two
+   objects" under its permanent constraints, and c-integration-guide's
+   pitfalls table a row for keying on a literal's address. datalog-04-indexing
+   (the tutorial that walks `indexed.tur`) explains `attr-id` in place of its
+   old claim that literals are interned by the C compiler.
+3. **The parity check.** `benchmarks/audit/corpus.txt` runs `indexed.tur` on
+   `cc,jit` again (it had been cc-only because of this report);
+   `run-corpus.py --only datalog/indexed` passes both engines against the
+   pinned output.

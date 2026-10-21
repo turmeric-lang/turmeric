@@ -312,7 +312,7 @@ hits under ASan.
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [jit-string-literal-identity-differs-from-cc](jit-string-literal-identity-differs-from-cc.md) | low-medium | Two identical string literals compare equal by address under `tur build` (gcc merges them) and unequal under `tur jit` (c2mir does not), so `examples/datalog/indexed.tur`, which keys its index on literal addresses, answers its queries compiled and returns nothing JIT'd. |
+| ~~[jit-string-literal-identity-differs-from-cc](../archive/jit-string-literal-identity-differs-from-cc.md)~~ | low-medium | **RESOLVED 2026-10-21** (archived): `examples/datalog/indexed.tur` keys its index on an interned `attr-id` (compared by contents), so `tur jit` answers as `tur build` does; jit-guide and c-integration-guide say a literal's address is no identity; the audit corpus runs the example on `cc,jit` again. Literal identity stays unpromised (Turmeric's `=` refuses a `cstr`) |
 
 ## Found executing generic-zipper-plan (filed 2026-10-14)
 

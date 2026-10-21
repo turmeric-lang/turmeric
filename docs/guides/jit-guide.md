@@ -571,6 +571,23 @@ tests the whole byte. A latent layout bug can therefore be invisible on
 Linux/`cc` (glibc happens to zero the byte) and deterministic under the JIT
 (macOS leaves `0x5A` there).
 
+### Two identical string literals are two objects
+
+Whether `"abc"` written twice is one object or two is unspecified in C. gcc
+merges identical literals within a unit (`-fmerge-constants`), so on the `cc`
+path two `":user/name"` literals usually share an address; c2mir gives each
+occurrence its own storage, so under the JIT they never do. A program that
+reads a literal's address -- through inline C, or an erasing `(:: s :int)` --
+and compares it is therefore right compiled and silently wrong JIT'd.
+`examples/datalog/indexed.tur` keyed its index that way and found nothing
+under `tur jit`
+([jit-string-literal-identity-differs-from-cc](../archive/jit-string-literal-identity-differs-from-cc.md)).
+
+This is not a JIT bug: Turmeric gives a `cstr` no identity (`=` does not
+accept one), and neither engine promises it. Compare contents (`strcmp`), or
+intern the string once at the edge and compare the ids, as that example now
+does with `attr-id`.
+
 ### Weak-symbol overrides do not cross the JIT boundary
 
 The runtime declares `__attribute__((weak)) int tur_closure_headers_enabled`

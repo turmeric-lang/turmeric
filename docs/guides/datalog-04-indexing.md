@@ -40,7 +40,7 @@ The index uses two C structs:
 /* One entry in a hash bucket chain */
 struct eavt_entry {
   int64_t entity;          /* the entity ID */
-  int64_t attr;            /* the attr cstr pointer (stored as int64) */
+  int64_t attr;            /* the attribute's attr-id (see below) */
   int64_t datum;           /* the datum pointer (stored as int64) */
   struct eavt_entry *next; /* next entry in the chain, or NULL */
 };
@@ -76,11 +76,32 @@ The bucket is chosen by:
 size_t h = (size_t)(entity * 31 + attr) % i->nbuckets;
 ```
 
-`attr` is the numeric value of the `cstr` pointer. Because C string literals
-with the same content may share the same address (string interning), comparing
-pointer values works correctly for attributes that come from the same literal
-pool. The hash is intentionally minimal -- this is a tutorial, not a production
-hash map.
+`attr` is the attribute's **attr-id**, a small integer that `attr-id` hands
+out per distinct name. The hash is intentionally minimal -- this is a tutorial,
+not a production hash map.
+
+### Why an id, not the string's address
+
+It is tempting to key on the `cstr` pointer itself, `(cstr->int ":user/name")`,
+and compare those integers. Do not: whether two identical string literals share
+one address is up to the C compiler. gcc merges them within a file, so the
+compiled program happens to work; `tur jit` hands the same C to c2mir, which
+gives each literal its own storage, and every lookup comes back empty. Turmeric
+gives a `cstr` no identity -- `=` does not even accept one -- so compare names by
+their contents. `attr-id` does that once, at the edge, and the index compares
+integers from then on:
+
+```turmeric
+(defn attr-id [s : cstr] : int
+  ```c
+  static char **names = NULL;
+  static int64_t n = 0, cap = 0;
+  for (int64_t i = 0; i < n; i++)
+    if (strcmp(names[i], s) == 0) return i + 1;
+  ...  /* grow the table, copy s in */
+  return ++n;
+  ```)
+```
 
 ---
 
@@ -210,12 +231,12 @@ defn idb-assert! [idb :int entity :int attr :int value :int] :int
 
 ```turmeric
 (defn idb-q-ea [idb : int entity : int attr : cstr] : ptr<void>
-  (eavt-idx-lookup (idb-idx idb) entity (cstr->int attr)))
+  (eavt-idx-lookup (idb-idx idb) entity (attr-id attr)))
 ```
 
 ```sweet-exp
 defn idb-q-ea [idb :int entity :int attr :cstr] :ptr<void>
-  eavt-idx-lookup(idb-idx(idb) entity cstr->int(attr))
+  eavt-idx-lookup(idb-idx(idb) entity attr-id(attr))
 ```
 
 ---
@@ -240,9 +261,9 @@ while `db-q` would take milliseconds.
 The `demo` in `indexed.tur` inserts three users and then does indexed lookups:
 
 ```turmeric
-(idb-assert! idb 1 (cstr->int ":user/name")  (str-val "Alice"))
-(idb-assert! idb 1 (cstr->int ":user/age")   (long-val 30))
-(idb-assert! idb 1 (cstr->int ":user/email") (str-val "alice@example.com"))
+(idb-assert! idb 1 (attr-id ":user/name")  (str-val "Alice"))
+(idb-assert! idb 1 (attr-id ":user/age")   (long-val 30))
+(idb-assert! idb 1 (attr-id ":user/email") (str-val "alice@example.com"))
 ...
 
 ;; Indexed lookup: entity=1, attr=:user/name
@@ -255,9 +276,9 @@ The `demo` in `indexed.tur` inserts three users and then does indexed lookups:
 ```
 
 ```sweet-exp
-idb-assert!(idb 1 cstr->int(":user/name")  str-val("Alice"))
-idb-assert!(idb 1 cstr->int(":user/age")   long-val(30))
-idb-assert!(idb 1 cstr->int(":user/email") str-val("alice@example.com"))
+idb-assert!(idb 1 attr-id(":user/name")  str-val("Alice"))
+idb-assert!(idb 1 attr-id(":user/age")   long-val(30))
+idb-assert!(idb 1 attr-id(":user/email") str-val("alice@example.com"))
 ...
 
 ; Indexed lookup: entity=1, attr=:user/name
@@ -297,10 +318,9 @@ attribute-only queries.
 those later retracted. `idb-q-ea` may return datums that have been logically
 retracted; callers must apply `retracted?` from `query.tur` if needed.
 
-**Integer key storage** -- `attr` is stored as a raw pointer integer. This
-means two logically identical strings stored at different addresses will hash to
-different buckets. In practice, Turmeric string literals are interned by the C
-compiler, so this is not an issue for constant attribute names.
+**A process-wide name table** -- `attr-id`'s table lives for the whole program
+and is searched linearly, which is fine for a schema's few dozen attribute names
+and would want a hash table (and an owner) in a real database.
 
 ---
 

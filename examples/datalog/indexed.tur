@@ -6,7 +6,7 @@
 ;; a full linear scan.
 ;;
 ;; C struct layout:
-;;   eavt_entry: [entity :int64, attr :int64, datum :int64, next :ptr]
+;;   eavt_entry: [entity :int64, attr :int64 (an attr-id), datum :int64, next :ptr]
 ;;   eavt_idx:   [buckets :ptr, nbuckets :size_t]
 ;;
 ;; Run with: ./build/tur examples/datalog/indexed.tur
@@ -135,6 +135,30 @@
 (defn cstr->int [s : cstr] : int
   ```c return (int64_t)(intptr_t)s; ```)
 
+;; attr-id -- intern an attribute name: equal names, whatever their address,
+;; get the same small positive id.
+;;
+;; The index keys on this id, never on the cstr's address.  Whether two
+;; identical string literals share one address is up to the C compiler: gcc
+;; merges them within a unit, `tur jit` (c2mir) gives each its own, so keying
+;; on `(cstr->int ":user/name")` found the facts compiled and nothing under the
+;; JIT (docs/archive/jit-string-literal-identity-differs-from-cc.md).
+(defn attr-id [s : cstr] : int
+  ```c
+  static char **names = NULL;
+  static int64_t n = 0, cap = 0;
+  for (int64_t i = 0; i < n; i++)
+    if (strcmp(names[i], s) == 0) return i + 1;
+  if (n == cap) {
+    cap = cap ? cap * 2 : 16;
+    names = realloc(names, (size_t)cap * sizeof *names);
+  }
+  size_t len = strlen(s) + 1;
+  names[n] = malloc(len);
+  memcpy(names[n], s, len);
+  return ++n;
+  ```)
+
 (defn cstr-eq? [a : int b : int] : bool
   ```c
   return strcmp((const char*)(intptr_t)a, (const char*)(intptr_t)b) == 0;
@@ -165,7 +189,7 @@
 ;;
 ;; struct eavt_entry {
 ;;   int64_t entity;
-;;   int64_t attr;      -- cstr pointer stored as int64
+;;   int64_t attr;      -- the attribute's attr-id
 ;;   int64_t datum;     -- datum pointer stored as int64
 ;;   struct eavt_entry *next;
 ;; };
@@ -273,7 +297,7 @@
 
 ;; Query by entity and attribute using the EAVT index (fast path)
 (defn idb-q-ea [idb : int entity : int attr : cstr] : ptr<void>
-  (eavt-idx-lookup (idb-idx idb) entity (cstr->int attr)))
+  (eavt-idx-lookup (idb-idx idb) entity (attr-id attr)))
 
 ;; ============================================================
 ;; Demo
@@ -283,16 +307,16 @@
   (let [idb (idb-new)]
 
     ;; Build some data
-    (idb-assert! idb 1 (cstr->int ":user/name")  (str-val "Alice"))
-    (idb-assert! idb 1 (cstr->int ":user/age")   (long-val 30))
-    (idb-assert! idb 1 (cstr->int ":user/email") (str-val "alice@example.com"))
+    (idb-assert! idb 1 (attr-id ":user/name")  (str-val "Alice"))
+    (idb-assert! idb 1 (attr-id ":user/age")   (long-val 30))
+    (idb-assert! idb 1 (attr-id ":user/email") (str-val "alice@example.com"))
 
-    (idb-assert! idb 2 (cstr->int ":user/name")  (str-val "Bob"))
-    (idb-assert! idb 2 (cstr->int ":user/age")   (long-val 25))
-    (idb-assert! idb 2 (cstr->int ":user/email") (str-val "bob@example.com"))
+    (idb-assert! idb 2 (attr-id ":user/name")  (str-val "Bob"))
+    (idb-assert! idb 2 (attr-id ":user/age")   (long-val 25))
+    (idb-assert! idb 2 (attr-id ":user/email") (str-val "bob@example.com"))
 
-    (idb-assert! idb 3 (cstr->int ":user/name")  (str-val "Carol"))
-    (idb-assert! idb 3 (cstr->int ":user/age")   (long-val 28))
+    (idb-assert! idb 3 (attr-id ":user/name")  (str-val "Carol"))
+    (idb-assert! idb 3 (attr-id ":user/age")   (long-val 28))
 
     ;; Indexed lookup: find Alice's name (entity=1, attr=:user/name)
     (println "-- idb-q-ea entity=1 :user/name --")
