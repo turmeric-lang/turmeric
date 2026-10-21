@@ -40,7 +40,12 @@
 ```c
 #include <errno.h>
 #include <fcntl.h>
-#include <netdb.h>  /* tur:optional -- POSIX only; Windows gets getaddrinfo from ws2tcpip.h */
+/* A file-scope block is copied verbatim -- its includes are not hoisted
+ * behind __has_include as a body's are -- so the POSIX-only header is
+ * guarded by hand.  Windows gets getaddrinfo from ws2tcpip.h (preamble). */
+#ifndef _WIN32
+#include <netdb.h>
+#endif
 /* The errno for the socket call that just failed.  Winsock reports through
  * WSAGetLastError with its own WSAE* numbers, which strerror does not know;
  * the common ones map onto the POSIX names MinGW's errno.h defines. */
