@@ -732,6 +732,18 @@ char *ensure_exists_byval_witness_dict(EmitCtx *ctx,
         tur_mangle_ident(m->name->name, field, sizeof(field));
         const char *ret_c = type_c_name(m->return_type);
         bool ret_void = (strcmp(ret_c, "void") == 0);
+        /* The real instance fn returns the int64 carrier when its declared
+         * result rides the carrier ABI -- a ground `(Vec cstr)` does -- while
+         * this thunk and EX_EXISTS_DISPATCH's cast spell the class's result
+         * type, `tur_adt_Vec__cstr *`.  dict_slot_ret_c_name (emit_stmt.c)
+         * asks the same question for the real dict; here the word is the
+         * pointer, so convert it back (-Wint-conversion, an error to clang). */
+        size_t ret_len = strlen(ret_c);
+        bool ret_from_carrier =
+            !ret_void && ret_len > 0 && ret_c[ret_len - 1] == '*' &&
+            mi->binding->type.kind == TY_FN &&
+            emit_inst_result_rides_carrier(ctx, mi,
+                                           mi->binding->type.as.fn.result_full_type);
 
         buf_printf(out, "static %s %s_%s(", ret_c, base, field);
         if (m->n_params == 0) buf_puts(out, "void");
@@ -744,6 +756,7 @@ char *ensure_exists_byval_witness_dict(EmitCtx *ctx,
         }
         buf_puts(out, ") {\n    ");
         if (!ret_void) buf_puts(out, "return ");
+        if (ret_from_carrier) buf_printf(out, "(%s)(intptr_t)", ret_c);
         buf_printf(out, "%s(", inst_fn);
         for (uint32_t j = 0; j < m->n_params; j++) {
             if (j > 0) buf_puts(out, ", ");

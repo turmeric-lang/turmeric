@@ -1,0 +1,34 @@
+;; exbox-thunk-carrier-result: a constrained existential whose class method
+;; returns a ground `(Vec cstr)`. The instance impls return it as the int64
+;; carrier (the type rides the carrier ABI), while the carrier-adapter thunk
+;; (`dict_<Class>_<T>__exbox`) and the dispatch site spell the class's result
+;; type, `tur_adt_Vec__cstr *`. The thunk returned the impl's word unconverted
+;; -- a -Wint-conversion warning to gcc and a hard error to clang -- for a
+;; default method body and an override alike.
+
+(defclass Named [a]
+  (names [r : a] : (Vec cstr) (:: (vec-new) (Vec cstr))))
+
+(defstruct Box3 :copy [x : float  y : float  z : float])
+(defstruct Tagged :copy [label : cstr  w : float  h : float])
+
+;; Box3 takes the default body; Tagged overrides it.
+(definstance Named [Box3])
+(definstance Named [Tagged]
+  (names [r] (vec-of (.label r) "second")))
+
+(defalias AnyNamed (exists [a] [(Named a)] a))
+
+(defn show-names [v : AnyNamed] : int
+  (open v [a x]
+    (let [ns (names x)
+          n  (vec-len ns)]
+      (println n)
+      (when (> n 0) (println (vec-get ns 0)))
+      (vec-free ns)
+      n)))
+
+(defn main [] : int
+  (do (show-names (pack (make-struct Box3 1.25 2.5 3.25) AnyNamed))
+      (show-names (pack (make-struct Tagged "first" 1.25 2.5) AnyNamed))
+      0))
