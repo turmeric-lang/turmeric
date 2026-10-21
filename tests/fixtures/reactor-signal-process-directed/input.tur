@@ -1,0 +1,48 @@
+;; reactor-signal-process-directed -- reactor-signal, with the signal sent to
+;; the PROCESS (kill(getpid(), ...)) rather than raised on the calling thread.
+;;
+;; A process-directed signal goes to any thread that does not block it.  The
+;; reactor's signalfd blocks SIGUSR1 only on the program's thread, which is
+;; enough for a native binary.  Under `tur jit` the program is not alone: the
+;; tur thread waiting for the big-stack worker, and the JIT thread waiting for
+;; the program's entry thread, both idled in pthread_join with the signal
+;; unblocked -- so the kernel handed SIGUSR1 to one of them and its default
+;; action killed the process.  Both waiting threads now block asynchronous
+;; signals for the duration (stack_guard.c, jit_engine.c).
+;;
+;; Expected output:
+;;   signal=10
+
+(defn reactor-link [] : int
+  ```c /* __tur_autolink__: -lturi */
+  return 0;
+  ```)
+
+(extern-c tur_reactor_new [] :ptr)
+(extern-c tur_reactor_add_signal [r :ptr signum :int ^fat cb :int ud :int] :int)
+(extern-c tur_reactor_poll [r :ptr timeout-ms :int] :int)
+(extern-c tur_reactor_free [r :ptr] :void)
+
+(defn signal-self [sig : int] : nil
+  ```c
+  #include <signal.h>
+  #include <unistd.h>
+  kill(getpid(), (int)sig);
+  ```)
+
+(defn print-signal [n : int] : nil
+  ```c printf("signal=%lld\n", (long long)n); ```)
+
+(defn main [] : int
+  (let [r (tur_reactor_new)]
+    ;; Register SIGUSR1 (10).
+    (tur_reactor_add_signal r 10
+      (fn [id signum ud] : nil
+        (print-signal signum))
+      0)
+    ;; Send it to the process -- now safely caught by the reactor.
+    (signal-self 10)
+    ;; Poll: the signal event is already pending.
+    (tur_reactor_poll r 200)
+    (tur_reactor_free r)
+    0))
