@@ -7300,6 +7300,99 @@ static bool call_bind_assoc_projections(Elab *e, const Form *call,
     return true;
 }
 
+/* RM1 / value-struct-payload-sum-monomorph-box-has-no-owner: stamp a
+ * sum-box argument for a free once its consuming call returns, when the
+ * argument is a call whose every value path mints a fresh box.  The caller
+ * has already established that the slot does not retain it.  A dictionary
+ * dispatch (abstract receiver / return type) is stamped TENTATIVELY: the
+ * callee that runs is only known per monomorph at emit, which re-resolves it
+ * and asks the freshness question of that binding before freeing anything. */
+static void stamp_fresh_sum_arg(Expr *arg) {
+    Expr *a = arg;
+    while (a && a->kind == EX_ASCRIBE) a = a->as.ascribe_.inner;
+    if (call_returns_fresh_sum_box(a) ||
+        (a && a->kind == EX_CALL && a->as.call_.dict_arg &&
+         !call_dispatch_is_static(a)))
+        a->sum_box_drop_after = true;
+}
+
+static void stamp_self_call_sum_drops(const Binding *b, Expr *e);
+
+static void stamp_self_call_sum_drops_n(const Binding *b, Expr **es, uint32_t n) {
+    for (uint32_t i = 0; i < n; i++) stamp_self_call_sum_drops(b, es[i]);
+}
+
+/* The walk visits the node kinds expr_subtree_has_inline_c models: a body
+ * whose nonretain_sum_param_mask is non-zero passed that check, so it holds
+ * no other kind.  A kind it does not visit only leaves a call unstamped --
+ * the status-quo leak, never a free. */
+static void stamp_self_call_sum_drops(const Binding *b, Expr *e) {
+    if (!e) return;
+    switch (e->kind) {
+        case EX_CALL:
+            if (e->as.call_.fn_binding == b)
+                for (uint32_t i = 0; i < e->as.call_.n_args && i < 32; i++)
+                    if (b->nonretain_sum_param_mask & (1u << i))
+                        stamp_fresh_sum_arg(e->as.call_.args[i]);
+            stamp_self_call_sum_drops(b, e->as.call_.fn_expr);
+            stamp_self_call_sum_drops_n(b, e->as.call_.args, e->as.call_.n_args);
+            stamp_self_call_sum_drops(b, e->as.call_.dict_arg);
+            return;
+        case EX_LET:
+        case EX_LETREC:
+            for (uint32_t i = 0; i < e->as.let_.n; i++)
+                stamp_self_call_sum_drops(b, e->as.let_.bindings[i].init);
+            stamp_self_call_sum_drops(b, e->as.let_.body);
+            return;
+        case EX_IF:
+            stamp_self_call_sum_drops(b, e->as.if_.cond);
+            stamp_self_call_sum_drops(b, e->as.if_.then_);
+            stamp_self_call_sum_drops(b, e->as.if_.else_or_null);
+            return;
+        case EX_DO:
+            stamp_self_call_sum_drops_n(b, e->as.do_.items, e->as.do_.n);
+            return;
+        case EX_BUILTIN:
+            stamp_self_call_sum_drops_n(b, e->as.builtin.args, e->as.builtin.n);
+            return;
+        case EX_MATCH:
+            stamp_self_call_sum_drops(b, e->as.match_.scrutinee);
+            for (uint32_t i = 0; i < e->as.match_.n_arms; i++) {
+                stamp_self_call_sum_drops(b, e->as.match_.arms[i].guard);
+                stamp_self_call_sum_drops(b, e->as.match_.arms[i].body);
+            }
+            return;
+        case EX_ASCRIBE: stamp_self_call_sum_drops(b, e->as.ascribe_.inner); return;
+        case EX_CAST:    stamp_self_call_sum_drops(b, e->as.cast_.expr); return;
+        case EX_GET_FIELD: stamp_self_call_sum_drops(b, e->as.get_field_.struct_expr); return;
+        case EX_RETURN:  stamp_self_call_sum_drops(b, e->as.return_.value); return;
+        case EX_DEFER:   stamp_self_call_sum_drops(b, e->as.defer_.body); return;
+        default:
+            /* A closure body is its own function (a call there runs after
+             * this activation may have returned), and the rest are leaves or
+             * packings no self-call hides under. */
+            return;
+    }
+}
+
+/* fresh-option-arg-to-self-call-leaks: the sum-box stamp above keys on the
+ * callee's inferred nonretain_sum_param_mask, which a self-recursive call
+ * cannot see -- it is elaborated inside the very body the mask is inferred
+ * from, while the mask is still zero.  So `(walk (nxt i))` in walk's own arm
+ * leaked the box every level, while the same call from `main` freed it.  Once
+ * the mask is known, revisit the body's self-calls and stamp them by the same
+ * rule.  With the mask still zero during its own inference, a self-call
+ * hand-off of a parameter counts as an escape, so a bit that survived is a
+ * sound non-retain fact for this caller too.  A tail self-call keeps its
+ * stamp but frees nothing: tco_mark lowers it to a back edge, which has no
+ * "after" to free in (fresh-option-arg-to-tail-self-call-loop-leaks). */
+void elab_stamp_self_call_sum_drops(Binding *b, Expr *body) {
+    if (!b || !b->nonretain_sum_param_mask || b->type.kind != TY_FN ||
+        !effect_row_is_empty(b->type.as.fn.effect_row))
+        return;
+    stamp_self_call_sum_drops(b, body);
+}
+
 static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) {
     uint32_t n_args = call->as.list.len - 1;
 
@@ -9178,16 +9271,7 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
               * fact the name allowlist asserts, checked instead of trusted.
               * Zero for inline-C bodies and dictionary-dispatched methods. */
              (i < 32 && (fn_binding->nonretain_sum_param_mask & (1u << i))))) {
-            Expr *a = args[i];
-            while (a && a->kind == EX_ASCRIBE) a = a->as.ascribe_.inner;
-            /* A dictionary dispatch (abstract receiver / return type) is
-             * stamped TENTATIVELY: the callee that runs is only known per
-             * monomorph at emit, which re-resolves it and asks the freshness
-             * question of that binding before freeing anything. */
-            if (call_returns_fresh_sum_box(a) ||
-                (a && a->kind == EX_CALL && a->as.call_.dict_arg &&
-                 !call_dispatch_is_static(a)))
-                a->sum_box_drop_after = true;
+            stamp_fresh_sum_arg(args[i]);
         }
 
         /* plain-fn-typed-params-are-kind-matched: a plain `(fn [int] int)`

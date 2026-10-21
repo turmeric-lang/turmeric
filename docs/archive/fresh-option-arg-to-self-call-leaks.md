@@ -1,5 +1,10 @@
 # A fresh `(Option Struct)` passed to a self-recursive call leaks its box
 
+**RESOLVED 2026-10-21** -- see [Resolution](#resolution-2026-10-21). Pinned by
+`option-arg-to-self-call-freed` (leak-checked). The tail-call sibling is filed
+separately as
+[fresh-option-arg-to-tail-self-call-loop-leaks](../reported/fresh-option-arg-to-tail-self-call-loop-leaks.md).
+
 **Severity: low (leak; grows with recursion depth).** When a function calls
 itself with a freshly made `(Option S)` as an argument, inside a `match` arm,
 and `S` is a struct, the Option's heap box is never freed. Binding the
@@ -53,3 +58,34 @@ known when the self-call is elaborated, so this call site gets no stamp.
    "non-retaining" as the assumption the fixpoint refines.
 2. **Guard it with a fixture:** a leak-checked recursive walk over `Option`
    of a struct, in direct and `let`-bound argument forms.
+
+## Resolution (2026-10-21)
+
+The suspected cause was right: the stamp keys on the callee's
+`nonretain_sum_param_mask`, and a self-call is elaborated inside the very body
+that mask is inferred from, while it is still zero. Fix direction 1, second
+half: once `elab_infer_nonretain_masks` has run for a `defn`,
+`elab_stamp_self_call_sum_drops` (`src/compiler/elab_call.c`, called from the
+defn elaboration in `elab_fns.c`) walks the body for calls whose callee is the
+function itself and stamps each fresh sum-box argument in a surviving mask
+slot, by the same rule (and through the same helper, `stamp_fresh_sum_arg`) as
+an outside caller. It is sound for the same reason the outside stamp is: the
+mask's inference reads every self-call hand-off of a parameter as a possible
+escape, so a surviving bit means the body neither keeps the box nor returns
+anything that points into it. The walk visits the node kinds
+`expr_subtree_has_inline_c` models, which is every kind a body with a
+non-zero mask can hold; an unvisited kind would only leave a call unstamped.
+
+The repro above now runs leak-free under LeakSanitizer and still prints 3.
+`option-arg-to-self-call-freed` (`requires.leak-check`) pins the report's
+shape, the let-bound form, a walk that reads the arm's payload after its
+self-call returns, and a non-self caller in tail position. Snapshots are
+unchanged (157), the full `run.sh` suite passes (3968), and so do the 235
+leak-checked fixtures.
+
+**Not covered: a TAIL self-call.** There the emitter lowers the call to a
+back edge (`o = new; goto`), which has no "after" to free in, so the box
+becomes the next iteration's parameter and is dropped when the loop reassigns
+it. The emitter correctly frees nothing there; the leak predates this fix
+(same 16 bytes before and after). Filed as
+[fresh-option-arg-to-tail-self-call-loop-leaks](../reported/fresh-option-arg-to-tail-self-call-loop-leaks.md).

@@ -12996,6 +12996,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
      * from the just-elaborated body; the conservative escape analysis only ever
      * clears the bit (a false "escapes" merely preserves the status-quo leak). */
     elab_infer_nonretain_masks(b, params, n_params, body);
+    elab_stamp_self_call_sum_drops(b, body);
     b->returns_closure_fn_binding = expr_closure_fn_binding(body);
 
     /* closure-drop-glue S1c (fresh-closure-returning fn): a fn whose body is a

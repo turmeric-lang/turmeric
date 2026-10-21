@@ -2554,6 +2554,9 @@ void elab_stamp_sum_freshness(Binding *b, Binding **params, uint32_t n_params,
  * elaborated body.  Shared by defn and instance-method elaboration. */
 void elab_infer_nonretain_masks(Binding *b, Binding **params, uint32_t n_params,
                                 Expr *body);
+/* fresh-option-arg-to-self-call-leaks: stamp a self-call's fresh sum-box
+ * arguments once the body's nonretain_sum_param_mask is known. */
+void elab_stamp_self_call_sum_drops(Binding *b, Expr *body);
 
 
 /* r7rs-programs-compile-slowly: the first id of the stdlib's own counter --
