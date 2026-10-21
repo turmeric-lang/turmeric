@@ -22575,8 +22575,25 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
         case EX_GEN_UNWRAP: {
             char *pv  = emit_value(ctx, body, e->as.gen_unwrap_.ptr_expr);
             char *raw = fresh_tmp(ctx);
+            /* `gen-next` hands back NULL once the body has ended; reading
+             * through it was a segfault.  A defined panic instead (test
+             * `gen-some?` first, as the docs say). */
             indent_buf(body, ctx->indent);
-            buf_printf(body, "int64_t %s = *(int64_t *)(intptr_t)(%s);\n", raw, pv);
+            buf_printf(body, "int64_t %s = 0;\n", raw);
+            indent_buf(body, ctx->indent);
+            buf_printf(body, "if (!(%s)) {\n", pv);
+            indent_buf(body, ctx->indent + 4);
+            /* tur_panic returns when a catch-unwind handler is active (the
+             * caller unwinds on tur_panicking), so the read stays in the else. */
+            emit_panic_call(body, e->span,
+                            "\"gen-unwrap: the generator is exhausted "
+                            "(test gen-some? before gen-unwrap)\"");
+            indent_buf(body, ctx->indent);
+            buf_printf(body, "} else {\n");
+            indent_buf(body, ctx->indent + 4);
+            buf_printf(body, "%s = *(int64_t *)(intptr_t)(%s);\n", raw, pv);
+            indent_buf(body, ctx->indent);
+            buf_printf(body, "}\n");
             free(pv);
             const char *rc = NULL;
             char rexpr[256];

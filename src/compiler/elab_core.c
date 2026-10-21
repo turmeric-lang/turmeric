@@ -1058,9 +1058,32 @@ Binding **collect_free_vars(const Expr *e, Binding **params, uint8_t n_params,
                 fv_push(&stack, &sp, &stack_cap, cur->as.while_.body);
                 fv_push(&stack, &sp, &stack_cap, cur->as.while_.cond);
                 break;
-            case EX_SET:
+            case EX_SET: {
+                /* The assigned variable is a free variable too: a body that
+                 * only SETS one never reads it, so no EX_VAR names it and the
+                 * capture was missed (C error: the local is undeclared). */
+                Binding *tb = cur->as.set_.target;
+                if (tb && !tb->is_global) {
+                    bool is_param = false;
+                    for (uint32_t i = 0; i < n_params; i++)
+                        if (params[i] == tb) { is_param = true; break; }
+                    bool is_local = false;
+                    for (uint32_t i = 0; i < n_local && !is_local; i++)
+                        is_local = local_defs[i] == tb;
+                    bool found = false;
+                    for (uint32_t i = 0; i < n && !found; i++)
+                        found = result[i] == tb;
+                    if (!is_param && !is_local && !found) {
+                        if (n >= cap) {
+                            cap = cap ? cap * 2 : 8;
+                            result = (Binding **)realloc(result, cap * sizeof(Binding *));
+                        }
+                        result[n++] = tb;
+                    }
+                }
                 fv_push(&stack, &sp, &stack_cap, cur->as.set_.value);
                 break;
+            }
             case EX_DEF:
                 fv_push(&stack, &sp, &stack_cap, cur->as.def_.init);
                 break;
@@ -2779,6 +2802,7 @@ void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     e->sym_gen_done  = intern_cstr(st, "gen-done?");
     e->sym_gen_unwrap = intern_cstr(st, "gen-unwrap");
     e->gen_ctx       = NULL;
+    e->gen_hidden_by_fn = false;
     e->gen_counter   = 0;
     /* CLI-ARGS: Pre-declare *args* as a global :int binding backed by g_tur_args.
      * Scripts access CLI arguments (after --) via *args* as a list of :cstr values

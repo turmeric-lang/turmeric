@@ -1039,6 +1039,8 @@ typedef struct Elab {
     uint32_t         cap_active_dynvar_bindings;
     /* GF1: Generator elaboration context */
     struct GenContext *gen_ctx;     /* non-NULL when inside a (gen ...) body */
+    bool gen_hidden_by_fn;          /* a (fn ...) literal inside a gen body is being elaborated: its
+                                     * body is not part of the generator, so `yield` there is rejected */
     uint32_t          gen_counter; /* monotonically increasing, for unique struct names */
     const Symbol     *sym_gen;          /* "gen" */
     const Symbol     *sym_yield;        /* "yield" */

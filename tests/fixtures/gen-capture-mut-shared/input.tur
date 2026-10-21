@@ -1,0 +1,32 @@
+;;; A scalar ^mut variable a `gen` body names is shared with the generator on
+;;; every engine: the compiled state struct used to hold a copy, so a `set!`
+;;; outside was not seen inside, the body's own `set!` never reached the
+;;; variable, and a body that only SET one did not build at all.
+
+(defn main [] : int
+  ;; An assignment after the generator is made is seen when it runs.
+  (let [^mut n 1
+        g (gen [] (yield n))]
+    (set! n 2)
+    (println (gen-unwrap (gen-next g))))
+
+  ;; The body's own assignment reaches the variable.
+  (let [^mut m 0
+        g (gen [] (set! m (+ m 5)) (yield m))]
+    (println (gen-unwrap (gen-next g)))
+    (println m))
+
+  ;; A body that only assigns.
+  (let [^mut k 0
+        g (gen [] (set! k 9) (yield 1))]
+    (gen-next g)
+    (println k))
+
+  ;; Updated between yields.
+  (let [^mut c 10
+        g (gen [] (yield c) (set! c {c + 1}) (yield c))]
+    (println (gen-unwrap (gen-next g)))
+    (set! c 20)
+    (println (gen-unwrap (gen-next g)))
+    (println c))
+  0)

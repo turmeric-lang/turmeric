@@ -2,6 +2,7 @@
 #include "elab_internal.h"
 #include "lang_dialects.h"   /* saffron-lang-plan S3: lang_span_is_dynamic */
 #include "experiments.h"     /* loop-invariants-plan: experiment_warn_if_used */
+#include "cps.h"             /* cps_visit_children -- gen_sets_binding */
 
 /* ---- file-local helper forward declarations ---- */
 static Expr *elab_set_deref(Elab *e, const Form *call, const Form *deref_form);
@@ -810,6 +811,10 @@ static bool cell_fn_mentions(Elab *e, const Form *f, const Symbol *n,
     if (f->tag == F_LIST && len >= 1 && f->as.list.items[0]->tag == F_SYM) {
         const Symbol *h = f->as.list.items[0]->as.sym;
         if (h == e->sym_quote) return false;
+        /* A `gen` body is a capturing scope as well: its state struct holds
+         * what it names, so a `^mut` it reads or sets must be the shared cell
+         * too, as for a `fn` (the interpreter has always shared it). */
+        if (h == e->sym_gen) in_fn = true;
         if (h == e->sym_fn || h == e->sym_lambda) {
             for (uint32_t k = 1; k < len && k <= 2; k++) {
                 if (f->as.list.items[k]->tag == F_VEC) {
@@ -5262,6 +5267,17 @@ static bool form_contains_sym(const Form *f, const Symbol *sym) {
  * with a _next function.  All let bindings in the body are promoted to struct
  * fields (conservative yield-live analysis).  Captures (free variables) are
  * passed to the _create function and stored in the struct. */
+static bool gen_sets_binding(const Expr *x, const Binding *b);
+static bool gen_sets_binding_visit(const Expr *c, void *ud) {
+    return gen_sets_binding(c, (const Binding *)ud);
+}
+/* Does `x` assign `b` (outside nested closures)? */
+static bool gen_sets_binding(const Expr *x, const Binding *b) {
+    if (!x) return false;
+    if (x->kind == EX_SET && x->as.set_.target == b) return true;
+    return cps_visit_children(x, gen_sets_binding_visit, (void *)b);
+}
+
 Expr *elab_gen(Elab *e, const Form *call) {
     if (call->as.list.len < 3) {
         diag_emit(DIAG_ERROR, call->span,
@@ -5372,6 +5388,24 @@ Expr *elab_gen(Elab *e, const Form *call) {
     free(caps);
     def->n_captures = n_caps;
 
+    /* The state struct holds a COPY of every captured variable.  A scalar
+     * `^mut` is already a shared cell by now (elab_let_mut_to_cell), so only
+     * a captured `^mut` of another type reaches here; assigning it would
+     * change the generator's copy and nothing else, so it is refused. */
+    for (uint32_t ci = 0; ci < n_caps; ci++) {
+        const Binding *cb = def->captures[ci];
+        if (cb && cb->is_mut && gen_sets_binding(body_expr, cb)) {
+            diag_emit(DIAG_ERROR, call->span,
+                      "gen body assigns the captured ^mut variable '%s' of type %s: "
+                      "a generator keeps its own copy of what it captures, so the "
+                      "assignment would never reach the variable (only a scalar "
+                      "^mut is shared with a gen; hold the state in a struct or "
+                      "vector the gen mutates through)",
+                      cb->name ? cb->name->name : "?", type_name(cb->type));
+            return NULL;
+        }
+    }
+
     /* Collect all let bindings for struct field promotion */
     Binding **let_binds  = NULL;
     uint32_t  n_let      = 0;
@@ -5414,10 +5448,32 @@ Expr *elab_gen(Elab *e, const Form *call) {
 }
 
 /* GF1: (yield expr) -- yield a value inside a gen body. */
+/* Yield payloads that share a carrier: every integer width reads back through
+ * the same 64-bit word, so they may mix; any other kind must match the first
+ * yield exactly. */
+static int gen_yield_family(TypeKind k) {
+    switch (k) {
+        case TY_INT: case TY_INT64: case TY_UINT64: case TY_INT32:
+        case TY_UINT32: case TY_INT16: case TY_UINT16: case TY_INT8:
+        case TY_UINT8:
+            return -1;
+        case TY_FLOAT: case TY_FLOAT64:
+            return -2;
+        default:
+            return (int)k;
+    }
+}
+
 Expr *elab_yield(Elab *e, const Form *call) {
     if (!e->gen_ctx) {
-        diag_emit(DIAG_ERROR, call->span,
-                  "yield is only valid inside a gen body");
+        if (e->gen_hidden_by_fn)
+            diag_emit(DIAG_ERROR, call->span,
+                      "'yield' inside a 'fn' literal: the fn is its own function, "
+                      "not part of the enclosing 'gen' body, so there is no generator "
+                      "for it to suspend; yield from the gen body itself");
+        else
+            diag_emit(DIAG_ERROR, call->span,
+                      "yield is only valid inside a gen body");
         return NULL;
     }
     /* CF5 (TUR-E0702): yield inside a match arm is unsupported in v1. */
@@ -5441,6 +5497,23 @@ Expr *elab_yield(Elab *e, const Form *call) {
     }
     Expr *value = elab_form(e, call->as.list.items[1]);
     if (!value) return NULL;
+
+    /* Later yields must carry the first yield's type: the generator's element
+     * is read back as that one kind, so another kind would be reinterpreted
+     * (2.5 read as an int printed its bit pattern). */
+    if (e->gen_ctx->element_kind_set) {
+        TypeKind first = e->gen_ctx->element_kind;
+        TypeKind now   = value->type.kind;
+        if (first != TY_TYVAR && now != TY_TYVAR &&
+            first != TY_UNKNOWN && now != TY_UNKNOWN &&
+            gen_yield_family(first) != gen_yield_family(now)) {
+            diag_emit(DIAG_ERROR, value->span,
+                      "'yield' of %s in a generator whose first yield is %s: "
+                      "every yield of one generator must have the same type",
+                      type_name(value->type), type_name(type_from_kind(first)));
+            return NULL;
+        }
+    }
 
     /* Record element kind on first yield */
     if (!e->gen_ctx->element_kind_set) {

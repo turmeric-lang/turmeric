@@ -681,9 +681,14 @@ static TuriValue native_gen_some(TuriEnv *env, TuriValue *args, uint32_t n, void
     if (n < 1) return turi_bool(false);
     return turi_bool(args[0].as_int != 0);
 }
+#define GEN_UNWRAP_EXHAUSTED_MSG \
+    "gen-unwrap: the generator is exhausted (test gen-some? before gen-unwrap)"
 static TuriValue native_gen_unwrap(TuriEnv *env, TuriValue *args, uint32_t n, void *ud) {
-    (void)env; (void)ud;
-    if (n < 1 || args[0].as_int == 0) return turi_int(0);
+    (void)ud;
+    if (n < 1 || args[0].as_int == 0) {
+        turi_runtime_panic(env, GEN_UNWRAP_EXHAUSTED_MSG);
+        return turi_nil();
+    }
     return turi_int(*(int64_t *)(intptr_t)args[0].as_int);
 }
 static TuriValue native_gen_none(TuriEnv *env, TuriValue *args, uint32_t n, void *ud) {
@@ -14990,7 +14995,14 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
             (pv.tag != TURI_INT ||
              !turi_prov_check(env, TURI_HK_GENBOX, (const void *)(intptr_t)pv.as_int)))
             return prov_forged_value("generator value");
-        int64_t bits = pv.as_int ? *(int64_t *)(intptr_t)pv.as_int : 0;
+        if (!pv.as_int) {
+            /* gen-next hands back nil once the body has ended; the compiled
+             * program used to segfault here, the interpreter read 0. */
+            g_panic_site = e->span;
+            turi_runtime_panic(env, GEN_UNWRAP_EXHAUSTED_MSG);
+            return turi_nil();
+        }
+        int64_t bits = *(int64_t *)(intptr_t)pv.as_int;
         /* generator-in-generic: the element is the enclosing generic's `A`,
          * which the tree-walker never monomorphizes -- there is no kind to
          * re-tag the bits by, and the default arm printed 7.1's bits as an

@@ -13490,7 +13490,22 @@ static bool fn_expected_result_is_grounded(const Elab *e, const Type *t) {
     }
 }
 
+static Expr *elab_fn_impl(Elab *e, const Form *call);
+
+/* A `fn` literal inside a `gen` body is its own function: its body is not part
+ * of the generator's state machine, so a `yield` there has no generator to
+ * suspend.  Hide the generator context while it is elaborated (the interpreter
+ * used to run such a yield, the compiler produced C that did not build). */
 Expr *elab_fn(Elab *e, const Form *call) {
+    struct GenContext *outer_gen = e->gen_ctx;
+    bool outer_hidden = e->gen_hidden_by_fn;
+    if (outer_gen) { e->gen_ctx = NULL; e->gen_hidden_by_fn = true; }
+    Expr *out = elab_fn_impl(e, call);
+    if (outer_gen) { e->gen_ctx = outer_gen; e->gen_hidden_by_fn = outer_hidden; }
+    return out;
+}
+
+static Expr *elab_fn_impl(Elab *e, const Form *call) {
     /* H10 x call/cc: consumed here so only the immediate receiver sees it. */
     bool is_callcc_receiver = e->in_callcc_receiver;
     e->in_callcc_receiver = false;

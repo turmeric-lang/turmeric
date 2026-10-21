@@ -1,0 +1,7 @@
+;;; A `fn` literal inside a `gen` body is its own function, not part of the
+;;; generator's state machine.  The compiler produced C that did not build; the
+;;; interpreter ran it.
+(defn main [] : int
+  (let [g (gen [] (let [f (fn [x : int] : nil (yield x))] (f 1) (yield 2)))]
+    (println (gen-unwrap (gen-next g))))
+  0)
