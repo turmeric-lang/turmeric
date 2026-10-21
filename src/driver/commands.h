@@ -40,13 +40,15 @@ int cmd_build_project(const char *root_in, const char *out_path,
                       const char *cli_build_dir,
                       const char *target);
 
-/* -- moving to driver/compile_link.c -- */
+/* == driver/compile_link.c ================================================= */
 int cmd_compile(const char *input, const char *out_obj,
                 const char **include_dirs, int n_include_dirs,
                 const char **reader_macro_paths,
                 int n_reader_macro_paths);
 int cmd_link(const char *out, const char **inputs, int n_inputs,
              bool shared, const char *extra_link_flags);
+
+/* == main.c ================================================================ */
 
 /* -- moving to driver/cmd_run.c -- */
 int cmd_run(int argc, char **argv);

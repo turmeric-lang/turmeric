@@ -263,9 +263,11 @@ char **collect_used_attr_modules(const char *entry_path,
                                  const char **include_dirs,
                                  int n_include_dirs, int *n_out);
 
-/* -- moving to driver/compile_link.c -- */
+/* == driver/compile_link.c ================================================= */
 void drv_obj_sibling_path(const char *obj, const char *suffix,
                           char *out, size_t cap);
+
+/* == main.c ================================================================ */
 
 /* -- moving to driver/jit.c -- */
 int run_delegate_engine(const char *engine, const char *entry,
