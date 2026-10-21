@@ -77,9 +77,7 @@ int cmd_repl(bool watch_mode);
 /* == driver/worker.c ======================================================= */
 int cmd_worker(void);
 
-/* == main.c ================================================================ */
-
-/* -- moving to driver/cmd_misc.c -- */
+/* == driver/cmd_misc.c ===================================================== */
 int cmd_image_info(const char *path);
 int cmd_image_verify(const char *path, const char *binary);
 int cmd_doc_cli(const char *sym);
@@ -88,6 +86,8 @@ int cmd_smt(int argc, char **argv);
 int cmd_experiments(int argc, char **argv);
 int cmd_dialects(int argc, char **argv);
 int cmd_explain(const char *code);
+
+/* == main.c ================================================================ */
 
 /* -- moving to driver/cli.c -- */
 int usage_build(void);

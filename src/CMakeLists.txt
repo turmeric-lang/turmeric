@@ -546,6 +546,7 @@ target_compile_definitions(tur_core PRIVATE TUR_VERSION="${_TUR_VERSION_STR}")
 set(TUR_DRIVER_SOURCES
   driver/cmd_eval.c
   driver/cmd_format.c
+  driver/cmd_misc.c
   driver/worker.c
 )
 add_executable(tur main.c lsp/mcp.c ${TUR_DRIVER_SOURCES} $<TARGET_OBJECTS:tur_core>)
