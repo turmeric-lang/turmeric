@@ -1,0 +1,6 @@
+#lang sweet-exp
+;; sweet-exp-diagnostic-columns-not-translated: the header reported the column
+;; of the transformed text (15); "x" starts at column 14 of the line below.
+defn main [] : int
+  let [x +(1 "x")]
+    x
