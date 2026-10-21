@@ -2,6 +2,69 @@
 
 All notable changes to Turmeric are documented here.
 
+## [0.68.0] -- 2026-10-21
+
+### Added
+
+- **OS stdlib surface: symlinks, permissions, dates, blocking TCP, signals and
+  `os/*`.** `fs/lstat`, `fs/symlink`, `fs/readlink`, `fs/realpath`, `fs/chmod`
+  over a `Mode` value (`mode/parse`, `mode/format`), `fs/walk-follow`,
+  `fs/touch`; a `:copy DateTime` with `utc-parts` / `local-parts` and
+  `format-iso8601` / `parse-iso8601`; blocking `net/tcp-connect`,
+  `net/tcp-listen`, `net/accept`, `net/send`, `net/recv` on a linear `Socket`;
+  signal handling and the `os/*` modules.
+
+### Changed
+
+- **BREAKING -- `upgrade` is retired; use `weak/upgrade`.** The builtin returned
+  an untyped `ptr<void>` and leaked its strong handle; `weak/upgrade` (tur/weak)
+  is the same operation typed `(Option rc<T>)`. `ref?` and `weak?` now answer
+  from the argument's static type -- `(ref? 7)` is no longer true.
+- **BREAKING -- sized-int arithmetic reduces to the kind's width.** `+`, `-`,
+  `*`, `/`, `bit-shl` and `bit-shr` on int8/16/32 and uint8/16/32 computed at
+  full width, so `(+ x y)` on two uint8s printed 300. Both engines now wrap at
+  the operand's kind, and a narrow `bit-shr` zero-extends from its own width.
+- **BREAKING -- `:build-opts :no-stdlib true` is refused.** No build path ever
+  read it, so a project that set it was built with the stdlib anyway, silently;
+  the manifest now rejects any value but false.
+- **`transmute` and `reinterpret` copy bits on both engines.** A float crossing
+  to or from a non-float kind went through a C conversion compiled and was the
+  identity interpreted; both now copy the representation. `reinterpret` takes
+  its target type, and `unsafe-cast` is spelled `TUR_AS(int64_t, x)`.
+- **`defdynamic` admits a payload-free `defdata` as a dynamic var's type.** A
+  defdata whose constructors carry nothing is only a tag, so the copy a read
+  makes aliases nothing; a defdata with a payload is still refused.
+
+### Fixed
+
+- **Typed `ptr<T>` / `rc<T>` targets are checked at calls, returns and `let`
+  annotations.** A `ptr<Foo>` parameter accepted a `ptr<Bar>` argument, and an
+  `rc<int>` parameter an `rc<float>`; diagnostics print the declared type, and
+  forward declarations commit `rc` and typed-pointer parameters, so rc-threaded
+  mutual recursion compiles.
+- **Definition and extern elaboration tightened.** `(def x : int 7.1)` used to
+  store the bits of 7.1; it is now an annotation error. Nested `defn`s can call
+  themselves and later siblings. `extern-c` reads the caret shorthand as `:type`
+  does (`[^cstr ^cstr]` declared one parameter), and an unknown C symbol fails
+  when called under `--interpret`.
+- **Panic, session and effect fixes.** `panic-payload-downcast` yields a value
+  and a mismatched `catch-panic-of` aborts instead of exiting 0; `send` checks
+  its payload against the protocol (TUR-E0212) and `[...]` patterns bind the
+  right names; effects past 128 no longer collide and continuations keep
+  captures past 16.
+- **Diagnostics, drops and build-driver fixes.** Sweet-exp diagnostics report
+  the user's columns; an early `return` releases the enclosing `let`'s owned
+  bindings instead of leaking them; `tur --interpret` refuses a malformed
+  `build.tur` (TUR-E0624); a `--target wasm` build keeps the runtime replica;
+  `tur --help` hides only the external commands a built-in shadows.
+
+### Docs
+
+- **The guides index lists descriptions and pages the recent tabs.** Recently
+  Added and Recently Updated rows read "<title> (<date>) -- <description>",
+  every dated guide is listed with a first/prev/next/last pager, and the
+  description column is dropped below 600px.
+
 ## [0.67.5] -- 2026-10-20
 
 ### Changed
