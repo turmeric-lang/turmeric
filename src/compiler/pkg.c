@@ -3394,6 +3394,10 @@ static void emit_link_iface_helper(FILE *f) {
     "# and IOKit frameworks its macOS backend needs live on *its*\n"
     "# INTERFACE_LINK_LIBRARIES and are reachable no other way. `_seen` guards\n"
     "# against link cycles.\n"
+    "# An ARCHIVE's own static dependencies are walked too, after it: GNU ld\n"
+    "# does not revisit earlier archives, so `top -> mid -> core` must put\n"
+    "# libcore.a after libmid.a after libtop.a on the line\n"
+    "# (docs/archive/cmake-dep-link-walk-stops-at-archive.md).\n"
     "function(_tur_walk_iface tgt acc_var seen_var)\n"
     "  set(_acc \"${${acc_var}}\")\n"
     "  set(_seen \"${${seen_var}}\")\n"
@@ -3414,13 +3418,12 @@ static void emit_link_iface_helper(FILE *f) {
     "                if(_ty STREQUAL SHARED_LIBRARY)\n"
     "                  list(APPEND _acc \"-Wl,-rpath,$<TARGET_FILE_DIR:${_e}>\")\n"
     "                endif()\n"
-    "              else()\n"
-    "                set(_a \"${_acc}\")\n"
-    "                set(_s \"${_seen}\")\n"
-    "                _tur_walk_iface(\"${_e}\" _a _s)\n"
-    "                set(_acc \"${_a}\")\n"
-    "                set(_seen \"${_s}\")\n"
     "              endif()\n"
+    "              set(_a \"${_acc}\")\n"
+    "              set(_s \"${_seen}\")\n"
+    "              _tur_walk_iface(\"${_e}\" _a _s)\n"
+    "              set(_acc \"${_a}\")\n"
+    "              set(_seen \"${_s}\")\n"
     "            else()\n"
     "              list(APPEND _acc \"${_e}\")\n"
     "            endif()\n"
@@ -3686,6 +3689,125 @@ static void path_collapse_dots(char *p) {
     p[at] = '\0';
 }
 
+/* Push a string onto a char** list if it is not already there. */
+static bool str_list_add_unique(char ***list, int *n, const char *s) {
+    if (!s) return true;
+    for (int i = 0; i < *n; i++)
+        if ((*list)[i] && strcmp((*list)[i], s) == 0) return true;
+    char **nl = (char **)realloc(*list, ((size_t)*n + 1) * sizeof(char *));
+    if (!nl) return false;
+    *list = nl;
+    (*list)[*n] = tur_strdup(s);
+    if (!(*list)[*n]) return false;
+    (*n)++;
+    return true;
+}
+
+/* Merge one option list into another, key by key.  A key the existing copy
+ * does not set is added; one it sets to the same value is a no-op; one it
+ * sets to a DIFFERENT value is a conflict, reported with both origins. */
+static bool merge_cmake_opts(PkgCmakeOpt **dst, int *n_dst,
+                             const PkgCmakeOpt *src, int n_src,
+                             const char *what, const char *name,
+                             const char *origin_old, const char *origin_new) {
+    for (int j = 0; j < n_src; j++) {
+        if (!src[j].key) continue;
+        int k = 0;
+        for (; k < *n_dst; k++)
+            if ((*dst)[k].key && strcmp((*dst)[k].key, src[j].key) == 0) break;
+        if (k < *n_dst) {
+            if (str_eq_or_both_null((*dst)[k].val, src[j].val)) continue;
+            fprintf(stderr,
+                "tur: conflicting :cmake-deps %s for \"%s\": %s\n"
+                "  %s: \"%s\"\n"
+                "  %s: \"%s\"\n"
+                "  Two spices configure one native dependency; they must agree "
+                "on every option they both set.\n",
+                what, name, src[j].key,
+                origin_old ? origin_old : "<unknown>",
+                (*dst)[k].val ? (*dst)[k].val : "",
+                origin_new ? origin_new : "<unknown>",
+                src[j].val ? src[j].val : "");
+            return false;
+        }
+        PkgCmakeOpt *no = (PkgCmakeOpt *)realloc(
+            *dst, ((size_t)*n_dst + 1) * sizeof(PkgCmakeOpt));
+        if (!no) return false;
+        *dst = no;
+        (*dst)[*n_dst].key = tur_strdup(src[j].key);
+        (*dst)[*n_dst].val = dup_cstr_or_null(src[j].val);
+        if (!(*dst)[*n_dst].key) return false;
+        (*n_dst)++;
+    }
+    return true;
+}
+
+/* cmake-deps-duplicate-keeps-first-options: two spices declaring one
+ * `:cmake-deps` name at the same :url/:ref (or :path) are one dependency,
+ * built once -- so their declarations are UNIONED rather than the first one
+ * collected (which was the last spice in the consumer's :spices map) winning
+ * silently.  `:options` and `:wasm-options` merge key by key and a key set
+ * to two different values is a hard error naming both manifests; `:targets`,
+ * `:link-libs` and `:link-flags` union; a differing `:cmake-name` or
+ * `:cmake-version` is a conflict too.  `:prefer-system` is the one soft key:
+ * the union prefers the system package when either copy asks, with a note.
+ * This is what transitive-cmake-deps-plan Phase 3 asked for. */
+static bool merge_cmake_dep(PkgCmakeDep *into, const PkgCmakeDep *dep,
+                            const char *origin_old, const char *origin_new) {
+    if (!merge_cmake_opts(&into->opts, &into->n_opts, dep->opts, dep->n_opts,
+                          "option", dep->name, origin_old, origin_new))
+        return false;
+    if (!merge_cmake_opts(&into->wasm_opts, &into->n_wasm_opts,
+                          dep->wasm_opts, dep->n_wasm_opts,
+                          ":wasm-options entry", dep->name, origin_old, origin_new))
+        return false;
+    for (int j = 0; j < dep->n_targets; j++)
+        if (!str_list_add_unique(&into->targets, &into->n_targets, dep->targets[j]))
+            return false;
+    if (dep->has_link_libs) {
+        into->has_link_libs = true;
+        for (int j = 0; j < dep->n_link_libs; j++)
+            if (!str_list_add_unique(&into->link_libs, &into->n_link_libs,
+                                     dep->link_libs[j]))
+                return false;
+    }
+    for (int j = 0; j < dep->n_link_flags; j++)
+        if (!str_list_add_unique(&into->link_flags, &into->n_link_flags,
+                                 dep->link_flags[j]))
+            return false;
+    const char *scalar_key[2] = { ":cmake-name", ":cmake-version" };
+    char **scalar_dst[2] = { &into->cmake_name, &into->cmake_version };
+    const char *scalar_src[2] = { dep->cmake_name, dep->cmake_version };
+    for (int s = 0; s < 2; s++) {
+        if (!scalar_src[s]) continue;
+        if (!*scalar_dst[s]) {
+            *scalar_dst[s] = tur_strdup(scalar_src[s]);
+            if (!*scalar_dst[s]) return false;
+        } else if (strcmp(*scalar_dst[s], scalar_src[s]) != 0) {
+            fprintf(stderr,
+                "tur: conflicting :cmake-deps %s for \"%s\":\n"
+                "  %s: \"%s\"\n"
+                "  %s: \"%s\"\n",
+                scalar_key[s], dep->name,
+                origin_old ? origin_old : "<unknown>", *scalar_dst[s],
+                origin_new ? origin_new : "<unknown>", scalar_src[s]);
+            return false;
+        }
+    }
+    if (dep->prefer_system != into->prefer_system) {
+        fprintf(stderr,
+            "tur: note: :cmake-deps \"%s\" is declared :prefer-system by %s "
+            "and not by %s; the system package is preferred\n",
+            dep->name,
+            dep->prefer_system ? (origin_new ? origin_new : "<unknown>")
+                               : (origin_old ? origin_old : "<unknown>"),
+            dep->prefer_system ? (origin_old ? origin_old : "<unknown>")
+                               : (origin_new ? origin_new : "<unknown>"));
+        into->prefer_system = true;
+    }
+    return true;
+}
+
 /* Append `dep` (deep-copied) into *out_deps, applying conflict-detection
  * keyed on `dep->name`.  `origin_dir` is reported in conflict diagnostics
  * (typically the manifest directory the dep was read from). */
@@ -3698,12 +3820,15 @@ static bool append_cmake_dep_with_conflict_check(PkgCmakeDep **out_deps,
     for (int i = 0; i < *out_n; i++) {
         if (!str_eq_or_both_null((*out_deps)[i].name, dep->name)) continue;
         /* Same name -- require :url and :ref to match (path-form deps
-         * are compared by :path).  Mismatched :cmake-name or :options
-         * is silently kept on the existing copy. */
+         * are compared by :path).  One dependency, so the two declarations
+         * are merged (merge_cmake_dep); only a key set to two different
+         * values is a conflict. */
         bool url_match  = str_eq_or_both_null((*out_deps)[i].url,  dep->url);
         bool ref_match  = str_eq_or_both_null((*out_deps)[i].ref,  dep->ref);
         bool path_match = str_eq_or_both_null((*out_deps)[i].path, dep->path);
-        if (url_match && ref_match && path_match) return true; /* dup */
+        if (url_match && ref_match && path_match)
+            return merge_cmake_dep(&(*out_deps)[i], dep,
+                                   origins[i], origin_dir);
         fprintf(stderr,
             "tur: conflicting :cmake-deps for \"%s\":\n"
             "  %s: url=%s, ref=%s, path=%s\n"

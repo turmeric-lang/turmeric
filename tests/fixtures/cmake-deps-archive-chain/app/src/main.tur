@@ -1,0 +1,9 @@
+(defn answer [] : int
+  ```c
+  extern int top_value(void);
+  return top_value();
+  ```)
+
+(defn main [] : int
+  (println (answer))
+  0)

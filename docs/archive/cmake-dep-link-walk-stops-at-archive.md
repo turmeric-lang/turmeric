@@ -108,3 +108,14 @@ and never reaches `mid`'s own `core`. `pkg_cmake_manifest_append_cc_flags`
    than producing the right one.
 
 A pin can be the repro verbatim, asserting the program prints `42`.
+
+## Resolved 2026-10-21: fix direction 1
+
+`_tur_walk_iface` (emitted by `emit_link_iface_helper`, `src/compiler/pkg.c`)
+now walks a linkable target's own `INTERFACE_LINK_LIBRARIES` after appending
+its `$<TARGET_FILE>`, instead of only recursing into non-linkable ones, so a
+static archive's static dependencies follow it on the line; `_seen` still
+stops cycles. The repro's `top` entry resolves to `libtop.a libmid.a
+libcore.a` and the program prints 42 with no `:targets` workaround. Pinned
+as `tests/fixtures/cmake-deps-archive-chain`, run by
+`tests/run-transitive-cmake-deps.sh` (`cmake-deps-archive-chain-links`).

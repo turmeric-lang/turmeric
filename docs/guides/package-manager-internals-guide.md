@@ -415,10 +415,14 @@ those of every spice in the `:spices` closure, walked with a worklist and a
 unrelated members' native deps and collided in CMake's single target
 namespace.
 
-`append_cmake_dep_with_conflict_check` dedups identical `(name, url, ref,
-path)` entries and fails on a same-name mismatch, printing both origins.
-Differences in `:cmake-name`, `:targets` or `:options` are not compared; the
-first copy wins silently. It also absolutizes a relative `:path` against
+`append_cmake_dep_with_conflict_check` fails on a same-name entry whose
+`(url, ref, path)` differ, printing both origins. Two entries at the same
+origin are one dependency and are merged (`merge_cmake_dep`, since
+2026-10-21): `:options` / `:wasm-options` key by key, a key set to two
+different values being a hard error that names both manifests; `:targets`,
+`:link-libs`, `:link-flags` union; a differing `:cmake-name` or
+`:cmake-version` is a conflict; `:prefer-system` unions to "prefer system"
+with a note. It also absolutizes a relative `:path` against
 `<origin>/cmake/` -- the generated file lives in `cmake/`, so a spice writes
 `:path "../cmake-deps/foo"` to mean `<spice>/cmake-deps/foo`.
 

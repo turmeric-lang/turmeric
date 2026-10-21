@@ -16,6 +16,14 @@ All notable changes to Turmeric are documented here.
 
 ### Fixed
 
+- **Two spices declaring one `:cmake-deps` entry merge their declarations.**
+  The copy collected first used to win silently, dropping the other's
+  `:options`, `:targets` and the rest. Options now union key by key, and a
+  key set to two different values is an error naming both manifests.
+- **A `:cmake-deps` archive's own static dependencies follow it on the link
+  line.** `top -> mid -> core` used to link as `libtop.a libmid.a` with
+  `libcore.a` only earlier, which GNU ld rejects; the walk now continues
+  through archives.
 - **A `(fn ...)` parameter can be stored into a struct's fn field.** A
   non-`^fat` fn parameter passed to a constructor used to type-check and then
   fail in cc (`aggregate value used where an integer was expected`).

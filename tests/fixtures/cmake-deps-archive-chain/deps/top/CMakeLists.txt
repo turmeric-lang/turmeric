@@ -1,0 +1,6 @@
+cmake_minimum_required(VERSION 3.20)
+project(top C)
+add_library(top STATIC top.c)
+if (TARGET mid)
+  target_link_libraries(top PRIVATE mid)
+endif()

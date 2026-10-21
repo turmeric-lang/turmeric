@@ -206,6 +206,101 @@ else
     echo "SKIP run-retries-failed-cmake-dep-build (no cmake)"
 fi
 
+# ---------------------------------------------------------------------------
+# 6. cmake-dep-link-walk-stops-at-archive: `top` links `mid`, which links
+#    `core`.  The generated link line must put libcore.a after libmid.a
+#    after libtop.a, or GNU ld (which never revisits an archive) reports
+#    core_value undefined.  The program prints 42 when the order is right.
+if command -v cmake >/dev/null 2>&1; then
+    CHAIN_SRC="tests/fixtures/cmake-deps-archive-chain"
+    CHAIN_DIR="$WORK/chain"
+    cp -r "$CHAIN_SRC" "$CHAIN_DIR"
+    if (cd "$CHAIN_DIR/app" && timeout 120 "$TUR_ABS" fetch >fetch.log 2>&1 \
+            && timeout 120 "$TUR_ABS" build . >build.log 2>&1) \
+       && [ -x "$CHAIN_DIR/app/build/bin/app" ] \
+       && [ "$("$CHAIN_DIR/app/build/bin/app" 2>&1)" = "42" ]; then
+        pass "cmake-deps-archive-chain-links"
+    else
+        fail "cmake-deps-archive-chain-links" \
+             "expected the app to build and print 42: $(tail -n 8 "$CHAIN_DIR/app/fetch.log" "$CHAIN_DIR/app/build.log" 2>/dev/null)"
+    fi
+else
+    echo "SKIP cmake-deps-archive-chain-links (no cmake)"
+fi
+
+# ---------------------------------------------------------------------------
+# 7./8. cmake-deps-duplicate-keeps-first-options: two spices declare one
+#    :cmake-deps name at the same :url/:ref.  Their :options UNION (a key only
+#    one of them sets still configures the dep), and a key set to two
+#    different values is a hard error naming both manifests.  The dep is a
+#    local git repo so FetchContent needs no network.
+if command -v cmake >/dev/null 2>&1 && command -v git >/dev/null 2>&1; then
+    U="$WORK/union"
+    mkdir -p "$U/dep" "$U/spice-a" "$U/spice-b" "$U/spice-c" "$U/app/src" "$U/app2/src"
+    cat >"$U/dep/CMakeLists.txt" <<'CMK'
+cmake_minimum_required(VERSION 3.20)
+project(dep C)
+set(DEP_FLAVOR "default" CACHE STRING "which flavor of dep to build")
+set(DEP_EXTRA "none" CACHE STRING "an extra knob")
+add_library(dep STATIC dep.c)
+target_compile_definitions(dep PRIVATE "DEP_FLAVOR=\"${DEP_FLAVOR}\"" "DEP_EXTRA=\"${DEP_EXTRA}\"")
+CMK
+    printf 'const char *dep_flavor(void) { return DEP_FLAVOR "/" DEP_EXTRA; }\n' >"$U/dep/dep.c"
+    (cd "$U/dep" && git init -q && git add -A \
+        && git -c user.name=r -c user.email=r@example.com commit -qm dep && git tag v1)
+    for s in a b c; do
+        case $s in
+            a) opts=':DEP_FLAVOR "shared"' ;;
+            b) opts=':DEP_FLAVOR "shared" :DEP_EXTRA "from-b"' ;;
+            c) opts=':DEP_FLAVOR "other"' ;;
+        esac
+        cat >"$U/spice-$s/build.tur" <<MAN
+(defpackage spice-$s :name "spice-$s" :version "0.1.0"
+  :cmake-deps #map{"dep" #map{:url "file://$U/dep" :ref "v1" :targets ["dep"]
+                              :options #map{$opts}}})
+MAN
+    done
+    cat >"$U/app/src/main.tur" <<'TUR'
+(defn flavor [] : cstr
+  ```c
+  extern const char *dep_flavor(void);
+  return dep_flavor();
+  ```)
+(defn main [] : int (println (flavor)) 0)
+TUR
+    cp "$U/app/src/main.tur" "$U/app2/src/main.tur"
+    cat >"$U/app/build.tur" <<'MAN'
+(defpackage app :name "app" :version "0.1.0"
+  :spices #map{"spice-a" #map{:path "../spice-a"} "spice-b" #map{:path "../spice-b"}})
+MAN
+    cat >"$U/app2/build.tur" <<'MAN'
+(defpackage app2 :name "app2" :version "0.1.0"
+  :spices #map{"spice-a" #map{:path "../spice-a"} "spice-c" #map{:path "../spice-c"}})
+MAN
+    if (cd "$U/app" && timeout 120 "$TUR_ABS" fetch >fetch.log 2>&1) \
+       && grep -q 'set(DEP_FLAVOR "shared"' "$U/app/cmake/CMakeLists.txt" \
+       && grep -q 'set(DEP_EXTRA "from-b"' "$U/app/cmake/CMakeLists.txt" \
+       && (cd "$U/app" && timeout 120 "$TUR_ABS" build . >build.log 2>&1) \
+       && [ "$("$U/app/build/bin/app" 2>&1)" = "shared/from-b" ]; then
+        pass "cmake-deps-option-union"
+    else
+        fail "cmake-deps-option-union" \
+             "expected both keys in cmake/CMakeLists.txt and the program to print shared/from-b: $(tail -n 8 "$U/app/fetch.log" "$U/app/build.log" 2>/dev/null)"
+    fi
+    (cd "$U/app2" && "$TUR_ABS" fetch >fetch.log 2>&1)
+    rc=$?
+    if [ "$rc" -ne 0 ] \
+       && grep -q 'conflicting :cmake-deps option for "dep": DEP_FLAVOR' "$U/app2/fetch.log" \
+       && grep -q 'spice-a' "$U/app2/fetch.log" && grep -q 'spice-c' "$U/app2/fetch.log"; then
+        pass "cmake-deps-option-conflict"
+    else
+        fail "cmake-deps-option-conflict" \
+             "expected a non-zero exit naming DEP_FLAVOR and both spices; rc=$rc, log=$(cat "$U/app2/fetch.log")"
+    fi
+else
+    echo "SKIP cmake-deps-option-union / cmake-deps-option-conflict (no cmake or git)"
+fi
+
 echo
 echo "transitive-cmake-deps: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

@@ -58,7 +58,7 @@ not work today, for three reasons:
 2. **A second spice cannot change the nng spice's options.** Re-declaring
    `"nng"` with TLS options gets deduplicated against the nng spice's entry,
    and the copy collected first keeps its options silently
-   ([cmake-deps-duplicate-keeps-first-options](../../reported/cmake-deps-duplicate-keeps-first-options.md)).
+   ([cmake-deps-duplicate-keeps-first-options](../../archive/cmake-deps-duplicate-keeps-first-options.md)).
    Even with a merge, `NNG_ENABLE_TLS` `OFF` against `ON` is a true conflict
    with no rule for who wins, and the nng spice's entry would also need
    configuring after `mbedtls`
@@ -142,7 +142,7 @@ and `NNG_TRANSPORT_WSS "OFF"` is rewritten to match.
 
 Add `:DISABLE_PACKAGE_CONFIG_AND_INSTALL "OFF"` to each. Whichever copy of
 the `mbedtls` entry is collected first is the one that gets built, options
-and all ([cmake-deps-duplicate-keeps-first-options](../../reported/cmake-deps-duplicate-keeps-first-options.md)).
+and all ([cmake-deps-duplicate-keeps-first-options](../../archive/cmake-deps-duplicate-keeps-first-options.md)).
 A program using nng and one of them gets that one's copy about half the
 time, depending on the order of its `:spices` map. The option only enables
 mbedTLS's own `install()` / export rules, which `tur` never runs, so it
@@ -303,7 +303,7 @@ One turmeric-spices PR is the expected shape; NT0 has no value shipped alone.
 ## Risks and open questions
 
 1. **Another spice's `mbedtls` copy without the option.** Covered above.
-   Retires when [cmake-deps-duplicate-keeps-first-options](../../reported/cmake-deps-duplicate-keeps-first-options.md)
+   Retires when [cmake-deps-duplicate-keeps-first-options](../../archive/cmake-deps-duplicate-keeps-first-options.md)
    is fixed by union.
 2. **mbedTLS version coupling.** nng's mbedTLS is now whatever `tls` pins.
    Bumping mbedTLS means moving every copy together, which the hard error on
@@ -370,17 +370,17 @@ fa42ece.
    client has no CA for".
 5. **Without the `:targets` workaround** the same link fails under GNU ld
    with undefined `mbedtls_asn1_*` / `mbedtls_cipher_*` references
-   ([cmake-dep-link-walk-stops-at-archive](../../reported/cmake-dep-link-walk-stops-at-archive.md)).
+   ([cmake-dep-link-walk-stops-at-archive](../../archive/cmake-dep-link-walk-stops-at-archive.md)).
 
 ## Found on the way
 
-All five were filed in `docs/reported/`; two are resolved since; none blocks this plan.
+All five were filed in `docs/reported/`; four are resolved since; none blocks this plan.
 
 | Report | Severity | Effect here |
 | --- | --- | --- |
-| [cmake-deps-duplicate-keeps-first-options](../../reported/cmake-deps-duplicate-keeps-first-options.md) | medium | why the sibling `mbedtls` entries are edited |
+| [cmake-deps-duplicate-keeps-first-options](../../archive/cmake-deps-duplicate-keeps-first-options.md) | medium | resolved 2026-10-21 by union: the sibling `mbedtls` entries no longer need editing, and only the `nng` entry needs the extra option |
 | [cmake-deps-no-cross-spice-override-or-order](../../reported/cmake-deps-no-cross-spice-override-or-order.md) | low | why TLS is not a separate spice or an opt-in |
-| [cmake-dep-link-walk-stops-at-archive](../../reported/cmake-dep-link-walk-stops-at-archive.md) | medium | why the `nng` entry lists the mbedTLS targets |
+| [cmake-dep-link-walk-stops-at-archive](../../archive/cmake-dep-link-walk-stops-at-archive.md) | medium | resolved 2026-10-21: the link walk follows an archive's own dependencies, so the `nng` entry no longer needs to list the mbedTLS targets |
 | [cmake-dir-markers-print-link-flag-warnings](../../archive/cmake-dir-markers-print-link-flag-warnings.md) | low | resolved 2026-10-18: the markers are dropped, so no warnings |
 | [cmake-dep-path-through-missing-cmake-dir](../../archive/cmake-dep-path-through-missing-cmake-dir.md) | medium | resolved 2026-10-18; none here (nng has no `:path` deps) |
 

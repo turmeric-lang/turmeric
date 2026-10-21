@@ -1,0 +1,5 @@
+cmake_minimum_required(VERSION 3.20)
+project(midcore C)
+add_library(core STATIC core.c)
+add_library(mid STATIC mid.c)
+target_link_libraries(mid PUBLIC core)

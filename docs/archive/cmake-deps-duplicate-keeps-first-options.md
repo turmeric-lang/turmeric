@@ -123,3 +123,27 @@ silently and "any divergence" should be a hard error naming both manifests.
 A pin can follow the repro's shape: two spices, one dep, one option each,
 asserting the merged `cmake/CMakeLists.txt` (union) or a non-zero exit
 (conflict).
+
+## Resolved 2026-10-21: fix direction 1, union with a hard error on a real conflict
+
+`append_cmake_dep_with_conflict_check` (`src/compiler/pkg.c`) now merges a
+same-name entry at the same `:url`/`:ref` (or `:path`) into the one already
+collected (`merge_cmake_dep`): `:options` and `:wasm-options` key by key,
+with a key set to two different values a hard error that names both
+manifests and the key; `:targets`, `:link-libs` and `:link-flags` union; a
+differing `:cmake-name` or `:cmake-version` is a conflict; `:prefer-system`
+unions to "prefer the system package", with a note. The repro above now
+configures `dep` with both spices' keys, and a true conflict exits 2:
+
+```
+tur: conflicting :cmake-deps option for "dep": DEP_FLAVOR
+  ./../spice-c: "other"
+  ./../spice-a: "shared"
+```
+
+Pinned in `tests/run-transitive-cmake-deps.sh` (`cmake-deps-option-union`,
+`cmake-deps-option-conflict`, a local git repo as the upstream). The three
+`mbedtls` copies in turmeric-spices merge as they are, and nng-tls-plan's
+edits to the sibling manifests are no longer needed. A deliberate override
+of a conflicting value is still
+[cmake-deps-no-cross-spice-override-or-order](../reported/cmake-deps-no-cross-spice-override-or-order.md).

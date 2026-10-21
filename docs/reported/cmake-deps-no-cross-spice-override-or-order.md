@@ -16,10 +16,9 @@ chose the in-spice route because they are not.
 nng only grows `wss://` when it is *built* with `NNG_ENABLE_TLS=ON`. A spice
 that wants that has to change the options of the `nng` entry the `nng` spice
 declares. It can re-declare `"nng"` with the same `:url` / `:ref` and its own
-`:options`, but today that copy is dropped whenever the `nng` spice's copy is
-collected first
-([cmake-deps-duplicate-keeps-first-options](cmake-deps-duplicate-keeps-first-options.md)).
-Even a key-by-key union, that report's first fix direction, cannot settle it:
+`:options`, and since 2026-10-21 the two copies are merged key by key
+([cmake-deps-duplicate-keeps-first-options](../archive/cmake-deps-duplicate-keeps-first-options.md)).
+That union cannot settle it:
 `NNG_ENABLE_TLS` is `OFF` in one copy and `ON` in the other, a true conflict,
 and nothing says which spice should win.
 
@@ -49,7 +48,7 @@ spice can only get the configure order it needs by declaring the shared
 library itself, ahead of its own entry, which is what nng-tls-plan does.
 
 Seen on `main` 3d9e02a2 (tur v0.65.5) with the three-library repro from
-[cmake-dep-link-walk-stops-at-archive](cmake-dep-link-walk-stops-at-archive.md),
+[cmake-dep-link-walk-stops-at-archive](../archive/cmake-dep-link-walk-stops-at-archive.md),
 rearranged: the `midcore` entry moves into a spice `midspice`, and the app
 declares `"top"` itself plus `:spices #map{"midspice" #map{:path
 "../midspice"}}`. The generated `cmake/CMakeLists.txt` adds `top` (line 79)
