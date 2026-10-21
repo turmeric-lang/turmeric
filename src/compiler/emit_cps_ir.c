@@ -3964,20 +3964,61 @@ bool emit_cps_ir_colored_fn_needs_mono(const FnDef *fd) {
 
 /* ---- whole-program classification cache ------------------------------ */
 
-/* `eff_lo`/`eff_hi` are a 128-bit set of the effect tags this function performs
- * or handles (bit `effect_tag(sym)-2`).  `in_s` is whether the function is
- * CPS-emitted; a non-candidate (main / exported / fell-back) is kept in the
- * table with in_s=false so its effects taint any CPS peer sharing them. */
+/* A set of effects, one bit per effect: bit `effect_tag(sym)-2` (eff_bit).
+ * Tags themselves never run out; an effect past the set's width shares the
+ * last bit (EFF_OVERFLOW_BIT) with every other such effect.  That bit only
+ * over-approximates: two functions touching different overflow effects look
+ * like they share one (more taint, never less), and a `handle` never
+ * subtracts it from a net escaping set (effset_or_andnot), so an overflow
+ * effect is never cleared by a handler for another one. */
+#define CPS_EFF_WORDS    16
+#define CPS_MAX_EFFECTS  (CPS_EFF_WORDS * 64)
+#define EFF_OVERFLOW_BIT (CPS_MAX_EFFECTS - 1)
+typedef struct { uint64_t w[CPS_EFF_WORDS]; } EffSet;
+
+static void effset_add(EffSet *s, int bit) {
+    s->w[bit / 64] |= (uint64_t)1 << (bit % 64);
+}
+static bool effset_has(const EffSet *s, int bit) {
+    return (s->w[bit / 64] >> (bit % 64)) & 1;
+}
+static bool effset_any(const EffSet *s) {
+    for (int i = 0; i < CPS_EFF_WORDS; i++) if (s->w[i]) return true;
+    return false;
+}
+static bool effset_meets(const EffSet *a, const EffSet *b) {
+    for (int i = 0; i < CPS_EFF_WORDS; i++) if (a->w[i] & b->w[i]) return true;
+    return false;
+}
+static bool effset_eq(const EffSet *a, const EffSet *b) {
+    return memcmp(a->w, b->w, sizeof a->w) == 0;
+}
+static void effset_or(EffSet *d, const EffSet *s) {
+    for (int i = 0; i < CPS_EFF_WORDS; i++) d->w[i] |= s->w[i];
+}
+/* d |= a & ~b, except that b's overflow bit is never subtracted (see EffSet). */
+static void effset_or_andnot(EffSet *d, const EffSet *a, const EffSet *b) {
+    for (int i = 0; i < CPS_EFF_WORDS; i++) {
+        uint64_t sub = b->w[i];
+        if (i == EFF_OVERFLOW_BIT / 64) sub &= ~((uint64_t)1 << (EFF_OVERFLOW_BIT % 64));
+        d->w[i] |= a->w[i] & ~sub;
+    }
+}
+
+/* `eff` is the set of effects this function performs or handles.  `in_s` is
+ * whether the function is CPS-emitted; a non-candidate (main / exported /
+ * fell-back) is kept in the table with in_s=false so its effects taint any CPS
+ * peer sharing them. */
 typedef struct {
     const FnDef *fd; const Binding *bind; CTerm *term; bool in_s;
-    uint64_t eff_lo, eff_hi;
-    /* Split of eff_* into effects this fn PERFORMS vs HANDLES, and its colored
+    EffSet eff;
+    /* Split of eff into effects this fn PERFORMS vs HANDLES, and its colored
      * call graph -- backing the call-path taint (below).  `edges` is a bitset
      * over g_ents indices of directly-called colored peers; `edges_all` marks a
      * fn that makes an indirect/over-cap call (conservatively reaches every
      * colored peer). */
-    uint64_t perf_lo, perf_hi;
-    uint64_t hand_lo, hand_hi;
+    EffSet perf;
+    EffSet hand;
     uint64_t *edges;   /* NULL until the call graph is built (see ensure_S) */
     bool      edges_all;
     /* G3b: a colored GENERIC template whose monomorphs are all CPS-admissible.
@@ -4096,7 +4137,7 @@ static size_t      g_ents_n;
  * shares such an effect is permanent SIG-cascade routing -- no BODY-* fix could
  * admit it -- so the EVICT trace reports it as SIG-TAINT, not BODY-STRUCT-OR-TAINT.
  * Computed by ensure_S (a fixpoint over sig_perm sources); read by the trace. */
-static uint64_t    g_perm_lo, g_perm_hi;
+static EffSet      g_perm;
 static bool        g_fwd_done;  /* __cps forward decls emitted for g_prog */
 
 /* E2/taint-completeness: the set of global fns whose ADDRESS is taken (referenced
@@ -4131,10 +4172,11 @@ static void pap_fwd_add(const Binding *b) {
 
 /* Effect -> prompt-tag registry.  Tags start at 2 (reset/shift use 1); the same
  * interned effect Symbol always maps to the same tag, so a handle and a matching
- * perform agree.  Reset per program. */
-#define CPS_MAX_EFFECTS 128
-static const Symbol *g_eff_syms[CPS_MAX_EFFECTS];
-static int           g_eff_n;
+ * perform agree.  Grows without limit: `dk_perform` matches a handler by tag
+ * alone, so two effects sharing one would silently run the wrong handler.
+ * Reset per program. */
+static const Symbol **g_eff_syms;
+static int            g_eff_n, g_eff_cap;
 
 /* Non-static (B3 part 2): the direct-path handler-literal emitter
  * (emit_effects_handler_lit) calls this to stamp a DK case entry's `dk_tag` with
@@ -4143,8 +4185,24 @@ static int           g_eff_n;
 int effect_tag(const Symbol *eff) {
     for (int i = 0; i < g_eff_n; i++)
         if (g_eff_syms[i] == eff) return i + 2;
-    if (g_eff_n < CPS_MAX_EFFECTS) { g_eff_syms[g_eff_n] = eff; return (g_eff_n++) + 2; }
-    return 2;
+    if (g_eff_n == g_eff_cap) {
+        g_eff_cap = g_eff_cap ? 2 * g_eff_cap : 64;
+        g_eff_syms = (const Symbol **)realloc(g_eff_syms, (size_t)g_eff_cap * sizeof *g_eff_syms);
+        if (!g_eff_syms) { fprintf(stderr, "tur: oom\n"); abort(); }
+    }
+    g_eff_syms[g_eff_n] = eff;
+    return (g_eff_n++) + 2;
+}
+
+/* `eff`'s bit in an EffSet: its tag - 2, or the shared overflow bit. */
+static int eff_bit(const Symbol *eff) {
+    int idx = effect_tag(eff) - 2;
+    return idx < EFF_OVERFLOW_BIT ? idx : EFF_OVERFLOW_BIT;
+}
+
+/* How many EffSet bits a per-bit loop has to visit for this program. */
+static int eff_bits_live(void) {
+    return g_eff_n < CPS_MAX_EFFECTS ? g_eff_n : CPS_MAX_EFFECTS;
 }
 
 static bool binding_in_s(const Binding *b) {
@@ -4503,21 +4561,19 @@ static bool needs_heap_join(const CTerm *t) {
     }
 }
 
-/* Mark effect `eff` in a 128-bit set (bit index = effect_tag - 2). */
-static void mark_effect(const Symbol *eff, uint64_t *lo, uint64_t *hi) {
+/* Mark effect `eff` in an effect set. */
+static void mark_effect(const Symbol *eff, EffSet *s) {
     if (!eff) return;
-    int idx = effect_tag(eff) - 2;      /* >=0 */
-    if (idx < 64)       *lo |= (uint64_t)1 << idx;
-    else if (idx < 128) *hi |= (uint64_t)1 << (idx - 64);
+    effset_add(s, eff_bit(eff));
 }
 
-/* Accumulator for the raw-Expr effect/call walk.  `plo/phi` collect the tags of
- * effects the expression *performs*; `hlo/hhi` collect the tags it *handles*
+/* Accumulator for the raw-Expr effect/call walk.  `perf` collects the effects
+ * the expression *performs*; `hand` collects the effects it *handles*
  * (installs a prompt for).  When `callees` is non-NULL, every direct call's
  * `fn_binding` is appended (deduped) up to `cap_callees`; an indirect call, or
  * an overflow past the cap, sets `*callee_overflow` (the caller then treats the
  * function as reaching every colored peer -- sound over-approximation).  The
- * combined "performs-or-handles" wrapper aliases plo==hlo and phi==hhi. */
+ * combined "performs-or-handles" wrapper aliases perf==hand. */
 /* r7rs-conformance-program-emits-megabytes-of-c: the E2 threadability tallies
  * for EVERY fn-value at once.  ensure_S used to walk the whole program once
  * per fn-value (fn_value_threadable, fnval_stored_in_struct) -- quadratic, and
@@ -4543,8 +4599,8 @@ typedef struct FvMulti {
 } FvMulti;
 
 typedef struct {
-    uint64_t *plo, *phi;      /* performed effects */
-    uint64_t *hlo, *hhi;      /* handled effects   */
+    EffSet   *perf;           /* performed effects */
+    EffSet   *hand;           /* handled effects   */
     const Binding **callees;  /* optional: direct-call bindings (deduped)      */
     int       *n_callees;
     int        cap_callees;
@@ -4750,7 +4806,7 @@ static void expr_collect_effects_acc(const Expr *e, EffAcc *acc) {
         /* --- the effect operations themselves --- */
         case EX_PERFORM:
             if (e->as.perform_.perform) {
-                mark_effect(e->as.perform_.perform->effect_name, acc->plo, acc->phi);
+                mark_effect(e->as.perform_.perform->effect_name, acc->perf);
                 for (uint32_t i = 0; i < e->as.perform_.perform->n_args; i++)
                     REC(e->as.perform_.perform->args[i]);
             }
@@ -4760,7 +4816,7 @@ static void expr_collect_effects_acc(const Expr *e, EffAcc *acc) {
                 HandleExpr *h = e->as.handle_.handle;
                 REC(h->body);
                 for (uint8_t i = 0; i < h->n_cases; i++) {
-                    mark_effect(h->cases[i].effect_name, acc->hlo, acc->hhi);
+                    mark_effect(h->cases[i].effect_name, acc->hand);
                     REC(h->cases[i].body);
                 }
             }
@@ -4800,7 +4856,7 @@ static void expr_collect_effects_acc(const Expr *e, EffAcc *acc) {
                 const Symbol *effs[32]; uint8_t neff = 0;
                 effect_row_collect_names(ht->as.handler_.handled_row, effs, &neff, 32);
                 for (uint8_t i = 0; i < neff; i++)
-                    mark_effect(effs[i], acc->hlo, acc->hhi);
+                    mark_effect(effs[i], acc->hand);
             }
             REC(e->as.with_handler_.handler); REC(e->as.with_handler_.body); return;
         }
@@ -4915,7 +4971,7 @@ static void expr_collect_effects_acc(const Expr *e, EffAcc *acc) {
                     if (fr && fr->kind == ERK_CONCRETE)
                         for (uint32_t i = 0; i < fr->as.concrete.n_effects; i++)
                             if (fr->as.concrete.effects[i])
-                                mark_effect(fr->as.concrete.effects[i]->name, acc->plo, acc->phi);
+                                mark_effect(fr->as.concrete.effects[i]->name, acc->perf);
                 } else if (acc->callees && acc->callee_overflow) {
                     *acc->callee_overflow = true;
                 }
@@ -4938,7 +4994,7 @@ static void expr_collect_effects_acc(const Expr *e, EffAcc *acc) {
             if (row && row->kind == ERK_CONCRETE)
                 for (uint32_t i = 0; i < row->as.concrete.n_effects; i++)
                     if (row->as.concrete.effects[i])
-                        mark_effect(row->as.concrete.effects[i]->name, acc->plo, acc->phi);
+                        mark_effect(row->as.concrete.effects[i]->name, acc->perf);
             /* E2 threadability probe: is count_target passed here as arg[i] to a
              * THREADING param of a resolvable global callee?  Counted alongside the
              * total-use walk below, so the caller can test total == threadable. */
@@ -5191,14 +5247,14 @@ static void expr_collect_effects_acc(const Expr *e, EffAcc *acc) {
 
 /* Combined "performs-or-handles" effect set (no callee collection) -- the shape
  * every existing caller uses.  Perform and handle tags fold into the same set. */
-static void expr_collect_effects(const Expr *e, uint64_t *lo, uint64_t *hi) {
-    EffAcc acc = { lo, hi, lo, hi, NULL, NULL, 0, NULL, NULL, NULL, NULL, NULL,
+static void expr_collect_effects(const Expr *e, EffSet *s) {
+    EffAcc acc = { s, s, NULL, NULL, 0, NULL, NULL, NULL, NULL, NULL,
                    NULL, NULL, NULL, false, NULL, false };
     expr_collect_effects_acc(e, &acc);
 }
 /* The same, for the base-taint seed: a lambda's body is its own entry's. */
-static void expr_collect_effects_base(const Expr *e, uint64_t *lo, uint64_t *hi) {
-    EffAcc acc = { lo, hi, lo, hi, NULL, NULL, 0, NULL, NULL, NULL, NULL, NULL,
+static void expr_collect_effects_base(const Expr *e, EffSet *s) {
+    EffAcc acc = { s, s, NULL, NULL, 0, NULL, NULL, NULL, NULL, NULL,
                    NULL, NULL, NULL, false, NULL, true };
     expr_collect_effects_acc(e, &acc);
 }
@@ -5217,13 +5273,13 @@ static void expr_collect_effects_base(const Expr *e, uint64_t *lo, uint64_t *hi)
  * round recomputes every colored fn from the previous round's callee sets.
  * The sets only grow and `handle` subtraction is monotone, so it converges,
  * recursion included, at linear cost per round. */
-typedef struct { const FnDef *fd; uint64_t lo, hi; } NescEnt;
+typedef struct { const FnDef *fd; EffSet esc; } NescEnt;
 static const Expr *g_nesc_prog = NULL;
 static NescEnt    *g_nesc_tab = NULL;
 static uint32_t    g_nesc_cap = 0;   /* power of two; 0 = no table */
 /* Per effect bit, the first unthreaded fn-value letting it escape (ensure_S),
  * for the refusal's note (emit_cps_ir_effect_escaping_fnval). */
-static const FnDef *g_fvesc_src[128];
+static const FnDef *g_fvesc_src[CPS_MAX_EFFECTS];
 
 static NescEnt *nesc_find(const FnDef *fd, bool insert) {
     if (!g_nesc_cap || !fd) return NULL;
@@ -5250,13 +5306,13 @@ static NescEnt *nesc_find(const FnDef *fd, bool insert) {
  * DO escape (they run in the handler frame, above this prompt), so they are
  * counted.  An uncovered form falls back to the raw union (conservative: it
  * over-counts handled effects as escaping, never under-counts). */
-static void fn_net_escaping_acc(const Expr *e, uint64_t *lo, uint64_t *hi) {
+static void fn_net_escaping_acc(const Expr *e, EffSet *s) {
     if (!e) return;
-    #define NESC(x) fn_net_escaping_acc((x), lo, hi)
+    #define NESC(x) fn_net_escaping_acc((x), s)
     switch (e->kind) {
         case EX_PERFORM:
             if (e->as.perform_.perform) {
-                mark_effect(e->as.perform_.perform->effect_name, lo, hi);
+                mark_effect(e->as.perform_.perform->effect_name, s);
                 for (uint32_t i = 0; i < e->as.perform_.perform->n_args; i++)
                     NESC(e->as.perform_.perform->args[i]);
             }
@@ -5266,13 +5322,12 @@ static void fn_net_escaping_acc(const Expr *e, uint64_t *lo, uint64_t *hi) {
                 HandleExpr *h = e->as.handle_.handle;
                 /* the body's net-escaping effects, MINUS the effects this handle
                  * discharges */
-                uint64_t blo = 0, bhi = 0;
-                fn_net_escaping_acc((const Expr *)h->body, &blo, &bhi);
-                uint64_t hlo = 0, hhi = 0;
+                EffSet body = {0};
+                fn_net_escaping_acc((const Expr *)h->body, &body);
+                EffSet handled = {0};
                 for (uint8_t i = 0; i < h->n_cases; i++)
-                    mark_effect(h->cases[i].effect_name, &hlo, &hhi);
-                *lo |= (blo & ~hlo);
-                *hi |= (bhi & ~hhi);
+                    mark_effect(h->cases[i].effect_name, &handled);
+                effset_or_andnot(s, &body, &handled);
                 /* case bodies run in the handler frame -- their performs escape */
                 for (uint8_t i = 0; i < h->n_cases; i++)
                     NESC(h->cases[i].body);
@@ -5308,14 +5363,14 @@ static void fn_net_escaping_acc(const Expr *e, uint64_t *lo, uint64_t *hi) {
             if (g_nesc_prog && e->as.call_.fn_binding && !e->as.call_.fn_expr) {
                 const NescEnt *ce =
                     nesc_find(fd_for_binding(g_nesc_prog, e->as.call_.fn_binding), false);
-                if (ce) { *lo |= ce->lo; *hi |= ce->hi; }
+                if (ce) effset_or(s, &ce->esc);
             }
             return;
         default:
             /* Uncovered form: fall back to the raw union (perform+handle folded),
              * which over-counts a nested handled effect as escaping -- sound (it
              * never clears a genuinely-escaping perform), just conservative. */
-            expr_collect_effects(e, lo, hi);
+            expr_collect_effects(e, s);
             return;
     }
     #undef NESC
@@ -5323,18 +5378,18 @@ static void fn_net_escaping_acc(const Expr *e, uint64_t *lo, uint64_t *hi) {
 
 const Expr *emit_cps_ir_effect_escaping_fnval(const Symbol *eff) {
     if (!eff) return NULL;
-    int idx = effect_tag(eff) - 2;
-    if (idx < 0 || idx >= 128 || !g_fvesc_src[idx]) return NULL;
-    return g_fvesc_src[idx]->body;
+    int bit = eff_bit(eff);
+    /* The overflow bit is shared, so its first fn-value may be another effect's. */
+    if (bit == EFF_OVERFLOW_BIT || !g_fvesc_src[bit]) return NULL;
+    return g_fvesc_src[bit]->body;
 }
 
 /* The net escaping effects of a fn-value's body, its colored callees' included
  * (see g_nesc_prog).  Needs nesc_fixpoint to have run for `program`. */
-static void fn_net_escaping(const Expr *program, const Expr *body,
-                            uint64_t *lo, uint64_t *hi) {
+static void fn_net_escaping(const Expr *program, const Expr *body, EffSet *s) {
     const Expr *saved = g_nesc_prog;
     g_nesc_prog = program;
-    fn_net_escaping_acc(body, lo, hi);
+    fn_net_escaping_acc(body, s);
     g_nesc_prog = saved;
 }
 
@@ -5371,10 +5426,10 @@ static void nesc_fixpoint(const Expr *program, const Expr **items, uint32_t np) 
         changed = false;
         for (uint32_t i = 0; i < k; i++) {
             NescEnt *en = order[i];
-            uint64_t lo = 0, hi = 0;
-            fn_net_escaping(program, en->fd->body, &lo, &hi);
-            lo |= en->lo; hi |= en->hi;   /* monotone by construction; keep it so */
-            if (lo != en->lo || hi != en->hi) { en->lo = lo; en->hi = hi; changed = true; }
+            EffSet esc = {0};
+            fn_net_escaping(program, en->fd->body, &esc);
+            effset_or(&esc, &en->esc);   /* monotone by construction; keep it so */
+            if (!effset_eq(&esc, &en->esc)) { en->esc = esc; changed = true; }
         }
     }
     free(order);
@@ -5392,7 +5447,7 @@ static void nesc_fixpoint(const Expr *program, const Expr **items, uint32_t np) 
  * delivery stays the handle's own result. */
 static bool letraw_effect_free(const CTerm *t) {
     if (!t || t->kind != CT_LETRAW || !t->as.letraw.e) return false;
-    uint64_t lo = 0, hi = 0; bool ov = false;
+    EffSet effs = {0}; bool ov = false;
     const Binding *callees[64]; int nc = 0;
     /* calls_only: a raw op that merely REFERENCES an effectful fn -- boxing
      * `my-eff` into a fat closure to pass it as a `^fat` argument -- runs no
@@ -5413,10 +5468,10 @@ static bool letraw_effect_free(const CTerm *t) {
      * walking the body here read the literal as effectful, so a handle whose
      * body passed such a lambda to a HOF fell to term_core_ok and evicted,
      * where the same lambda without a capture (a global reference) passed. */
-    EffAcc acc = { &lo, &hi, &lo, &hi, callees, &nc, 64, &ov,
+    EffAcc acc = { &effs, &effs, callees, &nc, 64, &ov,
                    NULL, NULL, NULL, NULL, NULL, NULL, NULL, true, NULL, true };
     expr_collect_effects_acc(t->as.letraw.e, &acc);
-    if (lo || hi || ov) return false;
+    if (effset_any(&effs) || ov) return false;
     for (int i = 0; i < nc; i++)
         if (!callee_effect_free(callees[i])) return false;
     return true;
@@ -5452,8 +5507,8 @@ static bool letraw_effect_free(const CTerm *t) {
 static int expr_count_all_uses(const Expr *e, const Binding *b) {
     if (!e || !b) return 0;
     int n = 0;
-    uint64_t dl = 0, dh = 0;
-    EffAcc acc = { &dl, &dh, &dl, &dh, NULL, NULL, 0, NULL, b, &n, NULL, NULL,
+    EffSet sink = {0};
+    EffAcc acc = { &sink, &sink, NULL, NULL, 0, NULL, b, &n, NULL, NULL,
                    b, &n, NULL, false, NULL, false };
     expr_collect_effects_acc(e, &acc);
     return n;
@@ -5938,9 +5993,9 @@ static void fnval_withdraw_walk(const Expr *e, UnthreadedUd *u) {
              * handler; one it handles itself (`(fn [] (with-handler ...))`)
              * runs the same off the trampoline -- the B5 rule below. */
             const FnDef *vfd = fd_for_binding(u->program, fb);
-            uint64_t lo = 0, hi = 0;
-            if (vfd && vfd->body) fn_net_escaping(u->program, vfd->body, &lo, &hi);
-            if (!(lo || hi)) continue;
+            EffSet esc = {0};
+            if (vfd && vfd->body) fn_net_escaping(u->program, vfd->body, &esc);
+            if (!effset_any(&esc)) continue;
             threadable_remove(fb);
             u->withdrew = true;
         }
@@ -6192,14 +6247,14 @@ static void fv_multi_free(FvMulti *m) {
 /* The same item walk, and the same per-item accumulator, as the single-target
  * fn_value_threadable / fnval_stored_in_struct. */
 static void fv_multi_tally(const Expr *program, FvMulti *m) {
-    uint64_t dl = 0, dh = 0;
+    EffSet sink = {0};
     uint32_t np = program->as.program.n;
     for (uint32_t i = 0; i < np; i++) {
         Expr *it = program->as.program.items[i];
         if (!it) continue;
         const Expr *body = (it->kind == EX_FN_DEF && it->as.fn_def_.fn)
                          ? it->as.fn_def_.fn->body : it;
-        EffAcc acc = { &dl, &dh, &dl, &dh, NULL, NULL, 0, NULL,
+        EffAcc acc = { &sink, &sink, NULL, NULL, 0, NULL,
                        NULL, NULL, program, NULL, NULL, NULL, NULL, false, m, false };
         expr_collect_effects_acc(body, &acc);
         (void)expr_stores_fnval_in_struct(body, m);
@@ -6659,11 +6714,11 @@ static void ensure_S(const Expr *program) {
     for (uint32_t i = 0; i < np; i++) {
         Expr *it = (Expr *)items[i];
         if (!it) continue;
-        uint64_t dlo = 0, dhi = 0;   /* throwaway effect sink */
+        EffSet sink = {0};   /* throwaway effect sink */
         if (it->kind == EX_FN_DEF && it->as.fn_def_.fn && it->as.fn_def_.fn->body)
-            expr_collect_effects(it->as.fn_def_.fn->body, &dlo, &dhi);
+            expr_collect_effects(it->as.fn_def_.fn->body, &sink);
         else
-            expr_collect_effects(it, &dlo, &dhi);
+            expr_collect_effects(it, &sink);
     }
     g_addr_collecting = false;
     g_serial_recv_n = 0;
@@ -6695,7 +6750,7 @@ static void ensure_S(const Expr *program) {
      * sees every threadable_add the targets before it made. */
     FnDef **tg_fd = (FnDef **)calloc(np ? np : 1, sizeof *tg_fd);
     const Binding **tg_b = (const Binding **)calloc(np ? np : 1, sizeof *tg_b);
-    uint64_t *tg_eff = (uint64_t *)calloc(np ? np : 1, sizeof *tg_eff);
+    bool *tg_eff = (bool *)calloc(np ? np : 1, sizeof *tg_eff);
     int ntg = 0;
     for (uint32_t i = 0; i < np; i++) {
         Expr *it = (Expr *)items[i];
@@ -6704,10 +6759,11 @@ static void ensure_S(const Expr *program) {
         if (!fd->binding || !fd->body) continue;
         bool is_fnval = fd->binding->is_lifted_lambda || addr_taken_has(fd->binding);
         if (!is_fnval) continue;
-        uint64_t lo = 0, hi = 0;
-        expr_collect_effects(fd->body, &lo, &hi);
-        if (!(lo || hi) && !fd->cps_colored) continue;
-        tg_fd[ntg] = fd; tg_b[ntg] = fd->binding; tg_eff[ntg] = (lo || hi);
+        EffSet effs = {0};
+        expr_collect_effects(fd->body, &effs);
+        bool effectful = effset_any(&effs);
+        if (!effectful && !fd->cps_colored) continue;
+        tg_fd[ntg] = fd; tg_b[ntg] = fd->binding; tg_eff[ntg] = effectful;
         ntg++;
     }
     FvMulti fvm;
@@ -6716,7 +6772,7 @@ static void ensure_S(const Expr *program) {
     for (int ti = 0; ti < ntg; ti++) {
         FnDef *fd = tg_fd[ti];
         int sl = fvm_slot(&fvm, fd->binding);
-        uint64_t lo = tg_eff[ti], hi = 0;
+        bool effectful = tg_eff[ti];
         /* An effectful fn-value keeps the fiber alive.  A PURE fn-value
          * normally does not -- EXCEPT one the coloring pass force-colored
          * because it flows into an EFFECTFUL fn-value param (effect-subtype
@@ -6754,7 +6810,7 @@ static void ensure_S(const Expr *program) {
          * so `(.field obj)` threads to its __cps.  Includes a PURE fn stored in
          * an effectful field (effect subtyping) once the coloring pass has
          * force-colored it (so it reaches here with a __cps entry). */
-        if (fvm.stored[sl] && (lo || hi || fd->cps_colored))
+        if (fvm.stored[sl] && (effectful || fd->cps_colored))
             threadable_add(fd->binding);
         if (trace) {
             const char *nm = fd->binding->name ? fd->binding->name->name : "?";
@@ -6819,7 +6875,7 @@ static void ensure_S(const Expr *program) {
      * CPS-emitted -- an uncolored function (whose sole control op is hidden from
      * coloring but still emits a fiber effect op) or a top-level def initializer.
      * These permanently taint their effects. */
-    uint64_t base_lo = 0, base_hi = 0;
+    EffSet base = {0};
     for (uint32_t i = 0; i < np; i++) {
         Expr *it = (Expr *)items[i];
         if (!it) continue;
@@ -6858,15 +6914,13 @@ static void ensure_S(const Expr *program) {
                  * effect set below, so the effect taints whether or not the
                  * fn-value was a candidate: a SIG-REJECT capturing lambda
                  * that only CALLS a performer used to taint nothing. */
-                uint64_t fv_esc_lo = 0, fv_esc_hi = 0;
+                EffSet fv_esc = {0};
                 if ((fd->binding->is_lifted_lambda || addr_taken_has(fd->binding))
                     && !threadable_has(fd->binding) && !serial_recv_has(fd->binding)
                     && !direct_only_has(fd->binding))
-                    fn_net_escaping(program, fd->body, &fv_esc_lo, &fv_esc_hi);
-                for (int b = 0; b < 128; b++) {
-                    bool on = b < 64 ? (fv_esc_lo >> b) & 1 : (fv_esc_hi >> (b - 64)) & 1;
-                    if (on && !g_fvesc_src[b]) g_fvesc_src[b] = fd;
-                }
+                    fn_net_escaping(program, fd->body, &fv_esc);
+                for (int b = 0, nb = eff_bits_live(); b < nb; b++)
+                    if (effset_has(&fv_esc, b) && !g_fvesc_src[b]) g_fvesc_src[b] = fd;
                 if (candidate
                     && (fd->binding->is_lifted_lambda || addr_taken_has(fd->binding))
                     && !threadable_has(fd->binding) && !direct_only_has(fd->binding)) {
@@ -6877,7 +6931,7 @@ static void ensure_S(const Expr *program) {
                      * so it is not a fiber-escape source.  Its interior handle
                      * installs its own DK prompt and CPS-lowers.  A genuinely
                      * escaping perform still taints. */
-                    if (fv_esc_lo || fv_esc_hi) { candidate = false; sig_perm = true; }
+                    if (effset_any(&fv_esc)) { candidate = false; sig_perm = true; }
                 }
                 CTerm *t = cps_ir_translate_fn(&g_arena, (Expr *)program, fd);
                 uint32_t fresh_n = cps_ir_last_fresh_count();
@@ -6926,20 +6980,22 @@ static void ensure_S(const Expr *program) {
                 g_ents[g_ents_n].mono_template = mono_tmpl;
                 g_ents[g_ents_n].sig_perm = sig_perm;
                 SEnt *en = &g_ents[g_ents_n];
-                en->perf_lo = en->perf_hi = en->hand_lo = en->hand_hi = 0;
+                memset(&en->perf, 0, sizeof en->perf);
+                memset(&en->hand, 0, sizeof en->hand);
                 en->edges = NULL; en->edges_all = false;
-                EffAcc acc = { &en->perf_lo, &en->perf_hi,
-                               &en->hand_lo, &en->hand_hi, NULL, NULL, 0, NULL,
+                EffAcc acc = { &en->perf, &en->hand, NULL, NULL, 0, NULL,
                                NULL, NULL, NULL, NULL, NULL, NULL, NULL, false, NULL, false };
                 expr_collect_effects_acc(fd->body, &acc);
-                en->eff_lo = en->perf_lo | en->hand_lo | fv_esc_lo;
-                en->eff_hi = en->perf_hi | en->hand_hi | fv_esc_hi;
+                en->eff = en->perf;
+                effset_or(&en->eff, &en->hand);
+                effset_or(&en->eff, &fv_esc);
                 /* Never runs, so it taints nothing (fn_unreached) -- neither as
                  * an evicted fn nor through a whole-body delegation's seeding of
                  * the base taint below. */
                 if (fn_unreached(program, fd)) {
-                    en->perf_lo = en->perf_hi = en->hand_lo = en->hand_hi = 0;
-                    en->eff_lo = en->eff_hi = 0;
+                    memset(&en->perf, 0, sizeof en->perf);
+                    memset(&en->hand, 0, sizeof en->hand);
+                    memset(&en->eff, 0, sizeof en->eff);
                     en->sig_perm = false;
                 }
                 /* A whole-body-delegated colored fn runs its effects on the FIBER
@@ -6951,19 +7007,18 @@ static void ensure_S(const Expr *program) {
                  * DK peers never split across the two machines.  A control-free
                  * single-op body matches the shape but has empty effects (no-op). */
                 if (candidate && term_is_whole_body_delegation(t)) {
-                    base_lo |= en->eff_lo;
-                    base_hi |= en->eff_hi;
+                    effset_or(&base, &en->eff);
                 }
                 g_ents_n++;
                 continue;
             }
             /* uncolored (or binding-less) fn: its effects are always fiber --
              * its own, not those of a lambda it builds (lifted, its own entry). */
-            if (fd->body) expr_collect_effects_base(fd->body, &base_lo, &base_hi);
+            if (fd->body) expr_collect_effects_base(fd->body, &base);
             continue;
         }
         /* non-fn top-level item (e.g. a def whose init performs). */
-        expr_collect_effects(it, &base_lo, &base_hi);
+        expr_collect_effects(it, &base);
     }
     free((void *)items);   /* flattened view is only needed for the loops above */
 
@@ -6981,8 +7036,8 @@ static void ensure_S(const Expr *program) {
         enum { CALLEE_CAP = 256 };
         const Binding *cbuf[CALLEE_CAP];
         int ncb = 0; bool overflow = false;
-        uint64_t scratch_lo = 0, scratch_hi = 0;
-        EffAcc acc = { &scratch_lo, &scratch_hi, &scratch_lo, &scratch_hi,
+        EffSet scratch = {0};
+        EffAcc acc = { &scratch, &scratch,
                        cbuf, &ncb, CALLEE_CAP, &overflow, NULL, NULL, NULL, NULL,
                        NULL, NULL, NULL, false, NULL, false };
         expr_collect_effects_acc(g_ents[i].fd->body, &acc);
@@ -6998,14 +7053,13 @@ static void ensure_S(const Expr *program) {
      * performer).  Fixed across the fixpoint -- only whether a node is currently a
      * fallback changes.  NULL for bits with no handler/performer pairing. */
     uint64_t *path_nodes[CPS_MAX_EFFECTS];
-    for (int b = 0; b < CPS_MAX_EFFECTS; b++) {
-        path_nodes[b] = NULL;
-        uint64_t bl = (b < 64) ? ((uint64_t)1 << b) : 0;
-        uint64_t bh = (b < 64) ? 0 : ((uint64_t)1 << (b - 64));
+    int n_bits = eff_bits_live();
+    for (int b = 0; b < CPS_MAX_EFFECTS; b++) path_nodes[b] = NULL;
+    for (int b = 0; b < n_bits; b++) {
         bool has_h = false, has_p = false;
         for (size_t i = 0; i < g_ents_n && !(has_h && has_p); i++) {
-            if ((g_ents[i].hand_lo & bl) || (g_ents[i].hand_hi & bh)) has_h = true;
-            if ((g_ents[i].perf_lo & bl) || (g_ents[i].perf_hi & bh)) has_p = true;
+            if (effset_has(&g_ents[i].hand, b)) has_h = true;
+            if (effset_has(&g_ents[i].perf, b)) has_p = true;
         }
         if (!has_h || !has_p) continue;
         uint64_t *fwd = (uint64_t *)arena_alloc(&g_arena, nwords * sizeof(uint64_t));
@@ -7013,8 +7067,8 @@ static void ensure_S(const Expr *program) {
         memset(fwd, 0, nwords * sizeof(uint64_t));
         memset(bwd, 0, nwords * sizeof(uint64_t));
         for (size_t i = 0; i < g_ents_n; i++) {
-            if ((g_ents[i].hand_lo & bl) || (g_ents[i].hand_hi & bh)) ent_bit_set(fwd, i);
-            if ((g_ents[i].perf_lo & bl) || (g_ents[i].perf_hi & bh)) ent_bit_set(bwd, i);
+            if (effset_has(&g_ents[i].hand, b)) ent_bit_set(fwd, i);
+            if (effset_has(&g_ents[i].perf, b)) ent_bit_set(bwd, i);
         }
         reach_forward(fwd, g_ents_n, nwords);
         reach_backward(bwd, g_ents_n, nwords);
@@ -7053,30 +7107,26 @@ static void ensure_S(const Expr *program) {
         /* An effect is tainted by any entry that is NEITHER an S candidate NOR a
          * mono-template: those are the genuinely fiber functions.  A mono-template
          * stands in for its DK monomorphs, so it does not taint while it holds. */
-        uint64_t taint_lo = base_lo, taint_hi = base_hi;
+        EffSet taint = base;
         for (size_t i = 0; i < g_ents_n; i++) {
-            if (!g_ents[i].in_s && !g_ents[i].mono_template) {
-                taint_lo |= g_ents[i].eff_lo; taint_hi |= g_ents[i].eff_hi;
-            }
+            if (!g_ents[i].in_s && !g_ents[i].mono_template)
+                effset_or(&taint, &g_ents[i].eff);
         }
         /* Rule C: taint an effect whose handler->performer call path routes through
          * a genuine fallback intermediary (severed DK chain). */
-        for (int b = 0; b < CPS_MAX_EFFECTS; b++) {
+        for (int b = 0; b < n_bits; b++) {
             if (!path_nodes[b]) continue;
-            bool already = (b < 64) ? ((taint_lo >> b) & 1)
-                                    : ((taint_hi >> (b - 64)) & 1);
-            if (already) continue;
+            if (effset_has(&taint, b)) continue;
             for (size_t i = 0; i < g_ents_n; i++) {
                 if (!ent_bit(path_nodes[b], i)) continue;
                 if (!g_ents[i].in_s && !g_ents[i].mono_template) {
-                    if (b < 64) taint_lo |= (uint64_t)1 << b;
-                    else        taint_hi |= (uint64_t)1 << (b - 64);
+                    effset_add(&taint, b);
                     break;
                 }
             }
         }
         for (size_t i = 0; i < g_ents_n; i++) {
-            bool tainted = (g_ents[i].eff_lo & taint_lo) || (g_ents[i].eff_hi & taint_hi);
+            bool tainted = effset_meets(&g_ents[i].eff, &taint);
             if (g_ents[i].in_s && tainted) {
                 g_ents[i].in_s = false;
                 changed = true;
@@ -7097,36 +7147,35 @@ static void ensure_S(const Expr *program) {
      * fiber.  A fixpoint mirroring the main one, but seeded ONLY from sig_perm
      * sources: a non-sig_perm fn tainted here is FORCED fiber by a permanent
      * source and can never be admitted by BODY-* work, so it cascades into
-     * perm_fiber too.  At convergence, g_perm_lo/hi holds the permanently-tainted
+     * perm_fiber too.  At convergence, g_perm holds the permanently-tainted
      * effects; the EVICT trace reports a fn evicted only via these as SIG-TAINT. */
     {
         bool *pf = (bool *)calloc(g_ents_n ? g_ents_n : 1, sizeof(bool));
         for (size_t i = 0; i < g_ents_n; i++) pf[i] = g_ents[i].sig_perm;
-        uint64_t plo = base_lo, phi = base_hi;
+        EffSet perm = base;
         bool pch = true;
         while (pch) {
             pch = false;
-            plo = base_lo; phi = base_hi;
+            perm = base;
             for (size_t i = 0; i < g_ents_n; i++)
-                if (pf[i] && !g_ents[i].mono_template) { plo |= g_ents[i].eff_lo; phi |= g_ents[i].eff_hi; }
-            for (int b = 0; b < CPS_MAX_EFFECTS; b++) {
+                if (pf[i] && !g_ents[i].mono_template) effset_or(&perm, &g_ents[i].eff);
+            for (int b = 0; b < n_bits; b++) {
                 if (!path_nodes[b]) continue;
-                bool already = (b < 64) ? ((plo >> b) & 1) : ((phi >> (b - 64)) & 1);
-                if (already) continue;
+                if (effset_has(&perm, b)) continue;
                 for (size_t i = 0; i < g_ents_n; i++) {
                     if (!ent_bit(path_nodes[b], i)) continue;
                     if (pf[i] && !g_ents[i].mono_template) {
-                        if (b < 64) plo |= (uint64_t)1 << b; else phi |= (uint64_t)1 << (b - 64);
+                        effset_add(&perm, b);
                         break;
                     }
                 }
             }
             for (size_t i = 0; i < g_ents_n; i++) {
-                bool tainted = (g_ents[i].eff_lo & plo) || (g_ents[i].eff_hi & phi);
+                bool tainted = effset_meets(&g_ents[i].eff, &perm);
                 if (!pf[i] && !g_ents[i].mono_template && tainted) { pf[i] = true; pch = true; }
             }
         }
-        g_perm_lo = plo; g_perm_hi = phi;
+        g_perm = perm;
         free(pf);
     }
 
@@ -14688,7 +14737,7 @@ static bool emit_cps_ir_try_fn_impl(EmitCtx *ctx, Buf *file, const Expr *e) {
                  * fixable BODY root.  A genuine BODY-UNSUPPORTED form still reports
                  * as such (the form is the real blocker even if also perm-tainted);
                  * only the taint-only (STRUCT-OR-TAINT) case reclassifies. */
-                bool perm_tainted = se && ((se->eff_lo & g_perm_lo) || (se->eff_hi & g_perm_hi));
+                bool perm_tainted = se && effset_meets(&se->eff, &g_perm);
                 bool inline_c = u && u->as.unsupported.why
                              && strstr(u->as.unsupported.why, "EX_INLINE_C");
                 if (inline_c)          { cat = "SIG-INLINE-C"; }  /* permanent: inline-C can't thread a DK cont */
@@ -14769,7 +14818,7 @@ static bool emit_cps_ir_try_fn_impl(EmitCtx *ctx, Buf *file, const Expr *e) {
                  * handles an effect -- the ONLY evictions that keep the fiber
                  * effect runtime alive.  A pure SIG-REJECT/SIG-EXPORT (eff=0) is
                  * out of scope for the deletion (plan Sec 4). */
-                int eff = (se && (se->eff_lo || se->eff_hi)) ? 1 : 0;
+                int eff = (se && effset_any(&se->eff)) ? 1 : 0;
                 fprintf(stderr, "[EVICT] %-22s eff=%d %s %s\n", cat, eff, nm, why);
             }
             /* The N6.5 gate governs the SHIPPING backend.  The now-graduated CPS
