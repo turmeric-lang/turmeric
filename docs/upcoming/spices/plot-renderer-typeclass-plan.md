@@ -11,11 +11,12 @@
 > `LineStyle` / `PointStyle` / `FillStyle` / `PlotOpts`; renderer data is
 > a Vec of typed records from `plot/data`. Pixel check: every plot body is
 > byte-identical to pre-plan output except where a bug fix changed it
-> (`arrows`' bounds, `contours`' levels, the interval kinds' outlines), and
-> legend swatches now show each renderer's own style. Building the spice
-> under clang needs turmeric branch `claude/exbox-thunk-carrier-result` (a
-> compiler fix). **Remaining (beyond this plan's acceptance):** a stacked
-> histogram's layer names never reach the legend. See P4.
+> (`arrows`' bounds, `contours`' levels, the interval kinds' outlines, the
+> histograms' per-bar auto colors and horizontal category axis), and legend
+> swatches show each renderer's own style, a row per stacked layer. Building
+> the spice under clang needs turmeric branch
+> `claude/exbox-thunk-carrier-result` (a compiler fix). **Remaining:** only
+> the deprecated `plot-anyrenderers` alias, kept for one release. See P4.
 > Tracks: spices-type-features-uplift-plan **U2 target — plot**
 > Scope: `spices/plot/` only; P3 needed a compiler dependency after all, now
 > satisfied (see Risks).
@@ -422,13 +423,26 @@ wrong record is TUR-E0001 (`errors/wrong-data-record.tur`).
   scenes gain outlines, nothing else moves. `legend_test` reads swatches
   back from the surface; it and the outline check fail on the old code.
 
+**Done (stacked layers in the legend, 2026-10-21, same branch):**
+- `Renderer` gained `legend-labels : (Vec cstr)` -- a renderer's legend
+  rows, fresh for the caller to free -- whose default is its one
+  `legend-label` (a default method body calling a sibling method works
+  through the existential, under clang too). `StackedHistogramR` overrides
+  it with a copy of its layer names. Swatches are per series: a draw calls
+  `plot_ctx_series(dc, k)` before series k, and row k shows that swatch.
+- An auto-colored stack layer re-resolved its fill for every cell, so a
+  layer changed color from group to group; the draw now goes layer by
+  layer, one resolve each. `discrete-histogram` and `rectangles` resolved
+  their single fill per bar the same way; once now.
+- A horizontal histogram's categories labelled the x axis, where its values
+  run. A defaulted `categories-on-y?` moves them to y for the two
+  histograms when `horizontal`.
+- Pixels: only the five histogram / rectangle scenes and
+  `categorical-mixed` (whose rule took the next auto color) change.
+
 **Remaining (follow-ups, not in this plan's acceptance):**
-- `stacked-histogram` takes layer names (`labels`) that nothing draws: it
-  has no `legend-label`, and one label per renderer could not name its
-  layers anyway. Listing them needs a renderer to contribute several legend
-  rows, each with its own swatch -- a `Renderer` method returning entries,
-  say, with the draw recording a swatch per layer.
-- `plot-anyrenderers` is a deprecated alias of `plot`.
+- `plot-anyrenderers` is a deprecated alias of `plot`, kept for one
+  release.
 
 **Acceptance**
 - The typed path is pixel-identical to legacy `plot` -- done for every kind
