@@ -1,5 +1,12 @@
 # The panic forms: an unfinished downcast, a typed catch that swallows, and wrong locations from `panic-with`
 
+**RESOLVED 2026-10-21** -- see [Resolution](#resolution-2026-10-21). Pinned by
+`panic-payload-forms`, `panic-with-source-location` and
+`catch-panic-of-mismatch-aborts` (both engines), `panic-payload-accessors`
+(`stdlib/panic.tur`'s wrappers; the interpreter harness skips a fixture that
+loads inline-C, so it was run by hand under `--interpret`), and
+`errors/catch-unwind-non-thunk` and `errors/catch-unwind-thunk-with-args`.
+
 **Severity: medium.** Found 2026-10-19 checking the examples for the panic
 forms' API reference (`stdlib/forms/panics.tur`). The only fixture that
 mentions a `panic-payload-*` form is `tests/fixtures/panic-downcast`, whose
@@ -77,3 +84,43 @@ be called at all interpreted (it is an inline-C `defn` taking a `Panic`).
    function.
 5. Give the interpreter real payload accessors, and a fixture for each of the
    five on both engines.
+
+## Resolution (2026-10-21)
+
+1. **`panic-payload-downcast` has a value.** The emitter
+   (`EX_PANIC_PAYLOAD_DOWNS`, `src/compiler/emit_expr.c`) calls the preamble's
+   `tur_panic_payload_downcast`; it evaluated the payload and returned nil.
+   The elaborator also read only a bare-symbol type, so the guide's
+   `:cstr` left the target `TY_UNKNOWN` and could never match -- a keyword is
+   read now, and an unknown type is an error.
+2. **A mismatched `catch-panic-of` with no boundary above is an uncaught
+   panic.** The compiled boundary staged the signal and returned, and with
+   nothing to propagate to, `main`'s return swallowed it (exit 0, the next
+   statement ran). `tur_catch_panic_of_box` / `_box_via`
+   (`src/compiler/emit_module.c`, and the regenerated split runtime) raise it
+   afresh once their node is popped and the handler chain is empty:
+   `tur_panic_at` for a message panic, so `panic at input.tur:6: s` still
+   names the message, `tur_panic_with` otherwise.
+3. **`panic-with` reports the source position.** `emit_panic_with_call`
+   passes the `.tur` file's base name and the form's line, as `emit_panic_call`
+   does for `panic` (and in the CPS body emitter, `emit_fns.c`),
+   instead of the C compiler's `__FILE__` / `__LINE__`.
+4. **A catch boundary checks its thunk.** `catch-unwind` and `catch-panic-of`
+   (`src/compiler/elab_concurrent.c`) refuse a literal, a float / bool /
+   cstr / nil / struct value, and a function that takes arguments. An `int`
+   stays accepted -- it is how a closure travels through an unannotated
+   parameter, as `resume` accepts it.
+5. **The interpreter's payload accessors are real.** The placeholders were
+   not the `panic-payload-*` forms but `stdlib/panic.tur`'s wrappers, which
+   are inline-C: `result-panic` answered nil, so every accessor read a null
+   handle. `result-panic`, `panic-message`, `panic-file`, `panic-line` and
+   `panic-type` are natives over the interpreter's `TuriPanicPayload`
+   (registered with rows in `native_caps.c` for the capability and
+   handle-provenance tables), the payload records the site's file and line
+   (it was NULL / 0), a plain panic's message is copied out of the one
+   buffer every later panic overwrites, and the mismatch abort names the
+   location as the compiled one does.
+
+The preamble changed, so the split runtime artifacts and all 157 codegen
+snapshots are regenerated in the same commit.
+

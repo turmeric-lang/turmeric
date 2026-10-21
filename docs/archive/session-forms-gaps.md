@@ -1,5 +1,9 @@
 # Session types: a `send` is not checked against the protocol's payload type, and destructuring arity is not checked
 
+**RESOLVED 2026-10-21** -- see [Resolution](#resolution-2026-10-21). Pinned by
+`errors/session-send-payload-type-mismatch`, `errors/session-destructure-arity`
+and `errors/session-mp-destructure-arity` (both engines).
+
 **Severity: medium.** Found 2026-10-19 checking the examples for the session forms'
 API reference (`stdlib/forms/sessions.tur`). Each repro was run on `tur run` and
 `tur --interpret`.
@@ -48,3 +52,29 @@ on macOS") contradicts "Payload types" below it, which says floats, strings, poi
 handles and delegated endpoints all travel intact on both backends. The latter is
 what the code does (7.25 and a `cstr` arrive exactly when the protocol names them);
 the first note quotes the archived `session-payloads-are-int64-only`.
+
+## Resolution (2026-10-21)
+
+All three items, on both engines (the elaborator is shared, so one check covers
+`tur run` and `tur --interpret`).
+
+1. **`send` checks its payload** against the protocol's message type
+   (`elab_session_send`, `src/compiler/elab_sessions.c`). The rule is the one
+   `perform` already applied to its arguments, factored out of
+   `elab_perform` as `elab_word_slot_mismatch` (`src/compiler/elab_effects.c`):
+   exact primitives with the `int`/`int64` and `float`/`float64` aliases, no
+   scalar into a pointer-shaped slot, nominal identity for aggregates, and
+   silence wherever a type variable or `any` leaves the answer to inference.
+   `(send s 7.25)` on `(Send int Close)` is now `TUR-E0212: send: the
+   protocol's next message is int, but this value has type float`. `send-to`
+   already compared kinds and is unchanged.
+2. **The pattern's length is checked** where `elab_let` splits a session pair
+   (`src/compiler/elab_forms.c`): two names for `make-session` and `recv`, one
+   per role for `make-protocol`. Any other count is `TUR-E0002` naming the
+   form and both numbers, and the misleading `TUR-E0100` is gone
+   (`unexpected.diag` pins its absence).
+3. **The stale note** under "make-session, send, recv, close" in
+   session-types-guide is replaced by the two rules above and a pointer to
+   "Payload types". The `make-session` / `make-protocol` reference pages
+   (`stdlib/forms/sessions.tur`) say the same.
+

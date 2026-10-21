@@ -1,0 +1,10 @@
+;; panic-forms-gaps 3: panic-with reports the .tur file and line of the call,
+;; as panic does.  Compiled it passed the C compiler's __FILE__/__LINE__, so a
+;; caught payload's line was a line of generated code.
+(load "stdlib/panic.tur")
+(defn main [] : int
+  (let [r (catch-panic-of :int (fn [] : int
+                                 (panic-with 7)))]
+    (println (panic-payload-file (result-panic r)))
+    (println (panic-payload-line (result-panic r))))
+  0)

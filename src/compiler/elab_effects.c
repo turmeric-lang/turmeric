@@ -2025,6 +2025,22 @@ static bool perform_arg_shape_mismatch(const Type *want, const Type *got) {
     }
 }
 
+/* The three rules above, as one verdict for any site that stores a value into
+ * a one-word slot whose type is declared elsewhere (a `perform` argument, a
+ * session `send` payload).  `*scalar_into_pointer` says which rule fired when
+ * the caller wants to say so. */
+bool elab_word_slot_mismatch(const Type *want, const Type *got,
+                             bool *scalar_into_pointer) {
+    TypeKind wnorm = perform_primitive_norm(want->kind);
+    TypeKind gnorm = perform_primitive_norm(got->kind);
+    bool primitive_mismatch =
+        (wnorm != TY_UNKNOWN && gnorm != TY_UNKNOWN && wnorm != gnorm);
+    bool sip = perform_param_is_pointer_shaped(want) &&
+               perform_arg_is_scalar_word(got);
+    if (scalar_into_pointer) *scalar_into_pointer = sip;
+    return primitive_mismatch || sip || perform_arg_shape_mismatch(want, got);
+}
+
 Expr *elab_perform(Elab *e, const Form *call) {
     if (call->as.list.len < 2) {
         diag_emit(DIAG_ERROR, call->span,
@@ -2203,16 +2219,9 @@ Expr *elab_perform(Elab *e, const Form *call) {
                 ? effect->constructor->param_full_types[i] : NULL;
             Type want = want_full ? *want_full
                                   : type_from_kind(effect->constructor->param_types[i]);
-            TypeKind wnorm = perform_primitive_norm(want.kind);
-            TypeKind gnorm = perform_primitive_norm(args[i]->type.kind);
-            bool primitive_mismatch =
-                (wnorm != TY_UNKNOWN && gnorm != TY_UNKNOWN && wnorm != gnorm);
-            bool scalar_into_pointer =
-                perform_param_is_pointer_shaped(&want) &&
-                perform_arg_is_scalar_word(&args[i]->type);
-            bool shape_mismatch =
-                perform_arg_shape_mismatch(&want, &args[i]->type);
-            if (primitive_mismatch || scalar_into_pointer || shape_mismatch) {
+            bool scalar_into_pointer = false;
+            if (elab_word_slot_mismatch(&want, &args[i]->type,
+                                        &scalar_into_pointer)) {
                 const Symbol *pn = effect->constructor->param_names
                     ? effect->constructor->param_names[i] : NULL;
                 char pbuf[96];

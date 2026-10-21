@@ -1125,6 +1125,10 @@ char *emit_c_zero_of(const char *cname);
 void emit_main_deep_stack_prologue(Buf *out);
 /* `(panic msg)` at `span`: tur_panic_at with the source location (emit_expr.c). */
 void emit_panic_call(Buf *body, Span span, const char *msg);
+/* `(panic-with payload)`: tur_panic_with(tag, payload, file, line) at the
+ * SOURCE position (the file's base name and span.line), as emit_panic_call
+ * does for `panic`. */
+void emit_panic_with_call(Buf *body, Span span, int type_tag, const char *payload);
 bool emit_str_is_bare_ident(const char *s);
 /* cps-let-binder-bridge-lacks-position-check: the single position-level test --
  * is `v` a bare identifier whose RECORDED emitted C type is exactly

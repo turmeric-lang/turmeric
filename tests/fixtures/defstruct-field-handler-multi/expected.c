@@ -2220,6 +2220,17 @@ static int64_t tur_catch_panic_of_box(int expected_type, int64_t thunk) {
             global_panic_payload = NULL;
             return tur_box_err((int64_t)(intptr_t)__p);
         }
+        /* panic-forms-gaps 2: no outer boundary means no one to
+         * propagate to -- the panic is uncaught, and the staged signal
+         * would be swallowed by main's return (exit 0, `after` printed).
+         * Raise it afresh with the boundary gone: abort, as an uncaught
+         * panic does, or reach a fiber's own buffer. */
+        if (__p && !tur_handler_chain) {
+            tur_panicking = 0; tur_panic_in_progress = 0;
+            global_panic_payload = NULL;
+            if (__p->owns_value) tur_panic_at(__p->file, __p->line, (const char *)__p->value);
+            else tur_panic_with(__p->type_tag, __p->value, __p->file, __p->line);
+        }
         /* type mismatch: leave the signal + payload staged so it
          * propagates to the next outer boundary via the return path.
          * catch-unwind-panic-payload-leaks: return a NULL box rather
@@ -2264,6 +2275,12 @@ static int64_t tur_catch_panic_of_box_via(int expected_type, int64_t (*__call)(v
             tur_panicking = 0; tur_panic_in_progress = 0;
             global_panic_payload = NULL;
             return tur_box_err((int64_t)(intptr_t)__p);
+        }
+        if (__p && !tur_handler_chain) {  /* no outer boundary: uncaught */
+            tur_panicking = 0; tur_panic_in_progress = 0;
+            global_panic_payload = NULL;
+            if (__p->owns_value) tur_panic_at(__p->file, __p->line, (const char *)__p->value);
+            else tur_panic_with(__p->type_tag, __p->value, __p->file, __p->line);
         }
         return 0;
     }

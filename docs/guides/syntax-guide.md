@@ -923,6 +923,11 @@ file scope and stays callable by name from the enclosing function:
   (inner 5))                  ; => 6
 ```
 
+A nested `defn` may call itself and the nested `defn`s beside it, in either
+order: all the `defn`s in a body are declared before any of their bodies is
+checked. A `defstruct`, `defdata` or `defgadt` there is lifted the same way, so
+its type and constructors are visible from that point on.
+
 **It may not be the last form**, unless the function owes no value. A definition
 produces nothing, so a function declared `: int` whose body ends with one has
 nothing to return -- that is `TUR-E0713`:

@@ -28,12 +28,11 @@
 ;;; Session[Close]`, `close is not valid on Session[Recv[int, Close]] -- protocol is not
 ;;; yet complete`) and an endpoint dropped unused (TUR-E0100). A message travels as
 ;;; one machine word: ints, bools, floats, strings and pointers do, a by-value
-;;; struct is rejected (TUR-E0212). Not checked: the payload of a `send` against the
-;;; protocol's type -- `(send s 7.25)` on a `(Send int Close)` is accepted and
-;;; arrives as 7 when compiled (7.25 interpreted) -- and the number of names in
-;;; the destructuring pattern, so `[a b c]` for a pair ignores `c`
-;;; (docs/reported/session-forms-gaps.md). Run a protocol under `--interpret`
-;;; first: it reports a deadlock where the compiled program would hang.
+;;; struct is rejected (TUR-E0212). A `send` must pass the protocol's message
+;;; type (`(send s 7.25)` on a `(Send int Close)` is TUR-E0212), and the pattern
+;;; must name exactly two endpoints (`[a b c]` is TUR-E0002). Run a protocol
+;;; under `--interpret` first: it reports a deadlock where the compiled program
+;;; would hang.
 ;;;
 ;;; Parameters:
 ;;;   protocol -- the protocol, as a type for the first endpoint
@@ -86,8 +85,8 @@
 ;;; returning the advanced endpoint (`recv-from` as `[value ch]`), and `(close ch)`
 ;;; ends it; `recv-timeout-from` is the bounded wait for a timed step. Give each
 ;;; role its own thread with `session-spawn`. An unknown protocol is
-;;; `make-protocol: unknown protocol 'Nope'`. Not checked: the number of endpoints
-;;; destructured, so `[a b]` for a three-role protocol silently leaves one out.
+;;; `make-protocol: unknown protocol 'Nope'`, and a pattern that does not name
+;;; one endpoint per role (`[a b]` for three roles) is TUR-E0002.
 ;;;
 ;;; Parameters:
 ;;;   Name -- a protocol declared with `defprotocol`

@@ -552,6 +552,38 @@ static void catch_thunk_mark_borrowed(Expr *thunk) {
         t->as.closure_.closure->fat_captures_borrowed = true;
 }
 
+/* panic-forms-gaps 4: the thunk of a catch boundary is called with no
+ * arguments, and `(catch-unwind 5)` compiled and segfaulted at run time where
+ * every other call form rejects a non-callable.  A literal, a scalar other than
+ * the int carrier (which is how a closure travels through an unannotated
+ * parameter, so `int` stays accepted -- as `resume` accepts it), a by-value
+ * struct, or a function that takes arguments is not a thunk. */
+static bool catch_thunk_check(const Expr *thunk, const char *who) {
+    if (!thunk) return false;
+    bool bad = false;
+    switch (thunk->kind) {
+        case EX_INT_LIT: case EX_FLOAT_LIT: case EX_BOOL_LIT: case EX_CSTR_LIT:
+            bad = true; break;
+        default: break;
+    }
+    switch (thunk->type.kind) {
+        case TY_FLOAT: case TY_FLOAT32: case TY_FLOAT64: case TY_BOOL:
+        case TY_CSTR: case TY_NIL: case TY_STRUCT:
+            bad = true; break;
+        case TY_FN:
+            if (thunk->type.as.fn.arity != 0) bad = true;
+            break;
+        default: break;
+    }
+    if (!bad) return true;
+    Buf tb; buf_init(&tb); type_print(&tb, thunk->type); buf_putc(&tb, '\0');
+    diag_emit_with_code(DIAG_ERROR, thunk->span, TUR_E0001_TYPE_MISMATCH,
+                        "%s: the thunk must be a function of no arguments, got %s",
+                        who, tb.data);
+    buf_free(&tb);
+    return false;
+}
+
 /* Phase R2: (catch-unwind thunk) — catch any panic at a boundary.
  * thunk is a nullary function; returns result<T, panic-payload>.
  * In v1, result is (Result :int :ptr<void>); lowering uses tur_catch_unwind_box. */
@@ -565,6 +597,7 @@ Expr *elab_catch_unwind(Elab *e, const Form *call) {
     }
     Expr *thunk = elab_form(e, call->as.list.items[1]);
     if (!thunk) return NULL;
+    if (!catch_thunk_check(thunk, "catch-unwind")) return NULL;
     Type result_ty = catch_unwind_result_type(e, thunk, call->span);
     thunk = catch_thunk_to_fat(e, thunk);
     catch_thunk_mark_borrowed(thunk);
@@ -595,6 +628,7 @@ Expr *elab_catch_panic_of(Elab *e, const Form *call) {
     /* Second arg: thunk */
     Expr *thunk = elab_form(e, call->as.list.items[2]);
     if (!thunk) return NULL;
+    if (!catch_thunk_check(thunk, "catch-panic-of")) return NULL;
     Type result_ty = catch_unwind_result_type(e, thunk, call->span);
     thunk = catch_thunk_to_fat(e, thunk);
     catch_thunk_mark_borrowed(thunk);
@@ -676,6 +710,17 @@ Expr *elab_panic_payload_downcast(Elab *e, const Form *call) {
     if (type_form->tag == F_SYM) {
         const char *type_name = type_form->as.sym->name;
         target_type = typekind_from_name(type_name);
+    } else if (type_form->tag == F_KEYWORD) {
+        /* `:cstr`, the spelling catch-panic-of and the guide use.  Only the
+         * bare symbol was read, so a keyword left the target TY_UNKNOWN and
+         * the downcast could never match. */
+        target_type = typekind_from_symbol(type_form->as.sym->name);
+    }
+    if (target_type == TY_UNKNOWN) {
+        diag_emit(DIAG_ERROR, type_form->span,
+                  "panic-payload-downcast: unknown payload type -- expected a "
+                  "type name such as :cstr or :int");
+        return NULL;
     }
     Expr *out = expr_new(e->arena, EX_PANIC_PAYLOAD_DOWNS, TYPE_PTR_VOID, call->span);
     out->as.panic_payload_downs_.payload = payload;

@@ -1,0 +1,16 @@
+;; definition-forms-gaps 3: a `defn` nested in a body is lifted to file scope,
+;; but its name was bound only after its body was elaborated, so it could not
+;; call itself (compiled: unknown function 'fact') nor a sibling declared after
+;; it.  Both now resolve.
+(defn outer [] : int
+  (defn fact [n : int] : int (if (= n 0) 1 (* n (fact (- n 1)))))
+  (fact 5))
+(defn parity [n : int] : int
+  (defn ev [k : int] : bool (if (= k 0) true (od (- k 1))))
+  (defn od [k : int] : bool (if (= k 0) false (ev (- k 1))))
+  (if (ev n) 1 0))
+(defn main [] : int
+  (println (outer))
+  (println (parity 10))
+  (println (parity 7))
+  0)

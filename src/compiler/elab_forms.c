@@ -349,6 +349,21 @@ static const Symbol *splice_body_def_head(Elab *e, const Form *f) {
  *   (def x : float 7.1)  =>  (let [x : float 7.1] <rest>)
  */
 Form *splice_internal_defines(Elab *e, Form **items, uint32_t n, Span span) {
+    /* definition-forms-gaps 3: every body window passes through here before
+     * its first form is elaborated, so this is where the `defn`s nested in it
+     * are declared -- all of them, before any body, as Pass 1 declares the
+     * top-level ones -- so two nested defns can call each other.  A nested
+     * defn lands at file scope (elab_defn); the declaration is that global
+     * binding, and is idempotent. */
+    if (e->scope != &e->global) {
+        for (uint32_t i = 0; i < n; i++) {
+            Form *f = items[i];
+            if (f && f->tag == F_LIST && f->as.list.len >= 3 &&
+                f->as.list.items[0]->tag == F_SYM &&
+                f->as.list.items[0]->as.sym == e->sym_defn)
+                elab_pre_declare_toplevel_defn(e, e->arena, f);
+        }
+    }
     /* Pre-scan: bail out fast when no defines are present. */
     bool has_define = false;
     for (uint32_t i = 0; i < n; i++) {
@@ -994,6 +1009,32 @@ Expr *elab_let(Elab *e, const Form *call) {
              * type-level operations (send/recv/offer/choose-*) already emit their
              * own diagnostics before returning. */
             uint32_t n_elems = vec_pat->as.list.len;
+            /* A session pair has exactly two endpoints and a recv pair a value
+             * and an endpoint; a make-protocol pair has one endpoint per role.
+             * Any other pattern length used to bind the surplus names as ints
+             * or drop the missing roles, and the only diagnostic was TUR-E0100
+             * for the endpoints that were named. */
+            if (init_v->type.kind == TY_SESSION_PAIR ||
+                init_v->type.kind == TY_SESSION_RECV_PAIR) {
+                Type *fst_t = init_v->type.as.session_.fst;
+                bool role_pair = init_v->type.kind == TY_SESSION_PAIR &&
+                                 fst_t && fst_t->kind == TY_ROLE;
+                uint32_t want = role_pair
+                    ? (uint32_t)fst_t->as.role_.global_type->as.global_.n_roles
+                    : 2;
+                if (n_elems != want) {
+                    const char *what =
+                        role_pair ? "make-protocol gives one endpoint per role"
+                        : init_v->type.kind == TY_SESSION_PAIR
+                            ? "make-session gives two endpoints"
+                            : "recv gives the value and the advanced endpoint";
+                    diag_emit_with_code(DIAG_ERROR, vec_span, TUR_E0002_ARITY_MISMATCH,
+                                        "%s: the pattern binds %u name%s, expected %u",
+                                        what, (unsigned)n_elems,
+                                        n_elems == 1 ? "" : "s", (unsigned)want);
+                    rc = -1; break;
+                }
+            }
             /* SS2: For session pair types we track the first binding so vi=1 can
              * reference vi=0's C name via __TUR_CAP_0__. */
             uint32_t first_bind_idx = n_binds;
@@ -1418,6 +1459,22 @@ Expr *elab_let(Elab *e, const Form *call) {
                         "initializer (annotated %s, got %s)",
                         name->name,
                         typekind_to_string(ak), typekind_to_string(ik));
+                    rc = -1; break;
+                }
+                /* typed-ptr-pointee-not-checked-at-calls: `ptr<Foo>` and
+                 * `ptr<Bar>` (likewise `rc<S>` / `rc<U>`) are one TypeKind, so
+                 * the compare above passed `[x : ptr<Foo> (mk-bar)]`.  Calls and
+                 * returns ask handle_targets_conflict; a `let` annotation is a
+                 * claim about the initializer in the same way. */
+                if (handle_targets_conflict(ann_ty, &init->type)) {
+                    Buf ab; buf_init(&ab); type_print(&ab, *ann_ty); buf_putc(&ab, '\0');
+                    Buf ib; buf_init(&ib); type_print(&ib, init->type); buf_putc(&ib, '\0');
+                    diag_emit_with_code(DIAG_ERROR, type_ann_form->span,
+                        TUR_E0001_TYPE_MISMATCH,
+                        "let binding '%s': type annotation does not match "
+                        "initializer (annotated %s, got %s)",
+                        name->name, ab.data, ib.data);
+                    buf_free(&ab); buf_free(&ib);
                     rc = -1; break;
                 }
                 /* committed-applied-let-annotation: an applied annotation was

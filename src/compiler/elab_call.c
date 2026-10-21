@@ -4265,6 +4265,19 @@ static Expr *elab_call_inner(Elab *e, Form *call);
 static int  g_elab_call_depth;
 static bool g_elab_call_depth_reported;
 
+/* definition-forms-gaps 4: a `defstruct` / `defdata` / `defgadt` in a function
+ * body declares its type and constructors in scope, but its C type and
+ * constructor functions were never emitted -- the EX_DEFDATA node sat in the
+ * body, where the emitter has nothing to say about it -- so the program was a C
+ * error (`implicit declaration of function 'ctor_Point_Point'`).  Hoist it to
+ * file scope the way a nested `defn` is (elab_defn), and leave nil in place. */
+static Expr *elab_hoist_nested_type_def(Elab *e, const Form *call, Expr *def) {
+    if (!def || e->scope == &e->global) return def;
+    if (def->kind != EX_DEFDATA && def->kind != EX_DEFGADT) return def;
+    elab_register_file_def(e, def);
+    return e_nil(e, call->span);
+}
+
 Expr *elab_call(Elab *e, Form *call) {
     if (g_elab_call_depth == 0) g_elab_call_depth_reported = false;
     if (g_elab_call_depth >= ELAB_CALL_DEPTH_STACK_FLOOR &&
@@ -4663,7 +4676,7 @@ static Expr *elab_call_inner(Elab *e, Form *call) {
     if (name == e->sym_cast)    return elab_any_cast(e, call);
     if (name == e->sym_is_q)    return elab_is_q(e, call);
     /* Phase 11: defstruct */
-    if (name == e->sym_defstruct) return elab_defstruct(e, call);
+    if (name == e->sym_defstruct) return elab_hoist_nested_type_def(e, call, elab_defstruct(e, call));
     if (name == e->sym_make_struct) return elab_make_struct(e, call);
     /* WITH-V0: functional struct update.  Gated on `!scope_lookup` so a user
      * binding named `with` still wins (mirrors the session-op shadowing rule). */
@@ -4730,9 +4743,9 @@ static Expr *elab_call_inner(Elab *e, Form *call) {
     /* SI4-C: defopaque */
     if (name == e->sym_defopaque) return elab_defopaque(e, call);
     /* Phase G0: ADTs */
-    if (name == e->sym_defdata) return elab_defdata(e, call);
+    if (name == e->sym_defdata) return elab_hoist_nested_type_def(e, call, elab_defdata(e, call));
     if (name == e->sym_match) return elab_match(e, call);
-    if (name == e->sym_defgadt) return elab_defgadt(e, call);
+    if (name == e->sym_defgadt) return elab_hoist_nested_type_def(e, call, elab_defgadt(e, call));
     if (name == e->sym_coerce)  return elab_coerce(e, call);
     /* Phase 12: Borrow traits */
     if (name == e->sym_borrow) return elab_borrow_immut(e, call);

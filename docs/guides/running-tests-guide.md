@@ -249,6 +249,7 @@ removes a check.
 | `requires.interp-only` | Skipped by `run.sh`; `run-turi.sh` owns it |
 | `requires.interp` | `run.sh` runs it through the interpreter instead of compiling |
 | `requires.tur-only` | Skipped by `run-turi.sh`: a feature the interpreter deliberately omits |
+| `requires.jit` | Skipped by `run-turi.sh` when this `tur` carries no JIT (`TUR_JIT=OFF`): the fixture calls a C function through the interpreter's FFI, which only a JIT build has |
 | `requires.cc` | Skipped by `run-jit.sh`: genuinely cc-only |
 | `requires.dedicated-runner` | Skipped by the fixture harnesses; its own ctest target runs it |
 | `requires.stress` | Skipped unless `TUR_STRESS=1` |

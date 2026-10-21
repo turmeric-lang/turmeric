@@ -1,0 +1,2 @@
+TUR-E0002
+make-protocol gives one endpoint per role: the pattern binds 2 names, expected 3

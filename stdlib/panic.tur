@@ -12,9 +12,11 @@
 ;;;       (println (panic-message (result-panic r)))
 ;;;       (use (ok-val r))))
 ;;;
-;;; The accessors are compiled-path features: they call the tur_panic_payload_*
-;;; helpers emitted into every program's C preamble (Phase R2). A program that
-;;; never catches a panic still links cleanly -- the helpers are always emitted.
+;;; Compiled, the accessors call the tur_panic_payload_* helpers emitted into
+;;; every program's C preamble (Phase R2); a program that never catches a panic
+;;; still links cleanly. Under --interpret the same names are natives over the
+;;; interpreter's own panic payload (eval.c), so both engines answer alike: the
+;;; message, the base name of the source file, the line and the payload's type.
 ;;;
 ;;; Since: Phase R2
 ;; Panic-inspection surface for catch-unwind.

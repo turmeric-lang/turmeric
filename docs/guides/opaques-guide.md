@@ -269,6 +269,10 @@ and wraps back:
   (:: (+ (:: c :float) 273.15) :Kelvin))
 ```
 
+A float base works: the handle is an `int64_t` holding the float's bits, and
+`::` to or from it reinterprets them, so `(:: (:: 21.5 Celsius) :float)` is
+21.5.
+
 ## Phantom type parameters
 
 `defopaque` accepts an optional type-parameter vector between the name and

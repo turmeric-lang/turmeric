@@ -284,6 +284,14 @@ static TuriValue native_err_val(TuriEnv *env, TuriValue *a, uint32_t n, void *ud
     if (n < 1) return turi_int(0);
     return result_field(a[0], 2);
 }
+/* result-panic (stdlib/panic.tur, inline-C there): the Panic handle in a caught
+ * (err ...) result's err slot, or 0 for an ok one.  The slot already holds the
+ * payload pointer the interpreter boxed (eval.c, turi_err_result_box). */
+static TuriValue native_result_panic(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 1 || result_field_int(a[0], 0) != 0) return turi_int(0);
+    return result_field(a[0], 2);
+}
 static TuriValue native_result_unwrap_or(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)env; (void)ud;
     if (n < 2) return turi_int(0);
@@ -4998,6 +5006,7 @@ void wk_register_stdlib_natives(TuriEnv *env) {
     turi_env_register_native(env, "err?",            native_err_pred,        NULL);
     turi_env_register_native(env, "ok-val",          native_ok_val,          NULL);
     turi_env_register_native(env, "err-val",         native_err_val,         NULL);
+    turi_env_register_native(env, "result-panic",    native_result_panic,    NULL);
     turi_env_register_native(env, "result-unwrap",   native_result_unwrap,   NULL);
     turi_env_register_native(env, "result-unwrap-or",native_result_unwrap_or,NULL);
     turi_env_register_native(env, "result-unwrap-err",native_result_unwrap_err,NULL);
