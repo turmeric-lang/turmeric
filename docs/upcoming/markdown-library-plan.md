@@ -589,7 +589,8 @@ a `SlugMode`, for READMEs that are read on GitHub.
 - **Compiler friction found and filed:**
   - `forward-call-with-rc-argument-rejected.md`: a call to a later `defn`
     taking an `rc<T>` is a type error, so `block.tur` defines callees before
-    callers, and the renderer recurses through one function;
+    callers, and the renderer recurses through one function (fixed
+    2026-10-21, now in `docs/archive/`; the ordering can go);
   - `vec-push-of-with-expression-emits-invalid-c.md`, worked around with a
     `let` (fixed 2026-10-18, now in `docs/archive/`; the `let` can go);
   - the two leaks above.

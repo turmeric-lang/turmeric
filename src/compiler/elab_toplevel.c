@@ -1811,7 +1811,8 @@ Type *elab_fwd_compound_result_type(Elab *e, const Form *f, uint32_t name_idx,
 typedef struct FwdPendingResult {
     Binding       *b;
     const Form    *f;
-    const Form    *ret_f;
+    const Form    *ret_f;      /* NULL: a parameter-only record */
+    const Form    *params_f;   /* non-NULL: rc-family params left unsettled */
     uint32_t       name_idx;
     uint32_t       params_idx;
     struct FwdPendingResult *next;
@@ -1825,8 +1826,22 @@ void elab_fwd_note_pending_result(Elab *e, Binding *b, const Form *f,
     p->b = b;
     p->f = f;
     p->ret_f = ret_f;
+    p->params_f = NULL;
     p->name_idx = name_idx;
     p->params_idx = params_idx;
+    p->next = (FwdPendingResult *)e->fwd_pending_results;
+    e->fwd_pending_results = p;
+}
+
+/* forward-call-with-rc-argument-rejected: the parameter half -- an `rc<S>`
+ * parameter whose S the module defines in its own body
+ * (fwd_decl_apply_ref_params returned true).  Retried by the same refresh. */
+void elab_fwd_note_pending_params(Elab *e, Binding *b, const Form *params_f) {
+    FwdPendingResult *p =
+        (FwdPendingResult *)arena_alloc(e->arena, sizeof(FwdPendingResult));
+    memset(p, 0, sizeof *p);
+    p->b = b;
+    p->params_f = params_f;
     p->next = (FwdPendingResult *)e->fwd_pending_results;
     e->fwd_pending_results = p;
 }
@@ -1836,6 +1851,17 @@ void elab_fwd_refresh_pending(Elab *e) {
     while (*pp) {
         FwdPendingResult *p = *pp;
         Binding *b = p->b;
+        if (!p->ret_f) {
+            /* A parameter-only record: done once the defn has started (its
+             * own signature replaces the forward decl) or every slot settled. */
+            bool fwd = b && b->type.kind == TY_FN && !b->source_fn_def;
+            if (!fwd || !fwd_decl_apply_ref_params(e, e->arena, &b->type, p->params_f)) {
+                *pp = p->next;
+                continue;
+            }
+            pp = &p->next;
+            continue;
+        }
         /* Done with once the defn itself has started: elab_defn's RR1 early
          * update gives the binding the real declared result from then on. */
         bool still_fwd = b && b->type.kind == TY_FN && !b->source_fn_def &&
@@ -2844,9 +2870,14 @@ void elab_pre_declare_toplevel_defn(Elab *ep, Arena *arena, Form *f) {
                              * arguments (it used to see a fixed arity that
                              * counted the `&` as a parameter). */
                             if (fwd_arg_full) fn_type.as.fn.arg_full_types = fwd_arg_full;
-                            if (params_idx_local < (uint32_t)f->as.list.len)
+                            if (params_idx_local < (uint32_t)f->as.list.len) {
                                 fwd_decl_apply_variadic(ep, arena, &fn_type,
                                                         f->as.list.items[params_idx_local]);
+                                /* forward-call-with-rc-argument-rejected: an
+                                 * `rc<S>` parameter and its `^borrow`. */
+                                fwd_decl_apply_ref_params(ep, arena, &fn_type,
+                                                          f->as.list.items[params_idx_local]);
+                            }
                             fwd_arg_full = fn_type.as.fn.arg_full_types;
                             /* defdata-parametric-forward-decl-inference: carry the
                              * full compound result type on the forward decl. */

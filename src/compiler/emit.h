@@ -130,6 +130,10 @@ typedef struct {
 /* definstance-not-dispatchable-across-modules: see the definition in
  * emit_module.c -- true when an instance method may take external linkage. */
 bool emit_inst_method_wants_external(const struct FnDef *fd);
+/* loaded-user-definstance-duplicated-across-tus: the linkage prefix for such a
+ * method's definition -- "__attribute__((weak)) " when it arrived by a
+ * `(load ...)` of a user file (every loading TU defines it), else "". */
+const char *emit_inst_method_linkage_attr(const struct FnDef *fd);
 
 int emit_header(Buf *out, const char *module_name, const Expr *program,
                 bool separate_compilation,

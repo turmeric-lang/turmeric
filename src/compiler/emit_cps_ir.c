@@ -15282,8 +15282,13 @@ static bool emit_cps_ir_try_fn_impl(EmitCtx *ctx, Buf *file, const Expr *e) {
             || emit_inst_method_wants_external(fd))
         && !fd->binding->is_from_stdlib)
         && !(emit_split_lib_owns(fd->binding) && !mono_emit);   /* r7rs-programs-compile-slowly */
-    buf_printf(file, "__attribute__((unused)) %s%s %s(",
-               entry_static ? "static " : "", rety, cn);
+    /* loaded-user-definstance-duplicated-across-tus: a loaded copy of a user
+     * instance method is weak, like its direct definition (emit_fns.c). */
+    buf_printf(file, "__attribute__((unused)) %s%s%s %s(",
+               entry_static ? "static " : "",
+               (!entry_static && ctx->separate_compilation)
+                   ? emit_inst_method_linkage_attr(fd) : "",
+               rety, cn);
     /* Params: the __cps ABI spelling (emit_params) EXCEPT a pass-by-ptr
      * aggregate, which is spelled `const T *` to agree with the direct forward
      * decl (the wrapper is the plain-name symbol direct callers link against). */

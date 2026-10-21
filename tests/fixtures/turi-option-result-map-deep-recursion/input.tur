@@ -1,0 +1,31 @@
+;; turi-option-result-map-deep-recursion -- recursion 100,000 deep through the
+;; callback of `option-map` and of `result-map`.  The stdlib bodies are plain
+;; `match`es, but under `tur --interpret` natives registered after the preload
+;; replaced them, and each native called the callback through turi_call -- one
+;; C frame per level -- so this overflowed the C stack.  Compiled was always
+;; fine.  See docs/archive/turi-option-map-native-reintroduces-c-recursion.md.
+(defn down [n : int] : int
+  (if (= n 0) 0
+    (match (option-map (some n) (fn [x : int] : int (+ 1 (down (- x 1)))))
+      (Some v) v
+      (None) 0)))
+
+(defn down-r [n : int] : int
+  (if (= n 0) 0
+    (match (result-map (:: (ok n) (Result int cstr))
+                       (fn [x : int] : int (+ 1 (down-r (- x 1)))))
+      (Ok v) v
+      (Err e) -1)))
+
+(defn main [] : int
+  (println (down 100000))
+  (println (down-r 100000))
+  ;; The ordinary cases still answer.
+  (println (match (option-map (none) (fn [x : int] : int (* x 2)))
+             (Some v) v
+             (None) -7))
+  (println (match (result-map (:: (err "no") (Result int cstr))
+                              (fn [x : int] : int (* x 2)))
+             (Ok v) v
+             (Err e) -8))
+  0)

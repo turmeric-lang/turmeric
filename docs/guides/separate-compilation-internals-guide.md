@@ -429,14 +429,22 @@ reports `static declaration follows non-static declaration`.
 
 `emit_abi_clone_name` (`emit_module.c`) builds a clone's name from:
 
-1. the binding's **bare** Turmeric name -- no module prefix;
-2. `__spec__`;
-3. the C type name of the **result**;
-4. `_` plus the C type name of each argument, in order.
+1. the module prefix the binding's own C name carries, when it is a global
+   of a named module (`ma__` for module `ma`, `geom__vector__` for
+   `geom/vector`; `binding_module_prefix`, shared with
+   `raw_name_for_binding`) -- nothing for a top-level defn;
+2. the binding's Turmeric name;
+3. `__spec__`;
+4. the C type name of the **result**;
+5. `_` plus the C type name of each argument, in order.
 
-Every non-alphanumeric character becomes `_`. If the name is already taken
-by another spec in the same TU, `__h1`, `__h2`, ... is appended in intern
-order.
+Every non-alphanumeric character of the name and the C types becomes `_`
+(the prefix is already a C identifier). If the name is already taken by
+another spec in the same TU, `__h1`, `__h2`, ... is appended in intern order.
+That suffix only separates names within one TU, which is why the prefix is
+needed: two modules exporting same-named generics instantiated at the same
+types used to emit one symbol twice
+([spec-clone-names-not-module-qualified](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/spec-clone-names-not-module-qualified.md)).
 
 Real names from `tur emit-c`:
 
@@ -455,9 +463,9 @@ emits the body and the header prototype in pass 2. In the tiny project below,
 ```
 $ tur build .            # util.tur + app.tur, no build.tur
 $ grep -n ident__spec build/obj/*.h build/obj/*.c      (trimmed)
-build/obj/util.h:551:const char * ident__spec__const_char___const_char__(const char *);
-build/obj/util.c:5435:const char * ident__spec__const_char___const_char__(const char * x) {
-build/obj/app.c:5414:  ... (ident__spec__const_char___const_char__("hi"));
+build/obj/util.h:551:const char * util__ident__spec__const_char___const_char__(const char *);
+build/obj/util.c:5435:const char * util__ident__spec__const_char___const_char__(const char * x) {
+build/obj/app.c:5414:  ... (util__ident__spec__const_char___const_char__("hi"));
 ```
 
 A forced spec carries `TypeKind`s, not types: the owner rebuilds them with
@@ -474,9 +482,16 @@ path containing `stdlib/`. The header loop declares
 such methods even though they are not exported. History:
 [definstance-not-dispatchable-across-modules](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/definstance-not-dispatchable-across-modules.md).
 
-The predicate does not detect a non-stdlib file `(load ...)`-ed into several
-modules; each TU then defines the instance externally (see
-[Known gaps](#known-gaps)).
+A non-stdlib file `(load ...)`-ed into several modules is spliced into each,
+so each TU defines its instance methods. Those copies are defined
+`__attribute__((weak))` (`emit_inst_method_linkage_attr`, at the definition,
+the forward declaration and the CPS entry wrapper): a separately compiled
+module's own source is file 0 of its unit, so an instance whose
+`origin_file_id` is anything else is a loaded copy. The linker keeps one, and
+an importer still links against the method through the loading module's
+header, which `static` would break
+([loaded-user-definstance-duplicated-across-tus](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/loaded-user-definstance-duplicated-across-tus.md)).
+An instance in the module's own file keeps a strong definition.
 
 `in_imported_module` keeps an imported module's self-registering forms
 (classes, instances) from registering for emission in the importer's TU.
@@ -520,7 +535,7 @@ clone_name  owning_module  fn_symbol  result_kind  n_args  arg_kind...
 The kinds are `TypeKind` integers. For the example above:
 
 ```
-ident__spec__const_char___const_char__  util  ident  5  1  5
+util__ident__spec__const_char___const_char__  util  ident  5  1  5
 ```
 
 **Nothing reads it.** The forced specs of a build are always recomputed by
@@ -555,8 +570,8 @@ Then look at the evidence:
 
 | Symptom | Usual cause |
 |---|---|
-| `multiple definition of '<fn>__spec__...'` in two module `.c` files | Two modules define generics with the same bare name, instantiated at the same types: clone names are not module-qualified |
-| `multiple definition of '__inst_<Class>_<m>_<T>'` | A `definstance` in a non-stdlib file that several modules `(load ...)` |
+| `multiple definition of '<fn>__spec__...'` in two module `.c` files | Before 2026-10-21: two modules define generics with the same bare name, instantiated at the same types (clone names were not module-qualified). Now the clone carries its module's prefix, so look for two specs of one module's generic minted under one name |
+| `multiple definition of '__inst_<Class>_<m>_<T>'` | Before 2026-10-21: a `definstance` in a non-stdlib file that several modules `(load ...)`. Such copies are weak now; a strong duplicate means the instance is in two modules' own files |
 | `incompatible type for argument N of '<fn>__spec__tur_adt_...'` | A forced spec at an aggregate type: the owner's clone takes `int64_t` |
 | `undefined reference to '<mod>__<fn>'` | The module is not in the build set, or inline C spells a mangled name by hand ([cross-module-private-helper-dropped-at-link](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/cross-module-private-helper-dropped-at-link.md)) |
 | `undefined reference to 'main'` | No module of a separate executable build defines `main`; `_main.c` does not synthesize one |
@@ -565,12 +580,12 @@ Then look at the evidence:
 | `redefinition of 'Result__...'` | A monomorph typedef without its include guard ([result-typedef-duplicated-across-modules](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/result-typedef-duplicated-across-modules.md)) |
 | ``error: `f` (module m) can perform the effect `E`, and this call crosses into it from another module`` | A call into another module whose callee can perform a user effect. Refused at build time since 2026-10-18; before, it built and aborted at run time with `tur: unhandled effect (tag N)` |
 
-### A worked failure
+### A worked failure (fixed 2026-10-21)
 
 Two modules each export `(defn ident [A] [x : A] : A x)`. `user1` calls
 `mb`'s at `cstr`; `app` calls `ma`'s at `cstr` and imports `user1`. Each
-importing TU sees only one `ident`, so no `__h1` suffix is added, and both
-owners are forced to emit the same name:
+importing TU sees only one `ident`, so no `__h1` suffix was added, and both
+owners were forced to emit the same name:
 
 ```
 $ tur build .                                 (trimmed)
@@ -582,9 +597,9 @@ ident__spec__const_char___const_char__  mb  ident  5  1  5
 ident__spec__const_char___const_char__  ma  ident  5  1  5
 ```
 
-The index shows the cause directly: one clone name, two owners. When `app`
-imports both modules itself, its TU interns both specs and the second becomes
-`..._h1`, which is why the simplest two-importer repro does not fail.
+The index showed the cause directly: one clone name, two owners. The names
+are `ma__ident__spec__...` and `mb__ident__spec__...` now, and the build
+links (`build-project-spec-same-name-two-modules` in `tests/run-build-project.sh`).
 
 ---
 
@@ -596,9 +611,7 @@ this guide was written; link the reports here once they are.
 
 | Gap | Where |
 |---|---|
-| Spec clone names are not module-qualified, so same-named generics of two modules collide at link | `emit_module.c:emit_abi_clone_name` |
 | A forced spec at an aggregate type is emitted with `int64_t` parameters and result | `ForcedAbiSpec` / `BorrowSpecInfo` carry `TypeKind`; `emit_type_from_kind` in `emit_header_inner` and `emit_implementation_inner` |
-| A user file `load`ed by two modules duplicates its instance methods | `emit_module.c:emit_inst_method_wants_external` (the residual recorded in the definstance report) |
 | An effect performed in one module's TU cannot reach a `handle` in another's. It is refused at the call site, not threaded | per-TU coloring; `static` `__cps` twins; the entry wrapper's fresh root continuation; the refusal is `effect_check.c` (`foreign_check`) |
 | Nested imports resolve against the entry file's directory, and the diagnostic calls it the importing file's | `elab_module.c:elab_load_module_impl` (`module_base_dir`) |
 
@@ -625,9 +638,7 @@ Each was reproduced against the compiler this guide describes and filed in
 update the passage above that describes it and drop it from this list.
 
 - [sepcomp-cross-module-effect-unhandled](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/sepcomp-cross-module-effect-unhandled.md) -- Separately compiled: an effect performed in one module cannot reach a handler in another (refused at build time since 2026-10-18)
-- [spec-clone-names-not-module-qualified](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/spec-clone-names-not-module-qualified.md) -- Specializations of same-named generics in two modules collide at link
 - [forced-spec-loses-aggregate-type](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/forced-spec-loses-aggregate-type.md) -- A cross-module specialization at a struct type is emitted at `int64_t`
-- [loaded-user-definstance-duplicated-across-tus](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/loaded-user-definstance-duplicated-across-tus.md) -- A `definstance` in a file `load`-ed by two modules is defined twice
 
 ## Maintenance
 

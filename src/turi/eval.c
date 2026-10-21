@@ -3408,7 +3408,9 @@ static Span leaf_panic_site(const Expr *x, Span saved) {
     g_fwd_site = SPAN_UNKNOWN;
     Span own = call_node_site(x);
     if (x && x->kind == EX_CALL && x->as.call_.forwards_site) {
-        if (fwd.line) return fwd;
+        /* ...unless the call through the partial is itself stdlib source
+         * (option-map's own `(f v)`), which keeps the program's site too. */
+        if (fwd.line && !(saved.line && diag_file_is_stdlib(fwd.file_id))) return fwd;
         return saved.line ? saved : own;
     }
     if (saved.line && own.line && diag_file_is_stdlib(own.file_id)) return saved;
@@ -11305,6 +11307,21 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                 /* panic-location-names-the-runtime-not-the-call-site: a
                  * partial's thunk names this call (g_fwd_site). */
                 g_fwd_site = fn_is_pap_thunk(fn) ? call_node_site(top->expr) : SPAN_UNKNOWN;
+                /* ...and the program's call INTO a stdlib Turmeric body names
+                 * itself to whatever that body's own calls panic in, as the
+                 * compiled path's sited call does (tur_site_keep keeps it
+                 * through the stdlib's calls; leaf_panic_site above).  A
+                 * native HOF's leaf call used to be the only setter, so once
+                 * `option-map` ran its Turmeric body a callback's panic named
+                 * option.tur (turi-option-map-native-reintroduces-c-recursion).
+                 * Not restored on return: every setter overwrites the slot,
+                 * and a native's leaf call saves and restores around itself. */
+                if (fn->body && top->expr) {
+                    Span cs = call_node_site(top->expr);
+                    if (cs.line && !diag_file_is_stdlib(cs.file_id) &&
+                        fn->body->span.line && diag_file_is_stdlib(fn->body->span.file_id))
+                        g_panic_site = cs;
+                }
                 /* turi-dict-passing-plan: a DICT-CLONE's leading dict params
                  * just bound as ordinary int args carry TypeClassInstance
                  * pointers (the EX_DICT address-only value).  Record them as

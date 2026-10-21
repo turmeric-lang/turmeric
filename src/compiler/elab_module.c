@@ -213,11 +213,19 @@ static void elab_forward_declare_defns(Elab *e, Form *const *items,
         Type fn_type = type_fn(arg_kinds, param_arity, fwd_result_kind);
         /* r7rs-lang-plan R7: the rest shape, as the top-level pre-pass does. */
         if (fwd_arg_full) fn_type.as.fn.arg_full_types = fwd_arg_full;
-        if (params_idx < (uint32_t)f->as.list.len)
+        bool ref_params_pending = false;
+        if (params_idx < (uint32_t)f->as.list.len) {
             fwd_decl_apply_variadic(e, e->arena, &fn_type, f->as.list.items[params_idx]);
+            /* forward-call-with-rc-argument-rejected: an `rc<S>` parameter and
+             * its `^borrow`; an S this module defines below is retried. */
+            ref_params_pending = fwd_decl_apply_ref_params(
+                e, e->arena, &fn_type, f->as.list.items[params_idx]);
+        }
         if (fwd_result_full) fn_type.as.fn.result_full_type = fwd_result_full;
         Binding *b = binding_new(e, fn_name_f->as.sym, fn_type, false, true, f->span);
         scope_add(&e->global, b);
+        if (ref_params_pending)
+            elab_fwd_note_pending_params(e, b, f->as.list.items[params_idx]);
         if (pending_ret_f && fwd_result_kind == TY_INT && !fwd_result_full)
             elab_fwd_note_pending_result(e, b, f, name_idx, params_idx,
                                          pending_ret_f);

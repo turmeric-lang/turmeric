@@ -3297,6 +3297,44 @@ char *adt_field_member_path(const AdtDef *def, const CtorDef *ctor, uint32_t fi)
     return r;
 }
 
+/* The module prefix of a binding's linker-visible C name -- `geom__vector__`
+ * for a global defined in module `geom/vector` -- written NUL-terminated into
+ * `out`; returns its length, 0 when the name carries none.
+ *
+ * Phase M7: Only globals get module-prefixed C names. Function parameters
+ * and locals are scoped to their function, so they don't collide across
+ * modules -- and inline-C bodies reference them by their source names.
+ * `main` is always the C entry point, never prefixed.  Shared by
+ * raw_name_for_binding and the ABI spec clone names (emit_abi_clone_name). */
+size_t binding_module_prefix(const Binding *b, char *out, size_t cap) {
+    if (cap > 0) out[0] = '\0';
+    if (!b || !b->name || b->defining_module_name == NULL || !b->is_global ||
+        cap < 8)
+        return 0;
+    if (b->name->len == 4 && memcmp(b->name->name, "main", 4) == 0) return 0;
+    const char *mn = b->defining_module_name->name;
+    size_t mn_len = b->defining_module_name->len;
+    size_t j = 0;
+    /* Each '/'-separated component is mangled through the shared injective
+     * scheme; '/' itself becomes the "__" structural separator (which data
+     * can never produce, since a literal '_' encodes as "_un"). A trailing
+     * "__" terminates the prefix. Reserve 6 bytes of slack: up to a 4-byte
+     * "_xHH" escape plus the trailing "__". */
+    for (size_t i = 0; i < mn_len && j + 6 < cap; i++) {
+        char c = mn[i];
+        if (c == '/') {
+            out[j++] = '_';
+            out[j++] = '_';
+        } else {
+            tur_mangle_append(out, &j, &mn[i], 1);
+        }
+    }
+    out[j++] = '_';
+    out[j++] = '_';
+    out[j]   = '\0';
+    return j;
+}
+
 /* Return a sanitized C identifier for a Binding, without the ID suffix.
  * Used for function names and parameters. Caller frees.
  *
@@ -3324,35 +3362,9 @@ char *raw_name_for_binding(const Binding *b) {
     /* Build module prefix if this binding belongs to a named module.
      * Exception: `main` is always the C entry point, never prefixed. */
     char mod_prefix[512];
-    size_t mod_prefix_len = 0;
     bool is_main_binding = (b->name->len == 4 &&
                              memcmp(b->name->name, "main", 4) == 0);
-    /* Phase M7: Only globals get module-prefixed C names. Function parameters
-     * and locals are scoped to their function, so they don't collide across
-     * modules — and inline-C bodies reference them by their source names. */
-    if (b->defining_module_name != NULL && !is_main_binding && b->is_global) {
-        const char *mn = b->defining_module_name->name;
-        size_t mn_len = b->defining_module_name->len;
-        size_t j = 0;
-        /* Each '/'-separated component is mangled through the shared injective
-         * scheme; '/' itself becomes the "__" structural separator (which data
-         * can never produce, since a literal '_' encodes as "_un"). A trailing
-         * "__" terminates the prefix. Reserve 6 bytes of slack: up to a 4-byte
-         * "_xHH" escape plus the trailing "__". */
-        for (size_t i = 0; i < mn_len && j + 6 < sizeof(mod_prefix); i++) {
-            char c = mn[i];
-            if (c == '/') {
-                mod_prefix[j++] = '_';
-                mod_prefix[j++] = '_';
-            } else {
-                tur_mangle_append(mod_prefix, &j, &mn[i], 1);
-            }
-        }
-        mod_prefix[j++] = '_';
-        mod_prefix[j++] = '_';
-        mod_prefix[j]   = '\0';
-        mod_prefix_len  = j;
-    }
+    size_t mod_prefix_len = binding_module_prefix(b, mod_prefix, sizeof(mod_prefix));
 
     /* +8 slack reserves room for the `tur_u_` libc-collision guard prefix
      * (6 bytes) plus the NUL, applied to a bare global below. */

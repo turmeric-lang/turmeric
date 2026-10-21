@@ -1556,6 +1556,7 @@ void emit_ctor_bare_alias(Buf *out, const struct AdtDef *def,
                           const struct CtorDef *ctor);
 char *adt_field_member_path(const AdtDef *def, const CtorDef *ctor, uint32_t fi);
 char *raw_name_for_binding(const Binding *b);
+size_t binding_module_prefix(const Binding *b, char *out, size_t cap);
 char *emit_call_name(EmitCtx *ctx, const Expr *call, const Binding *b);
 /* struct-of-closures monomorphization: find the inner-closure body spec (the
  * primary inner_closure_spec_idx or one of the extra struct-of-closures links)
