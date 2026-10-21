@@ -5881,6 +5881,10 @@ static void emit_fn_def_body(EmitCtx *ctx, Buf *file, const Expr *e) {
         emit_note_inline_c_fn(fn_name);
     if (needs_static) {
         buf_printf(file, "static ");
+    } else if (ctx->separate_compilation && user_inst_method) {
+        /* loaded-user-definstance-duplicated-across-tus: weak when this TU
+         * holds a `(load ...)`-ed copy (emit_inst_method_linkage_attr). */
+        buf_puts(file, emit_inst_method_linkage_attr(fd));
     }
     /* Return type from fn_type */
     if (e->type.kind == TY_FN) {

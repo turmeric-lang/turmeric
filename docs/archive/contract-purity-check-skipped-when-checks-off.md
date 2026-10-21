@@ -106,3 +106,42 @@ Release `tur`.
 3. **Optional, for the harnesses:** `run.sh` and `run-jit.sh` could say when
    `TUR` is a Release build. Today the 19 elided-contract fixtures read as
    failures with no hint of the cause.
+
+## Resolution (2026-10-21)
+
+Fix directions 1 and 2. Direction 3 (harness hints for a Release `tur`) is not
+taken.
+
+- **Fix.** Every site that builds a contract check now builds it whether or
+  not checks are emitted, and splices it into the body only when they are. So
+  each predicate is elaborated and classified, and TUR-E0375 is the same on
+  every build. The sites:
+  - the `defn` path's parameter refinements, `:pre`, `:post` and return
+    refinement (`elab_fns.c`, the CT1 block; the checks go into `cbody`, and
+    `body = cbody` only under `should_check`);
+  - a `fn`'s parameter refinements (`elab_fns.c`, gate moved to the splice);
+  - an instance method's parameter refinements and result refinements
+    (`elab_typeclasses.c`).
+- **Instance results.** Pass 1 publishes `refine_return_pred` on the method
+  binding only when checks are emitted -- a call reads it as a fact, and a
+  fact must not outlive the check that enforces it. That rule stays: pass 1
+  now also records the unpublished predicates on the method's pass record
+  (`InstMethodPass.unemitted_*`), and pass 2 builds the same wraps from them
+  and drops them.
+- **Same diagnostics as a Debug build, by construction.** The checks-off path
+  runs the same helpers (`rt_inject_param_checks`, `rt_wrap_return_check`)
+  as the checks-on path, including their skips (a `#reads` measure's entry
+  check, a statically proved obligation), so it reports exactly what a Debug
+  `tur` reports. One elaboration per predicate is the cost; nothing is
+  emitted for it.
+- **Not changed.** `rt_contracts_emitted()` still gates the early-`return`
+  contract (`e->ret_contract`) and the published facts; the same predicates
+  are classified by the whole-body wrap.
+- **Pinned** by `errors/contract-impure-pred-checks-off` (the
+  `refine-impure-accessor-contract-positions` program under `--no-contracts`:
+  all six TUR-E0375s, where only the `:invariant` one used to fire) and
+  `errors/contract-impure-pred-checks-off-more` (`:post`, a `fn` parameter, an
+  inherited instance parameter refinement and a class result refinement, also
+  under `--no-contracts`). The original one-line repro is TUR-E0375 under
+  `tur --no-contracts check` now. `--no-contracts` exercises the same gate a
+  Release `tur` takes, so these catch it on every build.
