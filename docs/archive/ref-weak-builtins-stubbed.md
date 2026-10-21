@@ -1,5 +1,9 @@
 # `ref?` and `weak?` are stubs, `upgrade` returns an untyped pointer, and the interpreter's `rc->ptr` returns the payload
 
+**RESOLVED 2026-10-21** -- see [Resolution](#resolution-2026-10-21). Pinned by
+`ref-weak-builtins` (both engines, leak-checked) and
+`errors/weak-upgrade-builtin-retired`.
+
 **Severity: low-medium.** Four of the builtin reference forms do not do what
 their names say. Nothing in the stdlib calls them -- `stdlib/weak.tur` wraps
 the runtime directly -- so this bites a program that reaches for the
@@ -52,3 +56,40 @@ binding of the same shape gets a scope-exit `drop!` (compare
 3. Interpreted `rc->ptr`: return the address of the payload cell.
 4. Free an `lref<T>`'s cell when `deref` consumes it.
 5. A fixture for each on both engines (leak-checked for the `lref` case).
+
+## Resolution (2026-10-21)
+
+All five items, on both engines.
+
+1. **`ref?` / `weak?`** answer from the argument's static type (fix direction
+   1): `true` iff it is a `ref<T>` / a `weak<T>`. `emit_expr.c` evaluates the
+   argument and yields the constant; `eval.c` reads the same elaborated type,
+   so the engines agree. A linear variable passed to either is read, not
+   moved (`elab_pred_read_is_not_a_move`, mirroring `elab_deref`), so
+   `(ref? r)` followed by `(deref r)` compiles.
+2. **`upgrade` is retired** for `weak/upgrade` (the second half of fix
+   direction 2). Typing the node `(Option rc<T>)` would have put a box the
+   compiler cannot see the owner of into the carrier-sum-option machinery
+   ([carrier-sum-option-boxes-have-no-owner](../reported/carrier-sum-option-boxes-have-no-owner.md)),
+   for a spelling that `weak/upgrade` (tur/weak) already provides correctly.
+   `(upgrade w)` is now an error naming `weak/upgrade`, `weak/unwrap` and
+   `rc/drop`; `EX_WEAK_UPGRADE` is gone, and with it the `let`-ownership
+   special case (`binding_owns_upgrade_box`) that freed its box. The five
+   fixtures that used it -- `gc-cycle-freed`, `gc-deterministic`, `gc-mixed`,
+   `weak-dangling`, `weak-upgrade-option` -- use `weak/upgrade` and `some?`
+   now instead of an inline-C tag peek, and `weak-upgrade-option` also
+   releases the strong handle the upgrade mints.
+3. **Interpreted `rc->ptr`** returns the address of the payload word in the
+   `__rc` record (fix direction 3), so `(ptr-deref (rc->ptr r))` reads 5, as
+   compiled.
+4. **`lref/new`'s cell** is freed by the `deref` that consumes it (fix
+   direction 4): `EX_DEREF` frees an `lref<T>` operand it owns -- a fresh
+   `(lref/new ...)` or an owning variable (`is_linear`, not
+   `is_nonowning_ref`) -- after reading the value. A field read is left
+   alone. The `linear-lref-*` fixtures are leak-clean.
+5. `ref-weak-builtins` covers 1, 3 and 4 on both engines under
+   `requires.leak-check`; `errors/weak-upgrade-builtin-retired` pins 2.
+
+The reference page (`stdlib/forms/references.tur`) documents the new answers
+and the retirement, with doctested examples, and c-integration-guide's weak
+section names `weak/upgrade`.

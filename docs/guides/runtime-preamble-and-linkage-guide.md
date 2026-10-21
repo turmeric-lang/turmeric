@@ -306,7 +306,7 @@ rc/GC and regions.
 | no archive locatable, or `--runtime=source` | inline | inline replica | bare sources, recompiled |
 | `--runtime=lib` with only `libturi.a` found | inline | inline replica | `libturi.a` |
 | `--runtime=split` | decls region (says so when it declines) | as `auto` | as `auto`; with no archive found it falls back to `-lturi` with a warning |
-| `--target wasm` | inline (`emcc`; never the split) | follows the native archive probe | bare sources through `emcc` |
+| `--target wasm` | inline (`emcc`; never the split) | inline replica (a located archive is native, so it is never taken -- not even under `TUR_RCGC_FROM_ARCHIVE=1`) | bare sources through `emcc` |
 | `#lang r7rs` (Linux, macOS) | inline, in the r7rs library unit (an r7rs preamble never matches the canonical text) | as `auto` | as `auto` |
 | `tur build <dir>` executable | `tur_runtime.h` + owner TU (never the split) | `libturt_runtime.a` if found (re-probed at link) | `libturt_runtime.a` if found; this hand-built link line scans no `__tur_autolink__` markers |
 | `tur build --shared` | owner TU | owner-TU replica, hidden | no archive, no marker scan |
@@ -677,7 +677,6 @@ Each was reproduced against the compiler this guide describes and filed in
 [`docs/reported/`](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/README.md). When one is fixed and archived,
 update the passage above that describes it and drop it from this list.
 
-- [wasm-build-takes-native-archive-posture](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/wasm-build-takes-native-archive-posture.md) -- `tur build --target wasm` emits the native-archive form of the runtime
 - [regions-off-source-runtime-link-failure](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/regions-off-source-runtime-link-failure.md) -- `TUR_REGIONS=0` fails to link when the runtime comes from source
 
 ## Maintenance

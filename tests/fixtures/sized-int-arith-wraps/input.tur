@@ -1,0 +1,56 @@
+;; sized-int-arithmetic-not-wrapped-to-width: + - * / bit-shl and bit-shr on a
+;; kind narrower than 64 bits are reduced to that kind's width, on both
+;; engines, whether or not the result is ever stored as the kind.  The
+;; `(println (+ x y))` shape was 300 on both engines; a function returning the
+;; kind was 44 compiled and 300 interpreted.
+
+(defeffect Tick [] : int)
+
+(defn add-u8 [a : uint8 b : uint8] : uint8 (+ a b))
+(defn sub-u32 [a : uint32 b : uint32] : uint32 (- a b))
+(defn shr-i8 [a : int8 n : int8] : int8 (bit-shr a n))
+
+;; A function that performs is lowered by the CPS backend, whose builtin
+;; emitter is a second copy of the direct one.
+(defn cps-add-u8 [a : uint8 b : uint8] : uint8
+  (let [t (perform (Tick))]
+    (println t)
+    (println (+ a b))
+    (* a b)))
+
+(defn main [] : int
+  ;; unstored: printed straight from the operator
+  (let [x : uint8 200u8
+        y : uint8 100u8]
+    (println (+ x y)))                   ; 300 mod 256 = 44
+  (println (- 0u8 1u8))                  ; 255
+  (println (* 16u8 17u8))                ; 272 mod 256 = 16
+  (println (+ 65535u16 2u16))            ; 1
+  (println (* 65535u16 65535u16))        ; 1 (no int overflow on the way)
+  (println (- 0u32 1u32))                ; 4294967295
+  (println (+ 127i8 1i8))                ; -128
+  (println (- -128i8 1i8))               ; 127
+  (println (* 64i8 4i8))                 ; 256 -> 0
+  (println (+ 32767i16 1i16))            ; -32768
+  (println (+ 2147483647i32 1i32))       ; -2147483648
+  (println (* 65536i32 65536i32))        ; 0
+  ;; a three-operand fold reduces the whole chain
+  (println (+ 200u8 50u8 10u8))          ; 260 -> 4
+  ;; comparisons see the reduced value
+  (println (< (+ 200u8 100u8) 50u8))     ; true
+  ;; division: INT8_MIN / -1 is 128, which int8 holds as -128
+  (println (/ -128i8 -1i8))              ; -128
+  ;; shifts, at the kind's own width
+  (println (bit-shl 1u8 8u8))            ; 0
+  (println (bit-shl 64i8 1i8))           ; -128
+  (println (bit-shr -16i8 2i8))          ; 0xF0 >> 2 = 60 (logical)
+  (println (bit-shr -1i16 15i16))        ; 1
+  (println (bit-shr -1i32 31i32))        ; 1
+  ;; through a parameter and a return
+  (println (add-u8 200u8 100u8))         ; 44
+  (println (sub-u32 0u32 1u32))          ; 4294967295
+  (println (shr-i8 -16i8 2i8))           ; 60
+  ;; the CPS backend's copy
+  (println (handle (cps-add-u8 250u8 10u8)
+             (Tick [] k) (resume k 7)))  ; 7, 4, then 2500 -> 196
+  0)

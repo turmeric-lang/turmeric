@@ -1,0 +1,27 @@
+;; auto-drop-defers-skipped-on-early-return: an early `return` out of a `let`
+;; that owns a `ref` leaked the ref's box (8 B per call) -- the injected
+;; scope-exit drop sits after the body and was never registered.  Leak-checked
+;; by tests/run-leak-check.sh (requires.leak-check).
+
+(defn early [flag : bool] : int
+  (let [r (ref 5)]
+    (if flag
+      (return (deref r))
+      0)))
+
+;; The return's value is computed BEFORE anything is released: the written
+;; `defer` runs after it (it used to run first), and the drop of `r` after
+;; that, so the value never reads a freed box.
+(defn ordered [flag : bool] : int
+  (let [r (ref 7)]
+    (defer (println "defer"))
+    (if flag
+      (return (do (println "value") (deref r)))
+      (do (println "value") (deref r)))))
+
+(defn main [] : int
+  (println (early false))    ; 0
+  (println (early true))     ; 5
+  (println (ordered true))   ; value, defer, 7
+  (println (ordered false))  ; value, defer, 7
+  0)

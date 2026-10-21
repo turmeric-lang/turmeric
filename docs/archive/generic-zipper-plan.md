@@ -714,7 +714,8 @@ dead function (checked mechanically, fixture by fixture).
 Two more are filed, not fixed; the zipper avoids both:
 [generic-returned-lambda-builds-heap-app](../reported/generic-returned-lambda-builds-heap-app.md)
 and
-[bare-parametric-instance-ctor-arg-unbridged](../reported/bare-parametric-instance-ctor-arg-unbridged.md).
+[bare-parametric-instance-ctor-arg-unbridged](bare-parametric-instance-ctor-arg-unbridged.md)
+(resolved 2026-10-21).
 
 ### Region measurements (section 6)
 

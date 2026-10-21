@@ -8216,75 +8216,75 @@ static int64_t __inst_Num_neg_int(int64_t x) {
 }
 
 static int8_t __inst_Num_add_int8(int8_t x, int8_t y) {
-        return (x) + (y);
+        return (int8_t)((uint64_t)(x) + (uint64_t)(y));
 }
 
 static int8_t __inst_Num_sub_int8(int8_t x, int8_t y) {
-        return (x) - (y);
+        return (int8_t)((uint64_t)(x) - (uint64_t)(y));
 }
 
 static int8_t __inst_Num_mul_int8(int8_t x, int8_t y) {
-        return (x) * (y);
+        return (int8_t)((uint64_t)(x) * (uint64_t)(y));
 }
 
 static int8_t __inst_Num_div_int8(int8_t x, int8_t y) {
-        return tur_idiv(x, y);
+        return (int8_t)tur_idiv(x, y);
 }
 
 static int8_t __inst_Num_neg_int8(int8_t x) {
-        return (INT8_C(0)) - (x);
+        return (int8_t)((uint64_t)(INT8_C(0)) - (uint64_t)(x));
 }
 
 static int16_t __inst_Num_add_int16(int16_t x, int16_t y) {
-        return (x) + (y);
+        return (int16_t)((uint64_t)(x) + (uint64_t)(y));
 }
 
 static int16_t __inst_Num_sub_int16(int16_t x, int16_t y) {
-        return (x) - (y);
+        return (int16_t)((uint64_t)(x) - (uint64_t)(y));
 }
 
 static int16_t __inst_Num_mul_int16(int16_t x, int16_t y) {
-        return (x) * (y);
+        return (int16_t)((uint64_t)(x) * (uint64_t)(y));
 }
 
 static int16_t __inst_Num_div_int16(int16_t x, int16_t y) {
-        return tur_idiv(x, y);
+        return (int16_t)tur_idiv(x, y);
 }
 
 static int16_t __inst_Num_neg_int16(int16_t x) {
-        return (INT16_C(0)) - (x);
+        return (int16_t)((uint64_t)(INT16_C(0)) - (uint64_t)(x));
 }
 
 static int32_t __inst_Num_add_int32(int32_t x, int32_t y) {
-        return (x) + (y);
+        return (int32_t)((uint64_t)(x) + (uint64_t)(y));
 }
 
 static int32_t __inst_Num_sub_int32(int32_t x, int32_t y) {
-        return (x) - (y);
+        return (int32_t)((uint64_t)(x) - (uint64_t)(y));
 }
 
 static int32_t __inst_Num_mul_int32(int32_t x, int32_t y) {
-        return (x) * (y);
+        return (int32_t)((uint64_t)(x) * (uint64_t)(y));
 }
 
 static int32_t __inst_Num_div_int32(int32_t x, int32_t y) {
-        return tur_idiv(x, y);
+        return (int32_t)tur_idiv(x, y);
 }
 
 static int32_t __inst_Num_neg_int32(int32_t x) {
-        return (INT32_C(0)) - (x);
+        return (int32_t)((uint64_t)(INT32_C(0)) - (uint64_t)(x));
 }
 
 static uint8_t __inst_Num_add_uint8(uint8_t x, uint8_t y) {
-        return (x) + (y);
+        return (uint8_t)((uint64_t)(x) + (uint64_t)(y));
 }
 
 static uint8_t __inst_Num_sub_uint8(uint8_t x, uint8_t y) {
-        return (x) - (y);
+        return (uint8_t)((uint64_t)(x) - (uint64_t)(y));
 }
 
 static uint8_t __inst_Num_mul_uint8(uint8_t x, uint8_t y) {
-        return (x) * (y);
+        return (uint8_t)((uint64_t)(x) * (uint64_t)(y));
 }
 
 static uint8_t __inst_Num_div_uint8(uint8_t x, uint8_t y) {
@@ -8292,19 +8292,19 @@ static uint8_t __inst_Num_div_uint8(uint8_t x, uint8_t y) {
 }
 
 static uint8_t __inst_Num_neg_uint8(uint8_t x) {
-        return (UINT8_C(0)) - (x);
+        return (uint8_t)((uint64_t)(UINT8_C(0)) - (uint64_t)(x));
 }
 
 static uint16_t __inst_Num_add_uint16(uint16_t x, uint16_t y) {
-        return (x) + (y);
+        return (uint16_t)((uint64_t)(x) + (uint64_t)(y));
 }
 
 static uint16_t __inst_Num_sub_uint16(uint16_t x, uint16_t y) {
-        return (x) - (y);
+        return (uint16_t)((uint64_t)(x) - (uint64_t)(y));
 }
 
 static uint16_t __inst_Num_mul_uint16(uint16_t x, uint16_t y) {
-        return (x) * (y);
+        return (uint16_t)((uint64_t)(x) * (uint64_t)(y));
 }
 
 static uint16_t __inst_Num_div_uint16(uint16_t x, uint16_t y) {
@@ -8312,19 +8312,19 @@ static uint16_t __inst_Num_div_uint16(uint16_t x, uint16_t y) {
 }
 
 static uint16_t __inst_Num_neg_uint16(uint16_t x) {
-        return (UINT16_C(0)) - (x);
+        return (uint16_t)((uint64_t)(UINT16_C(0)) - (uint64_t)(x));
 }
 
 static uint32_t __inst_Num_add_uint32(uint32_t x, uint32_t y) {
-        return (x) + (y);
+        return (uint32_t)((uint64_t)(x) + (uint64_t)(y));
 }
 
 static uint32_t __inst_Num_sub_uint32(uint32_t x, uint32_t y) {
-        return (x) - (y);
+        return (uint32_t)((uint64_t)(x) - (uint64_t)(y));
 }
 
 static uint32_t __inst_Num_mul_uint32(uint32_t x, uint32_t y) {
-        return (x) * (y);
+        return (uint32_t)((uint64_t)(x) * (uint64_t)(y));
 }
 
 static uint32_t __inst_Num_div_uint32(uint32_t x, uint32_t y) {
@@ -8332,7 +8332,7 @@ static uint32_t __inst_Num_div_uint32(uint32_t x, uint32_t y) {
 }
 
 static uint32_t __inst_Num_neg_uint32(uint32_t x) {
-        return (UINT32_C(0)) - (x);
+        return (uint32_t)((uint64_t)(UINT32_C(0)) - (uint64_t)(x));
 }
 
 static uint64_t __inst_Num_add_uint64(uint64_t x, uint64_t y) {

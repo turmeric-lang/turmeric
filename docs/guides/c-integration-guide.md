@@ -752,8 +752,9 @@ the whole surface:
 ### Weak pointers -- `weak<T>`
 
 A `weak<T>` holds only the control block pointer (strong count = 0 is allowed).
-`upgrade` returns a value wrapped in `Option`; if the strong count has reached
-zero it returns `nil`. Weak pointers crossing the C boundary have the same
+`weak/upgrade` (tur/weak) returns an `(Option rc<T>)`: `some` of a new strong
+handle the caller must `rc/drop`, or `none` once the strong count has reached
+zero. Weak pointers crossing the C boundary have the same
 concern as `rc<T>` -- do not `free()` them directly.
 
 ### Manual heap (`malloc`/`free` via `extern-c`)

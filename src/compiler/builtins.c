@@ -449,6 +449,48 @@ const char *builtin_int_divmod_helper(const BuiltinSpec *spec) {
     return NULL;
 }
 
+const char *builtin_int_unsigned_ctype(TypeKind k) {
+    switch (k) {
+        case TY_INT8:  case TY_UINT8:  return "uint8_t";
+        case TY_INT16: case TY_UINT16: return "uint16_t";
+        case TY_INT32: case TY_UINT32: return "uint32_t";
+        default:                       return NULL;
+    }
+}
+
+const char *builtin_int_wrap_ctype(const BuiltinSpec *spec) {
+    if (!spec) return NULL;
+    switch (spec->shape) {
+        case BS_VARIADIC_FOLD: case BS_DIV_CHECK: break;
+        case BS_BIN_INFIX:
+            if (spec->c_op && (strcmp(spec->c_op, "<<") == 0 ||
+                               strcmp(spec->c_op, ">>") == 0)) break;
+            return NULL;
+        default: return NULL;
+    }
+    switch (spec->result_type.kind) {
+        case TY_INT8:   return "int8_t";
+        case TY_INT16:  return "int16_t";
+        case TY_INT32:  return "int32_t";
+        case TY_UINT8:  return "uint8_t";
+        case TY_UINT16: return "uint16_t";
+        case TY_UINT32: return "uint32_t";
+        default:        return NULL;
+    }
+}
+
+int64_t builtin_int_wrap_value(TypeKind k, uint64_t v) {
+    switch (k) {
+        case TY_INT8:   return (int8_t)v;
+        case TY_INT16:  return (int16_t)v;
+        case TY_INT32:  return (int32_t)v;
+        case TY_UINT8:  return (uint8_t)v;
+        case TY_UINT16: return (uint16_t)v;
+        case TY_UINT32: return (uint32_t)v;
+        default:        return (int64_t)v;
+    }
+}
+
 uint32_t builtin_collect_with_name(const Symbol *name,
                                    const BuiltinSpec **out,
                                    uint32_t max_out) {
