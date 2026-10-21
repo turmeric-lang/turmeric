@@ -40,6 +40,15 @@ directory is worse for triage than no index.
 | --- | --- | --- |
 | [forced-spec-at-foreign-aggregate](forced-spec-at-foreign-aggregate.md) | low-medium (cc failure, separate compilation) | Narrowed from forced-spec-loses-aggregate-type: a module calling another module's generic at a by-value struct the generic's module does not define -- the caller's own, or a third module's -- still gets an owner clone taking `int64_t`, because `forced_spec_pos_type` resolves the ADT name only among the owner's own items |
 
+## Found typing tur-plot's renderer kinds (filed 2026-10-21)
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [fn-param-stored-in-struct-field-miscompiles](fn-param-stored-in-struct-field-miscompiles.md) | low-medium | `(defn mk [f : (fn [float] float)] : F (make-struct F f))` type-checks and cc rejects it (`aggregate value used where an integer was expected`): a non-`^fat` fn param is the two-word `tur_poly_fn_t` carrier, and the constructor field sink casts it to `int64_t` instead of boxing it with `EX_POLY_TO_FAT` as a type-variable slot does. `^fat f` works around it. |
+| [unannotated-method-receiver-option-result-untyped](unannotated-method-receiver-option-result-untyped.md) | low | A class method written `(cats [r] : (Option int))` -- receiver unannotated -- is classified return-directed, and a call on a concrete value types as a def-less `(? ?)`, so `(unwrap-or (cats 3) -1)` is TUR-E0001. `[r : a]` (as `defclass`'s docs write it), an ascription, or a call through `open` all work. |
+| [letrec-struct-arg-and-env-leak](letrec-struct-arg-and-env-leak.md) | low-medium | A by-value struct argument to a `letrec` closure is malloc-boxed at the call and never freed (per iteration when the self-call is not a loop), and a `letrec` whose body opens a captured existential and takes a struct argument never drops its env. Found by LeakSanitizer in tur-plot's folds, which are now top-level `defn`s. |
+| [macro-expansion-as-call-arg-blamed-on-template](macro-expansion-as-call-arg-blamed-on-template.md) | low | `(total (vec-of (Q 3.25)))` where `total` wants `(Vec P)` reports the TUR-E0001 at `stdlib/vec.tur:501`, the root of `vec-of`'s template, with no note naming the user's call: the expansion's Expr keeps the template span, and the enclosing arg check fires after the "in expansion of" window closes. A mismatch inside the expansion is attributed correctly. |
+
 ## Found writing the typeclass API docs (filed 2026-10-19)
 
 | Report | Severity | One line |
