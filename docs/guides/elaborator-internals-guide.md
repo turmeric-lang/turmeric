@@ -84,7 +84,7 @@ Three neighbouring areas have their own guides and are only summarized here:
 
 ## Pipeline position
 
-Elaboration is the first entry of `src/main.c:core_passes[]`:
+Elaboration is the first entry of `src/driver/pipeline.c:core_passes[]`:
 
 ```
 PASS_ELABORATE -> PASS_KIND_CHECK -> PASS_EFFECT_LOWER
@@ -96,7 +96,7 @@ over the finished IR. The elaborator does its own move, linear and
 uniqueness checks inline, though, because they depend on scope state that no
 longer exists after it returns.
 
-`elaborate_program` is called from `src/main.c` (every compiling command,
+`elaborate_program` is called from the driver's `run_core_pass` (every compiling command,
 plus `tur check`, `tur lsp` and `tur mcp`) and from the playground
 (`src/web/wasm_glue.c`, `wasm_lsp.c`). The interpreter (`src/turi/eval.c`,
 `repl.c`) calls `elaborate_program_session`. It evaluates the same

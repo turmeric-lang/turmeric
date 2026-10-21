@@ -205,7 +205,7 @@ mis-sorted entry fails loudly rather than silently ceasing to match.
 
 ## Module/file-name split
 
-`mangle_mod_basename` in `src/main.c` maps `/` -> `__`, `-` -> `_` for the
+`mangle_mod_basename` in `src/driver/project.c` maps `/` -> `__`, `-` -> `_` for the
 on-disk `.c`/`.h` filenames emitted by `tur build`. This is Option A from the
 plan: filenames stay legacy-lossy, only *symbol* names go injective.
 

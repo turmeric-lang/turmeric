@@ -136,7 +136,8 @@ static inline char *tur_realpath(const char *path, char *resolved) {
  * privilege requirement, and is the only way to answer it.  Ownership then
  * comes from state.tur rather than readlink, because a copy cannot say who
  * wrote it.  `tur repl --engine jit` makes the same kind of call for its
- * module shadow directory (repl_jit_shadow_entry, main.c): a hard link, then
+ * module shadow directory (repl_jit_shadow_entry, src/driver/jit.c): a hard
+ * link, then
  * a copy.
  *
  * So: do NOT "fix" these shims by making symlink() succeed via
@@ -393,7 +394,7 @@ static inline const char *tur_temp_dir(void) {
  *
  * Use `tur_shell_quote` (platform_proc.h), which does the `'\''` break-out on
  * POSIX and the CRT's backslash-doubling rule on Windows -- or, in a Buf,
- * main.c's `drv_buf_put_quoted`.
+ * the driver's `drv_buf_put_quoted`.
  */
 
 /*

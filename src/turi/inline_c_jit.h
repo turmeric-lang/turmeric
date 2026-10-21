@@ -15,7 +15,7 @@
  *
  * This half is MIR-free and lives in tur_core: it finds the source form,
  * marshals arguments, and caches the compiled function per FnDef.  The
- * compile itself is the host's (`tur` registers it from main.c under
+ * compile itself is the host's (`tur` registers it from its driver under
  * TUR_HAVE_JIT), so a build with no engine -- the WASM playground, a
  * -DTUR_JIT=OFF tree -- has no hook and keeps today's error. */
 #ifndef TUR_TURI_INLINE_C_JIT_H

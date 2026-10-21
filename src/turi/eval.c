@@ -1970,7 +1970,7 @@ static TuriValue turi_default_of(TuriEnv *env, const Type *t) {
 }
 
 /* W1b: see eval.h.  Read field idx of a struct value (TuriStruct is opaque to
- * main.c, so the Result/Option native shims call this to accept a make-struct
+ * interpreter_natives.c, so the Result/Option native shims call this to accept a make-struct
  * value as well as their native int64 box). */
 TuriValue turi_struct_field(TuriValue v, uint32_t idx, bool *found) {
     if (v.tag == TURI_STRUCT && v.as_struct && idx < v.as_struct->n_fields) {
@@ -12663,7 +12663,7 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
          * int64 carrier.  Interning by name guarantees pointer identity for
          * identical names (so Eq[Sym]/Hash[Sym] -- pointer identity -- and the
          * str->sym round-trip all agree with the literal), and the native sym ops
-         * (native_sym_to_str/_eq/_hash in main.c, registered as overrides for the
+         * (native_sym_to_str/_eq/_hash in interpreter_natives.c, registered as overrides for the
          * inline-C sym.tur bodies the tree-walker cannot run) read this Symbol*. */
         const Symbol *s = e->as.sym_lit_.sym;
         const Symbol *isym = s;
@@ -16906,7 +16906,7 @@ static TuriValue turi_eval_impl(TuriEnv *env, const char *src, const char *path,
         if (rest != src_body) {
             /* A #lang directive was found.  Reject an unknown / not-yet-
              * implemented reader the same way the compiled entry points do
-             * (src/main.c detect_and_adjust_lang) instead of silently running
+             * (the driver's detect_and_adjust_lang) instead of silently running
              * the program under the default reader -- otherwise `#lang foo`
              * would just execute as plain Turmeric under --interpret. */
             if (detected == READER_UNKNOWN && bad) {
@@ -17176,7 +17176,7 @@ static TuriValue turi_eval_impl(TuriEnv *env, const char *src, const char *path,
      * turn) still carried Bt.  Registration is idempotent, so re-scanning a
      * turn's defeffects into the shared env is harmless.  The builtin
      * `Unsafe` is registered as the compiled pipeline does (PASS_EFFECT_LOWER
-     * in main.c), for the same parity reason. */
+     * in run_core_pass), for the same parity reason. */
     int eff_rc = 0;
     {
         EffectEnv *eff_env = (EffectEnv *)env->effect_env;
@@ -17198,7 +17198,7 @@ static TuriValue turi_eval_impl(TuriEnv *env, const char *src, const char *path,
     }
 
     /* 6c. Run the always-on lifetime pass (elision + outlives-cycle check).
-     * The compiled pipeline runs this in PASS_BORROW_CHECK (src/main.c); the
+     * The compiled pipeline runs this in PASS_BORROW_CHECK (run_core_pass); the
      * interpreter shares the elaborator but not the later passes, so a cyclic
      * explicit signature (&'a &'b / &'b &'a) was previously accepted under
      * --interpret.  lifetime_check_program only emits TUR-E0106 on a genuine
@@ -17411,7 +17411,8 @@ TuriValue turi_call(TuriEnv *env, TuriValue fn, TuriValue *args, uint32_t n_args
     return eval_apply(env, fn.as_closure, args, n_args);
 }
 
-/* SEQ (stdlib/seq): public bridges so the seq inline-C natives in main.c can
+/* SEQ (stdlib/seq): public bridges so the seq inline-C natives in
+ * interpreter_natives.c can
  * drive an interpreter generator (TuriGen is defined in this file).  `gen` is a
  * generator value (the int64 carrier holds the TuriGen*); advance it one step,
  * setting *done to 1 if it just ran off its end (no value yielded). */

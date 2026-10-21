@@ -9,15 +9,16 @@ check_turi_parity.py: where that script ratchets the *expression-kind* parity
 
 The compiled path auto-loads a fixed set of stdlib modules so every compiled
 program sees the typed-collection / typeclass / macro definitions for free
-(`stdlib_files[]`, src/main.c).  The `--interpret`/`tur eval` path preloads its
-own prelude (`prelude[]` in cmd_eval, src/main.c).  Any module in the compiled
+(`autoload_files_[]`, src/compiler/stdlib_autoload.c).  The `--interpret`/
+`tur eval` path preloads its own prelude (`prelude[]` in
+turi_env_preload_collections, src/turi/preload.c).  Any module in the compiled
 set but NOT in the interpreter prelude is a *preload gap*: every public name it
 defines (`map-count`, `mutmap-set!`, `json/decode`, ...) is an "unknown
 function / unbound variable" under --interpret while resolving fine when
 compiled.  That gap is precisely the harness-flip "missing native" bucket.
 
 This script:
-  1. Parses both module lists out of src/main.c.
+  1. Parses both module lists out of those two files.
   2. Computes GAP = compiled-auto-load - interpreter-prelude.
   3. Requires every GAP module to carry a one-line rationale in
      docs/artifacts/turi-preload-carve-out.txt.  An undocumented gap fails the build
@@ -43,7 +44,6 @@ import re
 import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-MAIN_C = os.path.join(ROOT, "src", "main.c")
 # The compiled-side autoload list moved out of main.c so the WASM
 # playground's analyzer can share it (try-turmeric-lsp-plan, L0).
 AUTOLOAD_C = os.path.join(ROOT, "src", "compiler", "stdlib_autoload.c")

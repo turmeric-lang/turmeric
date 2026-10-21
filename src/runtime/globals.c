@@ -1,6 +1,6 @@
 /* globals.c — Definitions for global configuration variables shared between
- * the tur compiler driver (main.c) and libturi (tur_eval_basic, REPL, etc.).
- * main.c modifies these after parsing CLI flags; all defaults are "off". */
+ * the tur compiler driver (src/driver/) and libturi (tur_eval_basic, REPL, etc.).
+ * The driver sets these after parsing CLI flags; all defaults are "off". */
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -129,7 +129,7 @@ bool g_dump_refine_json = false;
 bool g_trail_autoloaded = false;
 const char *g_lang_prelude = NULL;   /* saffron-lang-plan S6 / r7rs R1: LangTraits.prelude of the entry file */
 uint32_t g_synthetic_user_from_line = 0; /* r7rs-lang-plan R9; see globals.h */
-const char *g_repl_start_lang = NULL; /* saffron-lang-plan S8 / r7rs R9: `tur repl --lang <base>`, validated by main.c */
+const char *g_repl_start_lang = NULL; /* saffron-lang-plan S8 / r7rs R9: `tur repl --lang <base>`, validated by cmd_repl_main */
 bool g_opt_option_niche = true;   /* graduated 2026-09-03; TUR_OPTION_NICHE=0 restores the tagged monomorph */
 bool g_opt_regions = true;       /* graduated 2026-09-05; TUR_REGIONS=0 restores malloc + unbracketed calls */
 bool g_opt_reflected_measures = false; /* reflected-measures RF0: --enable=reflected-measures */

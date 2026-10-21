@@ -53,7 +53,7 @@ bool emit_split_program_imports(const Expr *program);
  * program's stdlib bindings it defines -- written right after that emission
  * (emit_split_carry_save, appending a text record to `out`) and put back by
  * emit_split_carry_load in place of the emission, in EMIT_SPLIT_LIB mode, for
- * the same elaborated stdlib (main.c keys the cache).  Load returns false,
+ * the same elaborated stdlib (the driver keys the cache).  Load returns false,
  * having put nothing back, when the record is malformed or names a binding
  * this program does not have; the caller then emits the unit.
  * emit_split_clear_defined forgets the bindings a load (or an emission)
@@ -84,8 +84,8 @@ extern bool g_emit_ffi_export_shims;
  * Without this a compiled program runs a hand-written replica of the collector
  * while the maintained implementation sits unused in the archive.
  *
- * Must be set BEFORE emission -- the generated text depends on it.  main.c
- * resolves it from the same archive probe the link step uses; the probe is a
+ * Must be set BEFORE emission -- the generated text depends on it.  The
+ * driver resolves it from the same archive probe the link step uses; the probe is a
  * pure filesystem check, so it is safe to run ahead of codegen. */
 void emit_set_rcgc_from_archive(bool from_archive);
 /* The posture as last set -- true when the emitted preamble declared the

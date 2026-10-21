@@ -57,7 +57,7 @@ exactly what the C side of the equation looks like.
 
 A handful of list primitives -- `cons`, `head`, `tail`, `nil-value`, and
 `cstr->parse-int` -- are **interpreter natives** registered by `tur run` / the
-REPL (in `src/main.c`), *not* compiled stdlib functions. They are unbound when
+REPL (in `src/turi/interpreter_natives.c`), *not* compiled stdlib functions. They are unbound when
 you `tur build` / `tur emit-c` a file: you will see
 
 ```text

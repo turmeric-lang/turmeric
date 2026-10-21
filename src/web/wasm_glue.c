@@ -125,7 +125,7 @@ static void wasm_boot_mark(const char *phase) {
  * resolve instead of failing "unknown function or operator 'hamt-of'".  The
  * underlying Vec/Set/Map/HAMT runtime ops are already registered as natives by
  * turi_env_new (turi_register_collection_natives).  Shares the load list with
- * src/main.c via src/turi/preload.c so the two entry points cannot drift.
+ * `tur --interpret` via src/turi/preload.c so the two entry points cannot drift.
  * See docs/archive/history/web-repl-missing-stdlib-preload.md. */
 static void wasm_preload_stdlib(TuriEnv *env) {
     if (!env) return;
@@ -960,7 +960,7 @@ int turi_wasm_trace_run(const char *input, uint32_t max_steps, int has_main) {
     turi_repl_set_last_diag_code("");
     g_trace_base_line = wasm_acc_base_line();
 
-    /* The order is cmd_trace's (src/main.c:7502) by way of cmd_eval_h: attach
+    /* The order is cmd_trace's (src/driver/cmd_eval.c) by way of cmd_eval_h: attach
      * the debugger, install the recorder on it, load the program UNARMED so
      * the recording is of the program and not of its definitions, then arm and
      * call main. */
@@ -1335,7 +1335,7 @@ static void smt_json_model(Buf *out, const RefineModel *m) {
 }
 
 /* One `(check-sat)`'s worth of work: run the chain, then the bounded search if
- * nothing proved it.  Mirrors `smt_answer` in main.c. */
+ * nothing proved it.  Mirrors the driver's `smt_answer`. */
 static void smt_one_answer(RefineVC *vc, Arena *arena, Buf *out) {
     /* refine-chain-expands-the-same-dnf-four-times: the `_cc` stages, sharing
      * ONE run's cube set.  Each stage used to rebuild the same DNF from an

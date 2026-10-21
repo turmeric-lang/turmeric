@@ -204,14 +204,15 @@ bug that the `tools/check_turi_*` ratchets do **not** catch (they check
 elaboration coverage, not embedder wiring). Three rules keep them from drifting;
 each has bitten in practice.
 
-- **Native overrides live in `tur_core`, never in `main.c`.** The C
+- **Native overrides live in `tur_core`, never in the driver.** The C
   implementations that shadow stdlib inline-C bodies -- collection ops
   (`collections_native.c`), keyword/`:Sym`-keyed maps, contract panics,
   json/schema, lazy seqs -- must compile into `tur_core` (reached through one
   `turi_env_register_interpreter_natives`), because that is what lands in
-  `libturi.a` / `libturi_wasm.a`. Anything registered from `main.c` compiles
+  `libturi.a` / `libturi_wasm.a`. Anything registered from the driver
+  (`src/main.c`, `src/driver/`) compiles
   only into the `tur` executable, so an embedder or the WASM REPL that does not
-  link `main.c` gets no override and hits `inline-C not supported in interpreter
+  link the driver gets no override and hits `inline-C not supported in interpreter
   mode` for exactly those ops.
 - **Stdlib preload goes through one shared helper.** Reader-macro data literals
   lower unconditionally (`#map{...}` -> `hamt-of`, `#set{...}` -> `set-of`)

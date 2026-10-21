@@ -235,7 +235,8 @@ fixture_has_inline_c() {
 
 # W5 flip: a small set of fixtures carry a ```c block yet DO run correctly under
 # --interpret, because their inline-C ops are backed by native overrides
-# (wk_register_* in src/main.c) or handled by the simple inline-C evaluator
+# (wk_register_* in src/turi/interpreter_natives.c) or handled by the simple
+# inline-C evaluator
 # (try_exec_simple_inline_c in src/turi/eval.c).  The mechanical inline-C carve
 # would skip these and silently drop genuine interpreter coverage, so they are
 # kept explicitly and run (checked before the carve).  Keep this list tight: an

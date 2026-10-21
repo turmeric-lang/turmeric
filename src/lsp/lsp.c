@@ -277,7 +277,7 @@ static int        stdlib_sym_count_ = 0;
  * life of the page. */
 static int        stdlib_prime_tried_ = 0;
 
-/* Set by resolve_stdlib_root() in main.c before any subcommand runs. NULL if
+/* Set by the driver's resolve_stdlib_root() before any subcommand runs. NULL if
  * the stdlib could not be located, which disables the cache rather than
  * guessing. */
 static const char *stdlib_root(void) {
@@ -471,7 +471,7 @@ static void run_doc_analysis(LspDoc *doc, LspSink *sink) {
     /* 4. Run the compiler: collect symbols + locals + gather diagnostics.
      *
      * One compile answers both. The scope walk hangs off the same elaboration
-     * hook the symbol harvest does (see main.c), so bracketing it here is the
+     * hook the symbol harvest does (see tur_collect_symbols), so bracketing it here is the
      * whole of what it costs. */
     diag_reset();
     diag_init(false);

@@ -30,9 +30,9 @@ int fmt_print(Buf *buf, Form **forms, uint32_t count, FmtOptions opts);
  * on disk. `rtype` selects the dialect (the CLI derives it from the file
  * extension via reader_type_from_extension).
  *
- * Lives here rather than in main.c because the LSP's textDocument/formatting
- * handler needs it too, and the LSP is linked into tur_core -- which main.c is
- * not part of.
+ * Lives here rather than in the driver because the LSP's textDocument/formatting
+ * handler needs it too, and the LSP is linked into tur_core -- which the driver
+ * is not part of.
  *
  * On success returns 0 with *out populated (buf_init'd here; the caller frees
  * it). On failure returns -1 and *out is untouched -- do not free it. */

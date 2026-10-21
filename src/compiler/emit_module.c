@@ -12764,7 +12764,7 @@ static void emit_rt_tls(Buf *out, bool shared,
  * A third state on the DEDUP-3 switch rather than a new mechanism.  Resolved at
  * emit time, before codegen, because the emitted text depends on it; the probe
  * is a pure filesystem check so it can move ahead of the link step that
- * normally makes this decision (see apply_runtime_lib_mode in main.c).
+ * normally makes this decision (see the driver's apply_runtime_lib_mode).
  * ------------------------------------------------------------------------- */
 static bool g_rcgc_from_archive = false;
 
@@ -14605,7 +14605,7 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
      * subset shim mandatory for every program including `arith`.
      *
      * Keyed on __STDC_VERSION__ rather than swapped outright: the generated C is
-     * compiled `-std=c99` (see cc_flags in main.c), where `_Thread_local` is not
+     * compiled `-std=c99` (see cc_flags in cmd_build_once), where `_Thread_local` is not
      * a standard keyword.  gcc happens to accept it there anyway, but relying on
      * that across every supported cc buys nothing -- this way the cc path keeps
      * the exact spelling it has always used, and only a C11-or-later front end

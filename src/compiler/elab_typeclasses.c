@@ -8614,7 +8614,7 @@ static Expr *elab_method_call_impl(Elab *e, const Form *call) {
                     {
                         const char *opath = diag_file_path(inst->origin_file_id);
                         /* stdlib files always live directly under a dir ending
-                         * in "stdlib" (see resolve_stdlib_root in main.c), so the
+                         * in "stdlib" (see the driver's resolve_stdlib_root), so the
                          * path contains "stdlib/<basename>". The root may be
                          * relative ("stdlib/option.tur") or absolute, so match
                          * the "stdlib/" component without requiring a leading

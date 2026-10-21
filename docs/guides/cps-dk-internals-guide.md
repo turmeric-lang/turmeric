@@ -86,7 +86,7 @@ These look relevant but are **not** on the emitted path:
 
 ## Pipeline position
 
-The core passes are listed in `src/main.c:core_passes[]` and run by
+The core passes are listed in `src/driver/pipeline.c:core_passes[]` and run by
 `run_core_passes`. The CPS-related ones are:
 
 | Pass | What it actually does |
@@ -960,7 +960,7 @@ How they are produced and used:
   built into `libturt_preamble.a`, which the cc path links on Linux and
   Windows.
 - The JIT re-hashes the canonical text at use time
-  (`main.c:jit_try_split_preamble`) and falls back to the full preamble on a
+  (`driver/preamble_split.c:jit_try_split_preamble`) and falls back to the full preamble on a
   mismatch. CI checks that the split path actually engages.
 
 **A change to `emit_dk_runtime.c`, or to any preamble text, needs those files

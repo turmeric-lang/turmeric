@@ -425,7 +425,7 @@ static bool fmt_is_tur_file(const char *name) {
  * Returns 0 on success with *out populated, -1 on error.
  *
  * The pipeline itself lives in fmt.c so the LSP's textDocument/formatting
- * handler -- which is linked into tur_core, not into main.c -- can reach the
+ * handler -- which is linked into tur_core, not into the driver -- can reach the
  * same code instead of shelling out to this binary. */
 /* saffron-lang-plan S8 (formatter half): format a source that may carry a
  * `#lang` directive.
@@ -451,7 +451,7 @@ static bool fmt_is_tur_file(const char *name) {
 static int fmt_format_source(const char *path_label, const char *src, size_t len,
                               ReaderType rtype, Buf *out) {
     /* r7rs-lang-plan R9: the body moved to fmt.c (fmt_format_document) so the
-     * LSP's textDocument/formatting -- linked into tur_core, not main.c --
+     * LSP's textDocument/formatting -- linked into tur_core, not the driver --
      * formats a `#lang` document too; it handed the directive to the reader
      * and got a parse error, i.e. "no edits", for every `#lang` buffer. */
     return fmt_format_document(path_label, src, len, rtype, out);

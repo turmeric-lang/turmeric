@@ -1214,7 +1214,7 @@ static void list_print_wrapped(const char *first_pfx, const char *cont_pfx,
 
 int cmd_pkg_list(int argc, char **argv) {
     bool verbose   = false;
-    /* `--json` is a global flag (stripped from argv by main.c); honor it. */
+    /* `--json` is a global flag (stripped from argv by the driver); honor it. */
     bool as_json   = use_json_output;
     bool installed = false; /* --installed alias accepted, no-op */
     bool outdated  = false;

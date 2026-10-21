@@ -96,7 +96,7 @@ Related guides, not repeated here:
 | `src/turi/spice_loader.c` | Load a spice's AOT-compiled image into an env |
 | `src/turi/r7rs_embed.c` | The single embedded env behind R7RS `(scheme eval)` |
 | `src/turi/docstrings.c` | `doc` lookup natives |
-| `src/main.c` | `cmd_eval_h` (the `interpret`/`debug`/`dap`/`trace` entry), `run_delegate_engine` (`--engine interp`), `tur eval`, the forked `tur worker` |
+| `src/driver/` | `cmd_eval_h` (the `interpret`/`debug`/`dap`/`trace` entry) and `tur eval` (`cmd_eval.c`), `run_delegate_engine` (`--engine interp`, `cmd_run.c`), the forked `tur worker` (`worker.c`) |
 
 Two naming traps:
 
@@ -113,7 +113,7 @@ Two naming traps:
 
 | Entry | Path into the interpreter |
 |---|---|
-| `tur interpret f.tur` (also `--interpret`) | `main.c:cmd_eval_inc` -> `cmd_eval_h` |
+| `tur interpret f.tur` (also `--interpret`) | `driver/cmd_eval.c:cmd_eval_inc` -> `cmd_eval_h` |
 | `tur run --engine interp` (`TUR_ENGINE=interp`, `:engine "interp"`) | `run_delegate_engine` -> `cmd_eval_inc` |
 | `tur debug`, `tur dap`, `tur trace` | `cmd_eval_h` with `debug = true` and `EvalHooks` |
 | `tur repl` | `repl.c:turi_repl_run`, `repl_preload_stdlib_and_natives` |
@@ -121,7 +121,7 @@ Two naming traps:
 | libturi embedders | `turi_env_new` (or `_sandboxed`, `_with_natives`) then `turi_eval`/`turi_call` |
 | Macro time | `macro_env.c:elab_macro_env_get`, for `defmacro*` bodies |
 | R7RS `(scheme eval)` | `r7rs_embed.c`: one embedded env per process |
-| `tur worker` | `main.c:wk_eval_fixture`, a forked child per fixture, with its own narrower native set |
+| `tur worker` | `driver/worker.c:wk_eval_fixture`, a forked child per fixture, with its own narrower native set |
 
 ### What `cmd_eval_h` does
 
@@ -212,7 +212,7 @@ A turn:
 
 ### What the interpreter shares, and what it skips
 
-| Compiled stage (`main.c:core_passes[]`) | Under the interpreter |
+| Compiled stage (`driver/pipeline.c:core_passes[]`) | Under the interpreter |
 |---|---|
 | Reader, macro expander, `(load ...)` splicing | Same code |
 | `PASS_ELABORATE` | Same elaborator, session variant |
@@ -538,7 +538,8 @@ A native is `TuriValue fn(TuriEnv *, TuriValue *args, uint32_t n, void *ud)`.
 It receives already-evaluated arguments, which are often carriers
 (`TURI_INT` holding a pointer), and must return a fresh value.
 
-The families live in `tur_core`, never in `main.c`, so embedders and the
+The families live in `tur_core`, never in the driver (`src/main.c`,
+`src/driver/`), so embedders and the
 WASM build get them (see the parity guide's embedding rules):
 
 - `turi_env_new` registers async builtins, eval builtins
@@ -593,7 +594,7 @@ ways:
    `TUR_JIT` build, and `TUR_REPL_JIT_INLINE_C=0` turns it off). The defn's
    own source goes through the real emitter and MIR on its first call, and
    is called through its `__ffi` shim (`inline_c_jit.c`, hook installed from
-   `main.c`). User bindings only; never stdlib. An env without
+   `src/main.c`). User bindings only; never stdlib. An env without
    `TURI_CAP_INLINE_C` (the macro env, a sandbox) is refused before it, so
    macro expansion never compiles C.
 4. **`EX_INLINE_C` intercepts** in `eval_expr_impl`: the exact
@@ -832,7 +833,7 @@ in the process. Each has bitten someone.
   - `turi_eval_with_sink` sets it from `env->interpret_mode` for one call
     and restores it;
   - code that compiles **while an interpreter env exists** must bracket it:
-    save, set `false`, compile, restore. `main.c` does this around
+    save, set `false`, compile, restore. `driver/jit.c` does this around
     `compile_to_c` for the JIT REPL and the inline-C JIT build, and
     `macro_env.c` does it around `turi_env_new`.
 - **`g_turi_stdlib_preload`** stamps definitions as stdlib-owned while it is
@@ -881,7 +882,7 @@ header still says nothing calls into it beyond creation; in fact
   top-level program).
 - **`tur dap`** (`dap.c`): the same debugger behind the pause-handler API in
   `eval.h` (`turi_debug_set_pause_handler`, `turi_debug_frame_at`, ...).
-  `main.c:dap_launch_cb` builds the env through `cmd_eval_h`.
+  `driver/cmd_eval.c:dap_launch_cb` builds the env through `cmd_eval_h`.
 - **`tur trace`** (`trace.c`): a recorder built on the pause handler and
   `resume_step_node`. It records per-node binding deltas into a byte buffer.
 - **`(break)`** is a builtin: a no-op without a debugger.
@@ -922,7 +923,7 @@ header still says nothing calls into it beyond creation; in fact
 **A native for an inline-C stdlib function:**
 
 1. Write it in `src/turi/interpreter_natives.c` (or `collections_native.c`
-   or `string_native.c`). Never in `main.c`.
+   or `string_native.c`). Never in the driver (`src/main.c`, `src/driver/`).
 2. Register it in the right `wk_register_*_natives`, under the exact
    Turmeric name. An instance method uses its mangled `__inst_...` name.
 3. Add a row to `native_caps.c` for its capability and, if it takes or

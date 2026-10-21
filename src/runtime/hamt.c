@@ -29,7 +29,7 @@
 
 /* The store-side region note.  A TUR_REGIONS=0 program pastes no region
  * runtime, so when `tur build` compiles this file from source for one it
- * passes -DTUR_REGIONS=0 (main.c, autolink_regions_off) and the note compiles
+ * passes -DTUR_REGIONS=0 (the driver's autolink_regions_off) and the note compiles
  * away, exactly as the program's own TUR_REGION_NOTE does.  Every archive
  * build carries region.o beside this file and keeps the call. */
 #if defined(TUR_REGIONS) && TUR_REGIONS == 0

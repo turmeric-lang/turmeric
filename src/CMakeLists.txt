@@ -151,7 +151,7 @@ set(TURI_EVAL_SOURCES
     # lives in turi/jit_ffi.c inside tur_jit_obj (JIT builds only).
     turi/jit_ffi_hook.c
     # aot-compiled-repl-plan C1: compile an inline-C defn the interpreter
-    # cannot run, through a host hook (main.c registers it on a JIT build).
+    # cannot run, through a host hook (the driver registers it on a JIT build).
     # MIR-free, like jit_ffi_hook.c.
     turi/inline_c_jit.c
 )
@@ -174,7 +174,7 @@ set(TUR_INCLUDE_DIRS
 )
 
 # ---------------------------------------------------------------------------
-# Compiler sources (all except main.c and turi eval core)
+# Compiler sources (all except the driver and turi eval core)
 # ---------------------------------------------------------------------------
 set(TUR_CORE_SOURCES
     # compiler/ -- frontend pipeline: text -> IR
@@ -323,7 +323,7 @@ set(TUR_CORE_SOURCES
     # ...and its declarations image (tur_rt_split_hash / tur_rt_split_decls).
     # This used to live in tur_jit_obj under `if(TUR_JIT)`, on the stated
     # grounds that "non-JIT builds never read it".  `--runtime=split` made the
-    # CC PATH read it, which broke that premise: main.c's jit_try_split_preamble
+    # CC PATH read it, which broke that premise: the driver's jit_try_split_preamble
     # is called from cmd_build, and a non-JIT build then failed with
     # `jit_try_split_preamble used but never defined [-Werror]` -- invisible in
     # any -DTUR_JIT=ON tree, which is every tree it was developed in.
@@ -602,7 +602,7 @@ if(TUR_JIT)
   # $<TARGET_OBJECTS:> carries objects only -- no usage requirements, no
   # transitive link -- so each consumer states the engine's needs itself.
   target_sources(tur PRIVATE $<TARGET_OBJECTS:tur_jit_obj>)
-  # main.c's cmd_jit is compiled into `tur` directly, so it needs the define
+  # The driver's cmd_jit is compiled into `tur` directly, so it needs the define
   # on its own target -- it does not inherit tur_jit_obj's.
   target_compile_definitions(tur PRIVATE TUR_HAVE_JIT=1)
   target_link_libraries(tur PRIVATE tur_mir)
@@ -622,7 +622,7 @@ if(TUR_JIT)
   endif()
 endif()
 
-# tur also needs the subsystem subdirs on the include path for main.c.
+# tur also needs the subsystem subdirs on the include path for the driver.
 target_include_directories(tur PRIVATE ${TUR_INCLUDE_DIRS})
 
 # Common warning flags
@@ -658,7 +658,7 @@ if(HAVE_EDITLINE)
     target_compile_definitions(tur PRIVATE TURI_HAVE_EDITLINE=1)
 endif()
 
-# E2: inject version into tur executable (main.c reads TUR_VERSION)
+# E2: inject version into tur executable (the driver reads TUR_VERSION)
 target_compile_definitions(tur PRIVATE TUR_VERSION="${_TUR_VERSION_STR}")
 
 
@@ -738,7 +738,7 @@ endif()
 #
 # Compile flags mirror the default `tur build` cc_flags (-O2 -std=c99
 # -fno-strict-aliasing, plus the -fwrapv every emitted-C compile carries --
-# TUR_EMITTED_C_CC_FLAGS in main.c) so the objects are ABI-identical to a
+# TUR_EMITTED_C_CC_FLAGS in driver/driver.h) so the objects are ABI-identical to a
 # bare-source compile; no -Werror so a stray warning here never fails the
 # archive build.
 # DEDUP-4b (gc-cycle-collection-plan): rc/gc/rc_free_queue join the archive so a
@@ -1786,7 +1786,7 @@ set_target_properties(tur_docscanner_unit PROPERTIES
 # ---------------------------------------------------------------------------
 # LSP session unit test (try-turmeric-lsp-plan, §4)
 #
-# Links tur_core -- which is everything except main.c -- and supplies its own
+# Links tur_core -- which is everything except the driver -- and supplies its own
 # tur_collect_symbols. That is not a workaround for the link: it is the point.
 # A fixed stub index makes completion ordering, path remapping, and last-good
 # retention assertable, where the real compiler would tie every assertion to
@@ -1822,7 +1822,7 @@ set_target_properties(tur_lsp_session_unit PROPERTIES
 # ---------------------------------------------------------------------------
 # WASM LSP analysis-backend test (try-turmeric-lsp-plan, L0)
 #
-# src/web/wasm_lsp.c is the front end the browser uses in place of main.c's
+# src/web/wasm_lsp.c is the front end the browser uses in place of the driver's
 # compile_to_c.  Nothing in it is actually wasm-specific -- the Emscripten
 # build differs only in where the stdlib is mounted, which is a TUR_STDLIB_DIR
 # lookup -- so it runs here against the in-tree stdlib and the real compiler.
@@ -1994,7 +1994,7 @@ set(WASM_GLUE_SOURCES
     web/tutorial.c
     # try-turmeric-lsp-plan: the LSP bridge, plus the WASM-side analysis
     # backend.  tur_core carries the whole server already; what it does not
-    # carry is tur_collect_symbols, which lives in main.c (a CLI, and not part
+    # carry is tur_collect_symbols, which lives in the driver (a CLI, and not part
     # of this source set).  Nothing referenced the server, so wasm-ld collected
     # it away and the dangling reference never surfaced -- exporting an entry
     # point makes it live, and this file is what resolves it.

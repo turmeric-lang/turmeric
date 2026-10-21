@@ -166,7 +166,7 @@ static const char *resolve_turmeric_root(char *out, size_t cap) {
  * back C:\dir\sub -- so a walk-up that steps with strrchr(p, '/') alone finds
  * no separator, stops on its first iteration, and reports "not found" for the
  * entire platform.  Three loops below had that bug independently; this is the
- * one place to fix it in main.c (two of those loops now live in
+ * one place to fix it in the driver (two of those loops now live in
  * src/compiler/spice_search.c, whose ss_last_path_sep is the same split).
  *
  * Fourth instance of the class, after find_stdlib_beside_exe,

@@ -1,11 +1,16 @@
 # Split `src/main.c` into `src/driver/`
 
-> **Status:** draft, 2026-10-17. Not started. **Opportunistic, off the v1
-> critical path:** each phase stands alone and leaves the tree better than it
-> found it, so the work can stop after any step. Do a step when you are
-> already working in that part of `main.c`, not as a project that blocks
-> anything. Not experiment-gated: this is a build and tooling refactor, which
-> CLAUDE.md's experimental-flags rule excludes. Measurements are from `main`
+> **Status:** done, 2026-10-21 (branch `claude/main-c-split`). Every phase
+> landed. `src/main.c` is the entry point only (~190 lines); the driver is 16
+> files under `src/driver/`, declared through `driver.h` and `commands.h` and
+> checked by `tests/check-driver-headers.py`. Dispatch reads one command table
+> (`COMMANDS[]`) and one global-flag table (`GLOBAL_FLAGS[]`) in
+> `driver/cli.c`, pinned by the `tests/run-flags.sh` goldens. Where the work
+> departed from the text below: `run_delegate_engine` went to `cmd_run.c`, its
+> only caller, since its interpreter branch is not JIT-only; and Phase 4
+> changed two outputs, both stated in its commit (the completion scripts now
+> list every command, and `tur check --dump-refine=json` prints beside
+> `tur check` in `--help`). The original plan follows, measured on `main`
 > 9ac3cd43.
 
 ## Why
@@ -29,7 +34,7 @@ functions:
 The size has a cost beyond scrolling:
 
 - **Comments drift from what they describe.**
-  [stale-comments-build-driver](../archive/stale-comments-build-driver.md)
+  [stale-comments-build-driver](stale-comments-build-driver.md)
   found a doc comment on a forward declaration 40 lines from its definition,
   which contradicts the definition's own comment. It also found a "how to add
   a pass" recipe that misses one of the four places it has to name.
@@ -169,7 +174,7 @@ then be pointed at `emit_internal.h`.
 These are small, independent changes. Each one makes the later moves cleaner.
 
 - Land the `main.c` items of
-  [stale-comments-build-driver](../archive/stale-comments-build-driver.md):
+  [stale-comments-build-driver](stale-comments-build-driver.md):
   - the comment fixes (items 1-3, 7, 8, 10, 11);
   - `begin_compile_unit()` for the three identical reset sequences (item 12);
   - deleting the two dead `needs_hamt` fields (item 9).
@@ -291,14 +296,14 @@ moves one file at a time, at a quiet moment, and say so in the PR so open
 branches can merge `main` promptly. Open plans whose next steps touch
 `main.c`:
 
-- [cc-path-preamble-split-plan](cc-path-preamble-split-plan.md): the macOS
+- [cc-path-preamble-split-plan](../upcoming/cc-path-preamble-split-plan.md): the macOS
   flip, in `preamble_split_auto_applies`;
-- [profiling-plan](profiling-plan.md);
-- [security-audit-plan](security-audit-plan.md);
-- [aot-compiled-repl-plan](aot-compiled-repl-plan.md): REPL JIT;
-- [wasm-spices-plan](wasm-spices-plan.md);
-- [ffi-spices-integration-plan](ffi-spices-integration-plan.md);
-- [windows-remaining-plan](windows-remaining-plan.md).
+- [profiling-plan](../upcoming/profiling-plan.md);
+- [security-audit-plan](../upcoming/security-audit-plan.md);
+- [aot-compiled-repl-plan](../upcoming/aot-compiled-repl-plan.md): REPL JIT;
+- [wasm-spices-plan](../upcoming/wasm-spices-plan.md);
+- [ffi-spices-integration-plan](../upcoming/ffi-spices-integration-plan.md);
+- [windows-remaining-plan](../upcoming/windows-remaining-plan.md).
 
 Prefer moving a region right after such a plan's step lands, not while one is
 in flight.

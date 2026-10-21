@@ -3,7 +3,7 @@
 
 `tur build` scans the C it generated for `/* __tur_include__: LINE */` markers
 and prepends each LINE at file scope (hoist_tur_include_directives in
-src/main.c): preprocessor directives first, then code payloads such as
+src/driver/cc.c): preprocessor directives first, then code payloads such as
 httpd's `HttpdConn` typedef, each bucket in source order, behind a
 `#define _DEFAULT_SOURCE 1`.  `tur emit-c` prints the C before that step, so a
 fuzz harness that #includes emitted C for a module with markers

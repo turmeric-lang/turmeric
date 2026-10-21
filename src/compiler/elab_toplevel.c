@@ -1068,7 +1068,7 @@ static Expr *elab_form_impl(Elab *e, Form *f) {
 }
 
 /* LS2: file-scope holder for the active workspace-resolver context. Set
- * by main.c around its compile_to_c invocation; read here when Elab is
+ * by the driver around its compile_to_c invocation; read here when Elab is
  * initialized. Stays NULL outside that scope (REPL, eval, etc.), so the
  * warning machinery is a no-op for those paths. Single-threaded usage. */
 static const Ls2ResolverCtx *g_ls2_resolver_ctx;
@@ -1082,7 +1082,7 @@ const Ls2ResolverCtx *ls2_resolver_ctx_active(void) {
 }
 
 /* used-attr-whole-program: file-scope holder for the active force-load list,
- * mirroring the LS2 context above.  Set by main.c around compile_to_c; read
+ * mirroring the LS2 context above.  Set by the driver around compile_to_c; read
  * after the main elaboration pass to retain unimported #[used] modules.
  * Single-threaded usage. */
 static const UsedModulesCtx *g_used_modules_ctx;
@@ -1374,7 +1374,7 @@ static void load_expand_forms(LoadExpandCtx *lx, Elab *e, Arena *arena,
              * Finding 3): a freestanding `/tmp/foo.tur` that does
              * `(load "stdlib/math.tur")` cannot find the file cwd-relative when
              * run from outside the repo. `import` already falls back to the
-             * resolved stdlib root (TUR_STDLIB_DIR, set absolute by main.c's
+             * resolved stdlib root (TUR_STDLIB_DIR, set absolute by the driver's
              * resolve_stdlib_root); mirror that here so the load-line the
              * "unknown function" hint suggests actually resolves off-tree.
              *
@@ -1419,7 +1419,7 @@ static void load_expand_forms(LoadExpandCtx *lx, Elab *e, Arena *arena,
          * first line is `#lang turmeric/sweet` handed sweet source to the plain
          * reader and died on the directive itself ("unexpected character '#'").
          * Run the same detect_lang sweep the entry file gets
-         * (resolve_reader_type in main.c) so the directive is both honoured and
+         * (the driver's detect_and_adjust_lang) so the directive is both honoured and
          * stripped.  Extension still wins for the base when it selected a
          * non-default reader -- the directive is then a redundant hint. */
         {
@@ -2988,7 +2988,7 @@ Expr *elaborate_program_session(Arena *arena, SymbolTable *st,
     }
     e.module_include_dirs   = include_dirs;
     e.n_module_include_dirs = n_include_dirs;
-    /* LS2: pull workspace-resolution context published by main.c around
+    /* LS2: pull workspace-resolution context published by the driver around
      * the compile_to_c call (NULL outside that path -- the warning code
      * then silently no-ops). */
     {
@@ -3006,7 +3006,7 @@ Expr *elaborate_program_session(Arena *arena, SymbolTable *st,
 
     int rc = 0;
 
-    /* Seed the load-visited set with the auto-loaded stdlib files. main.c
+    /* Seed the load-visited set with the auto-loaded stdlib files. The driver
      * pre-splices the stdlib forms[0..stdlib_prefix) directly (not as `(load
      * ...)` forms), so they never pass through the dedup below. Registering
      * their canonical paths here makes a later explicit `(load

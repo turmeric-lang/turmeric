@@ -1787,7 +1787,7 @@ bool adt_ctor_is_null_none(const AdtDef *def, const CtorDef *ctor) {
  * wrong answer -- and R5 held it at prototype on one blocker, the boundary
  * form.  With `with-region` landed, the static walk widened across four pinned
  * batches, and the three R4 residues closed, the default flipped.  `TUR_REGIONS=0`
- * is the bisection hatch (read once in main.c): it restores plain malloc at
+ * is the bisection hatch (read once by the driver): it restores plain malloc at
  * the four routed ctor sites, no bracket around bt-scope / with-region, and no
  * atexit shutdown -- byte-for-byte the pre-graduation default build.
  * tests/run-regions-seam.sh keeps THAT path green (inverted at graduation, per
@@ -1838,7 +1838,7 @@ static bool sr3_option_niche(void) {
      * and changes no emitted byte there. */
     if (!g_sr2_app_sum_byvalue) return false;
     /* Graduated 2026-09-03: default-on, no lifecycle warning.  The global is
-     * only ever cleared by TUR_OPTION_NICHE=0 (main.c), the bisection hatch. */
+     * only ever cleared by TUR_OPTION_NICHE=0 (the driver), the bisection hatch. */
     return g_opt_option_niche;
 }
 
@@ -4529,7 +4529,7 @@ bool type_is_byvalue_adt_product(Type t) {
  * GRADUATED 2026-08-27 out of `--enable=parametric-sum-byvalue`: the row's
  * soak existed so the representation would not be fixed against SR2b, and
  * SR2b has landed (in-tree and across the spices).  `TUR_SR2_APP_SUM_BYVALUE=0`
- * is the bisection escape hatch, read once in main.c the way SR1's is. */
+ * is the bisection escape hatch, read once by the driver the way SR1's is. */
 static bool sr2_app_sum_byvalue(void) {
     return g_sr2_app_sum_byvalue;
 }
