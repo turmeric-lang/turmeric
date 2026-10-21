@@ -3567,6 +3567,22 @@ Span diag_translate_span(Span span) {
     return span;
 }
 
+/* `span` with the line and columns it has in the file the user wrote.  A
+ * sweet-exp file's spans index the transformed text, whose columns are not
+ * the user's, so every position a diagnostic REPORTS -- the stderr header,
+ * the JSON, the LSP range, the embed sink -- goes through here
+ * (sweet-exp-diagnostic-columns-not-translated).  The offsets are left
+ * alone: render_snippet_ex maps them itself, against the original text. */
+static Span diag_user_pos(Span span) {
+    const SourceFile *f = span.file_id < MAX_FILES ? files_[span.file_id] : NULL;
+    if (!f || !f->xform_map || !f->orig_src || span.line == 0) return span;
+    Span t = diag_translate_span(span);
+    span.line      = t.line;
+    span.col_start = t.col_start;
+    span.col_end   = t.col_end;
+    return span;
+}
+
 /* Render a multi-line snippet with context, underlines, and colors.
    Phase 8: Enhanced with configurable options and multi-span support. */
 static void render_snippet_ex(const SourceFile *f, Span span, const SnippetOpts *opts) {
@@ -3759,6 +3775,7 @@ DiagSinkFn diag_get_sink(void **out_ud) {
 static bool diag_sink_dispatch(DiagLevel level, DiagCode code, Span span,
                                const char *msg) {
     if (!diag_sink_fn_) return false;
+    span = diag_user_pos(span);
     const SourceFile *f = (span.file_id < MAX_FILES) ? files_[span.file_id] : NULL;
     const char *path = (f && f->path) ? f->path : "";
     const char *code_str = diag_code_to_string(code);
@@ -3769,6 +3786,7 @@ static bool diag_sink_dispatch(DiagLevel level, DiagCode code, Span span,
 }
 
 static void lsp_append(DiagLevel level, DiagCode code, Span span, const char *msg) {
+    span = diag_user_pos(span);
     if (lsp_entry_count_ >= lsp_entry_cap_) {
         lsp_entry_cap_ = lsp_entry_cap_ ? lsp_entry_cap_ * 2 : 32;
         lsp_entries_ = realloc(lsp_entries_, lsp_entry_cap_ * sizeof(DiagLspEntry));
@@ -4068,7 +4086,8 @@ void diag_emitv(DiagLevel level, Span span, const char *fmt, va_list ap) {
     const char *reset = use_color_ ? COLOR_RESET : "";
     
     /* Phase 8: Rust-style diagnostics with --> pointing to file */
-    fprintf(stderr, "%s%s:%u:%u: %s%s: ", color, path, span.line, span.col_start, level_name(level), reset);
+    Span at = diag_user_pos(span);
+    fprintf(stderr, "%s%s:%u:%u: %s%s: ", color, path, at.line, at.col_start, level_name(level), reset);
     {
         char msg[4096];
         vsnprintf(msg, sizeof(msg), fmt, ap);
@@ -4140,10 +4159,11 @@ void diag_emit_with_code(DiagLevel level, Span span, DiagCode code, const char *
     va_list ap;
     va_start(ap, fmt);
     
+    Span at = diag_user_pos(span);
     if (code != DIAG_CODE_NONE) {
-        fprintf(stderr, "%s%s:%u:%u: %s [%s]%s: ", color, path, span.line, span.col_start, level_name(level), code_str, reset);
+        fprintf(stderr, "%s%s:%u:%u: %s [%s]%s: ", color, path, at.line, at.col_start, level_name(level), code_str, reset);
     } else {
-        fprintf(stderr, "%s%s:%u:%u: %s%s: ", color, path, span.line, span.col_start, level_name(level), reset);
+        fprintf(stderr, "%s%s:%u:%u: %s%s: ", color, path, at.line, at.col_start, level_name(level), reset);
     }
     {
         char msg[4096];
@@ -4199,7 +4219,8 @@ void diag_emit_with_notes(DiagLevel level, Span span, const char *message,
     const char *reset = use_color_ ? COLOR_RESET : "";
     
     /* Print primary error */
-    fprintf(stderr, "%s%s:%u:%u: %s%s: %s\n", color, path, span.line, span.col_start, level_name(level), reset, message);
+    Span at = diag_user_pos(span);
+    fprintf(stderr, "%s%s:%u:%u: %s%s: %s\n", color, path, at.line, at.col_start, level_name(level), reset, message);
 
     /* Print primary snippet */
     if (f && span.off_start <= f->len) {
@@ -4212,9 +4233,10 @@ void diag_emit_with_notes(DiagLevel level, Span span, const char *message,
         if (notes[i].span.file_id < MAX_FILES) note_f = files_[notes[i].span.file_id];
         const char *note_path = note_f ? note_f->path : "<unknown>";
         const char *note_color = color_for_level(notes[i].level);
-        
-        fprintf(stderr, "%s%s:%u:%u: %s%s: %s\n", note_color, note_path, 
-                notes[i].span.line, notes[i].span.col_start,
+        Span note_at = diag_user_pos(notes[i].span);
+
+        fprintf(stderr, "%s%s:%u:%u: %s%s: %s\n", note_color, note_path,
+                note_at.line, note_at.col_start,
                 level_name(notes[i].level), reset, notes[i].message);
         
         if (note_f && notes[i].span.off_start <= note_f->len) {
@@ -4274,13 +4296,14 @@ void diag_emit_with_suggestion_code(DiagLevel level, Span span, DiagCode code,
     const char *help_color = use_color_ ? COLOR_GREEN : "";
     
     /* Print primary error */
+    Span at = diag_user_pos(span);
     if (code != DIAG_CODE_NONE)
-        fprintf(stderr, "%s%s:%u:%u: %s [%s]%s: %s\n", color, path, span.line,
-                span.col_start, level_name(level), diag_code_to_string(code),
+        fprintf(stderr, "%s%s:%u:%u: %s [%s]%s: %s\n", color, path, at.line,
+                at.col_start, level_name(level), diag_code_to_string(code),
                 reset, message);
     else
-        fprintf(stderr, "%s%s:%u:%u: %s%s: %s\n", color, path, span.line,
-                span.col_start, level_name(level), reset, message);
+        fprintf(stderr, "%s%s:%u:%u: %s%s: %s\n", color, path, at.line,
+                at.col_start, level_name(level), reset, message);
 
     /* Print snippet */
     if (f && span.off_start <= f->len) {
@@ -4289,16 +4312,16 @@ void diag_emit_with_suggestion_code(DiagLevel level, Span span, DiagCode code,
     
     /* Print suggestion */
     if (suggestion && suggestion->text) {
-        fprintf(stderr, "%s%s:%u:%u: %s%s: %s\n", help_color, path, span.line, span.col_start,
+        fprintf(stderr, "%s%s:%u:%u: %s%s: %s\n", help_color, path, at.line, at.col_start,
                 level_name(DIAG_HELP), reset, suggestion->text);
         
         if (suggestion->replacement) {
-            fprintf(stderr, "%s%s:%u:%u: %s%s: try: %s\n", help_color, path, span.line, span.col_start,
+            fprintf(stderr, "%s%s:%u:%u: %s%s: try: %s\n", help_color, path, at.line, at.col_start,
                     level_name(DIAG_HELP), reset, suggestion->replacement);
         }
         
         if (suggestion->doc_url) {
-            fprintf(stderr, "%s%s:%u:%u: %s%s: see: %s\n", help_color, path, span.line, span.col_start,
+            fprintf(stderr, "%s%s:%u:%u: %s%s: see: %s\n", help_color, path, at.line, at.col_start,
                     level_name(DIAG_HELP), reset, suggestion->doc_url);
         }
     }
@@ -4346,7 +4369,8 @@ void diag_emit_multi_span(DiagLevel level, const char *message,
     const char *reset = use_color_ ? COLOR_RESET : "";
     
     /* Print primary error with label */
-    fprintf(stderr, "%s%s:%u:%u: %s%s: %s\n", color, path, primary_span.line, primary_span.col_start,
+    Span at = diag_user_pos(primary_span);
+    fprintf(stderr, "%s%s:%u:%u: %s%s: %s\n", color, path, at.line, at.col_start,
             level_name(level), reset, message);
     
     /* Print primary snippet with label */
@@ -4361,8 +4385,8 @@ void diag_emit_multi_span(DiagLevel level, const char *message,
             uint32_t temp = primary_span.line + opts.context_lines;
             while (temp >= 10) { line_num_width++; temp /= 10; }
             
-            fprintf(stderr, "%*s | %*s%s%s\n", line_num_width, "", 
-                    (int)(primary_span.col_start - 1), "", color, primary_label);
+            fprintf(stderr, "%*s | %*s%s%s\n", line_num_width, "",
+                    (int)(at.col_start - 1), "", color, primary_label);
             fprintf(stderr, "%s", reset);
         }
     }
@@ -4373,9 +4397,10 @@ void diag_emit_multi_span(DiagLevel level, const char *message,
         if (secondary_spans[i].file_id < MAX_FILES) sec_f = files_[secondary_spans[i].file_id];
         const char *sec_path = sec_f ? sec_f->path : "<unknown>";
         const char *note_color = color_for_level(DIAG_NOTE);
-        
+        Span sec_at = diag_user_pos(secondary_spans[i]);
+
         fprintf(stderr, "%s%s:%u:%u: %s%s: %s\n", note_color, sec_path,
-                secondary_spans[i].line, secondary_spans[i].col_start,
+                sec_at.line, sec_at.col_start,
                 level_name(DIAG_NOTE), reset, secondary_labels ? secondary_labels[i] : "");
         
         if (sec_f && secondary_spans[i].off_start <= sec_f->len) {
@@ -4470,6 +4495,7 @@ static void json_escape_string(Buf *b, const char *s) {
 
 /* Emit a diagnostic in JSON format */
 void diag_emit_json(DiagLevel level, Span span, DiagCode code, const char *message) {
+    span = diag_user_pos(span);
     const SourceFile *f = NULL;
     if (span.file_id < MAX_FILES) f = files_[span.file_id];
     const char *file = f ? f->path : "<unknown>";

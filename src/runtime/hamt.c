@@ -27,6 +27,17 @@
 #define realloc tur_rt_realloc
 #define free    tur_rt_free
 
+/* The store-side region note.  A TUR_REGIONS=0 program pastes no region
+ * runtime, so when `tur build` compiles this file from source for one it
+ * passes -DTUR_REGIONS=0 (main.c, autolink_regions_off) and the note compiles
+ * away, exactly as the program's own TUR_REGION_NOTE does.  Every archive
+ * build carries region.o beside this file and keeps the call. */
+#if defined(TUR_REGIONS) && TUR_REGIONS == 0
+#define hamt_region_note(w) ((void)(w))
+#else
+#define hamt_region_note(w) tur_region_note_escape(w)
+#endif
+
 /* ============================================================================
  * xxHash64 - Minimal implementation for HAMT
  * ============================================================================
@@ -1133,13 +1144,15 @@ Hamt *tur_hamt_set(Hamt *m, uint64_t hash, void *key, void *val) {
      * region.c sits beside it in every library that carries hamt.c, and a
      * program that pastes its own region.c defines the symbol before the
      * archive is searched.  With no generation open on this thread (every
-     * TUR_REGIONS=0 program) the note returns at its first compare.  Every
+     * TUR_REGIONS=0 program linking an archive) the note returns at its first
+     * compare; compiled from source for one, it is compiled away
+     * (hamt_region_note, above).  Every
      * persistent setter funnels through here; the transient one
      * (tur_hamt_transient_set) reaches node_insert on its own and carries the
      * same two notes.  Those are the places a key or value word enters HAMT
      * memory -- malloc'd, and outliving any bracket the insert ran inside. */
-    tur_region_note_escape(key);
-    tur_region_note_escape(val);
+    hamt_region_note(key);
+    hamt_region_note(val);
     /* A NULL base means "the empty map".  We need a real one to read count /
      * key_ops / val_ops off, but it is OURS, not the caller's -- so it has to
      * be freed again before returning the derived map, or every insert into a
@@ -2065,8 +2078,8 @@ void tur_hamt_transient_set(HamtTransient *t, uint64_t hash, void *key, void *va
      * entry takes `ptr<void>` words, so a node reached here through an
      * explicit erasure that was already noted -- this is the host-runtime
      * half, for a caller that did not come through one (security-audit WP5). */
-    tur_region_note_escape(key);
-    tur_region_note_escape(val);
+    hamt_region_note(key);
+    hamt_region_note(val);
 
     /* In place: t owns its root, so node_insert_mut takes that reference and
      * hands back the root to keep, copying only nodes still shared with the

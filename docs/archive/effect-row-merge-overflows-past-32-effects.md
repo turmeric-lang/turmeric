@@ -48,4 +48,4 @@ loop over them.
 The fixture performs 40 effects from one function and discards each result.
 The repro's shape -- summing them -- now type-checks, but running it needs a
 continuation that captures more than 16 values, which is a separate limit:
-[cps-continuation-past-16-captures-loses-its-env](../reported/cps-continuation-past-16-captures-loses-its-env.md).
+[cps-continuation-past-16-captures-loses-its-env](cps-continuation-past-16-captures-loses-its-env.md) (since fixed).

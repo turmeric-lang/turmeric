@@ -37,7 +37,8 @@ the [LSP guide](lsp-guide.md).
    then routes the message to exactly one sink: LSP collection, an embedder's
    sink, JSON, or the terminal.
 4. **Spans index the text the reader saw.** For a sweet-exp file that is the
-   transformed text. Only the terminal snippet translates back. Macro
+   transformed text. Every reported position is translated back
+   (`diag_user_pos`), and the snippet maps the offsets itself. Macro
    templates keep the defmacro's spans, so the elaborator adds a note, and
    the LSP re-anchors the error on the macro call.
 5. **`diag_had_error()` is the stage gate.** Each driver stage checks it and
@@ -303,27 +304,34 @@ user's text in `orig_src`, and a `SweetMap` of verbatim runs in `xform_map`.
 `head_offset` counts the bytes of a stripped `#lang` line. The transform
 keeps line numbers, but not columns.
 
-There are two translators:
+There are three translators:
 
 - `diag.c:render_snippet_ex` maps the span through the `SweetMap` and draws
   the excerpt from `orig_src`. The caret is right.
 - `diag.c:diag_translate_span` does the same and adds `head_offset`. The LSP
   symbol and scope tables use it (`lsp_scope.c`).
+- `diag.c:diag_user_pos` keeps the span's offsets and takes only the line and
+  columns `diag_translate_span` computes. Every position that leaves
+  `diag.c` goes through it: the `path:line:col` header of each `diag_emit*`
+  entry point (with its notes, suggestions and secondary spans), the LSP
+  entry (`lsp_append`), the embed-sink record and the `--json-diagnostics`
+  record. A span is never translated at the entry point itself, because the
+  snippet renderer would then map its offsets a second time.
 
-**Nothing else translates.** The `path:line:col` header, the JSON record,
-the LSP entry and the embed-sink record all use the raw span. In a
-sweet-exp file their column can differ from the caret:
+So the header and the caret agree:
 
 ```
-sweet.tur:3:15: error [TUR-E0001]: '+' arg 2: type mismatch - expected int, got cstr
+sweet.tur:3:14: error [TUR-E0001]: '+' arg 2: type mismatch - expected int, got cstr
 1 |
 2 | defn main [] : int
 3 |   let [x +(1 "x")]
   |              ^^^
 ```
 
-The string starts at column 14, where the caret is. The header, JSON
-(`"col": 15`) and LSP (`"character": 14`, 0-based) all say 15.
+Until 2026-10-21 only the snippet translated, and the header, JSON and LSP
+all said column 15
+([sweet-exp-diagnostic-columns-not-translated](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/sweet-exp-diagnostic-columns-not-translated.md);
+pinned by `errors/sweet-diagnostic-column`).
 
 ### Macro expansion
 
@@ -692,7 +700,8 @@ Each was reproduced against the compiler this guide describes and filed in
 [`docs/reported/`](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/README.md). When one is fixed and archived,
 update the passage above that describes it and drop it from this list.
 
-- [sweet-exp-diagnostic-columns-not-translated](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/sweet-exp-diagnostic-columns-not-translated.md) -- Diagnostics in sweet-exp files report columns of the transformed text
+None open. [sweet-exp-diagnostic-columns-not-translated](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/sweet-exp-diagnostic-columns-not-translated.md)
+was fixed 2026-10-21.
 
 ## Maintenance
 

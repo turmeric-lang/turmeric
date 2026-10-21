@@ -1,0 +1,7 @@
+;; defdynamic-refuses-payload-free-defdata: a `defdata` none of whose
+;; constructors carries a field is admitted as a dynamic var's type (see the
+;; defdynamic-payload-free-defdata fixture).  One constructor with a payload
+;; makes it move-only for real, and it is still refused.
+(defdata Msg (Quiet) (Say cstr))
+(defdynamic *msg* :Msg (Quiet))
+(defn main [] : int 0)
