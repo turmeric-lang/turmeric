@@ -440,6 +440,13 @@ wrong record is TUR-E0001 (`errors/wrong-data-record.tur`).
 - Pixels: only the five histogram / rectangle scenes and
   `categorical-mixed` (whose rule took the next auto color) change.
 
+**Done (legend readability, 2026-10-21, same branch):** the legend is
+measured before it is drawn (`__legend-size`: rows and the widest label, via
+`plutovg_canvas_text_extents`) and sits on a translucent white box
+(`__legend-box`). Knowing its size fixed bottom legends, which grew down out
+of the plot, and long right-hand labels, which ran off its edge; and
+`legend-pos` 0 now means no legend, as documented (the frame read it as 1).
+
 **Remaining (follow-ups, not in this plan's acceptance):**
 - `plot-anyrenderers` is a deprecated alias of `plot`, kept for one
   release.
