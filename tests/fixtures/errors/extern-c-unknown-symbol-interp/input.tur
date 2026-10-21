@@ -1,0 +1,7 @@
+;; module-and-ffi-forms-gaps 3: under --interpret an extern-c name that is
+;; not a C symbol in the process used to be called as if it returned 0.  The
+;; call now fails naming it (compiled, the program does not link).
+(extern-c nosuchfn_xyz [^int] :int)
+(defn main [] : int
+  (println (nosuchfn_xyz 1))
+  0)

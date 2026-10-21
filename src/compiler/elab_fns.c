@@ -14853,7 +14853,26 @@ Expr *elab_extern_c(Elab *e, const Form *call) {
     /* A#1: ^fat marks the next extern-c parameter as a fat-closure consumer. */
     bool next_param_fat = false;
 
+    /* `[^]` is c-integration-guide's spelling of an empty parameter list (a
+     * nullary function, or a C global read as `(stderr)`), the same as `[]`.
+     * It used to declare one `int` parameter named `^`.  A lone `^` beside
+     * other parameters means nothing. */
     for (uint32_t i = 0; i < params_f->as.list.len; i++) {
+        Form *p = params_f->as.list.items[i];
+        if (p->tag == F_SYM && p->as.sym->len == 1 && p->as.sym->name[0] == '^' &&
+            params_f->as.list.len != 1) {
+            diag_emit(DIAG_ERROR, p->span,
+                      "extern-c: a lone `^` declares an empty parameter list "
+                      "and must be the only item: write `[^]` or `[]`");
+            return NULL;
+        }
+    }
+    bool caret_empty = params_f->as.list.len == 1 &&
+                       params_f->as.list.items[0]->tag == F_SYM &&
+                       params_f->as.list.items[0]->as.sym->len == 1 &&
+                       params_f->as.list.items[0]->as.sym->name[0] == '^';
+
+    for (uint32_t i = 0; !caret_empty && i < params_f->as.list.len; i++) {
         Form *p = params_f->as.list.items[i];
         /* A#1: ^fat annotation applies to the next parameter.  Intercept before
          * the generic ^ctype handling below (which would misparse "fat"). */
@@ -14914,22 +14933,41 @@ Expr *elab_extern_c(Elab *e, const Form *call) {
 
         /* Handle ^type prefix: ^int, ^ptr<void>, etc.
          * When a symbol starts with '^', the rest is a C type annotation and the
-         * NEXT symbol in the vector is the parameter name. */
+         * NEXT symbol in the vector is the parameter name.  The type name is
+         * read as the `:type` keyword form reads it (typekind_from_symbol plus
+         * the same legacy names), so `^float` is a double: an unknown name
+         * used to default to `int`, and `(extern-c sqrt [^float] :float)`
+         * passed `(sqrt 4)` in an integer register.  `^ptr<T>` is a pointer
+         * of any pointee, as `:ptr` is.  Anything else is an error. */
         if (p->as.sym->len > 1 && p->as.sym->name[0] == '^') {
             const char *tname = p->as.sym->name + 1;
             size_t tlen = p->as.sym->len - 1;
-            TypeKind ck;
-            if (tlen == 3 && memcmp(tname, "int", 3) == 0) ck = TY_INT;
-            else if (tlen == 4 && memcmp(tname, "bool", 4) == 0) ck = TY_BOOL;
-            else if (tlen == 4 && memcmp(tname, "cstr", 4) == 0) ck = TY_CSTR;
-            else if (tlen == 3 && memcmp(tname, "ptr", 3) == 0) ck = TY_PTR_VOID;
-            else if (tlen == 9 && memcmp(tname, "ptr<void>", 9) == 0) ck = TY_PTR_VOID;
-            else if (tlen == 4 && memcmp(tname, "void", 4) == 0) ck = TY_NIL;
-            else ck = TY_INT; /* unknown ^type: default to int */
-            /* Peek at next element to get the param name */
+            TypeKind ck = typekind_from_symbol(tname);
+            if (ck == TY_UNKNOWN) {
+                if (tlen == 4 && memcmp(tname, "void", 4) == 0) ck = TY_NIL;
+                else if (tlen > 5 && memcmp(tname, "ptr<", 4) == 0 &&
+                         tname[tlen - 1] == '>') ck = TY_PTR_VOID;
+                else {
+                    diag_emit(DIAG_ERROR, p->span,
+                              "extern-c: unknown parameter type `^%s` -- the "
+                              "shorthand takes the type names `:type` does "
+                              "(^int, ^float, ^int32, ^cstr, ^ptr, ...)", tname);
+                    return NULL;
+                }
+            }
+            /* Peek at next element to get the param name.  Another `^type`
+             * starts the next parameter, so this one is anonymous: stdlib
+             * io.tur's `(extern-c fopen [^cstr ^cstr] :ptr)` declared ONE
+             * `cstr` parameter named `^cstr`. */
+            const Form *peek = (i + 1 < params_f->as.list.len)
+                ? params_f->as.list.items[i + 1] : NULL;
+            bool next_is_caret = peek && peek->tag == F_SYM &&
+                                 peek->as.sym->len > 1 &&
+                                 peek->as.sym->name[0] == '^';
             i++;
-            if (i >= params_f->as.list.len) {
-                /* ^type at end with no following name — create anonymous param */
+            if (i >= params_f->as.list.len || next_is_caret) {
+                if (next_is_caret) i--;  /* re-read it as the next parameter */
+                /* ^type with no following name — create anonymous param */
                 if (n_params == 0) {
                     params = (Binding **)arena_alloc(e->arena, pcap * sizeof(Binding *));
                 }
@@ -14937,8 +14975,9 @@ Expr *elab_extern_c(Elab *e, const Form *call) {
                 /* Use the ^type symbol itself as a placeholder name */
                 Binding *b = binding_new(e, p->as.sym, type_from_kind(ck), false, false, p->span);
                 b->is_param = true;
+                b->is_fat = next_param_fat; next_param_fat = false;
                 params[n_params++] = b;
-                break;
+                continue;
             }
             Form *name_f = params_f->as.list.items[i];
             if (name_f->tag != F_SYM) {

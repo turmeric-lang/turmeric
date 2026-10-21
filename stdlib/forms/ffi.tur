@@ -29,14 +29,13 @@
 ;;; `(printf "n=%lld\n" 7)`.
 ;;;
 ;;; The older shorthand, `(extern-c fopen [^cstr ^cstr] :ptr)`, is common in the
-;;; stdlib and works for `^cstr`, `^ptr` and `^int`, but it does not understand
-;;; every type: `(extern-c sqrt [^float] :float)` declares an integer parameter, so
-;;; `(sqrt 4)` compiles and returns garbage, and `[^]` for no arguments makes a
-;;; function of one (docs/reported/module-and-ffi-forms-gaps.md). Write the named
-;;; form. A symbol that is not in libc or a linked library is a linker error
-;;; when compiled; under `--interpret` it needs a JIT build, and an unknown name is
-;;; called as if it returned 0. Libraries beyond libc are linked with `-l` or a
-;;; spice's `:cmake-deps`.
+;;; stdlib: each `^type` is a parameter, optionally followed by its name
+;;; (`[^cstr path ^cstr mode]`), and takes the type names the named form does
+;;; (`^float`, `^int32`, `^ptr`, ...); an unknown one is an error. `[^]`, like
+;;; `[]`, is an empty parameter list. A symbol that is not in libc or a linked
+;;; library is a linker error when compiled; under `--interpret` it needs a JIT
+;;; build, and calling an unknown name is an error naming it. Libraries beyond
+;;; libc are linked with `-l` or a spice's `:cmake-deps`.
 ;;;
 ;;; Parameters:
 ;;;   name   -- the C function or global's name

@@ -1,0 +1,2 @@
+;; Loaded by lib/mid.tur as "helper.tur": beside the file that loads it.
+(defn helper-val [] : int 41)

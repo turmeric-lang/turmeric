@@ -1,0 +1,20 @@
+;; module-and-ffi-forms-gaps 1-2: the `^type` shorthand reads the type name
+;; as `:type` does, a `^type` followed by another `^type` is an anonymous
+;; parameter, and `[^]` is an empty parameter list.  `[^float]` used to
+;; declare an int parameter (sqrt of 2.25 was a type error, of 4 garbage),
+;; `[^float ^float]` ONE parameter named `^float`, and `[^]` a function of
+;; one int.
+(extern-c sqrt [^float] :float)
+(extern-c fmax [^float ^float] :float)
+(extern-c fopen [^cstr ^cstr] :ptr)
+(extern-c fclose [^ptr] :int32)
+(extern-c abs [^int32 n] :int32)
+(extern-c getpid [^] :int32)
+(defn main [] : int
+  (println (sqrt 2.25))
+  (println (fmax 1.5 7.25))
+  (println (as int (abs (as int32 -7))))
+  (println (>= (as int (getpid)) 1))
+  (let [f (fopen "/dev/null" "r")]
+    (println (as int (fclose f))))
+  0)

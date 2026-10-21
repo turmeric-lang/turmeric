@@ -814,6 +814,27 @@ static TuriValue native_nil_stub(TuriEnv *env, TuriValue *args, uint32_t n,
     return turi_nil();
 }
 
+/* An extern-c declaration the interpreter has no implementation for.  It
+ * used to be the nil stub above, so a misspelt C name answered 0 and the
+ * program carried on; compiled, the same program is a link error.  The
+ * declaration itself stays legal (an unused one links fine compiled too), and
+ * the CALL fails, naming the symbol and why.  `ud` is a malloc'd message the
+ * env frees at teardown. */
+static TuriValue native_extern_unavailable(TuriEnv *env, TuriValue *args,
+                                           uint32_t n, void *ud) {
+    (void)env; (void)args; (void)n;
+    return turi_errorf("%s", (const char *)ud);
+}
+
+static void register_extern_c_unavailable(TuriEnv *env, const char *fname,
+                                          const char *c_name, const char *why) {
+    size_t need = strlen(c_name) + strlen(why) + 64;
+    char *msg = (char *)malloc(need);
+    if (!msg) { turi_env_register_native(env, fname, native_nil_stub, NULL); return; }
+    snprintf(msg, need, "extern-c '%s': %s", c_name, why);
+    turi_env_register_native_ex(env, fname, native_extern_unavailable, msg, free);
+}
+
 /* Native stubs for well-known libc functions declared via extern-c. */
 static TuriValue native_extern_exit(TuriEnv *env, TuriValue *args, uint32_t n, void *ud) {
     (void)env; (void)ud;
@@ -1256,6 +1277,7 @@ static void register_extern_c_binding(TuriEnv *env, const ExternC *ec,
                                       const char *fname) {
     if (register_extern_c_known(env, fname)) return;
 
+    const char *c_name = (ec && ec->c_name) ? ec->c_name->name : fname;
     const TurJitFfiProvider *jp = tur_jit_ffi_provider();
     if (jp && ec && !ec->is_variadic) {
         /* F4 follow-on: a signature with a by-value aggregate slot takes
@@ -1265,7 +1287,9 @@ static void register_extern_c_binding(TuriEnv *env, const ExternC *ec,
             if (extern_slot_agg_def(ec->param_types[i])) any_agg = true;
         if (any_agg) {
             if (register_extern_c_agg(env, ec, fname) == 0) return;
-            turi_env_register_native(env, fname, native_nil_stub, NULL);
+            register_extern_c_unavailable(env, fname, c_name,
+                "the interpreter cannot call it -- no C symbol of that name in "
+                "this process, or a by-value aggregate its FFI cannot lay out");
             return;
         }
         /* Classify the declared signature.  A '?' anywhere (ADT, carrier)
@@ -1286,8 +1310,7 @@ static void register_extern_c_binding(TuriEnv *env, const ExternC *ec,
          * (ENABLE_EXPORTS) plus anything dlopened RTLD_GLOBAL.  A symbol
          * from a lib the process never linked needs an explicit dlopen (or
          * jit autolink) first -- documented resolution order. */
-        void *fn = ok ? jp->resolve(ec->c_name ? ec->c_name->name : fname)
-                      : NULL;
+        void *fn = ok ? jp->resolve(c_name) : NULL;
         if (fn) {
             int rc = tur_ffi_register_extern_thunk(env, fname, fn, ret,
                                                    classes, n);
@@ -1295,6 +1318,13 @@ static void register_extern_c_binding(TuriEnv *env, const ExternC *ec,
             if (rc == 0) return;
         } else if (classes != inl) {
             free(classes);
+        }
+        if (ok && !fn) {
+            register_extern_c_unavailable(env, fname, c_name,
+                "no C symbol of that name in this process -- check the "
+                "spelling, or dlopen the library that defines it first "
+                "(compiled, this is a link error)");
+            return;
         }
     }
 

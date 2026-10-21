@@ -108,17 +108,17 @@
 ;;; or directly in a `defmodule` (`load is only valid at the top level or directly
 ;;; in a defmodule body`). A path beginning `stdlib/` is the standard library, found
 ;;; from any directory: `(load "stdlib/equal.tur")`, which lets a program use a
-;;; module that is not loaded by default. Any other path is relative to the
-;;; directory you run `tur` from, not to the file that contains the `load`, so
-;;; the same program can find `helper.tur` from one directory and fail with
-;;; `load: cannot open 'helper.tur'` from another. In a module body a stdlib file is
+;;; module that is not loaded by default. Any other relative path is looked for
+;;; beside the file that contains the `load` first, as an `import` is, and then
+;;; relative to the directory you run `tur` from, so `(load "helper.tur")` finds
+;;; the file next to the program from any directory. In a module body a stdlib file is
 ;;; spliced at file scope, ahead of the module, and shared by every module that
 ;;; loads it; another file is spliced into the module, so its definitions become
 ;;; the module's and can be exported. Prefer `import` for code you want to name
 ;;; and hide; `load` is for flat helper files and the stdlib.
 ;;;
 ;;; Parameters:
-;;;   path -- a string: `stdlib/...`, or a file relative to the working directory
+;;;   path -- a string: `stdlib/...`, or a file beside this one (or under the working directory)
 ;;;
 ;;; Example:
 ;;;   (load "stdlib/equal.tur")
