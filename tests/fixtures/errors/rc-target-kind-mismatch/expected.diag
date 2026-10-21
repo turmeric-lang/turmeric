@@ -1,0 +1,1 @@
+function 'takes' arg 1: expected rc<int>, got rc<float>

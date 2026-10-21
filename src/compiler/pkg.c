@@ -1271,7 +1271,17 @@ bool pkg_manifest_read_status(const char *path, PkgManifest *out,
                                ":link-flags", false, vf->span);
                 check_link_vec(out->c_flags, out->n_c_flags,
                                ":c-flags", false, vf->span);
-                out->no_stdlib = form_bool_val(nf);
+                /* build-opts-c-flags-never-consumed: no build path has ever
+                 * read :no-stdlib, so a project that set it got the stdlib
+                 * anyway, silently.  Refuse it until it means something;
+                 * `false` (the documented default) stays accepted. */
+                if (nf && !(nf->tag == F_BOOL && !nf->as.b)) {
+                    diag_emit(DIAG_ERROR, nf->span,
+                              "build.tur: :build-opts :no-stdlib is not "
+                              "implemented -- every build auto-loads the "
+                              "stdlib.\n"
+                              "  Remove the key (or write `:no-stdlib false`).");
+                }
                 /* spices-c-sources-plan: validate vendored sources/includes
                  * against the manifest directory (the dir holding build.tur). */
                 char mdir[4096];
@@ -1548,7 +1558,7 @@ bool pkg_manifest_write(const char *path, const PkgManifest *m) {
     }
 
     if (m->n_c_flags > 0 || m->n_link_libs > 0 || m->n_link_flags > 0 ||
-        m->no_stdlib || m->n_c_sources > 0 || m->n_c_includes > 0) {
+        m->n_c_sources > 0 || m->n_c_includes > 0) {
         fprintf(f, "\n  :build-opts #{\n");
         if (m->n_c_flags > 0) {
             fprintf(f, "    :c-flags [");
@@ -1590,7 +1600,6 @@ bool pkg_manifest_write(const char *path, const PkgManifest *m) {
             }
             fprintf(f, "]\n");
         }
-        if (m->no_stdlib) fprintf(f, "    :no-stdlib true\n");
         fprintf(f, "  }\n");
     }
 

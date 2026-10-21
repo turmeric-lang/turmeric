@@ -1180,6 +1180,17 @@ add_test(
   COMMAND bash tests/run-result-typedef-multi-module.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# forced-spec-loses-aggregate-type: a module calls another module's generic
+# at the owner's by-value struct.  The owner emits that specialization for the
+# caller, and rebuilt the struct from its TypeKind alone as the int64_t
+# carrier, so the caller's TU did not compile.  Separate compilation only, so
+# the pin builds a bare directory.  See
+# docs/archive/forced-spec-loses-aggregate-type.md.
+add_test(
+  NAME tur_forced_spec_aggregate
+  COMMAND bash tests/run-forced-spec-aggregate.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
 # any-type-ids-are-per-tu: an `any` box id used to be this TU's intern INDEX,
 # so two translation units numbered the same type differently and a value
 # widened in one module was misidentified in another (type-of, is?, cast, and

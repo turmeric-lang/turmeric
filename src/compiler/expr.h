@@ -713,6 +713,13 @@ struct Binding {
      * obligation instead of being an opaque term. */
     const struct Form  *refine_return_pred;
     const char         *refine_return_var;
+    /* refine-top-level-def-not-a-fact: for an immutable top-level `def` whose
+     * initializer is a literal or a constructor term over literals, that
+     * initializer.  A non-`^mut` global cannot be `set!`, so `name = init`
+     * holds wherever the name resolves to this binding, and a crossing whose
+     * argument names it asserts that equation (refine_resolve_call_sites).
+     * NULL for everything else. */
+    const struct Form  *refine_def_init;
     /* RT1: for a typeclass INSTANCE method that restated its own result
      * refinement, the CLASS's promise -- checked in addition to its own, and
      * only when `instance_pred |- class_pred` was not actually PROVED.
