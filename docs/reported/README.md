@@ -34,6 +34,13 @@ sentence above does not cover them. If you touch this file, check
 `ls docs/reported/` against it -- an index that silently omits a quarter of the
 directory is worse for triage than no index.
 
+## Found typing tur-plot's renderer kinds (filed 2026-10-21)
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [fn-param-stored-in-struct-field-miscompiles](fn-param-stored-in-struct-field-miscompiles.md) | low-medium | `(defn mk [f : (fn [float] float)] : F (make-struct F f))` type-checks and cc rejects it (`aggregate value used where an integer was expected`): a non-`^fat` fn param is the two-word `tur_poly_fn_t` carrier, and the constructor field sink casts it to `int64_t` instead of boxing it with `EX_POLY_TO_FAT` as a type-variable slot does. `^fat f` works around it. |
+| [letrec-struct-arg-and-env-leak](letrec-struct-arg-and-env-leak.md) | low-medium | A by-value struct argument to a `letrec` closure is malloc-boxed at the call and never freed (per iteration when the self-call is not a loop), and a `letrec` whose body opens a captured existential and takes a struct argument never drops its env. Found by LeakSanitizer in tur-plot's folds, which are now top-level `defn`s. |
+
 ## Found writing the typeclass API docs (filed 2026-10-19)
 
 | Report | Severity | One line |
