@@ -85,9 +85,7 @@ int cmd_experiments(int argc, char **argv);
 int cmd_dialects(int argc, char **argv);
 int cmd_explain(const char *code);
 
-/* == main.c ================================================================ */
-
-/* -- moving to driver/cli.c -- */
+/* == driver/cli.c ========================================================== */
 int usage_build(void);
 int usage_run(void);
 int usage_expand(void);

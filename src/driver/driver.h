@@ -274,9 +274,7 @@ extern const TuriInlineCJitHook g_repl_inline_c_jit_hook;
 /* == driver/cmd_format.c =================================================== */
 bool fmt_reader_from_lang_name(const char *lang, ReaderType *out);
 
-/* == main.c ================================================================ */
-
-/* -- moving to driver/cli.c -- */
+/* == driver/cli.c ========================================================== */
 extern bool g_no_auto_spice;
 extern bool g_no_auto_stdlib;
 extern bool g_no_abi_cache;

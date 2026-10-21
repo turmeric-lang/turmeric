@@ -545,6 +545,7 @@ target_compile_definitions(tur_core PRIVATE TUR_VERSION="${_TUR_VERSION_STR}")
 # file it names.
 set(TUR_DRIVER_SOURCES
   driver/cc.c
+  driver/cli.c
   driver/cmd_build.c
   driver/cmd_emit.c
   driver/cmd_eval.c
