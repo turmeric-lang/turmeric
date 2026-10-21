@@ -251,6 +251,11 @@ struct Binding {
      * handle's result type -- or NULL when unknown (elab_make_resume falls
      * back to the resume value's type). */
     const Type   *cont_result_type;
+    /* The kind the effect operation this continuation answers declares as its
+     * result -- what a resume must hand back (elab_make_resume checks the
+     * value against it).  Meaningful only when cont_op_result_set. */
+    TypeKind      cont_op_result_kind;
+    bool          cont_op_result_set;
     /* Phase M1: Module visibility */
     bool          is_exported;          /* listed in module's (export ...) */
     /* G3 (mutable-globals-plan §4.3): this

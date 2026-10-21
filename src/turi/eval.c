@@ -3579,6 +3579,13 @@ struct TuriEffectCont {
     /* result when body finishes */
     TuriValue          body_result;
     bool               done;
+    /* A one-shot work-stack continuation has been resumed: its TuriWsCont is
+     * freed at the resume, so the fact lives here, where `(cont? k)` and a
+     * second resume can still read it. */
+    bool               oneshot_resumed;
+    /* Any resume has run (one-shot or not): what `(cont? k)` reports for a
+     * continuation that is not ^multishot. */
+    bool               resumed;
 
     /* context for body evaluation (set before first swapcontext) */
     TuriEnv           *env;
@@ -3675,6 +3682,7 @@ static TuriValue eval_resume_cont(TuriEnv *env, EvalFrame *frame,
                           "TURI_TRACE_FIBER_FALLBACK=1 to see which form was "
                           "responsible");
     cont->resume_val = val;
+    cont->resumed = true;
 
     /* Re-install the handler frame around the body re-entry for a DEEP handler,
      * so a subsequent perform of the same effect in the resumed body is caught
@@ -3819,6 +3827,9 @@ static TuriValue eval_perform_fiber(TuriEnv *env, const char *effect_name,
     cont->perf_name   = effect_name;
     cont->perf_args   = args;
     cont->n_perf_args = n_args;
+    /* One struct serves every perform of a deep handler; each perform hands the
+     * clause a fresh, unresumed k (effect-deep-handler). */
+    cont->resumed = false;
 #if defined(__APPLE__)
 #  pragma clang diagnostic push
 #  pragma clang diagnostic ignored "-Wdeprecated-declarations"
@@ -10907,6 +10918,11 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                     cur = eval_resume_cont(env, rcf, k.as_cont, v);  /* fiber cont */
                     break;
                 }
+                k.as_cont->resumed = true;
+                if (k.as_cont->oneshot_resumed) {
+                    cur = turi_error("eval: resume: a one-shot continuation was resumed twice");
+                    break;
+                }
                 TuriWsCont *wc = k.as_cont->ws;
                 if (wc->oneshot && wc->consumed) {
                     cur = turi_error("eval: resume: a one-shot continuation was resumed twice");
@@ -10951,6 +10967,7 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                     env->in_no_unwind   = wc->perf_no_unwind;
                     env->defer_stack    = wc->perf_defer;
                     wc->consumed = true;
+                    k.as_cont->oneshot_resumed = true;
                     if (wc->case_frame == rcf) frame_release(env, rcf);
                     free(wc->frames);
                     free(wc->kval);
@@ -13460,32 +13477,21 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
         return eval_resume_cont(env, frame, k.as_cont, val);
     }
 
-    /* (discontinue k exception) — abort the body with an error. */
+    /* (discontinue k exception) -- not supported.  It used to store an error in
+     * the continuation and swapcontext() from the HANDLER's stack to the body's
+     * saved context, which is not a resume (the body was never suspended at a
+     * perform on this path): the process died with "stack smashing detected".
+     * Report it as the compiled backend does. */
     case EX_DISCONTINUE: {
         DiscontinueExpr *de = e->as.discontinue_.discontinue;
-        TuriValue k = eval_expr(env, frame, de->k);
-        if (turi_is_error(k) || env_signaled(env)) return k;
-        TuriValue exc = eval_expr(env, frame, de->exception);
-        if (turi_is_error(exc) || env_signaled(env)) return exc;
-
-        if (k.tag != TURI_EFFECT_CONT)
-            return turi_error("eval: discontinue: not a continuation");
-
-        TuriEffectCont *cont = k.as_cont;
-        cont->body_result = turi_is_error(exc)
-                            ? exc
-                            : turi_errorf("eval: discontinue: %s",
-                                          exc.tag == TURI_CSTR ? exc.as_cstr : "exception");
-        cont->done = true;
-#if defined(__APPLE__)
-#  pragma clang diagnostic push
-#  pragma clang diagnostic ignored "-Wdeprecated-declarations"
-#endif
-        swapcontext(&cont->body_ctx, &cont->handler_ctx);
-#if defined(__APPLE__)
-#  pragma clang diagnostic pop
-#endif
-        return turi_nil(); /* unreachable from caller's perspective */
+        if (de) {
+            TuriValue exc = eval_expr(env, frame, de->exception);
+            if (turi_is_error(exc) || env_signaled(env)) return exc;
+        }
+        return turi_error("eval: discontinue is not supported: neither the compiler "
+                          "nor the interpreter can raise at the perform. To end the "
+                          "handled body early, leave the clause without resuming k; "
+                          "for a failure the caller sees, return a Result from the clause");
     }
 
     /* (cont? k) — true if k is an unconsumed continuation. */
@@ -13503,7 +13509,14 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
             if (kt->as.cont.flavor == CONT_CLONEABLE || kt->as.cont.flavor == CONT_SERIAL)
                 return turi_bool(k.as_int != 0);
         }
-        return turi_bool(k.tag == TURI_EFFECT_CONT && k.as_cont != NULL);
+        /* `(cont? k)`: can k still be invoked?  A one-shot continuation is
+         * spent by its resume, as the compiled `cont?` reports (it answered true
+         * here, so `(if (cont? k) r -1)` took the other branch). */
+        if (k.tag != TURI_EFFECT_CONT || !k.as_cont) return turi_bool(false);
+        if (k.as_cont->oneshot_resumed) return turi_bool(false);
+        /* A `^multishot` k stays invocable after a resume; any other is spent. */
+        if (k.as_cont->resumed && kt->copy_kind != CK_MULTISHOT) return turi_bool(false);
+        return turi_bool(true);
     }
 
     /* --- Phase S5: inline-C is not executable in the tree-walk eval ------- */

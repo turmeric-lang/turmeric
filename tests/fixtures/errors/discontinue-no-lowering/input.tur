@@ -1,0 +1,6 @@
+;;; `discontinue` is not lowered by the compiled backend; say so at the form
+;;; rather than blaming the `perform` it would have raised at.
+(defeffect Ask [] : int)
+(defn main [] : int
+  (handle (+ 1 (perform (Ask))) (Ask [] k) (do (discontinue k "boom") 0))
+  0)

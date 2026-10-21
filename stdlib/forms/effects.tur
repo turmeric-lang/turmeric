@@ -24,7 +24,7 @@
 ;;; leaves its supported subset -- one whose body uses `discontinue`, say -- is
 ;;; rejected with `this effect operation has no lowering here`;
 ;;; `TUR_TRACE_EVICT=1` names the form that caused it. The interpreter has no such
-;;; limit. Several of the forms below differ between the two or are unfinished --
+;;; limit. A few forms below are unfinished or differ between the two --
 ;;; see docs/reported/effect-forms-gaps.md.
 ;; Reference only: tools/gendocs.py reads the ;;@ lines, the compiler skips them.
 
@@ -102,11 +102,8 @@
 ;;; and the typing rules are those of `handle`. Because the body can still
 ;;; perform the effect after the handler has gone, `handle-shallow` does not
 ;;; remove the effect from the enclosing function's declared row: a function
-;;; declared `#fx{}` that handles only shallowly is TUR-E0009.
-;;;
-;;; Compiled, a `handle-shallow` statement at the top level of a file is
-;;; rejected (`no lowering here`) although the same `handle` is accepted; put it
-;;; in a function.
+;;; declared `#fx{}` that handles only shallowly is TUR-E0009. At the top level
+;;; of a file a `handle-shallow` statement works like a `handle` one.
 ;;;
 ;;; Parameters:
 ;;;   body   -- the expression to run
@@ -142,9 +139,10 @@
 ;;; explores two answers (the standard way to write search and backtracking).
 ;;; `^linear` demands exactly one resume or `discontinue` on every path. A
 ;;; `^multishot` continuation cannot be resumed inside `atomically` (TUR-E0502).
-;;; Not checked: the value is not compared with the effect's declared result
-;;; type, so `(resume k "x")` for an effect that answers `int` compiles and
-;;; delivers the string's address as an integer.
+;;; The value must be of the effect's declared result type: `(resume k "x")` for
+;;; an effect that answers `int` is TUR-E0001. (Only the scalar types are
+;;; compared: integers, floats, bool and cstr; a `nil`-result effect takes any
+;;; filler, as in `(resume k 0)`.)
 ;;;
 ;;; Parameters:
 ;;;   k     -- the continuation bound by the handler clause
@@ -166,9 +164,9 @@
 ;;; instead of returning a value, so that the body's cleanup runs. It is typed
 ;;; `nil`, so a `handle` whose clause is a bare `discontinue` must itself be of
 ;;; type `nil` (TUR-E0252 otherwise). Not usable today: the compiled program
-;;; rejects any function that contains it (`unsupported form: EX_DISCONTINUE`
-;;; under `TUR_TRACE_EVICT=1`, then `no lowering here`), and the interpreter
-;;; aborts with `*** stack smashing detected ***`. To end the body early, leave
+;;; rejects any function that contains it (a located error naming `discontinue`,
+;;; beside the `no lowering here` one on the `perform`), and the interpreter
+;;; stops with `discontinue is not supported`. To end the body early, leave
 ;;; the clause without resuming it; for a failure the caller sees, return a
 ;;; `Result` from the clause. Like `resume`, it consumes the continuation, so
 ;;; using `k` afterwards is TUR-E0201 (TUR-E0101 for a `^linear` one), and it
@@ -185,9 +183,7 @@
 ;;; by its expression, with the same typing, `resume` and `^multishot` rules. The
 ;;; name is there for readers who know it from OCaml, and for async code, where
 ;;; `(try-with (await (fetch-file path)) (FileError [p] k) (resume k default))` reads as an
-;;; exception handler (async-await-guide). Compiled, a `try-with` statement at the
-;;; top level of a file is rejected (`no lowering here`) although `handle` there
-;;; is accepted; inside a function it behaves like `handle`.
+;;; exception handler (async-await-guide).
 ;;;
 ;;; Parameters:
 ;;;   body   -- the expression to run
@@ -218,8 +214,7 @@
 ;;; `(with-handler (handler ...) body)` with a literal handler removes the effect
 ;;; from the enclosing function's row like `handle`; a handler held in a variable
 ;;; removes nothing, so a function declared `#fx{}` that applies a variable
-;;; handler is TUR-E0009. Compiled, a `with-handler` statement at the top level of
-;;; a file is rejected (`no lowering here`); inside a function it works.
+;;; handler is TUR-E0009.
 ;;;
 ;;; Parameters:
 ;;;   handler -- a handler value
@@ -242,14 +237,14 @@
 ;;;
 ;;; `(compose-handlers h1 h2)` is a handler that handles what either does; both
 ;;; arguments must be handler values (`first argument must be a handler value`
-;;; otherwise). They must handle different effects: an effect in both is
-;;; TUR-E0251. The design (first-class-handlers-semantics) says
-;;; `(with-handler (compose-handlers h1 h2) body)` means
-;;; `(with-handler h1 (with-handler h2 body))`, h1 outermost. Today that holds only
-;;; while no clause performs an effect the other handler answers: a clause of one
-;;; handler that performs an effect of the other aborts as unhandled, whichever
-;;; way round they are composed and on both engines, where the nested form works.
-;;; Nest `with-handler`s when one handler's clauses need the other.
+;;; otherwise). They must handle different effects: an effect in both is;;; TUR-E0251. `(with-handler (compose-handlers h1 h2) body)` means
+;;; `(with-handler h1 (with-handler h2 body))`, h1 outermost (first-class-handlers-
+;;; semantics): a clause of h2 may perform an effect h1 answers, not the other
+;;; way round. That is how it runs when the composed arguments are `handler`
+;;; literals (written in place, nested to any depth). A composed handler built
+;;; earlier and held in a variable is still one flat table, where a clause that
+;;; performs an effect of its sibling aborts as unhandled; nest `with-handler`s
+;;; for that.
 ;;;
 ;;; Parameters:
 ;;;   h1 -- a handler value
@@ -274,11 +269,11 @@
 ;;; before it is resumed, an escape continuation while its `call/cc` is still on
 ;;; the stack, and a cloneable or serial continuation always, since those can be
 ;;; invoked repeatedly. Anything that is not a continuation -- `5` -- gives false.
-;;; Compiled, a handler's `k` is false once it has been resumed, even a
-;;; `^multishot` one, so it cannot guard a second `resume`; the interpreter still
-;;; answers true after a resume, and calling `cont?` on a `^multishot`
-;;; continuation between two `resume`s makes the second one fail with `this
-;;; continuation has already been resumed`. Use it before the first use.
+;;; A handler's `k` is false once it has been resumed, on both engines. That
+;;; includes a `^multishot` one compiled, so it cannot guard a second `resume`
+;;; there; interpreted, a `^multishot` clause that calls `cont?` between two
+;;; `resume`s fails the second with `this continuation has already been
+;;; resumed`. Use it before the first use.
 ;;;
 ;;; Parameters:
 ;;;   k -- a continuation, or any value

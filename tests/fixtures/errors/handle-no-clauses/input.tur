@@ -1,0 +1,5 @@
+;;; A `handle` with no clauses handles nothing.  The interpreter ran it as its
+;;; body; the compiled backend said it had no lowering.
+(defn main [] : int
+  (handle 5)
+  0)

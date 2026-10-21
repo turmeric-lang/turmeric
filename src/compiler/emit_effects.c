@@ -119,7 +119,7 @@ typedef struct { EmitCtx *ctx; int n; } HandlePerformWalk;
 
 static bool handle_report_performs(const Expr *c, void *ud) {
     HandlePerformWalk *w = (HandlePerformWalk *)ud;
-    if (c->kind == EX_PERFORM || c->kind == EX_WITH_HANDLER) {
+    if (c->kind == EX_PERFORM || c->kind == EX_WITH_HANDLER || c->kind == EX_DISCONTINUE) {
         Buf scratch; buf_init(&scratch);
         free(emit_value(w->ctx, &scratch, c));
         buf_free(&scratch);
@@ -570,22 +570,18 @@ char *emit_effects_resume(EmitCtx *ctx, Buf *body, const Expr *e) {
 }
 
 char *emit_effects_discontinue(EmitCtx *ctx, Buf *body, const Expr *e) {
-    /* (discontinue k exception) - discontinue with exception.
-     * Phase 19D: mark fiber as done and throw the exception.
-     */
-    if (e->as.discontinue_.discontinue) {
-        char *k_var = emit_value(ctx, body, e->as.discontinue_.discontinue->k);
-        if (e->as.discontinue_.discontinue->k->type.kind == TY_INT) {
-            indent_buf(body, ctx->indent);
-            buf_printf(body, "((FiberBlock*)(intptr_t)%s)->done = 1;\n", k_var);
-        }
-        free(k_var);
-        char *e_var = emit_value(ctx, body, e->as.discontinue_.discontinue->exception);
-        (void)e_var;  /* exception payload evaluated for side effects; discontinue aborts */
-        free(e_var);
-        indent_buf(body, ctx->indent);
-        buf_puts(body, "abort();\n");
-    }
+    /* (discontinue k exception): the fiber lowering that marked the fiber done
+     * and abort()ed is gone, and the CPS backend has no rule for it
+     * (`BODY-UNSUPPORTED EX_DISCONTINUE`), so every function holding one is
+     * evicted and the build used to fail with a message about the `perform`.
+     * Name the form that is the cause. */
+    (void)ctx; (void)body;
+    diag_emit(DIAG_ERROR, e->span,
+              "`discontinue` has no lowering in the compiled backend yet: the "
+              "CPS backend cannot raise at the `perform`. To end the handled "
+              "body early, leave the clause without resuming `k`; for a failure "
+              "the caller sees, return a `Result` from the clause. "
+              "(The interpreter does not run `discontinue` either.)");
     return atom_nil();
 }
 

@@ -1,0 +1,28 @@
+;;; `(with-handler (compose-handlers h1 h2) body)` is
+;;; `(with-handler h1 (with-handler h2 body))`, h1 outermost
+;;; (first-class-handlers-semantics FH0.1), so a clause of h2 may perform an
+;;; effect h1 answers.  The flat table the composed value lowered to made that
+;;; `unhandled effect`.
+(defeffect Ask [] : int)
+(defeffect Log [msg : cstr] : nil)
+
+(defn run [] : int
+  (with-handler
+    (compose-handlers (handler (Log [m] k) (do (println m) (resume k nil)))
+                      (handler (Ask [] k) (do (perform (Log "asked")) (resume k 41))))
+    (+ 1 (perform (Ask)))))
+
+;; Three levels: Tell is outermost, Log in the middle, Ask innermost.
+(defeffect Tell [n : int] : nil)
+(defn run3 [] : int
+  (with-handler
+    (compose-handlers
+      (compose-handlers (handler (Tell [n] k) (do (println n) (resume k nil)))
+                        (handler (Log [m] k) (do (perform (Tell 7)) (println m) (resume k nil))))
+      (handler (Ask [] k) (do (perform (Log "asked")) (resume k 41))))
+    (+ 1 (perform (Ask)))))
+
+(defn main [] : int
+  (println (run))
+  (println (run3))
+  0)

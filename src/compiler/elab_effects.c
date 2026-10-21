@@ -2351,6 +2351,15 @@ static Expr *elab_handle_impl(Elab *e, const Form *call, bool shallow) {
                   "handle expects pairs of (case-header body)");
         return NULL;
     }
+    /* `(handle 5)` handles nothing: the interpreter ran it as `5` and the
+     * compiled backend reported a missing lowering, a message about itself for
+     * a malformed form. */
+    if (n_case_forms == 0U) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "handle needs at least one clause after the body: "
+                  "(handle body (Effect [params] k) clause-body ...)");
+        return NULL;
+    }
 
     uint8_t n_cases = (uint8_t)(n_case_forms / 2);
     HandleCase *cases = arena_alloc(e->arena, n_cases * sizeof(HandleCase));
@@ -2560,6 +2569,10 @@ static Expr *elab_handle_impl(Elab *e, const Form *call, bool shallow) {
          * delivers: the body's type, not the resume value's. */
         if (body && body->type.kind != TY_UNKNOWN && body->type.kind != TY_NEVER)
             kb->cont_result_type = &body->type;
+        if (eff && eff->constructor && !eff->constructor->result_full_type) {
+            kb->cont_op_result_kind = eff->constructor->result_type;
+            kb->cont_op_result_set  = true;
+        }
         cases[i].k_binding = kb;
         scope_add(&handler_scope, kb);
         
@@ -2807,6 +2820,10 @@ Expr *elab_handler_lit(Elab *e, const Form *call) {
         break;
     }
     kb->is_continuation = true;
+    if (eff && eff->constructor && !eff->constructor->result_full_type) {
+        kb->cont_op_result_kind = eff->constructor->result_type;
+        kb->cont_op_result_set  = true;
+    }
     cases[0].k_binding = kb;
     scope_add(&handler_scope, kb);
 
@@ -2882,6 +2899,23 @@ Expr *elab_handler_lit(Elab *e, const Form *call) {
  * The body runs with hv's dispatch table installed; the result type is the
  * body's type (the answer type T).  hv must be a TY_HANDLER value.
  */
+/* The handler literals of a `compose-handlers` tree, outermost first; false when
+ * any leaf is not a literal with clauses (a handler held in a variable). */
+static bool compose_collect_literals(const Expr *hv, const HandleExpr **out,
+                                     uint32_t *n, uint32_t cap) {
+    if (!hv) return false;
+    if (hv->kind == EX_HANDLER_LIT && hv->as.handler_lit_.handle &&
+        hv->as.handler_lit_.handle->n_cases > 0) {
+        if (*n >= cap) return false;
+        out[(*n)++] = hv->as.handler_lit_.handle;
+        return true;
+    }
+    if (hv->kind == EX_COMPOSE_HANDLERS)
+        return compose_collect_literals(hv->as.compose_handlers_.h1, out, n, cap) &&
+               compose_collect_literals(hv->as.compose_handlers_.h2, out, n, cap);
+    return false;
+}
+
 Expr *elab_with_handler(Elab *e, const Form *call) {
     /* hv first so we know which effects to mark handled while elaborating body. */
     Expr *hv = elab_form(e, call->as.list.items[1]);
@@ -2900,10 +2934,53 @@ Expr *elab_with_handler(Elab *e, const Form *call) {
         /* Intern the effect name back to a Symbol for push_handled_effect. */
         const Symbol *eff_sym = intern_cstr(e->st, hv->type.as.handler_.effect_name);
         push_handled_effect(e, eff_sym);
+    } else if (hv->type.as.handler_.handled_row) {
+        /* A composed handler answers every effect of its row. */
+        const Symbol *names[32]; uint8_t nn = 0;
+        effect_row_collect_names(hv->type.as.handler_.handled_row, names, &nn, 32);
+        for (uint8_t ni = 0; ni < nn; ni++) push_handled_effect(e, names[ni]);
     }
     Expr *body = elab_form(e, call->as.list.items[2]);
     e->n_handled_effects = saved_n_handled;
     if (!body) return NULL;
+
+    /* `(with-handler (compose-handlers L1 L2 ...) body)` over handler LITERALS
+     * is `(with-handler L1 (with-handler L2 ... body))`, L1 outermost
+     * (first-class-handlers-semantics FH0.1).  The flat table the composed
+     * value lowers to answers every effect from one level, so a clause of one
+     * literal that performed an effect of the other aborted as unhandled
+     * (`tur: unhandled effect`); the nested handles are the form that works.
+     * A composed value that is not a tree of literals keeps the flat table. */
+    if (hv->kind == EX_COMPOSE_HANDLERS) {
+        const HandleExpr *lits[8];
+        uint32_t n_lits = 0;
+        if (compose_collect_literals(hv, lits, &n_lits, 8) && n_lits >= 2) {
+            bool answer_ok = true;
+            for (uint32_t li = 0; li < n_lits && answer_ok; li++)
+                for (uint8_t ci = 0; ci < lits[li]->n_cases && answer_ok; ci++) {
+                    const Expr *cb = lits[li]->cases[ci].body;
+                    if (!cb) { answer_ok = false; break; }
+                    const Expr *last = cb;
+                    if (last->kind == EX_DO && last->as.do_.n > 0)
+                        last = last->as.do_.items[last->as.do_.n - 1];
+                    answer_ok = last->kind == EX_RESUME
+                             || cb->type.kind == TY_NEVER
+                             || cb->type.kind == body->type.kind;
+                }
+            if (answer_ok) {
+                Expr *cur = body;
+                for (uint32_t li = n_lits; li-- > 0;) {
+                    HandleExpr *h = arena_alloc(e->arena, sizeof(HandleExpr));
+                    *h = *lits[li];
+                    h->body = cur;
+                    Expr *nest = expr_new(e->arena, EX_HANDLE, body->type, call->span);
+                    nest->as.handle_.handle = h;
+                    cur = nest;
+                }
+                return cur;
+            }
+        }
+    }
 
     /* `(with-handler (handler (E [p] k) case-body) body)` IS
      * `(handle body (E [p] k) case-body)`: the literal is deep, its cases are
@@ -3099,6 +3176,21 @@ static void cont_mark_consumed(Expr *k) {
  * `elab_resume` (the `(resume k v)` form) and by the `(k v)` application sugar
  * for effect handler continuations (elab_call.c) -- so both spellings resume
  * identically.  Caller runs cont_check_double_use before elaborating `k`. */
+/* A scalar type family for the resume-value check: all integer widths are one,
+ * both float widths are another; 0 = not a scalar this check compares. */
+static int resume_scalar_family(TypeKind k) {
+    switch (k) {
+        case TY_INT: case TY_INT8: case TY_INT16: case TY_INT32: case TY_INT64:
+        case TY_UINT8: case TY_UINT16: case TY_UINT32: case TY_UINT64:
+            return 1;
+        case TY_FLOAT: case TY_FLOAT32: case TY_FLOAT64:
+            return 2;
+        case TY_BOOL: return 3;
+        case TY_CSTR: return 4;
+        default:      return 0;   /* nil: a unit result takes any filler (`(resume k 0)`) */
+    }
+}
+
 Expr *elab_make_resume(Elab *e, Expr *k, Expr *value, Span span) {
     /* LC1: Mark continuation consumed per its cont_kind. */
     cont_mark_consumed(k);
@@ -3113,6 +3205,24 @@ Expr *elab_make_resume(Elab *e, Expr *k, Expr *value, Span span) {
             TUR_E0502_MULTISHOT_RESUME_IN_ATOMIC,
             "cannot resume a '^multishot' continuation inside 'atomically' -- "
             "STM retry may cause the continuation to be resumed multiple times unexpectedly");
+        return NULL;
+    }
+
+    /* The value a resume hands back is the answer to the `perform`, so it has
+     * the effect's declared result type.  Nothing compared them: a clause that
+     * resumed an int-result effect with "x" printed an address as an integer.
+     * Only scalar families are compared (every integer width is one family),
+     * and only against a continuation whose operation is known. */
+    if (k->kind == EX_VAR && k->as.var.binding && k->as.var.binding->cont_op_result_set &&
+        value && resume_scalar_family(k->as.var.binding->cont_op_result_kind) != 0 &&
+        resume_scalar_family(value->type.kind) != 0 &&
+        resume_scalar_family(k->as.var.binding->cont_op_result_kind) !=
+            resume_scalar_family(value->type.kind)) {
+        diag_emit_with_code(DIAG_ERROR, value->span, TUR_E0001_TYPE_MISMATCH,
+            "resume value has type %s, but the effect operation this continuation "
+            "answers declares a result of type %s",
+            type_name(value->type),
+            type_name(type_from_kind(k->as.var.binding->cont_op_result_kind)));
         return NULL;
     }
 

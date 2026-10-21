@@ -1,0 +1,10 @@
+;;; A top-level statement that holds a `perform` under `try-with`,
+;;; `handle-shallow` or `with-handler` is folded into main like one under
+;;; `handle`.  The guard list in form_has_toplevel_unhandled_perform named only
+;;; `handle` and `reset`, so these three were abandoned and the compiled build
+;;; said `this effect operation has no lowering here`.
+(defeffect Ask [] : int)
+(println (handle (+ 1 (perform (Ask))) (Ask [] k) (resume k 41)))
+(println (try-with (+ 1 (perform (Ask))) (Ask [] k) (resume k 41)))
+(println (handle-shallow (+ 1 (perform (Ask))) (Ask [] k) (resume k 41)))
+(println (with-handler (handler (Ask [] k) (resume k 41)) (+ 1 (perform (Ask)))))

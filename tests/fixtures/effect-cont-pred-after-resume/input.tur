@@ -1,0 +1,14 @@
+;;; `(cont? k)` asks whether k can still be invoked: a one-shot continuation is
+;;; spent by its resume.  The compiled program said so; the interpreter kept
+;;; answering true.
+(defeffect Ask [] : int)
+
+(defn h [k : effect-cont<int> v : int] : int
+  (let [r (resume k v)]
+    (if (cont? k) r -1)))
+
+(defn main [] : int
+  (println (handle (+ 1 (perform (Ask))) (Ask [] k) (h k 41)))
+  (println (handle (+ 1 (perform (Ask)))
+             (Ask [] k) (if (cont? k) (resume k 41) -2)))
+  0)
