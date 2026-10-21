@@ -1,1 +1,0 @@
-let binding 'x': type annotation does not match initializer (annotated ptr<Foo>, got ptr<Bar>)

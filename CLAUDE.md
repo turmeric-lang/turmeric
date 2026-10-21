@@ -120,12 +120,10 @@ If you are about to write `:int` for a parameter or return type, **stop**
 and answer:
 
 - Is this value an opaque handle to a thing of a specific kind? -> `defopaque`
-  newtype. Never `:int`. (A `:ptr<TheStruct>` works too: a `ptr<Foo>`
-  parameter, return type or `let` annotation rejects a `ptr<Bar>`
-  ([typed-ptr-pointee-not-checked-at-calls](docs/archive/typed-ptr-pointee-not-checked-at-calls.md)),
-  though not yet a call through a closure value
-  ([typed-ptr-pointee-not-checked-through-closures](docs/reported/typed-ptr-pointee-not-checked-through-closures.md)).
-  `defopaque` is checked everywhere, so it stays the default.)
+  newtype. Never `:int`. (A `:ptr<TheStruct>` is meant to work too, but today
+  a `ptr<Foo>` parameter accepts a `ptr<Bar>` --
+  [typed-ptr-pointee-not-checked-at-calls](docs/reported/typed-ptr-pointee-not-checked-at-calls.md)
+  -- so prefer `defopaque` until that is fixed.)
 - Is it a callback / function pointer? -> spell out the function type, e.g.
   `(fn [Request] (Option Response))`. Never `:int`.
 - Is it a boolean? -> `:bool`. Never `:int` with 0/1 convention.

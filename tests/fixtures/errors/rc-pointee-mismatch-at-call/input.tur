@@ -1,8 +1,0 @@
-;; typed-ptr-pointee-not-checked-at-calls, the `rc<T>` note: an `rc<U>`
-;; argument was accepted for an `rc<S>` parameter.
-(defstruct S [n : int])
-(defstruct U [n : int])
-(defn take [^borrow st : rc<S> k : int] : int k)
-(defn main [] : int
-  (println (take (rc/of (U 7)) 3))
-  0)

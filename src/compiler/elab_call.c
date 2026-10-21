@@ -1312,52 +1312,6 @@ static bool call_type_has_named_tyvar(const Type *t) {
     }
 }
 
-/* typed-ptr-pointee-not-checked-at-calls: the call check compares a parameter and
- * its argument by TypeKind, and a typed `ptr<Foo>` / `rc<S>` is the kind
- * TY_PTR_VOID / TY_RC whatever it points at -- so a `ptr<Bar>` went into a
- * `ptr<Foo>` parameter, and an `rc<U>` into an `rc<S>`.  The pointee is on the
- * parameter's own binding (a defn records it), so read it from there.
- *
- * Silent wherever either side leaves the pointee to inference or to the
- * untyped carrier: an untyped `ptr<void>` is interoperable with every pointer
- * (the runtime threads raw handles through it), and a type variable, `any` or
- * unknown pointee is some other check's business. */
-static bool call_pointee_open(const Type *t) {
-    return !t || t->kind == TY_TYVAR || t->kind == TY_UNKNOWN || t->kind == TY_ANY ||
-           call_type_has_named_tyvar(t);
-}
-/* The declared type of the callee's parameter `i`: the full type its fn type
- * carries (a forward declaration commits an `rc<S>` there before the defn is
- * elaborated), else the parameter binding a defn recorded. */
-static const Type *call_declared_param_type(const Binding *fb, const Type *fn_type,
-                                            uint32_t i) {
-    uint32_t pi = fb->closure_fn_binding ? i + 1 : i;
-    if (fn_type->kind == TY_FN && fn_type->as.fn.arg_full_types &&
-        pi < fn_type->as.fn.arity && fn_type->as.fn.arg_full_types[pi])
-        return fn_type->as.fn.arg_full_types[pi];
-    if (fb->source_fn_def && fb->source_fn_def->params &&
-        pi < fb->source_fn_def->n_params && fb->source_fn_def->params[pi])
-        return &fb->source_fn_def->params[pi]->type;
-    return NULL;
-}
-bool type_pointee_conflict(const Type *want, const Type *got) {
-    if (!want || !got || want->kind != got->kind) return false;
-    if (want->kind == TY_PTR_VOID) {
-        const Type *wi = want->as.ptr.inner, *gi = got->as.ptr.inner;
-        if (!wi || !gi || call_pointee_open(wi) || call_pointee_open(gi)) return false;
-        return !type_eq(*wi, *gi);
-    }
-    if (want->kind == TY_RC) {
-        TypeKind wk = want->as.rc.inner, gk = got->as.rc.inner;
-        if (wk == TY_TYVAR || wk == TY_UNKNOWN || wk == TY_ANY ||
-            gk == TY_TYVAR || gk == TY_UNKNOWN || gk == TY_ANY) return false;
-        if (wk != gk) return true;
-        return wk == TY_ADT && want->as.rc.adt_def && got->as.rc.adt_def &&
-               want->as.rc.adt_def != got->as.rc.adt_def;
-    }
-    return false;
-}
-
 /* True when `t` mentions a named type variable equal to `name` anywhere in its
  * structure.  Used by the poly-HOF eta-expansion look-ahead to decide whether a
  * sibling bare-tyvar parameter pins a tyvar appearing in a function-typed
@@ -9664,18 +9618,6 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
                 }
             }
         }
-        /* typed-ptr-pointee-not-checked-at-calls: every tolerance above is a
-         * statement about the KIND; none of them compared what a typed `ptr<T>`
-         * or `rc<T>` points at.  The declared type is the callee's own parameter
-         * binding, which a defn recorded before its first call. */
-        if (arg_ok && fn_binding && fn_type.kind == TY_FN &&
-            (expected_arg_kind == TY_PTR_VOID || expected_arg_kind == TY_RC) &&
-            args[i]->type.kind == expected_arg_kind) {
-            const Type *declared = call_declared_param_type(fn_binding, &fn_type, i);
-            if (declared && declared->kind == expected_arg_kind &&
-                type_pointee_conflict(declared, &args[i]->type))
-                arg_ok = false;
-        }
         /* declared-tyvars-are-not-rigid: every tolerance above lets an
          * argument typed by the ENCLOSING signature's variable into a ground
          * parameter -- `(f a)` with `a : A` and `f [x : int]`, `(P a)` into an
@@ -9717,15 +9659,6 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
              * their full type in arg_full_types, look it up there so the name
              * includes member/row types. */
             Type expected_ty = type_from_kind(expected_arg_kind);
-            /* typed-ptr-pointee-not-checked-at-calls: a typed pointer prints as
-             * `ptr<void>` by kind alone, which hid the pointee being compared
-             * ("expected ptr<void>, got cstr" for a `ptr<int>` parameter). */
-            if ((expected_arg_kind == TY_PTR_VOID || expected_arg_kind == TY_RC) &&
-                fn_binding) {
-                const Type *declared = call_declared_param_type(fn_binding, &fn_type, i);
-                if (declared && declared->kind == expected_arg_kind)
-                    expected_ty = *declared;
-            }
             /* saffron-open-generic-result-not-grounded (its second defect): a
              * borrowed generic parameter `(& K)` printed as `&?` -- the kind
              * alone has no target -- so `tur-map-kcheck`'s refusal of a string

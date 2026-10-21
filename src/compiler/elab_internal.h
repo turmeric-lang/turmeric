@@ -1988,10 +1988,6 @@ bool return_type_pointer_scalar_reverse_conflict(TypeKind declared, Type body);
  * committed position; the dispatcher applies that gate.  Returns true on the
  * shape match. */
 bool return_type_bool_integer_conflict(TypeKind declared, Type body);
-/* elab_call.c: do two typed pointers (`ptr<T>`) or two `rc<T>` point at
- * different things?  False wherever either pointee is untyped, a type
- * variable, `any` or unknown. */
-bool type_pointee_conflict(const Type *want, const Type *got);
 
 /* carrier-aware-return-unification Phase 2c: exactly one side is an aggregate
  * that does NOT ride the int64 carrier -- a by-value record ADT (`tur_adt_S`),

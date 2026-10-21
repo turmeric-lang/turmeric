@@ -1,7 +1,0 @@
-;; The rc<T> twin, caller above the callee.
-(defstruct S [n : int])
-(defstruct U [n : int])
-(defn main [] : int
-  (println (take (rc/of (U 7)) 3))
-  0)
-(defn take [^borrow st : rc<S> k : int] : int k)
