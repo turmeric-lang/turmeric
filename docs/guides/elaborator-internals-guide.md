@@ -567,7 +567,7 @@ variables, return-position conflicts).
   parameter occurrence is demoted to a `CK_MOVE` type variable. A lone return
   occurrence is "unsupported return type keyword". Setting
   `e->strict_unknown_types` turns the fallback into an error; see
-  [unknown-type-annotation-becomes-implicit-tyvar](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/unknown-type-annotation-becomes-implicit-tyvar.md).
+  [unknown-type-annotation-becomes-implicit-tyvar](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/unknown-type-annotation-becomes-implicit-tyvar.md).
 
 So a higher-order parameter must be annotated. This fails, because `f`
 defaults to `int`:

@@ -355,6 +355,7 @@ const char *diag_code_to_string(DiagCode code) {
         case TUR_W0042_SHADOWS_SPECIAL_FORM:       return "TUR-W0042";
         case TUR_W0043_SESSION_OP_IN_ASYNC:        return "TUR-W0043";
         case TUR_W0044_AWAITER_COMPILED_DIRECT:    return "TUR-W0044";
+        case TUR_W0045_UNKNOWN_TYPE_NAME_IS_TYVAR: return "TUR-W0045";
         /* LT1: Linear type errors */
         case TUR_E0100_LINEAR_DROPPED:             return "TUR-E0100";
         case TUR_E0101_LINEAR_USE_AFTER_CONSUME:   return "TUR-E0101";
@@ -555,6 +556,7 @@ DiagCode diag_code_from_string(const char *s) {
     if (strcmp(s, "TUR-W0042") == 0) return TUR_W0042_SHADOWS_SPECIAL_FORM;
     if (strcmp(s, "TUR-W0043") == 0) return TUR_W0043_SESSION_OP_IN_ASYNC;
     if (strcmp(s, "TUR-W0044") == 0) return TUR_W0044_AWAITER_COMPILED_DIRECT;
+    if (strcmp(s, "TUR-W0045") == 0) return TUR_W0045_UNKNOWN_TYPE_NAME_IS_TYVAR;
     /* LT1: Linear type errors */
     if (strcmp(s, "TUR-E0100") == 0) return TUR_E0100_LINEAR_DROPPED;
     if (strcmp(s, "TUR-E0101") == 0) return TUR_E0101_LINEAR_USE_AFTER_CONSUME;
@@ -1277,6 +1279,33 @@ static const DiagExplanation diag_explanations_[] = {
       "thunk, and whatever it calls or references.  An await anywhere else has\n"
       "no body to lose.\n"
       "See docs/reported/await-parks-only-to-the-nearest-c-frame.md.\n",
+    },
+    { TUR_W0045_UNKNOWN_TYPE_NAME_IS_TYVAR,
+      "TUR-W0045: A parameter's type name is unknown and is read as a type variable\n"
+      "\n"
+      "A name in a type annotation that is not a built-in type, a struct, an ADT\n"
+      "or a declared type parameter is an implicit type variable: `[k : zork]`\n"
+      "accepts any argument at all, and checks nothing about it.  That is what\n"
+      "makes `(defn id [x : a] : a x)` work without declaring `a`, and it is\n"
+      "also what a typo becomes.  This warning fires when the name appears in\n"
+      "exactly one position of the signature -- nothing relates it to another\n"
+      "parameter or to the result -- which is the typo shape, never the generic\n"
+      "one.\n"
+      "\n"
+      "The spelling most often hit is the prose one: `option<int>`, `Vec<cstr>`,\n"
+      "`result<T,E>`.  None of these is a type in an annotation.  Parameterized\n"
+      "types are written the way the checker reads them:\n"
+      "\n"
+      "    [x : (Option int)]      not  [x : option<int>]\n"
+      "    [xs : (Vec cstr)]       not  [xs : vec<cstr>]\n"
+      "    [r : (Result int cstr)] not  [r : result<int,cstr>]\n"
+      "\n"
+      "`ptr<T>` and `rc<T>` are the exceptions: they are built in and resolve.\n"
+      "\n"
+      "To use the name as a genuine type variable on purpose, declare it, so the\n"
+      "intent is on the page: `(defn f [zork] [k : zork] : int 1)`.  The warning\n"
+      "then stays quiet.\n"
+      "See docs/archive/unknown-type-annotation-becomes-implicit-tyvar.md.\n",
     },
     { TUR_W0042_SHADOWS_SPECIAL_FORM,
       "TUR-W0042: Definition shadows a special form\n"

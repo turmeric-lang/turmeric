@@ -11445,6 +11445,47 @@ Expr *elab_defn(Elab *e, const Form *call) {
                 fn_type_mentions_named(return_fn_type, nm) ||
                 fn_type_mentions_named(return_exists_type, nm)) occ++;
             if (occ >= 2) continue;  /* genuine: relates >=2 type positions */
+            /* unknown-type-annotation-becomes-implicit-tyvar: this is the
+             * typo shape -- say so, with the s-expression spelling when the
+             * name is the prose `option<int>` / `Vec<cstr>` form.  The stdlib
+             * is read on every compile, so a lone name there is not the
+             * user's to hear about. */
+            if (!e->in_stdlib_load) {
+                const char *lt = strchr(nm, '<');
+                size_t hl = lt ? (size_t)(lt - nm) : 0;
+                const char *sx = NULL;
+                if (lt) {
+                    static const char *const heads[][2] = {
+                        { "option", "Option" }, { "result", "Result" },
+                        { "vec", "Vec" }, { "list", "List" },
+                    };
+                    for (size_t hi = 0; hi < sizeof heads / sizeof heads[0]; hi++) {
+                        if (hl == strlen(heads[hi][0]) &&
+                            (strncmp(nm, heads[hi][0], hl) == 0 ||
+                             strncmp(nm, heads[hi][1], hl) == 0)) {
+                            sx = heads[hi][1];
+                            break;
+                        }
+                    }
+                }
+                if (sx)
+                    diag_emit_with_code(DIAG_WARNING, params[i]->span,
+                        TUR_W0045_UNKNOWN_TYPE_NAME_IS_TYVAR,
+                        "parameter '%s' is annotated '%s', which is not a type: "
+                        "it is read as an implicit type variable, so the argument "
+                        "is not checked.  Write the parameterized type as `(%s T)` "
+                        "-- `tur explain TUR-W0045`",
+                        params[i]->name ? params[i]->name->name : "?", nm, sx);
+                else
+                    diag_emit_with_code(DIAG_WARNING, params[i]->span,
+                        TUR_W0045_UNKNOWN_TYPE_NAME_IS_TYVAR,
+                        "parameter '%s' is annotated '%s', which is not a known "
+                        "type and appears nowhere else in the signature: it is "
+                        "read as an implicit type variable, so the argument is "
+                        "not checked.  Check the spelling, or declare it (`[%s]`) "
+                        "to mean a type variable -- `tur explain TUR-W0045`",
+                        params[i]->name ? params[i]->name->name : "?", nm, nm);
+            }
             /* structdef-retirement slice 5 B2 (P1): a single-occurrence bare
              * type-param is an unresolved type variable, not a nominal struct.
              * Emit a named TY_TYVAR carrying the param name rather than the

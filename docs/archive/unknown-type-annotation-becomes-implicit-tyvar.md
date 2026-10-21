@@ -69,3 +69,18 @@ times, and several guides use `Option<int>`. Prose is where new code copies its
 spellings from. So direction 1 above has a concrete first target: when the
 unknown head of an angle-bracket annotation is `option`, `Option`, `result`,
 `Result`, `vec` or `Vec`, suggest the s-expression spelling `(Option T)`.
+
+## Resolved 2026-10-21: fix direction 1, as a warning
+
+The KB-026 pass (`src/compiler/elab_fns.c`), which already identifies a
+parameter annotation naming no known type that appears nowhere else in the
+signature, now emits **TUR-W0045** there before demoting the name to an
+unresolved type variable. The message names the parameter and the spelling;
+when the name is an angle-bracket form whose head is `option` / `Option`,
+`result`, `vec` or `list`, it suggests the s-expression spelling `(Option T)`
+outright. `tur explain TUR-W0045` has the long form. Nothing else changes: a
+declared type parameter, a name that relates two positions, an ADT's own
+parameter, and anything inside the stdlib preload stay quiet, and the program
+still compiles as before. Pinned by
+`tests/fixtures/unknown-type-annotation-warns` (a typo, `option<int>`, and
+the three quiet shapes). Direction 2 (an error under a flag) was not taken.

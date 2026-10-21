@@ -21,6 +21,15 @@ All notable changes to Turmeric are documented here.
   built the effect registry; the identity `effect_lower` walk it also ran is
   deleted.
 
+### Added
+
+- **TUR-W0045: a parameter annotated with an unknown type name.** A name
+  that is no known type and relates to nothing else in the signature is an
+  implicit type variable, so the argument went unchecked; `[k : zork]` and
+  the prose spelling `[x : option<int>]` now warn, the latter with the
+  `(Option T)` spelling to use. A declared `[A]` or a name used twice stays
+  quiet.
+
 ### Fixed
 
 - **A by-value struct argument to a `letrec` closure no longer leaks a box

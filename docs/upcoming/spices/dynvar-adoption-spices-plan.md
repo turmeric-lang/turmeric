@@ -28,7 +28,7 @@
 > - [defdynamic-generic-adt-root-emitted-before-its-type](../../archive/defdynamic-generic-adt-root-emitted-before-its-type.md)
 >   (resolved 2026-10-18): a `(Option T)` dynvar did not compile. It does now,
 >   so tourist's "no request in flight" root can be an `(Option Ctx)`.
-> - [unknown-type-annotation-becomes-implicit-tyvar](../../reported/unknown-type-annotation-becomes-implicit-tyvar.md):
+> - [unknown-type-annotation-becomes-implicit-tyvar](../../archive/unknown-type-annotation-becomes-implicit-tyvar.md):
 >   a 2026-10-17 note; `option<T>` is not a type in an annotation, so write
 >   `(Option T)`.
 >
