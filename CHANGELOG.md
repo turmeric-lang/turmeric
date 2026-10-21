@@ -32,6 +32,12 @@ All notable changes to Turmeric are documented here.
 
 ### Fixed
 
+- **The API reference renders every definition form.** `deftype`,
+  `defdynamic`, `def` and `defalias` have cards; a sum type's constructors
+  keep their payload types and a GADT arm its result; a generic struct shows
+  its fields; `defeffect` and `defopaque` headers are shown as written; and a
+  name containing `=` (`char=?`) is published under its own name, so
+  `(doc 'char=?)` answers.
 - **A by-value struct argument to a `letrec` closure no longer leaks a box
   per call.** The thunk copies the value out at entry, so the box now lives
   in the caller's frame instead of on the heap with no owner.

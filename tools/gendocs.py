@@ -152,11 +152,78 @@ def _return_type_after_bracket(rest):
     parts = _split_sig_tokens(rest.strip())
     if not parts:
         return None
+
+    def _unclosed(tok):
+        # `(defeffect Fail [msg :cstr] :nil)` -- the form's closing paren
+        # rode on the return token.  Strip the `)`s no `(` in the token
+        # opened.
+        while tok.endswith(')') and tok.count(')') > tok.count('('):
+            tok = tok[:-1]
+        return tok or None
     if parts[0] == ':':
-        return ':' + parts[1] if len(parts) > 1 else None
+        return _unclosed(':' + parts[1]) if len(parts) > 1 else None
     if parts[0].startswith(':') or parts[0].startswith('ptr<'):
-        return parts[0]
+        return _unclosed(parts[0])
     return None
+
+
+def _top_level_groups(text):
+    """
+    The inner text of every `( ... )` group that sits at paren depth 0 of
+    `text`, string-aware and whitespace-collapsed, in order.  Stops at the
+    `)` that closes the enclosing form (depth goes negative).  Used for a
+    generic struct's `(field T)` list and a sum type's constructor arms, so
+    an arm keeps its payload types instead of only its head.
+    """
+    groups = []
+    depth = 0
+    in_str = False
+    cur = None
+    for ch in text:
+        if ch == '"':
+            in_str = not in_str
+        if in_str:
+            if cur is not None:
+                cur.append(ch)
+            continue
+        if ch == '(':
+            depth += 1
+            if depth == 1:
+                cur = []
+                continue
+        elif ch == ')':
+            depth -= 1
+            if depth == 0 and cur is not None:
+                groups.append(' '.join(''.join(cur).split()))
+                cur = None
+                continue
+            if depth < 0:
+                break
+        if cur is not None:
+            cur.append(ch)
+    return groups
+
+
+def _balanced_form(text):
+    """`text` from its first `(` through the `)` that closes it, collapsed."""
+    start = text.find('(')
+    if start == -1:
+        return ' '.join(text.split())
+    depth = 0
+    in_str = False
+    for i in range(start, len(text)):
+        ch = text[i]
+        if ch == '"':
+            in_str = not in_str
+        if in_str:
+            continue
+        if ch == '(':
+            depth += 1
+        elif ch == ')':
+            depth -= 1
+            if depth == 0:
+                return ' '.join(text[start:i + 1].split())
+    return ' '.join(text[start:].split())
 
 
 def _find_bracket(text):
@@ -524,6 +591,10 @@ def parse_tur_file(path):
     def_re = re.compile(
         r'^\s*\(\s*(defn|defmacro|defstruct|defdata|defgadt|defclass|definstance|defopaque|defeffect)\s+'
     )
+    # api-docs-miss-language-primitives (group 2): the definition forms that
+    # name a value or a type without a parameter vector.  Top level only (a
+    # `(def ...)` inside a body is a local), rendered as written.
+    decl_def_re = re.compile(r'^\(\s*(deftype|defdynamic|defalias|def)\s+')
     # r7rs-lang-plan R9: the Scheme definition forms, documented as the
     # Turmeric kinds they correspond to.  Parameters are untyped, like a
     # Saffron defn's: ('x', None).
@@ -599,6 +670,51 @@ def parse_tur_file(path):
                     'exported': exported,
                     'docstring': _parse_docstring(doc_buf) if doc_buf else None,
                     'line': i + 1,
+                })
+            doc_buf = []
+            i += 1
+            continue
+
+        dd = decl_def_re.match(line)
+        if dd and not def_re.match(line):
+            if not first_def_seen:
+                if module['docstring'] is None and pending_module_doc:
+                    module['docstring'] = _parse_docstring(pending_module_doc)
+                    pending_module_doc = None
+                first_def_seen = True
+            def_text = line
+            j = i + 1
+            while def_text.count('(') - def_text.count(')') > 0 and j < len(lines) and j < i + 8:
+                def_text += ' ' + lines[j].strip()
+                j += 1
+            kind = dd.group(1)
+            toks = def_text[dd.end():].split()
+            # `(def ^mut counter 0)`: the markers come before the name.
+            while toks and toks[0].startswith('^'):
+                toks.pop(0)
+            name = toks[0].rstrip(')') if toks else None
+            # Only a declaration its own `;;;` block names is API: the r7rs
+            # prelude has hundreds of bare `(def r7rs-... )` globals, some
+            # under a stray section comment, and a card per one of those would
+            # drown the lookup table.
+            documented = bool(doc_buf) and (
+                doc_buf[0].startswith(';;; ' + name + ' ') or
+                doc_buf[0] == ';;; ' + name)
+            if name and not documented:
+                name = None
+            if name:
+                exported = (name in module['exports']) or (not module['exports'])
+                if name.startswith('__') or name.endswith('__'):
+                    exported = False
+                module['definitions'].append({
+                    'kind': kind,
+                    'name': name,
+                    'params': [],
+                    'return_type': None,
+                    'exported': exported,
+                    'docstring': _parse_docstring(doc_buf) if doc_buf else None,
+                    'line': i + 1,
+                    'decl': _balanced_form(def_text),
                 })
             doc_buf = []
             i += 1
@@ -940,7 +1056,9 @@ def _parse_def_line(kind, text):
         caret_prefix = r'(?:\^[\w-]+\s+(?:"[^"]*"\s+)?)*'
     else:
         caret_prefix = ''
-    pattern = r'\(\s*' + kind + r'\s+' + caret_prefix + r'([\w/\-!?<>*+]+)'
+    # A name may contain `=` (`char=?`, `sym=?`, `r7rs-string<=?`): without it
+    # `char=?` was published as `char`.
+    pattern = r'\(\s*' + kind + r'\s+' + caret_prefix + r'([\w/\-!?<>*+=]+)'
     m = re.search(pattern, text)
     if not m:
         return None, [], None, {}
@@ -965,25 +1083,29 @@ def _parse_def_line(kind, text):
     # vector, and the constructor names so the module page can render a
     # sum-type entry.
     if kind in ('defdata', 'defgadt'):
-        ann_m = re.search(r':(copy|move)\b', rest)
+        ann_m = re.search(r':(copy|move|heap)\b', rest)
         if ann_m:
             extra['struct_ann'] = ann_m.group(1)
         # Optional type-param vector [L R ...] -- bare symbols, no ':' inside.
+        arms_from = 0
         tp_m = re.search(r'\[([^\]]*)\]', rest)
         if tp_m and ':' not in tp_m.group(1):
             tp_names = tp_m.group(1).split()
             if tp_names:
                 extra['type_params'] = tp_names
-        # Constructor arms: top-level (CtorName ...) groups.  The leading
-        # capitalised/symbol head of each parenthesised arm is the ctor name.
-        ctor_names = re.findall(r'\(\s*([\w\-!?<>*+/]+)', rest)
-        if ctor_names:
-            extra['ctors'] = ctor_names
+            arms_from = tp_m.end()
+        # Constructor arms, each kept WHOLE -- `Left L`, `Succ (Nat) : (Nat)`
+        # -- rather than its head alone, which rendered `(Left) (Right)` and
+        # read a GADT arm's result annotation as more constructors.
+        arms = _top_level_groups(rest[arms_from:])
+        if arms:
+            extra['arms'] = arms
+            extra['ctors'] = [a.split()[0] for a in arms if a.split()]
         return name, [], None, extra
 
     # LT4: For defstruct, detect :copy / :move / :linear annotation before the bracket.
     if kind == 'defstruct':
-        ann_m = re.search(r':(copy|move|linear)\s', rest)
+        ann_m = re.search(r':(copy|move|linear|heap)\s', rest)
         if ann_m:
             extra['struct_ann'] = ann_m.group(1)
 
@@ -994,6 +1116,15 @@ def _parse_def_line(kind, text):
         ann_m = re.search(r':(linear|affine)\b', rest)
         if ann_m:
             extra['struct_ann'] = ann_m.group(1)
+        # `(defopaque ArgSpec :int)` has no parameter vector; the defn renderer
+        # printed `(ArgSpec)`.  The declaration is short: show it as written.
+        extra['decl'] = _balanced_form(text)
+        return name, [], None, extra
+    if kind == 'defeffect':
+        # `(defeffect FS [] :nil ^extends IO ^capability)`: the keyword, the
+        # `^extends` / `^capability` markers and the result type all belong
+        # to the card, and the defn renderer dropped them.
+        extra['decl'] = _balanced_form(text)
 
     # Extract params bracket (nesting-aware: `(fn [int] int)` as a field
     # type must not end the vector early).
@@ -1010,8 +1141,16 @@ def _parse_def_line(kind, text):
                 tp_names = bracket_content.split()
                 if tp_names:
                     extra['type_params'] = tp_names
-                    # No field params to parse from this bracket
+                    # The fields follow as `(field T)` groups: `(defstruct
+                    # Pair [A B] (fst A) (snd B))`.  They used to be skipped,
+                    # so every generic struct showed no fields at all.
                     params = []
+                    for g in _top_level_groups(rest[bracket_end:]):
+                        toks = g.split(None, 1)
+                        if len(toks) == 2:
+                            params.append((toks[0], ':' + toks[1]))
+                        elif toks:
+                            params.append((toks[0], None))
                     return name, params, return_type, extra
         params = _parse_params('[' + bracket_inner + ']')
         after_bracket = rest[bracket_end:]
@@ -2041,6 +2180,11 @@ def _render_signature(defn):
         return '\n'.join(_render_signature(dict(defn, kind='defn', **o))
                          for o in defn['overloads'])
 
+    # A declaration shown as written: deftype / defdynamic / def / defalias,
+    # and the defeffect / defopaque headers, which have no body to omit.
+    if defn.get('decl'):
+        return defn['decl']
+
     if kind == 'defstruct':
         # LT4: include :linear / :copy / :move annotation if present
         struct_ann = defn.get('struct_ann', '')
@@ -2049,7 +2193,11 @@ def _render_signature(defn):
         type_params = defn.get('type_params', [])
         if type_params:
             tp_str = ' '.join(type_params)
-            return f"(defstruct {name}{ann_str} [{tp_str}])"
+            # A generic struct's fields are `(field T)` groups after the vector.
+            fields = ''.join(
+                f" ({p} {t[1:] if t and t.startswith(':') else t})" if t else f" ({p})"
+                for p, t in params)
+            return f"(defstruct {name}{ann_str} [{tp_str}]{fields})"
         param_str = ' '.join(
             f"{p} {t}" if t else p
             for p, t in params
@@ -2061,8 +2209,8 @@ def _render_signature(defn):
         ann_str = f' :{struct_ann}' if struct_ann else ''
         type_params = defn.get('type_params', [])
         tp_str = f" [{' '.join(type_params)}]" if type_params else ''
-        ctors = defn.get('ctors', [])
-        ctor_str = ''.join(f" ({c})" for c in ctors)
+        arms = defn.get('arms') or defn.get('ctors', [])
+        ctor_str = ''.join(f" ({c})" for c in arms)
         return f"({kind} {name}{ann_str}{tp_str}{ctor_str})"
 
     if kind == 'definstance':

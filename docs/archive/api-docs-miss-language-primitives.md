@@ -192,3 +192,27 @@ Groups 2-4 are generator fixes in the size of the defclass change and can land
 as one PR with parse tests. Group 1 waits on the decision above. Regenerate
 `stdlib/docstrings.tur` with any of them -- new and corrected names change its
 keys.
+
+## Resolved 2026-10-21: groups 2-4
+
+`tools/gendocs.py`:
+
+- **Group 2.** `deftype`, `defdynamic`, `def` and `defalias` at the top level
+  are definitions now, rendered as written (`(deftype Nat #refine{ x : int |
+  (>= x 0) })`, `(defdynamic *log-level* :int 1)`, `(def PI
+  3.141592653589793)`, `(defalias ReplicaId Sym)`), docstring and all. A
+  `^mut` marker is skipped before the name; a `__`-prefixed or `__`-suffixed
+  name is internal; a `(def ...)` inside a body is not a definition.
+  `extern-c` stays skipped.
+- **Group 3.** A sum type's constructor arms are kept whole, read as balanced
+  groups (`(Left L) (Right R)`, `(Zero : (Nat)) (Succ (Nat) : (Nat))`); a
+  generic struct's `(field T)` list is read after its type-parameter vector;
+  `:heap` joins the annotation set; `defeffect` and `defopaque` headers are
+  shown as written; a return type no longer carries the form's closing paren.
+- **Group 4.** A name may contain `=`: `char=?`, `sym=?` and the r7rs
+  comparison wrappers are published under their own names.
+
+Pinned in `tests/tools/check_gendocs_parse.py`. `stdlib/docstrings.tur` is
+regenerated (new and corrected keys). Group 1 was resolved on 2026-10-19
+(the `stdlib/forms/` pages); the guides half is
+[missing-guides-for-language-primitives](../reported/missing-guides-for-language-primitives.md).
