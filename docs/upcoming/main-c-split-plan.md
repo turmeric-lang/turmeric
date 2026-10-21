@@ -29,7 +29,7 @@ functions:
 The size has a cost beyond scrolling:
 
 - **Comments drift from what they describe.**
-  [stale-comments-build-driver](../reported/stale-comments-build-driver.md)
+  [stale-comments-build-driver](../archive/stale-comments-build-driver.md)
   found a doc comment on a forward declaration 40 lines from its definition,
   which contradicts the definition's own comment. It also found a "how to add
   a pass" recipe that misses one of the four places it has to name.
@@ -169,7 +169,7 @@ then be pointed at `emit_internal.h`.
 These are small, independent changes. Each one makes the later moves cleaner.
 
 - Land the `main.c` items of
-  [stale-comments-build-driver](../reported/stale-comments-build-driver.md):
+  [stale-comments-build-driver](../archive/stale-comments-build-driver.md):
   - the comment fixes (items 1-3, 7, 8, 10, 11);
   - `begin_compile_unit()` for the three identical reset sequences (item 12);
   - deleting the two dead `needs_hamt` fields (item 9).

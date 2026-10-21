@@ -735,13 +735,17 @@ static int read_entire_file(const char *path, char **out, size_t *out_len) {
 }
 
 /* Ordered list of compiler passes executed for every compilation unit.
- * To insert a new pass: add a PassKind constant to pass.h, add a case here,
- * and add the case in run_core_passes() below.                              */
+ * A new pass is named in four places:
+ *   1. its PassKind enumerator in pass.h;
+ *   2. its entry here, in pipeline order;
+ *   3. its arm in pass_zone() below (plus a ProfZone in prof.h if the pass
+ *      should be timed on its own) -- a missing arm is a -Wswitch error;
+ *   4. its arm in run_core_pass() below, which does the work.              */
 static const PassKind core_passes[] = {
     PASS_ELABORATE,
     PASS_KIND_CHECK,
     PASS_EFFECT_LOWER,
-    PASS_EFFECT_ROW_INFER,  /* P19-2: stub slot — no-op until inference lands */
+    PASS_EFFECT_ROW_INFER,  /* effect_check_pass: effect-row inference and checking */
     PASS_CPS,
     PASS_BORROW_CHECK,
 };
@@ -788,8 +792,9 @@ static int run_core_pass(PassContext *ctx, PassKind kind) {
              * lens passed at its enclosing fn's top-level invocations (VBM2's
              * cross-procedural collapse -- plan OQ #1/#2), then --dump-mono-specs
              * prints both the abstract and resolved-concrete registries.
-             * Registry-only: codegen is unchanged (the per-spec by-value body
-             * emit is tracked separately).  Graduated (vl-wide-mono, 2026-07-05):
+             * Resolves abstract lens specs to concrete ones; the emitter
+             * redirects to the by-value `<lens>__mono_<hash>` bodies (see
+             * mono_specs.h).  Graduated (vl-wide-mono, 2026-07-05):
              * the resolve pass is unconditional; it no-ops when no wide-functor
              * lens pin populated the registry during elaboration. */
             prof_enter(PROF_MONO);
@@ -797,9 +802,8 @@ static int run_core_pass(PassContext *ctx, PassKind kind) {
             prof_exit(PROF_MONO);
             if (g_dump_mono_specs) {
                 mono_specs_dump(stdout);
-                /* `tur run` calls this pass in-process then execv's the compiled
-                 * binary, which discards any unflushed stdio buffer.  Flush so the
-                 * dump survives to a redirected (fully-buffered) stdout. */
+                /* Harmless: cmd_run also flushes before system(), so a dump
+                 * precedes the program's output. */
                 fflush(stdout);
             }
             /* debugger Phase 1: audit breakpoint-span coverage on the freshly
@@ -812,7 +816,7 @@ static int run_core_pass(PassContext *ctx, PassKind kind) {
             }
             break;
         case PASS_KIND_CHECK:
-            /* Phase HKT H0: kind inference and validation pass (v1 stub). */
+            /* Phase HKT H0: kind inference and validation pass. */
             if (kind_check_pass(ctx->arena, ctx->prog) != 0)
                 return 1;
             /* Phase HKT-P6: optionally dump kind annotations for debugging. */
@@ -824,7 +828,9 @@ static int run_core_pass(PassContext *ctx, PassKind kind) {
 #endif
             break;
         case PASS_EFFECT_LOWER:
-            /* Phase 19: transform perform/handle into shift/reset. */
+            /* Builds the EffectEnv (builtin Unsafe and the capabilities) that
+             * later passes read.  effect_lower is an identity walk -- the
+             * CPS/DK backend lowers effects. */
             ctx->effect_env = effect_env_new(ctx->arena);
             effect_env_register_builtin_unsafe(
                 ctx->effect_env, ctx->arena,
@@ -858,8 +864,8 @@ static int run_core_pass(PassContext *ctx, PassKind kind) {
              * prints the colored/uncolored partition. */
             if (g_dump_cps_coloring)
                 cps_dump_coloring(ctx->arena, ctx->prog, stdout);
-            /* CPS2 (cps-transform-plan): --dump-cps prints the ANF/CPS IR for
-             * every colored function (dump-only; not wired into codegen). */
+            /* CPS2 (cps-transform-plan): --dump-cps prints the CT-IR the CPS
+             * backend emits from, for every colored function. */
             if (g_dump_cps)
                 cps_ir_dump_program(ctx->arena, ctx->prog, stdout);
             /* Phase 18: CPS transformation for shift/reset. */
@@ -1292,6 +1298,23 @@ static uint32_t prepend_stdlib_forms(Arena *arena, SymbolTable *st,
     return n;
 }
 
+/* Start a compilation unit: compile_to_c, compile_to_h and
+ * compile_to_implementation each call this first.  Clear the global diagnostic
+ * state (the `had_error_` flag and the file registry) before registering the
+ * unit's file so a prior failed compile in the same process cannot poison this
+ * one.  Without this, batch drivers that loop compile_to_c in-process
+ * (`tur test <dir>`, `tur check <dir>`) would mark every alphabetically-later
+ * file as FAIL once any earlier file failed to compile -- the stale
+ * `had_error_` short-circuits the `diag_had_error()` gate.  A new per-unit
+ * state is reset here, once, for all three. */
+static void begin_compile_unit(void) {
+    diag_reset();
+    experiment_reset_warnings();  /* XF2: once-per-compile TUR-W006x dedup */
+    pkg_tur_version_reassert();   /* :tur-version floor survives the reset above */
+    pkg_manifest_reassert();      /* a broken build.tur likewise: error: + exit 0 is not an error */
+    refine_discharge_reset();     /* RT3: once-per-compile refinement stats */
+}
+
 static int compile_to_c(const char *path, Buf *out_c,
                          const char **include_dirs, int n_include_dirs,
                          const char **reader_macro_paths,
@@ -1306,19 +1329,8 @@ static int compile_to_c(const char *path, Buf *out_c,
     LangDialect lang_dialect = LANG_TURMERIC;
     ReaderType reader_type = detect_and_adjust_lang(path, src, len, &src_adj, &len_adj, &lang_dialect);
 
-    /* Each compile_to_c call is a self-contained compilation unit.  Clear the
-     * global diagnostic state (the `had_error_` flag and the file registry)
-     * before registering this file so a prior failed compile in the same
-     * process cannot poison this one.  Without this, batch drivers that loop
-     * compile_to_c in-process (`tur test <dir>`, `tur check <dir>`) would mark
-     * every alphabetically-later file as FAIL once any earlier file failed to
-     * compile -- the stale `had_error_` short-circuits the `diag_had_error()`
-     * gate below. */
-    diag_reset();
-    experiment_reset_warnings();  /* XF2: once-per-compile TUR-W006x dedup */
-    pkg_tur_version_reassert();   /* :tur-version floor survives the reset above */
-    pkg_manifest_reassert();      /* a broken build.tur likewise: error: + exit 0 is not an error */
-    refine_discharge_reset();     /* RT3: once-per-compile refinement stats */
+    /* Each compile_to_c call is a self-contained compilation unit. */
+    begin_compile_unit();
 
     /* The directory entry-relative paths resolve against: the scratch copy's
      * own directory is meaningless (see g_logical_entry_path). */
@@ -1547,13 +1559,18 @@ static Form **load_project_prelude(Arena *arena, SymbolTable *st,
     return r;
 }
 
+/* Prepend the project-mode prelude to user_forms, for compile_to_h and
+ * compile_to_implementation.  Returns a new forms array with the prelude forms
+ * ahead of user_forms and sets *stdlib_count_out to how many were prepended.
+ * When nothing loads, the returned array is user_forms unchanged and
+ * *stdlib_count_out = 0. */
 static Form **load_project_prelude_impl(Arena *arena, SymbolTable *st,
                                          Form **user_forms, uint32_t nuser,
                                          uint32_t *stdlib_count_out) {
     *stdlib_count_out = 0;
 
     /* The prelude IS the project-mode stdlib auto-load: every file the
-     * single-file compile_to_c path loads (g_stdlib_autoload_files) is
+     * single-file compile_to_c path loads (tur_stdlib_autoload_files()) is
      * preloaded here in the same order, so `(Cons A)` / `tnil?` /
      * `Option`/`Result` etc. are visible inside spice defmodule bodies
      * built via `tur build .` without explicit imports.  See
@@ -1642,15 +1659,11 @@ static int compile_to_h(const char *path, Buf *out_h, const char *module_name,
     LangDialect lang_dialect = LANG_TURMERIC;
     ReaderType reader_type = detect_and_adjust_lang(path, src, len, &src_adj, &len_adj, &lang_dialect);
 
-    /* Fresh diagnostic slate per compilation unit -- see compile_to_c.  The
-     * project-mode dir build loops compile_to_h / compile_to_implementation
+    /* Fresh diagnostic slate per compilation unit -- see begin_compile_unit.
+     * The project-mode dir build loops compile_to_h / compile_to_implementation
      * in-process, so a stale `had_error_` from an earlier module would
      * otherwise short-circuit every later module's `diag_had_error()` gate. */
-    diag_reset();
-    experiment_reset_warnings();  /* XF2: once-per-compile TUR-W006x dedup */
-    pkg_tur_version_reassert();   /* :tur-version floor survives the reset above */
-    pkg_manifest_reassert();      /* a broken build.tur likewise: error: + exit 0 is not an error */
-    refine_discharge_reset();     /* RT3: once-per-compile refinement stats */
+    begin_compile_unit();
 
     SourceFile file = {0};
     file.path = path;
@@ -1690,7 +1703,7 @@ static int compile_to_h(const char *path, Buf *out_h, const char *module_name,
     Form **forms = read_all_with_registry(&arena, &st, &file,
                                           &reader_macros_reg, &nforms);
 
-    /* F1: inject macro-only prelude so project-mode files see when/cond/for/min/max. */
+    /* F1: prepend the stdlib auto-load list (the same files compile_to_c gets). */
     uint32_t stdlib_prefix = 0;
     forms = load_project_prelude(&arena, &st, forms, nforms, &stdlib_prefix);
     nforms += stdlib_prefix;
@@ -1751,15 +1764,11 @@ static int compile_to_implementation(const char *path, Buf *out_c, const char *m
     LangDialect lang_dialect = LANG_TURMERIC;
     ReaderType reader_type = detect_and_adjust_lang(path, src, len, &src_adj, &len_adj, &lang_dialect);
 
-    /* Fresh diagnostic slate per compilation unit -- see compile_to_c.  The
-     * project-mode dir build loops compile_to_h / compile_to_implementation
+    /* Fresh diagnostic slate per compilation unit -- see begin_compile_unit.
+     * The project-mode dir build loops compile_to_h / compile_to_implementation
      * in-process, so a stale `had_error_` from an earlier module would
      * otherwise short-circuit every later module's `diag_had_error()` gate. */
-    diag_reset();
-    experiment_reset_warnings();  /* XF2: once-per-compile TUR-W006x dedup */
-    pkg_tur_version_reassert();   /* :tur-version floor survives the reset above */
-    pkg_manifest_reassert();      /* a broken build.tur likewise: error: + exit 0 is not an error */
-    refine_discharge_reset();     /* RT3: once-per-compile refinement stats */
+    begin_compile_unit();
 
     SourceFile file = {0};
     file.path = path;
@@ -1799,7 +1808,7 @@ static int compile_to_implementation(const char *path, Buf *out_c, const char *m
     Form **forms = read_all_with_registry(&arena, &st, &file,
                                           &reader_macros_reg, &nforms);
 
-    /* F1: inject macro-only prelude so project-mode files see when/cond/for/min/max. */
+    /* F1: prepend the stdlib auto-load list (the same files compile_to_c gets). */
     uint32_t stdlib_prefix = 0;
     forms = load_project_prelude(&arena, &st, forms, nforms, &stdlib_prefix);
     nforms += stdlib_prefix;
@@ -8509,8 +8518,9 @@ static int cmd_build_multi_files(char **tur_files, int n_files,
     return 0;
 }
 
-/* Bare-directory build: glob the directory's top-level .tur files and build
- * them.  Used for ad-hoc multi-file directories with no build.tur manifest. */
+/* Bare-directory build: collect every `.tur` under the directory,
+ * recursively (collect_tur_files_deep), and build them.  Used for ad-hoc
+ * multi-file directories with no build.tur manifest. */
 static int cmd_build_multi(const char *dir, const char *out_path, bool shared,
                            const char *manifest_path, const char *cli_build_dir) {
     int n_files;
@@ -9558,9 +9568,11 @@ static int parse_check_read(const char *path, ReaderType forced, Buf *out) {
         rest_len = len;
     }
 
-    /* Fresh diagnostic slate per file -- see compile_to_c.  cmd_check_dir
-     * loops parse_check_read in-process, so a stale `had_error_` from an
-     * earlier file must not leak into this one's `diag_had_error()` gate. */
+    /* Fresh diagnostic slate per file -- see begin_compile_unit.
+     * cmd_parse_check reads two files in one process, so a stale `had_error_`
+     * from the first must not leak into the second's `diag_had_error()` gate.
+     * diag_reset alone, not begin_compile_unit, on purpose: this only reads,
+     * so the per-compile reasserts and refinement stats do not apply. */
     diag_reset();
 
     SourceFile file = {0};
@@ -10235,7 +10247,7 @@ static int cmd_eval_h(const char *path, bool use_color,
      * Turmeric-level defn during preload -- currently only vec-new-filled,
      * whose stub lives in turi_env_preload_collections -- would otherwise
      * keep running that stub body instead of the native. See
-     * docs/reported/turi-vec-new-filled-native-override-lost.md. */
+     * docs/archive/turi-vec-new-filled-native-override-lost.md. */
     turi_register_collection_natives(env);
     /* Build *args* as a cons-cell list of C-string pointers.  The cells are
      * this function's: freed after the env below (the strings are argv's). */
@@ -13246,7 +13258,7 @@ static int tur_main_inner(int argc, char **argv) {
     parse_timings_flag(&argc, argv);
     /* TUR_ADT_SLAB=1: bump-allocate never-freed multi-variant ADT boxes.
      * Env-only measurement seam (see
-     * docs/reported/multi-variant-adts-always-heap-allocate.md), deliberately
+     * docs/archive/multi-variant-adts-always-heap-allocate.md), deliberately
      * not a CLI flag -- and SHELVED 2026-08-25, so it is not a shipping
      * feature and is not on its way to becoming one. */
     {
@@ -13269,7 +13281,7 @@ static int tur_main_inner(int argc, char **argv) {
          * its payload pointer, so it cannot outlive the representation it
          * narrows.  Setting this alone is therefore a complete switch; it did
          * not used to be, and the failure mode was a compiler abort two layers
-         * from the flag (docs/reported/sr2-carrier-seam-rotted.md). */
+         * from the flag (docs/archive/sr2-carrier-seam-rotted.md). */
         const char *__sr2 = getenv("TUR_SR2_APP_SUM_BYVALUE");
         if (__sr2 && __sr2[0] == '0') g_sr2_app_sum_byvalue = false;
         else if (__sr2 && __sr2[0] == '1') g_sr2_app_sum_byvalue = true;

@@ -279,7 +279,7 @@ extern bool g_dump_cps_mono;
  * experiment graduated and stdlib/trail.tur is autoloaded unconditionally
  * (see experiments.c and stdlib_autoload.c). */
 /* TUR_ADT_SLAB=1: bump-allocate never-freed multi-variant ADT boxes.
- * A measurement seam for docs/reported/multi-variant-adts-always-heap-allocate.md,
+ * A measurement seam for docs/archive/multi-variant-adts-always-heap-allocate.md,
  * not a shipping default.  SHELVED 2026-08-25 -- kept reproducible, not
  * headed anywhere; the decision record in that report says why, and why
  * reclamation rather than a slab is the thing to build. */

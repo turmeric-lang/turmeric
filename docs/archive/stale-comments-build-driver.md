@@ -1,5 +1,14 @@
 # Build-driver (`main.c` pass pipeline) comments that disagree with the code
 
+> **Resolved 2026-10-21** (main-c-split-plan, Phase 0). Every item is fixed:
+> the comments (1-8, 10, 11), the two dead `needs_hamt` fields (9),
+> `begin_compile_unit()` for the three reset sequences (12; `parse_check_read`
+> keeps `diag_reset` alone on purpose, and its call now says why), and the
+> dead citations (13). Item 6's comment change landed. Its structural half --
+> whether to delete `effect_lower` -- is still an investigation and moved to
+> its own report,
+> [effect-lower-is-an-identity-pass](../reported/effect-lower-is-an-identity-pass.md).
+
 **Severity:** low (comment accuracy). Two items are dead code (a write-only
 field and a no-op pass), and one is a small deduplication. Filed 2026-10-17
 from the "Trust the code over the comments" note in
@@ -55,7 +64,7 @@ pass-pipeline region of `main.c` turned up the rest.
 - **Says:** "Registry-only: codegen is unchanged (the per-spec by-value body
   emit is tracked separately)."
 - **Code:** this is the claim
-  [mono-specs-header-comment-stale](../archive/mono-specs-header-comment-stale.md)
+  [mono-specs-header-comment-stale](mono-specs-header-comment-stale.md)
   corrected in `mono_specs.h` on 2026-08-13. VBM2b and VBM3 landed 2026-07-04,
   and the by-value body emit is live for simple and composed lenses
   (`mono_specs.h:28-41`). This copy was missed in that sweep.

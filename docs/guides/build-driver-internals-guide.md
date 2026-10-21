@@ -19,15 +19,10 @@ side of the commands covered here is in
 [the JIT](jit-guide.md) and
 [developing spices](developing-spices-guide.md).
 
-> **Trust the code over the comments.** `src/main.c` is about 14,700 lines
-> and many of its comments predate a rework of the thing they describe. Two
-> examples that matter: the pass list marks `PASS_EFFECT_ROW_INFER` as a
-> "stub slot" (it is the effect-row checker), and a comment in
-> `run_core_pass` says `tur run` "execv's the compiled binary" (it calls
-> `system()`). Where a comment and this guide disagree, read the code. If the
-> code disagrees with this guide, fix the guide.
-> The stale comments found so far in this area, each with a fix, are
-> listed in [stale-comments-build-driver](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/stale-comments-build-driver.md).
+> **Trust the code over the comments.** The driver is large and many of its
+> comments predate a rework of the thing they describe. Where a comment and
+> this guide disagree, read the code. If the code disagrees with this guide,
+> fix the guide.
 
 ---
 
@@ -205,19 +200,17 @@ differ in what they prepend and what they emit.
 | `ctx.separate_compilation` | false | true | true |
 | After the passes | `resolve_rcgc_from_archive`, `srfi_prune_program`, optional r7rs split, `emit_program`, optional exports manifest | `emit_header` | `emit_implementation`, optional exports manifest |
 
-The header comment on `load_project_prelude_impl` says it loads only
-macro-providing files; the body loads the full auto-load list
-(`tur_stdlib_autoload_files`), which is what the call sites' "F1" comments
-also undersell.
+`load_project_prelude_impl` loads the full auto-load list
+(`tur_stdlib_autoload_files`), the same files `compile_to_c` gets.
 
 **Shared front half**, in order:
 
 1. `read_entire_file`, then `detect_and_adjust_lang` for the `#lang` line.
-2. Per-unit resets: `diag_reset`, `experiment_reset_warnings`,
-   `pkg_tur_version_reassert`, `pkg_manifest_reassert`,
-   `refine_discharge_reset`. These exist because `tur test`,
-   `tur check <dir>`, project builds and the LSP loop over files in one
-   process; a stale `had_error_` would fail every later file.
+2. Per-unit resets, in `begin_compile_unit`: `diag_reset`,
+   `experiment_reset_warnings`, `pkg_tur_version_reassert`,
+   `pkg_manifest_reassert`, `refine_discharge_reset`. These exist because
+   `tur test`, `tur check <dir>`, project builds and the LSP loop over files
+   in one process; a stale `had_error_` would fail every later file.
 3. `diag_register_file`, a fresh `Arena` and `SymbolTable`.
 4. Reader macros from the manifest are loaded into a **strict** registry
    (a duplicate `reader-macros/define` is an error here, not in the REPL).
@@ -243,8 +236,8 @@ returns 0 to continue, 1 to fail, 2 to stop successfully.
 |---|---|
 | `PASS_ELABORATE` | `elaborate_program` (macro expansion, typeclasses and refinement discharge happen inside and have their own zones). Then, **outside the list but inside this arm**: `mono_specs_resolve_program` (zone `mono`), `--dump-mono-specs` (flushed), and under `audit-spans` `span_audit_program`, which returns 2 and ends the pipeline |
 | `PASS_KIND_CHECK` | `kind_check_pass`; `--dump-kinds` |
-| `PASS_EFFECT_LOWER` | Builds the `EffectEnv` (builtin `Unsafe`, the capabilities). The `effect_lower` call returns its input unchanged; the "perform/handle into shift/reset" comment in `pass.h` and in the arm is stale |
-| `PASS_EFFECT_ROW_INFER` | `effect_check_pass`, the effect-row checker; `--dump-effects`. Its "stub slot" comment in `core_passes[]` is stale |
+| `PASS_EFFECT_LOWER` | Builds the `EffectEnv` (builtin `Unsafe`, the capabilities). The `effect_lower` call returns its input unchanged; the CPS/DK backend lowers effects |
+| `PASS_EFFECT_ROW_INFER` | `effect_check_pass`, the effect-row checker; `--dump-effects` |
 | `PASS_CPS` | the `--dump-cps-coloring` (stdout) and `--dump-cps` dumps, `cps_transform`, then `--dump-clone-plan` and the stderr half of `--dump-cps-coloring` |
 | `PASS_BORROW_CHECK` | `borrow_check_program`, then `borrow_check_effect_handler_captures`, then `lifetime_check_program` (the TY4 lifetime pass lives here, not in a pass of its own) |
 
@@ -369,8 +362,8 @@ names: that file is post-swap and post-hoist, unlike `tur emit-c` output.
 
 - **`<dir>/build.tur` exists** -> `cmd_build_project`.
 - **Otherwise** -> `cmd_build_multi`, which collects every `.tur` under
-  the directory, recursively (`collect_tur_files_deep`; its header comment
-  still says "top-level"), and calls `cmd_build_multi_files`.
+  the directory, recursively (`collect_tur_files_deep`), and calls
+  `cmd_build_multi_files`.
 
 `cmd_build_project`, in order:
 

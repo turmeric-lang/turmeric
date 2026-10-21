@@ -257,7 +257,7 @@ void turi_env_preload_collections(TuriEnv *env, const char *stdlib_root) {
      * so a native shim wins over any stub/module body declared in between.
      * A real fix re-registers (at minimum) vec-new-filled -- or all of
      * turi_register_collection_natives -- at that same late point. See
-     * docs/reported/turi-vec-new-filled-native-override-lost.md. */
+     * docs/archive/turi-vec-new-filled-native-override-lost.md. */
     TuriValue sv2 = turi_eval(env,
         "(defn vec-new-filled [A] [n :int v :A] : (Vec A) (:: (vec-new) (Vec A)))\n"
     );

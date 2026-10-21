@@ -2739,7 +2739,6 @@ static Expr *elab_lower_map_call(Elab *e, const Form *call, const Symbol *name) 
          * lower map-new directly to hamt/new so the result type is void * and
          * subsequent HAMT operations (count, assoc, …) receive the right type. */
         if (e->in_persistent_let) {
-            e->needs_hamt = true;
             extern bool g_needs_hamt;
             g_needs_hamt = true;
             return elab_call_hamt_fn(e, call->span, e->sym_hamt_new, 0, NULL);
@@ -2782,9 +2781,7 @@ static Expr *elab_lower_map_call(Elab *e, const Form *call, const Symbol *name) 
         return elab_call_fn(e, call, fn_binding);
     }
     
-    /* Mark that we need HAMT */
-    e->needs_hamt = true;
-    /* Phase P3: Set global flag for emit phase */
+    /* Phase P3: mark that the emit phase needs HAMT */
     extern bool g_needs_hamt;
     g_needs_hamt = true;
     

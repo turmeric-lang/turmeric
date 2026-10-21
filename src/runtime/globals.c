@@ -256,9 +256,11 @@ bool g_werror_strict_effects = false;
  * the by-value HKT monomorphization (Path B) registration, unique-redirect, and
  * consumer-clone emit are now unconditional; the former `g_opt_vl_wide_mono`
  * enable bit is retired.  SIMPLE lenses (a direct `fmap` tail) redirect to a
- * by-value mono body with no `(f S)`/`(f A)` heap box; COMPOSED lenses fall back
- * to the Path A carrier bridge (mono_specs.c lens_is_simple_for_pathb).  Paired
- * with `--dump-mono-specs` (g_dump_mono_specs) to review the keying. */
+ * by-value mono body with no `(f S)`/`(f A)` heap box, and COMPOSED lenses
+ * thread by value too since CB1-CB5 (2026-07-05); the Path A carrier bridge is
+ * a narrow backstop for the shapes CB2/CB3 cannot lower (see mono_specs.h,
+ * CURRENT STATE).  Paired with `--dump-mono-specs` (g_dump_mono_specs) to
+ * review the keying. */
 bool g_dump_mono_specs = false;
 
 /* --dump-cps-mono: report CPS-subset admissibility of colored-generic
