@@ -23,19 +23,19 @@ queries ("what did we know at tx 5?") and full audit history.
 
 ### `minimal.tur`
 
-The foundational implementation (~110 lines). Contains:
+The foundational implementation (~180 lines). Contains:
 
 - `(defdata Value ...)` -- the Value ADT (LongVal, StrVal, EntityVal)
-- `datum-*` functions -- constructors and accessors for a single fact
-- `db-new / db-count / db-ref / db-assert!` -- the append-only store
-- `rvec-*` -- a lightweight growable array for query results
-- `db-q` -- filter datums with a predicate closure
+- `(defstruct Datum ...)` -- a single fact: entity, attribute, value, tx
+- `Db`, a `(Vec Datum)`, with `db-new / db-count / db-ref / db-assert!` --
+  the append-only store
+- `db-q` -- filter datums with a predicate closure into a fresh `(Vec Datum)`
 - `q-entity / q-attr / q-ea / q-and / q-or / q-not` -- query combinators
 - A demo asserting facts about Alice and Bob, then querying them
 
 **Run:**
 ```
-./build/tur examples/datalog/minimal.tur
+./build/tur run examples/datalog/minimal.tur
 ```
 
 ### `query.tur`
@@ -46,20 +46,21 @@ Extends `minimal.tur` with richer query capabilities:
 - `q-av` -- query by attribute name and value (find "all entities where :user/age = 30")
 - `db-as-of` -- snapshot the database at a given transaction number
 - `pull` -- get all facts for a single entity
-- `history` -- get all transactions for a (entity, attr) pair, sorted by tx
+- `history` -- get all transactions for a (entity, attr) pair, oldest first
 - `db-retract! / retracted?` -- retraction encoded as `:db/retract` facts
 
 **Run:**
 ```
-./build/tur examples/datalog/query.tur
+./build/tur run examples/datalog/query.tur
 ```
 
 ### `indexed.tur`
 
-Adds a hash-chained EAVT index for O(1) average-case lookups by (entity, attr):
+Adds a hash-bucketed EAVT index for O(1) average-case lookups by (entity, attr):
 
 - `eavt-idx-new / eavt-idx-insert! / eavt-idx-lookup` -- 64-bucket hash index
-- `idb-new / idb-assert! / idb-q-ea` -- indexed database wrapper
+  of log positions, keyed by entity and an interned attribute id
+- `idb-new / idb-assert! / idb-q-ea` -- the log and its index kept in step
 
 In a real system every `idb-q-ea` call skips the full linear scan and goes
 directly to the relevant bucket. For small datasets the difference is invisible;
@@ -67,7 +68,7 @@ for millions of facts it is essential.
 
 **Run:**
 ```
-./build/tur examples/datalog/indexed.tur
+./build/tur run examples/datalog/indexed.tur
 ```
 
 ### `blog.tur`
@@ -77,12 +78,13 @@ A complete blog system showing how EAVT scales to a real domain:
 - Users, posts, and comments as separate entity ranges
 - Attribute name constants (`user/name`, `post/author`, etc.)
 - `create-user / create-post / create-comment` batch helpers
+- `get-attr` / `str-attr` / `ref-attr` -- `(Option ...)` lookups of one value
 - `get-posts-by-user / get-comments-on-post` join queries
 - `print-blog-post` -- pretty-prints a post with author and nested comments
 
 **Run:**
 ```
-./build/tur examples/datalog/blog.tur
+./build/tur run examples/datalog/blog.tur
 ```
 
 ### `datalog.tur`
@@ -90,7 +92,7 @@ A complete blog system showing how EAVT scales to a real domain:
 A Datalog-style query layer on top of the EAVT database:
 
 - `Term` ADT -- `Var` (bind a variable), `Lit` (match a literal), `Wild` (skip)
-- `Binding` -- an assoc-list mapping variable names to Value pointers
+- `Binding` -- a persistent assoc-list mapping variable names to Values
 - `match-pattern` -- expands a binding set by pattern-matching against the database
 - `datalog` -- runs a sequence of clauses to produce all satisfying bindings
 
@@ -98,7 +100,7 @@ The demo shows a two-clause join: "find all post titles by the user named Alice.
 
 **Run:**
 ```
-./build/tur examples/datalog/datalog.tur
+./build/tur run examples/datalog/datalog.tur
 ```
 
 ## Key Concepts
@@ -124,24 +126,32 @@ need to respect retractions must check for the `:db/retract` marker.
 ### Value ADT
 
 ```turmeric
-(defdata Value
-  (LongVal :int)    ;; 64-bit integer
-  (StrVal :int)     ;; :cstr pointer stored as int
-  (EntityVal :int)) ;; entity ID reference
+(defdata Value :copy
+  (LongVal :int)      ;; 64-bit integer
+  (StrVal :cstr)      ;; string
+  (EntityVal :int))   ;; reference to another entity
 ```
 
-All values are stored as tagged integers (Turmeric's defdata encoding). Use
-`(LongVal n)`, `(StrVal s)`, or `(EntityVal e)` to construct them; use `match`
-to deconstruct.
+Use `(LongVal n)`, `(StrVal s)`, or `(EntityVal e)` to construct a value and
+`match` to take it apart. `:copy` because facts are immutable: a value is
+read and compared, never consumed.
+
+### Every engine
+
+The examples are plain typed Turmeric -- no inline C -- so each one runs
+compiled (`tur run`), on the JIT (`tur jit`) and in the interpreter
+(`tur --interpret`, which is also what the REPL, the notebook and the web
+playground use), with the same output. `tests/check-examples.sh` holds them
+to that (`examples/examples-interpret.txt`).
 
 ## Tutorial Docs
 
-Step-by-step explanations of each file live in `docs/guides/datalog/`:
+Step-by-step explanations of the first three files live in `docs/guides/`:
 
-- `01-concepts.md` -- EAVT model, immutability, comparison with SQL
-- `02-minimal-impl.md` -- walk through `minimal.tur` line by line
-- `03-query-api.md` -- walk through `query.tur` additions
-- `04-indexing.md` -- why indexing matters and how `indexed.tur` works
+- [`datalog-01-concepts.md`](../../docs/guides/datalog-01-concepts.md) -- EAVT model, immutability, comparison with SQL
+- [`datalog-02-minimal-impl.md`](../../docs/guides/datalog-02-minimal-impl.md) -- walk through `minimal.tur` line by line
+- [`datalog-03-query-api.md`](../../docs/guides/datalog-03-query-api.md) -- walk through `query.tur` additions
+- [`datalog-04-indexing.md`](../../docs/guides/datalog-04-indexing.md) -- why indexing matters and how `indexed.tur` works
 
 ## Interactive Tutorial
 

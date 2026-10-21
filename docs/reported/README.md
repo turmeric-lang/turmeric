@@ -34,6 +34,16 @@ sentence above does not cover them. If you touch this file, check
 `ls docs/reported/` against it -- an index that silently omits a quarter of the
 directory is worse for triage than no index.
 
+## Found rewriting the datalog examples onto typed data (filed 2026-10-21)
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| ~~[turi-vec-struct-element-dangles-across-rewind](../archive/turi-vec-struct-element-dangles-across-rewind.md)~~ | high (REPL use-after-free) | **RESOLVED 2026-10-21** (archived): a struct pushed onto a global Vec at a REPL prompt lived in scratch and dangled after the rewind (ASan use-after-poison in the sweep). Promotion now checks the cells of the tracked boxes the roots reach and relocates a Vec's struct, closure and string cells (`TuriCollBuf.relocate`). Pinned by `test_vec_struct_cells_relocated` (`tests/turi/env-longlived.c`) |
+| ~~[defalias-name-rejected-as-struct-field-type](../archive/defalias-name-rejected-as-struct-field-type.md)~~ | low-medium (expressiveness) | **RESOLVED 2026-10-21** (archived): `[db : Db]` over `(defalias Db (Vec Datum))` was "unrecognized type :Db"; `resolve_ctor_field` now resolves an alias name like a parameter annotation does. Pinned by `defalias-struct-field` |
+| ~~[self-recursive-sum-producer-not-fresh](../archive/self-recursive-sum-producer-not-fresh.md)~~ | low (leak) | **RESOLVED 2026-10-21** (archived): a self-recursive function returning a fresh `(Option T)` read its own freshness flag before it was set, so callers leaked its box; freshness is now a greatest fixed point. Pinned by `option-from-self-recursive-producer-freed` (leak-checked) |
+| [struct-param-closure-env-never-freed](struct-param-closure-env-never-freed.md) | low (leak) | A capturing closure whose parameter is a by-value struct (`(fn [D] bool)`), passed to a function parameter inline, from a factory, or let-bound, leaks its 24-byte env under LeakSanitizer; with `int` in place of `D` none is reported, though no drop is emitted for either, so the clean run may be LSan finding the pointer conservatively |
+| [nested-ctor-pattern-defeats-sum-nonretain](nested-ctor-pattern-defeats-sum-nonretain.md) | low (leak) | A function that matches its `(Option T)` parameter with a nested pattern (`(Some (StrVal s))`) is treated as keeping the box, so a caller never frees a fresh argument; the same function written `(Some v) (match v ...)` lets the caller free it. The nested pattern's desugaring is a shape `box_uses_confined` does not model |
+
 ## Found writing the typeclass API docs (filed 2026-10-19)
 
 | Report | Severity | One line |

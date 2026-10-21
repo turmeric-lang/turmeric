@@ -586,7 +586,7 @@ under `tur jit`
 This is not a JIT bug: Turmeric gives a `cstr` no identity (`=` does not
 accept one), and neither engine promises it. Compare contents (`strcmp`), or
 intern the string once at the edge and compare the ids, as that example now
-does with `attr-id`.
+does with its attribute ids (`attr-intern`).
 
 ### Weak-symbol overrides do not cross the JIT boundary
 

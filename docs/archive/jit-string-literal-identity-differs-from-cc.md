@@ -77,3 +77,8 @@ language never offered.
    `cc,jit` again (it had been cc-only because of this report);
    `run-corpus.py --only datalog/indexed` passes both engines against the
    pinned output.
+
+**Later the same day:** the five datalog examples were rewritten onto typed
+data so the interpreter could run them too, and `indexed.tur`'s C helper
+`attr-id` became Turmeric (`attr-find` / `attr-intern` over a `(Vec cstr)`
+name table). The keying is the same -- by contents, once, at the edge.

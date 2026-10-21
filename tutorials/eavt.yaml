@@ -10,17 +10,14 @@ steps:
   - id: value_adt
     title: The Value ADT
     instruction: |
-      Every fact stores a typed value. Define the Value ADT with three variants:
-        (defdata Value
-          (LongVal :int)
-          (StrVal :int)
-          (EntityVal :int))
-    expected: "(defdata Value (LongVal :int) (StrVal :int) (EntityVal :int))"
-    alternate_accept:
-      - "(defdata Value (LongVal :int) (StrVal :int))"
+      Every fact stores a typed value. Define the Value ADT with three variants.
+      `:copy` because a fact is immutable: its value is read and compared,
+      never consumed.
+        (defdata Value :copy (LongVal :int) (StrVal :cstr) (EntityVal :int))
+    expected: "(defdata Value :copy (LongVal :int) (StrVal :cstr) (EntityVal :int))"
     hints:
       - "Use defdata to define a tagged union."
-      - "LongVal holds integers, StrVal holds string pointers, EntityVal holds entity IDs."
+      - "LongVal holds integers, StrVal holds strings, EntityVal holds entity IDs."
     success_message: "Correct! The Value ADT lets the database store different payload types in a uniform way."
     match_strategy: normalized
 
@@ -36,7 +33,7 @@ steps:
     hints:
       - "Constructors have the same name as the variant: (LongVal n)"
       - "The argument is the payload integer."
-    success_message: "Correct! (LongVal 42) creates a tagged integer value."
+    success_message: "Correct! (LongVal 42) builds a Value holding 42."
     match_strategy: normalized
 
   - id: match_value
@@ -45,12 +42,12 @@ steps:
       Use match to print a Value. Every constructor needs an arm -- match is
       checked for exhaustiveness, so leaving EntityVal out is a compile error,
       not a silent fall-through. Define print-value:
-        (defn print-value [v :int] :nil
+        (defn print-value [v : Value] : nil
           (match v
             (LongVal n)   (println n)
             (StrVal s)    (println s)
             (EntityVal e) (println e)))
-    expected: "(defn print-value [v :int] :nil (match v (LongVal n) (println n) (StrVal s) (println s) (EntityVal e) (println e)))"
+    expected: "(defn print-value [v : Value] : nil (match v (LongVal n) (println n) (StrVal s) (println s) (EntityVal e) (println e)))"
     hints:
       - "match dispatches on the constructor of a Value."
       - "Each arm binds the payload to a name: (LongVal n) binds n."
@@ -59,83 +56,103 @@ steps:
     match_strategy: normalized
 
   - id: datum_layout
-    title: Datum layout
+    title: The Datum struct
     instruction: |
-      A datum is a 4-tuple [entity, attr, value, tx]. Define datum-entity to
-      extract the entity field (stored at index 0 of a C int64_t array):
-        (defn datum-entity [d :int] :int
-          ```c return ((int64_t*)(intptr_t)d)[0]; ```)
-    expected: "(defn datum-entity [d :int] :int ```c return ((int64_t*)(intptr_t)d)[0]; ```)"
+      A datum is one fact: an entity, an attribute, a value and the
+      transaction that recorded it. Define it as a struct:
+        (defstruct Datum :copy [entity : int attr : cstr value : Value tx : int])
+    expected: "(defstruct Datum :copy [entity : int attr : cstr value : Value tx : int])"
     hints:
-      - "Use an inline C block to access the raw memory layout."
-      - "The closing ``` must be on the same line as the ) to avoid Markdown issues."
-    success_message: "Correct! Inline C gives direct access to the datum's memory layout."
+      - "A struct names each field and its type."
+      - "Read a field with (.entity d), (.attr d), (.value d) or (.tx d)."
+    success_message: "Correct! Datum is a typed fact -- no raw memory layout to get wrong."
     match_strategy: normalized
 
   - id: db_new
     title: Creating a database
     instruction: |
-      Create a new empty database using db-new and bind it to db:
-        (let [db (db-new)])
-    expected: "(let [db (db-new)])"
-    alternate_accept:
-      - "(def db (db-new))"
+      The database is the log of datums, oldest first: a (Vec Datum). Name the
+      type, write db-new, then create a database and bind it to db:
+        (defalias Db (Vec Datum))
+        (defn db-new [] : Db (vec-new))
+        (def db (db-new))
+    expected: "(def db (db-new))"
     hints:
-      - "db-new allocates the database header and an empty datum vector."
-      - "Bind the result with let or def."
-    success_message: "Correct! db-new returns an opaque integer pointer to the database."
+      - "defalias gives a type a second name."
+      - "vec-new makes an empty Vec; the declared result type says of what."
+    success_message: "Correct! db is an empty, growable log of facts."
     match_strategy: normalized
 
   - id: db_assert
     title: Asserting a fact
     instruction: |
-      Assert that entity 1 has attribute ":user/name" with value (StrVal ...).
-      First define cstr->int and str-val, then call db-assert!:
-        (defn cstr->int [s :cstr] :int
-          ```c return (int64_t)(intptr_t)s; ```)
-        (defn str-val [s :cstr] :int (StrVal (cstr->int s)))
-        (db-assert! db 1 (cstr->int ":user/name") (str-val "Alice"))
-    expected: "(db-assert! db 1 (cstr->int \":user/name\") (str-val \"Alice\"))"
+      db-assert! appends a fact stamped with the next transaction number --
+      its 1-based position in the log -- and returns it. Define it, give
+      entity 1 an age, then assert that it has attribute ":user/name" with
+      value "Alice":
+        (defn db-assert! [db : Db entity : int attr : cstr value : Value] : int
+          (let [tx (+ (vec-len db) 1)]
+            (vec-push! db (Datum entity attr value tx)) tx))
+        (db-assert! db 1 ":user/age" (LongVal 30))
+        (db-assert! db 1 ":user/name" (StrVal "Alice"))
+    expected: "(db-assert! db 1 \":user/name\" (StrVal \"Alice\"))"
     alternate_accept:
-      - "(db-assert! db 1 (cstr->int \":user/name\") (StrVal (cstr->int \"Alice\")))"
+      - "(db-assert! db 1 \":user/age\" (LongVal 30))"
     hints:
-      - "db-assert! takes (db, entity, attr-as-int, value-as-int)."
+      - "db-assert! takes (db, entity, attribute name, Value)."
       - "It returns the transaction number assigned to this fact."
-    success_message: "Correct! Each call to db-assert! appends one immutable datum and increments the tx counter."
+    success_message: "Correct! Each call to db-assert! appends one immutable datum."
     match_strategy: normalized
 
   - id: db_q_entity
     title: Query by entity
     instruction: |
-      Use db-q with the q-entity combinator to find all facts about entity 1:
+      db-q filters the log with a predicate into a fresh Vec; q-entity builds
+      the predicate. Define both, then find all facts about entity 1:
+        (defn db-q [db : Db pred : (fn [Datum] bool)] : (Vec Datum)
+          (let [out (:: (vec-new) (Vec Datum)) ^mut i 0]
+            (while (< i (vec-len db))
+              (when (pred (vec-get db i)) (vec-push! out (vec-get db i)))
+              (set! i (+ i 1))) out))
+        (defn q-entity [e : int] : (fn [Datum] bool)
+          (fn [d : Datum] : bool (= (.entity d) e)))
         (db-q db (q-entity 1))
     expected: "(db-q db (q-entity 1))"
     alternate_accept:
       - "(db-q db (q-entity 2))"
     hints:
-      - "q-entity returns a predicate: (fn [d] (= (datum-entity d) e))"
+      - "q-entity returns a predicate: (fn [d : Datum] : bool (= (.entity d) e))"
       - "db-q applies the predicate to every datum and collects matches."
-    success_message: "Correct! db-q returns an rvec of matching datums."
+    success_message: "Correct! db-q returns a fresh Vec of the matching datums."
     match_strategy: normalized
 
   - id: q_attr
     title: Query by attribute
     instruction: |
-      Find all user names by querying with the :user/name attribute:
+      Attributes are strings, compared by their contents with cstr-eq? from
+      stdlib/cstr.tur. Load it, define q-attr, and find all user names:
+        (load "stdlib/cstr.tur")
+        (defn q-attr [a : cstr] : (fn [Datum] bool)
+          (fn [d : Datum] : bool (cstr-eq? (.attr d) a)))
         (db-q db (q-attr ":user/name"))
     expected: "(db-q db (q-attr \":user/name\"))"
     alternate_accept:
       - "(db-q db (q-attr \":user/email\"))"
     hints:
       - "q-attr returns a predicate matching on the attribute string."
-      - "All datums with attribute :user/name are returned."
+      - "= does not compare strings; cstr-eq? does."
     success_message: "Correct! q-attr is useful for finding all entities that have a given property."
     match_strategy: normalized
 
   - id: q_and
     title: Combining predicates with q-and
     instruction: |
-      Find all :user/age facts that are NOT for entity 2 (Bob):
+      Predicates compose. Define q-and and q-not, then find all :user/age
+      facts that are NOT for entity 2 (Bob):
+        (defn q-and [p : (fn [Datum] bool) q : (fn [Datum] bool)] : (fn [Datum] bool)
+          (fn [d : Datum] : bool (and (p d) (q d))))
+        (defn q-not [p : (fn [Datum] bool)] : (fn [Datum] bool)
+          (fn [d : Datum] : bool (not (p d))))
         (db-q db (q-and (q-attr ":user/age") (q-not (q-entity 2))))
     expected: "(db-q db (q-and (q-attr \":user/age\") (q-not (q-entity 2))))"
     hints:
@@ -147,13 +164,14 @@ steps:
   - id: value_eq
     title: Value equality
     instruction: |
-      Define value-eq? to compare two Value ADT instances.
-      Two LongVals are equal when their payloads match:
-        (defn value-eq? [a :int b :int] :bool
+      Define value-eq? to compare two Values: the same constructor with equal
+      payloads.
+        (defn value-eq? [a : Value b : Value] : bool
           (match a
-            (LongVal x) (match b (LongVal y) (= x y) _ false)
-            _ false))
-    expected: "(defn value-eq? [a :int b :int] :bool (match a (LongVal x) (match b (LongVal y) (= x y) _ false) _ false))"
+            (LongVal x)   (match b (LongVal y) (= x y) _ false)
+            (StrVal x)    (match b (StrVal y) (cstr-eq? x y) _ false)
+            (EntityVal x) (match b (EntityVal y) (= x y) _ false)))
+    expected: "(defn value-eq? [a : Value b : Value] : bool (match a (LongVal x) (match b (LongVal y) (= x y) _ false) (StrVal x) (match b (StrVal y) (cstr-eq? x y) _ false) (EntityVal x) (match b (EntityVal y) (= x y) _ false)))"
     hints:
       - "The outer match dispatches on a's constructor."
       - "The inner match checks that b has the same constructor."
@@ -165,11 +183,9 @@ steps:
     title: Attribute and value query (q-av)
     instruction: |
       Define q-av to find datums with a specific attribute AND value:
-        (defn q-av [a :cstr v :int]
-          (fn [d]
-            (and (cstr-eq? (datum-attr d) (cstr->int a))
-                 (value-eq? (datum-value d) v))))
-    expected: "(defn q-av [a :cstr v :int] (fn [d] (and (cstr-eq? (datum-attr d) (cstr->int a)) (value-eq? (datum-value d) v))))"
+        (defn q-av [a : cstr v : Value] : (fn [Datum] bool)
+          (fn [d : Datum] : bool (and (cstr-eq? (.attr d) a) (value-eq? (.value d) v))))
+    expected: "(defn q-av [a : cstr v : Value] : (fn [Datum] bool) (fn [d : Datum] : bool (and (cstr-eq? (.attr d) a) (value-eq? (.value d) v))))"
     hints:
       - "q-av returns a closure that checks both the attribute name and the value."
       - "Use cstr-eq? for attribute comparison and value-eq? for value comparison."
@@ -180,9 +196,9 @@ steps:
     title: Temporal as-of query
     instruction: |
       Define db-as-of to return all datums at or before a given transaction:
-        (defn db-as-of [db :int as-of-tx :int] :ptr<void>
-          (db-q db (fn [d] (<= (datum-tx d) as-of-tx))))
-    expected: "(defn db-as-of [db :int as-of-tx :int] :ptr<void> (db-q db (fn [d] (<= (datum-tx d) as-of-tx))))"
+        (defn db-as-of [db : Db as-of-tx : int] : (Vec Datum)
+          (db-q db (fn [d : Datum] : bool (<= (.tx d) as-of-tx))))
+    expected: "(defn db-as-of [db : Db as-of-tx : int] : (Vec Datum) (db-q db (fn [d : Datum] : bool (<= (.tx d) as-of-tx))))"
     hints:
       - "db-as-of filters datums by their transaction number."
       - "Only datums with tx <= as-of-tx are included."
@@ -193,12 +209,12 @@ steps:
     title: Pull all facts for an entity
     instruction: |
       Define pull to return every datum for a given entity:
-        (defn pull [db :int e :int] :ptr<void>
-          (db-q db (fn [d] (= (datum-entity d) e))))
-    expected: "(defn pull [db :int e :int] :ptr<void> (db-q db (fn [d] (= (datum-entity d) e))))"
+        (defn pull [db : Db e : int] : (Vec Datum)
+          (db-q db (q-entity e)))
+    expected: "(defn pull [db : Db e : int] : (Vec Datum) (db-q db (q-entity e)))"
     hints:
       - "pull is equivalent to SELECT * WHERE entity = e."
-      - "It returns an rvec of all matching datums."
+      - "It returns a Vec of all matching datums."
     success_message: "Correct! pull gives you a complete view of one entity across all its attributes."
     match_strategy: normalized
 
@@ -206,9 +222,9 @@ steps:
     title: Retracting a fact
     instruction: |
       Define db-retract! as a special assertion with attribute :db/retract:
-        (defn db-retract! [db :int entity :int attr :cstr] :int
-          (db-assert! db entity (cstr->int ":db/retract") (StrVal (cstr->int attr))))
-    expected: "(defn db-retract! [db :int entity :int attr :cstr] :int (db-assert! db entity (cstr->int \":db/retract\") (StrVal (cstr->int attr))))"
+        (defn db-retract! [db : Db entity : int attr : cstr] : int
+          (db-assert! db entity ":db/retract" (StrVal attr)))
+    expected: "(defn db-retract! [db : Db entity : int attr : cstr] : int (db-assert! db entity \":db/retract\" (StrVal attr)))"
     hints:
       - "Retraction is a new fact, not a deletion."
       - "The value of the retraction datum is the name of the attribute being retracted."
@@ -218,12 +234,17 @@ steps:
   - id: eavt_index
     title: EAVT hash index
     instruction: |
-      Create a new 64-bucket EAVT index using eavt-idx-new and bind it to idx:
-        (let [idx (eavt-idx-new)])
-    expected: "(let [idx (eavt-idx-new)])"
+      The EAVT index groups datums by (entity, attribute) into 64 buckets, so
+      a lookup scans one bucket instead of the whole log. It is about a
+      hundred lines, more than a step should ask you to type: load the
+      example, which defines it beside its own copy of the database, then
+      create an indexed database and bind it to idb:
+        (load "examples/datalog/indexed.tur")
+        (def idb (idb-new))
+    expected: "(def idb (idb-new))"
     hints:
-      - "eavt-idx-new allocates a C struct with 64 bucket head pointers."
-      - "The index maps (entity, attr) pairs to chains of datum pointers."
+      - "An Idb holds the log and its index and keeps them in step."
+      - "Read examples/datalog/indexed.tur to see how the buckets are built."
     success_message: "Correct! The EAVT index enables O(1) average-case entity+attribute lookups."
     match_strategy: normalized
 
@@ -231,13 +252,13 @@ steps:
     title: Asserting into an indexed database
     instruction: |
       Use idb-assert! to add a fact to an indexed database.
-      The function asserts to the raw db and also inserts into the EAVT index:
-        (idb-assert! idb 1 (cstr->int ":user/name") (str-val "Alice"))
-    expected: "(idb-assert! idb 1 (cstr->int \":user/name\") (str-val \"Alice\"))"
+      It appends to the log and also indexes the new datum:
+        (idb-assert! idb 1 ":user/name" (StrVal "Alice"))
+    expected: "(idb-assert! idb 1 \":user/name\" (StrVal \"Alice\"))"
     hints:
       - "idb-assert! wraps db-assert! and eavt-idx-insert! in one call."
       - "The idb must have been created with idb-new."
-    success_message: "Correct! idb-assert! keeps the raw database and the index in sync."
+    success_message: "Correct! idb-assert! keeps the log and the index in sync."
     match_strategy: normalized
 
   - id: idb_q_ea
@@ -249,39 +270,39 @@ steps:
     alternate_accept:
       - "(idb-q-ea idb 2 \":user/age\")"
     hints:
-      - "idb-q-ea delegates to eavt-idx-lookup -- no linear scan."
-      - "It returns an rvec of matching datum pointers."
+      - "idb-q-ea looks in one bucket -- no linear scan."
+      - "It returns a fresh Vec of the matching datums."
     success_message: "Correct! idb-q-ea is the O(1) fast path for the most common query pattern."
     match_strategy: normalized
 
   - id: datalog_term
     title: Datalog terms -- Var and Lit
     instruction: |
-      The Datalog layer uses a Term ADT. Construct a Var term for ?name and a
-      Lit term for the string "Alice":
-        (mk-var "?name")
-        (mk-lit (str-val "Alice"))
-    expected: "(mk-lit (str-val \"Alice\"))"
+      The Datalog layer matches patterns of Terms against the log. Load it,
+      then construct a Var term for ?name and a Lit term for the string
+      "Alice":
+        (load "examples/datalog/datalog.tur")
+        (Var "?name")
+        (Lit (StrVal "Alice"))
+    expected: "(Lit (StrVal \"Alice\"))"
     alternate_accept:
-      - "(mk-var \"?name\")"
-      - "(mk-var \"?e\")"
+      - "(Var \"?name\")"
+      - "(Var \"?e\")"
     hints:
-      - "mk-var wraps a variable name string."
-      - "mk-lit wraps a concrete Value."
+      - "Var names a variable to bind."
+      - "Lit wraps a concrete Value to match."
+      - "Wild matches anything and binds nothing."
     success_message: "Correct! Terms are the building blocks of Datalog pattern clauses."
     match_strategy: normalized
 
   - id: datalog_clause
     title: Building a Datalog pattern clause
     instruction: |
-      Create a pattern [?e :user/name ?name] using mk-pattern:
-        (mk-pattern
-          (mk-var "?e")
-          (mk-lit (str-val ":user/name"))
-          (mk-var "?name"))
-    expected: "(mk-pattern (mk-var \"?e\") (mk-lit (str-val \":user/name\")) (mk-var \"?name\"))"
+      Create a pattern [?e :user/name ?name] -- a Pattern of three terms:
+        (Pattern (Var "?e") (Lit (StrVal ":user/name")) (Var "?name"))
+    expected: "(Pattern (Var \"?e\") (Lit (StrVal \":user/name\")) (Var \"?name\"))"
     hints:
-      - "mk-pattern takes three terms: entity, attribute, value."
+      - "A Pattern takes three terms: entity, attribute, value."
       - "Variables will be bound when the pattern matches a datum."
     success_message: "Correct! A pattern clause unifies its three terms against every datum in the database."
     match_strategy: normalized
@@ -289,18 +310,17 @@ steps:
   - id: datalog_run
     title: Running a Datalog query
     instruction: |
-      Run a single-clause query to find all user names.
-      Build a clause list, add the pattern, then call datalog:
-        (let [cs (clauses-new)]
-          (clauses-add cs (mk-pattern (mk-var "?e")
-                                      (mk-lit (str-val ":user/name"))
-                                      (mk-var "?name")))
-          (datalog db cs))
-    expected: "(let [cs (clauses-new)] (clauses-add cs (mk-pattern (mk-var \"?e\") (mk-lit (str-val \":user/name\")) (mk-var \"?name\"))) (datalog db cs))"
+      Build a small database, then run a one-clause query that finds every
+      user name and print what ?name is bound to:
+        (def db2 (db-new))
+        (db-assert! db2 1 ":user/name" (StrVal "Alice"))
+        (db-assert! db2 2 ":user/name" (StrVal "Bob"))
+        (print-str-var (datalog db2 (vec-of (Pattern (Var "?e") (Lit (StrVal ":user/name")) (Var "?name")))) "?name")
+    expected: "(print-str-var (datalog db2 (vec-of (Pattern (Var \"?e\") (Lit (StrVal \":user/name\")) (Var \"?name\")))) \"?name\")"
     hints:
-      - "clauses-new creates an empty clause list."
-      - "clauses-add appends a pattern clause."
-      - "datalog returns an rvec of surviving bindings."
+      - "datalog takes the database and a Vec of Patterns."
+      - "It returns the bindings that satisfy every clause."
+      - "print-str-var prints the string a variable is bound to in each binding."
     success_message: "Correct! datalog evaluates clauses left-to-right, propagating bindings that satisfy each pattern."
     match_strategy: normalized
 
@@ -309,7 +329,8 @@ steps:
     instruction: |
       You have completed the EAVT tutorial!
 
-      Explore the full example files:
+      Explore the full example files -- each runs compiled, on the JIT and in
+      the interpreter:
         examples/datalog/minimal.tur  -- core types and query combinators
         examples/datalog/query.tur    -- extended query API with temporal features
         examples/datalog/indexed.tur  -- EAVT hash index for O(1) lookups
@@ -317,10 +338,10 @@ steps:
         examples/datalog/datalog.tur  -- Datalog-style pattern query engine
 
       Read the tutorial docs:
-        docs/tutorials/datalog/01-concepts.md     -- EAVT model and comparison with SQL
-        docs/tutorials/datalog/02-minimal-impl.md -- core implementation walkthrough
-        docs/tutorials/datalog/03-query-api.md    -- value equality, as-of, pull, history
-        docs/tutorials/datalog/04-indexing.md     -- hash index design and trade-offs
+        docs/guides/datalog-01-concepts.md     -- EAVT model and comparison with SQL
+        docs/guides/datalog-02-minimal-impl.md -- core implementation walkthrough
+        docs/guides/datalog-03-query-api.md    -- value equality, as-of, pull, history
+        docs/guides/datalog-04-indexing.md     -- hash index design and trade-offs
     expected: ""
     hints: []
     success_message: "Well done! You built an immutable EAVT database from scratch."

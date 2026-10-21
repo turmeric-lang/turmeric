@@ -72,15 +72,15 @@ This gives you:
 Adding a new fact. In Turmeric:
 
 ```turmeric
-(db-assert! db entity attr-ptr value)
+(db-assert! db 1 ":user/name" (StrVal "Alice"))
 ```
 
 ```sweet-exp
-db-assert!(db entity attr-ptr value)
+db-assert!(db 1 ":user/name" StrVal("Alice"))
 ```
 
 This returns the transaction number (`tx`) that was assigned to the fact.
-Every call to `db-assert!` increments the transaction counter.
+Every call to `db-assert!` takes the next transaction number.
 
 ### Query
 
@@ -143,12 +143,12 @@ past transaction:
 
 ```turmeric
 (db-as-of db snapshot-tx)
-;; Returns an rvec of all datums with tx <= snapshot-tx
+;; Returns a Vec of all datums with tx <= snapshot-tx
 ```
 
 ```sweet-exp
 db-as-of(db snapshot-tx)
-; Returns an rvec of all datums with tx <= snapshot-tx
+; Returns a Vec of all datums with tx <= snapshot-tx
 ```
 
 This enables "time travel" -- you can ask "what did the database look like before
@@ -160,12 +160,12 @@ Pull collects all facts for a single entity:
 
 ```turmeric
 (pull db entity-id)
-;; Returns an rvec of all datums where datum-entity = entity-id
+;; Returns a Vec of all datums whose entity is entity-id
 ```
 
 ```sweet-exp
 pull(db entity-id)
-; Returns an rvec of all datums where datum-entity = entity-id
+; Returns a Vec of all datums whose entity is entity-id
 ```
 
 This is the EAVT equivalent of `SELECT * FROM ... WHERE entity = ?`.
@@ -176,12 +176,12 @@ The history of an attribute for an entity shows how its value evolved over time:
 
 ```turmeric
 (history db entity ":user/age")
-;; Returns an rvec of all datums for (entity, ":user/age"), sorted by tx
+;; Returns a Vec of all datums for (entity, ":user/age"), oldest tx first
 ```
 
 ```sweet-exp
 history(db entity ":user/age")
-; Returns an rvec of all datums for (entity, ":user/age"), sorted by tx
+; Returns a Vec of all datums for (entity, ":user/age"), oldest tx first
 ```
 
 ## Comparison with Other Data Models
@@ -237,43 +237,43 @@ rather than graph traversal.
 Turmeric uses a tagged union to represent the three Value types:
 
 ```turmeric
-(defdata Value
-  (LongVal :int)    ;; 64-bit integer
-  (StrVal :int)     ;; :cstr pointer stored as int
-  (EntityVal :int)) ;; entity ID reference
+(defdata Value :copy
+  (LongVal :int)      ;; 64-bit integer
+  (StrVal :cstr)      ;; string
+  (EntityVal :int))   ;; reference to another entity
 ```
 
 ```sweet-exp
-defdata Value
-  (LongVal :int)    ; 64-bit integer
-  (StrVal :int)     ; :cstr pointer stored as int
-  (EntityVal :int)  ; entity ID reference
+defdata Value :copy
+  (LongVal :int)      ; 64-bit integer
+  (StrVal :cstr)      ; string
+  (EntityVal :int)    ; reference to another entity
 ```
+
+(`:copy` because a fact is immutable: its value is read and compared, never
+consumed. Part 2 explains it.)
 
 Use `match` to inspect a value:
 
 ```turmeric
 (match some-value
   (LongVal n)   (println n)
-  (StrVal s)    (println-cstr s)
+  (StrVal s)    (println s)
   (EntityVal e) (println e))
 ```
 
 ```sweet-exp
-match some-value
-  (LongVal n)
-  println(n)
-  (StrVal s)
-  println-cstr(s)
-  (EntityVal e)
-  println(e)
+match(some-value
+  (LongVal n)   println(n)
+  (StrVal s)    println(s)
+  (EntityVal e) println(e))
 ```
 
-Constructors:
+Build values with the constructors themselves:
 
-- `(long-val 42)` -- wraps an integer
-- `(str-val "hello")` -- wraps a string literal
-- `(entity-val 7)` -- wraps an entity ID reference
+- `(LongVal 42)` -- an integer
+- `(StrVal "hello")` -- a string
+- `(EntityVal 7)` -- a reference to entity 7
 
 ## Exercises
 

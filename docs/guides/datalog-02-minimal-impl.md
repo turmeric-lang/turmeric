@@ -8,12 +8,15 @@ description: Create a database and a query system to go with it
 
 This session walks through `examples/datalog/minimal.tur` line by line. By the
 end you will have a working, append-only fact database with a predicate-based
-query interface in roughly 250 lines of Turmeric.
-
-Run the complete example at any time:
+query interface in under 200 lines of typed Turmeric: a sum type for values, a
+struct for facts and a `Vec` for the log. There is no inline C, so the same
+file runs compiled, on the JIT and in the interpreter (which is what the REPL,
+the notebook and the web playground use):
 
 ```sh
 ./build/tur run examples/datalog/minimal.tur
+./build/tur jit examples/datalog/minimal.tur
+./build/tur --interpret examples/datalog/minimal.tur
 ```
 
 ---
@@ -21,311 +24,230 @@ Run the complete example at any time:
 ## The Value ADT
 
 The first design decision is how to represent typed values. The tutorial uses a
-simple tagged union (algebraic data type) with three variants:
-
-```turmeric
-(defdata Value
-  (LongVal :int)    ;; 64-bit integer
-  (StrVal :int)     ;; :cstr pointer stored as int
-  (EntityVal :int)) ;; entity ID reference
-```
-
-```sweet-exp
-defdata Value
-  (LongVal :int)    ; 64-bit integer
-  (StrVal :int)     ; :cstr pointer stored as int
-  (EntityVal :int)  ; entity ID reference
-```
-
-`LongVal` holds a 64-bit integer (ages, counts, timestamps).
-`StrVal` holds a string -- the `:cstr` pointer is stored as a plain `:int`
-so it can pass through the database machinery without triggering the borrow
-checker.
-`EntityVal` holds an entity ID, enabling typed cross-entity references.
-
-**A `defdata` value moves by default.** Binding one and then using it twice is
-an error:
-
-```
-error [TUR-E0201]: cannot copy unique value 'e-val' --
-unique values may be used at most once
-```
-
-That is the right default for an ADT that owns something, but a `Value` here
-is a tag plus a machine word -- there is nothing to own, and the later steps of
-this tutorial genuinely do want to use one twice (unify a term against it,
-*then* bind the term to it). Annotate the type `:copy` when you reach that
-point:
+tagged union (algebraic data type) with three variants:
 
 ```turmeric
 (defdata Value :copy
-  (LongVal :int)
-  (StrVal :int)
-  (EntityVal :int))
-```
-
-`examples/datalog/datalog.tur` carries the annotation for exactly this reason;
-`minimal.tur` does not need it, because nothing in it uses a `Value` twice.
-Reach for `:copy` when the checker asks for it, not before -- the error names
-the binding and the second use, so it is a precise instruction rather than a
-puzzle.
-
-Constructors wrap the raw int:
-
-```turmeric
-(defn long-val [n : int] : int  (LongVal n))
-(defn str-val  [s : cstr] : int (StrVal (cstr->int s)))
-(defn entity-val [e : int] : int (EntityVal e))
+  (LongVal :int)      ;; 64-bit integer
+  (StrVal :cstr)      ;; string
+  (EntityVal :int))   ;; reference to another entity
 ```
 
 ```sweet-exp
-defn long-val [n :int] :int
-  LongVal(n)
-defn str-val [s :cstr] :int
-  StrVal(cstr->int(s))
-defn entity-val [e :int] :int
-  EntityVal(e)
+defdata Value :copy
+  (LongVal :int)      ; 64-bit integer
+  (StrVal :cstr)      ; string
+  (EntityVal :int)    ; reference to another entity
 ```
 
-The printer dispatches on the constructor:
+`LongVal` holds a 64-bit integer (ages, counts, timestamps).
+`StrVal` holds a string.
+`EntityVal` holds an entity ID, enabling typed cross-entity references.
+
+**Why `:copy`.** A `defdata` value moves by default: binding one and then using
+it twice is an error.
+
+```
+error [TUR-E0201]: cannot copy unique value 'v' --
+unique values may be used at most once
+```
+
+That is the right default for an ADT that owns something. A fact, though, is
+immutable: a `Value` is read, compared and printed, never consumed, and the
+query code below reads the same datum more than once (test it against a
+predicate, *then* keep it). `:copy` says so. If you leave it off, the checker
+names the binding and the second use, so the fix is never a puzzle.
+
+Values are built with their constructors directly -- `(LongVal 30)`,
+`(StrVal "Alice")`, `(EntityVal 1)` -- and taken apart with `match`. The printer
+dispatches on the constructor:
 
 ```turmeric
-(defn print-value [v : int] : nil
+(defn print-value [v : Value] : nil
   (match v
     (LongVal n)   (println n)
-    (StrVal s)    (println-cstr s)
+    (StrVal s)    (println s)
     (EntityVal e) (println e)))
 ```
 
 ```sweet-exp
-defn print-value [v :int] :nil
+defn print-value [v : Value] : nil
   match(v
     (LongVal n)   println(n)
-    (StrVal s)    println-cstr(s)
+    (StrVal s)    println(s)
     (EntityVal e) println(e))
 ```
 
+`match` is checked for exhaustiveness: leave out the `EntityVal` arm and it is
+a compile error, not a silent fall-through.
+
 ---
 
-## Datum Layout
+## The Datum
 
-A datum is four 64-bit integers stored consecutively on the heap:
-
-```
-[entity :int64, attr (cstr ptr) :int64, value (Value ptr) :int64, tx :int64]
-```
-
-The C helper allocates and fills the struct:
+A datum is one fact -- an entity, an attribute, a value and the transaction
+that recorded it. A struct says exactly that:
 
 ```turmeric
-(defn datum-new [entity : int attr : int value : int tx : int] : int
-  ```c
-  int64_t *d = malloc(4 * sizeof(int64_t));
-  d[0] = entity; d[1] = attr; d[2] = value; d[3] = tx;
-  return (int64_t)(intptr_t)d;
-  ```)
-```
-
-````sweet-exp
-defn datum-new [entity :int attr :int value :int tx :int] :int
-  ```c
-  int64_t *d = malloc(4 * sizeof(int64_t));
-  d[0] = entity; d[1] = attr; d[2] = value; d[3] = tx;
-  return (int64_t)(intptr_t)d;
-  ```
-````
-
-Accessors project individual fields:
-
-```turmeric
-(defn datum-entity [d : int] : int
-  ```c return ((int64_t*)(intptr_t)d)[0]; ```)
-(defn datum-attr   [d : int] : int
-  ```c return ((int64_t*)(intptr_t)d)[1]; ```)
-(defn datum-value  [d : int] : int
-  ```c return ((int64_t*)(intptr_t)d)[2]; ```)
-(defn datum-tx     [d : int] : int
-  ```c return ((int64_t*)(intptr_t)d)[3]; ```)
+(defstruct Datum :copy
+  [entity : int     ;; the object the fact is about
+   attr   : cstr    ;; the property, e.g. ":user/name"
+   value  : Value   ;; the payload
+   tx     : int])   ;; the transaction that asserted it
 ```
 
 ```sweet-exp
-defn datum-entity [d :int] :int
-  ```c return ((int64_t*)(intptr_t)d)[0]; ```
-defn datum-attr [d :int] :int
-  ```c return ((int64_t*)(intptr_t)d)[1]; ```
-defn datum-value [d :int] :int
-  ```c return ((int64_t*)(intptr_t)d)[2]; ```
-defn datum-tx [d :int] :int
-  ```c return ((int64_t*)(intptr_t)d)[3]; ```
+defstruct Datum :copy
+  [entity : int     ; the object the fact is about
+   attr   : cstr    ; the property, e.g. ":user/name"
+   value  : Value   ; the payload
+   tx     : int]    ; the transaction that asserted it
 ```
 
-Note the `return (int64_t)(intptr_t)d` pattern -- this is the canonical way to
-hand a heap pointer back to Turmeric as an opaque `:int`.
+`(Datum 1 ":user/name" (StrVal "Alice") 1)` builds one, and `(.entity d)`,
+`(.attr d)`, `(.value d)` and `(.tx d)` read its fields. It is `:copy` for the
+same reason `Value` is: facts are never mutated, only read.
 
 ---
 
 ## The Database
 
-The database is a two-word header on the heap:
-
-```
-[datums-vec-ptr :int64, next-tx :int64]
-```
-
-`datums-vec-ptr` points to a growable C vector (`{data, len, cap}`) of datum
-pointers. `next-tx` is the transaction counter; each call to `db-assert!`
-increments it before stamping the new datum.
+The database is the log of datums, oldest first. The stdlib's growable
+`(Vec A)` is exactly that, and a type alias gives it a name:
 
 ```turmeric
-(defn db-new [] : int
-  ```c
-  int64_t *db = malloc(2 * sizeof(int64_t));
-  struct { int64_t *data; size_t len; size_t cap; } *v = malloc(sizeof(*v));
-  v->data = NULL; v->len = 0; v->cap = 0;
-  db[0] = (int64_t)(intptr_t)v;
-  db[1] = 0;
-  return (int64_t)(intptr_t)db;
-  ```)
-```
+(defalias Db (Vec Datum))
 
-````sweet-exp
-defn db-new [] :int
-  ```c
-  int64_t *db = malloc(2 * sizeof(int64_t));
-  struct { int64_t *data; size_t len; size_t cap; } *v = malloc(sizeof(*v));
-  v->data = NULL; v->len = 0; v->cap = 0;
-  db[0] = (int64_t)(intptr_t)v;
-  db[1] = 0;
-  return (int64_t)(intptr_t)db;
-  ```
-````
+(defn db-new [] : Db
+  (vec-new))
 
-`db-assert!` increments `next-tx`, allocates a new datum, appends it to the
-vector, and returns the transaction number:
+(defn db-count [db : Db] : int
+  (vec-len db))
 
-```turmeric no-check
-(defn db-assert! [db :int entity :int attr :int value :int] :int
-  ...
-  p[1] += 1;
-  int64_t tx = p[1];
-  ...
-  v->data[v->len++] = (int64_t)(intptr_t)d;
-  return tx;
+(defn db-ref [db : Db i : int] : Datum
+  (vec-get db i))
 ```
 
 ```sweet-exp
-defn db-assert! [db :int entity :int attr :int value :int] :int
-  ...
-  p[1] += 1;
-  int64_t tx = p[1];
-  ...
-  v->data[v->len++] = (int64_t)(intptr_t)d;
-  return tx;
+defalias Db (Vec Datum)
+
+defn db-new [] : Db
+  vec-new()
+
+defn db-count [db : Db] : int
+  vec-len(db)
+
+defn db-ref [db : Db i : int] : Datum
+  vec-get(db i)
 ```
 
-The doubling-growth vector ensures amortized O(1) append.
-
----
-
-## Result Vec
-
-Query results are collected in a `rvec` -- another growable C vector, typed
-`:ptr<void>` to keep the Turmeric ownership checker out of query logic:
+`db-assert!` appends a fact stamped with the next transaction number and
+returns that number:
 
 ```turmeric
-(defn rvec-new  [] :ptr<void>  ...)
-(defn rvec-len  [v :ptr<void>] :int  ...)
-(defn rvec-get  [v :ptr<void> i :int] :int  ...)
-(defn rvec-push! [v :ptr<void> val :int]  ...)
+(defn db-assert! [db : Db entity : int attr : cstr value : Value] : int
+  (let [tx (+ (db-count db) 1)]
+    (vec-push! db (Datum entity attr value tx))
+    tx))
 ```
 
 ```sweet-exp
-defn rvec-new [] :ptr<void>  ...
-defn rvec-len [v :ptr<void>] :int  ...
-defn rvec-get [v :ptr<void> i :int] :int  ...
-defn rvec-push! [v :ptr<void> val :int]  ...
+defn db-assert! [db : Db entity : int attr : cstr value : Value] : int
+  let [tx {db-count(db) + 1}]
+    vec-push!(db Datum(entity attr value tx))
+    tx
 ```
 
-`:ptr<void>` is an escape hatch that tells the compiler "I own this memory,
-do not track it". Use it sparingly and only when you are certain the vector
-outlives all uses of its contents.
+Every assert appends exactly one datum, so the transaction number is simply
+the datum's 1-based position in the log: no separate counter to keep in step.
+`vec-push!` grows the vector by doubling, so appends are amortized O(1).
 
 ---
 
-## String Helpers
+## Query Results
 
-Attribute names are C string literals. Two helpers convert between Turmeric
-`:cstr` and the opaque `:int` representation used inside the database:
+A query returns its matches as a fresh `(Vec Datum)`, in log order. The caller
+owns it and frees it with `vec-free` when done. The datums in it are copies,
+so freeing a result never touches the database itself.
+
+---
+
+## Comparing Strings
+
+Attributes are strings, and two strings are the same attribute when they hold
+the same characters. `stdlib/cstr.tur` provides that comparison:
 
 ```turmeric
-(defn cstr->int [s :cstr] :int
-  ```c return (int64_t)(intptr_t)s; ```)
+(load "stdlib/cstr.tur")   ;; cstr-eq?: string equality by contents
 
-(defn cstr-eq? [a :int b :int] :bool
-  ```c
-  return strcmp((const char*)(intptr_t)a, (const char*)(intptr_t)b) == 0;
-  ```)
+(cstr-eq? ":user/name" ":user/name")   ;; => true
 ```
 
-````sweet-exp
-defn cstr->int [s :cstr] :int
-  ```c return (int64_t)(intptr_t)s; ```
+```sweet-exp
+load "stdlib/cstr.tur"   ; cstr-eq?: string equality by contents
 
-defn cstr-eq? [a :int b :int] :bool
-  ```c
-  return strcmp((const char*)(intptr_t)a, (const char*)(intptr_t)b) == 0;
-  ```
-````
+cstr-eq?(":user/name" ":user/name")   ; => true
+```
 
-`cstr->int` turns a string literal (whose address is stable for the lifetime of
-the program) into an opaque integer for storage. `cstr-eq?` compares two such
-stored strings using `strcmp`.
-
-> **This local `cstr-eq?` is not the stdlib one.** `stdlib/cstr.tur` exports a
-> `cstr-eq? [a : cstr b : cstr] : bool` -- byte-wise content equality on real
-> `cstr` values, available via `(import cstr :refer [cstr-eq?])`. The helper
-> above takes the *erased* `:int` storage handles this tutorial stores in its
-> datums, so the two are not interchangeable and importing `cstr` into this
-> file would collide. Reach for the stdlib one in ordinary code: `=` has no
-> `cstr` overload at all, so `(= a b)` on two `cstr` values is a `TUR-E0006`
-> operator-lookup error rather than a comparison.
+`=` has no `cstr` overload at all, so `(= a b)` on two strings is a
+`TUR-E0006` operator-lookup error rather than a comparison. Do not reach for a
+string's address as a cheap identity either: whether two identical string
+literals share one address is up to the C compiler, and the JIT does not merge
+them, so a lookup keyed that way finds its facts compiled and nothing under
+`tur jit` (see the [jit-guide](jit-guide.md#two-identical-string-literals-are-two-objects)).
 
 ---
 
 ## Query Combinators
 
 `db-q` is the core query driver -- it accepts a predicate and returns a fresh
-result vec of all matching datums:
+`Vec` of all matching datums:
 
 ```turmeric
-(defn db-q [db :int pred] :ptr<void>
-  (let [n (db-count db)
-        result (rvec-new)
+(defn db-q [db : Db pred : (fn [Datum] bool)] : (Vec Datum)
+  (let [result (:: (vec-new) (Vec Datum))
         ^mut i 0]
-    (while (< i n)
-      (do
-        (let [d (db-ref db i)]
-          (when (pred d)
-            (rvec-push! result d)))
-        (set! i (+ i 1))))
+    (while (< i (db-count db))
+      (let [d (db-ref db i)]
+        (when (pred d)
+          (vec-push! result d)))
+      (set! i (+ i 1)))
     result))
 ```
 
 ```sweet-exp
-defn db-q [db :int pred] :ptr<void>
-  let [n db-count(db)
-       result rvec-new()
+defn db-q [db : Db pred : (fn [Datum] bool)] : (Vec Datum)
+  let [result (:: (vec-new) (Vec Datum))
        ^mut i 0]
-    while {i < n}
-      do
-        let [d db-ref(db i)]
-          when pred(d)
-            rvec-push!(result d)
-        set! i {i + 1}
+    while {i < db-count(db)}
+      let [d db-ref(db i)]
+        when pred(d)
+          vec-push!(result d)
+      set! i {i + 1}
     result
 ```
 
-Higher-level combinators return closures suitable as `pred`:
+`(:: (vec-new) (Vec Datum))` names the element type of the empty vector, which
+nothing else in the expression would pin down.
+
+Higher-level combinators return closures suitable as `pred`. Each one is a
+`(fn [Datum] bool)`, so they compose:
+
+```turmeric
+(defn q-attr [a : cstr] : (fn [Datum] bool)
+  (fn [d : Datum] : bool (cstr-eq? (.attr d) a)))
+
+(defn q-and [p : (fn [Datum] bool) q : (fn [Datum] bool)] : (fn [Datum] bool)
+  (fn [d : Datum] : bool (and (p d) (q d))))
+```
+
+```sweet-exp
+defn q-attr [a : cstr] : (fn [Datum] bool)
+  (fn [d : Datum] : bool (cstr-eq? (.attr d) a))
+
+defn q-and [p : (fn [Datum] bool) q : (fn [Datum] bool)] : (fn [Datum] bool)
+  (fn [d : Datum] : bool (and (p d) (q d)))
+```
 
 | Combinator | Description |
 |------------|-------------|
@@ -336,24 +258,19 @@ Higher-level combinators return closures suitable as `pred`:
 | `(q-or p q)` | Datums matching either `p` or `q` |
 | `(q-not p)` | Datums NOT matching `p` |
 
-Example -- find all names:
+Example -- find all names. `print-values` prints the value of each datum in a
+result:
 
 ```turmeric
-(let [names (db-q db (q-attr ":user/name"))
-      ^mut i 0]
-  (while (< i (rvec-len names))
-    (do
-      (print-value (datum-value (rvec-get names i)))
-      (set! i (+ i 1)))))
+(let [names (db-q db (q-attr ":user/name"))]
+  (print-values names)
+  (vec-free names))
 ```
 
 ```sweet-exp
-let [names db-q(db q-attr(":user/name"))
-     ^mut i 0]
-  while {i < rvec-len(names)}
-    do
-      print-value(datum-value(rvec-get(names i)))
-      set! i {i + 1}
+let [names db-q(db q-attr(":user/name"))]
+  print-values(names)
+  vec-free(names)
 ```
 
 ---
@@ -385,7 +302,7 @@ db-q(db q-entity(1))
 db-q(db q-and(q-attr(":user/age") q-not(q-entity(2))))
 ```
 
-Expected output:
+Expected output, from all three engines:
 
 ```
 -- All user names --
@@ -406,10 +323,15 @@ alice@example.com
 
 ## Memory Note
 
-The tutorial uses `malloc` directly with no `free`. For a real application you
-would want to free each datum, the internal vector, and the database header when
-the database goes out of scope. For the tutorial, the process exits immediately
-after `main` returns, so the OS reclaims all memory.
+The database and every query result are `Vec`s, and the demo frees each one
+with `vec-free` when it is done with it. The datums and values inside are
+plain `:copy` data with nothing of their own to free.
+
+One allocation is still left behind: the environment of each predicate
+closure the `q-*` combinators build. That is a compiler leak with an open
+report
+([struct-param-closure-env-never-freed](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/struct-param-closure-env-never-freed.md)),
+not something the example should work around.
 
 ---
 
@@ -417,10 +339,10 @@ after `main` returns, so the OS reclaims all memory.
 
 1. **Boolean values** -- add a `(BoolVal :bool)` variant to `Value` and assert
    a `:user/admin` fact with `(BoolVal true)`. Update `print-value` to handle
-   the new case.
+   the new case; `match` will tell you every other place that needs one.
 
 2. **Count query** -- write `db-count-matching [db pred]` that returns how many
-   datums satisfy `pred` without allocating an `rvec`.
+   datums satisfy `pred` without allocating a result `Vec`.
 
 3. **Distinct entities** -- write a query that returns the set of unique entity
    IDs for all datums matching a given attribute.
