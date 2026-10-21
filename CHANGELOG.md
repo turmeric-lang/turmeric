@@ -42,6 +42,11 @@ All notable changes to Turmeric are documented here.
 
 ### Fixed
 
+- **A lambda returned by a generic can build a parametric value.**
+  `(defn mk [A] [x : A] : (fn [A] (Box A)) (fn [y : A] : (Box A) ...))`
+  aborted with "base constructor ... has no definition" when the lambda
+  captured nothing, and returned a float's bit pattern when it captured
+  `x`. Each instantiation now gets its own clone of the lambda.
 - **Two spices can share one `:path` native dependency.** Each names it
   relative to its own manifest, and the second was compared as written
   against the first's absolute path, so the pair was always a "conflicting

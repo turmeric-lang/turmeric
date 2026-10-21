@@ -1,5 +1,29 @@
 # A lambda RETURNED by a generic that builds a `:heap` parametric value reaches the dead-base trap
 
+> **Resolved 2026-10-21.** Two gaps, both in `emit_abi_register_call`
+> (`src/compiler/emit_module.c`):
+>
+> - **`mk-f`, the dead-base abort.** A lambda that captures nothing is lifted
+>   to a global `__fn_N` and the body only names it, so
+>   `returns_closure_fn_binding` was NULL and no clone was considered at all.
+>   The register call now recognises a body that is a lifted lambda, and a
+>   new `inner_app_heap` gate clones a returned lambda per spec whenever its
+>   annotated result grounds to a parametric `:heap` application (or, for the
+>   lifted case, a by-value one). The spec is matched on bindings, so the
+>   `int` instantiation is no longer collapsed onto the base. The clone's
+>   body is scanned under its own bindings, so its constructor call lands on
+>   the monomorph, and `atom_var` already names a fn value's per-spec clone
+>   (`emit_reresolve_fn_value`).
+> - **`mk-k`, the garbage float.** Here the existing `inner_app_annotated`
+>   gate did fire, but that clone deliberately shared the base env, so the
+>   captured `x : A` stayed an `int64_t` slot. It now takes a suffixed env
+>   when a capture changes C representation under the spec
+>   (`emit_inner_captures_change_repr`).
+>
+> Pinned by `tests/fixtures/generic-returned-lambda-heap-app` (both lines of
+> the repro at float, int and cstr, a by-value `(Pt A)`, and the `tcons-of`
+> variant), which runs on both engines.
+
 **Severity: medium.** A correct program aborts at runtime (`tur: internal
 error: base constructor ... a call reached the dead base generic path`), or,
 when the lambda captures a float it stores, prints garbage. The interpreter

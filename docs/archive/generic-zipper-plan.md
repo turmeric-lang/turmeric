@@ -712,8 +712,8 @@ snapshots were regenerated, and each differs from the old one only by that
 dead function (checked mechanically, fixture by fixture).
 
 Two more are filed, not fixed; the zipper avoids both:
-[generic-returned-lambda-builds-heap-app](../reported/generic-returned-lambda-builds-heap-app.md)
-and
+[generic-returned-lambda-builds-heap-app](generic-returned-lambda-builds-heap-app.md)
+(resolved 2026-10-21) and
 [bare-parametric-instance-ctor-arg-unbridged](bare-parametric-instance-ctor-arg-unbridged.md)
 (resolved 2026-10-21).
 

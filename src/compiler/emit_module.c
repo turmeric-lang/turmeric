@@ -5770,6 +5770,28 @@ static const Symbol *emit_arena_symbol(Arena *arena, const char *s) {
     return sym;
 }
 
+/* generic-returned-lambda-builds-heap-app: does a capture of the lifted
+ * closure change its C representation under `bindings`?  `(fn [y : A] ...
+ * x)` capturing `x : A` holds an `int64_t` carrier slot in the base env and a
+ * `double` under A = float; a clone that shares the base env reads the
+ * float's bit pattern back as an integer. */
+static bool emit_inner_captures_change_repr(const FnDef *inner_fd,
+                                            const AbiTypeBinding *bindings,
+                                            uint8_t n_bindings, Arena *arena) {
+    if (!inner_fd || !inner_fd->closure || !bindings || n_bindings == 0)
+        return false;
+    const struct Closure *clo = inner_fd->closure;
+    for (uint8_t i = 0; i < clo->n_captures; i++) {
+        const Binding *cap = clo->captures[i];
+        if (!cap || !emit_abi_type_has_any_tyvar(&cap->type)) continue;
+        Type inst = emit_abi_instantiate_type(&cap->type, bindings, n_bindings,
+                                              arena);
+        if (strcmp(type_c_name(inst), type_c_name(cap->type)) != 0)
+            return true;
+    }
+    return false;
+}
+
 /* poly-closure-result-specialization: build and assign the suffixed env-struct
  * name (`__env_N__spec__<res>`) for an inner-closure body spec, so a register-
  * class- or layout-changing specialization gets its own struct instead of
@@ -7869,7 +7891,55 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
                 inner_app_annotated = true;
         }
     }
-    if (inner_float || inner_app || inner_app_annotated) abi_changes = true;
+    /* generic-returned-lambda-builds-heap-app: the third annotated shape.  A
+     * returned lambda written `(fn [y : A] : (Box A) (make-struct Box :v y))`
+     * whose result grounds to a parametric `:heap` application -- a pointer
+     * on every instantiation, so neither gate above fires -- still names the
+     * BASE constructor `ctor_Box_Box` from the one shared thunk, which a
+     * parametric `:heap` type never defines (the dead-base abort), and its
+     * env keeps a captured `A` as the int64 carrier (a float read back as
+     * its bit pattern).  Clone it per spec like inner_app: its own env, its
+     * body scanned under the clone's bindings, and the spec matched on
+     * bindings, since `int` and the carrier spell alike and would otherwise
+     * collapse the int instantiation onto the base. */
+    bool inner_app_heap = false;
+    /* A lambda that captures nothing is lifted to a global `__fn_N` and the
+     * body just names it, so returns_closure_fn_binding stays NULL.  Its
+     * clone is found by name -- atom_var's emit_reresolve_fn_value picks the
+     * spec of `__fn_N` interned under the outer spec's bindings -- so the
+     * only thing missing is recognising it here.  Taken only for the two
+     * annotated application gates; the float / unannotated paths keep
+     * their established shapes. */
+    Binding *lifted_ret = NULL;
+    if (!inner_closure && !borrow_path && fd && fd->body && n_bindings > 0) {
+        const Expr *rb = fd->body;
+        while (rb && (rb->kind == EX_ASCRIBE || rb->kind == EX_REINTERPRET))
+            rb = rb->kind == EX_ASCRIBE ? rb->as.ascribe_.inner
+                                        : rb->as.reinterpret_.expr;
+        if (rb && rb->kind == EX_VAR && rb->as.var.binding &&
+            rb->as.var.binding->is_lifted_lambda &&
+            rb->as.var.binding->type.kind == TY_FN &&
+            rb->as.var.binding->type.as.fn.result_full_type)
+            lifted_ret = rb->as.var.binding;
+    }
+    Binding *heap_cand = inner_closure ? inner_closure : lifted_ret;
+    if (heap_cand && !inner_app && !inner_app_annotated &&
+        !fn_binding->closure_return_dispatches_untyped &&
+        heap_cand->type.kind == TY_FN &&
+        heap_cand->type.as.fn.result_full_type && n_bindings > 0) {
+        const Type *gr = heap_cand->type.as.fn.result_full_type;
+        if (gr->kind == TY_APP && emit_abi_type_has_any_tyvar(gr)) {
+            Type inst = emit_abi_instantiate_type(gr, bindings, n_bindings,
+                                                  ctx->type_arena);
+            if (inst.kind == TY_APP && !emit_abi_type_has_any_tyvar(&inst) &&
+                (type_is_heap_struct(inst) ||
+                 (lifted_ret && adt_app_is_byvalue_product(inst))))
+                inner_app_heap = true;
+        }
+    }
+    if (inner_app_heap && !inner_closure) inner_closure = lifted_ret;
+    if (inner_float || inner_app || inner_app_annotated || inner_app_heap)
+        abi_changes = true;
     /* M6 / gap G6(c): a generic body PASSES a captured closure whose result type
      * follows the spec's tyvar (the recursive `(fn [c] : B (re-cata alg c))` to
      * `fmap` inside `re-cata [B]`).  Clone it per spec so its recursive call
@@ -8463,7 +8533,7 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
      * sibling, so bindings are the only thing telling them apart.  Without this
      * the callee's two clones dedup into one body and both enclosing specs call
      * it.  Gap H then names the siblings `__h<n>`. */
-    bool spec_match_bindings = inner_app_annotated ||
+    bool spec_match_bindings = inner_app_annotated || inner_app_heap ||
                                (!abi_changes && instance_changes);
     EmitAbiSpecialization *spec = emit_abi_intern_spec(
         ctx, fn_binding, fn_expr, fd, bindings, n_bindings,
@@ -8514,12 +8584,14 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
      * emit_resolve_type to the concrete float; the outer spec's EX_CLOSURE
      * construction then stores the clone's thunk + uses its suffixed env. */
     if ((inner_float || inner_app || inner_passed || inner_dispatch ||
-         inner_app_annotated) && inner_closure) {
+         inner_app_annotated || inner_app_heap) && inner_closure) {
         const Expr *inner_expr = emit_abi_find_fn_expr(items, n_items, inner_closure);
         if (inner_expr && inner_expr->kind == EX_FN_DEF && inner_expr->as.fn_def_.fn) {
             FnDef *inner_fd = inner_expr->as.fn_def_.fn;
             Type inner_args[MAX_FN_ARITY];
             uint32_t inner_n = inner_fd->n_params;
+            /* A lifted lambda that captures nothing has no env parameter. */
+            bool inner_has_env = inner_fd->closure != NULL;
             /* The inner closure binding's TY_FN includes the hidden env as arg 0,
              * so its arg_full_types are 1:1 with inner_fd->params.  Resolve each
              * to a *concrete* type via the spec bindings: the clone name and
@@ -8527,7 +8599,7 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
              * uses emit_type_c_name (which resolves tyvars), so arg_types[i] MUST
              * be tyvar-free or the three disagree (decl/def signature mismatch). */
             for (uint8_t i = 0; i < inner_n; i++) {
-                if (i == 0) {
+                if (i == 0 && inner_has_env) {
                     /* param 0 is the env pointer -- concrete ptr<void> already */
                     inner_args[i] = inner_fd->param_types[0];
                     continue;
@@ -8608,7 +8680,16 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
              * the base env layout -- only the body's representation differs --
              * so it reuses `__env_N` rather than emitting an identical
              * suffixed twin. */
-            if (!inner_dispatch && !spec_match_bindings)
+            /* ...unless a capture changes representation under the spec
+             * (generic-returned-lambda-builds-heap-app): a captured `A` is
+             * a double in the float clone and the carrier in the base, so
+             * that clone takes its own env. */
+            bool own_env = !inner_dispatch &&
+                (!spec_match_bindings || inner_app_heap ||
+                 (inner_app_annotated &&
+                  emit_inner_captures_change_repr(inner_fd, bindings,
+                                                  n_bindings, ctx->type_arena)));
+            if (own_env)
                 emit_assign_inner_env_override(ctx, inner_fd, inner_res, inner_spec);
             uint32_t inner_idx = (uint32_t)(inner_spec - ctx->abi_specializations);
             ctx->abi_specializations[outer_spec_idx].inner_closure_spec_idx = (int32_t)inner_idx;
@@ -8633,7 +8714,8 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
              * The int case worked by coincidence -- some other call in the
              * program had already interned tcons@int -- which is exactly the
              * kind of coincidence this campaign exists to remove. */
-            if ((inner_passed || inner_dispatch || inner_float || inner_app) &&
+            if ((inner_passed || inner_dispatch || inner_float || inner_app ||
+                 inner_app_heap) &&
                 inner_is_new && inner_fd->body) {
                 const EmitAbiSpecialization *saved_c = ctx->current_abi_specialization;
                 bool saved_in = saved_c >= ctx->abi_specializations &&
