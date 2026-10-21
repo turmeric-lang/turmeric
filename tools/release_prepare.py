@@ -239,7 +239,10 @@ def chat(base_url, key, spec, messages, timeout=900):
             last = f"HTTP {e.code}: {e.read()[:300]!r}"
             if e.code not in (429, 500, 502, 503, 504):
                 break
-        except (urllib.error.URLError, TimeoutError, KeyError, IndexError) as e:
+        # OSError: URLError and TimeoutError, but also an ssl.SSLError or a
+        # ConnectionResetError raised while reading the reply, which urllib
+        # does not wrap -- a transient TLS alert must retry, not crash the cut.
+        except (OSError, KeyError, IndexError) as e:
             last = repr(e)
         time.sleep(5 * (attempt + 1))
     raise RuntimeError(last)
