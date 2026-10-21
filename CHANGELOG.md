@@ -20,6 +20,16 @@ All notable changes to Turmeric are documented here.
 - **`--timings` zone `effect-lower` is now `effect-env`.** The pass only ever
   built the effect registry; the identity `effect_lower` walk it also ran is
   deleted.
+- **A spice's `:cmake-deps` configure after its dependencies'.** The entries
+  of the spices in a manifest's `:spices` closure now come first in the
+  generated `cmake/CMakeLists.txt`, and the root's own come last. A library
+  that reuses a target it finds in the project (`if (TARGET mbedtls)`) now
+  sees one a dependency spice declared. The link line keeps a dependent's
+  archives ahead of the ones they need.
+- **The dependent wins a `:cmake-deps` option.** When two spices set one
+  option of a shared native dependency to different values, the one that
+  depends on the other wins, and the root project can settle any option.
+  Two unrelated spices that disagree are still an error naming both.
 
 ### Added
 
@@ -32,6 +42,10 @@ All notable changes to Turmeric are documented here.
 
 ### Fixed
 
+- **Two spices can share one `:path` native dependency.** Each names it
+  relative to its own manifest, and the second was compared as written
+  against the first's absolute path, so the pair was always a "conflicting
+  :cmake-deps" error.
 - **The API reference renders every definition form.** `deftype`,
   `defdynamic`, `def` and `defalias` have cards; a sum type's constructors
   keep their payload types and a GADT arm its result; a generic struct shows

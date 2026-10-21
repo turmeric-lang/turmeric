@@ -1,5 +1,36 @@
 # A spice cannot override an option on, or be configured after, a `:cmake-deps` entry that another spice owns
 
+> **Resolved 2026-10-21.** Both gaps are closed in
+> `pkg_collect_transitive_cmake_deps` (`src/compiler/pkg.c`), which now keeps
+> the `:spices` graph it walks instead of a flat visited list:
+>
+> - **Order.** Entries are collected in post-order: a spice's `:spices`
+>   closure before the spice, the root manifest last, so a library's
+>   `if (TARGET ...)` probe sees what a dependency spice declared. The link
+>   manifest (`spice-deps-manifest.json`, whose entry order is the link order)
+>   is written the other way round, groups highest first, so a dependent's
+>   archives still precede the archives they need. Within one manifest the
+>   declared order stands for both.
+> - **Override.** Every value an option key is given is recorded with the
+>   manifest that gave it, and the key is settled after the whole graph is
+>   merged: the winning value is the one whose manifest depends on every
+>   manifest that set a different value. A spice overrides its dependency,
+>   the root overrides anything, and the root (or any common dependent) can
+>   settle a conflict between two unrelated spices by setting the option
+>   itself. Two unrelated spices that disagree with nothing above them still
+>   fail, naming both. The rule is the "dependent beats dependency" direction
+>   below; no `:override` key was needed.
+>
+> Pinned by `tests/run-transitive-cmake-deps.sh`:
+> `cmake-deps-dependent-overrides-option`, `cmake-deps-root-overrides-option`
+> and `cmake-deps-dependencies-configure-first` (the three-library repro
+> below, which now prints `top: found target mid`); `cmake-deps-option-conflict`
+> still pins the unrelated-spices error. Found on the way and fixed in the
+> same change: two spices naming one local library by `:path` always
+> conflicted, because the incoming path was compared as written against the
+> stored, absolutized one (`cmake-deps-shared-path-dep-merges`). Documented in
+> [developing-spices-guide](../guides/developing-spices-guide.md#native-dependencies-shared-across-spices).
+
 **Severity:** low (expressiveness hole; nothing is broken today). Two related
 gaps in how `tur` merges native dependencies across spices. Each forces a
 spice that builds on a shared native library to re-declare that library itself

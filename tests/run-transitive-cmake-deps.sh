@@ -297,8 +297,121 @@ MAN
         fail "cmake-deps-option-conflict" \
              "expected a non-zero exit naming DEP_FLAVOR and both spices; rc=$rc, log=$(cat "$U/app2/fetch.log")"
     fi
+
+    # 9./10. cmake-deps-no-cross-spice-override-or-order (gap 1): a spice may
+    #    override an option on an entry a spice in its own :spices closure
+    #    owns -- spice-d depends on spice-a and turns DEP_FLAVOR to "tls" --
+    #    and the root may override anything.  spice-a and spice-c above are
+    #    unrelated, so app2 still fails.
+    mkdir -p "$U/spice-d" "$U/app3/src" "$U/app4/src"
+    cat >"$U/spice-d/build.tur" <<MAN
+(defpackage spice-d :name "spice-d" :version "0.1.0"
+  :spices #map{"spice-a" #map{:path "../spice-a"}}
+  :cmake-deps #map{"dep" #map{:url "file://$U/dep" :ref "v1" :targets ["dep"]
+                              :options #map{:DEP_FLAVOR "tls"}}})
+MAN
+    cp "$U/app/src/main.tur" "$U/app3/src/main.tur"
+    cp "$U/app/src/main.tur" "$U/app4/src/main.tur"
+    cat >"$U/app3/build.tur" <<'MAN'
+(defpackage app3 :name "app3" :version "0.1.0"
+  :spices #map{"spice-d" #map{:path "../spice-d"}})
+MAN
+    cat >"$U/app4/build.tur" <<MAN
+(defpackage app4 :name "app4" :version "0.1.0"
+  :spices #map{"spice-a" #map{:path "../spice-a"} "spice-c" #map{:path "../spice-c"}}
+  :cmake-deps #map{"dep" #map{:url "file://$U/dep" :ref "v1" :targets ["dep"]
+                              :options #map{:DEP_FLAVOR "root"}}})
+MAN
+    if (cd "$U/app3" && timeout 120 "$TUR_ABS" fetch >fetch.log 2>&1) \
+       && grep -q 'set(DEP_FLAVOR "tls"' "$U/app3/cmake/CMakeLists.txt" \
+       && ! grep -q 'set(DEP_FLAVOR "shared"' "$U/app3/cmake/CMakeLists.txt" \
+       && (cd "$U/app3" && timeout 120 "$TUR_ABS" build . >build.log 2>&1) \
+       && [ "$("$U/app3/build/bin/app3" 2>&1)" = "tls/none" ]; then
+        pass "cmake-deps-dependent-overrides-option"
+    else
+        fail "cmake-deps-dependent-overrides-option" \
+             "expected spice-d's DEP_FLAVOR to win over spice-a's and the program to print tls/none: $(tail -n 8 "$U/app3/fetch.log" "$U/app3/build.log" 2>/dev/null)"
+    fi
+    # The root settles a conflict between two unrelated spices.
+    if (cd "$U/app4" && timeout 120 "$TUR_ABS" fetch >fetch.log 2>&1) \
+       && grep -q 'set(DEP_FLAVOR "root"' "$U/app4/cmake/CMakeLists.txt" \
+       && (cd "$U/app4" && timeout 120 "$TUR_ABS" build . >build.log 2>&1) \
+       && [ "$("$U/app4/build/bin/app4" 2>&1)" = "root/none" ]; then
+        pass "cmake-deps-root-overrides-option"
+    else
+        fail "cmake-deps-root-overrides-option" \
+             "expected the root's DEP_FLAVOR to settle spice-a vs spice-c and the program to print root/none: $(tail -n 8 "$U/app4/fetch.log" "$U/app4/build.log" 2>/dev/null)"
+    fi
 else
-    echo "SKIP cmake-deps-option-union / cmake-deps-option-conflict (no cmake or git)"
+    echo "SKIP cmake-deps-option-union / cmake-deps-option-conflict / overrides (no cmake or git)"
+fi
+
+# ---------------------------------------------------------------------------
+# 11. cmake-deps-no-cross-spice-override-or-order (gap 2): a spice's
+#    :cmake-deps are configured AFTER those of the spices it depends on, so a
+#    library that probes `if (TARGET mid)` sees the target a dependency spice
+#    declared.  The app declares `top` and gets `midcore` through midspice;
+#    top links mid when it finds the target, and the link line still puts
+#    libtop.a ahead of libmid.a.
+if command -v cmake >/dev/null 2>&1; then
+    O="$WORK/order"
+    mkdir -p "$O/deps" "$O/midspice/src" "$O/app/src"
+    cp -r tests/fixtures/cmake-deps-archive-chain/deps/top \
+          tests/fixtures/cmake-deps-archive-chain/deps/midcore "$O/deps/"
+    cat >"$O/deps/top/CMakeLists.txt" <<'CMK'
+cmake_minimum_required(VERSION 3.20)
+project(top C)
+add_library(top STATIC top.c)
+if (TARGET mid)
+  message(STATUS "top: found target mid")
+  target_link_libraries(top PRIVATE mid)
+else()
+  message(STATUS "top: no target mid yet")
+endif()
+CMK
+    cat >"$O/midspice/build.tur" <<'MAN'
+(defpackage midspice :name "midspice" :version "0.1.0"
+  :cmake-deps #map{"midcore" #map{:path "../../deps/midcore" :targets ["mid" "core"]}})
+MAN
+    cp tests/fixtures/cmake-deps-archive-chain/app/src/main.tur "$O/app/src/main.tur"
+    cat >"$O/app/build.tur" <<'MAN'
+(defpackage app :name "app" :version "0.1.0"
+  :spices #map{"midspice" #map{:path "../midspice"}}
+  :cmake-deps #map{"top" #map{:path "../../deps/top" :targets ["top"]}})
+MAN
+    if (cd "$O/app" && timeout 120 "$TUR_ABS" fetch >fetch.log 2>&1 \
+            && timeout 120 "$TUR_ABS" build . >build.log 2>&1) \
+       && grep -q "top: found target mid" "$O/app/fetch.log" \
+       && [ "$("$O/app/build/bin/app" 2>&1)" = "42" ]; then
+        pass "cmake-deps-dependencies-configure-first"
+    else
+        fail "cmake-deps-dependencies-configure-first" \
+             "expected top's configure to find midspice's mid target and the app to print 42: $(grep 'top:' "$O/app/fetch.log"; tail -n 8 "$O/app/fetch.log" "$O/app/build.log" 2>/dev/null)"
+    fi
+
+    # 12. Two spices that name ONE local library, each by a :path relative to
+    #     its own manifest, share it.  The stored copy's path was absolute and
+    #     the incoming one was compared as written, so this was a "conflicting
+    #     :cmake-deps" error every time.
+    mkdir -p "$O/midspice2/src" "$O/app2/src"
+    cp "$O/midspice/build.tur" "$O/midspice2/build.tur"
+    sed -i.bak 's/midspice/midspice2/g' "$O/midspice2/build.tur" && rm -f "$O/midspice2/build.tur.bak"
+    cp "$O/app/src/main.tur" "$O/app2/src/main.tur"
+    cat >"$O/app2/build.tur" <<'MAN'
+(defpackage app2 :name "app2" :version "0.1.0"
+  :spices #map{"midspice" #map{:path "../midspice"} "midspice2" #map{:path "../midspice2"}}
+  :cmake-deps #map{"top" #map{:path "../../deps/top" :targets ["top"]}})
+MAN
+    if (cd "$O/app2" && timeout 120 "$TUR_ABS" fetch >fetch.log 2>&1 \
+            && timeout 120 "$TUR_ABS" build . >build.log 2>&1) \
+       && [ "$("$O/app2/build/bin/app2" 2>&1)" = "42" ]; then
+        pass "cmake-deps-shared-path-dep-merges"
+    else
+        fail "cmake-deps-shared-path-dep-merges" \
+             "expected midspice and midspice2's midcore to be one dependency and the app to print 42: $(tail -n 8 "$O/app2/fetch.log" "$O/app2/build.log" 2>/dev/null)"
+    fi
+else
+    echo "SKIP cmake-deps-dependencies-configure-first / cmake-deps-shared-path-dep-merges (no cmake)"
 fi
 
 echo

@@ -62,7 +62,9 @@ not work today, for three reasons:
    Even with a merge, `NNG_ENABLE_TLS` `OFF` against `ON` is a true conflict
    with no rule for who wins, and the nng spice's entry would also need
    configuring after `mbedtls`
-   ([cmake-deps-no-cross-spice-override-or-order](../../reported/cmake-deps-no-cross-spice-override-or-order.md)).
+   ([cmake-deps-no-cross-spice-override-or-order](../../archive/cmake-deps-no-cross-spice-override-or-order.md),
+   closed 2026-10-21: a dependent's option now wins, and a `:spices`
+   dependency's entries are configured first).
 3. **A second nng build under another name cannot coexist.** Two `nng` CMake
    targets in one generated project is a configure error, and two copies of
    libnng's symbols in one link is a duplicate-symbol error.
@@ -99,12 +101,13 @@ cannot change the build silently. Other keys are unchanged:
 
 ```turmeric
 :cmake-deps #map{
-  ;; Declared here, ahead of "nng", rather than reached through the tls spice:
-  ;; nng's CMake reuses an in-project mbedtls only if the target already exists
-  ;; when nng configures, and entries from :spices are configured after a
-  ;; spice's own (cmake-deps-no-cross-spice-override-or-order). Same :url and
-  ;; :ref as tls / http / ws-client, so a program using any of them gets ONE
-  ;; mbedTLS build.
+  ;; Declared here, ahead of "nng": nng's CMake reuses an in-project mbedtls
+  ;; only if the target already exists when nng configures. (Reaching it
+  ;; through the tls spice would work too since 2026-10-21, when :spices
+  ;; entries started configuring first --
+  ;; cmake-deps-no-cross-spice-override-or-order.) Same :url and :ref as
+  ;; tls / http / ws-client, so a program using any of them gets ONE mbedTLS
+  ;; build.
   "mbedtls" #map{:url     "https://github.com/Mbed-TLS/mbedtls"
                  :ref     "v3.6.2"
                  :targets ["mbedtls" "mbedx509" "mbedcrypto"]
@@ -324,11 +327,11 @@ One turmeric-spices PR is the expected shape; NT0 has no value shipped alone.
 
 ## Follow-ups (not this plan)
 
-- **TLS as an opt-in.** Once a consumer can set an option on a dependency's
+- **TLS as an opt-in.** A consumer can now set an option on a dependency's
   entry and get it configured after `mbedtls`
-  ([cmake-deps-no-cross-spice-override-or-order](../../reported/cmake-deps-no-cross-spice-override-or-order.md)),
-  turn TLS back off by default and let a program, or a thin `nng-tls` spice,
-  opt in. The `nng/tls` API does not change.
+  ([cmake-deps-no-cross-spice-override-or-order](../../archive/cmake-deps-no-cross-spice-override-or-order.md),
+  closed 2026-10-21), so TLS can go back off by default, with a program or a
+  thin `nng-tls` spice opting in. The `nng/tls` API does not change.
 - **Explicit dialer / listener handles**, and with them per-endpoint
   WebSocket options (extra headers, frame sizes).
 - **A raw-WebSocket-over-TLS test client** in `ws_test.tur`, so the
@@ -374,12 +377,12 @@ fa42ece.
 
 ## Found on the way
 
-All five were filed in `docs/reported/`; four are resolved since; none blocks this plan.
+All five were filed in `docs/reported/`; all five are resolved since; none blocks this plan.
 
 | Report | Severity | Effect here |
 | --- | --- | --- |
 | [cmake-deps-duplicate-keeps-first-options](../../archive/cmake-deps-duplicate-keeps-first-options.md) | medium | resolved 2026-10-21 by union: the sibling `mbedtls` entries no longer need editing, and only the `nng` entry needs the extra option |
-| [cmake-deps-no-cross-spice-override-or-order](../../reported/cmake-deps-no-cross-spice-override-or-order.md) | low | why TLS is not a separate spice or an opt-in |
+| [cmake-deps-no-cross-spice-override-or-order](../../archive/cmake-deps-no-cross-spice-override-or-order.md) | low | resolved 2026-10-21: a dependent's option wins over its dependency's, and dependencies configure first, which is what TLS-as-an-opt-in (the follow-up above) needs |
 | [cmake-dep-link-walk-stops-at-archive](../../archive/cmake-dep-link-walk-stops-at-archive.md) | medium | resolved 2026-10-21: the link walk follows an archive's own dependencies, so the `nng` entry no longer needs to list the mbedTLS targets |
 | [cmake-dir-markers-print-link-flag-warnings](../../archive/cmake-dir-markers-print-link-flag-warnings.md) | low | resolved 2026-10-18: the markers are dropped, so no warnings |
 | [cmake-dep-path-through-missing-cmake-dir](../../archive/cmake-dep-path-through-missing-cmake-dir.md) | medium | resolved 2026-10-18; none here (nng has no `:path` deps) |

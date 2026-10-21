@@ -73,6 +73,12 @@ typedef struct PkgCmakeDep {
      * -- not tur -- decides which applies. */
     PkgCmakeOpt  *wasm_opts;
     int           n_wasm_opts;
+    /* Set by pkg_collect_transitive_cmake_deps: the post-order position of
+     * the manifest that first declared this entry (0 = the deepest spice;
+     * the root manifest is the highest).  pkg_gen_cmake_deps writes the
+     * link manifest highest group first, so a dependent's archives precede
+     * its dependencies'.  0 for a manifest's own, uncollected entries. */
+    int           link_group;
 } PkgCmakeDep;
 
 /* ------------------------------------------------------------------ */
@@ -523,15 +529,23 @@ char *pkg_workspace_member_path(const char *project_dir, const char *dep_name);
  * to its on-disk directory (workspace-sibling preferred, then :path, then
  * fetched <root>/spices/<name>[-<ref>][/<subdir>]), reading the sibling's
  * own build.tur, and unioning all :cmake-deps blocks encountered into a
- * freshly-allocated PkgCmakeDep array.  The root manifest's own cmake_deps
- * are included first so its declarations win in any ordering-sensitive
- * downstream consumer.
+ * freshly-allocated PkgCmakeDep array.  The array is in configure order:
+ * post-order over the :spices graph, so a spice's dependencies' entries
+ * come before its own and the root manifest's come last.  Each entry's
+ * `link_group` lets pkg_gen_cmake_deps write the link manifest the other
+ * way round (cmake-deps-no-cross-spice-override-or-order).
  *
  * Conflict policy:
- *   - identical (name, url, ref) entries are silently deduplicated
- *     (workspace siblings sharing a system dep coexist cleanly);
- *   - same-name entries with mismatched :url or :ref are a hard error --
- *     stderr gets both origins and the function returns false.
+ *   - same-name entries at the same :url/:ref (or :path) are one dependency
+ *     and are merged: :targets / :link-libs / :link-flags union, and so do
+ *     :options / :wasm-options key by key;
+ *   - an option set to different values goes to the declaration whose
+ *     manifest depends on every other one that set it (a spice overrides
+ *     its dependency, the root overrides anything); when none does, it is a
+ *     hard error naming two unrelated origins;
+ *   - same-name entries with mismatched :url or :ref, or a differing
+ *     :cmake-name / :cmake-version, are a hard error -- stderr gets both
+ *     origins and the function returns false.
  *
  * On success, *out_deps points to a newly-allocated array of PkgCmakeDep
  * (deep-copied from source manifests; :path entries are absolutized so
