@@ -14,15 +14,15 @@
 /* == driver/preamble_split.c =============================================== */
 int cmd_emit_rt_split(int argc, char **argv);
 
-/* == main.c ================================================================ */
-
-/* -- moving to driver/cmd_emit.c -- */
+/* == driver/cmd_emit.c ===================================================== */
 int cmd_emit_c(const char *path,
                const char **include_dirs, int n_include_dirs);
 int cmd_emit_c_to_dir(const char *out_dir, char **inputs, int n_inputs,
                       const char **include_dirs, int n_include_dirs);
 int cmd_emit_h(const char *path,
                const char **include_dirs, int n_include_dirs);
+
+/* == main.c ================================================================ */
 
 /* -- moving to driver/cmd_build.c -- */
 int cmd_build(const char *input, const char *out_path,

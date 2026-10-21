@@ -251,11 +251,11 @@ bool split_lib_cache_restore(SplitLibCache *c, const Expr *prog, Buf *lib_r);
 void split_lib_cache_record(SplitLibCache *c, const Expr *prog, const Buf *lib_r);
 bool jit_try_split_preamble(Buf *csrc, Buf *out);
 
-/* == main.c ================================================================ */
-
-/* -- moving to driver/cmd_emit.c -- */
+/* == driver/cmd_emit.c ===================================================== */
 void drv_default_output_name(const char *input, char *out, size_t cap);
 char *drv_resolve_build_dir(const char *input_or_root, const char *cli_flag);
+
+/* == main.c ================================================================ */
 
 /* -- moving to driver/project.c -- */
 extern bool g_build_bundle_deps;
