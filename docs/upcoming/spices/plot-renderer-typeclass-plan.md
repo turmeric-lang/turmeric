@@ -4,14 +4,15 @@
 > branch `claude/plot-renderer-typeclass-p4`, meeting the whole-plan
 > acceptance below: all 30 renderer kinds are types with a `Renderer`
 > instance (`bounds`, `draw`, and the defaulted `legend-label` /
-> `frame-marks` / `categories`); every public constructor returns
-> `AnyRenderer`; `plot` & co. take a `(Vec AnyRenderer)`; the draw `switch`,
-> the bounds `switch` and the slot bag are gone; callbacks are typed fn
-> values; style and option handles are `LineStyle` / `PointStyle` /
-> `FillStyle` / `PlotOpts`. Pixel check: of 34 scenes, 33 byte-identical to
-> pre-plan output and `arrows` changed by a bounds bug fix. **Remaining
-> (beyond this plan's acceptance):** typing the data payloads (`:int` cons
-> lists of double bits) and `contours`' collapsed levels. See P4.
+> `frame-marks` / `categorical?` / `category-labels`); every public
+> constructor returns `AnyRenderer`; `plot` & co. take a
+> `(Vec AnyRenderer)`; the draw `switch`, the bounds `switch` and the slot
+> bag are gone; callbacks are typed fn values; style and option handles are
+> `LineStyle` / `PointStyle` / `FillStyle` / `PlotOpts`; renderer data is
+> a Vec of typed records from `plot/data`. Pixel check: of 34 scenes, 33
+> byte-identical to pre-plan output and `arrows` changed by a bounds bug
+> fix. **Remaining (beyond this plan's acceptance):** `contours`' collapsed
+> levels and the frame's unmatched canvas save. See P4.
 > Tracks: spices-type-features-uplift-plan **U2 target — plot**
 > Scope: `spices/plot/` only; P3 needed a compiler dependency after all, now
 > satisfied (see Risks).
@@ -360,19 +361,35 @@ draws walk the Vec by index. The C-ABI helpers (`plot_ctx_*_style`,
 declare their prototypes and an opaque's C type is the compiler's choice. 34
 scenes byte-identical.
 
+**Done (typed data payloads, 2026-10-21, same branch):** a new module,
+`plot/data`, defines `Point`, `Rect`, `ErrorBar`, `Arrow`, `Bar` and `Group`
+(`:copy` structs; `Group` holds a `(Vec float)`), and every data-taking
+constructor takes a `(Vec <record>)` -- `density` a `(Vec float)`,
+`stacked-histogram`'s layer names a `(Vec cstr)`. Handing a renderer the
+wrong record is TUR-E0001 (`errors/wrong-data-record.tur`).
+- The C draws and bounds helpers are unchanged. Of the two shapes weighed
+  (C reading the Vec's boxed-element layout, or a Turmeric adapter), the
+  adapter was taken: each instance's `draw` / `bounds` lowers its Vec to the
+  cons cells the C reads (`__points->cells` and friends, an opaque `Cells`),
+  and frees them after. The boxed layout stays a compiler detail.
+- `parametric` / `parametric-interval` take a `(fn [float] Point)` and
+  `vector-field` a `(fn [float float] Point)`. The C calls them through two
+  Turmeric-bodied `export-as` shims (`plot_eval_point`,
+  `plot_eval_vector`) that apply the closure and store the fields through
+  out-pointers, so no cons point is allocated per sample.
+- The `categories` method (an `(Option int)` over the raw bar list) is
+  split into two defaulted methods, `categorical?` and
+  `category-labels : (Vec cstr)`, which the frame lowers for its tick labels;
+  `error-bars` / `discrete-histogram` / `stacked-histogram` take
+  `horizontal : bool` for their `invert : int`.
+- Verified: 34 scenes byte-identical to the typed-styles step; shard green
+  on release and Debug `tur` (11 tests, 5 compile-fail fixtures);
+  ASan/UBSan clean, and the per-sample callback leaks are gone.
+
 **Remaining (follow-ups, not in this plan's acceptance):**
-- Payload typing: point lists, error bars, arrows, quads, bars and groups
-  are `:int` cons lists of double bits, built by callers' own inline C.
-  Typed records (`Point`, `Rect`, `Bar`, ...) in a `(Vec T)` are the natural
-  shape, but a `(Vec <struct>)` stores each element boxed (a pointer per
-  element, an internal detail), so either the C draws learn that layout or a
-  Turmeric adapter lowers the typed records to the cons lists the C reads.
-  The parametric and vector-field callbacks return a cons point too; typing
-  them as `(fn [float] Point)` needs the C to call a closure returning a
-  struct. Every data-taking constructor changes signature -- a design call
-  for the spice's owner.
 - `contours` stores 0.0 for both ends of its level range, so all `n` levels
-  draw the 0 contour. Preserved for pixel identity; fix with the payload pass.
+  draw the 0 contour. Preserved for pixel identity; a one-line fix that
+  changes the `contours` scene's pixels.
 - The frame `plutovg_canvas_save`s once at the top with no matching
   `restore`, so each plot leaves one saved state on a caller's canvas
   (`CanvasBackend`). Preserved; harmless for a fresh surface.
@@ -389,9 +406,11 @@ scenes byte-identical.
 > **Done 2026-10-21 with the P4 migration:** `tests/plot/renderer_test.tur`
 > pins every kind's `bounds`; `tests/plot/callback_test.tur` checks `fn`
 > literals draw what defns draw and that re-rendering is stable;
-> `spices/plot/errors/run.sh` (the shard's errors stage) asserts three
+> `spices/plot/errors/run.sh` (the shard's errors stage) asserts five
 > compile-fail fixtures with witness substrings -- no `Renderer` instance,
-> a `(Vec int)` passed to `plot`, a mistyped callback. A per-kind
+> a `(Vec int)` passed to `plot`, a mistyped callback, and (with the typed
+> styles and data) a `FillStyle` where a `LineStyle` is due and `Rect`s
+> where `Point`s are due. A per-kind
 > construct→render→pixel-count check is not added: the line / point / area /
 > interval / contour suites already render every kind.
 
