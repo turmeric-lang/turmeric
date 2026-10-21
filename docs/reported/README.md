@@ -321,7 +321,6 @@ hits under ASan.
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [fs-functions-compiled-only](fs-functions-compiled-only.md) | medium (engine parity) | 25 of `stdlib/fs.tur`'s 29 inline-C functions (and `fs/read-string`) have no interpreter native, so `fs/read-text`, `fs/write-text`, `fs/exists?`, even `fs/path-join`, fail under `--interpret` and in `tur repl` with "inline-C not supported in interpreter mode". Only the `fs/tmpfile*` four are registered. |
 
 ## Found running the performance audit's WP0 corpus (filed 2026-10-14)
 

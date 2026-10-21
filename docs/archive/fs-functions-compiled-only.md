@@ -74,3 +74,24 @@ Knock-on effects:
    with no inline C of its own runs under `run-turi.sh` as well, and its
    doctest example stops being skipped. Either one keeps the two engines
    agreeing.
+
+## Resolved 2026-10-21: natives for the whole surface
+
+Fix direction 2, for every inline-C function in `stdlib/fs.tur` and
+`fs/read-string` in `fs-string.tur` (`src/turi/interpreter_natives.c`, beside
+`fs/tmpfile`'s). Each native mirrors its compiled body: the same errno in
+the `Err` arm (a Result is the `Ok` / `Err` struct `(ok x)` / `(err e)`
+evaluate to), the same malloc'd cstr the caller hands to `fs/free-cstr`, the
+same four-word StatInfo block, and a `(Vec cstr)` built through the
+collection natives (`turi_native_vec_new` / `_push` / `_free`, now exported
+from `collections_native.c`) so `vec-get` and `fs/paths-free` see an
+ordinary interpreter Vec. Every I/O native carries a `TURI_CAP_FS` row in
+`native_caps.c`; `fs/path-join`, `fs/dup-cstr`, `fs/free-cstr` and
+`fs/paths-free` need no capability and carry handle-signature rows instead.
+Fix direction 1 (Turmeric bodies for the pure helpers) was not needed once
+they had natives.
+
+Fix direction 3: `tests/fixtures/fs-interp-basics` writes, appends, reads
+(cstr, String, lines), stats, builds and removes a directory tree, globs and
+renames under a tmpfile's unique path, and runs under both `tests/run.sh`
+and `tests/run-turi.sh` with one `expected.stdout`.

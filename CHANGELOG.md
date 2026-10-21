@@ -23,6 +23,11 @@ All notable changes to Turmeric are documented here.
 
 ### Fixed
 
+- **`stdlib/fs.tur` runs under `tur --interpret` and in the REPL.** Every
+  function in it (`fs/read-text`, `fs/write-text`, `fs/read-lines`,
+  `fs/exists?`, `fs/stat`, `fs/mkdirp`, `fs/glob`, `fs/read-dir`, ... and
+  `fs/read-string`) has an interpreter native that mirrors its compiled body,
+  errno included; only the four `fs/tmpfile*` functions had one before.
 - **Two spices declaring one `:cmake-deps` entry merge their declarations.**
   The copy collected first used to win silently, dropping the other's
   `:options`, `:targets` and the rest. Options now union key by key, and a
