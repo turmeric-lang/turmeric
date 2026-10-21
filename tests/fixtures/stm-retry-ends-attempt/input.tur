@@ -1,0 +1,11 @@
+;; stm-forms-gaps item 2: `retry` ends the attempt.  It used to only set a flag,
+;; so the statements after it still ran -- printing "after" a thousand times a
+;; second -- and, with no TVar read, the transaction could never park and
+;; spun forever.  Now the body stops at the retry, and a transaction that read
+;; nothing (so no commit can wake it) stops the program with the interpreter's
+;; message instead of spinning.
+;;
+;; Nothing may reach stdout: "after" is after the retry, so it must not run.
+(defn main [] : int
+  (println (atomically (stm (retry) (println "after") 1)))
+  0)

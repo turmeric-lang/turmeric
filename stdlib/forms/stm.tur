@@ -20,12 +20,13 @@
 ;;; inside it the `tvar/*` forms work and see one consistent snapshot. Put
 ;;; `stm` directly under `atomically`, or in a function that is called from an
 ;;; `atomically` body. An `stm` nested in a running transaction joins it: its
-;;; writes belong to the same commit. A nested `atomically` does not -- it is a
-;;; transaction of its own that commits first and cannot see the outer one's
-;;; uncommitted writes. An `stm` that is not under an `atomically` at all
-;;; crashes the compiled program (the interpreter reports `tvar/read used outside
-;;; of an atomically block`). Do not `set!` a dynamic variable inside one
-;;; (TUR-E0605): a retry cannot undo it.
+;;; writes belong to the same commit. A nested `atomically` is refused at compile
+;;; time (TUR-E0009): the inner block would be a transaction of its own that
+;;; commits first and cannot see the outer one's uncommitted writes. An `stm`
+;;; run with no `atomically` around it at all stops the program (`stm used outside
+;;; of an atomically block`; the interpreter says `tvar/read used outside of an
+;;; atomically block`). Do not `set!` a dynamic variable inside one (TUR-E0605): a
+;;; retry cannot undo it.
 ;;;
 ;;; Parameters:
 ;;;   body -- the forms of the transaction
@@ -45,10 +46,10 @@
 ;;; this one has read (no busy-waiting), then runs the body again from the top.
 ;;; If nothing ever does, the compiled program waits forever; the interpreter,
 ;;; which cannot wait on another thread, stops with `transaction requested retry
-;;; with no way to make progress`. `retry` is not an exit: the rest of the attempt
-;;; still runs, so a `println` after it repeats on every attempt, and a retry
-;;; that has read no TVar spins instead of parking. Put it last on its path, and
-;;; prefer `check`, which is `retry` unless a condition holds. `retry` has type
+;;; with no way to make progress`. `retry` ends the attempt at once: the forms after
+;;; it do not run. A retry that has read no TVar can never be woken, so the
+;;; compiled program stops with the interpreter's message instead of spinning.
+;;; Prefer `check`, which is `retry` unless a condition holds. `retry` has type
 ;;; `nil`, so both arms of an `if` around it must be `nil`. `or-else` tries an
 ;;; alternative instead of waiting.
 ;;;

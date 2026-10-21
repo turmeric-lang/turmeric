@@ -1,0 +1,2 @@
+The compiled runtime panics (abort, exit 134) where the interpreter returns an
+error value (exit 1, a different message), so the exit status and stderr differ.

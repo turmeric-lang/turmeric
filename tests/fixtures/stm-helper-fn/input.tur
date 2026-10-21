@@ -1,0 +1,14 @@
+;; The other side of stm-outside-atomically: a `stm` block in a helper FUNCTION
+;; is legitimate -- `tvar/*` forms need a lexical `stm`, so a function that
+;; reads or writes a TVar wraps its body in one -- and runs inside whatever
+;; transaction calls it.  An attempt to reject `stm` outside a lexical
+;; `atomically` at compile time broke exactly this; the check is at run time.
+(defn bump [tv : ptr] : ptr
+  (stm (tvar/write tv (:: (+ (:: (tvar/read tv) :int) 1) ptr))
+       (tvar/read tv)))
+
+(defn main [] : int
+  (let [tv (tvar/new 5)]
+    (println (:: (atomically (bump tv)) :int))     ;; 6
+    (println (:: (atomically (bump tv) (bump tv)) :int)))  ;; 8: one transaction
+  0)

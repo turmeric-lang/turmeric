@@ -17656,6 +17656,24 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                 buf_printf(body, "%s %s = 0;\n", type_c_name(rt), res);
             }
             int opened = 0;
+            /* stm-forms-gaps item 1: this block runs only inside a transaction
+             * (`atomically` installs one before its body; a `stm` in a helper
+             * function is reached through an atomically body).  With none -- a
+             * bare `(stm (tvar/read tv))` -- every transactional form below read
+             * through a null transaction and the program segfaulted.  Say what
+             * the interpreter says, and skip the body. */
+            if (n > 0) {
+                indent_buf(body, ctx->indent);
+                buf_puts(body, "if (tur_stm_current_tx() == NULL) {\n");
+                ctx->indent += 4;
+                indent_buf(body, ctx->indent);
+                buf_puts(body, "tur_panic(\"stm used outside of an atomically block\");\n");
+                ctx->indent -= 4;
+                indent_buf(body, ctx->indent);
+                buf_puts(body, "} else {\n");
+                ctx->indent += 4;
+                opened++;
+            }
             for (uint32_t i = 0; i < n; i++) {
                 const Expr *be = e->as.stm_.body[i];
                 if (i > 0) {
@@ -17686,10 +17704,12 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
             char *result = fresh_tmp(ctx);
             Type result_type = e->type;
             
-            /* Declare result variable - but void type is not allowed in C */
+            /* Declare result variable - but void type is not allowed in C.
+             * Zeroed: the no-progress panic leaves the loop without committing,
+             * and the caller reads the result variable on its way out. */
             if (result_type.kind != TY_NIL) {
                 indent_buf(body, ctx->indent);
-                buf_printf(body, "%s %s;\n", type_c_name(result_type), result);
+                buf_printf(body, "%s %s = {0};\n", type_c_name(result_type), result);
             }
             
             /* atomically block */
@@ -17723,32 +17743,41 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
             indent_buf(body, ctx->indent);
             buf_puts(body, "__tur_stm_begin(__tx);\n");
 
-            /* Emit STM block body directly */
+            /* Emit the STM block body through the EX_STM arm, so a `retry` /
+             * `check` that fires ends the attempt: the statements after it do not
+             * run (stm-forms-gaps item 2 -- they used to run, and print, on every
+             * spin).  That arm declares the block's value before its guards. */
             const Expr *stm_expr = e->as.atomically_.stm_expr;
             char *stm_last_val = NULL;
             if (stm_expr->as.stm_.n_body > 0) {
-                for (uint32_t i = 0; i < stm_expr->as.stm_.n_body; i++) {
-                    const Expr *expr = stm_expr->as.stm_.body[i];
-                    if (i < stm_expr->as.stm_.n_body - 1) {
-                        /* Not the last expression - emit as statement */
-                        emit_stmt(ctx, body, expr);
-                    } else {
-                        /* Last expression - emit as value */
-                        if (expr->type.kind != TY_NIL && expr->type.kind != TY_NEVER) {
-                            stm_last_val = emit_value(ctx, body, expr);
-                        } else {
-                            emit_stmt(ctx, body, expr);
-                        }
-                    }
-                }
+                bool has_val = stm_expr->type.kind != TY_NIL &&
+                               stm_expr->type.kind != TY_NEVER;
+                char *v = emit_value(ctx, body, stm_expr);
+                if (has_val) stm_last_val = v; else free(v);
             }
-            
+
             /* retry / check-false: park on the read set, then re-run */
             indent_buf(body, ctx->indent);
             buf_puts(body, "if (__tx->retry_requested) {\n");
             ctx->indent += 4;
             indent_buf(body, ctx->indent);
             buf_puts(body, "tur_stm_set_current_tx(__prev_tx);\n");
+            /* A transaction that read no TVar can never be woken: no commit by
+             * another thread touches anything it depends on, so parking would
+             * return at once and the loop would spin forever.  The interpreter
+             * stops with the same message. */
+            indent_buf(body, ctx->indent);
+            buf_puts(body, "if (__tx->read_count == 0) {\n");
+            ctx->indent += 4;
+            indent_buf(body, ctx->indent);
+            buf_puts(body, "tur_panic(\"atomically: transaction requested retry with no way to make progress (it read no TVar, so no commit by another thread can wake it)\");\n");
+            indent_buf(body, ctx->indent);
+            buf_puts(body, "free(__tx);\n");
+            indent_buf(body, ctx->indent);
+            buf_puts(body, "break;\n");
+            ctx->indent -= 4;
+            indent_buf(body, ctx->indent);
+            buf_puts(body, "}\n");
             indent_buf(body, ctx->indent);
             buf_puts(body, "__tur_stm_park(__tx);\n");
             indent_buf(body, ctx->indent);
