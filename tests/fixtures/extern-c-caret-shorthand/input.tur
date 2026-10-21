@@ -1,0 +1,24 @@
+;; module-and-ffi-forms-gaps 1-2: the `^type` shorthand reads the type name
+;; as `:type` does, a `^type` followed by another `^type` is an anonymous
+;; parameter, and `[^]` is an empty parameter list.  `[^float]` used to
+;; declare an int parameter (sqrt of 2.25 was a type error, of 4 garbage),
+;; `[^float ^float]` ONE parameter named `^float`, and `[^]` a function of
+;; one int.
+(extern-c sqrt [^float] :float)
+(extern-c fmax [^float ^float] :float)
+(extern-c strcmp [^cstr ^cstr] :int32)
+(extern-c malloc [^int] :ptr)
+(extern-c free [^ptr] :void)
+(extern-c abs [^int32 n] :int32)
+(extern-c getpid [^] :int32)
+(defn main [] : int
+  (println (sqrt 2.25))
+  (println (fmax 1.5 7.25))
+  (println (as int (abs (as int32 -7))))
+  (println (>= (as int (getpid)) 1))
+  ;; Portable libc only: a native Windows binary has no "/dev/null" to fopen.
+  (println (as int (strcmp "turmeric" "turmeric")))
+  (let [p (malloc 16)]
+    (free p))
+  (println "freed")
+  0)

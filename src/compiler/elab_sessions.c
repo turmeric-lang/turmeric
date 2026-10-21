@@ -353,6 +353,19 @@ Expr *elab_session_send(Elab *e, const Form *call) {
     if (payload && !session_payload_supported(e, *payload, call->span, "send"))
         return NULL;
 
+    /* The value must be what the protocol says the message is: the payload
+     * is lowered by the PROTOCOL's type below, so a float sent on a
+     * `(Send int ...)` step was value-cast to 7 compiled and passed through
+     * as 7.25 interpreted.  The rule is an ordinary call's, shared with
+     * `perform`'s arguments (elab_word_slot_mismatch). */
+    if (payload && elab_word_slot_mismatch(payload, &val->type, NULL)) {
+        diag_emit_with_code(DIAG_ERROR, call->span, TUR_E0212_SESSION_PROTO_MISMATCH,
+                            "send: the protocol's next message is %s, but this "
+                            "value has type %s",
+                            type_name(*payload), type_name(val->type));
+        return NULL;
+    }
+
     /* Mark chan as consumed (it's linear) */
     Binding *chan_binding = (chan->kind == EX_VAR) ? chan->as.var.binding : NULL;
     if (chan_binding) binding_mark_moved(chan_binding, call->span);

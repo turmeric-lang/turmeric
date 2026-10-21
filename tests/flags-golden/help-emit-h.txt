@@ -1,0 +1,61 @@
+usage:
+  tur build [-I <dir>...] <file.tur> [-o <out>]   build a single file
+  tur build <dir> [-o <out>]                       build all .tur in dir
+  tur build --shared <dir> [-o <out>] [--manifest <p>]  build a shared library
+  tur compile [-I <dir>...] <file.tur> -o <out.o>  lower a .tur to an object + .link
+  tur link [--shared] <obj/src>... -o <out>        link objects (+ .link) into an exe/.so
+  tur emit-c [-I <dir>...] <file.tur>              emit C to stdout
+  tur emit-c [-I <dir>...] --build-dir <dir> <files...>  emit per-module .h/.c
+  tur emit-h [-I <dir>...] <file.tur>              emit header to stdout
+
+flags:
+  -o <out>          output file path
+  -I <dir>          add include directory for module resolution
+                    (repeat to add multiple; intra-spice imports usually
+                    want `-I src` from the spice root)
+  --release         compile at -O3 (the default is -O2; TUR_CC_FLAGS
+                    replaces either)
+  -B, --build-dir <d>  route generated .c/.h/.o + final artifact into <d>
+                    (subdirs: obj/, bin/, lib/). Defaults to
+                    <project-root>/build or <cwd>/build. Override layers:
+                    CLI flag > TUR_BUILD_DIR env > build.tur :build-dir.
+  --shared          build a shared library (`-fPIC -shared`, no main;
+                    Windows drops the -fPIC, which PE ignores anyway).
+                    Requires a directory argument. Exported defns are
+                    callable via dlopen/dlsym as `<module>__<name>`.
+                    Default output is <build-dir>/lib/lib<name>.so, or
+                    <name>.dll on Windows.
+  --split-build     build a single file as `compile` + `link` (cacheable
+                    `cc -c` object compiles + a link). Native builds only.
+  --no-split-build  force the monolithic single-`cc` build (the default).
+  --runtime=auto    (default) link the lean non-ASan libturt_runtime.a when
+                    locatable, else recompile the bare src/runtime autolink
+                    sources -- never links the ASan libturi.a on its own, so
+                    a default build matches the old source path.
+  --runtime=lib     force the archive link (lean preferred, else libturi.a).
+                    Set TUR_RUNTIME_LIB to point at the archive if not found.
+  --runtime=source  force recompiling the runtime sources.
+  --runtime=split   insist on the preamble split that auto takes on Linux
+                    and Windows when libturt_preamble.a is present: the
+                    fixed runtime preamble is linked, not recompiled per
+                    program.  TUR_PREAMBLE_SPLIT=0 keeps it inline.
+                    TUR_RUNTIME=auto|lib|source|split seeds the default.
+  --link-flags <f>  (tur link) extra linker flags, e.g. "-L<dir> -lfoo"
+  --manifest <p>    (with --shared) write exports.manifest to <p>
+                    (defaults to `<out>.manifest`). Lists each export
+                    as `<mod>/<defn> -> <mangled> :: (:args) -> :ret`.
+  --bundle-deps     (with --shared, on a project) link each :spices dep's
+                    modules into the library as well, so it loads with
+                    nothing else beside it; the manifest still lists only
+                    the project's own exports.
+  --target wasm     compile to WebAssembly via emcc (requires Emscripten)
+  --debug           emit `#line` directives mapping the generated C back
+                    to `.tur` source, and compile single-file builds with
+                    `-g -O0` so gdb/lldb step through Turmeric source.
+  --timings[=<p>]   print where the compile's time went, per phase
+                    (exclusive time; phases sum to the wall clock), and
+                    with <p> write it as tur-profile/1 JSON.  Also on
+                    check, emit-c, run and jit.  Profile a Release tur.
+
+Try 'tur --help' for global options.
+[exit 0]

@@ -19,7 +19,7 @@
  * Compiled into `tur` only under TUR_JIT (ON by default on 64-bit x86-64 and
  * arm64; it builds the vendored MIR in external/mir via cmake/mir.cmake and
  * sets ENABLE_EXPORTS so dlsym can see the runtime).
- * Without it, cmd_jit in main.c reports the missing capability.
+ * Without it, cmd_jit (src/driver/jit.c) reports the missing capability.
  */
 
 #include "jit_engine.h"

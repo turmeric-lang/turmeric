@@ -1,0 +1,6 @@
+warning [TUR-W0050]: --panic-trace is retired and does nothing; a panic already names its .tur file and line, and a --debug build gives a debugger backtrace (`tur debug`)
+warning [TUR-W0050]: --lint-effects is deprecated; use --strict-effects, which emits the same TUR-W0030 warnings (-Werror=strict-effects makes them errors)
+warning [TUR-W0050]: -Xgadt is no longer needed; the feature is on by default
+tur: the Turmeric compiler (v<VERSION>)
+Run `tur --help` for more commands.
+[exit 0]

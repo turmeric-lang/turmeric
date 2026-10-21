@@ -11,8 +11,8 @@
 ;;; source location, and the type of its payload. Most programs want the named
 ;;; wrapper in `stdlib/panic.tur` (`result-panic`, `panic-message`, `panic-file`,
 ;;; `panic-line`, `panic-type`) instead; load it with `(load "stdlib/panic.tur")`.
-;;; A few of these forms are unfinished or differ between the compiler and the
-;;; interpreter -- see docs/reported/panic-forms-gaps.md.
+;;; Both engines answer them alike: the type, file (the program's file name) and
+;;; line of the panic site.
 ;; Reference only: tools/gendocs.py reads the ;;@ lines, the compiler skips them.
 
 ;;; panic -- abort the program with an unrecoverable error.
@@ -36,10 +36,8 @@
 ;;;
 ;;; Like `panic`, but the payload can be any value, and `catch-panic-of` and
 ;;; `panic-payload-downcast` can tell payloads apart by type. An uncaught
-;;; `panic-with` aborts. Compiled, the abort message and `panic-payload-line`
-;;; name the generated C file and line rather than your source
-;;; (`panic at /tmp/tur-build/x.c:2759`); interpreted, they name your source.
-;;; It has no value, like `panic`.
+;;; `panic-with` aborts, naming your source file and line, as `panic` does; so
+;;; does `panic-payload-line` on a caught one. It has no value, like `panic`.
 ;;;
 ;;; Parameters:
 ;;;   payload -- the value to panic with
@@ -58,8 +56,8 @@
 ;;; the err result exists; defers above the boundary are untouched. A panic is
 ;;; not a substitute for a `Result`: use this at FFI boundaries (a panic must
 ;;; not unwind into C), test harnesses and supervisor loops. The argument must
-;;; be a function: a non-function (`(catch-unwind 5)`) is not rejected and
-;;; crashes the compiled program.
+;;; be a function of no arguments: `(catch-unwind 5)` and a function that takes
+;;; parameters are type errors.
 ;;;
 ;;; Parameters:
 ;;;   thunk -- a zero-argument function to run
@@ -75,11 +73,9 @@
 ;;;
 ;;; Catches a panic whose payload has the type given by the first argument
 ;;; (`:cstr` for `panic "..."`, `:int` for `(panic-with 42)`), as
-;;; `catch-unwind` would. A panic with any other payload type is meant to
-;;; continue to the next boundary outward. Today the compiled program does that
-;;; only when an outer `catch-unwind` / `catch-panic-of` exists; with none, it
-;;; swallows the panic and the call yields an `ok` result, while the interpreter
-;;; aborts as documented.
+;;; `catch-unwind` would. A panic with any other payload type continues to the
+;;; next boundary outward; with none above, it is an uncaught panic and the
+;;; program aborts, as an uncaught `panic` does.
 ;;;
 ;;; Parameters:
 ;;;   type  -- the payload type to catch, as a keyword or bare type name
@@ -98,7 +94,7 @@
 ;;;
 ;;; Takes the panic handle from the err slot of a `catch-unwind` result
 ;;; (`result-panic` in tur/panic extracts it). Returns the integer type kind of
-;;; the payload: 5 for the string of `(panic "...")`. Interpreted, it returns 0.
+;;; the payload: 5 for the string of `(panic "...")`.
 ;;;
 ;;; Parameters:
 ;;;   p -- a panic handle
@@ -126,7 +122,7 @@
 
 ;;; panic-payload-file -- the source file a caught panic came from.
 ;;;
-;;; Interpreted, it returns an empty string.
+;;; The base name of the file holding the `panic` or `panic-with` form.
 ;;;
 ;;; Parameters:
 ;;;   p -- a panic handle
@@ -140,8 +136,7 @@
 
 ;;; panic-payload-line -- the source line a caught panic came from.
 ;;;
-;;; The line of the `panic` form. For `panic-with` the compiled program returns
-;;; a line in the generated C instead of your source. Interpreted, it returns 0.
+;;; The line of the `panic` or `panic-with` form.
 ;;;
 ;;; Parameters:
 ;;;   p -- a panic handle
@@ -155,16 +150,15 @@
 
 ;;; panic-payload-downcast -- the payload, if it has the given type.
 ;;;
-;;; Meant to return a pointer to the payload when its type matches the second
-;;; argument and a null pointer otherwise. Unfinished: the compiler types the
-;;; result `ptr<void>` but emits no value, so any use of the result fails to
-;;; compile (`invalid use of void expression`). Use `panic-payload-type` to
-;;; branch on the payload type instead.
+;;; Returns a pointer to the payload when its type matches the second argument
+;;; and a null pointer otherwise (`ptr-null?`, inside `unsafe`, tells which):
+;;; `(panic-payload-downcast p :cstr)` is the message of a `(panic "...")`, and
+;;; null for the payload of a `panic-with` of an integer.
 ;;;
 ;;; Parameters:
 ;;;   p    -- a panic handle
 ;;;   type -- the payload type to match, as a keyword or bare type name
 ;;;
 ;;; Returns:
-;;;   A `ptr<void>`; see above.
+;;;   A `ptr<void>`: the payload, or null.
 ;;@builtin (panic-payload-downcast [p : ptr<void> type : T] : ptr<void>)

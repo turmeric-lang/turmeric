@@ -919,7 +919,7 @@ void turi_env_apply_lang_dialect(TuriEnv *env, ReaderType reader_type,
     env->lang        = dialect;
     /* The language's prelude joins the stdlib autoload list when the session
      * language has one -- the REPL's analogue of the entry-file switch in
-     * main.c. */
+     * the driver. */
     g_lang_prelude = lang_traits(dialect)->prelude;
 }
 

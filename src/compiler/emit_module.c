@@ -732,6 +732,18 @@ char *ensure_exists_byval_witness_dict(EmitCtx *ctx,
         tur_mangle_ident(m->name->name, field, sizeof(field));
         const char *ret_c = type_c_name(m->return_type);
         bool ret_void = (strcmp(ret_c, "void") == 0);
+        /* The real instance fn returns the int64 carrier when its declared
+         * result rides the carrier ABI -- a ground `(Vec cstr)` does -- while
+         * this thunk and EX_EXISTS_DISPATCH's cast spell the class's result
+         * type, `tur_adt_Vec__cstr *`.  dict_slot_ret_c_name (emit_stmt.c)
+         * asks the same question for the real dict; here the word is the
+         * pointer, so convert it back (-Wint-conversion, an error to clang). */
+        size_t ret_len = strlen(ret_c);
+        bool ret_from_carrier =
+            !ret_void && ret_len > 0 && ret_c[ret_len - 1] == '*' &&
+            mi->binding->type.kind == TY_FN &&
+            emit_inst_result_rides_carrier(ctx, mi,
+                                           mi->binding->type.as.fn.result_full_type);
 
         buf_printf(out, "static %s %s_%s(", ret_c, base, field);
         if (m->n_params == 0) buf_puts(out, "void");
@@ -744,6 +756,7 @@ char *ensure_exists_byval_witness_dict(EmitCtx *ctx,
         }
         buf_puts(out, ") {\n    ");
         if (!ret_void) buf_puts(out, "return ");
+        if (ret_from_carrier) buf_printf(out, "(%s)(intptr_t)", ret_c);
         buf_printf(out, "%s(", inst_fn);
         for (uint32_t j = 0; j < m->n_params; j++) {
             if (j > 0) buf_puts(out, ", ");
@@ -11196,9 +11209,9 @@ bool emit_inst_method_wants_external(const FnDef *fd) {
  * module that loaded the file dispatches on the instance through that
  * module's header, so the definition has to stay linker-visible.
  *
- * A separately compiled module's own source is file 0 of its unit (main.c
- * registers it so), so an instance from any other file is a loaded copy.  It
- * keeps external linkage and the declarations in the header, and is defined
+ * A separately compiled module's own source is file 0 of its unit (the
+ * driver registers it so), so an instance from any other file is a loaded
+ * copy.  It keeps external linkage and the declarations in the header, and is defined
  * WEAK: the copies are the same source elaborated the same way, and the
  * linker keeps one -- the SYM2 treatment of the interned symbol records
  * (sym_codegen_emit).  The PE/COFF trouble recorded there is a reference at
@@ -12796,7 +12809,7 @@ static void emit_rt_tls(Buf *out, bool shared,
  * A third state on the DEDUP-3 switch rather than a new mechanism.  Resolved at
  * emit time, before codegen, because the emitted text depends on it; the probe
  * is a pure filesystem check so it can move ahead of the link step that
- * normally makes this decision (see apply_runtime_lib_mode in main.c).
+ * normally makes this decision (see the driver's apply_runtime_lib_mode).
  * ------------------------------------------------------------------------- */
 static bool g_rcgc_from_archive = false;
 
@@ -14637,7 +14650,7 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
      * subset shim mandatory for every program including `arith`.
      *
      * Keyed on __STDC_VERSION__ rather than swapped outright: the generated C is
-     * compiled `-std=c99` (see cc_flags in main.c), where `_Thread_local` is not
+     * compiled `-std=c99` (see cc_flags in cmd_build_once), where `_Thread_local` is not
      * a standard keyword.  gcc happens to accept it there anyway, but relying on
      * that across every supported cc buys nothing -- this way the cc path keeps
      * the exact spelling it has always used, and only a C11-or-later front end
@@ -16012,6 +16025,17 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
         buf_puts(out, "            global_panic_payload = NULL;\n");
         buf_puts(out, "            return tur_box_err((int64_t)(intptr_t)__p);\n");
         buf_puts(out, "        }\n");
+        buf_puts(out, "        /* panic-forms-gaps 2: no outer boundary means no one to\n");
+        buf_puts(out, "         * propagate to -- the panic is uncaught, and the staged signal\n");
+        buf_puts(out, "         * would be swallowed by main's return (exit 0, `after` printed).\n");
+        buf_puts(out, "         * Raise it afresh with the boundary gone: abort, as an uncaught\n");
+        buf_puts(out, "         * panic does, or reach a fiber's own buffer. */\n");
+        buf_puts(out, "        if (__p && !tur_handler_chain) {\n");
+        buf_puts(out, "            tur_panicking = 0; tur_panic_in_progress = 0;\n");
+        buf_puts(out, "            global_panic_payload = NULL;\n");
+        buf_puts(out, "            if (__p->owns_value) tur_panic_at(__p->file, __p->line, (const char *)__p->value);\n");
+        buf_puts(out, "            else tur_panic_with(__p->type_tag, __p->value, __p->file, __p->line);\n");
+        buf_puts(out, "        }\n");
         buf_puts(out, "        /* type mismatch: leave the signal + payload staged so it\n");
         buf_puts(out, "         * propagates to the next outer boundary via the return path.\n");
         buf_puts(out, "         * catch-unwind-panic-payload-leaks: return a NULL box rather\n");
@@ -16070,6 +16094,12 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
         buf_puts(out, "            tur_panicking = 0; tur_panic_in_progress = 0;\n");
         buf_puts(out, "            global_panic_payload = NULL;\n");
         buf_puts(out, "            return tur_box_err((int64_t)(intptr_t)__p);\n");
+        buf_puts(out, "        }\n");
+        buf_puts(out, "        if (__p && !tur_handler_chain) {  /* no outer boundary: uncaught */\n");
+        buf_puts(out, "            tur_panicking = 0; tur_panic_in_progress = 0;\n");
+        buf_puts(out, "            global_panic_payload = NULL;\n");
+        buf_puts(out, "            if (__p->owns_value) tur_panic_at(__p->file, __p->line, (const char *)__p->value);\n");
+        buf_puts(out, "            else tur_panic_with(__p->type_tag, __p->value, __p->file, __p->line);\n");
         buf_puts(out, "        }\n");
         buf_puts(out, "        return 0;\n");
         buf_puts(out, "    }\n");

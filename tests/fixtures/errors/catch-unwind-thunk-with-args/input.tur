@@ -1,0 +1,5 @@
+;; panic-forms-gaps 4: a thunk that takes arguments is not one either; the
+;; runtime would call it with none.
+(defn main [] : int
+  (catch-panic-of :int (fn [x : int] : int x))
+  0)

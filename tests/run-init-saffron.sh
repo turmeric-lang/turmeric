@@ -4,7 +4,7 @@
 #
 # The assertion is deliberately the build, not the file contents. Checking that
 # `#lang saffron` appears in src/main.tur would have passed while the LIBRARY
-# scaffold could not compile at all: `load_project_prelude` (main.c) hardcoded
+# scaffold could not compile at all: `load_project_prelude` (the driver) hardcoded
 # READER_TURMERIC, so the autoloaded Saffron prelude died on its own first line
 # with `unexpected character '#'`. That is the FOURTH entry point found with
 # this defect -- after `tur fmt`, the module import path (S7), and the

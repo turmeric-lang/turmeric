@@ -1,0 +1,6 @@
+;; session-forms-gaps 2: make-protocol gives one endpoint per role.  Binding
+;; two names against a three-role protocol dropped role C silently, behind a
+;; dropped-linear-value error about the two that were named.
+(defprotocol P [A B C] (-> A B int) (-> B C int))
+(defn main [] : int
+  (let [[a b] (make-protocol P)] 0))

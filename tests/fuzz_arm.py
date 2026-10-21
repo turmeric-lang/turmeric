@@ -41,7 +41,7 @@ import subprocess
 import tempfile
 
 FNSAN_FLAGS = "-fsanitize=function -fsanitize-trap=function"
-# tur's own default when TUR_CC_FLAGS is unset (src/main.c); TUR_CC_FLAGS
+# tur's own default when TUR_CC_FLAGS is unset (cmd_build_once); TUR_CC_FLAGS
 # REPLACES it, so the armed value must restate it.
 TUR_DEFAULT_CC_FLAGS = "-O2 -std=c99 -Wall -fno-strict-aliasing"
 

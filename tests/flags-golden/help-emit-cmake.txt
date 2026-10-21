@@ -1,0 +1,2 @@
+tur emit-cmake: unknown flag '--help'
+[exit 1]

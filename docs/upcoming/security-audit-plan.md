@@ -309,7 +309,7 @@ starts rather than after.
 
 ### Rows confirmed as written
 
-- **D-1.** `link_command_run` (`main.c:2866-2897`) is one `buf_printf` chain
+- **D-1.** `drv_link_command_run` (`main.c:2866-2897`) is one `buf_printf` chain
   into `system()`: `cc`, `cc_flags`, `out_path`, `inputs`, `aux_includes`,
   `aux_sources`, `autolink`, `cmake_flags` and every `-I` dir, none quoted.
   The same shape repeats at `:2961-2977` (the split prelude compile, which also
@@ -329,8 +329,8 @@ starts rather than after.
   every other temp path in the tree goes through `tur_temp_dir()`.
 - **D-3.** `needs_rebuild` (`spice_loader.c:210-216`) is a bare mtime
   comparison; the `.so` is `dlopen`ed at `:717-720` with nothing else checked.
-- **D-4.** `stable_c_prefix` (`main.c:2242-2253`) is `mkdir(dir, 0700)` with the
-  result discarded and no owner check; `stable_c_path` maps an input to a
+- **D-4.** `drv_stable_c_prefix` (`main.c:2242-2253`) is `mkdir(dir, 0700)` with the
+  result discarded and no owner check; `drv_stable_c_path` maps an input to a
   predictable name and the `.c` is written with `fopen(..., "wb")`
   (`:3184`); the prelude cache reuses `<tur-build>/prelude/<hash>.o` on
   `st_size > 0` alone (`:3040`).
@@ -376,7 +376,7 @@ starts rather than after.
      quoting rules subtly wrong there is a worse failure than the one being
      fixed.
   2. The autolink string has a **space-joined contract** that three separate
-     passes depend on: `append_include_tokens` (`main.c:2439-2453`) re-splits
+     passes depend on: `drv_append_include_tokens` (`main.c:2439-2453`) re-splits
      it to pull `-I` tokens for the `cc -c` line, `autolink_has_bare_c_source`
      (`:2456+`) and `autolink_drop_bare_sources` re-split it to drop bare `.c`
      args superseded by `-lturi`, and the ASan probe (`:2745-2760`) scans it for
@@ -425,7 +425,7 @@ starts rather than after.
   (`src/runtime/buf.c:46-59`) reserves `n + 1` bytes and lets `vsnprintf` write
   its NUL at `data[len]`, so a Buf built entirely out of `buf_printf` can be
   read as a C string *before* anyone appends an explicit terminator --
-  and `link_command_run` does exactly that with the `aux_includes` and
+  and `drv_link_command_run` does exactly that with the `aux_includes` and
   `aux_sources` buffers (`buf_puts(&cmd, aux_sources->data)`). `buf_puts`
   reserves only `n`. Replacing one `buf_printf` with a `buf_puts` in
   `collect_spice_aux_c` therefore read past the allocation; ASan caught it in
@@ -1203,7 +1203,7 @@ the untrusted boundary plus quoting for the driver's own paths.
 
 - [x] **`src/tur_argcheck.h`** -- one header holding the grammars: what a
   contributed link token may look like, what a path a manifest supplies may
-  look like, and whether a string is free of shell syntax. `main.c`, `pkg.c`
+  look like, and whether a string is free of shell syntax. `driver/cc.c`, `pkg.c`
   and `mcp.c` all call into it, so the rules cannot drift between them the way
   the two link-flag readers once did.
 - [x] **D-1a, the grammar (the untrusted half).** `scan_autolink_markers` now
@@ -1213,7 +1213,7 @@ the untrusted boundary plus quoting for the driver's own paths.
   cmake-manifest token carrying shell syntax with a diagnostic. The diagnostic
   names the token and quotes its marker -- not the module, which is not
   recoverable at that point (2b).
-- [x] **D-1b, the quoting (the driver's own half).** `buf_put_quoted` wraps
+- [x] **D-1b, the quoting (the driver's own half).** `drv_buf_put_quoted` wraps
   `tur_shell_quote`; `-o`, the inputs, the `-I` dirs, the aux paths and the
   `cc -c` input/output are quoted at all five `system()` sites that assemble a
   cc command, and a path too long to quote refuses the command rather than

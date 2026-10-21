@@ -1,0 +1,3 @@
+tur: the Turmeric compiler (v<VERSION>)
+Run `tur --help` for more commands.
+[exit 0]

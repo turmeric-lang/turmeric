@@ -5557,8 +5557,9 @@ const DOCS_PACK_BASE = '/docs-pack';
 /**
  * How many pages each of the nav's dated sections lists.
  *
- * Ten apiece, matching the Recently Added and Recently Updated cards at the top
- * of the website's guides index -- and, like those cards, guides only. The pack
+ * Ten apiece, matching one page of the Recently Added and Recently Updated tabs
+ * at the top of the website's guides index (RECENT_PAGE_SIZE in
+ * tools/genguides.py) -- and, like those tabs, guides only. The pack
  * stamps API modules and spice pages with dates too, but these lists answer
  * "what is new to read?", and a module page is reference that its API tree
  * already files; mixed in, it takes a slot from a guide. The dates behind the

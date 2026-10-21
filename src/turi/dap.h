@@ -15,7 +15,7 @@
  * The server is transport-only: it does not know how to construct an interpreter
  * environment.  The embedder supplies a launch callback that builds the env,
  * calls dap_begin_session() once the debugger is enabled, runs the program, and
- * returns its exit code.  See src/main.c (dap_launch_cb).
+ * returns its exit code.  See dap_launch_cb (src/driver/cmd_eval.c).
  * --------------------------------------------------------------------------- */
 
 /* Embedder-provided launcher.  Invoked by the server after the client has sent

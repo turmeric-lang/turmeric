@@ -4,13 +4,13 @@
  * elaborator builtins (`+`, `let`, `if`, `fn`, ...).  Every real program needs
  * the core macros (`when`/`cond`/`for`/`and`/`or`) and the typed-collection
  * stdlib (Map/Set/Vec/Option/Result/...) loaded on top of that env before user
- * code runs.  `src/main.c`'s `--interpret` entry point (`cmd_eval`) has always
+ * code runs.  The `--interpret` entry point (`cmd_eval_h`) has always
  * done this inline; the WASM/browser REPL (`src/web/wasm_glue.c`) skipped it,
  * so reader-macro data literals such as `#map{...}` (which lower to the
  * `hamt-of` macro defined in `stdlib/map.tur`) failed with "unknown function or
  * operator 'hamt-of'".  See docs/archive/history/web-repl-missing-stdlib-preload.md.
  *
- * These two helpers factor that load sequence out of `main.c` so the native
+ * These two helpers factor that load sequence out of the driver so the native
  * interpreter and the WASM REPL share one copy and cannot drift.  They only
  * emit `(load "<root>/<file>")` forms; the underlying Vec/Set/Map/HAMT runtime
  * ops are already registered as natives by `turi_env_new`

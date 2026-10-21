@@ -14,7 +14,7 @@
  * either way.
  *
  * The zone list and src/runtime/pass.h's PassKind are kept in step by a switch
- * with no default in main.c (pass_zone): a new PassKind without a zone is a
+ * with no default in the driver (pass_zone): a new PassKind without a zone is a
  * -Wswitch error rather than a pass whose time quietly lands in a neighbor.
  */
 #ifndef TUR_PROF_H

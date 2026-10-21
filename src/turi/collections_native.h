@@ -20,7 +20,7 @@
  * interpreter embedders. */
 void turi_register_collection_natives(TuriEnv *env);
 
-/* Exposed for wk_register_sym_natives (main.c): MapKey[Sym] reuses the
+/* Exposed for wk_register_sym_natives (interpreter_natives.c): MapKey[Sym] reuses the
  * int-carrier comparator and the cstr box (a Sym is a one-word interned
  * pointer). */
 TuriValue native_mk_cmp_int(TuriEnv *env, TuriValue *a, uint32_t n, void *ud);

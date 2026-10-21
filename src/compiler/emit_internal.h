@@ -34,7 +34,7 @@
 #include "types.h"
 #include "emit_split.h"
 
-/* Phase R5: Global panic strategy flag (set by main.c --panic-abort) */
+/* Phase R5: Global panic strategy flag (set by the driver for --panic-abort) */
 extern bool g_panic_abort;
 /* r7rs-programs-compile-slowly: which unit of a split build this emission
  * writes (emit_split.h); EMIT_SPLIT_NONE for every ordinary emission. */
@@ -56,7 +56,7 @@ EmitSplitMode emit_split_binding_home(const Binding *b);
  * `why` is a string literal, kept for TUR_SHOW_CC-style diagnostics. */
 void emit_split_refuse(const char *why);
 
-/* Phase R6: Result/panic linting flags (set by main.c) */
+/* Phase R6: Result/panic linting flags (set by the driver) */
 extern bool g_warn_unused_result;
 extern bool g_lint_panic;
 /* Phase C2: --no-contracts (controls the TUR_CONTRACTS_ENABLED preamble define) */
@@ -172,9 +172,9 @@ uint32_t static_init_count(void);
  * split on Mach-O.  See the definition. */
 void     static_init_emit(Buf *out, bool gc_collector_pasted);
 
-/* Phase B5: backtrack depth cap (set by main.c --backtrack-depth N) */
+/* Phase B5: backtrack depth cap (set by the driver for --backtrack-depth N) */
 extern int64_t g_backtrack_depth;
-/* Phase B5: dump cloneable capture plan (set by main.c --dump-clone-plan) */
+/* Phase B5: dump cloneable capture plan (set by the driver for --dump-clone-plan) */
 extern bool g_dump_clone_plan;
 
 /* Forward declarations */
@@ -1137,6 +1137,10 @@ char *emit_c_zero_of(const char *cname);
 void emit_main_deep_stack_prologue(Buf *out);
 /* `(panic msg)` at `span`: tur_panic_at with the source location (emit_expr.c). */
 void emit_panic_call(Buf *body, Span span, const char *msg);
+/* `(panic-with payload)`: tur_panic_with(tag, payload, file, line) at the
+ * SOURCE position (the file's base name and span.line), as emit_panic_call
+ * does for `panic`. */
+void emit_panic_with_call(Buf *body, Span span, int type_tag, const char *payload);
 bool emit_str_is_bare_ident(const char *s);
 /* cps-let-binder-bridge-lacks-position-check: the single position-level test --
  * is `v` a bare identifier whose RECORDED emitted C type is exactly

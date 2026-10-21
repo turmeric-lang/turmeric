@@ -1,0 +1,8 @@
+;; module-and-ffi-forms-gaps 4: a relative `load` path names a file beside
+;; the one holding the `load`, as `import` does.  It used to resolve against
+;; the directory `tur` was run from, so `(load "lib/mid.tur")` failed unless
+;; run from this directory -- the harness runs from the repository root.
+(load "lib/mid.tur")
+(defn main [] : int
+  (println (mid-val))
+  0)

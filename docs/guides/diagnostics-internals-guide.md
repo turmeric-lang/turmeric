@@ -55,8 +55,8 @@ the [LSP guide](lsp-guide.md).
 |---|---|
 | `src/compiler/diag.h` | `DiagCode`, `DiagLevel`, `SourceFile`, `SweetMap`, `DiagNote`, `DiagSuggestion`, the whole public API |
 | `src/compiler/diag.c` | The file registry, capture frames, the code tables, `diag_explanations_[]`, snippet rendering, the four sinks |
-| `src/main.c:cmd_explain` | `tur explain` and `tur --explain` |
-| `src/main.c` (global flag loop) | `--json-diagnostics`, `--json`, `--no-color`, `--Werror=deprecated` |
+| `src/driver/cmd_misc.c:cmd_explain` | `tur explain` and `tur --explain` |
+| `src/driver/cli.c:GLOBAL_FLAGS[]` | `--json-diagnostics`, `--json`, `--no-color`, `--Werror=deprecated` |
 | `src/compiler/elab_call.c` (macro arm) | The "in expansion of macro" note and `diag_set_expansion_site` |
 | `src/compiler/elab_toplevel.c`, `elab_module.c` | `diag_set_file_origin` for `load` and `import` |
 | `src/compiler/elab_toplevel.c:elab_form_impl` (`F_SYM` arm) | Unbound symbol, the did-you-mean search, the `see:` URL |
@@ -157,7 +157,7 @@ About two dozen codes are never `DiagCode` values. They come in two shapes.
 2. **A direct `fprintf(stderr, ...)`.** `TUR-W0050` (a retired `-X` flag),
    `TUR-W0060`/`W0061` (`src/runtime/experiments.c:experiment_warn_if_used`),
    `TUR-W0062`-`W0064`, `TUR-W0070`/`W0071` (JIT fallback), and
-   `TUR-E0330`/`E0331` (bad `#lang` line, in `main.c` and `turi/eval.c`).
+   `TUR-E0330`/`E0331` (bad `#lang` line, in `driver/paths.c` and `turi/eval.c`).
    These bypass every sink below. They never reach JSON, the LSP or an
    embedder.
 
@@ -428,7 +428,7 @@ from `col_start` to `col_end`, at least one character wide. A note from
 
 Only the error line is underlined, so a span over several lines shows its
 first line. Color is on when stderr is a TTY and neither `--no-color` nor a
-JSON flag was given (`main.c`, `diag_init`).
+JSON flag was given (`tur_main_inner` in `src/main.c`, `diag_init`).
 
 ### JSON (`--json-diagnostics`, `--json`)
 
@@ -494,19 +494,19 @@ is not delivered. LSP collection takes precedence over the sink.
 
 `diag_had_error()` is a single process-wide flag. The driver checks it after
 each stage and returns 1. For example, after elaboration in
-`main.c:run_core_pass`: `if (!ctx->prog || diag_had_error()) return 1;`.
+`driver/pipeline.c:run_core_pass`: `if (!ctx->prog || diag_had_error()) return 1;`.
 Warnings never stop a build.
 
 Because the flag is global, a driver that compiles several files resets it
 between them with `diag_reset()`. Otherwise one file's error fails the next
-file's gate. The comments around the `diag_reset()` calls in `main.c` say
+file's gate. The comments around the `diag_reset()` calls in `src/driver/` say
 which reset protects which gate.
 
 ---
 
 ## `tur explain`
 
-`tur explain <arg>` and `tur --explain <arg>` both reach `main.c:cmd_explain`:
+`tur explain <arg>` and `tur --explain <arg>` both reach `driver/cmd_misc.c:cmd_explain`:
 
 1. If `diag_looks_like_code(arg)` (that is, `TUR-` then `E`, `W`, `D` or
    `I`, then digits), it calls `diag_code_from_string`, then `diag_explain`.

@@ -25,7 +25,7 @@ covers each one in depth. Start here, then follow the "Deep dive" links.
    The elaborator turns forms into one typed `EX_PROGRAM` tree. The compiled
    path emits C99 from that tree; the interpreter (`turi`) walks the same
    tree directly.
-2. **Six core passes**, listed in `src/main.c:core_passes[]`: elaborate,
+2. **Six core passes**, listed in `src/driver/pipeline.c:core_passes[]`: elaborate,
    kind check, effect env, effect rows, CPS (legacy metadata), borrow and
    lifetime checks. Most of the real checking happens inside elaboration.
 3. **The emitter makes more decisions than the passes do.** CPS coloring and
@@ -94,7 +94,7 @@ are reset per compile or emission, because `tur test <dir>`, project builds,
 
 ## The pass schedule
 
-`run_core_passes` (`src/main.c`) walks `core_passes[]` and calls
+`run_core_passes` (`src/driver/pipeline.c`) walks `core_passes[]` and calls
 `run_core_pass` for each, charging the time to its `--timings` zone
 (`pass_zone`). A pass returns 0 to continue, 1 to fail, or 2 to stop
 successfully (only `tur audit-spans` does that). In builds without `NDEBUG`
@@ -139,8 +139,10 @@ Deep dive: [build-driver-internals-guide.md](build-driver-internals-guide.md).
 
 ```ascii
 src/
-+-- main.c            driver: flags, subcommands, compile_to_c/_h/_impl...,
-|                     cc invocation, tur jit, project builds (~14.7k lines)
++-- main.c            the entry point: big-stack trampoline, the dispatcher
++-- driver/           the rest of the driver, one file per area: flags and the
+|                     command table (cli.c), compile_to_c/_h/_impl (pipeline.c),
+|                     cc invocation, tur jit, project builds, the subcommands
 +-- jit_engine.c/.h   in-process MIR JIT engine (TUR_JIT builds only)
 +-- platform_*.h      Windows shims: dl, fs, mman, proc, ucontext over Fibers
 +-- jit_win_prelude.h, source_literal.h, tur_argcheck.h   small helpers
@@ -180,7 +182,7 @@ src/
 | Target | What it is |
 |---|---|
 | `tur_core` | OBJECT library: every source in `TUR_CORE_SOURCES`, shared by `tur`, `libturi` and many unit tests |
-| `tur` | `main.c` + `lsp/mcp.c` + `tur_core` (+ `tur_jit_obj` under `TUR_JIT`) |
+| `tur` | `main.c` + `driver/*.c` (`TUR_DRIVER_SOURCES`) + `lsp/mcp.c` + `tur_core` (+ `tur_jit_obj` under `TUR_JIT`) |
 | `libturi.a` | `tur_core` as a static library, for C embedders and programs that autolink `-lturi` |
 | `libturt_runtime.a` | a lean, unsanitized archive of the runtime TUs programs link (`hamt`, `rc`, `gc`, `region`, ...) |
 | `libturt_preamble.a` | the generated preamble runtime (`tur_rt_split.c`), linked by `--runtime=split` |
@@ -192,18 +194,20 @@ on the include path, so `#include "arena.h"` works from anywhere.
 
 ---
 
-## Driver: src/main.c
+## Driver: src/main.c and src/driver/
 
-`main` moves onto a large stack (`tur_run_on_big_stack`) and calls
-`tur_main_inner`. That parses global flags into `g_*` variables, resolves
-the subcommand (exact name, alias or unique prefix) and dispatches through a
-long `strcmp` chain. The compile entry points are `compile_to_c` (one C
-unit) and `compile_to_h` / `compile_to_implementation` (separate
-compilation). `cmd_build_once` writes the C to `$TMPDIR/tur-build/` (a stable
-name, so ccache hits), picks how the runtime is linked, and runs one `cc`.
-`tur run <file>` builds to a temp executable and runs it. Project builds
-(`cmd_build_project`, `cmd_build_multi_files`) and `tur jit` (`cmd_jit`) live
-here too.
+`main` (`src/main.c`) moves onto a large stack (`tur_run_on_big_stack`) and
+calls `tur_main_inner`. That parses global flags into `g_*` variables
+through the `GLOBAL_FLAGS[]` table, resolves the subcommand (exact name,
+alias or unique prefix) in the `COMMANDS[]` table, and calls its handler;
+both tables are in `src/driver/cli.c`. The compile entry points are
+`compile_to_c` (one C unit) and `compile_to_h` / `compile_to_implementation`
+(separate compilation), in `driver/pipeline.c`. `cmd_build_once` writes the C
+to `$TMPDIR/tur-build/` (a stable name, so ccache hits), picks how the
+runtime is linked, and runs one `cc`. `tur run <file>` builds to a temp
+executable and runs it. Project builds (`cmd_build_project`,
+`cmd_build_multi_files`) and `tur jit` (`cmd_jit`) have files of their own in
+`src/driver/`.
 
 Deep dive: [build-driver-internals-guide.md](build-driver-internals-guide.md).
 
@@ -224,7 +228,7 @@ The `#lang` line picks a pair: a `ReaderType` (`READER_TURMERIC`,
 `READER_CURLY_INFIX`, `READER_NEOTERIC`, `READER_SWEET`, `READER_R7RS`,
 `READER_R7RS_SWEET`) and a `LangDialect` (`LANG_TURMERIC`, `LANG_SAFFRON`,
 `LANG_R7RS`). Both enums live in `diag.h`. `lang_dialects.c` owns the table
-of legal bases (`lang_base_lookup`); `main.c:detect_and_adjust_lang` strips
+of legal bases (`lang_base_lookup`); `driver/paths.c:detect_and_adjust_lang` strips
 the line. Sweet-expressions are a preprocessing step inside `reader.c` that
 records a `SweetMap`, so diagnostics point at the original text.
 `reader_macros.c` holds the `#`-dispatch registry: the builtins
@@ -238,7 +242,7 @@ today -- `macros`, `safe`, `contract`, `hamt`, eleven `typeclass-*` stubs,
 `zipper`), `option`, `result`, `pair`, `tuple`, `list`, `json`, `schema`,
 `sym`, `unique`, `trail` and `region`. A language prelude
 (`g_lang_prelude`, e.g. R7RS's) is appended last. Project mode loads the same
-list through `main.c:load_project_prelude`, via the shared accessor
+list through `driver/pipeline.c:load_project_prelude`, via the shared accessor
 `tur_stdlib_autoload_files`. `tur check --no-auto-stdlib` matters only when
 the checked file is itself on the list: that file and the ones after it are
 skipped, so it can be checked alone.
@@ -544,7 +548,7 @@ Deep dive: [regions-internals-guide.md](regions-internals-guide.md).
 module (`emit_header`, `emit_implementation`). Each TU carries its own copy
 of the stdlib prelude, and the emitter treats `is_from_stdlib` bindings
 specially so a multi-TU link sees no duplicate symbols.
-`cmd_build_multi_files` (`main.c`) runs two passes so cross-module
+`cmd_build_multi_files` (`driver/project.c`) runs two passes so cross-module
 borrow-spec clones are forced into their owning module, then writes a
 runtime owner TU and links.
 
@@ -558,7 +562,7 @@ Deep dive: [separate-compilation-internals-guide.md](separate-compilation-intern
 |---|---|
 | `arena.c` | bump allocator (`arena_alloc`, `arena_free`, `arena_reset`, `arena_owns`); the compiler's main allocator and the region generations |
 | `buf.c` | growable byte buffer for all generated text (`buf_puts`, `buf_printf`, `buf_to_file`) |
-| `globals.c` | most global flags (`g_strict_effects`, `g_dump_effects`, `g_cps_path`, `g_opt_regions`, `g_lang_prelude`, ...); a few, like `g_dump_kinds`, live in `main.c` |
+| `globals.c` | most global flags (`g_strict_effects`, `g_dump_effects`, `g_cps_path`, `g_opt_regions`, `g_lang_prelude`, ...); a few, like `g_dump_kinds`, live in `src/driver/` and are declared in `driver/driver.h` |
 | `experiments.c` | the `EXPERIMENTS[]` registry behind `--enable=<name>` and `tur experiments`; `experiment_warn_if_used` |
 | `rc.c`, `arc.c` | `rc<T>`/`weak<T>` control blocks (`rc_strong_increment`, `rc_strong_decrement`, `rc_upgrade`); atomic variant |
 | `gc.c`, `rc_free_queue.c` | Bacon-Rajan cycle collector over `rc` (`gc_collect`; in auto mode also at allocation checkpoints, `gc_on_alloc_checkpoint`; no background thread); deferred frees |
@@ -628,7 +632,7 @@ Deep dive: [turi-interpreter-internals-guide.md](turi-interpreter-internals-guid
 
 Under `-DTUR_JIT=ON` (the default on 64-bit x86-64 and arm64), `tur jit`
 compiles the emitted C in process through MIR's c2mir front end
-(`external/mir/`, vendored). `cmd_jit` in `main.c` drives it; `jit_prune.c`
+(`external/mir/`, vendored). `cmd_jit` in `driver/jit.c` drives it; `jit_prune.c`
 trims the C first; the S2 split lets it swap the preamble for precompiled
 declarations. A program the JIT cannot handle falls back to `cc`.
 
@@ -689,9 +693,9 @@ Deep dive: [package-manager-internals-guide.md](package-manager-internals-guide.
 
 1. Add a `PASS_YOUR_PASS` constant to `PassKind` in `src/runtime/pass.h`
    and update the order in its header comment.
-2. Add it to `core_passes[]` in `src/main.c`, at the position where it
+2. Add it to `core_passes[]` in `src/driver/pipeline.c`, at the position where it
    should run.
-3. Add a `case PASS_YOUR_PASS:` to `run_core_pass` in `src/main.c`. Return
+3. Add a `case PASS_YOUR_PASS:` to `run_core_pass` in the same file. Return
    1 on failure after reporting with `diag_emit` / `diag_emit_with_code`;
    check `diag_had_error()` if you call code that reports without returning
    a status. If the pass rewrites the IR, add the `kind_verify_program`
@@ -699,7 +703,7 @@ Deep dive: [package-manager-internals-guide.md](package-manager-internals-guide.
    information onto replacement nodes.
 4. Give it a `--timings` zone: a `PROF_*` value in `src/compiler/prof.h`
    (in pipeline order), its name in `k_zone_names[]` in `prof.c`, and a case
-   in `pass_zone` in `main.c`. `pass_zone` has no `default:` arm, so
+   in `pass_zone` (`driver/pipeline.c`). `pass_zone` has no `default:` arm, so
    `-Wswitch` under `-Werror` fails the build until you do.
 5. Put the code in `src/passes/your_pass.c` / `.h` and add the `.c` to
    `TUR_CORE_SOURCES` in `src/CMakeLists.txt`.

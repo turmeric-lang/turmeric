@@ -1,0 +1,11 @@
+;; definition-forms-gaps 2: a `binding` whose whole body is ONE call to a `nil`
+;; function.  The compiled call was never written out (it printed 7, 9, 9;
+;; interpreted printed 7, 8, 9, 9).
+(defdynamic *level* :int 1)
+(defn show [] : nil (println *level*))
+(defn main [] : int
+  (binding [*level* 7] (println *level*))
+  (binding [*level* 8] (show))
+  (binding [*level* 9] (show) (show))
+  (show)
+  0)

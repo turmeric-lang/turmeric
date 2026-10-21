@@ -1,0 +1,11 @@
+;; typed-ptr-pointee-not-checked-at-calls: a `let` annotation naming one
+;; pointee over an initializer of another passed, as both are one TypeKind.
+(defstruct Foo [a : int])
+(defstruct Bar [b : int])
+(defn mk-bar [] : ptr<Bar>
+  ```c
+  return 0;
+  ```)
+(defn main [] : int
+  (let [x : ptr<Foo> (mk-bar)]
+    0))

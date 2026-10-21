@@ -32,7 +32,7 @@ function(tur_fuzz_target name)
 endfunction()
 
 # The targets over tur_core (reader, manifest, interpreter JSON) link its
-# objects plus the one main.c symbol they reference.
+# objects plus the one driver symbol they reference.
 set(TUR_FUZZ_CORE $<TARGET_OBJECTS:tur_core> ${TUR_FUZZ_SRC}/fuzz_link_stub.c)
 set(TUR_FUZZ_CORE_LIBS "")
 if(HAVE_EDITLINE)

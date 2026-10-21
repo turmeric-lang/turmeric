@@ -952,7 +952,7 @@ bool pkg_manifest_read_status(const char *path, PkgManifest *out,
 
     /* Strip a leading "#lang ..." directive (if any) before parsing.  The
      * sweet-exp preprocessor and the s-expr reader both choke on the bare
-     * '#' of an unhandled "#lang" line; main.c's single-file paths run the
+     * '#' of an unhandled "#lang" line; the driver's single-file paths run the
      * same detect_lang sweep before reading.
      *
      * A trailing token after the base name is diagnosed HERE too, rather than
@@ -1138,7 +1138,7 @@ bool pkg_manifest_read_status(const char *path, PkgManifest *out,
             }
         } else if (strcmp(kw, "entry") == 0) {
             /* Entry-point module for project-mode `tur run`, relative to the
-             * manifest dir. Existence is checked by the caller (main.c), which
+             * manifest dir. Existence is checked by the caller (cmd_run), which
              * is the only place that knows the resolved project root. */
             free(out->entry);
             out->entry = form_str_dup(vf);
@@ -2561,7 +2561,7 @@ typedef struct FetchItem {
 
 /* LS3: how deep to walk looking for an enclosing workspace manifest.
  * Must accommodate worktrees and nested checkouts; mirrors the resolver's
- * TUR_SPICE_WALK_MAX in main.c. */
+ * TUR_SPICE_WALK_MAX in src/driver/spice.c. */
 #define PKG_WORKSPACE_WALK_MAX 16
 
 /* LS3: discover the names of *other* members of the workspace enclosing
@@ -3598,7 +3598,7 @@ static bool str_eq_or_both_null(const char *a, const char *b) {
 }
 
 /* Resolve a :spices entry to its on-disk directory, mirroring the
- * priority used in main.c's resolve_include_dirs_from_manifest:
+ * priority used in the driver's resolve_include_dirs_from_manifest:
  *   workspace-sibling -> :path -> <root>/spices/<name>-<ref> -> <root>/spices/<name>
  * Returns a heap-allocated absolute (or root-relative) path.  Returns
  * NULL when the resolved directory does not exist (best-effort silent
@@ -3783,7 +3783,7 @@ static bool append_cmake_dep_with_conflict_check(PkgCmakeDep **out_deps,
  * that declares `:members` containing `project_dir` itself, then returns the
  * absolute path of every sibling member (excluding `project_dir`).
  *
- * This mirrors the workspace-sibling `src/` resolution in main.c's
+ * This mirrors the workspace-sibling `src/` resolution in the driver's
  * auto_append_spice_includes: any sibling member's modules are importable
  * from `project_dir` without an explicit `:spices` entry, so any sibling's
  * native (`:cmake-deps`) contributions must participate in the build too.
@@ -4129,7 +4129,7 @@ bool pkg_collect_transitive_cmake_deps(const char        *root_project_dir,
 
     /* Seed: the enclosing workspace's *other* members.  A sibling member's
      * modules are importable from the root spice without an explicit :spices
-     * entry (see auto_append_spice_includes in main.c), so its :cmake-deps
+     * entry (see the driver's auto_append_spice_includes), so its :cmake-deps
      * must participate in the build too.  Each seeded dir is walked exactly
      * like a :spices entry (its build.tur read, :cmake-deps unioned, its own
      * :spices enqueued); the visited set dedups any overlap with the :spices

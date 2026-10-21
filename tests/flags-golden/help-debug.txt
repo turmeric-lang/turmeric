@@ -1,0 +1,7 @@
+usage:
+  tur debug <file.tur> [args...]
+
+Drops into an interactive debugger (break/step/next/finish/
+backtrace/locals/print/list/continue). Type 'help' at the
+(tur-dbg) prompt for the full command list.
+[exit 0]

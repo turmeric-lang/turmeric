@@ -62,7 +62,7 @@ shared runtime TU is in the
 | `src/compiler/elab_toplevel.c` | `elaborate_program`; the `load` preprocessor (`load_expand_forms`, `load_path_key`, `elab_expand_module_loads`); the stdlib promotion sweep |
 | `src/compiler/stdlib_autoload.c`, `.h` | The autoload list (`autoload_files_`), `tur_stdlib_autoload_files`, `tur_stdlib_prepend_forms` |
 | `src/compiler/spice_search.c`, `.h` | Walk-up to the enclosing `build.tur` (`spice_find_root`), its `src/`, `:spices` deps and workspace siblings (`spice_search_append`) |
-| `src/main.c` | Drivers: `compile_to_c` (whole-program), `compile_to_h`, `compile_to_implementation`, `load_project_prelude`, `cmd_build_project`, `cmd_build_multi`, `cmd_build_multi_files`, `cmd_emit_c_to_dir`, `auto_append_spice_includes` |
+| `src/driver/` | Drivers: `compile_to_c` (whole-program), `compile_to_h`, `compile_to_implementation` and `load_project_prelude` (`pipeline.c`); `cmd_build_project`, `cmd_build_multi` and `cmd_build_multi_files` (`project.c`); `cmd_emit_c_to_dir` (`cmd_emit.c`); `auto_append_spice_includes` (`spice.c`) |
 | `src/compiler/emit_module.c` | `emit_header`, `emit_implementation`, `emit_abi_clone_name`, `emit_inst_method_wants_external`, `emit_imported_adt_ctors`, the r7rs split helpers (`emit_split_lib_owns`) |
 | `src/compiler/emit.h` | `ForcedAbiSpec`, `BorrowSpecInfo`, the public emit entry points |
 | `src/compiler/emit_fns.c` | `emit_fn_def`: the `needs_static` linkage decision |
@@ -206,7 +206,7 @@ rewrites every `tur/`-module binding's `defining_module_name` to NULL and sets
 
 | # | Directory | Source |
 |---|---|---|
-| 1 | `e->module_base_dir` | The **entry** file's directory (`dir_of_path(path)` in the driver) |
+| 1 | `e->module_base_dir` | The **entry** file's directory (`drv_dir_of_path(path)` in the driver) |
 | 2 | `e->module_stdlib_dir` | `TUR_STDLIB_DIR`, else the literal `stdlib` |
 | 3 | `e->module_include_dirs[0..n)` | `-I` flags first, then auto-discovered spice dirs |
 
@@ -229,7 +229,7 @@ library is found by its name.
 
 ### Auto-spice discovery
 
-`auto_append_spice_includes` (`main.c`) appends to the include list, after the
+`auto_append_spice_includes` (`driver/spice.c`) appends to the include list, after the
 user's `-I` flags, whatever `spice_search_append` (`spice_search.c`) finds.
 It is skipped under `--no-auto-spice`.
 

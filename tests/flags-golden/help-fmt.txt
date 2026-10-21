@@ -1,0 +1,23 @@
+usage:
+  tur fmt [paths...]                   format .tur/.tur.sweet files in place
+  tur fmt --check [paths...]           exit 1 if any file would change
+  tur fmt --dry-run [paths...]         alias for --check
+  tur fmt --diff [paths...]            print unified diff of changes
+  tur fmt --stdout <file>              format file and print to stdout
+  tur fmt --stdin [--lang <dialect>]   format stdin and print to stdout
+
+  Paths may be files or directories.  Defaults to current directory.
+  Skips:  build/  .git/  .tur-cache/  .turnb-cache/  .tur-repl-cache/
+
+  Dialects for --lang:  turmeric (default)  sweet-exp  curly-infix  neoteric  r7rs
+  r7rs/sweet, or any base `tur dialects` lists (e.g. saffron, saffron/sweet),
+  which formats with that base's reader.
+  (tursweet is a deprecated alias for sweet-exp)
+
+Exit codes:
+  0   all files already formatted (or successfully written)
+  1   --check: at least one file would change; or I/O error
+  2   CLI / parse error
+
+Try 'tur --help' for global options.
+[exit 0]

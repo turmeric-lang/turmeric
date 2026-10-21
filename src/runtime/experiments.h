@@ -92,7 +92,7 @@ void experiment_mark_warned(const char *name);
  * Returns true iff a file was actually read.  Suppression -- skipping the
  * read when a project manifest declares its own :experiments -- is decided
  * by the caller before invoking this; see apply_user_config_experiments in
- * main.c. */
+ * src/driver/spice.c. */
 bool experiments_read_user_config(void);
 
 #endif /* TUR_EXPERIMENTS_H */

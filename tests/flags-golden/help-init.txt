@@ -1,0 +1,15 @@
+usage: tur init [options] [<name>]
+
+Scaffold a spice in the CURRENT directory.  With no <name>,
+the current directory's basename is used.
+
+options:
+  --bin, --lib   binary (default) or library spice
+  --sweet        write build.tur.sweet (sweet-exp manifest)
+  --saffron      scaffold `#lang saffron` sources (no annotations)
+  --r7rs         scaffold `#lang r7rs` sources (a Scheme program,
+                 or a define-library with --lib)
+  --no-git       skip git init
+  --force        overwrite files that already exist
+  -h, --help     show this help
+[exit 0]

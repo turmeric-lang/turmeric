@@ -65,7 +65,7 @@ three places: the lowering (`src/compiler/scheme_lower.c`), the prelude
 | `src/compiler/elab_module.c` | The same lowering for an imported module (`elab_load_module_impl`) |
 | `src/compiler/stdlib_autoload.c` | Appends `g_lang_prelude` last to the autoload list |
 | `src/compiler/emit_split.c`, `.h` | Library / imported-library / program units: `emit_split_state`, `emit_split_rename`, `emit_split_pieces` |
-| `src/main.c` | `prelude_split_applies`, `prelude_split_object` (object cache), `SplitLibCache` (emission cache), the call to `srfi_prune_program` |
+| `src/driver/pipeline.c`, `src/driver/preamble_split.c` | `prelude_split_applies` and the call to `srfi_prune_program`; `prelude_split_object` (object cache) and `SplitLibCache` (emission cache) |
 | `src/passes/srfi_prune.c`, `.h` | Drops SRFI definitions nothing reaches |
 | `src/compiler/emit_module.c` | `r7rs_gc_active`, `emit_r7rs_gc_prologue`, `emit_r7rs_gc_tls_roots`, `emit_deep_stack_runtime` |
 | `src/compiler/emit_dk_runtime.c` | `tur_r7rs_dyn` (the per-thread dynamic environment), `tur_dk_pinned` |
@@ -386,7 +386,7 @@ makes the collector, the DK runtime and the deep-stack helper defined once,
 in the library unit. `emit_split_pieces` compiles a cold library unit as
 several pieces in parallel.
 
-When it applies: `prelude_split_applies` (`src/main.c`) -- a `#lang r7rs`
+When it applies: `prelude_split_applies` (`src/driver/pipeline.c`) -- a `#lang r7rs`
 entry, a 64-bit host, not `--debug`, not writing a manifest, on Linux and
 macOS by default (`TUR_PRELUDE_SPLIT=1` opts in elsewhere; Windows is off
 until [r7rs-prelude-split-wrong-symbols-on-windows](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/r7rs-prelude-split-wrong-symbols-on-windows.md)
@@ -653,7 +653,7 @@ SRFI 17's `(set! (f x) v)` in a unit that imports those SRFIs' `cond` and
 
 ### Pruning
 
-`srfi_prune_program` (`src/passes/srfi_prune.c`) runs in `main.c` after the
+`srfi_prune_program` (`src/passes/srfi_prune.c`) runs in `driver/pipeline.c` after the
 transform passes and before emission, on the whole program. It removes each
 top-level definition from a `stdlib/srfi/` file that nothing outside those
 files reaches, transitively. Without it, a procedure used as a value

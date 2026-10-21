@@ -33,7 +33,7 @@ unrelated "unknown name" further down, if at all.
 
 ## Fix
 
-`cmd_eval_h` (`src/main.c`) checks `pkg_manifest_malformed()` after the
+`cmd_eval_h` (`src/driver/cmd_eval.c`) checks `pkg_manifest_malformed()` after the
 `:experiments` read, which is the first read of the manifest on that path, and
 refuses the same way `compile_to_c` does: `diag_reset()`, then
 `pkg_manifest_reassert()`, exit 1. The sticky verdict is reset first, because

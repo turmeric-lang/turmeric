@@ -292,7 +292,7 @@ default-off lint half and reads as though nothing is enforced.
 **Note on the `--no-proc-macros` default while here:** the premise for
 flipping it was the false rust-analyzer claim, so the author's 2026-09-30
 decision (LSP does not pass it by default) stands unchanged. If it is
-revisited, the flag is **global** (`src/main.c:9589`, `:12420`), so flipping
+revisited, the flag is **global** (`src/driver/cli.c:GLOBAL_FLAGS`, `src/driver/worker.c:wk_apply_flags`), so flipping
 its default would refuse `defmacro*` in `tur build` too. rust-analyzer's
 setting is scoped to the language server; `cargo build` always runs proc
 macros. The faithful analogy is a **per-subcommand** default -- deny for

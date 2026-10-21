@@ -1,7 +1,7 @@
 /*
  * justrun.h -- tur run: Justfile-compatible task runner (RN0-RN7).
  *
- * Public API: a single entry point dispatched from main.c when `tur run`
+ * Public API: a single entry point dispatched from cmd_run_main when `tur run`
  * is invoked without a .tur file argument.
  */
 
@@ -23,7 +23,7 @@
 int cmd_justrun(int argc, char **argv);
 
 /* justrun_finds_justfile -- true when an explicit --justfile arg or the
- * upward search from cwd yields a Justfile.  Lets main.c's `tur run`
+ * upward search from cwd yields a Justfile.  Lets the driver's `tur run`
  * dispatcher fall back to the classic project-run path for a BARE
  * invocation in a Justfile-less build.tur project (engine-selection-plan
  * E3) instead of the historical hard 127. */

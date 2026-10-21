@@ -28,12 +28,11 @@
 ;;; immutable`) unless it is written `(def ^mut name init)`, and defining the
 ;;; same name twice is `def: 'x' is already defined`. `define` is the same form.
 ;;;
-;;; A type may be written before the initializer, `(def x : int 41)`. Take care
-;;; with it: unlike `let`, a top-level `def` does not compare the annotation with
-;;; the initializer, so `(def x : int 7.1)` stores the bits of 7.1 and prints
-;;; 4619679907765970534 on both engines, and `(def y : float 3)` is 1.4822e-323
-;;; (docs/reported/definition-forms-gaps.md). Write the initializer in the type
-;;; you declare, or leave the annotation off.
+;;; A type may be written before the initializer, `(def x : int 41)`. As with
+;;; `let`, an annotation that names an integer for a float initializer or the
+;;; reverse is an error (`(def x : int 7.1)`: `type annotation does not match
+;;; initializer`); an integer literal under `: float` is the number, so
+;;; `(def y : float 3)` is 3.0.
 ;;;
 ;;; Parameters:
 ;;;   name -- the name to bind; `^mut name` makes it assignable
@@ -161,11 +160,7 @@
 ;;; is refused inside `atomically` (TUR-E0605). The type cannot be linear, affine
 ;;; or unique, and a user `defdata` is refused as a dynamic type (TUR-E0603);
 ;;; `defopaque` is the usual stand-in. See tur/forms/control for `binding` and
-;;; dynamic-vars-guide for threads and handlers. A compiled program drops a
-;;; `binding` whose whole body is one call to a function returning `nil`:
-;;; `(binding [*level* 3] (show))` never calls `show`
-;;; (docs/reported/definition-forms-gaps.md); give the body a second form or
-;;; return a value.
+;;; dynamic-vars-guide for threads and handlers.
 ;;;
 ;;; Parameters:
 ;;;   name -- the variable, written with earmuffs

@@ -53,7 +53,7 @@ An embedder cannot reach it:
 
 - the compile hook is installed by the `tur` binary only
   (`turi_set_inline_c_jit_hook(&g_repl_inline_c_jit_hook)`, `src/main.c`), and
-  the hook's implementation lives in `main.c` too;
+  the hook's implementation lives in `src/driver/jit.c`;
 - ~~the experiment gate is `g_opt_repl_jit_inline_c`, set by `--enable=` /
   `build.tur` / the user config, none of which a `tur build`-ed program
   reads~~ -- no longer an obstacle: since the graduation the gate defaults on
@@ -77,7 +77,7 @@ the `#fx{Unsafe}` `image-hook-record-path` from a top-level form without
 ## Fix directions
 
 1. **Ship the JIT hook in libturi.** Move `g_repl_inline_c_jit_hook` out of
-   `main.c` into tur_core beside `inline_c_jit.c` (it needs the emitter and
+   `driver/jit.c` into tur_core beside `inline_c_jit.c` (it needs the emitter and
    `jit_engine.c`, both already linked into a `-lturi` program that links
    `libtur_mir.a`), and give the embed API a per-env switch
    (`turi_env_set_inline_c_jit(env, true)`) the notebook calls next to
@@ -126,7 +126,7 @@ What it took beyond the API -- each a defect the `tur repl` path shared:
   `.so` failing `dlopen` (`undefined symbol: linalg__sized__lamat_hyset_ex`).
   Shims now skip what `emit_abi_fn_skip_generic` skips, and the manifest
   keeps only symbols the emitted C defines (`manifest_keep_defined`,
-  `src/main.c`) -- before that the loader rejected the image as a "stale
+  `src/driver/pipeline.c`) -- before that the loader rejected the image as a "stale
   exports.manifest".
 - **A struct parameter was bound as an int.** The manifest spells it `:any`,
   which the loader reads as class `i`; calling linalg's `mat-print-prec`

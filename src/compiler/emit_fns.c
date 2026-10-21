@@ -3844,8 +3844,7 @@ static void cps_emit(GsCtx *gs, Buf *b, const Expr *e, const GsSink *sink) {
         gs->ctx->indent = gs->cur_ind;
         char *pv = emit_value(gs->ctx, b, pl);
         indent_buf(b, gs->cur_ind);
-        buf_printf(b, "tur_panic_with(%d, (void*)%s, __FILE__, __LINE__);\n",
-                   (int)pl->type.kind, pv);
+        emit_panic_with_call(b, e->span, (int)pl->type.kind, pv);
         free(pv);
         indent_buf(b, gs->cur_ind); buf_puts(b, "break;\n");
         return;

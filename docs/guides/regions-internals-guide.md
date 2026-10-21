@@ -74,7 +74,7 @@ The design history is the archived
 | `src/compiler/emit_module.c` | The `TUR_REGION_*` macros (both arms), the routed base ctor in `emit_adt_typedef_and_ctors`, the catch-boundary retire in `emit_runtime_preamble` |
 | `src/compiler/types.c` | `regions_enabled`, `region_free_fn`, the routed monomorph ctor in `emit_registered_adt_app_rec` |
 | `src/runtime/hamt.c` | The host-runtime notes in `tur_hamt_set` and `tur_hamt_transient_set` |
-| `src/main.c` | Reads `TUR_REGIONS` into `g_opt_regions` (default `true`, `src/runtime/globals.c`) |
+| `src/driver/cli.c` | `drv_apply_env_overrides` reads `TUR_REGIONS` into `g_opt_regions` (default `true`, `src/runtime/globals.c`) |
 
 ---
 
@@ -579,7 +579,7 @@ region fixture you write. Counts are process-wide atomics.
 
 ### Turn regions off: `TUR_REGIONS=0`
 
-`TUR_REGIONS` is read by **`tur`**, at compile time (`src/main.c`), not by
+`TUR_REGIONS` is read by **`tur`**, at compile time (`drv_apply_env_overrides`), not by
 the program. `=0` clears `g_opt_regions`, which removes the routed ctor
 allocation (back to `malloc`), the bracket around `with-region` /
 `bt-scope`, the pasted region runtime and the `atexit`. Emitter notes are

@@ -1,0 +1,4 @@
+;; definition-forms-gaps 6: an unknown base keyword was accepted with no
+;; diagnostic and became the int64 carrier.
+(defopaque Bad :string)
+(defn main [] : int 0)

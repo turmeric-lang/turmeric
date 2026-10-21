@@ -7,16 +7,16 @@
 #include "effect.h"
 
 /* Phase 19: Effect lowering pass
- * 
- * This pass transforms algebraic effect operations into delimited continuations:
- * - (perform (E args...)) -> (shift k (apply handler E args k))
- * - (handle expr cases...) -> (reset (let [handlers...] expr))
- * 
- * The lowering follows the OCaml 5-style approach described in effects-plan.md.
- * 
- * For v1, we implement a simple direct-style lowering:
- * - perform -> shift with a function that calls the continuation
- * - handle -> reset with the body
+ *
+ * Despite the name, nothing is lowered here.  effect_lower returns its input
+ * when the program contains no effect node; otherwise it rebuilds the tree arm
+ * by arm and returns EX_PERFORM, EX_HANDLE and EX_RESUME unchanged.  The
+ * CPS/DK backend lowers effects.  The PASS_EFFECT_LOWER arm's real work is
+ * building the EffectEnv that later passes read.
+ *
+ * The rebuild is not quite an identity: lower_discontinue rebuilds
+ * EX_DISCONTINUE with TYPE_NIL rather than the node's own type.  Confirm
+ * nothing downstream reads that type before deleting the pass.
  */
 
 /* Check if an expression contains perform or handle */

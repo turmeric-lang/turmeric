@@ -5,7 +5,7 @@ confirms it.** A split build has no weak data now, and the link-level
 diagnosis is confirmed with MinGW-w64's GNU ld (below). What is left is one
 run on a Windows host: `TUR_PRELUDE_SPLIT=1 bash tests/run.sh` over the
 `r7rs-*` fixtures (MSYS2/UCRT64). Then drop the `!defined(__linux__)`
-gate's Windows half in `prelude_split_applies` (src/main.c), and archive this
+gate's Windows half in `prelude_split_applies` (src/driver/pipeline.c), and archive this
 report.
 
 ## Diagnosis, confirmed (2026-09-28, MinGW-w64 13.2 / GNU ld, cross from Linux)
@@ -44,7 +44,7 @@ that went wrong.
 ---
 
 **Severity:** low while the split is off there, and it is: on Windows,
-`prelude_split_applies` (src/main.c) declines unless `TUR_PRELUDE_SPLIT=1`.
+`prelude_split_applies` (src/driver/pipeline.c) declines unless `TUR_PRELUDE_SPLIT=1`.
 Windows builds keep the one-unit build and its 3 s-per-program cost. The
 split itself (docs/archive/r7rs-programs-compile-slowly.md) cuts that to
 about 1 s everywhere else.

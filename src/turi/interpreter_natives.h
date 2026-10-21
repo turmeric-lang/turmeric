@@ -27,7 +27,8 @@
  * shims win over the loaded (inline-C) stdlib bodies. */
 void turi_env_register_interpreter_natives(TuriEnv *env);
 
-/* Individually exposed for the forked fixture-runner worker in src/main.c
+/* Individually exposed for the forked fixture-runner worker in
+ * src/driver/worker.c
  * (wk_eval_fixture), which registers a narrower subset than the full sequence
  * above and threads its own preload. */
 void wk_register_stdlib_natives(TuriEnv *env);

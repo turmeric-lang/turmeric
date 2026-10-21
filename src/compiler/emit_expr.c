@@ -5722,6 +5722,28 @@ void emit_panic_call(Buf *body, Span span, const char *msg) {
     buf_printf(body, "\", %u, %s);\n", span.line, msg);
 }
 
+void emit_panic_with_call(Buf *body, Span span, int type_tag, const char *payload) {
+    /* panic-forms-gaps 3.  `panic-with` passed the C compiler's
+     * __FILE__/__LINE__, so an uncaught one reported the generated C file
+     * (`panic at /tmp/tur-build/k.c:2759`) and a caught one's
+     * panic-payload-line was a line of generated code.  `panic` passes the
+     * source span; so does this. */
+    const char *path = span.line ? diag_file_path(span.file_id) : NULL;
+    if (!path) {
+        buf_printf(body, "tur_panic_with(%d, (void*)%s, __FILE__, __LINE__);\n",
+                   type_tag, payload);
+        return;
+    }
+    const char *base = path;
+    for (const char *p = path; *p; p++) if (*p == '/' || *p == '\\') base = p + 1;
+    buf_printf(body, "tur_panic_with(%d, (void*)%s, \"", type_tag, payload);
+    for (const char *p = base; *p; p++) {
+        if (*p == '\\' || *p == '"') buf_putc(body, '\\');
+        buf_putc(body, *p);
+    }
+    buf_printf(body, "\", %u);\n", span.line);
+}
+
 static char *emit_if_value(EmitCtx *ctx, Buf *body, const Expr *e) {
     /* Phase 3/4: Check if branches contain return or throw */
     bool then_has_return_or_throw = expr_contains_return_or_throw(e->as.if_.then_);
@@ -10410,8 +10432,8 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     buf_printf(body, "tur_panic_set_frame(&%s);\n", ctx->frame_var);
                 }
                 /* tur_panic_with takes type_tag (int), payload (void*), file, line */
-                buf_printf(body, "tur_panic_with(%d, (void*)%s, __FILE__, __LINE__);\n",
-                           (int)payload->type.kind, payload_val);
+                emit_panic_with_call(body, e->span, (int)payload->type.kind,
+                                     payload_val);
                 /* tur_panic_with returns; propagate now. */
                 emit_panic_signal_return(ctx, body);
             }
@@ -10520,9 +10542,15 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
             const Expr *payload = e->as.panic_payload_downs_.payload;
             TypeKind target_type = e->as.panic_payload_downs_.target_type;
             char *payload_var = emit_value(ctx, body, payload);
+            /* panic-forms-gaps 1: this evaluated the payload and produced
+             * nothing, so any use of the result was `invalid use of void
+             * expression`.  The runtime helper exists in every preamble. */
+            char *result = malloc(strlen(payload_var) + 96);
+            snprintf(result, strlen(payload_var) + 96,
+                     "tur_panic_payload_downcast((tur_panic_payload*)(intptr_t)(%s), %d)",
+                     payload_var, (int)target_type);
             free(payload_var);
-            (void)target_type; /* unused in v1 */
-            return atom_nil();
+            return result;
         }
         /* Phase 18: Delimited continuations */
         case EX_RESET:            return emit_effects_reset(ctx, body, e);
@@ -18127,13 +18155,19 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                 free(vslot);
                 free(frame);
             }
-            /* Emit body */
-            char *bval = emit_value(ctx, body, e->as.dynvar_binding_.body);
-            if (!nil_result) {
+            /* Emit body.  A nil body is a statement: its value expression is
+             * never written out, so `(binding [*level* 8] (show))` whose whole
+             * body is one call to a nil function dropped the call
+             * (definition-forms-gaps 2).  emit_stmt writes it, as a nil `let`
+             * body is written. */
+            if (nil_result) {
+                emit_stmt(ctx, body, e->as.dynvar_binding_.body);
+            } else {
+                char *bval = emit_value(ctx, body, e->as.dynvar_binding_.body);
                 indent_buf(body, ctx->indent);
                 buf_printf(body, "%s = %s;\n", result_tmp, bval);
+                free(bval);
             }
-            free(bval);
             /* Leaving the binding scope: unregister the guards an early
              * `return` inside the body would have popped. */
             for (uint32_t pi = 0; pi < n_pairs && ctx->n_dynvar_guards > 0; pi++) {

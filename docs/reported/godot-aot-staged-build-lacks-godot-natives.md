@@ -44,7 +44,7 @@ for the first four. Details: "What remains" at the end of the progress note.
 > `eval mode`. Compiled mode takes the other branch and hard-errors. And
 > `g_interpret_mode` is set by exactly `cmd_eval_h`, `cmd_eval_expr` and
 > `cmd_repl` -- **not** by `cmd_jit`. The JIT elaborates in compiled mode, so it
-> hits this identically. `src/main.c:4420` says as much in passing: "Same
+> hits this identically. `src/driver/jit.c:repl_jit_build` says as much in passing: "Same
 > emission posture as cmd_jit -- which means COMPILED-mode elaboration".
 >
 > **So declarations are required on every route.** In-process compilation
@@ -179,7 +179,7 @@ for the first four. Details: "What remains" at the end of the progress note.
 >
 > **Fix direction 2 (resolve at load) needed no compiler change.** `tur build
 > --shared` already passes `-undefined dynamic_lookup` on macOS
-> ([src/main.c:6245](../../src/main.c)), so the staged `.so` links with
+> ([src/driver/project.c:cmd_build_multi_files](../../src/driver/project.c)), so the staged `.so` links with
 > `godot_vec2` and friends undefined and `dlopen` binds them to the running
 > extension. Verified by `nm -u` on the staged library. The whole fix is
 > therefore in `turmeric-godot`; nothing in this repo changed.

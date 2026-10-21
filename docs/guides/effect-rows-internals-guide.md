@@ -18,10 +18,8 @@ is the [effects system guide](effects-system-guide.md), in particular its
 sections. Type-level `#row{...}` rows are an unrelated feature
 ([row types guide](row-types-guide.md)).
 
-> **Trust the code over the header comments.** Several comments in this area
-> predate the current design. `main.c` still calls `PASS_EFFECT_ROW_INFER` a
-> "stub slot", `PASS_EFFECT_LOWER` says it transforms perform/handle into
-> shift/reset (it does not), and the `EffectRow` header comment in `effect.h`
+> **Trust the code over the header comments.** Some comments in this area
+> predate the current design: the `EffectRow` header comment in `effect.h`
 > still describes "Phase 19 v1". Where a comment and this guide disagree, read
 > the code; where the code disagrees with this guide, fix the guide.
 
@@ -65,7 +63,7 @@ sections. Type-level `#row{...}` rows are an unrelated feature
 | `src/compiler/elab_core.c` | `effect_row_contains_symbol`: name lookup on a row that may still be unresolved |
 | `src/compiler/reader.c` | `read_fx_row` and the `#{...}` / `@{...}` legacy spellings (provenance tags) |
 | `src/compiler/builtins.c` | `BuiltinSpec.effect` (`"IO"` on every `println` row), `builtin_effect_for_name` |
-| `src/main.c` | `core_passes[]`, `run_core_pass`, the effect flags |
+| `src/driver/pipeline.c`, `src/driver/cli.c` | `core_passes[]` and `run_core_pass`; the effect flags (`GLOBAL_FLAGS[]`) |
 | `src/turi/eval.c` | The interpreter's own call of `effect_check_pass` (`turi_eval_impl`, step 6b) |
 
 `src/passes/effect_lower.c` looks relevant and is not: it is a no-op (see the

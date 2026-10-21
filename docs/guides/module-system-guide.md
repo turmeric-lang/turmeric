@@ -80,6 +80,10 @@ defmodule geom/vector
   - **Any other** file is spliced into the module, so its definitions are
     the module's members and can be exported. That is how a module is split
     across files.
+  - A relative path other than `stdlib/...` is looked for beside the file
+    that holds the `load` first, as an `import` is, then under the directory
+    `tur` runs from. So `(load "vector-impl.tur")` in `geom/vector.tur` finds
+    `geom/vector-impl.tur` wherever the build is started.
 - A module's `import`s come before its first definition. A user-file
   `(load ...)` above an `import` splices definitions in and ends that section,
   so put it after the imports.

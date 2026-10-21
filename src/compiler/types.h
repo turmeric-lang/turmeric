@@ -384,6 +384,12 @@ typedef struct AdtDef {
      * declared base was not recoverable anywhere downstream.  Read only by
      * `adt_opaque_c_names_as_pointer` (types.c), which is seam-gated. */
     bool        opaque_base_is_ptr;
+    /* definition-forms-gaps 5: true iff the DECLARED base is a float kind --
+     * `(defopaque Celsius :float)`.  The handle is still an int64_t carrier, so
+     * a `::` between it and a float is a BIT reinterpret (elab_ascribe); left
+     * to C it was a value conversion, truncating 21.5 to 21 and reading 21.7
+     * back as the bits of an integer. */
+    bool        opaque_base_is_float;
     /* option-niche: set by the `:non-null` attribute on a pointer-based
      * defopaque -- `(defopaque String :ptr<void> :non-null)`.  A DECLARATION by
      * the type's author that its valid values exclude the null pointer (every

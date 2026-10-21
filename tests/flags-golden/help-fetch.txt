@@ -1,0 +1,2 @@
+tur fetch: no build.tur found in current directory
+[exit 2]

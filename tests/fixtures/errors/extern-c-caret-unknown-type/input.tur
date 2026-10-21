@@ -1,0 +1,4 @@
+;; module-and-ffi-forms-gaps 1: an unknown `^type` in the shorthand used to
+;; default to int; it is an error naming the token.
+(extern-c frob [^zork x] :int)
+(defn main [] : int 0)

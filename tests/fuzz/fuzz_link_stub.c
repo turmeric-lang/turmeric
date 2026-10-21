@@ -1,7 +1,8 @@
-/* fuzz_link_stub.c -- the one main.c symbol tur_core needs.
+/* fuzz_link_stub.c -- the one driver symbol tur_core needs.
  *
- * lsp/lsp.c references tur_collect_symbols, which is defined in src/main.c.
- * A harness that links every tur_core object without main.c resolves it here,
+ * lsp/lsp.c references tur_collect_symbols, which is defined in the driver
+ * (src/driver/pipeline.c).  A harness that links every tur_core object
+ * without the driver resolves it here,
  * as the unit tests do (tests/unit/pkg_hash.c). */
 #include "lsp/lsp_sym.h"
 
