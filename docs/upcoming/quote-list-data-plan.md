@@ -1,8 +1,8 @@
 # Plan: `(quote (a b c))` is data, not code
 
 > **Status:** PROPOSED 2026-10-21 (from control-forms-gaps item 1). Direction:
-> Lisp semantics -- `quote` never evaluates its argument. Not started; the
-> representation (below) wants a decision before code.
+> Lisp semantics -- `quote` never evaluates its argument. **Representation
+> decided 2026-10-21: a `Datum` ADT (option 1 below).** Not started.
 
 ## Problem
 
@@ -35,7 +35,7 @@ datum type, and `List` is homogeneous.
    (`#lang saffron`, where `any` is the default), noisy in typed code.
 3. **Both:** `Datum` in typed files, `(List any)` in Saffron.
 
-Recommendation: 1, with 3's Saffron arm only if Saffron users ask.
+**Decided: 1.** Option 3's Saffron arm only if Saffron users ask.
 
 Either way, keep `(quote sym)` a `Sym` at the top level (DSL helpers rely on it,
 see `docs/archive/history/defgodot-script-macro-vec-quote-semantics.md`); a
@@ -58,7 +58,8 @@ where `reader-macros/define` consumes its arguments before touching `F_QUOTE`).
 
 ## Steps
 
-1. Pick the representation; write `stdlib/datum.tur` with docstrings.
+1. Write `stdlib/datum.tur` (the `Datum` ADT, `show`, `Eq`, accessors) with
+   docstrings.
 2. `case F_QUOTE` builds the datum for a list / vector form (a vector quoted is a
    list datum too, or its own `DVec`; decide with 1).
 3. The interpreter shares the elaborator, so it gets the same lowering.

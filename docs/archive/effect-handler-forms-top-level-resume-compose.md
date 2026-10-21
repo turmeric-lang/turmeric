@@ -2,7 +2,7 @@
 
 **RESOLVED 2026-10-21** (items 2, 3, 4, the one-shot half of 5, and two of the
 smaller items of effect-forms-gaps). The rest stays open in
-[effect-forms-gaps](../reported/effect-forms-gaps.md). Pinned by
+[effect-forms-gaps](effect-forms-gaps.md). Pinned by
 `effect-toplevel-handler-forms`, `effect-compose-clause-performs`,
 `effect-cont-pred-after-resume` (all three engines), `errors/resume-value-type-mismatch`,
 `errors/handle-no-clauses`, `errors/discontinue-no-lowering` and

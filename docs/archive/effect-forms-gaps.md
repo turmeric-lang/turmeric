@@ -1,5 +1,16 @@
 # The effect forms: `discontinue` runs on neither engine
 
+**ARCHIVED 2026-10-21** -- every open item has a plan; see the disposition below.
+
+## Disposition (2026-10-21)
+
+- Item 1 (`discontinue` runs on neither engine): decision -- keep it and
+  implement it on both engines. Plan: [discontinue-plan](../upcoming/discontinue-plan.md).
+- Items 2-3 and the composed-handler note: decided and planned in
+  [effect-continuation-followups-plan](../upcoming/effect-continuation-followups-plan.md).
+- Everything else: resolved, see
+  [effect-handler-forms-top-level-resume-compose](effect-handler-forms-top-level-resume-compose.md).
+
 **Severity: medium.** Found 2026-10-19 checking the examples for the effect forms'
 API reference (`stdlib/forms/effects.tur`).
 
@@ -7,9 +18,9 @@ API reference (`stdlib/forms/effects.tur`).
 statements, `resume` value checking, `compose-handlers` over handler literals,
 `cont?` after a one-shot resume, the interpreter's `discontinue` stack smash and
 `(handle 5)` are resolved: see
-[effect-handler-forms-top-level-resume-compose](../archive/effect-handler-forms-top-level-resume-compose.md).
+[effect-handler-forms-top-level-resume-compose](effect-handler-forms-top-level-resume-compose.md).
 
-## 1. `discontinue` cannot be used (decision pending: lower it or retire it)
+## 1. `discontinue` cannot be used (decided 2026-10-21: keep and implement)
 
 ```turmeric
 (defeffect Ask [] : int)
@@ -52,7 +63,7 @@ runs the body's cleanup when a clause simply does not resume:
 
 Compiled and `tur jit`: `clause gives up`, `body cleanup`, `-1`. Interpreted:
 `clause gives up`, `-1`, `body cleanup` -- the same cleanup, run late
-([turi-fiber-handle-defers-fire-at-the-wrong-time](turi-fiber-handle-defers-fire-at-the-wrong-time.md),
+([turi-fiber-handle-defers-fire-at-the-wrong-time](../reported/turi-fiber-handle-defers-fire-at-the-wrong-time.md),
 which the defer-semantics plan should also close). So what `discontinue` adds is
 narrower:
 
@@ -103,7 +114,7 @@ handler held in a variable stays a flat table and is documented.
 
 - The interpreter's `handle` runs the body's pending `defer`s at the wrong time
   when a clause does not resume:
-  [turi-fiber-handle-defers-fire-at-the-wrong-time](turi-fiber-handle-defers-fire-at-the-wrong-time.md)
+  [turi-fiber-handle-defers-fire-at-the-wrong-time](../reported/turi-fiber-handle-defers-fire-at-the-wrong-time.md)
   (already filed; the `handle` page links it).
 - A composed handler held in a variable is still one flat table: a clause that
   performs an effect of its sibling aborts as unhandled (nest `with-handler`s, or
