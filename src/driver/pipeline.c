@@ -37,7 +37,6 @@ static Form **load_project_prelude_impl(Arena *arena, SymbolTable *st,
                                          Form **user_forms, uint32_t nuser,
                                          uint32_t *stdlib_count_out);
 
-/* Global configuration variables — defined in globals.c (part of tur_core) */
 /* Phase HKT-P6: --dump-kinds flag: print kind annotations after kind-check */
 bool g_dump_kinds = false;
 

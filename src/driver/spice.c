@@ -18,8 +18,6 @@ static void collect_dep_dirs_recursive(const char *root, const PkgManifest *m,
                                        const char ***dirs, int *n, int *cap,
                                        VisitedRoots *visited);
 
-/* Walk up from 'start' to find a directory containing build.tur.
- * Returns malloc'd path string or NULL if not found. Caller must free(). */
 /* RM4: collect the manifest's `:reader-macros [...]` entries as absolute
  * paths suitable for compile_to_c. `root_dir` is the spice root (where
  * build.tur lives); each manifest entry is joined onto it unless it is
@@ -60,6 +58,8 @@ void free_reader_macro_paths(char **paths, int n) {
     free(paths);
 }
 
+/* Walk up from 'start' to find a directory containing build.tur.
+ * Returns malloc'd path string or NULL if not found. Caller must free(). */
 char *drv_find_project_root(const char *start) {
     char dir[4096];
     strncpy(dir, start, sizeof(dir) - 1);
