@@ -1,7 +1,7 @@
 /*
  * justrun.c -- tur run: Justfile-compatible task runner.
  *
- * Implements the supported subset from docs/tur-run-plan.md (phases RN0-RN7).
+ * Implements the supported subset from docs/archive/history/tur-run-plan.md (phases RN0-RN7).
  * Pure C; no Turmeric compiler dependency at runtime.
  *
  * Supported:

@@ -2,7 +2,7 @@
  *
  * security-audit-plan WP3 (S-1).  Every native that turi_env_new registers --
  * interpreter_natives.c, collections_native.c, string_native.c, fiber.c, the
- * eval.c builtins, macro_env.c, ffi_thunk.c and main.c -- has exactly one row
+ * eval.c builtins, macro_env.c, ffi_thunk.c and the driver -- has exactly one row
  * here.  turi_env_register_native looks the name up and stamps the row's bits
  * on the closure; eval_apply_driven refuses the call when the calling env does
  * not hold every one of them.  One check at the dispatch, not one per native.

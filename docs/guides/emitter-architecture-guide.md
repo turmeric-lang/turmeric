@@ -95,7 +95,7 @@ Out of scope, with the guide that covers each:
 
 | Entry | Inner | Used for |
 |---|---|---|
-| `emit_program` | `emit_program_inner` | `main.c:compile_to_c`, which `cmd_emit_c`, `cmd_build_once`, `cmd_jit` and the REPL's JIT build call |
+| `emit_program` | `emit_program_inner` | `driver/pipeline.c:compile_to_c`, which `cmd_emit_c`, `cmd_build_once`, `cmd_jit` and the REPL's JIT build call |
 | `emit_header` | `emit_header_inner` | per-module `.h` in a multi-module build |
 | `emit_implementation` | `emit_implementation_inner` | per-module `.c` in a multi-module build |
 | `emit_exports_manifest` | `emit_exports_manifest_inner` | `exports.manifest` for `--shared` |
@@ -825,7 +825,7 @@ The emitter writes a few comments that tools parse. Do not reword them.
 
 | Marker | Written by | Read by |
 |---|---|---|
-| `/* ==== tur: end of fixed runtime preamble ==== */` | `emit_runtime_preamble` | the JIT's split-runtime swap (`main.c:jit_try_split_preamble`) and pruner (`jit_prune.c:jit_prune_full_source`); `tools/gen-runtime-split.py`; `tests/fconv_lint.py` (skips everything above it) |
+| `/* ==== tur: end of fixed runtime preamble ==== */` | `emit_runtime_preamble` | the JIT's split-runtime swap (`driver/preamble_split.c:jit_try_split_preamble`) and pruner (`jit_prune.c:jit_prune_full_source`); `tools/gen-runtime-split.py`; `tests/fconv_lint.py` (skips everything above it) |
 | `/* tur:inline-c-begin */` ... `/* tur:inline-c-end */` | `inline_c_emit_block_deduped` around file-scope C | `tests/fconv_lint.py` |
 | `/* tur:inline-c-fns: a b c */` (last line) | `emit_note_inline_c_fn` / `emit_write_inline_c_fns` | `tests/fconv_lint.py` |
 | `/* tur:optional */` on a hoisted include | the author, carried by `TUR_HOIST_OPTIONAL_TAG` | `tur_emit_hoisted_include` |

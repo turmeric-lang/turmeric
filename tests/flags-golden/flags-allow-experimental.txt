@@ -1,0 +1,2 @@
+error: --allow-experimental was retired in v<VERSION>; enabling an experiment (via --enable=<name>, build.tur, or ~/.config/turmeric/experiments.tur) is now the acknowledgment. Remove the flag.
+[exit 2]

@@ -2729,8 +2729,6 @@ void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     /* Phase EX1d: existential `open` skolem tracking. */
     e->open_skolem_depth = 0;
     e->open_skolem_next  = 0;
-    /* Phase P3: HAMT lowering */
-    e->needs_hamt = false;
     /* PR5-3-D: referred effects */
     e->referred_effects     = NULL;
     e->n_referred_effects   = 0;

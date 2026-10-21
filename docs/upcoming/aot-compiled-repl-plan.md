@@ -70,11 +70,11 @@ form. Since C1, `tur repl` prints `97` too (behind
 | --- | --- | --- |
 | Incremental elaboration session (TR2.2b) | `TuriEnv.elab_session`, `src/turi/env.h:261`; on by default (`incremental_elab`, `:230`) | Checks each turn against earlier turns without re-elaborating them. Applies the REPL's redefinition rules (`elab_prior_turn_global`, `src/compiler/elab_core.c:2505`) and gives the turn's result type |
 | JIT image mode (J2) | `tur_jit_compile_image` / `tur_jit_image_sym` / `tur_jit_image_free`, `src/jit_engine.h:74-103` | Compiles emitted C in process, links it against `tur`, runs `__tur_static_init`, and finds functions by C name, static ones included |
-| Split runtime | `jit_try_split_preamble`, `src/main.c:4494` | Every image links against the one runtime inside `tur` instead of carrying its own copy of the preamble's state |
-| Repeated in-process compile | `repl_jit_build`, `src/main.c:5155`; `compile_to_c` at `:5234` | Precedent for running the front end and emitter inside the REPL process on every `(reload)`, saving and restoring `g_interpret_mode` / `g_emit_for_link` around it |
+| Split runtime | `jit_try_split_preamble`, `src/driver/preamble_split.c` | Every image links against the one runtime inside `tur` instead of carrying its own copy of the preamble's state |
+| Repeated in-process compile | `repl_jit_build` and its `compile_to_c` call, `src/driver/jit.c` | Precedent for running the front end and emitter inside the REPL process on every `(reload)`, saving and restoring `g_interpret_mode` / `g_emit_for_link` around it |
 | Old images stay resident | retired list, `src/turi/ffi_thunk.c:494-507` | The lifetime rule: never free an image something may still point into |
-| Exports manifest and scalar marshaling | `g_manifest_sink` (`src/main.c:5232`), `tur_ffi_install_spice_bindings`, `src/turi/ffi_thunk.c` | Binding a compiled function as an interpreter native: C name, signature, and int/float/cstr/bool/nil marshaling |
-| C1's mid-turn compile (2026-10-02) | `repl_inline_c_jit_build` (`src/main.c`), `src/turi/inline_c_jit.c`, `repl_jit_compile_image(..., prune, ...)` | Compiling inside a turn without disturbing it: diagnostic-registry save/replace, emission-flag save/restore, `jit_prune` on an image TU, quiet c2mir warnings |
+| Exports manifest and scalar marshaling | `g_manifest_sink` (`src/driver/jit.c:repl_jit_build`), `tur_ffi_install_spice_bindings`, `src/turi/ffi_thunk.c` | Binding a compiled function as an interpreter native: C name, signature, and int/float/cstr/bool/nil marshaling |
+| C1's mid-turn compile (2026-10-02) | `repl_inline_c_jit_build` (`src/driver/jit.c`), `src/turi/inline_c_jit.c`, `repl_jit_compile_image(..., prune, ...)` | Compiling inside a turn without disturbing it: diagnostic-registry save/replace, emission-flag save/restore, `jit_prune` on an image TU, quiet c2mir warnings |
 | Lean resident images (2026-10-02) | `tur_jit_compile_image` releases the C front end once an image is initialized | An image costs ~1.6 MB resident instead of ~28-62 MB, which is what makes "keep every image" thinkable (C2, point 5) |
 | Vendored MIR, `TUR_JIT` on by default (2026-10-02) | `external/mir/`, `cmake/mir.cmake`, `CMakeLists.txt` | Every default build and release binary carries the engine |
 
@@ -215,7 +215,7 @@ What graduation accepted, rather than fixed:
 
 **As built.** `src/turi/inline_c_jit.{h,c}` is the MIR-free half, in
 `tur_core`. The compile is a hook that `tur` registers from `main.c` on a
-`TUR_HAVE_JIT` build (`repl_inline_c_jit_build`), so a build without an engine
+`TUR_HAVE_JIT` build (`repl_inline_c_jit_build`, `src/driver/jit.c`), so a build without an engine
 has no hook and keeps today's error.
 
 - **Trigger.** `eval_apply_driven` (`src/turi/eval.c`), straight after

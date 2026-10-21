@@ -950,8 +950,6 @@ typedef struct Elab {
      * opens cannot confuse each other's escape checks. */
     int              open_skolem_depth;
     uint32_t         open_skolem_next;
-    /* Phase P3: HAMT lowering - track if HAMT functions are used */
-    bool             needs_hamt;
     /* Phase P3: set true while elaborating the RHS of a ^persistent let binding
      * so that map-new (which has no first arg to inspect) can be lowered to
      * hamt/new even though is_persistent_map would otherwise be false. */

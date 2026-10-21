@@ -161,7 +161,7 @@ void turi_env_preload_collections(TuriEnv *env, const char *stdlib_root) {
     const char *root = preload_root(stdlib_root);
 
     /* The typeclass-stub + typed-collection set the compiled path auto-loads.
-     * Kept in sync with cmd_eval's `prelude[]` in src/main.c.  contract.tur is
+     * Kept in sync with the compiled path's list (src/compiler/stdlib_autoload.c).  contract.tur is
      * NOT here (it is loaded up front by turi_env_preload_macros, next to
      * macros.tur, because the M7 macro promotion is order-sensitive).  sym.tur
      * is appended last so first-class :Sym ops (and the Hash/Eq[Sym] instances
@@ -253,11 +253,11 @@ void turi_env_preload_collections(TuriEnv *env, const char *stdlib_root) {
      * owns this native) is registered exactly once, at env-creation time
      * (turi/env.c), with no later re-assertion after preload -- unlike
      * turi_env_register_interpreter_natives, which is deliberately called a
-     * second time in main.c AFTER all turi_env_preload_* calls specifically
+     * second time in cmd_eval_h AFTER all turi_env_preload_* calls specifically
      * so a native shim wins over any stub/module body declared in between.
      * A real fix re-registers (at minimum) vec-new-filled -- or all of
      * turi_register_collection_natives -- at that same late point. See
-     * docs/reported/turi-vec-new-filled-native-override-lost.md. */
+     * docs/archive/turi-vec-new-filled-native-override-lost.md. */
     TuriValue sv2 = turi_eval(env,
         "(defn vec-new-filled [A] [n :int v :A] : (Vec A) (:: (vec-new) (Vec A)))\n"
     );
@@ -296,7 +296,7 @@ void turi_env_preload_stdlib(TuriEnv *env, const char *stdlib_root) {
         setenv("TUR_STDLIB_DIR", root, 1);
 #endif
     }
-    /* The program preload `tur --interpret` runs (src/main.c cmd_eval), in
+    /* The program preload `tur --interpret` runs (cmd_eval_h), in
      * its order; see each helper's comment in preload.h for why it sits where
      * it does.  Not the REPL's Show slice (turi_env_preload_typeclasses): it
      * loads stdlib `String` into the global scope, where a module that

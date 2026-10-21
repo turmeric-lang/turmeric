@@ -17,7 +17,7 @@
 > **Implementation notes:**
 > - S1 went further than the fix shape: `:build-opts :link-libs` turned out
 >   to be parsed and consumed NOWHERE (schema + docs only), so
->   `collect_build_aux` now appends it for every consumer -- the cc link
+>   `drv_collect_build_aux` now appends it for every consumer -- the cc link
 >   line gets it too, not just the REPL hook.  A hook build failure also no
 >   longer fails the whole spice load: the loader falls back to the
 >   subprocess path (which handles vendored :c-sources and static-only
@@ -59,13 +59,13 @@ S5). Ordered by value.
 - A spice wraps a C library with `:cmake-deps` (fetch+build via CMake,
   flags recorded in `cmake/spice-deps-manifest.json`) and/or
   `:build-opts :link-libs`; `tur build`/`tur run` inject `-I/-L/-l`
-  from the manifest (`collect_build_aux`, `src/main.c:1859`).
+  from the manifest (`drv_collect_build_aux`, `src/driver/cc.c`).
 - Stdlib-style bare sources instead embed `/* __tur_autolink__: ... */`
-  markers in inline-C; `scan_autolink_markers` (`src/main.c:1839`)
+  markers in inline-C; `scan_autolink_markers` (`src/driver/cc.c`)
   collects them from the emitted C.
 - The REPL loads a spice either by subprocess `tur build --shared` +
   dlopen, or -- in JIT builds -- in-process via the `TurSpiceJitHook`
-  (`repl_jit_build`, `src/main.c:3823`).
+  (`repl_jit_build`, `src/driver/jit.c`).
 - REPL calls into spice exports resolve through the FFI ladder
   (`src/turi/ffi_thunk.c`): JIT thunk (any signature) -> per-export
   `__ffi` shim -> generated shape table.
@@ -85,7 +85,7 @@ unrelated homonym already in the process). The subprocess path is
 unaffected because `tur build` injects the manifest flags into cc.
 
 **Fix shape.** In `repl_jit_build`, call the same
-`collect_build_aux`/`pkg_cmake_manifest_append_cc_flags` pair
+`drv_collect_build_aux`/`pkg_cmake_manifest_append_cc_flags` pair
 `cmd_build` uses and append the collected `-L`/`-l` entries to the
 autolink string handed to `tur_jit_compile_image`. Two engine-side
 follow-ons in `jit_load_autolink` (`src/jit_engine.c:387`):

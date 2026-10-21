@@ -1,0 +1,4 @@
+usage:
+  tur upgrade <name>... [--dry-run] [--force]
+  tur upgrade --all [--dry-run] [--force]
+[exit 1]

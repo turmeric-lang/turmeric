@@ -155,6 +155,20 @@ its argument, else `$TUR`, else `./build/tur`. The first run builds the
 renderer, which takes a few seconds; later runs reuse the build until `tur` or
 a stdlib source changes.
 
+### `tests/run-flags.sh`
+
+The global flags and the CLI's own output (ctest `tur_flags_tests`): inline
+shell cases, not fixtures, so it takes no filter. `TUR=<binary>` points it at
+another build. It ends with goldens under `tests/flags-golden/` that pin
+`tur --help`, every subcommand's `--help`, the "external commands" listing,
+both completion scripts, and how the global flags are stripped. When a change
+to the CLI's text is intended, rewrite them and review the diff:
+
+```sh
+TUR_FLAGS_GOLDEN_UPDATE=1 timeout 720 bash tests/run-flags.sh
+git diff tests/flags-golden/
+```
+
 ### ctest
 
 ```sh

@@ -1,0 +1,18 @@
+usage:
+  tur docs                  print where the rendered docs are installed
+  tur docs --open           open them in your browser
+  tur docs --serve [--port N]
+                            serve them from localhost (default port 8137)
+
+Looks for the docs in, in order:
+  $TUR_DOCS_DIR
+  <prefix>/share/doc/turmeric   (installed alongside the binary)
+  <repo>/docs/html              (a source checkout)
+
+--serve exists because some browsers refuse cross-page navigation
+under file://, which breaks the links between guides.
+
+For a single symbol, `tur doc <symbol>` needs no docs install at all.
+
+Try 'tur --help' for global options.
+[exit 0]

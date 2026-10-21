@@ -848,6 +848,15 @@ add_test(
   COMMAND bash tests/check-running-tests-guide.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# src/driver/driver.h and commands.h are sectioned by defining file; each
+# section may declare only what its file defines (main-c-split-plan).  The
+# section grouping in emit_internal.h drifted until most of its prototypes sat
+# under the wrong file -- this keeps the driver's headers honest from the start.
+add_test(
+  NAME tur_driver_headers_lint
+  COMMAND python3 tests/check-driver-headers.py
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
 # Every add_test declared under src/ must be visible to `ctest -N`.  It was
 # not, for months: enable_testing() ran after add_subdirectory(src), so
 # tur_trail built, passed by hand, and never ran in CI.  The ordering is fixed

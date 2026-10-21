@@ -1,0 +1,7 @@
+usage:
+  tur experiments [--json]
+
+List the compiler's experimental features (the --enable=<name>
+registry).  --json emits the machine-readable form the docs site
+consumes.
+[exit 0]

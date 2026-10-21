@@ -213,7 +213,7 @@ jobs:
     timeout-minutes: 60
     # tur-link-and-build-split-plan Phase 5: cache the compiler-build objects
     # across runs. ccache launches every `cc -c` in the cmake build of `tur`
-    # (main.c + the runtime/compiler TUs), so an unchanged TU is a cache hit --
+    # (the driver + the runtime/compiler TUs), so an unchanged TU is a cache hit --
     # the bulk of each job's build step. (Fixture builds see little benefit now:
     # the auto/runtime-lib default already skips the runtime recompile, and each
     # fixture's generated .c is unique and invalidated by any src/ change.)

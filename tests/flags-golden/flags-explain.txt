@@ -1,0 +1,13 @@
+TUR-E0001: Type mismatch
+
+The type of an expression does not match the type expected in that
+position.
+
+Example:
+  (defn add [x :int y :int] :int (+ x y))
+  (add 1 true)   ; error: expected :int, got :bool
+
+Ensure that argument types, return types, and binding types are
+consistent.  Explicit type annotations help the compiler pinpoint the
+mismatch.
+[exit 0]

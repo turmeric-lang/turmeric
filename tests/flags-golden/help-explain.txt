@@ -1,0 +1,10 @@
+usage:
+  tur explain <TUR-E####>    print explanation for a diagnostic code
+  tur explain '<snippet>'   compile a snippet and explain errors
+
+examples:
+  tur explain TUR-E0042
+  tur explain '(+ 1 "x")'
+
+Try 'tur --help' for global options.
+[exit 0]

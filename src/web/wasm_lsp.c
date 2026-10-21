@@ -12,8 +12,8 @@
  *
  *   1. The JS bridge -- one JSON string in, one JSON string out.
  *   2. tur_collect_symbols, the analysis backend. The native one lives in
- *      main.c and runs the whole compile_to_c pipeline; main.c is a CLI and is
- *      not part of the WASM source set, so the browser gets its own front end
+ *      the driver and runs the whole compile_to_c pipeline; the driver is a
+ *      CLI and is not part of the WASM source set, so the browser gets its own front end
  *      over the same shared pieces (the stdlib autoload in
  *      compiler/stdlib_autoload.c, the binding walk in lsp/lsp_collect.c).
  *
@@ -109,7 +109,7 @@ static int read_whole_file(const char *path, char **out, size_t *out_len) {
 
 /* Read, parse, and elaborate `source_path`, recording every global binding.
  *
- * Mirrors the front half of main.c's compile_to_c, including the `#lang`
+ * Mirrors the front half of the driver's compile_to_c, including the `#lang`
  * sweep -- without it a `#lang turmeric/sweet` buffer (which is what the
  * playground opens with) would be handed to the s-expression reader and come
  * back as a wall of syntax errors that describe nothing the user did wrong.
@@ -142,7 +142,7 @@ int tur_collect_symbols(const char *source_path, const char *logical_path,
      * the latter reports only the reader axis, so a `#lang saffron` or
      * `#lang r7rs` buffer was elaborated as Turmeric (no `any` default, no
      * Scheme lowering, no prelude) and reported errors that were not there.
-     * The R0 READER_TURMERIC sweep named this site; this is main.c's
+     * The R0 READER_TURMERIC sweep named this site; this is the driver's
      * detect_and_adjust_lang, minus its exit paths. */
     LangDialect dialect = LANG_TURMERIC;
     ReaderType lang_type = detect_lang_dialect(src, len, &src_adj, &len_adj,
@@ -219,8 +219,8 @@ int tur_collect_symbols(const char *source_path, const char *logical_path,
     return rc;
 }
 
-/* src/lsp/lsp.c declares this for the CLI's `tur check` path. Nothing the
- * session reaches calls it; the definition exists so the reference resolves. */
+/* lsp_sym.h declares this for the MCP server's checks. Nothing the session
+ * reaches calls it; the definition exists so every reference resolves. */
 int tur_check_only(const char *path) {
     (void)path;
     return 1;

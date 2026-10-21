@@ -170,7 +170,7 @@ built from unpatched upstream. A file in the tree has no such cache.)
 |---|---|
 | `src/jit_engine.c` (~700 lines) | **the engine** -- c2mir compile, MIR link, MIR gen, run `main` on a sized-stack thread; also the persistent-image API |
 | `src/jit_engine.h` | public API and embedding contract (`tur_jit_execute`, `TurJitImage`, `TUR_JIT_ERR_*`). Included **unconditionally**; capability is probed with `#ifdef TUR_HAVE_JIT` |
-| `src/main.c` | the driver: `cmd_jit`, `jit_try_split_preamble`, `jit_sdk_include_dirs`, `cmd_emit_rt_split`, and the REPL's `repl_jit_build` hook |
+| `src/driver/jit.c`, `src/driver/preamble_split.c` | the driver: `cmd_jit`, `jit_sdk_include_dirs` and the REPL's `repl_jit_build` hook; `jit_try_split_preamble` and `cmd_emit_rt_split` |
 | `external/mir/`, `tools/update-mir.sh` | the vendored MIR sources (`UPSTREAM` records the fork commit, `VENDORED.md` the fixes) and the script that re-syncs them |
 | `cmake/mir.cmake` | defines the `tur_mir` static library from `external/mir/` (or `TUR_MIR_SOURCE_DIR`) |
 | `src/CMakeLists.txt` | the `tur_jit_obj` object library and how it is wired onto `tur` and `libturi` |
@@ -366,7 +366,7 @@ disagree.
   subprocess build, and the `dlopen` entirely, and compiles the whole spice as
   one TU in memory; symbol binding goes through the hook instead of `dlsym`.
   Every load compiles fresh, which is the point -- there is no cached artifact
-  to go stale. `repl_jit_build` in `src/main.c` does the interesting work:
+  to go stale. `repl_jit_build` in `src/driver/jit.c` does the interesting work:
   a shadow directory mapping module name to source file (symlinks; hard links
   or copies on Windows, where `symlink()` is an `ENOSYS` stub), a synthetic
   `__jit_root.tur` so imports dedupe through the ordinary module machinery,
@@ -597,7 +597,7 @@ there.
 ### `-I` does not reach c2mir
 
 Include directories for the JIT come from `jit_sdk_include_dirs`
-(`src/main.c`), rooted at `TUR_SDK_ROOT` or discovered by walking up from the
+(`src/driver/jit.c`), rooted at `TUR_SDK_ROOT` or discovered by walking up from the
 executable. A `-I` on the `tur jit` command line does not affect what c2mir
 can find.
 

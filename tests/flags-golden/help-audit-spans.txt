@@ -1,0 +1,19 @@
+usage:
+  tur check [-I <dir>...] [--no-auto-spice] [--no-auto-stdlib] <file.tur>
+                                       type-check only, no codegen
+
+flags:
+  -I <dir>             add an include directory for module resolution
+                       (repeat to add multiple)
+  --no-auto-spice      don't auto-discover the enclosing spice's src/
+                       (default behavior walks up from the file looking
+                       for build.tur and adds <spice>/src to the path)
+  --no-auto-stdlib     when the checked file is one of the auto-loaded
+                       stdlib files, skip auto-loading it and all
+                       subsequent stdlib files; earlier stdlib files
+                       still load so the file's own deps resolve.
+                       Use when type-checking auto-loaded stdlib files
+                       in isolation to avoid duplicate-definition errors.
+
+Try 'tur --help' for global options.
+[exit 0]

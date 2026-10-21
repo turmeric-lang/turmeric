@@ -20,7 +20,7 @@ builds and runs. Both cases are in `tests/run-build-project.sh`
 (`build-project-sepcomp-*`). Found on the way: a module that failed to compile
 after another had compiled leaked that module's borrow specs, and the Debug
 `tur`'s LeakSanitizer turned the compile error's exit 1 into 141
-(`free_borrow_specs`, `src/main.c`).
+(`free_borrow_specs`, `src/driver/project.c`).
 
 **Severity is now medium** (a correct program is refused, with a remedy).
 What is left is fix direction 1: thread the effect across units. That means

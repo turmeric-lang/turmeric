@@ -893,7 +893,7 @@ static void repl_preload_stdlib_and_natives(TuriEnv *env) {
     turi_env_pin_prelude(env);
     turi_env_register_interpreter_natives(env);
     /* Re-assert collection natives (vec/set/map/hamt) after preload -- see
-     * the matching call in main.c for why (turi_register_collection_natives
+     * the matching call in cmd_eval_h for why (turi_register_collection_natives
      * is otherwise only ever registered once, before any preload runs). */
     turi_register_collection_natives(env);
     tur_ffi_register_reload_native(env);
@@ -1384,7 +1384,7 @@ int turi_repl_run(bool watch_mode) {
     fflush(stdout);
 
     /* saffron-lang-plan S8 / r7rs-lang-plan R9: `tur repl --lang <base>`
-     * (main.c validated the token), seeded before the preload -- see
+     * (cmd_repl_main validated the token), seeded before the preload -- see
      * repl_fresh_env. */
     LangDialect start_lang = LANG_TURMERIC;
     ReaderType  start_rt   = READER_TURMERIC;

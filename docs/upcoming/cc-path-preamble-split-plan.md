@@ -3,7 +3,7 @@
 > **Status:** Steps 1-5 done on Linux and Windows; the split is the DEFAULT
 > there as of 2026-10-02. macOS is still opt-in (`TUR_PREAMBLE_SPLIT=1`), and
 > that is the one step left -- see "What the macOS flip still needs". Re-checked
-> 2026-10-18: `preamble_split_auto_applies` in `src/main.c` still applies the
+> 2026-10-18: `preamble_split_auto_applies` (now in `src/driver/pipeline.c`) still applies the
 > split by default only under `__linux__` / `_WIN32`. See "Step 5: the flip"
 > below for the re-measured win, a binary-size regression the flip would have
 > shipped, and the preconditions a default build checks.
@@ -66,7 +66,7 @@ it, so Windows split binaries still carry the whole preamble's code.
 
 ### When a default build takes the split
 
-`preamble_split_auto_applies()` in `src/main.c`. Each condition is a case where
+`preamble_split_auto_applies()` in `src/driver/pipeline.c`. Each condition is a case where
 the split would build something other than what was asked for. The whole
 preamble is the correct answer then, not a degraded one, so declining is quiet.
 `--runtime=split` still insists and says so when it declines.
@@ -197,9 +197,9 @@ both halves of an A/B.
 
 Three edits, a comment, and nothing else:
 
-1. `preamble_split_auto_applies` (`src/main.c:977`): add `__APPLE__` to the
-   `#if`, and correct the "macOS never has" prose above it (`src/main.c:963`).
-2. **Done** (`src/main.c:3706`): `-Wl,-dead_strip` for `__APPLE__`, beside the
+1. `preamble_split_auto_applies` (`src/driver/pipeline.c`): add `__APPLE__` to the
+   `#if`, and correct the "macOS never has" prose above it.
+2. **Done** (`src/driver/cmd_build.c:cmd_build_once`): `-Wl,-dead_strip` for `__APPLE__`, beside the
    ELF `--gc-sections`. Landed ahead of the flip because the split is still
    opt-in on macOS, so it only improves the path `TUR_PREAMBLE_SPLIT=1` and
    `--runtime=split` already take.

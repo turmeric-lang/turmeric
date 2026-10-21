@@ -93,7 +93,7 @@ Debug configuration as today, then uploads an artifact named
 `tur-${{ runner.os }}`.
 
 **What the artifact has to contain.** `tur test` links each test program
-against a runtime archive, and `locate_runtime_lib` (`src/main.c`) looks for
+against a runtime archive, and `locate_runtime_lib` (`src/driver/cc.c`) looks for
 it in `<exe_dir>/src`. It prefers `libturt_runtime.a` and falls back to
 `libturi.a`. The stdlib comes from `TUR_STDLIB_DIR`, which the workflow
 already sets to the turmeric checkout. So the artifact is:

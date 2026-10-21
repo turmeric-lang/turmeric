@@ -99,7 +99,7 @@ the first one.
 | `src/runtime/tur_tls.c` | Host-resident thread-local storage, plus an accessor per slot |
 | `src/runtime/tur_atomics.c` | Host-resident atomics for front ends without `__atomic_*` (c2mir) |
 | `src/async/tur_sjlj_x64_win.S` | A setjmp/longjmp pair that unwinds nothing, for win64 |
-| `src/main.c` | `resolve_rcgc_from_archive`, `locate_runtime_lib`, `apply_runtime_lib_mode`, `preamble_split_auto_applies`, `jit_try_split_preamble`, `cmd_emit_rt_split`, the `--runtime=` / `TUR_RUNTIME` parsing |
+| `src/driver/` | `resolve_rcgc_from_archive` and `preamble_split_auto_applies` (`pipeline.c`), `locate_runtime_lib` and `apply_runtime_lib_mode` (`cc.c`), `jit_try_split_preamble` and `cmd_emit_rt_split` (`preamble_split.c`), the `--runtime=` parsing (`cmd_build.c`, `compile_link.c`) and `TUR_RUNTIME` (`cli.c:drv_apply_env_overrides`) |
 | `src/CMakeLists.txt` | `tur_core` (all runtime TUs, including `tur_rt_split.c`), `turt_runtime` (`TURT_RUNTIME_SOURCES`), `turt_preamble` |
 | `tools/gc-copy-diff.py` | Diffs the emitted rc/GC replica against `src/runtime/{rc,gc,rc_free_queue}.c` |
 | `docs/upcoming/cc-path-preamble-split-plan.md` | Open plan: the split on the cc path (default on Linux and Windows; macOS left) |
@@ -230,7 +230,7 @@ definitions are left out, and the program links `libturt_runtime.a` instead:
 - `emit_rcgc_prototypes` spells the allocator's `value_type` parameter as
   `uint8_t` to match `rc.c`. The replica spells it `int`.
 
-`resolve_rcgc_from_archive` (`src/main.c`) chooses the archive posture before
+`resolve_rcgc_from_archive` (`src/driver/pipeline.c`) chooses the archive posture before
 emission. The checks run in this order, and the first that applies wins:
 
 1. `TUR_RCGC_FROM_ARCHIVE=0` -> replica.

@@ -11209,9 +11209,9 @@ bool emit_inst_method_wants_external(const FnDef *fd) {
  * module that loaded the file dispatches on the instance through that
  * module's header, so the definition has to stay linker-visible.
  *
- * A separately compiled module's own source is file 0 of its unit (main.c
- * registers it so), so an instance from any other file is a loaded copy.  It
- * keeps external linkage and the declarations in the header, and is defined
+ * A separately compiled module's own source is file 0 of its unit (the
+ * driver registers it so), so an instance from any other file is a loaded
+ * copy.  It keeps external linkage and the declarations in the header, and is defined
  * WEAK: the copies are the same source elaborated the same way, and the
  * linker keeps one -- the SYM2 treatment of the interned symbol records
  * (sym_codegen_emit).  The PE/COFF trouble recorded there is a reference at
@@ -12809,7 +12809,7 @@ static void emit_rt_tls(Buf *out, bool shared,
  * A third state on the DEDUP-3 switch rather than a new mechanism.  Resolved at
  * emit time, before codegen, because the emitted text depends on it; the probe
  * is a pure filesystem check so it can move ahead of the link step that
- * normally makes this decision (see apply_runtime_lib_mode in main.c).
+ * normally makes this decision (see the driver's apply_runtime_lib_mode).
  * ------------------------------------------------------------------------- */
 static bool g_rcgc_from_archive = false;
 
@@ -14650,7 +14650,7 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
      * subset shim mandatory for every program including `arith`.
      *
      * Keyed on __STDC_VERSION__ rather than swapped outright: the generated C is
-     * compiled `-std=c99` (see cc_flags in main.c), where `_Thread_local` is not
+     * compiled `-std=c99` (see cc_flags in cmd_build_once), where `_Thread_local` is not
      * a standard keyword.  gcc happens to accept it there anyway, but relying on
      * that across every supported cc buys nothing -- this way the cc path keeps
      * the exact spelling it has always used, and only a C11-or-later front end

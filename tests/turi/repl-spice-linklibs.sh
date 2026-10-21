@@ -6,7 +6,7 @@
 # anywhere in its sources) -- must be loadable and callable at the REPL:
 #
 #   - non-JIT builds: the subprocess `tur build --shared` path, where
-#     collect_build_aux injects -L/-l into cc's link line;
+#     drv_collect_build_aux injects -L/-l into cc's link line;
 #   - JIT builds: the in-process hook (repl_jit_build), which now threads
 #     the same flags into the engine's autolink string so
 #     jit_load_autolink can dlopen the library (including from -L dirs,

@@ -1,0 +1,101 @@
+tur: the Turmeric compiler (v<VERSION>)
+
+usage:
+  tur build <file.tur> [-o <out>]    build a single file
+  tur build <dir> [-o <out>]         build all .tur files in directory
+  tur compile <file.tur> -o <out.o>  lower a .tur to an object (+ .link sidecar)
+  tur link <obj/src>... -o <out>     link objects (+ .link sidecars) into an exe
+  tur emit-c <input.tur>            print the generated C to stdout
+  tur emit-h <input.tur>            print the generated header to stdout
+  tur run <input.tur>               build + execute a single file
+  tur run <recipe>                  run a Justfile recipe (`tur just` is a synonym)
+  tur repl                          interactive REPL (Phase S1)
+  tur worker                        persistent fixture evaluator (Tier 3, reads dirs from stdin)
+  tur interpret [-I dir] <file.tur> run a file through the tree-walking interpreter
+  tur debug [-I dir] <file.tur>     run a file under the interactive debugger
+  tur dap                           Debug Adapter Protocol server (JSON-RPC/stdio) for editors
+  tur trace <file.tur> [-o f]       record an interpreted run; --dump reads one back
+  tur lsp-lite                      lightweight completion/calltip/doc backend (NDJSON/stdio)
+  tur eval '<expr>'                 evaluate an inline expression
+  tur doc <symbol>                  print documentation for a builtin, special form, or stdlib definition
+  tur docs [--open|--serve]         locate, open, or serve the rendered guides and API reference
+  tur explain <TUR-E####|snippet>   explain a diagnostic code or snippet errors
+  tur test <dir>                    run all .tur files in a directory
+  tur check <input.tur>             type-check only, no codegen (phase 8)
+  tur check --dump-refine=json <f>  print one JSON record per refinement obligation
+  tur expand <input.tur>            trace macro expansions to stdout while checking
+  tur format [--check|--diff] [file.tur]   format source (stdin if no file given)
+  tur fmt [--check|--diff|--dry-run] [paths...]  format in place with dir walking
+  tur parse-check <a> <b>           exit 0 if both files read to the same AST
+  tur demangle [<name>...]          decode mangled C symbols back to Turmeric names
+                                    (filters stdin when given no names, so
+                                     `perf script | tur demangle` reads clean)
+  tur smt <file.smt2>               run an SMT-LIB2 script through the refinement solver
+  tur experiments                   list experimental features (--enable=<name>)
+  tur dialects                      list the base dialects a `#lang` line may name
+  tur completion <zsh|bash>         print a shell completion script
+
+package management (Spice, Phase PKG-1):
+  tur init [--bin|--lib] <name>     create a new project
+  tur add <url> [--ref <tag>]       add a Turmeric spice
+  tur add <path> --path             add a local spice
+  tur add --workspace <name>        assert a workspace sibling (no manifest entry)
+  tur add-cmake <url> [--ref <tag>] add a C/CMake dependency
+  tur fetch [--update|--frozen|--dry-run|--refetch]  download/update spices (--frozen: fail if tur.lock would change; --refetch bypasses system pkgs)
+  tur audit                         list every origin the build fetches code from
+  tur emit-cmake [--output-dir <d>] generate CMakeLists.txt + config for CMake consumers
+  tur install <url> [--ref <ref>]   install a spice binary globally
+  tur install <path> --path         install a local spice binary globally
+  tur uninstall <name>              remove a globally installed spice
+  tur list [--verbose|--outdated]   list globally installed spices
+  tur upgrade <name>...|--all       upgrade globally installed spices
+
+emit-c flags:
+  tur emit-c <file>                 compile a .tur file to C (stdout)
+  tur emit-c --output-dir <dir> <files...>  compile each .tur to <dir>/<mod>.h + .c
+
+global flags:
+  --enable=<name>[,<name>...]      turn on an experimental feature; see 'tur experiments'
+  --macro-caps=io                  grant macro-time (defmacro*) code I/O; default deny
+  --no-proc-macros                 refuse defmacro* instead of running it (untrusted trees)
+  --no-color                       disable colored diagnostics
+  --json                           structured JSON output (tur doc, tur test, tur check)
+  --json-diagnostics               output diagnostics as JSON (phase 8)
+  --explain <TUR-E####>            print explanation for a diagnostic code (HKT-P5)
+  --explain <snippet>              compile code snippet and explain errors (phase 8)
+  --timings[=<path>]               time each compiler phase (read, elaborate, emit, cc, ...):
+                                   a table on stderr; with a path, tur-profile/1 JSON there too
+                                   (`--timings <path>` when it ends in .json or is /dev/...)
+  --dump-kinds                     dump kind annotations after kind-check (HKT-P6)
+  --strict-effects                 warn on unannotated effectful functions (ER1)
+  -Werror=strict-effects           make the --strict-effects warnings errors (implies it)
+  --strict-refine                  hard-fail refinement obligations the solver cannot prove
+  --dump-effects                   print inferred effect row for each defn (ER6)
+  --dump-write-frames              print the checked verdict for each `#writes` frame (G1)
+  --dump-read-frames               print the verification verdict for each `#reads` frame (R4)
+  --dump-cps-coloring              print whole-program may-capture coloring per defn (CPS1)
+  --dump-cps                       print the ANF/CPS IR for each colored defn (CPS2)
+  --lint-effects                   deprecated alias for --strict-effects (TUR-W0050)
+  --backtrack-depth <N>            cap run-backtrack at N results (0=unlimited) (Phase B5)
+  --dump-clone-plan                dump cloneable capture plan after CPS (Phase B5)
+  --dump-cps-coloring              dump CPS coloring (colored/uncolored) per top-level defn (CPS1)
+  --cps-path                       emit CPS wrappers for colored functions (CPS3)
+  --emit-abi-trace                 print the resolved ABI path per call site during emit-c (Phase I)
+  --no-abi-cache                   disable the persistent cross-module ABI cache (.tur-abi-cache/) (Phase J6)
+  --no-r7rs-gc                     build a #lang r7rs program without its collector (TUR_R7RS_GC=0; for a program that starts threads)
+  --no-saffron-gc                  build a #lang saffron program without the collector (TUR_SAFFRON_GC=0)
+  --panic-abort                   all panics call abort() directly (Phase R5)
+  --warn-unused-result             warn on discarded result values (Phase R6)
+  --no-warn-unused-result          disable --warn-unused-result (Phase R6)
+  --lint-panic                     lint panic/must! usage (Phase R6)
+  --no-contracts                   strip contract checks; predicates not evaluated (Phase C2)
+  --dump-sizes                     print inferred size index per sized-GADT constructor (SZ8)
+  --keep-contracts                 retain contract checks in release builds (CT3)
+  -X<name>                         recognized for backwards compatibility; all language
+                                   features previously gated by -X flags are now on by default.
+                                   Each -X<name> emits TUR-W0050 and is otherwise ignored.
+                                   See docs/guides/compiler-flags-guide.md for the removal list.
+
+external commands (tur-* on $PATH):
+  tur foo
+[exit 64]

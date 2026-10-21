@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # tests/check-r7rs-split-lib-cache.sh -- r7rs-split-units-each-compile-the-runtime:
 # a warm split build reads the library unit's emission back from the cache
-# (SplitLibCache, src/main.c) instead of emitting it, and nothing else about
+# (SplitLibCache, src/driver/preamble_split.c) instead of emitting it, and nothing else about
 # the build changes.  For each program below, in a private TMPDIR (so the
 # cache starts empty):
 #

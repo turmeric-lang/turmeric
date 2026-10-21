@@ -1,7 +1,7 @@
 # `:build-opts :c-flags` (and `:no-stdlib`) are parsed but never used
 
 **Narrowed 2026-10-17:** `:c-flags` now reaches the compile.
-`append_manifest_link_flags` (`src/main.c`) appends it verbatim ahead of the
+`append_manifest_link_flags` (`src/driver/cc.c`) appends it verbatim ahead of the
 link libraries, into the buffer every build path passes to the compile as well
 as the link; `tests/spice-c-sources-tests.sh` ("c-flags") pins the repro below.
 What is left is `:no-stdlib`, which is still parsed, validated and
@@ -34,7 +34,7 @@ The same flag in `TUR_CC_FLAGS` builds.
 
 `src/compiler/pkg.c` parses and validates `:c-flags` and `:no-stdlib` into the
 manifest struct, but no build path reads them. The link-flag helper
-(`append_manifest_link_flags` in `src/main.c`) appends `:c-includes`,
+(`append_manifest_link_flags` in `src/driver/cc.c`) appends `:c-includes`,
 `:c-sources` and the link flags only.
 
 [developing-spices-guide](../guides/developing-spices-guide.md) (the

@@ -49,7 +49,7 @@ no split hash.
   forced" already makes this split; extend it to name the archive and trail
   flags too.
 
-### 3. `cmd_emit_rt_split`'s header, and a redundant call (`main.c:5891-5903`, `:5911`)
+### 3. `cmd_emit_rt_split`'s header, and a redundant call (`driver/preamble_split.c:cmd_emit_rt_split`)
 
 - **Says:** "cmd_jit's probe runs under real process state, and a JIT
   invocation with no runtime archive (rc/GC emitted as definitions) therefore
@@ -57,30 +57,32 @@ no split hash.
   self-enforcing."
 - **Code:** false since the fix above. The probe gets the canonical posture as
   well. `cmd_emit_rt_split` still calls `emit_set_rcgc_from_archive(true)`
-  (`:5911`) before `emit_rt_split_source`, which sets it again.
+  before `emit_rt_split_source`, which sets it again.
 - **Change:** delete the "Archive mode is hard-set ... self-enforcing"
-  paragraph and the `:5911` call. `emit_rt_split_source` is now the one place
+  paragraph and the `emit_set_rcgc_from_archive(true)` call. `emit_rt_split_source` is now the one place
   that owns the posture. With the call gone, nothing in this function sets the
   posture, so the comment has nothing to drift away from.
 
-### 4. `cmd_jit`'s call-site rationale (`main.c:6032-6045`)
+### 4. `cmd_jit`'s call-site rationale (`driver/jit.c:cmd_jit`)
 
 - **Says:** "Emitter drift, knob drift (--backtrack-depth, experiments), and a
   missing runtime archive all change that text".
 - **Change:** drop "and a missing runtime archive". The rest of this comment
   is accurate.
 
-### 5. `jit_try_split_preamble`'s doc comment sits on the wrong function (`main.c:5664-5697`)
+### 5. `jit_try_split_preamble`'s doc comment sits on the wrong function (`driver/preamble_split.c:jit_try_split_preamble`)
 
-- **Code:** three comment blocks are stacked before `jit_split_reject`
-  (`:5690`):
+> **Resolved 2026-10-21** (main-c-split-plan Phase 0, 21b48e72): block 2 now
+> sits directly above `jit_try_split_preamble`, in `driver/preamble_split.c`.
+
+- **Code:** three comment blocks are stacked before `jit_split_reject`:
   1. "NOT under `#ifdef TUR_HAVE_JIT`, deliberately. These two ...";
   2. "S2 (findings 25): swap an emitted TU's fixed preamble ... Returns true
      and fills `out` ...", which describes `jit_try_split_preamble`;
   3. "Report WHY the split did not engage", which describes
      `jit_split_reject`.
 
-  `jit_try_split_preamble` itself (`:5697`) has no comment.
+  `jit_try_split_preamble` itself has no comment.
 - **Change:** move block 2 to just above `jit_try_split_preamble`, and leave
   block 1 above the pair. A reader who jumps to the function from a call site
   currently lands on a function with no documentation.

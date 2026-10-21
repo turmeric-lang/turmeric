@@ -123,7 +123,7 @@ bool tur_spice_image_is_fresh(const TurSpiceImage *img);
  * it); `sym` replaces dlsym against that image; `free_image` replaces
  * dlclose.  The hook lives behind a function-pointer table because the
  * engine is only linked into `tur` under -DTUR_JIT=ON while this loader
- * is part of tur_core -- main.c installs it at REPL start when the `jit`
+ * is part of tur_core -- the driver installs it at REPL start when the `jit`
  * experiment is enabled.  NULL (the default) keeps the subprocess path. */
 typedef struct TurSpiceJitHook {
     int   (*build)(const char *build_dir, void **out_image,
