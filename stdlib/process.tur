@@ -522,6 +522,214 @@ static char **__tur_proc_argv(const char *path, int64_t args) {
   : (Result nil IoError)
   (process/kill-raw pid (signal->number sig)))
 ;; ============================================================================
+;; stdlib-os-surface-plan P3.4: signals outside the reactor
+;; ============================================================================
+;; A caught signal only sets a flag: running arbitrary Turmeric code inside a
+;; signal handler is not async-signal-safe (it may allocate, take a lock the
+;; interrupted code holds, ...), so the program polls the flag instead.
+;; Several deliveries before a poll coalesce into one, as POSIX signals do.
+```c
+#include <errno.h>
+#include <signal.h>
+#define __TUR_SIG_MAX 65
+static volatile sig_atomic_t __tur_sig_flags[__TUR_SIG_MAX];
+static void __tur_sig_catch(int signo) {
+  if (signo <= 0 || signo >= __TUR_SIG_MAX) return;
+  __tur_sig_flags[signo] = 1;
+#ifdef _WIN32
+  /* the CRT resets a caught signal to SIG_DFL before calling the handler */
+  signal(signo, __tur_sig_catch);
+#endif
+}
+/* Install h for signo; answers 0 or the errno. */
+static int __tur_sig_install(int64_t signo, void (*h)(int)) {
+  if (signo <= 0 || signo >= __TUR_SIG_MAX) return EINVAL;
+  /* `tur jit` compiles a function on its first call through its address.
+   * That first call must not be a signal delivery: compiling inside a
+   * handler is not async-signal-safe (it hung, or crashed in MIR's
+   * generator).  A no-op call (signo 0) through the same address compiles
+   * the handler here instead -- through a volatile pointer, so it cannot be
+   * inlined away.  Compiled ahead of time it is just a return. */
+  void (*volatile warm)(int) = __tur_sig_catch;
+  warm(0);
+#ifdef _WIN32
+  if (signal((int)signo, h) == SIG_ERR) return EINVAL;
+#else
+  /* No SA_RESTART: a blocking call the signal lands in returns EINTR, so a
+   * program waiting in net/accept or net/recv wakes up to look at the flag. */
+  struct sigaction sa;
+  memset(&sa, 0, sizeof sa);
+  sa.sa_handler = h;
+  sigemptyset(&sa.sa_mask);
+  sa.sa_flags = 0;
+  if (sigaction((int)signo, &sa, NULL) != 0) return errno;
+#endif
+  return 0;
+}
+```
+;;; signal/catch-raw -- catch signo with the flag-setting handler (internal).
+(defn signal/catch-raw [signo : int]
+  #fx{Proc}
+  : (Result nil IoError)
+  ```c
+  int e = __tur_sig_install(signo, __tur_sig_catch);
+  return e ? tur_err_int(e) : tur_ok_int(0);
+  ```)
+;;; signal/default-raw -- give signo its default action (internal).
+(defn signal/default-raw [signo : int]
+  #fx{Proc}
+  : (Result nil IoError)
+  ```c
+  int e = __tur_sig_install(signo, SIG_DFL);
+  return e ? tur_err_int(e) : tur_ok_int(0);
+  ```)
+;;; signal/ignore-raw -- ignore signo (internal).
+(defn signal/ignore-raw [signo : int]
+  #fx{Proc}
+  : (Result nil IoError)
+  ```c
+  int e = __tur_sig_install(signo, SIG_IGN);
+  return e ? tur_err_int(e) : tur_ok_int(0);
+  ```)
+;;; signal/flag-raw -- read the flag for signo, clearing it when take (internal).
+(defn signal/flag-raw [signo : int take : bool]
+  #fx{Proc}
+  : bool
+  ```c
+  if (signo <= 0 || signo >= __TUR_SIG_MAX) return false;
+  if (!__tur_sig_flags[signo]) return false;
+  if (take) __tur_sig_flags[signo] = 0;
+  return true;
+  ```)
+;;; signal/handle -- catch a signal so the program can poll for it.
+;;;
+;;; From now on a delivery of sig no longer runs its default action
+;;; (usually: terminate); it records that sig arrived, which signal/pending?
+;;; and signal/take! report.  A blocking call it interrupts -- net/accept,
+;;; net/recv -- returns an io-error/interrupted? error, so a waiting loop
+;;; wakes up to check.  Do not combine with reactor-add-signal for the same
+;;; signal: the reactor masks it and reads it itself.
+;;;
+;;; Parameters:
+;;;   sig -- the Signal to catch
+;;;
+;;; Returns:
+;;;   (Ok nil), or (Err e): EINVAL for a signal that cannot be caught
+;;;   (SigKill).  On Windows only SigInt (Ctrl+C) and SigTerm can be.
+;;;
+;;; Example:
+;;;   (signal/handle (SigTerm))  ; => (Ok nil)
+;;;
+;;; Since: stdlib-os-surface P3
+(defn signal/handle [sig : Signal]
+  #fx{Proc}
+  : (Result nil IoError)
+  (signal/catch-raw (signal->number sig)))
+;;; signal/on-interrupt -- catch Ctrl+C (SIGINT) so the program can poll for it.
+;;;
+;;; Shorthand for (signal/handle (SigInt)); poll with signal/interrupted?.
+;;;
+;;; Returns:
+;;;   (Ok nil), or (Err e).
+;;;
+;;; Example:
+;;;   (signal/on-interrupt)
+;;;   (while (not (signal/interrupted?)) (step))
+;;;
+;;; Since: stdlib-os-surface P3
+(defn signal/on-interrupt []
+  #fx{Proc}
+  : (Result nil IoError)
+  (signal/handle (SigInt)))
+;;; signal/pending? -- has a caught signal arrived since it was last taken?
+;;;
+;;; Does not clear it; signal/take! does.
+;;;
+;;; Parameters:
+;;;   sig -- a Signal installed with signal/handle
+;;;
+;;; Returns:
+;;;   true when sig has been delivered since the last signal/take! of it.
+;;;
+;;; Example:
+;;;   (signal/pending? (SigTerm))  ; => false
+;;;
+;;; Since: stdlib-os-surface P3
+(defn signal/pending? [sig : Signal]
+  #fx{Proc}
+  : bool
+  (signal/flag-raw (signal->number sig) false))
+;;; signal/take! -- report and clear a caught signal.
+;;;
+;;; Parameters:
+;;;   sig -- a Signal installed with signal/handle
+;;;
+;;; Returns:
+;;;   true when sig had arrived (one or more times) since the last take;
+;;;   the next call answers false until it arrives again.
+;;;
+;;; Example:
+;;;   (when (signal/take! (SigHup)) (reload-config))
+;;;
+;;; Since: stdlib-os-surface P3
+(defn signal/take! [sig : Signal]
+  #fx{Proc}
+  : bool
+  (signal/flag-raw (signal->number sig) true))
+;;; signal/interrupted? -- has Ctrl+C (SIGINT) arrived?
+;;;
+;;; (signal/pending? (SigInt)): true once SIGINT has been caught, after
+;;; signal/on-interrupt, until a signal/take! of it.
+;;;
+;;; Returns:
+;;;   true when SIGINT is pending.
+;;;
+;;; Example:
+;;;   (signal/interrupted?)  ; => false
+;;;
+;;; Since: stdlib-os-surface P3
+(defn signal/interrupted? [] #fx{Proc} : bool (signal/pending? (SigInt)))
+;;; signal/ignore -- make a signal do nothing at all.
+;;;
+;;; Unlike signal/handle nothing is recorded, and blocking calls are not
+;;; interrupted.  (signal/ignore (SigOther 13)) -- SIGPIPE -- is the classic
+;;; use; stdlib/net.tur already keeps SIGPIPE from its own sends.
+;;;
+;;; Parameters:
+;;;   sig -- the Signal
+;;;
+;;; Returns:
+;;;   (Ok nil), or (Err e) -- EINVAL for SigKill, and on Windows for anything
+;;;   but SigInt and SigTerm.
+;;;
+;;; Example:
+;;;   (signal/ignore (SigHup))  ; => (Ok nil)
+;;;
+;;; Since: stdlib-os-surface P3
+(defn signal/ignore [sig : Signal]
+  #fx{Proc}
+  : (Result nil IoError)
+  (signal/ignore-raw (signal->number sig)))
+;;; signal/reset -- give a signal back its default action.
+;;;
+;;; Undoes signal/handle or signal/ignore.  A flag already recorded stays
+;;; until taken.
+;;;
+;;; Parameters:
+;;;   sig -- the Signal
+;;;
+;;; Returns:
+;;;   (Ok nil), or (Err e) -- EINVAL as for signal/ignore.
+;;;
+;;; Example:
+;;;   (signal/reset (SigInt))  ; => (Ok nil)
+;;;
+;;; Since: stdlib-os-surface P3
+(defn signal/reset [sig : Signal]
+  #fx{Proc}
+  : (Result nil IoError)
+  (signal/default-raw (signal->number sig)))
+;; ============================================================================
 ;; stdlib-os-surface-plan P2.3: richer child-process I/O
 ;; ============================================================================
 ;;; ProcOutput -- everything process/output collects from a finished child.

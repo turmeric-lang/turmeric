@@ -1258,9 +1258,6 @@ Binding **collect_free_vars(const Expr *e, Binding **params, uint8_t n_params,
             case EX_WEAK:
                 fv_push(&stack, &sp, &stack_cap, cur->as.weak_.expr);
                 break;
-            case EX_WEAK_UPGRADE:
-                fv_push(&stack, &sp, &stack_cap, cur->as.weak_upgrade_.expr);
-                break;
             case EX_RC_CLONE:
                 fv_push(&stack, &sp, &stack_cap, cur->as.rc_clone_.expr);
                 break;

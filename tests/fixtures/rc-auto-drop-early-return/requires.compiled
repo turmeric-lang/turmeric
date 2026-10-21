@@ -1,0 +1,3 @@
+gc-live-blocks is inline-C over the rc runtime, which the tree-walking
+interpreter does not run (the TI7 carve-out); the early-return drop this
+counts is compiled-path codegen.

@@ -1,0 +1,27 @@
+;; ref-weak-builtins-stubbed: `ref?` / `weak?` answer from the argument's
+;; static type on both engines (`weak?` was a constant `true`, and `ref?` a
+;; non-null test of any value, so `(ref? 7)` was true); the interpreter's
+;; `rc->ptr` is the payload's address (it returned the payload, and reading
+;; through it segfaulted `tur`); and `deref` of an owned `lref` frees its cell
+;; (8 B leaked per `lref/new`; leak-checked, requires.leak-check).
+
+(defn take-lref [p : lref<int>] : int (deref p))
+
+(defn main [] : int
+  (println (weak? 3))                 ; false
+  (println (ref? 7))                  ; false
+  (println (ref? 0))                  ; false
+  (let [r (ref 7)]
+    (println (ref? r))                ; true -- and r is read, not moved:
+    (println (deref r)))              ; 7
+  (let [r (rc/of 1)
+        w (weak r)]
+    (println (weak? w))               ; true
+    (println (weak? r))               ; false
+    (println (ref? r)))               ; false -- an rc is not a ref
+  (let [r (rc/of 5)]
+    (println (unsafe (ptr-deref (rc->ptr r)))))  ; 5
+  (let [p (lref/new 99)]
+    (println (deref p)))              ; 99
+  (println (take-lref (lref/new 55))) ; 55
+  0)

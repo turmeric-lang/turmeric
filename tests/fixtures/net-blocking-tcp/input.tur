@@ -1,0 +1,60 @@
+;; stdlib-os-surface-plan P3.3: blocking TCP on the linear Socket.  One
+;; thread plays both ends: the kernel queues the client's connection and its
+;; bytes until the server accepts and reads them.  Port 0 lets the system pick
+;; a free port, which net/local-port reports.
+(load "stdlib/net.tur")
+
+(defn show-unit [label : cstr r : (Result nil IoError)] : int
+  (match r
+    (Ok _) (do (println label) 0)
+    (Err e) (do (println (io-error/message e)) 1)))
+
+(defn show-sent [r : (Result int IoError)] : int
+  (match r
+    (Ok n) (do (println n) n)
+    (Err e) (do (println (io-error/message e)) -1)))
+
+;; read until the peer closes, printing each chunk
+(defn drain [^borrow s : Socket] : int
+  (match (net/recv s 64)
+    (Ok o) (match o
+             (Some t) (do (println t) (drain s))
+             (None) (do (println "<closed>") 0))
+    (Err e) (do (println (io-error/message e)) 1)))
+
+(defn serve [^borrow server : Socket port : int] : int
+  (match (net/tcp-connect "127.0.0.1" port)
+    (Ok client)
+    (do (show-sent (net/send client "hello, server"))
+        (match (net/accept server)
+          (Ok conn)
+          (do (match (net/recv conn 64)
+                (Ok o) (match o (Some t) (println t) (None) (println "<closed?>"))
+                (Err e) (println (io-error/message e)))
+              (show-sent (net/send conn "hello, client"))
+              (show-unit "server done" (net/shutdown-write conn))
+              (drain client)
+              (show-unit "client done" (net/shutdown-write client))
+              (drain conn)
+              (show-unit "close conn" (net/close conn))
+              (show-unit "close client" (net/close client)))
+          (Err e) (do (println (io-error/message e)) (net/close client) 1)))
+    (Err e) (do (println (io-error/message e)) 1)))
+
+(defn main [] : int
+  (match (net/tcp-listen "127.0.0.1" 0)
+    (Ok server)
+    (match (net/local-port server)
+      (Ok port) (do (println (> port 0))
+                    (serve server port)
+                    (show-unit "close server" (net/close server))
+                    ;; nothing listens on the port now
+                    (match (net/tcp-connect "127.0.0.1" port)
+                      (Ok s) (do (println "connected?") (net/close s) 1)
+                      (Err e) (do (println (io-error/connection-refused? e)) 0)))
+      (Err e) (do (println (io-error/message e)) (net/close server) 1))
+    (Err e) (do (println (io-error/message e)) 1))
+  (match (net/tcp-listen "127.0.0.1" 70000)
+    (Ok s) (do (println "listened on 70000?") (net/close s) 1)
+    (Err e) (do (println (io-error/message e)) 0))
+  0)

@@ -1493,7 +1493,6 @@ static bool binding_escapes_impl_x(const Expr *e, const Binding *b,
             case EX_RC_FROM_REF: ESC_PUSH(cur->as.rc_from_ref_.expr); break;
             case EX_REF_FROM_RC: ESC_PUSH(cur->as.ref_from_rc_.expr); break;
             case EX_WEAK:         ESC_PUSH(cur->as.weak_.expr);         break;
-            case EX_WEAK_UPGRADE: ESC_PUSH(cur->as.weak_upgrade_.expr); break;
             case EX_WEAK_PRED:    ESC_PUSH(cur->as.weak_pred_.expr);    break;
             case EX_REF_PRED:     ESC_PUSH(cur->as.ref_pred_.expr);     break;
             case EX_BORROW_IMMUT: ESC_PUSH(cur->as.borrow_immut_.expr); break;
@@ -2919,6 +2918,119 @@ const char *emit_frame_parent(const char *frame) {
             return g_frame_parents[i].parent;
     return NULL;
 }
+/* auto-drop-defers-skipped-on-early-return: frame -> the injected scope-exit
+ * drops (`is_drop_glue` defers) its `do` has not registered yet.  elab_let
+ * appends them AFTER the body, so they are pushed only once control reaches
+ * them, and a `return` from inside the body left without them: every owned
+ * `ref` / `rc` / owning field of an enclosing `let` leaked once per early
+ * exit.  A do-emitter notes its trailing drops here while it emits the items
+ * ahead of them and clears the note once it pushes them; the `return` emitter
+ * runs the noted drops along its own frame chain (emit_frame_run_pending_drops).
+ * Keyed by frame like g_frame_parents, so a lambda body -- which starts with no
+ * frame -- never sees its enclosing function's. */
+static struct { char *frame; const Expr *const *items; uint32_t n; } *g_frame_drops = NULL;
+static uint32_t g_frame_drops_n = 0, g_frame_drops_cap = 0;
+
+uint32_t emit_do_trailing_drop_glue(const Expr *e) {
+    uint32_t k = e->as.do_.n;
+    while (k > 0 && e->as.do_.items[k - 1]->kind == EX_DEFER &&
+           e->as.do_.items[k - 1]->as.defer_.is_drop_glue)
+        k--;
+    return k;
+}
+
+void emit_frame_note_pending_drops(const char *frame, const Expr *e) {
+    if (!frame) return;
+    uint32_t k = emit_do_trailing_drop_glue(e);
+    if (k == e->as.do_.n) return;
+    if (g_frame_drops_n == g_frame_drops_cap) {
+        g_frame_drops_cap = g_frame_drops_cap ? g_frame_drops_cap * 2 : 64;
+        g_frame_drops = (void *)realloc(g_frame_drops,
+            g_frame_drops_cap * sizeof(*g_frame_drops));
+        if (!g_frame_drops) { fprintf(stderr, "tur: oom\n"); abort(); }
+    }
+    g_frame_drops[g_frame_drops_n].frame = strdup(frame);
+    g_frame_drops[g_frame_drops_n].items = (const Expr *const *)e->as.do_.items + k;
+    g_frame_drops[g_frame_drops_n].n = e->as.do_.n - k;
+    g_frame_drops_n++;
+}
+
+void emit_frame_clear_pending_drops(const char *frame) {
+    if (!frame) return;
+    for (uint32_t i = g_frame_drops_n; i-- > 0; )
+        if (strcmp(g_frame_drops[i].frame, frame) == 0) g_frame_drops[i].n = 0;
+}
+
+/* Does `v`, in a position whose value leaves the scope (a `return`'s value),
+ * hand over `b` itself -- the binding, or an owning field read off it?  Then
+ * the early exit is a move and `b`'s drop must not run: `(return x)` on an
+ * owned `x` was correct before only because the drop was skipped. */
+static bool emit_value_moves_binding(const Expr *v, const Binding *b) {
+    while (v && v->kind == EX_ASCRIBE) v = v->as.ascribe_.inner;
+    if (!v) return false;
+    switch (v->kind) {
+        case EX_VAR:       return v->as.var.binding == b;
+        case EX_GET_FIELD: return emit_value_moves_binding(v->as.get_field_.struct_expr, b);
+        case EX_DO:
+            return v->as.do_.n > 0 &&
+                   emit_value_moves_binding(v->as.do_.items[v->as.do_.n - 1], b);
+        case EX_LET: case EX_LETREC:
+            return emit_value_moves_binding(v->as.let_.body, b);
+        case EX_IF:
+            return emit_value_moves_binding(v->as.if_.then_, b) ||
+                   emit_value_moves_binding(v->as.if_.else_or_null, b);
+        case EX_MAKE_STRUCT:
+            for (uint32_t i = 0; i < v->as.make_struct_.n_fields; i++)
+                if (emit_value_moves_binding(v->as.make_struct_.field_values[i], b))
+                    return true;
+            return false;
+        case EX_CALL:
+            if (!v->as.call_.ctor) return false;
+            for (uint32_t i = 0; i < v->as.call_.n_args; i++)
+                if (emit_value_moves_binding(v->as.call_.args[i], b)) return true;
+            return false;
+        default:           return false;
+    }
+}
+
+/* The binding an injected drop discharges: the root local of `(drop! x)`,
+ * `(rc/drop x)`, `(drop! (.f o))` or a Drop-method call on `x`. */
+static const Binding *emit_drop_glue_root(const Expr *d) {
+    const Expr *arg = NULL;
+    if (d->kind == EX_RC_DROP) arg = d->as.rc_drop_.expr;
+    else if (d->kind == EX_BUILTIN && d->as.builtin.n == 1) arg = d->as.builtin.args[0];
+    else if (d->kind == EX_CALL && d->as.call_.n_args == 1) arg = d->as.call_.args[0];
+    while (arg && (arg->kind == EX_ASCRIBE || arg->kind == EX_GET_FIELD))
+        arg = arg->kind == EX_ASCRIBE ? arg->as.ascribe_.inner
+                                      : arg->as.get_field_.struct_expr;
+    return arg && arg->kind == EX_VAR ? arg->as.var.binding : NULL;
+}
+
+bool emit_frame_has_pending_drops(const EmitCtx *ctx) {
+    for (const char *f = ctx->frame_var; f; f = emit_frame_parent(f))
+        for (uint32_t i = g_frame_drops_n; i-- > 0; )
+            if (g_frame_drops[i].n > 0 && strcmp(g_frame_drops[i].frame, f) == 0)
+                return true;
+    return false;
+}
+
+void emit_frame_run_pending_drops(EmitCtx *ctx, Buf *body, const Expr *ret_value) {
+    for (const char *f = ctx->frame_var; f; f = emit_frame_parent(f)) {
+        for (uint32_t i = g_frame_drops_n; i-- > 0; ) {
+            if (g_frame_drops[i].n == 0 || strcmp(g_frame_drops[i].frame, f) != 0)
+                continue;
+            /* LIFO, as tur_frame_fire_lifo would have run them. */
+            for (uint32_t j = g_frame_drops[i].n; j-- > 0; ) {
+                const Expr *d = g_frame_drops[i].items[j]->as.defer_.body;
+                const Binding *root = emit_drop_glue_root(d);
+                if (root && ret_value && emit_value_moves_binding(ret_value, root))
+                    continue;
+                emit_stmt(ctx, body, d);
+            }
+        }
+    }
+}
+
 char *fresh_frame(EmitCtx *ctx) {
     char *p = (char *)malloc(24);
     if (!p) { fprintf(stderr, "tur: oom\n"); abort(); }
@@ -5703,22 +5815,42 @@ char *emit_builtin(EmitCtx *ctx, Buf *body, const Expr *e) {
              * by no other builtin (grep src/compiler/builtins.c), so this
              * cast is exact to bit-shr and cannot affect any other operator
              * sharing BS_BIN_INFIX. */
+            /* A narrow kind (sized-int-arithmetic-not-wrapped-to-width)
+             * shifts its own width: zero-extended from it for the logical
+             * `>>`, through uint64_t for `<<` (no signed-shift UB), and cast
+             * back to the kind either way. */
+            else if (strcmp(spec->c_op, ">>") == 0 && builtin_int_wrap_ctype(spec))
+                buf_printf(&out, "(%s)((uint64_t)(%s)(%s) >> (uint64_t)(%s))",
+                           builtin_int_wrap_ctype(spec),
+                           builtin_int_unsigned_ctype(spec->result_type.kind),
+                           arg_strs[0], arg_strs[1]);
             else if (strcmp(spec->c_op, ">>") == 0)
                 buf_printf(&out, "(int64_t)((uint64_t)(%s) >> (uint64_t)(%s))",
                            arg_strs[0], arg_strs[1]);
+            else if (builtin_int_wrap_ctype(spec))
+                buf_printf(&out, "(%s)((uint64_t)(%s) %s (uint64_t)(%s))",
+                           builtin_int_wrap_ctype(spec), arg_strs[0],
+                           spec->c_op, arg_strs[1]);
             else
                 buf_printf(&out, "(%s) %s (%s)",
                            arg_strs[0], spec->c_op, arg_strs[1]);
             break;
         case BS_VARIADIC_FOLD: {
-            /* ((a OP b) OP c) OP d ... -- no redundant outermost wrap */
+            /* ((a OP b) OP c) OP d ... -- no redundant outermost wrap.  A
+             * narrow integer kind folds in uint64_t (C would do it at `int`,
+             * where uint16 * uint16 can overflow) and casts the result back
+             * to the kind: sized-int-arithmetic-not-wrapped-to-width. */
+            const char *wrap = builtin_int_wrap_ctype(spec);
+            if (wrap) buf_printf(&out, "(%s)(", wrap);
             uint32_t group_opens = (n >= 2) ? n - 2 : 0;
             for (uint32_t i = 0; i < group_opens; i++) buf_putc(&out, '(');
-            buf_printf(&out, "(%s)", arg_strs[0]);
+            buf_printf(&out, wrap ? "(uint64_t)(%s)" : "(%s)", arg_strs[0]);
             for (uint32_t i = 1; i < n; i++) {
-                buf_printf(&out, " %s (%s)", spec->c_op, arg_strs[i]);
+                buf_printf(&out, " %s ", spec->c_op);
+                buf_printf(&out, wrap ? "(uint64_t)(%s)" : "(%s)", arg_strs[i]);
                 if (i < n - 1) buf_putc(&out, ')');
             }
+            if (wrap) buf_putc(&out, ')');
             break;
         }
         case BS_DIV_CHECK:
@@ -5731,7 +5863,10 @@ char *emit_builtin(EmitCtx *ctx, Buf *body, const Expr *e) {
                 buf_printf(&out, "(%s) / (%s)", arg_strs[0], arg_strs[1]);
             } else if (builtin_int_divmod_helper(spec)) {
                 /* signed: INT64_MIN / -1 traps too, so the helper owns both
-                 * checks (see tur_idiv in the preamble) */
+                 * checks (see tur_idiv in the preamble).  A narrow kind casts
+                 * the int64_t quotient back: INT8_MIN / -1 is 128 there. */
+                const char *wrap = builtin_int_wrap_ctype(spec);
+                if (wrap) buf_printf(&out, "(%s)", wrap);
                 buf_printf(&out, "%s(%s, %s)", builtin_int_divmod_helper(spec),
                            arg_strs[0], arg_strs[1]);
             } else {
@@ -6344,7 +6479,6 @@ Binding **collect_handle_captures(const Expr *body, uint32_t *n_out) {
             case EX_RC_FROM_REF:
             case EX_REF_FROM_RC:
             case EX_WEAK:
-            case EX_WEAK_UPGRADE:
             case EX_WEAK_PRED:
             case EX_REF_PRED: {
                 PUSH_EXPR(cur->as.rc_of_.expr);

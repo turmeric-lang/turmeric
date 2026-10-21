@@ -1,24 +1,27 @@
-;; Verify that (upgrade w) returns option<rc<T>>:
-;;   - some (non-NULL) when the rc is still alive
-;;   - none (NULL) after the rc has been dropped
-
-(defn ptr-opt-some? [o : ptr<void>] : bool
-  ```c
-  struct { int tag; int64_t value; } *opt = (void*)o;
-  return opt != NULL && opt->tag == 1;
-  ```)
+;; Verify that upgrading a weak returns an (Option rc<T>):
+;;   - some when the rc is still alive -- a NEW strong handle, ours to drop
+;;   - none after the rc has been dropped
+;;
+;; Written against the builtin `upgrade` until 2026-10-21, which returned the
+;; option as a `ptr<void>` (read here through an inline-C tag peek) and whose
+;; minted strong handle could not be released; it was retired for
+;; `weak/upgrade` (ref-weak-builtins-stubbed).
+(load "stdlib/weak.tur")
 
 (defn main [] : int
   ;; Case 1: rc still alive -- upgrade should succeed (some)
   (let [rc1 (rc/of 42)]
     (let [w1 (weak rc1)
-          opt1 (upgrade w1)]
-      (println (ptr-opt-some? opt1))))   ; expected: true
+          opt1 (weak/upgrade w1)]
+      (println (some? opt1))             ; expected: true
+      (let [s (weak/unwrap opt1)]
+        (println (rc/strong-count s))    ; expected: 2 -- the upgrade minted one
+        (rc/drop s))))
 
-  ;; Case 2: rc dropped -- upgrade should fail (none / NULL)
+  ;; Case 2: rc dropped -- upgrade should fail (none)
   (let [w2 (let [rc2 (rc/of 99)]
               (weak rc2))]
-    (let [opt2 (upgrade w2)]
-      (println (ptr-opt-some? opt2))))   ; expected: false
+    (let [opt2 (weak/upgrade w2)]
+      (println (some? opt2))))           ; expected: false
 
   0)

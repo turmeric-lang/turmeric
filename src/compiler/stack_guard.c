@@ -17,6 +17,7 @@
 #include <windows.h>
 #else
 #include <pthread.h>
+#include <signal.h>
 #endif
 
 /* Approximate the REAL stack pointer.  The obvious probe -- the address of a
@@ -215,7 +216,26 @@ int tur_run_on_big_stack(int (*fn)(void *), void *arg) {
     int rc = pthread_create(&th, &attr, tur_big_stack_thunk, &job);
     pthread_attr_destroy(&attr);
     if (rc != 0) return fn(arg);      /* degrade to the caller's stack */
+    /* The work, and whatever program it interprets or JITs, runs on `th`;
+     * this thread only waits.  A process-directed signal (kill, Ctrl+C, a
+     * timeout's SIGTERM) goes to any thread that does not block it, and Linux
+     * picks this one first -- so a program's signal/handle flag was set
+     * without waking the call it was blocked in, and a signal it had blocked
+     * for a signalfd (reactor-add-signal) took its default action here.
+     * Block them while waiting; `th` was created first and keeps the caller's
+     * mask.  Synchronous faults stay open (thread-directed, and none happen
+     * here).  jit_engine.c does the same around the JIT's entry thread. */
+    sigset_t idle_block, idle_prev;
+    sigfillset(&idle_block);
+    sigdelset(&idle_block, SIGSEGV);
+    sigdelset(&idle_block, SIGBUS);
+    sigdelset(&idle_block, SIGFPE);
+    sigdelset(&idle_block, SIGILL);
+    sigdelset(&idle_block, SIGTRAP);
+    sigdelset(&idle_block, SIGABRT);
+    pthread_sigmask(SIG_BLOCK, &idle_block, &idle_prev);
     pthread_join(th, NULL);
+    pthread_sigmask(SIG_SETMASK, &idle_prev, NULL);
     return job.rc;
 }
 

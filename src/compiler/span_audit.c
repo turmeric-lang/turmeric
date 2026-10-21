@@ -153,7 +153,6 @@ static void audit_expr(const Expr *e, bool is_top,
     case EX_RC_FROM_REF:   REC(e->as.rc_from_ref_.expr); return;
     case EX_REF_FROM_RC:   REC(e->as.ref_from_rc_.expr); return;
     case EX_WEAK:          REC(e->as.weak_.expr); return;
-    case EX_WEAK_UPGRADE:  REC(e->as.weak_upgrade_.expr); return;
     case EX_WEAK_PRED:     REC(e->as.weak_pred_.expr); return;
     case EX_REF_PRED:      REC(e->as.ref_pred_.expr); return;
     case EX_BORROW_IMMUT:  REC(e->as.borrow_immut_.expr); return;

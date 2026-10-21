@@ -82,8 +82,8 @@ the divisor at run time.)
 Left alone: an `int32` quotient of `INT32_MIN / -1` is 2147483648 -- the
 compiled program narrows it on the way out of a `: int32` return, the
 interpreter keeps the int64 carrier. That is
-[sized-int-arithmetic-not-wrapped-to-width](../reported/sized-int-arithmetic-not-wrapped-to-width.md),
-not a trap.
+[sized-int-arithmetic-not-wrapped-to-width](sized-int-arithmetic-not-wrapped-to-width.md),
+not a trap (resolved 2026-10-21: both engines reduce the quotient to `int32`).
 
 Pinned by `int-div-mod-minus-one` (both engines, int / int32 / uint64 / uint8),
 `saffron-any-div-mod-minus-one` (the `any` path, both engines), and

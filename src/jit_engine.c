@@ -1249,10 +1249,32 @@ int tur_jit_execute (const char *csrc, size_t csrc_len, const char *autolink,
     return TUR_JIT_ERR_RUN;
   }
   double t_run = jit_now_ms ();
+#ifndef _WIN32
+  /* A process-directed signal (kill, Ctrl+C, a timeout's SIGTERM) goes to any
+   * thread that does not block it.  Natively that is the program's own
+   * thread; here it could be this host thread, idle in pthread_join.  Then a
+   * signal the program catches with signal/handle set its flag without
+   * interrupting the program's blocking call (a net/accept waited on), and
+   * one the program had blocked for reactor-add-signal's signalfd ran its
+   * default action here and killed the process.  So this thread blocks them
+   * for the run, entry thread created first so it keeps the caller's mask.
+   * Synchronous faults stay open: they are thread-directed, and this thread
+   * takes none while it joins. */
+  sigset_t host_block, host_prev;
+  sigfillset (&host_block);
+  sigdelset (&host_block, SIGSEGV);
+  sigdelset (&host_block, SIGBUS);
+  sigdelset (&host_block, SIGFPE);
+  sigdelset (&host_block, SIGILL);
+  sigdelset (&host_block, SIGTRAP);
+  sigdelset (&host_block, SIGABRT);
+  pthread_sigmask (SIG_BLOCK, &host_block, &host_prev);
+#endif
   prof_enter (PROF_RUN);
   pthread_join (entry_thread, NULL);
   prof_exit (PROF_RUN);
 #ifndef _WIN32
+  pthread_sigmask (SIG_SETMASK, &host_prev, NULL);
   jit_entry_fault_restore ();
 #endif
   g_jit_stat_run_ms = jit_now_ms () - t_run;

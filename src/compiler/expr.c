@@ -228,11 +228,6 @@ void expr_print(Buf *b, const Expr *e) {
             expr_print(b, e->as.weak_.expr);
             buf_putc(b, ')');
             break;
-        case EX_WEAK_UPGRADE:
-            buf_puts(b, "(upgrade ");
-            expr_print(b, e->as.weak_upgrade_.expr);
-            buf_putc(b, ')');
-            break;
         case EX_WEAK_PRED:
             buf_puts(b, "(weak? ");
             expr_print(b, e->as.weak_pred_.expr);

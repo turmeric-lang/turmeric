@@ -1,5 +1,8 @@
 # Arithmetic on a sized integer is not wrapped to its width, and the engines disagree
 
+**RESOLVED 2026-10-21** -- see [Resolution](#resolution-2026-10-21). Pinned by
+`sized-int-arith-wraps` (both engines).
+
 **Severity: medium (silently wrong value).** Found 2026-10-19 probing the
 operators for their API reference (`stdlib/forms/operators.tur`).
 
@@ -39,3 +42,38 @@ type (a parameter, a return value); interpreted, never.
    (the builtin spec carries `result_type`).
 3. A fixture over each sized kind, both engines, including the unstored
    `(println (+ x y))` shape.
+
+## Resolution (2026-10-21)
+
+Fix directions 1 and 2, behind one table predicate in `src/compiler/builtins.c`:
+
+- `builtin_int_wrap_ctype(spec)` names the C type a builtin's result is reduced
+  to -- non-NULL for the kinds narrower than 64 bits (`int8` `int16` `int32`
+  `uint8` `uint16` `uint32`) on the rows whose result can leave the operand
+  range: `+ - *`, `/` (`INT8_MIN / -1`), `bit-shl` and `bit-shr`.
+  Comparisons, `mod` and and/or/xor stay in range; `int`, `int64` and
+  `uint64` are their own width.
+- Both emitters (`emit_builtin` in `emit_core.c`, `prim_expr` in
+  `emit_cps_ir.c`) fold such a row in `uint64_t` and cast back:
+  `(uint8_t)((uint64_t)(a) + (uint64_t)(b))`. Folding in `uint64_t` rather than
+  C's `int` also removes a signed overflow the old text had at
+  `uint16 * uint16` (65535 * 65535). A narrow `bit-shr` zero-extends from its
+  own width, `(int8_t)((uint64_t)(uint8_t)(a) >> (uint64_t)(n))`, so
+  `(bit-shr -16i8 2i8)` is 60; `bit-shl` shifts in `uint64_t` (no signed-shift
+  UB) and casts back.
+- The interpreter's `eval_builtin` reduces the int64 carrier with
+  `builtin_int_wrap_value(spec->result_type.kind, ...)` in the `+ - *` fold, `/`
+  and both shifts, so the engines agree.
+
+That also closes the `INT32_MIN / -1` residue
+[integer-mod-by-zero-and-min-div-minus-one-crash](integer-mod-by-zero-and-min-div-minus-one-crash.md)
+left here: the quotient is reduced to `int32` on both engines.
+
+Snapshot moved: `map-multiword-struct-value` (its `Num` instances for the sized
+kinds now carry the cast). The `Num` instances in `stdlib/typeclass.tur` are
+built on these operators, so `add`/`sub`/`mul` at a sized kind wrap too.
+
+`sized-int-arith-wraps` covers every narrow kind unstored, through a parameter
+and a return, a three-operand fold, a comparison of a wrapped sum, `/`, both
+shifts, and the CPS backend (`main` and a performing function are lowered
+there), on `tur run`, `tur --interpret` and `tur jit`.

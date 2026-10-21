@@ -1,0 +1,47 @@
+mkdirp
+write
+symlink
+true
+true
+false
+false
+data.txt
+22
+file
+5
+symlink
+8
+dir
+true
+true
+t/data.txt
+true
+416
+true
+false
+chmod
+rejected
+4076
+rwsr-sr-T
+rw-r-----
+rwxr-----
+rw-------
+loop link
+dir link
+-- walk
+t/alias
+t/data.txt
+t/link
+t/sub
+t/sub/up
+-- walk-follow
+t/alias
+t/alias/up
+t/data.txt
+t/link
+t/sub
+t/sub/up
+touch new
+touch existing
+12345
+true

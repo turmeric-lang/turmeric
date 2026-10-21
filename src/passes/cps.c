@@ -600,7 +600,6 @@ bool cps_visit_children(const Expr *e,
         case EX_RC_FROM_REF:  V(e->as.rc_from_ref_.expr);   return false;
         case EX_REF_FROM_RC:  V(e->as.ref_from_rc_.expr);   return false;
         case EX_WEAK:         V(e->as.weak_.expr);          return false;
-        case EX_WEAK_UPGRADE: V(e->as.weak_upgrade_.expr);  return false;
         case EX_WEAK_PRED:    V(e->as.weak_pred_.expr);     return false;
         case EX_REF_PRED:     V(e->as.ref_pred_.expr);      return false;
         case EX_BORROW_IMMUT: V(e->as.borrow_immut_.expr);  return false;
@@ -2286,7 +2285,6 @@ static Expr *cps_mark_expr(Arena *a, Expr *e) {
         case EX_RC_PTR:
         case EX_RC_COUNT:
         case EX_WEAK:
-        case EX_WEAK_UPGRADE:
         case EX_WEAK_PRED:
         case EX_REF_PRED:
         case EX_BORROW_IMMUT:
