@@ -1,27 +1,25 @@
 # Plan: `plot` Renderer Typeclass Collapse (U2, v1)
 
-> Status: P0–P2 landed (per-kind structs, `Renderer` `bounds`, `Backend`
-> output collapse). **P3 foundation landed** (existential `AnyRenderer` +
-> `renderers-bbox`) after the turmeric blocker was fixed (PRs #452/#456/#458).
-> **P4 render bridge landed**: `to-legacy` + `plot-anyrenderers` render a typed
-> `(Vec AnyRenderer)` through the existing pipeline, validated pixel-identical
-> to legacy `plot` (see P4). The remaining ~27 per-kind structs + the
-> constructor migration + the eventual per-kind `render` C de-monolith are the
-> pixel-sensitive remainder. Soft codegen/inference blockers worked around in
-> the landed code are listed under P3/P4.
+> Status: P0–P3 landed. **P4 and P5 done 2026-10-21** on turmeric-spices
+> branch `claude/plot-renderer-typeclass-p4`, meeting the whole-plan
+> acceptance below: all 30 renderer kinds are types with a `Renderer`
+> instance (`bounds`, `draw`, and the defaulted `legend-label` /
+> `frame-marks` / `categorical?` / `category-labels`); every public
+> constructor returns `AnyRenderer`; `plot` & co. take a
+> `(Vec AnyRenderer)`; the draw `switch`, the bounds `switch` and the slot
+> bag are gone; callbacks are typed fn values; style and option handles are
+> `LineStyle` / `PointStyle` / `FillStyle` / `PlotOpts`; renderer data is
+> a Vec of typed records from `plot/data`. Pixel check: every plot body is
+> byte-identical to pre-plan output except where a bug fix changed it
+> (`arrows`' bounds, `contours`' levels, the interval kinds' outlines, the
+> histograms' per-bar auto colors and horizontal category axis), and legend
+> swatches show each renderer's own style, a row per stacked layer. Building
+> the spice under clang needs turmeric branch
+> `claude/exbox-thunk-carrier-result` (a compiler fix). **Remaining:** only
+> the deprecated `plot-anyrenderers` alias, kept for one release. See P4.
 > Tracks: spices-type-features-uplift-plan **U2 target — plot**
 > Scope: `spices/plot/` only; P3 needed a compiler dependency after all, now
 > satisfied (see Risks).
->
-> **Re-checked 2026-10-07 against turmeric-spices `origin/main` (388aa99):
-> the status above is accurate and nothing has landed since.** In
-> `spices/plot/src/plot/core.tur` only three per-kind structs exist
-> (`LinesR`, `PointsR`, `LabelR`, each with a `Renderer` instance), alongside
-> `AnyRenderer`, `anyrenderers->legacy` and `plot-anyrenderers`; the other
-> constructors (`line.tur`, `area.tur`, `point.tur`, `contour.tur`) still call
-> `__make-renderer`. The `Backend` typeclass with `CanvasBackend` /
-> `SurfaceBackend` / `PngBackend` is in place. The remaining work is the
-> constructor migration, still pixel-sensitive.
 
 ## Motivation
 
@@ -284,27 +282,194 @@ untouched. It exercised one more recursion-return soft blocker (a self-recursive
 `defn` returning `(Vec int)` types its own call at the carrier `int`; ascribe
 the recursive result).
 
-**Remaining (the larger, pixel-sensitive migration):**
-- Rewrite the public constructors in `plot/line.tur`, `point.tur`,
-  `area.tur`, `contour.tur`, `interval.tur`, `decor.tur` to build the
-  typed struct and return `AnyRenderer` (currently they return the legacy
-  `int` handle; `plot-anyrenderers` bridges the other direction).
-- Add the remaining ~27 per-kind structs + `Renderer` instances (only
-  `LinesR`/`PointsR`/`LabelR` exist today) with `bounds` + `to-legacy`.
-- Eventually replace `to-legacy` + the monolithic `__draw-renderers` switch
-  with a per-kind `render` method (the P0-per-kind C de-monolith), at which
-  point the slot-bag handle and `__make-renderer` can be retired.
-- Keep `__make-renderer` and the generic-slot helpers exported but
-  deprecated for one release; update the README / `plutovg-guide.md` examples.
+**Done (constructor migration, 2026-10-21, turmeric-spices branch
+`claude/plot-renderer-typeclass-p4`):**
+- Every kind is a type in its constructor's module, with named, typed fields:
+  `LinesR` `FunctionR` `ParametricR` `PolarR` `InverseR` `DensityR`
+  (plot/line), `PointsR` `ErrorBarsR` `VectorFieldR` `ArrowsR` (plot/point),
+  `FunctionIntervalR` `LinesIntervalR` `ParametricIntervalR` `PolarIntervalR`
+  (plot/interval), `RectanglesR` `AreaHistogramR` `DiscreteHistogramR`
+  `StackedHistogramR` (plot/area), `IsolineR` `ContoursR` `ContourIntervalsR`
+  `ColorFieldR` (plot/contour), and in plot/decor a `Decoration` sum type
+  (`XAxis` `YAxis` `Axes` `XTickLines` `YTickLines` `TickGrid` -- a
+  `defstruct` cannot be empty) plus `HRuleR` `VRuleR` `LabelR`. Instances live
+  with the types, which the orphan check allows.
+- `(defalias AnyRenderer (exists [a] [(Renderer a)] a))`. Class names and
+  aliases are global, so neither is exported by name; `AnyRenderer` resolves
+  in every module.
+- Every public constructor returns `AnyRenderer`; `plot`, `plot-write-png`,
+  `plot-into-canvas`, `render` and `Backend`'s `render-to` take a
+  `(Vec AnyRenderer)`. `plot-into-canvas` folds `renderers-bbox`, lowers with
+  `anyrenderers->legacy`, hands both to the C frame worker
+  (`__plot-into-canvas-legacy`), and frees the lowered handles.
+- The bounds pass is typeclass dispatch: `__renderer-bbox` and its `switch`
+  are deleted; each kind's `bounds` calls one per-shape helper
+  (`__point-list-bbox`, `__error-bars-bbox`, `__arrows-bbox`, `__rects-bbox`,
+  `__discrete-hist-bbox`, `__stacked-hist-bbox`) or `point-bbox` /
+  `hint-bbox`. `bbox-union` keeps the left box on a tie, as the C union kept
+  the first point, so the fold is bit-identical.
+- Curve callbacks are typed function values (`^fat f : (fn [float] float)`,
+  `(fn [float] int)` for a point, `(fn [float float] float|int)` for fields);
+  the draw pass calls the closure handle with `TUR_APPLY1_T` / `TUR_APPLY2_T`.
+  `fn` literals, capturing or not, now work. (A plain, non-`^fat` fn param
+  cannot be stored in a struct field: turmeric
+  `docs/reported/fn-param-stored-in-struct-field-miscompiles.md`.)
+- The folds are top-level recursive `defn`s again: as `letrec` closures they
+  leaked their env and a struct box per call on every `plot`
+  (`docs/reported/letrec-struct-arg-and-env-leak.md`).
+- Verified: a program rendering all 30 kinds in 34 scenes through the public
+  API compiled unchanged against both versions; 33 PNGs are byte-identical.
+  `arrows.png` differs because `arrows`' bounds read each arrow's second cons
+  cell (a pointer) as y -- a heap-dependent, run-to-run-varying y range;
+  `ArrowsR` spans both endpoints. Suite green on the Release and the Debug
+  (ASan) compiler; the migrated path is ASan/UBSan/LSan clean (the remaining
+  leaks are the `ptr<void>` result envelopes, which predate it).
+
+**Done (per-kind draw, 2026-10-21, same branch):**
+- `Renderer` gained `draw [r : a  ctx : DrawCtx] : void` (named `draw`, as
+  `render` is the Backend entry point) and three methods with defaults for
+  what the frame needs: `legend-label` (""), `frame-marks` (a `FrameMarks`
+  of four bools; only `Decoration` overrides it) and `categories`
+  (`(Option int)`; the two categorical histograms override it). `to-legacy`
+  is gone.
+- Each arm of `__draw-renderers`' switch moved verbatim into an inline-C
+  draw function beside its kind (24 functions across plot/line, point,
+  interval, area, contour, decor), wrapped in `do { } while (0)` so the arms'
+  `break`s keep their meaning. What the arms shared -- SET_LINE_STYLE /
+  SET_FILL_STYLE / SET_POINT_STYLE / MAP_POINT -- became `export-as` helpers
+  in plot/core (`plot_ctx_line_style` etc.) behind same-named local macros,
+  and the auto-color cursor moved into the `DrawCtx`. The three sampled
+  interval kinds share one kernel (`plot_draw_curve_interval`) keyed by a
+  curve-evaluation mode, as the sampler is.
+- The frame worker is `__plot-frame` (returns the `DrawCtx`, or NULL when
+  the viewport is too small -- the font it loaded is now freed then), the
+  typed draw fold inside `__ctx-clip-begin` / `-end`, and the legend rows.
+- `__make-renderer`, the slot setters, `anyrenderers->legacy` and
+  `__free-renderers` are deleted. `plot/core` is 1748 lines (from 2081);
+  the six kind modules carry their draws.
+- A `:c-sources` C file was considered for the draw code and rejected:
+  `export-as` functions are `static`, so separate C could not reach the
+  closure-calling helpers, and vendored C cannot load in the in-process
+  engine.
+- Verified as before: 34 scenes byte-identical to the previous step; shards
+  green on both compilers; ASan/UBSan clean.
+
+**Done (typed styles, 2026-10-21, same branch):** `LineStyle`, `PointStyle`,
+`FillStyle` and `PlotOpts` are `defopaque` over `ptr<void>` in plot/style,
+built by raw `ptr<void>` producers wrapped with `::` (msgpack's Buf idiom).
+Every field, constructor and entry point takes the kind it draws with, so a
+`FillStyle` where a `LineStyle` is due is TUR-E0001
+(`errors/wrong-style-kind.tur`). Fill lists are `(Vec FillStyle)`; their
+draws walk the Vec by index. The C-ABI helpers (`plot_ctx_*_style`,
+`plot_draw_curve_interval`) keep word-sized style parameters, since C callers
+declare their prototypes and an opaque's C type is the compiler's choice. 34
+scenes byte-identical.
+
+**Done (typed data payloads, 2026-10-21, same branch):** a new module,
+`plot/data`, defines `Point`, `Rect`, `ErrorBar`, `Arrow`, `Bar` and `Group`
+(`:copy` structs; `Group` holds a `(Vec float)`), and every data-taking
+constructor takes a `(Vec <record>)` -- `density` a `(Vec float)`,
+`stacked-histogram`'s layer names a `(Vec cstr)`. Handing a renderer the
+wrong record is TUR-E0001 (`errors/wrong-data-record.tur`).
+- The C draws and bounds helpers are unchanged. Of the two shapes weighed
+  (C reading the Vec's boxed-element layout, or a Turmeric adapter), the
+  adapter was taken: each instance's `draw` / `bounds` lowers its Vec to the
+  cons cells the C reads (`__points->cells` and friends, an opaque `Cells`),
+  and frees them after. The boxed layout stays a compiler detail.
+- `parametric` / `parametric-interval` take a `(fn [float] Point)` and
+  `vector-field` a `(fn [float float] Point)`. The C calls them through two
+  Turmeric-bodied `export-as` shims (`plot_eval_point`,
+  `plot_eval_vector`) that apply the closure and store the fields through
+  out-pointers, so no cons point is allocated per sample.
+- The `categories` method (an `(Option int)` over the raw bar list) is
+  split into two defaulted methods, `categorical?` and
+  `category-labels : (Vec cstr)`, which the frame lowers for its tick labels;
+  `error-bars` / `discrete-histogram` / `stacked-histogram` take
+  `horizontal : bool` for their `invert : int`.
+- Verified: 34 scenes byte-identical to the typed-styles step; shard green
+  on release and Debug `tur` (11 tests, 5 compile-fail fixtures);
+  ASan/UBSan clean, and the per-sample callback leaks are gone.
+
+**Done (the two preserved bugs, 2026-10-21, same branch):**
+- `contours` stored 0.0 for both ends of its level range, so all `n` levels
+  drew the 0 contour. The draw now scans f over the sampled grid (NaN and
+  infinities skipped) and spaces level i of n at
+  min + (max - min) * (i + 1) / (n + 1). Only `contours.png` of the 34
+  scenes changes.
+- The frame `plutovg_canvas_save`d with no matching `restore`, leaving a
+  saved state on a `CanvasBackend` caller's canvas; `__ctx-finish` restores
+  it. Both have a test that fails on the old code.
+- Under clang every plot test failed to build: the existential's
+  carrier-adapter thunk for the defaulted `category-labels : (Vec cstr)`
+  returned the instance's int64 carrier as `tur_adt_Vec__cstr *`
+  (-Wint-conversion, an error to clang; a warning to gcc). Fixed in the
+  compiler on its own branch, `claude/exbox-thunk-carrier-result`
+  (fixture `exists-method-returns-carrier-vec`), which must merge before the
+  spice is green on macOS.
+
+**Done (legend swatches, 2026-10-21, same branch):**
+- The legend swatch was `palette[row % 8]`, not what its renderer drew
+  with. The three style helpers now record the first line, fill and point
+  style each renderer resolves (auto colors included) into a per-renderer
+  swatch the `DrawCtx` carries; the legend draws the point marker (now one
+  `plot_ctx_marker` the points draw shares), else a fill box edged in the
+  line style, else a line stroke. `contour-intervals` notes its first band.
+  No `Renderer` method was needed: the swatch is a by-product of `draw`.
+- Reviewing the band swatches showed the interval kinds never drew their
+  outline (`plutovg_canvas_fill` clears the path the stroke then used); they
+  `fill_preserve` now. A point `fill-color` or contour-band color of 8 or
+  more indexed past the palette; both wrap.
+- Pixels: 25 scenes change only in the swatch column, the five interval
+  scenes gain outlines, nothing else moves. `legend_test` reads swatches
+  back from the surface; it and the outline check fail on the old code.
+
+**Done (stacked layers in the legend, 2026-10-21, same branch):**
+- `Renderer` gained `legend-labels : (Vec cstr)` -- a renderer's legend
+  rows, fresh for the caller to free -- whose default is its one
+  `legend-label` (a default method body calling a sibling method works
+  through the existential, under clang too). `StackedHistogramR` overrides
+  it with a copy of its layer names. Swatches are per series: a draw calls
+  `plot_ctx_series(dc, k)` before series k, and row k shows that swatch.
+- An auto-colored stack layer re-resolved its fill for every cell, so a
+  layer changed color from group to group; the draw now goes layer by
+  layer, one resolve each. `discrete-histogram` and `rectangles` resolved
+  their single fill per bar the same way; once now.
+- A horizontal histogram's categories labelled the x axis, where its values
+  run. A defaulted `categories-on-y?` moves them to y for the two
+  histograms when `horizontal`.
+- Pixels: only the five histogram / rectangle scenes and
+  `categorical-mixed` (whose rule took the next auto color) change.
+
+**Done (legend readability, 2026-10-21, same branch):** the legend is
+measured before it is drawn (`__legend-size`: rows and the widest label, via
+`plutovg_canvas_text_extents`) and sits on a translucent white box
+(`__legend-box`). Knowing its size fixed bottom legends, which grew down out
+of the plot, and long right-hand labels, which ran off its edge; and
+`legend-pos` 0 now means no legend, as documented (the frame read it as 1).
+
+**Remaining (follow-ups, not in this plan's acceptance):**
+- `plot-anyrenderers` is a deprecated alias of `plot`, kept for one
+  release.
 
 **Acceptance**
-- `plot-anyrenderers` is pixel-identical to legacy `plot` for the typed kinds
-  (done for `LinesR`/`PointsR`/`LabelR`).
-- Once constructors migrate: every example under `spices/plot/` and the guide
-  compiles against the typed constructors; removing `__make-renderer` is the
-  only follow-up.
+- The typed path is pixel-identical to legacy `plot` -- done for every kind
+  (33/34 scenes byte-identical; `arrows` is a bug fix; `contours` changed
+  later by its own fix).
+- Every example under `spices/plot/` and the guide compiles against the typed
+  constructors -- done, and `__make-renderer` is removed.
 
 ### P5 — Tests, negative fixtures, image round-trip
+
+> **Done 2026-10-21 with the P4 migration:** `tests/plot/renderer_test.tur`
+> pins every kind's `bounds`; `tests/plot/callback_test.tur` checks `fn`
+> literals draw what defns draw and that re-rendering is stable;
+> `spices/plot/errors/run.sh` (the shard's errors stage) asserts five
+> compile-fail fixtures with witness substrings -- no `Renderer` instance,
+> a `(Vec int)` passed to `plot`, a mistyped callback, and (with the typed
+> styles and data) a `FillStyle` where a `LineStyle` is due and `Rect`s
+> where `Point`s are due. A per-kind
+> construct→render→pixel-count check is not added: the line / point / area /
+> interval / contour suites already render every kind.
 
 **Tasks**
 - Per-kind: keep the existing pixel-content assertions; add a
@@ -364,7 +529,9 @@ blocks on P2; P4/P5 close it out.
 4. **`text`/`label` ownership.** `__make-renderer` deep-copies `label`
    and `text` (`core.tur:80-93`). The typed structs should hold `cstr`
    with the same ownership contract; confirm GC vs malloc lifetime when
-   the struct replaces the C-owned copy.
+   the struct replaces the C-owned copy. **Settled in P4:** a typed struct
+   holds the caller's `cstr`; `to-legacy` deep-copies it into the slot bag
+   for one draw and `__free-renderers` frees the copy after.
 
 ---
 

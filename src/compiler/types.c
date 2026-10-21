@@ -2932,7 +2932,11 @@ const char *type_name(Type t) {
             Buf tmp;
             buf_init(&tmp);
             buf_puts(&tmp, "rc<");
-            buf_puts(&tmp, type_name(type_from_kind(t.as.rc.inner)));
+            /* typed-ptr-pointee-not-checked-at-calls: name the ADT, so
+             * `rc<S>` against `rc<U>` does not read `rc<<adt>>` twice. */
+            buf_puts(&tmp, (t.as.rc.inner == TY_ADT && t.as.rc.adt_def && t.as.rc.adt_def->name)
+                               ? t.as.rc.adt_def->name
+                               : type_name(type_from_kind(t.as.rc.inner)));
             buf_puts(&tmp, ">");
             buf_putc(&tmp, '\0');
             const char *r = intern_type_name(tmp.data);
@@ -2944,7 +2948,11 @@ const char *type_name(Type t) {
             Buf tmp;
             buf_init(&tmp);
             buf_puts(&tmp, "weak<");
-            buf_puts(&tmp, type_name(type_from_kind(t.as.rc.inner)));
+            /* typed-ptr-pointee-not-checked-at-calls: name the ADT, so
+             * `rc<S>` against `rc<U>` does not read `rc<<adt>>` twice. */
+            buf_puts(&tmp, (t.as.rc.inner == TY_ADT && t.as.rc.adt_def && t.as.rc.adt_def->name)
+                               ? t.as.rc.adt_def->name
+                               : type_name(type_from_kind(t.as.rc.inner)));
             buf_puts(&tmp, ">");
             buf_putc(&tmp, '\0');
             const char *r = intern_type_name(tmp.data);
@@ -3448,13 +3456,19 @@ static void type_name_buf(Buf *b, Type t) {
         /* Phase 9: rc<T> and weak<T> */
         case TY_RC: {
             buf_puts(b, "rc<");
-            type_name_buf(b, type_from_kind(t.as.rc.inner));
+            if (t.as.rc.inner == TY_ADT && t.as.rc.adt_def && t.as.rc.adt_def->name)
+                buf_puts(b, t.as.rc.adt_def->name);
+            else
+                type_name_buf(b, type_from_kind(t.as.rc.inner));
             buf_puts(b, ">");
             break;
         }
         case TY_WEAK: {
             buf_puts(b, "weak<");
-            type_name_buf(b, type_from_kind(t.as.rc.inner));
+            if (t.as.rc.inner == TY_ADT && t.as.rc.adt_def && t.as.rc.adt_def->name)
+                buf_puts(b, t.as.rc.adt_def->name);
+            else
+                type_name_buf(b, type_from_kind(t.as.rc.inner));
             buf_puts(b, ">");
             break;
         }

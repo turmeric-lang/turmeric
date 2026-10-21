@@ -56,8 +56,8 @@ User-facing material lives elsewhere:
    `cmake/spice-deps-manifest.json` (or `-wasm.json`), whose `-I/-L/-l`
    tokens every later C compile reads -- whether or not they are current.
 5. **Build options.** `:c-flags`, `:link-libs`, `:link-flags`, `:c-sources`
-   and `:c-includes` reach the cc line; `:no-stdlib` is parsed and validated
-   but nothing reads it.
+   and `:c-includes` reach the cc line; `:no-stdlib true` is refused at read
+   time (only `false` is accepted), since no build path implements it.
 
 ---
 
@@ -530,14 +530,17 @@ build for good and compiled with no dependency flags
 | `:c-includes` | `spice.c:collect_spice_aux_c`, as quoted `-I<spice dir>/<entry>` | root and the whole `:spices` closure |
 | `:c-sources` | `collect_spice_aux_c`, as extra TUs | root and the whole closure, each source once by `realpath` |
 | `:c-flags` | `append_manifest_link_flags`, verbatim, ahead of the link libraries; that buffer reaches the compile as well as the link | root only |
-| `:no-stdlib` | **nowhere** | -- |
+| `:no-stdlib` | nowhere: `true` (or any non-`false` value) is a read error, `false` is accepted and ignored | -- |
 
 The link vectors are grammar-checked at read time (`check_link_vec`,
 `tur_link_token_ok`), which is what lets `append_manifest_link_flags` splice
-them unquoted. `:c-flags` gets the same check and is then dropped: a
-`:c-flags ["-DMY_ANSWER=42"]` spice whose inline C returns `MY_ANSWER` fails
-with `'MY_ANSWER' undeclared`, and passes with the same flag in
-`TUR_CC_FLAGS`. The user guides still document it.
+them unquoted. `:c-flags` gets the same check, and a
+`:c-flags ["-DMY_ANSWER=42"]` spice whose inline C returns `MY_ANSWER` builds
+(`tests/spice-c-sources-tests.sh`, "c-flags"). `:no-stdlib` has no field in
+`PkgManifest`: the reader refuses anything but `false`, because a project that
+set it used to get the stdlib anyway, silently
+([build-opts-c-flags-never-consumed](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/build-opts-c-flags-never-consumed.md);
+"no-stdlib" in the same script).
 
 `:c-sources` and `:c-includes` are validated against the manifest directory
 when the manifest is read, so a missing file fails every read of that
@@ -630,7 +633,8 @@ Each was reproduced against the compiler this guide describes and filed in
 [`docs/reported/`](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/README.md). When one is fixed and archived,
 update the passage above that describes it and drop it from this list.
 
-- [build-opts-c-flags-never-consumed](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/build-opts-c-flags-never-consumed.md) -- `:build-opts :c-flags` (and `:no-stdlib`) are parsed but never used
+None open: the last one, build-opts-c-flags-never-consumed, was archived
+2026-10-21.
 
 ## Maintenance
 

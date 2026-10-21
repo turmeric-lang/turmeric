@@ -1,0 +1,28 @@
+;; refine-top-level-def-not-a-fact: an immutable top-level `def` whose value is
+;; a literal or a constructor term is a fact at a crossing whose argument names
+;; it -- `n = 5` -- exactly as a `let`-bound one is.  Before, every crossing
+;; below was "cannot be proved" (an error under --strict-refine): the global
+;; was a free variable in the VC.
+(def n 5)
+(def zero 0)
+
+(defn needs-pos [x : #refine{ v : int | (> v 0) }] : int x)
+
+(defdata Lst [] (Cons [hd : int tl : Lst]) (Nil))
+
+(defn ^reflect len [xs : Lst] : int
+  (match xs
+    (Nil) 0
+    (Cons _ t) (+ 1 (len t))))
+
+(defn needs-three [xs : #refine{ v : Lst | (= (len v) 3) }] : int
+  (len xs))
+
+;; A reflected measure selects its arm through the def's constructor term.
+(def three (Cons 1 (Cons 2 (Cons 3 (Nil)))))
+
+(defn main [] : int
+  (println (needs-pos n))
+  (println (needs-pos (+ n zero)))
+  (println (needs-three three))
+  0)

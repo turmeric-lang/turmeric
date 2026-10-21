@@ -253,11 +253,8 @@ bool g_build_bundle_deps = false;
  * the Debug tur's LeakSanitizer turned the compile error's exit 1 into 141. */
 static void free_borrow_specs(BorrowSpecInfo **all, uint32_t *n_all, int n_files) {
     for (int i = 0; all && n_all && i < n_files; i++) {
-        for (uint32_t bi = 0; bi < n_all[i]; bi++) {
-            free(all[i][bi].clone_name);
-            free(all[i][bi].owning_module);
-            free(all[i][bi].fn_symbol);
-        }
+        for (uint32_t bi = 0; bi < n_all[i]; bi++)
+            borrow_spec_free_fields(&all[i][bi]);
         free(all[i]);
     }
     free(all);
@@ -482,13 +479,8 @@ static int cmd_build_multi_files(char **tur_files, int n_files,
                 forced_for[owner] = nf;
                 cap_forced_for[owner] = nc;
             }
-            ForcedAbiSpec *fs = &forced_for[owner][n_forced_for[owner]++];
-            fs->clone_name = bsi->clone_name; /* borrow (valid until all_borrow freed) */
-            fs->fn_symbol  = bsi->fn_symbol;
-            fs->result_kind = bsi->result_kind;
-            fs->n_args = bsi->n_args;
-            for (uint8_t ai = 0; ai < bsi->n_args; ai++)
-                fs->arg_kinds[ai] = bsi->arg_kinds[ai];
+            /* borrows bsi's strings (valid until all_borrow freed) */
+            forced_spec_from_borrow(&forced_for[owner][n_forced_for[owner]++], bsi);
         }
     }
 

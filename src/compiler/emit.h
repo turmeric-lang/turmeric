@@ -103,6 +103,12 @@ typedef struct {
     TypeKind    result_kind;
     TypeKind    arg_kinds[MAX_FN_ARITY];
     uint8_t     n_args;
+    /* forced-spec-loses-aggregate-type: the ADT name at a TY_ADT position, so
+     * the owner rebuilds the full type (a by-value struct) rather than the
+     * carrier its kind alone gives.  NULL elsewhere.  Borrowed, like the
+     * names above. */
+    const char *result_adt;
+    const char *arg_adts[MAX_FN_ARITY];
 } ForcedAbiSpec;
 
 /* J6: Borrow spec info output from emit_implementation.  Each entry describes
@@ -116,6 +122,10 @@ typedef struct {
     TypeKind    result_kind;
     TypeKind    arg_kinds[MAX_FN_ARITY];
     uint8_t     n_args;
+    /* ForcedAbiSpec's result_adt / arg_adts; malloc'd, NULL when the position
+     * is not a TY_ADT. */
+    char       *result_adt;
+    char       *arg_adts[MAX_FN_ARITY];
 } BorrowSpecInfo;
 
 /* Phase 2: Multi-file support - emit separate .h and .c for a module.

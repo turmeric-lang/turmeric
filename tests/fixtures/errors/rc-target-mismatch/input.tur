@@ -1,0 +1,8 @@
+;; typed-ptr-pointee-not-checked-at-calls: rc<S> had the same hole as ptr<S> --
+;; type_eq compares only the target kind, so an rc<U> argument was accepted.
+(defstruct S [a : int])
+(defstruct U [b : int])
+(defn b1 [^borrow st : rc<S> k : int] : int k)
+(defn main [] : int
+  (println (b1 (rc/of (U 7)) 3))
+  0)

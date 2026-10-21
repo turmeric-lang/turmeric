@@ -1,0 +1,13 @@
+;; typed-ptr-pointee-not-checked-at-calls: the callee is defined BELOW the
+;; call, so the call is checked against its forward declaration, which used
+;; to carry the pointer kind without its pointee.
+(defstruct Foo [a : int])
+(defstruct Bar [b : int])
+(defn mk-bar [] : ptr<Bar>
+  ```c
+  return 0;
+  ```)
+(defn main [] : int
+  (println (later (mk-bar)))
+  0)
+(defn later [x : ptr<Foo>] : int 0)

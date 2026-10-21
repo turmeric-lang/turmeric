@@ -267,6 +267,8 @@ bool jit_try_split_preamble(Buf *csrc, Buf *out);
 
 /* == driver/cmd_emit.c ===================================================== */
 void drv_default_output_name(const char *input, char *out, size_t cap);
+void forced_spec_from_borrow(ForcedAbiSpec *fs, const BorrowSpecInfo *bsi);
+void borrow_spec_free_fields(BorrowSpecInfo *bsi);
 char *drv_resolve_build_dir(const char *input_or_root, const char *cli_flag);
 
 /* == driver/project.c ====================================================== */
