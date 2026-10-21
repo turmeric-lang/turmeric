@@ -1690,6 +1690,16 @@ static const char *__tur_any_type_name(int64_t tag) {
         case 2: return "bool";
         case 3: return "int";
         case 4: return "float";
+        case 26: return "int";
+        case 32: return "float";
+        case 23: return "int8";
+        case 24: return "int16";
+        case 25: return "int32";
+        case 27: return "uint8";
+        case 28: return "uint16";
+        case 29: return "uint32";
+        case 30: return "uint64";
+        case 31: return "float32";
         case 5: return "cstr";
         case 6: return "ptr";
         case 18: return "struct";
@@ -1734,6 +1744,7 @@ static void tur_existential_drop_byval(void *value) {
     tur_existential_t *rec = (tur_existential_t *)value;
     if (rec) free((void *)(intptr_t)rec->value);
 }
+typedef struct { int32_t __state; void *(*__next_fn)(void *); } __tur_gen_hdr_t;
 /* STM types (TL2) */
 typedef void *(*stm_fn_t)(void *env);
 typedef struct TVar { void *value; uint64_t version; } TVar;
@@ -1894,7 +1905,7 @@ static void __tur_stm_begin(STM_Transaction *tx) {
     __stm_ensure_init();
     tx->read_stamp = TUR_ATOMIC_LOAD_U64(&__stm_state.version_clock, __ATOMIC_ACQUIRE);
 }
-static void __tur_stm_park(STM_Transaction *tx) {
+static bool __tur_stm_park(STM_Transaction *tx) {
     unsigned idxs[256]; uint64_t seqs[256]; int n = 0;
     for (int i = 0; i < tx->read_count; i++) {
         unsigned bi = __stm_bucket_idx(tx->read_set[i]);
@@ -1902,7 +1913,10 @@ static void __tur_stm_park(STM_Transaction *tx) {
         for (int j = 0; j < n; j++) { if (idxs[j] == bi) { seen = 1; break; } }
         if (!seen) { idxs[n] = bi; seqs[n] = TUR_ATOMIC_LOAD_U64(&__stm_state.lock_buckets[bi].commit_seq, __ATOMIC_ACQUIRE); n++; }
     }
-    if (n == 0) return;
+    if (n == 0) {
+        tur_panic("atomically: transaction requested retry with no way to make progress (it read no TVar, so no commit by another thread can wake it)");
+        return false;
+    }
     pthread_mutex_lock(&__stm_state.retry_lock);
     for (;;) {
         int advanced = 0;
@@ -1913,6 +1927,7 @@ static void __tur_stm_park(STM_Transaction *tx) {
         pthread_cond_wait(&__stm_state.retry_cond, &__stm_state.retry_lock);
     }
     pthread_mutex_unlock(&__stm_state.retry_lock);
+    return true;
 }
 void *tur_atomically(void *(*fn)(void *), void *env) {
     STM_Transaction *tx = tur_stm_new_transaction();
@@ -1927,7 +1942,7 @@ void *tur_atomically(void *(*fn)(void *), void *env) {
         fn(env);
         if (tx->retry_requested) {
             tur_stm_set_current_tx(prev);
-            __tur_stm_park(tx);
+            if (!__tur_stm_park(tx)) { free(tx); return NULL; }
             continue;
         }
         if (tx->aborted) {

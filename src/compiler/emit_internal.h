@@ -585,7 +585,6 @@ typedef struct EmitCtx {
     uint32_t     n_gen_struct_bindings;
     const char  *gen_var_name;           /* "__g" when inside _next function (NULL outside) */
     const char  *gen_struct_type;        /* struct type name when inside _next (NULL outside) */
-    bool         gen_hdr_emitted;        /* true once __tur_gen_hdr_t typedef is in ctx->file */
     /* generator-in-generic-emitted-per-clone: the GenDefs whose struct and
      * functions are already out.  A generator is emitted ONCE, on the carrier
      * representation, however many clones of its enclosing fn create it. */

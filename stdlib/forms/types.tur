@@ -163,9 +163,10 @@
 ;;; Takes an `any` and returns the type's name as a string: `float`, `int`, `cstr`,
 ;;; `bool`, `Sym` for a keyword, `fn` for a function, the type name of a struct
 ;;; or ADT (`Option` without its instantiation). A value that is not already an
-;;; `any` is `'type-of' expects an 'any'-typed argument`. A sized integer or
-;;; float gives `unknown` when compiled (`(:: 3i32 any)`) and the plain `int` or
-;;; `float` interpreted; see `is?`.
+;;; `any` is `'type-of' expects an 'any'-typed argument`. A sized integer is
+;;; named for its size when compiled (`int32` for `(:: 3i32 any)`, `uint8`, ...);
+;;; the interpreter has one integer and one float kind and says `int` / `float`.
+;;; A `float32` is widened as a float, so it reads `float` on both. See `is?`.
 ;;;
 ;;; Parameters:
 ;;;   x -- an `any`

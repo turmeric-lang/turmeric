@@ -86,6 +86,12 @@ GHC rejects nested `atomically`; here it is accepted with no diagnostic.
    `(atomically (stm (tmvar-take mv)))` is now refused too -- correctly: it was
    two transactions. Use the `*-stm` helper inside one.
 
-No change to the runtime preamble (so no snapshot or split-runtime churn): all
-three live in the per-program `atomically` / `stm` emission. The `stm` and
-`retry` entries on the forms page (`stdlib/forms/stm.tur`) are updated.
+Items 1 and 3 live in the per-program `stm` emission and the elaborator. Item
+2's no-progress check was first written into every `atomically` site to avoid
+touching the runtime preamble (and with it all 157 snapshots); the same day it
+moved into the runtime, where it belongs: `__tur_stm_park` returns false for a
+transaction that read no TVar after panicking with the message, and both of its
+callers -- the emitted `atomically` loop and the runtime's own `tur_atomically`,
+which the per-site version had left spinning -- abandon the attempt. Snapshots
+and the split runtime were regenerated with it. The `stm` and `retry` entries on
+the forms page (`stdlib/forms/stm.tur`) are updated.

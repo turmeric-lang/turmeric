@@ -43,8 +43,10 @@ that fits a clause, or retire the form and its mention in the `^linear` rule.
            (let [r (resume k 41)] (if (cont? k) (+ r (resume k 1)) -1))))
 ```
 
-Compiled: `-1`, since `__dk_resume_word` marks the chain consumed at the first
-resume (`src/compiler/emit_dk_runtime.c`) even for a `^multishot` k. Interpreted:
+Compiled: `-1`, since the resume marks the chain consumed at the first resume
+even for a `^multishot` k -- `emit_resume` writes `((DK *)(k))->consumed = 1` at
+each site (`src/compiler/emit_cps_ir.c`), and `__dk_resume_word` does the same for a
+resume through a helper's `effect-cont` parameter. Interpreted:
 `this continuation has already been resumed and its body has finished` -- a
 clause that calls `cont?` is one the work-stack driver cannot descend
 (`ws_capturable` does not know `EX_CONT_PRED`), so it takes the single-shot fiber
@@ -52,15 +54,23 @@ path. The same clause without the `cont?` call returns 44 on both. The one-shot
 meaning (false after the resume) is now the same on both engines.
 
 Decision: `cont?` of a `^multishot` k should be true after a resume (it can still
-be invoked). That needs `__dk_resume_word` not to mark a multishot chain, a
-runtime-preamble change that regenerates the snapshots, and `EX_CONT_PRED` in the
-interpreter's work-stack driver.
+be invoked). Compiled that is a per-site change -- `emit_resume` skips the store
+when the k's binding is `CK_MULTISHOT` -- not a preamble one (an earlier version of
+this note said otherwise). The interpreter needs `EX_CONT_PRED` in its work-stack
+driver, without which the clause falls off the multi-shot path; changing only the
+compiled side would trade one divergence for another.
 
 ## 3. A compiled unhandled effect does not name the effect
 
 `tur: unhandled effect (tag 2)`, exit status 134, where the interpreter says
-`unhandled effect: Ask`. The runtime has the tag only; naming it needs the
-effect table in the emitted program (a preamble change).
+`unhandled effect: Ask`. `dk_perform` has the tag only. Tags are numbered per
+elaborated program (`effect_tag` in `emit_cps_ir.c`, reset with the CPS
+classification), so a name table the program publishes for the runtime (the way
+`__tur_any_register` publishes `any` type names) works for one translation unit,
+but in a multi-TU build the same tag can name different effects in different
+units, and a last-writer-wins table would print the wrong name. Either number
+effects program-wide (which a cross-unit handle/perform already needs to agree on)
+or key the published rows by unit.
 
 ## Also open
 

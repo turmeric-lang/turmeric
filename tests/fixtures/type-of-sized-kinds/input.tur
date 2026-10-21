@@ -1,0 +1,10 @@
+;;; `type-of` names a sized number widened to `any`.  The box's tag is the
+;;; TypeKind, which `is?` and `cast` already tell apart, but the compiled name
+;;; table had no row for the sized kinds and printed `unknown`.  A float32 is
+;;; widened as a float, so it reads `float`.
+(defn main [] : int
+  (println (type-of (:: 3i32 any)))
+  (println (type-of (:: (:: 200 uint8) any)))
+  (println (type-of (:: 7 any)))
+  (println (type-of (:: 2.5f32 any)))
+  0)

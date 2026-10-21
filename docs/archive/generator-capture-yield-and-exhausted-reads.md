@@ -30,6 +30,14 @@ parameter) stays open in
    fallbacks). The compiled read sits in the `else` of the null test because
    `tur_panic` returns when a `catch-unwind` handler is active.
 
+**Also resolved 2026-10-21** (item 2 of the narrowed report): a generator
+captured by a `fn` literal did not build. `__tur_gen_hdr_t`, the header
+`gen-next` / `gen-done?` read a generator through, was emitted with the first
+generator's functions -- after any lambda lifted from the function creating it
+-- so the lambda named an undeclared type. It is one line of the fixed preamble
+now (`emit_module.c`); snapshots and the split runtime regenerated. Pinned by
+`gen-captured-by-fn` (all three engines).
+
 The cell a generator captures is never freed (`closure_binding_escapes` treats an
 `EX_GEN` as an escape), which is safe and no worse than the generator state
 itself, which has never been freed.

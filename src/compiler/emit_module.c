@@ -15237,6 +15237,19 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_printf(out, "        case %d: return \"bool\";\n",  (int)TY_BOOL);
     buf_printf(out, "        case %d: return \"int\";\n",   (int)TY_INT);
     buf_printf(out, "        case %d: return \"float\";\n", (int)TY_FLOAT);
+    /* The sized kinds are their own tags (any_box_tag_for_type), which `is?`
+     * and `cast` already tell apart, but `type-of` printed `unknown` for them
+     * (type-forms-gaps item 3).  int64 / float64 are aliases of int / float. */
+    buf_printf(out, "        case %d: return \"int\";\n",     (int)TY_INT64);
+    buf_printf(out, "        case %d: return \"float\";\n",   (int)TY_FLOAT64);
+    buf_printf(out, "        case %d: return \"int8\";\n",    (int)TY_INT8);
+    buf_printf(out, "        case %d: return \"int16\";\n",   (int)TY_INT16);
+    buf_printf(out, "        case %d: return \"int32\";\n",   (int)TY_INT32);
+    buf_printf(out, "        case %d: return \"uint8\";\n",   (int)TY_UINT8);
+    buf_printf(out, "        case %d: return \"uint16\";\n",  (int)TY_UINT16);
+    buf_printf(out, "        case %d: return \"uint32\";\n",  (int)TY_UINT32);
+    buf_printf(out, "        case %d: return \"uint64\";\n",  (int)TY_UINT64);
+    buf_printf(out, "        case %d: return \"float32\";\n", (int)TY_FLOAT32);
     buf_printf(out, "        case %d: return \"cstr\";\n",  (int)TY_CSTR);
     buf_printf(out, "        case %d: return \"ptr\";\n",   (int)TY_PTR_VOID);
     buf_printf(out, "        case %d: return \"struct\";\n", (int)TY_STRUCT);
@@ -15394,6 +15407,13 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    tur_existential_t *rec = (tur_existential_t *)value;\n");
     buf_puts(out, "    if (rec) free((void *)(intptr_t)rec->value);\n");
     buf_puts(out, "}\n");
+    /* The header every generator state struct starts with: `gen-next` and
+     * `gen-done?` read a generator through it.  It used to be emitted with the
+     * first generator's functions, which land just ahead of the function that
+     * creates it -- after any lambda lifted from that function, so a `fn` that
+     * drives a captured generator named an undeclared type
+     * (generator-forms-gaps item 2).  One fixed line here has no order. */
+    buf_puts(out, "typedef struct { int32_t __state; void *(*__next_fn)(void *); } __tur_gen_hdr_t;\n");
     /* Inline STM runtime - TL2 (Transactional Locking II) */
     buf_puts(out, "/* STM types (TL2) */\n");
     buf_puts(out, "typedef void *(*stm_fn_t)(void *env);\n");
@@ -15559,8 +15579,12 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    __stm_ensure_init();\n");
     buf_puts(out, "    tx->read_stamp = TUR_ATOMIC_LOAD_U64(&__stm_state.version_clock, __ATOMIC_ACQUIRE);\n");
     buf_puts(out, "}\n");
-    /* Park until a bucket covering the read set commits (global cond + filter). */
-    buf_puts(out, "static void __tur_stm_park(STM_Transaction *tx) {\n");
+    /* Park until a bucket covering the read set commits (global cond + filter).
+     * False when the transaction read no TVar: no commit by another thread can
+     * wake it, so waiting would return at once and the retry loop would spin
+     * forever.  It panics with the interpreter's message, and the caller
+     * abandons the transaction (stm-forms-gaps item 2). */
+    buf_puts(out, "static bool __tur_stm_park(STM_Transaction *tx) {\n");
     buf_puts(out, "    unsigned idxs[256]; uint64_t seqs[256]; int n = 0;\n");
     buf_puts(out, "    for (int i = 0; i < tx->read_count; i++) {\n");
     buf_puts(out, "        unsigned bi = __stm_bucket_idx(tx->read_set[i]);\n");
@@ -15568,7 +15592,10 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "        for (int j = 0; j < n; j++) { if (idxs[j] == bi) { seen = 1; break; } }\n");
     buf_puts(out, "        if (!seen) { idxs[n] = bi; seqs[n] = TUR_ATOMIC_LOAD_U64(&__stm_state.lock_buckets[bi].commit_seq, __ATOMIC_ACQUIRE); n++; }\n");
     buf_puts(out, "    }\n");
-    buf_puts(out, "    if (n == 0) return;\n");
+    buf_puts(out, "    if (n == 0) {\n");
+    buf_puts(out, "        tur_panic(\"atomically: transaction requested retry with no way to make progress (it read no TVar, so no commit by another thread can wake it)\");\n");
+    buf_puts(out, "        return false;\n");
+    buf_puts(out, "    }\n");
     buf_puts(out, "    pthread_mutex_lock(&__stm_state.retry_lock);\n");
     buf_puts(out, "    for (;;) {\n");
     buf_puts(out, "        int advanced = 0;\n");
@@ -15579,6 +15606,7 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "        pthread_cond_wait(&__stm_state.retry_cond, &__stm_state.retry_lock);\n");
     buf_puts(out, "    }\n");
     buf_puts(out, "    pthread_mutex_unlock(&__stm_state.retry_lock);\n");
+    buf_puts(out, "    return true;\n");
     buf_puts(out, "}\n");
     buf_printf(out, "%svoid *tur_atomically(void *(*fn)(void *), void *env) {\n", rt_fn);
     buf_puts(out, "    STM_Transaction *tx = tur_stm_new_transaction();\n");
@@ -15593,7 +15621,7 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "        fn(env);\n");
     buf_puts(out, "        if (tx->retry_requested) {\n");
     buf_puts(out, "            tur_stm_set_current_tx(prev);\n");
-    buf_puts(out, "            __tur_stm_park(tx);\n");
+    buf_puts(out, "            if (!__tur_stm_park(tx)) { free(tx); return NULL; }\n");
     buf_puts(out, "            continue;\n");
     buf_puts(out, "        }\n");
     buf_puts(out, "        if (tx->aborted) {\n");
@@ -20027,7 +20055,6 @@ static int emit_program_inner(Buf *out, const Expr *program) {
     ctx.n_gen_struct_bindings = 0;
     ctx.gen_var_name = NULL;
     ctx.gen_struct_type = NULL;
-    ctx.gen_hdr_emitted = false;
     gs_reset_group_registry();
     tcg_reset_group_registry();
     ctx.abi_specializations = NULL;
@@ -23030,7 +23057,6 @@ static int emit_implementation_inner(Buf *out, const char *module_name, const Ex
     ctx.n_gen_struct_bindings = 0;
     ctx.gen_var_name = NULL;
     ctx.gen_struct_type = NULL;
-    ctx.gen_hdr_emitted = false;
     gs_reset_group_registry();
     tcg_reset_group_registry();
     ctx.abi_specializations = NULL;

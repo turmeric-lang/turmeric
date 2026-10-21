@@ -1,6 +1,6 @@
-# The continuation forms: `shift0` is `shift`, a bare compiled `shift` has no reset to find, and a serial continuation cannot be saved when interpreted
+# The continuation forms: `shift0` is `shift`, a compiled `shift` is delimited by the root, and a serial continuation cannot be saved when interpreted
 
-**Severity: low-medium.** Found 2026-10-19 checking the examples for the
+**Severity: medium** (item 2 is a silent wrong answer). Found 2026-10-19 checking the examples for the
 continuation forms' API reference (`stdlib/forms/continuations.tur`).
 
 **Narrowed 2026-10-21.** Two abortive resets plus a capture, a float through an
@@ -33,7 +33,7 @@ prompt (the continuation after `P`, not the captured slice with a `done` tail), 
 the nested-run model of `k->body(env, sub)` would then deliver that context's
 result twice; it needs a design pass, not a patch.
 
-## 2. A `shift` with no `reset` around it is not diagnosed when compiled (decision)
+## 2. A compiled `shift` delimited by the root: a bare `shift` is not diagnosed, and a direct `reset` around a CPS callee gives a wrong answer
 
 ```turmeric
 (defn h [] : int (+ 1 (shift (fn [v : int] (* 2 v)) 3)))
@@ -44,16 +44,38 @@ result twice; it needs a design pass, not a patch.
 ```
 
 `tur run` prints `6` and then exits with **status 6**: the second `(h)` has no
-reset, `dk_run_impl` takes the root prompt as the delimiter (`to_root`, on
-purpose: `call/cc` and `escape` rely on the implicit root prompt), and the
-receiver's value becomes the process's exit code. Without the first line the same
-`(println (h))` prints 42 for `(* 2 21)` and the program continues. `tur
---interpret` stops with `shift used outside of any reset boundary`.
+reset, and `dk_run_impl` (`src/compiler/emit_dk_runtime.c`), finding no prompt
+with the reset tag, delimits the shift at the root (`to_root`) -- so the
+receiver's value becomes `h`'s entry's result, here `main`'s, and the exit code.
+`tur --interpret` stops with `shift used outside of any reset boundary`.
 
-Decision: is a bare `shift` an error (the interpreter) or captures to the root (the
-compiled program)? Making it an error compiled means a runtime check in the DK
-machine (a preamble change: it regenerates the snapshots) or a static check that
-no call path reaches a `shift` without a `reset`.
+The same root capture is what makes a *direct-emitted* reset work around a CPS
+callee, and it is wrong there in a non-tail position. When `main` is evicted to
+the direct emitter (a `catch-unwind` in it is enough), `(reset (h))` has no
+lexical `shift`, so it pushes no setjmp context (`tur_cur_shift_reset`); `h`'s
+shift delimits at `h`'s own entry instead:
+
+```turmeric
+(defn main [] : int
+  (println (reset (h)))           ; 6 compiled, 6 interpreted
+  (println (reset (+ 10 (h))))    ; 16 compiled, 6 interpreted
+  (let [r (catch-unwind (fn [] : int 0))] (println (err? r)))
+  0)
+```
+
+The abortive shift should discard `(+ 10 _)` along with `(+ 1 _)`; compiled, only
+the part inside `h` is discarded. A silent wrong answer.
+
+**Tried 2026-10-21 and reverted:** a panic in `dk_run_impl` when a reset-tag shift
+reaches the root with no `tur_cur_shift_reset` live. It turned the working
+`(reset (h))` above into a panic, because the direct reset over a call never
+pushes that context.
+
+Fix: a direct-emitted `reset` whose body can reach a CPS function's `shift` has to
+be a real delimiter for it -- either push a DK prompt (enter the body through the
+DK machine) or always install the setjmp landing and have the root-reaching shift
+longjmp to it. With that in place, a shift that still reaches the root has no
+reset around it and can be the interpreter's error.
 
 ## 3. `call/cc`'s one-shot rule is only checked for `^linear`
 

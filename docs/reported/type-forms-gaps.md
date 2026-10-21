@@ -60,7 +60,7 @@ functions and enforce it.
   C compiler. A narrower rule (a `set!` through the borrow) is the way in.
 - (The guide's `(@ r)` spelling is fixed: it is `@r` and `(set! @r v)`.)
 
-## 3. `any` and sized numbers: `type-of` says `unknown`, and the engines disagree
+## 3. `any` and sized numbers: the engines disagree
 
 ```turmeric
 (defn main [] : int
@@ -71,9 +71,11 @@ functions and enforce it.
   0)
 ```
 
-Compiled: `unknown`, `true`, `false`, `true`. Interpreted: `int`, `false`, `true`,
-`false`. The interpreter has one `int` and one `float`. Compiled, `type-of` has no
-name for a sized kind (`unknown`), though `is?` and `cast` do distinguish them. And
+Compiled: `int32`, `true`, `false`, `true`. Interpreted: `int`, `false`, `true`,
+`false`. The interpreter has one `int` and one `float`. (Compiled `type-of` said
+`unknown` for a sized kind until 2026-10-21: the name table had no rows for them;
+pinned by `type-of-sized-kinds`. A `float32` is widened as a float, so it reads
+`float` on both.) And
 `(is? (:: (Some 3) any) (Option float))` is `false` compiled and `true` interpreted
 (archived `any-narrowing-broken-for-parametric-receivers` records the
 interpreter's side as a deliberate limit).
@@ -130,9 +132,7 @@ Two packed values of different machine types (`int`, `cstr`) work on both.
 1. Decide whether a `forall` argument is trusted or checked (migrating the
    fixtures), and whether `&mut` of a non-`^mut` local is an error (a `set!` through
    the borrow is the narrow form).
-2. Name sized kinds in `type-of` (the table is `emit_any_type_name_table` in
-   `emit_module.c`; it changes every program that uses `any`, so it regenerates the
-   snapshots) and make `is?`/`cast` agree between engines or document the interpreter
-   limit.
+2. Make `is?`/`cast` on sized kinds agree between engines, or document the
+   interpreter's single `int` / `float` as the limit.
 3. Give `coerce` the result type of the proof, or document it as an assertion.
 4. Make `type-app` work in a type position or retire it.

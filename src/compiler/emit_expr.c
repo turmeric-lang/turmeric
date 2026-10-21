@@ -6204,12 +6204,6 @@ static void emit_gen_functions(EmitCtx *ctx, const GenDef *def) {
      * before the function that creates them (emit_fn_def drains this buffer). */
     Buf *out = ctx->pending_handler_fns ? ctx->pending_handler_fns : ctx->file;
 
-    /* Emit common gen header typedef once per compilation unit */
-    if (!ctx->gen_hdr_emitted) {
-        buf_puts(out, "typedef struct { int32_t __state; void *(*__next_fn)(void *); } __tur_gen_hdr_t;\n");
-        ctx->gen_hdr_emitted = true;
-    }
-
     /* Struct typedef: __state, __next_fn, then all struct_binding fields */
     buf_printf(out, "typedef struct { int32_t __state; void *(*__next_fn)(void *);");
     for (uint32_t i = 0; i < def->n_struct_bindings; i++) {
@@ -17762,24 +17756,11 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
             ctx->indent += 4;
             indent_buf(body, ctx->indent);
             buf_puts(body, "tur_stm_set_current_tx(__prev_tx);\n");
-            /* A transaction that read no TVar can never be woken: no commit by
-             * another thread touches anything it depends on, so parking would
-             * return at once and the loop would spin forever.  The interpreter
-             * stops with the same message. */
+            /* __tur_stm_park is false for a transaction that read no TVar --
+             * nothing could ever wake it -- after it has panicked (the
+             * interpreter's message); the attempt is abandoned. */
             indent_buf(body, ctx->indent);
-            buf_puts(body, "if (__tx->read_count == 0) {\n");
-            ctx->indent += 4;
-            indent_buf(body, ctx->indent);
-            buf_puts(body, "tur_panic(\"atomically: transaction requested retry with no way to make progress (it read no TVar, so no commit by another thread can wake it)\");\n");
-            indent_buf(body, ctx->indent);
-            buf_puts(body, "free(__tx);\n");
-            indent_buf(body, ctx->indent);
-            buf_puts(body, "break;\n");
-            ctx->indent -= 4;
-            indent_buf(body, ctx->indent);
-            buf_puts(body, "}\n");
-            indent_buf(body, ctx->indent);
-            buf_puts(body, "__tur_stm_park(__tx);\n");
+            buf_puts(body, "if (!__tur_stm_park(__tx)) { free(__tx); break; }\n");
             indent_buf(body, ctx->indent);
             buf_puts(body, "continue;\n");
             ctx->indent -= 4;
