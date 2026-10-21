@@ -533,7 +533,19 @@ target_compile_definitions(tur_core PRIVATE TUR_VERSION="${_TUR_VERSION_STR}")
 # ---------------------------------------------------------------------------
 # tur: main compiler executable
 # ---------------------------------------------------------------------------
-add_executable(tur main.c lsp/mcp.c $<TARGET_OBJECTS:tur_core>)
+# The compiler driver: the `tur` subcommands, the pass pipeline, the cc
+# invocation and autolink, and the split-build caches (main-c-split-plan).
+# These belong to the executable, NOT tur_core: they call system(), fork(),
+# the cc toolchain and the JIT engine, and tur_core's eighteen consumers --
+# libturi_wasm among them -- must not link any of that.  Listing them here
+# also gives them the executable's own definitions (TUR_VERSION,
+# TUR_HAVE_JIT, TURI_HAVE_EDITLINE) with no extra work.  driver/driver.h
+# and driver/commands.h declare what crosses between them;
+# tests/check-driver-headers.py checks each header section against the
+# file it names.
+set(TUR_DRIVER_SOURCES
+)
+add_executable(tur main.c lsp/mcp.c ${TUR_DRIVER_SOURCES} $<TARGET_OBJECTS:tur_core>)
 
 # J1 (jit-engine-plan): the in-process MIR JIT engine behind `tur jit`.
 # Only under -DTUR_JIT=ON: vendors MIR (cmake/mir.cmake, included by the
