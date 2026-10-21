@@ -2675,17 +2675,16 @@ static void emit_registered_adt_app_rec(Buf *out, uint32_t idx) {
          * typedef + field-read sites. */
         if (app_heap) {
             /* RM3 R2 (docs/archive/regions-plan.md): the spine node, at the
-             * MONOMORPH ctor.  Its sibling is the base ctor in emit_module.c
-             * (`emit_adt_typedef_and_ctors`) -- the two mirror each other and a
-             * change to one belongs in both.  That is not a general caution: it
-             * is what happened here.  The first R2 pass changed only the base
-             * emitter, and `ctor_Cons_Cons__int` -- the ctor the leak sweep
-             * actually blames -- kept its plain malloc, which the reclamation
-             * plan's own standing habit predicts ("when a representation change
-             * lands in a ctor or temp emitter, grep for the other emitter
-             * before calling it done").
-             *
-             * Gated, so a default build emits the identical malloc. */
+             * MONOMORPH ctor.  Its siblings are the base ctor in emit_module.c
+             * (`emit_adt_typedef_and_ctors`) and the non-parametric base ctor
+             * in emit_program_inner -- the three mirror each other and a
+             * change to one belongs in all three.  That is not a general
+             * caution: it is what happened here.  The first R2 pass changed
+             * only the base emitter, and `ctor_Cons_Cons__int` -- the ctor the
+             * leak sweep actually blames -- kept its plain malloc, which the
+             * reclamation plan's own standing habit predicts ("when a
+             * representation change lands in a ctor or temp emitter, grep for
+             * the other emitter before calling it done"). */
             buf_printf(out, "    %s *__r = (%s *)%s(sizeof(%s));\n",
                        adt_inst_name, adt_inst_name,
                        region_alloc_fn(),

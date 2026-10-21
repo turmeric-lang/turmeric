@@ -12127,19 +12127,17 @@ static void emit_adt_typedef_and_ctors(Buf *out, const AdtDef *def,
              * A `:heap` ADT's monomorph ctor mallocs one per link, and it is
              * the allocation RM1 cannot reach (it escapes its constructor by
              * construction) and RM2 cannot own (a persistent tail is shared).
-             * Route it to the innermost open generation when regions are
-             * enabled; `tur_region_alloc_or_malloc` falls back to malloc when
-             * none is open, so the SAME emitted ctor works inside and outside
-             * a region and R2 needs no branch here.
+             * Route it to the innermost open generation;
+             * `tur_region_alloc_or_malloc` falls back to malloc when none is
+             * open, so the SAME emitted ctor works inside and outside a region
+             * and R2 needs no branch here.
              *
-             * Gated: a default build emits the identical `malloc` it always
-             * has, so this changes no byte of the default path.
-             *
-             * Its sibling is the MONOMORPH ctor in types.c (search RM3 R2
-             * there); the two mirror each other and a change to one belongs in
-             * both.  Changing only this one is what the first R2 pass did, and
-             * the monomorph ctor -- which is the one the leak sweep blames --
-             * kept its plain malloc. */
+             * Its siblings are the MONOMORPH ctor in types.c (search RM3 R2
+             * there) and the non-parametric base ctor in emit_program_inner;
+             * the three mirror each other and a change to one belongs in all
+             * three.  Changing only this one is what the first R2 pass did,
+             * and the monomorph ctor -- which is the one the leak sweep blames
+             * -- kept its plain malloc. */
             buf_printf(out, "    %s *__r = (%s *)%s(sizeof(%s));\n",
                        adt_c_name, adt_c_name,
                        region_alloc_fn(),
@@ -12295,19 +12293,60 @@ static bool adt_is_inline_byval_dep(const Expr **items, uint32_t n_items,
  *
  * src/runtime/{region,arena}.{h,c} are embedded into the compiler at build
  * time (cmake/embed_region_runtime.cmake -> region_rt_embed.h) and pasted
- * verbatim.  The one transform is dropping each source's LOCAL `#include
- * "..."` line: the emitter pastes those headers itself, in order, ahead of
- * the bodies, and a `cc` of the emitted TU has no src/runtime on its include
- * path to find them.  System includes stay -- they are what the bodies were
- * written against, and repeating a system header is harmless. */
+ * with two transforms.  Each source's LOCAL `#include "..."` line is dropped:
+ * the emitter pastes those headers itself, in order, ahead of the bodies, and
+ * a `cc` of the emitted TU has no src/runtime on its include path to find
+ * them.  System includes stay -- they are what the bodies were written
+ * against, and repeating a system header is harmless.  And every comment is
+ * stripped (stale-comments-regions, item 13): the sources' prose used to ride
+ * into every emitted program, so a comment edit in region.h cost all 157
+ * expected.c snapshots and a split-hash regen, which is how comments that
+ * predated graduation survived it.  Line breaks are kept, so the pasted
+ * text's line numbers still match the source's. */
 #include "runtime/region_rt_embed.h"
 #include "runtime/experiments.h"   /* experiment_warn_if_used */
 #include "runtime/stack_overflow.h" /* the deep stack's overflow test + message, shared with the JIT */
 
+/* Copy `src` into `out` without its block and line comments.  String and
+ * character literals are passed through untouched (a comment opener inside
+ * one is text), `#` directives are ordinary lines, and the newlines inside a
+ * block comment are kept so the line count does not move. */
+static void buf_write_without_c_comments(Buf *out, const char *src) {
+    const char *p = src;
+    while (*p) {
+        char c = *p;
+        if (c == '"' || c == '\'') {
+            const char *q = p + 1;
+            while (*q && *q != c) {
+                if (*q == '\\' && q[1]) q++;
+                q++;
+            }
+            if (*q) q++;
+            buf_write(out, p, (size_t)(q - p));
+            p = q;
+        } else if (c == '/' && p[1] == '*') {
+            const char *q = strstr(p + 2, "*/");
+            const char *end = q ? q + 2 : p + strlen(p);
+            for (const char *r = p; r < end; r++)
+                if (*r == '\n') buf_putc(out, '\n');
+            p = end;
+        } else if (c == '/' && p[1] == '/') {
+            const char *q = strchr(p, '\n');
+            p = q ? q : p + strlen(p);
+        } else {
+            buf_putc(out, c);
+            p++;
+        }
+    }
+}
+
 static void emit_embedded_runtime_source(Buf *out, const char *what,
                                          const unsigned char *src) {
-    buf_printf(out, "/* ---- begin src/runtime/%s (embedded verbatim) ---- */\n", what);
-    const char *p = (const char *)src;
+    buf_printf(out, "/* ---- begin src/runtime/%s (embedded; comments stripped) ---- */\n", what);
+    Buf stripped; buf_init(&stripped);
+    buf_write_without_c_comments(&stripped, (const char *)src);
+    buf_putc(&stripped, '\0');
+    const char *p = stripped.data;
     while (*p) {
         const char *nl = strchr(p, '\n');
         size_t len = nl ? (size_t)(nl - p) + 1 : strlen(p);
@@ -12318,7 +12357,8 @@ static void emit_embedded_runtime_source(Buf *out, const char *what,
         }
         p += len;
     }
-    if (p != (const char *)src && p[-1] != '\n') buf_putc(out, '\n');
+    if (p != stripped.data && p[-1] != '\n') buf_putc(out, '\n');
+    buf_free(&stripped);
     buf_printf(out, "/* ---- end src/runtime/%s ---- */\n", what);
 }
 
@@ -20336,13 +20376,13 @@ static int emit_program_inner(Buf *out, const Expr *program) {
                      * calling malloc while both of the other two routed.
                      *
                      * Found because R4's fixture measured the SAVING rather
-                     * than asserting the routing: valgrind reported 913 blocks
-                     * live with the flag on against 909 with it off, so the
-                     * region was pushed, popped, and never allocated into.  The
-                     * SR3 slice-A note a few lines below records this exact
-                     * miss at this exact site, one representation change
-                     * earlier.  All three emitters mirror each other; a change
-                     * to one belongs in all three. */
+                     * than asserting the routing (the valgrind counts are in
+                     * docs/archive/regions-plan.md): the region was pushed,
+                     * popped, and never allocated into.  The SR3 slice-A note
+                     * a few lines below records this exact miss at this exact
+                     * site, one representation change earlier.  All three
+                     * emitters mirror each other; a change to one belongs in
+                     * all three. */
                     buf_printf(&early_file, "    %s *__r = (%s *)%s(sizeof(%s));\n",
                                adt_c_name, adt_c_name,
                                region_alloc_fn(),

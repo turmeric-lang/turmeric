@@ -762,11 +762,11 @@ set(TURT_RUNTIME_SOURCES
     # libc until installed; a stdlib autolink marker compiles it beside hamt.c,
     # tur_string.c and symbols.c in bare-source mode.
     runtime/rt_alloc.c
-    # RM3 regions: an emitted spine ctor calls tur_region_alloc_or_malloc when
-    # --enable=regions is on, so the definition has to be linkable by the
+    # RM3 regions: every emitted spine ctor calls tur_region_alloc_or_malloc
+    # (regions are on by default), so the definition has to be linkable by the
     # program, not only by the compiler.  Same reasoning as the rc/gc members
-    # above; with the flag off nothing references it and the linker never
-    # extracts this member.
+    # above; only a TUR_REGIONS=0 build leaves it unreferenced, and then the
+    # linker never extracts this member.
     runtime/region.c
     runtime/arena.c
     # o0-build-cannot-link-contract-handler: stdlib/contract.tur's

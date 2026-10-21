@@ -10,6 +10,13 @@ All notable changes to Turmeric are documented here.
   repeated the row's `:resolved` git SHA and nothing compared it. A lock that
   still carries one is read as if the key were absent, so `tur fetch --frozen`
   does not report an old lock as changed. Spice rows are unchanged.
+- **The region runtime is pasted into emitted programs without its
+  comments.** `region.h`, `arena.{h,c}`, `region.c` and `r7gc.c` used to
+  ride into every `tur emit-c` output prose and all; a comment edit there
+  cost every codegen snapshot and a split-hash regen. Line breaks are kept.
+  `tur_region_pop_reclaim`, which nothing in the product called, is no longer
+  part of the runtime header; `tur_region_pop_checked` is the pop that
+  rewinds.
 - **`--timings` zone `effect-lower` is now `effect-env`.** The pass only ever
   built the effect registry; the identity `effect_lower` walk it also ran is
   deleted.

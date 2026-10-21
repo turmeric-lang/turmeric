@@ -77,13 +77,13 @@ int main(void) {
     void *b = tur_region_alloc(32);
     check(b != NULL && b != a, "inner alloc is distinct");
     check(tur_region_owns(b), "owns inner allocation");
-    tur_region_pop_reclaim(d2);
+    check(tur_region_pop_checked(d2) == true, "inner pop with nothing escaped rewinds");
     check(tur_region_active(), "outer region still active after inner pop");
     check(tur_region_owns(a), "outer allocation still owned after inner pop");
 
     /* (3) a mismatched depth must be refused.  d2 is spent; popping it again
      * must not take d1's generation with it. */
-    tur_region_pop_reclaim(d2);
+    check(tur_region_pop_checked(d2) == false, "stale depth is refused");
     check(tur_region_active(), "stale depth does not pop the live generation");
     check(tur_region_owns(a), "stale depth does not reclaim the live generation");
     tur_region_pop(0);
@@ -111,7 +111,7 @@ int main(void) {
     void *inr = tur_region_alloc_or_malloc(48);
     check(inr != NULL, "alloc_or_malloc succeeds inside a region");
     check(tur_region_owns(inr), "inside a region it is region memory");
-    tur_region_pop_reclaim(d3);
+    check(tur_region_pop_checked(d3) == true, "nothing escaped: the pop rewinds");
 
     /* ---- R3: the escape check ------------------------------------------
      *

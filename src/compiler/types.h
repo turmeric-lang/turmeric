@@ -1937,8 +1937,8 @@ bool         adt_ctor_is_null_none(const struct AdtDef *def,
  * payload types whose valid values exclude 0; see the definition for why
  * `:heap`-ness is not the condition and `Cons` fails it. */
 bool         adt_app_is_niche_option(Type t);
-/* RM3: true when `--enable=regions` is on.  Warns once per compile (TUR-W0060)
- * on first consult; see docs/archive/regions-plan.md. */
+/* RM3: true unless TUR_REGIONS=0 was set when tur ran (the bisection hatch;
+ * see driver/cli.c drv_apply_env_overrides).  docs/archive/regions-plan.md. */
 bool         regions_enabled(void);
 const char  *region_free_fn(void);
 const char  *region_alloc_fn(void);

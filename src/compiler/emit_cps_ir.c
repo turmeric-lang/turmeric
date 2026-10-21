@@ -9780,9 +9780,10 @@ static void emit_term_inner(CE *ce, const CTerm *t) {
              * behave exactly like the scalar one every existing fixture covers,
              * rather than introducing a third behaviour.
              *
-             * Scoped to the one callee `emit_binding_is_region_scope` names, and
-             * that predicate is false unless `--enable=regions` is on, so no
-             * default-path routing moves.  The residual asymmetry -- a colored
+             * Scoped to the callees `emit_binding_is_region_scope` names --
+             * true for `bt-scope` and `with-region` unless TUR_REGIONS=0, so a
+             * tail call to either always takes cps->direct.  The residual
+             * asymmetry -- a colored
              * mono-template emitting CPS specs of a direct-style base -- is not
              * fixed here; it is the general shape this is a local answer to. */
             bool force_direct = region_scope_call_bracketed(t->as.tailcall.fn,

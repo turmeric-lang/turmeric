@@ -347,7 +347,7 @@ add_test(
   COMMAND "${CMAKE_BINARY_DIR}/tur_region_unit"
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
-# RM3 R2: --enable=regions with no region open must change nothing observable.
+# RM3: keep the TUR_REGIONS=0 bisection path green (see the script header).
 add_test(
   NAME tur_regions_seam
   COMMAND bash tests/run-regions-seam.sh

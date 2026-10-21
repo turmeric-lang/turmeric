@@ -418,7 +418,12 @@ TUR_RT_API void tur_region_pop(int depth) {
     while (g_live_n >= depth) retire_top();
 }
 
-TUR_RT_API void tur_region_pop_reclaim(int depth) {
+/* Pop AND rewind, unconditionally: the step tur_region_pop_checked takes once
+ * both locks have passed.  It used to be public as tur_region_pop_reclaim
+ * ("the caller asserts nothing is still reachable"); nothing in the product
+ * ever called it, and a caller's word is not the proof the safety rule asks
+ * for, so it is the checked pop's private half now. */
+static void region_pop_rewind(int depth) {
     Arena *a = detach(depth);
     if (!a) return;
     /* Rewind, do not release.  arena_reset keeps the slabs and, in a Debug
@@ -441,7 +446,7 @@ TUR_RT_API bool tur_region_pop_checked(int depth) {
         tur_region_pop(depth);       /* retire: correctness over saving */
         return false;
     }
-    tur_region_pop_reclaim(depth);
+    region_pop_rewind(depth);
     return true;
 }
 
