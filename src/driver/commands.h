@@ -74,10 +74,10 @@ int cmd_trace_dump(const char *path);
 int cmd_eval_expr(const char *expr, bool use_color);
 int cmd_repl(bool watch_mode);
 
-/* == main.c ================================================================ */
-
-/* -- moving to driver/worker.c -- */
+/* == driver/worker.c ======================================================= */
 int cmd_worker(void);
+
+/* == main.c ================================================================ */
 
 /* -- moving to driver/cmd_misc.c -- */
 int cmd_image_info(const char *path);
