@@ -56,11 +56,13 @@ int cmd_check_dir(const char *dir);
 /* -- moving to driver/jit.c -- */
 int cmd_jit(int argc, char **argv);
 
-/* -- moving to driver/cmd_format.c -- */
+/* == driver/cmd_format.c =================================================== */
 int cmd_format(const char *path, bool check_only, bool diff_mode,
                bool lang_set, ReaderType force_lang);
 int cmd_parse_check(const char *path_a, const char *path_b);
 int cmd_fmt(int argc, char **argv);
+
+/* == main.c ================================================================ */
 
 /* -- moving to driver/cmd_eval.c -- */
 int cmd_eval_inc(const char *path, bool use_color,

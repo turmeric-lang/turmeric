@@ -277,8 +277,10 @@ extern const TurSpiceJitHook g_repl_jit_hook;
 extern const TuriInlineCJitHook g_repl_inline_c_jit_hook;
 #endif
 
-/* -- moving to driver/cmd_format.c -- */
+/* == driver/cmd_format.c =================================================== */
 bool fmt_reader_from_lang_name(const char *lang, ReaderType *out);
+
+/* == main.c ================================================================ */
 
 /* -- moving to driver/cli.c -- */
 extern bool g_no_auto_spice;
