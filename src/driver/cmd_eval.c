@@ -517,9 +517,9 @@ static void trace_on_done_cb(TuriEnv *env, void *ud) {
     turi_trace_stop(ctx->trace);
 }
 
-int cmd_trace(const char *path, const char *out_path,
-              char **extra_argv, int extra_argc, uint32_t max_steps,
-              TurTraceGrain grain) {
+static int cmd_trace(const char *path, const char *out_path,
+                     char **extra_argv, int extra_argc, uint32_t max_steps,
+                     TurTraceGrain grain) {
     TraceCtx ctx;
     memset(&ctx, 0, sizeof ctx);
     ctx.opts.max_steps      = max_steps;
@@ -580,7 +580,7 @@ int cmd_trace(const char *path, const char *out_path,
  * The format is exercised by a reader before any UI depends on it, which is
  * the ordering the plan asks for: if the format is wrong, a timeline widget is
  * the expensive place to find that out. */
-int cmd_trace_dump(const char *path) {
+static int cmd_trace_dump(const char *path) {
     FILE *f = fopen(path, "rb");
     if (!f) {
         fprintf(stderr, "tur: trace: cannot read %s\n", path);
@@ -658,7 +658,7 @@ int cmd_trace_dump(const char *path) {
 }
 
 /* E3: tur eval '<expr>' — evaluate an inline expression and print result. */
-int cmd_eval_expr(const char *expr, bool use_color) {
+static int cmd_eval_expr(const char *expr, bool use_color) {
     g_interpret_mode = true;
     turi_init(use_color);
     TuriEnv *env = turi_env_new();
@@ -684,7 +684,7 @@ int cmd_eval_expr(const char *expr, bool use_color) {
     return rc;
 }
 
-int cmd_repl(bool watch_mode) {
+static int cmd_repl(bool watch_mode) {
     /* UCH0 (diagnose-unbound-call-heads-plan): the REPL is an interpreter
      * entry point -- flag it so the INT-1 reader conditional picks :turi and
      * so elab_call keeps the runtime-native dispatch fallback (UCH1). */
@@ -718,4 +718,260 @@ int cmd_repl(bool watch_mode) {
     }
 
     return turi_repl_run(watch_mode);
+}
+
+/* -------------------------------------------------------------------------
+ * Entry points: the command table in cli.c runs these for `tur <command>`.
+ * ---------------------------------------------------------------------- */
+
+/* The interpreter arms (`tur --interpret`, `tur debug`): collect the `-I`
+ * flags that come BEFORE the file path, starting at argv[start].  Everything
+ * after the path is the program's *args*, untouched -- a `-I` there belongs to
+ * the program.  Returns the index of the file path (argc when there is none),
+ * or -1 after reporting a bare trailing `-I`.  *out_dirs is malloc'd (caller
+ * frees); its strings are borrowed from argv. */
+static int interp_leading_include_flags(int argc, char **argv, int start,
+                                        char ***out_dirs, int *n_out) {
+    *out_dirs = NULL;
+    *n_out = 0;
+    int i = start;
+    while (i < argc) {
+        int consumed = 0;
+        if (!drv_is_include_flag(argc, argv, i, &consumed)) {
+            if (strcmp(argv[i], "-I") == 0) {
+                free(*out_dirs);
+                *out_dirs = NULL;
+                *n_out = 0;
+                fprintf(stderr, "tur: -I requires a directory argument\n");
+                return -1;
+            }
+            break;
+        }
+        char **bigger = (char **)realloc(*out_dirs,
+                                         (size_t)(*n_out + 1) * sizeof(char *));
+        if (!bigger) break;
+        *out_dirs = bigger;
+        (*out_dirs)[(*n_out)++] = consumed == 2 ? argv[i + 1] : argv[i] + 2;
+        i += consumed;
+    }
+    return i;
+}
+
+/* Track T1: record an interpreted run, or read a recording back. */
+int cmd_trace_main(int argc, char **argv) {
+    const char *file = NULL, *out_path = NULL;
+    uint32_t    max_steps = 0;
+    bool        dump = false;
+    TurTraceGrain grain = TUR_TRACE_GRAIN_NODE;
+    char      **prog_argv = NULL;
+    int         prog_argc = 0;
+    for (int i = 2; i < argc; i++) {
+        if (strcmp(argv[i], "--dump") == 0) { dump = true; continue; }
+        if (strcmp(argv[i], "-o") == 0 && i + 1 < argc) {
+            out_path = argv[++i];
+            continue;
+        }
+        if (strncmp(argv[i], "--max-steps=", 12) == 0) {
+            max_steps = (uint32_t)strtoul(argv[i] + 12, NULL, 10);
+            continue;
+        }
+        /* The old granularity, for a program too big to record per
+         * expression under the cap.  Not the default: see TurTraceGrain. */
+        if (strcmp(argv[i], "--lines") == 0) {
+            grain = TUR_TRACE_GRAIN_LINE; continue;
+        }
+        if (!file) { file = argv[i]; continue; }
+        /* Everything after the program is the program's own argv. */
+        prog_argv = &argv[i];
+        prog_argc = argc - i;
+        break;
+    }
+    if (!file) {
+        fprintf(stderr,
+            "usage: tur trace <file.tur> [-o out.turtrace] "
+            "[--max-steps=N] [--lines] [-- args...]\n"
+            "       tur trace --dump <file.turtrace>\n"
+            "\n"
+            "  A step is one expression.  --lines records one step per\n"
+            "  source line instead, which is coarser: nested calls on one\n"
+            "  line collapse into a single step.\n");
+        return 1;
+    }
+    if (dump) return cmd_trace_dump(file);
+    return cmd_trace(file, out_path, prog_argv, prog_argc, max_steps, grain);
+}
+
+int cmd_repl_main(int argc, char **argv) {
+    /* Phase S0: interactive REPL.
+     * RP6: --watch enables auto-reload between prompts when a
+     * spice source file changes mtime. No background thread --
+     * the freshness check runs synchronously each turn. */
+    bool watch_mode = false;
+    const char *repl_engine_flag = NULL;
+    /* saffron-lang-plan S8: start the session in a dialect, rather than
+     * making the user type `#lang saffron` as their first line.  Both
+     * routes land on the same env switch. */
+    const char *repl_lang_flag = NULL;
+    for (int i = 2; i < argc; i++) {
+        if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
+            return usage_repl();
+        }
+        if (strcmp(argv[i], "--watch") == 0) {
+            watch_mode = true;
+            continue;
+        }
+        if (strcmp(argv[i], "--lang") == 0 && i + 1 < argc) {
+            repl_lang_flag = argv[++i];
+            continue;
+        }
+        if (strncmp(argv[i], "--lang=", 7) == 0) {
+            repl_lang_flag = argv[i] + 7;
+            continue;
+        }
+        if (strcmp(argv[i], "--engine") == 0 && i + 1 < argc) {
+            repl_engine_flag = argv[++i];
+            continue;
+        }
+        if (strncmp(argv[i], "--engine=", 9) == 0) {
+            repl_engine_flag = argv[i] + 9;
+            continue;
+        }
+        fprintf(stderr, "tur repl: unknown option '%s'\n", argv[i]);
+        return drv_usage_error(usage_repl);
+    }
+    /* J2 (jit-engine-plan 3.3): spice auto-discovery can build in process
+     * through the MIR engine instead of the `tur build --shared`
+     * subprocess + dlopen.  This used to hang off `--enable=jit`; that
+     * experiment graduated 2026-08-17, so it hangs off ENGINE SELECTION
+     * now -- `--engine jit`, `TUR_ENGINE=jit`, or `:engine "jit"` in the
+     * enclosing build.tur, the same ladder `tur run` resolves.
+     *
+     * Graduating the experiment deliberately did NOT make this the
+     * default: unset, the engine resolves to "cc" and the subprocess path
+     * is byte-for-byte what it was. */
+    {
+        const char *eng = drv_resolve_engine(".", repl_engine_flag);
+        if (!eng) return 2;    /* TUR-E0311 already printed */
+        if (strcmp(eng, "jit") == 0) {
+#ifdef TUR_HAVE_JIT
+            tur_spice_set_jit_hook(&g_repl_jit_hook);
+#else
+            fprintf(stderr,
+                    "tur repl: engine \"jit\" is configured, but this "
+                    "build carries no JIT engine\n"
+                    "     reconfigure with -DTUR_JIT=ON (the default on "
+                    "64-bit x86-64/arm64),\n"
+                    "     or override the engine: --engine cc / "
+                    "TUR_ENGINE=cc\n");
+            return 2;
+#endif
+        }
+    }
+    /* Validated HERE rather than inside cmd_repl, so a typo is a usage
+     * error before the banner prints and the stdlib preloads. */
+    if (repl_lang_flag) {
+        /* r7rs-lang-plan R9: any base `tur dialects` lists, resolved
+         * through the same table the `#lang` line uses -- it was a
+         * hard-coded "turmeric"/"saffron" pair, so `--lang r7rs` was
+         * refused. */
+        LangDialect ld;
+        ReaderType lr;
+        if (!lang_base_lookup(repl_lang_flag, strlen(repl_lang_flag), &ld, &lr)) {
+            fprintf(stderr,
+                    "tur repl: unknown --lang '%s' "
+                    "(expected a base `tur dialects` lists, e.g. "
+                    "\"turmeric\", \"saffron\" or \"r7rs\")\n",
+                    repl_lang_flag);
+            return drv_usage_error(usage_repl);
+        }
+        g_repl_start_lang = repl_lang_flag;
+    }
+    return cmd_repl(watch_mode);
+}
+
+int cmd_interpret_main(int argc, char **argv) {
+    /* The name the error below reports: `interpret` for any spelling the
+     * command table resolved, `--interpret` for that one. */
+    const char *cmd = strcmp(argv[1], "--interpret") == 0 ? "--interpret"
+                                                       : "interpret";
+    char **inc = NULL;
+    int    n_inc = 0;
+    int    fi = interp_leading_include_flags(argc, argv, 2, &inc, &n_inc);
+    if (fi < 0) return 2;
+    if (fi >= argc) {
+        free(inc);
+        fprintf(stderr, "tur: %s requires a file argument\n", cmd);
+        return drv_usage();
+    }
+    int rc = cmd_eval_inc(argv[fi], !g_no_color && stderr_is_tty(),
+                          inc, n_inc, argv + fi + 1, argc - fi - 1,
+                          /*debug=*/false);
+    free(inc);
+    return rc;
+}
+
+/* Debugger Phase 2: `tur debug <file.tur> [args...]` -- run a file through
+ * the tree-walking interpreter under the interactive debugger.  Drops into
+ * a command REPL at program entry; commands are read from stdin (so a
+ * script can drive it).  See docs/archive/history/debugger-plan.md (Phase 2). */
+int cmd_debug_main(int argc, char **argv) {
+    if (argc < 3 || strcmp(argv[2], "--help") == 0 || strcmp(argv[2], "-h") == 0) {
+        fprintf(stderr,
+            "usage:\n  tur debug <file.tur> [args...]\n"
+            "\nDrops into an interactive debugger (break/step/next/finish/\n"
+            "backtrace/locals/print/list/continue). Type 'help' at the\n"
+            "(tur-dbg) prompt for the full command list.\n");
+        return argc < 3 ? 1 : 0;
+    }
+    char **inc = NULL;
+    int    n_inc = 0;
+    int    fi = interp_leading_include_flags(argc, argv, 2, &inc, &n_inc);
+    if (fi < 0) return 2;
+    if (fi >= argc) {
+        free(inc);
+        fprintf(stderr, "tur: debug requires a file argument\n");
+        return 1;
+    }
+    int rc = cmd_eval_inc(argv[fi], !g_no_color && stderr_is_tty(),
+                          inc, n_inc, argv + fi + 1, argc - fi - 1,
+                          /*debug=*/true);
+    free(inc);
+    return rc;
+}
+
+/* E3: tur eval '<expr>' or tur eval --file <file> */
+int cmd_eval_main(int argc, char **argv) {
+    if (argc < 3) return drv_usage_error(usage_eval);
+    bool is_file = false;
+    const char *src = NULL;
+    for (int i = 2; i < argc; i++) {
+        if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0)
+            return usage_eval();
+        int consumed = 0;
+        if (drv_is_include_flag(argc, argv, i, &consumed)) {
+            i += consumed - 1;
+            continue;
+        }
+        if (strcmp(argv[i], "--file") == 0 && i + 1 < argc) {
+            is_file = true;
+            src = argv[++i];
+        } else if (argv[i][0] != '-') {
+            src = argv[i];
+        }
+    }
+    if (!src) return drv_usage_error(usage_eval);
+    bool use_color = !g_no_color && stderr_is_tty();
+    if (is_file) {
+        char **inc = NULL;
+        int    n_inc = drv_parse_include_flags(argc, argv, 2, &inc);
+        if (n_inc < 0) {
+            fprintf(stderr, "tur: -I requires a directory argument\n");
+            return 2;
+        }
+        int rc = cmd_eval_inc(src, use_color, inc, n_inc, NULL, 0,
+                              /*debug=*/false);
+        free(inc);
+        return rc;
+    }
+    return cmd_eval_expr(src, use_color);
 }

@@ -535,3 +535,181 @@ static int cmd_build_once(const char *input, const char *out_path,
     }
     return link_rc;
 }
+
+/* -------------------------------------------------------------------------
+ * Entry points: the command table in cli.c runs these for `tur <command>`.
+ * ---------------------------------------------------------------------- */
+
+int cmd_build_main(int argc, char **argv) {
+    const char *input = NULL;
+    const char *out = NULL;
+    const char *build_target = NULL;
+    bool        shared = false;  /* RP0: --shared selects shared-library build */
+    const char *manifest_out = NULL; /* RP1: --manifest <path> override */
+    const char *cli_build_dir = NULL; /* build-output-directory-plan: --build-dir/-B */
+    /* tur-link-and-build-split-plan Phase 3b/4: opt in to the compile+link
+     * split for a single-file build.  Default stays the monolithic `cc`
+     * call so output is byte-identical until the split is proven; the two
+     * flags let a build force either path during rollout. */
+    int split_build = 0;  /* 0 = default(monolithic), 1 = split, -1 = forced monolithic */
+    /* SC1: collect -I flags once via the shared helper, then walk argv
+     * a second time for the build-specific flags (`-o`, `--target`)
+     * and the positional input. */
+    char  **build_inc = NULL;
+    int     n_build_inc = drv_parse_include_flags(argc, argv, 2, &build_inc);
+    if (n_build_inc < 0) { free(build_inc); return drv_usage_error(usage_build); }
+    for (int i = 2; i < argc; i++) {
+        int c;
+        if (drv_is_include_flag(argc, argv, i, &c)) { i += c - 1; continue; }
+        if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
+            free(build_inc); return usage_build();
+        } else if (strcmp(argv[i], "-o") == 0 && i + 1 < argc) {
+            out = argv[++i];
+        } else if (strcmp(argv[i], "--shared") == 0) {
+            shared = true;
+        } else if (strcmp(argv[i], "--bundle-deps") == 0) {
+            g_build_bundle_deps = true;
+        } else if (strcmp(argv[i], "--release") == 0) {
+            g_cc_release = true;
+        } else if (strcmp(argv[i], "--split-build") == 0) {
+            split_build = 1;
+        } else if (strcmp(argv[i], "--no-split-build") == 0) {
+            split_build = -1;
+        } else if (strncmp(argv[i], "--runtime=", 10) == 0 ||
+                   (strcmp(argv[i], "--runtime") == 0 && i + 1 < argc)) {
+            const char *mode = argv[i][9] == '=' ? argv[i] + 10 : argv[++i];
+            if (strcmp(mode, "lib") == 0) g_runtime_mode = TUR_RT_LIB;
+            else if (strcmp(mode, "source") == 0) g_runtime_mode = TUR_RT_SOURCE;
+            else if (strcmp(mode, "auto") == 0) g_runtime_mode = TUR_RT_AUTO;
+            else if (strcmp(mode, "split") == 0) g_runtime_mode = TUR_RT_SPLIT;
+            else {
+                fprintf(stderr, "tur build: unknown --runtime '%s' "
+                        "(supported: auto, lib, source, split)\n", mode);
+                free(build_inc); return 1;
+            }
+        } else if (strcmp(argv[i], "--no-abi-cache") == 0) {
+            /* J6: consumed globally by parse_no_abi_cache; no-op here. */
+        } else if (strcmp(argv[i], "--no-r7rs-gc") == 0 ||
+                   strcmp(argv[i], "--no-saffron-gc") == 0) {
+            /* r7rs-gc: consumed globally by parse_no_r7rs_gc /
+             * parse_no_saffron_gc; no-op here. */
+        } else if (strcmp(argv[i], "--manifest") == 0 && i + 1 < argc) {
+            manifest_out = argv[++i];
+        } else if ((strcmp(argv[i], "--build-dir") == 0 ||
+                    strcmp(argv[i], "-B") == 0) && i + 1 < argc) {
+            cli_build_dir = argv[++i];
+        } else if (strcmp(argv[i], "--target") == 0 && i + 1 < argc) {
+            build_target = argv[++i];
+            if (strcmp(build_target, "wasm") != 0) {
+                fprintf(stderr, "tur build: unknown target '%s' (supported: wasm)\n", build_target);
+                free(build_inc); return 1;
+            }
+        } else if (argv[i][0] != '-') {
+            if (input) { free(build_inc); return drv_usage_error(usage_build); }
+            input = argv[i];
+        } else {
+            free(build_inc); return drv_usage_error(usage_build);
+        }
+    }
+    if (!input) { free(build_inc); return drv_usage_error(usage_build); }
+    /* RP0: --shared only supports directory input -- the single-file
+     * build path emits a `static`-by-default function and a main(), so
+     * dlsym wouldn't find anything useful. Directory mode runs through
+     * compile_to_implementation in separate-compilation mode, which
+     * gives exported defns extern linkage. */
+    if (shared && !drv_is_directory(input)) {
+        fprintf(stderr, "tur build: --shared requires a directory argument "
+                        "(single-file builds emit static symbols)\n");
+        free(build_inc); return 1;
+    }
+    if (shared && build_target) {
+        fprintf(stderr, "tur build: --shared and --target are mutually exclusive\n");
+        free(build_inc); return 1;
+    }
+    if (manifest_out && !shared) {
+        fprintf(stderr, "tur build: --manifest requires --shared\n");
+        free(build_inc); return 1;
+    }
+    if (g_build_bundle_deps && !shared) {
+        fprintf(stderr, "tur build: --bundle-deps requires --shared\n");
+        free(build_inc); return 1;
+    }
+    /* Check if input is a directory - use multi-file build */
+    int rc;
+    if (drv_is_directory(input)) {
+        /* Manifest-driven project build when the directory carries a
+         * build.tur: read the manifest, descend into src/, and resolve
+         * the include path (own src/ + each :spices dep). Otherwise fall
+         * back to the bare-directory glob. */
+        char proj_manifest[4096];
+        snprintf(proj_manifest, sizeof(proj_manifest),
+                 "%s/build.tur", input);
+        struct stat mst;
+        if (stat(proj_manifest, &mst) == 0 && S_ISREG(mst.st_mode)) {
+            rc = cmd_build_project(input, out, shared, manifest_out,
+                                   (const char **)build_inc, n_build_inc,
+                                   cli_build_dir, build_target);
+        } else {
+            rc = cmd_build_multi(input, out, shared, manifest_out,
+                                 cli_build_dir);
+        }
+    } else {
+        /* RM4: auto-discover the spice manifest containing `input` so
+         * `:reader-macros [...]` entries apply when building a single
+         * file from inside a project. No-op when there is no manifest.
+         * The shared helper also applies the manifest's `:experiments`
+         * (and the user experiments file): a hand-rolled copy of this
+         * walk skipped them, so `tur build f.tur` compiled with a
+         * project's gates off where `tur check f.tur` had them on. */
+        char **b_rm  = NULL;
+        int    b_n   = 0;
+        b_rm = discover_manifest_reader_macros(input, &b_n);
+        /* Mirror emit-c / emit-h / check / run: widen the include
+         * path with the enclosing spice's src/ and every declared
+         * `:spices` dep's src/. Short-circuits when --no-auto-spice
+         * is set or there is no enclosing build.tur. */
+        char **b_owned = NULL; int n_b_owned = 0;
+        Ls2ResolverCtx b_ls2 = {0};
+        auto_append_spice_includes(input, &build_inc, &n_build_inc,
+                                   &b_owned, &n_b_owned, &b_ls2);
+        ls2_resolver_ctx_set(&b_ls2);
+        if (split_build == 1 && !build_target) {
+            /* tur-link-and-build-split-plan Phase 3b: `tur build` defined as
+             * `tur compile` + `tur link` composed -- the exact subcommand
+             * code paths, so the three can never drift.  The generated
+             * object + `.link` sidecar land under the build temp dir. */
+            char base[512];
+            drv_default_output_name(input, base, sizeof(base));
+            char objp[1200];
+            snprintf(objp, sizeof(objp), "%s%s.o", drv_stable_c_prefix(), base);
+            rc = cmd_compile(input, objp, (const char **)build_inc,
+                             n_build_inc, (const char **)b_rm, b_n);
+            if (rc == 0) {
+                const char *outp = out;
+                char outbuf[1024];
+                if (!outp) {
+                    drv_default_output_name(input, outbuf, sizeof(outbuf));
+                    outp = outbuf;
+                }
+                const char *lk[1] = { objp };
+                rc = cmd_link(outp, lk, 1, false, NULL);
+            }
+            /* Drop the intermediate .o/.c/.link (ccache keyed on content
+             * already caches the underlying object compile). */
+            char scrap[1300];
+            unlink(objp);
+            drv_obj_sibling_path(objp, ".c",    scrap, sizeof(scrap)); unlink(scrap);
+            drv_obj_sibling_path(objp, ".link", scrap, sizeof(scrap)); unlink(scrap);
+        } else {
+            rc = cmd_build(input, out, (const char **)build_inc, n_build_inc,
+                           build_target, (const char **)b_rm, b_n);
+        }
+        ls2_resolver_ctx_set(NULL);
+        ls2_resolver_ctx_dispose(&b_ls2);
+        for (int i = 0; i < n_b_owned; i++) free(b_owned[i]);
+        free(b_owned);
+        free_reader_macro_paths(b_rm, b_n);
+    }
+    free(build_inc);
+    return rc;
+}

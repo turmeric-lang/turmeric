@@ -24,6 +24,9 @@
 #include "symbols.h"
 #include "turi/docstrings.h"
 #include "global.h"   /* use_json_output */
+#include "lsp/lsp.h"
+#include "lsp/mcp.h"
+#include "cli/lsp_lite.h"
 
 /* ---------------------------------------------------------------------------
  * AI6 (application-image-dumps-plan): `tur image-info` / `tur image-verify`.
@@ -38,7 +41,7 @@ static void tur_image_print_stamp(const uint8_t stamp[32]) {
     for (int i = 0; i < 32; i++) printf("%02x", stamp[i]);
 }
 
-int cmd_image_info(const char *path) {
+static int cmd_image_info(const char *path) {
     FILE *f = fopen(path, "rb");
     if (!f) { fprintf(stderr, "tur image-info: cannot open '%s'\n", path); return 1; }
     TurImageHeader h;
@@ -60,7 +63,7 @@ int cmd_image_info(const char *path) {
     return 0;
 }
 
-int cmd_image_verify(const char *path, const char *binary) {
+static int cmd_image_verify(const char *path, const char *binary) {
     FILE *f = fopen(path, "rb");
     if (!f) { fprintf(stderr, "tur image-verify: cannot open '%s'\n", path); return 2; }
     TurImageHeader h;
@@ -134,7 +137,7 @@ static int print_doc_result(const char *sym, const char *doc, char *owned) {
 
 /* E5 / OD4: tur doc <symbol> -- print documentation for a builtin, special
  * form, or stdlib definition. */
-int cmd_doc_cli(const char *sym) {
+static int cmd_doc_cli(const char *sym) {
     const char *doc = tur_doc_prefer(sym, stdlib_docstring_lookup(sym));
     if (doc) return print_doc_result(sym, doc, NULL);
 
@@ -1011,4 +1014,67 @@ int cmd_explain(const char *code) {
     symtab_free(&st);
     arena_free(&arena);
     return 0;
+}
+
+/* -------------------------------------------------------------------------
+ * Entry points: the command table in cli.c runs these for `tur <command>`.
+ * ---------------------------------------------------------------------- */
+
+int cmd_lsp_main(int argc, char **argv) {
+    diag_init(false);   /* no color -- stdout is reserved for JSON-RPC */
+    for (int i = 2; i < argc; i++) {
+        if (strcmp(argv[i], "--rename-exports") == 0)
+            lsp_set_rename_exports(true);
+    }
+    lsp_server_run(STDIN_FILENO, STDOUT_FILENO);
+    return 0;
+}
+
+int cmd_mcp_main(int argc, char **argv) {
+    diag_init(false);   /* no color -- stdout is reserved for JSON-RPC */
+    mcp_server_run(STDIN_FILENO, STDOUT_FILENO);
+    return 0;
+}
+
+/* lsp-lite: completion/calltip/doc backend for lightweight editors.
+ * Newline-delimited JSON over stdio; stdout is reserved for protocol
+ * traffic. */
+int cmd_lsp_lite_main(int argc, char **argv) {
+    diag_init(false);
+    resolve_stdlib_root();   /* sets TUR_STDLIB_DIR so lsp_lite can find docstrings.tur */
+    return lsp_lite_run(STDIN_FILENO, STDOUT_FILENO);
+}
+
+/* E5: tur doc <symbol> */
+int cmd_doc_main(int argc, char **argv) {
+    if (argc == 3 && (strcmp(argv[2], "--help") == 0 || strcmp(argv[2], "-h") == 0))
+        return usage_doc();
+    if (argc != 3) return drv_usage_error(usage_doc);
+    return cmd_doc_cli(argv[2]);
+}
+
+/* AI6: tur image-info <image> -- print header without resuming. */
+int cmd_image_info_main(int argc, char **argv) {
+    if (argc != 3 || strcmp(argv[2], "--help") == 0 || strcmp(argv[2], "-h") == 0) {
+        fprintf(stderr, "usage:\n  tur image-info <image>\n");
+        return argc == 3 ? 0 : 1;
+    }
+    return cmd_image_info(argv[2]);
+}
+
+/* AI6: tur image-verify <image> [binary] -- validate header (+ stamp). */
+int cmd_image_verify_main(int argc, char **argv) {
+    if (argc < 3 || argc > 4 || strcmp(argv[2], "--help") == 0 || strcmp(argv[2], "-h") == 0) {
+        fprintf(stderr, "usage:\n  tur image-verify <image> [loader-binary]\n");
+        return (argc >= 3 && strcmp(argv[2], "--help") != 0) ? 2 : 0;
+    }
+    return cmd_image_verify(argv[2], argc == 4 ? argv[3] : NULL);
+}
+
+/* E13: tur explain — first-class subcommand wrapping --explain */
+int cmd_explain_main(int argc, char **argv) {
+    if (argc == 3 && (strcmp(argv[2], "--help") == 0 || strcmp(argv[2], "-h") == 0))
+        return usage_explain();
+    if (argc < 3) return drv_usage_error(usage_explain);
+    return cmd_explain(argv[2]);
 }

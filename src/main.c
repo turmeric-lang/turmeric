@@ -137,17 +137,6 @@
 #include "driver/driver.h"
 #include "driver/commands.h"
 
-/* True when a `--help` / `-h` appears among the subcommand's arguments.  For
- * the subcommands whose argv loop has no explicit help arm (emit-c, emit-h),
- * so that `--help` keeps exiting 0 rather than falling into the unknown-flag
- * arm, which now exits 2. */
-static bool has_help_flag(int argc, char **argv) {
-    for (int i = 2; i < argc; i++) {
-        if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) return true;
-    }
-    return false;
-}
-
 /* profiling-plan C0+C1: does `--timings <arg>` mean <arg> is the JSON
  * destination?  The two-token form cannot otherwise be told apart from
  * `--timings <input-file>`, so it takes the next argument only when that is
@@ -357,7 +346,7 @@ static const char *resolve_command(const char *tok) {
     return hit;
 }
 
-static int usage(void) {
+int drv_usage(void) {
     fprintf(stderr,
         "tur: the Turmeric compiler (v" TUR_VERSION ")\n"
         "\n"
@@ -459,39 +448,6 @@ static int usage(void) {
         "                                   See docs/guides/compiler-flags-guide.md for the removal list.\n");
     list_external_subcommands();
     return 64;
-}
-
-/* The interpreter arms (`tur --interpret`, `tur debug`): collect the `-I`
- * flags that come BEFORE the file path, starting at argv[start].  Everything
- * after the path is the program's *args*, untouched -- a `-I` there belongs to
- * the program.  Returns the index of the file path (argc when there is none),
- * or -1 after reporting a bare trailing `-I`.  *out_dirs is malloc'd (caller
- * frees); its strings are borrowed from argv. */
-static int interp_leading_include_flags(int argc, char **argv, int start,
-                                        char ***out_dirs, int *n_out) {
-    *out_dirs = NULL;
-    *n_out = 0;
-    int i = start;
-    while (i < argc) {
-        int consumed = 0;
-        if (!drv_is_include_flag(argc, argv, i, &consumed)) {
-            if (strcmp(argv[i], "-I") == 0) {
-                free(*out_dirs);
-                *out_dirs = NULL;
-                *n_out = 0;
-                fprintf(stderr, "tur: -I requires a directory argument\n");
-                return -1;
-            }
-            break;
-        }
-        char **bigger = (char **)realloc(*out_dirs,
-                                         (size_t)(*n_out + 1) * sizeof(char *));
-        if (!bigger) break;
-        *out_dirs = bigger;
-        (*out_dirs)[(*n_out)++] = consumed == 2 ? argv[i + 1] : argv[i] + 2;
-        i += consumed;
-    }
-    return i;
 }
 
 /* Phase 8: Handle --no-color flag */
@@ -652,12 +608,12 @@ static bool use_json_diagnostics = false;
  * after git-foo / git foo. On success this does not return. On failure
  * prints a diagnostic and returns 1. */
 static int try_external_subcommand(int argc, char **argv) {
-    if (argc < 2) return usage();
+    if (argc < 2) return drv_usage();
     const char *cmd = argv[1];
-    if (!cmd || !*cmd || cmd[0] == '-') return usage();
+    if (!cmd || !*cmd || cmd[0] == '-') return drv_usage();
     /* Reject anything that's clearly a path or contains shell-unsafe bits. */
     for (const char *p = cmd; *p; p++) {
-        if (!(isalnum((unsigned char)*p) || *p == '-' || *p == '_')) return usage();
+        if (!(isalnum((unsigned char)*p) || *p == '-' || *p == '_')) return drv_usage();
     }
     char ext_name[256];
     snprintf(ext_name, sizeof(ext_name), "tur-%s", cmd);
@@ -838,7 +794,7 @@ static int tur_main_inner(int argc, char **argv) {
     argc = dd_at;
 
     /* Phase 8: Check for global flags before command */
-    bool no_color = parse_no_color(argc, argv);
+    g_no_color = parse_no_color(argc, argv);
     bool explain_mode = false;
     const char *explain_code = NULL;
     g_panic_abort = parse_panic_abort(argc, argv);
@@ -1284,7 +1240,7 @@ static int tur_main_inner(int argc, char **argv) {
             return 2;
         } else if (strcmp(argv[i], "--no-color") == 0) {
             /* no-color-flag-rejected-everywhere: already parsed into
-             * `no_color`; it was never stripped, so a trailing one reached
+             * `g_no_color`; it was never stripped, so a trailing one reached
              * the command's parser as an unknown flag and a leading one was
              * taken for the command name. */
             for (int j = i; j < argc - 1; j++) {
@@ -1303,13 +1259,13 @@ static int tur_main_inner(int argc, char **argv) {
         /* Initialize diagnostics - use color unless --no-color or --json-diagnostics specified */
         /* JSON output disables color */
         if (use_json_output) use_json_diagnostics = true;
-        diag_init(!no_color && !use_json_diagnostics && stderr_is_tty());
+        diag_init(!g_no_color && !use_json_diagnostics && stderr_is_tty());
         diag_set_json_output(use_json_diagnostics);
     
     if (explain_mode) {
         if (!explain_code) {
             fprintf(stderr, "tur: --explain requires a code snippet argument\n");
-            return usage();
+            return drv_usage();
         }
         return cmd_explain(explain_code);
     }
@@ -1325,980 +1281,88 @@ static int tur_main_inner(int argc, char **argv) {
 
     /* E1: --help / -h at top level */
     if (argc >= 2 && (strcmp(argv[1], "--help") == 0 || strcmp(argv[1], "-h") == 0)) {
-        usage();
+        drv_usage();
         return 0;
     }
 
-    if (argc < 2) return usage();
+    if (argc < 2) return drv_usage();
     const char *cmd = argv[1];
 
     {
         const char *resolved = resolve_command(cmd);
-        if (resolved == COMMAND_AMBIGUOUS) return usage();
+        if (resolved == COMMAND_AMBIGUOUS) return drv_usage();
         if (resolved != NULL) cmd = resolved;
     }
 
-    if (strcmp(cmd, "emit-c") == 0) {
-        /* SC2: collect -I flags up front so both emit-c forms see them. */
-        char **emit_inc = NULL;
-        int    n_emit_inc = drv_parse_include_flags(argc, argv, 2, &emit_inc);
-        if (n_emit_inc < 0) { free(emit_inc); return drv_usage_error(usage_build); }
-        if (has_help_flag(argc, argv)) { free(emit_inc); return usage_build(); }
-
-        /* tur emit-c [-I <dir>...] [--output-dir <dir> | --build-dir <dir> | -B <dir>]
-         *            <file1> [<file2> ...]
-         * build-output-directory-plan: --build-dir / -B are the new spellings;
-         * --output-dir stays as a deprecated alias. */
-        int od_idx = -1;
-        for (int i = 2; i < argc; i++) {
-            int c;
-            if (drv_is_include_flag(argc, argv, i, &c)) { i += c - 1; continue; }
-            if (strcmp(argv[i], "--output-dir") == 0 ||
-                strcmp(argv[i], "--build-dir")  == 0 ||
-                strcmp(argv[i], "-B")            == 0) { od_idx = i; break; }
-        }
-        if (od_idx >= 0) {
-            if (od_idx + 1 >= argc) { free(emit_inc); return drv_usage_error(usage_build); }
-            const char *out_dir = argv[od_idx + 1];
-            /* Inputs are every non-flag arg that isn't --output-dir or its
-             * value or a -I value.  Build a clean inputs list. */
-            char **inputs = (char **)malloc((size_t)argc * sizeof(char *));
-            int    n_inputs = 0;
-            for (int i = 2; i < argc; i++) {
-                int c;
-                if (drv_is_include_flag(argc, argv, i, &c)) { i += c - 1; continue; }
-                if (i == od_idx) { i++; continue; }   /* skip --output-dir and its value */
-                if (strcmp(argv[i], "--no-abi-cache") == 0) continue; /* J6: global, skip */
-                if (strcmp(argv[i], "--no-r7rs-gc") == 0) continue;   /* r7rs-gc: global, skip */
-                if (strcmp(argv[i], "--no-saffron-gc") == 0) continue;
-                if (argv[i][0] == '-') { free(inputs); free(emit_inc); return drv_usage_error(usage_build); }
-                inputs[n_inputs++] = argv[i];
-            }
-            /* SC4+SC5: auto-discover spice src + cross-spice deps for the
-             * FIRST input only.  For the multi-file --output-dir form,
-             * that input typically lives inside the same spice as the
-             * others; if it doesn't, an explicit -I is the right escape
-             * hatch. */
-            char **md_owned = NULL;
-            int    n_md_owned = 0;
-            Ls2ResolverCtx md_ls2 = {0};
-            if (n_inputs > 0) {
-                auto_append_spice_includes(inputs[0], &emit_inc, &n_emit_inc,
-                                           &md_owned, &n_md_owned, &md_ls2);
-            }
-            ls2_resolver_ctx_set(&md_ls2);
-            int rc = cmd_emit_c_to_dir(out_dir, inputs, n_inputs,
-                                       (const char **)emit_inc, n_emit_inc);
-            ls2_resolver_ctx_set(NULL);
-            ls2_resolver_ctx_dispose(&md_ls2);
-            for (int i = 0; i < n_md_owned; i++) free(md_owned[i]);
-            free(md_owned);
-            free(inputs);
-            free(emit_inc);
-            return rc;
-        }
-
-        /* tur emit-c [-I <dir>...] <file>   single file to stdout (legacy) */
-        const char *input = NULL;
-        for (int i = 2; i < argc; i++) {
-            int c;
-            if (drv_is_include_flag(argc, argv, i, &c)) { i += c - 1; continue; }
-            if (argv[i][0] != '-') {
-                if (input) { free(emit_inc); return drv_usage_error(usage_build); }
-                input = argv[i];
-                continue;
-            }
-            free(emit_inc); return drv_usage_error(usage_build);
-        }
-        if (!input) { free(emit_inc); return drv_usage_error(usage_build); }
-        char **ec_owned = NULL; int n_ec_owned = 0;
-        Ls2ResolverCtx ec_ls2 = {0};
-        auto_append_spice_includes(input, &emit_inc, &n_emit_inc,
-                                   &ec_owned, &n_ec_owned, &ec_ls2);
-        ls2_resolver_ctx_set(&ec_ls2);
-        int rc = cmd_emit_c(input, (const char **)emit_inc, n_emit_inc);
-        ls2_resolver_ctx_set(NULL);
-        ls2_resolver_ctx_dispose(&ec_ls2);
-        for (int i = 0; i < n_ec_owned; i++) free(ec_owned[i]);
-        free(ec_owned);
-        free(emit_inc);
-        return rc;
-    }
-    if (strcmp(cmd, "emit-h") == 0) {
-        /* SC2: accept -I just like emit-c / check / build.
-         * SC4+SC5: auto-discover enclosing spice src/ and dep src/. */
-        char **eh_inc = NULL;
-        int    n_eh_inc = drv_parse_include_flags(argc, argv, 2, &eh_inc);
-        if (n_eh_inc < 0) { free(eh_inc); return drv_usage_error(usage_build); }
-        if (has_help_flag(argc, argv)) { free(eh_inc); return usage_build(); }
-        const char *input = NULL;
-        for (int i = 2; i < argc; i++) {
-            int c;
-            if (drv_is_include_flag(argc, argv, i, &c)) { i += c - 1; continue; }
-            if (argv[i][0] != '-') {
-                if (input) { free(eh_inc); return drv_usage_error(usage_build); }
-                input = argv[i];
-                continue;
-            }
-            free(eh_inc); return drv_usage_error(usage_build);
-        }
-        if (!input) { free(eh_inc); return drv_usage_error(usage_build); }
-        char **eh_owned = NULL; int n_eh_owned = 0;
-        Ls2ResolverCtx eh_ls2 = {0};
-        auto_append_spice_includes(input, &eh_inc, &n_eh_inc,
-                                   &eh_owned, &n_eh_owned, &eh_ls2);
-        ls2_resolver_ctx_set(&eh_ls2);
-        int rc = cmd_emit_h(input, (const char **)eh_inc, n_eh_inc);
-        ls2_resolver_ctx_set(NULL);
-        ls2_resolver_ctx_dispose(&eh_ls2);
-        for (int i = 0; i < n_eh_owned; i++) free(eh_owned[i]);
-        free(eh_owned);
-        free(eh_inc);
-        return rc;
-    }
-    if (strcmp(cmd, "check") == 0) {
-        /* Phase 8: tur check subcommand - type-check only, no codegen
-         * SC1: now accepts -I <dir> flags so per-file checks inside a spice
-         * resolve their intra-spice imports the same way `tur build` does.
-         * SC4: walks up to find an enclosing build.tur and auto-adds its
-         * `src/` so editors / format-on-save don't need explicit -I. */
-        char       **check_inc = NULL;
-        int          n_check_inc = drv_parse_include_flags(argc, argv, 2, &check_inc);
-        if (n_check_inc < 0) { free(check_inc); return drv_usage_error(usage_check); }
-        const char *input = NULL;
-        for (int i = 2; i < argc; i++) {
-            if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
-                free(check_inc); return usage_check();
-            }
-            int c;
-            if (drv_is_include_flag(argc, argv, i, &c)) { i += c - 1; continue; }
-            if (strcmp(argv[i], "--no-auto-spice") == 0) continue;
-            if (strcmp(argv[i], "--no-auto-stdlib") == 0) {
-                g_no_auto_stdlib = true;
-                continue;
-            }
-            if (argv[i][0] != '-') {
-                if (input) { free(check_inc); return drv_usage_error(usage_check); }
-                input = argv[i];
-                continue;
-            }
-            free(check_inc); return drv_usage_error(usage_check);
-        }
-        if (!input) { free(check_inc); return drv_usage_error(usage_check); }
-        /* A directory argument checks every .tur file under it (project /
-         * spice mode), mirroring `tur test <dir>`. */
-        if (drv_is_directory(input)) {
-            free(check_inc);
-            return cmd_check_dir(input);
-        }
-        char **ck_owned = NULL; int n_ck_owned = 0;
-        Ls2ResolverCtx ck_ls2 = {0};
-        auto_append_spice_includes(input, &check_inc, &n_check_inc,
-                                   &ck_owned, &n_ck_owned, &ck_ls2);
-        ls2_resolver_ctx_set(&ck_ls2);
-        int rc;
-        int rm_n = 0;
-        char **rm_p = discover_manifest_reader_macros(input, &rm_n);
-        if (use_json_output) {
-            diag_lsp_begin();
-            Buf out;
-            buf_init(&out);
-            compile_to_c(input, &out, (const char **)check_inc, n_check_inc,
-                         (const char **)rm_p, rm_n);
-            buf_free(&out);
-            diag_lsp_flush(stdout);
-            diag_lsp_end();
-            rc = diag_had_error() ? 1 : 0;
-        } else {
-            Buf out;
-            buf_init(&out);
-            rc = compile_to_c(input, &out, (const char **)check_inc, n_check_inc,
-                              (const char **)rm_p, rm_n);
-            buf_free(&out);
-        }
-        ls2_resolver_ctx_set(NULL);
-        ls2_resolver_ctx_dispose(&ck_ls2);
-        free_reader_macro_paths(rm_p, rm_n);
-        for (int i = 0; i < n_ck_owned; i++) free(ck_owned[i]);
-        free(ck_owned);
-        free(check_inc);
-        return rc;
-    }
-    if (strcmp(cmd, "expand") == 0) {
-        /* `tur expand`: type-check like `tur check`, but with the expansion
-         * trace on -- every macro expansion outside the stdlib preload prints
-         * to stdout (see the g_dump_expansion site in elab_call.c).  Same
-         * include-path plumbing as `tur check`. */
-        char       **exp_inc = NULL;
-        int          n_exp_inc = drv_parse_include_flags(argc, argv, 2, &exp_inc);
-        if (n_exp_inc < 0) { free(exp_inc); return drv_usage_error(usage_expand); }
-        const char *input = NULL;
-        for (int i = 2; i < argc; i++) {
-            if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
-                free(exp_inc); return usage_expand();
-            }
-            int c;
-            if (drv_is_include_flag(argc, argv, i, &c)) { i += c - 1; continue; }
-            if (strcmp(argv[i], "--no-auto-spice") == 0) continue;
-            if (strcmp(argv[i], "--no-auto-stdlib") == 0) {
-                g_no_auto_stdlib = true;
-                continue;
-            }
-            if (argv[i][0] != '-') {
-                if (input) { free(exp_inc); return drv_usage_error(usage_expand); }
-                input = argv[i];
-                continue;
-            }
-            free(exp_inc); return drv_usage_error(usage_expand);
-        }
-        if (!input) { free(exp_inc); return drv_usage_error(usage_expand); }
-        char **exp_owned = NULL; int n_exp_owned = 0;
-        Ls2ResolverCtx exp_ls2 = {0};
-        auto_append_spice_includes(input, &exp_inc, &n_exp_inc,
-                                   &exp_owned, &n_exp_owned, &exp_ls2);
-        ls2_resolver_ctx_set(&exp_ls2);
-        int rm_n = 0;
-        char **rm_p = discover_manifest_reader_macros(input, &rm_n);
-        g_dump_expansion = true;
-        Buf out;
-        buf_init(&out);
-        int rc = compile_to_c(input, &out, (const char **)exp_inc, n_exp_inc,
-                              (const char **)rm_p, rm_n);
-        buf_free(&out);
-        g_dump_expansion = false;
-        ls2_resolver_ctx_set(NULL);
-        ls2_resolver_ctx_dispose(&exp_ls2);
-        free_reader_macro_paths(rm_p, rm_n);
-        for (int i = 0; i < n_exp_owned; i++) free(exp_owned[i]);
-        free(exp_owned);
-        free(exp_inc);
-        return rc;
-    }
-    if (strcmp(cmd, "audit-spans") == 0) {
-        /* debugger Phase 1: elaborate <file> and report breakpoint-eligible
-         * AST nodes (top-level forms, defns, let forms, call sites) that lack
-         * a usable source span.  Auto-discovers the enclosing spice src/ and
-         * -I flags exactly like `tur check`, so intra-spice imports resolve.
-         * Exit codes: 0 = clean, 3 = holes found, 1 = could not elaborate,
-         * 2 = file error. */
-        char       **as_inc = NULL;
-        int          n_as_inc = drv_parse_include_flags(argc, argv, 2, &as_inc);
-        if (n_as_inc < 0) { free(as_inc); return drv_usage_error(usage_check); }
-        const char *input = NULL;
-        for (int i = 2; i < argc; i++) {
-            if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
-                free(as_inc); return usage_check();
-            }
-            int c;
-            if (drv_is_include_flag(argc, argv, i, &c)) { i += c - 1; continue; }
-            if (strcmp(argv[i], "--no-auto-spice") == 0) continue;
-            if (strcmp(argv[i], "--no-auto-stdlib") == 0) {
-                g_no_auto_stdlib = true;
-                continue;
-            }
-            if (argv[i][0] != '-') {
-                if (input) { free(as_inc); return drv_usage_error(usage_check); }
-                input = argv[i];
-                continue;
-            }
-            free(as_inc); return drv_usage_error(usage_check);
-        }
-        if (!input) { free(as_inc); return drv_usage_error(usage_check); }
-        char **as_owned = NULL; int n_as_owned = 0;
-        Ls2ResolverCtx as_ls2 = {0};
-        auto_append_spice_includes(input, &as_inc, &n_as_inc,
-                                   &as_owned, &n_as_owned, &as_ls2);
-        ls2_resolver_ctx_set(&as_ls2);
-        int rm_n = 0;
-        char **rm_p = discover_manifest_reader_macros(input, &rm_n);
-        Buf out;
-        buf_init(&out);
-        g_audit_spans = true;
-        g_audit_span_holes = 0;
-        int rc = compile_to_c(input, &out, (const char **)as_inc, n_as_inc,
-                              (const char **)rm_p, rm_n);
-        g_audit_spans = false;
-        buf_free(&out);
-        ls2_resolver_ctx_set(NULL);
-        ls2_resolver_ctx_dispose(&as_ls2);
-        free_reader_macro_paths(rm_p, rm_n);
-        for (int i = 0; i < n_as_owned; i++) free(as_owned[i]);
-        free(as_owned);
-        free(as_inc);
-        return rc;
-    }
-    if (strcmp(cmd, "lsp") == 0) {
-        diag_init(false);   /* no color -- stdout is reserved for JSON-RPC */
-        for (int i = 2; i < argc; i++) {
-            if (strcmp(argv[i], "--rename-exports") == 0)
-                lsp_set_rename_exports(true);
-        }
-        lsp_server_run(STDIN_FILENO, STDOUT_FILENO);
-        return 0;
-    }
-    if (strcmp(cmd, "mcp") == 0) {
-        diag_init(false);   /* no color -- stdout is reserved for JSON-RPC */
-        mcp_server_run(STDIN_FILENO, STDOUT_FILENO);
-        return 0;
-    }
+    if (strcmp(cmd, "emit-c") == 0)
+        return cmd_emit_c_main(argc, argv);
+    if (strcmp(cmd, "emit-h") == 0)
+        return cmd_emit_h_main(argc, argv);
+    if (strcmp(cmd, "check") == 0)
+        return cmd_check_main(argc, argv);
+    if (strcmp(cmd, "expand") == 0)
+        return cmd_expand_main(argc, argv);
+    if (strcmp(cmd, "audit-spans") == 0)
+        return cmd_audit_spans_main(argc, argv);
+    if (strcmp(cmd, "lsp") == 0)
+        return cmd_lsp_main(argc, argv);
+    if (strcmp(cmd, "mcp") == 0)
+        return cmd_mcp_main(argc, argv);
     /* Debugger Phase 3: DAP server over the interpreter (JSON-RPC / stdio). */
     if (strcmp(cmd, "dap") == 0) {
         return cmd_dap();
     }
-    /* Track T1: record an interpreted run, or read a recording back. */
-    if (strcmp(cmd, "trace") == 0) {
-        const char *file = NULL, *out_path = NULL;
-        uint32_t    max_steps = 0;
-        bool        dump = false;
-        TurTraceGrain grain = TUR_TRACE_GRAIN_NODE;
-        char      **prog_argv = NULL;
-        int         prog_argc = 0;
-        for (int i = 2; i < argc; i++) {
-            if (strcmp(argv[i], "--dump") == 0) { dump = true; continue; }
-            if (strcmp(argv[i], "-o") == 0 && i + 1 < argc) {
-                out_path = argv[++i];
-                continue;
-            }
-            if (strncmp(argv[i], "--max-steps=", 12) == 0) {
-                max_steps = (uint32_t)strtoul(argv[i] + 12, NULL, 10);
-                continue;
-            }
-            /* The old granularity, for a program too big to record per
-             * expression under the cap.  Not the default: see TurTraceGrain. */
-            if (strcmp(argv[i], "--lines") == 0) {
-                grain = TUR_TRACE_GRAIN_LINE; continue;
-            }
-            if (!file) { file = argv[i]; continue; }
-            /* Everything after the program is the program's own argv. */
-            prog_argv = &argv[i];
-            prog_argc = argc - i;
-            break;
-        }
-        if (!file) {
-            fprintf(stderr,
-                "usage: tur trace <file.tur> [-o out.turtrace] "
-                "[--max-steps=N] [--lines] [-- args...]\n"
-                "       tur trace --dump <file.turtrace>\n"
-                "\n"
-                "  A step is one expression.  --lines records one step per\n"
-                "  source line instead, which is coarser: nested calls on one\n"
-                "  line collapse into a single step.\n");
-            return 1;
-        }
-        if (dump) return cmd_trace_dump(file);
-        return cmd_trace(file, out_path, prog_argv, prog_argc, max_steps, grain);
-    }
-    /* lsp-lite: completion/calltip/doc backend for lightweight editors.
-     * Newline-delimited JSON over stdio; stdout is reserved for protocol
-     * traffic. */
-    if (strcmp(cmd, "lsp-lite") == 0) {
-        diag_init(false);
-        resolve_stdlib_root();   /* sets TUR_STDLIB_DIR so lsp_lite can find docstrings.tur */
-        return lsp_lite_run(STDIN_FILENO, STDOUT_FILENO);
-    }
-    if (strcmp(cmd, "build") == 0) {
-        const char *input = NULL;
-        const char *out = NULL;
-        const char *build_target = NULL;
-        bool        shared = false;  /* RP0: --shared selects shared-library build */
-        const char *manifest_out = NULL; /* RP1: --manifest <path> override */
-        const char *cli_build_dir = NULL; /* build-output-directory-plan: --build-dir/-B */
-        /* tur-link-and-build-split-plan Phase 3b/4: opt in to the compile+link
-         * split for a single-file build.  Default stays the monolithic `cc`
-         * call so output is byte-identical until the split is proven; the two
-         * flags let a build force either path during rollout. */
-        int split_build = 0;  /* 0 = default(monolithic), 1 = split, -1 = forced monolithic */
-        /* SC1: collect -I flags once via the shared helper, then walk argv
-         * a second time for the build-specific flags (`-o`, `--target`)
-         * and the positional input. */
-        char  **build_inc = NULL;
-        int     n_build_inc = drv_parse_include_flags(argc, argv, 2, &build_inc);
-        if (n_build_inc < 0) { free(build_inc); return drv_usage_error(usage_build); }
-        for (int i = 2; i < argc; i++) {
-            int c;
-            if (drv_is_include_flag(argc, argv, i, &c)) { i += c - 1; continue; }
-            if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
-                free(build_inc); return usage_build();
-            } else if (strcmp(argv[i], "-o") == 0 && i + 1 < argc) {
-                out = argv[++i];
-            } else if (strcmp(argv[i], "--shared") == 0) {
-                shared = true;
-            } else if (strcmp(argv[i], "--bundle-deps") == 0) {
-                g_build_bundle_deps = true;
-            } else if (strcmp(argv[i], "--release") == 0) {
-                g_cc_release = true;
-            } else if (strcmp(argv[i], "--split-build") == 0) {
-                split_build = 1;
-            } else if (strcmp(argv[i], "--no-split-build") == 0) {
-                split_build = -1;
-            } else if (strncmp(argv[i], "--runtime=", 10) == 0 ||
-                       (strcmp(argv[i], "--runtime") == 0 && i + 1 < argc)) {
-                const char *mode = argv[i][9] == '=' ? argv[i] + 10 : argv[++i];
-                if (strcmp(mode, "lib") == 0) g_runtime_mode = TUR_RT_LIB;
-                else if (strcmp(mode, "source") == 0) g_runtime_mode = TUR_RT_SOURCE;
-                else if (strcmp(mode, "auto") == 0) g_runtime_mode = TUR_RT_AUTO;
-                else if (strcmp(mode, "split") == 0) g_runtime_mode = TUR_RT_SPLIT;
-                else {
-                    fprintf(stderr, "tur build: unknown --runtime '%s' "
-                            "(supported: auto, lib, source, split)\n", mode);
-                    free(build_inc); return 1;
-                }
-            } else if (strcmp(argv[i], "--no-abi-cache") == 0) {
-                /* J6: consumed globally by parse_no_abi_cache; no-op here. */
-            } else if (strcmp(argv[i], "--no-r7rs-gc") == 0 ||
-                       strcmp(argv[i], "--no-saffron-gc") == 0) {
-                /* r7rs-gc: consumed globally by parse_no_r7rs_gc /
-                 * parse_no_saffron_gc; no-op here. */
-            } else if (strcmp(argv[i], "--manifest") == 0 && i + 1 < argc) {
-                manifest_out = argv[++i];
-            } else if ((strcmp(argv[i], "--build-dir") == 0 ||
-                        strcmp(argv[i], "-B") == 0) && i + 1 < argc) {
-                cli_build_dir = argv[++i];
-            } else if (strcmp(argv[i], "--target") == 0 && i + 1 < argc) {
-                build_target = argv[++i];
-                if (strcmp(build_target, "wasm") != 0) {
-                    fprintf(stderr, "tur build: unknown target '%s' (supported: wasm)\n", build_target);
-                    free(build_inc); return 1;
-                }
-            } else if (argv[i][0] != '-') {
-                if (input) { free(build_inc); return drv_usage_error(usage_build); }
-                input = argv[i];
-            } else {
-                free(build_inc); return drv_usage_error(usage_build);
-            }
-        }
-        if (!input) { free(build_inc); return drv_usage_error(usage_build); }
-        /* RP0: --shared only supports directory input -- the single-file
-         * build path emits a `static`-by-default function and a main(), so
-         * dlsym wouldn't find anything useful. Directory mode runs through
-         * compile_to_implementation in separate-compilation mode, which
-         * gives exported defns extern linkage. */
-        if (shared && !drv_is_directory(input)) {
-            fprintf(stderr, "tur build: --shared requires a directory argument "
-                            "(single-file builds emit static symbols)\n");
-            free(build_inc); return 1;
-        }
-        if (shared && build_target) {
-            fprintf(stderr, "tur build: --shared and --target are mutually exclusive\n");
-            free(build_inc); return 1;
-        }
-        if (manifest_out && !shared) {
-            fprintf(stderr, "tur build: --manifest requires --shared\n");
-            free(build_inc); return 1;
-        }
-        if (g_build_bundle_deps && !shared) {
-            fprintf(stderr, "tur build: --bundle-deps requires --shared\n");
-            free(build_inc); return 1;
-        }
-        /* Check if input is a directory - use multi-file build */
-        int rc;
-        if (drv_is_directory(input)) {
-            /* Manifest-driven project build when the directory carries a
-             * build.tur: read the manifest, descend into src/, and resolve
-             * the include path (own src/ + each :spices dep). Otherwise fall
-             * back to the bare-directory glob. */
-            char proj_manifest[4096];
-            snprintf(proj_manifest, sizeof(proj_manifest),
-                     "%s/build.tur", input);
-            struct stat mst;
-            if (stat(proj_manifest, &mst) == 0 && S_ISREG(mst.st_mode)) {
-                rc = cmd_build_project(input, out, shared, manifest_out,
-                                       (const char **)build_inc, n_build_inc,
-                                       cli_build_dir, build_target);
-            } else {
-                rc = cmd_build_multi(input, out, shared, manifest_out,
-                                     cli_build_dir);
-            }
-        } else {
-            /* RM4: auto-discover the spice manifest containing `input` so
-             * `:reader-macros [...]` entries apply when building a single
-             * file from inside a project. No-op when there is no manifest.
-             * The shared helper also applies the manifest's `:experiments`
-             * (and the user experiments file): a hand-rolled copy of this
-             * walk skipped them, so `tur build f.tur` compiled with a
-             * project's gates off where `tur check f.tur` had them on. */
-            char **b_rm  = NULL;
-            int    b_n   = 0;
-            b_rm = discover_manifest_reader_macros(input, &b_n);
-            /* Mirror emit-c / emit-h / check / run: widen the include
-             * path with the enclosing spice's src/ and every declared
-             * `:spices` dep's src/. Short-circuits when --no-auto-spice
-             * is set or there is no enclosing build.tur. */
-            char **b_owned = NULL; int n_b_owned = 0;
-            Ls2ResolverCtx b_ls2 = {0};
-            auto_append_spice_includes(input, &build_inc, &n_build_inc,
-                                       &b_owned, &n_b_owned, &b_ls2);
-            ls2_resolver_ctx_set(&b_ls2);
-            if (split_build == 1 && !build_target) {
-                /* tur-link-and-build-split-plan Phase 3b: `tur build` defined as
-                 * `tur compile` + `tur link` composed -- the exact subcommand
-                 * code paths, so the three can never drift.  The generated
-                 * object + `.link` sidecar land under the build temp dir. */
-                char base[512];
-                drv_default_output_name(input, base, sizeof(base));
-                char objp[1200];
-                snprintf(objp, sizeof(objp), "%s%s.o", drv_stable_c_prefix(), base);
-                rc = cmd_compile(input, objp, (const char **)build_inc,
-                                 n_build_inc, (const char **)b_rm, b_n);
-                if (rc == 0) {
-                    const char *outp = out;
-                    char outbuf[1024];
-                    if (!outp) {
-                        drv_default_output_name(input, outbuf, sizeof(outbuf));
-                        outp = outbuf;
-                    }
-                    const char *lk[1] = { objp };
-                    rc = cmd_link(outp, lk, 1, false, NULL);
-                }
-                /* Drop the intermediate .o/.c/.link (ccache keyed on content
-                 * already caches the underlying object compile). */
-                char scrap[1300];
-                unlink(objp);
-                drv_obj_sibling_path(objp, ".c",    scrap, sizeof(scrap)); unlink(scrap);
-                drv_obj_sibling_path(objp, ".link", scrap, sizeof(scrap)); unlink(scrap);
-            } else {
-                rc = cmd_build(input, out, (const char **)build_inc, n_build_inc,
-                               build_target, (const char **)b_rm, b_n);
-            }
-            ls2_resolver_ctx_set(NULL);
-            ls2_resolver_ctx_dispose(&b_ls2);
-            for (int i = 0; i < n_b_owned; i++) free(b_owned[i]);
-            free(b_owned);
-            free_reader_macro_paths(b_rm, b_n);
-        }
-        free(build_inc);
-        return rc;
-    }
-    /* tur-link-and-build-split-plan Phase 3a-0: tur compile <in.tur> -o <out.o> */
-    if (strcmp(cmd, "compile") == 0) {
-        const char *input = NULL;
-        const char *out = NULL;
-        const char *cli_build_dir = NULL;
-        char  **comp_inc = NULL;
-        int     n_comp_inc = drv_parse_include_flags(argc, argv, 2, &comp_inc);
-        if (n_comp_inc < 0) { free(comp_inc); return drv_usage_error(usage_build); }
-        for (int i = 2; i < argc; i++) {
-            int c;
-            if (drv_is_include_flag(argc, argv, i, &c)) { i += c - 1; continue; }
-            if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
-                free(comp_inc); return usage_build();
-            } else if (strcmp(argv[i], "-o") == 0 && i + 1 < argc) {
-                out = argv[++i];
-            } else if ((strcmp(argv[i], "--build-dir") == 0 ||
-                        strcmp(argv[i], "-B") == 0) && i + 1 < argc) {
-                cli_build_dir = argv[++i];
-            } else if (strncmp(argv[i], "--runtime=", 10) == 0 ||
-                       (strcmp(argv[i], "--runtime") == 0 && i + 1 < argc)) {
-                const char *mode = argv[i][9] == '=' ? argv[i] + 10 : argv[++i];
-                if (strcmp(mode, "lib") == 0) g_runtime_mode = TUR_RT_LIB;
-                else if (strcmp(mode, "source") == 0) g_runtime_mode = TUR_RT_SOURCE;
-                else if (strcmp(mode, "auto") == 0) g_runtime_mode = TUR_RT_AUTO;
-                else {
-                    fprintf(stderr, "tur compile: unknown --runtime '%s' "
-                            "(supported: auto, lib, source)\n", mode);
-                    free(comp_inc); return 1;
-                }
-            } else if (strcmp(argv[i], "--no-abi-cache") == 0 ||
-                       strcmp(argv[i], "--no-r7rs-gc") == 0 ||
-                       strcmp(argv[i], "--no-saffron-gc") == 0) {
-                /* global, consumed elsewhere */
-            } else if (argv[i][0] != '-') {
-                if (input) { free(comp_inc); return drv_usage_error(usage_build); }
-                input = argv[i];
-            } else {
-                free(comp_inc); return drv_usage_error(usage_build);
-            }
-        }
-        if (!input) { free(comp_inc); return drv_usage_error(usage_build); }
-        if (drv_is_directory(input)) {
-            fprintf(stderr, "tur compile: expects a single .tur file, not a directory\n");
-            free(comp_inc); return 1;
-        }
-        /* Default the object under <build-dir>/obj/ when --build-dir/-B (or a
-         * manifest :build-dir) applies and no explicit -o was given. */
-        char obj_default[1200];
-        if (!out) {
-            char *bd = drv_resolve_build_dir(input, cli_build_dir);
-            if (bd) {
-                char base[512];
-                drv_default_output_name(input, base, sizeof(base));
-                snprintf(obj_default, sizeof(obj_default), "%s/obj/%s.o", bd, base);
-                out = obj_default;
-                free(bd);
-            }
-        }
-        /* Reader macros, experiments + spice include auto-discovery,
-         * mirroring cmd_build. */
-        char **c_rm = NULL; int c_n = 0;
-        c_rm = discover_manifest_reader_macros(input, &c_n);
-        char **c_owned = NULL; int n_c_owned = 0;
-        Ls2ResolverCtx c_ls2 = {0};
-        auto_append_spice_includes(input, &comp_inc, &n_comp_inc,
-                                   &c_owned, &n_c_owned, &c_ls2);
-        ls2_resolver_ctx_set(&c_ls2);
-        int rc = cmd_compile(input, out, (const char **)comp_inc, n_comp_inc,
-                             (const char **)c_rm, c_n);
-        ls2_resolver_ctx_set(NULL);
-        ls2_resolver_ctx_dispose(&c_ls2);
-        for (int i = 0; i < n_c_owned; i++) free(c_owned[i]);
-        free(c_owned);
-        free_reader_macro_paths(c_rm, c_n);
-        free(comp_inc);
-        return rc;
-    }
-    /* tur-link-and-build-split-plan Phase 3a: tur link <obj/src>... -o <out> */
-    if (strcmp(cmd, "link") == 0) {
-        const char *out = NULL;
-        bool shared = false;
-        const char *link_flags = NULL;
-        const char **inputs = (const char **)malloc((size_t)argc * sizeof(char *));
-        int n_inputs = 0;
-        for (int i = 2; i < argc; i++) {
-            if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
-                free(inputs); return usage_build();
-            } else if (strcmp(argv[i], "-o") == 0 && i + 1 < argc) {
-                out = argv[++i];
-            } else if (strcmp(argv[i], "--shared") == 0) {
-                shared = true;
-            } else if (strcmp(argv[i], "--link-flags") == 0 && i + 1 < argc) {
-                link_flags = argv[++i];
-            } else if (argv[i][0] != '-') {
-                inputs[n_inputs++] = argv[i];
-            } else {
-                fprintf(stderr, "tur link: unknown option '%s'\n", argv[i]);
-                free(inputs); return drv_usage_error(usage_build);
-            }
-        }
-        if (n_inputs == 0) { free(inputs); return drv_usage_error(usage_build); }
-        int rc = cmd_link(out, inputs, n_inputs, shared, link_flags);
-        free(inputs);
-        return rc;
-    }
+    if (strcmp(cmd, "trace") == 0)
+        return cmd_trace_main(argc, argv);
+    if (strcmp(cmd, "lsp-lite") == 0)
+        return cmd_lsp_lite_main(argc, argv);
+    if (strcmp(cmd, "build") == 0)
+        return cmd_build_main(argc, argv);
+    if (strcmp(cmd, "compile") == 0)
+        return cmd_compile_main(argc, argv);
+    if (strcmp(cmd, "link") == 0)
+        return cmd_link_main(argc, argv);
     if (strcmp(cmd, "jit") == 0) {
         return cmd_jit(argc, argv);
     }
     if (strcmp(cmd, "emit-rt-split") == 0) {
         return cmd_emit_rt_split(argc, argv);
     }
-    if (strcmp(cmd, "run") == 0) {
-        /* Disambiguate: if the first non-flag argument ends in .tur or
-         * .tur.sweet, use the classic compile-and-run path; if --release /
-         * -I flags appear (compile-only flags), also use classic path.
-         * Otherwise dispatch to the Justfile task runner (RN0-RN7). */
-        bool use_classic = false;
-        for (int i = 2; i < argc; i++) {
-            if (strcmp(argv[i], "--") == 0) break;
-            if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
-                /* Default help to the task runner; it documents both modes. */
-                return usage_justrun();
-            }
-            if (strcmp(argv[i], "--release") == 0 ||
-                strcmp(argv[i], "--offline") == 0  ||
-                strcmp(argv[i], "--engine") == 0   ||
-                strncmp(argv[i], "--engine=", 9) == 0 ||
-                strncmp(argv[i], "-I", 2) == 0) {
-                /* --engine is a classic-path (compile/run) flag; without this
-                 * arm its VALUE would be taken as a Justfile task name. */
-                use_classic = true;
-                break;
-            }
-            if (argv[i][0] != '-' || strcmp(argv[i], "-") == 0) {
-                /* Check if it looks like a .tur file path */
-                const char *a = argv[i];
-                size_t an = strlen(a);
-                if ((an > 4  && strcmp(a + an - 4,  ".tur")      == 0) ||
-                    (an > 10 && strcmp(a + an - 10, ".tur.sweet") == 0) ||
-                    (an > 4  && strcmp(a + an - 4,  ".scm")      == 0) ||
-                    strcmp(a, "-") == 0) {
-                    use_classic = true;
-                }
-                break;
-            }
-        }
-        if (use_classic)
-            return cmd_run(argc, argv);
-        /* engine-selection-plan E3: a BARE `tur run` (no recipe, no file) in
-         * a Justfile-less build.tur project takes the classic project-run
-         * path -- which resolves the manifest's `:engine` -- instead of the
-         * historical hard 127.  A named recipe keeps the task-runner error:
-         * a typo'd task silently compiling-and-running would be worse. */
-        {
-            bool bare = true;
-            for (int i = 2; i < argc; i++) {
-                if (strcmp(argv[i], "--") == 0) break;
-                if (argv[i][0] != '-') { bare = false; break; }
-                if (strcmp(argv[i], "--justfile") == 0 ||
-                    strcmp(argv[i], "--chdir") == 0) i++;   /* skip value */
-            }
-            if (bare && !justrun_finds_justfile()) {
-                char _cwd[4096];
-                if (getcwd(_cwd, sizeof(_cwd))) {
-                    char *_root = drv_find_project_root(_cwd);
-                    if (_root) {
-                        free(_root);
-                        return cmd_run(argc, argv);
-                    }
-                }
-            }
-        }
-        return cmd_justrun(argc, argv);
-    }
-    if (strcmp(cmd, "repl") == 0) {
-        /* Phase S0: interactive REPL.
-         * RP6: --watch enables auto-reload between prompts when a
-         * spice source file changes mtime. No background thread --
-         * the freshness check runs synchronously each turn. */
-        bool watch_mode = false;
-        const char *repl_engine_flag = NULL;
-        /* saffron-lang-plan S8: start the session in a dialect, rather than
-         * making the user type `#lang saffron` as their first line.  Both
-         * routes land on the same env switch. */
-        const char *repl_lang_flag = NULL;
-        for (int i = 2; i < argc; i++) {
-            if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
-                return usage_repl();
-            }
-            if (strcmp(argv[i], "--watch") == 0) {
-                watch_mode = true;
-                continue;
-            }
-            if (strcmp(argv[i], "--lang") == 0 && i + 1 < argc) {
-                repl_lang_flag = argv[++i];
-                continue;
-            }
-            if (strncmp(argv[i], "--lang=", 7) == 0) {
-                repl_lang_flag = argv[i] + 7;
-                continue;
-            }
-            if (strcmp(argv[i], "--engine") == 0 && i + 1 < argc) {
-                repl_engine_flag = argv[++i];
-                continue;
-            }
-            if (strncmp(argv[i], "--engine=", 9) == 0) {
-                repl_engine_flag = argv[i] + 9;
-                continue;
-            }
-            fprintf(stderr, "tur repl: unknown option '%s'\n", argv[i]);
-            return drv_usage_error(usage_repl);
-        }
-        /* J2 (jit-engine-plan 3.3): spice auto-discovery can build in process
-         * through the MIR engine instead of the `tur build --shared`
-         * subprocess + dlopen.  This used to hang off `--enable=jit`; that
-         * experiment graduated 2026-08-17, so it hangs off ENGINE SELECTION
-         * now -- `--engine jit`, `TUR_ENGINE=jit`, or `:engine "jit"` in the
-         * enclosing build.tur, the same ladder `tur run` resolves.
-         *
-         * Graduating the experiment deliberately did NOT make this the
-         * default: unset, the engine resolves to "cc" and the subprocess path
-         * is byte-for-byte what it was. */
-        {
-            const char *eng = drv_resolve_engine(".", repl_engine_flag);
-            if (!eng) return 2;    /* TUR-E0311 already printed */
-            if (strcmp(eng, "jit") == 0) {
-#ifdef TUR_HAVE_JIT
-                tur_spice_set_jit_hook(&g_repl_jit_hook);
-#else
-                fprintf(stderr,
-                        "tur repl: engine \"jit\" is configured, but this "
-                        "build carries no JIT engine\n"
-                        "     reconfigure with -DTUR_JIT=ON (the default on "
-                        "64-bit x86-64/arm64),\n"
-                        "     or override the engine: --engine cc / "
-                        "TUR_ENGINE=cc\n");
-                return 2;
-#endif
-            }
-        }
-        /* Validated HERE rather than inside cmd_repl, so a typo is a usage
-         * error before the banner prints and the stdlib preloads. */
-        if (repl_lang_flag) {
-            /* r7rs-lang-plan R9: any base `tur dialects` lists, resolved
-             * through the same table the `#lang` line uses -- it was a
-             * hard-coded "turmeric"/"saffron" pair, so `--lang r7rs` was
-             * refused. */
-            LangDialect ld;
-            ReaderType lr;
-            if (!lang_base_lookup(repl_lang_flag, strlen(repl_lang_flag), &ld, &lr)) {
-                fprintf(stderr,
-                        "tur repl: unknown --lang '%s' "
-                        "(expected a base `tur dialects` lists, e.g. "
-                        "\"turmeric\", \"saffron\" or \"r7rs\")\n",
-                        repl_lang_flag);
-                return drv_usage_error(usage_repl);
-            }
-            g_repl_start_lang = repl_lang_flag;
-        }
-        return cmd_repl(watch_mode);
-    }
+    if (strcmp(cmd, "run") == 0)
+        return cmd_run_main(argc, argv);
+    if (strcmp(cmd, "repl") == 0)
+        return cmd_repl_main(argc, argv);
     /* Tier 3: persistent fixture worker for the test suite. */
     if (strcmp(cmd, "worker") == 0) {
         return cmd_worker();
     }
-    if (strcmp(cmd, "interpret") == 0 || strcmp(cmd, "--interpret") == 0) {
-        char **inc = NULL;
-        int    n_inc = 0;
-        int    fi = interp_leading_include_flags(argc, argv, 2, &inc, &n_inc);
-        if (fi < 0) return 2;
-        if (fi >= argc) {
-            free(inc);
-            fprintf(stderr, "tur: %s requires a file argument\n", cmd);
-            return usage();
-        }
-        int rc = cmd_eval_inc(argv[fi], !no_color && stderr_is_tty(),
-                              inc, n_inc, argv + fi + 1, argc - fi - 1,
-                              /*debug=*/false);
-        free(inc);
-        return rc;
-    }
-    /* Debugger Phase 2: `tur debug <file.tur> [args...]` -- run a file through
-     * the tree-walking interpreter under the interactive debugger.  Drops into
-     * a command REPL at program entry; commands are read from stdin (so a
-     * script can drive it).  See docs/archive/history/debugger-plan.md (Phase 2). */
-    if (strcmp(cmd, "debug") == 0) {
-        if (argc < 3 || strcmp(argv[2], "--help") == 0 || strcmp(argv[2], "-h") == 0) {
-            fprintf(stderr,
-                "usage:\n  tur debug <file.tur> [args...]\n"
-                "\nDrops into an interactive debugger (break/step/next/finish/\n"
-                "backtrace/locals/print/list/continue). Type 'help' at the\n"
-                "(tur-dbg) prompt for the full command list.\n");
-            return argc < 3 ? 1 : 0;
-        }
-        char **inc = NULL;
-        int    n_inc = 0;
-        int    fi = interp_leading_include_flags(argc, argv, 2, &inc, &n_inc);
-        if (fi < 0) return 2;
-        if (fi >= argc) {
-            free(inc);
-            fprintf(stderr, "tur: debug requires a file argument\n");
-            return 1;
-        }
-        int rc = cmd_eval_inc(argv[fi], !no_color && stderr_is_tty(),
-                              inc, n_inc, argv + fi + 1, argc - fi - 1,
-                              /*debug=*/true);
-        free(inc);
-        return rc;
-    }
-    /* E3: tur eval '<expr>' or tur eval --file <file> */
-    if (strcmp(cmd, "eval") == 0) {
-        if (argc < 3) return drv_usage_error(usage_eval);
-        bool is_file = false;
-        const char *src = NULL;
-        for (int i = 2; i < argc; i++) {
-            if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0)
-                return usage_eval();
-            int consumed = 0;
-            if (drv_is_include_flag(argc, argv, i, &consumed)) {
-                i += consumed - 1;
-                continue;
-            }
-            if (strcmp(argv[i], "--file") == 0 && i + 1 < argc) {
-                is_file = true;
-                src = argv[++i];
-            } else if (argv[i][0] != '-') {
-                src = argv[i];
-            }
-        }
-        if (!src) return drv_usage_error(usage_eval);
-        bool use_color = !no_color && stderr_is_tty();
-        if (is_file) {
-            char **inc = NULL;
-            int    n_inc = drv_parse_include_flags(argc, argv, 2, &inc);
-            if (n_inc < 0) {
-                fprintf(stderr, "tur: -I requires a directory argument\n");
-                return 2;
-            }
-            int rc = cmd_eval_inc(src, use_color, inc, n_inc, NULL, 0,
-                                  /*debug=*/false);
-            free(inc);
-            return rc;
-        }
-        return cmd_eval_expr(src, use_color);
-    }
-    /* E5: tur doc <symbol> */
-    if (strcmp(cmd, "doc") == 0) {
-        if (argc == 3 && (strcmp(argv[2], "--help") == 0 || strcmp(argv[2], "-h") == 0))
-            return usage_doc();
-        if (argc != 3) return drv_usage_error(usage_doc);
-        return cmd_doc_cli(argv[2]);
-    }
+    if (strcmp(cmd, "interpret") == 0 || strcmp(cmd, "--interpret") == 0)
+        return cmd_interpret_main(argc, argv);
+    if (strcmp(cmd, "debug") == 0)
+        return cmd_debug_main(argc, argv);
+    if (strcmp(cmd, "eval") == 0)
+        return cmd_eval_main(argc, argv);
+    if (strcmp(cmd, "doc") == 0)
+        return cmd_doc_main(argc, argv);
     /* OD4: tur docs -- locate/open/serve the rendered guides and API pages. */
     if (strcmp(cmd, "docs") == 0)
         return cmd_docs(argc, argv);
-    /* AI6: tur image-info <image> -- print header without resuming. */
-    if (strcmp(cmd, "image-info") == 0) {
-        if (argc != 3 || strcmp(argv[2], "--help") == 0 || strcmp(argv[2], "-h") == 0) {
-            fprintf(stderr, "usage:\n  tur image-info <image>\n");
-            return argc == 3 ? 0 : 1;
-        }
-        return cmd_image_info(argv[2]);
-    }
-    /* AI6: tur image-verify <image> [binary] -- validate header (+ stamp). */
-    if (strcmp(cmd, "image-verify") == 0) {
-        if (argc < 3 || argc > 4 || strcmp(argv[2], "--help") == 0 || strcmp(argv[2], "-h") == 0) {
-            fprintf(stderr, "usage:\n  tur image-verify <image> [loader-binary]\n");
-            return (argc >= 3 && strcmp(argv[2], "--help") != 0) ? 2 : 0;
-        }
-        return cmd_image_verify(argv[2], argc == 4 ? argv[3] : NULL);
-    }
-    /* E13: tur explain — first-class subcommand wrapping --explain */
-    if (strcmp(cmd, "explain") == 0) {
-        if (argc == 3 && (strcmp(argv[2], "--help") == 0 || strcmp(argv[2], "-h") == 0))
-            return usage_explain();
-        if (argc < 3) return drv_usage_error(usage_explain);
-        return cmd_explain(argv[2]);
-    }
-    if (strcmp(cmd, "format") == 0) {
-        bool check_only = false;
-        bool diff_mode  = false;
-        const char *fmt_input = NULL;
-        bool        lang_set  = false;
-        ReaderType  force_lang = READER_TURMERIC;
-        for (int i = 2; i < argc; i++) {
-            if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0)
-                return usage_format();
-            if (strcmp(argv[i], "--check") == 0) {
-                check_only = true;
-            } else if (strcmp(argv[i], "--diff") == 0) {
-                diff_mode = true;
-            } else if (strcmp(argv[i], "--lang") == 0) {
-                if (i + 1 >= argc) return drv_usage_error(usage_format);
-                const char *lang = argv[++i];
-                if (!fmt_reader_from_lang_name(lang, &force_lang)) {
-                    fprintf(stderr,
-                            "tur format: unknown dialect '%s' (expected a "
-                            "reader name or a base `tur dialects` lists)\n",
-                            lang);
-                    return 2;
-                }
-                lang_set = true;
-            } else if (argv[i][0] != '-') {
-                if (fmt_input) return drv_usage_error(usage_format);
-                fmt_input = argv[i];
-            } else {
-                return drv_usage_error(usage_format);
-            }
-        }
-        if (check_only && diff_mode) return drv_usage_error(usage_format);
-        return cmd_format(fmt_input, check_only, diff_mode, lang_set,
-                          force_lang);
-    }
+    if (strcmp(cmd, "image-info") == 0)
+        return cmd_image_info_main(argc, argv);
+    if (strcmp(cmd, "image-verify") == 0)
+        return cmd_image_verify_main(argc, argv);
+    if (strcmp(cmd, "explain") == 0)
+        return cmd_explain_main(argc, argv);
+    if (strcmp(cmd, "format") == 0)
+        return cmd_format_main(argc, argv);
     if (strcmp(cmd, "fmt") == 0)
         return cmd_fmt(argc, argv);
-    if (strcmp(cmd, "parse-check") == 0) {
-        if (argc == 3 && (strcmp(argv[2], "--help") == 0 ||
-                          strcmp(argv[2], "-h") == 0))
-            return usage_parse_check();
-        if (argc != 4) return drv_usage_error(usage_parse_check);
-        return cmd_parse_check(argv[2], argv[3]);
-    }
+    if (strcmp(cmd, "parse-check") == 0)
+        return cmd_parse_check_main(argc, argv);
     if (strcmp(cmd, "demangle") == 0)
         return cmd_demangle(argc, argv);
-    if (strcmp(cmd, "test") == 0) {
-        if (argc == 3 && (strcmp(argv[2], "--help") == 0 || strcmp(argv[2], "-h") == 0))
-            return usage_test();
-        if (argc != 3) return drv_usage_error(usage_test);
-        return cmd_test(argv[2]);
-    }
+    if (strcmp(cmd, "test") == 0)
+        return cmd_test_main(argc, argv);
     /* Phase PKG-1: Spice package manager commands */
     if (strcmp(cmd, "new") == 0)
         return cmd_pkg_new(argc, argv);

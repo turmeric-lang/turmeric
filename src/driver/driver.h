@@ -271,18 +271,19 @@ extern const TurSpiceJitHook g_repl_jit_hook;
 extern const TuriInlineCJitHook g_repl_inline_c_jit_hook;
 #endif
 
-/* == driver/cmd_format.c =================================================== */
-bool fmt_reader_from_lang_name(const char *lang, ReaderType *out);
-
 /* == driver/cli.c ========================================================== */
 extern bool g_no_auto_spice;
 extern bool g_no_auto_stdlib;
 extern bool g_no_abi_cache;
+extern bool g_no_color;
 int drv_usage_error(int (*usage)(void));
 bool is_known_deprecated_x_flag(const char *s);
 void warn_deprecated_x_flag(const char *name);
 bool enable_experiment_list(const char *list, ExperimentSource src);
 bool drv_is_include_flag(int argc, char **argv, int i, int *consumed);
 int drv_parse_include_flags(int argc, char **argv, int start, char ***out_dirs);
+
+/* == main.c ================================================================ */
+int drv_usage(void);
 
 #endif /* TUR_DRIVER_H */

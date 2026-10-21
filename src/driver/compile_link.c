@@ -315,3 +315,114 @@ int cmd_link(const char *out, const char **inputs, int n_inputs,
     buf_free(&cc_flags);
     return link_rc;
 }
+
+/* -------------------------------------------------------------------------
+ * Entry points: the command table in cli.c runs these for `tur <command>`.
+ * ---------------------------------------------------------------------- */
+
+/* tur-link-and-build-split-plan Phase 3a-0: tur compile <in.tur> -o <out.o> */
+int cmd_compile_main(int argc, char **argv) {
+    const char *input = NULL;
+    const char *out = NULL;
+    const char *cli_build_dir = NULL;
+    char  **comp_inc = NULL;
+    int     n_comp_inc = drv_parse_include_flags(argc, argv, 2, &comp_inc);
+    if (n_comp_inc < 0) { free(comp_inc); return drv_usage_error(usage_build); }
+    for (int i = 2; i < argc; i++) {
+        int c;
+        if (drv_is_include_flag(argc, argv, i, &c)) { i += c - 1; continue; }
+        if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
+            free(comp_inc); return usage_build();
+        } else if (strcmp(argv[i], "-o") == 0 && i + 1 < argc) {
+            out = argv[++i];
+        } else if ((strcmp(argv[i], "--build-dir") == 0 ||
+                    strcmp(argv[i], "-B") == 0) && i + 1 < argc) {
+            cli_build_dir = argv[++i];
+        } else if (strncmp(argv[i], "--runtime=", 10) == 0 ||
+                   (strcmp(argv[i], "--runtime") == 0 && i + 1 < argc)) {
+            const char *mode = argv[i][9] == '=' ? argv[i] + 10 : argv[++i];
+            if (strcmp(mode, "lib") == 0) g_runtime_mode = TUR_RT_LIB;
+            else if (strcmp(mode, "source") == 0) g_runtime_mode = TUR_RT_SOURCE;
+            else if (strcmp(mode, "auto") == 0) g_runtime_mode = TUR_RT_AUTO;
+            else {
+                fprintf(stderr, "tur compile: unknown --runtime '%s' "
+                        "(supported: auto, lib, source)\n", mode);
+                free(comp_inc); return 1;
+            }
+        } else if (strcmp(argv[i], "--no-abi-cache") == 0 ||
+                   strcmp(argv[i], "--no-r7rs-gc") == 0 ||
+                   strcmp(argv[i], "--no-saffron-gc") == 0) {
+            /* global, consumed elsewhere */
+        } else if (argv[i][0] != '-') {
+            if (input) { free(comp_inc); return drv_usage_error(usage_build); }
+            input = argv[i];
+        } else {
+            free(comp_inc); return drv_usage_error(usage_build);
+        }
+    }
+    if (!input) { free(comp_inc); return drv_usage_error(usage_build); }
+    if (drv_is_directory(input)) {
+        fprintf(stderr, "tur compile: expects a single .tur file, not a directory\n");
+        free(comp_inc); return 1;
+    }
+    /* Default the object under <build-dir>/obj/ when --build-dir/-B (or a
+     * manifest :build-dir) applies and no explicit -o was given. */
+    char obj_default[1200];
+    if (!out) {
+        char *bd = drv_resolve_build_dir(input, cli_build_dir);
+        if (bd) {
+            char base[512];
+            drv_default_output_name(input, base, sizeof(base));
+            snprintf(obj_default, sizeof(obj_default), "%s/obj/%s.o", bd, base);
+            out = obj_default;
+            free(bd);
+        }
+    }
+    /* Reader macros, experiments + spice include auto-discovery,
+     * mirroring cmd_build. */
+    char **c_rm = NULL; int c_n = 0;
+    c_rm = discover_manifest_reader_macros(input, &c_n);
+    char **c_owned = NULL; int n_c_owned = 0;
+    Ls2ResolverCtx c_ls2 = {0};
+    auto_append_spice_includes(input, &comp_inc, &n_comp_inc,
+                               &c_owned, &n_c_owned, &c_ls2);
+    ls2_resolver_ctx_set(&c_ls2);
+    int rc = cmd_compile(input, out, (const char **)comp_inc, n_comp_inc,
+                         (const char **)c_rm, c_n);
+    ls2_resolver_ctx_set(NULL);
+    ls2_resolver_ctx_dispose(&c_ls2);
+    for (int i = 0; i < n_c_owned; i++) free(c_owned[i]);
+    free(c_owned);
+    free_reader_macro_paths(c_rm, c_n);
+    free(comp_inc);
+    return rc;
+}
+
+/* tur-link-and-build-split-plan Phase 3a: tur link <obj/src>... -o <out> */
+int cmd_link_main(int argc, char **argv) {
+    const char *out = NULL;
+    bool shared = false;
+    const char *link_flags = NULL;
+    const char **inputs = (const char **)malloc((size_t)argc * sizeof(char *));
+    int n_inputs = 0;
+    for (int i = 2; i < argc; i++) {
+        if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
+            free(inputs); return usage_build();
+        } else if (strcmp(argv[i], "-o") == 0 && i + 1 < argc) {
+            out = argv[++i];
+        } else if (strcmp(argv[i], "--shared") == 0) {
+            shared = true;
+        } else if (strcmp(argv[i], "--link-flags") == 0 && i + 1 < argc) {
+            link_flags = argv[++i];
+        } else if (argv[i][0] != '-') {
+            inputs[n_inputs++] = argv[i];
+        } else {
+            fprintf(stderr, "tur link: unknown option '%s'\n", argv[i]);
+            free(inputs); return drv_usage_error(usage_build);
+        }
+    }
+    if (n_inputs == 0) { free(inputs); return drv_usage_error(usage_build); }
+    int rc = cmd_link(out, inputs, n_inputs, shared, link_flags);
+    free(inputs);
+    return rc;
+}

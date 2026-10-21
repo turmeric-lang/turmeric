@@ -384,3 +384,7 @@ bool g_no_auto_stdlib = false;
  * The cache is a build-time optimization; disabling it must always still
  * produce a correct build (clones are recomputed per invocation). */
 bool g_no_abi_cache = false;
+
+/* --no-color, read by the dispatcher's scan; the interpreter commands pass
+ * it on as their use_color. */
+bool g_no_color = false;

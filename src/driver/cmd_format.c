@@ -21,7 +21,7 @@
  * lists, resolved to its reader -- formatting is a reader concern, so
  * `saffron` formats as `turmeric` and `saffron/sweet` as `sweet`.  False for
  * a name neither table knows. */
-bool fmt_reader_from_lang_name(const char *lang, ReaderType *out) {
+static bool fmt_reader_from_lang_name(const char *lang, ReaderType *out) {
     if (strcmp(lang, "turmeric") == 0 || strcmp(lang, "tur") == 0) {
         *out = READER_TURMERIC;
     } else if (strcmp(lang, "sweet-exp") == 0 || strcmp(lang, "sweet") == 0 || strcmp(lang, "tursweet") == 0) {
@@ -118,8 +118,8 @@ static int format_emit(const char *path, const char *src, size_t len,
  * Anything that is not plain Turmeric goes through fmt_format_document --
  * the same path as `tur fmt` -- instead of being read under the Turmeric
  * reader, which printed a sweet buffer one token per line. */
-int cmd_format(const char *path, bool check_only, bool diff_mode,
-               bool lang_set, ReaderType force_lang) {
+static int cmd_format(const char *path, bool check_only, bool diff_mode,
+                      bool lang_set, ReaderType force_lang) {
     char  *src = NULL;
     size_t len = 0;
 
@@ -358,7 +358,7 @@ static int parse_check_read(const char *path, ReaderType forced, Buf *out) {
     return rc;
 }
 
-int cmd_parse_check(const char *path_a, const char *path_b) {
+static int cmd_parse_check(const char *path_a, const char *path_b) {
     Buf sa, sb;
     buf_init(&sa);
     buf_init(&sb);
@@ -767,4 +767,52 @@ int cmd_fmt(int argc, char **argv) {
     if (changed > 0 && check_only) return 1;
     if (changed > 0 && diff_mode)  return 1;
     return 0;
+}
+
+/* -------------------------------------------------------------------------
+ * Entry points: the command table in cli.c runs these for `tur <command>`.
+ * ---------------------------------------------------------------------- */
+
+int cmd_format_main(int argc, char **argv) {
+    bool check_only = false;
+    bool diff_mode  = false;
+    const char *fmt_input = NULL;
+    bool        lang_set  = false;
+    ReaderType  force_lang = READER_TURMERIC;
+    for (int i = 2; i < argc; i++) {
+        if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0)
+            return usage_format();
+        if (strcmp(argv[i], "--check") == 0) {
+            check_only = true;
+        } else if (strcmp(argv[i], "--diff") == 0) {
+            diff_mode = true;
+        } else if (strcmp(argv[i], "--lang") == 0) {
+            if (i + 1 >= argc) return drv_usage_error(usage_format);
+            const char *lang = argv[++i];
+            if (!fmt_reader_from_lang_name(lang, &force_lang)) {
+                fprintf(stderr,
+                        "tur format: unknown dialect '%s' (expected a "
+                        "reader name or a base `tur dialects` lists)\n",
+                        lang);
+                return 2;
+            }
+            lang_set = true;
+        } else if (argv[i][0] != '-') {
+            if (fmt_input) return drv_usage_error(usage_format);
+            fmt_input = argv[i];
+        } else {
+            return drv_usage_error(usage_format);
+        }
+    }
+    if (check_only && diff_mode) return drv_usage_error(usage_format);
+    return cmd_format(fmt_input, check_only, diff_mode, lang_set,
+                      force_lang);
+}
+
+int cmd_parse_check_main(int argc, char **argv) {
+    if (argc == 3 && (strcmp(argv[2], "--help") == 0 ||
+                      strcmp(argv[2], "-h") == 0))
+        return usage_parse_check();
+    if (argc != 4) return drv_usage_error(usage_parse_check);
+    return cmd_parse_check(argv[2], argv[3]);
 }

@@ -1,26 +1,29 @@
-/* commands.h -- the subcommand entry points the dispatcher calls
- * (main-c-split-plan): each `tur <command>`'s `cmd_*` handler and its
- * `usage_*` text.  Sectioned by defining file like driver.h, and checked the
- * same way (tests/check-driver-headers.py). */
+/* commands.h -- the subcommand entry points (main-c-split-plan): each
+ * `tur <command>`'s `cmd_*` functions and its `usage_*` text.
+ *
+ * A `cmd_<name>_main(argc, argv)` is what the command table in cli.c runs for
+ * `tur <name>`: argv is the whole command line with the global flags already
+ * stripped, so argv[1] is the command word as typed (perhaps a prefix or an
+ * alias) and its own arguments start at argv[2].  The table points straight
+ * at a `cmd_*` that already takes (argc, argv).  The other `cmd_*` functions
+ * do a command's work once its arguments are parsed.
+ *
+ * Sectioned by defining file like driver.h, and checked the same way
+ * (tests/check-driver-headers.py). */
 #ifndef TUR_DRIVER_COMMANDS_H
 #define TUR_DRIVER_COMMANDS_H
 
 #include <stdbool.h>
-#include <stdint.h>
-
-#include "diag.h"        /* ReaderType */
-#include "turi/trace.h"  /* TurTraceGrain */
 
 /* == driver/preamble_split.c =============================================== */
 int cmd_emit_rt_split(int argc, char **argv);
 
 /* == driver/cmd_emit.c ===================================================== */
-int cmd_emit_c(const char *path,
-               const char **include_dirs, int n_include_dirs);
-int cmd_emit_c_to_dir(const char *out_dir, char **inputs, int n_inputs,
-                      const char **include_dirs, int n_include_dirs);
-int cmd_emit_h(const char *path,
-               const char **include_dirs, int n_include_dirs);
+int cmd_emit_c_main(int argc, char **argv);
+int cmd_emit_h_main(int argc, char **argv);
+int cmd_check_main(int argc, char **argv);
+int cmd_expand_main(int argc, char **argv);
+int cmd_audit_spans_main(int argc, char **argv);
 
 /* == driver/cmd_build.c ==================================================== */
 int cmd_build(const char *input, const char *out_path,
@@ -28,6 +31,7 @@ int cmd_build(const char *input, const char *out_path,
               const char *target,
               const char **reader_macro_paths,
               int n_reader_macro_paths);
+int cmd_build_main(int argc, char **argv);
 
 /* == driver/project.c ====================================================== */
 int cmd_build_multi(const char *dir, const char *out_path, bool shared,
@@ -45,45 +49,50 @@ int cmd_compile(const char *input, const char *out_obj,
                 int n_reader_macro_paths);
 int cmd_link(const char *out, const char **inputs, int n_inputs,
              bool shared, const char *extra_link_flags);
+int cmd_compile_main(int argc, char **argv);
+int cmd_link_main(int argc, char **argv);
 
 /* == driver/cmd_run.c ====================================================== */
 int cmd_run(int argc, char **argv);
-int cmd_test(const char *dir);
 int cmd_check_dir(const char *dir);
+int cmd_run_main(int argc, char **argv);
+int cmd_test_main(int argc, char **argv);
 
 /* == driver/jit.c ========================================================== */
 int cmd_jit(int argc, char **argv);
 
 /* == driver/cmd_format.c =================================================== */
-int cmd_format(const char *path, bool check_only, bool diff_mode,
-               bool lang_set, ReaderType force_lang);
-int cmd_parse_check(const char *path_a, const char *path_b);
 int cmd_fmt(int argc, char **argv);
+int cmd_format_main(int argc, char **argv);
+int cmd_parse_check_main(int argc, char **argv);
 
 /* == driver/cmd_eval.c ===================================================== */
 int cmd_eval_inc(const char *path, bool use_color,
                  char **user_inc, int n_user_inc,
                  char **extra_argv, int extra_argc, bool debug);
 int cmd_dap(void);
-int cmd_trace(const char *path, const char *out_path,
-              char **extra_argv, int extra_argc, uint32_t max_steps,
-              TurTraceGrain grain);
-int cmd_trace_dump(const char *path);
-int cmd_eval_expr(const char *expr, bool use_color);
-int cmd_repl(bool watch_mode);
+int cmd_trace_main(int argc, char **argv);
+int cmd_repl_main(int argc, char **argv);
+int cmd_interpret_main(int argc, char **argv);
+int cmd_debug_main(int argc, char **argv);
+int cmd_eval_main(int argc, char **argv);
 
 /* == driver/worker.c ======================================================= */
 int cmd_worker(void);
 
 /* == driver/cmd_misc.c ===================================================== */
-int cmd_image_info(const char *path);
-int cmd_image_verify(const char *path, const char *binary);
-int cmd_doc_cli(const char *sym);
 int cmd_docs(int argc, char **argv);
 int cmd_smt(int argc, char **argv);
 int cmd_experiments(int argc, char **argv);
 int cmd_dialects(int argc, char **argv);
 int cmd_explain(const char *code);
+int cmd_lsp_main(int argc, char **argv);
+int cmd_mcp_main(int argc, char **argv);
+int cmd_lsp_lite_main(int argc, char **argv);
+int cmd_doc_main(int argc, char **argv);
+int cmd_image_info_main(int argc, char **argv);
+int cmd_image_verify_main(int argc, char **argv);
+int cmd_explain_main(int argc, char **argv);
 
 /* == driver/cli.c ========================================================== */
 int usage_build(void);

@@ -14,6 +14,7 @@
 #include "prof.h"         /* profiling-plan C0+C1: --timings */
 #include "global.h"   /* tur_installed_spice_dir, use_json_output */
 #include "globals.h"
+#include "justrun.h"
 
 static int decode_exit_status(int status) {
     if (status == -1) return 127;
@@ -650,7 +651,7 @@ static void parse_test_directives(const char *path, TestDirectives *out) {
     fclose(f);
 }
 
-int cmd_test(const char *dir) {
+static int cmd_test(const char *dir) {
     int n_files = 0;
     char **tur_files = collect_tur_files_deep(dir, &n_files);
     if (!tur_files || n_files == 0) {
@@ -867,4 +868,79 @@ int cmd_check_dir(const char *dir) {
     for (int j = 0; j < n_inc; j++) free((char *)inc[j]);
     free(inc);
     return failed == 0 ? 0 : 1;
+}
+
+/* -------------------------------------------------------------------------
+ * Entry points: the command table in cli.c runs these for `tur <command>`.
+ * ---------------------------------------------------------------------- */
+
+int cmd_run_main(int argc, char **argv) {
+    /* Disambiguate: if the first non-flag argument ends in .tur or
+     * .tur.sweet, use the classic compile-and-run path; if --release /
+     * -I flags appear (compile-only flags), also use classic path.
+     * Otherwise dispatch to the Justfile task runner (RN0-RN7). */
+    bool use_classic = false;
+    for (int i = 2; i < argc; i++) {
+        if (strcmp(argv[i], "--") == 0) break;
+        if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
+            /* Default help to the task runner; it documents both modes. */
+            return usage_justrun();
+        }
+        if (strcmp(argv[i], "--release") == 0 ||
+            strcmp(argv[i], "--offline") == 0  ||
+            strcmp(argv[i], "--engine") == 0   ||
+            strncmp(argv[i], "--engine=", 9) == 0 ||
+            strncmp(argv[i], "-I", 2) == 0) {
+            /* --engine is a classic-path (compile/run) flag; without this
+             * arm its VALUE would be taken as a Justfile task name. */
+            use_classic = true;
+            break;
+        }
+        if (argv[i][0] != '-' || strcmp(argv[i], "-") == 0) {
+            /* Check if it looks like a .tur file path */
+            const char *a = argv[i];
+            size_t an = strlen(a);
+            if ((an > 4  && strcmp(a + an - 4,  ".tur")      == 0) ||
+                (an > 10 && strcmp(a + an - 10, ".tur.sweet") == 0) ||
+                (an > 4  && strcmp(a + an - 4,  ".scm")      == 0) ||
+                strcmp(a, "-") == 0) {
+                use_classic = true;
+            }
+            break;
+        }
+    }
+    if (use_classic)
+        return cmd_run(argc, argv);
+    /* engine-selection-plan E3: a BARE `tur run` (no recipe, no file) in
+     * a Justfile-less build.tur project takes the classic project-run
+     * path -- which resolves the manifest's `:engine` -- instead of the
+     * historical hard 127.  A named recipe keeps the task-runner error:
+     * a typo'd task silently compiling-and-running would be worse. */
+    {
+        bool bare = true;
+        for (int i = 2; i < argc; i++) {
+            if (strcmp(argv[i], "--") == 0) break;
+            if (argv[i][0] != '-') { bare = false; break; }
+            if (strcmp(argv[i], "--justfile") == 0 ||
+                strcmp(argv[i], "--chdir") == 0) i++;   /* skip value */
+        }
+        if (bare && !justrun_finds_justfile()) {
+            char _cwd[4096];
+            if (getcwd(_cwd, sizeof(_cwd))) {
+                char *_root = drv_find_project_root(_cwd);
+                if (_root) {
+                    free(_root);
+                    return cmd_run(argc, argv);
+                }
+            }
+        }
+    }
+    return cmd_justrun(argc, argv);
+}
+
+int cmd_test_main(int argc, char **argv) {
+    if (argc == 3 && (strcmp(argv[2], "--help") == 0 || strcmp(argv[2], "-h") == 0))
+        return usage_test();
+    if (argc != 3) return drv_usage_error(usage_test);
+    return cmd_test(argv[2]);
 }
