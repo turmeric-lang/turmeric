@@ -13,9 +13,6 @@
 ;;; array builtins index in words, and `ptr-add` / `ptr-sub` offset in bytes.
 ;;; A `ptr<void>` from `raw-malloc` is move-typed: passing it to a function
 ;;; consumes it (TUR-E0201 on a second use), while the builtins here borrow it.
-;;;
-;;; Some of these misbehave today, on one engine or both -- see
-;;; docs/reported/unsafe-builtins-wrong-or-engine-dependent.md.
 ;; Reference only: tools/gendocs.py reads the ;;@ lines, the compiler skips them.
 
 ;;; unsafe -- run code that uses the unsafe builtins.
@@ -72,7 +69,7 @@
 ;;; raw-realloc -- resize a block, keeping its contents.
 ;;;
 ;;; C's `realloc`: the block may move, so use the returned pointer and not
-;;; `p`.  Not implemented by the interpreter yet (it returns nil).
+;;; `p`.
 ;;;
 ;;; Parameters:
 ;;;   p    -- the block to resize (or a null pointer, to allocate)
@@ -172,8 +169,6 @@
 
 ;;; ptr-null? -- is a pointer null?
 ;;;
-;;; The interpreter answers wrongly today; see the module notes.
-;;;
 ;;; Parameters:
 ;;;   p -- the pointer to test
 ;;;
@@ -243,35 +238,42 @@
 ;;;   (unsafe-cast true :int)  ; => 1
 ;;@form (unsafe-cast x type)
 
-;;; reinterpret -- meant to reinterpret a value's bits as another type.
+;;; reinterpret -- reinterpret a value's bits as another type.
 ;;;
-;;; The target type must have the same size as `x`'s, checked at compile time.
-;;; Today the result is an `int` converted as `unsafe-cast` converts, not a
-;;; bit-for-bit copy; use `float->bits` / `bits->float` (tur/bits) for a
-;;; float's bit pattern.
+;;; The same bit copy as `transmute`: the target type must have the same size
+;;; as `x`'s, checked at compile time, and the result has the target type.
+;;; Nothing is converted -- `(reinterpret 1.5 :int)` is 1.5's IEEE-754 bit
+;;; pattern, not 1.
 ;;;
 ;;; Parameters:
 ;;;   x    -- the value
 ;;;   type -- the target type, a primitive kind such as `:int`
 ;;;
 ;;; Returns:
-;;;   An `int`.
+;;;   `x`'s bits, read as the target type.
+;;;
+;;; Example:
+;;;   (reinterpret 1.5 :int)  ; => 4609434218613702656
 ;;@form (reinterpret x type)
 
-;;; transmute -- meant to reinterpret a value's bits as another type.
+;;; transmute -- reinterpret a value's bits as another type.
 ;;;
 ;;; The target type must have the same size as `x`'s, checked at compile time
 ;;; (`(transmute (:: 1 :int32) :int)` is an error), and the result has the
-;;; target type.  Today the compiled conversion is a C cast, not a
-;;; bit-for-bit copy, and the interpreter passes `x` through unchanged; use
-;;; `float->bits` / `bits->float` (tur/bits) for a float's bit pattern.
+;;; target type.  The bits are copied, not converted: `(transmute 1.5 :int)`
+;;; is 4609434218613702656, and `transmute` back to `:float` gives 1.5.
+;;; `float->bits` / `bits->float` (tur/bits) are the same copy outside an
+;;; `unsafe` block.  For the NUMBER, use `unsafe-cast` or `float->int`.
 ;;;
 ;;; Parameters:
 ;;;   x    -- the value
 ;;;   type -- the target type, a primitive kind such as `:float`
 ;;;
 ;;; Returns:
-;;;   `x` as the target type.
+;;;   `x`'s bits, read as the target type.
+;;;
+;;; Example:
+;;;   (transmute 4609434218613702656 :float)  ; => 1.5
 ;;@form (transmute x type)
 
 ;;; c-call -- call a C function declared with extern-c.

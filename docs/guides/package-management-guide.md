@@ -164,7 +164,6 @@ Turmeric source file evaluated at build time. The top-level form is
   :build-opts #map{
     :c-flags   ["-O3" "-DGEOM_PRECISION=f64"]
     :link-libs ["m"]
-    :no-stdlib false
   }
 
   ;; What this package exports to consumers
@@ -214,7 +213,6 @@ defpackage geom
   :build-opts #map{
     :c-flags   ["-O3" "-DGEOM_PRECISION=f64"]
     :link-libs ["m"]
-    :no-stdlib false
   }
 
   ;; What this package exports to consumers

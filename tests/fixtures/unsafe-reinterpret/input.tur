@@ -1,7 +1,17 @@
+;; reinterpret / transmute copy bits; they do not convert values
+;; (unsafe-builtins-wrong-or-engine-dependent).
 (defn main [] : int
   (unsafe
-    ;; Reinterpret an int as a float (same size on most platforms)
-    (let [x 0x4048F5C3]  ; bit pattern for 3.14 as float32
+    ;; 0x40091EB851EB851F is the IEEE-754 double bit pattern of 3.14.
+    (let [x 0x40091EB851EB851F]
       (let [f (reinterpret x :float)]
         (println f)
+        (println (reinterpret f :int))
+        (println (transmute 1.5 :int))
+        (println (transmute 4609434218613702656 :float))
+        ;; A round trip keeps the fractional part.
+        (println (transmute (transmute 7.1 :int) :float))
+        ;; float32 <-> int32 go through 32 bits.
+        (println (transmute (:: 1078523331 :int32) :float32))
+        (println (transmute (:: 2.5 :float32) :int32))
         0))))

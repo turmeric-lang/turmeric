@@ -3925,6 +3925,24 @@ static CtorDef *rt_pat_ctor(Elab *e, const Form *pat) {
     return elab_lookup_ctor(e, h->as.sym);
 }
 
+/* refine-top-level-def-not-a-fact: is `f` a value the encoder can take as an
+ * equation's right side with nothing else in scope -- an int literal, or a
+ * constructor applied to int or bool literals and constructor terms
+ * (`(Push 1 (Halt))`)?  Anything that computes (a call, a name) is not: it
+ * could mention state, and an equation the encoder abstracts costs
+ * refutations (see rt_collect_path_conds).  A bare bool is not either: a
+ * crossing reads a named bool argument with the Int sort, so `(= flag true)`
+ * would only be ill-sorted. */
+static bool rt_def_init_is_fact(Elab *e, const Form *f, uint32_t depth) {
+    if (!f || depth >= 64) return false;
+    if (f->tag == F_INT || (f->tag == F_BOOL && depth > 0)) return true;
+    CtorDef *cd = rt_pat_ctor(e, f);
+    if (!cd || f->as.list.len - 1 != cd->n_fields) return false;
+    for (uint32_t i = 1; i < f->as.list.len; i++)
+        if (!rt_def_init_is_fact(e, f->as.list.items[i], depth + 1)) return false;
+    return true;
+}
+
 /* Copy `f`, renaming every FREE occurrence of `from` to `to`.
  *
  * Path splitting asserts `x = v` in the environment's single flat namespace,
@@ -4429,6 +4447,27 @@ static bool rt_cs_seen(Elab *e, const Binding *callee, const Form *cf, uint32_t 
     return false;
 }
 
+/* refine-top-level-def-not-a-fact: the immutable globals an argument form
+ * names, looked up in the scope of the call -- the one place a shadowing local
+ * is told apart from the global.  A call's head is a callee, not a value, and
+ * is skipped.  Deduplicated; past RT_GLOBAL_ARGS_MAX the rest go unrecorded,
+ * which only withholds facts. */
+#define RT_GLOBAL_ARGS_MAX 16
+static void rt_collect_global_args(Elab *e, const Form *f, const Binding **out,
+                                   uint32_t *n, uint32_t depth) {
+    if (!f || depth >= 32 || *n >= RT_GLOBAL_ARGS_MAX) return;
+    if (f->tag == F_SYM && f->as.sym) {
+        const Binding *b = scope_lookup(e->scope, f->as.sym);
+        if (!b || !b->is_global || b->is_mut || b->type.kind == TY_FN) return;
+        for (uint32_t i = 0; i < *n; i++) if (out[i] == b) return;
+        out[(*n)++] = b;
+        return;
+    }
+    if (f->tag != F_LIST && f->tag != F_VEC) return;
+    for (uint32_t i = (f->tag == F_LIST) ? 1 : 0; i < f->as.list.len; i++)
+        rt_collect_global_args(e, f->as.list.items[i], out, n, depth + 1);
+}
+
 uint32_t refine_note_call_site(Elab *e, const Binding *callee,
                                const Form *call_form, uint32_t arg_offset) {
     if (!e || !callee || !call_form)
@@ -4521,6 +4560,19 @@ uint32_t refine_note_call_site(Elab *e, const Binding *callee,
                     fn[k++] = b->name->name;
                 }
             if (k) { cs->frozen_names = fn; cs->n_frozen = k; }
+        }
+    }
+    cs->global_args   = NULL;
+    cs->n_global_args = 0;
+    if (call_form->tag == F_LIST) {
+        const Binding *globals[RT_GLOBAL_ARGS_MAX];
+        uint32_t ng = 0;
+        for (uint32_t i = arg_offset; i < call_form->as.list.len; i++)
+            rt_collect_global_args(e, call_form->as.list.items[i], globals, &ng, 0);
+        if (ng) {
+            cs->global_args = (const Binding **)arena_alloc(e->arena, ng * sizeof(Binding *));
+            memcpy(cs->global_args, globals, ng * sizeof(Binding *));
+            cs->n_global_args = ng;
         }
     }
     cs->loc         = call_form->span;
@@ -7429,6 +7481,19 @@ void refine_resolve_call_sites(Elab *e) {
             if (has_inst_preds)
                 rt_report_shadowed_crossing(e, cs, callee, cf, n_args, subst, n_subst);
             continue;
+        }
+
+        /* refine-top-level-def-not-a-fact: `g = <init>` for each immutable
+         * global an argument names (resolved at the call, so never a local
+         * that shadows it).  Pushed after the path facts, so the rewind below
+         * drops it with them. */
+        for (uint32_t gi = 0; cs->env && gi < cs->n_global_args; gi++) {
+            const Binding *g = cs->global_args[gi];
+            if (!g->refine_def_init || g->is_mut || !g->name) continue;
+            refine_env_push(cs->env,
+                            rt_form_eq(e, cf->span, form_sym(e->arena, cf->span, g->name),
+                                       g->refine_def_init),
+                            NULL, NULL);
         }
 
         uint32_t n_slots = has_inst_preds ? callee->n_refine_params : 0;
@@ -12073,6 +12138,13 @@ Expr *elab_defn(Elab *e, const Form *call) {
                 return_kind == TY_APP ? return_app_type : NULL,
                 return_kind, body->type))
             rc = RET_CONFLICT_CARRIER_AGGREGATE;
+        /* typed-ptr-pointee-not-checked-at-calls: a `: ptr<Foo>` return whose
+         * body yields a `ptr<Bar>` agreed by kind (and `rc<S>` / `rc<U>`). */
+        if (rc == RET_CONFLICT_NONE && !return_unannotated &&
+            (return_kind == TY_PTR_VOID || return_kind == TY_RC ||
+             return_kind == TY_WEAK) &&
+            handle_targets_conflict(return_app_type, &body->type))
+            rc = RET_CONFLICT_NOMINAL;
         /* declared-tyvars-are-not-rigid: the type question the representation
          * predicates above leave out.  A generic's own `[A B]` are rigid in
          * its body, against each other and against a ground type: `[x : A]
@@ -12097,7 +12169,9 @@ Expr *elab_defn(Elab *e, const Form *call) {
         }
         if (rc != RET_CONFLICT_NONE) {
             Buf wb; buf_init(&wb);
-            if (!return_adt_def && return_kind == TY_APP && return_app_type)
+            if (!return_adt_def && (return_kind == TY_APP || return_kind == TY_PTR_VOID ||
+                                    return_kind == TY_RC || return_kind == TY_WEAK) &&
+                return_app_type)
                 type_print(&wb, *return_app_type);
             else if (!return_adt_def && return_kind == TY_TYVAR && return_tyvar_type)
                 type_print(&wb, *return_tyvar_type);
@@ -15540,6 +15614,11 @@ Expr *elab_def(Elab *e, const Form *call) {
     } else {
         scope_add(&e->global, b);
     }
+    /* refine-top-level-def-not-a-fact: an immutable global's literal or
+     * constructor-term value is a fact wherever its name resolves to it. */
+    if (!is_mut && !is_deferred_init && !is_thread_local && !is_atomic &&
+        rt_def_init_is_fact(e, init_f, 0))
+        b->refine_def_init = init_f;
 
     Expr *out = expr_new(e->arena, EX_DEF, TYPE_NIL, call->span);
     out->as.def_.binding = b;

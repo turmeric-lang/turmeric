@@ -223,7 +223,8 @@ typedef struct PkgManifest {
     int          n_c_sources;
     char       **c_includes;
     int          n_c_includes;
-    bool         no_stdlib;
+    /* `:build-opts :no-stdlib` has no field: the reader refuses `true`
+     * (build-opts-c-flags-never-consumed). */
     /* `:web #map{...}` -- what this program needs of a browser. Read only on
      * the wasm arm; `present` is false for every native build. */
     PkgWebOpts   web;
