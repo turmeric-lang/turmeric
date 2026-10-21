@@ -1,0 +1,11 @@
+usage:
+  tur doc <symbol>          print documentation for a builtin, special
+                            form, or stdlib definition
+  tur doc --json <symbol>   print documentation as JSON
+
+Reads the docstring table shipped alongside the binary
+(<stdlib>/docstrings.tur); no network access is involved.
+For rendered guides and API pages offline, see `tur docs`.
+
+Try 'tur --help' for global options.
+[exit 0]

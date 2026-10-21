@@ -1,0 +1,5 @@
+usage:
+  tur install <url> [--ref <ref>] [--subdir <path>] [--name <name>] [--force]
+  tur install <path> --path [--name <name>] [--force]
+  tur install --print-path-snippet
+[exit 1]

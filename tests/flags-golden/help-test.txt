@@ -1,0 +1,12 @@
+usage:
+  tur test <dir>   run all .tur test files in a directory
+
+Each test compiles and runs; it passes iff both succeed (exit 0).
+A test file may carry directives in its leading comment lines:
+  ;; tur-test-flags: --strict-refine   extra compile flags for this test
+  ;; tur-test-expect-error: TUR-W0372  this test must FAIL to compile and
+                                       its diagnostics must contain the
+                                       text; the run phase is skipped
+
+Try 'tur --help' for global options.
+[exit 0]

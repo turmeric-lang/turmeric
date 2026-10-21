@@ -1,0 +1,2 @@
+error [TUR-E0310]: unknown experiment 'no-such-experiment'; run 'tur experiments' for the list
+[exit 2]

@@ -1,0 +1,3 @@
+usage:
+  tur image-info <image>
+[exit 0]

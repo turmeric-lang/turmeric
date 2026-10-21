@@ -1,0 +1,16 @@
+usage:
+  tur demangle [flags]                 filter stdin to stdout
+  tur demangle [flags] <name>...       demangle each name, one per line
+
+flags:
+  --strict      only rewrite module-qualified names (those carrying the
+                "__" separator). Effectively no false positives, but
+                misses bare top-level globals.
+  --annotate    print `source[mangled]` instead of replacing the token,
+                so downstream tools can still match the C symbol.
+
+examples:
+  perf script | tur demangle | perf report -i -
+  nm -g ./build/bin/myprog | tur demangle
+  tur demangle geom__vector__add2        # -> geom/vector/add2
+[exit 0]

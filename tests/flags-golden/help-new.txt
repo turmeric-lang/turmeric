@@ -1,0 +1,19 @@
+usage: tur new <name> [options]
+       tur new --here [options]
+
+options:
+  --kind lib|bin     library (default) or binary spice
+  --bin, --lib       shorthand for --kind
+  --author NAME      author string (default: git config)
+  --license SPDX     write LICENSE (MIT, Apache-2.0, BSD-3-Clause, none)
+  --no-git           skip git init and initial commit
+  --no-ci            skip .github/workflows/ci.yml
+  --no-justfile      skip the standard Justfile template
+  --dry-run          print files that would be created; do not write
+  --here             scaffold into the current directory
+  --sweet            emit build.tur.sweet (sweet-exp syntax)
+
+generated layout:
+  build.tur, tur.lock, src/<name>.tur, tests/<name>_test.tur
+  .gitignore, README.md, Justfile, .github/workflows/ci.yml
+[exit 0]

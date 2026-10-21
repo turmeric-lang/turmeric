@@ -1,0 +1,28 @@
+usage: tur smt <file.smt2>
+       tur smt --interactive
+
+Run an SMT-LIB2 script through tur's in-house staged decision
+procedure (S0 trivial -> S1 EUF -> S2 linear arithmetic -> S3
+Nelson-Oppen) and print the answer.
+
+Scope: the corpus subset of SMT-LIB2 over QF_UFLIA / QF_UFLRA.
+A script using anything outside that fragment is refused whole,
+never partially parsed -- a partially parsed assertion set has
+weaker hypotheses than the script wrote, and `unsat` from it would
+be a claim about work not done.
+
+`unknown` is a first-class answer, not a failure. Parity with a
+production SMT solver is a non-goal.
+
+The script is run as a SESSION: (push)/(pop) scope the assertions and
+each (check-sat) is answered where it appears, so one script can ask
+several questions. A script with no (check-sat) at all is decided once
+at the end. --interactive reads the same commands from stdin and
+answers as they arrive.
+
+exit codes (the LAST answer, when a script asks more than once):
+  0  unsat      the assertion set is contradictory (proved)
+  1  sat        a model was found
+  2  unknown    no stage decided it
+  3  error      unreadable, or outside the accepted fragment
+[exit 0]

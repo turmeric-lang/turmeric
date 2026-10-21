@@ -1,0 +1,2 @@
+usage: tur emit-rt-split [--hash]
+[exit 2]

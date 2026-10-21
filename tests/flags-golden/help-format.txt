@@ -1,0 +1,11 @@
+usage:
+  tur format [file.tur]          format a source file (stdin if no file given)
+  tur format --check [file.tur]  exit 1 if formatting would change the file
+  tur format --diff [file.tur]   print unified diff of formatting changes
+  tur format --lang <dialect>    read with that dialect (as `tur fmt --lang`);
+                                 default: the file's extension and #lang line
+
+  Prefer `tur fmt`, which also formats in place.
+
+Try 'tur --help' for global options.
+[exit 0]
