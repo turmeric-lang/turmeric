@@ -10068,8 +10068,29 @@ static int cmd_eval_h(const char *path, bool use_color,
     g_interpret_mode = true;
     /* The enclosing project's `:experiments` apply to a file run through the
      * interpreter as they do to one that is checked or compiled.  Before the
-     * env is built: experiments are read while it elaborates. */
+     * env is built: experiments are read while it elaborates.
+     *
+     * interpret-ignores-a-malformed-manifest: that read is also where a
+     * broken build.tur is found, and the compiled entry points then refuse to
+     * continue (TUR-E0624, pkg_manifest_reassert in compile_to_c) -- nothing
+     * the manifest declares is in effect, including the spice's own src/ on
+     * the search path.  This path printed the manifest's error and ran the
+     * program anyway, exit 0, so a typo in build.tur surfaced as an unrelated
+     * "unknown name" further down.  Refuse here too.  The verdict is reset
+     * first because it is sticky per process, and the DAP server launches one
+     * program after another in the same one.
+     *
+     * diag_reset() before the reassert, as compile_to_c does: the manifest
+     * read registered its stack-local SourceFile as file 0 and left it there,
+     * so an error emitted at SPAN_UNKNOWN (file 0) before a reset printed a
+     * path out of a dead frame -- ASan's stack-buffer-overflow. */
+    pkg_manifest_malformed_reset();
     apply_enclosing_manifest_experiments(path);
+    if (pkg_manifest_malformed()) {
+        diag_reset();
+        pkg_manifest_reassert();
+        return 1;
+    }
     turi_init(use_color);
     TuriEnv *env = turi_env_new();
     if (!env) {

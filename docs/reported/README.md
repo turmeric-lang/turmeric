@@ -34,11 +34,12 @@ sentence above does not cover them. If you touch this file, check
 `ls docs/reported/` against it -- an index that silently omits a quarter of the
 directory is worse for triage than no index.
 
-## Ported from the abandoned `non-macos-windows-reports` branch (filed 2026-10-21)
+## Ported from abandoned branches (filed 2026-10-21)
 
 | Report | Severity | One line |
 | --- | --- | --- |
 | [any-widen-deep-drop-frees-borrowed-children](any-widen-deep-drop-frees-borrowed-children.md) | low (open residue; was high) | **Use-after-frees FIXED 2026-10-21.** A widen copies a header into a fresh box, and the deep `__tur_any_drop` then freed children a live local still owned: through `returns_fresh_any`, through `any_expr_is_owned_temp`, and through a widen stored into a sibling's `:any` field. Heap-use-after-free in plain Turmeric (silent without ASan); a Saffron default build's collector hid it. All three now decline the free, and `run-leak-check.sh` no longer lets `known-leak` excuse a non-leak. Open: the declined boxes leak (`any-widen-deep-drop-plain-turmeric`, `any-widen-fresh-payload-aliases` are `known-leak`); deep freshness or a call-site shallow drop would close it. |
+| [manifest-read-leaves-a-dangling-file-registration](manifest-read-leaves-a-dangling-file-registration.md) | low (latent) | `pkg_manifest_read` registers a stack-local `SourceFile` as file 0 and never unregisters it, so a `SPAN_UNKNOWN` diagnostic emitted after a manifest read and before a `diag_reset()` prints a path out of a dead frame (ASan stack-buffer-overflow). Every compile entry point resets first, so nothing trips it today; the interpreter's new TUR-E0624 refusal did until it reset too. |
 | [byval-spine-drop-past-early-exit](byval-spine-drop-past-early-exit.md) | low | **Faces i and ii FIXED** (tail self-call on `main`; explicit `return` 2026-10-21, both glue paths, `byval-spine-drop-past-early-exit` leak-clean). Open: a loop whose parameters are not all numbers keeps leaking its spine per turn, because the gates refuse on the signature rather than on whether a back-edge argument aliases the spine; `byval-spine-drop-refused-nonscalar-param` is `known-leak`. |
 
 ## Found writing the typeclass API docs (filed 2026-10-19)
