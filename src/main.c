@@ -52,6 +52,10 @@
  * system() return value, and platform_fs.h defines those there. */
 #include <sys/wait.h>
 #include <sys/time.h>   /* utimes: the prelude cache's LRU stamp */
+/* The docs server (cmd_docs_serve), which Windows does not build. */
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
 #endif
 #ifdef __APPLE__
 #include <mach-o/dyld.h>     /* SN1: _NSGetExecutablePath for stdlib resolution */
@@ -76,6 +80,7 @@
 #include "compiler/emit_split.h" /* r7rs-programs-compile-slowly */
 #include "compiler/stack_guard.h" /* tur_run_on_big_stack -- see the note at EOF */
 #include "runtime/hamt.h" /* S2: tur_hamt_hash_xxh64 for the split-artifact hash */
+#include "runtime/image.h" /* AI6: tur image-info / image-verify */
 #include "runtime/rt_split_embed.h" /* S2: committed decls region + hash (TUR_JIT) */
 #include "turi/spice_loader.h" /* J2: the REPL's in-process jit hook */
 #include "turi/jit_ffi.h"      /* jit-ffi-c2mir-plan: dynamic-FFI provider */
@@ -138,6 +143,80 @@
  * The storage lives in install.c so libturi (which omits main.c but pulls in
  * tur_core) resolves it cleanly. */
 extern bool use_json_output;
+
+/* -------------------------------------------------------------------------
+ * Forward declarations: the functions and globals used above their
+ * definitions.  Each one is described at its definition.
+ * ---------------------------------------------------------------------- */
+
+/* The split build's handle on its cached library unit; the cache is
+ * described above g_split_lib_cache_off. */
+typedef struct {
+    bool     on;          /* this compile may read and write the cache */
+    bool     verify;      /* TUR_SPLIT_LIB_CACHE=verify */
+    bool     no_restore;  /* the entry did not fit: emit, and replace it */
+    uint64_t key;
+} SplitLibCache;
+
+/* The transitive :spices walk's visited set; see visited_roots_mark. */
+typedef struct { char **paths; int n; int cap; } VisitedRoots;
+
+static bool g_no_auto_spice;
+static bool g_no_auto_stdlib;
+static bool g_no_abi_cache;
+
+static int compile_to_c(const char *path, Buf *out_c,
+                        const char **include_dirs, int n_include_dirs,
+                        const char **reader_macro_paths,
+                        int n_reader_macro_paths);
+static Form **load_project_prelude_impl(Arena *arena, SymbolTable *st,
+                                         Form **user_forms, uint32_t nuser,
+                                         uint32_t *stdlib_count_out);
+static int cmd_build(const char *input, const char *out_path,
+                     const char **include_dirs, int n_include_dirs,
+                     const char *target,
+                     const char **reader_macro_paths,
+                     int n_reader_macro_paths);
+static int cmd_build_once(const char *input, const char *out_path,
+                          const char **include_dirs, int n_include_dirs,
+                          const char *target,
+                          const char **reader_macro_paths,
+                          int n_reader_macro_paths,
+                          bool allow_split, bool *retry_whole, bool *three_units);
+static int locate_runtime_lib(char *libdir, size_t dcap,
+                              char *libname, size_t ncap);
+static int prelude_pieces(void);
+static void split_lib_cache_init(SplitLibCache *c, const Expr *prog, const char *input);
+static bool split_lib_cache_restore(SplitLibCache *c, const Expr *prog, Buf *lib_r);
+static void split_lib_cache_record(SplitLibCache *c, const Expr *prog, const Buf *lib_r);
+static char *find_project_root(const char *start);
+static char *find_spice_root(const char *file_path);
+static char **discover_manifest_reader_macros(const char *input_path,
+                                              int *n_out);
+static void free_reader_macro_paths(char **paths, int n);
+static int auto_append_spice_includes(const char *input,
+                                      char ***inc, int *n_inc,
+                                      char ***owned, int *n_owned,
+                                      Ls2ResolverCtx *out_ls2);
+static void ls2_resolver_ctx_dispose(Ls2ResolverCtx *ctx);
+static void free_tur_files(char **files, int n);
+static void collect_dep_dirs_recursive(const char *root, const PkgManifest *m,
+                                       const char ***dirs, int *n, int *cap,
+                                       VisitedRoots *visited);
+static void collect_spice_aux_c(const char *root, Buf *includes, Buf *sources);
+static bool jit_try_split_preamble(Buf *csrc, Buf *out);
+static int cmd_jit(int argc, char **argv);
+static int cmd_run(int argc, char **argv);
+static char **collect_used_attr_modules(const char *entry_path,
+                                        const char **include_dirs,
+                                        int n_include_dirs, int *n_out);
+static bool file_defines_main(const char *path);
+static int cmd_eval_inc(const char *path, bool use_color,
+                        char **user_inc, int n_user_inc,
+                        char **extra_argv, int extra_argc, bool debug);
+static int usage_run(void);
+static bool is_include_flag(int argc, char **argv, int i, int *consumed);
+static int parse_include_flags(int argc, char **argv, int start, char ***out_dirs);
 
 /* Escape a string for JSON output (handles backslash, double-quote, newline). */
 static void json_escape(const char *s, char *out, size_t cap) {
@@ -827,27 +906,6 @@ static int run_core_passes(PassContext *ctx) {
     return 0;
 }
 
-/* -------------------------------------------------------------------------
- * LSP symbol collection (LD1)
- * --------------------------------------------------------------------- */
-
-/* Forward declaration: compile_to_c is defined later in this file */
-static int compile_to_c(const char *path, Buf *out_c,
-                        const char **include_dirs, int n_include_dirs,
-                        const char **reader_macro_paths,
-                        int n_reader_macro_paths);
-
-/* RM4 follow-up forward decls. */
-static char **discover_manifest_reader_macros(const char *input_path,
-                                              int *n_out);
-static void free_reader_macro_paths(char **paths, int n);
-
-/* SC1/SC2 forward decls: include-flag helpers used from cmd_run before
- * their definitions later in this file. */
-static int  parse_include_flags(int argc, char **argv, int start, char ***out_dirs);
-static bool is_include_flag(int argc, char **argv, int i, int *consumed);
-static int  usage_run(void);
-
 /* cli-usage-error-paths-exit-zero: a `usage_*` helper prints the subcommand's
  * usage and returns 0 -- right for `--help`, which is a successful request
  * for help.  The ERROR paths (an unknown flag, a missing or duplicated input)
@@ -871,19 +929,6 @@ static bool has_help_flag(int argc, char **argv) {
     }
     return false;
 }
-
-/* SC4 forward decl: --no-auto-spice flag inspected by auto_append_spice_src
- * (defined below find_spice_root) but set by parse_no_auto_spice in main(). */
-static bool g_no_auto_spice;
-
-/* Forward decl: set by the tur check handler when --no-auto-stdlib is passed.
- * Used inside compile_to_c's stdlib auto-load loop (suffix-skip). */
-static bool g_no_auto_stdlib;
-
-/* J6 forward decl: --no-abi-cache / TUR_NO_ABI_CACHE inspected at the
- * .tur-abi-cache/ write sites in cmd_build_multi / cmd_emit_c_to_dir;
- * set by parse_no_abi_cache in main(). */
-static bool g_no_abi_cache;
 
 /* tur-link-and-build-split-plan Phase 2/3c/6: runtime-linkage mode, read by
  * apply_runtime_lib_mode() in cmd_build / cmd_compile.  Set by the build/compile
@@ -909,39 +954,6 @@ static bool g_no_abi_cache;
  *                 AUTO only takes the split when every precondition holds. */
 enum { TUR_RT_AUTO = 0, TUR_RT_LIB = 1, TUR_RT_SOURCE = 2, TUR_RT_SPLIT = 3 };
 static int g_runtime_mode = TUR_RT_AUTO;
-
-/* DEDUP-4b (docs/archive/gc-cycle-collection-plan.md): resolve whether the emitted preamble
- * should DECLARE the rc<T>/GC runtime -- because libturt_runtime.a will supply
- * it -- instead of defining its own hand-written replica, and tell the emitter
- * before codegen runs.
- *
- * ON by default, but ONLY when `tur` is the one doing the linking.  A preamble
- * that declares without defining is not self-contained C, and bare
- * `tur emit-c` exists precisely to hand someone a translation unit they will
- * build themselves -- so that path keeps the definitions (and its snapshots
- * keep matching).  `tur build` / project builds control their own link line, so
- * they take the archive.  g_emit_for_link is what distinguishes the two.
- *
- * Also requires an actual archive: without one the program would link nothing
- * at all, so a failed probe silently keeps the emitted definitions.  That is
- * what makes this safe to default -- a toolchain with no archive still builds,
- * it just keeps running the replica.
- *
- * TUR_RCGC_FROM_ARCHIVE=0 forces the replica back (escape hatch if an archive
- * link ever misbehaves); =1 forces the archive even for bare `emit-c`, for
- * someone who links libturt_runtime.a from their own build system.
- *
- * Safe to call before the link step decides anything: locate_runtime_lib is a
- * pure filesystem probe with no side effects. */
-static int locate_runtime_lib(char *libdir, size_t dcap,
-                              char *libname, size_t ncap);
-
-/* cc-path-preamble-split-plan: swap the fixed runtime preamble in `csrc` for
- * the committed decls region, appending the result to `out`.  Declines (false)
- * unless the emitted preamble hashes equal to the committed artifact.  Defined
- * with the JIT's split machinery further down; `tur build --runtime=split`
- * calls the same one so the two paths cannot drift. */
-static bool jit_try_split_preamble(Buf *csrc, Buf *out);
 
 /* True while emitting C that `tur` itself will go on to compile and link. */
 static bool g_emit_for_link = false;
@@ -1006,15 +1018,6 @@ static size_t g_split_imp_exports = 0;
  * the unit anyway and says when the entry differs from it;
  * tests/check-r7rs-split-lib-cache.sh runs it (TUR_SPLIT_LIB_CACHE_ALL=1: over
  * every r7rs fixture).  TUR_SPLIT_LIB_CACHE=0 turns the cache off. */
-typedef struct {
-    bool     on;          /* this compile may read and write the cache */
-    bool     verify;      /* TUR_SPLIT_LIB_CACHE=verify */
-    bool     no_restore;  /* the entry did not fit: emit, and replace it */
-    uint64_t key;
-} SplitLibCache;
-static void split_lib_cache_init(SplitLibCache *c, const Expr *prog, const char *input);
-static bool split_lib_cache_restore(SplitLibCache *c, const Expr *prog, Buf *lib_r);
-static void split_lib_cache_record(SplitLibCache *c, const Expr *prog, const Buf *lib_r);
 /* cmd_build: emit the library unit, whatever the cache holds (a retry after
  * a split build whose library unit came from it did not build); the entry is
  * still written, replacing one that differs. */
@@ -1031,7 +1034,6 @@ static bool g_split_lib_from_cache = false;
  * `tur`: 8.5 s whole, 6.9 s in four) gain from them; SRFI 1's (~120) and
  * (scheme read)'s (~75) do not. */
 #define IMPORT_SPLIT_PIECES_MIN_EXPORTS 150
-static int prelude_pieces(void);
 static int import_split_pieces(void) {
     return g_split_imp_exports >= IMPORT_SPLIT_PIECES_MIN_EXPORTS ? prelude_pieces() : 1;
 }
@@ -1070,6 +1072,29 @@ static bool prelude_split_applies(void) {
     return g_lang_prelude && strcmp(g_lang_prelude, "r7rs/prelude.tur") == 0;
 }
 
+/* DEDUP-4b (docs/archive/gc-cycle-collection-plan.md): resolve whether the emitted preamble
+ * should DECLARE the rc<T>/GC runtime -- because libturt_runtime.a will supply
+ * it -- instead of defining its own hand-written replica, and tell the emitter
+ * before codegen runs.
+ *
+ * ON by default, but ONLY when `tur` is the one doing the linking.  A preamble
+ * that declares without defining is not self-contained C, and bare
+ * `tur emit-c` exists precisely to hand someone a translation unit they will
+ * build themselves -- so that path keeps the definitions (and its snapshots
+ * keep matching).  `tur build` / project builds control their own link line, so
+ * they take the archive.  g_emit_for_link is what distinguishes the two.
+ *
+ * Also requires an actual archive: without one the program would link nothing
+ * at all, so a failed probe silently keeps the emitted definitions.  That is
+ * what makes this safe to default -- a toolchain with no archive still builds,
+ * it just keeps running the replica.
+ *
+ * TUR_RCGC_FROM_ARCHIVE=0 forces the replica back (escape hatch if an archive
+ * link ever misbehaves); =1 forces the archive even for bare `emit-c`, for
+ * someone who links libturt_runtime.a from their own build system.
+ *
+ * Safe to call before the link step decides anything: locate_runtime_lib is a
+ * pure filesystem probe with no side effects. */
 static void resolve_rcgc_from_archive(void) {
     const char *opt = getenv("TUR_RCGC_FROM_ARCHIVE");
     bool forced_on = opt && strcmp(opt, "1") == 0;
@@ -1133,20 +1158,9 @@ static bool preamble_split_auto_applies(void) {
     return stat(probe, &st) == 0 && S_ISREG(st.st_mode);
 }
 
-/* SC4+SC5+SC6 forward decl: auto-append helper used from tur_check_only
- * (called by the LSP server) and the per-file dispatchers.
- *
- * LS2: when out_ls2 is non-NULL, the helper also populates a parallel
- * provenance array (workspace-sibling producer path per include dir),
- * the consumer's declared :spices map keys, and the TUR_DEBUG_RESOLVER
- * flag. Caller is responsible for calling ls2_resolver_ctx_dispose
- * after compile_to_c returns. Pass NULL to skip the LS2 bookkeeping. */
-static int auto_append_spice_includes(const char *input,
-                                      char ***inc, int *n_inc,
-                                      char ***owned, int *n_owned,
-                                      Ls2ResolverCtx *out_ls2);
-
-static void ls2_resolver_ctx_dispose(Ls2ResolverCtx *ctx);
+/* -------------------------------------------------------------------------
+ * LSP symbol collection (LD1)
+ * --------------------------------------------------------------------- */
 
 /* The real path of the document compile_to_c is analysing from a scratch copy
  * (tur_collect_symbols), or NULL.  Resolution that is relative to the ENTRY
@@ -1520,21 +1534,6 @@ static int compile_to_c(const char *path, Buf *out_c,
     free(src);
     return rc;
 }
-
-/* Load macro-only prelude files (macros.tur) into an arena/symtab so that
- * project-mode compilation (compile_to_h / compile_to_implementation) has the
- * same prelude macros visible as single-file mode.  Only macro-providing files
- * are loaded here to avoid the separate-compilation defn-emission gap (F6 in
- * the prelude-macros bug report): macros are compile-time only and emit no
- * object code, so they are safe to inject into every module's elaboration.
- *
- * Returns a new forms array with prelude forms prepended before user_forms.
- * *stdlib_count_out is set to the number of prepended prelude forms.
- * On any load failure the returned array equals user_forms unchanged and
- * *stdlib_count_out = 0. */
-static Form **load_project_prelude_impl(Arena *arena, SymbolTable *st,
-                                         Form **user_forms, uint32_t nuser,
-                                         uint32_t *stdlib_count_out);
 
 /* --timings: as prepend_stdlib_forms -- loading the prelude is module-load,
  * its parse "read". */
@@ -2179,24 +2178,6 @@ static void default_output_name(const char *input, char *out, size_t cap) {
     }
 }
 
-/* target: NULL for native build, "wasm" to compile with emcc. */
-static int cmd_build(const char *input, const char *out_path,
-                     const char **include_dirs, int n_include_dirs,
-                     const char *target,
-                     const char **reader_macro_paths,
-                     int n_reader_macro_paths);
-static char *find_project_root(const char *start);
-static void collect_spice_aux_c(const char *root, Buf *includes, Buf *sources);
-static bool file_defines_main(const char *path);
-/* used-attr-whole-program: collect slash-separated names of -I-reachable
- * modules carrying a #[used] attribute, so cmd_build can force-load them into
- * the whole-program TU (defined after collect_tur_recursive/file_has_used_attr
- * below). Caller frees via free_tur_files. */
-static char **collect_used_attr_modules(const char *entry_path,
-                                        const char **include_dirs,
-                                        int n_include_dirs, int *n_out);
-static void free_tur_files(char **files, int n);
-
 /* build-output-directory-plan: ensure_dir(path) creates a directory tree with
  * mkdir -p semantics.  Returns 0 on success (or if the directory already
  * exists), -1 with errno set on failure.  Walks `path` component-wise so a
@@ -2222,20 +2203,6 @@ static int ensure_dir(const char *path) {
     if (mkdir(tmp, 0755) != 0 && errno != EEXIST) return -1;
     return 0;
 }
-
-/* build-output-directory-plan: resolve the absolute build directory for a
- * compile.  Precedence (highest first):
- *   1. cli_flag (--build-dir / -B / TUR's emit-c --build-dir).
- *   2. TUR_BUILD_DIR env var.
- *   3. The nearest `build.tur`'s `:build-dir` (walking up from input_or_root),
- *      resolved relative to that manifest's directory.
- *   4. `<project-root>/build` when a manifest exists; otherwise `<cwd>/build`.
- *
- * On success returns a heap-allocated absolute path with the directory plus
- * `obj/`, `bin/`, `lib/` subdirs created, and a `.gitignore` containing
- * `*\n` dropped in on first creation.  Returns NULL with a diagnostic on
- * failure.  Caller frees with free(). */
-static char *find_spice_root(const char *file_path);   /* defined below */
 
 /* engine-selection-plan E1: resolve the execution engine for `tur run`.
  * Precedence (highest first), mirroring resolve_build_dir's ladder:
@@ -2296,6 +2263,18 @@ static const char *resolve_engine(const char *input_or_root,
     return NULL;
 }
 
+/* build-output-directory-plan: resolve the absolute build directory for a
+ * compile.  Precedence (highest first):
+ *   1. cli_flag (--build-dir / -B / TUR's emit-c --build-dir).
+ *   2. TUR_BUILD_DIR env var.
+ *   3. The nearest `build.tur`'s `:build-dir` (walking up from input_or_root),
+ *      resolved relative to that manifest's directory.
+ *   4. `<project-root>/build` when a manifest exists; otherwise `<cwd>/build`.
+ *
+ * On success returns a heap-allocated absolute path with the directory plus
+ * `obj/`, `bin/`, `lib/` subdirs created, and a `.gitignore` containing
+ * `*\n` dropped in on first creation.  Returns NULL with a diagnostic on
+ * failure.  Caller frees with free(). */
 static char *resolve_build_dir(const char *input_or_root, const char *cli_flag) {
     /* Step 1: pick the raw (unresolved) path string. */
     char raw[4096] = {0};
@@ -4335,13 +4314,7 @@ static void split_lib_cache_record(SplitLibCache *c, const Expr *prog, const Buf
     buf_free(&carry);
 }
 
-static int cmd_build_once(const char *input, const char *out_path,
-                          const char **include_dirs, int n_include_dirs,
-                          const char *target,
-                          const char **reader_macro_paths,
-                          int n_reader_macro_paths,
-                          bool allow_split, bool *retry_whole, bool *three_units);
-
+/* target: NULL for native build, "wasm" to compile with emcc. */
 static int cmd_build(const char *input, const char *out_path,
                      const char **include_dirs, int n_include_dirs,
                      const char *target,
@@ -4899,16 +4872,6 @@ static void free_reader_macro_paths(char **paths, int n) {
     free(paths);
 }
 
-/* RM4 follow-up: convenience wrapper around find_spice_root +
- * pkg_manifest_read + resolve_manifest_reader_macros. Walks up from
- * `input_path` to find an enclosing build.tur, then returns the resolved
- * absolute reader-macro paths. Returns NULL/0 when there is no manifest
- * or no entries. Caller frees with free_reader_macro_paths. Used by
- * every compile entry point that takes a single input file path. */
-static char **discover_manifest_reader_macros(const char *input_path,
-                                              int *n_out);
-/* Defined below find_spice_root, which it depends on. */
-
 static char *find_project_root(const char *start) {
     char dir[4096];
     strncpy(dir, start, sizeof(dir) - 1);
@@ -5025,6 +4988,12 @@ static void apply_enclosing_manifest_experiments(const char *input_path) {
     }
 }
 
+/* RM4 follow-up: convenience wrapper around find_spice_root +
+ * pkg_manifest_read + resolve_manifest_reader_macros. Walks up from
+ * `input_path` to find an enclosing build.tur, then returns the resolved
+ * absolute reader-macro paths. Returns NULL/0 when there is no manifest
+ * or no entries. Caller frees with free_reader_macro_paths. Used by
+ * every compile entry point that takes a single input file path. */
 static char **discover_manifest_reader_macros(const char *input_path,
                                               int *n_out) {
     *n_out = 0;
@@ -5120,6 +5089,15 @@ static void ls2_on_search_manifest(void *ud, const PkgManifest *m) {
     ls2->n_declared_spices = m->n_spices;
 }
 
+/* SC4+SC5+SC6: widen the include path with the enclosing spice's src/ and
+ * every declared `:spices` dep's src/.  Used from tur_check_only (called by
+ * the LSP server) and the per-file dispatchers.
+ *
+ * LS2: when out_ls2 is non-NULL, the helper also populates a parallel
+ * provenance array (workspace-sibling producer path per include dir),
+ * the consumer's declared :spices map keys, and the TUR_DEBUG_RESOLVER
+ * flag. Caller is responsible for calling ls2_resolver_ctx_dispose
+ * after compile_to_c returns. Pass NULL to skip the LS2 bookkeeping. */
 static int auto_append_spice_includes(const char *input,
                                       char ***inc, int *n_inc,
                                       char ***owned, int *n_owned,
@@ -5378,8 +5356,6 @@ static void push_include_dir(const char ***dirs, int *n, int *cap,
  * unrelated system header, or -- on a sanitized build -- a stack overflow.
  * Mirrors the keying pkg_collect_transitive_cmake_deps already uses for the
  * same shape of walk. */
-typedef struct { char **paths; int n; int cap; } VisitedRoots;
-
 /* True if `dir` was already visited; otherwise records it and returns false. */
 static bool visited_roots_mark(VisitedRoots *v, const char *dir) {
     char canon_buf[4096];
@@ -5402,10 +5378,6 @@ static void visited_roots_free(VisitedRoots *v) {
     for (int i = 0; i < v->n; i++) free(v->paths[i]);
     free(v->paths);
 }
-
-static void collect_dep_dirs_recursive(const char *root, const PkgManifest *m,
-                                       const char ***dirs, int *n, int *cap,
-                                       VisitedRoots *visited);
 
 static void resolve_include_dirs_from_manifest(const char *root,
                                                const PkgManifest *m,
@@ -5707,28 +5679,6 @@ static int decode_exit_status(int status) {
     return 1;
 }
 
-static int cmd_run(int argc, char **argv);   /* defined below; J1 fallback */
-static int cmd_eval_inc(const char *path, bool use_color,
-                        char **user_inc, int n_user_inc,
-                        char **extra_argv, int extra_argc, bool debug);
-static int cmd_jit(int argc, char **argv);
-
-/* NOT under `#ifdef TUR_HAVE_JIT`, deliberately.  These two started as a JIT
- * probe -- the name still says so -- but `--runtime=split` made the CC path
- * call jit_try_split_preamble from cmd_build, and cmd_build exists in every
- * build.  Leaving the definition inside the engine's guard while the
- * declaration and two of the three call sites sat outside it compiled fine in
- * any -DTUR_JIT=ON tree (which is every tree this was developed in) and failed
- * every non-JIT build with
- * `jit_try_split_preamble used but never defined [-Werror]`.
- * The declarations image they read moved to tur_core for the same reason. */
-/* S2 (findings 25): swap an emitted TU's fixed preamble for the committed
- * declarations region when this compiler still matches the committed
- * artifacts.  Returns true and fills `out` with
- * [hoisted user prefix][committed decls][program half]; false (out
- * untouched) on hash mismatch, missing marker, or TUR_JIT_NO_SPLIT=1.
- * Shared by cmd_jit and the J2 REPL image build.  See cmd_jit's call site
- * for the full rationale. */
 /* Report WHY the split did not engage, under TUR_JIT_TIMING=1.
  *
  * The split fails closed -- a rejected hash just means the full preamble is
@@ -5746,6 +5696,24 @@ static bool jit_split_reject(const char *why) {
     return false;
 }
 
+/* cc-path-preamble-split-plan: `tur build --runtime=split` calls this as well
+ * as the JIT, so the two paths cannot drift. */
+/* NOT under `#ifdef TUR_HAVE_JIT`, deliberately.  These two started as a JIT
+ * probe -- the name still says so -- but `--runtime=split` made the CC path
+ * call jit_try_split_preamble from cmd_build, and cmd_build exists in every
+ * build.  Leaving the definition inside the engine's guard while the
+ * declaration and two of the three call sites sat outside it compiled fine in
+ * any -DTUR_JIT=ON tree (which is every tree this was developed in) and failed
+ * every non-JIT build with
+ * `jit_try_split_preamble used but never defined [-Werror]`.
+ * The declarations image they read moved to tur_core for the same reason. */
+/* S2 (findings 25): swap an emitted TU's fixed preamble for the committed
+ * declarations region when this compiler still matches the committed
+ * artifacts.  Returns true and fills `out` with
+ * [hoisted user prefix][committed decls][program half]; false (out
+ * untouched) on hash mismatch, missing marker, or TUR_JIT_NO_SPLIT=1.
+ * Shared by cmd_jit and the J2 REPL image build.  See cmd_jit's call site
+ * for the full rationale. */
 static bool jit_try_split_preamble(Buf *csrc, Buf *out) {
     const char *no_split = getenv("TUR_JIT_NO_SPLIT");
     if (no_split && *no_split && strcmp(no_split, "0") != 0)
@@ -10739,20 +10707,6 @@ static int cmd_repl(bool watch_mode) {
     return turi_repl_run(watch_mode);
 }
 
-/* ---------------------------------------------------------------------------
- * Tier 3: tur worker — persistent fixture evaluator for the test suite.
- *
- * Reads fixture directory paths from stdin (one per line, blank = stop).
- * For each fixture, evaluates it using the interpreter in a forked child
- * (for isolation and stdout/stderr capture), compares outputs against
- * expected files, then writes a 4-line result file to $RESULTS_DIR and
- * prints PASS/FAIL/SKIP to stdout for live progress.
- *
- * The parent process persists across fixtures; only tur binary itself is
- * validated by syspolicyd at startup (N times for N workers), not once per
- * fixture.
- * --------------------------------------------------------------------------- */
-
 /* drop-x-flags-plan: every -X<name> below is an accept-and-warn no-op as
  * of v0.24.0.  The flags are still recognized for one full minor line so
  * downstream build.tur files keep compiling unchanged; each one emits
@@ -10845,6 +10799,20 @@ static void parse_timings_flag(int *argc_io, char **argv) {
     }
     *argc_io = argc;
 }
+
+/* ---------------------------------------------------------------------------
+ * Tier 3: tur worker — persistent fixture evaluator for the test suite.
+ *
+ * Reads fixture directory paths from stdin (one per line, blank = stop).
+ * For each fixture, evaluates it using the interpreter in a forked child
+ * (for isolation and stdout/stderr capture), compares outputs against
+ * expected files, then writes a 4-line result file to $RESULTS_DIR and
+ * prints PASS/FAIL/SKIP to stdout for live progress.
+ *
+ * The parent process persists across fixtures; only tur binary itself is
+ * validated by syspolicyd at startup (N times for N workers), not once per
+ * fixture.
+ * --------------------------------------------------------------------------- */
 
 /* Apply flags string (e.g. "-Xgadt -Xlinear") to global compiler flags. */
 static void wk_apply_flags(const char *flags_str) {
@@ -10982,14 +10950,6 @@ static void wk_drain_pipes(int fd_out, int fd_err, Buf *out_buf, Buf *err_buf) {
 }
 
 #endif /* _WIN32 -- wk_drain_pipes */
-
-/* -------------------------------------------------------------------------
- * Native HAMT wrappers for the interpreter (Tier 3).
- * These replace the nil stubs registered by EX_EXTERN_C so that HAMT
- * operations actually work during interpreter evaluation.
- * ---------------------------------------------------------------------- */
-#include "runtime/hamt.h"
-#include "runtime/image.h"
 
 /* ---------------------------------------------------------------------------
  * AI6 (application-image-dumps-plan): `tur image-info` / `tur image-verify`.
@@ -12274,10 +12234,6 @@ static int open_in_browser(const char *url) {
 }
 
 #ifndef _WIN32
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
-
 static const char *docs_mime(const char *path) {
     const char *dot = strrchr(path, '.');
     if (!dot) return "application/octet-stream";
@@ -12546,7 +12502,7 @@ static bool parse_no_color(int argc, char **argv) {
 
 /* SC4: --no-auto-spice disables the per-file subcommand walk-up that
  * adds the enclosing spice's `src/` to the include path.  Inspected by
- * auto_append_spice_src(). */
+ * auto_append_spice_includes(). */
 static bool g_no_auto_spice = false;
 
 /* --no-auto-stdlib (tur check only): suffix-skip -- when the file being
