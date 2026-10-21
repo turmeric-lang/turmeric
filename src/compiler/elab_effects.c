@@ -3454,6 +3454,23 @@ static Expr *callcc_node(Elab *e, const Form *call, bool is_escape) {
     e->in_callcc_receiver = saved_ccr;
     if (!f_expr) return NULL;
 
+    /* The receiver must be a function.  A literal (or a bool / float / string)
+     * was accepted silently: compiled it died with an internal emitter error,
+     * interpreted with `call/cc expects a function`.  An `int`-typed value stays
+     * accepted -- it is how a fn value is carried through an untyped parameter. */
+    if (f_expr->kind == EX_INT_LIT || f_expr->kind == EX_FLOAT_LIT ||
+        f_expr->kind == EX_BOOL_LIT || f_expr->kind == EX_CSTR_LIT ||
+        f_expr->kind == EX_NIL_LIT ||
+        f_expr->type.kind == TY_BOOL || f_expr->type.kind == TY_CSTR ||
+        f_expr->type.kind == TY_FLOAT || f_expr->type.kind == TY_FLOAT64 ||
+        f_expr->type.kind == TY_FLOAT32) {
+        diag_emit_with_code(DIAG_ERROR, call->as.list.items[1]->span,
+            TUR_E0001_TYPE_MISMATCH,
+            "%s expects a function taking the continuation, got %s",
+            is_escape ? "escape" : "call/cc", type_name(f_expr->type));
+        return NULL;
+    }
+
     /* f's codomain becomes the call/cc result type; fall back to int. */
     Type result_type = TYPE_INT;
     if (f_expr->type.kind == TY_FN) {

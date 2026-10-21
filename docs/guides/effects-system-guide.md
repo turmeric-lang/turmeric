@@ -711,8 +711,11 @@ you do not have to spell `:escape-cont` or call `tur_escape_resume` by hand.
 Annotate explicitly (`:cont`, `:escape-cont`, `:serial-cont`) only when you want
 a non-default flavor.
 
-**One-shot.** The captured `k` is `^unique` by default (calling it more than once
-is `TUR-E0100` / `TUR-E0101`). Opt into exactly-once accounting with `^linear`:
+**One-shot.** The captured `k` is one-shot by nature: `(k v)` unwinds to the
+`call/cc` site, so a second call after it on the same path never runs (the
+checker does not flag an unannotated `k` called twice). Opt into exactly-once
+accounting with `^linear`, which a second call breaks (`TUR-E0101`) and a path
+that never calls `k` breaks too (`TUR-E0100`):
 
 ```turmeric
 (defn use-once [] : int

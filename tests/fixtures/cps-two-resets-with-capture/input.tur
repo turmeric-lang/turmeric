@@ -1,0 +1,41 @@
+;;; A function with two or more abortive resets (operands or statements) and a
+;;; continuation capture used to leave the CPS backend's subset
+;;; (`BODY-STRUCT-CORE`): joins_closed_rec_x had no case for a `reset` or an
+;;; abortive `shift` in a reset's continuation.  The direct emitter that got the
+;;; function cannot lower the capture (`EX_CALLCC reached the direct emitter`,
+;;; or TUR-E0710 / E0706), so the build failed; the interpreter ran every shape.
+(defn ck [k : cont] : int (+ (k 1) (k 2)))
+(defn sk [k : serial-cont] : int (k 5))
+(defn ek [k : escape-cont] : int (+ 100 (k 41)))
+
+;; operands
+(defn a [] : int (+ (reset 1) (reset 2) (call/cc (fn [k] (+ 100 (k 7))))))
+(defn b [] : int (+ (reset 1) (reset 2) (escape (fn [k] (+ 100 (k 7))))))
+(defn c [] : int
+  (+ (reset 1) (reset 2)
+     (cloneable-reset (+ 1 (cloneable-shift (fn [k : cont] (k (k 10))) 0)))))
+
+;; statements
+(defn d [] : int
+  (do (println (reset (+ 1 2)))
+      (println (reset (shift0 (fn [v : int] v) 4)))
+      (println (reset 3))
+      (println (call/cc (fn [k] (+ 100 (k 41)))))
+      (println (cloneable-reset (+ 1 (cloneable-shift (fn [k : cont] (k (k 10))) 0))))
+      0))
+(defn e [] : int
+  (do (println (reset 1))
+      (println (reset 2))
+      (println (serial-reset (+ 10 (serial-shift sk 0))))
+      (println (cloneable-reset (+ 10 (call/cc* ck))))
+      (println (call/cc ek))
+      (println (escape ek))
+      0))
+
+(defn main [] : int
+  (println (a))
+  (println (b))
+  (println (c))
+  (println (d))
+  (println (e))
+  0)

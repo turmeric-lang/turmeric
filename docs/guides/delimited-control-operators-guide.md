@@ -130,6 +130,12 @@ The *local* result-typing rule is identical to `shift`: the `(shift0 f x)`
 expression has the type of `f`'s codomain. Only the runtime delimiter behavior
 differs.
 
+> **Status.** Today `shift0` runs as the abortive `shift` on both engines: the
+> reset is not popped, so a `shift` inside the receiver is delimited by that
+> same reset (`(reset (+ 100 (reset (+ 10 (shift0 (fn [v : int] (shift (fn [w : int] (* 1000 w)) v)) 5)))))`
+> is 5100, where the pop would give 5000), and `shift0` takes no `k` to resume
+> with. See [continuation-forms-gaps](../reported/continuation-forms-gaps.md).
+
 ```turmeric
 ;; The expression has f's codomain type (here :bool), exactly like shift.
 (defn is-zero [n : int] : bool

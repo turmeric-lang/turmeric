@@ -2278,6 +2278,20 @@ static bool joins_closed_rec_x(const CTerm *t, uint32_t *def, int nd, bool outer
         case CT_RESUME: return joins_closed_rec(t->as.resume.body, def, nd);
         case CT_CLONEABLE: return joins_closed_rec(t->as.cloneable.body, def, nd);
         case CT_CALLCC: return joins_closed_rec(t->as.callcc.body, def, nd);
+        case CT_SHIFT:
+            /* An abortive shift's body is straight-line (shift_body_ok: no
+             * joins, no branches), so it references no join at all. */
+            return true;
+        case CT_RESET: {
+            /* A second `reset` in a reset's continuation (`(+ (reset 1) (reset 2)
+             * (call/cc ...))`): the continuation runs in the SAME join scope, and
+             * the nested delimited body is lifted into its own frame, so a join it
+             * references must be defined within it -- the CT_HANDLE rule.  The
+             * missing case made the whole function BODY-STRUCT-CORE. */
+            uint32_t rdef[CC_MAX_BOUND];
+            if (!joins_closed_rec(t->as.reset.delim, rdef, 0)) return false;
+            return joins_closed_rec_x(t->as.reset.body, def, nd, outer_ok);
+        }
         case CT_PERFORM:
             /* Track A (A2): a nested `perform` in a reset/handle continuation
              * body.  The perform delivers to a handler (not a join); its joins are
@@ -14073,6 +14087,14 @@ static void emit_callcc(CE *ce, const CTerm *t) {
     if (boxed) {
         ce_line(ce, "{ tur_tagged_t *__ccb = (tur_tagged_t *)(intptr_t)%s.result; "
                     "%s = *__ccb; free(__ccb); }", cc, xn);
+    } else if (rty && strcmp(rty, "double") == 0) {
+        /* The landing's `result` is an int64 word.  A float travels through it
+         * as its bits (tur_escape_resume's caller stored them), so reading it
+         * back is a reinterpret: `(double)result` converted the bit pattern's
+         * VALUE and printed 4.61225e+18 for 2.25. */
+        ce_line(ce, "%s = ((union { int64_t i; double d; }){ .i = %s.result }).d;", xn, cc);
+    } else if (rty && strcmp(rty, "float") == 0) {
+        ce_line(ce, "%s = ((union { uint32_t u; float f; }){ .u = (uint32_t)%s.result }).f;", xn, cc);
     } else {
         ce_line(ce, "%s = (%s)%s.result;", xn, rty, cc);
     }
