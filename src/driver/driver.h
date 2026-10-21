@@ -112,7 +112,7 @@
 enum { TUR_RT_AUTO = 0, TUR_RT_LIB = 1, TUR_RT_SOURCE = 2, TUR_RT_SPLIT = 3 };
 
 /* The split build's handle on its cached library unit; the cache is
- * described above g_split_lib_cache_off. */
+ * described in preamble_split.c, above g_split_lib_cache_off. */
 typedef struct {
     bool     on;          /* this compile may read and write the cache */
     bool     verify;      /* TUR_SPLIT_LIB_CACHE=verify */
@@ -237,9 +237,7 @@ int drv_link_command_run(const char *cc, const char *cc_flags,
                          const char **include_dirs, int n_include_dirs,
                          const char *out_path, const char *cc_stderr_path);
 
-/* == main.c ================================================================ */
-
-/* -- moving to driver/preamble_split.c -- */
+/* == driver/preamble_split.c =============================================== */
 extern bool g_split_lib_cache_off;
 int prelude_pieces(void);
 int prelude_split_object(const Buf *lib_c, const char *cc, const char *cc_flags,
@@ -252,6 +250,8 @@ void split_lib_cache_init(SplitLibCache *c, const Expr *prog, const char *input)
 bool split_lib_cache_restore(SplitLibCache *c, const Expr *prog, Buf *lib_r);
 void split_lib_cache_record(SplitLibCache *c, const Expr *prog, const Buf *lib_r);
 bool jit_try_split_preamble(Buf *csrc, Buf *out);
+
+/* == main.c ================================================================ */
 
 /* -- moving to driver/cmd_emit.c -- */
 void drv_default_output_name(const char *input, char *out, size_t cap);

@@ -11,10 +11,10 @@
 #include "diag.h"        /* ReaderType */
 #include "turi/trace.h"  /* TurTraceGrain */
 
-/* == main.c ================================================================ */
-
-/* -- moving to driver/preamble_split.c -- */
+/* == driver/preamble_split.c =============================================== */
 int cmd_emit_rt_split(int argc, char **argv);
+
+/* == main.c ================================================================ */
 
 /* -- moving to driver/cmd_emit.c -- */
 int cmd_emit_c(const char *path,

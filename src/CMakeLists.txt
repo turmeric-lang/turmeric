@@ -553,6 +553,7 @@ set(TUR_DRIVER_SOURCES
   driver/jit.c
   driver/paths.c
   driver/pipeline.c
+  driver/preamble_split.c
   driver/spice.c
   driver/worker.c
 )
