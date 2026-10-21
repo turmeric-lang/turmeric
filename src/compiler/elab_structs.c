@@ -3755,8 +3755,22 @@ Expr *elab_match(Elab *e, const Form *call) {
      * ONE ADT only.  Arms drawn from two different ADTs would need a box-id
      * switch over unrelated layouts, which is a bigger thing than a narrow and
      * has no arm-unifier story yet; leaving it to the existing diagnostic is
-     * better than narrowing to whichever ADT happened to be named first. */
-    if (scrutinee->type.kind == TY_ANY && lang_span_is_dynamic(call->span)) {
+     * better than narrowing to whichever ADT happened to be named first.
+     *
+     * match-on-any-was-gated-to-saffron: NOT gated on the dialect.  It was
+     * (`lang_span_is_dynamic`), because a dynamic dialect is where the shape
+     * ARRIVES by default -- an unannotated parameter is `any` there.  But
+     * `any` is a Turmeric type, `(defn peek [l : any] ...)` is a Turmeric
+     * signature, and a plain-Turmeric `match` on one emitted precisely the C
+     * this comment predicts -- `tur_adt_Lst __scrut_v = (l);`, "invalid
+     * initializer" -- a hard `cc` failure with no Turmeric-level diagnostic, on
+     * a program that compiled the moment `#lang saffron` was added.  The narrow
+     * for a non-parametric ADT has nothing dialect-specific in it.  The one
+     * part that does is the parametric case below, which is sound only where
+     * the constructors build at `any`; outside a dynamic dialect it says so
+     * rather than narrowing. */
+    if (scrutinee->type.kind == TY_ANY) {
+        bool scrut_dynamic = lang_span_is_dynamic(call->span);
         AdtDef *only = NULL;
         bool mixed = false;
         for (uint32_t ai = 0; ai < n_arms && !mixed; ai++) {
@@ -3859,6 +3873,24 @@ Expr *elab_match(Elab *e, const Form *call) {
                     return NULL;
                 }
                 do_narrow = false;   /* unindexed: decline, as before */
+            } else if (only->n_type_params > 0 && !scrut_dynamic) {
+                /* match-on-any-was-gated-to-saffron: the `(Shape any)` narrow
+                 * below is sound only because a dynamic dialect's constructor
+                 * BUILDS at `any`.  A plain-Turmeric `(Sq 6)` builds a
+                 * `(Shape int)`, so narrowing to `(Shape any)` would compile
+                 * and then panic `different instantiation`; declining leaves
+                 * the emitter's C error about aggregates.  Name the fix
+                 * instead -- `cast` to the instantiation already works. */
+                diag_emit(DIAG_ERROR, scrutinee->span,
+                          "cannot match an 'any' scrutinee against parametric "
+                          "'%s': the instantiation the box holds is not known "
+                          "here", only->name);
+                diag_emit(DIAG_HELP, scrutinee->span,
+                          "narrow with `cast` to the instantiation you expect "
+                          "-- `(match (cast s (%s int)) ...)` -- or annotate "
+                          "the scrutinee with it",
+                          only->name);
+                return NULL;
             } else if (only->n_type_params > 0) {
                 /* `type_from_kind`, NOT a memset-zeroed Type: `CK_UNIQUE` is 0
                  * and `CK_MOVE` is an alias for it, so a zeroed `any` is

@@ -2512,6 +2512,31 @@ Expr *elab_let(Elab *e, const Form *call) {
         if (binding_moved_during_init[k] || moved_for_real ||
             is_binding_consumed(body, lb))
             continue;
+        /* any-widen-deep-drop-frees-borrowed-children: a FOURTH hand-off, a
+         * widen to `any` stored into an owning aggregate, which the guards
+         * above do not see.
+         *
+         *     (let [inner (Cons 1 (Nil))
+         *           outer (Cons inner (Nil))]   ;; `inner` widened into an :any field
+         *       ...)
+         *
+         * The widen copies `inner`'s header into a fresh box, but the copy's
+         * `tl` still points at the `(Nil)` box `inner`'s own spine owns.
+         * `outer`'s scope-exit `drop_localowned_` walks the `:any` field,
+         * `__tur_any_drop` runs the payload's glue and frees `inner`'s spine
+         * -- which `inner`'s own scope-exit drop then frees again.  Suppressing
+         * here is the safe half of the trade (`inner`'s spine leaks when
+         * nothing else claims it).  The sibling inits are searched as well as
+         * the body: the widening constructor is usually a LATER BINDING of the
+         * same `let`, which `body` alone does not cover. */
+        {
+            bool widened = is_binding_widened_to_any(body, lb);
+            for (uint32_t j = 0; j < n_binds && !widened; j++)
+                if (j != k && binds[j].init &&
+                    is_binding_widened_to_any(binds[j].init, lb))
+                    widened = true;
+            if (widened) continue;
+        }
         /* fn-cell-set-with-capturing-closure-segfaults, found while closing
          * it: the guards above see the LOCAL, not its aliases.  A match
          * binder of `xs` carries a pointer into the spine, and if the body

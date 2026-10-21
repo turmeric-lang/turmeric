@@ -15,8 +15,11 @@ All three are "a box whose every holder is reached through an opaque dynamic
 call", which no AST walk can settle:
 
 1. **Argument- and return-position `any` widens around a recursive walker**
-   (`tests/fixtures/saffron-higher-order`, `known-leak`: 880 bytes in 22
-   allocations). A by-value payload widened into an `any` argument is a box
+   (`tests/fixtures/saffron-higher-order`, `known-leak`: 560 bytes in 14
+   allocations since 2026-10-21, when a dynamic call stopped disqualifying the
+   parameters it never sees -- 880 in 22 before; see
+   [any-widen-deep-drop-frees-borrowed-children](any-widen-deep-drop-frees-borrowed-children.md)).
+   A by-value payload widened into an `any` argument is a box
    the callee reads but may pass to `(f h)`; a result widened on the way out
    carries values `(f h)` produced. Attribution and the static fixes that
    landed first are in

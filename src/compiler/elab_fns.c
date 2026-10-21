@@ -32,6 +32,36 @@ bool catch_box_binding_escapes_except(const Expr *e, const Binding *b,
 bool sum_box_binding_escapes(const Expr *e, const Binding *b);
 bool sum_box_binding_escapes_except(const Expr *e, const Binding *b,
                                     const Expr *ignore);
+/* any-widen-deep-drop-frees-borrowed-children: the predicate that decides
+ * whether a payload's `any` row names a `drop_localowned_<T>`, defined
+ * emit-side in emit_module.c.  Reused here so the freshness facts and the drop
+ * agree about what a drop will touch -- the same discipline the `boxed` flag
+ * already follows. */
+bool adt_def_has_localowned_glue(const AdtDef *def);
+
+/* any-widen-deep-drop-frees-borrowed-children: would a deep `__tur_any_drop`
+ * of a widen of `payload` release anything BESIDES the box?
+ *
+ * True exactly when the payload's ADT carries drop glue, which is the emitter's
+ * own answer to the same question (`adt_def_has_localowned_glue`): a
+ * recursive-self field or an `:any` field.  A scalar, a cstr, a heap-ADT handle
+ * and a struct of plain fields all own nothing, so the drop is the box free the
+ * freshness rules were written against and the answer is false.
+ *
+ * Shared by `returns_fresh_any` (below) and `any_expr_is_owned_temp`
+ * (elab_call.c), which had the same hole for the same reason: a widen COPIES
+ * the payload's header into a fresh box, and the copy's children are whatever
+ * the original pointed at.  The box is fresh; what is under it need not be. */
+bool any_widen_payload_owns_droppable(const Expr *payload) {
+    if (!payload) return false;
+    const Type *t = &payload->type;
+    AdtDef *def = NULL;
+    Type args[16];
+    uint8_t n = 0;
+    if (!type_extract_adt_app(t, &def, args, &n))
+        def = (t->kind == TY_ADT) ? t->as.adt_.def : NULL;
+    return def && adt_def_has_localowned_glue(def);
+}
 
 /* RM1 (reclamation-plan): the freshness analysis, on the elaborated body.
  * True iff every VALUE PATH ends in a sum-constructor application or a call
@@ -13043,7 +13073,25 @@ Expr *elab_defn(Elab *e, const Form *call) {
         while (_fa && (_fa->kind == EX_LET || _fa->kind == EX_ASCRIBE))
             _fa = (_fa->kind == EX_ASCRIBE) ? _fa->as.ascribe_.inner
                                             : _fa->as.let_.body;
-        if (_fa && _fa->kind == EX_UNION_INJECT && _fa->type.kind == TY_ANY)
+        /* any-widen-deep-drop-frees-borrowed-children: the paragraph above was
+         * written when `__tur_any_drop` was a box free.  It is not one any
+         * more -- it calls the payload's `drop_localowned_<T>` FIRST, so
+         * dropping an `any` releases everything the payload owns as well as
+         * the box.  "The tail is a widen" establishes that the BOX is fresh
+         * and says nothing about what the payload points at, while a
+         * constructor fills an owned field from whatever it is handed:
+         * `(defn wrap [x : any] : any (:: (Cons x (:: (Nil) any)) any))`
+         * qualified, and the consumer's drop then walked into `x` and freed a
+         * spine its caller still owned -- a heap-use-after-free.
+         *
+         * The narrowest repair that makes the fact true again is to require
+         * the payload to own NOTHING, i.e. exactly the types for which the
+         * emitter publishes no drop glue, so that the deep drop degenerates
+         * back into the box free this rule was written for.  Declining leaks
+         * the box where the payload really was deeply fresh -- the status-quo
+         * direction this family falls in. */
+        if (_fa && _fa->kind == EX_UNION_INJECT && _fa->type.kind == TY_ANY &&
+            !any_widen_payload_owns_droppable(_fa->as.union_inject_.value))
             b->returns_fresh_any = true;
         /* dynamic-returned-closure-env-is-never-freed: which of those widen a
          * capturing closure built right here (expr_is_fresh_any_closure, which
