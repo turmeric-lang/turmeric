@@ -22,14 +22,14 @@ int cmd_emit_c_to_dir(const char *out_dir, char **inputs, int n_inputs,
 int cmd_emit_h(const char *path,
                const char **include_dirs, int n_include_dirs);
 
-/* == main.c ================================================================ */
-
-/* -- moving to driver/cmd_build.c -- */
+/* == driver/cmd_build.c ==================================================== */
 int cmd_build(const char *input, const char *out_path,
               const char **include_dirs, int n_include_dirs,
               const char *target,
               const char **reader_macro_paths,
               int n_reader_macro_paths);
+
+/* == main.c ================================================================ */
 
 /* -- moving to driver/project.c -- */
 int cmd_build_multi(const char *dir, const char *out_path, bool shared,
