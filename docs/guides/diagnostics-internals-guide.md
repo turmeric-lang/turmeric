@@ -330,7 +330,7 @@ sweet.tur:3:14: error [TUR-E0001]: '+' arg 2: type mismatch - expected int, got 
 
 Until 2026-10-21 only the snippet translated, and the header, JSON and LSP
 all said column 15
-([sweet-exp-diagnostic-columns-not-translated](../archive/sweet-exp-diagnostic-columns-not-translated.md);
+([sweet-exp-diagnostic-columns-not-translated](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/sweet-exp-diagnostic-columns-not-translated.md);
 pinned by `errors/sweet-diagnostic-column`).
 
 ### Macro expansion
@@ -700,7 +700,7 @@ Each was reproduced against the compiler this guide describes and filed in
 [`docs/reported/`](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/README.md). When one is fixed and archived,
 update the passage above that describes it and drop it from this list.
 
-None open. [sweet-exp-diagnostic-columns-not-translated](../archive/sweet-exp-diagnostic-columns-not-translated.md)
+None open. [sweet-exp-diagnostic-columns-not-translated](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/sweet-exp-diagnostic-columns-not-translated.md)
 was fixed 2026-10-21.
 
 ## Maintenance
