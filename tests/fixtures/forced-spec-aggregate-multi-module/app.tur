@@ -1,0 +1,13 @@
+;; Calls util's generics at util's structs: util must emit each
+;; specialization with the by-value struct, not the int64_t carrier.
+(defmodule app
+  (import util :refer [ident pick Pos Box mk-pos])
+  (defn main [] : int
+    (let [p (ident (Pos 3 4))
+          q (pick 7 (mk-pos 5))
+          b (pick (Pos 1 2) (Box 1.5 2.25))]
+      (println (.x p))
+      (println (.y q))
+      (println (.h b)))
+    (println (ident 2.5))
+    0))

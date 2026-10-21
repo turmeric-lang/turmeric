@@ -1,0 +1,9 @@
+;; forced-spec-loses-aggregate-type: generics another module calls at this
+;; module's by-value structs.  Driven by tests/run-forced-spec-aggregate.sh.
+(defmodule util
+  (export ident pick Pos Box mk-pos)
+  (defstruct Pos [x : int y : int])
+  (defstruct Box [w : float h : float])
+  (defn mk-pos [x : int] : Pos (Pos x (* 2 x)))
+  (defn ident [A] [x : A] : A x)
+  (defn pick [A B] [a : A b : B] : B b))

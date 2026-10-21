@@ -65,3 +65,33 @@ elaborator's own comments say they do. `tur/bits`'s `float->bits` /
 3. Add the `BS_RAW_REALLOC` arm (`realloc((void *)p, n)`).
 4. A fixture over the unsafe builtins on both engines (run-turi.sh skips a
    file with inline C, so keep it free of one).
+
+## Resolution (2026-10-21)
+
+All four rows now answer as documented, alike on `tur run`, `tur jit` and
+`tur --interpret`:
+
+- **`transmute` / `reinterpret`, compiled** (`emit_builtin`,
+  `src/compiler/emit_core.c`): a float crossing to or from a non-float kind of
+  the same size goes through a union compound literal,
+  `(((union { double s; int64_t t; }){ .s = x }).t)`, so the bits are copied.
+  Between two integer or pointer kinds the C cast is kept -- it already keeps
+  the bits. `check-emitted-float-conversions.py` reports nothing on it.
+- **`reinterpret`'s type** (`elab_reinterpret`, `src/compiler/elab_unsafe.c`)
+  is now its target type, as `transmute`'s was, instead of `int`. It and
+  `unsafe-cast` also lost their placeholder second argument, which evaluated
+  the value twice.
+- **`unsafe-cast`, compiled** is spelled `TUR_AS(int64_t, x)`: it is a value
+  conversion on purpose, and that is the spelling the float-conversion check
+  accepts.
+- **The interpreter** (`src/turi/eval.c`): `turi_bitcast_builtin` copies the
+  bits into the result type after `eval_builtin` (float32 through 32 bits,
+  since every float kind is a double there); `unsafe-cast` converts as C does
+  (a float truncates, a bool is 0 or 1); `ptr-null?` is keyed on its spec name
+  and tests the whole word; `BS_RAW_REALLOC` has its arm.
+
+Pinned by `unsafe-builtins-engine-parity` (both engines, no inline C) and the
+rewritten `unsafe-reinterpret` (3.14's bit pattern both ways, a `7.1` round
+trip, and float32 <-> int32). The old `unsafe-reinterpret` expected the
+converted `1078523331`. The forms reference (`stdlib/forms/unsafe.tur`) no
+longer carries the "misbehaves today" notes.

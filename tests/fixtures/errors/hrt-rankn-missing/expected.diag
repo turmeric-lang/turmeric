@@ -1,1 +1,1 @@
-arg 1: expected ptr<void>, got int
+arg 1: expected (forall [a] (fn [a] : a)), got int

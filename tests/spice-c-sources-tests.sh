@@ -205,6 +205,31 @@ else
     sed 's/^/    /' "$CF/build.log" | tail -n 5
     FAIL=$((FAIL + 1)); FAILED+=("c-flags")
 fi
+
+# --- :build-opts :no-stdlib true is refused, false is accepted ----------------
+# build-opts-c-flags-never-consumed: :no-stdlib was parsed and read by
+# nothing, so `true` silently built with the stdlib.  Until it means
+# something the manifest reader refuses it.
+sed -i.bak 's/#map{:c-flags \["-DMY_ANSWER=42"\]}/#map{:no-stdlib true}/' "$CF/build.tur"
+printf '(defn main [] : int (println 7) 0)\n' >"$CF/src/main.tur"
+ns_true_ok=0
+if ! "$TUR" build "$CF" >"$CF/build.log" 2>&1 &&
+   grep -q ':no-stdlib is not implemented' "$CF/build.log"; then
+    ns_true_ok=1
+fi
+sed -i.bak 's/:no-stdlib true/:no-stdlib false/' "$CF/build.tur"
+ns_false_out=""
+if "$TUR" build "$CF" >"$CF/build-false.log" 2>&1; then
+    ns_false_out=$("$CF/build/bin/cf" 2>&1)
+fi
+if [ "$ns_true_ok" = 1 ] && [ "$ns_false_out" = "7" ]; then
+    echo "PASS no-stdlib: :no-stdlib true is refused, false builds"
+    PASS=$((PASS + 1))
+else
+    echo "FAIL no-stdlib: true refused=$ns_true_ok, false out=[$ns_false_out]"
+    sed 's/^/    /' "$CF/build.log" | tail -n 5
+    FAIL=$((FAIL + 1)); FAILED+=("no-stdlib")
+fi
 rm -rf "$CF"
 
 # definstance-not-dispatchable-across-modules: a typeclass instance defined in

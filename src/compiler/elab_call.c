@@ -1341,6 +1341,41 @@ static bool type_mentions_tyvar(const Type *t) {
     }
 }
 
+/* typed-ptr-pointee-not-checked-at-calls: true when a typed pointer's pointee
+ * (through any nesting, `ptr<ptr<A>>`) is still open -- a type variable, or
+ * an ADT with no def, which is how an unresolved one reads.  Such a pointer is
+ * checked by binding its variable, not by type_eq. */
+bool ptr_pointee_is_open(const Type *t) {
+    while (t && t->kind == TY_PTR_VOID && t->as.ptr.inner) t = t->as.ptr.inner;
+    if (!t || t->kind == TY_PTR_VOID) return false;
+    if (t->kind == TY_ADT && !t->as.adt_.def) return true;
+    return type_mentions_tyvar(t);
+}
+
+bool handle_targets_conflict(const Type *a, const Type *b) {
+    if (!a || !b || a->kind != b->kind) return false;
+    if (a->kind == TY_PTR_VOID) {
+        if (!a->as.ptr.inner || !b->as.ptr.inner) return false;
+        if (ptr_pointee_is_open(a) || ptr_pointee_is_open(b)) return false;
+        return !type_eq(*a, *b);
+    }
+    if (a->kind == TY_RC || a->kind == TY_WEAK) {
+        /* type_eq compares the target KIND only, and the kind check above
+         * not even that.  Two defs that are not the same object and do not
+         * share a name are two different types; a def re-registered under
+         * its own name is not a conflict. */
+        const AdtDef *da = a->as.rc.adt_def, *db = b->as.rc.adt_def;
+        /* A type-variable or unannotated (`rc<?>`) target matches anything. */
+        if (a->as.rc.inner == TY_TYVAR || b->as.rc.inner == TY_TYVAR ||
+            a->as.rc.inner == TY_UNKNOWN || b->as.rc.inner == TY_UNKNOWN)
+            return false;
+        if (a->as.rc.inner != b->as.rc.inner) return true;   /* rc<int> / rc<float> */
+        if (!da || !db || da == db) return false;
+        return !(da->name && db->name && strcmp(da->name, db->name) == 0);
+    }
+    return false;
+}
+
 static bool type_mentions_tyvar_name(const Type *t, const char *name) {
     if (!t || !name) return false;
     switch (t->kind) {
@@ -8405,6 +8440,21 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
                 }
             }
         }
+        /* typed-ptr-pointee-not-checked-at-calls: a `ptr<Foo>` parameter
+         * matched any pointer by kind, so a `ptr<Bar>` argument was accepted
+         * and a typed pointer protected no more than `ptr<void>`.  type_eq
+         * compares the pointees (and still lets an untyped `ptr<void>` match
+         * either way).  A pointee that names a type variable (`ptr<A>`) is
+         * left to the binding collection below.  `rc<S>` / `weak<S>` had the
+         * same hole: type_eq compares only their target kind. */
+        if (arg_ok && (expected_arg_kind == TY_PTR_VOID || expected_arg_kind == TY_RC ||
+                       expected_arg_kind == TY_WEAK) &&
+                fn_type.kind == TY_FN && fn_type.as.fn.arg_full_types) {
+            uint32_t nidx = fn_binding->closure_fn_binding ? i + 1 : i;
+            Type *ef = (nidx < fn_type.as.fn.arity)
+                ? fn_type.as.fn.arg_full_types[nidx] : NULL;
+            if (handle_targets_conflict(&args[i]->type, ef)) arg_ok = false;
+        }
         /* Phase HRT/G2: A TY_TYVAR parameter (named type variable like :a) accepts any argument.
          * The concrete type is resolved per-arm inside a GADT match. */
         if (!arg_ok && expected_arg_kind == TY_TYVAR) {
@@ -9687,7 +9737,11 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
                   * whole content of the diagnostic, so take it from
                   * arg_full_types. */
                  expected_arg_kind == TY_SESSION || expected_arg_kind == TY_ROLE ||
-                 expected_arg_kind == TY_FN) &&
+                 expected_arg_kind == TY_FN ||
+                 /* typed-ptr-pointee-not-checked-at-calls: `ptr<Foo>`, not
+                  * the kind's `ptr<void>`; `rc<S>`, not `rc<<adt>>`. */
+                 expected_arg_kind == TY_PTR_VOID || expected_arg_kind == TY_RC ||
+                 expected_arg_kind == TY_WEAK) &&
                 fn_type.kind == TY_FN && fn_type.as.fn.arg_full_types) {
                 uint32_t fn_arg_idx4 = fn_binding->closure_fn_binding ? i + 1 : i;
                 Type *ct = (fn_arg_idx4 < fn_type.as.fn.arity)

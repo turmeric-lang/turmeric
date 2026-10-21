@@ -1,0 +1,18 @@
+;; The unsafe builtins answer alike compiled and interpreted
+;; (unsafe-builtins-wrong-or-engine-dependent).  No inline C, so
+;; tests/run-turi.sh runs it too.
+(defn main [] : int
+  (unsafe
+    ;; unsafe-cast converts, as C does.
+    (println (unsafe-cast 7.1 :int))
+    (println (unsafe-cast true :int))
+    ;; transmute copies bits: 1.5's IEEE-754 pattern, and back.
+    (println (transmute 1.5 :int))
+    (println (transmute 4609434218613702656 :float))
+    ;; ptr-null? tests the whole pointer word, not its low byte.
+    (println (let [p (raw-malloc 8)] (let [n (ptr-null? p)] (raw-free p) n)))
+    ;; raw-realloc hands back the grown block.
+    (println (let [p (raw-realloc (raw-malloc 8) 64)]
+               (array-set-unchecked p 7 3)
+               (let [v (array-get-unchecked p 7)] (raw-free p) v))))
+  0)
