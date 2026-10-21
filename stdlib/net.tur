@@ -422,7 +422,7 @@ static void __tur_net_prepare(int64_t fd) {
   #fx{Net}
   : (Result nil IoError)
   ```c
-#ifdef _WIN32
+  #ifdef _WIN32
   int rc = shutdown((SOCKET)s, SD_SEND);
 #else
   int rc = shutdown((int)s, SHUT_WR);
@@ -445,7 +445,7 @@ static void __tur_net_prepare(int64_t fd) {
   #fx{Net}
   : (Result nil IoError)
   ```c
-#ifdef _WIN32
+  #ifdef _WIN32
   int rc = closesocket((SOCKET)s);
 #else
   int rc = close((int)s);

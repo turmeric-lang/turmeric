@@ -211,7 +211,7 @@
 ;;; mode/bit -- the single st_mode bit for who + perm (internal).
 (defn mode/bit [who : PermClass p : Perm] : int
   (bit-shl (match p (PermRead) 4 (PermWrite) 2 (PermExec) 1)
-           (match who (PermUser) 6 (PermGroup) 3 (PermOther) 0)))
+    (match who (PermUser) 6 (PermGroup) 3 (PermOther) 0)))
 ;;; mode/has? -- does a Mode grant a permission to a class?
 ;;;
 ;;; Parameters:
@@ -1501,9 +1501,10 @@
 ;; anc holds the identities of root and every directory between it and the
 ;; current one, as dev, ino pairs.
 (defn fs/walk-on-path? [anc : (Vec int) dev : int ino : int i : int] : bool
-  (cond (>= i (vec-len anc)) false
-        (and (= (vec-get anc i) dev) (= (vec-get anc (+ i 1)) ino)) true
-        :else (fs/walk-on-path? anc dev ino (+ i 2))))
+  (if (>= i (vec-len anc))
+    false
+    (or (and (= (vec-get anc i) dev) (= (vec-get anc (+ i 1)) ino))
+      (fs/walk-on-path? anc dev ino (+ i 2)))))
 ;;; fs/walk-follow-names -- fs/walk-names, following symlinks (internal).
 (defn fs/walk-follow-names [dir : cstr
                             names : (Vec cstr)
@@ -1524,18 +1525,23 @@
       (let [r (if (and is-dir (not (fs/walk-on-path? anc dev ino 0)))
                 (match (fs/read-dir full)
                   (Ok sub)
-                  (do (vec-push! anc dev)
-                      (vec-push! anc ino)
-                      (let [rr (fs/walk-follow-names full sub 0 f anc)]
-                        (vec-pop! anc)
-                        (vec-pop! anc)
-                        (fs/paths-free sub)
-                        rr))
+                  (do
+                    (vec-push! anc dev)
+                    (vec-push! anc ino)
+                    (let [rr (fs/walk-follow-names full sub 0 f anc)]
+                      (vec-pop! anc)
+                      (vec-pop! anc)
+                      (fs/paths-free sub)
+                      rr))
                   (Err e)
                   (Err e))
                 (io-error/ok-unit))]
         (fs/free-cstr full)
-        (match r (Ok _) (fs/walk-follow-names dir names (+ i 1) f anc) (Err e) (Err e))))))
+        (match r
+          (Ok _)
+          (fs/walk-follow-names dir names (+ i 1) f anc)
+          (Err e)
+          (Err e))))))
 ;;; fs/walk-fn-follow -- fs/walk-fn that descends into symlinked directories.
 ;;;
 ;;; The same visit order and callback as fs/walk-fn, but a symlink to a

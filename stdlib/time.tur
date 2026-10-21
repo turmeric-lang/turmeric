@@ -433,14 +433,16 @@
   ;;; instant.
   ;;;
   ;;; Since: stdlib-os-surface P3
-  (defstruct DateTime :copy [year : int
-                             month : int
-                             day : int
-                             hour : int
-                             minute : int
-                             second : int
-                             millis : int
-                             offset : int])
+  (defstruct DateTime
+    :copy
+    [year : int
+     month : int
+     day : int
+     hour : int
+     minute : int
+     second : int
+     millis : int
+     offset : int])
   ;;; utc-parts -- the UTC calendar fields of an instant.
   ;;;
   ;;; Pure arithmetic: no time-zone lookup.  Spelled time/utc-parts under a
@@ -549,10 +551,10 @@
   ;;; Since: stdlib-os-surface P3
   (defn datetime->ms [dt : DateTime] : int
     (+ (* (days-from-civil (.year dt) (.month dt) (.day dt)) 86400000)
-       (* (.hour dt) 3600000)
-       (* (- (.minute dt) (.offset dt)) 60000)
-       (* (.second dt) 1000)
-       (.millis dt)))
+      (* (.hour dt) 3600000)
+      (* (- (.minute dt) (.offset dt)) 60000)
+      (* (.second dt) 1000)
+      (.millis dt)))
   ;;; format-iso8601 -- an ISO 8601 / RFC 3339 timestamp for a DateTime.
   ;;;
   ;;; YYYY-MM-DDTHH:MM:SS, then .mmm when millis is not 0, then Z for offset 0
@@ -667,5 +669,4 @@
   ;;;
   ;;; Since: stdlib-os-surface P3
   (defn parse-iso8601 [s : cstr] : (Option DateTime)
-    (let [dt (parse-iso8601-raw s)]
-      (if (= (.month dt) 0) (None) (Some dt)))))
+    (let [dt (parse-iso8601-raw s)] (if (= (.month dt) 0) (None) (Some dt)))))

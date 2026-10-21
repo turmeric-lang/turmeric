@@ -688,10 +688,7 @@ static int __tur_sig_install(int64_t signo, void (*h)(int)) {
 ;;;   (signal/interrupted?)  ; => false
 ;;;
 ;;; Since: stdlib-os-surface P3
-(defn signal/interrupted? []
-  #fx{Proc}
-  : bool
-  (signal/pending? (SigInt)))
+(defn signal/interrupted? [] #fx{Proc} : bool (signal/pending? (SigInt)))
 ;;; signal/ignore -- make a signal do nothing at all.
 ;;;
 ;;; Unlike signal/handle nothing is recorded, and blocking calls are not
