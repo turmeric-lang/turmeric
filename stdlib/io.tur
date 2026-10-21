@@ -497,6 +497,40 @@ static int __tur_io_fs_list(const char* path, void* entries_v, int max_entries, 
   if (fclose((FILE*)fh) != 0) return tur_err_int(errno ? errno : EIO);
   return tur_ok_int(0);
   ```)
+;;; file-sync -- flush a FileHandle all the way to the storage device.
+;;;
+;;; Pushes the stdio buffer to the OS (fflush), then asks the OS to write
+;;; its cached pages to disk (fsync; _commit on Windows), so the data
+;;; survives a crash or power loss once this returns Ok.  file-close alone
+;;; does only the first half.
+;;;
+;;; Parameters:
+;;;   fh -- an open FileHandle (borrowed; not consumed).
+;;;
+;;; Returns:
+;;;   (Ok nil), or (Err e) -- the write error that flushing surfaced, or
+;;;   EINVAL for a handle (a pipe) that cannot be synced.
+;;;
+;;; Example:
+;;;   (file-sync fh)  ; => (Ok nil)
+;;;
+;;; Since: stdlib-os-surface P3
+(defn file-sync [^borrow fh : FileHandle]
+  #fx{FS}
+  : (Result nil IoError)
+  ```c
+  #include <errno.h>
+  #include <unistd.h>
+  #include <io.h>  /* tur:optional -- Windows only (_commit) */
+  FILE *f = (FILE *)fh;
+  if (fflush(f) != 0) return tur_err_int(errno ? errno : EIO);
+#ifdef _WIN32
+  if (_commit(_fileno(f)) != 0) return tur_err_int(errno);
+#else
+  if (fsync(fileno(f)) != 0) return tur_err_int(errno);
+#endif
+  return tur_ok_int(0);
+  ```)
 ;; ============================================================================
 ;; stdlib-os-surface-plan P0.2: write / seek / tell on FileHandle
 ;; ============================================================================

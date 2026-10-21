@@ -1,25 +1,29 @@
-;;; tur/net -- stub networking type (Socket) for linear resource tracking.
+;;; tur/net -- blocking TCP sockets over a linear Socket handle.
 ;;;
-;;; Defines Socket as a move-only struct wrapping an integer file descriptor.
+;;; net/tcp-connect, net/tcp-listen and net/accept hand out a Socket; net/send,
+;;; net/recv and net/shutdown-write use one; net/close releases it.  Every
+;;; call blocks the calling thread -- for the cooperative scheduler use
+;;; stdlib/async_socket.tur instead.  Every fallible call returns
+;;; (Result T IoError).
 ;;;
 ;;; Since: Phase LT4
-;; LT4: net.tur -- stub networking types for linear resource tracking.
+;; LT4: net.tur -- networking types for linear resource tracking.
 ;;
-;; Defines Socket as a move-only struct wrapping an integer file descriptor.
-;; Future versions will upgrade Socket to lref<Socket> once FileHandle,
-;; Socket, and MutexGuard are all defined and the LT4 annotation pass is done.
+;; stdlib-os-surface-plan P3.3 added the blocking client/server calls.  Before
+;; that, a simple TCP client meant adopting the async module.
 ;; ============================================================================
 ;; LT4: Socket -- resource-safe socket handle (move-only)
 ;; ============================================================================
-;;; Socket -- a linear (exactly-once) wrapper around a POSIX socket fd.
+;;; Socket -- a linear (exactly-once) handle to an open socket.
 ;;;
-;;; Wrapping the raw fd in a named struct prevents accidental duplication.
-;;; Marking the struct :linear (CK_LINEAR) means every bound Socket must be
-;;; explicitly consumed (e.g. via socket-close); the compiler emits TUR-E0100
-;;; if a linear value is silently dropped.
+;;; Every Socket must be consumed exactly once with net/close; under -Xlinear
+;;; dropping one is TUR-E0100 and closing it twice TUR-E0101.  The calls that
+;;; only use a socket (net/send, net/recv, net/accept, ...) borrow it.  It is
+;;; an opaque over the descriptor rather than a one-field struct, so it rides
+;;; a (Result Socket IoError) as one word.
 ;;;
 ;;; Since: LT4
-(defstruct Socket :linear [fd : int])
+(defopaque Socket :int :linear)
 ;; ---- File-descriptor handle newtype (stdlib-opaque-handle-types-plan, I/O sweep) ----
 ;; socket-fd hands back the underlying descriptor as a shared Fd handle (from
 ;; tur/fd) so it composes with the async-socket-* operations -- e.g.
@@ -28,13 +32,96 @@
 (load "stdlib/fd.tur")
 
 (load "stdlib/effects.tur")
-;; stdlib-effect-rows: socket-close releases a live network resource, so it
-;; carries the #{Net} capability tag.  The pure accessors socket-fd /
-;; socket-valid? read struct fields only and stay untagged.
+
+(load "stdlib/io-error.tur")
+;; stdlib-effect-rows: every call that touches a live socket carries the
+;; #{Net} capability tag.  The pure accessors socket-fd / socket-valid? read
+;; the handle only and stay untagged.
+```c
+#include <errno.h>
+#include <fcntl.h>
+/* A file-scope block is copied verbatim -- its includes are not hoisted
+ * behind __has_include as a body's are -- so the POSIX-only header is
+ * guarded by hand.  Windows gets getaddrinfo from ws2tcpip.h (preamble). */
+#ifndef _WIN32
+#include <netdb.h>
+#endif
+/* The errno for the socket call that just failed.  Winsock reports through
+ * WSAGetLastError with its own WSAE* numbers, which strerror does not know;
+ * the common ones map onto the POSIX names MinGW's errno.h defines. */
+static int __tur_net_errno(void) {
+#ifdef _WIN32
+  switch (WSAGetLastError()) {
+    case WSAECONNREFUSED: return ECONNREFUSED;
+    case WSAECONNRESET:   return ECONNRESET;
+    case WSAECONNABORTED: return ECONNABORTED;
+    case WSAETIMEDOUT:    return ETIMEDOUT;
+    case WSAEADDRINUSE:   return EADDRINUSE;
+    case WSAEADDRNOTAVAIL: return EADDRNOTAVAIL;
+    case WSAEHOSTUNREACH: return EHOSTUNREACH;
+    case WSAENETUNREACH:  return ENETUNREACH;
+    case WSAENOTCONN:     return ENOTCONN;
+    case WSAEINTR:        return EINTR;
+    case WSAEACCES:       return EACCES;
+    case WSAEINVAL:       return EINVAL;
+    case WSAEMFILE:       return EMFILE;
+    case WSAENOBUFS:      return ENOBUFS;
+    case WSAENOTSOCK:     return EBADF;
+    default:              return EIO;
+  }
+#else
+  return errno;
+#endif
+}
+/* getaddrinfo answers EAI_* codes, not errno: name the closest errno. */
+static int __tur_net_gai_errno(int rc) {
+#ifdef EAI_SYSTEM
+  if (rc == EAI_SYSTEM) return errno ? errno : EIO;
+#endif
+  if (rc == EAI_MEMORY) return ENOMEM;
+  if (rc == EAI_AGAIN) return EAGAIN;
+  if (rc == EAI_NONAME) return EHOSTUNREACH;
+#if defined(EAI_NODATA) && EAI_NODATA != EAI_NONAME
+  if (rc == EAI_NODATA) return EHOSTUNREACH;
+#endif
+  return EINVAL;
+}
+/* One-time Winsock start-up; a no-op elsewhere. */
+static void __tur_net_init(void) {
+#ifdef _WIN32
+  static LONG started = 0;
+  if (InterlockedExchange(&started, 1) == 0) { WSADATA wd; WSAStartup(MAKEWORD(2, 2), &wd); }
+#endif
+}
+static void __tur_net_closefd(int64_t fd) {
+#ifdef _WIN32
+  closesocket((SOCKET)fd);
+#else
+  close((int)fd);
+#endif
+}
+/* Per-socket set-up: not inherited by spawned children, and (macOS) a write
+ * to a closed peer is an EPIPE error rather than a SIGPIPE that kills us. */
+static void __tur_net_prepare(int64_t fd) {
+#ifndef _WIN32
+  fcntl((int)fd, F_SETFD, FD_CLOEXEC);
+#endif
+#ifdef SO_NOSIGPIPE
+  int one = 1;
+  setsockopt((int)fd, SOL_SOCKET, SO_NOSIGPIPE, (const char *)&one, sizeof one);
+#endif
+}
+/* Linux spells the SIGPIPE opt-out per send call instead. */
+#ifdef MSG_NOSIGNAL
+#define __TUR_NET_SEND_FLAGS MSG_NOSIGNAL
+#else
+#define __TUR_NET_SEND_FLAGS 0
+#endif
+```
 ;;; socket-fd -- return the underlying file descriptor from a Socket as an Fd.
 ;;;
 ;;; Parameters:
-;;;   s -- a Socket value.
+;;;   s -- a Socket (borrowed).
 ;;;
 ;;; Returns:
 ;;;   The underlying file descriptor wrapped as an Fd.
@@ -44,31 +131,32 @@
 ;;;
 ;;; Since: LT4
 
-(defn socket-fd [s : Socket] : Fd
+(defn socket-fd [^borrow s : Socket] : Fd
   ```c
-  return s.fd;
+  return s;
   ```)
 ;;; socket-valid? -- return true if the Socket wraps a non-negative fd.
 ;;;
 ;;; Parameters:
-;;;   s -- a Socket value.
+;;;   s -- a Socket (borrowed).
 ;;;
 ;;; Returns:
-;;;   true if fd >= 0, false otherwise.
+;;;   true if fd >= 0, false otherwise.  Every Socket the net/* calls hand
+;;;   out is valid; failure is their (Err e).
 ;;;
 ;;; Example:
 ;;;   (socket-valid? my-socket)  ; => true
 ;;;
 ;;; Since: LT4
 
-(defn socket-valid? [s : Socket] : bool
+(defn socket-valid? [^borrow s : Socket] : bool
   ```c
-  return s.fd >= 0;
+  return s >= 0;
   ```)
-;;; socket-close -- close a Socket and release the underlying fd.
+;;; socket-close -- deprecated: close a Socket, reporting 0 or -1.
 ;;;
 ;;; Parameters:
-;;;   s -- a Socket to close (by value; handle is consumed).
+;;;   s -- a Socket to close (consumed).
 ;;;
 ;;; Returns:
 ;;;   0 on success, -1 on error.
@@ -78,10 +166,294 @@
 ;;;
 ;;; Since: LT4
 
-(defn socket-close [s : Socket]
+(defn ^deprecated "use net/close, which returns (Result nil IoError)"
+  socket-close
+  [s : Socket]
   #fx{Net}
   : int
   ```c
-  if (s.fd < 0) return -1;
-  return close(s.fd);
+  if (s < 0) return -1;
+#ifdef _WIN32
+  return closesocket((SOCKET)s) == 0 ? 0 : -1;
+#else
+  return close((int)s);
+#endif
+  ```)
+;; ============================================================================
+;; stdlib-os-surface-plan P3.3: blocking sockets
+;; ============================================================================
+;;; net/tcp-connect -- open a TCP connection to host:port.
+;;;
+;;; host is a name or a numeric IPv4 / IPv6 address; every address it resolves
+;;; to is tried in turn until one accepts.
+;;;
+;;; Parameters:
+;;;   host -- e.g. "example.com", "127.0.0.1" or "::1"
+;;;   port -- the TCP port
+;;;
+;;; Returns:
+;;;   (Ok s) -- a connected Socket; close it with net/close -- or (Err e):
+;;;   ECONNREFUSED when nothing listens there, EHOSTUNREACH when host does
+;;;   not resolve.
+;;;
+;;; Example:
+;;;   (match (net/tcp-connect "127.0.0.1" 8080)
+;;;     (Ok s)  (net/close s)
+;;;     (Err e) (Err e))
+;;;
+;;; Since: stdlib-os-surface P3
+(defn net/tcp-connect [host : cstr port : int]
+  #fx{Net}
+  : (Result Socket IoError)
+  ```c
+  __tur_net_init();
+  if (port < 0 || port > 65535) return tur_err_int(EINVAL);
+  char portstr[16];
+  snprintf(portstr, sizeof portstr, "%d", (int)port);
+  struct addrinfo hints, *res = NULL;
+  memset(&hints, 0, sizeof hints);
+  hints.ai_family = AF_UNSPEC;
+  hints.ai_socktype = SOCK_STREAM;
+  int rc = getaddrinfo(host, portstr, &hints, &res);
+  if (rc != 0) return tur_err_int(__tur_net_gai_errno(rc));
+  int err = EHOSTUNREACH;
+  for (struct addrinfo *ai = res; ai; ai = ai->ai_next) {
+    int64_t fd = (int64_t)socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
+    if (fd < 0) { err = __tur_net_errno(); continue; }
+    __tur_net_prepare(fd);
+    if (connect(fd, ai->ai_addr, (socklen_t)ai->ai_addrlen) == 0) {
+      freeaddrinfo(res);
+      return tur_ok_int(fd);
+    }
+    err = __tur_net_errno();
+    __tur_net_closefd(fd);
+  }
+  freeaddrinfo(res);
+  return tur_err_int(err);
+  ```)
+;;; net/tcp-listen -- a listening TCP socket on host:port.
+;;;
+;;; Parameters:
+;;;   host -- the local address to bind: "127.0.0.1" for this machine only,
+;;;           "0.0.0.0" for every IPv4 interface, "::" for IPv6, or "" for
+;;;           the first wildcard address the system lists
+;;;   port -- the TCP port; 0 picks a free one (read it with net/local-port)
+;;;
+;;; Returns:
+;;;   (Ok s) -- a listening Socket for net/accept; close it with net/close --
+;;;   or (Err e), e.g. EADDRINUSE.  SO_REUSEADDR is set (not on Windows,
+;;;   where it would let another process take the port), so a restarted
+;;;   server can rebind at once.
+;;;
+;;; Example:
+;;;   (match (net/tcp-listen "127.0.0.1" 0)
+;;;     (Ok s)  (net/close s)
+;;;     (Err e) (Err e))
+;;;
+;;; Since: stdlib-os-surface P3
+(defn net/tcp-listen [host : cstr port : int]
+  #fx{Net}
+  : (Result Socket IoError)
+  ```c
+  __tur_net_init();
+  if (port < 0 || port > 65535) return tur_err_int(EINVAL);
+  char portstr[16];
+  snprintf(portstr, sizeof portstr, "%d", (int)port);
+  struct addrinfo hints, *res = NULL;
+  memset(&hints, 0, sizeof hints);
+  hints.ai_family = AF_UNSPEC;
+  hints.ai_socktype = SOCK_STREAM;
+  hints.ai_flags = AI_PASSIVE;
+  int rc = getaddrinfo((host && *host) ? host : NULL, portstr, &hints, &res);
+  if (rc != 0) return tur_err_int(__tur_net_gai_errno(rc));
+  int err = EADDRNOTAVAIL;
+  for (struct addrinfo *ai = res; ai; ai = ai->ai_next) {
+    int64_t fd = (int64_t)socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
+    if (fd < 0) { err = __tur_net_errno(); continue; }
+    __tur_net_prepare(fd);
+#ifndef _WIN32
+    int one = 1;
+    setsockopt((int)fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof one);
+#endif
+    if (bind(fd, ai->ai_addr, (socklen_t)ai->ai_addrlen) == 0 && listen(fd, SOMAXCONN) == 0) {
+      freeaddrinfo(res);
+      return tur_ok_int(fd);
+    }
+    err = __tur_net_errno();
+    __tur_net_closefd(fd);
+  }
+  freeaddrinfo(res);
+  return tur_err_int(err);
+  ```)
+;;; net/accept -- wait for the next connection on a listening socket.
+;;;
+;;; Parameters:
+;;;   s -- a Socket from net/tcp-listen (borrowed; it keeps listening)
+;;;
+;;; Returns:
+;;;   (Ok client) -- the connected Socket; close it with net/close -- or
+;;;   (Err e).  A signal caught with signal/handle (stdlib/process.tur) ends
+;;;   the wait with an io-error/interrupted? error, so a server loop can
+;;;   check signal/interrupted? and stop; call again to keep waiting.
+;;;
+;;; Example:
+;;;   (match (net/accept server)
+;;;     (Ok c)  (net/close c)
+;;;     (Err e) (Err e))
+;;;
+;;; Since: stdlib-os-surface P3
+(defn net/accept [^borrow s : Socket]
+  #fx{Net}
+  : (Result Socket IoError)
+  ```c
+  int64_t fd = (int64_t)accept(s, NULL, NULL);
+  if (fd < 0) return tur_err_int(__tur_net_errno());
+  __tur_net_prepare(fd);
+  return tur_ok_int(fd);
+  ```)
+;;; net/send -- write a whole string to a connected socket.
+;;;
+;;; Blocks until every byte is handed to the kernel (send(2) may take it in
+;;; pieces).  Writing to a peer that has closed is an EPIPE error, never a
+;;; SIGPIPE that kills the process.
+;;;
+;;; Parameters:
+;;;   s    -- a connected Socket (borrowed)
+;;;   data -- the bytes to send, up to the NUL terminator
+;;;
+;;; Returns:
+;;;   (Ok n) -- n is the byte count, the length of data -- or (Err e).
+;;;
+;;; Example:
+;;;   (net/send s "GET / HTTP/1.0\r\n\r\n")  ; => (Ok 18)
+;;;
+;;; Since: stdlib-os-surface P3
+(defn net/send [^borrow s : Socket data : cstr]
+  #fx{Net}
+  : (Result int IoError)
+  ```c
+  size_t len = strlen(data), total = 0;
+  while (total < len) {
+    size_t chunk = len - total;
+    if (chunk > 0x40000000) chunk = 0x40000000;   /* send's length is an int on Windows */
+    int64_t n = (int64_t)send(s, data + total, (int)chunk, __TUR_NET_SEND_FLAGS);
+    if (n < 0) {
+      int e = __tur_net_errno();
+      if (e == EINTR) continue;
+      return tur_err_int(e);
+    }
+    total += (size_t)n;
+  }
+  return tur_ok_int((int64_t)total);
+  ```)
+;;; net/recv -- read what has arrived on a connected socket, up to max bytes.
+;;;
+;;; Blocks until at least one byte is available or the peer closes.  The
+;;; bytes come back as a cstr, so this suits text protocols: a NUL byte in
+;;; the data ends the string early.
+;;;
+;;; Parameters:
+;;;   s   -- a connected Socket (borrowed)
+;;;   max -- the most bytes to return (> 0)
+;;;
+;;; Returns:
+;;;   (Ok (Some text)) -- a fresh heap cstr of 1 to max bytes the caller owns
+;;;   (release with free); (Ok (None)) once the peer has closed its side;
+;;;   (Err e) on a failure, e.g. ECONNRESET -- or io-error/interrupted? when
+;;;   a signal caught with signal/handle ended the wait (nothing was read;
+;;;   call again to keep waiting).
+;;;
+;;; Example:
+;;;   (match (net/recv s 4096)
+;;;     (Ok o)  (match o (Some t) (println t) (None) (println "<closed>"))
+;;;     (Err e) (println (io-error/message e)))
+;;;
+;;; Since: stdlib-os-surface P3
+(defn net/recv [^borrow s : Socket max : int]
+  #fx{Net}
+  : (Result (Option cstr) IoError)
+  ```c
+  if (max <= 0 || max > 0x40000000) return tur_err_int(EINVAL);
+  char *buf = (char *)malloc((size_t)max + 1);
+  if (!buf) return tur_err_int(ENOMEM);
+  int64_t n = (int64_t)recv(s, buf, (int)max, 0);
+  if (n > 0) { buf[n] = '\0'; return tur_ok_int(tur_some_ptr(buf)); }
+  int e = n == 0 ? 0 : __tur_net_errno();
+  free(buf);
+  return e == 0 ? tur_ok_int(tur_none()) : tur_err_int(e);
+  ```)
+;;; net/local-port -- the local port a socket is bound to.
+;;;
+;;; The way to learn which port net/tcp-listen picked for port 0.
+;;;
+;;; Parameters:
+;;;   s -- a bound or connected Socket (borrowed)
+;;;
+;;; Returns:
+;;;   (Ok port), or (Err e).
+;;;
+;;; Example:
+;;;   (net/local-port server)  ; => (Ok 49152)
+;;;
+;;; Since: stdlib-os-surface P3
+(defn net/local-port [^borrow s : Socket]
+  #fx{Net}
+  : (Result int IoError)
+  ```c
+  struct sockaddr_storage ss;
+  socklen_t len = sizeof ss;
+  if (getsockname(s, (struct sockaddr *)&ss, &len) != 0) return tur_err_int(__tur_net_errno());
+  if (ss.ss_family == AF_INET) return tur_ok_int(ntohs(((struct sockaddr_in *)&ss)->sin_port));
+  if (ss.ss_family == AF_INET6) return tur_ok_int(ntohs(((struct sockaddr_in6 *)&ss)->sin6_port));
+  return tur_err_int(EAFNOSUPPORT);
+  ```)
+;;; net/shutdown-write -- tell the peer no more data is coming (half-close).
+;;;
+;;; The peer's next net/recv answers (Ok (None)) once it has read everything
+;;; sent before; this side can still receive.  The socket stays open --
+;;; release it with net/close.
+;;;
+;;; Parameters:
+;;;   s -- a connected Socket (borrowed)
+;;;
+;;; Returns:
+;;;   (Ok nil), or (Err e).
+;;;
+;;; Example:
+;;;   (net/shutdown-write s)  ; => (Ok nil)
+;;;
+;;; Since: stdlib-os-surface P3
+(defn net/shutdown-write [^borrow s : Socket]
+  #fx{Net}
+  : (Result nil IoError)
+  ```c
+  #ifdef _WIN32
+  int rc = shutdown((SOCKET)s, SD_SEND);
+#else
+  int rc = shutdown((int)s, SHUT_WR);
+#endif
+  return rc == 0 ? tur_ok_int(0) : tur_err_int(__tur_net_errno());
+  ```)
+;;; net/close -- close a Socket.
+;;;
+;;; Parameters:
+;;;   s -- the Socket (consumed)
+;;;
+;;; Returns:
+;;;   (Ok nil), or (Err e).  The descriptor is released either way.
+;;;
+;;; Example:
+;;;   (net/close s)  ; => (Ok nil)
+;;;
+;;; Since: stdlib-os-surface P3
+(defn net/close [s : Socket]
+  #fx{Net}
+  : (Result nil IoError)
+  ```c
+  #ifdef _WIN32
+  int rc = closesocket((SOCKET)s);
+#else
+  int rc = close((int)s);
+#endif
+  return rc == 0 ? tur_ok_int(0) : tur_err_int(__tur_net_errno());
   ```)

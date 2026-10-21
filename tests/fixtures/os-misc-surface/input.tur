@@ -1,0 +1,65 @@
+;; stdlib-os-surface-plan P3.5: os/hostname, os/uid / os/gid (typed Uid /
+;; Gid), term/is-tty-fd? over an Fd, and file-sync.  The libc helpers below
+;; answer the same questions independently, so the fixture checks values,
+;; not just that the calls succeed.
+(load "stdlib/os.tur")
+(load "stdlib/term.tur")
+(load "stdlib/io.tur")
+(load "stdlib/fs.tur")
+
+(defn libc-uid [] : int
+  ```c
+  return (int64_t)getuid();
+  ```)
+
+(defn libc-gid [] : int
+  ```c
+  return (int64_t)getgid();
+  ```)
+
+(defn libc-hostname-is? [h : cstr] : bool
+  ```c
+  char buf[257];
+  if (gethostname(buf, 256) != 0) return false;
+  buf[256] = '\0';
+  return strcmp(buf, h) == 0;
+  ```)
+
+(defn scratch [name : cstr] : cstr
+  ```c
+  /* Run-time scratch dir (see io-stdlib-roundtrip for why not "/tmp"). */
+  const char *d = getenv("TUR_TEST_TMPDIR");
+  if (!d || !*d) d = "/tmp";
+  size_t cap = strlen(d) + strlen(name) + 48;
+  char *buf = (char *)malloc(cap);
+  snprintf(buf, cap, "%s/tur-os-misc-%d-%s", d, (int)getpid(), name);
+  return buf;
+  ```)
+
+(defn main [] : int
+  (match (os/hostname)
+    (Ok h) (do (println (libc-hostname-is? h)) (fs/free-cstr h))
+    (Err e) (println (io-error/message e)))
+  (match (os/uid)
+    (Ok u) (println (= (uid->int u) (libc-uid)))
+    (Err e) (println (io-error/message e)))
+  (match (os/gid)
+    (Ok g) (println (= (gid->int g) (libc-gid)))
+    (Err e) (println (io-error/message e)))
+  ;; the harness captures stdout, so fd 1 is a pipe; 999 is not open at all
+  (println (= (term/is-tty-fd? (int->fd 1)) (term/is-tty? 1)))
+  (println (term/is-tty-fd? (int->fd 999)))
+  (match (file-open (scratch "sync.txt") "wb")
+    (Ok fh) (do (file-write-str fh "durable")
+                (match (file-sync fh)
+                  (Ok _) (println "synced")
+                  (Err e) (println (io-error/message e)))
+                (match (file-close fh)
+                  (Ok _) 0
+                  (Err e) (do (println (io-error/message e)) 1)))
+    (Err e) (do (println (io-error/message e)) 1))
+  (match (fs/read-text (scratch "sync.txt"))
+    (Ok s) (do (println s) (fs/free-cstr s))
+    (Err e) (println (io-error/message e)))
+  (fs/rm (scratch "sync.txt"))
+  0)
