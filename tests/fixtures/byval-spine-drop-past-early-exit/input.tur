@@ -1,0 +1,72 @@
+;; byval-spine-drop-past-early-exit -- a by-value ADT local in a scope whose end
+;; is never reached still releases its box chain.
+;;
+;; `drop_localowned_<T>(&xs)` is a TRAILING free, emitted after the let body.
+;; Two exits jump past it:
+;;
+;;   face i  -- a tail self-call.  emit_tail emits a tail-position `let` INLINE
+;;              (emit_fns.c, the `tco_let_simple` arm), with no trailing code.
+;;              Its releases ride the early-exit channel instead
+;;              (let_binding_push_scope_frees), which the back-edge fires.
+;;   face ii -- an explicit `return`.  Until 2026-10-21 nothing fired: the
+;;              elaborator's confinement walk read the `return` as an escape,
+;;              so `xs` was never flagged for a drop, and emit_let_value only
+;;              collected the spine drop for bodies with no `return` anyway.
+;;              Measured: 2 boxes per call, every call.
+;;
+;; Face ii's drop now rides the same channel, which a `return` fires after
+;; hoisting its value to a temp.  What makes that sound is two gates: the
+;; confinement walk refuses a `return` whose value is `xs` or a binder
+;; aliasing it, and the emitter only pushes the drop when the enclosing
+;; SIGNATURE is all non-pointer scalars, so nothing the return hands out can
+;; point into the spine being freed.
+;;
+;; Both spine paths are here: the direct recursive field (`tl : Rec`) and the
+;; `:any` field (the Saffron shape, written with explicit widens so the file
+;; needs no `#lang` line).  Both glue through `drop_localowned_<T>`.
+;;
+;; Every read of `xs` is an INLINE `match`, on purpose.  Handing `xs` to a
+;; callee that takes the ADT by value (`[xs : Rec]`) MOVES it, so the callee
+;; owns it and there is no local drop for this fixture to pin.
+;;
+;; requires.leak-check with no known-leak: the loop counts make one missing
+;; free visible, and a drop fired too early would abort as a use-after-free.
+
+(defdata Rec [] (RCons [hd : int tl : Rec]) (RNil))
+(defdata Dyn [] (DCons [hd : any tl : any]) (DNil))
+
+;; face i, direct recursive field: the let body IS the tail self-call.
+(defn loop-rec [i : int n : int acc : int] : int
+  (if (= i n)
+    acc
+    (let [xs (RCons i (RCons 2 (RNil)))]
+      (loop-rec (+ i 1) n (+ acc (match xs (RCons h t) h (RNil) 0))))))
+
+;; face i, :any field: same shape, the other glue path.
+(defn loop-dyn [i : int n : int acc : int] : int
+  (if (= i n)
+    acc
+    (let [xs (DCons (:: i any) (:: (DCons (:: 2 any) (:: (DNil) any)) any))]
+      (loop-dyn (+ i 1) n (+ acc (match xs (DCons h t) (cast h int) (DNil) 0))))))
+
+;; face ii, both paths: the let body ends in an explicit `return`.
+(defn once-rec [i : int] : int
+  (let [xs (RCons i (RCons 2 (RNil)))]
+    (return (match xs (RCons h t) h (RNil) 0))))
+
+(defn once-dyn [i : int] : int
+  (let [xs (DCons (:: i any) (:: (DNil) any))]
+    (return (match xs (DCons h t) (cast h int) (DNil) 0))))
+
+;; A non-tail driver for the `return` cases, so their scopes are entered once
+;; per turn and the drop has to fire on the returning path each time.
+(defn drive [i : int n : int] : int
+  (if (= i n)
+    0
+    (+ (+ (once-rec i) (once-dyn i)) (drive (+ i 1) n))))
+
+(defn main [] : int
+  (println (loop-rec 0 200 0))   ;; 0+1+...+199 = 19900
+  (println (loop-dyn 0 200 0))   ;; 19900
+  (println (drive 0 200))        ;; 2 * 19900 = 39800
+  0)

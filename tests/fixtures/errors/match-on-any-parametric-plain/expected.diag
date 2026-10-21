@@ -1,0 +1,2 @@
+cannot match an 'any' scrutinee against parametric 'Shape'
+narrow with `cast`

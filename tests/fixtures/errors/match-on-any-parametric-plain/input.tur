@@ -1,0 +1,21 @@
+;; match-on-any-parametric-plain -- outside a dynamic dialect, `match` on an
+;; `any` scrutinee against a PARAMETRIC ADT is refused with a diagnostic.
+;;
+;; The narrow a dynamic dialect applies -- unbox to `(Shape any)` -- is sound
+;; there only because its constructors BUILD at `any`.  Here `(Sq 6)` builds a
+;; `(Shape int)`, so that narrow would compile and then panic "different
+;; instantiation", and declining it left the emitter's C error about an
+;; aggregate used where an integer was expected, naming nothing in this file.
+;; `cast` to the instantiation is the fix the help line names, and it works:
+;; `(match (cast s (Shape int)) ...)`.
+
+(defdata Shape [a] (Sq a) (Pt))
+
+(defn area [s : any] : int
+  (match s
+    (Sq w) 1
+    (Pt)   0))
+
+(defn main [] : int
+  (println (area (:: (Sq 6) any)))
+  0)

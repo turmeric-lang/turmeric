@@ -6973,7 +6973,23 @@ bool any_expr_is_owned_temp(const Expr *x, int depth) {
     if (x->kind == EX_UNION_INJECT && x->as.union_inject_.value &&
         x->as.union_inject_.value->type.kind == TY_UNION)
         return false;
-    if (x->kind == EX_UNION_INJECT) return !x->as.union_inject_.frame_box;
+    /* any-widen-deep-drop-frees-borrowed-children: the widen mints the box, but
+     * it fills that box with a COPY OF THE HEADER -- and the copy's children
+     * are still whatever the original pointed at.  So "this expression owns
+     * the box" does not license the deep `__tur_any_drop` the consumer will
+     * run, which walks the children too.
+     *
+     *     (let [one (Cons (:: 1 any) (:: (Nil) any))]
+     *       (peek (:: one any)))     ;; stamped -> deep drop
+     *
+     * The drop freed `one`'s `(Nil)` box through the copy, and `one`'s own
+     * scope-exit drop then read it again: a heap-use-after-free.  The same
+     * hole `returns_fresh_any` had -- freshness of the BOX read as freshness
+     * of what is under it -- so it takes the same guard.  A payload that owns
+     * nothing is unaffected, which is every case the temp-drop fixtures pin. */
+    if (x->kind == EX_UNION_INJECT)
+        return !x->as.union_inject_.frame_box &&
+               !any_widen_payload_owns_droppable(x->as.union_inject_.value);
     if (x->kind != EX_CALL || !x->as.call_.fn_binding) return false;
     const Binding *fb = x->as.call_.fn_binding;
     if (fb->returns_fresh_any) return true;

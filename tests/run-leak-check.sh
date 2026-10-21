@@ -136,6 +136,28 @@ for marker in "${marked[@]}"; do
 
     if [ "$rc" -eq 23 ]; then
         summary=$(grep -m1 "SUMMARY: AddressSanitizer" "$WORK/$name.err" || echo "leak reported")
+        # `exitcode` in ASAN_OPTIONS is the exit code for EVERY AddressSanitizer
+        # error, not just a leak -- a use-after-free, a double free and a buffer
+        # overflow all land here as 23 too.  So rc alone does not say "leak", and
+        # a `known-leak` marker applied to rc would excuse all of them: the gate
+        # would print `KNOWN <fixture> -- SUMMARY: AddressSanitizer:
+        # heap-use-after-free` and stay green.  That is not hypothetical -- the
+        # deep-drop use-after-free fixed alongside this check
+        # (docs/reported/any-widen-deep-drop-frees-borrowed-children.md) lives in
+        # exactly the machinery `saffron-higher-order` carries a marker for.
+        #
+        # LeakSanitizer is the only reporter whose summary reads `... leaked in
+        # N allocation(s)`, so that is the test.  A marker excuses a LEAK; every
+        # other ASan error is a wrong answer and fails with or without one.
+        case "$summary" in
+            *"leaked in"*) ;;
+            *)
+                fail "$name" "$summary"
+                echo "    (not a leak -- a known-leak marker does not excuse this)"
+                sed -n '/ERROR: AddressSanitizer/,+6p' "$WORK/$name.err" | head -8 | sed 's/^/    /'
+                continue
+                ;;
+        esac
         # A fixture may carry `known-leak` naming an OPEN report.  It then shows
         # as KNOWN rather than failing the gate: the leak is real and filed, and
         # a permanently red gate is one nobody reads.  Delete the marker when

@@ -1,0 +1,56 @@
+#lang saffron
+;; any-widen-fresh-payload-aliases -- `returns_fresh_any` says the BOX is fresh.
+;; Since the deep drop it has to say more than that, and this is the shape that
+;; proves it.
+;;
+;; `__tur_any_drop` was a box free when the freshness rule was written.  It is
+;; not one now: it calls the payload's `drop_localowned_<T>` first, so dropping
+;; an `any` releases everything the payload OWNS as well as the box.  The rule
+;; was never re-derived against that change, and it does not survive it -- a
+;; body whose tail is a widen mints a fresh box, but a CONSTRUCTOR fills its
+;; owned fields from whatever it was handed, and what it is handed here is a
+;; borrowed list.
+;;
+;; `wrap` is a widen in tail position, so it qualified.  `(peek (wrap inner))`
+;; then stamped the temporary for a drop, the drop walked into the `:any` field,
+;; and it freed the spine `inner` still owned.  Whether that reads as a
+;; use-after-free depends on who touches the spine next -- the plain-Turmeric
+;; twin, any-widen-deep-drop-plain-turmeric, is one under ASan -- but the spine
+;; is gone either way while `inner` is still live.  `llen` below walks it AFTER
+;; the drop, so a freed spine cannot hide behind a header-only read.
+;;
+;; The guard is that the payload must own NOTHING -- no recursive-self field and
+;; no `:any` field, i.e. exactly the types the emitter publishes no drop glue
+;; for, and so exactly the types for which the deep drop degenerates back into
+;; the box free the rule was written against.  `Lst` has an `:any` field, so
+;; `wrap` is refused and the box stays leaked, which is the safe direction and is
+;; the residue `known-leak` names.  (The leak is the collector-off build's; the
+;; leak gate builds Saffron with the collector off on purpose.)
+;;
+;; `Pt` is the other half of the pin: only int fields, so no glue, so the drop is
+;; a box free and `ret-any` still qualifies.  Without it this fixture would pass
+;; for a compiler that had simply switched `returns_fresh_any` off entirely.
+
+(defdata Lst [] (Cons [hd : any tl : any]) (Nil))
+(defstruct Pt [x : int y : int])
+
+;; Fresh box, payload OWNS its `:any` fields -- must NOT be dropped by a consumer.
+(defn wrap [x] (Cons x (Nil)))
+
+;; Fresh box, payload owns nothing -- still droppable, as it always was.
+(defn ret-any [i : int] : any (make-struct Pt i 2))
+
+(defn peek [l] (match l (Cons h t) 1 (Nil) 0))
+(defn llen [l] (match l (Cons h t) (+ 1 (cast (llen t) int)) (Nil) 0))
+(defn reads [v : any] : int (if (is? v Pt) 1 0))
+
+(defn main [] : int
+  (let [inner (Cons 7.1 (Cons 2 (Nil)))]
+    ;; The consuming call is where the drop would be stamped.
+    (println (peek (wrap inner)))
+    ;; `inner` must still be intact here -- all of it, not just its header --
+    ;; and its scope-exit drop must not be a second free of the same spine.
+    (println (llen inner)))
+  ;; The unaffected half: an owned-nothing payload is still dropped at its use.
+  (println (reads (ret-any 7)))
+  0)

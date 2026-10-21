@@ -1780,6 +1780,11 @@ uint32_t linear_state_snapshot_bindings(const Scope *scope,
 bool *linear_state_capture_current(Binding **bindings, uint32_t n);
 void linear_state_restore(Binding **bindings, const bool *states, uint32_t n);
 bool is_binding_consumed(const Expr *body, Binding *binding);
+/* any-widen-deep-drop-frees-borrowed-children: the same walk with one extra
+ * disposal pattern -- the binding widened to `any` and stored into an
+ * aggregate with drop glue, which hands its children to that aggregate's
+ * owner.  Used only by the localowned scope drop, where it can only suppress. */
+bool is_binding_widened_to_any(const Expr *body, Binding *binding);
 /* set-bang-rc-release: stamp every `(set! binding v)` in `body` so codegen
  * releases the value being overwritten, normalizing borrow-shaped `v` to a
  * genuine +1 first.  Call ONLY for a binding that owns a continuous reference
@@ -2564,6 +2569,12 @@ Expr *elab_session_recv_timeout(Elab *e, const Form *call);
 /* any-struct-box-leak-per-widen: does this expression evaluate to an `any` whose
  * payload box the evaluating expression owns?  See elab_call.c. */
 bool any_expr_is_owned_temp(const Expr *x, int depth);
+/* any-widen-deep-drop-frees-borrowed-children: true when a deep
+ * `__tur_any_drop` of a widen of this payload would release more than the box
+ * it mints -- i.e. the payload's ADT carries `drop_localowned_` glue.  Defined
+ * in elab_fns.c; the owned-temp and freshness rules share it so they cannot
+ * drift apart. */
+bool any_widen_payload_owns_droppable(const Expr *payload);
 
 /* RM1 (reclamation-plan): the per-callee freshness analysis -- see the walker
  * in elab_fns.c and the flag's comment in expr.h. */

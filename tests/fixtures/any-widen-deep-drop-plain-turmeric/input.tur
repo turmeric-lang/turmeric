@@ -1,0 +1,57 @@
+;; any-widen-deep-drop-plain-turmeric -- a widen COPIES a header into a fresh
+;; box; the copy's children are still the original's.  Three places read "the
+;; box is fresh" as "everything under it is ours", and each one freed children a
+;; live local still owned.  Plain Turmeric, so no collector stands behind it.
+;;
+;; `__tur_any_drop` is deep: it runs the payload's `drop_localowned_<T>` before
+;; freeing the box.  That is right for a box whose children were minted with it
+;; and wrong for a copy of a borrowed local's header, and all three shapes below
+;; are the second kind:
+;;
+;;   wrap-it  -- `returns_fresh_any`: the tail is a widen, so every call mints a
+;;               box -- but the constructor fills its `:any` field with the
+;;               caller's value, and the consumer's deep drop walked into it.
+;;   peek-it  -- `any_expr_is_owned_temp`: `(peek (:: one any))` stamps the
+;;               widen for a drop at the call, and the drop freed `one`'s
+;;               children through the copy.
+;;   store-it -- the scope drop: `outer`'s `:any` field holds a widen of
+;;               `inner`, so `outer`'s glue frees `inner`'s spine and `inner`'s
+;;               own scope drop frees it again.
+;;
+;; All three were heap-use-after-frees under ASan and silent without it.  The
+;; repair declines the deep drop (or, for store-it, `inner`'s own drop) when the
+;; payload owns anything, so what is left is a LEAK of the boxes nobody can
+;; prove it owns -- the residue `known-leak` names.  The marker excuses a leak
+;; and nothing else, so a free that comes back turns this red again.
+
+(defdata Lst [] (Cons [hd : any tl : any]) (Nil))
+
+(defn llen [xs : any] : int
+  (match (cast xs Lst)
+    (Cons h t) (+ 1 (llen t))
+    (Nil)      0))
+
+;; Fresh box, but the payload's `hd` is whatever the caller handed in.
+(defn wrap [x : any] : any (:: (Cons x (:: (Nil) any)) any))
+
+(defn wrap-it [] : int
+  (let [inner (Cons (:: 7 any) (:: (Cons (:: 2 any) (:: (Nil) any)) any))]
+    (let [a (llen (wrap (:: inner any)))]
+      ;; `inner` is read again AFTER the consumer's drop ran.
+      (+ a (llen (:: inner any))))))
+
+(defn peek-it [] : int
+  (let [one (Cons (:: 1 any) (:: (Cons (:: 2 any) (:: (Nil) any)) any))]
+    (let [a (llen (:: one any))]
+      (+ a (llen (:: one any))))))
+
+(defn store-it [] : int
+  (let [inner (Cons (:: 1 any) (:: (Cons (:: 2 any) (:: (Nil) any)) any))
+        outer (Cons (:: inner any) (:: (Nil) any))]
+    (+ (llen (:: inner any)) (llen (:: outer any)))))
+
+(defn main [] : int
+  (println (wrap-it))    ;; 1 + 2 = 3
+  (println (peek-it))    ;; 2 + 2 = 4
+  (println (store-it))   ;; 2 + 1 = 3
+  0)

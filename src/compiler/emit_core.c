@@ -2379,9 +2379,10 @@ static bool box_uses_confined(const Expr *e, const Binding *b, bool confined) {
          *                Either way the result is a copy, exactly as EX_ANY_CAST
          *                above is a deref.
          *
-         * A dynamic CALL is the opposite case and keeps the strict answer: the
-         * callee is a value, so there is no body to inspect and no mask to
-         * consult -- the same reason EX_CALL refuses an `fn_expr` callee. */
+         * A dynamic CALL is the opposite case and keeps the strict answer for
+         * what flows INTO it: the callee is a value, so there is no body to
+         * inspect and no mask to consult -- the same reason EX_CALL refuses an
+         * `fn_expr` callee. */
         case EX_DYN_OP:
             for (uint32_t i = 0; i < e->as.dyn_op_.n_args; i++)
                 if (!box_uses_confined(e->as.dyn_op_.args[i], b, /*confined=*/true))
@@ -2389,8 +2390,39 @@ static bool box_uses_confined(const Expr *e, const Binding *b, bool confined) {
             return true;
         case EX_DYN_FIELD:
             return box_uses_confined(e->as.dyn_field_.obj, b, /*confined=*/true);
+        /* any-widen-deep-drop-frees-borrowed-children: a bare `return false`
+         * here answered a question this walk never asked.  "The callee is
+         * opaque, so it may keep what it is given" is a statement about `b`
+         * FLOWING IN -- and a dynamic call that never mentions `b` is handed
+         * nothing of `b` to keep.  Refusing on the mere PRESENCE of one
+         * disqualified every parameter of every body containing a dynamic call,
+         * which in Saffron is every higher-order function: `lmap`'s `xs` read
+         * as retained because a sibling subexpression called `(f h)`, where `f`
+         * and `h` are other bindings entirely.
+         *
+         * Checking the operands, unconfined, is the same answer EX_CALL gives a
+         * general callee's arguments: `b` (or, in strict mode, a tracked alias
+         * of it) underneath the callee or an argument is refused exactly as
+         * before, at EX_VAR; a body that merely CONTAINS a dynamic call is no
+         * longer refused on that basis. */
+        /* byval-spine-drop-past-early-exit: a `return` hands its value out of
+         * the function, so the value is an UNCONFINED result position -- `b`,
+         * or (strict mode) a tracked alias of it such as a match binder `t`,
+         * is refused there exactly as at the scope's own result.  Left to
+         * `default`, every scope whose body merely CONTAINED a `return` read
+         * as retaining, so a by-value spine local in one never got its scope
+         * drop at all.  Strict mode only: that is the localowned client, which
+         * tracks the aliases this answer depends on. */
+        case EX_RETURN:
+            if (!g_bc_strict_handoff) return bc_unmodelled(e, b);
+            return box_uses_confined(e->as.return_.value, b, /*confined=*/false);
         case EX_DYN_CALL:
-            return false;
+            if (!box_uses_confined(e->as.dyn_call_.fn, b, /*confined=*/false))
+                return false;
+            for (uint32_t i = 0; i < e->as.dyn_call_.n_args; i++)
+                if (!box_uses_confined(e->as.dyn_call_.args[i], b, /*confined=*/false))
+                    return false;
+            return true;
         case EX_IF:
             return box_uses_confined(e->as.if_.cond, b, /*discarded=*/true) &&
                    box_uses_confined(e->as.if_.then_, b, confined) &&

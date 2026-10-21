@@ -229,6 +229,9 @@ static bool emit_dk_handler_case_fn(EmitCtx *ctx, Buf *hbuf, const char *dkfn_na
     hc.handle_captures = has_caps ? caps : NULL;
     hc.n_handle_captures = has_caps ? n_caps : 0;
     hc.handle_env_name = has_caps ? env_var : NULL;
+    /* byval-spine-drop-past-early-exit: a copied context inherits the OUTER
+     * function's signature verdict; this C function has its own. */
+    hc.current_fn_spine_drop_safe = false;
     /* non-tail prefix statements (e.g. (println s)) -- ordinary direct emit */
     for (uint32_t i = 0; i < n_prefix; i++) emit_stmt(&hc, &fn, prefix[i]);
     /* tail (resume k V): consume the continuation and tail-resume it on the DK */
@@ -353,6 +356,8 @@ char *emit_effects_handler_lit(EmitCtx *ctx, Buf *body, const Expr *e) {
         hc.handle_captures = has_caps ? caps : NULL;
         hc.n_handle_captures = has_caps ? n_caps : 0;
         hc.handle_env_name = has_caps ? env_var : NULL;
+        /* byval-spine-drop-past-early-exit: same reset as above. */
+        hc.current_fn_spine_drop_safe = false;
         if (!c->body) {
             buf_puts(&fn, "    return 0;\n");
         } else if (c->body->type.kind == TY_NEVER) {

@@ -1,0 +1,45 @@
+#lang saffron
+;; any-widen-frame-box-dyn-call-operand -- the counter-case to
+;; any-widen-frame-box-past-dyn-call: a parameter that IS an operand of a
+;; dynamic call must still be refused.
+;;
+;; That fixture relaxed the confinement walk's blanket refusal on `EX_DYN_CALL`,
+;; which had been disqualifying parameters the dynamic call never saw.  The
+;; relaxation is narrow on purpose -- the walk now checks the dynamic call's
+;; operands rather than its presence -- and this is the half that must not move.
+;;
+;; The callee here is a VALUE.  There is no body to inspect and no mask to
+;; consult, so `g` may keep whatever it is handed for as long as it likes.  If
+;; the walk admitted `xs` anyway, the caller would put its payload in its own
+;; frame and hand an opaque callee a pointer into a frame that is about to go
+;; away -- a dangling read, not a leak, and one that survives to whatever `g`
+;; does with it later.
+;;
+;; So this fixture is asserting a NON-optimisation, and the way it reads as
+;; passing is: the right answer is printed, and nothing is freed early.  The
+;; refused widen has no owner, which is the leak `known-leak` names -- a box
+;; whose holder sits behind an opaque dynamic call, which is what
+;; saffron-static-ownership-residue tracks (a default build's collector
+;; reclaims it), not a regression.  requires.leak-check earns its place even so:
+;; since `known-leak` excuses a LEAK and nothing else, a frame box wrongly
+;; admitted here turns the gate red as a use-after-free.
+
+(defdata Lst [] (Cons [hd : any tl : any]) (Nil))
+
+;; `xs` flows straight into the dynamic call -- the refused shape.
+(defn keeps [g xs] (g xs))
+
+;; And the same through a widen rather than a bare reference, which the walk
+;; sees as the same thing: EX_UNION_INJECT is transparent, so the operand
+;; underneath it is what is asked about.
+(defn keeps-head [g xs] (match xs (Cons h t) (g xs) (Nil) 0))
+
+(defn sink [l] (match l (Cons h t) 1 (Nil) 0))
+(defn total [l] (match l (Cons h t) (+ h (cast (total t) int)) (Nil) 0))
+
+(defn main [] : int
+  (let [ys (Cons 9 (Cons 4 (Nil)))]
+    (println (keeps sink ys))        ;; 1
+    (println (keeps total ys))       ;; 13
+    (println (keeps-head sink ys)))  ;; 1
+  0)

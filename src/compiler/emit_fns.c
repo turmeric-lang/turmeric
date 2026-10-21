@@ -5374,6 +5374,10 @@ static void tcg_emit_def(EmitCtx *ctx, Buf *file, TcgGroup *g) {
     Buf *saved_file = ctx->file;
     int saved_indent = ctx->indent;
     const char *saved_ret = ctx->current_fn_ret_ctype;
+    /* byval-spine-drop-past-early-exit: a fused group is one C function for
+     * several signatures; refuse the spine push in it rather than judge them. */
+    bool saved_spine_safe = ctx->current_fn_spine_drop_safe;
+    ctx->current_fn_spine_drop_safe = false;
     Binding **saved_params = ctx->fn_params;
     uint32_t saved_n_params = ctx->n_fn_params;
     const Binding **saved_ic_locals = ctx->inline_c_raw_locals;
@@ -5440,6 +5444,7 @@ static void tcg_emit_def(EmitCtx *ctx, Buf *file, TcgGroup *g) {
     ctx->file = saved_file;
     ctx->indent = saved_indent;
     ctx->current_fn_ret_ctype = saved_ret;
+    ctx->current_fn_spine_drop_safe = saved_spine_safe;
     ctx->fn_params = saved_params;
     ctx->n_fn_params = saved_n_params;
     ctx->inline_c_raw_locals = saved_ic_locals;
@@ -5658,6 +5663,22 @@ static void emit_fn_def_body(EmitCtx *ctx, Buf *file, const Expr *e) {
     }
     const char *saved_current_fn_ret_ctype = ctx->current_fn_ret_ctype;
     ctx->current_fn_ret_ctype = current_fn_ret_ctype_eff;
+    /* byval-spine-drop-past-early-exit: see EmitCtx.current_fn_spine_drop_safe.
+     * Decided from the SIGNATURE, not the body: the exits the channel fires at
+     * hand exactly the result (a `return`) or the parameters (a back-edge) to
+     * whatever runs next, so those are the only words that could still point
+     * into a spine freed on the way out.  tco_plain_scalar is the numeric
+     * whitelist, which deliberately leaves out cstr and ptr. */
+    bool saved_current_fn_spine_drop_safe = ctx->current_fn_spine_drop_safe;
+    {
+        bool safe = fd && e->type.kind == TY_FN &&
+                    (e->type.as.fn.result_kind == TY_NIL ||
+                     tco_plain_scalar(e->type.as.fn.result_kind));
+        for (uint32_t pi = 0; safe && pi < fd->n_params; pi++)
+            if (!fd->params[pi] || !tco_plain_scalar(fd->params[pi]->type.kind))
+                safe = false;
+        ctx->current_fn_spine_drop_safe = safe;
+    }
     const struct FnDef *saved_own_cur_fn = ctx->own_cur_fn;
     ctx->own_cur_fn = fd;
 
@@ -6906,6 +6927,7 @@ static void emit_fn_def_body(EmitCtx *ctx, Buf *file, const Expr *e) {
     free((void*)ctx->env_var_name);
     ctx->env_var_name = saved_env_var_name;
     ctx->current_fn_ret_ctype = saved_current_fn_ret_ctype;
+    ctx->current_fn_spine_drop_safe = saved_current_fn_spine_drop_safe;
     ctx->own_cur_fn = saved_own_cur_fn;
     ctx->tail_void = saved_tail_void;
 
