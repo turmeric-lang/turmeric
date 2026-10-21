@@ -51,7 +51,7 @@ directory is worse for triage than no index.
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [letrec-struct-arg-and-env-leak](letrec-struct-arg-and-env-leak.md) | low-medium | A by-value struct argument to a `letrec` closure is malloc-boxed at the call and never freed (per iteration when the self-call is not a loop), and a `letrec` whose body opens a captured existential and takes a struct argument never drops its env. Found by LeakSanitizer in tur-plot's folds, which are now top-level `defn`s. |
+| [letrec-struct-arg-and-env-leak](letrec-struct-arg-and-env-leak.md) | low-medium (narrowed 2026-10-21: the struct-argument box is fixed; the env leak with `open` remains) | A by-value struct argument to a `letrec` closure is malloc-boxed at the call and never freed (per iteration when the self-call is not a loop), and a `letrec` whose body opens a captured existential and takes a struct argument never drops its env. Found by LeakSanitizer in tur-plot's folds, which are now top-level `defn`s. |
 
 ## Found writing the typeclass API docs (filed 2026-10-19)
 
@@ -100,7 +100,6 @@ directory is worse for triage than no index.
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [turi-stdlib-hof-effectful-callback-false-w0033](turi-stdlib-hof-effectful-callback-false-w0033.md) | low (diagnostic noise) | Under `tur --interpret`, a `handle` around a stdlib higher-order call (`option-map`, `with-region`, `bt-scope`) whose lambda performs the effect warns TUR-W0033 "unreachable"; the program is correct. The per-turn effect pass does not index the stdlib's preload-turn definitions, so the fn-argument row charge (`effect_check.c:469`, `if (callee && ...)`) never runs. `tur check` / `tur run` are clean. |
 
 ## Found porting `tools/check-guide-pairs` to Turmeric (filed 2026-10-17)
 
@@ -156,7 +155,7 @@ on `main` 3d9e02a2.
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [turi-fiber-handle-defers-fire-at-the-wrong-time](turi-fiber-handle-defers-fire-at-the-wrong-time.md) | low-medium (engine divergence) | Under `tur --interpret`, a `handle` whose body has a pending `defer` takes the single-shot fiber runtime, and the defer fires at the next enclosing scope exit: after the abortive case's value, or even when a stored `k` is never resumed. Compiled fires it at the case's return, and multi-shot over such a body is refused. Filed while fixing the stored-`k` use-after-free (archived). |
+| [turi-fiber-handle-defers-fire-at-the-wrong-time](turi-fiber-handle-defers-fire-at-the-wrong-time.md) | low-medium (engine divergence; narrowed 2026-10-21: the abortive case is fixed, the stored-`k` case remains) | Under `tur --interpret`, a `handle` whose body has a pending `defer` takes the single-shot fiber runtime, and the defer fires at the next enclosing scope exit: after the abortive case's value, or even when a stored `k` is never resumed. Compiled fires it at the case's return, and multi-shot over such a body is refused. Filed while fixing the stored-`k` use-after-free (archived). |
 
 ## Found revisiting the two dynvar plans (filed 2026-10-17)
 

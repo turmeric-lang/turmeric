@@ -1,0 +1,26 @@
+;; letrec-struct-arg-and-env-leak (leak 1): a by-value struct argument to a
+;; letrec closure crosses as a box pointer the thunk copies out at entry.  The
+;; box used to be a heap allocation nobody freed -- one per outside call, and
+;; one per iteration when the self-call is not a loop.  It lives in the
+;; caller's frame now.  requires.leak-check runs this under LeakSanitizer.
+(defstruct Acc :copy [lo : float  hi : float])
+(defn widen [a : Acc  x : float] : Acc
+  (make-struct Acc (if (< x (.lo a)) x (.lo a)) (if (> x (.hi a)) x (.hi a))))
+(defn span-letrec [n : float] : Acc
+  (letrec [go (fn [x : float  acc : Acc] : Acc
+                (if (>= x n) acc
+                  (go (+ x 1.0) (widen acc x))))]
+    (go 0.0 (make-struct Acc 0.0 0.0))))
+(defn main [] : int
+  (println (.hi (span-letrec 10.0)))
+  (println (.hi (sum-letrec 5.0)))
+  0)
+
+;; The self-call that is NOT a loop (the recursion sits under an addition):
+;; every iteration crossed its own box.
+(defn sum-letrec [n : float] : Acc
+  (letrec [go (fn [x : float  acc : Acc] : Acc
+                (if (>= x n) acc
+                  (let [r (go (+ x 1.0) (widen acc x))]
+                    (make-struct Acc (.lo r) (+ (.hi r) 0.0)))))]
+    (go 0.0 (make-struct Acc 0.0 0.0))))

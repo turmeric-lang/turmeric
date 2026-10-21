@@ -1,5 +1,17 @@
 # A `letrec` closure leaks its struct arguments, and its env when it opens an existential
 
+**Narrowed 2026-10-21: leak 1 is fixed; leak 2 stays open.** The direct
+closure-call site (`src/compiler/emit_expr.c`, the B4 branch of the thunk
+call's argument loop) now spills a wide by-value struct argument into the
+caller's frame and passes its address, instead of heap-boxing it with no
+owner: the thunk only borrows the box (it deref-copies at entry, `emit_fns.c`
+"no free here"), and the spill's `&` keeps the call off `musttail`, so the
+frame outlives the call. `tests/fixtures/letrec-struct-arg-leak` (the program
+below plus a non-loop self-call) runs under LeakSanitizer through
+`tests/run-leak-check.sh`. What remains is leak 2, the env that is never
+dropped when the body opens a captured existential and takes a struct
+argument.
+
 **Severity: low-medium (leak per call, not per program).** Found 2026-10-21
 running tur-plot under LeakSanitizer (plot-renderer-typeclass-plan P4): its
 two `letrec` folds over a `(Vec (exists ...))` leaked on every `plot` call,

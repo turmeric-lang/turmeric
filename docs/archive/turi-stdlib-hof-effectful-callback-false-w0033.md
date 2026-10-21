@@ -80,3 +80,16 @@ only by `tests/run.sh`, which runs the compiled path, where nothing warns. So
 either teach `tests/run-turi.sh` to honour `unexpected.stderr` the way it
 already honours `expected.stderr`, or give the fixture an `expected.stderr`
 that holds exactly what the interpreter should print (nothing).
+
+## Resolved 2026-10-21: fix direction 2
+
+`collect_effects_in_expr` (`src/passes/effect_check.c`) charges a fn-value
+argument's row through the callee's parameter list; when the index lookup
+fails but the call's binding carries a `source_fn_def` (a stdlib function
+elaborated on the preload turn), that definition's parameter list is used
+for the charge alone. The callee's own inferred row is still read only from
+the index, so nothing is re-validated across turns.
+
+`tests/run-turi.sh` now honours `unexpected.stderr` the way `run.sh` does,
+and `tests/fixtures/turi-hof-effectful-callback-no-w0033` (the repro plus a
+`with-region` thunk) pins that no TUR-W0033 is printed on either engine.

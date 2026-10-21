@@ -664,6 +664,26 @@ run_turi_fixture() {
             return
         fi
     fi
+    # unexpected.stderr: the mirror -- substrings that must NOT appear, as in
+    # tests/run.sh, so a fixture can pin the absence of a diagnostic the
+    # interpreter alone used to print (turi-stdlib-hof-effectful-callback-
+    # false-w0033: a TUR-W0033 on a clause that runs).
+    if [ -f "$dir/unexpected.stderr" ]; then
+        local present=0
+        while IFS= read -r needle || [ -n "$needle" ]; do
+            [ -z "$needle" ] && continue
+            if grep -F -q -- "$needle" "$actual_stderr"; then
+                [ $present -eq 0 ] && echo "FAIL $name -- unexpected stderr substring found:"
+                echo "    $needle"
+                present=1
+            fi
+        done < "$dir/unexpected.stderr"
+        if [ $present -ne 0 ]; then
+            head -5 "$actual_stderr" | sed 's/^/    stderr: /'
+            echo "FAIL" > "$RESULTS_DIR/$(printf '%s' "$name" | tr '/ ' '__').result"
+            return
+        fi
+    fi
 
     stamp_write "$name" "$input"
     echo "PASS $name"

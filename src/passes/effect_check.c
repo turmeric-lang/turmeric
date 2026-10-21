@@ -465,13 +465,27 @@ static EffectRow *collect_effects_in_expr(Arena *a, Expr *e,
          * way was built with no CPS entry, aborting `unhandled effect` when
          * called through.  Charge the argument's row to this call, as the
          * callee may invoke it.  Conservative for a callee that only stores
-         * the value: its effect still happens when something calls it. */
-        if (callee && callee->params && callee->n_params > 0 &&
+         * the value: its effect still happens when something calls it.
+         *
+         * turi-stdlib-hof-effectful-callback-false-w0033: under --interpret
+         * the checker runs once per turn over that turn's forms, so a
+         * STDLIB callee (option-map, with-region, bt-scope) elaborated on
+         * the preload turn is not in this index and the charge never ran:
+         * the lambda's perform reached the handler at runtime, and the
+         * clause was reported unreachable.  The rule reads only the callee's
+         * parameter list, which its binding's source_fn_def still carries,
+         * so fall back to that for the charge alone -- the callee's own row
+         * was inferred and validated on its own turn and is not re-read. */
+        FnDef *arg_callee = callee;
+        if (!arg_callee && e->as.call_.fn_binding &&
+            e->as.call_.fn_binding->source_fn_def)
+            arg_callee = e->as.call_.fn_binding->source_fn_def;
+        if (arg_callee && arg_callee->params && arg_callee->n_params > 0 &&
             e->as.call_.n_args > 0) {
-            uint32_t n_open = callee->n_params < e->as.call_.n_args
-                                ? callee->n_params : e->as.call_.n_args;
+            uint32_t n_open = arg_callee->n_params < e->as.call_.n_args
+                                ? arg_callee->n_params : e->as.call_.n_args;
             for (uint32_t pi = 0; pi < n_open; pi++) {
-                Binding *param = callee->params[pi];
+                Binding *param = arg_callee->params[pi];
                 if (!param) continue;
                 /* An un-annotated `(fn [int] int)` in parameter position is
                  * a rank-2 poly-fn param (ptr<void> at the C level, its

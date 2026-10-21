@@ -23,6 +23,20 @@ All notable changes to Turmeric are documented here.
 
 ### Fixed
 
+- **A by-value struct argument to a `letrec` closure no longer leaks a box
+  per call.** The thunk copies the value out at entry, so the box now lives
+  in the caller's frame instead of on the heap with no owner.
+- **`tur --interpret` fires an abandoned body's `defer`s when the handler
+  case returns.** A case that returned without resuming used to leave the
+  body's pending defers for the next enclosing scope exit, after everything
+  the handle's continuation printed; the compiled runtime fires them at the
+  case's return, and the interpreter now does too. A case that keeps `k` is
+  unchanged.
+- **`tur --interpret` no longer warns TUR-W0033 on a handler around a
+  stdlib higher-order call.** An effectful lambda passed to `option-map`,
+  `with-region` or `bt-scope` reached the handler, but the interpreter's
+  per-turn effect check could not see the stdlib callee's parameters and
+  called the clause unreachable.
 - **`stdlib/fs.tur` runs under `tur --interpret` and in the REPL.** Every
   function in it (`fs/read-text`, `fs/write-text`, `fs/read-lines`,
   `fs/exists?`, `fs/stat`, `fs/mkdirp`, `fs/glob`, `fs/read-dir`, ... and

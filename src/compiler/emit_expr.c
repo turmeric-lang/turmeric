@@ -11857,12 +11857,22 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                          * the int64 box-pointer carrier -- emit_fns.c /
                          * emit_module.c declare such a param `int64_t
                          * __tur_b4box_<name>` and the thunk deref+copies it back.
-                         * Heap-box the aggregate here so the call matches that
+                         * Box the aggregate here so the call matches that
                          * carrier ABI; passing the raw `tur_adt_Box` into the
                          * int64_t slot is an incompatible-type cc error.  Affects
                          * both the closure's own recursive self-call and the
-                         * enclosing letrec's direct invocation. */
-                        raw = emit_carrier_bridge_escaping(ctx, body, raw,
+                         * enclosing letrec's direct invocation.
+                         *
+                         * letrec-struct-arg-and-env-leak: the box lives in THIS
+                         * frame (the non-escaping bridge spills to a local and
+                         * passes its address), not on the heap.  The thunk only
+                         * borrows it -- it deref-copies the value at body entry
+                         * and keeps no pointer (emit_fns.c, "no free here") --
+                         * so a heap box here had no owner and leaked once per
+                         * call.  The `&` the spill writes keeps the call off
+                         * musttail (tail_call_musttail_ok refuses any `&`), so
+                         * the frame is alive for the whole call. */
+                        raw = emit_carrier_bridge(ctx, body, raw,
                                   CK_CONCRETE, CK_CARRIER,
                                   emit_resolve_type(ctx, e->as.call_.args[i]->type));
                     } else {

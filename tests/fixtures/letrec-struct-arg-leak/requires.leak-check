@@ -1,0 +1,1 @@
+leak 1 of letrec-struct-arg-and-env-leak: the by-value struct argument box
