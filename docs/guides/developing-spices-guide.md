@@ -1295,10 +1295,12 @@ global install is auto-installed rather than reported, and version-range
 validation against the installed version (the registry records a `:version`,
 but nothing checks it against a requested range yet).
 
-This is **deferred**; until it ships, a spice that wants to be reused as
-a library should be added the normal way with `tur add`. See the
-[global-spice-install plan](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/global-spice-install-plan.md#imports-from-global-spices)
-for the full design sketch.
+Until library-only installs exist, a library-only spice is added the normal
+way with `tur add`. Installing one, and importing installed spices from a
+script or REPL session that has no project, is planned in
+[installed-spice-libraries-plan](https://github.com/turmeric-lang/turmeric/blob/main/docs/upcoming/installed-spice-libraries-plan.md).
+The original design sketch is in the
+[global-spice-install plan](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/global-spice-install-plan.md#imports-from-global-spices).
 
 ---
 
