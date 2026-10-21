@@ -7,10 +7,11 @@
 > `frame-marks` / `categories`); every public constructor returns
 > `AnyRenderer`; `plot` & co. take a `(Vec AnyRenderer)`; the draw `switch`,
 > the bounds `switch` and the slot bag are gone; callbacks are typed fn
-> values. Pixel check: of 34 scenes, 33 byte-identical to pre-plan output and
-> `arrows` changed by a bounds bug fix. **Remaining (beyond this plan's
-> acceptance):** typing the payloads (`:int` cons lists of double bits,
-> `:int` style handles) and `contours`' collapsed levels. See P4.
+> values; style and option handles are `LineStyle` / `PointStyle` /
+> `FillStyle` / `PlotOpts`. Pixel check: of 34 scenes, 33 byte-identical to
+> pre-plan output and `arrows` changed by a bounds bug fix. **Remaining
+> (beyond this plan's acceptance):** typing the data payloads (`:int` cons
+> lists of double bits) and `contours`' collapsed levels. See P4.
 > Tracks: spices-type-features-uplift-plan **U2 target — plot**
 > Scope: `spices/plot/` only; P3 needed a compiler dependency after all, now
 > satisfied (see Risks).
@@ -348,11 +349,28 @@ the recursive result).
 - Verified as before: 34 scenes byte-identical to the previous step; shards
   green on both compilers; ASan/UBSan clean.
 
+**Done (typed styles, 2026-10-21, same branch):** `LineStyle`, `PointStyle`,
+`FillStyle` and `PlotOpts` are `defopaque` over `ptr<void>` in plot/style,
+built by raw `ptr<void>` producers wrapped with `::` (msgpack's Buf idiom).
+Every field, constructor and entry point takes the kind it draws with, so a
+`FillStyle` where a `LineStyle` is due is TUR-E0001
+(`errors/wrong-style-kind.tur`). Fill lists are `(Vec FillStyle)`; their
+draws walk the Vec by index. The C-ABI helpers (`plot_ctx_*_style`,
+`plot_draw_curve_interval`) keep word-sized style parameters, since C callers
+declare their prototypes and an opaque's C type is the compiler's choice. 34
+scenes byte-identical.
+
 **Remaining (follow-ups, not in this plan's acceptance):**
-- Payload typing: point lists, bars and quads are `:int` cons lists of
-  double bits, and style handles are `:int`. Typing them (a `Point` struct and
-  `(List Point)`, `defopaque LineStyle` etc.) changes every constructor's
-  signature again; do it in one pass with `plot/style`.
+- Payload typing: point lists, error bars, arrows, quads, bars and groups
+  are `:int` cons lists of double bits, built by callers' own inline C.
+  Typed records (`Point`, `Rect`, `Bar`, ...) in a `(Vec T)` are the natural
+  shape, but a `(Vec <struct>)` stores each element boxed (a pointer per
+  element, an internal detail), so either the C draws learn that layout or a
+  Turmeric adapter lowers the typed records to the cons lists the C reads.
+  The parametric and vector-field callbacks return a cons point too; typing
+  them as `(fn [float] Point)` needs the C to call a closure returning a
+  struct. Every data-taking constructor changes signature -- a design call
+  for the spice's owner.
 - `contours` stores 0.0 for both ends of its level range, so all `n` levels
   draw the 0 contour. Preserved for pixel identity; fix with the payload pass.
 - The frame `plutovg_canvas_save`s once at the top with no matching
