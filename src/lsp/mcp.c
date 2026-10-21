@@ -94,11 +94,6 @@ static void mcp_write_message(int fd_out, const char *json, size_t len) {
 #define TUR_VERSION "unknown"
 #endif
 
-extern int tur_check_only(const char *path);
-extern int tur_collect_symbols(const char *source_path, const char *logical_path,
-                               LspSymbol *out, int cap,
-                               int *count_out);
-
 #define MCP_SYM_CAP 2048
 
 /* -------------------------------------------------------------------------

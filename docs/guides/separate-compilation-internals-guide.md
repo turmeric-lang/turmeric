@@ -206,7 +206,7 @@ rewrites every `tur/`-module binding's `defining_module_name` to NULL and sets
 
 | # | Directory | Source |
 |---|---|---|
-| 1 | `e->module_base_dir` | The **entry** file's directory (`dir_of_path(path)` in the driver) |
+| 1 | `e->module_base_dir` | The **entry** file's directory (`drv_dir_of_path(path)` in the driver) |
 | 2 | `e->module_stdlib_dir` | `TUR_STDLIB_DIR`, else the literal `stdlib` |
 | 3 | `e->module_include_dirs[0..n)` | `-I` flags first, then auto-discovered spice dirs |
 

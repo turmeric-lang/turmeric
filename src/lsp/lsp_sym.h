@@ -47,4 +47,12 @@ typedef struct {
 int tur_collect_symbols(const char *source_path, const char *logical_path,
                         LspSymbol *out, int cap, int *count_out);
 
+/* Type-check `path` the way `tur check` does, with every registered
+ * experiment on, and discard the generated C; returns compile_to_c's status.
+ * The diagnostics go to whatever sink the caller set up (the MCP server calls
+ * it inside diag_lsp_begin).  Defined by the driver beside
+ * tur_collect_symbols; web/wasm_lsp.c supplies a stand-in for the WASM
+ * build. */
+int tur_check_only(const char *path);
+
 #endif

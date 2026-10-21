@@ -69,7 +69,7 @@ User-facing material lives elsewhere:
 | `src/compiler/pkg.c` | Manifest read/write, lockfile, tree hash, semver ranges, git fetch, `pkg_fetch_all`, the workspace walks, `:cmake-deps` collection and CMake generation, the JSON manifest reader, the scaffold (`scaffold_project_ext`), and the CLI commands `new`, `init`, `add`, `add-cmake`, `fetch`, `audit`, `emit-cmake` |
 | `src/compiler/install.c` | `tur install`/`uninstall`/`list`/`upgrade`: global spices under the XDG layout, `state.tur`, bin symlinks; also `pkg_rm_rf` |
 | `src/compiler/spice_search.c` | `spice_find_root` and `spice_search_append`: the include path a single file inside a spice gets (shared with libturi embedders) |
-| `src/main.c` | The consumers: `cmd_run` project mode, `cmd_test`, `tur build <dir>`, `collect_build_aux`, `append_manifest_link_flags`, `collect_spice_aux_c`, `resolve_include_dirs_from_manifest`, `discover_manifest_reader_macros`, `apply_manifest_experiments`, `resolve_build_dir`, `resolve_engine` |
+| `src/main.c` | The consumers: `cmd_run` project mode, `cmd_test`, `tur build <dir>`, `drv_collect_build_aux`, `append_manifest_link_flags`, `collect_spice_aux_c`, `resolve_include_dirs_from_manifest`, `discover_manifest_reader_macros`, `apply_manifest_experiments`, `drv_resolve_build_dir`, `drv_resolve_engine` |
 | `src/compiler/emit_core.c` | `tur_emit_hoisted_include`: the `__has_include` wrapper around hoisted inline-C includes |
 | `src/compiler/elab_module.c` | The one-time "resolved via workspace sibling" advisory, inside module resolution |
 | `src/compiler/global.c` | `tur_installed_spice_dir` and the `state.tur` registry behind `:global true` |
@@ -109,10 +109,10 @@ exist. `pkg_resolve_manifest_cwd` is the cwd-relative twin used by the CLI
 commands, and `pkg_is_manifest_name` keeps both names out of source scans.
 
 Walk-ups use it at every step: `spice_find_root` (per-file commands, up to
-`TUR_SPICE_WALK_MAX` = 16 levels) and `main.c:find_project_root` (unbounded).
+`TUR_SPICE_WALK_MAX` = 16 levels) and `main.c:drv_find_project_root` (unbounded).
 
 A few readers hard-code `build.tur` and so ignore a `.sweet` manifest:
-`install.c:do_install_spec`, and `main.c:collect_web_link_flags` (the `:web`
+`install.c:do_install_spec`, and `main.c:drv_collect_web_link_flags` (the `:web`
 block of a wasm link). New code should go through the resolver.
 
 ### Parsing it
@@ -152,13 +152,13 @@ TUR-E0620, and turns a bare `{...}` -- curly-infix, not a map -- into a
 | `:build-opts` | `c_flags`, `link_libs`, `link_flags`, `no_stdlib`, `c_sources`, `c_includes` | link tokens grammar-checked (`check_link_vec`); C paths relative, contained, existing, `.c/.cc/.cpp` | section 5 |
 | `:exports` | `exports[]` (module names only) | effect row rejected | `tur build <dir>` (export has a file), `tur emit-cmake` |
 | `:members` | `members[]` | each a contained relative path | workspace walks |
-| `:build-dir` | `build_dir` | contained relative path | `main.c:resolve_build_dir` |
+| `:build-dir` | `build_dir` | contained relative path | `main.c:drv_resolve_build_dir` |
 | `:entry` | `entry` | none (existence checked by `cmd_run`) | `cmd_run` |
-| `:engine` | `engine` | `"cc"`/`"jit"`/`"interp"` (TUR-E0311) | `main.c:resolve_engine` |
+| `:engine` | `engine` | `"cc"`/`"jit"`/`"interp"` (TUR-E0311) | `main.c:drv_resolve_engine` |
 | `:experiments` | `experiments[]`, `has_experiments_key` | must be a vector | `apply_manifest_experiments` (unknown name exits with TUR-E0310); the key's presence suppresses the user file |
 | `:reader-macros` | `reader_macros[]` | none | `resolve_manifest_reader_macros` |
 | `:bin` | `bin_names[]`, `bin_paths[]` | names start with `tur-` | `tur install` |
-| `:web` | `web` | `:gl`, `:heap`, `:main-loop` values | `collect_web_link_flags` (wasm only) |
+| `:web` | `web` | `:gl`, `:heap`, `:main-loop` values | `drv_collect_web_link_flags` (wasm only) |
 
 ### Failure: ABSENT, OK, MALFORMED
 
@@ -489,7 +489,7 @@ token must pass `tur_arg_is_shell_safe` (`cmake_manifest_token_ok`) or it is
 dropped with a message.
 
 Two places call it, both reading only the **project root's** JSON:
-`main.c:collect_build_aux` (called by `cmd_build`, `cmd_compile` and the
+`main.c:drv_collect_build_aux` (called by `cmd_build`, `cmd_compile` and the
 REPL's in-process spice loader, so it covers `tur run`, single-file
 `tur build`, and `tur test`, which compiles each test through `cmd_build`)
 and the native-only block in the separate-compilation path of
@@ -613,7 +613,7 @@ no `:cmake-deps`. A project consumes such an install as a library through
    it. `tur add` and `tur add-cmake` edit the existing text and keep every
    key.
 6. **Consume it** from every path that should honour it. Check both
-   `collect_build_aux` and the separate-compilation block of `tur build <dir>`
+   `drv_collect_build_aux` and the separate-compilation block of `tur build <dir>`
    (they were once hand-copied twins, which is how `:link-libs` reached one and
    not the other), and decide whether it applies to the root only or to the
    whole `:spices` closure. A key with no consumer is the `:c-flags` bug.

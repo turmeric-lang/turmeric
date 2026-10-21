@@ -46,9 +46,6 @@
 #endif
 #include <unistd.h>
 
-/* Declared in main.c (non-static wrapper around compile_to_c) */
-extern int tur_check_only(const char *path);
-
 /* -------------------------------------------------------------------------
  * JSON helpers
  * --------------------------------------------------------------------- */

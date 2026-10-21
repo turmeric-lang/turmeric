@@ -219,8 +219,8 @@ int tur_collect_symbols(const char *source_path, const char *logical_path,
     return rc;
 }
 
-/* src/lsp/lsp.c declares this for the CLI's `tur check` path. Nothing the
- * session reaches calls it; the definition exists so the reference resolves. */
+/* lsp_sym.h declares this for the MCP server's checks. Nothing the session
+ * reaches calls it; the definition exists so every reference resolves. */
 int tur_check_only(const char *path) {
     (void)path;
     return 1;

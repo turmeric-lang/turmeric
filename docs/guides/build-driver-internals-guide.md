@@ -43,7 +43,7 @@ side of the commands covered here is in
    the source, prepend the stdlib, run `run_core_passes`, and emit C.
 6. `cmd_build_once` writes the C to `$TMPDIR/tur-build/<name>.c`, decides
    how the runtime is linked, and runs **one** `cc` command that compiles
-   and links (`link_command_run`).
+   and links (`drv_link_command_run`).
 7. `tur run <file>` is `cmd_build` into a temp executable, then `system()`
    on it, then `unlink`.
 
@@ -208,7 +208,7 @@ differ in what they prepend and what they emit.
 
 **Shared front half**, in order:
 
-1. `read_entire_file`, then `detect_and_adjust_lang` for the `#lang` line.
+1. `drv_read_entire_file`, then `detect_and_adjust_lang` for the `#lang` line.
 2. Per-unit resets, in `begin_compile_unit`: `diag_reset`,
    `experiment_reset_warnings`, `pkg_tur_version_reassert`,
    `pkg_manifest_reassert`, `refine_discharge_reset`. These exist because
@@ -290,10 +290,10 @@ happens in the split shape is therefore slow, never wrong.
    dirs, so a symbol only C reaches is still emitted.
 3. `compile_to_c`, with `g_split_lib_sink`/`g_split_imp_sink` set unless the
    target is wasm or `--runtime=split`.
-4. Writes the C to `stable_c_path(input)`: `$TMPDIR/tur-build/` plus the
+4. Writes the C to `drv_stable_c_path(input)`: `$TMPDIR/tur-build/` plus the
    input path **as typed**, every byte outside `[A-Za-z0-9-]` turned into
    `_` (`m.tur` -> `m_tur.c`). It is stable so ccache can hit. If the
-   directory is not ours (`tmp_dir_is_ours`: a real directory, owned by
+   directory is not ours (`drv_tmp_dir_is_ours`: a real directory, owned by
    us, not group/other-writable) it falls back to
    `$TMPDIR/tur-build-<uid>/`. The file is opened with `O_NOFOLLOW`.
 5. The preamble swap: under `TUR_RT_SPLIT`, or `TUR_RT_AUTO` when
@@ -306,24 +306,24 @@ happens in the split shape is therefore slow, never wrong.
 7. `scan_autolink_markers` collects `__tur_autolink__` link flags, checking
    every token against the grammar in `src/tur_argcheck.h` (they reach a
    shell).
-8. Picks the output: `-o`, else `default_output_name` in the **current
+8. Picks the output: `-o`, else `drv_default_output_name` in the **current
    directory** (`foo.tur` -> `foo`; `.js` appended for wasm). A
    single-file build never consults the build directory.
 9. Picks the compiler and flags (below), collects the spice's
-   `:c-includes`/`:c-sources` and cmake-dep flags (`collect_build_aux`),
+   `:c-includes`/`:c-sources` and cmake-dep flags (`drv_collect_build_aux`),
    and for wasm the `:web` emcc flags.
 10. `apply_runtime_lib_mode` swaps bare runtime `.c` sources for an archive;
     `resolve_autolink_flags` anchors SDK and tree-relative paths and probes
     for a sanitized `libturi.a`.
 11. Under the r7rs split, `prelude_split_object` compiles (or reuses) the
     library and imported-library objects.
-12. `link_command_run` assembles and runs the one `cc` command.
+12. `drv_link_command_run` assembles and runs the one `cc` command.
 13. Leaves the stable `.c` in place for ccache; only a random fallback temp
     is unlinked.
 
 ### The `cc` command
 
-`link_command_run` builds:
+`drv_link_command_run` builds:
 
 ```
 $CC <cc_flags> -Wno-misleading-indentation -fwrapv -o '<out>' '<tmp>.c'
@@ -426,18 +426,18 @@ The `run` arm scans its arguments up to `--`:
    too); `TUR_CC_FLAGS` still replaces the defaults, and a non-`cc` engine
    has no cc step for it to change.
 2. **Single-file mode** (`<file>` given): auto-spice includes, then
-   `discover_manifest_reader_macros`, then `resolve_engine`. A non-`cc`
+   `discover_manifest_reader_macros`, then `drv_resolve_engine`. A non-`cc`
    engine goes to `run_delegate_engine` (`cmd_jit` or the interpreter).
    `-` reads stdin into `$TMPDIR/tur-stdin-XXXXXX.tur` first.
-3. **Project mode:** `find_project_root` from the cwd; fetch or verify
+3. **Project mode:** `drv_find_project_root` from the cwd; fetch or verify
    `:spices` (`--offline` only checks they exist); build the include path
    from the manifest; build the transitive cmake deps; pick the entry
    (`:entry`, else `src/main.tur`, else the only file in `src/`).
 4. `RUN_ENTRY`: `mkstemp` `$TMPDIR/tur-run-XXXXXX`, `cmd_build` into it,
-   run it with `system()` (arguments quoted with `buf_put_quoted`),
+   run it with `system()` (arguments quoted with `drv_buf_put_quoted`),
    `unlink` it, and return `decode_exit_status` of the child.
 
-The engine ladder (`resolve_engine`) is `--engine` > `TUR_ENGINE` >
+The engine ladder (`drv_resolve_engine`) is `--engine` > `TUR_ENGINE` >
 `build.tur :engine` > `cc`. An unknown CLI or environment value is
 TUR-E0311, never a fallback.
 
@@ -502,12 +502,12 @@ single-file `tur build` does not auto-discover is out of date: it does, and
 
 ## 6. The build directory
 
-`resolve_build_dir(input_or_root, cli_flag)` decides where project builds
+`drv_resolve_build_dir(input_or_root, cli_flag)` decides where project builds
 put their output. Precedence, highest first:
 
 1. `--build-dir <dir>` / `-B <dir>`.
 2. `TUR_BUILD_DIR`.
-3. `:build-dir` in the nearest manifest (`find_project_root`, unbounded
+3. `:build-dir` in the nearest manifest (`drv_find_project_root`, unbounded
    walk-up; relative to the manifest's directory unless absolute).
 4. `<project-root>/build` when a manifest exists, else `./build`.
 
@@ -516,7 +516,7 @@ The result is `realpath`ed; `obj/`, `bin/` and `lib/` are created, and a
 
 Who uses it:
 
-| Command | Uses `resolve_build_dir` | Output when no `-o` |
+| Command | Uses `drv_resolve_build_dir` | Output when no `-o` |
 |---|---|---|
 | `build <file>` | **no** | `./<stem>` in the cwd; intermediate C in `$TMPDIR/tur-build/` |
 | `build <dir>` (single-main fast path) | yes | `<bd>/bin/<:name>` |
@@ -630,7 +630,7 @@ and [diagnosing the compiler](diagnosing-the-compiler-guide.md).
    Either list also keeps a `tur-<name>` on `$PATH` out of the "external
    commands" listing (`list_external_subcommands`).
 3. Write `usage_<name>`: `--help` returns 0 through it; error paths return
-   `usage_error(usage_<name>)` (exit 2). Add a line to `usage()`.
+   `drv_usage_error(usage_<name>)` (exit 2). Add a line to `usage()`.
 4. If it compiles a file, call `auto_append_spice_includes` and
    `discover_manifest_reader_macros`, set the LS2 context around the
    compile (`ls2_resolver_ctx_set`), and dispose of both afterwards. Copy
@@ -690,7 +690,7 @@ Update this guide in the same PR when you:
 - add, remove or rename a subcommand, a global flag, or a flag-parsing
   route;
 - change `core_passes[]` or move work into or out of `run_core_pass`;
-- change how `cc` is chosen, the default flags, or `link_command_run`'s
+- change how `cc` is chosen, the default flags, or `drv_link_command_run`'s
   command shape;
 - add a cache, change a cache key, or change the build-directory ladder;
 - add an environment variable the driver reads.

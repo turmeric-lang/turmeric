@@ -393,7 +393,7 @@ static inline const char *tur_temp_dir(void) {
  *
  * Use `tur_shell_quote` (platform_proc.h), which does the `'\''` break-out on
  * POSIX and the CRT's backslash-doubling rule on Windows -- or, in a Buf,
- * main.c's `buf_put_quoted`.
+ * main.c's `drv_buf_put_quoted`.
  */
 
 /*

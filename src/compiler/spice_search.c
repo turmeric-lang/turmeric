@@ -34,7 +34,7 @@
 #include "platform_fs.h"  /* realpath on Windows */
 
 /* The directory part of `path`, or "." when it has none.  The same split as
- * main.c's dir_of_path, '\\' included on Windows. */
+ * main.c's drv_dir_of_path, '\\' included on Windows. */
 static void ss_dir_of_path(const char *path, char *out, size_t cap) {
     const char *last_slash = strrchr(path, '/');
 #ifdef _WIN32
@@ -54,7 +54,7 @@ static void ss_dir_of_path(const char *path, char *out, size_t cap) {
 
 /* The last separator in `p`.  realpath() hands back backslashes on Windows,
  * so a '/'-only walk-up stops on its first step there (main.c's
- * last_path_sep says how that hid). */
+ * drv_last_path_sep says how that hid). */
 static char *ss_last_path_sep(char *p) {
     char *slash = strrchr(p, '/');
 #ifdef _WIN32

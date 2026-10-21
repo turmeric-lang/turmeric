@@ -156,7 +156,7 @@ and writes `exports.manifest`. Three fixes were needed to get there:
   the asm block **must** end by switching back to `.text` -- otherwise later
   compiler output lands in the discardable section and every generated program
   segfaults in `main()`.
-- **`basename_of()` split on `/` only.** Windows `realpath()` returns the
+- **`drv_basename_of()` split on `/` only.** Windows `realpath()` returns the
   backslash spelling, so `tur build --shared .` used the whole absolute path as
   the artifact name and ld rejected it. Now splits on `\` too, under `_WIN32`.
 - **`dlfcn.h` in the smoke harness.** MinGW has none; it now includes the

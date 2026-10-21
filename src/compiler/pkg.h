@@ -256,7 +256,7 @@ typedef struct PkgManifest {
     char        *entry;
     /* engine-selection-plan E1: default execution engine for `tur run` --
      * "cc" | "jit" | "interp", or NULL when the key is absent.  Validated at
-     * parse (TUR-E0311); resolved by main.c's resolve_engine ladder
+     * parse (TUR-E0311); resolved by main.c's drv_resolve_engine ladder
      * (CLI --engine > TUR_ENGINE env > this key > "cc"). */
     char        *engine;
     /* XF1 (experimental-flag-mechanism-plan): names from a top-level

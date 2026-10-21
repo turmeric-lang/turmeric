@@ -286,7 +286,7 @@ idiom already in `src/jit_engine.c:51`.
 | `PROF_READ`, `PROF_SWEET` | `read_all` at `src/main.c:895` and its peers |
 | `PROF_ELAB` .. `PROF_BORROW` | wrap each `case` in `run_core_passes`, `src/main.c:438-520` |
 | `PROF_EMIT` | the `emit_*` call after `run_core_passes` in `compile_to_c`, `src/main.c:567` / `:710` |
-| `PROF_CC` | around `system(cmd.data)` in `link_command_run`, `src/main.c:2278` |
+| `PROF_CC` | around `system(cmd.data)` in `drv_link_command_run`, `src/main.c:2278` |
 | `PROF_REFINE` | `refine_discharge_*`, which already has `TUR_REFINE_STATS` counters to cross-check against |
 
 `run_core_passes` being a flat ordered switch over `core_passes[]` is what
