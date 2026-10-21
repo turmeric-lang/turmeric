@@ -5,10 +5,11 @@
 # or source it directly from ~/.bashrc:
 #   source <(tur completion bash)
 
-__tur_commands="build run just check test repl fmt format emit-c emit-h compile link
-interpret debug eval doc explain parse-check audit-spans lsp lsp-lite dap mcp
-worker init new add add-cmake fetch emit-cmake install uninstall list upgrade
-experiments dialects image-info image-verify completion demangle"
+__tur_commands="build compile link emit-c emit-h run just repl worker
+interpret debug dap trace lsp-lite eval doc docs explain test check expand
+format fmt parse-check demangle smt experiments dialects completion init add
+add-cmake fetch audit emit-cmake install uninstall list upgrade new
+audit-spans lsp mcp image-info image-verify jit"
 
 __tur_global_flags="--help --version --no-color --json --json-diagnostics
 --strict-effects -Werror=strict-effects --strict-refine --no-contracts --keep-contracts

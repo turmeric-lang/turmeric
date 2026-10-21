@@ -22,6 +22,7 @@ usage:
   tur explain <TUR-E####|snippet>   explain a diagnostic code or snippet errors
   tur test <dir>                    run all .tur files in a directory
   tur check <input.tur>             type-check only, no codegen (phase 8)
+  tur check --dump-refine=json <f>  print one JSON record per refinement obligation
   tur expand <input.tur>            trace macro expansions to stdout while checking
   tur format [--check|--diff] [file.tur]   format source (stdin if no file given)
   tur fmt [--check|--diff|--dry-run] [paths...]  format in place with dir walking
@@ -30,7 +31,6 @@ usage:
                                     (filters stdin when given no names, so
                                      `perf script | tur demangle` reads clean)
   tur smt <file.smt2>               run an SMT-LIB2 script through the refinement solver
-  tur check --dump-refine=json <f>  print one JSON record per refinement obligation
   tur experiments                   list experimental features (--enable=<name>)
   tur dialects                      list the base dialects a `#lang` line may name
   tur completion <zsh|bash>         print a shell completion script

@@ -120,6 +120,19 @@ typedef struct {
     uint64_t key;
 } SplitLibCache;
 
+/* One `tur` subcommand: a row of the command table in cli.c. */
+typedef struct DrvCommand {
+    const char *name;
+    int       (*run)(int argc, char **argv);  /* see commands.h */
+    unsigned    flags;                        /* DRV_CMD_* */
+    const char *summary;  /* its line in the completion scripts, or NULL */
+    const char *help;     /* its lines in `tur --help`, or NULL to list none */
+} DrvCommand;
+enum {
+    DRV_CMD_EXACT   = 1u << 0,  /* dispatched on its exact spelling only */
+    DRV_CMD_PACKAGE = 1u << 1,  /* listed under "package management" */
+};
+
 /* == driver/paths.c ======================================================== */
 extern const char *g_argv0;
 extern int g_main_argc;
@@ -275,15 +288,19 @@ extern const TuriInlineCJitHook g_repl_inline_c_jit_hook;
 extern bool g_no_auto_spice;
 extern bool g_no_auto_stdlib;
 extern bool g_no_abi_cache;
-extern bool g_no_color;
 int drv_usage_error(int (*usage)(void));
 bool is_known_deprecated_x_flag(const char *s);
-void warn_deprecated_x_flag(const char *name);
 bool enable_experiment_list(const char *list, ExperimentSource src);
 bool drv_is_include_flag(int argc, char **argv, int i, int *consumed);
 int drv_parse_include_flags(int argc, char **argv, int start, char ***out_dirs);
-
-/* == main.c ================================================================ */
+extern bool g_no_color;
+extern bool g_json_diagnostics;
+extern const char *g_explain_code;
+void drv_apply_env_overrides(void);
+void drv_parse_timings_flag(int *argc_io, char **argv);
+int drv_parse_global_flags(int *argc_io, char **argv);
+const DrvCommand *drv_find_command(const char *tok, bool *ambiguous);
 int drv_usage(void);
+int drv_try_external_subcommand(int argc, char **argv);
 
 #endif /* TUR_DRIVER_H */

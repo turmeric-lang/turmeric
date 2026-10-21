@@ -19,8 +19,13 @@
 
 #include "completion.h"
 
+#include <stdbool.h>
 #include <stdio.h>
 #include <string.h>
+
+/* Where each script lists the subcommands; emit() writes them there from the
+ * list the driver passes, in the script's own syntax. */
+static const char COMMANDS_HERE[] = "";
 
 static const char *const ZSH_SCRIPT[] = {
     "#compdef tur\n",
@@ -82,46 +87,7 @@ static const char *const ZSH_SCRIPT[] = {
     "\n",
     "  local -a commands\n",
     "  commands=(\n",
-    "    'build:build a file or directory into an executable'\n",
-    "    'run:run a Justfile recipe, or build and execute a .tur file'\n",
-    "    'just:synonym for run'\n",
-    "    'check:type-check only, no codegen'\n",
-    "    'test:run all .tur files in a directory'\n",
-    "    'repl:interactive REPL'\n",
-    "    'fmt:format sources in place, walking directories'\n",
-    "    'format:format a single source file or stdin'\n",
-    "    'emit-c:print the generated C to stdout'\n",
-    "    'emit-h:print the generated header to stdout'\n",
-    "    'compile:lower a .tur to an object file'\n",
-    "    'link:link objects into an executable'\n",
-    "    'interpret:run a file through the tree-walking interpreter'\n",
-    "    'debug:run a file under the interactive debugger'\n",
-    "    'eval:evaluate an inline expression'\n",
-    "    'doc:print documentation for a symbol'\n",
-    "    'explain:explain a diagnostic code or snippet'\n",
-    "    'parse-check:exit 0 if two files read to the same AST'\n",
-    "    'demangle:decode mangled C symbols back to Turmeric names'\n",
-    "    'audit-spans:report source-span coverage'\n",
-    "    'lsp:Language Server Protocol server'\n",
-    "    'lsp-lite:lightweight completion/calltip/doc backend'\n",
-    "    'dap:Debug Adapter Protocol server'\n",
-    "    'mcp:Model Context Protocol server'\n",
-    "    'worker:persistent fixture evaluator'\n",
-    "    'init:create a new project in the current directory'\n",
-    "    'new:scaffold a new spice'\n",
-    "    'add:add a Turmeric spice dependency'\n",
-    "    'add-cmake:add a C/CMake dependency'\n",
-    "    'fetch:download or update declared spices'\n",
-    "    'emit-cmake:generate CMakeLists.txt for CMake consumers'\n",
-    "    'install:install a spice binary globally'\n",
-    "    'uninstall:remove a globally installed spice'\n",
-    "    'list:list globally installed spices'\n",
-    "    'upgrade:upgrade globally installed spices'\n",
-    "    'experiments:list experimental features'\n",
-    "    'dialects:list the base dialects a #lang line may name'\n",
-    "    'image-info:print metadata for a compiled image'\n",
-    "    'image-verify:verify a compiled image'\n",
-    "    'completion:print a shell completion script'\n",
+    COMMANDS_HERE,
     "  )\n",
     "\n",
     "  _arguments -C \\\n",
@@ -263,10 +229,7 @@ static const char *const BASH_SCRIPT[] = {
     "# or source it directly from ~/.bashrc:\n",
     "#   source <(tur completion bash)\n",
     "\n",
-    "__tur_commands=\"build run just check test repl fmt format emit-c emit-h compile link\n",
-    "interpret debug eval doc explain parse-check audit-spans lsp lsp-lite dap mcp\n",
-    "worker init new add add-cmake fetch emit-cmake install uninstall list upgrade\n",
-    "experiments dialects image-info image-verify completion demangle\"\n",
+    COMMANDS_HERE,
     "\n",
     "__tur_global_flags=\"--help --version --no-color --json --json-diagnostics\n",
     "--strict-effects -Werror=strict-effects --strict-refine --no-contracts --keep-contracts\n",
@@ -370,8 +333,27 @@ static const char *const BASH_SCRIPT[] = {
     NULL,
 };
 
-static void emit(const char *const *lines) {
-    for (int i = 0; lines[i]; i++) fputs(lines[i], stdout);
+/* zsh: one `'name:summary'` per line.  bash: `__tur_commands="..."`, the
+ * names wrapped at 78 columns. */
+static void emit(const char *const *lines, bool zsh,
+                 const CompletionCommand *cmds, int n_cmds) {
+    for (int i = 0; lines[i]; i++) {
+        if (lines[i] != COMMANDS_HERE) { fputs(lines[i], stdout); continue; }
+        if (zsh) {
+            for (int k = 0; k < n_cmds; k++)
+                printf("    '%s:%s'\n", cmds[k].name, cmds[k].summary);
+            continue;
+        }
+        size_t col = (size_t)printf("__tur_commands=\"");
+        for (int k = 0; k < n_cmds; k++) {
+            size_t w = strlen(cmds[k].name);
+            if (k > 0 && col + 1 + w > 78) { putchar('\n'); col = 0; }
+            else if (k > 0) { putchar(' '); col++; }
+            fputs(cmds[k].name, stdout);
+            col += w;
+        }
+        fputs("\"\n", stdout);
+    }
 }
 
 int usage_completion(void) {
@@ -395,7 +377,8 @@ int usage_completion(void) {
     return 0;
 }
 
-int cmd_completion(int argc, char **argv) {
+int cmd_completion(int argc, char **argv,
+                   const CompletionCommand *cmds, int n_cmds) {
     if (argc < 3) {
         fprintf(stderr, "tur completion: missing shell name\n");
         usage_completion();
@@ -404,8 +387,8 @@ int cmd_completion(int argc, char **argv) {
     const char *shell = argv[2];
     if (strcmp(shell, "--help") == 0 || strcmp(shell, "-h") == 0)
         return usage_completion();
-    if (strcmp(shell, "zsh") == 0)  { emit(ZSH_SCRIPT);  return 0; }
-    if (strcmp(shell, "bash") == 0) { emit(BASH_SCRIPT); return 0; }
+    if (strcmp(shell, "zsh") == 0)  { emit(ZSH_SCRIPT, true, cmds, n_cmds);   return 0; }
+    if (strcmp(shell, "bash") == 0) { emit(BASH_SCRIPT, false, cmds, n_cmds); return 0; }
     fprintf(stderr,
             "tur completion: unsupported shell '%s' (expected zsh or bash)\n",
             shell);
