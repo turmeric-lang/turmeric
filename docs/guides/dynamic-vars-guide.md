@@ -57,11 +57,11 @@ value is the initial value visible on any thread that has never called
 - Substructural types (`^linear`, `^affine`, `^unique`) are rejected --
   dynamic vars may be read by any number of callers.
 - Which ADTs a dynvar can carry: an instantiation of a stdlib generic ADT,
-  such as `(Option int)`, `(Option cstr)` or `(Option Ctx)`, works. A user
-  `defdata` is move-only by default, so it is refused with `TUR-E0603`, even
-  one whose constructors carry no payload
-  ([defdynamic-refuses-payload-free-defdata](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/defdynamic-refuses-payload-free-defdata.md));
-  a `defopaque` newtype is the usual stand-in.
+  such as `(Option int)`, `(Option cstr)` or `(Option Ctx)`, works. So does a
+  user `defdata` whose constructors carry no payload --
+  `(defdata LogLevel (Debug) (Info) (Warn) (Error))` -- since its value is
+  only a tag. A `defdata` with a payload is move-only, so it is refused with
+  `TUR-E0603`; a `defopaque` newtype is the usual stand-in for it.
 - The declared type is the expected type of the root, of every `binding`
   override and of a `set!` value, so a generic call whose type variable is
   only on its result needs no ascription: `(defdynamic *v* :(Option int)

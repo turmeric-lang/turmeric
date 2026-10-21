@@ -1,5 +1,7 @@
 # A CPS continuation that captures more than 16 values is emitted with no env
 
+**RESOLVED 2026-10-21** -- see [Resolution](#resolution-2026-10-21). Pinned by `cps-continuation-many-captures`.
+
 **Severity:** low-medium (compile failure). cc rejects the program with
 undeclared temporaries; nothing at the Turmeric level says why. It needs one
 function whose lifted continuation reads more than 16 enclosing values, which
@@ -59,6 +61,32 @@ one that captured too much.
   internal error rather than the zero-capture fallback.
 
 Found fixing
-[effect-row-merge-overflows-past-32-effects](../archive/effect-row-merge-overflows-past-32-effects.md),
+[effect-row-merge-overflows-past-32-effects](effect-row-merge-overflows-past-32-effects.md),
 whose repro sums 40 performs; that report's fixture discards the results so
 nothing is captured.
+
+## Resolution (2026-10-21)
+
+Fix direction 1. `CapSet` (`src/compiler/emit_cps_ir.c`) is an array of
+`CapEnt` entries: the first 16 inline, as before, and `cap_push` moves them
+to an arena past that, so a set never fills. Every `cs->ok = false` that meant
+"too many" is gone; `ok` now only means a capture the env cannot carry. The
+lifted helper's per-capture spelling save/restore (`emit_lifted`) is sized
+from the set instead of the old constant.
+
+The capture walk had a second cap on the same path. Its binder stack
+(`bound`, `CC_MAX_BOUND` = 128 entries) set `ok = false` once a continuation
+bound more than 128 names, which a chain of 130 performs reaches. That is a
+`BoundStk` now, growing the same way. Both spill into `g_cap_arena`, which
+`emit_cps_ir_forget` frees.
+
+The report's repro gives the right sum at n = 17, 18, 40, 130 and 200; at
+200 the function is still CPS-emitted (not evicted), with a 199-field env on
+its last continuation. The fixture sums 18 performs and 40 -- the sum
+[effect-row-merge-overflows-past-32-effects](effect-row-merge-overflows-past-32-effects.md)'s
+fixture had to leave out.
+
+Not done: direction 3, an internal error at the lifting sites when `ok` is
+false with captures collected. Capacity can no longer cause it; a capture the
+env cannot carry still falls back to the zero-capture helper there, which the
+admission gate is relied on to have refused.

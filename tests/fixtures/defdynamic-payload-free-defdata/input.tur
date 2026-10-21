@@ -1,0 +1,47 @@
+;; defdynamic-refuses-payload-free-defdata: a `defdata` whose constructors
+;; carry nothing is move-only by default, so `defdynamic` refused it with
+;; TUR-E0603.  Its value is just a tag -- the copy a read makes aliases
+;; nothing -- so it is admitted now.  Reads the root, overrides it with
+;; `binding` (nested, and two vars at once), `set!`s it inside one, and passes
+;; it to a function and a `match` -- the shapes a log-level var needs.
+
+(defdata LogLevel (Debug) (Info) (Warn) (Error))
+(defdata Color (Red) (Green))
+
+(defdynamic *lv* :LogLevel (Info))
+(defdynamic *color* :Color (Red))
+
+(defn level-rank [l : LogLevel] : int
+  (match l
+    (Debug) 0
+    (Info)  1
+    (Warn)  2
+    (Error) 3))
+
+(defn enabled? [at : LogLevel] : bool
+  (>= (level-rank at) (level-rank *lv*)))
+
+(defn color-name [] : cstr
+  (match *color*
+    (Red)   "red"
+    (Green) "green"))
+
+(defn main [] : int
+  (println (level-rank *lv*))                 ;; 1
+  (println (enabled? (Debug)))                ;; false
+  (binding [*lv* (Debug)]
+    (println (level-rank *lv*))               ;; 0
+    (println (enabled? (Debug)))              ;; true
+    (binding [*lv* (Error)]
+      (println (enabled? (Warn))))            ;; false
+    (println (level-rank *lv*)))              ;; 0
+  (println (level-rank *lv*))                 ;; 1
+  (binding [*lv*    (Warn)
+            *color* (Green)]
+    (println (level-rank *lv*))               ;; 2
+    (println (color-name))                    ;; green
+    (set! *lv* (Error))
+    (println (level-rank *lv*)))              ;; 3
+  (println (level-rank *lv*))                 ;; 1
+  (println (color-name))                      ;; red
+  0)

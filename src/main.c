@@ -3184,6 +3184,24 @@ static void apply_runtime_lib_mode(Buf *autolink) {
     *autolink = inj;
 }
 
+/* regions-off-source-runtime-link-failure: a TUR_REGIONS=0 program pastes no
+ * region runtime (emit_region_runtime_bodies), and its emitted C must name no
+ * region symbol (tests/run-regions-seam.sh).  But hamt.c is host runtime and
+ * calls tur_region_note_escape directly, so compiled here from source -- no
+ * archive to supply region.o -- it failed to link.  Tell the runtime sources
+ * that regions are off: hamt.c's note then compiles away, as the program's own
+ * TUR_REGION_NOTE does.  An archive link needs nothing (region.o is in it). */
+static void autolink_regions_off(Buf *autolink) {
+    if (regions_enabled() || !autolink_has_bare_c_source(autolink)) return;
+    Buf out;
+    buf_init(&out);
+    if (autolink->len > 1) buf_write(&out, autolink->data, autolink->len - 1);
+    buf_puts(&out, " -DTUR_REGIONS=0");
+    buf_putc(&out, '\0');
+    buf_free(autolink);
+    *autolink = out;
+}
+
 /* Is `prefix` an installed SDK prefix -- <prefix>/include/turi/eval.h, the
  * layout a release archive ships (scripts/stage-release.sh)? */
 static bool sdk_prefix_has_turi_headers(const char *prefix) {
@@ -4652,6 +4670,7 @@ static int cmd_build_once(const char *input, const char *out_path,
      * runtime .c autolink sources for a link against the prebuilt libturi.a
      * (native builds only -- emcc/wasm has no libturi.a). */
     if (!wasm_target) apply_runtime_lib_mode(&autolink);
+    autolink_regions_off(&autolink);
 
     /* cc-path-preamble-split-plan: the program half was emitted with the decls
      * region in place of the preamble, so the definitions have to come from
@@ -9100,6 +9119,7 @@ static int cmd_compile(const char *input, const char *out_obj,
      * sidecar records the -lturi link and the object never carries the runtime
      * TUs.  cmd_compile is native-only, so no wasm guard is needed. */
     apply_runtime_lib_mode(&autolink);
+    autolink_regions_off(&autolink);
 
     const char *cc = getenv("CC");
     if (!cc || !*cc) cc = "cc";

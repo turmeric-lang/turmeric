@@ -24,6 +24,20 @@ DynVarEntry *dynvar_lookup(const Elab *e, const Symbol *name) {
     return NULL;
 }
 
+/* A `defdata` none of whose constructors carries a field -- `(defdata Level
+ * (Debug) (Info))` -- and that was not declared `:linear` / `:affine`.  It is
+ * move-only only by default (type_adt), not because a value owns anything: a
+ * value is its tag, so the copy a dynamic-var read makes aliases nothing
+ * (defdynamic-refuses-payload-free-defdata). */
+static bool adt_is_payload_free(const Type *t) {
+    if (!t || t->kind != TY_ADT || !t->as.adt_.def) return false;
+    const AdtDef *def = t->as.adt_.def;
+    if (def->is_linear || def->is_affine || def->n_ctors == 0) return false;
+    for (uint32_t i = 0; i < def->n_ctors; i++)
+        if (!def->ctors[i] || def->ctors[i]->n_fields != 0) return false;
+    return true;
+}
+
 /* DV0: Elaborate (defdynamic [^private] *name* :type root-expr).
  *
  * Syntax:
@@ -33,7 +47,8 @@ DynVarEntry *dynvar_lookup(const Elab *e, const Symbol *name) {
  * Checks performed:
  *   - Feature flag must be active              (hard error, no code)
  *   - Must be at module top-level              (TUR-E0604)
- *   - Value type must not be substructural     (TUR-E0603)
+ *   - Value type must not be substructural     (TUR-E0603); a payload-free
+ *     `defdata` is admitted (adt_is_payload_free)
  *   - Name missing *earmuffs* convention       (TUR-W0600, non-fatal)
  *   - Root-expr type must match declared type  (TUR-E0602)
  *
@@ -96,7 +111,8 @@ Expr *elab_defdynamic(Elab *e, const Form *call) {
     }
 
     /* TUR-E0603: reject substructural (linear / move-only) value types */
-    if (vtype->copy_kind == CK_LINEAR || vtype->copy_kind == CK_UNIQUE) {
+    if ((vtype->copy_kind == CK_LINEAR || vtype->copy_kind == CK_UNIQUE)
+        && !adt_is_payload_free(vtype)) {
         diag_emit_with_code(DIAG_ERROR, type_f->span, TUR_E0603_DYNVAR_SUBSTRUCTURAL_TYPE,
                             "defdynamic: '%s' -- dynamic vars may not hold substructural "
                             "(linear or move-only) types", name->name);
