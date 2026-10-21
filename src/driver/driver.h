@@ -204,9 +204,7 @@ int compile_to_implementation(const char *path, Buf *out_c, const char *module_n
                               const ForcedAbiSpec *forced, uint32_t n_forced,
                               BorrowSpecInfo **out_borrow_specs, uint32_t *out_n_borrow_specs);
 
-/* == main.c ================================================================ */
-
-/* -- moving to driver/cc.c -- */
+/* == driver/cc.c =========================================================== */
 extern int g_runtime_mode;
 extern bool g_emit_for_link;
 extern bool g_cc_release;
@@ -238,6 +236,8 @@ int drv_link_command_run(const char *cc, const char *cc_flags,
                          const Buf *cmake_flags,
                          const char **include_dirs, int n_include_dirs,
                          const char *out_path, const char *cc_stderr_path);
+
+/* == main.c ================================================================ */
 
 /* -- moving to driver/preamble_split.c -- */
 extern bool g_split_lib_cache_off;
