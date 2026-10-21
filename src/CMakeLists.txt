@@ -544,6 +544,7 @@ target_compile_definitions(tur_core PRIVATE TUR_VERSION="${_TUR_VERSION_STR}")
 # tests/check-driver-headers.py checks each header section against the
 # file it names.
 set(TUR_DRIVER_SOURCES
+  driver/cmd_eval.c
   driver/cmd_format.c
 )
 add_executable(tur main.c lsp/mcp.c ${TUR_DRIVER_SOURCES} $<TARGET_OBJECTS:tur_core>)

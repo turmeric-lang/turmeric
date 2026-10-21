@@ -62,9 +62,7 @@ int cmd_format(const char *path, bool check_only, bool diff_mode,
 int cmd_parse_check(const char *path_a, const char *path_b);
 int cmd_fmt(int argc, char **argv);
 
-/* == main.c ================================================================ */
-
-/* -- moving to driver/cmd_eval.c -- */
+/* == driver/cmd_eval.c ===================================================== */
 int cmd_eval_inc(const char *path, bool use_color,
                  char **user_inc, int n_user_inc,
                  char **extra_argv, int extra_argc, bool debug);
@@ -75,6 +73,8 @@ int cmd_trace(const char *path, const char *out_path,
 int cmd_trace_dump(const char *path);
 int cmd_eval_expr(const char *expr, bool use_color);
 int cmd_repl(bool watch_mode);
+
+/* == main.c ================================================================ */
 
 /* -- moving to driver/worker.c -- */
 int cmd_worker(void);
