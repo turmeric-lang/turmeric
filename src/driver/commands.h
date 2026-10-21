@@ -53,9 +53,7 @@ int cmd_run(int argc, char **argv);
 int cmd_test(const char *dir);
 int cmd_check_dir(const char *dir);
 
-/* == main.c ================================================================ */
-
-/* -- moving to driver/jit.c -- */
+/* == driver/jit.c ========================================================== */
 int cmd_jit(int argc, char **argv);
 
 /* == driver/cmd_format.c =================================================== */

@@ -267,9 +267,7 @@ char **collect_used_attr_modules(const char *entry_path,
 void drv_obj_sibling_path(const char *obj, const char *suffix,
                           char *out, size_t cap);
 
-/* == main.c ================================================================ */
-
-/* -- moving to driver/jit.c -- */
+/* == driver/jit.c ========================================================== */
 #ifdef TUR_HAVE_JIT
 extern const TurSpiceJitHook g_repl_jit_hook;
 extern const TuriInlineCJitHook g_repl_inline_c_jit_hook;
