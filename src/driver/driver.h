@@ -140,9 +140,7 @@ int drv_read_entire_file_quiet(const char *path, char **out, size_t *out_len);
 int drv_read_entire_file(const char *path, char **out, size_t *out_len);
 int drv_is_directory(const char *path);
 
-/* == main.c ================================================================ */
-
-/* -- moving to driver/spice.c -- */
+/* == driver/spice.c ======================================================== */
 extern bool g_user_config_experiments_done;
 const char *drv_resolve_engine(const char *input_or_root,
                                const char *cli_flag);
@@ -176,6 +174,8 @@ void resolve_include_dirs_from_manifest(const char *root,
 void collect_spice_aux_c(const char *root, Buf *includes, Buf *sources);
 void resolve_project_include_dirs(const char *dir,
                                   const char ***out_dirs, int *out_n);
+
+/* == main.c ================================================================ */
 
 /* -- moving to driver/pipeline.c -- */
 extern bool g_dump_kinds;
