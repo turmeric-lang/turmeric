@@ -9,10 +9,11 @@
 > `(Vec AnyRenderer)`; the draw `switch`, the bounds `switch` and the slot
 > bag are gone; callbacks are typed fn values; style and option handles are
 > `LineStyle` / `PointStyle` / `FillStyle` / `PlotOpts`; renderer data is
-> a Vec of typed records from `plot/data`. Pixel check: of 34 scenes, 33
-> byte-identical to pre-plan output and `arrows` changed by a bounds bug
-> fix. **Remaining (beyond this plan's acceptance):** `contours`' collapsed
-> levels and the frame's unmatched canvas save. See P4.
+> a Vec of typed records from `plot/data`. Pixel check: of 34 scenes, 32
+> byte-identical to pre-plan output; `arrows` and `contours` changed by bug
+> fixes. Building the spice under clang needs turmeric branch
+> `claude/exbox-thunk-carrier-result` (a compiler fix). **Remaining (beyond
+> this plan's acceptance):** the legend swatch's color. See P4.
 > Tracks: spices-type-features-uplift-plan **U2 target — plot**
 > Scope: `spices/plot/` only; P3 needed a compiler dependency after all, now
 > satisfied (see Risks).
@@ -386,18 +387,36 @@ wrong record is TUR-E0001 (`errors/wrong-data-record.tur`).
   on release and Debug `tur` (11 tests, 5 compile-fail fixtures);
   ASan/UBSan clean, and the per-sample callback leaks are gone.
 
+**Done (the two preserved bugs, 2026-10-21, same branch):**
+- `contours` stored 0.0 for both ends of its level range, so all `n` levels
+  drew the 0 contour. The draw now scans f over the sampled grid (NaN and
+  infinities skipped) and spaces level i of n at
+  min + (max - min) * (i + 1) / (n + 1). Only `contours.png` of the 34
+  scenes changes.
+- The frame `plutovg_canvas_save`d with no matching `restore`, leaving a
+  saved state on a `CanvasBackend` caller's canvas; `__ctx-finish` restores
+  it. Both have a test that fails on the old code.
+- Under clang every plot test failed to build: the existential's
+  carrier-adapter thunk for the defaulted `category-labels : (Vec cstr)`
+  returned the instance's int64 carrier as `tur_adt_Vec__cstr *`
+  (-Wint-conversion, an error to clang; a warning to gcc). Fixed in the
+  compiler on its own branch, `claude/exbox-thunk-carrier-result`
+  (fixture `exists-method-returns-carrier-vec`), which must merge before the
+  spice is green on macOS.
+
 **Remaining (follow-ups, not in this plan's acceptance):**
-- `contours` stores 0.0 for both ends of its level range, so all `n` levels
-  draw the 0 contour. Preserved for pixel identity; a one-line fix that
-  changes the `contours` scene's pixels.
-- The frame `plutovg_canvas_save`s once at the top with no matching
-  `restore`, so each plot leaves one saved state on a caller's canvas
-  (`CanvasBackend`). Preserved; harmless for a fresh surface.
+- The legend swatch is `palette[row % 8]`, not the color its renderer drew
+  with, so it disagrees with a renderer that names a color (`contours` in
+  `render-all-kinds` strokes green beside a blue swatch) or follows an
+  unlabelled renderer that took an auto color. Predates this plan; the
+  legend needs each renderer's resolved style, e.g. a defaulted
+  `legend-swatch` method or the draw recording its color in the `DrawCtx`.
 - `plot-anyrenderers` is a deprecated alias of `plot`.
 
 **Acceptance**
 - The typed path is pixel-identical to legacy `plot` -- done for every kind
-  (33/34 scenes byte-identical; `arrows` is a bug fix).
+  (33/34 scenes byte-identical; `arrows` is a bug fix; `contours` changed
+  later by its own fix).
 - Every example under `spices/plot/` and the guide compiles against the typed
   constructors -- done, and `__make-renderer` is removed.
 
