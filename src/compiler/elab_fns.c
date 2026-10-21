@@ -38,8 +38,8 @@ bool sum_box_binding_escapes_except(const Expr *e, const Binding *b,
  * to a binding already proven fresh.  Callees elaborate before callers within
  * a load order (stdlib first), so `some`/`ok`/`err`/`none` -- whose bodies are
  * bare ctor applications -- are stamped before the instance bodies that call
- * them; a self-recursive body reads its own flag before it is set and fails
- * conservatively.  Guarded match fall-through yields the zero-initialized
+ * them.  A self-recursive body is decided as a greatest fixed point
+ * (elab_stamp_sum_freshness).  Guarded match fall-through yields the zero-initialized
  * merge temp, i.e. the NULL carrier, which the null-guarded free ignores --
  * so guards need no special case.  Anything unrecognized is NOT fresh: the
  * polarity is that a wrong `false` leaks (status quo) and a wrong `true`
@@ -190,7 +190,24 @@ void elab_stamp_sum_freshness(Binding *b, Binding **params, uint32_t n_params,
                               const Expr *body) {
     if (!b) return;
     uint32_t need = 0;
+    /* A self-recursive producer -- `(defn f [i] : (Option V) (if (done? i)
+     * (some v) (f (+ i 1))))` -- reads its own flag at the self-call, before
+     * it is set, so the walk used to answer "not fresh" and every caller
+     * leaked the box (the datalog examples' get-attr walk).  Decide it as a
+     * greatest fixed point: assume the function unconditionally fresh while
+     * walking its body, and keep the answer only if the walk confirms it
+     * unconditionally.  That is sound: a value the function returns comes out
+     * of a finite chain of self-calls ending in a non-self path, and the walk
+     * checked every such path mints a fresh box.  Anything weaker (not fresh,
+     * or fresh only through a parameter) is decided again without the
+     * assumption, as before. */
+    b->returns_fresh_sum_box = true;
     bool fresh = fresh_sum_walk(body, params, n_params, &need);
+    b->returns_fresh_sum_box = false;
+    if (!(fresh && need == 0)) {
+        need = 0;
+        fresh = fresh_sum_walk(body, params, n_params, &need);
+    }
     /* inline-c-results-guide, "Who owns the box": a body that is inline C
      * and whose DECLARED result is an Option/Result application hands its
      * caller a FRESH carrier box -- that is the contract the guide states

@@ -1,0 +1,53 @@
+;; A self-recursive function that returns a fresh `(Option Value)` -- the box is
+;; minted on the base path and handed up through the self-call -- is a fresh
+;; producer, so a caller that matches on its result frees the box.  The
+;; freshness walk used to read the function's own flag at the self-call before
+;; it was set, answer "not fresh", and every caller leaked one box (the
+;; datalog examples' get-attr scan).  elab_stamp_sum_freshness now decides a
+;; self-recursive body as a greatest fixed point.  requires.leak-check runs
+;; this under LeakSanitizer (tests/run-leak-check.sh).
+;;
+;;   find-from   -- the base path mints the box; the other path is the tail
+;;                  self-call (lowered to a loop)
+;;   depth-first -- the self-call is not in tail position: its result is
+;;                  let-bound, then returned
+;;
+;; A function that returns its PARAMETER on some path is not fresh, and the
+;; fixed point does not change that: the walk under the assumption still meets
+;; the parameter there and the answer falls back to the old walk's.  Such a
+;; negative control cannot live here -- its caller keeps the box
+;; (conservatively), which LeakSanitizer reports.
+
+(defdata Value :copy
+  (LongVal :int)
+  (StrVal :cstr))
+
+(defn find-from [i : int stop : int] : (Option Value)
+  (if (>= i stop)
+    (none)
+    (if (= i 3)
+      (some (StrVal "three"))
+      (find-from (+ i 1) stop))))
+
+(defn depth-first [n : int] : (Option Value)
+  (if (= n 0)
+    (some (LongVal 42))
+    (let [r (depth-first (- n 1))]
+      r)))
+
+;; Written as two matches, not `(Some (StrVal s))`: the non-retain inference
+;; does not see through a nested constructor pattern yet, so `show` would keep
+;; every box it is handed whoever produced it
+;; (docs/reported/nested-ctor-pattern-defeats-sum-nonretain.md).
+(defn show [o : (Option Value)] : cstr
+  (match o
+    (Some v) (match v
+               (StrVal s)  s
+               (LongVal _) "long")
+    (None)   "none"))
+
+(defn main [] : int
+  (println (show (find-from 0 10)))     ;; three
+  (println (show (find-from 5 10)))     ;; none
+  (println (show (depth-first 4)))      ;; long
+  0)
