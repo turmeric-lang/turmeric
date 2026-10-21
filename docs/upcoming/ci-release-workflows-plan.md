@@ -192,10 +192,47 @@ mistral-small-latest`. `mistral-large` was not tried (older; not viable).
 With no reviewer, Medium and Small are fallbacks for a GLM outage only --
 worth a `dry_run` look before letting either publish.
 
+### Re-measured 2026-10-21: Mistral Large 4, and GLM effort
+
+`tools/release_model_eval.py` makes the measurement above repeatable: it
+drafts past releases with one model at a time, from the CHANGELOG and README
+as they stood at the old tag, and reports each draft beside the published
+entry with a style table (`--style-history` gives the same table for every
+published entry). Two runs each of v0.61->v0.62 (9 commits), v0.62->v0.63
+(73) and v0.66->v0.67 (24). Since 2026-10-05, `zai-glm-latest` has moved to
+GLM 5.3, which is far faster at every effort.
+
+Mistral Large 4 ("Le Chonk", public preview 2026-10-06) is `mistral-large-4`
+(alias `mistral-large-4-0`); `mistral-large-latest` is still Large 3
+(`mistral-large-2512`). It takes `reasoning_effort` `none` or `high`, and
+reasons by default.
+
+| Model @ effort | Time per draft | Verdict |
+|---|---|---|
+| `zai-glm-latest@low` | 4-8 s | Good. One run labeled a graduation `BREAKING`; more mechanism leaks than `@high` |
+| `zai-glm-latest@high` | 8-56 s | **Best.** Fewest errors, most complete, steadiest on the 73-commit release |
+| `mistral-large-4@none` | 12-57 s | Worse than GLM: over-splits large releases (18-22 bullets; one run fell to the raw-subject fallback), misplaces `BREAKING`, leaks internals |
+| `mistral-large-4` (default = reasoning) | 100-1077 s | The only one to mark the v0.67 cross-module-effect change `BREAKING`; also a false `BREAKING`, plan labels, internal tooling. Too slow for CI |
+
+What effort does not fix, at either GLM setting: classification wanders run to
+run (the same change lands in `Changed` once and `Fixed` the next), no run
+marked v0.67's cross-module-effect rejection `BREAKING`, and none wrote
+v0.63's `Deprecated` section. A likely cause, not yet tested: the style
+examples are "the two most recent CHANGELOG entries", which since v0.63.1 are
+GLM's own drafts, so each release imitates the last two -- a one-bullet `Docs`
+patch included. `--style-history` shows `code` per bullet fall from 4-8 in
+the hand-cut entries to 0-2 for v0.63.2-v0.63.5. Pinning the examples to
+fixed hand-cut entries (v0.62.0, v0.63.0) and stating when a change is
+`BREAKING` or `Deprecated` are the next things to measure.
+
 ## Checklist
 
 - [x] `tools/release_prepare.py` (drafter, validators, `--strict`, apply).
 - [x] Measure Medium / Small / GLM, with effort settings, on two releases.
+- [x] Re-measure with `tools/release_model_eval.py`: Large 4, GLM `@low` /
+      `@high` (2026-10-21). Large 4 is not adopted.
+- [ ] Pin the style examples to hand-cut entries; re-measure; then decide
+      `@low` vs `@high`.
 - [x] `.github/workflows/release-cut.yml`.
 - [x] Verify the `dist/.../wrangler.json` path.
 - [x] Set `MISTRAL_API_KEY`.
