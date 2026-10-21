@@ -255,9 +255,7 @@ bool jit_try_split_preamble(Buf *csrc, Buf *out);
 void drv_default_output_name(const char *input, char *out, size_t cap);
 char *drv_resolve_build_dir(const char *input_or_root, const char *cli_flag);
 
-/* == main.c ================================================================ */
-
-/* -- moving to driver/project.c -- */
+/* == driver/project.c ====================================================== */
 extern bool g_build_bundle_deps;
 char **collect_used_attr_modules(const char *entry_path,
                                  const char **include_dirs,

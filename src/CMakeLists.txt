@@ -556,6 +556,7 @@ set(TUR_DRIVER_SOURCES
   driver/paths.c
   driver/pipeline.c
   driver/preamble_split.c
+  driver/project.c
   driver/spice.c
   driver/worker.c
 )

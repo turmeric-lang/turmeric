@@ -29,9 +29,7 @@ int cmd_build(const char *input, const char *out_path,
               const char **reader_macro_paths,
               int n_reader_macro_paths);
 
-/* == main.c ================================================================ */
-
-/* -- moving to driver/project.c -- */
+/* == driver/project.c ====================================================== */
 int cmd_build_multi(const char *dir, const char *out_path, bool shared,
                     const char *manifest_path, const char *cli_build_dir);
 int cmd_build_project(const char *root_in, const char *out_path,
