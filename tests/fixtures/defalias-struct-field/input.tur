@@ -1,0 +1,34 @@
+;; defalias-struct-field: a `defalias` name is a struct field type, as it is a
+;; parameter or result type.  The field path read a bare type name as a
+;; primitive or a declared struct/ADT only, so `[db : Db]` over
+;; `(defalias Db (Vec Datum))` was "defdata: field has unrecognized type :Db"
+;; (found rewriting examples/datalog/indexed.tur onto typed data).
+;;
+;; One field per alias shape, each read back after construction:
+;;   Ints -- a type application, stored as the compound form would be
+;;   N, F -- primitives, stored as int / float (7.25: a float, not truncated)
+;;   Pt   -- a nominal struct, stored as the struct itself
+;;   Op   -- a fn type, stored as the fat closure a fn field holds
+
+(defalias Ints (Vec int))
+(defalias N int)
+(defalias F float)
+(defstruct P :copy [x : float y : float])
+(defalias Pt P)
+(defalias Op (fn [int] int))
+
+(defstruct S :copy [xs : Ints n : N f : F p : Pt])
+(defstruct H [op : Op])
+
+(defn main [] : int
+  (let [s (S (:: (vec-new) (Vec int)) 3 7.25 (P 1.5 2.5))]
+    (vec-push! (.xs s) 5)
+    (println (vec-len (.xs s)))   ;; 1
+    (println (.n s))              ;; 3
+    (println (.f s))              ;; 7.25
+    (println (.y (.p s)))         ;; 2.5
+    (vec-free (.xs s)))
+  (let [k 10
+        h (H (fn [x : int] : int (+ x k)))]
+    (println ((.op h) 5)))        ;; 15
+  0)
