@@ -1,0 +1,22 @@
+;; fn-param-stored-in-struct-field-miscompiles: a `(fn ...)` parameter not
+;; marked `^fat` is the two-word poly carrier; storing it into a struct's fn
+;; field used to cast the struct to an integer (a cc error).
+(defstruct F :copy [f : (fn [float] float)])
+(defstruct G [g : (fn [int int] int)  tag : int])
+(defn sq [x : float] : float (* x x))
+(defn mk [f : (fn [float] float)] : F (make-struct F f))
+(defn mk-g [g : (fn [int int] int) tag : int] : G (make-struct G g tag))
+(defn mk-g-kw [g : (fn [int int] int)] : G (make-struct G :g g :tag 7))
+(defn main [] : int
+  (println ((.f (mk sq)) 3.0))
+  ;; a capturing lambda through the same parameter
+  (let [k 2.5]
+    (println ((.f (mk (fn [x : float] : float (* x k)))) 3.0)))
+  ;; a two-argument field, positional and keyword construction
+  (let [h (mk-g (fn [a : int b : int] : int (+ a b)) 1)]
+    (println ((.g h) 20 22))
+    (println (.tag h)))
+  (let [j (mk-g-kw (fn [a : int b : int] : int (* a b)))]
+    (println ((.g j) 6 7))
+    (println (.tag j)))
+  0)

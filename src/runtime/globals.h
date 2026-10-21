@@ -361,9 +361,8 @@ extern bool g_opt_option_niche;
  * cannot reach (the nodes escape their constructor by construction) and RM2
  * cannot own (sharing makes "is this the last reference?" a runtime fact).
  *
- * Off by default and gated behind `--enable=regions`: this is user-visible
- * surface, and it is the reclamation phase most able to produce a silent wrong
- * answer if it rewinds a generation something still points into.  The plan's
+ * This is the reclamation phase most able to produce a silent wrong answer if
+ * it rewinds a generation something still points into.  The plan's
  * safety rule is that a region which cannot PROVE every escaping value
  * relocatable does not rewind at all, so a missed shape costs a saving rather
  * than correctness -- the same discipline turi's value-pool promotion walk

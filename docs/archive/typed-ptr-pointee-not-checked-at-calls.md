@@ -112,5 +112,5 @@ predicate: `[x : ptr<Foo> (mk-bar)]` and `[r : rc<S> (rc/of (U 7))]` are
 `errors/typed-ptr-let-annotation-mismatch` and `errors/rc-let-annotation-mismatch`;
 `typed-ptr-pointee-controls` is the positive control). A call through a
 let-bound lambda is still unchecked:
-[typed-ptr-pointee-not-checked-through-closures](../reported/typed-ptr-pointee-not-checked-through-closures.md).
+[typed-ptr-pointee-not-checked-through-closures](typed-ptr-pointee-not-checked-through-closures.md).
 

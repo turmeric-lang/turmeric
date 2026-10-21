@@ -292,7 +292,7 @@ returns 0 to continue, 1 to fail, 2 to stop successfully.
 |---|---|
 | `PASS_ELABORATE` | `elaborate_program` (macro expansion, typeclasses and refinement discharge happen inside and have their own zones). Then, **outside the list but inside this arm**: `mono_specs_resolve_program` (zone `mono`), `--dump-mono-specs` (flushed), and under `audit-spans` `span_audit_program`, which returns 2 and ends the pipeline |
 | `PASS_KIND_CHECK` | `kind_check_pass`; `--dump-kinds` |
-| `PASS_EFFECT_LOWER` | Builds the `EffectEnv` (builtin `Unsafe`, the capabilities). The `effect_lower` call returns its input unchanged; the CPS/DK backend lowers effects |
+| `PASS_EFFECT_ENV` | Builds the `EffectEnv` (builtin `Unsafe`, the capabilities); the tree is untouched. The CPS/DK backend lowers effects |
 | `PASS_EFFECT_ROW_INFER` | `effect_check_pass`, the effect-row checker; `--dump-effects` |
 | `PASS_CPS` | the `--dump-cps-coloring` (stdout) and `--dump-cps` dumps, `cps_transform`, then `--dump-clone-plan` and the stderr half of `--dump-cps-coloring` |
 | `PASS_BORROW_CHECK` | `borrow_check_program`, then `borrow_check_effect_handler_captures`, then `lifetime_check_program` (the TY4 lifetime pass lives here, not in a pass of its own) |

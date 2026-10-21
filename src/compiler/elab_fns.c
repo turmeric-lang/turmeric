@@ -2859,7 +2859,7 @@ static WfVerdict wf_global_verdict(Elab *e, Binding *fn, const Symbol **uncovere
  * `(.n a)` (a field READ), `(if ...)`, `(do ...)` and `(+ p 1)` are none of
  * them global bindings, so all four declined, and a frame over any body doing
  * ordinary work was silently UNVERIFIED
- * (docs/reported/writes-frame-walk-treats-every-head-as-a-callee.md).
+ * (docs/archive/writes-frame-walk-treats-every-head-as-a-callee.md).
  *
  * On `Expr` each of those is a distinct node kind and the guessing stops.  The
  * decisive case is the dotted head: `(.f x)` is EX_GET_FIELD when `f` is a
@@ -10573,7 +10573,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
 
     /* Phase 19: Parse optional effect-row annotation #{Read Write} or #{e} before return type.
      * Uppercase names are concrete effects; lowercase are row variables.
-     * The row is stored as ERK_UNRESOLVED and resolved after PASS_EFFECT_LOWER. */
+     * The row is stored as ERK_UNRESOLVED and resolved after PASS_EFFECT_ENV. */
     EffectRow *declared_effect_row_defn = NULL;
     /* C2 / #reads: captured here, stamped onto the binding alongside the
      * refine_* metadata below.  1-based; 0 = no #reads annotation. */
@@ -11445,6 +11445,47 @@ Expr *elab_defn(Elab *e, const Form *call) {
                 fn_type_mentions_named(return_fn_type, nm) ||
                 fn_type_mentions_named(return_exists_type, nm)) occ++;
             if (occ >= 2) continue;  /* genuine: relates >=2 type positions */
+            /* unknown-type-annotation-becomes-implicit-tyvar: this is the
+             * typo shape -- say so, with the s-expression spelling when the
+             * name is the prose `option<int>` / `Vec<cstr>` form.  The stdlib
+             * is read on every compile, so a lone name there is not the
+             * user's to hear about. */
+            if (!e->in_stdlib_load) {
+                const char *lt = strchr(nm, '<');
+                size_t hl = lt ? (size_t)(lt - nm) : 0;
+                const char *sx = NULL;
+                if (lt) {
+                    static const char *const heads[][2] = {
+                        { "option", "Option" }, { "result", "Result" },
+                        { "vec", "Vec" }, { "list", "List" },
+                    };
+                    for (size_t hi = 0; hi < sizeof heads / sizeof heads[0]; hi++) {
+                        if (hl == strlen(heads[hi][0]) &&
+                            (strncmp(nm, heads[hi][0], hl) == 0 ||
+                             strncmp(nm, heads[hi][1], hl) == 0)) {
+                            sx = heads[hi][1];
+                            break;
+                        }
+                    }
+                }
+                if (sx)
+                    diag_emit_with_code(DIAG_WARNING, params[i]->span,
+                        TUR_W0045_UNKNOWN_TYPE_NAME_IS_TYVAR,
+                        "parameter '%s' is annotated '%s', which is not a type: "
+                        "it is read as an implicit type variable, so the argument "
+                        "is not checked.  Write the parameterized type as `(%s T)` "
+                        "-- `tur explain TUR-W0045`",
+                        params[i]->name ? params[i]->name->name : "?", nm, sx);
+                else
+                    diag_emit_with_code(DIAG_WARNING, params[i]->span,
+                        TUR_W0045_UNKNOWN_TYPE_NAME_IS_TYVAR,
+                        "parameter '%s' is annotated '%s', which is not a known "
+                        "type and appears nowhere else in the signature: it is "
+                        "read as an implicit type variable, so the argument is "
+                        "not checked.  Check the spelling, or declare it (`[%s]`) "
+                        "to mean a type variable -- `tur explain TUR-W0045`",
+                        params[i]->name ? params[i]->name->name : "?", nm, nm);
+            }
             /* structdef-retirement slice 5 B2 (P1): a single-occurrence bare
              * type-param is an unresolved type variable, not a nominal struct.
              * Emit a named TY_TYVAR carrying the param name rather than the
@@ -13787,8 +13828,18 @@ Expr *elab_fn(Elab *e, const Form *call) {
              * later bare `item : T` value parameter fails to unify against the
              * real opaque/struct type.  Recording it keeps the nominal identity
              * intact across the binding. */
+            /* typed-ptr-pointee-not-checked-through-closures: a typed handle
+             * (`ptr<Foo>`, `rc<Foo>`, `weak<Foo>`) qualifies too -- its bare
+             * kind is the same as `ptr<void>`'s, and the call-site pointee
+             * check (handle_targets_conflict, elab_call.c) reads the pointee
+             * off arg_full_types, so without this a call through a let-bound
+             * lambda accepted a `ptr<Bar>` where a defn with the same
+             * signature refuses it. */
             if (ann->kind == TY_APP || ann->kind == TY_TYVAR || ann->kind == TY_FN ||
                 ann->kind == TY_STRUCT || ann->kind == TY_ADT ||
+                (ann->kind == TY_PTR_VOID && ann->as.ptr.inner) ||
+                ((ann->kind == TY_RC || ann->kind == TY_WEAK) &&
+                 ann->as.rc.inner != TY_UNKNOWN) ||
                 fn_type_has_named_tyvar(ann)) {
                 param_full_types[n_params - 1] = ann;
             }
@@ -13923,7 +13974,7 @@ Expr *elab_fn(Elab *e, const Form *call) {
      * call through mismatched function-pointer types, which
      * -fsanitize=function reports and CFI / CET-BTI / WASM call_indirect
      * reject outright.
-     * See docs/reported/emitter-thunk-type-return-mismatch.md. */
+     * See docs/archive/emitter-thunk-type-return-mismatch.md. */
     bool return_annotated = false;
     Type *return_full_type = NULL;
     Type *return_fn_type = NULL; /* Preserve full TY_FN returns for higher-order calls. */

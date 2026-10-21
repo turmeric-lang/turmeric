@@ -12,9 +12,12 @@ add_compile_definitions(_DEFAULT_SOURCE)
 # Winsock. tur_core is an OBJECT library, so its Winsock dependency does not
 # propagate to the many executables that embed its objects (tur, the tur_*
 # test harnesses). A directory-scoped link_libraries applies to every target
-# defined below, which is the simplest way to cover them all.
+# defined below, which is the simplest way to cover them all.  shlwapi rides
+# along for the interpreter's fs/glob native (interpreter_natives.c), which
+# matches with PathMatchSpecA where POSIX has fnmatch -- the same library the
+# driver already adds to an emitted program's Windows link line.
 if(WIN32)
-    link_libraries(ws2_32)
+    link_libraries(ws2_32 shlwapi)
 endif()
 
 # ---------------------------------------------------------------------------
@@ -251,7 +254,6 @@ set(TUR_CORE_SOURCES
     passes/cps_ir.c
     passes/effect.c
     passes/effect_check.c
-    passes/effect_lower.c
     passes/kind_check.c
     passes/lifetime_elision.c
     passes/lifetimes.c
@@ -702,9 +704,10 @@ target_link_libraries(libturi INTERFACE ${CMAKE_DL_LIBS})
 # overrides auto-registered for every interpreter env), whose math shims
 # reference sqrt/floor -- propagate libm to anyone linking libturi.
 target_link_libraries(libturi INTERFACE m)
-# WIN3: propagate ws2_32 to anyone linking libturi (io_iocp.c uses Winsock).
+# WIN3: propagate ws2_32 to anyone linking libturi (io_iocp.c uses Winsock),
+# and shlwapi for the fs/glob native's PathMatchSpecA.
 if(WIN32)
-    target_link_libraries(libturi INTERFACE ws2_32)
+    target_link_libraries(libturi INTERFACE ws2_32 shlwapi)
 endif()
 
 # I4: libturi carries the JIT engine when the build has one.  PUBLIC on both
@@ -763,11 +766,11 @@ set(TURT_RUNTIME_SOURCES
     # libc until installed; a stdlib autolink marker compiles it beside hamt.c,
     # tur_string.c and symbols.c in bare-source mode.
     runtime/rt_alloc.c
-    # RM3 regions: an emitted spine ctor calls tur_region_alloc_or_malloc when
-    # --enable=regions is on, so the definition has to be linkable by the
+    # RM3 regions: every emitted spine ctor calls tur_region_alloc_or_malloc
+    # (regions are on by default), so the definition has to be linkable by the
     # program, not only by the compiler.  Same reasoning as the rc/gc members
-    # above; with the flag off nothing references it and the linker never
-    # extracts this member.
+    # above; only a TUR_REGIONS=0 build leaves it unreferenced, and then the
+    # linker never extracts this member.
     runtime/region.c
     runtime/arena.c
     # o0-build-cannot-link-contract-handler: stdlib/contract.tur's

@@ -24,15 +24,16 @@
  * There are no partial rewinds and no best-effort.  A shape the escape check
  * cannot handle costs a SAVING, never correctness -- the same discipline
  * turi's value-pool promotion walk runs on ("a missed shape means this eval
- * does not shrink, never use-after-reset").  R1 ships the mechanism with the
- * rule enforced the only way it can be before the escape check exists: a pop
- * rewinds only when the caller has vouched for the generation
- * (`tur_region_pop_reclaim`), and the plain `tur_region_pop` does not rewind
- * at all.  R3 replaces the caller's word with a proof.
+ * does not shrink, never use-after-reset").  A pop rewinds only through
+ * `tur_region_pop_checked`, after both locks pass (the static walk over the
+ * bracket's result type, and the runtime escape note below); `tur_region_pop`
+ * is what the emitter spells when the static walk refuses, and on the catch
+ * boundary, and it never rewinds.
  *
  * The Debug arena poisons reclaimed bytes, so a value that outlives its region
  * crashes loudly under ASan rather than reading stale-but-mapped data.  That
- * backstop is why this is shippable behind a flag at all; do not disable it. */
+ * backstop is part of why regions could graduate to on by default; do not
+ * disable it. */
 #include <stdbool.h>
 #include <stddef.h>
 
@@ -58,8 +59,9 @@
 TUR_RT_API int  tur_region_push(void);
 
 /* Pop WITHOUT reclaiming: the generation's memory stays live for the process.
- * The conservative default, and what R1 uses everywhere -- correctness with no
- * saving, which is the safe half of the rule above.
+ * What the emitter spells when the static walk refuses the bracket's result
+ * type, and on the catch boundary -- correctness with no saving, which is the
+ * safe half of the rule above.
  *
  * Every pop tolerates a stack DEEPER than `depth`: the generations above it
  * had their pops skipped (a panic unwound through their brackets), and they
@@ -67,12 +69,6 @@ TUR_RT_API int  tur_region_push(void);
  * jammed on a stale innermost generation.  A `depth` deeper than the stack is
  * a spent handle and a no-op. */
 TUR_RT_API void tur_region_pop(int depth);
-
-/* Pop AND rewind, unconditionally.  The caller asserts that nothing allocated
- * in this generation is still reachable.  Prefer `tur_region_pop_checked`,
- * which asks rather than asserts; this one remains for a caller that owns both
- * ends of the scope and has its own proof. */
-TUR_RT_API void tur_region_pop_reclaim(int depth);
 
 /* --- R3: the escape check ---------------------------------------------- *
  *
@@ -169,9 +165,9 @@ TUR_RT_API int  tur_region_depth(void);
 TUR_RT_API void tur_region_shutdown(void);
 
 /* Call `cb` on the used memory of every live and retired generation on this
- * thread (a pooled, rewound one is dead memory and is skipped).  The r7rs-gc
- * experiment's collector reads these as roots: a node built in a bracket can
- * point at an object on the collected heap. */
+ * thread (a pooled, rewound one is dead memory and is skipped).  The r7rs
+ * collector reads these as roots: a node built in a bracket can point at an
+ * object on the collected heap. */
 TUR_RT_API void tur_region_each_used(void (*cb)(const void *p, size_t n, void *ud),
                                      void *ud);
 

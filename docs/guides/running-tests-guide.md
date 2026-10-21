@@ -234,7 +234,7 @@ removes a check.
 | `expected.stdout` | The program's exact output. Without it the output is not checked at all |
 | `expected.exit` | The expected exit status (default 0) |
 | `expected.stderr` | Substrings that must appear in stderr, one per line (`run.sh` and `run-turi.sh`) |
-| `unexpected.stderr` | Substrings that must NOT appear in stderr (`run.sh`), one per line -- pins a false diagnostic's absence |
+| `unexpected.stderr` | Substrings that must NOT appear in stderr (`run.sh` and `run-turi.sh`), one per line -- pins a false diagnostic's absence |
 | `expected.diag` | Negative fixtures: substrings the compiler's diagnostics must contain, one per line |
 | `unexpected.diag` | Negative fixtures (`run.sh`): substrings that must NOT appear beside the expected error, one per line -- pins a false diagnostic that used to accompany a real one |
 | `expected.c` | Codegen snapshot, compared on every run. `TUR_TEST_SUITE=snapshots` runs only these; regenerate with `tur run regen-snapshots` |

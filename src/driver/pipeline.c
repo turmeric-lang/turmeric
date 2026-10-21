@@ -17,7 +17,6 @@
 #include "effect.h"       /* built-in effect registration */
 #include "kind_check.h"   /* Phase HKT H0: kind inference pass */
 #include "compiler/emit_split.h" /* r7rs-programs-compile-slowly */
-#include "effect_lower.h" /* Phase 19: Effect lowering */
 #include "forms.h"
 #include "pass.h"         /* Phase P19-1: pass scheduling */
 #include "prof.h"         /* profiling-plan C0+C1: --timings */
@@ -56,7 +55,7 @@ int  g_audit_span_holes = 0;
 static const PassKind core_passes[] = {
     PASS_ELABORATE,
     PASS_KIND_CHECK,
-    PASS_EFFECT_LOWER,
+    PASS_EFFECT_ENV,
     PASS_EFFECT_ROW_INFER,  /* effect_check_pass: effect-row inference and checking */
     PASS_CPS,
     PASS_BORROW_CHECK,
@@ -70,7 +69,7 @@ static ProfZone pass_zone(PassKind k) {
     switch (k) {
     case PASS_ELABORATE:        return PROF_ELAB;
     case PASS_KIND_CHECK:       return PROF_KIND;
-    case PASS_EFFECT_LOWER:     return PROF_EFFECT_LOWER;
+    case PASS_EFFECT_ENV:       return PROF_EFFECT_ENV;
     case PASS_EFFECT_ROW_INFER: return PROF_EFFECT_ROW;
     case PASS_CPS:              return PROF_CPS;
     case PASS_BORROW_CHECK:     return PROF_BORROW;
@@ -139,23 +138,18 @@ static int run_core_pass(PassContext *ctx, PassKind kind) {
             assert(kind_verify_program(ctx->prog) && "Kind info cleared after PASS_KIND_CHECK");
 #endif
             break;
-        case PASS_EFFECT_LOWER:
+        case PASS_EFFECT_ENV:
             /* Builds the EffectEnv (builtin Unsafe and the capabilities) that
-             * later passes read.  effect_lower is an identity walk -- the
-             * CPS/DK backend lowers effects. */
+             * later passes read.  The tree is untouched: the CPS/DK backend
+             * lowers effects.  Until 2026-10-21 this arm was PASS_EFFECT_LOWER
+             * and also called effect_lower, an identity walk
+             * (docs/archive/effect-lower-is-an-identity-pass.md). */
             ctx->effect_env = effect_env_new(ctx->arena);
             effect_env_register_builtin_unsafe(
                 ctx->effect_env, ctx->arena,
                 symtab_intern(ctx->st, strslice(EFFECT_NAME_UNSAFE, 6)));
             effect_env_register_builtin_capabilities(ctx->effect_env, ctx->arena,
                                                      ctx->st);
-            ctx->prog = effect_lower(ctx->arena, ctx->st,
-                                     ctx->prog, ctx->effect_env);
-            if (!ctx->prog || diag_had_error()) return 1;
-#ifndef NDEBUG
-            /* Phase HKT-P6: verify kind info preserved after effect-lower */
-            assert(kind_verify_program(ctx->prog) && "Kind info cleared after PASS_EFFECT_LOWER");
-#endif
             break;
         case PASS_EFFECT_ROW_INFER:
             /* P19-2: effect-row inference and validation pass. */

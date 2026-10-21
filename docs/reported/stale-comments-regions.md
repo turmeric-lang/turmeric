@@ -1,5 +1,17 @@
 # Regions comments still describe `--enable=regions`, a flag that no longer exists
 
+**Narrowed 2026-10-21: one structural item stays open.** Items 1-10 and 12
+landed, with item 13's second bullet: `emit_embedded_runtime_source` strips
+`/* ... */` and `//` comments (outside string and character literals, line
+breaks kept) from the pasted runtime sources, so a comment edit in
+`region.h`, `arena.{h,c}`, `region.c` or `r7gc.c` no longer touches the
+`expected.c` snapshots or the split hash; the one-time regen that landed it
+absorbed items 1-4. `tur_region_pop_reclaim` is gone (the checked pop's
+private rewind step, `region_pop_rewind`), and `tests/region_unit.c` asserts
+through `tur_region_pop_checked`. Item 11 is its own report. What remains is
+item 13's first bullet: one `emit_heap_ctor_body` for the three heap-ctor
+emitters, whose "mirror each other" comments now at least count three.
+
 **Severity:** low (comment accuracy). One item proposes merging three copies of
 a code emitter whose comments exist to keep them in step. Filed 2026-10-17
 from the "Trust the code over the comments" note in
@@ -152,6 +164,10 @@ This is already filed with its fix as
 It is listed here only so this report is complete; fix it there.
 
 ### 12. `hamt.c:10`: a citation that resolves nowhere
+
+> **Resolved 2026-10-21:** `hamt.c` and `hamt.h` now point at
+> `docs/guides/hamt-guide.md` and name the region store hooks; the dead-citation
+> lint `tests/check-src-doc-citations.sh` catches the next one.
 
 - **Says:** "See docs/hamt-plan.md for full design and phase breakdown."
 - **Code:** no `hamt-plan.md` exists anywhere under `docs/`. The file header

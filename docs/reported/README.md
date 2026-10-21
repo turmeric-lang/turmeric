@@ -39,7 +39,6 @@ directory is worse for triage than no index.
 | Report | Severity | One line |
 | --- | --- | --- |
 | [any-widen-deep-drop-frees-borrowed-children](any-widen-deep-drop-frees-borrowed-children.md) | low (open residue; was high) | **Use-after-frees FIXED 2026-10-21.** A widen copies a header into a fresh box, and the deep `__tur_any_drop` then freed children a live local still owned: through `returns_fresh_any`, through `any_expr_is_owned_temp`, and through a widen stored into a sibling's `:any` field. Heap-use-after-free in plain Turmeric (silent without ASan); a Saffron default build's collector hid it. All three now decline the free, and `run-leak-check.sh` no longer lets `known-leak` excuse a non-leak. Open: the declined boxes leak (`any-widen-deep-drop-plain-turmeric`, `any-widen-fresh-payload-aliases` are `known-leak`); deep freshness or a call-site shallow drop would close it. |
-| [manifest-read-leaves-a-dangling-file-registration](manifest-read-leaves-a-dangling-file-registration.md) | low (latent) | `pkg_manifest_read` registers a stack-local `SourceFile` as file 0 and never unregisters it, so a `SPAN_UNKNOWN` diagnostic emitted after a manifest read and before a `diag_reset()` prints a path out of a dead frame (ASan stack-buffer-overflow). Every compile entry point resets first, so nothing trips it today; the interpreter's new TUR-E0624 refusal did until it reset too. |
 | [byval-spine-drop-past-early-exit](byval-spine-drop-past-early-exit.md) | low | **Faces i and ii FIXED** (tail self-call on `main`; explicit `return` 2026-10-21, both glue paths, `byval-spine-drop-past-early-exit` leak-clean). Open: a loop whose parameters are not all numbers keeps leaking its spine per turn, because the gates refuse on the signature rather than on whether a back-edge argument aliases the spine; `byval-spine-drop-refused-nonscalar-param` is `known-leak`. |
 
 ## Found executing the open reports (filed 2026-10-21)
@@ -52,16 +51,12 @@ directory is worse for triage than no index.
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [fn-param-stored-in-struct-field-miscompiles](fn-param-stored-in-struct-field-miscompiles.md) | low-medium | `(defn mk [f : (fn [float] float)] : F (make-struct F f))` type-checks and cc rejects it (`aggregate value used where an integer was expected`): a non-`^fat` fn param is the two-word `tur_poly_fn_t` carrier, and the constructor field sink casts it to `int64_t` instead of boxing it with `EX_POLY_TO_FAT` as a type-variable slot does. `^fat f` works around it. |
-| [unannotated-method-receiver-option-result-untyped](unannotated-method-receiver-option-result-untyped.md) | low | A class method written `(cats [r] : (Option int))` -- receiver unannotated -- is classified return-directed, and a call on a concrete value types as a def-less `(? ?)`, so `(unwrap-or (cats 3) -1)` is TUR-E0001. `[r : a]` (as `defclass`'s docs write it), an ascription, or a call through `open` all work. |
-| [letrec-struct-arg-and-env-leak](letrec-struct-arg-and-env-leak.md) | low-medium | A by-value struct argument to a `letrec` closure is malloc-boxed at the call and never freed (per iteration when the self-call is not a loop), and a `letrec` whose body opens a captured existential and takes a struct argument never drops its env. Found by LeakSanitizer in tur-plot's folds, which are now top-level `defn`s. |
-| [macro-expansion-as-call-arg-blamed-on-template](macro-expansion-as-call-arg-blamed-on-template.md) | low | `(total (vec-of (Q 3.25)))` where `total` wants `(Vec P)` reports the TUR-E0001 at `stdlib/vec.tur:501`, the root of `vec-of`'s template, with no note naming the user's call: the expansion's Expr keeps the template span, and the enclosing arg check fires after the "in expansion of" window closes. A mismatch inside the expansion is attributed correctly. |
+| [letrec-struct-arg-and-env-leak](letrec-struct-arg-and-env-leak.md) | low-medium (narrowed 2026-10-21: the struct-argument box is fixed; the env leak with `open` remains) | A by-value struct argument to a `letrec` closure is malloc-boxed at the call and never freed (per iteration when the self-call is not a loop), and a `letrec` whose body opens a captured existential and takes a struct argument never drops its env. Found by LeakSanitizer in tur-plot's folds, which are now top-level `defn`s. |
 
 ## Found writing the typeclass API docs (filed 2026-10-19)
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [api-docs-miss-language-primitives](api-docs-miss-language-primitives.md) | medium (documentation) | **Narrowed 2026-10-19:** every public compiler builtin has an API entry (`stdlib/forms/`, `;;@builtin` / `;;@form` declarations read by gendocs), stdlib entries win over the one-line C table, and `tur_forms_documented_lint` keeps the set from drifting; left: 100 special forms, listed in `tests/forms-undocumented.txt`. Original row: The API site documents none of the ~137 special forms or ~40 compiler builtins, and `(doc ...)` has a one-liner for only 32 forms (`shift`, `handle-shallow`, `ptr-*`, `raw-*`, `transmute`, `rc/of`, ... have nothing); `deftype`/`defdynamic`/`def`/`defalias` never render (the `tur/refine` page is empty); generic structs lose their fields, `defdata` its payloads, `defgadt` reads result types as constructors, `defeffect`/`defopaque` lose their declarations; and `char=?` is published as `char`. Groups 2-4 are `tools/gendocs.py` fixes; group 1 needs a decision on where primitive docs live. |
 
 ## Found surveying guide coverage of the language primitives (filed 2026-10-19)
 
@@ -104,7 +99,6 @@ directory is worse for triage than no index.
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [turi-stdlib-hof-effectful-callback-false-w0033](turi-stdlib-hof-effectful-callback-false-w0033.md) | low (diagnostic noise) | Under `tur --interpret`, a `handle` around a stdlib higher-order call (`option-map`, `with-region`, `bt-scope`) whose lambda performs the effect warns TUR-W0033 "unreachable"; the program is correct. The per-turn effect pass does not index the stdlib's preload-turn definitions, so the fn-argument row charge (`effect_check.c:469`, `if (callee && ...)`) never runs. `tur check` / `tur run` are clean. |
 
 ## Found porting `tools/check-guide-pairs` to Turmeric (filed 2026-10-17)
 
@@ -130,12 +124,9 @@ keep it at zero.
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [stale-comments-emitter](stale-comments-emitter.md) | low | `emit_value_dispatch` "~10k lines over 124 cases" (12,965 over 120). The "Final assembly order" lists 9 bands; the code writes about 21. `emit_join_coerce` is `bridge_control_result_int_ptr`. `emit_effects.c`'s header names a deleted runtime. `emit_internal.h`'s "emit_core.c" section holds about 133 prototypes defined elsewhere. Plus tombstones, missing names and 12 dead citations |
-| [stale-comments-package-manager](stale-comments-package-manager.md) | low | `PkgLockEntry.sha256` "SHA-256 of the archive" is a `tree1:` hash, a git-SHA fallback, or (cmake) `:resolved` again. `pkg.h` says cmake deps are pinned. `pkg_sha256_file` is dead. The user guides' lockfile samples show shapes `tur` never writes (sweet-exp, `:subdir`). **Decided 2026-10-17:** drop the duplicate `:sha256` from cmake rows |
-| [stale-comments-runtime-preamble](stale-comments-runtime-preamble.md) | low | Four comments (`rt_split_embed.h`, `emit_rt_split_source`'s own header, `cmd_emit_rt_split`, `cmd_jit`) say a missing runtime archive disengages S2, but `emit_rt_split_source` forces the posture. A redundant setter call; proposes a table for the forced-input set (the misplaced doc comment, item 5, is fixed) |
+| [stale-comments-emitter](stale-comments-emitter.md) | low (narrowed 2026-10-21: three structural items remain) | The comment items are fixed and `tests/check-src-doc-citations.sh` now catches a dead `docs/` citation in `src/`. Open: pull the ~20-band final assembly of `emit_program_inner` into an `emit_program_assemble` over a struct of bands (and re-check the guide's "Output bands" table), fold the three copies of the "recorded spelling, else representation" question into one `emit_value_spelled_ctype` helper, and re-sort `emit_internal.h` into real per-file sections (its "emit_core.c" banner covers 239 prototypes, 133 defined elsewhere). |
 | ~~[stale-comments-build-driver](../archive/stale-comments-build-driver.md)~~ | low | **RESOLVED 2026-10-21** (archived, main-c-split-plan Phase 0): the comments are fixed, the add-a-pass recipe names all four places, the two dead `needs_hamt` fields are gone, and `begin_compile_unit()` is the one per-unit reset. Deleting `effect_lower` moved to its own report |
-| [effect-lower-is-an-identity-pass](effect-lower-is-an-identity-pass.md) | low | `PASS_EFFECT_LOWER` builds the `EffectEnv`; its `effect_lower` call rebuilds the tree and lowers nothing (the CPS/DK backend does). The one difference deleting it makes: `EX_DISCONTINUE` keeps its own type instead of `TYPE_NIL`. **Decided 2026-10-17:** investigate deleting it |
-| [stale-comments-regions](stale-comments-regions.md) | low | Eight comments still describe `--enable=regions` (`region.h`, `types.h`, `globals.h`, `emit_cps_ir.c`, `preload.c`, `stdlib_autoload.c`, both CMakeLists). The heap ctor emitters say "two" copies and a "default malloc". Notes that `region.h` edits regen 157 snapshots plus the S2 hash, and proposes one ctor-body helper plus comment-stripping at embed time. **Decided 2026-10-17:** strip comments at embed time, first |
+| [stale-comments-regions](stale-comments-regions.md) | low (narrowed 2026-10-21: one structural item remains) | The `--enable=regions` comments are fixed and the embedded runtime sources are pasted with comments stripped, so a comment edit there no longer costs a snapshot regen. Open: one `emit_heap_ctor_body` for the three heap-ctor emitters (`emit_adt_typedef_and_ctors`, the monomorph ctor in `types.c`, `emit_program_inner`), which write the same body and have drifted twice. |
 | ~~[stale-comments-diagnostics](../archive/stale-comments-diagnostics.md)~~ | low / low-medium | **RESOLVED 2026-10-18** (archived): `--Werror=deprecated` promotes D0002/D0003 through one helper, `elab_deprecation_level()`; `tur explain TUR-D0001` describes an error; `tur explain` (and the REPL's bare `:explain`) accept `I` codes, and TUR-I0379 has an entry; the stale comments are fixed. Pinned by `errors/deprecated-fx-row-{hash,at}-as-error` and four `run-flags.sh` explain checks |
 
 ## Found planning `wss://` for tur-nng (filed 2026-10-17)
@@ -149,9 +140,7 @@ on `main` 3d9e02a2.
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [cmake-deps-duplicate-keeps-first-options](cmake-deps-duplicate-keeps-first-options.md) | medium | Two spices declaring one `:cmake-deps` name with the same `:url` / `:ref` but different `:options` (or `:wasm-options`, `:targets`, ...): the copy collected first is built and the other is dropped silently (`append_cmake_dep_with_conflict_check`, `pkg.c:3634`). Which one wins depends on the consumer's `:spices` order. Live as `mbedtls` (http / tls / ws-client, equivalent today) and `raylib` (`sdf-raylib`'s copy lacks the web options) |
-| [cmake-deps-no-cross-spice-override-or-order](cmake-deps-no-cross-spice-override-or-order.md) | low | Expressiveness hole: a spice cannot override an option on a dependency another spice declares (the `:override` the transitive-cmake-deps plan anticipated), and its own entries are always configured before its `:spices`' entries, so `if (TARGET mbedtls)` in its CMake misses a dependency's mbedTLS. Why `wss://` is not a separate spice |
-| [cmake-dep-link-walk-stops-at-archive](cmake-dep-link-walk-stops-at-archive.md) | medium | `_tur_walk_iface` stops at a linkable archive, so when a later entry's static library needs an earlier entry's archives, only the first is repeated after it and GNU ld fails with undefined references. Latent until nng links mbedTLS; workaround is listing the targets on the consuming entry |
+| ~~[cmake-deps-no-cross-spice-override-or-order](../archive/cmake-deps-no-cross-spice-override-or-order.md)~~ | low | **RESOLVED 2026-10-21** (archived): the collector keeps the `:spices` graph, configures entries in post-order (a spice's dependencies before it, the root last) and writes the link manifest the other way round; an option two declarations disagree on goes to the one that depends on every other setter, so a spice overrides its dependency and the root settles anything. Two unrelated spices still conflict. Pinned by `run-transitive-cmake-deps.sh` `cmake-deps-dependent-overrides-option`, `cmake-deps-root-overrides-option`, `cmake-deps-dependencies-configure-first` |
 | ~~[cmake-dir-markers-print-link-flag-warnings](../archive/cmake-dir-markers-print-link-flag-warnings.md)~~ | low | **RESOLVED 2026-10-18** (archived): `_tur_walk_iface` drops `^::@` entries, and the manifest consumer skips tokens it would drop anyway (`link_flag_token_skipped`) before the shell-syntax check, so no "dropping link flag" warning for a marker. Pinned by `spice-resolver-tests.sh` `cmake-dir-markers-dropped-without-a-warning` |
 | ~~[cmake-dep-path-through-missing-cmake-dir](../archive/cmake-dep-path-through-missing-cmake-dir.md)~~ | medium | **RESOLVED 2026-10-18** (archived): when `realpath()` fails, the `<spice>/cmake/<path>` join is collapsed lexically (`path_collapse_dots`), so a dependency spice's `:path` cmake-dep no longer needs its gitignored `cmake/` to exist. Pinned by `spice-resolver-tests.sh` `cmake-dep-path-through-missing-cmake-dir` |
 
@@ -165,7 +154,7 @@ on `main` 3d9e02a2.
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [turi-fiber-handle-defers-fire-at-the-wrong-time](turi-fiber-handle-defers-fire-at-the-wrong-time.md) | low-medium (engine divergence) | Under `tur --interpret`, a `handle` whose body has a pending `defer` takes the single-shot fiber runtime, and the defer fires at the next enclosing scope exit: after the abortive case's value, or even when a stored `k` is never resumed. Compiled fires it at the case's return, and multi-shot over such a body is refused. Filed while fixing the stored-`k` use-after-free (archived). |
+| [turi-fiber-handle-defers-fire-at-the-wrong-time](turi-fiber-handle-defers-fire-at-the-wrong-time.md) | low-medium (engine divergence; narrowed 2026-10-21: the abortive case is fixed, the stored-`k` case remains) | Under `tur --interpret`, a `handle` whose body has a pending `defer` takes the single-shot fiber runtime, and the defer fires at the next enclosing scope exit: after the abortive case's value, or even when a stored `k` is never resumed. Compiled fires it at the case's return, and multi-shot over such a body is refused. Filed while fixing the stored-`k` use-after-free (archived). |
 
 ## Found revisiting the two dynvar plans (filed 2026-10-17)
 
@@ -202,7 +191,6 @@ on `main` 3d9e02a2.
 | Report | Severity | One line |
 | --- | --- | --- |
 | ~~[typed-ptr-pointee-not-checked-at-calls](../archive/typed-ptr-pointee-not-checked-at-calls.md)~~ | medium (silent loss of type checking) | **RESOLVED 2026-10-21** (archived): the call check compares a `ptr<T>` / `rc<T>` / `weak<T>` parameter's target after the kind match (`handle_targets_conflict`; untyped `ptr<void>` and open pointees still match anything), forward declarations carry typed-pointer parameters, and a `: ptr<Foo>` return refuses a `ptr<Bar>` body. Pinned by `errors/typed-ptr-pointee-mismatch` (+`-forward`, `-return`) and `errors/rc-target-mismatch` |
-| [typed-ptr-pointee-not-checked-through-closures](typed-ptr-pointee-not-checked-through-closures.md) | low-medium | Narrowed from typed-ptr-pointee-not-checked-at-calls: `(let [f (fn [x : ptr<Foo>] : int 1)] (f (mk-bar)))` is accepted -- the closure-call path has no declared full type to compare, so a `ptr<Bar>` goes into a `ptr<Foo>` lambda parameter (a defn with the same signature is TUR-E0001) |
 
 ## Found writing the CPS/DK internals guide (filed 2026-10-16)
 
@@ -331,7 +319,6 @@ hits under ASan.
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [fs-functions-compiled-only](fs-functions-compiled-only.md) | medium (engine parity) | 25 of `stdlib/fs.tur`'s 29 inline-C functions (and `fs/read-string`) have no interpreter native, so `fs/read-text`, `fs/write-text`, `fs/exists?`, even `fs/path-join`, fail under `--interpret` and in `tur repl` with "inline-C not supported in interpreter mode". Only the `fs/tmpfile*` four are registered. |
 
 ## Found running the performance audit's WP0 corpus (filed 2026-10-14)
 
@@ -348,7 +335,7 @@ have no report: see the plan's section 5.
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [generic-returned-lambda-builds-heap-app](generic-returned-lambda-builds-heap-app.md) | medium | A lambda RETURNED by a generic whose body builds a `:heap` parametric value (`(make-struct Box :v y)`, `tcons-of`) is lifted once at the carrier ABI and calls the dead base constructor; a captured float stored that way prints garbage. A lambda stored into a record field is fine. |
+| ~~[generic-returned-lambda-builds-heap-app](../archive/generic-returned-lambda-builds-heap-app.md)~~ | medium | **RESOLVED 2026-10-21** (archived): `emit_abi_register_call` clones a returned lambda per spec when its annotated result grounds to a parametric `:heap` application, also when the lambda captures nothing (a lifted `__fn_N` the body only names); an annotated clone whose capture changes representation takes its own env. Pinned by `generic-returned-lambda-heap-app` (both engines) |
 | ~~[bare-parametric-instance-ctor-arg-unbridged](../archive/bare-parametric-instance-ctor-arg-unbridged.md)~~ | low-medium | **RESOLVED 2026-10-21** (archived): the monomorph-ctor argument loop reads a bare identifier's emitted C type through `emit_ident_emitted_ctype`, which knows the enclosing function's parameters, so the erased method's carrier `ks` is bridged into the typed `kids` slot. Pinned by `bare-parametric-instance-ctor-arg` (`hook.sh`, built unpruned)
 
 ## Found by the performance audit's WP2 (filed 2026-10-14)
@@ -411,7 +398,6 @@ not fixed there.
 | ~~[cont-query-on-wrapped-handler-k-reads-past-wrapper](../archive/cont-query-on-wrapped-handler-k-reads-past-wrapper.md)~~ | medium (out-of-bounds read) | **RESOLVED 2026-10-13** (archived): both `cont?` lowerings call `__dk_cont_live_word`, which checks for a `__dk_cont_fn` wrapper before reading `consumed` off a bare chain; a wrapper is live before and after a resume. Pinned by `cont-query-wrapped-handler-k` (leak-checked) |
 | ~~[resume-of-non-continuation-int-crashes](../archive/resume-of-non-continuation-int-crashes.md)~~ | low-medium | **RESOLVED 2026-10-17** (archived): a literal `k` is TUR-E0001; at run time a first-page word is reported (`resume: not a continuation`) and `cont?` of it is false. Pinned by `resume-of-non-continuation-reports` and `errors/resume-of-literal-refused` |
 | ~~[effect-cont-aggregate-result-untyped](../archive/effect-cont-aggregate-result-untyped.md)~~ | low | **RESOLVED 2026-10-13** (archived): the cont type carries the whole written result type (`Type.as.cont.returns_full`), which `elab_make_resume` prefers to the scalar ladder, so an aggregate resume is typed and crosses the slot boxed. Pinned by `effect-cont-aggregate-result` (leak-checked) |
-| [unknown-type-annotation-becomes-implicit-tyvar](unknown-type-annotation-becomes-implicit-tyvar.md) | low (policy) | `[k : zork]` -- any unknown type name, capitalized too -- is an implicit type variable, so a typo is never reported; KB-026 finds the single-occurrence case but demotes it to another tyvar. The commonest instance is `option<T>` / `Option<T>` / `vec<T>`, the spelling CLAUDE.md uses: none of them is a type, so the parameter is unchecked (2026-10-17 note). |
 
 ## Found fixing resume-of-cont-typed-param-is-a-no-op (filed 2026-10-12)
 

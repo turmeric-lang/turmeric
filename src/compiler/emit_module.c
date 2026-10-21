@@ -420,9 +420,8 @@ static bool thunk_type_has_concrete_c_abi(Type t, bool result_pos) {
              * An UNAPPLIED or non-concrete app has no such typedef.  The
              * predicate for "this app names a real monomorph" is
              * `type_app_is_concrete_adt`, NOT
-             * `type_has_concrete_codegen_layout` -- the latter answers false
-             * for every TY_APP by design (its struct-app branch defers to
-             * `type_extract_struct_app`), so gating on it reads as "no
+             * `type_has_concrete_codegen_layout` -- the latter's TY_APP arm
+             * returns false unconditionally, so gating on it reads as "no
              * parametric app ever has a C ABI" and reinstates the bug.
              *
              * Admitted only PAST the 16-byte sret threshold
@@ -3992,11 +3991,6 @@ static bool emit_abi_type_has_concrete_named_tyvar(const Type *t) {
     }
 }
 
-/* GS5/CS3: emit_abi_collect_type_bindings / emit_abi_find_type_binding used to
- * live here as a duplicate of elab_call.c's substitution machinery. They have
- * been removed -- elab now attaches the substitution to EX_CALL via
- * call_.abi_bindings, and emit_abi_register_call consumes that directly. */
-
 /* set-add-elem-hash-disagrees-with-set-member: does `t` mention ANY type
  * variable, named or not?  The two predicates above ask about NAMED tyvars,
  * which is the right question for "does this call need specializing" -- but
@@ -4200,11 +4194,8 @@ static void emit_abi_unify_collect(const Type *pattern, const Type *concrete,
                                binds, n_binds, max_binds);
         return;
     }
-    /* structdef-retirement DS-D: the former TY_STRUCT concrete-monomorph arm
-     * (recovering spine elements from a struct-headed app via
-     * type_extract_struct_app) is dead -- no Type has kind TY_STRUCT.  A
-     * monomorphized parametric aggregate is a record ADT and matches through the
-     * TY_APP/TY_APP arm above. */
+    /* A monomorphized parametric aggregate is a record ADT and matches through
+     * the TY_APP/TY_APP arm above; no Type has kind TY_STRUCT. */
 }
 
 static const Expr *emit_abi_find_fn_expr(const Expr **items, uint32_t n_items, const Binding *binding) {
@@ -5779,6 +5770,28 @@ static const Symbol *emit_arena_symbol(Arena *arena, const char *s) {
     return sym;
 }
 
+/* generic-returned-lambda-builds-heap-app: does a capture of the lifted
+ * closure change its C representation under `bindings`?  `(fn [y : A] ...
+ * x)` capturing `x : A` holds an `int64_t` carrier slot in the base env and a
+ * `double` under A = float; a clone that shares the base env reads the
+ * float's bit pattern back as an integer. */
+static bool emit_inner_captures_change_repr(const FnDef *inner_fd,
+                                            const AbiTypeBinding *bindings,
+                                            uint8_t n_bindings, Arena *arena) {
+    if (!inner_fd || !inner_fd->closure || !bindings || n_bindings == 0)
+        return false;
+    const struct Closure *clo = inner_fd->closure;
+    for (uint8_t i = 0; i < clo->n_captures; i++) {
+        const Binding *cap = clo->captures[i];
+        if (!cap || !emit_abi_type_has_any_tyvar(&cap->type)) continue;
+        Type inst = emit_abi_instantiate_type(&cap->type, bindings, n_bindings,
+                                              arena);
+        if (strcmp(type_c_name(inst), type_c_name(cap->type)) != 0)
+            return true;
+    }
+    return false;
+}
+
 /* poly-closure-result-specialization: build and assign the suffixed env-struct
  * name (`__env_N__spec__<res>`) for an inner-closure body spec, so a register-
  * class- or layout-changing specialization gets its own struct instead of
@@ -5904,10 +5917,10 @@ static bool emit_inner_closure_needs_float_spec(Binding *inner,
  * clone) when the redirect applies. */
 static bool emit_abi_try_byval_twin_redirect(EmitCtx *ctx, const Expr *call,
                                              const Expr **items, uint32_t n_items) {
-    /* structdef-retirement DS-D: the by-value twin redirect applied only to a
-     * struct-headed receiver app (type_extract_struct_app), which can no longer
-     * form -- no Type has kind TY_STRUCT.  A parametric aggregate is a record
-     * ADT with its own monomorph ABI, so this redirect never fires. */
+    /* The by-value twin redirect applied only to a struct-headed receiver app,
+     * which can no longer form -- no Type has kind TY_STRUCT.  A parametric
+     * aggregate is a record ADT with its own monomorph ABI, so this redirect
+     * never fires. */
     (void)ctx; (void)call; (void)items; (void)n_items;
     return false;
 }
@@ -7878,7 +7891,55 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
                 inner_app_annotated = true;
         }
     }
-    if (inner_float || inner_app || inner_app_annotated) abi_changes = true;
+    /* generic-returned-lambda-builds-heap-app: the third annotated shape.  A
+     * returned lambda written `(fn [y : A] : (Box A) (make-struct Box :v y))`
+     * whose result grounds to a parametric `:heap` application -- a pointer
+     * on every instantiation, so neither gate above fires -- still names the
+     * BASE constructor `ctor_Box_Box` from the one shared thunk, which a
+     * parametric `:heap` type never defines (the dead-base abort), and its
+     * env keeps a captured `A` as the int64 carrier (a float read back as
+     * its bit pattern).  Clone it per spec like inner_app: its own env, its
+     * body scanned under the clone's bindings, and the spec matched on
+     * bindings, since `int` and the carrier spell alike and would otherwise
+     * collapse the int instantiation onto the base. */
+    bool inner_app_heap = false;
+    /* A lambda that captures nothing is lifted to a global `__fn_N` and the
+     * body just names it, so returns_closure_fn_binding stays NULL.  Its
+     * clone is found by name -- atom_var's emit_reresolve_fn_value picks the
+     * spec of `__fn_N` interned under the outer spec's bindings -- so the
+     * only thing missing is recognising it here.  Taken only for the two
+     * annotated application gates; the float / unannotated paths keep
+     * their established shapes. */
+    Binding *lifted_ret = NULL;
+    if (!inner_closure && !borrow_path && fd && fd->body && n_bindings > 0) {
+        const Expr *rb = fd->body;
+        while (rb && (rb->kind == EX_ASCRIBE || rb->kind == EX_REINTERPRET))
+            rb = rb->kind == EX_ASCRIBE ? rb->as.ascribe_.inner
+                                        : rb->as.reinterpret_.expr;
+        if (rb && rb->kind == EX_VAR && rb->as.var.binding &&
+            rb->as.var.binding->is_lifted_lambda &&
+            rb->as.var.binding->type.kind == TY_FN &&
+            rb->as.var.binding->type.as.fn.result_full_type)
+            lifted_ret = rb->as.var.binding;
+    }
+    Binding *heap_cand = inner_closure ? inner_closure : lifted_ret;
+    if (heap_cand && !inner_app && !inner_app_annotated &&
+        !fn_binding->closure_return_dispatches_untyped &&
+        heap_cand->type.kind == TY_FN &&
+        heap_cand->type.as.fn.result_full_type && n_bindings > 0) {
+        const Type *gr = heap_cand->type.as.fn.result_full_type;
+        if (gr->kind == TY_APP && emit_abi_type_has_any_tyvar(gr)) {
+            Type inst = emit_abi_instantiate_type(gr, bindings, n_bindings,
+                                                  ctx->type_arena);
+            if (inst.kind == TY_APP && !emit_abi_type_has_any_tyvar(&inst) &&
+                (type_is_heap_struct(inst) ||
+                 (lifted_ret && adt_app_is_byvalue_product(inst))))
+                inner_app_heap = true;
+        }
+    }
+    if (inner_app_heap && !inner_closure) inner_closure = lifted_ret;
+    if (inner_float || inner_app || inner_app_annotated || inner_app_heap)
+        abi_changes = true;
     /* M6 / gap G6(c): a generic body PASSES a captured closure whose result type
      * follows the spec's tyvar (the recursive `(fn [c] : B (re-cata alg c))` to
      * `fmap` inside `re-cata [B]`).  Clone it per spec so its recursive call
@@ -8472,7 +8533,7 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
      * sibling, so bindings are the only thing telling them apart.  Without this
      * the callee's two clones dedup into one body and both enclosing specs call
      * it.  Gap H then names the siblings `__h<n>`. */
-    bool spec_match_bindings = inner_app_annotated ||
+    bool spec_match_bindings = inner_app_annotated || inner_app_heap ||
                                (!abi_changes && instance_changes);
     EmitAbiSpecialization *spec = emit_abi_intern_spec(
         ctx, fn_binding, fn_expr, fd, bindings, n_bindings,
@@ -8523,12 +8584,14 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
      * emit_resolve_type to the concrete float; the outer spec's EX_CLOSURE
      * construction then stores the clone's thunk + uses its suffixed env. */
     if ((inner_float || inner_app || inner_passed || inner_dispatch ||
-         inner_app_annotated) && inner_closure) {
+         inner_app_annotated || inner_app_heap) && inner_closure) {
         const Expr *inner_expr = emit_abi_find_fn_expr(items, n_items, inner_closure);
         if (inner_expr && inner_expr->kind == EX_FN_DEF && inner_expr->as.fn_def_.fn) {
             FnDef *inner_fd = inner_expr->as.fn_def_.fn;
             Type inner_args[MAX_FN_ARITY];
             uint32_t inner_n = inner_fd->n_params;
+            /* A lifted lambda that captures nothing has no env parameter. */
+            bool inner_has_env = inner_fd->closure != NULL;
             /* The inner closure binding's TY_FN includes the hidden env as arg 0,
              * so its arg_full_types are 1:1 with inner_fd->params.  Resolve each
              * to a *concrete* type via the spec bindings: the clone name and
@@ -8536,7 +8599,7 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
              * uses emit_type_c_name (which resolves tyvars), so arg_types[i] MUST
              * be tyvar-free or the three disagree (decl/def signature mismatch). */
             for (uint8_t i = 0; i < inner_n; i++) {
-                if (i == 0) {
+                if (i == 0 && inner_has_env) {
                     /* param 0 is the env pointer -- concrete ptr<void> already */
                     inner_args[i] = inner_fd->param_types[0];
                     continue;
@@ -8617,7 +8680,16 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
              * the base env layout -- only the body's representation differs --
              * so it reuses `__env_N` rather than emitting an identical
              * suffixed twin. */
-            if (!inner_dispatch && !spec_match_bindings)
+            /* ...unless a capture changes representation under the spec
+             * (generic-returned-lambda-builds-heap-app): a captured `A` is
+             * a double in the float clone and the carrier in the base, so
+             * that clone takes its own env. */
+            bool own_env = !inner_dispatch &&
+                (!spec_match_bindings || inner_app_heap ||
+                 (inner_app_annotated &&
+                  emit_inner_captures_change_repr(inner_fd, bindings,
+                                                  n_bindings, ctx->type_arena)));
+            if (own_env)
                 emit_assign_inner_env_override(ctx, inner_fd, inner_res, inner_spec);
             uint32_t inner_idx = (uint32_t)(inner_spec - ctx->abi_specializations);
             ctx->abi_specializations[outer_spec_idx].inner_closure_spec_idx = (int32_t)inner_idx;
@@ -8642,7 +8714,8 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
              * The int case worked by coincidence -- some other call in the
              * program had already interned tcons@int -- which is exactly the
              * kind of coincidence this campaign exists to remove. */
-            if ((inner_passed || inner_dispatch || inner_float || inner_app) &&
+            if ((inner_passed || inner_dispatch || inner_float || inner_app ||
+                 inner_app_heap) &&
                 inner_is_new && inner_fd->body) {
                 const EmitAbiSpecialization *saved_c = ctx->current_abi_specialization;
                 bool saved_in = saved_c >= ctx->abi_specializations &&
@@ -11267,11 +11340,8 @@ static void emit_fn_forward_decls(EmitCtx *ctx, Buf *out,
         size_t _ret_start = out->len;
         if (e->type.kind == TY_FN) {
             TypeKind result = e->type.as.fn.result_kind;
-            /* RT/SC5: carrier-return bridge -- must mirror the definition path
-             * in emit_fns.c so the forward declaration agrees with the body.
-             * structdef-retirement DS-C: emit_carrier_return_override is dead (a
-             * method body is never TY_STRUCT), so the `carrier_override.kind ==
-             * TY_STRUCT` branch is removed, matching emit_fns.c. */
+            /* Must mirror the definition path in emit_fns.c so the forward
+             * declaration agrees with the body. */
             if (fd->box_aggregate_result) {
                 /* WF1/WF2 (van-laarhoven-wide-functor-carrier-plan): a functor-
                  * wrapping closure `g` boxes its wide `(f A)` aggregate into the
@@ -12139,19 +12209,17 @@ static void emit_adt_typedef_and_ctors(Buf *out, const AdtDef *def,
              * A `:heap` ADT's monomorph ctor mallocs one per link, and it is
              * the allocation RM1 cannot reach (it escapes its constructor by
              * construction) and RM2 cannot own (a persistent tail is shared).
-             * Route it to the innermost open generation when regions are
-             * enabled; `tur_region_alloc_or_malloc` falls back to malloc when
-             * none is open, so the SAME emitted ctor works inside and outside
-             * a region and R2 needs no branch here.
+             * Route it to the innermost open generation;
+             * `tur_region_alloc_or_malloc` falls back to malloc when none is
+             * open, so the SAME emitted ctor works inside and outside a region
+             * and R2 needs no branch here.
              *
-             * Gated: a default build emits the identical `malloc` it always
-             * has, so this changes no byte of the default path.
-             *
-             * Its sibling is the MONOMORPH ctor in types.c (search RM3 R2
-             * there); the two mirror each other and a change to one belongs in
-             * both.  Changing only this one is what the first R2 pass did, and
-             * the monomorph ctor -- which is the one the leak sweep blames --
-             * kept its plain malloc. */
+             * Its siblings are the MONOMORPH ctor in types.c (search RM3 R2
+             * there) and the non-parametric base ctor in emit_program_inner;
+             * the three mirror each other and a change to one belongs in all
+             * three.  Changing only this one is what the first R2 pass did,
+             * and the monomorph ctor -- which is the one the leak sweep blames
+             * -- kept its plain malloc. */
             buf_printf(out, "    %s *__r = (%s *)%s(sizeof(%s));\n",
                        adt_c_name, adt_c_name,
                        region_alloc_fn(),
@@ -12307,19 +12375,60 @@ static bool adt_is_inline_byval_dep(const Expr **items, uint32_t n_items,
  *
  * src/runtime/{region,arena}.{h,c} are embedded into the compiler at build
  * time (cmake/embed_region_runtime.cmake -> region_rt_embed.h) and pasted
- * verbatim.  The one transform is dropping each source's LOCAL `#include
- * "..."` line: the emitter pastes those headers itself, in order, ahead of
- * the bodies, and a `cc` of the emitted TU has no src/runtime on its include
- * path to find them.  System includes stay -- they are what the bodies were
- * written against, and repeating a system header is harmless. */
+ * with two transforms.  Each source's LOCAL `#include "..."` line is dropped:
+ * the emitter pastes those headers itself, in order, ahead of the bodies, and
+ * a `cc` of the emitted TU has no src/runtime on its include path to find
+ * them.  System includes stay -- they are what the bodies were written
+ * against, and repeating a system header is harmless.  And every comment is
+ * stripped (stale-comments-regions, item 13): the sources' prose used to ride
+ * into every emitted program, so a comment edit in region.h cost all 157
+ * expected.c snapshots and a split-hash regen, which is how comments that
+ * predated graduation survived it.  Line breaks are kept, so the pasted
+ * text's line numbers still match the source's. */
 #include "runtime/region_rt_embed.h"
 #include "runtime/experiments.h"   /* experiment_warn_if_used */
 #include "runtime/stack_overflow.h" /* the deep stack's overflow test + message, shared with the JIT */
 
+/* Copy `src` into `out` without its block and line comments.  String and
+ * character literals are passed through untouched (a comment opener inside
+ * one is text), `#` directives are ordinary lines, and the newlines inside a
+ * block comment are kept so the line count does not move. */
+static void buf_write_without_c_comments(Buf *out, const char *src) {
+    const char *p = src;
+    while (*p) {
+        char c = *p;
+        if (c == '"' || c == '\'') {
+            const char *q = p + 1;
+            while (*q && *q != c) {
+                if (*q == '\\' && q[1]) q++;
+                q++;
+            }
+            if (*q) q++;
+            buf_write(out, p, (size_t)(q - p));
+            p = q;
+        } else if (c == '/' && p[1] == '*') {
+            const char *q = strstr(p + 2, "*/");
+            const char *end = q ? q + 2 : p + strlen(p);
+            for (const char *r = p; r < end; r++)
+                if (*r == '\n') buf_putc(out, '\n');
+            p = end;
+        } else if (c == '/' && p[1] == '/') {
+            const char *q = strchr(p, '\n');
+            p = q ? q : p + strlen(p);
+        } else {
+            buf_putc(out, c);
+            p++;
+        }
+    }
+}
+
 static void emit_embedded_runtime_source(Buf *out, const char *what,
                                          const unsigned char *src) {
-    buf_printf(out, "/* ---- begin src/runtime/%s (embedded verbatim) ---- */\n", what);
-    const char *p = (const char *)src;
+    buf_printf(out, "/* ---- begin src/runtime/%s (embedded; comments stripped) ---- */\n", what);
+    Buf stripped; buf_init(&stripped);
+    buf_write_without_c_comments(&stripped, (const char *)src);
+    buf_putc(&stripped, '\0');
+    const char *p = stripped.data;
     while (*p) {
         const char *nl = strchr(p, '\n');
         size_t len = nl ? (size_t)(nl - p) + 1 : strlen(p);
@@ -12330,7 +12439,8 @@ static void emit_embedded_runtime_source(Buf *out, const char *what,
         }
         p += len;
     }
-    if (p != (const char *)src && p[-1] != '\n') buf_putc(out, '\n');
+    if (p != stripped.data && p[-1] != '\n') buf_putc(out, '\n');
+    buf_free(&stripped);
     buf_printf(out, "/* ---- end src/runtime/%s ---- */\n", what);
 }
 
@@ -14890,7 +15000,7 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
         "extern char *strpbrk(const char *, const char *);\n"
         "extern void *memchr(const void *, int, size_t);\n"
         "#endif\n");
-    /* ADT slab allocator (docs/reported/multi-variant-adts-always-heap-allocate.md).
+    /* ADT slab allocator (docs/archive/multi-variant-adts-always-heap-allocate.md).
      *
      * A multi-variant ADT box is malloc'd on every construction and, when the
      * type has no drop glue, never freed -- so ~85%% of executed instructions
@@ -15124,7 +15234,7 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
      * ownership unambiguous and ASan/LSan-clean, a composed table does not
      * double-free shared envs -- it is the application site (with-handler) that
      * frees, and only the outermost owner frees.  See
-     * docs/first-class-handlers-semantics.md (FH1.2 invariant). */
+     * docs/archive/history/first-class-handlers-semantics.md (FH1.2 invariant). */
     buf_puts(out, "/* FH1: first-class handler dispatch-table entry.\n");
     buf_puts(out, " * B3: `dk_tag`/`dk_fn` carry the DK-ABI variant of the case (emitted at the\n");
     buf_puts(out, " * handler-literal site when it is created inside colored code), so a dynamic\n");
@@ -16220,14 +16330,6 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    if (cont->env && cont->drop_env) cont->drop_env(cont->env);\n");
     buf_puts(out, "    free(cont);\n");
     buf_puts(out, "}\n\n");
-    /* cps-backend-direct-lowering-removal D6b: the setjmp/longjmp cloneable-reset
-     * context (tur_cloneable_reset_ctx / tur_current_reset_ctx) is deleted.  It
-     * was the landing for the legacy emit_effects_cloneable_shift longjmp (Case-2),
-     * which D6a replaced with a TUR-E0710 diagnostic and D6b removed -- nothing in
-     * the generated program pushes or longjmps to it anymore, so emitting the
-     * typedef + thread-local left an unused struct and __thread global in every
-     * cloneable program. */
-
     } /* end if (cps_uses_cloneable_rt) */
 
     /* cps-transform-plan: emit the heap-reified CPS substrate (DK multi-prompt
@@ -16662,8 +16764,6 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    f->result = value;\n");
     buf_puts(out, "    swapcontext(&f->ctx, &f->caller_ctx);\n");
     buf_puts(out, "}\n\n");
-    /* Phase 19D effect-capture continuation helpers (tur_effect_cont_resume /
-     * tur_effect_cont_valid) DELETED 2026-07-19 with the fiber effect runtime. */
     /* Phase T21: Fiber-local storage */
     buf_puts(out, "typedef struct FiberLocalEntry FiberLocalEntry;\n");
     buf_puts(out, "struct FiberLocalEntry {\n");
@@ -17350,7 +17450,7 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
                 "tur_async_direct_body", "int *", "tur_tls_async_direct_body_ptr", NULL);
     /* async-capturing-body-env-never-freed: the next closure spawn OWNS its box
      * -- a fresh capturing lambda written at the spawn whose env drop is
-     * shallow (emit_async_owns_env) -- and drops it when the body settles. */
+     * shallow (async_spawn_owns_env) -- and drops it when the body settles. */
     /* Both flags are set and read by one thread between a spawn site and the
      * spawn it calls, so each is thread-local: a thread-backed body spawning
      * while another thread spawns must not read the other's flag. */
@@ -19409,60 +19509,64 @@ void emit_shared_runtime_header(Buf *out) {
  *       declarations artifacts, plus the recorded content hash;
  *   (b) cmd_jit at JIT time, hashing this emission against the recorded
  *       hash to decide whether the committed artifacts still describe the
- *       compiler it is running in.  Any drift -- an emitter edit, a knob like
- *       --backtrack-depth, archive-mode state --
- *       changes this text, fails the compare, and falls back to full-preamble
- *       emission.  Never wrong, just slower.
+ *       compiler it is running in.  Drift changes this text, fails the
+ *       compare, and falls back to full-preamble emission.  Never wrong,
+ *       just slower.
  *
- * Knobs are deliberately NOT normalized here: the text must reflect the
- * current process state so the hash compare covers them.  Gate globals
- * (g_needs_*) are forced and restored because they are per-program facts,
- * not knobs. */
+ * Two kinds of input reach the preamble, and they are treated oppositely:
+ *
+ *   - KNOBS (--backtrack-depth, experiments) are deliberately NOT normalized:
+ *     the text must reflect the current process state so the hash compare
+ *     covers them.  A program built with a knob declines the split, which is
+ *     correct.
+ *   - PER-HOST and PER-PROGRAM facts are forced to one canonical value and
+ *     restored on the way out, precisely so they CANNOT cause a mismatch:
+ *     the g_needs_* / g_cps_path / g_has_variadics gates, g_trail_autoloaded,
+ *     and the rc/GC archive posture.  They live in rt_split_forced[] below
+ *     (the posture through its setter), which is the one list; a new state
+ *     input to the preamble joins it there, or every program that sets it
+ *     silently loses the split.  That is how the archive posture bit (a host
+ *     with no lean runtime archive emitted the rc/GC bodies, so the probe
+ *     never matched) and how g_trail_autoloaded bit after it (cmd_emit_rt_split
+ *     does not autoload stdlib/trail.tur, the JIT probe does).  Nothing
+ *     reports a disengaged split: the JIT just takes the whole-preamble path,
+ *     which on Windows then dies on __va_start and falls back again to cc.
+ *
+ * Forcing g_trail_autoloaded on is safe for the split specifically: the
+ * runtime half is compiled into the host, which always links
+ * src/runtime/trail.c, so tur_trail_level_i64 resolves.  The gate's own
+ * comment is about the NON-split path, where a looser gate would emit a call
+ * cc cannot resolve. */
+extern bool g_needs_hamt, g_needs_regex_h, g_has_variadics, g_cps_path;
+extern bool g_needs_winsock;
+static struct { bool *flag; bool forced; } const rt_split_forced[] = {
+    { &g_needs_hamt,        true },
+    { &g_needs_regex_h,     true },
+    { &g_has_variadics,     true },
+    { &g_cps_path,          true },
+    { &g_needs_winsock,     true },
+    { &g_trail_autoloaded,  true },
+    { &g_rt_split_all_gates, true },
+};
+#define RT_SPLIT_N_FORCED (sizeof(rt_split_forced) / sizeof(rt_split_forced[0]))
+
 void emit_rt_split_source(Buf *out) {
-    extern bool g_needs_hamt, g_needs_regex_h, g_has_variadics, g_cps_path;
-    extern bool g_needs_winsock;
-    bool s_hamt = g_needs_hamt, s_regex = g_needs_regex_h;
-    bool s_var = g_has_variadics, s_cps = g_cps_path, s_wsk = g_needs_winsock;
-    /* DEDUP-4b interaction: the rc/GC section emits decls-only in archive mode
-     * and full static bodies otherwise, so the canonical text depends on
-     * g_rcgc_from_archive too.  cmd_emit_rt_split forces it true before
-     * calling here, but the S2 engage probe (jit_try_split_preamble) calls
-     * with whatever resolve_rcgc_from_archive decided for this box -- on a
-     * host without the lean runtime archive that is `false`, the probe emits
-     * the bodies flavor, and the hash NEVER matches the committed artifacts.
-     * Net effect: S2 silently disengaged for every program on such hosts.
-     * Force it here, where every caller gets the canonical posture, and
-     * restore on the way out. */
+    bool saved[RT_SPLIT_N_FORCED];
+    for (size_t i = 0; i < RT_SPLIT_N_FORCED; i++) {
+        saved[i] = *rt_split_forced[i].flag;
+        *rt_split_forced[i].flag = rt_split_forced[i].forced;
+    }
+    /* The archive posture is a flag behind a setter, so it is the one forced
+     * input outside the table: decls-only rc/GC is the canonical flavor. */
     bool s_arch = rt_global_from_archive();
     emit_set_rcgc_from_archive(true);
-    /* Same hazard, second instance.  The SX1 trail guard inside
-     * tur_serial_cont_serialize is gated on g_trail_autoloaded, which
-     * reflects whether stdlib/trail.tur happened to be autoloaded into THIS
-     * compile.  cmd_emit_rt_split does not autoload it, the JIT engage probe
-     * does -- so the two emitted different text, the hash compare failed, and
-     * S2 silently disengaged for EVERY program on every platform.  Nothing
-     * reports that: the JIT just falls back to the whole-preamble path, which
-     * on Windows then dies on __va_start and falls back again to cc.
-     *
-     * Forcing it on is safe for the split specifically: the runtime half is
-     * compiled into the host, which always links src/runtime/trail.c, so
-     * tur_trail_level_i64 resolves.  The gate's own comment is about the
-     * NON-split path, where a looser gate would emit a call cc cannot
-     * resolve. */
-    bool s_trail = g_trail_autoloaded;
-    g_trail_autoloaded = true;
-    g_needs_hamt = true; g_needs_regex_h = true;
-    g_has_variadics = true; g_cps_path = true; g_needs_winsock = true;
-    g_rt_split_all_gates = true;
     type_codegen_reset_adt_apps();
     type_codegen_reset_fn_ptr_typedefs();
     sym_codegen_reset();
     emit_runtime_preamble(out, NULL, /*shared=*/false);
-    g_rt_split_all_gates = false;
-    g_needs_hamt = s_hamt; g_needs_regex_h = s_regex;
-    g_has_variadics = s_var; g_cps_path = s_cps; g_needs_winsock = s_wsk;
     emit_set_rcgc_from_archive(s_arch);
-    g_trail_autoloaded = s_trail;
+    for (size_t i = 0; i < RT_SPLIT_N_FORCED; i++)
+        *rt_split_forced[i].flag = saved[i];
 }
 
 /* structdef-retirement slice 5: an `(defopaque ...)` elaborates to an EX_DEF
@@ -20354,13 +20458,13 @@ static int emit_program_inner(Buf *out, const Expr *program) {
                      * calling malloc while both of the other two routed.
                      *
                      * Found because R4's fixture measured the SAVING rather
-                     * than asserting the routing: valgrind reported 913 blocks
-                     * live with the flag on against 909 with it off, so the
-                     * region was pushed, popped, and never allocated into.  The
-                     * SR3 slice-A note a few lines below records this exact
-                     * miss at this exact site, one representation change
-                     * earlier.  All three emitters mirror each other; a change
-                     * to one belongs in all three. */
+                     * than asserting the routing (the valgrind counts are in
+                     * docs/archive/regions-plan.md): the region was pushed,
+                     * popped, and never allocated into.  The SR3 slice-A note
+                     * a few lines below records this exact miss at this exact
+                     * site, one representation change earlier.  All three
+                     * emitters mirror each other; a change to one belongs in
+                     * all three. */
                     buf_printf(&early_file, "    %s *__r = (%s *)%s(sizeof(%s));\n",
                                adt_c_name, adt_c_name,
                                region_alloc_fn(),
@@ -21622,7 +21726,33 @@ static int emit_program_inner(Buf *out, const Expr *program) {
         free(prog_defers);
     }
 
-    /* Final assembly. */
+    /* Final assembly.  `out` is written in this order, which is what gives
+     * each band C visibility of the ones before it:
+     *   1. the runtime preamble, the hoisted includes and the panic-site slot
+     *      (the library unit's state under --split);
+     *   2. early_file -- struct typedefs + drop glue (visible to everything);
+     *   3. sym_records;
+     *   4. concrete_fn_ptr_typedefs -- typed fn-ptr typedefs for parametric
+     *      struct fields;
+     *   5. concrete_adt_apps -- monomorphized polymorphic ADT typedefs + ctors;
+     *   6. rt_lazy (split builds only);
+     *   7. thunk_typedefs, after emit_any_type_name_table appends to it;
+     *   8. extern_decls -- user extern-c declarations;
+     *   9. fwd_decls -- Turmeric function forward declarations;
+     *  10. defer_thunks -- defer env structs and thunk prototypes (their
+     *      bodies follow `file`: they may name its globals);
+     *  11. cprelude, then cprelude_own, then cprelude_user;
+     *  12. pending_handler_fns -- effect handler functions;
+     *  13. file -- the Turmeric function definitions;
+     *  14. defer_thunk_defs;
+     *  15. main(), or __tur_module_def_init for a module;
+     *  16. fatbox_defs, then __tur_fatbox_init;
+     *  17. emit_instance_row_table;
+     *  18. emit_r7rs_gc_tls_roots;
+     *  19. emit_cps_ir_flush_groups;
+     *  20. static_init_emit;
+     *  21. emit_ffi_export_shims (J2 only).
+     * emit_program_job then appends the `tur:inline-c-fns` comment. */
     if (g_emit_split != EMIT_SPLIT_NONE) {
         /* r7rs-programs-compile-slowly: one instance of the runtime's state,
          * in the library unit (emit_split_state). */
@@ -21663,21 +21793,11 @@ static int emit_program_inner(Buf *out, const Expr *program) {
      * whose bodies can register too. */
     emit_flush_dead_base_ctor_traps(&ctx, &fwd_decls);
 
-    /* Final assembly order (ensures correct C visibility):
-     *  1. early_file  - struct typedefs + drop glue (visible to everything)
-     *  2. concrete_fn_ptr_typedefs - typed fn-ptr typedefs for parametric struct fields
-     *  3. concrete_adt_apps - monomorphized polymorphic ADT typedefs + ctor fns
-     *  4. extern_decls - user extern-c declarations
-     *  5. fwd_decls   - Turmeric function forward declarations (visible to handlers)
-     *  6. defer_thunks - defer env structs and thunk prototypes (the thunk
- *                    bodies follow `file`: they may name its globals)
-     *  7. pending_handler_fns - effect handler functions (can call Turmeric fns)
-     *  8. file        - Turmeric function definitions (can reference handler fns by name)
-     *  9. main()      - entry point body
+    /* The band order is listed at `Final assembly.` above.
      *
-     * macos-int-conversion-carrier-pointer-straddles: (2) and (3) are written in
-     * the opposite order to the one they are GENERATED in above, and both orders
-     * are load-bearing.  Generation must run adt_apps first because emitting a
+     * macos-int-conversion-carrier-pointer-straddles: concrete_fn_ptr_typedefs
+     * and concrete_adt_apps are written in the opposite order to the one they
+     * are GENERATED in above, and both orders are load-bearing.  Generation must run adt_apps first because emitting a
      * monomorph calls type_c_name, which is what REGISTERS the fn-ptr typedefs;
      * collecting them earlier would miss every one.  Output must put the
      * typedefs first because a monomorph over a `(c-fn ...)` element names one
@@ -22380,7 +22500,7 @@ static int emit_header_inner(Buf *out, const char *module_name, const Expr *prog
         "extern char *strpbrk(const char *, const char *);\n"
         "extern void *memchr(const void *, int, size_t);\n"
         "#endif\n");
-    /* ADT slab allocator (docs/reported/multi-variant-adts-always-heap-allocate.md).
+    /* ADT slab allocator (docs/archive/multi-variant-adts-always-heap-allocate.md).
      *
      * A multi-variant ADT box is malloc'd on every construction and, when the
      * type has no drop glue, never freed -- so ~85%% of executed instructions
@@ -22420,7 +22540,7 @@ static int emit_header_inner(Buf *out, const char *module_name, const Expr *prog
      * degrades).  It also never addressed the footprint half of the problem --
      * slabs are never released -- which is the half the report identifies as
      * the real one.  Decision record and the numbers:
-     * docs/reported/multi-variant-adts-always-heap-allocate.md.
+     * docs/archive/multi-variant-adts-always-heap-allocate.md.
      *
      * The seam stays because it costs nothing when off (codegen is
      * byte-identical) and keeps the 2.1x measurement reproducible.  It is a

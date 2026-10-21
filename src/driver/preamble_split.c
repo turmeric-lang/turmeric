@@ -929,12 +929,9 @@ bool jit_try_split_preamble(Buf *csrc, Buf *out) {
  * text.  The hash spelling here IS the JIT-time compare: both sides call
  * tur_hamt_hash_xxh64 over the same emission, so the recorded artifact hash
  * and cmd_jit's probe can never disagree on hash function or input framing.
- *
- * Archive mode is hard-set rather than probed so the generated text is a
- * property of the compiler, not of which build tree generated it; cmd_jit's
- * probe runs under real process state, and a JIT invocation with no runtime
- * archive (rc/GC emitted as definitions) therefore hashes differently and
- * falls back to full-preamble emission -- the guard is self-enforcing. */
+ * Every per-host input (the archive posture among them) is forced to its
+ * canonical value inside emit_rt_split_source itself, so this command and
+ * the JIT probe see the same text on every box. */
 int cmd_emit_rt_split(int argc, char **argv) {
     bool hash_only = false;
     for (int i = 2; i < argc; i++) {
@@ -942,7 +939,6 @@ int cmd_emit_rt_split(int argc, char **argv) {
         fprintf(stderr, "usage: tur emit-rt-split [--hash]\n");
         return 2;
     }
-    emit_set_rcgc_from_archive(true);
     Buf out; buf_init(&out);
     emit_rt_split_source(&out);
     if (hash_only) {

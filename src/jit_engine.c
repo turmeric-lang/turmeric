@@ -871,7 +871,7 @@ static void *jit_run_entry (void *p) {
  * resolve wrongly.  Only names the TU DEFINES are dropped, so nothing loses a
  * prototype it still needs -- which would be the implicit-int pointer
  * truncation from the same family, see
- * docs/reported/jit-c2mir-implicit-decl-truncates-pointers.md.
+ * docs/archive/jit-c2mir-implicit-decl-truncates-pointers.md.
  *
  * The cc path never needs this: it compiles the raw TU against real headers,
  * where the only `log2` in scope is a gcc BUILTIN, and gcc lets a local

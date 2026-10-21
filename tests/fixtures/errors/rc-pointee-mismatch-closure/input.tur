@@ -1,0 +1,6 @@
+;; typed-ptr-pointee-not-checked-through-closures: rc<S> through a lambda.
+(defstruct Foo [a : int])
+(defstruct Bar [b : int])
+(defn main [] : int
+  (let [f (fn [^borrow x : rc<Foo>] : int (.a (deref x)))]
+    (f (rc/of (Bar 1)))))

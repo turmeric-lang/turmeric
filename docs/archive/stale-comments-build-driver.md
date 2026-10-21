@@ -7,7 +7,7 @@
 > dead citations (13). Item 6's comment change landed. Its structural half --
 > whether to delete `effect_lower` -- is still an investigation and moved to
 > its own report,
-> [effect-lower-is-an-identity-pass](../reported/effect-lower-is-an-identity-pass.md).
+> [effect-lower-is-an-identity-pass](effect-lower-is-an-identity-pass.md).
 
 **Severity:** low (comment accuracy). Two items are dead code (a write-only
 field and a no-op pass), and one is a small deduplication. Filed 2026-10-17

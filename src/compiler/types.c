@@ -917,10 +917,9 @@ bool type_has_concrete_codegen_layout(const Type *t) {
  * type arguments have a concrete codegen layout -- e.g. `(ReF bool)`,
  * `(Cons int)`.  Such a type is monomorphized to a per-element C struct
  * (`tur_adt_ReF__bool`) whose field WIDTHS follow the element, distinct from the
- * int64-carrier `tur_adt_ReF`.  The struct-app branch of
- * type_has_concrete_codegen_layout deliberately rejects ADT apps (its callers
- * then call type_extract_struct_app), so this is a separate predicate used by
- * the M7 by-value HKT machinery to recognize a parametric-SUM result/element. */
+ * int64-carrier `tur_adt_ReF`.  type_has_concrete_codegen_layout's TY_APP arm
+ * returns false unconditionally, so this is a separate predicate used by the
+ * M7 by-value HKT machinery to recognize a parametric-SUM result/element. */
 /* Is one type ARGUMENT of an ADT application concrete enough to monomorphise?
  *
  * type_has_concrete_codegen_layout answers `true` for every TY_ADT, which is
@@ -1831,7 +1830,7 @@ static bool sr3_option_niche(void) {
      * wrong-answered httpd-req-string-opt, all of which recover when the niche
      * comes off too, and none of which points at the niche from the switch the
      * user actually flipped.  Measured and filed 2026-09-04 in
-     * docs/reported/sr2-carrier-seam-rotted.md; tests/run-sr2-seam.sh pins it.
+     * docs/archive/sr2-carrier-seam-rotted.md; tests/run-sr2-seam.sh pins it.
      *
      * This is a HATCH interaction, not a default one: both globals are true in
      * every shipping build, so the added test is dead weight on the default path
@@ -2676,17 +2675,16 @@ static void emit_registered_adt_app_rec(Buf *out, uint32_t idx) {
          * typedef + field-read sites. */
         if (app_heap) {
             /* RM3 R2 (docs/archive/regions-plan.md): the spine node, at the
-             * MONOMORPH ctor.  Its sibling is the base ctor in emit_module.c
-             * (`emit_adt_typedef_and_ctors`) -- the two mirror each other and a
-             * change to one belongs in both.  That is not a general caution: it
-             * is what happened here.  The first R2 pass changed only the base
-             * emitter, and `ctor_Cons_Cons__int` -- the ctor the leak sweep
-             * actually blames -- kept its plain malloc, which the reclamation
-             * plan's own standing habit predicts ("when a representation change
-             * lands in a ctor or temp emitter, grep for the other emitter
-             * before calling it done").
-             *
-             * Gated, so a default build emits the identical malloc. */
+             * MONOMORPH ctor.  Its siblings are the base ctor in emit_module.c
+             * (`emit_adt_typedef_and_ctors`) and the non-parametric base ctor
+             * in emit_program_inner -- the three mirror each other and a
+             * change to one belongs in all three.  That is not a general
+             * caution: it is what happened here.  The first R2 pass changed
+             * only the base emitter, and `ctor_Cons_Cons__int` -- the ctor the
+             * leak sweep actually blames -- kept its plain malloc, which the
+             * reclamation plan's own standing habit predicts ("when a
+             * representation change lands in a ctor or temp emitter, grep for
+             * the other emitter before calling it done"). */
             buf_printf(out, "    %s *__r = (%s *)%s(sizeof(%s));\n",
                        adt_inst_name, adt_inst_name,
                        region_alloc_fn(),

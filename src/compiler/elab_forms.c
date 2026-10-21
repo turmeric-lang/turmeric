@@ -1575,7 +1575,7 @@ Expr *elab_let(Elab *e, const Form *call) {
              * (fn_param_type_is_fat_normalized) although its type is not
              * marked boxed; shimming it again would box a box.  Such an init
              * keeps today's spelling (see
-             * docs/reported/let-alias-of-fn-param-call-undeclared.md for what
+             * docs/archive/let-alias-of-fn-param-call-undeclared.md for what
              * that spelling does). */
             const Expr *ip = init;
             while (ip && ip->kind == EX_ASCRIBE) ip = ip->as.ascribe_.inner;
@@ -1946,7 +1946,7 @@ Expr *elab_let(Elab *e, const Form *call) {
          * DESTROYING the control block, and its body nulls `cb->value` before
          * `free(cb)`, so the payload survives with the returned ref as its only
          * owner.  Nothing shared it and nothing freed it --
-         * docs/reported/rc-ref-conversion-and-weak-upgrade-leak.md.
+         * docs/archive/rc-ref-conversion-and-weak-upgrade-leak.md.
          *
          * It is therefore an ordinary owning ref, exactly like a fresh
          * `(ref ...)`: deref is non-consuming and the scope-exit auto-drop

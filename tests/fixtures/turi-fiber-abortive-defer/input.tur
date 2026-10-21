@@ -1,0 +1,32 @@
+;; turi-fiber-handle-defers-fire-at-the-wrong-time: a `defer` pending in the
+;; body when a handler case ABANDONS the continuation (returns without
+;; resuming or keeping `k`) runs when the case returns, before the handle's
+;; value is used -- on the compiled DK runtime and under --interpret, whose
+;; fiber path used to leave it for the next enclosing scope exit.  No inline
+;; C, so run-turi.sh runs it beside run.sh.
+(defeffect Abort [] : int)
+
+(defn w1 [] : int
+  (defer (println "w1: defer ran"))
+  (+ 1 (perform (Abort))))
+
+(defn w2-inner [] : int
+  (defer (println "w2-inner: defer ran"))
+  (+ 1 (perform (Abort))))
+(defn w2 [] : int
+  (defer (println "w2: defer ran"))
+  (let [r (w2-inner)]
+    (+ r 100)))
+
+(defn w7 [tag : cstr] : int
+  (defer (println tag))
+  (+ 1 (perform (Abort))))
+
+(defn main [] : int
+  (println (handle (w1) (Abort [] k) 7))
+  (println "after w1")
+  (println (handle (w2) (Abort [] k) 8))
+  (println "after w2")
+  (println (handle (w7 "w7: defer ran") (Abort [] k) 9))
+  (println "after w7")
+  0)

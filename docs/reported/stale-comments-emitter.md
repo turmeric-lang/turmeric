@@ -1,5 +1,13 @@
 # Emitter comments that disagree with the code
 
+**Narrowed 2026-10-21: the comment items are fixed; three structural items
+stay open.** Items 1, 4, 5, 6, 7, 8, 9 and 11 landed, with item 2's comment
+half and item 3's comment half. `tests/check-src-doc-citations.sh` (item 11's
+lint, in the docs-lint job and ctest) now fails on any dead `docs/` citation
+in `src/`. What remains is structural: item 2's `emit_program_assemble` (and
+its guide follow-up on the "Output bands" table), item 3's
+`emit_value_spelled_ctype` helper, and item 10's `emit_internal.h` re-sort.
+
 **Severity:** low (comment accuracy). No miscompile. Two items are cheap structural
 cleanups (a header re-sort, and dropping tombstones for deleted code); the rest
 are comment rewrites. Filed 2026-10-17 from the "Trust the code over the

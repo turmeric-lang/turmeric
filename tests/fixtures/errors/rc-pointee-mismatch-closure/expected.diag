@@ -1,0 +1,1 @@
+function 'f' arg 1: expected rc<Foo>, got rc<Bar>

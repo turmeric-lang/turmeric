@@ -25,16 +25,14 @@ User-facing material lives elsewhere:
   -- what happens after the package manager hands over include dirs and flags;
 - [compiler-internals.md](compiler-internals.md) -- the pipeline overall.
 
-> **Trust the code over the comments.** `pkg.h` still describes `:sha256` as
-> "SHA-256 of the archive" (it is a `tree1:` content hash for spices and a git
-> SHA for cmake deps), and several user guides show lockfile shapes `tur`
-> never writes. The sibling repo's `turmeric-spices/CLAUDE.md` says a lock row
+> **Trust the code over the comments.** The sibling repo's
+> `turmeric-spices/CLAUDE.md` says a lock row
 > makes `tur fetch` skip a missing dependency and that `:resolved` is never
 > checked out; both stopped being true for `:spices` (see
 > [What the lock actually does](#what-the-lock-actually-does)). Where this
 > guide and the code disagree, fix the guide.
 > The stale comments found so far in this area, each with a fix, are
-> listed in [stale-comments-package-manager](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/stale-comments-package-manager.md).
+> listed in [stale-comments-package-manager](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/stale-comments-package-manager.md).
 
 ---
 
@@ -325,7 +323,7 @@ temp file renamed into place:
   }
   :cmake-deps #{
     "zlib" #{:url "..." :ref "v1.3.1" :resolved "<git sha>"
-             :sha256 "<same git sha>" :fetched-at "..." }
+             :fetched-at "..." }
     "libpq" #{:resolved-via "system" :system-version "16.2" }
   })
 ```
@@ -335,8 +333,11 @@ temp file renamed into place:
   file's path, size and bytes in sorted path order, skipping `.git`, `build`,
   `.tur-abi-cache` and `.tur-repl-cache`. If hashing fails it falls back to
   the git SHA, which `pkg_hash_comparable` then refuses to compare.
-- A cmake row's `:sha256` is just the git SHA again. A system-resolved row
-  keeps only `:resolved-via` and `:system-version`.
+- A cmake row has no `:sha256`: `:resolved` is its only pin. (Until
+  2026-10-21 it repeated the git SHA there; a lock that still carries one is
+  read as if the key were absent, so `tur fetch --frozen` does not report it
+  as a change.) A system-resolved row keeps only `:resolved-via` and
+  `:system-version`.
 - Rows for `:path`, workspace and `:global` deps are removed, so the lock
   records only URL deps.
 
@@ -414,10 +415,14 @@ those of every spice in the `:spices` closure, walked with a worklist and a
 unrelated members' native deps and collided in CMake's single target
 namespace.
 
-`append_cmake_dep_with_conflict_check` dedups identical `(name, url, ref,
-path)` entries and fails on a same-name mismatch, printing both origins.
-Differences in `:cmake-name`, `:targets` or `:options` are not compared; the
-first copy wins silently. It also absolutizes a relative `:path` against
+`append_cmake_dep_with_conflict_check` fails on a same-name entry whose
+`(url, ref, path)` differ, printing both origins. Two entries at the same
+origin are one dependency and are merged (`merge_cmake_dep`, since
+2026-10-21): `:options` / `:wasm-options` key by key, a key set to two
+different values being a hard error that names both manifests; `:targets`,
+`:link-libs`, `:link-flags` union; a differing `:cmake-name` or
+`:cmake-version` is a conflict; `:prefer-system` unions to "prefer system"
+with a note. It also absolutizes a relative `:path` against
 `<origin>/cmake/` -- the generated file lives in `cmake/`, so a spice writes
 `:path "../cmake-deps/foo"` to mean `<spice>/cmake-deps/foo`.
 

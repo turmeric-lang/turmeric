@@ -618,7 +618,7 @@ static Form *read_number(Reader *r, int sign) {
          * characters -- a hand-rolled digit accumulator drifts from the
          * correctly-rounded double and previously dropped negative exponents
          * outright (e.g. 1e-10 parsed as 1.0). See
-         * docs/reader-float-parsing-plan.md. */
+         * docs/archive/history/reader-float-parsing-plan.md. */
         num_start = r->pos;
 
         /* Parse integer part */
@@ -792,7 +792,7 @@ static Form *read_number(Reader *r, int sign) {
 
 /* A user Scheme source: read by the Scheme reader, and neither Turmeric-shaped
  * nor inside a Turmeric data literal.  Where this holds, two Turmeric lexemes
- * give way to Scheme's (docs/reported/r7rs-turmeric-syntax-leaks.md):
+ * give way to Scheme's (docs/archive/r7rs-turmeric-syntax-leaks.md):
  *
  *   - a token that starts with `:` is an identifier (R7RS 7.1.1 makes `:` an
  *     <initial>), as the runtime `read` has always read it -- so `':x` is the

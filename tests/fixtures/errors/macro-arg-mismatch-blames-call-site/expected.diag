@@ -1,0 +1,1 @@
+input.tur:8:10: error [TUR-E0001]: function 'total' arg 1: expected (Vec P), got (Vec Q)

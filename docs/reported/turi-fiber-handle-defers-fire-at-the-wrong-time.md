@@ -1,5 +1,17 @@
 # `tur --interpret`: a fiber-path `handle` fires the body's pending `defer`s at the wrong time
 
+**Narrowed 2026-10-21: the abortive case is fixed; the stored-`k` case stays
+open.** `eval_handle` marks the defer chain before the body runs; when a case
+returns with the body suspended and no case can keep `k`
+(`fiber_handle_k_may_escape` is false), the entries above the mark are fired
+by scope right there, so the first row of the table below now reads
+`w4: defer ran`, then `7` on both engines
+(`tests/fixtures/turi-fiber-abortive-defer`, run by both harnesses). What
+remains is the second row: a case that may keep `k` still leaves the body's
+defers on the chain, where the next enclosing scope exit fires them, while
+the compiled runtime holds them until the resume. Fix direction 2's "park
+them on the cont" (or fix direction 1) is what is left.
+
 **Severity:** low-medium (engine divergence: output order, and a refused
 multi-shot resume). Interpreter only. The compiled program is correct. A
 `handle` takes the interpreter's single-shot fiber runtime when its body

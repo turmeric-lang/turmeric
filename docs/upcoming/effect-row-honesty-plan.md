@@ -225,7 +225,7 @@ and `stdlib/` still compiles.
 ### W2 -- Make `IO` available where `println` is -- DONE 2026-10-02
 
 > **Done:** the five tags are registered, with parents and `is_capability`,
-> wherever `Unsafe` is -- the elaborator's env, `PASS_EFFECT_LOWER`'s and the
+> wherever `Unsafe` is -- the elaborator's env, `PASS_EFFECT_ENV`'s and the
 > interpreter's session env (`effect_env_register_builtin_capabilities`).
 > `stdlib/effects.tur` keeps its declarations, because the docs live on them;
 > a `defeffect` of one of these names is accepted only when it matches the

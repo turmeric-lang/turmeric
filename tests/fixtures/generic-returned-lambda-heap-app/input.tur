@@ -1,0 +1,41 @@
+;; generic-returned-lambda-builds-heap-app: a lambda RETURNED by a generic
+;; whose annotated result is a parametric application -- `(Box A)` on a
+;; `:heap` struct, `(Pt A)` on a by-value one, `(Cons A)` -- was lifted once at
+;; the carrier ABI.  Its body named the base constructor `ctor_Box_Box`, which
+;; a parametric `:heap` type never defines (the dead-base abort), and a
+;; captured `x : A` sat in an int64 env slot, so a float came back as its bit
+;; pattern (4.61281e+18).  Each instantiation now gets its own clone of the
+;; lambda, with its own env.  `mk-f` captures nothing (a lifted `__fn_N` the
+;; body only names); `mk-k` captures `x`.
+
+(defstruct Box :heap :copy [A] (v A))
+(defstruct Pt [A] (x A) (y A))
+
+(defn mk-f [A] [x : A] : (fn [A] (Box A))
+  (fn [y : A] : (Box A) (make-struct Box :v y)))
+
+(defn mk-k [A] [x : A] : (fn [A] (Box A))
+  (fn [y : A] : (Box A) (make-struct Box :v x)))
+
+(defn mk-p [A] [x : A] : (fn [A] (Pt A))
+  (fn [y : A] : (Pt A) (make-struct Pt :x x :y y)))
+
+(defn mk-c [A] [x : A] : (fn [A] (Cons A))
+  (fn [y : A] : (Cons A) (tcons-of y (tcons-of x (tnil)))))
+
+(defn main [] : int
+  (println (.v ((mk-f 2.5) 7.1)))           ; 7.1
+  (println (.v ((mk-k 2.5) 7.1)))           ; 2.5
+  (println (.v ((mk-f 3) 4)))               ; 4
+  (println (.v ((mk-k 3) 4)))               ; 3
+  (println (.v ((mk-f "a") "b")))           ; b
+  (println (.v ((mk-k "a") "b")))           ; a
+  (let [p ((mk-p 1.25) 3.5)]
+    (println (.x p))                        ; 1.25
+    (println (.y p)))                       ; 3.5
+  (let [q ((mk-p 5) 6)]
+    (println (+ (.x q) (.y q))))            ; 11
+  (let [c ((mk-c 2.5) 7.1)]
+    (println (thead c))                     ; 7.1
+    (println (thead (ttail c))))            ; 2.5
+  0)

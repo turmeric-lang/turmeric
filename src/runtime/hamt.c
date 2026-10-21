@@ -7,7 +7,9 @@
  * Collision handling: linked list in v1.
  * Hash function: xxHash64 (speed-optimised, non-cryptographic).
  *
- * See docs/hamt-plan.md for full design and phase breakdown.
+ * User-facing API and semantics: docs/guides/hamt-guide.md.  The region
+ * store hooks (tur_hamt_set, tur_hamt_transient_set) note every stored word;
+ * see docs/guides/gc-guide.md (regions).
  */
 
 #include "hamt.h"

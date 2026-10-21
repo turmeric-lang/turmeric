@@ -1,0 +1,28 @@
+;; unannotated-method-receiver-option-result-untyped: a class method whose
+;; receiver is written without a type, `[r]`, and whose result is a ground
+;; application, `(Option int)`, types its call from the declaration -- the
+;; same as `[r : a]` does -- so the result can go where an Option is expected.
+(defstruct Pt :copy [x : int])
+(defclass K [a]
+  (cats [r] : (Option int))
+  (tag [r] : (Result cstr int))
+  (dflt [r] : (Option int) (none)))
+(definstance K [int]
+  (cats [r] (some r))
+  (tag [r] (ok "int")))
+(definstance K [Pt]
+  (cats [r] (some (.x r)))
+  (tag [r] (err (.x r)))
+  (dflt [r] (some 99)))
+(defn main [] : int
+  (println (unwrap-or (cats 3) -1))
+  (println (unwrap-or (cats (Pt 7)) -1))
+  (println (unwrap-or (dflt 3) -1))
+  (println (unwrap-or (dflt (Pt 7)) -1))
+  (match (tag 3)
+    (Ok s) (println s)
+    (Err n) (println n))
+  (match (tag (Pt 5))
+    (Ok s) (println s)
+    (Err n) (println n))
+  0)

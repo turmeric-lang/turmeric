@@ -120,7 +120,7 @@ void emit_pbp_push(EmitCtx *ctx, Binding *b) {
  * expanded to `if` -- put them).  Mutual/general tail calls and tail calls
  * inside `match` arms remain ordinary recursive calls; they are correct, just
  * not stack-optimized.  See docs/guides/generators-guide.md and
- * docs/control-flow-completeness-plan.md (Phase CF1).
+ * docs/archive/history/control-flow-completeness-plan.md (Phase CF1).
  * ========================================================================== */
 
 /* The declared C type of parameter `i`, matching the function signature's
@@ -426,7 +426,7 @@ static bool tco_let_simple(EmitCtx *ctx, const Expr *e) {
  * T2's first cut ALSO required the callee's C return type to equal the enclosing
  * function's, and refused the body outright otherwise.  That was not a statement
  * about tail position -- it was a workaround for
- * docs/reported/emit-tail-return-path-lacks-carrier-bridges.md, which is fixed:
+ * docs/archive/emit-tail-return-path-lacks-carrier-bridges.md, which is fixed:
  * both return paths share `emit_fn_return_spelling` now, so a marked call whose
  * return does need a bridge is simply emitted with its hoist and its check, the
  * way it always was.  The type question still gets asked, but where it belongs
@@ -4445,7 +4445,7 @@ static TypeKind emit_tail_float_kind(EmitCtx *ctx, const Expr *tail_e) {
  * TCO-routed and carrier-returning got the thin copy and miscompiled.  Nothing
  * reported that: the divergence was only reachable once proper-tail-calls T2
  * widened the routing, and it then failed 24 fixtures with hard `cc` errors.
- * Filed as docs/reported/emit-tail-return-path-lacks-carrier-bridges.md, and
+ * Filed as docs/archive/emit-tail-return-path-lacks-carrier-bridges.md, and
  * this function is the fix -- the same treatment `inline_c_returns_byvalue_adt`
  * got, for the same stated reason: so the two copies cannot drift apart again.
  *
@@ -4497,9 +4497,6 @@ static void emit_fn_return_spelling(EmitCtx *ctx, Buf *out, const Expr *fn_e,
     const char *ret_ctype = NULL;
     bool inst_method_carrier_spill = false;
     if (fn_e->type.kind == TY_FN && !is_main) {
-        /* structdef-retirement DS-C: emit_carrier_return_override is dead
-         * (method body never TY_STRUCT); its `carrier_override.kind ==
-         * TY_STRUCT` branch below is removed. */
         if (fd->box_aggregate_result) {
             /* WF1/WF2 (van-laarhoven-wide-functor-carrier-plan): the closure
              * returns its wide `(f A)` aggregate boxed into the int64 carrier;
@@ -5589,9 +5586,6 @@ static void emit_fn_def_body(EmitCtx *ctx, Buf *file, const Expr *e) {
     bool is_main_check = fd->binding && fd->binding->name && fd->binding->name->name &&
         strcmp(fd->binding->name->name, "main") == 0;
     if (e->type.kind == TY_FN && !is_main_check) {
-        /* structdef-retirement DS-C: emit_carrier_return_override is dead (a
-         * method body is never TY_STRUCT), so the `carrier_override.kind ==
-         * TY_STRUCT` branch that used to sit here is removed. */
         if (fd->box_aggregate_result) {
             /* WF1/WF2 (van-laarhoven-wide-functor-carrier-plan): this functor-
              * wrapping closure `g` returns its wide `(f A)` aggregate boxed into
@@ -5913,10 +5907,9 @@ static void emit_fn_def_body(EmitCtx *ctx, Buf *file, const Expr *e) {
     /* Return type from fn_type */
     if (e->type.kind == TY_FN) {
         TypeKind result = e->type.as.fn.result_kind;
-        /* structdef-retirement DS-C: the RT/SC5 carrier-return-override bridge
-         * (emit_carrier_return_override) is dead -- a method body is never
-         * TY_STRUCT -- so its assignment and the `carrier_override.kind ==
-         * TY_STRUCT` branch below are removed. */
+        /* A method body is never TY_STRUCT (every struct lowers to a record
+         * ADT), so the return type comes from the binding, with no
+         * by-value-struct override. */
         if (is_main) {
             buf_puts(file, "int");  /* C main must always return int */
         } else if (fd->box_aggregate_result) {

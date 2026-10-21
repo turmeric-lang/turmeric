@@ -4080,6 +4080,12 @@ static TuriValue eval_handle(TuriEnv *env, EvalFrame *frame,
     hf.prev            = (TuriHandlerFrame *)env->handler_stack;
     env->handler_stack = &hf;
 
+    /* turi-fiber-handle-defers-fire-at-the-wrong-time: the body pushes its
+     * `defer`s onto the shared env chain while it runs on its fiber.  Mark
+     * the chain here so a case that ABANDONS the body can fire exactly the
+     * body's pending defers when it returns (below). */
+    DeferItem *body_defer_mark = (DeferItem *)env->defer_stack;
+
     /* Switch to body; saves current context into handler_ctx. */
     swapcontext(&cont->handler_ctx, &cont->body_ctx);
 #if !defined(__EMSCRIPTEN__) && defined(__APPLE__)
@@ -4096,6 +4102,18 @@ static TuriValue eval_handle(TuriEnv *env, EvalFrame *frame,
     } else {
         /* Body performed an effect; dispatch handler case. */
         result = eval_handle_inner(env, frame, h, cont);
+        /* The case returned with the body still suspended and no case able
+         * to keep `k`: the body's frames are abandoned for good, so their
+         * pending defers run now, innermost scope first -- when the case
+         * returns, before the handle's value is used -- as the compiled DK
+         * runtime fires them (cps-defer-skipped-on-abortive-effect).  They
+         * used to stay on the chain and fire at the next enclosing scope
+         * exit, after everything the handle's continuation printed.  A case
+         * that may keep `k` is left alone: its defers belong to a later
+         * resume, which is the half of the report still open. */
+        if (!cont->done && !k_may_escape &&
+            env->defer_stack != (void *)body_defer_mark)
+            fire_defers_to_mark_by_scope(env, body_defer_mark, frame);
     }
 
     /* A case that may have kept `k` keeps the cont: it can be resumed after
@@ -17352,7 +17370,7 @@ static TuriValue turi_eval_impl(TuriEnv *env, const char *src, const char *path,
      * and reported TUR-E0009 against a callee whose row (resolved on its own
      * turn) still carried Bt.  Registration is idempotent, so re-scanning a
      * turn's defeffects into the shared env is harmless.  The builtin
-     * `Unsafe` is registered as the compiled pipeline does (PASS_EFFECT_LOWER
+     * `Unsafe` is registered as the compiled pipeline does (PASS_EFFECT_ENV
      * in run_core_pass), for the same parity reason. */
     int eff_rc = 0;
     {

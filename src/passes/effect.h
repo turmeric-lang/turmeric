@@ -79,7 +79,7 @@ typedef enum EffectRowKind {
     ERK_VAR,         /* {a} - effect variable (lowercase name = row variable) */
     ERK_UNION,       /* {E1 | E2} - union (for type inference) */
     ERK_UNRESOLVED,  /* #{Foo Bar e} - symbolic names parsed during elab; resolved
-                      * to ERK_CONCRETE/ERK_VAR after PASS_EFFECT_LOWER by
+                      * to ERK_CONCRETE/ERK_VAR after PASS_EFFECT_ENV by
                       * effect_row_resolve(). Uppercase names → concrete effects;
                       * lowercase names → ERK_VAR row variables. */
 } EffectRowKind;
@@ -240,7 +240,7 @@ Effect *effect_env_register_builtin_unsafe(EffectEnv *env, Arena *a,
  * FS / Net / Proc / Rand `^extends IO` -- registered with their parent links
  * and is_capability set, so `#fx{IO}` resolves in a program that loads
  * nothing.  Idempotent.  Every EffectEnv that registers Unsafe registers
- * these too (elab, PASS_EFFECT_LOWER, the interpreter's session env). */
+ * these too (elab, PASS_EFFECT_ENV, the interpreter's session env). */
 void effect_env_register_builtin_capabilities(EffectEnv *env, Arena *a,
                                               SymbolTable *st);
 

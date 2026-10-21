@@ -141,8 +141,9 @@ for something else." Everything else gets a real type.
 `(Result T E)`, `(List T)` (from `stdlib/list-typed.tur`). The angle-bracket
 forms `option<T>`, `Option<T>`, `vec<T>` and `list<T>` are **not** types in an
 annotation. An unknown name there becomes an implicit type variable, so a
-parameter written `[x : option<int>]` accepts a `cstr` with no diagnostic
-([unknown-type-annotation-becomes-implicit-tyvar](docs/reported/unknown-type-annotation-becomes-implicit-tyvar.md)),
+parameter written `[x : option<int>]` accepts a `cstr`, with a TUR-W0045
+warning since 2026-10-21
+([unknown-type-annotation-becomes-implicit-tyvar](docs/archive/unknown-type-annotation-becomes-implicit-tyvar.md)),
 and `result<T,E>` does not even parse as one type. `ptr<T>` and `rc<T>` are
 built-in and do resolve, with the `ptr<T>` pointee caveat above.
 

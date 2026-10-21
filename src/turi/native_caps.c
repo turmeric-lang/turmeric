@@ -164,10 +164,45 @@ static const TuriNativeCapRow k_rows[] = {
     { "floor", 0 },
     { "free-bind", 0 },
     { "free-run", 0 },
+    { "fs/append-text", TURI_CAP_FS },                                      /* stdlib/fs.tur native: by-path file access */
+    { "fs/chmod", TURI_CAP_FS },                                            /* stdlib/fs.tur native: by-path file access */
+    { "fs/copy", TURI_CAP_FS },                                             /* stdlib/fs.tur native: by-path file access */
+    { "fs/dir?", TURI_CAP_FS },                                             /* stdlib/fs.tur native: by-path file access */
+    { "fs/dup-cstr", 0 },
+    { "fs/exists?", TURI_CAP_FS },                                          /* stdlib/fs.tur native: by-path file access */
+    { "fs/file-dev", TURI_CAP_FS },                                         /* stdlib/fs.tur native: by-path file access */
+    { "fs/file-ino", TURI_CAP_FS },                                         /* stdlib/fs.tur native: by-path file access */
+    { "fs/file?", TURI_CAP_FS },                                            /* stdlib/fs.tur native: by-path file access */
+    { "fs/free-cstr", 0 },
+    { "fs/glob", TURI_CAP_FS },                                             /* stdlib/fs.tur native: by-path file access */
+    { "fs/lstat", TURI_CAP_FS },                                            /* stdlib/fs.tur native: by-path file access */
+    { "fs/mkdir", TURI_CAP_FS },                                            /* stdlib/fs.tur native: by-path file access */
+    { "fs/mkdirp", TURI_CAP_FS },                                           /* stdlib/fs.tur native: by-path file access */
+    { "fs/path-join", 0 },
+    { "fs/paths-free", 0 },
+    { "fs/read-dir", TURI_CAP_FS },                                         /* stdlib/fs.tur native: by-path file access */
+    { "fs/read-lines", TURI_CAP_FS },                                       /* stdlib/fs.tur native: by-path file access */
+    { "fs/read-string", TURI_CAP_FS },                                      /* stdlib/fs.tur native: by-path file access */
+    { "fs/read-text", TURI_CAP_FS },                                        /* stdlib/fs.tur native: by-path file access */
+    { "fs/readlink", TURI_CAP_FS },                                         /* stdlib/fs.tur native: by-path file access */
+    { "fs/realpath", TURI_CAP_FS },                                         /* stdlib/fs.tur native: by-path file access */
+    { "fs/rename", TURI_CAP_FS },                                           /* stdlib/fs.tur native: by-path file access */
+    { "fs/rm", TURI_CAP_FS },                                               /* stdlib/fs.tur native: by-path file access */
+    { "fs/rmdir", TURI_CAP_FS },                                            /* stdlib/fs.tur native: by-path file access */
+    { "fs/stat", TURI_CAP_FS },                                             /* stdlib/fs.tur native: by-path file access */
+    { "fs/stat-atime", TURI_CAP_FS },                                       /* stdlib/fs.tur native: by-path file access */
+    { "fs/stat-free", TURI_CAP_FS },                                        /* stdlib/fs.tur native: by-path file access */
+    { "fs/stat-mode", TURI_CAP_FS },                                        /* stdlib/fs.tur native: by-path file access */
+    { "fs/stat-mtime", TURI_CAP_FS },                                       /* stdlib/fs.tur native: by-path file access */
+    { "fs/stat-size", TURI_CAP_FS },                                        /* stdlib/fs.tur native: by-path file access */
+    { "fs/symlink", TURI_CAP_FS },                                          /* stdlib/fs.tur native: by-path file access */
+    { "fs/symlink?", TURI_CAP_FS },                                         /* stdlib/fs.tur native: by-path file access */
     { "fs/tmpfile", TURI_CAP_FS },                           /* mkstemp in /tmp */
     { "fs/tmpfile-fd", TURI_CAP_FS },                        /* a tmpfile handle: its path, its fd, and unlink */
     { "fs/tmpfile-free", TURI_CAP_FS },                      /* a tmpfile handle: its path, its fd, and unlink */
     { "fs/tmpfile-path", TURI_CAP_FS },                      /* a tmpfile handle: its path, its fd, and unlink */
+    { "fs/walk-dir?", TURI_CAP_FS },                                        /* stdlib/fs.tur native: by-path file access */
+    { "fs/write-text", TURI_CAP_FS },                                       /* stdlib/fs.tur native: by-path file access */
     { "future-cell-free", 0 },
     { "future-cell-new", 0 },
     { "future-done?", 0 },
@@ -829,6 +864,10 @@ static const TuriNativeHandleRow k_handle_rows[] = {
     { "err-val", { TURI_HK_RESULTBOX, TURI_HK_NONE, TURI_HK_NONE, TURI_HK_NONE }, TURI_HK_NONE, TURI_HSIG_STRUCT_OK },
     { "err-val-ptr", { TURI_HK_RESULTBOX, TURI_HK_NONE, TURI_HK_NONE, TURI_HK_NONE }, TURI_HK_NONE, TURI_HSIG_STRUCT_OK },
     { "err?", { TURI_HK_RESULTBOX, TURI_HK_NONE, TURI_HK_NONE, TURI_HK_NONE }, TURI_HK_NONE, TURI_HSIG_STRUCT_OK },
+    { "fs/dup-cstr", { TURI_HK_CSTR, TURI_HK_NONE, TURI_HK_NONE, TURI_HK_NONE }, TURI_HK_OWNED_CSTR, TURI_HSIG_MINT },
+    { "fs/free-cstr", { TURI_HK_OWNED_CSTR, TURI_HK_NONE, TURI_HK_NONE, TURI_HK_NONE }, TURI_HK_NONE, TURI_HSIG_FREE },
+    { "fs/path-join", { TURI_HK_CSTR, TURI_HK_CSTR, TURI_HK_NONE, TURI_HK_NONE }, TURI_HK_OWNED_CSTR, TURI_HSIG_MINT },
+    { "fs/paths-free", { TURI_HK_VEC, TURI_HK_NONE, TURI_HK_NONE, TURI_HK_NONE }, TURI_HK_NONE, TURI_HSIG_FREE },
     { "future-cell-free", { TURI_HK_FUTURE, TURI_HK_NONE, TURI_HK_NONE, TURI_HK_NONE }, TURI_HK_NONE, 0 },
     { "future-cell-new", { TURI_HK_NONE, TURI_HK_NONE, TURI_HK_NONE, TURI_HK_NONE }, TURI_HK_FUTURE, TURI_HSIG_MINT },
     { "future-done?", { TURI_HK_FUTURE, TURI_HK_NONE, TURI_HK_NONE, TURI_HK_NONE }, TURI_HK_NONE, 0 },

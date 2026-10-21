@@ -18,16 +18,16 @@ the [GC guide](gc-guide.md#what-is-not-gc-managed) and the
 The design history is the archived
 [regions plan](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/regions-plan.md).
 
-> **Trust the code over the comments.** Several comments in this area predate
-> graduation (2026-09-05). `emit_cps_ir.c` says the region predicate "is false
-> unless `--enable=regions` is on"; `region.h` calls the poison backstop the
-> reason the feature "is shippable behind a flag"; `src/turi/preload.c` calls
-> the identity forwarder the compiled path's "`--enable=regions` off" mode.
-> There is no flag any more. Regions are on unless `TUR_REGIONS=0` was set
-> when `tur` ran. Two fixtures also claim to rewind and never do (see
+> **Trust the code over the comments.** There is no `--enable=regions` flag
+> any more: regions are on unless `TUR_REGIONS=0` was set when `tur` ran, and
+> the comments that said otherwise were corrected on 2026-10-21. Since then
+> the embedded runtime sources (`region.h`, `arena.{h,c}`, `region.c`,
+> `r7gc.c`) are pasted into emitted programs with their comments stripped, so
+> a comment edit there no longer touches the `expected.c` snapshots or the
+> split hash. Two fixtures still claim to rewind and never do (see
 > [When does a generation actually rewind?](#when-does-a-generation-actually-rewind)).
-> The stale comments found so far in this area, each with a fix, are
-> listed in [stale-comments-regions](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/stale-comments-regions.md).
+> What is still open in this area is listed in
+> [stale-comments-regions](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/stale-comments-regions.md).
 
 ---
 

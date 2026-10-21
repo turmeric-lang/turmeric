@@ -876,7 +876,7 @@ Each phase is a zone the driver or elaborator enters and leaves:
 | `macro-expand` | computing an expansion; elaborating the result is `elaborate` |
 | `elaborate` | `PASS_ELABORATE`, less everything else in this list it contains |
 | `typeclass` | `defclass`/`definstance`, method dispatch, instance resolution |
-| `kind-check`, `effect-lower`, `effect-row`, `cps`, `borrow-check` | the core passes of the same names |
+| `kind-check`, `effect-env`, `effect-row`, `cps`, `borrow-check` | the core passes of the same names (`effect-env` was `effect-lower` until 2026-10-21) |
 | `refine` | refinement obligations: frame checks, call-site crossings, the solver |
 | `mono` | the by-value spec resolution pass (monomorphs instantiated inline are charged to `elaborate` or `emit`, wherever that happens) |
 | `emit` | producing C, including the driver's split-preamble swap and the JIT's prune |
@@ -903,7 +903,7 @@ tur --timings: tur build --timings fib.json benchmarks/triangle/fib.tur -o fib
   elaborate            4.219      2.4
   typeclass            0.801      0.5
   kind-check           0.038      0.0
-  effect-lower         0.001      0.0
+  effect-env           0.001      0.0
   effect-row           0.469      0.3
   cps                  0.023      0.0
   borrow-check         0.069      0.0

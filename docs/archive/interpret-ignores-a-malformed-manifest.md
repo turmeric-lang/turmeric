@@ -42,7 +42,7 @@ the compiled path, `--no-auto-spice` does not suppress it -- the `:experiments`
 read still finds the manifest. Each error now prints once.
 
 The `diag_reset()` is load-bearing, not tidy: see
-[manifest-read-leaves-a-dangling-file-registration](../reported/manifest-read-leaves-a-dangling-file-registration.md).
+[manifest-read-leaves-a-dangling-file-registration](manifest-read-leaves-a-dangling-file-registration.md).
 
 Pinned by `tests/fixtures/errors/lang-trailing-token-manifest`, which runs on
 both engines (it carried `requires.compiled` on the original branch for

@@ -1,7 +1,7 @@
 #ifndef TUR_READER_MACROS_H
 #define TUR_READER_MACROS_H
 
-/* User-defined reader macros — see docs/reader-macros-plan.md.
+/* User-defined reader macros — see docs/archive/reader-macros-plan.md.
  *
  * RM0 is the registry skeleton: types, reserved-prefix table, and lookup
  * API. No reader behavior changes yet — the registry starts empty and the

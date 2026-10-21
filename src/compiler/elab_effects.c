@@ -3018,7 +3018,7 @@ Expr *elab_compose_handlers(Elab *e, const Form *call) {
     /* FH5: runtime composition is implemented -- the CF3 TUR-E0704 gate is
      * removed.  The static checks above (TUR-E0251 overlap, handler-value
      * typing) still fire first.  Composition lowers to table concatenation
-     * (emit_effects_compose_handlers); see docs/first-class-handlers-semantics.md. */
+     * (emit_effects_compose_handlers); see docs/archive/history/first-class-handlers-semantics.md. */
 
     /* FH0.3: composed handlers must agree on the answer type T.  In v1 a
      * detached handler literal does not carry the answer type -- its

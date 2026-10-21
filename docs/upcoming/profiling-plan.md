@@ -159,7 +159,7 @@ so nobody reads it as a partition.
     {"name": "elaborate",     "self_ms": 640.0, "self_pct": 35.0},
     {"name": "typeclass",     "self_ms": 210.5, "self_pct": 11.5},
     {"name": "kind-check",    "self_ms":   8.0, "self_pct":  0.4},
-    {"name": "effect-lower",  "self_ms":  22.0, "self_pct":  1.2},
+    {"name": "effect-env",    "self_ms":  22.0, "self_pct":  1.2},
     {"name": "effect-row",    "self_ms":  14.0, "self_pct":  0.8},
     {"name": "cps",           "self_ms":  55.0, "self_pct":  3.0},
     {"name": "borrow-check",  "self_ms":  31.0, "self_pct":  1.7},
@@ -230,7 +230,7 @@ New `src/compiler/prof.h` + `prof.c`, roughly 120 lines:
 ```c
 typedef enum ProfZone {
     PROF_READ, PROF_SWEET, PROF_MODULE_LOAD, PROF_MACRO_EXPAND,
-    PROF_ELAB, PROF_TYPECLASS, PROF_KIND, PROF_EFFECT_LOWER,
+    PROF_ELAB, PROF_TYPECLASS, PROF_KIND, PROF_EFFECT_ENV,
     PROF_EFFECT_ROW, PROF_CPS, PROF_BORROW, PROF_REFINE,
     PROF_MONO, PROF_EMIT, PROF_CC,
     PROF_ZONE_N

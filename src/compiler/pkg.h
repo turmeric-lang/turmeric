@@ -5,16 +5,16 @@
  * pkg.h -- Spice: the Turmeric package manager (Phase PKG-1)
  *
  * A build.tur file declares a package using (defpackage ...).
- * tur.lock pins all resolved git refs and SHA-256 hashes.
+ * tur.lock pins each URL spice to a commit (`:resolved`) and a `tree1:`
+ * content hash (`:sha256`, see PkgLockEntry); for a cmake dep it records the
+ * commit fetched but does not pin it -- the generated CMake hands
+ * FetchContent the manifest's `:ref`, and pkg_cmake_verify_lock reports a
+ * mismatch after the fact.
  *
- * Workflow:
- *   tur init --bin my-app    create a new binary project
- *   tur init --lib my-lib    create a new library project
- *   tur add <url> [--ref v]  add a Turmeric spice (git URL)
- *   tur add <path> --path    add a local spice
- *   tur add-cmake <url>      add a C/CMake dependency
- *   tur fetch                clone all spices, update tur.lock
- *   tur fetch --update       update all spices to latest ref
+ * The commands (init, add, add-cmake, fetch, fetch --update / --frozen,
+ * audit, and the global install / uninstall / list / upgrade verbs) are
+ * listed with their flags in docs/guides/package-manager-internals-guide.md,
+ * "Commands at a glance".
  */
 
 #include <stdbool.h>
@@ -73,6 +73,12 @@ typedef struct PkgCmakeDep {
      * -- not tur -- decides which applies. */
     PkgCmakeOpt  *wasm_opts;
     int           n_wasm_opts;
+    /* Set by pkg_collect_transitive_cmake_deps: the post-order position of
+     * the manifest that first declared this entry (0 = the deepest spice;
+     * the root manifest is the highest).  pkg_gen_cmake_deps writes the
+     * link manifest highest group first, so a dependent's archives precede
+     * its dependencies'.  0 for a manifest's own, uncollected entries. */
+    int           link_group;
 } PkgCmakeDep;
 
 /* ------------------------------------------------------------------ */
@@ -282,7 +288,11 @@ typedef struct PkgLockEntry {
     char  *url;
     char  *ref;
     char  *resolved;    /* full git commit SHA */
-    char  *sha256;      /* SHA-256 of the archive */
+    char  *sha256;      /* a spice row: pkg_hash_dir's `tree1:` content hash
+                         * (the git SHA if hashing failed -- pkg_hash_comparable
+                         * refuses to compare that); NULL on a cmake row, which
+                         * pins by `:resolved` alone (a `:sha256` an older tur
+                         * wrote there is ignored on read) */
     char  *fetched_at;  /* ISO-8601 timestamp */
     char  *resolved_via;   /* "system" or "fetch"; NULL = legacy/fetch */
     char  *system_version; /* system pkg version when resolved_via == system */
@@ -384,16 +394,13 @@ PkgLockEntry *pkg_lock_find(PkgLockFile *lock, const char *name, bool is_cmake);
 /* Utilities                                                           */
 /* ------------------------------------------------------------------ */
 
-/* Compute SHA-256 of a file (64 hex chars + NUL). Returns true on success. */
-bool pkg_sha256_file(const char *path, char out[65]);
-
 /* Append one argument to a shell command string, quoted for the platform's
  * shell (tur_shell_quote).  Returns false if it does not fit -- a truncated
  * command string is worse than none, so callers must fail rather than run it.
  *
  * Every command in the package and install paths used to interpolate `'%s'`,
  * which cmd.exe does not treat as quoting at all.
- * See docs/reported/windows-spice-fetch-shell-quoting.md. */
+ * See docs/archive/windows-spice-fetch-shell-quoting.md. */
 bool pkg_cmd_arg(Buf *cmd, const char *arg);
 
 /* Room for a tagged tree hash: "tree1:" + 64 hex + NUL. */
@@ -522,15 +529,23 @@ char *pkg_workspace_member_path(const char *project_dir, const char *dep_name);
  * to its on-disk directory (workspace-sibling preferred, then :path, then
  * fetched <root>/spices/<name>[-<ref>][/<subdir>]), reading the sibling's
  * own build.tur, and unioning all :cmake-deps blocks encountered into a
- * freshly-allocated PkgCmakeDep array.  The root manifest's own cmake_deps
- * are included first so its declarations win in any ordering-sensitive
- * downstream consumer.
+ * freshly-allocated PkgCmakeDep array.  The array is in configure order:
+ * post-order over the :spices graph, so a spice's dependencies' entries
+ * come before its own and the root manifest's come last.  Each entry's
+ * `link_group` lets pkg_gen_cmake_deps write the link manifest the other
+ * way round (cmake-deps-no-cross-spice-override-or-order).
  *
  * Conflict policy:
- *   - identical (name, url, ref) entries are silently deduplicated
- *     (workspace siblings sharing a system dep coexist cleanly);
- *   - same-name entries with mismatched :url or :ref are a hard error --
- *     stderr gets both origins and the function returns false.
+ *   - same-name entries at the same :url/:ref (or :path) are one dependency
+ *     and are merged: :targets / :link-libs / :link-flags union, and so do
+ *     :options / :wasm-options key by key;
+ *   - an option set to different values goes to the declaration whose
+ *     manifest depends on every other one that set it (a spice overrides
+ *     its dependency, the root overrides anything); when none does, it is a
+ *     hard error naming two unrelated origins;
+ *   - same-name entries with mismatched :url or :ref, or a differing
+ *     :cmake-name / :cmake-version, are a hard error -- stderr gets both
+ *     origins and the function returns false.
  *
  * On success, *out_deps points to a newly-allocated array of PkgCmakeDep
  * (deep-copied from source manifests; :path entries are absolutized so

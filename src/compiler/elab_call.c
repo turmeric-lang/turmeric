@@ -5124,6 +5124,25 @@ static Expr *elab_call_inner(Elab *e, Form *call) {
             expanded->as.list.items[0]->tag == F_SYM &&
             strcmp(expanded->as.list.items[0]->as.sym->name, "definstance") == 0) {
             expanded->span = call->span;
+        } else if (e->toplevel_stmt != call) {
+            /* macro-expansion-as-call-arg-blamed-on-template: the expansion
+             * REPLACES the call, so the VALUE it elaborates to belongs at the
+             * call site -- but its Expr carried the template root's span, and
+             * a check made AFTER the expand+elaborate window (the enclosing
+             * call's argument check, a `let` annotation) reported there:
+             * `stdlib/vec.tur:501` for `(total (vec-of (Q 3.25)))`, with no
+             * note back to the user's file.  Give the root the call's span;
+             * inner subforms keep their template spans, so a diagnostic
+             * INSIDE the expansion still lands in the macro with the
+             * provenance note.  Expression position only: a top-level
+             * statement root (a macro-emitted `defn`) keeps its file id, which
+             * credits the definition to the macro's module.  A shallow copy
+             * rather than a write: the root can be one of the call's own
+             * argument forms handed back unchanged. */
+            Form *root = (Form *)arena_alloc(e->arena, sizeof(Form));
+            *root = *expanded;
+            root->span = call->span;
+            expanded = root;
         }
 
         /* Phase M4: Keep the expansion-module context active while elaborating
@@ -5658,6 +5677,39 @@ static Expr *elab_call_inner(Elab *e, Form *call) {
                                             (ft->kind == TY_FN && ft->as.fn.boxed));
                     if (!fat_field) continue;
                     Expr *fa = call_expr->as.call_.args[fi];
+                    /* fn-param-stored-in-struct-field-miscompiles: a `(fn ...)`
+                     * PARAMETER not marked `^fat` is the two-word poly carrier
+                     * (tur_poly_fn_t, typed ptr<void>), not a TY_FN value, so
+                     * the thin-fn shim below never saw it and the constructor
+                     * cast the struct to an integer (a cc error).  Box it onto
+                     * the fat handle the field holds, as the type-variable slot
+                     * (fn-param-at-type-variable-slot, the arg loop) and a
+                     * fn-typed defn result (elab_normalize_fn_tail_leaves)
+                     * already do; the sink is the field's own signature so the
+                     * slot-0 shim matches the field call's typed dispatch. */
+                    if (fa && fa->type.kind == TY_PTR_VOID) {
+                        const Expr *pv = fa;
+                        while (pv && pv->kind == EX_ASCRIBE) pv = pv->as.ascribe_.inner;
+                        const Binding *pb = (pv && pv->kind == EX_VAR)
+                            ? pv->as.var.binding : NULL;
+                        if (pb && pb->is_param && pb->is_poly_fn && pb->poly_type &&
+                            pb->poly_type->kind == TY_FN &&
+                            !pb->poly_type->as.fn.cfnptr &&
+                            pb->poly_type->as.fn.arity <= TUR_FAT_SHIM_MAX_ARITY) {
+                            const Type *sink = (ft->kind == TY_FN &&
+                                                !call_type_has_named_tyvar(ft))
+                                ? ft : pb->poly_type;
+                            Type *bt = (Type *)arena_alloc(e->arena, sizeof(Type));
+                            *bt = *sink;
+                            bt->as.fn.boxed = true;
+                            Expr *conv = expr_new(e->arena, EX_POLY_TO_FAT, *bt,
+                                                  fa->span);
+                            conv->as.poly_to_fat_.inner = fa;
+                            conv->as.poly_to_fat_.sink_fn_type = sink;
+                            call_expr->as.call_.args[fi] = conv;
+                        }
+                        continue;
+                    }
                     if (!fa || fa->type.kind != TY_FN || fa->type.as.fn.boxed)
                         continue;
                     /* fn-value-fat-normalization increment 2: a NORMALIZED fn
@@ -7021,7 +7073,7 @@ bool any_expr_is_owned_temp(const Expr *x, int depth) {
  * and hand over the stored value/key, which IS a carrier box, so their erased
  * comparators are already right.  (Their TYPED comparators are wrong for the
  * mirror-image reason -- filed separately as
- * docs/reported/typed-comparator-over-hamt-box-compares-box-addresses.md.) */
+ * docs/archive/typed-comparator-over-hamt-box-compares-box-addresses.md.) */
 static bool call_comparator_gets_slot_words(const Binding *fn_binding,
                                             uint32_t argi) {
     if (!fn_binding || !fn_binding->name || !fn_binding->name->name) return false;
