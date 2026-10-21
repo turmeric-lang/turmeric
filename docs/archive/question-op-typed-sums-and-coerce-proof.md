@@ -2,7 +2,7 @@
 
 **RESOLVED 2026-10-21** (items 1 and part of 5 of type-forms-gaps, plus doc fixes
 for items 3 and 8). The rest stays open in
-[type-forms-gaps](../reported/type-forms-gaps.md). Pinned by
+[type-forms-gaps](type-forms-gaps.md). Pinned by
 `question-op-typed-sums` (all three engines), `coerce-applied-equal-proof` and
 `errors/coerce-proof-about-other-type`.
 

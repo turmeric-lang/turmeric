@@ -16,8 +16,8 @@
 ;;; a `match` arm (TUR-E0702) or in a recursive generator (TUR-E0703), and there
 ;;; is no type to annotate a generator parameter with -- a function that takes
 ;;; one cannot call `gen-next` on it. Consume a generator where it is made, or
-;;; through the tur/gen macros. See docs/reported/generator-forms-gaps.md for
-;;; what else falls short.
+;;; through the tur/gen macros; docs/upcoming/generator-type-plan.md adds
+;;; `(Generator T)`.
 ;; Reference only: tools/gendocs.py reads the ;;@ lines, the compiler skips them.
 
 ;;; gen -- create a generator from a body.

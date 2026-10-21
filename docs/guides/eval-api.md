@@ -687,6 +687,21 @@ These are intentional and enforced: `tools/check_turi_parity.py` (wired into
 `tests/run.sh`) checks every `EX_*` kind against `docs/turi-carve-out.txt`, so a
 carve-out can neither silently regress to the generic default nor go stale.
 
+### Where the interpreter's answer differs by design
+
+Two limits are not errors, so they are listed here rather than in the table:
+
+- **Sized numbers inside `any`.** The interpreter has one integer kind and one
+  float kind, so a sized value widened to `any` is just an `int` or `float`:
+  `(type-of (:: 3i32 any))` is `int` (compiled: `int32`), `(is? (:: 3i32 any)
+  int32)` is false and `(is? ... int)` true (compiled: the reverse). Outside `any`
+  the sized arithmetic matches the compiled program.
+- **Saving a serial continuation.** `serial-cont->bytes`, `bytes->serial-cont`
+  and the `*-cont!` / `cont-*-file` helpers in `stdlib/serial.tur` marshal the
+  compiled program's continuation frames; the interpreter's serial continuation is
+  its own structure, and the inline-C helpers stop with `takes a parameter of type
+  cont<int>`. `serial-shift` and calling `k` work on both.
+
 ---
 
 ## Full example -- sandboxed calculator

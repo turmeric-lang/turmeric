@@ -1,5 +1,8 @@
 # Two identical string literals compare equal by address under `tur run`, unequal under `tur jit` -- in plain Turmeric
 
+**Decision (2026-10-21):** store each distinct literal once per unit (fix
+direction 1); plan: [string-literal-interning-plan](../upcoming/string-literal-interning-plan.md).
+
 **Severity: low-medium** (engine divergence; silent wrong answer). Found
 2026-10-21 reviewing the resolution of
 [jit-string-literal-identity-differs-from-cc](../archive/jit-string-literal-identity-differs-from-cc.md),

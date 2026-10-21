@@ -23,7 +23,8 @@
 ;;; delimited-control-operators-guide compares them; serializable-continuations-guide
 ;;; covers the serial pair. Several of these forms differ between the compiler
 ;;; and the interpreter, or are unfinished -- see
-;;; docs/reported/continuation-forms-gaps.md.
+;;; docs/reported/compiled-shift-delimited-by-root.md and
+;;; docs/upcoming/shift0-pop-plan.md.
 ;; Reference only: tools/gendocs.py reads the ;;@ lines, the compiler skips them.
 
 ;;; reset -- mark how far a shift reaches.

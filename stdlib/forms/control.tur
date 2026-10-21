@@ -9,8 +9,9 @@
 ;;; Where the compiled program and the interpreter (`tur --interpret`, the REPL,
 ;;; the playground) differ, an entry says so. Guides: binding-forms-guide,
 ;;; sum-types-guide (for `match`), macros-guide (`gensym`), dynamic-vars-guide
-;;; (`binding`), error-handling-guide (`defer`). Defects found while writing
-;;; this page are in docs/reported/control-forms-gaps.md.
+;;; (`binding`), error-handling-guide (`defer`). What is still to change:
+;;; docs/upcoming/quote-list-data-plan.md (`quote` of a list) and
+;;; docs/upcoming/defer-semantics-plan.md (`defer` scope and read time).
 ;; Reference only: tools/gendocs.py reads the ;;@ lines, the compiler skips them.
 
 ;;; let -- bind local names, then evaluate a body.

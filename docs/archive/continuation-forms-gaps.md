@@ -1,11 +1,29 @@
 # The continuation forms: `shift0` is `shift`, a compiled `shift` is delimited by the root, and a serial continuation cannot be saved when interpreted
 
+**ARCHIVED 2026-10-21** -- split into reports and plans; see the disposition below.
+
+## Disposition (2026-10-21) -- archived; every open item has a home
+
+- Item 1 (`shift0` is `shift`): decision -- implement the pop; feasibility
+  investigated (small, after the root-delimiting fix). Plan:
+  [shift0-pop-plan](../upcoming/shift0-pop-plan.md).
+- Item 2 (a compiled `shift` delimited by the root; the wrong answer under a
+  direct `reset`): its own report,
+  [compiled-shift-delimited-by-root](../reported/compiled-shift-delimited-by-root.md).
+- Item 3 (`call/cc` `k` reuse unchecked): decision -- leave as is; the guide says
+  only `^linear` is checked.
+- Item 4 (serial continuation bytes interpreted): decision -- compiled-only,
+  documented in `stdlib/serial.tur`, the `serial-shift` forms entry and
+  eval-api's interpreter limits.
+- Item 5 (`(k 2.25)` into a `float32` continuation): its own report,
+  [escape-cont-float32-literal-arg](../reported/escape-cont-float32-literal-arg.md).
+
 **Severity: medium** (item 2 is a silent wrong answer). Found 2026-10-19 checking the examples for the
 continuation forms' API reference (`stdlib/forms/continuations.tur`).
 
 **Narrowed 2026-10-21.** Two abortive resets plus a capture, a float through an
 escape `k`, and `call/cc` of a non-function are resolved: see
-[cps-reset-continuation-joins-and-escape-float](../archive/cps-reset-continuation-joins-and-escape-float.md).
+[cps-reset-continuation-joins-and-escape-float](cps-reset-continuation-joins-and-escape-float.md).
 
 ## 1. `shift0` behaves as `shift` (decision: implement the pop, or retire the distinction)
 

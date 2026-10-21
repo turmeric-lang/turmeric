@@ -569,6 +569,11 @@
 ;;; is written, so the bytes are valid in another process running the SAME
 ;;; program.
 ;;;
+;;; Compiled programs only: the frame chain this walks is the compiled
+;;; program's. `tur --interpret` keeps its own continuation structure and stops
+;;; with `inline-C defn 'serial-cont->bytes' takes a parameter of type cont<int>`.
+;;; `bytes->serial-cont` and the `*-cont!` / `cont-*-file` helpers are the same.
+;;;
 ;;; Parameters:
 ;;;   k -- the continuation the serial-shift receiver was passed
 ;;;

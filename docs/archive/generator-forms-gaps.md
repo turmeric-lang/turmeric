@@ -1,5 +1,15 @@
 # Generators: no parameter type
 
+**ARCHIVED 2026-10-21** -- split into reports and plans; see the disposition below.
+
+## Disposition (2026-10-21) -- archived
+
+- Item 1 (no generator parameter type; `gen-unwrap` typed `int`): decision -- add
+  `(Generator T)` and a typed `gen-unwrap`. Plan:
+  [generator-type-plan](../upcoming/generator-type-plan.md).
+- The rest is resolved: see
+  [generator-capture-yield-and-exhausted-reads](generator-capture-yield-and-exhausted-reads.md).
+
 **Severity: medium.** Found 2026-10-19 checking the examples for the generator
 forms' API reference (`stdlib/forms/generators.tur`).
 
@@ -7,7 +17,7 @@ forms' API reference (`stdlib/forms/generators.tur`).
 checks, `yield` in a nested `fn`, and `gen-unwrap` of an exhausted generator
 are resolved, and so (same day, second pass) is a generator captured by a
 `fn` literal: see
-[generator-capture-yield-and-exhausted-reads](../archive/generator-capture-yield-and-exhausted-reads.md).
+[generator-capture-yield-and-exhausted-reads](generator-capture-yield-and-exhausted-reads.md).
 
 ## 1. No way to type a generator parameter
 

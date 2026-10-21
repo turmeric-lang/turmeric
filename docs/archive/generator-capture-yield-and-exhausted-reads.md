@@ -5,7 +5,7 @@
 `errors/gen-yield-type-mismatch`, `errors/gen-yield-in-fn-literal`,
 `errors/gen-set-captured-mut-struct`. Item 5 (a type for a generator
 parameter) stays open in
-[generator-forms-gaps](../reported/generator-forms-gaps.md).
+[generator-forms-gaps](generator-forms-gaps.md).
 
 ## What was wrong, and what changed
 

@@ -2,7 +2,7 @@
 
 **RESOLVED 2026-10-21** (items 1, 2 and the `call/cc` argument check of item 5 of
 continuation-forms-gaps). The rest stays open in
-[continuation-forms-gaps](../reported/continuation-forms-gaps.md). Pinned by
+[continuation-forms-gaps](continuation-forms-gaps.md). Pinned by
 `cps-two-resets-with-capture` and `escape-float-through-k` (compiled, and
 interpreted where the program is not compiled-only) and
 `errors/callcc-literal-receiver`.

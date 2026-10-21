@@ -19,7 +19,7 @@
 ;;; kinds cannot be ascribed to each other at all -- the compiler cannot tell which
 ;;; of the two a program means, so it stops (see `::`). Several forms here differ
 ;;; between the compiler and the interpreter, or do not do what the guides say;
-;;; see docs/reported/type-forms-gaps.md.
+;;; each entry names its report or plan.
 ;; Reference only: tools/gendocs.py reads the ;;@ lines, the compiler skips them.
 
 ;;; as -- convert a number to another numeric kind.
@@ -305,8 +305,8 @@
 ;;; evidence packed with the value to choose the operation, so two packed values
 ;;; of different types each reach their own instance. The interpreter does this by
 ;;; looking at the runtime value, which cannot tell two `defopaque` types over
-;;; `:int` apart: it can pick the wrong instance (docs/reported/type-forms-gaps.md).
-;;; The `(open c as [s v] ...)` spelling in hrt-guide is not accepted.
+;;; `:int` apart: it can pick the wrong instance
+;;; (docs/reported/turi-packed-defopaque-wrong-instance.md).
 ;;;
 ;;; Parameters:
 ;;;   e    -- an existential value
@@ -332,7 +332,7 @@
 ;;; borrowing `x` mutably afterwards in that same `let` is `cannot borrow 'x' as
 ;;; mutable while it is already borrowed`; close the `let` first.
 ;;;
-;;; Known gaps (docs/reported/type-forms-gaps.md): `set!` of a variable while an
+;;; Known gaps (docs/reported/borrow-checks-gaps.md): `set!` of a variable while an
 ;;; immutable borrow of it is live is accepted, and compiled and interpreted
 ;;; programs then see different values; `&` of a literal fails in the C
 ;;; compiler.
@@ -357,7 +357,8 @@
 ;;; can change its caller's variable: `(defn bump [r : &mut int] : nil (set! @r
 ;;; (+ @r 1)))` called as `(bump &mut x)`.
 ;;;
-;;; Known gaps (docs/reported/type-forms-gaps.md): the variable need not be
+;;; Known gaps (docs/reported/borrow-checks-gaps.md and
+;;; turi-borrow-is-a-copy.md): the variable need not be
 ;;; declared `^mut` -- `(let [x 1] (let [r &mut x] (set! @r 5)) x)` is 5 -- and a
 ;;; mutable borrow of a struct field changes the struct when compiled but not when
 ;;; interpreted.

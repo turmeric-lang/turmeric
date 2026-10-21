@@ -1,12 +1,34 @@
 # The type forms: a `forall` argument is trusted, `&mut` ignores `^mut`, and `type-of` names no sized kind
 
+**ARCHIVED 2026-10-21** -- split into reports and plans; see the disposition below.
+
+## Disposition (2026-10-21) -- archived; every open item has a home
+
+- Item 1 (`forall` argument trusted): decision -- enforce it. Plan:
+  [rank2-argument-genericity-plan](../upcoming/rank2-argument-genericity-plan.md).
+- Item 2 (borrows): reports
+  [borrow-checks-gaps](../reported/borrow-checks-gaps.md) (the checker) and
+  [turi-borrow-is-a-copy](../reported/turi-borrow-is-a-copy.md) (the interpreter).
+- Item 3 (sized numbers in `any`): decision -- an interpreter limit, documented
+  in eval-api ("Where the interpreter's answer differs by design") and the
+  `type-of` forms entry. Compiled `type-of` names them since 2026-10-21.
+- Item 4 (`coerce` keeps `x`'s type) and item 5 (`type-app`): decisions -- the
+  proof's `b` when it is a type variable; retire `type-app`. Plan:
+  [coerce-result-and-type-app-retirement-plan](../upcoming/coerce-result-and-type-app-retirement-plan.md).
+- Item 6 (interpreter picks the wrong instance for packed `defopaque`): report
+  [turi-packed-defopaque-wrong-instance](../reported/turi-packed-defopaque-wrong-instance.md).
+- Item 7, float casts: decision -- saturate on both; report
+  [float-to-int-cast-out-of-range-differs](../reported/float-to-int-cast-out-of-range-differs.md)
+  (which found the compiled side is a bare C cast too). `(:: "hi" :int)`: decision
+  -- store literals once per unit; [string-literal-interning-plan](../upcoming/string-literal-interning-plan.md).
+
 **Severity: medium.** Found 2026-10-19 checking the examples for the type, cast,
 existential and borrow forms' API reference (`stdlib/forms/types.tur`). Each repro
 below was run on `tur run` and `tur --interpret`.
 
 **Narrowed 2026-10-21.** `?` on a typed `Result` / `Option` and `coerce` with an
 applied `(Equal a b)` proof annotation are resolved: see
-[question-op-typed-sums-and-coerce-proof](../archive/question-op-typed-sums-and-coerce-proof.md).
+[question-op-typed-sums-and-coerce-proof](question-op-typed-sums-and-coerce-proof.md).
 Two checks were tried and reverted because the corpus relies on the permissive
 behavior (below).
 
@@ -127,7 +149,7 @@ Two packed values of different machine types (`int`, `cstr`) work on both.
 - `(:: "hi" :int)` is the string's address compiled and the string interpreted;
   and since the address is exposed, two identical literals compare equal under
   `tur run` and unequal under `tur jit`
-  ([cstr-literal-address-differs-by-engine](cstr-literal-address-differs-by-engine.md)).
+  ([cstr-literal-address-differs-by-engine](../reported/cstr-literal-address-differs-by-engine.md)).
 - (hrt-guide's `pack` / `open` spellings are fixed.)
 
 ## Fix directions

@@ -1,5 +1,17 @@
 # Control forms: `quote` does not quote lists, and `defer` scopes and capture are unsettled
 
+**ARCHIVED 2026-10-21** -- split into reports and plans; see the disposition below.
+
+## Disposition (2026-10-21) -- archived; every open item has a home
+
+- Item 1 (`quote` of a list evaluates it): decision -- Lisp semantics, `quote`
+  never evaluates. Plan: [quote-list-data-plan](../upcoming/quote-list-data-plan.md).
+- Item 2 (`defer` scope differs): decision -- end of block on both engines.
+- Item 3 (`defer` captures at registration): decision -- the deferred expression
+  reads its variables when it runs (prototyped). Items 2 and 3:
+  [defer-semantics-plan](../upcoming/defer-semantics-plan.md).
+- Items 4-7: fixed earlier the same day (see "Fixed").
+
 **Narrowed 2026-10-21: items 4-7 are fixed** (`return` is checked against the
 function's type, a literal `match` needs a wildcard, the interpreter checks
 `^tailcall`, vector destructuring in `let` is refused on a non-session value --
