@@ -1220,28 +1220,77 @@ static bool has_capture(const CTerm *t, uint32_t exclude) {
  * and is exhaustive-or-bails: it collects a scalar (Copy, multi-shot-safe)
  * CA_VAR capture, and sets `ok=false` for anything it cannot represent in an env
  * (a captured CPS var, a non-scalar capture, a delegated composite with a
- * capture, or a nested control op).  A false `ok` means the caller keeps the
- * zero-capture fallback.  Mirrors has_capture_rec's traversal exactly so no
- * capture is missed (a missed capture would emit an undeclared reference). */
-#define CC_MAX_CAPS 16
+ * capture, or a nested control op).  A false `ok` means some capture cannot
+ * ride an env -- never how many there are: the set grows (cap_push) -- and the
+ * admission gate refuses a continuation that fails to collect.  Mirrors
+ * has_capture_rec's traversal exactly so no capture is missed (a missed
+ * capture would emit an undeclared reference). */
 /* A capture is either a source binding (`b`, named via name_for_binding) or a
  * CPS-introduced result var (`cvname`, a fresh "tN" name that is both its
  * declaration and its reference).  Exactly one of b / cvname is set. */
 typedef struct {
-    const Binding *b[CC_MAX_CAPS];
-    const char    *cvname[CC_MAX_CAPS];
-    uint32_t       cvid[CC_MAX_CAPS];
-    TypeKind       ty[CC_MAX_CAPS];
-    const Type    *type[CC_MAX_CAPS];   /* full type (Tier C by-value aggregate); may be NULL */
-    bool           polyfn[CC_MAX_CAPS]; /* a rank-2 poly fn value -- env field is tur_poly_fn_t */
-    bool           owning[CC_MAX_CAPS]; /* E1: an owning capture admitted into a MULTI-SHOT
-                                         * continuation -- the lifted helper clones (increfs)
-                                         * it on read-out so each invocation owns its own +1,
-                                         * balanced by the body's drop.  Only set for the
-                                         * multi-shot owning admission (a single-shot owning
-                                         * capture rides by a bare shallow copy, owning=false). */
-    int n; bool ok;
+    const Binding *b;
+    const char    *cvname;
+    uint32_t       cvid;
+    TypeKind       ty;
+    const Type    *type;   /* full type (Tier C by-value aggregate); may be NULL */
+    bool           polyfn; /* a rank-2 poly fn value -- env field is tur_poly_fn_t */
+    bool           owning; /* E1: an owning capture admitted into a MULTI-SHOT
+                            * continuation -- the lifted helper clones (increfs)
+                            * it on read-out so each invocation owns its own +1,
+                            * balanced by the body's drop.  Only set for the
+                            * multi-shot owning admission (a single-shot owning
+                            * capture rides by a bare shallow copy, owning=false). */
+} CapEnt;
+/* Any number of captures: the first CC_INLINE_CAPS live in the set itself, and
+ * cap_push moves them to g_cap_arena past that.  `e` points at one or the
+ * other, so a CapSet is never copied by value; cap_init sets it up. */
+#define CC_INLINE_CAPS 16
+typedef struct {
+    CapEnt *e;
+    int n, cap; bool ok;
+    CapEnt inl[CC_INLINE_CAPS];
 } CapSet;
+
+static Arena g_cap_arena;
+static bool  g_cap_arena_live;
+
+static void cap_init(CapSet *cs) {
+    cs->e = cs->inl; cs->n = 0; cs->cap = CC_INLINE_CAPS; cs->ok = true;
+}
+
+/* A fresh, zeroed entry at the end of `cs`. */
+static CapEnt *cap_push(CapSet *cs) {
+    if (cs->n == cs->cap) {
+        if (!g_cap_arena_live) { arena_init(&g_cap_arena, 0); g_cap_arena_live = true; }
+        int cap = 2 * cs->cap;
+        CapEnt *e = (CapEnt *)arena_alloc(&g_cap_arena, (size_t)cap * sizeof *e);
+        memcpy(e, cs->e, (size_t)cs->n * sizeof *e);
+        cs->e = e; cs->cap = cap;
+    }
+    CapEnt *e = &cs->e[cs->n++];
+    memset(e, 0, sizeof *e);
+    return e;
+}
+
+/* The binders in scope during a capture walk, a stack indexed by depth: the
+ * first CC_MAX_BOUND inline, deeper ones in g_cap_arena (a continuation that
+ * binds more -- a long chain of performs -- still collects every capture). */
+typedef struct { uint32_t *v; int cap; uint32_t inl[CC_MAX_BOUND]; } BoundStk;
+
+static void bound_init(BoundStk *bs) { bs->v = bs->inl; bs->cap = CC_MAX_BOUND; }
+
+static void bound_put(BoundStk *bs, int i, uint32_t id) {
+    if (i >= bs->cap) {
+        if (!g_cap_arena_live) { arena_init(&g_cap_arena, 0); g_cap_arena_live = true; }
+        int cap = bs->cap;
+        while (cap <= i) cap *= 2;
+        uint32_t *v = (uint32_t *)arena_alloc(&g_cap_arena, (size_t)cap * sizeof *v);
+        memcpy(v, bs->v, (size_t)bs->cap * sizeof *v);
+        bs->v = v; bs->cap = cap;
+    }
+    bs->v[i] = id;
+}
 
 /* ---- defer-skipped-on-panic-in-cps-function: the pending-defer stack ------ *
  * A `do` lowered by P5b (cps_ir.c) threads its `(defer D)` bodies into the
@@ -1359,7 +1408,7 @@ static uint64_t pend_unfirable_for(const CapSet *caps) {
             const Binding *b = fv[k];
             if (!b || b->is_global || binding_excluded(b)) continue;
             bool have = false;
-            if (caps) for (int c = 0; c < caps->n; c++) if (caps->b[c] == b) { have = true; break; }
+            if (caps) for (int c = 0; c < caps->n; c++) if (caps->e[c].b == b) { have = true; break; }
             if (!have) { m |= 1ull << i; break; }
         }
         free(fv);
@@ -1559,11 +1608,9 @@ static void cap_add(CapSet *cs, const Binding *b, TypeKind ty, const Type *type)
         if (cap_owning_ok(ty, type)) needs_clone = true;
         else { cs->ok = false; return; }
     }
-    for (int i = 0; i < cs->n; i++) if (cs->b[i] == b) return;
-    if (cs->n >= CC_MAX_CAPS) { cs->ok = false; return; }
-    cs->b[cs->n] = b; cs->cvname[cs->n] = NULL; cs->ty[cs->n] = ty;
-    cs->type[cs->n] = type; cs->polyfn[cs->n] = is_poly;
-    cs->owning[cs->n] = needs_clone; cs->n++;
+    for (int i = 0; i < cs->n; i++) if (cs->e[i].b == b) return;
+    CapEnt *e = cap_push(cs);
+    e->b = b; e->ty = ty; e->type = type; e->polyfn = is_poly; e->owning = needs_clone;
 }
 
 /* The expression that fills capture slot i from the local `cn`.  A fn-typed
@@ -1574,7 +1621,7 @@ static void cap_add(CapSet *cs, const Binding *b, TypeKind ty, const Type *type)
  * Bridge through intptr_t; for a local already spelled as the word it is a
  * no-op.  Malloc'd. */
 static char *cap_fill_expr(const CapSet *caps, int i, const char *cn) {
-    if (caps->ty[i] == TY_FN && !caps->polyfn[i]) {
+    if (caps->e[i].ty == TY_FN && !caps->e[i].polyfn) {
         Buf b; buf_init(&b);
         buf_printf(&b, "(int64_t)(intptr_t)(%s)", cn);
         buf_putc(&b, '\0');
@@ -1588,13 +1635,13 @@ static char *cap_fill_expr(const CapSet *caps, int i, const char *cn) {
 /* The C type of capture slot i: a fat closure is `tur_poly_fn_t`, everything
  * else its scalar / by-value-aggregate binder type. */
 static const char *cap_ctype(EmitCtx *ctx, const CapSet *caps, int i) {
-    if (caps->polyfn[i]) return "tur_poly_fn_t";
+    if (caps->e[i].polyfn) return "tur_poly_fn_t";
     /* B7: a by-reference mutable rides the env as its (typed) cell POINTER. */
-    if (caps->b[i] && is_byref_mut(caps->b[i])) return byref_cell_ptr_ctype(ctx, caps->b[i]);
+    if (caps->e[i].b && is_byref_mut(caps->e[i].b)) return byref_cell_ptr_ctype(ctx, caps->e[i].b);
     /* E2c: a captureless-effectful fn-value param (a via_registry callee carried
      * by cap_add_fn_scalar) rides the env as a bare int64 direct-entry fn-ptr --
      * `binder_ctype_full(TY_FN)` would leak a bad spelling. */
-    if (caps->ty[i] == TY_FN) return "int64_t";
+    if (caps->e[i].ty == TY_FN) return "int64_t";
     /* fn-value-fat-normalization (effect-row increment): a normalized fn param
      * FORWARDED as an argument was retyped to TY_PTR_VOID by the elab
      * pass-through (so the arg loop does not double-shim it), so its capture
@@ -1602,10 +1649,10 @@ static const char *cap_ctype(EmitCtx *ctx, const CapSet *caps, int i) {
      * int64_t carrier.  Spelling the env field `void *` makes the fill an
      * int->pointer assignment (-Wint-conversion).  The binding still says
      * TY_FN; keep the slot the one-word carrier. */
-    if (caps->ty[i] == TY_PTR_VOID && caps->b[i] &&
-        caps->b[i]->type.kind == TY_FN)
+    if (caps->e[i].ty == TY_PTR_VOID && caps->e[i].b &&
+        caps->e[i].b->type.kind == TY_FN)
         return "int64_t";
-    return binder_ctype_full(ctx, caps->ty[i], caps->type[i]);
+    return binder_ctype_full(ctx, caps->e[i].ty, caps->e[i].type);
 }
 
 /* E2c: capture a captureless-effectful fn-value PARAM (a `via_registry` tailcall's
@@ -1616,11 +1663,9 @@ static const char *cap_ctype(EmitCtx *ctx, const CapSet *caps, int i) {
  * bails the capture set (cs->ok = false) exactly like cap_add. */
 static void cap_add_fn_scalar(CapSet *cs, const Binding *b) {
     if (!b || b->type.kind != TY_FN || b->is_poly_fn) { cs->ok = false; return; }
-    for (int i = 0; i < cs->n; i++) if (cs->b[i] == b) return;
-    if (cs->n >= CC_MAX_CAPS) { cs->ok = false; return; }
-    cs->b[cs->n] = b; cs->cvname[cs->n] = NULL; cs->ty[cs->n] = TY_FN;
-    cs->type[cs->n] = &b->type; cs->polyfn[cs->n] = false;
-    cs->owning[cs->n] = false; cs->n++;
+    for (int i = 0; i < cs->n; i++) if (cs->e[i].b == b) return;
+    CapEnt *e = cap_push(cs);
+    e->b = b; e->ty = TY_FN; e->type = &b->type;
 }
 
 /* cps-evicts-handle-in-operand-positions: the fresh binders a CT_LETRAW of an
@@ -1641,11 +1686,9 @@ static bool cvar_is_polyfn(uint32_t id) {
 static void cap_add_cvar(CapSet *cs, uint32_t id, const char *name, TypeKind ty, const Type *type) {
     bool is_poly = cvar_is_polyfn(id);
     if ((!is_poly && !cap_ty_ok(ty, type)) || !name) { cs->ok = false; return; }
-    for (int i = 0; i < cs->n; i++) if (cs->cvname[i] && cs->cvid[i] == id) return;
-    if (cs->n >= CC_MAX_CAPS) { cs->ok = false; return; }
-    cs->b[cs->n] = NULL; cs->cvname[cs->n] = name; cs->cvid[cs->n] = id;
-    cs->ty[cs->n] = ty; cs->type[cs->n] = type; cs->polyfn[cs->n] = is_poly;
-    cs->owning[cs->n] = false; cs->n++;
+    for (int i = 0; i < cs->n; i++) if (cs->e[i].cvname && cs->e[i].cvid == id) return;
+    CapEnt *e = cap_push(cs);
+    e->cvname = name; e->cvid = id; e->ty = ty; e->type = type; e->polyfn = is_poly;
 }
 
 /* cps-evicts-handle-in-operand-positions item 4: the E2c FIELD-LOAD callee of a
@@ -1658,26 +1701,24 @@ static void cap_add_cvar(CapSet *cs, uint32_t id, const char *name, TypeKind ty,
 static void cap_add_cvar_fn_scalar(CapSet *cs, uint32_t id, const char *name,
                                    const Type *type) {
     if (!name) { cs->ok = false; return; }
-    for (int i = 0; i < cs->n; i++) if (cs->cvname[i] && cs->cvid[i] == id) return;
-    if (cs->n >= CC_MAX_CAPS) { cs->ok = false; return; }
-    cs->b[cs->n] = NULL; cs->cvname[cs->n] = name; cs->cvid[cs->n] = id;
-    cs->ty[cs->n] = TY_FN; cs->type[cs->n] = type; cs->polyfn[cs->n] = false;
-    cs->owning[cs->n] = false; cs->n++;
+    for (int i = 0; i < cs->n; i++) if (cs->e[i].cvname && cs->e[i].cvid == id) return;
+    CapEnt *e = cap_push(cs);
+    e->cvname = name; e->cvid = id; e->ty = TY_FN; e->type = type;
 }
 
 static void collect_caps_rec(const CTerm *t, uint32_t exclude,
-                             uint32_t *bound, int nb, CapSet *cs) {
+                             BoundStk *bound, int nb, CapSet *cs) {
     if (!cs->ok) return;
-    if (!t || nb >= CC_MAX_BOUND) { if (!t) return; cs->ok = false; return; }
+    if (!t) return;
     #define COL_ATOM(a) do { const CAtom *_a = (a); \
         if (_a->kind == CA_VAR) { \
             if (_a->var && !_a->var->is_global && !binding_excluded(_a->var)) { \
                 uint32_t _id = _a->var->id; bool _f = (_id != exclude); \
-                for (int _i = 0; _i < nb; _i++) if (bound[_i] == _id) { _f = false; break; } \
+                for (int _i = 0; _i < nb; _i++) if (bound->v[_i] == _id) { _f = false; break; } \
                 if (_f) cap_add(cs, _a->var, _a->ty, _a->type); } } \
         else if (_a->kind == CA_CVAR) { \
             if (_a->cvar_id != exclude) { bool _f = true; \
-                for (int _i = 0; _i < nb; _i++) if (bound[_i] == _a->cvar_id) { _f = false; break; } \
+                for (int _i = 0; _i < nb; _i++) if (bound->v[_i] == _a->cvar_id) { _f = false; break; } \
                 if (_f) cap_add_cvar(cs, _a->cvar_id, _a->cvar_name, _a->ty, _a->type); } } } while (0)
     /* A free source var referenced inside a delegated (direct-emitted) Expr: the
      * same test COL_ATOM applies to a CA_VAR, but reaching through an EX_VAR node
@@ -1689,21 +1730,21 @@ static void collect_caps_rec(const CTerm *t, uint32_t exclude,
             && !binding_excluded(_e->as.var.binding)) { \
             const Binding *_b = _e->as.var.binding; \
             uint32_t _id = _b->id; bool _f = (_id != exclude); \
-            for (int _i = 0; _i < nb; _i++) if (bound[_i] == _id) { _f = false; break; } \
+            for (int _i = 0; _i < nb; _i++) if (bound->v[_i] == _id) { _f = false; break; } \
             if (_f) cap_add(cs, _b, _b->type.kind, &_b->type); } } while (0)
     switch (t->kind) {
         case CT_APPCONT: COL_ATOM(&t->as.appcont.v); return;
         case CT_LETVAL:
             COL_ATOM(&t->as.letval.v);
-            bound[nb] = t->as.letval.x.id;
+            bound_put(bound, nb, t->as.letval.x.id);
             collect_caps_rec(t->as.letval.body, exclude, bound, nb + 1, cs); return;
         case CT_LETPRIM:
             for (uint32_t i = 0; i < t->as.letprim.n; i++) COL_ATOM(&t->as.letprim.args[i]);
-            bound[nb] = t->as.letprim.x.id;
+            bound_put(bound, nb, t->as.letprim.x.id);
             collect_caps_rec(t->as.letprim.body, exclude, bound, nb + 1, cs); return;
         case CT_LETCALL:
             for (uint32_t i = 0; i < t->as.letcall.n; i++) COL_ATOM(&t->as.letcall.args[i]);
-            bound[nb] = t->as.letcall.x.id;
+            bound_put(bound, nb, t->as.letcall.x.id);
             collect_caps_rec(t->as.letcall.body, exclude, bound, nb + 1, cs); return;
         case CT_TAILCALL:
             for (uint32_t i = 0; i < t->as.tailcall.n; i++) COL_ATOM(&t->as.tailcall.args[i]);
@@ -1711,7 +1752,7 @@ static void collect_caps_rec(const CTerm *t, uint32_t exclude,
                 const CAtom *_fa = &t->as.tailcall.fn_atom;   /* E2c field-load callee */
                 if (_fa->kind == CA_CVAR && _fa->ty == TY_FN) {
                     bool _f = _fa->cvar_id != exclude;
-                    for (int _i = 0; _i < nb; _i++) if (bound[_i] == _fa->cvar_id) { _f = false; break; }
+                    for (int _i = 0; _i < nb; _i++) if (bound->v[_i] == _fa->cvar_id) { _f = false; break; }
                     if (_f) cap_add_cvar_fn_scalar(cs, _fa->cvar_id, _fa->cvar_name, _fa->type);
                 } else {
                     COL_ATOM(_fa);
@@ -1725,7 +1766,7 @@ static void collect_caps_rec(const CTerm *t, uint32_t exclude,
                 const Binding *fn = t->as.tailcall.fn;
                 if (fn && !fn->is_global && !binding_excluded(fn)) {
                     uint32_t _id = fn->id; bool _f = (_id != exclude);
-                    for (int _i = 0; _i < nb; _i++) if (bound[_i] == _id) { _f = false; break; }
+                    for (int _i = 0; _i < nb; _i++) if (bound->v[_i] == _id) { _f = false; break; }
                     if (_f) cap_add_fn_scalar(cs, fn);
                 }
             }
@@ -1737,7 +1778,7 @@ static void collect_caps_rec(const CTerm *t, uint32_t exclude,
                 const Binding *fn = t->as.tailcall.fn;
                 if (fn && !fn->is_global && !binding_excluded(fn)) {
                     uint32_t _id = fn->id; bool _f = (_id != exclude);
-                    for (int _i = 0; _i < nb; _i++) if (bound[_i] == _id) { _f = false; break; }
+                    for (int _i = 0; _i < nb; _i++) if (bound->v[_i] == _id) { _f = false; break; }
                     if (_f) cap_add(cs, fn, fn->type.kind, &fn->type);
                 }
             }
@@ -1752,8 +1793,8 @@ static void collect_caps_rec(const CTerm *t, uint32_t exclude,
              * captures instead of bailing (cs->ok = false). */
             for (uint32_t i = 0; i < t->as.loop.n_params; i++) COL_ATOM(&t->as.loop.inits[i]);
             uint32_t nnb = nb;
-            for (uint32_t i = 0; i < t->as.loop.n_params && nnb < CC_MAX_BOUND; i++)
-                if (t->as.loop.params[i].bind) bound[nnb++] = t->as.loop.params[i].bind->id;
+            for (uint32_t i = 0; i < t->as.loop.n_params; i++)
+                if (t->as.loop.params[i].bind) bound_put(bound, nnb++, t->as.loop.params[i].bind->id);
             collect_caps_rec(t->as.loop.body, exclude, bound, nnb, cs); return;
         }
         case CT_IF:
@@ -1770,13 +1811,13 @@ static void collect_caps_rec(const CTerm *t, uint32_t exclude,
             for (uint32_t ai = 0; ai < t->as.match.n_arms && cs->ok; ai++) {
                 const CMatchArm *arm = &t->as.match.arms[ai];
                 uint32_t nnb = nb;
-                for (uint32_t bi = 0; bi < arm->n_fields && nnb < CC_MAX_BOUND; bi++)
-                    if (arm->fields[bi]) bound[nnb++] = arm->fields[bi]->id;
+                for (uint32_t bi = 0; bi < arm->n_fields; bi++)
+                    if (arm->fields[bi]) bound_put(bound, nnb++, arm->fields[bi]->id);
                 collect_caps_rec(arm->body, exclude, bound, nnb, cs);
             }
             return;
         case CT_LETCONT:
-            bound[nb] = t->as.letcont.param.id;
+            bound_put(bound, nb, t->as.letcont.param.id);
             collect_caps_rec(t->as.letcont.jbody, exclude, bound, nb + 1, cs);
             collect_caps_rec(t->as.letcont.body, exclude, bound, nb + 1, cs); return;
         case CT_RESUME:
@@ -1785,7 +1826,7 @@ static void collect_caps_rec(const CTerm *t, uint32_t exclude,
              * handler case resumes, so this must be collectable. */
             COL_ATOM(&t->as.resume.k);
             COL_ATOM(&t->as.resume.v);
-            bound[nb] = t->as.resume.x.id;
+            bound_put(bound, nb, t->as.resume.x.id);
             collect_caps_rec(t->as.resume.body, exclude, bound, nb + 1, cs); return;
         case CT_CLONEABLE: {
             /* The receiver is a named global fn (no capture); Shape 2 frame
@@ -1805,7 +1846,7 @@ static void collect_caps_rec(const CTerm *t, uint32_t exclude,
                 const Binding *_bb = _fv[_i];
                 if (!_bb || _bb->is_global || binding_excluded(_bb)) continue;
                 uint32_t _id = _bb->id; bool _f = (_id != exclude);
-                for (int _j = 0; _j < nb; _j++) if (bound[_j] == _id) { _f = false; break; }
+                for (int _j = 0; _j < nb; _j++) if (bound->v[_j] == _id) { _f = false; break; }
                 if (_f) cap_add(cs, _bb, _bb->type.kind, &_bb->type);
             }
             free(_fv);
@@ -1819,12 +1860,12 @@ static void collect_caps_rec(const CTerm *t, uint32_t exclude,
                     const Binding *_bb = _rfv[_i];
                     if (!_bb || _bb->is_global || binding_excluded(_bb)) continue;
                     uint32_t _id = _bb->id; bool _f = (_id != exclude);
-                    for (int _j = 0; _j < nb; _j++) if (bound[_j] == _id) { _f = false; break; }
+                    for (int _j = 0; _j < nb; _j++) if (bound->v[_j] == _id) { _f = false; break; }
                     if (_f) cap_add(cs, _bb, _bb->type.kind, &_bb->type);
                 }
                 free(_rfv);
             }
-            bound[nb] = t->as.cloneable.x.id;
+            bound_put(bound, nb, t->as.cloneable.x.id);
             collect_caps_rec(t->as.cloneable.body, exclude, bound, nb + 1, cs); return;
         }
         case CT_LETRAW: {
@@ -1862,7 +1903,7 @@ static void collect_caps_rec(const CTerm *t, uint32_t exclude,
                 const Binding *b = fv[i];
                 if (!b || b->is_global || binding_excluded(b)) continue;
                 uint32_t _id = b->id; bool _f = (_id != exclude);
-                for (int _i = 0; _i < nb; _i++) if (bound[_i] == _id) { _f = false; break; }
+                for (int _i = 0; _i < nb; _i++) if (bound->v[_i] == _id) { _f = false; break; }
                 if (_f) cap_add(cs, b, b->type.kind, &b->type);
             }
             free(fv);
@@ -1877,10 +1918,10 @@ static void collect_caps_rec(const CTerm *t, uint32_t exclude,
             if (bref && !is_byref_mut(bref)) bref = NULL;
             if (bref && !bref->is_global && !binding_excluded(bref)) {
                 uint32_t _id = bref->id; bool _f = (_id != exclude);
-                for (int _i = 0; _i < nb; _i++) if (bound[_i] == _id) { _f = false; break; }
+                for (int _i = 0; _i < nb; _i++) if (bound->v[_i] == _id) { _f = false; break; }
                 if (_f) cap_add(cs, bref, bref->type.kind, &bref->type);
             }
-            bound[nb] = t->as.letraw.x.id;
+            bound_put(bound, nb, t->as.letraw.x.id);
             collect_caps_rec(t->as.letraw.body, exclude, bound, nb + 1, cs); return;
         }
         case CT_RESET:
@@ -1893,7 +1934,7 @@ static void collect_caps_rec(const CTerm *t, uint32_t exclude,
              * rather than bailing.  emit_reset recurses to emit the nested prompt;
              * this just enumerates the captures its lifted helpers ride. */
             collect_caps_rec(t->as.reset.delim, exclude, bound, nb, cs);
-            bound[nb] = t->as.reset.x.id;
+            bound_put(bound, nb, t->as.reset.x.id);
             collect_caps_rec(t->as.reset.body, exclude, bound, nb + 1, cs); return;
         case CT_SHIFT:
             /* The delimited body under a nested reset ends in an (abortive) shift;
@@ -1906,7 +1947,7 @@ static void collect_caps_rec(const CTerm *t, uint32_t exclude,
              * capture the lifted frame must carry; the awaited value binds x for the
              * rest of the continuation. */
             COL_ATOM(&t->as.await.fut);
-            bound[nb] = t->as.await.x.id;
+            bound_put(bound, nb, t->as.await.x.id);
             collect_caps_rec(t->as.await.body, exclude, bound, nb + 1, cs); return;
         case CT_PERFORM:
             /* Track A: a nested `perform` in a lifted (RESUME_CONT) perform
@@ -1914,7 +1955,7 @@ static void collect_caps_rec(const CTerm *t, uint32_t exclude,
              * may be captures the lifted frame must carry; the performed-effect
              * result binds x for the rest of the continuation. */
             for (uint32_t i = 0; i < t->as.perform.n; i++) COL_ATOM(&t->as.perform.args[i]);
-            bound[nb] = t->as.perform.x.id;
+            bound_put(bound, nb, t->as.perform.x.id);
             collect_caps_rec(t->as.perform.body, exclude, bound, nb + 1, cs); return;
         case CT_HANDLE:
             /* A nested `handle` in a lifted continuation (two SEQUENTIAL handles:
@@ -1929,12 +1970,12 @@ static void collect_caps_rec(const CTerm *t, uint32_t exclude,
             for (uint32_t ci = 0; ci < t->as.handle.n_cases && cs->ok; ci++) {
                 const CHandleCase *hc = &t->as.handle.cases[ci];
                 uint32_t cnb = nb;
-                for (uint32_t pi = 0; pi < hc->n_params && cnb < CC_MAX_BOUND; pi++)
-                    if (hc->params[pi]) bound[cnb++] = hc->params[pi]->id;
-                if (hc->k && cnb < CC_MAX_BOUND) bound[cnb++] = hc->k->id;
+                for (uint32_t pi = 0; pi < hc->n_params; pi++)
+                    if (hc->params[pi]) bound_put(bound, cnb++, hc->params[pi]->id);
+                if (hc->k) bound_put(bound, cnb++, hc->k->id);
                 collect_caps_rec(hc->case_body, exclude, bound, cnb, cs);
             }
-            if (nb < CC_MAX_BOUND) bound[nb] = t->as.handle.x.id;
+            bound_put(bound, nb, t->as.handle.x.id);
             collect_caps_rec(t->as.handle.body, exclude, bound, nb + 1, cs); return;
         case CT_CALLCC: {
             /* The receiver f may capture enclosing locals (build_callcc admits a
@@ -1948,11 +1989,11 @@ static void collect_caps_rec(const CTerm *t, uint32_t exclude,
                 const Binding *cb = fv[i];
                 if (!cb || cb->is_global || binding_excluded(cb)) continue;
                 uint32_t _id = cb->id; bool _f = (_id != exclude);
-                for (int _i = 0; _i < nb; _i++) if (bound[_i] == _id) { _f = false; break; }
+                for (int _i = 0; _i < nb; _i++) if (bound->v[_i] == _id) { _f = false; break; }
                 if (_f) cap_add(cs, cb, cb->type.kind, &cb->type);
             }
             free(fv);
-            bound[nb] = t->as.callcc.x.id;
+            bound_put(bound, nb, t->as.callcc.x.id);
             collect_caps_rec(t->as.callcc.body, exclude, bound, nb + 1, cs); return;
         }
         default:
@@ -2008,10 +2049,10 @@ static bool term_has_continue(const CTerm *t) {
 }
 
 static bool collect_caps(const CTerm *body, uint32_t exclude, CapSet *cs) {
-    uint32_t bound[CC_MAX_BOUND];
-    cs->n = 0; cs->ok = true;
+    BoundStk bound; bound_init(&bound);
+    cap_init(cs);
     g_cap_single_shot = true;   /* a reset/handle/perform continuation or shift body */
-    collect_caps_rec(body, exclude, bound, 0, cs);
+    collect_caps_rec(body, exclude, &bound, 0, cs);
     /* defer-skipped-on-panic-in-cps-function: the helper also fires the
      * pending defers at its panic checks (and in its unwinder), so their free
      * variables ride the env too.  One whose variable the env cannot carry
@@ -2034,20 +2075,14 @@ static bool collect_caps(const CTerm *body, uint32_t exclude, CapSet *cs) {
         for (int i = 0; i < g_loop_inv->n && cs->ok; i++) {
             bool dup = false;
             for (int k = 0; k < cs->n; k++) {
-                if (g_loop_inv->b[i] ? (cs->b[k] == g_loop_inv->b[i])
-                                     : (!cs->b[k] && cs->cvid[k] == g_loop_inv->cvid[i]))
+                if (g_loop_inv->e[i].b ? (cs->e[k].b == g_loop_inv->e[i].b)
+                                     : (!cs->e[k].b && cs->e[k].cvid == g_loop_inv->e[i].cvid))
                     { dup = true; break; }
             }
             if (dup) continue;
-            if (cs->n >= CC_MAX_CAPS) { cs->ok = false; break; }
-            cs->b[cs->n] = g_loop_inv->b[i];
-            cs->cvname[cs->n] = g_loop_inv->cvname[i];
-            cs->cvid[cs->n] = g_loop_inv->cvid[i];
-            cs->ty[cs->n] = g_loop_inv->ty[i];
-            cs->type[cs->n] = g_loop_inv->type[i];
-            cs->polyfn[cs->n] = g_loop_inv->polyfn[i];
-            cs->owning[cs->n] = false;
-            cs->n++;
+            CapEnt *e = cap_push(cs);
+            *e = g_loop_inv->e[i];
+            e->owning = false;
         }
     }
     return cs->ok;
@@ -2177,10 +2212,10 @@ static bool collect_caps_case(const CTerm *body, const CHandleCase *hc, CapSet *
     for (uint32_t i = 0; i < hc->n_params && g_excl_n < 8; i++)
         g_excl_b[g_excl_n++] = hc->params[i];
     if (hc->k && g_excl_n < 8) g_excl_b[g_excl_n++] = hc->k;
-    uint32_t bound[CC_MAX_BOUND];
-    cs->n = 0; cs->ok = true;
+    BoundStk bound; bound_init(&bound);
+    cap_init(cs);
     g_cap_single_shot = false;   /* a handler case body runs once per perform, not single-shot */
-    collect_caps_rec(body, UINT32_MAX, bound, 0, cs);
+    collect_caps_rec(body, UINT32_MAX, &bound, 0, cs);
     g_excl_n = 0;
     /* E-borrow: a borrow-only owning capture rides by a bare shallow alias
      * (owning=false) -- leak-clean, since the enclosing fn owns and drops it
@@ -2190,10 +2225,10 @@ static bool collect_caps_case(const CTerm *body, const CHandleCase *hc, CapSet *
      * teardown), so evict it rather than emit a wrong incref. */
     if (cs->ok)
         for (int i = 0; i < cs->n; i++) {
-            if (!cs->owning[i] || !cs->b[i]) continue;
-            if (owning_cap_borrow_only(body, cs->b[i]->id))
-                cs->owning[i] = false;
-            else if (cs->ty[i] != TY_RC)
+            if (!cs->e[i].owning || !cs->e[i].b) continue;
+            if (owning_cap_borrow_only(body, cs->e[i].b->id))
+                cs->e[i].owning = false;
+            else if (cs->e[i].ty != TY_RC)
                 cs->ok = false;
         }
     return cs->ok;
@@ -11211,13 +11246,14 @@ static void emit_lifted(CE *ce, const char *name, LHMode mode,
      * same way the body references them (name_for_binding). */
     /* The read-out's recorded spellings are this helper's alone (see
      * emit_localvar_save_ctype); restored once its body is emitted. */
-    char *cap_prev_ctype[CC_MAX_CAPS] = {0};
-    char *cap_prev_name[CC_MAX_CAPS] = {0};
+    int n_cap_prev = has_caps ? caps->n : 0;
+    char **cap_prev_ctype = (char **)calloc(n_cap_prev ? n_cap_prev : 1, sizeof *cap_prev_ctype);
+    char **cap_prev_name = (char **)calloc(n_cap_prev ? n_cap_prev : 1, sizeof *cap_prev_name);
     if (has_caps) {
         indent_buf(&tmp, 4);
         buf_printf(&tmp, "%s_env *__cap = (%s_env *)(intptr_t)env;\n", name, name);
         for (int i = 0; i < caps->n; i++) {
-            char *cn = caps->b[i] ? name_for_binding(ce->ctx, caps->b[i]) : strdup(caps->cvname[i]);
+            char *cn = caps->e[i].b ? name_for_binding(ce->ctx, caps->e[i].b) : strdup(caps->e[i].cvname);
             indent_buf(&tmp, 4);
             buf_printf(&tmp, "%s %s = __cap->f%d;\n", cap_ctype(ce->ctx, caps, i), cn, i);
             /* The direct emitter, which renders this helper's delegated
@@ -11233,7 +11269,7 @@ static void emit_lifted(CE *ce, const char *name, LHMode mode,
              * original +1 is intentionally leaked (matching the leaked-DK-node
              * regime); the fixture carries requires.no-leak-check.  Currently only
              * an rc handle reaches here (cap_owning_ok gates it). */
-            if (caps->owning[i]) {
+            if (caps->e[i].owning) {
                 indent_buf(&tmp, 4);
                 buf_printf(&tmp, "rc_strong_increment(%s);\n", cn);
             }
@@ -11394,7 +11430,7 @@ static void emit_lifted(CE *ce, const char *name, LHMode mode,
         if (has_caps) {
             buf_printf(&unw, "    %s_env *__cap = (%s_env *)(intptr_t)env;\n", name, name);
             for (int i = 0; i < caps->n; i++) {
-                char *cn = caps->b[i] ? name_for_binding(ce->ctx, caps->b[i]) : strdup(caps->cvname[i]);
+                char *cn = caps->e[i].b ? name_for_binding(ce->ctx, caps->e[i].b) : strdup(caps->e[i].cvname);
                 buf_printf(&unw, "    %s %s = __cap->f%d; (void)%s;\n",
                            cap_ctype(ce->ctx, caps, i), cn, i, cn);
                 free(cn);
@@ -11412,11 +11448,13 @@ static void emit_lifted(CE *ce, const char *name, LHMode mode,
         buf_puts(&unw, "}\n");
         buf_putc(&unw, '\0');
     }
-    for (int i = 0; i < CC_MAX_CAPS; i++)
+    for (int i = 0; i < n_cap_prev; i++)
         if (cap_prev_name[i]) {
             emit_localvar_restore_ctype(cap_prev_name[i], cap_prev_ctype[i]);
             free(cap_prev_name[i]);
         }
+    free(cap_prev_name);
+    free(cap_prev_ctype);
 
     /* N6.3: the env struct type (named <name>_env) shared with the alloc site.
      * Caps-only -- no continuation slot (see emit_cont_env). */
@@ -11693,11 +11731,12 @@ static void emit_loop(CE *ce, const CTerm *t) {
      * handle result a loop in a handle continuation reads).  They thread as extra
      * helper params, passed unchanged on every back-edge.  A collect bail
      * (cs->ok=false) falls back to no-extras (prior behaviour). */
-    CapSet inv; inv.n = 0; inv.ok = true;
+    CapSet inv; cap_init(&inv);
     {
-        uint32_t bnd[CC_MAX_BOUND]; uint32_t nbnd = 0;
-        for (uint32_t i = 0; i < np && nbnd < CC_MAX_BOUND; i++)
-            if (t->as.loop.params[i].bind) bnd[nbnd++] = t->as.loop.params[i].bind->id;
+        BoundStk bnd; bound_init(&bnd);
+        int nbnd = 0;
+        for (uint32_t i = 0; i < np; i++)
+            if (t->as.loop.params[i].bind) bound_put(&bnd, nbnd++, t->as.loop.params[i].bind->id);
         /* cps-while-discarded-cps-call-loses-captures: an invariant is threaded
          * LINEARLY -- the entry hands it to the helper once, and each back-edge
          * hands it to the next iteration once -- never duplicated into a frame
@@ -11710,7 +11749,7 @@ static void emit_loop(CE *ce, const CTerm *t) {
          * passed: `'n' undeclared`. */
         bool saved_ss = g_cap_single_shot;
         g_cap_single_shot = true;
-        collect_caps_rec(t->as.loop.body, UINT32_MAX, bnd, nbnd, &inv);
+        collect_caps_rec(t->as.loop.body, UINT32_MAX, &bnd, nbnd, &inv);
         g_cap_single_shot = saved_ss;
         if (!inv.ok) inv.n = 0;
     }
@@ -11721,7 +11760,7 @@ static void emit_loop(CE *ce, const CTerm *t) {
     if (inv.n > 0) {
         Buf nbuf; buf_init(&nbuf);
         for (int i = 0; i < inv.n; i++) {
-            char *cn = inv.b[i] ? name_for_binding(ce->ctx, inv.b[i]) : strdup(inv.cvname[i]);
+            char *cn = inv.e[i].b ? name_for_binding(ce->ctx, inv.e[i].b) : strdup(inv.e[i].cvname);
             buf_printf(&nbuf, "%s%s", i ? ", " : "", cn);
             free(cn);
         }
@@ -11740,8 +11779,8 @@ static void emit_loop(CE *ce, const CTerm *t) {
                                                   t->as.loop.params[i].type));
     for (int i = 0; i < inv.n; i++) {
         loop_ctypes[np + (uint32_t)i] = strdup(cap_ctype(ce->ctx, &inv, i));
-        loop_inv_names[i] = inv.b[i] ? name_for_binding(ce->ctx, inv.b[i])
-                                     : strdup(inv.cvname[i]);
+        loop_inv_names[i] = inv.e[i].b ? name_for_binding(ce->ctx, inv.e[i].b)
+                                     : strdup(inv.e[i].cvname);
     }
 
     /* 1. Forward declaration (before nested helpers reference it). */
@@ -11829,7 +11868,7 @@ static void emit_loop(CE *ce, const CTerm *t) {
         free(pn);
     }
     for (int i = 0; i < inv.n; i++) {
-        char *cn = inv.b[i] ? name_for_binding(ce->ctx, inv.b[i]) : strdup(inv.cvname[i]);
+        char *cn = inv.e[i].b ? name_for_binding(ce->ctx, inv.e[i].b) : strdup(inv.e[i].cvname);
         buf_printf(ce->helpers, "%s %s, ", cap_ctype(ce->ctx, &inv, i), cn);
         free(cn);
     }
@@ -11952,7 +11991,7 @@ static char *emit_cont_env_impl(CE *ce, const char *hname, const CapSet *caps, b
     snprintf(envv, sizeof envv, "__ce_%s", hname);
     ce_line(ce, "%s_env *%s = (%s_env *)malloc(sizeof(%s_env));", hname, envv, hname, hname);
     for (int i = 0; i < caps->n; i++) {
-        char *cn = caps->b[i] ? name_for_binding(ce->ctx, caps->b[i]) : strdup(caps->cvname[i]);
+        char *cn = caps->e[i].b ? name_for_binding(ce->ctx, caps->e[i].b) : strdup(caps->e[i].cvname);
         char *fe = cap_fill_expr(caps, i, cn);
         ce_line(ce, "%s->f%d = %s;", envv, i, fe);
         free(fe);
@@ -13597,7 +13636,7 @@ static void emit_perform(CE *ce, const CTerm *t) {
             snprintf(envv, sizeof envv, "__pfe%d", id);
             ce_line(ce, "%s_env *%s = (%s_env *)malloc(sizeof(%s_env));", pname, envv, pname, pname);
             for (int i = 0; i < cs.n; i++) {
-                char *cn = cs.b[i] ? name_for_binding(ce->ctx, cs.b[i]) : strdup(cs.cvname[i]);
+                char *cn = cs.e[i].b ? name_for_binding(ce->ctx, cs.e[i].b) : strdup(cs.e[i].cvname);
                 char *fe = cap_fill_expr(&cs, i, cn);
                 ce_line(ce, "%s->f%d = %s;", envv, i, fe);
                 free(fe);
@@ -13751,7 +13790,7 @@ static void emit_await(CE *ce, const CTerm *t) {
             snprintf(envv, sizeof envv, "__awe%d", id);
             ce_line(ce, "%s_env *%s = (%s_env *)malloc(sizeof(%s_env));", pname, envv, pname, pname);
             for (int i = 0; i < cs.n; i++) {
-                char *cn = cs.b[i] ? name_for_binding(ce->ctx, cs.b[i]) : strdup(cs.cvname[i]);
+                char *cn = cs.e[i].b ? name_for_binding(ce->ctx, cs.e[i].b) : strdup(cs.e[i].cvname);
                 char *fe = cap_fill_expr(&cs, i, cn);
                 ce_line(ce, "%s->f%d = %s;", envv, i, fe);
                 free(fe);
@@ -14168,6 +14207,7 @@ void emit_cps_ir_forget(void) {
     g_fwd_done = false;
     g_eff_n = 0;
     ctg_reset();
+    if (g_cap_arena_live) { arena_free(&g_cap_arena); g_cap_arena_live = false; }
 }
 
 bool emit_cps_ir_program_has_emittable(const Expr *program) {
