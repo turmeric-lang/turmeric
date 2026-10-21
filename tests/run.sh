@@ -824,6 +824,17 @@ run_happy() {
     if [ -f "$dir/requires.no-leak-check" ]; then
         run_env=(env "ASAN_OPTIONS=${ASAN_OPTIONS:+$ASAN_OPTIONS:}detect_leaks=0")
     fi
+    # run.env: `NAME=value` lines added to the compiled program's environment
+    # (not tur's), one per line; `#` starts a comment.  A region fixture sets
+    # TUR_REGION_STATS=1 with it, so expected.stderr can pin the rewind count
+    # (docs/archive/region-rewind-fixtures-never-rewind.md).
+    if [ -f "$dir/run.env" ]; then
+        [ ${#run_env[@]} -eq 0 ] && run_env=(env)
+        while IFS= read -r _re || [ -n "$_re" ]; do
+            case "$_re" in ''|\#*) continue ;; esac
+            run_env+=("$_re")
+        done < "$dir/run.env"
+    fi
 
     # Stamp fast-path: skip if input, expected.c, and tur binary are all
     # unchanged since the last passing run.

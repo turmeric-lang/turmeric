@@ -211,6 +211,7 @@ removes a check.
 | `hook.sh` | The fixture drives its own build and run instead (`run.sh`, `run-jit.sh`) |
 | `flags` | Extra compiler flags, one line |
 | `run.args` | Arguments for the program, one line |
+| `run.env` | `NAME=value` lines added to the compiled program's environment (`run.sh` only; `#` comments) -- e.g. `TUR_REGION_STATS=1`, so `expected.stderr` can pin a region fixture's rewind count |
 | `input.stdin` | Fed to the program's stdin |
 
 **What it must do**

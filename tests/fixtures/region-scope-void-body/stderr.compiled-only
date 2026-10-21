@@ -1,0 +1,1 @@
+The region-stats line is printed by the compiled runtime (TUR_REGION_STATS=1, via run.env); the interpreter has no regions.

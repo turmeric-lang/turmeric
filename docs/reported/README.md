@@ -330,7 +330,7 @@ have no report: see the plan's section 5.
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [region-rewind-fixtures-never-rewind](region-rewind-fixtures-never-rewind.md) | medium (test coverage) | `region-with-region` and `region-scope-value-survives` exist to catch a rewind that corrupts pooled slabs, and say the pop rewinds; under `TUR_REGION_STATS=1` both show `rewinds=0 retires=103`, because their erasing ascription and erased inline-C argument are escape-note hooks. They check stdout only, so they pass. |
+| ~~[region-rewind-fixtures-never-rewind](../archive/region-rewind-fixtures-never-rewind.md)~~ | medium (test coverage) | **RESOLVED 2026-10-21** (archived): the fixtures keep a typed spine, so every bracket rewinds, and a new `run.env` (`TUR_REGION_STATS=1`) plus `expected.stderr` pins the count (`rewinds=103 retires=0`); the sweep found `region-scope-escape-refused`'s control retiring too, fixed and pinned the same way |
 
 ## Found executing heap-sum-generic-never-specialized (filed 2026-10-14)
 

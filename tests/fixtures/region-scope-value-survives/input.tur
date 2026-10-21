@@ -19,30 +19,32 @@
 ;; the shape a real caller writes, so the region path is exercised through it
 ;; rather than only through a bracket inlined into `main`.
 
-(defdata Link :heap (Link [v : int nxt : int]))
+;;; Chain -- a typed spine.  It stays typed from construction to the sum: an
+;;; erasing ascription or an inline-C `:int` reader is an escape note (CLAUDE.md,
+;;; "Region Store Hooks"), and this fixture used both until 2026-10-21, so every
+;;; generation retired and nothing here tested a rewind
+;;; (docs/archive/region-rewind-fixtures-never-rewind.md).  `run.env` sets
+;;; TUR_REGION_STATS=1 and expected.stderr pins `rewinds=103 retires=0`.
+(defdata Chain :heap (Link [v : int nxt : Chain]) (End))
 
-;;; build -- an n-link spine, carrier-erased, 0 for the end.
-(defn build [n : int acc : int] : int
+;;; build -- an n-link spine ending in End.
+(defn build [n : int acc : Chain] : Chain
   (if (<= n 0)
     acc
-    (build (- n 1) (:: (Link n acc) :int))))
+    (build (- n 1) (Link n acc))))
 
-;;; chain-sum -- walk the spine.  Single-ctor `:heap` ADTs are flat (no tag),
-;;; which is the same layout conv-heap-adt-carrier-ascribe reads.
-(defn chain-sum [c : int] : int
-  ```c
-  struct { int64_t v; int64_t nxt; } *p = (void *)(intptr_t)c;
-  int64_t acc = 0;
-  while (p) { acc += p->v; p = (void *)(intptr_t)p->nxt; }
-  return acc;
-  ```)
+;;; chain-sum -- walk the spine.
+(defn chain-sum [c : Chain acc : int] : int
+  (match c
+    (Link v nxt) (chain-sum nxt (+ acc v))
+    (End)        acc))
 
 ;;; one-round -- build and consume a spine inside one generation.
 ;;;
 ;;; The result is an `:int` SUM, not the chain: nothing that points into the
 ;;; generation crosses the boundary, so both locks pass and the pop rewinds.
 (defn one-round [n : int] : int
-  (bt-scope (fn [] (chain-sum (build n 0)))))
+  (bt-scope (fn [] (chain-sum (build n (End)) 0))))
 
 ;;; rounds -- k generations of the same shape, opened and reclaimed in turn.
 (defn rounds [k : int n : int acc : int] : int

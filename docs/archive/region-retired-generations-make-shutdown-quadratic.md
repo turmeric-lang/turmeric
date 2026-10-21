@@ -26,8 +26,8 @@ retirements the old walk took 51.5 s and the index 0.03 s.
 2,000 retirements and several table growths.
 
 Direction 4 (a visible signal for brackets that always retire) is not done.
-The reason the fixtures retire is its own open report,
-[region-rewind-fixtures-never-rewind](../reported/region-rewind-fixtures-never-rewind.md).
+The reason the fixtures retired was its own report (since fixed),
+[region-rewind-fixtures-never-rewind](region-rewind-fixtures-never-rewind.md).
 
 **Severity:** medium (performance; unbounded in a long-running program).
 Found 2026-10-14 by the performance audit's WP2
@@ -55,7 +55,7 @@ pays, per retirement:
 WP0's `benchmarks/audit/sized/region-rounds-100k.tur` (a copy of
 `tests/fixtures/region-with-region` with `(rounds 100 8 0)` raised to 100000;
 every one of its brackets retires -- see
-[region-rewind-fixtures-never-rewind](../reported/region-rewind-fixtures-never-rewind.md)):
+[region-rewind-fixtures-never-rewind](region-rewind-fixtures-never-rewind.md)):
 
 ```
 rounds    wall    TUR_REGION_STATS

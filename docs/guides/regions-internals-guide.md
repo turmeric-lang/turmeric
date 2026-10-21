@@ -24,10 +24,8 @@ The design history is the archived
 > reason the feature "is shippable behind a flag"; `src/turi/preload.c` calls
 > the identity forwarder the compiled path's "`--enable=regions` off" mode.
 > There is no flag any more. Regions are on unless `TUR_REGIONS=0` was set
-> when `tur` ran. Two fixtures also claim to rewind and never do (see
-> [When does a generation actually rewind?](#when-does-a-generation-actually-rewind)).
-> The stale comments found so far in this area, each with a fix, are
-> listed in [stale-comments-regions](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/stale-comments-regions.md).
+> when `tur` ran. The stale comments found so far in this area, each with a
+> fix, are listed in [stale-comments-regions](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/stale-comments-regions.md).
 
 ---
 
@@ -185,17 +183,24 @@ retires. Measured with `TUR_REGION_STATS=1` on this tree:
 
 | Program | pushes | rewinds | retires |
 |---|---|---|---|
-| `tests/fixtures/region-with-region` | 103 | 0 | 103 |
-| `tests/fixtures/region-scope-value-survives` | 103 | 0 | 103 |
-| `tests/fixtures/region-scope-void-body` | 3 | 0 | 3 |
+| `tests/fixtures/region-with-region` | 103 | 103 | 0 |
+| `tests/fixtures/region-scope-value-survives` | 103 | 103 | 0 |
+| `tests/fixtures/region-scope-void-body` | 3 | 3 | 0 |
+| `tests/fixtures/region-scope-escape-refused` | 4 | 1 | 3 |
 | `tests/fixtures/region-escape-via-inline-c` | 2 | 1 | 1 |
 | The typed worked example below | 2 | 1 | 1 |
 
-The first two fixtures say in their comments that the pop rewinds. It does
-not, so they cannot catch a rewind that corrupts memory. That is the open
-[region-rewind-fixtures-never-rewind](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/region-rewind-fixtures-never-rewind.md).
-When you write a region fixture, pin the `region-stats` line (the
-`hook.sh` fixtures below show how), not just stdout.
+The first three used to build their spine through `(:: (Link ..) :int)` and
+sum it in inline C, so every bracket retired and they could not catch a
+rewind that corrupts memory, though their comments said the pop rewinds
+([region-rewind-fixtures-never-rewind](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/region-rewind-fixtures-never-rewind.md),
+fixed 2026-10-21; `region-scope-escape-refused`'s rewinding control had the
+same flaw). Their spines are typed now, and each pins its `region-stats` line.
+When you write a region fixture, pin that line too, not just stdout: a
+`run.env` holding `TUR_REGION_STATS=1` plus the line in `expected.stderr` (and
+a `stderr.compiled-only` marker, since the interpreter has no regions), as
+those four do; or a `hook.sh`, as the fixtures below do, when one program is
+not enough.
 
 ---
 
@@ -296,7 +301,7 @@ tur_region_pop(__tur_rgn_N);
 - **Void results.** `emit_value` skips a call typed `nil`/`never`. A
   `bt-scope` or `with-region` call still gets a bracket, because the call is
   emitted against the erased `int64_t` carrier (`region-scope-void-body` pins
-  this; its 3 brackets all retire because it erases its spine).
+  this; its spine is typed, so its 3 brackets all rewind).
 - **Allocation in argument position** lands in the generation too: the push
   precedes the argument emission on the direct path. The comment in
   `emit_value` argues why this is sound for a thunk argument.
@@ -759,15 +764,15 @@ set by the note makes that pop retire
 
 Open:
 
-- [region-rewind-fixtures-never-rewind](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/region-rewind-fixtures-never-rewind.md)
-  -- `region-with-region` and `region-scope-value-survives` retire every
-  bracket, so they no longer test a rewind.
 - [byvalue-recursive-shared-copies-leak](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/byvalue-recursive-shared-copies-leak.md)
   and [carrier-sum-option-boxes-have-no-owner](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/carrier-sum-option-boxes-have-no-owner.md)
   -- leak reports that name a region as the remedy for part of their residue.
 
 Archived, for the *why*:
 
+- [region-rewind-fixtures-never-rewind](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/region-rewind-fixtures-never-rewind.md)
+  -- three rewind fixtures retired every bracket (an erased spine); typed
+  now, with the rewind count pinned through `run.env`.
 - [regions-plan](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/regions-plan.md) -- the design, the increments,
   region-lock-hardening, and the graduation checklist.
 - [region-escape-through-unhooked-stores](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/region-escape-through-unhooked-stores.md)
