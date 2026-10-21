@@ -23,8 +23,10 @@ release: (_configured "build-release" "Release")
 # nightly TSan workflow. Release, not Debug: Debug is ASan-instrumented, the
 # fixture programs (built with -fsanitize=thread under TUR_TSAN=1) link the
 # runtime archives beside `tur`, and ASan and TSan cannot share a process.
-# Not the TSan CMake configuration either, which does not link every target:
-# docs/reported/tsan-cmake-config-fails-to-link.md.
+# Not the TSan CMake configuration either: it builds (every target links since
+# docs/archive/tsan-cmake-config-fails-to-link.md), but it instruments `tur`
+# and its archives too, which the fixture runs do not need and pay for on
+# every compile.  Configure it by hand to race-check the compiler itself.
 
 # Non-ASan `tur` for the ThreadSanitizer fixture runs, in build-tsan/.
 tsan: (_configured "build-tsan" "Release")

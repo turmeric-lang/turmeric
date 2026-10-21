@@ -1,5 +1,7 @@
 # The `TSan` CMake configuration does not build: test executables fail to link
 
+**RESOLVED 2026-10-21** -- see [Resolution](#resolution-2026-10-21).
+
 **Severity: low.** Nothing builds this configuration today: the nightly TSan
 workflow, `tests/run-tsan.sh` and `tur run tsan` all use a Release tree. But
 `src/CMakeLists.txt` still advertises `TSan` as a build type, and a contributor
@@ -58,3 +60,23 @@ so the instrumented objects reach a link without the TSan runtime.
 Whichever is chosen, `tur run tsan` could then build this configuration again
 if instrumenting `tur` turns out to be worth its cost (the Justfile comment on
 `tsan` points here).
+
+## Resolution (2026-10-21)
+
+Fix direction 2. The top-level `CMakeLists.txt` adds
+`add_link_options($<$<CONFIG:TSan>:-fsanitize=thread>)` beside the
+`TUR_ASAN_FLAGS` block, ahead of `add_subdirectory(src)`, so every target in
+the tree -- `tur`, the unit tests and helpers, the fuzz and example targets --
+links the TSan runtime under that configuration and nothing else changes.
+The per-target `-fsanitize=thread` link option on `tur` stays; it is now
+redundant but harmless.
+
+Verified with the repro above: `cmake --build` of a fresh
+`-DCMAKE_BUILD_TYPE=TSan` tree finishes with exit 0 and no undefined
+references, and `tur --version`, `tur_reactor_slot_reuse_unit` and
+`tur_gc_runtime_copy_parity` run clean under TSan.
+
+The nightly TSan workflow, `tests/run-tsan.sh` and `tur run tsan` still use a
+Release `tur` (the Justfile comment on `tsan` now says why: the configuration
+instruments the compiler too, which the fixture runs do not need). The
+configuration is there for race-checking `tur` itself.

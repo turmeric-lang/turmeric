@@ -273,7 +273,7 @@ hits under ASan.
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [tsan-cmake-config-fails-to-link](tsan-cmake-config-fails-to-link.md) | low | `-DCMAKE_BUILD_TYPE=TSan` compiles the runtime archives with `-fsanitize=thread`, but the test executables that link them add sanitizer link flags for `Debug` only, so `tur_reactor_slot_reuse_unit` and others fail with undefined `__tsan_*` references. Nothing uses the configuration: the TSan runs build Release. |
+| ~~[tsan-cmake-config-fails-to-link](../archive/tsan-cmake-config-fails-to-link.md)~~ | low | **RESOLVED 2026-10-21** (archived): a directory-wide `add_link_options($<$<CONFIG:TSan>:-fsanitize=thread>)` in the top-level `CMakeLists.txt` gives every target the TSan runtime at link time; a fresh `-DCMAKE_BUILD_TYPE=TSan` tree builds clean |
 
 ## Found running the JIT suite against a Release `tur` (filed 2026-10-15)
 

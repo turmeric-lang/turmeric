@@ -1220,9 +1220,9 @@ The fix splits the trees:
 - `tsan` configures and builds `build-tsan/` as Release, the tree the nightly
   TSan workflow and `tests/run-tsan.sh` use. The fixture programs carry
   `-fsanitize=thread`; `tur` must only not be ASan-instrumented. The TSan
-  CMake configuration, which instruments `tur` too, does not link every
-  target, and is reported separately
-  (`docs/reported/tsan-cmake-config-fails-to-link.md`).
+  CMake configuration, which instruments `tur` too, did not link every
+  target until `docs/archive/tsan-cmake-config-fails-to-link.md` was fixed
+  (2026-10-21).
 - `test-tsan` runs `tests/run-tsan.sh` against `build-tsan/tur`, the selection
   the nightly TSan workflow runs, under the 12-minute suite timeout.
 - `_configured` takes the directory and build type, so all three build

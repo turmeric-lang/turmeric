@@ -70,6 +70,15 @@ else()
   message(STATUS "tur: Debug sanitizers disabled (TUR_DEBUG_SANITIZE=OFF)")
 endif()
 
+# The TSan configuration compiles tur_core, libturi and the other runtime
+# archives with -fsanitize=thread (src/CMakeLists.txt), so every executable
+# that links one needs the TSan runtime on its link line.  The test harnesses
+# spell their sanitizer link flags per target, for Debug only, so before this
+# line they reached the link without it (`undefined reference to
+# __tsan_read8`; docs/archive/tsan-cmake-config-fails-to-link.md).  Directory
+# scope, ahead of add_subdirectory(src), covers every target defined below.
+add_link_options($<$<CONFIG:TSan>:-fsanitize=thread>)
+
 # ---------------------------------------------------------------------------
 # RT3: the Z3 refinement scaffold was RETIRED in 0.32.5.
 #

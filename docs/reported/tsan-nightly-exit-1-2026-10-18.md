@@ -44,8 +44,8 @@ payloads (`tsan-failures.txt`, `tsan.log`) are where they are.
    CLAUDE.md, "Overlapping runs cause false FAILURES").
 4. Compare against a night where it passed, by the release SHA, to bound the
    change. Recent TSan work: the release/tsan build-tree split is the one the
-   sibling report [tsan-cmake-config-fails-to-link](tsan-cmake-config-fails-to-link.md)
-   came from, but that one affects only `-DCMAKE_BUILD_TYPE=TSan`, which the
+   sibling report [tsan-cmake-config-fails-to-link](../archive/tsan-cmake-config-fails-to-link.md)
+   came from (since fixed), but that one affected only `-DCMAKE_BUILD_TYPE=TSan`, which the
    workflow does not use, so it is unlikely to be the cause.
 
 ## Fix directions
