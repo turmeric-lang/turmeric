@@ -3896,13 +3896,16 @@ static CtorDef *rt_pat_ctor(Elab *e, const Form *pat) {
 }
 
 /* refine-top-level-def-not-a-fact: is `f` a value the encoder can take as an
- * equation's right side with nothing else in scope -- an int or bool literal,
- * or a constructor applied to such values (`(Push 1 (Halt))`)?  Anything that
- * computes (a call, a name) is not: it could mention state, and an equation
- * the encoder abstracts costs refutations (see rt_collect_path_conds). */
+ * equation's right side with nothing else in scope -- an int literal, or a
+ * constructor applied to int or bool literals and constructor terms
+ * (`(Push 1 (Halt))`)?  Anything that computes (a call, a name) is not: it
+ * could mention state, and an equation the encoder abstracts costs
+ * refutations (see rt_collect_path_conds).  A bare bool is not either: a
+ * crossing reads a named bool argument with the Int sort, so `(= flag true)`
+ * would only be ill-sorted. */
 static bool rt_def_init_is_fact(Elab *e, const Form *f, uint32_t depth) {
     if (!f || depth >= 64) return false;
-    if (f->tag == F_INT || f->tag == F_BOOL) return true;
+    if (f->tag == F_INT || (f->tag == F_BOOL && depth > 0)) return true;
     CtorDef *cd = rt_pat_ctor(e, f);
     if (!cd || f->as.list.len - 1 != cd->n_fields) return false;
     for (uint32_t i = 1; i < f->as.list.len; i++)

@@ -49,9 +49,13 @@ and the only question left is whether the name at the call IS the global.
 
 - `elab_def` stamps `Binding.refine_def_init` with the initializer of an
   immutable, non-atomic, non-thread-local, non-deferred `def` whose value is
-  an int or bool literal or a constructor applied to such values
-  (`rt_def_init_is_fact`). A computed value stays a free variable: an
-  equation the encoder abstracts costs refutations, as the let path notes.
+  an int literal or a constructor applied to int / bool literals and
+  constructor terms (`rt_def_init_is_fact`). A computed value stays a free
+  variable: an equation the encoder abstracts costs refutations, as the let
+  path notes. A bare `bool` global does too, because a crossing reads a named
+  bool argument with the Int sort -- a `let`-bound bool hits the same wall
+  ("predicate does not denote a proposition"), so the equation could only be
+  ill-sorted.
 - `refine_note_call_site` records the immutable globals the ARGUMENTS name
   (`RefineCallSite.global_args`, `rt_collect_global_args`), looked up in the
   scope of the call while it is being elaborated -- so a parameter or local
