@@ -1,17 +1,16 @@
 # Plan: `plot` Renderer Typeclass Collapse (U2, v1)
 
-> Status: P0–P3 landed. **P4 constructor migration done 2026-10-21** on
-> turmeric-spices branch `claude/plot-renderer-typeclass-p4`: all 30 renderer kinds
-> are types with a `Renderer` instance (`bounds` + `to-legacy`), every public
-> constructor returns `AnyRenderer`, `plot` / `plot-write-png` /
-> `plot-into-canvas` / `render` take a `(Vec AnyRenderer)`, curve callbacks are
-> typed `^fat` fn values called through `TUR_APPLY*_T`, and the extent is
-> folded through `bounds` (the per-kind bounds `switch` is deleted). Pixel
-> check: 33 of 34 scenes byte-identical across the change; `arrows` differs by
-> a bounds bug fix. **P5 negative fixtures done** there too (`spices/plot/errors/`).
-> **Remaining:** the per-kind `render` method that retires `to-legacy`, the
-> slot bag and the draw `switch` (P4 tail, pixel-sensitive); typing the
-> payloads (`:int` cons lists, `:int` style handles). See P4.
+> Status: P0–P3 landed. **P4 and P5 done 2026-10-21** on turmeric-spices
+> branch `claude/plot-renderer-typeclass-p4`, meeting the whole-plan
+> acceptance below: all 30 renderer kinds are types with a `Renderer`
+> instance (`bounds`, `draw`, and the defaulted `legend-label` /
+> `frame-marks` / `categories`); every public constructor returns
+> `AnyRenderer`; `plot` & co. take a `(Vec AnyRenderer)`; the draw `switch`,
+> the bounds `switch` and the slot bag are gone; callbacks are typed fn
+> values. Pixel check: of 34 scenes, 33 byte-identical to pre-plan output and
+> `arrows` changed by a bounds bug fix. **Remaining (beyond this plan's
+> acceptance):** typing the payloads (`:int` cons lists of double bits,
+> `:int` style handles) and `contours`' collapsed levels. See P4.
 > Tracks: spices-type-features-uplift-plan **U2 target — plot**
 > Scope: `spices/plot/` only; P3 needed a compiler dependency after all, now
 > satisfied (see Risks).
@@ -320,30 +319,52 @@ the recursive result).
   (ASan) compiler; the migrated path is ASan/UBSan/LSan clean (the remaining
   leaks are the `ptr<void>` result envelopes, which predate it).
 
-**Remaining:**
-- A per-kind `render` method replacing `to-legacy` + the monolithic
-  `__draw-renderers` switch (the P0 per-kind C de-monolith), after which the
-  slot bag, `__make-renderer` and the frame worker's kind scan for axes /
-  categories can go. The kind scan could become two more methods (`decorates`,
-  `categories`) first. Pixel-sensitive: keep the 34-scene byte diff as the
-  gate -- `spices/plot/tools/render-all-kinds.tur` is that program; its
-  header says how to run it against two checkouts.
+**Done (per-kind draw, 2026-10-21, same branch):**
+- `Renderer` gained `draw [r : a  ctx : DrawCtx] : void` (named `draw`, as
+  `render` is the Backend entry point) and three methods with defaults for
+  what the frame needs: `legend-label` (""), `frame-marks` (a `FrameMarks`
+  of four bools; only `Decoration` overrides it) and `categories`
+  (`(Option int)`; the two categorical histograms override it). `to-legacy`
+  is gone.
+- Each arm of `__draw-renderers`' switch moved verbatim into an inline-C
+  draw function beside its kind (24 functions across plot/line, point,
+  interval, area, contour, decor), wrapped in `do { } while (0)` so the arms'
+  `break`s keep their meaning. What the arms shared -- SET_LINE_STYLE /
+  SET_FILL_STYLE / SET_POINT_STYLE / MAP_POINT -- became `export-as` helpers
+  in plot/core (`plot_ctx_line_style` etc.) behind same-named local macros,
+  and the auto-color cursor moved into the `DrawCtx`. The three sampled
+  interval kinds share one kernel (`plot_draw_curve_interval`) keyed by a
+  curve-evaluation mode, as the sampler is.
+- The frame worker is `__plot-frame` (returns the `DrawCtx`, or NULL when
+  the viewport is too small -- the font it loaded is now freed then), the
+  typed draw fold inside `__ctx-clip-begin` / `-end`, and the legend rows.
+- `__make-renderer`, the slot setters, `anyrenderers->legacy` and
+  `__free-renderers` are deleted. `plot/core` is 1748 lines (from 2081);
+  the six kind modules carry their draws.
+- A `:c-sources` C file was considered for the draw code and rejected:
+  `export-as` functions are `static`, so separate C could not reach the
+  closure-calling helpers, and vendored C cannot load in the in-process
+  engine.
+- Verified as before: 34 scenes byte-identical to the previous step; shards
+  green on both compilers; ASan/UBSan clean.
+
+**Remaining (follow-ups, not in this plan's acceptance):**
 - Payload typing: point lists, bars and quads are `:int` cons lists of
   double bits, and style handles are `:int`. Typing them (a `Point` struct and
   `(List Point)`, `defopaque LineStyle` etc.) changes every constructor's
   signature again; do it in one pass with `plot/style`.
 - `contours` stores 0.0 for both ends of its level range, so all `n` levels
   draw the 0 contour. Preserved for pixel identity; fix with the payload pass.
-- The legacy slot-bag helpers (`__make-renderer`, `__renderer-floats`, ...)
-  are still exported for `to-legacy`; `plot-anyrenderers` is a deprecated
-  alias of `plot`.
+- The frame `plutovg_canvas_save`s once at the top with no matching
+  `restore`, so each plot leaves one saved state on a caller's canvas
+  (`CanvasBackend`). Preserved; harmless for a fresh surface.
+- `plot-anyrenderers` is a deprecated alias of `plot`.
 
 **Acceptance**
 - The typed path is pixel-identical to legacy `plot` -- done for every kind
   (33/34 scenes byte-identical; `arrows` is a bug fix).
 - Every example under `spices/plot/` and the guide compiles against the typed
-  constructors -- done. Removing `__make-renderer` waits on the per-kind
-  `render` method.
+  constructors -- done, and `__make-renderer` is removed.
 
 ### P5 — Tests, negative fixtures, image round-trip
 
