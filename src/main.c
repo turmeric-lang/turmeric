@@ -137,12 +137,6 @@
 #include "driver/driver.h"
 #include "driver/commands.h"
 
-/* E14: structured JSON output global — set by --json flag.
- * When true: tur doc prints JSON; tur test prints JSON; tur check uses JSON diag.
- * The storage lives in install.c so libturi (which omits main.c but pulls in
- * tur_core) resolves it cleanly. */
-extern bool use_json_output;
-
 /* -------------------------------------------------------------------------
  * Forward declarations: the functions and globals used above their
  * definitions.  Each one is described at its definition.
