@@ -423,13 +423,14 @@ document.addEventListener('DOMContentLoaded', function(){
 
     // ---- Recently Added / Recently Updated pages ---------------------------
     // Each panel ships every row, all but the first page `hidden`, and its
-    // first | prev | next | last pager hidden too, so the page reads as page 1
-    // with no JS. A dead end is aria-disabled rather than disabled, so the
-    // button you just pressed keeps focus on reaching the first or last page.
+    // first | previous | page m of n | next | last pager hidden too, so the
+    // page reads as page 1 with no JS. A dead end is aria-disabled rather than
+    // disabled, so the button you just pressed keeps focus on reaching the
+    // first or last page.
     document.querySelectorAll('.recent-panel').forEach(function(panel){
       var pager = panel.querySelector('.recent-pager');
       if (!pager) return;
-      var rows = Array.prototype.slice.call(panel.querySelectorAll('li'));
+      var rows = Array.prototype.slice.call(panel.querySelectorAll('tbody tr'));
       var size = Number(pager.dataset.pageSize) || 10;
       var last = Math.max(0, Math.ceil(rows.length / size) - 1);
       var status = pager.querySelector('.recent-page-status');
@@ -437,9 +438,9 @@ document.addEventListener('DOMContentLoaded', function(){
 
       function show(p) {
         page = Math.max(0, Math.min(last, p));
-        rows.forEach(function(li, i){ li.hidden = Math.floor(i / size) !== page; });
+        rows.forEach(function(tr, i){ tr.hidden = Math.floor(i / size) !== page; });
         pager.querySelectorAll('button').forEach(function(b){
-          var back = b.dataset.page === 'first' || b.dataset.page === 'prev';
+          var back = b.dataset.page === 'first' || b.dataset.page === 'previous';
           var dead = back ? page === 0 : page === last;
           b.setAttribute('aria-disabled', dead ? 'true' : 'false');
         });
@@ -449,7 +450,7 @@ document.addEventListener('DOMContentLoaded', function(){
       pager.addEventListener('click', function(e){
         var b = e.target.closest('button');
         if (!b || b.getAttribute('aria-disabled') === 'true') return;
-        show({ first: 0, prev: page - 1, next: page + 1, last: last }[b.dataset.page]);
+        show({ first: 0, previous: page - 1, next: page + 1, last: last }[b.dataset.page]);
       });
       pager.hidden = false;
       show(0);
@@ -1682,41 +1683,43 @@ def render_index(categories: list[dict], all_stems: set[str], out_dir: Path,
     sidebar_html = build_sidebar(
         toc=f'      <h3>Categories</h3>\n      <ul>{sidebar_cats}</ul>')
 
-    # "<title> (<date>) -- <description>", one row each. The description is
-    # the part that gives: it takes whatever width the title and date leave
-    # and ellipsizes there, so a long one costs the row nothing but its tail.
-    # The row's title attribute carries the whole description for hover.
-    # Rows past the first page ship `hidden`, so without JS the panel reads as
-    # its first page -- the same ten rows it listed before it had pages.
-    def dated_items(entries: list[dict]) -> str:
+    # Title | date | description, one table row each, with no headings and no
+    # rules. The title and date columns size to their content; the
+    # description takes the width they leave and ellipsizes there, so a long
+    # one costs the row nothing but its tail. Its cell's title attribute
+    # carries the whole description for hover. Rows past the first page ship
+    # `hidden`, so without JS the panel reads as its first page -- the same
+    # ten rows it listed before it had pages.
+    def dated_rows(entries: list[dict]) -> str:
         out = []
         for i, r in enumerate(entries):
             desc = r.get('desc', '').replace('—', '--')
             out.append(
-                f'<li title="{_html.escape(desc, quote=True)}"'
-                f'{" hidden" if i >= RECENT_PAGE_SIZE else ""}>'
-                f'<a href="{r["stem"]}.html">{_fmt_inline(r["label"])}</a>'
-                f'<span class="recent-date">&nbsp;({r["date"]})</span>'
-                + (f'<span class="recent-desc">&nbsp;-- {_fmt_desc(desc)}</span>'
-                   if desc else '')
-                + '</li>')
+                f'<tr{" hidden" if i >= RECENT_PAGE_SIZE else ""}>'
+                f'<td class="recent-title"><a href="{r["stem"]}.html">'
+                f'{_fmt_inline(r["label"])}</a></td>'
+                f'<td class="recent-date">{r["date"]}</td>'
+                f'<td class="recent-desc" title="{_html.escape(desc, quote=True)}">'
+                f'{_fmt_desc(desc)}</td></tr>')
         return ''.join(out)
 
-    # first | prev | next | last, under a panel with more than one page. Shipped
-    # `hidden`: guide-index.js reveals it once it can turn the pages, so a page
-    # read without JS never shows controls that do nothing.
+    # first | previous | page m of n | next | last, centered under a panel with
+    # more than one page. Shipped `hidden`: guide-index.js reveals it once it
+    # can turn the pages, so a page read without JS never shows controls that
+    # do nothing.
     def pager(heading: str, entries: list[dict]) -> str:
         pages = -(-len(entries) // RECENT_PAGE_SIZE)
         if pages <= 1:
             return ''
+        button = lambda name: (f'<button type="button" data-page="{name}">'
+                               f'{name}</button>')
+        status = (f'<span class="recent-page-status" aria-live="polite">'
+                  f'page 1 of {pages}</span>')
         sep = '<span class="recent-pager-sep" aria-hidden="true">|</span>'
-        buttons = sep.join(
-            f'<button type="button" data-page="{name}">{name}</button>'
-            for name in ('first', 'prev', 'next', 'last'))
+        items = sep.join([button('first'), button('previous'), status,
+                          button('next'), button('last')])
         return (f'<nav class="recent-pager" aria-label="{heading} pages"'
-                f' data-page-size="{RECENT_PAGE_SIZE}" hidden>{buttons}'
-                f'<span class="recent-page-status" aria-live="polite">'
-                f'page 1 of {pages}</span></nav>')
+                f' data-page-size="{RECENT_PAGE_SIZE}" hidden>{items}</nav>')
 
     # What arrived, then what changed, as two tabs of one card. The dates are
     # the two ends of each guide's git history -- first commit and last -- so a
@@ -1739,7 +1742,7 @@ def render_index(categories: list[dict], all_stems: set[str], out_dir: Path,
     panels = ''.join(
         f'<div class="recent-panel" role="tabpanel" id="{slug}"'
         f' aria-labelledby="{slug}-tab"{"" if i == 0 else " hidden"}>'
-        f'<ul style="list-style:none;margin:0">{dated_items(entries)}</ul>'
+        f'<table class="recent-table"><tbody>{dated_rows(entries)}</tbody></table>'
         f'{pager(heading, entries)}</div>'
         for i, (slug, heading, entries) in enumerate(tabs)
     )
@@ -1769,18 +1772,29 @@ def render_index(categories: list[dict], all_stems: set[str], out_dir: Path,
     .recent-tablist .seg-btn:hover {{ color:var(--text-primary); }}
     .recent-tablist .seg-btn.active {{ color:var(--gold-bright); background:var(--bg-hover); }}
     .recent-tablist .seg-btn:focus-visible {{ outline:2px solid var(--gold); outline-offset:-2px; }}
-    .recent-panel li {{ display:flex; align-items:baseline; white-space:nowrap; min-width:0; }}
-    .recent-panel li[hidden] {{ display:none; }}
-    .recent-panel li a {{ flex:0 1 auto; min-width:0; overflow:hidden; text-overflow:ellipsis; }}
-    .recent-panel .recent-date {{ flex:none; color:var(--text-sec); }}
-    .recent-panel .recent-desc {{ flex:1 1 0; min-width:0; overflow:hidden; text-overflow:ellipsis; color:var(--text-sec); }}
-    .recent-pager {{ display:flex; flex-wrap:wrap; align-items:baseline; gap:0.4rem; margin-top:0.6rem; font-family:system-ui; font-size:0.8rem; color:var(--text-dim); }}
+    .recent-table {{ width:100%; border-collapse:collapse; font-size:0.875rem; }}
+    .recent-table td {{ padding:0.2rem 1.25rem 0.2rem 0; border:none; white-space:nowrap; vertical-align:baseline; }}
+    .recent-table td:last-child {{ padding-right:0; }}
+    .recent-table .recent-title, .recent-table .recent-date {{ width:1%; }}
+    .recent-table .recent-title a {{ display:block; max-width:min(24rem, 45vw); overflow:hidden; text-overflow:ellipsis; color:var(--text-primary); }}
+    .recent-table .recent-title a:hover {{ color:var(--gold); }}
+    .recent-table .recent-date {{ color:var(--text-sec); font-variant-numeric:tabular-nums; }}
+    .recent-table .recent-desc {{ max-width:0; overflow:hidden; text-overflow:ellipsis; color:var(--text-sec); }}
+    .recent-pager {{ display:flex; justify-content:center; flex-wrap:wrap; align-items:baseline; gap:0.5rem; margin-top:0.75rem; font-family:system-ui; font-size:0.8rem; color:var(--text-dim); }}
     .recent-pager[hidden] {{ display:none; }}
     .recent-pager button {{ padding:0; background:none; border:none; font:inherit; color:var(--gold); cursor:pointer; }}
     .recent-pager button:hover {{ color:var(--gold-bright); text-decoration:underline; }}
     .recent-pager button[aria-disabled="true"] {{ color:var(--text-dim); cursor:default; text-decoration:none; }}
     .recent-pager button:focus-visible {{ outline:2px solid var(--gold); outline-offset:2px; }}
-    .recent-page-status {{ margin-left:0.6rem; }}
+    .recent-page-status {{ color:var(--text-sec); }}
+    /* A phone leaves the description a letter or two -- a column of "H..." --
+       so below 600px it goes, and the title takes the width it held. */
+    @media (max-width: 600px) {{
+      .recent-table .recent-desc {{ display:none; }}
+      .recent-table .recent-title {{ width:100%; max-width:0; }}
+      .recent-table .recent-title a {{ max-width:none; }}
+      .recent-table .recent-date {{ padding-right:0; }}
+    }}
   </style>
 </head>
 <body>
