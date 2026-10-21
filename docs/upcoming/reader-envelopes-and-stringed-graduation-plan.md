@@ -247,7 +247,7 @@ construction site correct without edits.
 currently answers one question with one return value. Split it:
 `source_format_from_extension(path, &envelope, &base)` returning both, with
 `reader_type_from_extension` kept as a thin wrapper so the ~9 existing call
-sites (`main.c:176`, `main.c:7355`, `main.c:7615`, `eval.c:12414`,
+sites (`driver/paths.c:detect_and_adjust_lang`, `driver/cmd_format.c:fmt_process_file`, `driver/cmd_format.c:cmd_fmt`, `eval.c:12414`,
 `wasm_lsp.c:146`, `lsp.c:2111`, ...) compile unchanged and are converted one
 at a time.
 
@@ -301,8 +301,8 @@ incremental. Do not exploit that in the MVP: add
 
 **E6 -- The rest of the toolchain.** Every place that decides "is this a
 Turmeric source file" by extension needs `.tur.md`:
-`main.c:7325` (`tur fmt`), the directory walk at `main.c:7427`, the
-`tur run` single-file dispatch at `main.c:11892`, project-mode build descent
+`driver/cmd_format.c:fmt_is_tur_file` (`tur fmt`), the directory walk at `driver/cmd_format.c:fmt_walk`, the
+`tur run` single-file dispatch at `driver/cmd_run.c:cmd_run_main`, project-mode build descent
 in `pkg.c`, and module resolution for `(import)`. `tur fmt` on a `.tur.md`
 is genuinely hard (reformat inside fences, leave prose alone) -- **skip it in
 the MVP and diagnose rather than mangle**.

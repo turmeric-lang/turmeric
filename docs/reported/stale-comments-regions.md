@@ -7,13 +7,13 @@ from the "Trust the code over the comments" note in
 against `main` 9ac3cd43; line numbers are from that commit.
 
 Regions graduated on 2026-09-05. They are on unless `TUR_REGIONS=0` is set
-when `tur` runs: `g_opt_regions` defaults to `true`, `main.c:13274` reads the
+when `tur` runs: `g_opt_regions` defaults to `true`, `driver/cli.c:drv_apply_env_overrides` reads the
 variable, and `regions_enabled()` (`types.c:1795`) returns `g_opt_regions`.
 There is no `--enable=regions`, no experiment row, and no TUR-W0060 for it.
 The guide names three comments that predate this. A grep for `enable=regions` /
 "behind a flag" over `src/`, `stdlib/`, `CMakeLists.txt` and `tests/*.sh`
 finds eight that are stale. Three more mention the flag accurately, as
-history (`region.h:16`, `main.c:13268`, `tests/run-regions-seam.sh:8`). A read of
+history (`region.h:16`, `driver/cli.c:drv_apply_env_overrides`, `tests/run-regions-seam.sh:8`). A read of
 the ctor emitters finds the rest.
 
 ## Read this before editing `src/runtime/region.h`
@@ -91,7 +91,7 @@ in these files cost nothing from then on.
   (TUR-W0060) on first consult".
 - **Code:** `return g_opt_regions;`. It never warns.
 - **Change:** "true unless TUR_REGIONS=0 was set when tur ran (the bisection
-  hatch; see main.c)."
+  hatch; see driver/cli.c)."
 
 ### 7. `emit_cps_ir.c:9652-9654`: "no default-path routing moves"
 

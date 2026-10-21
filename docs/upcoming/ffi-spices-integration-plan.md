@@ -59,13 +59,13 @@ S5). Ordered by value.
 - A spice wraps a C library with `:cmake-deps` (fetch+build via CMake,
   flags recorded in `cmake/spice-deps-manifest.json`) and/or
   `:build-opts :link-libs`; `tur build`/`tur run` inject `-I/-L/-l`
-  from the manifest (`drv_collect_build_aux`, `src/main.c:1859`).
+  from the manifest (`drv_collect_build_aux`, `src/driver/cc.c`).
 - Stdlib-style bare sources instead embed `/* __tur_autolink__: ... */`
-  markers in inline-C; `scan_autolink_markers` (`src/main.c:1839`)
+  markers in inline-C; `scan_autolink_markers` (`src/driver/cc.c`)
   collects them from the emitted C.
 - The REPL loads a spice either by subprocess `tur build --shared` +
   dlopen, or -- in JIT builds -- in-process via the `TurSpiceJitHook`
-  (`repl_jit_build`, `src/main.c:3823`).
+  (`repl_jit_build`, `src/driver/jit.c`).
 - REPL calls into spice exports resolve through the FFI ladder
   (`src/turi/ffi_thunk.c`): JIT thunk (any signature) -> per-export
   `__ffi` shim -> generated shape table.

@@ -1203,7 +1203,7 @@ the untrusted boundary plus quoting for the driver's own paths.
 
 - [x] **`src/tur_argcheck.h`** -- one header holding the grammars: what a
   contributed link token may look like, what a path a manifest supplies may
-  look like, and whether a string is free of shell syntax. `main.c`, `pkg.c`
+  look like, and whether a string is free of shell syntax. `driver/cc.c`, `pkg.c`
   and `mcp.c` all call into it, so the rules cannot drift between them the way
   the two link-flag readers once did.
 - [x] **D-1a, the grammar (the untrusted half).** `scan_autolink_markers` now

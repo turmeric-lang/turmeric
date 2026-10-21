@@ -33,8 +33,8 @@ mutation with no flag: removing the untaken-message drop in
 
 `resolve_autolink_flags` sets `needs_asan` only when the autolink line names
 `-lturi` and an `nm` scan finds ASan symbols in that `libturi.a`
-(`src/main.c:2989`). `link_command_run` adds the sanitizer flags only when
-`needs_asan` is set (`src/main.c:3158`). That autodetect exists so a sanitized
+(`src/driver/cc.c:resolve_autolink_flags`). `link_command_run` adds the sanitizer flags only when
+`needs_asan` is set (`src/driver/cc.c:drv_link_command_run`). That autodetect exists so a sanitized
 libturi links at all; it was never meant to choose which programs get
 checked. The archived reports
 [catch-unwind-panic-payload-leaks](../archive/catch-unwind-panic-payload-leaks.md)

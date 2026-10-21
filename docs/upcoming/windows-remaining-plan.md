@@ -137,7 +137,7 @@ Turmeric script.
 
 `tur build --shared` emits `<name>.dll` (no `lib` prefix) on Windows.
 `TUR_SHLIB_PREFIX` / `TUR_SHLIB_EXT` in `src/platform_fs.h` are the single
-source of truth; `src/main.c` (default output path) and
+source of truth; `src/driver/project.c` (default output path) and
 `src/turi/spice_loader.c` (the `.tur-repl-cache/` image) both build their names
 from them. macOS deliberately keeps `lib<name>.so` -- see the header comment.
 
@@ -293,7 +293,7 @@ hard-links or copies where it used to hit the `symlink` `ENOSYS` stub. See
   `-Wint-conversion` / `-Wincompatible-pointer-types`, hard errors on gcc >= 14
   and Apple clang >= 15. **Correction (2026-07-31): the `-Wno-error=`
   workaround this plan previously cited is gone** -- both downgrades were
-  deliberately removed (`src/main.c:5231-5251`) on the grounds that every
+  deliberately removed (`src/driver/project.c:cmd_build_multi_files`) on the grounds that every
   straddle was bridged at emit time. Five remained under gcc 16.1.0, so that
   claim did not hold; do not re-add the downgrades, the removal is what exposed
   them.

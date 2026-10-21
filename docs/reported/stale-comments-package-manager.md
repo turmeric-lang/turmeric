@@ -61,7 +61,7 @@ Checked against `main` 9ac3cd43; line numbers are from that commit.
   mismatch only after the fact. Most rows do not hold a SHA-256 either (see
   item 1). The workflow list beneath also leaves out `tur fetch --frozen`,
   `tur audit` and the global install verbs (`install`, `uninstall`, `list`,
-  `upgrade`), which all exist (`main.c:11469`).
+  `upgrade`), which all exist (`driver/cli.c:COMMANDS`).
 - **Change:** "tur.lock pins each URL spice to a commit (`:resolved`) and a
   `tree1:` content hash; for cmake deps it records the commit fetched but does
   not pin it." Either finish the workflow list or replace it with a pointer to
