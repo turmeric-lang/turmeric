@@ -550,6 +550,7 @@ set(TUR_DRIVER_SOURCES
   driver/cmd_run.c
   driver/compile_link.c
   driver/jit.c
+  driver/paths.c
   driver/worker.c
 )
 add_executable(tur main.c lsp/mcp.c ${TUR_DRIVER_SOURCES} $<TARGET_OBJECTS:tur_core>)

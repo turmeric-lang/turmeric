@@ -120,9 +120,7 @@ typedef struct {
     uint64_t key;
 } SplitLibCache;
 
-/* == main.c ================================================================ */
-
-/* -- moving to driver/paths.c -- */
+/* == driver/paths.c ======================================================== */
 extern const char *g_argv0;
 extern int g_main_argc;
 extern const char *const *g_main_argv;
@@ -141,6 +139,8 @@ const char *tur_stdlib_path(const char *basename,
 int drv_read_entire_file_quiet(const char *path, char **out, size_t *out_len);
 int drv_read_entire_file(const char *path, char **out, size_t *out_len);
 int drv_is_directory(const char *path);
+
+/* == main.c ================================================================ */
 
 /* -- moving to driver/spice.c -- */
 extern bool g_user_config_experiments_done;
