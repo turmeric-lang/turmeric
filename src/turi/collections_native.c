@@ -1313,12 +1313,40 @@ static bool vec_buf_scan(void *box, TuriCollBufMarkFn mark, void *ctx) {
         mark(vec_retag_cell(v, (size_t)i, data[i]), ctx);
     return true;
 }
+/* Scratch promotion: a struct, closure or string cell can point into the
+ * scratch pool -- `(vec-push! v (P 1))` at a REPL prompt stores the struct
+ * the eval just built -- and the rewind would leave the cell dangling.  Move
+ * each such cell and store the moved pointer back; the per-cell tag says
+ * which cells hold one (vec_retag_cell, as the scan reads them). */
+static void vec_buf_relocate(void *box, TuriCollBufMoveFn move, void *ctx) {
+    int64_t *v = (int64_t *)box;
+    int64_t *data = (int64_t *)(intptr_t)v[0];
+    if (!data) return;
+    for (int64_t i = 0; i < v[1]; i++) {
+        TuriValue c = vec_retag_cell(v, (size_t)i, data[i]);
+        switch (c.tag) {
+            case TURI_STRUCT:
+                data[i] = (int64_t)(intptr_t)move(c, ctx).as_struct;
+                break;
+            case TURI_CLOSURE:
+                data[i] = (int64_t)(intptr_t)move(c, ctx).as_closure;
+                break;
+            case TURI_CSTR:
+                data[i] = (int64_t)(intptr_t)move(c, ctx).as_cstr;
+                break;
+            default:
+                break;
+        }
+    }
+}
 static TuriValue native_vec_new(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)a; (void)n; (void)ud;
     int64_t *v = (int64_t *)calloc(4, sizeof(int64_t));
     if (!v) return turi_nil();
-    v[3] = (int64_t)(intptr_t)turi_env_track_collection(env, v, vec_buf_destroy,
-                                                        vec_buf_scan);
+    TuriCollBuf *node = turi_env_track_collection(env, v, vec_buf_destroy,
+                                                  vec_buf_scan);
+    if (node) node->relocate = vec_buf_relocate;
+    v[3] = (int64_t)(intptr_t)node;
     TuriValue r = {0}; r.tag = TURI_INT; r.as_int = (int64_t)(intptr_t)v; return r;
 }
 static TuriValue native_vec_len(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {

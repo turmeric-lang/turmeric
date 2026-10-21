@@ -40,6 +40,7 @@
 #include <string.h>
 
 #include "turi/eval.h"
+#include "turi/preload.h"
 
 static int failures = 0;
 
@@ -540,6 +541,62 @@ static void test_collection_sweep(void) {
     turi_env_free(env);
 }
 
+/* turi-vec-struct-element-dangles-across-rewind: a struct pushed onto a
+ * global Vec at one eval boundary lived in scratch, and the rewind left the
+ * Vec's cell pointing at reclaimed memory -- ASan use-after-poison in the
+ * sweep's mark, and garbage on a later read.  The promotion walk now moves a
+ * reached Vec's struct, closure and string cells, so every boundary still
+ * rewinds and every element reads back -- a runtime-built string field
+ * included, and a Vec of bare strings. */
+static void test_vec_struct_cells_relocated(void) {
+    TuriEnv *env = turi_env_new();
+    /* The REPL's own prelude: typed vec-get / vec-push! for a (Vec P). */
+    turi_env_preload_macros(env, "stdlib");
+    turi_env_preload_native_stubs(env);
+    turi_env_preload_collections(env, "stdlib");
+    turi_env_set_scratch_promotion(env, true);
+
+    TuriValue pr = turi_eval(env,
+        "(load \"stdlib/str-build.tur\")\n"   /* a cstr-typed str-concat */
+        "(defstruct P :copy [x : int tag : cstr])\n"
+        "(def ps (:: (vec-new) (Vec P)))\n"
+        "(def ss (:: (vec-new) (Vec cstr)))\n0\n");
+    CHECK(pr.tag != TURI_ERROR, "vec-cell prelude failed: %s",
+          pr.tag == TURI_ERROR ? pr.as_error : "");
+
+    uint64_t rewinds0 = env->promo_rewinds;
+    uint64_t declined0 = env->promo_decline_unrelocatable;
+    char src[160];
+    for (int i = 0; i < 50; i++) {
+        snprintf(src, sizeof src,
+                 "(vec-push! ps (P %d (str-concat \"p\" \"%d\")))\n"
+                 "(vec-push! ss (str-concat \"s\" \"%d\"))\n0\n", i, i, i);
+        CHECK(eval_int(env, src, "push struct + string") == 0, "push %d", i);
+    }
+    CHECK(env->promo_rewinds >= rewinds0 + 50,
+          "pushes into a global Vec stopped the rewinds (%llu -> %llu)",
+          (unsigned long long)rewinds0, (unsigned long long)env->promo_rewinds);
+    CHECK(env->promo_decline_unrelocatable == declined0,
+          "a Vec of structs declined promotion (%llu -> %llu)",
+          (unsigned long long)declined0,
+          (unsigned long long)env->promo_decline_unrelocatable);
+
+    for (int i = 0; i < 50; i += 7) {
+        snprintf(src, sizeof src, "(.x (vec-get ps %d))\n", i);
+        CHECK(eval_int(env, src, "struct cell read") == i,
+              "struct cell %d did not survive the rewinds", i);
+        snprintf(src, sizeof src, "(cstr-len (.tag (vec-get ps %d)))\n", i);
+        CHECK(eval_int(env, src, "struct string field read") == (i < 10 ? 2 : 3),
+              "string field of struct cell %d did not survive", i);
+        snprintf(src, sizeof src, "(cstr-len (vec-get ss %d))\n", i);
+        CHECK(eval_int(env, src, "string cell read") == (i < 10 ? 2 : 3),
+              "string cell %d did not survive", i);
+    }
+    CHECK(eval_int(env, "(vec-len ps)\n", "vec len") == 50, "lost Vec elements");
+
+    turi_env_free(env);
+}
+
 int main(void) {
     turi_init(false);
     test_steady_state();
@@ -550,6 +607,7 @@ int main(void) {
     test_effectcont_bail();
     test_gen_drain_across_evals();
     test_collection_sweep();
+    test_vec_struct_cells_relocated();
 
     if (failures) {
         fprintf(stderr, "env-longlived: %d failure(s).\n", failures);

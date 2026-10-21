@@ -16011,6 +16011,113 @@ static void collsweep_after_rewind(TuriEnv *env, TuriValue result) {
     }
 }
 
+/* ---- Collection cells at promotion ------------------------------------------
+ * turi-vec-struct-element-dangles-across-rewind: a tracked box's cells are
+ * values the promotion walk never saw -- the roots reach a box only as an
+ * opaque int carrier -- so a struct pushed onto a global Vec at a REPL prompt
+ * stayed in scratch, and the rewind left the cell dangling (the TR3 sweep then
+ * read it: ASan use-after-poison in collmark_value).  Before the rewind, mark
+ * which boxes the roots reach (the sweep's own marker, over valid memory),
+ * then require each reached box's cells to be relocatable: a box with a
+ * relocate hook has them promo_check'ed and later moved, a box without one
+ * must hold no scratch pointer at all.  Only reached boxes are asked, so a
+ * garbage Set holding a stale scratch word cannot block every rewind after it
+ * -- unless the mark was incomplete (a non-empty Set/Map may hide a box behind
+ * an untyped entry), when every live box is asked. */
+
+/* Does this value point into the scratch pool? */
+static bool promo_value_in_scratch(TuriEnv *env, TuriValue v) {
+    switch (v.tag) {
+    case TURI_INT:     return PROMO_SCRATCH(env, (void *)(intptr_t)v.as_int);
+    case TURI_CSTR:    return v.as_cstr && PROMO_SCRATCH(env, v.as_cstr);
+    case TURI_STRUCT:  return v.as_struct && PROMO_SCRATCH(env, v.as_struct);
+    case TURI_CLOSURE: return v.as_closure && PROMO_SCRATCH(env, v.as_closure);
+    default:           return false;
+    }
+}
+
+typedef struct {
+    TuriEnv  *env;
+    PromoMap *seen;
+    bool      movable;   /* the box can relocate its cells */
+    bool      ok;
+} PromoCellCheck;
+
+static void promo_cell_check(TuriValue v, void *ctx) {
+    PromoCellCheck *c = (PromoCellCheck *)ctx;
+    if (!c->ok) return;
+    if (c->movable) {
+        if (!promo_check(c->env, v, c->seen)) c->ok = false;
+    } else if (promo_value_in_scratch(c->env, v)) {
+        c->ok = false;
+    }
+}
+
+/* Pass 1 for the collection boxes: mark the boxes the roots reach (leaving
+ * node->marked set on every box whose cells were checked, for pass 2), and
+ * return whether all their cells can survive the rewind. */
+static bool promo_check_coll_bufs(TuriEnv *env, TuriValue result) {
+    if (!env->coll_bufs) return true;
+    PromoMap boxmap;
+    promo_map_init(&boxmap);
+    bool any_live = false;
+    for (TuriCollBuf *n = env->coll_bufs; n; n = n->next) {
+        n->marked = false;
+        if (n->box) { promo_map_put(&boxmap, n->box, n); any_live = true; }
+    }
+    if (!any_live) { promo_map_free(&boxmap); return true; }
+
+    CollMark mc = { env, &boxmap, NULL, 0, 0, true };
+    PromoMap seen;
+    promo_map_init(&seen);
+    collmark_value(env, result, &seen, &mc);
+    for (EnvBinding *b = env->globals; b; b = b->next)
+        collmark_value(env, b->value, &seen, &mc);
+    for (uint32_t i = 0; i < env->n_prelude_globals; i++)
+        collmark_value(env, env->prelude_globals[i].value, &seen, &mc);
+    CollMarkFnCtx fnctx = { &seen, &mc };
+    for (size_t i = 0; i < mc.wl_len; i++) {
+        TuriCollBuf *n = mc.wl[i];
+        if (!n->scan || !n->scan(n->box, collmark_markfn, &fnctx))
+            mc.complete = false;
+    }
+    promo_map_free(&seen);
+    promo_map_free(&boxmap);
+    free(mc.wl);
+
+    bool ok = true;
+    PromoMap cseen;
+    promo_map_init(&cseen);
+    for (TuriCollBuf *n = env->coll_bufs; ok && n; n = n->next) {
+        if (!n->box) continue;
+        if (!mc.complete) n->marked = true;   /* reachability unknown: ask all */
+        if (!n->marked) continue;
+        if (!n->scan) continue;   /* an embedder's opaque box: never walked */
+        PromoCellCheck cc = { env, &cseen, n->relocate != NULL, true };
+        n->scan(n->box, promo_cell_check, &cc);
+        if (!cc.ok) ok = false;
+    }
+    promo_map_free(&cseen);
+    return ok;
+}
+
+typedef struct { TuriEnv *env; PromoMap *fwd; } PromoCellMove;
+
+static TuriValue promo_cell_move(TuriValue v, void *ctx) {
+    PromoCellMove *m = (PromoCellMove *)ctx;
+    return promo_copy(m->env, v, m->fwd);
+}
+
+/* Pass 2 for the collection boxes: move the cells of every box pass 1
+ * checked, through the roots' forwarding table so a value shared between a
+ * root and a cell stays one value. */
+static void promo_relocate_coll_bufs(TuriEnv *env, PromoMap *fwd) {
+    PromoCellMove m = { env, fwd };
+    for (TuriCollBuf *n = env->coll_bufs; n; n = n->next)
+        if (n->box && n->marked && n->relocate)
+            n->relocate(n->box, promo_cell_move, &m);
+}
+
 /* ===========================================================================
  * r7rs-callcc-memory-never-freed: what a capture kept, put off to the sweep.
  *
@@ -16758,6 +16865,8 @@ static void turi_promote_escaping(TuriEnv *env, TuriValue *result) {
     for (uint32_t i = 0; ok && i < env->n_prelude_globals; i++)
         if (!promo_check(env, env->prelude_globals[i].value, &seen)) ok = false;
     promo_map_free(&seen);
+    /* The values the roots hold through tracked collection boxes. */
+    if (ok && !promo_check_coll_bufs(env, *result)) ok = false;
     if (!ok) { env->promo_decline_unrelocatable++; return; }   /* keep scratch intact this cycle */
 
     /* Pass 2: copy roots into perm, rewriting pointers (shared fwd table keeps
@@ -16770,6 +16879,7 @@ static void turi_promote_escaping(TuriEnv *env, TuriValue *result) {
     for (uint32_t i = 0; i < env->n_prelude_globals; i++)   /* PS5 */
         env->prelude_globals[i].value =
             promo_copy(env, env->prelude_globals[i].value, &fwd);
+    promo_relocate_coll_bufs(env, &fwd);
     promo_map_free(&fwd);
     *result = promoted;
 

@@ -743,10 +743,11 @@ TuriCollBuf *turi_env_track_collection(TuriEnv *env, void *box,
     } else {
         node = (TuriCollBuf *)turi_val_perm_alloc(env, sizeof(TuriCollBuf));
     }
-    node->box     = box;
-    node->destroy = destroy;
-    node->scan    = scan;
-    node->marked  = false;
+    node->box      = box;
+    node->destroy  = destroy;
+    node->scan     = scan;
+    node->relocate = NULL;   /* a box that can move its cells sets it after */
+    node->marked   = false;
     node->next    = env->coll_bufs;
     env->coll_bufs = node;
     return node;
