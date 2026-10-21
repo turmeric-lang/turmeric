@@ -1,0 +1,1 @@
+function 'g' declares return type 'ptr<Foo>' but its body returns ptr<Bar>

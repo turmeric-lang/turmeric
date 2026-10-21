@@ -216,24 +216,45 @@ bool fwd_decl_apply_ref_params(Elab *e, Arena *arena, Type *fn_type, const Form 
         const char *nm = t->as.sym->name;
         uint32_t len = t->as.sym->len;
         uint32_t prefix = 0;
+        bool is_ptr = false;
         if (len > 3 && memcmp(nm, "rc<", 3) == 0) prefix = 3;
         else if (len > 4 && memcmp(nm, "ref<", 4) == 0) prefix = 4;
         else if (len > 5 && (memcmp(nm, "weak<", 5) == 0 || memcmp(nm, "lref<", 5) == 0)) prefix = 5;
+        /* typed-ptr-pointee-not-checked-at-calls: a typed `ptr<Foo>` slot
+         * already has the TY_PTR_VOID kind, but no pointee, so a caller above
+         * the definition passed a `ptr<Bar>` unchecked. */
+        else if (len > 4 && memcmp(nm, "ptr<", 4) == 0) { prefix = 4; is_ptr = true; }
         if (prefix == 0 || nm[len - 1] != '>' || len - prefix - 1 == 0) continue;
         char inner[128];
         uint32_t inner_len = len - prefix - 1;
         if (inner_len >= sizeof inner) continue;
         memcpy(inner, nm + prefix, inner_len);
         inner[inner_len] = '\0';
-        TypeKind ik = typekind_from_symbol(inner);
+        /* A pointer's pointee may itself be a pointer (`ptr<ptr<Foo>>`) or
+         * const (`ptr<const-u8>`): settle on the innermost name. */
+        const char *leaf = inner;
+        size_t leaf_len = inner_len;
+        while (is_ptr) {
+            if (leaf_len > 6 && memcmp(leaf, "const-", 6) == 0) { leaf += 6; leaf_len -= 6; }
+            else if (leaf_len > 5 && memcmp(leaf, "ptr<", 4) == 0 && leaf[leaf_len - 1] == '>') {
+                leaf += 4; leaf_len -= 5;
+            } else break;
+        }
+        char leaf_buf[128];
+        memcpy(leaf_buf, leaf, leaf_len);
+        leaf_buf[leaf_len] = '\0';
+        if (is_ptr && strcmp(leaf_buf, "void") == 0) continue;  /* untyped: no pointee */
+        TypeKind ik = typekind_from_symbol(leaf_buf);
         bool settled = ik != TY_UNKNOWN &&
                        (typekind_is_numeric(ik) || ik == TY_BOOL || ik == TY_CSTR);
         for (uint32_t ai = 0; !settled && ai < e->n_adt_defs; ai++) {
             const AdtDef *d = e->adt_defs[ai];
-            if (d->n_type_params == 0 && strcmp(d->name, inner) == 0) settled = true;
+            if (d->n_type_params == 0 && strcmp(d->name, leaf_buf) == 0) settled = true;
         }
         if (!settled) { unsettled = true; continue; }
-        Type *rt = rc_family_type_from_keyword_name(e, nm, len, t->span, NULL, NULL, NULL, 0);
+        Type *rt = is_ptr
+            ? ptr_type_from_keyword_name(e, nm, len, t->span, NULL, NULL, NULL, 0)
+            : rc_family_type_from_keyword_name(e, nm, len, t->span, NULL, NULL, NULL, 0);
         if (!rt) continue;
         fn_type->as.fn.arg_kinds[slot - 1] = (uint8_t)rt->kind;
         if (!fn_type->as.fn.arg_full_types) {

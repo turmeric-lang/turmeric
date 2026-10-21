@@ -2373,6 +2373,17 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
 Type *ptr_type_from_keyword_name(Elab *e, const char *name, uint32_t len,
     Span span, const Symbol *rec_name, const Symbol **type_params,
     Kind *type_param_kinds, uint8_t n_type_params);
+/* typed-ptr-pointee-not-checked-at-calls: true when `t` is a typed pointer
+ * whose pointee (through any nesting) is still open -- a type variable, or an
+ * ADT with no def.  Two typed pointers are compared with type_eq only when
+ * neither is open (elab_call.c). */
+bool ptr_pointee_is_open(const Type *t);
+/* true when `a` and `b` are handles of one kind to two different things that
+ * the kind check alone let through: typed pointers with closed pointees that
+ * type_eq tells apart (`ptr<Foo>` against `ptr<Bar>`; an untyped ptr<void> on
+ * either side never conflicts), or `rc` / `weak` of two different ADTs
+ * (`rc<S>` against `rc<U>`; a type-variable target never conflicts). */
+bool handle_targets_conflict(const Type *a, const Type *b);
 /* rc-angle-bracket-annotation-becomes-tyvar: resolve a typed reference-family
  * keyword annotation (`rc<T>`, `weak<T>`, `ref<T>`, `lref<T>`) to its real
  * TY_RC/TY_WEAK/TY_REF/TY_LREF Type -- and, for

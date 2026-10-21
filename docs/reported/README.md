@@ -183,7 +183,7 @@ on `main` 3d9e02a2.
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [typed-ptr-pointee-not-checked-at-calls](typed-ptr-pointee-not-checked-at-calls.md) | medium (silent loss of type checking) | A `ptr<Foo>` parameter or return type accepts a `ptr<Bar>`, although `type_eq` compares pointees (`types.c:278-284`); a `ptr<int>` parameter's error prints `expected ptr<void>`, so the pointee seems to be dropped before the call check. CLAUDE.md now steers handles to `defopaque` until it is fixed. |
+| ~~[typed-ptr-pointee-not-checked-at-calls](../archive/typed-ptr-pointee-not-checked-at-calls.md)~~ | medium (silent loss of type checking) | **RESOLVED 2026-10-21** (archived): the call check compares a `ptr<T>` / `rc<T>` / `weak<T>` parameter's target after the kind match (`handle_targets_conflict`; untyped `ptr<void>` and open pointees still match anything), forward declarations carry typed-pointer parameters, and a `: ptr<Foo>` return refuses a `ptr<Bar>` body. Pinned by `errors/typed-ptr-pointee-mismatch` (+`-forward`, `-return`) and `errors/rc-target-mismatch` |
 
 ## Found writing the CPS/DK internals guide (filed 2026-10-16)
 

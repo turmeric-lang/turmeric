@@ -12043,6 +12043,13 @@ Expr *elab_defn(Elab *e, const Form *call) {
                 return_kind == TY_APP ? return_app_type : NULL,
                 return_kind, body->type))
             rc = RET_CONFLICT_CARRIER_AGGREGATE;
+        /* typed-ptr-pointee-not-checked-at-calls: a `: ptr<Foo>` return whose
+         * body yields a `ptr<Bar>` agreed by kind (and `rc<S>` / `rc<U>`). */
+        if (rc == RET_CONFLICT_NONE && !return_unannotated &&
+            (return_kind == TY_PTR_VOID || return_kind == TY_RC ||
+             return_kind == TY_WEAK) &&
+            handle_targets_conflict(return_app_type, &body->type))
+            rc = RET_CONFLICT_NOMINAL;
         /* declared-tyvars-are-not-rigid: the type question the representation
          * predicates above leave out.  A generic's own `[A B]` are rigid in
          * its body, against each other and against a ground type: `[x : A]
@@ -12067,7 +12074,9 @@ Expr *elab_defn(Elab *e, const Form *call) {
         }
         if (rc != RET_CONFLICT_NONE) {
             Buf wb; buf_init(&wb);
-            if (!return_adt_def && return_kind == TY_APP && return_app_type)
+            if (!return_adt_def && (return_kind == TY_APP || return_kind == TY_PTR_VOID ||
+                                    return_kind == TY_RC || return_kind == TY_WEAK) &&
+                return_app_type)
                 type_print(&wb, *return_app_type);
             else if (!return_adt_def && return_kind == TY_TYVAR && return_tyvar_type)
                 type_print(&wb, *return_tyvar_type);
