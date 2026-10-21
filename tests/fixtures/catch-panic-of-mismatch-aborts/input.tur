@@ -1,0 +1,9 @@
+;; panic-forms-gaps 2: catch-panic-of re-raises a panic of another type to the
+;; next outer boundary.  With none, that is an uncaught panic: the program ends.
+;; Compiled it was swallowed -- `true`, `after`, exit 0 -- because the staged
+;; signal had nowhere to go and main simply returned.
+(defn main [] : int
+  (let [r (catch-panic-of :int (fn [] : int (panic "s")))]
+    (println "unreachable")
+    (println (ok? r))
+    0))

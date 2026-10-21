@@ -1,0 +1,5 @@
+;; panic-forms-gaps 4: `(catch-unwind 5)` compiled and segfaulted at run time.
+;; The boundary's argument must be a function of no arguments.
+(defn main [] : int
+  (catch-unwind 5)
+  0)
