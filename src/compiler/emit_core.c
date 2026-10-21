@@ -1493,7 +1493,6 @@ static bool binding_escapes_impl_x(const Expr *e, const Binding *b,
             case EX_RC_FROM_REF: ESC_PUSH(cur->as.rc_from_ref_.expr); break;
             case EX_REF_FROM_RC: ESC_PUSH(cur->as.ref_from_rc_.expr); break;
             case EX_WEAK:         ESC_PUSH(cur->as.weak_.expr);         break;
-            case EX_WEAK_UPGRADE: ESC_PUSH(cur->as.weak_upgrade_.expr); break;
             case EX_WEAK_PRED:    ESC_PUSH(cur->as.weak_pred_.expr);    break;
             case EX_REF_PRED:     ESC_PUSH(cur->as.ref_pred_.expr);     break;
             case EX_BORROW_IMMUT: ESC_PUSH(cur->as.borrow_immut_.expr); break;
@@ -6448,7 +6447,6 @@ Binding **collect_handle_captures(const Expr *body, uint32_t *n_out) {
             case EX_RC_FROM_REF:
             case EX_REF_FROM_RC:
             case EX_WEAK:
-            case EX_WEAK_UPGRADE:
             case EX_WEAK_PRED:
             case EX_REF_PRED: {
                 PUSH_EXPR(cur->as.rc_of_.expr);

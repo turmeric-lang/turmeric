@@ -1651,7 +1651,6 @@ void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
         case EX_RC_FROM_REF:
         case EX_REF_FROM_RC:
         case EX_WEAK:
-        case EX_WEAK_UPGRADE:
         case EX_WEAK_PRED:
         case EX_REF_PRED:
         case EX_CONT_PRED:

@@ -1,0 +1,8 @@
+;; ref-weak-builtins-stubbed: the builtin `upgrade` returned its option as a
+;; `ptr<void>` no `Option` function accepts, and leaked the strong handle it
+;; took.  It is retired; the diagnostic names `weak/upgrade`.
+(defn main [] : int
+  (let [r (rc/of 1)
+        w (weak r)]
+    (upgrade w))
+  0)

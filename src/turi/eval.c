@@ -14004,12 +14004,17 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
         return turi_nil();
     }
     case EX_RC_PTR: {
+        /* ref-weak-builtins-stubbed: the ADDRESS of the payload, as the
+         * compiled rc_get_value gives -- the payload's word sits in the `__rc`
+         * record's value field, which lives as long as the rc.  Returning the
+         * payload itself made `(ptr-deref (rc->ptr r))` dereference the value
+         * (`tur` segfaulted reading address 0x5 for `(rc/of 5)`). */
         TuriValue r = eval_expr(env, frame, e->as.rc_ptr_.expr);
         if (turi_is_error(r) || env_signaled(env)) return r;
         if (r.tag == TURI_STRUCT && r.as_struct
             && r.as_struct->name && strcmp(r.as_struct->name, "__rc") == 0
             && r.as_struct->n_fields >= 2)
-            return r.as_struct->fields[1];
+            return turi_int((int64_t)(intptr_t)&r.as_struct->fields[1].as_int);
         return r;
     }
     case EX_RC_COUNT: {
@@ -14055,9 +14060,12 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
     case EX_REF:
         return eval_expr(env, frame, e->as.ref_.expr);
     case EX_REF_PRED: {
+        /* ref-weak-builtins-stubbed: answered from the argument's static
+         * type, as the compiled path does -- a ref is transparent here, so
+         * its value cannot say. */
         TuriValue _rpv = eval_expr(env, frame, e->as.ref_pred_.expr);
         if (turi_is_error(_rpv) || env_signaled(env)) return _rpv;
-        return turi_bool(_rpv.tag != TURI_NIL);
+        return turi_bool(e->as.ref_pred_.expr->type.kind == TY_REF);
     }
 
     /* --- Phase 9: weak<T> — simplified in interpreter --------------------- */
@@ -14075,14 +14083,12 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
         }
         return wv;
     }
-    case EX_WEAK_UPGRADE: {
-        TuriValue _wuv = eval_expr(env, frame, e->as.weak_upgrade_.expr);
-        if (turi_is_error(_wuv) || env_signaled(env)) return _wuv;
-        /* In the interpreter all weak refs are always valid; wrap in some(value). */
-        return make_struct_val(env, "some", 1, &_wuv);
+    case EX_WEAK_PRED: {
+        /* ref-weak-builtins-stubbed: from the static type, like `ref?`. */
+        TuriValue _wpv = eval_expr(env, frame, e->as.weak_pred_.expr);
+        if (turi_is_error(_wpv) || env_signaled(env)) return _wpv;
+        return turi_bool(e->as.weak_pred_.expr->type.kind == TY_WEAK);
     }
-    case EX_WEAK_PRED:
-        return turi_bool(true);
 
     /* --- Phase HRT0: exists pack/open — erase existential box ------------- */
     case EX_EXISTS_PACK:

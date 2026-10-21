@@ -802,8 +802,6 @@ static EffectRow *collect_effects_in_expr(Arena *a, Expr *e,
         return collect_effects_in_expr(a, e->as.ref_from_rc_.expr, row, idx, env, subst);
     case EX_WEAK:
         return collect_effects_in_expr(a, e->as.weak_.expr, row, idx, env, subst);
-    case EX_WEAK_UPGRADE:
-        return collect_effects_in_expr(a, e->as.weak_upgrade_.expr, row, idx, env, subst);
     case EX_WEAK_PRED:
         return collect_effects_in_expr(a, e->as.weak_pred_.expr, row, idx, env, subst);
     case EX_REF_PRED:

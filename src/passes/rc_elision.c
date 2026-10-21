@@ -122,7 +122,6 @@ static int count_uses(const Expr *e, const Binding *b) {
         case EX_RC_FROM_REF:  return count_uses(e->as.rc_from_ref_.expr, b);
         case EX_REF_FROM_RC:  return count_uses(e->as.ref_from_rc_.expr, b);
         case EX_WEAK:         return count_uses(e->as.weak_.expr, b);
-        case EX_WEAK_UPGRADE: return count_uses(e->as.weak_upgrade_.expr, b);
         case EX_WEAK_PRED:    return count_uses(e->as.weak_pred_.expr, b);
         case EX_REF_PRED:     return count_uses(e->as.ref_pred_.expr, b);
         case EX_BORROW_IMMUT: return count_uses(e->as.borrow_immut_.expr, b);
@@ -253,7 +252,6 @@ static bool has_barrier(const Expr *e) {
         case EX_RC_PTR:        return has_barrier(e->as.rc_ptr_.expr);
         case EX_RC_FROM_REF:   return has_barrier(e->as.rc_from_ref_.expr);
         case EX_WEAK:          return has_barrier(e->as.weak_.expr);
-        case EX_WEAK_UPGRADE:  return has_barrier(e->as.weak_upgrade_.expr);
         case EX_WEAK_PRED:     return has_barrier(e->as.weak_pred_.expr);
         case EX_REF_PRED:      return has_barrier(e->as.ref_pred_.expr);
         case EX_BORROW_IMMUT:  return has_barrier(e->as.borrow_immut_.expr);
@@ -531,7 +529,6 @@ static void analyze_expr(Expr *e) {
         case EX_RC_FROM_REF:   analyze_expr(e->as.rc_from_ref_.expr);   return;
         case EX_REF_FROM_RC:   analyze_expr(e->as.ref_from_rc_.expr);   return;
         case EX_WEAK:          analyze_expr(e->as.weak_.expr);          return;
-        case EX_WEAK_UPGRADE:  analyze_expr(e->as.weak_upgrade_.expr);  return;
         case EX_WEAK_PRED:     analyze_expr(e->as.weak_pred_.expr);     return;
         case EX_REF_PRED:      analyze_expr(e->as.ref_pred_.expr);      return;
         case EX_BORROW_IMMUT:  analyze_expr(e->as.borrow_immut_.expr);  return;
