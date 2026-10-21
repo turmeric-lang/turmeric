@@ -9,11 +9,13 @@
 > `(Vec AnyRenderer)`; the draw `switch`, the bounds `switch` and the slot
 > bag are gone; callbacks are typed fn values; style and option handles are
 > `LineStyle` / `PointStyle` / `FillStyle` / `PlotOpts`; renderer data is
-> a Vec of typed records from `plot/data`. Pixel check: of 34 scenes, 32
-> byte-identical to pre-plan output; `arrows` and `contours` changed by bug
-> fixes. Building the spice under clang needs turmeric branch
-> `claude/exbox-thunk-carrier-result` (a compiler fix). **Remaining (beyond
-> this plan's acceptance):** the legend swatch's color. See P4.
+> a Vec of typed records from `plot/data`. Pixel check: every plot body is
+> byte-identical to pre-plan output except where a bug fix changed it
+> (`arrows`' bounds, `contours`' levels, the interval kinds' outlines), and
+> legend swatches now show each renderer's own style. Building the spice
+> under clang needs turmeric branch `claude/exbox-thunk-carrier-result` (a
+> compiler fix). **Remaining (beyond this plan's acceptance):** a stacked
+> histogram's layer names never reach the legend. See P4.
 > Tracks: spices-type-features-uplift-plan **U2 target — plot**
 > Scope: `spices/plot/` only; P3 needed a compiler dependency after all, now
 > satisfied (see Risks).
@@ -404,13 +406,28 @@ wrong record is TUR-E0001 (`errors/wrong-data-record.tur`).
   (fixture `exists-method-returns-carrier-vec`), which must merge before the
   spice is green on macOS.
 
+**Done (legend swatches, 2026-10-21, same branch):**
+- The legend swatch was `palette[row % 8]`, not what its renderer drew
+  with. The three style helpers now record the first line, fill and point
+  style each renderer resolves (auto colors included) into a per-renderer
+  swatch the `DrawCtx` carries; the legend draws the point marker (now one
+  `plot_ctx_marker` the points draw shares), else a fill box edged in the
+  line style, else a line stroke. `contour-intervals` notes its first band.
+  No `Renderer` method was needed: the swatch is a by-product of `draw`.
+- Reviewing the band swatches showed the interval kinds never drew their
+  outline (`plutovg_canvas_fill` clears the path the stroke then used); they
+  `fill_preserve` now. A point `fill-color` or contour-band color of 8 or
+  more indexed past the palette; both wrap.
+- Pixels: 25 scenes change only in the swatch column, the five interval
+  scenes gain outlines, nothing else moves. `legend_test` reads swatches
+  back from the surface; it and the outline check fail on the old code.
+
 **Remaining (follow-ups, not in this plan's acceptance):**
-- The legend swatch is `palette[row % 8]`, not the color its renderer drew
-  with, so it disagrees with a renderer that names a color (`contours` in
-  `render-all-kinds` strokes green beside a blue swatch) or follows an
-  unlabelled renderer that took an auto color. Predates this plan; the
-  legend needs each renderer's resolved style, e.g. a defaulted
-  `legend-swatch` method or the draw recording its color in the `DrawCtx`.
+- `stacked-histogram` takes layer names (`labels`) that nothing draws: it
+  has no `legend-label`, and one label per renderer could not name its
+  layers anyway. Listing them needs a renderer to contribute several legend
+  rows, each with its own swatch -- a `Renderer` method returning entries,
+  say, with the draw recording a swatch per layer.
 - `plot-anyrenderers` is a deprecated alias of `plot`.
 
 **Acceptance**
