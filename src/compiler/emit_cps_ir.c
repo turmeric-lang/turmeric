@@ -8123,19 +8123,35 @@ static char *prim_expr(const BuiltinSpec *sp, char **as, uint32_t n) {
                            as[0], as[1]);
             /* bit-shr is documented as a LOGICAL (unsigned) right shift;
              * see the matching comment in emit_core.c's BS_BIN_INFIX case. */
+            /* A narrow kind shifts its own width and casts back, as in
+             * emit_core.c (sized-int-arithmetic-not-wrapped-to-width). */
+            else if (strcmp(sp->c_op, ">>") == 0 && builtin_int_wrap_ctype(sp))
+                buf_printf(&b, "(%s)((uint64_t)(%s)(%s) >> (uint64_t)(%s))",
+                           builtin_int_wrap_ctype(sp),
+                           builtin_int_unsigned_ctype(sp->result_type.kind),
+                           as[0], as[1]);
             else if (strcmp(sp->c_op, ">>") == 0)
                 buf_printf(&b, "(int64_t)((uint64_t)(%s) >> (uint64_t)(%s))", as[0], as[1]);
+            else if (builtin_int_wrap_ctype(sp))
+                buf_printf(&b, "(%s)((uint64_t)(%s) %s (uint64_t)(%s))",
+                           builtin_int_wrap_ctype(sp), as[0], sp->c_op, as[1]);
             else
                 buf_printf(&b, "(%s) %s (%s)", as[0], sp->c_op, as[1]);
             break;
         case BS_VARIADIC_FOLD: {
+            /* A narrow kind folds in uint64_t and casts back, as in
+             * emit_core.c. */
+            const char *wrap = builtin_int_wrap_ctype(sp);
+            if (wrap) buf_printf(&b, "(%s)(", wrap);
             uint32_t opens = (n >= 2) ? n - 2 : 0;
             for (uint32_t i = 0; i < opens; i++) buf_putc(&b, '(');
-            buf_printf(&b, "(%s)", as[0]);
+            buf_printf(&b, wrap ? "(uint64_t)(%s)" : "(%s)", as[0]);
             for (uint32_t i = 1; i < n; i++) {
-                buf_printf(&b, " %s (%s)", sp->c_op, as[i]);
+                buf_printf(&b, " %s ", sp->c_op);
+                buf_printf(&b, wrap ? "(uint64_t)(%s)" : "(%s)", as[i]);
                 if (i < n - 1) buf_putc(&b, ')');
             }
+            if (wrap) buf_putc(&b, ')');
             break;
         }
         case BS_DIV_CHECK:
@@ -8144,6 +8160,8 @@ static char *prim_expr(const BuiltinSpec *sp, char **as, uint32_t n) {
             if (builtin_div_is_ieee(sp)) {
                 buf_printf(&b, "(%s) / (%s)", as[0], as[1]);
             } else if (builtin_int_divmod_helper(sp)) {
+                if (builtin_int_wrap_ctype(sp))
+                    buf_printf(&b, "(%s)", builtin_int_wrap_ctype(sp));
                 buf_printf(&b, "%s(%s, %s)", builtin_int_divmod_helper(sp),
                            as[0], as[1]);
             } else {

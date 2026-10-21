@@ -5671,22 +5671,42 @@ char *emit_builtin(EmitCtx *ctx, Buf *body, const Expr *e) {
              * by no other builtin (grep src/compiler/builtins.c), so this
              * cast is exact to bit-shr and cannot affect any other operator
              * sharing BS_BIN_INFIX. */
+            /* A narrow kind (sized-int-arithmetic-not-wrapped-to-width)
+             * shifts its own width: zero-extended from it for the logical
+             * `>>`, through uint64_t for `<<` (no signed-shift UB), and cast
+             * back to the kind either way. */
+            else if (strcmp(spec->c_op, ">>") == 0 && builtin_int_wrap_ctype(spec))
+                buf_printf(&out, "(%s)((uint64_t)(%s)(%s) >> (uint64_t)(%s))",
+                           builtin_int_wrap_ctype(spec),
+                           builtin_int_unsigned_ctype(spec->result_type.kind),
+                           arg_strs[0], arg_strs[1]);
             else if (strcmp(spec->c_op, ">>") == 0)
                 buf_printf(&out, "(int64_t)((uint64_t)(%s) >> (uint64_t)(%s))",
                            arg_strs[0], arg_strs[1]);
+            else if (builtin_int_wrap_ctype(spec))
+                buf_printf(&out, "(%s)((uint64_t)(%s) %s (uint64_t)(%s))",
+                           builtin_int_wrap_ctype(spec), arg_strs[0],
+                           spec->c_op, arg_strs[1]);
             else
                 buf_printf(&out, "(%s) %s (%s)",
                            arg_strs[0], spec->c_op, arg_strs[1]);
             break;
         case BS_VARIADIC_FOLD: {
-            /* ((a OP b) OP c) OP d ... -- no redundant outermost wrap */
+            /* ((a OP b) OP c) OP d ... -- no redundant outermost wrap.  A
+             * narrow integer kind folds in uint64_t (C would do it at `int`,
+             * where uint16 * uint16 can overflow) and casts the result back
+             * to the kind: sized-int-arithmetic-not-wrapped-to-width. */
+            const char *wrap = builtin_int_wrap_ctype(spec);
+            if (wrap) buf_printf(&out, "(%s)(", wrap);
             uint32_t group_opens = (n >= 2) ? n - 2 : 0;
             for (uint32_t i = 0; i < group_opens; i++) buf_putc(&out, '(');
-            buf_printf(&out, "(%s)", arg_strs[0]);
+            buf_printf(&out, wrap ? "(uint64_t)(%s)" : "(%s)", arg_strs[0]);
             for (uint32_t i = 1; i < n; i++) {
-                buf_printf(&out, " %s (%s)", spec->c_op, arg_strs[i]);
+                buf_printf(&out, " %s ", spec->c_op);
+                buf_printf(&out, wrap ? "(uint64_t)(%s)" : "(%s)", arg_strs[i]);
                 if (i < n - 1) buf_putc(&out, ')');
             }
+            if (wrap) buf_putc(&out, ')');
             break;
         }
         case BS_DIV_CHECK:
@@ -5699,7 +5719,10 @@ char *emit_builtin(EmitCtx *ctx, Buf *body, const Expr *e) {
                 buf_printf(&out, "(%s) / (%s)", arg_strs[0], arg_strs[1]);
             } else if (builtin_int_divmod_helper(spec)) {
                 /* signed: INT64_MIN / -1 traps too, so the helper owns both
-                 * checks (see tur_idiv in the preamble) */
+                 * checks (see tur_idiv in the preamble).  A narrow kind casts
+                 * the int64_t quotient back: INT8_MIN / -1 is 128 there. */
+                const char *wrap = builtin_int_wrap_ctype(spec);
+                if (wrap) buf_printf(&out, "(%s)", wrap);
                 buf_printf(&out, "%s(%s, %s)", builtin_int_divmod_helper(spec),
                            arg_strs[0], arg_strs[1]);
             } else {

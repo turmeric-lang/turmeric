@@ -11,9 +11,11 @@
 ;;;
 ;;; In the signatures, `N` stands for any numeric kind -- `int` (64-bit
 ;;; signed), `float` (64-bit), `float32`, or a sized integer (`int8` `int16`
-;;; `int32` `uint8` `uint16` `uint32` `uint64`).  `int` arithmetic wraps on
-;;; overflow (two's complement).  For a type with no builtin row, `+ - * /`
-;;; fall back to its `Num` instance (tur/typeclass); see numeric-tower-guide.
+;;; `int32` `uint8` `uint16` `uint32` `uint64`).  Integer arithmetic wraps on
+;;; overflow (two's complement) at the kind's own width, whether or not the
+;;; result is stored: `(+ 200u8 100u8)` is 44.  For a type with no builtin row,
+;;; `+ - * /` fall back to its `Num` instance (tur/typeclass); see
+;;; numeric-tower-guide.
 ;; Reference only: tools/gendocs.py reads the ;;@builtin lines, the compiler skips them.
 
 ;;; + -- add numbers, left to right.

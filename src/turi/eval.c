@@ -5236,14 +5236,18 @@ static TuriValue eval_builtin(TuriEnv *env, const BuiltinSpec *spec,
          * the -fwrapv every emitted-C compile carries; folded in uint64_t so
          * the interpreter's own C has no signed overflow either
          * (emitted-c-signed-overflow-no-fwrapv). */
+        /* A sized kind narrower than 64 bits is then reduced to its width,
+         * as the compiled path's cast does (builtin_int_wrap_value;
+         * sized-int-arithmetic-not-wrapped-to-width). */
         if (n == 0) return turi_error("eval: variadic builtin requires ≥1 arg");
         const char *op = spec->c_op;
         bool is_float = (args[0].tag == TURI_FLOAT);
+        TypeKind rk = spec->result_type.kind;
         if (strcmp(op, "+") == 0) {
             if (!is_float) {
                 uint64_t acc = (uint64_t)args[0].as_int;
                 for (uint32_t i = 1; i < n; i++) acc += (uint64_t)args[i].as_int;
-                return turi_int((int64_t)acc);
+                return turi_int(builtin_int_wrap_value(rk, acc));
             } else {
                 double acc = args[0].as_float;
                 for (uint32_t i = 1; i < n; i++) acc += args[i].as_float;
@@ -5254,7 +5258,7 @@ static TuriValue eval_builtin(TuriEnv *env, const BuiltinSpec *spec,
             if (!is_float) {
                 uint64_t acc = (uint64_t)args[0].as_int;
                 for (uint32_t i = 1; i < n; i++) acc -= (uint64_t)args[i].as_int;
-                return turi_int((int64_t)acc);
+                return turi_int(builtin_int_wrap_value(rk, acc));
             } else {
                 double acc = args[0].as_float;
                 for (uint32_t i = 1; i < n; i++) acc -= args[i].as_float;
@@ -5265,7 +5269,7 @@ static TuriValue eval_builtin(TuriEnv *env, const BuiltinSpec *spec,
             if (!is_float) {
                 uint64_t acc = (uint64_t)args[0].as_int;
                 for (uint32_t i = 1; i < n; i++) acc *= (uint64_t)args[i].as_int;
-                return turi_int((int64_t)acc);
+                return turi_int(builtin_int_wrap_value(rk, acc));
             } else {
                 double acc = args[0].as_float;
                 for (uint32_t i = 1; i < n; i++) acc *= args[i].as_float;
@@ -5279,7 +5283,8 @@ static TuriValue eval_builtin(TuriEnv *env, const BuiltinSpec *spec,
         bool is_float = (args[0].tag == TURI_FLOAT);
         if (!is_float) {
             if (args[1].as_int == 0) return turi_error("eval: division by zero");
-            return turi_int(turi_idiv_nz(args[0].as_int, args[1].as_int));
+            return turi_int(builtin_int_wrap_value(spec->result_type.kind,
+                (uint64_t)turi_idiv_nz(args[0].as_int, args[1].as_int)));
         } else {
             return turi_float(args[0].as_float / args[1].as_float);
         }
@@ -5339,18 +5344,28 @@ static TuriValue eval_builtin(TuriEnv *env, const BuiltinSpec *spec,
         }
         /* Phase C bitwise ops (bit-and/or/xor/shl/shr).  Builtins.c registers
          * these for every integer kind; under --interpret every integer is an
-         * int64 carrier, so the kind-preserving width masking the compiled path
-         * applies is a no-op here -- the int64 result matches for in-range
-         * values (the same convention the arithmetic fold path uses). */
+         * int64 carrier.  and/or/xor of in-range operands stay in range; the
+         * shifts do not, so a narrow kind's result is reduced to its width as
+         * the compiled cast does (sized-int-arithmetic-not-wrapped-to-width). */
         if (strcmp(op, "&")  == 0) return turi_int(args[0].as_int &  args[1].as_int);
         if (strcmp(op, "|")  == 0) return turi_int(args[0].as_int |  args[1].as_int);
         if (strcmp(op, "^")  == 0) return turi_int(args[0].as_int ^  args[1].as_int);
-        if (strcmp(op, "<<") == 0) return turi_int(args[0].as_int << args[1].as_int);
+        TypeKind rk = spec->result_type.kind;
+        if (strcmp(op, "<<") == 0)
+            return turi_int(builtin_int_wrap_value(rk,
+                (uint64_t)args[0].as_int << (uint64_t)args[1].as_int));
         /* bit-shr is documented as a LOGICAL (unsigned) right shift; see the
          * matching comment in emit_core.c's BS_BIN_INFIX case -- this is the
-         * same bug in the interpreter's copy of the same operator. */
-        if (strcmp(op, ">>") == 0)
-            return turi_int((int64_t)((uint64_t)args[0].as_int >> (uint64_t)args[1].as_int));
+         * same bug in the interpreter's copy of the same operator.  A narrow
+         * operand zero-extends from its own width, not from 64 bits. */
+        if (strcmp(op, ">>") == 0) {
+            uint64_t a = (uint64_t)args[0].as_int;
+            if (builtin_int_unsigned_ctype(rk))
+                a = (uint64_t)builtin_int_wrap_value(rk == TY_INT8  ? TY_UINT8  :
+                                                    rk == TY_INT16 ? TY_UINT16 :
+                                                    rk == TY_INT32 ? TY_UINT32 : rk, a);
+            return turi_int(builtin_int_wrap_value(rk, a >> (uint64_t)args[1].as_int));
+        }
         return turi_errorf("eval: unknown infix builtin '%s'", op);
     }
 

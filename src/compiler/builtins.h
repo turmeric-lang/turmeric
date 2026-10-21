@@ -114,6 +114,29 @@ bool builtin_div_is_ieee(const BuiltinSpec *spec);
  * (emit_module.c), so neither operand is repeated in the output. */
 const char *builtin_int_divmod_helper(const BuiltinSpec *spec);
 
+/* sized-int-arithmetic-not-wrapped-to-width: the C type an integer builtin's
+ * result is reduced to, or NULL when it needs no reduction.
+ *
+ * C does arithmetic at `int` or wider, so `uint8_t + uint8_t` is an `int`:
+ * `(+ x y)` at uint8 was 300 until something of type uint8_t received it, and
+ * the interpreter (int64 carriers throughout) never reduced it at all.  Non-
+ * NULL for the kinds narrower than 64 bits (int8/16/32, uint8/16/32) on the
+ * rows whose result can leave the operand range: + - * (BS_VARIADIC_FOLD), `/`
+ * (INT8_MIN / -1), `bit-shl` and `bit-shr`.  Comparisons, `mod` and
+ * and/or/xor stay in range, and int/int64/uint64 are their own width. */
+const char *builtin_int_wrap_ctype(const BuiltinSpec *spec);
+
+/* The unsigned C type of the same width as a sized integer kind
+ * ("uint8_t" for int8 and uint8, ...), or NULL for a 64-bit or non-integer
+ * kind.  `bit-shr` is a LOGICAL shift, so a narrow operand is zero-extended
+ * from its own width, not sign-extended to 64 bits first. */
+const char *builtin_int_unsigned_ctype(TypeKind k);
+
+/* Reduce `v` to the width of `k`, two's complement, as the cast the compiled
+ * path emits does; the identity for int/int64/uint64 and non-integer kinds.
+ * The interpreter's half of builtin_int_wrap_ctype. */
+int64_t builtin_int_wrap_value(TypeKind k, uint64_t v);
+
 /* stdlib-os-surface-plan P0.5: the print family's destination.  Every
  * BS_PRINTLN_* row is `println` (stdout, trailing newline) unless its c_op
  * says otherwise: "stderr" is `eprintln`, "stderr-nonl" is `eprint`. */
