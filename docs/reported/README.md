@@ -193,6 +193,7 @@ on `main` 3d9e02a2.
 | Report | Severity | One line |
 | --- | --- | --- |
 | ~~[typed-ptr-pointee-not-checked-at-calls](../archive/typed-ptr-pointee-not-checked-at-calls.md)~~ | medium (silent loss of type checking) | **RESOLVED 2026-10-21** (archived): the call check compares a `ptr<T>` / `rc<T>` / `weak<T>` parameter's target after the kind match (`handle_targets_conflict`; untyped `ptr<void>` and open pointees still match anything), forward declarations carry typed-pointer parameters, and a `: ptr<Foo>` return refuses a `ptr<Bar>` body. Pinned by `errors/typed-ptr-pointee-mismatch` (+`-forward`, `-return`) and `errors/rc-target-mismatch` |
+| [typed-ptr-pointee-not-checked-through-closures](typed-ptr-pointee-not-checked-through-closures.md) | low-medium | Narrowed from typed-ptr-pointee-not-checked-at-calls: `(let [f (fn [x : ptr<Foo>] : int 1)] (f (mk-bar)))` is accepted -- the closure-call path has no declared full type to compare, so a `ptr<Bar>` goes into a `ptr<Foo>` lambda parameter (a defn with the same signature is TUR-E0001) |
 
 ## Found writing the CPS/DK internals guide (filed 2026-10-16)
 

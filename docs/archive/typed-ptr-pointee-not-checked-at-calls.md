@@ -105,3 +105,12 @@ than `ptr<void>`.
 Pinned by `errors/typed-ptr-pointee-mismatch`, `-forward`, `-return`,
 `errors/rc-target-mismatch` and `errors/rc-target-kind-mismatch`. CLAUDE.md no longer steers handles away from
 `ptr<TheStruct>` on this report's account.
+
+**Addendum (2026-10-21, later).** A `let` annotation is checked by the same
+predicate: `[x : ptr<Foo> (mk-bar)]` and `[r : rc<S> (rc/of (U 7))]` are
+`let binding 'x': type annotation does not match initializer` (pinned by
+`errors/typed-ptr-let-annotation-mismatch` and `errors/rc-let-annotation-mismatch`;
+`typed-ptr-pointee-controls` is the positive control). A call through a
+let-bound lambda is still unchecked:
+[typed-ptr-pointee-not-checked-through-closures](../reported/typed-ptr-pointee-not-checked-through-closures.md).
+
