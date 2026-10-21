@@ -12594,7 +12594,6 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                             }
                         }
                     }
-                    free(lam_cname_owned);
                     /* fnsan-thin-call-fn-param: a function-typed parameter of
                      * the callee is `int64_t` in its definition -- every
                      * TY_FN parameter is, the fat handle or the code word --
@@ -12637,8 +12636,47 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                         Type aspec_t;
                         if (emit_var_spec_arg_type(ctx, e->as.call_.args[i], &aspec_t))
                             ait = aspec_t;
-                        buf_puts(&out, type_c_name(ait));
+                        const char *aic = type_c_name(ait);
+                        /* typed-ptr-pointee-not-checked-through-closures: a
+                         * lambda's `ptr<Foo>` parameter is emitted as
+                         * `tur_adt_Foo *` and its `ptr<void>` one as `void *`,
+                         * but the argument may be the other of the two (both
+                         * are accepted).  Spelling the slot from the argument
+                         * then called `__fn(void *)` through `(tur_adt_Foo *)`
+                         * -- a -fsanitize=function trap and a WebAssembly
+                         * call_indirect trap.  Take the lambda's own spelling
+                         * when both sides are pointers and one of them is
+                         * `void *`: C converts the argument implicitly. */
+                        const char *lpc = lam_cname
+                            ? emit_sig_lookup_param_ctype(lam_cname, i) : NULL;
+                        /* A let-bound lambda carries no closure_head_init, so
+                         * its recorded signature is not found above; its
+                         * binding's declared type says the same thing.  The
+                         * definition spells a `ptr<Foo>` parameter from its
+                         * full type and a bare `ptr<void>` one as `void *`. */
+                        if (!lpc && fn_binding && fn_binding->type.kind == TY_FN &&
+                            fn_binding->type.as.fn.arg_kinds &&
+                            i < fn_binding->type.as.fn.arity &&
+                            fn_binding->type.as.fn.arg_kinds[i] == TY_PTR_VOID) {
+                            const Type *aft = fn_binding->type.as.fn.arg_full_types
+                                ? fn_binding->type.as.fn.arg_full_types[i] : NULL;
+                            lpc = (aft && aft->kind == TY_PTR_VOID)
+                                ? emit_type_c_name(ctx, *aft) : "void *";
+                        }
+                        size_t lpl = lpc ? strlen(lpc) : 0;
+                        size_t ail = aic ? strlen(aic) : 0;
+                        if (lpl && ail && lpc[lpl - 1] == '*' && aic[ail - 1] == '*' &&
+                            strcmp(lpc, aic) != 0 &&
+                            (strcmp(lpc, "void *") == 0 || strcmp(aic, "void *") == 0)) {
+                            buf_puts(&out, lpc);
+                            continue;
+                        }
+                        buf_puts(&out, aic);
                     }
+                    /* Freed only now: the cast loop above still reads the
+                     * lambda's recorded signature through lam_cname. */
+                    free(lam_cname_owned);
+                    lam_cname = NULL;
                     buf_printf(&out, "))(intptr_t)%s)(", fn_ptr);
                     for (uint32_t i = 0; i < n; i++) {
                         if (i > 0) buf_puts(&out, ", ");
