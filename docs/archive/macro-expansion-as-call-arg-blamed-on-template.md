@@ -62,3 +62,21 @@ check, which uses the returned Expr's span.
   two.
 - Snapshot churn: an Expr span can reach emitted `#line` / diagnostics in
   `expected.c` and `expected.diag`; regenerate in the same change.
+
+## Resolved 2026-10-21
+
+The macro branch of call elaboration (`src/compiler/elab_call.c`) now gives
+the expansion's ROOT form the call site's span, by a shallow copy of the root
+(the root can be one of the call's own argument forms handed back unchanged,
+so it is not written in place). Inner subforms keep their template spans, so
+a diagnostic inside the expansion still lands in the macro with the
+"in expansion of macro" note. Expression position only: a top-level
+statement root (a macro-emitted `defn`) keeps its file id, which credits the
+definition to the macro's module; the `definstance` re-span stays as it was.
+
+The program above now reports
+`input.tur:5:10: error [TUR-E0001]: function 'total' arg 1: expected (Vec P), got (Vec Q)`
+with the caret under `(vec-of (Q 3.25))`.
+
+Fixture: `tests/fixtures/errors/macro-arg-mismatch-blames-call-site`
+(`unexpected.diag` pins that `stdlib/vec.tur` is no longer named).

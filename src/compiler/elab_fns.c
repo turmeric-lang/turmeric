@@ -13787,8 +13787,18 @@ Expr *elab_fn(Elab *e, const Form *call) {
              * later bare `item : T` value parameter fails to unify against the
              * real opaque/struct type.  Recording it keeps the nominal identity
              * intact across the binding. */
+            /* typed-ptr-pointee-not-checked-through-closures: a typed handle
+             * (`ptr<Foo>`, `rc<Foo>`, `weak<Foo>`) qualifies too -- its bare
+             * kind is the same as `ptr<void>`'s, and the call-site pointee
+             * check (handle_targets_conflict, elab_call.c) reads the pointee
+             * off arg_full_types, so without this a call through a let-bound
+             * lambda accepted a `ptr<Bar>` where a defn with the same
+             * signature refuses it. */
             if (ann->kind == TY_APP || ann->kind == TY_TYVAR || ann->kind == TY_FN ||
                 ann->kind == TY_STRUCT || ann->kind == TY_ADT ||
+                (ann->kind == TY_PTR_VOID && ann->as.ptr.inner) ||
+                ((ann->kind == TY_RC || ann->kind == TY_WEAK) &&
+                 ann->as.rc.inner != TY_UNKNOWN) ||
                 fn_type_has_named_tyvar(ann)) {
                 param_full_types[n_params - 1] = ann;
             }

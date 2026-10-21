@@ -39,7 +39,6 @@ directory is worse for triage than no index.
 | Report | Severity | One line |
 | --- | --- | --- |
 | [any-widen-deep-drop-frees-borrowed-children](any-widen-deep-drop-frees-borrowed-children.md) | low (open residue; was high) | **Use-after-frees FIXED 2026-10-21.** A widen copies a header into a fresh box, and the deep `__tur_any_drop` then freed children a live local still owned: through `returns_fresh_any`, through `any_expr_is_owned_temp`, and through a widen stored into a sibling's `:any` field. Heap-use-after-free in plain Turmeric (silent without ASan); a Saffron default build's collector hid it. All three now decline the free, and `run-leak-check.sh` no longer lets `known-leak` excuse a non-leak. Open: the declined boxes leak (`any-widen-deep-drop-plain-turmeric`, `any-widen-fresh-payload-aliases` are `known-leak`); deep freshness or a call-site shallow drop would close it. |
-| [manifest-read-leaves-a-dangling-file-registration](manifest-read-leaves-a-dangling-file-registration.md) | low (latent) | `pkg_manifest_read` registers a stack-local `SourceFile` as file 0 and never unregisters it, so a `SPAN_UNKNOWN` diagnostic emitted after a manifest read and before a `diag_reset()` prints a path out of a dead frame (ASan stack-buffer-overflow). Every compile entry point resets first, so nothing trips it today; the interpreter's new TUR-E0624 refusal did until it reset too. |
 | [byval-spine-drop-past-early-exit](byval-spine-drop-past-early-exit.md) | low | **Faces i and ii FIXED** (tail self-call on `main`; explicit `return` 2026-10-21, both glue paths, `byval-spine-drop-past-early-exit` leak-clean). Open: a loop whose parameters are not all numbers keeps leaking its spine per turn, because the gates refuse on the signature rather than on whether a back-edge argument aliases the spine; `byval-spine-drop-refused-nonscalar-param` is `known-leak`. |
 
 ## Found executing the open reports (filed 2026-10-21)
@@ -52,10 +51,8 @@ directory is worse for triage than no index.
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [fn-param-stored-in-struct-field-miscompiles](fn-param-stored-in-struct-field-miscompiles.md) | low-medium | `(defn mk [f : (fn [float] float)] : F (make-struct F f))` type-checks and cc rejects it (`aggregate value used where an integer was expected`): a non-`^fat` fn param is the two-word `tur_poly_fn_t` carrier, and the constructor field sink casts it to `int64_t` instead of boxing it with `EX_POLY_TO_FAT` as a type-variable slot does. `^fat f` works around it. |
 | [unannotated-method-receiver-option-result-untyped](unannotated-method-receiver-option-result-untyped.md) | low | A class method written `(cats [r] : (Option int))` -- receiver unannotated -- is classified return-directed, and a call on a concrete value types as a def-less `(? ?)`, so `(unwrap-or (cats 3) -1)` is TUR-E0001. `[r : a]` (as `defclass`'s docs write it), an ascription, or a call through `open` all work. |
 | [letrec-struct-arg-and-env-leak](letrec-struct-arg-and-env-leak.md) | low-medium | A by-value struct argument to a `letrec` closure is malloc-boxed at the call and never freed (per iteration when the self-call is not a loop), and a `letrec` whose body opens a captured existential and takes a struct argument never drops its env. Found by LeakSanitizer in tur-plot's folds, which are now top-level `defn`s. |
-| [macro-expansion-as-call-arg-blamed-on-template](macro-expansion-as-call-arg-blamed-on-template.md) | low | `(total (vec-of (Q 3.25)))` where `total` wants `(Vec P)` reports the TUR-E0001 at `stdlib/vec.tur:501`, the root of `vec-of`'s template, with no note naming the user's call: the expansion's Expr keeps the template span, and the enclosing arg check fires after the "in expansion of" window closes. A mismatch inside the expansion is attributed correctly. |
 
 ## Found writing the typeclass API docs (filed 2026-10-19)
 
@@ -202,7 +199,6 @@ on `main` 3d9e02a2.
 | Report | Severity | One line |
 | --- | --- | --- |
 | ~~[typed-ptr-pointee-not-checked-at-calls](../archive/typed-ptr-pointee-not-checked-at-calls.md)~~ | medium (silent loss of type checking) | **RESOLVED 2026-10-21** (archived): the call check compares a `ptr<T>` / `rc<T>` / `weak<T>` parameter's target after the kind match (`handle_targets_conflict`; untyped `ptr<void>` and open pointees still match anything), forward declarations carry typed-pointer parameters, and a `: ptr<Foo>` return refuses a `ptr<Bar>` body. Pinned by `errors/typed-ptr-pointee-mismatch` (+`-forward`, `-return`) and `errors/rc-target-mismatch` |
-| [typed-ptr-pointee-not-checked-through-closures](typed-ptr-pointee-not-checked-through-closures.md) | low-medium | Narrowed from typed-ptr-pointee-not-checked-at-calls: `(let [f (fn [x : ptr<Foo>] : int 1)] (f (mk-bar)))` is accepted -- the closure-call path has no declared full type to compare, so a `ptr<Bar>` goes into a `ptr<Foo>` lambda parameter (a defn with the same signature is TUR-E0001) |
 
 ## Found writing the CPS/DK internals guide (filed 2026-10-16)
 

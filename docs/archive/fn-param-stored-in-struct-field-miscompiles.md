@@ -46,3 +46,17 @@ before `arg_ok`), and so is one returned from a defn whose result is a fn type
    slot does.
 2. A fixture: the program above, plus a capturing `fn` literal passed through
    the same parameter.
+
+## Resolved 2026-10-21
+
+Fix direction 1. The constructor arg loop in `src/compiler/elab_call.c`
+(the `fat_field` block that already shims a thin fn into a boxed field) now
+also takes a carrier fn PARAMETER (`ptr<void>`-typed, `is_poly_fn`, a
+non-`cfnptr` `poly_type`) and wraps it in `EX_POLY_TO_FAT`, with the field's
+own signature as the sink so the slot-0 shim matches the field call's typed
+dispatch. A `^fat` parameter and a capturing lambda were already fat and are
+untouched.
+
+Fixture: `tests/fixtures/fn-param-stored-in-struct-field` -- the program
+above, a capturing lambda through the same parameter, and a two-argument
+field stored positionally and by keyword. Prints the same on both engines.

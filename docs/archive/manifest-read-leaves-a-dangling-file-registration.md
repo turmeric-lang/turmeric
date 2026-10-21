@@ -35,3 +35,18 @@ the `:experiments` read in `cmd_eval_h`; the fix there resets first, as
 2. Or register a manifest-lifetime copy (heap `SourceFile`, duplicated path
    and source), so a later diagnostic that legitimately points into the
    manifest can still render its snippet.
+
+## Resolved 2026-10-21
+
+Fix direction 1. `diag_unregister_file(file, prev)` (`src/compiler/diag.c`)
+forgets `file` if its id still names it and puts back what the id named
+before. `pkg_manifest_read_status` records `diag_source_file(0)` before
+registering its stack-local `SourceFile` and calls the unregister on each of
+its three returns past the registration, so the registry never names the
+dead frame. A diagnostic at `SPAN_UNKNOWN` emitted after a manifest read
+prints no path (or the caller's own file 0), instead of reading the frame.
+
+The other stack-local registrations at id 0 (`pkg_lockfile_read` and the
+`:experiments` read in `pkg.c`, `global.c`, `fmt.c`, the driver's single-file
+paths) have the same shape and were not changed here; no caller is known to
+trip them, for the reason above.

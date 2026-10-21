@@ -38,3 +38,18 @@ Record a lambda's `ptr<T>` / `rc<T>` parameter types in its fn type's
 `arg_full_types` (the field exists for compound types) and apply
 `handle_targets_conflict` in the closure-call path; a negative fixture beside
 `errors/typed-ptr-pointee-mismatch`.
+
+## Resolved 2026-10-21
+
+The fix direction as written. A lambda's parameter annotation is recorded on
+its fn type's `arg_full_types` (`elab_fn`, `src/compiler/elab_fns.c`) when it
+is a typed `ptr<T>`, or an `rc<T>` / `weak<T>` with a known target, beside
+the nominal and parametric types that were already recorded. A call through
+the let-bound lambda then reaches the same `handle_targets_conflict` check as
+a call to a defn, and the program above is
+`function 'f' arg 1: expected ptr<Foo>, got ptr<Bar>`.
+
+Fixtures: `tests/fixtures/errors/typed-ptr-pointee-mismatch-closure`,
+`tests/fixtures/errors/rc-pointee-mismatch-closure`, and the positive
+`tests/fixtures/typed-ptr-pointee-closure-controls` (same pointee, untyped
+`ptr<void>` in either direction, `rc<S>` given an `rc<S>`).

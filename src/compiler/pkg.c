@@ -986,6 +986,12 @@ bool pkg_manifest_read_status(const char *path, PkgManifest *out,
         len_eff = len_rest;
     }
 
+    /* manifest-read-leaves-a-dangling-file-registration: `file` is this
+     * frame's, registered under id 0 for the reader's diagnostics.  Every
+     * return below hands the slot back (diag_unregister_file), restoring
+     * whatever id 0 named before, so a later diagnostic at SPAN_UNKNOWN never
+     * prints a path out of a dead frame. */
+    const SourceFile *prev_file0 = diag_source_file(0);
     SourceFile file = {0};
     file.path    = path;
     file.src     = src_eff;
@@ -1012,6 +1018,7 @@ bool pkg_manifest_read_status(const char *path, PkgManifest *out,
      * on as if outside a project: `tur check` printed the reader's `error:`
      * and exited 0. */
     if (!forms || diag_error_serial() != err_serial0 || nforms == 0) {
+        diag_unregister_file(&file, prev_file0);
         symtab_free(&st);
         arena_free(&arena);
         if (status) *status = PKG_MANIFEST_MALFORMED;
@@ -1033,6 +1040,7 @@ bool pkg_manifest_read_status(const char *path, PkgManifest *out,
     }
     if (!dp) {
         fprintf(stderr, "spice: no (defpackage ...) form found in '%s'\n", path);
+        diag_unregister_file(&file, prev_file0);
         symtab_free(&st);
         arena_free(&arena);
         if (status) *status = PKG_MANIFEST_MALFORMED;
@@ -1297,6 +1305,7 @@ bool pkg_manifest_read_status(const char *path, PkgManifest *out,
     }
 
     bool ok = diag_error_serial() == err_serial0;
+    diag_unregister_file(&file, prev_file0);
     symtab_free(&st);
     arena_free(&arena);
 

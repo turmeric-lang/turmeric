@@ -721,6 +721,14 @@ bool diag_use_color(void);
 bool stderr_is_tty(void);
 
 void diag_register_file(const SourceFile *file);
+/* Forget `file` if its id still names it, and put `prev` (what the id named
+ * before `file` was registered, or NULL) back.  A reader that registers a
+ * STACK-LOCAL SourceFile -- the manifest reader, under id 0 -- calls this on
+ * every return, so the registry never names a dead frame: a diagnostic at
+ * SPAN_UNKNOWN emitted between a manifest read and the next diag_reset
+ * printed `path` out of that frame
+ * (manifest-read-leaves-a-dangling-file-registration). */
+void diag_unregister_file(const SourceFile *file, const SourceFile *prev);
 /* Record that `file_id` was pulled into the compile by the form at `origin`
  * (the `load` string or the `import` form, a span in the file that names it).
  * Call after diag_register_file, which clears it.  The LSP follows these

@@ -50,6 +50,15 @@ void diag_register_file(const SourceFile *file) {
     if (file->file_id >= file_count_) file_count_ = (size_t)file->file_id + 1;
 }
 
+void diag_unregister_file(const SourceFile *file, const SourceFile *prev) {
+    if (!file || file->file_id >= MAX_FILES || files_[file->file_id] != file)
+        return;
+    /* `prev` goes back as the pointer it was and is not read: what the slot
+     * named before may itself be a frame another reader has since left. */
+    files_[file->file_id] = (prev != file) ? prev : NULL;
+    origins_[file->file_id] = SPAN_UNKNOWN;
+}
+
 void diag_set_file_origin(uint16_t file_id, Span origin) {
     if (file_id >= MAX_FILES || origin.line == 0 ||
         origin.file_id >= MAX_FILES || origin.file_id == file_id)

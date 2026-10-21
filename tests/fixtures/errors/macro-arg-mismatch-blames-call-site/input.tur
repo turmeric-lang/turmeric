@@ -1,0 +1,8 @@
+;; macro-expansion-as-call-arg-blamed-on-template: the whole expansion has the
+;; wrong type for the enclosing call, so the error belongs at the user's call,
+;; not at the root of vec-of's template in stdlib/vec.tur.
+(defstruct P :copy [x : float  y : float])
+(defstruct Q :copy [a : float])
+(defn total [ps : (Vec P)] : int (vec-len ps))
+(defn main [] : int
+  (total (vec-of (Q 3.25))))

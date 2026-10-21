@@ -1,0 +1,12 @@
+;; typed-ptr-pointee-not-checked-through-closures: a call through a let-bound
+;; lambda compares the pointee too -- a defn with the same signature already
+;; refused this (typed-ptr-pointee-mismatch).
+(defstruct Foo [a : int])
+(defstruct Bar [b : int])
+(defn mk-bar [] : ptr<Bar>
+  ```c
+  return 0;
+  ```)
+(defn main [] : int
+  (let [f (fn [x : ptr<Foo>] : int 1)]
+    (f (mk-bar))))

@@ -312,8 +312,9 @@ the recursive result).
   `(fn [float] int)` for a point, `(fn [float float] float|int)` for fields);
   the draw pass calls the closure handle with `TUR_APPLY1_T` / `TUR_APPLY2_T`.
   `fn` literals, capturing or not, now work. (A plain, non-`^fat` fn param
-  cannot be stored in a struct field: turmeric
-  `docs/reported/fn-param-stored-in-struct-field-miscompiles.md`.)
+  could not be stored in a struct field until 2026-10-21: turmeric
+  `docs/archive/fn-param-stored-in-struct-field-miscompiles.md`; the `^fat`
+  spelling still works and is what the spice carries.)
 - The folds are top-level recursive `defn`s again: as `letrec` closures they
   leaked their env and a struct box per call on every `plot`
   (`docs/reported/letrec-struct-arg-and-env-leak.md`).
