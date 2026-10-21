@@ -41,10 +41,16 @@
        (lambda ()
          (guard (e ((uncaught-exception? e) 'uncaught-in-thread))
            (thread-join! (thread-start! (make-thread (lambda () (raise-continuable 'x)))))))))
-(define slow (thread-start! (make-thread (lambda () (thread-sleep! 0.2) 'late))))
+;; `slow` cannot finish until main releases `hold`, so both timed joins time out
+;; however the threads are scheduled.  (It used to sleep 0.2 s instead, and a
+;; loaded runner that stalled main for that long saw `late` too early.)
+(define hold (make-mutex 'hold))
+(mutex-lock! hold)
+(define slow (thread-start! (make-thread (lambda () (mutex-lock! hold) (mutex-unlock! hold) 'late))))
 (show "join timeout, default: " (thread-join! slow 0.01 'not-yet))
 (show "join timeout, raised: "
       (guard (e ((join-timeout-exception? e) 'join-timeout)) (thread-join! slow 0.01)))
+(mutex-unlock! hold)
 (show "join, no timeout: " (thread-join! slow))
 (show "terminate: "
       (guard (e ((error-object? e) 'refused))
