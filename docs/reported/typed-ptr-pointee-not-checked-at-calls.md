@@ -56,3 +56,13 @@ mismatch.
 2. Run the corpus. Code that passes a typed pointer where a different one is
    declared has been compiling, so expect some real mismatches to surface.
 3. Until then, CLAUDE.md steers new handles to `defopaque`, which is checked.
+
+## Note (2026-10-21): `rc<T>` has the same hole
+
+An `rc<U>` argument is accepted for an `rc<S>` parameter, with the callee
+defined before or after the call (`(defn b [^borrow st : rc<S> k : int] ...)`
+called as `(b (rc/of (U 7)) 3)` passes `tur check`). The call check
+(`src/compiler/elab_call.c`, `arg_ok = (args[i]->type.kind == expected_arg_kind)`)
+compares kinds, and only re-checks the full type for a struct, ADT, session or
+role parameter. Found closing
+[forward-call-with-rc-argument-rejected](../archive/forward-call-with-rc-argument-rejected.md).

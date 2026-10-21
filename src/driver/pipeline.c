@@ -329,6 +329,10 @@ void resolve_rcgc_from_archive(void) {
 
     if (opt && strcmp(opt, "0") == 0)     { emit_set_rcgc_from_archive(false); return; }
     if (g_runtime_mode == TUR_RT_SOURCE)  { emit_set_rcgc_from_archive(false); return; }
+    /* wasm-build-takes-native-archive-posture: a locatable archive is a
+     * NATIVE libturt_runtime.a, which emcc cannot link and is never given, so
+     * a wasm build keeps the replica -- TUR_RCGC_FROM_ARCHIVE=1 included. */
+    if (g_emit_for_wasm)                  { emit_set_rcgc_from_archive(false); return; }
     if (!g_emit_for_link && !forced_on)   { emit_set_rcgc_from_archive(false); return; }
 
     char libdir[4096], libname[128];

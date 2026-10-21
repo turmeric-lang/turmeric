@@ -6027,7 +6027,11 @@ static char *emit_do_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             buf_printf(body, "%s %s;\n", type_c_name(e->type), result_tmp);
         }
 
-        /* Emit all items, registering defers */
+        /* Emit all items, registering defers.  The trailing injected drops
+         * are pending until pushed, for a `return` in the items before them
+         * (auto-drop-defers-skipped-on-early-return). */
+        uint32_t drops_at = emit_do_trailing_drop_glue(e);
+        emit_frame_note_pending_drops(frame_var, e);
         bool emitted_diverging = false;  /* Track if we've emitted a return/throw/panic */
         for (uint32_t i = 0; i < n; i++) {
             const Expr *it = e->as.do_.items[i];
@@ -6039,6 +6043,7 @@ static char *emit_do_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             }
 
             if (it->kind == EX_DEFER) {
+                if (i == drops_at) emit_frame_clear_pending_drops(frame_var);
                 emit_frame_push_defer(ctx, body, frame_var, it);
             } else if (last_yields_value && (int)i == last_value_idx) {
                 char *bv = emit_value(ctx, body, it);
@@ -6063,15 +6068,20 @@ static char *emit_do_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             buf_printf(body, "tur_frame_fire_lifo(&%s);\n", frame_var);
         }
 
+        emit_frame_clear_pending_drops(frame_var);
         ctx->frame_var = saved_frame;
         free(frame_var);
         return result_tmp ? result_tmp : atom_nil();
     }
 
-    /* Emit non-defer items and register defer thunks */
+    /* Emit non-defer items and register defer thunks (the trailing injected
+     * drops pending until pushed, as above). */
+    uint32_t drops_at = emit_do_trailing_drop_glue(e);
+    emit_frame_note_pending_drops(frame_var, e);
     for (uint32_t i = 0; i < n; i++) {
         const Expr *it = e->as.do_.items[i];
         if (it->kind == EX_DEFER) {
+            if (i == drops_at) emit_frame_clear_pending_drops(frame_var);
             emit_frame_push_defer(ctx, body, frame_var, it);
         } else if ((int)i == last_value_idx) {
             continue; /* emitted as value below */
@@ -6106,6 +6116,7 @@ static char *emit_do_value(EmitCtx *ctx, Buf *body, const Expr *e) {
     buf_printf(body, "tur_frame_fire_lifo(&%s);\n", frame_var);
 
     /* Restore frame state */
+    emit_frame_clear_pending_drops(frame_var);
     ctx->frame_var = saved_frame;
     free(frame_var);
 
@@ -13509,7 +13520,16 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                          * ctor whose field -- a type variable instantiated to a
                          * fn type -- is the int64 carrier got the handle
                          * uncast.  Read the argument's spelling off its
-                         * expression, or off the temp's recorded C type. */
+                         * expression, or off the temp's recorded C type.
+                         *
+                         * bare-parametric-instance-ctor-arg-unbridged: or off
+                         * the enclosing function's signature, for a PARAMETER
+                         * (the localvar table never holds one).  A method of an
+                         * instance on a bare parametric `:heap` type is emitted
+                         * once, at the erased carrier signature, so its
+                         * `(Cons A)` parameter is the int64 word while the
+                         * representative monomorph ctor's slot is the typed
+                         * pointer. */
                         if (!arg_cty && arg) {
                             const Expr *ac = arg;
                             while (ac && ac->kind == EX_ASCRIBE)
@@ -13518,7 +13538,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                                        ac->kind == EX_FN_TO_FAT))
                                 arg_cty = "void *";
                             else if (emit_str_is_bare_ident(av))
-                                arg_cty = emit_localvar_lookup_ctype(av);
+                                arg_cty = emit_ident_emitted_ctype(ctx, av);
                         }
                         if (arg_cty) {
                             size_t sl = strlen(slot_cty);
@@ -16506,6 +16526,24 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                 indent_buf(body, ctx->indent);
                 buf_printf(body, "%s %s = *((%s *)%s);\n", 
                            inner_type_c, tmp, inner_type_c, inner);
+                /* ref-weak-builtins-stubbed: `deref` CONSUMES an lref<T> (it
+                 * is the linear value's one use -- elab_deref un-marks only a
+                 * ref<T>), so it is also the cell's owner's last word: free
+                 * it once the value is out.  Only for an lref this code owns:
+                 * a fresh `(lref/new ...)` or an owning variable, never a
+                 * borrowed one.  Nothing else frees the cell -- elab_let
+                 * injects no drop for a consumed lref -- so each `lref/new`
+                 * leaked its 8 bytes. */
+                const Expr *op = e->as.deref_.expr;
+                while (op && op->kind == EX_ASCRIBE) op = op->as.ascribe_.inner;
+                if (e->as.deref_.expr->type.kind == TY_LREF && op &&
+                    (op->kind == EX_REF ||
+                     (op->kind == EX_VAR && op->as.var.binding &&
+                      op->as.var.binding->is_linear &&
+                      !op->as.var.binding->is_nonowning_ref))) {
+                    indent_buf(body, ctx->indent);
+                    buf_printf(body, "free(%s);\n", inner);
+                }
                 free(inner);
                 free(inner_type_c);
                 return tmp;
@@ -17189,48 +17227,22 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
             free(inner);
             return tmp;
         }
-        case EX_WEAK_UPGRADE: {
-            /* (upgrade w) -> option<rc<T>> as ptr<void>: some(rc) or none (NULL) */
-            char *inner = emit_value(ctx, body, e->as.weak_upgrade_.expr);
-            char *cb_tmp  = fresh_tmp(ctx);
-            char *opt_tmp = fresh_tmp(ctx);
-            indent_buf(body, ctx->indent);
-            buf_printf(body, "RcControlBlock *%s = rc_upgrade(%s);\n", cb_tmp, inner);
-            free(inner);
-            indent_buf(body, ctx->indent);
-            /* SR2b: the canonical Option layout is the tagged sum (tag 1 =
-             * Some); build it via the preamble helper so this site cannot
-             * drift from the layout again.  A failed upgrade stays the
-             * historical none-as-NULL, which tur_is_some still reads. */
-            buf_printf(body, "void *%s = NULL;\n", opt_tmp);
-            indent_buf(body, ctx->indent);
-            buf_printf(body,
-                "if (%s) { %s = (void *)(intptr_t)tur_box_some((int64_t)(intptr_t)%s); }\n",
-                cb_tmp, opt_tmp, cb_tmp);
-            free(cb_tmp);
-            return opt_tmp;
-        }
-        case EX_WEAK_PRED: {
-            /* (weak? w) - check if w is weak<T> */
-            char *inner = emit_value(ctx, body, e->as.weak_pred_.expr);
-            char *tmp = fresh_tmp(ctx);
-            indent_buf(body, ctx->indent);
-            /* Check if the type kind is TY_WEAK - but at runtime we can't easily check this */
-            /* For Phase 9, we'll use a simple approach: check if it's a RcControlBlock pointer */
-            /* This is a simplification - in a proper implementation we'd need type info */
-            buf_printf(body, "bool %s = true; // weak? not fully implemented in Phase 9\n", tmp);
-            free(inner);
-            return tmp;
-        }
+        case EX_WEAK_PRED:
         case EX_REF_PRED: {
-            /* (ref? x) - check if x is ref<T>: always true if elaboration accepted it */
-            char *inner = emit_value(ctx, body, e->as.ref_pred_.expr);
-            char *tmp = fresh_tmp(ctx);
+            /* (weak? x) / (ref? x): is x a weak<T> / a ref<T>?  The answer
+             * is the argument's static type -- nothing at run time can say,
+             * and the interpreter answers from the same type.  The argument
+             * is still evaluated (ref-weak-builtins-stubbed: `weak?` was a
+             * constant `true` and `ref?` a non-null test of any value, so
+             * `(ref? 7)` was true). */
+            const Expr *arg = e->kind == EX_WEAK_PRED ? e->as.weak_pred_.expr
+                                                      : e->as.ref_pred_.expr;
+            bool is = arg->type.kind == (e->kind == EX_WEAK_PRED ? TY_WEAK : TY_REF);
+            char *inner = emit_value(ctx, body, arg);
             indent_buf(body, ctx->indent);
-            /* ref<T> is a void* in C; check non-NULL */
-            buf_printf(body, "bool %s = (%s != NULL); /* ref? — non-null pointer check */\n", tmp, inner);
+            buf_printf(body, "(void)(%s);\n", inner);
             free(inner);
-            return tmp;
+            return strdup(is ? "true" : "false");
         }
         case EX_CONT_PRED:        return emit_effects_cont_pred(ctx, body, e);
         /* Phase T21-F: async/await */

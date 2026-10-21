@@ -1,0 +1,68 @@
+;; stdlib-os-surface-plan P3.2: calendar dates.  utc-parts / datetime->ms
+;; round-trip (including before 1970 and across leap days), format-iso8601
+;; writes RFC 3339, parse-iso8601 reads it back and range-checks every
+;; field, and local-parts reports its zone offset so datetime->ms inverts it.
+(load "stdlib/env.tur")
+
+(defmodule time-dates-iso8601
+  (import cstr :refer [cstr-free])
+  (import time :refer [DateTime utc-parts local-parts datetime->ms
+                       format-iso8601 parse-iso8601 now-ms])
+
+  (defn show [dt : DateTime] : int
+    (let [s (format-iso8601 dt)]
+      (println s)
+      (cstr-free s)
+      0))
+
+  (defn parse-show [s : cstr] : int
+    (match (parse-iso8601 s)
+      (Some dt) (do (show dt) (println (datetime->ms dt)) 0)
+      (None) (do (println "invalid") 1)))
+
+  (defn main [] : int
+    (show (utc-parts 0))
+    (show (utc-parts 1500))
+    ;; 2000-02-29 (a leap day in a century leap year), late in the day
+    (let [dt (utc-parts 951868799999)]
+      (show dt)
+      (println (.year dt))
+      (println (.month dt))
+      (println (.day dt))
+      (println (datetime->ms dt)))
+    ;; before the epoch: floor division, not truncation
+    (show (utc-parts -1))
+    (show (utc-parts -86400000))
+    (println (datetime->ms (DateTime 1969 12 31 23 59 59 999 0)))
+    ;; offsets: the same instant in three spellings
+    (parse-show "2026-10-21T09:30:00Z")
+    (parse-show "2026-10-21T11:30:00+02:00")
+    (parse-show "2026-10-21 04:30-0500")
+    (parse-show "2026-10-21t09:30:00.123456z")
+    (parse-show "2026-10-21")
+    (parse-show "+012026-01-01T00:00:00Z")
+    (show (DateTime 12026 1 1 0 0 0 0 0))
+    (show (DateTime 2026 3 4 5 6 7 8 -90))
+    ;; rejected
+    (parse-show "2026-02-29")
+    (parse-show "2024-02-30T00:00:00Z")
+    (parse-show "2026-13-01")
+    (parse-show "2026-10-21T24:00:00Z")
+    (parse-show "2026-10-21T09:30:00+02:00x")
+    (parse-show "2026-1-21")
+    (parse-show "")
+    ;; leap year rules: 1900 is not one, 2000 and 2024 are
+    (parse-show "1900-02-29")
+    (parse-show "2024-02-29")
+    ;; local time: whatever the zone, its offset makes datetime->ms invert it
+    (let [now (now-ms)
+          loc (local-parts now)]
+      (println (= (datetime->ms loc) now))
+      (println (and (>= (.offset loc) -1440) (<= (.offset loc) 1440))))
+    ;; a fixed-offset POSIX zone (no tz database needed), set at run time:
+    ;; local-parts re-reads TZ
+    (env/set "TZ" "XYZ-3")
+    (let [loc (local-parts 1792575000000)]
+      (show loc)
+      (println (datetime->ms loc)))
+    0))

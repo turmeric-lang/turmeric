@@ -1,0 +1,16 @@
+;; forward-call-rc-param-in-module -- the defmodule half of
+;; forward-call-rc-param.  A module has no type pre-pass, so `S` is not
+;; registered when the module's forward declarations are made; the rc
+;; parameter is retried at each defn, by which point the defstruct above has
+;; run.  See docs/archive/forward-call-with-rc-argument-rejected.md.
+(defmodule prog
+  (export main)
+  (defstruct S [n : int])
+  (defn ping [^borrow st : rc<S> k : int] : int
+    (if (= k 0) (.n st) (pong st (- k 1))))
+  (defn pong [^borrow st : rc<S> k : int] : int
+    (ping st k))
+  (defn main [] : int
+    (let [st (rc/of (S 7))]
+      (println (ping st 5)))
+    0))

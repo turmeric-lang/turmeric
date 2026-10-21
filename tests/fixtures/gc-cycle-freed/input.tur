@@ -1,11 +1,7 @@
 ; gc-cycle-freed: a zombie (strong=0, weak>0) is freed by explicit gc/collect.
 ; After rc/drop, r's strong_count reaches 0 while weak_count=1 (zombie state).
 ; gc! should free the zombie value; upgrade then returns none (not alive).
-(defn lgc-some? [o : ptr<void>] : bool
-  ```c
-  struct { int tag; int64_t value; } *opt = (void*)o;
-  return opt != NULL && opt->tag == 1;
-  ```)
+(load "stdlib/weak.tur")
 
 (defn main [] : int
   (gc-enable!)
@@ -13,6 +9,6 @@
     (let [w (weak r)]
       (rc/drop r)
       (gc!)
-      (let [u (upgrade w)]
-        (println (if (lgc-some? u) 1 0)))))  ; expected: 0 -- rc was collected
+      (let [u (weak/upgrade w)]
+        (println (if (some? u) 1 0)))))  ; expected: 0 -- rc was collected
   0)

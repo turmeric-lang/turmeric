@@ -12286,13 +12286,22 @@ Expr *elab_defn(Elab *e, const Form *call) {
             if (rt_inferred_ret) rt_inferred_var = RT4_RESULT_VAR;
         }
 
-        if (should_check && body) {
+        /* contract-purity-check-skipped-when-checks-off: the checks are BUILT
+         * whether or not they are emitted, so every predicate is elaborated and
+         * classified (TUR-E0375) on every build -- a Release `tur` and
+         * `--no-contracts` used to accept an impure `:pre` a Debug `tur`
+         * rejects, because the purity check only ran here.  `cbody` is spliced
+         * in below only when the checks are kept, the way
+         * elab_loop_invariant_pred classifies an `:invariant` ahead of its
+         * gate. */
+        if (body) {
+            Expr *cbody = body;
             /* Look up tur-contract-check binding */
             Binding *check_fn = scope_lookup(&e->global, e->sym_tur_contract_check);
 
             /* CT1: parameter contract predicates -- entry checks.  Shared
              * with `fn` so a lambda's contract parameters behave identically. */
-            body = rt_inject_param_checks(e, body, check_fn, params, n_params,
+            cbody = rt_inject_param_checks(e, cbody, check_fn, params, n_params,
                                           ct_param_preds, ct_param_varnames,
                                           ct_param_param_idx, n_ct_param_preds,
                                           name_f->as.sym->name, call->span);
@@ -12311,11 +12320,11 @@ Expr *elab_defn(Elab *e, const Form *call) {
                     /* Prepend check to body as EX_DO */
                     Expr **do_items = (Expr **)arena_alloc(e->arena, 2 * sizeof(Expr *));
                     do_items[0] = check_call;
-                    do_items[1] = body;
-                    Expr *new_body = expr_new(e->arena, EX_DO, body->type, call->span);
+                    do_items[1] = cbody;
+                    Expr *new_body = expr_new(e->arena, EX_DO, cbody->type, call->span);
                     new_body->as.do_.items = do_items;
                     new_body->as.do_.n = 2;
-                    body = new_body;
+                    cbody = new_body;
                 }
             }
 
@@ -12331,13 +12340,14 @@ Expr *elab_defn(Elab *e, const Form *call) {
                 const Form *pred_form = ct_pass == 0 ? ct_post_form : ct_ret_pred;
                 if (!pred_form) continue;
                 if (ct_pass == 0 ? rt_post_proven : rt_ret_proven) continue;
-                body = rt_wrap_return_check(
-                    e, body, check_fn, pred_form,
+                cbody = rt_wrap_return_check(
+                    e, cbody, check_fn, pred_form,
                     ct_pass == 1 ? ct_ret_var : NULL,
                     ct_pass == 0 ? "Postcondition failed"
                                  : "Return contract violated",
                     name_f->as.sym->name, call->span);
             }
+            if (should_check) body = cbody;
         }
     }
 
@@ -14143,12 +14153,15 @@ Expr *elab_fn(Elab *e, const Form *call) {
     /* CT1: inject this lambda's parameter contract checks.  Done BEFORE capture
      * analysis so the final body is what gets scanned, and while the inner
      * scope is still current so the predicate can be elaborated in it. */
-    if (n_ct_param_preds > 0 && body && rt_contracts_emitted()) {
+    /* contract-purity-check-skipped-when-checks-off: built (so classified,
+     * TUR-E0375) on every build, kept only when checks are emitted. */
+    if (n_ct_param_preds > 0 && body) {
         Binding *ct_check_fn = scope_lookup(&e->global, e->sym_tur_contract_check);
-        body = rt_inject_param_checks(e, body, ct_check_fn, params, n_params,
-                                      ct_param_preds, ct_param_varnames,
-                                      ct_param_param_idx, n_ct_param_preds,
-                                      "fn", call->span);
+        Expr *cbody = rt_inject_param_checks(e, body, ct_check_fn, params, n_params,
+                                             ct_param_preds, ct_param_varnames,
+                                             ct_param_param_idx, n_ct_param_preds,
+                                             "fn", call->span);
+        if (rt_contracts_emitted()) body = cbody;
     }
 
     /* Phase 3: Capture analysis - collect free variables in the body */

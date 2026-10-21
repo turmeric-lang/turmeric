@@ -1,0 +1,134 @@
+;;; tur/os -- facts about the machine and the user running the program.
+;;;
+;;; os/hostname names the machine; os/uid and os/gid the user and group the
+;;; process runs as.  Load with (load "stdlib/os.tur").  Every call returns
+;;; (Result T IoError), with ENOSYS where a platform has no such notion.
+;;;
+;;; Since: stdlib-os-surface P3
+;; stdlib-os-surface-plan P3.5 (misc).  Environment variables live in
+;; stdlib/env.tur, processes in stdlib/process.tur.
+(load "stdlib/effects.tur")
+
+(load "stdlib/io-error.tur")
+;;; Uid -- a numeric user id, as getuid(2) reports it.
+;;;
+;;; Its own type rather than an :int, so a uid cannot be passed where a gid,
+;;; a pid or a count is expected.  uid->int gives the number for interop.
+;;;
+;;; Since: stdlib-os-surface P3
+(defopaque Uid :int)
+;;; Gid -- a numeric group id, as getgid(2) reports it.
+;;;
+;;; Since: stdlib-os-surface P3
+(defopaque Gid :int)
+;;; uid->int -- the number a Uid carries.
+;;;
+;;; Parameters:
+;;;   u -- a Uid
+;;;
+;;; Returns:
+;;;   The user id; 0 is root.
+;;;
+;;; Example:
+;;;   (= (uid->int u) 0)  ; => true when running as root
+;;;
+;;; Since: stdlib-os-surface P3
+(defn uid->int [u : Uid] : int (:: u :int))
+;;; gid->int -- the number a Gid carries.
+;;;
+;;; Parameters:
+;;;   g -- a Gid
+;;;
+;;; Returns:
+;;;   The group id.
+;;;
+;;; Example:
+;;;   (gid->int g)  ; => 1000
+;;;
+;;; Since: stdlib-os-surface P3
+(defn gid->int [g : Gid] : int (:: g :int))
+;;; os/hostname -- the name of this machine.
+;;;
+;;; Returns:
+;;;   (Ok name) -- a fresh heap cstr the caller owns (release with free) --
+;;;   or (Err e).  gethostname(2) on POSIX; on Windows the DNS host name
+;;;   (GetComputerNameEx), which is what hostname.exe prints.
+;;;
+;;; Example:
+;;;   (match (os/hostname)
+;;;     (Ok h)  (println h)
+;;;     (Err e) (println (io-error/message e)))
+;;;
+;;; Since: stdlib-os-surface P3
+(defn os/hostname []
+  #fx{Proc}
+  : (Result cstr IoError)
+  ```c
+  #include <errno.h>
+  #include <unistd.h>
+#ifdef _WIN32
+  DWORD n = 0;
+  GetComputerNameExA(ComputerNameDnsHostname, NULL, &n);   /* asks for the size */
+  if (n == 0) return tur_err_int(EIO);
+  char *buf = (char *)malloc(n);
+  if (!buf) return tur_err_int(ENOMEM);
+  if (!GetComputerNameExA(ComputerNameDnsHostname, buf, &n)) { free(buf); return tur_err_int(EIO); }
+  return tur_ok_ptr(buf);
+#else
+  /* POSIX caps a host name at HOST_NAME_MAX (255 on Linux); gethostname
+   * need not NUL-terminate a name it had to truncate, so do it here. */
+  char *buf = (char *)malloc(257);
+  if (!buf) return tur_err_int(ENOMEM);
+  if (gethostname(buf, 256) != 0) { int e = errno; free(buf); return tur_err_int(e); }
+  buf[256] = '\0';
+  return tur_ok_ptr(buf);
+#endif
+  ```)
+;;; os/uid -- the real user id of this process.
+;;;
+;;; Returns:
+;;;   (Ok uid), or (Err e) with ENOSYS on Windows, which has no numeric user
+;;;   ids (it names users by SID).
+;;;
+;;; Example:
+;;;   (match (os/uid)
+;;;     (Ok u)  (println (uid->int u))
+;;;     (Err e) (println (io-error/message e)))
+;;;
+;;; Since: stdlib-os-surface P3
+(defn os/uid []
+  #fx{Proc}
+  : (Result Uid IoError)
+  ```c
+  #include <errno.h>
+  #include <unistd.h>
+#ifdef _WIN32
+  return tur_err_int(ENOSYS);
+#else
+  return tur_ok_int((int64_t)getuid());
+#endif
+  ```)
+;;; os/gid -- the real group id of this process.
+;;;
+;;; Returns:
+;;;   (Ok gid), or (Err e) with ENOSYS on Windows, which has no numeric group
+;;;   ids.
+;;;
+;;; Example:
+;;;   (match (os/gid)
+;;;     (Ok g)  (println (gid->int g))
+;;;     (Err e) (println (io-error/message e)))
+;;;
+;;; Since: stdlib-os-surface P3
+(defn os/gid []
+  #fx{Proc}
+  : (Result Gid IoError)
+  ```c
+  #include <errno.h>
+  #include <unistd.h>
+#ifdef _WIN32
+  return tur_err_int(ENOSYS);
+#else
+  return tur_ok_int((int64_t)getgid());
+#endif
+  ```)

@@ -1,0 +1,69 @@
+;; stdlib-os-surface-plan P3.4: signals outside the reactor.  signal/handle
+;; turns a delivery into a flag the program polls (signal/pending?,
+;; signal/take!, signal/interrupted?); signal/ignore and signal/reset change
+;; the disposition; and a caught signal wakes a blocking net/accept with an
+;; io-error/interrupted? error instead of letting it wait on.
+(load "stdlib/process.tur")
+(load "stdlib/net.tur")
+
+(defn show-unit [label : cstr r : (Result nil IoError)] : int
+  (match r
+    (Ok _) (do (println label) 0)
+    (Err e) (do (println (io-error/message e)) 1)))
+
+(defn send-self [sig : Signal] : int
+  (match (process/kill (process/pid) sig)
+    (Ok _) 0
+    (Err e) (do (println (io-error/message e)) 1)))
+
+;; wait in accept until a child process sends SIGINT
+(defn interrupted-accept [] : int
+  (match (net/tcp-listen "127.0.0.1" 0)
+    (Ok server)
+    (match (process/spawn "sh" "-c" "sleep 0.5; kill -INT $PPID")
+      (Ok child)
+      (do (match (net/accept server)
+            (Ok c) (do (println "accepted?") (net/close c) 0)
+            (Err e) (do (println (io-error/interrupted? e)) 0))
+          (println (signal/take! (SigInt)))
+          (match (process/wait child)
+            (Ok st) (println (exit-status/success? st))
+            (Err e) (println (io-error/message e)))
+          (net/close server)
+          0)
+      (Err e) (do (println (io-error/message e)) (net/close server) 1))
+    (Err e) (do (println (io-error/message e)) 1)))
+
+(defn main [] : int
+  (show-unit "on-interrupt" (signal/on-interrupt))
+  (println (signal/interrupted?))
+  (send-self (SigInt))
+  ;; still running: the signal was caught, not acted on
+  (println (signal/interrupted?))
+  (println (signal/pending? (SigInt)))
+  (println (signal/take! (SigInt)))
+  (println (signal/take! (SigInt)))
+  (println (signal/interrupted?))
+  ;; deliveries before a poll coalesce
+  (show-unit "handle term" (signal/handle (SigTerm)))
+  (send-self (SigTerm))
+  (send-self (SigTerm))
+  (println (signal/take! (SigTerm)))
+  (println (signal/take! (SigTerm)))
+  ;; back to the default at once: a harness timeout's SIGTERM must still kill
+  (show-unit "reset term" (signal/reset (SigTerm)))
+  ;; SIGKILL cannot be caught or ignored
+  (match (signal/handle (SigKill))
+    (Ok _) (println "caught SIGKILL?")
+    (Err e) (println (io-error/message e)))
+  (match (signal/ignore (SigKill))
+    (Ok _) (println "ignored SIGKILL?")
+    (Err e) (println (io-error/message e)))
+  ;; an ignored signal leaves no flag
+  (show-unit "ignore hup" (signal/ignore (SigHup)))
+  (send-self (SigHup))
+  (println (signal/pending? (SigHup)))
+  (show-unit "reset hup" (signal/reset (SigHup)))
+  (interrupted-accept)
+  (show-unit "reset int" (signal/reset (SigInt)))
+  0)

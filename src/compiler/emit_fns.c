@@ -1746,8 +1746,12 @@ static void emit_tail_drop_hoist_do(EmitCtx *ctx, Buf *body, const Expr *fn_e,
         buf_printf(body, "tur_frame_init(&%s, &%s);\n", frame_var, saved_frame);
     else
         buf_printf(body, "tur_frame_init(&%s, NULL);\n", frame_var);
+    /* auto-drop-defers-skipped-on-early-return: the drops are pending while
+     * the items ahead of the tail are emitted. */
+    emit_frame_note_pending_drops(frame_var, e);
     for (int i = 0; i < last; i++)
         emit_stmt(ctx, body, e->as.do_.items[i]);
+    emit_frame_clear_pending_drops(frame_var);
     for (uint32_t i = (uint32_t)last + 1; i < e->as.do_.n; i++)
         emit_frame_push_defer(ctx, body, frame_var, e->as.do_.items[i]);
     emit_tail(ctx, body, fn_e, fd, e->as.do_.items[last], result_kind, is_main);
@@ -5881,6 +5885,10 @@ static void emit_fn_def_body(EmitCtx *ctx, Buf *file, const Expr *e) {
         emit_note_inline_c_fn(fn_name);
     if (needs_static) {
         buf_printf(file, "static ");
+    } else if (ctx->separate_compilation && user_inst_method) {
+        /* loaded-user-definstance-duplicated-across-tus: weak when this TU
+         * holds a `(load ...)`-ed copy (emit_inst_method_linkage_attr). */
+        buf_puts(file, emit_inst_method_linkage_attr(fd));
     }
     /* Return type from fn_type */
     if (e->type.kind == TY_FN) {

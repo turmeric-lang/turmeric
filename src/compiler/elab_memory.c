@@ -476,34 +476,28 @@ Expr *elab_weak(Elab *e, const Form *call) {
     return out;
 }
 
-/* (upgrade w) - Upgrade weak<T> to option<rc<T>>.
- * Returns: option<rc<T>>
- */
+/* (upgrade w) -- retired (ref-weak-builtins-stubbed).  It returned the
+ * option as a `ptr<void>` that no `Option` function accepts, and the strong
+ * handle it minted on success could never be released.  `weak/upgrade`
+ * (tur/weak) is the same operation with the right type, `(Option rc<T>)`,
+ * so the builtin points there rather than keeping a second spelling. */
 Expr *elab_weak_upgrade(Elab *e, const Form *call) {
-    if (call->as.list.len != 2) {
-        diag_emit(DIAG_ERROR, call->span,
-                  "(upgrade w) requires exactly one argument");
-        return NULL;
-    }
+    diag_emit(DIAG_ERROR, call->span,
+              "`upgrade` was retired: use `weak/upgrade` from tur/weak, which "
+              "returns an `(Option rc<T>)` -- and `weak/unwrap` and `rc/drop` "
+              "for the strong handle it hands back");
+    return NULL;
+}
 
-    Expr *inner = elab_form(e, call->as.list.items[1]);
-    if (!inner) return NULL;
-
-    /* Argument must be weak<T> */
-    if (inner->type.kind != TY_WEAK) {
-        diag_emit(DIAG_ERROR, call->span,
-                  "upgrade requires weak<T>, got %s", type_name(inner->type));
-        return NULL;
-    }
-
-    /* Returns option<rc<T>>, represented as ptr<void> (heap-allocated some/none struct).
-     * Callers use some?/option-unwrap from stdlib/option.tur to inspect the result. */
-    Type result_type = TYPE_PTR_VOID;
-
-    /* Create EX_WEAK_UPGRADE expression */
-    Expr *out = expr_new(e->arena, EX_WEAK_UPGRADE, result_type, call->span);
-    out->as.weak_upgrade_.expr = inner;
-    return out;
+/* `ref?` / `weak?` only look at their argument's type: like `deref` of a
+ * ref<T>, a bare linear variable passed to one is read, not consumed, so the
+ * generic EX_VAR walk's consumed mark is undone (see elab_deref). */
+static void elab_pred_read_is_not_a_move(Expr *inner) {
+    if (inner->kind == EX_VAR && inner->as.var.binding &&
+        inner->as.var.binding->is_linear &&
+        !inner->as.var.binding->is_nonowning_ref &&
+        (inner->type.kind == TY_REF || inner->type.kind == TY_WEAK))
+        inner->as.var.binding->is_linear_consumed = false;
 }
 
 /* (weak? w) - Check if w is a weak<T>.
@@ -518,8 +512,10 @@ Expr *elab_weak_pred(Elab *e, const Form *call) {
 
     Expr *inner = elab_form(e, call->as.list.items[1]);
     if (!inner) return NULL;
+    elab_pred_read_is_not_a_move(inner);
 
-    /* Create EX_WEAK_PRED expression */
+    /* Create EX_WEAK_PRED expression -- answered from inner's static type
+     * (emit_expr.c, eval.c). */
     Expr *out = expr_new(e->arena, EX_WEAK_PRED, TYPE_BOOL, call->span);
     out->as.weak_pred_.expr = inner;
     return out;
@@ -537,8 +533,10 @@ Expr *elab_ref_pred(Elab *e, const Form *call) {
 
     Expr *inner = elab_form(e, call->as.list.items[1]);
     if (!inner) return NULL;
+    elab_pred_read_is_not_a_move(inner);
 
-    /* Create EX_REF_PRED expression — always true if the type is TY_REF */
+    /* Create EX_REF_PRED expression -- true iff inner's static type is
+     * ref<T> (emit_expr.c, eval.c). */
     Expr *out = expr_new(e->arena, EX_REF_PRED, TYPE_BOOL, call->span);
     out->as.ref_pred_.expr = inner;
     return out;

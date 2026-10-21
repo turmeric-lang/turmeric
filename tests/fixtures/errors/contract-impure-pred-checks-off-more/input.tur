@@ -1,0 +1,33 @@
+;; contract-purity-check-skipped-when-checks-off: the contract positions
+;; refine-impure-accessor-contract-positions does not cover, compiled with
+;; `--no-contracts` -- `:post`, a `fn` parameter refinement, an instance
+;; method's (inherited) parameter refinement and a class result refinement.
+;; Each is TUR-E0375 here exactly as it is with checks on.
+;; See docs/archive/contract-purity-check-skipped-when-checks-off.md.
+(defn tick [] #fx{} : int
+  ```c
+  static int64_t n = 0;
+  return n++;
+  ```)
+
+(defn on-post [n : int] : int
+  :post (>= result (tick))
+  n)
+
+(defn on-fn-param [] : int
+  (let [g (fn [x : #refine{ v : int | (> v (tick)) }] : int x)]
+    (g 5)))
+
+(defclass Sized [a]
+  (size [x : a n : #refine{ v : int | (>= v (tick)) }] : int))
+
+(definstance Sized [int]
+  (size [x n] n))
+
+(defclass Counted [a]
+  (count-of [x : a] : #refine{ r : int | (>= r (tick)) }))
+
+(definstance Counted [int]
+  (count-of [x] x))
+
+(defn main [] : int 0)

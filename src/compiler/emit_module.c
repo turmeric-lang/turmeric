@@ -4702,9 +4702,18 @@ static Binding *emit_find_dispatch_spec_closure(const Expr *e, FnDef *fd,
     }
 }
 
+/* spec-clone-names-not-module-qualified: a generic defined in a named module
+ * gets the module prefix its own C name carries (`ma__ident__spec__...`).
+ * The `__h<n>` discriminator below only separates names within one TU; under
+ * separate compilation a spec of a user generic has external linkage, so two
+ * modules exporting a same-named generic instantiated at the same types
+ * emitted one symbol twice ("multiple definition of `ident__spec__...'"). */
 static char *emit_abi_clone_name(const Binding *binding, Type result_type, Type *arg_types, uint8_t n_args) {
     Buf name;
     buf_init(&name);
+    char mod_prefix[512];
+    if (binding_module_prefix(binding, mod_prefix, sizeof mod_prefix) > 0)
+        buf_puts(&name, mod_prefix);
     append_sanitized_c_token(&name, binding && binding->name ? binding->name->name : "fn");
     buf_puts(&name, "__spec__");
     append_sanitized_c_token(&name, type_c_name(result_type));
@@ -11179,6 +11188,26 @@ bool emit_inst_method_wants_external(const FnDef *fd) {
     return true;
 }
 
+/* loaded-user-definstance-duplicated-across-tus: a USER file `(load ...)`-ed
+ * by two modules is spliced into both, so both TUs define its instance
+ * methods.  The path test above only catches stdlib files, and external
+ * linkage made the second copy a link error ("multiple definition of
+ * `__inst_Describe_describe_int'").  Static is no answer: an importer of a
+ * module that loaded the file dispatches on the instance through that
+ * module's header, so the definition has to stay linker-visible.
+ *
+ * A separately compiled module's own source is file 0 of its unit (the
+ * driver registers it so), so an instance from any other file is a loaded
+ * copy.  It keeps external linkage and the declarations in the header, and is defined
+ * WEAK: the copies are the same source elaborated the same way, and the
+ * linker keeps one -- the SYM2 treatment of the interned symbol records
+ * (sym_codegen_emit).  The PE/COFF trouble recorded there is a reference at
+ * an offset into weak DATA; a function is only ever called by its address. */
+const char *emit_inst_method_linkage_attr(const FnDef *fd) {
+    if (!emit_inst_method_wants_external(fd)) return "";
+    return fd->owner_instance->origin_file_id != 0 ? "__attribute__((weak)) " : "";
+}
+
 static void emit_fn_forward_decls(EmitCtx *ctx, Buf *out,
                                   const Expr **items, uint32_t n_items) {
     /* S1: the per-program reset used to live HERE, which silently discarded
@@ -11216,6 +11245,9 @@ static void emit_fn_forward_decls(EmitCtx *ctx, Buf *out,
              fd->binding->is_from_stdlib) &&
             !emit_split_lib_owns(fd->binding)) {
             buf_puts(out, "static ");
+        } else if (ctx->separate_compilation) {
+            /* loaded-user-definstance-duplicated-across-tus */
+            buf_puts(out, emit_inst_method_linkage_attr(fd));
         }
         /* S1: the return type is written by the branches below; capture the
          * exact substring so a call site can name it instead of __auto_type. */

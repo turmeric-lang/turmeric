@@ -1,0 +1,5 @@
+TUR-E0375
+contract-impure-pred-checks-off-more/input.tur:13:1: error [TUR-E0375]
+contract-impure-pred-checks-off-more/input.tur:18:11: error [TUR-E0375]
+contract-impure-pred-checks-off-more/input.tur:25:3: error [TUR-E0375]
+contract-impure-pred-checks-off-more/input.tur:31:3: error [TUR-E0375]

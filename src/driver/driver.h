@@ -220,6 +220,7 @@ int compile_to_implementation(const char *path, Buf *out_c, const char *module_n
 /* == driver/cc.c =========================================================== */
 extern int g_runtime_mode;
 extern bool g_emit_for_link;
+extern bool g_emit_for_wasm;
 extern bool g_cc_release;
 void hoist_tur_include_directives(Buf *csrc);
 char *drv_last_path_sep(char *p);

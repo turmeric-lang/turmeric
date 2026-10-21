@@ -50,3 +50,36 @@ runs.
    unsafe: a call checked against an `int` parameter cannot know the callee
    borrows, so the caller may treat the rc as moved, or skip an increment it
    owes. Direction 1 avoids this.
+
+## Resolution (2026-10-21)
+
+Fix direction 1: the forward declaration carries the parameter's real type.
+
+- **Fix.** `fwd_decl_apply_ref_params` (`src/compiler/elab_core.c`) runs beside
+  `fwd_decl_apply_variadic` at all three forward-decl sites: the top-level
+  pre-pass (`elab_toplevel.c`), the defmodule pre-pass (`elab_module.c`) and
+  the letrec placeholder (`elab_forms.c`). For an `rc<S>`, `weak<S>`, `ref<S>`
+  or `lref<S>` annotation whose pointee a bare name settles -- a scalar, or a
+  registered non-generic ADT or struct -- it commits the slot's kind and full
+  type through `rc_family_type_from_keyword_name`, the resolver the real
+  signature uses. It also sets `FA_BORROW` on every `^borrow` slot, so a
+  borrowed argument is lent at a forward call exactly as at a backward one
+  (the move checker reads the flag; the placeholder had none).
+- **Modules.** A module has no RF0 type pre-pass, so its own `defstruct S` is
+  not registered when its forward decls are made. Such a slot is recorded on
+  the existing pending list (`elab_fwd_note_pending_params`, beside
+  `elab_fwd_note_pending_result`) and retried at the start of every defn, by
+  which point a struct written above its first user is registered.
+- **Not covered.** `rc<A>` over one of the defn's own type parameters keeps
+  the placeholder, as before.
+- **Same check as a backward call, holes included.** A forward call is now
+  checked exactly as a call to an already-defined callee. That includes one
+  gap the two share: an `rc<U>` argument is accepted for an `rc<S>` parameter
+  in both directions, because the call check compares kinds. Noted in
+  [typed-ptr-pointee-not-checked-at-calls](../reported/typed-ptr-pointee-not-checked-at-calls.md),
+  which is the same hole for `ptr<T>`.
+- **Pinned** by `forward-call-rc-param` (borrowed mutual recursion, an owning
+  rc parameter, an `rc<int>`, a letrec lambda) and
+  `forward-call-rc-param-in-module`, both engines. The borrowed case's
+  compiled program is clean under ASan/LSan: `main` keeps ownership and drops
+  the rc once.

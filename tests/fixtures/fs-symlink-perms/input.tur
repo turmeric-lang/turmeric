@@ -1,0 +1,134 @@
+;; stdlib-os-surface-plan P3.1 / P3.5: symlinks (fs/lstat, fs/symlink?,
+;; fs/readlink, fs/symlink, fs/realpath), permissions as a Mode value
+;; (fs/chmod, fs/stat-perms, mode/*), fs/stat-kind / fs/stat-atime,
+;; fs/walk-follow (a link cycle ends), and fs/touch.
+(load "stdlib/fs.tur")
+
+(defn scratch [name : cstr] : cstr
+  ```c
+  /* Run-time scratch dir (see io-stdlib-roundtrip for why not "/tmp");
+   * a fresh buffer per call. */
+  const char *d = getenv("TUR_TEST_TMPDIR");
+  if (!d || !*d) d = "/tmp";
+  size_t cap = strlen(d) + strlen(name) + 48;
+  char *buf = (char *)malloc(cap);
+  snprintf(buf, cap, "%s/tur-fs-link-%d/%s", d, (int)getpid(), name);
+  return buf;
+  ```)
+
+;; print a path relative to the scratch root
+(defn rel [p : cstr] : cstr
+  ```c
+  const char *m = strstr(p, "/tur-fs-link-");
+  if (!m) return p;
+  const char *s = strchr(m + 1, '/');
+  return s ? s + 1 : p;
+  ```)
+
+(defn unit [label : cstr r : (Result nil IoError)] : int
+  (match r
+    (Ok _) (do (println label) 0)
+    (Err e) (do (println (io-error/message e)) 1)))
+
+(defn kind [k : FileKind] : cstr
+  (match k (KindFile) "file" (KindDir) "dir" (KindSymlink) "symlink" (KindOther) "other"))
+
+(defn show-mode [m : Mode] : int
+  (let [s (mode/format m)] (println s) (fs/free-cstr s) 0))
+
+(defn print-vec [v : (Vec cstr) i : int] : int
+  (if (>= i (vec-len v))
+    0
+    (do (println (rel (vec-get v i)))
+        (print-vec v (+ i 1)))))
+
+(defn main [] : int
+  (unit "mkdirp" (fs/mkdirp (scratch "t/sub")))
+  (unit "write" (fs/write-text (scratch "t/data.txt") "12345"))
+  ;; a relative target, resolved against the link's directory
+  (unit "symlink" (fs/symlink "data.txt" (scratch "t/link")))
+  (match (fs/symlink "data.txt" (scratch "t/link"))
+    (Ok _) (println "symlink over existing?")
+    (Err e) (println (io-error/exists? e)))
+  (println (fs/symlink? (scratch "t/link")))
+  (println (fs/symlink? (scratch "t/data.txt")))
+  (println (fs/symlink? (scratch "t/nothing")))
+  (match (fs/readlink (scratch "t/link"))
+    (Ok t) (do (println t) (fs/free-cstr t))
+    (Err e) (println (io-error/message e)))
+  (match (fs/readlink (scratch "t/data.txt"))
+    (Ok t) (println "readlink on a file?")
+    (Err e) (println (io-error/code e)))
+  ;; stat follows the link, lstat does not
+  (match (fs/stat (scratch "t/link"))
+    (Ok s) (do (println (kind (fs/stat-kind s))) (println (fs/stat-size s)) (fs/stat-free s))
+    (Err e) (println (io-error/message e)))
+  (match (fs/lstat (scratch "t/link"))
+    (Ok s) (do (println (kind (fs/stat-kind s))) (println (fs/stat-size s)) (fs/stat-free s))
+    (Err e) (println (io-error/message e)))
+  (match (fs/lstat (scratch "t/sub"))
+    (Ok s) (do (println (kind (fs/stat-kind s)))
+               (println (> (fs/stat-atime s) 1000000000))
+               (fs/stat-free s))
+    (Err e) (println (io-error/message e)))
+  ;; realpath resolves the link: same answer as for the target
+  (match (fs/realpath (scratch "t/link"))
+    (Ok a) (match (fs/realpath (scratch "t/sub/../data.txt"))
+             (Ok b) (do (println (eq? a b)) (println (rel b))
+                        (fs/free-cstr a) (fs/free-cstr b))
+             (Err e) (println (io-error/message e)))
+    (Err e) (println (io-error/message e)))
+  (match (fs/realpath (scratch "t/missing"))
+    (Ok a) (println "realpath of a missing path?")
+    (Err e) (println (io-error/not-found? e)))
+  ;; Mode values
+  (match (mode/parse "rw-r-----")
+    (Some m) (do (println (mode/bits m))
+                 (println (mode/has? m (PermGroup) (PermRead)))
+                 (println (mode/has? m (PermOther) (PermRead)))
+                 (unit "chmod" (fs/chmod (scratch "t/data.txt") m)))
+    (None) (do (println "parse failed") 1))
+  (match (mode/parse "rwxr-xr-q")
+    (Some m) (println "parsed garbage?")
+    (None) (println "rejected"))
+  (match (mode/parse "rwsr-sr-T")
+    (Some m) (do (println (mode/bits m)) (show-mode m))
+    (None) (do (println "parse failed") 1))
+  (match (fs/stat (scratch "t/data.txt"))
+    (Ok s) (let [m (fs/stat-perms s)]
+             (show-mode m)
+             (show-mode (mode/with m (PermUser) (PermExec)))
+             (show-mode (mode/without m (PermGroup) (PermRead)))
+             (fs/stat-free s)
+             0)
+    (Err e) (do (println (io-error/message e)) 1))
+  ;; a link back up the tree: walk-follow reports it but does not enter it
+  (unit "loop link" (fs/symlink ".." (scratch "t/sub/up")))
+  ;; a link to a directory that is not a cycle: walk-follow enters it
+  (unit "dir link" (fs/symlink "sub" (scratch "t/alias")))
+  (println "-- walk")
+  (match (fs/walk (scratch "t"))
+    (Ok v) (do (print-vec v 0) (fs/paths-free v) 0)
+    (Err e) (do (println (io-error/message e)) 1))
+  (println "-- walk-follow")
+  (match (fs/walk-follow (scratch "t"))
+    (Ok v) (do (print-vec v 0) (fs/paths-free v) 0)
+    (Err e) (do (println (io-error/message e)) 1))
+  ;; touch: creates, then leaves contents alone
+  (unit "touch new" (fs/touch (scratch "t/stamp")))
+  (unit "touch existing" (fs/touch (scratch "t/data.txt")))
+  (match (fs/read-text (scratch "t/data.txt"))
+    (Ok s) (do (println s) (fs/free-cstr s))
+    (Err e) (println (io-error/message e)))
+  (match (fs/touch (scratch "no/such/dir/x"))
+    (Ok _) (println "touch in a missing dir?")
+    (Err e) (println (io-error/not-found? e)))
+  (fs/rm (scratch "t/sub/up"))
+  (fs/rm (scratch "t/alias"))
+  (fs/rm (scratch "t/link"))
+  (fs/rm (scratch "t/stamp"))
+  (fs/rm (scratch "t/data.txt"))
+  (fs/rmdir (scratch "t/sub"))
+  (fs/rmdir (scratch "t"))
+  (fs/rmdir (scratch ""))
+  0)

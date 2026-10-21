@@ -1524,6 +1524,18 @@ char *fresh_frame(EmitCtx *ctx);
  * parent = a function-outermost frame. */
 void emit_frame_note_parent(const char *frame, const char *parent);
 const char *emit_frame_parent(const char *frame);
+/* auto-drop-defers-skipped-on-early-return: a let's injected scope-exit drops
+ * trail its body's `do`, so an early `return` from the body leaves before they
+ * are registered.  The do-emitters note them per frame while emitting the
+ * items ahead of them (and clear the note once they push them); the `return`
+ * emitter runs every pending drop on its frame chain after computing its value,
+ * skipping a binding the value moves out.  emit_do_trailing_drop_glue is the
+ * index of the first item of the trailing drop-glue run (n when none). */
+uint32_t emit_do_trailing_drop_glue(const struct Expr *e);
+void emit_frame_note_pending_drops(const char *frame, const struct Expr *e);
+void emit_frame_clear_pending_drops(const char *frame);
+bool emit_frame_has_pending_drops(const EmitCtx *ctx);
+void emit_frame_run_pending_drops(EmitCtx *ctx, Buf *body, const struct Expr *ret_value);
 void tcg_reset_group_registry(void);
 bool fn_may_bounce(const struct FnDef *fd);
 const struct FnDef *tb_static_tail_callee(const struct Expr *e);
@@ -1556,6 +1568,7 @@ void emit_ctor_bare_alias(Buf *out, const struct AdtDef *def,
                           const struct CtorDef *ctor);
 char *adt_field_member_path(const AdtDef *def, const CtorDef *ctor, uint32_t fi);
 char *raw_name_for_binding(const Binding *b);
+size_t binding_module_prefix(const Binding *b, char *out, size_t cap);
 char *emit_call_name(EmitCtx *ctx, const Expr *call, const Binding *b);
 /* struct-of-closures monomorphization: find the inner-closure body spec (the
  * primary inner_closure_spec_idx or one of the extra struct-of-closures links)

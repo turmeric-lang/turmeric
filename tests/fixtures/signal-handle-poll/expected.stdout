@@ -1,0 +1,20 @@
+on-interrupt
+false
+true
+true
+true
+false
+false
+handle term
+true
+false
+reset term
+Invalid argument
+Invalid argument
+ignore hup
+false
+reset hup
+true
+true
+true
+reset int

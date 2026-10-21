@@ -194,19 +194,14 @@ static TuriValue native_option_unwrap_or(TuriEnv *env, TuriValue *a, uint32_t n,
     if (!option_is_some(a[0])) return a[1];
     return option_field(a[0], 1);
 }
-/* option-map -- apply f to the some value, returning a new Option.  option.tur's
- * body fat-dispatches f via TUR_APPLY1; this native invokes f (a turi closure)
- * via turi_call and returns a fresh native int64[2] {is_some, value} box. */
-static TuriValue native_option_map(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
-    (void)ud;
-    if (n < 2) return turi_make_struct(env, "None", NULL, 0);
-    if (!option_is_some(a[0])) return turi_make_struct(env, "None", NULL, 0);
-    TuriValue arg = option_field(a[0], 1);
-    TuriValue rv = turi_call(env, a[1], &arg, 1);
-    if (turi_is_error(rv) || env->throwing) return rv;  /* propagate callback error */
-    TuriValue fields[1] = { rv };
-    return turi_make_struct(env, "Some", fields, 1);
-}
+/* turi-option-map-native-reintroduces-c-recursion: there is no native
+ * `option-map` (nor `result-map`, below).  option.tur's body is a plain
+ * `match` now, which the stackless driver runs without nesting; a native
+ * called the callback through turi_call, one C frame per level, and since
+ * the natives are registered AFTER the preload it replaced that body -- so
+ * recursion 100,000 deep through the callback overflowed the C stack under
+ * `--interpret`.  A native that calls back belongs here only while the
+ * stdlib body cannot run interpreted. */
 
 /* Result functions: { bool is_ok (offset 0); int64_t ok_val (offset 8); int64_t err_val (offset 16) }
  * Stored as int64_t[3]: [0]=is_ok, [1]=ok_val, [2]=err_val
@@ -307,16 +302,8 @@ static TuriValue native_err_val_ptr(TuriEnv *env, TuriValue *a, uint32_t n, void
     if (n < 1) return turi_nil();
     return result_field(a[0], 2);
 }
-/* result-map: apply Turmeric fn to ok value, return new result */
-static TuriValue native_result_map(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
-    (void)ud;
-    if (n < 2) return turi_nil();
-    if (!result_is_ok(a[0])) return a[0]; /* return err unchanged */
-    TuriValue arg = result_field(a[0], 1);
-    TuriValue res = turi_call(env, a[1], &arg, 1);
-    if (turi_is_error(res) || env->throwing) return res;  /* propagate callback error */
-    return result_box_make(env, true, res);
-}
+/* result-map: no native -- result.tur's body is a plain `match`; see the
+ * option-map note above. */
 /* W1b: result-eq? -- (result-eq? r1 r2 ok-cmp err-cmp).  result.tur's version is
  * inline-C that fat-dispatches the two comparison closures, which the simple
  * inline-C evaluator cannot run; this native invokes them via turi_call so
@@ -5002,7 +4989,6 @@ void wk_register_stdlib_natives(TuriEnv *env) {
     turi_env_register_native(env, "unwrap-or-carrier",native_option_unwrap_or,NULL);
     turi_env_register_native(env, "option-must",     native_option_must,     NULL);
     turi_env_register_native(env, "option-expect",   native_option_expect,   NULL);
-    turi_env_register_native(env, "option-map",      native_option_map,      NULL);
     /* kleisli.tur: fat-closure carrier apply (TUR_APPLY1) -> turi_call. */
     turi_env_register_native(env, "k-apply-raw",     native_k_apply_raw,     NULL);
     /* Result/ok/err */
@@ -5017,7 +5003,6 @@ void wk_register_stdlib_natives(TuriEnv *env) {
     turi_env_register_native(env, "result-unwrap-err",native_result_unwrap_err,NULL);
     turi_env_register_native(env, "ok-val-ptr",      native_ok_val_ptr,      NULL);
     turi_env_register_native(env, "err-val-ptr",     native_err_val_ptr,     NULL);
-    turi_env_register_native(env, "result-map",      native_result_map,      NULL);
     turi_env_register_native(env, "result-eq?",      native_result_eq,       NULL);
     turi_env_register_native(env, "result-map-err",  native_result_map_err,  NULL);
     turi_env_register_native(env, "result-flat-map", native_result_flat_map, NULL);

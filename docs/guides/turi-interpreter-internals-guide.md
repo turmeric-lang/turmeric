@@ -505,15 +505,17 @@ nest C frames:
   `handle`, a generator body (each on its own ucontext stack).
 - **Natives that call back**: about 30 call sites in
   `interpreter_natives.c` and `collections_native.c` call `turi_call`
-  (option and result combinators, seq bridges, comparators, the R7RS
+  (some result combinators, seq bridges, comparators, the R7RS
   natives). Each
   callback is a fresh `eval_drive_ex` on top of the native's C frame.
-  [turi-cek-stackless-reentry-plan](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/turi-cek-stackless-reentry-plan.md)
-  says this re-entry is gone because `option-map` and friends became pure
-  Turmeric. But `cmd_eval_h` re-registers `native_option_map` (and the
-  other natives) after the preload, so it is the native that runs.
-  Recursion through `option-map` 100,000 deep overflows the C stack under a
-  Debug `--interpret`; the compiled program completes.
+  The natives are registered after the stdlib preload, so a native wins
+  over a stdlib body of the same name. `option-map` and `result-map` have
+  no native any more: their stdlib bodies are plain `match`es the driver
+  runs without nesting, and recursion 100,000 deep through either callback
+  completes under `--interpret`
+  ([turi-option-map-native-reintroduces-c-recursion](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/turi-option-map-native-reintroduces-c-recursion.md)).
+  A native that calls back should exist only while its stdlib body cannot
+  run interpreted.
 
 `turi_env_set_max_depth` is a no-op. **Step fuel** (`turi_env_set_fuel`;
 `TURI_DEFAULT_SANDBOX_FUEL`, 10M steps, for sandboxed envs and the macro
@@ -1001,7 +1003,8 @@ Each was reproduced against the compiler this guide describes and filed in
 [`docs/reported/`](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/README.md). When one is fixed and archived,
 update the passage above that describes it and drop it from this list.
 
-- [turi-option-map-native-reintroduces-c-recursion](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/turi-option-map-native-reintroduces-c-recursion.md) -- The interpreter's native `option-map` re-nests the C stack
+None open: the one filed (turi-option-map-native-reintroduces-c-recursion)
+was fixed on 2026-10-21.
 
 ## Maintenance
 

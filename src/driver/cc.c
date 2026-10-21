@@ -17,6 +17,10 @@ int g_runtime_mode = TUR_RT_AUTO;
 /* True while emitting C that `tur` itself will go on to compile and link. */
 bool g_emit_for_link = false;
 
+/* True while emitting C for `tur build --target wasm`.  emcc links that, and
+ * no native runtime archive can go on its link line. */
+bool g_emit_for_wasm = false;
+
 /* `tur run --release` / `tur build --release`: compile the program at -O3
  * instead of -O2 (decision 2 of docs/archive/performance-audit-plan.md; WP2
  * measured -O3 at ~6% on the corpus).  -march=native is never on by default

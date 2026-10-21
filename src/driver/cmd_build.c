@@ -81,6 +81,7 @@ static int cmd_build_once(const char *input, const char *out_path,
     /* DEDUP-4b: `tur` links this output, so the rc<T>/GC runtime may come
      * from the archive rather than being replicated into the preamble. */
     g_emit_for_link = true;
+    g_emit_for_wasm = target && strcmp(target, "wasm") == 0;
     Buf csrc;
     buf_init(&csrc);
     /* used-attr-whole-program: this single-file/whole-program path inlines only
@@ -110,6 +111,7 @@ static int cmd_build_once(const char *input, const char *out_path,
     if (try_split) { g_split_lib_sink = &split_lib; g_split_imp_sink = &split_imp; }
     int rc = compile_to_c(input, &csrc, include_dirs, n_include_dirs,
                           reader_macro_paths, n_reader_macro_paths);
+    g_emit_for_wasm = false;
     g_split_lib_sink = NULL;
     g_split_imp_sink = NULL;
     if (n_used_mods > 0) used_modules_ctx_set(NULL);

@@ -794,7 +794,11 @@ void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
                 buf_printf(body, "tur_frame_init(&%s, NULL);\n", frame_var);
             }
 
-            /* Emit non-defer items and register defer thunks */
+            /* Emit non-defer items and register defer thunks.  The trailing
+             * injected drops are pending until pushed, for a `return` in the
+             * items before them (auto-drop-defers-skipped-on-early-return). */
+            uint32_t drops_at = emit_do_trailing_drop_glue(e);
+            emit_frame_note_pending_drops(frame_var, e);
             bool emitted_diverging = false;  /* Track if we've emitted a return/throw/panic */
             for (uint32_t i = 0; i < n; i++) {
                 const Expr *it = e->as.do_.items[i];
@@ -805,6 +809,7 @@ void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
                 }
                 
                 if (it->kind == EX_DEFER) {
+                    if (i == drops_at) emit_frame_clear_pending_drops(frame_var);
                     emit_frame_push_defer(ctx, body, frame_var, it);
                 } else {
                     emit_stmt(ctx, body, it);
@@ -823,6 +828,7 @@ void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
             }
 
             /* Restore frame state */
+            emit_frame_clear_pending_drops(frame_var);
             ctx->frame_var = saved_frame;
             free(frame_var);
             return;
@@ -1509,23 +1515,36 @@ void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
                            ctx->dynvar_guard_names[di], ctx->dynvar_guard_ptrs[di]);
             }
 
-            /* Fire all defers in the frame chain if we're in a scope with defers */
-            if (ctx->frame_var) {
-                indent_buf(body, ctx->indent);
-                buf_printf(body, "tur_frame_fire_chain(&%s);\n", ctx->frame_var);
-            }
-
             /* Emit the return statement.
              *
-             * any-struct-box-leak-per-widen: an `any` local owned by an
-             * enclosing scope is released here, because the trailing free at
-             * that scope's end is about to be jumped past.  The drop must come
-             * AFTER the return value is computed -- `(return (reads a))` reads
-             * the box -- so the value is hoisted to a temp first when there is
-             * anything to drop.  Zero drops keeps the emitted form byte-identical
-             * to before. */
-            if (ctx->n_any_scope_drops > 0 && e->as.return_.value) {
-                char *val = emit_value(ctx, body, e->as.return_.value);
+             * The value is computed FIRST, then the scope exits run, then the
+             * `return` -- the order a scope's normal exit has always had
+             * (emit_do_value hoists its value ahead of tur_frame_fire_lifo)
+             * and the interpreter's.  An early `return` used to fire the
+             * frame chain before computing its value, so a `defer` ran ahead
+             * of the expression it was deferred past, and once the injected
+             * drops below ran on this path `(return (deref r))` would have
+             * read a freed `r`.  The scope exits, in order:
+             *
+             *   - the frame chain: every `defer` registered so far;
+             *   - auto-drop-defers-skipped-on-early-return: the enclosing
+             *     lets' injected drops that sit after the body and so are not
+             *     registered yet -- except a binding the value moves out
+             *     (`(return x)` hands `x` to the caller);
+             *   - any-struct-box-leak-per-widen: an `any` local owned by an
+             *     enclosing scope, because the trailing free at that scope's
+             *     end is about to be jumped past.
+             *
+             * When any of them run, a value is hoisted to a temp. */
+            const Expr *ret_e = e->as.return_.value;
+            bool pending_drops = emit_frame_has_pending_drops(ctx);
+            bool exits_run = ctx->frame_var || pending_drops ||
+                             ctx->n_any_scope_drops > 0;
+            char *val = ret_e ? emit_value(ctx, body, ret_e) : NULL;
+            if (val && exits_run && ret_e->type.kind != TY_NIL &&
+                ret_e->type.kind != TY_NEVER &&
+                !(ctx->current_fn_ret_ctype &&
+                  strcmp(ctx->current_fn_ret_ctype, "void") == 0)) {
                 char *rv = fresh_tmp(ctx);
                 indent_buf(body, ctx->indent);
                 /* Name the type rather than reach for __auto_type: this frame's
@@ -1539,16 +1558,16 @@ void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
                                                      : "__auto_type",
                            rv, val);
                 free(val);
-                emit_any_scope_drops(ctx, body);
-                indent_buf(body, ctx->indent);
-                buf_printf(body, "return %s;\n", rv);
-                free(rv);
-                return;
+                val = rv;
             }
+            if (ctx->frame_var) {
+                indent_buf(body, ctx->indent);
+                buf_printf(body, "tur_frame_fire_chain(&%s);\n", ctx->frame_var);
+            }
+            if (pending_drops) emit_frame_run_pending_drops(ctx, body, ret_e);
             if (ctx->n_any_scope_drops > 0) emit_any_scope_drops(ctx, body);
             indent_buf(body, ctx->indent);
-            if (e->as.return_.value) {
-                char *val = emit_value(ctx, body, e->as.return_.value);
+            if (val) {
                 buf_printf(body, "return %s;\n", val);
                 free(val);
             } else {
@@ -1632,7 +1651,6 @@ void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
         case EX_RC_FROM_REF:
         case EX_REF_FROM_RC:
         case EX_WEAK:
-        case EX_WEAK_UPGRADE:
         case EX_WEAK_PRED:
         case EX_REF_PRED:
         case EX_CONT_PRED:

@@ -315,6 +315,27 @@ built from public primitives only (`_MIR_get_wrapper`, `_MIR_redirect_thunk`,
 still lets two threads that both got past the stub generate the same function
 twice and trip `_MIR_duplicate_func_insns`.
 
+**A signal handler must not be its own first call.** Lazy generation compiles
+a function the first time something calls it through its address -- and a C
+function an inline-C body installs with `sigaction` / `signal` is called first
+by a signal delivery. MIR-gen then runs inside the handler, which is not
+async-signal-safe: `signal/handle` (`stdlib/process.tur`) hung, or crashed in
+`solve_dataflow`, until it called its handler once with a no-op argument
+through a `volatile` function pointer before installing it. The pointer is the
+point: a direct call can be inlined, leaving the thunk uncompiled. Do the same
+for any handler you install from inline C.
+
+**Only the program's thread takes signals.** The program runs on the entry
+thread, and two `tur` threads sit in `pthread_join` meanwhile: the original
+main thread (waiting on `tur_run_on_big_stack`'s worker) and the worker
+(waiting on the entry thread). A process-directed signal goes to any thread
+that does not block it, and Linux picked those first -- so a `signal/handle`
+flag was set without waking the program's blocking `net/accept`, and a signal
+the program had blocked for `reactor-add-signal`'s signalfd took its default
+action there and killed `tur`. Both waits now block asynchronous signals for
+their duration (`stack_guard.c`, `jit_engine.c`); synchronous faults stay
+open. `tests/fixtures/reactor-signal-process-directed` pins it.
+
 **`jit_mir_error`.** MIR's default error handler prints and `exit()`s the
 process. Ours prints and `longjmp`s to the landing pad so the fallback can
 happen. Before this existed, 13 fixtures whose stdlib inline C used

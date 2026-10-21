@@ -7,6 +7,7 @@
 ;;
 ;; Uses sys/ioctl.h for window size, termios.h for raw/cooked mode switching,
 ;; and unistd.h for isatty(3).  ANSI helpers respect the NO_COLOR env var.
+(load "stdlib/fd.tur")
 ;;; term/width -- return the terminal column width.
 ;;;
 ;;; Returns:
@@ -78,6 +79,27 @@
 ;;; Since: Phase B2
 
 (defn term/is-tty? [fd : int] : bool
+  ```c
+  #include <unistd.h>
+  return isatty((int)fd) != 0;
+  ```)
+;;; term/is-tty-fd? -- test whether a file descriptor is a terminal.
+;;;
+;;; term/is-tty? over the Fd handle the I/O modules hand out (socket-fd,
+;;; fs/tmpfile-fd, async-socket-*), so any descriptor can be asked without
+;;; unwrapping it.
+;;;
+;;; Parameters:
+;;;   fd -- an Fd, e.g. (int->fd 1) for stdout
+;;;
+;;; Returns:
+;;;   true if fd is connected to a terminal.
+;;;
+;;; Example:
+;;;   (term/is-tty-fd? (int->fd 2))  ; => true when stderr is a tty
+;;;
+;;; Since: stdlib-os-surface P3
+(defn term/is-tty-fd? [fd : Fd] : bool
   ```c
   #include <unistd.h>
   return isatty((int)fd) != 0;

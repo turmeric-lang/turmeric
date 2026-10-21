@@ -4048,6 +4048,14 @@ static Expr *elab_definstance_inner(Elab *e, const Form *call) {
          * Phase RT substitution), so pass 2 can reject a float-vs-non-float
          * (xmm-vs-GP) register-class clash in the method body. */
         TypeKind         ret_kind;
+        /* contract-purity-check-skipped-when-checks-off: the result refinements
+         * pass 1 did NOT publish on the binding because checks are not
+         * emitted (refine_return_pred is "published only when enforced").
+         * Pass 2 still elaborates them, to classify their purity. */
+        const Form      *unemitted_ret_pred;
+        const char      *unemitted_ret_var;
+        const Form      *unemitted_class_ret_pred;
+        const char      *unemitted_class_ret_var;
         /* carrier-aware-return-unification Phase 0: the full declared return
          * Type (after Phase RT substitution), retained so the Phase 3 classifier
          * can tell a grounded concrete commit from a carrier-participating
@@ -5240,6 +5248,16 @@ static Expr *elab_definstance_inner(Elab *e, const Form *call) {
                 method_binding->refine_class_ret_pred = m_class_ret_pred;
                 method_binding->refine_class_ret_var  = m_class_ret_var;
             }
+        } else {
+            /* contract-purity-check-skipped-when-checks-off: not published,
+             * but pass 2 classifies them all the same. */
+            passes[i].unemitted_ret_pred = impl_ret_pred;
+            passes[i].unemitted_ret_var  = impl_ret_var;
+            if (impl_ret_pred_own && m_class_ret_pred &&
+                impl_ret_pred != m_class_ret_pred && !ret_variance_proved) {
+                passes[i].unemitted_class_ret_pred = m_class_ret_pred;
+                passes[i].unemitted_class_ret_var  = m_class_ret_var;
+            }
         }
         method_fd->binding = method_binding;
         method_fd->params = method_params;
@@ -5415,7 +5433,9 @@ static Expr *elab_definstance_inner(Elab *e, const Form *call) {
          * rather than decorative. */
         {
             const Binding *mb = mp->method_fd ? mp->method_fd->binding : NULL;
-            if (mb && mb->refine_param_preds && method_body && rt_contracts_emitted()) {
+            /* contract-purity-check-skipped-when-checks-off: built (so
+             * classified, TUR-E0375) on every build, kept only when emitted. */
+            if (mb && mb->refine_param_preds && method_body) {
                 /* The arrays are indexed by parameter, with NULL where there is
                  * no refinement, so the index list is just 0..n-1. */
                 uint32_t idx[MAX_FN_ARITY];
@@ -5423,11 +5443,12 @@ static Expr *elab_definstance_inner(Elab *e, const Form *call) {
                                ? mb->n_refine_params : MAX_FN_ARITY;
                 for (uint32_t _i = 0; _i < n_idx; _i++) idx[_i] = _i;
                 Binding *m_check_fn = scope_lookup(&e->global, e->sym_tur_contract_check);
-                method_body = rt_inject_param_checks(
+                Expr *cbody = rt_inject_param_checks(
                     e, method_body, m_check_fn,
                     mp->method_params, mp->n_method_params,
                     mb->refine_param_preds, mb->refine_param_vars,
                     idx, n_idx, rt_impl_method_name(impl_form), impl_form->span);
+                if (rt_contracts_emitted()) method_body = cbody;
             }
         }
 
@@ -5456,6 +5477,25 @@ static Expr *elab_definstance_inner(Elab *e, const Form *call) {
                         rb->refine_class_ret_var,
                         "Class result contract violated",
                         rt_impl_method_name(impl_form), impl_form->span);
+            } else if (method_body && !rt_contracts_emitted() &&
+                       (mp->unemitted_ret_pred || mp->unemitted_class_ret_pred)) {
+                /* contract-purity-check-skipped-when-checks-off: the same
+                 * wraps, built to classify the predicates and then dropped. */
+                Binding *m_check_fn =
+                    scope_lookup(&e->global, e->sym_tur_contract_check);
+                Expr *cbody = method_body;
+                if (mp->unemitted_ret_pred)
+                    cbody = rt_wrap_return_check(
+                        e, cbody, m_check_fn, mp->unemitted_ret_pred,
+                        mp->unemitted_ret_var, "Return contract violated",
+                        rt_impl_method_name(impl_form), impl_form->span);
+                if (mp->unemitted_class_ret_pred)
+                    cbody = rt_wrap_return_check(
+                        e, cbody, m_check_fn, mp->unemitted_class_ret_pred,
+                        mp->unemitted_class_ret_var,
+                        "Class result contract violated",
+                        rt_impl_method_name(impl_form), impl_form->span);
+                (void)cbody;
             }
         }
 

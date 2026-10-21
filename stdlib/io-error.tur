@@ -127,6 +127,49 @@
   #include <errno.h>
   return e == EACCES || e == EPERM;
   ```)
+;;; io-error/interrupted? -- true when a signal cut a blocking call short.
+;;;
+;;; A signal caught with signal/handle (stdlib/process.tur) wakes a call
+;;; that was waiting -- net/accept, net/recv -- with this error rather than
+;;; letting it wait on, so the program can look at the signal and decide.
+;;; Nothing was done; calling again resumes the wait.
+;;;
+;;; Parameters:
+;;;   e -- an IoError
+;;;
+;;; Returns:
+;;;   true for EINTR.
+;;;
+;;; Example:
+;;;   (io-error/interrupted? e)  ; => true
+;;;
+;;; Since: stdlib-os-surface P3
+(defn io-error/interrupted? [e : IoError] : bool
+  ```c
+  #include <errno.h>
+  return e == EINTR;
+  ```)
+;;; io-error/connection-refused? -- true when nothing was listening.
+;;;
+;;; What net/tcp-connect answers for a port with no server behind it -- the
+;;; error a client retrying while its server starts up waits out.
+;;;
+;;; Parameters:
+;;;   e -- an IoError
+;;;
+;;; Returns:
+;;;   true for ECONNREFUSED (on Windows, also the WSAECONNREFUSED that
+;;;   stdlib/net.tur maps onto it).
+;;;
+;;; Example:
+;;;   (io-error/connection-refused? e)  ; => true
+;;;
+;;; Since: stdlib-os-surface P3
+(defn io-error/connection-refused? [e : IoError] : bool
+  ```c
+  #include <errno.h>
+  return e == ECONNREFUSED;
+  ```)
 ;;; io-error/ok-unit -- (Ok nil) as a (Result nil IoError).
 ;;;
 ;;; Written before Turmeric code could spell (Ok nil) itself; since

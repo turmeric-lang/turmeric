@@ -3408,7 +3408,9 @@ static Span leaf_panic_site(const Expr *x, Span saved) {
     g_fwd_site = SPAN_UNKNOWN;
     Span own = call_node_site(x);
     if (x && x->kind == EX_CALL && x->as.call_.forwards_site) {
-        if (fwd.line) return fwd;
+        /* ...unless the call through the partial is itself stdlib source
+         * (option-map's own `(f v)`), which keeps the program's site too. */
+        if (fwd.line && !(saved.line && diag_file_is_stdlib(fwd.file_id))) return fwd;
         return saved.line ? saved : own;
     }
     if (saved.line && own.line && diag_file_is_stdlib(own.file_id)) return saved;
@@ -5234,14 +5236,18 @@ static TuriValue eval_builtin(TuriEnv *env, const BuiltinSpec *spec,
          * the -fwrapv every emitted-C compile carries; folded in uint64_t so
          * the interpreter's own C has no signed overflow either
          * (emitted-c-signed-overflow-no-fwrapv). */
+        /* A sized kind narrower than 64 bits is then reduced to its width,
+         * as the compiled path's cast does (builtin_int_wrap_value;
+         * sized-int-arithmetic-not-wrapped-to-width). */
         if (n == 0) return turi_error("eval: variadic builtin requires ≥1 arg");
         const char *op = spec->c_op;
         bool is_float = (args[0].tag == TURI_FLOAT);
+        TypeKind rk = spec->result_type.kind;
         if (strcmp(op, "+") == 0) {
             if (!is_float) {
                 uint64_t acc = (uint64_t)args[0].as_int;
                 for (uint32_t i = 1; i < n; i++) acc += (uint64_t)args[i].as_int;
-                return turi_int((int64_t)acc);
+                return turi_int(builtin_int_wrap_value(rk, acc));
             } else {
                 double acc = args[0].as_float;
                 for (uint32_t i = 1; i < n; i++) acc += args[i].as_float;
@@ -5252,7 +5258,7 @@ static TuriValue eval_builtin(TuriEnv *env, const BuiltinSpec *spec,
             if (!is_float) {
                 uint64_t acc = (uint64_t)args[0].as_int;
                 for (uint32_t i = 1; i < n; i++) acc -= (uint64_t)args[i].as_int;
-                return turi_int((int64_t)acc);
+                return turi_int(builtin_int_wrap_value(rk, acc));
             } else {
                 double acc = args[0].as_float;
                 for (uint32_t i = 1; i < n; i++) acc -= args[i].as_float;
@@ -5263,7 +5269,7 @@ static TuriValue eval_builtin(TuriEnv *env, const BuiltinSpec *spec,
             if (!is_float) {
                 uint64_t acc = (uint64_t)args[0].as_int;
                 for (uint32_t i = 1; i < n; i++) acc *= (uint64_t)args[i].as_int;
-                return turi_int((int64_t)acc);
+                return turi_int(builtin_int_wrap_value(rk, acc));
             } else {
                 double acc = args[0].as_float;
                 for (uint32_t i = 1; i < n; i++) acc *= args[i].as_float;
@@ -5277,7 +5283,8 @@ static TuriValue eval_builtin(TuriEnv *env, const BuiltinSpec *spec,
         bool is_float = (args[0].tag == TURI_FLOAT);
         if (!is_float) {
             if (args[1].as_int == 0) return turi_error("eval: division by zero");
-            return turi_int(turi_idiv_nz(args[0].as_int, args[1].as_int));
+            return turi_int(builtin_int_wrap_value(spec->result_type.kind,
+                (uint64_t)turi_idiv_nz(args[0].as_int, args[1].as_int)));
         } else {
             return turi_float(args[0].as_float / args[1].as_float);
         }
@@ -5337,18 +5344,28 @@ static TuriValue eval_builtin(TuriEnv *env, const BuiltinSpec *spec,
         }
         /* Phase C bitwise ops (bit-and/or/xor/shl/shr).  Builtins.c registers
          * these for every integer kind; under --interpret every integer is an
-         * int64 carrier, so the kind-preserving width masking the compiled path
-         * applies is a no-op here -- the int64 result matches for in-range
-         * values (the same convention the arithmetic fold path uses). */
+         * int64 carrier.  and/or/xor of in-range operands stay in range; the
+         * shifts do not, so a narrow kind's result is reduced to its width as
+         * the compiled cast does (sized-int-arithmetic-not-wrapped-to-width). */
         if (strcmp(op, "&")  == 0) return turi_int(args[0].as_int &  args[1].as_int);
         if (strcmp(op, "|")  == 0) return turi_int(args[0].as_int |  args[1].as_int);
         if (strcmp(op, "^")  == 0) return turi_int(args[0].as_int ^  args[1].as_int);
-        if (strcmp(op, "<<") == 0) return turi_int(args[0].as_int << args[1].as_int);
+        TypeKind rk = spec->result_type.kind;
+        if (strcmp(op, "<<") == 0)
+            return turi_int(builtin_int_wrap_value(rk,
+                (uint64_t)args[0].as_int << (uint64_t)args[1].as_int));
         /* bit-shr is documented as a LOGICAL (unsigned) right shift; see the
          * matching comment in emit_core.c's BS_BIN_INFIX case -- this is the
-         * same bug in the interpreter's copy of the same operator. */
-        if (strcmp(op, ">>") == 0)
-            return turi_int((int64_t)((uint64_t)args[0].as_int >> (uint64_t)args[1].as_int));
+         * same bug in the interpreter's copy of the same operator.  A narrow
+         * operand zero-extends from its own width, not from 64 bits. */
+        if (strcmp(op, ">>") == 0) {
+            uint64_t a = (uint64_t)args[0].as_int;
+            if (builtin_int_unsigned_ctype(rk))
+                a = (uint64_t)builtin_int_wrap_value(rk == TY_INT8  ? TY_UINT8  :
+                                                    rk == TY_INT16 ? TY_UINT16 :
+                                                    rk == TY_INT32 ? TY_UINT32 : rk, a);
+            return turi_int(builtin_int_wrap_value(rk, a >> (uint64_t)args[1].as_int));
+        }
         return turi_errorf("eval: unknown infix builtin '%s'", op);
     }
 
@@ -11305,6 +11322,21 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                 /* panic-location-names-the-runtime-not-the-call-site: a
                  * partial's thunk names this call (g_fwd_site). */
                 g_fwd_site = fn_is_pap_thunk(fn) ? call_node_site(top->expr) : SPAN_UNKNOWN;
+                /* ...and the program's call INTO a stdlib Turmeric body names
+                 * itself to whatever that body's own calls panic in, as the
+                 * compiled path's sited call does (tur_site_keep keeps it
+                 * through the stdlib's calls; leaf_panic_site above).  A
+                 * native HOF's leaf call used to be the only setter, so once
+                 * `option-map` ran its Turmeric body a callback's panic named
+                 * option.tur (turi-option-map-native-reintroduces-c-recursion).
+                 * Not restored on return: every setter overwrites the slot,
+                 * and a native's leaf call saves and restores around itself. */
+                if (fn->body && top->expr) {
+                    Span cs = call_node_site(top->expr);
+                    if (cs.line && !diag_file_is_stdlib(cs.file_id) &&
+                        fn->body->span.line && diag_file_is_stdlib(fn->body->span.file_id))
+                        g_panic_site = cs;
+                }
                 /* turi-dict-passing-plan: a DICT-CLONE's leading dict params
                  * just bound as ordinary int args carry TypeClassInstance
                  * pointers (the EX_DICT address-only value).  Record them as
@@ -13972,12 +14004,17 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
         return turi_nil();
     }
     case EX_RC_PTR: {
+        /* ref-weak-builtins-stubbed: the ADDRESS of the payload, as the
+         * compiled rc_get_value gives -- the payload's word sits in the `__rc`
+         * record's value field, which lives as long as the rc.  Returning the
+         * payload itself made `(ptr-deref (rc->ptr r))` dereference the value
+         * (`tur` segfaulted reading address 0x5 for `(rc/of 5)`). */
         TuriValue r = eval_expr(env, frame, e->as.rc_ptr_.expr);
         if (turi_is_error(r) || env_signaled(env)) return r;
         if (r.tag == TURI_STRUCT && r.as_struct
             && r.as_struct->name && strcmp(r.as_struct->name, "__rc") == 0
             && r.as_struct->n_fields >= 2)
-            return r.as_struct->fields[1];
+            return turi_int((int64_t)(intptr_t)&r.as_struct->fields[1].as_int);
         return r;
     }
     case EX_RC_COUNT: {
@@ -14023,9 +14060,12 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
     case EX_REF:
         return eval_expr(env, frame, e->as.ref_.expr);
     case EX_REF_PRED: {
+        /* ref-weak-builtins-stubbed: answered from the argument's static
+         * type, as the compiled path does -- a ref is transparent here, so
+         * its value cannot say. */
         TuriValue _rpv = eval_expr(env, frame, e->as.ref_pred_.expr);
         if (turi_is_error(_rpv) || env_signaled(env)) return _rpv;
-        return turi_bool(_rpv.tag != TURI_NIL);
+        return turi_bool(e->as.ref_pred_.expr->type.kind == TY_REF);
     }
 
     /* --- Phase 9: weak<T> — simplified in interpreter --------------------- */
@@ -14043,14 +14083,12 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
         }
         return wv;
     }
-    case EX_WEAK_UPGRADE: {
-        TuriValue _wuv = eval_expr(env, frame, e->as.weak_upgrade_.expr);
-        if (turi_is_error(_wuv) || env_signaled(env)) return _wuv;
-        /* In the interpreter all weak refs are always valid; wrap in some(value). */
-        return make_struct_val(env, "some", 1, &_wuv);
+    case EX_WEAK_PRED: {
+        /* ref-weak-builtins-stubbed: from the static type, like `ref?`. */
+        TuriValue _wpv = eval_expr(env, frame, e->as.weak_pred_.expr);
+        if (turi_is_error(_wpv) || env_signaled(env)) return _wpv;
+        return turi_bool(e->as.weak_pred_.expr->type.kind == TY_WEAK);
     }
-    case EX_WEAK_PRED:
-        return turi_bool(true);
 
     /* --- Phase HRT0: exists pack/open — erase existential box ------------- */
     case EX_EXISTS_PACK:

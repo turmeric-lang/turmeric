@@ -1091,6 +1091,131 @@ else
     fail "build-project-sepcomp-module-handles-own-effect" "rc=$sep_rc out=$sep_out"
 fi
 
+# spec-clone-names-not-module-qualified: two modules export a same-named
+# generic, each instantiated at `cstr` in a TU that sees only that one, so no
+# `__h<n>` suffix tells them apart.  The clone names used to be the bare
+# `ident__spec__...` in both owners ("multiple definition" at link); they
+# carry the module prefix now.
+SPECDIR="$WORK/specname"
+mkdir -p "$SPECDIR"
+cat > "$SPECDIR/ma.tur" <<'EOF'
+(defmodule ma (export ident) (defn ident [A] [x : A] : A x))
+EOF
+cat > "$SPECDIR/mb.tur" <<'EOF'
+(defmodule mb (export ident) (defn ident [A] [x : A] : A x))
+EOF
+cat > "$SPECDIR/user1.tur" <<'EOF'
+(defmodule user1
+  (export shout)
+  (import mb :as b)
+  (defn shout [] : void (println (b/ident "u"))))
+EOF
+cat > "$SPECDIR/app.tur" <<'EOF'
+(defmodule app
+  (import ma :as a)
+  (import user1 :refer [shout])
+  (defn main [] : int
+    (println (a/ident "a"))
+    (shout)
+    0))
+EOF
+spec_out=$(cd "$SPECDIR" && "$TUR" build . -o "$WORK/specbin" 2>&1 && "$WORK/specbin" 2>&1)
+spec_rc=$?
+if [ $spec_rc -eq 0 ] && [ "$(tail -2 <<< "$spec_out" | tr '\n' ' ')" = "a u " ] &&
+   grep -q 'ma__ident__spec__' "$SPECDIR/build/obj/ma.c" &&
+   grep -q 'mb__ident__spec__' "$SPECDIR/build/obj/mb.c"; then
+    pass "build-project-spec-same-name-two-modules"
+else
+    fail "build-project-spec-same-name-two-modules" "rc=$spec_rc out=$spec_out"
+fi
+
+# loaded-user-definstance-duplicated-across-tus: a user file `(load ...)`-ed
+# by two modules is spliced into both, so both TUs define its instance
+# methods.  They used to be strong external definitions ("multiple definition
+# of `__inst_Describe_describe_int'"); a loaded copy is weak now.  The second
+# build is the shape that rules out `static`: an importer of the loading
+# module dispatches on the instance through that module's header.
+INSTDIR="$WORK/loadinst"
+mkdir -p "$INSTDIR/shared" "$INSTDIR/proj"
+cat > "$INSTDIR/shared/desc.tur" <<'EOF'
+(defclass Describe [a]
+  (describe [x : a] : int))
+(definstance Describe [int]
+  (describe [x] (* x 10)))
+EOF
+cat > "$INSTDIR/proj/ma.tur" <<'EOF'
+(load "../shared/desc.tur")
+(defmodule ma
+  (export fa)
+  (defn fa [] : int (describe 1)))
+EOF
+cat > "$INSTDIR/proj/mb.tur" <<'EOF'
+(load "../shared/desc.tur")
+(defmodule mb
+  (export fb)
+  (defn fb [] : int (describe 2)))
+EOF
+cat > "$INSTDIR/proj/app.tur" <<'EOF'
+(defmodule app
+  (import ma :refer [fa])
+  (import mb :refer [fb])
+  (defn main [] : int
+    (println (fa))
+    (println (fb))
+    0))
+EOF
+inst_out=$(cd "$INSTDIR/proj" && "$TUR" build . -o "$WORK/instbin" 2>&1 && "$WORK/instbin" 2>&1)
+inst_rc=$?
+if [ $inst_rc -eq 0 ] && [ "$(tail -2 <<< "$inst_out" | tr '\n' ' ')" = "10 20 " ]; then
+    pass "build-project-loaded-definstance-two-modules"
+else
+    fail "build-project-loaded-definstance-two-modules" "rc=$inst_rc out=$inst_out"
+fi
+rm -f "$INSTDIR/proj/mb.tur"
+rm -rf "$INSTDIR/proj/build"
+cat > "$INSTDIR/proj/app.tur" <<'EOF'
+(defmodule app
+  (import ma :refer [fa])
+  (defn main [] : int
+    (println (fa))
+    (println (describe 5))
+    0))
+EOF
+inst_out=$(cd "$INSTDIR/proj" && "$TUR" build . -o "$WORK/instbin2" 2>&1 && "$WORK/instbin2" 2>&1)
+inst_rc=$?
+if [ $inst_rc -eq 0 ] && [ "$(tail -2 <<< "$inst_out" | tr '\n' ' ')" = "10 50 " ]; then
+    pass "build-project-loaded-definstance-reached-by-importer"
+else
+    fail "build-project-loaded-definstance-reached-by-importer" "rc=$inst_rc out=$inst_out"
+fi
+
+# wasm-build-takes-native-archive-posture: a locatable runtime archive is a
+# NATIVE libturt_runtime.a, which emcc cannot link and is never given -- so a
+# `--target wasm` build must keep the full runtime replica in its C whatever
+# is locatable.  A stub emcc on PATH captures the C it is handed, so this
+# needs no Emscripten; any archive TUR_RUNTIME_LIB names triggers the probe.
+WASMDIR="$WORK/wasm"
+mkdir -p "$WASMDIR/bin" "$WASMDIR/lib"
+: > "$WASMDIR/lib/libturt_runtime.a"
+cat > "$WASMDIR/bin/emcc" <<'EOF'
+#!/usr/bin/env bash
+for a in "$@"; do case "$a" in *.c) cat "$a" >> "$(dirname "$0")/../seen.c";; esac; done
+exit 0
+EOF
+chmod +x "$WASMDIR/bin/emcc"
+printf '(defn main [] : int\n  (println 42)\n  0)\n' > "$WASMDIR/hello.tur"
+wasm_out=$(cd "$WASMDIR" && PATH="$WASMDIR/bin:$PATH" \
+           TUR_RUNTIME_LIB="$WASMDIR/lib/libturt_runtime.a" \
+           TUR_RCGC_FROM_ARCHIVE=1 \
+           "$TUR" build --target wasm hello.tur -o hello.js 2>&1)
+wasm_rc=$?
+if [ $wasm_rc -eq 0 ] && [ -s "$WASMDIR/seen.c" ] &&
+   ! grep -q 'definitions live in the runtime archive' "$WASMDIR/seen.c"; then
+    pass "build-wasm-keeps-runtime-replica"
+else
+    fail "build-wasm-keeps-runtime-replica" "rc=$wasm_rc out=$wasm_out"
+fi
+
 echo
 echo "summary: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

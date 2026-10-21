@@ -105,8 +105,9 @@ The name is built by `emit_abi_clone_name` (`src/compiler/emit_module.c`).
 Parse it:
 
 1. Everything before `__spec__` is the originating defn/method/ctor's
-   **bare** Turmeric name -- not module-qualified, so `util/ident`'s clones
-   start `ident__spec__`.
+   Turmeric name, behind the module prefix its own C name carries when it is
+   a global of a named module: `util/ident`'s clones start
+   `util__ident__spec__`, a top-level `ident`'s start `ident__spec__`.
 2. Right after `__spec__` comes the C type name of the **result**.
 3. Then, for each argument in order, a single `_` and that argument's C type
    name.
@@ -130,11 +131,12 @@ If you see one of these in a link error under separate compilation (see the
 [separate compilation internals guide](separate-compilation-internals-guide.md)):
 
 - **`multiple definition`.** A spec of a user generic is emitted with external
-  linkage by the module that defines the generic. Because the name carries no
-  module, two modules that define same-named generics instantiated at the same
-  types emit the same symbol
-  ([report](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/spec-clone-names-not-module-qualified.md)). Specs of
-  stdlib generics are `static` per TU and never collide.
+  linkage by the module that defines the generic. Until 2026-10-21 the name
+  carried no module, so two modules that define same-named generics
+  instantiated at the same types emitted the same symbol
+  ([spec-clone-names-not-module-qualified](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/spec-clone-names-not-module-qualified.md));
+  the module prefix keeps them apart now. Specs of stdlib generics are
+  `static` per TU and never collide.
 - **`undefined reference` or a type mismatch at the call.** The owning module
   emits a borrowed spec only after the build's second pass forces it there; a
   module missing from the build set, or a forced spec the owner rebuilt with
