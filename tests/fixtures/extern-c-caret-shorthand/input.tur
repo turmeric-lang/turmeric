@@ -6,8 +6,9 @@
 ;; one int.
 (extern-c sqrt [^float] :float)
 (extern-c fmax [^float ^float] :float)
-(extern-c fopen [^cstr ^cstr] :ptr)
-(extern-c fclose [^ptr] :int32)
+(extern-c strcmp [^cstr ^cstr] :int32)
+(extern-c malloc [^int] :ptr)
+(extern-c free [^ptr] :void)
 (extern-c abs [^int32 n] :int32)
 (extern-c getpid [^] :int32)
 (defn main [] : int
@@ -15,6 +16,9 @@
   (println (fmax 1.5 7.25))
   (println (as int (abs (as int32 -7))))
   (println (>= (as int (getpid)) 1))
-  (let [f (fopen "/dev/null" "r")]
-    (println (as int (fclose f))))
+  ;; Portable libc only: a native Windows binary has no "/dev/null" to fopen.
+  (println (as int (strcmp "turmeric" "turmeric")))
+  (let [p (malloc 16)]
+    (free p))
+  (println "freed")
   0)
