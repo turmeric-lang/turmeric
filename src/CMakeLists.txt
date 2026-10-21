@@ -12,9 +12,12 @@ add_compile_definitions(_DEFAULT_SOURCE)
 # Winsock. tur_core is an OBJECT library, so its Winsock dependency does not
 # propagate to the many executables that embed its objects (tur, the tur_*
 # test harnesses). A directory-scoped link_libraries applies to every target
-# defined below, which is the simplest way to cover them all.
+# defined below, which is the simplest way to cover them all.  shlwapi rides
+# along for the interpreter's fs/glob native (interpreter_natives.c), which
+# matches with PathMatchSpecA where POSIX has fnmatch -- the same library the
+# driver already adds to an emitted program's Windows link line.
 if(WIN32)
-    link_libraries(ws2_32)
+    link_libraries(ws2_32 shlwapi)
 endif()
 
 # ---------------------------------------------------------------------------
@@ -701,9 +704,10 @@ target_link_libraries(libturi INTERFACE ${CMAKE_DL_LIBS})
 # overrides auto-registered for every interpreter env), whose math shims
 # reference sqrt/floor -- propagate libm to anyone linking libturi.
 target_link_libraries(libturi INTERFACE m)
-# WIN3: propagate ws2_32 to anyone linking libturi (io_iocp.c uses Winsock).
+# WIN3: propagate ws2_32 to anyone linking libturi (io_iocp.c uses Winsock),
+# and shlwapi for the fs/glob native's PathMatchSpecA.
 if(WIN32)
-    target_link_libraries(libturi INTERFACE ws2_32)
+    target_link_libraries(libturi INTERFACE ws2_32 shlwapi)
 endif()
 
 # I4: libturi carries the JIT engine when the build has one.  PUBLIC on both
