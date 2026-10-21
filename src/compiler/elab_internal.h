@@ -1411,6 +1411,13 @@ typedef struct RefineCallSite {
      * one of these.  NULL / 0 when nothing is frozen. */
     const char   **frozen_names;
     uint32_t       n_frozen;
+    /* refine-top-level-def-not-a-fact: the global bindings the ARGUMENTS name,
+     * resolved through the scope at crossing-creation time -- so a local that
+     * shadows the global's name is never mistaken for it.  Their
+     * `refine_def_init` is read when the crossing is decided, since a `def`
+     * the call precedes is elaborated after it. */
+    const Binding **global_args;
+    uint32_t        n_global_args;
     Span           loc;
 } RefineCallSite;
 

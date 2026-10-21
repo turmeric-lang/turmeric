@@ -1205,6 +1205,14 @@ anyway.
   any body form keeps its guards -- not only one in the form the function
   returns.
 
+  An immutable top-level `def` contributes too: when an argument names a
+  global `(def n 5)` -- or `(def prog (Push 1 (Halt)))` -- the crossing assumes
+  `n = 5`, as a `let` would. Only a non-`^mut` global (which cannot be `set!`)
+  whose value is an int or bool literal, or a constructor applied to such
+  values, and only where the name resolves to the global: a parameter or local
+  of the same name shadows it and gets no fact. A `def` whose value is computed
+  -- a call, another name -- is still a free variable.
+
   Four things are deliberately left out, and all four cost a diagnostic rather
   than soundness -- the callee's own entry check always remains:
   a caller whose body **assigns** anywhere (a condition naming a reassigned
