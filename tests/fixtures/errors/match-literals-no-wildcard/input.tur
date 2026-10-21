@@ -1,0 +1,7 @@
+;; control-forms-gaps item 5: a `match` on literals with no arm for the value.
+;; Compiled, the unmatched case returned whatever the uninitialised result temp
+;; held (a segfault for a cstr); interpreted, "match: no arm matched" at run
+;; time.  A missing constructor of a sum was always a compile error; a literal
+;; match now needs a wildcard (or `true` and `false`) for the same reason.
+(defn g [n : int] : cstr (match n 0 "zero" 1 "one"))
+(defn main [] : int (println (g 5)) 0)

@@ -1,4 +1,11 @@
-# Control forms: `quote` does not quote lists, `defer` scopes differ between engines, `return` and literal `match` are unchecked
+# Control forms: `quote` does not quote lists, and `defer` scopes and capture are unsettled
+
+**Narrowed 2026-10-21: items 4-7 are fixed** (`return` is checked against the
+function's type, a literal `match` needs a wildcard, the interpreter checks
+`^tailcall`, vector destructuring in `let` is refused on a non-session value --
+see "Fixed" at the end). **Open:** 1 (`quote` of a list), 2 (`defer` scopes
+differ between engines) and 3 (`defer` captures at registration). Each wants a
+decision, and 2 needs per-block defer scopes in both interpreter evaluators.
 
 **Severity: medium.** Found 2026-10-19 checking the examples for the control
 forms' API reference (`stdlib/forms/control.tur`). Every repro was run on both
@@ -83,3 +90,28 @@ reject the pattern.
    fall-through a defined error.
 6. Run the TUR-E0716 check in the interpreter's elaboration too.
 7. Destructure vector elements, or reject `[a b]` on a vector.
+
+## Fixed 2026-10-21 (items 4-7)
+
+- **4. `return`.** `defn` elaboration runs the body's tail check
+  (`return_position_conflict`) on every `return` value too, with an int literal
+  returned from a `float` function widened first. `(defn f [] : int (return "a")
+  1)` is TUR-E0709 (`errors/return-value-type-mismatch`). A `return` under a node
+  kind the collector does not walk (`collect_return_values`) is unchecked, as
+  before.
+- **5. Literal `match`.** A match on int, float or string literals needs an
+  unguarded `_` or variable arm, and a bool match needs both `true` and `false`;
+  otherwise `match: non-exhaustive patterns -- a match on literal values needs a
+  wildcard arm` (`errors/match-literals-no-wildcard`). `^non-exhaustive` opts out.
+  A compile error rather than a run-time panic, to match a sum's missing
+  constructors.
+- **6. `^tailcall` in the interpreter.** `tc_interp_walk` (`src/turi/eval.c`)
+  mirrors the emitter's tail grammar with the same reason text (shared in
+  `tailcall_reasons.h`), and runs after elaboration. Four `errors/tailcall-*`
+  fixtures lost their `requires.compiled`. The emitter's reasons that need its
+  analyses (`tailcall-owned-local-live`, `-fn-param-swapped`, `-indirect`,
+  `-let-release-live`, `-mutual-not-fusable`) stay compiled-only.
+- **7. `let` vector destructuring.** Refused unless the initialiser is a session
+  pair (`errors/let-vector-destructure-non-session`); it used to bind the first
+  name to the whole value and the rest to `int`. Destructuring a vector's
+  elements is not implemented.

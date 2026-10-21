@@ -989,6 +989,21 @@ Expr *elab_let(Elab *e, const Form *call) {
             Form *init_form_v = bindings_form->as.list.items[i++];
             Expr *init_v = elab_form(e, init_form_v);
             if (!init_v) { rc = -1; break; }
+            /* control-forms-gaps item 7: this form destructures a SESSION pair
+             * (a channel endpoint pair, a recv result, a make-protocol role set).
+             * For anything else the loop below gave the first name the whole
+             * value's type and the rest `int`, so `(let [[a b] (vec-of 7 8)] a)`
+             * bound `a` to the vector.  Say so rather than mis-bind. */
+            if (init_v->type.kind != TY_SESSION_PAIR &&
+                init_v->type.kind != TY_SESSION_RECV_PAIR &&
+                init_v->type.kind != TY_UNKNOWN) {
+                diag_emit(DIAG_ERROR, vec_span,
+                          "let vector destructuring `[a b]` is defined only for "
+                          "session pairs (make-session, recv, make-protocol); it "
+                          "does not take a vector or list apart -- read elements "
+                          "with (vec-get v 0), (vec-get v 1)");
+                rc = -1; break;
+            }
             /* Create one binding per name in the pattern vector with placeholder types.
              * The actual types will be verified by codegen (SS2); for SS0b the
              * type-level operations (send/recv/offer/choose-*) already emit their

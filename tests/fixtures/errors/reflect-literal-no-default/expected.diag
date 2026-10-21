@@ -1,2 +1,2 @@
-TUR-E0384
-coverage gate
+non-exhaustive patterns
+a match on literal values needs a wildcard arm

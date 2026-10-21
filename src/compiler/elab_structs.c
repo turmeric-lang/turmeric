@@ -4311,6 +4311,41 @@ Expr *elab_match(Elab *e, const Form *call) {
             if (lit_result.kind == TY_UNKNOWN) lit_result = TYPE_NIL;
             for (uint32_t ai = 0; ai < n_arms; ai++)
                 elab_retype_nullary_ctor_arm(lit_arms[ai].body, lit_result);
+            /* control-forms-gaps item 5: a match on LITERALS has no constructor list to
+             * run out of, so nothing said an unmatched value is an error: compiled, the
+             * fall-through returned whatever the uninitialised result temp held (a
+             * segfault for a cstr); interpreted, "match: no arm matched" at run time.
+             * Missing constructors of an ADT are a compile error; this is the same
+             * rule for literals -- some unguarded `_` / variable arm must catch the
+             * rest, or a bool match must name both `true` and `false`.  `^non-exhaustive`
+             * opts out, as it does for a sum. */
+            if (!nonexhaustive_optout) {
+                bool any_lit = false, any_bool = false, total = false;
+                bool has_true = false, has_false = false;
+                for (uint32_t ai = 0; ai < n_arms; ai++) {
+                    const MatchPattern *pt = &lit_arms[ai].pattern;
+                    bool unguarded = (lit_arms[ai].guard == NULL);
+                    if (pt->is_literal) {
+                        if (pt->lit_kind == F_BOOL) {
+                            any_bool = true;
+                            if (unguarded) { if (pt->lit_bool) has_true = true; else has_false = true; }
+                        } else if (pt->lit_kind == F_INT || pt->lit_kind == F_FLOAT ||
+                                   pt->lit_kind == F_STR) {
+                            any_lit = true;
+                        }
+                    } else if ((pt->is_wildcard || pt->is_var) && unguarded) {
+                        total = true;
+                    }
+                }
+                if (!total && (any_lit || (any_bool && !(has_true && has_false)))) {
+                    diag_emit(DIAG_ERROR, call->span,
+                              "match: non-exhaustive patterns -- a match on literal values "
+                              "needs a wildcard arm (`_ ...`) for every other value%s",
+                              any_bool && !any_lit ? " (or both `true` and `false`)" : "");
+                    return NULL;
+                }
+            }
+
             Expr *out = expr_new(e->arena, EX_MATCH, lit_result, call->span);
             out->as.match_.scrutinee = scrutinee;
             out->as.match_.arms      = lit_arms;

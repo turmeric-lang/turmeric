@@ -81,6 +81,7 @@
 #include "runtime/hamt.h"   /* tur_hamt_hash_str -- struct-key content hash */
 #include "runtime/tur_string.h"  /* tur_string_cstr/release -- Show returns owned String */
 #include "diag.h"
+#include "tailcall_reasons.h"
 #include "elab.h"
 #include "expr.h"
 #include "forms.h"
@@ -16841,6 +16842,144 @@ static bool elab_session_replay(TuriEnv *env, Arena *arena, Form **forms,
     return true;
 }
 
+/* control-forms-gaps item 6: `^tailcall` is checked by the compiled emitter's
+ * tail-position walker (TUR-E0716), which needs a codegen context, so the
+ * interpreter -- which shares the elaborator but not the emitter -- accepted
+ * `(+ 1 (^tailcall (f (- n 1))))` and ran it, 3 for `(f 3)`.  This is the
+ * syntactic half of that check, mirroring emit_fns.c's tc_check grammar and
+ * sharing its reason text (tailcall_reasons.h): `why` is NULL where an
+ * annotated call would be in tail position, else the sentence for the context
+ * that takes it out.  The emitter's further reasons -- a call shape or function
+ * that cannot form a backedge (an owned local still live, a `fn` parameter
+ * passed on changed, a mutual group that cannot fuse) -- need its analyses and
+ * stay compiled-only.  A node kind not listed here is not entered, so a
+ * `^tailcall` buried in one goes unchecked rather than mis-reported, which is
+ * also how the emitter's own walker treats them. */
+typedef struct { bool tail_void; bool bad; } TcInterp;
+
+static void tc_interp_walk(TcInterp *c, const Expr *e, const char *why, int depth);
+
+static void tc_interp_fn(TcInterp *outer, const FnDef *fn, int depth) {
+    if (!fn || !fn->body) return;
+    TcInterp c = { fn->return_type.kind == TY_NIL, false };
+    tc_interp_walk(&c, fn->body, NULL, depth + 1);
+    if (c.bad) outer->bad = true;
+}
+
+static void tc_interp_report(TcInterp *c, const Expr *e, const char *why) {
+    diag_emit_with_code(DIAG_ERROR, e->span, TUR_E0716_TAILCALL_NOT_TAIL,
+                        "`^tailcall` call is not in tail position: %s", why);
+    c->bad = true;
+}
+
+static void tc_interp_walk(TcInterp *c, const Expr *e, const char *why, int depth) {
+    if (!e || depth > 200) return;
+    switch (e->kind) {
+        case EX_CALL:
+            if (e->as.call_.wants_tailcall && why) tc_interp_report(c, e, why);
+            for (uint32_t i = 0; i < e->as.call_.n_args; i++)
+                tc_interp_walk(c, e->as.call_.args[i], TC_ARG, depth + 1);
+            tc_interp_walk(c, e->as.call_.fn_expr, TC_ARG, depth + 1);
+            return;
+        case EX_DYN_CALL:
+            if (e->as.dyn_call_.wants_tailcall && why) tc_interp_report(c, e, why);
+            tc_interp_walk(c, e->as.dyn_call_.fn, TC_ARG, depth + 1);
+            for (uint32_t i = 0; i < e->as.dyn_call_.n_args; i++)
+                tc_interp_walk(c, e->as.dyn_call_.args[i], TC_ARG, depth + 1);
+            return;
+        case EX_DYN_OP:
+            for (uint32_t i = 0; i < e->as.dyn_op_.n_args; i++)
+                tc_interp_walk(c, e->as.dyn_op_.args[i], TC_ARG, depth + 1);
+            return;
+        case EX_LET:
+        case EX_LETREC:
+            for (uint32_t i = 0; i < e->as.let_.n; i++)
+                tc_interp_walk(c, e->as.let_.bindings[i].init, TC_LET_INIT, depth + 1);
+            tc_interp_walk(c, e->as.let_.body, why, depth + 1);
+            return;
+        case EX_IF:
+            tc_interp_walk(c, e->as.if_.cond, TC_IF_COND, depth + 1);
+            if (e->as.if_.else_or_null) {
+                tc_interp_walk(c, e->as.if_.then_, why, depth + 1);
+                tc_interp_walk(c, e->as.if_.else_or_null, why, depth + 1);
+            } else {
+                tc_interp_walk(c, e->as.if_.then_,
+                               why ? why : (c->tail_void ? NULL : TC_IF_ONE_ARM),
+                               depth + 1);
+            }
+            return;
+        case EX_DO: {
+            /* The value item, as emit_fns.c's tco_drop_glue_tail_idx sees it:
+             * the last item, or the last non-defer item when every defer after
+             * it is the elaborator's injected drop glue.  A `defer` the program
+             * wrote runs AFTER a call in its block, so nothing in such a block is
+             * in tail position. */
+            uint32_t n = e->as.do_.n;
+            int last_non_defer = -1;
+            for (int i = (int)n - 1; i >= 0; i--)
+                if (e->as.do_.items[i]->kind != EX_DEFER) { last_non_defer = i; break; }
+            bool user_defer = false;
+            for (uint32_t i = 0; i < n; i++) {
+                const Expr *it = e->as.do_.items[i];
+                if (it->kind != EX_DEFER) continue;
+                if (!((int)i > last_non_defer && it->as.defer_.is_drop_glue))
+                    user_defer = true;
+            }
+            int value_idx = last_non_defer >= 0 ? last_non_defer : (int)n - 1;
+            for (uint32_t i = 0; i < n; i++) {
+                const char *w = why ? why
+                              : user_defer ? TC_DEFER_USER
+                              : ((int)i == value_idx ? NULL : TC_NOT_LAST);
+                tc_interp_walk(c, e->as.do_.items[i], w, depth + 1);
+            }
+            return;
+        }
+        case EX_MATCH:
+            tc_interp_walk(c, e->as.match_.scrutinee, TC_MATCH_SCR, depth + 1);
+            for (uint32_t i = 0; i < e->as.match_.n_arms; i++) {
+                tc_interp_walk(c, e->as.match_.arms[i].guard, TC_GUARD, depth + 1);
+                tc_interp_walk(c, e->as.match_.arms[i].body, why, depth + 1);
+            }
+            return;
+        case EX_BUILTIN: {
+            bool sc = e->as.builtin.spec &&
+                      (e->as.builtin.spec->shape == BS_AND_SC ||
+                       e->as.builtin.spec->shape == BS_OR_SC) &&
+                      e->as.builtin.n >= 2;
+            for (uint32_t i = 0; i < e->as.builtin.n; i++) {
+                bool last = sc && i + 1 == e->as.builtin.n;
+                tc_interp_walk(c, e->as.builtin.args[i],
+                               last ? why : (sc ? TC_SC_TEST : TC_ARG), depth + 1);
+            }
+            return;
+        }
+        case EX_ASCRIBE:
+            tc_interp_walk(c, e->as.ascribe_.inner, why ? why : TC_ASCRIBE, depth + 1);
+            return;
+        case EX_RETURN:
+            tc_interp_walk(c, e->as.return_.value, why ? why : TC_RETURN, depth + 1);
+            return;
+        case EX_WHILE:
+            tc_interp_walk(c, e->as.while_.cond, TC_WHILE, depth + 1);
+            tc_interp_walk(c, e->as.while_.body, TC_WHILE, depth + 1);
+            return;
+        case EX_FN_DEF:  tc_interp_fn(c, e->as.fn_def_.fn, depth); return;
+        case EX_CLOSURE:
+            if (e->as.closure_.closure) tc_interp_fn(c, e->as.closure_.closure->fn, depth);
+            return;
+        default:
+            return;
+    }
+}
+
+static bool tailcall_check_syntactic(const Expr *program) {
+    if (!program || program->kind != EX_PROGRAM) return true;
+    TcInterp c = { false, false };
+    for (uint32_t i = 0; i < program->as.program.n; i++)
+        tc_interp_walk(&c, program->as.program.items[i], TC_NOT_LAST, 0);
+    return !c.bad;
+}
+
 static void turi_promote_escaping(TuriEnv *env, TuriValue *result) {
     if (!env || !env->scratch_promotion) return;
     /* S-5: the handle-provenance registry names scratch addresses (cons
@@ -17360,7 +17499,7 @@ static TuriValue turi_eval_impl(TuriEnv *env, const char *src, const char *path,
      * PASS_BORROW_CHECK; `errors/effect-handler-borrow` printed 42 and exited
      * 0 under --interpret. */
     if (eff_rc != 0 || !borrow_check_effect_handler_captures(prog) ||
-        !lifetime_check_program(prog)) {
+        !lifetime_check_program(prog) || !tailcall_check_syntactic(prog)) {
         env->n_acc_forms = acc_committed;   /* TR2: uncommit this turn's forms */
         if (env->elab_session) {            /* see the discard note above */
             elab_session_free(env->elab_session);

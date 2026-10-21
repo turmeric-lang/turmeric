@@ -8937,6 +8937,64 @@ static bool form_vec_has_literal_item(const Form *v) {
     return false;
 }
 
+/* control-forms-gaps item 4: the values a function's `return` forms hand back.
+ * The body's TAIL is checked against the declared result below; a `return` in
+ * the middle of the body was not, so `(defn f [] : int (return "a") 1)` compiled
+ * and returned the string's address as an int.  Closures and nested fn defs are
+ * not entered: their `return` belongs to them.  A node kind the walk does not
+ * list only leaves a `return` under it unchecked (the old behaviour). */
+static void collect_return_values(Expr *e, Expr **out, uint32_t *n, uint32_t cap,
+                                  int depth) {
+    if (!e || depth > 64) return;
+    switch (e->kind) {
+        case EX_RETURN:
+            if (e->as.return_.value) {
+                if (*n < cap) out[(*n)++] = e->as.return_.value;
+                collect_return_values(e->as.return_.value, out, n, cap, depth + 1);
+            }
+            return;
+        case EX_CALL:
+            collect_return_values(e->as.call_.fn_expr, out, n, cap, depth + 1);
+            for (uint32_t i = 0; i < e->as.call_.n_args; i++)
+                collect_return_values(e->as.call_.args[i], out, n, cap, depth + 1);
+            return;
+        case EX_LET:
+        case EX_LETREC:
+            for (uint32_t i = 0; i < e->as.let_.n; i++)
+                collect_return_values(e->as.let_.bindings[i].init, out, n, cap, depth + 1);
+            collect_return_values(e->as.let_.body, out, n, cap, depth + 1);
+            return;
+        case EX_IF:
+            collect_return_values(e->as.if_.cond, out, n, cap, depth + 1);
+            collect_return_values(e->as.if_.then_, out, n, cap, depth + 1);
+            collect_return_values(e->as.if_.else_or_null, out, n, cap, depth + 1);
+            return;
+        case EX_DO:
+            for (uint32_t i = 0; i < e->as.do_.n; i++)
+                collect_return_values(e->as.do_.items[i], out, n, cap, depth + 1);
+            return;
+        case EX_WHILE:
+            collect_return_values(e->as.while_.cond, out, n, cap, depth + 1);
+            collect_return_values(e->as.while_.body, out, n, cap, depth + 1);
+            return;
+        case EX_BUILTIN:
+            for (uint32_t i = 0; i < e->as.builtin.n; i++)
+                collect_return_values(e->as.builtin.args[i], out, n, cap, depth + 1);
+            return;
+        case EX_MATCH:
+            collect_return_values(e->as.match_.scrutinee, out, n, cap, depth + 1);
+            for (uint32_t i = 0; i < e->as.match_.n_arms; i++) {
+                collect_return_values(e->as.match_.arms[i].guard, out, n, cap, depth + 1);
+                collect_return_values(e->as.match_.arms[i].body, out, n, cap, depth + 1);
+            }
+            return;
+        case EX_ASCRIBE: collect_return_values(e->as.ascribe_.inner, out, n, cap, depth + 1); return;
+        case EX_CAST:    collect_return_values(e->as.cast_.expr, out, n, cap, depth + 1); return;
+        case EX_DEFER:   collect_return_values(e->as.defer_.body, out, n, cap, depth + 1); return;
+        default: return;
+    }
+}
+
 Expr *elab_defn(Elab *e, const Form *call) {
     /* forward-call-to-aggregate-result-types-as-carrier: a module type
      * elaborated since the last defn may be what a pending forward decl's
@@ -12082,6 +12140,23 @@ Expr *elab_defn(Elab *e, const Form *call) {
                                      body->type, fn_declared_unsafe))
                 rc = RET_CONFLICT_RIGID_TYVAR;
         }
+        /* ...and the same check for every `return` in the body, in the same
+         * committed position.  An int literal returned from a float function is
+         * widened first, as the tail's is. */
+        Expr *conflict_src = body;
+        if (rc == RET_CONFLICT_NONE && !return_unannotated) {
+            Expr *rets[64];
+            uint32_t nr = 0;
+            collect_return_values(body, rets, &nr, 64, 0);
+            for (uint32_t ri = 0; ri < nr; ri++) {
+                Expr *rv = rets[ri];
+                if (rv->type.kind == TY_NEVER || rv->type.kind == TY_UNKNOWN) continue;
+                rc_widen_int_literal_to_float_return(return_kind, rv);
+                ReturnConflict rrc = return_position_conflict(
+                    return_adt_def, return_kind, rv->type, ret_cls, false);
+                if (rrc != RET_CONFLICT_NONE) { rc = rrc; conflict_src = rv; break; }
+            }
+        }
         if (rc != RET_CONFLICT_NONE) {
             Buf wb; buf_init(&wb);
             if (!return_adt_def && return_kind == TY_APP && return_app_type)
@@ -12093,18 +12168,18 @@ Expr *elab_defn(Elab *e, const Form *call) {
                              : (wb.data && wb.data[0]) ? wb.data
                              : typekind_to_string(return_kind);
             Buf gb; buf_init(&gb);
-            type_print(&gb, body->type);
+            type_print(&gb, conflict_src->type);
             buf_putc(&gb, '\0');
             switch (rc) {
                 case RET_CONFLICT_NOMINAL:
-                    diag_emit_with_code(DIAG_ERROR, body->span,
+                    diag_emit_with_code(DIAG_ERROR, conflict_src->span,
                         TUR_E0001_TYPE_MISMATCH,
                         "function '%s' declares return type '%s' but its body "
                         "returns %s",
                         name_f->as.sym->name, want, gb.data);
                     break;
                 case RET_CONFLICT_REGISTER_CLASS:
-                    diag_emit_with_code(DIAG_ERROR, body->span,
+                    diag_emit_with_code(DIAG_ERROR, conflict_src->span,
                         TUR_E0707_RETURN_REGISTER_CLASS_MISMATCH,
                         "function '%s' declares return type '%s' but its body "
                         "returns %s -- a float and a non-float live in different "
@@ -12113,7 +12188,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
                         name_f->as.sym->name, want, gb.data);
                     break;
                 case RET_CONFLICT_POINTER_SCALAR:
-                    diag_emit_with_code(DIAG_ERROR, body->span,
+                    diag_emit_with_code(DIAG_ERROR, conflict_src->span,
                         TUR_E0708_RETURN_POINTER_SCALAR_MISMATCH,
                         "function '%s' declares return type 'cstr' but its body "
                         "returns %s -- a bare integer is never a valid string "
@@ -12122,7 +12197,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
                         name_f->as.sym->name, gb.data);
                     break;
                 case RET_CONFLICT_TYPE_REVERSE:
-                    diag_emit_with_code(DIAG_ERROR, body->span,
+                    diag_emit_with_code(DIAG_ERROR, conflict_src->span,
                         TUR_E0709_RETURN_TYPE_MISMATCH,
                         "function '%s' declares return type '%s' but its body "
                         "returns %s -- a string pointer is never a valid integer, "
@@ -12131,7 +12206,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
                         name_f->as.sym->name, want, gb.data);
                     break;
                 case RET_CONFLICT_BOOL_INTEGER:
-                    diag_emit_with_code(DIAG_ERROR, body->span,
+                    diag_emit_with_code(DIAG_ERROR, conflict_src->span,
                         TUR_E0709_RETURN_TYPE_MISMATCH,
                         "function '%s' declares return type '%s' but its body "
                         "returns %s -- bool and the integer family are distinct "
@@ -12141,7 +12216,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
                         name_f->as.sym->name, want, gb.data);
                     break;
                 case RET_CONFLICT_CARRIER_AGGREGATE:
-                    diag_emit_with_code(DIAG_ERROR, body->span,
+                    diag_emit_with_code(DIAG_ERROR, conflict_src->span,
                         TUR_E0709_RETURN_TYPE_MISMATCH,
                         "function '%s' declares return type '%s' but its body "
                         "returns %s -- an aggregate is a real C type (a struct, or "
@@ -12157,7 +12232,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
                      * missing close paren that swallowed the real tail.  The
                      * second is what made this hole expensive -- see TUR-E0713,
                      * the targeted diagnostic for the definition-in-tail case. */
-                    diag_emit_with_code(DIAG_ERROR, body->span,
+                    diag_emit_with_code(DIAG_ERROR, conflict_src->span,
                         TUR_E0709_RETURN_TYPE_MISMATCH,
                         "function '%s' declares return type '%s' but its body "
                         "produces no value (nil) -- a tail that is a void call "
@@ -12168,7 +12243,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
                         name_f->as.sym->name, want);
                     break;
                 case RET_CONFLICT_RIGID_TYVAR:
-                    diag_emit_with_code(DIAG_ERROR, body->span,
+                    diag_emit_with_code(DIAG_ERROR, conflict_src->span,
                         TUR_E0709_RETURN_TYPE_MISMATCH,
                         "function '%s' declares return type '%s' but its body "
                         "returns %s -- a declared type variable stands for "
