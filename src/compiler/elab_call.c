@@ -1360,11 +1360,16 @@ bool handle_targets_conflict(const Type *a, const Type *b) {
         return !type_eq(*a, *b);
     }
     if (a->kind == TY_RC || a->kind == TY_WEAK) {
-        /* type_eq compares the target KIND only.  Two defs that are not the
-         * same object and do not share a name are two different types; a
-         * def re-registered under its own name is not a conflict. */
+        /* type_eq compares the target KIND only, and the kind check above
+         * not even that.  Two defs that are not the same object and do not
+         * share a name are two different types; a def re-registered under
+         * its own name is not a conflict. */
         const AdtDef *da = a->as.rc.adt_def, *db = b->as.rc.adt_def;
-        if (a->as.rc.inner == TY_TYVAR || b->as.rc.inner == TY_TYVAR) return false;
+        /* A type-variable or unannotated (`rc<?>`) target matches anything. */
+        if (a->as.rc.inner == TY_TYVAR || b->as.rc.inner == TY_TYVAR ||
+            a->as.rc.inner == TY_UNKNOWN || b->as.rc.inner == TY_UNKNOWN)
+            return false;
+        if (a->as.rc.inner != b->as.rc.inner) return true;   /* rc<int> / rc<float> */
         if (!da || !db || da == db) return false;
         return !(da->name && db->name && strcmp(da->name, db->name) == 0);
     }

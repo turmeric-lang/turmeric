@@ -1,0 +1,7 @@
+;; typed-ptr-pointee-not-checked-at-calls: an rc<float> argument for an
+;; rc<int> parameter matched by the outer kind alone.
+(defn takes [^borrow r : rc<int>] : int 1)
+(defn main [] : int
+  (let [r (rc/of 2.5)]
+    (println (takes r)))
+  0)

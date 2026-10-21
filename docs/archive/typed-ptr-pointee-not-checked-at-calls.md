@@ -79,8 +79,11 @@ re-checked the full type only for a struct, ADT, session or role parameter.
   untyped `ptr<void>` on either side, or a pointee that is still open
   (`ptr<A>` in a generic -- `ptr_pointee_is_open`), never does, so raw
   `raw-malloc` handles and generic pointer helpers are unaffected. For
-  `rc` / `weak`, whose type_eq compares only the target KIND, two different
-  ADT defs (not merely two copies of one name) conflict. The diagnostic
+  `rc` / `weak`, whose type_eq compares only the target KIND (and the call's
+  kind check not even that), two different target kinds (`rc<int>` /
+  `rc<float>`) or two different ADT defs (not merely two copies of one name)
+  conflict; a type-variable or unannotated (`rc`, read `rc<?>`) target
+  matches anything. The diagnostic
   prints the declared type: `expected ptr<Foo>, got ptr<Bar>`, and
   `rc<S>` / `rc<U>` instead of `rc<<adt>>` twice (`src/compiler/types.c`
   names an rc/weak's ADT now).
@@ -99,6 +102,6 @@ only movement was three `errors/hrt-*` diagnostics, whose rank-2 parameter
 has the pointer kind and now prints as `(forall [a] (fn [a] : a))` rather
 than `ptr<void>`.
 
-Pinned by `errors/typed-ptr-pointee-mismatch`, `-forward`, `-return` and
-`errors/rc-target-mismatch`. CLAUDE.md no longer steers handles away from
+Pinned by `errors/typed-ptr-pointee-mismatch`, `-forward`, `-return`,
+`errors/rc-target-mismatch` and `errors/rc-target-kind-mismatch`. CLAUDE.md no longer steers handles away from
 `ptr<TheStruct>` on this report's account.
