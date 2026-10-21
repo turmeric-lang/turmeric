@@ -14,10 +14,9 @@
 ;;; - `weak<T>` observes an `rc<T>` without owning it -- the way to break an
 ;;;   `rc` cycle.
 ;;;
-;;; For `weak<T>`, prefer tur/weak (`rc/downgrade`, `weak/upgrade`,
-;;; `weak/alive?`, `weak/drop`): the builtin `upgrade`, `weak?` and `ref?`
-;;; are unfinished -- see docs/reported/ref-weak-builtins-stubbed.md.  When to
-;;; use which: ownership-guide.
+;;; For `weak<T>`, use tur/weak (`rc/downgrade`, `weak/upgrade`,
+;;; `weak/alive?`, `weak/drop`); the builtin `upgrade` was retired for
+;;; `weak/upgrade`.  When to use which: ownership-guide.
 ;; Reference only: tools/gendocs.py reads the ;;@ lines, the compiler skips them.
 
 ;;; ref -- allocate a single-owner heap cell holding a value.
@@ -64,25 +63,28 @@
 ;;;   (let [r (ref 7)] (let [v (deref r)] (drop! r) v))  ; => 7
 ;;@builtin (drop! [r : ref<T>] : nil)
 
-;;; ref? -- unfinished: meant to ask whether a value is a ref<T>.
+;;; ref? -- is a value a ref<T>?
 ;;;
-;;; Today it tests the value for being non-null, whatever its type, so
-;;; `(ref? 7)` is `true`.  A value's type is known at compile time; there is
-;;; nothing to ask at run time.
+;;; Answered from the argument's static type, on both engines: `true` for a
+;;; `ref<T>` (an `lref<T>` is not one), `false` for anything else.  The
+;;; argument is evaluated, and a ref passed to it is read, not moved.
 ;;;
 ;;; Parameters:
 ;;;   x -- any value
 ;;;
 ;;; Returns:
-;;;   A `bool`; see above.
+;;;   `true` iff x is a `ref<T>`.
+;;;
+;;; Example:
+;;;   (let [r (ref 7)] (ref? r))  ; => true
+;;;   (ref? 7)                    ; => false
 ;;@builtin (ref? [x : T] : bool)
 
 ;;; lref/new -- allocate a linear heap cell holding a value.
 ;;;
 ;;; The `lref<T>` must be consumed exactly once -- by `deref`, by moving it
-;;; into a struct field or a call -- or the program does not compile.  Its
-;;; cell is not freed when `deref` consumes it today (8 bytes per
-;;; `lref/new`); see docs/reported/ref-weak-builtins-stubbed.md.
+;;; into a struct field or a call -- or the program does not compile.  A
+;;; `deref` of an lref it owns frees the cell once the value is read.
 ;;;
 ;;; Parameters:
 ;;;   x -- the initial value
@@ -153,8 +155,7 @@
 ;;; rc->ptr -- borrow a raw pointer to an rc's value.
 ;;;
 ;;; The pointer is valid while the rc lives.  Reading through it needs the
-;;; unsafe builtins (tur/forms/unsafe).  The interpreter returns the value
-;;; itself rather than its address today.
+;;; unsafe builtins (tur/forms/unsafe).
 ;;;
 ;;; Parameters:
 ;;;   r -- the rc
@@ -210,27 +211,32 @@
 ;;;   A `weak<T>` on the same cell.
 ;;@builtin (weak [r : rc<T>] : weak<T>)
 
-;;; upgrade -- unfinished: try to get an owning rc back from a weak.
+;;; upgrade -- retired: use `weak/upgrade` (tur/weak).
 ;;;
-;;; Returns a `ptr<void>` -- null once the value is gone -- that no `Option`
-;;; function accepts, and the strong handle it takes on success cannot be
-;;; released.  Use `weak/upgrade` (tur/weak), which returns an
-;;; `(Option rc<T>)`.
+;;; It returned the option as a `ptr<void>` that no `Option` function
+;;; accepts, and the strong handle it took on success could not be released.
+;;; It is now a compile error naming its replacement: `weak/upgrade` returns
+;;; an `(Option rc<T>)`, whose `some` holds a strong handle the caller
+;;; releases with `rc/drop` (take it out with `weak/unwrap`).
 ;;;
 ;;; Parameters:
 ;;;   w -- the weak to upgrade
 ;;;
 ;;; Returns:
-;;;   A `ptr<void>`; see above.
-;;@builtin (upgrade [w : weak<T>] : ptr<void>)
+;;;   Nothing: a call does not compile.
+;;@builtin (upgrade [w : weak<T>] : nil)
 
-;;; weak? -- unfinished: meant to ask whether a value is a weak<T>.
+;;; weak? -- is a value a weak<T>?
 ;;;
-;;; Always `true` today, whatever the argument.
+;;; Answered from the argument's static type, on both engines, like `ref?`.
 ;;;
 ;;; Parameters:
 ;;;   x -- any value
 ;;;
 ;;; Returns:
-;;;   `true`.
+;;;   `true` iff x is a `weak<T>`.
+;;;
+;;; Example:
+;;;   (let [r (rc/of 1) w (weak r)] (weak? w))  ; => true
+;;;   (weak? 3)                                 ; => false
 ;;@builtin (weak? [x : T] : bool)

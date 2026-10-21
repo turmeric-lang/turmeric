@@ -1,15 +1,11 @@
 ;; Verify that upgrading a weak ref after the rc is dropped returns none.
 
-(defn weak-some? [o : ptr<void>] : bool
-  ```c
-  struct { int tag; int64_t value; } *opt = (void*)o;
-  return opt != NULL && opt->tag == 1;
-  ```)
+(load "stdlib/weak.tur")
 
 (defn main [] : int
   (let [r (rc/of 99)]
     (let [w (weak r)]
       (rc/drop r)
-      (let [u (upgrade w)]
-        (println (weak-some? u)))))   ; expected: false -- rc was dropped
+      (let [u (weak/upgrade w)]
+        (println (some? u)))))   ; expected: false -- rc was dropped
   0)

@@ -1,11 +1,7 @@
 ; gc-mixed: mix of live and dead objects -- GC collects only zombies.
 ; x stays alive (strong_count=1), y becomes a zombie.
 ; After gc!, x's strong_count should still be 1, y's upgrade should return none.
-(defn lgc-some? [o : ptr<void>] : bool
-  ```c
-  struct { int tag; int64_t value; } *opt = (void*)o;
-  return opt != NULL && opt->tag == 1;
-  ```)
+(load "stdlib/weak.tur")
 
 (defn main [] : int
   (gc-enable!)
@@ -15,7 +11,7 @@
       (rc/drop y)
       (gc!)
       (println (rc/strong-count x))          ; expected: 1
-      (let [uy (upgrade wy)]
-        (println (if (lgc-some? uy) 1 0)))        ; expected: 0 -- y was collected
+      (let [uy (weak/upgrade wy)]
+        (println (if (some? uy) 1 0)))        ; expected: 0 -- y was collected
       (rc/drop x)
       0)))

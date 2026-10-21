@@ -972,7 +972,6 @@ typedef enum ExprKind {
     EX_RC_FROM_REF,    /* (rc/from-ref r) - move ref<T> into rc<T> */
     EX_REF_FROM_RC,    /* (ref/from-rc r) - extract unique ref<T> from rc<T> */
     EX_WEAK,           /* (weak r) - create weak<T> from rc<T> */
-    EX_WEAK_UPGRADE,   /* (upgrade w) - upgrade weak<T> to option<rc<T>> */
     EX_WEAK_PRED,      /* (weak? w) - check if w is weak<T> */
     EX_REF_PRED,       /* (ref? x) - check if x is ref<T> */
     /* Phase 12: Borrow traits */
@@ -1829,7 +1828,6 @@ struct Expr {
         struct { Expr *expr; }        rc_from_ref_; /* (rc/from-ref r) - ref to convert */
         struct { Expr *expr; }        ref_from_rc_; /* (ref/from-rc r) - rc to convert */
         struct { Expr *expr; }        weak_;      /* (weak r) - rc to create weak from */
-        struct { Expr *expr; }        weak_upgrade_; /* (upgrade w) - weak to upgrade */
         struct { Expr *expr; }        weak_pred_;   /* (weak? w) - expr to check */
         struct { Expr *expr; }        ref_pred_;    /* (ref? x) - expr to check */
         /* Phase 12: Borrow traits */

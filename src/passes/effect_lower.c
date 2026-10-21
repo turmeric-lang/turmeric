@@ -292,7 +292,6 @@ static Expr *lower_expr(Arena *a, SymbolTable *st, Expr *e, EffectEnv *effect_en
         case EX_RC_PTR:
         case EX_RC_COUNT:
         case EX_WEAK:
-        case EX_WEAK_UPGRADE:
         case EX_WEAK_PRED:
         case EX_REF_PRED:
         case EX_BORROW_IMMUT:
