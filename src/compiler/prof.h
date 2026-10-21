@@ -41,7 +41,7 @@ typedef enum ProfZone {
     PROF_TYPECLASS,     /* "typeclass"    class/instance processing, method
                          *                dispatch, instance resolution         */
     PROF_KIND,          /* "kind-check"   PASS_KIND_CHECK                       */
-    PROF_EFFECT_LOWER,  /* "effect-lower" PASS_EFFECT_LOWER                     */
+    PROF_EFFECT_ENV,    /* "effect-env"   PASS_EFFECT_ENV (was "effect-lower") */
     PROF_EFFECT_ROW,    /* "effect-row"   PASS_EFFECT_ROW_INFER                 */
     PROF_CPS,           /* "cps"          PASS_CPS                              */
     PROF_BORROW,        /* "borrow-check" PASS_BORROW_CHECK                     */

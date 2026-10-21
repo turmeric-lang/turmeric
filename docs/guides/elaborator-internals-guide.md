@@ -87,7 +87,7 @@ Three neighbouring areas have their own guides and are only summarized here:
 Elaboration is the first entry of `src/driver/pipeline.c:core_passes[]`:
 
 ```
-PASS_ELABORATE -> PASS_KIND_CHECK -> PASS_EFFECT_LOWER
+PASS_ELABORATE -> PASS_KIND_CHECK -> PASS_EFFECT_ENV
   -> PASS_EFFECT_ROW_INFER -> PASS_CPS -> PASS_BORROW_CHECK
 ```
 
@@ -462,7 +462,7 @@ with `expr_new(arena, kind, type, span)`, which zeroes the payload.
 | Structure | `EX_PROGRAM`, `EX_DEFMODULE` |
 
 Two kinds are never built by the elaborator. `EX_FN` is only copied by
-`cps.c` and `effect_lower.c` if one is already present. `EX_CPS_CONT_APP` is
+`cps.c` if one is already present. `EX_CPS_CONT_APP` is
 built by nothing; `emit_value` reports an internal error if it sees one, and
 it is the one kind the interpreter carves out. Both still have arms in most
 switches. `EX_DEFECT` means `defeffect`, not "defect".
@@ -871,7 +871,7 @@ src/` today finds:
 | The IR itself | `expr.h` (enum and payload), `expr.c` (`expr_print`) |
 | Elaborator walks | `elab_core.c` (`collect_free_vars`, which decides closure captures; the consumption walks `is_binding_consumed` and `is_field_consumed`) and the `switch (... ->kind)` walks in `elab_fns.c`, `elab_call.c`, `elab_typeclasses.c` (ownership masks, escape analysis) |
 | Shared operand enumeration | `src/passes/cps.c:cps_visit_children`. The CPS coloring and the effect checker fall back to it, so a kind with operands must be enumerated here or those walks will not see its children |
-| Core passes | `src/passes/cps.c`, `cps_ir.c`, `effect_check.c`, `effect_lower.c`, `borrow_check.c`, `rc_elision.c`, `srfi_prune.c` |
+| Core passes | `src/passes/cps.c`, `cps_ir.c`, `effect_check.c`, `borrow_check.c`, `rc_elision.c`, `srfi_prune.c` |
 | Emitter | `emit_expr.c` (`emit_value`), `emit_stmt.c`, `emit_module.c` (preamble feature scans), `emit_cps_ir.c` |
 | Interpreter | `src/turi/eval.c` |
 | Tooling | `src/compiler/span_audit.c` (`tur audit-spans`) |

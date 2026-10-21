@@ -848,6 +848,13 @@ add_test(
   COMMAND bash tests/check-running-tests-guide.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# Every docs/.../*.md path a source comment cites must exist: reports move to
+# docs/archive/ and the citations are left behind (29 dead on 2026-10-17).
+add_test(
+  NAME tur_src_doc_citations_lint
+  COMMAND bash tests/check-src-doc-citations.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
 # src/driver/driver.h and commands.h are sectioned by defining file; each
 # section may declare only what its file defines (main-c-split-plan).  The
 # section grouping in emit_internal.h drifted until most of its prototypes sat

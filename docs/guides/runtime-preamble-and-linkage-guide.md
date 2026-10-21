@@ -23,14 +23,11 @@ User-facing knobs (`--runtime=`, `TUR_RUNTIME`, `TUR_PREAMBLE_SPLIT`) are
 described in the [tur compile / link guide](tur-compile-link-guide.md#tur-build---runtime----how-the-runtime-gets-linked).
 This guide is the mechanism underneath them.
 
-> **Trust the code over the comments.** Several comments in this area predate
-> later fixes. For example, `rt_split_embed.h` and `cmd_jit` say a missing
-> runtime archive changes the canonical text and disengages the split. It no
-> longer does: `emit_rt_split_source` forces the archive posture itself. Where a
-> comment and this guide disagree, read the code. If the code disagrees with
-> this guide, fix the guide.
-> The stale comments found so far in this area, each with a fix, are
-> listed in [stale-comments-runtime-preamble](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/stale-comments-runtime-preamble.md).
+> **Trust the code over the comments.** Where a comment and this guide
+> disagree, read the code. If the code disagrees with this guide, fix the
+> guide. The comments that said a missing runtime archive disengages the
+> split were corrected on 2026-10-21
+> ([stale-comments-runtime-preamble](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/stale-comments-runtime-preamble.md)).
 
 **"Split" means four different things in this codebase.** This guide is about
 the first one.
@@ -567,8 +564,9 @@ platform, and only CI's probes notice.
 ### Adding a gate
 
 A new per-program flag that changes text above the marker has to be added to
-the forced set in `emit_rt_split_source` (save it, force it, restore it), and
-the artifacts regenerated. Otherwise every program that sets the flag hashes
+the forced set, the `rt_split_forced[]` table above `emit_rt_split_source`
+(one row: the flag and its canonical value; the loop saves, forces and
+restores it), and the artifacts regenerated. Otherwise every program that sets the flag hashes
 differently and silently loses the split. `g_needs_dlfcn` is the live example.
 `call-ptr` and `dlopen` set it, it is not forced, and so those programs keep
 the whole preamble (on 2026-10-16 `jit-ffi-call-ptr` hashed to
@@ -634,7 +632,7 @@ hidden at `-O2` because dead-code elimination removed the only reference).
 | Report | What went wrong | Lesson |
 |---|---|---|
 | [jit-s2-split-disengages-on-hoisted-inline-c-include](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/jit-s2-split-disengages-on-hoisted-inline-c-include.md) | hoisted inline-C includes sat inside the marked span; every C-binding spice lost the split | keep per-program text below the marker |
-| `emit_rt_split_source` comments; the `jit` CI step | the archive-posture flag, then `g_trail_autoloaded`, differed between `emit-rt-split` and a real build; the split disengaged everywhere, twice | a new state input to the preamble joins the forced set |
+| `emit_rt_split_source` comments; the `jit` CI step | the archive-posture flag, then `g_trail_autoloaded`, differed between `emit-rt-split` and a real build; the split disengaged everywhere, twice | a new state input to the preamble joins the forced set -- since 2026-10-21 one row in `rt_split_forced[]`, so the list is the code |
 | [cc-path-split-windows-and-hamt-findings](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/cc-path-split-windows-and-hamt-findings.md) | (1) out-of-line `tur_frame_*` multiplied stack frames by about 6.7x (Windows `STATUS_STACK_OVERFLOW`, reported by bash as exit 127); (2) the frozen `hamt.h` include conflicted with loose externs | the split changes codegen as well as linkage; check inlining-sensitive helpers |
 | [cc-path-preamble-split-plan](https://github.com/turmeric-lang/turmeric/blob/main/docs/upcoming/cc-path-preamble-split-plan.md), "Where it actually got to" | 16 of the first 20 split failures were duplicated thread-locals: the hosted gcc build took the native branch | both halves must reach one storage |
 | [release-archive-cannot-compile](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/release-archive-cannot-compile.md) | the flat release layout matched no `locate_runtime_lib` candidate; source mode then wanted `src/runtime/*.c`, which the release does not ship | `locate_runtime_lib` probes `<exe_dir>` too; install and ship every archive |

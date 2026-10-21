@@ -153,6 +153,10 @@ It is listed here only so this report is complete; fix it there.
 
 ### 12. `hamt.c:10`: a citation that resolves nowhere
 
+> **Resolved 2026-10-21:** `hamt.c` and `hamt.h` now point at
+> `docs/guides/hamt-guide.md` and name the region store hooks; the dead-citation
+> lint `tests/check-src-doc-citations.sh` catches the next one.
+
 - **Says:** "See docs/hamt-plan.md for full design and phase breakdown."
 - **Code:** no `hamt-plan.md` exists anywhere under `docs/`. The file header
   also describes "Phase P1 v1" (reference counting, list collisions) as the

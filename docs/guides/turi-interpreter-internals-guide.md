@@ -217,7 +217,7 @@ A turn:
 | Reader, macro expander, `(load ...)` splicing | Same code |
 | `PASS_ELABORATE` | Same elaborator, session variant |
 | `PASS_KIND_CHECK` (`kind_check_pass`) | Not run as a pass. The kind-error fixtures still fail under `--interpret`, because the elaborator raises them too |
-| `PASS_EFFECT_LOWER` | Only its `EffectEnv` setup; `effect_lower` is a no-op anyway |
+| `PASS_EFFECT_ENV` | Only its `EffectEnv` setup |
 | `PASS_EFFECT_ROW_INFER` | `effect_check_pass` |
 | `PASS_CPS` | Not run |
 | `PASS_BORROW_CHECK` | `borrow_check_effect_handler_captures` and `lifetime_check_program`. `borrow_check_program` is disabled process-wide (`borrow_check_enabled` is never set), so skipping it costs no parity. The handler-capture check used to be skipped, so `errors/effect-handler-borrow` printed 42 under `--interpret` ([turi-skips-handler-borrow-capture-check](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/turi-skips-handler-borrow-capture-check.md)) |

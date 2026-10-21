@@ -14,7 +14,7 @@
  *   4. KindEnv — a symbol → Kind mapping used to propagate inferred kinds.
  *
  * Pipeline position:
- *   PASS_ELABORATE → PASS_KIND_CHECK → PASS_EFFECT_LOWER → ...
+ *   PASS_ELABORATE → PASS_KIND_CHECK → PASS_EFFECT_ENV → ...
  */
 
 #ifndef TUR_KIND_CHECK_H

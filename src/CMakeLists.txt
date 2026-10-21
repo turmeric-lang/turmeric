@@ -251,7 +251,6 @@ set(TUR_CORE_SOURCES
     passes/cps_ir.c
     passes/effect.c
     passes/effect_check.c
-    passes/effect_lower.c
     passes/kind_check.c
     passes/lifetime_elision.c
     passes/lifetimes.c

@@ -15,7 +15,7 @@
  * under the S2 split the program half is compiled by c2mir, which has no such
  * builtin and does not define __GNUC__, and setjmp/longjmp must PAIR -- so the
  * split was pinned to plain setjmp on both sides and effects-on-fibers stayed
- * broken there (docs/reported/jit-windows-support-spike.md).
+ * broken there (docs/archive/jit-windows-support-spike.md).
  *
  * These two functions are the way out: an ordinary extern call that BOTH halves
  * can make.  The host-compiled runtime half links this object directly; the

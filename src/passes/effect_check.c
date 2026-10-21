@@ -1899,7 +1899,7 @@ int effect_check_pass(Arena *a, Expr *program, EffectEnv *env) {
     s_e0254_n = 0;
 
     /* --- Step -1: Populate the effect env from EX_DEFECT nodes.
-     * PASS_EFFECT_LOWER creates a fresh empty env; we scan the elaborated AST
+     * PASS_EFFECT_ENV creates a fresh empty env; we scan the elaborated AST
      * for (defeffect ...) nodes and register each one so the env is populated
      * before ERK_UNRESOLVED resolution and inference run. --- */
     for (uint32_t i = 0; i < n_items; i++) {
@@ -1949,7 +1949,7 @@ int effect_check_pass(Arena *a, Expr *program, EffectEnv *env) {
 
     /* --- Step 0: Resolve ERK_UNRESOLVED declared effect rows.
      * Effect row annotations are parsed during elaboration as ERK_UNRESOLVED
-     * (symbolic names).  Now that PASS_EFFECT_LOWER has populated the effect
+     * (symbolic names).  Now that PASS_EFFECT_ENV has populated the effect
      * environment, we can resolve each annotation to ERK_CONCRETE/ERK_VAR.
      * Every resolution goes through resolve_declared_row, which reports a
      * name no defeffect declares (TUR-E0026) instead of dropping it. --- */

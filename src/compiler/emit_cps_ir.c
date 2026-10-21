@@ -200,7 +200,7 @@ static bool slot_box_ty(const Type *t) {
      * `tur_tagged_t` the direct emitter passes and returns BY VALUE
      * (type_struct_pass_by_ptr says so), owning-free as far as the compiler
      * tracks (the payload box behind `val` has no drop glue anywhere; that is
-     * docs/reported/any-struct-box-leak-per-widen.md, not an owning field).
+     * docs/archive/any-struct-box-leak-per-widen.md, not an owning field).
      * It simply is not an AdtDef, so the by-value-product test below cannot
      * see it and the whole function fell out of the CPS subset: `fn_sig_ok`'s
      * param gate rejected it, and a `perform` anywhere in such a function then
@@ -12245,7 +12245,7 @@ static bool serial_env_ser_names(CE *ce, const Type *t,
  *     tur_cloneable_cont over an identity fn (NULL env), call receiver, bind x.
  *   Shape 2 (n_frames >= 1): reify the `(<op> <operand> ... [])` context as DK
  *     frame; the shift body deep-clones the captured sub-continuation into a
- *     cloneable_cont and hands it to receiver.  Mirrors emit_cloneable_ctx. */
+ *     cloneable_cont and hands it to receiver. */
 /* Direct-emit a self-contained (shift-free) context Expr -- a `let` init, an
  * `if` condition, or an `if` pure arm -- at the reset site, honoring the CT
  * emitter's current indent.  Returns the malloc'd C expression string. */

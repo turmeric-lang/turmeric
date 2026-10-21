@@ -2375,13 +2375,12 @@ static Expr *cps_mark_expr(Arena *a, Expr *e) {
             return e;
 
         case EX_PERFORM:
-            /* perform is already lowered to shift by effect_lower pass */
-            /* Just mark the expression */
+            /* Left as it is: the DK backend (emit_cps_ir.c) lowers a
+             * perform; nothing before this pass rewrites it. */
             return e;
 
         case EX_HANDLE:
-            /* handle is already lowered to reset by effect_lower pass */
-            /* Just mark the expression */
+            /* Left as it is: the DK backend lowers a handle too. */
             return e;
         
         case EX_RESUME: {

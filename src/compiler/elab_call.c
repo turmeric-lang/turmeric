@@ -7073,7 +7073,7 @@ bool any_expr_is_owned_temp(const Expr *x, int depth) {
  * and hand over the stored value/key, which IS a carrier box, so their erased
  * comparators are already right.  (Their TYPED comparators are wrong for the
  * mirror-image reason -- filed separately as
- * docs/reported/typed-comparator-over-hamt-box-compares-box-addresses.md.) */
+ * docs/archive/typed-comparator-over-hamt-box-compares-box-addresses.md.) */
 static bool call_comparator_gets_slot_words(const Binding *fn_binding,
                                             uint32_t argi) {
     if (!fn_binding || !fn_binding->name || !fn_binding->name->name) return false;

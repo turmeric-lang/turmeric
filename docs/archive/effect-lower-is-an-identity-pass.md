@@ -42,3 +42,21 @@ keep the pass until it is fixed.
 `src/passes/cps.c` (the `EX_PERFORM` / `EX_HANDLE` arms) and
 `src/compiler/emit_stmt.c` carry comments saying effects are "already lowered
 to shift/reset by effect_lower"; correct them in the same change.
+
+## Resolved 2026-10-21: the pass is deleted
+
+The investigation came back clean:
+
+1. `run_core_pass` was the only caller; the interpreter, the WASM glue and
+   the tests never named `effect_lower`.
+2. Nothing downstream depends on `EX_DISCONTINUE` carrying `TYPE_NIL` from
+   the rebuild: the elaborator already builds the node with `TYPE_NIL`
+   (`elab_effects.c`, the `discontinue` form), so the rebuild changed nothing.
+3. With the call removed the full fixture suite passes.
+
+`src/passes/effect_lower.{c,h}` are gone, and the pass is renamed
+`PASS_EFFECT_ENV` (its `--timings` zone is `effect-env`, was `effect-lower`;
+`tests/run-timings.sh` and the performance guide follow). The `EffectEnv`
+construction is unchanged. The stale "already lowered by effect_lower"
+comments in `src/passes/cps.c` and `src/compiler/emit_stmt.c` are corrected,
+and the guides that listed the file as a no-op no longer list it.

@@ -2859,7 +2859,7 @@ static WfVerdict wf_global_verdict(Elab *e, Binding *fn, const Symbol **uncovere
  * `(.n a)` (a field READ), `(if ...)`, `(do ...)` and `(+ p 1)` are none of
  * them global bindings, so all four declined, and a frame over any body doing
  * ordinary work was silently UNVERIFIED
- * (docs/reported/writes-frame-walk-treats-every-head-as-a-callee.md).
+ * (docs/archive/writes-frame-walk-treats-every-head-as-a-callee.md).
  *
  * On `Expr` each of those is a distinct node kind and the guessing stops.  The
  * decisive case is the dotted head: `(.f x)` is EX_GET_FIELD when `f` is a
@@ -10573,7 +10573,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
 
     /* Phase 19: Parse optional effect-row annotation #{Read Write} or #{e} before return type.
      * Uppercase names are concrete effects; lowercase are row variables.
-     * The row is stored as ERK_UNRESOLVED and resolved after PASS_EFFECT_LOWER. */
+     * The row is stored as ERK_UNRESOLVED and resolved after PASS_EFFECT_ENV. */
     EffectRow *declared_effect_row_defn = NULL;
     /* C2 / #reads: captured here, stamped onto the binding alongside the
      * refine_* metadata below.  1-based; 0 = no #reads annotation. */
@@ -13933,7 +13933,7 @@ Expr *elab_fn(Elab *e, const Form *call) {
      * call through mismatched function-pointer types, which
      * -fsanitize=function reports and CFI / CET-BTI / WASM call_indirect
      * reject outright.
-     * See docs/reported/emitter-thunk-type-return-mismatch.md. */
+     * See docs/archive/emitter-thunk-type-return-mismatch.md. */
     bool return_annotated = false;
     Type *return_full_type = NULL;
     Type *return_fn_type = NULL; /* Preserve full TY_FN returns for higher-order calls. */

@@ -2,6 +2,34 @@
 
 All notable changes to Turmeric are documented here.
 
+## [Unreleased]
+
+### Changed
+
+- **`tur.lock` no longer writes `:sha256` on a `:cmake-deps` row.** It
+  repeated the row's `:resolved` git SHA and nothing compared it. A lock that
+  still carries one is read as if the key were absent, so `tur fetch --frozen`
+  does not report an old lock as changed. Spice rows are unchanged.
+- **`--timings` zone `effect-lower` is now `effect-env`.** The pass only ever
+  built the effect registry; the identity `effect_lower` walk it also ran is
+  deleted.
+
+### Fixed
+
+- **A `(fn ...)` parameter can be stored into a struct's fn field.** A
+  non-`^fat` fn parameter passed to a constructor used to type-check and then
+  fail in cc (`aggregate value used where an integer was expected`).
+- **A type error on a macro call used as an argument is reported at the
+  call.** `(total (vec-of (Q 3.25)))` pointed into `stdlib/vec.tur`'s template
+  with no note naming the user's line.
+- **A class method with an unannotated receiver and an applied result types
+  its call.** `(defclass K [a] (cats [r] : (Option int)))` called on a value
+  used to give `expected (Option A), got (? ?)` where an Option was expected;
+  the declared result now types the call as it does with `[r : a]`.
+- **A call through a lambda checks a typed pointer's pointee.** `(let [f (fn
+  [x : ptr<Foo>] ...)] (f bar-ptr))` is now the same TUR-E0001 a defn with
+  that signature gives.
+
 ## [0.67.5] -- 2026-10-20
 
 ### Changed

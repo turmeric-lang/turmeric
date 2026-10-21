@@ -119,3 +119,25 @@ turmeric-lang/turmeric-spices, so it is listed here only so it is not lost.
 Drop the `pkg.h` and user-guide examples from the guide's "Trust the code over
 the comments" paragraph. Keep the turmeric-spices sentence until that repo is
 fixed.
+
+## Resolved 2026-10-21
+
+- Item 1, option (b) as decided: `pkg_cmake_build` no longer writes `:sha256`
+  on a cmake row, `pkg_lock_read` ignores one on a cmake row (so `tur fetch
+  --frozen` does not report an old lock as changed), the field comment in
+  `pkg.h` says what each kind of row holds, the internals guide's sample and
+  bullet are updated, and the CHANGELOG has the line. Options (a) and (c)
+  stay unexercised: with (b) landed the field holds one kind of value per row
+  kind, which is what the comment now says.
+- Item 2: the `pkg.h` header says what the lock pins (and does not pin) and
+  points at the guide's "Commands at a glance" instead of carrying a partial
+  workflow list.
+- Item 3: `pkg_sha256_file` and its banner are deleted.
+- Item 4: the citations are repointed, and
+  `tests/check-src-doc-citations.sh` (in the docs-lint job and ctest) now
+  fails on any `docs/` path cited in `src/` that does not exist.
+- Item 5: both user guides show one lock in the shape `pkg_lock_write`
+  writes (plain s-expressions, one row per line, `tree1:` hashes, no
+  `:subdir`, no cmake `:sha256`), and say the file is generated.
+- Item 6 is in turmeric-lang/turmeric-spices; the internals guide's "Trust
+  the code" note keeps that sentence until it is fixed there.

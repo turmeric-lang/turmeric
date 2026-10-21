@@ -108,3 +108,27 @@ forced, then restored, plus `g_rt_split_all_gates`, plus a separate
 Remove the example from the guide's "Trust the code over the comments"
 paragraph. Point the `emit_rt_split_source` row of its pitfall table at the
 table from item 6, if that lands.
+
+## Resolved 2026-10-21
+
+Items 1-4 and 6 landed (item 5 had landed earlier):
+
+- `rt_split_embed.h`, `cmd_jit`'s call-site comment and `cmd_emit_rt_split`'s
+  header no longer say a missing runtime archive changes the canonical text;
+  each says the per-host inputs are forced to a canonical value so that they
+  cannot.
+- `emit_rt_split_source`'s header splits the inputs into knobs (left alone
+  so the compare covers them) and per-host / per-program facts (forced and
+  restored), and names the archive posture and `g_trail_autoloaded` among
+  the latter.
+- The redundant `emit_set_rcgc_from_archive(true)` in `cmd_emit_rt_split` is
+  gone; `emit_rt_split_source` is the one owner of the posture.
+- The forced set is one static table, `rt_split_forced[]` (`{ bool *flag;
+  bool forced; }`), that the function loops over to save, force and restore.
+  The archive posture stays a special case through its setter. Adding an
+  input is adding a row.
+
+`tur emit-rt-split --hash` still matches the committed hash
+(`f1ad7d9c57159b62`) and `TUR_JIT_SPLIT_DEBUG=1 tur jit` prints
+`probe == committed`, so no regeneration was needed. The guide's "Trust the
+code over the comments" paragraph and its pitfall-table row now point here.

@@ -4,7 +4,7 @@
 #include "platform_fs.h"  /* strndup() on Windows */
 #include "globals.h"      /* compiler config globals */
 #include "cps.h"          /* cps_visit_children (ownership provenance walk) */
-#include "diag.h"         /* diag_file_path (emit_site_push_text) */
+#include "diag.h"         /* diag_file_path (emit_line_directive, emit_site_ref_text) */
 #include "emit_cps_ir.h"  /* emit_cps_ir_addr_taken_any (emit_fn_value_calls_sited) */
 
 int type_size_bytes(TypeKind kind);  /* elab_core.c; the transmute bit-cast */
@@ -528,12 +528,6 @@ bool emit_fn_body_is_opaque_ptr_over_carrier_result(const FnDef *fd,
     const char *dc = type_c_name(emit_type_from_kind(declared_result));
     return dc && strcmp(dc, "int64_t") == 0;
 }
-
-/* structdef-retirement DS-C: emit_carrier_return_override (RT/SC5) is deleted.
- * Its signal was a by-value (non-carrier) TY_STRUCT method body type -- which no
- * longer occurs, since every struct lowers to a record ADT.  The function always
- * returned the "none" sentinel, so all five call sites' `carrier_override.kind
- * == TY_STRUCT` branches were dead and have been removed. */
 
 void indent_buf(Buf *b, int n) {
     for (int i = 0; i < n; i++) buf_putc(b, ' ');
@@ -3304,7 +3298,7 @@ void ctor_census_reset(void) {
  * the FIRST ADT's constructor.  With both ADTs on the int64 carrier, C's type
  * system could not see it either: no turmeric error, no cc warning, no ASan
  * report, just the wrong constructor.  See
- * docs/reported/separator-fold-collides-emitted-c-names.md. */
+ * docs/archive/separator-fold-collides-emitted-c-names.md. */
 static void ctor_census_push(const char *adt_name, const char *ctor_name) {
     if (g_n_ctor_census >= g_cap_ctor_census) {
         uint32_t nc = g_cap_ctor_census ? g_cap_ctor_census * 2 : 64;
@@ -6817,9 +6811,8 @@ char *emit_carrier_bridge(EmitCtx *ctx, Buf *body,
         bool essential = type_is_heap_struct(concrete_ty) ||
                          carrier_is_inline(concrete_ty.kind);
         if (!essential) {
-            /* structdef-retirement DS-D: the former struct-app Option/Result
-             * check (type_extract_struct_app) is dead -- no struct-headed app
-             * forms; a lowered Option/Result monomorph is an ADT app. */
+            /* A lowered Option/Result monomorph is an ADT app; no struct-headed
+             * app forms. */
             /* Pointer-sized leaves (cstr, ptr<void>, int/int64) cross with no
              * reinterpret and are trivially safe -- not part of the
              * struct-fallback set the tripwire watches. */
@@ -7136,16 +7129,12 @@ char *emit_carrier_bridge(EmitCtx *ctx, Buf *body,
              * layout instead. The non-Result/Option fallback keeps the
              * legacy deref so unrelated parametric structs (Pair, user
              * defstructs) are unaffected. */
-            /* structdef-retirement DS-D: the former struct-app Option/Result
-             * canonical readback (keyed on type_extract_struct_app) is dead --
-             * no struct-headed app forms.  The lowered record-ADT readback
-             * below handles Option/Result monomorphs. */
             bool used_canonical = false;
-            /* CONV-S1 seam 4: the same canonical NULL-safe readback for a LOWERED
-             * Option/Result record ADT (`tur_adt_Option__Device`).  The struct
-             * path above keys on type_extract_struct_app and misses an ADT app, so
-             * a `none` (NULL carrier) would otherwise hit the unguarded deref below
-             * and segfault.  Read the canonical box fields by name (the ctor field
+            /* CONV-S1 seam 4: a canonical NULL-safe readback for a LOWERED
+             * Option/Result record ADT (`tur_adt_Option__Device`) -- the only
+             * Option/Result shape there is, since no struct-headed app forms.
+             * Without it a `none` (NULL carrier) would hit the unguarded deref
+             * below and segfault.  Read the canonical box fields by name (the ctor field
              * names match tur_option_t/tur_result_box_t) and write the ADT
              * aggregate through its member path, guarding Option with a NULL test
              * that collapses to a zeroed `{0}` (is_some=false). */

@@ -1036,7 +1036,7 @@ Expr *elab_callback_ptr(Elab *e, const Form *call) {
      * bare function pointer, a boxed closure whose slot 0 is the code
      * pointer, or a `__poly_` adapter, and one of those combinations already
      * SIGSEGVs on the ordinary argument path
-     * (docs/reported/let-bound-noncapturing-lambda-segfaults-as-fn-arg.md).
+     * (docs/archive/let-bound-noncapturing-lambda-segfaults-as-fn-arg.md).
      * Building an FFI trampoline on top of that would turn a representation
      * mismatch into a wild jump from inside a C library.
      *

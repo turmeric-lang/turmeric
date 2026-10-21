@@ -1794,7 +1794,12 @@ bool pkg_lock_read(const char *path, PkgLockFile *out) {
                 e->url        = form_str_dup(map_get_kw(ef, "url"));
                 e->ref        = form_str_dup(map_get_kw(ef, "ref"));
                 e->resolved   = form_str_dup(map_get_kw(ef, "resolved"));
-                e->sha256     = form_str_dup(map_get_kw(ef, "sha256"));
+                /* A cmake row pins by :resolved alone.  Older locks carry a
+                 * :sha256 there too (the git SHA again); ignoring it on read
+                 * keeps `tur fetch --frozen` from reporting such a lock as
+                 * changed (stale-comments-package-manager, item 1). */
+                e->sha256     = is_cmake ? NULL
+                                         : form_str_dup(map_get_kw(ef, "sha256"));
                 e->fetched_at = form_str_dup(map_get_kw(ef, "fetched-at"));
                 e->resolved_via   = form_str_dup(map_get_kw(ef, "resolved-via"));
                 e->system_version = form_str_dup(map_get_kw(ef, "system-version"));
@@ -1877,7 +1882,6 @@ bool pkg_lock_write(const char *path, const PkgLockFile *lock) {
             if (e->url)        fprintf(f, ":url \"%s\" ", e->url);
             if (e->ref)        fprintf(f, ":ref \"%s\" ", e->ref);
             if (e->resolved)   fprintf(f, ":resolved \"%s\" ", e->resolved);
-            if (e->sha256)     fprintf(f, ":sha256 \"%s\" ", e->sha256);
             if (e->fetched_at) fprintf(f, ":fetched-at \"%s\" ", e->fetched_at);
             if (e->resolved_via)
                 fprintf(f, ":resolved-via \"%s\" ", e->resolved_via);
@@ -1963,17 +1967,6 @@ static bool lock_remove(PkgLockFile *lock, const char *name, bool is_cmake) {
         return true;
     }
     return false;
-}
-
-/* ================================================================== */
-/* SHA-256                                                              */
-/* ================================================================== */
-
-bool pkg_sha256_file(const char *path, char out[65]) {
-    uint8_t digest[TUR_SHA256_DIGEST_LEN];
-    if (!tur_sha256_file(path, digest)) return false;
-    tur_sha256_hex(digest, out);
-    return true;
 }
 
 /* --- pkg_hash_dir: a content hash of a directory tree ------------------- *
@@ -2387,7 +2380,7 @@ bool pkg_version_range_match(const char *range, const char *version,
  * That made `tur fetch` unable to fetch anything on Windows.  Returns false if
  * the argument does not fit; a truncated command string is worse than none, so
  * callers must fail rather than run it.
- * docs/reported/windows-spice-fetch-shell-quoting.md */
+ * docs/archive/windows-spice-fetch-shell-quoting.md */
 bool pkg_cmd_arg(Buf *cmd, const char *arg) {
     char q[8192];
     if (tur_shell_quote(arg, q, sizeof q) != 0) return false;
@@ -4592,7 +4585,7 @@ bool pkg_cmake_build(const char *project_dir,
      * already handled by the arm-independent `cmake_major_version() >= 4`
      * test.  raylib hid the bug -- its own floor is exactly 3.5, the lowest
      * CMake 4 still accepts -- so it only showed up on the second cmake dep.
-     * docs/reported/wasm-arm-suppresses-cmake-policy-min.md. */
+     * docs/archive/wasm-arm-suppresses-cmake-policy-min.md. */
     if (cmake_major_version() >= 4 && !getenv("TUR_CMAKE_NO_POLICY_MIN"))
         buf_printf(&cmd, " -DCMAKE_POLICY_VERSION_MINIMUM=3.5");
     /* SF3: honor `tur fetch --refetch` (sets TUR_FETCH_FORCE_FETCH) by
@@ -4677,8 +4670,10 @@ bool pkg_cmake_build(const char *project_dir,
         char *sha = pkg_git_resolve(dep_src);
         if (sha) {
             free(le->resolved); le->resolved = sha;
-            free(le->sha256);   le->sha256   = tur_strdup(sha);
         }
+        /* :resolved is the pin; a cmake row carries no :sha256 (it used to
+         * repeat the git SHA, which nothing compared). */
+        free(le->sha256); le->sha256 = NULL;
     }
 
     pkg_cmake_manifest_free(&cmkman);

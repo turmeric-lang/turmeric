@@ -34,9 +34,9 @@ sections. Type-level `#row{...}` rows are an unrelated feature
    friends. Its checks are scope- and arity-based, not row-based: TUR-E0008
    (top-level unhandled perform), TUR-E0021 (private effect), TUR-E0014
    (cloneable capture without `Clone`), handler result and arity checks.
-3. **Register.** `PASS_EFFECT_LOWER` builds a fresh `EffectEnv` holding the
-   builtin `Unsafe` and the five compiler-known capabilities. `effect_lower`
-   itself returns its input unchanged.
+3. **Register.** `PASS_EFFECT_ENV` builds a fresh `EffectEnv` holding the
+   builtin `Unsafe` and the five compiler-known capabilities. The tree is
+   untouched.
 4. **Infer and check.** `PASS_EFFECT_ROW_INFER` runs
    `src/passes/effect_check.c:effect_check_pass`. It registers every
    `defeffect`, resolves each declared row (TUR-E0026 on an unknown name),
@@ -66,9 +66,6 @@ sections. Type-level `#row{...}` rows are an unrelated feature
 | `src/driver/pipeline.c`, `src/driver/cli.c` | `core_passes[]` and `run_core_pass`; the effect flags (`GLOBAL_FLAGS[]`) |
 | `src/turi/eval.c` | The interpreter's own call of `effect_check_pass` (`turi_eval_impl`, step 6b) |
 
-`src/passes/effect_lower.c` looks relevant and is not: it is a no-op (see the
-[CPS guide](cps-dk-internals-guide.md#pipeline-position)).
-
 ---
 
 ## Pipeline position
@@ -76,7 +73,7 @@ sections. Type-level `#row{...}` rows are an unrelated feature
 | Stage | What happens to rows |
 |---|---|
 | `PASS_ELABORATE` | Annotations parsed to `ERK_UNRESOLVED`; elaborator effect checks; `#fx{Unsafe}` gating. Effects are registered in the **elaborator's** `EffectEnv` (`e->effect_env`). |
-| `PASS_EFFECT_LOWER` | `run_core_pass` allocates `ctx->effect_env` -- a **second, empty** env -- and registers `Unsafe` and `IO`/`FS`/`Net`/`Proc`/`Rand`. |
+| `PASS_EFFECT_ENV` | `run_core_pass` allocates `ctx->effect_env` -- a **second, empty** env -- and registers `Unsafe` and `IO`/`FS`/`Net`/`Proc`/`Rand`. |
 | `PASS_EFFECT_ROW_INFER` | `effect_check_pass` re-registers each `EX_DEFECT` into that env, resolves, infers, checks. A non-zero return stops the build; `--dump-effects` runs only after a zero return. |
 | `PASS_CPS` and emission | Read the rows; never write them. |
 
@@ -364,7 +361,7 @@ The fixture `effect-dump` and `tests/run-flags.sh` pin the format.
 Both are ordinary `Effect`s with properties the pass special-cases.
 
 **Registration.** `effect_env_register_builtin_unsafe` and
-`effect_env_register_builtin_capabilities` run in `PASS_EFFECT_LOWER`, in the
+`effect_env_register_builtin_capabilities` run in `PASS_EFFECT_ENV`, in the
 interpreter's session env, and in the elaborator. The capabilities come from
 the `k_builtin_caps[]` table in `effect.c`: `IO`, then `FS`, `Net`, `Proc`,
 `Rand` with `parent = IO`. A `defeffect` of one of those names is accepted

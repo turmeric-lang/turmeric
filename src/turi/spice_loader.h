@@ -1,4 +1,4 @@
-/* spice_loader.h -- RP3 of docs/spice-repl-plan.md.
+/* spice_loader.h -- RP3 of docs/archive/spice-repl-plan.md.
  *
  * Discovers an enclosing spice project (walking up from the cwd to find
  * a build.tur), invokes `tur build --shared` if the cached library is

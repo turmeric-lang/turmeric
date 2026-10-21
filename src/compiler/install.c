@@ -213,7 +213,7 @@ static bool inst_rm_tree(const char *path) {
  * Was `system("rm -rf -- '%s'")`, which failed twice on Windows: cmd.exe has
  * no `rm`, and it does not treat '...' as quoting, so the path arrived with
  * the quotes still attached.  A tree walk needs neither a shell nor a quoting
- * rule.  docs/reported/windows-spice-fetch-shell-quoting.md */
+ * rule.  docs/archive/windows-spice-fetch-shell-quoting.md */
 bool pkg_rm_rf(const char *path) {
     if (!path || !*path) return false;
     if (!strchr(path, '/')) return false;

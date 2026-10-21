@@ -61,7 +61,7 @@ path, pos, zero = sys.argv[1], sys.argv[2], sys.argv[3]
 with open(path) as f:
     d = json.load(f)
 names = ["read", "sweet", "module-load", "macro-expand", "elaborate",
-         "typeclass", "kind-check", "effect-lower", "effect-row", "cps",
+         "typeclass", "kind-check", "effect-env", "effect-row", "cps",
          "borrow-check", "refine", "mono", "emit", "cc", "jit", "run", "other"]
 problems = []
 for k in ("schema", "kind", "tur_version", "command", "started_utc",
@@ -112,7 +112,7 @@ PY
     fi
 }
 
-FRONT="read,sweet,module-load,macro-expand,elaborate,typeclass,kind-check,effect-lower,effect-row,cps,borrow-check,emit"
+FRONT="read,sweet,module-load,macro-expand,elaborate,typeclass,kind-check,effect-env,effect-row,cps,borrow-check,emit"
 
 # --- tur build --timings <path>.json: the full pipeline, cc included -------
 if "$TUR" build --timings "$TMP/build.json" "$TMP/main.tur" -o "$TMP/main" \

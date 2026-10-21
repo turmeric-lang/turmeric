@@ -228,10 +228,12 @@ int cmd_jit(int argc, char **argv) {
      * resolver), and c2mir compiles ~60% less fixed text per program.
      *
      * The guard: re-emit the all-gates preamble under CURRENT process state
-     * and hash it against the recorded artifact hash.  Emitter drift, knob
-     * drift (--backtrack-depth, experiments), and a missing runtime archive
-     * all change that text, fail the compare, and keep the full preamble --
-     * never wrong, just slower.  Probe cost is one in-memory emission,
+     * and hash it against the recorded artifact hash.  Emitter drift and knob
+     * drift (--backtrack-depth, experiments) change that text, fail the
+     * compare, and keep the full preamble -- never wrong, just slower.
+     * Per-host facts (the runtime archive, trail autoload, the g_needs_*
+     * gates) are forced to canonical values inside emit_rt_split_source, so
+     * they cannot.  Probe cost is one in-memory emission,
      * microseconds against the ~90ms c2mir spend it can save.  Runs AFTER
      * compile_to_c: emit_rt_split_source resets per-TU codegen registries,
      * which must not disturb the program's own emission.

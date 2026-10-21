@@ -17352,7 +17352,7 @@ static TuriValue turi_eval_impl(TuriEnv *env, const char *src, const char *path,
      * and reported TUR-E0009 against a callee whose row (resolved on its own
      * turn) still carried Bt.  Registration is idempotent, so re-scanning a
      * turn's defeffects into the shared env is harmless.  The builtin
-     * `Unsafe` is registered as the compiled pipeline does (PASS_EFFECT_LOWER
+     * `Unsafe` is registered as the compiled pipeline does (PASS_EFFECT_ENV
      * in run_core_pass), for the same parity reason. */
     int eff_rc = 0;
     {

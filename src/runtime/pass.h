@@ -9,7 +9,7 @@
  *   4. its arm in run_core_pass(), which does the work.
  *
  * Current pipeline order:
- *   PASS_ELABORATE → PASS_KIND_CHECK → PASS_EFFECT_LOWER → PASS_EFFECT_ROW_INFER →
+ *   PASS_ELABORATE → PASS_KIND_CHECK → PASS_EFFECT_ENV → PASS_EFFECT_ROW_INFER →
  *   PASS_CPS → PASS_BORROW_CHECK
  *
  * The emit step is NOT a PassKind because the three emit variants
@@ -36,7 +36,7 @@
 typedef enum PassKind {
     PASS_ELABORATE,        /* Form* → typed Expr (elaboration + type checking)      */
     PASS_KIND_CHECK,       /* kind inference and validation (Phase HKT H0)          */
-    PASS_EFFECT_LOWER,     /* builds the EffectEnv; effect_lower is an identity walk */
+    PASS_EFFECT_ENV,       /* builds the EffectEnv (builtin Unsafe, capabilities)    */
     PASS_EFFECT_ROW_INFER, /* infer and validate effect rows per function (P19-2)    */
     PASS_CPS,              /* continuation-passing-style transform for shift/reset   */
     PASS_BORROW_CHECK,     /* ownership, move, and borrow analysis (Phase 14)        */
@@ -49,9 +49,9 @@ typedef enum PassKind {
  * Fields:
  *   arena       — bump allocator whose lifetime spans the full pipeline.
  *   st          — symbol table; populated by the reader, read by later passes.
- *   effect_env  — effect registry; populated by PASS_EFFECT_LOWER, carried
+ *   effect_env  — effect registry; populated by PASS_EFFECT_ENV, carried
  *                 forward so PASS_EFFECT_ROW_INFER and codegen can query it.
- *                 NULL until PASS_EFFECT_LOWER runs.
+ *                 NULL until PASS_EFFECT_ENV runs.
  *   prog        — current program AST; set by PASS_ELABORATE and updated in
  *                 place by each subsequent transform pass.
  *   forms       — raw input forms fed to PASS_ELABORATE; unused afterwards.
@@ -60,7 +60,7 @@ typedef enum PassKind {
 typedef struct PassContext {
     Arena       *arena;
     SymbolTable *st;
-    EffectEnv   *effect_env;  /* NULL until PASS_EFFECT_LOWER completes */
+    EffectEnv   *effect_env;  /* NULL until PASS_EFFECT_ENV completes   */
     TypeClassEnv tc_env;      /* populated by PASS_ELABORATE             */
     Expr        *prog;        /* NULL until PASS_ELABORATE completes     */
     Form       **forms;       /* input to PASS_ELABORATE                 */

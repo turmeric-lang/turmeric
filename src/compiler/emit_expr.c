@@ -8,9 +8,6 @@
 #include "mono_specs.h" /* VBM3: van Laarhoven lens dispatch redirect */
 #include "stack_guard.h" /* emit-depth-guard-loses-race-with-asan-stack */
 
-/* ACB: true when kind represents a concrete aggregate type (struct, ADT, or
- * type-application) that the carrier ABI stores as a heap pointer.  Used by
- * KB-004 and KB-010 bridge insertion sites. */
 /* S1/findings 16: hand the panic-hoist the return C type this builder just
  * spelled into its own call text (cast fn-ptr, thunk typedef, member fn).
  * Call as the LAST thing before returning the composed string -- nested
@@ -27,8 +24,8 @@ static void note_call_ret(EmitCtx *ctx, const char *ct) {
  * type: a `(Result any any)` match binder and a `vec-get` temp are both typed
  * as the element tyvar (or its `int` carrier), yet one is declared
  * `tur_tagged_t` and the other `int64_t`.  The same two-step question the
- * `any` temp reader asks (emit_join_coerce's temp_is_tagged arm): the local's
- * recorded spelling, else the value's own representation. */
+ * `any` temp reader asks (bridge_control_result_int_ptr's temp_is_tagged arm):
+ * the local's recorded spelling, else the value's own representation. */
 static const char *emit_binding_repr_c_name(EmitCtx *ctx, Type binding_ty,
                                             const Expr *init);
 static bool emit_arg_is_any_carrier_word(EmitCtx *ctx, const char *raw,
@@ -50,6 +47,9 @@ static bool emit_arg_is_any_carrier_word(EmitCtx *ctx, const char *raw,
     return ct && strcmp(ct, "int64_t") == 0;
 }
 
+/* ACB: true when kind represents a concrete aggregate type (struct, ADT, or
+ * type-application) that the carrier ABI stores as a heap pointer.  Used by
+ * KB-004 and KB-010 bridge insertion sites. */
 static bool type_kind_is_aggregate(TypeKind k) {
     return k == TY_STRUCT || k == TY_ADT || k == TY_APP;
 }
@@ -1039,7 +1039,7 @@ static bool emit_var_spec_arg_type(EmitCtx *ctx, const Expr *var_expr, Type *out
  * The same bare-var-tail bug is therefore still reachable for a non-parametric
  * product; closing it needs a predicate that distinguishes the two positions,
  * not a broader type test.  See
- * docs/reported/byvalue-product-tail-var-double-unboxed-nonparametric.md. */
+ * docs/archive/byvalue-product-tail-var-double-unboxed-nonparametric.md. */
 static bool type_is_byvalue_product_app(EmitCtx *ctx, Type t) {
     Type rt = emit_resolve_type(ctx, t);
     if (rt.kind != TY_APP) return false;
@@ -1975,7 +1975,7 @@ static Type fn_body_tail_byvalue_carrier_type_inner(EmitCtx *ctx,
             /* CONV-S1 seam 4 (inline-C generic-element result): a `: A` inline-C
              * body (e.g. `vec-get`) always returns the int64 carrier regardless
              * of the element type, and at a non-spec call site the bare tyvar `A`
-             * has no binding so emit_resolve leaves it abstract.  The TYPER, by
+             * has no binding so emit_resolve_type leaves it abstract.  The TYPER, by
              * contrast, already grounded the CALL's own result type to the
              * concrete element (`(Option int)` here, via the `(:: ... (Option
              * int))` read).  Fall back to that grounded type so a by-value
@@ -7042,10 +7042,10 @@ char *emit_word_slot_bits(const Type *t, const char *v) {
  * host, under any sanitizer.
  *
  * Replacing the native recursion with an explicit worklist would remove even
- * the backstop.  That is a real project -- emit_value_dispatch is ~10k lines
- * over 124 cases, each interleaving statement emission with child-value
- * emission, and there are ~218 emit_value call sites -- and it is not what the
- * stack overflow required. */
+ * the backstop.  That is a real project -- emit_value_dispatch is the largest
+ * function in the tree, one arm per ExprKind, each interleaving statement
+ * emission with child-value emission, and emit_value is called from a couple
+ * of hundred sites -- and it is not what the stack overflow required. */
 
 /* Depth at which the headroom check switches on.  Below this the walk cannot
  * plausibly be the thing exhausting the stack, and skipping the check keeps a
@@ -13187,7 +13187,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                          * only way to store one -- a `:fn` field segfaults)
                          * emits C that warns, and tests/run.sh's cc-warning gate
                          * rejects it.  See
-                         * docs/reported/closure-in-defdata-field.md. */
+                         * docs/archive/closure-in-defdata-field.md. */
                         if (!field_is_carrier && fft) {
                             Type fr = emit_resolve_type(ctx, *fft);
                             field_is_carrier = fr.kind == TY_ADT &&
@@ -15287,12 +15287,9 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                          fn_binding->type.as.fn.arg_full_types &&
                          i < fn_binding->type.as.fn.arity &&
                          fn_binding->type.as.fn.arg_full_types[i]) {
-                    /* structdef-retirement DS-D: the former carrier->concrete
-                     * bridge for a struct-headed Option/Result param
-                     * (type_extract_struct_app) never fired once Option/Result
-                     * lowered to record ADTs -- no struct-headed app forms.  A
-                     * lowered Option/Result construct-template arg already crosses
-                     * correctly via the general carrier handling. */
+                    /* A lowered Option/Result construct-template arg crosses
+                     * via the general carrier handling; no struct-headed app
+                     * forms, so there is no separate bridge here. */
                     (void)0;
                 }
                 /* Phase D / tuplen-struct-param: a pass-by-pointer struct
@@ -18216,12 +18213,11 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
         }
         case EX_PERFORM:
         case EX_WITH_HANDLER:
-            /* v2 invariant (fiber effect runtime deleted, Stage G): a `perform` and a
-             * handler-VALUE `with-handler` lower on the DK backend (emit_cps_ir),
-             * never the direct/fiber emitter -- their fiber emitters
-             * (emit_effects_perform / emit_effects_with_handler) emitted now-deleted
-             * runtime symbols and are removed.  So there is genuinely nothing to
-             * emit here, and emitting an undefined reference would be worse.
+            /* v2 invariant: a `perform` and a handler-VALUE `with-handler` lower
+             * on the DK backend (emit_cps_ir), never the direct emitter -- the
+             * CPS/DK backend is the only effect lowering.  So there is genuinely
+             * nothing to emit here, and emitting an undefined reference would be
+             * worse.
              * (EX_HANDLE keeps its emitter: a non-effect `handle` shape -- e.g. the
              * contract/MonadError lowering -- still has a live direct path.)
              *
@@ -21998,7 +21994,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                                      * is exactly what the pointer-box branch emits.
                                      * (sum-passthrough-param-not-dropped under
                                      * TUR_SR2_APP_SUM_BYVALUE=0;
-                                     * docs/reported/sr2-carrier-seam-rotted.md) */
+                                     * docs/archive/sr2-carrier-seam-rotted.md) */
                                     buf_printf(body, "%s %s = __scrut%s%s;\n",
                                                ctype, bname, acc, mp);
                                 } else if (type_struct_pass_by_ptr(

@@ -30,15 +30,12 @@ Out of scope, with the guide that covers each:
 | The `#lang r7rs` split build | [r7rs-implementation-guide](r7rs-implementation-guide.md) |
 
 > **Trust the code over the comments.** The emitter's comments are long and
-> mostly accurate about *why*, but many are stale about *where* and *how
-> much*. Examples: `emit_expr.c` describes `emit_value_dispatch` as "~10k lines
-> over 124 cases" (it is ~12.9k lines over the 120 `ExprKind`s), the "Final
-> assembly order" comment in `emit_program_inner` lists 9 bands where the code
-> writes about 20, and a comment names `emit_join_coerce`, a function that does
-> not exist. When this guide and the code disagree, the code wins; fix the
-> guide.
-> The stale comments found so far in this area, each with a fix, are
-> listed in [stale-comments-emitter](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/stale-comments-emitter.md).
+> mostly accurate about *why*, but can be stale about *where* and *how much*.
+> When this guide and the code disagree, the code wins; fix the guide. A
+> `docs/` path cited in a source comment is checked by `tests/check-src-doc-citations.sh`
+> (the docs-lint job), so a moved report cannot leave a dead citation behind.
+> The comment fixes still open in this area are listed in
+> [stale-comments-emitter](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/stale-comments-emitter.md).
 
 ---
 

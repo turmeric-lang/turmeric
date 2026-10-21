@@ -8,9 +8,11 @@
  * the one the artifacts describe, and the emitted program's fixed preamble
  * can be swapped for `tur_rt_split_decls` (declarations only; the runtime
  * lives in the host process as src/runtime/generated/tur_rt_split.c).  On
- * a mismatch -- emitter drift, a knob like --backtrack-depth, a missing
- * runtime archive -- the full preamble is used unchanged: never wrong,
- * just slower. */
+ * a mismatch -- emitter drift, a knob like --backtrack-depth -- the full
+ * preamble is used unchanged: never wrong, just slower.  Per-host inputs
+ * (the archive posture, g_trail_autoloaded, the g_needs_* gates) are forced
+ * to a canonical value by emit_rt_split_source, precisely so that they
+ * cannot cause a mismatch. */
 #ifndef TUR_RT_SPLIT_EMBED_H
 #define TUR_RT_SPLIT_EMBED_H
 

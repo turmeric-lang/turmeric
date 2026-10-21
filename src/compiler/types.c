@@ -917,10 +917,9 @@ bool type_has_concrete_codegen_layout(const Type *t) {
  * type arguments have a concrete codegen layout -- e.g. `(ReF bool)`,
  * `(Cons int)`.  Such a type is monomorphized to a per-element C struct
  * (`tur_adt_ReF__bool`) whose field WIDTHS follow the element, distinct from the
- * int64-carrier `tur_adt_ReF`.  The struct-app branch of
- * type_has_concrete_codegen_layout deliberately rejects ADT apps (its callers
- * then call type_extract_struct_app), so this is a separate predicate used by
- * the M7 by-value HKT machinery to recognize a parametric-SUM result/element. */
+ * int64-carrier `tur_adt_ReF`.  type_has_concrete_codegen_layout's TY_APP arm
+ * returns false unconditionally, so this is a separate predicate used by the
+ * M7 by-value HKT machinery to recognize a parametric-SUM result/element. */
 /* Is one type ARGUMENT of an ADT application concrete enough to monomorphise?
  *
  * type_has_concrete_codegen_layout answers `true` for every TY_ADT, which is
@@ -1831,7 +1830,7 @@ static bool sr3_option_niche(void) {
      * wrong-answered httpd-req-string-opt, all of which recover when the niche
      * comes off too, and none of which points at the niche from the switch the
      * user actually flipped.  Measured and filed 2026-09-04 in
-     * docs/reported/sr2-carrier-seam-rotted.md; tests/run-sr2-seam.sh pins it.
+     * docs/archive/sr2-carrier-seam-rotted.md; tests/run-sr2-seam.sh pins it.
      *
      * This is a HATCH interaction, not a default one: both globals are true in
      * every shipping build, so the added test is dead weight on the default path
