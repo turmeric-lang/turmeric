@@ -652,18 +652,45 @@ void turi_env_set_toplevel_imports(TuriEnv *env, bool on) {
 }
 
 int turi_env_set_search_path_for(TuriEnv *env, const char *path) {
+    return turi_env_set_search_path_with(env, path, NULL, 0);
+}
+
+/* The manifest reader runs on the diag layer: it gives up when
+ * diag_had_error() is already set -- as it still is after a turn that
+ * failed -- and it registers its stack-local SourceFile as file 0.  These
+ * run a walk on a clean slate and put the session's table and flag back. */
+typedef struct {
+    const SourceFile *files[DIAG_MAX_FILES];
+    size_t            n;
+    bool              had_error;
+} EnvDiagSave;
+
+static void env_diag_save(EnvDiagSave *sv) {
+    sv->n = diag_files_save(sv->files, sizeof(sv->files) / sizeof(sv->files[0]));
+    sv->had_error = diag_had_error();
+    diag_reset();
+}
+
+static void env_diag_restore(EnvDiagSave *sv) {
+    diag_reset();
+    diag_files_replace(sv->files, sv->n);
+    if (sv->had_error) diag_force_had_error();
+}
+
+int turi_env_set_search_path_with(TuriEnv *env, const char *path,
+                                  const char *const *pre_dirs, int n_pre) {
     if (!env) return -1;
     env_drop_owned_include_dirs(env);
-    if (!path) {
+    if (!path && n_pre <= 0) {
         turi_env_set_module_base_dir(env, NULL);
         return 0;
     }
 
     /* The entry file's directory -- the project root every import, nested
      * ones too, resolves under: what `tur run <path>` searches first. */
-    const char *sep = strrchr(path, '/');
+    const char *sep = path ? strrchr(path, '/') : NULL;
 #ifdef _WIN32
-    const char *bs = strrchr(path, '\\');
+    const char *bs = path ? strrchr(path, '\\') : NULL;
     if (bs && (!sep || bs > sep)) sep = bs;
 #endif
     if (sep) {
@@ -679,34 +706,73 @@ int turi_env_set_search_path_for(TuriEnv *env, const char *path) {
         turi_env_set_module_base_dir(env, NULL);  /* "." */
     }
 
-    /* Then the enclosing spice's src/, its :spices deps and its workspace
-     * siblings -- the list the per-file commands build. */
+    /* The caller's own dirs first (a REPL's -I), in order: they keep their
+     * place ahead of everything discovered. */
     char **inc = NULL, **owned = NULL;
     int    n_inc = 0, n_owned = 0;
-    /* The manifest reader runs on the diag layer: it gives up when
-     * diag_had_error() is already set -- as it still is after a turn that
-     * failed -- and it registers its stack-local SourceFile as file 0.  Run
-     * it on a clean slate and put the session's table and flag back. */
-    const SourceFile *saved_files[DIAG_MAX_FILES];
-    size_t n_saved = diag_files_save(saved_files,
-                                     sizeof(saved_files) / sizeof(saved_files[0]));
-    bool saved_error = diag_had_error();
-    diag_reset();
-    int rc = spice_search_append(path, &inc, &n_inc, &owned, &n_owned, NULL);
-    diag_reset();
-    diag_files_replace(saved_files, n_saved);
-    if (saved_error) diag_force_had_error();
+    if (n_pre > 0) {
+        inc = (char **)malloc((size_t)n_pre * sizeof(char *));
+        if (!inc) return -1;
+        for (int i = 0; i < n_pre; i++) {
+            inc[i] = strdup(pre_dirs[i] ? pre_dirs[i] : ".");
+            if (!inc[i]) {
+                for (int j = 0; j < i; j++) free(inc[j]);
+                free(inc);
+                return -1;
+            }
+        }
+        n_inc = n_pre;
+    }
+
+    /* Then the enclosing spice's src/, its :spices deps and its workspace
+     * siblings -- the list the per-file commands build -- or, with no
+     * build.tur above `path`, the installed spices
+     * (installed-spice-libraries D2). */
+    int rc = 0;
+    if (path) {
+        EnvDiagSave sv;
+        env_diag_save(&sv);
+        rc = spice_search_append(path, &inc, &n_inc, &owned, &n_owned, NULL);
+        env_diag_restore(&sv);
+    }
+    free(owned);  /* every entry of `inc` is owned; the env keeps them */
     if (rc != 0) {
-        for (int i = 0; i < n_owned; i++) free(owned[i]);
-        free(owned);
+        for (int i = 0; i < n_inc; i++) free(inc[i]);
         free(inc);
         return -1;
     }
-    free(owned);  /* every entry of `inc` is owned; the env keeps them */
     env->include_dirs       = (const char **)inc;
     env->n_include_dirs     = n_inc;
     env->include_dirs_owned = inc != NULL;
     return n_inc;
+}
+
+int turi_env_add_spice_search_path(TuriEnv *env, const char *name,
+                                   const char *spice_dir) {
+    if (!env || !spice_dir) return -1;
+    char **inc = NULL;
+    int    n_inc = env->n_include_dirs;
+    if (env->include_dirs_owned) {
+        inc = (char **)env->include_dirs;
+    } else if (n_inc > 0) {
+        /* A borrowed list is the embedder's: copy it into one we own. */
+        inc = (char **)malloc((size_t)n_inc * sizeof(char *));
+        if (!inc) return -1;
+        for (int i = 0; i < n_inc; i++) inc[i] = strdup(env->include_dirs[i]);
+    }
+    int before = n_inc;
+    char **owned = NULL;
+    int    n_owned = 0;
+    EnvDiagSave sv;
+    env_diag_save(&sv);
+    int rc = spice_search_append_spice(name ? name : spice_dir, spice_dir,
+                                       &inc, &n_inc, &owned, &n_owned, NULL);
+    env_diag_restore(&sv);
+    free(owned);
+    env->include_dirs       = (const char **)inc;
+    env->n_include_dirs     = n_inc;
+    env->include_dirs_owned = inc != NULL;
+    return rc != 0 ? -1 : n_inc - before;
 }
 
 void turi_env_register_native_ex(TuriEnv *env, const char *name,

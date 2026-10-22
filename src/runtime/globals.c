@@ -129,6 +129,8 @@ bool g_dump_refine_json = false;
 bool g_trail_autoloaded = false;
 const char *g_lang_prelude = NULL;   /* saffron-lang-plan S6 / r7rs R1: LangTraits.prelude of the entry file */
 uint32_t g_synthetic_user_from_line = 0; /* r7rs-lang-plan R9; see globals.h */
+const char *const *g_repl_include_dirs = NULL; /* installed-spice-libraries D10: `tur repl -I` */
+int                g_repl_n_include_dirs = 0;
 const char *g_repl_start_lang = NULL; /* saffron-lang-plan S8 / r7rs R9: `tur repl --lang <base>`, validated by cmd_repl_main */
 bool g_opt_option_niche = true;   /* graduated 2026-09-03; TUR_OPTION_NICHE=0 restores the tagged monomorph */
 bool g_opt_regions = true;       /* graduated 2026-09-05; TUR_REGIONS=0 restores malloc + unbracketed calls */

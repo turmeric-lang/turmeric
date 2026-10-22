@@ -37,6 +37,9 @@
 #include "platform_fs.h"   /* setenv/unsetenv on Windows */
 #include "lang_dialects.h" /* lang_traits: a dialect's prelude and name */
 #include "docstrings.h"    /* :doc -- tur_doc_prefer over the stdlib table */
+#include "global.h"        /* :spice -- tur_installed_spice_dir */
+#include "pkg.h"           /* :spice <path> -- the manifest's :name */
+#include "spice_search.h"  /* installed-spice-libraries: the search path */
 
 #include <ctype.h>
 #include <errno.h>
@@ -212,7 +215,7 @@ static void repl_configure_env(TuriEnv *env) {
 static const char *const k_meta_cmds[] = {
     ":help", ":quit", ":q",
     ":type", ":doc", ":expand", ":reload", ":load-string", ":run", ":reset", ":explain",
-    ":cd", ":pwd",
+    ":cd", ":pwd", ":spice",
     ":tutorial", ":next", ":prev", ":hint", ":skip",
     ":quit-tutorial", ":tutorial-progress",
     NULL
@@ -229,6 +232,24 @@ static char *tur_completion_generator(const char *text, int state) {
     if (state == 0) {
         meta_idx   = 0;
         cur_binding = g_completion_env ? g_completion_env->globals : NULL;
+    }
+
+    /* installed-spice-libraries IL5: `:spice <TAB>` offers installed names. */
+    if (rl_line_buffer && strncmp(rl_line_buffer, ":spice ", 7) == 0) {
+        static char **names;
+        static int    n_names, name_idx;
+        if (state == 0) {
+            for (int i = 0; i < n_names; i++) free(names[i]);
+            free(names);
+            names = NULL;
+            n_names = spice_search_installed_names(&names, NULL);
+            name_idx = 0;
+        }
+        while (name_idx < n_names) {
+            const char *nm = names[name_idx++];
+            if (strncmp(nm, text, tlen) == 0) return strdup(nm);
+        }
+        return NULL;
     }
 
     if (text[0] == ':') {
@@ -963,6 +984,119 @@ static char *unquote_literal(const char **pp) {
  * The fields are assigned directly rather than through
  * turi_env_apply_lang_dialect, which rewinds to a preload that does not exist
  * yet. */
+/* -------------------------------------------------------------------------
+ * installed-spice-libraries D10: the session's module search path.
+ *
+ * `-I` dirs first, then what a file in cwd would get from the per-file walk:
+ * the enclosing spice's src/ and deps, or -- with no build.tur above cwd --
+ * the installed spices; then every spice `:spice` loaded.  Computed when a
+ * session env is made (startup, :reset, :run), from the cwd at that moment;
+ * `:cd` alone does not recompute it.  The base dir stays the default ".", so
+ * a sibling module still follows `:cd`.  TUR_NO_AUTO_SPICE=1 leaves only
+ * the -I dirs and the `:spice` loads.
+ * ---------------------------------------------------------------------- */
+typedef struct { char *name; char *dir; } ReplSpice;
+static ReplSpice *g_repl_spices;
+static int        g_n_repl_spices;
+
+static bool repl_no_auto_spice(void) {
+    const char *no_auto = getenv("TUR_NO_AUTO_SPICE");
+    return no_auto && strcmp(no_auto, "1") == 0;
+}
+
+static void repl_setup_search_path(TuriEnv *env) {
+    char anchor[PATH_MAX + 4];
+    const char *path = NULL;
+    char cwd[PATH_MAX];
+    if (!repl_no_auto_spice() && getcwd(cwd, sizeof cwd)) {
+        /* "<cwd>/-" names a file in cwd: the walk starts there. */
+        snprintf(anchor, sizeof anchor, "%s/-", cwd);
+        path = anchor;
+    }
+    (void)turi_env_set_search_path_with(env, path, g_repl_include_dirs,
+                                        g_repl_n_include_dirs);
+    turi_env_set_module_base_dir(env, NULL);
+    for (int i = 0; i < g_n_repl_spices; i++)
+        (void)turi_env_add_spice_search_path(env, g_repl_spices[i].name,
+                                             g_repl_spices[i].dir);
+}
+
+/* The spice root at or above `dir`, as the image loader spells it. */
+static char *repl_spice_root_of(const char *dir) {
+    char probe[PATH_MAX + 4];
+    snprintf(probe, sizeof probe, "%s/-", dir);
+    return spice_find_root(probe);
+}
+
+/* The image `env` holds for the spice rooted at `root`, if any. */
+static const TurSpiceImage *repl_image_for_root(const TuriEnv *env,
+                                                const char *root) {
+    if (!root) return NULL;
+    if (env->spice_image && tur_spice_image_root(env->spice_image) &&
+        strcmp(tur_spice_image_root(env->spice_image), root) == 0)
+        return env->spice_image;
+    for (struct TurSpiceImageNode *n = env->attached_spice_images; n; n = n->next) {
+        const char *r = n->image ? tur_spice_image_root(n->image) : NULL;
+        if (r && strcmp(r, root) == 0) return n->image;
+    }
+    return NULL;
+}
+
+/* Before a turn runs: attach the compiled image of each spice the turn
+ * imports from (turi_env_attach_spice_for_module), so its inline-C functions
+ * run instead of being refused.  Built once per spice and cached in
+ * `<root>/.tur-repl-cache/`.  A turn's imports are found textually -- strings,
+ * comments and ```c fences skipped -- since the turn has not been read yet:
+ * `(import m ...)`, `import(m ...)` and a line-leading sweet `import m`. */
+static void repl_attach_turn_imports(TuriEnv *env, const char *src) {
+    if (!env || !src || repl_no_auto_spice()) return;
+    const char *p = src;
+    bool line_start = true;
+    while (*p) {
+        if (*p == '"') {
+            for (p++; *p && *p != '"'; p++)
+                if (*p == '\\' && p[1]) p++;
+            if (*p) p++;
+            line_start = false;
+            continue;
+        }
+        if (*p == ';') { while (*p && *p != '\n') p++; continue; }
+        if (p[0] == '#' && p[1] == '|') {
+            const char *e = strstr(p + 2, "|#");
+            p = e ? e + 2 : p + strlen(p);
+            continue;
+        }
+        if (strncmp(p, "```", 3) == 0) {
+            const char *e = strstr(p + 3, "```");
+            p = e ? e + 3 : p + strlen(p);
+            continue;
+        }
+        if (*p == '\n') { line_start = true; p++; continue; }
+        if (line_start && (*p == ' ' || *p == '\t')) { p++; continue; }
+        const char *after = NULL;
+        if (strncmp(p, "(import", 7) == 0 && (p[7] == ' ' || p[7] == '\t' || p[7] == '\n'))
+            after = p + 7;
+        else if (strncmp(p, "import(", 7) == 0 && (p == src || !isalnum((unsigned char)p[-1])))
+            after = p + 7;
+        else if (line_start && strncmp(p, "import", 6) == 0 && (p[6] == ' ' || p[6] == '\t'))
+            after = p + 6;
+        line_start = false;
+        if (!after) { p++; continue; }
+        while (*after == ' ' || *after == '\t' || *after == '\n') after++;
+        char mod[512];
+        size_t n = 0;
+        while (after[n] && n + 1 < sizeof mod && !isspace((unsigned char)after[n]) &&
+               after[n] != ')' && after[n] != '(' && after[n] != '[' && after[n] != ']')
+            n++;
+        if (n > 0 && n + 1 < sizeof mod && after[0] != ':') {
+            memcpy(mod, after, n);
+            mod[n] = '\0';
+            (void)turi_env_attach_spice_for_module(env, mod, getenv("TUR_BIN"));
+        }
+        p = after + n;
+    }
+}
+
 static TuriEnv *repl_fresh_env(LangDialect d, ReaderType r) {
     TuriEnv *env = turi_env_new();
     if (!env) return NULL;
@@ -971,7 +1105,132 @@ static TuriEnv *repl_fresh_env(LangDialect d, ReaderType r) {
     env->reader_type = r;
     g_lang_prelude   = lang_traits(d)->prelude;
     repl_preload_stdlib_and_natives(env);
+    /* installed-spice-libraries D10: a session's search path and its `:spice`
+     * loads are configuration, not state -- every fresh env (:reset, :run)
+     * gets them back.  An image is cached, so re-attaching is a load, not a
+     * rebuild. */
+    repl_setup_search_path(env);
+    for (int i = 0; i < g_n_repl_spices; i++)
+        (void)turi_env_attach_spice(env, g_repl_spices[i].dir, getenv("TUR_BIN"));
     return env;
+}
+
+/* -------------------------------------------------------------------------
+ * :spice [name-or-path]  (installed-spice-libraries D10)
+ *
+ * Loads a spice into the session: an installed one by its registry name, or
+ * a checkout by path (anything with a '/', or starting with '.' or '~').  Its
+ * src/ and dependency closure join the search path, and its compiled image is
+ * attached, so its exports are bound bare and qualified (the RP4 rules).
+ * Works inside a project too: it is an explicit request.  Bare `:spice` lists
+ * the loaded spices and the installed ones not loaded yet.
+ * ---------------------------------------------------------------------- */
+static void cmd_spice_list(void) {
+    if (g_n_repl_spices == 0) {
+        printf(";; no spices loaded with :spice\n");
+    } else {
+        printf(";; loaded:\n");
+        for (int i = 0; i < g_n_repl_spices; i++)
+            printf(";;   %-20s %s\n", g_repl_spices[i].name, g_repl_spices[i].dir);
+    }
+    char **names = NULL, **dirs = NULL;
+    int n = spice_search_installed_names(&names, &dirs);
+    int shown = 0;
+    for (int i = 0; i < n; i++) {
+        bool loaded = false;
+        for (int j = 0; j < g_n_repl_spices && !loaded; j++)
+            loaded = strcmp(g_repl_spices[j].name, names[i]) == 0;
+        if (!loaded) {
+            if (shown++ == 0) printf(";; installed, not loaded (:spice <name>):\n");
+            printf(";;   %-20s %s\n", names[i], dirs[i]);
+        }
+        free(names[i]);
+        free(dirs[i]);
+    }
+    free(names);
+    free(dirs);
+    if (n == 0) printf(";; no spices installed (`tur install <source>`)\n");
+    fflush(stdout);
+}
+
+static void cmd_spice(TuriEnv *env, const char *arg) {
+    while (*arg == ' ' || *arg == '\t') arg++;
+    size_t al = strlen(arg);
+    while (al > 0 && (arg[al - 1] == ' ' || arg[al - 1] == '\t')) al--;
+    if (al == 0) { cmd_spice_list(); return; }
+    char want[PATH_MAX];
+    snprintf(want, sizeof want, "%.*s", (int)al, arg);
+
+    bool is_path = strchr(want, '/') || want[0] == '.' || want[0] == '~';
+    char dir[PATH_MAX];
+    char name[256];
+    char *version = NULL;
+    if (is_path) {
+        char expanded[PATH_MAX];
+        const char *home = getenv("HOME");
+        if (want[0] == '~' && home)
+            snprintf(expanded, sizeof expanded, "%s%s", home, want + 1);
+        else
+            snprintf(expanded, sizeof expanded, "%s", want);
+        char mp[PATH_MAX];
+        if (!realpath(expanded, dir) || !pkg_resolve_manifest_path(dir, mp, sizeof mp)) {
+            fprintf(stderr, "tur repl: :spice: no build.tur at '%s'\n", want);
+            return;
+        }
+        PkgManifest m;
+        memset(&m, 0, sizeof m);
+        const char *base = strrchr(dir, '/');
+        snprintf(name, sizeof name, "%s", base ? base + 1 : dir);
+        if (pkg_manifest_read(mp, &m)) {
+            if (m.name && *m.name) snprintf(name, sizeof name, "%s", m.name);
+            if (m.version) version = strdup(m.version);
+        }
+        pkg_manifest_free(&m);
+    } else {
+        if (!tur_installed_spice_dir(want, dir, sizeof dir, &version, NULL)) {
+            fprintf(stderr, "tur repl: :spice: '%s' is not installed -- "
+                            "`tur install <source>` first\n", want);
+            return;
+        }
+        snprintf(name, sizeof name, "%s", want);
+    }
+
+    char real[PATH_MAX];
+    if (!realpath(dir, real)) snprintf(real, sizeof real, "%s", dir);
+    for (int i = 0; i < g_n_repl_spices; i++) {
+        if (strcmp(g_repl_spices[i].dir, real) == 0) {
+            printf(";; spice %s already loaded\n", g_repl_spices[i].name);
+            fflush(stdout);
+            free(version);
+            return;
+        }
+    }
+
+    ReplSpice *grown = (ReplSpice *)realloc(g_repl_spices,
+        (size_t)(g_n_repl_spices + 1) * sizeof *grown);
+    if (!grown) { free(version); return; }
+    g_repl_spices = grown;
+    g_repl_spices[g_n_repl_spices].name = strdup(name);
+    g_repl_spices[g_n_repl_spices].dir  = strdup(real);
+    g_n_repl_spices++;
+
+    (void)turi_env_add_spice_search_path(env, name, real);
+    int rc = turi_env_attach_spice(env, real, getenv("TUR_BIN"));
+    char *root = repl_spice_root_of(real);
+    const TurSpiceImage *img = repl_image_for_root(env, root);
+    free(root);
+    if (rc < 0 || !img) {
+        printf("Loaded spice %s%s%s from %s (modules only: its compiled image "
+               "did not build, so inline-C functions will not run)\n",
+               name, version ? " " : "", version ? version : "", real);
+    } else {
+        uint32_t n_exports = tur_spice_image_count(img);
+        printf("Loaded spice %s%s%s from %s (%u export%s)\n",
+               name, version ? " " : "", version ? version : "", real,
+               n_exports, n_exports == 1 ? "" : "s");
+    }
+    fflush(stdout);
+    free(version);
 }
 
 /* -------------------------------------------------------------------------
@@ -1109,6 +1368,8 @@ static void print_help(void) {
         "  :pwd                print the working directory\n"
         "  :cd [dir]           change the working directory (bare :cd goes home)\n"
         "  :explain [code]     explain the most recent error, or a TUR-E#### code\n"
+        "  :spice [name|path]  load an installed spice (or a checkout) into the\n"
+        "                      session; bare :spice lists loaded and installed\n"
         "\n"
         "Tutorial commands:\n"
         "  :tutorial              list available tutorials\n"
@@ -1554,6 +1815,12 @@ int turi_repl_run(bool watch_mode) {
                 free(line);
                 continue;
             }
+            /* installed-spice-libraries IL5: :spice [name|path] */
+            if (strcmp(line, ":spice") == 0 || strncmp(line, ":spice ", 7) == 0) {
+                cmd_spice(env, line + 6);
+                free(line);
+                continue;
+            }
             /* :pwd — print the working directory, as the host spells it. */
             if (strcmp(line, ":pwd") == 0) {
                 char cwd[PATH_MAX];
@@ -1862,6 +2129,10 @@ int turi_repl_run(bool watch_mode) {
             g_last_diag_code[0] = '\0';
 
             repl_emit_exec_marker();   /* busy from here until the D below */
+
+            /* installed-spice-libraries D10: compiled code for the spices
+             * this turn imports from. */
+            repl_attach_turn_imports(env, multi.data);
 
             char     type_tag[64] = {0};
             TuriValue result = turi_eval_typed(env, multi.data,

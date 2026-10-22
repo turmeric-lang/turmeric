@@ -1,0 +1,14 @@
+-- outside a project: installed spice, -I, :spice by name and path
+=> nil
+=> 42
+=> nil
+=> 42
+Loaded spice ilc 0.4.0 from <tmp>/ilc (1 export)
+;; spice ilc already loaded
+;; spice ilc already loaded
+tur repl: :spice: 'nosuch' is not installed -- `tur install <source>` first
+=> 6
+;; ilc <tmp>/ilc
+-- inside a project: :spice is an explicit request
+Loaded spice ilc 0.4.0 from <tmp>/ilc (1 export)
+=> 10

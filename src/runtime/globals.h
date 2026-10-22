@@ -330,6 +330,10 @@ extern const char *g_lang_prelude;
  * first line.  Read once at REPL startup; `#lang` at the prompt is the other
  * route to the same env state. */
 extern const char *g_repl_start_lang;
+/* installed-spice-libraries D10: `tur repl -I <dir>` -- absolute paths, in
+ * command-line order, searched ahead of everything the REPL discovers. */
+extern const char *const *g_repl_include_dirs;
+extern int                g_repl_n_include_dirs;
 /* r7rs-lang-plan R9: in a synthetic `<...>` source (the interpreter's `<eval>`
  * blob), the first line that is USER input rather than the pinned stdlib
  * preload, or 0 when nothing is pinned.  The REPL compiles the pinned preload

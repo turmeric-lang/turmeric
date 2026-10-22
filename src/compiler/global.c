@@ -205,7 +205,27 @@ static void gs_parse_str_vec(const Form *f, char ***out, int *n_out) {
     }
 }
 
+static bool tur_state_read_clean(const char *path, TurState *out);
+
+/* The reader runs on the diag layer: it reports "empty" when diag_had_error()
+ * is already set -- as it still is in a REPL after a turn that failed, where
+ * `:spice <name>` then said the spice was not installed -- and it registers
+ * its stack-local SourceFile in the file table.  So it runs on a clean slate
+ * and the caller's table and flag are put back, the way libturi's
+ * turi_env_set_search_path_with treats the manifest reader. */
 bool tur_state_read(const char *path, TurState *out) {
+    const SourceFile *saved[DIAG_MAX_FILES];
+    size_t n_saved = diag_files_save(saved, sizeof(saved) / sizeof(saved[0]));
+    bool had_error = diag_had_error();
+    diag_reset();
+    bool ok = tur_state_read_clean(path, out);
+    diag_reset();
+    diag_files_replace(saved, n_saved);
+    if (had_error) diag_force_had_error();
+    return ok;
+}
+
+static bool tur_state_read_clean(const char *path, TurState *out) {
     memset(out, 0, sizeof(*out));
     out->format_version = 1;
 

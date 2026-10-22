@@ -833,6 +833,8 @@ int cmd_repl_main(int argc, char **argv) {
      * making the user type `#lang saffron` as their first line.  Both
      * routes land on the same env switch. */
     const char *repl_lang_flag = NULL;
+    const char **repl_inc = NULL;   /* process-lifetime: the session reads it */
+    int n_repl_inc = 0;
     for (int i = 2; i < argc; i++) {
         if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
             return usage_repl();
@@ -857,9 +859,36 @@ int cmd_repl_main(int argc, char **argv) {
             repl_engine_flag = argv[i] + 9;
             continue;
         }
+        /* installed-spice-libraries D10: -I <dir> / -I<dir>, repeatable.
+         * Made absolute now, so a later :cd does not change what it names. */
+        int consumed = 0;
+        if (drv_is_include_flag(argc, argv, i, &consumed)) {
+            const char *d = consumed == 2 ? argv[i + 1] : argv[i] + 2;
+            char abs[4096];
+            if (!realpath(d, abs)) {
+                char cwd[4096];
+                if (d[0] != '/' && getcwd(cwd, sizeof cwd))
+                    snprintf(abs, sizeof abs, "%s/%s", cwd, d);
+                else
+                    snprintf(abs, sizeof abs, "%s", d);
+            }
+            const char **grown = (const char **)realloc(
+                (void *)repl_inc, (size_t)(n_repl_inc + 1) * sizeof(char *));
+            if (!grown) return 2;
+            repl_inc = grown;
+            repl_inc[n_repl_inc++] = strdup(abs);
+            i += consumed - 1;
+            continue;
+        }
+        if (strcmp(argv[i], "-I") == 0) {
+            fprintf(stderr, "tur repl: -I requires a directory argument\n");
+            return drv_usage_error(usage_repl);
+        }
         fprintf(stderr, "tur repl: unknown option '%s'\n", argv[i]);
         return drv_usage_error(usage_repl);
     }
+    g_repl_include_dirs   = repl_inc;
+    g_repl_n_include_dirs = n_repl_inc;
     /* J2 (jit-engine-plan 3.3): spice auto-discovery can build in process
      * through the MIR engine instead of the `tur build --shared`
      * subprocess + dlopen.  This used to hang off `--enable=jit`; that

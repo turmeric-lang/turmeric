@@ -632,6 +632,22 @@ void turi_env_set_module_base_dir(TuriEnv *env, const char *path);
 #define TURI_HAS_SEARCH_PATH_FOR 1
 int turi_env_set_search_path_for(TuriEnv *env, const char *path);
 
+/* turi_env_set_search_path_for with `pre_dirs` (copied) in front of
+ * everything it discovers, in order -- the shape `tur repl -I <dir>` wants.
+ * `path` may be NULL: then only `pre_dirs`, and the default base dir.
+ * Outside any `build.tur` the discovered part is the installed spices
+ * (`tur install`), unless TUR_NO_GLOBAL_SPICES=1.  Returns the list's
+ * length, or -1 on allocation failure. */
+int turi_env_set_search_path_with(TuriEnv *env, const char *path,
+                                  const char *const *pre_dirs, int n_pre);
+
+/* Append one spice's `src/` and its dependency closure to the env's search
+ * dirs (dirs already there are skipped), labelling them as `name`'s in a
+ * failed import's search listing.  For a REPL that loads a spice on request
+ * (`:spice`).  Returns the number of dirs added, or -1 on failure. */
+int turi_env_add_spice_search_path(TuriEnv *env, const char *name,
+                                   const char *spice_dir);
+
 /* Let source evaluated on `env` use `(import ...)` at the top level, outside
  * any defmodule -- the interactive-session model a REPL or a notebook wants,
  * where one turn imports and the next calls what it referred.  `:refer`,

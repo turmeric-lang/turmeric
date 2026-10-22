@@ -327,10 +327,13 @@ int usage_test(void) {
 int usage_repl(void) {
     fprintf(stderr,
         "usage:\n"
-        "  tur repl [--watch] [--lang <dialect>] [--engine <name>]\n"
+        "  tur repl [-I <dir>...] [--watch] [--lang <dialect>] [--engine <name>]\n"
         "                  start the interactive REPL\n"
         "\n"
         "flags:\n"
+        "  -I <dir>        add a module search directory (repeatable); searched\n"
+        "                  before the enclosing spice or, outside a project,\n"
+        "                  before the installed spices\n"
         "  --lang <d>      start in a language dialect: \"turmeric\" (default),\n"
         "                  \"saffron\" (unannotated params default to any),\n"
         "                  \"r7rs\" (Scheme), or any base `tur dialects` lists.\n"
@@ -351,10 +354,13 @@ int usage_repl(void) {
         "  :type <expr>    print the inferred type of an expression\n"
         "  :reload <file>  reload a source file\n"
         "  :reset          clear session and start fresh\n"
+        "  :spice [name]   load an installed spice (or a checkout, by path);\n"
+        "                  bare :spice lists loaded and installed spices\n"
         "  :tutorial       start the interactive tutorial\n"
         "\n"
         "REPL forms:\n"
-        "  (reload)        rebuild the loaded spice and refresh bindings\n"
+        "  (reload)        rebuild the loaded spice (and any attached spice\n"
+        "                  whose sources changed) and refresh bindings\n"
         "\n"
         "Try 'tur --help' for global options.\n");
     return 0;
