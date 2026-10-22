@@ -361,7 +361,7 @@ static const char *const reserved_special_forms_[] = {
     "while", "case", "defer", "return", "match", "quote", "gensym",
     "^tailcall",
     /* definition forms */
-    "defn", "fn", "\xce\xbb", "extern-c", "defmacro", "defmodule", "import",
+    "defn", "fn", "\xce\xbb", "extern-c", "defmacro", "defmodule", "defscript", "import",
     "export", "load", "defstruct", "make-struct", "defopaque", "defdata",
     "defgadt", "defclass", "definstance", "defkind", "defrec", "deftype",
     "defalias", "defdynamic", "defeffect", "defprotocol",
@@ -4663,6 +4663,7 @@ static Expr *elab_call_inner(Elab *e, Form *call) {
     /* Phase M0: Module system */
     if (name == e->sym_load)      return elab_load(e, call);
     if (name == e->sym_defmodule) return elab_defmodule(e, call);
+    if (name == e->sym_defscript) return elab_defscript(e, call);
     if (name == e->sym_export) {
         diag_emit(DIAG_ERROR, call->span,
                   "export is only allowed inside defmodule");

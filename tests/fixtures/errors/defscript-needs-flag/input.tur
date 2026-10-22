@@ -1,0 +1,4 @@
+;; script-spice-deps-plan SD-D7: a header without --enable=script-deps.
+(defscript :spices #map{})
+
+(defn main [] : int 0)

@@ -1,0 +1,5 @@
+;; script-spice-deps-plan SD-D1: the header must be the first form.
+(defn helper [] : int 1)
+(defscript :spices #map{})
+
+(defn main [] : int 0)

@@ -44,6 +44,7 @@
 #include "symbols.h"
 #include "platform_fs.h"
 #include "runtime/sha256.h"
+#include "script_deps.h"   /* tur add/fetch --script */
 
 /* ================================================================== */
 /* Internal helpers                                                     */
@@ -128,6 +129,10 @@ static void pkg_check_tur_version_span(const char *range, Span span);
 
 /* Get a value from an F_MAP by keyword name (without colon).
  * Returns NULL if not found. */
+/* The file the map-slot diagnostics below name: "build.tur", or a script
+ * while pkg_parse_spices_for reads a `defscript` header's `:spices`. */
+static const char *s_pkg_who = "build.tur";
+
 static const Form *map_get_kw(const Form *map, const char *kw) {
     if (!map || (map->tag != F_MAP && map->tag != F_MAP_LITERAL)) return NULL;
     const FormList *fl = &map->as.list;
@@ -163,7 +168,7 @@ static void report_non_map(const Form *got, const char *what) {
     bool bare_brace = sf && sf->src && got->span.off_start < sf->len &&
                       sf->src[got->span.off_start] == '{';
     diag_emit(DIAG_ERROR, got->span,
-              "build.tur: %s must be a map -- use `#map{...}`%s", what,
+              "%s: %s must be a map -- use `#map{...}`%s", s_pkg_who, what,
               bare_brace
                 ? " (a bare `{...}` is curly-infix arithmetic, not a map)"
                 : "");
@@ -187,11 +192,11 @@ static bool reject_fx_row(const Form *f, const char *what, const char *alt) {
         (f->fx_prov == (uint8_t)PROV_FX_AT_LEGACY) ? "@{...}"   : NULL;
     if (!spelling) return false;
     diag_emit(DIAG_ERROR, f->span,
-              "TUR-E0620: build.tur: %s expects a map (`#{...}` or "
+              "TUR-E0620: %s: %s expects a map (`#{...}` or "
               "`#map{...}`)%s%s; got an effect-row literal (`%s`).  Effect "
               "rows are the spelling used in function type annotations "
               "(e.g. `#fx{Net}`), not manifest maps.",
-              what, alt ? " or " : "", alt ? alt : "", spelling);
+              s_pkg_who, what, alt ? " or " : "", alt ? alt : "", spelling);
     return true;
 }
 
@@ -256,24 +261,24 @@ static bool parse_spices(const Form *map, PkgManifest *m) {
          * segments here, which is the tightest thing that is also true. */
         if (!tur_path_segment_ok(s->name)) {
             diag_emit(DIAG_ERROR, key->span,
-                "build.tur: spice name '%s' is not a usable directory name -- "
+                "%s: spice name '%s' is not a usable directory name -- "
                 "letters, digits, '.', '_', '-' and '+' only, not starting "
-                "with '-' or '.'", s->name ? s->name : "");
+                "with '-' or '.'", s_pkg_who, s->name ? s->name : "");
             return false;
         }
         if (s->ref && !tur_git_ref_ok(s->ref)) {
             diag_emit(DIAG_ERROR, val->span,
-                "build.tur: spice \"%s\" has an unusable :ref '%s' -- a ref "
+                "%s: spice \"%s\" has an unusable :ref '%s' -- a ref "
                 "may hold letters, digits, '.', '_', '-', '+' and '/', must "
                 "not start with '-', '.' or '/', and must not contain '..'",
-                s->name, s->ref);
+                s_pkg_who, s->name, s->ref);
             return false;
         }
         if (s->url && !tur_url_ok(s->url)) {
             diag_emit(DIAG_ERROR, val->span,
-                "build.tur: spice \"%s\" has an unusable :url '%s' -- it must "
+                "%s: spice \"%s\" has an unusable :url '%s' -- it must "
                 "not start with '-' or contain whitespace or a character the "
-                "shell would read as syntax", s->name, s->url);
+                "shell would read as syntax", s_pkg_who, s->name, s->url);
             return false;
         }
         /* `:subdir` names a directory INSIDE the fetched repo, so it is
@@ -283,17 +288,17 @@ static bool parse_spices(const Form *map, PkgManifest *m) {
          * a place we create, so it gets shell-safety and no containment. */
         if (s->subdir && !tur_rel_path_ok(s->subdir)) {
             diag_emit(DIAG_ERROR, val->span,
-                "build.tur: spice \"%s\" has an unusable :subdir '%s' -- it "
+                "%s: spice \"%s\" has an unusable :subdir '%s' -- it "
                 "must be a relative path inside the fetched repository (no "
                 "'..', no leading '/', no shell metacharacters)",
-                s->name, s->subdir);
+                s_pkg_who, s->name, s->subdir);
             return false;
         }
         if (s->path && (!tur_arg_is_shell_safe(s->path) || s->path[0] == '-')) {
             diag_emit(DIAG_ERROR, val->span,
-                "build.tur: spice \"%s\" has an unusable :path '%s' -- it must "
+                "%s: spice \"%s\" has an unusable :path '%s' -- it must "
                 "not start with '-' or contain a character the shell would "
-                "read as syntax", s->name, s->path);
+                "read as syntax", s_pkg_who, s->name, s->path);
             return false;
         }
         const Form *opt_f = map_get_kw(val, "optional");
@@ -315,6 +320,14 @@ static bool parse_spices(const Form *map, PkgManifest *m) {
         }
     }
     return true;
+}
+
+bool pkg_parse_spices_for(const Form *map, PkgManifest *m, const char *who) {
+    const char *prev = s_pkg_who;
+    s_pkg_who = who ? who : "build.tur";
+    bool ok = parse_spices(map, m);
+    s_pkg_who = prev;
+    return ok;
 }
 
 /* Forward declaration (parse_str_vec is defined after parse_cmake_deps). */
@@ -874,11 +887,12 @@ static void bins_clear(PkgManifest *m) {
  * `:cmake-deps` written the same way, were silently not in effect.  Splice a
  * keyword-headed line list back into the defpackage's own items; the forms
  * keep their spans, so `tur add` can still find them in the source. */
-static const Form *pkg_dp_unwrap_sweet_lines(Arena *a, const Form *dp) {
+static const Form *pkg_dp_unwrap_sweet_lines_from(Arena *a, const Form *dp,
+                                                  uint32_t first) {
     uint32_t n = dp->as.list.len, m = 0;
     for (uint32_t i = 0; i < n; i++) {
         const Form *it = dp->as.list.items[i];
-        bool line = i >= 2 && it->tag == F_LIST && it->as.list.len >= 1 &&
+        bool line = i >= first && it->tag == F_LIST && it->as.list.len >= 1 &&
                     it->as.list.items[0]->tag == F_KEYWORD;
         m += line ? it->as.list.len : 1;
     }
@@ -887,7 +901,7 @@ static const Form *pkg_dp_unwrap_sweet_lines(Arena *a, const Form *dp) {
     uint32_t k = 0;
     for (uint32_t i = 0; i < n; i++) {
         Form *it = dp->as.list.items[i];
-        bool line = i >= 2 && it->tag == F_LIST && it->as.list.len >= 1 &&
+        bool line = i >= first && it->tag == F_LIST && it->as.list.len >= 1 &&
                     it->as.list.items[0]->tag == F_KEYWORD;
         if (line) {
             for (uint32_t j = 0; j < it->as.list.len; j++)
@@ -897,6 +911,12 @@ static const Form *pkg_dp_unwrap_sweet_lines(Arena *a, const Form *dp) {
         }
     }
     return form_list(a, dp->span, items, m);
+}
+
+/* A defpackage's keyword pairs start after its name; a defscript's right
+ * after the head. */
+static const Form *pkg_dp_unwrap_sweet_lines(Arena *a, const Form *dp) {
+    return pkg_dp_unwrap_sweet_lines_from(a, dp, 2);
 }
 
 bool pkg_manifest_read_status(const char *path, PkgManifest *out,
@@ -1334,6 +1354,263 @@ bool pkg_manifest_read_status(const char *path, PkgManifest *out,
 /* ================================================================== */
 /* :tur-version enforcement                                             */
 /* ================================================================== */
+
+/* ================================================================== */
+/* script-spice-deps-plan SD0: the `(defscript ...)` header            */
+/* ================================================================== */
+
+/* Skip whitespace, `;` line comments and `#| ... |#` block comments (which
+ * nest) from `i`. */
+static size_t sh_skip_ws(const char *s, size_t n, size_t i) {
+    for (;;) {
+        while (i < n && isspace((unsigned char)s[i])) i++;
+        if (i < n && s[i] == ';') {
+            while (i < n && s[i] != '\n') i++;
+            continue;
+        }
+        if (i + 1 < n && s[i] == '#' && s[i + 1] == '|') {
+            int depth = 1;
+            i += 2;
+            while (i < n && depth > 0) {
+                if (i + 1 < n && s[i] == '|' && s[i + 1] == '#') { depth--; i += 2; }
+                else if (i + 1 < n && s[i] == '#' && s[i + 1] == '|') { depth++; i += 2; }
+                else i++;
+            }
+            continue;
+        }
+        return i;
+    }
+}
+
+static size_t sh_skip_line(const char *s, size_t n, size_t i) {
+    while (i < n && s[i] != '\n') i++;
+    return i < n ? i + 1 : i;
+}
+
+/* Past everything that may precede a header: a shebang at byte 0 (the shape
+ * the reader skips), comments, a `#lang` line, more comments. */
+static size_t sh_skip_preamble(const char *s, size_t n) {
+    size_t i = 0;
+    if (n >= 2 && s[0] == '#' && s[1] == '!' &&
+        (n < 3 || s[2] == '/' || s[2] == ' ' || s[2] == '\t' ||
+         s[2] == '\n' || s[2] == '\r'))
+        i = sh_skip_line(s, n, 0);
+    i = sh_skip_ws(s, n, i);
+    if (i + 5 <= n && memcmp(s + i, "#lang", 5) == 0 &&
+        (i + 5 == n || s[i + 5] == ' ' || s[i + 5] == '\t'))
+        i = sh_skip_ws(s, n, sh_skip_line(s, n, i));
+    return i;
+}
+
+bool pkg_text_is_preamble(const char *src, size_t n) {
+    if (!src) return true;
+    return sh_skip_preamble(src, n) >= n;
+}
+
+size_t pkg_preamble_end(const char *src, size_t n) {
+    return src ? sh_skip_preamble(src, n) : 0;
+}
+
+static bool sh_is_delim(const char *s, size_t n, size_t i) {
+    return i >= n || isspace((unsigned char)s[i]) || s[i] == '(' ||
+           s[i] == ')' || s[i] == ';';
+}
+
+/* End of the parenthesised form opening at `i`: past its matching close,
+ * skipping strings, comments and `#\c` character literals. */
+static size_t sh_sexpr_end(const char *s, size_t n, size_t i) {
+    int depth = 0;
+    while (i < n) {
+        char c = s[i];
+        if (c == '"') {
+            i++;
+            while (i < n && s[i] != '"') i += (s[i] == '\\' && i + 1 < n) ? 2 : 1;
+            i++;
+            continue;
+        }
+        if (c == ';') { i = sh_skip_line(s, n, i); continue; }
+        if (c == '#' && i + 1 < n && s[i + 1] == '\\') { i += 3; continue; }
+        if (c == '(' || c == '[' || c == '{') depth++;
+        else if (c == ')' || c == ']' || c == '}') {
+            if (--depth <= 0) return i + 1;
+        }
+        i++;
+    }
+    return n;
+}
+
+bool pkg_script_header_locate(const char *src, size_t len, int reader_type,
+                              size_t *start, size_t *end) {
+    if (!src) return false;
+    size_t i = sh_skip_preamble(src, len);
+    if (i >= len) return false;
+    static const char kw[] = "defscript";
+    const size_t kl = sizeof(kw) - 1;
+    if (src[i] == '(') {
+        size_t j = sh_skip_ws(src, len, i + 1);
+        if (j + kl > len || memcmp(src + j, kw, kl) != 0 ||
+            !sh_is_delim(src, len, j + kl))
+            return false;
+        *start = i;
+        *end   = sh_sexpr_end(src, len, i);
+        return true;
+    }
+    /* Sweet-exp: the header is the same form in indentation syntax -- a
+     * `defscript` line at column 0 and the lines indented under it. */
+    if ((ReaderType)reader_type != READER_SWEET) return false;
+    if (i > 0 && src[i - 1] != '\n') return false;
+    if (i + kl > len || memcmp(src + i, kw, kl) != 0 ||
+        !sh_is_delim(src, len, i + kl))
+        return false;
+    size_t j = sh_skip_line(src, len, i);
+    while (j < len) {
+        size_t k = j;
+        while (k < len && (src[k] == ' ' || src[k] == '\t')) k++;
+        bool blank = (k >= len || src[k] == '\n' || src[k] == '\r' || src[k] == ';');
+        if (!blank && k == j) break;     /* back at column 0: the next form */
+        j = sh_skip_line(src, len, j);
+    }
+    *start = i;
+    *end   = j;
+    return true;
+}
+
+PkgScriptStatus pkg_script_header_read(const char *path, bool in_project,
+                                       PkgManifest *out) {
+    memset(out, 0, sizeof(*out));
+    if (!path) return PKG_SCRIPT_NONE;
+    FILE *f = fopen(path, "rb");
+    if (!f) return PKG_SCRIPT_NONE;   /* the compile reports a missing file */
+    if (fseek(f, 0, SEEK_END) != 0) { fclose(f); return PKG_SCRIPT_NONE; }
+    long sz = ftell(f);
+    rewind(f);
+    if (sz < 0) { fclose(f); return PKG_SCRIPT_NONE; }
+    char *src = (char *)malloc((size_t)sz + 1);
+    if (!src) { fclose(f); return PKG_SCRIPT_NONE; }
+    if (fread(src, 1, (size_t)sz, f) != (size_t)sz) {
+        fclose(f); free(src); return PKG_SCRIPT_NONE;
+    }
+    fclose(f);
+    src[sz] = '\0';
+
+    /* The file's own reader: its `#lang` line, else its extension.  A bad
+     * `#lang` line is the compile's to report, and `#lang r7rs` is out of
+     * scope -- neither has a header. */
+    const char *rest = src;
+    size_t rest_len = (size_t)sz;
+    ReaderType rt = detect_lang(src, (size_t)sz, &rest, &rest_len, NULL, NULL);
+    if (rt == READER_UNKNOWN) { free(src); return PKG_SCRIPT_NONE; }
+    if (rest == src) rt = reader_type_from_extension(path);
+    if (rt != READER_TURMERIC && rt != READER_CURLY_INFIX &&
+        rt != READER_NEOTERIC && rt != READER_SWEET) {
+        free(src); return PKG_SCRIPT_NONE;
+    }
+    size_t h_start = 0, h_end = 0;
+    if (!pkg_script_header_locate(rest, rest_len, (int)rt, &h_start, &h_end)) {
+        free(src); return PKG_SCRIPT_NONE;
+    }
+
+    /* Read the header's text only: the rest of the file is the compile's,
+     * and a reader error there must be reported once, by it.  The source
+     * keeps everything before the header so spans and line numbers are the
+     * file's own. */
+    Arena arena;
+    arena_init(&arena, 0);
+    SymbolTable st;
+    symtab_init(&st, &arena);
+    char *text = (char *)arena_alloc(&arena, h_end + 1);
+    memcpy(text, rest, h_end);
+    text[h_end] = '\0';
+    size_t head_offset = (size_t)(rest - src);
+    free(src);
+
+    const SourceFile *prev_file0 = diag_source_file(0);
+    SourceFile file = {0};
+    file.path        = path;
+    file.src         = text;
+    file.len         = (uint32_t)h_end;
+    file.head_offset = head_offset;
+    file.file_id     = 0;
+    file.reader_type = rt;
+    diag_register_file(&file);
+    uint64_t err0 = diag_error_serial();
+
+    PkgScriptStatus result = PKG_SCRIPT_OK;
+    uint32_t nforms = 0;
+    Form **forms = read_all(&arena, &st, &file, &nforms);
+    Form *hdr = (forms && nforms > 0) ? forms[nforms - 1] : NULL;
+    if (!hdr || diag_error_serial() != err0 || hdr->tag != F_LIST ||
+        hdr->as.list.len < 1 || hdr->as.list.items[0]->tag != F_SYM ||
+        strcmp(hdr->as.list.items[0]->as.sym->name, "defscript") != 0) {
+        result = (diag_error_serial() != err0) ? PKG_SCRIPT_ERROR : PKG_SCRIPT_NONE;
+        goto done;
+    }
+    if (rt == READER_SWEET)
+        hdr = (Form *)pkg_dp_unwrap_sweet_lines_from(&arena, hdr, 1);
+
+    if (in_project) {
+        diag_emit_with_code(DIAG_ERROR, hdr->span, TUR_E0632_DEFSCRIPT_IN_PROJECT,
+            "a `defscript` header in a file inside a project -- the "
+            "project's build.tur governs this file; declare the spice there "
+            "(`tur add`), or move the script out of the project");
+        result = PKG_SCRIPT_ERROR;
+        goto done;
+    }
+
+    const FormList *fl = &hdr->as.list;
+    for (uint32_t i = 1; i < fl->len; i++) {
+        const Form *kf = fl->items[i];
+        if (kf->tag != F_KEYWORD) {
+            diag_emit_with_code(DIAG_ERROR, kf->span, TUR_E0631_DEFSCRIPT_MALFORMED,
+                "`defscript` takes keyword options, as in "
+                "`(defscript :spices #map{...})`");
+            result = PKG_SCRIPT_ERROR;
+            continue;
+        }
+        const char *kw = kf->as.sym->name;
+        const Form *vf = (i + 1 < fl->len) ? fl->items[i + 1] : NULL;
+        i++;
+        if (strcmp(kw, "spices") == 0 && vf) {
+            spices_clear(out);
+            if (!pkg_parse_spices_for(vf, out, "defscript")) result = PKG_SCRIPT_ERROR;
+        } else if (strcmp(kw, "spices") == 0) {
+            diag_emit_with_code(DIAG_ERROR, kf->span, TUR_E0631_DEFSCRIPT_MALFORMED,
+                "`:spices` needs a value -- `#map{\"name\" #map{:url ... "
+                ":ref ...}}`");
+            result = PKG_SCRIPT_ERROR;
+        } else {
+            diag_emit_with_code(DIAG_ERROR, kf->span, TUR_E0631_DEFSCRIPT_MALFORMED,
+                "`defscript` does not take :%s -- a script header declares "
+                ":spices only; anything more needs a project (`tur init`, then "
+                "build.tur)", kw);
+            result = PKG_SCRIPT_ERROR;
+        }
+    }
+    for (int i = 0; result == PKG_SCRIPT_OK && i < out->n_spices; i++) {
+        const PkgSpice *s = &out->spices[i];
+        if (s->url && !s->ref) {
+            diag_emit_with_code(DIAG_ERROR, hdr->span, TUR_E0631_DEFSCRIPT_MALFORMED,
+                "spice \"%s\" has a :url but no :ref -- a script header "
+                "pins every fetched dep (a tag, a branch or a commit id)",
+                s->name);
+            result = PKG_SCRIPT_ERROR;
+        } else if (!s->url && !s->path && !s->is_global) {
+            diag_emit_with_code(DIAG_ERROR, hdr->span, TUR_E0631_DEFSCRIPT_MALFORMED,
+                "spice \"%s\" says neither where to fetch it (:url and "
+                ":ref), nor where it is (:path), nor that it is installed "
+                "(:global true)", s->name);
+            result = PKG_SCRIPT_ERROR;
+        }
+    }
+    if (diag_error_serial() != err0) result = PKG_SCRIPT_ERROR;
+
+done:
+    diag_unregister_file(&file, prev_file0);
+    symtab_free(&st);
+    arena_free(&arena);
+    if (result != PKG_SCRIPT_OK) pkg_manifest_free(out);
+    return result;
+}
 
 /* The compiler's own version, injected by CMake on tur_core.  Guarded because
  * pkg.c had no reason to know it before this check existed. */
@@ -2038,6 +2315,17 @@ static void hash_walk_push(HashWalk *w, const char *rel) {
     w->n++;
 }
 
+/* Top-level names a caller asked to leave out (pkg_hash_dir_excluding); NULL
+ * for the plain hash.  Set only for the duration of one walk. */
+static const char *const *s_hash_skip_top;
+
+static bool hash_skip_top(const char *rel) {
+    if (!s_hash_skip_top) return false;
+    for (const char *const *p = s_hash_skip_top; *p; p++)
+        if (strcmp(*p, rel) == 0) return true;
+    return false;
+}
+
 static void hash_walk(HashWalk *w, const char *root, const char *rel, int depth) {
     if (w->failed || depth > PKG_HASH_MAX_DEPTH) return;
     char abs[4096];
@@ -2052,6 +2340,7 @@ static void hash_walk(HashWalk *w, const char *root, const char *rel, int depth)
         char child[4096];
         if (*rel) snprintf(child, sizeof(child), "%s/%s", rel, ent->d_name);
         else      snprintf(child, sizeof(child), "%s", ent->d_name);
+        if (!*rel && hash_skip_top(child)) continue;
         char child_abs[4096];
         snprintf(child_abs, sizeof(child_abs), "%s/%s", root, child);
         struct stat st;
@@ -2117,6 +2406,14 @@ bool pkg_hash_dir(const char *dir, char out[PKG_HASH_MAX]) {
 
     for (int i = 0; i < w.n; i++) free(w.paths[i]);
     free(w.paths);
+    return ok;
+}
+
+bool pkg_hash_dir_excluding(const char *dir, const char *const *skip_top,
+                            char out[PKG_HASH_MAX]) {
+    s_hash_skip_top = skip_top;
+    bool ok = pkg_hash_dir(dir, out);
+    s_hash_skip_top = NULL;
     return ok;
 }
 
@@ -2410,7 +2707,9 @@ char *pkg_git_fetch(const char *url, const char *ref, const char *dest_dir) {
     bool ok = true;
     if (!already_cloned) {
         /* Fresh clone */
-        buf_puts(&cmd, "git clone --depth 1 ");
+        /* advice.detachedHead: a tag :ref checks out detached, and git's
+         * eleven-line advice about that says nothing to a spice consumer. */
+        buf_puts(&cmd, "git -c advice.detachedHead=false clone --depth 1 ");
         if (ref) {
             buf_puts(&cmd, "--branch ");
             ok = pkg_cmd_arg(&cmd, ref) && ok;
@@ -6802,6 +7101,21 @@ int cmd_pkg_add(int argc, char **argv) {
     bool        is_workspace  = false;
     bool        optional      = false;
 
+    /* script-spice-deps-plan SD4: `tur add --script <file> ...` edits a
+     * script's `(defscript ...)` header instead of build.tur. */
+    for (int i = 2; i + 1 < argc; i++) {
+        if (strcmp(argv[i], "--script") != 0) continue;
+        const char *script = argv[i + 1];
+        char **rest = (char **)malloc((size_t)argc * sizeof(char *));
+        if (!rest) return 1;
+        int nr = 0;
+        for (int j = 2; j < argc; j++)
+            if (j != i && j != i + 1) rest[nr++] = argv[j];
+        int rc = script_deps_add_cmd(script, nr, rest);
+        free(rest);
+        return rc;
+    }
+
     for (int i = 2; i < argc; i++) {
         if (strcmp(argv[i], "--ref") == 0 && i + 1 < argc) {
             ref = argv[++i];
@@ -7134,11 +7448,25 @@ int cmd_pkg_fetch(int argc, char **argv) {
     bool dry_run = false;
     bool refetch = false;
     bool frozen  = false;
+    const char *script = NULL;
+    bool        lock_script = false;
     for (int i = 2; i < argc; i++) {
         if (strcmp(argv[i], "--update") == 0) update = true;
         else if (strcmp(argv[i], "--dry-run") == 0) dry_run = true;
         else if (strcmp(argv[i], "--refetch") == 0) refetch = true;
         else if (strcmp(argv[i], "--frozen") == 0) frozen = true;
+        else if (strcmp(argv[i], "--script") == 0 && i + 1 < argc) script = argv[++i];
+        else if (strcmp(argv[i], "--lock") == 0) lock_script = true;
+    }
+    /* script-spice-deps-plan SD4: a script's header, not a project. */
+    if (script) {
+        g_script_deps_update = update;
+        return script_deps_fetch_cmd(script, lock_script);
+    }
+    if (lock_script) {
+        fprintf(stderr, "tur fetch: --lock goes with --script <file>; a "
+                "project's tur.lock is always written\n");
+        return 2;
     }
     /* --frozen (the `npm ci` / `cargo --locked` shape): fetch exactly what
      * tur.lock pins and fail if anything would change it -- a dep with no row,

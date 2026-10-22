@@ -655,3 +655,152 @@ void tur_spice_modules_free(char **mods, int n) {
     for (int i = 0; i < n; i++) free(mods[i]);
     free(mods);
 }
+
+/* ------------------------------------------------------------------ */
+/* script-spice-deps-plan SD1: the script-dep cache index              */
+/* ------------------------------------------------------------------ */
+
+bool tur_script_cache_dir(char *out, size_t out_sz) {
+    char cache[4096];
+    if (!tur_global_cache_dir(cache, sizeof(cache))) return false;
+    int n = snprintf(out, out_sz, "%s/script-spices", cache);
+    return n > 0 && (size_t)n < out_sz;
+}
+
+static bool tur_script_index_read_clean(const char *path, TurScriptIndex *out) {
+    memset(out, 0, sizeof(*out));
+    FILE *f = fopen(path, "rb");
+    if (!f) return true;
+    fseek(f, 0, SEEK_END);
+    long sz = ftell(f);
+    rewind(f);
+    if (sz <= 0) { fclose(f); return true; }
+    Arena arena;
+    arena_init(&arena, 0);
+    SymbolTable st;
+    symtab_init(&st, &arena);
+    char *src = (char *)arena_alloc(&arena, (size_t)sz + 1);
+    if (fread(src, 1, (size_t)sz, f) != (size_t)sz) {
+        fclose(f); symtab_free(&st); arena_free(&arena); return true;
+    }
+    fclose(f);
+    src[sz] = '\0';
+
+    SourceFile file = {0};
+    file.path = path;
+    file.src  = src;
+    file.len  = (uint32_t)sz;
+    diag_register_file(&file);
+    uint32_t nforms = 0;
+    Form **forms = read_all(&arena, &st, &file, &nforms);
+    for (uint32_t i = 0; forms && !diag_had_error() && i < nforms; i++) {
+        const Form *frm = forms[i];
+        if (frm->tag != F_LIST || frm->as.list.len < 1 ||
+            frm->as.list.items[0]->tag != F_SYM ||
+            strcmp(frm->as.list.items[0]->as.sym->name, "defscriptindex") != 0)
+            continue;
+        const FormList *fl = &frm->as.list;
+        for (uint32_t k = 1; k + 1 < fl->len; k += 2) {
+            const Form *kf = fl->items[k];
+            const Form *vf = fl->items[k + 1];
+            if (kf->tag != F_KEYWORD || strcmp(kf->as.sym->name, "refs") != 0)
+                continue;
+            if (vf->tag != F_VEC && vf->tag != F_LIST) continue;
+            for (uint32_t j = 0; j < vf->as.list.len; j++) {
+                const Form *ef = vf->as.list.items[j];
+                char *url = gs_form_str_dup(gs_map_get_kw(ef, "url"));
+                char *ref = gs_form_str_dup(gs_map_get_kw(ef, "ref"));
+                char *res = gs_form_str_dup(gs_map_get_kw(ef, "resolved"));
+                char *at  = gs_form_str_dup(gs_map_get_kw(ef, "fetched-at"));
+                TurScriptRef *nr = url && ref && res
+                    ? (TurScriptRef *)realloc(out->refs,
+                          (size_t)(out->n_refs + 1) * sizeof(TurScriptRef))
+                    : NULL;
+                if (!nr) { free(url); free(ref); free(res); free(at); continue; }
+                out->refs = nr;
+                TurScriptRef *r = &out->refs[out->n_refs++];
+                r->url = url; r->ref = ref; r->resolved = res; r->fetched_at = at;
+            }
+        }
+        break;
+    }
+    symtab_free(&st);
+    arena_free(&arena);
+    return true;
+}
+
+bool tur_script_index_read(const char *path, TurScriptIndex *out) {
+    const SourceFile *saved[DIAG_MAX_FILES];
+    size_t n_saved = diag_files_save(saved, sizeof(saved) / sizeof(saved[0]));
+    bool had_error = diag_had_error();
+    diag_reset();
+    bool ok = tur_script_index_read_clean(path, out);
+    diag_reset();
+    diag_files_replace(saved, n_saved);
+    if (had_error) diag_force_had_error();
+    return ok;
+}
+
+bool tur_script_index_write(const char *path, const TurScriptIndex *ix) {
+    char tmp_path[4096];
+    snprintf(tmp_path, sizeof(tmp_path), "%s.tmp.%d", path, (int)getpid());
+    FILE *f = fopen(tmp_path, "w");
+    if (!f) return false;
+    fprintf(f, ";;; index.tur -- the script-dep cache's resolved refs. "
+               "Managed by tur; safe to delete.\n");
+    fprintf(f, "(defscriptindex\n  :format-version 1\n  :refs [\n");
+    for (int i = 0; i < ix->n_refs; i++) {
+        const TurScriptRef *r = &ix->refs[i];
+        fprintf(f, "    #{");
+        state_put_kv(f, "url", r->url);
+        state_put_kv(f, "ref", r->ref);
+        state_put_kv(f, "resolved", r->resolved);
+        state_put_kv(f, "fetched-at", r->fetched_at);
+        fprintf(f, "}\n");
+    }
+    fprintf(f, "  ])\n");
+    fclose(f);
+    if (rename(tmp_path, path) != 0) { unlink(tmp_path); return false; }
+    return true;
+}
+
+const char *tur_script_index_lookup(const TurScriptIndex *ix,
+                                    const char *url, const char *ref) {
+    for (int i = 0; i < ix->n_refs; i++)
+        if (strcmp(ix->refs[i].url, url) == 0 && strcmp(ix->refs[i].ref, ref) == 0)
+            return ix->refs[i].resolved;
+    return NULL;
+}
+
+void tur_script_index_set(TurScriptIndex *ix, const char *url, const char *ref,
+                          const char *resolved) {
+    TurScriptRef *r = NULL;
+    for (int i = 0; i < ix->n_refs && !r; i++)
+        if (strcmp(ix->refs[i].url, url) == 0 && strcmp(ix->refs[i].ref, ref) == 0)
+            r = &ix->refs[i];
+    if (!r) {
+        TurScriptRef *nr = (TurScriptRef *)realloc(ix->refs,
+            (size_t)(ix->n_refs + 1) * sizeof(TurScriptRef));
+        if (!nr) return;
+        ix->refs = nr;
+        r = &ix->refs[ix->n_refs++];
+        memset(r, 0, sizeof(*r));
+        r->url = strdup(url);
+        r->ref = strdup(ref);
+    }
+    free(r->resolved);
+    free(r->fetched_at);
+    r->resolved   = strdup(resolved);
+    r->fetched_at = strdup(gs_iso_now());
+}
+
+void tur_script_index_free(TurScriptIndex *ix) {
+    for (int i = 0; i < ix->n_refs; i++) {
+        free(ix->refs[i].url);
+        free(ix->refs[i].ref);
+        free(ix->refs[i].resolved);
+        free(ix->refs[i].fetched_at);
+    }
+    free(ix->refs);
+    memset(ix, 0, sizeof(*ix));
+}

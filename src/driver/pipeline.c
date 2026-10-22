@@ -419,7 +419,17 @@ int tur_collect_symbols(const char *path, const char *logical_path,
     char **owned = NULL;
     int    n_owned = 0;
     Ls2ResolverCtx ls2;
+    /* script-spice-deps-plan SD5: an editor keystroke resolves a script
+     * header from the cache only -- it never fetches, prints or exits. */
+    bool prev_editor = g_script_deps_editor;
+    g_script_deps_editor = true;
+    /* The editor honors a header whatever the flag says: it only reads the
+     * cache, and a script whose `#!` line carries --enable=script-deps would
+     * otherwise show TUR-E0633 in the editor and run fine. */
+    bool prev_script_deps = g_opt_script_deps;
+    g_opt_script_deps = true;
     auto_append_spice_includes(anchor, &inc, &n_inc, &owned, &n_owned, &ls2);
+    g_script_deps_editor = prev_editor;
 
     Buf discard;
     buf_init(&discard);
@@ -442,6 +452,7 @@ int tur_collect_symbols(const char *path, const char *logical_path,
     free(owned);
     free(inc);
     lsp_collect_end();
+    g_opt_script_deps = prev_script_deps;
     return rc;
 }
 
@@ -1106,7 +1117,10 @@ int tur_check_only(const char *path) {
     char **owned = NULL;
     int    n_owned = 0;
     Ls2ResolverCtx ls2;
+    bool prev_editor = g_script_deps_editor;
+    g_script_deps_editor = true;   /* see tur_collect_symbols */
     auto_append_spice_includes(path, &inc, &n_inc, &owned, &n_owned, &ls2);
+    g_script_deps_editor = prev_editor;
 
     Buf discard;
     buf_init(&discard);

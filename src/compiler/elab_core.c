@@ -2793,6 +2793,7 @@ void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     e->cap_macros = 0;
     /* Phase M0: Module system */
     e->sym_defmodule = intern_cstr(st, "defmodule");
+    e->sym_defscript = intern_cstr(st, "defscript");
     e->sym_export = intern_cstr(st, "export");
     e->sym_export_from = intern_cstr(st, "export-from");
     e->sym_effect = intern_cstr(st, "effect");

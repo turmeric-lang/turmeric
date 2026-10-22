@@ -444,6 +444,17 @@ static const ExperimentDescriptor EXPERIMENTS[] = {
       "0.71.0",                  /* expires_at -- advisory; never blocks a release */
       XF_LIFECYCLE_PROTOTYPE,
       &g_opt_discontinue },
+    /* script-deps (script-spice-deps-plan): a single-file script declares
+     * its spices in a `(defscript :spices #map{...})` header, fetched into
+     * the script-dep cache and resolved hermetically.  Gated while the key
+     * set, the <file>.lock format and the cache layout settle. */
+    { "script-deps",
+      "a `(defscript :spices ...)` header declares a single-file script's spices",
+      "docs/upcoming/script-spice-deps-plan.md",
+      "0.70.0",                  /* introduced */
+      "0.74.0",                  /* expires_at -- advisory; never blocks a release */
+      XF_LIFECYCLE_PROTOTYPE,
+      &g_opt_script_deps },
     /* loop-invariants GRADUATED 2026-10-03, in the 0.61 line (introduced
      * 0.57.0, prototype, advisory expires_at 0.58.0).  `(while c :invariant p
      * ...)` is always on: the runtime checks, the initiation/preservation

@@ -64,6 +64,7 @@
 #include "expr.h"
 #include "pkg.h"          /* PkgManifest */
 #include "spice_search.h" /* resolve_include_dirs_from_manifest */
+#include "script_deps.h"  /* script-spice-deps-plan */
 #include "turi/inline_c_jit.h"  /* TuriInlineCJitHook */
 #include "turi/spice_loader.h"  /* TurSpiceJitHook */
 
@@ -310,5 +311,9 @@ int drv_parse_global_flags(int *argc_io, char **argv);
 const DrvCommand *drv_find_command(const char *tok, bool *ambiguous);
 int drv_usage(void);
 int drv_try_external_subcommand(int argc, char **argv);
+/* script-spice-deps-plan SD-D6: `tur <script> args...`. */
+bool drv_is_script_word(const char *w);
+bool drv_script_word_shaped(const char *w);   /* the name test alone */
+int  drv_run_script(int argc, char **argv);
 
 #endif /* TUR_DRIVER_H */
