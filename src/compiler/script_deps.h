@@ -22,6 +22,7 @@
  * per-file command, so the header is honored in one place. */
 
 #include <stdbool.h>
+#include <stddef.h>
 
 /* `--offline`: resolve from the cache only; a missing entry is TUR-E0634. */
 extern bool g_script_deps_offline;
@@ -67,6 +68,19 @@ int  script_deps_fetch_cmd(const char *script, bool lock);
  * add the entry to it, written back through the formatter.  `argv` holds the
  * words after `--script <file>`.  Returns a process exit status. */
 int  script_deps_add_cmd(const char *script, int argc, char **argv);
+
+/* project-less-tools-plan PT3: the cache entry for one (url, ref, subdir),
+ * outside any script header -- `tur x <url>`.  The same directory, naming,
+ * index.tur and fetched-project setup a header's `:url` dep gets, so a tool
+ * and a script that name the same commit share one tree.  `ref` NULL is the
+ * default branch.  `update` re-resolves a tag or branch ref; `offline`
+ * refuses to fetch.  Returns 1 with the spice root (the entry, or its
+ * `subdir`) in `spice_dir_out`, or -1 after printing why not.  `who` prefixes
+ * the messages. */
+int  script_deps_cache_entry(const char *who, const char *name,
+                             const char *url, const char *ref,
+                             const char *subdir, bool update, bool offline,
+                             char *spice_dir_out, size_t cap);
 
 /* `tur cache list` / `tur cache clean [--older-than <days>]`. */
 int  cmd_cache(int argc, char **argv);

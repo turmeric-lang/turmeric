@@ -65,6 +65,9 @@ int drv_run_program(const char *engine, const char *entry,
                     char **inc, int n_inc,
                     char **prog_argv, int prog_argc);
 
+/* == driver/cmd_x.c ======================================================== */
+int cmd_x(int argc, char **argv);
+
 /* == driver/jit.c ========================================================== */
 int cmd_jit(int argc, char **argv);
 

@@ -1055,6 +1055,10 @@ static const DrvCommand COMMANDS[] = {
       "install a spice binary globally",
       "  tur install <url> [--ref <ref>]   install a spice binary globally\n"
       "  tur install <path> --path         install a local spice binary globally\n" },
+    /* project-less-tools-plan PT3. */
+    { "x", cmd_x, DRV_CMD_PACKAGE,
+      "run a spice's binary without installing it",
+      "  tur x <name|path|url> [-- <args>] run a spice's :bin without installing it\n" },
     { "uninstall", cmd_pkg_uninstall, DRV_CMD_PACKAGE,
       "remove a globally installed spice",
       "  tur uninstall <name>              remove a globally installed spice\n" },

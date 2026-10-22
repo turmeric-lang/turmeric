@@ -552,6 +552,85 @@ static int inst_check_module_conflicts(const char *verb, const char *install_nam
     return 0;
 }
 
+bool pkg_build_spice_bin(const char *who, const char *src_dir,
+                         const PkgManifest *m, const char *bin_name,
+                         const char *entry, const char *out_path) {
+    struct stat st;
+    char entry_abs[4096];
+    if (entry[0] == '/')
+        snprintf(entry_abs, sizeof(entry_abs), "%s", entry);
+    else
+        snprintf(entry_abs, sizeof(entry_abs), "%s/%s", src_dir, entry);
+    if (stat(entry_abs, &st) != 0) {
+        fprintf(stderr, "%s: :bin entrypoint '%s' for binary '%s' not found.\n",
+                who, entry_abs, bin_name);
+        return false;
+    }
+
+    char self_exe[4096];
+    inst_self_exe(self_exe, sizeof(self_exe));
+    /* `tur build` invokes cc with autolink markers like
+     * `src/runtime/hamt.c` that are interpreted relative to cwd. Find the
+     * turmeric source root from the exe path and cd there before the
+     * sub-build so those relative paths resolve. */
+    char tur_root[4096];
+    bool have_root = inst_find_turmeric_root(self_exe, tur_root, sizeof(tur_root));
+
+    /* The include list project mode computes for this root: its own src/,
+     * then the transitive :spices closure now on disk under <root>/spices/.
+     * The link inputs (:c-sources, the cmake/ deps manifest) are found by
+     * `tur build`'s own walk up from the entry file to this root. */
+    const char **inc_dirs = NULL;
+    int n_inc_dirs = 0;
+    resolve_include_dirs_from_manifest(src_dir, m, /*include_own_src=*/true,
+                                       &inc_dirs, &n_inc_dirs);
+
+    Buf cmd;
+    bool cmd_ok = true;
+    buf_init(&cmd);
+    if (have_root) {
+        /* `cd` alone does not change DRIVE on Windows: from C:, `cd D:\x`
+         * silently succeeds and leaves you on C:.  /d is the switch that
+         * makes it mean what this code intends. */
+        buf_puts(&cmd, TUR_CD " ");
+        cmd_ok = pkg_cmd_arg(&cmd, tur_root) && cmd_ok;
+        buf_puts(&cmd, " && ");
+    }
+    cmd_ok = pkg_cmd_arg(&cmd, self_exe) && cmd_ok;
+    buf_puts(&cmd, " build ");
+    cmd_ok = pkg_cmd_arg(&cmd, entry_abs) && cmd_ok;
+    for (int j = 0; j < n_inc_dirs; j++) {
+        buf_puts(&cmd, " -I ");
+        cmd_ok = pkg_cmd_arg(&cmd, inc_dirs[j]) && cmd_ok;
+    }
+    buf_puts(&cmd, " -o ");
+    cmd_ok = pkg_cmd_arg(&cmd, out_path) && cmd_ok;
+    buf_putc(&cmd, '\0');
+    for (int j = 0; j < n_inc_dirs; j++) free((void *)inc_dirs[j]);
+    free((void *)inc_dirs);
+
+    /* This command STARTS with a quoted program path (or with `cd` when
+     * have_root), which is the case cmd.exe's "strip the first and last
+     * quote" rule tears in half.  tur_shell_command adds the enclosing
+     * pair it eats; on POSIX it is a copy. */
+    char wrapped[16384];
+    if (cmd_ok && tur_shell_command(cmd.data, wrapped, sizeof(wrapped)) != 0)
+        cmd_ok = false;
+
+    fprintf(stderr, "%s: building %s ...\n", who, bin_name);
+    int rc = cmd_ok ? system(wrapped) : -1;
+    buf_free(&cmd);
+    if (rc != 0) {
+        fprintf(stderr, "%s: build failed for '%s' (rc=%d)\n", who, bin_name, rc);
+        return false;
+    }
+    if (stat(out_path, &st) != 0) {
+        fprintf(stderr, "%s: build produced no output at '%s'\n", who, out_path);
+        return false;
+    }
+    return true;
+}
+
 static int do_install_spec(const InstallSpec *spec) {
     const char *src         = spec->src;
     const char *ref         = spec->ref;
@@ -724,104 +803,19 @@ static int do_install_spec(const InstallSpec *spec) {
         return 1;
     }
 
-    /* `tur build` invokes cc with autolink markers like
-     * `src/runtime/hamt.c` that are interpreted relative to cwd. Find the
-     * turmeric source root from the exe path and cd there before each
-     * sub-build so those relative paths resolve. */
-    char tur_root[4096];
-    bool have_root = inst_find_turmeric_root(self_exe, tur_root, sizeof(tur_root));
-
-    /* The include list project mode computes for this root: its own src/,
-     * then the transitive :spices closure now on disk under <root>/spices/.
-     * The link inputs (:c-sources, the cmake/ deps manifest) are found by
-     * `tur build`'s own walk up from the entry file to this root. */
-    const char **inc_dirs = NULL;
-    int n_inc_dirs = 0;
-    if (m.n_bins > 0)
-        resolve_include_dirs_from_manifest(src_dir, &m, /*include_own_src=*/true,
-                                           &inc_dirs, &n_inc_dirs);
-#define INST_FREE_INCS() do { for (int j_ = 0; j_ < n_inc_dirs; j_++) \
-                                  free((void *)inc_dirs[j_]);            \
-                              free((void *)inc_dirs); } while (0)
-
     for (int i = 0; i < m.n_bins; i++) {
-        const char *bin_name = m.bin_names[i];
-        const char *entry    = m.bin_paths[i];
-
-        char entry_abs[4096];
-        if (entry[0] == '/')
-            snprintf(entry_abs, sizeof(entry_abs), "%s", entry);
-        else
-            snprintf(entry_abs, sizeof(entry_abs), "%s/%s", src_dir, entry);
-
-        if (stat(entry_abs, &st) != 0) {
-            fprintf(stderr,
-                "tur %s: :bin entrypoint '%s' for binary '%s' "
-                "not found.\n", verb, entry_abs, bin_name);
-            INST_FREE_INCS();
-            pkg_manifest_free(&m);
-            free(resolved_sha);
-            return 1;
-        }
-
         char bin_out[4096];
         snprintf(bin_out, sizeof(bin_out), "%s/%s",
-                 build_out_dir, bin_name);
-
-        Buf cmd;
-        bool cmd_ok = true;
-        buf_init(&cmd);
-        if (have_root) {
-            /* `cd` alone does not change DRIVE on Windows: from C:, `cd D:\x`
-             * silently succeeds and leaves you on C:.  /d is the switch that
-             * makes it mean what this code intends. */
-            buf_puts(&cmd, TUR_CD " ");
-            cmd_ok = pkg_cmd_arg(&cmd, tur_root) && cmd_ok;
-            buf_puts(&cmd, " && ");
-        }
-        cmd_ok = pkg_cmd_arg(&cmd, self_exe) && cmd_ok;
-        buf_puts(&cmd, " build ");
-        cmd_ok = pkg_cmd_arg(&cmd, entry_abs) && cmd_ok;
-        for (int j = 0; j < n_inc_dirs; j++) {
-            buf_puts(&cmd, " -I ");
-            cmd_ok = pkg_cmd_arg(&cmd, inc_dirs[j]) && cmd_ok;
-        }
-        buf_puts(&cmd, " -o ");
-        cmd_ok = pkg_cmd_arg(&cmd, bin_out) && cmd_ok;
-        buf_putc(&cmd, '\0');
-
-        /* This command STARTS with a quoted program path (or with `cd` when
-         * have_root), which is the case cmd.exe's "strip the first and last
-         * quote" rule tears in half.  tur_shell_command adds the enclosing
-         * pair it eats; on POSIX it is a copy. */
-        char wrapped[16384];
-        if (cmd_ok && tur_shell_command(cmd.data, wrapped, sizeof(wrapped)) != 0)
-            cmd_ok = false;
-
-        fprintf(stderr, "tur %s: building %s ...\n", verb, bin_name);
-        int rc = cmd_ok ? system(wrapped) : -1;
-        buf_free(&cmd);
-        if (rc != 0) {
-            fprintf(stderr,
-                "tur %s: build failed for '%s' (rc=%d)\n",
-                verb, bin_name, rc);
-            INST_FREE_INCS();
-            pkg_manifest_free(&m);
-            free(resolved_sha);
-            return 1;
-        }
-        if (stat(bin_out, &st) != 0) {
-            fprintf(stderr,
-                "tur %s: build produced no output at '%s'\n",
-                verb, bin_out);
-            INST_FREE_INCS();
+                 build_out_dir, m.bin_names[i]);
+        char who[64];
+        snprintf(who, sizeof(who), "tur %s", verb);
+        if (!pkg_build_spice_bin(who, src_dir, &m, m.bin_names[i],
+                                 m.bin_paths[i], bin_out)) {
             pkg_manifest_free(&m);
             free(resolved_sha);
             return 1;
         }
     }
-    INST_FREE_INCS();
-#undef INST_FREE_INCS
 
     /* ---------------------------------------------------------------- */
     /* 6. Symlink each binary into bin_dir.                             */
