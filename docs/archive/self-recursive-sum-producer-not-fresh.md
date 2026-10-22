@@ -34,6 +34,7 @@ comes out of a finite chain of self-calls ending in a non-self path, and the
 walk checked each such path mints a fresh box. A function that returns its
 parameter on some path stays not fresh.
 
-The fixture's consumer is written `(Some v) (match v ...)`: a nested
-`(Some (StrVal s))` pattern defeats the separate non-retain inference, open as
-[nested-ctor-pattern-defeats-sum-nonretain](../reported/nested-ctor-pattern-defeats-sum-nonretain.md).
+The fixture's consumer was written `(Some v) (match v ...)`: a nested
+`(Some (StrVal s))` pattern defeated the separate non-retain inference,
+[nested-ctor-pattern-defeats-sum-nonretain](nested-ctor-pattern-defeats-sum-nonretain.md)
+(resolved 2026-10-22; the fixture now carries both spellings).

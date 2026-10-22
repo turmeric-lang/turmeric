@@ -1195,6 +1195,7 @@ Type emit_type_from_kind(TypeKind k);
 /* heap-sum-generic-never-specialized: `t` with every open slot (a parameter a
  * constructor application left unfixed) grounded to the int carrier. */
 Type emit_ground_open_slots(EmitCtx *ctx, Type t, bool *changed);
+bool emit_fn_def_is_monomorphic(const FnDef *fd);
 Type emit_resolve_type(EmitCtx *ctx, Type t);
 const char *emit_type_c_name(EmitCtx *ctx, Type t);
 /* Increment 4 stage 3 (repr-decision-function-plan): the shadow instrument,

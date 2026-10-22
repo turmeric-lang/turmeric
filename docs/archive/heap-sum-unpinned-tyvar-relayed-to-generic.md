@@ -1,5 +1,9 @@
 # A `:heap` sum whose element nothing in the program fixes, passed to a generic, still reaches the dead-base trap
 
+**RESOLVED 2026-10-22** -- see [Resolution](#resolution-2026-10-22). Pinned by
+`heap-sum-generic-rebuild` (`(has? (bump (Nil)))` and `(has? (Nil))`, on all
+three engines).
+
 **Severity: low.** A correct program aborts at runtime, but only one whose
 element type is genuinely undetermined: nothing anywhere fixes `T`. The
 interpreter runs it.
@@ -57,3 +61,30 @@ dead-base trap.
    reliable "the current function has no type parameters" signal.
 3. **Pin it** by adding the repro's `(has? (bump (Nil)))` line to
    `tests/fixtures/heap-sum-generic-rebuild`.
+
+## Resolution (2026-10-22)
+
+Fix direction 2, in the emitter. The root cause was slightly different from
+the one traced above: the nullary `(Nil)` handed to `bump`'s `(Fr T)`
+parameter types as `(Fr T)` with the **callee parameter's own named `T`**
+(not the bare ADT), so both `bump` and `has?` record the binding `T := T` --
+a named variable, which is also the shape a generic relaying its own `T`
+produces, and which the emitter must keep abstract inside a generic body.
+
+The two are told apart by the caller. `emit_fn_def_is_monomorphic`
+(`emit_module.c`) answers whether a function has no typeclass constraint, is
+no instance method or dict-clone, and names no type variable anywhere in its
+signature. In such a body, with no active spec clone, a binding to a named
+type variable names nothing the caller could relay, so:
+
+- the open-slot grounding pass in `emit_abi_register_call` (the
+  `heap-sum-generic-never-specialized` block) grounds it to the int carrier
+  exactly as it grounds `(One 7.1)`'s open `B` -- gated, as before, on that
+  being what exposes a ground `:heap` sum -- and the per-spec clone
+  (`bump__spec__int64_t_int64_t`) is minted; and
+- `emit_heap_ctor_open_suffix` (`emit_expr.c`) grounds the named variables of
+  a `:heap` ctor's result type the same way in a monomorphic direct-emitted
+  body (`ctx->own_cur_fn`), so `main`'s own `(Nil)` names the `__int`
+  monomorph's ctor rather than the dead base.
+
+A generic body keeps every named binding abstract, as before.

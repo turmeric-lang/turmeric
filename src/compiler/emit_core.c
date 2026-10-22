@@ -936,6 +936,15 @@ bool expr_subtree_has_inline_c(const Expr *e) {
             return false;
         case EX_DYN_FIELD:   return expr_subtree_has_inline_c(e->as.dyn_field_.obj);
         case EX_RETURN:  return expr_subtree_has_inline_c(e->as.return_.value);
+        /* nested-ctor-pattern-defeats-sum-nonretain: a `panic` lowers to the
+         * preamble's tur_panic_at and carries no inline C of its own, so only
+         * its payload needs walking.  The nested-constructor-pattern lowering
+         * (elab_structs.c) puts one in every exhaustive group's unreachable
+         * fallthrough, so left to `default` a body written `(Some (StrVal
+         * s))` read as "may hide inline C" and lost the sum nonretain
+         * inference -- every caller then kept the box it handed in. */
+        case EX_PANIC:       return expr_subtree_has_inline_c(e->as.panic_.payload);
+        case EX_PANIC_WITH:  return expr_subtree_has_inline_c(e->as.panic_with_.payload);
         /* RM1 (bind chains): a nested closure literal is walked INTO -- its
          * captures are copies of this body's values, so inline C in there can
          * stash them just as inline C here could -- and the packings around a

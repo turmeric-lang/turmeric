@@ -1,0 +1,33 @@
+;; float-to-int-cast-out-of-range-differs: `(as <integer kind> <float>)` of a
+;; value outside the target's range SATURATES on every engine (Rust's `as`
+;; rule) -- a bare C cast left it undefined, so `(as uint8 300.7)` was 255
+;; compiled (gcc folding the constant) and 44 interpreted, and a run-time
+;; operand gave INT64_MIN's low bits.  NaN is 0; inside the range the value
+;; truncates toward zero.  The run-time operands (`big`, `mk-nan`, ...) are
+;; the cases a constant could never show: the C compiler cannot fold them.
+(defn big [] : float 1e30)
+(defn neg-big [] : float -1e30)
+(defn mk-nan [z : float] : float (/ z z))
+(defn half [] : float -0.5)
+
+(defn main [] : int
+  (println (as uint8 300.7))              ; 255
+  (println (as int8 -129.5))              ; -128
+  (println (as int 1e30))                 ; 9223372036854775807
+  (println (as int (big)))                ; 9223372036854775807
+  (println (as int (neg-big)))            ; -9223372036854775808
+  (println (as uint8 (big)))              ; 255
+  (println (as uint64 (big)))             ; 18446744073709551615
+  (println (as uint64 (neg-big)))         ; 0
+  (println (as int16 (big)))              ; 32767
+  (println (as uint32 (neg-big)))         ; 0
+  (println (as int32 (big)))              ; 2147483647
+  (println (as int8 (mk-nan 0.0)))        ; 0
+  (println (as int (mk-nan 0.0)))         ; 0
+  (println (as uint16 (mk-nan 0.0)))      ; 0
+  (println (as int8 (half)))              ; 0 (truncates toward zero)
+  (println (as uint8 (half)))             ; 0
+  (println (as int8 7.9))                 ; 7
+  (println (as uint8 255.9))              ; 255
+  (println (as int32 -2147483648.9))      ; -2147483648
+  0)

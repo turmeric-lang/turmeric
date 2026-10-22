@@ -6547,6 +6547,38 @@ static void emit_abi_link_nested_passed_closures(
     }
 }
 
+/* heap-sum-unpinned-tyvar-relayed-to-generic: is this function MONOMORPHIC --
+ * no typeclass constraint, not an instance method or dict-clone, and no type
+ * variable anywhere in its signature?  A binding to a named type variable
+ * recorded at a call inside such a body names nothing the caller could relay,
+ * so it is a slot nothing fixed rather than an abstraction to keep. */
+bool emit_fn_def_is_monomorphic(const FnDef *fd) {
+    if (!fd) return false;
+    if (fd->owner_instance || fd->n_dict_clone > 0 || fd->closure) return false;
+    if (fd->constraints.n_constraints > 0) return false;
+    const Binding *sb = fd->binding;
+    if (!sb || sb->type.kind != TY_FN) return false;
+    if (sb->fn_constraints && sb->fn_constraints->n_constraints > 0) return false;
+    const Type *rt = sb->type.as.fn.result_full_type;
+    if (rt && emit_abi_type_has_concrete_named_tyvar(rt)) return false;
+    if (sb->type.as.fn.arg_full_types)
+        for (uint32_t i = 0; i < sb->type.as.fn.arity; i++) {
+            const Type *at = sb->type.as.fn.arg_full_types[i];
+            if (at && emit_abi_type_has_concrete_named_tyvar(at)) return false;
+        }
+    return true;
+}
+
+/* ... and the same question of the function whose body the ABI scan is in:
+ * conservative (reads as generic) under an active spec clone or when no
+ * function is being scanned. */
+static bool emit_scan_fn_is_monomorphic(const EmitCtx *ctx) {
+    if (ctx->current_abi_specialization) return false;
+    const Expr *sf = ctx->current_scan_fn;
+    if (!sf || sf->kind != EX_FN_DEF) return false;
+    return emit_fn_def_is_monomorphic(sf->as.fn_def_.fn);
+}
+
 static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
                                    const Expr **items, uint32_t n_items,
                                    const Type *result_type_override) {
@@ -7345,14 +7377,30 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
      * argument took, emit_ground_open_slots), but only when that is what
      * exposes a ground `:heap` sum: Result/Option open slots ride the carrier
      * already and keep the bindings elab gave them. */
+    /* heap-sum-unpinned-tyvar-relayed-to-generic: `(has? (bump (Nil)))` with
+     * NOTHING in the program fixing `T` records `T := T` -- a NAMED variable,
+     * not an open slot (the nullary ctor took the callee parameter's own `T`
+     * as its argument), which is also the shape a generic relaying its own
+     * `T` produces.  The two are told apart by the CALLER: inside a generic
+     * body or an active spec the name may be the enclosing signature's and
+     * must stay abstract; in a MONOMORPHIC caller there is no variable it
+     * could be, so it is as open as `(One 7.1)`'s `B` and takes the same
+     * carrier grounding. */
     AbiTypeBinding open_fixed[ABI_TYPE_BINDINGS_MAX];
     if (!borrow_path && fd && bindings && n_bindings > 0 &&
         n_bindings <= ABI_TYPE_BINDINGS_MAX && fn_binding->type.kind == TY_FN) {
         bool any_open = false;
+        bool mono_caller = emit_scan_fn_is_monomorphic(ctx);
         for (uint8_t bi = 0; bi < n_bindings; bi++) {
             open_fixed[bi] = bindings[bi];
             open_fixed[bi].type = emit_ground_open_slots(ctx, bindings[bi].type,
                                                          &any_open);
+            if (mono_caller && open_fixed[bi].type.kind == TY_TYVAR &&
+                open_fixed[bi].type.as.tyvar_.name &&
+                open_fixed[bi].type.hkt_kind != KIND_TYPEROW) {
+                open_fixed[bi].type = emit_type_from_kind(TY_INT);
+                any_open = true;
+            }
         }
         bool exposes = false;
         for (uint32_t i = 0; any_open && !exposes && i <= fd->n_params; i++) {
@@ -12471,6 +12519,52 @@ static void emit_closure_fat_runtime(Buf *out, bool guarded) {
      * from an accidental value conversion (tests/check-emitted-float-
      * conversions.py). */
     buf_puts(out, "#define TUR_AS(T, x)    ((T)(x))\n");
+    /* float-to-int-cast-out-of-range-differs: `(as <integer kind> <float>)`.
+     * A float outside the target's range is undefined behaviour as a bare C
+     * cast -- gcc folded `(uint8_t)300.7` to 255 while a run-time operand
+     * gave INT64_MIN's low bits, and the interpreter 44 -- so the conversion
+     * SATURATES instead (Rust's `as` rule): NaN is 0, anything beyond the
+     * range is the nearest bound, and inside it truncation toward zero.
+     * Clamping the 64-bit result to a narrower width is the same answer as
+     * clamping the double (truncation and clamping commute on a float that
+     * is out of the narrow range).  Defined here, in the preamble, so the
+     * emitted-conversion check (tests/check-emitted-float-conversions.py)
+     * attributes the one real cast to the runtime rather than the program. */
+    buf_puts(out, "static inline int64_t tur_f2i64(double d) {\n"
+                  "    if (d != d) return 0;\n"
+                  "    if (d >= 9223372036854775808.0) return INT64_MAX;\n"
+                  "    if (d <= -9223372036854775808.0) return INT64_MIN;\n"
+                  "    return (int64_t)d;\n"
+                  "}\n"
+                  "static inline uint64_t tur_f2u64(double d) {\n"
+                  "    if (d != d || d <= -1.0) return 0;\n"
+                  "    if (d >= 18446744073709551616.0) return UINT64_MAX;\n"
+                  "    return (uint64_t)d;\n"
+                  "}\n"
+                  "static inline int8_t tur_f2i8(double d) {\n"
+                  "    int64_t v = tur_f2i64(d);\n"
+                  "    return (int8_t)(v < INT8_MIN ? INT8_MIN : v > INT8_MAX ? INT8_MAX : v);\n"
+                  "}\n"
+                  "static inline int16_t tur_f2i16(double d) {\n"
+                  "    int64_t v = tur_f2i64(d);\n"
+                  "    return (int16_t)(v < INT16_MIN ? INT16_MIN : v > INT16_MAX ? INT16_MAX : v);\n"
+                  "}\n"
+                  "static inline int32_t tur_f2i32(double d) {\n"
+                  "    int64_t v = tur_f2i64(d);\n"
+                  "    return (int32_t)(v < INT32_MIN ? INT32_MIN : v > INT32_MAX ? INT32_MAX : v);\n"
+                  "}\n"
+                  "static inline uint8_t tur_f2u8(double d) {\n"
+                  "    uint64_t v = tur_f2u64(d);\n"
+                  "    return (uint8_t)(v > UINT8_MAX ? UINT8_MAX : v);\n"
+                  "}\n"
+                  "static inline uint16_t tur_f2u16(double d) {\n"
+                  "    uint64_t v = tur_f2u64(d);\n"
+                  "    return (uint16_t)(v > UINT16_MAX ? UINT16_MAX : v);\n"
+                  "}\n"
+                  "static inline uint32_t tur_f2u32(double d) {\n"
+                  "    uint64_t v = tur_f2u64(d);\n"
+                  "    return (uint32_t)(v > UINT32_MAX ? UINT32_MAX : v);\n"
+                  "}\n");
     /* Integer `/` and `mod`.  A zero divisor has no value, and INT64_MIN / -1
      * (and % -1) traps on x86-64 although C only calls it overflow, so neither
      * is left to the bare operator.  A divisor of -1 is answered without

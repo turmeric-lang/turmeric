@@ -1,0 +1,28 @@
+;; turi-borrow-is-a-copy: a borrow is a reference to the PLACE on both
+;; engines.  The interpreter used to box a copy of the value, so a write
+;; through `&mut (.x p)` never reached `p` (3 interpreted, 10 compiled) and a
+;; borrow taken before a `set!` kept reading the old value.
+(defstruct P [x : int y : int])
+(defstruct Q [p : P n : int])
+
+(defn bump! [r : &mut int] : void (set! @r (+ @r 1)))
+
+(defn main [] : int
+  (let [^mut p (P 3 4)]
+    (let [m &mut (.x p)] (set! @m 10))
+    (println (.x p))                        ; 10
+    (bump! &mut (.y p))
+    (println (.y p)))                       ; 5
+  (let [^mut q (Q (P 1 2) 9)]
+    (let [m &mut (.x (.p q))] (set! @m 7))
+    (println (.x (.p q)))                   ; 7
+    (let [r (& (.n q))] (set! (.n q) 11) (println @r)))   ; 11
+  (let [^mut x 1
+        r (& x)]
+    (set! x 2)
+    (println @r))                           ; 2
+  (let [^mut z 5]
+    (bump! &mut z)
+    (println z))                            ; 6
+  (let [^mut s 7.25 rs (& s)] (set! s 8.5) (println @rs))   ; 8.5
+  0)

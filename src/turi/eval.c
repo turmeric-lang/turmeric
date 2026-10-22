@@ -1860,7 +1860,7 @@ static TuriValue make_struct_val_def(TuriEnv *env, const char *name, uint32_t n,
  *   - a `:heap` struct, which is interior-mutable by declaration -- a callee's
  *     mutation IS meant to reach the caller.
  *   - anything that is not a TURI_STRUCT.  A `&Struct` borrow arrives as
- *     TURI_REF and is a genuine reference; leave it alone.
+ *     TURI_REF (the slot's address) and is a genuine reference; leave it alone.
  *
  * The copy RECURSES through by-value struct fields, because that is what the
  * compiled backend does: an `Outer` holding an `Inner` by value is one flat C
@@ -8828,6 +8828,9 @@ static TuriHandleKind prov_box_field_kind(TuriHandleKind box, uint32_t idx);
 
 static TuriValue get_field_extract(TuriEnv *env, const Expr *e, TuriValue sv) {
     uint32_t idx = e->as.get_field_.field_idx;
+    /* turi-borrow-is-a-copy: `(.x r)` on a `&Struct` reads through the
+     * borrow to the place it names. */
+    if (sv.tag == TURI_REF && sv.as_ref) sv = *(TuriValue *)sv.as_ref;
     /* security-audit-plan S-5 (value-model channel): a bare-int receiver is
      * read below as a field buffer, and `(.x (:: (mk 4096) Hp))` made it any
      * integer.  In a provenance-tracked env it must be a struct that lost its
@@ -8923,7 +8926,9 @@ static bool unary_operand(const Expr *e, const Expr **operand) {
     case EX_POLY_WRAP:    *operand = e->as.poly_wrap_.inner;    return true;
     case EX_FN_TO_FAT:    *operand = e->as.fn_to_fat_.inner;    return true;
     case EX_POLY_TO_FAT:  *operand = e->as.poly_to_fat_.inner;  return true;
-    case EX_BORROW_IMMUT: *operand = e->as.borrow_immut_.expr;  return true;
+    /* turi-borrow-is-a-copy: a borrow is a reference to a PLACE, not a
+     * value transform of its operand, so it is not driven here -- the
+     * black-box path below reaches its eval_expr arm. */
     case EX_RC_FROM_REF:  *operand = e->as.rc_from_ref_.expr;   return true;
     case EX_REF:          *operand = e->as.ref_.expr;           return true;
     case EX_EXISTS_PACK:  *operand = e->as.exists_pack_.value;  return true;
@@ -9051,42 +9056,118 @@ static TuriValue try_retag_carrier_struct(TuriEnv *env, EvalFrame *frame,
  * has already evaluated to `v` (assumed non-signalled; callers check
  * error/returning/throwing first).  Transparent shims fall through to `return
  * v`. */
+/* turi-borrow-is-a-copy: the slot a borrow's operand names, or NULL when it
+ * names no place.  A variable is its frame binding's value slot (the global's
+ * when no frame holds it); a field is the slot inside the struct's storage,
+ * reached through whatever the receiver evaluates to -- a by-value struct is
+ * one TuriStruct shared by every reader, so the field slot aliases the place
+ * `(set! (.x p) v)` writes; a deref of a borrow is the borrow's own slot (a
+ * reborrow, `&@r`); and a variable whose value is already a borrow reborrows
+ * it rather than borrowing the borrow (`(& r1)` is `&int`, not `&&int`). */
+static TuriValue *borrow_place_slot(TuriEnv *env, EvalFrame *frame, const Expr *inner) {
+    if (!inner) return NULL;
+    switch (inner->kind) {
+    case EX_VAR: {
+        if (!inner->as.var.binding || !inner->as.var.binding->name) return NULL;
+        const char *vname = inner->as.var.binding->name->name;
+        TuriValue *slot = NULL;
+        for (EvalFrame *f = frame; f && !slot; f = f->parent)
+            for (EvalBinding *b = f->bindings; b; b = b->next)
+                if (frame_name_eq(b->name, vname)) { slot = &b->value; break; }
+        if (!slot) {
+            EnvBinding *gb = turi_env_find_binding(env, vname);
+            if (gb) slot = &gb->value;
+        }
+        if (slot && slot->tag == TURI_REF && slot->as_ref)
+            return (TuriValue *)slot->as_ref;
+        return slot;
+    }
+    case EX_GET_FIELD: {
+        TuriValue sv = eval_expr(env, frame, inner->as.get_field_.struct_expr);
+        if (turi_is_error(sv) || env_signaled(env)) return NULL;
+        if (sv.tag == TURI_REF && sv.as_ref) sv = *(TuriValue *)sv.as_ref;
+        while (sv.tag == TURI_STRUCT && sv.as_struct && sv.as_struct->name &&
+               strcmp(sv.as_struct->name, "__rc") == 0 && sv.as_struct->n_fields >= 2)
+            sv = sv.as_struct->fields[1];
+        if (sv.tag != TURI_STRUCT || !sv.as_struct) return NULL;
+        uint32_t idx = inner->as.get_field_.field_idx;
+        if (idx >= sv.as_struct->n_fields) return NULL;
+        return &sv.as_struct->fields[idx];
+    }
+    case EX_DEREF: {
+        TuriValue r = eval_expr(env, frame, inner->as.deref_.expr);
+        if (turi_is_error(r) || env_signaled(env)) return NULL;
+        if (r.tag == TURI_REF && r.as_ref) return (TuriValue *)r.as_ref;
+        return NULL;
+    }
+    case EX_ASCRIBE:
+        return borrow_place_slot(env, frame, inner->as.ascribe_.inner);
+    default:
+        return NULL;
+    }
+}
+
+/* float-to-int-cast-out-of-range-differs: the saturating float-to-integer
+ * rule, mirroring the compiled preamble's tur_f2i64 / tur_f2u64 and their
+ * narrow clamps.  NaN is 0; a value beyond [lo, hi] is the nearest bound;
+ * inside the range it truncates toward zero. */
+static int64_t turi_f2i_sat(double d, int64_t lo, int64_t hi) {
+    int64_t v;
+    if (d != d) return 0;
+    if (d >= 9223372036854775808.0) v = INT64_MAX;
+    else if (d <= -9223372036854775808.0) v = INT64_MIN;
+    else v = (int64_t)d;
+    return v < lo ? lo : v > hi ? hi : v;
+}
+static uint64_t turi_f2u_sat(double d, uint64_t hi) {
+    uint64_t v;
+    if (d != d || d <= -1.0) return 0;
+    if (d >= 18446744073709551616.0) v = UINT64_MAX;
+    else v = (uint64_t)d;
+    return v > hi ? hi : v;
+}
+
 static TuriValue eval_unary_post(TuriEnv *env, EvalFrame *frame,
                                  const Expr *e, TuriValue v) {
     switch (e->kind) {
     case EX_CAST:
+        /* float-to-int-cast-out-of-range-differs: a float-to-integer cast
+         * saturates, the rule the compiled program's tur_f2* helpers apply
+         * (NaN is 0, beyond the range is the nearest bound, truncation
+         * toward zero inside it); a bare C cast of an out-of-range double
+         * was undefined and answered differently on each engine. */
         switch (e->as.cast_.target_kind) {
         case TY_INT:
         case TY_INT64:
-            if (v.tag == TURI_FLOAT) return turi_int((int64_t)v.as_float);
+            if (v.tag == TURI_FLOAT) return turi_int(turi_f2i_sat(v.as_float, INT64_MIN, INT64_MAX));
             if (v.tag == TURI_INT)   return turi_int(v.as_int);
             return turi_int(0);
         case TY_INT8:
-            if (v.tag == TURI_FLOAT) return turi_int((int8_t)(int64_t)v.as_float);
+            if (v.tag == TURI_FLOAT) return turi_int(turi_f2i_sat(v.as_float, INT8_MIN, INT8_MAX));
             if (v.tag == TURI_INT)   return turi_int((int8_t)v.as_int);
             return turi_int(0);
         case TY_INT16:
-            if (v.tag == TURI_FLOAT) return turi_int((int16_t)(int64_t)v.as_float);
+            if (v.tag == TURI_FLOAT) return turi_int(turi_f2i_sat(v.as_float, INT16_MIN, INT16_MAX));
             if (v.tag == TURI_INT)   return turi_int((int16_t)v.as_int);
             return turi_int(0);
         case TY_INT32:
-            if (v.tag == TURI_FLOAT) return turi_int((int32_t)(int64_t)v.as_float);
+            if (v.tag == TURI_FLOAT) return turi_int(turi_f2i_sat(v.as_float, INT32_MIN, INT32_MAX));
             if (v.tag == TURI_INT)   return turi_int((int32_t)v.as_int);
             return turi_int(0);
         case TY_UINT8:
-            if (v.tag == TURI_FLOAT) return turi_int((int64_t)(uint8_t)(int64_t)v.as_float);
+            if (v.tag == TURI_FLOAT) return turi_int((int64_t)turi_f2u_sat(v.as_float, UINT8_MAX));
             if (v.tag == TURI_INT)   return turi_int((int64_t)(uint8_t)v.as_int);
             return turi_int(0);
         case TY_UINT16:
-            if (v.tag == TURI_FLOAT) return turi_int((int64_t)(uint16_t)(int64_t)v.as_float);
+            if (v.tag == TURI_FLOAT) return turi_int((int64_t)turi_f2u_sat(v.as_float, UINT16_MAX));
             if (v.tag == TURI_INT)   return turi_int((int64_t)(uint16_t)v.as_int);
             return turi_int(0);
         case TY_UINT32:
-            if (v.tag == TURI_FLOAT) return turi_int((int64_t)(uint32_t)(int64_t)v.as_float);
+            if (v.tag == TURI_FLOAT) return turi_int((int64_t)turi_f2u_sat(v.as_float, UINT32_MAX));
             if (v.tag == TURI_INT)   return turi_int((int64_t)(uint32_t)v.as_int);
             return turi_int(0);
         case TY_UINT64:
-            if (v.tag == TURI_FLOAT) return turi_int((int64_t)(uint64_t)(int64_t)v.as_float);
+            if (v.tag == TURI_FLOAT) return turi_int((int64_t)turi_f2u_sat(v.as_float, UINT64_MAX));
             if (v.tag == TURI_INT)   return turi_int((int64_t)(uint64_t)v.as_int);
             return turi_int(0);
         case TY_FLOAT:
@@ -13395,10 +13476,10 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
         TuriValue recv = eval_expr(env, frame, e->as.set_field_.receiver);
         if (turi_is_error(recv) || env_signaled(env)) return recv;
         /* Resolve the underlying struct.  A mutable borrow is represented as a
-         * TURI_REF to the binding holding the struct; an rc<Struct> stores the
+         * TURI_REF to the slot holding the struct; an rc<Struct> stores the
          * struct in the __rc payload (field[1]). */
         if (recv.tag == TURI_REF && recv.as_ref)
-            recv = ((EvalBinding *)recv.as_ref)->value;
+            recv = *(TuriValue *)recv.as_ref;
         if (recv.tag != TURI_STRUCT || !recv.as_struct)
             return turi_errorf("eval: set-field on non-struct (tag %d)", recv.tag);
         TuriStruct *s = recv.as_struct;
@@ -13864,30 +13945,34 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
         return eval_expr(env, frame, e->as.poly_to_fat_.inner);
 
     /* --- Phase 12: borrows --- */
+    /* turi-borrow-is-a-copy: `&` and `&mut` are references to a PLACE -- a
+     * variable's slot (its frame binding, or the global's), or a field's slot
+     * inside the struct's storage -- so a write through `&mut` reaches the
+     * place and a borrow sees a later `set!`, as the compiled program's
+     * `&p.x` / `&x` do.  Both used to box a COPY of the value (and `&mut`
+     * only pointed at a local's binding), so `(set! @m 10)` through
+     * `&mut (.x p)` left `p` at 3 and `@r` after `(set! x 2)` still read 1.
+     * The TURI_REF carries the slot's address; the borrow checker scopes
+     * every borrow inside the frame that owns the slot.  An operand that
+     * names no place (a call's result, a literal) keeps the old copy. */
     case EX_BORROW_IMMUT:
-        return eval_expr(env, frame, e->as.borrow_immut_.expr);
     case EX_BORROW_MUT: {
-        /* Return a TURI_REF pointing to the EvalBinding so set! can mutate it. */
-        const Expr *inner = e->as.borrow_mut_.expr;
-        if (inner->kind == EX_VAR) {
-            const char *vname = inner->as.var.binding->name->name;
-            for (EvalFrame *f = frame; f; f = f->parent) {
-                for (EvalBinding *b = f->bindings; b; b = b->next) {
-                    if (strcmp(b->name, vname) == 0) {
-                        TuriValue ref; ref.tag = TURI_REF; ref.as_ref = b;
-                        return ref;
-                    }
-                }
-            }
+        const Expr *inner = (e->kind == EX_BORROW_MUT) ? e->as.borrow_mut_.expr
+                                                       : e->as.borrow_immut_.expr;
+        TuriValue *slot = borrow_place_slot(env, frame, inner);
+        if (env_signaled(env)) return turi_nil();
+        if (slot) {
+            TuriValue ref; ref.tag = TURI_REF; ref.as_ref = slot;
+            return ref;
         }
         /* Fallback: transparent */
-        return eval_expr(env, frame, e->as.borrow_mut_.expr);
+        return eval_expr(env, frame, inner);
     }
     case EX_DEREF: {
         TuriValue r = eval_expr(env, frame, e->as.deref_.expr);
         if (turi_is_error(r) || env_signaled(env)) return r;
         if (r.tag == TURI_REF && r.as_ref)
-            return ((EvalBinding *)r.as_ref)->value;
+            r = *(TuriValue *)r.as_ref;
         /* rc-deref-emits-control-block-pointer: an rc<T> is the __rc
          * {counter, value} pair EX_RC_OF builds; `@` reads the value, not the
          * pair (which printed as the counter's address). */
@@ -13902,7 +13987,7 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
         TuriValue v = eval_expr(env, frame, e->as.set_deref_.value);
         if (turi_is_error(v) || env_signaled(env)) return v;
         if (ref.tag == TURI_REF && ref.as_ref)
-            ((EvalBinding *)ref.as_ref)->value = v;
+            *(TuriValue *)ref.as_ref = v;
         return turi_nil();
     }
 

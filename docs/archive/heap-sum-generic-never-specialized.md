@@ -4,8 +4,9 @@
 exposed. Pinned by `tests/fixtures/heap-sum-generic-rebuild`: the repro's
 `bump`, a read-only `has?`, a result-only `mk`, a generic calling a generic,
 the sum nested in an `Option`, `float`/`cstr`/`bool`/struct elements, and
-open slots. One narrower shape stays open as
-[heap-sum-unpinned-tyvar-relayed-to-generic](../reported/heap-sum-unpinned-tyvar-relayed-to-generic.md).
+open slots. One narrower shape was left open as
+[heap-sum-unpinned-tyvar-relayed-to-generic](heap-sum-unpinned-tyvar-relayed-to-generic.md)
+(resolved 2026-10-22).
 
 ## Resolution
 
@@ -140,9 +141,10 @@ path that does not.
 
 ## Related
 
-- [heap-sum-unpinned-tyvar-relayed-to-generic](../reported/heap-sum-unpinned-tyvar-relayed-to-generic.md)
-  is the shape left open: `(has? (bump (Nil)))`, where nothing in the program
-  ever fixes `T`.
+- [heap-sum-unpinned-tyvar-relayed-to-generic](heap-sum-unpinned-tyvar-relayed-to-generic.md)
+  was the shape left open: `(has? (bump (Nil)))`, where nothing in the program
+  ever fixes `T`. Resolved 2026-10-22: a monomorphic caller grounds the named
+  binding like an open slot.
 - The zipper plan works around this by never rebuilding a parametric `:heap`
   sum in a generic body: its path frames are `:heap` structs with a nullable
   link.

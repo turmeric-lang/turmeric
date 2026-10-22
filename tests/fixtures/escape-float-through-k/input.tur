@@ -11,4 +11,17 @@
   (println (e2))
   (println (e3))
   (println (e4 (:: 2.25 float32)))
+  (main2))
+
+;; escape-cont-float32-literal-arg: a float LITERAL (a double) handed to a
+;; float32 continuation is converted to float32 before its bits travel, so
+;; the landing's 32-bit read sees the value rather than a double's low word.
+(defn e5 [] : float32 (call/cc (fn [k : escape-cont<float32>] (k 2.25))))
+(defn e6 [] : float32 (call/cc (fn [k : escape-cont<float32>] (k 7.1))))
+(defn e7 [x : float] : float32 (call/cc (fn [k : escape-cont<float32>] (k x))))
+
+(defn main2 [] : int
+  (println (e5))
+  (println (e6))
+  (println (e7 7.1))
   0)

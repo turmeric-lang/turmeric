@@ -1,5 +1,9 @@
 # A float cast to an integer type out of its range is a bare C cast on both engines (undefined); the answers differ
 
+**RESOLVED 2026-10-22** -- see [Resolution](#resolution-2026-10-22). Pinned by
+`float-to-int-cast-saturates` (every width, NaN, `-0.5`, and run-time
+operands, on all three engines).
+
 **Severity: low-medium** (engine divergence on an input C leaves undefined).
 Split out of type-forms-gaps item 7 on 2026-10-21. **Decision (2026-10-21):
 saturate on both engines.**
@@ -36,3 +40,21 @@ runtime. Document the rule in sized-primitives-guide next to the integer wrap it
 already describes, and pin the three lines above plus NaN, `-0.5` and a
 run-time (non-constant) operand on all three engines -- the run-time operand is
 the case the current fixtures cannot see.
+
+## Resolution (2026-10-22)
+
+Saturation, on both engines, as decided:
+
+- **Compiled.** The runtime preamble (next to `TUR_AS`, `emit_module.c`)
+  defines `tur_f2i64` / `tur_f2u64` -- NaN to 0, beyond the range to the
+  nearest bound, truncation toward zero inside it -- and one clamp per narrow
+  width (`tur_f2i8` ... `tur_f2u32`). `(as <integer kind> <float>)` emits the
+  helper for its target width (`emit_expr.c`, the `EX_CAST` arm); the
+  integer-to-float direction keeps `TUR_AS`. The helpers live in the
+  preamble, so `tests/check-emitted-float-conversions.py` attributes the one
+  real cast to the runtime, and the fixture is clean under it. The split
+  runtime (`src/runtime/generated/`) was regenerated, so `tur jit` saturates
+  too.
+- **Interpreter.** `EX_CAST` (`src/turi/eval.c`) applies the same rule
+  through `turi_f2i_sat` / `turi_f2u_sat`.
+- **Documented** in sized-primitives-guide next to the integer wrap.
