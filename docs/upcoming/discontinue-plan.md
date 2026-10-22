@@ -2,7 +2,45 @@
 
 > **Status:** PROPOSED 2026-10-21. Decision taken: keep `discontinue` and
 > implement it on both engines (from effect-forms-gaps item 1, archived). Not
-> started.
+> started. **2026-10-22:** three open reports block its fixtures (two compiled,
+> one interpreted), see [Blockers](#blockers-checked-2026-10-22).
+
+## Blockers (checked 2026-10-22)
+
+The plan's own work (the IR term, the raise-on-resume runtime, typing, the
+experiment row) is unblocked. Three open reports stand in the way of its
+fixtures, so of its five fixtures only 4 (`^linear`) can pass on all three
+engines today. The probes behind this table substitute `resume` plus a `panic`
+in the continuation for `discontinue`, since that is the panic `discontinue`
+will raise.
+
+| Report | Engine | Blocks | Why |
+| --- | --- | --- | --- |
+| [cps-catch-unwind-cannot-cross-an-effect-capture](../reported/cps-catch-unwind-cannot-cross-an-effect-capture.md) | compiled | fixtures 2, 3, and 5 when the body catches | A `catch-unwind` around the `perform` (fixture 2) or around the `discontinue` in the clause (fixture 3) is refused with "no lowering here". This is the shape that justifies keeping `discontinue` ("a `catch-unwind` in the body ... catches it, and the body carries on"), so this report is the main blocker. Its fix direction 2 (the false TUR-W0033) is small and independent |
+| [turi-fiber-resume-from-clause-scope-crashes-on-body-defer](../reported/turi-fiber-resume-from-clause-scope-crashes-on-body-defer.md) | interpreted | fixtures 1 and 3 | A body with a `defer` takes the fiber runtime, and resuming it from inside any scope in the clause (`let`, a call, a `catch-unwind`) segfaults. "Fiber fallback" step 2 below builds on exactly this path |
+| [compiled-uncaught-panic-skips-caller-defers](../reported/compiled-uncaught-panic-skips-caller-defers.md) | compiled | fixture 1 as written | The raise starts inside the body function. If nothing catches it, the compiled runtime aborts without running that function's `defer`, while the interpreter runs it. Fixture 1 can hold a `catch-unwind` in `main` (a different function from the `handle`, which works today) until this is fixed, but then it no longer tests the uncaught case |
+| [turi-fiber-handle-defers-fire-at-the-wrong-time](../reported/turi-fiber-handle-defers-fire-at-the-wrong-time.md) | interpreted | fixture 5 with a `defer` or `catch-unwind` in the body | The fiber runtime is single-shot. `(+ (resume k 1) (resume k 2))` over a defer-bearing body is refused with "already been resumed", and so is one whose `perform` sits under a `catch-unwind` (`ws_capturable` refuses both). Its fix direction 1 (work-stack-capturable `defer`, and `catch-unwind` too) is the real unblock for the interpreter, and would also retire the crash above |
+
+Related but not blocking:
+
+- [compiled-shift-delimited-by-root](../reported/compiled-shift-delimited-by-root.md)
+  has the same structure as the first row (a direct-emitted delimiter around a
+  CPS callee). A design for one should fit the other.
+- [effect-nontail-resume-copies-held-until-outer-entry](../reported/effect-nontail-resume-copies-held-until-outer-entry.md):
+  not a blocker, but the in-place resume paths it added (`dk_case_resumes_once`,
+  `resume_inplace`, `dk_resume_into`, the `k_last` free) are paths the raise
+  flag in "Compiled" step 2 must survive. `term_resumes_k_once` /
+  `term_k_only_resumed` should count a `discontinue` as the case's one resume,
+  or a discontinue case falls back to the copy path.
+- [missing-guides-for-language-primitives](../reported/missing-guides-for-language-primitives.md)
+  item 5 and [stale-comments-emitter](../reported/stale-comments-emitter.md)
+  item 6 cover the guide section and the `emit_effects.c` header. This plan's
+  last step already does both.
+
+Suggested order: the TUR-W0033 fix, then the interpreter crash, and the
+interpreter half of this plan behind `--enable=discontinue`. The compiled half
+waits on a CPS-IR `catch-unwind`. Without one it can land only fixtures 1 and
+4, with fixture 1 caught in `main`.
 
 ## Today
 

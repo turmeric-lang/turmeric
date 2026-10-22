@@ -34,6 +34,14 @@ sentence above does not cover them. If you touch this file, check
 `ls docs/reported/` against it -- an index that silently omits a quarter of the
 directory is worse for triage than no index.
 
+## Found checking what blocks discontinue-plan (filed 2026-10-22)
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [turi-fiber-resume-from-clause-scope-crashes-on-body-defer](turi-fiber-resume-from-clause-scope-crashes-on-body-defer.md) | high | `(handle (body) (Ask [] k) (let [x 1] (resume k x)))` segfaults under `tur --interpret` when `body` has a `defer`: the fiber body and the clause share one defer chain, and the body's return walks it for a mark the clause's scope moved. Compiled is correct. Blocks [discontinue-plan](../upcoming/discontinue-plan.md) fixtures 1 and 3 interpreted |
+| [cps-catch-unwind-cannot-cross-an-effect-capture](cps-catch-unwind-cannot-cross-an-effect-capture.md) | medium | Compiled, a `perform` inside a `catch-unwind` thunk cannot reach the handler outside it, and a `handle` cannot sit in a function holding a `catch-unwind` (`EX_CATCH_UNWIND` is outside the CPS IR). All three engines also give a false TUR-W0033 for the thunk's `perform`. The interpreter runs it. Blocks discontinue-plan fixtures 2 and 3 compiled, which are the plan's reason to keep the form |
+| [compiled-uncaught-panic-skips-caller-defers](compiled-uncaught-panic-skips-caller-defers.md) | medium | With no `catch-unwind` live, a compiled panic runs only the panicking function's defers and aborts. Callers' defers are skipped, where the interpreter and error-handling-guide run them all. Blocks discontinue-plan fixture 1 as written |
+
 ## Found rewriting the datalog examples onto typed data (filed 2026-10-21)
 
 | Report | Severity | One line |
