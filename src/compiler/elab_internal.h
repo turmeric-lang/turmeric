@@ -940,6 +940,12 @@ typedef struct Elab {
      * an enclosing `while` that began after the holder was bound).  The check
      * that needs the later uses waits in borrow_pending until the holder's
      * `let` ends (elab_borrow_pending_flush). */
+    /* fat-shim-arg-to-mutual-cps-pair-leaks: functions whose fn-param
+     * inference read a call to a function not yet inferred (a forward
+     * reference, mask still 0), waiting to be solved again together with it
+     * (elab_nonretain_resolve_forward). */
+    struct NonretainPending *nonretain_pending;
+    uint32_t          n_nonretain_pending, cap_nonretain_pending;
     uint64_t          borrow_clock;
     uint64_t         *borrow_loop_marks;
     uint32_t          n_borrow_loop_marks, cap_borrow_loop_marks;
@@ -2117,6 +2123,15 @@ typedef struct BorrowPendingWrite {
     Span           span;
     const char    *what;        /* "`x`" or "`.f` of `x`" (arena) */
 } BorrowPendingWrite;
+typedef struct NonretainPending {
+    Binding        *fn;        /* the function whose bits may be too low */
+    Binding *const *params;
+    uint32_t        n_params;
+    Expr           *body;
+    const Binding  *waits_on;  /* the forward callee it handed a param to */
+} NonretainPending;
+void elab_nonretain_resolve_forward(Elab *e, Binding *b, Binding **params,
+                                    uint32_t n_params, Expr *body);
 bool elab_borrow_check_write(Elab *e, const Expr *place, Span span, const char *what);
 void elab_borrow_note_use(Elab *e, Binding *b);
 bool elab_borrow_pending_flush(Elab *e, Binding *const *holders, uint32_t n, bool report);

@@ -823,6 +823,10 @@ struct Binding {
      * beyond bit 31 are left unset (conservative -- no free).  0 for non-fns and
      * fns with no non-retaining fn-param. */
     uint32_t            nonretain_param_mask;
+    /* fat-shim-arg-to-mutual-cps-pair-leaks: elab_infer_nonretain_masks has
+     * run for this function (a forward reference's mask is still 0 because it
+     * is not known yet, not because its body retains). */
+    bool                nonretain_inferred;
     /* catch-box-reader-confinement-whitelist: bit i set when parameter i is a
      * POINTER-CARRYING SCALAR (cstr / ptr<void>) that the body provably does
      * not retain -- every use of it is discarded or flows into another
