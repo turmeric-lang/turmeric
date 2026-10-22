@@ -5,7 +5,7 @@
 > **Type:** Tooling / CLI (`src/driver/cli.c`, `src/driver/cmd_run.c`,
 > `src/compiler/install.c`), stdlib (`stdlib/httpd.tur`, a new
 > `stdlib/tools/serve.tur`).
-> **Builds on:** [installed-spice-libraries-plan](installed-spice-libraries-plan.md)
+> **Builds on:** [installed-spice-libraries-plan](../archive/installed-spice-libraries-plan.md)
 > (IL0's install layout and "an installed root is a fetched project" helper)
 > and [script-spice-deps-plan](script-spice-deps-plan.md) (SD-D3's cache
 > directory, SD-D6's `tur <file> args` dispatch). PT0-PT2 below need neither;

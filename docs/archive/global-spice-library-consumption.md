@@ -72,7 +72,9 @@ and the `:global` + `:url` rejection.
 - **Library-only spices still cannot be installed.** `tur install` requires at
   least one `:bin` entry, so a `:global` dep must name a spice that also ships
   a binary. That is a `tur install` limitation this change did not touch; it is
-  called out in the guide.
+  called out in the guide.  *Closed 2026-10-22 by
+  [installed-spice-libraries-plan](installed-spice-libraries-plan.md) (IL1):
+  a spice with a `src/` and no `:bin` installs as a library.*
 
 ## Guides updated
 
