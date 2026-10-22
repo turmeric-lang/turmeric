@@ -65,8 +65,9 @@ inseparable, so the type checker forces you to handle every case.
 - **Name** -- the type constructor (`Either`).
 - **`:copy` / `:move`** (optional) -- value discipline. `:copy` makes a value
   freely reusable (right for immutable, resource-free sums like `Either`);
-  the default `:move` enforces single-use ownership. Put it right after the
-  name.
+  the default `:move` enforces single-use ownership; `:linear` (exactly once)
+  and `:affine` (at most once) are the substructural ones. Put it after the
+  name, before or after the type-parameter vector.
 - **Type parameters** `[L R]` (optional) -- a parametric sum. Each constructor
   may use these in its payload types.
 - **Constructors** `(Left L) (Right R)` -- one parenthesised arm each. A
@@ -114,6 +115,32 @@ struct field syntax (`[radius : float]`).
 owning pointer (`rc<T>`, `ref<T>`, `weak<T>`) is rejected, naming the
 offending field and variant -- the same rule `defstruct :copy` enforces,
 lifted across the sum.
+
+### Constructors with their own result type
+
+A constructor may end with `: Result`, the type it produces. Unannotated, a
+constructor of `(defdata Expr [a] ...)` produces the generic `(Expr a)`;
+annotated, it can fix the parameter:
+
+```turmeric
+(defdata Expr [a]
+  (Lit int            : (Expr int))
+  (IsZero (Expr int)  : (Expr bool))
+  (If (Expr bool) (Expr a) (Expr a)))      ; unannotated: (Expr a)
+```
+
+`(IsZero ...)` is then an `(Expr bool)`, a `match` on an `(Expr int)` need
+not list `IsZero`, and inside an arm the checker knows what `a` is. The
+annotation goes after the payload, a record field vector included:
+`(Rect [w : int h : int] : (Shape int))`. It must apply the type being
+defined to as many arguments as it has parameters. This is what `defgadt`
+spells (every constructor annotated); [gadts-guide.md](gadts-guide.md)
+covers what refinement buys.
+
+Whether a type needs the uniform carrier representation is decided by what
+the annotations say, not by the keyword: a type whose constructors all
+return one instantiation -- `(Bound int)` from every constructor -- is a
+plain sum with a pinned parameter.
 
 ## Pattern matching: `match`
 

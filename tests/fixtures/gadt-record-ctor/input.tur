@@ -1,0 +1,15 @@
+; adt-gadt-unification slice 2: a record constructor with a result type.
+(defgadt Shape [a]
+  (Rect [w : int h : int] : (Shape int))
+  (Circle [r : float] : (Shape float)))
+
+(defn area-int [s : (Shape int)] : int
+  (match s
+    (Rect w h) (* w h)))
+
+(defn main [] : int
+  (println (area-int (Rect 3 4)))
+  (println (area-int (Rect :h 5 :w 2)))
+  (println (match (Rect 6 7) (Rect :h hv :w wv) (- hv wv) (Circle r) 0))
+  (println (match (Circle 2.5) (Rect w h) 0.0 (Circle r) (* r 2.0)))
+  0)

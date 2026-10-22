@@ -1,0 +1,7 @@
+; A constructor's `: Result` applies the type to as many arguments as it
+; declares parameters: `Pair2` has two, so `(Pair2 int)` is an error.
+(defdata Pair2 [a b]
+  (IntPair int int : (Pair2 int))
+  (Swap (Pair2 b a)))
+
+(defn main [] : int 0)

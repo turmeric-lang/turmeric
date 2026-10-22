@@ -347,7 +347,7 @@ There are 61 `TY_*` kinds:
 |---|---|
 | Scalars | `TY_NIL` (unit/void), `TY_BOOL`, `TY_INT` (`int64_t`), `TY_FLOAT` (`double`), `TY_INT8`..`TY_INT64`, `TY_UINT8`..`TY_UINT64`, `TY_FLOAT32`, `TY_FLOAT64`, `TY_CSTR`, `TY_SYM`, `TY_PTR_VOID` |
 | Ownership | `TY_REF` (owning `ref<T>`), `TY_LREF` (linear `lref<T>`), `TY_RC`, `TY_WEAK`, `TY_REF_IMMUT` (`&T`), `TY_REF_MUT` (`&mut T`) |
-| User data | `TY_ADT` (every `defdata`, `defgadt`, `defstruct` and `defopaque`; a GADT is an `AdtDef` with `is_gadt`), `TY_APP`, `TY_REC`, `TY_TYVAR` |
+| User data | `TY_ADT` (every `defdata`, `defgadt`, `defstruct` and `defopaque`; a constructor's `: (Name ...)` annotation is `CtorDef.result_type_form`, and `AdtDef.is_refined` says whether the annotations refine the parameters), `TY_APP`, `TY_REC`, `TY_TYVAR` |
 | Functions, control | `TY_FN`, `TY_CONT`, `TY_CLONEABLE_CONT`, `TY_HANDLER`, `TY_GENERATOR`, `TY_EXCEPTION` |
 | Polymorphism, gradual | `TY_FORALL`, `TY_EXISTS`, `TY_UNION`, `TY_INTERSECTION`, `TY_ANY`, `TY_NEVER`, `TY_CONTRACT` |
 | Typeclasses | `TY_TYPECLASS`, `TY_TYPECLASS_INST` |

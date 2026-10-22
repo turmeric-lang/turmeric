@@ -1,0 +1,1 @@
+defdata: constructor 'IntPair' return type has 1 type argument(s) but 'Pair2' has 2 type parameter(s)

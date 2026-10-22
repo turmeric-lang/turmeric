@@ -2,9 +2,10 @@
 ;;;
 ;;; Four forms declare a new nominal type. `defstruct` is a record: all of its
 ;;; fields at once. `defdata` is a sum: one of several constructors, each with its
-;;; own payload, taken apart with `match`. `defgadt` is a sum whose constructors
-;;; also say what type index they produce, so `match` can learn something from the
-;;; arm that fired. `defopaque` is a newtype: a distinct type that is, at run time,
+;;; own payload, taken apart with `match`; a constructor may also say what type
+;;; index it produces, `(Lit int : (Expr int))`, so `match` can learn something
+;;; from the arm that fired. `defgadt` is the older spelling of a `defdata` whose
+;;; every constructor says so. `defopaque` is a newtype: a distinct type that is, at run time,
 ;;; nothing but its representation. Each introduces constructor functions with the
 ;;; type's name; the type name itself works as an annotation.
 ;;;
@@ -85,33 +86,52 @@
 ;;; constructor names its fields, `(Rect [w : int h : int])`, and is built by
 ;;; position or by keyword, `(Rect :h 4 :w 3)`. Type parameters follow the name in a
 ;;; vector, `(defdata Tree [a] (Leaf) (Node (Tree a) a (Tree a)))`, and `:copy`
-;;; or `:move` (the default) goes right after the name. Constructors are ordinary
+;;; or `:move` (the default) goes after the name, before or after the vector;
+;;; `:linear`, `:affine` and `:heap` go there too. Constructors are ordinary
 ;;; functions, `(Circle 2)`, and `match` takes a value apart: leaving a constructor
 ;;; out of a `match` is the error `match: non-exhaustive patterns`, which names the
 ;;; constructor, unless the `match` is marked `^non-exhaustive`.
+;;;
+;;; A constructor may end with `: Result`, the type it produces:
+;;; `(Lit int : (Expr int))`, `(Rect [w : int h : int] : (Shape int))`. The result
+;;; is an application of `Name` to as many arguments as it has parameters, and an
+;;; unannotated constructor produces the generic `(Name a ...)`. A constructor
+;;; whose result fixes a parameter is refining: `(IsZero ...)` is an
+;;; `(Expr bool)`, passing it where an `(Expr int)` is wanted is TUR-E0001, a
+;;; `match` on an `(Expr int)` need only list the constructors that can produce
+;;; one, and inside an arm the checker knows what the parameter is. Equality
+;;; proofs (`Equal`, `Refl`) are built on this (see `coerce`). gadts-guide has the
+;;; rest.
 ;;;
 ;;; Parameters:
 ;;;   Name    -- the type's name
 ;;;   [A ..]  -- optional type parameters
 ;;;   (Ctor ...) -- one constructor with its payload types, or none
+;;;   : Result -- optional, per constructor: the type it produces
 ;;;
 ;;; Example:
 ;;;   (defdata Shape (Circle :int) (Rect :int :int))
 ;;;   (defn area [s : Shape] : int (match s (Circle r) (* 3 (* r r)) (Rect w h) (* w h)))
 ;;;   (area (Rect 3 4))  ; => 12  ; ; doctest: a type declared inside the test body does not build when compiled
+;;;   (defdata Expr [a]
+;;;     (Lit int : (Expr int))
+;;;     (IsZero (Expr int) : (Expr bool))
+;;;     (If (Expr bool) (Expr a) (Expr a)))
+;;;   (defn eval-int [e : (Expr int)] : int
+;;;     (match e (Lit n) n (If c t f) (eval-int t)))
+;;;   (eval-int (If (IsZero (Lit 0)) (Lit 7) (Lit 9)))  ; => 7  ; ; doctest: a type declared inside the test body does not build when compiled
 ;;@form (defdata Name (Ctor payload ...) ...)
 ;;@form (defdata Name :copy [A ...] (Ctor payload ...) ...)
+;;@form (defdata Name [A ...] (Ctor payload ... : Result) ...)
 
-;;; defgadt -- declare a sum whose constructors have their own result types.
+;;; defgadt -- a defdata whose every constructor declares its result type.
 ;;;
 ;;; `(defgadt Expr [a] (Lit int : (Expr int)) (IsZero (Expr int) : (Expr bool)))`
-;;; lists constructors as `(Ctor payload ... : ResultType)`. The result type fixes
-;;; the type parameter, so the type system tracks which kind of value each
-;;; constructor makes: `(IsZero ...)` is an `(Expr bool)` and passing it where an
-;;; `(Expr int)` is wanted is TUR-E0001. A `match` on an `(Expr int)` need only
-;;; list the constructors that can produce one -- `eval-int` over `Lit` and `Add`
-;;; is exhaustive -- and inside an arm the checker knows what the parameter is.
-;;; Equality proofs (`Equal`, `Refl`) are built on this (see `coerce`).
+;;; is `defdata` with one more rule: every constructor must carry its
+;;; `: ResultType` (an unannotated one is `requires an explicit return-type
+;;; annotation`). Everything else -- the head keywords, record constructors, what
+;;; a refining constructor tells `match` -- is defdata's, which documents it.
+;;; Write `defdata` in new code; `defgadt` is kept for the programs that spell it.
 ;;;
 ;;; Parameters:
 ;;;   Name   -- the type's name

@@ -8,8 +8,8 @@ description: Fold `defgadt` into `defdata` -- one elaborator, an optional per-co
 
 > **Status:** IN PROGRESS 2026-10-22. Decisions taken 2026-10-22 (see
 > "Decisions"): rename the flag to `is_refined`; an unrefined type reports as
-> a sum; `defgadt` is retired through the TUR-D deprecation band. Slice 1
-> landed. Not a v1 blocker.
+> a sum; `defgadt` is retired through the TUR-D deprecation band. Slices 1
+> and 2 landed. Not a v1 blocker.
 
 ## Summary
 
@@ -258,17 +258,32 @@ row per the CLAUDE.md rule rather than an env seam.
 
 ### Slice 2 -- optional result type on `defdata`
 
-- [ ] `defdata` accepts `(Ctor payload ... : Result)` and
+- [x] `defdata` accepts `(Ctor payload ... : Result)` and
       `(Ctor [f : T ...] : Result)`; `defgadt` accepts record constructors,
-      `:heap`, `:linear`, `:affine`, `:no-auto-ctor`.
-- [ ] `stdlib/forms/datatypes.tur`: `defdata` docstring gains the annotated
+      `:heap`, `:linear`, `:affine`, `:no-auto-ctor`. *As built:* `:affine`
+      is new on `defdata` too (it was never in the head parser; `type_adt`
+      already honoured `AdtDef.is_affine`), and `:linear` with `:affine` is an
+      error. An unannotated constructor of a type with annotated ones gets the
+      generic `(Name a ...)` written out as its `result_type_form`, so the
+      index machinery sees one shape: `(If (IsZero (Lit 0)) (Lit 7) (Lit 9))`
+      infers `(Expr int)` from its branches. The phantom-parameter `:heap`
+      base constructor (`emit_flush_dead_base_ctor_traps`) assumed the named
+      single-record layout; it now picks the constructor by name, stores its
+      tag when the layout has one, and writes through `adt_field_member_path`.
+- [x] `stdlib/forms/datatypes.tur`: `defdata` docstring gains the annotated
       form; `defgadt` is documented as "defdata where every constructor is
       annotated; deprecated, see slice 4". gadts-guide, gadts-cookbook and
       sum-types-guide updated; `tests/check-forms-documented.sh` stays green.
-- [ ] Fixtures: `defdata-mixed-refined-ctors` (the `Expr` above, with `If`
+      (The cookbook's recipes are rewritten with the slice 4 migration.)
+- [x] Fixtures: `defdata-mixed-refined-ctors` (the `Expr` above, with `If`
       unannotated), `gadt-record-ctor`, `gadt-heap-ctor`,
       `gadt-linear-ctor`, `errors/defdata-result-wrong-head`,
-      `errors/defdata-result-wrong-arity`.
+      `errors/defdata-result-wrong-arity`. Also
+      `errors/defdata-mixed-refined-index-mismatch` (the unannotated `If`
+      over `(Expr bool)` branches is refused where `(Expr int)` is wanted),
+      `errors/gadt-linear-ctor-reuse` and
+      `errors/defdata-affine-annotated-reuse`.
+      `errors/defgadt-record-ctor-rejected` is gone, as planned.
 
 ### Slice 3 -- representation follows refinement
 

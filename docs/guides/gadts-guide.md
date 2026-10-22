@@ -109,8 +109,12 @@ compiler reports the missing arm.
 
 ## Your First GADT (`defgadt`)
 
-A GADT is declared with `defgadt`. The key difference from `defdata` is that
-each constructor carries an explicit `: return-type` annotation:
+A GADT is declared with `defgadt`, or with `defdata` -- a `defdata`
+constructor may carry the same `: return-type` annotation, and an
+unannotated one returns the generic `(Name a ...)` (see "Mixing annotated
+and unannotated constructors" below). The key difference from a plain
+`defdata` is that each constructor carries an explicit `: return-type`
+annotation:
 
 ```turmeric
 (defgadt Expr [a]
@@ -131,7 +135,7 @@ Each constructor line reads as: "field types ... `: return type`". Here:
   fields and also returns `(Expr int)`.
 
 Like `defdata`, a `defgadt` accepts an optional `:copy` modifier -- placed
-after the type-parameter vector -- to opt the type out of affine move
+before or after the type-parameter vector -- to opt the type out of affine move
 tracking. Without it, GADT values follow move semantics (using one twice is a
 `TUR-E0005` use-after-move); with it, the values are plain, freely-readable
 value types (use this when the constructors carry only copyable payloads, e.g.
@@ -169,6 +173,24 @@ defn eval-expr [e] :int
     (Add l r)
     {eval-expr(l) + eval-expr(r)}
 ```
+
+### Mixing annotated and unannotated constructors
+
+`defdata` takes the annotation per constructor, so a type can refine only
+where it needs to:
+
+```turmeric
+(defdata Expr [a]
+  (Lit int            : (Expr int))
+  (BLit bool          : (Expr bool))
+  (IsZero (Expr int)  : (Expr bool))
+  (If (Expr bool) (Expr a) (Expr a)))      ; (Expr a)
+```
+
+`(If (IsZero (Lit 0)) (Lit 7) (Lit 9))` is an `(Expr int)`: the unannotated
+`If` takes its index from its branches. Record constructors, `:heap`,
+`:linear` and `:affine` work on such a type exactly as on any `defdata` --
+`(Rect [w : int h : int] : (Shape int))`.
 
 ---
 

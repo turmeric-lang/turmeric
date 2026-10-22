@@ -1,0 +1,28 @@
+; adt-gadt-unification slice 2: a `defdata` whose constructors may carry an
+; optional `: Result`.  `Lit` and `IsZero` refine the parameter; `If` is
+; unannotated and returns the generic `(Expr a)`.
+(defdata Expr [a]
+  (Lit int : (Expr int))
+  (BLit bool : (Expr bool))
+  (IsZero (Expr int) : (Expr bool))
+  (Add (Expr int) (Expr int) : (Expr int))
+  (If (Expr bool) (Expr a) (Expr a)))
+
+(defn eval-int [e : (Expr int)] : int
+  (match e
+    (Lit n)    n
+    (Add l r)  (+ (eval-int l) (eval-int r))
+    (If c t f) (if (eval-bool c) (eval-int t) (eval-int f))))
+
+(defn eval-bool [e : (Expr bool)] : bool
+  (match e
+    (BLit b)   b
+    (IsZero x) (= (eval-int x) 0)
+    (If c t f) (if (eval-bool c) (eval-bool t) (eval-bool f))))
+
+(defn main [] : int
+  (println (eval-int (Add (Lit 2) (Lit 40))))
+  (println (eval-int (If (IsZero (Lit 0)) (Lit 7) (Lit 9))))
+  (println (eval-int (If (IsZero (Lit 1)) (Lit 7) (Lit 9))))
+  (println (eval-bool (If (BLit true) (IsZero (Lit 0)) (BLit false))))
+  0)

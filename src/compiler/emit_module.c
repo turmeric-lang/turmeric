@@ -5088,17 +5088,31 @@ void emit_flush_dead_base_ctor_traps(EmitCtx *ctx, Buf *out) {
                 "    %s __r = (%s)%s("
                 "sizeof(struct tur_adt_%s));\n", ptr_name, ptr_name,
                 region_alloc_fn(), sname);
+            /* The ctor this name is: a phantom heap SUM has several, and
+             * the store below must be that one's (adt-gadt-unification:
+             * `(defdata Cell [a] :heap (ICell [v : int] : (Cell int)))`). */
             const CtorDef *c0 = bd->n_ctors > 0 ? bd->ctors[0] : NULL;
+            for (uint32_t ci = 0; ci < bd->n_ctors; ci++) {
+                const CtorDef *c = bd->ctors[ci];
+                if (!c || !c->name) continue;
+                char *cm = mangle_ctor_symbol(bd, c->name);
+                bool hit = cm && strcmp(cm, nm) == 0;
+                free(cm);
+                if (hit) { c0 = c; break; }
+            }
+            if (c0 && !adt_is_flat_product(bd))
+                buf_printf(out, "    __r->tag = %u;\n", c0->tag);
             for (uint32_t a = 0; c0 && a < arity && a < c0->n_fields; a++) {
-                const char *fn2 = c0->fields[a].name;
                 const char *fct = adt_ctor_field_c_type(&c0->fields[a], true);
                 /* phantom-base-ctor-unmangled-field (generic-zipper-plan): the
                  * struct declares the C-safe spelling (`branch?` ->
-                 * `branch_`, `make-node` -> `make_hynode`), so assign it. */
-                if (fn2) {
-                    char *mf = mangle_field_name(fn2);
-                    buf_printf(out, "    __r->%s = (%s)(_%u);\n", mf, fct, a);
-                    free(mf);
+                 * `branch_`, `make-node` -> `make_hynode`), so assign it --
+                 * through the same member path every other store uses, which
+                 * is `as.<Ctor>._<i>` when the layout is not the named one. */
+                char *mp = adt_field_member_path(bd, c0, a);
+                if (mp) {
+                    buf_printf(out, "    __r->%s = (%s)(_%u);\n", mp, fct, a);
+                    free(mp);
                 }
             }
             buf_puts(out, "    return __r;\n}\n");

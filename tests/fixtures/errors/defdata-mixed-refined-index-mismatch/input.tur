@@ -1,0 +1,11 @@
+; The unannotated `If` takes its index from its branches: with `(Expr bool)`
+; branches it is an `(Expr bool)`, which `eval-int` refuses.
+(defdata Expr [a]
+  (Lit int : (Expr int))
+  (IsZero (Expr int) : (Expr bool))
+  (If (Expr bool) (Expr a) (Expr a)))
+(defn eval-int [e : (Expr int)] : int
+  (match e (Lit n) n (If c t f) (eval-int t)))
+(defn main [] : int
+  (println (eval-int (If (IsZero (Lit 0)) (IsZero (Lit 7)) (IsZero (Lit 9)))))
+  0)

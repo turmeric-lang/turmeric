@@ -1715,6 +1715,8 @@ static bool adt_ctor_split_result(Elab *e, const char *kw, const Form *ctor_form
  *           (Ctor1)
  *           (Ctor2 :T1 :T2)               ; positional-style variant
  *           (Ctor3 [a : int b : cstr])    ; CONV-S0 record-style variant
+ *           (Ctor4 int : (Name int))      ; optional result type
+ *           (Ctor5 [a : int] : (Name int))
  *           ...)
  *         (defgadt Name [type-params] [:copy]
  *           (Ctor1 T1 ... : (Name ...))   ; result type required
@@ -1747,14 +1749,15 @@ static Expr *elab_adt_def(Elab *e, const Form *call, bool spelled_defgadt) {
     }
     const Symbol *name = name_form->as.sym;
 
-    /* The head: optional :copy / :move / :heap / :linear / :no-auto-ctor
-     * keywords and at most one type-parameter vector, in any order (defdata
-     * wrote the keywords first, defgadt the vector).
+    /* The head: optional :copy / :move / :heap / :linear / :affine /
+     * :no-auto-ctor keywords and at most one type-parameter vector, in any
+     * order (defdata wrote the keywords first, defgadt the vector).
      * CONV-S1 seam 3: :heap marks a typed-pointer record ADT (the analogue of a
      * :heap struct -- Vec/Map/Set), set by a lowered `:heap` defstruct. */
     bool is_copy = false;
     bool is_heap = false;
     bool is_linear = false;     /* structdef-retirement slice 4 (LT4) */
+    bool is_affine = false;     /* at-most-once (CK_UNIQUE), as on a defopaque */
     bool no_auto_ctor = false;  /* structdef-retirement slice 2 (CTOR-V0) */
     Form *tp_form = NULL;
     uint32_t ctors_start_idx = 2;
@@ -1774,19 +1777,20 @@ static Expr *elab_adt_def(Elab *e, const Form *call, bool spelled_defgadt) {
          * enforcement then propagates from the type's copy_kind. */
         else if (k == e->kw_heap) is_heap = true;
         else if (k == e->kw_linear) is_linear = true;
+        else if (k == e->kw_affine) is_affine = true;
         /* structdef-retirement slice 2: a lowered `:no-auto-ctor` defstruct (and,
          * by extension, a `defdata` that opts in) suppresses the auto-bound
          * value-namespace constructor so the `(Name ...)` call form stays rejected
          * ("not a function"); construction goes through `make-struct`. */
         else if (k == e->kw_no_auto_ctor) no_auto_ctor = true;
         else break;
-        if (spelled_defgadt && k != e->kw_copy && k != e->kw_move) {
-            diag_emit(DIAG_ERROR, hf->span,
-                      "defgadt: ':%s' is not supported on defgadt; only :copy and "
-                      ":move are", k->name);
-            return NULL;
-        }
         ctors_start_idx++;
+    }
+    if (is_linear && is_affine) {
+        diag_emit(DIAG_ERROR, name_form->span,
+                  "%s: '%s' cannot be both :linear and :affine -- \"exactly "
+                  "once\" and \"at most once\" are contradictory", kw, name->name);
+        return NULL;
     }
 
     /* Phase RF1: the type-parameter vector [^f a b ...].  L6 follow-up C: a
@@ -1992,6 +1996,7 @@ static Expr *elab_adt_def(Elab *e, const Form *call, bool spelled_defgadt) {
     def->is_copy = is_copy;
     def->is_heap = is_heap;
     def->is_linear = is_linear; /* LT4 (structdef-retirement slice 4) */
+    def->is_affine = is_affine;
     def->no_auto_ctor = no_auto_ctor;
     def->needs_drop_glue = false;
     def->has_result_types = any_annotated;
@@ -2091,13 +2096,6 @@ static Expr *elab_adt_def(Elab *e, const Form *call, bool spelled_defgadt) {
                       ctor_name->name);
             goto data_ctor_parse_error;
         }
-        if (result_form && !spelled_defgadt) {
-            diag_emit(DIAG_ERROR, result_form->span,
-                      "defdata: constructor '%s' cannot declare a return type; "
-                      "use defgadt for constructors with their own result types",
-                      ctor_name->name);
-            goto data_ctor_parse_error;
-        }
         if (result_form &&
             !adt_check_result_form(e, kw, name, type_params, n_type_params,
                                    ctor_name, result_form))
@@ -2108,16 +2106,6 @@ static Expr *elab_adt_def(Elab *e, const Form *call, bool spelled_defgadt) {
         bool is_record = payload_end == 2 &&
                          ctor_form->as.list.items[1]->tag == F_VEC;
         Form *rec_vec = is_record ? ctor_form->as.list.items[1] : NULL;
-        if (is_record && spelled_defgadt) {
-            /* A field vector used to be accepted here as ONE int field,
-             * after which `(Rect 3 4)` was "not callable" and `(Rect w h)`
-             * in a match "expects 1 fields, got 2". */
-            diag_emit(DIAG_ERROR, rec_vec->span,
-                      "defgadt: constructor '%s' takes positional field types; "
-                      "a record field vector is not supported",
-                      ctor_name->name);
-            goto data_ctor_parse_error;
-        }
 
         CtorDef *ctor = (CtorDef *)arena_alloc(e->arena, sizeof(CtorDef));
         ctor->name = ctor_name->name;
