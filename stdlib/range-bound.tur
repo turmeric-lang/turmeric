@@ -1,16 +1,16 @@
-;;; tur/range-bound -- Bound A GADT: typed range endpoints (R3).
+;;; tur/range-bound -- Bound: typed range endpoints (R3).
 ;;;
 ;;; range.tur encodes a range endpoint's kind as a sentinel int -- the
 ;;; `inclusive : int` argument to range-bound-new (1 = inclusive, 0 =
 ;;; exclusive) plus the null pointer (0) standing for "unbounded". That is a
 ;;; classic stringly-typed sum. This module replaces it with a real algebraic
-;;; type, the `Bound A` GADT:
+;;; type, `Bound`:
 ;;;
 ;;;   Inclusive v  -- the endpoint v is part of the interval
 ;;;   Exclusive v  -- the endpoint v is the open boundary
 ;;;   Unbounded    -- no endpoint on this side
 ;;;
-;;; As of range-gadt-typeclass-migration-plan B1 the `Bound` GADT IS range.tur's
+;;; As of range-gadt-typeclass-migration-plan B1 `Bound` IS range.tur's
 ;;; internal endpoint representation (defined in range.tur, re-exported here),
 ;;; so this module is now a thin convenience layer. The historical
 ;;; compatibility shims (bound->range-bound and range-bound->bound) survive one
@@ -19,11 +19,10 @@
 ;;;
 ;;; Bound is declared `:copy`, so its endpoints are plain value types that can
 ;;; be read repeatedly (a shared range bound is destructured by many
-;;; predicates). This relies on defgadt's `:copy` support; see
-;;; docs/archive/history/defgadt-copy-and-shared-bounds.md.
-;;;
-;;; GADTs are enabled by default (range-gadt-typeclass-migration-plan A1), so
-;;; no flag is required to load this module.
+;;; predicates); see docs/archive/history/defgadt-copy-and-shared-bounds.md.
+;;; It was a `defgadt` whose every constructor returned `(Bound int)`; it is
+;;; an ordinary `defdata` with no type parameter now, and goes by value
+;;; (adt-gadt-unification-plan slice 3).
 ;;;
 ;;; Since: stdlib-refinement-collections-plan (R3)
 (load "stdlib/range.tur")
@@ -40,7 +39,7 @@
 ;;;   v -- the endpoint value (part of the interval)
 ;;;
 ;;; Returns:
-;;;   A (Bound int) tagged Inclusive.
+;;;   A Bound tagged Inclusive.
 ;;;
 ;;; Example:
 ;;;   (range-contains? (bound-range (bound-inclusive 1) (bound-unbounded)) 1)  ; => true
@@ -54,7 +53,7 @@
 ;;;   v -- the open boundary value (not part of the interval)
 ;;;
 ;;; Returns:
-;;;   A (Bound int) tagged Exclusive.
+;;;   A Bound tagged Exclusive.
 ;;;
 ;;; Example:
 ;;;   (range-contains? (bound-range (bound-inclusive 1) (bound-exclusive 5)) 5)  ; => false
@@ -65,7 +64,7 @@
 ;;; bound-unbounded -- construct an unbounded (open-ended) endpoint.
 ;;;
 ;;; Returns:
-;;;   A (Bound int) tagged Unbounded.
+;;;   A Bound tagged Unbounded.
 ;;;
 ;;; Example:
 ;;;   (range-contains? (bound-range (bound-unbounded) (bound-unbounded)) 999)  ; => true
@@ -77,14 +76,14 @@
 ;;;
 ;;; Before range-gadt-typeclass-migration-plan B1 this lowered a Bound to
 ;;; range.tur's pointer representation. Now that range.tur's internal endpoint
-;;; representation IS the Bound GADT, it is the identity. Retained one release
+;;; representation IS Bound, it is the identity. Retained one release
 ;;; for source compatibility; prefer passing the Bound directly to range-new.
 ;;;
 ;;; Parameters:
-;;;   b -- the (Bound int)
+;;;   b -- the Bound
 ;;;
 ;;; Returns:
-;;;   The same (Bound int), accepted by range-new and every range.tur predicate.
+;;;   The same Bound, accepted by range-new and every range.tur predicate.
 ;;;
 ;;; Example:
 ;;;   (range-bound-inclusive? (bound->range-bound (bound-inclusive 3)))  ; => true
@@ -95,15 +94,15 @@
 ;;; range-bound->bound -- deprecated compatibility shim (now near-identity).
 ;;;
 ;;; Before range-gadt-typeclass-migration-plan B1 this lifted range.tur's
-;;; pointer representation into the Bound GADT. Now that range.tur's endpoints
+;;; pointer representation into Bound. Now that range.tur's endpoints
 ;;; ARE Bound values, it is the identity. Retained one release for source
 ;;; compatibility; prefer using range-lower / range-upper directly.
 ;;;
 ;;; Parameters:
-;;;   b -- a (Bound int)
+;;;   b -- a Bound
 ;;;
 ;;; Returns:
-;;;   The same (Bound int).
+;;;   The same Bound.
 ;;;
 ;;; Example:
 ;;;   (bound-value (range-bound->bound (range-lower (closed-range 2 8))))  ; => 2
@@ -114,7 +113,7 @@
 ;;; bound-value -- extract the endpoint value from a bounded endpoint.
 ;;;
 ;;; Parameters:
-;;;   b -- a (Bound int); Unbounded yields 0
+;;;   b -- a Bound; Unbounded yields 0
 ;;;
 ;;; Returns:
 ;;;   The endpoint value for Inclusive / Exclusive, or 0 for Unbounded.
@@ -129,7 +128,7 @@
 ;;; bound-inclusive? -- true when an endpoint is inclusive.
 ;;;
 ;;; Parameters:
-;;;   b -- a (Bound int)
+;;;   b -- a Bound
 ;;;
 ;;; Returns:
 ;;;   true for Inclusive, false for Exclusive or Unbounded.
@@ -144,54 +143,54 @@
 ;; bound-unbounded? is provided by range.tur (it is range.tur's internal
 ;; Unbounded test as of range-gadt-typeclass-migration-plan B1); no redefinition
 ;; here.
-;;; bound-range -- build a Range from two GADT endpoints.
+;;; bound-range -- build a Range from two Bound endpoints.
 ;;;
-;;; The GADT-typed analogue of range.tur's positional constructors
+;;; The Bound-typed analogue of range.tur's positional constructors
 ;;; (closed-range, open-range, ...): pick any Inclusive / Exclusive /
 ;;; Unbounded combination for each side.
 ;;;
 ;;; Parameters:
-;;;   lo -- the lower (Bound int)
-;;;   hi -- the upper (Bound int)
+;;;   lo -- the lower Bound
+;;;   hi -- the upper Bound
 ;;;
 ;;; Returns:
-;;;   An :int Range pointer, usable with every range.tur predicate.
+;;;   A Range, usable with every range.tur predicate.
 ;;;
 ;;; Example:
 ;;;   (range-contains? (bound-range (bound-inclusive 1) (bound-exclusive 5)) 4)  ; => true
 ;;;
 ;;; Since: R3
 
-(defn bound-range [lo : Bound hi : Bound] : int
+(defn bound-range [lo : Bound hi : Bound] : Range
   (range-new (bound->range-bound lo) (bound->range-bound hi)))
-;;; range-lower-bound -- the lower endpoint of a Range as a Bound GADT.
+;;; range-lower-bound -- the lower endpoint of a Range as a Bound.
 ;;;
 ;;; Parameters:
-;;;   r -- an :int Range pointer
+;;;   r -- a Range
 ;;;
 ;;; Returns:
-;;;   The lower endpoint lifted into the (Bound int) GADT.
+;;;   The lower endpoint as a Bound.
 ;;;
 ;;; Example:
 ;;;   (bound-inclusive? (range-lower-bound (closed-range 1 5)))  ; => true
 ;;;
 ;;; Since: R3
 
-(defn range-lower-bound [r : int] : Bound (range-bound->bound (range-lower r)))
-;;; range-upper-bound -- the upper endpoint of a Range as a Bound GADT.
+(defn range-lower-bound [r : Range] : Bound (range-bound->bound (range-lower r)))
+;;; range-upper-bound -- the upper endpoint of a Range as a Bound.
 ;;;
 ;;; Parameters:
-;;;   r -- an :int Range pointer
+;;;   r -- a Range
 ;;;
 ;;; Returns:
-;;;   The upper endpoint lifted into the (Bound int) GADT.
+;;;   The upper endpoint as a Bound.
 ;;;
 ;;; Example:
 ;;;   (bound-unbounded? (range-upper-bound (at-least-range 3)))  ; => true
 ;;;
 ;;; Since: R3
 
-(defn range-upper-bound [r : int] : Bound (range-bound->bound (range-upper r)))
+(defn range-upper-bound [r : Range] : Bound (range-bound->bound (range-upper r)))
 ;; -------------------------------------------------------------------
 ;; Rendering (range-gadt-typeclass-migration-plan B2)
 ;; -------------------------------------------------------------------
@@ -203,9 +202,9 @@
 ;; typeclass.tur to bring Show/Ord into scope. `(show b)` renders a lone
 ;; endpoint exactly like `bound->str` below.
 ;;
-;; `Range` remains a bare :int with no nominal type, so `(definstance Show
-;; [Range] ...)` is still not expressible; the full-interval `range->str` /
-;; `range-fmt` helpers below stay as self-contained functions.
+;; The full-interval `range->str` / `range-fmt` helpers below are
+;; self-contained functions.  (`Range` is a nominal record now, so a `Show
+;; [Range]` instance is expressible; none is declared yet.)
 ;; range-fmt -- inline-C formatter for a range's decomposed endpoints.
 ;; kind: 0 = unbounded, 1 = inclusive, 2 = exclusive.
 
@@ -227,7 +226,7 @@
 ;;; "[1, 5)" for a closed-open range or "(-inf, 5]" for an at-most range.
 ;;;
 ;;; Parameters:
-;;;   r -- an :int Range pointer
+;;;   r -- a Range
 ;;;
 ;;; Returns:
 ;;;   A freshly allocated :cstr interval string.
@@ -238,7 +237,7 @@
 ;;;
 ;;; Since: range-gadt-typeclass-migration-plan B2
 
-(defn range->str [r : int] : cstr
+(defn range->str [r : Range] : cstr
   (let [lo (range-lower r)
         hi (range-upper r)]
     (range-fmt (bound-kind lo)
@@ -252,7 +251,7 @@
 ;;; form; use range->str for a full interval.
 ;;;
 ;;; Parameters:
-;;;   b -- a (Bound int)
+;;;   b -- a Bound
 ;;;
 ;;; Returns:
 ;;;   A freshly allocated :cstr.

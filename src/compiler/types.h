@@ -438,16 +438,17 @@ typedef struct AdtDef {
     bool from_implib;
 } AdtDef;
 
-/* CONV-S2 (struct/ADT convergence): a single-variant, non-GADT ADT is
+/* CONV-S2 (struct/ADT convergence): a single-variant, unrefined ADT is
  * representationally a product (one named/positional payload, no choice of
  * variant), so codegen specializes it to a flat layout -- no `int tag` word in
  * the typedef, no tag store in the constructor, and no tag test in `match`.
- * Multi-variant ADTs and GADTs (whose tag may drive return-type refinement)
- * keep the tagged-union representation.  Every codegen site that would emit or
+ * Multi-variant ADTs and refined types (AdtDef.is_refined: a constructor's
+ * annotation refines the parameters, so no monomorph can hold every arm's
+ * fields) keep the tagged-union representation.  Every codegen site that would emit or
  * read the tag word for an ADT gates on this predicate so the typedef, the
  * constructors, and the match sites stay in lockstep. */
 static inline bool adt_is_flat_product(const AdtDef *def) {
-    return def && def->n_ctors == 1 && !def->has_result_types;
+    return def && def->n_ctors == 1 && !def->is_refined;
 }
 
 /* CONV-S1 seam 4: a NON-PARAMETRIC, single-variant, record-style ADT (the
@@ -475,7 +476,7 @@ static inline bool adt_is_flat_product(const AdtDef *def) {
  * base, types.c monomorph), the ctor stores, field reads, and match binds all
  * key off this one predicate. */
 static inline bool adt_uses_named_layout(const AdtDef *def) {
-    if (!def || def->n_ctors != 1 || def->has_result_types)
+    if (!def || def->n_ctors != 1 || def->is_refined)
         return false;
     const CtorDef *c = def->ctors[0];
     if (!c || !c->is_record || c->n_fields == 0) return false;

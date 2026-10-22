@@ -3600,12 +3600,18 @@ static const Form *gx_subst(Elab *e, const Form *f, const GxSub *subs, int n_sub
     return form_list(e->arena, f->span, items, f->as.list.len);
 }
 
+/* adt-gadt-unification: only a REFINED type's index says anything its type
+ * does not.  An annotated type that is not refined -- `(Tok int)` from every
+ * constructor, or a generic `(Box a)` -- is typed by its constructors like
+ * any defdata, and its applied form is a by-value monomorph, so retyping a
+ * bare (carrier) value to it through an ascription would lie about the
+ * representation. */
 static const AdtDef *gx_gadt_head(Elab *e, const Form *f) {
     f = gx_peel(f);
     if (!f || f->tag != F_LIST || f->as.list.len < 2) return NULL;
     TypeKind p = TY_UNKNOWN;
     const AdtDef *d = NULL;
-    if (gx_const(e, f->as.list.items[0], &p, &d) != 2 || !d || !d->has_result_types)
+    if (gx_const(e, f->as.list.items[0], &p, &d) != 2 || !d || !d->is_refined)
         return NULL;
     return d;
 }
@@ -3684,7 +3690,7 @@ static bool gx_closed(Elab *e, const Form *f) {
  * elaborates to.  `x` itself when the index is not known. */
 Expr *gadt_refine_to_index(Elab *e, Expr *x) {
     if (!x || x->type.kind != TY_ADT || !x->type.as.adt_.def ||
-        !x->type.as.adt_.def->has_result_types)
+        !x->type.as.adt_.def->is_refined)
         return x;
     const Form *xf = gx_peel(sz_recover_type_form(e, x));
     if (gx_gadt_head(e, xf) != x->type.as.adt_.def || !gx_closed(e, xf))
@@ -5840,13 +5846,17 @@ static Expr *elab_call_inner(Elab *e, Form *call) {
                  * Collecting through the app makes `(N (MkPair2 3 4))` infer
                  * `(Nest int)`.
                  *
-                 * adt-gadt-unification: per CONSTRUCTOR, not per type -- a
-                 * constructor whose annotation pins its own result (`Lit :
-                 * (Expr int)`) is typed by the index machinery above, while
-                 * an unannotated or generic one (`If`, `MkBox : (Box a)`)
-                 * collects like any defdata constructor. */
+                 * adt-gadt-unification: in a REFINED type, per constructor --
+                 * one whose annotation pins its own result (`Lit : (Expr
+                 * int)`) is typed by the index machinery above, while an
+                 * unannotated or generic one (`If`, `MkBox : (Box a)`)
+                 * collects like any defdata constructor.  In an unrefined
+                 * type every constructor collects: `(ITok 5)` of `(Tok int)`
+                 * is built at the by-value monomorph its plain-defdata twin
+                 * gets, not at the bare carrier. */
                 if (ctor->adt->n_type_params > 0 &&
-                    !ctor_is_refining(ctor->adt, ctor) &&
+                    (!ctor->adt->is_refined ||
+                     !ctor_is_refining(ctor->adt, ctor)) &&
                     ctor->adt->n_type_params <= 8) {
                     uint8_t ntp = ctor->adt->n_type_params;
                     Type targs[8];
@@ -8488,7 +8498,7 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
          * Only there -- a bare parameter keeps the bare argument. */
         if (fn_type.kind == TY_FN && fn_type.as.fn.arg_full_types &&
             args[i]->type.kind == TY_ADT && args[i]->type.as.adt_.def &&
-            args[i]->type.as.adt_.def->has_result_types) {
+            args[i]->type.as.adt_.def->is_refined) {
             uint32_t gfi = fn_binding->closure_fn_binding ? i + 1 : i;
             const Type *gft = (gfi < fn_type.as.fn.arity)
                 ? fn_type.as.fn.arg_full_types[gfi] : NULL;

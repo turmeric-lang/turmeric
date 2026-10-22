@@ -1259,6 +1259,22 @@ static bool resolve_ctor_field(Elab *e, AdtDef *def, CtorDef *ctor, uint32_t fi,
                                uint32_t n_type_params, bool record_style) {
     ctor->fields[fi].full_type = NULL;
     if (ctor->field_forms) ctor->field_forms[fi] = NULL;
+    /* adt-gadt-unification: `(Nat)` -- a type applied to no arguments, the
+     * spelling a defgadt result annotation uses -- is the type `Nat`.  Read
+     * as an application it was an error in a match arm ("type expression
+     * must be a symbol or (ctor arg ...) application"), and a self-reference
+     * written that way was resolved as an INLINE field, which kept the type
+     * off the by-value path its bare-named twin takes. */
+    if (ft_form->tag == F_LIST && ft_form->as.list.len == 1 &&
+        ft_form->as.list.items[0]->tag == F_SYM) {
+        Form *hd = ft_form->as.list.items[0];
+        TypeKind hk, hi;
+        parse_struct_field_type(hd->as.sym->name, hd->as.sym->len, &hk, &hi);
+        Binding *htb = hk == TY_UNKNOWN ? scope_lookup_type_def(e->scope, hd->as.sym)
+                                        : NULL;
+        if (hk != TY_UNKNOWN || (htb && htb->type.kind == TY_ADT))
+            ft_form = hd;
+    }
     if (ctor_field_form_names_adt(ft_form, def->name))
         def->is_self_recursive = true;
 
@@ -2935,7 +2951,8 @@ bool elab_retype_nullary_ctor_arm(Expr *arm, Type joined) {
         arm->as.call_.n_args != 0)
         return false;
     const CtorDef *ctor = arm->as.call_.ctor;
-    if (!ctor->adt || ctor_is_refining(ctor->adt, ctor) || ctor->adt->n_type_params == 0)
+    if (!ctor->adt || ctor->adt->n_type_params == 0 ||
+        (ctor->adt->is_refined && ctor_is_refining(ctor->adt, ctor)))
         return false;
     if (arm->type.kind != TY_ADT || arm->type.as.adt_.def != ctor->adt)
         return false;

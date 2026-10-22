@@ -8,8 +8,8 @@ description: Fold `defgadt` into `defdata` -- one elaborator, an optional per-co
 
 > **Status:** IN PROGRESS 2026-10-22. Decisions taken 2026-10-22 (see
 > "Decisions"): rename the flag to `is_refined`; an unrefined type reports as
-> a sum; `defgadt` is retired through the TUR-D deprecation band. Slices 1
-> and 2 landed. Not a v1 blocker.
+> a sum; `defgadt` is retired through the TUR-D deprecation band. Slices
+> 1-3 landed. Not a v1 blocker.
 
 ## Summary
 
@@ -287,23 +287,76 @@ row per the CLAUDE.md rule rather than an env seam.
 
 ### Slice 3 -- representation follows refinement
 
-- [ ] `types.c` / `types.h` gates switch from `is_gadt` to `is_refined`.
+- [x] `types.c` / `types.h` gates switch from `is_gadt` to `is_refined`.
       `Bound`, `GVec`, `Nat`, `StaticInt`, `Size`, `SizedVec` move to the
-      by-value / flat paths; `Equal` stays on the carrier.
-- [ ] `range.tur` rewrite per "range.tur under slice 3", same PR.
+      by-value / flat paths; `Equal` stays on the carrier. *As measured:*
+      only the **non-parametric** ones move -- `StaticInt` (a flat product),
+      `Nat` and `Size` (recursive sums, by value since RM4). A parametric
+      type's bare name is the uniform carrier whatever its constructors say
+      (`adt_sr1_sum_candidate` requires `n_type_params == 0`; probed with a
+      plain `(defdata Bnd :copy [A] (Incl int) ...)`, which mallocs too), so
+      `GVec [a]` and `SizedVec [n a]` keep the carrier for bare uses; only an
+      applied `(GVec int)` now gets a by-value monomorph. `Nat` and `Size`
+      also needed `(Nat)` -- a type applied to no arguments, the spelling
+      their result annotations use -- to read as the type `Nat` in field
+      position (`resolve_ctor_field`); as an application it was resolved as
+      an inline field and kept the type off the by-value path (and in a
+      `defdata` it failed outright in a match arm: "type expression must be
+      a symbol or (ctor arg ...) application").
+      Two elaboration rules moved with the representation, because an
+      unrefined annotated type's applied form is now a by-value monomorph
+      while its bare name is the carrier: the def-level index machinery
+      (`gx_gadt_head`, `gadt_refine_to_index`, the call-argument retype)
+      keys on `is_refined`, not `has_result_types` -- retyping a bare value
+      to `(Tok int)` through an ascription claimed a representation it did
+      not have (`(defdata Tok [a] (ITok int : (Tok int)))` passed to a
+      `(Tok int)` parameter was a C type error) -- and every constructor of
+      an unrefined type collects type arguments like a defdata one, so
+      `(ITok 5)` is built at the monomorph exactly as its unannotated twin
+      is. Only a refining constructor of a refined type skips collection.
+- [x] `range.tur` rewrite per "range.tur under slice 3", same PR.
       `range-bound.tur` docstrings lose the "int64-encoded GADT cell"
-      wording.
-- [ ] `sized.tur`'s `sized-vec-from-list` rewritten in Turmeric (same
-      section), same PR.
-- [ ] `tests/check-emitted-float-conversions.py` and the region-escape
+      wording. *As built:* `Bound` would have stayed on the carrier for the
+      reason above, so it lost its parameter: `(defdata Bound :copy
+      (Inclusive int) (Exclusive int) (Unbounded))`. `[A]` was pinned to
+      `int` by every constructor and never used
+      (range-gadt-typeclass-migration-plan lists parameterising `Bound` as a
+      non-goal); `(Bound int)` no longer names it, and no code in the tree
+      or in turmeric-spices wrote that. `Range` is `(defstruct Range :copy
+      [lower : Bound upper : Bound])` -- `:copy` and by value rather than the
+      `:heap` sketched above: every caller reuses a range, and a by-value
+      record of two by-value sums allocates nothing. Every `r : int` in
+      range.tur / range-bound.tur / range-string.tur is `r : Range`.
+      `range-intersection` and `range-gap` call their abort helper as a
+      `when` guard, since the helper's `:int` cannot share an `if` with a
+      `Range`.
+- [x] `sized.tur`'s `sized-vec-from-list` rewritten in Turmeric (same
+      section), same PR. *Not needed:* `SizedVec` is parametric and its bare
+      name stays on the carrier, so `ctor_SVNil()` / `ctor_SVCons(...)` still
+      return the `int64_t` that inline body keeps; it compiles and runs as
+      before (`sized-vec-basic`).
+- [x] `tests/check-emitted-float-conversions.py` and the region-escape
       fixtures (`region-escape-via-store`) re-run: a by-value `Bound` is a new
-      shape for `TUR_REGION_NOTE_WORDS`.
-- [ ] Snapshots regenerated in the same PR (CLAUDE.md "Fixture churn is not
+      shape for `TUR_REGION_NOTE_WORDS`. Zero float findings on the range,
+      sized, nat and new slice 2 fixtures. A by-value `Bound` / `Range` holds
+      only integers; `region-escape-via-store` gains case 12, an annotated
+      recursive sum (`Peano`) whose boxed field is built inside a bracket and
+      pushed into an outer vec, on both `TUR_REGIONS` arms
+      (`tests/run-regions-seam.sh` green).
+- [x] Snapshots regenerated in the same PR (CLAUDE.md "Fixture churn is not
       a deferral reason"). Expect the `range-*`, `sized-*`, `nat-*` and
-      `gadt-vec-*` fixtures to move.
-- [ ] Measure: `tur emit-c` of a `range.tur` caller shows no `malloc` in
+      `gadt-vec-*` fixtures to move. *As measured:* none of those carries an
+      `expected.c`, and no snapshot moved -- the full suite (4080 fixtures)
+      was green with none regenerated.
+- [x] Measure: `tur emit-c` of a `range.tur` caller shows no `malloc` in
       `ctor_Bound_*`; the range benchmark, if one exists under `bench/`, is
-      re-run before and after.
+      re-run before and after. *Measured 2026-10-22:* `ctor_Bound_Inclusive`
+      returns a `tur_adt_Bound` by value and `range_new` a `tur_adt_Range`
+      (both were `int64_t` over a `malloc`). There is no range benchmark; a
+      2M-iteration loop building a `closed-open-range`, an `at-least-range`
+      and their `range-span`, Release build: **0.47-0.58 s and 437 MB peak
+      RSS before, 0.12-0.13 s and 1.2 MB after** (every endpoint and range
+      was a never-freed malloc).
 
 ### Slice 4 -- retire `defgadt`
 
