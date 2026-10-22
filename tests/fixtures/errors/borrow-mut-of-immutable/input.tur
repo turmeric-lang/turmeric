@@ -1,0 +1,10 @@
+;; borrow-checks-gaps item 1: `&mut` is the exclusive MUTABLE access to a
+;; mutable place.  `x` is not `^mut`, so the write through `r` used to change
+;; it (5); the borrow itself is refused now, which also covers a `&mut`
+;; handed straight to a writing callee.
+(defn main [] : int
+  (let [x 1]
+    (let [r &mut x]
+      (set! @r 5))
+    (println x))
+  0)

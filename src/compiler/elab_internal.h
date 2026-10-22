@@ -933,6 +933,18 @@ typedef struct Elab {
      * elab_fn/elab_defn).  check_cloneable_capture stops here so bindings
      * from outer function scopes are not falsely flagged as needing Clone. */
     struct Scope    *fn_entry_outer_scope;
+    /* borrow-checks-gaps: last-use liveness for `let`-held borrows.  Every
+     * use of a binding that holds a borrow stamps borrow_clock on it; a
+     * `set!` of the borrowed place while such a binding is in scope is
+     * refused if the holder is used AFTER it (in program order, or earlier in
+     * an enclosing `while` that began after the holder was bound).  The check
+     * that needs the later uses waits in borrow_pending until the holder's
+     * `let` ends (elab_borrow_pending_flush). */
+    uint64_t          borrow_clock;
+    uint64_t         *borrow_loop_marks;
+    uint32_t          n_borrow_loop_marks, cap_borrow_loop_marks;
+    struct BorrowPendingWrite *borrow_pending;
+    uint32_t          n_borrow_pending, cap_borrow_pending;
     /* Edge 1 (hkt-matcher-cata-...): the binding group of the `letrec`/named-let
      * init currently being lifted.  Set by elab_letrec immediately around each
      * init's elaboration and snapshotted+cleared at elab_fn entry, so the
@@ -2098,6 +2110,18 @@ ReturnConflict return_position_conflict(const AdtDef *ret_adt,
 /* TY4: if `e` is a borrow (&x / &mut x) of a named binding, return that
  * binding (the referent); otherwise NULL.  Used by the borrow-escape check. */
 const Binding *borrow_referent_binding(const Expr *e);
+const Binding *borrow_place_root(const Expr *place);
+typedef struct BorrowPendingWrite {
+    const Binding *holder;
+    uint64_t       at;          /* borrow_clock at the write */
+    Span           span;
+    const char    *what;        /* "`x`" or "`.f` of `x`" (arena) */
+} BorrowPendingWrite;
+bool elab_borrow_check_write(Elab *e, const Expr *place, Span span, const char *what);
+void elab_borrow_note_use(Elab *e, Binding *b);
+bool elab_borrow_pending_flush(Elab *e, Binding *const *holders, uint32_t n, bool report);
+void elab_borrow_loop_push(Elab *e);
+void elab_borrow_loop_pop(Elab *e);
 
 /* elab_unsafe.c */
 Expr *elab_ptr_deref(Elab *e, const Form *call);

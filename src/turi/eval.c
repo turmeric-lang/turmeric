@@ -14231,6 +14231,21 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
             TuriValue ref; ref.tag = TURI_REF; ref.as_ref = slot;
             return ref;
         }
+        /* borrow-checks-gaps: `&mut` of a literal borrows a temporary, as the
+         * compiled spill does (emit_borrow_spill), so a write through it reads
+         * back.  The temporary is a frame binding no name can reach. */
+        if (e->kind == EX_BORROW_MUT && frame) {
+            const Expr *lit = inner;
+            while (lit && lit->kind == EX_ASCRIBE) lit = lit->as.ascribe_.inner;
+            if (lit && (lit->kind == EX_INT_LIT || lit->kind == EX_FLOAT_LIT ||
+                        lit->kind == EX_BOOL_LIT || lit->kind == EX_CSTR_LIT)) {
+                TuriValue v = eval_expr(env, frame, inner);
+                if (turi_is_error(v) || env_signaled(env)) return v;
+                frame_bind(env, frame, " borrow-temp", v);
+                TuriValue ref; ref.tag = TURI_REF; ref.as_ref = &frame->bindings->value;
+                return ref;
+            }
+        }
         /* Fallback: transparent */
         return eval_expr(env, frame, inner);
     }

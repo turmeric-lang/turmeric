@@ -9803,6 +9803,31 @@ static bool async_spawn_owns_env(const Expr *fn_expr) {
     return lc && (closure_env_drop_is_shallow(lc) || closure_env_drop_frees_box_only(lc));
 }
 
+/* borrow-checks-gaps: a borrow of a literal has no place to point at --
+ * `&7.25` is not C.  Spill the value to a temporary in the current block,
+ * which lives as long as the `let` (or the call) that holds the borrow, and
+ * hand back its address; NULL when `op` is a place (or anything else, which
+ * takes the ordinary `&` path). */
+static char *emit_borrow_spill(EmitCtx *ctx, Buf *body, const Expr *op) {
+    const Expr *x = op;
+    while (x && x->kind == EX_ASCRIBE) x = x->as.ascribe_.inner;
+    if (!x || (x->kind != EX_INT_LIT && x->kind != EX_FLOAT_LIT &&
+               x->kind != EX_BOOL_LIT && x->kind != EX_CSTR_LIT))
+        return NULL;
+    char *v = emit_value(ctx, body, op);
+    char *tmp = fresh_tmp(ctx);
+    indent_buf(body, ctx->indent);
+    buf_printf(body, "%s %s = %s;\n",
+               type_c_name(emit_resolve_type(ctx, op->type)), tmp, v);
+    free(v);
+    size_t n = strlen(tmp) + 2;
+    char *result = (char *)malloc(n);
+    if (!result) { fprintf(stderr, "tur: oom\n"); abort(); }
+    snprintf(result, n, "&%s", tmp);
+    free(tmp);
+    return result;
+}
+
 static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
     switch (e->kind) {
         case EX_DYN_OP:    return emit_dyn_op(ctx, body, e);
@@ -18133,6 +18158,8 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
         /* Phase 12: Borrow traits */
         case EX_BORROW_IMMUT: {
             /* (& expr) - immutable borrow */
+            char *spilled = emit_borrow_spill(ctx, body, e->as.borrow_immut_.expr);
+            if (spilled) return spilled;
             Type inner_type = e->as.borrow_immut_.expr->type;
             bool saved_lv = ctx->lvalue_mode;
             ctx->lvalue_mode = true;  /* borrow-struct-field: field operand as lvalue */
@@ -18159,6 +18186,8 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
         }
         case EX_BORROW_MUT: {
             /* (&mut expr) - mutable borrow */
+            char *spilled = emit_borrow_spill(ctx, body, e->as.borrow_mut_.expr);
+            if (spilled) return spilled;
             Type inner_type = e->as.borrow_mut_.expr->type;
             bool saved_lv_m = ctx->lvalue_mode;
             ctx->lvalue_mode = true;  /* borrow-struct-field: field operand as lvalue */

@@ -5888,6 +5888,19 @@ Expr *elab_borrow_mut(Elab *e, const Form *call) {
         if (target->is_linear)
             target->is_linear_consumed = false;
     }
+    /* borrow-checks-gaps: `&mut` is the exclusive MUTABLE access to a mutable
+     * place, so the place must be one `set!` could write: a `^mut` local, or
+     * a field path inside one.  A place behind an rc, a `:heap` pointer or a
+     * borrow is interior-mutable and has no root (borrow_place_root). */
+    {
+        const Binding *root = borrow_place_root(inner);
+        if (root && !root->is_mut) {
+            diag_emit(DIAG_ERROR, call->span,
+                      "cannot borrow `%s` as mutable: it is not declared `^mut`",
+                      root->name->name);
+            return NULL;
+        }
+    }
     
     /* Phase U: Borrowing from ptr<void> requires an unsafe context. */
     if (inner->type.kind == TY_PTR_VOID && e->unsafe_depth == 0) {

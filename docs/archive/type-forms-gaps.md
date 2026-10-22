@@ -7,7 +7,7 @@
 - Item 1 (`forall` argument trusted): decision -- enforce it. Plan:
   [rank2-argument-genericity-plan](../upcoming/rank2-argument-genericity-plan.md).
 - Item 2 (borrows): reports
-  [borrow-checks-gaps](../reported/borrow-checks-gaps.md) (the checker) and
+  [borrow-checks-gaps](borrow-checks-gaps.md) (the checker) and
   [turi-borrow-is-a-copy](turi-borrow-is-a-copy.md) (the interpreter; resolved
   2026-10-22).
 - Item 3 (sized numbers in `any`): decision -- an interpreter limit, documented

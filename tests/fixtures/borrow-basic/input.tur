@@ -2,7 +2,7 @@
 ; Multiple immutable borrows allowed
 
 (defn main [] : int
-  (let [x 42]
+  (let [^mut x 42]
     (let [r1 (& x)]
       (let [r2 (& x)]  ; OK: multiple &T allowed
         (println 1)))

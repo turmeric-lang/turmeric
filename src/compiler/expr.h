@@ -238,6 +238,16 @@ struct Binding {
      * Without it the unexported defn is demoted to `static` and the raw
      * `extern <mangled>` reference in another TU dangles at link time. */
     bool          retain_c_linkage;
+    /* borrow-checks-gaps: when this `let` binding holds a borrow -- its
+     * initializer is `(& place)` or `(&mut place)` -- the local binding whose
+     * own storage the place names (borrow_place_root), else NULL.  `set!` of
+     * that binding, or of a field path overlapping the borrowed one, is
+     * refused while this one is live (elab_borrow_check_write). */
+    const Binding *borrow_of;
+    const struct Expr *borrow_place;   /* the borrowed place, for field overlap */
+    uint64_t       borrow_bound_at;    /* Elab.borrow_clock when bound */
+    uint64_t       borrow_last_use;    /* ... at the last use; UINT64_MAX once
+                                        * a closure captures it */
     /* Phase T25: true if this binding is an algebraic-effect continuation (k in handle cases).
      * Used to detect continuation escape into async blocks at compile time. */
     bool          is_continuation;
