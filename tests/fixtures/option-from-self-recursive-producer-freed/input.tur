@@ -35,11 +35,19 @@
     (let [r (depth-first (- n 1))]
       r)))
 
-;; Written as two matches, not `(Some (StrVal s))`: the non-retain inference
-;; does not see through a nested constructor pattern yet, so `show` would keep
-;; every box it is handed whoever produced it
-;; (docs/reported/nested-ctor-pattern-defeats-sum-nonretain.md).
+;; Two consumers of the same shape.  `show` is written with a NESTED
+;; constructor pattern: its lowering puts an unreachable `panic` fallthrough
+;; in the body, which used to read as "may hide inline C" and switched the
+;; non-retain inference off, so every caller kept the box it handed in
+;; (nested-ctor-pattern-defeats-sum-nonretain).  `show2` is the hand-flattened
+;; twin that always qualified.
 (defn show [o : (Option Value)] : cstr
+  (match o
+    (Some (StrVal s))  s
+    (Some (LongVal _)) "long"
+    (None)             "none"))
+
+(defn show2 [o : (Option Value)] : cstr
   (match o
     (Some v) (match v
                (StrVal s)  s
@@ -50,4 +58,7 @@
   (println (show (find-from 0 10)))     ;; three
   (println (show (find-from 5 10)))     ;; none
   (println (show (depth-first 4)))      ;; long
+  (println (show (some (StrVal "x"))))  ;; x
+  (println (show2 (find-from 0 10)))    ;; three
+  (println (show2 (depth-first 4)))     ;; long
   0)

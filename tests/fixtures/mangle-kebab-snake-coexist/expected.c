@@ -325,6 +325,41 @@ static void tur_handler_table_free(tur_handler_table_t *t) {
 /* IT4: tagged union runtime representation */
 typedef struct { int64_t tag; int64_t val; } tur_tagged_t;
 #define TUR_AS(T, x)    ((T)(x))
+static inline int64_t tur_f2i64(double d) {
+    if (d != d) return 0;
+    if (d >= 9223372036854775808.0) return INT64_MAX;
+    if (d <= -9223372036854775808.0) return INT64_MIN;
+    return (int64_t)d;
+}
+static inline uint64_t tur_f2u64(double d) {
+    if (d != d || d <= -1.0) return 0;
+    if (d >= 18446744073709551616.0) return UINT64_MAX;
+    return (uint64_t)d;
+}
+static inline int8_t tur_f2i8(double d) {
+    int64_t v = tur_f2i64(d);
+    return (int8_t)(v < INT8_MIN ? INT8_MIN : v > INT8_MAX ? INT8_MAX : v);
+}
+static inline int16_t tur_f2i16(double d) {
+    int64_t v = tur_f2i64(d);
+    return (int16_t)(v < INT16_MIN ? INT16_MIN : v > INT16_MAX ? INT16_MAX : v);
+}
+static inline int32_t tur_f2i32(double d) {
+    int64_t v = tur_f2i64(d);
+    return (int32_t)(v < INT32_MIN ? INT32_MIN : v > INT32_MAX ? INT32_MAX : v);
+}
+static inline uint8_t tur_f2u8(double d) {
+    uint64_t v = tur_f2u64(d);
+    return (uint8_t)(v > UINT8_MAX ? UINT8_MAX : v);
+}
+static inline uint16_t tur_f2u16(double d) {
+    uint64_t v = tur_f2u64(d);
+    return (uint16_t)(v > UINT16_MAX ? UINT16_MAX : v);
+}
+static inline uint32_t tur_f2u32(double d) {
+    uint64_t v = tur_f2u64(d);
+    return (uint32_t)(v > UINT32_MAX ? UINT32_MAX : v);
+}
 static inline int64_t tur_idiv(int64_t a, int64_t b) {
     if (b == 0) { fprintf(stderr, "division by zero\n"); abort(); }
     return b == -1 ? (int64_t)(0 - (uint64_t)a) : a / b;

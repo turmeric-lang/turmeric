@@ -1,5 +1,9 @@
 # A nested constructor pattern on an `(Option T)` parameter makes the function keep every box it is handed
 
+**RESOLVED 2026-10-22** -- see [Resolution](#resolution-2026-10-22). Pinned by
+`option-from-self-recursive-producer-freed` (`requires.leak-check`), whose
+`show` is now the nested-pattern form beside its hand-flattened twin.
+
 **Severity: low (leak; one box per call).** Found 2026-10-21 writing the
 leak-checked fixture `option-from-self-recursive-producer-freed`.
 
@@ -54,3 +58,20 @@ binder followed by `(match v ...)` is modelled.
    an arm binder and a `match` on it are admitted.
 2. Extend `option-from-self-recursive-producer-freed` (or a sibling
    `requires.leak-check` fixture) with the nested-pattern consumer.
+
+## Resolution (2026-10-22)
+
+The walk was never the problem: `box_uses_confined` models every node the
+lowering produces. What it never reached is the gate in front of it. The
+nested-pattern lowering (`elab_structs.c`) puts an unreachable
+`(panic "match: nested pattern fallthrough (unreachable)")` at the end of
+every exhaustive group's test chain, and `expr_subtree_has_inline_c`
+(`emit_core.c`) -- the inline-C exclusion that guards the whole nonretain
+inference in `elab_fns.c` -- left `EX_PANIC` to its conservative `default`,
+"may hide inline C". So the inference was switched off for the body before
+any walk ran, the mask stayed 0, and every caller kept its box.
+
+`EX_PANIC` and `EX_PANIC_WITH` now walk only their payload: a panic lowers to
+the preamble's `tur_panic_at` and carries no inline C of its own. With that
+the nested-pattern `show` is stamped non-retaining like its flattened twin,
+and the fixture is clean under LeakSanitizer with both consumers.

@@ -83,4 +83,9 @@
     (None2) (println "none")
     (One a) (println "one")
     (Both a b) (do (println a) (println b)))      ; 3, s
+  ;; heap-sum-unpinned-tyvar-relayed-to-generic: nothing in the program fixes
+  ;; T here -- the nullary ctor takes bump's own named T, which a monomorphic
+  ;; caller grounds to the carrier exactly as an open slot.
+  (println (has? (bump (Nil))))                   ; false
+  (println (has? (Nil)))                          ; false
   0)

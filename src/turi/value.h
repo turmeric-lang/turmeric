@@ -43,7 +43,7 @@ typedef enum TuriTag {
     TURI_STRUCT,         /* struct instance: TuriStruct* (Phase S4) */
     TURI_THROW,          /* in-flight exception: TuriThrow* (Phase S4) */
     TURI_FUTURE,         /* async future handle: TuriFuture* (Phase S7) */
-    TURI_REF,            /* mutable borrow reference: void* to EvalBinding */
+    TURI_REF,            /* borrow reference: TuriValue* to the borrowed place's slot */
     TURI_STRUCT_TYPE,    /* struct type descriptor: as_cstr holds the name */
     TURI_GEN,            /* generator instance: TuriGen* (Phase TI2) */
     TURI_HANDLER,        /* first-class handler value: TuriHandlerVal* (TI6) */
@@ -68,7 +68,7 @@ typedef struct TuriValue {
     union {
         bool              as_bool;
         int64_t           as_int;
-        void             *as_ref;   /* TURI_REF: EvalBinding* in interpreter */
+        void             *as_ref;   /* TURI_REF: TuriValue* slot (frame binding or struct field) */
         double            as_float;
         const char       *as_cstr;    /* borrowed or malloc'd string */
         TuriClosure      *as_closure;

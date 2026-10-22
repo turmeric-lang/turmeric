@@ -16,7 +16,7 @@
   documented in `stdlib/serial.tur`, the `serial-shift` forms entry and
   eval-api's interpreter limits.
 - Item 5 (`(k 2.25)` into a `float32` continuation): its own report,
-  [escape-cont-float32-literal-arg](../reported/escape-cont-float32-literal-arg.md).
+  [escape-cont-float32-literal-arg](escape-cont-float32-literal-arg.md) (resolved 2026-10-22).
 
 **Severity: medium** (item 2 is a silent wrong answer). Found 2026-10-19 checking the examples for the
 continuation forms' API reference (`stdlib/forms/continuations.tur`).

@@ -7744,6 +7744,27 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
                                 type_name(type_from_kind(karg->type.kind)));
             return NULL;
         }
+        /* escape-cont-float32-literal-arg: an escape continuation's value
+         * lands as the call/cc site's result, whose type is the cont's
+         * declared `returns` (`escape-cont<float32>`).  The resume value is
+         * carried as int64 BITS (the reinterpret below), so a double handed
+         * to a float32 continuation -- a float literal, or a `float` value --
+         * arrived as the low 32 bits of a double: 0 for 2.25.  Convert the
+         * value to the declared float kind first, the `(as float32 v)` the
+         * program would otherwise have to spell. */
+        if ((ContFlavor)fn_type.as.cont.flavor == CONT_ESCAPE &&
+            fn_type.as.cont.returns_known) {
+            TypeKind want = fn_type.as.cont.returns;
+            bool want_f = want == TY_FLOAT || want == TY_FLOAT32 || want == TY_FLOAT64;
+            if (want_f && karg->type.kind != want &&
+                typekind_is_numeric(karg->type.kind)) {
+                Expr *cv = expr_new(e->arena, EX_CAST, type_simple(want, CK_COPY),
+                                    call->span);
+                cv->as.cast_.expr = karg;
+                cv->as.cast_.target_kind = want;
+                karg = cv;
+            }
+        }
         /* CC4.4: (k v) consumes the continuation.  This sugar builds the EX_VAR
          * by hand (below), bypassing the shared var-use consumption path, so
          * account for linearity here: invoking a ^linear k marks it consumed, and

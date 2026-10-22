@@ -6733,6 +6733,24 @@ Type emit_ground_open_slots(EmitCtx *ctx, Type t, bool *changed) {
     return type_app(ctx->type_arena, fn, arg, nosp);
 }
 
+/* heap-sum-unpinned-tyvar-relayed-to-generic: the named-variable twin of
+ * emit_ground_open_slots, for a MONOMORPHIC body only (the caller decides):
+ * every named type variable in `t` becomes the int carrier. */
+static Type emit_ground_named_tyvars(EmitCtx *ctx, Type t, bool *changed) {
+    if (t.kind == TY_TYVAR && t.as.tyvar_.name && t.hkt_kind != KIND_TYPEROW) {
+        if (changed) *changed = true;
+        return emit_type_from_kind(TY_INT);
+    }
+    if (t.kind != TY_APP || !t.as.app.fn || !t.as.app.arg) return t;
+    bool c = false;
+    Type fn = emit_ground_named_tyvars(ctx, *t.as.app.fn, &c);
+    Type arg = emit_ground_named_tyvars(ctx, *t.as.app.arg, &c);
+    if (!c) return t;
+    if (changed) *changed = true;
+    Span nosp; memset(&nosp, 0, sizeof nosp);
+    return type_app(ctx->type_arena, fn, arg, nosp);
+}
+
 /* A `:heap` parametric ADT has no base constructor -- only per-monomorph
  * `ctor_Fr_Nil__int` -- so a ctor call whose type keeps an open slot
  * (`(match (Nil) ...)`, `(One 7.1)` of a two-parameter sum) named the dead-base
@@ -6756,6 +6774,16 @@ static char *emit_heap_ctor_open_suffix(EmitCtx *ctx, Type rty, bool nullary,
     if (rty.kind != TY_APP) return NULL;
     bool changed = false;
     Type g = emit_ground_open_slots(ctx, rty, &changed);
+    /* heap-sum-unpinned-tyvar-relayed-to-generic: `(bump (Nil))` in `main`
+     * types the ctor as `(Fr T)` with the callee parameter's own NAMED `T` --
+     * not an open slot -- and nothing in the program fixes it.  Inside a
+     * generic body that name may be the enclosing signature's and stays; in a
+     * MONOMORPHIC direct-emitted body there is no variable it could be, so it
+     * is as open as the slot above and takes the same carrier grounding (the
+     * call it feeds is grounded the same way, emit_abi_register_call). */
+    if (!ctx->current_abi_specialization && ctx->own_cur_fn &&
+        emit_fn_def_is_monomorphic(ctx->own_cur_fn))
+        g = emit_ground_named_tyvars(ctx, g, &changed);
     if (!changed || !type_app_is_concrete_adt(&g)) return NULL;
     if (out_family) *out_family = g;
     return type_adt_app_ctor_suffix(g);
@@ -9831,7 +9859,27 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
             TypeKind tgt_k = e->as.cast_.target_kind;
             bool tgt_f = tgt_k == TY_FLOAT || tgt_k == TY_FLOAT32 || tgt_k == TY_FLOAT64;
             bool src_f = src_k == TY_FLOAT || src_k == TY_FLOAT32 || src_k == TY_FLOAT64;
-            if (tgt_f != src_f && src_k != TY_UNKNOWN && src_k != TY_TYVAR)
+            /* float-to-int-cast-out-of-range-differs: a float-to-INTEGER
+             * cast saturates (the preamble's tur_f2* helpers) rather than
+             * leaving an out-of-range value to the bare cast's undefined
+             * behaviour; the integer-to-float direction keeps TUR_AS. */
+            const char *sat = NULL;
+            if (src_f && !tgt_f) {
+                switch (tgt_k) {
+                    case TY_INT: case TY_INT64: sat = "tur_f2i64"; break;
+                    case TY_INT8:   sat = "tur_f2i8";  break;
+                    case TY_INT16:  sat = "tur_f2i16"; break;
+                    case TY_INT32:  sat = "tur_f2i32"; break;
+                    case TY_UINT8:  sat = "tur_f2u8";  break;
+                    case TY_UINT16: sat = "tur_f2u16"; break;
+                    case TY_UINT32: sat = "tur_f2u32"; break;
+                    case TY_UINT64: sat = "tur_f2u64"; break;
+                    default: break;
+                }
+            }
+            if (sat)
+                buf_printf(&out, "%s(%s)", sat, inner);
+            else if (tgt_f != src_f && src_k != TY_UNKNOWN && src_k != TY_TYVAR)
                 buf_printf(&out, "TUR_AS(%s, %s)", type_c_name(target), inner);
             else
                 buf_printf(&out, "((%s)(%s))", type_c_name(target), inner);

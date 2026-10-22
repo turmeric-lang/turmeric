@@ -8,7 +8,8 @@
   [rank2-argument-genericity-plan](../upcoming/rank2-argument-genericity-plan.md).
 - Item 2 (borrows): reports
   [borrow-checks-gaps](../reported/borrow-checks-gaps.md) (the checker) and
-  [turi-borrow-is-a-copy](../reported/turi-borrow-is-a-copy.md) (the interpreter).
+  [turi-borrow-is-a-copy](turi-borrow-is-a-copy.md) (the interpreter; resolved
+  2026-10-22).
 - Item 3 (sized numbers in `any`): decision -- an interpreter limit, documented
   in eval-api ("Where the interpreter's answer differs by design") and the
   `type-of` forms entry. Compiled `type-of` names them since 2026-10-21.
@@ -18,8 +19,9 @@
 - Item 6 (interpreter picks the wrong instance for packed `defopaque`): report
   [turi-packed-defopaque-wrong-instance](../reported/turi-packed-defopaque-wrong-instance.md).
 - Item 7, float casts: decision -- saturate on both; report
-  [float-to-int-cast-out-of-range-differs](../reported/float-to-int-cast-out-of-range-differs.md)
-  (which found the compiled side is a bare C cast too). `(:: "hi" :int)`: decision
+  [float-to-int-cast-out-of-range-differs](float-to-int-cast-out-of-range-differs.md)
+  (which found the compiled side is a bare C cast too; resolved 2026-10-22,
+  both engines saturate). `(:: "hi" :int)`: decision
   -- store literals once per unit; [string-literal-interning-plan](../upcoming/string-literal-interning-plan.md).
 
 **Severity: medium.** Found 2026-10-19 checking the examples for the type, cast,

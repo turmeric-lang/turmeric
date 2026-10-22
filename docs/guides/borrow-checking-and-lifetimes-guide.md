@@ -48,11 +48,13 @@ A borrow is read with `@r` (`(println @r)`) and written through with
 `(set! @r v)` -- the `set!` form with a deref target. The prefix `@r` is the
 only spelling: `(@ r)` is not a call form.
 
-What the checker does not enforce today ([borrow-checks-gaps](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/borrow-checks-gaps.md), [turi-borrow-is-a-copy](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/turi-borrow-is-a-copy.md)): a
+What the checker does not enforce today ([borrow-checks-gaps](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/borrow-checks-gaps.md)): a
 `&mut` of a local that is not declared `^mut` is accepted, and writes through it
-change the variable; an assignment to a variable while a `&` of it is live is not
-a conflict; and the interpreter's borrow of a struct field is a copy, so a write
-through `&mut (.x p)` does not reach `p`.
+change the variable; and an assignment to a variable while a `&` of it is live
+is not a conflict. On both engines a borrow is a reference to the place: a
+write through `&mut (.x p)` reaches `p`, and a borrow sees a later `set!` of
+the variable (the interpreter used to borrow a copy --
+[turi-borrow-is-a-copy](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/turi-borrow-is-a-copy.md), resolved 2026-10-22).
 
 ## Move Tracking
 

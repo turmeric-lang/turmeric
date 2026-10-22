@@ -2,8 +2,9 @@
 
 **Severity: medium** (the guide's borrow rules are not enforced; one shape is a C
 compile error). Split out of type-forms-gaps item 2 on 2026-10-21. The
-interpreter's side (its borrows are copies) is
-[turi-borrow-is-a-copy](turi-borrow-is-a-copy.md).
+interpreter's side (its borrows were copies) was
+[turi-borrow-is-a-copy](../archive/turi-borrow-is-a-copy.md), resolved
+2026-10-22.
 
 ## 1. A write through `&mut` of a variable that is not `^mut`
 

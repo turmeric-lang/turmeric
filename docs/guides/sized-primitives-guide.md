@@ -123,9 +123,9 @@ mod(100u32 7u32)   ; uint32 mod uint32 -> uint32
 
 ## Casting with `(as ...)`
 
-`(as TargetType expr)` converts a value to a different numeric kind. The
-conversion is the same as a C explicit cast -- no overflow checking is
-performed:
+`(as TargetType expr)` converts a value to a different numeric kind. An
+integer-to-integer cast is the same as a C explicit cast -- it wraps, with no
+overflow checking:
 
 ```turmeric
 (as int8  300)          ; wraps: 300 mod 256 = 44
@@ -142,6 +142,20 @@ as(int32 3.7f32)   ; truncates: 3
 
 Casts between signed and unsigned types of the same width reinterpret the
 bit pattern at the C level.
+
+A float-to-integer cast **saturates** instead of wrapping (the rule Rust's
+`as` uses), on every engine: a value beyond the target's range becomes the
+nearest bound, NaN becomes 0, and a value inside the range truncates toward
+zero. A bare C cast leaves an out-of-range float undefined, and the two
+engines used to answer it differently.
+
+```turmeric
+(as uint8 300.7)        ; saturates: 255
+(as int8 -129.5)        ; saturates: -128
+(as int 1e30)           ; saturates: 9223372036854775807
+(as int8 -0.5)          ; truncates toward zero: 0
+(as uint8 (nan))        ; 0
+```
 
 ## Struct Fields
 
