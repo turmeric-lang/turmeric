@@ -91,7 +91,9 @@ pending, restores the recorded state and jumps there (`__dk_reset_abort`). So
 `(reset (+ 10 (h)))` is 6: the `(+ 10 _)` never runs. Jumping at the entry's
 exit rather than from inside the machine keeps the entry's root and reap list
 freed (LeakSanitizer-clean over 1000 aborts); the restore covers a jump out of
-nested entries, whose roots are then the only thing left behind.
+nested entries, whose roots are then left behind -- 2 nodes per skipped entry
+per abort, measured and filed as
+[shift-abort-across-nested-dk-entries](../reported/shift-abort-across-nested-dk-entries.md).
 
 The original repro no longer shows the bug as written: since 2026-10-22 a
 `catch-unwind` with a lambda thunk lowers on the DK chain and does not evict
@@ -103,11 +105,12 @@ reset boundary")`, the interpreter's message, on `tur run` and `tur jit`. The
 2026-10-21 attempt panicked on item 1's first line because a direct `reset`
 over a call installed no landing; it does now.
 
-One shape stays as it was, reported nowhere because nothing reaches it today: a
-`reset` in a CPS-emitted function (a DK prompt) around an evicted function that
-calls the shifting one starts a new DK chain for the callee, whose root is
-reached with no landing live -- that now panics instead of returning f(v) as the
-callee's value. A CPS `reset` would have to install a landing too.
+One shape is still wrong, differently: a `reset` in a CPS-emitted function (a
+DK prompt) around an evicted function that calls the shifting one starts a new
+DK chain for the callee, whose root is reached with no landing live -- that now
+panics instead of returning f(v) as the callee's value. A CPS `reset` would
+have to install a landing too; filed with the leak above, in
+shift-abort-across-nested-dk-entries.
 
 A runtime-preamble change: the 158 `expected.c` snapshots and the S2 split
 runtime (`tools/gen-runtime-split.py`) were regenerated. Fixtures
