@@ -3427,6 +3427,46 @@ char *mangle_ctor_symbol(const AdtDef *adt, const char *ctor_name) {
     return r;
 }
 
+/* The body of a `:heap` ADT constructor -- one spine node -- shared by the
+ * three emitters that write one: the base ctor (emit_adt_typedef_and_ctors),
+ * the monomorph (emit_registered_adt_app_rec, types.c) and the
+ * non-parametric base in emit_program_inner (stale-comments-regions item 13:
+ * they used to be three copies kept in step by comments, and RM3 R2 missed
+ * two of them in turn).  The node is allocated in the innermost open region --
+ * `tur_region_alloc_or_malloc` falls back to malloc when none is open, so the
+ * same ctor works inside and outside one (docs/archive/regions-plan.md) --
+ * then the tag (unless `flat`) and one store per field, through
+ * adt_field_member_path.  `wide_box` (NULL: none) marks a WIDE by-value field
+ * the monomorph typedef stores as an int64 heap box; it is boxed here, of C
+ * type `val_ctype[fi]`, and its words noted for the region escape check. */
+void emit_heap_ctor_body(Buf *out, const AdtDef *def, const CtorDef *ctor,
+                         const char *c_name, bool flat,
+                         const bool *wide_box, const char *const *val_ctype) {
+    buf_printf(out, "    %s *__r = (%s *)%s(sizeof(%s));\n",
+               c_name, c_name, region_alloc_fn(), c_name);
+    if (!flat) buf_printf(out, "    __r->tag = %u;\n", ctor->tag);
+    for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
+        char *mp = adt_field_member_path(def, ctor, fi);
+        if (wide_box && wide_box[fi]) {
+            /* heap-adt-niche-option-some-payload-missing-cast (the by-value
+             * half): assigning the aggregate parameter straight into the
+             * word did not compile -- `(Bx (Pos 7 8))`.  Box it as the
+             * carrier ctor does. */
+            buf_printf(out,
+                "    { %s *__b = (%s *)malloc(sizeof(%s)); *__b = _%u;"
+                " __r->%s = (int64_t)(intptr_t)__b; }\n",
+                val_ctype[fi], val_ctype[fi], val_ctype[fi], fi, mp);
+            buf_printf(out,
+                "    TUR_REGION_NOTE_WORDS((void *)(intptr_t)__r->%s, sizeof(%s));\n",
+                mp, val_ctype[fi]);
+        } else {
+            buf_printf(out, "    __r->%s = _%u;\n", mp, fi);
+        }
+        free(mp);
+    }
+    buf_printf(out, "    return __r;\n");
+}
+
 /* CONV-S1 seam 4: build the C member-access path (without a leading '.'/'->')
  * for constructor field `fi`.  A flat, named-layout ADT (adt_uses_named_layout)
  * is accessed by its mangled field name (`value`, `max_age`); every other ADT

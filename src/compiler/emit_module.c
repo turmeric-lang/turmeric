@@ -12251,34 +12251,9 @@ static void emit_adt_typedef_and_ctors(Buf *out, const AdtDef *def,
         if (ctor->n_fields == 0) buf_puts(out, "void");   /* prototyped, not `()` */
         buf_printf(out, ") {\n");
         if (heap) {
-            /* malloc the by-value header, store fields inline, return the typed
-             * pointer (no int64 carrier cast -- the pointer IS the value). */
-            /* RM3 R2 (docs/archive/regions-plan.md): this is the spine node.
-             * A `:heap` ADT's monomorph ctor mallocs one per link, and it is
-             * the allocation RM1 cannot reach (it escapes its constructor by
-             * construction) and RM2 cannot own (a persistent tail is shared).
-             * Route it to the innermost open generation;
-             * `tur_region_alloc_or_malloc` falls back to malloc when none is
-             * open, so the SAME emitted ctor works inside and outside a region
-             * and R2 needs no branch here.
-             *
-             * Its siblings are the MONOMORPH ctor in types.c (search RM3 R2
-             * there) and the non-parametric base ctor in emit_program_inner;
-             * the three mirror each other and a change to one belongs in all
-             * three.  Changing only this one is what the first R2 pass did,
-             * and the monomorph ctor -- which is the one the leak sweep blames
-             * -- kept its plain malloc. */
-            buf_printf(out, "    %s *__r = (%s *)%s(sizeof(%s));\n",
-                       adt_c_name, adt_c_name,
-                       region_alloc_fn(),
-                       adt_c_name);
-            if (!flat) buf_printf(out, "    __r->tag = %u;\n", ctor->tag);
-            for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
-                char *mp = adt_field_member_path(def, ctor, fi);
-                buf_printf(out, "    __r->%s = _%u;\n", mp, fi);
-                free(mp);
-            }
-            buf_printf(out, "    return __r;\n");
+            /* RM3 R2: the spine node -- the typed pointer IS the value (no
+             * int64 carrier cast). */
+            emit_heap_ctor_body(out, def, ctor, adt_c_name, flat, NULL, NULL);
         } else if (byval) {
             /* CONV-S1: build and return the aggregate by value -- no heap box.
              * SR1: `byval` no longer implies single-variant, so the tag store
@@ -20647,32 +20622,12 @@ static int emit_program_inner(Buf *out, const Expr *program) {
                 if (ctor->n_fields == 0) buf_puts(&early_file, "void");
                 buf_printf(&early_file, ") {\n");
                 if (heap) {
-                    /* RM3 R2/R4 (docs/archive/regions-plan.md): the THIRD
-                     * spine-node ctor emitter.  `emit_program` emits base ctors
-                     * HERE rather than through emit_adt_typedef_and_ctors, so a
+                    /* RM3 R2/R4: `emit_program` emits base ctors HERE rather
+                     * than through emit_adt_typedef_and_ctors, so a
                      * NON-parametric `:heap` ADT -- `(defdata Link :heap ...)`,
-                     * the plainest spine there is -- came out of R2 still
-                     * calling malloc while both of the other two routed.
-                     *
-                     * Found because R4's fixture measured the SAVING rather
-                     * than asserting the routing (the valgrind counts are in
-                     * docs/archive/regions-plan.md): the region was pushed,
-                     * popped, and never allocated into.  The SR3 slice-A note
-                     * a few lines below records this exact miss at this exact
-                     * site, one representation change earlier.  All three
-                     * emitters mirror each other; a change to one belongs in
-                     * all three. */
-                    buf_printf(&early_file, "    %s *__r = (%s *)%s(sizeof(%s));\n",
-                               adt_c_name, adt_c_name,
-                               region_alloc_fn(),
-                               adt_c_name);
-                    if (!flat) buf_printf(&early_file, "    __r->tag = %u;\n", ctor->tag);
-                    for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
-                        char *mp = adt_field_member_path(def, ctor, fi);
-                        buf_printf(&early_file, "    __r->%s = _%u;\n", mp, fi);
-                        free(mp);
-                    }
-                    buf_printf(&early_file, "    return __r;\n");
+                     * the plainest spine there is -- shares the body through
+                     * emit_heap_ctor_body like the other two. */
+                    emit_heap_ctor_body(&early_file, def, ctor, adt_c_name, flat, NULL, NULL);
                 } else if (byval) {
                     /* CONV-S1 / SR1: mirror of the emit_adt_typedef_and_ctors
                      * site -- conditional tag store, cheap deterministic dead

@@ -1589,6 +1589,9 @@ bool ctor_base_name_is_unique(const char *mangled_ctor_name);
 void emit_ctor_bare_alias(Buf *out, const struct AdtDef *def,
                           const struct CtorDef *ctor);
 char *adt_field_member_path(const AdtDef *def, const CtorDef *ctor, uint32_t fi);
+void emit_heap_ctor_body(Buf *out, const AdtDef *def, const CtorDef *ctor,
+                         const char *c_name, bool flat,
+                         const bool *wide_box, const char *const *val_ctype);
 char *raw_name_for_binding(const Binding *b);
 size_t binding_module_prefix(const Binding *b, char *out, size_t cap);
 char *emit_call_name(EmitCtx *ctx, const Expr *call, const Binding *b);
