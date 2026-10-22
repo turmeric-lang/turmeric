@@ -15,7 +15,9 @@ This guide covers the *static* story -- the library is known at build time
 and the generated C calls it by name. For loading libraries at **runtime**
 (`dlopen`/`dlsym`, the experimental `call-ptr` form) and for how C calls
 work under `--interpret` and the REPL, see the
-[Dynamic FFI Guide](ffi-guide.md).
+[Dynamic FFI Guide](ffi-guide.md). For the `(unsafe ...)` block and the
+raw-pointer builtins (`ptr-deref`, `raw-malloc`, `transmute`, ...) that touch
+C memory without an inline-C block, see the [Unsafe Code guide](unsafe-guide.md).
 
 This guide covers the two directions:
 

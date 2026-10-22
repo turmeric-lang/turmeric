@@ -1,5 +1,7 @@
 # Several groups of language primitives have no user-facing guide
 
+**RESOLVED 2026-10-22**; see Resolution at the end.
+
 **Severity: low-medium (documentation).** Nothing is broken, but a user who
 meets one of the forms below has no guide that explains it. Most of them appear
 only in `docs/guides/syntax-guide.md`'s "Reserved names" table (names, no
@@ -129,3 +131,47 @@ sibling as the other guides do (`tur run check-guides`). Once
 `api-docs-miss-language-primitives` task 1 lands per-form reference pages
 (`stdlib/forms/`), link each guide section to them rather than restating
 signatures.
+
+## Resolution (2026-10-22)
+
+Each gap has its guide or section, written from the per-form reference
+(`stdlib/forms/`, which landed after this report and supersedes a few of its
+facts -- `reinterpret` is a same-size bit copy now, not an `(int64_t)` cast) and
+checked by running every example on `tur run` and `--interpret`. Each links its
+`tur/forms/*` reference page rather than restating signatures, and every
+`turmeric` block has its `sweet-exp` sibling (`check-guide-pairs`: 970 pairs
+ok).
+
+1. **Unsafe code** -- new [unsafe-guide](../guides/unsafe-guide.md): the block
+   and `#fx{Unsafe}`, raw memory, words versus bytes, the casts, `c-call`, and
+   a "reach for something safer first" table. Linked from ffi-guide,
+   c-integration-guide and the guides index.
+2. **Operators** -- new [operators-guide](../guides/operators-guide.md): one type
+   per call chosen by the first argument, the arity and type table, integer
+   wrapping and truncating division (`mod` takes the dividend's sign),
+   short-circuiting, the float-only forms, and `bit-shr` as a logical shift.
+3. **rc / weak / ref builtins** -- "The builtin reference forms" in
+   ownership-guide: what each cell is for and when it is released, moving
+   between `ref` and `rc`, `rc->ptr`, the static-type `ref?` / `weak?`, and
+   why `weak` goes through `stdlib/weak.tur` (`upgrade` is retired).
+4. **Panic payload forms** -- "Typed payloads" in error-handling-guide:
+   `panic-with`, the five `panic-payload-*` builtins, and which layer to use.
+5. **Handler variants** -- "Deep and shallow handlers" in effects-system-guide
+   (`handle-shallow`, `try-with`); `compose-handlers` and `discontinue` already
+   had sections, now cross-linked.
+6. **Smaller holes** -- `->` / `->>` in syntax-guide, `let*` in
+   binding-forms-guide, `defrec` in hkt-guide beside `defkind`.
+
+Two defects turned up writing the examples:
+
+- An `#fx{Unsafe}` function whose body used the unsafe builtins got
+  TUR-W0031 "declares effect 'Unsafe' but never performs it": the effect pass
+  infers Unsafe from no builtin, and only an inline-C body was exempt. The
+  exemption now covers any unsafe builtin, anywhere in the body
+  (`builtin_requires_unsafe`, `src/passes/effect_check.c`);
+  `unsafe-fx-builtins-not-over-annotated` pins it with `unexpected.stderr`.
+- A `handle` around `resume` in a `handle-shallow` clause -- the pattern the
+  form reference names as `handle-shallow`'s purpose -- does not compile.
+  Filed as
+  [shallow-clause-handle-around-resume-not-lowered](../reported/shallow-clause-handle-around-resume-not-lowered.md);
+  the guide states it.
