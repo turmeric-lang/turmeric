@@ -413,7 +413,12 @@ static bool sd_build_entry(const char *script, const char *cache,
              (long)getpid(), counter++);
     char real_path[4096];
     snprintf(real_path, sizeof(real_path), "%s/%s", cache, real_name);
-    if (rename(tmp, real_path) != 0 || symlink(real_name, entry_out) != 0) {
+    bool placed = rename(tmp, real_path) == 0;
+    if (placed && symlink(real_name, entry_out) != 0) {
+        /* A filesystem without symlinks: rename, as on Windows. */
+        placed = errno != EEXIST && rename(real_path, entry_out) == 0;
+    }
+    if (!placed) {
         bool lost = sd_entry_complete(entry_out);
         (void)pkg_rm_rf(sd_exists(real_path) ? real_path : tmp);
         if (!lost) {

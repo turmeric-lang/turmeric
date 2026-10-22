@@ -713,6 +713,10 @@ produce no `tur.lock` entries.
   fill gaps, and a project never sees them. `--no-global-spices` /
   `TUR_NO_GLOBAL_SPICES=1` turn that off; the test harnesses export the
   latter. See [consuming-spices-guide](docs/guides/consuming-spices-guide.md#using-spices-without-a-project).
+- A file that starts with a `(defscript :spices #map{...})` header
+  (`--enable=script-deps`) sees exactly the spices it declares, fetched into
+  the script-dep cache -- not the installed set; `tur <file> args` runs it.
+  See [consuming-spices-guide](docs/guides/consuming-spices-guide.md#declaring-spices-in-the-script-itself-defscript).
 - Explicit `-I <dir>` flags still work and win on name collisions.
 - `--no-auto-spice` (global flag, before the subcommand) opts out.
 - `tur build <file>` (single-file build) does **not** auto-discover --
