@@ -416,15 +416,17 @@ static void test_gen_drain_across_evals(void) {
         CHECK(eval_int(env, "(let [z 0] z)", "gen-drain-intervening") == 0,
               "intervening eval wrong at %d", i);
 
-    /* Full drain: the yields must arrive in order, then NULL (exhausted). */
+    /* Full drain: the yields must arrive in order, then NULL (exhausted).
+     * The last step tests exhaustion with gen-some?: gen-unwrap of an
+     * exhausted generator panics (generator-forms-gaps, archived). */
     CHECK(eval_int(env, "(gen-unwrap (gen-next g))", "gen-drain-1") == 10,
           "cross-eval drain: yield 1 wrong (want 10)");
     CHECK(eval_int(env, "(gen-unwrap (gen-next g))", "gen-drain-2") == 20,
           "cross-eval drain: yield 2 wrong (want 20 -- generator double-advanced)");
     CHECK(eval_int(env, "(gen-unwrap (gen-next g))", "gen-drain-3") == 30,
           "cross-eval drain: yield 3 wrong (want 30)");
-    CHECK(eval_int(env, "(gen-unwrap (gen-next g))", "gen-drain-4") == 0,
-          "cross-eval drain: exhausted sentinel wrong (want 0)");
+    CHECK(eval_int(env, "(if (gen-some? (gen-next g)) 1 0)", "gen-drain-4") == 0,
+          "cross-eval drain: generator not exhausted after 3 yields");
 
     turi_env_free(env);
 }
