@@ -1,4 +1,4 @@
-(defgadt Expr [a]
+(defdata Expr [a]
   (Lit : (Expr int))
   (Add : (Expr int)))
 

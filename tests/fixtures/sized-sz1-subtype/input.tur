@@ -3,12 +3,12 @@
 ;   (SizedVec n int) is compatible with (SizedVec m int) iff n = m.
 ; Uses size-compat?, size-assert-eq!, and size-assert-le!.
 
-(defgadt Size []
+(defdata Size []
   (Static (int) : (Size))
   (Add (Size) (Size) : (Size))
   (Mul (Size) (Size) : (Size)))
 
-(defgadt SizedVec [n a]
+(defdata SizedVec [n a]
   (SVNil : (SizedVec Size int))
   (SVCons int (SizedVec Size int) : (SizedVec Size int)))
 

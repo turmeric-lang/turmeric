@@ -7,7 +7,7 @@
 ;
 ; The bound type variable [n] has no runtime binding; only the value
 ; variable [v] is materialised at runtime.
-(defgadt SizedVec [n a]
+(defdata SizedVec [n a]
   (SVNil : (SizedVec int int))
   (SVCons int (SizedVec int int) : (SizedVec int int)))
 

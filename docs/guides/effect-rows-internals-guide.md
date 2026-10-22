@@ -235,10 +235,11 @@ bodies.
    `^extends` parent it has not seen yet.)
 2. **Resolve declared rows (Step 0).** For each `EX_FN_DEF`: its binding's row
    and every `TY_FN` parameter's row. Then record-field rows (`EX_DEFDATA`,
-   `EX_DEFGADT`), class method rows, and the copy of each class method's row
-   onto its instance impls and default body. Every resolution goes through
-   `resolve_declared_row`, which reports unknown names **once per row object**
-   (`unknown_reported`) and then calls `effect_row_resolve`.
+   which `defgadt` also elaborates to), class method rows, and the copy of
+   each class method's row onto its instance impls and default body. Every
+   resolution goes through `resolve_declared_row`, which reports unknown names
+   **once per row object** (`unknown_reported`) and then calls
+   `effect_row_resolve`.
 3. **Index (Step 1).** An `FnIndex` -- an open-addressed hash from `Binding *`
    to `FnDef *` that doubles past half full -- over every `EX_FN_DEF`. The first
    `FnDef` added for a binding wins. (It used to be a fixed 1024-slot array;

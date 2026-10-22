@@ -2,7 +2,7 @@
 ; consumes the value into a concrete tail type must pass the escape
 ; check.  This complements the negative fixtures by demonstrating that
 ; the EX2-3 type-level check does not false-positive on legitimate uses.
-(defgadt SizedVec [n a]
+(defdata SizedVec [n a]
   (SVNil : (SizedVec int int))
   (SVCons int (SizedVec int int) : (SizedVec int int)))
 

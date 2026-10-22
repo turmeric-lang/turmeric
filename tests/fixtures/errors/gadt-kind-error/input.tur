@@ -1,14 +1,16 @@
 ; Phase G1/HKT: Test that using a kind-* -> * type constructor as a bare
 ; symbol in a GADT constructor return-type argument slot emits TUR-E0012.
 ;
-; Pair has one type parameter so its kind is * -> *.
+; Twin has one type parameter so its kind is * -> *.
 ; Bad has zero type parameters so its sole argument slot expects kind *.
-; Passing Pair (kind * -> *) in that slot is a kind mismatch.
+; Passing Twin (kind * -> *) in that slot is a kind mismatch.
+; (Not `Pair`: that names the auto-loaded stdlib struct, and redefining a
+; stdlib type is its own error.)
 
-(defgadt Pair [a]
-  (MkPair a : (Pair a)))
+(defdata Twin [a]
+  (MkTwin a : (Twin a)))
 
-(defgadt Bad []
-  (MkBad : (Bad Pair)))
+(defdata Bad []
+  (MkBad : (Bad Twin)))
 
 (defn main [] : int 0)

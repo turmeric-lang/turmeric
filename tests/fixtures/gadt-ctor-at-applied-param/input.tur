@@ -2,7 +2,7 @@
 ;; constructor of the SAME type (`Refl : (Equal a a)` at `(Equal int int)`),
 ;; and a nullary constructor of the parameter's own type.  Pins the boundary
 ;; of adt-arg-accepted-at-any-applied-param from the accepting side.
-(defgadt Equal [a b]
+(defdata Equal [a b]
   (Refl : (Equal a a)))
 (defn use-eq [p : (Equal int int)] : int 1)
 (defn opt-or [o : (Option int) d : int] : int

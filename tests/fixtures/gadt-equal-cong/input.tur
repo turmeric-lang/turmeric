@@ -3,7 +3,7 @@
 ; The body is Refl because in the Refl arm the skolem a ~ b is active,
 ; so (f a) and (f b) are interchangeable.
 
-(defgadt Equal [a b]
+(defdata Equal [a b]
   (Refl : (Equal a a)))
 
 ;;; equal-cong -- congruence: if a = b then (f a) = (f b) for any f : * -> *.

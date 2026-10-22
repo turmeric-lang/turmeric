@@ -1,0 +1,11 @@
+; `:affine` on a defdata with annotated constructors: at most one use.
+(defdata Tik [a] :affine
+  (ITik int : (Tik int))
+  (NoTik))
+(defn spend [t : Tik] : int
+  (match t (ITik n) n (NoTik) 0))
+(defn main [] : int
+  (let [t (ITik 5)]
+    (println (spend t))
+    (println (spend t)))
+  0)

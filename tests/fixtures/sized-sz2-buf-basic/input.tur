@@ -3,7 +3,7 @@
 ; sized-buf-get, sized-buf-set!, sized-buf-fill!, sized-buf-sum,
 ; sized-buf-min, sized-buf-max, sized-buf-copy!, and sized-buf-size.
 
-(defgadt Size []
+(defdata Size []
   (Static (int) : (Size))
   (Add (Size) (Size) : (Size))
   (Mul (Size) (Size) : (Size)))

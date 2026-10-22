@@ -37,7 +37,10 @@ Read the proof's second argument `b` (the application is `((Equal a) b)`;
 - `a` and `b` different concrete types (`(Equal int float)`): an error, `coerce:
   the proof (Equal int float) relates different types` -- `Refl` cannot be built at
   that type, so the only callers are dead code, and a reinterpret there would be
-  a silent bit cast if one ever ran.
+  a silent bit cast if one ever ran. (Until 2026-10-22 it could: `(:: (Refl)
+  (Equal int float))` was accepted, because `Refl`'s inferred index `(Equal ?
+  ?)` agreed with any claim. The claim is now checked against the constructor's
+  declared result as well; `errors/equal-refl-false-claim`.)
 - The bare `Equal` annotation (no arguments) keeps today's behaviour: result at
   `x`'s type.
 

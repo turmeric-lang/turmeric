@@ -55,7 +55,8 @@ casts to/from the real pointer type internally).
 Opaques are *not* for:
 
 - Multi-field aggregates -- use `defstruct`.
-- Sum types / tagged unions -- use `defdata` or `defgadt`.
+- Sum types / tagged unions -- use `defdata` (its constructors may declare
+  their own result type, which covers what `defgadt` used to).
 - Hiding the body of a polymorphic abstraction (e.g. "some `T` with a
   `Show` instance") -- use existentials (see
   [existential-types-guide.md](existential-types-guide.md)).

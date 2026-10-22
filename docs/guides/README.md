@@ -98,7 +98,7 @@ pseudo-code can opt out by marking its opening fence ```` ```turmeric no-check `
 
 ## Advanced Types
 
-- **[gadts-guide.md](gadts-guide.md)** -- GADTs: `defgadt`, type refinement, equality witnesses, union types, gradual typing
+- **[gadts-guide.md](gadts-guide.md)** -- GADTs: refined constructors (`defdata` with `: Result`), type refinement, equality witnesses, union types, gradual typing
 - **[gadts-cookbook.md](gadts-cookbook.md)** -- GADTs cookbook: practical patterns and recipes
 - **[existential-types-guide.md](existential-types-guide.md)** -- Existential types: pack/open, typeclass constraints, hiding concrete types behind opaque boundaries
 - **[opaques-guide.md](opaques-guide.md)** -- Named nominal newtypes over a representation type -- what they are, what they're for, and how to construct, unwrap, and combine them

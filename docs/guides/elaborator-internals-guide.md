@@ -67,7 +67,7 @@ Three neighbouring areas have their own guides and are only summarized here:
 | `elab_forms.c` | `let`, `let*`, `letrec`, `if`, `do`, `while`, `case`, `set!`, `defer`, `return`, `?`, generators |
 | `elab_core.c` | `elab_init_state`, scopes, `binding_new`, move and linear state, `collect_free_vars`, `elab_register_file_def`, the return-position conflict predicates, `elab_lookup_macro` |
 | `elab_types.c` | `type_expr_from_form` (annotation -> `Type`), `defkind`, `defalias`, `defrec`, `deftype`, `type-app`, `::`, `pack`/`open`, `default-of` |
-| `elab_structs.c` | `defstruct` (lowered to a record `defdata`), `defopaque`, `defdata`, `defgadt`, `match`, `make-struct`, `with`, `&`, `&mut` |
+| `elab_structs.c` | `defstruct` (lowered to a record `defdata`), `defopaque`, `defdata` and the deprecated `defgadt` (both `elab_adt_def`; `elab_defgadt` only adds TUR-D0005 and requires every constructor annotated), `match`, `make-struct`, `with`, `&`, `&mut` |
 | `elab_typeclasses.c` | `defclass`, `definstance`, `elab_method_call`, return-directed dispatch. See [typeclass-internals-guide.md](typeclass-internals-guide.md) |
 | `elab_effects.c` | `reset`/`shift`/`shift0`, cloneable and serial continuations, `call/cc`, `escape`, `defeffect`, `perform`, `handle`, handler values, `resume` |
 | `elab_macros.c` | `defmacro`, `defmacro*`, the compile-time evaluator, quasiquote, `gensym` |
@@ -262,7 +262,7 @@ program that does not need it takes no extra work.
 | 2. Load dedup | Register the auto-loaded stdlib files' paths, so a later explicit `(load "stdlib/x.tur")` is a no-op | `load_dedup_register` |
 | 3. Load expansion | Splice every top-level `(load "path")` depth-first, in source order. The stdlib boundary index is re-anchored to the expanded stream | `load_expand_forms` |
 | 4. Scheme lowering | Lower `#lang r7rs` core forms onto Turmeric forms. See [r7rs-implementation-guide.md](r7rs-implementation-guide.md) | `scheme_lower_program` |
-| 5. Type stubs | Pre-register every top-level `defstruct`, `defdata`, `defgadt` and `defopaque` name as an empty `AdtDef` with a global binding, so types can refer to each other in any order | the "Phase RF0" loop |
+| 5. Type stubs | Pre-register every top-level `defstruct`, `defdata` (or `defgadt`) and `defopaque` name as an empty `AdtDef` with a global binding, so types can refer to each other in any order | the "Phase RF0" loop |
 | 6. Main fold | Fold loose statements into a synthesized `main` (below) | inline |
 | 7. Pass 1 | Forward-declare every top-level `defn` | `elab_pre_declare_toplevel_defn` |
 | 8. `defmodule` position | A `defmodule` must be the first form of its source file | inline |
@@ -376,7 +376,7 @@ incremental path can move that boundary, which is why `elab_lookup_sym` and
    (`__poly_N`), partial-application thunks, dictionary clones, and the
    definitions of loaded modules;
 2. one item per top-level form, in form order. A `defn` is `EX_FN_DEF`, a
-   `def` is `EX_DEF`, a type definition is `EX_DEFDATA`/`EX_DEFGADT`,
+   `def` is `EX_DEF`, a type definition is `EX_DEFDATA` (`defgadt` too),
    `defclass` is `EX_TYPECLASS_DEF`, `definstance` is `EX_INSTANCE_DEF`, a
    `defmodule` is `EX_DEFMODULE`, and a `defmacro` or `import` is an
    `EX_NIL_LIT` placeholder.
@@ -451,7 +451,7 @@ with `expr_new(arena, kind, type, span)`, which zeroes the payload.
 | Function-value bridges | `EX_POLY_WRAP`, `EX_FN_TO_FAT`, `EX_POLY_TO_FAT`. See [value-representations-guide.md](value-representations-guide.md) |
 | Type operations | `EX_ASCRIBE`, `EX_CAST`, `EX_REINTERPRET`, `EX_UNION_INJECT`, `EX_EXISTS_PACK`, `EX_EXISTS_OPEN`, `EX_EXISTS_DISPATCH` |
 | Dynamic (`any`) | `EX_ANY_TYPE_OF`, `EX_ANY_CAST`, `EX_ANY_IS`, `EX_DYN_OP`, `EX_DYN_CALL`, `EX_DYN_FIELD`, `EX_DYN_METHOD` |
-| Data definitions and access | `EX_DEFDATA`, `EX_DEFGADT`, `EX_MAKE_STRUCT`, `EX_GET_FIELD`, `EX_SET_FIELD` |
+| Data definitions and access | `EX_DEFDATA` (`defdata` and `defgadt`; there is no `EX_DEFGADT`), `EX_MAKE_STRUCT`, `EX_GET_FIELD`, `EX_SET_FIELD` |
 | Typeclasses | `EX_TYPECLASS_DEF`, `EX_INSTANCE_DEF`, `EX_DICT` |
 | Ownership | `EX_REF`, `EX_DEREF`, `EX_SET_DEREF`, `EX_RC_*` (7 kinds), `EX_REF_FROM_RC`, `EX_WEAK`, `EX_WEAK_UPGRADE`, `EX_WEAK_PRED`, `EX_REF_PRED`, `EX_BORROW_IMMUT`, `EX_BORROW_MUT` |
 | Panics | `EX_PANIC`, `EX_PANIC_WITH`, `EX_CATCH_UNWIND`, `EX_CATCH_PANIC_OF`, `EX_PANIC_PAYLOAD_*` (5 kinds) |
@@ -485,7 +485,7 @@ with one arm per structured kind.
 | Raw pointers | `TY_PTR_VOID`. A typed `ptr<T>` is also `TY_PTR_VOID`, with `as.ptr.inner` set | `ptr` |
 | Functions | `TY_FN` | `fn` |
 | Owning and borrowed | `TY_REF`, `TY_LREF`, `TY_RC`, `TY_WEAK`, `TY_REF_IMMUT` (`&T`), `TY_REF_MUT` (`&mut T`) | `ref`, `rc`, `ref_borrow` |
-| Nominal data | `TY_ADT` (every `defdata`, `defstruct`, `defgadt` and `defopaque`), `TY_STRUCT` (retired; see below) | `adt_` |
+| Nominal data | `TY_ADT` (every `defdata`, `defstruct`, `defgadt` and `defopaque`; `AdtDef.has_result_types` / `is_refined` replaced `is_gadt`), `TY_STRUCT` (retired; see below) | `adt_` |
 | Type-level structure | `TY_APP`, `TY_TYVAR`, `TY_FORALL`, `TY_EXISTS`, `TY_REC`, `TY_UNION`, `TY_INTERSECTION`, `TY_TYPEROW`, `TY_CONTRACT` | `app`, `tyvar_`, `forall_`, `rec`, `union_`, `intersection_`, `typerow_`, `contract_` |
 | Dynamic | `TY_ANY` (`tur_tagged_t` at run time) | -- |
 | Control | `TY_CONT`, `TY_CLONEABLE_CONT`, `TY_HANDLER`, `TY_EXCEPTION`, `TY_GENERATOR` | `cont`, `handler_`, `exn`, `generator_` |

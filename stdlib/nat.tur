@@ -1,19 +1,19 @@
-;;; tur/nat -- type-level natural numbers via GADT for phantom length annotations.
+;;; tur/nat -- natural numbers as a sum: Zero and Succ.
 ;;;
 ;;; Nat encodes a number at the type level as a phantom type.
 ;;; True compile-time length safety is deferred to a future dependent-types phase.
 ;;;
 ;;; Since: Phase G4
-;; Phase G4: Type-level natural numbers via GADT.
-; Phase G4: Type-level natural numbers via GADT.
-; Nat is a phantom type encoding a number at the type level.
-; Zero and Succ are constructors that carry a runtime nat value.
+;; Phase G4: natural numbers (Zero / Succ).
+; Phase G4: natural numbers.  Zero and Succ are constructors that carry a
+; runtime nat value.  It was a defgadt whose constructors all returned (Nat);
+; an ordinary defdata now, it goes by value (adt-gadt-unification-plan).
 ;
 ; Since Turmeric does not yet support dependent types (types depending on
 ; runtime values), the length index n in Vec is a type-level phantom -- it
 ; helps document intent but does not enforce lengths at compile time.
 ; True compile-time length safety is deferred to a future dependent-types phase.
-(defgadt Nat [] (Zero : (Nat)) (Succ (Nat) : (Nat)))
+(defdata Nat (Zero) (Succ Nat))
 ;;; nat-zero -- construct the Zero natural number.
 ;;;
 ;;; Returns:

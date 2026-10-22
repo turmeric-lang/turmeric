@@ -1077,10 +1077,8 @@ typedef enum ExprKind {
     EX_EXISTS_DISPATCH,/* method call on an open-bound `v`, resolved at runtime
                         * through the existential record's packed witness vtable */
     /* Phase G0: Plain ADTs */
-    EX_DEFDATA,        /* (defdata Name [:copy] (Ctor1) (Ctor2 T1 T2) ...) */
+    EX_DEFDATA,        /* (defdata Name [:copy] (Ctor1) (Ctor2 T1 T2) ...); also defgadt */
     EX_MATCH,          /* (match scrutinee (Ctor1 x y) body1 _ default-body) */
-    /* Phase G1: GADTs */
-    EX_DEFGADT,        /* (defgadt Name [params] (Ctor : return-type) ...) */
     /* IT4: Tagged union injection — wraps a value into tur_tagged_t */
     EX_UNION_INJECT,   /* (union-inject tag_idx value) — tags a member value for TY_UNION/TY_ANY */
     /* IT4 gradual typing */
@@ -2150,16 +2148,12 @@ struct Expr {
             struct Expr     **args;         /* call args; args[0] is the receiver `v` */
             uint32_t          n_args;
         } exists_dispatch_;
-        /* Phase G0: ADT definition */
+        /* Phase G0: ADT definition -- `defdata` and `defgadt` alike
+         * (adt-gadt-unification: one node, one elaborator). */
         struct {
             AdtDef  *def;      /* the ADT being defined */
             Binding *binding;  /* global binding for the ADT type */
         } defdata_;
-        /* Phase G1: GADT definition — same layout as defdata_ */
-        struct {
-            AdtDef  *def;      /* the GADT being defined (is_gadt=true) */
-            Binding *binding;  /* global binding for the GADT type */
-        } defgadt_;
         /* Phase G0: match expression */
         struct {
             struct Expr *scrutinee;

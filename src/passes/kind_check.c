@@ -276,7 +276,7 @@ static int kind_check_expr(Expr *expr) {
             }
             break;
         }
-        case EX_DEFGADT: {
+        case EX_DEFDATA: {
             /* Phase G1/HKT: Walk each constructor's return-type form.
              * For each constructor with an explicit return-type annotation,
              * check that any F_LIST sub-form (type application) in argument
@@ -293,8 +293,8 @@ static int kind_check_expr(Expr *expr) {
              * bare-symbol arguments; here we validate F_LIST sub-forms by
              * checking that the result_type_form is well-structured (non-NULL
              * head symbol that is the GADT name). */
-            AdtDef *def = expr->as.defgadt_.def;
-            if (!def || !def->is_gadt) break;
+            AdtDef *def = expr->as.defdata_.def;
+            if (!def || !def->has_result_types) break;
             for (uint32_t ci = 0; ci < def->n_ctors; ci++) {
                 CtorDef *ctor = def->ctors[ci];
                 if (!ctor || !ctor->result_type_form) continue;

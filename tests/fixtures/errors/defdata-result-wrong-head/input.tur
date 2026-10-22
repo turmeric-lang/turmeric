@@ -1,0 +1,7 @@
+; A constructor's `: Result` must be an application of the type being
+; defined: `Lit` cannot claim to return an `(Option int)`.
+(defdata Expr [a]
+  (Lit int : (Option int))
+  (If (Expr bool) (Expr a) (Expr a)))
+
+(defn main [] : int 0)

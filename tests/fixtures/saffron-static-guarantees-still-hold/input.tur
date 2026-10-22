@@ -38,7 +38,7 @@
 ;; parametric `defdata` fails identically and a non-parametric one works, so
 ;; the axis is ARITY, not `defgadt`.  The annotation here keeps THIS fixture
 ;; about D7 rather than about that bug.
-(defgadt Shape [a]
+(defdata Shape [a]
   (Sq  int : (Shape int))
   (Rec int int : (Shape int)))
 

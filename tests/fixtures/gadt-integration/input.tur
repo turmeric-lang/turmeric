@@ -1,7 +1,7 @@
 ; Combining plain ADTs and GADTs
 (defdata Color :copy (Red) (Green) (Blue))
 
-(defgadt Expr [a]
+(defdata Expr [a]
   (Lit int : (Expr int))
   (Add (Expr int) (Expr int) : (Expr int)))
 

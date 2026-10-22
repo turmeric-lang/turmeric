@@ -1,4 +1,4 @@
-(defgadt MyVec [n]
+(defdata MyVec [n]
   (VNil : (MyVec int))
   (VCons int (MyVec int) : (MyVec int)))
 

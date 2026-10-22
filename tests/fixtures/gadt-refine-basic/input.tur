@@ -1,4 +1,4 @@
-(defgadt Witness [a]
+(defdata Witness [a]
   (IntWit : (Witness int))
   (BoolWit : (Witness bool)))
 

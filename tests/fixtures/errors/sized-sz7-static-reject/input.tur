@@ -3,7 +3,7 @@
 ; size-assert-eq! on two statically-known, unequal sizes is a compile-time
 ; error (TUR-E0260), not a runtime panic. No runtime check is emitted.
 
-(defgadt Size []
+(defdata Size []
   (Static (int) : (Size))
   (Add (Size) (Size) : (Size))
   (Mul (Size) (Size) : (Size)))

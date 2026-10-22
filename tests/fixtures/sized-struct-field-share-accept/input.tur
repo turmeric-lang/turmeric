@@ -16,7 +16,7 @@
 ; both the all-phantom World and a mixed phantom/by-value struct lower to their
 ; real aggregates.  See also tests/fixtures/make-struct-phantom-typeparam.
 
-(defgadt Size []
+(defdata Size []
   (Static (int) : (Size))
   (Add (Size) (Size) : (Size))
   (Mul (Size) (Size) : (Size)))

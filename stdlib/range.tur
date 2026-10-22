@@ -10,11 +10,14 @@
 ;; can be converted to a Seq via seq/from-range or seq/from-range-step.
 ;;
 ;; Internal representation
-;;   Bound:      the `Bound int` GADT -- Inclusive v / Exclusive v / Unbounded.
-;;               A `:copy` value type (range-gadt-typeclass-migration-plan B1);
-;;               there is no null sentinel, the Unbounded constructor is total.
-;;   Range:      heap struct { int64_t lower; int64_t upper; }
-;;               Each field carries a Bound value (an int64-encoded GADT cell).
+;;   Bound:      a `:copy` sum -- Inclusive v / Exclusive v / Unbounded
+;;               (range-gadt-typeclass-migration-plan B1); there is no null
+;;               sentinel, the Unbounded constructor is total.  It goes by
+;;               value: a tag and the endpoint, no allocation.
+;;   Range:      a `:copy` record of two Bounds, also by value
+;;               (adt-gadt-unification-plan slice 3; it was a malloc'd
+;;               `struct { int64_t lower; int64_t upper; }` handed around as
+;;               an `:int`).
 ;;
 ;; All consumers that iterate integers load stdlib/seq/core.tur.  The file
 ;; does NOT auto-load seq; fixtures that need seq/from-range must load
@@ -32,7 +35,7 @@
 
 (load "stdlib/typeclass.tur")
 ;; -------------------------------------------------------------------
-;; Bound GADT and accessors
+;; Bound and accessors
 ;; -------------------------------------------------------------------
 ;;; Bound -- a range endpoint: inclusive, exclusive, or unbounded.
 ;;;
@@ -41,14 +44,15 @@
 ;;; without affine move tracking complaining; see
 ;;; docs/archive/history/defgadt-copy-and-shared-bounds.md.
 ;;;
-;;; Since: LZ4 (GADT form: range-gadt-typeclass-migration-plan B1)
+;;; It was `(defgadt Bound [A] ...)` with every constructor returning `(Bound
+;;; int)`: the parameter was pinned to `int` and never used, so it is gone
+;;; (adt-gadt-unification-plan slice 3).  A parametric type's bare name is the
+;;; uniform carrier, so the phantom parameter alone kept every endpoint a
+;;; malloc'd cell.
+;;;
+;;; Since: LZ4 (sum form: range-gadt-typeclass-migration-plan B1)
 
-(defgadt Bound
-  [A]
-  :copy
-  (Inclusive int : (Bound int))
-  (Exclusive int : (Bound int))
-  (Unbounded : (Bound int)))
+(defdata Bound :copy (Inclusive int) (Exclusive int) (Unbounded))
 ;;; range-bound-new -- build a Bound with given inclusivity and value.
 ;;;
 ;;; Parameters:
@@ -56,7 +60,7 @@
 ;;;   value     -- the endpoint value
 ;;;
 ;;; Returns:
-;;;   A (Bound int): Inclusive when inclusive=1, else Exclusive.
+;;;   A Bound: Inclusive when inclusive=1, else Exclusive.
 ;;;
 ;;; Since: LZ4
 
@@ -66,7 +70,7 @@
 ;;; bound-unbounded? -- true if the endpoint is the Unbounded constructor.
 ;;;
 ;;; Parameters:
-;;;   b -- a (Bound int)
+;;;   b -- a Bound
 ;;;
 ;;; Since: range-gadt-typeclass-migration-plan B1
 
@@ -75,7 +79,7 @@
 ;;; range-bound-inclusive? -- true if the bound is inclusive.
 ;;;
 ;;; Parameters:
-;;;   b -- a (Bound int) (must not be Unbounded)
+;;;   b -- a Bound (must not be Unbounded)
 ;;;
 ;;; Since: LZ4
 
@@ -84,7 +88,7 @@
 ;;; range-bound-value -- return the endpoint value of a bound.
 ;;;
 ;;; Parameters:
-;;;   b -- a (Bound int) (Unbounded yields 0)
+;;;   b -- a Bound (Unbounded yields 0)
 ;;;
 ;;; Since: LZ4
 
@@ -93,7 +97,7 @@
 ;;; range-bound-flip -- return a new bound with the same value but flipped inclusivity.
 ;;;
 ;;; Parameters:
-;;;   b -- a (Bound int) (must not be Unbounded)
+;;;   b -- a Bound (must not be Unbounded)
 ;;;
 ;;; Since: LZ4
 
@@ -176,8 +180,8 @@
 ;;; upper side -- a distinction a lone Bound cannot carry.
 ;;;
 ;;; Parameters:
-;;;   x -- the left (Bound int)
-;;;   y -- the right (Bound int)
+;;;   x -- the left Bound
+;;;   y -- the right Bound
 ;;;
 ;;; Returns:
 ;;;   true when x sorts strictly before y.
@@ -216,50 +220,50 @@
   (gt? [x y] (bound-lt? y x))
   (gte? [x y] (not (bound-lt? x y))))
 ;; -------------------------------------------------------------------
-;; Range allocation and accessors (inline-C)
+;; Range and accessors
 ;; -------------------------------------------------------------------
-;;; range-new -- allocate a Range from lower and upper Bound endpoints.
+;;; Range -- a continuous interval: a lower and an upper Bound.
+;;;
+;;; A `:copy` value, so one range can be tested and combined any number of
+;;; times.  Build one with the constructors below (closed-range, ...) or
+;;; range-new, and read its ends with range-lower / range-upper.
+;;;
+;;; Since: LZ4 (a typed record: adt-gadt-unification-plan slice 3)
+
+(defstruct Range :copy [lower : Bound upper : Bound])
+;;; range-new -- build a Range from lower and upper Bound endpoints.
 ;;;
 ;;; Parameters:
-;;;   lower -- the lower (Bound int) (Unbounded for unbounded below)
-;;;   upper -- the upper (Bound int) (Unbounded for unbounded above)
+;;;   lower -- the lower Bound (Unbounded for unbounded below)
+;;;   upper -- the upper Bound (Unbounded for unbounded above)
 ;;;
 ;;; Returns:
-;;;   int64_t pointer to a heap Range.
+;;;   The Range.
+;;;
+;;; Example:
+;;;   (range-contains? (range-new (Inclusive 1) (Exclusive 5)) 4)  ; => true
 ;;;
 ;;; Since: LZ4
 
-
-(defn range-new [lower : Bound upper : Bound] : int
-  ```c
-  struct { int64_t lower; int64_t upper; } *r = malloc(sizeof(*r));
-  r->lower = lower;
-  r->upper = upper;
-  return (int64_t)(intptr_t)r;
-  ```)
+(defn range-new [lower : Bound upper : Bound] : Range (Range lower upper))
 ;;; range-lower -- return the lower Bound endpoint.
 ;;;
 ;;; Parameters:
-;;;   r -- int64_t pointer to a Range
+;;;   r -- a Range
 ;;;
 ;;; Since: LZ4
 
-(defn range-lower [r : int] : Bound
-  ```c
-  return ((struct { int64_t lower; int64_t upper; } *)(intptr_t)r)->lower;
-  ```)
+(defn range-lower [r : Range] : Bound (.lower r))
 ;;; range-upper -- return the upper Bound endpoint.
 ;;;
 ;;; Parameters:
-;;;   r -- int64_t pointer to a Range
+;;;   r -- a Range
 ;;;
 ;;; Since: LZ4
 
-(defn range-upper [r : int] : Bound
-  ```c
-  return ((struct { int64_t lower; int64_t upper; } *)(intptr_t)r)->upper;
-  ```)
-;; Typed abort helpers -- each returns :int so they can be used in if-branches.
+(defn range-upper [r : Range] : Bound (.upper r))
+;; Abort helpers.  Each returns :int so it can sit in an if-branch beside an
+;; int (seq/from-range); range-intersection / range-gap call them as a guard.
 
 (defn range-abort-not-connected [] : int
   ```c
@@ -299,7 +303,7 @@
 ;;; Since: LZ4
 
 
-(defn closed-range [lo : int hi : int] : int
+(defn closed-range [lo : int hi : int] : Range
   (range-new (range-bound-new 1 lo) (range-bound-new 1 hi)))
 ;;; open-range -- (lo, hi) both endpoints exclusive.
 ;;;
@@ -315,7 +319,7 @@
 ;;;
 ;;; Since: LZ4
 
-(defn open-range [lo : int hi : int] : int
+(defn open-range [lo : int hi : int] : Range
   (range-new (range-bound-new 0 lo) (range-bound-new 0 hi)))
 ;;; closed-open-range -- [lo, hi) inclusive lower, exclusive upper.
 ;;;
@@ -331,7 +335,7 @@
 ;;;
 ;;; Since: LZ4
 
-(defn closed-open-range [lo : int hi : int] : int
+(defn closed-open-range [lo : int hi : int] : Range
   (range-new (range-bound-new 1 lo) (range-bound-new 0 hi)))
 ;;; open-closed-range -- (lo, hi] exclusive lower, inclusive upper.
 ;;;
@@ -347,7 +351,7 @@
 ;;;
 ;;; Since: LZ4
 
-(defn open-closed-range [lo : int hi : int] : int
+(defn open-closed-range [lo : int hi : int] : Range
   (range-new (range-bound-new 0 lo) (range-bound-new 1 hi)))
 ;;; at-least-range -- [lo, +inf) inclusive lower, unbounded above.
 ;;;
@@ -362,7 +366,7 @@
 ;;;
 ;;; Since: LZ4
 
-(defn at-least-range [lo : int] : int
+(defn at-least-range [lo : int] : Range
   (range-new (range-bound-new 1 lo) (Unbounded)))
 ;;; greater-than-range -- (lo, +inf) exclusive lower, unbounded above.
 ;;;
@@ -377,7 +381,7 @@
 ;;;
 ;;; Since: LZ4
 
-(defn greater-than-range [lo : int] : int
+(defn greater-than-range [lo : int] : Range
   (range-new (range-bound-new 0 lo) (Unbounded)))
 ;;; at-most-range -- (-inf, hi] unbounded below, inclusive upper.
 ;;;
@@ -392,7 +396,7 @@
 ;;;
 ;;; Since: LZ4
 
-(defn at-most-range [hi : int] : int
+(defn at-most-range [hi : int] : Range
   (range-new (Unbounded) (range-bound-new 1 hi)))
 ;;; less-than-range -- (-inf, hi) unbounded below, exclusive upper.
 ;;;
@@ -407,7 +411,7 @@
 ;;;
 ;;; Since: LZ4
 
-(defn less-than-range [hi : int] : int
+(defn less-than-range [hi : int] : Range
   (range-new (Unbounded) (range-bound-new 0 hi)))
 ;;; singleton-range -- [v, v] a range containing exactly one value.
 ;;;
@@ -422,7 +426,7 @@
 ;;;
 ;;; Since: LZ4
 
-(defn singleton-range [v : int] : int
+(defn singleton-range [v : int] : Range
   (range-new (range-bound-new 1 v) (range-bound-new 1 v)))
 ;;; unbounded-range -- (-inf, +inf) no bounds at all.
 ;;;
@@ -434,7 +438,7 @@
 ;;;
 ;;; Since: LZ4
 
-(defn unbounded-range [] : int (range-new (Unbounded) (Unbounded)))
+(defn unbounded-range [] : Range (range-new (Unbounded) (Unbounded)))
 ;; -------------------------------------------------------------------
 ;; Internal comparison helpers
 ;; -------------------------------------------------------------------
@@ -493,7 +497,7 @@
 ;;; range-contains? -- true if value v falls within range r.
 ;;;
 ;;; Parameters:
-;;;   r -- int64_t pointer to a Range
+;;;   r -- a Range
 ;;;   v -- value to test
 ;;;
 ;;; Returns:
@@ -506,7 +510,7 @@
 ;;; Since: LZ4
 
 
-(defn range-contains? [r : int v : int] : bool
+(defn range-contains? [r : Range v : int] : bool
   (and (range-val-in-lower? (range-lower r) v)
     (range-val-in-upper? (range-upper r) v)))
 ;;; range-encloses? -- true if every value in other is also in r.
@@ -524,7 +528,7 @@
 ;;;
 ;;; Since: LZ4
 
-(defn range-encloses? [r : int other : int] : bool
+(defn range-encloses? [r : Range other : Range] : bool
   (let [rl (range-lower r)
         ru (range-upper r)
         ol (range-lower other)
@@ -572,7 +576,7 @@
 ;;;
 ;;; Since: LZ4
 
-(defn range-connected? [r1 : int r2 : int] : bool
+(defn range-connected? [r1 : Range r2 : Range] : bool
   (and (not (range-bound-has-gap? (range-upper r1) (range-lower r2)))
     (not (range-bound-has-gap? (range-upper r2) (range-lower r1)))))
 ;;; range-overlaps? -- true if r1 and r2 share at least one common value.
@@ -593,61 +597,63 @@
 ;;;
 ;;; Since: LZ4
 
-(defn range-overlaps? [r1 : int r2 : int] : bool
+(defn range-overlaps? [r1 : Range r2 : Range] : bool
   (and (not (range-bound-strictly-before? (range-upper r1) (range-lower r2)))
     (not (range-bound-strictly-before? (range-upper r2) (range-lower r1)))))
 ;;; bounded-range? -- true if both endpoints are present.
 ;;;
 ;;; Parameters:
-;;;   r -- int64_t pointer to a Range
+;;;   r -- a Range
 ;;;
 ;;; Since: LZ4
 
-(defn bounded-range? [r : int] : bool
+(defn bounded-range? [r : Range] : bool
   (and (not (bound-unbounded? (range-lower r)))
     (not (bound-unbounded? (range-upper r)))))
 ;;; bounded-above? -- true if r has an upper bound.
 ;;;
 ;;; Parameters:
-;;;   r -- int64_t pointer to a Range
+;;;   r -- a Range
 ;;;
 ;;; Since: LZ4
 
-(defn bounded-above? [r : int] : bool (not (bound-unbounded? (range-upper r))))
+(defn bounded-above? [r : Range] : bool
+  (not (bound-unbounded? (range-upper r))))
 ;;; bounded-below? -- true if r has a lower bound.
 ;;;
 ;;; Parameters:
-;;;   r -- int64_t pointer to a Range
+;;;   r -- a Range
 ;;;
 ;;; Since: LZ4
 
-(defn bounded-below? [r : int] : bool (not (bound-unbounded? (range-lower r))))
+(defn bounded-below? [r : Range] : bool
+  (not (bound-unbounded? (range-lower r))))
 ;;; unbounded-above? -- true if r has no upper bound.
 ;;;
 ;;; Parameters:
-;;;   r -- int64_t pointer to a Range
+;;;   r -- a Range
 ;;;
 ;;; Since: LZ4
 
-(defn unbounded-above? [r : int] : bool (bound-unbounded? (range-upper r)))
+(defn unbounded-above? [r : Range] : bool (bound-unbounded? (range-upper r)))
 ;;; unbounded-below? -- true if r has no lower bound.
 ;;;
 ;;; Parameters:
-;;;   r -- int64_t pointer to a Range
+;;;   r -- a Range
 ;;;
 ;;; Since: LZ4
 
-(defn unbounded-below? [r : int] : bool (bound-unbounded? (range-lower r)))
+(defn unbounded-below? [r : Range] : bool (bound-unbounded? (range-lower r)))
 ;;; singleton-range? -- true if r contains exactly one value.
 ;;;
 ;;; A range is a singleton when both bounds are present, equal, and inclusive.
 ;;;
 ;;; Parameters:
-;;;   r -- int64_t pointer to a Range
+;;;   r -- a Range
 ;;;
 ;;; Since: LZ4
 
-(defn singleton-range? [r : int] : bool
+(defn singleton-range? [r : Range] : bool
   (let [lo (range-lower r)
         hi (range-upper r)]
     (if (or (bound-unbounded? lo) (bound-unbounded? hi))
@@ -661,11 +667,11 @@
 ;;; or when both bounds share a value but at least one is exclusive.
 ;;;
 ;;; Parameters:
-;;;   r -- int64_t pointer to a Range
+;;;   r -- a Range
 ;;;
 ;;; Since: LZ4
 
-(defn empty-range? [r : int] : bool
+(defn empty-range? [r : Range] : bool
   (let [lo (range-lower r)
         hi (range-upper r)]
     (if (or (bound-unbounded? lo) (bound-unbounded? hi))
@@ -681,11 +687,11 @@
 ;;; nonempty-range? -- true if r contains at least one value.
 ;;;
 ;;; Parameters:
-;;;   r -- int64_t pointer to a Range
+;;;   r -- a Range
 ;;;
 ;;; Since: LZ4
 
-(defn nonempty-range? [r : int] : bool (not (empty-range? r)))
+(defn nonempty-range? [r : Range] : bool (not (empty-range? r)))
 ;; -------------------------------------------------------------------
 ;; Internal bound selection helpers for set operations
 ;; -------------------------------------------------------------------
@@ -761,7 +767,7 @@
 ;;; Since: LZ4
 
 
-(defn range-span [r1 : int r2 : int] : int
+(defn range-span [r1 : Range r2 : Range] : Range
   (range-new (range-lower-min (range-lower r1) (range-lower r2))
     (range-upper-max (range-upper r1) (range-upper r2))))
 ;;; range-intersection -- largest range enclosed by both r1 and r2.
@@ -781,11 +787,10 @@
 ;;;
 ;;; Since: LZ4
 
-(defn range-intersection [r1 : int r2 : int] : int
-  (if (not (range-connected? r1 r2))
-    (range-abort-not-connected)
-    (range-new (range-lower-max (range-lower r1) (range-lower r2))
-      (range-upper-min (range-upper r1) (range-upper r2)))))
+(defn range-intersection [r1 : Range r2 : Range] : Range
+  (when (not (range-connected? r1 r2)) (range-abort-not-connected))
+  (range-new (range-lower-max (range-lower r1) (range-lower r2))
+    (range-upper-min (range-upper r1) (range-upper r2))))
 ;;; range-gap -- largest range lying strictly between r1 and r2.
 ;;;
 ;;; The ranges must NOT be connected (a gap must exist); if they are
@@ -806,17 +811,16 @@
 ;;;
 ;;; Since: LZ4
 
-(defn range-gap [r1 : int r2 : int] : int
-  (if (range-connected? r1 r2)
-    (range-abort-connected)
-    (let [u1       (range-upper r1)
-          l2       (range-lower r2)
-          u2       (range-upper r2)
-          l1       (range-lower r1)
-          r1-first (range-bound-has-gap? u1 l2)]
-      (if r1-first
-        (range-new (range-bound-flip u1) (range-bound-flip l2))
-        (range-new (range-bound-flip u2) (range-bound-flip l1))))))
+(defn range-gap [r1 : Range r2 : Range] : Range
+  (when (range-connected? r1 r2) (range-abort-connected))
+  (let [u1       (range-upper r1)
+        l2       (range-lower r2)
+        u2       (range-upper r2)
+        l1       (range-lower r1)
+        r1-first (range-bound-has-gap? u1 l2)]
+    (if r1-first
+      (range-new (range-bound-flip u1) (range-bound-flip l2))
+      (range-new (range-bound-flip u2) (range-bound-flip l1)))))
 ;; -------------------------------------------------------------------
 ;; Seq integration -- integer ranges only
 ;; -------------------------------------------------------------------
@@ -826,7 +830,7 @@
 ;;; An unbounded upper bound produces an infinite sequence.
 ;;;
 ;;; Parameters:
-;;;   r -- int64_t pointer to a Range (integer endpoints)
+;;;   r -- a Range (integer endpoints)
 ;;;
 ;;; Returns:
 ;;;   A Seq yielding each integer in r in ascending order.
@@ -838,7 +842,7 @@
 ;;; Since: LZ4
 
 
-(defn seq/from-range [r : int] : int
+(defn seq/from-range [r : Range] : int
   (let [lo (range-lower r)]
     (if (bound-unbounded? lo)
       (range-abort-unbounded-lower)
@@ -867,7 +871,7 @@
 ;;;
 ;;; Parameters:
 ;;;   step -- increment per element (nonzero)
-;;;   r    -- int64_t pointer to a Range (integer endpoints)
+;;;   r    -- a Range (integer endpoints)
 ;;;
 ;;; Returns:
 ;;;   A Seq yielding each integer in r at the given step.
@@ -878,7 +882,7 @@
 ;;;
 ;;; Since: LZ4
 
-(defn seq/from-range-step [step : int r : int] : int
+(defn seq/from-range-step [step : int r : Range] : int
   (let [lo (range-lower r)]
     (if (bound-unbounded? lo)
       (range-abort-unbounded-lower)

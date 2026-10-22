@@ -2,6 +2,45 @@
 
 All notable changes to Turmeric are documented here.
 
+## [Unreleased]
+
+### Added
+
+- **A `defdata` constructor may declare its result type.** `(Lit int : (Expr
+  int))`, and after a record field vector `(Rect [w : int h : int] : (Shape
+  int))`; an unannotated constructor returns the generic `(Expr a)`, and one
+  type can mix both -- `(If c t f)` then takes its index from its branches.
+  The head takes its keywords and type-parameter vector in either order, and
+  `:affine` is accepted.
+
+### Changed
+
+- **Whether a type is a GADT is read from its constructors, not its keyword.**
+  A type whose constructors all return one instantiation -- `(Bound int)` from
+  every one, or the generic `(Box a)` -- is an ordinary sum and goes by value;
+  only a type whose annotations refine its parameters (`Refl : (Equal a a)`)
+  keeps the boxed carrier. `defgadt` now takes record constructors, `:heap`,
+  `:linear` and `:affine`; a record field vector there used to become one
+  `int` field. A missing `match` arm is excused only when its result index
+  provably differs from the scrutinee's type, not by a guess from the other
+  arms (the "unreachable for this GADT instantiation" warning is gone).
+- **`range.tur` ranges are a typed `Range` and go by value.** `Range` is a
+  `:copy` record of two `Bound`s instead of a malloc'd pointer passed as
+  `:int`, and `Bound` lost its never-used type parameter (`(Bound int)` no
+  longer names it). A range-heavy loop runs about 4x faster and no longer
+  leaks every endpoint.
+- **A type can no longer replace an auto-loaded stdlib struct of the same
+  name.** `(defgadt Pair ...)` used to supersede stdlib's `Pair` under the
+  stdlib code built on it; it is the "already defined by an auto-loaded stdlib
+  module" error, as `defdata` always was.
+
+### Deprecated
+
+- **`defgadt` (TUR-D0005).** Write `defdata`; its constructors take the same
+  `: (Name ...)` result type. The old spelling still compiles with a warning,
+  is an error under `--Werror=deprecated`, and `tur explain TUR-D0005` shows
+  the rewrite. It is removed at a future major release.
+
 ## [0.69.0] -- 2026-10-22
 
 ### Added

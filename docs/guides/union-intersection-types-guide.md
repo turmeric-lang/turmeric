@@ -396,9 +396,10 @@ An early plan proposed desugaring `defdata` into a union type internally so the
 two share one code path. That internal unification is **not pursued**: the union
 machinery is monomorphic, closed, and non-recursive, while every `defdata` in
 the tree is parametric (`Either [L R]`), higher-kinded (`Fix [^f]`,
-`Free [^f a]`), recursive, or a GADT (`Nat`). Lowering those onto today's union
-representation would mean rebuilding parametric/HKT/recursive/GADT sum-type
-support on top of unions -- a far larger change with no user-visible payoff.
+`Free [^f a]`), recursive (`Nat`), or a GADT (`Equal`). Lowering those onto
+today's union representation would mean rebuilding parametric/HKT/recursive/GADT
+sum-type support on top of unions -- a far larger change with no user-visible
+payoff.
 
 The user-facing goal that desugar was meant to deliver -- ADT values
 participating in union-style dispatch -- **already ships** through the `any` top
@@ -530,6 +531,6 @@ The following items are not yet implemented:
 ## See Also
 
 - [Type Annotations Guide](type-annotations-guide.md) -- compound type syntax: `(-> a b)`, `(vec T)`, `forall`
-- [GADTs Guide](gadts-guide.md) -- `defgadt`, type refinement, union types interaction
+- [GADTs Guide](gadts-guide.md) -- refined constructors (`defdata` with `: Result`), type refinement, union types interaction
 - [Error Handling Guide](error-handling-guide.md) -- `Result` and `Option` types
 - [Contract Types Guide](contract-types-guide.md) -- runtime-checked predicates on types

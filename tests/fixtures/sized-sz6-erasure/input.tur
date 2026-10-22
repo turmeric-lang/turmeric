@@ -6,7 +6,7 @@
 ; pins that erased shape -- if a size field ever leaked into codegen, the
 ; snapshot would change and the test would fail.
 
-(defgadt SizedVec [n]
+(defdata SizedVec [n]
   (SVNil : (SizedVec (Static 0)))
   (SVCons int (SizedVec n) : (SizedVec (Add (Static 1) n))))
 

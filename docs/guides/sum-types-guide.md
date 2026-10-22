@@ -65,8 +65,9 @@ inseparable, so the type checker forces you to handle every case.
 - **Name** -- the type constructor (`Either`).
 - **`:copy` / `:move`** (optional) -- value discipline. `:copy` makes a value
   freely reusable (right for immutable, resource-free sums like `Either`);
-  the default `:move` enforces single-use ownership. Put it right after the
-  name.
+  the default `:move` enforces single-use ownership; `:linear` (exactly once)
+  and `:affine` (at most once) are the substructural ones. Put it after the
+  name, before or after the type-parameter vector.
 - **Type parameters** `[L R]` (optional) -- a parametric sum. Each constructor
   may use these in its payload types.
 - **Constructors** `(Left L) (Right R)` -- one parenthesised arm each. A
@@ -114,6 +115,36 @@ struct field syntax (`[radius : float]`).
 owning pointer (`rc<T>`, `ref<T>`, `weak<T>`) is rejected, naming the
 offending field and variant -- the same rule `defstruct :copy` enforces,
 lifted across the sum.
+
+### Constructors with their own result type
+
+A constructor may end with `: Result`, the type it produces. Unannotated, a
+constructor of `(defdata Expr [a] ...)` produces the generic `(Expr a)`;
+annotated, it can fix the parameter:
+
+```turmeric
+(defdata Expr [a]
+  (Lit int            : (Expr int))
+  (IsZero (Expr int)  : (Expr bool))
+  (If (Expr bool) (Expr a) (Expr a)))      ; unannotated: (Expr a)
+```
+
+`(IsZero ...)` is then an `(Expr bool)`, a `match` on an `(Expr int)` need
+not list `IsZero`, and inside an arm the checker knows what `a` is. The
+annotation goes after the payload, a record field vector included:
+`(Rect [w : int h : int] : (Shape int))`. It must apply the type being
+defined to as many arguments as it has parameters.
+[gadts-guide.md](gadts-guide.md) covers what refinement buys. `defgadt` --
+the same form with every constructor required to be annotated -- is the
+deprecated older spelling: it still compiles, with a `TUR-D0005` warning (an
+error under `--Werror=deprecated`), and the rewrite is the keyword alone.
+
+Whether a type needs the uniform carrier representation is decided by what
+the annotations say, not by the keyword: a type whose constructors all
+return one instantiation -- `(GVec int)` from both constructors of
+`stdlib/gadt-vec.tur` -- is a plain sum with a pinned parameter, and can go
+by value like any `defdata`. Only a type whose annotations refine its
+parameters (`Lit` and `IsZero` above) stays on the carrier.
 
 ## Pattern matching: `match`
 
@@ -236,7 +267,10 @@ match: non-exhaustive patterns -- constructor 'Left' of 'Either' not covered
 ```
 
 This is deliberate: the compiler will not let a new constructor silently slip
-past existing matches.
+past existing matches. The one exception is a constructor with its own result
+type that the scrutinee's annotated type rules out -- `IsZero : (Expr bool)`
+in a `match` on an `[e : (Expr int)]`. With an unannotated scrutinee every
+constructor is required.
 
 ### Opting out: `^non-exhaustive`
 

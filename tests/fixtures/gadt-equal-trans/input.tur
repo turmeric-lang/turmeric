@@ -1,4 +1,4 @@
-(defgadt Equal [a b]
+(defdata Equal [a b]
   (Refl : (Equal a a)))
 
 (defn equal-trans [eq1 : Equal eq2 : Equal] : Equal

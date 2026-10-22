@@ -1,6 +1,6 @@
 ; Phase SZ3: SizedMatrix -- 2D flat row-major matrix.
 
-(defgadt Size []
+(defdata Size []
   (Static (int) : (Size))
   (Add (Size) (Size) : (Size))
   (Mul (Size) (Size) : (Size)))

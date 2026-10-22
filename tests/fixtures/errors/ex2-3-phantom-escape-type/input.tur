@@ -8,7 +8,7 @@
 ; if 'n' were a usable type variable inside the body, the user could
 ; ascribe a value as (SizedVec n int) and let the phantom index flow
 ; out of the open scope through the value's type.
-(defgadt SizedVec [n a]
+(defdata SizedVec [n a]
   (SVNil : (SizedVec int int))
   (SVCons int (SizedVec int int) : (SizedVec int int)))
 

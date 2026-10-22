@@ -79,6 +79,16 @@
 (defn read-field-any [c : any] : int
   (let [p (cast c AnyCell)] (link-v (cast (.a p) Link))))
 
+;; 12. a by-value recursive sum whose constructors carry result annotations
+;;     (adt-gadt-unification-plan slice 3): every one returns `(Peano)`, so the
+;;     type is not refined and goes by value like its bare-named twin.  The
+;;     recursive field is a box built inside the bracket; pushed into an outer
+;;     vec, the element's WORDS carry that box.
+(defdata Peano (PZ : (Peano)) (PS (Peano) : (Peano)))
+(defn peano-n [p : Peano] : int (match p (PZ) 0 (PS q) (+ 1 (peano-n q))))
+(defn store-peano [pv : (Vec Peano) n : int] : int
+  (with-region (fn [] (do (vec-push! pv (PS (PS (PS (PZ))))) 1))))
+
 ;; 11. tvar/write of a chain into a TVar that outlives the bracket.  `val` is
 ;;     a `ptr`, so the node arrives through an erasing ascription, which is the
 ;;     note (security-audit-plan WP5 retired tvar/write as a hook gap on that
@@ -122,4 +132,7 @@
   (let [tv (tvar/new 0)]
     (println (store-tvar tv 5))                         ;; 1
     (println (read-tvar tv)))                           ;; 15
+  (let [pv (:: (vec-new) (Vec Peano))]
+    (println (store-peano pv 3))                        ;; 1
+    (println (peano-n (vec-get-byval pv 0))))           ;; 3
   0)

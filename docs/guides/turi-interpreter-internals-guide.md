@@ -264,9 +264,9 @@ struct TuriStruct {
 };
 ```
 
-- **Constructors are natives.** `EX_DEFDATA`/`EX_DEFGADT` register every
-  constructor under its name as `adt_ctor_native`, with the `CtorDef` as the
-  native's `ud`. Calling it builds a `TuriStruct` named after the
+- **Constructors are natives.** `EX_DEFDATA` (`defgadt` included) registers
+  every constructor under its name as `adt_ctor_native`, with the `CtorDef` as
+  the native's `ud`. Calling it builds a `TuriStruct` named after the
   constructor, with `ctor` set. Constructor names share the flat global
   namespace.
 - **Matching compares names.** `eval_match_resolve_with` matches a

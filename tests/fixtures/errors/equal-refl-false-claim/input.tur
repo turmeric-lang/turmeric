@@ -1,0 +1,17 @@
+;; `Refl : (Equal a a)` can only be built at an equal pair.  Its inferred index
+;; was `(Equal ? ?)` -- both `a`s unknown -- which agreed with every claim, so an
+;; ascription, a declared return or an annotated let could mint `(Equal int
+;; bool)` and `coerce` trusted it.  The claim now meets the constructor's
+;; declared result too, where the repeated `a` must be one type.
+(load "stdlib/equal.tur")
+
+(defn mint [] : (Equal int bool) (Refl))
+
+(defn bind [] : int
+  (let [p : (Equal float int) (Refl)]
+    1))
+
+(defn main [] : int
+  (let [q (:: (Refl) (Equal int cstr))]
+    (println 1))
+  0)

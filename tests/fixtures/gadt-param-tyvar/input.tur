@@ -1,9 +1,9 @@
-;; TP2: defgadt with a type-variable field -- basic parse and construction.
+;; TP2: annotated constructors with a type-variable field -- basic parse and construction.
 ;; The type variable `a` in (MkBox2 a : (Box2 a)) should be accepted as a
 ;; field type and stored in CtorField.full_type as TY_TYVAR.
 ;; The bound variable is unused in the arm body to avoid overload-resolution
 ;; failure on a polymorphic value (that is a TP6 concern, not TP2).
-(defgadt Box2 [a]
+(defdata Box2 [a]
   (MkBox2 a : (Box2 a))
   (EmptyBox : (Box2 a)))
 

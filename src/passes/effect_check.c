@@ -2049,7 +2049,6 @@ int effect_check_pass(Arena *a, Expr *program, EffectEnv *env) {
         if (!item) continue;
         AdtDef *adt = NULL;
         if (item->kind == EX_DEFDATA) adt = item->as.defdata_.def;
-        else if (item->kind == EX_DEFGADT) adt = item->as.defgadt_.def;
         if (!adt) continue;
         for (uint32_t ci = 0; ci < adt->n_ctors; ci++) {
             CtorDef *ctor = adt->ctors[ci];

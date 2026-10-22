@@ -2,7 +2,7 @@
 ; Exercises sized-vec-nil, sized-vec-cons, sized-vec-len, sized-vec-head-or,
 ; sized-vec-tail, sized-vec-sum, and sized-vec-size.
 
-(defgadt Size []
+(defdata Size []
   (Static (int) : (Size))
   (Add (Size) (Size) : (Size))
   (Mul (Size) (Size) : (Size)))
@@ -13,7 +13,7 @@
     (Add s1 s2)  (+ (size-eval s1) (size-eval s2))
     (Mul s1 s2)  (* (size-eval s1) (size-eval s2))))
 
-(defgadt SizedVec [n a]
+(defdata SizedVec [n a]
   (SVNil : (SizedVec Size int))
   (SVCons int (SizedVec Size int) : (SizedVec Size int)))
 

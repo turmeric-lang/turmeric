@@ -1,6 +1,6 @@
 ;; Renamed Pair -> P2 to avoid colliding with the auto-loaded
 ;; stdlib `Pair` struct from stdlib/pair.tur.
-(defgadt P2 [a b]
+(defdata P2 [a b]
   (MkP2 int int : (P2 a b)))
 
 (defn main [] : int

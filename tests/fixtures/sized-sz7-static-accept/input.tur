@@ -7,7 +7,7 @@
 ;     known, so the existing runtime assertion guards it instead.
 ; (The static-reject outcome lives in errors/sized-sz7-static-reject.)
 
-(defgadt Size []
+(defdata Size []
   (Static (int) : (Size))
   (Add (Size) (Size) : (Size))
   (Mul (Size) (Size) : (Size)))

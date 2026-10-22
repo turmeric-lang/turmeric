@@ -1,0 +1,31 @@
+;; The Equality Witnesses recipe of docs/guides/gadts-cookbook.md, verbatim.
+; Equal and Refl live in stdlib/equal.tur, which is not auto-loaded. The
+; whole declaration is one line:
+;   (defdata Equal [a b] (Refl : (Equal a a)))
+(load "stdlib/equal.tur")
+
+; Symmetry: (Equal a b) -> (Equal b a).
+; In the Refl arm a = b, so Refl is also an (Equal b a).
+(defn sym [a b] [eq : (Equal a b)] : (Equal b a)
+  (match eq
+    (Refl) (Refl)))
+
+; Transitivity: (Equal a b) -> (Equal b c) -> (Equal a c).
+(defn trans [a b c] [ab : (Equal a b) bc : (Equal b c)] : (Equal a c)
+  (match ab
+    (Refl) (match bc
+             (Refl) (Refl))))
+
+; coerce checks that x has the proof's left type and hands x back:
+; nothing is converted and no code is emitted.
+(defn use-eq [eq : (Equal int int) x : int] : int
+  (+ (coerce eq x) 1))
+
+(defn main [] : int
+  ; Refl at int = int; an unequal pair is a TUR-E0001 here.
+  (let [proof (:: (Refl) (Equal int int))]
+    (println (use-eq proof 41))               ; 42
+    (println (use-eq (sym proof) 99))         ; 100
+    (println (use-eq (trans proof proof) 0))  ; 1
+    (println (coerce proof 100)))             ; 100
+  0)

@@ -17,7 +17,7 @@
 ;;; Constructed with SInt.
 ;;;
 ;;; Since: Phase SZ0
-(defgadt StaticInt [] (SInt (int) : (StaticInt)))
+(defdata StaticInt (SInt int))
 ;;; static-int -- construct a StaticInt from a literal integer.
 ;;;
 ;;; Parameters:
@@ -91,11 +91,7 @@
 ;;; Since: Phase SZ0
 
 
-(defgadt Size
-  []
-  (Static (int) : (Size))
-  (Add (Size) (Size) : (Size))
-  (Mul (Size) (Size) : (Size)))
+(defdata Size (Static int) (Add Size Size) (Mul Size Size))
 ;;; size-static -- create a literal Size from an integer.
 ;;;
 ;;; Parameters:
@@ -175,7 +171,7 @@
 ;;; Since: Phase SZ0
 
 
-(defgadt SizedVec
+(defdata SizedVec
   [n a]
   (SVNil : (SizedVec Size int))
   (SVCons int (SizedVec Size int) : (SizedVec Size int)))

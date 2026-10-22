@@ -1,7 +1,7 @@
 ---
 title: GADTs -- A Practical Guide
 category: Advanced Types
-description: GADTs: `defgadt`, type refinement, equality witnesses, union types, gradual typing
+description: GADTs: refined constructors (`defdata` with `: Result`), type refinement, equality witnesses, union types, gradual typing
 ---
 
 # GADTs in Turmeric -- A Practical Guide
@@ -9,7 +9,9 @@ description: GADTs: `defgadt`, type refinement, equality witnesses, union types,
 Generalized Algebraic Data Types (GADTs) extend ordinary sum types by letting
 each constructor specialize the type parameters it returns. The type-checker
 learns those specializations when pattern-matching, so programs that previously
-needed runtime tags or unsafe casts become statically verified.
+needed runtime tags or unsafe casts become statically verified. In Turmeric a
+GADT is an ordinary `defdata` whose constructors declare their own result
+type; there is no separate form for it.
 
 This guide walks from plain sum types up to GADTs and equality witnesses. All
 examples are valid Turmeric source. GADT support is **enabled by default** --
@@ -107,20 +109,21 @@ compiler reports the missing arm.
 
 ---
 
-## Your First GADT (`defgadt`)
+## Refined Constructors (`defdata` with `: Result`)
 
-A GADT is declared with `defgadt`. The key difference from `defdata` is that
-each constructor carries an explicit `: return-type` annotation:
+A `defdata` constructor may end with `: (Name ...)`, the type it returns. An
+unannotated constructor returns the generic instantiation `(Name a ...)`, as
+in a plain sum (see "Mixing annotated and unannotated constructors" below):
 
 ```turmeric
-(defgadt Expr [a]
-  (Lit int         : (Expr int))
+(defdata Expr [a]
+  (Lit int                   : (Expr int))
   (Add (Expr int) (Expr int) : (Expr int)))
 ```
 
 ```sweet-exp
-defgadt Expr [a]
-  (Lit int         : (Expr int))
+defdata Expr [a]
+  (Lit int                   : (Expr int))
   (Add (Expr int) (Expr int) : (Expr int))
 ```
 
@@ -129,28 +132,6 @@ Each constructor line reads as: "field types ... `: return type`". Here:
 - `(Lit int : (Expr int))` -- `Lit` takes one `int` field and returns `(Expr int)`.
 - `(Add (Expr int) (Expr int) : (Expr int))` -- `Add` takes two `(Expr int)`
   fields and also returns `(Expr int)`.
-
-Like `defdata`, a `defgadt` accepts an optional `:copy` modifier -- placed
-after the type-parameter vector -- to opt the type out of affine move
-tracking. Without it, GADT values follow move semantics (using one twice is a
-`TUR-E0005` use-after-move); with it, the values are plain, freely-readable
-value types (use this when the constructors carry only copyable payloads, e.g.
-shared range bounds):
-
-```turmeric
-(defgadt Bound [A]
-  :copy
-  (Inclusive int : (Bound int))
-  (Exclusive int : (Bound int))
-  (Unbounded     : (Bound int)))
-```
-
-This is exactly the `Bound` GADT that backs `stdlib/range.tur`'s internal
-endpoint representation -- `Inclusive` / `Exclusive` / `Unbounded` range
-bounds (see [`range-gadt-typeclass-migration-plan`](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/history/range-gadt-typeclass-migration-plan.md)).
-
-GADT support is on by default, so no flag is needed. (Passing the legacy
-`-Xgadt` flag still works but prints a deprecation notice.)
 
 Evaluation is written the same as for a plain ADT:
 
@@ -170,6 +151,92 @@ defn eval-expr [e] :int
     {eval-expr(l) + eval-expr(r)}
 ```
 
+The annotation must apply the type being defined to exactly as many
+arguments as it has parameters: `(Lit int : (Option int))` and, for a
+two-parameter type, `(IntPair int int : (Pair2 int))` are errors. A record
+constructor takes it after the field vector:
+`(Rect [w : int h : int] : (Shape int))`.
+
+Older code spells this `defgadt`. That keyword is **deprecated**: it is
+`defdata` with every constructor required to carry an annotation, it still
+compiles, and it emits `TUR-D0005` (an error under `--Werror=deprecated`;
+`tur explain TUR-D0005` shows the rewrite). It will be removed in a future
+major release. The rewrite is the keyword alone -- `(defgadt Expr [a] ...)`
+becomes `(defdata Expr [a] ...)` with the constructors unchanged.
+
+GADT support is on by default, so no flag is needed. (Passing the legacy
+`-Xgadt` flag still works but prints a deprecation notice.)
+
+### Refined or not is read from the annotations
+
+Annotating a constructor does not by itself make a type a GADT. Both
+constructors of the `Expr` above return `(Expr int)`, so it refines
+nothing: it is an ordinary sum whose parameter is pinned to `int`. A type is
+**not refined** when every constructor returns one shared instantiation
+whose arguments are each the parameter in its own position or a closed type
+-- `(Expr int)` from every constructor, or a generic `(Box a)`. It is
+**refined** when the constructors say something different about the
+parameters: `Refl : (Equal a a)` (its second argument is not `b`), or
+`Lit : (Expr int)` beside `IsZero : (Expr bool)`.
+
+The difference is representational. A refined type stays on the uniform
+representation -- a boxed value carried as an int64 word -- because a field
+of type `a` has a different concrete type per arm. An unrefined one is an
+ordinary sum and can go by value like any `defdata`. What a refined type
+gets from the checker -- per-arm type refinement, the skolem-escape check,
+exhaustiveness by index, and the index checks at calls, ascriptions and
+returns -- is what a `defgadt` always got.
+
+### Head keywords
+
+The head takes the same keywords as any `defdata` -- `:copy`, `:move`,
+`:linear`, `:affine`, `:heap` and `:no-auto-ctor` -- before or after the
+type-parameter vector: `(defdata Tag :copy [a] ...)` and
+`(defdata Tag [a] :copy ...)` are the same. (`:linear` with `:affine` is an
+error.) Without `:copy`, values follow move semantics (using one twice is a
+`TUR-E0005` use-after-move); with it, they are plain, freely-readable values
+-- use it when the constructors carry only copyable payloads:
+
+```turmeric
+(defdata Tag :copy [a]
+  (IntTag  : (Tag int))
+  (BoolTag : (Tag bool)))
+```
+
+`stdlib/range.tur`'s `Bound` used to be the example here, spelled
+`(defgadt Bound [A] :copy ...)` with every constructor returning
+`(Bound int)`. Those annotations refined nothing -- the parameter was pinned
+to `int` and never used -- so `Bound` is now a plain `:copy` sum with no
+parameter, and goes by value:
+
+```turmeric
+(defdata Bound :copy
+  (Inclusive int)
+  (Exclusive int)
+  (Unbounded))
+```
+
+`(Bound int)` no longer names a type; write `Bound`.
+
+### Mixing annotated and unannotated constructors
+
+`defdata` takes the annotation per constructor, so a type can refine only
+where it needs to:
+
+```turmeric
+(defdata Expr [a]
+  (Lit int            : (Expr int))
+  (BLit bool          : (Expr bool))
+  (IsZero (Expr int)  : (Expr bool))
+  (If (Expr bool) (Expr a) (Expr a)))      ; (Expr a)
+```
+
+This `Expr` is refined: `Lit` and `IsZero` return different instantiations.
+`(If (IsZero (Lit 0)) (Lit 7) (Lit 9))` is an `(Expr int)`: the unannotated
+`If` takes its index from its branches. Record constructors, `:heap`,
+`:linear` and `:affine` work on such a type exactly as on any `defdata` --
+`(Rect [w : int h : int] : (Shape int))`.
+
 ---
 
 ## Type Refinement in Match Arms
@@ -178,13 +245,13 @@ The power of GADTs shows up when constructors specialize different type
 parameters. Consider a typed tag:
 
 ```turmeric
-(defgadt Tag [a]
+(defdata Tag [a]
   (IntTag  : (Tag int))
   (BoolTag : (Tag bool)))
 ```
 
 ```sweet-exp
-defgadt Tag [a]
+defdata Tag [a]
   (IntTag  : (Tag int))
   (BoolTag : (Tag bool))
 ```
@@ -211,12 +278,12 @@ In the `IntTag` arm the type-checker knows `a = int`; in `BoolTag` it knows
 `a = bool`. These *skolem equalities* are introduced automatically per arm and
 are invisible to the programmer. No casts, no `option` wrapper, and no runtime tags.
 
-A larger example combining plain ADTs and GADTs in one program:
+A larger example combining a plain sum and an annotated one in one program:
 
 ```turmeric
 (defdata Color :copy (Red) (Green) (Blue))
 
-(defgadt Expr [a]
+(defdata Expr [a]
   (Lit int         : (Expr int))
   (Add (Expr int) (Expr int) : (Expr int)))
 
@@ -241,7 +308,7 @@ A larger example combining plain ADTs and GADTs in one program:
 ```sweet-exp
 defdata Color :copy (Red) (Green) (Blue)
 
-defgadt Expr [a]
+defdata Expr [a]
   (Lit int         : (Expr int))
   (Add (Expr int) (Expr int) : (Expr int))
 
@@ -268,11 +335,12 @@ defn main [] :int
   0
 ```
 
-You can also use multiple constructors that refine the same type variable in
-different ways:
+A type can carry any number of annotated constructors. (All three below
+return `(Expr int)`, so, like the two-constructor `Expr` earlier, this one is
+a sum with its parameter pinned to `int` rather than a refined type.)
 
 ```turmeric
-(defgadt Expr [a]
+(defdata Expr [a]
   (Lit int                         : (Expr int))
   (Add (Expr int) (Expr int)       : (Expr int))
   (Mul (Expr int) (Expr int)       : (Expr int)))
@@ -291,7 +359,7 @@ different ways:
 ```
 
 ```sweet-exp
-defgadt Expr [a]
+defdata Expr [a]
   (Lit int                         : (Expr int))
   (Add (Expr int) (Expr int)       : (Expr int))
   (Mul (Expr int) (Expr int)       : (Expr int))
@@ -312,71 +380,120 @@ defn main [] :int
     0
 ```
 
+### Exhaustiveness by index
+
+A `match` lists every constructor, with one exception: a constructor whose
+declared result index provably differs from the **scrutinee's annotated
+type** cannot be the value, so it needs no arm. Over the refined `Expr` of
+"Mixing annotated and unannotated constructors" above:
+
+```turmeric
+(defn eval-int [e : (Expr int)] : int
+  (match e
+    (Lit n)    n
+    (If c t f) (if (eval-bool c) (eval-int t) (eval-int f))))
+
+(defn eval-bool [e : (Expr bool)] : bool
+  (match e
+    (BLit b)   b
+    (IsZero x) (= (eval-int x) 0)
+    (If c t f) (if (eval-bool c) (eval-bool t) (eval-bool f))))
+```
+
+```sweet-exp
+defn eval-int [e : (Expr int)] :int
+  match e
+    (Lit n)
+    n
+    (If c t f)
+    if(eval-bool(c) eval-int(t) eval-int(f))
+
+defn eval-bool [e : (Expr bool)] :bool
+  match e
+    (BLit b)
+    b
+    (IsZero x)
+    {eval-int(x) = 0}
+    (If c t f)
+    if(eval-bool(c) eval-bool(t) eval-bool(f))
+```
+
+`eval-int` leaves out `BLit` and `IsZero` (both `(Expr bool)`), and
+`eval-bool` leaves out `Lit`; neither may leave out `If`, whose result is
+the generic `(Expr a)`. The decision reads only the scrutinee's
+annotation and each constructor's declared result. With an unannotated
+scrutinee (`[e]`) every constructor is required -- the compiler does not
+guess an instantiation from the other arms. (An older heuristic did, and
+warned that a constructor was "unreachable for this GADT instantiation"; it
+is gone.)
+
 ---
 
 ## The `Equal` GADT and `coerce`
 
-The standard library provides a built-in equality witness GADT:
+The standard library's equality witness lives in `stdlib/equal.tur`, which is
+not auto-loaded -- `(load "stdlib/equal.tur")`, or declare it yourself:
 
 ```turmeric
-; Built into the runtime -- you do not need to declare this yourself.
-; (defgadt Equal [a b]
-;   (Refl : (Equal a a)))
+(defdata Equal [a b]
+  (Refl : (Equal a a)))
 ```
 
 ```sweet-exp
-; Built into the runtime -- you do not need to declare this yourself.
-; defgadt Equal [a b]
-;   (Refl : (Equal a a))
+defdata Equal [a b]
+  (Refl : (Equal a a))
 ```
 
 `(Refl)` is the only constructor. Because its return type is `(Equal a a)`,
-constructing `(Refl)` proves that the two type parameters are the same type.
+a `Refl` can only be built at an equal pair: `(:: (Refl) (Equal int int))` is
+a proof, and `(:: (Refl) (Equal int bool))` is TUR-E0001 -- as is a declared
+return or an annotated `let` making that claim.
 
-Use `coerce` to convert a value across a proven equality:
+`coerce` takes a proof and a value, checks that the value has the proof's left
+type, and hands the value back -- no conversion, no code:
 
 ```turmeric
-(defgadt Equal [a b]
-  (Refl : (Equal a a)))
+(load "stdlib/equal.tur")
 
 (defn main [] : int
-  (match (Refl)
-    (Refl)
-      (do
-        (println (coerce (Refl) 42))
-        0)))
+  (let [proof (:: (Refl) (Equal int int))]
+    (println (coerce proof 42))   ; 42
+    0))
 ```
 
 ```sweet-exp
-defgadt Equal [a b]
-  (Refl : (Equal a a))
+load "stdlib/equal.tur"
 
 defn main [] :int
-  match (Refl)
-    (Refl)
-    do
-      println(coerce((Refl) 42))
-      0
+  let [proof (:: (Refl) (Equal int int))]
+    println(coerce(proof 42))
+    0
 ```
 
-In the `(Refl)` arm the type-checker knows `a = b`, so `coerce` can safely
-reinterpret the value without any runtime overhead.
+With that proof, `(coerce proof 7.1)` is TUR-E0001. `coerce` returns the value
+at its own type; taking the result type from the proof's `b` is
+[coerce-result-and-type-app-retirement-plan](https://github.com/turmeric-lang/turmeric/blob/main/docs/upcoming/coerce-result-and-type-app-retirement-plan.md).
 
 Symmetry -- turning `(Equal a b)` into `(Equal b a)` -- follows from matching
-on `Refl` and returning `Refl`:
+on `Refl` and returning `Refl`: in the arm `a = b`, so `Refl` is also an
+`(Equal b a)`. The checker accepts the declared result; it does not derive it
+from the arm, so check such a signature by hand:
 
 ```turmeric
-(defn sym [eq] :(Equal b a)
+(defn sym [a b] [eq : (Equal a b)] : (Equal b a)
   (match eq
     (Refl) (Refl)))
 ```
 
 ```sweet-exp
-defn sym [eq] :(Equal b a)
+defn sym [a b] [eq : (Equal a b)] : (Equal b a)
   match eq
     (Refl)
     (Refl)
 ```
+
+The [cookbook](gadts-cookbook.md#equality-witnesses) has transitivity and a
+typed box.
 
 ---
 
@@ -431,16 +548,18 @@ is tried.
 
 | Mistake | Error message (excerpt) | Fix |
 |---|---|---|
-| Omitting the `: return-type` on a refining constructor | `constructor refines type variable -- explicit return type required` | Add `: (MyGadt ...)` after the field list |
-| Missing a constructor in a match | `non-exhaustive match: missing constructor 'Foo'` | Add the missing arm or a wildcard `_` |
+| Annotating a constructor with another type's name | `defdata: constructor 'Lit' return type must be an application of 'Expr'` | Write `: (Expr ...)` -- the type being defined |
+| Annotating with the wrong number of arguments | `defdata: constructor 'IntPair' return type has 1 type argument(s) but 'Pair2' has 2 type parameter(s)` | One argument per type parameter |
+| Omitting the `: return-type` on a constructor meant to refine | none at the definition -- it returns the generic `(MyGadt a)` and refines nothing | Add `: (MyGadt ...)` after the field list |
+| Missing a constructor in a match | `match: non-exhaustive patterns -- constructor 'Foo' of 'MyGadt' not covered` | Add the missing arm or a wildcard `_`; a constructor is left out only when the scrutinee's annotated type excludes it (see "Exhaustiveness by index") |
 | Type mismatch from a skolem | `cannot unify 'int' with 'bool' (skolem from 'BoolTag')` | Check that the correct GADT arm is used for the operation |
 | Skolem type escaping its scope | `skolem type variable 'a' escapes its match scope` | Use a universally polymorphic return type instead of the refined one |
 | Unannotated GADT in a container | `ambiguous GADT type parameter -- annotation required` | Add an explicit type annotation, e.g. `: (vec (MyGadt int))` |
 
 ### No flag required
 
-GADT support is on by default. Files that use `defgadt` or match on a GADT
-compile with no special flag:
+GADT support is on by default. Files that declare refined constructors or
+match on a GADT compile with no special flag:
 
 ```sh
 tur run build          # builds everything, GADTs included
@@ -577,7 +696,7 @@ literals may appear there too. Arms are tried in order, so a specific arm can
 precede a general one for the same constructor:
 
 ```turmeric
-(defgadt Expr [a]
+(defdata Expr [a]
   (Lit int                   : (Expr int))
   (Add (Expr int) (Expr int) : (Expr int)))
 
@@ -588,7 +707,7 @@ precede a general one for the same constructor:
     (Add l r)       (+ (eval-expr l) (eval-expr r))))
 ```
 ```sweet-exp
-defgadt Expr [a]
+defdata Expr [a]
   (Lit int                   : (Expr int))
   (Add (Expr int) (Expr int) : (Expr int))
 
@@ -624,7 +743,8 @@ arm falls through to the next arm of the same group when it fails.
   (phantom-parameter opaques: `(defopaque Zero :int)`, `(defopaque Succ [n]
   :int)`). A `match` on a scrutinee annotated `(Vec (Succ n))` then omits the
   `VNil` arm -- the exhaustiveness check drops a constructor whose declared
-  index provably differs from the scrutinee's -- and `(vec-head (VNil))` is
+  index provably differs from the scrutinee's annotated type; an unannotated
+  scrutinee needs every arm -- and `(vec-head (VNil))` is
   rejected at the call: a constructor application knows its index
   (`(VNil)` is `(Vec Zero)`), and so do a `let` bound to one, an ascription
   and a declared return. The value's type stays the bare `Vec`, so a
@@ -663,8 +783,8 @@ arm falls through to the next arm of the same group when it fails.
 ; Declare a plain ADT
 (defdata Color :copy (Red) (Green) (Blue))
 
-; Declare a GADT  (GADTs are on by default)
-(defgadt Expr [a]
+; Constructors with their own result type (defgadt is the deprecated spelling)
+(defdata Expr [a]
   (Lit int                         : (Expr int))
   (Add (Expr int) (Expr int)       : (Expr int))
   (Mul (Expr int) (Expr int)       : (Expr int)))
@@ -676,8 +796,8 @@ arm falls through to the next arm of the same group when it fails.
     (Add l r) (+ (eval-expr l) (eval-expr r))
     (Mul l r) (* (eval-expr l) (eval-expr r))))
 
-; Equality witness
-(defgadt Equal [a b]
+; Equality witness -- refined: Refl's result equates a and b
+(defdata Equal [a b]
   (Refl : (Equal a a)))
 
 ; coerce a value using an equality proof
@@ -699,8 +819,8 @@ arm falls through to the next arm of the same group when it fails.
 ; Declare a plain ADT
 defdata Color :copy (Red) (Green) (Blue)
 
-; Declare a GADT  (GADTs are on by default)
-defgadt Expr [a]
+; Constructors with their own result type (defgadt is the deprecated spelling)
+defdata Expr [a]
   (Lit int                         : (Expr int))
   (Add (Expr int) (Expr int)       : (Expr int))
   (Mul (Expr int) (Expr int)       : (Expr int))
@@ -715,8 +835,8 @@ defn eval-expr [e] :int
     (Mul l r)
     {eval-expr(l) * eval-expr(r)}
 
-; Equality witness
-defgadt Equal [a b]
+; Equality witness -- refined: Refl's result equates a and b
+defdata Equal [a b]
   (Refl : (Equal a a))
 
 ; coerce a value using an equality proof

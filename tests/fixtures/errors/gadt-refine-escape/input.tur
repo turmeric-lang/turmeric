@@ -1,4 +1,4 @@
-(defgadt Box [a]
+(defdata Box [a]
   (MkBox a : (Box a)))
 
 ;; my-unbox: renamed from `unbox` to avoid colliding with the auto-loaded

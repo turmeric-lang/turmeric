@@ -48,7 +48,7 @@
 ;;; range->str-string -- render a Range in interval notation, as an owned String.
 ;;;
 ;;; Parameters:
-;;;   r -- an :int Range pointer
+;;;   r -- a Range
 ;;;
 ;;; Returns:
 ;;;   An owned String, e.g. "[1, 5)".
@@ -58,7 +58,7 @@
 ;;;
 ;;; Since: v2
 
-(defn range->str-string [r : int] : String (string/adopt-cstr (range->str r)))
+(defn range->str-string [r : Range] : String (string/adopt-cstr (range->str r)))
 ;;; bound-fmt-string -- render a single inclusive/exclusive endpoint, as an
 ;;; owned String.
 ;;;

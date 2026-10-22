@@ -26,7 +26,7 @@ and links to a deeper guide for the rules and edge cases.
 | Pick a different implementation per type | Typeclasses (`defclass` / `definstance`) | this guide; see also [hkt-guide.md](hkt-guide.md) |
 | Abstract over a container, not just an element | Higher-kinded types (`^f`) | [hkt-guide.md](hkt-guide.md) |
 | Accept a callback that must itself stay polymorphic | Higher-ranked types (`forall` in argument position) | [hrt-guide.md](hrt-guide.md) |
-| Refine a type through a pattern match | GADTs (`defgadt`) | [gadts-guide.md](gadts-guide.md), [gadts-cookbook.md](gadts-cookbook.md) |
+| Refine a type through a pattern match | GADTs (`defdata` constructors with a `: Result`) | [gadts-guide.md](gadts-guide.md), [gadts-cookbook.md](gadts-cookbook.md) |
 | Accept "one of these concrete types" | Union types (`A \| B`) | [union-intersection-types-guide.md](union-intersection-types-guide.md) |
 | Demand "all of these capabilities at once" | Intersection types (`A & B`) | [union-intersection-types-guide.md](union-intersection-types-guide.md) |
 | Hide a concrete type behind capabilities | Existential types (`exists` / `pack` / `open`) | [existential-types-guide.md](existential-types-guide.md) |
@@ -218,29 +218,27 @@ defdata Fix [^f]
   Roll :int
 ```
 
-`defgadt` ("generalized algebraic data type") goes further: each constructor
-can *constrain* the type parameter, so a match arm sees a more specific type
-than the whole. This eliminates whole classes of "shouldn't happen" branches
-because they truly cannot.
+A constructor can go further and declare its own result type with
+`: (Name ...)`, *constraining* the type parameter -- a "generalized algebraic
+data type" (GADT) -- so a match arm sees a more specific type than the whole.
+This eliminates whole classes of "shouldn't happen" branches because they
+truly cannot. An unannotated constructor returns the generic `(Expr a)`:
 
 ```turmeric
-(defgadt Nat []
-  (Zero          : (Nat))
-  (Succ  (Nat)   : (Nat)))
-
-(defgadt GVec [a]
-  (GVNil                  : (GVec int))
-  (GVCons int (GVec int)  : (GVec int)))
+(defdata Expr [a]
+  (Lit int            : (Expr int))
+  (IsZero (Expr int)  : (Expr bool))
+  (If (Expr bool) (Expr a) (Expr a)))      ; unannotated: (Expr a)
 ```
 ```sweet-exp
-defgadt Nat []
-  Zero          : (Nat)
-  Succ  (Nat)   : (Nat)
-
-defgadt GVec [a]
-  GVNil                  : (GVec int)
-  GVCons int (GVec int)  : (GVec int)
+defdata Expr [a]
+  (Lit int            : (Expr int))
+  (IsZero (Expr int)  : (Expr bool))
+  (If (Expr bool) (Expr a) (Expr a))      ; unannotated: (Expr a)
 ```
+
+`defgadt`, the older spelling that required every constructor to be
+annotated, is deprecated (`TUR-D0005`); write `defdata`.
 
 **Reach for ADTs** for everyday sum types. **Reach for GADTs** when a
 constructor needs to *prove* something about its type parameter (a tagless

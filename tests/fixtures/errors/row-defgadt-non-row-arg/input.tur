@@ -1,4 +1,4 @@
 ;; L6 follow-up C: a defgadt with a `^&` row-kinded parameter rejects a
 ;; non-row argument at type-application sites via check_row_type_arg_kind.
-(defgadt QueryG [^&cols] (QueryG : (QueryG #row{int})))
+(defdata QueryG [^&cols] (QueryG : (QueryG #row{int})))
 (defn bad [x : (QueryG :int)] : int 0)

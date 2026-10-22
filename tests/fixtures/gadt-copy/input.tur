@@ -1,6 +1,6 @@
-;; defgadt :copy opts a GADT out of affine move tracking, so its values can be
+;; :copy opts a type with annotated constructors out of affine move tracking, so its values can be
 ;; read repeatedly (e.g. shared range bounds).
-(defgadt Bound [A]
+(defdata Bound [A]
   :copy
   (Inclusive int : (Bound int))
   (Exclusive int : (Bound int))

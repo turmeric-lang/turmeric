@@ -240,8 +240,8 @@ const char *turi_doc_lookup_builtin(const char *sym) {
         /* Pattern matching and data */
         {"match",    "(match val (Pattern body) ...) -- destructure and branch on value"},
         {"defstruct","(defstruct Name [field :Type ...]) -- define a named product type"},
-        {"defdata",  "(defdata Name (Ctor) (Ctor :T) ...) -- define an algebraic data type"},
-        {"defgadt",  "(defgadt Name [a] (Ctor :T) ...) -- define a generalized ADT"},
+        {"defdata",  "(defdata Name [a] (Ctor) (Ctor :T) (Ctor T : (Name int)) ...) -- define an algebraic data type; a constructor may declare its result type"},
+        {"defgadt",  "(defgadt Name [a] (Ctor T : (Name ...)) ...) -- deprecated (TUR-D0005): defdata with every constructor's result type declared"},
         {"deftype",  "(deftype Alias ActualType) -- define a type alias"},
         /* Macros */
         {"defmacro", "(defmacro name [args] body) -- define a syntax macro"},

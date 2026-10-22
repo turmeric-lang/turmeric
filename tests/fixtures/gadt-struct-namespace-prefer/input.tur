@@ -4,7 +4,7 @@
 
 (defstruct Stack [A] (data :ptr<void>) (size :int))
 
-(defgadt Stack [a]
+(defdata Stack [a]
   (SEmpty : (Stack int))
   (SPush  int (Stack int) : (Stack int)))
 

@@ -5,8 +5,8 @@
 ;;;
 ;;;     (defopaque SizedThing [n] :int)
 ;;;
-;;; or as a sized defgadt/defstruct of the same shape. Validated against
-;;; both `(SizedVec n int)` (defgadt head, bare-nominal call sites) and
+;;; or as a sized defdata/defstruct of the same shape. Validated against
+;;; both `(SizedVec n int)` (defdata head, bare-nominal call sites) and
 ;;; `(SizedBuf n)` (defopaque head, applied-form call sites) so the same
 ;;; macros lift both shapes uniformly. The macros below
 ;;; sit directly on top of native `pack` (EX1c) and `open` (EX1d /

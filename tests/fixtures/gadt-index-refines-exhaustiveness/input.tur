@@ -17,7 +17,7 @@
 (defopaque Zero :int)
 (defopaque Succ [n] :int)
 
-(defgadt LVec [n]
+(defdata LVec [n]
   (LNil : (LVec Zero))
   (LCons int (LVec n) : (LVec (Succ n))))
 

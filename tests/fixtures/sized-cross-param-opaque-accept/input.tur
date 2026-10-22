@@ -8,7 +8,7 @@
 ; from each callee's declared return form, binds the shared variable `n`
 ; in zip's signature to 2 once, and accepts the second arg trivially.
 
-(defgadt Size []
+(defdata Size []
   (Static (int) : (Size))
   (Add (Size) (Size) : (Size))
   (Mul (Size) (Size) : (Size)))

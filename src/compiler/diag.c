@@ -438,6 +438,7 @@ const char *diag_code_to_string(DiagCode code) {
         case TUR_D0002_FX_ROW_LEGACY_HASH:        return "TUR-D0002";
         case TUR_D0003_FX_ROW_LEGACY_AT:          return "TUR-D0003";
         case TUR_D0004_NONEXHAUSTIVE_FX_MARKER:   return "TUR-D0004";
+        case TUR_D0005_DEFGADT:                   return "TUR-D0005";
         /* XF: experimental-flag mechanism */
         case TUR_E0310_UNKNOWN_EXPERIMENT:        return "TUR-E0310";
         case TUR_E0311_UNKNOWN_ENGINE:            return "TUR-E0311";
@@ -644,6 +645,7 @@ DiagCode diag_code_from_string(const char *s) {
     if (strcmp(s, "TUR-D0002") == 0) return TUR_D0002_FX_ROW_LEGACY_HASH;
     if (strcmp(s, "TUR-D0003") == 0) return TUR_D0003_FX_ROW_LEGACY_AT;
     if (strcmp(s, "TUR-D0004") == 0) return TUR_D0004_NONEXHAUSTIVE_FX_MARKER;
+    if (strcmp(s, "TUR-D0005") == 0) return TUR_D0005_DEFGADT;
     /* XF: experimental-flag mechanism */
     if (strcmp(s, "TUR-E0310") == 0) return TUR_E0310_UNKNOWN_EXPERIMENT;
     if (strcmp(s, "TUR-E0311") == 0) return TUR_E0311_UNKNOWN_ENGINE;
@@ -2815,6 +2817,31 @@ static const DiagExplanation diag_explanations_[] = {
       "\n"
       "The old spelling still opts out, so a program keeps compiling; under\n"
       "--Werror=deprecated it is an error.  It is removed in a future release.\n",
+    },
+    /* adt-gadt-unification slice 4 */
+    { TUR_D0005_DEFGADT,
+      "TUR-D0005: `defgadt` is deprecated; write `defdata` with a `: Result` on\n"
+      "each constructor\n"
+      "\n"
+      "A `defdata` constructor takes the same result annotation a `defgadt` one\n"
+      "does, and an unannotated constructor returns the generic `(Name a ...)`,\n"
+      "so one form covers both.  Whether a type's constructors refine its\n"
+      "parameters is read from the annotations, not from the keyword.\n"
+      "\n"
+      "Example triggering this warning:\n"
+      "  (defgadt Expr [a]\n"
+      "    (Lit int : (Expr int))\n"
+      "    (IsZero (Expr int) : (Expr bool)))\n"
+      "\n"
+      "Fix: change the keyword; the constructors stay as written:\n"
+      "  (defdata Expr [a]\n"
+      "    (Lit int : (Expr int))\n"
+      "    (IsZero (Expr int) : (Expr bool)))\n"
+      "\n"
+      "An annotation that returns the generic instantiation, `(MkBox a : (Box\n"
+      "a))`, can be dropped.  The old spelling still compiles; under\n"
+      "--Werror=deprecated it is an error.  It is removed in a future major\n"
+      "release.\n",
     },
     /* XF (experimental-flag-mechanism-plan): unknown --enable= name */
     { TUR_E0310_UNKNOWN_EXPERIMENT,

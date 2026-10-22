@@ -1,0 +1,14 @@
+;; adt-gadt-unification-plan slice 4: `defgadt` is deprecated (TUR-D0005).
+;; It still compiles -- a warning -- and under --Werror=deprecated it is an
+;; error, which is what this fixture pins (flags).  The rewrite is
+;; the keyword: a `defdata` constructor takes the same `: Result`.
+(defgadt Expr [a]
+  (Lit int : (Expr int))
+  (IsZero (Expr int) : (Expr bool)))
+
+(defn eval-int [e : (Expr int)] : int
+  (match e (Lit n) n))
+
+(defn main [] : int
+  (println (eval-int (Lit 42)))
+  0)

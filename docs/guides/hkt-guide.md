@@ -510,8 +510,8 @@ nothing at runtime because at runtime they do not exist.
 
 ### Declaring a row parameter
 
-Mark the parameter with `^&` on `defstruct`, `deftype`, `defdata`, `defgadt`,
-or `defn`:
+Mark the parameter with `^&` on `defstruct`, `deftype`, `defdata` (and the
+deprecated `defgadt`), or `defn`:
 
 ```turmeric
 (defopaque Position :int)
@@ -886,4 +886,4 @@ and `free-run`.
 
 ## See also
 
-- [gadts-guide.md](gadts-guide.md) -- GADTs, `defgadt`, and equality witnesses
+- [gadts-guide.md](gadts-guide.md) -- GADTs (`defdata` with refined constructors) and equality witnesses

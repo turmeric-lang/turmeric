@@ -1,8 +1,8 @@
 ; Test a simplified GADT-based MyVec demonstrating recursive operations.
-; Uses defgadt with -Xgadt flag. Avoids reuse of moved bindings by
+; Uses annotated constructors (no flag needed). Avoids reuse of moved bindings by
 ; constructing fresh MyVec values for each operation.
 
-(defgadt MyVec [a]
+(defdata MyVec [a]
   (VNil : (MyVec int))
   (VCons int (MyVec int) : (MyVec int)))
 

@@ -17,7 +17,7 @@ Turmeric. By the end you will:
   `match`, so the whole thing round-trips to `15`.
 
 The focus is pedagogy, not micro-optimisation. Every line is idiomatic
-Turmeric with `defdata`, `defgadt`, `match`, and no inline C.
+Turmeric with `defdata`, `match`, and no inline C.
 
 The runnable end-to-end version of every snippet here lives in
 [`tests/fixtures/parsec-tutorial/input.tur`](https://github.com/turmeric-lang/turmeric/tree/main/tests/fixtures/parsec-tutorial/input.tur).
@@ -238,14 +238,15 @@ gives back exactly `number-as-expr`.
 
 ## The AST as a GADT
 
-Every constructor pins the `[a]` parameter to `int`. In a richer
-calculator you could add `(EEq (Expr int) (Expr int) : (Expr bool))`
-and the type checker would then refuse `EAdd (EEq ...) (ENum 1)` at
-compile time. That's the GADT payoff -- illegal ASTs stop being
-representable.
+Each constructor declares its result type after a `:`, and every one
+pins the `[a]` parameter to `int` -- so as written this `Expr` is not yet
+refined, just a sum with a pinned parameter. In a richer calculator you
+could add `(EEq (Expr int) (Expr int) : (Expr bool))` and the type checker
+would then refuse `EAdd (EEq ...) (ENum 1)` at compile time. That's the
+GADT payoff -- illegal ASTs stop being representable.
 
 ```turmeric
-(defgadt Expr [a]
+(defdata Expr [a]
   (ENum int                     : (Expr int))
   (EAdd (Expr int) (Expr int)   : (Expr int))
   (ESub (Expr int) (Expr int)   : (Expr int))
@@ -477,7 +478,7 @@ even for a tutorial-sized parser.
 
 ## See also
 
-- [gadts-guide.md](gadts-guide.md) -- `defgadt`, `match`, type refinement
+- [gadts-guide.md](gadts-guide.md) -- refined constructors (`defdata` with `: Result`), `match`, type refinement
 - [backtracking-guide.md](backtracking-guide.md) -- the list monad and
   nondeterminism (the direction a full-fat combinator library would go)
 - [`stdlib/parsec.tur`](https://github.com/turmeric-lang/turmeric/tree/main/stdlib/parsec.tur)

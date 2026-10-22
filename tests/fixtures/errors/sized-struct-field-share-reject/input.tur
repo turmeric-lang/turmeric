@@ -5,7 +5,7 @@
 ; spans both parameters -- recovers each projection's size index from the
 ; receiver's declared type Form and rejects the mismatch statically.
 
-(defgadt Size []
+(defdata Size []
   (Static (int) : (Size))
   (Add (Size) (Size) : (Size))
   (Mul (Size) (Size) : (Size)))

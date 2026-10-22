@@ -278,7 +278,7 @@ uses and scopes -- none of which `any` touches:
 
 | Feature | In Saffron |
 |---|---|
-| `defgadt` | works -- skolem escape still fires |
+| GADTs (`defdata` with refined constructors) | works -- skolem escape still fires |
 | `Session[P]` | works -- `TUR-E0211` still fires, same protocol state |
 | `^linear` / `^unique` / `lref<T>` | works -- `TUR-E0101` / `TUR-E0100` still fire |
 | `&T` / `&mut T` | works -- the aliasing conflict still fires |

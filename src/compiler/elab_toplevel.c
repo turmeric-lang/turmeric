@@ -3254,7 +3254,10 @@ Expr *elaborate_program_session(Arena *arena, SymbolTable *st,
             AdtDef *stub = (AdtDef *)arena_alloc(arena, sizeof(AdtDef));
             memset(stub, 0, sizeof(*stub));
             stub->name = type_name->name;
-            stub->is_gadt = true;
+            /* Off the by-value paths until the body is seen (AdtDef.
+             * is_refined): elab_defgadt recomputes both from the ctors. */
+            stub->has_result_types = true;
+            stub->is_refined = true;
             elab_register_adt_def(&e, stub);
             Type t = type_adt(stub);
             Binding *b = binding_new(&e, type_name, t, false, true, name_f->span);

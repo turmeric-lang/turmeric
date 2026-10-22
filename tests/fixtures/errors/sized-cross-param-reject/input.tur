@@ -7,12 +7,12 @@
 ; and a length-3 vector for ys is a static contradiction (`n := 2` vs
 ; `n := 3`).
 
-(defgadt Size []
+(defdata Size []
   (Static (int) : (Size))
   (Add (Size) (Size) : (Size))
   (Mul (Size) (Size) : (Size)))
 
-(defgadt SizedVec [n]
+(defdata SizedVec [n]
   (SVNil  : (SizedVec (Static 0)))
   (SVCons int (SizedVec n) : (SizedVec (Add (Static 1) n))))
 

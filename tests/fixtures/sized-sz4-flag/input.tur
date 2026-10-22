@@ -4,7 +4,7 @@
 ; reachable with only -Xsized-types on the command line (this fixture's `flags`
 ; file lists -Xsized-types, NOT -Xgadt).
 
-(defgadt Size []
+(defdata Size []
   (Static (int) : (Size))
   (Add (Size) (Size) : (Size))
   (Mul (Size) (Size) : (Size)))
@@ -15,7 +15,7 @@
     (Add s1 s2)  (+ (size-eval s1) (size-eval s2))
     (Mul s1 s2)  (* (size-eval s1) (size-eval s2))))
 
-(defgadt SizedVec [n a]
+(defdata SizedVec [n a]
   (SVNil : (SizedVec Size int))
   (SVCons int (SizedVec Size int) : (SizedVec Size int)))
 

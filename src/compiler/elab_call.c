@@ -3249,7 +3249,7 @@ static bool sz7_static_size_violation(Elab *e, const Form *call, const Symbol *n
  * Inference is purely additive metadata -- erased in codegen. */
 static SizeTerm *sz8_infer_ctor_size_index(Elab *e, const CtorDef *ctor,
                                            Expr *call_expr) {
-    if (!ctor || !ctor->adt || !ctor->adt->is_gadt)
+    if (!ctor || !ctor->adt || !ctor->result_type_form)
         return NULL;
     const AdtDef *adt = ctor->adt;
     const Form *rt = ctor->result_type_form;
@@ -3290,7 +3290,7 @@ static SizeTerm *sz8_infer_ctor_size_index(Elab *e, const CtorDef *ctor,
 /* SZ8: true when `ctor` is a size-indexed GADT constructor (its return type
  * carries a Size expression in some argument position). */
 static bool sz8_ctor_is_sized(Elab *e, const CtorDef *ctor) {
-    if (!ctor || !ctor->adt || !ctor->adt->is_gadt)
+    if (!ctor || !ctor->adt || !ctor->result_type_form)
         return false;
     const Form *rt = ctor->result_type_form;
     if (!rt || rt->tag != F_LIST || rt->as.list.len < 2) return false;
@@ -3600,12 +3600,18 @@ static const Form *gx_subst(Elab *e, const Form *f, const GxSub *subs, int n_sub
     return form_list(e->arena, f->span, items, f->as.list.len);
 }
 
+/* adt-gadt-unification: only a REFINED type's index says anything its type
+ * does not.  An annotated type that is not refined -- `(Tok int)` from every
+ * constructor, or a generic `(Box a)` -- is typed by its constructors like
+ * any defdata, and its applied form is a by-value monomorph, so retyping a
+ * bare (carrier) value to it through an ascription would lie about the
+ * representation. */
 static const AdtDef *gx_gadt_head(Elab *e, const Form *f) {
     f = gx_peel(f);
     if (!f || f->tag != F_LIST || f->as.list.len < 2) return NULL;
     TypeKind p = TY_UNKNOWN;
     const AdtDef *d = NULL;
-    if (gx_const(e, f->as.list.items[0], &p, &d) != 2 || !d || !d->is_gadt)
+    if (gx_const(e, f->as.list.items[0], &p, &d) != 2 || !d || !d->is_refined)
         return NULL;
     return d;
 }
@@ -3624,12 +3630,12 @@ static char *gx_form_str(const Form *f) {
  * `(VCons 7 (VNil))` is `(Vec (Succ Zero))`; with an argument whose index is
  * unknown it is `(Vec (Succ ?))`.  A field whose argument's index contradicts
  * another field sharing its variable is a type error, reported here.
- * NULL for a non-GADT. */
+ * NULL for a constructor with no result annotation. */
 static const Form *gadt_infer_ctor_form(Elab *e, const CtorDef *ctor,
                                         const Expr *call_expr, const Form *call,
                                         bool *mismatch) {
     if (mismatch) *mismatch = false;
-    if (!ctor || !ctor->adt || !ctor->adt->is_gadt) return NULL;
+    if (!ctor || !ctor->adt || !ctor->result_type_form) return NULL;
     /* A size term (SZ8's `(Static 0)`, `(Add (Static 1) n)`) is left exactly
      * as declared by gx_subst and matches anything in gx_unify, so a sized
      * GADT's form carries the same size template it always did. */
@@ -3684,7 +3690,7 @@ static bool gx_closed(Elab *e, const Form *f) {
  * elaborates to.  `x` itself when the index is not known. */
 Expr *gadt_refine_to_index(Elab *e, Expr *x) {
     if (!x || x->type.kind != TY_ADT || !x->type.as.adt_.def ||
-        !x->type.as.adt_.def->is_gadt)
+        !x->type.as.adt_.def->is_refined)
         return x;
     const Form *xf = gx_peel(sz_recover_type_form(e, x));
     if (gx_gadt_head(e, xf) != x->type.as.adt_.def || !gx_closed(e, xf))
@@ -3749,6 +3755,24 @@ bool gadt_claim_disagrees(Elab *e, const Form *claim, const Expr *x,
            (gx_peel(x->as.ascribe_.type_form) == claim ||
             x->as.ascribe_.type_form == NULL))
         x = x->as.ascribe_.inner;
+    /* A constructor's declared result can relate two of its own positions --
+     * `Refl : (Equal a a)` -- and the index inferred for the application
+     * cannot say so: an unbound variable is `?`, and `(Equal ? ?)` agrees
+     * with every claim, so `(:: (Refl) (Equal int bool))` minted a false
+     * proof that `coerce` then trusted.  Read the declared result as the
+     * pattern, the claim as the value, so a variable named twice must meet
+     * one type twice.  Bindings from the arguments are the inferred index's
+     * job (below); this only adds what the declaration itself relates. */
+    if (x && x->kind == EX_CALL && x->as.call_.ctor &&
+        x->as.call_.ctor->adt == cd && x->as.call_.ctor->result_type_form) {
+        const Form *decl = gx_peel(x->as.call_.ctor->result_type_form);
+        GxSub dsubs[GX_MAX_SUB];
+        int n_dsubs = 0;
+        if (!gx_unify(e, decl, claim, dsubs, &n_dsubs)) {
+            if (got) *got = decl;
+            return true;
+        }
+    }
     const Form *xf = gx_peel(sz_recover_type_form(e, x));
     if (gx_gadt_head(e, xf) != cd) return false;
     if (xf == claim) return false;
@@ -4273,7 +4297,7 @@ static bool g_elab_call_depth_reported;
  * file scope the way a nested `defn` is (elab_defn), and leave nil in place. */
 static Expr *elab_hoist_nested_type_def(Elab *e, const Form *call, Expr *def) {
     if (!def || e->scope == &e->global) return def;
-    if (def->kind != EX_DEFDATA && def->kind != EX_DEFGADT) return def;
+    if (def->kind != EX_DEFDATA) return def;
     elab_register_file_def(e, def);
     return e_nil(e, call->span);
 }
@@ -5592,7 +5616,7 @@ static Expr *elab_call_inner(Elab *e, Form *call) {
                 call_expr->as.call_.size_index = inferred;
                 sz8_dump_ctor_size(e, ctor, inferred);
                 /* gadt-length-index-not-enforced: the value's phantom index. */
-                if (ctor->adt->is_gadt && call_expr->kind == EX_CALL) {
+                if (ctor->result_type_form && call_expr->kind == EX_CALL) {
                     bool gmis = false;
                     call_expr->as.call_.gadt_form =
                         gadt_infer_ctor_form(e, ctor, call_expr, call, &gmis);
@@ -5839,9 +5863,19 @@ static Expr *elab_call_inner(Elab *e, Form *call) {
                  * 0, and the result stays a bare `Nest` -- so a nested `match`
                  * can't thread the concrete element type into the inner bindings.
                  * Collecting through the app makes `(N (MkPair2 3 4))` infer
-                 * `(Nest int)`. */
+                 * `(Nest int)`.
+                 *
+                 * adt-gadt-unification: in a REFINED type, per constructor --
+                 * one whose annotation pins its own result (`Lit : (Expr
+                 * int)`) is typed by the index machinery above, while an
+                 * unannotated or generic one (`If`, `MkBox : (Box a)`)
+                 * collects like any defdata constructor.  In an unrefined
+                 * type every constructor collects: `(ITok 5)` of `(Tok int)`
+                 * is built at the by-value monomorph its plain-defdata twin
+                 * gets, not at the bare carrier. */
                 if (ctor->adt->n_type_params > 0 &&
-                    !ctor->adt->is_gadt &&
+                    (!ctor->adt->is_refined ||
+                     !ctor_is_refining(ctor->adt, ctor)) &&
                     ctor->adt->n_type_params <= 8) {
                     uint8_t ntp = ctor->adt->n_type_params;
                     Type targs[8];
@@ -8484,7 +8518,7 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
          * Only there -- a bare parameter keeps the bare argument. */
         if (fn_type.kind == TY_FN && fn_type.as.fn.arg_full_types &&
             args[i]->type.kind == TY_ADT && args[i]->type.as.adt_.def &&
-            args[i]->type.as.adt_.def->is_gadt) {
+            args[i]->type.as.adt_.def->is_refined) {
             uint32_t gfi = fn_binding->closure_fn_binding ? i + 1 : i;
             const Type *gft = (gfi < fn_type.as.fn.arity)
                 ? fn_type.as.fn.arg_full_types[gfi] : NULL;

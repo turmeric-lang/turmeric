@@ -373,18 +373,24 @@ element type is itself `Eq`:
 **GADTs (generalized algebraic data types):**
 
 ```lisp
-(defgadt Expr [a]
-  (Lit int                         : (Expr int))
-  (Add (Expr int) (Expr int)       : (Expr int))
-  (Mul (Expr int) (Expr int)       : (Expr int)))
+; A constructor may declare its own result type; one without returns (Expr a).
+(defdata Expr [a]
+  (Lit int            : (Expr int))
+  (IsZero (Expr int)  : (Expr bool))
+  (If (Expr bool) (Expr a) (Expr a)))
 
-(defn eval-expr [e] : int
+; A scrutinee typed (Expr int) cannot be an IsZero, so that arm is not needed.
+(defn eval-int [e : (Expr int)] : int
   (match e
-    (Lit n)   n
-    (Add l r) (+ (eval-expr l) (eval-expr r))
-    (Mul l r) (* (eval-expr l) (eval-expr r))))
+    (Lit n)    n
+    (If c t f) (if (eval-bool c) (eval-int t) (eval-int f))))
 
-(println (eval-expr (Add (Lit 10) (Mul (Lit 4) (Lit 8)))))
+(defn eval-bool [e : (Expr bool)] : bool
+  (match e
+    (IsZero x) (= (eval-int x) 0)
+    (If c t f) (if (eval-bool c) (eval-bool t) (eval-bool f))))
+
+(println (eval-int (If (IsZero (Lit 0)) (Lit 42) (Lit 7))))
 ; => 42
 ```
 
@@ -548,7 +554,7 @@ rather than a public issue. See [`SECURITY.md`](SECURITY.md).
 | Macros (`defmacro`, quasiquote, threading macros) | ✅ |
 | `defstruct`, field access, copy/move annotations | ✅ |
 | ADTs (`defdata`, `match`, exhaustiveness checking) | ✅ |
-| GADTs (`defgadt`, per-constructor type refinement, equality witnesses, `coerce`) | ✅ |
+| GADTs (`defdata` with a per-constructor `: Result`, type refinement, equality witnesses, `coerce`; `defgadt` is deprecated) | ✅ |
 | Structural union types (`A \| B`), `any` top type, gradual typing | ✅ |
 | Intersection types (`A & B`) | ✅ |
 | Higher-ranked types (Rank-2/N `forall`, existential `pack`/`open`) | ✅ |

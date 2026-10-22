@@ -3180,7 +3180,7 @@ static TuriValue native_panic_pred(TuriEnv *env, TuriValue *args, uint32_t n, vo
     return turi_bool(strcmp(v.as_struct->name, "panic") == 0);
 }
 
-/* Native callback for ADT constructors registered by EX_DEFDATA/EX_DEFGADT. */
+/* Native callback for ADT constructors registered by EX_DEFDATA (defdata / defgadt). */
 static TuriValue adt_ctor_native(TuriEnv *env, TuriValue *args, uint32_t n, void *ud) {
     CtorDef *ctor = (CtorDef *)ud;
     TuriValue v = make_struct_val(env, ctor->name, n, args);
@@ -13821,10 +13821,8 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
         return turi_nil();
 
     /* --- G0/G1: ADT and GADT definitions --------------------------------- */
-    case EX_DEFDATA:
-    case EX_DEFGADT: {
-        AdtDef *adt = (e->kind == EX_DEFDATA)
-            ? e->as.defdata_.def : e->as.defgadt_.def;
+    case EX_DEFDATA: {
+        AdtDef *adt = e->as.defdata_.def;
         for (uint32_t ci = 0; ci < adt->n_ctors; ci++) {
             CtorDef *ctor = adt->ctors[ci];
             /* Register each constructor as a native that builds a TuriStruct. */
