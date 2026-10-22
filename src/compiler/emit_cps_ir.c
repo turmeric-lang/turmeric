@@ -685,6 +685,37 @@ static const CTerm *first_unsupported(const CTerm *t) {
     }
 }
 
+/* discontinue-plan: does `t` hold a raising resume (a `discontinue`)
+ * anywhere?  Same traversal as first_unsupported. */
+static bool term_has_raise(const CTerm *t) {
+    if (!t) return false;
+    switch (t->kind) {
+        case CT_LETVAL:   return term_has_raise(t->as.letval.body);
+        case CT_LETPRIM:  return term_has_raise(t->as.letprim.body);
+        case CT_LETCALL:  return term_has_raise(t->as.letcall.body);
+        case CT_LETRAW:   return term_has_raise(t->as.letraw.body);
+        case CT_LETCONT:  return term_has_raise(t->as.letcont.jbody) || term_has_raise(t->as.letcont.body);
+        case CT_IF:       return term_has_raise(t->as.if_.then_) || term_has_raise(t->as.if_.else_);
+        case CT_MATCH:
+            for (uint32_t i = 0; i < t->as.match.n_arms; i++)
+                if (term_has_raise(t->as.match.arms[i].body)) return true;
+            return false;
+        case CT_RESET:    return term_has_raise(t->as.reset.delim) || term_has_raise(t->as.reset.body);
+        case CT_SHIFT:    return term_has_raise(t->as.shift.body);
+        case CT_HANDLE:
+            if (term_has_raise(t->as.handle.delim) || term_has_raise(t->as.handle.body)) return true;
+            for (uint32_t i = 0; i < t->as.handle.n_cases; i++)
+                if (term_has_raise(t->as.handle.cases[i].case_body)) return true;
+            return false;
+        case CT_PERFORM:  return term_has_raise(t->as.perform.body);
+        case CT_RESUME:   return t->as.resume.raise || term_has_raise(t->as.resume.body);
+        case CT_CLONEABLE: return term_has_raise(t->as.cloneable.body);
+        case CT_CALLCC:   return term_has_raise(t->as.callcc.body);
+        case CT_LOOP:     return term_has_raise(t->as.loop.body);
+        default: return false;
+    }
+}
+
 /* serial-receiver-effect-cannot-reach-enclosing-handler: every outward serial
  * receiver in `t` is CPS-emitted (the reset calls its `__cps` twin).  Read by
  * the classification fixpoint, once every entry exists: a function whose
@@ -10910,8 +10941,8 @@ static bool term_resumes_nontail(const CTerm *t, const Binding *k) {
     while (t) {
         switch (t->kind) {
             case CT_RESUME:
-                if (t->as.resume.k.kind == CA_VAR && t->as.resume.k.var == k
-                    && !resume_is_tail(t)) return true;
+                if (!t->as.resume.raise && t->as.resume.k.kind == CA_VAR
+                    && t->as.resume.k.var == k && !resume_is_tail(t)) return true;
                 t = t->as.resume.body; break;
             case CT_PERFORM: t = t->as.perform.body; break;
             case CT_LETVAL:  t = t->as.letval.body;  break;
@@ -10941,7 +10972,8 @@ static bool term_resumes_k_any(const CTerm *t, const Binding *k) {
     while (t) {
         switch (t->kind) {
             case CT_RESUME:
-                if (t->as.resume.k.kind == CA_VAR && t->as.resume.k.var == k) return true;
+                if (!t->as.resume.raise && t->as.resume.k.kind == CA_VAR
+                    && t->as.resume.k.var == k) return true;
                 t = t->as.resume.body; break;
             case CT_PERFORM: t = t->as.perform.body; break;
             case CT_LETVAL:  t = t->as.letval.body;  break;
@@ -10962,8 +10994,13 @@ static bool term_resumes_k_any(const CTerm *t, const Binding *k) {
     return false;
 }
 static bool case_body_tail_resumes(const CTerm *t);
+static bool term_has_raise(const CTerm *t);
 static bool case_resumes_into(const CHandleCase *c) {
+    /* discontinue-plan: a case that discontinues needs dk_perform's `sub`
+     * whole -- its enclosing-handler markers included -- because the body may
+     * catch the raise and go on to perform an outer effect. */
     return c && c->k && !c->resumable_payload && !is_shift_effect(c->effect)
+        && !term_has_raise(c->case_body)
         && (term_resumes_nontail(c->case_body, c->k)
             || (!case_body_tail_resumes(c->case_body) && term_resumes_k_any(c->case_body, c->k)));
 }
@@ -11035,6 +11072,7 @@ static bool term_resumes_k_once_impl(const CTerm *t, const Binding *k, bool allo
                     if (atom_is_binding(&t->as.perform.args[i], k)) return false;
                 t = t->as.perform.body; break;
             case CT_RESUME:
+                if (t->as.resume.raise) return false;
                 if (!atom_is_binding(&t->as.resume.k, k) || atom_is_binding(&t->as.resume.v, k))
                     return false;
                 return !term_mentions_binding(t->as.resume.body, k);
@@ -11092,6 +11130,7 @@ static bool term_k_copied_only(const CTerm *t, const Binding *k) {
         switch (t->kind) {
             case CT_APPCONT: return !atom_is_binding(&t->as.appcont.v, k);
             case CT_RESUME:
+                if (t->as.resume.raise && atom_is_binding(&t->as.resume.k, k)) return false;
                 if (atom_is_binding(&t->as.resume.v, k)) return false;
                 t = t->as.resume.body; break;
             case CT_PERFORM:
@@ -11163,6 +11202,7 @@ static bool term_k_only_resumed(const CTerm *t, const Binding *k) {
         switch (t->kind) {
             case CT_APPCONT: return !atom_is_binding(&t->as.appcont.v, k);
             case CT_RESUME:
+                if (t->as.resume.raise && atom_is_binding(&t->as.resume.k, k)) return false;
                 if (atom_is_binding(&t->as.resume.v, k)) return false;
                 t = t->as.resume.body; break;
             case CT_PERFORM:
@@ -13355,6 +13395,8 @@ static void emit_shift(CE *ce, const CTerm *t) {
  * the handler case's return (KK_RET/KK_PROMPT), with nothing after?  Then the
  * handler does no post-resume work and dk_perform can trampoline it. */
 static bool resume_is_tail(const CTerm *t) {
+    /* discontinue-plan: a raising resume always comes back to the case. */
+    if (t->as.resume.raise) return false;
     const CTerm *b = t->as.resume.body;
     return b && b->kind == CT_APPCONT
         && (b->as.appcont.kont.kind == KK_RET || b->as.appcont.kont.kind == KK_PROMPT)
@@ -13933,6 +13975,38 @@ static void emit_resume(CE *ce, const CTerm *t) {
     /* resume k v = dk_invoke((DK*)k, v); slot-load the result and continue. */
     char *kk = atom_str(ce, &t->as.resume.k);
     char *vv = atom_str(ce, &t->as.resume.v);
+    /* discontinue-plan: `(discontinue k payload)`.  __dk_discontinue raises the
+     * payload at k's perform -- the body's pending defers fire, a catch prompt
+     * in the body takes it and the body goes on (its answer comes back here,
+     * as a resume's would), or else it returns with the panic still raised and
+     * the check below re-raises it here, in the clause.  Never a tail resume:
+     * the case always gets control back (resume_is_tail). */
+    if (t->as.resume.raise) {
+        char *sv = slot_store_reap(ce->ctx, t->as.resume.v.ty, t->as.resume.v.type, vv);
+        Span sp = t->as.resume.raise_span;
+        const char *path = sp.line ? diag_file_path(sp.file_id) : NULL;
+        const char *base = path ? path : "";
+        for (const char *q = base; *q; q++) if (*q == '/' || *q == '\\') base = q + 1;
+        Buf site; buf_init(&site);
+        buf_putc(&site, '"');
+        for (const char *q = base; *q; q++) {
+            if (*q == '\\' || *q == '"') buf_putc(&site, '\\');
+            buf_putc(&site, *q);
+        }
+        buf_putc(&site, '"'); buf_putc(&site, '\0');
+        Buf inv; buf_init(&inv);
+        buf_printf(&inv, "__dk_discontinue((DK *)(%s), %d, (intptr_t)(%s), %s, %u)",
+                   kk, t->as.resume.raise_type, sv, site.data, sp.line);
+        buf_putc(&inv, '\0');
+        char *ld = slot_load(ce->ctx, t->as.resume.x.ty, t->as.resume.x.type, inv.data, false);
+        char *bn = cvar_cname(ce, t->as.resume.x);
+        ce_line(ce, "%s = %s;", bn, ld);
+        buf_free(&inv); buf_free(&site);
+        free(bn); free(ld); free(sv); free(kk); free(vv);
+        cps_panic_check(ce);
+        emit_term(ce, t->as.resume.body);
+        return;
+    }
     /* E7: a TAIL resume directly inside a handler case yields to the entry driver
      * (dk_tail_resume) instead of resuming inline (dk_invoke) -- the trampoline
      * keeps deep effectful recursion flat.  dk_perform installed this case with

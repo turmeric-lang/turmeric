@@ -14,6 +14,7 @@
 
 #include "emit_dk_runtime.h"
 #include "globals.h"  /* compiler config globals */
+#include "types.h"    /* TY_CSTR: __dk_discontinue's message payload */
 
 /* ---- (call/cc f) / (escape f): undelimited escape-continuation runtime ---- */
 
@@ -1789,6 +1790,58 @@ void emit_cps_runtime_prelude(Buf *out) {
 "    intptr_t r = dk_run_impl(c, w, false);\n"
 "    dk_free(c); return r;\n"
 "}\n");
+    /* discontinue-plan: (discontinue k payload) resumes `sub` by raising the
+     * payload at k's perform.  The panic is staged as an emitted panic site
+     * stages it (a cstr payload reads as the message, as `panic`'s does; any
+     * other is a panic-with payload).  When `sub` is the continuation of the
+     * case running now (the innermost pending perform), the perform's ORIGINAL
+     * frames are the body's: the ones up to a catch prompt that takes the panic
+     * fire their pending defers, innermost first, as a panic there would.  If
+     * that prompt is inside the body, the body goes on past it with Err -- run
+     * from a copy of `sub`, as dk_invoke runs a resume, so its value comes back
+     * to the case -- and `sub` counts as copied, so dk_perform does not abandon
+     * the originals again.  Otherwise this returns with the panic still raised,
+     * and the case re-raises it at the discontinue (its panic check), where
+     * dk_perform's case-panicked path takes it on from the handle.  With
+     * nothing above to see the signal (no catch-unwind, no root unwind: another
+     * thread), it ends here, as an uncaught panic does. */
+    buf_printf(out,
+"__attribute__((unused)) static intptr_t __dk_discontinue(DK *sub, int ptype, intptr_t payload, const char *file, int line) {\n"
+"    sub->consumed = 1;\n"
+"    if (tur_panic_in_progress) { tur_panic_root_print(); fprintf(stderr, \"double panic: aborting\\n\"); abort(); }\n"
+"    tur_panic_payload *p = ptype == %d\n"
+"        ? panic_payload_new(ptype, payload ? strdup((const char *)payload) : NULL, file, line, 1)\n"
+"        : panic_payload_new(ptype, (void *)payload, file, line, 0);\n"
+"    if (!tur_handler_chain && !tur_root_unwind) {\n"
+"        if (p->owns_value) fprintf(stderr, \"panic at %%s:%%d: %%s\\n\", file, line, p->value ? (const char *)p->value : \"(no message)\");\n"
+"        else fprintf(stderr, \"panic at %%s:%%d\\n\", file, line);\n"
+"        fflush(NULL); abort();\n"
+"    }\n"
+"    tur_panic_in_progress = 1; global_panic_payload = p; tur_panicking = 1;\n"
+"    DKPendPerform *pp = g_dk_pend_perform;\n"
+"    if (!pp || pp->sub != sub) return 0;\n"
+"    size_t n = 0; DK *o = pp->k;\n"
+"    for (; o && o != pp->H; o = o->next, n++) {\n"
+"        if (__dk_catch_takes(o)) break;\n"
+"        if (o->unwind) { void (*u)(intptr_t) = o->unwind; o->unwind = NULL; u(o->env); }\n"
+"        if (o->kind == DKK_DONE) return 0;\n"
+"    }\n"
+"    if (!o || o == pp->H || !__dk_catch_takes(o)) return 0;\n"
+"    DK *cs = sub; for (size_t i = 0; i < n && cs; i++) cs = cs->next;\n"
+"    if (!cs || cs->kind != DKK_PROMPT || cs->tag != DK_CATCH_TAG) return 0;\n"
+"    tur_panicking = 0; tur_panic_in_progress = 0; global_panic_payload = NULL;\n"
+"    intptr_t err = (intptr_t)tur_box_err((int64_t)(intptr_t)p);\n"
+"    if (cs->catch_reap) {\n"
+"        __dk_reap_ptr(err);\n"
+"        if (p->owns_value && p->value) __dk_reap_ptr((intptr_t)p->value);\n"
+"        __dk_reap_ptr((intptr_t)p);\n"
+"    }\n"
+"    if (sub->ncopy != 255) sub->ncopy++;\n"
+"    DK *c = dk_copy_range(cs->next, NULL);\n"
+"    if (g_dk_driver) return __dk_drive_bounded(c, err);\n"
+"    intptr_t r = dk_run_impl(c, err, false);\n"
+"    dk_free(c); return r;\n"
+"}\n", (int)TY_CSTR);
     /* effect-nontail-resume-under-outer-handler-splits-the-capture: dk_invoke
      * runs a resume on the C stack and hands its value back, so whatever the
      * case does after it -- and the handle's continuation after that -- is not

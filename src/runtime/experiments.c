@@ -431,6 +431,19 @@ static const ExperimentDescriptor EXPERIMENTS[] = {
       "0.64.0",                  /* expires_at -- advisory; never blocks a release */
       XF_LIFECYCLE_PROTOTYPE,
       &g_opt_reflected_measures },
+    /* discontinue (discontinue-plan): `(discontinue k payload)` resumes `k` by
+     * raising a panic at the `perform` it captured -- the body's defers run,
+     * a catch-unwind in the body may take it, and otherwise it is re-raised
+     * at the `discontinue` in the clause.  Gated while the two engines still
+     * disagree on a shape each refuses: compiled, a catch-unwind inside the
+     * clause; interpreted, a ^multishot k whose body catches. */
+    { "discontinue",
+      "`(discontinue k payload)` resumes a handler continuation by raising a panic at its `perform`",
+      "docs/upcoming/discontinue-plan.md",
+      "0.68.0",                  /* introduced */
+      "0.71.0",                  /* expires_at -- advisory; never blocks a release */
+      XF_LIFECYCLE_PROTOTYPE,
+      &g_opt_discontinue },
     /* loop-invariants GRADUATED 2026-10-03, in the 0.61 line (introduced
      * 0.57.0, prototype, advisory expires_at 0.58.0).  `(while c :invariant p
      * ...)` is always on: the runtime checks, the initiation/preservation

@@ -302,7 +302,13 @@ struct CTerm {
          * await owns it (emit_await marks it with __tur_await_own; the reader
          * that takes its value frees it). */
         struct { CAtom fut; CVar x; CTerm *body; bool fresh_fut; }       await;
-        struct { CAtom k; CAtom v; CVar x; CTerm *body; }                 resume;
+        /* raise (discontinue-plan): a `(discontinue k payload)` -- `v` is the
+         * payload, of TypeKind raise_type, and the resume raises a panic at the
+         * perform instead of delivering a value; raise_span is the form's site
+         * (the panic's location).  The handler-case shape predicates treat it
+         * as a use of `k` that is not a resume. */
+        struct { CAtom k; CAtom v; CVar x; CTerm *body;
+                 bool raise; int raise_type; Span raise_span; }           resume;
         /* reap_env: e is a freeable, provably-non-escaping capturing closure
          * whose heap fat-env the direct emitter does NOT free at this leaf
          * position (only emit_value(EX_LET) applies the scoped-env free).  When

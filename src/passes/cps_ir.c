@@ -2971,6 +2971,27 @@ static CTerm *build_await(CpsB *b, Expr *e, CVar x, CTerm *cont, Pending *p) {
     return t;
 }
 
+/* discontinue-plan: `(discontinue k payload)` is a resume that raises (see
+ * cps_ir.h).  A `k` bound as a cloneable wrapper (a fn-payload or __Shift
+ * case) is not a chain the runtime can raise into: NULL, and the caller
+ * evicts. */
+static CTerm *build_discontinue(CpsB *b, Expr *e, CVar x, CTerm *cont, Pending *p) {
+    DiscontinueExpr *d = e->as.discontinue_.discontinue;
+    if (!g_opt_discontinue || !d || !d->k || !d->exception) return NULL;
+    const Expr *kv = ascribe_peel(d->k);
+    if (kv && kv->kind == EX_VAR && kv->as.var.binding && kv->as.var.binding->cont_is_wrapper)
+        return NULL;
+    CTerm *t = new_term(b, CT_RESUME);
+    t->as.resume.k = atomize(b, d->k, p);
+    t->as.resume.v = atomize(b, d->exception, p);
+    t->as.resume.x = x;
+    t->as.resume.body = cont;
+    t->as.resume.raise = true;
+    t->as.resume.raise_type = (int)d->exception->type.kind;
+    t->as.resume.raise_span = e->span;
+    return t;
+}
+
 static CTerm *build_resume(CpsB *b, Expr *e, CVar x, CTerm *cont, Pending *p) {
     ResumeExpr *r = e->as.resume_.resume;
     CTerm *t = new_term(b, CT_RESUME);
@@ -5902,6 +5923,15 @@ static CTerm *cps_tail(CpsB *b, Expr *e, CKont kont) {
             CTerm *core = build_perform(b, e, x, ac, &p);
             return fold_pending(b, &p, core);
         }
+        case EX_DISCONTINUE: {
+            Pending p = {0};
+            CVar x = fresh_cvar(b, &e->type);
+            CTerm *ac = new_term(b, CT_APPCONT);
+            ac->as.appcont.kont = kont; ac->as.appcont.v = atom_cvar(x);
+            CTerm *core = build_discontinue(b, e, x, ac, &p);
+            if (!core) return unsupported_form(b, e);
+            return fold_pending(b, &p, core);
+        }
         case EX_RESUME: {
             Pending p = {0};
             CVar x = fresh_cvar(b, &e->type);
@@ -6363,6 +6393,12 @@ static CTerm *cps_bind(CpsB *b, Expr *e, CVar x, CTerm *rest) {
             CTerm *core = build_perform(b, e, x, rest, &p);
             return fold_pending(b, &p, core);
         }
+        case EX_DISCONTINUE: {
+            Pending p = {0};
+            CTerm *core = build_discontinue(b, e, x, rest, &p);
+            if (!core) return unsupported_form(b, e);
+            return fold_pending(b, &p, core);
+        }
         case EX_RESUME: {
             Pending p = {0};
             CTerm *core = build_resume(b, e, x, rest, &p);
@@ -6651,7 +6687,8 @@ void cps_ir_print(const CTerm *t, FILE *out, int indent) {
             cps_ir_print(t->as.await.body, out, indent);
             break;
         case CT_RESUME:
-            fprintf(out, "let %s = resume ", t->as.resume.x.name);
+            fprintf(out, "let %s = %s ", t->as.resume.x.name,
+                    t->as.resume.raise ? "discontinue" : "resume");
             print_atom(&t->as.resume.k, out); fputc(' ', out);
             print_atom(&t->as.resume.v, out); fputs("\n", out);
             cps_ir_print(t->as.resume.body, out, indent);
