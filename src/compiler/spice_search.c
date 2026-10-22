@@ -442,29 +442,29 @@ typedef struct {
     bool  is_dep;
 } InstalledSlot;
 
-static InstalledSlot *g_slots;
-static int            g_n_slots, g_cap_slots;
+static InstalledSlot *g_islots;
+static int            g_n_islots, g_cap_islots;
 static char         **g_used_roots;
 static int            g_n_used, g_cap_used;
 
 static const InstalledSlot *ss_find_slot(const char *dir) {
     if (!dir) return NULL;
-    for (int i = 0; i < g_n_slots; i++)
-        if (strcmp(g_slots[i].dir, dir) == 0) return &g_slots[i];
+    for (int i = 0; i < g_n_islots; i++)
+        if (strcmp(g_islots[i].dir, dir) == 0) return &g_islots[i];
     return NULL;
 }
 
 static void ss_record_slot(const char *dir, const char *name, const char *root,
                            bool is_dep) {
     if (ss_find_slot(dir)) return;
-    if (g_n_slots >= g_cap_slots) {
-        int nc = g_cap_slots ? g_cap_slots * 2 : 16;
-        InstalledSlot *ns = (InstalledSlot *)realloc(g_slots,
+    if (g_n_islots >= g_cap_islots) {
+        int nc = g_cap_islots ? g_cap_islots * 2 : 16;
+        InstalledSlot *ns = (InstalledSlot *)realloc(g_islots,
                                                      (size_t)nc * sizeof(*ns));
         if (!ns) return;
-        g_slots = ns; g_cap_slots = nc;
+        g_islots = ns; g_cap_islots = nc;
     }
-    InstalledSlot *sl = &g_slots[g_n_slots];
+    InstalledSlot *sl = &g_islots[g_n_islots];
     sl->dir  = strdup(dir);
     sl->name = strdup(name);
     sl->root = strdup(root);
@@ -473,7 +473,7 @@ static void ss_record_slot(const char *dir, const char *name, const char *root,
         free(sl->dir); free(sl->name); free(sl->root);
         return;
     }
-    g_n_slots++;
+    g_n_islots++;
 }
 
 const char *spice_search_installed_slot(const char *dir, bool *out_is_dep) {
