@@ -17,7 +17,7 @@
   proof's `b` when it is a type variable; retire `type-app`. Plan:
   [coerce-result-and-type-app-retirement-plan](../upcoming/coerce-result-and-type-app-retirement-plan.md).
 - Item 6 (interpreter picks the wrong instance for packed `defopaque`): report
-  [turi-packed-defopaque-wrong-instance](../reported/turi-packed-defopaque-wrong-instance.md).
+  [turi-packed-defopaque-wrong-instance](turi-packed-defopaque-wrong-instance.md).
 - Item 7, float casts: decision -- saturate on both; report
   [float-to-int-cast-out-of-range-differs](float-to-int-cast-out-of-range-differs.md)
   (which found the compiled side is a bare C cast too; resolved 2026-10-22,

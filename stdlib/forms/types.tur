@@ -303,10 +303,8 @@
 ;;; mention `a`, so the value cannot leave: returning `v` itself is `open:
 ;;; existential type variable 'a' escapes its scope`. The unpacking uses the
 ;;; evidence packed with the value to choose the operation, so two packed values
-;;; of different types each reach their own instance. The interpreter does this by
-;;; looking at the runtime value, which cannot tell two `defopaque` types over
-;;; `:int` apart: it can pick the wrong instance
-;;; (docs/reported/turi-packed-defopaque-wrong-instance.md).
+;;; of different types each reach their own instance -- two `defopaque` types
+;;; over `:int` included, on every engine.
 ;;;
 ;;; Parameters:
 ;;;   e    -- an existential value

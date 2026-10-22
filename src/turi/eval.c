@@ -1388,6 +1388,12 @@ typedef struct DictBind {
      * dictionary for EACH of K and V, and a class-only key could not tell
      * them apart at the dispatch site. */
     const char               *tyvar;
+    /* turi-packed-defopaque-wrong-instance: a pack-site witness an `open`
+     * bound for its `v` (open_binding, the witness_idx-th constraint), or
+     * NULL.  Only EX_EXISTS_DISPATCH reads these (frame_lookup_open_witness);
+     * the dictionary lookups above skip them. */
+    const struct Binding     *open_binding;
+    uint8_t                   witness_idx;
     struct DictBind          *next;
 } DictBind;
 
@@ -1599,7 +1605,18 @@ static struct TypeClassInstance *frame_lookup_dict(EvalFrame *f,
                                                    const struct TypeClass *tc) {
     for (EvalFrame *cur = f; cur; cur = cur->parent)
         for (DictBind *db = cur->dicts; db; db = db->next)
-            if (db->tc == tc) return db->inst;
+            if (db->tc == tc && !db->open_binding) return db->inst;
+    return NULL;
+}
+
+/* The pack-site witness an enclosing `open` bound for `v`'s idx-th constraint
+ * (EX_EXISTS_OPEN over a wrapped pack), or NULL. */
+static struct TypeClassInstance *frame_lookup_open_witness(EvalFrame *f,
+                                                           const struct Binding *v,
+                                                           uint8_t idx) {
+    for (EvalFrame *cur = f; cur; cur = cur->parent)
+        for (DictBind *db = cur->dicts; db; db = db->next)
+            if (db->open_binding == v && db->witness_idx == idx) return db->inst;
     return NULL;
 }
 
@@ -1612,7 +1629,7 @@ static struct TypeClassInstance *frame_lookup_dict_tyvar(
     if (tyvar)
         for (EvalFrame *cur = f; cur; cur = cur->parent)
             for (DictBind *db = cur->dicts; db; db = db->next)
-                if (db->tc == tc && db->tyvar &&
+                if (db->tc == tc && db->tyvar && !db->open_binding &&
                     (db->tyvar == tyvar || strcmp(db->tyvar, tyvar) == 0))
                     return db->inst;
     return frame_lookup_dict(f, tc);
@@ -1645,8 +1662,8 @@ static TyvarBind *tyvar_bind_alloc(TuriEnv *env) {
 
 static DictBind *dict_bind_alloc(TuriEnv *env) {
     DictBind *db = (DictBind *)env->dict_free;
-    if (!db) return (DictBind *)turi_val_alloc(env, sizeof(DictBind));
-    env->dict_free = db->next;
+    if (db) env->dict_free = db->next;
+    else    db = (DictBind *)turi_val_alloc(env, sizeof(DictBind));
     memset(db, 0, sizeof *db);
     return db;
 }
@@ -9346,6 +9363,25 @@ static uint64_t turi_f2u_sat(double d, uint64_t hi) {
     return v > hi ? hi : v;
 }
 
+/* turi-packed-defopaque-wrong-instance: a constrained `pack` keeps what the
+ * compiled record keeps -- the witnesses its constraints resolved to at the
+ * pack site, where the hidden type is known -- beside the value, as an
+ * `__tur_exists` pair of the value and the pack node (whose `witnesses` the
+ * arena keeps).  `open` unwraps it and binds the witnesses for `v`, so a
+ * method call inside dispatches on them rather than on the runtime value: a
+ * `defopaque` over `:int` is an int at run time, and two of them looked
+ * alike.  An unconstrained pack has nothing to dispatch and stays the bare
+ * value. */
+static const char k_exists_rec[] = "__tur_exists";
+static TuriValue turi_exists_pack_wrap(TuriEnv *env, const Expr *pack, TuriValue v) {
+    if (pack->as.exists_pack_.n_witnesses == 0 || !pack->as.exists_pack_.witnesses)
+        return v;
+    TuriValue fields[2];
+    fields[0] = v;
+    fields[1] = turi_int((int64_t)(intptr_t)pack);
+    return turi_make_struct(env, k_exists_rec, fields, 2);
+}
+
 static TuriValue eval_unary_post(TuriEnv *env, EvalFrame *frame,
                                  const Expr *e, TuriValue v) {
     switch (e->kind) {
@@ -9510,6 +9546,8 @@ static TuriValue eval_unary_post(TuriEnv *env, EvalFrame *frame,
      * (if_narrow_branch), so a narrowed use goes through that same unwrap. */
     case EX_UNION_INJECT:
         return turi_any_box_widen(env, e, v);
+    case EX_EXISTS_PACK:
+        return turi_exists_pack_wrap(env, e, v);
     default:   /* transparent shims: value passes through unchanged */
         return v;
     }
@@ -14602,8 +14640,11 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
     }
 
     /* --- Phase HRT0: exists pack/open — erase existential box ------------- */
-    case EX_EXISTS_PACK:
-        return eval_expr(env, frame, e->as.exists_pack_.value);
+    case EX_EXISTS_PACK: {
+        TuriValue v = eval_expr(env, frame, e->as.exists_pack_.value);
+        if (turi_is_error(v) || env_signaled(env)) return v;
+        return turi_exists_pack_wrap(env, e, v);
+    }
     case EX_EXISTS_OPEN: {
         TuriValue packed = eval_expr(env, frame, e->as.exists_open_.packed);
         if (turi_is_error(packed) || env_signaled(env)) return packed;
@@ -14611,6 +14652,25 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
          * and now, so the frame lives no longer than the enclosing activation
          * -- owned by it, released with it unless something captured it. */
         EvalFrame *ef = eval_frame_new_owned(env, frame);
+        /* turi-packed-defopaque-wrong-instance: unwrap a constrained pack and
+         * bind its witnesses for `v` (turi_exists_pack_wrap). */
+        if (packed.tag == TURI_STRUCT && packed.as_struct &&
+            packed.as_struct->name == k_exists_rec && packed.as_struct->n_fields == 2) {
+            const Expr *pk = (const Expr *)(intptr_t)packed.as_struct->fields[1].as_int;
+            packed = packed.as_struct->fields[0];
+            const Binding *vb = e->as.exists_open_.var_binding;
+            for (uint8_t wi = 0; vb && wi < pk->as.exists_pack_.n_witnesses; wi++) {
+                TypeClassInstance *w = pk->as.exists_pack_.witnesses[wi];
+                if (!w) continue;
+                DictBind *db = dict_bind_alloc(env);
+                db->tc           = w->typeclass;
+                db->inst         = w;
+                db->open_binding = vb;
+                db->witness_idx  = wi;
+                db->next  = ef->dicts;
+                ef->dicts = db;
+            }
+        }
         if (e->as.exists_open_.var_binding)
             frame_bind(env, ef, e->as.exists_open_.var_binding->name->name, packed);
         TuriValue r = eval_expr(env, ef, e->as.exists_open_.body);
@@ -14619,13 +14679,13 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
     }
     case EX_EXISTS_DISPATCH: {
         /* Witness-indirected `open`-site method dispatch.  The compiled path
-         * reads the constraint witness packed into the existential record; the
-         * interpreter erases that record (EX_EXISTS_PACK returns the bare
-         * value), so it re-resolves the instance structurally from the
-         * receiver's runtime concrete type.  This is exact for struct/ADT
-         * payloads; opaque-over-primitive newtypes collapse to their carrier
-         * here, so a heterogeneous opaque collection is a compiled-only
-         * fixture (requires.compiled). */
+         * reads the constraint witness packed into the existential record; so
+         * does this one, through the witnesses the enclosing `open` bound
+         * (turi_exists_pack_wrap).  Without one -- a value that reached the
+         * `open` unpacked -- it re-resolves the instance structurally from the
+         * receiver's runtime concrete type, which is exact for struct/ADT
+         * payloads but collapses an opaque-over-primitive newtype to its
+         * carrier. */
         const TypeClass *tc = e->as.exists_dispatch_.typeclass;
         uint8_t mi = e->as.exists_dispatch_.method_idx;
         uint32_t na = e->as.exists_dispatch_.n_args;
@@ -14637,8 +14697,12 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
             }
         }
         TypeClassEnv *tce = (TypeClassEnv *)env->last_tc_env;
-        TypeClassInstance *match = NULL;
-        if (tce && tc) {
+        /* turi-packed-defopaque-wrong-instance: the witness the pack resolved,
+         * as the compiled record's vtable, when the open bound one. */
+        TypeClassInstance *match = frame_lookup_open_witness(
+            frame, e->as.exists_dispatch_.open_binding, e->as.exists_dispatch_.witness_idx);
+        if (match && match->typeclass != tc) match = NULL;
+        if (!match && tce && tc) {
             const char *head = (na > 0) ? turi_struct_name(argv[0]) : NULL;
             TypeKind prim = TY_UNKNOWN;
             if (!head && na > 0) {
