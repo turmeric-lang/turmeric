@@ -431,67 +431,69 @@ is gone.)
 
 ## The `Equal` GADT and `coerce`
 
-The standard library provides a built-in equality witness GADT:
-
-```turmeric
-; Built into the runtime -- you do not need to declare this yourself.
-; (defdata Equal [a b]
-;   (Refl : (Equal a a)))
-```
-
-```sweet-exp
-; Built into the runtime -- you do not need to declare this yourself.
-; defdata Equal [a b]
-;   (Refl : (Equal a a))
-```
-
-`(Refl)` is the only constructor. Because its return type is `(Equal a a)`,
-constructing `(Refl)` proves that the two type parameters are the same type.
-
-Use `coerce` to convert a value across a proven equality:
+The standard library's equality witness lives in `stdlib/equal.tur`, which is
+not auto-loaded -- `(load "stdlib/equal.tur")`, or declare it yourself:
 
 ```turmeric
 (defdata Equal [a b]
   (Refl : (Equal a a)))
-
-(defn main [] : int
-  (match (Refl)
-    (Refl)
-      (do
-        (println (coerce (Refl) 42))
-        0)))
 ```
 
 ```sweet-exp
 defdata Equal [a b]
   (Refl : (Equal a a))
-
-defn main [] :int
-  match (Refl)
-    (Refl)
-    do
-      println(coerce((Refl) 42))
-      0
 ```
 
-In the `(Refl)` arm the type-checker knows `a = b`, so `coerce` can safely
-reinterpret the value without any runtime overhead.
+`(Refl)` is the only constructor. Because its return type is `(Equal a a)`,
+a `Refl` can only be built at an equal pair: `(:: (Refl) (Equal int int))` is
+a proof, and `(:: (Refl) (Equal int bool))` is TUR-E0001 -- as is a declared
+return or an annotated `let` making that claim.
 
-Symmetry -- turning `(Equal a b)` into `(Equal b a)` -- follows from matching
-on `Refl` and returning `Refl`:
+`coerce` takes a proof and a value, checks that the value has the proof's left
+type, and hands the value back -- no conversion, no code:
 
 ```turmeric
-(defn sym [eq] :(Equal b a)
+(load "stdlib/equal.tur")
+
+(defn main [] : int
+  (let [proof (:: (Refl) (Equal int int))]
+    (println (coerce proof 42))   ; 42
+    0))
+```
+
+```sweet-exp
+load "stdlib/equal.tur"
+
+defn main [] :int
+  let [proof (:: (Refl) (Equal int int))]
+    println(coerce(proof 42))
+    0
+```
+
+With that proof, `(coerce proof 7.1)` is TUR-E0001. `coerce` returns the value
+at its own type; taking the result type from the proof's `b` is
+[coerce-result-and-type-app-retirement-plan](https://github.com/turmeric-lang/turmeric/blob/main/docs/upcoming/coerce-result-and-type-app-retirement-plan.md).
+
+Symmetry -- turning `(Equal a b)` into `(Equal b a)` -- follows from matching
+on `Refl` and returning `Refl`: in the arm `a = b`, so `Refl` is also an
+`(Equal b a)`. The checker accepts the declared result; it does not derive it
+from the arm, so check such a signature by hand:
+
+```turmeric
+(defn sym [a b] [eq : (Equal a b)] : (Equal b a)
   (match eq
     (Refl) (Refl)))
 ```
 
 ```sweet-exp
-defn sym [eq] :(Equal b a)
+defn sym [a b] [eq : (Equal a b)] : (Equal b a)
   match eq
     (Refl)
     (Refl)
 ```
+
+The [cookbook](gadts-cookbook.md#equality-witnesses) has transitivity and a
+typed box.
 
 ---
 

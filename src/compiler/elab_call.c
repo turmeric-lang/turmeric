@@ -3755,6 +3755,24 @@ bool gadt_claim_disagrees(Elab *e, const Form *claim, const Expr *x,
            (gx_peel(x->as.ascribe_.type_form) == claim ||
             x->as.ascribe_.type_form == NULL))
         x = x->as.ascribe_.inner;
+    /* A constructor's declared result can relate two of its own positions --
+     * `Refl : (Equal a a)` -- and the index inferred for the application
+     * cannot say so: an unbound variable is `?`, and `(Equal ? ?)` agrees
+     * with every claim, so `(:: (Refl) (Equal int bool))` minted a false
+     * proof that `coerce` then trusted.  Read the declared result as the
+     * pattern, the claim as the value, so a variable named twice must meet
+     * one type twice.  Bindings from the arguments are the inferred index's
+     * job (below); this only adds what the declaration itself relates. */
+    if (x && x->kind == EX_CALL && x->as.call_.ctor &&
+        x->as.call_.ctor->adt == cd && x->as.call_.ctor->result_type_form) {
+        const Form *decl = gx_peel(x->as.call_.ctor->result_type_form);
+        GxSub dsubs[GX_MAX_SUB];
+        int n_dsubs = 0;
+        if (!gx_unify(e, decl, claim, dsubs, &n_dsubs)) {
+            if (got) *got = decl;
+            return true;
+        }
+    }
     const Form *xf = gx_peel(sz_recover_type_form(e, x));
     if (gx_gadt_head(e, xf) != cd) return false;
     if (xf == claim) return false;

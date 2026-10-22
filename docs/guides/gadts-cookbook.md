@@ -274,126 +274,153 @@ not provide. The pattern above shows the core idea with fixed arity.
 
 ## Equality Witnesses
 
-The built-in `Equal` GADT lets you carry proofs of type equality across
-function boundaries. Use `coerce` to convert values across proven equalities.
+An `Equal` value is a proof that two types are the same. Its one constructor,
+`Refl : (Equal a a)`, can only be built at an equal pair, and matching on it
+tells the checker, inside the arm, that the two parameters are one type.
 
 ```turmeric
-; Equal is built-in; you can also declare it yourself:
-; (defdata Equal [a b]
-;   (Refl : (Equal a a)))
+; Equal and Refl live in stdlib/equal.tur, which is not auto-loaded. The
+; whole declaration is one line:
+;   (defdata Equal [a b] (Refl : (Equal a a)))
+(load "stdlib/equal.tur")
 
-; Symmetry: (Equal a b) -> (Equal b a)
-; In the Refl arm a = b, so Refl also has type (Equal b a).
-(defn sym [eq] :(Equal b a)
+; Symmetry: (Equal a b) -> (Equal b a).
+; In the Refl arm a = b, so Refl is also an (Equal b a).
+(defn sym [a b] [eq : (Equal a b)] : (Equal b a)
   (match eq
     (Refl) (Refl)))
 
-; Transitivity: (Equal a b) -> (Equal b c) -> (Equal a c)
-; Both Refl arms unify a=b and b=c, giving a=c.
-(defn trans [ab bc] :(Equal a c)
+; Transitivity: (Equal a b) -> (Equal b c) -> (Equal a c).
+(defn trans [a b c] [ab : (Equal a b) bc : (Equal b c)] : (Equal a c)
   (match ab
-    (Refl)
-      (match bc
-        (Refl) (Refl))))
+    (Refl) (match bc
+             (Refl) (Refl))))
 
-; coerce uses an equality proof to safely reinterpret a value.
-; No cast instruction is emitted -- it is zero-overhead.
-(defn use-eq [eq x] : int
-  (match eq
-    (Refl)
-      ; In this arm a = int (from the Refl refinement)
-      ; so x : a is the same as x : int
-      (+ x 1)))
+; coerce checks that x has the proof's left type and hands x back:
+; nothing is converted and no code is emitted.
+(defn use-eq [eq : (Equal int int) x : int] : int
+  (+ (coerce eq x) 1))
 
 (defn main [] : int
-  ; Construct a proof that int = int
-  (let [proof (Refl)]
-    (println (use-eq proof 41))   ; 42
-    (println (coerce proof 100))) ; 100 -- zero overhead
+  ; Refl at int = int; an unequal pair is a TUR-E0001 here.
+  (let [proof (:: (Refl) (Equal int int))]
+    (println (use-eq proof 41))               ; 42
+    (println (use-eq (sym proof) 99))         ; 100
+    (println (use-eq (trans proof proof) 0))  ; 1
+    (println (coerce proof 100)))             ; 100
   0)
 ```
 
 ```sweet-exp
-; Equal is built-in; you can also declare it yourself:
-; defdata Equal [a b]
-;   (Refl : (Equal a a))
+; Equal and Refl live in stdlib/equal.tur, which is not auto-loaded. The
+; whole declaration is one line:
+;   defdata Equal [a b] (Refl : (Equal a a))
+load "stdlib/equal.tur"
 
-; Symmetry: (Equal a b) -> (Equal b a)
-; In the Refl arm a = b, so Refl also has type (Equal b a).
-defn sym [eq] :(Equal b a)
+; Symmetry: (Equal a b) -> (Equal b a).
+; In the Refl arm a = b, so Refl is also an (Equal b a).
+defn sym [a b] [eq : (Equal a b)] : (Equal b a)
   match eq
     (Refl)
     (Refl)
 
-; Transitivity: (Equal a b) -> (Equal b c) -> (Equal a c)
-; Both Refl arms unify a=b and b=c, giving a=c.
-defn trans [ab bc] :(Equal a c)
+; Transitivity: (Equal a b) -> (Equal b c) -> (Equal a c).
+defn trans [a b c] [ab : (Equal a b) bc : (Equal b c)] : (Equal a c)
   match ab
     (Refl)
     match bc
       (Refl)
       (Refl)
 
-; coerce uses an equality proof to safely reinterpret a value.
-; No cast instruction is emitted -- it is zero-overhead.
-defn use-eq [eq x] :int
-  match eq
-    (Refl)
-    ; In this arm a = int (from the Refl refinement)
-    ; so x : a is the same as x : int
-    {x + 1}
+; coerce checks that x has the proof's left type and hands x back:
+; nothing is converted and no code is emitted.
+defn use-eq [eq : (Equal int int) x : int] :int
+  {coerce(eq x) + 1}
 
 defn main [] :int
-  ; Construct a proof that int = int
-  let [proof (Refl)]
+  ; Refl at int = int; an unequal pair is a TUR-E0001 here.
+  let [proof (:: (Refl) (Equal int int))]
     println(use-eq(proof 41))
+    println(use-eq(sym(proof) 99))
+    println(use-eq(trans(proof proof) 0))
     println(coerce(proof 100))
   0
 ```
 
-### Using `Equal` to implement a typed heterogeneous container
+What the checker holds you to, and what it does not:
+
+- **A proof can only claim an equal pair.** `(:: (Refl) (Equal int bool))` is
+  TUR-E0001 (`ascription declares (Equal int bool) but the expression has type
+  (Equal a a)`), and so is a declared return or an annotated `let` that makes
+  that claim -- `Refl`'s declared result relates its two positions, and the
+  claim must meet one type in both.
+- **`coerce` checks the value against the proof.** With `proof : (Equal int
+  int)`, `(coerce proof 7.1)` is TUR-E0001 (`the proof is about a value of
+  type int, but this value has type float`).
+- **`coerce` does not change the value's type.** It hands `x` back at `x`'s own
+  type, so `(defn conv [a b] [eq : (Equal a b) x : a] : b (coerce eq x))` does
+  not type-check yet; taking the result type from the proof's `b` is
+  [coerce-result-and-type-app-retirement-plan](https://github.com/turmeric-lang/turmeric/blob/main/docs/upcoming/coerce-result-and-type-app-retirement-plan.md).
+- **A declared result is not derived from the arm.** `sym`'s `(Equal b a)` is
+  accepted, but so would a wrong signature be: the arm's `a = b` refines the
+  arm's bindings, it is not used to check the function's declared result.
+
+### A typed box: the index decides which arms a match needs
+
+A constructor's result index travels with the value, so a function that names
+the index it accepts needs only the constructors that produce it, and a call
+with a value of another index is rejected.
 
 ```turmeric
-; A box that remembers the type of its contents via a witness.
+; A box whose type index says what it holds.
 (defdata TypeBox [a]
   (MkBox     int  : (TypeBox int))
   (MkBoolBox bool : (TypeBox bool)))
 
-; Open a TypeBox knowing it holds an int.
-(defn open-int-box [box eq] : int
+; A (TypeBox int) cannot be a MkBoolBox, so that arm is left out -- and
+; (open-int-box (MkBoolBox true)) is a TUR-E0001 at the call.
+(defn open-int-box [box : (TypeBox int)] : int
   (match box
-    (MkBox n)
-      (match eq
-        ; In this arm a = int, so coerce is safe
-        (Refl) (coerce eq n))
-    (MkBoolBox _) -1))
+    (MkBox n) n))
+
+; A box whose index the function does not fix needs every arm.
+(defn box-weight [a] [box : (TypeBox a)] : int
+  (match box
+    (MkBox n)     n
+    (MkBoolBox b) (if b 1 0)))
 
 (defn main [] : int
-  (let [b (MkBox 99)]
-    (println (open-int-box b (Refl))))  ; 99
+  (println (open-int-box (MkBox 99)))      ; 99
+  (println (box-weight (MkBoolBox true)))  ; 1
+  (println (box-weight (MkBox 7)))         ; 7
   0)
 ```
 
 ```sweet-exp
-; A box that remembers the type of its contents via a witness.
+; A box whose type index says what it holds.
 defdata TypeBox [a]
   (MkBox     int  : (TypeBox int))
   (MkBoolBox bool : (TypeBox bool))
 
-; Open a TypeBox knowing it holds an int.
-defn open-int-box [box eq] :int
+; A (TypeBox int) cannot be a MkBoolBox, so that arm is left out -- and
+; (open-int-box (MkBoolBox true)) is a TUR-E0001 at the call.
+defn open-int-box [box : (TypeBox int)] :int
   match box
     (MkBox n)
-    match eq
-      ; In this arm a = int, so coerce is safe
-      (Refl)
-      coerce(eq n)
-    (MkBoolBox _)
-    -1
+    n
+
+; A box whose index the function does not fix needs every arm.
+defn box-weight [a] [box : (TypeBox a)] :int
+  match box
+    (MkBox n)
+    n
+    (MkBoolBox b)
+    if b 1 0
 
 defn main [] :int
-  let [b MkBox(99)]
-    println(open-int-box(b (Refl)))
+  println(open-int-box(MkBox(99)))
+  println(box-weight(MkBoolBox(true)))
+  println(box-weight(MkBox(7)))
   0
 ```
 

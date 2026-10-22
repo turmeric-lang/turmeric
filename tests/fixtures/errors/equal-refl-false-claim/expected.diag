@@ -1,0 +1,3 @@
+'mint' declares return type (Equal int bool) but its body has type (Equal a a)
+let binding 'p': annotated (Equal float int), but the initializer has type (Equal a a)
+ascription declares (Equal int cstr) but the expression has type (Equal a a)
