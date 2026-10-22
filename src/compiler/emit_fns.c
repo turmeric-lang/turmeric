@@ -5626,6 +5626,8 @@ static void emit_fn_def_body(EmitCtx *ctx, Buf *file, const Expr *e) {
     }
     const char *saved_current_fn_ret_ctype = ctx->current_fn_ret_ctype;
     ctx->current_fn_ret_ctype = current_fn_ret_ctype_eff;
+    bool saved_in_user_main = ctx->in_user_main;
+    ctx->in_user_main = is_main_check;
     /* byval-spine-drop-past-early-exit: see EmitCtx.current_fn_spine_drop_safe.
      * Decided from the SIGNATURE, not the body: the exits the channel fires at
      * hand exactly the result (a `return`) or the parameters (a back-edge) to
@@ -6469,6 +6471,7 @@ static void emit_fn_def_body(EmitCtx *ctx, Buf *file, const Expr *e) {
         buf_puts(file, "__tur_static_init();\n");
         ctx->indent -= 4;
         emit_win_binary_stdio_prologue(file);
+        emit_main_root_unwind_prologue(file);
     }
 
     /* CLI-ARGS: build *args* cons list from argv[1..argc-1] before user code runs.
@@ -6889,6 +6892,7 @@ static void emit_fn_def_body(EmitCtx *ctx, Buf *file, const Expr *e) {
     free((void*)ctx->env_var_name);
     ctx->env_var_name = saved_env_var_name;
     ctx->current_fn_ret_ctype = saved_current_fn_ret_ctype;
+    ctx->in_user_main = saved_in_user_main;
     ctx->current_fn_spine_drop_safe = saved_current_fn_spine_drop_safe;
     ctx->own_cur_fn = saved_own_cur_fn;
     ctx->tail_void = saved_tail_void;

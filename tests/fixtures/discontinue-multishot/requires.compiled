@@ -1,0 +1,1 @@
+the interpreter's fiber runtime is single-shot (turi-fiber-handle-defers-fire-at-the-wrong-time)

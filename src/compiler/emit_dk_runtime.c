@@ -14,6 +14,7 @@
 
 #include "emit_dk_runtime.h"
 #include "globals.h"  /* compiler config globals */
+#include "types.h"    /* TY_CSTR: __dk_discontinue's message payload */
 
 /* ---- (call/cc f) / (escape f): undelimited escape-continuation runtime ---- */
 
@@ -656,6 +657,13 @@ void emit_cps_runtime_prelude(Buf *out) {
 " * the chain up to the nearest prompt. Faithful port of src/runtime/cps_prompt.c.\n"
 " * Capture is O(depth-of-slice) and unbounded -- no 16-frame ceiling. */\n"
 "#define DK_ROOT_TAG 0\n"
+/* cps-catch-unwind-cannot-cross-an-effect-capture: a catch-unwind's prompt.
+ * No shift targets it (a reset's prompt is tag 1, an await's the root's).
+ * A catch prompt a panic must not reach -- one inside a handled body whose
+ * handler case panicked, or inside a reset whose shift body did -- is retagged
+ * DK_DEAD_CATCH_TAG, so the panic passes it. */
+"#define DK_CATCH_TAG (-31337)\n"
+"#define DK_DEAD_CATCH_TAG (-31338)\n"
 "typedef struct DK DK;\n"
 "typedef intptr_t (*DKFrame)(intptr_t env, intptr_t value);\n"
 "typedef intptr_t (*DKBody)(intptr_t env, DK *subk);\n"
@@ -807,12 +815,17 @@ void emit_cps_runtime_prelude(Buf *out) {
 "    bool copy_tail;       /* dk_resume_into's copy ends here: body_env is its head */\n"
 "    bool k_copied_only;   /* case only copies its k: dk_perform's sub dies with the case */\n"
 "    bool k_last;          /* a resume site: the case's last use of this k (emit_resume) */\n"
-"    bool copy_last;       /* dk_resume_into's copy ends at this node: body_env is its head */\n");
+"    bool copy_last;       /* dk_resume_into's copy ends at this node: body_env is its head */\n"
+/* cps-catch-unwind-cannot-cross-an-effect-capture: a catch prompt whose
+ * Result is bound by a let it provably does not escape -- the box it makes
+ * (and an Err's payload) goes on the reap list for the boundary free. */
+"    bool catch_reap;      /* catch prompt: reap the Ok / Err box it makes */\n");
     buf_puts(out,
 "};\n"
 "/* Is the chain from `n` on (n included) single-shot?  See the `ss` field. */\n"
 "static bool __dk_ss_after(const DK *n) {\n"
-"    return n->ss && !((n->kind == DKK_PROMPT && n->tag != DK_ROOT_TAG)\n"
+"    return n->ss && !((n->kind == DKK_PROMPT && n->tag != DK_ROOT_TAG\n"
+"                       && n->tag != DK_CATCH_TAG && n->tag != DK_DEAD_CATCH_TAG)\n"
 "                      || n->kind == DKK_SHIFT || n->kind == DKK_SHIFT0\n"
 "                      || (n->kind == DKK_HANDLER && n->multishot));\n"
 "}\n"
@@ -853,12 +866,34 @@ void emit_cps_runtime_prelude(Buf *out) {
  * already-walked chain again (a nested driver, then its caller) finds the
  * fields cleared.  An unwinder runs with the signal cleared and raises it
  * again (the emitter writes that into it). */
+/* Does catch prompt `k` take the panic in flight?  A catch-unwind (env -1)
+ * takes any; a catch-panic-of only a payload of its type. */
+"static bool __dk_catch_takes(const DK *k) {\n"
+"    return k->kind == DKK_PROMPT && k->tag == DK_CATCH_TAG\n"
+"        && ((int)k->env < 0 || (global_panic_payload && global_panic_payload->type_tag == (int)k->env));\n"
+"}\n"
+/* The walk stops at a catch prompt that takes the panic: the frames past it
+ * are not abandoned -- the catch delivers Err to them (__dk_panic_catch). */
 "__attribute__((unused)) static void __dk_panic_abandon(DK *k) {\n"
 "    for (; k; k = k->next) {\n"
+"        if (__dk_catch_takes(k)) break;\n"
 "        if (k->unwind) { void (*u)(intptr_t) = k->unwind; k->unwind = NULL; u(k->env); }\n"
 "        if (k->kind == DKK_DONE) break;\n"
 "    }\n"
 "}\n"
+    );
+    buf_puts(out,
+/* The catch prompts on [k, end) can no longer be reached by the panic in
+ * flight: a handler case or a shift body runs outside the delimited part it
+ * cut off, so its panic passes them.  Those nodes are dead (the case / body
+ * abandoned them; copies are other nodes). */
+"__attribute__((unused)) static void __dk_catch_kill(DK *k, const DK *end) {\n"
+"    for (; k && k != end; k = k->next) {\n"
+"        if (k->kind == DKK_PROMPT && k->tag == DK_CATCH_TAG) k->tag = DK_DEAD_CATCH_TAG;\n"
+"        if (k->kind == DKK_DONE) break;\n"
+"    }\n"
+"}\n"
+
 /* cps-defer-skipped-on-abortive-effect: the chain an ABORTIVE handler case
  * abandons -- the perform's frames up to its handler `H`, exclusive.  When the
  * case returns without having copied its continuation (dk_perform checks
@@ -899,6 +934,10 @@ void emit_cps_runtime_prelude(Buf *out) {
 "}\n"
 "static DK *dk_prompt(int tag, DK *next) {\n"
 "    DK *k = dk_new(DKK_PROMPT, next); k->tag = tag; return k;\n"
+"}\n"
+/* A catch-unwind's prompt; env is catch-panic-of's payload type, -1 for any. */
+"__attribute__((unused)) static DK *dk_prompt_catch(int ptype, int reap, DK *next) {\n"
+"    DK *k = dk_new(DKK_PROMPT, next); k->tag = DK_CATCH_TAG; k->env = ptype; k->catch_reap = reap != 0; return k;\n"
 "}\n"
 "static DK *dk_shift_impl(DKKind kind, int tag, DKBody body, intptr_t env, DK *next) {\n"
 "    DK *k = dk_new(kind, next); k->tag = tag; k->body = body; k->body_env = env; return k;\n"
@@ -1042,6 +1081,7 @@ void emit_cps_runtime_prelude(Buf *out) {
  * boundary happened to sit.  case_delivers IS copied: it describes the case
  * fn's delivery protocol, which a re-installed marker copy shares. */
 "    c->case_delivers = n->case_delivers;\n"
+"    c->catch_reap = n->catch_reap;   /* a copied catch prompt reaps the box it makes too */\n"
 "    c->resume_into = n->resume_into;\n"
 "    c->resume_once = n->resume_once;\n"
 "    c->resume_once_dyn = n->resume_once_dyn; c->multishot = n->multishot; c->ss = n->ss;\n"
@@ -1580,6 +1620,44 @@ void emit_cps_runtime_prelude(Buf *out) {
 "    free((void *)env);\n"
 "}\n");
     buf_puts(out,
+/* cps-catch-unwind-cannot-cross-an-effect-capture: a panic with chain `k` in
+ * hand.  Abandon the frames up to the nearest catch prompt that takes it (their
+ * pending defers fire), and if there is one, consume the panic: *err is the
+ * Err box (the payload, as tur_catch_unwind_box's panic arm builds it) and the
+ * result's `k` is the chain to deliver it to -- past the prompt, whose Ok
+ * boxing it skips.  NULL: nothing on `k` catches it; it keeps propagating. */
+/* Returned by value, not through an out-parameter: an address-taken local
+ * in dk_run_impl / dk_perform would be a red-zoned stack slot in every frame
+ * of a deep chain under ASan. */
+"typedef struct { DK *k; intptr_t err; } DKCaught;\n"
+"__attribute__((unused)) static DKCaught __dk_panic_catch(DK *k) {\n"
+"    DKCaught c = { NULL, 0 };\n"
+"    __dk_panic_abandon(k);\n"
+"    for (; k; k = k->next) {\n"
+"        if (__dk_catch_takes(k)) break;\n"
+"        if (k->kind == DKK_DONE) return c;\n"
+"    }\n"
+"    if (!k) return c;\n"
+"    tur_panicking = 0; tur_panic_in_progress = 0;\n"
+"    tur_panic_payload *p = global_panic_payload; global_panic_payload = NULL;\n"
+"    c.err = (intptr_t)tur_box_err((int64_t)(intptr_t)p);\n"
+"    if (k->catch_reap) {\n"
+"        __dk_reap_ptr(c.err);\n"
+"        if (p) { if (p->owns_value && p->value) __dk_reap_ptr((intptr_t)p->value); __dk_reap_ptr((intptr_t)p); }\n"
+"    }\n"
+"    c.k = k->next;\n"
+"    return c;\n"
+"}\n"
+/* A handler case panicked: the perform's chain k..H is dead, and the case ran
+ * at H, so only a catch prompt past H can take the panic.  dk_perform consumes
+ * the chain, so it delivers the Err itself when one does (the caller returns
+ * dk_run(result, *err)); NULL: the panic keeps propagating. */
+"__attribute__((unused)) static DKCaught __dk_case_panicked(DK *k, const DK *H) {\n"
+"    __dk_catch_kill(k, H);\n"
+"    return __dk_panic_catch(k);\n"
+"}\n"
+    );
+    buf_puts(out,
 /* dk_resume_into's copy with a borrowed tail has run through its last node:
  * dead when nothing copied it (fix direction 2).  `last` goes with it. */
 "static void __dk_copy_last_release(DK *last) {\n"
@@ -1590,14 +1668,24 @@ void emit_cps_runtime_prelude(Buf *out) {
 "    while (k) {\n"
 "        switch (k->kind) {\n"
 "            case DKK_DONE: return v;\n"
-"            case DKK_PROMPT: case DKK_HANDLER: { DK *n = k->next; if (k->copy_last) __dk_copy_last_release(k); k = n; break; }\n"
+"            case DKK_PROMPT: case DKK_HANDLER: {\n"
+"                DK *n = k->next;\n"
+"                /* A catch prompt reached normally: the thunk returned, so Ok. */\n"
+"                if (k->kind == DKK_PROMPT && (k->tag == DK_CATCH_TAG || k->tag == DK_DEAD_CATCH_TAG)) {\n"
+"                    v = (intptr_t)tur_box_ok((int64_t)v);\n"
+"                    if (k->catch_reap) __dk_reap_ptr(v);\n"
+"                }\n"
+"                if (k->copy_last) __dk_copy_last_release(k);\n"
+"                k = n; break; }\n"
 "            /* cps-body-panic-not-propagated: a frame whose body panicked under a\n"
 "             * handler returned by signal; the rest of the chain is the rest of the\n"
 "             * program past the panic and must not run.  Its nodes are reap-owned. */\n"
 "            case DKK_FRAME: {\n"
 "                DK *self = k; intptr_t senv = k->env;\n"
 "                k->unwind = NULL;   /* a run frame fires its own pending defers */\n"
-"                v = k->fn(k->env, v); if (tur_panicking) { __dk_panic_abandon(k->next); return 0; } k = k->next;\n"
+"                v = k->fn(k->env, v);\n"
+"                if (tur_panicking) { DKCaught c = __dk_panic_catch(k->next); if (!c.k) return 0; k = c.k; v = c.err; break; }\n"
+"                k = k->next;\n"
 "                /* The fn is done with its env, so it can follow the node. */\n"
 "                if (self->join_once && __dk_join_release_node(self)) __dk_join_release_env(senv);\n"
 "                else if (self->copy_last) __dk_copy_last_release(self);\n"
@@ -1657,7 +1745,11 @@ void emit_cps_runtime_prelude(Buf *out) {
 "                sub = dk_append(sub, tail);\n"
 "                intptr_t bodyval = k->body(k->body_env, sub);\n"
 "                dk_free(sub);\n"
-"                if (tur_panicking) { __dk_panic_abandon(k->next); return bodyval; }\n"
+"                if (tur_panicking) {\n"
+"                    /* The shift body ran at the prompt, outside the part it cut off. */\n"
+"                    __dk_catch_kill(k->next, to_root ? NULL : P);\n"
+"                    DKCaught c = __dk_panic_catch(k->next); if (!c.k) return bodyval; k = c.k; v = c.err; break;\n"
+"                }\n"
 "                if (to_root) return bodyval;\n"
 "                k = P->next; v = bodyval; break;\n"
 "            }\n"
@@ -1698,6 +1790,58 @@ void emit_cps_runtime_prelude(Buf *out) {
 "    intptr_t r = dk_run_impl(c, w, false);\n"
 "    dk_free(c); return r;\n"
 "}\n");
+    /* discontinue-plan: (discontinue k payload) resumes `sub` by raising the
+     * payload at k's perform.  The panic is staged as an emitted panic site
+     * stages it (a cstr payload reads as the message, as `panic`'s does; any
+     * other is a panic-with payload).  When `sub` is the continuation of the
+     * case running now (the innermost pending perform), the perform's ORIGINAL
+     * frames are the body's: the ones up to a catch prompt that takes the panic
+     * fire their pending defers, innermost first, as a panic there would.  If
+     * that prompt is inside the body, the body goes on past it with Err -- run
+     * from a copy of `sub`, as dk_invoke runs a resume, so its value comes back
+     * to the case -- and `sub` counts as copied, so dk_perform does not abandon
+     * the originals again.  Otherwise this returns with the panic still raised,
+     * and the case re-raises it at the discontinue (its panic check), where
+     * dk_perform's case-panicked path takes it on from the handle.  With
+     * nothing above to see the signal (no catch-unwind, no root unwind: another
+     * thread), it ends here, as an uncaught panic does. */
+    buf_printf(out,
+"__attribute__((unused)) static intptr_t __dk_discontinue(DK *sub, int ptype, intptr_t payload, const char *file, int line) {\n"
+"    sub->consumed = 1;\n"
+"    if (tur_panic_in_progress) { tur_panic_root_print(); fprintf(stderr, \"double panic: aborting\\n\"); abort(); }\n"
+"    tur_panic_payload *p = ptype == %d\n"
+"        ? panic_payload_new(ptype, payload ? strdup((const char *)payload) : NULL, file, line, 1)\n"
+"        : panic_payload_new(ptype, (void *)payload, file, line, 0);\n"
+"    if (!tur_handler_chain && !tur_root_unwind) {\n"
+"        if (p->owns_value) fprintf(stderr, \"panic at %%s:%%d: %%s\\n\", file, line, p->value ? (const char *)p->value : \"(no message)\");\n"
+"        else fprintf(stderr, \"panic at %%s:%%d\\n\", file, line);\n"
+"        fflush(NULL); abort();\n"
+"    }\n"
+"    tur_panic_in_progress = 1; global_panic_payload = p; tur_panicking = 1;\n"
+"    DKPendPerform *pp = g_dk_pend_perform;\n"
+"    if (!pp || pp->sub != sub) return 0;\n"
+"    size_t n = 0; DK *o = pp->k;\n"
+"    for (; o && o != pp->H; o = o->next, n++) {\n"
+"        if (__dk_catch_takes(o)) break;\n"
+"        if (o->unwind) { void (*u)(intptr_t) = o->unwind; o->unwind = NULL; u(o->env); }\n"
+"        if (o->kind == DKK_DONE) return 0;\n"
+"    }\n"
+"    if (!o || o == pp->H || !__dk_catch_takes(o)) return 0;\n"
+"    DK *cs = sub; for (size_t i = 0; i < n && cs; i++) cs = cs->next;\n"
+"    if (!cs || cs->kind != DKK_PROMPT || cs->tag != DK_CATCH_TAG) return 0;\n"
+"    tur_panicking = 0; tur_panic_in_progress = 0; global_panic_payload = NULL;\n"
+"    intptr_t err = (intptr_t)tur_box_err((int64_t)(intptr_t)p);\n"
+"    if (cs->catch_reap) {\n"
+"        __dk_reap_ptr(err);\n"
+"        if (p->owns_value && p->value) __dk_reap_ptr((intptr_t)p->value);\n"
+"        __dk_reap_ptr((intptr_t)p);\n"
+"    }\n"
+"    if (sub->ncopy != 255) sub->ncopy++;\n"
+"    DK *c = dk_copy_range(cs->next, NULL);\n"
+"    if (g_dk_driver) return __dk_drive_bounded(c, err);\n"
+"    intptr_t r = dk_run_impl(c, err, false);\n"
+"    dk_free(c); return r;\n"
+"}\n", (int)TY_CSTR);
     /* effect-nontail-resume-under-outer-handler-splits-the-capture: dk_invoke
      * runs a resume on the C stack and hands its value back, so whatever the
      * case does after it -- and the handle's continuation after that -- is not
@@ -1984,7 +2128,7 @@ void emit_cps_runtime_prelude(Buf *out) {
 "        k->inplace_head = true;\n"
 "        g_dk_case_reopen_hnode = H;\n"
 "        { intptr_t r0 = H->handler(H->handler_env, arg, k);  /* ends in dk_tail_resume -> longjmp */\n"
-"          if (tur_panicking) __dk_panic_abandon(k);\n"
+"          if (tur_panicking) { DKCaught pc = __dk_case_panicked(k, H); if (pc.k) return dk_run(pc.k, pc.err); }\n"
 "          return r0; }\n"
 "    }\n");
     /* effect-copy-path-tail-resume-delivers-out-of-order: the copy branch.  A
@@ -2005,7 +2149,7 @@ void emit_cps_runtime_prelude(Buf *out) {
 "        DK *sub = dk_copy_range(k, NULL);\n"
 "        g_dk_case_reopen_hnode = H;  /* re-opening: case reads its enclosing markers */\n"
 "        { intptr_t r0 = H->handler(H->handler_env, arg, sub);  /* ends in dk_tail_resume -> longjmp */\n"
-"          if (tur_panicking) __dk_panic_abandon(k);\n"
+"          if (tur_panicking) { DKCaught pc = __dk_case_panicked(k, H); if (pc.k) return dk_run(pc.k, pc.err); }\n"
 "          return r0; }\n"
 "    }\n"
     /* effect-nontail-resume-copies-held-until-outer-entry: the in-place branch
@@ -2031,10 +2175,10 @@ void emit_cps_runtime_prelude(Buf *out) {
 "        intptr_t r0 = H->handler(H->handler_env, arg, k);   /* a resume ends in dk_resume_into -> longjmp */\n"
 "        g_dk_pend_perform = pp.up;\n"
 "        k->resume_inplace = false; k->body_env = 0;\n"
-"        if (tur_panicking) { __dk_panic_abandon(k); return r0; }\n"
+"        if (tur_panicking) { DKCaught pc = __dk_case_panicked(k, H); if (pc.k) return dk_run(pc.k, pc.err); return r0; }\n"
 "        __dk_abort_abandon(k, H);   /* answered without resuming: k..H never run */\n"
 "        if (!tur_panicking) __dk_abort_pending(k, H, pp.up);\n"
-"        if (tur_panicking) { __dk_panic_abandon(H); return r0; }\n"
+"        if (tur_panicking) { DKCaught pc = __dk_panic_catch(H); if (pc.k) return dk_run(pc.k, pc.err); return r0; }\n"
 "        return r0;   /* case_delivers: it delivered through the real chain */\n"
 "    }\n"
 "    DK *sub = dk_copy_range(k, H);\n");
@@ -2103,7 +2247,9 @@ void emit_cps_runtime_prelude(Buf *out) {
 "    DKPendPerform pp = { k, H, sub, g_dk_pend_perform }; g_dk_pend_perform = &pp;\n"
 "    intptr_t r = H->handler(H->handler_env, arg, sub);\n"
 "    g_dk_pend_perform = pp.up;\n"
-"    if (tur_panicking) { __dk_panic_abandon(k); return r; }   /* the case panicked: the perform's chain never runs */\n"
+"    if (tur_panicking) {   /* the case panicked: the perform's chain never runs */\n"
+"        DKCaught pc = __dk_case_panicked(k, H); if (pc.k) return dk_run(pc.k, pc.err); return r;\n"
+"    }\n"
 /* cps-defer-skipped-on-abortive-effect: the case returned without resuming
  * or keeping `sub` (no copy was ever taken of it), so the perform's original
  * frames up to H are abandoned for good: run the defers pending in them now,
@@ -2115,7 +2261,7 @@ void emit_cps_runtime_prelude(Buf *out) {
 "    if (!sub->ncopy) {\n"
 "        __dk_abort_abandon(k, H);\n"
 "        if (!tur_panicking) __dk_abort_pending(k, H, pp.up);\n"
-"        if (tur_panicking) { __dk_panic_abandon(H); return r; }\n"
+"        if (tur_panicking) { DKCaught pc = __dk_panic_catch(H); if (pc.k) return dk_run(pc.k, pc.err); return r; }\n"
 "    }\n"
 /* case_delivers: a re-opening case already delivered its value through the
  * real chain (its __kont = dk_case_enclosing_real covers H->next); `r` is the

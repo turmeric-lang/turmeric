@@ -381,6 +381,23 @@ chain), it prints `double panic: aborting` and calls `abort()` immediately.
 Defer thunks registered before the panic are fired in reverse order during
 unwinding. If a defer thunk itself panics, the double-panic guard triggers `abort()`.
 
+That holds whether or not a `catch-unwind` takes the panic. An uncaught
+`panic` / `panic-with` unwinds to `main` with every frame on the way firing its
+defers (innermost first, a CPS function's pending defers included), then prints
+its message and aborts.
+
+A `catch-unwind` can also sit between a `perform` and the handler that answers
+it, with the thunk written at the form. The panic is then caught whether it is
+raised before the `perform` or in the continuation the handler resumes, and a
+`^multishot` continuation catches in each copy it runs. A panic raised by the
+handler clause itself is not caught there, because the clause runs outside the
+handled body; a `catch-unwind` around the `handle` takes it. Compiled, this
+needs a thunk whose value is one word (`int`, `bool`, `cstr`, `nil`); a
+`catch-unwind` written inside a handler clause is not supported yet. One exception, in compiled code only: a panic
+raised by a failed runtime check rather than a panic form (a dynamic operator
+on the wrong type, a bad `cast`) still aborts where it is raised when no
+`catch-unwind` is live. The same applies in a thread other than `main`'s.
+
 ### Auditing panic call sites
 
 Pass `--lint-panic` to have the compiler emit `TUR-W0038` at every panic call

@@ -1,6 +1,7 @@
 /* elab_effects.c -- delimited continuations and algebraic effects. */
 #include "elab_internal.h"
 #include "lang_dialects.h"   /* saffron-perform-argument-skips-the-any-seam */
+#include "runtime/experiments.h" /* discontinue-plan: experiment_warn_if_used */
 
 /* E3a (owning-cloneable-capture, cps-backend-owning-env-teardown): an owning
  * value captured ^borrow into a genuinely multi-shot cloneable continuation that
@@ -3200,6 +3201,36 @@ static int resume_scalar_family(TypeKind k) {
     }
 }
 
+/* What a resume (or discontinue) of `k` yields: the handle's answer, which a
+ * case's `k` carries and an `effect-cont<T>` names; `fallback` when neither
+ * is known. */
+static Type cont_resume_result_type(const Expr *k, Type fallback) {
+    Type rtype = fallback;
+    if (k->kind == EX_VAR && k->as.var.binding) {
+        const Binding *kb = k->as.var.binding;
+        if (kb->cont_result_type) {
+            rtype = *kb->cont_result_type;
+        } else if (kb->type.kind == TY_CONT && kb->type.as.cont.returns_full) {
+            /* effect-cont-aggregate-result-untyped: the written result type,
+             * whole -- a struct or ADT as well as a scalar. */
+            rtype = *kb->type.as.cont.returns_full;
+        } else if (kb->type.kind == TY_CONT && kb->type.as.cont.returns_known) {
+            /* `returns` is a bare kind: only a scalar names a whole type. */
+            switch (kb->type.as.cont.returns) {
+                case TY_INT: case TY_INT8: case TY_INT16: case TY_INT32: case TY_INT64:
+                case TY_UINT8: case TY_UINT16: case TY_UINT32: case TY_UINT64:
+                case TY_FLOAT: case TY_FLOAT32: case TY_FLOAT64:
+                case TY_BOOL: case TY_CSTR: case TY_NIL:
+                    rtype = type_from_kind(kb->type.as.cont.returns);
+                    break;
+                default:
+                    break;
+            }
+        }
+    }
+    return rtype;
+}
+
 Expr *elab_make_resume(Elab *e, Expr *k, Expr *value, Span span) {
     /* LC1: Mark continuation consumed per its cont_kind. */
     cont_mark_consumed(k);
@@ -3244,29 +3275,7 @@ Expr *elab_make_resume(Elab *e, Expr *k, Expr *value, Span span) {
      * `effect-cont<T>` names it.  Typing it as the value (the fallback, when
      * neither is known) made `(println (resume k 3.25))` in a handle of int
      * read an int's bits as a double, and refused `(+ 100 (resume k 3.25))`. */
-    Type rtype = value->type;
-    if (k->kind == EX_VAR && k->as.var.binding) {
-        const Binding *kb = k->as.var.binding;
-        if (kb->cont_result_type) {
-            rtype = *kb->cont_result_type;
-        } else if (kb->type.kind == TY_CONT && kb->type.as.cont.returns_full) {
-            /* effect-cont-aggregate-result-untyped: the written result type,
-             * whole -- a struct or ADT as well as a scalar. */
-            rtype = *kb->type.as.cont.returns_full;
-        } else if (kb->type.kind == TY_CONT && kb->type.as.cont.returns_known) {
-            /* `returns` is a bare kind: only a scalar names a whole type. */
-            switch (kb->type.as.cont.returns) {
-                case TY_INT: case TY_INT8: case TY_INT16: case TY_INT32: case TY_INT64:
-                case TY_UINT8: case TY_UINT16: case TY_UINT32: case TY_UINT64:
-                case TY_FLOAT: case TY_FLOAT32: case TY_FLOAT64:
-                case TY_BOOL: case TY_CSTR: case TY_NIL:
-                    rtype = type_from_kind(kb->type.as.cont.returns);
-                    break;
-                default:
-                    break;
-            }
-        }
-    }
+    Type rtype = cont_resume_result_type(k, value->type);
 
     Expr *out = expr_new(e->arena, EX_RESUME, rtype, span);
     out->as.resume_.resume = resume;
@@ -3356,7 +3365,16 @@ Expr *elab_discontinue(Elab *e, const Form *call) {
     discontinue->k = k;
     discontinue->exception = exception;
 
-    Expr *out = expr_new(e->arena, EX_DISCONTINUE, TYPE_NIL, call->span);
+    /* discontinue-plan: a discontinue returns what a resume of `k` would --
+     * the handle's answer, when the body caught the raise and went on -- so a
+     * clause can end in it.  Without the experiment it stays `nil`, and both
+     * engines refuse it. */
+    Type dtype = TYPE_NIL;
+    if (g_opt_discontinue) {
+        experiment_warn_if_used("discontinue");
+        dtype = cont_resume_result_type(k, TYPE_NIL);
+    }
+    Expr *out = expr_new(e->arena, EX_DISCONTINUE, dtype, call->span);
     out->as.discontinue_.discontinue = discontinue;
     return out;
 }

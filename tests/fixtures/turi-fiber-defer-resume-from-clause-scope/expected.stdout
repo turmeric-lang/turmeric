@@ -1,0 +1,11 @@
+let: defer ran
+2
+call: defer ran
+3
+0
+never resumed
+0
+stash: handle exited
+stash body: defer ran
+stash: defer ran
+11

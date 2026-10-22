@@ -26,6 +26,15 @@ bool cps_expr_uses_control(const Expr *e);
 /* escape-in-main-reaches-direct-emitter: the same walk seeded on call/cc /
  * escape alone (fn_is_d2b_main). */
 bool cps_expr_contains_callcc(const Expr *e);
+
+/* cps-catch-unwind-cannot-cross-an-effect-capture: the function whose body a
+ * `catch-unwind` / `catch-panic-of` node (EX_CATCH_UNWIND / EX_CATCH_PANIC_OF)
+ * calls, when that thunk is a lambda written at the form -- nullary (a
+ * capturing one has only its env parameter) and with no `return` -- so the
+ * CPS backend can translate the body inline, under a catch prompt.  NULL for
+ * any other thunk (a named function, a fn-valued variable). */
+struct FnDef;
+const struct FnDef *cps_catch_inline_thunk(const Expr *catch_expr);
 /* The one enumeration of every evaluated operand of an expression (nested fn
  * definitions -- EX_FN_DEF / EX_FN / EX_CLOSURE -- are boundaries and are NOT
  * visited).  `visit` returns true to stop; returns whether it stopped.  See

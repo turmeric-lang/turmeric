@@ -1,0 +1,30 @@
+;; compiled-uncaught-panic-skips-caller-defers: a panic no catch-unwind takes
+;; unwinds to `main` before the program aborts, so every frame on the way fires
+;; its defers, innermost first -- the panicking function's callers included,
+;; and a CPS function's pending defers too.  It used to abort at the panic
+;; site after firing only the panicking function's own frame.  The statements
+;; after the panicking call do not run.  No inline C, so run-turi.sh runs it.
+(defeffect Ask [] : int)
+
+(defn boom [x : int] : int (if (> x 0) (panic "boom") x))
+
+(defn helper [] : int
+  (defer (println "helper: defer ran"))
+  (+ 1 (boom 1)))
+
+;; A CPS function (it performs), resumed, then the panic.
+(defn cps-body [] : int
+  (defer (println "cps-body: defer ran"))
+  (+ (perform (Ask)) (helper)))
+
+(defn mid [] : int
+  (defer (println "mid: defer ran"))
+  (let [r (handle (cps-body) (Ask [] k) (resume k 5))]
+    (println "mid: not reached")
+    r))
+
+(defn main [] : int
+  (defer (println "main: defer ran"))
+  (println (mid))
+  (println "main: not reached")
+  0)

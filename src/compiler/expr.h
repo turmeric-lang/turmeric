@@ -1202,6 +1202,11 @@ struct FnDef {
      * by the future selective-CPS lowering (CPS3). Distinct from `may_capture`,
      * which the existing Phase-18 delimited-CPS pass owns. */
     bool           cps_colored;
+    /* cps-catch-unwind-cannot-cross-an-effect-capture: this lifted lambda is
+     * the thunk of a `catch-unwind` in a function the CPS coloring colored, so
+     * the CPS backend translates its body inline (cps_catch_inline_thunk) and
+     * never calls it as a fn value: its effects do not escape through it. */
+    bool           cps_catch_inlined;
     /* await-through-fn-value-parks-only-the-callee: true iff this function can
      * suspend on an `await` -- its own body awaits, or it calls (by name) a
      * function that may.  `await` contributes nothing to an effect row, so a

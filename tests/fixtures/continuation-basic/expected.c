@@ -1712,6 +1712,8 @@ static const char *__tur_any_type_name(int64_t tag) {
 }
 static void tur_panic(const char *msg);
 static void tur_panic_at(const char *file, int line, const char *msg);
+static void tur_panic_at_site(const char *file, int line, const char *msg);
+static void tur_panic_with_site(int type_tag, void *payload, const char *file, int line);
 static void __tur_any_cast_check_at(int64_t have, int64_t want, const char *file, int line);
 static void __tur_any_cast_check(int64_t have, int64_t want) {
     __tur_any_cast_check_at(have, want, NULL, 0);
@@ -2058,6 +2060,12 @@ static TUR_THREAD_LOCAL int tur_panicking = 0;
 extern int * tur_tls_panicking_ptr(void);
 #define tur_panicking (*tur_tls_panicking_ptr())
 #endif
+#if defined(__GNUC__) || defined(__clang__)
+static TUR_THREAD_LOCAL int tur_root_unwind = 0;
+#else
+extern int * tur_tls_root_unwind_ptr(void);
+#define tur_root_unwind (*tur_tls_root_unwind_ptr())
+#endif
 #define TUR_SC_MAXP 8
 #define TUR_SC_MAXN 32
 typedef struct tur_cont { int tag; tur_handler_node *boundary; struct tur_cont *next; int64_t saved[TUR_SC_MAXN]; uint32_t aggr_mask; } tur_cont;
@@ -2067,13 +2075,21 @@ static inline int64_t tur_sc_bits_f32(float f){ int64_t i=0; memcpy(&i,&f,sizeof
 static inline float   tur_sc_f32_from_bits(int64_t i){ float f; memcpy(&f,&i,sizeof f); return f; }
 static tur_panic_payload *global_panic_payload;
 static tur_panic_payload *panic_payload_new(int, void *, const char *, int, int);
+static void tur_panic_root_print(void);
 static void tur_panic_at(const char *file, int line, const char *msg) {
     if (tur_panic_in_progress) {
+        tur_panic_root_print();
         fprintf(stderr, "double panic: aborting\n");
         abort();
     }
     tur_panic_in_progress = 1;
     if (tur_handler_chain) {
+        global_panic_payload = panic_payload_new(5, msg ? strdup(msg) : NULL, file, line, 1);
+        if (global_panic_frame) { tur_frame_fire_chain(global_panic_frame); global_panic_frame = NULL; }
+        tur_panicking = 1;
+        return;
+    }
+    if (tur_root_unwind == 2) {
         global_panic_payload = panic_payload_new(5, msg ? strdup(msg) : NULL, file, line, 1);
         if (global_panic_frame) { tur_frame_fire_chain(global_panic_frame); global_panic_frame = NULL; }
         tur_panicking = 1;
@@ -2088,6 +2104,7 @@ static void tur_panic_at(const char *file, int line, const char *msg) {
 }
 static void tur_panic(const char *msg) { tur_panic_at(__FILE__, __LINE__, msg); }
 
+static void tur_panic_root_exit(void);
 /* Phase R5: tur_panic_abort - no unwinding, immediate abort */
 static void tur_panic_abort(const char *msg) {
     fprintf(stderr, "panic (no unwind): %s\n", msg ? msg : "(no message)");
@@ -2105,6 +2122,18 @@ struct tur_panic_payload {
     int owns_value;
 };
 
+static void tur_panic_root_print(void) {
+    tur_panic_payload *p = global_panic_payload;
+    if (!tur_root_unwind || !p || p->line < 0) return;
+    if (p->owns_value) fprintf(stderr, "panic at %s:%d: %s\n", p->file, p->line, p->value ? (const char *)p->value : "(no message)");
+    else fprintf(stderr, "panic at %s:%d\n", p->file ? p->file : "(unknown)", p->line);
+    p->line = -1;   /* printed */
+}
+static void tur_panic_root_exit(void) {
+    tur_panic_root_print();
+    fflush(NULL);
+    abort();
+}
 static tur_panic_payload *global_panic_payload = NULL;
 
 static tur_panic_payload *panic_payload_new(int type_tag, void *payload, const char *file, int line, int owns_value) {
@@ -2321,6 +2350,8 @@ static void tur_result_box_free_shallow(int64_t __r) {
  * the chain up to the nearest prompt. Faithful port of src/runtime/cps_prompt.c.
  * Capture is O(depth-of-slice) and unbounded -- no 16-frame ceiling. */
 #define DK_ROOT_TAG 0
+#define DK_CATCH_TAG (-31337)
+#define DK_DEAD_CATCH_TAG (-31338)
 typedef struct DK DK;
 typedef intptr_t (*DKFrame)(intptr_t env, intptr_t value);
 typedef intptr_t (*DKBody)(intptr_t env, DK *subk);
@@ -2364,10 +2395,12 @@ struct DK {
     bool k_copied_only;   /* case only copies its k: dk_perform's sub dies with the case */
     bool k_last;          /* a resume site: the case's last use of this k (emit_resume) */
     bool copy_last;       /* dk_resume_into's copy ends at this node: body_env is its head */
+    bool catch_reap;      /* catch prompt: reap the Ok / Err box it makes */
 };
 /* Is the chain from `n` on (n included) single-shot?  See the `ss` field. */
 static bool __dk_ss_after(const DK *n) {
-    return n->ss && !((n->kind == DKK_PROMPT && n->tag != DK_ROOT_TAG)
+    return n->ss && !((n->kind == DKK_PROMPT && n->tag != DK_ROOT_TAG
+                       && n->tag != DK_CATCH_TAG && n->tag != DK_DEAD_CATCH_TAG)
                       || n->kind == DKK_SHIFT || n->kind == DKK_SHIFT0
                       || (n->kind == DKK_HANDLER && n->multishot));
 }
@@ -2402,9 +2435,20 @@ static DK *dk_frame_resume_join(DKResumeFrame fn, intptr_t env, DK *next) {
     DK *k = dk_frame_resume(fn, env, next); k->join_once = true; return k;
 }
 __attribute__((unused)) static DK *__dk_with_unwind(DK *k, void (*u)(intptr_t)) { k->unwind = u; return k; }
+static bool __dk_catch_takes(const DK *k) {
+    return k->kind == DKK_PROMPT && k->tag == DK_CATCH_TAG
+        && ((int)k->env < 0 || (global_panic_payload && global_panic_payload->type_tag == (int)k->env));
+}
 __attribute__((unused)) static void __dk_panic_abandon(DK *k) {
     for (; k; k = k->next) {
+        if (__dk_catch_takes(k)) break;
         if (k->unwind) { void (*u)(intptr_t) = k->unwind; k->unwind = NULL; u(k->env); }
+        if (k->kind == DKK_DONE) break;
+    }
+}
+__attribute__((unused)) static void __dk_catch_kill(DK *k, const DK *end) {
+    for (; k && k != end; k = k->next) {
+        if (k->kind == DKK_PROMPT && k->tag == DK_CATCH_TAG) k->tag = DK_DEAD_CATCH_TAG;
         if (k->kind == DKK_DONE) break;
     }
 }
@@ -2436,6 +2480,9 @@ static DK *dk_frame_resume_group_end(DKResumeFrame fn, intptr_t env, DK *next) {
 }
 static DK *dk_prompt(int tag, DK *next) {
     DK *k = dk_new(DKK_PROMPT, next); k->tag = tag; return k;
+}
+__attribute__((unused)) static DK *dk_prompt_catch(int ptype, int reap, DK *next) {
+    DK *k = dk_new(DKK_PROMPT, next); k->tag = DK_CATCH_TAG; k->env = ptype; k->catch_reap = reap != 0; return k;
 }
 static DK *dk_shift_impl(DKKind kind, int tag, DKBody body, intptr_t env, DK *next) {
     DK *k = dk_new(kind, next); k->tag = tag; k->body = body; k->body_env = env; return k;
@@ -2545,6 +2592,7 @@ static DK *dk_copy_node(const DK *n) {
     c->tail_inplace = n->tail_inplace;
     c->hgroup = n->hgroup;
     c->case_delivers = n->case_delivers;
+    c->catch_reap = n->catch_reap;   /* a copied catch prompt reaps the box it makes too */
     c->resume_into = n->resume_into;
     c->resume_once = n->resume_once;
     c->resume_once_dyn = n->resume_once_dyn; c->multishot = n->multishot; c->ss = n->ss;
@@ -2935,6 +2983,29 @@ __attribute__((unused)) static void __dk_join_release_env(intptr_t env) {
     __dk_reap_v[n - 1] = NULL; __dk_reap_n = n - 1;
     free((void *)env);
 }
+typedef struct { DK *k; intptr_t err; } DKCaught;
+__attribute__((unused)) static DKCaught __dk_panic_catch(DK *k) {
+    DKCaught c = { NULL, 0 };
+    __dk_panic_abandon(k);
+    for (; k; k = k->next) {
+        if (__dk_catch_takes(k)) break;
+        if (k->kind == DKK_DONE) return c;
+    }
+    if (!k) return c;
+    tur_panicking = 0; tur_panic_in_progress = 0;
+    tur_panic_payload *p = global_panic_payload; global_panic_payload = NULL;
+    c.err = (intptr_t)tur_box_err((int64_t)(intptr_t)p);
+    if (k->catch_reap) {
+        __dk_reap_ptr(c.err);
+        if (p) { if (p->owns_value && p->value) __dk_reap_ptr((intptr_t)p->value); __dk_reap_ptr((intptr_t)p); }
+    }
+    c.k = k->next;
+    return c;
+}
+__attribute__((unused)) static DKCaught __dk_case_panicked(DK *k, const DK *H) {
+    __dk_catch_kill(k, H);
+    return __dk_panic_catch(k);
+}
 static void __dk_copy_last_release(DK *last) {
     DK *c = (DK *)last->body_env; last->copy_last = false; last->body_env = 0;
     if (c && !tur_dk_pinned && !__dk_chain_copied(c) && __dk_reap_take(c, 1)) dk_free(c);
@@ -2943,14 +3014,24 @@ static intptr_t dk_run_impl(DK *k, intptr_t v, bool root) {
     while (k) {
         switch (k->kind) {
             case DKK_DONE: return v;
-            case DKK_PROMPT: case DKK_HANDLER: { DK *n = k->next; if (k->copy_last) __dk_copy_last_release(k); k = n; break; }
+            case DKK_PROMPT: case DKK_HANDLER: {
+                DK *n = k->next;
+                /* A catch prompt reached normally: the thunk returned, so Ok. */
+                if (k->kind == DKK_PROMPT && (k->tag == DK_CATCH_TAG || k->tag == DK_DEAD_CATCH_TAG)) {
+                    v = (intptr_t)tur_box_ok((int64_t)v);
+                    if (k->catch_reap) __dk_reap_ptr(v);
+                }
+                if (k->copy_last) __dk_copy_last_release(k);
+                k = n; break; }
             /* cps-body-panic-not-propagated: a frame whose body panicked under a
              * handler returned by signal; the rest of the chain is the rest of the
              * program past the panic and must not run.  Its nodes are reap-owned. */
             case DKK_FRAME: {
                 DK *self = k; intptr_t senv = k->env;
                 k->unwind = NULL;   /* a run frame fires its own pending defers */
-                v = k->fn(k->env, v); if (tur_panicking) { __dk_panic_abandon(k->next); return 0; } k = k->next;
+                v = k->fn(k->env, v);
+                if (tur_panicking) { DKCaught c = __dk_panic_catch(k->next); if (!c.k) return 0; k = c.k; v = c.err; break; }
+                k = k->next;
                 /* The fn is done with its env, so it can follow the node. */
                 if (self->join_once && __dk_join_release_node(self)) __dk_join_release_env(senv);
                 else if (self->copy_last) __dk_copy_last_release(self);
@@ -3009,7 +3090,11 @@ static intptr_t dk_run_impl(DK *k, intptr_t v, bool root) {
                 sub = dk_append(sub, tail);
                 intptr_t bodyval = k->body(k->body_env, sub);
                 dk_free(sub);
-                if (tur_panicking) { __dk_panic_abandon(k->next); return bodyval; }
+                if (tur_panicking) {
+                    /* The shift body ran at the prompt, outside the part it cut off. */
+                    __dk_catch_kill(k->next, to_root ? NULL : P);
+                    DKCaught c = __dk_panic_catch(k->next); if (!c.k) return bodyval; k = c.k; v = c.err; break;
+                }
                 if (to_root) return bodyval;
                 k = P->next; v = bodyval; break;
             }
@@ -3047,6 +3132,42 @@ static intptr_t dk_invoke(DK *sub, intptr_t w) {
      * With no driver a longjmp is impossible -- free eagerly as before. */
     if (g_dk_driver) return __dk_drive_bounded(c, w);
     intptr_t r = dk_run_impl(c, w, false);
+    dk_free(c); return r;
+}
+__attribute__((unused)) static intptr_t __dk_discontinue(DK *sub, int ptype, intptr_t payload, const char *file, int line) {
+    sub->consumed = 1;
+    if (tur_panic_in_progress) { tur_panic_root_print(); fprintf(stderr, "double panic: aborting\n"); abort(); }
+    tur_panic_payload *p = ptype == 5
+        ? panic_payload_new(ptype, payload ? strdup((const char *)payload) : NULL, file, line, 1)
+        : panic_payload_new(ptype, (void *)payload, file, line, 0);
+    if (!tur_handler_chain && !tur_root_unwind) {
+        if (p->owns_value) fprintf(stderr, "panic at %s:%d: %s\n", file, line, p->value ? (const char *)p->value : "(no message)");
+        else fprintf(stderr, "panic at %s:%d\n", file, line);
+        fflush(NULL); abort();
+    }
+    tur_panic_in_progress = 1; global_panic_payload = p; tur_panicking = 1;
+    DKPendPerform *pp = g_dk_pend_perform;
+    if (!pp || pp->sub != sub) return 0;
+    size_t n = 0; DK *o = pp->k;
+    for (; o && o != pp->H; o = o->next, n++) {
+        if (__dk_catch_takes(o)) break;
+        if (o->unwind) { void (*u)(intptr_t) = o->unwind; o->unwind = NULL; u(o->env); }
+        if (o->kind == DKK_DONE) return 0;
+    }
+    if (!o || o == pp->H || !__dk_catch_takes(o)) return 0;
+    DK *cs = sub; for (size_t i = 0; i < n && cs; i++) cs = cs->next;
+    if (!cs || cs->kind != DKK_PROMPT || cs->tag != DK_CATCH_TAG) return 0;
+    tur_panicking = 0; tur_panic_in_progress = 0; global_panic_payload = NULL;
+    intptr_t err = (intptr_t)tur_box_err((int64_t)(intptr_t)p);
+    if (cs->catch_reap) {
+        __dk_reap_ptr(err);
+        if (p->owns_value && p->value) __dk_reap_ptr((intptr_t)p->value);
+        __dk_reap_ptr((intptr_t)p);
+    }
+    if (sub->ncopy != 255) sub->ncopy++;
+    DK *c = dk_copy_range(cs->next, NULL);
+    if (g_dk_driver) return __dk_drive_bounded(c, err);
+    intptr_t r = dk_run_impl(c, err, false);
     dk_free(c); return r;
 }
 __attribute__((unused))
@@ -3239,14 +3360,14 @@ static intptr_t dk_perform(int tag, intptr_t arg, DK *k) {
         k->inplace_head = true;
         g_dk_case_reopen_hnode = H;
         { intptr_t r0 = H->handler(H->handler_env, arg, k);  /* ends in dk_tail_resume -> longjmp */
-          if (tur_panicking) __dk_panic_abandon(k);
+          if (tur_panicking) { DKCaught pc = __dk_case_panicked(k, H); if (pc.k) return dk_run(pc.k, pc.err); }
           return r0; }
     }
     if (H->tail_resume && !H->shallow && g_dk_driver) {
         DK *sub = dk_copy_range(k, NULL);
         g_dk_case_reopen_hnode = H;  /* re-opening: case reads its enclosing markers */
         { intptr_t r0 = H->handler(H->handler_env, arg, sub);  /* ends in dk_tail_resume -> longjmp */
-          if (tur_panicking) __dk_panic_abandon(k);
+          if (tur_panicking) { DKCaught pc = __dk_case_panicked(k, H); if (pc.k) return dk_run(pc.k, pc.err); }
           return r0; }
     }
     if ((H->resume_once || (H->resume_once_dyn && __dk_ss_after(dk_case_enclosing_real(H))))
@@ -3257,10 +3378,10 @@ static intptr_t dk_perform(int tag, intptr_t arg, DK *k) {
         intptr_t r0 = H->handler(H->handler_env, arg, k);   /* a resume ends in dk_resume_into -> longjmp */
         g_dk_pend_perform = pp.up;
         k->resume_inplace = false; k->body_env = 0;
-        if (tur_panicking) { __dk_panic_abandon(k); return r0; }
+        if (tur_panicking) { DKCaught pc = __dk_case_panicked(k, H); if (pc.k) return dk_run(pc.k, pc.err); return r0; }
         __dk_abort_abandon(k, H);   /* answered without resuming: k..H never run */
         if (!tur_panicking) __dk_abort_pending(k, H, pp.up);
-        if (tur_panicking) { __dk_panic_abandon(H); return r0; }
+        if (tur_panicking) { DKCaught pc = __dk_panic_catch(H); if (pc.k) return dk_run(pc.k, pc.err); return r0; }
         return r0;   /* case_delivers: it delivered through the real chain */
     }
     DK *sub = dk_copy_range(k, H);
@@ -3316,11 +3437,13 @@ static intptr_t dk_perform(int tag, intptr_t arg, DK *k) {
     DKPendPerform pp = { k, H, sub, g_dk_pend_perform }; g_dk_pend_perform = &pp;
     intptr_t r = H->handler(H->handler_env, arg, sub);
     g_dk_pend_perform = pp.up;
-    if (tur_panicking) { __dk_panic_abandon(k); return r; }   /* the case panicked: the perform's chain never runs */
+    if (tur_panicking) {   /* the case panicked: the perform's chain never runs */
+        DKCaught pc = __dk_case_panicked(k, H); if (pc.k) return dk_run(pc.k, pc.err); return r;
+    }
     if (!sub->ncopy) {
         __dk_abort_abandon(k, H);
         if (!tur_panicking) __dk_abort_pending(k, H, pp.up);
-        if (tur_panicking) { __dk_panic_abandon(H); return r; }
+        if (tur_panicking) { DKCaught pc = __dk_panic_catch(H); if (pc.k) return dk_run(pc.k, pc.err); return r; }
     }
     if (H_kcopy && !tur_dk_pinned && __dk_reap_take(sub, 1)) dk_free(sub);
     return H_delivers ? r : dk_run_impl(H_next, r, false);
@@ -3412,6 +3535,7 @@ TUR_TLS_FRESH(FiberBlock *, tur_current_fiber, tur_current_fiber__at);
 #endif
 static void tur_panic_with(int type_tag, void *payload, const char *file, int line) {
     if (tur_panic_in_progress) {
+        tur_panic_root_print();
         fprintf(stderr, "double panic: aborting\n");
         abort();
     }
@@ -3426,8 +3550,25 @@ static void tur_panic_with(int type_tag, void *payload, const char *file, int li
         global_panic_payload = panic_payload_new(type_tag, payload, file, line, 0);
         TUR_LONGJMP(tur_current_fiber->panic_jmpbuf);
     }
+    if (tur_root_unwind == 2) {
+        global_panic_payload = panic_payload_new(type_tag, payload, file, line, 0);
+        if (global_panic_frame) { tur_frame_fire_chain(global_panic_frame); global_panic_frame = NULL; }
+        tur_panicking = 1;
+        return;
+    }
     fprintf(stderr, "panic at %s:%d\n", file ? file : "(unknown)", line);
     abort();
+}
+
+static void tur_panic_at_site(const char *file, int line, const char *msg) {
+    int __r = tur_root_unwind; if (__r) tur_root_unwind = 2;
+    tur_panic_at(file, line, msg);
+    if (__r) tur_root_unwind = __r;
+}
+static void tur_panic_with_site(int type_tag, void *payload, const char *file, int line) {
+    int __r = tur_root_unwind; if (__r) tur_root_unwind = 2;
+    tur_panic_with(type_tag, payload, file, line);
+    if (__r) tur_root_unwind = __r;
 }
 
 #if defined(__GNUC__) || defined(__clang__)
@@ -8425,43 +8566,43 @@ static int64_t map_hyeq_hyloop__cps(void * iter, void * m2_hamt, void * keyeq, i
 __tur_cps_self:;
     bool __ps_97 = (hamt_sliter_hyadvance_ex((void *)(intptr_t)(iter)));
     if (tur_panicking) {
-        __dk_panic_abandon(__kont);
+        { DKCaught __pcc = __dk_panic_catch(__kont); if (__pcc.k) return dk_run(__pcc.k, __pcc.err); }
         return ((int64_t)0);
     }
     __t0 = __ps_97;
     if (__t0) {
         int64_t __ps_98 = (hamt_sliter_hycur_hyhash((void *)(intptr_t)(iter)));
         if (tur_panicking) {
-            __dk_panic_abandon(__kont);
+            { DKCaught __pcc = __dk_panic_catch(__kont); if (__pcc.k) return dk_run(__pcc.k, __pcc.err); }
             return ((int64_t)0);
         }
         h_1001051 = __ps_98;
         void * __ps_99 = (hamt_sliter_hycur_hykey((void *)(intptr_t)(iter)));
         if (tur_panicking) {
-            __dk_panic_abandon(__kont);
+            { DKCaught __pcc = __dk_panic_catch(__kont); if (__pcc.k) return dk_run(__pcc.k, __pcc.err); }
             return ((int64_t)0);
         }
         k_1001052 = __ps_99;
         bool __ps_100 = (hamt_slhas_hydynamic_qu((void *)(intptr_t)(m2_hamt), h_1001051, (void *)(intptr_t)(k_1001052), (void *)(intptr_t)(keyeq)));
         if (tur_panicking) {
-            __dk_panic_abandon(__kont);
+            { DKCaught __pcc = __dk_panic_catch(__kont); if (__pcc.k) return dk_run(__pcc.k, __pcc.err); }
             return ((int64_t)0);
         }
         __t1 = __ps_100;
         if (__t1) {
             int64_t __ps_101 = (map_hyiter_hycur_hyval_hyas((void *)(intptr_t)(iter)));
             if (tur_panicking) {
-                __dk_panic_abandon(__kont);
+                { DKCaught __pcc = __dk_panic_catch(__kont); if (__pcc.k) return dk_run(__pcc.k, __pcc.err); }
                 return ((int64_t)0);
             }
             int64_t __ps_102 = (map_hyget_hydynamic_hyas((void *)(intptr_t)(m2_hamt), h_1001051, (void *)(intptr_t)(k_1001052), (void *)(intptr_t)(keyeq)));
             if (tur_panicking) {
-                __dk_panic_abandon(__kont);
+                { DKCaught __pcc = __dk_panic_catch(__kont); if (__pcc.k) return dk_run(__pcc.k, __pcc.err); }
                 return ((int64_t)0);
             }
             bool __ps_103 = (((bool)((int64_t (*)(void*, int64_t, int64_t))(intptr_t)((int64_t *)((void *)(intptr_t)(val_cmp)))[0])((void *)(intptr_t)(val_cmp), __ps_101, __ps_102)));
             if (tur_panicking) {
-                __dk_panic_abandon(__kont);
+                { DKCaught __pcc = __dk_panic_catch(__kont); if (__pcc.k) return dk_run(__pcc.k, __pcc.err); }
                 return ((int64_t)0);
             }
             __t2 = __ps_103;
@@ -8492,13 +8633,15 @@ __attribute__((unused)) static bool map_hyeq_hyloop(void * iter, void * m2_hamt,
     size_t __dk_reap_mark = __dk_reap_n;
     DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
     int64_t __r;
-    tur_jmp_buf __dkjb; tur_jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;
-    DKPendPerform *__dkpp = g_dk_pend_perform;
-    if (TUR_SETJMP(__dkjb) == 0) { __r = map_hyeq_hyloop__cps(iter, m2_hamt, keyeq, val_cmp, __root); }
-    else { g_dk_pend_perform = __dkpp; __r = __dk_drive_after(); }
-    g_dk_driver = __dksave;
+    struct { tur_jmp_buf jb; tur_jmp_buf *save; DKPendPerform *pp; DK *root; size_t mark; } __dke;
+    __dke.save = g_dk_driver; __dke.pp = g_dk_pend_perform;
+    __dke.root = __root; __dke.mark = __dk_reap_mark;
+    g_dk_driver = &__dke.jb;
+    if (TUR_SETJMP(__dke.jb) == 0) { __r = map_hyeq_hyloop__cps(iter, m2_hamt, keyeq, val_cmp, __root); }
+    else { g_dk_pend_perform = __dke.pp; __r = __dk_drive_after(); }
+    g_dk_driver = __dke.save;
     bool __ret = (bool)(__r);
-    __dk_entry_leave(__root, __dk_reap_mark);
+    __dk_entry_leave(__dke.root, __dke.mark);
     return __ret;
 }
 static bool map_hyeq_hydriver(int64_t m1, int64_t m2, int64_t val_cmp) {
@@ -8804,13 +8947,13 @@ static intptr_t list_hyeq_qu_j0(intptr_t env, intptr_t __t3__slot, DK *__kont) {
     if (__t3) {
         int64_t __ps_126 = (list_hytail(l1));
         if (tur_panicking) {
-            __dk_panic_abandon(__kont);
+            { DKCaught __pcc = __dk_panic_catch(__kont); if (__pcc.k) return dk_run(__pcc.k, __pcc.err); }
             return ((int64_t)0);
         }
         __t4 = __ps_126;
         int64_t __ps_127 = (list_hytail(l2));
         if (tur_panicking) {
-            __dk_panic_abandon(__kont);
+            { DKCaught __pcc = __dk_panic_catch(__kont); if (__pcc.k) return dk_run(__pcc.k, __pcc.err); }
             return ((int64_t)0);
         }
         __t5 = __ps_127;
@@ -8835,14 +8978,14 @@ static int64_t list_hyeq_qu__cps(int64_t l1, int64_t l2, int64_t cmp_fn, DK *__k
     int64_t __t7;
     bool __ps_121 = (null_qu(l1));
     if (tur_panicking) {
-        __dk_panic_abandon(__kont);
+        { DKCaught __pcc = __dk_panic_catch(__kont); if (__pcc.k) return dk_run(__pcc.k, __pcc.err); }
         return ((int64_t)0);
     }
     __t0 = __ps_121;
     if (__t0) {
         bool __ps_122 = (null_qu(l2));
         if (tur_panicking) {
-            __dk_panic_abandon(__kont);
+            { DKCaught __pcc = __dk_panic_catch(__kont); if (__pcc.k) return dk_run(__pcc.k, __pcc.err); }
             return ((int64_t)0);
         }
         __t1 = __ps_122;
@@ -8850,7 +8993,7 @@ static int64_t list_hyeq_qu__cps(int64_t l1, int64_t l2, int64_t cmp_fn, DK *__k
     } else {
         bool __ps_123 = (null_qu(l2));
         if (tur_panicking) {
-            __dk_panic_abandon(__kont);
+            { DKCaught __pcc = __dk_panic_catch(__kont); if (__pcc.k) return dk_run(__pcc.k, __pcc.err); }
             return ((int64_t)0);
         }
         __t2 = __ps_123;
@@ -8859,13 +9002,13 @@ static int64_t list_hyeq_qu__cps(int64_t l1, int64_t l2, int64_t cmp_fn, DK *__k
         } else {
             int64_t __ps_124 = (list_hyhead(l1));
             if (tur_panicking) {
-                __dk_panic_abandon(__kont);
+                { DKCaught __pcc = __dk_panic_catch(__kont); if (__pcc.k) return dk_run(__pcc.k, __pcc.err); }
                 return ((int64_t)0);
             }
             __t6 = __ps_124;
             int64_t __ps_125 = (list_hyhead(l2));
             if (tur_panicking) {
-                __dk_panic_abandon(__kont);
+                { DKCaught __pcc = __dk_panic_catch(__kont); if (__pcc.k) return dk_run(__pcc.k, __pcc.err); }
                 return ((int64_t)0);
             }
             __t7 = __ps_125;
@@ -8890,13 +9033,15 @@ __attribute__((unused)) static bool list_hyeq_qu(int64_t l1, int64_t l2, int64_t
     size_t __dk_reap_mark = __dk_reap_n;
     DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
     int64_t __r;
-    tur_jmp_buf __dkjb; tur_jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;
-    DKPendPerform *__dkpp = g_dk_pend_perform;
-    if (TUR_SETJMP(__dkjb) == 0) { __r = list_hyeq_qu__cps(l1, l2, cmp_fn, __root); }
-    else { g_dk_pend_perform = __dkpp; __r = __dk_drive_after(); }
-    g_dk_driver = __dksave;
+    struct { tur_jmp_buf jb; tur_jmp_buf *save; DKPendPerform *pp; DK *root; size_t mark; } __dke;
+    __dke.save = g_dk_driver; __dke.pp = g_dk_pend_perform;
+    __dke.root = __root; __dke.mark = __dk_reap_mark;
+    g_dk_driver = &__dke.jb;
+    if (TUR_SETJMP(__dke.jb) == 0) { __r = list_hyeq_qu__cps(l1, l2, cmp_fn, __root); }
+    else { g_dk_pend_perform = __dke.pp; __r = __dk_drive_after(); }
+    g_dk_driver = __dke.save;
     bool __ret = (bool)(__r);
-    __dk_entry_leave(__root, __dk_reap_mark);
+    __dk_entry_leave(__dke.root, __dke.mark);
     return __ret;
 }
 static bool cons_hyeq_hygo(int64_t c1, int64_t c2) {
@@ -8948,7 +9093,7 @@ static intptr_t _un_uncons_hyfmap_j0(intptr_t env, intptr_t __t2__slot, DK *__ko
     int64_t out_1001357;
     out_1001357 = (int64_t)(intptr_t)tcons__spec__tur_adt_Cons__int___int64_t_int64_t(__t1, __t2); /* cps->direct */
     if (tur_panicking) {
-        __dk_panic_abandon(__kont);
+        { DKCaught __pcc = __dk_panic_catch(__kont); if (__pcc.k) return dk_run(__pcc.k, __pcc.err); }
         return ((int64_t)0);
     }
     return dk_run(__kont, (intptr_t)(out_1001357));
@@ -8959,7 +9104,7 @@ static int64_t _un_uncons_hyfmap__cps(int64_t cell, void * f, DK *__kont) {
     int64_t __t3;
     bool __ps_137 = (null_qu(cell));
     if (tur_panicking) {
-        __dk_panic_abandon(__kont);
+        { DKCaught __pcc = __dk_panic_catch(__kont); if (__pcc.k) return dk_run(__pcc.k, __pcc.err); }
         return ((int64_t)0);
     }
     __t0 = __ps_137;
@@ -8968,18 +9113,18 @@ static int64_t _un_uncons_hyfmap__cps(int64_t cell, void * f, DK *__kont) {
     } else {
         int64_t __ps_138 = (list_hyhead(cell));
         if (tur_panicking) {
-            __dk_panic_abandon(__kont);
+            { DKCaught __pcc = __dk_panic_catch(__kont); if (__pcc.k) return dk_run(__pcc.k, __pcc.err); }
             return ((int64_t)0);
         }
         int64_t __ps_139 = ((*( tur_thunk_int64_t_int64_t_t *)(f))(f, __ps_138));
         if (tur_panicking) {
-            __dk_panic_abandon(__kont);
+            { DKCaught __pcc = __dk_panic_catch(__kont); if (__pcc.k) return dk_run(__pcc.k, __pcc.err); }
             return ((int64_t)0);
         }
         __t1 = __ps_139;
         int64_t __ps_140 = (list_hytail(cell));
         if (tur_panicking) {
-            __dk_panic_abandon(__kont);
+            { DKCaught __pcc = __dk_panic_catch(__kont); if (__pcc.k) return dk_run(__pcc.k, __pcc.err); }
             return ((int64_t)0);
         }
         __t3 = __ps_140;
@@ -8994,13 +9139,15 @@ __attribute__((unused)) static int64_t _un_uncons_hyfmap(int64_t cell, void * f)
     size_t __dk_reap_mark = __dk_reap_n;
     DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
     int64_t __r;
-    tur_jmp_buf __dkjb; tur_jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;
-    DKPendPerform *__dkpp = g_dk_pend_perform;
-    if (TUR_SETJMP(__dkjb) == 0) { __r = _un_uncons_hyfmap__cps(cell, f, __root); }
-    else { g_dk_pend_perform = __dkpp; __r = __dk_drive_after(); }
-    g_dk_driver = __dksave;
+    struct { tur_jmp_buf jb; tur_jmp_buf *save; DKPendPerform *pp; DK *root; size_t mark; } __dke;
+    __dke.save = g_dk_driver; __dke.pp = g_dk_pend_perform;
+    __dke.root = __root; __dke.mark = __dk_reap_mark;
+    g_dk_driver = &__dke.jb;
+    if (TUR_SETJMP(__dke.jb) == 0) { __r = _un_uncons_hyfmap__cps(cell, f, __root); }
+    else { g_dk_pend_perform = __dke.pp; __r = __dk_drive_after(); }
+    g_dk_driver = __dke.save;
     int64_t __ret = (int64_t)(__r);
-    __dk_entry_leave(__root, __dk_reap_mark);
+    __dk_entry_leave(__dke.root, __dke.mark);
     return __ret;
 }
 static void tur_hylist_hyhomog_un_un(int64_t a, int64_t b) {
@@ -10653,7 +10800,7 @@ static int64_t schema_hydecode_hyabort(int64_t errs) {
         int64_t __ps_186 = (schema_hydecode_hyreport(errs));
         if (tur_panicking) return ((int64_t)0);
         (void)(__ps_186);
-        tur_panic_at("schema.tur", 1071, "schema-decode!: validation failed");
+        tur_panic_at_site("schema.tur", 1071, "schema-decode!: validation failed");
         if (tur_panicking) return ((int64_t)0);
         return ((int64_t)0);
 }
@@ -10938,6 +11085,7 @@ int main(int argc, char **argv) {
     _setmode(_fileno(stdout), _O_BINARY);
     _setmode(_fileno(stderr), _O_BINARY);
 #endif
+    tur_root_unwind = 1;
     /* *args*: build cons list from argv[1..argc-1]; *argv0* is argv[0] */
     if (argc > 0 && argv[0]) g_tur_argv0 = argv[0];
     g_tur_args = 0;
@@ -10965,6 +11113,7 @@ int main(int argc, char **argv) {
     SCHEMA_unAP_1001546 = INT64_C(14);
     SCHEMA_unFIELD_1001547 = INT64_C(15);
     SCHEMA_unAP_unFAT_1001548 = INT64_C(16);
+    if (tur_panicking) tur_panic_root_exit();
     return 0;
 }
 TUR_FATBOX_DEF(__tur_fatbox_0, __tur_fatshim_bool_int64_t_int64_t, __fn_1001064)

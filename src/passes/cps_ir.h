@@ -241,7 +241,19 @@ struct CTerm {
                  const Expr *call_expr; } tailcall;
         struct { CVar j; CVar param; CTerm *jbody; CTerm *body; }         letcont;
         struct { CAtom cond; CTerm *then_; CTerm *else_; }                if_;
-        struct { CVar x; CTerm *delim; CTerm *body; }                     reset;
+        /* is_catch (cps-catch-unwind-cannot-cross-an-effect-capture): the
+         * reset is a `catch-unwind` / `catch-panic-of` whose thunk was written
+         * at the form.  delim is the thunk's body, delivering its value (of
+         * delim_ty) to the prompt; the emitter installs a CATCH prompt, which
+         * boxes that value as Ok and turns a panic raised inside delim into
+         * Err.  x is the Result.  catch_type is catch-panic-of's payload
+         * TypeKind, or -1 for catch-unwind (any payload). */
+        /* catch_reap: x is a let binding whose box provably does not
+         * escape the let (emit_let_binding_box_freeable): the prompt has the
+         * runtime register the Ok / Err box it makes for the boundary free. */
+        struct { CVar x; CTerm *delim; CTerm *body;
+                 bool is_catch; int catch_type; const Type *delim_ty;
+                 bool catch_reap; }                                       reset;
         /* shift0 == true lowers to dk_shift0 (does NOT reinstall the prompt);
          * false is a plain shift (dk_shift, prompt stays installed). */
         struct { CVar k; CTerm *body; bool shift0; }                      shift;
@@ -290,7 +302,13 @@ struct CTerm {
          * await owns it (emit_await marks it with __tur_await_own; the reader
          * that takes its value frees it). */
         struct { CAtom fut; CVar x; CTerm *body; bool fresh_fut; }       await;
-        struct { CAtom k; CAtom v; CVar x; CTerm *body; }                 resume;
+        /* raise (discontinue-plan): a `(discontinue k payload)` -- `v` is the
+         * payload, of TypeKind raise_type, and the resume raises a panic at the
+         * perform instead of delivering a value; raise_span is the form's site
+         * (the panic's location).  The handler-case shape predicates treat it
+         * as a use of `k` that is not a resume. */
+        struct { CAtom k; CAtom v; CVar x; CTerm *body;
+                 bool raise; int raise_type; Span raise_span; }           resume;
         /* reap_env: e is a freeable, provably-non-escaping capturing closure
          * whose heap fat-env the direct emitter does NOT free at this leaf
          * position (only emit_value(EX_LET) applies the scoped-env free).  When

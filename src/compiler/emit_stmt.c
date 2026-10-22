@@ -955,6 +955,11 @@ void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
                 emit_panic_signal_return(ctx, body);
             } else {
                 buf_printf(body, "(void)(%s);\n", v);
+                /* A `!` call has no value to hoist either: under catch-unwind
+                 * the rest of the caller ran after it panicked, and with the
+                 * root unwind so did the rest of `main`
+                 * (compiled-uncaught-panic-skips-caller-defers). */
+                if (e->type.kind == TY_NEVER) emit_panic_signal_return(ctx, body);
             }
             free(v);
             emit_pending_drops_drain(ctx, body, pd_mark);

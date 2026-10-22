@@ -1,0 +1,28 @@
+;; The `!` twin of nil-call-panic-propagates: a statement-position call to a
+;; `: !` function had no panic-signal check after it either, so under
+;; catch-unwind its caller printed "after diverge" before returning.  Found
+;; fixing compiled-uncaught-panic-skips-caller-defers, where the same gap let
+;; `main` run on past an uncaught panic.  Direct emitter and CPS backend.
+(defeffect Ask [] : int)
+
+(defn diverge [] : ! (panic "diverge"))
+
+(defn work [n : int] : int
+  (when (> n 0) (diverge))
+  (println "after diverge")
+  n)
+
+(defn work-cps [] : int
+  (let [n (perform (Ask))]
+    (when (> n 0) (diverge))
+    (println "after diverge (cps)")
+    n))
+
+(defn main [] : int
+  (let [r (catch-unwind (fn [] (work 1)))]
+    (println (if (ok? r) "ok" "caught")))
+  (let [r (catch-unwind (fn [] (handle (work-cps) (Ask [] k) (resume k 1))))]
+    (println (if (ok? r) "ok" "caught")))
+  (let [r (catch-unwind (fn [] (work 0)))]
+    (println (if (ok? r) "ok" "caught")))
+  0)

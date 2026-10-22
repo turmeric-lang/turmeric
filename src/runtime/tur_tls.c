@@ -52,6 +52,9 @@ void **tur_tls_handler_chain_ptr (void) { return &tur_tls_handler_chain; }
 __thread int tur_tls_panicking = 0;
 int *tur_tls_panicking_ptr (void) { return &tur_tls_panicking; }
 
+__thread int tur_tls_root_unwind = 0;
+int *tur_tls_root_unwind_ptr (void) { return &tur_tls_root_unwind; }
+
 __thread void *tur_tls_cur_shift_reset = 0;
 void **tur_tls_cur_shift_reset_ptr (void) { return &tur_tls_cur_shift_reset; }
 

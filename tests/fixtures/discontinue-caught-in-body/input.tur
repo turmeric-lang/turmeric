@@ -1,0 +1,40 @@
+;; discontinue-plan fixture 2 (and 4): a `catch-unwind` in the body around the
+;; `perform` catches the panic a `discontinue` raises there, and the body goes
+;; on: its value is the handle's, and what the `discontinue` returns.  This is
+;; what not resuming cannot do.  Behind --enable=discontinue (`flags`).
+(defeffect Ask [] : int)
+
+;; 1. Caught in the body; the body's defer runs when it returns.
+(defn body [] : int
+  (defer (println "body: defer ran"))
+  (let [r (catch-unwind (fn [] : int (+ 1 (perform (Ask)))))]
+    (if (err? r) 100 200)))
+
+;; 2. The perform in a helper with a defer: the defer runs during the raise,
+;;    before the catch delivers.  The clause adds to what discontinue returns.
+(defn inner [] : int
+  (defer (println "inner: defer ran"))
+  (+ 1 (perform (Ask))))
+(defn through-helper [] : int
+  (let [r (catch-unwind (fn [] : int (inner)))]
+    (if (err? r) (do (println "through-helper: caught") 100) 200)))
+
+;; 3. A typed payload, taken by catch-panic-of of its type.
+(defn typed [] : int
+  (let [r (catch-panic-of :int (fn [] : int (+ 1 (perform (Ask)))))]
+    (if (err? r) 300 400)))
+
+;; 4. Not caught in the body: caught around the handle instead.
+(defn uncaught [] : int
+  (defer (println "uncaught: defer ran"))
+  (+ 1 (perform (Ask))))
+
+(defn main [] : int
+  (println (handle (body) (Ask [] k) (discontinue k "boom")))
+  (println (handle (through-helper) (Ask [] k) (+ 1000 (discontinue k "boom"))))
+  (println (handle (typed) (Ask [] k) (discontinue k 42)))
+  ;; 5. A ^linear k discontinued once is a use.
+  (println (handle (body) (Ask [] ^linear k) (discontinue k "boom")))
+  (let [r (catch-unwind (fn [] : int (handle (uncaught) (Ask [] k) (discontinue k "boom"))))]
+    (println (if (err? r) "caught around the handle" "not caught")))
+  0)

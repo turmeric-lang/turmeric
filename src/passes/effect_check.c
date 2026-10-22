@@ -270,6 +270,39 @@ static bool e0254_first_report(const Expr *site) {
     return true;
 }
 
+/* cps-catch-unwind-cannot-cross-an-effect-capture: `catch-unwind` and
+ * `catch-panic-of` CALL their thunk, at once and exactly once, so what the
+ * thunk's body performs is performed by the form.  The thunk reaches here
+ * normalized to a fat fn value (EX_FN_TO_FAT over a lambda, or over the
+ * lifted function's name), and walking it as a value counted nothing: a
+ * `perform` in the thunk left the handler around the form "unreachable"
+ * (TUR-W0033) on every engine. */
+static EffectRow *collect_effects_in_expr(Arena *a, Expr *e, EffectRow *row,
+                                          const FnIndex *idx, EffectEnv *env,
+                                          EffectRowSubst *subst);
+
+static EffectRow *collect_called_thunk(Arena *a, Expr *t, EffectRow *row,
+                                       const FnIndex *idx, EffectEnv *env,
+                                       EffectRowSubst *subst) {
+    while (t && (t->kind == EX_ASCRIBE || t->kind == EX_FN_TO_FAT ||
+                 t->kind == EX_POLY_WRAP))
+        t = t->kind == EX_ASCRIBE  ? t->as.ascribe_.inner
+          : t->kind == EX_FN_TO_FAT ? t->as.fn_to_fat_.inner
+          : t->as.poly_wrap_.inner;
+    if (!t) return row;
+    if (t->kind == EX_FN && t->as.fn_.fn)
+        return collect_effects_in_expr(a, t->as.fn_.fn->body, row, idx, env, subst);
+    if (t->kind == EX_VAR && t->as.var.binding) {
+        FnDef *fd = fn_index_lookup(idx, t->as.var.binding);
+        EffectRow *r = fd && fd->inferred_effect_row ? fd->inferred_effect_row
+                     : t->as.var.binding->type.kind == TY_FN
+                       ? t->as.var.binding->type.as.fn.effect_row : NULL;
+        if (r) row = effect_row_merge(a, row, effect_row_apply_subst(r, subst, a));
+        return row;
+    }
+    return collect_effects_in_expr(a, t, row, idx, env, subst);
+}
+
 static EffectRow *collect_effects_in_expr(Arena *a, Expr *e,
                                           EffectRow *row,
                                           const FnIndex *idx,
@@ -672,9 +705,9 @@ static EffectRow *collect_effects_in_expr(Arena *a, Expr *e,
     case EX_PANIC_WITH:
         return collect_effects_in_expr(a, e->as.panic_with_.payload, row, idx, env, subst);
     case EX_CATCH_UNWIND:
-        return collect_effects_in_expr(a, e->as.catch_unwind_.thunk, row, idx, env, subst);
+        return collect_called_thunk(a, e->as.catch_unwind_.thunk, row, idx, env, subst);
     case EX_CATCH_PANIC_OF:
-        return collect_effects_in_expr(a, e->as.catch_panic_of_.thunk, row, idx, env, subst);
+        return collect_called_thunk(a, e->as.catch_panic_of_.thunk, row, idx, env, subst);
     case EX_PANIC_PAYLOAD_TYPE:
     case EX_PANIC_PAYLOAD_VALUE:
     case EX_PANIC_PAYLOAD_FILE:

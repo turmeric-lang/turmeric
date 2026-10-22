@@ -47,6 +47,7 @@ TLS = {
     '__stm_current_tx': ('void **', 'tur_tls_stm_current_tx_ptr'),
     'tur_handler_chain': ('void **', 'tur_tls_handler_chain_ptr'),
     'tur_panicking': ('int *', 'tur_tls_panicking_ptr'),
+    'tur_root_unwind': ('int *', 'tur_tls_root_unwind_ptr'),
     'tur_cur_shift_reset': ('void **', 'tur_tls_cur_shift_reset_ptr'),
     'tur_current_fiber': ('void **', 'tur_tls_current_fiber_ptr'),
     'tur_fiber_cancelled_flag': ('bool *', 'tur_tls_fiber_cancelled_flag_ptr'),
