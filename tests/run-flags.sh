@@ -70,7 +70,8 @@ fi
 # so the jit-ffi block below adds its directory to this list rather than
 # installing a second trap that would silently drop this one.
 TMP_FFI_DIR=""
-trap 'rm -rf "$_tur_wrap_dir" "$TMP_FFI_DIR"' EXIT
+_golden_tmp=""
+trap 'rm -rf "$_tur_wrap_dir" "$TMP_FFI_DIR" "$_golden_tmp"' EXIT
 
 PASS=0
 FAIL=0
@@ -2157,6 +2158,109 @@ if [ $rc -ne 0 ] || [ "$last" != "hi-from-program" ]; then
 else
     pass "dump-then-run-output-ordered"
 fi
+
+# ---------------------------------------------------------------------------
+# The CLI's own output, pinned (main-c-split-plan, Phase 4).
+#
+# The cases above check that `--help` exits 0 and says "usage:".  These pin
+# the whole text: `tur --help`, each subcommand's `--help`, the "external
+# commands" listing, and both completion scripts.  The dispatcher, the help
+# listing, prefix resolution and the external-command filter are generated
+# from one command table, and the global flags from one flag table, so a
+# change to either shows up here as a diff to review rather than a silent
+# drift.  TUR_FLAGS_GOLDEN_UPDATE=1 rewrites the files from the binary under
+# test; review that diff like any other.
+#
+# Each golden is the command's stdout and stderr together, then `[exit N]`,
+# with this compiler's version replaced by <VERSION>.  Each runs in an empty
+# directory (no build.tur to find) with stdin from /dev/null, and with PATH
+# holding only a scratch directory: the listing must show a `tur-foo` from
+# PATH and hide a `tur-lsp` and a `tur-jit`, which built-ins shadow, and
+# nothing on the host's own PATH may leak in.
+#
+# Left out: `interpret` and `trace`, which take `--help` for a file and so
+# print the stdlib autoload list's line numbers, and `jit`, whose answer
+# depends on whether the build carries the engine.
+# ---------------------------------------------------------------------------
+GOLDEN_DIR=tests/flags-golden
+_golden_tmp="$(mktemp -d -t tur-flags-golden-XXXXXX)"
+mkdir -p "$_golden_tmp/wd" "$_golden_tmp/path"
+for ext in foo lsp jit; do
+    printf '#!/bin/sh\nexit 0\n' > "$_golden_tmp/path/tur-$ext"
+    chmod +x "$_golden_tmp/path/tur-$ext"
+done
+_golden_tur="$(cd "$(dirname "${TUR_REAL:-$TUR}")" && pwd)/$(basename "${TUR_REAL:-$TUR}")"
+_golden_timeout=""
+[ -n "$_tur_timeout_bin" ] && _golden_timeout="$(command -v "$_tur_timeout_bin")"
+_golden_version="$(tr -d ' \r\n' < VERSION)"
+
+golden() {
+    local name="$1"; shift
+    local f="$GOLDEN_DIR/$name.txt" out rc
+    if [ -n "$_golden_timeout" ]; then
+        out=$(cd "$_golden_tmp/wd" && env PATH="$_golden_tmp/path" \
+              "$_golden_timeout" -k 5 "$TUR_CASE_TIMEOUT" "$_golden_tur" "$@" \
+              </dev/null 2>&1); rc=$?
+    else
+        out=$(cd "$_golden_tmp/wd" && env PATH="$_golden_tmp/path" \
+              "$_golden_tur" "$@" </dev/null 2>&1); rc=$?
+    fi
+    out="$(printf '%s\n[exit %d]' "$out" "$rc" | sed "s/v$_golden_version/v<VERSION>/g")"
+    if [ "${TUR_FLAGS_GOLDEN_UPDATE:-0}" = 1 ]; then
+        mkdir -p "$GOLDEN_DIR"
+        printf '%s\n' "$out" > "$f"
+        pass "golden-$name (written)"
+    elif [ ! -f "$f" ]; then
+        fail "golden-$name" "no $f (TUR_FLAGS_GOLDEN_UPDATE=1 writes it)"
+    elif printf '%s\n' "$out" | diff -u "$f" - > "$_golden_tmp/diff"; then
+        pass "golden-$name"
+    else
+        fail "golden-$name" "output differs from $f (TUR_FLAGS_GOLDEN_UPDATE=1 rewrites it):"
+        sed 's/^/    /' "$_golden_tmp/diff" | head -40
+    fi
+}
+
+golden help --help
+golden help-short -h
+golden no-args
+golden version --version
+for sub in emit-c emit-h emit-cmake check expand audit-spans lsp mcp dap \
+           lsp-lite build compile link run repl worker debug eval doc docs \
+           image-info image-verify explain format fmt parse-check test \
+           demangle new init add add-cmake fetch audit install uninstall \
+           list upgrade experiments dialects smt completion emit-rt-split; do
+    golden "help-$sub" "$sub" --help
+done
+golden completion-zsh completion zsh
+golden completion-bash completion bash
+
+# The global flags' stripping and errors, which the flag table reproduces.
+# `--version` is only recognised as argv[1], so it answers only once every
+# flag before it has been stripped.
+golden flags-stripped --no-color --panic-abort --no-auto-spice --no-r7rs-gc \
+    --no-saffron-gc --warn-unused-result --no-warn-unused-result \
+    -Werror=deprecated --Werror=inline-c-narrow-params \
+    --Werror=strict-effects --lint-panic --no-contracts --debug \
+    --json-diagnostics --json --lint-unsafe --lint-unsafe-max-lines=9 \
+    --require-unsafe-docs --unsafe-stats --lint-inline-c-unsafe \
+    --dump-kinds --strict-refine --strict-effects --dump-reflect \
+    --dump-write-frames --dump-read-frames --dump-effects \
+    --dump-refine=json --dump-cps-coloring --dump-cps --dump-mono-specs \
+    --dump-cps-mono --dump-sizes --backtrack-depth=3 --backtrack-depth 4 \
+    --dump-clone-plan --cps-path --emit-abi-trace --keep-contracts \
+    --macro-caps=io --no-proc-macros --version
+golden flags-retired --panic-trace --lint-effects -Xgadt --version
+# Read by its scanner but NOT stripped: each command's own parser skips it.
+golden flags-no-abi-cache-kept --no-abi-cache --version
+# A flag that wants a value and has none is not a flag; it is left in place.
+golden flags-explain-no-arg --explain
+golden flags-backtrack-no-arg --backtrack-depth
+golden flags-explain --explain TUR-E0001
+golden flags-enable-unknown --enable=no-such-experiment --version
+golden flags-macro-caps-ffi --macro-caps=ffi --version
+golden flags-allow-experimental --allow-experimental --version
+# Everything from `--` on belongs to the program.
+golden flags-after-dashdash --version -- --debug
 
 # ---------------------------------------------------------------------------
 # Summary

@@ -3526,6 +3526,29 @@ Expr *elab_ascribe(Elab *e, const Form *call) {
             return NULL;
         }
     }
+    /* definition-forms-gaps 5: a float-backed `defopaque` is an int64_t handle
+     * holding the float's bits.  `::` between it and a float is the carrier
+     * round trip, and the C assignment between `double` and `int64_t` is a
+     * VALUE conversion (21.5 became 21, and 21.7 read back as 4.6e18).  Build
+     * the bit reinterpret through the int64 carrier instead; the interpreter
+     * keeps the float as it is, which is the same answer. */
+    {
+        const AdtDef *od = (ascribed->kind == TY_ADT) ? ascribed->as.adt_.def : NULL;
+        const AdtDef *id = (inner->type.kind == TY_ADT) ? inner->type.as.adt_.def : NULL;
+        bool src_flt = src_kind == TY_FLOAT || src_kind == TY_FLOAT32 ||
+                       src_kind == TY_FLOAT64;
+        bool dst_flt = dst_kind == TY_FLOAT || dst_kind == TY_FLOAT32 ||
+                       dst_kind == TY_FLOAT64;
+        bool into_opaque = src_flt && od && od->is_opaque && od->opaque_base_is_float;
+        bool out_of_opaque = dst_flt && id && id->is_opaque && id->opaque_base_is_float;
+        if (into_opaque || out_of_opaque) {
+            Expr *r = expr_new(e->arena, EX_REINTERPRET, *ascribed, call->span);
+            r->as.reinterpret_.expr = inner;
+            r->as.reinterpret_.source_kind = into_opaque ? src_kind : TY_INT;
+            r->as.reinterpret_.target_kind = into_opaque ? TY_INT : dst_kind;
+            return r;
+        }
+    }
     if (src_kind != dst_kind) {
         int src_size = type_size_bytes(src_kind);
         int dst_size = type_size_bytes(dst_kind);

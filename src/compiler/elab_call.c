@@ -1341,6 +1341,41 @@ static bool type_mentions_tyvar(const Type *t) {
     }
 }
 
+/* typed-ptr-pointee-not-checked-at-calls: true when a typed pointer's pointee
+ * (through any nesting, `ptr<ptr<A>>`) is still open -- a type variable, or
+ * an ADT with no def, which is how an unresolved one reads.  Such a pointer is
+ * checked by binding its variable, not by type_eq. */
+bool ptr_pointee_is_open(const Type *t) {
+    while (t && t->kind == TY_PTR_VOID && t->as.ptr.inner) t = t->as.ptr.inner;
+    if (!t || t->kind == TY_PTR_VOID) return false;
+    if (t->kind == TY_ADT && !t->as.adt_.def) return true;
+    return type_mentions_tyvar(t);
+}
+
+bool handle_targets_conflict(const Type *a, const Type *b) {
+    if (!a || !b || a->kind != b->kind) return false;
+    if (a->kind == TY_PTR_VOID) {
+        if (!a->as.ptr.inner || !b->as.ptr.inner) return false;
+        if (ptr_pointee_is_open(a) || ptr_pointee_is_open(b)) return false;
+        return !type_eq(*a, *b);
+    }
+    if (a->kind == TY_RC || a->kind == TY_WEAK) {
+        /* type_eq compares the target KIND only, and the kind check above
+         * not even that.  Two defs that are not the same object and do not
+         * share a name are two different types; a def re-registered under
+         * its own name is not a conflict. */
+        const AdtDef *da = a->as.rc.adt_def, *db = b->as.rc.adt_def;
+        /* A type-variable or unannotated (`rc<?>`) target matches anything. */
+        if (a->as.rc.inner == TY_TYVAR || b->as.rc.inner == TY_TYVAR ||
+            a->as.rc.inner == TY_UNKNOWN || b->as.rc.inner == TY_UNKNOWN)
+            return false;
+        if (a->as.rc.inner != b->as.rc.inner) return true;   /* rc<int> / rc<float> */
+        if (!da || !db || da == db) return false;
+        return !(da->name && db->name && strcmp(da->name, db->name) == 0);
+    }
+    return false;
+}
+
 static bool type_mentions_tyvar_name(const Type *t, const char *name) {
     if (!t || !name) return false;
     switch (t->kind) {
@@ -2739,7 +2774,6 @@ static Expr *elab_lower_map_call(Elab *e, const Form *call, const Symbol *name) 
          * lower map-new directly to hamt/new so the result type is void * and
          * subsequent HAMT operations (count, assoc, …) receive the right type. */
         if (e->in_persistent_let) {
-            e->needs_hamt = true;
             extern bool g_needs_hamt;
             g_needs_hamt = true;
             return elab_call_hamt_fn(e, call->span, e->sym_hamt_new, 0, NULL);
@@ -2782,9 +2816,7 @@ static Expr *elab_lower_map_call(Elab *e, const Form *call, const Symbol *name) 
         return elab_call_fn(e, call, fn_binding);
     }
     
-    /* Mark that we need HAMT */
-    e->needs_hamt = true;
-    /* Phase P3: Set global flag for emit phase */
+    /* Phase P3: mark that the emit phase needs HAMT */
     extern bool g_needs_hamt;
     g_needs_hamt = true;
     
@@ -4233,6 +4265,19 @@ static Expr *elab_call_inner(Elab *e, Form *call);
 static int  g_elab_call_depth;
 static bool g_elab_call_depth_reported;
 
+/* definition-forms-gaps 4: a `defstruct` / `defdata` / `defgadt` in a function
+ * body declares its type and constructors in scope, but its C type and
+ * constructor functions were never emitted -- the EX_DEFDATA node sat in the
+ * body, where the emitter has nothing to say about it -- so the program was a C
+ * error (`implicit declaration of function 'ctor_Point_Point'`).  Hoist it to
+ * file scope the way a nested `defn` is (elab_defn), and leave nil in place. */
+static Expr *elab_hoist_nested_type_def(Elab *e, const Form *call, Expr *def) {
+    if (!def || e->scope == &e->global) return def;
+    if (def->kind != EX_DEFDATA && def->kind != EX_DEFGADT) return def;
+    elab_register_file_def(e, def);
+    return e_nil(e, call->span);
+}
+
 Expr *elab_call(Elab *e, Form *call) {
     if (g_elab_call_depth == 0) g_elab_call_depth_reported = false;
     if (g_elab_call_depth >= ELAB_CALL_DEPTH_STACK_FLOOR &&
@@ -4631,7 +4676,7 @@ static Expr *elab_call_inner(Elab *e, Form *call) {
     if (name == e->sym_cast)    return elab_any_cast(e, call);
     if (name == e->sym_is_q)    return elab_is_q(e, call);
     /* Phase 11: defstruct */
-    if (name == e->sym_defstruct) return elab_defstruct(e, call);
+    if (name == e->sym_defstruct) return elab_hoist_nested_type_def(e, call, elab_defstruct(e, call));
     if (name == e->sym_make_struct) return elab_make_struct(e, call);
     /* WITH-V0: functional struct update.  Gated on `!scope_lookup` so a user
      * binding named `with` still wins (mirrors the session-op shadowing rule). */
@@ -4698,9 +4743,9 @@ static Expr *elab_call_inner(Elab *e, Form *call) {
     /* SI4-C: defopaque */
     if (name == e->sym_defopaque) return elab_defopaque(e, call);
     /* Phase G0: ADTs */
-    if (name == e->sym_defdata) return elab_defdata(e, call);
+    if (name == e->sym_defdata) return elab_hoist_nested_type_def(e, call, elab_defdata(e, call));
     if (name == e->sym_match) return elab_match(e, call);
-    if (name == e->sym_defgadt) return elab_defgadt(e, call);
+    if (name == e->sym_defgadt) return elab_hoist_nested_type_def(e, call, elab_defgadt(e, call));
     if (name == e->sym_coerce)  return elab_coerce(e, call);
     /* Phase 12: Borrow traits */
     if (name == e->sym_borrow) return elab_borrow_immut(e, call);
@@ -5079,6 +5124,25 @@ static Expr *elab_call_inner(Elab *e, Form *call) {
             expanded->as.list.items[0]->tag == F_SYM &&
             strcmp(expanded->as.list.items[0]->as.sym->name, "definstance") == 0) {
             expanded->span = call->span;
+        } else if (e->toplevel_stmt != call) {
+            /* macro-expansion-as-call-arg-blamed-on-template: the expansion
+             * REPLACES the call, so the VALUE it elaborates to belongs at the
+             * call site -- but its Expr carried the template root's span, and
+             * a check made AFTER the expand+elaborate window (the enclosing
+             * call's argument check, a `let` annotation) reported there:
+             * `stdlib/vec.tur:501` for `(total (vec-of (Q 3.25)))`, with no
+             * note back to the user's file.  Give the root the call's span;
+             * inner subforms keep their template spans, so a diagnostic
+             * INSIDE the expansion still lands in the macro with the
+             * provenance note.  Expression position only: a top-level
+             * statement root (a macro-emitted `defn`) keeps its file id, which
+             * credits the definition to the macro's module.  A shallow copy
+             * rather than a write: the root can be one of the call's own
+             * argument forms handed back unchanged. */
+            Form *root = (Form *)arena_alloc(e->arena, sizeof(Form));
+            *root = *expanded;
+            root->span = call->span;
+            expanded = root;
         }
 
         /* Phase M4: Keep the expansion-module context active while elaborating
@@ -5613,6 +5677,39 @@ static Expr *elab_call_inner(Elab *e, Form *call) {
                                             (ft->kind == TY_FN && ft->as.fn.boxed));
                     if (!fat_field) continue;
                     Expr *fa = call_expr->as.call_.args[fi];
+                    /* fn-param-stored-in-struct-field-miscompiles: a `(fn ...)`
+                     * PARAMETER not marked `^fat` is the two-word poly carrier
+                     * (tur_poly_fn_t, typed ptr<void>), not a TY_FN value, so
+                     * the thin-fn shim below never saw it and the constructor
+                     * cast the struct to an integer (a cc error).  Box it onto
+                     * the fat handle the field holds, as the type-variable slot
+                     * (fn-param-at-type-variable-slot, the arg loop) and a
+                     * fn-typed defn result (elab_normalize_fn_tail_leaves)
+                     * already do; the sink is the field's own signature so the
+                     * slot-0 shim matches the field call's typed dispatch. */
+                    if (fa && fa->type.kind == TY_PTR_VOID) {
+                        const Expr *pv = fa;
+                        while (pv && pv->kind == EX_ASCRIBE) pv = pv->as.ascribe_.inner;
+                        const Binding *pb = (pv && pv->kind == EX_VAR)
+                            ? pv->as.var.binding : NULL;
+                        if (pb && pb->is_param && pb->is_poly_fn && pb->poly_type &&
+                            pb->poly_type->kind == TY_FN &&
+                            !pb->poly_type->as.fn.cfnptr &&
+                            pb->poly_type->as.fn.arity <= TUR_FAT_SHIM_MAX_ARITY) {
+                            const Type *sink = (ft->kind == TY_FN &&
+                                                !call_type_has_named_tyvar(ft))
+                                ? ft : pb->poly_type;
+                            Type *bt = (Type *)arena_alloc(e->arena, sizeof(Type));
+                            *bt = *sink;
+                            bt->as.fn.boxed = true;
+                            Expr *conv = expr_new(e->arena, EX_POLY_TO_FAT, *bt,
+                                                  fa->span);
+                            conv->as.poly_to_fat_.inner = fa;
+                            conv->as.poly_to_fat_.sink_fn_type = sink;
+                            call_expr->as.call_.args[fi] = conv;
+                        }
+                        continue;
+                    }
                     if (!fa || fa->type.kind != TY_FN || fa->type.as.fn.boxed)
                         continue;
                     /* fn-value-fat-normalization increment 2: a NORMALIZED fn
@@ -6928,7 +7025,23 @@ bool any_expr_is_owned_temp(const Expr *x, int depth) {
     if (x->kind == EX_UNION_INJECT && x->as.union_inject_.value &&
         x->as.union_inject_.value->type.kind == TY_UNION)
         return false;
-    if (x->kind == EX_UNION_INJECT) return !x->as.union_inject_.frame_box;
+    /* any-widen-deep-drop-frees-borrowed-children: the widen mints the box, but
+     * it fills that box with a COPY OF THE HEADER -- and the copy's children
+     * are still whatever the original pointed at.  So "this expression owns
+     * the box" does not license the deep `__tur_any_drop` the consumer will
+     * run, which walks the children too.
+     *
+     *     (let [one (Cons (:: 1 any) (:: (Nil) any))]
+     *       (peek (:: one any)))     ;; stamped -> deep drop
+     *
+     * The drop freed `one`'s `(Nil)` box through the copy, and `one`'s own
+     * scope-exit drop then read it again: a heap-use-after-free.  The same
+     * hole `returns_fresh_any` had -- freshness of the BOX read as freshness
+     * of what is under it -- so it takes the same guard.  A payload that owns
+     * nothing is unaffected, which is every case the temp-drop fixtures pin. */
+    if (x->kind == EX_UNION_INJECT)
+        return !x->as.union_inject_.frame_box &&
+               !any_widen_payload_owns_droppable(x->as.union_inject_.value);
     if (x->kind != EX_CALL || !x->as.call_.fn_binding) return false;
     const Binding *fb = x->as.call_.fn_binding;
     if (fb->returns_fresh_any) return true;
@@ -6960,7 +7073,7 @@ bool any_expr_is_owned_temp(const Expr *x, int depth) {
  * and hand over the stored value/key, which IS a carrier box, so their erased
  * comparators are already right.  (Their TYPED comparators are wrong for the
  * mirror-image reason -- filed separately as
- * docs/reported/typed-comparator-over-hamt-box-compares-box-addresses.md.) */
+ * docs/archive/typed-comparator-over-hamt-box-compares-box-addresses.md.) */
 static bool call_comparator_gets_slot_words(const Binding *fn_binding,
                                             uint32_t argi) {
     if (!fn_binding || !fn_binding->name || !fn_binding->name->name) return false;
@@ -8498,6 +8611,21 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
                 }
             }
         }
+        /* typed-ptr-pointee-not-checked-at-calls: a `ptr<Foo>` parameter
+         * matched any pointer by kind, so a `ptr<Bar>` argument was accepted
+         * and a typed pointer protected no more than `ptr<void>`.  type_eq
+         * compares the pointees (and still lets an untyped `ptr<void>` match
+         * either way).  A pointee that names a type variable (`ptr<A>`) is
+         * left to the binding collection below.  `rc<S>` / `weak<S>` had the
+         * same hole: type_eq compares only their target kind. */
+        if (arg_ok && (expected_arg_kind == TY_PTR_VOID || expected_arg_kind == TY_RC ||
+                       expected_arg_kind == TY_WEAK) &&
+                fn_type.kind == TY_FN && fn_type.as.fn.arg_full_types) {
+            uint32_t nidx = fn_binding->closure_fn_binding ? i + 1 : i;
+            Type *ef = (nidx < fn_type.as.fn.arity)
+                ? fn_type.as.fn.arg_full_types[nidx] : NULL;
+            if (handle_targets_conflict(&args[i]->type, ef)) arg_ok = false;
+        }
         /* Phase HRT/G2: A TY_TYVAR parameter (named type variable like :a) accepts any argument.
          * The concrete type is resolved per-arm inside a GADT match. */
         if (!arg_ok && expected_arg_kind == TY_TYVAR) {
@@ -9771,7 +9899,11 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
                   * whole content of the diagnostic, so take it from
                   * arg_full_types. */
                  expected_arg_kind == TY_SESSION || expected_arg_kind == TY_ROLE ||
-                 expected_arg_kind == TY_FN) &&
+                 expected_arg_kind == TY_FN ||
+                 /* typed-ptr-pointee-not-checked-at-calls: `ptr<Foo>`, not
+                  * the kind's `ptr<void>`; `rc<S>`, not `rc<<adt>>`. */
+                 expected_arg_kind == TY_PTR_VOID || expected_arg_kind == TY_RC ||
+                 expected_arg_kind == TY_WEAK) &&
                 fn_type.kind == TY_FN && fn_type.as.fn.arg_full_types) {
                 uint32_t fn_arg_idx4 = fn_binding->closure_fn_binding ? i + 1 : i;
                 Type *ct = (fn_arg_idx4 < fn_type.as.fn.arity)

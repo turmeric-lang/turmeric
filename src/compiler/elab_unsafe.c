@@ -250,18 +250,16 @@ Expr *elab_unsafe_cast(Elab *e, const Form *call) {
     Type result_type = TYPE_INT;
     Expr *out = expr_new(e->arena, EX_BUILTIN, result_type, call->span);
     out->as.builtin.spec = spec;
-    Expr **args = arena_alloc(e->arena, 2 * sizeof(Expr *));
+    Expr **args = arena_alloc(e->arena, 1 * sizeof(Expr *));
     args[0] = value;
-    args[1] = value; /* Placeholder for target type */
     out->as.builtin.args = args;
-    out->as.builtin.n = 2;
+    out->as.builtin.n = 1;
     return out;
 }
 
 Expr *elab_reinterpret(Elab *e, const Form *call) {
-    /* (reinterpret value as-type) - bitwise reinterpretation
-     * Similar to unsafe-cast but with compile-time size check requirement
-     * For v1, we just check we're in an unsafe block */
+    /* (reinterpret value as-type) - bitwise reinterpretation, with a
+     * compile-time size check.  Same lowering as transmute. */
     if (call->as.list.len != 3) {
         diag_emit(DIAG_ERROR, call->span,
                   "reinterpret requires exactly 2 arguments: (reinterpret value as-type)");
@@ -296,14 +294,18 @@ Expr *elab_reinterpret(Elab *e, const Form *call) {
         diag_emit(DIAG_ERROR, call->span, "reinterpret: builtin lookup failed");
         return NULL;
     }
-    Type result_type = TYPE_INT;
+    /* The result has the target type, as transmute's does: a bit copy read
+     * back as an `int` would print a float's bits as a number. */
+    Type result_type = (target_kind != TY_UNKNOWN) ? (Type){ .kind = target_kind,
+        .copy_kind = CK_COPY, .n_lifetimes = 0 } : TYPE_INT;
     Expr *out = expr_new(e->arena, EX_BUILTIN, result_type, call->span);
     out->as.builtin.spec = spec;
-    Expr **args = arena_alloc(e->arena, 2 * sizeof(Expr *));
+    /* One argument: a placeholder second slot evaluated `value` twice, on
+     * both engines. */
+    Expr **args = arena_alloc(e->arena, 1 * sizeof(Expr *));
     args[0] = value;
-    args[1] = value; /* Placeholder */
     out->as.builtin.args = args;
-    out->as.builtin.n = 2;
+    out->as.builtin.n = 1;
     return out;
 }
 
@@ -1034,7 +1036,7 @@ Expr *elab_callback_ptr(Elab *e, const Form *call) {
      * bare function pointer, a boxed closure whose slot 0 is the code
      * pointer, or a `__poly_` adapter, and one of those combinations already
      * SIGSEGVs on the ordinary argument path
-     * (docs/reported/let-bound-noncapturing-lambda-segfaults-as-fn-arg.md).
+     * (docs/archive/let-bound-noncapturing-lambda-segfaults-as-fn-arg.md).
      * Building an FFI trampoline on top of that would turn a representation
      * mismatch into a wild jump from inside a C library.
      *

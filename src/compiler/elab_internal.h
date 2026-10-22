@@ -950,8 +950,6 @@ typedef struct Elab {
      * opens cannot confuse each other's escape checks. */
     int              open_skolem_depth;
     uint32_t         open_skolem_next;
-    /* Phase P3: HAMT lowering - track if HAMT functions are used */
-    bool             needs_hamt;
     /* Phase P3: set true while elaborating the RHS of a ^persistent let binding
      * so that map-new (which has no first arg to inspect) can be lowered to
      * hamt/new even though is_persistent_map would otherwise be false. */
@@ -1413,6 +1411,13 @@ typedef struct RefineCallSite {
      * one of these.  NULL / 0 when nothing is frozen. */
     const char   **frozen_names;
     uint32_t       n_frozen;
+    /* refine-top-level-def-not-a-fact: the global bindings the ARGUMENTS name,
+     * resolved through the scope at crossing-creation time -- so a local that
+     * shadows the global's name is never mistaken for it.  Their
+     * `refine_def_init` is read when the crossing is decided, since a `def`
+     * the call precedes is elaborated after it. */
+    const Binding **global_args;
+    uint32_t        n_global_args;
     Span           loc;
 } RefineCallSite;
 
@@ -1777,6 +1782,11 @@ uint32_t linear_state_snapshot_bindings(const Scope *scope,
 bool *linear_state_capture_current(Binding **bindings, uint32_t n);
 void linear_state_restore(Binding **bindings, const bool *states, uint32_t n);
 bool is_binding_consumed(const Expr *body, Binding *binding);
+/* any-widen-deep-drop-frees-borrowed-children: the same walk with one extra
+ * disposal pattern -- the binding widened to `any` and stored into an
+ * aggregate with drop glue, which hands its children to that aggregate's
+ * owner.  Used only by the localowned scope drop, where it can only suppress. */
+bool is_binding_widened_to_any(const Expr *body, Binding *binding);
 /* set-bang-rc-release: stamp every `(set! binding v)` in `body` so codegen
  * releases the value being overwritten, normalizing borrow-shaped `v` to a
  * genuine +1 first.  Call ONLY for a binding that owns a continuous reference
@@ -2375,6 +2385,17 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
 Type *ptr_type_from_keyword_name(Elab *e, const char *name, uint32_t len,
     Span span, const Symbol *rec_name, const Symbol **type_params,
     Kind *type_param_kinds, uint8_t n_type_params);
+/* typed-ptr-pointee-not-checked-at-calls: true when `t` is a typed pointer
+ * whose pointee (through any nesting) is still open -- a type variable, or an
+ * ADT with no def.  Two typed pointers are compared with type_eq only when
+ * neither is open (elab_call.c). */
+bool ptr_pointee_is_open(const Type *t);
+/* true when `a` and `b` are handles of one kind to two different things that
+ * the kind check alone let through: typed pointers with closed pointees that
+ * type_eq tells apart (`ptr<Foo>` against `ptr<Bar>`; an untyped ptr<void> on
+ * either side never conflicts), or `rc` / `weak` of two different ADTs
+ * (`rc<S>` against `rc<U>`; a type-variable target never conflicts). */
+bool handle_targets_conflict(const Type *a, const Type *b);
 /* rc-angle-bracket-annotation-becomes-tyvar: resolve a typed reference-family
  * keyword annotation (`rc<T>`, `weak<T>`, `ref<T>`, `lref<T>`) to its real
  * TY_RC/TY_WEAK/TY_REF/TY_LREF Type -- and, for
@@ -2528,6 +2549,12 @@ SessPayloadClass session_payload_class(Type t);
 /* Emit TUR-E0212 naming `op` and the payload type when the class is
  * SESS_PAY_UNSUPPORTED; returns false in that case. */
 bool session_payload_supported(Elab *e, Type t, Span span, const char *op);
+/* elab_effects.c: would storing a `got` value into a one-word slot declared
+ * `want` be rejected by an ordinary call?  The `perform` argument rule (exact
+ * primitives, no scalar into a pointer, nominal aggregates; silent wherever a
+ * type variable or `any` leaves the answer to inference), shared with `send`. */
+bool elab_word_slot_mismatch(const Type *want, const Type *got,
+                             bool *scalar_into_pointer);
 /* Arena-allocated C expression converting `inner` (a C expression of the
  * payload's C type) to the int64 word, and back from a word to the payload
  * type.  `inner` need not be NUL-terminated: pass its length. */
@@ -2544,6 +2571,12 @@ Expr *elab_session_recv_timeout(Elab *e, const Form *call);
 /* any-struct-box-leak-per-widen: does this expression evaluate to an `any` whose
  * payload box the evaluating expression owns?  See elab_call.c. */
 bool any_expr_is_owned_temp(const Expr *x, int depth);
+/* any-widen-deep-drop-frees-borrowed-children: true when a deep
+ * `__tur_any_drop` of a widen of this payload would release more than the box
+ * it mints -- i.e. the payload's ADT carries `drop_localowned_` glue.  Defined
+ * in elab_fns.c; the owned-temp and freshness rules share it so they cannot
+ * drift apart. */
+bool any_widen_payload_owns_droppable(const Expr *payload);
 
 /* RM1 (reclamation-plan): the per-callee freshness analysis -- see the walker
  * in elab_fns.c and the flag's comment in expr.h. */

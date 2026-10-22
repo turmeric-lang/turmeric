@@ -34,7 +34,7 @@
 #include "types.h"
 #include "emit_split.h"
 
-/* Phase R5: Global panic strategy flag (set by main.c --panic-abort) */
+/* Phase R5: Global panic strategy flag (set by the driver for --panic-abort) */
 extern bool g_panic_abort;
 /* r7rs-programs-compile-slowly: which unit of a split build this emission
  * writes (emit_split.h); EMIT_SPLIT_NONE for every ordinary emission. */
@@ -56,7 +56,7 @@ EmitSplitMode emit_split_binding_home(const Binding *b);
  * `why` is a string literal, kept for TUR_SHOW_CC-style diagnostics. */
 void emit_split_refuse(const char *why);
 
-/* Phase R6: Result/panic linting flags (set by main.c) */
+/* Phase R6: Result/panic linting flags (set by the driver) */
 extern bool g_warn_unused_result;
 extern bool g_lint_panic;
 /* Phase C2: --no-contracts (controls the TUR_CONTRACTS_ENABLED preamble define) */
@@ -172,9 +172,9 @@ uint32_t static_init_count(void);
  * split on Mach-O.  See the definition. */
 void     static_init_emit(Buf *out, bool gc_collector_pasted);
 
-/* Phase B5: backtrack depth cap (set by main.c --backtrack-depth N) */
+/* Phase B5: backtrack depth cap (set by the driver for --backtrack-depth N) */
 extern int64_t g_backtrack_depth;
-/* Phase B5: dump cloneable capture plan (set by main.c --dump-clone-plan) */
+/* Phase B5: dump cloneable capture plan (set by the driver for --dump-clone-plan) */
 extern bool g_dump_clone_plan;
 
 /* Forward declarations */
@@ -669,6 +669,18 @@ typedef struct EmitCtx {
     uint32_t  cap_dead_base_ctors;
     const EmitAbiSpecialization *current_abi_specialization;
     const char *current_fn_ret_ctype;
+    /* byval-spine-drop-past-early-exit: true while emitting a function whose
+     * every parameter AND result is a non-pointer scalar (bool/int/float and
+     * the fixed-width kinds -- NOT cstr, NOT ptr, NOT any).  Only then may
+     * emit_let_value put a by-value ADT local's `drop_localowned_<T>` on the
+     * early-exit channel (`any_scope_drops`) for a body that `return`s: the
+     * channel fires after the return value is hoisted, so only that value
+     * leaves -- and a number cannot point into the spine being freed.  A match
+     * binder aliasing the spine (`t` in `(Cons h t)`) returned out of the scope
+     * is exactly what this refuses.  Computed once per FnDef beside
+     * `current_fn_ret_ctype`; reset to false wherever a nested C function body
+     * is emitted, so the default is the status-quo leak, never a free. */
+    bool current_fn_spine_drop_safe;
     /* MB1 / forall-dict-pass-multi-constraint-hkt-plan (Task 1.4): set while
      * emitting a dict-clone FnDef body (see FnDef.dict_clone_*).  A class-method
      * call carrying a `dict_arg` whose instance's class matches one of
@@ -1124,6 +1136,10 @@ char *emit_c_zero_of(const char *cname);
 void emit_main_deep_stack_prologue(Buf *out);
 /* `(panic msg)` at `span`: tur_panic_at with the source location (emit_expr.c). */
 void emit_panic_call(Buf *body, Span span, const char *msg);
+/* `(panic-with payload)`: tur_panic_with(tag, payload, file, line) at the
+ * SOURCE position (the file's base name and span.line), as emit_panic_call
+ * does for `panic`. */
+void emit_panic_with_call(Buf *body, Span span, int type_tag, const char *payload);
 bool emit_str_is_bare_ident(const char *s);
 /* cps-let-binder-bridge-lacks-position-check: the single position-level test --
  * is `v` a bare identifier whose RECORDED emitted C type is exactly

@@ -1,0 +1,2 @@
+usage: tur uninstall <name>
+[exit 1]

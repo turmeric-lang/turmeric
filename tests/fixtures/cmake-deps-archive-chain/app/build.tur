@@ -1,0 +1,6 @@
+(defpackage app
+  :name "app"
+  :version "0.1.0"
+  :cmake-deps #map{
+    "midcore" #map{:path "../../deps/midcore" :targets ["mid" "core"]}
+    "top"     #map{:path "../../deps/top"     :targets ["top"]}})

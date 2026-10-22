@@ -1,15 +1,15 @@
 /* emit_effects.c -- expression-position emission for algebraic effects and
- * CPS (shift/reset) constructs.  Covers the three regions of emit_value that
- * were extracted from emit_expr.c (EE1--EE3):
+ * CPS (shift/reset) constructs, on the DIRECT emitter.  What is here:
  *
- *   Region C  EX_DEFECT / EX_PERFORM / EX_HANDLE / EX_RESUME / EX_DISCONTINUE
- *   Region A  EX_RESET / EX_CLONEABLE_RESET / EX_SHIFT / EX_SHIFT0 /
- *             EX_CLONEABLE_SHIFT / EX_SERIAL_RESET / EX_SERIAL_SHIFT
- *   Region B  EX_CONT_PRED
+ *   - the effect arms: EX_DEFECT, EX_HANDLE (a non-effect `handle` shape still
+ *     has a direct path), the handler literal and compose-handlers, EX_RESUME
+ *     and EX_DISCONTINUE;
+ *   - the reset/shift family: EX_RESET / EX_CLONEABLE_RESET / EX_SHIFT /
+ *     EX_SHIFT0 / EX_CLONEABLE_SHIFT / EX_SERIAL_RESET / EX_SERIAL_SHIFT;
+ *   - the continuation predicate, EX_CONT_PRED.
  *
- * The emit_program runtime prelude fragments (fiber struct fields,
- * global_effect_handler_chain, tur_effect_perform definition) remain in
- * emit_module.c -- see emit-effects-extraction-plan.md §EE4 for rationale.
+ * EX_PERFORM is not here: the CPS/DK backend (emit_cps_ir.c) is the only
+ * effect lowering, and emit_value_dispatch's EX_PERFORM arm emits nothing.
  */
 #include "emit_internal.h"
 #include "globals.h"
@@ -229,6 +229,9 @@ static bool emit_dk_handler_case_fn(EmitCtx *ctx, Buf *hbuf, const char *dkfn_na
     hc.handle_captures = has_caps ? caps : NULL;
     hc.n_handle_captures = has_caps ? n_caps : 0;
     hc.handle_env_name = has_caps ? env_var : NULL;
+    /* byval-spine-drop-past-early-exit: a copied context inherits the OUTER
+     * function's signature verdict; this C function has its own. */
+    hc.current_fn_spine_drop_safe = false;
     /* non-tail prefix statements (e.g. (println s)) -- ordinary direct emit */
     for (uint32_t i = 0; i < n_prefix; i++) emit_stmt(&hc, &fn, prefix[i]);
     /* tail (resume k V): consume the continuation and tail-resume it on the DK */
@@ -353,6 +356,8 @@ char *emit_effects_handler_lit(EmitCtx *ctx, Buf *body, const Expr *e) {
         hc.handle_captures = has_caps ? caps : NULL;
         hc.n_handle_captures = has_caps ? n_caps : 0;
         hc.handle_env_name = has_caps ? env_var : NULL;
+        /* byval-spine-drop-past-early-exit: same reset as above. */
+        hc.current_fn_spine_drop_safe = false;
         if (!c->body) {
             buf_puts(&fn, "    return 0;\n");
         } else if (c->body->type.kind == TY_NEVER) {
@@ -877,8 +882,6 @@ char *emit_effects_shift(EmitCtx *ctx, Buf *body, const Expr *e) {
     char *result = fresh_tmp(ctx);
 
     /* Emit the call: k_fn(body_val) */
-    /* Use emit_call_helper to handle both functions and closures */
-    /* For now, just emit as a regular call */
     char *k_fn = emit_value(ctx, body, e->as.shift_.k_fn);
 
     /* Check if this is a closure call by looking at the expression */

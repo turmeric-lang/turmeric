@@ -1,0 +1,12 @@
+;; typed-ptr-pointee-not-checked-at-calls: a ptr<Foo> parameter must refuse a
+;; ptr<Bar> argument -- it used to match any pointer by kind.
+(defstruct Foo [a : int])
+(defstruct Bar [b : int])
+(defn mk-bar [] : ptr<Bar>
+  ```c
+  return 0;
+  ```)
+(defn f [x : ptr<Foo>] : int 0)
+(defn main [] : int
+  (println (f (mk-bar)))
+  0)

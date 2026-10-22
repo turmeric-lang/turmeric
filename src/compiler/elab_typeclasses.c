@@ -8654,7 +8654,7 @@ static Expr *elab_method_call_impl(Elab *e, const Form *call) {
                     {
                         const char *opath = diag_file_path(inst->origin_file_id);
                         /* stdlib files always live directly under a dir ending
-                         * in "stdlib" (see resolve_stdlib_root in main.c), so the
+                         * in "stdlib" (see the driver's resolve_stdlib_root), so the
                          * path contains "stdlib/<basename>". The root may be
                          * relative ("stdlib/option.tur") or absolute, so match
                          * the "stdlib/" component without requiring a leading
@@ -9646,6 +9646,21 @@ resolved_user_fallback:;
                 rft->kind == TY_ADT && rft->as.adt_.def &&
                 rft->as.adt_.def->n_type_params == 0) {
                 result_type = *rft;
+            }
+            /* unannotated-method-receiver-option-result-untyped: a GROUND
+             * application declared on the method -- `(cats [r] : (Option
+             * int))` -- is threaded onto the impl binding (the TY_APP branch
+             * of elab_definstance's result_full_type), but only the
+             * non-parametric ADT above was read back here, so the call was
+             * typed from result_kind alone: the def-less `(? ?)` that
+             * `unwrap-or` refused.  With `[r : a]` the call took another
+             * path and was typed; the declared result should type the call
+             * either way.  Ground applications only (an applied class
+             * variable is the receiver-grounded case further down). */
+            else if (rft && rft->kind == TY_APP && !saffron_type_mentions_tyvar(rft)) {
+                const Type *hd = rft;
+                while (hd->kind == TY_APP && hd->as.app.fn) hd = hd->as.app.fn;
+                if (hd->kind == TY_ADT && hd->as.adt_.def) result_type = *rft;
             }
             /* ECS E2d-P6 (parametric associated-type element): the impl's
              * result_full_type is the instance head's own tyvar (`A`, threaded

@@ -917,10 +917,9 @@ bool type_has_concrete_codegen_layout(const Type *t) {
  * type arguments have a concrete codegen layout -- e.g. `(ReF bool)`,
  * `(Cons int)`.  Such a type is monomorphized to a per-element C struct
  * (`tur_adt_ReF__bool`) whose field WIDTHS follow the element, distinct from the
- * int64-carrier `tur_adt_ReF`.  The struct-app branch of
- * type_has_concrete_codegen_layout deliberately rejects ADT apps (its callers
- * then call type_extract_struct_app), so this is a separate predicate used by
- * the M7 by-value HKT machinery to recognize a parametric-SUM result/element. */
+ * int64-carrier `tur_adt_ReF`.  type_has_concrete_codegen_layout's TY_APP arm
+ * returns false unconditionally, so this is a separate predicate used by the
+ * M7 by-value HKT machinery to recognize a parametric-SUM result/element. */
 /* Is one type ARGUMENT of an ADT application concrete enough to monomorphise?
  *
  * type_has_concrete_codegen_layout answers `true` for every TY_ADT, which is
@@ -1787,7 +1786,7 @@ bool adt_ctor_is_null_none(const AdtDef *def, const CtorDef *ctor) {
  * wrong answer -- and R5 held it at prototype on one blocker, the boundary
  * form.  With `with-region` landed, the static walk widened across four pinned
  * batches, and the three R4 residues closed, the default flipped.  `TUR_REGIONS=0`
- * is the bisection hatch (read once in main.c): it restores plain malloc at
+ * is the bisection hatch (read once by the driver): it restores plain malloc at
  * the four routed ctor sites, no bracket around bt-scope / with-region, and no
  * atexit shutdown -- byte-for-byte the pre-graduation default build.
  * tests/run-regions-seam.sh keeps THAT path green (inverted at graduation, per
@@ -1831,14 +1830,14 @@ static bool sr3_option_niche(void) {
      * wrong-answered httpd-req-string-opt, all of which recover when the niche
      * comes off too, and none of which points at the niche from the switch the
      * user actually flipped.  Measured and filed 2026-09-04 in
-     * docs/reported/sr2-carrier-seam-rotted.md; tests/run-sr2-seam.sh pins it.
+     * docs/archive/sr2-carrier-seam-rotted.md; tests/run-sr2-seam.sh pins it.
      *
      * This is a HATCH interaction, not a default one: both globals are true in
      * every shipping build, so the added test is dead weight on the default path
      * and changes no emitted byte there. */
     if (!g_sr2_app_sum_byvalue) return false;
     /* Graduated 2026-09-03: default-on, no lifecycle warning.  The global is
-     * only ever cleared by TUR_OPTION_NICHE=0 (main.c), the bisection hatch. */
+     * only ever cleared by TUR_OPTION_NICHE=0 (the driver), the bisection hatch. */
     return g_opt_option_niche;
 }
 
@@ -2676,17 +2675,16 @@ static void emit_registered_adt_app_rec(Buf *out, uint32_t idx) {
          * typedef + field-read sites. */
         if (app_heap) {
             /* RM3 R2 (docs/archive/regions-plan.md): the spine node, at the
-             * MONOMORPH ctor.  Its sibling is the base ctor in emit_module.c
-             * (`emit_adt_typedef_and_ctors`) -- the two mirror each other and a
-             * change to one belongs in both.  That is not a general caution: it
-             * is what happened here.  The first R2 pass changed only the base
-             * emitter, and `ctor_Cons_Cons__int` -- the ctor the leak sweep
-             * actually blames -- kept its plain malloc, which the reclamation
-             * plan's own standing habit predicts ("when a representation change
-             * lands in a ctor or temp emitter, grep for the other emitter
-             * before calling it done").
-             *
-             * Gated, so a default build emits the identical malloc. */
+             * MONOMORPH ctor.  Its siblings are the base ctor in emit_module.c
+             * (`emit_adt_typedef_and_ctors`) and the non-parametric base ctor
+             * in emit_program_inner -- the three mirror each other and a
+             * change to one belongs in all three.  That is not a general
+             * caution: it is what happened here.  The first R2 pass changed
+             * only the base emitter, and `ctor_Cons_Cons__int` -- the ctor the
+             * leak sweep actually blames -- kept its plain malloc, which the
+             * reclamation plan's own standing habit predicts ("when a
+             * representation change lands in a ctor or temp emitter, grep for
+             * the other emitter before calling it done"). */
             buf_printf(out, "    %s *__r = (%s *)%s(sizeof(%s));\n",
                        adt_inst_name, adt_inst_name,
                        region_alloc_fn(),
@@ -2932,7 +2930,11 @@ const char *type_name(Type t) {
             Buf tmp;
             buf_init(&tmp);
             buf_puts(&tmp, "rc<");
-            buf_puts(&tmp, type_name(type_from_kind(t.as.rc.inner)));
+            /* typed-ptr-pointee-not-checked-at-calls: name the ADT, so
+             * `rc<S>` against `rc<U>` does not read `rc<<adt>>` twice. */
+            buf_puts(&tmp, (t.as.rc.inner == TY_ADT && t.as.rc.adt_def && t.as.rc.adt_def->name)
+                               ? t.as.rc.adt_def->name
+                               : type_name(type_from_kind(t.as.rc.inner)));
             buf_puts(&tmp, ">");
             buf_putc(&tmp, '\0');
             const char *r = intern_type_name(tmp.data);
@@ -2944,7 +2946,11 @@ const char *type_name(Type t) {
             Buf tmp;
             buf_init(&tmp);
             buf_puts(&tmp, "weak<");
-            buf_puts(&tmp, type_name(type_from_kind(t.as.rc.inner)));
+            /* typed-ptr-pointee-not-checked-at-calls: name the ADT, so
+             * `rc<S>` against `rc<U>` does not read `rc<<adt>>` twice. */
+            buf_puts(&tmp, (t.as.rc.inner == TY_ADT && t.as.rc.adt_def && t.as.rc.adt_def->name)
+                               ? t.as.rc.adt_def->name
+                               : type_name(type_from_kind(t.as.rc.inner)));
             buf_puts(&tmp, ">");
             buf_putc(&tmp, '\0');
             const char *r = intern_type_name(tmp.data);
@@ -3448,13 +3454,19 @@ static void type_name_buf(Buf *b, Type t) {
         /* Phase 9: rc<T> and weak<T> */
         case TY_RC: {
             buf_puts(b, "rc<");
-            type_name_buf(b, type_from_kind(t.as.rc.inner));
+            if (t.as.rc.inner == TY_ADT && t.as.rc.adt_def && t.as.rc.adt_def->name)
+                buf_puts(b, t.as.rc.adt_def->name);
+            else
+                type_name_buf(b, type_from_kind(t.as.rc.inner));
             buf_puts(b, ">");
             break;
         }
         case TY_WEAK: {
             buf_puts(b, "weak<");
-            type_name_buf(b, type_from_kind(t.as.rc.inner));
+            if (t.as.rc.inner == TY_ADT && t.as.rc.adt_def && t.as.rc.adt_def->name)
+                buf_puts(b, t.as.rc.adt_def->name);
+            else
+                type_name_buf(b, type_from_kind(t.as.rc.inner));
             buf_puts(b, ">");
             break;
         }
@@ -4529,7 +4541,7 @@ bool type_is_byvalue_adt_product(Type t) {
  * GRADUATED 2026-08-27 out of `--enable=parametric-sum-byvalue`: the row's
  * soak existed so the representation would not be fixed against SR2b, and
  * SR2b has landed (in-tree and across the spices).  `TUR_SR2_APP_SUM_BYVALUE=0`
- * is the bisection escape hatch, read once in main.c the way SR1's is. */
+ * is the bisection escape hatch, read once by the driver the way SR1's is. */
 static bool sr2_app_sum_byvalue(void) {
     return g_sr2_app_sum_byvalue;
 }

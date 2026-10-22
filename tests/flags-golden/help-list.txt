@@ -1,0 +1,2 @@
+usage: tur list [--verbose|--json|--outdated]
+[exit 1]

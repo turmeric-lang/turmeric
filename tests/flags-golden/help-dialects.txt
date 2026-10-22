@@ -1,0 +1,8 @@
+usage:
+  tur dialects [--json]
+
+List the base DIALECTS a `#lang` line may name: a language, and
+optionally a reader after a slash.  `#lang <base>` takes one base and
+nothing else -- a trailing token is an error (TUR-E0330).  --json emits
+the machine-readable form.
+[exit 0]

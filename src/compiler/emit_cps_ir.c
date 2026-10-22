@@ -200,7 +200,7 @@ static bool slot_box_ty(const Type *t) {
      * `tur_tagged_t` the direct emitter passes and returns BY VALUE
      * (type_struct_pass_by_ptr says so), owning-free as far as the compiler
      * tracks (the payload box behind `val` has no drop glue anywhere; that is
-     * docs/reported/any-struct-box-leak-per-widen.md, not an owning field).
+     * docs/archive/any-struct-box-leak-per-widen.md, not an owning field).
      * It simply is not an AdtDef, so the by-value-product test below cannot
      * see it and the whole function fell out of the CPS subset: `fn_sig_ok`'s
      * param gate rejected it, and a `perform` anywhere in such a function then
@@ -9794,9 +9794,10 @@ static void emit_term_inner(CE *ce, const CTerm *t) {
              * behave exactly like the scalar one every existing fixture covers,
              * rather than introducing a third behaviour.
              *
-             * Scoped to the one callee `emit_binding_is_region_scope` names, and
-             * that predicate is false unless `--enable=regions` is on, so no
-             * default-path routing moves.  The residual asymmetry -- a colored
+             * Scoped to the callees `emit_binding_is_region_scope` names --
+             * true for `bt-scope` and `with-region` unless TUR_REGIONS=0, so a
+             * tail call to either always takes cps->direct.  The residual
+             * asymmetry -- a colored
              * mono-template emitting CPS specs of a direct-style base -- is not
              * fixed here; it is the general shape this is a local answer to. */
             bool force_direct = region_scope_call_bracketed(t->as.tailcall.fn,
@@ -11473,7 +11474,11 @@ static void emit_lifted(CE *ce, const char *name, LHMode mode,
         const char *srt = ce->ctx->current_fn_ret_ctype;
         ce->ctx->indent = 4;
         ce->ctx->current_fn_ret_ctype = "void";   /* the unwinder returns nothing */
+        /* byval-spine-drop-past-early-exit: nor shares the signature verdict. */
+        bool sss = ce->ctx->current_fn_spine_drop_safe;
+        ce->ctx->current_fn_spine_drop_safe = false;
         cps_pend_fire(ce->ctx, &unw);
+        ce->ctx->current_fn_spine_drop_safe = sss;
         ce->ctx->current_fn_ret_ctype = srt;
         ce->ctx->indent = si;
         buf_puts(&unw, "}\n");
@@ -12255,7 +12260,7 @@ static bool serial_env_ser_names(CE *ce, const Type *t,
  *     tur_cloneable_cont over an identity fn (NULL env), call receiver, bind x.
  *   Shape 2 (n_frames >= 1): reify the `(<op> <operand> ... [])` context as DK
  *     frame; the shift body deep-clones the captured sub-continuation into a
- *     cloneable_cont and hands it to receiver.  Mirrors emit_cloneable_ctx. */
+ *     cloneable_cont and hands it to receiver. */
 /* Direct-emit a self-contained (shift-free) context Expr -- a `let` init, an
  * `if` condition, or an `if` pure arm -- at the reset site, honoring the CT
  * emitter's current indent.  Returns the malloc'd C expression string. */
@@ -15092,6 +15097,10 @@ static bool emit_cps_ir_try_fn_impl(EmitCtx *ctx, Buf *file, const Expr *e) {
      * under `catch-unwind`. */
     const char *saved_cps_ret_ctype = ctx->current_fn_ret_ctype;
     ctx->current_fn_ret_ctype = "int64_t";
+    /* byval-spine-drop-past-early-exit: a CPS term is a different C function
+     * from the one whose signature was judged; refuse the spine push in it. */
+    bool saved_cps_spine_safe = ctx->current_fn_spine_drop_safe;
+    ctx->current_fn_spine_drop_safe = false;
     /* cps-self-tail-call-relies-on-sibling-call: a self tail call in this
      * body may jump back to here.  Not for a monomorph (the call names the
      * generic), the program entry, or a param the body keeps in a cell or as a
@@ -15116,6 +15125,7 @@ static bool emit_cps_ir_try_fn_impl(EmitCtx *ctx, Buf *file, const Expr *e) {
     }
     emit_term(&ce, se->term);
     ctx->current_fn_ret_ctype = saved_cps_ret_ctype;
+    ctx->current_fn_spine_drop_safe = saved_cps_spine_safe;
     if (self_backedge) {
         /* The label goes after the binder declarations, ahead of the first
          * statement of the body; the empty statement keeps it legal where a

@@ -1,0 +1,10 @@
+w1: defer ran
+7
+after w1
+w2-inner: defer ran
+w2: defer ran
+8
+after w2
+w7: defer ran
+9
+after w7

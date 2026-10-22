@@ -18,7 +18,7 @@
 > and the rest of the section 6 guide (the `--profile` half). Open questions
 > 1, 4, 5 stand.
 > The `src/` file:line anchors below have drifted (e.g. `--timing-json` is now
-> `src/main.c:4634`) -- locate by symbol, not line.
+> `src/driver/jit.c:cmd_jit`) -- locate by symbol, not line.
 > **Type:** Tooling / runtime / compiler driver
 > **Depends on:** `tur_demangle` (`src/compiler/mangle.c:172`), the `#line`
 > emission behind `--debug` (`src/compiler/emit_core.c:461`), and the
@@ -159,7 +159,7 @@ so nobody reads it as a partition.
     {"name": "elaborate",     "self_ms": 640.0, "self_pct": 35.0},
     {"name": "typeclass",     "self_ms": 210.5, "self_pct": 11.5},
     {"name": "kind-check",    "self_ms":   8.0, "self_pct":  0.4},
-    {"name": "effect-lower",  "self_ms":  22.0, "self_pct":  1.2},
+    {"name": "effect-env",    "self_ms":  22.0, "self_pct":  1.2},
     {"name": "effect-row",    "self_ms":  14.0, "self_pct":  0.8},
     {"name": "cps",           "self_ms":  55.0, "self_pct":  3.0},
     {"name": "borrow-check",  "self_ms":  31.0, "self_pct":  1.7},
@@ -196,7 +196,7 @@ tur demangle                             # stdin -> stdout name filter (P0)
 ```
 
 Both flags accept `--flag <path>` and `--flag=<path>`, matching the existing
-`--timing-json` parser at `src/main.c:3642`.
+`--timing-json` parser at `src/driver/jit.c:cmd_jit`.
 
 **`--profile` on `build` arms the sampler; it never bakes in an output path**
 (resolving open question 2). The armed binary writes a profile only when
@@ -214,7 +214,7 @@ the env var only surfaces when you deliberately profile a pre-built artifact.
 - New `bool g_emit_profile` / `const char *g_profile_out` and
   `bool g_timings` / `const char *g_timings_out` alongside the existing
   `g_dump_*` globals in `src/compiler/emit_internal.h:46`.
-- Add rows to `wk_apply_flags` (`src/main.c:7503`) for both flags. The worker
+- Add rows to `wk_apply_flags` (`src/driver/worker.c`) for both flags. The worker
   processes re-apply compiler flags from a string; without a row there, a
   parallel or project-mode build profiles the parent and not the work. This is
   the single easiest thing to forget and it fails silently.
@@ -230,7 +230,7 @@ New `src/compiler/prof.h` + `prof.c`, roughly 120 lines:
 ```c
 typedef enum ProfZone {
     PROF_READ, PROF_SWEET, PROF_MODULE_LOAD, PROF_MACRO_EXPAND,
-    PROF_ELAB, PROF_TYPECLASS, PROF_KIND, PROF_EFFECT_LOWER,
+    PROF_ELAB, PROF_TYPECLASS, PROF_KIND, PROF_EFFECT_ENV,
     PROF_EFFECT_ROW, PROF_CPS, PROF_BORROW, PROF_REFINE,
     PROF_MONO, PROF_EMIT, PROF_CC,
     PROF_ZONE_N
@@ -283,10 +283,10 @@ idiom already in `src/jit_engine.c:51`.
 
 | Zone | Site |
 | --- | --- |
-| `PROF_READ`, `PROF_SWEET` | `read_all` at `src/main.c:895` and its peers |
-| `PROF_ELAB` .. `PROF_BORROW` | wrap each `case` in `run_core_passes`, `src/main.c:438-520` |
-| `PROF_EMIT` | the `emit_*` call after `run_core_passes` in `compile_to_c`, `src/main.c:567` / `:710` |
-| `PROF_CC` | around `system(cmd.data)` in `link_command_run`, `src/main.c:2278` |
+| `PROF_READ`, `PROF_SWEET` | `read_all` in `src/driver/pipeline.c:load_project_prelude_impl` and its peers |
+| `PROF_ELAB` .. `PROF_BORROW` | wrap each `case` in `run_core_passes`, `src/driver/pipeline.c` |
+| `PROF_EMIT` | the `emit_*` call after `run_core_passes` in `compile_to_c`, `src/driver/pipeline.c` |
+| `PROF_CC` | around `system(cmd.data)` in `drv_link_command_run`, `src/driver/cc.c` |
 | `PROF_REFINE` | `refine_discharge_*`, which already has `TUR_REFINE_STATS` counters to cross-check against |
 
 `run_core_passes` being a flat ordered switch over `core_passes[]` is what
@@ -306,7 +306,7 @@ conclusion "elaboration is slow", which nobody can act on.
 
 ### 3.5 Absorbing `--timing-json`
 
-`tur jit --timing-json` (`src/main.c:3642`, owned by
+`tur jit --timing-json` (`src/driver/jit.c:cmd_jit`, owned by
 [`post-jit-benchmark-resurrection-plan.md`](../archive/post-jit-benchmark-resurrection-plan.md))
 keeps working byte-for-byte -- the benchmark harness parses `compile_ms`,
 `run_ms`, and the `"engine": "cc-fallback"` marker. C4 additionally makes
@@ -327,7 +327,7 @@ Do not "unify" these by changing the old keys.
 
 Instrumentation is additionally hostile to this codebase specifically: the
 single-file build leans on the optimizer's dead-code elimination to drop
-preloaded stdlib defns (see the `-Og` comment at `src/main.c:2394`), and
+preloaded stdlib defns (see the `-Og` comment in `src/driver/cmd_build.c:cmd_build_once`), and
 per-function hooks anchor exactly those bodies; TCO'd self-calls
 (`src/compiler/emit_fns.c` `tco_*`) become back-edges with no call to hook;
 and the CPS path splits one Turmeric function across many C functions, so
@@ -398,7 +398,7 @@ people distrust profilers.
 
 `--profile` turns on the existing `#line` emission
 (`emit_line_directive`, `src/compiler/emit_core.c:461`) and adds `-g` to
-`cc_flags` (`src/main.c:2388`), so DWARF maps generated C straight back to
+`cc_flags` (`src/driver/cmd_build.c:cmd_build_once`), so DWARF maps generated C straight back to
 `.tur` source and `functions[].file`/`.line` are real Turmeric locations.
 
 It does **not** adopt `--debug`'s `-Og`. Profiling a `-Og` binary answers a
@@ -429,7 +429,7 @@ caller attribution. If P3 slips, P1 is still a shipped, useful profiler.
 Immediately makes `perf`, `samply`, Instruments, `nm`, and `gdb` output
 readable against both binaries.
 
-Shipped in `src/cli/demangle.c`, dispatched from `src/main.c`, with unit tests
+Shipped in `src/cli/demangle.c`, dispatched from `src/driver/cli.c`, with unit tests
 in `tests/mangle_test.c` (`tur_mangle_unit`) and a CLI harness at
 `tests/run-demangle.sh` (`tur_demangle_tests`).
 
@@ -532,7 +532,7 @@ As built, and where it differs from sections 2-3:
   context teardown), `run` (the program's own execution under `tur run` /
   `tur jit`, so the partition holds there too -- the report says the phase is
   not compile time) and `other` (the stack's bottom: what no zone claims).
-  `pass_zone()` in `main.c` maps every `PassKind` to a zone in a switch with
+  `pass_zone()` in `driver/pipeline.c` maps every `PassKind` to a zone in a switch with
   no default, so a new pass without a zone is a `-Wswitch` error rather than
   a review note.
 - **The stack is run-length encoded**, and `elab_form` re-enters

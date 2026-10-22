@@ -18,14 +18,14 @@ the [GC guide](gc-guide.md#what-is-not-gc-managed) and the
 The design history is the archived
 [regions plan](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/regions-plan.md).
 
-> **Trust the code over the comments.** Several comments in this area predate
-> graduation (2026-09-05). `emit_cps_ir.c` says the region predicate "is false
-> unless `--enable=regions` is on"; `region.h` calls the poison backstop the
-> reason the feature "is shippable behind a flag"; `src/turi/preload.c` calls
-> the identity forwarder the compiled path's "`--enable=regions` off" mode.
-> There is no flag any more. Regions are on unless `TUR_REGIONS=0` was set
-> when `tur` ran. The stale comments found so far in this area, each with a
-> fix, are listed in [stale-comments-regions](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/stale-comments-regions.md).
+> **Trust the code over the comments.** There is no `--enable=regions` flag
+> any more: regions are on unless `TUR_REGIONS=0` was set when `tur` ran, and
+> the comments that said otherwise were corrected on 2026-10-21. Since then
+> the embedded runtime sources (`region.h`, `arena.{h,c}`, `region.c`,
+> `r7gc.c`) are pasted into emitted programs with their comments stripped, so
+> a comment edit there no longer touches the `expected.c` snapshots or the
+> split hash. What is still open in this area is listed in
+> [stale-comments-regions](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/stale-comments-regions.md).
 
 ---
 
@@ -72,7 +72,7 @@ The design history is the archived
 | `src/compiler/emit_module.c` | The `TUR_REGION_*` macros (both arms), the routed base ctor in `emit_adt_typedef_and_ctors`, the catch-boundary retire in `emit_runtime_preamble` |
 | `src/compiler/types.c` | `regions_enabled`, `region_free_fn`, the routed monomorph ctor in `emit_registered_adt_app_rec` |
 | `src/runtime/hamt.c` | The host-runtime notes in `tur_hamt_set` and `tur_hamt_transient_set` |
-| `src/main.c` | Reads `TUR_REGIONS` into `g_opt_regions` (default `true`, `src/runtime/globals.c`) |
+| `src/driver/cli.c` | `drv_apply_env_overrides` reads `TUR_REGIONS` into `g_opt_regions` (default `true`, `src/runtime/globals.c`) |
 
 ---
 
@@ -584,7 +584,7 @@ region fixture you write. Counts are process-wide atomics.
 
 ### Turn regions off: `TUR_REGIONS=0`
 
-`TUR_REGIONS` is read by **`tur`**, at compile time (`src/main.c`), not by
+`TUR_REGIONS` is read by **`tur`**, at compile time (`drv_apply_env_overrides`), not by
 the program. `=0` clears `g_opt_regions`, which removes the routed ctor
 allocation (back to `malloc`), the bracket around `with-region` /
 `bt-scope`, the pasted region runtime and the `atexit`. Emitter notes are

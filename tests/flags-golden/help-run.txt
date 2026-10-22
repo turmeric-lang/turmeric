@@ -1,0 +1,42 @@
+usage:
+  tur run                        list recipes (or run 'default')
+  tur run --list                 list all recipes with doc + params
+  tur run --list --json          machine-readable recipe list
+  tur run --list --all           include [private] / _-prefixed recipes
+  tur run <recipe> [args...]     run a Justfile recipe
+  tur run --dry-run <recipe>     print resolved commands, don't exec
+  tur run --verbose <recipe>     echo recipe metadata to stderr
+  tur run --justfile <path> <r>  use an explicit Justfile
+  tur run --chdir <dir> <r>      run recipe from <dir>
+  tur run --init                 write a starter Justfile into cwd
+  tur run --init --force         overwrite an existing Justfile
+  tur run <file.tur> [-- <args>] compile and run a .tur file
+  tur run --release <file.tur>   the same, compiled at -O3 (default -O2)
+
+`tur just` is a synonym for `tur run`: every form above accepts
+either spelling.
+
+flags (task-runner mode):
+  --list, -l          list recipes (aliases included; hidden ones are not)
+  --all, -a           with --list: also show [private] / _-prefixed recipes
+  --json              JSON output (with --list)
+  --dry-run           print resolved commands; do not execute
+  --verbose           echo recipe metadata to stderr
+  --justfile PATH     explicit Justfile path
+  --chdir DIR         change to DIR before running the recipe
+  --set VAR VALUE     override a Justfile variable (also VAR=VALUE)
+  --init              write a starter Justfile into cwd
+  --force             overwrite existing Justfile (with --init)
+
+exit codes:
+  0    recipe succeeded
+  1    recipe exited non-zero (exit code propagated)
+  2    CLI / parse / unsupported-feature error
+  127  Justfile not found
+
+supported Justfile subset: recipes, deps, params, variables,
+{{ }} interpolation, @ and - prefixes, set shell / dotenv-load /
+positional-arguments, built-in functions (env_var, os, arch, ...).
+
+Try 'tur --help' for global options.
+[exit 0]

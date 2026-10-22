@@ -1,0 +1,68 @@
+;; fs-functions-compiled-only: the stdlib/fs.tur surface runs under
+;; --interpret through natives that mirror the inline-C bodies.  Everything
+;; happens under a tmpfile's unique path, so the fixture is hermetic and
+;; cleans up after itself.  No inline C of its own, so run-turi.sh runs it.
+(load "stdlib/fs.tur")
+(load "stdlib/fs-string.tur")
+(load "stdlib/string.tur")
+(load "stdlib/str.tur")
+
+(defn show-result [r : (Result nil IoError)] : nil
+  (if (ok? r) (println "ok") (println "err")))
+
+(defn main [] : int
+  (let [t    (fs/tmpfile)
+        path (fs/dup-cstr (fs/tmpfile-path t))]
+    (fs/tmpfile-free t)
+    ;; path helpers need no I/O
+    (println (fs/path-join "a" "b"))
+    (println (fs/path-join "a/" "b"))
+    (println (fs/exists? path))
+    ;; write, append, read back as cstr, String and lines
+    (show-result (fs/write-text path "one\ntwo\n"))
+    (show-result (fs/append-text path "three"))
+    (println (fs/exists? path))
+    (println (fs/file? path))
+    (println (fs/dir? path))
+    (match (fs/read-text path)
+      (Ok s) (do (println s) (fs/free-cstr s))
+      (Err e) (println (io-error/code e)))
+    (match (fs/read-string path)
+      (Ok s) (println (string/len s))
+      (Err e) (println (io-error/code e)))
+    (match (fs/read-lines path)
+      (Ok v) (do (println (vec-len v))
+                 (println (vec-get v 1))
+                 (fs/paths-free v))
+      (Err e) (println (io-error/code e)))
+    ;; stat
+    (match (fs/stat path)
+      (Ok st) (do (println (fs/stat-size st)) (fs/stat-free st))
+      (Err e) (println (io-error/code e)))
+    ;; a directory tree beside it: mkdirp, read-dir, glob, rename, copy, rm
+    (let [dir (str-concat path "-dir")
+          sub (fs/path-join dir "a/b")]
+      (show-result (fs/mkdirp sub))
+      (println (fs/dir? sub))
+      (println (fs/walk-dir? sub))
+      (show-result (fs/copy path (fs/path-join dir "x.txt")))
+      (show-result (fs/rename (fs/path-join dir "x.txt") (fs/path-join dir "y.txt")))
+      (match (fs/read-dir dir)
+        (Ok v) (do (println (vec-len v)) (println (vec-get v 0)) (println (vec-get v 1))
+                   (fs/paths-free v))
+        (Err e) (println (io-error/code e)))
+      (match (fs/glob dir "*.txt")
+        (Ok v) (do (println (vec-len v)) (fs/paths-free v))
+        (Err e) (println (io-error/code e)))
+      (show-result (fs/rm (fs/path-join dir "y.txt")))
+      (show-result (fs/rmdir sub))
+      (show-result (fs/rmdir (fs/path-join dir "a")))
+      (show-result (fs/rmdir dir))
+      (println (fs/exists? dir)))
+    ;; a missing file is an Err carrying errno
+    (match (fs/read-text (str-concat path "-missing"))
+      (Ok s) (println "unexpected")
+      (Err e) (println (> (io-error/code e) 0)))
+    (show-result (fs/rm path))
+    (println (fs/exists? path))
+    0))

@@ -2,7 +2,7 @@
  *
  * security-audit-plan WP3 (S-1).  Every native that turi_env_new registers --
  * interpreter_natives.c, collections_native.c, string_native.c, fiber.c, the
- * eval.c builtins, macro_env.c, ffi_thunk.c and main.c -- has exactly one row
+ * eval.c builtins, macro_env.c, ffi_thunk.c and the driver -- has exactly one row
  * here.  turi_env_register_native looks the name up and stamps the row's bits
  * on the closure; eval_apply_driven refuses the call when the calling env does
  * not hold every one of them.  One check at the dispatch, not one per native.
@@ -165,10 +165,45 @@ static const TuriNativeCapRow k_rows[] = {
     { "floor", 0 },
     { "free-bind", 0 },
     { "free-run", 0 },
+    { "fs/append-text", TURI_CAP_FS },                                      /* stdlib/fs.tur native: by-path file access */
+    { "fs/chmod", TURI_CAP_FS },                                            /* stdlib/fs.tur native: by-path file access */
+    { "fs/copy", TURI_CAP_FS },                                             /* stdlib/fs.tur native: by-path file access */
+    { "fs/dir?", TURI_CAP_FS },                                             /* stdlib/fs.tur native: by-path file access */
+    { "fs/dup-cstr", 0 },
+    { "fs/exists?", TURI_CAP_FS },                                          /* stdlib/fs.tur native: by-path file access */
+    { "fs/file-dev", TURI_CAP_FS },                                         /* stdlib/fs.tur native: by-path file access */
+    { "fs/file-ino", TURI_CAP_FS },                                         /* stdlib/fs.tur native: by-path file access */
+    { "fs/file?", TURI_CAP_FS },                                            /* stdlib/fs.tur native: by-path file access */
+    { "fs/free-cstr", 0 },
+    { "fs/glob", TURI_CAP_FS },                                             /* stdlib/fs.tur native: by-path file access */
+    { "fs/lstat", TURI_CAP_FS },                                            /* stdlib/fs.tur native: by-path file access */
+    { "fs/mkdir", TURI_CAP_FS },                                            /* stdlib/fs.tur native: by-path file access */
+    { "fs/mkdirp", TURI_CAP_FS },                                           /* stdlib/fs.tur native: by-path file access */
+    { "fs/path-join", 0 },
+    { "fs/paths-free", 0 },
+    { "fs/read-dir", TURI_CAP_FS },                                         /* stdlib/fs.tur native: by-path file access */
+    { "fs/read-lines", TURI_CAP_FS },                                       /* stdlib/fs.tur native: by-path file access */
+    { "fs/read-string", TURI_CAP_FS },                                      /* stdlib/fs.tur native: by-path file access */
+    { "fs/read-text", TURI_CAP_FS },                                        /* stdlib/fs.tur native: by-path file access */
+    { "fs/readlink", TURI_CAP_FS },                                         /* stdlib/fs.tur native: by-path file access */
+    { "fs/realpath", TURI_CAP_FS },                                         /* stdlib/fs.tur native: by-path file access */
+    { "fs/rename", TURI_CAP_FS },                                           /* stdlib/fs.tur native: by-path file access */
+    { "fs/rm", TURI_CAP_FS },                                               /* stdlib/fs.tur native: by-path file access */
+    { "fs/rmdir", TURI_CAP_FS },                                            /* stdlib/fs.tur native: by-path file access */
+    { "fs/stat", TURI_CAP_FS },                                             /* stdlib/fs.tur native: by-path file access */
+    { "fs/stat-atime", TURI_CAP_FS },                                       /* stdlib/fs.tur native: by-path file access */
+    { "fs/stat-free", TURI_CAP_FS },                                        /* stdlib/fs.tur native: by-path file access */
+    { "fs/stat-mode", TURI_CAP_FS },                                        /* stdlib/fs.tur native: by-path file access */
+    { "fs/stat-mtime", TURI_CAP_FS },                                       /* stdlib/fs.tur native: by-path file access */
+    { "fs/stat-size", TURI_CAP_FS },                                        /* stdlib/fs.tur native: by-path file access */
+    { "fs/symlink", TURI_CAP_FS },                                          /* stdlib/fs.tur native: by-path file access */
+    { "fs/symlink?", TURI_CAP_FS },                                         /* stdlib/fs.tur native: by-path file access */
     { "fs/tmpfile", TURI_CAP_FS },                           /* mkstemp in /tmp */
     { "fs/tmpfile-fd", TURI_CAP_FS },                        /* a tmpfile handle: its path, its fd, and unlink */
     { "fs/tmpfile-free", TURI_CAP_FS },                      /* a tmpfile handle: its path, its fd, and unlink */
     { "fs/tmpfile-path", TURI_CAP_FS },                      /* a tmpfile handle: its path, its fd, and unlink */
+    { "fs/walk-dir?", TURI_CAP_FS },                                        /* stdlib/fs.tur native: by-path file access */
+    { "fs/write-text", TURI_CAP_FS },                                       /* stdlib/fs.tur native: by-path file access */
     { "future-cell-free", 0 },
     { "future-cell-new", 0 },
     { "future-done?", 0 },
@@ -301,6 +336,10 @@ static const TuriNativeCapRow k_rows[] = {
     { "option-unwrap", 0 },
     { "option-unwrap-or", 0 },
     { "option-value", 0 },
+    { "panic-file", 0 },
+    { "panic-line", 0 },
+    { "panic-message", 0 },
+    { "panic-type", 0 },
     { "panic?", 0 },
     { "popcount", 0 },
     { "pow", 0 },
@@ -446,6 +485,7 @@ static const TuriNativeCapRow k_rows[] = {
     { "result-must-msg", 0 },
     { "result-or", 0 },
     { "result-or-else", 0 },
+    { "result-panic", 0 },
     { "result-partition", 0 },
     { "result-partition-err", 0 },
     { "result-partition-ok", 0 },
@@ -825,6 +865,10 @@ static const TuriNativeHandleRow k_handle_rows[] = {
     { "err-val", { TURI_HK_RESULTBOX, TURI_HK_NONE, TURI_HK_NONE, TURI_HK_NONE }, TURI_HK_NONE, TURI_HSIG_STRUCT_OK },
     { "err-val-ptr", { TURI_HK_RESULTBOX, TURI_HK_NONE, TURI_HK_NONE, TURI_HK_NONE }, TURI_HK_NONE, TURI_HSIG_STRUCT_OK },
     { "err?", { TURI_HK_RESULTBOX, TURI_HK_NONE, TURI_HK_NONE, TURI_HK_NONE }, TURI_HK_NONE, TURI_HSIG_STRUCT_OK },
+    { "fs/dup-cstr", { TURI_HK_CSTR, TURI_HK_NONE, TURI_HK_NONE, TURI_HK_NONE }, TURI_HK_OWNED_CSTR, TURI_HSIG_MINT },
+    { "fs/free-cstr", { TURI_HK_OWNED_CSTR, TURI_HK_NONE, TURI_HK_NONE, TURI_HK_NONE }, TURI_HK_NONE, TURI_HSIG_FREE },
+    { "fs/path-join", { TURI_HK_CSTR, TURI_HK_CSTR, TURI_HK_NONE, TURI_HK_NONE }, TURI_HK_OWNED_CSTR, TURI_HSIG_MINT },
+    { "fs/paths-free", { TURI_HK_VEC, TURI_HK_NONE, TURI_HK_NONE, TURI_HK_NONE }, TURI_HK_NONE, TURI_HSIG_FREE },
     { "future-cell-free", { TURI_HK_FUTURE, TURI_HK_NONE, TURI_HK_NONE, TURI_HK_NONE }, TURI_HK_NONE, 0 },
     { "future-cell-new", { TURI_HK_NONE, TURI_HK_NONE, TURI_HK_NONE, TURI_HK_NONE }, TURI_HK_FUTURE, TURI_HSIG_MINT },
     { "future-done?", { TURI_HK_FUTURE, TURI_HK_NONE, TURI_HK_NONE, TURI_HK_NONE }, TURI_HK_NONE, 0 },
@@ -927,6 +971,10 @@ static const TuriNativeHandleRow k_handle_rows[] = {
     { "option-unwrap", { TURI_HK_OPTIONBOX, TURI_HK_NONE, TURI_HK_NONE, TURI_HK_NONE }, TURI_HK_NONE, TURI_HSIG_STRUCT_OK },
     { "option-unwrap-or", { TURI_HK_OPTIONBOX, TURI_HK_NONE, TURI_HK_NONE, TURI_HK_NONE }, TURI_HK_NONE, TURI_HSIG_STRUCT_OK },
     { "option-value", { TURI_HK_OPTIONBOX, TURI_HK_NONE, TURI_HK_NONE, TURI_HK_NONE }, TURI_HK_NONE, TURI_HSIG_STRUCT_OK },
+    { "panic-file", { TURI_HK_PANIC, TURI_HK_NONE, TURI_HK_NONE, TURI_HK_NONE }, TURI_HK_NONE, 0 },
+    { "panic-line", { TURI_HK_PANIC, TURI_HK_NONE, TURI_HK_NONE, TURI_HK_NONE }, TURI_HK_NONE, 0 },
+    { "panic-message", { TURI_HK_PANIC, TURI_HK_NONE, TURI_HK_NONE, TURI_HK_NONE }, TURI_HK_NONE, 0 },
+    { "panic-type", { TURI_HK_PANIC, TURI_HK_NONE, TURI_HK_NONE, TURI_HK_NONE }, TURI_HK_NONE, 0 },
     { "promise-fulfill", { TURI_HK_FUTURE, TURI_HK_NONE, TURI_HK_NONE, TURI_HK_NONE }, TURI_HK_NONE, 0 },
     { "r7rs-args-head__", { TURI_HK_ARGCELL, TURI_HK_NONE, TURI_HK_NONE, TURI_HK_NONE }, TURI_HK_NONE, 0 },
     { "r7rs-args-tail__", { TURI_HK_ARGCELL, TURI_HK_NONE, TURI_HK_NONE, TURI_HK_NONE }, TURI_HK_ARGCELL, TURI_HSIG_MINT },
@@ -967,6 +1015,7 @@ static const TuriNativeHandleRow k_handle_rows[] = {
     { "result-must-msg", { TURI_HK_RESULTBOX, TURI_HK_NONE, TURI_HK_NONE, TURI_HK_NONE }, TURI_HK_NONE, TURI_HSIG_STRUCT_OK },
     { "result-or", { TURI_HK_RESULTBOX, TURI_HK_NONE, TURI_HK_NONE, TURI_HK_NONE }, TURI_HK_NONE, TURI_HSIG_STRUCT_OK },
     { "result-or-else", { TURI_HK_RESULTBOX, TURI_HK_NONE, TURI_HK_NONE, TURI_HK_NONE }, TURI_HK_NONE, TURI_HSIG_STRUCT_OK },
+    { "result-panic", { TURI_HK_RESULTBOX, TURI_HK_NONE, TURI_HK_NONE, TURI_HK_NONE }, TURI_HK_NONE, TURI_HSIG_STRUCT_OK },
     { "result-partition", { TURI_HK_VEC, TURI_HK_NONE, TURI_HK_NONE, TURI_HK_NONE }, TURI_HK_RESPAIR, TURI_HSIG_MINT },
     { "result-partition-err", { TURI_HK_RESPAIR, TURI_HK_NONE, TURI_HK_NONE, TURI_HK_NONE }, TURI_HK_NONE, 0 },
     { "result-partition-ok", { TURI_HK_RESPAIR, TURI_HK_NONE, TURI_HK_NONE, TURI_HK_NONE }, TURI_HK_NONE, 0 },

@@ -17,7 +17,7 @@
  * gets a grammar: say what these strings are allowed to be, reject the rest
  * with a diagnostic, and quote the paths the driver itself owns.
  *
- * Header-only and dependency-free on purpose: `main.c`, `src/compiler/pkg.c`
+ * Header-only and dependency-free on purpose: the driver, `src/compiler/pkg.c`
  * and `src/lsp/mcp.c` all need it, and one copy of the rules is the only shape
  * that cannot drift the way the two link-flag readers did before
  * `append_manifest_link_flags` unified them.

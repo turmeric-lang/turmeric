@@ -1,0 +1,17 @@
+usage:
+  tur completion zsh              print the zsh completion script
+  tur completion bash             print the bash completion script
+
+zsh -- install into your fpath:
+  tur completion zsh > "${fpath[1]}/_tur" && compinit
+zsh -- or source it from ~/.zshrc:
+  source <(tur completion zsh)
+
+bash -- install:
+  tur completion bash > /usr/local/etc/bash_completion.d/tur
+bash -- or source it from ~/.bashrc:
+  source <(tur completion bash)
+
+Recipe completion for `tur run` reads `tur run --list` in the
+directory being completed, so it tracks the enclosing Justfile.
+[exit 0]

@@ -1,0 +1,1 @@
+let binding 'r': type annotation does not match initializer (annotated rc<S>, got rc<U>)

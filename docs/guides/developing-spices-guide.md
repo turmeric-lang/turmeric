@@ -787,6 +787,38 @@ still resolves through `find_package`, since there is no source copy to prefer.
 > [tur-fetch-system-first-plan.md](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/history/tur-fetch-system-first-plan.md) for the
 > design rationale and open questions.
 
+### Native dependencies shared across spices
+
+`tur` collects `:cmake-deps` from the whole `:spices` closure into one CMake
+project. Three rules decide how they combine:
+
+- **One name, one build.** Two spices that declare the same name at the same
+  `:url`/`:ref` (or `:path`) share one build. Their `:targets`, `:link-libs`
+  and `:link-flags` union, and so do their `:options` and `:wasm-options`.
+  A different `:url`, `:ref`, `:cmake-name` or `:cmake-version` is an error.
+- **The dependent wins an option.** When two declarations set one option to
+  different values, the value from the spice that depends on the other wins.
+  The root project depends on everything, so it can settle any option. Two
+  unrelated spices that disagree are an error naming both, unless a spice
+  that depends on both sets the option too.
+- **Dependencies configure first.** The entries of the spices in your
+  `:spices` closure are configured before your own. A library whose CMake
+  reuses a target it finds in the project (`if (TARGET mbedtls)`) therefore
+  sees the one a dependency spice declared. The link line runs the other way,
+  so your archives come before the archives they need.
+
+So a spice that needs a different build of a library another spice owns
+re-declares it with the same `:url` and `:ref` and only the options it changes:
+
+```turmeric
+;; nng-wss: depends on the nng spice and turns its TLS on.
+:spices     #map{"nng" #map{:path "../nng"}}
+:cmake-deps #map{
+  "nng" #map{:url     "https://github.com/nanomsg/nng"
+             :ref     "v1.12.4"
+             :options #map{:NNG_ENABLE_TLS "ON"}}}
+```
+
 For the full `:cmake-deps` field reference, the generated `cmake/CMakeLists.txt`
 format, the `spice-deps-manifest.json` schema, and hash locking, see the
 [CMake/CPM integration notes](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/cmake-cpm-integration-plan.md).
@@ -1295,10 +1327,12 @@ global install is auto-installed rather than reported, and version-range
 validation against the installed version (the registry records a `:version`,
 but nothing checks it against a requested range yet).
 
-This is **deferred**; until it ships, a spice that wants to be reused as
-a library should be added the normal way with `tur add`. See the
-[global-spice-install plan](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/global-spice-install-plan.md#imports-from-global-spices)
-for the full design sketch.
+Until library-only installs exist, a library-only spice is added the normal
+way with `tur add`. Installing one, and importing installed spices from a
+script or REPL session that has no project, is planned in
+[installed-spice-libraries-plan](https://github.com/turmeric-lang/turmeric/blob/main/docs/upcoming/installed-spice-libraries-plan.md).
+The original design sketch is in the
+[global-spice-install plan](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/global-spice-install-plan.md#imports-from-global-spices).
 
 ---
 

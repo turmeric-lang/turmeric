@@ -1161,19 +1161,16 @@ void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
                 /* Build function pointer type */
                 buf_puts(ctx->file, "    ");
                 
-                /* Return type: mirror the priority used by emit_fns.c.
+                /* Return type: mirror the priority used by emit_fns.c.  A
+                 * method body is never TY_STRUCT, so the type comes from the
+                 * binding:
                  *
-                 * 1. emit_carrier_return_override: body returns a struct by
-                 *    value (e.g. HasSchema decode → User) → use the struct type.
-                 * 2. binding result_full_type: poly result with a known full type.
-                 * 3. binding result_kind: handles inline-C (TY_NIL body), bare
+                 * 1. binding result_full_type: poly result with a known full type.
+                 * 2. binding result_kind: handles inline-C (TY_NIL body), bare
                  *    fn-reference bodies (TY_FN), and bool-typed methods where
                  *    body literal 1 has kind TY_INT.
-                 * 4. body->type fallback when no binding is available. */
+                 * 3. body->type fallback when no binding is available. */
                 Type ret_type;
-                /* structdef-retirement DS-C: emit_carrier_return_override is dead
-                 * (a method body is never TY_STRUCT); the `carrier_override.kind
-                 * == TY_STRUCT` branch is removed. */
                 if (method_impl->binding
                            && method_impl->binding->type.kind == TY_FN) {
                     Type *rft = method_impl->binding->type.as.fn.result_full_type;
@@ -1752,7 +1749,8 @@ void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
         case EX_MAKE_STRUCT:
         case EX_GET_FIELD:
         case EX_SET_LIT: {
-            /* These should be lowered by effect_lower/CPS passes.
+            /* Effect nodes reach here only off the CPS/DK path (the
+             * direct-style emitter handles them in emit_effects.c).
              * Fallback: emit via emit_value and discard result.
              * Do not recurse into emit_stmt with the same node. */
             char *v = emit_value(ctx, body, e);

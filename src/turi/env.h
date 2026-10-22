@@ -724,7 +724,7 @@ void turi_env_set_incremental_elab(TuriEnv *env, bool enable);
  * after the turi_env_preload_* sequence and before the env is handed to a user;
  * all three interpreter entry points (native REPL, `--interpret`, WASM) do.
  * Only reader-agnostic plain s-expressions may be pinned -- the pinned text is
- * re-read under the NEW reader after a switch, a property src/main.c's file-eval
+ * re-read under the NEW reader after a switch, a property the driver's file-eval
  * pre-detect already relies on.  Idempotent; a second call re-pins at the
  * current position. */
 void turi_env_pin_prelude(TuriEnv *env);

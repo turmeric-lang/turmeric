@@ -155,6 +155,20 @@ its argument, else `$TUR`, else `./build/tur`. The first run builds the
 renderer, which takes a few seconds; later runs reuse the build until `tur` or
 a stdlib source changes.
 
+### `tests/run-flags.sh`
+
+The global flags and the CLI's own output (ctest `tur_flags_tests`): inline
+shell cases, not fixtures, so it takes no filter. `TUR=<binary>` points it at
+another build. It ends with goldens under `tests/flags-golden/` that pin
+`tur --help`, every subcommand's `--help`, the "external commands" listing,
+both completion scripts, and how the global flags are stripped. When a change
+to the CLI's text is intended, rewrite them and review the diff:
+
+```sh
+TUR_FLAGS_GOLDEN_UPDATE=1 timeout 720 bash tests/run-flags.sh
+git diff tests/flags-golden/
+```
+
 ### ctest
 
 ```sh
@@ -221,7 +235,7 @@ removes a check.
 | `expected.stdout` | The program's exact output. Without it the output is not checked at all |
 | `expected.exit` | The expected exit status (default 0) |
 | `expected.stderr` | Substrings that must appear in stderr, one per line (`run.sh` and `run-turi.sh`) |
-| `unexpected.stderr` | Substrings that must NOT appear in stderr (`run.sh`), one per line -- pins a false diagnostic's absence |
+| `unexpected.stderr` | Substrings that must NOT appear in stderr (`run.sh` and `run-turi.sh`), one per line -- pins a false diagnostic's absence |
 | `expected.diag` | Negative fixtures: substrings the compiler's diagnostics must contain, one per line |
 | `unexpected.diag` | Negative fixtures (`run.sh`): substrings that must NOT appear beside the expected error, one per line -- pins a false diagnostic that used to accompany a real one |
 | `expected.c` | Codegen snapshot, compared on every run. `TUR_TEST_SUITE=snapshots` runs only these; regenerate with `tur run regen-snapshots` |
@@ -236,6 +250,7 @@ removes a check.
 | `requires.interp-only` | Skipped by `run.sh`; `run-turi.sh` owns it |
 | `requires.interp` | `run.sh` runs it through the interpreter instead of compiling |
 | `requires.tur-only` | Skipped by `run-turi.sh`: a feature the interpreter deliberately omits |
+| `requires.jit` | Skipped by `run-turi.sh` when this `tur` carries no JIT (`TUR_JIT=OFF`): the fixture calls a C function through the interpreter's FFI, which only a JIT build has |
 | `requires.cc` | Skipped by `run-jit.sh`: genuinely cc-only |
 | `requires.dedicated-runner` | Skipped by the fixture harnesses; its own ctest target runs it |
 | `requires.stress` | Skipped unless `TUR_STRESS=1` |

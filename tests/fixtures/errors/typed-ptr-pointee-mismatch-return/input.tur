@@ -1,0 +1,10 @@
+;; typed-ptr-pointee-not-checked-at-calls: a `: ptr<Foo>` return whose body
+;; yields a ptr<Bar>.
+(defstruct Foo [a : int])
+(defstruct Bar [b : int])
+(defn mk-bar [] : ptr<Bar>
+  ```c
+  return 0;
+  ```)
+(defn g [] : ptr<Foo> (mk-bar))
+(defn main [] : int 0)

@@ -20,7 +20,14 @@
  * interpreter embedders. */
 void turi_register_collection_natives(TuriEnv *env);
 
-/* Exposed for wk_register_sym_natives (main.c): MapKey[Sym] reuses the
+/* The Vec natives, callable from another native (the fs natives build a
+ * (Vec cstr) result): a fresh tracked Vec, a push that records the element
+ * tag, and the untracking free. */
+TuriValue turi_native_vec_new(TuriEnv *env);
+TuriValue turi_native_vec_push(TuriEnv *env, TuriValue vec, TuriValue elem);
+TuriValue turi_native_vec_free(TuriEnv *env, TuriValue vec);
+
+/* Exposed for wk_register_sym_natives (interpreter_natives.c): MapKey[Sym] reuses the
  * int-carrier comparator and the cstr box (a Sym is a one-word interned
  * pointer). */
 TuriValue native_mk_cmp_int(TuriEnv *env, TuriValue *a, uint32_t n, void *ud);

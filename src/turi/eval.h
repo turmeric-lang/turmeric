@@ -813,7 +813,8 @@ TuriValue turi_sleep_async(TuriEnv *env, uint64_t ms);
 void turi_run_pending_defers(TuriEnv *env);
 
 /* W1b: read field `idx` of a struct VALUE as a TuriValue.  Lets the
- * Result/Option native shims (in main.c, where TuriStruct is incomplete) accept
+ * Result/Option native shims (in interpreter_natives.c, where TuriStruct is
+ * incomplete) accept
  * a make-struct TuriStruct in addition to their native int64 box.  Sets *found
  * to true and returns the field when v is a TURI_STRUCT with idx in range; sets
  * *found to false and returns nil otherwise. */
@@ -834,7 +835,8 @@ bool turi_struct_key_eq_c(int64_t a, int64_t b);
 int64_t turi_struct_hash_c(TuriValue v);
 
 /* Returns the constructor/struct name of a TURI_STRUCT value (e.g. "PureFree"),
- * or NULL when v is not a struct.  Lets natives in main.c dispatch on an ADT
+ * or NULL when v is not a struct.  Lets natives in interpreter_natives.c
+ * dispatch on an ADT
  * constructor without the opaque TuriStruct layout. */
 const char *turi_struct_name(TuriValue v);
 
@@ -846,7 +848,7 @@ TuriValue turi_make_struct(TuriEnv *env, const char *name, TuriValue *fields, ui
 
 /* SEQ: advance a generator VALUE (carrier holds the TuriGen*) one step; returns
  * the yielded value and sets *done to 1 when the generator just exhausted.
- * Lets the seq inline-C natives (main.c) drive a TURI_GEN. */
+ * Lets the seq inline-C natives (interpreter_natives.c) drive a TURI_GEN. */
 TuriValue turi_gen_advance_val(TuriEnv *env, TuriValue gen, int *done);
 /* True if the generator value has run off its end (or is null). */
 bool turi_gen_done_val(TuriValue gen);

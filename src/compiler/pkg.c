@@ -952,7 +952,7 @@ bool pkg_manifest_read_status(const char *path, PkgManifest *out,
 
     /* Strip a leading "#lang ..." directive (if any) before parsing.  The
      * sweet-exp preprocessor and the s-expr reader both choke on the bare
-     * '#' of an unhandled "#lang" line; main.c's single-file paths run the
+     * '#' of an unhandled "#lang" line; the driver's single-file paths run the
      * same detect_lang sweep before reading.
      *
      * A trailing token after the base name is diagnosed HERE too, rather than
@@ -986,6 +986,12 @@ bool pkg_manifest_read_status(const char *path, PkgManifest *out,
         len_eff = len_rest;
     }
 
+    /* manifest-read-leaves-a-dangling-file-registration: `file` is this
+     * frame's, registered under id 0 for the reader's diagnostics.  Every
+     * return below hands the slot back (diag_unregister_file), restoring
+     * whatever id 0 named before, so a later diagnostic at SPAN_UNKNOWN never
+     * prints a path out of a dead frame. */
+    const SourceFile *prev_file0 = diag_source_file(0);
     SourceFile file = {0};
     file.path    = path;
     file.src     = src_eff;
@@ -1012,6 +1018,7 @@ bool pkg_manifest_read_status(const char *path, PkgManifest *out,
      * on as if outside a project: `tur check` printed the reader's `error:`
      * and exited 0. */
     if (!forms || diag_error_serial() != err_serial0 || nforms == 0) {
+        diag_unregister_file(&file, prev_file0);
         symtab_free(&st);
         arena_free(&arena);
         if (status) *status = PKG_MANIFEST_MALFORMED;
@@ -1033,6 +1040,7 @@ bool pkg_manifest_read_status(const char *path, PkgManifest *out,
     }
     if (!dp) {
         fprintf(stderr, "spice: no (defpackage ...) form found in '%s'\n", path);
+        diag_unregister_file(&file, prev_file0);
         symtab_free(&st);
         arena_free(&arena);
         if (status) *status = PKG_MANIFEST_MALFORMED;
@@ -1138,7 +1146,7 @@ bool pkg_manifest_read_status(const char *path, PkgManifest *out,
             }
         } else if (strcmp(kw, "entry") == 0) {
             /* Entry-point module for project-mode `tur run`, relative to the
-             * manifest dir. Existence is checked by the caller (main.c), which
+             * manifest dir. Existence is checked by the caller (cmd_run), which
              * is the only place that knows the resolved project root. */
             free(out->entry);
             out->entry = form_str_dup(vf);
@@ -1271,7 +1279,17 @@ bool pkg_manifest_read_status(const char *path, PkgManifest *out,
                                ":link-flags", false, vf->span);
                 check_link_vec(out->c_flags, out->n_c_flags,
                                ":c-flags", false, vf->span);
-                out->no_stdlib = form_bool_val(nf);
+                /* build-opts-c-flags-never-consumed: no build path has ever
+                 * read :no-stdlib, so a project that set it got the stdlib
+                 * anyway, silently.  Refuse it until it means something;
+                 * `false` (the documented default) stays accepted. */
+                if (nf && !(nf->tag == F_BOOL && !nf->as.b)) {
+                    diag_emit(DIAG_ERROR, nf->span,
+                              "build.tur: :build-opts :no-stdlib is not "
+                              "implemented -- every build auto-loads the "
+                              "stdlib.\n"
+                              "  Remove the key (or write `:no-stdlib false`).");
+                }
                 /* spices-c-sources-plan: validate vendored sources/includes
                  * against the manifest directory (the dir holding build.tur). */
                 char mdir[4096];
@@ -1287,6 +1305,7 @@ bool pkg_manifest_read_status(const char *path, PkgManifest *out,
     }
 
     bool ok = diag_error_serial() == err_serial0;
+    diag_unregister_file(&file, prev_file0);
     symtab_free(&st);
     arena_free(&arena);
 
@@ -1548,7 +1567,7 @@ bool pkg_manifest_write(const char *path, const PkgManifest *m) {
     }
 
     if (m->n_c_flags > 0 || m->n_link_libs > 0 || m->n_link_flags > 0 ||
-        m->no_stdlib || m->n_c_sources > 0 || m->n_c_includes > 0) {
+        m->n_c_sources > 0 || m->n_c_includes > 0) {
         fprintf(f, "\n  :build-opts #{\n");
         if (m->n_c_flags > 0) {
             fprintf(f, "    :c-flags [");
@@ -1590,7 +1609,6 @@ bool pkg_manifest_write(const char *path, const PkgManifest *m) {
             }
             fprintf(f, "]\n");
         }
-        if (m->no_stdlib) fprintf(f, "    :no-stdlib true\n");
         fprintf(f, "  }\n");
     }
 
@@ -1776,7 +1794,12 @@ bool pkg_lock_read(const char *path, PkgLockFile *out) {
                 e->url        = form_str_dup(map_get_kw(ef, "url"));
                 e->ref        = form_str_dup(map_get_kw(ef, "ref"));
                 e->resolved   = form_str_dup(map_get_kw(ef, "resolved"));
-                e->sha256     = form_str_dup(map_get_kw(ef, "sha256"));
+                /* A cmake row pins by :resolved alone.  Older locks carry a
+                 * :sha256 there too (the git SHA again); ignoring it on read
+                 * keeps `tur fetch --frozen` from reporting such a lock as
+                 * changed (stale-comments-package-manager, item 1). */
+                e->sha256     = is_cmake ? NULL
+                                         : form_str_dup(map_get_kw(ef, "sha256"));
                 e->fetched_at = form_str_dup(map_get_kw(ef, "fetched-at"));
                 e->resolved_via   = form_str_dup(map_get_kw(ef, "resolved-via"));
                 e->system_version = form_str_dup(map_get_kw(ef, "system-version"));
@@ -1859,7 +1882,6 @@ bool pkg_lock_write(const char *path, const PkgLockFile *lock) {
             if (e->url)        fprintf(f, ":url \"%s\" ", e->url);
             if (e->ref)        fprintf(f, ":ref \"%s\" ", e->ref);
             if (e->resolved)   fprintf(f, ":resolved \"%s\" ", e->resolved);
-            if (e->sha256)     fprintf(f, ":sha256 \"%s\" ", e->sha256);
             if (e->fetched_at) fprintf(f, ":fetched-at \"%s\" ", e->fetched_at);
             if (e->resolved_via)
                 fprintf(f, ":resolved-via \"%s\" ", e->resolved_via);
@@ -1945,17 +1967,6 @@ static bool lock_remove(PkgLockFile *lock, const char *name, bool is_cmake) {
         return true;
     }
     return false;
-}
-
-/* ================================================================== */
-/* SHA-256                                                              */
-/* ================================================================== */
-
-bool pkg_sha256_file(const char *path, char out[65]) {
-    uint8_t digest[TUR_SHA256_DIGEST_LEN];
-    if (!tur_sha256_file(path, digest)) return false;
-    tur_sha256_hex(digest, out);
-    return true;
 }
 
 /* --- pkg_hash_dir: a content hash of a directory tree ------------------- *
@@ -2369,7 +2380,7 @@ bool pkg_version_range_match(const char *range, const char *version,
  * That made `tur fetch` unable to fetch anything on Windows.  Returns false if
  * the argument does not fit; a truncated command string is worse than none, so
  * callers must fail rather than run it.
- * docs/reported/windows-spice-fetch-shell-quoting.md */
+ * docs/archive/windows-spice-fetch-shell-quoting.md */
 bool pkg_cmd_arg(Buf *cmd, const char *arg) {
     char q[8192];
     if (tur_shell_quote(arg, q, sizeof q) != 0) return false;
@@ -2552,7 +2563,7 @@ typedef struct FetchItem {
 
 /* LS3: how deep to walk looking for an enclosing workspace manifest.
  * Must accommodate worktrees and nested checkouts; mirrors the resolver's
- * TUR_SPICE_WALK_MAX in main.c. */
+ * TUR_SPICE_WALK_MAX in src/driver/spice.c. */
 #define PKG_WORKSPACE_WALK_MAX 16
 
 /* LS3: discover the names of *other* members of the workspace enclosing
@@ -3383,6 +3394,10 @@ static void emit_link_iface_helper(FILE *f) {
     "# and IOKit frameworks its macOS backend needs live on *its*\n"
     "# INTERFACE_LINK_LIBRARIES and are reachable no other way. `_seen` guards\n"
     "# against link cycles.\n"
+    "# An ARCHIVE's own static dependencies are walked too, after it: GNU ld\n"
+    "# does not revisit earlier archives, so `top -> mid -> core` must put\n"
+    "# libcore.a after libmid.a after libtop.a on the line\n"
+    "# (docs/archive/cmake-dep-link-walk-stops-at-archive.md).\n"
     "function(_tur_walk_iface tgt acc_var seen_var)\n"
     "  set(_acc \"${${acc_var}}\")\n"
     "  set(_seen \"${${seen_var}}\")\n"
@@ -3403,13 +3418,12 @@ static void emit_link_iface_helper(FILE *f) {
     "                if(_ty STREQUAL SHARED_LIBRARY)\n"
     "                  list(APPEND _acc \"-Wl,-rpath,$<TARGET_FILE_DIR:${_e}>\")\n"
     "                endif()\n"
-    "              else()\n"
-    "                set(_a \"${_acc}\")\n"
-    "                set(_s \"${_seen}\")\n"
-    "                _tur_walk_iface(\"${_e}\" _a _s)\n"
-    "                set(_acc \"${_a}\")\n"
-    "                set(_seen \"${_s}\")\n"
     "              endif()\n"
+    "              set(_a \"${_acc}\")\n"
+    "              set(_s \"${_seen}\")\n"
+    "              _tur_walk_iface(\"${_e}\" _a _s)\n"
+    "              set(_acc \"${_a}\")\n"
+    "              set(_seen \"${_s}\")\n"
     "            else()\n"
     "              list(APPEND _acc \"${_e}\")\n"
     "            endif()\n"
@@ -3589,7 +3603,7 @@ static bool str_eq_or_both_null(const char *a, const char *b) {
 }
 
 /* Resolve a :spices entry to its on-disk directory, mirroring the
- * priority used in main.c's resolve_include_dirs_from_manifest:
+ * priority used in the driver's resolve_include_dirs_from_manifest:
  *   workspace-sibling -> :path -> <root>/spices/<name>-<ref> -> <root>/spices/<name>
  * Returns a heap-allocated absolute (or root-relative) path.  Returns
  * NULL when the resolved directory does not exist (best-effort silent
@@ -3675,98 +3689,399 @@ static void path_collapse_dots(char *p) {
     p[at] = '\0';
 }
 
+/* Push a string onto a char** list if it is not already there. */
+static bool str_list_add_unique(char ***list, int *n, const char *s) {
+    if (!s) return true;
+    for (int i = 0; i < *n; i++)
+        if ((*list)[i] && strcmp((*list)[i], s) == 0) return true;
+    char **nl = (char **)realloc(*list, ((size_t)*n + 1) * sizeof(char *));
+    if (!nl) return false;
+    *list = nl;
+    (*list)[*n] = tur_strdup(s);
+    if (!(*list)[*n]) return false;
+    (*n)++;
+    return true;
+}
+
+/* Merge one option list into another, key by key.  A key the existing copy
+ * does not set is added; one it sets to the same value is a no-op; one it
+ * sets to a DIFFERENT value is a conflict, reported with both origins. */
+/* cmake-deps-no-cross-spice-override-or-order: the :spices graph the
+ * collector walked, kept so a merge can ask "does A depend on B?".  Node 0
+ * is the root manifest; `reach[a * n + b]` is true when a == b or b is in
+ * a's transitive :spices closure. */
+typedef struct {
+    int          n;
+    const char **dir;    /* each node's manifest directory, for diagnostics */
+    const bool  *reach;
+} CmakeDepGraph;
+
+static bool cmake_graph_reaches(const CmakeDepGraph *g, int a, int b) {
+    return g && a >= 0 && b >= 0 && a < g->n && b < g->n
+        && g->reach[(size_t)a * (size_t)g->n + (size_t)b];
+}
+
+static const char *cmake_graph_dir(const CmakeDepGraph *g, int node) {
+    return (g && node >= 0 && node < g->n && g->dir[node]) ? g->dir[node]
+                                                           : "<unknown>";
+}
+
+/* Every value one option key of a merged entry was given, with the node
+ * (manifest) that gave it, in collection order.  The values are borrowed
+ * from the manifests the collector holds until it returns. */
+typedef struct {
+    int          n;
+    int          cap;
+    int         *node;
+    const char **val;
+} CmakeOptHist;
+
+/* Which node first declared a merged entry (`node`: its :url/:ref and
+ * :prefer-system), and the settings history of each of its option keys
+ * (`opt_hist` / `wasm_hist`, parallel to the entry's option arrays). */
+typedef struct {
+    int           node;
+    CmakeOptHist *opt_hist;
+    CmakeOptHist *wasm_hist;
+} CmakeDepOrigin;
+
+static bool cmake_opt_hist_add(CmakeOptHist *h, int node, const char *val) {
+    if (h->n >= h->cap) {
+        int nc = h->cap ? h->cap * 2 : 2;
+        int *nn = (int *)realloc(h->node, (size_t)nc * sizeof(int));
+        if (!nn) return false;
+        h->node = nn;
+        const char **nv = (const char **)realloc(h->val,
+                                                 (size_t)nc * sizeof(char *));
+        if (!nv) return false;
+        h->val = nv;
+        h->cap = nc;
+    }
+    h->node[h->n] = node;
+    h->val[h->n]  = val;
+    h->n++;
+    return true;
+}
+
+static void cmake_opt_hists_free(CmakeOptHist *h, int n) {
+    if (!h) return;
+    for (int i = 0; i < n; i++) {
+        free(h[i].node);
+        free(h[i].val);
+    }
+    free(h);
+}
+
+/* Fold `src` into the entry's option list: a new key is appended with its
+ * value, and every setting -- new key or not -- is recorded in `*hist`.
+ * Which value a key ends with is decided once the whole graph has been
+ * merged (resolve_cmake_opts): the spice that settles a conflict between
+ * two of its dependencies is merged after both of them. */
+static bool merge_cmake_opts(PkgCmakeOpt **dst, int *n_dst, CmakeOptHist **hist,
+                             const PkgCmakeOpt *src, int n_src, int node) {
+    for (int j = 0; j < n_src; j++) {
+        if (!src[j].key) continue;
+        int k = 0;
+        for (; k < *n_dst; k++)
+            if ((*dst)[k].key && strcmp((*dst)[k].key, src[j].key) == 0) break;
+        if (k == *n_dst) {
+            PkgCmakeOpt *no = (PkgCmakeOpt *)realloc(
+                *dst, ((size_t)*n_dst + 1) * sizeof(PkgCmakeOpt));
+            if (!no) return false;
+            *dst = no;
+            CmakeOptHist *nh = (CmakeOptHist *)realloc(
+                *hist, ((size_t)*n_dst + 1) * sizeof(CmakeOptHist));
+            if (!nh) return false;
+            *hist = nh;
+            memset(&(*hist)[k], 0, sizeof(CmakeOptHist));
+            (*dst)[k].key = tur_strdup(src[j].key);
+            (*dst)[k].val = dup_cstr_or_null(src[j].val);
+            (*n_dst)++;
+            if (!(*dst)[k].key) return false;
+        }
+        if (!cmake_opt_hist_add(&(*hist)[k], node, src[j].val)) return false;
+    }
+    return true;
+}
+
+/* cmake-deps-no-cross-spice-override-or-order: settle each option key of a
+ * merged entry.  Values that agree need nothing.  When they differ, the
+ * value wins whose manifest DEPENDS ON every manifest that set a different
+ * value: a spice re-declares a library a spice in its own :spices closure
+ * owns, with the one option it needs changed; and the root, which depends
+ * on everything, may override anything, settling a conflict between two of
+ * its spices.  When no setting dominates the rest -- two unrelated spices
+ * disagree and nothing above both of them decides -- it is a hard error
+ * naming both, as before: nothing says which should win. */
+static bool resolve_cmake_opts(PkgCmakeOpt *opts, int n_opts,
+                               const CmakeOptHist *hist,
+                               const char *what, const char *name,
+                               const CmakeDepGraph *g) {
+    for (int k = 0; k < n_opts; k++) {
+        const CmakeOptHist *h = &hist[k];
+        if (h->n <= 1) continue;
+        int win = -1;
+        /* Latest first: in post-order a dependent is merged after what it
+         * depends on, so the last setting is the likeliest winner. */
+        for (int c = h->n - 1; c >= 0 && win < 0; c--) {
+            bool dominates = true;
+            for (int o = 0; o < h->n && dominates; o++)
+                if (!str_eq_or_both_null(h->val[o], h->val[c])
+                    && !cmake_graph_reaches(g, h->node[c], h->node[o]))
+                    dominates = false;
+            if (dominates) win = c;
+        }
+        if (win < 0) {
+            int last = h->n - 1, other = 0;
+            for (int o = 0; o < h->n; o++)
+                if (!str_eq_or_both_null(h->val[o], h->val[last])
+                    && !cmake_graph_reaches(g, h->node[last], h->node[o])) {
+                    other = o;
+                    break;
+                }
+            fprintf(stderr,
+                "tur: conflicting :cmake-deps %s for \"%s\": %s\n"
+                "  %s: \"%s\"\n"
+                "  %s: \"%s\"\n"
+                "  Two spices configure one native dependency; they must agree "
+                "on every option they both set.  A spice that depends on both "
+                "(the root, say) may settle it by setting the option itself.\n",
+                what, name, opts[k].key,
+                cmake_graph_dir(g, h->node[other]),
+                h->val[other] ? h->val[other] : "",
+                cmake_graph_dir(g, h->node[last]),
+                h->val[last] ? h->val[last] : "");
+            return false;
+        }
+        if (str_eq_or_both_null(opts[k].val, h->val[win])) continue;
+        char *nv = dup_cstr_or_null(h->val[win]);
+        if (h->val[win] && !nv) return false;
+        free(opts[k].val);
+        opts[k].val = nv;
+    }
+    return true;
+}
+
+/* cmake-deps-duplicate-keeps-first-options: two spices declaring one
+ * `:cmake-deps` name at the same :url/:ref (or :path) are one dependency,
+ * built once -- so their declarations are UNIONED rather than the first one
+ * collected (which was the last spice in the consumer's :spices map) winning
+ * silently.  `:options` and `:wasm-options` merge key by key and a key set
+ * to two different values is a hard error naming both manifests; `:targets`,
+ * `:link-libs` and `:link-flags` union; a differing `:cmake-name` or
+ * `:cmake-version` is a conflict too.  `:prefer-system` is the one soft key:
+ * the union prefers the system package when either copy asks, with a note.
+ * This is what transitive-cmake-deps-plan Phase 3 asked for.  An option a
+ * dependent re-sets overrides its dependency's value (merge_cmake_opts). */
+static bool merge_cmake_dep(PkgCmakeDep *into, CmakeDepOrigin *org,
+                            const PkgCmakeDep *dep,
+                            const CmakeDepGraph *g, int new_node) {
+    const char *origin_old = cmake_graph_dir(g, org->node);
+    const char *origin_new = cmake_graph_dir(g, new_node);
+    if (!merge_cmake_opts(&into->opts, &into->n_opts, &org->opt_hist,
+                          dep->opts, dep->n_opts, new_node))
+        return false;
+    if (!merge_cmake_opts(&into->wasm_opts, &into->n_wasm_opts, &org->wasm_hist,
+                          dep->wasm_opts, dep->n_wasm_opts, new_node))
+        return false;
+    for (int j = 0; j < dep->n_targets; j++)
+        if (!str_list_add_unique(&into->targets, &into->n_targets, dep->targets[j]))
+            return false;
+    if (dep->has_link_libs) {
+        into->has_link_libs = true;
+        for (int j = 0; j < dep->n_link_libs; j++)
+            if (!str_list_add_unique(&into->link_libs, &into->n_link_libs,
+                                     dep->link_libs[j]))
+                return false;
+    }
+    for (int j = 0; j < dep->n_link_flags; j++)
+        if (!str_list_add_unique(&into->link_flags, &into->n_link_flags,
+                                 dep->link_flags[j]))
+            return false;
+    const char *scalar_key[2] = { ":cmake-name", ":cmake-version" };
+    char **scalar_dst[2] = { &into->cmake_name, &into->cmake_version };
+    const char *scalar_src[2] = { dep->cmake_name, dep->cmake_version };
+    for (int s = 0; s < 2; s++) {
+        if (!scalar_src[s]) continue;
+        if (!*scalar_dst[s]) {
+            *scalar_dst[s] = tur_strdup(scalar_src[s]);
+            if (!*scalar_dst[s]) return false;
+        } else if (strcmp(*scalar_dst[s], scalar_src[s]) != 0) {
+            fprintf(stderr,
+                "tur: conflicting :cmake-deps %s for \"%s\":\n"
+                "  %s: \"%s\"\n"
+                "  %s: \"%s\"\n",
+                scalar_key[s], dep->name,
+                origin_old ? origin_old : "<unknown>", *scalar_dst[s],
+                origin_new ? origin_new : "<unknown>", scalar_src[s]);
+            return false;
+        }
+    }
+    if (dep->prefer_system != into->prefer_system) {
+        fprintf(stderr,
+            "tur: note: :cmake-deps \"%s\" is declared :prefer-system by %s "
+            "and not by %s; the system package is preferred\n",
+            dep->name,
+            dep->prefer_system ? (origin_new ? origin_new : "<unknown>")
+                               : (origin_old ? origin_old : "<unknown>"),
+            dep->prefer_system ? (origin_old ? origin_old : "<unknown>")
+                               : (origin_new ? origin_new : "<unknown>"));
+        into->prefer_system = true;
+    }
+    return true;
+}
+
+/* Absolutize a :path-form dep so a sibling's relative path still resolves
+ * from here.  Heap-allocated; NULL when `path` needs no change (absent or
+ * already absolute) or on allocation failure.
+ *
+ * The base is `<origin_dir>/cmake`, NOT `origin_dir`. The generated
+ * CMakeLists lives in `<spice>/cmake/`, so a relative add_subdirectory
+ * argument resolves from there, and every spice writes its `:path`
+ * accordingly -- `"../cmake-deps/raygui"` means
+ * `<spice>/cmake/../cmake-deps/raygui`, i.e. `<spice>/cmake-deps/raygui`.
+ * Joining against `origin_dir` instead lands one directory too high
+ * (`spices/cmake-deps/raygui`), which does not exist.
+ *
+ * The result is always absolute, which is what lets cmake_dep_path_dir
+ * stay a pure passthrough: `origin_dir` is itself relative under
+ * `tur fetch` (it is "."), so joining alone would leave a relative path
+ * that the emitter would then join against project_dir a second time,
+ * inserting `cmake/` twice. realpath() settles both the absoluteness and
+ * the `..` normalization.  When it fails the join is collapsed
+ * lexically instead (path_collapse_dots): a dependency spice's `cmake/`
+ * is gitignored and absent in a fresh checkout, and the OS cannot walk
+ * `cmake/..` through it (cmake-dep-path-through-missing-cmake-dir).  If
+ * the dep directory itself is missing, CMake then reports that path. */
+static char *cmake_dep_abs_path(const char *path, const char *origin_dir) {
+    if (!path || path[0] == '/' || !origin_dir) return NULL;
+    char joined[4096];
+    char cwd[4096];
+    if (origin_dir[0] == '/') {
+        snprintf(joined, sizeof(joined), "%s/cmake/%s", origin_dir, path);
+    } else if (getcwd(cwd, sizeof(cwd))) {
+        /* origin_dir is "." under `tur fetch`, which is relative to the
+         * process cwd -- anchor it there rather than leaving a relative
+         * result the emitter would join a second time. */
+        snprintf(joined, sizeof(joined), "%s/%s/cmake/%s",
+                 cwd, origin_dir, path);
+    } else {
+        snprintf(joined, sizeof(joined), "%s/cmake/%s", origin_dir, path);
+    }
+    char resolved[4096];
+    const char *final = resolved;
+    if (!realpath(joined, resolved)) {
+        path_collapse_dots(joined);
+        final = joined;
+    }
+    return tur_strdup(final);
+}
+
+static void cmake_dep_origins_free(CmakeDepOrigin *origins,
+                                   const PkgCmakeDep *deps, int n) {
+    if (!origins) return;
+    for (int i = 0; i < n; i++) {
+        cmake_opt_hists_free(origins[i].opt_hist, deps ? deps[i].n_opts : 0);
+        cmake_opt_hists_free(origins[i].wasm_hist,
+                             deps ? deps[i].n_wasm_opts : 0);
+    }
+    free(origins);
+}
+
 /* Append `dep` (deep-copied) into *out_deps, applying conflict-detection
- * keyed on `dep->name`.  `origin_dir` is reported in conflict diagnostics
- * (typically the manifest directory the dep was read from). */
+ * keyed on `dep->name`.  `node` is the graph node (manifest) the dep was
+ * read from; its directory is reported in conflict diagnostics and anchors
+ * a relative :path.  `*origins` runs parallel to `*out_deps`. */
 static bool append_cmake_dep_with_conflict_check(PkgCmakeDep **out_deps,
                                                   int *out_n,
                                                   int *out_cap,
+                                                  CmakeDepOrigin **origins,
                                                   const PkgCmakeDep *dep,
-                                                  const char *origin_dir,
-                                                  const char **origins) {
+                                                  const CmakeDepGraph *g,
+                                                  int node) {
+    const char *origin_dir = cmake_graph_dir(g, node);
+    /* The stored copy of a :path dep is absolute (below), so the incoming
+     * one is compared in the same form: comparing it as written made two
+     * spices that name one local library -- each relative to its own
+     * manifest -- a conflict every time. */
+    char *abs_path = cmake_dep_abs_path(dep->path,
+                                        node >= 0 && g && node < g->n
+                                            ? g->dir[node] : NULL);
+    const char *cmp_path = abs_path ? abs_path : dep->path;
     for (int i = 0; i < *out_n; i++) {
         if (!str_eq_or_both_null((*out_deps)[i].name, dep->name)) continue;
         /* Same name -- require :url and :ref to match (path-form deps
-         * are compared by :path).  Mismatched :cmake-name or :options
-         * is silently kept on the existing copy. */
+         * are compared by :path).  One dependency, so the two declarations
+         * are merged (merge_cmake_dep); only a key set to two different
+         * values by unrelated spices is a conflict. */
         bool url_match  = str_eq_or_both_null((*out_deps)[i].url,  dep->url);
         bool ref_match  = str_eq_or_both_null((*out_deps)[i].ref,  dep->ref);
-        bool path_match = str_eq_or_both_null((*out_deps)[i].path, dep->path);
-        if (url_match && ref_match && path_match) return true; /* dup */
+        bool path_match = str_eq_or_both_null((*out_deps)[i].path, cmp_path);
+        if (url_match && ref_match && path_match) {
+            free(abs_path);
+            return merge_cmake_dep(&(*out_deps)[i], &(*origins)[i], dep,
+                                   g, node);
+        }
         fprintf(stderr,
             "tur: conflicting :cmake-deps for \"%s\":\n"
             "  %s: url=%s, ref=%s, path=%s\n"
             "  %s: url=%s, ref=%s, path=%s\n",
             dep->name,
-            origins[i] ? origins[i] : "<unknown>",
+            cmake_graph_dir(g, (*origins)[i].node),
             (*out_deps)[i].url  ? (*out_deps)[i].url  : "(none)",
             (*out_deps)[i].ref  ? (*out_deps)[i].ref  : "(none)",
             (*out_deps)[i].path ? (*out_deps)[i].path : "(none)",
-            origin_dir ? origin_dir : "<unknown>",
+            origin_dir,
             dep->url  ? dep->url  : "(none)",
             dep->ref  ? dep->ref  : "(none)",
-            dep->path ? dep->path : "(none)");
+            cmp_path  ? cmp_path  : "(none)");
+        free(abs_path);
         return false;
     }
     if (*out_n >= *out_cap) {
         int new_cap = *out_cap ? *out_cap * 2 : 4;
         PkgCmakeDep *nd = (PkgCmakeDep *)realloc(
             *out_deps, (size_t)new_cap * sizeof(PkgCmakeDep));
-        if (!nd) return false;
+        if (!nd) goto oom;
         *out_deps = nd;
+        CmakeDepOrigin *no = (CmakeDepOrigin *)realloc(
+            *origins, (size_t)new_cap * sizeof(CmakeDepOrigin));
+        if (!no) goto oom;
+        *origins  = no;
         *out_cap  = new_cap;
-        /* parallel origins[] array grows in the caller */
     }
-    if (!deep_copy_cmake_dep(&(*out_deps)[*out_n], dep)) return false;
-    /* Absolutize :path-form deps so a sibling's relative path still resolves
-     * from here.
-     *
-     * The base is `<origin_dir>/cmake`, NOT `origin_dir`. The generated
-     * CMakeLists lives in `<spice>/cmake/`, so a relative add_subdirectory
-     * argument resolves from there, and every spice writes its `:path`
-     * accordingly -- `"../cmake-deps/raygui"` means
-     * `<spice>/cmake/../cmake-deps/raygui`, i.e. `<spice>/cmake-deps/raygui`.
-     * Joining against `origin_dir` instead lands one directory too high
-     * (`spices/cmake-deps/raygui`), which does not exist.
-     *
-     * The result is always absolute, which is what lets cmake_dep_path_dir
-     * stay a pure passthrough: `origin_dir` is itself relative under
-     * `tur fetch` (it is "."), so joining alone would leave a relative path
-     * that the emitter would then join against project_dir a second time,
-     * inserting `cmake/` twice. realpath() settles both the absoluteness and
-     * the `..` normalization.  When it fails the join is collapsed
-     * lexically instead (path_collapse_dots): a dependency spice's `cmake/`
-     * is gitignored and absent in a fresh checkout, and the OS cannot walk
-     * `cmake/..` through it (cmake-dep-path-through-missing-cmake-dir).  If
-     * the dep directory itself is missing, CMake then reports that path. */
-    if ((*out_deps)[*out_n].path && (*out_deps)[*out_n].path[0] != '/'
-        && origin_dir) {
-        char joined[4096];
-        char cwd[4096];
-        if (origin_dir[0] == '/') {
-            snprintf(joined, sizeof(joined), "%s/cmake/%s",
-                     origin_dir, (*out_deps)[*out_n].path);
-        } else if (getcwd(cwd, sizeof(cwd))) {
-            /* origin_dir is "." under `tur fetch`, which is relative to the
-             * process cwd -- anchor it there rather than leaving a relative
-             * result the emitter would join a second time. */
-            snprintf(joined, sizeof(joined), "%s/%s/cmake/%s",
-                     cwd, origin_dir, (*out_deps)[*out_n].path);
-        } else {
-            snprintf(joined, sizeof(joined), "%s/cmake/%s",
-                     origin_dir, (*out_deps)[*out_n].path);
-        }
-        char resolved[4096];
-        const char *final = resolved;
-        if (!realpath(joined, resolved)) {
-            path_collapse_dots(joined);
-            final = joined;
-        }
+    if (!deep_copy_cmake_dep(&(*out_deps)[*out_n], dep)) goto oom;
+    CmakeDepOrigin *org = &(*origins)[*out_n];
+    memset(org, 0, sizeof(*org));
+    org->node = node;
+    const PkgCmakeDep *copy = &(*out_deps)[*out_n];
+    if (copy->n_opts > 0) {
+        org->opt_hist = (CmakeOptHist *)calloc((size_t)copy->n_opts,
+                                               sizeof(CmakeOptHist));
+        if (!org->opt_hist) goto oom;
+        for (int k = 0; k < copy->n_opts; k++)
+            if (!cmake_opt_hist_add(&org->opt_hist[k], node, dep->opts[k].val))
+                goto oom;
+    }
+    if (copy->n_wasm_opts > 0) {
+        org->wasm_hist = (CmakeOptHist *)calloc((size_t)copy->n_wasm_opts,
+                                                sizeof(CmakeOptHist));
+        if (!org->wasm_hist) goto oom;
+        for (int k = 0; k < copy->n_wasm_opts; k++)
+            if (!cmake_opt_hist_add(&org->wasm_hist[k], node,
+                                    dep->wasm_opts[k].val))
+                goto oom;
+    }
+    if (abs_path) {
         free((*out_deps)[*out_n].path);
-        (*out_deps)[*out_n].path = tur_strdup(final);
+        (*out_deps)[*out_n].path = abs_path;
+        abs_path = NULL;
     }
     (*out_n)++;
     return true;
+oom:
+    free(abs_path);
+    return false;
 }
 
 /* Discover the on-disk directories of the *other* members of the workspace
@@ -3774,7 +4089,7 @@ static bool append_cmake_dep_with_conflict_check(PkgCmakeDep **out_deps,
  * that declares `:members` containing `project_dir` itself, then returns the
  * absolute path of every sibling member (excluding `project_dir`).
  *
- * This mirrors the workspace-sibling `src/` resolution in main.c's
+ * This mirrors the workspace-sibling `src/` resolution in the driver's
  * auto_append_spice_includes: any sibling member's modules are importable
  * from `project_dir` without an explicit `:spices` entry, so any sibling's
  * native (`:cmake-deps`) contributions must participate in the build too.
@@ -4034,6 +4349,53 @@ static char **collect_workspace_sibling_dirs(const char *project_dir,
     return NULL;
 }
 
+/* One manifest in the :spices graph pkg_collect_transitive_cmake_deps walks.
+ * Node 0 is the root; `kids` are the nodes its :spices (and, for the root,
+ * the seeded workspace siblings) resolve to. */
+typedef struct {
+    char        *dir;      /* as resolved: the diagnostics name, manifest dir */
+    char        *canon;    /* realpath() key the visited check dedups on */
+    PkgManifest  m;        /* node 0 aliases root_manifest (own_m false) */
+    bool         own_m;
+    int         *kids;
+    int          n_kids;
+    int          cap_kids;
+} CmakeDepNode;
+
+static bool cmake_node_add_kid(CmakeDepNode *nd, int kid) {
+    for (int i = 0; i < nd->n_kids; i++)
+        if (nd->kids[i] == kid) return true;
+    if (nd->n_kids >= nd->cap_kids) {
+        int nc = nd->cap_kids ? nd->cap_kids * 2 : 4;
+        int *nk = (int *)realloc(nd->kids, (size_t)nc * sizeof(int));
+        if (!nk) return false;
+        nd->kids     = nk;
+        nd->cap_kids = nc;
+    }
+    nd->kids[nd->n_kids++] = kid;
+    return true;
+}
+
+static void cmake_graph_mark_reach(const CmakeDepNode *nodes, int n,
+                                   int from, int i, bool *reach) {
+    if (reach[(size_t)from * (size_t)n + (size_t)i]) return;
+    reach[(size_t)from * (size_t)n + (size_t)i] = true;
+    for (int k = 0; k < nodes[i].n_kids; k++)
+        cmake_graph_mark_reach(nodes, n, from, nodes[i].kids[k], reach);
+}
+
+/* Post-order from `i`: a node's :spices closure before the node itself, so
+ * a library is configured before the libraries of the spices that depend
+ * on it, and the root last. */
+static void cmake_graph_postorder(const CmakeDepNode *nodes, int i,
+                                  bool *seen, int *order, int *n_order) {
+    if (seen[i]) return;
+    seen[i] = true;
+    for (int k = 0; k < nodes[i].n_kids; k++)
+        cmake_graph_postorder(nodes, nodes[i].kids[k], seen, order, n_order);
+    order[(*n_order)++] = i;
+}
+
 bool pkg_collect_transitive_cmake_deps(const char        *root_project_dir,
                                        const PkgManifest *root_manifest,
                                        bool               include_workspace_siblings,
@@ -4043,84 +4405,66 @@ bool pkg_collect_transitive_cmake_deps(const char        *root_project_dir,
     *out_n    = 0;
     if (!root_project_dir || !root_manifest) return true;
 
-    PkgCmakeDep *deps     = NULL;
-    int          n_deps   = 0;
-    int          cap_deps = 0;
-    const char **origins  = NULL;
-    int          n_origins = 0;
-    int          cap_origins = 0;
+    bool            ok        = false;
+    CmakeDepNode   *nodes     = NULL;
+    int             n_nodes   = 0;
+    int             cap_nodes = 0;
+    /* Worklist of (parent node, resolved dir) pairs still to visit. */
+    int            *work_parent = NULL;
+    char          **work_dir    = NULL;
+    int             n_work      = 0;
+    int             cap_work    = 0;
+    bool           *reach     = NULL;
+    bool           *seen      = NULL;
+    int            *order     = NULL;
+    const char    **dirs      = NULL;
+    PkgCmakeDep    *deps      = NULL;
+    int             n_deps    = 0;
+    int             cap_deps  = 0;
+    CmakeDepOrigin *origins   = NULL;
+    CmakeDepGraph   g         = { 0, NULL, NULL };
+    int             n_order   = 0;
+    char            canon_buf[4096];
 
-#define GROW_ORIGINS_TO(n_target) do {                                       \
-    if ((n_target) > cap_origins) {                                          \
-        int nc = cap_origins ? cap_origins * 2 : 4;                          \
-        while (nc < (n_target)) nc *= 2;                                     \
-        const char **no = (const char **)realloc(                            \
-            origins, (size_t)nc * sizeof(char *));                           \
-        if (!no) goto fail;                                                  \
-        origins = no;                                                        \
-        cap_origins = nc;                                                    \
-    }                                                                        \
-} while (0)
-
-    /* Root manifest's own deps go first. */
-    for (int i = 0; i < root_manifest->n_cmake_deps; i++) {
-        GROW_ORIGINS_TO(n_origins + 1);
-        if (!append_cmake_dep_with_conflict_check(
-                &deps, &n_deps, &cap_deps,
-                &root_manifest->cmake_deps[i],
-                root_project_dir, origins))
-            goto fail;
-        origins[n_origins++] = root_project_dir;
-    }
-
-    /* Multi-level walk over :spices entries.  The worklist holds
-     * absolute-real-path directories of spices whose `build.tur` we
-     * still need to inspect; the visited set is keyed on those same
-     * paths so cycles and diamond shapes terminate.  Each visit
-     * unions the spice's :cmake-deps and appends its own :spices to
-     * the worklist. */
-    char **worklist  = NULL;
-    int    n_work    = 0;
-    int    cap_work  = 0;
-    char **visited   = NULL;
-    int    n_visited = 0;
-    int    cap_vis   = 0;
-
-#define GROW_WORK_TO(n_target) do {                                         \
-    if ((n_target) > cap_work) {                                            \
+#define PUSH_WORK(parent_idx, dir_owned) do {                                \
+    char *pw_dir_ = (dir_owned);                                            \
+    if (!pw_dir_) break;                                                    \
+    if (n_work >= cap_work) {                                               \
         int nc = cap_work ? cap_work * 2 : 4;                               \
-        while (nc < (n_target)) nc *= 2;                                    \
-        char **nw = (char **)realloc(worklist, (size_t)nc * sizeof(char *));\
-        if (!nw) goto walk_fail;                                            \
-        worklist = nw;                                                      \
+        int   *np = (int *)realloc(work_parent, (size_t)nc * sizeof(int));  \
+        if (!np) { free(pw_dir_); goto done; }                              \
+        work_parent = np;                                                   \
+        char **nd = (char **)realloc(work_dir, (size_t)nc * sizeof(char *));\
+        if (!nd) { free(pw_dir_); goto done; }                              \
+        work_dir = nd;                                                      \
         cap_work = nc;                                                      \
     }                                                                       \
-} while (0)
-#define GROW_VIS_TO(n_target) do {                                          \
-    if ((n_target) > cap_vis) {                                             \
-        int nc = cap_vis ? cap_vis * 2 : 4;                                 \
-        while (nc < (n_target)) nc *= 2;                                    \
-        char **nv = (char **)realloc(visited, (size_t)nc * sizeof(char *)); \
-        if (!nv) goto walk_fail;                                            \
-        visited = nv;                                                       \
-        cap_vis = nc;                                                       \
-    }                                                                       \
+    work_parent[n_work] = (parent_idx);                                     \
+    work_dir[n_work]    = pw_dir_;                                          \
+    n_work++;                                                               \
 } while (0)
 
-    /* Helper: canonical key for the visited set.  realpath() if the dir
-     * exists; otherwise the input. */
+    /* Node 0: the root manifest. */
+    cap_nodes = 4;
+    nodes = (CmakeDepNode *)calloc((size_t)cap_nodes, sizeof(CmakeDepNode));
+    if (!nodes) goto done;
+    nodes[0].dir = tur_strdup(root_project_dir);
+    if (!nodes[0].dir) goto done;
+    nodes[0].canon = tur_strdup(realpath(root_project_dir, canon_buf)
+                                    ? canon_buf : root_project_dir);
+    if (!nodes[0].canon) goto done;
+    nodes[0].m     = *root_manifest;
+    nodes[0].own_m = false;
+    n_nodes = 1;
+
     /* Seed: the root's own :spices entries. */
-    for (int i = 0; i < root_manifest->n_spices; i++) {
-        char *sib_dir = pkg_resolve_spice_dep_dir(root_project_dir,
-                                              &root_manifest->spices[i]);
-        if (!sib_dir) continue;
-        GROW_WORK_TO(n_work + 1);
-        worklist[n_work++] = sib_dir;
-    }
+    for (int i = 0; i < root_manifest->n_spices; i++)
+        PUSH_WORK(0, pkg_resolve_spice_dep_dir(root_project_dir,
+                                               &root_manifest->spices[i]));
 
     /* Seed: the enclosing workspace's *other* members.  A sibling member's
      * modules are importable from the root spice without an explicit :spices
-     * entry (see auto_append_spice_includes in main.c), so its :cmake-deps
+     * entry (see the driver's auto_append_spice_includes), so its :cmake-deps
      * must participate in the build too.  Each seeded dir is walked exactly
      * like a :spices entry (its build.tur read, :cmake-deps unioned, its own
      * :spices enqueued); the visited set dedups any overlap with the :spices
@@ -4135,100 +4479,157 @@ bool pkg_collect_transitive_cmake_deps(const char        *root_project_dir,
         char **sib_dirs = collect_workspace_sibling_dirs(root_project_dir,
                                                          &n_sib);
         for (int i = 0; i < n_sib; i++) {
-            GROW_WORK_TO(n_work + 1);
-            worklist[n_work++] = sib_dirs[i];  /* ownership moves to worklist */
+            if (!sib_dirs[i]) continue;
+            /* ownership moves to the worklist; on failure PUSH_WORK frees
+             * its own argument and the rest are released here. */
+            char *d = sib_dirs[i];
+            sib_dirs[i] = NULL;
+            if (n_work >= cap_work) {
+                int nc = cap_work ? cap_work * 2 : 4;
+                int   *np = (int *)realloc(work_parent, (size_t)nc * sizeof(int));
+                char **nd = np ? (char **)realloc(work_dir, (size_t)nc * sizeof(char *))
+                               : NULL;
+                if (np) work_parent = np;
+                if (nd) work_dir = nd;
+                if (!np || !nd) {
+                    free(d);
+                    for (int j = i + 1; j < n_sib; j++) free(sib_dirs[j]);
+                    free(sib_dirs);
+                    goto done;
+                }
+                cap_work = nc;
+            }
+            work_parent[n_work] = 0;
+            work_dir[n_work]    = d;
+            n_work++;
         }
         free(sib_dirs);
     }
 
+    /* Multi-level walk over :spices entries.  The worklist holds the
+     * directories of spices whose `build.tur` we still need to inspect,
+     * each with the node that named it; the node table is keyed on the
+     * realpath so cycles and diamond shapes terminate -- a second route to
+     * a spice adds an edge, not a node.  Each visit reads the spice's
+     * manifest and enqueues its own :spices.  Nothing is collected yet:
+     * the entries are appended afterwards in post-order over this graph. */
     while (n_work > 0) {
-        char *sib_dir = worklist[--n_work];
+        n_work--;
+        int   parent = work_parent[n_work];
+        char *dir    = work_dir[n_work];
+        work_dir[n_work] = NULL;
 
-        /* Visited check (canonical key via realpath when available). */
-        char canon_buf[4096];
-        const char *canon = sib_dir;
-        if (realpath(sib_dir, canon_buf)) canon = canon_buf;
-        bool seen = false;
-        for (int v = 0; v < n_visited; v++) {
-            if (strcmp(visited[v], canon) == 0) { seen = true; break; }
+        const char *canon = realpath(dir, canon_buf) ? canon_buf : dir;
+        int found = -1;
+        for (int v = 0; v < n_nodes; v++)
+            if (strcmp(nodes[v].canon, canon) == 0) { found = v; break; }
+        if (found >= 0) {
+            free(dir);
+            if (!cmake_node_add_kid(&nodes[parent], found)) goto done;
+            continue;
         }
-        if (seen) { free(sib_dir); continue; }
-        GROW_VIS_TO(n_visited + 1);
-        visited[n_visited++] = tur_strdup(canon);
+
+        if (n_nodes >= cap_nodes) {
+            int nc = cap_nodes * 2;
+            CmakeDepNode *nn = (CmakeDepNode *)realloc(
+                nodes, (size_t)nc * sizeof(CmakeDepNode));
+            if (!nn) { free(dir); goto done; }
+            nodes = nn;
+            memset(nodes + cap_nodes, 0,
+                   (size_t)(nc - cap_nodes) * sizeof(CmakeDepNode));
+            cap_nodes = nc;
+        }
+        int idx = n_nodes++;
+        nodes[idx].dir   = dir;
+        nodes[idx].canon = tur_strdup(canon);
+        if (!nodes[idx].canon) goto done;
+        if (!cmake_node_add_kid(&nodes[parent], idx)) goto done;
 
         char sib_manifest[4096];
-        if (!pkg_resolve_manifest_path(sib_dir, sib_manifest,
-                                       sizeof(sib_manifest))) {
-            free(sib_dir);
+        if (!pkg_resolve_manifest_path(dir, sib_manifest, sizeof(sib_manifest)))
             continue;
-        }
         PkgManifest sm;
         memset(&sm, 0, sizeof(sm));
-        if (!pkg_manifest_read(sib_manifest, &sm)) {
-            free(sib_dir);
+        if (!pkg_manifest_read(sib_manifest, &sm))
             continue;
-        }
+        nodes[idx].m     = sm;
+        nodes[idx].own_m = true;
 
-        for (int j = 0; j < sm.n_cmake_deps; j++) {
-            GROW_ORIGINS_TO(n_origins + 1);
-            if (!append_cmake_dep_with_conflict_check(
-                    &deps, &n_deps, &cap_deps,
-                    &sm.cmake_deps[j], sib_dir, origins)) {
-                pkg_manifest_free(&sm);
-                free(sib_dir);
-                goto walk_fail;
-            }
-            origins[n_origins++] = tur_strdup(sib_dir);
-        }
-
-        /* Enqueue this sibling's own :spices for the next level. */
-        for (int j = 0; j < sm.n_spices; j++) {
-            char *grand_dir = pkg_resolve_spice_dep_dir(sib_dir, &sm.spices[j]);
-            if (!grand_dir) continue;
-            GROW_WORK_TO(n_work + 1);
-            worklist[n_work++] = grand_dir;
-        }
-
-        pkg_manifest_free(&sm);
-        free(sib_dir);
+        /* Enqueue this spice's own :spices for the next level. */
+        for (int j = 0; j < nodes[idx].m.n_spices; j++)
+            PUSH_WORK(idx, pkg_resolve_spice_dep_dir(dir, &nodes[idx].m.spices[j]));
     }
+#undef PUSH_WORK
 
-    for (int v = 0; v < n_visited; v++) free(visited[v]);
-    free(visited);
-    free(worklist);
-#undef GROW_WORK_TO
-#undef GROW_VIS_TO
+    /* Reachability: reach[a][b] when b is in a's closure (or a == b). */
+    reach = (bool *)calloc((size_t)n_nodes * (size_t)n_nodes, sizeof(bool));
+    dirs  = (const char **)calloc((size_t)n_nodes, sizeof(char *));
+    seen  = (bool *)calloc((size_t)n_nodes, sizeof(bool));
+    order = (int *)calloc((size_t)n_nodes, sizeof(int));
+    if (!reach || !dirs || !seen || !order) goto done;
+    for (int a = 0; a < n_nodes; a++) {
+        cmake_graph_mark_reach(nodes, n_nodes, a, a, reach);
+        dirs[a] = nodes[a].dir;
+    }
+    g.n = n_nodes; g.dir = dirs; g.reach = reach;
 
-    /* origins[] entries i >= root_manifest->n_cmake_deps are
-     * heap-allocated copies; free them now that conflict diagnostics
-     * have been emitted (or not). */
-    for (int i = root_manifest->n_cmake_deps; i < n_origins; i++)
-        free((char *)origins[i]);
-    free(origins);
-
-#undef GROW_ORIGINS_TO
+    /* cmake-deps-no-cross-spice-override-or-order: emit dependencies first.
+     * A spice's :spices closure is appended before the spice's own entries
+     * and the root's own entries come last, so a library that probes
+     * `if (TARGET mbedtls)` finds the target a dependency spice declared.
+     * The same order makes the override rule in merge_cmake_opts work:
+     * when a dependent re-declares a library, the dependency's copy is
+     * already in `deps` and the dependent's option values replace it. */
+    cmake_graph_postorder(nodes, 0, seen, order, &n_order);
+    for (int o = 0; o < n_order; o++) {
+        int i = order[o];
+        for (int j = 0; j < nodes[i].m.n_cmake_deps; j++) {
+            int before = n_deps;
+            if (!append_cmake_dep_with_conflict_check(
+                    &deps, &n_deps, &cap_deps, &origins,
+                    &nodes[i].m.cmake_deps[j], &g, i))
+                goto done;
+            /* The LINK order is the other way round (pkg_gen_cmake_deps):
+             * a static archive must precede the archives it needs, so the
+             * dependents' entries -- the root's first -- lead the link
+             * line.  Within one manifest the author's order stands for
+             * both. */
+            if (n_deps > before) deps[n_deps - 1].link_group = o;
+        }
+    }
+    for (int i = 0; i < n_deps; i++) {
+        if (!resolve_cmake_opts(deps[i].opts, deps[i].n_opts,
+                                origins[i].opt_hist, "option",
+                                deps[i].name, &g)
+            || !resolve_cmake_opts(deps[i].wasm_opts, deps[i].n_wasm_opts,
+                                   origins[i].wasm_hist, ":wasm-options entry",
+                                   deps[i].name, &g))
+            goto done;
+    }
 
     *out_deps = deps;
     *out_n    = n_deps;
-    return true;
+    deps      = NULL;
+    ok        = true;
 
-fail:
-    for (int i = root_manifest->n_cmake_deps; i < n_origins; i++)
-        free((char *)origins[i]);
-    free(origins);
-    pkg_cmake_deps_free(deps, n_deps);
-    return false;
-
-walk_fail:
-    for (int i = 0; i < n_work; i++) free(worklist[i]);
-    free(worklist);
-    for (int v = 0; v < n_visited; v++) free(visited[v]);
-    free(visited);
-    for (int i = root_manifest->n_cmake_deps; i < n_origins; i++)
-        free((char *)origins[i]);
-    free(origins);
-    pkg_cmake_deps_free(deps, n_deps);
-    return false;
+done:
+    for (int w = 0; w < n_work; w++) free(work_dir[w]);
+    free(work_dir);
+    free(work_parent);
+    for (int v = 0; v < n_nodes; v++) {
+        free(nodes[v].dir);
+        free(nodes[v].canon);
+        free(nodes[v].kids);
+        if (nodes[v].own_m) pkg_manifest_free(&nodes[v].m);
+    }
+    free(nodes);
+    free(reach);
+    free(dirs);
+    free(seen);
+    free(order);
+    cmake_dep_origins_free(origins, ok ? *out_deps : deps, n_deps);
+    if (!ok) pkg_cmake_deps_free(deps, n_deps);
+    return ok;
 }
 
 bool pkg_gen_cmake_deps(const char *project_dir,
@@ -4379,8 +4780,21 @@ bool pkg_gen_cmake_deps(const char *project_dir,
     fprintf(f, "set(_spice_manifest \"{\\n\")\n");
     fprintf(f, "set(_spice_first TRUE)\n\n");
 
+    /* The manifest's entry order is the link order.  The configure blocks
+     * above run dependencies first (pkg_collect_transitive_cmake_deps), but
+     * a static archive must precede the archives it needs, so the groups
+     * are walked the other way: the root manifest's entries (the highest
+     * link_group) lead, then each spice before the spices it depends on.
+     * Within one group the declared order stands.  A manifest that was not
+     * collected has every entry in group 0, so its order is unchanged. */
+    int max_group = 0;
+    for (int i = 0; i < manifest->n_cmake_deps; i++)
+        if (manifest->cmake_deps[i].link_group > max_group)
+            max_group = manifest->cmake_deps[i].link_group;
+    for (int grp = max_group; grp >= 0; grp--)
     for (int i = 0; i < manifest->n_cmake_deps; i++) {
         const PkgCmakeDep *d = &manifest->cmake_deps[i];
+        if (d->link_group != grp) continue;
         const char *link_lib = cmake_dep_link_lib(d);
 
         fprintf(f, "# manifest entry: %s\n", d->name);
@@ -4574,7 +4988,7 @@ bool pkg_cmake_build(const char *project_dir,
      * already handled by the arm-independent `cmake_major_version() >= 4`
      * test.  raylib hid the bug -- its own floor is exactly 3.5, the lowest
      * CMake 4 still accepts -- so it only showed up on the second cmake dep.
-     * docs/reported/wasm-arm-suppresses-cmake-policy-min.md. */
+     * docs/archive/wasm-arm-suppresses-cmake-policy-min.md. */
     if (cmake_major_version() >= 4 && !getenv("TUR_CMAKE_NO_POLICY_MIN"))
         buf_printf(&cmd, " -DCMAKE_POLICY_VERSION_MINIMUM=3.5");
     /* SF3: honor `tur fetch --refetch` (sets TUR_FETCH_FORCE_FETCH) by
@@ -4659,8 +5073,10 @@ bool pkg_cmake_build(const char *project_dir,
         char *sha = pkg_git_resolve(dep_src);
         if (sha) {
             free(le->resolved); le->resolved = sha;
-            free(le->sha256);   le->sha256   = tur_strdup(sha);
         }
+        /* :resolved is the pin; a cmake row carries no :sha256 (it used to
+         * repeat the git SHA, which nothing compared). */
+        free(le->sha256); le->sha256 = NULL;
     }
 
     pkg_cmake_manifest_free(&cmkman);

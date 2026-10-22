@@ -7,7 +7,9 @@
  * Collision handling: linked list in v1.
  * Hash function: xxHash64 (speed-optimised, non-cryptographic).
  *
- * See docs/hamt-plan.md for full design and phase breakdown.
+ * User-facing API and semantics: docs/guides/hamt-guide.md.  The region
+ * store hooks (tur_hamt_set, tur_hamt_transient_set) note every stored word;
+ * see docs/guides/gc-guide.md (regions).
  */
 
 #include "hamt.h"
@@ -29,7 +31,7 @@
 
 /* The store-side region note.  A TUR_REGIONS=0 program pastes no region
  * runtime, so when `tur build` compiles this file from source for one it
- * passes -DTUR_REGIONS=0 (main.c, autolink_regions_off) and the note compiles
+ * passes -DTUR_REGIONS=0 (the driver's autolink_regions_off) and the note compiles
  * away, exactly as the program's own TUR_REGION_NOTE does.  Every archive
  * build carries region.o beside this file and keeps the call. */
 #if defined(TUR_REGIONS) && TUR_REGIONS == 0
@@ -119,7 +121,7 @@ uint64_t tur_hamt_hash_xxh64(const void *data, size_t len) {
      * its whole stripes alone: any two that agreed there collided, whatever
      * followed (and its length was never mixed in either).  Every path under
      * one fixtures directory shares its first 32 bytes, which is how
-     * tur-build's intermediate-C names (stable_c_path) collided; the cache
+     * tur-build's intermediate-C names (drv_stable_c_path) collided; the cache
      * keys and HAMT string keys hashed here had the same blind spot.  An input
      * under 32 bytes hashes exactly as before. */
     while (len >= 8) {

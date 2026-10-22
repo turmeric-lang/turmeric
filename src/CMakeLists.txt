@@ -12,9 +12,12 @@ add_compile_definitions(_DEFAULT_SOURCE)
 # Winsock. tur_core is an OBJECT library, so its Winsock dependency does not
 # propagate to the many executables that embed its objects (tur, the tur_*
 # test harnesses). A directory-scoped link_libraries applies to every target
-# defined below, which is the simplest way to cover them all.
+# defined below, which is the simplest way to cover them all.  shlwapi rides
+# along for the interpreter's fs/glob native (interpreter_natives.c), which
+# matches with PathMatchSpecA where POSIX has fnmatch -- the same library the
+# driver already adds to an emitted program's Windows link line.
 if(WIN32)
-    link_libraries(ws2_32)
+    link_libraries(ws2_32 shlwapi)
 endif()
 
 # ---------------------------------------------------------------------------
@@ -151,7 +154,7 @@ set(TURI_EVAL_SOURCES
     # lives in turi/jit_ffi.c inside tur_jit_obj (JIT builds only).
     turi/jit_ffi_hook.c
     # aot-compiled-repl-plan C1: compile an inline-C defn the interpreter
-    # cannot run, through a host hook (main.c registers it on a JIT build).
+    # cannot run, through a host hook (the driver registers it on a JIT build).
     # MIR-free, like jit_ffi_hook.c.
     turi/inline_c_jit.c
 )
@@ -174,7 +177,7 @@ set(TUR_INCLUDE_DIRS
 )
 
 # ---------------------------------------------------------------------------
-# Compiler sources (all except main.c and turi eval core)
+# Compiler sources (all except the driver and turi eval core)
 # ---------------------------------------------------------------------------
 set(TUR_CORE_SOURCES
     # compiler/ -- frontend pipeline: text -> IR
@@ -251,7 +254,6 @@ set(TUR_CORE_SOURCES
     passes/cps_ir.c
     passes/effect.c
     passes/effect_check.c
-    passes/effect_lower.c
     passes/kind_check.c
     passes/lifetime_elision.c
     passes/lifetimes.c
@@ -323,7 +325,7 @@ set(TUR_CORE_SOURCES
     # ...and its declarations image (tur_rt_split_hash / tur_rt_split_decls).
     # This used to live in tur_jit_obj under `if(TUR_JIT)`, on the stated
     # grounds that "non-JIT builds never read it".  `--runtime=split` made the
-    # CC PATH read it, which broke that premise: main.c's jit_try_split_preamble
+    # CC PATH read it, which broke that premise: the driver's jit_try_split_preamble
     # is called from cmd_build, and a non-JIT build then failed with
     # `jit_try_split_preamble used but never defined [-Werror]` -- invisible in
     # any -DTUR_JIT=ON tree, which is every tree it was developed in.
@@ -533,7 +535,35 @@ target_compile_definitions(tur_core PRIVATE TUR_VERSION="${_TUR_VERSION_STR}")
 # ---------------------------------------------------------------------------
 # tur: main compiler executable
 # ---------------------------------------------------------------------------
-add_executable(tur main.c lsp/mcp.c $<TARGET_OBJECTS:tur_core>)
+# The compiler driver: the `tur` subcommands, the pass pipeline, the cc
+# invocation and autolink, and the split-build caches (main-c-split-plan).
+# These belong to the executable, NOT tur_core: they call system(), fork(),
+# the cc toolchain and the JIT engine, and tur_core's eighteen consumers --
+# libturi_wasm among them -- must not link any of that.  Listing them here
+# also gives them the executable's own definitions (TUR_VERSION,
+# TUR_HAVE_JIT, TURI_HAVE_EDITLINE) with no extra work.  driver/driver.h
+# and driver/commands.h declare what crosses between them;
+# tests/check-driver-headers.py checks each header section against the
+# file it names.
+set(TUR_DRIVER_SOURCES
+  driver/cc.c
+  driver/cli.c
+  driver/cmd_build.c
+  driver/cmd_emit.c
+  driver/cmd_eval.c
+  driver/cmd_format.c
+  driver/cmd_misc.c
+  driver/cmd_run.c
+  driver/compile_link.c
+  driver/jit.c
+  driver/paths.c
+  driver/pipeline.c
+  driver/preamble_split.c
+  driver/project.c
+  driver/spice.c
+  driver/worker.c
+)
+add_executable(tur main.c lsp/mcp.c ${TUR_DRIVER_SOURCES} $<TARGET_OBJECTS:tur_core>)
 
 # J1 (jit-engine-plan): the in-process MIR JIT engine behind `tur jit`.
 # Only under -DTUR_JIT=ON: vendors MIR (cmake/mir.cmake, included by the
@@ -574,7 +604,7 @@ if(TUR_JIT)
   # $<TARGET_OBJECTS:> carries objects only -- no usage requirements, no
   # transitive link -- so each consumer states the engine's needs itself.
   target_sources(tur PRIVATE $<TARGET_OBJECTS:tur_jit_obj>)
-  # main.c's cmd_jit is compiled into `tur` directly, so it needs the define
+  # The driver's cmd_jit is compiled into `tur` directly, so it needs the define
   # on its own target -- it does not inherit tur_jit_obj's.
   target_compile_definitions(tur PRIVATE TUR_HAVE_JIT=1)
   target_link_libraries(tur PRIVATE tur_mir)
@@ -594,7 +624,7 @@ if(TUR_JIT)
   endif()
 endif()
 
-# tur also needs the subsystem subdirs on the include path for main.c.
+# tur also needs the subsystem subdirs on the include path for the driver.
 target_include_directories(tur PRIVATE ${TUR_INCLUDE_DIRS})
 
 # Common warning flags
@@ -630,7 +660,7 @@ if(HAVE_EDITLINE)
     target_compile_definitions(tur PRIVATE TURI_HAVE_EDITLINE=1)
 endif()
 
-# E2: inject version into tur executable (main.c reads TUR_VERSION)
+# E2: inject version into tur executable (the driver reads TUR_VERSION)
 target_compile_definitions(tur PRIVATE TUR_VERSION="${_TUR_VERSION_STR}")
 
 
@@ -674,9 +704,10 @@ target_link_libraries(libturi INTERFACE ${CMAKE_DL_LIBS})
 # overrides auto-registered for every interpreter env), whose math shims
 # reference sqrt/floor -- propagate libm to anyone linking libturi.
 target_link_libraries(libturi INTERFACE m)
-# WIN3: propagate ws2_32 to anyone linking libturi (io_iocp.c uses Winsock).
+# WIN3: propagate ws2_32 to anyone linking libturi (io_iocp.c uses Winsock),
+# and shlwapi for the fs/glob native's PathMatchSpecA.
 if(WIN32)
-    target_link_libraries(libturi INTERFACE ws2_32)
+    target_link_libraries(libturi INTERFACE ws2_32 shlwapi)
 endif()
 
 # I4: libturi carries the JIT engine when the build has one.  PUBLIC on both
@@ -710,7 +741,7 @@ endif()
 #
 # Compile flags mirror the default `tur build` cc_flags (-O2 -std=c99
 # -fno-strict-aliasing, plus the -fwrapv every emitted-C compile carries --
-# TUR_EMITTED_C_CC_FLAGS in main.c) so the objects are ABI-identical to a
+# TUR_EMITTED_C_CC_FLAGS in driver/driver.h) so the objects are ABI-identical to a
 # bare-source compile; no -Werror so a stray warning here never fails the
 # archive build.
 # DEDUP-4b (gc-cycle-collection-plan): rc/gc/rc_free_queue join the archive so a
@@ -735,11 +766,11 @@ set(TURT_RUNTIME_SOURCES
     # libc until installed; a stdlib autolink marker compiles it beside hamt.c,
     # tur_string.c and symbols.c in bare-source mode.
     runtime/rt_alloc.c
-    # RM3 regions: an emitted spine ctor calls tur_region_alloc_or_malloc when
-    # --enable=regions is on, so the definition has to be linkable by the
+    # RM3 regions: every emitted spine ctor calls tur_region_alloc_or_malloc
+    # (regions are on by default), so the definition has to be linkable by the
     # program, not only by the compiler.  Same reasoning as the rc/gc members
-    # above; with the flag off nothing references it and the linker never
-    # extracts this member.
+    # above; only a TUR_REGIONS=0 build leaves it unreferenced, and then the
+    # linker never extracts this member.
     runtime/region.c
     runtime/arena.c
     # o0-build-cannot-link-contract-handler: stdlib/contract.tur's
@@ -1758,7 +1789,7 @@ set_target_properties(tur_docscanner_unit PROPERTIES
 # ---------------------------------------------------------------------------
 # LSP session unit test (try-turmeric-lsp-plan, §4)
 #
-# Links tur_core -- which is everything except main.c -- and supplies its own
+# Links tur_core -- which is everything except the driver -- and supplies its own
 # tur_collect_symbols. That is not a workaround for the link: it is the point.
 # A fixed stub index makes completion ordering, path remapping, and last-good
 # retention assertable, where the real compiler would tie every assertion to
@@ -1794,7 +1825,7 @@ set_target_properties(tur_lsp_session_unit PROPERTIES
 # ---------------------------------------------------------------------------
 # WASM LSP analysis-backend test (try-turmeric-lsp-plan, L0)
 #
-# src/web/wasm_lsp.c is the front end the browser uses in place of main.c's
+# src/web/wasm_lsp.c is the front end the browser uses in place of the driver's
 # compile_to_c.  Nothing in it is actually wasm-specific -- the Emscripten
 # build differs only in where the stdlib is mounted, which is a TUR_STDLIB_DIR
 # lookup -- so it runs here against the in-tree stdlib and the real compiler.
@@ -1966,7 +1997,7 @@ set(WASM_GLUE_SOURCES
     web/tutorial.c
     # try-turmeric-lsp-plan: the LSP bridge, plus the WASM-side analysis
     # backend.  tur_core carries the whole server already; what it does not
-    # carry is tur_collect_symbols, which lives in main.c (a CLI, and not part
+    # carry is tur_collect_symbols, which lives in the driver (a CLI, and not part
     # of this source set).  Nothing referenced the server, so wasm-ld collected
     # it away and the dangling reference never surfaced -- exporting an entry
     # point makes it live, and this file is what resolves it.

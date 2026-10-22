@@ -1075,7 +1075,7 @@ static ElabModule *elab_load_module_impl(Elab *e, const Symbol *name, Span impor
      * registry can be NULL (legacy callers / no manifest) -- in that
      * case read_all_with_registry behaves identically to read_all.
      *
-     * Loading semantics: see docs/reader-macros-plan.md ("Loading
+     * Loading semantics: see docs/archive/reader-macros-plan.md ("Loading
      * semantics"). `(import ...)` and `(load ...)` (elab_toplevel.c)
      * both populate this same registry; macros declared in an imported
      * module become visible to anything loaded *after* it in the

@@ -659,9 +659,10 @@ fixtures; see the dated note under "Landed"):
   ones included; measures with extra non-decreasing arguments
   (`reflect-stack-machine`); measures calling other reflected measures.
 - **Does not:** anything needing induction (`len t >= 0`); a value returned by
-  a function call or held by a top-level `def` (globals are not refinement
-  facts at all, reflected or not:
-  [refine-top-level-def-not-a-fact](../reported/refine-top-level-def-not-a-fact.md));
+  a function call, or held by a top-level `def` whose value is computed (an
+  immutable `def` of a constructor term is a fact at a crossing since
+  2026-10-21:
+  [refine-top-level-def-not-a-fact](../archive/refine-top-level-def-not-a-fact.md));
   a `float` measure that does arithmetic;
   a reflected function that builds data (`app` is `TUR-E0384` at the purity
   gate, whose walk admits "literals, if/let/do/match, arithmetic, and calls to

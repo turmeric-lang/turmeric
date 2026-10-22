@@ -211,7 +211,7 @@ struct TuriEnv *elab_macro_env_get(ElabSession *session) {
         turi_env_pin_prelude(env);
         turi_env_register_interpreter_natives(env);
         /* Re-assert collection natives (vec/set/map/hamt) after preload --
-         * see the matching call in main.c for why. */
+         * see the matching call in cmd_eval_h for why. */
         turi_register_collection_natives(env);
         /* Stage 4 / R3: bounded type reflection, macro-env only -- the
          * native reads the enclosing compile's ADT registry through the

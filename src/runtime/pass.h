@@ -1,12 +1,15 @@
 /* pass.h — Compiler pass scheduling infrastructure (Phase P19-1).
  *
  * Defines the ordered pass pipeline and the PassContext struct that threads
- * shared state between passes.  Each new pass is added here by:
- *   1. Adding a PassKind constant.
- *   2. Adding a case in the run_core_passes() switch in main.c.
+ * shared state between passes.  A new pass is named in four places:
+ *   1. its PassKind constant here;
+ *   2. its entry in core_passes[] (the driver's pass pipeline);
+ *   3. its arm in pass_zone() (plus a ProfZone in prof.h if the pass should
+ *      be timed on its own) -- a missing arm is a -Wswitch error;
+ *   4. its arm in run_core_pass(), which does the work.
  *
  * Current pipeline order:
- *   PASS_ELABORATE → PASS_KIND_CHECK → PASS_EFFECT_LOWER → PASS_EFFECT_ROW_INFER →
+ *   PASS_ELABORATE → PASS_KIND_CHECK → PASS_EFFECT_ENV → PASS_EFFECT_ROW_INFER →
  *   PASS_CPS → PASS_BORROW_CHECK
  *
  * The emit step is NOT a PassKind because the three emit variants
@@ -27,12 +30,13 @@
 #include "symbols.h"
 #include "typeclass.h"
 
-/* Compiler pass identifiers.  Ordered to match the pipeline sequence used in
- * run_core_passes().  New passes are inserted here and in the switch. */
+/* Compiler pass identifiers.  Ordered to match the pipeline sequence in
+ * core_passes[].  See the top of this file for the four places a new pass is
+ * named. */
 typedef enum PassKind {
     PASS_ELABORATE,        /* Form* → typed Expr (elaboration + type checking)      */
     PASS_KIND_CHECK,       /* kind inference and validation (Phase HKT H0)          */
-    PASS_EFFECT_LOWER,     /* perform/handle → shift/reset (effect lowering)         */
+    PASS_EFFECT_ENV,       /* builds the EffectEnv (builtin Unsafe, capabilities)    */
     PASS_EFFECT_ROW_INFER, /* infer and validate effect rows per function (P19-2)    */
     PASS_CPS,              /* continuation-passing-style transform for shift/reset   */
     PASS_BORROW_CHECK,     /* ownership, move, and borrow analysis (Phase 14)        */
@@ -45,9 +49,9 @@ typedef enum PassKind {
  * Fields:
  *   arena       — bump allocator whose lifetime spans the full pipeline.
  *   st          — symbol table; populated by the reader, read by later passes.
- *   effect_env  — effect registry; populated by PASS_EFFECT_LOWER, carried
+ *   effect_env  — effect registry; populated by PASS_EFFECT_ENV, carried
  *                 forward so PASS_EFFECT_ROW_INFER and codegen can query it.
- *                 NULL until PASS_EFFECT_LOWER runs.
+ *                 NULL until PASS_EFFECT_ENV runs.
  *   prog        — current program AST; set by PASS_ELABORATE and updated in
  *                 place by each subsequent transform pass.
  *   forms       — raw input forms fed to PASS_ELABORATE; unused afterwards.
@@ -56,7 +60,7 @@ typedef enum PassKind {
 typedef struct PassContext {
     Arena       *arena;
     SymbolTable *st;
-    EffectEnv   *effect_env;  /* NULL until PASS_EFFECT_LOWER completes */
+    EffectEnv   *effect_env;  /* NULL until PASS_EFFECT_ENV completes   */
     TypeClassEnv tc_env;      /* populated by PASS_ELABORATE             */
     Expr        *prog;        /* NULL until PASS_ELABORATE completes     */
     Form       **forms;       /* input to PASS_ELABORATE                 */
@@ -67,8 +71,6 @@ typedef struct PassContext {
     /* Phase PKG-1: extra module search directories from -I flags / spice paths */
     const char **include_dirs;
     int          n_include_dirs;
-    /* Phase P3: HAMT lowering - track if HAMT functions are used */
-    bool         needs_hamt;
     /* Transitive-RM: shared reader-macro registry. Set by the compile
      * driver alongside `forms`/`nforms`; the elaborator copies the
      * pointer into Elab so module loaders read with the same registry

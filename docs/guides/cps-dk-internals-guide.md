@@ -80,18 +80,17 @@ These look relevant but are **not** on the emitted path:
 | `src/runtime/cps_prompt.c`, `.h` | The original reference DK machine (13-field `struct DK`). It is linked only into the `tur_cps_prompt_unit` test. The emitted machine has diverged from it substantially: about 40 fields, the driver, the reap list, handler groups, in-place resume. Read it for the core idea, not for current behavior. |
 | `src/runtime/cps_rt.c`, `.h` | The CPS4 `TurKont` trampoline. Nothing outside `tests/cps_rt_unit.c` uses it, though it is still compiled into `tur_core`. |
 | `tur_cont` in `src/runtime/runtime.h` | The pre-CPS fiber-snapshot continuation. `runtime.c` is not built by any target. The emitted preamble's `tur_cont` is an unrelated struct with the same name (a node of the catch-unwind segment trampoline). |
-| `src/passes/effect_lower.c` | A no-op (see [Pipeline position](#pipeline-position)). Effects are **not** rewritten to `shift`/`reset`. |
 
 ---
 
 ## Pipeline position
 
-The core passes are listed in `src/main.c:core_passes[]` and run by
+The core passes are listed in `src/driver/pipeline.c:core_passes[]` and run by
 `run_core_passes`. The CPS-related ones are:
 
 | Pass | What it actually does |
 |---|---|
-| `PASS_EFFECT_LOWER` | Builds the `EffectEnv` (registers builtin `Unsafe` and the capabilities), then calls `effect_lower`. `effect_lower` returns its input unchanged: its `expr_contains_effects` gate has no `EX_PROGRAM` arm, and even its rewriter leaves `EX_PERFORM`/`EX_HANDLE`/`EX_RESUME` as they are. |
+| `PASS_EFFECT_ENV` | Builds the `EffectEnv` (registers builtin `Unsafe` and the capabilities). The tree is untouched; effects are **not** rewritten to `shift`/`reset` anywhere before the DK backend. (It was `PASS_EFFECT_LOWER`, and called an identity `effect_lower` walk, until 2026-10-21.) |
 | `PASS_EFFECT_ROW_INFER` | `effect_check_pass`, the effect-row checker. Its "stub slot" comment is stale. |
 | `PASS_CPS` | Runs `--dump-cps-coloring` (stdout half) and `--dump-cps` on the pre-transform tree, then `cps_transform`, then `--dump-clone-plan` and the stderr half of `--dump-cps-coloring`. |
 
@@ -960,7 +959,7 @@ How they are produced and used:
   built into `libturt_preamble.a`, which the cc path links on Linux and
   Windows.
 - The JIT re-hashes the canonical text at use time
-  (`main.c:jit_try_split_preamble`) and falls back to the full preamble on a
+  (`driver/preamble_split.c:jit_try_split_preamble`) and falls back to the full preamble on a
   mismatch. CI checks that the split path actually engages.
 
 **A change to `emit_dk_runtime.c`, or to any preamble text, needs those files

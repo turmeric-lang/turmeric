@@ -1,0 +1,2 @@
+tur audit: no build.tur found in current directory
+[exit 1]

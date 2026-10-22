@@ -55,9 +55,8 @@ static const char *const autoload_files_[] = {
     "trail.tur",
     /* RM3 (regions): `with-region`, the lifetime-only bracket.  Loaded after
      * trail.tur since it is the trail's sibling in the region/trail split.  The
-     * body is a bare forwarder, so with `--enable=regions` off the defn is an
-     * ordinary identity call and adds no behaviour; the emitter opens a region
-     * around a call to it only when the flag is on. */
+     * body itself is an identity forwarder and adds no behaviour; the emitter
+     * opens a region around a call to it unless TUR_REGIONS=0. */
     "region.tur",
     NULL
 };

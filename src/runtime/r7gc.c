@@ -3,7 +3,7 @@
  *
  * Why it exists: a Scheme value is a `:heap` box, and the memory model never
  * frees one (docs/guides/gc-guide.md), so a Scheme program's memory only grows
- * (docs/reported/r7rs-heap-data-never-reclaimed.md).  Shared, mutable, cyclic
+ * (docs/archive/r7rs-heap-data-never-reclaimed.md).  Shared, mutable, cyclic
  * data is the case only a tracing collector handles well.
  *
  * How it plugs in: the emitter pastes this file into the program's

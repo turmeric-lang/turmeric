@@ -1,0 +1,5 @@
+;; session-forms-gaps 2: make-session gives exactly two endpoints.  A third
+;; name used to be bound as an int, and the only diagnostic was the
+;; dropped-linear-value error for the two endpoints that were named.
+(defn main [] : int
+  (let [[a b c] (make-session (Send int Close))] 0))

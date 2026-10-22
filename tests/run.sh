@@ -573,7 +573,8 @@ export TUR_STDLIB_HASH="$(find stdlib -type f 2>/dev/null | LC_ALL=C sort |
 #
 # The preamble mode is RESOLVED, not read off TUR_PREAMBLE_SPLIT: the split
 # also depends on whether libturt_preamble.a was built, on the platform default,
-# and on -fsanitize in TUR_CC_FLAGS (preamble_split_auto_applies, src/main.c).
+# and on -fsanitize in TUR_CC_FLAGS (preamble_split_auto_applies,
+# src/driver/pipeline.c).
 # So ask `tur` -- one probe build, whose link line names -lturt_preamble exactly
 # when the split engaged.  The same probe is how CI's `whole-preamble` job
 # verifies its opt-out.

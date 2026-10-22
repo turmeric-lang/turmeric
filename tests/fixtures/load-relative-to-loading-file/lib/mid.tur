@@ -1,0 +1,3 @@
+;; Loaded by input.tur as "lib/mid.tur"; loads its own neighbour.
+(load "helper.tur")
+(defn mid-val [] : int (+ 1 (helper-val)))

@@ -1,0 +1,53 @@
+;; match-on-any-plain-turmeric -- `match` on an `any` scrutinee is not a Saffron
+;; feature, and gating it on the dialect made plain Turmeric emit uncompilable C.
+;;
+;; The narrow (elab_structs.c) reads the arms, finds the one ADT they name, and
+;; inserts the checked unbox that `cast` would.  It was written for Saffron --
+;; where an unannotated parameter IS `any`, so the shape arrives by default --
+;; and carried `lang_span_is_dynamic`.  But `any` is a Turmeric type and
+;; `[l : any]` is a Turmeric signature, so the shape is writable here too, and
+;; without the narrow the emitter produced exactly the C the narrow's own comment
+;; predicts:
+;;
+;;     tur_adt_Lst __scrut_v = (l);   // error: invalid initializer
+;;
+;; A hard `cc` failure with no Turmeric-level diagnostic, on a program that
+;; compiled and ran the moment `#lang saffron` was added to the top of the file.
+;;
+;; The gate is gone for a non-parametric ADT.  What the narrow must NOT become is
+;; a reinterpret: handing it an `any` holding something else panics with the
+;; standard cast message, and `peek-typed` below is the compile-time half of the
+;; same point -- a scrutinee whose static type is already the ADT does not go
+;; through the narrow at all.  A PARAMETRIC ADT stays dynamic-dialect-only (its
+;; narrow to `(T any)` relies on the constructor building at `any`) and gets a
+;; diagnostic here instead of the C error: errors/match-on-any-parametric-plain.
+
+(defdata Lst [] (Cons [hd : any tl : any]) (Nil))
+
+;; The shape that did not compile: an `any` parameter matched against ADT arms.
+(defn peek [l : any] : int
+  (match l
+    (Cons h t) 1
+    (Nil)      0))
+
+;; Reading a field back out through the narrow, so the arm BINDERS are exercised
+;; rather than just the tag.
+(defn head-or [l : any d : int] : int
+  (match l
+    (Cons h t) (cast h int)
+    (Nil)      d))
+
+;; The already-typed scrutinee still takes the ordinary path.
+(defn peek-typed [l : Lst] : int
+  (match l
+    (Cons h t) 1
+    (Nil)      0))
+
+(defn main [] : int
+  (let [one (Cons (:: 1 any) (:: (Nil) any))]
+    (println (peek (:: one any)))          ;; 1
+    (println (peek (:: (Nil) any)))        ;; 0
+    (println (head-or (:: one any) 99))    ;; 1
+    (println (head-or (:: (Nil) any) 99))  ;; 99
+    (println (peek-typed one)))            ;; 1
+  0)

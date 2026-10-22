@@ -2,6 +2,165 @@
 
 All notable changes to Turmeric are documented here.
 
+## [Unreleased]
+
+### Changed
+
+- **`tur.lock` no longer writes `:sha256` on a `:cmake-deps` row.** It
+  repeated the row's `:resolved` git SHA and nothing compared it. A lock that
+  still carries one is read as if the key were absent, so `tur fetch --frozen`
+  does not report an old lock as changed. Spice rows are unchanged.
+- **The region runtime is pasted into emitted programs without its
+  comments.** `region.h`, `arena.{h,c}`, `region.c` and `r7gc.c` used to
+  ride into every `tur emit-c` output prose and all; a comment edit there
+  cost every codegen snapshot and a split-hash regen. Line breaks are kept.
+  `tur_region_pop_reclaim`, which nothing in the product called, is no longer
+  part of the runtime header; `tur_region_pop_checked` is the pop that
+  rewinds.
+- **`--timings` zone `effect-lower` is now `effect-env`.** The pass only ever
+  built the effect registry; the identity `effect_lower` walk it also ran is
+  deleted.
+- **A spice's `:cmake-deps` configure after its dependencies'.** The entries
+  of the spices in a manifest's `:spices` closure now come first in the
+  generated `cmake/CMakeLists.txt`, and the root's own come last. A library
+  that reuses a target it finds in the project (`if (TARGET mbedtls)`) now
+  sees one a dependency spice declared. The link line keeps a dependent's
+  archives ahead of the ones they need.
+- **The dependent wins a `:cmake-deps` option.** When two spices set one
+  option of a shared native dependency to different values, the one that
+  depends on the other wins, and the root project can settle any option.
+  Two unrelated spices that disagree are still an error naming both.
+
+### Added
+
+- **TUR-W0045: a parameter annotated with an unknown type name.** A name
+  that is no known type and relates to nothing else in the signature is an
+  implicit type variable, so the argument went unchecked; `[k : zork]` and
+  the prose spelling `[x : option<int>]` now warn, the latter with the
+  `(Option T)` spelling to use. A declared `[A]` or a name used twice stays
+  quiet.
+
+### Fixed
+
+- **A lambda returned by a generic can build a parametric value.**
+  `(defn mk [A] [x : A] : (fn [A] (Box A)) (fn [y : A] : (Box A) ...))`
+  aborted with "base constructor ... has no definition" when the lambda
+  captured nothing, and returned a float's bit pattern when it captured
+  `x`. Each instantiation now gets its own clone of the lambda.
+- **Two spices can share one `:path` native dependency.** Each names it
+  relative to its own manifest, and the second was compared as written
+  against the first's absolute path, so the pair was always a "conflicting
+  :cmake-deps" error.
+- **The API reference renders every definition form.** `deftype`,
+  `defdynamic`, `def` and `defalias` have cards; a sum type's constructors
+  keep their payload types and a GADT arm its result; a generic struct shows
+  its fields; `defeffect` and `defopaque` headers are shown as written; and a
+  name containing `=` (`char=?`) is published under its own name, so
+  `(doc 'char=?)` answers.
+- **A by-value struct argument to a `letrec` closure no longer leaks a box
+  per call.** The thunk copies the value out at entry, so the box now lives
+  in the caller's frame instead of on the heap with no owner.
+- **`tur --interpret` fires an abandoned body's `defer`s when the handler
+  case returns.** A case that returned without resuming used to leave the
+  body's pending defers for the next enclosing scope exit, after everything
+  the handle's continuation printed; the compiled runtime fires them at the
+  case's return, and the interpreter now does too. A case that keeps `k` is
+  unchanged.
+- **`tur --interpret` no longer warns TUR-W0033 on a handler around a
+  stdlib higher-order call.** An effectful lambda passed to `option-map`,
+  `with-region` or `bt-scope` reached the handler, but the interpreter's
+  per-turn effect check could not see the stdlib callee's parameters and
+  called the clause unreachable.
+- **`stdlib/fs.tur` runs under `tur --interpret` and in the REPL.** Every
+  function in it (`fs/read-text`, `fs/write-text`, `fs/read-lines`,
+  `fs/exists?`, `fs/stat`, `fs/mkdirp`, `fs/glob`, `fs/read-dir`, ... and
+  `fs/read-string`) has an interpreter native that mirrors its compiled body,
+  errno included; only the four `fs/tmpfile*` functions had one before.
+- **Two spices declaring one `:cmake-deps` entry merge their declarations.**
+  The copy collected first used to win silently, dropping the other's
+  `:options`, `:targets` and the rest. Options now union key by key, and a
+  key set to two different values is an error naming both manifests.
+- **A `:cmake-deps` archive's own static dependencies follow it on the link
+  line.** `top -> mid -> core` used to link as `libtop.a libmid.a` with
+  `libcore.a` only earlier, which GNU ld rejects; the walk now continues
+  through archives.
+- **A `(fn ...)` parameter can be stored into a struct's fn field.** A
+  non-`^fat` fn parameter passed to a constructor used to type-check and then
+  fail in cc (`aggregate value used where an integer was expected`).
+- **A type error on a macro call used as an argument is reported at the
+  call.** `(total (vec-of (Q 3.25)))` pointed into `stdlib/vec.tur`'s template
+  with no note naming the user's line.
+- **A class method with an unannotated receiver and an applied result types
+  its call.** `(defclass K [a] (cats [r] : (Option int)))` called on a value
+  used to give `expected (Option A), got (? ?)` where an Option was expected;
+  the declared result now types the call as it does with `[r : a]`.
+- **A call through a lambda checks a typed pointer's pointee.** `(let [f (fn
+  [x : ptr<Foo>] ...)] (f bar-ptr))` is now the same TUR-E0001 a defn with
+  that signature gives.
+
+## [0.68.0] -- 2026-10-21
+
+### Added
+
+- **OS stdlib surface: symlinks, permissions, dates, blocking TCP, signals and
+  `os/*`.** `fs/lstat`, `fs/symlink`, `fs/readlink`, `fs/realpath`, `fs/chmod`
+  over a `Mode` value (`mode/parse`, `mode/format`), `fs/walk-follow`,
+  `fs/touch`; a `:copy DateTime` with `utc-parts` / `local-parts` and
+  `format-iso8601` / `parse-iso8601`; blocking `net/tcp-connect`,
+  `net/tcp-listen`, `net/accept`, `net/send`, `net/recv` on a linear `Socket`;
+  signal handling and the `os/*` modules.
+
+### Changed
+
+- **BREAKING -- `upgrade` is retired; use `weak/upgrade`.** The builtin returned
+  an untyped `ptr<void>` and leaked its strong handle; `weak/upgrade` (tur/weak)
+  is the same operation typed `(Option rc<T>)`. `ref?` and `weak?` now answer
+  from the argument's static type -- `(ref? 7)` is no longer true.
+- **BREAKING -- sized-int arithmetic reduces to the kind's width.** `+`, `-`,
+  `*`, `/`, `bit-shl` and `bit-shr` on int8/16/32 and uint8/16/32 computed at
+  full width, so `(+ x y)` on two uint8s printed 300. Both engines now wrap at
+  the operand's kind, and a narrow `bit-shr` zero-extends from its own width.
+- **BREAKING -- `:build-opts :no-stdlib true` is refused.** No build path ever
+  read it, so a project that set it was built with the stdlib anyway, silently;
+  the manifest now rejects any value but false.
+- **`transmute` and `reinterpret` copy bits on both engines.** A float crossing
+  to or from a non-float kind went through a C conversion compiled and was the
+  identity interpreted; both now copy the representation. `reinterpret` takes
+  its target type, and `unsafe-cast` is spelled `TUR_AS(int64_t, x)`.
+- **`defdynamic` admits a payload-free `defdata` as a dynamic var's type.** A
+  defdata whose constructors carry nothing is only a tag, so the copy a read
+  makes aliases nothing; a defdata with a payload is still refused.
+
+### Fixed
+
+- **Typed `ptr<T>` / `rc<T>` targets are checked at calls, returns and `let`
+  annotations.** A `ptr<Foo>` parameter accepted a `ptr<Bar>` argument, and an
+  `rc<int>` parameter an `rc<float>`; diagnostics print the declared type, and
+  forward declarations commit `rc` and typed-pointer parameters, so rc-threaded
+  mutual recursion compiles.
+- **Definition and extern elaboration tightened.** `(def x : int 7.1)` used to
+  store the bits of 7.1; it is now an annotation error. Nested `defn`s can call
+  themselves and later siblings. `extern-c` reads the caret shorthand as `:type`
+  does (`[^cstr ^cstr]` declared one parameter), and an unknown C symbol fails
+  when called under `--interpret`.
+- **Panic, session and effect fixes.** `panic-payload-downcast` yields a value
+  and a mismatched `catch-panic-of` aborts instead of exiting 0; `send` checks
+  its payload against the protocol (TUR-E0212) and `[...]` patterns bind the
+  right names; effects past 128 no longer collide and continuations keep
+  captures past 16.
+- **Diagnostics, drops and build-driver fixes.** Sweet-exp diagnostics report
+  the user's columns; an early `return` releases the enclosing `let`'s owned
+  bindings instead of leaking them; `tur --interpret` refuses a malformed
+  `build.tur` (TUR-E0624); a `--target wasm` build keeps the runtime replica;
+  `tur --help` hides only the external commands a built-in shadows.
+
+### Docs
+
+- **The guides index lists descriptions and pages the recent tabs.** Recently
+  Added and Recently Updated rows read "<title> (<date>) -- <description>",
+  every dated guide is listed with a first/prev/next/last pager, and the
+  description column is dropped below 600px.
+
 ## [0.67.5] -- 2026-10-20
 
 ### Changed

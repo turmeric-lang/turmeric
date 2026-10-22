@@ -8,10 +8,10 @@
 ;;; nothing but its representation. Each introduces constructor functions with the
 ;;; type's name; the type name itself works as an annotation.
 ;;;
-;;; Declare a type at file scope. A `defstruct` or `defdata` written inside a
-;;; function body is accepted by the checker and the interpreter, but the compiled
-;;; program does not build (`unknown type name 'tur_adt_Point'`)
-;;; (docs/reported/definition-forms-gaps.md); a `defopaque` there is fine.
+;;; A type is usually declared at file scope. One written inside a function body
+;;; (`defstruct`, `defdata`, `defopaque`) is lifted to file scope, as a nested
+;;; `defn` is: its name is visible from that point on, and to the rest of the
+;;; program.
 ;;;
 ;;; A name that an auto-loaded stdlib module already defines (`Pair`, `Option`,
 ;;; ...) or that an earlier form of the file defined cannot be defined again
@@ -36,8 +36,7 @@
 ;;; B])`. A struct is passed to a function by value, so a callee that changes its
 ;;; parameter changes its own copy. Field types are checked at construction
 ;;; (`expected int, got float`) and an unknown field is `no typeclass method found
-;;; for 'y'`. Field names are meant to be distinct but a repeated one is not
-;;; rejected (docs/reported/definition-forms-gaps.md).
+;;; for 'y'`. Field names must be distinct: `[x : int x : int]` is an error.
 ;;;
 ;;; Parameters:
 ;;;   Name   -- the type's name, which is also its constructor
@@ -141,12 +140,10 @@
 ;;; `(defopaque Tok :int :linear)` must be consumed. A phantom type parameter goes
 ;;; before the base: `(defopaque Tagged [A] :int)` is written `(Tagged int)`.
 ;;;
-;;; A float base is a trap: `(defopaque Celsius :float)` compiles to an `int64_t`
-;;; handle and `::` to or from it converts the number instead of reinterpreting
-;;; it, so `(raw (mk 21.5))` is 21 compiled (21.5 interpreted) and opaques-guide's
-;;; `celsius->kelvin` example prints `4.62674e+18`. Wrap a float in a `defstruct`
-;;; until that is fixed (docs/reported/definition-forms-gaps.md). An unknown base
-;;; such as `:string` is accepted without a diagnostic.
+;;; A float base works: `(defopaque Celsius :float)` is an `int64_t` handle
+;;; holding the float's bits, and `::` to or from it reinterprets them, so
+;;; `(:: (:: 21.5 Celsius) :float)` is 21.5. An unknown base such as `:string`
+;;; is an error.
 ;;;
 ;;; Parameters:
 ;;;   Name   -- the type's name

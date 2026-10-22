@@ -11,10 +11,9 @@ which pass does what, where every subsystem lives in `src/`, and which guide
 covers each one in depth. Start here, then follow the "Deep dive" links.
 
 > **Trust the code over the header comments.** Many file and function
-> comments in `src/` predate later consolidations. `pass.h` says
-> `PASS_EFFECT_LOWER` turns `perform`/`handle` into `shift`/`reset`; it
-> does not. `core_passes[]` calls `PASS_EFFECT_ROW_INFER` a "stub slot"; it
-> is a full checker. Where a comment and this guide disagree, read the code.
+> comments in `src/` predate later consolidations. `core_passes[]` called
+> `PASS_EFFECT_ROW_INFER` a "stub slot" for a while; it is a full checker.
+> Where a comment and this guide disagree, read the code.
 > If the code disagrees with this guide, fix the guide.
 
 ---
@@ -25,7 +24,7 @@ covers each one in depth. Start here, then follow the "Deep dive" links.
    The elaborator turns forms into one typed `EX_PROGRAM` tree. The compiled
    path emits C99 from that tree; the interpreter (`turi`) walks the same
    tree directly.
-2. **Six core passes**, listed in `src/main.c:core_passes[]`: elaborate,
+2. **Six core passes**, listed in `src/driver/pipeline.c:core_passes[]`: elaborate,
    kind check, effect env, effect rows, CPS (legacy metadata), borrow and
    lifetime checks. Most of the real checking happens inside elaboration.
 3. **The emitter makes more decisions than the passes do.** CPS coloring and
@@ -47,7 +46,7 @@ flowchart TD
   STD["stdlib autoload<br/>compiler/stdlib_autoload.c"]
   EL["PASS_ELABORATE<br/>compiler/elab_*.c<br/>(scheme lowering, macros, typeclasses,<br/>refinements, then mono_specs)"]
   KC["PASS_KIND_CHECK<br/>passes/kind_check.c"]
-  EFL["PASS_EFFECT_LOWER<br/>builds the EffectEnv; IR unchanged"]
+  EFL["PASS_EFFECT_ENV<br/>builds the EffectEnv; IR unchanged"]
   EFC["PASS_EFFECT_ROW_INFER<br/>passes/effect_check.c"]
   CPS["PASS_CPS<br/>passes/cps.c: dumps + legacy metadata"]
   BC["PASS_BORROW_CHECK<br/>passes/borrow_check.c:<br/>handler captures + lifetimes"]
@@ -78,7 +77,7 @@ The passes share one `PassContext` (`src/runtime/pass.h`): the `arena` and
 symbol table `st` for the whole compile, the input `forms` (the first
 `stdlib_prefix` of them are autoloaded stdlib), the `tc_env` typeclass
 registry, the program `prog`, the `effect_env` (`NULL` until
-`PASS_EFFECT_LOWER`), and module-lookup settings (`module_base_dir`,
+`PASS_EFFECT_ENV`), and module-lookup settings (`module_base_dir`,
 `include_dirs`, `separate_compilation`, `reader_macros`).
 
 **Compiler data lives in one arena per compile.** `compile_to_c` creates an
@@ -94,7 +93,7 @@ are reset per compile or emission, because `tur test <dir>`, project builds,
 
 ## The pass schedule
 
-`run_core_passes` (`src/main.c`) walks `core_passes[]` and calls
+`run_core_passes` (`src/driver/pipeline.c`) walks `core_passes[]` and calls
 `run_core_pass` for each, charging the time to its `--timings` zone
 (`pass_zone`). A pass returns 0 to continue, 1 to fail, or 2 to stop
 successfully (only `tur audit-spans` does that). In builds without `NDEBUG`
@@ -104,7 +103,7 @@ each arm also asserts `kind_verify_program`.
 |---|---|---|
 | `PASS_ELABORATE` | `elaborate_program` (`elab_toplevel.c`), then `mono_specs_resolve_program` | Forms to typed IR. Inside it: `(load ...)` splicing, `#lang r7rs` lowering, macro expansion, typeclass resolution, move/linear checks and refinement discharge. After it, in the same arm: lens spec resolution, `--dump-mono-specs`, and `tur audit-spans`' `span_audit_program` |
 | `PASS_KIND_CHECK` | `kind_check_pass` | Top-level only: infers class parameter kinds from instances, checks instance type arguments and GADT return types (TUR-E0012), and runs an occurs check on `defrec`. Most kind errors are caught earlier, in the elaborator. `--dump-kinds` |
-| `PASS_EFFECT_LOWER` | `effect_env_new`, `effect_env_register_builtin_unsafe`, `effect_env_register_builtin_capabilities`, `effect_lower` | Builds the `EffectEnv`. `effect_lower` returns its input unchanged; effects are **not** rewritten to `shift`/`reset` |
+| `PASS_EFFECT_ENV` | `effect_env_new`, `effect_env_register_builtin_unsafe`, `effect_env_register_builtin_capabilities` | Builds the `EffectEnv`; the tree is untouched. Effects are lowered by the CPS/DK backend, never rewritten to `shift`/`reset` (the identity `effect_lower` walk this arm used to call was deleted on 2026-10-21) |
 | `PASS_EFFECT_ROW_INFER` | `effect_check_pass` | Registers `defeffect`s, resolves declared rows (TUR-E0026), infers every function's row by whole-program fixpoint, checks declared against inferred. `--dump-effects` |
 | `PASS_CPS` | `cps_dump_coloring`, `cps_ir_dump_program`, `cps_transform`, `cps_dump_clone_plan` | The CPS dumps, then `cps_transform`: a near-identity tree copy recording **legacy** metadata. The coloring the backend uses is computed later, by the emitter |
 | `PASS_BORROW_CHECK` | `borrow_check_program`, `borrow_check_effect_handler_captures`, `lifetime_check_program` | `borrow_check_program` returns at once: `borrow_check_enabled` defaults to false and nothing calls `borrow_check_set_enabled`. The two always-on checks reject a handler case that captures an outer borrow, and run lifetime elision plus the outlives-cycle check |
@@ -139,8 +138,10 @@ Deep dive: [build-driver-internals-guide.md](build-driver-internals-guide.md).
 
 ```ascii
 src/
-+-- main.c            driver: flags, subcommands, compile_to_c/_h/_impl...,
-|                     cc invocation, tur jit, project builds (~14.7k lines)
++-- main.c            the entry point: big-stack trampoline, the dispatcher
++-- driver/           the rest of the driver, one file per area: flags and the
+|                     command table (cli.c), compile_to_c/_h/_impl (pipeline.c),
+|                     cc invocation, tur jit, project builds, the subcommands
 +-- jit_engine.c/.h   in-process MIR JIT engine (TUR_JIT builds only)
 +-- platform_*.h      Windows shims: dl, fs, mman, proc, ucontext over Fibers
 +-- jit_win_prelude.h, source_literal.h, tur_argcheck.h   small helpers
@@ -155,7 +156,7 @@ src/
 |   +-- diag.c/.h span_audit.c prof.c
 |   +-- pkg.c spice_search.c global.c install.c justrun.c
 |   +-- fmt.c project.c r7rs_bignum.inc r7rs_numsyntax.inc
-+-- passes/           kind_check effect effect_lower effect_check cps cps_ir
++-- passes/           kind_check effect effect_check cps cps_ir
 |                     borrow_check lifetimes lifetime_elision rc_elision srfi_prune
 +-- runtime/          compiler infrastructure and the host-side runtime
 |   +-- arena.c buf.c globals.c experiments.c pass.h platform.h
@@ -180,7 +181,7 @@ src/
 | Target | What it is |
 |---|---|
 | `tur_core` | OBJECT library: every source in `TUR_CORE_SOURCES`, shared by `tur`, `libturi` and many unit tests |
-| `tur` | `main.c` + `lsp/mcp.c` + `tur_core` (+ `tur_jit_obj` under `TUR_JIT`) |
+| `tur` | `main.c` + `driver/*.c` (`TUR_DRIVER_SOURCES`) + `lsp/mcp.c` + `tur_core` (+ `tur_jit_obj` under `TUR_JIT`) |
 | `libturi.a` | `tur_core` as a static library, for C embedders and programs that autolink `-lturi` |
 | `libturt_runtime.a` | a lean, unsanitized archive of the runtime TUs programs link (`hamt`, `rc`, `gc`, `region`, ...) |
 | `libturt_preamble.a` | the generated preamble runtime (`tur_rt_split.c`), linked by `--runtime=split` |
@@ -192,18 +193,20 @@ on the include path, so `#include "arena.h"` works from anywhere.
 
 ---
 
-## Driver: src/main.c
+## Driver: src/main.c and src/driver/
 
-`main` moves onto a large stack (`tur_run_on_big_stack`) and calls
-`tur_main_inner`. That parses global flags into `g_*` variables, resolves
-the subcommand (exact name, alias or unique prefix) and dispatches through a
-long `strcmp` chain. The compile entry points are `compile_to_c` (one C
-unit) and `compile_to_h` / `compile_to_implementation` (separate
-compilation). `cmd_build_once` writes the C to `$TMPDIR/tur-build/` (a stable
-name, so ccache hits), picks how the runtime is linked, and runs one `cc`.
-`tur run <file>` builds to a temp executable and runs it. Project builds
-(`cmd_build_project`, `cmd_build_multi_files`) and `tur jit` (`cmd_jit`) live
-here too.
+`main` (`src/main.c`) moves onto a large stack (`tur_run_on_big_stack`) and
+calls `tur_main_inner`. That parses global flags into `g_*` variables
+through the `GLOBAL_FLAGS[]` table, resolves the subcommand (exact name,
+alias or unique prefix) in the `COMMANDS[]` table, and calls its handler;
+both tables are in `src/driver/cli.c`. The compile entry points are
+`compile_to_c` (one C unit) and `compile_to_h` / `compile_to_implementation`
+(separate compilation), in `driver/pipeline.c`. `cmd_build_once` writes the C
+to `$TMPDIR/tur-build/` (a stable name, so ccache hits), picks how the
+runtime is linked, and runs one `cc`. `tur run <file>` builds to a temp
+executable and runs it. Project builds (`cmd_build_project`,
+`cmd_build_multi_files`) and `tur jit` (`cmd_jit`) have files of their own in
+`src/driver/`.
 
 Deep dive: [build-driver-internals-guide.md](build-driver-internals-guide.md).
 
@@ -224,7 +227,7 @@ The `#lang` line picks a pair: a `ReaderType` (`READER_TURMERIC`,
 `READER_CURLY_INFIX`, `READER_NEOTERIC`, `READER_SWEET`, `READER_R7RS`,
 `READER_R7RS_SWEET`) and a `LangDialect` (`LANG_TURMERIC`, `LANG_SAFFRON`,
 `LANG_R7RS`). Both enums live in `diag.h`. `lang_dialects.c` owns the table
-of legal bases (`lang_base_lookup`); `main.c:detect_and_adjust_lang` strips
+of legal bases (`lang_base_lookup`); `driver/paths.c:detect_and_adjust_lang` strips
 the line. Sweet-expressions are a preprocessing step inside `reader.c` that
 records a `SweetMap`, so diagnostics point at the original text.
 `reader_macros.c` holds the `#`-dispatch registry: the builtins
@@ -238,7 +241,7 @@ today -- `macros`, `safe`, `contract`, `hamt`, eleven `typeclass-*` stubs,
 `zipper`), `option`, `result`, `pair`, `tuple`, `list`, `json`, `schema`,
 `sym`, `unique`, `trail` and `region`. A language prelude
 (`g_lang_prelude`, e.g. R7RS's) is appended last. Project mode loads the same
-list through `main.c:load_project_prelude`, via the shared accessor
+list through `driver/pipeline.c:load_project_prelude`, via the shared accessor
 `tur_stdlib_autoload_files`. `tur check --no-auto-stdlib` matters only when
 the checked file is itself on the list: that file and the ones after it are
 skipped, so it can be checked alone.
@@ -402,8 +405,8 @@ Deep dive: [refinement-solver-internals-guide.md](refinement-solver-internals-gu
 `effect.c` holds the data model: `Effect`, `EffectRow`, `EffectEnv`, and the
 row algebra. The elaborator parses `#fx{...}` into unresolved rows and does
 scope- and arity-based effect checks (TUR-E0008 and friends).
-`PASS_EFFECT_LOWER` builds the env with `Unsafe` and the compiler-known
-capabilities; `effect_lower` itself is a no-op. `PASS_EFFECT_ROW_INFER`
+`PASS_EFFECT_ENV` builds the env with `Unsafe` and the compiler-known
+capabilities. `PASS_EFFECT_ROW_INFER`
 (`effect_check.c:effect_check_pass`) resolves, infers and checks rows; CPS
 coloring, the CT-IR translator and the emitter read the results
 (`FnDef.inferred_effect_row`).
@@ -544,7 +547,7 @@ Deep dive: [regions-internals-guide.md](regions-internals-guide.md).
 module (`emit_header`, `emit_implementation`). Each TU carries its own copy
 of the stdlib prelude, and the emitter treats `is_from_stdlib` bindings
 specially so a multi-TU link sees no duplicate symbols.
-`cmd_build_multi_files` (`main.c`) runs two passes so cross-module
+`cmd_build_multi_files` (`driver/project.c`) runs two passes so cross-module
 borrow-spec clones are forced into their owning module, then writes a
 runtime owner TU and links.
 
@@ -558,7 +561,7 @@ Deep dive: [separate-compilation-internals-guide.md](separate-compilation-intern
 |---|---|
 | `arena.c` | bump allocator (`arena_alloc`, `arena_free`, `arena_reset`, `arena_owns`); the compiler's main allocator and the region generations |
 | `buf.c` | growable byte buffer for all generated text (`buf_puts`, `buf_printf`, `buf_to_file`) |
-| `globals.c` | most global flags (`g_strict_effects`, `g_dump_effects`, `g_cps_path`, `g_opt_regions`, `g_lang_prelude`, ...); a few, like `g_dump_kinds`, live in `main.c` |
+| `globals.c` | most global flags (`g_strict_effects`, `g_dump_effects`, `g_cps_path`, `g_opt_regions`, `g_lang_prelude`, ...); a few, like `g_dump_kinds`, live in `src/driver/` and are declared in `driver/driver.h` |
 | `experiments.c` | the `EXPERIMENTS[]` registry behind `--enable=<name>` and `tur experiments`; `experiment_warn_if_used` |
 | `rc.c`, `arc.c` | `rc<T>`/`weak<T>` control blocks (`rc_strong_increment`, `rc_strong_decrement`, `rc_upgrade`); atomic variant |
 | `gc.c`, `rc_free_queue.c` | Bacon-Rajan cycle collector over `rc` (`gc_collect`; in auto mode also at allocation checkpoints, `gc_on_alloc_checkpoint`; no background thread); deferred frees |
@@ -596,7 +599,6 @@ deleting, since some are kept for a unit test.
 | `src/runtime/cps_prompt.c` | The original reference DK machine; built only into the `tur_cps_prompt_unit` test. The emitted machine has diverged far from it |
 | `src/runtime/runtime.c`, `stm.c`, `src/async/scheduler.c`, `timer_wheel.c` | Replaced by `generated/tur_rt_split.c`; built by no target |
 | `src/async/atomic_queue.c` | Built, but its only consumer is the unbuilt `scheduler.c` |
-| `src/passes/effect_lower.c` | Returns its input unchanged |
 | `borrow_check_program` | Disabled (see [Borrows and lifetimes](#borrows-and-lifetimes)) |
 
 ---
@@ -628,7 +630,7 @@ Deep dive: [turi-interpreter-internals-guide.md](turi-interpreter-internals-guid
 
 Under `-DTUR_JIT=ON` (the default on 64-bit x86-64 and arm64), `tur jit`
 compiles the emitted C in process through MIR's c2mir front end
-(`external/mir/`, vendored). `cmd_jit` in `main.c` drives it; `jit_prune.c`
+(`external/mir/`, vendored). `cmd_jit` in `driver/jit.c` drives it; `jit_prune.c`
 trims the C first; the S2 split lets it swap the preamble for precompiled
 declarations. A program the JIT cannot handle falls back to `cc`.
 
@@ -689,9 +691,9 @@ Deep dive: [package-manager-internals-guide.md](package-manager-internals-guide.
 
 1. Add a `PASS_YOUR_PASS` constant to `PassKind` in `src/runtime/pass.h`
    and update the order in its header comment.
-2. Add it to `core_passes[]` in `src/main.c`, at the position where it
+2. Add it to `core_passes[]` in `src/driver/pipeline.c`, at the position where it
    should run.
-3. Add a `case PASS_YOUR_PASS:` to `run_core_pass` in `src/main.c`. Return
+3. Add a `case PASS_YOUR_PASS:` to `run_core_pass` in the same file. Return
    1 on failure after reporting with `diag_emit` / `diag_emit_with_code`;
    check `diag_had_error()` if you call code that reports without returning
    a status. If the pass rewrites the IR, add the `kind_verify_program`
@@ -699,7 +701,7 @@ Deep dive: [package-manager-internals-guide.md](package-manager-internals-guide.
    information onto replacement nodes.
 4. Give it a `--timings` zone: a `PROF_*` value in `src/compiler/prof.h`
    (in pipeline order), its name in `k_zone_names[]` in `prof.c`, and a case
-   in `pass_zone` in `main.c`. `pass_zone` has no `default:` arm, so
+   in `pass_zone` (`driver/pipeline.c`). `pass_zone` has no `default:` arm, so
    `-Wswitch` under `-Werror` fails the build until you do.
 5. Put the code in `src/passes/your_pass.c` / `.h` and add the `.c` to
    `TUR_CORE_SOURCES` in `src/CMakeLists.txt`.

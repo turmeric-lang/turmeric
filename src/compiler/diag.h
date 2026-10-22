@@ -178,6 +178,13 @@ typedef enum DiagCode {
      * is unaffected, which is why this is a warning and not an error.
      * Emitted once per function at the eviction site (emit_cps_ir.c). */
     TUR_W0044_AWAITER_COMPILED_DIRECT,
+    /* unknown-type-annotation-becomes-implicit-tyvar: a defn parameter is
+     * annotated with a name that is not a known type and occurs nowhere else
+     * in the signature.  Such a name is an implicit type variable (GS4), so
+     * the argument is unchecked -- which is what a typo (`zork`), or the
+     * prose spelling `option<int>`, silently becomes.  The KB-026 pass that
+     * demotes the lone name to an unresolved variable emits this. */
+    TUR_W0045_UNKNOWN_TYPE_NAME_IS_TYVAR,
     /* MS2: Multi-shot continuation capture analysis */
     TUR_E0500_MULTISHOT_UNIQUE_CAPTURE,       /* ^multishot handler captures a unique/linear value */
     TUR_E0501_MULTISHOT_ANN_OUTSIDE_HANDLER,  /* ^multishot annotation outside a handler continuation */
@@ -721,6 +728,14 @@ bool diag_use_color(void);
 bool stderr_is_tty(void);
 
 void diag_register_file(const SourceFile *file);
+/* Forget `file` if its id still names it, and put `prev` (what the id named
+ * before `file` was registered, or NULL) back.  A reader that registers a
+ * STACK-LOCAL SourceFile -- the manifest reader, under id 0 -- calls this on
+ * every return, so the registry never names a dead frame: a diagnostic at
+ * SPAN_UNKNOWN emitted between a manifest read and the next diag_reset
+ * printed `path` out of that frame
+ * (manifest-read-leaves-a-dangling-file-registration). */
+void diag_unregister_file(const SourceFile *file, const SourceFile *prev);
 /* Record that `file_id` was pulled into the compile by the form at `origin`
  * (the `load` string or the `import` form, a span in the file that names it).
  * Call after diag_register_file, which clears it.  The LSP follows these

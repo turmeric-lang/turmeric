@@ -1,0 +1,18 @@
+;; definition-forms-gaps 4: a `defstruct` / `defdata` inside a function body.
+;; The syntax guide says any `def*` form may appear there and is lifted to file
+;; scope; the C type and constructors were never emitted (compiled: implicit
+;; declaration of ctor_Point_Point).
+(defn area [] : int
+  (defstruct Rect :copy [w : int h : int])
+  (let [r (Rect 3 4)]
+    {(.w r) * (.h r)}))
+(defn describe [] : int
+  (defdata Shape (Circle int) (Square int))
+  (let [s (Square 6)]
+    (match s
+      (Circle r) r
+      (Square w) {w + 100})))
+(defn main [] : int
+  (println (area))
+  (println (describe))
+  0)

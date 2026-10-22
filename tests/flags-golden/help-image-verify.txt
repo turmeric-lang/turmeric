@@ -1,0 +1,3 @@
+usage:
+  tur image-verify <image> [loader-binary]
+[exit 0]

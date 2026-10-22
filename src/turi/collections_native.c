@@ -1441,6 +1441,13 @@ static TuriValue native_vec_free(TuriEnv *env, TuriValue *a, uint32_t n, void *u
     return turi_nil();
 }
 
+TuriValue turi_native_vec_new(TuriEnv *env) { return native_vec_new(env, NULL, 0, NULL); }
+TuriValue turi_native_vec_push(TuriEnv *env, TuriValue vec, TuriValue elem) {
+    TuriValue a[2] = { vec, elem };
+    return native_vec_push(env, a, 2, NULL);
+}
+TuriValue turi_native_vec_free(TuriEnv *env, TuriValue vec) { return native_vec_free(env, &vec, 1, NULL); }
+
 /* vec-set-o! -- interpreter override for the boxed-aware vec-set! helper.
  * The compiled body frees the old element box before overwriting when its
  * `boxed` flag (a[3]) is set; the tree-walker never boxes multi-word elements

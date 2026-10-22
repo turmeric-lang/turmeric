@@ -32,6 +32,36 @@ bool catch_box_binding_escapes_except(const Expr *e, const Binding *b,
 bool sum_box_binding_escapes(const Expr *e, const Binding *b);
 bool sum_box_binding_escapes_except(const Expr *e, const Binding *b,
                                     const Expr *ignore);
+/* any-widen-deep-drop-frees-borrowed-children: the predicate that decides
+ * whether a payload's `any` row names a `drop_localowned_<T>`, defined
+ * emit-side in emit_module.c.  Reused here so the freshness facts and the drop
+ * agree about what a drop will touch -- the same discipline the `boxed` flag
+ * already follows. */
+bool adt_def_has_localowned_glue(const AdtDef *def);
+
+/* any-widen-deep-drop-frees-borrowed-children: would a deep `__tur_any_drop`
+ * of a widen of `payload` release anything BESIDES the box?
+ *
+ * True exactly when the payload's ADT carries drop glue, which is the emitter's
+ * own answer to the same question (`adt_def_has_localowned_glue`): a
+ * recursive-self field or an `:any` field.  A scalar, a cstr, a heap-ADT handle
+ * and a struct of plain fields all own nothing, so the drop is the box free the
+ * freshness rules were written against and the answer is false.
+ *
+ * Shared by `returns_fresh_any` (below) and `any_expr_is_owned_temp`
+ * (elab_call.c), which had the same hole for the same reason: a widen COPIES
+ * the payload's header into a fresh box, and the copy's children are whatever
+ * the original pointed at.  The box is fresh; what is under it need not be. */
+bool any_widen_payload_owns_droppable(const Expr *payload) {
+    if (!payload) return false;
+    const Type *t = &payload->type;
+    AdtDef *def = NULL;
+    Type args[16];
+    uint8_t n = 0;
+    if (!type_extract_adt_app(t, &def, args, &n))
+        def = (t->kind == TY_ADT) ? t->as.adt_.def : NULL;
+    return def && adt_def_has_localowned_glue(def);
+}
 
 /* RM1 (reclamation-plan): the freshness analysis, on the elaborated body.
  * True iff every VALUE PATH ends in a sum-constructor application or a call
@@ -2846,7 +2876,7 @@ static WfVerdict wf_global_verdict(Elab *e, Binding *fn, const Symbol **uncovere
  * `(.n a)` (a field READ), `(if ...)`, `(do ...)` and `(+ p 1)` are none of
  * them global bindings, so all four declined, and a frame over any body doing
  * ordinary work was silently UNVERIFIED
- * (docs/reported/writes-frame-walk-treats-every-head-as-a-callee.md).
+ * (docs/archive/writes-frame-walk-treats-every-head-as-a-callee.md).
  *
  * On `Expr` each of those is a distinct node kind and the guessing stops.  The
  * decisive case is the dotted head: `(.f x)` is EX_GET_FIELD when `f` is a
@@ -3912,6 +3942,24 @@ static CtorDef *rt_pat_ctor(Elab *e, const Form *pat) {
     return elab_lookup_ctor(e, h->as.sym);
 }
 
+/* refine-top-level-def-not-a-fact: is `f` a value the encoder can take as an
+ * equation's right side with nothing else in scope -- an int literal, or a
+ * constructor applied to int or bool literals and constructor terms
+ * (`(Push 1 (Halt))`)?  Anything that computes (a call, a name) is not: it
+ * could mention state, and an equation the encoder abstracts costs
+ * refutations (see rt_collect_path_conds).  A bare bool is not either: a
+ * crossing reads a named bool argument with the Int sort, so `(= flag true)`
+ * would only be ill-sorted. */
+static bool rt_def_init_is_fact(Elab *e, const Form *f, uint32_t depth) {
+    if (!f || depth >= 64) return false;
+    if (f->tag == F_INT || (f->tag == F_BOOL && depth > 0)) return true;
+    CtorDef *cd = rt_pat_ctor(e, f);
+    if (!cd || f->as.list.len - 1 != cd->n_fields) return false;
+    for (uint32_t i = 1; i < f->as.list.len; i++)
+        if (!rt_def_init_is_fact(e, f->as.list.items[i], depth + 1)) return false;
+    return true;
+}
+
 /* Copy `f`, renaming every FREE occurrence of `from` to `to`.
  *
  * Path splitting asserts `x = v` in the environment's single flat namespace,
@@ -4416,6 +4464,27 @@ static bool rt_cs_seen(Elab *e, const Binding *callee, const Form *cf, uint32_t 
     return false;
 }
 
+/* refine-top-level-def-not-a-fact: the immutable globals an argument form
+ * names, looked up in the scope of the call -- the one place a shadowing local
+ * is told apart from the global.  A call's head is a callee, not a value, and
+ * is skipped.  Deduplicated; past RT_GLOBAL_ARGS_MAX the rest go unrecorded,
+ * which only withholds facts. */
+#define RT_GLOBAL_ARGS_MAX 16
+static void rt_collect_global_args(Elab *e, const Form *f, const Binding **out,
+                                   uint32_t *n, uint32_t depth) {
+    if (!f || depth >= 32 || *n >= RT_GLOBAL_ARGS_MAX) return;
+    if (f->tag == F_SYM && f->as.sym) {
+        const Binding *b = scope_lookup(e->scope, f->as.sym);
+        if (!b || !b->is_global || b->is_mut || b->type.kind == TY_FN) return;
+        for (uint32_t i = 0; i < *n; i++) if (out[i] == b) return;
+        out[(*n)++] = b;
+        return;
+    }
+    if (f->tag != F_LIST && f->tag != F_VEC) return;
+    for (uint32_t i = (f->tag == F_LIST) ? 1 : 0; i < f->as.list.len; i++)
+        rt_collect_global_args(e, f->as.list.items[i], out, n, depth + 1);
+}
+
 uint32_t refine_note_call_site(Elab *e, const Binding *callee,
                                const Form *call_form, uint32_t arg_offset) {
     if (!e || !callee || !call_form)
@@ -4508,6 +4577,19 @@ uint32_t refine_note_call_site(Elab *e, const Binding *callee,
                     fn[k++] = b->name->name;
                 }
             if (k) { cs->frozen_names = fn; cs->n_frozen = k; }
+        }
+    }
+    cs->global_args   = NULL;
+    cs->n_global_args = 0;
+    if (call_form->tag == F_LIST) {
+        const Binding *globals[RT_GLOBAL_ARGS_MAX];
+        uint32_t ng = 0;
+        for (uint32_t i = arg_offset; i < call_form->as.list.len; i++)
+            rt_collect_global_args(e, call_form->as.list.items[i], globals, &ng, 0);
+        if (ng) {
+            cs->global_args = (const Binding **)arena_alloc(e->arena, ng * sizeof(Binding *));
+            memcpy(cs->global_args, globals, ng * sizeof(Binding *));
+            cs->n_global_args = ng;
         }
     }
     cs->loc         = call_form->span;
@@ -7418,6 +7500,19 @@ void refine_resolve_call_sites(Elab *e) {
             continue;
         }
 
+        /* refine-top-level-def-not-a-fact: `g = <init>` for each immutable
+         * global an argument names (resolved at the call, so never a local
+         * that shadows it).  Pushed after the path facts, so the rewind below
+         * drops it with them. */
+        for (uint32_t gi = 0; cs->env && gi < cs->n_global_args; gi++) {
+            const Binding *g = cs->global_args[gi];
+            if (!g->refine_def_init || g->is_mut || !g->name) continue;
+            refine_env_push(cs->env,
+                            rt_form_eq(e, cf->span, form_sym(e->arena, cf->span, g->name),
+                                       g->refine_def_init),
+                            NULL, NULL);
+        }
+
         uint32_t n_slots = has_inst_preds ? callee->n_refine_params : 0;
         if (has_class_preds && cs->n_class_params > n_slots)
             n_slots = cs->n_class_params;
@@ -9148,6 +9243,16 @@ Expr *elab_defn(Elab *e, const Form *call) {
      * redefinition -- treating it as the former rewrote ITS signature in
      * place (the HRT5 early update below), and that module's calls then met
      * a function of the wrong arity in the emitter.  Shadow it instead. */
+    /* definition-forms-gaps 3: a defn nested in a body is lifted to file scope,
+     * but nothing declared its name before its body was elaborated -- Pass 1
+     * forward-declares only top-level forms -- so a nested `fact` calling
+     * itself was `unknown function or operator 'fact'`.  Declare it the way
+     * Pass 1 would (a sibling nested defn is declared by the body-window scan
+     * in splice_internal_defines, which is what lets two of them recurse
+     * mutually). */
+    if (e->scope != &e->global && !e->bare_fat_spec_active &&
+        !scope_lookup_visible(e, e->scope, name_f->as.sym))
+        elab_pre_declare_toplevel_defn(e, e->arena, (Form *)call);
     Binding *existing = scope_lookup_visible(e, e->scope, name_f->as.sym);
     if (existing && binding_private_elsewhere(e, existing)) existing = NULL;
     /* bare-fat-result-monomorphization: a specialized clone re-elaborates the
@@ -10543,7 +10648,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
 
     /* Phase 19: Parse optional effect-row annotation #{Read Write} or #{e} before return type.
      * Uppercase names are concrete effects; lowercase are row variables.
-     * The row is stored as ERK_UNRESOLVED and resolved after PASS_EFFECT_LOWER. */
+     * The row is stored as ERK_UNRESOLVED and resolved after PASS_EFFECT_ENV. */
     EffectRow *declared_effect_row_defn = NULL;
     /* C2 / #reads: captured here, stamped onto the binding alongside the
      * refine_* metadata below.  1-based; 0 = no #reads annotation. */
@@ -11415,6 +11520,47 @@ Expr *elab_defn(Elab *e, const Form *call) {
                 fn_type_mentions_named(return_fn_type, nm) ||
                 fn_type_mentions_named(return_exists_type, nm)) occ++;
             if (occ >= 2) continue;  /* genuine: relates >=2 type positions */
+            /* unknown-type-annotation-becomes-implicit-tyvar: this is the
+             * typo shape -- say so, with the s-expression spelling when the
+             * name is the prose `option<int>` / `Vec<cstr>` form.  The stdlib
+             * is read on every compile, so a lone name there is not the
+             * user's to hear about. */
+            if (!e->in_stdlib_load) {
+                const char *lt = strchr(nm, '<');
+                size_t hl = lt ? (size_t)(lt - nm) : 0;
+                const char *sx = NULL;
+                if (lt) {
+                    static const char *const heads[][2] = {
+                        { "option", "Option" }, { "result", "Result" },
+                        { "vec", "Vec" }, { "list", "List" },
+                    };
+                    for (size_t hi = 0; hi < sizeof heads / sizeof heads[0]; hi++) {
+                        if (hl == strlen(heads[hi][0]) &&
+                            (strncmp(nm, heads[hi][0], hl) == 0 ||
+                             strncmp(nm, heads[hi][1], hl) == 0)) {
+                            sx = heads[hi][1];
+                            break;
+                        }
+                    }
+                }
+                if (sx)
+                    diag_emit_with_code(DIAG_WARNING, params[i]->span,
+                        TUR_W0045_UNKNOWN_TYPE_NAME_IS_TYVAR,
+                        "parameter '%s' is annotated '%s', which is not a type: "
+                        "it is read as an implicit type variable, so the argument "
+                        "is not checked.  Write the parameterized type as `(%s T)` "
+                        "-- `tur explain TUR-W0045`",
+                        params[i]->name ? params[i]->name->name : "?", nm, sx);
+                else
+                    diag_emit_with_code(DIAG_WARNING, params[i]->span,
+                        TUR_W0045_UNKNOWN_TYPE_NAME_IS_TYVAR,
+                        "parameter '%s' is annotated '%s', which is not a known "
+                        "type and appears nowhere else in the signature: it is "
+                        "read as an implicit type variable, so the argument is "
+                        "not checked.  Check the spelling, or declare it (`[%s]`) "
+                        "to mean a type variable -- `tur explain TUR-W0045`",
+                        params[i]->name ? params[i]->name->name : "?", nm, nm);
+            }
             /* structdef-retirement slice 5 B2 (P1): a single-occurrence bare
              * type-param is an unresolved type variable, not a nominal struct.
              * Emit a named TY_TYVAR carrying the param name rather than the
@@ -12118,6 +12264,13 @@ Expr *elab_defn(Elab *e, const Form *call) {
                 return_kind == TY_APP ? return_app_type : NULL,
                 return_kind, body->type))
             rc = RET_CONFLICT_CARRIER_AGGREGATE;
+        /* typed-ptr-pointee-not-checked-at-calls: a `: ptr<Foo>` return whose
+         * body yields a `ptr<Bar>` agreed by kind (and `rc<S>` / `rc<U>`). */
+        if (rc == RET_CONFLICT_NONE && !return_unannotated &&
+            (return_kind == TY_PTR_VOID || return_kind == TY_RC ||
+             return_kind == TY_WEAK) &&
+            handle_targets_conflict(return_app_type, &body->type))
+            rc = RET_CONFLICT_NOMINAL;
         /* declared-tyvars-are-not-rigid: the type question the representation
          * predicates above leave out.  A generic's own `[A B]` are rigid in
          * its body, against each other and against a ground type: `[x : A]
@@ -12159,7 +12312,9 @@ Expr *elab_defn(Elab *e, const Form *call) {
         }
         if (rc != RET_CONFLICT_NONE) {
             Buf wb; buf_init(&wb);
-            if (!return_adt_def && return_kind == TY_APP && return_app_type)
+            if (!return_adt_def && (return_kind == TY_APP || return_kind == TY_PTR_VOID ||
+                                    return_kind == TY_RC || return_kind == TY_WEAK) &&
+                return_app_type)
                 type_print(&wb, *return_app_type);
             else if (!return_adt_def && return_kind == TY_TYVAR && return_tyvar_type)
                 type_print(&wb, *return_tyvar_type);
@@ -13136,7 +13291,25 @@ Expr *elab_defn(Elab *e, const Form *call) {
         while (_fa && (_fa->kind == EX_LET || _fa->kind == EX_ASCRIBE))
             _fa = (_fa->kind == EX_ASCRIBE) ? _fa->as.ascribe_.inner
                                             : _fa->as.let_.body;
-        if (_fa && _fa->kind == EX_UNION_INJECT && _fa->type.kind == TY_ANY)
+        /* any-widen-deep-drop-frees-borrowed-children: the paragraph above was
+         * written when `__tur_any_drop` was a box free.  It is not one any
+         * more -- it calls the payload's `drop_localowned_<T>` FIRST, so
+         * dropping an `any` releases everything the payload owns as well as
+         * the box.  "The tail is a widen" establishes that the BOX is fresh
+         * and says nothing about what the payload points at, while a
+         * constructor fills an owned field from whatever it is handed:
+         * `(defn wrap [x : any] : any (:: (Cons x (:: (Nil) any)) any))`
+         * qualified, and the consumer's drop then walked into `x` and freed a
+         * spine its caller still owned -- a heap-use-after-free.
+         *
+         * The narrowest repair that makes the fact true again is to require
+         * the payload to own NOTHING, i.e. exactly the types for which the
+         * emitter publishes no drop glue, so that the deep drop degenerates
+         * back into the box free this rule was written for.  Declining leaks
+         * the box where the payload really was deeply fresh -- the status-quo
+         * direction this family falls in. */
+        if (_fa && _fa->kind == EX_UNION_INJECT && _fa->type.kind == TY_ANY &&
+            !any_widen_payload_owns_droppable(_fa->as.union_inject_.value))
             b->returns_fresh_any = true;
         /* dynamic-returned-closure-env-is-never-freed: which of those widen a
          * capturing closure built right here (expr_is_fresh_any_closure, which
@@ -13763,8 +13936,18 @@ static Expr *elab_fn_impl(Elab *e, const Form *call) {
              * later bare `item : T` value parameter fails to unify against the
              * real opaque/struct type.  Recording it keeps the nominal identity
              * intact across the binding. */
+            /* typed-ptr-pointee-not-checked-through-closures: a typed handle
+             * (`ptr<Foo>`, `rc<Foo>`, `weak<Foo>`) qualifies too -- its bare
+             * kind is the same as `ptr<void>`'s, and the call-site pointee
+             * check (handle_targets_conflict, elab_call.c) reads the pointee
+             * off arg_full_types, so without this a call through a let-bound
+             * lambda accepted a `ptr<Bar>` where a defn with the same
+             * signature refuses it. */
             if (ann->kind == TY_APP || ann->kind == TY_TYVAR || ann->kind == TY_FN ||
                 ann->kind == TY_STRUCT || ann->kind == TY_ADT ||
+                (ann->kind == TY_PTR_VOID && ann->as.ptr.inner) ||
+                ((ann->kind == TY_RC || ann->kind == TY_WEAK) &&
+                 ann->as.rc.inner != TY_UNKNOWN) ||
                 fn_type_has_named_tyvar(ann)) {
                 param_full_types[n_params - 1] = ann;
             }
@@ -13899,7 +14082,7 @@ static Expr *elab_fn_impl(Elab *e, const Form *call) {
      * call through mismatched function-pointer types, which
      * -fsanitize=function reports and CFI / CET-BTI / WASM call_indirect
      * reject outright.
-     * See docs/reported/emitter-thunk-type-return-mismatch.md. */
+     * See docs/archive/emitter-thunk-type-return-mismatch.md. */
     bool return_annotated = false;
     Type *return_full_type = NULL;
     Type *return_fn_type = NULL; /* Preserve full TY_FN returns for higher-order calls. */
@@ -14903,6 +15086,17 @@ static bool extern_c_aggregate_ok(const Type *t, Span span) {
     return false;
 }
 
+/* The integer kinds, for elab_def's int/float annotation check. */
+static bool def_kind_is_integer(TypeKind k) {
+    switch (k) {
+        case TY_INT: case TY_INT8: case TY_INT16: case TY_INT32: case TY_INT64:
+        case TY_UINT8: case TY_UINT16: case TY_UINT32: case TY_UINT64:
+            return true;
+        default:
+            return false;
+    }
+}
+
 /* Phase 2: extern-c — (extern-c name [param1 param2 ...] : return-type)
  * Declares an external C function. For phase 2, we don't support capture.
  * Example: (extern-c printf [^cstr fmt] : int)
@@ -14961,7 +15155,26 @@ Expr *elab_extern_c(Elab *e, const Form *call) {
     /* A#1: ^fat marks the next extern-c parameter as a fat-closure consumer. */
     bool next_param_fat = false;
 
+    /* `[^]` is c-integration-guide's spelling of an empty parameter list (a
+     * nullary function, or a C global read as `(stderr)`), the same as `[]`.
+     * It used to declare one `int` parameter named `^`.  A lone `^` beside
+     * other parameters means nothing. */
     for (uint32_t i = 0; i < params_f->as.list.len; i++) {
+        Form *p = params_f->as.list.items[i];
+        if (p->tag == F_SYM && p->as.sym->len == 1 && p->as.sym->name[0] == '^' &&
+            params_f->as.list.len != 1) {
+            diag_emit(DIAG_ERROR, p->span,
+                      "extern-c: a lone `^` declares an empty parameter list "
+                      "and must be the only item: write `[^]` or `[]`");
+            return NULL;
+        }
+    }
+    bool caret_empty = params_f->as.list.len == 1 &&
+                       params_f->as.list.items[0]->tag == F_SYM &&
+                       params_f->as.list.items[0]->as.sym->len == 1 &&
+                       params_f->as.list.items[0]->as.sym->name[0] == '^';
+
+    for (uint32_t i = 0; !caret_empty && i < params_f->as.list.len; i++) {
         Form *p = params_f->as.list.items[i];
         /* A#1: ^fat annotation applies to the next parameter.  Intercept before
          * the generic ^ctype handling below (which would misparse "fat"). */
@@ -15022,22 +15235,41 @@ Expr *elab_extern_c(Elab *e, const Form *call) {
 
         /* Handle ^type prefix: ^int, ^ptr<void>, etc.
          * When a symbol starts with '^', the rest is a C type annotation and the
-         * NEXT symbol in the vector is the parameter name. */
+         * NEXT symbol in the vector is the parameter name.  The type name is
+         * read as the `:type` keyword form reads it (typekind_from_symbol plus
+         * the same legacy names), so `^float` is a double: an unknown name
+         * used to default to `int`, and `(extern-c sqrt [^float] :float)`
+         * passed `(sqrt 4)` in an integer register.  `^ptr<T>` is a pointer
+         * of any pointee, as `:ptr` is.  Anything else is an error. */
         if (p->as.sym->len > 1 && p->as.sym->name[0] == '^') {
             const char *tname = p->as.sym->name + 1;
             size_t tlen = p->as.sym->len - 1;
-            TypeKind ck;
-            if (tlen == 3 && memcmp(tname, "int", 3) == 0) ck = TY_INT;
-            else if (tlen == 4 && memcmp(tname, "bool", 4) == 0) ck = TY_BOOL;
-            else if (tlen == 4 && memcmp(tname, "cstr", 4) == 0) ck = TY_CSTR;
-            else if (tlen == 3 && memcmp(tname, "ptr", 3) == 0) ck = TY_PTR_VOID;
-            else if (tlen == 9 && memcmp(tname, "ptr<void>", 9) == 0) ck = TY_PTR_VOID;
-            else if (tlen == 4 && memcmp(tname, "void", 4) == 0) ck = TY_NIL;
-            else ck = TY_INT; /* unknown ^type: default to int */
-            /* Peek at next element to get the param name */
+            TypeKind ck = typekind_from_symbol(tname);
+            if (ck == TY_UNKNOWN) {
+                if (tlen == 4 && memcmp(tname, "void", 4) == 0) ck = TY_NIL;
+                else if (tlen > 5 && memcmp(tname, "ptr<", 4) == 0 &&
+                         tname[tlen - 1] == '>') ck = TY_PTR_VOID;
+                else {
+                    diag_emit(DIAG_ERROR, p->span,
+                              "extern-c: unknown parameter type `^%s` -- the "
+                              "shorthand takes the type names `:type` does "
+                              "(^int, ^float, ^int32, ^cstr, ^ptr, ...)", tname);
+                    return NULL;
+                }
+            }
+            /* Peek at next element to get the param name.  Another `^type`
+             * starts the next parameter, so this one is anonymous: stdlib
+             * io.tur's `(extern-c fopen [^cstr ^cstr] :ptr)` declared ONE
+             * `cstr` parameter named `^cstr`. */
+            const Form *peek = (i + 1 < params_f->as.list.len)
+                ? params_f->as.list.items[i + 1] : NULL;
+            bool next_is_caret = peek && peek->tag == F_SYM &&
+                                 peek->as.sym->len > 1 &&
+                                 peek->as.sym->name[0] == '^';
             i++;
-            if (i >= params_f->as.list.len) {
-                /* ^type at end with no following name — create anonymous param */
+            if (i >= params_f->as.list.len || next_is_caret) {
+                if (next_is_caret) i--;  /* re-read it as the next parameter */
+                /* ^type with no following name — create anonymous param */
                 if (n_params == 0) {
                     params = (Binding **)arena_alloc(e->arena, pcap * sizeof(Binding *));
                 }
@@ -15045,8 +15277,9 @@ Expr *elab_extern_c(Elab *e, const Form *call) {
                 /* Use the ^type symbol itself as a placeholder name */
                 Binding *b = binding_new(e, p->as.sym, type_from_kind(ck), false, false, p->span);
                 b->is_param = true;
+                b->is_fat = next_param_fat; next_param_fat = false;
                 params[n_params++] = b;
-                break;
+                continue;
             }
             Form *name_f = params_f->as.list.items[i];
             if (name_f->tag != F_SYM) {
@@ -15486,6 +15719,39 @@ Expr *elab_def(Elab *e, const Form *call) {
 
         TypeKind src_kind = init->type.kind;
         TypeKind dst_kind = declared_type->kind;
+        /* definition-forms-gaps 1: an int/float pair is the `::` rule's
+         * ambiguity, not a representation-equal pair.  The same-size test
+         * below took `(def x : int 7.1)` for one and stored the bits of 7.1
+         * (4619679907765970534; `(def y : float 3)` was 1.4822e-323) on both
+         * engines, where the same annotation on a `let` is an error.  Reject it
+         * as `let` does; an integer LITERAL under `: float` is the number. */
+        {
+            bool src_flt = src_kind == TY_FLOAT || src_kind == TY_FLOAT32 ||
+                           src_kind == TY_FLOAT64;
+            bool dst_flt = dst_kind == TY_FLOAT || dst_kind == TY_FLOAT32 ||
+                           dst_kind == TY_FLOAT64;
+            bool src_num = src_flt || def_kind_is_integer(src_kind) ||
+                           src_kind == TY_BOOL;
+            bool dst_num = dst_flt || def_kind_is_integer(dst_kind) ||
+                           dst_kind == TY_BOOL;
+            if (src_num && dst_num && src_flt != dst_flt) {
+                if (dst_flt && init->kind == EX_INT_LIT) {
+                    Expr *lit = expr_new(e->arena, EX_FLOAT_LIT, *declared_type,
+                                         init->span);
+                    lit->as.f = (double)init->as.i;
+                    init = lit;
+                    src_kind = dst_kind;
+                } else {
+                    diag_emit(DIAG_ERROR, init_f->span,
+                              "%s '%s': type annotation does not match "
+                              "initializer (annotated %s, got %s)",
+                              kw, name_f->as.sym->name,
+                              typekind_to_string(dst_kind),
+                              typekind_to_string(src_kind));
+                    return NULL;
+                }
+            }
+        }
         if (src_kind != dst_kind) {
             int src_size = type_size_bytes(src_kind);
             int dst_size = type_size_bytes(dst_kind);
@@ -15600,6 +15866,11 @@ Expr *elab_def(Elab *e, const Form *call) {
     } else {
         scope_add(&e->global, b);
     }
+    /* refine-top-level-def-not-a-fact: an immutable global's literal or
+     * constructor-term value is a fact wherever its name resolves to it. */
+    if (!is_mut && !is_deferred_init && !is_thread_local && !is_atomic &&
+        rt_def_init_is_fact(e, init_f, 0))
+        b->refine_def_init = init_f;
 
     Expr *out = expr_new(e->arena, EX_DEF, TYPE_NIL, call->span);
     out->as.def_.binding = b;

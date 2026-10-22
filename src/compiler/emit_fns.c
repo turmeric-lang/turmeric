@@ -121,7 +121,7 @@ void emit_pbp_push(EmitCtx *ctx, Binding *b) {
  * expanded to `if` -- put them).  Mutual/general tail calls and tail calls
  * inside `match` arms remain ordinary recursive calls; they are correct, just
  * not stack-optimized.  See docs/guides/generators-guide.md and
- * docs/control-flow-completeness-plan.md (Phase CF1).
+ * docs/archive/history/control-flow-completeness-plan.md (Phase CF1).
  * ========================================================================== */
 
 /* The declared C type of parameter `i`, matching the function signature's
@@ -427,7 +427,7 @@ static bool tco_let_simple(EmitCtx *ctx, const Expr *e) {
  * T2's first cut ALSO required the callee's C return type to equal the enclosing
  * function's, and refused the body outright otherwise.  That was not a statement
  * about tail position -- it was a workaround for
- * docs/reported/emit-tail-return-path-lacks-carrier-bridges.md, which is fixed:
+ * docs/archive/emit-tail-return-path-lacks-carrier-bridges.md, which is fixed:
  * both return paths share `emit_fn_return_spelling` now, so a marked call whose
  * return does need a bridge is simply emitted with its hoist and its check, the
  * way it always was.  The type question still gets asked, but where it belongs
@@ -3813,8 +3813,7 @@ static void cps_emit(GsCtx *gs, Buf *b, const Expr *e, const GsSink *sink) {
         gs->ctx->indent = gs->cur_ind;
         char *pv = emit_value(gs->ctx, b, pl);
         indent_buf(b, gs->cur_ind);
-        buf_printf(b, "tur_panic_with(%d, (void*)%s, __FILE__, __LINE__);\n",
-                   (int)pl->type.kind, pv);
+        emit_panic_with_call(b, e->span, (int)pl->type.kind, pv);
         free(pv);
         indent_buf(b, gs->cur_ind); buf_puts(b, "break;\n");
         return;
@@ -4415,7 +4414,7 @@ static TypeKind emit_tail_float_kind(EmitCtx *ctx, const Expr *tail_e) {
  * TCO-routed and carrier-returning got the thin copy and miscompiled.  Nothing
  * reported that: the divergence was only reachable once proper-tail-calls T2
  * widened the routing, and it then failed 24 fixtures with hard `cc` errors.
- * Filed as docs/reported/emit-tail-return-path-lacks-carrier-bridges.md, and
+ * Filed as docs/archive/emit-tail-return-path-lacks-carrier-bridges.md, and
  * this function is the fix -- the same treatment `inline_c_returns_byvalue_adt`
  * got, for the same stated reason: so the two copies cannot drift apart again.
  *
@@ -4467,9 +4466,6 @@ static void emit_fn_return_spelling(EmitCtx *ctx, Buf *out, const Expr *fn_e,
     const char *ret_ctype = NULL;
     bool inst_method_carrier_spill = false;
     if (fn_e->type.kind == TY_FN && !is_main) {
-        /* structdef-retirement DS-C: emit_carrier_return_override is dead
-         * (method body never TY_STRUCT); its `carrier_override.kind ==
-         * TY_STRUCT` branch below is removed. */
         if (fd->box_aggregate_result) {
             /* WF1/WF2 (van-laarhoven-wide-functor-carrier-plan): the closure
              * returns its wide `(f A)` aggregate boxed into the int64 carrier;
@@ -5344,6 +5340,10 @@ static void tcg_emit_def(EmitCtx *ctx, Buf *file, TcgGroup *g) {
     Buf *saved_file = ctx->file;
     int saved_indent = ctx->indent;
     const char *saved_ret = ctx->current_fn_ret_ctype;
+    /* byval-spine-drop-past-early-exit: a fused group is one C function for
+     * several signatures; refuse the spine push in it rather than judge them. */
+    bool saved_spine_safe = ctx->current_fn_spine_drop_safe;
+    ctx->current_fn_spine_drop_safe = false;
     Binding **saved_params = ctx->fn_params;
     uint32_t saved_n_params = ctx->n_fn_params;
     const Binding **saved_ic_locals = ctx->inline_c_raw_locals;
@@ -5410,6 +5410,7 @@ static void tcg_emit_def(EmitCtx *ctx, Buf *file, TcgGroup *g) {
     ctx->file = saved_file;
     ctx->indent = saved_indent;
     ctx->current_fn_ret_ctype = saved_ret;
+    ctx->current_fn_spine_drop_safe = saved_spine_safe;
     ctx->fn_params = saved_params;
     ctx->n_fn_params = saved_n_params;
     ctx->inline_c_raw_locals = saved_ic_locals;
@@ -5554,9 +5555,6 @@ static void emit_fn_def_body(EmitCtx *ctx, Buf *file, const Expr *e) {
     bool is_main_check = fd->binding && fd->binding->name && fd->binding->name->name &&
         strcmp(fd->binding->name->name, "main") == 0;
     if (e->type.kind == TY_FN && !is_main_check) {
-        /* structdef-retirement DS-C: emit_carrier_return_override is dead (a
-         * method body is never TY_STRUCT), so the `carrier_override.kind ==
-         * TY_STRUCT` branch that used to sit here is removed. */
         if (fd->box_aggregate_result) {
             /* WF1/WF2 (van-laarhoven-wide-functor-carrier-plan): this functor-
              * wrapping closure `g` returns its wide `(f A)` aggregate boxed into
@@ -5628,6 +5626,22 @@ static void emit_fn_def_body(EmitCtx *ctx, Buf *file, const Expr *e) {
     }
     const char *saved_current_fn_ret_ctype = ctx->current_fn_ret_ctype;
     ctx->current_fn_ret_ctype = current_fn_ret_ctype_eff;
+    /* byval-spine-drop-past-early-exit: see EmitCtx.current_fn_spine_drop_safe.
+     * Decided from the SIGNATURE, not the body: the exits the channel fires at
+     * hand exactly the result (a `return`) or the parameters (a back-edge) to
+     * whatever runs next, so those are the only words that could still point
+     * into a spine freed on the way out.  tco_plain_scalar is the numeric
+     * whitelist, which deliberately leaves out cstr and ptr. */
+    bool saved_current_fn_spine_drop_safe = ctx->current_fn_spine_drop_safe;
+    {
+        bool safe = fd && e->type.kind == TY_FN &&
+                    (e->type.as.fn.result_kind == TY_NIL ||
+                     tco_plain_scalar(e->type.as.fn.result_kind));
+        for (uint32_t pi = 0; safe && pi < fd->n_params; pi++)
+            if (!fd->params[pi] || !tco_plain_scalar(fd->params[pi]->type.kind))
+                safe = false;
+        ctx->current_fn_spine_drop_safe = safe;
+    }
     const struct FnDef *saved_own_cur_fn = ctx->own_cur_fn;
     ctx->own_cur_fn = fd;
 
@@ -5862,10 +5876,9 @@ static void emit_fn_def_body(EmitCtx *ctx, Buf *file, const Expr *e) {
     /* Return type from fn_type */
     if (e->type.kind == TY_FN) {
         TypeKind result = e->type.as.fn.result_kind;
-        /* structdef-retirement DS-C: the RT/SC5 carrier-return-override bridge
-         * (emit_carrier_return_override) is dead -- a method body is never
-         * TY_STRUCT -- so its assignment and the `carrier_override.kind ==
-         * TY_STRUCT` branch below are removed. */
+        /* A method body is never TY_STRUCT (every struct lowers to a record
+         * ADT), so the return type comes from the binding, with no
+         * by-value-struct override. */
         if (is_main) {
             buf_puts(file, "int");  /* C main must always return int */
         } else if (fd->box_aggregate_result) {
@@ -6876,6 +6889,7 @@ static void emit_fn_def_body(EmitCtx *ctx, Buf *file, const Expr *e) {
     free((void*)ctx->env_var_name);
     ctx->env_var_name = saved_env_var_name;
     ctx->current_fn_ret_ctype = saved_current_fn_ret_ctype;
+    ctx->current_fn_spine_drop_safe = saved_current_fn_spine_drop_safe;
     ctx->own_cur_fn = saved_own_cur_fn;
     ctx->tail_void = saved_tail_void;
 

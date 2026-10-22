@@ -1,0 +1,80 @@
+#lang saffron
+;; any-widen-frame-box-past-dyn-call -- a DYNAMIC call somewhere in a body must
+;; not disqualify the parameters that dynamic call never sees.
+;;
+;; The frame-box rule (any-widen-frame-box) asks one question of the callee: does
+;; this body retain a pointer its `any` parameter carries?  The walk answering it
+;; refused outright on `EX_DYN_CALL` -- the callee is a value, so there is no body
+;; to inspect and no mask to consult.
+;;
+;; That is a sound answer about a value FLOWING INTO a dynamic call, and the
+;; wrong answer about the mere presence of one.  A dynamic call that never
+;; mentions the parameter is handed nothing of it to keep.  Refusing on presence
+;; disqualified every parameter of every body containing a dynamic call, which in
+;; Saffron is every higher-order function: a walker's `xs` read as retained
+;; because a sibling subexpression called `(g h)`, where `g` and `h` are other
+;; bindings entirely.  Each call site then heap-copied the list header into a box
+;; nothing owned -- one malloc per call, in the language where the widen is the
+;; common case rather than the corner.
+;;
+;; The walk checks the dynamic call's OPERANDS instead, unconfined.  `xs` under
+;; one is still refused (see `keeps`, below); `xs` merely co-located with one is
+;; not.
+;;
+;; The match binders these walkers forward do not make the parameter escape: the
+;; arm lowering deref-COPIES the scrutinee and binds each field by value, so a
+;; binder carries a pointer to a SIBLING allocation, never into the parameter's
+;; own box -- which is the box the frame-box rule relocates.
+;;
+;; requires.leak-check is the whole point: the loop count is what makes one
+;; missing free visible, and a frame box that was wrongly admitted would show up
+;; there as a use-after-free rather than a leak.
+;;
+;; Every walker here returns a SCALAR on purpose.  A walker that returns a new
+;; LIST widens in RETURN position, and that box is the residue
+;; saffron-static-ownership-residue tracks -- including it would make the gate
+;; permanently red and say nothing about the argument-position rule this pins.
+;;
+;; Measured 2026-10-21, before the walk changed: 2500 allocations leaked over
+;; the 500 turns below.  After: none.
+
+(defdata Lst [] (Cons [hd : any tl : any]) (Nil))
+
+;; The `lfold` shape: an accumulator threaded through a dynamic call, beside a
+;; recursive call forwarding the tail binder.  `xs` itself reaches neither.
+(defn lfold2 [g acc xs]
+  (match xs
+    (Cons h t) (lfold2 g (g acc h) t)
+    (Nil)      acc))
+
+;; The `lmap` shape -- a dynamic call on the HEAD binder rather than on the
+;; accumulator -- reduced to a scalar so the walk is pinned without the
+;; return-position widen.
+(defn count-if [p xs]
+  (match xs
+    (Cons h t) (+ (if (p h) 1 0) (count-if p t))
+    (Nil)      0))
+
+;; The counter-case -- `xs` itself an operand of the dynamic call, which must
+;; STILL be refused -- is pinned next door in
+;; any-widen-frame-box-dyn-call-operand.  It leaks by construction (a refused
+;; widen has no owner: saffron-static-ownership-residue), so it cannot share a
+;; leak-clean gate with the shapes here.
+(defn add [a b] (+ a b))
+(defn big? [x] (> x 1))
+
+;; The recursive call is deliberately NOT in tail position, so this fixture's
+;; gate is about the frame-box rule and nothing else; the tail-position spine
+;; drop is byval-spine-drop-past-early-exit's.
+(defn drive [i : int n : int] : int
+  (if (= i n)
+    0
+    (let [xs (Cons 1 (Cons 2 (Cons 3 (Nil))))]
+      (+ (+ (cast (lfold2 add 0 xs) int)
+            (cast (count-if big? xs) int))
+         (drive (+ i 1) n)))))
+
+(defn main [] : int
+  ;; 1+2+3 = 6, and two of the three are > 1, so 8 a turn.
+  (println (drive 0 500))
+  0)

@@ -1,0 +1,12 @@
+#lang turmeric boguslayer
+;; A manifest is source like any other file, so `#lang` means the same thing
+;; here as it does in a .tur: one base dialect, nothing after it (TUR-E0330).
+;;
+;; The manifest is then unreadable, which is the existing TUR-E0624 contract:
+;; nothing it declares is in effect, so the run refuses to continue rather than
+;; proceeding with a half-configured search path.  Both engines: `tur
+;; --interpret` used to print the E0330 and run the program anyway, exit 0
+;; (docs/archive/interpret-ignores-a-malformed-manifest.md).
+(defpackage lang-trailing-token-manifest
+  :name    "lang-trailing-token-manifest"
+  :version "0.1.0")

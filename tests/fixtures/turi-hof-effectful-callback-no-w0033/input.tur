@@ -1,0 +1,17 @@
+;; turi-stdlib-hof-effectful-callback-false-w0033: an effectful lambda handed
+;; to a STDLIB higher-order function (option-map, with-region) reaches the
+;; handler, so the clause is not unreachable -- under --interpret too, where
+;; the stdlib was elaborated on an earlier turn and is not in this turn's
+;; function index.  A user-defined HOF of the same shape never warned.
+(defeffect Bail [code : int] : int)
+
+(defn fwd [A] [^fat body : (fn [] A)] : A (body))
+
+(defn main [] : int
+  (println (handle (match (option-map (some 1) (fn [x : int] : int (perform (Bail x))))
+                     (Some v) v
+                     None 0)
+             (Bail [c] k) (+ c 100)))
+  (println (handle (fwd (fn [] : int (+ 5 (perform (Bail 7))))) (Bail [c] k) c))
+  (println (handle (with-region (fn [] : int (+ 1 (perform (Bail 2))))) (Bail [c] k) (* c 10)))
+  0)

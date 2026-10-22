@@ -174,7 +174,7 @@ extern bool g_interpret_mode;
 extern bool g_elab_toplevel_imports;
 
 /* `tur expand`: print each macro expansion (outside stdlib load) to stdout
- * as it happens during elaboration.  Set by cmd_expand in main.c; read at
+ * as it happens during elaboration.  Set by `tur expand` (cmd_expand_main); read at
  * the expansion site in elab_call.c. */
 extern bool g_dump_expansion;
 
@@ -182,7 +182,7 @@ extern bool g_dump_expansion;
  * macro-time env TURI_CAP_IO for the rare legitimately-effectful macro
  * (embed-file style).  Default deny; io is the only grantable capability
  * -- FFI/Unsafe/inline-C/async at macro time are never offered.  Set by
- * the global flag parser in main.c; read at macro-env creation in
+ * the global flag parser (drv_parse_global_flags); read at macro-env creation in
  * src/turi/macro_env.c. */
 extern bool g_macro_caps_io;
 
@@ -279,7 +279,7 @@ extern bool g_dump_cps_mono;
  * experiment graduated and stdlib/trail.tur is autoloaded unconditionally
  * (see experiments.c and stdlib_autoload.c). */
 /* TUR_ADT_SLAB=1: bump-allocate never-freed multi-variant ADT boxes.
- * A measurement seam for docs/reported/multi-variant-adts-always-heap-allocate.md,
+ * A measurement seam for docs/archive/multi-variant-adts-always-heap-allocate.md,
  * not a shipping default.  SHELVED 2026-08-25 -- kept reproducible, not
  * headed anywhere; the decision record in that report says why, and why
  * reclamation rather than a slab is the thing to build. */
@@ -361,15 +361,14 @@ extern bool g_opt_option_niche;
  * cannot reach (the nodes escape their constructor by construction) and RM2
  * cannot own (sharing makes "is this the last reference?" a runtime fact).
  *
- * Off by default and gated behind `--enable=regions`: this is user-visible
- * surface, and it is the reclamation phase most able to produce a silent wrong
- * answer if it rewinds a generation something still points into.  The plan's
+ * This is the reclamation phase most able to produce a silent wrong answer if
+ * it rewinds a generation something still points into.  The plan's
  * safety rule is that a region which cannot PROVE every escaping value
  * relocatable does not rewind at all, so a missed shape costs a saving rather
  * than correctness -- the same discipline turi's value-pool promotion walk
  * already runs on.
  *
- * GRADUATED 2026-09-05: default true.  TUR_REGIONS=0 (main.c) is the bisection
+ * GRADUATED 2026-09-05: default true.  TUR_REGIONS=0 (drv_apply_env_overrides) is the bisection
  * hatch; tests/run-regions-seam.sh keeps that off path green. */
 extern bool g_opt_regions;
 

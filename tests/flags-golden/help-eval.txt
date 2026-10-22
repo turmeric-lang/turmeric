@@ -1,0 +1,6 @@
+usage:
+  tur eval '<expr>'          evaluate an inline expression and print the result
+  tur eval --file <file.tur> run a .tur file through the interpreter
+
+Try 'tur --help' for global options.
+[exit 0]

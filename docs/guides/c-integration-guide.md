@@ -57,7 +57,7 @@ exactly what the C side of the equation looks like.
 
 A handful of list primitives -- `cons`, `head`, `tail`, `nil-value`, and
 `cstr->parse-int` -- are **interpreter natives** registered by `tur run` / the
-REPL (in `src/main.c`), *not* compiled stdlib functions. They are unbound when
+REPL (in `src/turi/interpreter_natives.c`), *not* compiled stdlib functions. They are unbound when
 you `tur build` / `tur emit-c` a file: you will see
 
 ```text
@@ -107,7 +107,20 @@ extern-c function-name [arg-types...] return-type
 
 `extern-c` declares that a C function (or global) with the given name is
 available at link time. The elaborator trusts the signature entirely -- there
-is no validation against an actual header file.
+is no validation against an actual header file. The emitted C carries your
+prototype beside the system headers', so a declaration whose widths differ
+from the real one (`(extern-c getpid [] : int)`, where C's is `int`) is a C
+compiler error, `conflicting types for 'getpid'`; declare `: int32`.
+
+The parameter list is either named, `[path : cstr mode : cstr]`, or the
+caret shorthand the stdlib uses below: each `^type` is one parameter,
+optionally followed by its name (`[^ptr p]`), and takes any type name the
+`:type` form does (`^float`, `^int32`, `^ptr`, ...). An unknown `^type` is
+an error. `[^]` and `[]` are both an empty parameter list.
+
+Under `tur --interpret` a declared C function is looked up in the running
+process; calling one that is not there is an error naming it (compiled, the
+program does not link).
 
 **Examples from the stdlib:**
 

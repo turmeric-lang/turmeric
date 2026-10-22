@@ -350,6 +350,21 @@ static const Symbol *splice_body_def_head(Elab *e, const Form *f) {
  *   (def x : float 7.1)  =>  (let [x : float 7.1] <rest>)
  */
 Form *splice_internal_defines(Elab *e, Form **items, uint32_t n, Span span) {
+    /* definition-forms-gaps 3: every body window passes through here before
+     * its first form is elaborated, so this is where the `defn`s nested in it
+     * are declared -- all of them, before any body, as Pass 1 declares the
+     * top-level ones -- so two nested defns can call each other.  A nested
+     * defn lands at file scope (elab_defn); the declaration is that global
+     * binding, and is idempotent. */
+    if (e->scope != &e->global) {
+        for (uint32_t i = 0; i < n; i++) {
+            Form *f = items[i];
+            if (f && f->tag == F_LIST && f->as.list.len >= 3 &&
+                f->as.list.items[0]->tag == F_SYM &&
+                f->as.list.items[0]->as.sym == e->sym_defn)
+                elab_pre_declare_toplevel_defn(e, e->arena, f);
+        }
+    }
     /* Pre-scan: bail out fast when no defines are present. */
     bool has_define = false;
     for (uint32_t i = 0; i < n; i++) {
@@ -1014,6 +1029,32 @@ Expr *elab_let(Elab *e, const Form *call) {
              * type-level operations (send/recv/offer/choose-*) already emit their
              * own diagnostics before returning. */
             uint32_t n_elems = vec_pat->as.list.len;
+            /* A session pair has exactly two endpoints and a recv pair a value
+             * and an endpoint; a make-protocol pair has one endpoint per role.
+             * Any other pattern length used to bind the surplus names as ints
+             * or drop the missing roles, and the only diagnostic was TUR-E0100
+             * for the endpoints that were named. */
+            if (init_v->type.kind == TY_SESSION_PAIR ||
+                init_v->type.kind == TY_SESSION_RECV_PAIR) {
+                Type *fst_t = init_v->type.as.session_.fst;
+                bool role_pair = init_v->type.kind == TY_SESSION_PAIR &&
+                                 fst_t && fst_t->kind == TY_ROLE;
+                uint32_t want = role_pair
+                    ? (uint32_t)fst_t->as.role_.global_type->as.global_.n_roles
+                    : 2;
+                if (n_elems != want) {
+                    const char *what =
+                        role_pair ? "make-protocol gives one endpoint per role"
+                        : init_v->type.kind == TY_SESSION_PAIR
+                            ? "make-session gives two endpoints"
+                            : "recv gives the value and the advanced endpoint";
+                    diag_emit_with_code(DIAG_ERROR, vec_span, TUR_E0002_ARITY_MISMATCH,
+                                        "%s: the pattern binds %u name%s, expected %u",
+                                        what, (unsigned)n_elems,
+                                        n_elems == 1 ? "" : "s", (unsigned)want);
+                    rc = -1; break;
+                }
+            }
             /* SS2: For session pair types we track the first binding so vi=1 can
              * reference vi=0's C name via __TUR_CAP_0__. */
             uint32_t first_bind_idx = n_binds;
@@ -1440,6 +1481,22 @@ Expr *elab_let(Elab *e, const Form *call) {
                         typekind_to_string(ak), typekind_to_string(ik));
                     rc = -1; break;
                 }
+                /* typed-ptr-pointee-not-checked-at-calls: `ptr<Foo>` and
+                 * `ptr<Bar>` (likewise `rc<S>` / `rc<U>`) are one TypeKind, so
+                 * the compare above passed `[x : ptr<Foo> (mk-bar)]`.  Calls and
+                 * returns ask handle_targets_conflict; a `let` annotation is a
+                 * claim about the initializer in the same way. */
+                if (handle_targets_conflict(ann_ty, &init->type)) {
+                    Buf ab; buf_init(&ab); type_print(&ab, *ann_ty); buf_putc(&ab, '\0');
+                    Buf ib; buf_init(&ib); type_print(&ib, init->type); buf_putc(&ib, '\0');
+                    diag_emit_with_code(DIAG_ERROR, type_ann_form->span,
+                        TUR_E0001_TYPE_MISMATCH,
+                        "let binding '%s': type annotation does not match "
+                        "initializer (annotated %s, got %s)",
+                        name->name, ab.data, ib.data);
+                    buf_free(&ab); buf_free(&ib);
+                    rc = -1; break;
+                }
                 /* committed-applied-let-annotation: an applied annotation was
                  * parsed and then not compared at all, so `[o : (Option int)
                  * (some 7.1)]`, `[o : (Vec int) (some 1)]` and `[o : (Option
@@ -1538,7 +1595,7 @@ Expr *elab_let(Elab *e, const Form *call) {
              * (fn_param_type_is_fat_normalized) although its type is not
              * marked boxed; shimming it again would box a box.  Such an init
              * keeps today's spelling (see
-             * docs/reported/let-alias-of-fn-param-call-undeclared.md for what
+             * docs/archive/let-alias-of-fn-param-call-undeclared.md for what
              * that spelling does). */
             const Expr *ip = init;
             while (ip && ip->kind == EX_ASCRIBE) ip = ip->as.ascribe_.inner;
@@ -1909,7 +1966,7 @@ Expr *elab_let(Elab *e, const Form *call) {
          * DESTROYING the control block, and its body nulls `cb->value` before
          * `free(cb)`, so the payload survives with the returned ref as its only
          * owner.  Nothing shared it and nothing freed it --
-         * docs/reported/rc-ref-conversion-and-weak-upgrade-leak.md.
+         * docs/archive/rc-ref-conversion-and-weak-upgrade-leak.md.
          *
          * It is therefore an ordinary owning ref, exactly like a fresh
          * `(ref ...)`: deref is non-consuming and the scope-exit auto-drop
@@ -2513,6 +2570,31 @@ Expr *elab_let(Elab *e, const Form *call) {
         if (binding_moved_during_init[k] || moved_for_real ||
             is_binding_consumed(body, lb))
             continue;
+        /* any-widen-deep-drop-frees-borrowed-children: a FOURTH hand-off, a
+         * widen to `any` stored into an owning aggregate, which the guards
+         * above do not see.
+         *
+         *     (let [inner (Cons 1 (Nil))
+         *           outer (Cons inner (Nil))]   ;; `inner` widened into an :any field
+         *       ...)
+         *
+         * The widen copies `inner`'s header into a fresh box, but the copy's
+         * `tl` still points at the `(Nil)` box `inner`'s own spine owns.
+         * `outer`'s scope-exit `drop_localowned_` walks the `:any` field,
+         * `__tur_any_drop` runs the payload's glue and frees `inner`'s spine
+         * -- which `inner`'s own scope-exit drop then frees again.  Suppressing
+         * here is the safe half of the trade (`inner`'s spine leaks when
+         * nothing else claims it).  The sibling inits are searched as well as
+         * the body: the widening constructor is usually a LATER BINDING of the
+         * same `let`, which `body` alone does not cover. */
+        {
+            bool widened = is_binding_widened_to_any(body, lb);
+            for (uint32_t j = 0; j < n_binds && !widened; j++)
+                if (j != k && binds[j].init &&
+                    is_binding_widened_to_any(binds[j].init, lb))
+                    widened = true;
+            if (widened) continue;
+        }
         /* fn-cell-set-with-capturing-closure-segfaults, found while closing
          * it: the guards above see the LOCAL, not its aliases.  A match
          * binder of `xs` carries a pointer into the spine, and if the body

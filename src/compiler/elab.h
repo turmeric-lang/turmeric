@@ -99,7 +99,7 @@ Expr *elaborate_program_session(Arena *arena, SymbolTable *st,
                                 ElabSession *session);
 
 /* LS2 (local-spice-dev-workflow-plan): per-compile workspace-sibling
- * resolution context. Set by the entry-point (main.c's compile_to_c)
+ * resolution context. Set by the entry-point (the driver's compile_to_c)
  * around a call into the elaborator and cleared after; the elaborator
  * picks it up when initializing Elab. Outside of compile_to_c the
  * pointer is NULL and the warning code is inert.
@@ -129,7 +129,7 @@ const Ls2ResolverCtx *ls2_resolver_ctx_active(void);
 
 /* used-attr-whole-program: per-compile list of module names to force-load
  * during whole-program elaboration so a `#[used]` defn reached only via a raw
- * mangled C symbol (no `(import)`) is still emitted.  Set by main.c's
+ * mangled C symbol (no `(import)`) is still emitted.  Set by the driver's
  * compile_to_c around the elaborate_program call and cleared after; NULL/0
  * elsewhere (REPL, eval, separate compilation), where the force-load is inert.
  * Module names are slash-separated (e.g. "app/a"), matching `(import ...)`. */

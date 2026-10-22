@@ -1,0 +1,7 @@
+;; The rc<T> twin of typed-ptr-let-annotation-mismatch: an annotation naming
+;; one rc target over an initializer of another.
+(defstruct S [n : int])
+(defstruct U [n : int])
+(defn main [] : int
+  (let [r : rc<S> (rc/of (U 7))]
+    0))

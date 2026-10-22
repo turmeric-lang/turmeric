@@ -25,16 +25,14 @@ User-facing material lives elsewhere:
   -- what happens after the package manager hands over include dirs and flags;
 - [compiler-internals.md](compiler-internals.md) -- the pipeline overall.
 
-> **Trust the code over the comments.** `pkg.h` still describes `:sha256` as
-> "SHA-256 of the archive" (it is a `tree1:` content hash for spices and a git
-> SHA for cmake deps), and several user guides show lockfile shapes `tur`
-> never writes. The sibling repo's `turmeric-spices/CLAUDE.md` says a lock row
+> **Trust the code over the comments.** The sibling repo's
+> `turmeric-spices/CLAUDE.md` says a lock row
 > makes `tur fetch` skip a missing dependency and that `:resolved` is never
 > checked out; both stopped being true for `:spices` (see
 > [What the lock actually does](#what-the-lock-actually-does)). Where this
 > guide and the code disagree, fix the guide.
 > The stale comments found so far in this area, each with a fix, are
-> listed in [stale-comments-package-manager](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/stale-comments-package-manager.md).
+> listed in [stale-comments-package-manager](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/stale-comments-package-manager.md).
 
 ---
 
@@ -56,8 +54,8 @@ User-facing material lives elsewhere:
    `cmake/spice-deps-manifest.json` (or `-wasm.json`), whose `-I/-L/-l`
    tokens every later C compile reads -- whether or not they are current.
 5. **Build options.** `:c-flags`, `:link-libs`, `:link-flags`, `:c-sources`
-   and `:c-includes` reach the cc line; `:no-stdlib` is parsed and validated
-   but nothing reads it.
+   and `:c-includes` reach the cc line; `:no-stdlib true` is refused at read
+   time (only `false` is accepted), since no build path implements it.
 
 ---
 
@@ -69,7 +67,7 @@ User-facing material lives elsewhere:
 | `src/compiler/pkg.c` | Manifest read/write, lockfile, tree hash, semver ranges, git fetch, `pkg_fetch_all`, the workspace walks, `:cmake-deps` collection and CMake generation, the JSON manifest reader, the scaffold (`scaffold_project_ext`), and the CLI commands `new`, `init`, `add`, `add-cmake`, `fetch`, `audit`, `emit-cmake` |
 | `src/compiler/install.c` | `tur install`/`uninstall`/`list`/`upgrade`: global spices under the XDG layout, `state.tur`, bin symlinks; also `pkg_rm_rf` |
 | `src/compiler/spice_search.c` | `spice_find_root` and `spice_search_append`: the include path a single file inside a spice gets (shared with libturi embedders) |
-| `src/main.c` | The consumers: `cmd_run` project mode, `cmd_test`, `tur build <dir>`, `collect_build_aux`, `append_manifest_link_flags`, `collect_spice_aux_c`, `resolve_include_dirs_from_manifest`, `discover_manifest_reader_macros`, `apply_manifest_experiments`, `resolve_build_dir`, `resolve_engine` |
+| `src/driver/` | The consumers: `cmd_run` project mode and `cmd_test` (`cmd_run.c`), `tur build <dir>` (`project.c`), `drv_collect_build_aux` and `append_manifest_link_flags` (`cc.c`), `collect_spice_aux_c`, `resolve_include_dirs_from_manifest`, `discover_manifest_reader_macros`, `apply_manifest_experiments` and `drv_resolve_engine` (`spice.c`), `drv_resolve_build_dir` (`cmd_emit.c`) |
 | `src/compiler/emit_core.c` | `tur_emit_hoisted_include`: the `__has_include` wrapper around hoisted inline-C includes |
 | `src/compiler/elab_module.c` | The one-time "resolved via workspace sibling" advisory, inside module resolution |
 | `src/compiler/global.c` | `tur_installed_spice_dir` and the `state.tur` registry behind `:global true` |
@@ -90,9 +88,9 @@ Tests that pin this area: `tests/unit/pkg_hash.c` (tree hash),
 | `tur fetch` | `pkg.c:cmd_pkg_fetch` | yes | always (`pkg_fetch_all`) | always | yes, unless `--frozen` |
 | `tur add <url>` | `pkg.c:cmd_pkg_add` | yes | yes | no | on success |
 | `tur add-cmake` | `pkg.c:cmd_pkg_add_cmake` | no | no | no (prints "run `tur fetch`") | no |
-| `tur run` (project) | `main.c:cmd_run` | yes, verifies | only if a dep dir is missing | only if the JSON manifest is absent | after a fetch or cmake build |
-| `tur build <dir>` | `main.c` dir branch | yes, verifies | never | only if this arm's JSON manifest is absent | after a cmake build |
-| `tur test` | `main.c:cmd_test` | no | never | never | no |
+| `tur run` (project) | `cmd_run.c:cmd_run` | yes, verifies | only if a dep dir is missing | only if the JSON manifest is absent | after a fetch or cmake build |
+| `tur build <dir>` | `cmd_build.c:cmd_build_main` dir branch | yes, verifies | never | only if this arm's JSON manifest is absent | after a cmake build |
+| `tur test` | `cmd_run.c:cmd_test` | no | never | never | no |
 | `tur install` | `install.c:do_install_spec` | no | direct deps only, unpinned | never | no (writes `state.tur`) |
 
 Everything below explains one column of this table.
@@ -109,10 +107,10 @@ exist. `pkg_resolve_manifest_cwd` is the cwd-relative twin used by the CLI
 commands, and `pkg_is_manifest_name` keeps both names out of source scans.
 
 Walk-ups use it at every step: `spice_find_root` (per-file commands, up to
-`TUR_SPICE_WALK_MAX` = 16 levels) and `main.c:find_project_root` (unbounded).
+`TUR_SPICE_WALK_MAX` = 16 levels) and `spice.c:drv_find_project_root` (unbounded).
 
 A few readers hard-code `build.tur` and so ignore a `.sweet` manifest:
-`install.c:do_install_spec`, and `main.c:collect_web_link_flags` (the `:web`
+`install.c:do_install_spec`, and `cc.c:drv_collect_web_link_flags` (the `:web`
 block of a wasm link). New code should go through the resolver.
 
 ### Parsing it
@@ -152,13 +150,13 @@ TUR-E0620, and turns a bare `{...}` -- curly-infix, not a map -- into a
 | `:build-opts` | `c_flags`, `link_libs`, `link_flags`, `no_stdlib`, `c_sources`, `c_includes` | link tokens grammar-checked (`check_link_vec`); C paths relative, contained, existing, `.c/.cc/.cpp` | section 5 |
 | `:exports` | `exports[]` (module names only) | effect row rejected | `tur build <dir>` (export has a file), `tur emit-cmake` |
 | `:members` | `members[]` | each a contained relative path | workspace walks |
-| `:build-dir` | `build_dir` | contained relative path | `main.c:resolve_build_dir` |
+| `:build-dir` | `build_dir` | contained relative path | `cmd_emit.c:drv_resolve_build_dir` |
 | `:entry` | `entry` | none (existence checked by `cmd_run`) | `cmd_run` |
-| `:engine` | `engine` | `"cc"`/`"jit"`/`"interp"` (TUR-E0311) | `main.c:resolve_engine` |
+| `:engine` | `engine` | `"cc"`/`"jit"`/`"interp"` (TUR-E0311) | `spice.c:drv_resolve_engine` |
 | `:experiments` | `experiments[]`, `has_experiments_key` | must be a vector | `apply_manifest_experiments` (unknown name exits with TUR-E0310); the key's presence suppresses the user file |
 | `:reader-macros` | `reader_macros[]` | none | `resolve_manifest_reader_macros` |
 | `:bin` | `bin_names[]`, `bin_paths[]` | names start with `tur-` | `tur install` |
-| `:web` | `web` | `:gl`, `:heap`, `:main-loop` values | `collect_web_link_flags` (wasm only) |
+| `:web` | `web` | `:gl`, `:heap`, `:main-loop` values | `drv_collect_web_link_flags` (wasm only) |
 
 ### Failure: ABSENT, OK, MALFORMED
 
@@ -167,7 +165,7 @@ walk-up result) from "a manifest exists and is broken" (`MALFORMED`). The
 distinction matters because every compile entry point calls `diag_reset()`,
 which would erase the manifest's error and exit 0. So a malformed verdict is
 recorded in sticky process state (`pkg_manifest_mark_malformed_slot`) and
-re-emitted as TUR-E0624 by `pkg_manifest_reassert()`, which `main.c` calls
+re-emitted as TUR-E0624 by `pkg_manifest_reassert()`, which the driver calls
 right after each `diag_reset()`, beside `pkg_tur_version_reassert()`.
 
 Every return past the `fopen` marks the manifest malformed, the **reader**
@@ -238,7 +236,7 @@ fetched) but differ in scope:
 | Walker | Used by | Transitive | Workspace siblings |
 |---|---|---|---|
 | `pkg.c:pkg_fetch_all` | `tur fetch`, `tur add`, `tur run` | yes, BFS through each fetched spice's own `:spices` | skipped only for root entries |
-| `main.c:resolve_include_dirs_from_manifest` | `tur run`, `tur test`, `tur build <dir>` | yes, `VisitedRoots` stops cycles | a `:spices` entry naming a sibling resolves to it |
+| `spice.c:resolve_include_dirs_from_manifest` | `tur run`, `tur test`, `tur build <dir>` | yes, `VisitedRoots` stops cycles | a `:spices` entry naming a sibling resolves to it |
 | `spice_search.c:spice_search_append` | `tur check`, `emit-c`, `run <file>`, the LSP, libturi | **no**, direct `:spices` only | every other member's `src/` is added, declared or not |
 | `pkg.c:pkg_resolve_spice_dep_dir` | the `:cmake-deps` and `:c-sources` closures | yes (its callers walk) | yes |
 
@@ -325,7 +323,7 @@ temp file renamed into place:
   }
   :cmake-deps #{
     "zlib" #{:url "..." :ref "v1.3.1" :resolved "<git sha>"
-             :sha256 "<same git sha>" :fetched-at "..." }
+             :fetched-at "..." }
     "libpq" #{:resolved-via "system" :system-version "16.2" }
   })
 ```
@@ -335,8 +333,11 @@ temp file renamed into place:
   file's path, size and bytes in sorted path order, skipping `.git`, `build`,
   `.tur-abi-cache` and `.tur-repl-cache`. If hashing fails it falls back to
   the git SHA, which `pkg_hash_comparable` then refuses to compare.
-- A cmake row's `:sha256` is just the git SHA again. A system-resolved row
-  keeps only `:resolved-via` and `:system-version`.
+- A cmake row has no `:sha256`: `:resolved` is its only pin. (Until
+  2026-10-21 it repeated the git SHA there; a lock that still carries one is
+  read as if the key were absent, so `tur fetch --frozen` does not report it
+  as a change.) A system-resolved row keeps only `:resolved-via` and
+  `:system-version`.
 - Rows for `:path`, workspace and `:global` deps are removed, so the lock
   records only URL deps.
 
@@ -414,10 +415,14 @@ those of every spice in the `:spices` closure, walked with a worklist and a
 unrelated members' native deps and collided in CMake's single target
 namespace.
 
-`append_cmake_dep_with_conflict_check` dedups identical `(name, url, ref,
-path)` entries and fails on a same-name mismatch, printing both origins.
-Differences in `:cmake-name`, `:targets` or `:options` are not compared; the
-first copy wins silently. It also absolutizes a relative `:path` against
+`append_cmake_dep_with_conflict_check` fails on a same-name entry whose
+`(url, ref, path)` differ, printing both origins. Two entries at the same
+origin are one dependency and are merged (`merge_cmake_dep`, since
+2026-10-21): `:options` / `:wasm-options` key by key, a key set to two
+different values being a hard error that names both manifests; `:targets`,
+`:link-libs`, `:link-flags` union; a differing `:cmake-name` or
+`:cmake-version` is a conflict; `:prefer-system` unions to "prefer system"
+with a note. It also absolutizes a relative `:path` against
 `<origin>/cmake/` -- the generated file lives in `cmake/`, so a spice writes
 `:path "../cmake-deps/foo"` to mean `<spice>/cmake-deps/foo`.
 
@@ -489,7 +494,7 @@ token must pass `tur_arg_is_shell_safe` (`cmake_manifest_token_ok`) or it is
 dropped with a message.
 
 Two places call it, both reading only the **project root's** JSON:
-`main.c:collect_build_aux` (called by `cmd_build`, `cmd_compile` and the
+`cc.c:drv_collect_build_aux` (called by `cmd_build`, `cmd_compile` and the
 REPL's in-process spice loader, so it covers `tur run`, single-file
 `tur build`, and `tur test`, which compiles each test through `cmd_build`)
 and the native-only block in the separate-compilation path of
@@ -525,19 +530,22 @@ build for good and compiled with no dependency flags
 
 | Key | Reaches cc through | Scope |
 |---|---|---|
-| `:link-libs` | `main.c:append_manifest_link_flags`, as `-l<name>` | the project root's manifest only |
+| `:link-libs` | `cc.c:append_manifest_link_flags`, as `-l<name>` | the project root's manifest only |
 | `:link-flags` | the same, verbatim (one entry may be several tokens) | root only |
-| `:c-includes` | `main.c:collect_spice_aux_c`, as quoted `-I<spice dir>/<entry>` | root and the whole `:spices` closure |
+| `:c-includes` | `spice.c:collect_spice_aux_c`, as quoted `-I<spice dir>/<entry>` | root and the whole `:spices` closure |
 | `:c-sources` | `collect_spice_aux_c`, as extra TUs | root and the whole closure, each source once by `realpath` |
-| `:c-flags` | `main.c:append_manifest_link_flags`, verbatim, ahead of the link libraries; that buffer reaches the compile as well as the link | root only |
-| `:no-stdlib` | **nowhere** | -- |
+| `:c-flags` | `append_manifest_link_flags`, verbatim, ahead of the link libraries; that buffer reaches the compile as well as the link | root only |
+| `:no-stdlib` | nowhere: `true` (or any non-`false` value) is a read error, `false` is accepted and ignored | -- |
 
 The link vectors are grammar-checked at read time (`check_link_vec`,
 `tur_link_token_ok`), which is what lets `append_manifest_link_flags` splice
-them unquoted. `:c-flags` gets the same check and is then dropped: a
-`:c-flags ["-DMY_ANSWER=42"]` spice whose inline C returns `MY_ANSWER` fails
-with `'MY_ANSWER' undeclared`, and passes with the same flag in
-`TUR_CC_FLAGS`. The user guides still document it.
+them unquoted. `:c-flags` gets the same check, and a
+`:c-flags ["-DMY_ANSWER=42"]` spice whose inline C returns `MY_ANSWER` builds
+(`tests/spice-c-sources-tests.sh`, "c-flags"). `:no-stdlib` has no field in
+`PkgManifest`: the reader refuses anything but `false`, because a project that
+set it used to get the stdlib anyway, silently
+([build-opts-c-flags-never-consumed](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/build-opts-c-flags-never-consumed.md);
+"no-stdlib" in the same script).
 
 `:c-sources` and `:c-includes` are validated against the manifest directory
 when the manifest is read, so a missing file fails every read of that
@@ -613,7 +621,7 @@ no `:cmake-deps`. A project consumes such an install as a library through
    it. `tur add` and `tur add-cmake` edit the existing text and keep every
    key.
 6. **Consume it** from every path that should honour it. Check both
-   `collect_build_aux` and the separate-compilation block of `tur build <dir>`
+   `drv_collect_build_aux` and the separate-compilation block of `tur build <dir>`
    (they were once hand-copied twins, which is how `:link-libs` reached one and
    not the other), and decide whether it applies to the root only or to the
    whole `:spices` closure. A key with no consumer is the `:c-flags` bug.
@@ -630,7 +638,8 @@ Each was reproduced against the compiler this guide describes and filed in
 [`docs/reported/`](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/README.md). When one is fixed and archived,
 update the passage above that describes it and drop it from this list.
 
-- [build-opts-c-flags-never-consumed](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/build-opts-c-flags-never-consumed.md) -- `:build-opts :c-flags` (and `:no-stdlib`) are parsed but never used
+None open: the last one, build-opts-c-flags-never-consumed, was archived
+2026-10-21.
 
 ## Maintenance
 

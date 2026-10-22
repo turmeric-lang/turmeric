@@ -1,0 +1,32 @@
+usage:
+  tur repl [--watch] [--lang <dialect>] [--engine <name>]
+                  start the interactive REPL
+
+flags:
+  --lang <d>      start in a language dialect: "turmeric" (default),
+                  "saffron" (unannotated params default to any),
+                  "r7rs" (Scheme), or any base `tur dialects` lists.
+                  Equivalent to typing `#lang <d>` at the prompt.
+  --watch         auto-reload the enclosing spice between prompts
+                  when any source .tur file's mtime advances
+                  (RP6; equivalent to typing (reload) each turn)
+  --engine <name> engine for building the enclosing spice:
+                  "cc" (default -- build --shared subprocess) or
+                  "jit" (in-process MIR, needs -DTUR_JIT=ON).
+                  Precedence: --engine > TUR_ENGINE > build.tur
+                  :engine > "cc"
+
+REPL commands:
+  :help           print help
+  :quit / :q      exit the REPL
+  :doc <sym>      look up documentation for a symbol
+  :type <expr>    print the inferred type of an expression
+  :reload <file>  reload a source file
+  :reset          clear session and start fresh
+  :tutorial       start the interactive tutorial
+
+REPL forms:
+  (reload)        rebuild the loaded spice and refresh bindings
+
+Try 'tur --help' for global options.
+[exit 0]

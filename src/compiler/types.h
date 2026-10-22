@@ -384,6 +384,12 @@ typedef struct AdtDef {
      * declared base was not recoverable anywhere downstream.  Read only by
      * `adt_opaque_c_names_as_pointer` (types.c), which is seam-gated. */
     bool        opaque_base_is_ptr;
+    /* definition-forms-gaps 5: true iff the DECLARED base is a float kind --
+     * `(defopaque Celsius :float)`.  The handle is still an int64_t carrier, so
+     * a `::` between it and a float is a BIT reinterpret (elab_ascribe); left
+     * to C it was a value conversion, truncating 21.5 to 21 and reading 21.7
+     * back as the bits of an integer. */
+    bool        opaque_base_is_float;
     /* option-niche: set by the `:non-null` attribute on a pointer-based
      * defopaque -- `(defopaque String :ptr<void> :non-null)`.  A DECLARATION by
      * the type's author that its valid values exclude the null pointer (every
@@ -1931,8 +1937,8 @@ bool         adt_ctor_is_null_none(const struct AdtDef *def,
  * payload types whose valid values exclude 0; see the definition for why
  * `:heap`-ness is not the condition and `Cons` fails it. */
 bool         adt_app_is_niche_option(Type t);
-/* RM3: true when `--enable=regions` is on.  Warns once per compile (TUR-W0060)
- * on first consult; see docs/archive/regions-plan.md. */
+/* RM3: true unless TUR_REGIONS=0 was set when tur ran (the bisection hatch;
+ * see driver/cli.c drv_apply_env_overrides).  docs/archive/regions-plan.md. */
 bool         regions_enabled(void);
 const char  *region_free_fn(void);
 const char  *region_alloc_fn(void);

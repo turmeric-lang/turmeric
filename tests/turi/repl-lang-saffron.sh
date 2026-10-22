@@ -28,7 +28,7 @@
 #      was not asserted at first: every error path in this subcommand reused
 #      `usage_repl()`, which returns 0, so `tur repl --bogus-flag` also exited
 #      0 (cli-usage-error-paths-exit-zero, since fixed: error paths go through
-#      `usage_error`, which exits 2, and the status is asserted here too).
+#      `drv_usage_error`, which exits 2, and the status is asserted here too).
 #
 # Skips cleanly (exit 0) when the binary is missing, like its siblings.
 

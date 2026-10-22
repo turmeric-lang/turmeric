@@ -1,0 +1,2 @@
+usage: tur add-cmake <url> [--ref <ref>] [--opt KEY=VAL]
+[exit 1]

@@ -1,0 +1,50 @@
+#lang saffron
+;; any-widen-of-a-borrowed-local -- a widen COPIES a header; the copy's children
+;; are still the original's, and two owners then free them.
+;;
+;; `(:: inner any)` mallocs a fresh box and copies `inner`'s two words into it.
+;; The box is fresh, so storing it in an `:any` field and letting the field's
+;; owner free it is right.  But the copy's `tl` word still points at the `(Nil)`
+;; box that `inner`'s OWN spine owns -- and since `__tur_any_drop` went deep
+;; (2026-09-14) the field owner's `drop_localowned_` walks straight through the
+;; copy into it.  `inner`'s scope-exit drop then frees the same box a second
+;; time: `free(): double free detected in tcache 2`, on six lines, in both
+;; dialects.
+;;
+;; The localowned drop already had the right frame -- "a local that was moved
+;; into a call, moved during its own initialisation, or explicitly consumed has
+;; handed ownership on, and the new owner's scope frees the spine instead" -- and
+;; a widen is a hand-off that was simply not on the list.  It is now, so `inner`
+;; keeps no drop of its own and `outer` releases the spine exactly once.
+;;
+;; "Stored" is the load-bearing half of the new guard.  A widen in plain ARGUMENT
+;; position hands the box to a callee that reads it and returns; nothing outlives
+;; the call holding it, so the binding's drop is still needed and still correct.
+;; Keying on the widen alone cost `saffron-higher-order` its whole list spine --
+;; back from 13 allocations to 17 -- which is why the guard asks whether the
+;; CONSUMER's result is itself an aggregate carrying drop glue.  `each-len`
+;; below is the argument-position case that must keep its drop.
+;;
+;; requires.leak-check with no `known-leak`: both halves have to hold at once.
+;; Drop twice and ASan aborts; drop never and the spine shows up as leaked.
+
+(defdata Lst [] (Cons [hd : any tl : any]) (Nil))
+
+(defn llen [xs] (match xs (Cons h t) (+ 1 (cast (llen t) int)) (Nil) 0))
+
+(defn drive [i : int n : int] : int
+  (if (= i n)
+    0
+    (let [inner (Cons 1 (Cons 2 (Nil)))
+          ;; STORED: `inner` is widened into an `:any` field `outer` owns.
+          outer (Cons inner (Nil))]
+      (+ (+ (cast (llen inner) int)
+            ;; ARGUMENT position: `inner` is read by a callee that returns an
+            ;; int.  `inner` must keep its own drop, or its spine leaks.
+            (cast (llen outer) int))
+         (drive (+ i 1) n)))))
+
+(defn main [] : int
+  ;; 2 per `inner`, 1 per `outer`, over 300 turns.
+  (println (drive 0 300))
+  0)

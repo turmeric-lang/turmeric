@@ -8,7 +8,8 @@
  * interpreter_natives.h and docs/archive/history/web-repl-repl-inline-c-native-gap.md.
  *
  * The fixture-runner helpers (wk_apply_flags / wk_write_result / wk_drain_pipes
- * / wk_eval_fixture) that fork/pipe stay in src/main.c; only the native
+ * / wk_eval_fixture) that fork/pipe stay in the driver (src/driver/worker.c);
+ * only the native
  * overrides moved here.
  */
 #include "turi/interpreter_natives.h"
@@ -41,6 +42,13 @@
 #include <time.h>
 #include <unistd.h>
 #include <sys/stat.h>
+#include <dirent.h>   /* fs/read-dir, fs/glob natives */
+#ifdef _WIN32
+#include <direct.h>   /* _mkdir, for the fs/mkdir natives */
+#include <shlwapi.h>  /* PathMatchSpecA, fs/glob's wildcard on Windows */
+#else
+#include <fnmatch.h>  /* fs/glob */
+#endif
 #include "../runtime/tur_string.h"
 #include "../runtime/trail.h"   /* SX1: the real trail, shimmed for --interpret */
 #if defined(_WIN32)
@@ -281,6 +289,14 @@ static TuriValue native_ok_val(TuriEnv *env, TuriValue *a, uint32_t n, void *ud)
 static TuriValue native_err_val(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)env; (void)ud;
     if (n < 1) return turi_int(0);
+    return result_field(a[0], 2);
+}
+/* result-panic (stdlib/panic.tur, inline-C there): the Panic handle in a caught
+ * (err ...) result's err slot, or 0 for an ok one.  The slot already holds the
+ * payload pointer the interpreter boxed (eval.c, turi_err_result_box). */
+static TuriValue native_result_panic(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 1 || result_field_int(a[0], 0) != 0) return turi_int(0);
     return result_field(a[0], 2);
 }
 static TuriValue native_result_unwrap_or(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
@@ -5010,6 +5026,7 @@ void wk_register_stdlib_natives(TuriEnv *env) {
     turi_env_register_native(env, "err?",            native_err_pred,        NULL);
     turi_env_register_native(env, "ok-val",          native_ok_val,          NULL);
     turi_env_register_native(env, "err-val",         native_err_val,         NULL);
+    turi_env_register_native(env, "result-panic",    native_result_panic,    NULL);
     turi_env_register_native(env, "result-unwrap",   native_result_unwrap,   NULL);
     turi_env_register_native(env, "result-unwrap-or",native_result_unwrap_or,NULL);
     turi_env_register_native(env, "result-unwrap-err",native_result_unwrap_err,NULL);
@@ -5872,6 +5889,482 @@ static TuriValue native_fs_tmpfile_free(TuriEnv *env, TuriValue *a, uint32_t n, 
 }
 
 /* -------------------------------------------------------------------------
+ * fs-functions-compiled-only: natives for the inline-C bodies of
+ * stdlib/fs.tur (and fs/read-string in fs-string.tur), so a script or a REPL
+ * session can read, write and stat files under --interpret.  Each native
+ * mirrors its compiled body: the same errno in the Err arm, the same
+ * malloc'd cstr the caller hands to fs/free-cstr, the same four-word
+ * StatInfo block, and a (Vec cstr) built through the collection natives so
+ * vec-get / fs/paths-free see an ordinary interpreter Vec.  A Result is the
+ * `Ok` / `Err` struct `(ok x)` / `(err e)` evaluate to (native_ok /
+ * native_err), an IoError the errno it wraps.
+ * ---------------------------------------------------------------------- */
+static TuriValue fs_ok(TuriEnv *env, TuriValue v)  { return native_ok(env, &v, 1, NULL); }
+static TuriValue fs_err(TuriEnv *env, int e)        { TuriValue v = turi_int(e); return native_err(env, &v, 1, NULL); }
+static TuriValue fs_ok_nil(TuriEnv *env)            { return fs_ok(env, turi_nil()); }
+static const char *fs_arg_cstr(TuriValue *a, uint32_t n, uint32_t i) {
+    return (i < n && a[i].tag == TURI_CSTR) ? a[i].as_cstr : NULL;
+}
+
+/* Read a whole stream into a fresh NUL-terminated buffer; *len_out gets the
+ * byte count.  NULL and *err_out set on failure.  Shared by read-text and
+ * read-string, as the compiled bodies share their loop. */
+static char *fs_slurp(FILE *f, size_t *len_out, int *err_out) {
+    size_t cap, len = 0;
+    long size = -1;
+    if (fseek(f, 0, SEEK_END) == 0) size = ftell(f);
+    if (size >= 0) { fseek(f, 0, SEEK_SET); cap = (size_t)size + 1; }
+    else cap = 4096;
+    char *buf = (char *)malloc(cap);
+    if (!buf) { *err_out = ENOMEM; return NULL; }
+    for (;;) {
+        if (cap - len < 2) {
+            char *grown = (char *)realloc(buf, cap * 2);
+            if (!grown) { free(buf); *err_out = ENOMEM; return NULL; }
+            buf = grown; cap *= 2;
+        }
+        size_t got = fread(buf + len, 1, cap - len - 1, f);
+        len += got;
+        if (got == 0) break;
+    }
+    if (ferror(f)) { *err_out = errno ? errno : EIO; free(buf); return NULL; }
+    buf[len] = '\0';
+    *len_out = len;
+    return buf;
+}
+
+static TuriValue native_fs_read_text(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)ud;
+    const char *path = fs_arg_cstr(a, n, 0);
+    if (!path) return fs_err(env, EINVAL);
+    FILE *f = fopen(path, "rb");
+    if (!f) return fs_err(env, errno);
+    size_t len = 0; int e = 0;
+    char *buf = fs_slurp(f, &len, &e);
+    fclose(f);
+    if (!buf) return fs_err(env, e);
+    return fs_ok(env, turi_cstr(buf));
+}
+static TuriValue native_fs_read_string(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)ud;
+    const char *path = fs_arg_cstr(a, n, 0);
+    if (!path) return fs_err(env, EINVAL);
+    FILE *f = fopen(path, "rb");
+    if (!f) return fs_err(env, errno);
+    size_t len = 0; int e = 0;
+    char *buf = fs_slurp(f, &len, &e);
+    fclose(f);
+    if (!buf) return fs_err(env, e);
+    void *str = tur_string_from_bytes(buf, (int64_t)len);
+    free(buf);
+    return fs_ok(env, turi_int((int64_t)(intptr_t)str));
+}
+static TuriValue fs_write_mode(TuriEnv *env, TuriValue *a, uint32_t n, const char *mode) {
+    const char *path = fs_arg_cstr(a, n, 0);
+    const char *content = fs_arg_cstr(a, n, 1);
+    if (!path || !content) return fs_err(env, EINVAL);
+    FILE *f = fopen(path, mode);
+    if (!f) return fs_err(env, errno);
+    size_t len = strlen(content);
+    size_t got = fwrite(content, 1, len, f);
+    int e = (got == len) ? 0 : (errno ? errno : EIO);
+    if (fclose(f) != 0 && !e) e = errno ? errno : EIO;
+    return e ? fs_err(env, e) : fs_ok_nil(env);
+}
+static TuriValue native_fs_write_text(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)ud; return fs_write_mode(env, a, n, "wb");
+}
+static TuriValue native_fs_append_text(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)ud; return fs_write_mode(env, a, n, "ab");
+}
+/* A fresh interpreter Vec holding malloc'd cstrs, the shape fs/paths-free
+ * releases.  `names` are taken over (freed on the error path). */
+static TuriValue fs_vec_of_cstrs(TuriEnv *env, char **names, int64_t count) {
+    TuriValue v = turi_native_vec_new(env);
+    if (v.tag != TURI_INT || !v.as_int) {
+        for (int64_t i = 0; i < count; i++) free(names[i]);
+        free(names);
+        return fs_err(env, ENOMEM);
+    }
+    for (int64_t i = 0; i < count; i++)
+        turi_native_vec_push(env, v, turi_cstr(names[i]));
+    free(names);
+    return fs_ok(env, v);
+}
+static bool fs_names_push(char ***names, int64_t *count, int64_t *cap, char *s) {
+    if (*count == *cap) {
+        int64_t ncap = *cap ? *cap * 2 : 16;
+        char **grown = (char **)realloc(*names, (size_t)ncap * sizeof(char *));
+        if (!grown) return false;
+        *names = grown; *cap = ncap;
+    }
+    (*names)[(*count)++] = s;
+    return true;
+}
+static void fs_names_free(char **names, int64_t count) {
+    for (int64_t i = 0; i < count; i++) free(names[i]);
+    free(names);
+}
+static TuriValue native_fs_read_lines(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)ud;
+    const char *path = fs_arg_cstr(a, n, 0);
+    if (!path) return fs_err(env, EINVAL);
+    FILE *f = fopen(path, "rb");
+    if (!f) return fs_err(env, errno);
+    char **names = NULL; int64_t count = 0, cap = 0;
+    size_t lcap = 256, llen = 0;
+    char *line = (char *)malloc(lcap);
+    int err = line ? 0 : ENOMEM;
+    int c = 0, any = 0;
+    while (!err) {
+        c = fgetc(f);
+        if (c == EOF || c == '\n') {
+            if (c == EOF && !any) break;
+            if (llen > 0 && line[llen - 1] == '\r') llen--;
+            char *s = (char *)malloc(llen + 1);
+            if (!s) { err = ENOMEM; break; }
+            memcpy(s, line, llen);
+            s[llen] = '\0';
+            if (!fs_names_push(&names, &count, &cap, s)) { free(s); err = ENOMEM; break; }
+            llen = 0; any = 0;
+            if (c == EOF) break;
+            continue;
+        }
+        any = 1;
+        if (llen + 1 >= lcap) {
+            char *grown = (char *)realloc(line, lcap * 2);
+            if (!grown) { err = ENOMEM; break; }
+            line = grown; lcap *= 2;
+        }
+        line[llen++] = (char)c;
+    }
+    if (!err && ferror(f)) err = errno ? errno : EIO;
+    free(line);
+    fclose(f);
+    if (err) { fs_names_free(names, count); return fs_err(env, err); }
+    return fs_vec_of_cstrs(env, names, count);
+}
+static int fs_name_cmp(const void *x, const void *y) {
+    return strcmp(*(char *const *)x, *(char *const *)y);
+}
+static TuriValue native_fs_read_dir(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)ud;
+    const char *dir = fs_arg_cstr(a, n, 0);
+    if (!dir) return fs_err(env, EINVAL);
+    DIR *d = opendir(dir);
+    if (!d) return fs_err(env, errno);
+    char **names = NULL; int64_t count = 0, cap = 0;
+    int err = 0;
+    struct dirent *ent;
+    while ((ent = readdir(d))) {
+        if (strcmp(ent->d_name, ".") == 0 || strcmp(ent->d_name, "..") == 0) continue;
+        char *name = strdup(ent->d_name);
+        if (!name || !fs_names_push(&names, &count, &cap, name)) { free(name); err = ENOMEM; break; }
+    }
+    closedir(d);
+    if (err) { fs_names_free(names, count); return fs_err(env, err); }
+    if (count > 1) qsort(names, (size_t)count, sizeof(char *), fs_name_cmp);
+    return fs_vec_of_cstrs(env, names, count);
+}
+static TuriValue native_fs_glob(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)ud;
+    const char *dir = fs_arg_cstr(a, n, 0);
+    const char *pattern = fs_arg_cstr(a, n, 1);
+    if (!dir || !pattern) return fs_err(env, EINVAL);
+    DIR *d = opendir(dir);
+    if (!d) return fs_err(env, errno);
+    char **names = NULL; int64_t count = 0, cap = 0;
+    size_t dlen = strlen(dir);
+    int err = 0;
+    struct dirent *ent;
+    while ((ent = readdir(d))) {
+        if (strcmp(ent->d_name, ".") == 0 || strcmp(ent->d_name, "..") == 0) continue;
+#ifdef _WIN32
+        if (!PathMatchSpecA(ent->d_name, pattern)) continue;
+#else
+        if (fnmatch(pattern, ent->d_name, 0) != 0) continue;
+#endif
+        int sep = (dlen > 0 && dir[dlen - 1] != '/') ? 1 : 0;
+        size_t nlen = strlen(ent->d_name);
+        char *full = (char *)malloc(dlen + (size_t)sep + nlen + 1);
+        if (!full) { err = ENOMEM; break; }
+        memcpy(full, dir, dlen);
+        if (sep) full[dlen] = '/';
+        memcpy(full + dlen + sep, ent->d_name, nlen + 1);
+        if (!fs_names_push(&names, &count, &cap, full)) { free(full); err = ENOMEM; break; }
+    }
+    closedir(d);
+    if (err) { fs_names_free(names, count); return fs_err(env, err); }
+    return fs_vec_of_cstrs(env, names, count);
+}
+/* fs/paths-free: release the cstrs a glob / read-dir / read-lines / walk
+ * minted, then the Vec itself (vec-free, which also untracks it). */
+static TuriValue native_fs_paths_free(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)ud;
+    if (n < 1 || a[0].tag != TURI_INT || !a[0].as_int) return turi_nil();
+    int64_t *v = (int64_t *)(intptr_t)a[0].as_int;
+    int64_t *data = (int64_t *)(intptr_t)v[0];
+    for (int64_t i = 0; i < v[1]; i++) free((void *)(intptr_t)data[i]);
+    v[1] = 0;
+    return turi_native_vec_free(env, a[0]);
+}
+static TuriValue native_fs_path_join(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    const char *dir = fs_arg_cstr(a, n, 0);
+    const char *name = fs_arg_cstr(a, n, 1);
+    if (!dir || !name) return turi_cstr(NULL);
+    size_t dl = strlen(dir), nl = strlen(name);
+    int sep = (dl > 0 && dir[dl - 1] != '/') ? 1 : 0;
+    char *out = (char *)malloc(dl + (size_t)sep + nl + 1);
+    if (!out) return turi_cstr(NULL);
+    memcpy(out, dir, dl);
+    if (sep) out[dl] = '/';
+    memcpy(out + dl + sep, name, nl + 1);
+    return turi_cstr(out);
+}
+static TuriValue native_fs_dup_cstr(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    const char *s = fs_arg_cstr(a, n, 0);
+    return turi_cstr(s ? strdup(s) : NULL);
+}
+/* As cstr-free: in a provenance-tracked env only a string an fs native minted
+ * (OWNED_CSTR) is freed, and forgotten; a literal or a forged word is left
+ * alone rather than handed to free(). */
+static TuriValue native_fs_free_cstr(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)ud;
+    if (n < 1) return turi_nil();
+    void *p = (a[0].tag == TURI_CSTR) ? (void *)a[0].as_cstr
+            : (a[0].tag == TURI_INT)  ? (void *)(intptr_t)a[0].as_int : NULL;
+    if (!p) return turi_nil();
+    if (env->provenance_on) {
+        if (!turi_prov_check(env, TURI_HK_OWNED_CSTR, p)) return turi_nil();
+        turi_prov_forget(env, p);
+    }
+    free(p);
+    return turi_nil();
+}
+/* stat / lstat: the compiled { size mtime mode atime } block. */
+static TuriValue fs_stat_block(TuriEnv *env, const char *path, bool follow) {
+    if (!path) return fs_err(env, EINVAL);
+    struct stat st;
+#ifdef _WIN32
+    (void)follow;
+    if (stat(path, &st) != 0) return fs_err(env, errno);
+#else
+    if ((follow ? stat(path, &st) : lstat(path, &st)) != 0) return fs_err(env, errno);
+#endif
+    int64_t *info = (int64_t *)malloc(4 * sizeof(int64_t));
+    if (!info) return fs_err(env, ENOMEM);
+    info[0] = (int64_t)st.st_size;
+    info[1] = (int64_t)st.st_mtime;
+    info[2] = (int64_t)st.st_mode;
+    info[3] = (int64_t)st.st_atime;
+    return fs_ok(env, turi_int((int64_t)(intptr_t)info));
+}
+static TuriValue native_fs_stat(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)ud; return fs_stat_block(env, fs_arg_cstr(a, n, 0), true);
+}
+static TuriValue native_fs_lstat(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)ud; return fs_stat_block(env, fs_arg_cstr(a, n, 0), false);
+}
+static TuriValue native_fs_stat_free(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n > 0 && a[0].as_int) free((void *)(intptr_t)a[0].as_int);
+    return turi_nil();
+}
+static int64_t fs_stat_word(TuriValue *a, uint32_t n, int i) {
+    if (n < 1 || !a[0].as_int) return 0;
+    return ((int64_t *)(intptr_t)a[0].as_int)[i];
+}
+static TuriValue native_fs_stat_size(TuriEnv *env, TuriValue *a, uint32_t n, void *ud)  { (void)env; (void)ud; return turi_int(fs_stat_word(a, n, 0)); }
+static TuriValue native_fs_stat_mtime(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) { (void)env; (void)ud; return turi_int(fs_stat_word(a, n, 1)); }
+static TuriValue native_fs_stat_mode(TuriEnv *env, TuriValue *a, uint32_t n, void *ud)  { (void)env; (void)ud; return turi_int(fs_stat_word(a, n, 2)); }
+static TuriValue native_fs_stat_atime(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) { (void)env; (void)ud; return turi_int(fs_stat_word(a, n, 3)); }
+/* exists? / file? / dir? / walk-dir? / symlink? */
+static bool fs_stat_path(const char *path, struct stat *st, bool follow) {
+    if (!path) return false;
+#ifdef _WIN32
+    (void)follow;
+    return stat(path, st) == 0;
+#else
+    return (follow ? stat(path, st) : lstat(path, st)) == 0;
+#endif
+}
+static TuriValue native_fs_exists(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud; struct stat st;
+    return turi_bool(fs_stat_path(fs_arg_cstr(a, n, 0), &st, true));
+}
+static TuriValue native_fs_file_p(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud; struct stat st;
+    return turi_bool(fs_stat_path(fs_arg_cstr(a, n, 0), &st, true) && S_ISREG(st.st_mode));
+}
+static TuriValue native_fs_dir_p(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud; struct stat st;
+    return turi_bool(fs_stat_path(fs_arg_cstr(a, n, 0), &st, true) && S_ISDIR(st.st_mode));
+}
+static TuriValue native_fs_walk_dir_p(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud; struct stat st;
+    return turi_bool(fs_stat_path(fs_arg_cstr(a, n, 0), &st, false) && S_ISDIR(st.st_mode));
+}
+static TuriValue native_fs_symlink_p(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+#ifdef _WIN32
+    const char *path = fs_arg_cstr(a, n, 0);
+    if (!path) return turi_bool(false);
+    DWORD at = GetFileAttributesA(path);
+    return turi_bool(at != INVALID_FILE_ATTRIBUTES && (at & FILE_ATTRIBUTE_REPARSE_POINT) != 0);
+#else
+    struct stat st;
+    return turi_bool(fs_stat_path(fs_arg_cstr(a, n, 0), &st, false) && S_ISLNK(st.st_mode));
+#endif
+}
+/* The (Result nil IoError) one-liners over a path or a pair of paths. */
+static TuriValue fs_rc(TuriEnv *env, int rc) { return rc == 0 ? fs_ok_nil(env) : fs_err(env, errno); }
+static int fs_mkdir_one(const char *p) {
+#ifdef _WIN32
+    return _mkdir(p);
+#else
+    return mkdir(p, 0755);
+#endif
+}
+static TuriValue native_fs_mkdir(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)ud;
+    const char *path = fs_arg_cstr(a, n, 0);
+    if (!path) return fs_err(env, EINVAL);
+    return fs_rc(env, fs_mkdir_one(path));
+}
+static TuriValue native_fs_mkdirp(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)ud;
+    const char *path = fs_arg_cstr(a, n, 0);
+    if (!path) return fs_err(env, EINVAL);
+    char *p = strdup(path);
+    if (!p) return fs_err(env, ENOMEM);
+    int err = 0;
+    for (char *s = p + 1; *s; s++) {
+        if (*s == '/') {
+            *s = '\0';
+            if (fs_mkdir_one(p) != 0 && errno != EEXIST) { err = errno; break; }
+            *s = '/';
+        }
+    }
+    if (err == 0 && fs_mkdir_one(p) != 0 && errno != EEXIST) err = errno;
+    free(p);
+    return err == 0 ? fs_ok_nil(env) : fs_err(env, err);
+}
+static TuriValue native_fs_rmdir(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)ud;
+    const char *path = fs_arg_cstr(a, n, 0);
+    if (!path) return fs_err(env, EINVAL);
+    return fs_rc(env, rmdir(path));
+}
+static TuriValue native_fs_rm(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)ud;
+    const char *path = fs_arg_cstr(a, n, 0);
+    if (!path) return fs_err(env, EINVAL);
+    return fs_rc(env, unlink(path));
+}
+static TuriValue native_fs_rename(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)ud;
+    const char *src = fs_arg_cstr(a, n, 0), *dst = fs_arg_cstr(a, n, 1);
+    if (!src || !dst) return fs_err(env, EINVAL);
+    return fs_rc(env, rename(src, dst));
+}
+static TuriValue native_fs_copy(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)ud;
+    const char *src = fs_arg_cstr(a, n, 0), *dst = fs_arg_cstr(a, n, 1);
+    if (!src || !dst) return fs_err(env, EINVAL);
+    FILE *in = fopen(src, "rb");
+    if (!in) return fs_err(env, errno);
+    FILE *out = fopen(dst, "wb");
+    if (!out) { int e = errno; fclose(in); return fs_err(env, e); }
+    char buf[8192];
+    size_t got;
+    int err = 0;
+    while ((got = fread(buf, 1, sizeof(buf), in)) > 0) {
+        if (fwrite(buf, 1, got, out) != got) { err = errno ? errno : EIO; break; }
+    }
+    if (!err && ferror(in)) err = errno ? errno : EIO;
+    fclose(in);
+    if (fclose(out) != 0 && !err) err = errno ? errno : EIO;
+    return err ? fs_err(env, err) : fs_ok_nil(env);
+}
+static TuriValue native_fs_chmod(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)ud;
+    const char *path = fs_arg_cstr(a, n, 0);
+    if (!path || n < 2) return fs_err(env, EINVAL);
+    int64_t mode = a[1].as_int;
+#ifdef _WIN32
+    int wmode = _S_IREAD | ((mode & 0200) ? _S_IWRITE : 0);
+    return fs_rc(env, _chmod(path, wmode));
+#else
+    return fs_rc(env, chmod(path, (mode_t)mode));
+#endif
+}
+static TuriValue native_fs_symlink(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)ud;
+    const char *target = fs_arg_cstr(a, n, 0), *link_path = fs_arg_cstr(a, n, 1);
+    if (!target || !link_path) return fs_err(env, EINVAL);
+#ifdef _WIN32
+    DWORD at = GetFileAttributesA(target);
+    DWORD flags = (at != INVALID_FILE_ATTRIBUTES && (at & FILE_ATTRIBUTE_DIRECTORY)) ? 0x1 : 0x0;
+    if (CreateSymbolicLinkA(link_path, target, flags | 0x2)) return fs_ok_nil(env);
+    DWORD w = GetLastError();
+    if (w == ERROR_INVALID_PARAMETER && CreateSymbolicLinkA(link_path, target, flags))
+        return fs_ok_nil(env);
+    if (w == ERROR_INVALID_PARAMETER) w = GetLastError();
+    if (w == ERROR_ALREADY_EXISTS || w == ERROR_FILE_EXISTS) return fs_err(env, EEXIST);
+    if (w == ERROR_PATH_NOT_FOUND) return fs_err(env, ENOENT);
+    return fs_err(env, EPERM);
+#else
+    return fs_rc(env, symlink(target, link_path));
+#endif
+}
+static TuriValue native_fs_readlink(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)ud;
+    const char *path = fs_arg_cstr(a, n, 0);
+    if (!path) return fs_err(env, EINVAL);
+#ifdef _WIN32
+    return fs_err(env, ENOSYS);
+#else
+    size_t cap = 256;
+    for (;;) {
+        char *buf = (char *)malloc(cap);
+        if (!buf) return fs_err(env, ENOMEM);
+        ssize_t got = readlink(path, buf, cap);
+        if (got < 0) { int e = errno; free(buf); return fs_err(env, e); }
+        if ((size_t)got < cap) { buf[got] = '\0'; return fs_ok(env, turi_cstr(buf)); }
+        free(buf);
+        cap *= 2;
+    }
+#endif
+}
+static TuriValue native_fs_realpath(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)ud;
+    const char *path = fs_arg_cstr(a, n, 0);
+    if (!path) return fs_err(env, EINVAL);
+#ifdef _WIN32
+    if (GetFileAttributesA(path) == INVALID_FILE_ATTRIBUTES) return fs_err(env, ENOENT);
+    char *out = _fullpath(NULL, path, 0);
+    if (!out) return fs_err(env, errno ? errno : ENOMEM);
+    return fs_ok(env, turi_cstr(out));
+#else
+    char *out = realpath(path, NULL);
+    if (!out) return fs_err(env, errno);
+    return fs_ok(env, turi_cstr(out));
+#endif
+}
+static TuriValue native_fs_file_dev(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud; struct stat st;
+    if (!fs_stat_path(fs_arg_cstr(a, n, 0), &st, true)) return turi_int(-1);
+    return turi_int((int64_t)st.st_dev);
+}
+static TuriValue native_fs_file_ino(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud; struct stat st;
+    if (!fs_stat_path(fs_arg_cstr(a, n, 0), &st, true)) return turi_int(-1);
+    return turi_int((int64_t)st.st_ino);
+}
+
+/* -------------------------------------------------------------------------
  * R3 (turi-interpret-flip-residual-plan): backtrack.tur cons-stream monad.
  *
  * A Backtrack value is a linked list of results -- malloc'd { int64 value;
@@ -6155,6 +6648,43 @@ static void wk_register_proc_fs_natives(TuriEnv *env) {
     turi_env_register_native(env, "fs/tmpfile-path",  native_fs_tmpfile_path,   NULL);
     turi_env_register_native(env, "fs/tmpfile-fd",    native_fs_tmpfile_fd,     NULL);
     turi_env_register_native(env, "fs/tmpfile-free",  native_fs_tmpfile_free,   NULL);
+    /* fs-functions-compiled-only: the rest of stdlib/fs.tur, plus
+     * fs/read-string (fs-string.tur). */
+    turi_env_register_native(env, "fs/read-text",     native_fs_read_text,      NULL);
+    turi_env_register_native(env, "fs/read-string",   native_fs_read_string,    NULL);
+    turi_env_register_native(env, "fs/write-text",    native_fs_write_text,     NULL);
+    turi_env_register_native(env, "fs/append-text",   native_fs_append_text,    NULL);
+    turi_env_register_native(env, "fs/read-lines",    native_fs_read_lines,     NULL);
+    turi_env_register_native(env, "fs/read-dir",      native_fs_read_dir,       NULL);
+    turi_env_register_native(env, "fs/glob",          native_fs_glob,           NULL);
+    turi_env_register_native(env, "fs/paths-free",    native_fs_paths_free,     NULL);
+    turi_env_register_native(env, "fs/path-join",     native_fs_path_join,      NULL);
+    turi_env_register_native(env, "fs/dup-cstr",      native_fs_dup_cstr,       NULL);
+    turi_env_register_native(env, "fs/free-cstr",     native_fs_free_cstr,      NULL);
+    turi_env_register_native(env, "fs/stat",          native_fs_stat,           NULL);
+    turi_env_register_native(env, "fs/lstat",         native_fs_lstat,          NULL);
+    turi_env_register_native(env, "fs/stat-free",     native_fs_stat_free,      NULL);
+    turi_env_register_native(env, "fs/stat-size",     native_fs_stat_size,      NULL);
+    turi_env_register_native(env, "fs/stat-mtime",    native_fs_stat_mtime,     NULL);
+    turi_env_register_native(env, "fs/stat-mode",     native_fs_stat_mode,      NULL);
+    turi_env_register_native(env, "fs/stat-atime",    native_fs_stat_atime,     NULL);
+    turi_env_register_native(env, "fs/exists?",       native_fs_exists,         NULL);
+    turi_env_register_native(env, "fs/file?",         native_fs_file_p,         NULL);
+    turi_env_register_native(env, "fs/dir?",          native_fs_dir_p,          NULL);
+    turi_env_register_native(env, "fs/walk-dir?",     native_fs_walk_dir_p,     NULL);
+    turi_env_register_native(env, "fs/symlink?",      native_fs_symlink_p,      NULL);
+    turi_env_register_native(env, "fs/mkdir",         native_fs_mkdir,          NULL);
+    turi_env_register_native(env, "fs/mkdirp",        native_fs_mkdirp,         NULL);
+    turi_env_register_native(env, "fs/rmdir",         native_fs_rmdir,          NULL);
+    turi_env_register_native(env, "fs/rm",            native_fs_rm,             NULL);
+    turi_env_register_native(env, "fs/rename",        native_fs_rename,         NULL);
+    turi_env_register_native(env, "fs/copy",          native_fs_copy,           NULL);
+    turi_env_register_native(env, "fs/chmod",         native_fs_chmod,          NULL);
+    turi_env_register_native(env, "fs/symlink",       native_fs_symlink,        NULL);
+    turi_env_register_native(env, "fs/readlink",      native_fs_readlink,       NULL);
+    turi_env_register_native(env, "fs/realpath",      native_fs_realpath,       NULL);
+    turi_env_register_native(env, "fs/file-dev",      native_fs_file_dev,       NULL);
+    turi_env_register_native(env, "fs/file-ino",      native_fs_file_ino,       NULL);
 }
 
 /* -------------------------------------------------------------------------

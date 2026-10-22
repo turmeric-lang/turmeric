@@ -1,0 +1,9 @@
+;; refine-top-level-def-not-a-fact: the global's equation is asserted only
+;; where its name resolves to the global.  `f`'s parameter `n` shadows it, so
+;; the crossing has no fact about `n` and stays unproved (an error under
+;; --strict-refine) -- asserting `n = 5` here would prove a call that panics
+;; for `(f -3)`.
+(def n 5)
+(defn needs-pos [x : #refine{ v : int | (> v 0) }] : int x)
+(defn f [n : int] : int (needs-pos n))
+(defn main [] : int (println (f -3)) 0)

@@ -725,10 +725,24 @@ static TuriValue native_error_message(TuriEnv *env, TuriValue *args, uint32_t n,
     return turi_cstr(args[0].as_error ? args[0].as_error : "");
 }
 
+/* stdlib/panic.tur's accessors (defined beside TuriPanicPayload below). */
+static TuriValue native_panic_message(TuriEnv *env, TuriValue *args, uint32_t n, void *ud);
+static TuriValue native_panic_file(TuriEnv *env, TuriValue *args, uint32_t n, void *ud);
+static TuriValue native_panic_line(TuriEnv *env, TuriValue *args, uint32_t n, void *ud);
+static TuriValue native_panic_type(TuriEnv *env, TuriValue *args, uint32_t n, void *ud);
+
 /* Register eval-layer native builtins (struct-aware predicates, etc.).
  * Called from turi_env_new after async builtins are registered. */
 void turi_eval_register_builtins(TuriEnv *env) {
     turi_env_register_native(env, "panic?", native_panic_pred, NULL);
+    /* panic-forms-gaps 5: stdlib/panic.tur's accessors are inline-C over the
+     * compiled runtime's tur_panic_payload, which the interpreter cannot run,
+     * so they answered nil -- panic-payload-type 0, file "", line 0 for a
+     * caught panic.  These read the TuriPanicPayload the interpreter boxes. */
+    turi_env_register_native(env, "panic-message", native_panic_message, NULL);
+    turi_env_register_native(env, "panic-file",    native_panic_file,    NULL);
+    turi_env_register_native(env, "panic-line",    native_panic_line,    NULL);
+    turi_env_register_native(env, "panic-type",    native_panic_type,    NULL);
     /* workflow.tur serial-continuation wrappers (inline-C in stdlib; the
      * interpreter cannot run the inline-C body, so override with natives over
      * the cont machinery). */
@@ -818,6 +832,27 @@ static TuriValue native_nil_stub(TuriEnv *env, TuriValue *args, uint32_t n,
                                   void *ud) {
     (void)env; (void)args; (void)n; (void)ud;
     return turi_nil();
+}
+
+/* An extern-c declaration the interpreter has no implementation for.  It
+ * used to be the nil stub above, so a misspelt C name answered 0 and the
+ * program carried on; compiled, the same program is a link error.  The
+ * declaration itself stays legal (an unused one links fine compiled too), and
+ * the CALL fails, naming the symbol and why.  `ud` is a malloc'd message the
+ * env frees at teardown. */
+static TuriValue native_extern_unavailable(TuriEnv *env, TuriValue *args,
+                                           uint32_t n, void *ud) {
+    (void)env; (void)args; (void)n;
+    return turi_errorf("%s", (const char *)ud);
+}
+
+static void register_extern_c_unavailable(TuriEnv *env, const char *fname,
+                                          const char *c_name, const char *why) {
+    size_t need = strlen(c_name) + strlen(why) + 64;
+    char *msg = (char *)malloc(need);
+    if (!msg) { turi_env_register_native(env, fname, native_nil_stub, NULL); return; }
+    snprintf(msg, need, "extern-c '%s': %s", c_name, why);
+    turi_env_register_native_ex(env, fname, native_extern_unavailable, msg, free);
 }
 
 /* Native stubs for well-known libc functions declared via extern-c. */
@@ -1262,6 +1297,7 @@ static void register_extern_c_binding(TuriEnv *env, const ExternC *ec,
                                       const char *fname) {
     if (register_extern_c_known(env, fname)) return;
 
+    const char *c_name = (ec && ec->c_name) ? ec->c_name->name : fname;
     const TurJitFfiProvider *jp = tur_jit_ffi_provider();
     if (jp && ec && !ec->is_variadic) {
         /* F4 follow-on: a signature with a by-value aggregate slot takes
@@ -1271,7 +1307,9 @@ static void register_extern_c_binding(TuriEnv *env, const ExternC *ec,
             if (extern_slot_agg_def(ec->param_types[i])) any_agg = true;
         if (any_agg) {
             if (register_extern_c_agg(env, ec, fname) == 0) return;
-            turi_env_register_native(env, fname, native_nil_stub, NULL);
+            register_extern_c_unavailable(env, fname, c_name,
+                "the interpreter cannot call it -- no C symbol of that name in "
+                "this process, or a by-value aggregate its FFI cannot lay out");
             return;
         }
         /* Classify the declared signature.  A '?' anywhere (ADT, carrier)
@@ -1292,8 +1330,7 @@ static void register_extern_c_binding(TuriEnv *env, const ExternC *ec,
          * (ENABLE_EXPORTS) plus anything dlopened RTLD_GLOBAL.  A symbol
          * from a lib the process never linked needs an explicit dlopen (or
          * jit autolink) first -- documented resolution order. */
-        void *fn = ok ? jp->resolve(ec->c_name ? ec->c_name->name : fname)
-                      : NULL;
+        void *fn = ok ? jp->resolve(c_name) : NULL;
         if (fn) {
             int rc = tur_ffi_register_extern_thunk(env, fname, fn, ret,
                                                    classes, n);
@@ -1301,6 +1338,13 @@ static void register_extern_c_binding(TuriEnv *env, const ExternC *ec,
             if (rc == 0) return;
         } else if (classes != inl) {
             free(classes);
+        }
+        if (ok && !fn) {
+            register_extern_c_unavailable(env, fname, c_name,
+                "no C symbol of that name in this process -- check the "
+                "spelling, or dlopen the library that defines it first "
+                "(compiled, this is a link error)");
+            return;
         }
     }
 
@@ -1976,7 +2020,7 @@ static TuriValue turi_default_of(TuriEnv *env, const Type *t) {
 }
 
 /* W1b: see eval.h.  Read field idx of a struct value (TuriStruct is opaque to
- * main.c, so the Result/Option native shims call this to accept a make-struct
+ * interpreter_natives.c, so the Result/Option native shims call this to accept a make-struct
  * value as well as their native int64 box). */
 TuriValue turi_struct_field(TuriValue v, uint32_t idx, bool *found) {
     if (v.tag == TURI_STRUCT && v.as_struct && idx < v.as_struct->n_fields) {
@@ -3445,6 +3489,12 @@ void turi_runtime_panic(TuriEnv *env, const char *msg) {
     TuriCatchBoundary *cb = g_catch_stack;
     if (cb && !env->in_no_unwind) {
         panic_fill_cstr_payload(env, s);
+        /* The payload records where the panic was raised, as the compiled
+         * runtime's does (file base name and line): it was NULL / 0. */
+        if (panic_site_base(site)) {
+            env->catch_panic_file = panic_site_base(site);
+            env->catch_panic_line = (int)site.line;
+        }
         env->panicking = true;
         if (cb->is_driver)
             return;                 /* raise signal; the driver unwinds to DK_CATCH_UNWIND */
@@ -3488,6 +3538,36 @@ typedef struct TuriPanicPayload {
     int         line;       /* source line, or 0 */
 } TuriPanicPayload;
 
+/* The Panic handle stdlib/panic.tur's accessors take is the payload pointer in
+ * a TURI_INT (result-panic reads it out of the err slot).  With provenance on
+ * the dispatcher has already checked it is a minted TURI_HK_PANIC handle
+ * (native_caps.c); a null handle is the `ok` result's, and reads as "none". */
+static TuriPanicPayload *panic_handle_arg(TuriValue *args, uint32_t n) {
+    if (n < 1 || args[0].tag != TURI_INT || !args[0].as_int) return NULL;
+    return (TuriPanicPayload *)(intptr_t)args[0].as_int;
+}
+static TuriValue native_panic_message(TuriEnv *env, TuriValue *args, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    TuriPanicPayload *pp = panic_handle_arg(args, n);
+    if (pp && pp->value.tag == TURI_CSTR && pp->value.as_cstr) return pp->value;
+    return turi_cstr("");
+}
+static TuriValue native_panic_file(TuriEnv *env, TuriValue *args, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    TuriPanicPayload *pp = panic_handle_arg(args, n);
+    return turi_cstr(pp && pp->file ? pp->file : "");
+}
+static TuriValue native_panic_line(TuriEnv *env, TuriValue *args, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    TuriPanicPayload *pp = panic_handle_arg(args, n);
+    return turi_int(pp ? pp->line : 0);
+}
+static TuriValue native_panic_type(TuriEnv *env, TuriValue *args, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    TuriPanicPayload *pp = panic_handle_arg(args, n);
+    return turi_int(pp ? pp->type_tag : 0);
+}
+
 /* Build the Result the native ok/err helpers also build, in its Ok shape.
  *
  * turi-catch-unwind-aggregate-payload: this used to take a bare `int64_t` and
@@ -3522,6 +3602,10 @@ static TuriValue turi_err_result_box(TuriEnv *env) {
     TuriPanicPayload *pp = (TuriPanicPayload *)turi_val_alloc(env, sizeof(TuriPanicPayload));
     pp->type_tag = env->catch_panic_type;
     pp->value    = env->catch_panic_value;
+    /* A plain panic's value is a cstr pointing into env->catch_panic_msg, the
+     * one buffer every later panic overwrites: keep the caught message. */
+    if (pp->value.tag == TURI_CSTR && pp->value.as_cstr)
+        pp->value = turi_cstr(turi_val_strdup(env, pp->value.as_cstr));
     pp->file     = env->catch_panic_file
                    ? turi_val_strdup(env, env->catch_panic_file) : NULL;
     pp->line     = env->catch_panic_line;
@@ -4013,6 +4097,12 @@ static TuriValue eval_handle(TuriEnv *env, EvalFrame *frame,
     hf.prev            = (TuriHandlerFrame *)env->handler_stack;
     env->handler_stack = &hf;
 
+    /* turi-fiber-handle-defers-fire-at-the-wrong-time: the body pushes its
+     * `defer`s onto the shared env chain while it runs on its fiber.  Mark
+     * the chain here so a case that ABANDONS the body can fire exactly the
+     * body's pending defers when it returns (below). */
+    DeferItem *body_defer_mark = (DeferItem *)env->defer_stack;
+
     /* Switch to body; saves current context into handler_ctx. */
     swapcontext(&cont->handler_ctx, &cont->body_ctx);
 #if !defined(__EMSCRIPTEN__) && defined(__APPLE__)
@@ -4029,6 +4119,18 @@ static TuriValue eval_handle(TuriEnv *env, EvalFrame *frame,
     } else {
         /* Body performed an effect; dispatch handler case. */
         result = eval_handle_inner(env, frame, h, cont);
+        /* The case returned with the body still suspended and no case able
+         * to keep `k`: the body's frames are abandoned for good, so their
+         * pending defers run now, innermost scope first -- when the case
+         * returns, before the handle's value is used -- as the compiled DK
+         * runtime fires them (cps-defer-skipped-on-abortive-effect).  They
+         * used to stay on the chain and fire at the next enclosing scope
+         * exit, after everything the handle's continuation printed.  A case
+         * that may keep `k` is left alone: its defers belong to a later
+         * resume, which is the half of the report still open. */
+        if (!cont->done && !k_may_escape &&
+            env->defer_stack != (void *)body_defer_mark)
+            fire_defers_to_mark_by_scope(env, body_defer_mark, frame);
     }
 
     /* A case that may have kept `k` keeps the cont: it can be resumed after
@@ -5238,6 +5340,34 @@ static bool is_blocked_builtin(TuriCaps caps, BuiltinShape shape) {
     }
 }
 
+/* transmute / reinterpret: copy `v`'s bits into the builtin's result type, as
+ * the compiled union does.  Every float kind is held as a double here, so a
+ * float32 is narrowed before its 32 bits are read (and widened after). */
+static TuriValue turi_bitcast_builtin(const Expr *be, TuriValue v) {
+    TypeKind src = be->as.builtin.args[0]->type.kind;
+    TypeKind dst = be->type.kind;
+    bool dst_f = dst == TY_FLOAT || dst == TY_FLOAT64 || dst == TY_FLOAT32;
+    if (v.tag == TURI_FLOAT && !dst_f) {
+        if (src == TY_FLOAT32) {
+            float f = (float)v.as_float; int32_t i;
+            memcpy(&i, &f, sizeof i);
+            return turi_int(i);
+        }
+        int64_t i; memcpy(&i, &v.as_float, sizeof i);
+        return turi_int(i);
+    }
+    if (dst_f && (v.tag == TURI_INT || v.tag == TURI_BOOL)) {
+        if (dst == TY_FLOAT32) {
+            uint32_t bits = (uint32_t)v.as_int; float f;
+            memcpy(&f, &bits, sizeof f);
+            return turi_float((double)f);
+        }
+        double d; memcpy(&d, &v.as_int, sizeof d);
+        return turi_float(d);
+    }
+    return v;
+}
+
 static TuriValue eval_builtin(TuriEnv *env, const BuiltinSpec *spec,
                                TuriValue *args, uint32_t n) {
     BuiltinShape shape = spec->shape;
@@ -5388,6 +5518,11 @@ static TuriValue eval_builtin(TuriEnv *env, const BuiltinSpec *spec,
 
     case BS_PREFIX_UNARY: {
         const char *op = spec->c_op;
+        /* ptr-null? shares `not`'s c_op "!", but its operand is a pointer
+         * word: reading its low byte as a bool answered `true` for most
+         * live blocks (unsafe-builtins-wrong-or-engine-dependent). */
+        if (spec->name && strcmp(spec->name, "ptr-null?") == 0)
+            return turi_bool(args[0].as_int == 0);
         if (op && strcmp(op, "!") == 0) return turi_bool(!args[0].as_bool);
         if (op && strcmp(op, "&") == 0) {
             /* ptr-of: emulate &var by boxing the value into a pool cell that
@@ -5401,9 +5536,17 @@ static TuriValue eval_builtin(TuriEnv *env, const BuiltinSpec *spec,
     }
 
     case BS_UNSAFE_CAST:
+        /* `(int64_t)x`, converted as the compiled cast converts: a float
+         * truncates, a bool is 0 or 1. */
+        if (args[0].tag == TURI_FLOAT) return turi_int((int64_t)args[0].as_float);
+        if (args[0].tag == TURI_BOOL)  return turi_int(args[0].as_bool ? 1 : 0);
+        if (args[0].tag == TURI_NIL)   return turi_int(0);
+        return turi_int(args[0].as_int);
+
     case BS_REINTERPRET:
     case BS_TRANSMUTE:
-        /* All three are C-style casts; in the interpreter, pass the value through. */
+        /* A bit copy into the result type, which this function does not see:
+         * the DK_BUILTIN_ARG driver applies turi_bitcast_builtin to this. */
         return args[0];
 
     case BS_PREFIX_UNARY_FREE:
@@ -5517,6 +5660,13 @@ static TuriValue eval_builtin(TuriEnv *env, const BuiltinSpec *spec,
         void *p = (void *)(intptr_t)args[0].as_int;
         if (p) free(p);
         return turi_nil();
+    }
+    case BS_RAW_REALLOC: {
+        void   *p  = (void *)(intptr_t)args[0].as_int;
+        int64_t sz = args[1].as_int;
+        void   *q  = realloc(p, (size_t)(sz > 0 ? sz : 0));
+        TuriValue v = {0}; v.tag = TURI_INT; v.as_int = (int64_t)(intptr_t)q;
+        return v;
     }
     case BS_PTR_DEREF: {
         int64_t *p = (int64_t *)(intptr_t)args[0].as_int;
@@ -11579,6 +11729,9 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                     have_apply = true;   /* result returns to this DK_CONT_FOLD */
                 } else {
                     cur = eval_builtin(env, spec, acc, n);
+                    if ((spec->shape == BS_TRANSMUTE || spec->shape == BS_REINTERPRET) &&
+                        !turi_is_error(cur))
+                        cur = turi_bitcast_builtin(be, cur);
                     TURI_DRIVE_FREE_OWN(acc_epoch, acc, acc_own); len--;
                 }
                 break;
@@ -12718,7 +12871,7 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
          * int64 carrier.  Interning by name guarantees pointer identity for
          * identical names (so Eq[Sym]/Hash[Sym] -- pointer identity -- and the
          * str->sym round-trip all agree with the literal), and the native sym ops
-         * (native_sym_to_str/_eq/_hash in main.c, registered as overrides for the
+         * (native_sym_to_str/_eq/_hash in interpreter_natives.c, registered as overrides for the
          * inline-C sym.tur bodies the tree-walker cannot run) read this Symbol*. */
         const Symbol *s = e->as.sym_lit_.sym;
         const Symbol *isym = s;
@@ -13784,7 +13937,7 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
             env->catch_panic_msg[sizeof(env->catch_panic_msg) - 1] = '\0';
             env->catch_panic_type  = e->as.panic_with_.payload->type.kind;
             env->catch_panic_value = pv;
-            env->catch_panic_file  = NULL;
+            env->catch_panic_file  = panic_site_base(e->span);
             env->catch_panic_line  = (int)e->span.line;
             env->panicking = true;
             if (cb->is_driver) return pv;   /* raise signal; driver unwinds */
@@ -13917,7 +14070,11 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
                 longjmp(*outer->jmp, 1);
             }
             host_exit_unwind(env, NULL);
-            fprintf(stderr, "panic at\npanic: %s\n", env->catch_panic_msg);
+            if (env->catch_panic_file)
+                fprintf(stderr, "panic at %s:%d: %s\n", env->catch_panic_file,
+                        env->catch_panic_line, env->catch_panic_msg);
+            else
+                fprintf(stderr, "panic at\npanic: %s\n", env->catch_panic_msg);
             fflush(stderr);
             fire_defers_to_mark_by_scope(env, NULL, NULL);
             fflush(stdout);
@@ -17218,7 +17375,7 @@ static TuriValue turi_eval_impl(TuriEnv *env, const char *src, const char *path,
         if (rest != src_body) {
             /* A #lang directive was found.  Reject an unknown / not-yet-
              * implemented reader the same way the compiled entry points do
-             * (src/main.c detect_and_adjust_lang) instead of silently running
+             * (the driver's detect_and_adjust_lang) instead of silently running
              * the program under the default reader -- otherwise `#lang foo`
              * would just execute as plain Turmeric under --interpret. */
             if (detected == READER_UNKNOWN && bad) {
@@ -17487,8 +17644,8 @@ static TuriValue turi_eval_impl(TuriEnv *env, const char *src, const char *path,
      * and reported TUR-E0009 against a callee whose row (resolved on its own
      * turn) still carried Bt.  Registration is idempotent, so re-scanning a
      * turn's defeffects into the shared env is harmless.  The builtin
-     * `Unsafe` is registered as the compiled pipeline does (PASS_EFFECT_LOWER
-     * in main.c), for the same parity reason. */
+     * `Unsafe` is registered as the compiled pipeline does (PASS_EFFECT_ENV
+     * in run_core_pass), for the same parity reason. */
     int eff_rc = 0;
     {
         EffectEnv *eff_env = (EffectEnv *)env->effect_env;
@@ -17510,7 +17667,7 @@ static TuriValue turi_eval_impl(TuriEnv *env, const char *src, const char *path,
     }
 
     /* 6c. Run the always-on lifetime pass (elision + outlives-cycle check).
-     * The compiled pipeline runs this in PASS_BORROW_CHECK (src/main.c); the
+     * The compiled pipeline runs this in PASS_BORROW_CHECK (run_core_pass); the
      * interpreter shares the elaborator but not the later passes, so a cyclic
      * explicit signature (&'a &'b / &'b &'a) was previously accepted under
      * --interpret.  lifetime_check_program only emits TUR-E0106 on a genuine
@@ -17723,7 +17880,8 @@ TuriValue turi_call(TuriEnv *env, TuriValue fn, TuriValue *args, uint32_t n_args
     return eval_apply(env, fn.as_closure, args, n_args);
 }
 
-/* SEQ (stdlib/seq): public bridges so the seq inline-C natives in main.c can
+/* SEQ (stdlib/seq): public bridges so the seq inline-C natives in
+ * interpreter_natives.c can
  * drive an interpreter generator (TuriGen is defined in this file).  `gen` is a
  * generator value (the int64 carrier holds the TuriGen*); advance it one step,
  * setting *done to 1 if it just ran off its end (no value yielded). */

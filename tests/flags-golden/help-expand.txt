@@ -1,0 +1,12 @@
+usage:
+  tur expand [-I <dir>...] [--no-auto-spice] [--no-auto-stdlib] <file.tur>
+                                       elaborate the file and print each macro
+                                       expansion to stdout as it happens
+
+Each expansion prints as a `;; <macro-name> @ <line>:<col>` header (the
+call site) followed by the expanded form.  Nested expansions print too,
+inner-first, in elaboration order.  Diagnostics still go to stderr, so
+stdout is suitable for golden-file comparison.
+
+flags: same as `tur check` (see `tur check --help`)
+[exit 0]

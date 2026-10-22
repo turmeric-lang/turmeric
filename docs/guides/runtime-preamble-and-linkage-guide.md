@@ -23,14 +23,11 @@ User-facing knobs (`--runtime=`, `TUR_RUNTIME`, `TUR_PREAMBLE_SPLIT`) are
 described in the [tur compile / link guide](tur-compile-link-guide.md#tur-build---runtime----how-the-runtime-gets-linked).
 This guide is the mechanism underneath them.
 
-> **Trust the code over the comments.** Several comments in this area predate
-> later fixes. For example, `rt_split_embed.h` and `cmd_jit` say a missing
-> runtime archive changes the canonical text and disengages the split. It no
-> longer does: `emit_rt_split_source` forces the archive posture itself. Where a
-> comment and this guide disagree, read the code. If the code disagrees with
-> this guide, fix the guide.
-> The stale comments found so far in this area, each with a fix, are
-> listed in [stale-comments-runtime-preamble](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/stale-comments-runtime-preamble.md).
+> **Trust the code over the comments.** Where a comment and this guide
+> disagree, read the code. If the code disagrees with this guide, fix the
+> guide. The comments that said a missing runtime archive disengages the
+> split were corrected on 2026-10-21
+> ([stale-comments-runtime-preamble](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/stale-comments-runtime-preamble.md)).
 
 **"Split" means four different things in this codebase.** This guide is about
 the first one.
@@ -99,7 +96,7 @@ the first one.
 | `src/runtime/tur_tls.c` | Host-resident thread-local storage, plus an accessor per slot |
 | `src/runtime/tur_atomics.c` | Host-resident atomics for front ends without `__atomic_*` (c2mir) |
 | `src/async/tur_sjlj_x64_win.S` | A setjmp/longjmp pair that unwinds nothing, for win64 |
-| `src/main.c` | `resolve_rcgc_from_archive`, `locate_runtime_lib`, `apply_runtime_lib_mode`, `preamble_split_auto_applies`, `jit_try_split_preamble`, `cmd_emit_rt_split`, the `--runtime=` / `TUR_RUNTIME` parsing |
+| `src/driver/` | `resolve_rcgc_from_archive` and `preamble_split_auto_applies` (`pipeline.c`), `locate_runtime_lib` and `apply_runtime_lib_mode` (`cc.c`), `jit_try_split_preamble` and `cmd_emit_rt_split` (`preamble_split.c`), the `--runtime=` parsing (`cmd_build.c`, `compile_link.c`) and `TUR_RUNTIME` (`cli.c:drv_apply_env_overrides`) |
 | `src/CMakeLists.txt` | `tur_core` (all runtime TUs, including `tur_rt_split.c`), `turt_runtime` (`TURT_RUNTIME_SOURCES`), `turt_preamble` |
 | `tools/gc-copy-diff.py` | Diffs the emitted rc/GC replica against `src/runtime/{rc,gc,rc_free_queue}.c` |
 | `docs/upcoming/cc-path-preamble-split-plan.md` | Open plan: the split on the cc path (default on Linux and Windows; macOS left) |
@@ -230,7 +227,7 @@ definitions are left out, and the program links `libturt_runtime.a` instead:
 - `emit_rcgc_prototypes` spells the allocator's `value_type` parameter as
   `uint8_t` to match `rc.c`. The replica spells it `int`.
 
-`resolve_rcgc_from_archive` (`src/main.c`) chooses the archive posture before
+`resolve_rcgc_from_archive` (`src/driver/pipeline.c`) chooses the archive posture before
 emission. The checks run in this order, and the first that applies wins:
 
 1. `TUR_RCGC_FROM_ARCHIVE=0` -> replica.
@@ -567,8 +564,9 @@ platform, and only CI's probes notice.
 ### Adding a gate
 
 A new per-program flag that changes text above the marker has to be added to
-the forced set in `emit_rt_split_source` (save it, force it, restore it), and
-the artifacts regenerated. Otherwise every program that sets the flag hashes
+the forced set, the `rt_split_forced[]` table above `emit_rt_split_source`
+(one row: the flag and its canonical value; the loop saves, forces and
+restores it), and the artifacts regenerated. Otherwise every program that sets the flag hashes
 differently and silently loses the split. `g_needs_dlfcn` is the live example.
 `call-ptr` and `dlopen` set it, it is not forced, and so those programs keep
 the whole preamble (on 2026-10-16 `jit-ffi-call-ptr` hashed to
@@ -634,7 +632,7 @@ hidden at `-O2` because dead-code elimination removed the only reference).
 | Report | What went wrong | Lesson |
 |---|---|---|
 | [jit-s2-split-disengages-on-hoisted-inline-c-include](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/jit-s2-split-disengages-on-hoisted-inline-c-include.md) | hoisted inline-C includes sat inside the marked span; every C-binding spice lost the split | keep per-program text below the marker |
-| `emit_rt_split_source` comments; the `jit` CI step | the archive-posture flag, then `g_trail_autoloaded`, differed between `emit-rt-split` and a real build; the split disengaged everywhere, twice | a new state input to the preamble joins the forced set |
+| `emit_rt_split_source` comments; the `jit` CI step | the archive-posture flag, then `g_trail_autoloaded`, differed between `emit-rt-split` and a real build; the split disengaged everywhere, twice | a new state input to the preamble joins the forced set -- since 2026-10-21 one row in `rt_split_forced[]`, so the list is the code |
 | [cc-path-split-windows-and-hamt-findings](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/cc-path-split-windows-and-hamt-findings.md) | (1) out-of-line `tur_frame_*` multiplied stack frames by about 6.7x (Windows `STATUS_STACK_OVERFLOW`, reported by bash as exit 127); (2) the frozen `hamt.h` include conflicted with loose externs | the split changes codegen as well as linkage; check inlining-sensitive helpers |
 | [cc-path-preamble-split-plan](https://github.com/turmeric-lang/turmeric/blob/main/docs/upcoming/cc-path-preamble-split-plan.md), "Where it actually got to" | 16 of the first 20 split failures were duplicated thread-locals: the hosted gcc build took the native branch | both halves must reach one storage |
 | [release-archive-cannot-compile](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/release-archive-cannot-compile.md) | the flat release layout matched no `locate_runtime_lib` candidate; source mode then wanted `src/runtime/*.c`, which the release does not ship | `locate_runtime_lib` probes `<exe_dir>` too; install and ship every archive |

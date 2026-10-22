@@ -216,24 +216,45 @@ bool fwd_decl_apply_ref_params(Elab *e, Arena *arena, Type *fn_type, const Form 
         const char *nm = t->as.sym->name;
         uint32_t len = t->as.sym->len;
         uint32_t prefix = 0;
+        bool is_ptr = false;
         if (len > 3 && memcmp(nm, "rc<", 3) == 0) prefix = 3;
         else if (len > 4 && memcmp(nm, "ref<", 4) == 0) prefix = 4;
         else if (len > 5 && (memcmp(nm, "weak<", 5) == 0 || memcmp(nm, "lref<", 5) == 0)) prefix = 5;
+        /* typed-ptr-pointee-not-checked-at-calls: a typed `ptr<Foo>` slot
+         * already has the TY_PTR_VOID kind, but no pointee, so a caller above
+         * the definition passed a `ptr<Bar>` unchecked. */
+        else if (len > 4 && memcmp(nm, "ptr<", 4) == 0) { prefix = 4; is_ptr = true; }
         if (prefix == 0 || nm[len - 1] != '>' || len - prefix - 1 == 0) continue;
         char inner[128];
         uint32_t inner_len = len - prefix - 1;
         if (inner_len >= sizeof inner) continue;
         memcpy(inner, nm + prefix, inner_len);
         inner[inner_len] = '\0';
-        TypeKind ik = typekind_from_symbol(inner);
+        /* A pointer's pointee may itself be a pointer (`ptr<ptr<Foo>>`) or
+         * const (`ptr<const-u8>`): settle on the innermost name. */
+        const char *leaf = inner;
+        size_t leaf_len = inner_len;
+        while (is_ptr) {
+            if (leaf_len > 6 && memcmp(leaf, "const-", 6) == 0) { leaf += 6; leaf_len -= 6; }
+            else if (leaf_len > 5 && memcmp(leaf, "ptr<", 4) == 0 && leaf[leaf_len - 1] == '>') {
+                leaf += 4; leaf_len -= 5;
+            } else break;
+        }
+        char leaf_buf[128];
+        memcpy(leaf_buf, leaf, leaf_len);
+        leaf_buf[leaf_len] = '\0';
+        if (is_ptr && strcmp(leaf_buf, "void") == 0) continue;  /* untyped: no pointee */
+        TypeKind ik = typekind_from_symbol(leaf_buf);
         bool settled = ik != TY_UNKNOWN &&
                        (typekind_is_numeric(ik) || ik == TY_BOOL || ik == TY_CSTR);
         for (uint32_t ai = 0; !settled && ai < e->n_adt_defs; ai++) {
             const AdtDef *d = e->adt_defs[ai];
-            if (d->n_type_params == 0 && strcmp(d->name, inner) == 0) settled = true;
+            if (d->n_type_params == 0 && strcmp(d->name, leaf_buf) == 0) settled = true;
         }
         if (!settled) { unsettled = true; continue; }
-        Type *rt = rc_family_type_from_keyword_name(e, nm, len, t->span, NULL, NULL, NULL, 0);
+        Type *rt = is_ptr
+            ? ptr_type_from_keyword_name(e, nm, len, t->span, NULL, NULL, NULL, 0)
+            : rc_family_type_from_keyword_name(e, nm, len, t->span, NULL, NULL, NULL, 0);
         if (!rt) continue;
         fn_type->as.fn.arg_kinds[slot - 1] = (uint8_t)rt->kind;
         if (!fn_type->as.fn.arg_full_types) {
@@ -1843,10 +1864,40 @@ void linear_state_restore(Binding **bindings, const bool *states, uint32_t n) {
 /* Check if a binding is explicitly disposed in the body: an RC binding consumed
  * by ref/from-rc or dropped via rc/drop, or a ref<T> binding dropped via drop!.
  * Returns true if the binding is disposed (so the auto-drop must be skipped to
- * avoid a double-free). */
+ * avoid a double-free).
+ *
+ * any-widen-deep-drop-frees-borrowed-children: `widen_counts` adds one
+ * disposal pattern -- the binding appearing as the operand of a widen to `any`
+ * that is STORED into an aggregate carrying drop glue.
+ *
+ * A widen COPIES the value's header into a fresh box and hands that box to
+ * whoever stores it.  The copy's children are the original's, so if the box
+ * lands in an `:any` FIELD the field's owner will deep-drop them
+ * (`drop_localowned_<T>` -> `__tur_any_drop` -> the payload's own glue) while
+ * this binding's scope-exit drop is still queued to drop them too.  That is a
+ * double free, and the move discipline the localowned drop already relies on
+ * -- "a local that was moved into a call, moved during its own initialisation,
+ * or explicitly consumed has handed ownership on" -- is exactly the right
+ * frame; a widen simply was not on the list.
+ *
+ * Off by default, so the rc/ref auto-drop injections that share this walk are
+ * untouched.  In its one caller it can only ever SUPPRESS a free, which trades
+ * a double free for a leak -- the direction this whole family falls in. */
+static bool binding_disposed_walk(const Expr *body, Binding *binding,
+                                  bool widen_counts);
+
 bool is_binding_consumed(const Expr *body, Binding *binding) {
+    return binding_disposed_walk(body, binding, /*widen_counts=*/false);
+}
+
+bool is_binding_widened_to_any(const Expr *body, Binding *binding) {
+    return binding_disposed_walk(body, binding, /*widen_counts=*/true);
+}
+
+static bool binding_disposed_walk(const Expr *body, Binding *binding,
+                                  bool widen_counts) {
     if (!body) return false;
-    
+
     const Expr **stack = (const Expr **)malloc(256 * sizeof(const Expr *));
     if (!stack) {
         fprintf(stderr, "tur: oom\n");
@@ -1860,7 +1911,60 @@ bool is_binding_consumed(const Expr *body, Binding *binding) {
     while (sp > 0) {
         const Expr *cur = stack[--sp];
         if (!cur) continue;
-        
+
+        /* any-widen-deep-drop-frees-borrowed-children: the binding widened to
+         * `any` and STORED -- see the header above.
+         *
+         * "Stored" is the load-bearing half.  A widen in plain argument
+         * position hands the box to a callee that reads it and returns;
+         * nothing outlives the call holding it, and suppressing the binding's
+         * drop there costs its whole spine for nothing.  The store is
+         * recognised by the CONSUMER's result type: a call that takes the
+         * widened value and hands back an aggregate which itself carries drop
+         * glue is one that can have put the box in an owning field, and
+         * `(Cons inner (Nil))` is precisely that call.  A consumer returning
+         * an int, a cstr or a bare `any` cannot have. */
+        if (widen_counts &&
+            (cur->kind == EX_CALL || cur->kind == EX_MAKE_STRUCT) &&
+            any_widen_payload_owns_droppable(cur)) {
+            uint32_t na = (cur->kind == EX_CALL) ? cur->as.call_.n_args
+                                                 : cur->as.make_struct_.n_fields;
+            Expr *const *av = (cur->kind == EX_CALL)
+                                  ? cur->as.call_.args
+                                  : cur->as.make_struct_.field_values;
+            for (uint32_t ai = 0; ai < na; ai++) {
+                const Expr *a = av ? av[ai] : NULL;
+                while (a && a->kind == EX_ASCRIBE) a = a->as.ascribe_.inner;
+                if (!a || a->kind != EX_UNION_INJECT) continue;
+                const Expr *w = a->as.union_inject_.value;
+                while (w && w->kind == EX_ASCRIBE) w = w->as.ascribe_.inner;
+                if (w && w->kind == EX_VAR && w->as.var.binding == binding) {
+                    free(stack);
+                    return true;
+                }
+            }
+        }
+        /* The storing call can sit under a widen or an ascription of its own
+         * (`(:: (Cons (:: inner any) ...) any)`) or in a match arm, which the
+         * rc/ref patterns below never needed to look through.  Descend there
+         * in this mode only, so the walk those patterns use is unchanged. */
+        if (widen_counts && sp < 250) {
+            if (cur->kind == EX_UNION_INJECT) {
+                stack[sp++] = cur->as.union_inject_.value;
+                continue;
+            }
+            if (cur->kind == EX_ASCRIBE) {
+                stack[sp++] = cur->as.ascribe_.inner;
+                continue;
+            }
+            if (cur->kind == EX_MATCH) {
+                stack[sp++] = cur->as.match_.scrutinee;
+                for (uint32_t ai = 0; ai < cur->as.match_.n_arms && sp < 255; ai++)
+                    stack[sp++] = cur->as.match_.arms[ai].body;
+                continue;
+            }
+        }
+
         /* Check if this expression consumes the binding via ref/from-rc */
         if (cur->kind == EX_REF_FROM_RC &&
             cur->as.ref_from_rc_.expr &&
@@ -2731,8 +2835,6 @@ void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     /* Phase EX1d: existential `open` skolem tracking. */
     e->open_skolem_depth = 0;
     e->open_skolem_next  = 0;
-    /* Phase P3: HAMT lowering */
-    e->needs_hamt = false;
     /* PR5-3-D: referred effects */
     e->referred_effects     = NULL;
     e->n_referred_effects   = 0;

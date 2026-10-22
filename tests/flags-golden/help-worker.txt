@@ -1,0 +1,2 @@
+tur worker: RESULTS_DIR not set
+[exit 2]

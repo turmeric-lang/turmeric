@@ -171,8 +171,8 @@ static void load_stdlib_docstrings(LiteTable *out, const char *path) {
 }
 
 /* The stdlib root is exposed by the main binary via TUR_STDLIB_DIR (set by
- * resolve_stdlib_root in src/main.c before any subcommand runs). Use the env
- * var to stay decoupled from main.c's static state. */
+ * the driver's resolve_stdlib_root before any subcommand runs). Use the env
+ * var to stay decoupled from the driver's state. */
 static void resolve_docstrings_path(char *out, size_t cap) {
     const char *root = getenv("TUR_STDLIB_DIR");
     if (root && *root) {

@@ -4,8 +4,10 @@
 #include "platform_fs.h"  /* strndup() on Windows */
 #include "globals.h"      /* compiler config globals */
 #include "cps.h"          /* cps_visit_children (ownership provenance walk) */
-#include "diag.h"         /* diag_file_path (emit_site_push_text) */
+#include "diag.h"         /* diag_file_path (emit_line_directive, emit_site_ref_text) */
 #include "emit_cps_ir.h"  /* emit_cps_ir_addr_taken_any (emit_fn_value_calls_sited) */
+
+int type_size_bytes(TypeKind kind);  /* elab_core.c; the transmute bit-cast */
 
 /* ------------ helpers ------------ */
 
@@ -526,12 +528,6 @@ bool emit_fn_body_is_opaque_ptr_over_carrier_result(const FnDef *fd,
     const char *dc = type_c_name(emit_type_from_kind(declared_result));
     return dc && strcmp(dc, "int64_t") == 0;
 }
-
-/* structdef-retirement DS-C: emit_carrier_return_override (RT/SC5) is deleted.
- * Its signal was a by-value (non-carrier) TY_STRUCT method body type -- which no
- * longer occurs, since every struct lowers to a record ADT.  The function always
- * returned the "none" sentinel, so all five call sites' `carrier_override.kind
- * == TY_STRUCT` branches were dead and have been removed. */
 
 void indent_buf(Buf *b, int n) {
     for (int i = 0; i < n; i++) buf_putc(b, ' ');
@@ -2377,9 +2373,10 @@ static bool box_uses_confined(const Expr *e, const Binding *b, bool confined) {
          *                Either way the result is a copy, exactly as EX_ANY_CAST
          *                above is a deref.
          *
-         * A dynamic CALL is the opposite case and keeps the strict answer: the
-         * callee is a value, so there is no body to inspect and no mask to
-         * consult -- the same reason EX_CALL refuses an `fn_expr` callee. */
+         * A dynamic CALL is the opposite case and keeps the strict answer for
+         * what flows INTO it: the callee is a value, so there is no body to
+         * inspect and no mask to consult -- the same reason EX_CALL refuses an
+         * `fn_expr` callee. */
         case EX_DYN_OP:
             for (uint32_t i = 0; i < e->as.dyn_op_.n_args; i++)
                 if (!box_uses_confined(e->as.dyn_op_.args[i], b, /*confined=*/true))
@@ -2387,8 +2384,39 @@ static bool box_uses_confined(const Expr *e, const Binding *b, bool confined) {
             return true;
         case EX_DYN_FIELD:
             return box_uses_confined(e->as.dyn_field_.obj, b, /*confined=*/true);
+        /* any-widen-deep-drop-frees-borrowed-children: a bare `return false`
+         * here answered a question this walk never asked.  "The callee is
+         * opaque, so it may keep what it is given" is a statement about `b`
+         * FLOWING IN -- and a dynamic call that never mentions `b` is handed
+         * nothing of `b` to keep.  Refusing on the mere PRESENCE of one
+         * disqualified every parameter of every body containing a dynamic call,
+         * which in Saffron is every higher-order function: `lmap`'s `xs` read
+         * as retained because a sibling subexpression called `(f h)`, where `f`
+         * and `h` are other bindings entirely.
+         *
+         * Checking the operands, unconfined, is the same answer EX_CALL gives a
+         * general callee's arguments: `b` (or, in strict mode, a tracked alias
+         * of it) underneath the callee or an argument is refused exactly as
+         * before, at EX_VAR; a body that merely CONTAINS a dynamic call is no
+         * longer refused on that basis. */
+        /* byval-spine-drop-past-early-exit: a `return` hands its value out of
+         * the function, so the value is an UNCONFINED result position -- `b`,
+         * or (strict mode) a tracked alias of it such as a match binder `t`,
+         * is refused there exactly as at the scope's own result.  Left to
+         * `default`, every scope whose body merely CONTAINED a `return` read
+         * as retaining, so a by-value spine local in one never got its scope
+         * drop at all.  Strict mode only: that is the localowned client, which
+         * tracks the aliases this answer depends on. */
+        case EX_RETURN:
+            if (!g_bc_strict_handoff) return bc_unmodelled(e, b);
+            return box_uses_confined(e->as.return_.value, b, /*confined=*/false);
         case EX_DYN_CALL:
-            return false;
+            if (!box_uses_confined(e->as.dyn_call_.fn, b, /*confined=*/false))
+                return false;
+            for (uint32_t i = 0; i < e->as.dyn_call_.n_args; i++)
+                if (!box_uses_confined(e->as.dyn_call_.args[i], b, /*confined=*/false))
+                    return false;
+            return true;
         case EX_IF:
             return box_uses_confined(e->as.if_.cond, b, /*discarded=*/true) &&
                    box_uses_confined(e->as.if_.then_, b, confined) &&
@@ -3270,7 +3298,7 @@ void ctor_census_reset(void) {
  * the FIRST ADT's constructor.  With both ADTs on the int64 carrier, C's type
  * system could not see it either: no turmeric error, no cc warning, no ASan
  * report, just the wrong constructor.  See
- * docs/reported/separator-fold-collides-emitted-c-names.md. */
+ * docs/archive/separator-fold-collides-emitted-c-names.md. */
 static void ctor_census_push(const char *adt_name, const char *ctor_name) {
     if (g_n_ctor_census >= g_cap_ctor_census) {
         uint32_t nc = g_cap_ctor_census ? g_cap_ctor_census * 2 : 64;
@@ -5882,20 +5910,33 @@ char *emit_builtin(EmitCtx *ctx, Buf *body, const Expr *e) {
         /* Phase U3: Unsafe primitives - type casting */
         case BS_UNSAFE_CAST:
             /* unsafe-cast: C-style cast from one type to another
-             * arg0 = value to cast, arg1 = type keyword (we ignore it and cast to int64_t for v1)
-             * Emit: (int64_t)arg0 */
-            buf_printf(&out, "((int64_t)%s)", arg_strs[0]);
+             * arg0 = value to cast (the target type is not read for v1)
+             * Emit: TUR_AS(int64_t, arg0) -- a value conversion on purpose
+             * (a float truncates), unlike transmute's bit copy below. */
+            buf_printf(&out, "TUR_AS(int64_t, %s)", arg_strs[0]);
             break;
         case BS_REINTERPRET:
-            /* reinterpret: bitwise reinterpretation - same as unsafe-cast for v1
-             * Emit: (int64_t)arg0 */
-            buf_printf(&out, "((int64_t)%s)", arg_strs[0]);
+        case BS_TRANSMUTE: {
+            /* reinterpret / transmute: a bit-for-bit copy into the result
+             * type; size equality is verified at elaboration time.  A C cast
+             * keeps the bits between two integer or pointer kinds, but it
+             * CONVERTS a float's value, so a float crossing to or from a
+             * non-float kind goes through a union instead
+             * (unsafe-builtins-wrong-or-engine-dependent). */
+            Type src = e->as.builtin.args[0]->type;
+            bool src_f = src.kind == TY_FLOAT || src.kind == TY_FLOAT32 ||
+                         src.kind == TY_FLOAT64;
+            bool dst_f = e->type.kind == TY_FLOAT || e->type.kind == TY_FLOAT32 ||
+                         e->type.kind == TY_FLOAT64;
+            int src_sz = type_size_bytes(src.kind);
+            if (src_f != dst_f && src_sz > 0 &&
+                src_sz == type_size_bytes(e->type.kind))
+                buf_printf(&out, "(((union { %s s; %s t; }){ .s = %s }).t)",
+                           type_c_name(src), type_c_name(e->type), arg_strs[0]);
+            else
+                buf_printf(&out, "((%s)%s)", type_c_name(e->type), arg_strs[0]);
             break;
-        case BS_TRANSMUTE:
-            /* transmute: bitwise reinterpretation; size equality verified at
-             * elaboration time. Cast through the result type. */
-            buf_printf(&out, "((%s)%s)", type_c_name(e->type), arg_strs[0]);
-            break;
+        }
         /* Phase U3: Unsafe primitives - unchecked array ops */
         case BS_ARRAY_GET_UNCHECKED:
             /* array-get-unchecked: *(ptr + index)
@@ -6770,9 +6811,8 @@ char *emit_carrier_bridge(EmitCtx *ctx, Buf *body,
         bool essential = type_is_heap_struct(concrete_ty) ||
                          carrier_is_inline(concrete_ty.kind);
         if (!essential) {
-            /* structdef-retirement DS-D: the former struct-app Option/Result
-             * check (type_extract_struct_app) is dead -- no struct-headed app
-             * forms; a lowered Option/Result monomorph is an ADT app. */
+            /* A lowered Option/Result monomorph is an ADT app; no struct-headed
+             * app forms. */
             /* Pointer-sized leaves (cstr, ptr<void>, int/int64) cross with no
              * reinterpret and are trivially safe -- not part of the
              * struct-fallback set the tripwire watches. */
@@ -7089,16 +7129,12 @@ char *emit_carrier_bridge(EmitCtx *ctx, Buf *body,
              * layout instead. The non-Result/Option fallback keeps the
              * legacy deref so unrelated parametric structs (Pair, user
              * defstructs) are unaffected. */
-            /* structdef-retirement DS-D: the former struct-app Option/Result
-             * canonical readback (keyed on type_extract_struct_app) is dead --
-             * no struct-headed app forms.  The lowered record-ADT readback
-             * below handles Option/Result monomorphs. */
             bool used_canonical = false;
-            /* CONV-S1 seam 4: the same canonical NULL-safe readback for a LOWERED
-             * Option/Result record ADT (`tur_adt_Option__Device`).  The struct
-             * path above keys on type_extract_struct_app and misses an ADT app, so
-             * a `none` (NULL carrier) would otherwise hit the unguarded deref below
-             * and segfault.  Read the canonical box fields by name (the ctor field
+            /* CONV-S1 seam 4: a canonical NULL-safe readback for a LOWERED
+             * Option/Result record ADT (`tur_adt_Option__Device`) -- the only
+             * Option/Result shape there is, since no struct-headed app forms.
+             * Without it a `none` (NULL carrier) would hit the unguarded deref
+             * below and segfault.  Read the canonical box fields by name (the ctor field
              * names match tur_option_t/tur_result_box_t) and write the ADT
              * aggregate through its member path, guarding Option with a NULL test
              * that collapses to a zeroed `{0}` (is_some=false). */

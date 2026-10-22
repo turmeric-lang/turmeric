@@ -6,8 +6,8 @@ description: How the `tur` driver turns a command line into a binary -- command 
 
 # The Build Driver (internals)
 
-This guide is for contributors working on `src/main.c` -- the `tur` driver --
-and the small helpers in `src/cli/`. It follows one command from `argv` to a
+This guide is for contributors working on the `tur` driver -- `src/main.c`
+and `src/driver/` -- and the small helpers in `src/cli/`. It follows one command from `argv` to a
 linked executable and names the function that does each step. It describes
 the code as it stands.
 
@@ -19,15 +19,10 @@ side of the commands covered here is in
 [the JIT](jit-guide.md) and
 [developing spices](developing-spices-guide.md).
 
-> **Trust the code over the comments.** `src/main.c` is about 14,700 lines
-> and many of its comments predate a rework of the thing they describe. Two
-> examples that matter: the pass list marks `PASS_EFFECT_ROW_INFER` as a
-> "stub slot" (it is the effect-row checker), and a comment in
-> `run_core_pass` says `tur run` "execv's the compiled binary" (it calls
-> `system()`). Where a comment and this guide disagree, read the code. If the
-> code disagrees with this guide, fix the guide.
-> The stale comments found so far in this area, each with a fix, are
-> listed in [stale-comments-build-driver](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/stale-comments-build-driver.md).
+> **Trust the code over the comments.** The driver is large and many of its
+> comments predate a rework of the thing they describe. Where a comment and
+> this guide disagree, read the code. If the code disagrees with this guide,
+> fix the guide.
 
 ---
 
@@ -36,10 +31,12 @@ side of the commands covered here is in
 1. `main` moves the whole driver onto a large stack
    (`tur_run_on_big_stack`) and calls `tur_main_inner`.
 2. `tur_main_inner` reads a few environment seams, then parses **global
-   flags** out of `argv` into `g_*` globals and strips them.
-3. `resolve_command` maps `argv[1]` to a canonical subcommand (exact match,
-   alias, or unique prefix). A long `strcmp` chain dispatches it. An unknown
-   name is exec'd as `tur-<name>` from `$PATH`.
+   flags** out of `argv` into `g_*` globals and strips them (the flag table,
+   `GLOBAL_FLAGS[]` in `driver/cli.c`).
+3. `drv_find_command` looks `argv[1]` up in the command table (`COMMANDS[]`,
+   same file: an exact spelling, an alias, or a unique prefix) and the
+   dispatcher runs that row's handler. An unknown name is exec'd as
+   `tur-<name>` from `$PATH`.
 4. Per-file commands widen the include path from the enclosing `build.tur`
    (`auto_append_spice_includes`) and load its reader macros and
    experiments (`discover_manifest_reader_macros`).
@@ -48,7 +45,7 @@ side of the commands covered here is in
    the source, prepend the stdlib, run `run_core_passes`, and emit C.
 6. `cmd_build_once` writes the C to `$TMPDIR/tur-build/<name>.c`, decides
    how the runtime is linked, and runs **one** `cc` command that compiles
-   and links (`link_command_run`).
+   and links (`drv_link_command_run`).
 7. `tur run <file>` is `cmd_build` into a temp executable, then `system()`
    on it, then `unlink`.
 
@@ -58,7 +55,24 @@ side of the commands covered here is in
 
 | File | Role |
 |---|---|
-| `src/main.c` | Everything below unless noted: dispatch, flag parsing, compile entry points, the pass list, cc invocation, project builds, `tur run`, caches |
+| `src/main.c` | `main`, the big-stack trampoline, the ASan options hook, and `tur_main_inner`: startup and the table-driven dispatcher |
+| `src/driver/driver.h`, `commands.h` | What the driver files share: helpers and state, and the `cmd_*` / `usage_*` entry points. Sectioned by defining file; `tests/check-driver-headers.py` checks each section |
+| `src/driver/cli.c` | The command table, the global-flag table and its parser, `--timings`, the environment switches, `tur --help` and the per-command usage text, `-I` parsing, the external-command fallback |
+| `src/driver/paths.c` | Reading files, the executable's path, the stdlib root, `#lang` detection, `cc_system` |
+| `src/driver/spice.c` | Manifest and spice discovery: reader macros, experiments, the `:spices` include walk, `.tur` collection, engine selection |
+| `src/driver/pipeline.c` | `core_passes[]` and the pass runner, the three compile entry points, the stdlib and project prelude, the split switches, `tur_check_only` / `tur_collect_symbols` |
+| `src/driver/cc.c` | `#include` hoisting, autolink markers and flags, the runtime library and its mode, `drv_link_command_run`, the stable temp paths |
+| `src/driver/preamble_split.c` | The prelude pieces and their cache, the r7rs library-unit cache, the preamble swap (`jit_try_split_preamble`), `tur emit-rt-split` |
+| `src/driver/cmd_emit.c` | `emit-c`, `emit-h`, `check`, `expand`, `audit-spans`; the build-directory ladder |
+| `src/driver/cmd_build.c` | `tur build <file>` (`cmd_build`, `cmd_build_once`) |
+| `src/driver/project.c` | `tur build <dir>`: `cmd_build_project`, `cmd_build_multi`, separate compilation |
+| `src/driver/compile_link.c` | `tur compile`, `tur link`, the `.link` sidecar |
+| `src/driver/cmd_run.c` | `tur run <file>`, `tur test`, `tur check <dir>`, engine delegation |
+| `src/driver/jit.c` | `tur jit` and the REPL's JIT builds -- the whole file is `#ifdef TUR_HAVE_JIT` |
+| `src/driver/cmd_eval.c` | The interpreter commands: `interpret`, `debug`, `eval`, `repl`, `dap`, `trace` |
+| `src/driver/cmd_format.c` | `format`, `fmt`, `parse-check` |
+| `src/driver/worker.c` | `tur worker` |
+| `src/driver/cmd_misc.c` | `doc`, `docs`, `image-info` / `image-verify`, `smt`, `experiments`, `dialects`, `explain`, `lsp`, `mcp`, `lsp-lite` |
 | `src/runtime/pass.h` | `PassKind`, `PassContext` |
 | `src/runtime/globals.c`, `globals.h` | Most `g_*` option globals the passes and emitter read |
 | `src/runtime/experiments.c` | `EXPERIMENTS[]`, `enable_experiment_list` (see the [experimental flags guide](experimental-flags-guide.md)) |
@@ -70,7 +84,7 @@ side of the commands covered here is in
 | `src/compiler/pkg.c` | Manifest reading, fetch, cmake deps (see the [package manager internals](package-manager-internals-guide.md)) |
 | `src/turi/spice_loader.c` | The REPL's `.tur-repl-cache/` |
 | `src/platform_fs.h` | `tur_temp_dir` |
-| `src/cli/completion.c` | `tur completion zsh\|bash` -- embedded scripts |
+| `src/cli/completion.c` | `tur completion zsh\|bash` -- embedded scripts; the command lists come from the command table |
 | `src/cli/demangle.c`, `lsp_lite.c` | `tur demangle`, `tur lsp-lite` |
 
 ---
@@ -86,33 +100,53 @@ once for the whole driver rather than rationed per phase.
 
 `tur_main_inner` then, in order:
 
-1. `parse_timings_flag` strips `--timings[=path]` and starts the profiler.
-   It is the only global-flag parser that stops at `--`.
-2. Reads the representation and memory seams (`TUR_ADT_SLAB`,
-   `TUR_SR1_SUM_BYVALUE`, `TUR_SR2_APP_SUM_BYVALUE`, `TUR_OPTION_NICHE`,
-   `TUR_REGIONS`) and the interpreter's inline-C JIT switch
-   (`TUR_REPL_JIT_INLINE_C`). See [section 8](#8-environment-variables).
+1. `drv_parse_timings_flag` strips `--timings[=path]` and starts the
+   profiler, before anything it should measure and before `g_main_argv` is
+   taken (the split build's cache key hashes the command line).
+2. `drv_apply_env_overrides` reads the representation and memory seams
+   (`TUR_ADT_SLAB`, `TUR_SR1_SUM_BYVALUE`, `TUR_SR2_APP_SUM_BYVALUE`,
+   `TUR_OPTION_NICHE`, `TUR_REGIONS`), the interpreter's inline-C JIT switch
+   (`TUR_REPL_JIT_INLINE_C`) and `TUR_RUNTIME`. See
+   [section 8](#8-environment-variables).
 3. Records `g_argv0`, `g_main_argc`, `g_main_argv`, and calls
    `resolve_stdlib_root`, which `setenv`s `TUR_STDLIB_DIR` (without
    overwriting) so every later subsystem sees one stdlib root.
 4. On JIT builds, installs the c2mir FFI provider and the REPL inline-C hook.
 
-### Global flags: three mechanisms
+### Global flags: one table
 
-A global flag reaches its `g_*` global through one of three routes:
+`GLOBAL_FLAGS[]` in `driver/cli.c` lists every global flag: its spelling
+(and a second one, as for `-Werror=` / `--Werror=`), the global it sets or
+the action it runs, and how it is read. `drv_parse_global_flags` reads the
+table in two passes, as the hand-written scanners and strip loop it
+replaced did -- and the difference is observable:
 
-| Route | Flags | Notes |
-|---|---|---|
-| `parse_*` helpers (`parse_no_color`, `parse_debug_build`, `parse_no_abi_cache`, ...) | `--no-color`, `--panic-abort`, `--warn-unused-result`, `--lint-panic`, `--no-contracts`, `--debug`, `-Werror=...`, `--no-auto-spice`, `--no-abi-cache`, `--no-r7rs-gc`, `--no-saffron-gc` | Each scans `argv` up to the first `--` and returns a bool; they do not remove anything |
-| The strip loop in `tur_main_inner` | the flags above (except `--no-abi-cache`), plus every `--dump-*`, `--strict-*`, `--lint-*`, `--enable=`, `--macro-caps=`, `--json`, `--explain`, `-X<name>`, ... | Sets the global (or confirms the helper did) and shifts the flag out of `argv` so the subcommand parser never sees it |
-| Per-command parsers | `-I`, `-o`, `--build-dir`/`-B`, `--runtime=`, `--shared`, `--engine`, ... | Local to each `if (strcmp(cmd, ...))` arm |
+1. **Scan.** Every `GF_SCAN` row (`--no-color`, `--panic-abort`,
+   `--warn-unused-result` and its `--no-` twin, `--lint-panic`,
+   `--no-contracts`, `--debug`, the three `-Werror=`s, `--no-auto-spice`,
+   `--no-abi-cache`, `--no-r7rs-gc`, `--no-saffron-gc`) is applied wherever it
+   appears, before anything is removed -- so `--debug` counts even as the word
+   after `--explain`. The environment's half of three of them
+   (`TUR_NO_ABI_CACHE`, `TUR_R7RS_GC=0`, `TUR_SAFFRON_GC=0`) is read first.
+2. **Strip.** Left to right, each word is matched against the table in
+   table order; a row that is not a scan row is applied (`--dump-*`,
+   `--strict-*`, `--lint-*`, `--json`, `--explain`, `--enable=`,
+   `--macro-caps=`, `-X<name>`, ...), and every matched row is removed from
+   `argv` except a `GF_KEEP` one. A row whose action fails (an unknown
+   `--enable=` name, `--macro-caps=` other than `io`,
+   `--allow-experimental`) stops the parse; the dispatcher exits with its
+   status. A `GF_VALUE` row (`--explain`, `--backtrack-depth N`) with no word
+   after it is not that flag: it stays in `argv` for the subcommand to reject.
 
-Because of the strip loop, a global flag is accepted before **or** after the
+Per-command flags (`-I`, `-o`, `--build-dir`/`-B`, `--runtime=`, `--shared`,
+`--engine`, ...) are parsed by each command's `cmd_<name>_main`.
+
+Because of the strip pass, a global flag is accepted before **or** after the
 subcommand: `tur --strict-effects check f.tur` and
 `tur check f.tur --strict-effects` are the same. Two details:
 
-- **Both stop at `--`.** `argc` is cut at the first `--` while they run,
-  and the tail (the `--` included) is put back afterwards, so
+- **Both passes stop at `--`.** `argc` is cut at the first `--` while they
+  run, and the tail (the `--` included) is put back afterwards, so
   `tur run f.tur -- a --strict-effects b` compiles with the default flags and
   hands the program all three words. Until 2026-10-17 neither stopped there
   ([global-flags-parsed-after-double-dash](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/global-flags-parsed-after-double-dash.md)).
@@ -121,30 +155,32 @@ subcommand: `tur --strict-effects check f.tur` and
   a leading one was taken for the subcommand (exit 64)
   ([no-color-flag-rejected-everywhere](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/no-color-flag-rejected-everywhere.md)).
 
-`--no-abi-cache` is the one flag a helper reads and the strip loop leaves
-in `argv`, so a subcommand parser that rejects unknown dashes has to skip it
-by name. The `build`, `compile` and `emit-c --output-dir` arms do; the
-single-file `emit-c`, `check` and `expand` arms do not, so `tur emit-c f.tur
---no-abi-cache` is a usage error. (The same arms still skip
+`--no-abi-cache` is the one `GF_KEEP` row: read, but left in `argv`, so a
+subcommand parser that rejects unknown dashes has to skip it by name. The
+`build`, `compile` and `emit-c --output-dir` handlers do; the single-file
+`emit-c`, `check` and `expand` ones do not, so `tur emit-c f.tur
+--no-abi-cache` is a usage error. (The same handlers still skip
 `--no-auto-spice`, `--no-r7rs-gc` and `--no-saffron-gc` by name, which is
-dead code now that the strip loop removes them.)
+dead code now that the strip pass removes them.)
 
-After the loop: `diag_init` (color off under `--json`/`--json-diagnostics`
+After the parse: `diag_init` (color off under `--json`/`--json-diagnostics`
 or a non-tty stderr), then `--explain`, `--version`/`-V`/`-v`, and
 `--help`/`-h`, which are handled before command resolution.
+`tests/run-flags.sh` pins the stripping and the errors in its goldens
+(`tests/flags-golden/flags-*.txt`).
 
 ### The worker's flag-string parser
 
 `wk_apply_flags` is a **second, independent** flag parser. It reads a
 fixture's `flags` file as a space-separated string and sets the same
 globals, for `tur worker` (a persistent fixture evaluator that reads fixture
-directories from stdin and forks per fixture). Its list has drifted from the
-strip loop in both directions:
+directories from stdin and forks per fixture). Its list has drifted from
+`GLOBAL_FLAGS[]` in both directions:
 
 - missing: `--no-contracts`, `--keep-contracts`, `--panic-abort`, `--debug`,
   `--lint-panic`, `--warn-unused-result`, `--dump-kinds`,
   `--dump-clone-plan`, `--cps-path`, `--backtrack-depth`;
-- extra: `--lint-unsafe-doc`, `--lint-unsafe-nested`, which the strip loop
+- extra: `--lint-unsafe-doc`, `--lint-unsafe-nested`, which the table
   does not know.
 
 No script under `tests/` starts `tur worker` today (`tests/run.sh` does
@@ -153,30 +189,45 @@ revive the worker, reconcile the two lists first.
 
 ### Resolving and dispatching the subcommand
 
-`resolve_command` matches `argv[1]` against `CANONICAL_COMMANDS[]` and
-`COMMAND_ALIASES[]` (`just` -> `run`):
+`COMMANDS[]` in `driver/cli.c` is the one list of subcommands: each row is
+the name, its handler, its flags, its line in the completion scripts and its
+lines in `tur --help`. It drives the dispatcher, prefix resolution, the
+`tur --help` listing (`drv_usage`, in table order), the filter that keeps a
+`tur-<name>` a built-in shadows out of the "external commands" listing, and
+the command lists of both completion scripts. Until main-c-split-plan there
+were three lists, and they disagreed.
 
-1. An exact match wins.
-2. Otherwise a unique prefix resolves (`tur bui` -> `build`); two or more
-   hits print the usage and exit 64.
-3. A leading `-` or no hit returns NULL and the token is used as is.
+`drv_find_command` maps `argv[1]` to a row:
 
-`CANONICAL_COMMANDS[]` does not list `jit`, `emit-rt-split` or
-`completion`, so those three dispatch on an exact spelling only. A token that
-matches no arm of the `strcmp` chain falls to `try_external_subcommand`,
-which `execv`s the first executable `tur-<name>` on `$PATH` with the
-remaining arguments (on Windows, `_spawnv` and wait).
+1. An exact spelling of a command or an alias (`COMMAND_ALIASES[]`: `just`
+   -> `run`, and `--interpret` -> `interpret`) wins.
+2. Otherwise a unique prefix of a command or alias resolves (`tur bui` ->
+   `build`); two or more hits print the usage and exit 64. A token that
+   starts with `-` is never prefix-resolved.
+3. No hit returns NULL.
 
-The main arms and their handlers:
+`jit`, `emit-rt-split` and `completion` are `DRV_CMD_EXACT` rows: they
+dispatch on their exact spelling only, because listing them for prefix
+resolution would make `tur comp` and `tur j` ambiguous. A token no row
+matches falls to `drv_try_external_subcommand`, which `execv`s the first
+executable `tur-<name>` on `$PATH` with the remaining arguments (on Windows,
+`_spawnv` and wait).
+
+A handler takes the whole `argc`/`argv`, global flags already stripped:
+`argv[1]` is the command word as typed and its arguments start at
+`argv[2]`. Most are a `cmd_<name>_main` in the file for their area; a few
+rows point straight at a `cmd_*` that already took `(argc, argv)`.
+
+The main commands and their handlers:
 
 | Command | Handler | Path through the compiler |
 |---|---|---|
 | `emit-c <file>` | `cmd_emit_c` | `compile_to_c`, C to stdout |
 | `emit-c -B <dir> <files...>` | `cmd_emit_c_to_dir` | per module `compile_to_h` + `compile_to_implementation` |
 | `emit-h <file>` | `cmd_emit_h` | `compile_to_h` |
-| `check <file>` / `<dir>` | inline arm / `cmd_check_dir` | `compile_to_c`, output discarded |
-| `expand <file>` | inline arm | `compile_to_c` with `g_dump_expansion` |
-| `audit-spans <file>` | inline arm | `compile_to_c` with `g_audit_spans` (stops after elaboration) |
+| `check <file>` / `<dir>` | `cmd_check_main` / `cmd_check_dir` | `compile_to_c`, output discarded |
+| `expand <file>` | `cmd_expand_main` | `compile_to_c` with `g_dump_expansion` |
+| `audit-spans <file>` | `cmd_audit_spans_main` | `compile_to_c` with `g_audit_spans` (stops after elaboration) |
 | `build <file>` | `cmd_build` (or `cmd_compile` + `cmd_link` under `--split-build`) | `compile_to_c` + one `cc` |
 | `build <dir>` with `build.tur` | `cmd_build_project` | see [section 4](#4-directory-and-project-builds) |
 | `build <dir>` without one | `cmd_build_multi` | separate compilation |
@@ -205,19 +256,17 @@ differ in what they prepend and what they emit.
 | `ctx.separate_compilation` | false | true | true |
 | After the passes | `resolve_rcgc_from_archive`, `srfi_prune_program`, optional r7rs split, `emit_program`, optional exports manifest | `emit_header` | `emit_implementation`, optional exports manifest |
 
-The header comment on `load_project_prelude_impl` says it loads only
-macro-providing files; the body loads the full auto-load list
-(`tur_stdlib_autoload_files`), which is what the call sites' "F1" comments
-also undersell.
+`load_project_prelude_impl` loads the full auto-load list
+(`tur_stdlib_autoload_files`), the same files `compile_to_c` gets.
 
 **Shared front half**, in order:
 
-1. `read_entire_file`, then `detect_and_adjust_lang` for the `#lang` line.
-2. Per-unit resets: `diag_reset`, `experiment_reset_warnings`,
-   `pkg_tur_version_reassert`, `pkg_manifest_reassert`,
-   `refine_discharge_reset`. These exist because `tur test`,
-   `tur check <dir>`, project builds and the LSP loop over files in one
-   process; a stale `had_error_` would fail every later file.
+1. `drv_read_entire_file`, then `detect_and_adjust_lang` for the `#lang` line.
+2. Per-unit resets, in `begin_compile_unit`: `diag_reset`,
+   `experiment_reset_warnings`, `pkg_tur_version_reassert`,
+   `pkg_manifest_reassert`, `refine_discharge_reset`. These exist because
+   `tur test`, `tur check <dir>`, project builds and the LSP loop over files
+   in one process; a stale `had_error_` would fail every later file.
 3. `diag_register_file`, a fresh `Arena` and `SymbolTable`.
 4. Reader macros from the manifest are loaded into a **strict** registry
    (a duplicate `reader-macros/define` is an error here, not in the REPL).
@@ -243,8 +292,8 @@ returns 0 to continue, 1 to fail, 2 to stop successfully.
 |---|---|
 | `PASS_ELABORATE` | `elaborate_program` (macro expansion, typeclasses and refinement discharge happen inside and have their own zones). Then, **outside the list but inside this arm**: `mono_specs_resolve_program` (zone `mono`), `--dump-mono-specs` (flushed), and under `audit-spans` `span_audit_program`, which returns 2 and ends the pipeline |
 | `PASS_KIND_CHECK` | `kind_check_pass`; `--dump-kinds` |
-| `PASS_EFFECT_LOWER` | Builds the `EffectEnv` (builtin `Unsafe`, the capabilities). The `effect_lower` call returns its input unchanged; the "perform/handle into shift/reset" comment in `pass.h` and in the arm is stale |
-| `PASS_EFFECT_ROW_INFER` | `effect_check_pass`, the effect-row checker; `--dump-effects`. Its "stub slot" comment in `core_passes[]` is stale |
+| `PASS_EFFECT_ENV` | Builds the `EffectEnv` (builtin `Unsafe`, the capabilities); the tree is untouched. The CPS/DK backend lowers effects |
+| `PASS_EFFECT_ROW_INFER` | `effect_check_pass`, the effect-row checker; `--dump-effects` |
 | `PASS_CPS` | the `--dump-cps-coloring` (stdout) and `--dump-cps` dumps, `cps_transform`, then `--dump-clone-plan` and the stderr half of `--dump-cps-coloring` |
 | `PASS_BORROW_CHECK` | `borrow_check_program`, then `borrow_check_effect_handler_captures`, then `lifetime_check_program` (the TY4 lifetime pass lives here, not in a pass of its own) |
 
@@ -294,10 +343,10 @@ happens in the split shape is therefore slow, never wrong.
    dirs, so a symbol only C reaches is still emitted.
 3. `compile_to_c`, with `g_split_lib_sink`/`g_split_imp_sink` set unless the
    target is wasm or `--runtime=split`.
-4. Writes the C to `stable_c_path(input)`: `$TMPDIR/tur-build/` plus the
+4. Writes the C to `drv_stable_c_path(input)`: `$TMPDIR/tur-build/` plus the
    input path **as typed**, every byte outside `[A-Za-z0-9-]` turned into
    `_` (`m.tur` -> `m_tur.c`). It is stable so ccache can hit. If the
-   directory is not ours (`tmp_dir_is_ours`: a real directory, owned by
+   directory is not ours (`drv_tmp_dir_is_ours`: a real directory, owned by
    us, not group/other-writable) it falls back to
    `$TMPDIR/tur-build-<uid>/`. The file is opened with `O_NOFOLLOW`.
 5. The preamble swap: under `TUR_RT_SPLIT`, or `TUR_RT_AUTO` when
@@ -310,24 +359,24 @@ happens in the split shape is therefore slow, never wrong.
 7. `scan_autolink_markers` collects `__tur_autolink__` link flags, checking
    every token against the grammar in `src/tur_argcheck.h` (they reach a
    shell).
-8. Picks the output: `-o`, else `default_output_name` in the **current
+8. Picks the output: `-o`, else `drv_default_output_name` in the **current
    directory** (`foo.tur` -> `foo`; `.js` appended for wasm). A
    single-file build never consults the build directory.
 9. Picks the compiler and flags (below), collects the spice's
-   `:c-includes`/`:c-sources` and cmake-dep flags (`collect_build_aux`),
+   `:c-includes`/`:c-sources` and cmake-dep flags (`drv_collect_build_aux`),
    and for wasm the `:web` emcc flags.
 10. `apply_runtime_lib_mode` swaps bare runtime `.c` sources for an archive;
     `resolve_autolink_flags` anchors SDK and tree-relative paths and probes
     for a sanitized `libturi.a`.
 11. Under the r7rs split, `prelude_split_object` compiles (or reuses) the
     library and imported-library objects.
-12. `link_command_run` assembles and runs the one `cc` command.
+12. `drv_link_command_run` assembles and runs the one `cc` command.
 13. Leaves the stable `.c` in place for ccache; only a random fallback temp
     is unlinked.
 
 ### The `cc` command
 
-`link_command_run` builds:
+`drv_link_command_run` builds:
 
 ```
 $CC <cc_flags> -Wno-misleading-indentation -fwrapv -o '<out>' '<tmp>.c'
@@ -369,8 +418,8 @@ names: that file is post-swap and post-hoist, unlike `tur emit-c` output.
 
 - **`<dir>/build.tur` exists** -> `cmd_build_project`.
 - **Otherwise** -> `cmd_build_multi`, which collects every `.tur` under
-  the directory, recursively (`collect_tur_files_deep`; its header comment
-  still says "top-level"), and calls `cmd_build_multi_files`.
+  the directory, recursively (`collect_tur_files_deep`), and calls
+  `cmd_build_multi_files`.
 
 `cmd_build_project`, in order:
 
@@ -430,18 +479,18 @@ The `run` arm scans its arguments up to `--`:
    too); `TUR_CC_FLAGS` still replaces the defaults, and a non-`cc` engine
    has no cc step for it to change.
 2. **Single-file mode** (`<file>` given): auto-spice includes, then
-   `discover_manifest_reader_macros`, then `resolve_engine`. A non-`cc`
+   `discover_manifest_reader_macros`, then `drv_resolve_engine`. A non-`cc`
    engine goes to `run_delegate_engine` (`cmd_jit` or the interpreter).
    `-` reads stdin into `$TMPDIR/tur-stdin-XXXXXX.tur` first.
-3. **Project mode:** `find_project_root` from the cwd; fetch or verify
+3. **Project mode:** `drv_find_project_root` from the cwd; fetch or verify
    `:spices` (`--offline` only checks they exist); build the include path
    from the manifest; build the transitive cmake deps; pick the entry
    (`:entry`, else `src/main.tur`, else the only file in `src/`).
 4. `RUN_ENTRY`: `mkstemp` `$TMPDIR/tur-run-XXXXXX`, `cmd_build` into it,
-   run it with `system()` (arguments quoted with `buf_put_quoted`),
+   run it with `system()` (arguments quoted with `drv_buf_put_quoted`),
    `unlink` it, and return `decode_exit_status` of the child.
 
-The engine ladder (`resolve_engine`) is `--engine` > `TUR_ENGINE` >
+The engine ladder (`drv_resolve_engine`) is `--engine` > `TUR_ENGINE` >
 `build.tur :engine` > `cc`. An unknown CLI or environment value is
 TUR-E0311, never a fallback.
 
@@ -506,12 +555,12 @@ single-file `tur build` does not auto-discover is out of date: it does, and
 
 ## 6. The build directory
 
-`resolve_build_dir(input_or_root, cli_flag)` decides where project builds
+`drv_resolve_build_dir(input_or_root, cli_flag)` decides where project builds
 put their output. Precedence, highest first:
 
 1. `--build-dir <dir>` / `-B <dir>`.
 2. `TUR_BUILD_DIR`.
-3. `:build-dir` in the nearest manifest (`find_project_root`, unbounded
+3. `:build-dir` in the nearest manifest (`drv_find_project_root`, unbounded
    walk-up; relative to the manifest's directory unless absolute).
 4. `<project-root>/build` when a manifest exists, else `./build`.
 
@@ -520,7 +569,7 @@ The result is `realpath`ed; `obj/`, `bin/` and `lib/` are created, and a
 
 Who uses it:
 
-| Command | Uses `resolve_build_dir` | Output when no `-o` |
+| Command | Uses `drv_resolve_build_dir` | Output when no `-o` |
 |---|---|---|
 | `build <file>` | **no** | `./<stem>` in the cwd; intermediate C in `$TMPDIR/tur-build/` |
 | `build <dir>` (single-main fast path) | yes | `<bd>/bin/<:name>` |
@@ -566,8 +615,8 @@ Three properties of the intermediate-C cache are worth knowing:
 
 ## 8. Environment variables
 
-`src/main.c` reads these (grep `getenv` to refresh the list). Variables read
-only elsewhere are noted.
+The driver (`src/main.c`, `src/driver/`) reads these (grep `getenv` to
+refresh the list). Variables read only elsewhere are noted.
 
 **Toolchain and linkage**
 
@@ -625,38 +674,48 @@ and [diagnosing the compiler](diagnosing-the-compiler-guide.md).
 
 ### A new subcommand
 
-1. Add an arm to the `strcmp` chain in `tur_main_inner`, before the
-   `try_external_subcommand` fall-through. Put the body in a `cmd_<name>`.
-2. Add the name to `CANONICAL_COMMANDS[]` so prefix resolution knows it --
-   and check the new name does not make an existing prefix ambiguous.
-3. Write `usage_<name>`: `--help` returns 0 through it; error paths return
-   `usage_error(usage_<name>)` (exit 2). Add a line to `usage()`.
+1. Write its handler, `int cmd_<name>_main(int argc, char **argv)`, in the
+   `src/driver/` file for its area, and declare it in that file's section of
+   `driver/commands.h`. `argv[2]` is its first argument.
+2. Add a row to `COMMANDS[]` in `driver/cli.c`: the name, the handler, its
+   flags, a one-line summary for the completion scripts, and its lines for
+   `tur --help` (NULL to list none). The row's position is its place in the
+   `--help` listing. That is all dispatch, prefix resolution, the
+   external-command filter and the completion scripts' command lists need.
+   Check the new name does not make an existing prefix ambiguous; a name that
+   would (as `completion` would for `tur comp`) gets `DRV_CMD_EXACT`.
+3. Write `usage_<name>` in `driver/cli.c`: `--help` returns 0 through it;
+   error paths return `drv_usage_error(usage_<name>)` (exit 2).
 4. If it compiles a file, call `auto_append_spice_includes` and
    `discover_manifest_reader_macros`, set the LS2 context around the
    compile (`ls2_resolver_ctx_set`), and dispose of both afterwards. Copy
-   an existing arm (`emit-h` is the shortest).
-5. Add it to `list_external_subcommands`'s `builtins[]`, so a `tur-<name>`
-   on `$PATH` is not advertised as an external command.
-6. Add it to both scripts in `src/cli/completion.c` (the zsh `commands=(...)`
-   list with a description, and bash's `__tur_commands`).
+   an existing handler (`cmd_emit_h_main` is the shortest).
+5. If it takes arguments worth completing, add an arm for it to the
+   per-command `case` in both scripts in `src/cli/completion.c`.
+6. Rewrite the CLI goldens (`TUR_FLAGS_GOLDEN_UPDATE=1 bash
+   tests/run-flags.sh`), add the new `help-<name>` golden to the list there,
+   and review the diff.
 7. Document it in the user guide for its area, and in
    [compiler-flags-guide.md](compiler-flags-guide.md) if it takes flags.
 
 ### A new global flag
 
 1. Add the `g_<name>` global (in `src/runtime/globals.c` + `globals.h` if a
-   pass or the emitter reads it; a `static` in `main.c` if only the driver
-   does).
-2. Add an arm to the strip loop in `tur_main_inner` that sets it and shifts
-   it out of `argv`. A bare `parse_*` helper without a strip arm leaves the
-   flag for every subcommand parser to reject.
+   pass or the emitter reads it; in the driver file that owns it, declared
+   in its `driver.h` section, if only the driver does).
+2. Add a row to `GLOBAL_FLAGS[]` in `driver/cli.c`: the spelling, the
+   global it sets (or a `gf_*` action), and how it is read. A plain row is
+   applied and stripped by the strip pass; `GF_SCAN` applies it wherever it
+   appears, even as another flag's value; `GF_VALUE` / `GF_PREFIX` take a
+   value; `GF_KEEP` leaves it in `argv`.
 3. Add the same token to `wk_apply_flags`, the worker's parser.
 4. If it changes the emitted C, add it to the key in `split_lib_cache_init`
    (`SLK(...)`), or the r7rs library-unit cache will serve stale text.
    `TUR_SPLIT_LIB_CACHE=verify` is the check.
-5. Add it to the "global flags" block of `usage()`, to both completion
+5. Add it to the "global flags" block of `drv_usage`, to both completion
    scripts (`_arguments` in zsh, `__tur_global_flags` in bash), and to
-   [compiler-flags-guide.md](compiler-flags-guide.md).
+   [compiler-flags-guide.md](compiler-flags-guide.md). Rewrite the CLI
+   goldens and add it to the `flags-stripped` golden's command line.
 6. If it is an in-flight feature rather than a diagnostic or codegen knob,
    it is an experiment instead: an `EXPERIMENTS[]` row behind `--enable=`
    (see the [experimental flags guide](experimental-flags-guide.md)).
@@ -692,10 +751,10 @@ Update this guide in the same PR when you:
 - add, remove or rename a subcommand, a global flag, or a flag-parsing
   route;
 - change `core_passes[]` or move work into or out of `run_core_pass`;
-- change how `cc` is chosen, the default flags, or `link_command_run`'s
+- change how `cc` is chosen, the default flags, or `drv_link_command_run`'s
   command shape;
 - add a cache, change a cache key, or change the build-directory ladder;
 - add an environment variable the driver reads.
 
-Refresh the environment table with `grep -o 'getenv("[A-Z_0-9]*")'
-src/main.c | sort -u`. Cite functions, not line numbers.
+Refresh the environment table with `grep -oh 'getenv("[A-Z_0-9]*")'
+src/main.c src/driver/*.c | sort -u`. Cite functions, not line numbers.

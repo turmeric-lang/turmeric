@@ -1,0 +1,13 @@
+;; unknown-type-annotation-becomes-implicit-tyvar: a parameter annotated with
+;; a name that is no type and relates to nothing else in the signature is an
+;; implicit type variable (the argument is unchecked), which is what a typo
+;; or the prose spelling `option<int>` becomes.  It now draws TUR-W0045, with
+;; the s-expression spelling for the prose forms.  Behaviour is unchanged: a
+;; declared variable (`[A]`), a name used twice, and a real type are quiet.
+(defn h3 [k : zork] : int 1)
+(defn h4 [x : option<int>] : int 2)
+(defn h5 [A] [k : A] : int 3)
+(defn h6 [a : wib b : wib] : int 4)
+(defn main [] : int
+  (println (+ (h3 4) (+ (h4 "s") (+ (h5 1.5) (h6 1 2)))))
+  0)

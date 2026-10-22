@@ -120,10 +120,10 @@ If you are about to write `:int` for a parameter or return type, **stop**
 and answer:
 
 - Is this value an opaque handle to a thing of a specific kind? -> `defopaque`
-  newtype. Never `:int`. (A `:ptr<TheStruct>` is meant to work too, but today
-  a `ptr<Foo>` parameter accepts a `ptr<Bar>` --
-  [typed-ptr-pointee-not-checked-at-calls](docs/reported/typed-ptr-pointee-not-checked-at-calls.md)
-  -- so prefer `defopaque` until that is fixed.)
+  newtype. Never `:int`. (A `:ptr<TheStruct>` works too: its pointee is
+  checked at calls and returns, so a `ptr<Foo>` parameter refuses a
+  `ptr<Bar>` --
+  [typed-ptr-pointee-not-checked-at-calls](docs/archive/typed-ptr-pointee-not-checked-at-calls.md).)
 - Is it a callback / function pointer? -> spell out the function type, e.g.
   `(fn [Request] (Option Response))`. Never `:int`.
 - Is it a boolean? -> `:bool`. Never `:int` with 0/1 convention.
@@ -141,8 +141,9 @@ for something else." Everything else gets a real type.
 `(Result T E)`, `(List T)` (from `stdlib/list-typed.tur`). The angle-bracket
 forms `option<T>`, `Option<T>`, `vec<T>` and `list<T>` are **not** types in an
 annotation. An unknown name there becomes an implicit type variable, so a
-parameter written `[x : option<int>]` accepts a `cstr` with no diagnostic
-([unknown-type-annotation-becomes-implicit-tyvar](docs/reported/unknown-type-annotation-becomes-implicit-tyvar.md)),
+parameter written `[x : option<int>]` accepts a `cstr`, with a TUR-W0045
+warning since 2026-10-21
+([unknown-type-annotation-becomes-implicit-tyvar](docs/archive/unknown-type-annotation-becomes-implicit-tyvar.md)),
 and `result<T,E>` does not even parse as one type. `ptr<T>` and `rc<T>` are
 built-in and do resolve, with the `ptr<T>` pointee caveat above.
 
@@ -864,6 +865,7 @@ PASS-skip it under certain conditions:
 | `requires.spices` | the sibling `../turmeric-spices/` checkout is absent |
 | `requires.musttail` | the fixture compiler (`$CC`) does not honour `TUR_MUSTTAIL` -- probed once per run with the same gate the emitter writes; today only clang on x86-64/aarch64 passes it |
 | `requires.posix-apis` | `TUR_HOST_WINDOWS=1` (an MSYS2 `MSYSTEM`); the fixture's inline-C needs a POSIX API MinGW lacks -- `pipe()`, `fork()`, `getppid()`. Applies to negative fixtures too |
+| `requires.jit` | (`run-turi.sh` only) the `tur` under test carries no JIT, so `--interpret` has no FFI to call a C function through `extern-c` |
 
 `tests/run-turi.sh` honours the same six markers (`requires.compiled`,
 `requires.tur-only`, `requires.dedicated-runner`, `requires.spices`,

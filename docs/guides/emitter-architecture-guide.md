@@ -30,15 +30,12 @@ Out of scope, with the guide that covers each:
 | The `#lang r7rs` split build | [r7rs-implementation-guide](r7rs-implementation-guide.md) |
 
 > **Trust the code over the comments.** The emitter's comments are long and
-> mostly accurate about *why*, but many are stale about *where* and *how
-> much*. Examples: `emit_expr.c` describes `emit_value_dispatch` as "~10k lines
-> over 124 cases" (it is ~12.9k lines over the 120 `ExprKind`s), the "Final
-> assembly order" comment in `emit_program_inner` lists 9 bands where the code
-> writes about 20, and a comment names `emit_join_coerce`, a function that does
-> not exist. When this guide and the code disagree, the code wins; fix the
-> guide.
-> The stale comments found so far in this area, each with a fix, are
-> listed in [stale-comments-emitter](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/stale-comments-emitter.md).
+> mostly accurate about *why*, but can be stale about *where* and *how much*.
+> When this guide and the code disagree, the code wins; fix the guide. A
+> `docs/` path cited in a source comment is checked by `tests/check-src-doc-citations.sh`
+> (the docs-lint job), so a moved report cannot leave a dead citation behind.
+> The comment fixes still open in this area are listed in
+> [stale-comments-emitter](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/stale-comments-emitter.md).
 
 ---
 
@@ -95,7 +92,7 @@ Out of scope, with the guide that covers each:
 
 | Entry | Inner | Used for |
 |---|---|---|
-| `emit_program` | `emit_program_inner` | `main.c:compile_to_c`, which `cmd_emit_c`, `cmd_build_once`, `cmd_jit` and the REPL's JIT build call |
+| `emit_program` | `emit_program_inner` | `driver/pipeline.c:compile_to_c`, which `cmd_emit_c`, `cmd_build_once`, `cmd_jit` and the REPL's JIT build call |
 | `emit_header` | `emit_header_inner` | per-module `.h` in a multi-module build |
 | `emit_implementation` | `emit_implementation_inner` | per-module `.c` in a multi-module build |
 | `emit_exports_manifest` | `emit_exports_manifest_inner` | `exports.manifest` for `--shared` |
@@ -825,7 +822,7 @@ The emitter writes a few comments that tools parse. Do not reword them.
 
 | Marker | Written by | Read by |
 |---|---|---|
-| `/* ==== tur: end of fixed runtime preamble ==== */` | `emit_runtime_preamble` | the JIT's split-runtime swap (`main.c:jit_try_split_preamble`) and pruner (`jit_prune.c:jit_prune_full_source`); `tools/gen-runtime-split.py`; `tests/fconv_lint.py` (skips everything above it) |
+| `/* ==== tur: end of fixed runtime preamble ==== */` | `emit_runtime_preamble` | the JIT's split-runtime swap (`driver/preamble_split.c:jit_try_split_preamble`) and pruner (`jit_prune.c:jit_prune_full_source`); `tools/gen-runtime-split.py`; `tests/fconv_lint.py` (skips everything above it) |
 | `/* tur:inline-c-begin */` ... `/* tur:inline-c-end */` | `inline_c_emit_block_deduped` around file-scope C | `tests/fconv_lint.py` |
 | `/* tur:inline-c-fns: a b c */` (last line) | `emit_note_inline_c_fn` / `emit_write_inline_c_fns` | `tests/fconv_lint.py` |
 | `/* tur:optional */` on a hoisted include | the author, carried by `TUR_HOIST_OPTIONAL_TAG` | `tur_emit_hoisted_include` |

@@ -227,7 +227,7 @@ After extracting, the tarball lays out like:
 `-- share/turmeric/stdlib/    # the standard library (~137 .tur files)
 ```
 
-`tur` finds `stdlib/` via a probe defined in `src/main.c`
+`tur` finds `stdlib/` via a probe defined in `src/driver/paths.c`
 (`resolve_stdlib_root`), in this order:
 
 1. The `TUR_STDLIB_DIR` environment variable, if set.
@@ -449,6 +449,6 @@ failed attempt's history is preserved.
   in the `turmeric-lang/homebrew-turmeric` tap; this one is kept for one
   release for people who tapped this repo by URL, then removed.
 - `.github/workflows/release.yml` -- the release pipeline.
-- `src/main.c` (`resolve_stdlib_root`) -- the stdlib-discovery logic
+- `src/driver/paths.c` (`resolve_stdlib_root`) -- the stdlib-discovery logic
   that makes both the tarball and Homebrew layouts work without code
   changes.

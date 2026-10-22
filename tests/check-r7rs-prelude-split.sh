@@ -37,7 +37,7 @@ case "$(uname -m)" in
     *) echo "SKIP check-r7rs-prelude-split: 64-bit targets only"; exit 0 ;;
 esac
 # The split is on by default on Linux and Darwin (prelude_split_applies,
-# src/main.c); Windows keeps one unit until its report closes
+# src/driver/pipeline.c); Windows keeps one unit until its report closes
 # (docs/reported/r7rs-prelude-split-wrong-symbols-on-windows.md).
 case "$(uname -s)" in
     Linux|Darwin) ;;

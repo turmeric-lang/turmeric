@@ -1,0 +1,4 @@
+usage: tur add <url> [--ref <ref>] [--name <name>] [--subdir <dir>]
+       tur add <path> --path
+       tur add --workspace <name>
+[exit 1]

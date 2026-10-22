@@ -1,0 +1,4 @@
+;; module-and-ffi-forms-gaps 2: `[^]` is an empty parameter list; a lone `^`
+;; beside real parameters means nothing and is refused.
+(extern-c frob [^ ^int] :int)
+(defn main [] : int 0)

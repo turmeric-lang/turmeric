@@ -1,0 +1,2 @@
+error: --macro-caps only accepts 'io' (got 'ffi'); ffi/unsafe/inline-c/async are never available at macro-expansion time
+[exit 2]

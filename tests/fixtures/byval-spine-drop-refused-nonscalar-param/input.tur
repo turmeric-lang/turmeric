@@ -1,0 +1,33 @@
+#lang saffron
+;; byval-spine-drop-refused-nonscalar-param -- the counter-case to
+;; byval-spine-drop-past-early-exit: the spine must NOT be released at the exit
+;; when what leaves through it can carry a pointer into the spine.
+;;
+;; `carry` is an `any` PARAMETER, and each turn the tail self-call hands it a
+;; match BINDER -- `t` out of `(Cons h t)` -- which is a pointer to the second
+;; cell of THIS turn's `xs`.  Had `xs`'s chain been freed at the back-edge,
+;; `carry` would still point into it, and the next iteration (and the final
+;; `match`) would read a freed cell.
+;;
+;; So both gates refuse: the confinement walk sees the binder alias leave as an
+;; argument, and no drop is flagged for `xs`; the emitter's signature gate
+;; (`current_fn_spine_drop_safe`) is false besides, since `carry` is not a
+;; number.  The loop leaks its spine every turn, and that leak is the open
+;; residue `known-leak` names; a wrongly admitted free would show here as a
+;; use-after-free, which a marker does not excuse.
+;;
+;; This fixture is asserting a NON-optimisation.  What passing means: the right
+;; answer is printed (the last turn's second cell holds 7), and nothing is
+;; freed early.
+
+(defdata Lst [] (Cons [hd : any tl : any]) (Nil))
+
+(defn drive [i : int n : int carry] : int
+  (if (= i n)
+    (cast (match carry (Cons h t) h (Nil) 0) int)
+    (let [xs (Cons i (Cons 7 (Nil)))]
+      (drive (+ i 1) n (match xs (Cons h t) t (Nil) xs)))))
+
+(defn main [] : int
+  (println (drive 0 50 (Nil)))   ;; 7
+  0)

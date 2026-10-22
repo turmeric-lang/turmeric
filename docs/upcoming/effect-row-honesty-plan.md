@@ -225,7 +225,7 @@ and `stdlib/` still compiles.
 ### W2 -- Make `IO` available where `println` is -- DONE 2026-10-02
 
 > **Done:** the five tags are registered, with parents and `is_capability`,
-> wherever `Unsafe` is -- the elaborator's env, `PASS_EFFECT_LOWER`'s and the
+> wherever `Unsafe` is -- the elaborator's env, `PASS_EFFECT_ENV`'s and the
 > interpreter's session env (`effect_env_register_builtin_capabilities`).
 > `stdlib/effects.tur` keeps its declarations, because the docs live on them;
 > a `defeffect` of one of these names is accepted only when it matches the
@@ -292,7 +292,7 @@ default-off lint half and reads as though nothing is enforced.
 **Note on the `--no-proc-macros` default while here:** the premise for
 flipping it was the false rust-analyzer claim, so the author's 2026-09-30
 decision (LSP does not pass it by default) stands unchanged. If it is
-revisited, the flag is **global** (`src/main.c:9589`, `:12420`), so flipping
+revisited, the flag is **global** (`src/driver/cli.c:GLOBAL_FLAGS`, `src/driver/worker.c:wk_apply_flags`), so flipping
 its default would refuse `defmacro*` in `tur build` too. rust-analyzer's
 setting is scoped to the language server; `cargo build` always runs proc
 macros. The faithful analogy is a **per-subcommand** default -- deny for

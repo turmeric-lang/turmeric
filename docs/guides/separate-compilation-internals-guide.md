@@ -62,7 +62,7 @@ shared runtime TU is in the
 | `src/compiler/elab_toplevel.c` | `elaborate_program`; the `load` preprocessor (`load_expand_forms`, `load_path_key`, `elab_expand_module_loads`); the stdlib promotion sweep |
 | `src/compiler/stdlib_autoload.c`, `.h` | The autoload list (`autoload_files_`), `tur_stdlib_autoload_files`, `tur_stdlib_prepend_forms` |
 | `src/compiler/spice_search.c`, `.h` | Walk-up to the enclosing `build.tur` (`spice_find_root`), its `src/`, `:spices` deps and workspace siblings (`spice_search_append`) |
-| `src/main.c` | Drivers: `compile_to_c` (whole-program), `compile_to_h`, `compile_to_implementation`, `load_project_prelude`, `cmd_build_project`, `cmd_build_multi`, `cmd_build_multi_files`, `cmd_emit_c_to_dir`, `auto_append_spice_includes` |
+| `src/driver/` | Drivers: `compile_to_c` (whole-program), `compile_to_h`, `compile_to_implementation` and `load_project_prelude` (`pipeline.c`); `cmd_build_project`, `cmd_build_multi` and `cmd_build_multi_files` (`project.c`); `cmd_emit_c_to_dir` (`cmd_emit.c`); `auto_append_spice_includes` (`spice.c`) |
 | `src/compiler/emit_module.c` | `emit_header`, `emit_implementation`, `emit_abi_clone_name`, `emit_inst_method_wants_external`, `emit_imported_adt_ctors`, the r7rs split helpers (`emit_split_lib_owns`) |
 | `src/compiler/emit.h` | `ForcedAbiSpec`, `BorrowSpecInfo`, the public emit entry points |
 | `src/compiler/emit_fns.c` | `emit_fn_def`: the `needs_static` linkage decision |
@@ -206,7 +206,7 @@ rewrites every `tur/`-module binding's `defining_module_name` to NULL and sets
 
 | # | Directory | Source |
 |---|---|---|
-| 1 | `e->module_base_dir` | The **entry** file's directory (`dir_of_path(path)` in the driver) |
+| 1 | `e->module_base_dir` | The **entry** file's directory (`drv_dir_of_path(path)` in the driver) |
 | 2 | `e->module_stdlib_dir` | `TUR_STDLIB_DIR`, else the literal `stdlib` |
 | 3 | `e->module_include_dirs[0..n)` | `-I` flags first, then auto-discovered spice dirs |
 
@@ -229,7 +229,7 @@ library is found by its name.
 
 ### Auto-spice discovery
 
-`auto_append_spice_includes` (`main.c`) appends to the include list, after the
+`auto_append_spice_includes` (`driver/spice.c`) appends to the include list, after the
 user's `-I` flags, whatever `spice_search_append` (`spice_search.c`) finds.
 It is skipped under `--no-auto-spice`.
 
@@ -456,7 +456,8 @@ Real names from `tur emit-c`:
 
 Ownership: the module that defines the generic owns every clone of it. A
 borrower's clone reaches the owner as a `ForcedAbiSpec`
-`{clone_name, fn_symbol, result_kind, arg_kinds[], n_args}`, and the owner
+`{clone_name, fn_symbol, result_kind, arg_kinds[], n_args, result_adt,
+arg_adts[]}`, and the owner
 emits the body and the header prototype in pass 2. In the tiny project below,
 `app` calls `util`'s `ident` at `cstr`, and the result is:
 
@@ -468,9 +469,13 @@ build/obj/util.c:5435:const char * util__ident__spec__const_char___const_char__(
 build/obj/app.c:5414:  ... (util__ident__spec__const_char___const_char__("hi"));
 ```
 
-A forced spec carries `TypeKind`s, not types: the owner rebuilds them with
-`emit_type_from_kind`. That is exact for scalars and `cstr`, and loses the
-identity of an aggregate (see [Known gaps](#known-gaps)).
+A forced spec carries `TypeKind`s, plus the ADT name at each `TY_ADT`
+position (`forced_spec_adt_name`). The owner rebuilds each position with
+`forced_spec_pos_type`: a named ADT the owner itself defines becomes its full
+type, so the clone takes the by-value struct the borrower passes; everything
+else goes through `emit_type_from_kind`, which is exact for scalars and `cstr`.
+An ADT the owner does not define -- the borrower's own, or a third module's --
+still falls back to the carrier (see [Known gaps](#known-gaps)).
 
 ### Typeclass instances across modules
 
@@ -572,7 +577,7 @@ Then look at the evidence:
 |---|---|
 | `multiple definition of '<fn>__spec__...'` in two module `.c` files | Before 2026-10-21: two modules define generics with the same bare name, instantiated at the same types (clone names were not module-qualified). Now the clone carries its module's prefix, so look for two specs of one module's generic minted under one name |
 | `multiple definition of '__inst_<Class>_<m>_<T>'` | Before 2026-10-21: a `definstance` in a non-stdlib file that several modules `(load ...)`. Such copies are weak now; a strong duplicate means the instance is in two modules' own files |
-| `incompatible type for argument N of '<fn>__spec__tur_adt_...'` | A forced spec at an aggregate type: the owner's clone takes `int64_t` |
+| `incompatible type for argument N of '<fn>__spec__tur_adt_...'` | A forced spec at a struct the owner does not define: the owner's clone takes `int64_t`. Before 2026-10-21 this happened for the owner's own structs too ([forced-spec-loses-aggregate-type](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/forced-spec-loses-aggregate-type.md)) |
 | `undefined reference to '<mod>__<fn>'` | The module is not in the build set, or inline C spells a mangled name by hand ([cross-module-private-helper-dropped-at-link](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/cross-module-private-helper-dropped-at-link.md)) |
 | `undefined reference to 'main'` | No module of a separate executable build defines `main`; `_main.c` does not synthesize one |
 | `static declaration follows non-static declaration`, `conflicting types` | The header prototype and the `.c` definition disagree (linkage or parameter spelling) -- e.g. [sepcomp-cps-entry-wrapper-byptr-agg-param-mismatch](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/sepcomp-cps-entry-wrapper-byptr-agg-param-mismatch.md) |
@@ -611,7 +616,7 @@ this guide was written; link the reports here once they are.
 
 | Gap | Where |
 |---|---|
-| A forced spec at an aggregate type is emitted with `int64_t` parameters and result | `ForcedAbiSpec` / `BorrowSpecInfo` carry `TypeKind`; `emit_type_from_kind` in `emit_header_inner` and `emit_implementation_inner` |
+| A forced spec at a by-value struct the owner does not define (the caller's own, or a third module's) is emitted with `int64_t` there ([forced-spec-at-foreign-aggregate](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/forced-spec-at-foreign-aggregate.md)) | `forced_spec_pos_type` finds only the owner's own `EX_DEFDATA` items; an imported `AdtDef` is not among them |
 | An effect performed in one module's TU cannot reach a `handle` in another's. It is refused at the call site, not threaded | per-TU coloring; `static` `__cps` twins; the entry wrapper's fresh root continuation; the refusal is `effect_check.c` (`foreign_check`) |
 | Nested imports resolve against the entry file's directory, and the diagnostic calls it the importing file's | `elab_module.c:elab_load_module_impl` (`module_base_dir`) |
 
@@ -624,6 +629,7 @@ this guide was written; link the reports here once they are.
 | Multi-module whole-program fixtures | `tests/fixtures/module-*`, `load-in-imported-module`, `cross-module-*` (run by `tests/run.sh`) |
 | Project builds, manifest descent, `--shared`, the runtime owner TU | `tests/run-build-project.sh` |
 | Two headers carrying one monomorph | `tests/run-result-typedef-multi-module.sh` (ctest `tur_result_typedef_multi_module`) |
+| Forced specs at the owner's by-value structs | `tests/run-forced-spec-aggregate.sh` (ctest `tur_forced_spec_aggregate`) |
 
 Most `module-*` fixtures run whole-program, so they do not exercise the split.
 A change to header or implementation emission wants a case in
@@ -638,7 +644,7 @@ Each was reproduced against the compiler this guide describes and filed in
 update the passage above that describes it and drop it from this list.
 
 - [sepcomp-cross-module-effect-unhandled](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/sepcomp-cross-module-effect-unhandled.md) -- Separately compiled: an effect performed in one module cannot reach a handler in another (refused at build time since 2026-10-18)
-- [forced-spec-loses-aggregate-type](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/forced-spec-loses-aggregate-type.md) -- A cross-module specialization at a struct type is emitted at `int64_t`
+- [forced-spec-at-foreign-aggregate](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/forced-spec-at-foreign-aggregate.md) -- A cross-module specialization at a struct the owner does not define is emitted at `int64_t` (narrowed from the archived forced-spec-loses-aggregate-type)
 
 ## Maintenance
 

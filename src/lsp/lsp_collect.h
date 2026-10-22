@@ -15,10 +15,10 @@ struct Expr;
  * LspSymbol array. This is the whole of what the LSP means by "analysis": the
  * compiler does the work, this reads the result off the tree.
  *
- * Split out of main.c so the walk has exactly one implementation. `tur lsp`
+ * Split out of the driver so the walk has exactly one implementation. `tur lsp`
  * reaches it through compile_to_c; the WASM playground reaches it through its
  * own front end (src/web/wasm_lsp.c), which has no CLI to inherit. Leaving the
- * walk welded to main.c would have forced the second caller to grow a copy,
+ * walk welded to the CLI would have forced the second caller to grow a copy,
  * and a copy is how the two would quietly stop agreeing about what a symbol is.
  *
  * Single-threaded: one collection is in flight at a time, bracketed by

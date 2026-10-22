@@ -111,4 +111,10 @@ bool tur_state_remove(TurState *st, const char *name);
 bool tur_installed_spice_dir(const char *name, char *out, size_t out_sz,
                              char **out_version, char **out_resolved);
 
+/* E14: the --json flag.  When true, `tur doc` and `tur test` print JSON and
+ * `tur check` writes its diagnostics as JSON.  The storage lives in install.c,
+ * not the driver, so libturi (which links tur_core but not the driver)
+ * resolves it; the driver's flag parsing sets it. */
+extern bool use_json_output;
+
 #endif /* TUR_GLOBAL_H */

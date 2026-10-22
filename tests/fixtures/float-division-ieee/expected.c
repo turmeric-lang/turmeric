@@ -408,187 +408,183 @@ static int64_t tur_opt_value(int64_t __o) {
 #    define TUR_RT_API
 #  endif
 #endif
-/* ---- begin src/runtime/region.h (embedded verbatim) ---- */
+/* ---- begin src/runtime/region.h (embedded; comments stripped) ---- */
 #ifndef TUR_REGION_H
 #define TUR_REGION_H
-/* region.h -- declared lifetimes (RM3), over the Arena that already ships.
- *
- * The reclamation plan's third phase.  RM1 frees a box whose owner is a scope;
- * RM2 would free a node whose owner is a value, and cannot, because a
- * persistent structure's nodes have no unique owner -- `(SBind v t rest)`
- * shares `rest` with every older chain, so "is this the last reference?" is a
- * runtime fact no static rule answers.
- *
- * A region does not ask who owns a node.  It asks WHEN THE GENERATION DIES.
- * Every node allocated between a push and its matching pop dies at the pop, in
- * one O(slabs) rewind, with no per-node bookkeeping at all.
- *
- * See docs/archive/regions-plan.md.  ON BY DEFAULT since graduation out of
- * `--enable=regions` on 2026-09-05 (g_opt_regions, default true); TUR_REGIONS=0
- * is the bisection hatch that restores the pre-graduation build.
- *
- * THE SAFETY RULE, and it is the whole design:
- *
- *   A region that cannot prove every escaping value relocatable does not
- *   rewind.
- *
- * There are no partial rewinds and no best-effort.  A shape the escape check
- * cannot handle costs a SAVING, never correctness -- the same discipline
- * turi's value-pool promotion walk runs on ("a missed shape means this eval
- * does not shrink, never use-after-reset").  R1 ships the mechanism with the
- * rule enforced the only way it can be before the escape check exists: a pop
- * rewinds only when the caller has vouched for the generation
- * (`tur_region_pop_reclaim`), and the plain `tur_region_pop` does not rewind
- * at all.  R3 replaces the caller's word with a proof.
- *
- * The Debug arena poisons reclaimed bytes, so a value that outlives its region
- * crashes loudly under ASan rather than reading stale-but-mapped data.  That
- * backstop is why this is shippable behind a flag at all; do not disable it. */
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 #include <stdbool.h>
 #include <stddef.h>
 
-/* Linkage qualifier for the public surface.  Empty when this is compiled as
- * an ordinary runtime TU (the compiler itself, libturt_runtime.a).  The
- * emitter pastes this header and region.c verbatim into an emitted program
- * that does not link the archive (src/compiler/emit_module.c,
- * emit_region_runtime_bodies); in a --shared build it defines this as
- * TUR_RT_LOCAL (hidden visibility) first, so a .so keeps its generation stack
- * to itself -- the same reasoning DEDUP-5 applied to the GC registry. */
+
+
+
+
+
+
+
 #ifndef TUR_RT_API
 #define TUR_RT_API
 #endif
 
-/* Push a new generation.  Returns the depth, which `tur_region_pop*` takes
- * back so a mismatched pair is caught rather than silently rewinding someone
- * else's generation.
- *
- * The generation stack is PER-THREAD (see region.c): a bracket opened on one
- * thread is popped on that thread, and a worker thread's allocations never
- * land in a generation the main thread has open.  Ownership (`tur_region_owns`,
- * and so `tur_region_free`) is still process-wide. */
+
+
+
+
+
+
+
+
 TUR_RT_API int  tur_region_push(void);
 
-/* Pop WITHOUT reclaiming: the generation's memory stays live for the process.
- * The conservative default, and what R1 uses everywhere -- correctness with no
- * saving, which is the safe half of the rule above.
- *
- * Every pop tolerates a stack DEEPER than `depth`: the generations above it
- * had their pops skipped (a panic unwound through their brackets), and they
- * are retired -- never rewound -- on the way down, so the stack cannot stay
- * jammed on a stale innermost generation.  A `depth` deeper than the stack is
- * a spent handle and a no-op. */
+
+
+
+
+
+
+
+
+
+
 TUR_RT_API void tur_region_pop(int depth);
 
-/* Pop AND rewind, unconditionally.  The caller asserts that nothing allocated
- * in this generation is still reachable.  Prefer `tur_region_pop_checked`,
- * which asks rather than asserts; this one remains for a caller that owns both
- * ends of the scope and has its own proof. */
-TUR_RT_API void tur_region_pop_reclaim(int depth);
 
-/* --- R3: the escape check ---------------------------------------------- *
- *
- * Note that `p` crosses out of the innermost generation.  A value that is NOT
- * region memory (a malloc'd box, a static, a scalar cast to a pointer) is
- * recorded and harmless; one that IS marks the generation non-reclaimable.
- *
- * WHAT THIS DOES AND DOES NOT ESTABLISH, because the difference is the whole
- * safety argument:
- *
- *   It proves the escaping pointer ITSELF does not point into the generation.
- *   It proves nothing about what that pointer TRANSITIVELY reaches -- a
- *   malloc'd struct whose field points at a region node passes this check and
- *   would dangle after a rewind.
- *
- * So this is the SECOND lock, not the first.  The first is static: the region
- * form only reclaims when its result TYPE cannot transitively reach a
- * region-allocated node, which is a compile-time question with a decidable
- * conservative answer.  This runtime check catches the direct case cheaply and
- * makes a static mistake loud rather than silent.  Neither alone is the
- * argument; do not remove one on the strength of the other.
- *
- * The same note is the STORE-SIDE lock (region-lock-hardening, 2026-09-06):
- * every primitive that writes a caller's word into memory that can outlive
- * the bracket -- vec-push!, a map insert, a cell set, a closure capture, a
- * heap-boxed constructor field, an erasing `(:: node :int)` -- notes the word
- * through the emitted `TUR_REGION_NOTE` macro.  A store is an escape the
- * result walk cannot see, and before this it rewound a generation an outer
- * container still pointed into.  The note flags whichever LIVE generation
- * owns `p`, not only the innermost: a store fired inside a nested bracket for
- * a value the outer generation allocated must block the OUTER rewind. */
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 TUR_RT_API void tur_region_note_escape(const void *p);
 
-/* Note every aligned word of `n` bytes at `p` -- a by-value aggregate crossing
- * a boundary or being boxed.  A scalar word compared as an address is simply
- * not region memory; an erased pointer field is, and flags its generation. */
+
+
+
 TUR_RT_API void tur_region_note_escape_words(const void *p, size_t n);
 
-/* Pop, reclaiming ONLY if no noted escape pointed into the generation.
- * Returns true when it reclaimed, false when it retired instead -- the caller
- * can use that to report whether a region paid for itself.
- *
- * Reclaiming REWINDS rather than releases: the arena is reset (which poisons
- * its bytes in a Debug build, so a straggler traps at the deref under ASan
- * instead of reading stale data) and kept for the next push.  A per-query
- * region in a loop therefore allocates its slabs once. */
+
+
+
+
+
+
+
+
 TUR_RT_API bool tur_region_pop_checked(int depth);
 
-/* Allocate `n` bytes in the innermost live generation.  Returns NULL when no
- * region is open, which every caller must treat as "use malloc instead" -- a
- * region is an optimisation, never a requirement. */
+
+
+
 TUR_RT_API void *tur_region_alloc(size_t n);
 
-/* Allocate `n` bytes in the innermost live generation if one is open, and from
- * the heap otherwise.  The routing point for RM3 R2: a spine-node constructor
- * calls this instead of `malloc`, so the SAME emitted code allocates by
- * generation inside a region and exactly as it does today outside one.
- *
- * A caller must therefore never assume the result is region memory -- pair it
- * with `tur_region_owns` before any `free()`.  That guard is the whole reason
- * the two allocators can share one call site. */
+
+
+
+
+
+
+
+
 TUR_RT_API void *tur_region_alloc_or_malloc(size_t n);
 
-/* True when `p` points into any live generation.  The guard the reclamation
- * plan requires on every free path: a pointer into region memory must never
- * reach `free()`, because the slab, not the pointer, owns it. */
+
+
+
 TUR_RT_API bool tur_region_owns(const void *p);
 
-/* `free(p)` unless `p` is region memory, in which case the generation owns it
- * and the pop reclaims it.
- *
- * R4 makes this load-bearing rather than advisory.  R2 routed the spine-node
- * constructor through `tur_region_alloc_or_malloc`, so from R2 onward a node
- * inside a region is arena memory while the SAME emitted drop glue still ends
- * in `free(ptr)` -- an allocator mismatch that aborts, not a leak.  Every node
- * free path therefore spells this instead of `free` when regions are enabled,
- * exactly mirroring the allocation side's one-call-site routing.
- *
- * A NULL is a no-op, like `free`. */
+
+
+
+
+
+
+
+
+
+
+
 TUR_RT_API void tur_region_free(void *p);
 
-/* True when at least one generation is open (on this thread). */
+
 TUR_RT_API bool tur_region_active(void);
 
-/* Number of generations open on this thread.  A test / probe surface: a
- * bracket that did not pop shows up as a depth that never returns to 0. */
+
+
 TUR_RT_API int  tur_region_depth(void);
 
-/* Release every generation and the backing arena.  Process teardown only.
- * Under TUR_REGION_STATS=1 it first prints `region-stats: pushes=N
- * rewinds=N retires=N` to stderr -- the instrument tests/regions-fuzz-src.py
- * checks its rewind / retire model against, so a lock that quietly became a
- * blanket refusal shows up as a savings regression rather than as nothing. */
+
+
+
+
+
 TUR_RT_API void tur_region_shutdown(void);
 
-/* Call `cb` on the used memory of every live and retired generation on this
- * thread (a pooled, rewound one is dead memory and is skipped).  The r7rs-gc
- * experiment's collector reads these as roots: a node built in a bracket can
- * point at an object on the collected heap. */
+
+
+
+
 TUR_RT_API void tur_region_each_used(void (*cb)(const void *p, size_t n, void *ud),
                                      void *ud);
 
-/* The same over every thread's generations (the ownership registry), for a
- * collector that has stopped the other threads.  The lock is a spinlock a
- * stopped thread may hold, so the collector tries it and walks under it. */
+
+
+
 TUR_RT_API bool tur_region_registry_trylock(void);
 TUR_RT_API void tur_region_registry_unlock(void);
 TUR_RT_API void tur_region_each_registered(void (*cb)(const void *p, size_t n, void *ud),
@@ -736,7 +732,7 @@ static void *__tur_fatshim_keep[] __attribute__((unused)) = {
     (void *)__tur_fatshim7, (void *)__tur_poly_to_fat7,
     (void *)__tur_fatshim8, (void *)__tur_poly_to_fat8,
 };
-/* ---- begin src/runtime/arena.h (embedded verbatim) ---- */
+/* ---- begin src/runtime/arena.h (embedded; comments stripped) ---- */
 #ifndef TUR_ARENA_H
 #define TUR_ARENA_H
 
@@ -744,8 +740,8 @@ static void *__tur_fatshim_keep[] __attribute__((unused)) = {
 #include <stdint.h>
 #include <stdbool.h>
 
-/* Linkage qualifier -- see region.h.  Empty in an ordinary runtime TU; the
- * emitter defines it before pasting this header into an emitted program. */
+
+
 #ifndef TUR_RT_API
 #define TUR_RT_API
 #endif
@@ -754,10 +750,10 @@ typedef struct ArenaSlab ArenaSlab;
 
 typedef struct Arena {
     ArenaSlab *head;
-    /* Slabs emptied by arena_reset, waiting to be reused.  The head chain is
-     * where allocations land and what arena_each_used walks; a reset keeps
-     * the head slab there and parks the rest here, so the next generation
-     * refills them before it asks malloc for more. */
+    
+
+
+
     ArenaSlab *spare;
     size_t default_slab;
     size_t total_bytes;
@@ -770,41 +766,41 @@ TUR_RT_API void *arena_alloc_aligned(Arena *a, size_t size, size_t align);
 TUR_RT_API char *arena_strdup(Arena *a, const char *s, size_t len);
 TUR_RT_API void  arena_free(Arena *a);
 
-/* Rewind every slab to empty without releasing the backing memory, so the arena
- * can be reused for a fresh generation of allocations in O(slabs).  This is the
- * scratch-region reset primitive for the turi value-pool scratch/permanent split
- * (turi-value-pool-scratch-promotion-plan): a long-lived TuriEnv rewinds its
- * scratch pool at each top-level eval boundary after promoting escapees.
- *
- * In a Debug build (NDEBUG undefined) the reclaimed bytes are overwritten with a
- * poison pattern first, so any pointer that survived into the rewound region and
- * is dereferenced afterwards crashes loudly under ASan instead of reading stale
- * (but still-mapped) data -- the "poison-on-reset debug mode" the plan calls for. */
+
+
+
+
+
+
+
+
+
+
 TUR_RT_API void  arena_reset(Arena *a);
 
-/* True when p points into any slab currently owned by a.  Used by the promotion
- * walk to decide whether a payload pointer is scratch-allocated (copy + forward)
- * or lives elsewhere -- permanent pool, eval arenas, sym arena, static data --
- * and must be left untouched.  O(slabs). */
+
+
+
+
 TUR_RT_API bool  arena_owns(const Arena *a, const void *p);
 
-/* Each slab's data block and capacity, head chain then spare: exactly the
- * ranges arena_owns answers for.  region.c indexes a retired generation's
- * slabs by address with it (performance-audit R-3). */
+
+
+
 TUR_RT_API void  arena_each_slab(const Arena *a,
                                  void (*cb)(const void *data, size_t cap, void *ud),
                                  void *ud);
 
-/* Call `cb` on the used bytes of every slab -- the memory a conservative
- * collector must read as roots (the r7rs-gc experiment scans region memory
- * this way, since an object built in a region can point into its heap). */
+
+
+
 TUR_RT_API void  arena_each_used(const Arena *a,
                                  void (*cb)(const void *p, size_t n, void *ud),
                                  void *ud);
 
 #endif
 /* ---- end src/runtime/arena.h ---- */
-/* ---- begin src/runtime/arena.c (embedded verbatim) ---- */
+/* ---- begin src/runtime/arena.c (embedded; comments stripped) ---- */
 /* (local #include dropped: that header is pasted above) */
 
 #include <stdatomic.h>
@@ -819,28 +815,28 @@ struct ArenaSlab {
     ArenaSlab *next;
     size_t cap;
     size_t used;
-    /* data[cap] follows inline */
+    
     unsigned char data[];
 };
 
-/* ---- ASan-aware debug poisoning (docs/archive/history/arena-debug-poisoning-plan.md)
- *
- * The bump arena is invisible to ASan at sub-allocation granularity: a stale
- * pointer into a reset arena reads still-mapped garbage, and a stale pointer
- * into a FREED arena usually aliases the next compile's reallocated slabs
- * (malloc reuses the addresses), corrupting live data with no report.  In a
- * Debug+ASan build we close both holes:
- *
- *   - reset/free POISON the reclaimed bytes with the real ASan interface, so a
- *     straggler deref traps as use-after-poison AT the deref;
- *   - free QUARANTINES the slabs (poisoned, chained off a global so LSan still
- *     sees them as reachable) instead of returning them to malloc, so freed
- *     arena addresses are never reused within the process and the poison
- *     cannot be undone by a later malloc.
- *
- * Opt out with TUR_DEBUG_ARENA_POISON=0 (e.g. for a long-lived Debug REPL
- * where the quarantine's bounded, deliberate retention is unwanted).  The
- * whole mechanism compiles away in Release / non-ASan builds. */
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 #if defined(__has_feature)
 # if __has_feature(address_sanitizer)
 #  define TUR_ARENA_ASAN 1
@@ -849,22 +845,22 @@ struct ArenaSlab {
 # define TUR_ARENA_ASAN 1
 #endif
 
-/* Guard-page mode (plan phase AP4): TUR_DEBUG_ARENA_GUARD=1 in a Debug build
- * backs every slab with its own mmap and mprotect(PROT_NONE)s it on
- * arena_free instead of returning it to malloc.  Any later access through a
- * stale pointer into a freed arena is then a hard SIGSEGV AT THE DEREF, with
- * the faulting address still inside the old slab -- the strongest form of
- * the diagnostic, and the one that works when ASan's own allocator perturbs
- * the layout enough to hide the bug.  The protected regions are retained for
- * the life of the process (bounded, deliberate).  Opt-in only.
- *
- * Unavailable on Windows, hence TUR_ARENA_GUARD rather than a bare NDEBUG
- * test: the mode needs mprotect(PROT_NONE) to retire a mapping in place, and
- * platform_mman.h deliberately emulates only anonymous mmap/munmap -- it
- * declines mprotect rather than fake it (see the header's comment).  Since
- * this is an opt-in diagnostic and not a correctness feature, the Windows
- * build simply loses it and keeps the malloc path; TUR_DEBUG_ARENA_GUARD=1
- * is a no-op there. */
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 #if !defined(NDEBUG) && !defined(_WIN32)
 #define TUR_ARENA_GUARD 1
 #include <sys/mman.h>
@@ -892,9 +888,9 @@ static int arena_poison_mode(void) {
     return mode;
 }
 
-/* Freed-slab quarantine.  Chained via the slabs' own next pointers and rooted
- * in a global so the memory stays reachable (LSan-clean) while its addresses
- * stay out of malloc circulation for the life of the process. */
+
+
+
 static ArenaSlab *g_arena_quarantine = NULL;
 
 static void arena_dbg_unpoison(void *p, size_t n) {
@@ -912,8 +908,8 @@ static void oom(void) {
 static ArenaSlab *slab_new(size_t cap) {
 #ifdef TUR_ARENA_GUARD
     if (arena_guard_mode()) {
-        /* Page-rounded private mapping so arena_free can mprotect it whole.
-         * cap absorbs the rounding slack (header + cap == mapping exactly). */
+        
+
         size_t page  = (size_t)sysconf(_SC_PAGESIZE);
         size_t total = (sizeof(ArenaSlab) + cap + page - 1) & ~(page - 1);
         ArenaSlab *s = (ArenaSlab *)mmap(NULL, total, PROT_READ | PROT_WRITE,
@@ -950,12 +946,12 @@ TUR_RT_API void *arena_alloc_aligned(Arena *a, size_t size, size_t align) {
     if (size == 0) size = 1;
     if (align < sizeof(void *)) align = sizeof(void *);
 
-    /* Align the ABSOLUTE address, not the offset: the slab's data[] field sits
-     * at a non-trivial offset past the ArenaSlab header (e.g. 24 bytes), so a
-     * 16-byte-aligned malloc base leaves data[] only 8-byte aligned.  Aligning
-     * s->used alone would therefore never satisfy align > 8 (a TuriFiber leads
-     * with a ucontext_t needing 16-byte alignment -- see turi/fiber.c).  Round
-     * the real pointer up instead so any power-of-two alignment is honored. */
+    
+
+
+
+
+
     ArenaSlab *s = a->head;
     if (s) {
         uintptr_t base = (uintptr_t)s->data;
@@ -970,11 +966,11 @@ TUR_RT_API void *arena_alloc_aligned(Arena *a, size_t size, size_t align) {
         }
     }
 
-    /* Need another slab.  Reuse one a reset emptied when it is big enough --
-     * otherwise a rewound arena refills only its old head slab and mallocs the
-     * rest afresh on every generation, so a region rewound in a loop grows
-     * without bound.  Else grow: the extra `align` bytes cover worst-case
-     * alignment padding at the head of a fresh slab. */
+    
+
+
+
+
     ArenaSlab *fresh;
     if (a->spare && a->spare->cap >= size + align) {
         fresh = a->spare;
@@ -985,10 +981,10 @@ TUR_RT_API void *arena_alloc_aligned(Arena *a, size_t size, size_t align) {
         fresh = slab_new(cap);
     }
     fresh->next = a->head;
-    /* The link before the publication, as a signal handler on this thread
-     * sees it: the r7rs-gc collector stops a thread anywhere and then walks
-     * its region generations (r7gc.c, tur_region_each_registered), and a
-     * head published ahead of its link would hide every older slab. */
+    
+
+
+
     atomic_signal_fence(memory_order_seq_cst);
     a->head = fresh;
 
@@ -1018,9 +1014,9 @@ static void free_slabs(ArenaSlab *s) {
         ArenaSlab *next = s->next;
 #ifdef TUR_ARENA_GUARD
         if (arena_guard_mode()) {
-            /* Retire the whole mapping: any stale pointer into this arena now
-             * faults at the deref.  Never unmapped, so the address range is
-             * never recycled into a later arena. */
+            
+
+
             mprotect(s, sizeof(ArenaSlab) + s->cap, PROT_NONE);
             s = next;
             continue;
@@ -1028,10 +1024,10 @@ static void free_slabs(ArenaSlab *s) {
 #endif
 #if defined(TUR_ARENA_ASAN) && !defined(NDEBUG)
         if (arena_poison_mode()) {
-            /* Quarantine instead of free: poison the payload and park the slab
-             * (header included) so its addresses are never handed out again by
-             * malloc.  A stale cross-arena pointer then traps at the deref
-             * instead of silently aliasing the next arena's live data. */
+            
+
+
+
             __asan_poison_memory_region(s->data, s->cap);
             s->next = g_arena_quarantine;
             g_arena_quarantine = s;
@@ -1054,24 +1050,24 @@ TUR_RT_API void arena_free(Arena *a) {
     a->total_allocs = 0;
 }
 
-/* Poison byte for reclaimed scratch memory; 0xDE reads back as an obviously-bad
- * pointer (0xDEDEDEDE...) if a straggler is dereferenced. */
+
+
 #define ARENA_POISON 0xDE
 
 TUR_RT_API void arena_reset(Arena *a) {
     for (ArenaSlab *s = a->head; s; s = s->next) {
 #ifndef NDEBUG
-        /* Poison the bytes we are about to hand out again so a missed pointer
-         * into the rewound region crashes loudly instead of reading stale data. */
+        
+
         if (s->used) {
 #if defined(TUR_ARENA_ASAN)
             if (arena_poison_mode()) {
-                /* The used region is a patchwork of unpoisoned allocations and
-                 * still-poisoned alignment gaps from earlier generations, so
-                 * lift the poison before the memset can trip over a gap, then
-                 * re-poison the whole span with the real ASan interface: a
-                 * straggler deref now traps as use-after-poison at the deref
-                 * (arena_alloc unpoisons ranges as they are handed back out). */
+                
+
+
+
+
+
                 __asan_unpoison_memory_region(s->data, s->used);
                 memset(s->data, ARENA_POISON, s->used);
                 __asan_poison_memory_region(s->data, s->used);
@@ -1082,14 +1078,14 @@ TUR_RT_API void arena_reset(Arena *a) {
             memset(s->data, ARENA_POISON, s->used);
 #endif
         }
-#endif /* !NDEBUG */
+#endif 
         s->used = 0;
     }
-    /* Keep the head slab where allocations land and park the rest on the
-     * spare list (in their existing order, ahead of any older spares), so the
-     * next generation refills them before calling malloc.  The head's link is
-     * cut after the spare list holds the tail: a signal handler walking the
-     * head chain (r7gc) only ever sees empty slabs drop out of it. */
+    
+
+
+
+
     if (a->head && a->head->next) {
         ArenaSlab *tail = a->head->next;
         ArenaSlab *last = tail;
@@ -1129,42 +1125,42 @@ TUR_RT_API void arena_each_slab(const Arena *a,
     for (const ArenaSlab *s = a->spare; s; s = s->next) cb(s->data, s->cap, ud);
 }
 /* ---- end src/runtime/arena.c ---- */
-/* ---- begin src/runtime/region.c (embedded verbatim) ---- */
-/* region.c -- declared lifetimes (RM3).  See region.h for the design and
- * docs/archive/regions-plan.md for the phase.
- *
- * One Arena per generation rather than watermarks into a shared one.  Arena
- * exposes `arena_reset` (whole-arena rewind) and `arena_owns`, not a
- * save/restore watermark, so a per-generation Arena is what the existing API
- * supports without changing it -- and it makes `tur_region_owns` a walk over
- * the live generations instead of an address-range comparison that would have
- * to know about interleaving.  The retired ones, which accumulate, are
- * indexed by address (g_ridx below); a retired arena never changes, so that
- * index never has to.
- *
- * A generation popped WITHOUT reclaim is retired, not freed: its memory stays
- * mapped for the process.  That is deliberately the status quo (the spine
- * leaks today), so the conservative path costs nothing new, and it keeps
- * `tur_region_owns` true for those pointers -- a value that outlived its
- * generation must still never reach `free()`.
- *
- * THREADS (region-lock-hardening, 2026-09-06).  The generation stack is
- * PER-THREAD (`__thread`, exactly as src/runtime/trail.c keeps the trail and
- * tur_tls.c keeps the panic state): a bracket is a stack discipline over one
- * thread's control flow, and `bt-scope` already pushes a per-thread trail
- * level, so its generation belongs to the same thread.  With one process-wide
- * stack, a worker thread's spine nodes landed in whatever generation the main
- * thread happened to have open -- through an unsynchronised push_ptr/realloc
- * -- and were rewound under the worker when that bracket closed.
- *
- * What does NOT follow the thread is OWNERSHIP.  A node allocated in thread
- * A's generation and dropped by thread B must still never reach free(), so
- * `tur_region_owns` consults a process-wide registry of every arena that is
- * live or retired in ANY thread.  The registry is touched under a spinlock at
- * push, retire and reclaim (once per bracket, never per allocation), and the
- * ownership query skips the lock entirely while every registered arena is
- * this thread's own -- which is every single-threaded program, and every
- * multi-threaded one in which only one thread has ever opened a region. */
+/* ---- begin src/runtime/region.c (embedded; comments stripped) ---- */
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 /* (local #include dropped: that header is pasted above) */
 
 #include <pthread.h>
@@ -1178,53 +1174,53 @@ TUR_RT_API void arena_each_slab(const Arena *a,
 
 #define TUR_REGION_SLAB (64u * 1024u)
 
-/* Live generations, innermost last.  Depth is 1-based so 0 can mean "none". */
+
 static __thread Arena  **g_live;
 static __thread int      g_live_n;
 static __thread int      g_live_cap;
 
-/* Generations popped without reclaim.  Never freed before shutdown -- see the
- * file comment for why they are kept rather than released. */
+
+
 static __thread Arena  **g_retired;
 static __thread int      g_retired_n;
 static __thread int      g_retired_cap;
 
-/* The retired generations again, indexed by address: a slot per 64 KiB block
- * each retired slab overlaps, in an open-addressing table.  Every node free
- * asks tur_region_owns (regions are on by default, so the drop glue frees
- * through tur_region_free), and it used to walk g_retired -- so in a program
- * that keeps retiring, every free got slower for the life of the process
- * (performance-audit R-3).  Exact rather than approximate: a retired arena
- * never allocates again, so its slabs never change after they are indexed,
- * and a hit is confirmed with arena_owns.  If the table cannot grow, it is
- * marked broken and the query walks g_retired as before. */
+
+
+
+
+
+
+
+
+
 typedef struct { uintptr_t blk; Arena *a; } RetiredSlot;
 #define TUR_REGION_BLK_SHIFT 16
 static __thread RetiredSlot *g_ridx;
-static __thread size_t       g_ridx_cap;    /* a power of two; 0 = none yet */
+static __thread size_t       g_ridx_cap;    
 static __thread size_t       g_ridx_n;
 static __thread bool         g_ridx_broken;
 
-/* Reclaimed generations, reset and available for the next push.  Reclaiming
- * REWINDS rather than releases: arena_reset keeps the slabs (and poisons them
- * in a Debug build), so a per-query region inside a loop pays for its slabs
- * once instead of per iteration.  A pooled arena is dead memory -- deliberately
- * NOT reported by tur_region_owns, which answers about live and retired
- * generations only. */
+
+
+
+
+
+
 static __thread Arena  **g_pool;
 static __thread int      g_pool_n;
 static __thread int      g_pool_cap;
 
-/* R3: set on a generation when a noted escape points into it.  Parallel to
- * g_live, one flag per open generation.  Sticky: once a generation has leaked
- * a pointer it can never be reclaimed, however many safe escapes follow. */
+
+
+
 static __thread bool    *g_escaped;
 static __thread int      g_escaped_cap;
 
-/* Cross-thread ownership registry: every arena that is live or retired in any
- * thread.  `g_reg_total` counts them (atomic, read lock-free); `g_my_reg`
- * counts the ones this thread registered.  While the two agree, every
- * registered arena is ours and the per-thread walk is the whole answer. */
+
+
+
+
 static Arena         **g_reg;
 static int             g_reg_n;
 static int             g_reg_cap;
@@ -1235,14 +1231,14 @@ static __thread int    g_my_reg;
 static void reg_lock(void)   { while (atomic_flag_test_and_set_explicit(&g_reg_lock, memory_order_acquire)) { } }
 static void reg_unlock(void) { atomic_flag_clear_explicit(&g_reg_lock, memory_order_release); }
 
-/* TUR_REGION_STATS=1: count pushes, rewinds and retires (process-wide,
- * atomic) and print them at shutdown, so a harness can tell a region that
- * paid for itself from one that only ever retired.  The regions fuzzer
- * (tests/regions-fuzz-src.py) predicts these per program: a bracket with no
- * escape MUST rewind, or the lock has become a blanket refusal -- which is
- * safe, and exactly the regression a safety-only check would never see. */
+
+
+
+
+
+
 static atomic_int g_stat_push, g_stat_rewind, g_stat_retire;
-static int g_stats_enabled = -1;   /* -1: not read yet */
+static int g_stats_enabled = -1;   
 
 static bool stats_enabled(void) {
     if (g_stats_enabled < 0) {
@@ -1252,13 +1248,13 @@ static bool stats_enabled(void) {
     return g_stats_enabled == 1;
 }
 
-/* Thread exit.  A worker that opened a region owns three small arrays and a
- * pool of reset arenas that nothing else references; a pthread key destructor
- * releases them when the thread ends (the main thread's go through
- * tur_region_shutdown at atexit instead).  Live generations it abandoned are
- * retired -- something may still point into them -- and retired ones stay
- * registered, because a node that crossed to another thread still needs
- * `tur_region_owns` to answer for it. */
+
+
+
+
+
+
+
 static pthread_key_t   g_tls_key;
 static pthread_once_t  g_tls_once = PTHREAD_ONCE_INIT;
 static __thread bool   g_tls_armed;
@@ -1282,7 +1278,7 @@ static void tls_key_init(void) { pthread_key_create(&g_tls_key, tls_thread_exit)
 static void tls_arm(void) {
     if (g_tls_armed) return;
     pthread_once(&g_tls_once, tls_key_init);
-    pthread_setspecific(g_tls_key, (void *)1);   /* non-NULL: run the destructor */
+    pthread_setspecific(g_tls_key, (void *)1);   
     g_tls_armed = true;
 }
 
@@ -1304,19 +1300,19 @@ static void reg_add(Arena *a) {
         atomic_fetch_add_explicit(&g_reg_total, 1, memory_order_relaxed);
         g_my_reg++;
     }
-    /* A failed registration is conservative in the only direction that
-     * matters: the per-thread walk still knows this arena, and another thread
-     * asked about it gets "not owned" -- the same answer a registry could not
-     * have given it before this change.  It cannot rewind anything. */
+    
+
+
+
     reg_unlock();
 }
 
-/* From the END: brackets are LIFO, so the arena a reclaim hands back is almost
- * always among the last registered -- behind it sit only the inner
- * generations that retired since it was pushed -- and the swap-with-last
- * removal keeps the survivors in that order.  Scanning from index 0 instead
- * paid for every generation the program had ever retired, on every rewind
- * (performance-audit R-3). */
+
+
+
+
+
+
 static void reg_remove(Arena *a) {
     reg_lock();
     for (int i = g_reg_n - 1; i >= 0; i--) {
@@ -1335,14 +1331,14 @@ static int cmp_arena_ptr(const void *x, const void *y) {
     return a < b ? -1 : a > b;
 }
 
-/* Drop every registry entry for this thread's live and retired generations in
- * ONE pass.  Shutdown used to reg_remove each arena in turn, which is R x R/2
- * compares for R retirements -- 71% of a 100k-round program's cycles, all
- * after main returned (performance-audit R-3).  When every registered arena is
- * this thread's (every single-threaded program) the registry is simply
- * cleared; otherwise this thread's arenas are sorted and the registry filtered
- * against them.  Subtracts exactly what it removed, so the lock-free "all
- * mine" test in reg_owns_foreign stays true for the threads that remain. */
+
+
+
+
+
+
+
+
 static void reg_remove_mine(void) {
     reg_lock();
     int removed = 0;
@@ -1366,7 +1362,7 @@ static void reg_remove_mine(void) {
             g_reg_n = k;
             free(own);
         } else if (n > 0) {
-            /* No memory for the sort: one removal each, as before. */
+            
             reg_unlock();
             for (int i = 0; i < g_live_n; i++)    reg_remove(g_live[i]);
             for (int i = 0; i < g_retired_n; i++) reg_remove(g_retired[i]);
@@ -1379,8 +1375,8 @@ static void reg_remove_mine(void) {
 }
 
 static bool reg_owns_foreign(const void *p) {
-    /* Lock-free fast path: nothing registered that this thread does not
-     * already answer for. */
+    
+
     if (atomic_load_explicit(&g_reg_total, memory_order_acquire) == g_my_reg)
         return false;
     bool owned = false;
@@ -1396,7 +1392,7 @@ TUR_RT_API int tur_region_push(void) {
     tls_arm();
     if (stats_enabled()) atomic_fetch_add_explicit(&g_stat_push, 1, memory_order_relaxed);
     if (g_pool_n > 0) {
-        a = g_pool[--g_pool_n];    /* already reset by the reclaim that pooled it */
+        a = g_pool[--g_pool_n];    
     } else {
         a = (Arena *)calloc(1, sizeof(Arena));
         if (!a) return 0;
@@ -1408,35 +1404,35 @@ TUR_RT_API int tur_region_push(void) {
         return 0;
     }
     reg_add(a);
-    /* A fresh generation has escaped nothing.  Grow the flag vector alongside
-     * the live stack; a failure to grow it is treated as "escaped", so the
-     * generation is never reclaimed on the strength of a flag we could not
-     * store -- the conservative direction. */
+    
+
+
+
     if (g_live_n > g_escaped_cap) {
         int nc = g_escaped_cap ? g_escaped_cap * 2 : 8;
         if (nc < g_live_n) nc = g_live_n;
         bool *nf = (bool *)realloc(g_escaped, (size_t)nc * sizeof(bool));
-        if (!nf) return g_live_n;   /* flag missing -> read as escaped below */
+        if (!nf) return g_live_n;   
         g_escaped = nf;
         g_escaped_cap = nc;
     }
     g_escaped[g_live_n - 1] = false;
-    return g_live_n;   /* 1-based depth */
+    return g_live_n;   
 }
 
 TUR_RT_API void tur_region_note_escape(const void *p) {
     if (g_live_n <= 0 || !p) return;
-    /* Only an escape that IS region memory matters.  A malloc'd or static
-     * pointer crossing the boundary is ordinary and blocks nothing -- which is
-     * what makes this check worth having rather than a blanket refusal.
-     *
-     * Flag the generation that OWNS the pointer, not just the innermost one.
-     * The result note at a pop only ever sees its own generation, but a store
-     * hook (vec-push! into an outer container, a closure capture, ...) can
-     * fire inside a nested bracket for a value the OUTER generation allocated:
-     * that outer generation is the one that must not rewind, and it would
-     * have, because its own flag was never set.  Innermost-first, so the
-     * common case is one arena walk. */
+    
+
+
+
+
+
+
+
+
+
+
     for (int i = g_live_n - 1; i >= 0; i--) {
         if (arena_owns(g_live[i], p)) {
             if (i < g_escaped_cap) g_escaped[i] = true;
@@ -1447,11 +1443,11 @@ TUR_RT_API void tur_region_note_escape(const void *p) {
 
 TUR_RT_API void tur_region_note_escape_words(const void *p, size_t n) {
     if (g_live_n <= 0 || !p) return;
-    /* Every aligned word of a by-value aggregate, read as a possible address.
-     * A word that is not a pointer at all compares as an address and simply is
-     * not region memory; a word that IS a region pointer -- an erased `:int`
-     * field, a boxed element's box, a closure env -- flags its generation.
-     * False positives refuse a rewind (the safe direction), never permit one. */
+    
+
+
+
+
     const unsigned char *b = (const unsigned char *)p;
     for (size_t off = 0; off + sizeof(void *) <= n; off += sizeof(void *)) {
         void *w;
@@ -1460,8 +1456,8 @@ TUR_RT_API void tur_region_note_escape_words(const void *p, size_t n) {
     }
 }
 
-/* Read the flag conservatively: a generation whose flag we could not store is
- * treated as having escaped. */
+
+
 static bool generation_escaped(int idx0) {
     if (idx0 < 0) return true;
     if (idx0 >= g_escaped_cap) return true;
@@ -1492,15 +1488,15 @@ static bool ridx_grow(void) {
     return true;
 }
 
-/* arena_each_slab callback: one slot per 64 KiB block the slab overlaps, kept
- * at most half full so every probe ends at an empty slot. */
+
+
 static void ridx_add_slab(const void *data, size_t cap, void *ud) {
     if (g_ridx_broken || cap == 0) return;
     uintptr_t lo = (uintptr_t)data >> TUR_REGION_BLK_SHIFT;
     uintptr_t hi = ((uintptr_t)data + cap - 1) >> TUR_REGION_BLK_SHIFT;
     for (uintptr_t b = lo; b <= hi; b++) {
         if ((g_ridx_n + 1) * 2 > g_ridx_cap && !ridx_grow()) {
-            g_ridx_broken = true;   /* incomplete from here on: walk instead */
+            g_ridx_broken = true;   
             return;
         }
         ridx_put(g_ridx, g_ridx_cap, b, (Arena *)ud);
@@ -1519,26 +1515,26 @@ static void retire_top(void) {
     Arena *a = g_live[--g_live_n];
     if (stats_enabled()) atomic_fetch_add_explicit(&g_stat_retire, 1, memory_order_relaxed);
     if (!push_ptr(&g_retired, &g_retired_n, &g_retired_cap, a)) {
-        /* Out of memory retiring it: the arena stays mapped and unreferenced,
-         * which is the same outcome the retired list produces.  Never free it
-         * -- something may still point in.  It stays in the registry, so a
-         * drop path that reaches it still refuses to free(). */
+        
+
+
+
         return;
     }
     arena_each_slab(a, ridx_add_slab, a);
 }
 
-/* Both pops take the depth back so a mismatched pair cannot rewind somebody
- * else's generation.
- *
- * A depth SHALLOWER than the stack means the deeper generations' pops were
- * skipped -- a panic that unwound through a bracket without running its pop.
- * Those generations are retired here (never rewound: something the unwinder
- * left behind may still point into them), so the stack does not stay jammed
- * with a stale innermost that every later allocation would land in and that
- * would refuse every outer pop.  A depth DEEPER than the stack is a spent
- * handle and a no-op.  Either way the failure stays "no saving", never
- * "reclaimed memory still in use". */
+
+
+
+
+
+
+
+
+
+
+
 static Arena *detach(int depth) {
     if (depth <= 0 || depth > g_live_n) return NULL;
     while (g_live_n > depth) retire_top();
@@ -1550,13 +1546,18 @@ TUR_RT_API void tur_region_pop(int depth) {
     while (g_live_n >= depth) retire_top();
 }
 
-TUR_RT_API void tur_region_pop_reclaim(int depth) {
+
+
+
+
+
+static void region_pop_rewind(int depth) {
     Arena *a = detach(depth);
     if (!a) return;
-    /* Rewind, do not release.  arena_reset keeps the slabs and, in a Debug
-     * build, poisons them -- so a straggler traps at the deref under ASan
-     * instead of reading stale bytes, and the next push reuses the memory
-     * rather than asking the allocator again. */
+    
+
+
+
     arena_reset(a);
     reg_remove(a);
     if (stats_enabled()) atomic_fetch_add_explicit(&g_stat_rewind, 1, memory_order_relaxed);
@@ -1567,18 +1568,18 @@ TUR_RT_API void tur_region_pop_reclaim(int depth) {
 }
 
 TUR_RT_API bool tur_region_pop_checked(int depth) {
-    if (depth <= 0 || depth > g_live_n) return false;   /* spent handle: refuse */
-    while (g_live_n > depth) retire_top();               /* skipped inner pops */
+    if (depth <= 0 || depth > g_live_n) return false;   
+    while (g_live_n > depth) retire_top();               
     if (generation_escaped(depth - 1)) {
-        tur_region_pop(depth);       /* retire: correctness over saving */
+        tur_region_pop(depth);       
         return false;
     }
-    tur_region_pop_reclaim(depth);
+    region_pop_rewind(depth);
     return true;
 }
 
 TUR_RT_API void *tur_region_alloc(size_t n) {
-    if (g_live_n <= 0) return NULL;   /* no region open -- caller uses malloc */
+    if (g_live_n <= 0) return NULL;   
     return arena_alloc(g_live[g_live_n - 1], n);
 }
 
@@ -1604,10 +1605,10 @@ TUR_RT_API bool tur_region_owns(const void *p) {
 
 TUR_RT_API void tur_region_free(void *p) {
     if (!p) return;
-    /* Region memory is owned by the generation, not by this pointer: handing it
-     * to free() is an allocator mismatch (glibc aborts), so the guard is not a
-     * leak-avoidance nicety but the thing that keeps a region-allocated node
-     * survivable at all once a drop path runs over it. */
+    
+
+
+
     if (tur_region_owns(p)) return;
     free(p);
 }
@@ -1620,12 +1621,12 @@ TUR_RT_API void tur_region_each_used(void (*cb)(const void *p, size_t n, void *u
     for (int i = 0; i < g_retired_n; i++) arena_each_used(g_retired[i], cb, ud);
 }
 
-/* Every thread's live and retired generations, through the ownership
- * registry.  For the r7rs-gc collector (docs/archive/r7rs-gc-threads-plan.md):
- * it stops every other thread before it reads roots, so the arenas hold
- * still; but a stopped thread may be inside reg_add/reg_remove holding the
- * registry's spinlock, so the collector TRIES the lock, and on a refusal
- * lets the world run and stops it again. */
+
+
+
+
+
+
 TUR_RT_API bool tur_region_registry_trylock(void) {
     return !atomic_flag_test_and_set_explicit(&g_reg_lock, memory_order_acquire);
 }
@@ -1648,11 +1649,11 @@ TUR_RT_API void tur_region_shutdown(void) {
         fprintf(stderr, "region-stats: pushes=%d rewinds=%d retires=%d\n",
                 atomic_load(&g_stat_push), atomic_load(&g_stat_rewind),
                 atomic_load(&g_stat_retire));
-    /* This thread's arenas only: another thread's live or retired generations
-     * are its own, and at process exit they go with the process.  Their
-     * registry entries are dropped too, so a shutdown that follows every
-     * thread's exit leaves nothing allocated.  The entries go first, in one
-     * pass, so no other thread can find a freed arena in the registry. */
+    
+
+
+
+
     reg_remove_mine();
     for (int i = 0; i < g_live_n; i++)    { arena_free(g_live[i]);    free(g_live[i]); }
     for (int i = 0; i < g_retired_n; i++) { arena_free(g_retired[i]); free(g_retired[i]); }
@@ -2235,6 +2236,17 @@ static int64_t tur_catch_panic_of_box(int expected_type, int64_t thunk) {
             global_panic_payload = NULL;
             return tur_box_err((int64_t)(intptr_t)__p);
         }
+        /* panic-forms-gaps 2: no outer boundary means no one to
+         * propagate to -- the panic is uncaught, and the staged signal
+         * would be swallowed by main's return (exit 0, `after` printed).
+         * Raise it afresh with the boundary gone: abort, as an uncaught
+         * panic does, or reach a fiber's own buffer. */
+        if (__p && !tur_handler_chain) {
+            tur_panicking = 0; tur_panic_in_progress = 0;
+            global_panic_payload = NULL;
+            if (__p->owns_value) tur_panic_at(__p->file, __p->line, (const char *)__p->value);
+            else tur_panic_with(__p->type_tag, __p->value, __p->file, __p->line);
+        }
         /* type mismatch: leave the signal + payload staged so it
          * propagates to the next outer boundary via the return path.
          * catch-unwind-panic-payload-leaks: return a NULL box rather
@@ -2279,6 +2291,12 @@ static int64_t tur_catch_panic_of_box_via(int expected_type, int64_t (*__call)(v
             tur_panicking = 0; tur_panic_in_progress = 0;
             global_panic_payload = NULL;
             return tur_box_err((int64_t)(intptr_t)__p);
+        }
+        if (__p && !tur_handler_chain) {  /* no outer boundary: uncaught */
+            tur_panicking = 0; tur_panic_in_progress = 0;
+            global_panic_payload = NULL;
+            if (__p->owns_value) tur_panic_at(__p->file, __p->line, (const char *)__p->value);
+            else tur_panic_with(__p->type_tag, __p->value, __p->file, __p->line);
         }
         return 0;
     }

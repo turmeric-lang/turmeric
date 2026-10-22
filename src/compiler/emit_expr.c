@@ -8,9 +8,6 @@
 #include "mono_specs.h" /* VBM3: van Laarhoven lens dispatch redirect */
 #include "stack_guard.h" /* emit-depth-guard-loses-race-with-asan-stack */
 
-/* ACB: true when kind represents a concrete aggregate type (struct, ADT, or
- * type-application) that the carrier ABI stores as a heap pointer.  Used by
- * KB-004 and KB-010 bridge insertion sites. */
 /* S1/findings 16: hand the panic-hoist the return C type this builder just
  * spelled into its own call text (cast fn-ptr, thunk typedef, member fn).
  * Call as the LAST thing before returning the composed string -- nested
@@ -27,8 +24,8 @@ static void note_call_ret(EmitCtx *ctx, const char *ct) {
  * type: a `(Result any any)` match binder and a `vec-get` temp are both typed
  * as the element tyvar (or its `int` carrier), yet one is declared
  * `tur_tagged_t` and the other `int64_t`.  The same two-step question the
- * `any` temp reader asks (emit_join_coerce's temp_is_tagged arm): the local's
- * recorded spelling, else the value's own representation. */
+ * `any` temp reader asks (bridge_control_result_int_ptr's temp_is_tagged arm):
+ * the local's recorded spelling, else the value's own representation. */
 static const char *emit_binding_repr_c_name(EmitCtx *ctx, Type binding_ty,
                                             const Expr *init);
 static bool emit_arg_is_any_carrier_word(EmitCtx *ctx, const char *raw,
@@ -50,6 +47,9 @@ static bool emit_arg_is_any_carrier_word(EmitCtx *ctx, const char *raw,
     return ct && strcmp(ct, "int64_t") == 0;
 }
 
+/* ACB: true when kind represents a concrete aggregate type (struct, ADT, or
+ * type-application) that the carrier ABI stores as a heap pointer.  Used by
+ * KB-004 and KB-010 bridge insertion sites. */
 static bool type_kind_is_aggregate(TypeKind k) {
     return k == TY_STRUCT || k == TY_ADT || k == TY_APP;
 }
@@ -1039,7 +1039,7 @@ static bool emit_var_spec_arg_type(EmitCtx *ctx, const Expr *var_expr, Type *out
  * The same bare-var-tail bug is therefore still reachable for a non-parametric
  * product; closing it needs a predicate that distinguishes the two positions,
  * not a broader type test.  See
- * docs/reported/byvalue-product-tail-var-double-unboxed-nonparametric.md. */
+ * docs/archive/byvalue-product-tail-var-double-unboxed-nonparametric.md. */
 static bool type_is_byvalue_product_app(EmitCtx *ctx, Type t) {
     Type rt = emit_resolve_type(ctx, t);
     if (rt.kind != TY_APP) return false;
@@ -1975,7 +1975,7 @@ static Type fn_body_tail_byvalue_carrier_type_inner(EmitCtx *ctx,
             /* CONV-S1 seam 4 (inline-C generic-element result): a `: A` inline-C
              * body (e.g. `vec-get`) always returns the int64 carrier regardless
              * of the element type, and at a non-spec call site the bare tyvar `A`
-             * has no binding so emit_resolve leaves it abstract.  The TYPER, by
+             * has no binding so emit_resolve_type leaves it abstract.  The TYPER, by
              * contrast, already grounded the CALL's own result type to the
              * concrete element (`(Option int)` here, via the `(:: ... (Option
              * int))` read).  Fall back to that grounded type so a by-value
@@ -4999,10 +4999,20 @@ static char *emit_let_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                 let_binding_widen_drop_stmt(ctx, e, i);
         }
     }
-    if (!body_has_return_or_throw) {
-        /* Its own loop rather than an arm of the else-chain below: a recursive
-         * local can also be env- or box-freeable, and those are different
-         * questions about the same binding. */
+    /* byval-spine-drop-past-early-exit: collected OUTSIDE the
+     * `!body_has_return_or_throw` gate below, unlike its neighbours and like
+     * the `any` drop above.  Inside it, a body with an explicit `return`
+     * collected no spine drop at all, so
+     * `(let [xs (Cons ...)] (return (match xs ...)))` leaked its spine on
+     * every call.  Collected here, the drop is pushed onto the early-exit
+     * channel when the enclosing signature permits it
+     * (EmitCtx.current_fn_spine_drop_safe) and emitted trailing on BOTH
+     * fall-through paths, exactly the two places the `any` drop fires.
+     *
+     * Its own loop rather than an arm of the else-chain below: a recursive
+     * local can also be env- or box-freeable, and those are different
+     * questions about the same binding. */
+    {
         for (uint32_t i = 0; i < e->as.let_.n; i++) {
             const Binding *rb = e->as.let_.bindings[i].binding;
             if (!rb || !rb->drops_local_owned || rb->type.kind != TY_ADT ||
@@ -5027,6 +5037,8 @@ static char *emit_let_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             locown_types[n_locown] = rtn;
             n_locown++;
         }
+    }
+    if (!body_has_return_or_throw) {
         for (uint32_t i = 0; i < e->as.let_.n; i++) {
             if (!let_binding_mut_cell_freeable(ctx, e, i)) continue;
             cell_free_names = (char **)realloc(cell_free_names,
@@ -5118,6 +5130,24 @@ static char *emit_let_value(EmitCtx *ctx, Buf *body, const Expr *e) {
     uint32_t any_scope_mark = ctx->n_any_scope_drops;
     for (uint32_t i = 0; i < n_any_free; i++)
         any_scope_drops_push(ctx, any_free_names[i]);
+    /* byval-spine-drop-past-early-exit: the spine drops join the channel, so a
+     * `return` inside the body fires them (after hoisting its value to a temp
+     * -- emit_stmt.c's return arm) instead of jumping past the trailing free.
+     * Gated on the enclosing signature: the `return` hands out only the
+     * result, and the gate says it is a number, so it cannot point into the
+     * spine.  Ungated, the trailing frees below still run on fall-through,
+     * which is the free the ungated path always emitted. */
+    if (body_has_return_or_throw && ctx->current_fn_spine_drop_safe) {
+        for (uint32_t i = 0; i < n_locown; i++) {
+            Buf ds;
+            buf_init(&ds);
+            buf_printf(&ds, "drop_localowned_%s((void *)&%s)",
+                       locown_types[i], locown_names[i]);
+            buf_putc(&ds, '\0');
+            any_scope_drops_push(ctx, ds.data);
+            buf_free(&ds);
+        }
+    }
 
     if (body_has_return_or_throw) {
         /* Body contains return/throw but may still produce a value on the
@@ -5151,6 +5181,19 @@ static char *emit_let_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             free(any_free_names[i]);
         }
         free(any_free_names);
+        /* byval-spine-drop-past-early-exit: the spine drop on the same
+         * fall-through path, for the same reason -- and, when the signature
+         * gate declined the channel push, this is the only place it fires.
+         * Reverse order, matching the ungated trailing emission below. */
+        for (uint32_t i = n_locown; i-- > 0; ) {
+            indent_buf(body, ctx->indent);
+            buf_printf(body, "drop_localowned_%s((void *)&%s);\n",
+                       locown_types[i], locown_names[i]);
+            free(locown_names[i]);
+            free(locown_types[i]);
+        }
+        free(locown_names);
+        free(locown_types);
         /* Close scope */
         ctx->indent -= 4;
         indent_buf(body, ctx->indent);
@@ -5677,6 +5720,28 @@ void emit_panic_call(Buf *body, Span span, const char *msg) {
         buf_putc(body, *p);
     }
     buf_printf(body, "\", %u, %s);\n", span.line, msg);
+}
+
+void emit_panic_with_call(Buf *body, Span span, int type_tag, const char *payload) {
+    /* panic-forms-gaps 3.  `panic-with` passed the C compiler's
+     * __FILE__/__LINE__, so an uncaught one reported the generated C file
+     * (`panic at /tmp/tur-build/k.c:2759`) and a caught one's
+     * panic-payload-line was a line of generated code.  `panic` passes the
+     * source span; so does this. */
+    const char *path = span.line ? diag_file_path(span.file_id) : NULL;
+    if (!path) {
+        buf_printf(body, "tur_panic_with(%d, (void*)%s, __FILE__, __LINE__);\n",
+                   type_tag, payload);
+        return;
+    }
+    const char *base = path;
+    for (const char *p = path; *p; p++) if (*p == '/' || *p == '\\') base = p + 1;
+    buf_printf(body, "tur_panic_with(%d, (void*)%s, \"", type_tag, payload);
+    for (const char *p = base; *p; p++) {
+        if (*p == '\\' || *p == '"') buf_putc(body, '\\');
+        buf_putc(body, *p);
+    }
+    buf_printf(body, "\", %u);\n", span.line);
 }
 
 static char *emit_if_value(EmitCtx *ctx, Buf *body, const Expr *e) {
@@ -6294,13 +6359,17 @@ static void emit_gen_functions(EmitCtx *ctx, const GenDef *def) {
      * reading it as the spec's pbp param spilled the word and passed its
      * ADDRESS (`ok_hyval(&__t)`). */
     uint32_t gen_saved_npbp = ctx->n_pbp_params;
+    /* byval-spine-drop-past-early-exit: nor is its signature verdict. */
+    bool gen_saved_spine_safe = ctx->current_fn_spine_drop_safe;
     ctx->current_fn_ret_ctype = "void *";
+    ctx->current_fn_spine_drop_safe = false;
     ctx->frame_var = NULL;
     ctx->panic_signal_is_break = false;
     ctx->n_pbp_params = 0;
 
     emit_stmt(ctx, &fn_body, def->body);
     ctx->current_fn_ret_ctype = gen_saved_ret;
+    ctx->current_fn_spine_drop_safe = gen_saved_spine_safe;
     ctx->frame_var = gen_saved_frame;
     ctx->panic_signal_is_break = gen_saved_brk;
     ctx->n_pbp_params = gen_saved_npbp;
@@ -6967,10 +7036,10 @@ char *emit_word_slot_bits(const Type *t, const char *v) {
  * host, under any sanitizer.
  *
  * Replacing the native recursion with an explicit worklist would remove even
- * the backstop.  That is a real project -- emit_value_dispatch is ~10k lines
- * over 124 cases, each interleaving statement emission with child-value
- * emission, and there are ~218 emit_value call sites -- and it is not what the
- * stack overflow required. */
+ * the backstop.  That is a real project -- emit_value_dispatch is the largest
+ * function in the tree, one arm per ExprKind, each interleaving statement
+ * emission with child-value emission, and emit_value is called from a couple
+ * of hundred sites -- and it is not what the stack overflow required. */
 
 /* Depth at which the headroom check switches on.  Below this the walk cannot
  * plausibly be the thing exhausting the stack, and skipping the check keeps a
@@ -10357,8 +10426,8 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     buf_printf(body, "tur_panic_set_frame(&%s);\n", ctx->frame_var);
                 }
                 /* tur_panic_with takes type_tag (int), payload (void*), file, line */
-                buf_printf(body, "tur_panic_with(%d, (void*)%s, __FILE__, __LINE__);\n",
-                           (int)payload->type.kind, payload_val);
+                emit_panic_with_call(body, e->span, (int)payload->type.kind,
+                                     payload_val);
                 /* tur_panic_with returns; propagate now. */
                 emit_panic_signal_return(ctx, body);
             }
@@ -10467,9 +10536,15 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
             const Expr *payload = e->as.panic_payload_downs_.payload;
             TypeKind target_type = e->as.panic_payload_downs_.target_type;
             char *payload_var = emit_value(ctx, body, payload);
+            /* panic-forms-gaps 1: this evaluated the payload and produced
+             * nothing, so any use of the result was `invalid use of void
+             * expression`.  The runtime helper exists in every preamble. */
+            char *result = malloc(strlen(payload_var) + 96);
+            snprintf(result, strlen(payload_var) + 96,
+                     "tur_panic_payload_downcast((tur_panic_payload*)(intptr_t)(%s), %d)",
+                     payload_var, (int)target_type);
             free(payload_var);
-            (void)target_type; /* unused in v1 */
-            return atom_nil();
+            return result;
         }
         /* Phase 18: Delimited continuations */
         case EX_RESET:            return emit_effects_reset(ctx, body, e);
@@ -11776,12 +11851,22 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                          * the int64 box-pointer carrier -- emit_fns.c /
                          * emit_module.c declare such a param `int64_t
                          * __tur_b4box_<name>` and the thunk deref+copies it back.
-                         * Heap-box the aggregate here so the call matches that
+                         * Box the aggregate here so the call matches that
                          * carrier ABI; passing the raw `tur_adt_Box` into the
                          * int64_t slot is an incompatible-type cc error.  Affects
                          * both the closure's own recursive self-call and the
-                         * enclosing letrec's direct invocation. */
-                        raw = emit_carrier_bridge_escaping(ctx, body, raw,
+                         * enclosing letrec's direct invocation.
+                         *
+                         * letrec-struct-arg-and-env-leak: the box lives in THIS
+                         * frame (the non-escaping bridge spills to a local and
+                         * passes its address), not on the heap.  The thunk only
+                         * borrows it -- it deref-copies the value at body entry
+                         * and keeps no pointer (emit_fns.c, "no free here") --
+                         * so a heap box here had no owner and leaked once per
+                         * call.  The `&` the spill writes keeps the call off
+                         * musttail (tail_call_musttail_ok refuses any `&`), so
+                         * the frame is alive for the whole call. */
+                        raw = emit_carrier_bridge(ctx, body, raw,
                                   CK_CONCRETE, CK_CARRIER,
                                   emit_resolve_type(ctx, e->as.call_.args[i]->type));
                     } else {
@@ -12503,7 +12588,6 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                             }
                         }
                     }
-                    free(lam_cname_owned);
                     /* fnsan-thin-call-fn-param: a function-typed parameter of
                      * the callee is `int64_t` in its definition -- every
                      * TY_FN parameter is, the fat handle or the code word --
@@ -12546,8 +12630,47 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                         Type aspec_t;
                         if (emit_var_spec_arg_type(ctx, e->as.call_.args[i], &aspec_t))
                             ait = aspec_t;
-                        buf_puts(&out, type_c_name(ait));
+                        const char *aic = type_c_name(ait);
+                        /* typed-ptr-pointee-not-checked-through-closures: a
+                         * lambda's `ptr<Foo>` parameter is emitted as
+                         * `tur_adt_Foo *` and its `ptr<void>` one as `void *`,
+                         * but the argument may be the other of the two (both
+                         * are accepted).  Spelling the slot from the argument
+                         * then called `__fn(void *)` through `(tur_adt_Foo *)`
+                         * -- a -fsanitize=function trap and a WebAssembly
+                         * call_indirect trap.  Take the lambda's own spelling
+                         * when both sides are pointers and one of them is
+                         * `void *`: C converts the argument implicitly. */
+                        const char *lpc = lam_cname
+                            ? emit_sig_lookup_param_ctype(lam_cname, i) : NULL;
+                        /* A let-bound lambda carries no closure_head_init, so
+                         * its recorded signature is not found above; its
+                         * binding's declared type says the same thing.  The
+                         * definition spells a `ptr<Foo>` parameter from its
+                         * full type and a bare `ptr<void>` one as `void *`. */
+                        if (!lpc && fn_binding && fn_binding->type.kind == TY_FN &&
+                            fn_binding->type.as.fn.arg_kinds &&
+                            i < fn_binding->type.as.fn.arity &&
+                            fn_binding->type.as.fn.arg_kinds[i] == TY_PTR_VOID) {
+                            const Type *aft = fn_binding->type.as.fn.arg_full_types
+                                ? fn_binding->type.as.fn.arg_full_types[i] : NULL;
+                            lpc = (aft && aft->kind == TY_PTR_VOID)
+                                ? emit_type_c_name(ctx, *aft) : "void *";
+                        }
+                        size_t lpl = lpc ? strlen(lpc) : 0;
+                        size_t ail = aic ? strlen(aic) : 0;
+                        if (lpl && ail && lpc[lpl - 1] == '*' && aic[ail - 1] == '*' &&
+                            strcmp(lpc, aic) != 0 &&
+                            (strcmp(lpc, "void *") == 0 || strcmp(aic, "void *") == 0)) {
+                            buf_puts(&out, lpc);
+                            continue;
+                        }
+                        buf_puts(&out, aic);
                     }
+                    /* Freed only now: the cast loop above still reads the
+                     * lambda's recorded signature through lam_cname. */
+                    free(lam_cname_owned);
+                    lam_cname = NULL;
                     buf_printf(&out, "))(intptr_t)%s)(", fn_ptr);
                     for (uint32_t i = 0; i < n; i++) {
                         if (i > 0) buf_puts(&out, ", ");
@@ -13106,7 +13229,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                          * only way to store one -- a `:fn` field segfaults)
                          * emits C that warns, and tests/run.sh's cc-warning gate
                          * rejects it.  See
-                         * docs/reported/closure-in-defdata-field.md. */
+                         * docs/archive/closure-in-defdata-field.md. */
                         if (!field_is_carrier && fft) {
                             Type fr = emit_resolve_type(ctx, *fft);
                             field_is_carrier = fr.kind == TY_ADT &&
@@ -15206,12 +15329,9 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                          fn_binding->type.as.fn.arg_full_types &&
                          i < fn_binding->type.as.fn.arity &&
                          fn_binding->type.as.fn.arg_full_types[i]) {
-                    /* structdef-retirement DS-D: the former carrier->concrete
-                     * bridge for a struct-headed Option/Result param
-                     * (type_extract_struct_app) never fired once Option/Result
-                     * lowered to record ADTs -- no struct-headed app forms.  A
-                     * lowered Option/Result construct-template arg already crosses
-                     * correctly via the general carrier handling. */
+                    /* A lowered Option/Result construct-template arg crosses
+                     * via the general carrier handling; no struct-headed app
+                     * forms, so there is no separate bridge here. */
                     (void)0;
                 }
                 /* Phase D / tuplen-struct-param: a pass-by-pointer struct
@@ -17394,6 +17514,9 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                 tctx.n_defer_captures = 0;
                 tctx.frame_var = NULL;
                 tctx.return_emitted = false;
+                /* byval-spine-drop-past-early-exit: the thunk is its own C
+                 * function, not the one whose signature was judged. */
+                tctx.current_fn_spine_drop_safe = false;
 
                 char *ret = NULL;
                 if (fn_expr->type.kind == TY_NIL || fn_expr->type.kind == TY_NEVER) {
@@ -18087,13 +18210,19 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                 free(vslot);
                 free(frame);
             }
-            /* Emit body */
-            char *bval = emit_value(ctx, body, e->as.dynvar_binding_.body);
-            if (!nil_result) {
+            /* Emit body.  A nil body is a statement: its value expression is
+             * never written out, so `(binding [*level* 8] (show))` whose whole
+             * body is one call to a nil function dropped the call
+             * (definition-forms-gaps 2).  emit_stmt writes it, as a nil `let`
+             * body is written. */
+            if (nil_result) {
+                emit_stmt(ctx, body, e->as.dynvar_binding_.body);
+            } else {
+                char *bval = emit_value(ctx, body, e->as.dynvar_binding_.body);
                 indent_buf(body, ctx->indent);
                 buf_printf(body, "%s = %s;\n", result_tmp, bval);
+                free(bval);
             }
-            free(bval);
             /* Leaving the binding scope: unregister the guards an early
              * `return` inside the body would have popped. */
             for (uint32_t pi = 0; pi < n_pairs && ctx->n_dynvar_guards > 0; pi++) {
@@ -18142,12 +18271,11 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
         }
         case EX_PERFORM:
         case EX_WITH_HANDLER:
-            /* v2 invariant (fiber effect runtime deleted, Stage G): a `perform` and a
-             * handler-VALUE `with-handler` lower on the DK backend (emit_cps_ir),
-             * never the direct/fiber emitter -- their fiber emitters
-             * (emit_effects_perform / emit_effects_with_handler) emitted now-deleted
-             * runtime symbols and are removed.  So there is genuinely nothing to
-             * emit here, and emitting an undefined reference would be worse.
+            /* v2 invariant: a `perform` and a handler-VALUE `with-handler` lower
+             * on the DK backend (emit_cps_ir), never the direct emitter -- the
+             * CPS/DK backend is the only effect lowering.  So there is genuinely
+             * nothing to emit here, and emitting an undefined reference would be
+             * worse.
              * (EX_HANDLE keeps its emitter: a non-effect `handle` shape -- e.g. the
              * contract/MonadError lowering -- still has a live direct path.)
              *
@@ -21924,7 +22052,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                                      * is exactly what the pointer-box branch emits.
                                      * (sum-passthrough-param-not-dropped under
                                      * TUR_SR2_APP_SUM_BYVALUE=0;
-                                     * docs/reported/sr2-carrier-seam-rotted.md) */
+                                     * docs/archive/sr2-carrier-seam-rotted.md) */
                                     buf_printf(body, "%s %s = __scrut%s%s;\n",
                                                ctype, bname, acc, mp);
                                 } else if (type_struct_pass_by_ptr(

@@ -9,7 +9,7 @@
  * pkg.c used to run `shasum -a 256` / `sha256sum` through popen with POSIX
  * shell quoting, which no Windows host can satisfy: MinGW has neither tool and
  * popen there runs cmd.exe, where `'...'` is not quoting at all.  See
- * docs/reported/pkg-hash-shells-out-to-sha256sum.md. */
+ * docs/archive/pkg-hash-shells-out-to-sha256sum.md. */
 #ifndef TUR_SHA256_H
 #define TUR_SHA256_H
 

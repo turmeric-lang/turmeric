@@ -1,0 +1,22 @@
+;; typed-ptr-pointee-not-checked-through-closures: the shapes that keep working
+;; beside the closure-call pointee check -- the same pointee, an untyped
+;; ptr<void> in either direction, and an rc<S> given an rc<S>.
+(defstruct Foo [a : int])
+(defn mk-foo [] : ptr<Foo>
+  ```c
+  return 0;
+  ```)
+(defn mk-raw [] : ptr<void>
+  ```c
+  return 0;
+  ```)
+(defstruct S [n : int])
+(defn main [] : int
+  (let [takes-foo (fn [x : ptr<Foo>] : int 1)
+        takes-raw (fn [x : ptr<void>] : int 2)
+        peek      (fn [^borrow st : rc<S>] : int (.n (deref st)))]
+    (println (takes-foo (mk-foo)))
+    (println (takes-raw (mk-foo)))
+    (println (takes-foo (mk-raw)))
+    (println (peek (rc/of (S 9))))
+    0))

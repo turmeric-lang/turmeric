@@ -1060,6 +1060,19 @@ Expr *elab_defopaque(Elab *e, const Form *call) {
         const Form *base_form = call->as.list.items[base_idx];
         if (base_form->tag == F_KEYWORD && base_form->as.sym) {
             const char *bn = base_form->as.sym->name;
+            /* definition-forms-gaps 6: an unknown base keyword (`:string`) was
+             * accepted with no diagnostic and silently became the int64
+             * carrier.  The base is a type name `:type` would accept, a
+             * pointer spelling, or a type already in scope. */
+            if (typekind_from_symbol(bn) == TY_UNKNOWN &&
+                strcmp(bn, "void") != 0 &&
+                strncmp(bn, "ptr<", 4) != 0 &&
+                !scope_lookup_type_def(e->scope, base_form->as.sym)) {
+                diag_emit(DIAG_ERROR, base_form->span,
+                          "defopaque: unknown base type :%s -- expected a type "
+                          "such as :int, :float, :cstr, :ptr or :ptr<T>", bn);
+                return NULL;
+            }
             base_is_ptr_keyword =
                 (strcmp(bn, "ptr") == 0 || strcmp(bn, "ptr-void") == 0 ||
                  strncmp(bn, "ptr<", 4) == 0);
@@ -1078,6 +1091,11 @@ Expr *elab_defopaque(Elab *e, const Form *call) {
             def->opaque_base_is_ptr =
                 base_is_ptr_keyword ||
                 strcmp(bn, "cstr") == 0 || strcmp(bn, "Sym") == 0;
+            TypeKind bk = typekind_from_symbol(bn);
+            def->opaque_base_is_float =
+                bk == TY_FLOAT || bk == TY_FLOAT32 || bk == TY_FLOAT64;
+        } else {
+            def->opaque_base_is_float = false;
         }
     }
     /* option-niche: `:non-null` declares "this handle's valid values exclude
@@ -1894,6 +1912,18 @@ Expr *elab_defdata(Elab *e, const Form *call) {
                 /* Unwrap `: T` (F_TYPE_ANN) to the bare type form. */
                 if (type_f->tag == F_TYPE_ANN)
                     type_f = type_f->as.list.items[0];
+                /* definition-forms-gaps 6: field names are distinct (the
+                 * structs-guide says so).  `(defstruct P [x : int x : int])`
+                 * was accepted, and the second `x` was unreachable. */
+                for (uint32_t pf = 0; pf < nf; pf++) {
+                    if (rec_field_names[pf] == name_f->as.sym) {
+                        diag_emit(DIAG_ERROR, name_f->span,
+                                  "defdata: record-style variant '%s' declares "
+                                  "field '%s' twice", ctor_name->name,
+                                  name_f->as.sym->name);
+                        goto data_ctor_parse_error;
+                    }
+                }
                 rec_field_names[nf] = name_f->as.sym;
                 field_type_forms[nf] = type_f;
                 field_effect_forms[nf] = NULL;
@@ -3834,8 +3864,22 @@ Expr *elab_match(Elab *e, const Form *call) {
      * ONE ADT only.  Arms drawn from two different ADTs would need a box-id
      * switch over unrelated layouts, which is a bigger thing than a narrow and
      * has no arm-unifier story yet; leaving it to the existing diagnostic is
-     * better than narrowing to whichever ADT happened to be named first. */
-    if (scrutinee->type.kind == TY_ANY && lang_span_is_dynamic(call->span)) {
+     * better than narrowing to whichever ADT happened to be named first.
+     *
+     * match-on-any-was-gated-to-saffron: NOT gated on the dialect.  It was
+     * (`lang_span_is_dynamic`), because a dynamic dialect is where the shape
+     * ARRIVES by default -- an unannotated parameter is `any` there.  But
+     * `any` is a Turmeric type, `(defn peek [l : any] ...)` is a Turmeric
+     * signature, and a plain-Turmeric `match` on one emitted precisely the C
+     * this comment predicts -- `tur_adt_Lst __scrut_v = (l);`, "invalid
+     * initializer" -- a hard `cc` failure with no Turmeric-level diagnostic, on
+     * a program that compiled the moment `#lang saffron` was added.  The narrow
+     * for a non-parametric ADT has nothing dialect-specific in it.  The one
+     * part that does is the parametric case below, which is sound only where
+     * the constructors build at `any`; outside a dynamic dialect it says so
+     * rather than narrowing. */
+    if (scrutinee->type.kind == TY_ANY) {
+        bool scrut_dynamic = lang_span_is_dynamic(call->span);
         AdtDef *only = NULL;
         bool mixed = false;
         for (uint32_t ai = 0; ai < n_arms && !mixed; ai++) {
@@ -3938,6 +3982,24 @@ Expr *elab_match(Elab *e, const Form *call) {
                     return NULL;
                 }
                 do_narrow = false;   /* unindexed: decline, as before */
+            } else if (only->n_type_params > 0 && !scrut_dynamic) {
+                /* match-on-any-was-gated-to-saffron: the `(Shape any)` narrow
+                 * below is sound only because a dynamic dialect's constructor
+                 * BUILDS at `any`.  A plain-Turmeric `(Sq 6)` builds a
+                 * `(Shape int)`, so narrowing to `(Shape any)` would compile
+                 * and then panic `different instantiation`; declining leaves
+                 * the emitter's C error about aggregates.  Name the fix
+                 * instead -- `cast` to the instantiation already works. */
+                diag_emit(DIAG_ERROR, scrutinee->span,
+                          "cannot match an 'any' scrutinee against parametric "
+                          "'%s': the instantiation the box holds is not known "
+                          "here", only->name);
+                diag_emit(DIAG_HELP, scrutinee->span,
+                          "narrow with `cast` to the instantiation you expect "
+                          "-- `(match (cast s (%s int)) ...)` -- or annotate "
+                          "the scrutinee with it",
+                          only->name);
+                return NULL;
             } else if (only->n_type_params > 0) {
                 /* `type_from_kind`, NOT a memset-zeroed Type: `CK_UNIQUE` is 0
                  * and `CK_MOVE` is an alias for it, so a zeroed `any` is

@@ -56,8 +56,8 @@
 #include <windows.h>  /* GetModuleFileNameA */
 #endif
 
-/* Storage for the --json global. main.c sets this from argv parsing; we
- * (and other TUs) read it via extern declaration. */
+/* Storage for the --json global, declared in global.h.  The driver sets it
+ * from argv. */
 bool use_json_output = false;
 
 /* ------------------------------------------------------------------ */
@@ -213,7 +213,7 @@ static bool inst_rm_tree(const char *path) {
  * Was `system("rm -rf -- '%s'")`, which failed twice on Windows: cmd.exe has
  * no `rm`, and it does not treat '...' as quoting, so the path arrived with
  * the quotes still attached.  A tree walk needs neither a shell nor a quoting
- * rule.  docs/reported/windows-spice-fetch-shell-quoting.md */
+ * rule.  docs/archive/windows-spice-fetch-shell-quoting.md */
 bool pkg_rm_rf(const char *path) {
     if (!path || !*path) return false;
     if (!strchr(path, '/')) return false;
@@ -1214,7 +1214,7 @@ static void list_print_wrapped(const char *first_pfx, const char *cont_pfx,
 
 int cmd_pkg_list(int argc, char **argv) {
     bool verbose   = false;
-    /* `--json` is a global flag (stripped from argv by main.c); honor it. */
+    /* `--json` is a global flag (stripped from argv by the driver); honor it. */
     bool as_json   = use_json_output;
     bool installed = false; /* --installed alias accepted, no-op */
     bool outdated  = false;

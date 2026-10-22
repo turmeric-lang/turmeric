@@ -1,0 +1,5 @@
+;; refine-top-level-def-not-a-fact: a `^mut` global can be `set!`, so its
+;; initializer is not a fact.
+(def ^mut m 5)
+(defn needs-pos [x : #refine{ v : int | (> v 0) }] : int x)
+(defn main [] : int (set! m -1) (println (needs-pos m)) 0)

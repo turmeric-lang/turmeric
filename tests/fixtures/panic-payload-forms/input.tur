@@ -1,0 +1,14 @@
+;; panic-forms-gaps 1 and 5: the panic-payload-* forms on a caught panic, on
+;; both engines, without stdlib/panic.tur's inline-C wrappers.  The compiled
+;; panic-payload-downcast produced no value at all (any use of it was `invalid
+;; use of void expression`), and the interpreter's file/line were "" and 0.
+(defn boom [] : int
+  (panic "boom"))
+(defn main [] : int
+  (let [r (catch-unwind boom)]
+    (let [p (err-val r)]
+      (println (panic-payload-file p))
+      (println (panic-payload-line p))
+      (println (:: (panic-payload-downcast p :cstr) cstr))
+      (println (:: (panic-payload-downcast p :int) int))))
+  0)

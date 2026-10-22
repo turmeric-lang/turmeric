@@ -1,0 +1,8 @@
+usage:
+  tur parse-check <a> <b>   exit 0 if both files read to the same AST
+
+  <a> is read as turmeric, <b> as sweet-exp, unless an explicit
+  #lang directive overrides. Exit codes: 0 equal, 1 mismatch, 2 error.
+
+Try 'tur --help' for global options.
+[exit 0]

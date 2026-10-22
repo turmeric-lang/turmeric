@@ -1,4 +1,4 @@
-/* ffi_thunk.h -- RP4 of docs/spice-repl-plan.md.
+/* ffi_thunk.h -- RP4 of docs/archive/spice-repl-plan.md.
  *
  * Bridge between the REPL's eval layer (TuriValue / TuriEnv) and the
  * shape-keyed dispatcher in src/runtime/ffi_dispatch_thunk.c. For each

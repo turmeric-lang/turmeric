@@ -356,7 +356,7 @@ add_test(
   COMMAND "${CMAKE_BINARY_DIR}/tur_region_unit"
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
-# RM3 R2: --enable=regions with no region open must change nothing observable.
+# RM3: keep the TUR_REGIONS=0 bisection path green (see the script header).
 add_test(
   NAME tur_regions_seam
   COMMAND bash tests/run-regions-seam.sh
@@ -857,6 +857,22 @@ add_test(
   COMMAND bash tests/check-running-tests-guide.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# Every docs/.../*.md path a source comment cites must exist: reports move to
+# docs/archive/ and the citations are left behind (29 dead on 2026-10-17).
+add_test(
+  NAME tur_src_doc_citations_lint
+  COMMAND bash tests/check-src-doc-citations.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+# src/driver/driver.h and commands.h are sectioned by defining file; each
+# section may declare only what its file defines (main-c-split-plan).  The
+# section grouping in emit_internal.h drifted until most of its prototypes sat
+# under the wrong file -- this keeps the driver's headers honest from the start.
+add_test(
+  NAME tur_driver_headers_lint
+  COMMAND python3 tests/check-driver-headers.py
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
 # Every add_test declared under src/ must be visible to `ctest -N`.  It was
 # not, for months: enable_testing() ran after add_subdirectory(src), so
 # tur_trail built, passed by hand, and never ran in CI.  The ordering is fixed
@@ -1187,6 +1203,17 @@ add_test(
 add_test(
   NAME tur_result_typedef_multi_module
   COMMAND bash tests/run-result-typedef-multi-module.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+# forced-spec-loses-aggregate-type: a module calls another module's generic
+# at the owner's by-value struct.  The owner emits that specialization for the
+# caller, and rebuilt the struct from its TypeKind alone as the int64_t
+# carrier, so the caller's TU did not compile.  Separate compilation only, so
+# the pin builds a bare directory.  See
+# docs/archive/forced-spec-loses-aggregate-type.md.
+add_test(
+  NAME tur_forced_spec_aggregate
+  COMMAND bash tests/run-forced-spec-aggregate.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
 # any-type-ids-are-per-tu: an `any` box id used to be this TU's intern INDEX,

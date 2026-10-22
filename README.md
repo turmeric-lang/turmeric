@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/turmeric-lang/turmeric/actions/workflows/ci.yml/badge.svg)](https://github.com/turmeric-lang/turmeric/actions/workflows/ci.yml)
 
-**Latest release:** `v0.67.5` -- Integer `/` and `mod` now abort cleanly on a zero divisor (and wrap `INT64_MIN / -1`), and a project's `:experiments` apply in every `tur` command that compiles or evaluates a file.
+**Latest release:** `v0.68.0` -- New OS stdlib surface (symlinks, permissions, dates, blocking TCP, signals), typed `ptr<T>`/`rc<T>` target checking at calls and returns, and a retired `upgrade` in favor of `weak/upgrade`.
 
 ## What
 
