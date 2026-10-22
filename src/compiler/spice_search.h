@@ -12,6 +12,8 @@
  * (src/turi/eval.h) instead of re-deriving it.
  * See docs/archive/notebook-eval-no-module-base-dir.md */
 
+#include <stdbool.h>
+
 #include "pkg.h"
 
 /* SC3: maximum number of parent directories spice_find_root walks before
@@ -50,5 +52,19 @@ int spice_search_append(const char *input,
                         char ***inc, int *n_inc,
                         char ***owned, int *n_owned,
                         const SpiceSearchHooks *hooks);
+
+/* Build a project's include search path from an already-loaded manifest:
+ * `root/src` first when `include_own_src` is set, then the src/ of every
+ * `:spices` dep across the transitive closure (workspace sibling -> `:path`
+ * -> fetched `<root>/spices/<name>-<ref>` -> `<root>/spices/<name>`, a
+ * `:global` dep from the install registry), deduplicated by real path.
+ * *out_dirs is a heap array of strdup'd dirs (*out_n entries); the caller
+ * frees each string and the array.  Shared by `tur run`, `tur test`,
+ * `tur build <dir>`, `tur install` and the project-less fallback. */
+void resolve_include_dirs_from_manifest(const char *root,
+                                        const PkgManifest *m,
+                                        bool include_own_src,
+                                        const char ***out_dirs,
+                                        int *out_n);
 
 #endif /* TUR_SPICE_SEARCH_H */

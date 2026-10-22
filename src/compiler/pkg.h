@@ -566,6 +566,12 @@ char *pkg_workspace_member_path(const char *project_dir, const char *dep_name);
  * not exist.  Shared by the transitive :cmake-deps and :c-sources walks so
  * the two agree on what a dependency IS. */
 char *pkg_resolve_spice_dep_dir(const char *root_project_dir, const PkgSpice *s);
+/* As above, for a dep declared by a spice somewhere inside a project:
+ * `fetch_root` is the project whose `tur fetch` populated spices/ (it puts
+ * the whole closure there, flat), tried when a fetched dep is not under
+ * `root_project_dir`'s own spices/.  NULL means no fallback. */
+char *pkg_resolve_spice_dep_dir_in(const char *root_project_dir,
+                                   const char *fetch_root, const PkgSpice *s);
 
 bool pkg_collect_transitive_cmake_deps(const char        *root_project_dir,
                                        const PkgManifest *root_manifest,

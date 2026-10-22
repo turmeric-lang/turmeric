@@ -42,6 +42,9 @@
 #include <sys/types.h>
 #include <time.h>
 #include <unistd.h>
+#ifndef _WIN32
+#include <sys/wait.h>
+#endif
 
 #ifdef __APPLE__
 #  include <mach-o/dyld.h>
@@ -50,6 +53,7 @@
 #include "buf.h"
 #include "global.h"
 #include "pkg.h"
+#include "spice_search.h"  /* resolve_include_dirs_from_manifest */
 #include "platform_fs.h"
 #include "platform_proc.h"
 #ifdef _WIN32
@@ -419,10 +423,93 @@ typedef struct InstallSpec {
     const char *ref;          /* git ref (NULL for path / default HEAD) */
     const char *subdir;       /* monorepo subdir under repo root */
     const char *name_alias;   /* --name override */
+    const char *install_dir;  /* upgrade: the recorded :dir to fetch into */
     bool        is_path;
     bool        force;
     const char *verb;         /* "install" or "upgrade" — used in messages */
 } InstallSpec;
+
+/* installed-spice-libraries D4: set the installed root up the way `tur fetch`
+ * sets up a project -- its `:spices` closure into `<root>/spices/` with a
+ * tur.lock, and its `:cmake-deps` (its own and its deps') configured and
+ * built under `<root>/cmake/`.  It runs `tur fetch` in that directory, so an
+ * installed root is exactly a fetched project and every project-mode resolver
+ * (the include walk, collect_spice_aux_c, the cmake deps manifest, the REPL
+ * image's --bundle-deps) finds its deps where it already looks.
+ *
+ * The bespoke walk this replaced fetched only the first level, into the
+ * SHARED spices/ directory next to the installed spices, and never carried a
+ * dep's :cmake-deps or :c-sources into the build.  A spice with neither
+ * :spices nor :cmake-deps has nothing to fetch and is left untouched.
+ * Exit 1 from `tur fetch` means only `:optional` deps failed; that installs. */
+static bool inst_fetch_root(const char *verb, const char *self_exe,
+                            const char *src_dir, const PkgManifest *m) {
+    if (m->n_spices == 0 && m->n_cmake_deps == 0) return true;
+    Buf cmd;
+    buf_init(&cmd);
+    buf_puts(&cmd, TUR_CD " ");
+    bool ok = pkg_cmd_arg(&cmd, src_dir);
+    buf_puts(&cmd, " && ");
+    ok = pkg_cmd_arg(&cmd, self_exe) && ok;
+    buf_puts(&cmd, " fetch");
+    buf_putc(&cmd, '\0');
+    char wrapped[16384];
+    if (ok && tur_shell_command(cmd.data, wrapped, sizeof(wrapped)) != 0)
+        ok = false;
+    fprintf(stderr, "tur %s: fetching dependencies into %s ...\n", verb, src_dir);
+    int rc = ok ? system(wrapped) : -1;
+    buf_free(&cmd);
+    if (rc != -1 && WIFEXITED(rc)) rc = WEXITSTATUS(rc);
+    if (rc == 0 || rc == 1) return true;
+    fprintf(stderr, "tur %s: fetching dependencies failed (rc=%d)\n", verb, rc);
+    return false;
+}
+
+static int inst_cmp_str(const void *a, const void *b) {
+    return strcmp(*(const char *const *)a, *(const char *const *)b);
+}
+
+/* installed-spice-libraries D6: every installed spice's src/ shares one
+ * namespace in a manifest-less context, so a module path the new spice
+ * provides must not already come from another installed spice.  Returns the
+ * number of conflicts found (each reported on stderr); `force` turns them
+ * into warnings and the result into 0. */
+static int inst_check_module_conflicts(const char *verb, const char *install_name,
+                                       const char *src_dir, char **mods, int n_mods,
+                                       const TurState *state, bool force) {
+    char self_real[4096];
+    if (!realpath(src_dir, self_real)) snprintf(self_real, sizeof(self_real), "%s", src_dir);
+    int n_conflicts = 0;
+    for (int i = 0; i < state->n_entries; i++) {
+        const TurStateEntry *e = &state->entries[i];
+        if (!e->name || strcmp(e->name, install_name) == 0) continue;
+        char other[4096];
+        if (!tur_state_entry_src_dir(e, other, sizeof(other))) continue;
+        char other_real[4096];
+        if (realpath(other, other_real) && strcmp(other_real, self_real) == 0) continue;
+        char **theirs = NULL;
+        int n_theirs = tur_spice_modules(other, &theirs);
+        for (int j = 0; j < n_mods; j++) {
+            if (!bsearch(&mods[j], theirs, (size_t)n_theirs, sizeof(char *),
+                         inst_cmp_str))
+                continue;
+            fprintf(stderr, "tur %s: %s: module '%s' is already provided by "
+                            "installed spice '%s'\n",
+                    verb, force ? "warning" : "error", mods[j], e->name);
+            n_conflicts++;
+        }
+        tur_spice_modules_free(theirs, n_theirs);
+    }
+    if (n_conflicts > 0 && !force) {
+        fprintf(stderr,
+            "tur %s: refusing to install '%s': outside a project every installed\n"
+            "  spice's modules share one namespace, so the import would be ambiguous.\n"
+            "  `tur uninstall` the other spice, or pass --force (the spice whose name\n"
+            "  sorts first then wins).\n", verb, install_name);
+        return n_conflicts;
+    }
+    return 0;
+}
 
 static int do_install_spec(const InstallSpec *spec) {
     const char *src         = spec->src;
@@ -470,14 +557,20 @@ static int do_install_spec(const InstallSpec *spec) {
         else
             inst_derive_name(src, derived_name, sizeof(derived_name));
 
-        char ref_tag[128];
-        snprintf(ref_tag, sizeof(ref_tag), "%s",
-                 ref ? ref : "HEAD");
-        /* sanitize ref_tag: replace '/' with '-' */
-        for (char *p = ref_tag; *p; p++) if (*p == '/') *p = '-';
+        if (spec->install_dir && *spec->install_dir) {
+            /* upgrade: fetch into the directory the entry records (D5), not
+             * one re-derived from its name, which can differ. */
+            snprintf(install_dir, sizeof(install_dir), "%s", spec->install_dir);
+        } else {
+            char ref_tag[128];
+            snprintf(ref_tag, sizeof(ref_tag), "%s",
+                     ref ? ref : "HEAD");
+            /* sanitize ref_tag: replace '/' with '-' */
+            for (char *p = ref_tag; *p; p++) if (*p == '/') *p = '-';
 
-        snprintf(install_dir, sizeof(install_dir), "%s/%s-%s",
-                 spices_dir, derived_name, ref_tag);
+            snprintf(install_dir, sizeof(install_dir), "%s/%s-%s",
+                     spices_dir, derived_name, ref_tag);
+        }
 
         resolved_sha = pkg_git_fetch(src, ref, install_dir);
         if (!resolved_sha) {
@@ -512,9 +605,14 @@ static int do_install_spec(const InstallSpec *spec) {
         return 1;
     }
 
-    if (m.n_bins == 0) {
+    /* installed-spice-libraries D3: a spice with modules is a library, with or
+     * without :bin entries.  Only a spice with neither has nothing to offer. */
+    char own_src[4096];
+    snprintf(own_src, sizeof(own_src), "%s/src", src_dir);
+    bool has_src = (stat(own_src, &st) == 0 && S_ISDIR(st.st_mode));
+    if (m.n_bins == 0 && !has_src) {
         fprintf(stderr,
-            "tur %s: spice '%s' declares no :bin entries; "
+            "tur %s: spice '%s' declares no :bin entries and has no src/; "
             "nothing to install.\n",
             verb, m.name ? m.name : derived_name);
         pkg_manifest_free(&m);
@@ -528,7 +626,8 @@ static int do_install_spec(const InstallSpec *spec) {
         (m.name && *m.name) ? m.name : derived_name;
 
     /* ---------------------------------------------------------------- */
-    /* 3. Pre-flight conflict check on bin_dir/<name> entries.          */
+    /* 3. Pre-flight conflict checks: bin_dir/<name> entries, and the    */
+    /*    module paths this spice adds to the installed namespace (D6). */
     /* ---------------------------------------------------------------- */
     TurState pre_state;
     tur_state_read(state_path, &pre_state);
@@ -546,16 +645,14 @@ static int do_install_spec(const InstallSpec *spec) {
             return 1;
         }
     }
+    char **mods = NULL;
+    int n_mods = tur_spice_modules(src_dir, &mods);
+    int n_mod_conflicts = inst_check_module_conflicts(verb, install_name, src_dir,
+                                                      mods, n_mods, &pre_state,
+                                                      force);
+    tur_spice_modules_free(mods, n_mods);
     tur_state_free(&pre_state);
-
-    /* ---------------------------------------------------------------- */
-    /* 4. Build each declared binary.                                   */
-    /*    Output goes to <src_dir>/build/<bin_name>.                    */
-    /* ---------------------------------------------------------------- */
-    char build_out_dir[4096];
-    snprintf(build_out_dir, sizeof(build_out_dir), "%s/build", src_dir);
-    if (!inst_mkdirp(build_out_dir)) {
-        fprintf(stderr, "tur %s: cannot create '%s'\n", verb, build_out_dir);
+    if (n_mod_conflicts > 0) {
         pkg_manifest_free(&m);
         free(resolved_sha);
         return 1;
@@ -564,6 +661,28 @@ static int do_install_spec(const InstallSpec *spec) {
     char self_exe[4096];
     inst_self_exe(self_exe, sizeof(self_exe));
 
+    /* ---------------------------------------------------------------- */
+    /* 4. Set the root up as a fetched project (D4).                    */
+    /* ---------------------------------------------------------------- */
+    if (!inst_fetch_root(verb, self_exe, src_dir, &m)) {
+        pkg_manifest_free(&m);
+        free(resolved_sha);
+        return 1;
+    }
+
+    /* ---------------------------------------------------------------- */
+    /* 5. Build each declared binary.                                   */
+    /*    Output goes to <src_dir>/build/<bin_name>.                    */
+    /* ---------------------------------------------------------------- */
+    char build_out_dir[4096];
+    snprintf(build_out_dir, sizeof(build_out_dir), "%s/build", src_dir);
+    if (m.n_bins > 0 && !inst_mkdirp(build_out_dir)) {
+        fprintf(stderr, "tur %s: cannot create '%s'\n", verb, build_out_dir);
+        pkg_manifest_free(&m);
+        free(resolved_sha);
+        return 1;
+    }
+
     /* `tur build` invokes cc with autolink markers like
      * `src/runtime/hamt.c` that are interpreted relative to cwd. Find the
      * turmeric source root from the exe path and cd there before each
@@ -571,82 +690,18 @@ static int do_install_spec(const InstallSpec *spec) {
     char tur_root[4096];
     bool have_root = inst_find_turmeric_root(self_exe, tur_root, sizeof(tur_root));
 
-    /* ---------------------------------------------------------------- */
-    /* 4a. Fetch :spices deps and collect their src/ dirs for -I.       */
-    /* ---------------------------------------------------------------- */
-#define INST_MAX_DEPS 64
-    char *dep_srcs[INST_MAX_DEPS];
-    int   n_dep_srcs = 0;
-    bool  deps_ok = true;
-
-    for (int j = 0; j < m.n_spices && n_dep_srcs < INST_MAX_DEPS; j++) {
-        const PkgSpice *dep = &m.spices[j];
-        char dep_dest[4096];
-
-        if (dep->path) {
-            /* Local path dep: resolve relative to src_dir. */
-            if (dep->path[0] == '/')
-                snprintf(dep_dest, sizeof(dep_dest), "%s", dep->path);
-            else
-                snprintf(dep_dest, sizeof(dep_dest), "%s/%s",
-                         src_dir, dep->path);
-        } else if (dep->url) {
-            /* Git dep: fetch into global spices dir if not already present. */
-            char ref_tag[128];
-            snprintf(ref_tag, sizeof(ref_tag), "%s",
-                     dep->ref ? dep->ref : "HEAD");
-            for (char *p = ref_tag; *p; p++) if (*p == '/') *p = '-';
-
-            if (dep->ref)
-                snprintf(dep_dest, sizeof(dep_dest), "%s/%s-%s",
-                         spices_dir, dep->name, ref_tag);
-            else
-                snprintf(dep_dest, sizeof(dep_dest), "%s/%s",
-                         spices_dir, dep->name);
-
-            struct stat dep_st;
-            if (stat(dep_dest, &dep_st) != 0 || !S_ISDIR(dep_st.st_mode)) {
-                fprintf(stderr, "tur %s: fetching dep '%s' ...\n",
-                        verb, dep->name);
-                char *sha = pkg_git_fetch(dep->url, dep->ref, dep_dest);
-                if (!sha) {
-                    if (dep->optional) {
-                        fprintf(stderr,
-                            "tur %s: optional dep '%s' unavailable, skipping\n",
-                            verb, dep->name);
-                        continue;
-                    }
-                    fprintf(stderr,
-                        "tur %s: failed to fetch required dep '%s'\n",
-                        verb, dep->name);
-                    deps_ok = false;
-                    break;
-                }
-                free(sha);
-            }
-        } else {
-            continue;
-        }
-
-        /* Compute the src/ dir, accounting for :subdir. */
-        char dep_src[4096];
-        if (dep->subdir)
-            snprintf(dep_src, sizeof(dep_src), "%s/%s/src",
-                     dep_dest, dep->subdir);
-        else
-            snprintf(dep_src, sizeof(dep_src), "%s/src", dep_dest);
-
-        struct stat src_st;
-        if (stat(dep_src, &src_st) == 0 && S_ISDIR(src_st.st_mode))
-            dep_srcs[n_dep_srcs++] = tur_strdup(dep_src);
-    }
-
-    if (!deps_ok) {
-        for (int j = 0; j < n_dep_srcs; j++) free(dep_srcs[j]);
-        pkg_manifest_free(&m);
-        free(resolved_sha);
-        return 1;
-    }
+    /* The include list project mode computes for this root: its own src/,
+     * then the transitive :spices closure now on disk under <root>/spices/.
+     * The link inputs (:c-sources, the cmake/ deps manifest) are found by
+     * `tur build`'s own walk up from the entry file to this root. */
+    const char **inc_dirs = NULL;
+    int n_inc_dirs = 0;
+    if (m.n_bins > 0)
+        resolve_include_dirs_from_manifest(src_dir, &m, /*include_own_src=*/true,
+                                           &inc_dirs, &n_inc_dirs);
+#define INST_FREE_INCS() do { for (int j_ = 0; j_ < n_inc_dirs; j_++) \
+                                  free((void *)inc_dirs[j_]);            \
+                              free((void *)inc_dirs); } while (0)
 
     for (int i = 0; i < m.n_bins; i++) {
         const char *bin_name = m.bin_names[i];
@@ -662,7 +717,7 @@ static int do_install_spec(const InstallSpec *spec) {
             fprintf(stderr,
                 "tur %s: :bin entrypoint '%s' for binary '%s' "
                 "not found.\n", verb, entry_abs, bin_name);
-            for (int j = 0; j < n_dep_srcs; j++) free(dep_srcs[j]);
+            INST_FREE_INCS();
             pkg_manifest_free(&m);
             free(resolved_sha);
             return 1;
@@ -671,10 +726,6 @@ static int do_install_spec(const InstallSpec *spec) {
         char bin_out[4096];
         snprintf(bin_out, sizeof(bin_out), "%s/%s",
                  build_out_dir, bin_name);
-
-        char src_subdir[4096];
-        snprintf(src_subdir, sizeof(src_subdir), "%s/src", src_dir);
-        bool has_src = (stat(src_subdir, &st) == 0 && S_ISDIR(st.st_mode));
 
         Buf cmd;
         bool cmd_ok = true;
@@ -690,13 +741,9 @@ static int do_install_spec(const InstallSpec *spec) {
         cmd_ok = pkg_cmd_arg(&cmd, self_exe) && cmd_ok;
         buf_puts(&cmd, " build ");
         cmd_ok = pkg_cmd_arg(&cmd, entry_abs) && cmd_ok;
-        if (has_src) {
+        for (int j = 0; j < n_inc_dirs; j++) {
             buf_puts(&cmd, " -I ");
-            cmd_ok = pkg_cmd_arg(&cmd, src_subdir) && cmd_ok;
-        }
-        for (int j = 0; j < n_dep_srcs; j++) {
-            buf_puts(&cmd, " -I ");
-            cmd_ok = pkg_cmd_arg(&cmd, dep_srcs[j]) && cmd_ok;
+            cmd_ok = pkg_cmd_arg(&cmd, inc_dirs[j]) && cmd_ok;
         }
         buf_puts(&cmd, " -o ");
         cmd_ok = pkg_cmd_arg(&cmd, bin_out) && cmd_ok;
@@ -717,7 +764,7 @@ static int do_install_spec(const InstallSpec *spec) {
             fprintf(stderr,
                 "tur %s: build failed for '%s' (rc=%d)\n",
                 verb, bin_name, rc);
-            for (int j = 0; j < n_dep_srcs; j++) free(dep_srcs[j]);
+            INST_FREE_INCS();
             pkg_manifest_free(&m);
             free(resolved_sha);
             return 1;
@@ -726,16 +773,17 @@ static int do_install_spec(const InstallSpec *spec) {
             fprintf(stderr,
                 "tur %s: build produced no output at '%s'\n",
                 verb, bin_out);
-            for (int j = 0; j < n_dep_srcs; j++) free(dep_srcs[j]);
+            INST_FREE_INCS();
             pkg_manifest_free(&m);
             free(resolved_sha);
             return 1;
         }
     }
-    for (int j = 0; j < n_dep_srcs; j++) free(dep_srcs[j]);
+    INST_FREE_INCS();
+#undef INST_FREE_INCS
 
     /* ---------------------------------------------------------------- */
-    /* 5. Symlink each binary into bin_dir.                             */
+    /* 6. Symlink each binary into bin_dir.                             */
     /* ---------------------------------------------------------------- */
     for (int i = 0; i < m.n_bins; i++) {
         char binfile[4096], target[4096], source[4096];
@@ -754,7 +802,7 @@ static int do_install_spec(const InstallSpec *spec) {
     }
 
     /* ---------------------------------------------------------------- */
-    /* 6. Update state.tur                                              */
+    /* 7. Update state.tur                                              */
     /* ---------------------------------------------------------------- */
     TurState state;
     tur_state_read(state_path, &state);
@@ -772,12 +820,19 @@ static int do_install_spec(const InstallSpec *spec) {
     if (subdir)         e->subdir   = tur_strdup(subdir);
     if (resolved_sha)   e->resolved = tur_strdup(resolved_sha);
     if (m.version)      e->version  = tur_strdup(m.version);
+    /* D5: record where the install lives, so no reader has to guess it from
+     * the entry name (which differs from the clone's name whenever the
+     * manifest's :name is not the URL's last segment). */
+    if (!is_path) {
+        e->dir = tur_strdup(install_dir);
+        if (subdir) e->src_dir = tur_strdup(src_dir);
+    }
     e->installed_at = tur_strdup(inst_iso_now());
 #ifdef TUR_VERSION
     e->built_with = tur_strdup(TUR_VERSION);
 #endif
     e->n_bin = m.n_bins;
-    e->bin   = (char **)malloc(m.n_bins * sizeof(char *));
+    e->bin   = m.n_bins > 0 ? (char **)malloc(m.n_bins * sizeof(char *)) : NULL;
     for (int i = 0; i < m.n_bins; i++)
         e->bin[i] = tur_strdup(m.bin_names[i]);
 
@@ -794,14 +849,20 @@ static int do_install_spec(const InstallSpec *spec) {
     const char *past = (strcmp(verb, "upgrade") == 0) ? "upgraded" : "installed";
     fprintf(stderr, "tur %s: %s '%s'", verb, past, install_name);
     if (m.version) fprintf(stderr, " (%s)", m.version);
+    if (m.n_bins == 0) fprintf(stderr, " [library]");
     fprintf(stderr, "\n");
     for (int i = 0; i < m.n_bins; i++) {
         char binfile[4096];
         inst_bin_name(m.bin_names[i], binfile, sizeof(binfile));
         fprintf(stderr, "  %s/%s\n", bin_dir, binfile);
     }
+    if (m.n_bins == 0) {
+        fprintf(stderr, "  modules: %s/src\n"
+                        "  importable from any file outside a project\n",
+                src_dir);
+    }
 
-    if (!tur_global_bin_on_path(bin_dir)) {
+    if (m.n_bins > 0 && !tur_global_bin_on_path(bin_dir)) {
         fprintf(stderr,
             "\nNote: %s is not on $PATH.\n"
             "  bash/zsh: export PATH=\"%s:$PATH\"\n"
@@ -945,27 +1006,28 @@ int cmd_pkg_uninstall(int argc, char **argv) {
         }
     }
 
-    /* Remove the source tree (non-path installs only). */
-    if (!e->path) {
-        /* Find <spices_dir>/<name>-<something>/ — match by prefix. */
-        DIR *d = opendir(spices_dir);
-        if (d) {
-            struct dirent *ent;
-            size_t nl = strlen(name);
-            while ((ent = readdir(d)) != NULL) {
-                if (ent->d_name[0] == '.') continue;
-                size_t el = strlen(ent->d_name);
-                if (el <= nl + 1) continue;
-                if (strncmp(ent->d_name, name, nl) != 0) continue;
-                if (ent->d_name[nl] != '-') continue;
-                char tree[4096];
-                snprintf(tree, sizeof(tree), "%s/%s",
-                         spices_dir, ent->d_name);
-                if (pkg_rm_rf(tree)) {
-                    fprintf(stderr, "tur uninstall: removed %s\n", tree);
-                }
-            }
-            closedir(d);
+    /* Remove the source tree (non-path installs only).
+     *
+     * installed-spice-libraries D5: exactly the root the entry records (or,
+     * for an entry that predates `:dir`, the one reconstructed from its name)
+     * -- never every `<name>-*` directory under spices/, which also took
+     * `plot-extras-HEAD/` with `tur uninstall plot`.  The root must be a
+     * direct child of spices/: a hand-edited `:dir` cannot point the delete
+     * anywhere else. */
+    char root[4096];
+    if (tur_state_entry_root_dir(e, root, sizeof(root))) {
+        size_t sl = strlen(spices_dir);
+        const char *rest = root + sl;
+        bool inside = strncmp(root, spices_dir, sl) == 0 && rest[0] == '/' &&
+                      rest[1] && !strchr(rest + 1, '/') &&
+                      strcmp(rest + 1, "..") != 0 && strcmp(rest + 1, ".") != 0;
+        struct stat rst;
+        if (!inside) {
+            fprintf(stderr, "tur uninstall: not removing '%s': it is not an "
+                            "install root under %s\n", root, spices_dir);
+        } else if (stat(root, &rst) == 0 && S_ISDIR(rst.st_mode)) {
+            if (pkg_rm_rf(root))
+                fprintf(stderr, "tur uninstall: removed %s\n", root);
         }
     }
 
@@ -985,30 +1047,13 @@ int cmd_pkg_uninstall(int argc, char **argv) {
 /* tur list                                                            */
 /* ------------------------------------------------------------------ */
 
-/* Reconstruct the source dir on disk for an installed entry. For path
- * installs this is the local checkout; for git installs we look in
- * spices/<name>-<sanitized-ref>/<subdir>?. Returns true if the dir
- * exists. */
+/* The source dir on disk for an installed entry (D5: the recorded one,
+ * else the pre-D5 reconstruction).  Returns true if the dir exists. */
 static bool inst_entry_src_dir(const TurStateEntry *e,
                                 const char *spices_dir,
                                 char *out, size_t out_sz) {
-    if (e->path) {
-        snprintf(out, out_sz, "%s", e->path);
-        struct stat st;
-        return stat(out, &st) == 0 && S_ISDIR(st.st_mode);
-    }
-    char ref_tag[128];
-    snprintf(ref_tag, sizeof(ref_tag), "%s", e->ref ? e->ref : "HEAD");
-    for (char *p = ref_tag; *p; p++) if (*p == '/') *p = '-';
-    char base[4096];
-    snprintf(base, sizeof(base), "%s/%s-%s", spices_dir,
-             e->name ? e->name : "unknown", ref_tag);
-    if (e->subdir)
-        snprintf(out, out_sz, "%s/%s", base, e->subdir);
-    else
-        snprintf(out, out_sz, "%s", base);
-    struct stat st;
-    return stat(out, &st) == 0 && S_ISDIR(st.st_mode);
+    (void)spices_dir;
+    return tur_state_entry_src_dir(e, out, out_sz);
 }
 
 static int list_usage(void) {
@@ -1163,6 +1208,24 @@ static void list_print_json(const TurState *state,
             buf_putc(&b, '"');
         }
         buf_puts(&b, "],\n");
+        /* installed-spice-libraries IL1: a "tool" has :bin entries (and is
+         * a library too -- its modules are importable); a "library" has
+         * modules only. */
+        buf_printf(&b, "      \"kind\": \"%s\",\n",
+                   e->n_bin > 0 ? "tool" : "library");
+        buf_puts(&b, "      \"modules\": [");
+        if (have_src) {
+            char **mods = NULL;
+            int n_mods = tur_spice_modules(src_dir, &mods);
+            for (int j = 0; j < n_mods; j++) {
+                if (j) buf_putc(&b, ',');
+                buf_putc(&b, '"');
+                inst_json_str(&b, mods[j]);
+                buf_putc(&b, '"');
+            }
+            tur_spice_modules_free(mods, n_mods);
+        }
+        buf_puts(&b, "],\n");
         buf_puts(&b, "      \"exports\": [");
         if (have_src) {
             char manifest[4096];
@@ -1282,6 +1345,7 @@ int cmd_pkg_list(int argc, char **argv) {
          * users try to pass it to `tur uninstall`. */
         printf("%s %s", branch, e->name ? e->name : "(unnamed)");
         if (e->version) printf(" %s", e->version);
+        if (e->n_bin == 0) printf(" [library]");
         if (e->path)               printf("       (%s) [path]", e->path);
         else if (e->url && e->ref) printf("       (%s @ %s)", e->url, e->ref);
         else if (e->url)           printf("       (%s)", e->url);
@@ -1309,7 +1373,10 @@ int cmd_pkg_list(int argc, char **argv) {
         char prefix_cont[256];
         snprintf(prefix_cont, sizeof(prefix_cont),
                  "%s\xe2\x94\x82                ", bar);
-        list_print_wrapped(prefix1, prefix_cont, e->bin, e->n_bin);
+        if (e->n_bin > 0)
+            list_print_wrapped(prefix1, prefix_cont, e->bin, e->n_bin);
+        else
+            printf("%s(library -- no binaries)\n", prefix1);
 
         /* exports line(s) */
         if (have_manifest) {
@@ -1335,10 +1402,10 @@ int cmd_pkg_list(int argc, char **argv) {
     }
 
     printf("\n");
-    printf("%d %s installed (%d with binaries).\n",
+    printf("%d %s installed (%d with binaries, %d library-only).\n",
            state.n_entries,
            state.n_entries == 1 ? "spice" : "spices",
-           n_with_bin);
+           n_with_bin, state.n_entries - n_with_bin);
     printf("PATH entry: %s (%s)\n",
            bin_dir,
            path_active ? "active" : "NOT on PATH -- run 'tur install --print-path-snippet'");
@@ -1498,6 +1565,7 @@ int cmd_pkg_upgrade(int argc, char **argv) {
         char *ref;
         char *subdir;
         char *path;
+        char *dir;
     } Snapshot;
     Snapshot *snaps = (Snapshot *)calloc((size_t)n_targets, sizeof(Snapshot));
     for (int i = 0; i < n_targets; i++) {
@@ -1507,6 +1575,7 @@ int cmd_pkg_upgrade(int argc, char **argv) {
         snaps[i].ref    = e->ref    ? tur_strdup(e->ref)    : NULL;
         snaps[i].subdir = e->subdir ? tur_strdup(e->subdir) : NULL;
         snaps[i].path   = e->path   ? tur_strdup(e->path)   : NULL;
+        snaps[i].dir    = e->dir    ? tur_strdup(e->dir)    : NULL;
     }
     tur_state_free(&state);
 
@@ -1525,6 +1594,8 @@ int cmd_pkg_upgrade(int argc, char **argv) {
             spec.is_path = false;
             spec.src     = snaps[i].url;
             spec.ref     = snaps[i].ref;
+            /* D5: re-fetch into the root the entry records. */
+            spec.install_dir = snaps[i].dir;
         }
         if (!spec.src) {
             fprintf(stderr,
@@ -1543,6 +1614,7 @@ int cmd_pkg_upgrade(int argc, char **argv) {
         free(snaps[i].ref);
         free(snaps[i].subdir);
         free(snaps[i].path);
+        free(snaps[i].dir);
     }
     free(snaps);
 

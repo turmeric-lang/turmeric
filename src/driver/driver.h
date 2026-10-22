@@ -63,6 +63,7 @@
 #include "experiments.h"  /* ExperimentSource */
 #include "expr.h"
 #include "pkg.h"          /* PkgManifest */
+#include "spice_search.h" /* resolve_include_dirs_from_manifest */
 #include "turi/inline_c_jit.h"  /* TuriInlineCJitHook */
 #include "turi/spice_loader.h"  /* TurSpiceJitHook */
 
@@ -179,11 +180,6 @@ void collect_tur_recursive(const char *dir,
                            char ***files, int *n, int *cap);
 char **collect_tur_files_deep(const char *dir, int *n_out);
 char **collect_project_src_files(const char *root, int *n_out);
-void resolve_include_dirs_from_manifest(const char *root,
-                                        const PkgManifest *m,
-                                        bool include_own_src,
-                                        const char ***out_dirs,
-                                        int *out_n);
 void collect_spice_aux_c(const char *root, Buf *includes, Buf *sources);
 void resolve_project_include_dirs(const char *dir,
                                   const char ***out_dirs, int *out_n);

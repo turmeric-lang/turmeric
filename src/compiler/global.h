@@ -75,6 +75,14 @@ typedef struct TurStateEntry {
     int    n_bin;
     char  *installed_at;  /* ISO-8601 timestamp */
     char  *built_with;    /* tur version used at install time */
+    /* installed-spice-libraries D5: where the install lives on disk.  `dir`
+     * is the install root (the clone under spices/; for a --path install the
+     * checkout itself), `src_dir` the directory holding the spice's build.tur
+     * when `:subdir` puts it below `dir`.  NULL for an entry written by a tur
+     * that predates the fields -- readers then fall back to reconstructing
+     * the path from the entry name (tur_state_entry_src_dir). */
+    char  *dir;
+    char  *src_dir;
 } TurStateEntry;
 
 typedef struct TurState {
@@ -102,6 +110,19 @@ TurStateEntry *tur_state_upsert(TurState *st, const char *name);
 /* Remove an entry by name. Returns true if an entry was removed. */
 bool tur_state_remove(TurState *st, const char *name);
 
+/* installed-spice-libraries D5: the directory holding an entry's build.tur.
+ * Prefers the recorded `:src-dir` / `:dir`; for an entry that predates them,
+ * a --path install is its `:path` and a git install is reconstructed as
+ * `spices/<name>-<sanitized-ref>[/<subdir>]`.  Writes the path to `out` even
+ * when it does not exist; returns whether it is a directory. */
+bool tur_state_entry_src_dir(const TurStateEntry *e, char *out, size_t out_sz);
+
+/* The install ROOT an entry owns under spices/ -- what `tur uninstall` and
+ * `tur upgrade` operate on.  The recorded `:dir`, else the reconstruction
+ * above without `:subdir`.  Returns false for a --path install (its tree is
+ * the user's checkout, never ours to delete) and when no root can be named. */
+bool tur_state_entry_root_dir(const TurStateEntry *e, char *out, size_t out_sz);
+
 /* global-spice-library-consumption: the source dir of an INSTALLED spice,
  * looked up by name in state.tur -- what a `#{:global true}` manifest dep
  * resolves to.  Returns false when it is not installed (or its directory is
@@ -110,6 +131,14 @@ bool tur_state_remove(TurState *st, const char *name);
  * install); the caller frees them. */
 bool tur_installed_spice_dir(const char *name, char *out, size_t out_sz,
                              char **out_version, char **out_resolved);
+
+/* installed-spice-libraries D6: the module paths a spice provides -- every
+ * `.tur` file under `<spice_dir>/src/`, relative to it, without the
+ * extension (`json/decode`), in byte-wise order.  Dot entries are skipped.
+ * Returns the count (0 when there is no src/); *out is a heap array of heap
+ * strings, freed with tur_spice_modules_free. */
+int  tur_spice_modules(const char *spice_dir, char ***out);
+void tur_spice_modules_free(char **mods, int n);
 
 /* E14: the --json flag.  When true, `tur doc` and `tur test` print JSON and
  * `tur check` writes its diagnostics as JSON.  The storage lives in install.c,
