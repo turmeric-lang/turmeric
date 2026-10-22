@@ -3,9 +3,9 @@
 > **Status:** PROPOSED 2026-10-21 (from continuation-forms-gaps item 1; the
 > request was to implement it unless it is a large amount of work). Feasibility
 > investigated the same day: **small** on its own -- two local changes, below --
-> but the observable cases need
-> [compiled-shift-delimited-by-root](../reported/compiled-shift-delimited-by-root.md)
-> fixed first. Not started.
+> but the observable cases needed
+> [compiled-shift-delimited-by-root](../archive/compiled-shift-delimited-by-root.md)
+> fixed first (resolved 2026-10-22). Not started.
 
 ## The semantics
 

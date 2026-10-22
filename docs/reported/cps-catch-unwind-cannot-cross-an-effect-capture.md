@@ -99,7 +99,7 @@ What does work: a `catch-unwind` in a function that holds neither the
   landing, and a call through it starts with no handler in scope
   (`emit_expr.c:18322`, the "escapes this function value" note). It is the same
   structural gap as
-  [compiled-shift-delimited-by-root](compiled-shift-delimited-by-root.md): a
+  [compiled-shift-delimited-by-root](../archive/compiled-shift-delimited-by-root.md): a
   direct-emitted delimiter around a CPS callee.
 - **TUR-W0033.** `collect_effects_in_expr` (`src/passes/effect_check.c:674`)
   walks the thunk as an expression; the thunk is a `fn` literal, whose effects

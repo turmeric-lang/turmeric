@@ -656,6 +656,18 @@ static bool reset_body_has_base_shift(const Expr *e) {
     }
 }
 
+/* compiled-shift-delimited-by-root: can evaluating `e` call a function -- one
+ * whose shift would have to find this reset?  A body of literals, variables
+ * and operators cannot, and keeps its landing-free lowering. */
+static bool reset_body_may_reach_callee_visit(const Expr *e, void *ud) {
+    (void)ud;
+    if (e->kind == EX_CALL || e->kind == EX_DYN_CALL) return true;
+    return cps_visit_children(e, reset_body_may_reach_callee_visit, NULL);
+}
+static bool reset_body_may_reach_callee(const Expr *e) {
+    return e && reset_body_may_reach_callee_visit(e, NULL);
+}
+
 char *emit_effects_reset(EmitCtx *ctx, Buf *body, const Expr *e) {
     /* (reset body) - establish a continuation boundary and run body.
      *
@@ -679,9 +691,18 @@ char *emit_effects_reset(EmitCtx *ctx, Buf *body, const Expr *e) {
      * located error rather than computed wrongly.  A reset with no shift in
      * reach just evaluates its body, as before. */
     const Expr *rb = e->as.reset_.body;
-    if (!reset_body_has_base_shift(rb)) return emit_value(ctx, body, rb);
     const char *ct = emit_type_c_name(ctx, emit_resolve_type(ctx, e->type));
-    if (!type_kind_is_order_spillable(e->type.kind) || !ct) {
+    /* compiled-shift-delimited-by-root: the landing is also where a shift in a
+     * CPS callee aborts to (its DK chain holds no prompt for this reset; the
+     * machine jumps here, __dk_reset_abort), so it is installed for every
+     * reset whose value can ride the landing, not only for a lexical shift --
+     * `(reset (+ 10 (h)))` ran the `(+ 10 _)` after h's shift.  A reset of
+     * any other type with no lexical shift still just evaluates its body. */
+    bool spillable = type_kind_is_order_spillable(e->type.kind) && ct;
+    bool lexical = reset_body_has_base_shift(rb);
+    if (!lexical && (!spillable || !reset_body_may_reach_callee(rb)))
+        return emit_value(ctx, body, rb);
+    if (!spillable) {
         diag_emit(DIAG_ERROR, e->span,
                   "this `reset` has no lowering here: its function left the "
                   "CPS backend's supported subset, and the direct emitter "
@@ -704,6 +725,8 @@ char *emit_effects_reset(EmitCtx *ctx, Buf *body, const Expr *e) {
     buf_printf(body, "%s %s;\n", ct, res);
     indent_buf(body, ctx->indent);
     buf_printf(body, "%s.prev = tur_cur_shift_reset;\n", rs);
+    indent_buf(body, ctx->indent);
+    buf_printf(body, "__dk_reset_save(&%s);\n", rs);
     indent_buf(body, ctx->indent);
     buf_printf(body, "tur_cur_shift_reset = &%s;\n", rs);
     indent_buf(body, ctx->indent);

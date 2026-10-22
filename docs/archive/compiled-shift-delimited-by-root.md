@@ -1,5 +1,7 @@
 # A compiled `shift` that finds no reset prompt is delimited by the root: a wrong answer under a direct-emitted `reset`, and no error for a bare `shift`
 
+**RESOLVED 2026-10-22**; see Resolution at the end.
+
 **Severity: medium** (silent wrong answer). Found 2026-10-21 working
 continuation-forms-gaps (it was item 2 there).
 
@@ -71,3 +73,44 @@ first line, and wrong for its second.
    split runtime).
 3. Fixtures: both programs above on `tur run`, `tur jit` and `--interpret`, plus
    the same with `shift0` (see the shift0 plan, which depends on this).
+
+## Resolution (2026-10-22)
+
+Fix direction 1's first shape, then direction 2.
+
+**Item 1.** A direct-emitted `reset` (`emit_effects_reset`) installs its setjmp
+landing whenever its value can ride the landing and its body can reach a call,
+not only for a lexical `shift`, and records the DK machine's per-thread state
+in it (`__dk_reset_save`: the driver landing, the pending perform, the entry
+depth, the reap mark). In `dk_run_impl`, a reset-tag shift (`k->tag !=
+DK_ROOT_TAG`) that reaches its chain's root while a landing is live stores f(v)
+in it -- as bits, the way the direct escape does -- marks it `pending`, and
+returns as the root case did. The entry's exit (`__dk_entry_leave`, which every
+direct->CPS wrapper runs) does its cleanup and then, finding the landing
+pending, restores the recorded state and jumps there (`__dk_reset_abort`). So
+`(reset (+ 10 (h)))` is 6: the `(+ 10 _)` never runs. Jumping at the entry's
+exit rather than from inside the machine keeps the entry's root and reap list
+freed (LeakSanitizer-clean over 1000 aborts); the restore covers a jump out of
+nested entries, whose roots are then the only thing left behind.
+
+The original repro no longer shows the bug as written: since 2026-10-22 a
+`catch-unwind` with a lambda thunk lowers on the DK chain and does not evict
+`main`. A `(Vec int)` parameter (SIG-REJECT) evicts the same way.
+
+**Item 2.** With item 1 in place, a reset-tag shift that reaches the root with
+no landing live has no reset around it: `tur_panic("shift used outside of any
+reset boundary")`, the interpreter's message, on `tur run` and `tur jit`. The
+2026-10-21 attempt panicked on item 1's first line because a direct `reset`
+over a call installed no landing; it does now.
+
+One shape stays as it was, reported nowhere because nothing reaches it today: a
+`reset` in a CPS-emitted function (a DK prompt) around an evicted function that
+calls the shifting one starts a new DK chain for the callee, whose root is
+reached with no landing live -- that now panics instead of returning f(v) as the
+callee's value. A CPS `reset` would have to install a landing too.
+
+A runtime-preamble change: the 158 `expected.c` snapshots and the S2 split
+runtime (`tools/gen-runtime-split.py`) were regenerated. Fixtures
+`shift-in-callee-delimited-by-direct-reset` (a callee, a callee's callee, two
+shifts in one body, a float result, `shift0`, a nested reset, 1000 resets in a
+loop) and `shift-without-reset-panics`, on both harnesses; `tur jit` agrees.

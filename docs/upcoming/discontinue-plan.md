@@ -79,7 +79,7 @@ will raise.
 
 Related but not blocking:
 
-- [compiled-shift-delimited-by-root](../reported/compiled-shift-delimited-by-root.md)
+- [compiled-shift-delimited-by-root](../archive/compiled-shift-delimited-by-root.md)
   has the same structure as the first row (a direct-emitted delimiter around a
   CPS callee). A design for one should fit the other.
 - [effect-nontail-resume-copies-held-until-outer-entry](../reported/effect-nontail-resume-copies-held-until-outer-entry.md):

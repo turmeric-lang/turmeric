@@ -16481,6 +16481,34 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "}\n\n");
     } /* end if (cps_uses_cloneable_rt) */
 
+    /* Base-shift escape-reset context (direct-reset-shift-degrades fix): the
+     * direct emitter lowers a base (reset ...) onto a setjmp/longjmp landing
+     * rather than the DK abort-value model (which only handles a statically-
+     * first shift).  Base shift is abortive, so a shift is an escape: it
+     * computes f(operand), stores it here, and longjmps to the innermost reset
+     * landing, discarding the delimited continuation from anywhere --
+     * including inside a branch.  The thread-local stack targets the innermost
+     * reset; `prev` restores the enclosing one.
+     *
+     * compiled-shift-delimited-by-root: a shift in a CPS callee runs on its own
+     * DK chain, which holds no prompt for a direct reset, so the DK machine
+     * aborts to this landing too (`pending`, then __dk_reset_abort at the
+     * entry's exit) -- emitted ahead of the machine, which reads it, and with
+     * it.  The dk_* fields are the machine's per-thread state at the reset
+     * (__dk_reset_save), which the abort restores. */
+    if (shared || cps_uses_delimited || cps_uses_cloneable_dk ||
+        cps_uses_serial || cps_ir_emittable) {
+        buf_puts(out, "/* base-shift escape-reset context (setjmp/longjmp abort) */\n");
+        buf_puts(out, "typedef struct tur_shift_reset_ctx {\n");
+        buf_puts(out, "    tur_jmp_buf buf;\n");
+        buf_puts(out, "    int64_t result;  /* f(operand), set by an abortive shift before longjmp */\n");
+        buf_puts(out, "    struct tur_shift_reset_ctx *prev; /* nested resets */\n");
+        buf_puts(out, "    void *dk_driver; void *dk_pend; int dk_depth; size_t dk_reap_mark;\n");
+        buf_puts(out, "    int pending;     /* a DK shift stored `result`: jump at the entry's exit */\n");
+        buf_puts(out, "} tur_shift_reset_ctx;\n\n");
+        emit_rt_tls(out, shared, "TUR_THREAD_LOCAL tur_shift_reset_ctx *tur_cur_shift_reset = NULL;\n\n", "TUR_THREAD_LOCAL tur_shift_reset_ctx *tur_cur_shift_reset",
+                "tur_cur_shift_reset", "void **", "tur_tls_cur_shift_reset_ptr", "tur_shift_reset_ctx **");
+    }
     /* cps-transform-plan: emit the heap-reified CPS substrate (DK multi-prompt
      * machine) when the program uses base delimited control (reset/shift/
      * shift0), or when a cloneable-reset lowers onto the DK machine (CPS9).
@@ -16498,25 +16526,6 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
         r7gc_note_tls_root("__dk_reap_v");
         r7gc_note_tls_root("__dk_reap_kind");
         r7gc_note_tls_root("g_dk_resume_chain");
-    }
-    /* Base-shift escape-reset context (direct-reset-shift-degrades fix): the
-     * direct emitter lowers a base (reset ...) whose body reaches a shift through
-     * runtime BRANCHING -- `(reset (+ e (if c (shift ...) v)))` -- onto a
-     * setjmp/longjmp landing rather than the DK abort-value model (which only
-     * handles a statically-first shift).  Base shift is abortive, so a shift is
-     * an escape: it computes f(operand), stores it here, and longjmps to the
-     * innermost reset landing, discarding the delimited continuation from
-     * anywhere -- including inside a branch.  The thread-local stack targets the
-     * innermost reset; `prev` restores the enclosing one. */
-    if (shared || cps_uses_delimited) {
-        buf_puts(out, "/* base-shift escape-reset context (setjmp/longjmp abort) */\n");
-        buf_puts(out, "typedef struct tur_shift_reset_ctx {\n");
-        buf_puts(out, "    tur_jmp_buf buf;\n");
-        buf_puts(out, "    int64_t result;  /* f(operand), set by an abortive shift before longjmp */\n");
-        buf_puts(out, "    struct tur_shift_reset_ctx *prev; /* nested resets */\n");
-        buf_puts(out, "} tur_shift_reset_ctx;\n\n");
-        emit_rt_tls(out, shared, "TUR_THREAD_LOCAL tur_shift_reset_ctx *tur_cur_shift_reset = NULL;\n\n", "TUR_THREAD_LOCAL tur_shift_reset_ctx *tur_cur_shift_reset",
-                "tur_cur_shift_reset", "void **", "tur_tls_cur_shift_reset_ptr", "tur_shift_reset_ctx **");
     }
     /* CPS9: the cloneable-continuation <-> DK bridge needs both the cloneable
      * runtime (emitted above) and the DK machine (just emitted) in scope.  A
@@ -17661,6 +17670,7 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
 "    }\n"
 "    dk_free(root);\n"
 "    if (--__dk_entry_depth == 0) __dk_reap_run(); else __dk_reap_drop_to(mark);\n"
+"    if (tur_cur_shift_reset && tur_cur_shift_reset->pending) __dk_reset_abort(tur_cur_shift_reset);\n"
 "}\n\n");
         /* r7rs-conformance-program-emits-megabytes-of-c: the direct->cps entry
          * wrapper of a ZERO-parameter colored function (emit_cps_ir.c) is this one
