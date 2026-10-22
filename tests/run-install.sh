@@ -480,6 +480,435 @@ else
     bad ":global + :url is rejected" "rc=$rc out: $out"
 fi
 
+# ------------------------------------------------------------------ #
+# installed-spice-libraries IL0/IL1: install layout, library installs #
+# ------------------------------------------------------------------ #
+
+# A local bare repo from a directory, served as a file:// URL.  pkg_git_fetch
+# clones --depth 1, which wants a URL rather than a plain path.
+mkrepo() {   # mkrepo <src-dir> -> prints the file:// URL of a bare clone
+    ( cd "$1" && git init -q && git add -A &&
+      git -c user.email=t@example.invalid -c user.name=t commit -qm init ) >/dev/null 2>&1
+    git clone -q --bare "$1" "$1.git" >/dev/null 2>&1
+    echo "file://$1.git"
+}
+
+# 34. D5: a monorepo `--subdir` install with no --name clones under the URL's
+#     name (mono-HEAD) but registers the manifest's :name (json).  Every reader
+#     used to rebuild the directory from the entry name and miss.
+MONO="$WORK/mono"
+mkdir -p "$MONO/spices/json/src/json"
+cat > "$MONO/spices/json/build.tur" <<'EOF'
+(defpackage json
+  :name    "json"
+  :version "0.3.0")
+EOF
+cat > "$MONO/spices/json/src/json/decode.tur" <<'EOF'
+(defmodule json/decode
+  (export json-answer)
+  (defn json-answer [] : int 7))
+EOF
+MONO_URL="$(mkrepo "$MONO")"
+out="$("$TUR" install "$MONO_URL" --subdir spices/json 2>&1)"
+rc=$?
+if [ "$rc" -eq 0 ] && [ -d "$TUR_HOME/spices/mono-HEAD/spices/json" ] &&
+   grep -q ':dir ' "$TUR_HOME/state.tur" && grep -q ':src-dir ' "$TUR_HOME/state.tur"; then
+    ok "subdir install without --name records :dir/:src-dir"
+else
+    bad "subdir install without --name records :dir/:src-dir" "rc=$rc out: $out"
+fi
+out="$("$TUR" --json list 2>&1)"
+if python3 - "$out" <<'PY' 2>/dev/null
+import json, sys
+d = json.loads(sys.argv[1])
+e = [x for x in d["installed"] if x["name"] == "json"][0]
+assert e["source_dir"].endswith("mono-HEAD/spices/json"), e["source_dir"]
+assert e["kind"] == "library" and e["modules"] == ["json/decode"], e
+PY
+then
+    ok "list finds the subdir install's source"
+else
+    bad "list finds the subdir install's source" "$out"
+fi
+JAPP="$WORK/json-consumer"
+mkdir -p "$JAPP/src"
+cat > "$JAPP/build.tur" <<'EOF'
+(defpackage japp
+  :version "0.1.0"
+  :spices #map{"json" #map{:global true}})
+EOF
+cat > "$JAPP/src/main.tur" <<'EOF'
+(defmodule japp/main
+  (import json/decode :refer [json-answer])
+  (defn main [] : int
+    (println (json-answer))
+    0))
+EOF
+out="$(cd "$JAPP" && "$TUR_ABS" build . -o "$JAPP/appbin" 2>&1)"
+rc=$?
+if [ "$rc" -eq 0 ] && [ "$("$JAPP/appbin")" = "7" ]; then
+    ok ":global dep resolves a subdir install"
+else
+    bad ":global dep resolves a subdir install" "rc=$rc out: $out"
+fi
+out="$("$TUR" uninstall json 2>&1)"
+rc=$?
+if [ "$rc" -eq 0 ] && [ ! -e "$TUR_HOME/spices/mono-HEAD" ]; then
+    ok "uninstall removes the subdir install's clone"
+else
+    bad "uninstall removes the subdir install's clone" "rc=$rc out: $out"
+fi
+
+# 35. D5: `tur uninstall plot` removes plot's clone and nothing else -- it used
+#     to delete every spices/plot-* directory, plot-extras-HEAD included.
+for nm in plot plot-extras; do
+    mkdir -p "$WORK/$nm/src/$nm"
+    printf '(defpackage %s :name "%s" :version "0.1.0")\n' "$nm" "$nm" > "$WORK/$nm/build.tur"
+    printf '(defmodule %s/core (export one) (defn one [] : int 1))\n' "$nm" > "$WORK/$nm/src/$nm/core.tur"
+done
+PLOT_URL="$(mkrepo "$WORK/plot")"
+EXTRAS_URL="$(mkrepo "$WORK/plot-extras")"
+"$TUR" install "$PLOT_URL" >/dev/null 2>&1
+"$TUR" install "$EXTRAS_URL" >/dev/null 2>&1
+out="$("$TUR" uninstall plot 2>&1)"
+rc=$?
+if [ "$rc" -eq 0 ] && [ ! -e "$TUR_HOME/spices/plot-HEAD" ] &&
+   [ -d "$TUR_HOME/spices/plot-extras-HEAD" ]; then
+    ok "uninstall plot leaves plot-extras alone"
+else
+    bad "uninstall plot leaves plot-extras alone" "rc=$rc out: $(ls "$TUR_HOME/spices") $out"
+fi
+"$TUR" uninstall plot-extras >/dev/null 2>&1
+
+# 36. D4: an installed :bin spice whose dep has a dep of its own builds -- the
+#     install is set up as a fetched project, so the whole closure lands in
+#     the spice's own spices/ and reaches the build.
+mkdir -p "$WORK/deep-b/src/deepb" "$WORK/deep-a/src/deepa" "$WORK/deep-tool/src"
+cat > "$WORK/deep-b/build.tur" <<'EOF'
+(defpackage deepb :name "deepb" :version "0.1.0")
+EOF
+cat > "$WORK/deep-b/src/deepb/core.tur" <<'EOF'
+(defmodule deepb/core
+  (export base)
+  (defn base [] : int 40))
+EOF
+B_URL="$(mkrepo "$WORK/deep-b")"
+cat > "$WORK/deep-a/build.tur" <<EOF
+(defpackage deepa :name "deepa" :version "0.1.0"
+  :spices #map{"deepb" #map{:url "$B_URL"}})
+EOF
+cat > "$WORK/deep-a/src/deepa/core.tur" <<'EOF'
+(defmodule deepa/core
+  (import deepb/core :refer [base])
+  (export answer)
+  (defn answer [] : int (+ (base) 2)))
+EOF
+A_URL="$(mkrepo "$WORK/deep-a")"
+cat > "$WORK/deep-tool/build.tur" <<EOF
+(defpackage deeptool :name "deeptool" :version "0.1.0"
+  :spices #map{"deepa" #map{:url "$A_URL"}}
+  :bin #{ "tur-deeptool" "src/main.tur" })
+EOF
+cat > "$WORK/deep-tool/src/main.tur" <<'EOF'
+(defmodule deeptool/main
+  (import deepa/core :refer [answer])
+  (defn main [] : int
+    (println (answer))
+    0))
+EOF
+out="$("$TUR" install "$WORK/deep-tool" --path 2>&1)"
+rc=$?
+if [ "$rc" -eq 0 ] && [ "$("$TUR_HOME/bin/$(binfile tur-deeptool)" 2>&1)" = "42" ] &&
+   [ -d "$WORK/deep-tool/spices/deepb" ]; then
+    ok "installed tool with a transitive dep builds"
+else
+    bad "installed tool with a transitive dep builds" "rc=$rc out: $out"
+fi
+"$TUR" uninstall deeptool >/dev/null 2>&1
+
+# 37. D3: a spice with no :bin but a src/ installs as a library.
+LIB="$WORK/mathx"
+mkdir -p "$LIB/src/mathx"
+cat > "$LIB/build.tur" <<'EOF'
+(defpackage mathx :name "mathx" :version "1.2.0")
+EOF
+cat > "$LIB/src/mathx/core.tur" <<'EOF'
+(defmodule mathx/core
+  (export triple)
+  (defn triple [x : int] : int (* x 3)))
+EOF
+out="$("$TUR" install "$LIB" --path 2>&1)"
+rc=$?
+if [ "$rc" -eq 0 ] && [[ "$out" == *"[library]"* ]]; then
+    ok "library-only install"
+else
+    bad "library-only install" "rc=$rc out: $out"
+fi
+out="$("$TUR" list 2>&1)"
+if [[ "$out" == *"mathx 1.2.0 [library]"* ]] && [[ "$out" == *"library-only"* ]]; then
+    ok "list marks a library-only install"
+else
+    bad "list marks a library-only install" "$out"
+fi
+out="$("$TUR" --json list 2>&1)"
+if python3 - "$out" <<'PY' 2>/dev/null
+import json, sys
+d = json.loads(sys.argv[1])
+e = [x for x in d["installed"] if x["name"] == "mathx"][0]
+assert e["kind"] == "library" and e["bin"] == [] and e["modules"] == ["mathx/core"], e
+t = [x for x in d["installed"] if x["name"] == "sample"][0]
+assert t["kind"] == "tool" and "sample/core" in t["modules"] and "main" not in t["modules"], t
+PY
+then
+    ok "list --json kind and modules"
+else
+    bad "list --json kind and modules" "$out"
+fi
+
+# 38. D3: neither :bin nor src/ -- nothing to install.
+mkdir -p "$WORK/empty-spice"
+echo '(defpackage empty :name "empty" :version "0.1.0")' > "$WORK/empty-spice/build.tur"
+out="$("$TUR" install "$WORK/empty-spice" --path 2>&1)"
+rc=$?
+if [ "$rc" -ne 0 ] && [[ "$out" == *"no :bin entries and has no src/"* ]]; then
+    ok "spice with neither :bin nor src/ is refused"
+else
+    bad "spice with neither :bin nor src/ is refused" "rc=$rc out: $out"
+fi
+
+# 39. D6: a second spice providing the same module path is refused; --force
+#     installs it with a warning.
+LIB2="$WORK/mathx-fork"
+mkdir -p "$LIB2/src/mathx"
+echo '(defpackage mathxfork :name "mathx-fork" :version "0.1.0")' > "$LIB2/build.tur"
+cp "$LIB/src/mathx/core.tur" "$LIB2/src/mathx/core.tur"
+out="$("$TUR" install "$LIB2" --path 2>&1)"
+rc=$?
+if [ "$rc" -ne 0 ] && [[ "$out" == *"module 'mathx/core' is already provided by installed spice 'mathx'"* ]]; then
+    ok "module conflict refused"
+else
+    bad "module conflict refused" "rc=$rc out: $out"
+fi
+out="$("$TUR" install "$LIB2" --path --force 2>&1)"
+rc=$?
+if [ "$rc" -eq 0 ] && [[ "$out" == *"warning: module 'mathx/core'"* ]]; then
+    ok "module conflict --force installs with a warning"
+else
+    bad "module conflict --force installs with a warning" "rc=$rc out: $out"
+fi
+"$TUR" uninstall mathx-fork >/dev/null 2>&1
+
+# 40. A :global dep can name a library-only spice; upgrade and uninstall
+#     accept library entries.
+cat > "$APP/build.tur" <<'EOF'
+(defpackage app
+  :version "0.1.0"
+  :spices #map{"mathx" #map{:global true}})
+EOF
+cat > "$APP/src/main.tur" <<'EOF'
+(defmodule app/main
+  (import mathx/core :refer [triple])
+  (defn main [] : int
+    (println (triple 14))
+    0))
+EOF
+out="$(cd "$APP" && "$TUR_ABS" build . -o "$APP/appbin" 2>&1)"
+rc=$?
+if [ "$rc" -eq 0 ] && [ "$("$APP/appbin")" = "42" ]; then
+    ok ":global dep on a library-only spice builds"
+else
+    bad ":global dep on a library-only spice builds" "rc=$rc out: $out"
+fi
+out="$("$TUR" upgrade mathx 2>&1)"
+rc=$?
+if [ "$rc" -eq 0 ] && [[ "$out" == *"upgraded 'mathx'"* ]]; then
+    ok "upgrade accepts a library entry"
+else
+    bad "upgrade accepts a library entry" "rc=$rc out: $out"
+fi
+out="$("$TUR" uninstall mathx 2>&1)"
+rc=$?
+if [ "$rc" -eq 0 ] && [ -d "$LIB/src" ] && ! grep -q '"mathx"' "$TUR_HOME/state.tur"; then
+    ok "uninstall a library entry (keeps the --path checkout)"
+else
+    bad "uninstall a library entry (keeps the --path checkout)" "rc=$rc out: $out"
+fi
+
+# ------------------------------------------------------------------ #
+# installed-spice-libraries IL2/IL3: the project-less search path     #
+# ------------------------------------------------------------------ #
+# These need a scratch directory with no build.tur above it.  The harnesses
+# turn the fallback off; this one is about the fallback, so it must not be.
+unset TUR_NO_GLOBAL_SPICES
+
+LIBX="$WORK/libx"
+mkdir -p "$LIBX/src/libx"
+cat > "$LIBX/build.tur" <<'EOF'
+(defpackage libx :name "libx" :version "0.2.0")
+EOF
+cat > "$LIBX/src/libx/core.tur" <<'EOF'
+(defmodule libx/core
+  (export triple)
+  (defn triple [x : int] : int (* x 3)))
+EOF
+"$TUR" install "$LIBX" --path >/dev/null 2>&1
+
+SCRATCH="$WORK/scratch"
+mkdir -p "$SCRATCH"
+cat > "$SCRATCH/report.tur" <<'EOF'
+(defmodule report
+  (import libx/core :refer [triple])
+  (defn main [] : int
+    (println (triple 14))
+    0))
+EOF
+
+# 41. D1/D2: a file outside any project imports an installed spice -- the
+#     compiled path, check, and the interpreter.
+out="$(cd "$SCRATCH" && "$TUR_ABS" run report.tur 2>&1)"
+if [ "$out" = "42" ]; then ok "project-less tur run imports an installed spice"
+else bad "project-less tur run imports an installed spice" "$out"; fi
+out="$(cd "$SCRATCH" && "$TUR_ABS" check report.tur 2>&1)"
+rc=$?
+if [ "$rc" -eq 0 ]; then ok "project-less tur check resolves an installed spice"
+else bad "project-less tur check resolves an installed spice" "rc=$rc $out"; fi
+out="$(cd "$SCRATCH" && "$TUR_ABS" --interpret report.tur 2>&1)"
+if [ "$out" = "42" ]; then ok "project-less tur --interpret imports an installed spice"
+else bad "project-less tur --interpret imports an installed spice" "$out"; fi
+
+# 42. `tur run -` anchors the walk at cwd, not at its temp copy.
+out="$(cd "$SCRATCH" && "$TUR_ABS" run - < report.tur 2>&1)"
+if [ "$out" = "42" ]; then ok "tur run - (stdin) sees the installed spices"
+else bad "tur run - (stdin) sees the installed spices" "$out"; fi
+
+# 43. D1: the same file under a build.tur that does not declare the spice
+#     still fails -- projects stay hermetic.
+PROJ="$WORK/hermetic"
+mkdir -p "$PROJ/src"
+echo '(defpackage hermetic :version "0.1.0")' > "$PROJ/build.tur"
+cp "$SCRATCH/report.tur" "$PROJ/src/report.tur"
+out="$(cd "$PROJ" && "$TUR_ABS" check src/report.tur 2>&1)"
+rc=$?
+if [ "$rc" -ne 0 ] && [[ "$out" == *"module 'libx/core' not found"* ]]; then
+    ok "a project does not see the installed spices"
+else
+    bad "a project does not see the installed spices" "rc=$rc $out"
+fi
+
+# 44. D8: the off switches.
+for sw in "--no-global-spices" "--no-auto-spice"; do
+    out="$(cd "$SCRATCH" && "$TUR_ABS" $sw check report.tur 2>&1)"
+    rc=$?
+    if [ "$rc" -ne 0 ] && [[ "$out" == *"module 'libx/core' not found"* ]]; then
+        ok "$sw turns the fallback off"
+    else
+        bad "$sw turns the fallback off" "rc=$rc $out"
+    fi
+done
+out="$(cd "$SCRATCH" && TUR_NO_GLOBAL_SPICES=1 "$TUR_ABS" check report.tur 2>&1)"
+rc=$?
+if [ "$rc" -ne 0 ]; then ok "TUR_NO_GLOBAL_SPICES=1 turns the fallback off"
+else bad "TUR_NO_GLOBAL_SPICES=1 turns the fallback off" "$out"; fi
+
+# 45. D2: installed spices only fill gaps -- a sibling module and an -I dir of
+#     the same path both win over the installed one.
+mkdir -p "$SCRATCH/libx" "$WORK/incdir/libx"
+cat > "$SCRATCH/libx/core.tur" <<'EOF'
+(defmodule libx/core
+  (export triple)
+  (defn triple [x : int] : int 99))
+EOF
+out="$(cd "$SCRATCH" && "$TUR_ABS" run report.tur 2>&1)"
+if [ "$out" = "99" ]; then ok "a sibling module beats an installed one"
+else bad "a sibling module beats an installed one" "$out"; fi
+rm -rf "$SCRATCH/libx"
+cat > "$WORK/incdir/libx/core.tur" <<'EOF'
+(defmodule libx/core
+  (export triple)
+  (defn triple [x : int] : int 77))
+EOF
+out="$(cd "$SCRATCH" && "$TUR_ABS" run -I "$WORK/incdir" report.tur 2>&1)"
+if [ "$out" = "77" ]; then ok "an -I dir beats an installed spice"
+else bad "an -I dir beats an installed spice" "$out"; fi
+
+# 46. A failed import outside a project names the installed spice it searched
+#     and points at `tur install`.
+cat > "$SCRATCH/missing.tur" <<'EOF'
+(defmodule missing
+  (import nosuch/mod)
+  (defn main [] : int 0))
+EOF
+out="$(cd "$SCRATCH" && "$TUR_ABS" check missing.tur 2>&1)"
+if [[ "$out" == *"(installed spice libx)"* ]] && [[ "$out" == *"tur install <source>"* ]]; then
+    ok "module-not-found labels installed spices and names tur install"
+else
+    bad "module-not-found labels installed spices and names tur install" "$out"
+fi
+
+# 47. D2 step 5: an installed spice's own dependencies resolve too.
+mkdir -p "$WORK/withdep/src/withdep"
+cat > "$WORK/withdep/build.tur" <<EOF
+(defpackage withdep :name "withdep" :version "0.1.0"
+  :spices #map{"deepb" #map{:url "$B_URL"}})
+EOF
+cat > "$WORK/withdep/src/withdep/core.tur" <<'EOF'
+(defmodule withdep/core
+  (import deepb/core :refer [base])
+  (export plus2)
+  (defn plus2 [] : int (+ (base) 2)))
+EOF
+"$TUR" install "$WORK/withdep" --path >/dev/null 2>&1
+cat > "$SCRATCH/usedep.tur" <<'EOF'
+(defmodule usedep
+  (import withdep/core :refer [plus2])
+  (defn main [] : int
+    (println (plus2))
+    0))
+EOF
+out="$(cd "$SCRATCH" && "$TUR_ABS" run usedep.tur 2>&1)"
+if [ "$out" = "42" ]; then ok "an installed spice's dependency resolves outside a project"
+else bad "an installed spice's dependency resolves outside a project" "$out"; fi
+
+# 48. IL3 (D7): an installed spice's :c-sources link into a project-less
+#     program that imports it; an installed spice whose C does not compile
+#     does not break a program that never imports it.
+mkdir -p "$WORK/cfx/src/cfx" "$WORK/cfx/c" "$WORK/brokenc/src/brokenc" "$WORK/brokenc/c"
+cat > "$WORK/cfx/build.tur" <<'EOF'
+(defpackage cfx :name "cfx" :version "0.1.0"
+  :build-opts #map{:c-sources ["c/cfx.c"]})
+EOF
+echo 'long cfx_seven(void) { return 7; }' > "$WORK/cfx/c/cfx.c"
+cat > "$WORK/cfx/src/cfx/core.tur" <<'EOF'
+(defmodule cfx/core
+  (export seven)
+  (defn seven [] : int
+    ```c
+    extern long cfx_seven(void);
+    return cfx_seven();
+    ```))
+EOF
+cat > "$WORK/brokenc/build.tur" <<'EOF'
+(defpackage brokenc :name "brokenc" :version "0.1.0"
+  :build-opts #map{:c-sources ["c/broken.c"]})
+EOF
+echo 'this is not C;' > "$WORK/brokenc/c/broken.c"
+echo '(defmodule brokenc/core (export b) (defn b [] : int 1))' > "$WORK/brokenc/src/brokenc/core.tur"
+"$TUR" install "$WORK/cfx" --path >/dev/null 2>&1
+"$TUR" install "$WORK/brokenc" --path >/dev/null 2>&1
+cat > "$SCRATCH/usec.tur" <<'EOF'
+(defmodule usec
+  (import cfx/core :refer [seven])
+  (defn main [] : int
+    (println (* (seven) 6))
+    0))
+EOF
+out="$(cd "$SCRATCH" && "$TUR_ABS" run usec.tur 2>&1)"
+if [ "$out" = "42" ]; then ok "an imported installed spice's :c-sources link"
+else bad "an imported installed spice's :c-sources link" "$out"; fi
+out="$(cd "$SCRATCH" && "$TUR_ABS" run report.tur 2>&1)"
+if [ "$out" = "42" ]; then ok "an installed spice that is not imported links nothing"
+else bad "an installed spice that is not imported links nothing" "$out"; fi
+
 echo
 echo "install summary: $PASS passed, $FAIL failed"
 if [ "$FAIL" -ne 0 ]; then

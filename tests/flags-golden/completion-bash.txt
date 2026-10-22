@@ -13,7 +13,7 @@ audit-spans lsp mcp image-info image-verify jit"
 
 __tur_global_flags="--help --version --no-color --json --json-diagnostics
 --strict-effects -Werror=strict-effects --strict-refine --no-contracts --keep-contracts
---warn-unused-result --panic-abort --no-auto-spice --enable="
+--warn-unused-result --panic-abort --no-auto-spice --no-global-spices --enable="
 
 # Recipe names from the enclosing Justfile (empty when there is none).
 __tur_recipes() {

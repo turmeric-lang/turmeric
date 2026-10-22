@@ -1,8 +1,11 @@
 usage:
-  tur repl [--watch] [--lang <dialect>] [--engine <name>]
+  tur repl [-I <dir>...] [--watch] [--lang <dialect>] [--engine <name>]
                   start the interactive REPL
 
 flags:
+  -I <dir>        add a module search directory (repeatable); searched
+                  before the enclosing spice or, outside a project,
+                  before the installed spices
   --lang <d>      start in a language dialect: "turmeric" (default),
                   "saffron" (unannotated params default to any),
                   "r7rs" (Scheme), or any base `tur dialects` lists.
@@ -23,10 +26,13 @@ REPL commands:
   :type <expr>    print the inferred type of an expression
   :reload <file>  reload a source file
   :reset          clear session and start fresh
+  :spice [name]   load an installed spice (or a checkout, by path);
+                  bare :spice lists loaded and installed spices
   :tutorial       start the interactive tutorial
 
 REPL forms:
-  (reload)        rebuild the loaded spice and refresh bindings
+  (reload)        rebuild the loaded spice (and any attached spice
+                  whose sources changed) and refresh bindings
 
 Try 'tur --help' for global options.
 [exit 0]

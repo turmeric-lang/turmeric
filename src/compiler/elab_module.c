@@ -4,6 +4,7 @@
 #include "elab_internal.h"
 #include "lang_dialects.h"      /* lang_span_is_dynamic: the H6 forward-decl rule */
 #include "prof.h"               /* --timings: the module-load zone */
+#include "spice_search.h"       /* installed-spice provenance (IL2) */
 
 /* ---- file-local helper forward declarations ---- */
 static bool module_name_valid(const char *name, uint32_t len);
@@ -867,6 +868,12 @@ static ElabModule *elab_load_module_impl(Elab *e, const Symbol *name, Span impor
             /* Fallback: try each -I include directory (spice paths). */
             bool found_in_includes = false;
             int  matched_ii = -1;
+            /* installed-spice-libraries IL2: installed-spice slots are
+             * labelled with the spice's name, and only the first few are
+             * listed -- a machine with many installed spices would otherwise
+             * bury the -I dirs the reader is looking for. */
+            int  n_installed_listed = 0, n_installed_hidden = 0;
+            bool searched_installed = false;
             for (int ii = 0; ii < e->n_module_include_dirs && !found_in_includes; ii++) {
                 char inc_path[4096];
                 int iplen = snprintf(inc_path, sizeof(inc_path), "%s/%s.tur",
@@ -878,14 +885,36 @@ static ElabModule *elab_load_module_impl(Elab *e, const Symbol *name, Span impor
                         plen = iplen;
                         found_in_includes = true;
                         matched_ii = ii;
-                    } else if (alen < (int)sizeof(attempted) - 256) {
-                        int iw = snprintf(attempted + alen, sizeof(attempted) - (size_t)alen,
-                                          "    %s    (-I %s)\n", inc_path,
-                                          e->module_include_dirs[ii]);
-                        if (iw > 0 && (size_t)iw < sizeof(attempted) - (size_t)alen) alen += iw;
+                    } else {
+                        bool is_dep = false;
+                        const char *spice = spice_search_installed_slot(
+                            e->module_include_dirs[ii], &is_dep);
+                        if (spice) searched_installed = true;
+                        if (spice && n_installed_listed >= 4) {
+                            n_installed_hidden++;
+                        } else if (alen < (int)sizeof(attempted) - 256) {
+                            int iw = spice
+                                ? snprintf(attempted + alen, sizeof(attempted) - (size_t)alen,
+                                           "    %s    (installed spice %s%s)\n", inc_path,
+                                           spice, is_dep ? ", dependency" : "")
+                                : snprintf(attempted + alen, sizeof(attempted) - (size_t)alen,
+                                           "    %s    (-I %s)\n", inc_path,
+                                           e->module_include_dirs[ii]);
+                            if (iw > 0 && (size_t)iw < sizeof(attempted) - (size_t)alen) alen += iw;
+                            if (spice) n_installed_listed++;
+                        }
                     }
                 }
             }
+            if (n_installed_hidden > 0 && alen < (int)sizeof(attempted) - 128) {
+                int hw = snprintf(attempted + alen, sizeof(attempted) - (size_t)alen,
+                                  "    ... and %d more installed-spice dir%s "
+                                  "(`tur list` shows them)\n",
+                                  n_installed_hidden, n_installed_hidden == 1 ? "" : "s");
+                if (hw > 0 && (size_t)hw < sizeof(attempted) - (size_t)alen) alen += hw;
+            }
+            if (found_in_includes && matched_ii >= 0)
+                spice_search_note_import_dir(e->module_include_dirs[matched_ii]);
             if (found_in_includes && matched_ii >= 0
                 && e->module_include_workspace_producer
                 && e->module_include_workspace_producer[matched_ii]) {
@@ -939,7 +968,22 @@ static ElabModule *elab_load_module_impl(Elab *e, const Symbol *name, Span impor
                  * is unresolvable.  See
                  * docs/archive/manifest-read-failure-degrades-to-module-not-found.md. */
                 const char *hint;
-                if (e->n_module_include_dirs > 0) {
+                /* installed-spice-libraries IL2: outside a project an
+                 * installed spice is the other way to make a module
+                 * importable, so the hint names it next to -I. */
+                bool no_manifest = false;
+                {
+                    char probe[4096];
+                    snprintf(probe, sizeof(probe), "%s/x.tur", base);
+                    char *proot = spice_find_root(probe);
+                    no_manifest = (proot == NULL);
+                    free(proot);
+                }
+                int n_plain_includes = 0;
+                for (int ii = 0; ii < e->n_module_include_dirs; ii++)
+                    if (!spice_search_installed_slot(e->module_include_dirs[ii], NULL))
+                        n_plain_includes++;
+                if (n_plain_includes > 0) {
                     hint = "  hint: check the -I paths you passed, "
                            "or run `tur build <spice-src-dir>` to compile the whole spice";
                 } else {
@@ -973,9 +1017,13 @@ static ElabModule *elab_load_module_impl(Elab *e, const Symbol *name, Span impor
                                  lib, name->name, name->name);
                     }
                 }
+                const char *install_hint = (no_manifest || searched_installed)
+                    ? "\n        outside a project, `tur install <source>` makes a spice's\n"
+                      "        modules importable here (installed spices are searched last)"
+                    : "";
                 diag_emit(DIAG_ERROR, import_span,
-                          "module '%s' not found\n  searched:\n%s%s%s",
-                          name->name, attempted, hint, r7note);
+                          "module '%s' not found\n  searched:\n%s%s%s%s",
+                          name->name, attempted, hint, install_hint, r7note);
                 slot->is_loading = false;
                 return NULL;
             }

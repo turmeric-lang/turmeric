@@ -21,6 +21,7 @@
 #  endif
 #endif
 
+#include <dirent.h>
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -39,6 +40,7 @@
 #include "reader.h"
 #include "symbols.h"
 #include "platform_fs.h"
+#include "pkg.h"           /* tur_spice_modules reads :bin */
 
 /* ------------------------------------------------------------------ */
 /* Local helpers                                                       */
@@ -203,7 +205,27 @@ static void gs_parse_str_vec(const Form *f, char ***out, int *n_out) {
     }
 }
 
+static bool tur_state_read_clean(const char *path, TurState *out);
+
+/* The reader runs on the diag layer: it reports "empty" when diag_had_error()
+ * is already set -- as it still is in a REPL after a turn that failed, where
+ * `:spice <name>` then said the spice was not installed -- and it registers
+ * its stack-local SourceFile in the file table.  So it runs on a clean slate
+ * and the caller's table and flag are put back, the way libturi's
+ * turi_env_set_search_path_with treats the manifest reader. */
 bool tur_state_read(const char *path, TurState *out) {
+    const SourceFile *saved[DIAG_MAX_FILES];
+    size_t n_saved = diag_files_save(saved, sizeof(saved) / sizeof(saved[0]));
+    bool had_error = diag_had_error();
+    diag_reset();
+    bool ok = tur_state_read_clean(path, out);
+    diag_reset();
+    diag_files_replace(saved, n_saved);
+    if (had_error) diag_force_had_error();
+    return ok;
+}
+
+static bool tur_state_read_clean(const char *path, TurState *out) {
     memset(out, 0, sizeof(*out));
     out->format_version = 1;
 
@@ -296,6 +318,8 @@ bool tur_state_read(const char *path, TurState *out) {
                 e->version      = gs_form_str_dup(gs_map_get_kw(ef, "version"));
                 e->installed_at = gs_form_str_dup(gs_map_get_kw(ef, "installed-at"));
                 e->built_with   = gs_form_str_dup(gs_map_get_kw(ef, "built-with"));
+                e->dir          = gs_form_str_dup(gs_map_get_kw(ef, "dir"));
+                e->src_dir      = gs_form_str_dup(gs_map_get_kw(ef, "src-dir"));
                 gs_parse_str_vec(gs_map_get_kw(ef, "bin"),
                                  &e->bin, &e->n_bin);
             }
@@ -357,6 +381,8 @@ bool tur_state_write(const char *path, const TurState *st) {
         state_put_kv(f, "version",      e->version);
         state_put_kv(f, "installed-at", e->installed_at);
         state_put_kv(f, "built-with",   e->built_with);
+        state_put_kv(f, "dir",          e->dir);
+        state_put_kv(f, "src-dir",      e->src_dir);
         if (e->n_bin > 0) {
             fprintf(f, ":bin [");
             for (int j = 0; j < e->n_bin; j++) {
@@ -388,6 +414,8 @@ static void gs_entry_free(TurStateEntry *e) {
     free(e->version);
     free(e->installed_at);
     free(e->built_with);
+    free(e->dir);
+    free(e->src_dir);
     for (int j = 0; j < e->n_bin; j++) free(e->bin[j]);
     free(e->bin);
     memset(e, 0, sizeof(*e));
@@ -419,6 +447,8 @@ TurStateEntry *tur_state_upsert(TurState *st, const char *name) {
         free(e->version);      e->version = NULL;
         free(e->installed_at); e->installed_at = NULL;
         free(e->built_with);   e->built_with = NULL;
+        free(e->dir);          e->dir = NULL;
+        free(e->src_dir);      e->src_dir = NULL;
         for (int j = 0; j < e->n_bin; j++) free(e->bin[j]);
         free(e->bin);
         e->bin = NULL;
@@ -447,14 +477,59 @@ bool tur_state_remove(TurState *st, const char *name) {
     return false;
 }
 
+static bool gs_is_dir(const char *p) {
+    struct stat ds;
+    return p[0] && stat(p, &ds) == 0 && S_ISDIR(ds.st_mode);
+}
+
+/* The pre-D5 reconstruction of a git install's root:
+ * spices/<name>-<sanitized-ref>.  It names the wrong directory whenever the
+ * clone was made under a different name than the entry's (a monorepo
+ * `--subdir` install without `--name`), which is why new entries record
+ * `:dir`; it survives only for entries written before that. */
+static bool gs_reconstructed_root(const TurStateEntry *e, char *out, size_t out_sz) {
+    char spices_dir[4096];
+    if (!tur_global_spices_dir(spices_dir, sizeof(spices_dir))) return false;
+    char ref_tag[128];
+    snprintf(ref_tag, sizeof(ref_tag), "%s", e->ref ? e->ref : "HEAD");
+    for (char *p = ref_tag; *p; p++) if (*p == '/') *p = '-';
+    snprintf(out, out_sz, "%s/%s-%s", spices_dir,
+             e->name ? e->name : "unknown", ref_tag);
+    return true;
+}
+
+bool tur_state_entry_root_dir(const TurStateEntry *e, char *out, size_t out_sz) {
+    if (!e || !out || out_sz == 0) return false;
+    out[0] = '\0';
+    if (e->path) return false;
+    if (e->dir) { snprintf(out, out_sz, "%s", e->dir); return true; }
+    return gs_reconstructed_root(e, out, out_sz);
+}
+
+bool tur_state_entry_src_dir(const TurStateEntry *e, char *out, size_t out_sz) {
+    if (!e || !out || out_sz == 0) return false;
+    out[0] = '\0';
+    if (e->src_dir) {
+        snprintf(out, out_sz, "%s", e->src_dir);
+    } else if (e->path) {
+        snprintf(out, out_sz, "%s", e->path);
+    } else {
+        char base[4096];
+        if (!tur_state_entry_root_dir(e, base, sizeof(base))) return false;
+        if (e->subdir) snprintf(out, out_sz, "%s/%s", base, e->subdir);
+        else           snprintf(out, out_sz, "%s", base);
+    }
+    return gs_is_dir(out);
+}
+
 /* global-spice-library-consumption: resolve an INSTALLED spice's source
  * directory by name, for a manifest dep declared `#{:global true}`.
  *
- * Mirrors `tur list`'s reconstruction (install.c: inst_entry_src_dir): a
- * `--path` install points at the local checkout, a git install at
- * `spices/<name>-<sanitized-ref>` plus any `:subdir`.  Returns false when the
- * spice is not installed or its directory is gone, so callers can report
- * "install it first" rather than falling through to a project-local guess.
+ * The directory comes from tur_state_entry_src_dir: the recorded `:src-dir` /
+ * `:dir` (installed-spice-libraries D5), or the reconstruction for an entry
+ * that predates them.  Returns false when the spice is not installed or its
+ * directory is gone, so callers can report "install it first" rather than
+ * falling through to a project-local guess.
  *
  * `out_version` / `out_resolved`, when non-NULL, receive the state entry's
  * recorded version and resolved SHA (borrowed from the caller-owned state, so
@@ -473,32 +548,110 @@ bool tur_installed_spice_dir(const char *name, char *out, size_t out_sz,
 
     bool found = false;
     TurStateEntry *e = tur_state_find(&st, name);
-    if (e) {
-        char dir[4096];
-        if (e->path) {
-            snprintf(dir, sizeof(dir), "%s", e->path);
-        } else {
-            char spices_dir[4096];
-            if (tur_global_spices_dir(spices_dir, sizeof(spices_dir))) {
-                char ref_tag[128];
-                snprintf(ref_tag, sizeof(ref_tag), "%s", e->ref ? e->ref : "HEAD");
-                for (char *p = ref_tag; *p; p++) if (*p == '/') *p = '-';
-                char base[4096];
-                snprintf(base, sizeof(base), "%s/%s-%s", spices_dir, name, ref_tag);
-                if (e->subdir) snprintf(dir, sizeof(dir), "%s/%s", base, e->subdir);
-                else           snprintf(dir, sizeof(dir), "%s", base);
-            } else {
-                dir[0] = '\0';
-            }
-        }
-        struct stat ds;
-        if (dir[0] && stat(dir, &ds) == 0 && S_ISDIR(ds.st_mode)) {
-            snprintf(out, out_sz, "%s", dir);
-            if (out_version && e->version)   *out_version  = tur_strdup(e->version);
-            if (out_resolved && e->resolved) *out_resolved = tur_strdup(e->resolved);
-            found = true;
-        }
+    char dir[4096];
+    if (e && tur_state_entry_src_dir(e, dir, sizeof(dir))) {
+        snprintf(out, out_sz, "%s", dir);
+        if (out_version && e->version)   *out_version  = tur_strdup(e->version);
+        if (out_resolved && e->resolved) *out_resolved = tur_strdup(e->resolved);
+        found = true;
     }
     tur_state_free(&st);
     return found;
+}
+
+/* ------------------------------------------------------------------ */
+/* Module listing (installed-spice-libraries D6)                       */
+/* ------------------------------------------------------------------ */
+
+static void gs_push_mod(char ***out, int *n, int *cap, const char *rel) {
+    if (*n >= *cap) {
+        int nc = *cap ? *cap * 2 : 16;
+        char **nv = (char **)realloc(*out, (size_t)nc * sizeof(char *));
+        if (!nv) return;
+        *out = nv; *cap = nc;
+    }
+    (*out)[(*n)++] = tur_strdup(rel);
+}
+
+static void gs_walk_mods(const char *dir, const char *rel,
+                         char ***out, int *n, int *cap, int depth) {
+    if (depth > 32) return;
+    DIR *d = opendir(dir);
+    if (!d) return;
+    struct dirent *ent;
+    while ((ent = readdir(d)) != NULL) {
+        if (ent->d_name[0] == '.') continue;
+        char path[4096], sub[4096];
+        snprintf(path, sizeof(path), "%s/%s", dir, ent->d_name);
+        if (rel[0]) snprintf(sub, sizeof(sub), "%s/%s", rel, ent->d_name);
+        else        snprintf(sub, sizeof(sub), "%s", ent->d_name);
+        struct stat st;
+        if (stat(path, &st) != 0) continue;
+        if (S_ISDIR(st.st_mode)) {
+            gs_walk_mods(path, sub, out, n, cap, depth + 1);
+        } else if (S_ISREG(st.st_mode)) {
+            size_t sl = strlen(sub);
+            if (sl > 4 && strcmp(sub + sl - 4, ".tur") == 0) {
+                sub[sl - 4] = '\0';
+                gs_push_mod(out, n, cap, sub);
+            }
+        }
+    }
+    closedir(d);
+}
+
+static int gs_cmp_str(const void *a, const void *b) {
+    return strcmp(*(const char *const *)a, *(const char *const *)b);
+}
+
+/* `src/main.tur` / `./src/main.tur` -> `main`; NULL when the :bin path is
+ * not under src/ (then it cannot shadow a module anyway). */
+static bool gs_bin_module(const char *bin_path, char *out, size_t cap) {
+    const char *p = bin_path;
+    while (p[0] == '.' && p[1] == '/') p += 2;
+    if (strncmp(p, "src/", 4) != 0) return false;
+    p += 4;
+    size_t l = strlen(p);
+    if (l <= 4 || strcmp(p + l - 4, ".tur") != 0 || l - 4 >= cap) return false;
+    memcpy(out, p, l - 4);
+    out[l - 4] = '\0';
+    return true;
+}
+
+int tur_spice_modules(const char *spice_dir, char ***out) {
+    *out = NULL;
+    if (!spice_dir) return 0;
+    char src[4096];
+    snprintf(src, sizeof(src), "%s/src", spice_dir);
+    int n = 0, cap = 0;
+    gs_walk_mods(src, "", out, &n, &cap, 0);
+
+    /* A :bin entrypoint is a program, not a library module: nobody imports
+     * a tool's `main`, and counting it would make every two tools that keep
+     * their entry at src/main.tur "provide the same module". */
+    char mp[4096];
+    PkgManifest m;
+    memset(&m, 0, sizeof(m));
+    if (pkg_resolve_manifest_path(spice_dir, mp, sizeof(mp)) &&
+        pkg_manifest_read(mp, &m)) {
+        for (int b = 0; b < m.n_bins; b++) {
+            char bm[4096];
+            if (!m.bin_paths[b] || !gs_bin_module(m.bin_paths[b], bm, sizeof(bm)))
+                continue;
+            for (int i = 0; i < n; i++) {
+                if (strcmp((*out)[i], bm) != 0) continue;
+                free((*out)[i]);
+                (*out)[i] = (*out)[--n];
+                break;
+            }
+        }
+    }
+    pkg_manifest_free(&m);
+    if (n > 1) qsort(*out, (size_t)n, sizeof(char *), gs_cmp_str);
+    return n;
+}
+
+void tur_spice_modules_free(char **mods, int n) {
+    for (int i = 0; i < n; i++) free(mods[i]);
+    free(mods);
 }

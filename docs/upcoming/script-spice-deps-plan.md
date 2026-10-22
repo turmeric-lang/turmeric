@@ -1,13 +1,13 @@
 # Plan: Spices declared inside a script -- a `defscript` header, a dep cache, and an opt-in lock
 
 > **Status:** Deferred. Written 2026-10-21 as the follow-up to
-> [installed-spice-libraries-plan](installed-spice-libraries-plan.md), and it
+> [installed-spice-libraries-plan](../archive/installed-spice-libraries-plan.md), and it
 > **assumes that plan has landed** (IL0-IL3 at least). Not scheduled.
 > **Last Updated:** 2026-10-21
 > **Type:** Tooling / package management (`src/compiler/pkg.c`,
 > `src/compiler/global.c`), build driver (`src/main.c`), one new reserved
 > top-level form, behind `--enable=script-deps`.
-> **See also:** [installed-spice-libraries-plan](installed-spice-libraries-plan.md),
+> **See also:** [installed-spice-libraries-plan](../archive/installed-spice-libraries-plan.md),
 > [global-spice-install-plan](../archive/global-spice-install-plan.md),
 > [consuming-spices-guide](../guides/consuming-spices-guide.md) (the `:spices`
 > entry grammar this reuses), [experimental-flags-guide](../guides/experimental-flags-guide.md).
@@ -42,7 +42,7 @@ it reproducible byte for byte.
 
 ## What the previous plan leaves, and why this is separate
 
-After [installed-spice-libraries-plan](installed-spice-libraries-plan.md), a
+After [installed-spice-libraries-plan](../archive/installed-spice-libraries-plan.md), a
 file outside any project can import any **installed** spice: `tur install`
 once, then import from anywhere. That covers the person who owns the machine,
 but a script built that way is not portable:
@@ -371,7 +371,7 @@ compile on every invocation, and shebang use makes that visible.
 
 ## Out of scope
 
-- Everything in [installed-spice-libraries-plan](installed-spice-libraries-plan.md),
+- Everything in [installed-spice-libraries-plan](../archive/installed-spice-libraries-plan.md),
   which this plan assumes.
 - Registries and name-only dependencies (`"json" "0.3"` resolved by name).
   Turmeric has no package index; every dep names its source.

@@ -28,6 +28,13 @@ Turmeric v0.x.0  (type :help for help, :quit to exit)
 
 Exit with `:quit`, `:q`, or `Ctrl-D`.
 
+`tur repl -I <dir>` (repeatable; `-I<dir>` too) adds a module search
+directory for `(import ...)` at the prompt. Each dir is made absolute at
+startup, so a later `:cd` does not change what it names. The dirs are searched
+after the current directory and the stdlib, and before the enclosing spice --
+or, outside a project, before the installed spices (see
+[Installed spices at the prompt](#installed-spices-at-the-prompt)).
+
 ---
 
 ## Evaluating expressions
@@ -181,6 +188,8 @@ Meta-commands:
   :pwd                print the working directory
   :cd [dir]           change the working directory (bare :cd goes home)
   :explain [code]     explain the most recent error, or a TUR-E#### code
+  :spice [name|path]  load an installed spice (or a checkout) into the
+                      session; bare :spice lists loaded and installed
 
 Tutorial commands:
   :tutorial              list available tutorials
@@ -451,6 +460,61 @@ Each export is bound under **two** names so you can call it either way:
 The qualified form avoids collisions when two modules in the same
 project export the same name.
 
+### Installed spices at the prompt
+
+The session's module search path is what a file in the current directory
+would get from `tur run`: the `-I` dirs, then the enclosing spice's `src/` and
+its `:spices` deps -- or, when no `build.tur` is above the current directory,
+every spice installed with `tur install`, in the order the
+[consuming-spices guide](consuming-spices-guide.md#search-order) gives. So a
+REPL started outside any project imports installed spices directly:
+
+```
+$ cd ~/scratch
+$ tur repl
+turmeric> (import json/decode :refer [parse])
+turmeric> (parse "[1, 2]")
+```
+
+Before a turn runs, the REPL attaches the compiled image of each spice the turn
+imports from, so an installed spice's inline-C functions run compiled rather
+than being refused by the interpreter. The image is built the first time (a
+`tur build --shared`, which makes that first import slow) and cached in the
+spice's `.tur-repl-cache/`.
+
+A side effect worth knowing: inside a spice, a top-level `(import own/module)`
+at the prompt now resolves from the spice's `src/`.
+
+The path is computed when the session starts, and again on `:reset` and
+`:run`; `:cd` alone does not recompute it (a sibling module in the new
+directory still resolves, since the current directory is searched first).
+`TUR_NO_AUTO_SPICE=1` leaves only the `-I` dirs and `:spice` loads;
+`TUR_NO_GLOBAL_SPICES=1` keeps the installed spices out.
+
+### `:spice` -- load a spice explicitly
+
+`:spice <name>` loads an installed spice by its registry name; `:spice <path>`
+loads a checkout (anything containing `/`, or starting with `.` or `~`). It
+works inside a project as well as outside one -- it is an explicit request. The
+spice's `src/` and dependency closure join the search path, and its compiled
+image is attached, so its exports are bound bare and qualified as above:
+
+```
+turmeric> :spice json
+Loaded spice json 0.3.0 from /home/me/.local/share/turmeric/spices/turmeric-spices-json-v0.3.0/spices/json (14 exports)
+turmeric> :spice json
+;; spice json already loaded
+turmeric> :spice nosuch
+tur repl: :spice: 'nosuch' is not installed -- `tur install <source>` first
+```
+
+Bare `:spice` lists the spices loaded this way and the installed ones not
+loaded yet; `:spice <TAB>` completes installed names. Loads survive `:reset`
+and `:run` -- they are session configuration, like `-I`. `(reload)` also
+rebuilds a loaded or import-attached spice whose sources changed; only a
+`--path` install or a local checkout can change, since a git install's tree
+belongs to the registry.
+
 ### Cache layout
 
 The compiled library and its symbol manifest live under
@@ -578,7 +642,8 @@ advance the loop anyway.
 
 | Variable | Effect |
 |---|---|
-| `TUR_NO_AUTO_SPICE=1` | Skip discovery entirely. Useful for a pure-Turmeric REPL inside a project directory. |
+| `TUR_NO_AUTO_SPICE=1` | Skip discovery entirely -- the enclosing spice and the installed spices. Useful for a pure-Turmeric REPL inside a project directory. |
+| `TUR_NO_GLOBAL_SPICES=1` | Outside a project, do not search the installed spices. |
 | `TUR_BIN=<path>` | Override the executable used for the rebuild subprocess. Defaults to `tur` (PATH lookup). Helpful when running an in-tree dev build. |
 
 ### Calling spice defns: type marshaling

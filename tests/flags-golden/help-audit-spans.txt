@@ -7,7 +7,8 @@ flags:
                        (repeat to add multiple)
   --no-auto-spice      don't auto-discover the enclosing spice's src/
                        (default behavior walks up from the file looking
-                       for build.tur and adds <spice>/src to the path)
+                       for build.tur and adds <spice>/src to the path;
+                       with no build.tur, the installed spices instead)
   --no-auto-stdlib     when the checked file is one of the auto-loaded
                        stdlib files, skip auto-loading it and all
                        subsequent stdlib files; earlier stdlib files

@@ -537,8 +537,44 @@ int tur_ffi_register_extern_thunk(TuriEnv *env, const char *name, void *fn,
 /* (reload) native                                                     */
 /* ------------------------------------------------------------------ */
 
+/* installed-spice-libraries IL5: rebuild every ATTACHED image (a `:spice`
+ * load, or one attached for an import) whose sources changed since it was
+ * built.  Only a --path install or a local checkout can change; a git
+ * install's tree is the registry's.  The old image is retired, not freed, so
+ * bindings already handed out keep their borrowed strings.  Returns how many
+ * were rebuilt. */
+static int reload_attached_images(TuriEnv *env) {
+    int rebuilt = 0;
+    for (struct TurSpiceImageNode *n = env->attached_spice_images; n; n = n->next) {
+        if (!n->image || tur_spice_image_is_fresh(n->image)) continue;
+        const char *root = tur_spice_image_root(n->image);
+        TurSpiceImage *fresh = NULL;
+        if (tur_spice_image_load(root, getenv("TUR_BIN"), &fresh) != 0 || !fresh) {
+            printf("(reload) %s: rebuild failed; previous image left in place\n",
+                   root ? root : "(spice)");
+            continue;
+        }
+        struct TurSpiceImageNode *old =
+            (struct TurSpiceImageNode *)calloc(1, sizeof(*old));
+        if (!old) { tur_spice_image_free(fresh); continue; }
+        old->image = n->image;
+        old->next  = env->retired_spice_images;
+        env->retired_spice_images = old;
+        n->image = fresh;
+        uint32_t n_exports = tur_spice_image_count(fresh);
+        (void)tur_ffi_install_spice_bindings(env, fresh);
+        printf("(reload) rebuilt %u export%s from %s\n",
+               n_exports, n_exports == 1 ? "" : "s", tur_spice_image_root(fresh));
+        rebuilt++;
+    }
+    fflush(stdout);
+    return rebuilt;
+}
+
 TuriValue tur_ffi_reload_spice(TuriEnv *env) {
     if (!env) return turi_error("(reload) no env");
+
+    int n_attached_rebuilt = reload_attached_images(env);
 
     /* RP7: self-heal path -- when the initial REPL load failed
      * (compile error in user code, missing build.tur, etc.), the
@@ -549,6 +585,11 @@ TuriValue tur_ffi_reload_spice(TuriEnv *env) {
         TurSpiceImage *fresh0 = NULL;
         int rc0 = tur_spice_image_load(".", getenv("TUR_BIN"), &fresh0);
         if (rc0 == 1) {
+            if (env->attached_spice_images) {
+                if (n_attached_rebuilt == 0) printf("(reload) no changes\n");
+                fflush(stdout);
+                return turi_nil();
+            }
             printf("(reload) no spice project here; nothing to reload\n");
             fflush(stdout);
             return turi_error("(reload) no spice loaded");
@@ -566,6 +607,7 @@ TuriValue tur_ffi_reload_spice(TuriEnv *env) {
         return turi_nil();
     }
     if (tur_spice_image_is_fresh(env->spice_image)) {
+        if (n_attached_rebuilt > 0) return turi_nil();
         printf("(reload) no changes\n");
         fflush(stdout);
         return turi_nil();

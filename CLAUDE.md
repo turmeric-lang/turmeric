@@ -708,6 +708,11 @@ configuration in your editor, LSP, or format-on-save hook.
 (`:path` entries and workspace siblings) resolve with no fetch step and
 produce no `tur.lock` entries.
 
+- With **no** `build.tur` above the file, the installed spices (`tur install`,
+  library-only ones included) are searched after `-I` instead -- they only
+  fill gaps, and a project never sees them. `--no-global-spices` /
+  `TUR_NO_GLOBAL_SPICES=1` turn that off; the test harnesses export the
+  latter. See [consuming-spices-guide](docs/guides/consuming-spices-guide.md#using-spices-without-a-project).
 - Explicit `-I <dir>` flags still work and win on name collisions.
 - `--no-auto-spice` (global flag, before the subcommand) opts out.
 - `tur build <file>` (single-file build) does **not** auto-discover --

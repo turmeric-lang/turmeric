@@ -1288,14 +1288,59 @@ library supports Emscripten. To make your spice Emscripten-compatible:
 
 ## Global Spices as Libraries
 
-A spice installed with `tur install` is a command-line tool by default: its
-`:bin` entries are symlinked into `~/.local/bin/` and become available as
-`tur-<cmd>` (or via the `tur <cmd>` fallthrough). The global `spices/` root is
-deliberately **not** on the default module-resolution path -- that would make
-every build depend on what happens to be installed on the machine.
+`tur install` puts a spice in the per-user install area
+(`~/.local/share/turmeric/`, or `$TUR_HOME` / `$XDG_DATA_HOME/turmeric`) and
+records it in the registry, `state.tur`. What it then provides depends on the
+spice:
 
-A project opts in per dependency, by declaring it `:global` in its
-`build.tur`:
+- **A spice with `:bin` entries** is a tool: each binary is built and linked
+  into `~/.local/bin/` as `tur-<cmd>` (and reachable as `tur <cmd>`). It is a
+  library too -- its modules are importable like any other installed spice's.
+- **A spice with no `:bin` but a `src/`** is a library-only install: nothing is
+  built and nothing lands in `~/.local/bin/`. `tur install` prints
+  `[library]`, and `tur list` marks it the same way (`--json` reports
+  `"kind": "library"` or `"tool"`, plus the `"modules"` the spice provides).
+- **A spice with neither** is refused: there is nothing to install.
+
+### Where an installed spice's dependencies live
+
+An installed spice is set up exactly as a fetched project: `tur install` runs
+`tur fetch` in its root, so its whole `:spices` closure lands in
+`<install root>/spices/` with a `tur.lock`, and its `:cmake-deps` (its own and
+its dependencies') are configured and built under `<install root>/cmake/`.
+`:bin` entries are then built with the include path project mode computes for
+that root. Nothing goes into the shared `spices/` directory next to the
+installed spices -- that holds installed spices only. `tur upgrade` re-runs the
+same pipeline in the same directory.
+
+`state.tur` records where each install lives (`:dir`, plus `:src-dir` when a
+`--subdir` puts the manifest below the clone), so `tur list`, `tur uninstall`
+and a `:global` dep find it even when the manifest's `:name` differs from the
+URL's last segment -- the normal case for a `turmeric-spices` monorepo install
+without `--name`. `tur uninstall` removes exactly that directory.
+
+### Two installed spices may not provide the same module
+
+Outside a project every installed spice's `src/` is searched (see
+[Using spices without a project](consuming-spices-guide.md#using-spices-without-a-project)),
+so the installed set behaves like one namespace. A module path is the path of a
+`.tur` file under `src/` without the extension (`json/decode`); a `:bin`
+entrypoint does not count, since nobody imports a tool's `main`. If a module
+the new spice provides already comes from another installed spice,
+`tur install` refuses and names both:
+
+```text
+tur install: error: module 'json/decode' is already provided by installed spice 'json'
+```
+
+`--force` installs it anyway with a warning; the spice whose name sorts first
+then wins. Dependencies are not checked -- they are per-spice and versioned.
+
+### Using an installed spice from a project
+
+A project does **not** see the installed set: a build should not depend on
+what happens to be installed on the machine. It opts in per dependency, by
+declaring it `:global` in its `build.tur`:
 
 ```turmeric
 :spices #map{
@@ -1318,21 +1363,17 @@ works. Four things follow from where it resolves:
 - **`:global` takes no `:url` and no `:path`.** They name a different
   resolution source, so declaring both is a manifest error rather than a
   silent precedence rule.
-- **The spice must be installable**, which today means it declares at least
-  one `:bin` entry -- `tur install` is a binary installer. A library-only
-  spice cannot be registered yet, so it cannot be a `:global` dep either.
+- **It may name a library-only spice** as well as a tool.
 
 Not built: the `:global-policy` knob that would decide whether a missing
 global install is auto-installed rather than reported, and version-range
 validation against the installed version (the registry records a `:version`,
 but nothing checks it against a requested range yet).
 
-Until library-only installs exist, a library-only spice is added the normal
-way with `tur add`. Installing one, and importing installed spices from a
-script or REPL session that has no project, is planned in
-[installed-spice-libraries-plan](https://github.com/turmeric-lang/turmeric/blob/main/docs/upcoming/installed-spice-libraries-plan.md).
 The original design sketch is in the
-[global-spice-install plan](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/global-spice-install-plan.md#imports-from-global-spices).
+[global-spice-install plan](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/global-spice-install-plan.md#imports-from-global-spices);
+library installs and the project-less search path are
+[installed-spice-libraries-plan](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/installed-spice-libraries-plan.md).
 
 ---
 

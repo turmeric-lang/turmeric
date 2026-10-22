@@ -3611,6 +3611,12 @@ static bool str_eq_or_both_null(const char *a, const char *b) {
  * Caller frees. */
 char *pkg_resolve_spice_dep_dir(const char *root_project_dir,
                                 const PkgSpice *s) {
+    return pkg_resolve_spice_dep_dir_in(root_project_dir, NULL, s);
+}
+
+char *pkg_resolve_spice_dep_dir_in(const char *root_project_dir,
+                                   const char *fetch_root,
+                                   const PkgSpice *s) {
     if (!root_project_dir || !s || !s->name) return NULL;
     char dep_dir[4096];
     /* global-spice-library-consumption: an explicitly `:global` dep resolves
@@ -3625,6 +3631,7 @@ char *pkg_resolve_spice_dep_dir(const char *root_project_dir,
     char *ws = s->path ? NULL
                        : pkg_workspace_member_path(root_project_dir, s->name);
     bool from_path = false;
+    bool fetched   = false;
     if (ws) {
         snprintf(dep_dir, sizeof(dep_dir), "%s", ws);
         free(ws);
@@ -3634,9 +3641,11 @@ char *pkg_resolve_spice_dep_dir(const char *root_project_dir,
     } else if (s->ref) {
         snprintf(dep_dir, sizeof(dep_dir), "%s/spices/%s-%s",
                  root_project_dir, s->name, s->ref);
+        fetched = true;
     } else {
         snprintf(dep_dir, sizeof(dep_dir), "%s/spices/%s",
                  root_project_dir, s->name);
+        fetched = true;
     }
     /* `:subdir` describes the sub-path inside a URL-fetched repo (e.g. a
      * monorepo's `spices/<name>`).  When the entry is `:path`-based the
@@ -3650,8 +3659,16 @@ char *pkg_resolve_spice_dep_dir(const char *root_project_dir,
         snprintf(dep_dir, sizeof(dep_dir), "%s", tmp);
     }
     struct stat ss;
-    if (stat(dep_dir, &ss) != 0 || !S_ISDIR(ss.st_mode)) return NULL;
-    return tur_strdup(dep_dir);
+    if (stat(dep_dir, &ss) == 0 && S_ISDIR(ss.st_mode)) return tur_strdup(dep_dir);
+    /* installed-spice-libraries D4: pkg_fetch_all flattens a project's whole
+     * :spices closure into the TOP project's spices/, so a fetched dep of a
+     * fetched dep is not under its parent's spices/ but under the root's. */
+    if (fetched && fetch_root && strcmp(fetch_root, root_project_dir) != 0) {
+        PkgSpice flat = *s;
+        flat.path = NULL;
+        return pkg_resolve_spice_dep_dir_in(fetch_root, NULL, &flat);
+    }
+    return NULL;
 }
 
 /* cmake-dep-path-through-missing-cmake-dir: collapse the `.` and `dir/..`
@@ -4557,7 +4574,8 @@ bool pkg_collect_transitive_cmake_deps(const char        *root_project_dir,
 
         /* Enqueue this spice's own :spices for the next level. */
         for (int j = 0; j < nodes[idx].m.n_spices; j++)
-            PUSH_WORK(idx, pkg_resolve_spice_dep_dir(dir, &nodes[idx].m.spices[j]));
+            PUSH_WORK(idx, pkg_resolve_spice_dep_dir_in(dir, root_project_dir,
+                                                        &nodes[idx].m.spices[j]));
     }
 #undef PUSH_WORK
 

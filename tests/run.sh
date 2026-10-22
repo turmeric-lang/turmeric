@@ -19,6 +19,11 @@
 
 set -u
 cd "$(dirname "$0")/.."
+# installed-spice-libraries D8: a fixture outside any build.tur (nearly all of
+# them -- the repo root has none) would otherwise search the developer's
+# installed spices, so an `errors/` fixture expecting "module not found" could
+# pass an import on that one machine.
+export TUR_NO_GLOBAL_SPICES=1
 
 # Isolate the test suite from any globally exported TUR_STDLIB_DIR (e.g. from
 # a mise-managed global `turmeric` install). Otherwise the locally built
@@ -699,16 +704,22 @@ run_happy() {
         TUR="$TUR" CC="$BUILD_CC" TUR_CC_FLAGS="$TUR_CC_FLAGS" ASAN_OPTIONS="$hook_asan" \
             bash "$dir/hook.sh" "$hook_tmp" > "$actual_hook_stdout" 2> "$hook_log"
         local hook_rc=$?
+        # A failure's log is written into RESULTS_DIR, not $hook_tmp: the
+        # summary below cats it AFTER this function has removed $hook_tmp, so
+        # a log kept there was gone by then and a hook fixture's failure
+        # printed its one-line reason with no diff and no hook output.
+        local hook_fail_log
+        hook_fail_log="$RESULTS_DIR/hook-$(printf '%s' "$name" | tr '/ ' '__').log"
         if [ $hook_rc -ne 0 ]; then
-            { echo "FAIL $name -- hook.sh exited $hook_rc"; cat "$hook_log"; } > "$hook_log.final"
-            write_result "FAIL" "$name" "hook.sh failed (exit $hook_rc)" "$hook_log.final"
+            { echo "FAIL $name -- hook.sh exited $hook_rc"; cat "$hook_log"; } > "$hook_fail_log"
+            write_result "FAIL" "$name" "hook.sh failed (exit $hook_rc)" "$hook_fail_log"
             rm -rf "$hook_tmp"
             return
         fi
         if [ -f "$dir/expected.stdout" ]; then
             if ! diff -u "$dir/expected.stdout" "$actual_hook_stdout" > /dev/null; then
-                { echo "FAIL $name -- stdout mismatch"; diff -u "$dir/expected.stdout" "$actual_hook_stdout" | sed 's/^/    /'; } > "$hook_log.final"
-                write_result "FAIL" "$name" "stdout mismatch" "$hook_log.final"
+                { echo "FAIL $name -- stdout mismatch"; diff -u "$dir/expected.stdout" "$actual_hook_stdout" | sed 's/^/    /'; } > "$hook_fail_log"
+                write_result "FAIL" "$name" "stdout mismatch" "$hook_fail_log"
                 rm -rf "$hook_tmp"
                 return
             fi

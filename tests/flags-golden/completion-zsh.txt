@@ -120,6 +120,7 @@ _tur() {
     '--warn-unused-result[warn on discarded result values]' \
     '--panic-abort[all panics call abort() directly]' \
     '--no-auto-spice[do not auto-discover the enclosing build.tur]' \
+    '--no-global-spices[outside a project, do not search installed spices]' \
     '1: :->command' \
     '*:: :->args' && ret=0
 

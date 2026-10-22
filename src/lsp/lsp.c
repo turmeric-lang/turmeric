@@ -13,6 +13,8 @@
 #include "fmt.h"          /* fmt_format_buffer() for textDocument/formatting */
 #include "platform_fs.h"  /* mkstemps() on Windows */
 #include "pkg.h"          /* R2: the manifest decides the file set */
+#include "global.h"       /* tur_spice_modules: installed-spice completion */
+#include "spice_search.h" /* the project-less fallback */
 
 #include <ctype.h>
 #include <dirent.h>
@@ -2519,6 +2521,35 @@ static void on_completion(const char *id_raw, size_t id_len,
             json_str(&items, mod);
             buf_puts(&items, ",\"kind\":9}");
             emitted++;
+        }
+        /* installed-spice-libraries IL2: outside a project, `tur check`
+         * resolves the installed spices' modules, so the editor offers them
+         * too.  Inside one the manifest decides, and nothing is added. */
+        char proot[4096];
+        if (doc->path && !spice_root_of(doc->path, proot, sizeof(proot)) &&
+            !spice_search_global_disabled()) {
+            char **names = NULL, **dirs = NULL;
+            int n = spice_search_installed_names(&names, &dirs);
+            for (int i = 0; i < n; i++) {
+                char **mods = NULL;
+                int nm = tur_spice_modules(dirs[i], &mods);
+                for (int j = 0; j < nm && emitted < LSP_COMPLETION_MAX; j++) {
+                    if (prefix_len > 0 && !ci_starts_with(mods[j], prefix, prefix_len))
+                        continue;
+                    if (emitted > 0) buf_putc(&items, ',');
+                    buf_puts(&items, "{\"label\":");
+                    json_str(&items, mods[j]);
+                    buf_puts(&items, ",\"kind\":9,\"detail\":");
+                    json_str(&items, names[i]);
+                    buf_putc(&items, '}');
+                    emitted++;
+                }
+                tur_spice_modules_free(mods, nm);
+                free(names[i]);
+                free(dirs[i]);
+            }
+            free(names);
+            free(dirs);
         }
     }
 

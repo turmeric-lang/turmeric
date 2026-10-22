@@ -188,7 +188,8 @@ int usage_check(void) {
         "                       (repeat to add multiple)\n"
         "  --no-auto-spice      don't auto-discover the enclosing spice's src/\n"
         "                       (default behavior walks up from the file looking\n"
-        "                       for build.tur and adds <spice>/src to the path)\n"
+        "                       for build.tur and adds <spice>/src to the path;\n"
+        "                       with no build.tur, the installed spices instead)\n"
         "  --no-auto-stdlib     when the checked file is one of the auto-loaded\n"
         "                       stdlib files, skip auto-loading it and all\n"
         "                       subsequent stdlib files; earlier stdlib files\n"
@@ -326,10 +327,13 @@ int usage_test(void) {
 int usage_repl(void) {
     fprintf(stderr,
         "usage:\n"
-        "  tur repl [--watch] [--lang <dialect>] [--engine <name>]\n"
+        "  tur repl [-I <dir>...] [--watch] [--lang <dialect>] [--engine <name>]\n"
         "                  start the interactive REPL\n"
         "\n"
         "flags:\n"
+        "  -I <dir>        add a module search directory (repeatable); searched\n"
+        "                  before the enclosing spice or, outside a project,\n"
+        "                  before the installed spices\n"
         "  --lang <d>      start in a language dialect: \"turmeric\" (default),\n"
         "                  \"saffron\" (unannotated params default to any),\n"
         "                  \"r7rs\" (Scheme), or any base `tur dialects` lists.\n"
@@ -350,10 +354,13 @@ int usage_repl(void) {
         "  :type <expr>    print the inferred type of an expression\n"
         "  :reload <file>  reload a source file\n"
         "  :reset          clear session and start fresh\n"
+        "  :spice [name]   load an installed spice (or a checkout, by path);\n"
+        "                  bare :spice lists loaded and installed spices\n"
         "  :tutorial       start the interactive tutorial\n"
         "\n"
         "REPL forms:\n"
-        "  (reload)        rebuild the loaded spice and refresh bindings\n"
+        "  (reload)        rebuild the loaded spice (and any attached spice\n"
+        "                  whose sources changed) and refresh bindings\n"
         "\n"
         "Try 'tur --help' for global options.\n");
     return 0;
@@ -688,6 +695,10 @@ static const GlobalFlag GLOBAL_FLAGS[] = {
     /* SC4: no enclosing-spice auto-discovery in the per-file subcommands
      * (check/emit-c/emit-h/run). */
     { "--no-auto-spice", NULL, GF_SCAN, &g_no_auto_spice, true, NULL, NULL },
+    /* installed-spice-libraries D8: keep the installed spices off the search
+     * path of a file outside any project.  --no-auto-spice implies it (it
+     * skips the whole walk); TUR_NO_GLOBAL_SPICES=1 is the env spelling. */
+    { "--no-global-spices", NULL, GF_SCAN, &g_no_global_spices, true, NULL, NULL },
     /* r7rs-gc: build a Scheme (or Saffron) program without the collector --
      * a program that starts threads.  TUR_R7RS_GC=0 / TUR_SAFFRON_GC=0 too. */
     { "--no-r7rs-gc", NULL, GF_SCAN, &g_opt_r7rs_gc, false, NULL, NULL },
@@ -1251,6 +1262,9 @@ int drv_usage(void) {
         "  --no-r7rs-gc                     build a #lang r7rs program without its collector (TUR_R7RS_GC=0; for a program that starts threads)\n"
         "  --no-saffron-gc                  build a #lang saffron program without the collector (TUR_SAFFRON_GC=0)\n"
         "  --panic-abort                   all panics call abort() directly (Phase R5)\n"
+        "  --no-auto-spice                  no enclosing-spice discovery: only -I dirs are searched\n"
+        "  --no-global-spices               outside a project, do not search the installed spices\n"
+        "                                   (TUR_NO_GLOBAL_SPICES=1; implied by --no-auto-spice)\n"
         "  --warn-unused-result             warn on discarded result values (Phase R6)\n"
         "  --no-warn-unused-result          disable --warn-unused-result (Phase R6)\n"
         "  --lint-panic                     lint panic/must! usage (Phase R6)\n"

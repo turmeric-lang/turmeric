@@ -85,6 +85,9 @@ global flags:
   --no-r7rs-gc                     build a #lang r7rs program without its collector (TUR_R7RS_GC=0; for a program that starts threads)
   --no-saffron-gc                  build a #lang saffron program without the collector (TUR_SAFFRON_GC=0)
   --panic-abort                   all panics call abort() directly (Phase R5)
+  --no-auto-spice                  no enclosing-spice discovery: only -I dirs are searched
+  --no-global-spices               outside a project, do not search the installed spices
+                                   (TUR_NO_GLOBAL_SPICES=1; implied by --no-auto-spice)
   --warn-unused-result             warn on discarded result values (Phase R6)
   --no-warn-unused-result          disable --warn-unused-result (Phase R6)
   --lint-panic                     lint panic/must! usage (Phase R6)

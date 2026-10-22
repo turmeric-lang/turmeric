@@ -12,6 +12,11 @@
 
 set -uo pipefail
 cd "$(dirname "$0")/.."
+# installed-spice-libraries D8: a fixture outside any build.tur (nearly all of
+# them -- the repo root has none) would otherwise search the developer's
+# installed spices, so an `errors/` fixture expecting "module not found" could
+# pass an import on that one machine.
+export TUR_NO_GLOBAL_SPICES=1
 
 # This harness exercises the tree-walking turi/eval interpreter (the eval-*
 # cases below), which intentionally never frees its closures or registered

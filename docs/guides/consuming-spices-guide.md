@@ -115,6 +115,68 @@ for the full rules.
 
 ---
 
+## Using spices without a project
+
+A one-off script or a REPL session has no `build.tur` to declare spices in.
+For those, an **installed** spice is importable directly:
+
+```sh
+tur install https://github.com/turmeric-lang/turmeric-spices \
+  --ref json-v0.3.0 --subdir spices/json
+cd ~/scratch                  # no build.tur anywhere above
+tur run report.tur            # (import json/decode) resolves
+tur repl                      # and at the prompt too
+```
+
+Any spice with modules can be installed -- one with no `:bin` entries is a
+library-only install (see
+[Global Spices as Libraries](developing-spices-guide.md#global-spices-as-libraries)).
+
+### Which files see the installed spices
+
+Only a file with **no `build.tur` above it** (within 16 parent directories):
+`tur run`, `tur check`, `tur build <file>`, `tur --interpret`, `tur jit`,
+`tur emit-c`, `tur expand`, `tur eval --file`, the LSP, and libturi embedders
+that call `turi_env_set_search_path_for`. `tur run -` (stdin) and `tur repl`
+are anchored at the current directory.
+
+A file inside a project sees exactly the spices its manifest declares, as
+always -- a project build must not depend on what happens to be installed on
+the machine, and a script has no lock file whose reproducibility the installed
+set could break. Inside a project, reach an installed spice with a
+[`:global` dep](#globally-installed-spices), or with `:spice` at the REPL.
+
+### Search order
+
+Outside a project an import is searched in:
+
+1. the importing file's directory,
+2. the stdlib,
+3. `-I` dirs, in command-line order,
+4. every installed spice's own `src/`, in install-name order (byte-wise),
+5. each installed spice's own dependencies, in the same order.
+
+Steps 1-3 are what was searched before; installed spices only fill a gap. An
+import that resolves without them resolves to the same file with them, and the
+spice you installed by name beats another version of it that some other
+installed spice depends on. A failed import lists the installed dirs it tried,
+labelled `(installed spice <name>)`, and names `tur install` in its hint.
+
+Linking follows the imports: an installed spice's `:c-sources`, `:cmake-deps`
+and `:link-libs` reach a program only when the program imports one of its
+modules, so one broken or platform-specific installed spice does not break
+every script.
+
+### Turning it off
+
+`--no-global-spices` (a global flag) or `TUR_NO_GLOBAL_SPICES=1` removes steps
+4 and 5. `--no-auto-spice` implies it -- it already means "add nothing to the
+search path on my behalf". The repository's test harnesses set
+`TUR_NO_GLOBAL_SPICES=1`, so a developer's installed spices cannot leak into
+the fixture suite.
+
+---
+
 ## What `tur add` Changes
 
 Before adding any spice:

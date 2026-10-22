@@ -12,6 +12,8 @@
  * (src/turi/eval.h) instead of re-deriving it.
  * See docs/archive/notebook-eval-no-module-base-dir.md */
 
+#include <stdbool.h>
+
 #include "pkg.h"
 
 /* SC3: maximum number of parent directories spice_find_root walks before
@@ -39,16 +41,72 @@ typedef struct SpiceSearchHooks {
     void *ud;
 } SpiceSearchHooks;
 
-/* SC4+SC5+LS2: append the enclosing spice's `src/`, then every `:spices`
- * dep's `src/` that exists on disk, then the workspace siblings' `src/`, to
- * `*inc`.  Each appended path is a strdup'd copy also recorded in `*owned`
+/* SC4+SC5+LS2: append the enclosing spice's `src/`, then the `src/` of every
+ * `:spices` dep across the transitive closure that exists on disk, then the
+ * workspace siblings' `src/`, to `*inc`.
+ *
+ * installed-spice-libraries D1/D2: when `input` has NO enclosing `build.tur`
+ * (a manifest-less context), it appends the installed spices instead -- each
+ * one's own `src/` in install-name order, then each one's dependency closure
+ * -- unless spice_search_global_disabled().  Entries already on the list
+ * (the `-I` dirs) are not appended twice, and nothing the caller put in
+ * front moves, so an installed spice only fills a gap.  Each appended path is a strdup'd copy also recorded in `*owned`
  * (insertion order) for the caller to free.  Entries already in `*inc` stay in
  * front, so the elaborator's first-match-wins keeps them highest priority.
- * Appends nothing when `input` is NULL or has no enclosing `build.tur`.
+ * Appends nothing when `input` is NULL.
  * Returns 0, or -1 on allocation failure. */
 int spice_search_append(const char *input,
                         char ***inc, int *n_inc,
                         char ***owned, int *n_owned,
                         const SpiceSearchHooks *hooks);
+
+/* installed-spice-libraries D8: the off switch for the project-less
+ * fallback.  `--no-global-spices` sets the flag (the driver's
+ * `--no-auto-spice` never reaches spice_search_append at all, so it implies
+ * it); `TUR_NO_GLOBAL_SPICES=1` is the environment spelling, which the test
+ * harnesses and libturi embedders use. */
+extern bool g_no_global_spices;
+bool spice_search_global_disabled(void);
+
+/* Append one spice's own `src/` and its dependency closure, recording them
+ * as installed-spice slots under `name` (the REPL's `:spice`; D10).  Dirs
+ * already on the list are skipped.  Returns 0, or -1 on allocation failure. */
+int spice_search_append_spice(const char *name, const char *spice_dir,
+                              char ***inc, int *n_inc,
+                              char ***owned, int *n_owned,
+                              const SpiceSearchHooks *hooks);
+
+/* The installed spices whose source tree is on disk, sorted by name:
+ * parallel heap arrays of heap strings (`out_dirs` may be NULL).  Returns the
+ * count; the caller frees every string and both arrays. */
+int spice_search_installed_names(char ***out_names, char ***out_dirs);
+
+/* D7 provenance.  Every slot the fallback (or spice_search_append_spice)
+ * added is recorded, process-wide, with the installed spice it belongs to.
+ *   - spice_search_installed_slot: that spice's name for an include dir
+ *     (exactly as appended), or NULL; *out_is_dep says whether the dir is
+ *     one of its dependencies rather than its own src/.
+ *   - spice_search_note_import_dir: the elaborator reports the include dir
+ *     that satisfied an import; an installed slot marks its spice's root as
+ *     used.
+ *   - spice_search_used_installed_roots: the roots marked so far, for the
+ *     link step -- only spices a program imports contribute link inputs. */
+const char *spice_search_installed_slot(const char *dir, bool *out_is_dep);
+void        spice_search_note_import_dir(const char *dir);
+int         spice_search_used_installed_roots(const char *const **out);
+
+/* Build a project's include search path from an already-loaded manifest:
+ * `root/src` first when `include_own_src` is set, then the src/ of every
+ * `:spices` dep across the transitive closure (workspace sibling -> `:path`
+ * -> fetched `<root>/spices/<name>-<ref>` -> `<root>/spices/<name>`, a
+ * `:global` dep from the install registry), deduplicated by real path.
+ * *out_dirs is a heap array of strdup'd dirs (*out_n entries); the caller
+ * frees each string and the array.  Shared by `tur run`, `tur test`,
+ * `tur build <dir>`, `tur install` and the project-less fallback. */
+void resolve_include_dirs_from_manifest(const char *root,
+                                        const PkgManifest *m,
+                                        bool include_own_src,
+                                        const char ***out_dirs,
+                                        int *out_n);
 
 #endif /* TUR_SPICE_SEARCH_H */

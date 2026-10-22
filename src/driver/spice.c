@@ -11,13 +11,6 @@
 #include "global.h"   /* tur_installed_spice_dir */
 #include "spice_search.h"  /* find_spice_root / auto_append_spice_includes */
 
-/* The transitive :spices walk's visited set; see visited_roots_mark. */
-typedef struct { char **paths; int n; int cap; } VisitedRoots;
-
-static void collect_dep_dirs_recursive(const char *root, const PkgManifest *m,
-                                       const char ***dirs, int *n, int *cap,
-                                       VisitedRoots *visited);
-
 /* RM4: collect the manifest's `:reader-macros [...]` entries as absolute
  * paths suitable for compile_to_c. `root_dir` is the spice root (where
  * build.tur lives); each manifest entry is joined onto it unless it is
@@ -484,249 +477,6 @@ char **collect_project_src_files(const char *root, int *n_out) {
     return files;
 }
 
-/* Build a project's include search path from an already-loaded manifest.
- * `root` is the project root (the dir holding build.tur); `m` its manifest.
- * When `include_own_src` is set, `root/src` is added first (so intra-spice
- * imports resolve for callers whose entry/test files live outside `src/`).
- * Each `:spices` dep is resolved in priority order:
- *   workspace-member sibling -> explicit `:path` -> fetched `:ref` dir
- *   -> `spices/<name>`; then `:subdir`, a `src/` preference, and a
- *   monorepo-sibling fallback when the resolved dir is absent.
- * *out_dirs is a heap array of strdup'd dirs (*out_n entries); the caller
- * frees each string and the array.  Shared by `tur run`, `tur test`, and
- * `tur build <dir>` so all three resolve the include path identically. */
-/* spice-include-dirs-transitive: recurse one level into each dep's manifest
- * and add its :spices' src/ dirs too.  Walking only direct deps left tourist
- * unable to resolve `thread-pool/pool` (httpd's dep), even with the workspace
- * `:members` declaring it -- imports from one spice into another silently
- * dropped at the first hop.  Capacity grows as we go since transitive width is
- * not bounded by m->n_spices.
- *
- * Two separate dedups are at work, and they are not interchangeable:
- *   - include_dir_seen / push_include_dir dedupe the OUTPUT list, so a dep
- *     pulled in by several parents contributes one -I.
- *   - VisitedRoots below dedupes the WALK, so a cycle terminates.
- * This comment used to claim the first also did the second; it does not, and
- * a manifest cycle recursed until something else gave out.  See
- * docs/archive/history/spice-cycle-include-path-blowup.md. */
-static bool include_dir_seen(const char **dirs, int n, const char *cand) {
-    for (int i = 0; i < n; i++)
-        if (dirs[i] && strcmp(dirs[i], cand) == 0) return true;
-    return false;
-}
-
-static void grow_include_dirs(const char ***dirs, int *cap, int need) {
-    if (need <= *cap) return;
-    int new_cap = *cap ? *cap * 2 : 8;
-    while (new_cap < need) new_cap *= 2;
-    *dirs = (const char **)realloc(*dirs, (size_t)new_cap * sizeof(char *));
-    *cap = new_cap;
-}
-
-/* Append `cand` to the include list unless an equivalent entry is already
- * there.  The path is canonicalized first (realpath, falling back to the raw
- * spelling when it fails): a transitively-resolved dep dir arrives as
- * `a/../b/src`, which the textual dedup would otherwise treat as distinct from
- * the `b/src` a different parent contributed.  Canonicalizing keeps the `-I`
- * list short and caps the damage from any future unbounded walk independently
- * of the visited set. */
-static void push_include_dir(const char ***dirs, int *n, int *cap,
-                             const char *cand) {
-    char canon_buf[4096];
-    const char *canon = cand;
-    if (realpath(cand, canon_buf)) canon = canon_buf;
-    if (include_dir_seen(*dirs, *n, canon)) return;
-    grow_include_dirs(dirs, cap, *n + 1);
-    if (!*dirs) return;
-    (*dirs)[(*n)++] = strdup(canon);
-}
-
-/* spice-cycle-include-path-blowup: visited set for the transitive :spices walk,
- * keyed on each package root's canonical (realpath'd) path.  Without it a
- * manifest cycle (A declares B, B declares A) recurses forever: each lap
- * resolves through one more `../` hop, so the textual paths never repeat and
- * the output-dir dedup below never fires.  The symptom was either a
- * multi-kilobyte `-I` argument that cc rejected with "File name too long" on an
- * unrelated system header, or -- on a sanitized build -- a stack overflow.
- * Mirrors the keying pkg_collect_transitive_cmake_deps already uses for the
- * same shape of walk. */
-/* True if `dir` was already visited; otherwise records it and returns false. */
-static bool visited_roots_mark(VisitedRoots *v, const char *dir) {
-    char canon_buf[4096];
-    const char *canon = dir;
-    if (realpath(dir, canon_buf)) canon = canon_buf;
-    for (int i = 0; i < v->n; i++)
-        if (strcmp(v->paths[i], canon) == 0) return true;
-    if (v->n >= v->cap) {
-        int nc = v->cap ? v->cap * 2 : 8;
-        char **np = (char **)realloc(v->paths, (size_t)nc * sizeof(char *));
-        if (!np) return true;   /* OOM: treat as visited so the walk terminates */
-        v->paths = np;
-        v->cap   = nc;
-    }
-    v->paths[v->n++] = strdup(canon);
-    return false;
-}
-
-static void visited_roots_free(VisitedRoots *v) {
-    for (int i = 0; i < v->n; i++) free(v->paths[i]);
-    free(v->paths);
-}
-
-void resolve_include_dirs_from_manifest(const char *root,
-                                        const PkgManifest *m,
-                                        bool include_own_src,
-                                        const char ***out_dirs,
-                                        int *out_n) {
-    *out_dirs = NULL;
-    *out_n    = 0;
-
-    int cap = 0;
-    const char **dirs = NULL;
-    int n = 0;
-    grow_include_dirs(&dirs, &cap, (include_own_src ? 1 : 0) + m->n_spices + 8);
-    if (!dirs) return;
-
-    if (include_own_src) {
-        char own_src[4096];
-        snprintf(own_src, sizeof(own_src), "%s/src", root);
-        struct stat ss;
-        if (stat(own_src, &ss) == 0 && S_ISDIR(ss.st_mode))
-            push_include_dir(&dirs, &n, &cap, own_src);
-    }
-
-    /* Seed the visited set with the root itself, so a dep that declares the
-     * root back (the minimal A -> B -> A cycle) stops at the second hop. */
-    VisitedRoots visited; memset(&visited, 0, sizeof(visited));
-    visited_roots_mark(&visited, root);
-    collect_dep_dirs_recursive(root, m, &dirs, &n, &cap, &visited);
-    visited_roots_free(&visited);
-
-    *out_dirs = dirs;
-    *out_n    = n;
-}
-
-/* Walk every :spices entry in m, resolve its on-disk dir, push its src/ (or
- * dep_dir) into *dirs (deduped), then recurse into the dep's own manifest. */
-static void collect_dep_dirs_recursive(const char *root, const PkgManifest *m,
-                                       const char ***dirs, int *n, int *cap,
-                                       VisitedRoots *visited) {
-    char spices_dir[4096];
-    snprintf(spices_dir, sizeof(spices_dir), "%s/spices", root);
-    for (int i = 0; i < m->n_spices; i++) {
-        const PkgSpice *s = &m->spices[i];
-        char dep_dir[4096];
-        /* global-spice-library-consumption: a `:global` dep resolves from the
-         * `tur install` registry and nowhere else -- a project-local fallback
-         * would silently use a different spice than the manifest asked for.
-         * Not installed: skipped, like any other dep whose dir is absent. */
-        bool from_global = false;
-        if (s->is_global) {
-            if (!tur_installed_spice_dir(s->name, dep_dir, sizeof(dep_dir),
-                                         NULL, NULL))
-                continue;
-            from_global = true;
-        }
-        /* LS4: a :spices entry that is a workspace sibling resolves to the
-         * sibling's on-disk dir, ignoring any :url/:ref declared for
-         * external publication. */
-        char *ws_path = (s->path || from_global)
-                            ? NULL
-                            : pkg_workspace_member_path(root, s->name);
-        if (from_global) {
-            /* dep_dir is already the installed package root. */
-        } else if (ws_path) {
-            strncpy(dep_dir, ws_path, sizeof(dep_dir) - 1);
-            dep_dir[sizeof(dep_dir) - 1] = '\0';
-            free(ws_path);
-        } else if (s->path) {
-            snprintf(dep_dir, sizeof(dep_dir), "%s/%s", root, s->path);
-        } else if (s->ref) {
-            snprintf(dep_dir, sizeof(dep_dir), "%s/%s-%s",
-                     spices_dir, s->name, s->ref);
-        } else {
-            snprintf(dep_dir, sizeof(dep_dir), "%s/%s", spices_dir, s->name);
-        }
-        if (s->subdir && !from_global) {
-            char tmp[4096];
-            snprintf(tmp, sizeof(tmp), "%s/%s", dep_dir, s->subdir);
-            strncpy(dep_dir, tmp, sizeof(dep_dir) - 1);
-            dep_dir[sizeof(dep_dir) - 1] = '\0';
-        }
-        char src_sub[4096];
-        snprintf(src_sub, sizeof(src_sub), "%s/src", dep_dir);
-        struct stat ss;
-        const char *chosen = NULL;
-        if (stat(src_sub, &ss) == 0 && S_ISDIR(ss.st_mode))
-            chosen = src_sub;
-        else if (stat(dep_dir, &ss) == 0 && S_ISDIR(ss.st_mode))
-            chosen = dep_dir;
-
-        /* `resolved_root` is the dep's true on-disk package root, used both
-         * for manifest lookup (the recursion's `root`) and for choosing which
-         * include path to push when src/ is not directly present. */
-        char resolved_root[4096];
-        resolved_root[0] = '\0';
-        if (chosen) {
-            /* dep_dir/src exists OR dep_dir itself exists; the package root is
-             * dep_dir.  If chosen == src_sub, strip the trailing "/src" so the
-             * manifest read targets dep_dir, not its src/. */
-            strncpy(resolved_root, dep_dir, sizeof(resolved_root) - 1);
-            resolved_root[sizeof(resolved_root) - 1] = '\0';
-        }
-        bool fallback_added = false;
-        if (!chosen && s->subdir) {
-            char ancestor[4096];
-            strncpy(ancestor, root, sizeof(ancestor) - 1);
-            ancestor[sizeof(ancestor) - 1] = '\0';
-            for (int up = 0; up < 4 && !fallback_added; up++) {
-                char *slash = strrchr(ancestor, '/');
-                if (!slash || slash == ancestor) break;
-                *slash = '\0';
-                char sib_src[4096];
-                snprintf(sib_src, sizeof(sib_src),
-                         "%s/%s/src", ancestor, s->subdir);
-                if (stat(sib_src, &ss) == 0 && S_ISDIR(ss.st_mode)) {
-                    push_include_dir(dirs, n, cap, sib_src);
-                    snprintf(resolved_root, sizeof(resolved_root),
-                             "%s/%s", ancestor, s->subdir);
-                    chosen = NULL;
-                    fallback_added = true;
-                    break;
-                }
-                char sib_dir[4096];
-                snprintf(sib_dir, sizeof(sib_dir),
-                         "%s/%s", ancestor, s->subdir);
-                if (stat(sib_dir, &ss) == 0 && S_ISDIR(ss.st_mode)) {
-                    push_include_dir(dirs, n, cap, sib_dir);
-                    strncpy(resolved_root, sib_dir, sizeof(resolved_root) - 1);
-                    resolved_root[sizeof(resolved_root) - 1] = '\0';
-                    chosen = NULL;
-                    fallback_added = true;
-                    break;
-                }
-            }
-        }
-        if (chosen) push_include_dir(dirs, n, cap, chosen);
-
-        /* Recurse into the dep's own manifest so its :spices contribute their
-         * src/ too.  Use `resolved_root` (the real on-disk package root) for
-         * manifest lookup; `dep_dir` may have :subdir appended to a :path,
-         * yielding a non-existent path when both are set together. */
-        if (!resolved_root[0]) continue;
-        /* Stop on re-entry. A diamond (two parents pulling the same dep) is
-         * deduped for free by the same check -- its src/ was already pushed on
-         * the first visit. */
-        if (visited_roots_mark(visited, resolved_root)) continue;
-        char dmp[4096];
-        if (!pkg_resolve_manifest_path(resolved_root, dmp, sizeof(dmp))) continue;
-        PkgManifest dm; memset(&dm, 0, sizeof(dm));
-        if (!pkg_manifest_read(dmp, &dm)) continue;
-        collect_dep_dirs_recursive(resolved_root, &dm, dirs, n, cap, visited);
-        pkg_manifest_free(&dm);
-    }
-}
-
 /* spices-c-sources-plan: collect a project's vendored C build inputs into two
  * command-line fragments (caller inits/frees the Bufs):
  *   - `includes`: -I flags. The project's OWN :c-includes (private to the
@@ -762,17 +512,36 @@ static bool aux_c_seen(char ***seen, int *n, int *cap, const char *key) {
     return false;
 }
 void collect_spice_aux_c(const char *root, Buf *includes, Buf *sources) {
-    if (g_no_auto_spice || !root) return;
-    char **work = NULL; int n_work = 0, cap_work = 0;
+    if (!root) return;
+    collect_spice_aux_c_roots(&root, 1, includes, sources);
+}
+
+/* installed-spice-libraries D7: the same closure walk seeded with several
+ * roots at once -- a project's own root plus the installed spices a program
+ * imported -- so a dep two of them share, or the project and an installed
+ * spice both vendor, is compiled ONCE.  Each work item remembers the root it
+ * was reached from, which is the project whose `tur fetch` put the fetched
+ * deps in its spices/ (pkg_resolve_spice_dep_dir_in). */
+void collect_spice_aux_c_roots(const char *const *roots, int n_roots,
+                               Buf *includes, Buf *sources) {
+    if (g_no_auto_spice || !roots || n_roots <= 0) return;
+    char **work = NULL; const char **work_top = NULL; int n_work = 0, cap_work = 0;
     char **visited = NULL; int n_vis = 0, cap_vis = 0;
     char **src_seen = NULL; int n_src = 0, cap_src = 0;
     char **inc_seen = NULL; int n_inc = 0, cap_inc = 0;
-    #define AUX_PUSH(d) do { if (n_work >= cap_work) { int nc = cap_work ? cap_work * 2 : 8; \
+    #define AUX_PUSH(d, top) do { if (n_work >= cap_work) { int nc = cap_work ? cap_work * 2 : 8; \
         char **nw = (char **)realloc(work, (size_t)nc * sizeof(char *)); \
-        if (!nw) { free(d); break; } work = nw; cap_work = nc; } work[n_work++] = (d); } while (0)
-    AUX_PUSH(strdup(root));
+        if (!nw) { free(d); break; } work = nw; \
+        const char **nt = (const char **)realloc(work_top, (size_t)nc * sizeof(char *)); \
+        if (!nt) { free(d); break; } work_top = nt; cap_work = nc; } \
+        work_top[n_work] = (top); work[n_work++] = (d); } while (0)
+    /* A stack: push in reverse so the first root is walked first. */
+    for (int r = n_roots - 1; r >= 0; r--)
+        if (roots[r]) AUX_PUSH(strdup(roots[r]), roots[r]);
     while (n_work > 0) {
-        char *dir = work[--n_work];
+        --n_work;
+        char *dir = work[n_work];
+        const char *top = work_top[n_work];
         char canon[4096];
         const char *key = realpath(dir, canon) ? canon : dir;
         if (aux_c_seen(&visited, &n_vis, &cap_vis, key)) { free(dir); continue; }
@@ -811,9 +580,9 @@ void collect_spice_aux_c(const char *root, Buf *includes, Buf *sources) {
          * :global); a dep that is not on disk is skipped silently, exactly
          * like a missing fetched dep before. */
         for (int i = 0; i < m.n_spices; i++) {
-            char *dep_dir = pkg_resolve_spice_dep_dir(dir, &m.spices[i]);
+            char *dep_dir = pkg_resolve_spice_dep_dir_in(dir, top, &m.spices[i]);
             if (!dep_dir) continue;
-            AUX_PUSH(dep_dir);
+            AUX_PUSH(dep_dir, top);
         }
         pkg_manifest_free(&m);
         free(dir);
@@ -821,6 +590,7 @@ void collect_spice_aux_c(const char *root, Buf *includes, Buf *sources) {
     #undef AUX_PUSH
     for (int i = 0; i < n_work; i++) free(work[i]);
     free(work);
+    free((void *)work_top);
     for (int i = 0; i < n_vis; i++) free(visited[i]);
     free(visited);
     for (int i = 0; i < n_src; i++) free(src_seen[i]);

@@ -1,19 +1,20 @@
 # Plan: Installed spices outside a project -- library installs, a project-less search path, and REPL loading
 
-> **Status:** Draft, not started. Written 2026-10-21.
-> **Last Updated:** 2026-10-21
+> **Status:** Implemented 2026-10-22 (IL0-IL6). See "Implementation notes"
+> at the end for where the code departs from the text above it.
+> **Last Updated:** 2026-10-22
 > **Type:** Tooling / package management (`src/compiler/install.c`,
 > `src/compiler/global.c`, `src/compiler/spice_search.c`), build driver
 > (`src/main.c`), REPL (`src/turi/repl.c`, `src/turi/env.c`).
-> **Follow-up:** [script-spice-deps-plan](script-spice-deps-plan.md) (spices
+> **Follow-up:** [script-spice-deps-plan](../upcoming/script-spice-deps-plan.md) (spices
 > declared inside a single script) assumes this plan has landed.
-> **See also:** [global-spice-install-plan](../archive/global-spice-install-plan.md)
+> **See also:** [global-spice-install-plan](global-spice-install-plan.md)
 > (`tur install`, `state.tur`, `:bin`),
-> [global-spice-library-consumption](../archive/global-spice-library-consumption.md)
+> [global-spice-library-consumption](global-spice-library-consumption.md)
 > (`:global true` deps),
-> [interpret-takes-no-include-path-or-spice-discovery](../archive/interpret-takes-no-include-path-or-spice-discovery.md)
+> [interpret-takes-no-include-path-or-spice-discovery](interpret-takes-no-include-path-or-spice-discovery.md)
 > (`-I` on the interpreter),
-> [spice-repl-plan](../archive/spice-repl-plan.md) (the REPL's spice image),
+> [spice-repl-plan](spice-repl-plan.md) (the REPL's spice image),
 > [notebook-cells-cannot-call-inline-c-spices](../reported/notebook-cells-cannot-call-inline-c-spices.md)
 > (`turi_env_attach_spice`).
 
@@ -99,7 +100,7 @@ deliberately not on the default module-resolution path",
 for the case it was written for: a project build should not depend on what
 happens to be installed on the machine. A one-off script or a REPL session has
 no lock file and no reproducibility contract to break. Making it reproducible
-is the job of the [follow-up plan](script-spice-deps-plan.md).
+is the job of the [follow-up plan](../upcoming/script-spice-deps-plan.md).
 
 Inside a project, nothing changes. `:global true` stays the per-dep opt-in, and
 the REPL's `:spice` (D10) is an explicit request typed at an interactive
@@ -140,7 +141,7 @@ every `:global true` dep. So:
   nothing to install").
 
 Library-only installs also close the third "Not done" item of
-[global-spice-library-consumption](../archive/global-spice-library-consumption.md):
+[global-spice-library-consumption](global-spice-library-consumption.md):
 a `:global true` dep can then name a library-only spice.
 
 ### D4. An installed spice is a fetched project
@@ -300,19 +301,19 @@ this kind (`-I`, `--build-dir`), so no `EXPERIMENTS[]` row is added.
 
 ### IL0 -- Fix the install layout (prerequisite)
 
-- [ ] `state.tur` entries record `:dir` (and `:src-dir` with `:subdir`) (D5).
+- [x] `state.tur` entries record `:dir` (and `:src-dir` with `:subdir`) (D5).
       Readers prefer them, and fall back to reconstruction for old entries.
-- [ ] `tur_installed_spice_dir`, `inst_entry_src_dir` and `cmd_pkg_uninstall`
+- [x] `tur_installed_spice_dir`, `inst_entry_src_dir` and `cmd_pkg_uninstall`
       use the recorded directory. Uninstall removes exactly that tree.
-- [ ] Move the transitive include walk (`resolve_include_dirs_from_manifest` /
+- [x] Move the transitive include walk (`resolve_include_dirs_from_manifest` /
       `collect_dep_dirs_recursive`) out of `main.c` into tur_core, next to
       `spice_search_append`, so `install.c`, IL2 and libturi can all call it.
-- [ ] `tur install` sets the installed root up as a fetched project (D4):
+- [x] `tur install` sets the installed root up as a fetched project (D4):
       `pkg_fetch_all` into `<root>/spices/`, the `cmake/` build, and `:bin`
       builds with the root's transitive include list. Retire the bespoke
       first-level fetch at `install.c:575-649`.
-- [ ] `tur upgrade` runs the same pipeline.
-- [ ] `tests/run-install.sh` gains three cases:
+- [x] `tur upgrade` runs the same pipeline.
+- [x] `tests/run-install.sh` gains three cases:
       - a git install from a local bare repo (`file://` URL) with `--subdir`
         and no `--name`, checking the D5 regression through `tur list`,
         `:global true` and `tur uninstall`,
@@ -321,19 +322,19 @@ this kind (`-I`, `--build-dir`), so no `EXPERIMENTS[]` row is added.
 
 ### IL1 -- Library-only installs
 
-- [ ] Drop the `n_bins == 0` refusal. Refuse only a spice with neither `:bin`
+- [x] Drop the `n_bins == 0` refusal. Refuse only a spice with neither `:bin`
       nor `src/` (D3).
-- [ ] Module-path conflict check against the installed set, with `--force`
+- [x] Module-path conflict check against the installed set, with `--force`
       (D6).
-- [ ] `tur list`:
+- [x] `tur list`:
       - the tree marks library-only entries,
       - `--json` gains `"kind": "library" | "tool"` (a tool also has modules)
         plus the `modules` list.
-- [ ] `tur uninstall` / `tur upgrade` / `tur list --outdated` accept library
+- [x] `tur uninstall` / `tur upgrade` / `tur list --outdated` accept library
       entries. They have no bins to unlink or relink.
-- [ ] `:global true` can name a library-only spice. Remove that caveat from
+- [x] `:global true` can name a library-only spice. Remove that caveat from
       `developing-spices-guide.md`.
-- [ ] `run-install.sh`:
+- [x] `run-install.sh`:
       - install a library-only spice with `--path`,
       - `tur list` and `--json` show it,
       - the conflict refusal and `--force`,
@@ -341,7 +342,7 @@ this kind (`-I`, `--build-dir`), so no `EXPERIMENTS[]` row is added.
 
 ### IL2 -- The project-less search path
 
-- [ ] `spice_search_append`: when `spice_find_root` finds no manifest, append
+- [x] `spice_search_append`: when `spice_find_root` finds no manifest, append
       D2 steps 4-5 from the registry, unless disabled (D8). This puts the
       fallback in tur_core, so every caller gets it at once:
       - `auto_append_spice_includes`: `tur check`, `tur run <file>`,
@@ -349,25 +350,25 @@ this kind (`-I`, `--build-dir`), so no `EXPERIMENTS[]` row is added.
         `tur expand`, `tur eval --file`,
       - libturi's `turi_env_set_search_path_for` (embedders such as the
         notebook spice; they can set `TUR_NO_GLOBAL_SPICES=1`).
-- [ ] Step 5 uses the transitive walk IL0 moved into tur_core. It is worth
+- [x] Step 5 uses the transitive walk IL0 moved into tur_core. It is worth
       switching SC5, the per-file walk's own one-level `:spices` step, to the
       same walk in this change: a file inside a spice whose dep has a dep of
       its own then resolves the grand-dep too. That only fills gaps; it changes
       no import that resolves today.
-- [ ] `tur run -` (stdin) anchors the walk at cwd.
-- [ ] Provenance (D7): installed-spice slots carry their spice name and root,
+- [x] `tur run -` (stdin) anchors the walk at cwd.
+- [x] Provenance (D7): installed-spice slots carry their spice name and root,
       in a parallel array next to LS2's, and the elaborator records the roots
       it resolved through.
-- [ ] Diagnostics for a failed import:
+- [x] Diagnostics for a failed import:
       - the `searched:` list labels installed-spice dirs with the spice name,
         and collapses them to one line beyond a handful,
       - outside a project, the hint names `tur install` alongside `-I`.
-- [ ] `--no-global-spices` / `TUR_NO_GLOBAL_SPICES=1`, and the implication
+- [x] `--no-global-spices` / `TUR_NO_GLOBAL_SPICES=1`, and the implication
       from `--no-auto-spice` (D8). Add both to `usage`, the shell completions
       (`src/cli/completion.c`), and the test harnesses.
-- [ ] The LSP runs its own manifest walk-up (`src/lsp/lsp.c:1338`). Give it the
+- [x] The LSP runs its own manifest walk-up (`src/lsp/lsp.c:1338`). Give it the
       same fallback, so an editor resolves the same imports `tur check` does.
-- [ ] Tests, using a scratch `TUR_HOME`:
+- [x] Tests, using a scratch `TUR_HOME`:
       - `tur run` / `tur check` / `tur --interpret` of a file outside any
         project import an installed spice,
       - the same file under a `build.tur` that does not declare it still fails,
@@ -377,40 +378,40 @@ this kind (`-I`, `--build-dir`), so no `EXPERIMENTS[]` row is added.
 
 ### IL3 -- Link inputs for imported installed spices
 
-- [ ] `collect_build_aux` feeds the roots recorded in IL2 through its three
+- [x] `collect_build_aux` feeds the roots recorded in IL2 through its three
       collectors (D7), and dedups against a project root when both apply.
-- [ ] A test: an installed spice with `:c-sources` is imported by a project-less
+- [x] A test: an installed spice with `:c-sources` is imported by a project-less
       `tur run` and links. A second installed spice whose `:c-sources` do not
       compile on purpose does not break a script that never imports it.
 
 ### IL4 -- REPL search path and `-I`
 
-- [ ] `tur repl` parses `-I` (D10) and rejects a trailing bare `-I`, as the
+- [x] `tur repl` parses `-I` (D10) and rejects a trailing bare `-I`, as the
       interpreter arm does.
-- [ ] The REPL sets its search path with `turi_env_set_search_path_for`,
+- [x] The REPL sets its search path with `turi_env_set_search_path_for`,
       anchored at cwd. It is computed once at startup; `:cd` does not
       recompute it (documented).
-- [ ] Before each turn's evaluation, the REPL calls
+- [x] Before each turn's evaluation, the REPL calls
       `turi_env_attach_spice_for_module` for each top-level `(import M ...)` in
       the turn.
-- [ ] `TUR_NO_AUTO_SPICE=1` keeps meaning "no discovery at all", installed
+- [x] `TUR_NO_AUTO_SPICE=1` keeps meaning "no discovery at all", installed
       spices included.
-- [ ] A `hook.sh` fixture pipes a session into `tur repl` with a scratch
+- [x] A `hook.sh` fixture pipes a session into `tur repl` with a scratch
       `TUR_HOME`. It imports an installed spice's inline-C function and calls
       it, and it imports through `-I`.
 
 ### IL5 -- `:spice`
 
-- [ ] `:spice <name>` and `:spice <path>` (D10). A path is anything containing
+- [x] `:spice <name>` and `:spice <path>` (D10). A path is anything containing
       `/`, or starting with `.` or `~`. An unknown name gets "not installed --
       `tur install <source>` first".
-- [ ] `:spice` with no argument lists loaded and installable spices.
-- [ ] Add `:spice` to the command table (`src/turi/repl.c:213`), `:help`, and
+- [x] `:spice` with no argument lists loaded and installable spices.
+- [x] Add `:spice` to the command table (`src/turi/repl.c:213`), `:help`, and
       tab completion. Installed names complete after `:spice `.
-- [ ] `(reload)` also rebuilds an attached spice whose sources changed. Only a
+- [x] `(reload)` also rebuilds an attached spice whose sources changed. Only a
       `--path` install or a local checkout can change; use
       `tur_spice_image_is_fresh`.
-- [ ] Fixture cases:
+- [x] Fixture cases:
       - `:spice` by name and by path,
       - a second `:spice` of the same spice is a no-op,
       - `:spice` inside a project,
@@ -418,15 +419,15 @@ this kind (`-I`, `--build-dir`), so no `EXPERIMENTS[]` row is added.
 
 ### IL6 -- Docs
 
-- [ ] `docs/guides/consuming-spices-guide.md`: a "Using spices without a
+- [x] `docs/guides/consuming-spices-guide.md`: a "Using spices without a
       project" section covering install, project-less resolution and its order,
       the off switch, and why projects do not see the installed set.
-- [ ] `docs/guides/developing-spices-guide.md`, "Global Spices as Libraries":
+- [x] `docs/guides/developing-spices-guide.md`, "Global Spices as Libraries":
       library-only installs, D6 conflicts, D4 (an installed spice's deps live
       inside it).
-- [ ] `docs/guides/repl.md`: `-I`, `:spice`, and importing installed spices
+- [x] `docs/guides/repl.md`: `-I`, `:spice`, and importing installed spices
       outside a project.
-- [ ] CLAUDE.md's "Per-file Commands Inside a Spice" gains one line about
+- [x] CLAUDE.md's "Per-file Commands Inside a Spice" gains one line about
       the project-less fallback.
 
 ## Open questions
@@ -453,8 +454,57 @@ this kind (`-I`, `--build-dir`), so no `EXPERIMENTS[]` row is added.
 ## Out of scope
 
 - Spices declared inside a script, a cache of script deps, and lock files:
-  [script-spice-deps-plan](script-spice-deps-plan.md).
+  [script-spice-deps-plan](../upcoming/script-spice-deps-plan.md).
 - `:global-policy` (auto-installing a missing `:global` dep) and version-range
   checks for `:global` deps. These are the remaining "Not done" items of
   global-spice-library-consumption and are unchanged here.
 - The web REPL. It has no filesystem and no install area.
+
+## Implementation notes
+
+Landed 2026-10-22, IL0-IL6 in one change. Where the code differs from the
+text above, or the text left a choice open:
+
+- **D6 counts library modules, not entrypoints.** A `:bin` entrypoint under
+  `src/` is not a module (`tur_spice_modules`, `src/compiler/global.c`). With
+  it counted, every two tools that keep their entry at `src/main.tur` "provide
+  the same module", which is open question 4 arriving on the first test, not
+  in practice. `--no-lib` is still not built.
+- **D7 provenance is a process-wide registry, not a parallel array.** The
+  fallback records each slot it adds (directory -> installed spice and root)
+  in `spice_search.c`; the elaborator reports the directory that satisfied an
+  import (`spice_search_note_import_dir`), and the link step reads the used
+  roots back (`spice_search_used_installed_roots`). The per-compile LS2
+  context is disposed before `drv_collect_build_aux` runs, so an array there
+  could not carry the answer to the link. A dependency's slot belongs to the
+  top-level installed spice that pulled it in, whose closure then supplies its
+  link inputs. Only the program builds (`tur build`/`run <file>`,
+  `tur compile`) read it, through `drv_collect_build_aux_with_installed`; the
+  REPL's in-process image probe keeps the plain one.
+- **Fetched deps of fetched deps.** `pkg_fetch_all` puts a project's whole
+  `:spices` closure in the TOP project's `spices/`, flat, while the include
+  walk, `collect_spice_aux_c` and the `:cmake-deps` walk all looked for a dep's
+  deps under that dep's own `spices/`. D4's third `run-install.sh` case found
+  it; project mode had the same gap for URL deps two levels deep. All three
+  walks now fall back to the fetch root's `spices/`
+  (`pkg_resolve_spice_dep_dir_in`).
+- **`tur_state_read` runs on a clean diag slate.** It reported an empty
+  registry whenever `diag_had_error()` was already set -- in a REPL, after any
+  failed turn -- so `:spice <name>` said the spice was not installed. It now
+  saves and restores the diag table and flag, as libturi's search-path setter
+  does for the manifest reader.
+- **The LSP** resolves imports through `tur_collect_symbols`, which already
+  calls the shared walk, so it inherited the fallback with no change. Its own
+  walk-up (`spice_root_of`) scopes rename and references, not imports; what it
+  gained is import-path completion of installed modules outside a project.
+- **The module-not-found hint** keeps its existing text and adds a
+  `tur install` line outside a project (a fixture pins the existing text).
+- **Open question 1** (prebuild the REPL image at install time): lazy, as
+  proposed; `--prebuild` is not built.
+- **Open question 3** (`:spice` and `:reset`): loads survive `:reset` and
+  `:run`, as proposed, by living in the REPL rather than the env -- every
+  fresh env re-adds their search path and re-attaches their (cached) images.
+- **`TUR_NO_AUTO_SPICE=1` at the REPL** also skips the per-turn image attach,
+  since it means "no discovery at all".
+- Tests: `tests/run-install.sh` cases 34-48 (IL0-IL3), and the
+  `repl-installed-spices` `hook.sh` fixture (IL4/IL5).
