@@ -36,10 +36,14 @@ TUR_EOF
 echo '(defpackage proj :version "0.1.0")' > "$TMP/proj/build.tur"
 "$TUR" install "$TMP/ilc" --path >/dev/null 2>&1 || echo "install failed"
 
-# Keep the lines a reader checks; spell the scratch dir as <tmp>.
+# Keep the lines a reader checks, and spell the spice's directory <tmp>/ilc.
+# tur prints it realpath'd, which is not $TMP's spelling everywhere (Windows
+# prints a drive-lettered, possibly backslashed path for an MSYS /tmp/...), so
+# the match is on the path's last component rather than on $TMP itself.
 filter() {
     grep -E '^=>|Loaded spice|already loaded|not installed|^;;   ' |
-        sed -e "s#$TMP#<tmp>#g" -e 's/  */ /g'
+        tr -d '\r' | tr '\\' '/' |
+        sed -E -e 's#[^ ]*/ilc( |$)#<tmp>/ilc\1#g' -e 's/  */ /g'
 }
 
 echo "-- outside a project: installed spice, -I, :spice by name and path"
