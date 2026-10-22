@@ -1,0 +1,6 @@
+(defmodule app
+  (import types :refer [Pos])
+  (import util :refer [ident])
+  (defn main [] : int
+    (let [p (ident (Pos 3 4))] (println (.y p)))
+    0))

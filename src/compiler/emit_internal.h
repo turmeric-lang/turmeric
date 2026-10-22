@@ -1596,6 +1596,7 @@ char *mangle_ctor_symbol(const struct AdtDef *adt, const char *ctor_name);
 void ctor_census_reset(void);
 void ctor_census_snapshot(struct AdtDef *const *defs, uint32_t n_defs);
 bool ctor_base_name_is_unique(const char *mangled_ctor_name);
+const struct AdtDef *ctor_census_find_adt(const char *name);
 void emit_ctor_bare_alias(Buf *out, const struct AdtDef *def,
                           const struct CtorDef *ctor);
 char *adt_field_member_path(const AdtDef *def, const CtorDef *ctor, uint32_t fi);

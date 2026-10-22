@@ -3297,6 +3297,12 @@ static CtorCensusRow *g_ctor_census     = NULL;
 static uint32_t       g_n_ctor_census   = 0;
 static uint32_t       g_cap_ctor_census = 0;
 
+/* forced-spec-at-foreign-aggregate: the defs themselves, for a lookup by name
+ * (ctor_census_find_adt) -- every ADT the module being emitted can see, its
+ * imports' included, which its own program items are not. */
+static const AdtDef **g_census_defs   = NULL;
+static uint32_t       g_n_census_defs = 0;
+
 void ctor_census_reset(void) {
     for (uint32_t i = 0; i < g_n_ctor_census; i++) {
         free(g_ctor_census[i].adt_name);
@@ -3306,6 +3312,18 @@ void ctor_census_reset(void) {
     g_ctor_census = NULL;
     g_n_ctor_census = 0;
     g_cap_ctor_census = 0;
+    free(g_census_defs);
+    g_census_defs = NULL;
+    g_n_census_defs = 0;
+}
+
+const AdtDef *ctor_census_find_adt(const char *name) {
+    if (!name) return NULL;
+    for (uint32_t i = g_n_census_defs; i-- > 0;) {
+        const AdtDef *d = g_census_defs[i];
+        if (d && !d->superseded && d->name && strcmp(d->name, name) == 0) return d;
+    }
+    return NULL;
 }
 
 /* Both names are stored MANGLED.  The alias the census gates expands to
@@ -3341,6 +3359,12 @@ static void ctor_census_push(const char *adt_name, const char *ctor_name) {
 void ctor_census_snapshot(struct AdtDef *const *defs, uint32_t n_defs) {
     ctor_census_reset();
     if (!defs) return;
+    if (n_defs) {
+        g_census_defs = (const AdtDef **)malloc(n_defs * sizeof(AdtDef *));
+        if (!g_census_defs) { fprintf(stderr, "tur: oom\n"); abort(); }
+        for (uint32_t i = 0; i < n_defs; i++) g_census_defs[i] = defs[i];
+        g_n_census_defs = n_defs;
+    }
     for (uint32_t i = 0; i < n_defs; i++) {
         const AdtDef *d = defs[i];
         if (!d || !d->name || !d->ctors) continue;

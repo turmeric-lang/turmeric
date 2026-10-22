@@ -22593,7 +22593,8 @@ static char *forced_spec_adt_name(Type t) {
  * borrower passes; anything else is rebuilt from its kind, which turns a
  * struct into the int64_t carrier and left the borrower's call uncompilable. */
 static Type forced_spec_pos_type(TypeKind kind, const char *adt_name,
-                                 const Expr **items, uint32_t n_items) {
+                                 const Expr **items, uint32_t n_items,
+                                 bool *unresolved) {
     if (adt_name) {
         for (uint32_t i = 0; i < n_items; i++) {
             const Expr *e = items[i];
@@ -22604,6 +22605,16 @@ static Type forced_spec_pos_type(TypeKind kind, const char *adt_name,
                 strcmp(def->name, adt_name) == 0)
                 return type_adt(def);
         }
+        /* forced-spec-at-foreign-aggregate: a struct from a module this one
+         * imports -- `types`' `Pos`, for `util` that imports `types` -- is
+         * not among this module's items, but its elaboration saw the def, and
+         * this module's header already includes that module's. */
+        const AdtDef *imp = ctor_census_find_adt(adt_name);
+        if (imp) return type_adt((AdtDef *)imp);
+        /* A struct this module cannot see at all (the borrower's own): the
+         * clone cannot be emitted here, and the int64 carrier would only
+         * turn into a cc error at the borrower's call. */
+        if (unresolved) *unresolved = true;
     }
     return emit_type_from_kind(kind);
 }
@@ -22893,11 +22904,14 @@ static int emit_header_inner(Buf *out, const char *module_name, const Expr *prog
             /* Build arg_types[] and result_type from the recorded kinds and
              * ADT names. */
             Type arg_types[MAX_FN_ARITY];
+            bool unresolved = false;
             for (uint32_t ai = 0; ai < fs->n_args; ai++)
                 arg_types[ai] = forced_spec_pos_type(fs->arg_kinds[ai], fs->arg_adts[ai],
-                                                     h_items, h_n_items);
+                                                     h_items, h_n_items, &unresolved);
             Type result_type = forced_spec_pos_type(fs->result_kind, fs->result_adt,
-                                                    h_items, h_n_items);
+                                                    h_items, h_n_items, &unresolved);
+            /* Refused with a diagnostic by the implementation pass. */
+            if (unresolved) continue;
             /* Grow hdr_ctx.abi_specializations and add spec. */
             if (hdr_ctx.n_abi_specializations >= hdr_ctx.cap_abi_specializations) {
                 uint32_t nc = hdr_ctx.cap_abi_specializations ? hdr_ctx.cap_abi_specializations * 2 : 4;
@@ -23519,11 +23533,36 @@ static int emit_implementation_inner(Buf *out, const char *module_name, const Ex
         sp->fn = fd2;
         sp->binding = b;
         sp->n_args = fs->n_args;
+        bool unresolved = false;
+        const char *unresolved_adt = NULL;
         sp->result_type = forced_spec_pos_type(fs->result_kind, fs->result_adt,
-                                               impl_items, impl_n_items);
-        for (uint32_t ai = 0; ai < fs->n_args; ai++)
+                                               impl_items, impl_n_items, &unresolved);
+        if (unresolved) unresolved_adt = fs->result_adt;
+        for (uint32_t ai = 0; ai < fs->n_args; ai++) {
+            bool u = false;
             sp->arg_types[ai] = forced_spec_pos_type(fs->arg_kinds[ai], fs->arg_adts[ai],
-                                                     impl_items, impl_n_items);
+                                                     impl_items, impl_n_items, &u);
+            if (u && !unresolved_adt) unresolved_adt = fs->arg_adts[ai];
+            unresolved = unresolved || u;
+        }
+        if (unresolved) {
+            /* forced-spec-at-foreign-aggregate: the borrower's own struct.
+             * Only the borrower can name it, and it does not carry this
+             * generic's body, so no unit can emit the clone.  Say so here
+             * rather than leave the borrower's call to fail in the C
+             * compiler. */
+            diag_emit(DIAG_ERROR, fn_expr2->span,
+                      "`%s` is called at `%s` from another module, but `%s` is not "
+                      "visible in the module that defines `%s`: compiled separately, "
+                      "a generic is specialized in its own module, at a struct that "
+                      "module defines or imports. Move `%s` into a module both import, "
+                      "or build the program as one unit (a project with one `main`)",
+                      fs->fn_symbol, unresolved_adt, unresolved_adt, fs->fn_symbol,
+                      unresolved_adt);
+            free(sp->clone_name);
+            ctx.n_abi_specializations--;
+            continue;
+        }
         sp->clone_name = strdup(fs->clone_name);
         sp->external_linkage = true;
         /* No call-site rewrite needed (no local call site). */
