@@ -415,6 +415,7 @@ static void fmt_emit_inline(FmtState *s, const Form *f) {
 typedef enum SpecialForm {
     SF_NONE,
     SF_DEFPACKAGE,          /* (defpackage ...) and (deflockfile ...) */
+    SF_DEFSCRIPT,           /* (defscript ...): defpackage's layout, no name */
     SF_DEFN, SF_DEFMACRO,
     SF_FN,
     SF_LET, SF_LOOP,
@@ -441,6 +442,7 @@ static SpecialForm classify_list(const Form *f) {
     if (!h) return SF_NONE;
     if (sym_eq(h, "defpackage"))  return SF_DEFPACKAGE;
     if (sym_eq(h, "deflockfile")) return SF_DEFPACKAGE;
+    if (sym_eq(h, "defscript"))   return SF_DEFSCRIPT;
     if (sym_eq(h, "defn"))        return SF_DEFN;
     if (sym_eq(h, "defmacro"))    return SF_DEFMACRO;
     if (sym_eq(h, "fn"))          return SF_FN;
@@ -1283,21 +1285,23 @@ static void fmt_map_block(FmtState *s, const Form *f,
  *   :spices #{
  *     "name" #{...}
  *   }) */
-static void fmt_defpackage(FmtState *s, const Form *f) {
+/* `n_head` is how many items share the opening line: the head and the
+ * package name for defpackage (2), the head alone for defscript (1). */
+static void fmt_keyword_block(FmtState *s, const Form *f, uint32_t n_head) {
     uint32_t n = f->as.list.len;
     uint32_t paren_col = s->col;
     uint32_t body_col  = paren_col + s->opts.indent_width;
 
     fs_putc(s, '(');
 
-    /* head (defpackage/deflockfile) + package name */
-    fmt_header_items(s, f, 2, body_col, UINT32_MAX);
+    /* head (defpackage/deflockfile/defscript) [+ package name] */
+    fmt_header_items(s, f, n_head, body_col, UINT32_MAX);
 
-    /* keyword-value pairs starting at index 2, re-emitting any comment in
+    /* keyword-value pairs after the header, re-emitting any comment in
      * the gaps (a `;; why this dep` above a :spices entry). */
-    uint32_t prev_end = (n >= 2) ? f->as.list.items[1]->span.off_end
-                                 : (n >= 1 ? f->as.list.items[0]->span.off_end : 0);
-    uint32_t i = 2;
+    uint32_t prev_end = (n >= n_head && n_head > 0)
+                            ? f->as.list.items[n_head - 1]->span.off_end : 0;
+    uint32_t i = n_head;
     while (i < n) {
         const Form *kw = f->as.list.items[i];
         emit_gap_comments_before(s, prev_end, kw, body_col);
@@ -1333,6 +1337,10 @@ static void fmt_defpackage(FmtState *s, const Form *f) {
     fs_putc(s, ')');
 }
 
+static void fmt_defpackage(FmtState *s, const Form *f) {
+    fmt_keyword_block(s, f, 2);
+}
+
 /* ---------------------------------------------------------------------------
  * Main list dispatcher
  * ---------------------------------------------------------------------------
@@ -1363,6 +1371,7 @@ static void fmt_list(FmtState *s, const Form *f) {
         case SF_COND:        fmt_cond(s, f);       break;
         case SF_HANDLE:      fmt_handle(s, f);     break;
         case SF_DEFPACKAGE:  fmt_defpackage(s, f);  break;
+        case SF_DEFSCRIPT:   fmt_keyword_block(s, f, 1);  break;
         case SF_DEFCLASS:    fmt_defclass(s, f);   break;
         case SF_DEFINSTANCE: fmt_definstance(s, f);break;
         /* defeffect is usually short; if it doesn't fit, use generic layout */

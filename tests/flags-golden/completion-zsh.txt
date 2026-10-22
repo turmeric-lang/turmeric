@@ -96,6 +96,7 @@ _tur() {
     'uninstall:remove a globally installed spice'
     'list:list globally installed spices'
     'upgrade:upgrade globally installed spices'
+    'cache:list or clean the script-dep cache'
     'new:scaffold a new spice'
     'audit-spans:report source-span coverage'
     'lsp:Language Server Protocol server'

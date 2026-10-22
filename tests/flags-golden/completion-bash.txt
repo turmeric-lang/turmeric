@@ -8,7 +8,7 @@
 __tur_commands="build compile link emit-c emit-h run just repl worker
 interpret debug dap trace lsp-lite eval doc docs explain test check expand
 format fmt parse-check demangle smt experiments dialects completion init add
-add-cmake fetch audit emit-cmake install uninstall list upgrade new
+add-cmake fetch audit emit-cmake install uninstall list upgrade cache new
 audit-spans lsp mcp image-info image-verify jit"
 
 __tur_global_flags="--help --version --no-color --json --json-diagnostics

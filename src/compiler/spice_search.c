@@ -32,6 +32,7 @@
 #include "global.h"   /* tur_installed_spice_dir: :global spice deps */
 #include "pkg.h"
 #include "platform_fs.h"  /* realpath on Windows */
+#include "script_deps.h"  /* script-spice-deps-plan: the defscript header */
 
 /* The directory part of `path`, or "." when it has none.  The same split as
  * the driver's drv_dir_of_path, '\\' included on Windows. */
@@ -604,45 +605,87 @@ int spice_search_append_spice(const char *name, const char *spice_dir,
     return rc;
 }
 
-/* D2 steps 4-5: every installed spice's own src/, in install-name order, then
- * each one's transitive :spices closure in the same order.  All top-level
- * spices come before any dependency, so the spice the user installed BY NAME
- * beats another version of it that some other installed spice depends on. */
+/* Every root's own src/, in the order given, then each one's transitive
+ * :spices closure in the same order, each slot recorded as belonging to its
+ * root (D7: the link step reads that back).  All top-level spices come before
+ * any dependency, so a spice named directly beats another version of it that
+ * some other root depends on. */
+static int ss_append_roots(const char *const *names, const char *const *dirs,
+                           int n, char ***inc, int *n_inc,
+                           char ***owned, int *n_owned,
+                           const SpiceSearchHooks *hooks) {
+    int rc = 0;
+    for (int i = 0; i < n && rc == 0; i++) {
+        char own_src[4096];
+        snprintf(own_src, sizeof(own_src), "%s/src", dirs[i]);
+        if (!ss_is_dir(own_src) || ss_already_listed(*inc, *n_inc, own_src)) continue;
+        if (ss_add(own_src, NULL, inc, n_inc, owned, n_owned, hooks) != 0) rc = -1;
+        else ss_record_slot(own_src, names[i], dirs[i], false);
+    }
+    for (int i = 0; i < n && rc == 0; i++) {
+        char mp[4096];
+        if (!pkg_resolve_manifest_path(dirs[i], mp, sizeof(mp))) continue;
+        PkgManifest m;
+        memset(&m, 0, sizeof(m));
+        if (!pkg_manifest_read(mp, &m)) continue;
+        const char **dd = NULL;
+        int nd = 0;
+        resolve_include_dirs_from_manifest(dirs[i], &m, false, &dd, &nd);
+        for (int j = 0; j < nd; j++) {
+            if (rc == 0 && !ss_already_listed(*inc, *n_inc, dd[j])) {
+                if (ss_add(dd[j], NULL, inc, n_inc, owned, n_owned, hooks) != 0)
+                    rc = -1;
+                else
+                    ss_record_slot(dd[j], names[i], dirs[i], true);
+            }
+            free((void *)dd[j]);
+        }
+        free((void *)dd);
+        pkg_manifest_free(&m);
+    }
+    return rc;
+}
+
+/* D2 steps 4-5: every installed spice, in install-name order. */
 static int ss_append_installed(char ***inc, int *n_inc,
                                char ***owned, int *n_owned,
                                const SpiceSearchHooks *hooks) {
     SsInstalled *v = NULL;
     int n = ss_installed_list(&v);
+    const char **names = n ? (const char **)calloc((size_t)n, sizeof(char *)) : NULL;
+    const char **dirs  = n ? (const char **)calloc((size_t)n, sizeof(char *)) : NULL;
     int rc = 0;
-    for (int i = 0; i < n && rc == 0; i++) {
-        char own_src[4096];
-        snprintf(own_src, sizeof(own_src), "%s/src", v[i].dir);
-        if (!ss_is_dir(own_src) || ss_already_listed(*inc, *n_inc, own_src)) continue;
-        if (ss_add(own_src, NULL, inc, n_inc, owned, n_owned, hooks) != 0) rc = -1;
-        else ss_record_slot(own_src, v[i].name, v[i].dir, false);
+    if (n && (!names || !dirs)) {
+        rc = -1;
+    } else {
+        for (int i = 0; i < n; i++) { names[i] = v[i].name; dirs[i] = v[i].dir; }
+        rc = ss_append_roots(names, dirs, n, inc, n_inc, owned, n_owned, hooks);
     }
-    for (int i = 0; i < n && rc == 0; i++) {
-        char mp[4096];
-        if (!pkg_resolve_manifest_path(v[i].dir, mp, sizeof(mp))) continue;
-        PkgManifest m;
-        memset(&m, 0, sizeof(m));
-        if (!pkg_manifest_read(mp, &m)) continue;
-        const char **dirs = NULL;
-        int nd = 0;
-        resolve_include_dirs_from_manifest(v[i].dir, &m, false, &dirs, &nd);
-        for (int j = 0; j < nd; j++) {
-            if (rc == 0 && !ss_already_listed(*inc, *n_inc, dirs[j])) {
-                if (ss_add(dirs[j], NULL, inc, n_inc, owned, n_owned, hooks) != 0)
-                    rc = -1;
-                else
-                    ss_record_slot(dirs[j], v[i].name, v[i].dir, true);
-            }
-            free((void *)dirs[j]);
-        }
-        free((void *)dirs);
-        pkg_manifest_free(&m);
-    }
+    free((void *)names);
+    free((void *)dirs);
     ss_installed_free(v, n);
+    return rc;
+}
+
+/* script-spice-deps-plan SD2: a file with a `(defscript ...)` header sees its
+ * declared deps (and their closures), its own directory, the stdlib and -I
+ * -- and nothing else: the installed-spice fallback is off for it. */
+static int ss_append_script(const ScriptDeps *sd, char ***inc, int *n_inc,
+                            char ***owned, int *n_owned,
+                            const SpiceSearchHooks *hooks) {
+    if (sd->n == 0) return 0;
+    const char **names = (const char **)calloc((size_t)sd->n, sizeof(char *));
+    const char **dirs  = (const char **)calloc((size_t)sd->n, sizeof(char *));
+    int rc = -1;
+    if (names && dirs) {
+        for (int i = 0; i < sd->n; i++) {
+            names[i] = sd->deps[i].name;
+            dirs[i]  = sd->deps[i].dir;
+        }
+        rc = ss_append_roots(names, dirs, sd->n, inc, n_inc, owned, n_owned, hooks);
+    }
+    free((void *)names);
+    free((void *)dirs);
     return rc;
 }
 
@@ -652,6 +695,23 @@ int spice_search_append(const char *input,
                         const SpiceSearchHooks *hooks) {
     if (!input) return 0;
     char *root = spice_find_root(input);
+
+    /* script-spice-deps-plan: a script header, when there is one, decides
+     * the whole search path.  A header in a project is an error; the editor
+     * then carries on with the project's resolution. */
+    ScriptDeps sd;
+    int hs = script_deps_resolve(input, root != NULL, false, &sd);
+    if (hs < 0 && !g_script_deps_editor) {
+        free(root);
+        return SPICE_SEARCH_SCRIPT_ERROR;
+    }
+    if (hs > 0) {
+        int rc = ss_append_script(&sd, inc, n_inc, owned, n_owned, hooks);
+        script_deps_free(&sd);
+        free(root);
+        return rc;
+    }
+
     if (!root) {
         /* installed-spice-libraries D1: a manifest-less context -- no
          * build.tur above the anchor -- searches the installed spices after

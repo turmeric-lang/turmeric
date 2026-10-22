@@ -442,6 +442,19 @@ typedef struct InstallSpec {
  * dep's :cmake-deps or :c-sources into the build.  A spice with neither
  * :spices nor :cmake-deps has nothing to fetch and is left untouched.
  * Exit 1 from `tur fetch` means only `:optional` deps failed; that installs. */
+/* installed-spice-libraries D4: set the installed root up the way `tur fetch`
+ * sets up a project -- its `:spices` closure into `<root>/spices/` with a
+ * tur.lock, and its `:cmake-deps` (its own and its deps') configured and
+ * built under `<root>/cmake/`.  It runs `tur fetch` in that directory, so an
+ * installed root is exactly a fetched project and every project-mode resolver
+ * (the include walk, collect_spice_aux_c, the cmake deps manifest, the REPL
+ * image's --bundle-deps) finds its deps where it already looks.
+ *
+ * The bespoke walk this replaced fetched only the first level, into the
+ * SHARED spices/ directory next to the installed spices, and never carried a
+ * dep's :cmake-deps or :c-sources into the build.  A spice with neither
+ * :spices nor :cmake-deps has nothing to fetch and is left untouched.
+ * Exit 1 from `tur fetch` means only `:optional` deps failed; that installs. */
 static bool inst_fetch_root(const char *verb, const char *self_exe,
                             const char *src_dir, const PkgManifest *m) {
     if (m->n_spices == 0 && m->n_cmake_deps == 0) return true;
@@ -462,6 +475,34 @@ static bool inst_fetch_root(const char *verb, const char *self_exe,
     if (rc != -1 && WIFEXITED(rc)) rc = WEXITSTATUS(rc);
     if (rc == 0 || rc == 1) return true;
     fprintf(stderr, "tur %s: fetching dependencies failed (rc=%d)\n", verb, rc);
+    return false;
+}
+
+/* The same setup for a caller whose stdout is not its own -- a script-dep
+ * cache entry is built while `tur run` is about to run the script, so the
+ * child `tur fetch`'s progress goes to stderr with the rest of the notes. */
+bool pkg_setup_fetched_project(const char *who, const char *src_dir,
+                               const PkgManifest *m) {
+    if (m->n_spices == 0 && m->n_cmake_deps == 0) return true;
+    char self_exe[4096];
+    if (!inst_self_exe(self_exe, sizeof(self_exe))) return false;
+    Buf cmd;
+    buf_init(&cmd);
+    buf_puts(&cmd, TUR_CD " ");
+    bool ok = pkg_cmd_arg(&cmd, src_dir);
+    buf_puts(&cmd, " && ");
+    ok = pkg_cmd_arg(&cmd, self_exe) && ok;
+    buf_puts(&cmd, " fetch 1>&2");
+    buf_putc(&cmd, '\0');
+    char wrapped[16384];
+    if (ok && tur_shell_command(cmd.data, wrapped, sizeof(wrapped)) != 0)
+        ok = false;
+    fprintf(stderr, "tur: %s: fetching dependencies into %s ...\n", who, src_dir);
+    int rc = ok ? system(wrapped) : -1;
+    buf_free(&cmd);
+    if (rc != -1 && WIFEXITED(rc)) rc = WEXITSTATUS(rc);
+    if (rc == 0 || rc == 1) return true;
+    fprintf(stderr, "tur: %s: fetching dependencies failed (rc=%d)\n", who, rc);
     return false;
 }
 

@@ -1749,6 +1749,15 @@ add_test(
   COMMAND bash tests/run-spice-fetch.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# script-spice-deps-plan: a script's `(defscript ...)` header, the script-dep
+# cache, `tur <script> args`, `tur add/fetch --script` and `tur cache`.
+add_test(
+  NAME tur_script_deps_tests
+  COMMAND bash tests/run-script-deps.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+set_tests_properties(tur_script_deps_tests PROPERTIES
+  ENVIRONMENT "TUR_REQUIRE_GIT=1")
 # The harness skips itself when git is absent.  Under ctest that would be a
 # pass that tested nothing, and a source tree you cloned has git -- so here
 # a missing one is a failure with an actionable message.

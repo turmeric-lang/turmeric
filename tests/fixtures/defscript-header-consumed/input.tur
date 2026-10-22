@@ -1,0 +1,10 @@
+#!/usr/bin/env -S tur --enable=script-deps
+;; script-spice-deps-plan SD0: a header is consumed before elaboration -- it
+;; is not a top-level statement, and a defmodule may follow it.
+(defscript
+  :spices #map{})
+
+(defmodule header-consumed
+  (defn main [] : int
+    (println 7)
+    0))

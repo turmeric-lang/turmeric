@@ -8,6 +8,7 @@
 #include "lang_dialects.h"      /* saffron-lang-plan S6 (G7): lang_span_is_dynamic */
 #include "scheme_lower.h"       /* r7rs-lang-plan R2: the Scheme core forms */
 #include "prof.h"               /* --timings: elaborate / module-load / refine */
+#include "pkg.h"                /* script-spice-deps-plan: pkg_text_is_preamble */
 
 /* duplicate-ctor-names-collide-in-emitted-c: the constructor-name census lives
  * in emit_core.c; declared here because elab_toplevel.c does not include
@@ -3150,6 +3151,31 @@ Expr *elaborate_program_session(Arena *arena, SymbolTable *st,
         nforms = lowered_n;
     }
 
+    /* script-spice-deps-plan SD0: the driver has already consumed the
+     * entry file's `(defscript ...)` header (its deps are on the include
+     * path), so here it is a no-op, and it is dropped before the `main` fold
+     * so a header never counts as a top-level statement.  Only the header
+     * itself qualifies: the program's first form (the first after the
+     * auto-loaded stdlib), with nothing but a shebang, a `#lang` line and
+     * comments before it in its file, under --enable=script-deps.  Any other `defscript` reaches elab_defscript,
+     * which says why it is not one. */
+    if (g_opt_script_deps && stdlib_prefix < nforms) {
+        Form *f = forms[stdlib_prefix];
+        const SourceFile *sf = diag_source_file(f->span.file_id);
+        if (f->tag == F_LIST && f->as.list.len >= 1 &&
+            f->as.list.items[0]->tag == F_SYM &&
+            f->as.list.items[0]->as.sym == e.sym_defscript &&
+            sf && sf->src && f->span.off_start <= sf->len &&
+            pkg_text_is_preamble(sf->src, f->span.off_start)) {
+            Form **kept = (Form **)arena_alloc(arena, nforms * sizeof(Form *));
+            uint32_t nk = 0;
+            for (uint32_t j = 0; j < nforms; j++)
+                if (j != stdlib_prefix) kept[nk++] = forms[j];
+            forms  = (Form *const *)kept;
+            nforms = nk;
+        }
+    }
+
     Expr **items = (nforms == 0) ? NULL :
         (Expr **)arena_alloc(arena, nforms * sizeof(Expr *));
 
@@ -3562,6 +3588,12 @@ Expr *elaborate_program_session(Arena *arena, SymbolTable *st,
             if (first->tag == F_LIST && first->as.list.len > 0) {
                 Form *fh = first->as.list.items[0];
                 if (fh->tag == F_SYM && fh->as.sym == e.sym_defmodule) continue;
+                /* script-spice-deps-plan: a script's `defscript` header comes
+                 * before its defmodule.  A consumed one is gone by now; one
+                 * still here is elab_defscript's to report (TUR-E0633 /
+                 * E0630), which says more than this would. */
+                if (fh->tag == F_SYM && fh->as.sym == e.sym_defscript &&
+                    i == file_start_idx + 1) continue;
             }
             diag_emit(DIAG_ERROR, head->span,
                       "defmodule must be the first form in the file");

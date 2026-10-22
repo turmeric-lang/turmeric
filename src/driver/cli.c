@@ -154,8 +154,12 @@ int usage_run(void) {
         "flags:\n"
         "  -I <dir>    add an include directory for module resolution\n"
         "  --release   compile at -O3 (the default is -O2)\n"
-        "  --offline   skip dependency fetch\n"
+        "  --offline   skip dependency fetch (a script header resolves from the cache)\n"
+        "  --update    re-resolve a script header's tag and branch refs\n"
         "  --          pass remaining arguments to the program\n"
+        "\n"
+        "`tur <file.tur> <args...>` is `tur run <file.tur> -- <args...>`, so a\n"
+        "script can start with `#!/usr/bin/env tur`.\n"
         "\n"
         "Try 'tur --help' for global options.\n");
     return 0;
@@ -828,6 +832,19 @@ int drv_parse_global_flags(int *argc_io, char **argv) {
     int dd_at = argc;
     for (int i = 1; i < argc; i++)
         if (strcmp(argv[i], "--") == 0) { dd_at = i; break; }
+    /* script-spice-deps-plan SD-D6: `tur [flags] report.tur a b` -- the
+     * script's own words are the program's too, cut off the same way, just
+     * past the file.  Only when the script is the first non-flag word: in
+     * `tur run x.tur --no-color` the flag is still tur's. */
+    for (int i = 1; i < dd_at; i++) {
+        if (argv[i][0] == '-') {
+            const GlobalFlag *f = gf_lookup(argv, dd_at, i);
+            if (f && (f->how & GF_VALUE)) i++;
+            continue;
+        }
+        if (drv_is_script_word(argv[i])) dd_at = i + 1;
+        break;
+    }
     const int dd_tail = argc - dd_at;
     argc = dd_at;
 
@@ -1009,13 +1026,15 @@ static const DrvCommand COMMANDS[] = {
       "add a Turmeric spice dependency",
       "  tur add <url> [--ref <tag>]       add a Turmeric spice\n"
       "  tur add <path> --path             add a local spice\n"
-      "  tur add --workspace <name>        assert a workspace sibling (no manifest entry)\n" },
+      "  tur add --workspace <name>        assert a workspace sibling (no manifest entry)\n"
+      "  tur add --script <f> <url> --ref <r>  add a spice to a script's defscript header\n" },
     { "add-cmake", cmd_pkg_add_cmake, DRV_CMD_PACKAGE,
       "add a C/CMake dependency",
       "  tur add-cmake <url> [--ref <tag>] add a C/CMake dependency\n" },
     { "fetch", cmd_pkg_fetch, DRV_CMD_PACKAGE,
       "download or update declared spices",
-      "  tur fetch [--update|--frozen|--dry-run|--refetch]  download/update spices (--frozen: fail if tur.lock would change; --refetch bypasses system pkgs)\n" },
+      "  tur fetch [--update|--frozen|--dry-run|--refetch]  download/update spices (--frozen: fail if tur.lock would change; --refetch bypasses system pkgs)\n"
+      "  tur fetch --script <f> [--update] [--lock]  fetch a script header's spices (--lock: write <f>.lock)\n" },
     { "audit", cmd_pkg_audit, DRV_CMD_PACKAGE,
       "list every origin the build fetches code from",
       "  tur audit                         list every origin the build fetches code from\n" },
@@ -1037,6 +1056,10 @@ static const DrvCommand COMMANDS[] = {
     { "upgrade", cmd_pkg_upgrade, DRV_CMD_PACKAGE,
       "upgrade globally installed spices",
       "  tur upgrade <name>...|--all       upgrade globally installed spices\n" },
+    /* script-spice-deps-plan SD5: the script-dep cache. */
+    { "cache", cmd_cache, DRV_CMD_PACKAGE,
+      "list or clean the script-dep cache",
+      "  tur cache list|clean [--older-than <days>]  the spices script headers fetched\n" },
 
     /* Not in `tur --help`. */
     { "new", cmd_pkg_new, DRV_CMD_PACKAGE, "scaffold a new spice", NULL },
@@ -1277,6 +1300,50 @@ int drv_usage(void) {
         "                                   See docs/guides/compiler-flags-guide.md for the removal list.\n");
     list_external_subcommands();
     return 64;
+}
+
+/* script-spice-deps-plan SD-D6: does `w` name a script `tur w args...`
+ * should run?  An existing regular file whose name says so: it contains a
+ * '/', or ends in `.tur` or `.tur.sweet`.  A built-in command name has
+ * neither, so a built-in always wins (`tur check.tur` is a script called
+ * check.tur, `tur check` the command). */
+bool drv_script_word_shaped(const char *w) {
+    if (!w || !*w || w[0] == '-') return false;
+    size_t n = strlen(w);
+    return strchr(w, '/') != NULL ||
+#ifdef _WIN32
+           strchr(w, '\\') != NULL ||
+#endif
+           (n > 4 && strcmp(w + n - 4, ".tur") == 0) ||
+           (n > 10 && strcmp(w + n - 10, ".tur.sweet") == 0);
+}
+
+bool drv_is_script_word(const char *w) {
+    if (!drv_script_word_shaped(w)) return false;
+    struct stat st;
+    return stat(w, &st) == 0 && S_ISREG(st.st_mode);
+}
+
+/* `tur <script> args...` is `tur run <script> -- args...`.  The global flags
+ * before the script were applied already (drv_parse_global_flags stopped at
+ * it), so a `#!/usr/bin/env -S tur --enable=script-deps` line works.  Exit
+ * status passes through. */
+int drv_run_script(int argc, char **argv) {
+    bool ambiguous = false;
+    const DrvCommand *run = drv_find_command("run", &ambiguous);
+    if (!run) return drv_usage();
+    char **nv = (char **)calloc((size_t)argc + 3, sizeof(char *));
+    if (!nv) return 1;
+    int n = 0;
+    nv[n++] = argv[0];
+    nv[n++] = (char *)"run";
+    nv[n++] = argv[1];
+    nv[n++] = (char *)"--";
+    for (int i = 2; i < argc; i++) nv[n++] = argv[i];
+    nv[n] = NULL;
+    int rc = run->run(n, nv);
+    free(nv);
+    return rc;
 }
 
 /* GS-M2: subcommand fallthrough. When `tur <cmd>` doesn't match a built-in,

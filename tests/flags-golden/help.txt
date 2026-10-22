@@ -40,8 +40,10 @@ package management (Spice, Phase PKG-1):
   tur add <url> [--ref <tag>]       add a Turmeric spice
   tur add <path> --path             add a local spice
   tur add --workspace <name>        assert a workspace sibling (no manifest entry)
+  tur add --script <f> <url> --ref <r>  add a spice to a script's defscript header
   tur add-cmake <url> [--ref <tag>] add a C/CMake dependency
   tur fetch [--update|--frozen|--dry-run|--refetch]  download/update spices (--frozen: fail if tur.lock would change; --refetch bypasses system pkgs)
+  tur fetch --script <f> [--update] [--lock]  fetch a script header's spices (--lock: write <f>.lock)
   tur audit                         list every origin the build fetches code from
   tur emit-cmake [--output-dir <d>] generate CMakeLists.txt + config for CMake consumers
   tur install <url> [--ref <ref>]   install a spice binary globally
@@ -49,6 +51,7 @@ package management (Spice, Phase PKG-1):
   tur uninstall <name>              remove a globally installed spice
   tur list [--verbose|--outdated]   list globally installed spices
   tur upgrade <name>...|--all       upgrade globally installed spices
+  tur cache list|clean [--older-than <days>]  the spices script headers fetched
 
 emit-c flags:
   tur emit-c <file>                 compile a .tur file to C (stdout)

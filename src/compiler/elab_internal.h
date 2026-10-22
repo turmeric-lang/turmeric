@@ -767,6 +767,7 @@ typedef struct Elab {
     const Symbol *sym_tilde;
     /* Phase M0: Module system */
     const Symbol *sym_defmodule;  /* defmodule */
+    const Symbol *sym_defscript;  /* defscript (script-spice-deps-plan) */
     const Symbol *sym_export;     /* export */
     /* (export-from <mod> name ...) -- re-export names another module already
      * exports, without a forwarding wrapper. */
@@ -2333,6 +2334,8 @@ Binding *make_dict_clone(Elab *e, Binding *inner_b, Span span);
 /* elab_module.c */
 Expr *elab_load(Elab *e, const Form *call);
 Expr *elab_defmodule(Elab *e, const Form *call);
+/* script-spice-deps-plan: a `defscript` the driver did not consume. */
+Expr *elab_defscript(Elab *e, const Form *call);
 /* A top-level `(import ...)`: legal only when e->toplevel_imports is set (an
  * interactive session); an error naming defmodule otherwise. */
 Expr *elab_toplevel_import(Elab *e, const Form *call);

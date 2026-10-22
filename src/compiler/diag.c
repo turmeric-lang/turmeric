@@ -453,6 +453,11 @@ const char *diag_code_to_string(DiagCode code) {
         case TUR_W0623_TUR_VERSION_ABOVE_CEILING: return "TUR-W0623";
         case TUR_W0624_NO_ENTRY_POINT_NEAR_MISS:   return "TUR-W0624";
         case TUR_W0625_TOPLEVEL_MAIN_CALL_DROPPED: return "TUR-W0625";
+        case TUR_E0630_DEFSCRIPT_MISPLACED:       return "TUR-E0630";
+        case TUR_E0631_DEFSCRIPT_MALFORMED:       return "TUR-E0631";
+        case TUR_E0632_DEFSCRIPT_IN_PROJECT:      return "TUR-E0632";
+        case TUR_E0633_DEFSCRIPT_NEEDS_FLAG:      return "TUR-E0633";
+        case TUR_E0634_SCRIPT_DEP_UNAVAILABLE:    return "TUR-E0634";
         case TUR_W0706_IMAGE_GLOBAL_UNREGISTERED:  return "TUR-W0706";
         case TUR_E0332_SWEET_DOLLAR_IN_BRACKETS:   return "TUR-E0332";
         case TUR_E0716_TAILCALL_NOT_TAIL:          return "TUR-E0716";
@@ -654,6 +659,11 @@ DiagCode diag_code_from_string(const char *s) {
     if (strcmp(s, "TUR-W0623") == 0) return TUR_W0623_TUR_VERSION_ABOVE_CEILING;
     if (strcmp(s, "TUR-W0624") == 0) return TUR_W0624_NO_ENTRY_POINT_NEAR_MISS;
     if (strcmp(s, "TUR-W0625") == 0) return TUR_W0625_TOPLEVEL_MAIN_CALL_DROPPED;
+    if (strcmp(s, "TUR-E0630") == 0) return TUR_E0630_DEFSCRIPT_MISPLACED;
+    if (strcmp(s, "TUR-E0631") == 0) return TUR_E0631_DEFSCRIPT_MALFORMED;
+    if (strcmp(s, "TUR-E0632") == 0) return TUR_E0632_DEFSCRIPT_IN_PROJECT;
+    if (strcmp(s, "TUR-E0633") == 0) return TUR_E0633_DEFSCRIPT_NEEDS_FLAG;
+    if (strcmp(s, "TUR-E0634") == 0) return TUR_E0634_SCRIPT_DEP_UNAVAILABLE;
     if (strcmp(s, "TUR-W0706") == 0) return TUR_W0706_IMAGE_GLOBAL_UNREGISTERED;
     if (strcmp(s, "TUR-E0332") == 0) return TUR_E0332_SWEET_DOLLAR_IN_BRACKETS;
     if (strcmp(s, "TUR-E0716") == 0) return TUR_E0716_TAILCALL_NOT_TAIL;
@@ -2885,6 +2895,67 @@ static const DiagExplanation diag_explanations_[] = {
       "\n"
       "  (defn main [] : int (println \"hi\") 0)\n"
       "  (main)          ; TUR-W0625: remove it -- main already runs\n",
+    },
+    { TUR_E0630_DEFSCRIPT_MISPLACED,
+      "TUR-E0630: `defscript` is not the first form of the script\n"
+      "\n"
+      "A `(defscript ...)` header declares the spices a single-file script\n"
+      "needs.  The driver reads it before compiling, because the include path\n"
+      "has to be known before the first import resolves -- so it must be the\n"
+      "first form of the file you run: after an optional `#!` line, an optional\n"
+      "`#lang` line and comments, and before anything else.\n"
+      "\n"
+      "A module the script imports cannot carry one: its dependencies are the\n"
+      "script's.  Move the declaration into the script's own header.\n"
+      "\n"
+      "  #!/usr/bin/env -S tur --enable=script-deps\n"
+      "  (defscript :spices #map{\"json\" #map{:url \"...\" :ref \"v1\"}})\n"
+      "  (import json/decode)\n",
+    },
+    { TUR_E0631_DEFSCRIPT_MALFORMED,
+      "TUR-E0631: malformed `defscript` header\n"
+      "\n"
+      "A script header takes one key, `:spices`, whose value uses the build.tur\n"
+      "entry grammar (`:url`, `:ref`, `:subdir`, `:path`, `:optional`,\n"
+      "`:global`).  Two more rules apply in a header:\n"
+      "\n"
+      "  - every `:url` dep needs a `:ref` (a tag, a branch, or a commit id);\n"
+      "    a header that floats on a default branch declares nothing;\n"
+      "  - anything else -- `:cmake-deps`, `:c-sources`, a name, a version --\n"
+      "    needs a project.  Run `tur init` and move the declaration into\n"
+      "    build.tur.\n",
+    },
+    { TUR_E0632_DEFSCRIPT_IN_PROJECT,
+      "TUR-E0632: `defscript` header in a file inside a project\n"
+      "\n"
+      "The file sits below a build.tur, and that manifest governs which spices\n"
+      "it sees.  A second manifest in the file would need a precedence rule\n"
+      "between the two, so it is an error instead.  Declare the dependency in\n"
+      "the project's build.tur (`tur add`), or move the script out of the\n"
+      "project.\n",
+    },
+    { TUR_E0633_DEFSCRIPT_NEEDS_FLAG,
+      "TUR-E0633: `defscript` needs --enable=script-deps\n"
+      "\n"
+      "Script headers are experimental: the key set, the lock format and the\n"
+      "cache layout may still change.  Enable them per run (`tur\n"
+      "--enable=script-deps run report.tur`), on the script's own `#!` line\n"
+      "(`#!/usr/bin/env -S tur --enable=script-deps`), or for every run in\n"
+      "~/.config/turmeric/experiments.tur (`:enable [script-deps]`).\n",
+    },
+    { TUR_E0634_SCRIPT_DEP_UNAVAILABLE,
+      "TUR-E0634: a spice the script header declares is not available\n"
+      "\n"
+      "The dependency could not be fetched into the script-dep cache, or the\n"
+      "cache could not be trusted.  The message names which:\n"
+      "\n"
+      "  - the fetch failed (network, a wrong :url, a :ref that does not exist);\n"
+      "  - --offline was given and the cache has no entry for it -- run once\n"
+      "    online, or `tur fetch --script <file>`;\n"
+      "  - <file>.lock exists but does not list the dep -- the lock is stale:\n"
+      "    `tur fetch --script <file> --lock`;\n"
+      "  - a cached tree no longer hashes to what the lock recorded -- delete\n"
+      "    the entry (`tur cache clean`) and fetch again.\n",
     },
     { TUR_E0313_DICT_PASS_NESTED_LAMBDA,
       "TUR-E0313: a class method on a constrained type variable is called\n"

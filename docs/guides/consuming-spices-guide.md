@@ -175,6 +175,119 @@ search path on my behalf". The repository's test harnesses set
 `TUR_NO_GLOBAL_SPICES=1`, so a developer's installed spices cannot leak into
 the fixture suite.
 
+### Declaring spices in the script itself (`defscript`)
+
+An installed spice makes a script work on *your* machine. To make it work on
+anyone's, declare what it needs in the file, in a `(defscript ...)` header.
+This is experimental, so it needs `--enable=script-deps` -- on the `#!` line,
+on the command line, or in `~/.config/turmeric/experiments.tur`:
+
+```turmeric no-check
+#!/usr/bin/env -S tur --enable=script-deps
+(defscript
+  :spices #map{"json" #map{:url    "https://github.com/turmeric-lang/turmeric-spices"
+                           :ref    "json-v0.3.0"
+                           :subdir "spices/json"}})
+
+(defmodule report
+  (import json/decode)
+  (defn main [] : int
+    ...))
+```
+
+```sh
+chmod +x report.tur
+./report.tur data.json       # first run fetches json-v0.3.0; later runs are offline
+```
+
+The rules:
+
+- **The header is the file's first form.** Only a `#!` line, a `#lang` line
+  and comments may come before it (TUR-E0630 otherwise, and in a module the
+  script imports). It reads the same in sweet-exp: a `defscript` line at
+  column 0 with the options indented under it.
+- **`:spices` is the build.tur entry grammar.** `:url` + `:ref` [+ `:subdir`],
+  `:path` (relative to the script), `:global true` (an installed spice, from
+  the registry), `:optional`. Every `:url` dep needs a `:ref` -- a tag, a
+  branch or a commit id -- and nothing but `:spices` is accepted (TUR-E0631);
+  `:cmake-deps` and friends need a project.
+- **A file inside a project cannot have one** (TUR-E0632): its build.tur
+  governs it.
+- **A script with a header is hermetic.** It sees its declared spices (and
+  their dependencies), its own directory, the stdlib and `-I` -- the installed
+  spices are *not* searched. Add `"name" #map{:global true}` to use one.
+- **Linking follows the imports**, as for installed spices: a declared
+  spice's `:c-sources`, `:cmake-deps` and `:link-libs` reach the program when
+  it imports one of its modules.
+
+Every per-file command honors the header -- `tur run`, `tur check`,
+`tur build <file>`, `tur --interpret`, `tur jit`, `tur emit-c` -- and the LSP
+resolves it from the cache without ever fetching.
+
+#### Where the spices go
+
+Fetched spices land in the **script-dep cache**,
+`~/.local/share/turmeric/cache/script-spices/` (under `$TUR_HOME` when set):
+one immutable tree per (url, subdir, commit), each set up as a fetched
+project, so its own `:spices` and `:cmake-deps` come with it. The cache is
+never your install set -- `tur list` does not show it, and two scripts can pin
+two versions of one spice side by side.
+
+A tag or branch `:ref` is resolved once and remembered in the cache's
+`index.tur`; later runs need no network. A run that fetches says so on
+stderr (`tur: fetching json (json-v0.3.0) for report.tur`).
+
+| Command | Effect |
+| --- | --- |
+| `tur run --offline report.tur` | resolve from the cache only; a missing spice is TUR-E0634 |
+| `tur run --update report.tur` | resolve tag and branch refs again |
+| `tur fetch --script report.tur` | warm the cache without running |
+| `tur cache list` | the entries, their size and when they were last used |
+| `tur cache clean [--older-than <days>]` | remove entries (all, or the ones not used for `<days>`) |
+
+#### Editing the header
+
+```sh
+tur --enable=script-deps add --script report.tur \
+    https://github.com/turmeric-lang/turmeric-spices --ref json-v0.3.0 --subdir spices/json
+tur --enable=script-deps add --script report.tur ./helpers --path --name helpers
+```
+
+`tur add --script` creates the header (after the `#!` and `#lang` lines) or
+adds the entry to it, written back through the formatter. Comments inside an
+existing header are not kept.
+
+#### Locking a script
+
+A one-off script should not grow a second file unless you want it to, so the
+lock is opt-in:
+
+```sh
+tur --enable=script-deps fetch --script report.tur --lock     # writes report.tur.lock
+```
+
+`report.tur.lock` uses tur.lock's format: a row per fetched spice with its
+commit and tree hash, and one per dependency of each, named `<spice>/<dep>`.
+While it exists:
+
+- every run resolves from it -- even `--update` (move it with
+  `tur fetch --script report.tur --lock --update`);
+- every cached tree is hash-checked against it, and one modified after it was
+  fetched is TUR-E0634 (`tur cache clean`, then run again);
+- a `:url` spice the lock does not pin as the header declares it is a stale
+  lock -- TUR-E0634, naming `tur fetch --script report.tur --lock` -- not a
+  silent re-resolve.
+
+`:path` and `:global` spices are never locked, as in build.tur.
+
+#### Running a script by name
+
+`tur report.tur a b` is `tur run report.tur -- a b`, which is what lets a
+`#!/usr/bin/env -S tur --enable=script-deps` line work: global flags before
+the file apply, and every word after it is the script's. A built-in command
+always wins (`tur check.tur` runs a script called `check.tur`; `tur check`
+is the command). Windows has no `#!`: run `tur report.tur args` there.
+
 ---
 
 ## What `tur add` Changes
@@ -534,6 +647,14 @@ tur run
 tur run --release
 tur run --offline
 tur test
+
+# A script's own spices (defscript header; --enable=script-deps)
+tur add --script <file> <url> --ref <ref>
+tur fetch --script <file> [--update] [--lock]
+tur run [--offline|--update] <file>
+tur <file> <args...>
+tur cache list
+tur cache clean [--older-than <days>]
 ```
 
 ---
