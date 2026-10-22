@@ -581,7 +581,7 @@ reads a literal's address -- through inline C, or an erasing `(:: s :int)` --
 and compares it is therefore right compiled and silently wrong JIT'd.
 `examples/datalog/indexed.tur` keyed its index that way and found nothing
 under `tur jit`
-([jit-string-literal-identity-differs-from-cc](../archive/jit-string-literal-identity-differs-from-cc.md)).
+([jit-string-literal-identity-differs-from-cc](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/jit-string-literal-identity-differs-from-cc.md)).
 
 This is not a JIT bug: Turmeric gives a `cstr` no identity (`=` does not
 accept one), and neither engine promises it. Compare contents (`strcmp`), or
