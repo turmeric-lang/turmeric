@@ -750,6 +750,13 @@ TuriCollBuf *turi_env_track_collection(TuriEnv *env, void *box,
     node->marked   = false;
     node->next    = env->coll_bufs;
     env->coll_bufs = node;
+    /* turi-r7rs-strings-and-ports-kept-until-teardown: a box is malloc'd, not
+     * pool memory, so it never brought the pool sweep on: a loop that made a
+     * string per turn grew by its code points between sweeps the pool's own
+     * reuse had all but stopped (3 sweeps in 80,000 turns).  Count it toward
+     * the budget -- a flat estimate, as the box's size is its owner's to
+     * know.  A no-op unless the env sweeps (`#lang r7rs`). */
+    turi_pool_count(env, TURI_COLL_BOX_POOL_COST);
     return node;
 }
 

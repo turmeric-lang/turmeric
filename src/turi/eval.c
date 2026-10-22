@@ -17267,6 +17267,27 @@ size_t turi_cont_gc_reclaim(TuriContGc *gc) {
     PoolReclaim r = { env, 0 };
     turi_val_each_unmarked(env, pool_reclaim_one, &r);
     gc->free_bytes += r.bytes;
+    /* turi-r7rs-strings-and-ports-kept-until-teardown: the collection boxes
+     * the marking pass did not reach -- a dropped Scheme string's code-point
+     * vector, a dropped string port -- go too, as collsweep_after_rewind
+     * frees them at a top-level boundary a `#lang r7rs` program never
+     * reaches.  Its rule holds: a reached box whose scan was incomplete set
+     * the sweep's doubt, and a doubtful sweep frees nothing (above). */
+    for (TuriCollBuf **pp = &env->coll_bufs; *pp; ) {
+        TuriCollBuf *n = *pp;
+        if (n->box && !n->marked) {
+            n->destroy(n->box);
+            n->box = NULL;
+            env->collsweep_freed++;
+        }
+        if (!n->box) {   /* swept now, or tombstoned by an explicit free */
+            *pp = n->next;
+            n->next = env->coll_bufs_free;
+            env->coll_bufs_free = n;
+        } else {
+            pp = &n->next;
+        }
+    }
     return r.bytes;
 }
 
