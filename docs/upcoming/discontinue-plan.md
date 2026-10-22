@@ -16,10 +16,12 @@ will raise.
 
 | Report | Engine | Blocks | Why |
 | --- | --- | --- | --- |
-| [cps-catch-unwind-cannot-cross-an-effect-capture](../reported/cps-catch-unwind-cannot-cross-an-effect-capture.md) | compiled | fixtures 2, 3, and 5 when the body catches | A `catch-unwind` around the `perform` (fixture 2) or around the `discontinue` in the clause (fixture 3) is refused with "no lowering here". This is the shape that justifies keeping `discontinue` ("a `catch-unwind` in the body ... catches it, and the body carries on"), so this report is the main blocker. Its fix direction 2 (the false TUR-W0033) is small and independent |
+| [cps-catch-unwind-cannot-cross-an-effect-capture](../reported/cps-catch-unwind-cannot-cross-an-effect-capture.md) | compiled | fixture 3 only (narrowed 2026-10-22) | Fixtures 2 and 5 are unblocked: a `catch-unwind` written in the body around the `perform` lowers as a catch prompt, and a panic raised in the resumed continuation -- where `discontinue`'s raise will start -- is caught there, per `^multishot` copy too. Still refused: a `catch-unwind` inside the CLAUSE around the `discontinue` (fixture 3). Until that lands, fixture 3 can catch around the `handle` instead, which works in the same function. The raise itself should enter the existing catch path: set `tur_panicking` with the payload staged, and the frame check / body hook / `dk_perform` find the prompt (`__dk_panic_catch`) |
 | ~~[turi-fiber-resume-from-clause-scope-crashes-on-body-defer](../archive/turi-fiber-resume-from-clause-scope-crashes-on-body-defer.md)~~ | interpreted | -- | **Resolved 2026-10-22.** The fiber body now has its own defer chain, so resuming from a scope in the clause works |
 | ~~[compiled-uncaught-panic-skips-caller-defers](../archive/compiled-uncaught-panic-skips-caller-defers.md)~~ | compiled | -- | **Resolved 2026-10-22.** An uncaught panic unwinds to `main` firing every defer. The raise `discontinue` makes must enter through the root-unwind path (`tur_panic_with_site`, or set `tur_root_unwind` to 2 around its raise), not a runtime helper's plain `tur_panic_with` |
-| [turi-fiber-handle-defers-fire-at-the-wrong-time](../reported/turi-fiber-handle-defers-fire-at-the-wrong-time.md) | interpreted | fixture 5 with a `defer` or `catch-unwind` in the body | The fiber runtime is single-shot. `(+ (resume k 1) (resume k 2))` over a defer-bearing body is refused with "already been resumed", and so is one whose `perform` sits under a `catch-unwind` (`ws_capturable` refuses both). Its fix direction 1 (work-stack-capturable `defer`, and `catch-unwind` too) is the real unblock for the interpreter, and would also retire the crash above |
+| [turi-fiber-handle-defers-fire-at-the-wrong-time](../reported/turi-fiber-handle-defers-fire-at-the-wrong-time.md) | interpreted | fixture 5 with a `defer` or `catch-unwind` in the body (narrowed 2026-10-22: only the single-shot limit is left) | The fiber runtime is single-shot. `(+ (resume k 1) (resume k 2))` over a defer-bearing body is refused with "already been resumed", and so is one whose `perform` sits under a `catch-unwind` (`ws_capturable` refuses both). Its fix direction 1 (work-stack-capturable `defer`, and `catch-unwind` too) is the real unblock for the interpreter, and would also retire the crash above |
+
+| [turi-catch-panic-of-mismatch-in-fiber-body-overflows](../reported/turi-catch-panic-of-mismatch-in-fiber-body-overflows.md) | interpreted | a `catch-panic-of` of the wrong type in a body with a `defer` | Found 2026-10-22. The plan types the payload with `catch-panic-of`, so a fixture that re-raises past one crashes the interpreter |
 
 Related but not blocking:
 
@@ -37,10 +39,12 @@ Related but not blocking:
   item 6 cover the guide section and the `emit_effects.c` header. This plan's
   last step already does both.
 
-Suggested order: the TUR-W0033 fix, then the interpreter crash, and the
-interpreter half of this plan behind `--enable=discontinue`. The compiled half
-waits on a CPS-IR `catch-unwind`. Without one it can land only fixtures 1 and
-4, with fixture 1 caught in `main`.
+Suggested order (updated 2026-10-22, after the first three rows were worked):
+both halves of this plan can start, behind `--enable=discontinue`. Compiled,
+fixtures 1, 2, 4 and 5 are reachable now, and fixture 3 with its catch around
+the `handle`. Interpreted, fixtures 1 to 4 are reachable, and fixture 5 waits
+on the single-shot limit. The remaining blockers are a catch in a handler
+clause (compiled) and the two interpreter fiber reports.
 
 ## Today
 

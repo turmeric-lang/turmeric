@@ -241,7 +241,19 @@ struct CTerm {
                  const Expr *call_expr; } tailcall;
         struct { CVar j; CVar param; CTerm *jbody; CTerm *body; }         letcont;
         struct { CAtom cond; CTerm *then_; CTerm *else_; }                if_;
-        struct { CVar x; CTerm *delim; CTerm *body; }                     reset;
+        /* is_catch (cps-catch-unwind-cannot-cross-an-effect-capture): the
+         * reset is a `catch-unwind` / `catch-panic-of` whose thunk was written
+         * at the form.  delim is the thunk's body, delivering its value (of
+         * delim_ty) to the prompt; the emitter installs a CATCH prompt, which
+         * boxes that value as Ok and turns a panic raised inside delim into
+         * Err.  x is the Result.  catch_type is catch-panic-of's payload
+         * TypeKind, or -1 for catch-unwind (any payload). */
+        /* catch_reap: x is a let binding whose box provably does not
+         * escape the let (emit_let_binding_box_freeable): the prompt has the
+         * runtime register the Ok / Err box it makes for the boundary free. */
+        struct { CVar x; CTerm *delim; CTerm *body;
+                 bool is_catch; int catch_type; const Type *delim_ty;
+                 bool catch_reap; }                                       reset;
         /* shift0 == true lowers to dk_shift0 (does NOT reinstall the prompt);
          * false is a plain shift (dk_shift, prompt stays installed). */
         struct { CVar k; CTerm *body; bool shift0; }                      shift;

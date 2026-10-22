@@ -899,6 +899,8 @@ typedef struct { PendItem *items; uint32_t n, cap; } Pending;
 /* forward decls */
 static CTerm *cps_tail(CpsB *b, Expr *e, CKont kont);
 static CTerm *cps_bind(CpsB *b, Expr *e, CVar x, CTerm *rest);
+static CTerm *build_catch(CpsB *b, Expr *e, CVar x, CTerm *rest, bool reap);
+bool emit_let_binding_box_freeable(const Expr *e, uint32_t idx);  /* emit_expr.c */
 static CTerm *cps_bind_reinterp(CpsB *b, Expr *e, CVar x, CTerm *rest);
 static CTerm *cps_bind_cast(CpsB *b, Expr *e, CVar x, CTerm *rest);
 static CTerm *build_letraw(CpsB *b, Expr *e, CVar x, CTerm *rest);
@@ -1398,6 +1400,10 @@ static CTerm *cps_bind_let_init(CpsB *b, const Expr *let, uint32_t idx, CVar bx,
         t->as.letraw.reap_env = true;
         t->as.letraw.reap_at_backedge = cps_closure_only_invoked(let, idx);
         return t;
+    }
+    if (init && (init->kind == EX_CATCH_UNWIND || init->kind == EX_CATCH_PANIC_OF)) {
+        CTerm *c = build_catch(b, init, bx, rest, emit_let_binding_box_freeable(let, idx));
+        if (c) return c;
     }
     CTerm *t = cps_bind(b, init, bx, rest);
     /* Only when the call was delegated as a raw let: that is the one lowering
@@ -2482,6 +2488,7 @@ static bool safe_to_delegate(CpsB *b, const Expr *e) {
          *   - EX_BORROW_IMMUT: `(& x)` -- an address-of / pointer expression over
          *     an in-scope local; no control op, no allocation. */
         case EX_PANIC:    return safe_to_delegate(b, e->as.panic_.payload);
+        case EX_PANIC_WITH: return safe_to_delegate(b, e->as.panic_with_.payload);
         case EX_CONS_LIST:
             for (uint32_t i = 0; i < e->as.cons_list_.n; i++)
                 if (!safe_to_delegate(b, e->as.cons_list_.items[i])) return false;
@@ -5332,6 +5339,38 @@ static const Expr *tyvar_reinterp_wrapper(const Expr *e) {
             e->as.reinterpret_.expr) ? e : NULL;
 }
 
+/* cps-catch-unwind-cannot-cross-an-effect-capture: a `catch-unwind` /
+ * `catch-panic-of` whose thunk is a lambda written at the form becomes a
+ * CT_RESET under a CATCH prompt (is_catch): the thunk's body is translated
+ * inline as the delimited part, delivering its value to the prompt, so a
+ * `perform` in it captures through the prompt to a handler outside, and a
+ * panic raised in it -- or in the continuation a handler resumes -- is turned
+ * into Err where the prompt is.  The thunk's value must be one machine word
+ * (the prompt boxes it with tur_box_ok, as tur_catch_unwind_box does); any
+ * other thunk keeps the delegated, direct-emitted lowering.  `x` binds the
+ * Result. */
+static bool catch_delim_type_ok(const Type *t) {
+    if (!t) return false;
+    switch (t->kind) {
+        case TY_INT: case TY_BOOL: case TY_CSTR: case TY_NIL: return true;
+        default: return false;
+    }
+}
+static CTerm *build_catch(CpsB *b, Expr *e, CVar x, CTerm *rest, bool reap) {
+    const FnDef *tf = cps_catch_inline_thunk(e);
+    if (!tf || !catch_delim_type_ok(&tf->body->type)) return NULL;
+    CTerm *t = new_term(b, CT_RESET);
+    t->as.reset.x = x;
+    t->as.reset.is_catch = true;
+    t->as.reset.catch_type = e->kind == EX_CATCH_PANIC_OF
+                           ? (int)e->as.catch_panic_of_.type_kind : -1;
+    t->as.reset.delim_ty = &tf->body->type;
+    t->as.reset.delim = cps_tail(b, tf->body, kont_prompt(tf->body->type.kind));
+    t->as.reset.body = rest;
+    t->as.reset.catch_reap = reap;
+    return t;
+}
+
 static CTerm *cps_tail(CpsB *b, Expr *e, CKont kont) {
     {
         const Expr *w = tyvar_reinterp_wrapper(e);
@@ -5346,6 +5385,14 @@ static CTerm *cps_tail(CpsB *b, Expr *e, CKont kont) {
     }
     e = (Expr *)ascribe_peel(e);
     e = pap_maybe_rewrite(b, e);
+    if (e && (e->kind == EX_CATCH_UNWIND || e->kind == EX_CATCH_PANIC_OF) &&
+        kont.kind != KK_LOOP) {
+        CVar x = fresh_cvar(b, &e->type);
+        CTerm *ac = new_term(b, CT_APPCONT);
+        ac->as.appcont.kont = kont; ac->as.appcont.v = atom_cvar(x);
+        CTerm *c = build_catch(b, e, x, ac, false);
+        if (c) return c;
+    }
     /* A `letrec` of captureless members binds global names, not values. */
     if (e && e->kind == EX_LETREC && letrec_all_global_members(e))
         return cps_tail(b, e->as.let_.body, kont);
@@ -5931,6 +5978,10 @@ static CTerm *cps_bind(CpsB *b, Expr *e, CVar x, CTerm *rest) {
     e = (Expr *)ascribe_peel(e);
     if (!e) return rest;
     e = pap_maybe_rewrite(b, e);
+    if (e->kind == EX_CATCH_UNWIND || e->kind == EX_CATCH_PANIC_OF) {
+        CTerm *c = build_catch(b, e, x, rest, false);
+        if (c) return c;
+    }
     if (e->kind == EX_LETREC && letrec_all_global_members(e))
         return cps_bind(b, e->as.let_.body, x, rest);
     if (letrec_local_closure(b, e)) {

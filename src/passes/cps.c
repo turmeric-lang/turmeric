@@ -656,6 +656,45 @@ bool cps_visit_children(const Expr *e,
  * into nested function definitions (each nested fn is colored on its own merits;
  * reaching it is modeled as an unresolved call by the caller). This mirrors the
  * trusted enumeration in cps_expr_contains_shift, plus the serial operators. */
+static bool cps_has_return_visit(const Expr *c, void *ud);
+static bool cps_has_return(const Expr *e) {
+    if (!e) return false;
+    if (e->kind == EX_RETURN) return true;
+    return cps_visit_children(e, cps_has_return_visit, NULL);
+}
+static bool cps_has_return_visit(const Expr *c, void *ud) { (void)ud; return cps_has_return(c); }
+
+const FnDef *cps_catch_inline_thunk(const Expr *catch_expr) {
+    if (!catch_expr) return NULL;
+    const Expr *t = catch_expr->kind == EX_CATCH_UNWIND ? catch_expr->as.catch_unwind_.thunk
+                  : catch_expr->kind == EX_CATCH_PANIC_OF ? catch_expr->as.catch_panic_of_.thunk
+                  : NULL;
+    while (t && (t->kind == EX_FN_TO_FAT || t->kind == EX_ASCRIBE))
+        t = t->kind == EX_FN_TO_FAT ? t->as.fn_to_fat_.inner : t->as.ascribe_.inner;
+    if (!t) return NULL;
+    const FnDef *fd = NULL;
+    if (t->kind == EX_VAR && t->as.var.binding && t->as.var.binding->is_lifted_lambda) {
+        fd = t->as.var.binding->source_fn_def;
+        if (fd && fd->n_params != 0) fd = NULL;
+    } else if (t->kind == EX_CLOSURE && t->as.closure_.closure) {
+        fd = t->as.closure_.closure->fn;
+        if (fd && fd->n_params != 1) fd = NULL;   /* the env parameter only */
+    }
+    if (!fd || !fd->body || cps_has_return(fd->body)) return NULL;
+    return fd;
+}
+
+static bool cps_mark_catch_visit(const Expr *c, void *ud);
+static void cps_mark_catch_thunks(const Expr *e) {
+    if (!e) return;
+    if (e->kind == EX_CATCH_UNWIND || e->kind == EX_CATCH_PANIC_OF) {
+        const FnDef *tf = cps_catch_inline_thunk(e);
+        if (tf) { ((FnDef *)tf)->cps_catch_inlined = true; cps_mark_catch_thunks(tf->body); return; }
+    }
+    cps_visit_children(e, cps_mark_catch_visit, NULL);
+}
+static bool cps_mark_catch_visit(const Expr *c, void *ud) { (void)ud; cps_mark_catch_thunks(c); return false; }
+
 static bool cps_directly_uses_control(const Expr *e);
 static bool cps_control_walk(const Expr *e, bool callcc_only);
 bool cps_expr_uses_control(const Expr *e) { return cps_directly_uses_control(e); }
@@ -741,10 +780,16 @@ static bool cps_control_walk(const Expr *e, bool callcc_only) {
             return cps_control_walk(e->as.panic_payload_type_.payload, callcc_only);
         case EX_PANIC_PAYLOAD_DOWNS:
             return cps_control_walk(e->as.panic_payload_downs_.payload, callcc_only);
+        /* A thunk written at the form is translated inline (CT_RESET under a
+         * catch prompt), so its body's control ops are this function's. */
         case EX_CATCH_UNWIND:
-            return cps_control_walk(e->as.catch_unwind_.thunk, callcc_only);
-        case EX_CATCH_PANIC_OF:
-            return cps_control_walk(e->as.catch_panic_of_.thunk, callcc_only);
+        case EX_CATCH_PANIC_OF: {
+            const FnDef *tf = cps_catch_inline_thunk(e);
+            if (tf) return cps_control_walk(tf->body, callcc_only);
+            return cps_control_walk(e->kind == EX_CATCH_UNWIND ? e->as.catch_unwind_.thunk
+                                                               : e->as.catch_panic_of_.thunk,
+                                    callcc_only);
+        }
         case EX_DYNVAR_BINDING:
             for (uint32_t i = 0; i < e->as.dynvar_binding_.n_pairs; i++)
                 if (cps_control_walk(e->as.dynvar_binding_.pairs[i].override_expr, callcc_only))
@@ -1173,11 +1218,16 @@ static void cps_collect_calls(const Expr *e, CpsNode *nodes, uint32_t n_nodes,
             cps_collect_calls(e->as.dynvar_binding_.body, nodes, n_nodes, self);
             return;
         case EX_CATCH_UNWIND:
-            cps_collect_calls(e->as.catch_unwind_.thunk, nodes, n_nodes, self);
+        case EX_CATCH_PANIC_OF: {
+            /* An inline thunk's calls are this function's (see the control
+             * walk). */
+            const FnDef *tf = cps_catch_inline_thunk(e);
+            if (tf) { cps_collect_calls(tf->body, nodes, n_nodes, self); return; }
+            cps_collect_calls(e->kind == EX_CATCH_UNWIND ? e->as.catch_unwind_.thunk
+                                                         : e->as.catch_panic_of_.thunk,
+                              nodes, n_nodes, self);
             return;
-        case EX_CATCH_PANIC_OF:
-            cps_collect_calls(e->as.catch_panic_of_.thunk, nodes, n_nodes, self);
-            return;
+        }
         case EX_ASCRIBE:
             /* Ascription is erased at codegen; descend so a call inside
              * (:: <expr> T) still contributes a call-graph edge. */
@@ -1709,6 +1759,7 @@ void cps_color_program(Arena *a, Expr *program) {
         FnDef *_fd = (FDEXPR)->as.fn_def_.fn;                                   \
         if (_fd) {                                                              \
             _fd->cps_colored = false; /* reset (idempotent) */                 \
+            _fd->cps_catch_inlined = false;                                    \
             if (n == cap) { cap *= 2; nodes = realloc(nodes, cap * sizeof(CpsNode)); } \
             memset(&nodes[n], 0, sizeof(CpsNode));                              \
             nodes[n].fd = _fd;                                                  \
@@ -1848,6 +1899,10 @@ void cps_color_program(Arena *a, Expr *program) {
         nodes[i].fd->cps_colored = nodes[i].colored;
         free(nodes[i].edges);
     }
+    /* cps-catch-unwind-cannot-cross-an-effect-capture: the thunks a colored
+     * function's catch forms inline. */
+    for (uint32_t i = 0; i < n; i++)
+        if (nodes[i].colored) cps_mark_catch_thunks(nodes[i].fd->body);
     cps_nidx_free();
     free(nodes);
 }

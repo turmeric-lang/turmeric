@@ -1394,7 +1394,16 @@ static void cps_pend_hook_fire(EmitCtx *ctx, Buf *body) {
     if (cps_pend_any_firable()) cps_pend_fire(ctx, body);
     if (g_pend_k_ok && g_pend_k) {
         indent_buf(body, ctx->indent);
-        buf_printf(body, "__dk_panic_abandon(%s);\n", g_pend_k);
+        const char *rt = ctx->current_fn_ret_ctype;
+        if (rt && strcmp(rt, "void") != 0) {
+            /* cps-catch-unwind-cannot-cross-an-effect-capture: this body holds
+             * its chain and consumes it, so a catch prompt on it takes the
+             * panic here and the program goes on past the prompt with Err. */
+            buf_printf(body, "{ DKCaught __pcc = __dk_panic_catch(%s); "
+                             "if (__pcc.k) return dk_run(__pcc.k, __pcc.err); }\n", g_pend_k);
+        } else {
+            buf_printf(body, "__dk_panic_abandon(%s);\n", g_pend_k);
+        }
     }
 }
 /* The entries whose free variables `caps` does not carry: unfirable in a
@@ -6963,15 +6972,18 @@ static void ensure_S(const Expr *program) {
                  * fn-value was a candidate: a SIG-REJECT capturing lambda
                  * that only CALLS a performer used to taint nothing. */
                 EffSet fv_esc = {0};
+                /* cps-catch-unwind-cannot-cross-an-effect-capture: a catch
+                 * thunk whose body its caller inlines is never a fn value at
+                 * run time. */
                 if ((fd->binding->is_lifted_lambda || addr_taken_has(fd->binding))
                     && !threadable_has(fd->binding) && !serial_recv_has(fd->binding)
-                    && !direct_only_has(fd->binding))
+                    && !direct_only_has(fd->binding) && !fd->cps_catch_inlined)
                     fn_net_escaping(program, fd->body, &fv_esc);
                 for (int b = 0, nb = eff_bits_live(); b < nb; b++)
                     if (effset_has(&fv_esc, b) && !g_fvesc_src[b]) g_fvesc_src[b] = fd;
                 if (candidate
                     && (fd->binding->is_lifted_lambda || addr_taken_has(fd->binding))
-                    && !threadable_has(fd->binding) && !direct_only_has(fd->binding)) {
+                    && !threadable_has(fd->binding) && !direct_only_has(fd->binding) && !fd->cps_catch_inlined) {
                     /* B5: perm-taint only on the NET ESCAPING effect -- a perform
                      * this fn-value DISCHARGES internally (a self-handling body,
                      * e.g. the `(fn [] (handle (perform E) (E ...)))` async closure
@@ -12076,14 +12088,26 @@ static void emit_reset(CE *ce, const CTerm *t) {
      * freed here; register it for reaping at the outermost entry boundary
      * (docs/archive/cps-delimited-dk-node-leak.md) -- borrow_next keeps that
      * dk_free out of the enclosing chain. */
-    ce_line(ce, "DK *%s = __dk_reap_keep(dk_prompt(1, %sdk_frame_resume_borrow(%s, %s, %s)%s));",
-            pchain, uw, hname, envexpr, ce->cur_k, uwc);
+    if (t->as.reset.is_catch) {
+        /* cps-catch-unwind-cannot-cross-an-effect-capture: a CATCH prompt.
+         * It boxes the delimited body's value as Ok on the way to the
+         * continuation frame, and a panic raised while it is on the chain is
+         * delivered past it as Err (__dk_panic_catch). */
+        ce_line(ce, "DK *%s = __dk_reap_keep(dk_prompt_catch(%d, %d, %sdk_frame_resume_borrow(%s, %s, %s)%s));",
+                pchain, t->as.reset.catch_type, t->as.reset.catch_reap ? 1 : 0,
+                uw, hname, envexpr, ce->cur_k, uwc);
+    } else {
+        ce_line(ce, "DK *%s = __dk_reap_keep(dk_prompt(1, %sdk_frame_resume_borrow(%s, %s, %s)%s));",
+                pchain, uw, hname, envexpr, ce->cur_k, uwc);
+    }
     free(envexpr);
 
     const char *save = ce->cur_k;
     const Type *save_ty = ce->cur_ty;
     ce->cur_k = arena_strdup(&g_arena, pchain, strlen(pchain));
-    ce->cur_ty = t->as.reset.x.type;    /* KK_PROMPT crossing type = reset result */
+    /* KK_PROMPT crossing type = reset result; a catch's delimited body
+     * delivers the thunk's value, which the prompt boxes. */
+    ce->cur_ty = t->as.reset.is_catch ? t->as.reset.delim_ty : t->as.reset.x.type;
     /* defer-skipped-on-panic-in-cps-function: the reset continuation frame
      * exists from here on and owns the fires in reset.body. */
     uint64_t down_saved = g_pend_downstream;
@@ -13837,7 +13861,8 @@ static void emit_await(CE *ce, const CTerm *t) {
         ce_line(ce, "if (__awok) {");
         ce_line(ce, "    intptr_t __awr = %s((intptr_t)%s, __tur_await_value((void *)(%s)));",
                 pname, envv, fsa);
-        ce_line(ce, "    if (tur_panicking) { __dk_panic_abandon(%s); return 0; }", ce->cur_k);
+        ce_line(ce, "    if (tur_panicking) { DKCaught __pcc = __dk_panic_catch(%s); "
+                    "if (__pcc.k) return dk_run(__pcc.k, __pcc.err); return 0; }", ce->cur_k);
         ce_line(ce, "    return dk_run(%s, __awr);", ce->cur_k);
         ce_line(ce, "}");
         if (caps)
@@ -14635,6 +14660,22 @@ void emit_cps_ir_flush_groups(Buf *file) {
         if (g_ctg[gi].declared && !g_ctg[gi].defined) ctg_emit_def(file, &g_ctg[gi]);
 }
 
+/* jit-dk-entry-locals-clobbered-by-longjmp: what a DK entry's driver landing
+ * reads back after a longjmp -- the enclosing driver, the pending-perform list,
+ * the root prompt and the reap mark -- lives in one struct with the jump
+ * buffer, whose address is taken, so no backend keeps it in a register the
+ * jump does not restore.  Plain locals came back stale under the JIT (c2mir's
+ * setjmp; `volatile` did not help): the landing restored g_dk_pend_perform to a
+ * DK node's address, and the next abortive handler case walked it as a
+ * pending perform (heap-use-after-free in __dk_abort_pending).  Expects
+ * `__root` and `__dk_reap_mark` already declared. */
+static void emit_dk_entry_landing_state(Buf *file) {
+    buf_puts(file, "    struct { tur_jmp_buf jb; tur_jmp_buf *save; DKPendPerform *pp; DK *root; size_t mark; } __dke;\n");
+    buf_puts(file, "    __dke.save = g_dk_driver; __dke.pp = g_dk_pend_perform;\n");
+    buf_puts(file, "    __dke.root = __root; __dke.mark = __dk_reap_mark;\n");
+    buf_puts(file, "    g_dk_driver = &__dke.jb;\n");
+}
+
 /* await-parks-only-to-the-nearest-c-frame: a call in `e` (nested function
  * definitions excluded) through a rank-2 parameter that may receive an
  * awaiting function and that the translator cannot thread -- it calls the
@@ -15261,12 +15302,11 @@ static bool emit_cps_ir_try_fn_impl(EmitCtx *ctx, Buf *file, const Expr *e) {
         /* E7: install the trampoline driver.  A tail-resume longjmps here; the
          * else-branch runs the trampoline to completion. */
         if (!mvoid) buf_puts(file, "    int64_t __r;\n");
-        buf_puts(file, "    tur_jmp_buf __dkjb; tur_jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;\n");
-        buf_puts(file, "    DKPendPerform *__dkpp = g_dk_pend_perform;\n");
-        buf_printf(file, "    if (TUR_SETJMP(__dkjb) == 0) { %s%s__cps(__root); }\n",
+        emit_dk_entry_landing_state(file);
+        buf_printf(file, "    if (TUR_SETJMP(__dke.jb) == 0) { %s%s__cps(__root); }\n",
                    mvoid ? "(void)" : "__r = ", cn);
-        buf_printf(file, "    else { g_dk_pend_perform = __dkpp; %s__dk_drive_after(); }\n", mvoid ? "(void)" : "__r = ");
-        buf_puts(file, "    g_dk_driver = __dksave;\n");
+        buf_printf(file, "    else { g_dk_pend_perform = __dke.pp; %s__dk_drive_after(); }\n", mvoid ? "(void)" : "__r = ");
+        buf_puts(file, "    g_dk_driver = __dke.save;\n");
         /* compiled-uncaught-panic-skips-caller-defers: the chain unwound to the
          * root; end the unwind before the value (meaningless now) is read. */
         buf_puts(file, "    if (tur_panicking) tur_panic_root_exit();\n");
@@ -15283,7 +15323,7 @@ static bool emit_cps_ir_try_fn_impl(EmitCtx *ctx, Buf *file, const Expr *e) {
          * resumed body settles: a parked copy may still reference a registered
          * chain / env struct / box.  __dk_entry_leave (emit_module.c) has the
          * whole protocol (async-parked-body-chains-never-reaped). */
-        buf_puts(file, "    __dk_entry_leave(__root, __dk_reap_mark);\n");
+        buf_puts(file, "    __dk_entry_leave(__dke.root, __dke.mark);\n");
         if (mvoid) {
             buf_puts(file, "    return 0;\n}\n");
         } else {
@@ -15442,15 +15482,14 @@ static bool emit_cps_ir_try_fn_impl(EmitCtx *ctx, Buf *file, const Expr *e) {
      * the d2b main), so a colored body reached from a non-d2b caller (`run`
      * called by a plain main) still trampolines a deep tail-resume flat. */
     if (!void_ret) buf_puts(file, "    int64_t __r;\n");
-    buf_puts(file, "    tur_jmp_buf __dkjb; tur_jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;\n");
-    buf_puts(file, "    DKPendPerform *__dkpp = g_dk_pend_perform;\n");
-    buf_printf(file, "    if (TUR_SETJMP(__dkjb) == 0) { %s%s__cps(%s); }\n",
+    emit_dk_entry_landing_state(file);
+    buf_printf(file, "    if (TUR_SETJMP(__dke.jb) == 0) { %s%s__cps(%s); }\n",
                void_ret ? "(void)" : "__r = ", cn, __args.data);
     /* T6: after a tail-resume longjmp the drive runs continuations that are not
      * this entry's body; no bounce shortcut applies there. */
-    buf_printf(file, "    else { g_dk_pend_perform = __dkpp; %s%s__dk_drive_after(); }\n",
+    buf_printf(file, "    else { g_dk_pend_perform = __dke.pp; %s%s__dk_drive_after(); }\n",
                tb_entry ? "tur_tb_root = NULL; " : "", void_ret ? "(void)" : "__r = ");
-    buf_puts(file, "    g_dk_driver = __dksave;\n");
+    buf_puts(file, "    g_dk_driver = __dke.save;\n");
     if (tb_entry) buf_puts(file, "    tur_tb_root = __tb_save;\n");
     buf_free(&__args);
     /* Read the delivered value out BEFORE the reap: a Tier-C return rides a heap
@@ -15475,7 +15514,7 @@ static bool emit_cps_ir_try_fn_impl(EmitCtx *ctx, Buf *file, const Expr *e) {
     /* Free the root and reap, or hand both to the park the body parked on --
      * see __dk_entry_leave (emit_module.c, async-parked-body-chains-never-
      * reaped). */
-    buf_puts(file, "    __dk_entry_leave(__root, __dk_reap_mark);\n");
+    buf_puts(file, "    __dk_entry_leave(__dke.root, __dke.mark);\n");
     if (void_ret) {
         buf_puts(file, "    return;\n}\n");
     } else {

@@ -15941,8 +15941,10 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
      * runtime, never the caller, so a `(panic ...)` site calls tur_panic_at
      * with its own .tur file and line (emit_panic_call); tur_panic is the
      * runtime's own entry, whose location is honestly its own. */
+    buf_puts(out, "static void tur_panic_root_print(void);\n");
     buf_puts(out, "static void tur_panic_at(const char *file, int line, const char *msg) {\n");
     buf_puts(out, "    if (tur_panic_in_progress) {\n");
+    buf_puts(out, "        tur_panic_root_print();\n");
     buf_puts(out, "        fprintf(stderr, \"double panic: aborting\\n\");\n");
     buf_puts(out, "        abort();\n");
     buf_puts(out, "    }\n");
@@ -15960,14 +15962,17 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "        tur_panicking = 1;\n");
     buf_puts(out, "        return;\n");
     buf_puts(out, "    }\n");
-    buf_puts(out, "    fprintf(stderr, \"panic at %s:%d: %s\\n\", file, line, msg ? msg : \"(no message)\");\n");
-    /* compiled-uncaught-panic-skips-caller-defers: unwind to `main`. */
+    /* compiled-uncaught-panic-skips-caller-defers: unwind to `main`.  The
+     * message is printed when the unwind ends there (tur_panic_root_exit):
+     * a catch-unwind prompt on a CPS chain may still take the panic
+     * (cps-catch-unwind-cannot-cross-an-effect-capture). */
     buf_puts(out, "    if (tur_root_unwind == 2) {\n");
     buf_printf(out, "        global_panic_payload = panic_payload_new(%d, msg ? strdup(msg) : NULL, file, line, 1);\n", (int)TY_CSTR);
     buf_puts(out, "        if (global_panic_frame) { tur_frame_fire_chain(global_panic_frame); global_panic_frame = NULL; }\n");
     buf_puts(out, "        tur_panicking = 1;\n");
     buf_puts(out, "        return;\n");
     buf_puts(out, "    }\n");
+    buf_puts(out, "    fprintf(stderr, \"panic at %s:%d: %s\\n\", file, line, msg ? msg : \"(no message)\");\n");
     buf_puts(out, "    if (global_panic_frame) {\n");
     buf_puts(out, "        tur_frame_fire_chain(global_panic_frame);\n");
     buf_puts(out, "    }\n");
@@ -15980,10 +15985,7 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     /* compiled-uncaught-panic-skips-caller-defers: the end of an unwind that
      * no catch-unwind took.  The message was printed where the panic was
      * raised; every frame on the way here has fired its defers. */
-    buf_puts(out, "static void tur_panic_root_exit(void) {\n");
-    buf_puts(out, "    fflush(NULL);\n");
-    buf_puts(out, "    abort();\n");
-    buf_puts(out, "}\n");
+    buf_puts(out, "static void tur_panic_root_exit(void);\n");
     /* panic-location-names-the-runtime-not-the-call-site: the current panic
      * site and tur_panic_sited are PROGRAM-side, after the fixed preamble
      * (emit_panic_site_slot) -- a thread-local in this region is reached
@@ -16033,6 +16035,20 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
      * to leak unconditionally to stay sound. */
     buf_puts(out, "    int owns_value;\n");
     buf_puts(out, "};\n\n");
+    /* The message of a panic the root unwind is carrying, printed once: at
+     * the end of the unwind, or ahead of a double panic raised during it. */
+    buf_puts(out, "static void tur_panic_root_print(void) {\n");
+    buf_puts(out, "    tur_panic_payload *p = global_panic_payload;\n");
+    buf_puts(out, "    if (!tur_root_unwind || !p || p->line < 0) return;\n");
+    buf_puts(out, "    if (p->owns_value) fprintf(stderr, \"panic at %s:%d: %s\\n\", p->file, p->line, p->value ? (const char *)p->value : \"(no message)\");\n");
+    buf_puts(out, "    else fprintf(stderr, \"panic at %s:%d\\n\", p->file ? p->file : \"(unknown)\", p->line);\n");
+    buf_puts(out, "    p->line = -1;   /* printed */\n");
+    buf_puts(out, "}\n");
+    buf_puts(out, "static void tur_panic_root_exit(void) {\n");
+    buf_puts(out, "    tur_panic_root_print();\n");
+    buf_puts(out, "    fflush(NULL);\n");
+    buf_puts(out, "    abort();\n");
+    buf_puts(out, "}\n");
     emit_rt_global(out, shared, "tur_panic_payload *global_panic_payload = NULL;\n\n", "tur_panic_payload *global_panic_payload");
     buf_puts(out, "static tur_panic_payload *panic_payload_new(int type_tag, void *payload, const char *file, int line, int owns_value) {\n");
     buf_puts(out, "    tur_panic_payload *p = (tur_panic_payload *)malloc(sizeof(tur_panic_payload));\n");
@@ -16564,6 +16580,7 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
      * tur_current_fiber are in scope for the per-fiber panic check. */
     buf_puts(out, "static void tur_panic_with(int type_tag, void *payload, const char *file, int line) {\n");
     buf_puts(out, "    if (tur_panic_in_progress) {\n");
+    buf_puts(out, "        tur_panic_root_print();\n");
     buf_puts(out, "        fprintf(stderr, \"double panic: aborting\\n\");\n");
     /* payload is opaque (may be an inline scalar reinterpreted as a pointer,
      * e.g. (panic-with 7) -> (void*)7, or a value borrowed elsewhere), so we
@@ -16589,13 +16606,13 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "        global_panic_payload = panic_payload_new(type_tag, payload, file, line, 0);\n");
     buf_puts(out, "        TUR_LONGJMP(tur_current_fiber->panic_jmpbuf);\n");
     buf_puts(out, "    }\n");
-    buf_puts(out, "    fprintf(stderr, \"panic at %s:%d\\n\", file ? file : \"(unknown)\", line);\n");
     buf_puts(out, "    if (tur_root_unwind == 2) {\n");
     buf_puts(out, "        global_panic_payload = panic_payload_new(type_tag, payload, file, line, 0);\n");
     buf_puts(out, "        if (global_panic_frame) { tur_frame_fire_chain(global_panic_frame); global_panic_frame = NULL; }\n");
     buf_puts(out, "        tur_panicking = 1;\n");
     buf_puts(out, "        return;\n");
     buf_puts(out, "    }\n");
+    buf_puts(out, "    fprintf(stderr, \"panic at %s:%d\\n\", file ? file : \"(unknown)\", line);\n");
     /* payload is opaque -- see the double-panic path above.  Do not free it:
      * a scalar/borrowed payload must never be freed, and abort() reclaims a
      * heap payload via the OS anyway. */

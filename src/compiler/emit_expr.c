@@ -3210,6 +3210,13 @@ static bool let_binding_box_freeable(const Expr *e, uint32_t idx) {
     return true;
 }
 
+/* cps-catch-unwind-cannot-cross-an-effect-capture: the same verdict for the
+ * CPS backend, which lowers such a let's catch as a catch prompt and has the
+ * runtime register the box it makes for a boundary free (build_catch). */
+bool emit_let_binding_box_freeable(const Expr *e, uint32_t idx) {
+    return let_binding_box_freeable(e, idx);
+}
+
 /* any-struct-box-leak-per-widen (the residue): decide whether let-binding `idx`
  * holds an `any` whose payload box this scope owns and may drop at scope exit.
  *
