@@ -94,7 +94,7 @@ _tur() {
     'audit:list every origin the build fetches code from'
     'emit-cmake:generate CMakeLists.txt for CMake consumers'
     'install:install a spice binary globally'
-    'x:run a spice's binary without installing it'
+    'x:run a spice'\''s binary without installing it'
     'uninstall:remove a globally installed spice'
     'list:list globally installed spices'
     'upgrade:upgrade globally installed spices'

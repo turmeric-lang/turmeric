@@ -341,8 +341,19 @@ static void emit(const char *const *lines, bool zsh,
     for (int i = 0; lines[i]; i++) {
         if (lines[i] != COMMANDS_HERE) { fputs(lines[i], stdout); continue; }
         if (zsh) {
-            for (int k = 0; k < n_cmds; k++)
-                printf("    '%s:%s'\n", cmds[k].name, cmds[k].summary);
+            /* Inside the single quotes a summary's own `'` must close, escape
+             * and reopen the quote (`a spice's binary` ended the string and
+             * zsh refused the whole script), and a `:` would split the entry
+             * where _describe looks for the name. */
+            for (int k = 0; k < n_cmds; k++) {
+                printf("    '%s:", cmds[k].name);
+                for (const char *p = cmds[k].summary; *p; p++) {
+                    if (*p == '\'')     fputs("'\\''", stdout);
+                    else if (*p == ':') fputs("\\:", stdout);
+                    else                putchar(*p);
+                }
+                fputs("'\n", stdout);
+            }
             continue;
         }
         size_t col = (size_t)printf("__tur_commands=\"");
