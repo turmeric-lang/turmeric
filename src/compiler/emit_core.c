@@ -987,6 +987,17 @@ bool expr_subtree_has_inline_c(const Expr *e) {
         case EX_RC_CLONE: return expr_subtree_has_inline_c(e->as.rc_clone_.expr);
         case EX_RC_DROP:  return expr_subtree_has_inline_c(e->as.rc_drop_.expr);
         case EX_DEFER:    return expr_subtree_has_inline_c(e->as.defer_.body);
+        /* struct-param-closure-env-never-freed: an assignment and a loop are
+         * plain C around their operands.  Left to `default`, every body with a
+         * `set!` or a `while` -- any counting loop -- read as "may hide inline
+         * C", and elab_infer_nonretain_masks skipped it whole: `(defn count-if
+         * [n pred] (let [^mut i 0 ...] (while ... (pred x) ...)))` never got
+         * its `pred` bit, so the capturing lambda a caller handed it was never
+         * dropped (24 B a call).  The fourth time a missing arm here has
+         * switched the inference off. */
+        case EX_SET:      return expr_subtree_has_inline_c(e->as.set_.value);
+        case EX_WHILE:    return expr_subtree_has_inline_c(e->as.while_.cond)
+                              || expr_subtree_has_inline_c(e->as.while_.body);
         default:
             /* Unmodeled kind -- conservatively assume it may hide inline-C. */
             return true;
