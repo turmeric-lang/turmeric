@@ -167,8 +167,8 @@ int cmd_compile(const char *input, const char *out_obj,
     Buf cmake_flags;  buf_init(&cmake_flags);
     Buf aux_includes; buf_init(&aux_includes);
     Buf aux_sources;  buf_init(&aux_sources);
-    drv_collect_build_aux(input, &cmake_flags, &aux_includes, &aux_sources,
-                          NULL);
+    drv_collect_build_aux_with_installed(input, &cmake_flags, &aux_includes, &aux_sources,
+                                         NULL);
 
     bool needs_asan = false;
     resolve_autolink_flags(&autolink, cc_flags, &needs_asan);

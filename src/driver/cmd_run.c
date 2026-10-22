@@ -215,11 +215,19 @@ int cmd_run(int argc, char **argv) {
      * is skipped there to avoid double-adding the same paths. */
     char **auto_run_owned = NULL;
     int    n_auto_run_owned = 0;
-    if (explicit_file && strcmp(explicit_file, "-") != 0) {
-        auto_append_spice_includes(explicit_file, &user_inc, &n_user_inc,
+    if (explicit_file) {
+        /* installed-spice-libraries IL2: stdin has no file to walk up from,
+         * so its walk is anchored at cwd ("./-" names a file there) -- the
+         * temp copy below lives in the temp dir, which says nothing about
+         * where the user is. */
+        const char *anchor = strcmp(explicit_file, "-") == 0 ? "./-" : explicit_file;
+        auto_append_spice_includes(anchor, &user_inc, &n_user_inc,
                                    &auto_run_owned, &n_auto_run_owned,
                                    &run_ls2);
     }
+#define STDIN_FREE() do { free(user_inc);                                       \
+        for (int _i = 0; _i < n_auto_run_owned; _i++) free(auto_run_owned[_i]); \
+        free(auto_run_owned); ls2_resolver_ctx_dispose(&run_ls2); } while (0)
 
     /* Single-file mode: explicit file provided, skip project lookup. */
     if (explicit_file) {
@@ -228,7 +236,7 @@ int cmd_run(int argc, char **argv) {
             char src_tmp[512];
             snprintf(src_tmp, sizeof(src_tmp), "%s/tur-stdin-XXXXXX.tur", tur_temp_dir());
             int src_fd = mkstemps(src_tmp, 4);
-            if (src_fd < 0) { fprintf(stderr, "tur: mkstemp failed\n"); free(user_inc); return 2; }
+            if (src_fd < 0) { fprintf(stderr, "tur: mkstemp failed\n"); STDIN_FREE(); return 2; }
             char ibuf[4096]; size_t nr;
             int ok = 1;
             while ((nr = fread(ibuf, 1, sizeof(ibuf), stdin)) > 0)
@@ -237,22 +245,24 @@ int cmd_run(int argc, char **argv) {
             if (!ok) {
                 unlink(src_tmp);
                 fprintf(stderr, "tur: error reading stdin\n");
-                free(user_inc);
+                STDIN_FREE();
                 return 2;
             }
             char out_path[512];
             snprintf(out_path, sizeof(out_path), "%s/tur-run-XXXXXX", tur_temp_dir());
             int out_fd = mkstemp(out_path);
-            if (out_fd < 0) { unlink(src_tmp); fprintf(stderr, "tur: mkstemp failed\n"); free(user_inc); return 2; }
+            if (out_fd < 0) { unlink(src_tmp); fprintf(stderr, "tur: mkstemp failed\n"); STDIN_FREE(); return 2; }
             close(out_fd);
             tur_exe_path(out_path, sizeof(out_path));
             /* SC2: stdin mode never enters project setup, so spice_inc_dirs
              * is empty here; we can pass user_inc straight through. */
+            ls2_resolver_ctx_set(&run_ls2);
             int brc = cmd_build(src_tmp, out_path,
                                 (const char **)user_inc, n_user_inc, NULL,
                                 NULL, 0);
+            ls2_resolver_ctx_set(NULL);
             unlink(src_tmp);
-            if (brc != 0) { unlink(out_path); free(user_inc); return brc; }
+            if (brc != 0) { unlink(out_path); STDIN_FREE(); return brc; }
             Buf run_cmd; buf_init(&run_cmd);
             bool rq = drv_buf_put_quoted(&run_cmd, out_path);
             if (passthrough_start >= 0)
@@ -269,7 +279,7 @@ int cmd_run(int argc, char **argv) {
             prof_exit(PROF_RUN);
             buf_free(&run_cmd);
             unlink(out_path);
-            free(user_inc);
+            STDIN_FREE();
             return decode_exit_status(sys);
         }
         /* RM4: in explicit-file mode, walk up from the file to discover an

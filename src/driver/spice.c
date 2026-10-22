@@ -512,17 +512,36 @@ static bool aux_c_seen(char ***seen, int *n, int *cap, const char *key) {
     return false;
 }
 void collect_spice_aux_c(const char *root, Buf *includes, Buf *sources) {
-    if (g_no_auto_spice || !root) return;
-    char **work = NULL; int n_work = 0, cap_work = 0;
+    if (!root) return;
+    collect_spice_aux_c_roots(&root, 1, includes, sources);
+}
+
+/* installed-spice-libraries D7: the same closure walk seeded with several
+ * roots at once -- a project's own root plus the installed spices a program
+ * imported -- so a dep two of them share, or the project and an installed
+ * spice both vendor, is compiled ONCE.  Each work item remembers the root it
+ * was reached from, which is the project whose `tur fetch` put the fetched
+ * deps in its spices/ (pkg_resolve_spice_dep_dir_in). */
+void collect_spice_aux_c_roots(const char *const *roots, int n_roots,
+                               Buf *includes, Buf *sources) {
+    if (g_no_auto_spice || !roots || n_roots <= 0) return;
+    char **work = NULL; const char **work_top = NULL; int n_work = 0, cap_work = 0;
     char **visited = NULL; int n_vis = 0, cap_vis = 0;
     char **src_seen = NULL; int n_src = 0, cap_src = 0;
     char **inc_seen = NULL; int n_inc = 0, cap_inc = 0;
-    #define AUX_PUSH(d) do { if (n_work >= cap_work) { int nc = cap_work ? cap_work * 2 : 8; \
+    #define AUX_PUSH(d, top) do { if (n_work >= cap_work) { int nc = cap_work ? cap_work * 2 : 8; \
         char **nw = (char **)realloc(work, (size_t)nc * sizeof(char *)); \
-        if (!nw) { free(d); break; } work = nw; cap_work = nc; } work[n_work++] = (d); } while (0)
-    AUX_PUSH(strdup(root));
+        if (!nw) { free(d); break; } work = nw; \
+        const char **nt = (const char **)realloc(work_top, (size_t)nc * sizeof(char *)); \
+        if (!nt) { free(d); break; } work_top = nt; cap_work = nc; } \
+        work_top[n_work] = (top); work[n_work++] = (d); } while (0)
+    /* A stack: push in reverse so the first root is walked first. */
+    for (int r = n_roots - 1; r >= 0; r--)
+        if (roots[r]) AUX_PUSH(strdup(roots[r]), roots[r]);
     while (n_work > 0) {
-        char *dir = work[--n_work];
+        --n_work;
+        char *dir = work[n_work];
+        const char *top = work_top[n_work];
         char canon[4096];
         const char *key = realpath(dir, canon) ? canon : dir;
         if (aux_c_seen(&visited, &n_vis, &cap_vis, key)) { free(dir); continue; }
@@ -561,9 +580,9 @@ void collect_spice_aux_c(const char *root, Buf *includes, Buf *sources) {
          * :global); a dep that is not on disk is skipped silently, exactly
          * like a missing fetched dep before. */
         for (int i = 0; i < m.n_spices; i++) {
-            char *dep_dir = pkg_resolve_spice_dep_dir_in(dir, root, &m.spices[i]);
+            char *dep_dir = pkg_resolve_spice_dep_dir_in(dir, top, &m.spices[i]);
             if (!dep_dir) continue;
-            AUX_PUSH(dep_dir);
+            AUX_PUSH(dep_dir, top);
         }
         pkg_manifest_free(&m);
         free(dir);
@@ -571,6 +590,7 @@ void collect_spice_aux_c(const char *root, Buf *includes, Buf *sources) {
     #undef AUX_PUSH
     for (int i = 0; i < n_work; i++) free(work[i]);
     free(work);
+    free((void *)work_top);
     for (int i = 0; i < n_vis; i++) free(visited[i]);
     free(visited);
     for (int i = 0; i < n_src; i++) free(src_seen[i]);

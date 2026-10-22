@@ -734,6 +734,181 @@ else
     bad "uninstall a library entry (keeps the --path checkout)" "rc=$rc out: $out"
 fi
 
+# ------------------------------------------------------------------ #
+# installed-spice-libraries IL2/IL3: the project-less search path     #
+# ------------------------------------------------------------------ #
+# These need a scratch directory with no build.tur above it.  The harnesses
+# turn the fallback off; this one is about the fallback, so it must not be.
+unset TUR_NO_GLOBAL_SPICES
+
+LIBX="$WORK/libx"
+mkdir -p "$LIBX/src/libx"
+cat > "$LIBX/build.tur" <<'EOF'
+(defpackage libx :name "libx" :version "0.2.0")
+EOF
+cat > "$LIBX/src/libx/core.tur" <<'EOF'
+(defmodule libx/core
+  (export triple)
+  (defn triple [x : int] : int (* x 3)))
+EOF
+"$TUR" install "$LIBX" --path >/dev/null 2>&1
+
+SCRATCH="$WORK/scratch"
+mkdir -p "$SCRATCH"
+cat > "$SCRATCH/report.tur" <<'EOF'
+(defmodule report
+  (import libx/core :refer [triple])
+  (defn main [] : int
+    (println (triple 14))
+    0))
+EOF
+
+# 41. D1/D2: a file outside any project imports an installed spice -- the
+#     compiled path, check, and the interpreter.
+out="$(cd "$SCRATCH" && "$TUR_ABS" run report.tur 2>&1)"
+if [ "$out" = "42" ]; then ok "project-less tur run imports an installed spice"
+else bad "project-less tur run imports an installed spice" "$out"; fi
+out="$(cd "$SCRATCH" && "$TUR_ABS" check report.tur 2>&1)"
+rc=$?
+if [ "$rc" -eq 0 ]; then ok "project-less tur check resolves an installed spice"
+else bad "project-less tur check resolves an installed spice" "rc=$rc $out"; fi
+out="$(cd "$SCRATCH" && "$TUR_ABS" --interpret report.tur 2>&1)"
+if [ "$out" = "42" ]; then ok "project-less tur --interpret imports an installed spice"
+else bad "project-less tur --interpret imports an installed spice" "$out"; fi
+
+# 42. `tur run -` anchors the walk at cwd, not at its temp copy.
+out="$(cd "$SCRATCH" && "$TUR_ABS" run - < report.tur 2>&1)"
+if [ "$out" = "42" ]; then ok "tur run - (stdin) sees the installed spices"
+else bad "tur run - (stdin) sees the installed spices" "$out"; fi
+
+# 43. D1: the same file under a build.tur that does not declare the spice
+#     still fails -- projects stay hermetic.
+PROJ="$WORK/hermetic"
+mkdir -p "$PROJ/src"
+echo '(defpackage hermetic :version "0.1.0")' > "$PROJ/build.tur"
+cp "$SCRATCH/report.tur" "$PROJ/src/report.tur"
+out="$(cd "$PROJ" && "$TUR_ABS" check src/report.tur 2>&1)"
+rc=$?
+if [ "$rc" -ne 0 ] && [[ "$out" == *"module 'libx/core' not found"* ]]; then
+    ok "a project does not see the installed spices"
+else
+    bad "a project does not see the installed spices" "rc=$rc $out"
+fi
+
+# 44. D8: the off switches.
+for sw in "--no-global-spices" "--no-auto-spice"; do
+    out="$(cd "$SCRATCH" && "$TUR_ABS" $sw check report.tur 2>&1)"
+    rc=$?
+    if [ "$rc" -ne 0 ] && [[ "$out" == *"module 'libx/core' not found"* ]]; then
+        ok "$sw turns the fallback off"
+    else
+        bad "$sw turns the fallback off" "rc=$rc $out"
+    fi
+done
+out="$(cd "$SCRATCH" && TUR_NO_GLOBAL_SPICES=1 "$TUR_ABS" check report.tur 2>&1)"
+rc=$?
+if [ "$rc" -ne 0 ]; then ok "TUR_NO_GLOBAL_SPICES=1 turns the fallback off"
+else bad "TUR_NO_GLOBAL_SPICES=1 turns the fallback off" "$out"; fi
+
+# 45. D2: installed spices only fill gaps -- a sibling module and an -I dir of
+#     the same path both win over the installed one.
+mkdir -p "$SCRATCH/libx" "$WORK/incdir/libx"
+cat > "$SCRATCH/libx/core.tur" <<'EOF'
+(defmodule libx/core
+  (export triple)
+  (defn triple [x : int] : int 99))
+EOF
+out="$(cd "$SCRATCH" && "$TUR_ABS" run report.tur 2>&1)"
+if [ "$out" = "99" ]; then ok "a sibling module beats an installed one"
+else bad "a sibling module beats an installed one" "$out"; fi
+rm -rf "$SCRATCH/libx"
+cat > "$WORK/incdir/libx/core.tur" <<'EOF'
+(defmodule libx/core
+  (export triple)
+  (defn triple [x : int] : int 77))
+EOF
+out="$(cd "$SCRATCH" && "$TUR_ABS" run -I "$WORK/incdir" report.tur 2>&1)"
+if [ "$out" = "77" ]; then ok "an -I dir beats an installed spice"
+else bad "an -I dir beats an installed spice" "$out"; fi
+
+# 46. A failed import outside a project names the installed spice it searched
+#     and points at `tur install`.
+cat > "$SCRATCH/missing.tur" <<'EOF'
+(defmodule missing
+  (import nosuch/mod)
+  (defn main [] : int 0))
+EOF
+out="$(cd "$SCRATCH" && "$TUR_ABS" check missing.tur 2>&1)"
+if [[ "$out" == *"(installed spice libx)"* ]] && [[ "$out" == *"tur install <source>"* ]]; then
+    ok "module-not-found labels installed spices and names tur install"
+else
+    bad "module-not-found labels installed spices and names tur install" "$out"
+fi
+
+# 47. D2 step 5: an installed spice's own dependencies resolve too.
+mkdir -p "$WORK/withdep/src/withdep"
+cat > "$WORK/withdep/build.tur" <<EOF
+(defpackage withdep :name "withdep" :version "0.1.0"
+  :spices #map{"deepb" #map{:url "$B_URL"}})
+EOF
+cat > "$WORK/withdep/src/withdep/core.tur" <<'EOF'
+(defmodule withdep/core
+  (import deepb/core :refer [base])
+  (export plus2)
+  (defn plus2 [] : int (+ (base) 2)))
+EOF
+"$TUR" install "$WORK/withdep" --path >/dev/null 2>&1
+cat > "$SCRATCH/usedep.tur" <<'EOF'
+(defmodule usedep
+  (import withdep/core :refer [plus2])
+  (defn main [] : int
+    (println (plus2))
+    0))
+EOF
+out="$(cd "$SCRATCH" && "$TUR_ABS" run usedep.tur 2>&1)"
+if [ "$out" = "42" ]; then ok "an installed spice's dependency resolves outside a project"
+else bad "an installed spice's dependency resolves outside a project" "$out"; fi
+
+# 48. IL3 (D7): an installed spice's :c-sources link into a project-less
+#     program that imports it; an installed spice whose C does not compile
+#     does not break a program that never imports it.
+mkdir -p "$WORK/cfx/src/cfx" "$WORK/cfx/c" "$WORK/brokenc/src/brokenc" "$WORK/brokenc/c"
+cat > "$WORK/cfx/build.tur" <<'EOF'
+(defpackage cfx :name "cfx" :version "0.1.0"
+  :build-opts #map{:c-sources ["c/cfx.c"]})
+EOF
+echo 'long cfx_seven(void) { return 7; }' > "$WORK/cfx/c/cfx.c"
+cat > "$WORK/cfx/src/cfx/core.tur" <<'EOF'
+(defmodule cfx/core
+  (export seven)
+  (defn seven [] : int
+    ```c
+    extern long cfx_seven(void);
+    return cfx_seven();
+    ```))
+EOF
+cat > "$WORK/brokenc/build.tur" <<'EOF'
+(defpackage brokenc :name "brokenc" :version "0.1.0"
+  :build-opts #map{:c-sources ["c/broken.c"]})
+EOF
+echo 'this is not C;' > "$WORK/brokenc/c/broken.c"
+echo '(defmodule brokenc/core (export b) (defn b [] : int 1))' > "$WORK/brokenc/src/brokenc/core.tur"
+"$TUR" install "$WORK/cfx" --path >/dev/null 2>&1
+"$TUR" install "$WORK/brokenc" --path >/dev/null 2>&1
+cat > "$SCRATCH/usec.tur" <<'EOF'
+(defmodule usec
+  (import cfx/core :refer [seven])
+  (defn main [] : int
+    (println (* (seven) 6))
+    0))
+EOF
+out="$(cd "$SCRATCH" && "$TUR_ABS" run usec.tur 2>&1)"
+if [ "$out" = "42" ]; then ok "an imported installed spice's :c-sources link"
+else bad "an imported installed spice's :c-sources link" "$out"; fi
+out="$(cd "$SCRATCH" && "$TUR_ABS" run report.tur 2>&1)"
+if [ "$out" = "42" ]; then ok "an installed spice that is not imported links nothing"
+else bad "an installed spice that is not imported links nothing" "$out"; fi
+
 echo
 echo "install summary: $PASS passed, $FAIL failed"
 if [ "$FAIL" -ne 0 ]; then

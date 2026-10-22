@@ -336,8 +336,8 @@ static int cmd_build_once(const char *input, const char *out_path,
      * manifest dir found by walking up from the input file. */
     Buf aux_includes; buf_init(&aux_includes);
     Buf aux_sources;  buf_init(&aux_sources);
-    drv_collect_build_aux(input, &cmake_flags, &aux_includes, &aux_sources,
-                          target);
+    drv_collect_build_aux_with_installed(input, &cmake_flags, &aux_includes, &aux_sources,
+                                         target);
     /* `:web` -> emcc flags.  Appended to cmake_flags because that Buf is
      * already spliced verbatim into the link command. */
     if (wasm_target && !drv_collect_web_link_flags(input, &cmake_flags)) {

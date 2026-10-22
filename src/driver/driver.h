@@ -181,6 +181,8 @@ void collect_tur_recursive(const char *dir,
 char **collect_tur_files_deep(const char *dir, int *n_out);
 char **collect_project_src_files(const char *root, int *n_out);
 void collect_spice_aux_c(const char *root, Buf *includes, Buf *sources);
+void collect_spice_aux_c_roots(const char *const *roots, int n_roots,
+                               Buf *includes, Buf *sources);
 void resolve_project_include_dirs(const char *dir,
                                   const char ***out_dirs, int *out_n);
 
@@ -230,6 +232,13 @@ bool drv_collect_web_link_flags(const char *input, Buf *out);
 void drv_collect_build_aux(const char *input, Buf *cmake_flags,
                            Buf *aux_includes, Buf *aux_sources,
                            const char *target);
+/* drv_collect_build_aux plus the link inputs of every installed spice the
+ * compile just imported (installed-spice-libraries D7).  For the program
+ * builds (tur build/run <file>, tur compile); the REPL's image probe keeps
+ * the plain one, since prompt imports are not that image's. */
+void drv_collect_build_aux_with_installed(const char *input, Buf *cmake_flags,
+                                          Buf *aux_includes, Buf *aux_sources,
+                                          const char *target);
 void drv_append_include_tokens(Buf *dst, const char *flags);
 int locate_runtime_lib(char *libdir, size_t dcap,
                        char *libname, size_t ncap);

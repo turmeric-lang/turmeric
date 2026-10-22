@@ -592,9 +592,22 @@ bool drv_collect_web_link_flags(const char *input, Buf *out) {
     return ok;
 }
 
-void drv_collect_build_aux(const char *input, Buf *cmake_flags,
-                           Buf *aux_includes, Buf *aux_sources,
-                           const char *target) {
+/* The cmake deps manifest of one spice root, as cc flags. */
+static void append_root_cmake_flags(const char *root, const char *target,
+                                    Buf *cmake_flags) {
+    char manifest_path[4096];
+    snprintf(manifest_path, sizeof(manifest_path), "%s/cmake/%s",
+             root, pkg_cmake_manifest_name(target));
+    PkgCmakeManifest cmake_manifest;
+    if (pkg_cmake_manifest_read(manifest_path, &cmake_manifest)) {
+        pkg_cmake_manifest_append_cc_flags(&cmake_manifest, cmake_flags);
+        pkg_cmake_manifest_free(&cmake_manifest);
+    }
+}
+
+static void collect_build_aux_impl(const char *input, Buf *cmake_flags,
+                                   Buf *aux_includes, Buf *aux_sources,
+                                   const char *target, bool with_installed) {
     /* Walk up from the input file's directory to find project root.  Resolve
      * to an absolute path first -- drv_find_project_root walks via strrchr('/'),
      * so a bare "." or "foo.tur" would stop after one step. */
@@ -610,19 +623,51 @@ void drv_collect_build_aux(const char *input, Buf *cmake_flags,
         input_dir[sizeof(input_dir) - 1] = '\0';
     }
     char *proj_root = drv_find_project_root(input_dir);
-    if (proj_root) {
-        char manifest_path[4096];
-        snprintf(manifest_path, sizeof(manifest_path), "%s/cmake/%s",
-                 proj_root, pkg_cmake_manifest_name(target));
-        PkgCmakeManifest cmake_manifest;
-        if (pkg_cmake_manifest_read(manifest_path, &cmake_manifest)) {
-            pkg_cmake_manifest_append_cc_flags(&cmake_manifest, cmake_flags);
-            pkg_cmake_manifest_free(&cmake_manifest);
+
+    /* installed-spice-libraries D7: the installed spices this compile
+     * resolved an import through (recorded by the elaborator against the
+     * include slots the project-less fallback added).  Only those -- one
+     * broken or platform-specific installed spice must not break every
+     * script, and unrelated vendored C must not meet at link time.  A root
+     * that IS the project root is already covered by it. */
+    const char *roots[64];
+    int n_roots = 0;
+    if (proj_root) roots[n_roots++] = proj_root;
+    if (with_installed && !g_no_auto_spice) {
+        const char *const *used = NULL;
+        int n_used = spice_search_used_installed_roots(&used);
+        char proj_real[4096] = "";
+        if (proj_root && !realpath(proj_root, proj_real))
+            snprintf(proj_real, sizeof(proj_real), "%s", proj_root);
+        for (int i = 0; i < n_used && n_roots < (int)(sizeof roots / sizeof roots[0]); i++) {
+            char ur[4096];
+            const char *u = realpath(used[i], ur) ? ur : used[i];
+            if (proj_real[0] && strcmp(u, proj_real) == 0) continue;
+            roots[n_roots++] = used[i];
         }
-        append_manifest_link_flags(proj_root, cmake_flags);
-        collect_spice_aux_c(proj_root, aux_includes, aux_sources);
-        free(proj_root);
     }
+
+    for (int i = 0; i < n_roots; i++) {
+        append_root_cmake_flags(roots[i], target, cmake_flags);
+        append_manifest_link_flags(roots[i], cmake_flags);
+    }
+    if (n_roots > 0)
+        collect_spice_aux_c_roots(roots, n_roots, aux_includes, aux_sources);
+    free(proj_root);
+}
+
+void drv_collect_build_aux(const char *input, Buf *cmake_flags,
+                           Buf *aux_includes, Buf *aux_sources,
+                           const char *target) {
+    collect_build_aux_impl(input, cmake_flags, aux_includes, aux_sources,
+                           target, false);
+}
+
+void drv_collect_build_aux_with_installed(const char *input, Buf *cmake_flags,
+                                          Buf *aux_includes, Buf *aux_sources,
+                                          const char *target) {
+    collect_build_aux_impl(input, cmake_flags, aux_includes, aux_sources,
+                           target, true);
 }
 
 /* tur-link-and-build-split-plan Phase 3: append the -I tokens from a resolved

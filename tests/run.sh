@@ -19,6 +19,11 @@
 
 set -u
 cd "$(dirname "$0")/.."
+# installed-spice-libraries D8: a fixture outside any build.tur (nearly all of
+# them -- the repo root has none) would otherwise search the developer's
+# installed spices, so an `errors/` fixture expecting "module not found" could
+# pass an import on that one machine.
+export TUR_NO_GLOBAL_SPICES=1
 
 # Isolate the test suite from any globally exported TUR_STDLIB_DIR (e.g. from
 # a mise-managed global `turmeric` install). Otherwise the locally built

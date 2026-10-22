@@ -36,6 +36,11 @@
 
 set -u
 cd "$(dirname "$0")/.."
+# installed-spice-libraries D8: a fixture outside any build.tur (nearly all of
+# them -- the repo root has none) would otherwise search the developer's
+# installed spices, so an `errors/` fixture expecting "module not found" could
+# pass an import on that one machine.
+export TUR_NO_GLOBAL_SPICES=1
 
 # This harness runs every fixture through the tree-walking turi/eval
 # interpreter, which intentionally never frees its closures or registered
