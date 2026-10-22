@@ -7497,8 +7497,9 @@ static void stamp_self_call_sum_drops(const Binding *b, Expr *e) {
  * rule.  With the mask still zero during its own inference, a self-call
  * hand-off of a parameter counts as an escape, so a bit that survived is a
  * sound non-retain fact for this caller too.  A tail self-call keeps its
- * stamp but frees nothing: tco_mark lowers it to a back edge, which has no
- * "after" to free in (fresh-option-arg-to-tail-self-call-loop-leaks). */
+ * stamp, but tco_mark lowers it to a back edge, which has no "after" to free
+ * in: the loop takes the box instead (tco_owned_params, emit_fns.c;
+ * fresh-option-arg-to-tail-self-call-loop-leaks). */
 void elab_stamp_self_call_sum_drops(Binding *b, Expr *body) {
     if (!b || !b->nonretain_sum_param_mask || b->type.kind != TY_FN ||
         !effect_row_is_empty(b->type.as.fn.effect_row))

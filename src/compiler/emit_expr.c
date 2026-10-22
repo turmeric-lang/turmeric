@@ -7428,6 +7428,31 @@ void emit_any_scope_drops(EmitCtx *ctx, Buf *body) {
  * for all three pending families at once.  Draining past a NON-void call is a
  * no-op (its own hoist already drained to the same point), so the bracket is
  * unconditional. */
+/* fresh-option-arg-to-tail-self-call-loop-leaks: drop the pending entries
+ * above `m` without emitting them -- for a consumer that owns those boxes
+ * itself (a self-tail back edge, which hands them to the loop). */
+void emit_pending_drops_discard(EmitCtx *ctx, const uint32_t m[3]) {
+    while (ctx->n_any_pending > m[0]) free(ctx->any_pending[--ctx->n_any_pending]);
+    while (ctx->n_sum_pending > m[1]) {
+        --ctx->n_sum_pending;
+        if (ctx->sum_pending_owned[ctx->n_sum_pending])
+            free_struct_app_type(ctx->sum_pending_types[ctx->n_sum_pending]);
+        free(ctx->sum_pending[ctx->n_sum_pending]);
+    }
+    while (ctx->n_vsp_pending > m[2]) free(ctx->vsp_pending[--ctx->n_vsp_pending]);
+}
+
+/* The emit_pending_drop_stmt kind that frees a fresh sum box held in a C
+ * variable of type `ctype` and source type `t`: 0 for the int64 carrier
+ * (null-guarded shallow free), 2 for a by-value monomorph whose live arm holds
+ * a boxed value-struct payload, -1 when there is no box to free. */
+int emit_sum_box_drop_kind(EmitCtx *ctx, const char *ctype, Type t) {
+    if (!ctype) return -1;
+    if (strcmp(ctype, "int64_t") == 0) return 0;
+    if (!strchr(ctype, '*') && adt_app_has_boxed_struct_payload(ctx, t)) return 2;
+    return -1;
+}
+
 void emit_pending_drops_mark(EmitCtx *ctx, uint32_t m[3]) {
     m[0] = ctx->n_any_pending;
     m[1] = ctx->n_sum_pending;
