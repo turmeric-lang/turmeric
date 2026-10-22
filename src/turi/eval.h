@@ -713,6 +713,10 @@ void turi_host_exit_guard(TuriEnv *env, const char *msg);
  * opaque) wraps it in a FRESH one-field box each time, so two widens of one
  * vector are two different structs; this looks through the box. */
 TuriValue turi_any_identity_payload(TuriValue v);
+/* turi-packed-defopaque-wrong-instance: the value a constrained `pack` packed.
+ * The interpreter keeps the pack-site witnesses beside it in a record that
+ * only `open` reads; anything else that meets a packed value sees through it. */
+TuriValue turi_exists_payload(TuriValue v);
 
 /* r7rs-lang-plan T5: the interpreter's side of a re-entrant continuation (the
  * R7RS prelude's call/cc copies the C stack; see eval.c).  `turi_cont_pin`

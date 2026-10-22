@@ -35,6 +35,7 @@
  * signature can never name one. */
 
 #include "inline_c_jit.h"
+#include "eval.h"
 
 #include "buf.h"
 #include "diag.h"
@@ -437,6 +438,8 @@ bool turi_inline_c_jit_try(TuriEnv *env, FnDef *fn, uint32_t param_offset,
     const char *name = fn->binding->name->name;
     TuriValue result = turi_nil();
     bool ok = true;
+    for (uint32_t k = 0; k < n_args; k++)
+        args[k] = turi_exists_payload(args[k]);
     for (uint32_t k = 0; k < n_args && ok; k++) {
         const TuriValue *v = &args[k];
         iv[k] = 0;

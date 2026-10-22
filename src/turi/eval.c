@@ -9382,6 +9382,13 @@ static TuriValue turi_exists_pack_wrap(TuriEnv *env, const Expr *pack, TuriValue
     return turi_make_struct(env, k_exists_rec, fields, 2);
 }
 
+TuriValue turi_exists_payload(TuriValue v) {
+    if (v.tag == TURI_STRUCT && v.as_struct && v.as_struct->name == k_exists_rec &&
+        v.as_struct->n_fields == 2)
+        return v.as_struct->fields[0];
+    return v;
+}
+
 static TuriValue eval_unary_post(TuriEnv *env, EvalFrame *frame,
                                  const Expr *e, TuriValue v) {
     switch (e->kind) {

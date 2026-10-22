@@ -92,8 +92,8 @@ cp "$F4/util.tur" "$F4/app.tur" "$WORK/own/"
 build_out=$("$TUR" build "$WORK/own" --build-dir "$WORK/bd4" -o "$WORK/app4" 2>&1)
 build_rc=$?
 if [ $build_rc -ne 0 ] &&
-   printf '%s' "$build_out" | grep -q '`ident` is called at `Q` from another module' &&
-   ! printf '%s' "$build_out" | grep -q 'incompatible type for argument'; then
+   grep -q '`ident` is called at `Q` from another module' <<< "$build_out" &&
+   ! grep -q 'incompatible type for argument' <<< "$build_out"; then
     pass "forced-spec-callers-own-struct-refused"
 else
     fail "forced-spec-callers-own-struct-refused" "exit=$build_rc: $build_out"
