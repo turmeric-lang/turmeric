@@ -1712,6 +1712,8 @@ static const char *__tur_any_type_name(int64_t tag) {
 }
 static void tur_panic(const char *msg);
 static void tur_panic_at(const char *file, int line, const char *msg);
+static void tur_panic_at_site(const char *file, int line, const char *msg);
+static void tur_panic_with_site(int type_tag, void *payload, const char *file, int line);
 static void __tur_any_cast_check_at(int64_t have, int64_t want, const char *file, int line);
 static void __tur_any_cast_check(int64_t have, int64_t want) {
     __tur_any_cast_check_at(have, want, NULL, 0);
@@ -2058,6 +2060,12 @@ static TUR_THREAD_LOCAL int tur_panicking = 0;
 extern int * tur_tls_panicking_ptr(void);
 #define tur_panicking (*tur_tls_panicking_ptr())
 #endif
+#if defined(__GNUC__) || defined(__clang__)
+static TUR_THREAD_LOCAL int tur_root_unwind = 0;
+#else
+extern int * tur_tls_root_unwind_ptr(void);
+#define tur_root_unwind (*tur_tls_root_unwind_ptr())
+#endif
 #define TUR_SC_MAXP 8
 #define TUR_SC_MAXN 32
 typedef struct tur_cont { int tag; tur_handler_node *boundary; struct tur_cont *next; int64_t saved[TUR_SC_MAXN]; uint32_t aggr_mask; } tur_cont;
@@ -2080,6 +2088,12 @@ static void tur_panic_at(const char *file, int line, const char *msg) {
         return;
     }
     fprintf(stderr, "panic at %s:%d: %s\n", file, line, msg ? msg : "(no message)");
+    if (tur_root_unwind == 2) {
+        global_panic_payload = panic_payload_new(5, msg ? strdup(msg) : NULL, file, line, 1);
+        if (global_panic_frame) { tur_frame_fire_chain(global_panic_frame); global_panic_frame = NULL; }
+        tur_panicking = 1;
+        return;
+    }
     if (global_panic_frame) {
         tur_frame_fire_chain(global_panic_frame);
     }
@@ -2088,6 +2102,10 @@ static void tur_panic_at(const char *file, int line, const char *msg) {
 }
 static void tur_panic(const char *msg) { tur_panic_at(__FILE__, __LINE__, msg); }
 
+static void tur_panic_root_exit(void) {
+    fflush(NULL);
+    abort();
+}
 /* Phase R5: tur_panic_abort - no unwinding, immediate abort */
 static void tur_panic_abort(const char *msg) {
     fprintf(stderr, "panic (no unwind): %s\n", msg ? msg : "(no message)");
@@ -3413,7 +3431,24 @@ static void tur_panic_with(int type_tag, void *payload, const char *file, int li
         TUR_LONGJMP(tur_current_fiber->panic_jmpbuf);
     }
     fprintf(stderr, "panic at %s:%d\n", file ? file : "(unknown)", line);
+    if (tur_root_unwind == 2) {
+        global_panic_payload = panic_payload_new(type_tag, payload, file, line, 0);
+        if (global_panic_frame) { tur_frame_fire_chain(global_panic_frame); global_panic_frame = NULL; }
+        tur_panicking = 1;
+        return;
+    }
     abort();
+}
+
+static void tur_panic_at_site(const char *file, int line, const char *msg) {
+    int __r = tur_root_unwind; if (__r) tur_root_unwind = 2;
+    tur_panic_at(file, line, msg);
+    if (__r) tur_root_unwind = __r;
+}
+static void tur_panic_with_site(int type_tag, void *payload, const char *file, int line) {
+    int __r = tur_root_unwind; if (__r) tur_root_unwind = 2;
+    tur_panic_with(type_tag, payload, file, line);
+    if (__r) tur_root_unwind = __r;
 }
 
 #if defined(__GNUC__) || defined(__clang__)
@@ -10675,7 +10710,7 @@ static int64_t schema_hydecode_hyabort(int64_t errs) {
         int64_t __ps_186 = (schema_hydecode_hyreport(errs));
         if (tur_panicking) return ((int64_t)0);
         (void)(__ps_186);
-        tur_panic_at("schema.tur", 1071, "schema-decode!: validation failed");
+        tur_panic_at_site("schema.tur", 1071, "schema-decode!: validation failed");
         if (tur_panicking) return ((int64_t)0);
         return ((int64_t)0);
 }
@@ -10896,6 +10931,7 @@ int main(int argc, char **argv) {
     _setmode(_fileno(stdout), _O_BINARY);
     _setmode(_fileno(stderr), _O_BINARY);
 #endif
+    tur_root_unwind = 1;
         /* *args*: build cons list from argv[1..argc-1]; *argv0* is argv[0] */
         if (argc > 0 && argv[0]) g_tur_argv0 = argv[0];
         g_tur_args = 0;
@@ -10908,16 +10944,16 @@ int main(int argc, char **argv) {
         }
         {
             int64_t __ps_202 = (__opt_some(INT64_C(41)));
-            /* panic-return-signal: ret ctype unknown; no propagation here */
+            if (tur_panicking) { tur_panic_root_exit(); }
             int64_t __ps_203 = (__inst_TestFunctor_fmap_option(__ps_202, (tur_poly_fn_t){ NULL, (int64_t(*)(void*,int64_t))__poly_15 }));
-            /* panic-return-signal: ret ctype unknown; no propagation here */
+            if (tur_panicking) { tur_panic_root_exit(); }
             int64_t result_21 = __ps_203;
             (void)result_21;
             bool __ps_204 = (_un_unopt_unsome_qu(result_21));
-            /* panic-return-signal: ret ctype unknown; no propagation here */
+            if (tur_panicking) { tur_panic_root_exit(); }
             puts((__ps_204) ? "true" : "false");
             int64_t __ps_205 = (__opt_unwrap(result_21));
-            /* panic-return-signal: ret ctype unknown; no propagation here */
+            if (tur_panicking) { tur_panic_root_exit(); }
             printf("%lld\n", (long long)(__ps_205));
         }
         {
@@ -10925,7 +10961,7 @@ int main(int argc, char **argv) {
             (void)delta_22;
             {
                 int64_t __ps_206 = (__opt_some(INT64_C(23)));
-                /* panic-return-signal: ret ctype unknown; no propagation here */
+                if (tur_panicking) { tur_panic_root_exit(); }
                 void *__t208 = malloc(sizeof(void *) + sizeof(struct __env_26));
                 *(void (**)(void *))__t208 = drop_glue___env_26;
                 struct __env_26 *__t207 = (struct __env_26 *)((char *)__t208 + sizeof(void *));
@@ -10935,14 +10971,14 @@ int main(int argc, char **argv) {
                 void *__t209 = __t207;
                 void *__t210 = (void *)(intptr_t)(__t209);
                 int64_t __ps_211 = (__inst_TestFunctor_fmap_option(__ps_206, (tur_poly_fn_t){ __t210, (int64_t(*)(void*,int64_t))(*( tur_thunk_int64_t_int64_t_t *)(__t210)) }));
-                /* panic-return-signal: ret ctype unknown; no propagation here */
+                if (tur_panicking) { tur_panic_root_exit(); }
                 int64_t result_29 = __ps_211;
                 (void)result_29;
                 bool __ps_212 = (_un_unopt_unsome_qu(result_29));
-                /* panic-return-signal: ret ctype unknown; no propagation here */
+                if (tur_panicking) { tur_panic_root_exit(); }
                 puts((__ps_212) ? "true" : "false");
                 int64_t __ps_213 = (__opt_unwrap(result_29));
-                /* panic-return-signal: ret ctype unknown; no propagation here */
+                if (tur_panicking) { tur_panic_root_exit(); }
                 printf("%lld\n", (long long)(__ps_213));
             }
         }
@@ -10950,7 +10986,7 @@ int main(int argc, char **argv) {
             int64_t delta_30 = INT64_C(100);
             (void)delta_30;
             int64_t __ps_214 = (__opt_none());
-            /* panic-return-signal: ret ctype unknown; no propagation here */
+            if (tur_panicking) { tur_panic_root_exit(); }
             void *__t216 = malloc(sizeof(void *) + sizeof(struct __env_34));
             *(void (**)(void *))__t216 = drop_glue___env_34;
             struct __env_34 *__t215 = (struct __env_34 *)((char *)__t216 + sizeof(void *));
@@ -10960,9 +10996,9 @@ int main(int argc, char **argv) {
             void *__t217 = __t215;
             void *__t218 = (void *)(intptr_t)(__t217);
             int64_t __ps_219 = (__inst_TestFunctor_fmap_option(__ps_214, (tur_poly_fn_t){ __t218, (int64_t(*)(void*,int64_t))(*( tur_thunk_int64_t_int64_t_t *)(__t218)) }));
-            /* panic-return-signal: ret ctype unknown; no propagation here */
+            if (tur_panicking) { tur_panic_root_exit(); }
             bool __ps_220 = (_un_unopt_unsome_qu(__ps_219));
-            /* panic-return-signal: ret ctype unknown; no propagation here */
+            if (tur_panicking) { tur_panic_root_exit(); }
             puts((__ps_220) ? "true" : "false");
         }
         int64_t __t221;

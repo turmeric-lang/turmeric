@@ -1,5 +1,41 @@
 # Compiled: an uncaught panic runs only the panicking function's defers
 
+**RESOLVED 2026-10-22** (archived), by fix direction 1, scoped to the panic
+forms. The emitted C `main` sets a new thread-local, `tur_root_unwind`
+(`emit_main_root_unwind_prologue`; slot `tur_tls_root_unwind` in
+`src/runtime/tur_tls.c`, registered in `tools/gen-runtime-split.py`). An
+emitted `panic` / `panic-with` site now calls `tur_panic_at_site` /
+`tur_panic_with_site`. With no `catch-unwind` live, those still print the
+message at once, then raise the signal the caught path uses instead of
+aborting. Every frame on the way out fires its defers through its own
+propagation check, including a CPS chain's (`__dk_panic_abandon`). `main`'s own
+checks, and those of the program's top-level statements (`EmitCtx.in_user_main`;
+`main` used to have no propagation at all, its C return type being unrecorded),
+end the unwind in `tur_panic_root_exit`, which flushes and aborts. The process
+still exits 134, with the same message.
+
+Left as it was, deliberately: a panic raised by a runtime helper (a failed
+dynamic operator, a bad `cast`) with no `catch-unwind` live still aborts where
+it is raised. Those helpers' callers carry no propagation check, so unwinding
+from them would run the rest of the caller (measured on the
+`saffron-*-panic-site` fixtures). The same goes for other threads and
+task-group fibers, which never set the flag. error-handling-guide says so.
+
+Found on the way: a statement-position call to a `: !` function had no
+propagation check (only `: nil` calls had one, nil-call-panic-not-propagated),
+so under `catch-unwind` the caller ran on past it (`emit_stmt.c`, EX_CALL). It
+does now, pinned by `tests/fixtures/never-call-panic-propagates`. The
+exhausted-generator panic of `gen-unwrap` gained the same check.
+
+Pinned by `tests/fixtures/panic-uncaught-unwinds-callers` (a direct function,
+a CPS function resumed before the panic, two callers and `main`; run by
+`run.sh` and `run-turi.sh`). The runtime preamble changed: 158 snapshots and
+`src/runtime/generated/` regenerated.
+
+Suite: `run.sh` 4057 passed, 0 failed; `run-jit.sh` over
+panic/defer/catch/effect/handle/gen 588 passed, 0 failed; `run-leak-check.sh`
+240 passed, 0 failed, 8 known-open.
+
 **Severity: medium** (engine divergence; contradicts error-handling-guide's
 "Defer thunks registered before the panic are fired in reverse order during
 unwinding"). It also **blocks [discontinue-plan](../upcoming/discontinue-plan.md)

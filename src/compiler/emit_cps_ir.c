@@ -15241,6 +15241,7 @@ static bool emit_cps_ir_try_fn_impl(EmitCtx *ctx, Buf *file, const Expr *e) {
         emit_main_deep_stack_prologue(file);
         buf_puts(file, "    __tur_static_init();\n");   /* S1b */
         emit_win_binary_stdio_prologue(file);
+        emit_main_root_unwind_prologue(file);
         buf_puts(file, "    /* *args*: build cons list from argv[1..argc-1]; *argv0* is argv[0] */\n");
         buf_puts(file, "    if (argc > 0 && argv[0]) g_tur_argv0 = argv[0];\n");
         buf_puts(file, "    g_tur_args = 0;\n");
@@ -15266,6 +15267,9 @@ static bool emit_cps_ir_try_fn_impl(EmitCtx *ctx, Buf *file, const Expr *e) {
                    mvoid ? "(void)" : "__r = ", cn);
         buf_printf(file, "    else { g_dk_pend_perform = __dkpp; %s__dk_drive_after(); }\n", mvoid ? "(void)" : "__r = ");
         buf_puts(file, "    g_dk_driver = __dksave;\n");
+        /* compiled-uncaught-panic-skips-caller-defers: the chain unwound to the
+         * root; end the unwind before the value (meaningless now) is read. */
+        buf_puts(file, "    if (tur_panicking) tur_panic_root_exit();\n");
         /* Read the delivered value out BEFORE the reap: a Tier-C return rides a
          * heap box owned by the reap list (consume=false, never freed at a load),
          * so the reap frees it -- copy the value into a local first, then reap. */

@@ -669,6 +669,12 @@ typedef struct EmitCtx {
     uint32_t  cap_dead_base_ctors;
     const EmitAbiSpecialization *current_abi_specialization;
     const char *current_fn_ret_ctype;
+    /* compiled-uncaught-panic-skips-caller-defers: true while emitting the
+     * user's `main` or the program's top-level statements -- the code with no
+     * caller to hand a panic signal to.  A propagation check there (whose
+     * `current_fn_ret_ctype` is NULL) fires the frames and ends the unwind in
+     * tur_panic_root_exit.  Saved and set per function by emit_fn. */
+    bool in_user_main;
     /* byval-spine-drop-past-early-exit: true while emitting a function whose
      * every parameter AND result is a non-pointer scalar (bool/int/float and
      * the fixed-width kinds -- NOT cstr, NOT ptr, NOT any).  Only then may
@@ -1646,6 +1652,7 @@ char *name_for_binding(EmitCtx *ctx, const Binding *b);
  into 
 . */
 void emit_win_binary_stdio_prologue(Buf *out);
+void emit_main_root_unwind_prologue(Buf *out);
 
 void emit_c_string(Buf *out, StrSlice s);
 char *atom_nil(void);
