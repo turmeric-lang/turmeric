@@ -74,14 +74,16 @@ get /../outside.txt
 get /nope
 stop
 # The request log: one line per request on stderr, the time normalized.
-sed -E 's/[0-9]+ms$/Nms/' "$TMP/serve.err"
+# Only the log lines: an engine may add notes of its own (a JIT that falls
+# back to cc says so), which are not the server's output.
+grep -E '^(GET|HEAD|POST) ' "$TMP/serve.err" | sed -E 's/[0-9]+ms$/Nms/' 
 
 # --no-listing: the index still serves, a directory without one is a 404.
 start site -p 0 --no-listing -q
 get /
 get /sub/
 stop
-echo "quiet log lines: $(wc -l < "$TMP/serve.err" | tr -d ' ')"
+echo "quiet log lines: $(grep -cE '^(GET|HEAD|POST) ' "$TMP/serve.err")"
 
 # Default directory: the current one.
 (cd "$root" && exec "$TUR_ABS" serve -p 0) > "$TMP/serve.out" 2> "$TMP/serve.err" &
@@ -99,7 +101,7 @@ for args in "--frob" "-p 70000" "$TMP/missing" "a b" "--bind nope"; do
     # shellcheck disable=SC2086
     "$TUR_ABS" serve $args > /dev/null 2> "$TMP/err"
     rc=$?
-    echo "serve $(echo "$args" | sed "s|$TMP|TMP|") -> exit $rc ($(head -1 "$TMP/err" | sed "s|$TMP|TMP|"))"
+    echo "serve $(echo "$args" | sed "s|$TMP|TMP|") -> exit $rc ($(grep -m1 '^tur serve:' "$TMP/err" | sed "s|$TMP|TMP|"))"
 done
 "$TUR_ABS" serve --help | head -1
 exit 0

@@ -1085,7 +1085,8 @@ int cmd_test_main(int argc, char **argv) {
  * `load` is found and runs it with the rest of the command line as its
  * *args* -- it takes no flags of its own, so no `--` is needed.  The JIT runs
  * it when this build carries one (in process, so the tur PID is the server's
- * and nothing is left behind in the temp dir), else the cc path.  TUR_ENGINE
+ * and nothing is left behind in the temp dir), else -- and always on
+ * Windows -- the cc path.  TUR_ENGINE
  * overrides that for debugging; `interp` is refused, since the interpreter
  * has no httpd natives.  The program is hermetic: no enclosing spice and no
  * installed spice is searched, so `tur serve` means the same thing inside a
@@ -1101,7 +1102,10 @@ int cmd_serve(int argc, char **argv) {
                 "directory that has tools/serve.tur\n", entry);
         return 2;
     }
-#ifdef TUR_HAVE_JIT
+    /* Windows: c2mir cannot read MinGW's socket headers, so the JIT would
+     * fail on httpd every time (a page of diagnostics, then TUR-W0070's cc
+     * fallback).  Go straight to cc there. */
+#if defined(TUR_HAVE_JIT) && !defined(_WIN32)
     const char *engine = "jit";
 #else
     const char *engine = "cc";

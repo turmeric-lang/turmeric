@@ -5494,7 +5494,11 @@
 
 ;;; httpd-static-serve-with-flags! -- internal: httpd-static-serve-with! with
 ;;; the StaticOpts fields passed one by one (`index-file` "" = none).
-(defn httpd-static-serve-with-flags! [conn : ptr<void> root : cstr rel : cstr index-file : cstr listing : bool] : bool
+(defn httpd-static-serve-with-flags! [conn : ptr<void>
+                                      root : cstr
+                                      rel : cstr
+                                      index-file : cstr
+                                      listing : bool] : bool
   ```c
   #include <sys/stat.h>
   #include <fcntl.h>
@@ -5734,9 +5738,7 @@
 ;;;   (mw-static-with (StaticOpts "index.html" true) "./public" base)
 ;;;
 ;;; Since: project-less-tools-plan PT0
-(defstruct StaticOpts
-  [index   : cstr
-   listing : bool])
+(defstruct StaticOpts [index : cstr listing : bool])
 
 ;;; httpd-static-serve-with! -- httpd-static-serve!, with an index and a listing.
 ;;;
@@ -5769,7 +5771,10 @@
 ;;;     (httpd-resp-status! c 404))
 ;;;
 ;;; Since: project-less-tools-plan PT0
-(defn httpd-static-serve-with! [conn : ptr<void> opts : StaticOpts root : cstr rel : cstr] : bool
+(defn httpd-static-serve-with! [conn : ptr<void>
+                                opts : StaticOpts
+                                root : cstr
+                                rel : cstr] : bool
   (httpd-static-serve-with-flags! conn root rel (.index opts) (.listing opts)))
 
 ;;; httpd-mw-static-fallback -- internal: when the response status is 404,
@@ -5783,7 +5788,10 @@
 
 ;;; httpd-mw-static-fallback-with -- internal: mw-static-with's fallback; the
 ;;; StaticOpts fields passed one by one.
-(defn httpd-mw-static-fallback-with [conn : ptr<void> root : cstr index-file : cstr listing : bool] : nil
+(defn httpd-mw-static-fallback-with [conn : ptr<void>
+                                     root : cstr
+                                     index-file : cstr
+                                     listing : bool] : nil
   ```c
   if (!conn) return;
   if (httpd_hyresp_hystatus_hyget((void *)conn) != 404) return;
@@ -5840,7 +5848,9 @@
 ;;;   (httpd-new 8000 (mw-static-with (StaticOpts "index.html" true) "." not-found))
 ;;;
 ;;; Since: project-less-tools-plan PT0
-(defn mw-static-with [opts : StaticOpts root-dir : cstr ^fat next : (fn [ptr<void>] nil)] : ptr<void>
+(defn mw-static-with [opts : StaticOpts
+                      root-dir : cstr
+                      ^fat next : (fn [ptr<void>] nil)] : ptr<void>
   (let [_root    root-dir
         _index   (.index opts)
         _listing (.listing opts)

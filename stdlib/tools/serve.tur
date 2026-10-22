@@ -9,11 +9,14 @@
 ;;;
 ;;; Since: project-less-tools-plan PT1
 ;; A program, not a module: gendocs skips stdlib/tools/.
-
 (load "stdlib/args.tur")
+
 (load "stdlib/fs.tur")
+
 (load "stdlib/httpd.tur")
+
 (load "stdlib/process.tur")
+
 (load "stdlib/str-build.tur")
 
 ;;; serve/usage -- the usage text, to stdout for --help and stderr otherwise.
@@ -37,7 +40,11 @@
 
 ;;; serve/fail -- print `tur serve: <msg>` (and the usage, for a usage error)
 ;;; to stderr, release the parsed arguments and exit with `code`.
-(defn serve/fail [spec : ArgSpec res : ArgResult msg : cstr usage : bool code : int] : nil
+(defn serve/fail [spec : ArgSpec
+                  res : ArgResult
+                  msg : cstr
+                  usage : bool
+                  code : int] : nil
   (eprint "tur serve: ")
   (eprintln msg)
   (when usage (serve/usage true))
@@ -118,37 +125,55 @@
     (args/spec-short spec "-q" "--quiet")
     (args/spec-short spec "-h" "--help")
     (let [res (args/parse spec *args*)]
-      (when (args/error? res)
-        (serve/fail spec res (args/error-msg res) true 2))
+      (when (args/error? res) (serve/fail spec res (args/error-msg res) true 2))
       (when (args/has? res "help")
         (serve/usage false)
         (args/result-free res)
         (args/spec-free spec)
         (process/exit 0))
-      (let [dir   (match (serve/positional res)
-                    (Ok d)    d
-                    (Err msg) (do (serve/fail spec res msg true 2) "."))
-            bind  (args/get-str res "bind")
-            port  (match (serve/parse-port (args/get-str res "port"))
-                    (Some p) p
-                    (None)   (do (serve/fail spec res "--port takes a number from 0 to 65535" true 2) 0))]
+      (let [dir  (match (serve/positional res)
+                   (Ok d)
+                   d
+                   (Err msg)
+                   (do (serve/fail spec res msg true 2) "."))
+            bind (args/get-str res "bind")
+            port (match (serve/parse-port (args/get-str res "port"))
+                   (Some p)
+                   p
+                   (None)
+                   (do
+                     (serve/fail spec
+                       res
+                       "--port takes a number from 0 to 65535"
+                       true
+                       2)
+                     0))]
         (when (not (fs/dir? dir))
           (serve/fail spec res (str-concat "not a directory: " dir) false 2))
         (when (not (serve/bind! bind))
-          (serve/fail spec res "--bind takes any, localhost, or a numeric address" true 2))
+          (serve/fail spec
+            res
+            "--bind takes any, localhost, or a numeric address"
+            true
+            2))
         (let [base    (fn [c : ptr<void>] : nil
                         (httpd-resp-status! c 404)
                         (httpd-resp-body! c "Not Found"))
               static  (mw-static-with (StaticOpts (args/get-str res "index")
-                                                  (not (args/has? res "no-listing")))
-                                      dir
-                                      base)
+                                        (not (args/has? res "no-listing")))
+                        dir
+                        base)
               handler (if (args/has? res "quiet")
                         static
-                        (mw-log-to (fn [line : cstr] : nil (eprintln line)) static))
+                        (mw-log-to (fn [line : cstr] : nil (eprintln line))
+                          static))
               h       (httpd-new port handler)]
           (when (< (httpd-port h) 0)
-            (serve/fail spec res (str-concat "cannot listen on port " (args/get-str res "port")) false 1))
+            (serve/fail spec
+              res
+              (str-concat "cannot listen on port " (args/get-str res "port"))
+              false
+              1))
           (serve/announce dir bind (httpd-port h))
           (httpd-run h)
           0)))))

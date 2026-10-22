@@ -87,7 +87,8 @@ tur run stdlib/tools/serve.tur dist -p 8080
 Read it for a small, complete `stdlib/httpd.tur` program.
 
 It runs on the JIT when this `tur` carries one (in process: the `tur` PID is
-the server's), otherwise through the C compiler. `TUR_ENGINE=cc` or
+the server's), otherwise -- and always on Windows, where the JIT cannot read
+the socket headers -- through the C compiler. `TUR_ENGINE=cc` or
 `TUR_ENGINE=jit` picks one for debugging; `interp` is refused, since the
 interpreter has no httpd. It searches no spices: inside a project or outside
 one, `tur serve` means the same thing.
