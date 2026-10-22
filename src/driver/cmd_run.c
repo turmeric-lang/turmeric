@@ -8,6 +8,7 @@
 #include "commands.h"
 
 #ifndef _WIN32
+#include <signal.h>
 #include <sys/wait.h>
 #endif
 
@@ -15,6 +16,10 @@
 #include "global.h"   /* tur_installed_spice_dir, use_json_output */
 #include "globals.h"
 #include "justrun.h"
+#include "spice_search.h" /* g_no_global_spices */
+#ifdef TUR_HAVE_JIT
+#include "jit_engine.h"   /* tur_jit_set_quiet_warnings */
+#endif
 
 static int decode_exit_status(int status) {
     if (status == -1) return 127;
@@ -23,39 +28,135 @@ static int decode_exit_status(int status) {
     return 1;
 }
 
-/* engine-selection-plan E2/E3: delegate a resolved non-cc engine.
- * The subcommand arms keep their existing bodies (`cmd_jit` / `cmd_eval_inc`);
- * this adapts `tur run`'s normalized "entry + includes + program args"
- * request to each.  Unsatisfiable configurations are HARD errors -- a
- * project that declares an engine has declared a semantic requirement,
- * and quietly running a different one is the worst available outcome
- * (the JIT's own runtime TUR-W0070 cc fallback is unchanged: that one is
- * a per-program capability miss with a warning attached, not a
- * misconfiguration). */
-static int run_delegate_engine(const char *engine, const char *entry,
-                               char **user_inc, int n_user_inc,
-                               int argc, char **argv,
-                               int passthrough_start) {
+#ifndef _WIN32
+/* The program drv_exec_program is waiting for, so a SIGTERM or SIGHUP sent to
+ * tur reaches it too (a supervisor, or a test, stopping `tur serve`). */
+static volatile sig_atomic_t g_exec_child = 0;
+static void exec_forward_signal(int sig) {
+    if (g_exec_child > 0) kill((pid_t)g_exec_child, sig);
+}
+#endif
+
+/* project-less-tools-plan PT-D1: run an already-built executable with the
+ * program's arguments, and pass its exit status on.  `tur run`'s cc path,
+ * `tur serve`'s and `tur x`'s all end here.
+ *
+ * On POSIX the program is forked and exec'd directly, not run through
+ * system(): there is no shell to quote for, and the process tree is tur ->
+ * program, so stopping tur (SIGTERM/SIGHUP, forwarded) stops the program
+ * rather than orphaning it -- and tur still deletes a temporary binary after.
+ * Like system(), tur ignores SIGINT and SIGQUIT while it waits: Ctrl-C goes
+ * to the whole foreground group, so the program gets it and decides. */
+int drv_exec_program(const char *exe, char **prog_argv, int prog_argc) {
+    /* tur-run-dump-output-interleaves-program-output: a --dump-* report
+     * still in tur's stdout buffer would land after the program's own
+     * output, mid-line, once stdout is a file. */
+    fflush(NULL);
+#ifdef _WIN32
+    Buf cmd; buf_init(&cmd);
+    bool q = drv_buf_put_quoted(&cmd, exe);
+    for (int i = 0; i < prog_argc; i++) {
+        buf_putc(&cmd, ' ');
+        q = drv_buf_put_quoted(&cmd, prog_argv[i]) && q;
+    }
+    buf_putc(&cmd, '\0');
+    if (!q) fprintf(stderr, "tur: an argument was too long to quote\n");
+    prof_enter(PROF_RUN);
+    int sys = q ? system(cmd.data) : 2;
+    prof_exit(PROF_RUN);
+    buf_free(&cmd);
+    return q ? decode_exit_status(sys) : 2;
+#else
+    char **av = (char **)malloc((size_t)(prog_argc + 2) * sizeof(char *));
+    if (!av) return 2;
+    av[0] = (char *)exe;
+    for (int i = 0; i < prog_argc; i++) av[i + 1] = prog_argv[i];
+    av[prog_argc + 1] = NULL;
+    struct sigaction ign, fwd, old_int, old_quit, old_term, old_hup;
+    memset(&ign, 0, sizeof ign);
+    ign.sa_handler = SIG_IGN;
+    sigemptyset(&ign.sa_mask);
+    memset(&fwd, 0, sizeof fwd);
+    fwd.sa_handler = exec_forward_signal;
+    sigemptyset(&fwd.sa_mask);
+    sigaction(SIGINT, &ign, &old_int);
+    sigaction(SIGQUIT, &ign, &old_quit);
+    sigaction(SIGTERM, &fwd, &old_term);
+    sigaction(SIGHUP, &fwd, &old_hup);
+    prof_enter(PROF_RUN);
+    pid_t pid = fork();
+    if (pid == 0) {
+        /* The child starts with the dispositions tur had on entry. */
+        sigaction(SIGINT, &old_int, NULL);
+        sigaction(SIGQUIT, &old_quit, NULL);
+        sigaction(SIGTERM, &old_term, NULL);
+        sigaction(SIGHUP, &old_hup, NULL);
+        execv(exe, av);
+        fprintf(stderr, "tur: cannot run '%s': %s\n", exe, strerror(errno));
+        _exit(127);
+    }
+    int status = -1;
+    if (pid > 0) {
+        g_exec_child = (sig_atomic_t)pid;
+        while (waitpid(pid, &status, 0) < 0 && errno == EINTR) { }
+        g_exec_child = 0;
+    } else {
+        fprintf(stderr, "tur: fork failed: %s\n", strerror(errno));
+    }
+    prof_exit(PROF_RUN);
+    sigaction(SIGINT, &old_int, NULL);
+    sigaction(SIGQUIT, &old_quit, NULL);
+    sigaction(SIGTERM, &old_term, NULL);
+    sigaction(SIGHUP, &old_hup, NULL);
+    free(av);
+    return decode_exit_status(status);
+#endif
+}
+
+/* project-less-tools-plan PT-D1: "build this entry with these include dirs,
+ * then run it with these arguments", on a resolved engine.
+ *
+ * engine-selection-plan E2/E3: each engine keeps its own arm (`cmd_jit` /
+ * `cmd_eval_inc` / cmd_build); this adapts one normalized request to them.
+ * Unsatisfiable configurations are HARD errors -- a project that declares an
+ * engine has declared a semantic requirement, and quietly running a
+ * different one is the worst available outcome (the JIT's own runtime
+ * TUR-W0070 cc fallback is unchanged: that one is a per-program capability
+ * miss with a warning attached, not a misconfiguration).  `prog_argv` NULL
+ * means "no program arguments at all", as distinct from an empty list only
+ * in that no `--` is forwarded to `tur jit`. */
+int drv_run_program(const char *engine, const char *entry,
+                    char **inc, int n_inc,
+                    char **prog_argv, int prog_argc) {
     if (getenv("TUR_VERBOSE") && *getenv("TUR_VERBOSE"))
         fprintf(stderr, "tur run: engine '%s' for %s\n", engine, entry);
     if (strcmp(engine, "interp") == 0) {
-        /* The user's -I dirs are threaded through, and cmd_eval_h runs the
-         * same per-file spice walk-up `tur check` does (a dir already on the
-         * list is not added twice), so an interpreted spice resolves its
-         * intra- and cross-spice imports; program args after `--` become
-         * *args*.  This comment used to claim the walk-up happened while
-         * dropping -I -- neither was true (see
-         * docs/archive/interpret-takes-no-include-path-or-spice-discovery.md). */
-        char **prog_argv = (passthrough_start >= 0) ? argv + passthrough_start
-                                                    : NULL;
-        int    prog_argc = (passthrough_start >= 0) ? argc - passthrough_start
-                                                    : 0;
-        return cmd_eval_inc(entry, stderr_is_tty(), user_inc, n_user_inc,
-                            prog_argv, prog_argc, /*debug=*/false);
+        /* The -I dirs are threaded through, and cmd_eval_h runs the same
+         * per-file spice walk-up `tur check` does (a dir already on the list
+         * is not added twice), so an interpreted spice resolves its intra-
+         * and cross-spice imports; the program arguments become *args*
+         * (see docs/archive/interpret-takes-no-include-path-or-spice-discovery.md). */
+        return cmd_eval_inc(entry, stderr_is_tty(), inc, n_inc,
+                            prog_argv, prog_argv ? prog_argc : 0,
+                            /*debug=*/false);
+    }
+    if (strcmp(engine, "cc") == 0) {
+        char out_path[512];
+        snprintf(out_path, sizeof(out_path), "%s/tur-run-XXXXXX", tur_temp_dir());
+        int fd = mkstemp(out_path);
+        if (fd < 0) { fprintf(stderr, "tur: mkstemp failed\n"); return 2; }
+        close(fd);
+        tur_exe_path(out_path, sizeof(out_path));
+        int brc = cmd_build(entry, out_path, (const char **)inc, n_inc, NULL,
+                            NULL, 0);
+        if (brc != 0) { unlink(out_path); return brc; }
+        int rc = drv_exec_program(out_path, prog_argv, prog_argv ? prog_argc : 0);
+        unlink(out_path);
+        return rc;
     }
     /* jit */
 #ifndef TUR_HAVE_JIT
-    (void)user_inc; (void)n_user_inc;
+    (void)inc; (void)n_inc; (void)prog_argv; (void)prog_argc;
     fprintf(stderr,
             "tur run: engine \"jit\" is configured, but this build carries "
             "no JIT engine\n"
@@ -67,21 +168,20 @@ static int run_delegate_engine(const char *engine, const char *entry,
     /* Rebuild a `tur jit` argv: {argv0, "jit", -I <d>..., entry, --, rest}.
      * cmd_jit performs its own manifest discovery (P0) and TUR-W0070 cc
      * fallback. */
-    int cap = 3 + 2 * n_user_inc + 1 +
-              (passthrough_start >= 0 ? 1 + (argc - passthrough_start) : 0);
+    int cap = 3 + 2 * n_inc + 1 + (prog_argv ? 1 + prog_argc : 0);
     char **jargv = (char **)malloc((size_t)(cap + 1) * sizeof(char *));
     if (!jargv) return 2;
     int n = 0;
-    jargv[n++] = argv[0];
+    jargv[n++] = (char *)"tur";
     jargv[n++] = (char *)"jit";
-    for (int i = 0; i < n_user_inc; i++) {
+    for (int i = 0; i < n_inc; i++) {
         jargv[n++] = (char *)"-I";
-        jargv[n++] = user_inc[i];
+        jargv[n++] = inc[i];
     }
     jargv[n++] = (char *)entry;
-    if (passthrough_start >= 0) {
+    if (prog_argv) {
         jargv[n++] = (char *)"--";
-        for (int i = passthrough_start; i < argc; i++) jargv[n++] = argv[i];
+        for (int i = 0; i < prog_argc; i++) jargv[n++] = prog_argv[i];
     }
     jargv[n] = NULL;
     int rc = cmd_jit(n, jargv);
@@ -108,9 +208,20 @@ int cmd_run(int argc, char **argv) {
     int    n_user_inc = drv_parse_include_flags(scan_end, argv, 2, &user_inc);
     if (n_user_inc < 0) { free(user_inc); return drv_usage_error(usage_run); }
 
+    /* project-less-tools-plan PT-D6: the program's arguments are every word
+     * after the file that is not one of run's own flags, then everything
+     * after `--`.  run's flags are recognized on either side of the file; a
+     * program that wants a literal `--release` of its own puts it after
+     * `--`.  (Bare words after the file used to be dropped without a word.)
+     * They are compacted in place to argv[2..]: a word is only ever written
+     * at or below the index being read, and nothing reads argv after this
+     * loop, so no buffer has to be freed on cmd_run's many exits. */
+    char **prog_argv = argv + 2;
+    int    prog_argc = 0;
     for (int i = 2; i < argc; i++) {
         if (strcmp(argv[i], "--") == 0) {
             passthrough_start = i + 1;
+            for (int j = i + 1; j < argc; j++) prog_argv[prog_argc++] = argv[j];
             break;
         }
         int c;
@@ -130,10 +241,15 @@ int cmd_run(int argc, char **argv) {
             engine_flag = argv[++i];
         } else if (strncmp(argv[i], "--engine=", 9) == 0) {
             engine_flag = argv[i] + 9;
+        } else if (explicit_file) {
+            prog_argv[prog_argc++] = argv[i];
         } else if (argv[i][0] != '-' || strcmp(argv[i], "-") == 0) {
-            if (!explicit_file) explicit_file = argv[i];
+            explicit_file = argv[i];
         }
     }
+    /* Program arguments (or a `--`) make *args* explicit; with neither, the
+     * engines see no `--` at all, as before. */
+    char **prog_args = (prog_argc > 0 || passthrough_start >= 0) ? prog_argv : NULL;
     /* Read where cmd_build_once picks its default cc flags.  A non-cc engine
      * (tur jit, the interpreter) has no cc step for it to change. */
     g_cc_release = release;
@@ -184,24 +300,7 @@ int cmd_run(int argc, char **argv) {
         free(_inc);                                                      \
         if (_rc != 0) { unlink(out_path); for (int _i = 0; _i < n_spice_inc_dirs; _i++) free((char *)spice_inc_dirs[_i]); free(spice_inc_dirs); free(user_inc); free_reader_macro_paths(rm_paths_owned, n_rm_paths); for (int _i = 0; _i < n_auto_run_owned; _i++) free(auto_run_owned[_i]); \
         free(auto_run_owned); ls2_resolver_ctx_dispose(&run_ls2); return _rc; } \
-        Buf _cmd; buf_init(&_cmd);                                       \
-        bool _q = drv_buf_put_quoted(&_cmd, out_path);                       \
-        if (passthrough_start >= 0) {                                    \
-            for (int _i = passthrough_start; _i < argc; _i++) {          \
-                buf_putc(&_cmd, ' ');                                    \
-                _q = drv_buf_put_quoted(&_cmd, argv[_i]) && _q;              \
-            }                                                            \
-        }                                                                \
-        buf_putc(&_cmd, '\0');                                           \
-        /* tur-run-dump-output-interleaves-program-output: a --dump-* \
-         * report still in tur's stdout buffer would land after the     \
-         * program's own output, mid-line, once stdout is a file. */    \
-        fflush(NULL);                                                    \
-        prof_enter(PROF_RUN);                                            \
-        int _sys = _q ? system(_cmd.data) : 2;                           \
-        prof_exit(PROF_RUN);                                             \
-        if (!_q) fprintf(stderr, "tur run: an argument was too long to quote\n"); \
-        buf_free(&_cmd);                                                  \
+        int _xrc = drv_exec_program(out_path, prog_args, prog_args ? prog_argc : 0); \
         unlink(out_path);                                                \
         for (int _i = 0; _i < n_spice_inc_dirs; _i++) free((char *)spice_inc_dirs[_i]); \
         free(spice_inc_dirs);                                            \
@@ -210,7 +309,7 @@ int cmd_run(int argc, char **argv) {
         for (int _i = 0; _i < n_auto_run_owned; _i++) free(auto_run_owned[_i]); \
         free(auto_run_owned);                                              \
         ls2_resolver_ctx_dispose(&run_ls2);                              \
-        return decode_exit_status(_sys);                                 \
+        return _xrc;                                                     \
     } while (0)
 
     /* SC4+SC5: in explicit-file mode, auto-discover the file's enclosing
@@ -269,24 +368,11 @@ int cmd_run(int argc, char **argv) {
             ls2_resolver_ctx_set(NULL);
             unlink(src_tmp);
             if (brc != 0) { unlink(out_path); STDIN_FREE(); return brc; }
-            Buf run_cmd; buf_init(&run_cmd);
-            bool rq = drv_buf_put_quoted(&run_cmd, out_path);
-            if (passthrough_start >= 0)
-                for (int i = passthrough_start; i < argc; i++) {
-                    buf_putc(&run_cmd, ' ');
-                    rq = drv_buf_put_quoted(&run_cmd, argv[i]) && rq;
-                }
-            buf_putc(&run_cmd, '\0');
-            if (!rq)
-                fprintf(stderr, "tur run: an argument was too long to quote\n");
-            fflush(NULL);   /* as RUN_ENTRY: a dump first, then the program */
-            prof_enter(PROF_RUN);
-            int sys = rq ? system(run_cmd.data) : 2;
-            prof_exit(PROF_RUN);
-            buf_free(&run_cmd);
+            int xrc = drv_exec_program(out_path, prog_args,
+                                       prog_args ? prog_argc : 0);
             unlink(out_path);
             STDIN_FREE();
-            return decode_exit_status(sys);
+            return xrc;
         }
         /* RM4: in explicit-file mode, walk up from the file to discover an
          * enclosing build.tur and apply its `:reader-macros [...]` if any.
@@ -309,9 +395,9 @@ int cmd_run(int argc, char **argv) {
                 return 2;
             }
             if (strcmp(eng, "cc") != 0) {
-                int drc = run_delegate_engine(eng, explicit_file,
+                int drc = drv_run_program(eng, explicit_file,
                                               user_inc, n_user_inc,
-                                              argc, argv, passthrough_start);
+                                              prog_args, prog_argc);
                 free(user_inc);
                 for (int _i = 0; _i < n_auto_run_owned; _i++)
                     free(auto_run_owned[_i]);
@@ -609,8 +695,8 @@ entry_resolved:
             return 2;
         }
         if (strcmp(eng, "cc") != 0) {
-            int drc = run_delegate_engine(eng, entry, user_inc, n_user_inc,
-                                          argc, argv, passthrough_start);
+            int drc = drv_run_program(eng, entry, user_inc, n_user_inc,
+                                          prog_args, prog_argc);
             for (int _i = 0; _i < n_spice_inc_dirs; _i++)
                 free((char *)spice_inc_dirs[_i]);
             free(spice_inc_dirs);
@@ -960,4 +1046,54 @@ int cmd_test_main(int argc, char **argv) {
         return usage_test();
     if (argc != 3) return drv_usage_error(usage_test);
     return cmd_test(argv[2]);
+}
+
+/* project-less-tools-plan PT1: `tur serve [dir] [flags]`.
+ *
+ * The server is a Turmeric program shipped with the stdlib
+ * (`<stdlib root>/tools/serve.tur`); this arm finds it the way every stdlib
+ * `load` is found and runs it with the rest of the command line as its
+ * *args* -- it takes no flags of its own, so no `--` is needed.  The JIT runs
+ * it when this build carries one (in process, so the tur PID is the server's
+ * and nothing is left behind in the temp dir), else the cc path.  TUR_ENGINE
+ * overrides that for debugging; `interp` is refused, since the interpreter
+ * has no httpd natives.  The program is hermetic: no enclosing spice and no
+ * installed spice is searched, so `tur serve` means the same thing inside a
+ * project and outside one. */
+int cmd_serve(int argc, char **argv) {
+    char entry[4096];
+    snprintf(entry, sizeof entry, "%s/tools/serve.tur", resolve_stdlib_root());
+    struct stat st;
+    if (stat(entry, &st) != 0 || !S_ISREG(st.st_mode)) {
+        fprintf(stderr,
+                "tur serve: cannot find the server program at '%s'\n"
+                "     it ships with the stdlib; set TUR_STDLIB_DIR to a stdlib "
+                "directory that has tools/serve.tur\n", entry);
+        return 2;
+    }
+#ifdef TUR_HAVE_JIT
+    const char *engine = "jit";
+#else
+    const char *engine = "cc";
+#endif
+    const char *env = getenv("TUR_ENGINE");
+    if (env && *env) {
+        if (strcmp(env, "interp") == 0) {
+            fprintf(stderr,
+                    "tur serve: engine \"interp\" cannot run the server (the "
+                    "interpreter has no httpd)\n"
+                    "     use TUR_ENGINE=jit or TUR_ENGINE=cc\n");
+            return 2;
+        }
+        engine = drv_resolve_engine(entry, NULL);
+        if (!engine) return 2;
+    }
+    g_no_auto_spice    = true;
+    g_no_global_spices = true;
+#ifdef TUR_HAVE_JIT
+    /* c2mir's notes on the system headers are noise to someone serving a
+     * directory; its errors still print. */
+    if (strcmp(engine, "jit") == 0) (void)tur_jit_set_quiet_warnings(true);
+#endif
+    return drv_run_program(engine, entry, NULL, 0, argv + 2, argc - 2);
 }

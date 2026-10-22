@@ -1,0 +1,47 @@
+## tur run F a b
+a
+b
+2
+exit 0
+## tur run F -- a
+a
+1
+exit 0
+## tur run F a -- --release -I x
+a
+--release
+-I
+x
+4
+exit 0
+## tur run --release F a
+a
+1
+exit 0
+## tur run F a --release b
+a
+b
+2
+exit 0
+## tur run -I DIR F a -I DIR b
+a
+b
+2
+exit 0
+## tur run F -x --flag
+-x
+--flag
+2
+exit 0
+## tur run F
+0
+exit 0
+## tur run --engine=interp F i1 i2
+i1
+i2
+2
+exit 0
+## tur run F --engine interp i3
+i3
+1
+exit 0

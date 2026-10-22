@@ -1,0 +1,31 @@
+Serving site on http://127.0.0.1:PORT/ (Ctrl-C to stop)
+/ -> 200
+  body: <p>home</p>
+/sub -> 301 location=/sub/
+/sub/ -> 200
+  <a href="../">../</a>
+  <a href="inner/">inner/</a>
+  <a href="b.txt">b.txt</a>
+/sub/b.txt -> 200
+  body: bee
+/sub/.hidden -> 404
+/../outside.txt -> 404
+/nope -> 404
+GET / -> 200 11 Nms
+GET /sub -> 301 0 Nms
+GET /sub/ -> 200 521 Nms
+GET /sub/b.txt -> 200 3 Nms
+GET /sub/.hidden -> 404 9 Nms
+GET /../outside.txt -> 404 9 Nms
+GET /nope -> 404 9 Nms
+Serving site on http://127.0.0.1:PORT/ (Ctrl-C to stop)
+/ -> 200
+/sub/ -> 404
+quiet log lines: 0
+Serving . on http://127.0.0.1:PORT/ (Ctrl-C to stop)
+serve --frob -> exit 2 (tur serve: unknown flag: --frob)
+serve -p 70000 -> exit 2 (tur serve: --port takes a number from 0 to 65535)
+serve TMP/missing -> exit 2 (tur serve: not a directory: TMP/missing)
+serve a b -> exit 2 (tur serve: expected at most one directory)
+serve --bind nope -> exit 2 (tur serve: --bind takes any, localhost, or a numeric address)
+Usage: tur serve [dir] [options]

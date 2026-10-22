@@ -57,6 +57,13 @@ int cmd_run(int argc, char **argv);
 int cmd_check_dir(const char *dir);
 int cmd_run_main(int argc, char **argv);
 int cmd_test_main(int argc, char **argv);
+int cmd_serve(int argc, char **argv);
+/* project-less-tools-plan PT-D1: the one "build entry, run with args" path
+ * `tur run`, `tur serve` and `tur x` share. */
+int drv_exec_program(const char *exe, char **prog_argv, int prog_argc);
+int drv_run_program(const char *engine, const char *entry,
+                    char **inc, int n_inc,
+                    char **prog_argv, int prog_argc);
 
 /* == driver/jit.c ========================================================== */
 int cmd_jit(int argc, char **argv);

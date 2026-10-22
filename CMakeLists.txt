@@ -1076,6 +1076,15 @@ add_test(
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
 set_tests_properties(tur_release_sdk PROPERTIES ENVIRONMENT "ASAN_OPTIONS=detect_leaks=0")
+# project-less-tools-plan PT1: `tur serve` runs a program shipped in the
+# stdlib, so it is the one command that needs the archive's layout to be
+# right.  Stage it and serve from an unrelated directory on both engines.
+add_test(
+  NAME tur_serve_release
+  COMMAND bash tests/check-serve-release.sh "${CMAKE_BINARY_DIR}"
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+set_tests_properties(tur_serve_release PROPERTIES ENVIRONMENT "ASAN_OPTIONS=detect_leaks=0")
 # tur-init-help-scaffolds-and-overwrites: `tur init` must never destroy a
 # working tree.  `tur init --help` did not print help -- the flag fell past the
 # project-name slot, the cwd basename was used as the name, and scaffolding
