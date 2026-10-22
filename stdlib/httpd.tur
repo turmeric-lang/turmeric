@@ -100,9 +100,9 @@
   /* __tur_include__: typedef struct __HttpdAttr { char *key; char *value; struct __HttpdAttr *next; } HttpdAttr; */
   /* __tur_include__: typedef struct __HttpdOwnedStr { char *s; struct __HttpdOwnedStr *next; } HttpdOwnedStr; */
   /* __tur_include__: typedef struct { int fd; int64_t handler; char method[16]; char path[1024]; char version[16]; char *body; int body_len; int resp_status; char *resp_body; int resp_body_len; int client_keep_alive; void *route_params; int64_t tls; void *req_headers; void *resp_headers; int64_t req_json_cache; void *req_multipart_parts; void *fiber_group; void *attr_list; void *owned_cstrs; int upgrade; int64_t on_upgrade; int has_max_body; int64_t max_body; } HttpdConn; */
-  /* __tur_include__: static const char *httpd_mp_find(const char *h, const char *e, const char *n, size_t nl) { if (!h || !e || nl == 0) return 0; for (; h + nl <= e; h++) if (memcmp(h, n, nl) == 0) return h; return 0; } */
-  /* __tur_include__: static int httpd_hdr_param(const char *v, const char *ve, const char *key, char *out, int cap) { size_t kl = strlen(key); const char *q = (const char *)memchr(v, ';', (size_t)(ve - v)); while (q && q < ve) { q++; while (q < ve && (*q == ' ' || *q == '\t')) q++; const char *ks = q; while (q < ve && *q != '=' && *q != ';') q++; const char *ke = q; while (ke > ks && (ke[-1] == ' ' || ke[-1] == '\t')) ke--; if (q >= ve || *q == ';') continue; q++; while (q < ve && (*q == ' ' || *q == '\t')) q++; int hit = (size_t)(ke - ks) == kl && strncasecmp(ks, key, kl) == 0; int n = 0; if (q < ve && *q == '"') { q++; while (q < ve && *q != '"') { if (*q == '\\' && q + 1 < ve) q++; if (hit && n + 1 < cap) out[n++] = *q; q++; } if (q < ve) q++; } else { while (q < ve && *q != ';' && *q != ' ' && *q != '\t') { if (hit && n + 1 < cap) out[n++] = *q; q++; } } if (hit) { out[n] = '\0'; return n; } q = (const char *)memchr(q, ';', (size_t)(ve - q)); } return -1; } */
-  /* __tur_include__: static char *httpd_conn_own_cstr(HttpdConn *c, char *s) { if (!c || !s) return s; HttpdOwnedStr *n = (HttpdOwnedStr *)malloc(sizeof(HttpdOwnedStr)); if (!n) return s; n->s = s; n->next = (HttpdOwnedStr *)c->owned_cstrs; c->owned_cstrs = n; return s; } */
+  /* __tur_include__: static __attribute__((unused)) const char *httpd_mp_find(const char *h, const char *e, const char *n, size_t nl) { if (!h || !e || nl == 0) return 0; for (; h + nl <= e; h++) if (memcmp(h, n, nl) == 0) return h; return 0; } */
+  /* __tur_include__: static __attribute__((unused)) int httpd_hdr_param(const char *v, const char *ve, const char *key, char *out, int cap) { size_t kl = strlen(key); const char *q = (const char *)memchr(v, ';', (size_t)(ve - v)); while (q && q < ve) { q++; while (q < ve && (*q == ' ' || *q == '\t')) q++; const char *ks = q; while (q < ve && *q != '=' && *q != ';') q++; const char *ke = q; while (ke > ks && (ke[-1] == ' ' || ke[-1] == '\t')) ke--; if (q >= ve || *q == ';') continue; q++; while (q < ve && (*q == ' ' || *q == '\t')) q++; int hit = (size_t)(ke - ks) == kl && strncasecmp(ks, key, kl) == 0; int n = 0; if (q < ve && *q == '"') { q++; while (q < ve && *q != '"') { if (*q == '\\' && q + 1 < ve) q++; if (hit && n + 1 < cap) out[n++] = *q; q++; } if (q < ve) q++; } else { while (q < ve && *q != ';' && *q != ' ' && *q != '\t') { if (hit && n + 1 < cap) out[n++] = *q; q++; } } if (hit) { out[n] = '\0'; return n; } q = (const char *)memchr(q, ';', (size_t)(ve - q)); } return -1; } */
+  /* __tur_include__: static __attribute__((unused)) char *httpd_conn_own_cstr(HttpdConn *c, char *s) { if (!c || !s) return s; HttpdOwnedStr *n = (HttpdOwnedStr *)malloc(sizeof(HttpdOwnedStr)); if (!n) return s; n->s = s; n->next = (HttpdOwnedStr *)c->owned_cstrs; c->owned_cstrs = n; return s; } */
   return 0;
   ```)
 ;;; httpd-register-tls-impl -- install TLS function pointers into the H5 hook table.
@@ -2901,8 +2901,8 @@
   ```c
   /* __tur_include__: typedef struct __HttpdCorsCfg { char *origin; char *methods; char *headers; char *expose; int creds; int wildcard; int64_t max_age; struct __HttpdCorsCfg *next; } HttpdCorsCfg; */
   /* __tur_include__: static HttpdCorsCfg *g_cors_registry = 0; */
-  /* __tur_include__: static int g_cors_atexit = 0; */
-  /* __tur_include__: static void httpd_cors_cleanup_all(void) { HttpdCorsCfg *c = g_cors_registry; while (c) { HttpdCorsCfg *nx = c->next; free(c->origin); free(c->methods); free(c->headers); free(c->expose); free(c); c = nx; } g_cors_registry = 0; } */
+  /* __tur_include__: static __attribute__((unused)) int g_cors_atexit = 0; */
+  /* __tur_include__: static __attribute__((unused)) void httpd_cors_cleanup_all(void) { HttpdCorsCfg *c = g_cors_registry; while (c) { HttpdCorsCfg *nx = c->next; free(c->origin); free(c->methods); free(c->headers); free(c->expose); free(c); c = nx; } g_cors_registry = 0; } */
   HttpdCorsCfg *c = (HttpdCorsCfg *)calloc(1, sizeof *c);
   if (!c) return 0;
   c->origin  = strdup(allow_origin   ? allow_origin   : "*");
@@ -5160,8 +5160,8 @@
   /* __tur_include__: #include <stdlib.h> */
   /* __tur_include__: typedef struct __RLReg { void *st; void *entries; struct __RLReg *next; } RLReg; */
   /* __tur_include__: static RLReg *g_rl_registry = 0; */
-  /* __tur_include__: static int g_rl_atexit_registered = 0; */
-  /* __tur_include__: static void httpd_rl_cleanup_all(void) { RLReg *r = g_rl_registry; while (r) { RLReg *nx = r->next; if (r->entries) free(r->entries); if (r->st) free(r->st); free(r); r = nx; } g_rl_registry = 0; } */
+  /* __tur_include__: static __attribute__((unused)) int g_rl_atexit_registered = 0; */
+  /* __tur_include__: static __attribute__((unused)) void httpd_rl_cleanup_all(void) { RLReg *r = g_rl_registry; while (r) { RLReg *nx = r->next; if (r->entries) free(r->entries); if (r->st) free(r->st); free(r); r = nx; } g_rl_registry = 0; } */
   RLState *st = (RLState *)calloc(1, sizeof(RLState));
   if (!st) return 0;
   st->capacity     = 256 * 8;   /* 256 sets of 8 ways, 128 KiB */
@@ -5338,6 +5338,14 @@
   if (strcasecmp(ext, "ico") == 0)  return "image/x-icon";
   if (strcasecmp(ext, "wasm")== 0)  return "application/wasm";
   if (strcasecmp(ext, "pdf") == 0)  return "application/pdf";
+  if (strcasecmp(ext, "mjs") == 0)  return "application/javascript; charset=utf-8";
+  if (strcasecmp(ext, "map") == 0)  return "application/json";
+  if (strcasecmp(ext, "xml") == 0)  return "application/xml";
+  if (strcasecmp(ext, "webp")== 0)  return "image/webp";
+  if (strcasecmp(ext, "woff")== 0)  return "font/woff";
+  if (strcasecmp(ext, "woff2")== 0) return "font/woff2";
+  if (strcasecmp(ext, "mp4") == 0)  return "video/mp4";
+  if (strcasecmp(ext, "md")  == 0)  return "text/markdown; charset=utf-8";
   return "application/octet-stream";
   ```)
 ;;; httpd-mw-static-try -- internal: attempt to serve `path` from `root`
@@ -5349,32 +5357,144 @@
   if (!conn) return 0;
   return __TUR_CNAME_httpd-static-serve!__(conn, root, ((HttpdConn *)conn)->path) ? 1 : 0;
   ```)
-;;; httpd-static-serve! -- answer a request with a file under a root directory.
-;;;
-;;; mw-static's file serving, for callers that pick the path themselves (a
-;;; framework mapping `/assets/*` onto a directory, say).  `rel` is joined onto
-;;; `root` (its query string ignored); the file must resolve, symlinks and all,
-;;; to a regular file inside `root`, and no segment of `rel` may start with '.'
-;;; (`.well-known` excepted) or contain a backslash.  A hit sets status 200,
-;;; the body (binary-safe), `Content-Type` from the extension and a strong
-;;; `ETag` of `"<size hex>-<mtime hex>"`; an `If-None-Match` naming that tag
-;;; (or `*`) gets 304 with the ETag and no body.
-;;;
-;;; Parameters:
-;;;   conn -- connection handle from the worker
-;;;   root -- filesystem directory to serve from
-;;;   rel  -- the path to look up under it, e.g. "/css/site.css"
-;;;
-;;; Returns:
-;;;   bool -- true when it answered (200 or 304), false on a miss (nothing
-;;;           written).
-;;;
-;;; Example:
-;;;   (when (not (httpd-static-serve! c "./public" "/index.html"))
-;;;     (httpd-resp-status! c 404))
-;;;
-;;; Since: tourist-on-stdlib-httpd H5
-(defn httpd-static-serve! [conn : ptr<void> root : cstr rel : cstr] : bool
+
+;;; httpd-static-listing! -- internal: answer with an HTML listing of `dir`
+;;; (an already-resolved directory), titled with the first `plen` bytes of
+;;; `path`.  Dotfiles are left out; directories come first, then files, each
+;;; group byte-wise.  Returns false (nothing written) when `dir` cannot be read.
+(defn httpd-static-listing! [conn : ptr<void> dir : cstr path : cstr plen : int] : bool
+  ```c
+  #include <dirent.h>
+  #include <sys/stat.h>
+  if (!conn || !dir || !path) return 0;
+  DIR *d = opendir(dir);
+  if (!d) return 0;
+  typedef struct { char *name; int is_dir; long long size; long long mtime; } HttpdLsEnt;
+  HttpdLsEnt *ents = NULL;
+  size_t n = 0, cap = 0;
+  struct dirent *de;
+  while ((de = readdir(d))) {
+      const char *nm = de->d_name;
+      if (nm[0] == '.') continue;   /* ".", "..", and dotfiles (unservable anyway) */
+      if (n == cap) {
+          size_t nc = cap ? cap * 2 : 32;
+          HttpdLsEnt *g = (HttpdLsEnt *)realloc(ents, nc * sizeof *g);
+          if (!g) break;
+          ents = g; cap = nc;
+      }
+      char ep[4600];
+      snprintf(ep, sizeof ep, "%s/%s", dir, nm);
+      struct stat es;
+      int ok = stat(ep, &es) == 0;
+      ents[n].name   = strdup(nm);
+      if (!ents[n].name) break;
+      ents[n].is_dir = ok && S_ISDIR(es.st_mode);
+      ents[n].size   = ok ? (long long)es.st_size : -1;
+      ents[n].mtime  = ok ? (long long)es.st_mtime : 0;
+      n++;
+  }
+  closedir(d);
+  /* Directories first, then byte order.  Insertion sort: listings are small
+   * and the body stays free of a file-scope comparator. */
+  for (size_t i = 1; i < n; i++) {
+      HttpdLsEnt key = ents[i];
+      size_t j = i;
+      while (j > 0) {
+          HttpdLsEnt *pr = &ents[j - 1];
+          int gt = pr->is_dir != key.is_dir ? key.is_dir : strcmp(pr->name, key.name) > 0;
+          if (!gt) break;
+          ents[j] = *pr;
+          j--;
+      }
+      ents[j] = key;
+  }
+  /* A growable output buffer; the macros keep the body free of helpers. */
+  char  *out = NULL;
+  size_t ol = 0, oc = 0;
+  int    oom = 0;
+  #define HTTPD_LS_PUTN(src_, n_) do { size_t _n = (n_); \
+      if (!oom && ol + _n + 1 > oc) { size_t _c = oc ? oc : 1024; \
+          while (ol + _n + 1 > _c) _c *= 2; \
+          char *_g = (char *)realloc(out, _c); \
+          if (!_g) oom = 1; else { out = _g; oc = _c; } } \
+      if (!oom) { memcpy(out + ol, (src_), _n); ol += _n; out[ol] = '\0'; } } while (0)
+  #define HTTPD_LS_PUT(s_) HTTPD_LS_PUTN((s_), strlen(s_))
+  /* HTML-escape text content and attribute values. */
+  #define HTTPD_LS_ESC(s_, n_) do { const char *_s = (s_); size_t _len = (n_); \
+      for (size_t _i = 0; _i < _len; _i++) { char _ch = _s[_i]; \
+          if (_ch == '&') HTTPD_LS_PUT("&amp;"); \
+          else if (_ch == '<') HTTPD_LS_PUT("&lt;"); \
+          else if (_ch == '>') HTTPD_LS_PUT("&gt;"); \
+          else if (_ch == '"') HTTPD_LS_PUT("&quot;"); \
+          else if (_ch == '\'') HTTPD_LS_PUT("&#39;"); \
+          else HTTPD_LS_PUTN(&_ch, 1); } } while (0)
+  /* Percent-encode a name for an href: everything but RFC 3986 unreserved. */
+  #define HTTPD_LS_PCT(s_) do { const unsigned char *_u = (const unsigned char *)(s_); \
+      for (; *_u; _u++) { unsigned char _b = *_u; \
+          if ((_b >= 'A' && _b <= 'Z') || (_b >= 'a' && _b <= 'z') || \
+              (_b >= '0' && _b <= '9') || _b == '-' || _b == '.' || _b == '_' || _b == '~') { \
+              char _ch = (char)_b; HTTPD_LS_PUTN(&_ch, 1); } \
+          else { char _h[4]; snprintf(_h, sizeof _h, "%%%02X", _b); HTTPD_LS_PUTN(_h, 3); } } } while (0)
+  size_t pl = (size_t)(plen < 0 ? 0 : plen);
+  HTTPD_LS_PUT("<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n<title>Index of ");
+  HTTPD_LS_ESC(path, pl);
+  HTTPD_LS_PUT("</title>\n<style>body{font-family:system-ui,sans-serif;margin:2em}"
+               "td{padding:0 1.5em 0 0}td.n{text-align:right}</style>\n</head>\n<body>\n<h1>Index of ");
+  HTTPD_LS_ESC(path, pl);
+  HTTPD_LS_PUT("</h1>\n<table>\n");
+  if (!(pl == 1 && path[0] == '/'))
+      HTTPD_LS_PUT("<tr><td><a href=\"../\">../</a></td><td></td><td></td></tr>\n");
+  for (size_t i = 0; i < n; i++) {
+      HTTPD_LS_PUT("<tr><td><a href=\"");
+      HTTPD_LS_PCT(ents[i].name);
+      if (ents[i].is_dir) HTTPD_LS_PUT("/");
+      HTTPD_LS_PUT("\">");
+      HTTPD_LS_ESC(ents[i].name, strlen(ents[i].name));
+      if (ents[i].is_dir) HTTPD_LS_PUT("/");
+      HTTPD_LS_PUT("</a></td><td class=\"n\">");
+      char cell[64];
+      if (ents[i].is_dir || ents[i].size < 0) HTTPD_LS_PUT("-");
+      else { snprintf(cell, sizeof cell, "%lld", ents[i].size); HTTPD_LS_PUT(cell); }
+      HTTPD_LS_PUT("</td><td>");
+      /* UTC date from the epoch by arithmetic (days -> civil date), so no
+       * gmtime_r / gmtime_s split and nothing thread-unsafe. */
+      long long t = ents[i].mtime;
+      long long days = t / 86400, secs = t % 86400;
+      if (secs < 0) { secs += 86400; days--; }
+      long long z = days + 719468;
+      long long era = (z >= 0 ? z : z - 146096) / 146097;
+      long long doe = z - era * 146097;
+      long long yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+      long long y = yoe + era * 400;
+      long long doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+      long long mp = (5 * doy + 2) / 153;
+      long long dd = doy - (153 * mp + 2) / 5 + 1;
+      long long mm = mp < 10 ? mp + 3 : mp - 9;
+      if (mm <= 2) y++;
+      snprintf(cell, sizeof cell, "%04lld-%02lld-%02lld %02lld:%02lld UTC",
+               y, mm, dd, secs / 3600, (secs / 60) % 60);
+      HTTPD_LS_PUT(cell);
+      HTTPD_LS_PUT("</td></tr>\n");
+      free(ents[i].name);
+  }
+  free(ents);
+  HTTPD_LS_PUT("</table>\n</body>\n</html>\n");
+  #undef HTTPD_LS_PCT
+  #undef HTTPD_LS_ESC
+  #undef HTTPD_LS_PUT
+  #undef HTTPD_LS_PUTN
+  if (oom || !out) { free(out); return 0; }
+  __TUR_CNAME_httpd-resp-status!__((void *)conn, 200);
+  __TUR_CNAME_httpd-resp-body-bytes!__((void *)conn, (void *)out, (int64_t)ol);
+  free(out);
+  __TUR_CNAME_httpd-resp-header!__((void *)conn, "Content-Type", "text/html; charset=utf-8");
+  return 1;
+  ```)
+
+
+;;; httpd-static-serve-with-flags! -- internal: httpd-static-serve-with! with
+;;; the StaticOpts fields passed one by one (`index-file` "" = none).
+(defn httpd-static-serve-with-flags! [conn : ptr<void> root : cstr rel : cstr index-file : cstr listing : bool] : bool
   ```c
   #include <sys/stat.h>
   #include <fcntl.h>
@@ -5392,6 +5512,39 @@
    * contains a backslash (a separator on Windows).  The substring check stays
    * as a second line. */
   size_t rpl = strcspn(rp, "?#");
+  /* The path is percent-decoded before any check below runs, so "%2e%2e" is
+   * ".." to the checks as it is to the filesystem, and a listing's encoded
+   * links (a space is %20) reach the files they name.  A malformed escape or
+   * a %00 is a miss.  `raw` keeps the path as sent, for a redirect. */
+  const char *raw = rp;
+  size_t rawl = rpl;
+  char dec[1024];
+  {
+      size_t o = 0;
+      for (size_t i = 0; i < rawl; i++) {
+          unsigned char ch = (unsigned char)raw[i];
+          if (ch == '%') {
+              if (i + 2 >= rawl) return 0;
+              int v = 0;
+              for (int k = 1; k <= 2; k++) {
+                  unsigned char h = (unsigned char)raw[i + k];
+                  v <<= 4;
+                  if (h >= '0' && h <= '9') v |= h - '0';
+                  else if (h >= 'a' && h <= 'f') v |= h - 'a' + 10;
+                  else if (h >= 'A' && h <= 'F') v |= h - 'A' + 10;
+                  else return 0;
+              }
+              if (v == 0) return 0;
+              ch = (unsigned char)v;
+              i += 2;
+          }
+          if (o + 1 >= sizeof dec) return 0;
+          dec[o++] = (char)ch;
+      }
+      dec[o] = '\0';
+      rp = dec;
+      rpl = o;
+  }
   if (memchr(rp, '\\', rpl)) return 0;
   for (size_t i = 0; i < rpl; i++) {
       if ((i == 0 || rp[i - 1] == '/') && rp[i] == '.') {
@@ -5436,12 +5589,53 @@
   size_t rrl = strlen(rroot);
   while (rrl > 1 && (rroot[rrl - 1] == '/' || rroot[rrl - 1] == '\\')) rroot[--rrl] = '\0';
   if (strncmp(rfull, rroot, rrl) != 0) return 0;
-  if (!(rrl == 1 || rfull[rrl] == '/' || rfull[rrl] == '\\')) return 0;
+  /* The root itself (a request for "/") is inside; it can only ever be a
+   * directory, which the S_ISREG check below refuses unless the caller
+   * asked for an index or a listing. */
+  if (!(rrl == 1 || rfull[rrl] == '/' || rfull[rrl] == '\\' || rfull[rrl] == '\0')) return 0;
   /* Open the resolved path and stat what was opened, not the name. */
   int ffd = open(rfull, O_RDONLY | O_NOFOLLOW);
-  if (ffd < 0) return 0;
   struct stat sb;
-  if (fstat(ffd, &sb) != 0 || !S_ISREG(sb.st_mode)) { close(ffd); return 0; }
+  int is_dir = 0;
+  if (ffd < 0) {
+      /* Windows cannot open() a directory; a directory is still worth
+       * knowing about when an index or a listing was asked for. */
+      if (stat(rfull, &sb) != 0 || !S_ISDIR(sb.st_mode)) return 0;
+      is_dir = 1;
+  } else if (fstat(ffd, &sb) != 0) {
+      close(ffd); return 0;
+  } else if (S_ISDIR(sb.st_mode)) {
+      close(ffd); ffd = -1; is_dir = 1;
+  } else if (!S_ISREG(sb.st_mode)) {
+      close(ffd); return 0;
+  }
+  if (is_dir) {
+      /* project-less-tools-plan PT-D4.  Without an index or a listing a
+       * directory is a miss, exactly as before. */
+      int want_index = index_file && *index_file && !strchr(index_file, '/') && !strchr(index_file, '\\');
+      if (!want_index && !listing) return 0;
+      /* A directory path without its trailing '/' is redirected to one, so
+       * the listing's relative links resolve against the directory. */
+      if (rawl == 0 || raw[rawl - 1] != '/') {
+          char loc[2200];
+          snprintf(loc, sizeof loc, "%.*s/%s", (int)rawl, raw, raw + rawl);
+          __TUR_CNAME_httpd-resp-status!__((void *)conn, 301);
+          __TUR_CNAME_httpd-resp-body!__((void *)conn, "");
+          __TUR_CNAME_httpd-resp-header!__((void *)conn, "Location", loc);
+          return 1;
+      }
+      /* The index goes through this same function as a file request, so it
+       * gets the containment check, the dotfile rule and the ETag. */
+      if (want_index) {
+          char ip[2200];
+          int il = snprintf(ip, sizeof ip, "%.*s%s", (int)rawl, raw, index_file);
+          if (il > 0 && (size_t)il < sizeof ip &&
+              __TUR_CNAME_httpd-static-serve-with-flags!__(conn, root, ip, "", 0))
+              return 1;
+      }
+      if (!listing) return 0;
+      return __TUR_CNAME_httpd-static-listing!__(conn, rfull, rp, (int64_t)rpl) ? 1 : 0;
+  }
   /* ETag = "<size>-<mtime>" */
   char etag[64];
   snprintf(etag, sizeof(etag), "\"%llx-%llx\"",
@@ -5500,6 +5694,103 @@
   __TUR_CNAME_httpd-resp-header!__((void *)conn, "ETag", etag);
   return 1;
   ```)
+
+;;; httpd-static-serve! -- answer a request with a file under a root directory.
+;;;
+;;; mw-static's file serving, for callers that pick the path themselves (a
+;;; framework mapping `/assets/*` onto a directory, say).  `rel` is joined onto
+;;; `root` (its query string ignored); the file must resolve, symlinks and all,
+;;; to a regular file inside `root`, and no segment of `rel` may start with '.'
+;;; (`.well-known` excepted) or contain a backslash.  A hit sets status 200,
+;;; the body (binary-safe), `Content-Type` from the extension and a strong
+;;; `ETag` of `"<size hex>-<mtime hex>"`; an `If-None-Match` naming that tag
+;;; (or `*`) gets 304 with the ETag and no body.
+;;;
+;;; Parameters:
+;;;   conn -- connection handle from the worker
+;;;   root -- filesystem directory to serve from
+;;;   rel  -- the path to look up under it, e.g. "/css/site.css"
+;;;
+;;; Returns:
+;;;   bool -- true when it answered (200 or 304), false on a miss (nothing
+;;;           written).
+;;;
+;;; Example:
+;;;   (when (not (httpd-static-serve! c "./public" "/index.html"))
+;;;     (httpd-resp-status! c 404))
+;;;
+;;; Since: tourist-on-stdlib-httpd H5
+(defn httpd-static-serve! [conn : ptr<void> root : cstr rel : cstr] : bool
+  (httpd-static-serve-with-flags! conn root rel "" false))
+
+;;; StaticOpts -- what the static path does with a request for a directory.
+;;;
+;;; Fields:
+;;;   index   -- a file to serve for a directory path, e.g. "index.html";
+;;;              "" serves none
+;;;   listing -- render an HTML listing when there is no index
+;;;
+;;; Example:
+;;;   (mw-static-with (StaticOpts "index.html" true) "./public" base)
+;;;
+;;; Since: project-less-tools-plan PT0
+(defstruct StaticOpts
+  [index   : cstr
+   listing : bool])
+
+;;; httpd-static-serve-with! -- httpd-static-serve!, with an index and a listing.
+;;;
+;;; The same file path, containment and dotfile rules as httpd-static-serve!.
+;;; A request that resolves to a directory, which httpd-static-serve! treats
+;;; as a miss, is answered according to `opts`:
+;;;
+;;;   1. without a trailing '/' -- 301 to the same path with one, so relative
+;;;      links in the page resolve inside the directory;
+;;;   2. with `(.index opts)` naming a regular file in it -- that file, ETag
+;;;      and all;
+;;;   3. with `(.listing opts)` -- an HTML listing (text/html, no ETag):
+;;;      directories first, names escaped and percent-encoded, size and
+;;;      modification time, dotfiles left out;
+;;;   4. otherwise a miss.
+;;;
+;;; With `(StaticOpts "" false)` it is exactly httpd-static-serve!.
+;;;
+;;; Parameters:
+;;;   conn -- connection handle from the worker
+;;;   opts -- the index file and whether to list a directory
+;;;   root -- filesystem directory to serve from
+;;;   rel  -- the path to look up under it, e.g. "/docs/"
+;;;
+;;; Returns:
+;;;   bool -- true when it answered (200, 301 or 304), false on a miss.
+;;;
+;;; Example:
+;;;   (when (not (httpd-static-serve-with! c (StaticOpts "index.html" true) "./site" (httpd-req-path c)))
+;;;     (httpd-resp-status! c 404))
+;;;
+;;; Since: project-less-tools-plan PT0
+(defn httpd-static-serve-with! [conn : ptr<void> opts : StaticOpts root : cstr rel : cstr] : bool
+  (httpd-static-serve-with-flags! conn root rel (.index opts) (.listing opts)))
+
+;;; httpd-mw-static-fallback -- internal: when the response status is 404,
+;;; try to serve a file from root; otherwise no-op. Always returns nil.
+(defn httpd-mw-static-fallback [conn : ptr<void> root : cstr] : nil
+  ```c
+  if (!conn) return;
+  if (httpd_hyresp_hystatus_hyget((void *)conn) != 404) return;
+  (void)httpd_hymw_hystatic_hytry((void *)conn, root);
+  ```)
+
+;;; httpd-mw-static-fallback-with -- internal: mw-static-with's fallback; the
+;;; StaticOpts fields passed one by one.
+(defn httpd-mw-static-fallback-with [conn : ptr<void> root : cstr index-file : cstr listing : bool] : nil
+  ```c
+  if (!conn) return;
+  if (httpd_hyresp_hystatus_hyget((void *)conn) != 404) return;
+  (void)__TUR_CNAME_httpd-static-serve-with-flags!__((void *)conn, root, ((HttpdConn *)conn)->path,
+                                                     index_file, listing);
+  ```)
+
 ;;; mw-static -- serve files from a root directory when next returns 404.
 ;;;
 ;;; Composes after a router: `next` is consulted first; only when `next`
@@ -5522,23 +5813,41 @@
 ;;;     (httpd-new 0 composed))
 ;;;
 ;;; Since: Phase H8 (MW2)
-;;; httpd-mw-static-fallback -- internal: when the response status is 404,
-;;; try to serve a file from root; otherwise no-op. Always returns nil.
-
-
-(defn httpd-mw-static-fallback [conn : ptr<void> root : cstr] : nil
-  ```c
-  if (!conn) return;
-  if (httpd_hyresp_hystatus_hyget((void *)conn) != 404) return;
-  (void)httpd_hymw_hystatic_hytry((void *)conn, root);
-  ```)
-
 (defn mw-static [root-dir : cstr ^fat next : (fn [ptr<void>] nil)] : ptr<void>
   (let [_root root-dir
         _n    next]
     (fn [c : ptr<void>] : nil
       (httpd-call _n c)
       (httpd-mw-static-fallback c _root))))
+
+;;; mw-static-with -- mw-static, with an index file and a directory listing.
+;;;
+;;; mw-static treats a request for a directory as a miss.  This one answers
+;;; it the way `opts` says (httpd-static-serve-with! has the rules): a 301 to
+;;; add the trailing '/', the index file when there is one, else a listing
+;;; when `(.listing opts)` is set.  Both are opt-in so a framework composing
+;;; mw-static after its router does not grow a listing by surprise.
+;;;
+;;; Parameters:
+;;;   opts     -- the index file name ("" for none) and whether to list
+;;;   root-dir -- filesystem path to serve files from
+;;;   next     -- downstream handler closure
+;;;
+;;; Returns:
+;;;   A wrapped handler closure (:ptr<void>).
+;;;
+;;; Example:
+;;;   (httpd-new 8000 (mw-static-with (StaticOpts "index.html" true) "." not-found))
+;;;
+;;; Since: project-less-tools-plan PT0
+(defn mw-static-with [opts : StaticOpts root-dir : cstr ^fat next : (fn [ptr<void>] nil)] : ptr<void>
+  (let [_root    root-dir
+        _index   (.index opts)
+        _listing (.listing opts)
+        _n       next]
+    (fn [c : ptr<void>] : nil
+      (httpd-call _n c)
+      (httpd-mw-static-fallback-with c _root _index _listing))))
 
 ;; =============================================================================
 ;; MW3: mw-recover -- turn a downstream panic into a 500 response
@@ -5695,8 +6004,8 @@
   ```c
   /* __tur_include__: typedef struct __HttpdHdrSet { int n; char *name[8]; char *value[8]; struct __HttpdHdrSet *next; } HttpdHdrSet; */
   /* __tur_include__: static HttpdHdrSet *g_hdrset_registry = 0; */
-  /* __tur_include__: static int g_hdrset_atexit = 0; */
-  /* __tur_include__: static void httpd_hdrset_cleanup_all(void) { HttpdHdrSet *s = g_hdrset_registry; while (s) { HttpdHdrSet *nx = s->next; for (int i = 0; i < s->n; i++) { free(s->name[i]); free(s->value[i]); } free(s); s = nx; } g_hdrset_registry = 0; } */
+  /* __tur_include__: static __attribute__((unused)) int g_hdrset_atexit = 0; */
+  /* __tur_include__: static __attribute__((unused)) void httpd_hdrset_cleanup_all(void) { HttpdHdrSet *s = g_hdrset_registry; while (s) { HttpdHdrSet *nx = s->next; for (int i = 0; i < s->n; i++) { free(s->name[i]); free(s->value[i]); } free(s); s = nx; } g_hdrset_registry = 0; } */
   HttpdHdrSet *s = (HttpdHdrSet *)calloc(1, sizeof *s);
   if (!s) return 0;
   #define HDRSET_ADD(k, v) do { const char *v_ = (v); if (v_ && *v_) { s->name[s->n] = strdup(k); s->value[s->n] = strdup(v_); s->n++; } } while (0)
@@ -6008,8 +6317,8 @@
   ```c
   /* __tur_include__: typedef struct __HttpdTrust { int n; HttpdCidr *cidr; struct __HttpdTrust *next; } HttpdTrust; */
   /* __tur_include__: static HttpdTrust *g_trust_registry = 0; */
-  /* __tur_include__: static int g_trust_atexit = 0; */
-  /* __tur_include__: static void httpd_trust_cleanup_all(void) { HttpdTrust *t = g_trust_registry; while (t) { HttpdTrust *nx = t->next; free(t->cidr); free(t); t = nx; } g_trust_registry = 0; } */
+  /* __tur_include__: static __attribute__((unused)) int g_trust_atexit = 0; */
+  /* __tur_include__: static __attribute__((unused)) void httpd_trust_cleanup_all(void) { HttpdTrust *t = g_trust_registry; while (t) { HttpdTrust *nx = t->next; free(t->cidr); free(t); t = nx; } g_trust_registry = 0; } */
   HttpdTrust *t = (HttpdTrust *)calloc(1, sizeof *t);
   if (!t) return 0;
   int64_t n = httpd_hytrust_hyparse(trusted, NULL, 0);
