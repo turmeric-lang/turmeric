@@ -102,8 +102,9 @@ static bool sd_is_commit_id(const char *s) {
 
 static char *sd_dup(const char *s) { return s ? strdup(s) : NULL; }
 
-static const char *sd_now(void) {
-    static char buf[32];
+/* The current time, ISO-8601 UTC, into the caller's buffer. */
+#define SD_NOW_MAX 32
+static void sd_now(char buf[SD_NOW_MAX]) {
     time_t t = time(NULL);
     struct tm tmv;
 #ifdef _WIN32
@@ -111,8 +112,7 @@ static const char *sd_now(void) {
 #else
     gmtime_r(&t, &tmv);
 #endif
-    strftime(buf, sizeof(buf), "%Y-%m-%dT%H:%M:%SZ", &tmv);
-    return buf;
+    strftime(buf, SD_NOW_MAX, "%Y-%m-%dT%H:%M:%SZ", &tmv);
 }
 
 /* FNV-1a, for the short tag that keeps two `:subdir`s of one commit apart. */
@@ -220,7 +220,9 @@ static bool sd_meta_write(const char *entry, const SdMeta *m) {
     if (m->subdir) fprintf(f, "subdir %s\n", m->subdir);
     fprintf(f, "resolved %s\n", m->resolved);
     if (m->sha256) fprintf(f, "sha256 %s\n", m->sha256);
-    fprintf(f, "created %s\n", m->created ? m->created : sd_now());
+    char now[SD_NOW_MAX];
+    sd_now(now);
+    fprintf(f, "created %s\n", m->created ? m->created : now);
     return fclose(f) == 0;
 }
 
@@ -229,7 +231,9 @@ static void sd_stamp(const char *entry) {
     char p[4096];
     snprintf(p, sizeof(p), "%s/" SD_STAMP, entry);
     FILE *f = fopen(p, "w");
-    if (f) { fprintf(f, "%s\n", sd_now()); fclose(f); }
+    char now[SD_NOW_MAX];
+    sd_now(now);
+    if (f) { fprintf(f, "%s\n", now); fclose(f); }
 }
 
 /* The entry name for (name, subdir, commit). */
@@ -359,7 +363,9 @@ static bool sd_build_entry(const char *script, const char *cache,
     meta.subdir   = s->subdir;
     meta.resolved = sha;
     meta.sha256   = pkg_hash_dir_excluding(spice_dir, SD_HASH_SKIP, hash) ? hash : NULL;
-    meta.created  = (char *)sd_now();
+    char now[SD_NOW_MAX];
+    sd_now(now);
+    meta.created  = now;
 
     /* Set the tree up as a fetched project, the way `tur install` sets up an
      * installed root, so every project-mode resolver works on it unchanged. */
@@ -782,7 +788,9 @@ int script_deps_fetch_cmd(const char *script, bool lock) {
         e->ref        = strdup(d->ref);
         e->resolved   = strdup(d->resolved);
         e->sha256     = sd_dup(d->sha256);
-        e->fetched_at = strdup(sd_now());
+        char now[SD_NOW_MAX];
+        sd_now(now);
+        e->fetched_at = strdup(now);
 
         char own_path[4096];
         snprintf(own_path, sizeof(own_path), "%s/tur.lock", d->dir);
