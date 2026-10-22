@@ -37,7 +37,7 @@ the struct's storage plus the field offset (by-value structs live in the frame
 slot or a heap box). `@r` reads through it and `(set! @r v)` writes through it.
 Pin both programs above on `tur run` and `--interpret`.
 
-Whether item 2 of [borrow-checks-gaps](../reported/borrow-checks-gaps.md)
+Whether item 2 of [borrow-checks-gaps](borrow-checks-gaps.md)
 (assigning a borrowed variable) becomes an error does not change this: a
 `&mut` still has to write through.
 

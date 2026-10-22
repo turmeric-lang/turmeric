@@ -252,12 +252,13 @@ This is the "AnyRenderer box" pattern: a collection of distinct handle
 kinds sharing one `Renderer` dictionary, each dispatching `bounds` /
 `render` through its own packed witness.
 
-The witness vtable lives in the runtime existential record, so this is a
-compiled-codegen feature. Under the tree-walking interpreter
-(`--interpret`) the record is erased and `open`-site calls re-dispatch
-structurally on the receiver's runtime type; opaque-over-primitive
-newtypes collapse to their carrier there, so a heterogeneous *opaque*
-collection must run through the compiled path.
+The witness vtable lives in the runtime existential record. The
+tree-walking interpreter (`--interpret`) keeps the same thing: a constrained
+`pack` carries the instances its constraints resolved to beside the value, and
+`open` dispatches on them, so a heterogeneous *opaque* collection gives the
+same answers on every engine
+([turi-packed-defopaque-wrong-instance](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/turi-packed-defopaque-wrong-instance.md),
+resolved 2026-10-22).
 
 ## The `stdlib/existential.tur` helpers
 

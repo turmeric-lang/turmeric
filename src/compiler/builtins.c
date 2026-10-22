@@ -613,3 +613,17 @@ int builtin_describe(const char *name, char *out, size_t cap) {
     }
     return n_total;
 }
+
+bool builtin_requires_unsafe(const BuiltinSpec *spec) {
+    if (!spec || !spec->name) return false;
+    static const char *const names[] = {
+        "ptr-deref", "ptr-null?", "ptr-of", "ptr-add", "ptr-sub", "ptr-write",
+        "unsafe-cast", "reinterpret", "transmute",
+        "array-get-unchecked", "array-set-unchecked",
+        "raw-malloc", "raw-free", "raw-realloc", "raw-memcpy", "raw-memset",
+        "dlopen", "dlsym", "dlclose",
+    };
+    for (size_t i = 0; i < sizeof names / sizeof names[0]; i++)
+        if (strcmp(spec->name, names[i]) == 0) return true;
+    return false;
+}

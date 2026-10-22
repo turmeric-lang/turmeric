@@ -200,9 +200,9 @@ Measured on a Release `tur`, peak RSS:
 | a loop calling an eval'd procedure, 5,000 iterations | 98.1 MB | 64.2 MB |
 | the same, 20,000 iterations | 236.7 MB | 74.8 MB |
 
-The eval'd-procedure loop still grows 0.7 KB a call: strings and string
-ports, which the sweep does not hand back
-(docs/reported/turi-r7rs-strings-and-ports-kept-until-teardown.md).
+The eval'd-procedure loop still grew 0.7 KB a call: strings and string
+ports, which the sweep did not hand back until 2026-10-22
+(docs/archive/turi-r7rs-strings-and-ports-kept-until-teardown.md).
 
 **What the per-env slots changed for continuations.** Re-entering a
 continuation the program captured inside a call from evaluated code, after

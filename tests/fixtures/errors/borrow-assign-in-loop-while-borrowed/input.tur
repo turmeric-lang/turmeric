@@ -1,0 +1,12 @@
+;; borrow-checks-gaps item 2: a holder's use earlier in a `while` body runs
+;; again after the assignment on the next turn, so the borrow is live at
+;; `(set! x 2)` although no use follows it in program order.
+(defn main [] : int
+  (let [^mut i 0
+        ^mut x 1
+        r (& x)]
+    (while (< i 2)
+      (println @r)
+      (set! x 2)
+      (set! i (+ i 1))))
+  0)

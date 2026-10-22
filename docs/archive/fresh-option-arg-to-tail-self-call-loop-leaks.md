@@ -1,5 +1,7 @@
 # A fresh `(Option Struct)` passed to a TAIL self-call leaks a box per iteration
 
+**RESOLVED 2026-10-22**; see Resolution at the end.
+
 **Severity: low (leak; grows with the loop's trip count).** The tail-position
 sibling of the archived
 [fresh-option-arg-to-self-call-leaks](../archive/fresh-option-arg-to-self-call-leaks.md):
@@ -48,3 +50,37 @@ is dropped on the floor. The emitter correctly frees nothing at the back edge
    returned points into the box.
 2. Pin it with a `requires.leak-check` fixture beside
    `option-arg-to-self-call-freed` (which covers the non-tail shapes).
+
+## Resolution (2026-10-22)
+
+Fix direction 1, in the emitter (`src/compiler/emit_fns.c`). Before the loop
+head, `tco_owned_params` finds the parameters some self tail call hands a FRESH
+box the function does not keep -- the argument passes the same test the non-tail
+drop-after stamp does (`emit_call_owes_sum_drop`, and the parameter's bit in
+`nonretain_sum_param_mask`), the parameter holds a box this can free (the int64
+carrier, or a by-value monomorph whose live arm boxes a value-struct payload, as
+here: `emit_sum_box_drop_kind`), and the function's result is a non-pointer
+scalar. Each gets an `int __tur_lown_<i> = 0;` flag. Then:
+
+- **a back edge** whose argument is fresh frees the old box if the flag is set,
+  reassigns, and sets the flag; one that passes the parameter on unchanged
+  keeps both; any other argument clears the flag without a free, since it may
+  alias the old box (`(let [p o] (walk p ...))`) -- the old leak, never a wrong
+  free. The fresh argument's queued drop-after-consumer entry is discarded
+  (`emit_pending_drops_discard`): the back edge is not its consumer.
+- **every `return`** (value, void and explicit) frees the box while the flag is
+  set. The free rides `any_scope_drops`, which the return paths already fire
+  after hoisting the value; the back edge skips those entries
+  (`tco_own_lo`/`tco_own_hi`).
+
+The first turn's box is the caller's, so the flag starts clear and the caller's
+own free after the call is unchanged. `option-arg-to-tail-self-call-freed`
+(`requires.leak-check`) pins the repro and a two-field payload.
+
+Not covered, and not this report's shape: a loop that passes the parameter on
+UNCHANGED on some turns (`(walk-hold o (- hold 1) ...)`). The sum mask's
+inference reads that self hand-off as an escape (it is not a greatest fixed
+point, unlike the fn-param mask), so the parameter is not non-retaining and its
+fresh boxes are not stamped -- they leak as before, tail or not. The back edge
+already handles the unchanged argument (box and flag stay) for when the
+inference learns it.

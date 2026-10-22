@@ -740,9 +740,6 @@ From `docs/reported/` on 2026-10-16:
   -- one library per file, named by its path; held by decision.
 - [r7rs-prelude-split-wrong-symbols-on-windows](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/r7rs-prelude-split-wrong-symbols-on-windows.md)
   -- fix landed; the split stays off on Windows until a Windows run confirms.
-- [turi-r7rs-strings-and-ports-kept-until-teardown](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/turi-r7rs-strings-and-ports-kept-until-teardown.md)
-  -- under `--interpret`, a dropped string's code points and a string port's
-  buffer are kept until teardown.
 - [jit-r7rs-threads-lifecycle-exited-1-once](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/jit-r7rs-threads-lifecycle-exited-1-once.md)
   -- one unreproduced JIT failure of `r7rs-threads-lifecycle`.
 

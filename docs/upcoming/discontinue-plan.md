@@ -79,7 +79,7 @@ will raise.
 
 Related but not blocking:
 
-- [compiled-shift-delimited-by-root](../reported/compiled-shift-delimited-by-root.md)
+- [compiled-shift-delimited-by-root](../archive/compiled-shift-delimited-by-root.md)
   has the same structure as the first row (a direct-emitted delimiter around a
   CPS callee). A design for one should fit the other.
 - [effect-nontail-resume-copies-held-until-outer-entry](../reported/effect-nontail-resume-copies-held-until-outer-entry.md):
@@ -88,7 +88,7 @@ Related but not blocking:
   flag in "Compiled" step 2 must survive. `term_resumes_k_once` /
   `term_k_only_resumed` should count a `discontinue` as the case's one resume,
   or a discontinue case falls back to the copy path.
-- [missing-guides-for-language-primitives](../reported/missing-guides-for-language-primitives.md)
+- [missing-guides-for-language-primitives](../archive/missing-guides-for-language-primitives.md)
   item 5 and [stale-comments-emitter](../reported/stale-comments-emitter.md)
   item 6 cover the guide section and the `emit_effects.c` header. This plan's
   last step already does both.

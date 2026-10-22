@@ -1,0 +1,18 @@
+;; missing-guides-for-language-primitives: a function declared `#fx{Unsafe}`
+;; may use the unsafe builtins without an `(unsafe ...)` block -- that is what
+;; the annotation permits -- but the effect system infers Unsafe from none of
+;; them, so `make-cell` and `read-and-free` used to get TUR-W0031 ("declares
+;; effect 'Unsafe' but never performs it").  Only an inline-C body was exempt.
+(defn make-cell [v : int] #fx{Unsafe} : ptr<void>
+  (let [p (raw-malloc 8)]
+    (ptr-write p v)
+    p))
+
+(defn read-and-free [p : ptr<void>] #fx{Unsafe} : int
+  (let [w (ptr-deref p)]
+    (raw-free p)
+    (+ w 1)))
+
+(defn main [] : int
+  (unsafe (println (read-and-free (make-cell 41))))   ; 42
+  0)

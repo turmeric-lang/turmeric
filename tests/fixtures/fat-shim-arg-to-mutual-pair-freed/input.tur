@@ -1,0 +1,40 @@
+;; fat-shim-arg-to-mutual-cps-pair-leaks: a `^fat` lambda handed to a MUTUALLY
+;; recursive pair that only invokes it.  Each function's non-retaining
+;; inference ran while the other's mask was still unknown (0), so `ping`'s
+;; hand-off to `pong`, defined after it, read as retention, and then `pong`'s
+;; to `ping` did too: the 24 B fat-shim box main built was never freed.  A
+;; function that loses a bit to a not-yet-inferred callee now waits, and is
+;; solved again together with it (elab_nonretain_resolve_forward).
+;; requires.leak-check runs this under LeakSanitizer (tests/run-leak-check.sh).
+;;
+;;   ping/pong   -- the report's repro, and a capturing lambda through it.
+;;   c1/c2/c3    -- a three-function cycle.
+;;   keep-a/b    -- a pair where one member stores `f`: it must stay retained,
+;;                  and the stored closure is called after the pair returns.
+
+(defn zero [x : int] : int 0)
+(def ^mut g-f : (fn [int] int) zero)
+
+(defn ping [^fat f : (fn [int] int) i : int n : int acc : int] : int
+  (if (>= i n) acc (pong f (+ i 1) n (+ acc (f i)))))
+(defn pong [^fat f : (fn [int] int) i : int n : int acc : int] : int
+  (if (>= i n) acc (ping f (+ i 1) n (- acc (f i)))))
+
+(defn c1 [^fat f : (fn [int] int) i : int] : int (if (> i 0) (c2 f (- i 1)) (f i)))
+(defn c2 [^fat f : (fn [int] int) i : int] : int (if (> i 0) (c3 f (- i 1)) (f i)))
+(defn c3 [^fat f : (fn [int] int) i : int] : int (if (> i 0) (c1 f (- i 1)) (f i)))
+
+(defn keep-a [^fat f : (fn [int] int) i : int] : int
+  (if (> i 0) (keep-b f (- i 1)) (f 1)))
+(defn keep-b [^fat f : (fn [int] int) i : int] : int
+  (do (set! g-f f) (keep-a f i)))
+
+(defn main [] : int
+  (println (ping (fn [x : int] : int (mod x 7)) 0 1000 0))      ; -3
+  (let [k 7]
+    (println (ping (fn [x : int] : int (mod x k)) 0 1000 0))    ; -3
+    (println (c1 (fn [x : int] : int (+ x k)) 10)))             ; 7
+  (let [m 3]
+    (println (keep-a (fn [x : int] : int (* x m)) 3)))          ; 3
+  (println (g-f 5))                                             ; 15
+  0)

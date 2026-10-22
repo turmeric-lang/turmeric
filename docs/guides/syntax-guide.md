@@ -109,6 +109,38 @@ square(9)          ; => 81
 vec-new()          ; zero-arg call
 ```
 
+### Threading a value through calls: `->` and `->>`
+
+`(-> x step ...)` passes a value through a chain of calls as each one's
+**first** argument; `->>` passes it as each one's **last** argument. A bare name
+as a step is called with the value alone. They read top to bottom where nested
+calls read inside out ([tur/forms/control](../html/api/tur-forms-control.html)):
+
+```turmeric
+(defn add [a : int b : int] : int (+ a b))
+(defn double [x : int] : int (* 2 x))
+
+(defn main [] : int
+  (println (-> 5 (add 1) double))        ; (double (add 5 1)) => 12
+  (println (->> 5 (- 100) double))       ; (double (- 100 5))  => 190
+  0)
+```
+```sweet-exp
+#lang sweet-exp
+
+defn add [a : int b : int] : int {a + b}
+defn double [x : int] : int {2 * x}
+
+defn main [] : int
+  println (-> 5 (add 1) double)        ; (double (add 5 1)) => 12
+  println (->> 5 (- 100) double)       ; (double (- 100 5))  => 190
+  0
+```
+
+`(-> x)` is just `x`. The builder style in [cli-args-guide](cli-args-guide.md)
+(`(-> (args/spec-new) (args/flag ...) ...)`) is `->` over functions that take
+the spec first and return it.
+
 ### Special forms you will see first
 
 These are the forms a newcomer meets immediately. This guide only shows their

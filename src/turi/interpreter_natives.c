@@ -2874,7 +2874,7 @@ static int64_t r7rs_arg_int(TuriValue *a, uint32_t n, uint32_t i) {
 /* r7rs-lang-plan R8: twins of the port and printer primitives in
  * stdlib/r7rs/prelude.tur's R8 section.  Keep them equal.  An R7rsIo /
  * R7rsIdTab handle rides as a TURI_INT carrying the pointer. */
-typedef struct { unsigned char *p; size_t n, cap, pos; FILE *f; int std; } r7rs_io;
+typedef struct { unsigned char *p; size_t n, cap, pos; FILE *f; int std; TuriCollBuf *trk; } r7rs_io;
 typedef struct { uintptr_t *k; int64_t *v; size_t cap, cnt; } r7rs_idtab;
 static r7rs_io *r7rs_arg_io(TuriValue *a, uint32_t n, uint32_t i) {
     return (r7rs_io *)(intptr_t)r7rs_arg_int(a, n, i);
@@ -2886,9 +2886,29 @@ static void r7rs_io_reserve(r7rs_io *b, size_t extra) {
     while (b->n + extra + 1 > c) c *= 2;
     b->p = (unsigned char *)realloc(b->p, c); b->cap = c;
 }
+/* turi-r7rs-strings-and-ports-kept-until-teardown: a port the program made is
+ * a collection box, so the pool sweep frees a dropped one (and closes its
+ * file), and turi_env_free frees what is left.  Its scan is empty and
+ * complete: a port holds bytes, never a value.  The three standard ports are
+ * process-global and stay untracked. */
+static void r7rs_io_destroy(void *box) {
+    r7rs_io *b = (r7rs_io *)box;
+    if (b->f) fclose(b->f);
+    free(b->p);
+    free(b);
+}
+static bool r7rs_io_scan(void *box, TuriCollBufMarkFn mark, void *ctx) {
+    (void)box; (void)mark; (void)ctx;
+    return true;
+}
+static r7rs_io *r7rs_io_alloc(TuriEnv *env) {
+    r7rs_io *b = (r7rs_io *)calloc(1, sizeof(r7rs_io));
+    if (b) b->trk = turi_env_track_collection(env, b, r7rs_io_destroy, r7rs_io_scan);
+    return b;
+}
 static TuriValue native_r7rs_io_new(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
-    (void)env; (void)a; (void)n; (void)ud;
-    return r7rs_ptr_val(calloc(1, sizeof(r7rs_io)));
+    (void)a; (void)n; (void)ud;
+    return r7rs_ptr_val(r7rs_io_alloc(env));
 }
 /* The three standard-port buffers, process-global.  r7rs-io-std__ hands them
  * out, and the R7RS prelude takes them while it loads -- before a macro env
@@ -2915,8 +2935,9 @@ void turi_r7rs_std_ports_prov(TuriEnv *env, bool live) {
     }
 }
 static TuriValue native_r7rs_io_open(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
-    (void)env; (void)ud;
-    r7rs_io *b = (r7rs_io *)calloc(1, sizeof(r7rs_io));
+    (void)ud;
+    r7rs_io *b = r7rs_io_alloc(env);
+    if (!b) return r7rs_ptr_val(NULL);
     b->f = fopen(r7rs_arg_cstr(a, n, 0), r7rs_arg_cstr(a, n, 1));
     return r7rs_ptr_val(b);
 }
@@ -3022,6 +3043,7 @@ static TuriValue native_r7rs_io_free(TuriEnv *env, TuriValue *a, uint32_t n, voi
     (void)env; (void)ud;
     r7rs_io *b = r7rs_arg_io(a, n, 0);
     if (b->std || b->f) return turi_nil();
+    turi_env_untrack_collection(b->trk);
     free(b->p); free(b);
     return turi_nil();
 }
@@ -4164,6 +4186,7 @@ __attribute__((noinline))
 static void r7k_maybe_sweep(TuriEnv *env, bool pool) {
     size_t before = g_r7k_live, freed = 0, scanned = 0, kept_back = 0, reclaimed = 0;
     size_t free_bytes = 0;
+    uint64_t boxes_before = env->collsweep_freed;
     const char *why = (r7k_gc_mode & 1) ? r7k_sweep_gate(env) : "TUR_TURI_CONT_GC=0";
     TuriContGc *gc = why ? NULL : turi_cont_gc_begin(env, r7k_gc_word, NULL);
     if (!why && !gc) why = "the value pool keeps no complete object map";
@@ -4202,8 +4225,10 @@ static void r7k_maybe_sweep(TuriEnv *env, bool pool) {
         if (why) fprintf(stderr, "%s %zu live, none freed: %s\n", at, before, why);
         else     fprintf(stderr, "%s %zu live, %zu freed, %zu KB read, "
                                  "%zu kept frames and temporaries handed back, "
-                                 "%zu KB of frames, bindings, closures and structs\n",
-                         at, before, freed, scanned / 1024, kept_back, reclaimed / 1024);
+                                 "%zu KB of frames, bindings, closures and structs, "
+                                 "%llu collection boxes\n",
+                         at, before, freed, scanned / 1024, kept_back, reclaimed / 1024,
+                         (unsigned long long)(env->collsweep_freed - boxes_before));
     }
     r7k_pool_rebudget(env, why, scanned, free_bytes);
     size_t next = g_r7k_live + R7K_SWEEP_EVERY;

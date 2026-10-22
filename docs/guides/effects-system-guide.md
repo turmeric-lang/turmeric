@@ -108,6 +108,60 @@ and a `catch-unwind` around the `perform` can catch it and carry on:
   `discontinue`; interpreted, a `^multishot` k whose body catches. See
   [discontinue-plan](https://github.com/turmeric-lang/turmeric/blob/main/docs/upcoming/discontinue-plan.md).
 
+### Deep and shallow handlers: `handle-shallow`
+
+A `handle` is **deep**: it stays installed around the continuation, so every
+`perform` the body makes -- before or after a resume -- reaches the same clause.
+`handle-shallow` takes the same arguments, but the handler answers **one**
+`perform` and is gone: the continuation `k` the clause resumes runs without it,
+so the body's next `perform` of that effect reaches an enclosing handler (or
+aborts as unhandled). `try-with` is another spelling of `handle` -- deep, same
+rules -- for readers who know it from OCaml, and for async code where it reads
+as an exception handler ([async-await-guide](async-await-guide.md)).
+
+```turmeric
+(defeffect Ask [] : int)
+
+(defn two-asks [] : int
+  (+ (perform (Ask)) (* 10 (perform (Ask)))))
+
+(defn main [] : int
+  ;; deep: one clause answers both performs => 1 + 10*1
+  (println (handle (two-asks) (Ask [] k) (resume k 1)))          ; 11
+  ;; shallow: it answers the first; the second reaches the outer handle
+  (println (handle (handle-shallow (two-asks) (Ask [] k) (resume k 1))
+             (Ask [] k) (resume k 2)))                            ; 21
+  (println (try-with (two-asks) (Ask [] k) (resume k 4)))        ; 44
+  0)
+```
+```sweet-exp
+#lang sweet-exp
+
+defeffect Ask [] : int
+
+defn two-asks [] : int
+  {perform(Ask()) + {10 * perform(Ask())}}
+
+defn main [] : int
+  ;; deep: one clause answers both performs => 1 + 10*1
+  println
+    (handle (two-asks) (Ask [] k) (resume k 1))                   ; 11
+  ;; shallow: it answers the first; the second reaches the outer handle
+  println
+    (handle (handle-shallow (two-asks) (Ask [] k) (resume k 1))
+      (Ask [] k) (resume k 2))                                     ; 21
+  println
+    (try-with (two-asks) (Ask [] k) (resume k 4))                  ; 44
+  0
+```
+
+Because the body can still perform the effect after a shallow handler has gone,
+`handle-shallow` does not remove the effect from the enclosing function's row: a
+function declared `#fx{}` that handles only shallowly is TUR-E0009. A clause can
+also choose what answers the rest by wrapping its `resume` in another `handle`;
+the interpreter runs that today, and the compiled backend refuses it
+([shallow-clause-handle-around-resume-not-lowered](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/shallow-clause-handle-around-resume-not-lowered.md)).
+
 ### Properties
 
 - **Effects are not in the type system** -- Whether `perform` is handled is checked dynamically. Unhandled effects raise an exception at runtime.
@@ -118,7 +172,8 @@ and a `catch-unwind` around the `perform` can catch it and carry on:
 
 Compose handlers for different effects by **nesting `handle` forms** -- the
 inner handler runs inside the outer one, and each effect is routed to the
-handler that declares it:
+handler that declares it (`compose-handlers` does the same for handler values;
+see the next section):
 
 ```turmeric
 (defeffect Log [msg :cstr] :nil)

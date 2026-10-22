@@ -1,0 +1,36 @@
+;; fresh-option-arg-to-tail-self-call-loop-leaks: a fresh `(Option Id)` handed
+;; to a TAIL self-call.  tco_mark lowers the call to a back edge
+;; (`o = new; goto`), which has no "after" for the caller to free the box in,
+;; so each turn's box was dropped when the next turn reassigned `o` (16 B over
+;; a 3-step walk).  The loop owns it now: the back edge frees the old box
+;; before the reassignment, and every `return` frees the last one, while a
+;; per-parameter flag says the loop holds one (the first turn's box is the
+;; caller's).  requires.leak-check runs this under LeakSanitizer
+;; (tests/run-leak-check.sh); the non-tail shapes are option-arg-to-self-call-freed.
+;;
+;;   walk-acc  -- the report's repro.
+;;   walk-wide -- a two-field payload.
+
+(defstruct Id :copy [ix : int])
+(defstruct Wide :copy [ix : int w : int])
+
+(defn nxt [i : int] : (Option Id)
+  (if (>= i 3) (none) (some (Id i))))
+
+(defn nxt-wide [i : int] : (Option Wide)
+  (if (>= i 3) (none) (some (Wide i (* 10 i)))))
+
+(defn walk-acc [o : (Option Id) acc : int] : int
+  (match o
+    (Some id) (walk-acc (nxt (+ (.ix id) 1)) (+ acc (.ix id)))
+    (None)    acc))
+
+(defn walk-wide [o : (Option Wide) acc : int] : int
+  (match o
+    (Some w) (walk-wide (nxt-wide (+ (.ix w) 1)) (+ acc (.w w)))
+    (None)   acc))
+
+(defn main [] : int
+  (println (walk-acc (nxt 0) 100))      ; 103
+  (println (walk-wide (nxt-wide 0) 0))  ; 0+10+20 = 30
+  0)

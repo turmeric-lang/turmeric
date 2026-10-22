@@ -70,16 +70,19 @@ static Effect *find_unsafe_effect(EffectEnv *env) {
     return NULL;
 }
 
-/* Returns true if e contains any EX_INLINE_C node (shallow: only checks the
- * immediate expression, not inside nested function literals). */
-static bool expr_has_inline_c(Expr *e) {
-    if (!e) return false;
+/* Does `e` use something only `#fx{Unsafe}` (or an `(unsafe ...)` block)
+ * permits -- an inline C block, or an unsafe builtin (`ptr-write`,
+ * `raw-malloc`, ...: builtin_requires_unsafe)?  The effect system infers
+ * Unsafe from neither, so a body that does is never over-annotated.  Not
+ * inside nested function literals (cps_visit_children stops there). */
+static bool expr_uses_unsafe_visit(const Expr *e, void *ud) {
+    (void)ud;
     if (e->kind == EX_INLINE_C) return true;
-    if (e->kind == EX_DO) {
-        for (uint32_t i = 0; i < e->as.do_.n; i++)
-            if (expr_has_inline_c(e->as.do_.items[i])) return true;
-    }
-    return false;
+    if (e->kind == EX_BUILTIN && builtin_requires_unsafe(e->as.builtin.spec)) return true;
+    return cps_visit_children(e, expr_uses_unsafe_visit, NULL);
+}
+static bool expr_uses_unsafe(Expr *e) {
+    return e && expr_uses_unsafe_visit(e, NULL);
 }
 
 static uint32_t fn_index_slot(const FnEntry *slots, uint32_t cap,
@@ -1051,12 +1054,15 @@ static int effect_row_check_over_annotated(FnDef *fd, Arena *a) {
                 }
             }
             if (!covered_by_subeffect) {
-                /* Suppress W0031 for #{Unsafe} when the body contains inline C:
-                 * inline C is inherently unsafe but the effect system does not
-                 * infer Unsafe from it, so the annotation is always justified. */
+                /* Suppress W0031 for #{Unsafe} when the body contains inline C
+                 * or an unsafe builtin: both are what the annotation permits,
+                 * but the effect system infers Unsafe from neither, so the
+                 * annotation is justified (missing-guides-for-language-
+                 * primitives: `(ptr-write p v)` in an `#fx{Unsafe}` body
+                 * warned). */
                 bool suppress = false;
                 if (strcmp(eff->name->name, EFFECT_NAME_UNSAFE) == 0 &&
-                    expr_has_inline_c(fd->body)) {
+                    expr_uses_unsafe(fd->body)) {
                     suppress = true;
                 }
                 if (!suppress) {

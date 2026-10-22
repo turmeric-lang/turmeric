@@ -232,6 +232,33 @@ For mutually-recursive helpers, use `letrec`.
 
 ---
 
+## `let*` -- the Scheme spelling of `let`
+
+`(let* [a 1 b (+ a 1)] ...)` binds strictly in order, each value seeing the
+names before it. So does `let`: `let*` desugars to one nested `let` per binding,
+and the two behave the same. It is there for code written in the Scheme style
+([tur/forms/control](../html/api/tur-forms-control.html)); new Turmeric code
+writes `let`.
+
+```turmeric
+(defn main [] : int
+  (let* [a 1
+         b (+ a 1)]
+    (println (+ a b)))   ; 3
+  0)
+```
+```sweet-exp
+#lang sweet-exp
+
+defn main [] : int
+  let* [a 1
+        b {a + 1}]
+    println {a + b}   ; 3
+  0
+```
+
+---
+
 ## `letrec` -- Mutually-recursive local bindings
 
 `letrec` is like `let` but pre-registers every name in the binding group

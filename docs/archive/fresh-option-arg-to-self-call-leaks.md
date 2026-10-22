@@ -3,7 +3,7 @@
 **RESOLVED 2026-10-21** -- see [Resolution](#resolution-2026-10-21). Pinned by
 `option-arg-to-self-call-freed` (leak-checked). The tail-call sibling is filed
 separately as
-[fresh-option-arg-to-tail-self-call-loop-leaks](../reported/fresh-option-arg-to-tail-self-call-loop-leaks.md).
+[fresh-option-arg-to-tail-self-call-loop-leaks](fresh-option-arg-to-tail-self-call-loop-leaks.md).
 
 **Severity: low (leak; grows with recursion depth).** When a function calls
 itself with a freshly made `(Option S)` as an argument, inside a `match` arm,
@@ -88,4 +88,4 @@ back edge (`o = new; goto`), which has no "after" to free in, so the box
 becomes the next iteration's parameter and is dropped when the loop reassigns
 it. The emitter correctly frees nothing there; the leak predates this fix
 (same 16 bytes before and after). Filed as
-[fresh-option-arg-to-tail-self-call-loop-leaks](../reported/fresh-option-arg-to-tail-self-call-loop-leaks.md).
+[fresh-option-arg-to-tail-self-call-loop-leaks](fresh-option-arg-to-tail-self-call-loop-leaks.md).

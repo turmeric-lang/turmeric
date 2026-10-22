@@ -2380,6 +2380,22 @@ static void tur_result_box_free_shallow(int64_t __r) {
     free((tur_result_box_t *)(intptr_t)__r);
 }
 
+/* base-shift escape-reset context (setjmp/longjmp abort) */
+typedef struct tur_shift_reset_ctx {
+    tur_jmp_buf buf;
+    int64_t result;  /* f(operand), set by an abortive shift before longjmp */
+    struct tur_shift_reset_ctx *prev; /* nested resets */
+    void *dk_driver; void *dk_pend; int dk_depth; size_t dk_reap_mark;
+    int pending;     /* a DK shift stored `result`: jump at the entry's exit */
+} tur_shift_reset_ctx;
+
+#if defined(__GNUC__) || defined(__clang__)
+static TUR_THREAD_LOCAL tur_shift_reset_ctx *tur_cur_shift_reset = NULL;
+
+#else
+extern void ** tur_tls_cur_shift_reset_ptr(void);
+#define tur_cur_shift_reset (*(tur_shift_reset_ctx **)tur_tls_cur_shift_reset_ptr())
+#endif
 /* CPS substrate (cps-transform-plan): multi-prompt delimited-control machine.
  * Heap-reified continuation chains (DK); a reset is a prompt, a shift slices
  * the chain up to the nearest prompt. Faithful port of src/runtime/cps_prompt.c.
@@ -3045,6 +3061,29 @@ static void __dk_copy_last_release(DK *last) {
     DK *c = (DK *)last->body_env; last->copy_last = false; last->body_env = 0;
     if (c && !tur_dk_pinned && !__dk_chain_copied(c) && __dk_reap_take(c, 1)) dk_free(c);
 }
+/* compiled-shift-delimited-by-root: a direct-emitted reset is a setjmp
+ * landing (emit_effects_reset), and a shift in a CPS callee runs on that
+ * callee's own DK chain, which holds no prompt for it.  A reset-tag shift
+ * that reaches its chain's root while a landing is live stores f(v) there
+ * and marks it pending; the machine returns as it would at the root, and the
+ * entry's exit (__dk_entry_leave), its cleanup done, jumps to the landing --
+ * the whole context up to the reset is discarded, as an abortive shift's is.
+ * The landing recorded the machine's per-thread state, which the jump
+ * restores in case it leaves nested entries too. */
+__attribute__((unused)) static void __dk_reset_save(tur_shift_reset_ctx *rs) {
+    rs->dk_driver = (void *)g_dk_driver; rs->dk_pend = (void *)g_dk_pend_perform;
+    rs->dk_depth = __dk_entry_depth; rs->dk_reap_mark = __dk_reap_n; rs->pending = 0;
+}
+__attribute__((unused)) static void __dk_reset_abort(tur_shift_reset_ctx *rs) {
+    rs->pending = 0;
+    g_dk_driver = (tur_jmp_buf *)rs->dk_driver;
+    g_dk_pend_perform = (DKPendPerform *)rs->dk_pend;
+    if (__dk_entry_depth > rs->dk_depth) {
+        __dk_entry_depth = rs->dk_depth;
+        if (__dk_entry_depth == 0) __dk_reap_run(); else __dk_reap_drop_to(rs->dk_reap_mark);
+    }
+    TUR_LONGJMP(rs->buf);
+}
 static intptr_t dk_run_impl(DK *k, intptr_t v, bool root) {
     while (k) {
         switch (k->kind) {
@@ -3129,6 +3168,17 @@ static intptr_t dk_run_impl(DK *k, intptr_t v, bool root) {
                     /* The shift body ran at the prompt, outside the part it cut off. */
                     __dk_catch_kill(k->next, to_root ? NULL : P);
                     DKCaught c = __dk_panic_catch(k->next); if (!c.k) return bodyval; k = c.k; v = c.err; break;
+                }
+                if (to_root && k->tag != DK_ROOT_TAG) {
+                    /* No prompt on this chain: the reset is a direct landing,
+                     * or there is none (the interpreter's error). */
+                    if (tur_cur_shift_reset) {
+                        int64_t w = (int64_t)bodyval;
+                        memcpy(&tur_cur_shift_reset->result, &w, sizeof w);
+                        tur_cur_shift_reset->pending = 1;
+                        return bodyval;
+                    }
+                    tur_panic("shift used outside of any reset boundary");
                 }
                 if (to_root) return bodyval;
                 k = P->next; v = bodyval; break;
@@ -3483,20 +3533,6 @@ static intptr_t dk_perform(int tag, intptr_t arg, DK *k) {
     if (H_kcopy && !tur_dk_pinned && __dk_reap_take(sub, 1)) dk_free(sub);
     return H_delivers ? r : dk_run_impl(H_next, r, false);
 }
-/* base-shift escape-reset context (setjmp/longjmp abort) */
-typedef struct tur_shift_reset_ctx {
-    tur_jmp_buf buf;
-    int64_t result;  /* f(operand), set by an abortive shift before longjmp */
-    struct tur_shift_reset_ctx *prev; /* nested resets */
-} tur_shift_reset_ctx;
-
-#if defined(__GNUC__) || defined(__clang__)
-static TUR_THREAD_LOCAL tur_shift_reset_ctx *tur_cur_shift_reset = NULL;
-
-#else
-extern void ** tur_tls_cur_shift_reset_ptr(void);
-#define tur_cur_shift_reset (*(tur_shift_reset_ctx **)tur_tls_cur_shift_reset_ptr())
-#endif
 __attribute__((unused, noinline))
 static intptr_t __dk_resume_word(intptr_t k, intptr_t w) {
     if ((uintptr_t)k < 4096) {
@@ -4466,6 +4502,7 @@ __attribute__((unused)) static void __dk_entry_leave(DK *root, size_t mark) {
     }
     dk_free(root);
     if (--__dk_entry_depth == 0) __dk_reap_run(); else __dk_reap_drop_to(mark);
+    if (tur_cur_shift_reset && tur_cur_shift_reset->pending) __dk_reset_abort(tur_cur_shift_reset);
 }
 
 __attribute__((unused)) static int64_t __dk_enter0(int64_t (*body)(DK *), void *out, size_t out_size) {

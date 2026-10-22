@@ -215,4 +215,4 @@ keys.
 Pinned in `tests/tools/check_gendocs_parse.py`. `stdlib/docstrings.tur` is
 regenerated (new and corrected keys). Group 1 was resolved on 2026-10-19
 (the `stdlib/forms/` pages); the guides half is
-[missing-guides-for-language-primitives](../reported/missing-guides-for-language-primitives.md).
+[missing-guides-for-language-primitives](missing-guides-for-language-primitives.md).

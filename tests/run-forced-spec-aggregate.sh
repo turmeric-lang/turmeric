@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# tests/run-forced-spec-aggregate.sh -- pin forced-spec-loses-aggregate-type.
+# tests/run-forced-spec-aggregate.sh -- pin forced-spec-loses-aggregate-type
+# and forced-spec-at-foreign-aggregate.
 #
 # `app` calls `util`'s generics at `util`'s by-value structs.  Under separate
 # compilation `util` emits those specializations for `app` (a forced ABI
@@ -59,6 +60,43 @@ if "$TUR" emit-c --output-dir "$WORK/out" "$WORK/proj/util.tur" \
 else
     fail "forced-spec-aggregate-emit-c-header" \
          "$(grep -n 'spec__tur_adt' "$WORK/out/util.h" 2>&1 | head -5)"
+fi
+
+# --- 3) forced-spec-at-foreign-aggregate: a THIRD module's struct. ----------
+# `types` exports Pos; `util` and `app` both import it.  `util` emits `ident`
+# at Pos for `app`, and Pos is not among util's own items: the owner resolves
+# it through the defs its elaboration saw (it includes types.h already).
+F3="$REPO/tests/fixtures/forced-spec-foreign-aggregate-third-module"
+mkdir -p "$WORK/third"
+cp "$F3/types.tur" "$F3/util.tur" "$F3/app.tur" "$WORK/third/"
+build_out=$("$TUR" build "$WORK/third" --build-dir "$WORK/bd3" -o "$WORK/app3" 2>&1)
+build_rc=$?
+if [ $build_rc -ne 0 ]; then
+    fail "forced-spec-third-module-build" "tur build exit=$build_rc: $build_out"
+else
+    run_out=$("$WORK/app3" 2>&1)
+    if [ "$run_out" = "$(cat "$F3/expected.stdout")" ]; then
+        pass "forced-spec-third-module"
+    else
+        fail "forced-spec-third-module" "got: $run_out"
+    fi
+fi
+
+# --- 4) ... and the CALLER's own struct: `app` defines Q and calls util's
+# generic at it.  util cannot name Q (it does not include app.h), so no unit
+# can emit the clone; the build stops with a diagnostic naming Q instead of a
+# C compiler error at app's call.
+F4="$REPO/tests/fixtures/forced-spec-foreign-aggregate-callers-own"
+mkdir -p "$WORK/own"
+cp "$F4/util.tur" "$F4/app.tur" "$WORK/own/"
+build_out=$("$TUR" build "$WORK/own" --build-dir "$WORK/bd4" -o "$WORK/app4" 2>&1)
+build_rc=$?
+if [ $build_rc -ne 0 ] &&
+   grep -q '`ident` is called at `Q` from another module' <<< "$build_out" &&
+   ! grep -q 'incompatible type for argument' <<< "$build_out"; then
+    pass "forced-spec-callers-own-struct-refused"
+else
+    fail "forced-spec-callers-own-struct-refused" "exit=$build_rc: $build_out"
 fi
 
 echo "forced-spec-aggregate: $PASS passed, $FAIL failed"
