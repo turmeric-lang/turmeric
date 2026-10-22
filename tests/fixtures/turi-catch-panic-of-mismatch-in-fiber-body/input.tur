@@ -1,0 +1,18 @@
+;; turi-catch-panic-of-mismatch-in-fiber-body-overflows: a catch-panic-of of
+;; the wrong type re-raises out of a handled body that has a defer (so the
+;; interpreter runs the handle on its fiber runtime).  The re-raise used to
+;; longjmp from the body's stack to a boundary on the handler's, and a driver
+;; then wrote past its inline stack (an ASan stack-buffer-overflow).  Each side
+;; of a fiber handle now has its own catch-boundary stack, and the body's own
+;; boundary hands the panic back to the handler side, where it is uncaught:
+;; the defer, the message, a non-zero exit, on both engines.
+(defeffect Ask [] : int)
+
+(defn body [] : int
+  (defer (println "body: defer ran"))
+  (let [r (catch-panic-of :int (fn [] : int (let [v (perform (Ask))] (if (> v 0) (panic "boom") v))))]
+    (if (err? r) 100 200)))
+
+(defn main [] : int
+  (println (handle (body) (Ask [] k) (resume k 5)))
+  0)

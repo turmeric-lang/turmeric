@@ -1,0 +1,6 @@
+;; discontinue-plan fixture 4: a ^linear k is used exactly once; a discontinue
+;; after a resume is a second use.
+(defeffect Ask [] : int)
+(defn main [] : int
+  (println (handle (+ 1 (perform (Ask))) (Ask [] ^linear k) (do (resume k 1) (discontinue k "boom"))))
+  0)

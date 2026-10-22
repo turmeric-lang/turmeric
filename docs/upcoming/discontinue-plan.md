@@ -1,9 +1,63 @@
 # Plan: implement `discontinue` -- resume a continuation by raising at the `perform`
 
-> **Status:** PROPOSED 2026-10-21. Decision taken: keep `discontinue` and
-> implement it on both engines (from effect-forms-gaps item 1, archived). Not
-> started. **2026-10-22:** open reports block its fixtures, see
-> [Blockers](#blockers-checked-2026-10-22).
+> **Status:** IMPLEMENTED BEHIND `--enable=discontinue` 2026-10-22 (an
+> `EXPERIMENTS[]` row, prototype, introduced 0.68.0, advisory expiry 0.71.0).
+> Both engines run fixtures 1, 2 and 4. Graduation waits on two shapes, one
+> per engine, that each refuses: compiled, fixture 3 (a `catch-unwind` inside
+> the clause, which a CPS case body cannot hold yet:
+> [cps-catch-unwind-cannot-cross-an-effect-capture](../reported/cps-catch-unwind-cannot-cross-an-effect-capture.md));
+> interpreted, fixture 5 (a `^multishot` k over a body that catches, which
+> the single-shot fiber runtime refuses:
+> [turi-fiber-handle-defers-fire-at-the-wrong-time](../reported/turi-fiber-handle-defers-fire-at-the-wrong-time.md)).
+> See "Implemented" below.
+
+## Implemented (2026-10-22)
+
+**Typing.** `elab_discontinue` types the node as a resume of `k` would be
+(`cont_resume_result_type`, shared with `elab_make_resume`); the payload is any
+type. Without the experiment it stays `nil`, and both engines refuse the form
+as before (`errors/discontinue-no-lowering`, `discontinue-interp-unsupported`).
+
+**Compiled.** A `discontinue` is a CT_RESUME with `raise` set (`build_discontinue`,
+`src/passes/cps_ir.c`). The handler-case shape predicates treat it as a use of
+`k` that is not a resume: never a tail resume, never in place, never into the
+chain (`case_resumes_into` refuses any case that discontinues, since the body
+may catch the raise and then perform an outer effect, which needs `sub`'s
+enclosing-handler markers). `emit_resume` calls `__dk_discontinue` (DK
+runtime). It stages the panic (a cstr payload as `panic` would, anything else
+as `panic-with`), and fires the pending defers of the perform's ORIGINAL frames
+up to a catch prompt that takes the panic. If that prompt is inside the body,
+the body goes on from a copy of `sub` past the prompt with Err, and the result
+comes back to the clause as a resume's would. Otherwise it returns with the
+panic raised, the clause's panic check re-raises it there, and `dk_perform`'s
+case-panicked path carries it on from the handle. This differs from the
+sketch in "Compiled" below: no entry check per frame was needed. The catch
+prompts from cps-catch-unwind-cannot-cross-an-effect-capture do the catching.
+
+**Interpreted.** The work-stack driver has an EX_DISCONTINUE arm: the same two
+halves as a resume, with `DK_RESUME` raising at the slice's hole instead of
+delivering (`turi_raise_payload`). On the fiber path, `eval_resume_cont_raise`
+sets `raise_pending` on the cont, and the woken `eval_perform_fiber` raises in
+the body; a forwarded perform passes the raise down to the inner body's
+perform. A body now runs under a catch boundary of its own (`eval_body_run`).
+A panic nothing in it takes fires the body's defers and is raised again on the
+handler side (`turi_panic_reraise`), at the `discontinue`. That needed each side
+of a fiber handle to have its own catch-boundary stack, which also fixed
+[turi-catch-panic-of-mismatch-in-fiber-body-overflows](../archive/turi-catch-panic-of-mismatch-in-fiber-body-overflows.md).
+
+**Site.** The panic names the `discontinue`'s line, not the `perform`'s, on
+both engines: neither runtime keeps a perform's location in its continuation.
+
+**Fixtures** (`flags`: `--enable=discontinue`): `discontinue-uncaught` (1),
+`discontinue-caught-in-body` (2, 4, a typed payload, a catch around the
+handle), `discontinue-caught-in-clause` (3, interpreter only),
+`discontinue-multishot` (5, compiled only), `errors/discontinue-linear-twice`
+(4: TUR-E0101).
+
+**Graduation.** When the two shapes in the Status line run on both engines,
+drop the `EXPERIMENTS[]` row and the gates (`g_opt_discontinue` in
+elab_effects.c, cps_ir.c, emit_effects.c, eval.c), retire the two refusal
+fixtures and the `flags` files, and archive this plan.
 
 ## Blockers (checked 2026-10-22)
 
@@ -21,7 +75,7 @@ will raise.
 | ~~[compiled-uncaught-panic-skips-caller-defers](../archive/compiled-uncaught-panic-skips-caller-defers.md)~~ | compiled | -- | **Resolved 2026-10-22.** An uncaught panic unwinds to `main` firing every defer. The raise `discontinue` makes must enter through the root-unwind path (`tur_panic_with_site`, or set `tur_root_unwind` to 2 around its raise), not a runtime helper's plain `tur_panic_with` |
 | [turi-fiber-handle-defers-fire-at-the-wrong-time](../reported/turi-fiber-handle-defers-fire-at-the-wrong-time.md) | interpreted | fixture 5 with a `defer` or `catch-unwind` in the body (narrowed 2026-10-22: only the single-shot limit is left) | The fiber runtime is single-shot. `(+ (resume k 1) (resume k 2))` over a defer-bearing body is refused with "already been resumed", and so is one whose `perform` sits under a `catch-unwind` (`ws_capturable` refuses both). Its fix direction 1 (work-stack-capturable `defer`, and `catch-unwind` too) is the real unblock for the interpreter, and would also retire the crash above |
 
-| [turi-catch-panic-of-mismatch-in-fiber-body-overflows](../reported/turi-catch-panic-of-mismatch-in-fiber-body-overflows.md) | interpreted | a `catch-panic-of` of the wrong type in a body with a `defer` | Found 2026-10-22. The plan types the payload with `catch-panic-of`, so a fixture that re-raises past one crashes the interpreter |
+| ~~[turi-catch-panic-of-mismatch-in-fiber-body-overflows](../archive/turi-catch-panic-of-mismatch-in-fiber-body-overflows.md)~~ | interpreted | -- | **Resolved 2026-10-22** with the interpreter half of this plan |
 
 Related but not blocking:
 

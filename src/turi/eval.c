@@ -3519,6 +3519,85 @@ void turi_runtime_panic(TuriEnv *env, const char *msg) {
     exit(1);
 }
 
+/* A typed panic (`panic-with`, or a `discontinue` whose payload is not a
+ * cstr) raised at `span`: unwind to the innermost catch boundary carrying the
+ * payload -- a work-stack DK_CATCH_UNWIND consumes it via the signal (set
+ * env->panicking, return), a setjmp boundary is longjmp'd to -- or, with none,
+ * print, fire every pending defer, and exit. */
+static TuriValue turi_panic_with_value(TuriEnv *env, TuriValue pv, int ptype, Span span) {
+    if (env->panicking || g_firing_panic_defer) {
+        host_exit_unwind(env, "double panic");
+        fprintf(stderr, "double panic: aborting\n");
+        fflush(stderr);
+        fflush(stdout);
+        abort();
+    }
+    TuriCatchBoundary *cb = g_catch_stack;
+    if (cb && !env->in_no_unwind) {
+        strncpy(env->catch_panic_msg, "typed panic", sizeof(env->catch_panic_msg) - 1);
+        env->catch_panic_msg[sizeof(env->catch_panic_msg) - 1] = '\0';
+        env->catch_panic_type  = ptype;
+        env->catch_panic_value = pv;
+        env->catch_panic_file  = panic_site_base(span);
+        env->catch_panic_line  = (int)span.line;
+        env->panicking = true;
+        if (cb->is_driver) return pv;   /* raise signal; driver unwinds */
+        longjmp(*cb->jmp, 1);
+    }
+    host_exit_unwind(env, "typed panic");
+    env->panicking = true;
+    if (panic_site_base(span))
+        fprintf(stderr, "panic at %s:%u\n", panic_site_base(span), span.line);
+    else
+        fprintf(stderr, "panic at\n");
+    fflush(stderr);
+    fire_defers_to_mark_by_scope(env, NULL, NULL);
+    fflush(stdout);
+    exit(1);
+}
+
+/* discontinue-plan: raise a discontinue's payload where it lands (at the
+ * perform, in the body): a cstr reads as the panic message, as `panic`'s
+ * does; anything else is a typed payload, as `panic-with`'s is.  `site` is
+ * the discontinue form's span. */
+static void turi_raise_payload(TuriEnv *env, TuriValue pv, int ptype, Span site) {
+    if (ptype == TY_CSTR) {
+        g_panic_site = site;
+        turi_runtime_panic(env, (pv.tag == TURI_CSTR && pv.as_cstr) ? pv.as_cstr : "(no message)");
+        return;
+    }
+    (void)turi_panic_with_value(env, pv, ptype, site);
+}
+
+/* Raise again, on this side, the panic whose payload env->catch_panic_* still
+ * holds -- one that ended a fiber body (eval_body_thunk's boundary took it
+ * there) and continues at the resume or discontinue that ran the body. */
+static void turi_panic_reraise(TuriEnv *env) {
+    TuriCatchBoundary *cb = g_catch_stack;
+    if (cb && !env->in_no_unwind) {
+        env->panicking = true;
+        if (cb->is_driver) return;
+        longjmp(*cb->jmp, 1);
+    }
+    host_exit_unwind(env, NULL);
+    env->panicking = true;
+    if (env->catch_panic_type == TY_CSTR) {
+        if (env->catch_panic_file)
+            fprintf(stderr, "panic at %s:%d: %s\n", env->catch_panic_file,
+                    env->catch_panic_line, env->catch_panic_msg);
+        else
+            fprintf(stderr, "panic at\npanic: %s\n", env->catch_panic_msg);
+    } else if (env->catch_panic_file) {
+        fprintf(stderr, "panic at %s:%d\n", env->catch_panic_file, env->catch_panic_line);
+    } else {
+        fprintf(stderr, "panic at\n");
+    }
+    fflush(stderr);
+    fire_defers_to_mark_by_scope(env, NULL, NULL);
+    fflush(stdout);
+    exit(1);
+}
+
 /* -------------------------------------------------------------------------
  * Phase TI5: typed panic payloads + catch-panic-of.
  *
@@ -3695,6 +3774,24 @@ struct TuriEffectCont {
      * ever walks its own items. */
     void              *body_defers;
     void              *body_defer_base;  /* the handle's chain the body's began on */
+
+    /* The body's own catch-boundary stack while it is swapped out, kept the
+     * way body_defers is: a boundary the body set up (a catch-unwind around
+     * its perform, eval_body_thunk's own) is on the body's stack, so the
+     * clause must not see it -- a panic there used to longjmp onto the body's
+     * stack from the handler's.  `body_panicked`: a panic nothing in the body
+     * took ended it, and is raised again where the body was entered from
+     * (fiber_enter_body). */
+    void              *body_catch;
+    bool               body_panicked;
+
+    /* discontinue-plan: the resume that is running the body is a
+     * `discontinue`, so the perform it wakes raises this payload instead of
+     * returning a value (eval_perform_fiber). */
+    bool               raise_pending;
+    TuriValue          raise_value;
+    int                raise_type;
+    Span               raise_site;
 };
 
 /* Internal handler frame stored on TuriEnv.handler_stack. */
@@ -3717,13 +3814,55 @@ static TuriValue eval_handle_inner(TuriEnv *env, EvalFrame *frame,
                                    const HandleExpr *h,
                                    TuriEffectCont *cont);
 
+/* Run a fiber body to its end, under a catch boundary of its own at the
+ * bottom of its stack: a panic nothing in the body takes lands here, the
+ * body's pending defers fire (innermost first), and the panic is handed to
+ * the handler side, which raises it again at the resume / discontinue that
+ * ran the body (fiber_enter_body).  It used to longjmp straight from the
+ * body's stack to a boundary on the handler's.  Also restores what the jump
+ * skipped: the driver registrations and signals the body's frames held. */
+struct DriveReg;
+static _Thread_local struct DriveReg *g_drive_regs;
+static void eval_body_run(TuriEffectCont *cont) {
+    TuriEnv *env = cont->env;
+    jmp_buf jb;
+    struct DriveReg *volatile regs = g_drive_regs;
+    TuriCatchBoundary pad = { .is_driver = false, .jmp = &jb, .prev = NULL };
+    g_catch_stack = &pad;
+    if (setjmp(jb) == 0) {
+        cont->body_result = eval_expr(env, cont->body_frame, cont->body_expr);
+    } else {
+#ifdef TURI_POOL_ASAN
+        /* The jump came from frames deeper on this fiber's stack, and ASan
+         * ignores the no-return hook on a stack it does not know, so their
+         * redzones are still poisoned: unpoison what is below this frame, or
+         * the defers fired next trip over them. */
+        if (cont->body_stack) {
+            char *lo = cont->body_stack, *here = (char *)__builtin_frame_address(0);
+            if (here > lo && here <= lo + EFFECT_CONT_STACK_SIZE)
+                __asan_unpoison_memory_region(lo, (size_t)(here - lo));
+        }
+#endif
+        g_drive_regs = regs;
+        env->returning = false;
+        env->throwing  = false;
+        /* Fire with the signal still set, so a defer that panics is the
+         * double panic it is; then hand the panic over. */
+        fire_defers_to_mark_by_scope(env, (DeferItem *)cont->body_defer_base, NULL);
+        env->panicking = false;
+        cont->body_panicked = true;
+        cont->body_result = turi_nil();
+    }
+    g_catch_stack = NULL;
+    cont->done = true;
+}
+
 /* Body thunk: runs inside the body fiber; yields back when perform fires or done. */
 #ifdef __EMSCRIPTEN__
 EMSCRIPTEN_KEEPALIVE
 static void eval_body_thunk(void *arg) {
     TuriEffectCont *cont = (TuriEffectCont *)arg;
-    cont->body_result = eval_expr(cont->env, cont->body_frame, cont->body_expr);
-    cont->done        = true;
+    eval_body_run(cont);
     swapcontext(&cont->body_ctx, &cont->handler_ctx);
     abort();
 }
@@ -3734,8 +3873,7 @@ static void eval_body_thunk(void *arg) {
 #  endif
 static void eval_body_thunk(void) {
     TuriEffectCont *cont = g_pending_cont;
-    cont->body_result = eval_expr(cont->env, cont->body_frame, cont->body_expr);
-    cont->done        = true;
+    eval_body_run(cont);
     swapcontext(&cont->body_ctx, &cont->handler_ctx);
     abort();
 }
@@ -3745,11 +3883,16 @@ static void eval_body_thunk(void) {
 #endif
 
 /* Swap from the handler side into cont's body, giving the body its own defer
- * chain (cont->body_defers) for as long as it runs, and give the handler side
- * back the chain it had when the body yields (performs again or finishes). */
+ * chain (cont->body_defers) and catch-boundary stack (cont->body_catch) for as
+ * long as it runs, and give the handler side back its own when the body yields
+ * (performs again or finishes).  A body that a panic ended raises it again
+ * here, on the handler side. */
+static void turi_panic_reraise(TuriEnv *env);
 static void fiber_enter_body(TuriEnv *env, TuriEffectCont *cont) {
     void *mine = env->defer_stack;
+    TuriCatchBoundary *my_catch = g_catch_stack;
     env->defer_stack = cont->body_defers;
+    g_catch_stack = (TuriCatchBoundary *)cont->body_catch;
 #if defined(__APPLE__)
 #  pragma clang diagnostic push
 #  pragma clang diagnostic ignored "-Wdeprecated-declarations"
@@ -3760,6 +3903,8 @@ static void fiber_enter_body(TuriEnv *env, TuriEffectCont *cont) {
 #endif
     cont->body_defers = env->defer_stack;
     env->defer_stack = mine;
+    cont->body_catch = g_catch_stack;
+    g_catch_stack = my_catch;
     if (cont->done && cont->body_defers != cont->body_defer_base) {
         /* A `defer` at the top of the body belongs to the scope around the
          * handle, as it does on the work-stack path: hand what the finished
@@ -3773,6 +3918,10 @@ static void fiber_enter_body(TuriEnv *env, TuriEffectCont *cont) {
             env->defer_stack = cont->body_defers;
         }
         cont->body_defers = cont->body_defer_base;
+    }
+    if (cont->done && cont->body_panicked) {
+        cont->body_panicked = false;
+        turi_panic_reraise(env);
     }
 }
 
@@ -3855,6 +4004,22 @@ static TuriValue eval_resume_cont(TuriEnv *env, EvalFrame *frame,
                              cont->handle_expr, cont);
 }
 
+/* discontinue-plan: resume a fiber continuation by raising `payload` at its
+ * perform (see eval_perform_fiber).  Returns what a resume would: the body's
+ * value when it caught the raise and went on, or nil with the panic raised
+ * again here when it did not. */
+static TuriValue eval_resume_cont_raise(TuriEnv *env, EvalFrame *frame, TuriEffectCont *cont,
+                                        TuriValue payload, int ptype, Span site) {
+    if (cont->done) return eval_resume_cont(env, frame, cont, turi_nil());   /* the refusal */
+    cont->raise_pending = true;
+    cont->raise_value   = payload;
+    cont->raise_type    = ptype;
+    cont->raise_site    = site;
+    TuriValue r = eval_resume_cont(env, frame, cont, turi_nil());
+    cont->raise_pending = false;
+    return r;
+}
+
 /* Dispatch the handler case for the current perform signal on cont. */
 static TuriValue eval_handle_inner(TuriEnv *env, EvalFrame *frame,
                                     const HandleExpr *h,
@@ -3892,6 +4057,15 @@ static TuriValue eval_handle_inner(TuriEnv *env, EvalFrame *frame,
                     /* Outer handler ran and resumed us. Forward resume value to inner body. */
                     TuriValue resume_val = outer_cont->resume_val;
                     cont->resume_val = resume_val;
+                    /* ...or its discontinue: the raise belongs at the inner
+                     * body's perform, which is where the effect came from. */
+                    if (outer_cont->raise_pending) {
+                        outer_cont->raise_pending = false;
+                        cont->raise_pending = true;
+                        cont->raise_value   = outer_cont->raise_value;
+                        cont->raise_type    = outer_cont->raise_type;
+                        cont->raise_site    = outer_cont->raise_site;
+                    }
                     /* Re-push inner handler frame and resume inner body. */
                     TuriHandlerFrame inner_hf;
                     inner_hf.cases   = cont->handle_expr->cases;
@@ -3950,6 +4124,15 @@ static TuriValue eval_perform_fiber(TuriEnv *env, const char *effect_name,
 #if defined(__APPLE__)
 #  pragma clang diagnostic pop
 #endif
+    /* discontinue-plan: woken by a discontinue -- the perform raises its
+     * payload here, in the body: the body's defers run as it unwinds, a
+     * catch-unwind in it may take the panic, and eval_body_run's boundary
+     * hands anything else back to the clause. */
+    if (cont->raise_pending) {
+        cont->raise_pending = false;
+        turi_raise_payload(env, cont->raise_value, cont->raise_type, cont->raise_site);
+        return turi_nil();
+    }
     return cont->resume_val;
 }
 
@@ -10617,6 +10800,16 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                 control = re->k; tail = false; descending = true;
                 break;
             }
+            case EX_DISCONTINUE: {
+                /* discontinue-plan: the same two halves as a resume (k, then
+                 * the payload); DK_RESUME raises instead of delivering.  Off
+                 * by default: the eval_expr arm reports it. */
+                if (!g_opt_discontinue) goto drive_default;
+                DRIVE_PUSH(((DriveCont){ .kind = DK_RESUME_K, .expr = control,
+                                         .frame = cf, .tail = tail }));
+                control = control->as.discontinue_.discontinue->k; tail = false; descending = true;
+                break;
+            }
             case EX_GET_FIELD: {
                 /* SR N2: descend the receiver on the work-stack (non-tail) so
                  * recursion threaded through a field accessor stays heap-bounded
@@ -10877,7 +11070,7 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                 have_apply = true;
                 break;
             }
-            default: {
+            default: drive_default: {
                 /* SR N3: single-operand black-box forms descend their operand on
                  * the work-stack (DK_UNARY), so recursion threaded through a
                  * cast/ascribe/return/set/transparent-shim stays heap-bounded. */
@@ -11065,9 +11258,12 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                  * descend the value arg under DK_RESUME carrying k in .last --
                  * from here on identical to the former eval_expr'd-k path. */
                 if (signaled) { len--; break; }
-                if (cur.tag != TURI_EFFECT_CONT
-                    && !resume_k_is_ts_handle(top->expr->as.resume_.resume->k, cur)) {
-                    cur = turi_error("eval: resume: not a continuation");
+                bool rdisc = top->expr->kind == EX_DISCONTINUE;
+                if (rdisc ? cur.tag != TURI_EFFECT_CONT
+                          : (cur.tag != TURI_EFFECT_CONT
+                             && !resume_k_is_ts_handle(top->expr->as.resume_.resume->k, cur))) {
+                    cur = turi_error(rdisc ? "eval: discontinue: not an effect handler continuation"
+                                           : "eval: resume: not a continuation");
                     len--; break;
                 }
                 const Expr *rex = top->expr;
@@ -11079,7 +11275,8 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                 top->last = cur;
                 top->frame = rcf;
                 top->tail  = rtl;
-                control = rex->as.resume_.resume->value;
+                control = rdisc ? rex->as.discontinue_.discontinue->exception
+                                : rex->as.resume_.resume->value;
                 cf = rcf; tail = false; descending = true;
                 break;
             }
@@ -11093,6 +11290,9 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                 TuriValue  k    = top->last;
                 EvalFrame *rcf  = top->frame;
                 bool       rtl  = top->tail;
+                /* discontinue-plan: a discontinue raises its payload (v) at
+                 * the perform instead of delivering it. */
+                const Expr *dex = (top->expr && top->expr->kind == EX_DISCONTINUE) ? top->expr : NULL;
                 if (signaled) { len--; break; }
                 TuriValue v = cur;
                 len--;   /* pop DK_RESUME */
@@ -11101,7 +11301,9 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                     break;
                 }
                 if (!k.as_cont->ws) {
-                    cur = eval_resume_cont(env, rcf, k.as_cont, v);  /* fiber cont */
+                    cur = dex ? eval_resume_cont_raise(env, rcf, k.as_cont, v,
+                                    (int)dex->as.discontinue_.discontinue->exception->type.kind, dex->span)
+                              : eval_resume_cont(env, rcf, k.as_cont, v);  /* fiber cont */
                     break;
                 }
                 k.as_cont->resumed = true;
@@ -11159,6 +11361,7 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                     free(wc->kval);
                     free(wc);
                     cur = v;
+                    if (dex) goto drive_raise_in_slice;
                     break;
                 }
                 if (wc->n_frames) {
@@ -11172,6 +11375,17 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                 env->in_no_unwind   = wc->perf_no_unwind;
                 env->defer_stack    = wc->perf_defer;
                 cur = v;   /* feed v into the cloned slice; keep returning */
+                if (dex) {
+                drive_raise_in_slice:
+                    /* The slice is back on the stack; raise at its hole.  A
+                     * driver boundary takes the signal as the loop unwinds the
+                     * slice's frames (no slice holds a defer or catch-unwind:
+                     * ws_capturable refuses both), so the panic reaches the
+                     * clause, as the compiled runtime re-raises it there. */
+                    turi_raise_payload(env, v, (int)dex->as.discontinue_.discontinue->exception->type.kind,
+                                       dex->span);
+                    cur = turi_nil();
+                }
                 break;
             }
             case DK_IF_BRANCH: {
@@ -13673,6 +13887,21 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
      * Report it as the compiled backend does. */
     case EX_DISCONTINUE: {
         DiscontinueExpr *de = e->as.discontinue_.discontinue;
+        /* discontinue-plan, behind --enable=discontinue: resume k by raising
+         * the payload at its perform. */
+        if (g_opt_discontinue && de) {
+            TuriValue k = eval_expr(env, frame, de->k);
+            if (turi_is_error(k) || env_signaled(env)) return k;
+            TuriValue exc = eval_expr(env, frame, de->exception);
+            if (turi_is_error(exc) || env_signaled(env)) return exc;
+            if (k.tag != TURI_EFFECT_CONT)
+                return turi_error("eval: discontinue: not an effect handler continuation");
+            if (k.as_cont->ws)
+                return turi_error("eval: cannot discontinue a work-stack continuation "
+                                  "through a non-driver (native HOF) frame");
+            return eval_resume_cont_raise(env, frame, k.as_cont, exc,
+                                          (int)de->exception->type.kind, e->span);
+        }
         if (de) {
             TuriValue exc = eval_expr(env, frame, de->exception);
             if (turi_is_error(exc) || env_signaled(env)) return exc;
@@ -13680,7 +13909,8 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
         return turi_error("eval: discontinue is not supported: neither the compiler "
                           "nor the interpreter can raise at the perform. To end the "
                           "handled body early, leave the clause without resuming k; "
-                          "for a failure the caller sees, return a Result from the clause");
+                          "for a failure the caller sees, return a Result from the clause "
+                          "(--enable=discontinue runs it: prototype)");
     }
 
     /* (cont? k) — true if k is an unconsumed continuation. */
@@ -13957,38 +14187,7 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
          * panic-payload-* accessors can read it. */
         TuriValue pv = eval_expr(env, frame, e->as.panic_with_.payload);
         if (turi_is_error(pv) || env_signaled(env)) return pv;
-        if (env->panicking || g_firing_panic_defer) {
-            host_exit_unwind(env, "double panic");
-            fprintf(stderr, "double panic: aborting\n");
-            fflush(stderr);
-            fflush(stdout);
-            abort();
-        }
-        /* If a catch boundary is active, unwind to it carrying the payload.  C1:
-         * a work-stack DK_CATCH_UNWIND boundary consumes the panic via the signal
-         * (set env->panicking, return); a setjmp boundary is longjmp'd to. */
-        TuriCatchBoundary *cb = g_catch_stack;
-        if (cb && !env->in_no_unwind) {
-            strncpy(env->catch_panic_msg, "typed panic", sizeof(env->catch_panic_msg) - 1);
-            env->catch_panic_msg[sizeof(env->catch_panic_msg) - 1] = '\0';
-            env->catch_panic_type  = e->as.panic_with_.payload->type.kind;
-            env->catch_panic_value = pv;
-            env->catch_panic_file  = panic_site_base(e->span);
-            env->catch_panic_line  = (int)e->span.line;
-            env->panicking = true;
-            if (cb->is_driver) return pv;   /* raise signal; driver unwinds */
-            longjmp(*cb->jmp, 1);
-        }
-        host_exit_unwind(env, "typed panic");
-        env->panicking = true;
-        if (panic_site_base(e->span))
-            fprintf(stderr, "panic at %s:%u\n", panic_site_base(e->span), e->span.line);
-        else
-            fprintf(stderr, "panic at\n");
-        fflush(stderr);
-        fire_defers_to_mark_by_scope(env, NULL, NULL);
-        fflush(stdout);
-        exit(1);
+        return turi_panic_with_value(env, pv, (int)e->as.panic_with_.payload->type.kind, e->span);
     }
 
     /* --- Phase R2: catch-unwind — catch interpreter panics at a boundary --- */

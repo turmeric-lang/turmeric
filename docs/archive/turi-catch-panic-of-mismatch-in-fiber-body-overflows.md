@@ -1,5 +1,25 @@
 # `tur --interpret`: a mismatched `catch-panic-of` re-raising out of a fiber body corrupts the driver stack
 
+**RESOLVED 2026-10-22** (archived), while implementing `discontinue`
+([discontinue-plan](../upcoming/discontinue-plan.md)). The mechanism was the
+one guessed below. A fiber body's catch boundaries were on the same
+thread-local stack as the handler side's, so the mismatched `catch-panic-of`
+re-raise longjmp'd from the body's fiber stack to a boundary on the handler's
+stack, through live driver frames. Now:
+
+- `fiber_enter_body` gives each side its own catch-boundary stack
+  (`TuriEffectCont.body_catch`), as it already did for the defer chain.
+- The body runs under a boundary of its own at the bottom of its stack
+  (`eval_body_run`). A panic nothing in the body takes lands there, the body's
+  defers fire, and the panic is raised again on the handler side
+  (`turi_panic_reraise`), at the resume that ran the body.
+- Under ASan, the landing unpoisons the abandoned part of the fiber stack.
+  ASan ignores the no-return hook on a stack it does not know, so the
+  abandoned frames' redzones would otherwise trip the defers fired next.
+
+Pinned by `tests/fixtures/turi-catch-panic-of-mismatch-in-fiber-body` (the
+repro below; the old interpreter reports the ASan error on it).
+
 **Severity: medium** (an ASan stack-buffer-overflow, interpreter only; the
 compiled program prints the right thing). Found 2026-10-22 testing the CPS
 `catch-unwind` lowering. It reproduces on the commit before any of that work
