@@ -1,0 +1,14 @@
+;;; A float handed to `k` of a compiled `call/cc` / `escape` travels as its bits
+;;; in the landing's int64 `result`; the landing read it back with a value
+;;; conversion, `(double)result`, so 2.25 came out as 4.61225e+18.
+(defn e1 [] : float (+ 0.5 (call/cc (fn [k : escape-cont<float>] (k 2.25)))))
+(defn e2 [] : float (escape (fn [k : escape-cont<float>] (k 2.25))))
+(defn e3 [] : float (+ 0.5 (call/cc (fn [k : escape-cont<float>] 3.25))))
+(defn e4 [x : float32] : float32 (call/cc (fn [k : escape-cont<float32>] (k x))))
+
+(defn main [] : int
+  (println (e1))
+  (println (e2))
+  (println (e3))
+  (println (e4 (:: 2.25 float32)))
+  0)

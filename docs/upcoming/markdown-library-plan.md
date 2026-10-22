@@ -551,8 +551,10 @@ a `SlugMode`, for READMEs that are read on GitHub.
   Two compiler leaks ruled out the planned shape:
   - a struct or sum with a `String` field is a heap box nothing frees
     (`docs/archive/opaque-field-struct-box-never-freed.md`, fixed since);
-  - an `Option` of a struct passed down a recursive walk leaks its box
-    (`fresh-option-arg-to-self-call-leaks.md`).
+  - an `Option` of a struct passed down a recursive walk leaked its box
+    (`docs/archive/fresh-option-arg-to-self-call-leaks.md`, fixed since for a
+    non-tail walk; a tail-call loop still leaks:
+    `fresh-option-arg-to-tail-self-call-loop-leaks.md`).
 
   Nothing in a node owns memory, so the parser builds and frees the tree with
   no ownership bookkeeping.
@@ -1220,9 +1222,9 @@ The fix splits the trees:
 - `tsan` configures and builds `build-tsan/` as Release, the tree the nightly
   TSan workflow and `tests/run-tsan.sh` use. The fixture programs carry
   `-fsanitize=thread`; `tur` must only not be ASan-instrumented. The TSan
-  CMake configuration, which instruments `tur` too, does not link every
-  target, and is reported separately
-  (`docs/reported/tsan-cmake-config-fails-to-link.md`).
+  CMake configuration, which instruments `tur` too, did not link every
+  target until `docs/archive/tsan-cmake-config-fails-to-link.md` was fixed
+  (2026-10-21).
 - `test-tsan` runs `tests/run-tsan.sh` against `build-tsan/tur`, the selection
   the nightly TSan workflow runs, under the 12-minute suite timeout.
 - `_configured` takes the directory and build type, so all three build

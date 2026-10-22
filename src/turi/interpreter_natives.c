@@ -578,6 +578,19 @@ static TuriValue native_cstr_nth(TuriEnv *env, TuriValue *a, uint32_t n, void *u
     return turi_int((int64_t)(unsigned char)s[i]);
 }
 
+/* cstr-eq?: mirror stdlib/cstr.tur -- byte equality up to the terminator;
+ * two NULLs are equal, a NULL never equals a string (not even "").  The
+ * inline-C original otherwise reaches the interpreter only through the REPL
+ * JIT, which a build without the JIT (the WASM REPL) does not have.  Only a
+ * TURI_CSTR is read as a string: a bare integer is never dereferenced. */
+static TuriValue native_cstr_eq(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    const char *x = (n > 0 && a[0].tag == TURI_CSTR) ? a[0].as_cstr : NULL;
+    const char *y = (n > 1 && a[1].tag == TURI_CSTR) ? a[1].as_cstr : NULL;
+    if (x == NULL || y == NULL) return turi_bool(x == y);
+    return turi_bool(strcmp(x, y) == 0);
+}
+
 /* str->int: parse decimal string to int64 */
 static TuriValue native_str_to_int(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)env; (void)ud;
@@ -5039,11 +5052,13 @@ void wk_register_stdlib_natives(TuriEnv *env) {
      * Phase 0): shims over the inline-C str-concat / cstr-len / cstr-nth the
      * tree-walker cannot run. Same binding names, same NUL-terminated cstr ABI.
      * cstr-sub (the substring builder the pure-Turmeric re.tur engine reads
-     * output through) rides the same shim cluster. */
+     * output through) and cstr-eq? (content equality) ride the same shim
+     * cluster. */
     turi_env_register_native(env, "str-concat",      native_str_concat,      NULL);
     turi_env_register_native(env, "cstr-len",        native_cstr_len,        NULL);
     turi_env_register_native(env, "cstr-nth",        native_cstr_nth,        NULL);
     turi_env_register_native(env, "cstr-sub",        native_cstr_sub,        NULL);
+    turi_env_register_native(env, "cstr-eq?",        native_cstr_eq,         NULL);
     /* Common math/array fixture helpers */
     turi_env_register_native(env, "c-abs",           native_c_abs,           NULL);
     turi_env_register_native(env, "popcount",        native_popcount,        NULL);

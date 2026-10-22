@@ -1,0 +1,11 @@
+;;; A `fn` literal that drives a generator it captures.  The generator header
+;;; typedef (__tur_gen_hdr_t) was emitted with the first generator's functions,
+;;; which land just ahead of the function creating it -- after the lambda lifted
+;;; from that function -- so the lambda named an undeclared type and the C did
+;;; not compile (the interpreter ran it).  It is in the fixed preamble now.
+(defn main [] : int
+  (let [g (gen [] (yield 1) (yield 2))
+        f (fn [] : int (gen-unwrap (gen-next g)))]
+    (println (f))
+    (println (f)))
+  0)

@@ -122,6 +122,35 @@ for f in $checked_ok; do
     fi
 done
 
+# ---------------------------------------------------------------------------
+# Interpret phase: examples/examples-interpret.txt lists examples that must
+# also run under `tur --interpret` and print exactly what the compiled run
+# prints.  The datalog tutorial's examples are there: they ran compiled for
+# months while every one of them stopped under the interpreter, which no
+# sweep looked at.
+# ---------------------------------------------------------------------------
+INTERP_LIST=examples/examples-interpret.txt
+if [ -f "$INTERP_LIST" ]; then
+    while IFS= read -r line || [ -n "$line" ]; do
+        case "$line" in ''|'#'*) continue ;; esac
+        f="${line%% *}"
+        if [ ! -f "$f" ]; then
+            FAIL=$((FAIL + 1)); echo "FAIL $f -- listed in $INTERP_LIST but missing"
+            continue
+        fi
+        compiled=$(timeout 60 "$TUR" run "$f" 2>/dev/null)
+        interpreted=$(timeout 60 "$TUR" --interpret "$f" 2>&1)
+        if [ "$compiled" = "$interpreted" ]; then
+            PASS=$((PASS + 1)); echo "INTERP $f"
+        else
+            FAIL=$((FAIL + 1))
+            echo "FAIL $f -- interpreted output differs from the compiled run"
+            diff <(printf '%s\n' "$compiled") <(printf '%s\n' "$interpreted") \
+                | head -8 | sed 's/^/    /'
+        fi
+    done < "$INTERP_LIST"
+fi
+
 echo ""
 echo "examples check: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ] && exit 0

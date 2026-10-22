@@ -9,8 +9,9 @@
 ;;; Where the compiled program and the interpreter (`tur --interpret`, the REPL,
 ;;; the playground) differ, an entry says so. Guides: binding-forms-guide,
 ;;; sum-types-guide (for `match`), macros-guide (`gensym`), dynamic-vars-guide
-;;; (`binding`), error-handling-guide (`defer`). Defects found while writing
-;;; this page are in docs/reported/control-forms-gaps.md.
+;;; (`binding`), error-handling-guide (`defer`). What is still to change:
+;;; docs/upcoming/quote-list-data-plan.md (`quote` of a list) and
+;;; docs/upcoming/defer-semantics-plan.md (`defer` scope and read time).
 ;; Reference only: tools/gendocs.py reads the ;;@ lines, the compiler skips them.
 
 ;;; let -- bind local names, then evaluate a body.
@@ -21,9 +22,11 @@
 ;;; assignable with `set!`. A name bound twice shadows the earlier one. The body
 ;;; is one or more forms and the value is the last. `(let name [i 0] ...)` is a
 ;;; named let: `name` is a function of the bound names, so the body can loop by
-;;; calling it. Vector destructuring, `(let [[a b] v] ...)`, does not bind the
-;;; elements today: it binds the vector itself. A `ref`, `rc` or owning field
-;;; bound here is released when the body ends.
+;;; calling it. Vector destructuring, `(let [[a b] x] ...)`, takes a session pair
+;;; apart (`make-session`, `recv`, `make-protocol`); on a vector or list it is a
+;;; compile error, since it does not bind the elements -- read them with
+;;; `vec-get`. A `ref`, `rc` or owning field bound here is released when the body
+;;; ends.
 ;;;
 ;;; Parameters:
 ;;;   bindings -- a vector of `name value` pairs (with optional `^mut` and type)
@@ -152,9 +155,9 @@
 ;;; or lambda, not from the nearest loop or `let`. The value is computed first;
 ;;; then the deferred cleanups registered by the code it leaves run, and a
 ;;; `ref` or `rc` owned by a `let` it jumps out of is released (unless the
-;;; value is that binding). The value is not checked against the declared
-;;; return type: `(defn f [] : int (return "a") 1)` compiles, and returns a
-;;; pointer read as an `int` when compiled.
+;;; value is that binding). The value is checked against the declared return type
+;;; as the body's last form is: `(defn f [] : int (return "a") 1)` is TUR-E0709
+;;; (an int literal returned from a `float` function is widened, as there).
 ;;;
 ;;; Parameters:
 ;;;   value -- the value to return
@@ -237,9 +240,11 @@
 ;;; variable may carry a guard, `x when (< x 0)`. Every arm must have the same
 ;;; type. On an algebraic data type the compiler checks exhaustiveness:
 ;;; `non-exhaustive patterns -- constructor 'Rect' of 'Shape' not covered` is an
-;;; error (`^non-exhaustive` opts out). A match on literals is not checked: with
-;;; no matching arm the compiled program crashes and the interpreter stops with
-;;; `match: no arm matched`, so end it with `_`.
+;;; error (`^non-exhaustive` opts out). A match on literals has no constructor list
+;;; to run out of, so it must end with an unguarded `_` or variable arm (a `bool`
+;;; match may name both `true` and `false` instead); without one the compiler
+;;; reports `non-exhaustive patterns -- a match on literal values needs a wildcard
+;;; arm`.
 ;;;
 ;;; Parameters:
 ;;;   value -- the expression to match
@@ -292,7 +297,9 @@
 ;;; (`tur explain TUR-E0716`) instead of overflowing the stack later. Write it
 ;;; around the call, `(^tailcall (f x))`, or as a prefix, `^tailcall (f x)`. A
 ;;; call in an argument position, like `(+ 1 (^tailcall (f x)))`, is the error.
-;;; The interpreter does not check it: it accepts that program and runs it.
+;;; The interpreter checks the same tail grammar and gives the same message; the
+;;; reasons that need the emitter's analyses (an owned local still live, a `fn`
+;;; parameter passed on changed) are reported when compiled only.
 ;;;
 ;;; Parameters:
 ;;;   call -- the call that must be in tail position

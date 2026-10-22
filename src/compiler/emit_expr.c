@@ -6269,12 +6269,6 @@ static void emit_gen_functions(EmitCtx *ctx, const GenDef *def) {
      * before the function that creates them (emit_fn_def drains this buffer). */
     Buf *out = ctx->pending_handler_fns ? ctx->pending_handler_fns : ctx->file;
 
-    /* Emit common gen header typedef once per compilation unit */
-    if (!ctx->gen_hdr_emitted) {
-        buf_puts(out, "typedef struct { int32_t __state; void *(*__next_fn)(void *); } __tur_gen_hdr_t;\n");
-        ctx->gen_hdr_emitted = true;
-    }
-
     /* Struct typedef: __state, __next_fn, then all struct_binding fields */
     buf_printf(out, "typedef struct { int32_t __state; void *(*__next_fn)(void *);");
     for (uint32_t i = 0; i < def->n_struct_bindings; i++) {
@@ -17779,6 +17773,24 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                 buf_printf(body, "%s %s = 0;\n", type_c_name(rt), res);
             }
             int opened = 0;
+            /* stm-forms-gaps item 1: this block runs only inside a transaction
+             * (`atomically` installs one before its body; a `stm` in a helper
+             * function is reached through an atomically body).  With none -- a
+             * bare `(stm (tvar/read tv))` -- every transactional form below read
+             * through a null transaction and the program segfaulted.  Say what
+             * the interpreter says, and skip the body. */
+            if (n > 0) {
+                indent_buf(body, ctx->indent);
+                buf_puts(body, "if (tur_stm_current_tx() == NULL) {\n");
+                ctx->indent += 4;
+                indent_buf(body, ctx->indent);
+                buf_puts(body, "tur_panic(\"stm used outside of an atomically block\");\n");
+                ctx->indent -= 4;
+                indent_buf(body, ctx->indent);
+                buf_puts(body, "} else {\n");
+                ctx->indent += 4;
+                opened++;
+            }
             for (uint32_t i = 0; i < n; i++) {
                 const Expr *be = e->as.stm_.body[i];
                 if (i > 0) {
@@ -17809,10 +17821,12 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
             char *result = fresh_tmp(ctx);
             Type result_type = e->type;
             
-            /* Declare result variable - but void type is not allowed in C */
+            /* Declare result variable - but void type is not allowed in C.
+             * Zeroed: the no-progress panic leaves the loop without committing,
+             * and the caller reads the result variable on its way out. */
             if (result_type.kind != TY_NIL) {
                 indent_buf(body, ctx->indent);
-                buf_printf(body, "%s %s;\n", type_c_name(result_type), result);
+                buf_printf(body, "%s %s = {0};\n", type_c_name(result_type), result);
             }
             
             /* atomically block */
@@ -17846,34 +17860,30 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
             indent_buf(body, ctx->indent);
             buf_puts(body, "__tur_stm_begin(__tx);\n");
 
-            /* Emit STM block body directly */
+            /* Emit the STM block body through the EX_STM arm, so a `retry` /
+             * `check` that fires ends the attempt: the statements after it do not
+             * run (stm-forms-gaps item 2 -- they used to run, and print, on every
+             * spin).  That arm declares the block's value before its guards. */
             const Expr *stm_expr = e->as.atomically_.stm_expr;
             char *stm_last_val = NULL;
             if (stm_expr->as.stm_.n_body > 0) {
-                for (uint32_t i = 0; i < stm_expr->as.stm_.n_body; i++) {
-                    const Expr *expr = stm_expr->as.stm_.body[i];
-                    if (i < stm_expr->as.stm_.n_body - 1) {
-                        /* Not the last expression - emit as statement */
-                        emit_stmt(ctx, body, expr);
-                    } else {
-                        /* Last expression - emit as value */
-                        if (expr->type.kind != TY_NIL && expr->type.kind != TY_NEVER) {
-                            stm_last_val = emit_value(ctx, body, expr);
-                        } else {
-                            emit_stmt(ctx, body, expr);
-                        }
-                    }
-                }
+                bool has_val = stm_expr->type.kind != TY_NIL &&
+                               stm_expr->type.kind != TY_NEVER;
+                char *v = emit_value(ctx, body, stm_expr);
+                if (has_val) stm_last_val = v; else free(v);
             }
-            
+
             /* retry / check-false: park on the read set, then re-run */
             indent_buf(body, ctx->indent);
             buf_puts(body, "if (__tx->retry_requested) {\n");
             ctx->indent += 4;
             indent_buf(body, ctx->indent);
             buf_puts(body, "tur_stm_set_current_tx(__prev_tx);\n");
+            /* __tur_stm_park is false for a transaction that read no TVar --
+             * nothing could ever wake it -- after it has panicked (the
+             * interpreter's message); the attempt is abandoned. */
             indent_buf(body, ctx->indent);
-            buf_puts(body, "__tur_stm_park(__tx);\n");
+            buf_puts(body, "if (!__tur_stm_park(__tx)) { free(__tx); break; }\n");
             indent_buf(body, ctx->indent);
             buf_puts(body, "continue;\n");
             ctx->indent -= 4;
@@ -22674,8 +22684,25 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
         case EX_GEN_UNWRAP: {
             char *pv  = emit_value(ctx, body, e->as.gen_unwrap_.ptr_expr);
             char *raw = fresh_tmp(ctx);
+            /* `gen-next` hands back NULL once the body has ended; reading
+             * through it was a segfault.  A defined panic instead (test
+             * `gen-some?` first, as the docs say). */
             indent_buf(body, ctx->indent);
-            buf_printf(body, "int64_t %s = *(int64_t *)(intptr_t)(%s);\n", raw, pv);
+            buf_printf(body, "int64_t %s = 0;\n", raw);
+            indent_buf(body, ctx->indent);
+            buf_printf(body, "if (!(%s)) {\n", pv);
+            indent_buf(body, ctx->indent + 4);
+            /* tur_panic returns when a catch-unwind handler is active (the
+             * caller unwinds on tur_panicking), so the read stays in the else. */
+            emit_panic_call(body, e->span,
+                            "\"gen-unwrap: the generator is exhausted "
+                            "(test gen-some? before gen-unwrap)\"");
+            indent_buf(body, ctx->indent);
+            buf_printf(body, "} else {\n");
+            indent_buf(body, ctx->indent + 4);
+            buf_printf(body, "%s = *(int64_t *)(intptr_t)(%s);\n", raw, pv);
+            indent_buf(body, ctx->indent);
+            buf_printf(body, "}\n");
             free(pv);
             const char *rc = NULL;
             char rexpr[256];

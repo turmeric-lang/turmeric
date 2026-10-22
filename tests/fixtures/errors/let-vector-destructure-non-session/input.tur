@@ -1,0 +1,7 @@
+;; control-forms-gaps item 7: `(let [[a b] x] ...)` destructures a SESSION pair.
+;; On a vector it bound `a` to the whole vector (the first name got the value's
+;; type, the rest `int`), so `a` was not 7.  It is an error now.
+(defn main [] : int
+  (let [[a b] (vec-of 7 8)]
+    (println (vec-len a)))
+  0)

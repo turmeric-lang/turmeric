@@ -1941,6 +1941,8 @@ static bool form_has_toplevel_unhandled_perform(const Elab *e, const Form *f) {
         if (hs == e->sym_perform) return true;
         /* a handle/reset guards its subtree; a nested fn/lambda is its own body */
         if (hs == e->sym_handle || hs == e->sym_reset
+            || hs == e->sym_handle_shallow || hs == e->sym_try_with
+            || hs == e->sym_with_handler
             || hs == e->sym_fn || hs == e->sym_lambda) return false;
     }
     for (uint32_t i = 0; i < f->as.list.len; i++)

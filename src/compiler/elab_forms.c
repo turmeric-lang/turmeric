@@ -2,6 +2,7 @@
 #include "elab_internal.h"
 #include "lang_dialects.h"   /* saffron-lang-plan S3: lang_span_is_dynamic */
 #include "experiments.h"     /* loop-invariants-plan: experiment_warn_if_used */
+#include "cps.h"             /* cps_visit_children -- gen_sets_binding */
 
 /* ---- file-local helper forward declarations ---- */
 static Expr *elab_set_deref(Elab *e, const Form *call, const Form *deref_form);
@@ -825,6 +826,10 @@ static bool cell_fn_mentions(Elab *e, const Form *f, const Symbol *n,
     if (f->tag == F_LIST && len >= 1 && f->as.list.items[0]->tag == F_SYM) {
         const Symbol *h = f->as.list.items[0]->as.sym;
         if (h == e->sym_quote) return false;
+        /* A `gen` body is a capturing scope as well: its state struct holds
+         * what it names, so a `^mut` it reads or sets must be the shared cell
+         * too, as for a `fn` (the interpreter has always shared it). */
+        if (h == e->sym_gen) in_fn = true;
         if (h == e->sym_fn || h == e->sym_lambda) {
             for (uint32_t k = 1; k < len && k <= 2; k++) {
                 if (f->as.list.items[k]->tag == F_VEC) {
@@ -1004,6 +1009,21 @@ Expr *elab_let(Elab *e, const Form *call) {
             Form *init_form_v = bindings_form->as.list.items[i++];
             Expr *init_v = elab_form(e, init_form_v);
             if (!init_v) { rc = -1; break; }
+            /* control-forms-gaps item 7: this form destructures a SESSION pair
+             * (a channel endpoint pair, a recv result, a make-protocol role set).
+             * For anything else the loop below gave the first name the whole
+             * value's type and the rest `int`, so `(let [[a b] (vec-of 7 8)] a)`
+             * bound `a` to the vector.  Say so rather than mis-bind. */
+            if (init_v->type.kind != TY_SESSION_PAIR &&
+                init_v->type.kind != TY_SESSION_RECV_PAIR &&
+                init_v->type.kind != TY_UNKNOWN) {
+                diag_emit(DIAG_ERROR, vec_span,
+                          "let vector destructuring `[a b]` is defined only for "
+                          "session pairs (make-session, recv, make-protocol); it "
+                          "does not take a vector or list apart -- read elements "
+                          "with (vec-get v 0), (vec-get v 1)");
+                rc = -1; break;
+            }
             /* Create one binding per name in the pattern vector with placeholder types.
              * The actual types will be verified by codegen (SS2); for SS0b the
              * type-level operations (send/recv/offer/choose-*) already emit their
@@ -5121,6 +5141,36 @@ Expr *elab_return(Elab *e, const Form *call) {
  * unwrapped ok type; `elab_if` accepts NEVER as compatible with any type and
  * propagates the other branch's type as the result.
  */
+static Form *question_call1(Elab *e, Span span, Form *f, Form *a) {
+    Form *items[2] = { f, a };
+    return form_list(e->arena, span, items, 2);
+}
+
+/* The static type of a `?` operand when it is a typed `Result` / `Option`:
+ * "Result", "Option", or NULL (anything else, or not known without elaborating
+ * it).  Only a variable and a call of a named function are read -- the operand
+ * is elaborated once, by the lowering. */
+static const char *question_operand_sum(Elab *e, const Form *inner) {
+    Type t;
+    memset(&t, 0, sizeof t);
+    t.kind = TY_UNKNOWN;
+    if (inner->tag == F_SYM) {
+        Binding *b = scope_lookup(e->scope, inner->as.sym);
+        if (b) t = b->type;
+    } else if (inner->tag == F_LIST && inner->as.list.len >= 1 &&
+               inner->as.list.items[0]->tag == F_SYM) {
+        Binding *b = scope_lookup(e->scope, inner->as.list.items[0]->as.sym);
+        if (b && b->type.kind == TY_FN && b->type.as.fn.result_full_type)
+            t = *b->type.as.fn.result_full_type;
+    }
+    /* `(Result int cstr)` is an application: peel it to the constructor's ADT. */
+    while (t.kind == TY_APP && t.as.app.fn) t = *t.as.app.fn;
+    if (t.kind != TY_ADT || !t.as.adt_.def || !t.as.adt_.def->name) return NULL;
+    if (strcmp(t.as.adt_.def->name, "Result") == 0) return "Result";
+    if (strcmp(t.as.adt_.def->name, "Option") == 0) return "Option";
+    return NULL;
+}
+
 Expr *elab_question(Elab *e, const Form *call) {
     if (e->fn_body_depth == 0) {
         diag_emit(DIAG_ERROR, call->span,
@@ -5166,6 +5216,42 @@ Expr *elab_question(Elab *e, const Form *call) {
     const Symbol *q_sym = symtab_intern(e->st,
         strslice(q_name, (uint32_t)strlen(q_name)));
     Form *q_sym_f = form_sym(e->arena, span, q_sym);
+
+    /* A operand statically typed `(Result T E)` or `(Option T)` -- the language's
+     * own by-value sums -- lowers to a `match` on it.  The helpers below read the
+     * layout of the old pointer-carried Result (`struct { int tag; int64_t
+     * payload; } *`), so a typed value failed their `ptr<void>` argument check
+     * and `?` could not be used on the type error-handling-guide documents it
+     * for.  The match is plain Turmeric, so it runs under --interpret too. */
+    {
+        const char *kind = question_operand_sum(e, inner);
+        if (kind) {
+            bool is_res = strcmp(kind, "Result") == 0;
+            /* (if (err? q) (return (Err (err-val q))) (ok-val q)), or
+             * (if (none? q) (return (None)) (unwrap q)): a branch that
+             * `return`s joins with any other, which a `match` arm does not. */
+            #define QSYM(n) form_sym(e->arena, span, intern_cstr(e->st, (n)))
+            #define QCALL1(f, a) question_call1(e, span, (f), (a))
+            Form *test_f = QCALL1(QSYM(is_res ? "err?" : "none?"), q_sym_f);
+            Form *fail_val;
+            if (is_res) {
+                fail_val = QCALL1(QSYM("Err"), QCALL1(QSYM("err-val"), q_sym_f));
+            } else {
+                Form *_n[1] = { QSYM("None") };
+                fail_val = form_list(e->arena, span, _n, 1);
+            }
+            Form *ret_f = QCALL1(form_sym(e->arena, span, e->sym_return), fail_val);
+            Form *ok_f = QCALL1(QSYM(is_res ? "ok-val" : "unwrap"), q_sym_f);
+            Form *if_i[4] = { form_sym(e->arena, span, e->sym_if), test_f, ret_f, ok_f };
+            Form *if_f2 = form_list(e->arena, span, if_i, 4);
+            #undef QCALL1
+            #undef QSYM
+            Form *bv_items[2] = { q_sym_f, inner };
+            Form *bv = form_vec(e->arena, span, bv_items, 2);
+            Form *li[3] = { form_sym(e->arena, span, e->sym_let), bv, if_f2 };
+            return elab_form(e, form_list(e->arena, span, li, 3));
+        }
+    }
 
     /* The ? lowering routes through two stdlib helpers --
      * __tur-q-is-err? and __tur-q-ok-val (defined in stdlib/result.tur) --
@@ -5329,6 +5415,17 @@ static bool form_contains_sym(const Form *f, const Symbol *sym) {
  * with a _next function.  All let bindings in the body are promoted to struct
  * fields (conservative yield-live analysis).  Captures (free variables) are
  * passed to the _create function and stored in the struct. */
+static bool gen_sets_binding(const Expr *x, const Binding *b);
+static bool gen_sets_binding_visit(const Expr *c, void *ud) {
+    return gen_sets_binding(c, (const Binding *)ud);
+}
+/* Does `x` assign `b` (outside nested closures)? */
+static bool gen_sets_binding(const Expr *x, const Binding *b) {
+    if (!x) return false;
+    if (x->kind == EX_SET && x->as.set_.target == b) return true;
+    return cps_visit_children(x, gen_sets_binding_visit, (void *)b);
+}
+
 Expr *elab_gen(Elab *e, const Form *call) {
     if (call->as.list.len < 3) {
         diag_emit(DIAG_ERROR, call->span,
@@ -5439,6 +5536,24 @@ Expr *elab_gen(Elab *e, const Form *call) {
     free(caps);
     def->n_captures = n_caps;
 
+    /* The state struct holds a COPY of every captured variable.  A scalar
+     * `^mut` is already a shared cell by now (elab_let_mut_to_cell), so only
+     * a captured `^mut` of another type reaches here; assigning it would
+     * change the generator's copy and nothing else, so it is refused. */
+    for (uint32_t ci = 0; ci < n_caps; ci++) {
+        const Binding *cb = def->captures[ci];
+        if (cb && cb->is_mut && gen_sets_binding(body_expr, cb)) {
+            diag_emit(DIAG_ERROR, call->span,
+                      "gen body assigns the captured ^mut variable '%s' of type %s: "
+                      "a generator keeps its own copy of what it captures, so the "
+                      "assignment would never reach the variable (only a scalar "
+                      "^mut is shared with a gen; hold the state in a struct or "
+                      "vector the gen mutates through)",
+                      cb->name ? cb->name->name : "?", type_name(cb->type));
+            return NULL;
+        }
+    }
+
     /* Collect all let bindings for struct field promotion */
     Binding **let_binds  = NULL;
     uint32_t  n_let      = 0;
@@ -5481,10 +5596,32 @@ Expr *elab_gen(Elab *e, const Form *call) {
 }
 
 /* GF1: (yield expr) -- yield a value inside a gen body. */
+/* Yield payloads that share a carrier: every integer width reads back through
+ * the same 64-bit word, so they may mix; any other kind must match the first
+ * yield exactly. */
+static int gen_yield_family(TypeKind k) {
+    switch (k) {
+        case TY_INT: case TY_INT64: case TY_UINT64: case TY_INT32:
+        case TY_UINT32: case TY_INT16: case TY_UINT16: case TY_INT8:
+        case TY_UINT8:
+            return -1;
+        case TY_FLOAT: case TY_FLOAT64:
+            return -2;
+        default:
+            return (int)k;
+    }
+}
+
 Expr *elab_yield(Elab *e, const Form *call) {
     if (!e->gen_ctx) {
-        diag_emit(DIAG_ERROR, call->span,
-                  "yield is only valid inside a gen body");
+        if (e->gen_hidden_by_fn)
+            diag_emit(DIAG_ERROR, call->span,
+                      "'yield' inside a 'fn' literal: the fn is its own function, "
+                      "not part of the enclosing 'gen' body, so there is no generator "
+                      "for it to suspend; yield from the gen body itself");
+        else
+            diag_emit(DIAG_ERROR, call->span,
+                      "yield is only valid inside a gen body");
         return NULL;
     }
     /* CF5 (TUR-E0702): yield inside a match arm is unsupported in v1. */
@@ -5508,6 +5645,23 @@ Expr *elab_yield(Elab *e, const Form *call) {
     }
     Expr *value = elab_form(e, call->as.list.items[1]);
     if (!value) return NULL;
+
+    /* Later yields must carry the first yield's type: the generator's element
+     * is read back as that one kind, so another kind would be reinterpreted
+     * (2.5 read as an int printed its bit pattern). */
+    if (e->gen_ctx->element_kind_set) {
+        TypeKind first = e->gen_ctx->element_kind;
+        TypeKind now   = value->type.kind;
+        if (first != TY_TYVAR && now != TY_TYVAR &&
+            first != TY_UNKNOWN && now != TY_UNKNOWN &&
+            gen_yield_family(first) != gen_yield_family(now)) {
+            diag_emit(DIAG_ERROR, value->span,
+                      "'yield' of %s in a generator whose first yield is %s: "
+                      "every yield of one generator must have the same type",
+                      type_name(value->type), type_name(type_from_kind(first)));
+            return NULL;
+        }
+    }
 
     /* Record element kind on first yield */
     if (!e->gen_ctx->element_kind_set) {

@@ -1,0 +1,7 @@
+;;; The value a `resume` hands back is the answer to the `perform`, so it has
+;;; the effect's declared result type.  `(resume k "x")` for an `int` effect
+;;; compiled and delivered the string's address as an integer.
+(defeffect Ask [] : int)
+(defn main [] : int
+  (println (handle (+ 1 (perform (Ask))) (Ask [] k) (resume k "x")))
+  0)

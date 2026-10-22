@@ -23,7 +23,8 @@
 ;;; delimited-control-operators-guide compares them; serializable-continuations-guide
 ;;; covers the serial pair. Several of these forms differ between the compiler
 ;;; and the interpreter, or are unfinished -- see
-;;; docs/reported/continuation-forms-gaps.md.
+;;; docs/reported/compiled-shift-delimited-by-root.md and
+;;; docs/upcoming/shift0-pop-plan.md.
 ;; Reference only: tools/gendocs.py reads the ;;@ lines, the compiler skips them.
 
 ;;; reset -- mark how far a shift reaches.
@@ -37,14 +38,7 @@
 ;;; around one that takes a `cont` it is a `cloneable-reset`, with their rules on
 ;;; what may be captured. `call/cc` and `escape` are not stopped by a `reset`:
 ;;; `(+ 1 (escape (fn [k] (reset (+ 10 (k 5))))))` is 6.
-;;;
-;;; A compiler fault to know about: a function that holds two or more resets
-;;; that stay abortive (a `reset` with no `shift`, or with a `shift` or `shift0`
-;;; that takes a value, counts) and also a `cloneable-shift`, `serial-shift`,
-;;; `call/cc*`, `call/cc` or `escape` does not compile -- TUR-E0710 for
-;;; `cloneable-shift` and `call/cc*`, TUR-E0706 for `serial-shift`, an internal
-;;; error for `call/cc` and `escape`. The interpreter runs it.
-;;; Give each reset its own function. See docs/reported/continuation-forms-gaps.md.
+
 ;;;
 ;;; Parameters:
 ;;;   body -- one or more expressions
@@ -53,7 +47,7 @@
 ;;;   The value of the last body form, or the result of the `shift` that fired.
 ;;;
 ;;; Example:
-;;;   (reset (+ 1 2))  ; => 3  ; doctest: two abortive resets in one function stop the compiled build
+;;;   (reset (+ 1 2))  ; => 3
 ;;@form (reset body ...)
 
 ;;; shift -- capture the context up to the nearest reset.
@@ -108,7 +102,7 @@
 ;;;   The result type of `f`.
 ;;;
 ;;; Example:
-;;;   (reset (shift0 (fn [v : int] (= v 0)) 0))  ; => true  ; doctest: two abortive resets in one function stop the compiled build
+;;;   (reset (shift0 (fn [v : int] (= v 0)) 0))  ; => true
 ;;@form (shift0 f x)
 
 ;;; cloneable-reset -- the boundary for cloneable-shift.
@@ -212,13 +206,9 @@
 ;;; prompt returned`. The parameter can be written `(fn [k] ...)`, which gives it
 ;;; the `escape-cont` type, or `(fn [k : escape-cont<int>] ...)`; `^linear` makes
 ;;; it an error not to call `k` (TUR-E0100) or to call it twice (TUR-E0101),
-;;; which an unannotated `k` does not check. For a continuation that can be called
-;;; again use `call/cc*`.
-;;;
-;;; Known faults of the compiled program (docs/reported/continuation-forms-gaps.md):
-;;; a float passed to `k` comes out as garbage, a function with two or more
-;;; abortive `reset`s as well as a `call/cc` is an internal error (`EX_CALLCC
-;;; reached the direct emitter`), and a non-function argument is not rejected.
+;;; which an unannotated `k` does not check (it is one-shot by nature: the first
+;;; `(k v)` leaves the call). For a continuation that can be called again use
+;;; `call/cc*`. The argument must be a function: `(call/cc 5)` is TUR-E0001.
 ;;;
 ;;; Parameters:
 ;;;   f -- a function taking `k`

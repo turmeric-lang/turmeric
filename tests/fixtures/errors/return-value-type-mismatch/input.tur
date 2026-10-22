@@ -1,0 +1,9 @@
+;; control-forms-gaps item 4: `return` did not check its value against the
+;; function's declared result.  Compiled, this returned the string's address as
+;; an int (a -Wint-conversion warning from cc); interpreted, it returned the
+;; string.  The tail of a body was always checked; a `return` in the middle of
+;; one now is too.
+(defn f [] : int
+  (return "a")
+  1)
+(defn main [] : int (println (f)) 0)

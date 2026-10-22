@@ -9,211 +9,122 @@
 ;;   Value       -- a typed payload (long, string, entity ref, ...)
 ;;   Transaction -- a monotonic counter stamped on each assert
 ;;
-;; Run with: ./build/tur examples/datalog/minimal.tur
+;; Everything here is typed Turmeric -- a `Value` sum, a `Datum` struct, a
+;; `(Vec Datum)` log -- so all three engines run it:
+;;
+;;   ./build/tur run examples/datalog/minimal.tur
+;;   ./build/tur jit examples/datalog/minimal.tur
+;;   ./build/tur --interpret examples/datalog/minimal.tur
+
+(load "stdlib/cstr.tur")   ;; cstr-eq?: string equality by contents
 
 ;; ============================================================
 ;; Value ADT -- typed payload stored in each fact
 ;; ============================================================
 
-;; `:heap` is load-bearing, not decoration: a datum is a raw `int64_t[4]`
-;; built in inline-C, so the value it stores has to be ONE WORD.  A :heap ADT
-;; is a typed pointer (`tur_adt_Value *`), which fits; a plain multi-variant
-;; sum now flows BY VALUE as a tag+union aggregate (SR1) and does not.
-(defdata Value :heap
-  (LongVal :int)    ;; 64-bit integer
-  (StrVal :int)     ;; :cstr pointer stored as int
-  (EntityVal :int)) ;; entity ID reference
+;; `:copy` because a fact is immutable: a Value is read, compared and printed,
+;; never consumed, so every use may copy it.
+(defdata Value :copy
+  (LongVal :int)      ;; 64-bit integer
+  (StrVal :cstr)      ;; string
+  (EntityVal :int))   ;; reference to another entity
 
 ;; ============================================================
 ;; Datum -- a single immutable EAV-T fact
-;; Storage layout: [entity, attr (cstr ptr), value (Value ptr), tx]
 ;; ============================================================
 
-(defn datum-new [entity : int attr : int value : int tx : int] : int
-  ```c
-  int64_t *d = malloc(4 * sizeof(int64_t));
-  d[0] = entity; d[1] = attr; d[2] = value; d[3] = tx;
-  return (int64_t)(intptr_t)d;
-  ```)
-
-(defn datum-entity [d : int] : int
-  ```c return ((int64_t*)(intptr_t)d)[0]; ```)
-
-(defn datum-attr [d : int] : int
-  ```c return ((int64_t*)(intptr_t)d)[1]; ```)
-
-(defn datum-value [d : int] : int
-  ```c return ((int64_t*)(intptr_t)d)[2]; ```)
-
-(defn datum-tx [d : int] : int
-  ```c return ((int64_t*)(intptr_t)d)[3]; ```)
+(defstruct Datum :copy
+  [entity : int     ;; the object the fact is about
+   attr   : cstr    ;; the property, e.g. ":user/name"
+   value  : Value   ;; the payload
+   tx     : int])   ;; the transaction that asserted it
 
 ;; ============================================================
-;; Database -- a mutable, append-only store
-;; Storage layout: [datums-vec-ptr, next-tx]
+;; Database -- the append-only log of datums, oldest first
 ;; ============================================================
 
-(defn db-new [] : int
-  ```c
-  int64_t *db = malloc(2 * sizeof(int64_t));
-  struct { int64_t *data; size_t len; size_t cap; } *v = malloc(sizeof(*v));
-  v->data = NULL; v->len = 0; v->cap = 0;
-  db[0] = (int64_t)(intptr_t)v;
-  db[1] = 0;
-  return (int64_t)(intptr_t)db;
-  ```)
+(defalias Db (Vec Datum))
+
+(defn db-new [] : Db
+  (vec-new))
 
 ;; Number of facts in the database
-(defn db-count [db : int] : int
-  ```c
-  int64_t *p = (int64_t*)(intptr_t)db;
-  struct { int64_t *data; size_t len; size_t cap; } *v = (void*)(intptr_t)p[0];
-  return (int64_t)v->len;
-  ```)
+(defn db-count [db : Db] : int
+  (vec-len db))
 
 ;; Get datum at index i
-(defn db-ref [db : int i : int] : int
-  ```c
-  int64_t *p = (int64_t*)(intptr_t)db;
-  struct { int64_t *data; size_t len; size_t cap; } *v = (void*)(intptr_t)p[0];
-  return v->data[i];
-  ```)
+(defn db-ref [db : Db i : int] : Datum
+  (vec-get db i))
 
-;; Assert a new fact. Increments next-tx and appends the datum. Returns the tx.
-(defn db-assert! [db : int entity : int attr : int value : int] : int
-  ```c
-  int64_t *p = (int64_t*)(intptr_t)db;
-  p[1] += 1;
-  int64_t tx = p[1];
-  int64_t *d = malloc(4 * sizeof(int64_t));
-  d[0] = entity; d[1] = attr; d[2] = value; d[3] = tx;
-  struct { int64_t *data; size_t len; size_t cap; } *v = (void*)(intptr_t)p[0];
-  if (v->len >= v->cap) {
-    size_t nc = v->cap > 0 ? v->cap * 2 : 8;
-    int64_t *nd = malloc(sizeof(int64_t) * nc);
-    for (size_t i = 0; i < v->len; i++) nd[i] = v->data[i];
-    free(v->data); v->data = nd; v->cap = nc;
-  }
-  v->data[v->len++] = (int64_t)(intptr_t)d;
-  return tx;
-  ```)
-
-;; ============================================================
-;; Result vec -- a lightweight growable array for query results
-;; Uses :ptr<void> to keep the ownership checker out of query logic
-;; ============================================================
-
-(defn rvec-new [] : ptr<void>
-  ```c
-  struct { int64_t *data; size_t len; size_t cap; } *v = malloc(sizeof(*v));
-  v->data = NULL; v->len = 0; v->cap = 0;
-  return v;
-  ```)
-
-(defn rvec-len [v : ptr<void>] : int
-  ```c
-  struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)v;
-  return (int64_t)vec->len;
-  ```)
-
-(defn rvec-get [v : ptr<void> i : int] : int
-  ```c
-  struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)v;
-  return vec->data[i];
-  ```)
-
-(defn rvec-push! [v : ptr<void> val : int]
-  ```c
-  struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)v;
-  if (vec->len >= vec->cap) {
-    size_t nc = vec->cap > 0 ? vec->cap * 2 : 8;
-    int64_t *nd = malloc(sizeof(int64_t) * nc);
-    for (size_t i = 0; i < vec->len; i++) nd[i] = vec->data[i];
-    free(vec->data); vec->data = nd; vec->cap = nc;
-  }
-  vec->data[vec->len++] = val;
-  ```)
+;; Assert a new fact: append it, stamped with the next transaction number.
+;; Every assert appends exactly one datum, so the tx is the datum's 1-based
+;; position in the log. Returns the tx.
+(defn db-assert! [db : Db entity : int attr : cstr value : Value] : int
+  (let [tx (+ (db-count db) 1)]
+    (vec-push! db (Datum entity attr value tx))
+    tx))
 
 ;; ============================================================
 ;; Query -- filter datums with a predicate closure
-;; Returns a fresh rvec of matching datum pointers
+;; Returns a fresh (Vec Datum) of the matches, in log order
 ;; ============================================================
 
-(defn db-q [db : int pred : (fn [int] bool)] : ptr<void>
-  (let [n (db-count db)]
-    (let [result (rvec-new)]
-      (let [^mut i 0]
-        (while (< i n)
-          (do
-            (let [d (db-ref db i)]
-              (when (pred d)
-                (rvec-push! result d)))
-            (set! i (+ i 1))))
-        result))))
+(defn db-q [db : Db pred : (fn [Datum] bool)] : (Vec Datum)
+  (let [result (:: (vec-new) (Vec Datum))
+        ^mut i 0]
+    (while (< i (db-count db))
+      (let [d (db-ref db i)]
+        (when (pred d)
+          (vec-push! result d)))
+      (set! i (+ i 1)))
+    result))
 
 ;; ============================================================
-;; String helpers
+;; Value printer
 ;; ============================================================
 
-(defn cstr->int [s : cstr] : int
-  ```c return (int64_t)(intptr_t)s; ```)
-
-(defn cstr-eq? [a : int b : int] : bool
-  ```c
-  return strcmp((const char*)(intptr_t)a, (const char*)(intptr_t)b) == 0;
-  ```)
-
-(defn println-cstr [s : int] : nil
-  ```c printf("%s\n", (const char*)(intptr_t)s); ```)
-
-;; ============================================================
-;; Value constructors and printer
-;; ============================================================
-
-(defn long-val [n : int] : int
-  (LongVal n))
-
-(defn str-val [s : cstr] : int
-  (StrVal (cstr->int s)))
-
-(defn entity-val [e : int] : int
-  (EntityVal e))
-
-(defn print-value [v : int] : nil
+(defn print-value [v : Value] : nil
   (match v
     (LongVal n)   (println n)
-    (StrVal s)    (println-cstr s)
+    (StrVal s)    (println s)
     (EntityVal e) (println e)))
+
+;; Print the value of every datum in a query result
+(defn print-values [ds : (Vec Datum)] : nil
+  (let [^mut i 0]
+    (while (< i (vec-len ds))
+      (print-value (.value (vec-get ds i)))
+      (set! i (+ i 1)))))
 
 ;; ============================================================
 ;; Query combinators -- build predicate closures
 ;; ============================================================
 
 ;; Match datums by entity ID
-(defn q-entity [e : int] : (fn [int] bool)
-  (fn [d : int] : bool (= (datum-entity d) e)))
+(defn q-entity [e : int] : (fn [Datum] bool)
+  (fn [d : Datum] : bool (= (.entity d) e)))
 
-;; Match datums by attribute name
-(defn q-attr [a : cstr] : (fn [int] bool)
-  (fn [d : int] : bool (cstr-eq? (datum-attr d) (cstr->int a))))
+;; Match datums by attribute name (compared by contents, never by address)
+(defn q-attr [a : cstr] : (fn [Datum] bool)
+  (fn [d : Datum] : bool (cstr-eq? (.attr d) a)))
 
 ;; Match datums by entity AND attribute
-(defn q-ea [e : int a : cstr] : (fn [int] bool)
-  (fn [d : int] : bool
-    (and (= (datum-entity d) e)
-         (cstr-eq? (datum-attr d) (cstr->int a)))))
+(defn q-ea [e : int a : cstr] : (fn [Datum] bool)
+  (fn [d : Datum] : bool
+    (and (= (.entity d) e)
+         (cstr-eq? (.attr d) a))))
 
 ;; Logical AND of two predicates
-(defn q-and [p : (fn [int] bool) q : (fn [int] bool)] : (fn [int] bool)
-  (fn [d : int] : bool (and (p d) (q d))))
+(defn q-and [p : (fn [Datum] bool) q : (fn [Datum] bool)] : (fn [Datum] bool)
+  (fn [d : Datum] : bool (and (p d) (q d))))
 
 ;; Logical OR of two predicates
-(defn q-or [p : (fn [int] bool) q : (fn [int] bool)] : (fn [int] bool)
-  (fn [d : int] : bool (or (p d) (q d))))
+(defn q-or [p : (fn [Datum] bool) q : (fn [Datum] bool)] : (fn [Datum] bool)
+  (fn [d : Datum] : bool (or (p d) (q d))))
 
 ;; Logical NOT of a predicate
-(defn q-not [p : (fn [int] bool)] : (fn [int] bool)
-  (fn [d : int] : bool (not (p d))))
+(defn q-not [p : (fn [Datum] bool)] : (fn [Datum] bool)
+  (fn [d : Datum] : bool (not (p d))))
 
 ;; ============================================================
 ;; Demo
@@ -223,45 +134,42 @@
   (let [db (db-new)]
 
     ;; --- Alice: entity 1 ---
-    (db-assert! db 1 (cstr->int ":user/name")  (str-val "Alice"))
-    (db-assert! db 1 (cstr->int ":user/email") (str-val "alice@example.com"))
-    (db-assert! db 1 (cstr->int ":user/age")   (long-val 30))
+    (db-assert! db 1 ":user/name"  (StrVal "Alice"))
+    (db-assert! db 1 ":user/email" (StrVal "alice@example.com"))
+    (db-assert! db 1 ":user/age"   (LongVal 30))
 
     ;; --- Bob: entity 2 ---
-    (db-assert! db 2 (cstr->int ":user/name")  (str-val "Bob"))
-    (db-assert! db 2 (cstr->int ":user/email") (str-val "bob@example.com"))
-    (db-assert! db 2 (cstr->int ":user/age")   (long-val 25))
+    (db-assert! db 2 ":user/name"  (StrVal "Bob"))
+    (db-assert! db 2 ":user/email" (StrVal "bob@example.com"))
+    (db-assert! db 2 ":user/age"   (LongVal 25))
 
-    ;; Query: all user names
+    ;; Query: all user names.  A query result is a fresh Vec the caller owns
+    ;; and frees; the datums in it are copies, so freeing it leaves the
+    ;; database alone.
     (println "-- All user names --")
     (let [names (db-q db (q-attr ":user/name"))]
-      (let [^mut i 0]
-        (while (< i (rvec-len names))
-          (do
-            (print-value (datum-value (rvec-get names i)))
-            (set! i (+ i 1))))))
+      (print-values names)
+      (vec-free names))
 
     ;; Query: facts about entity 1 (Alice)
     (println "-- Alice's facts --")
-    (let [alice (db-q db (q-entity 1))]
-      (let [^mut i 0]
-        (while (< i (rvec-len alice))
-          (do
-            (let [d (rvec-get alice i)]
-              (println-cstr (datum-attr d))
-              (print-value (datum-value d)))
-            (set! i (+ i 1))))))
+    (let [alice (db-q db (q-entity 1))
+          ^mut i 0]
+      (while (< i (vec-len alice))
+        (let [d (vec-get alice i)]
+          (println (.attr d))
+          (print-value (.value d)))
+        (set! i (+ i 1)))
+      (vec-free alice))
 
-    ;; Query: everyone over age 26
+    ;; Query: ages of every user but entity 2
     (println "-- Users with age NOT 25 --")
-    (let [results (db-q db (q-and (q-attr ":user/age")
-                                  (q-not (q-entity 2))))]
-      (let [^mut i 0]
-        (while (< i (rvec-len results))
-          (do
-            (print-value (datum-value (rvec-get results i)))
-            (set! i (+ i 1))))))
+    (let [ages (db-q db (q-and (q-attr ":user/age")
+                               (q-not (q-entity 2))))]
+      (print-values ages)
+      (vec-free ages))
 
+    (vec-free db)
     nil))
 
 (defn main [] : int

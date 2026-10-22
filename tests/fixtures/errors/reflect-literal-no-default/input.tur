@@ -1,7 +1,9 @@
-;; reflected-measures RF2: a match over LITERALS has no coverage check in the
-;; elaborator (S4-lit path), so the reflection walk demands a trailing `_` or
-;; variable arm itself.  The sibling positive reflect-literal-default adds
-;; the `_` arm and passes.
+;; reflected-measures RF2: a `^reflect` function whose match is over LITERALS
+;; with no trailing `_` or variable arm.  The reflection walk once had to demand
+;; that arm itself (TUR-E0384, "coverage gate") because the elaborator did not
+;; check a literal match; since control-forms-gaps item 5 it does, and refuses
+;; the program first.  The sibling positive reflect-literal-default adds the `_`
+;; arm and passes.
 (defn ^reflect code [n : int] : int
   (match n
     1 10

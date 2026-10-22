@@ -17,28 +17,34 @@
 ;;      generation crosses the boundary and the pop REWINDS (the static walk
 ;;      clears it).  The spine built inside is reclaimed; the sum survives.
 ;;
+;; The spine stays TYPED from construction to the sum.  It used to be built
+;; through `(:: (Link n acc) :int)` and summed in inline C over an erased
+;; `:int`; both are hooked escape notes (CLAUDE.md, "Region Store Hooks"), so
+;; every one of the 103 generations retired and this fixture tested no rewind
+;; at all (docs/archive/region-rewind-fixtures-never-rewind.md).  `run.env`
+;; sets TUR_REGION_STATS=1 and expected.stderr pins `rewinds=103 retires=0`,
+;; so a fixture that stops rewinding now fails instead of quietly becoming a
+;; retire test.
+;;
 ;; With regions off (`TUR_REGIONS=0`, the bisection hatch), `with-region` is a plain identity call and the
 ;; numbers are identical -- which is what the regions seam checks.
 
-(defdata Link :heap (Link [v : int nxt : int]))
+(defdata Chain :heap (Link [v : int nxt : Chain]) (End))
 
-(defn build [n : int acc : int] : int
+(defn build [n : int acc : Chain] : Chain
   (if (<= n 0)
     acc
-    (build (- n 1) (:: (Link n acc) :int))))
+    (build (- n 1) (Link n acc))))
 
-(defn chain-sum [c : int] : int
-  ```c
-  struct { int64_t v; int64_t nxt; } *p = (void *)(intptr_t)c;
-  int64_t acc = 0;
-  while (p) { acc += p->v; p = (void *)(intptr_t)p->nxt; }
-  return acc;
-  ```)
+(defn chain-sum [c : Chain acc : int] : int
+  (match c
+    (Link v nxt) (chain-sum nxt (+ acc v))
+    (End)        acc))
 
 ;; A #fx{} (pure-declared) caller reaching a region bracket: legal, because
 ;; with-region opens no trail level.  The bt-scope twin of this is TUR-E0009.
 (defn pure-total [n : int] #fx{} : int
-  (with-region (fn [] (chain-sum (build n 0)))))
+  (with-region (fn [] (chain-sum (build n (End)) 0))))
 
 ;; k generations of the same shape, opened and reclaimed in turn -- the pooled
 ;; slabs are reused each round.

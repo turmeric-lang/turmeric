@@ -251,7 +251,7 @@ package's PR.
   `tests/benchmarks/output/` had been committed on 2026-05-13, so every
   benchmark run dirtied the tree. Untracked.
 
-Filed: [jit-string-literal-identity-differs-from-cc](../../reported/jit-string-literal-identity-differs-from-cc.md)
+Filed: [jit-string-literal-identity-differs-from-cc](../../archive/jit-string-literal-identity-differs-from-cc.md)
 -- the output-parity check's first catch. `examples/datalog/indexed.tur`
 answers its queries compiled and returns nothing under `tur jit`, because it
 keys an index on string-literal addresses, which gcc merges and c2mir does

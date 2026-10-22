@@ -16,21 +16,21 @@
 ;;; a `match` arm (TUR-E0702) or in a recursive generator (TUR-E0703), and there
 ;;; is no type to annotate a generator parameter with -- a function that takes
 ;;; one cannot call `gen-next` on it. Consume a generator where it is made, or
-;;; through the tur/gen macros. See docs/reported/generator-forms-gaps.md for
-;;; what else falls short.
+;;; through the tur/gen macros; docs/upcoming/generator-type-plan.md adds
+;;; `(Generator T)`.
 ;; Reference only: tools/gendocs.py reads the ;;@ lines, the compiler skips them.
 
 ;;; gen -- create a generator from a body.
 ;;;
 ;;; The capture vector is always `[]`: the body sees the variables around it, and
 ;;; the compiler works out which ones from the body itself (`(gen [x] ...)` is an
-;;; error). The body runs lazily, a `yield` at a time. Locals that the body
-;;; reads are copied into the generator when it is created, so a later `set!` of
-;;; the outer variable is not seen by the compiled generator (the interpreter
-;;; sees it), and `set!` of a captured variable inside the body changes only the
-;;; generator's copy (a `set!` of a captured variable the body never reads does
-;;; not compile). Keep a generator's state in `let` bindings made inside the
-;;; body.
+;;; error). The body runs lazily, a `yield` at a time. A scalar `^mut` variable
+;;; (a number, bool, string or symbol) that the body names is shared with the
+;;; generator, on both engines: a `set!` outside is seen inside, and the body's
+;;; own `set!` reaches the variable. Every other captured local is copied into
+;;; the generator when it is created, and assigning a captured `^mut` of
+;;; another type inside the body is an error (it would change only the copy).
+;;; Keep a generator's own state in `let` bindings made inside the body.
 ;;;
 ;;; Parameters:
 ;;;   []   -- the capture vector, which must be empty
@@ -47,10 +47,10 @@
 ;;;
 ;;; Valid only inside a `gen` body (anywhere else is `yield is only valid inside
 ;;; a gen body`). The first `yield` fixes the generator's element type: ints,
-;;; floats and strings work, but a later `yield` of a different type is not
-;;; checked and comes out as raw bits. A `yield` inside a nested `fn` literal in
-;;; the body does not compile (the interpreter accepts it). A `yield` form has
-;;; type void, so `(let [r (yield 1)] ...)` is TUR-E0023.
+;;; floats and strings work, and a later `yield` of a different type is an error
+;;; (integer widths may mix). A `yield` inside a `fn` literal in the body is an
+;;; error too: the fn is its own function, not part of the generator. A `yield`
+;;; form has type void, so `(let [r (yield 1)] ...)` is TUR-E0023.
 ;;;
 ;;; Parameters:
 ;;;   value -- the value to yield
@@ -65,8 +65,8 @@
 ;;; word. When the body runs off its end the result is a null pointer
 ;;; (`gen-some?` is false for it) and every later call returns null again.
 ;;; Passing something that is not a generator is a compile error. Reading a
-;;; null result with `gen-unwrap` crashes the compiled program (the interpreter
-;;; returns 0), so test with `gen-some?` first.
+;;; null result with `gen-unwrap` is a panic ("the generator is exhausted") on
+;;; both engines, so test with `gen-some?` first.
 ;;;
 ;;; Parameters:
 ;;;   g -- the generator to advance

@@ -1,0 +1,6 @@
+;;; call/cc takes a function.  `(call/cc 5)` passed `tur check`, died with an
+;;; internal emitter error when compiled and with `call/cc expects a function`
+;;; when interpreted.
+(defn main [] : int
+  (println (call/cc 5))
+  0)

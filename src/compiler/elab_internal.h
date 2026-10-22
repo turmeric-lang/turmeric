@@ -1037,6 +1037,8 @@ typedef struct Elab {
     uint32_t         cap_active_dynvar_bindings;
     /* GF1: Generator elaboration context */
     struct GenContext *gen_ctx;     /* non-NULL when inside a (gen ...) body */
+    bool gen_hidden_by_fn;          /* a (fn ...) literal inside a gen body is being elaborated: its
+                                     * body is not part of the generator, so `yield` there is rejected */
     uint32_t          gen_counter; /* monotonically increasing, for unique struct names */
     const Symbol     *sym_gen;          /* "gen" */
     const Symbol     *sym_yield;        /* "yield" */
@@ -2587,6 +2589,9 @@ void elab_stamp_sum_freshness(Binding *b, Binding **params, uint32_t n_params,
  * elaborated body.  Shared by defn and instance-method elaboration. */
 void elab_infer_nonretain_masks(Binding *b, Binding **params, uint32_t n_params,
                                 Expr *body);
+/* fresh-option-arg-to-self-call-leaks: stamp a self-call's fresh sum-box
+ * arguments once the body's nonretain_sum_param_mask is known. */
+void elab_stamp_self_call_sum_drops(Binding *b, Expr *body);
 
 
 /* r7rs-programs-compile-slowly: the first id of the stdlib's own counter --

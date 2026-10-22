@@ -16,28 +16,30 @@
 ;; defn (CPS `CT_TAILCALL` cps->direct arm), the bare call in `main` is the
 ;; direct path (`emit_value`).
 
-(defdata Link :heap (Link [v : int nxt : int]))
+;; The spine is typed end to end, so all three brackets REWIND: expected.stderr
+;; pins `rewinds=3 retires=0` (run.env sets TUR_REGION_STATS=1).  Built through
+;; an erasing `(:: (Link ..) :int)` and summed in inline C, as it was until
+;; 2026-10-21, every bracket retired
+;; (docs/archive/region-rewind-fixtures-never-rewind.md).
+(defdata Chain :heap (Link [v : int nxt : Chain]) (End))
 
-(defn build [n : int acc : int] : int
+(defn build [n : int acc : Chain] : Chain
   (if (<= n 0)
     acc
-    (build (- n 1) (:: (Link n acc) :int))))
+    (build (- n 1) (Link n acc))))
 
-(defn chain-sum [c : int] : int
-  ```c
-  struct { int64_t v; int64_t nxt; } *p = (void *)(intptr_t)c;
-  int64_t acc = 0;
-  while (p) { acc += p->v; p = (void *)(intptr_t)p->nxt; }
-  return acc;
-  ```)
+(defn chain-sum [c : Chain acc : int] : int
+  (match c
+    (Link v nxt) (chain-sum nxt (+ acc v))
+    (End)        acc))
 
 ;;; shout -- the whole point is the println; the bracket yields nothing.
 (defn shout [n : int] : void
-  (bt-scope (fn [] (println (chain-sum (build n 0))))))
+  (bt-scope (fn [] (println (chain-sum (build n (End)) 0)))))
 
 (defn main [] : int
   (shout 4)                                                ;; 10
   (shout 100)                                              ;; 5050
   ;; ... and the same shape straight in main, which is the other emitter.
-  (bt-scope (fn [] (println (chain-sum (build 8 0)))))     ;; 36
+  (bt-scope (fn [] (println (chain-sum (build 8 (End)) 0))))     ;; 36
   0)

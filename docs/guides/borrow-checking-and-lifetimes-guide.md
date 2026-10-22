@@ -44,8 +44,15 @@ A borrow is created with `(& expr)` (immutable) or `(&mut expr)`
 (mutable). The borrow expression kind is `EX_BORROW_IMMUT` or
 `EX_BORROW_MUT` in the compiler's IR.
 
-Mutation through a mutable borrow uses `(set! (@ r) v)` -- the `set!`
-form with a deref target.
+A borrow is read with `@r` (`(println @r)`) and written through with
+`(set! @r v)` -- the `set!` form with a deref target. The prefix `@r` is the
+only spelling: `(@ r)` is not a call form.
+
+What the checker does not enforce today ([borrow-checks-gaps](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/borrow-checks-gaps.md), [turi-borrow-is-a-copy](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/turi-borrow-is-a-copy.md)): a
+`&mut` of a local that is not declared `^mut` is accepted, and writes through it
+change the variable; an assignment to a variable while a `&` of it is live is not
+a conflict; and the interpreter's borrow of a struct field is a copy, so a write
+through `&mut (.x p)` does not reach `p`.
 
 ## Move Tracking
 

@@ -1,0 +1,10 @@
+;;; A generator keeps its own copy of what it captures; only a scalar ^mut is
+;;; shared.  Assigning another captured ^mut inside the body would change the
+;;; copy and nothing else, so it is refused.
+(defstruct P [x : int])
+
+(defn main [] : int
+  (let [^mut p (P 1)
+        g (gen [] (set! p (P 2)) (yield 1))]
+    (println (gen-unwrap (gen-next g))))
+  0)

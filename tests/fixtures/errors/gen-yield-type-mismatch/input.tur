@@ -1,0 +1,7 @@
+;;; Every `yield` of one generator must carry the first yield's type: the
+;;; element is read back as that one kind, so the float's bits came out as an
+;;; integer (4612811918334230528 for 2.5).
+(defn main [] : int
+  (let [g (gen [] (yield 1) (yield 2.5))]
+    (println (gen-unwrap (gen-next g))))
+  0)

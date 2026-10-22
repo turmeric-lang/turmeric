@@ -155,13 +155,14 @@ in these files cost nothing from then on.
   a reference to the archived plan.
 - **Change (structure, preferred):** see item 13.
 
-### 11. The two rewind fixtures say they rewind
+### 11. The two rewind fixtures say they rewind -- fixed 2026-10-21
 
-`tests/fixtures/region-with-region` and `region-scope-value-survives` say "the
-pop REWINDS" / "both locks pass and the pop rewinds". Every bracket retires.
-This is already filed with its fix as
-[region-rewind-fixtures-never-rewind](region-rewind-fixtures-never-rewind.md).
-It is listed here only so this report is complete; fix it there.
+`tests/fixtures/region-with-region` and `region-scope-value-survives` said "the
+pop REWINDS" / "both locks pass and the pop rewinds" while every bracket
+retired. Fixed under
+[region-rewind-fixtures-never-rewind](../archive/region-rewind-fixtures-never-rewind.md)
+(archived): the spines are typed, so the comments are true, and each fixture
+pins its rewind count. Nothing left to do here.
 
 ### 12. `hamt.c:10`: a citation that resolves nowhere
 
@@ -210,5 +211,5 @@ Two changes would remove whole classes of the items above.
 ## When this is fixed
 
 Remove the three examples from the guide's "Trust the code over the comments"
-paragraph. Keep the fixture sentence until
-`region-rewind-fixtures-never-rewind` is archived.
+paragraph. (Its fixture sentence went when
+`region-rewind-fixtures-never-rewind` was archived, 2026-10-21.)

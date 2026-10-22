@@ -1,0 +1,1 @@
+call/cc expects a function taking the continuation

@@ -66,20 +66,23 @@ defn swap-apply [f (forall [a b] (-> a b a)) x :int y :int] :int
 Use `exists` to hide a type implementation:
 
 ```turmeric
-(defn make-counter [] (exists [s] s)
-  (pack int 0))
+(defn make-counter [] : (exists [s] s)
+  (pack 0 (exists [s] s)))
 
-(defn use-counter [c (exists [s] s)] : int
-  (open c as [s v] v))
+(defn use-counter [c : (exists [s] s)] : int
+  (open c [s v] 1))
 ```
 
 ```sweet-exp
-defn make-counter [] (exists [s] s)
-  pack(int 0)
+defn make-counter [] : (exists [s] s)
+  pack(0 (exists [s] s))
 
-defn use-counter [c (exists [s] s)] :int
-  open(c as [s v] v)
+defn use-counter [c : (exists [s] s)] : int
+  open(c [s v] 1)
 ```
+
+`(pack value (exists ...))` boxes a value; `(open e [a v] body)` unpacks it, with
+`v` of the hidden type `a` (it cannot be returned as anything else).
 
 See `docs/archive/existential-types-plan.md` for the full existential type spec.
 

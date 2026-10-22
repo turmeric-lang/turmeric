@@ -1,0 +1,18 @@
+# Examples that tests/check-examples.sh also runs under the interpreter
+# (`tur --interpret`), whose stdout must equal the compiled run's.
+#
+# Added 2026-10-21 with the typed rewrite of examples/datalog: every one of
+# them used to stop under the interpreter with "the REPL JIT cannot pass this
+# value as a C scalar", because they stored their Value ADT, typed as an `:int`
+# stand-in, in inline-C arrays -- and nothing ran them interpreted, so nobody
+# saw it. They are plain typed Turmeric now, which is what lets the REPL, the
+# notebook and the web playground run the tutorial's code.
+#
+# One path per line. Add an example here once it runs interpreted; the sweep
+# fails if a listed example stops matching.
+
+examples/datalog/minimal.tur
+examples/datalog/query.tur
+examples/datalog/indexed.tur
+examples/datalog/blog.tur
+examples/datalog/datalog.tur

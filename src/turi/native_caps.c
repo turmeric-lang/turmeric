@@ -140,6 +140,7 @@ static const TuriNativeCapRow k_rows[] = {
     { "contract-enabled?", 0 },
     { "cos", 0 },
     { "cstr->parse-int", 0 },
+    { "cstr-eq?", 0 },
     { "cstr-free", 0 },
     { "cstr-len", 0 },
     { "cstr-nth", 0 },

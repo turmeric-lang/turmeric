@@ -1,0 +1,13 @@
+;;; Reading `gen-unwrap` off an exhausted generator is a defined panic, on every
+;;; engine.  The compiled program used to dereference the null `gen-next`
+;;; returned (a segfault); the interpreter quietly read 0.
+
+(defn drain-twice [] : int
+  (let [g (gen [] (yield 1))]
+    (println (gen-unwrap (gen-next g)))
+    (gen-unwrap (gen-next g))))
+
+(defn main [] : int
+  (let [r (catch-unwind (fn [] : int (drain-twice)))]
+    (println (err? r)))
+  0)

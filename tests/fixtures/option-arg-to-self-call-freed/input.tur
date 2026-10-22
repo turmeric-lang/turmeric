@@ -1,0 +1,51 @@
+;; fresh-option-arg-to-self-call-leaks: a fresh `(Option Id)` handed straight to
+;; a self-recursive call inside a `match` arm.  The caller frees such a box once
+;; the call returns when the callee's inferred nonretain_sum_param_mask says it
+;; does not keep it (the sum-box drop-after stamp) -- but a self-call is
+;; elaborated inside the body that mask is inferred from, while it is still
+;; zero, so `walk`'s own `(walk (nxt ..))` leaked one box per level and only
+;; `main`'s outer call was freed.  elab_stamp_self_call_sum_drops revisits the
+;; self-calls once the mask is known.  requires.leak-check runs this under
+;; LeakSanitizer (tests/run-leak-check.sh).
+;;
+;; Three shapes, all printing 3 (the walk visits Id 0, 1, 2):
+;;   walk      -- the report's repro: the fresh box is the self-call argument.
+;;   walk-let  -- the same box let-bound first, which was always freed.
+;;   via       -- a non-self caller in tail position, stamped as before.
+;; Each prints its count, and a box freed while still read would print garbage
+;; or trip ASan here.
+
+(defstruct Id :copy [ix : int])
+
+(defn nxt [i : int] : (Option Id)
+  (if (>= i 3) (none) (some (Id i))))
+
+(defn walk [o : (Option Id)] : int
+  (match o
+    (Some id) (+ 1 (walk (nxt (+ (.ix id) 1))))
+    (None)    0))
+
+(defn walk-let [o : (Option Id)] : int
+  (match o
+    (Some id) (let [n (nxt (+ (.ix id) 1))]
+                (+ 1 (walk-let n)))
+    (None)    0))
+
+;; The id sum of the walk, read from the arm's payload after the self-call
+;; returns -- the payload is `o`'s box, not the argument's, so the free after
+;; the call must not reach it.
+(defn walk-sum [o : (Option Id)] : int
+  (match o
+    (Some id) (let [rest (walk-sum (nxt (+ (.ix id) 1)))]
+                (+ rest (.ix id)))
+    (None)    0))
+
+(defn via [i : int] : int
+  (walk (nxt i)))
+
+(defn main [] : int
+  (println (walk (nxt 0)))       ;; 3
+  (println (walk-let (nxt 0)))   ;; 3
+  (println (walk-sum (nxt 0)))   ;; 0+1+2 = 3
+  (println (via 0))              ;; 3
+  0)

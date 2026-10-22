@@ -1,0 +1,9 @@
+;; stm-forms-gaps item 3: a nested `atomically` ran as a SEPARATE transaction.
+;; The inner block did not see the outer one's uncommitted write (it read 0,
+;; not 3), and an inner write committed first and was then overwritten by the
+;; outer commit.  Both engines agreed on that wrong answer, so it is refused.
+(defn main [] : int
+  (let [tv (tvar/new 0)]
+    (println (:: (atomically (stm (tvar/write tv 3)
+                                  (atomically (stm (tvar/read tv))))) :int)))
+  0)

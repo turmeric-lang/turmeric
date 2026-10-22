@@ -1181,6 +1181,80 @@ static bool ctor_field_form_names_adt(const Form *ft_form, const char *adt_name)
     return false;
 }
 
+/* Store an already-resolved compound field type `t` (a type application, a
+ * fn type, ...) into ctor->fields[fi]: its storage kind, its full type, and
+ * the drop glue an owning field obliges the ADT to carry.  Shared by a
+ * compound field form and a `defalias` name that stands for one. */
+static void ctor_field_set_compound(Elab *e, AdtDef *def, CtorDef *ctor,
+                                    uint32_t fi, Form *ft_form, Type *t) {
+    /* capturing-closure-in-struct-field-segv: a concrete `(fn ...)` field
+     * uses the FAT closure representation (a `{thunk, env}` handle in the
+     * int64 slot), so a CAPTURING closure stored in it dispatches correctly
+     * -- not the thin fn-pointer path, which called a fat env block as code
+     * (SIGSEGV).  Marking the field type `boxed` steers every `(.f v)` read to
+     * the fat dispatch (TUR_APPLY*); the make-struct store shims a bare/thin
+     * fn into a fat handle (elab_call.c constructor arg loop).  Storage stays
+     * the int64 carrier -- only the dispatch/representation changes. */
+    /* Bound to arity 0..4: the field-call fat dispatch (emit_expr.c,
+     * TUR_APPLY<N>_T) covers N<=4; the store shim (elab_call.c) covers the
+     * same range.  Arity 0 was originally excluded alongside >4, which
+     * left a THUNK field -- the lazy-stream shape, and the one the
+     * closure-in-defdata-field report was filed about -- on the thin path,
+     * where a capturing closure stored into it segfaulted at force time
+     * (TUR_APPLY0_T existed all along; the exclusion was stale).  A >4-arg
+     * fn field stays thin, and a capturing store into one is rejected at
+     * elaboration rather than left to crash. */
+    if (t && t->kind == TY_FN && !t->as.fn.boxed &&
+        t->as.fn.arity <= 4) {
+        Type *bt = (Type *)arena_alloc(e->arena, sizeof(Type));
+        *bt = *t;
+        bt->as.fn.boxed = true;
+        t = bt;
+        /* closure-drop-glue S2 (Model U): the boxed fn-field owns a heap fat
+         * handle (a shim box for a bare fn, or a capturing env), so the struct
+         * needs drop glue to free it -- which also makes the struct move-only,
+         * the precondition that keeps a single owner and avoids a copy
+         * double-freeing the shared handle. */
+        def->needs_drop_glue = true;
+    }
+    TypeKind fkind = TY_UNKNOWN, finner = TY_UNKNOWN;
+    struct_field_storage_from_type(t, &fkind, &finner);
+    if (fkind == TY_UNKNOWN) { fkind = TY_INT; finner = TY_UNKNOWN; }
+    ctor->fields[fi].kind = fkind;
+    ctor->fields[fi].inner_kind = finner;
+    ctor->fields[fi].full_type = t;
+    if (ctor->field_forms) ctor->field_forms[fi] = ft_form;
+    if (fkind == TY_RC || fkind == TY_REF || fkind == TY_WEAK) {
+        def->needs_drop_glue = true;
+    }
+    /* drop-glue-shallow-nested-owning-aggregate: a nominal by-value
+     * aggregate field whose inner def itself `needs_drop_glue` is stored
+     * behind the int64 carrier (adt_field_is_inline_byval excludes a
+     * drop-glue inner).  Flag the owner and remember the inner def so the
+     * by-value drop/walk glue releases the boxed sub-aggregate.  Restricted
+     * to a non-parametric nominal ADT: its drop glue is the plain
+     * `drop_glue_tur_adt_<name>`, whereas a parametric applied monomorph
+     * (`(Pair rc<int> int)`) uses a mangled monomorph name -- threading that
+     * through is separate work.  A :heap inner is a typed pointer whose
+     * teardown is separate deferred work. */
+    if (t->kind == TY_ADT) {
+        const AdtDef *iad = t->as.adt_.def;
+        if (iad && iad->needs_drop_glue && !iad->is_heap &&
+            iad->n_type_params == 0 && adt_is_byvalue_product(iad) &&
+            (fkind == TY_INT || fkind == TY_ADT)) {
+            ctor->fields[fi].drop_inner_def = iad;
+            def->needs_drop_glue = true;
+        }
+    }
+}
+
+/* The target of a `defalias` named `sym`, or NULL when it names none. */
+static Type *ctor_field_alias_target(Elab *e, const Symbol *sym) {
+    for (uint32_t ai = 0; ai < e->n_type_aliases; ai++)
+        if (e->type_alias_names[ai] == sym) return e->type_alias_types[ai];
+    return NULL;
+}
+
 static bool resolve_ctor_field(Elab *e, AdtDef *def, CtorDef *ctor, uint32_t fi,
                                Form *ft_form, const Symbol **tp_syms,
                                uint32_t n_type_params, bool record_style) {
@@ -1244,65 +1318,7 @@ static bool resolve_ctor_field(Elab *e, AdtDef *def, CtorDef *ctor, uint32_t fi,
                       "defdata: could not resolve constructor field type");
             return false;
         }
-        /* capturing-closure-in-struct-field-segv: a concrete `(fn ...)` field
-         * uses the FAT closure representation (a `{thunk, env}` handle in the
-         * int64 slot), so a CAPTURING closure stored in it dispatches correctly
-         * -- not the thin fn-pointer path, which called a fat env block as code
-         * (SIGSEGV).  Marking the field type `boxed` steers every `(.f v)` read to
-         * the fat dispatch (TUR_APPLY*); the make-struct store shims a bare/thin
-         * fn into a fat handle (elab_call.c constructor arg loop).  Storage stays
-         * the int64 carrier -- only the dispatch/representation changes. */
-        /* Bound to arity 0..4: the field-call fat dispatch (emit_expr.c,
-         * TUR_APPLY<N>_T) covers N<=4; the store shim (elab_call.c) covers the
-         * same range.  Arity 0 was originally excluded alongside >4, which
-         * left a THUNK field -- the lazy-stream shape, and the one the
-         * closure-in-defdata-field report was filed about -- on the thin path,
-         * where a capturing closure stored into it segfaulted at force time
-         * (TUR_APPLY0_T existed all along; the exclusion was stale).  A >4-arg
-         * fn field stays thin, and a capturing store into one is rejected at
-         * elaboration rather than left to crash. */
-        if (t && t->kind == TY_FN && !t->as.fn.boxed &&
-            t->as.fn.arity <= 4) {
-            Type *bt = (Type *)arena_alloc(e->arena, sizeof(Type));
-            *bt = *t;
-            bt->as.fn.boxed = true;
-            t = bt;
-            /* closure-drop-glue S2 (Model U): the boxed fn-field owns a heap fat
-             * handle (a shim box for a bare fn, or a capturing env), so the struct
-             * needs drop glue to free it -- which also makes the struct move-only,
-             * the precondition that keeps a single owner and avoids a copy
-             * double-freeing the shared handle. */
-            def->needs_drop_glue = true;
-        }
-        TypeKind fkind = TY_UNKNOWN, finner = TY_UNKNOWN;
-        struct_field_storage_from_type(t, &fkind, &finner);
-        if (fkind == TY_UNKNOWN) { fkind = TY_INT; finner = TY_UNKNOWN; }
-        ctor->fields[fi].kind = fkind;
-        ctor->fields[fi].inner_kind = finner;
-        ctor->fields[fi].full_type = t;
-        if (ctor->field_forms) ctor->field_forms[fi] = ft_form;
-        if (fkind == TY_RC || fkind == TY_REF || fkind == TY_WEAK) {
-            def->needs_drop_glue = true;
-        }
-        /* drop-glue-shallow-nested-owning-aggregate: a nominal by-value
-         * aggregate field whose inner def itself `needs_drop_glue` is stored
-         * behind the int64 carrier (adt_field_is_inline_byval excludes a
-         * drop-glue inner).  Flag the owner and remember the inner def so the
-         * by-value drop/walk glue releases the boxed sub-aggregate.  Restricted
-         * to a non-parametric nominal ADT: its drop glue is the plain
-         * `drop_glue_tur_adt_<name>`, whereas a parametric applied monomorph
-         * (`(Pair rc<int> int)`) uses a mangled monomorph name -- threading that
-         * through is separate work.  A :heap inner is a typed pointer whose
-         * teardown is separate deferred work. */
-        if (t->kind == TY_ADT) {
-            const AdtDef *iad = t->as.adt_.def;
-            if (iad && iad->needs_drop_glue && !iad->is_heap &&
-                iad->n_type_params == 0 && adt_is_byvalue_product(iad) &&
-                (fkind == TY_INT || fkind == TY_ADT)) {
-                ctor->fields[fi].drop_inner_def = iad;
-                def->needs_drop_glue = true;
-            }
-        }
+        ctor_field_set_compound(e, def, ctor, fi, ft_form, t);
         return true;
     }
 
@@ -1362,6 +1378,44 @@ static bool resolve_ctor_field(Elab *e, AdtDef *def, CtorDef *ctor, uint32_t fi,
         /* Phase RF0: fall back to user-defined type lookup. */
         const Symbol *type_sym = symtab_intern(e->st, strslice(tname, tlen));
         Binding *tb = scope_lookup_type_def(e->scope, type_sym);
+        /* A `defalias` name stands for its target here as it does in a
+         * parameter or result annotation (type_expr_from_form): a primitive
+         * target is stored as that primitive, a nominal ADT / struct target
+         * continues as that type's name below, and anything else -- `(Vec
+         * Datum)`, a fn type -- is stored the way the compound form itself
+         * would be.  Before this a `[db : Db]` field over `(defalias Db (Vec
+         * Datum))` was "unrecognized type :Db". */
+        Type *alias_t = tb ? NULL : ctor_field_alias_target(e, type_sym);
+        if (alias_t) {
+            TypeKind ak = TY_UNKNOWN, ainner = TY_UNKNOWN;
+            if (alias_t->kind == TY_ADT && alias_t->as.adt_.def &&
+                alias_t->as.adt_.def->name) {
+                const char *an = alias_t->as.adt_.def->name;
+                tb = scope_lookup_type_def(
+                    e->scope, symtab_intern(e->st, strslice(an, strlen(an))));
+            } else {
+                bool prim;
+                switch (alias_t->kind) {
+                    case TY_NIL: case TY_BOOL: case TY_INT: case TY_FLOAT:
+                    case TY_CSTR: case TY_SYM: case TY_PTR_VOID:
+                    case TY_INT8: case TY_INT16: case TY_INT32: case TY_INT64:
+                    case TY_UINT8: case TY_UINT16: case TY_UINT32: case TY_UINT64:
+                    case TY_FLOAT32: case TY_FLOAT64:
+                        prim = true; break;
+                    default:
+                        prim = false; break;
+                }
+                if (!prim) {
+                    ctor_field_set_compound(e, def, ctor, fi, ft_form, alias_t);
+                    return true;
+                }
+                struct_field_storage_from_type(alias_t, &ak, &ainner);
+                ctor->fields[fi].kind = ak;
+                ctor->fields[fi].inner_kind = ainner;
+                if (ctor->field_forms) ctor->field_forms[fi] = ft_form;
+                return true;
+            }
+        }
         if (tb && (tb->type.kind == TY_STRUCT || tb->type.kind == TY_ADT)) {
             fkind = TY_INT;
             finner = TY_UNKNOWN;
@@ -2943,16 +2997,41 @@ Expr *elab_coerce(Elab *e, const Form *call) {
     }
     Expr *eq = elab_form(e, call->as.list.items[1]);
     if (!eq) return NULL;
-    /* Verify eq has type Equal */
-    if (eq->type.kind != TY_ADT ||
-        !eq->type.as.adt_.def ||
-        strcmp(eq->type.as.adt_.def->name, "Equal") != 0) {
+    /* Verify eq has type Equal.  A parametrised annotation `(Equal int int)` is a
+     * type application of the bare ADT, which only the bare `Equal` spelling used
+     * to satisfy; peel it, keeping the first argument (the type `x` has). */
+    const Type *proof_lhs = NULL;
+    Type eqt = eq->type;
+    if (eqt.kind == TY_APP && eqt.as.app.fn && eqt.as.app.arg) {
+        const Type *head = eqt.as.app.fn;
+        if (head->kind == TY_APP && head->as.app.fn && head->as.app.arg) {
+            proof_lhs = head->as.app.arg;      /* ((Equal a) b) */
+            head = head->as.app.fn;
+        }
+        if (head->kind == TY_ADT) eqt = *head;
+    }
+    if (eqt.kind != TY_ADT ||
+        !eqt.as.adt_.def ||
+        strcmp(eqt.as.adt_.def->name, "Equal") != 0) {
         diag_emit(DIAG_ERROR, call->as.list.items[1]->span,
                   "coerce requires an (Equal a b) proof as first argument");
         return NULL;
     }
     Expr *x = elab_form(e, call->as.list.items[2]);
     if (!x) return NULL;
+    /* The value is read at the proof's left type: a concrete scalar that is not
+     * x's own is a proof about some other value. */
+    if (proof_lhs && proof_lhs->kind != TY_TYVAR && proof_lhs->kind != TY_UNKNOWN &&
+        x->type.kind != TY_TYVAR && x->type.kind != TY_UNKNOWN &&
+        proof_lhs->kind != x->type.kind &&
+        !(proof_lhs->kind == TY_INT && x->type.kind == TY_INT64)) {
+        diag_emit_with_code(DIAG_ERROR, call->as.list.items[2]->span,
+                            TUR_E0001_TYPE_MISMATCH,
+                            "coerce: the proof is about a value of type %s, but this value "
+                            "has type %s",
+                            type_name(*proof_lhs), type_name(x->type));
+        return NULL;
+    }
     /* SS1: Reject coerce whose source is a session channel.
      * Reinterpreting a Session endpoint at a different protocol step would
      * strand the linear resource; the Equal witness is insufficient to make
@@ -4319,6 +4398,41 @@ Expr *elab_match(Elab *e, const Form *call) {
             if (lit_result.kind == TY_UNKNOWN) lit_result = TYPE_NIL;
             for (uint32_t ai = 0; ai < n_arms; ai++)
                 elab_retype_nullary_ctor_arm(lit_arms[ai].body, lit_result);
+            /* control-forms-gaps item 5: a match on LITERALS has no constructor list to
+             * run out of, so nothing said an unmatched value is an error: compiled, the
+             * fall-through returned whatever the uninitialised result temp held (a
+             * segfault for a cstr); interpreted, "match: no arm matched" at run time.
+             * Missing constructors of an ADT are a compile error; this is the same
+             * rule for literals -- some unguarded `_` / variable arm must catch the
+             * rest, or a bool match must name both `true` and `false`.  `^non-exhaustive`
+             * opts out, as it does for a sum. */
+            if (!nonexhaustive_optout) {
+                bool any_lit = false, any_bool = false, total = false;
+                bool has_true = false, has_false = false;
+                for (uint32_t ai = 0; ai < n_arms; ai++) {
+                    const MatchPattern *pt = &lit_arms[ai].pattern;
+                    bool unguarded = (lit_arms[ai].guard == NULL);
+                    if (pt->is_literal) {
+                        if (pt->lit_kind == F_BOOL) {
+                            any_bool = true;
+                            if (unguarded) { if (pt->lit_bool) has_true = true; else has_false = true; }
+                        } else if (pt->lit_kind == F_INT || pt->lit_kind == F_FLOAT ||
+                                   pt->lit_kind == F_STR) {
+                            any_lit = true;
+                        }
+                    } else if ((pt->is_wildcard || pt->is_var) && unguarded) {
+                        total = true;
+                    }
+                }
+                if (!total && (any_lit || (any_bool && !(has_true && has_false)))) {
+                    diag_emit(DIAG_ERROR, call->span,
+                              "match: non-exhaustive patterns -- a match on literal values "
+                              "needs a wildcard arm (`_ ...`) for every other value%s",
+                              any_bool && !any_lit ? " (or both `true` and `false`)" : "");
+                    return NULL;
+                }
+            }
+
             Expr *out = expr_new(e->arena, EX_MATCH, lit_result, call->span);
             out->as.match_.scrutinee = scrutinee;
             out->as.match_.arms      = lit_arms;

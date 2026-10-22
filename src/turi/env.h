@@ -138,10 +138,21 @@ typedef void (*TuriCollBufFreeFn)(void *box);
 typedef void (*TuriCollBufMarkFn)(TuriValue v, void *ctx);
 typedef bool (*TuriCollBufScanFn)(void *box, TuriCollBufMarkFn mark, void *ctx);
 
+/* Scratch promotion (docs/archive/turi-vec-struct-element-dangles-across-rewind.md):
+ * a box's cells are values too, and the promotion walk reaches the box itself
+ * only as an opaque int carrier.  `relocate` hands each cell that may point
+ * into the scratch pool (a struct, closure or string) to `move`, which returns
+ * where the value lives after promotion, and stores that back in the cell.
+ * A box with no relocate hook must hold no scratch pointer at a rewind: the
+ * promotion check refuses the rewind when a reachable one does. */
+typedef TuriValue (*TuriCollBufMoveFn)(TuriValue v, void *ctx);
+typedef void (*TuriCollBufRelocateFn)(void *box, TuriCollBufMoveFn move, void *ctx);
+
 typedef struct TuriCollBuf {
     void                *box;      /* wrapper allocation; NULL once freed/tombstoned */
     TuriCollBufFreeFn    destroy;  /* frees box (and any heap buffer it owns) */
     TuriCollBufScanFn    scan;     /* enumerate contained values; NULL = opaque */
+    TuriCollBufRelocateFn relocate; /* rewrite cells at promotion; NULL = cannot */
     bool                 marked;   /* per-sweep scratch bit */
     struct TuriCollBuf  *next;
 } TuriCollBuf;

@@ -1,0 +1,11 @@
+;; stm-forms-gaps item 1: a `stm` block run with no `atomically` around it.
+;; Compiled, every transactional form in it read through a null transaction and
+;; the program segfaulted; the interpreter stopped with "tvar/read used outside
+;; of an atomically block".  The compiled block now checks for a running
+;; transaction on entry and panics with the same words.  (Not a compile-time
+;; error: a `stm` in a helper function is reached through an atomically body --
+;; see stm-helper-fn -- so the compiler cannot tell the two apart.)
+(defn main [] : int
+  (let [tv (tvar/new 5)]
+    (println (:: (stm (tvar/read tv)) :int)))
+  0)

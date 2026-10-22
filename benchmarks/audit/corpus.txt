@@ -58,7 +58,7 @@ examples/cellular-automata.tur               cc,jit         exact
 examples/cli_args_demo.tur                   cc,jit         exact   # imports inline C
 examples/datalog/blog.tur                    cc,jit         exact
 examples/datalog/datalog.tur                 cc,jit         exact
-examples/datalog/indexed.tur                 cc             exact   # jit answers differently: docs/reported/jit-string-literal-identity-differs-from-cc.md
+examples/datalog/indexed.tur                 cc,jit         exact
 examples/datalog/minimal.tur                 cc,jit         exact
 examples/datalog/query.tur                   cc,jit         exact
 examples/minikanren/src/main.tur             cc,jit         exact

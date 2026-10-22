@@ -1,0 +1,43 @@
+;;; `?` on the language's own typed (Result T E) and (Option T).  It lowered
+;;; through helpers that read the old pointer-carried Result, so a typed operand
+;;; failed their `ptr<void>` argument check and --interpret could not run `?` at
+;;; all.  An operand statically typed Result / Option (a variable, or a call of a
+;;; named function) lowers to (if (err? q) (return (Err (err-val q))) (ok-val q))
+;;; and its Option twin; any other operand keeps the carrier path.
+(defn halve [n : int] : (Result int cstr)
+  (if (= (mod n 2) 0) (ok (/ n 2)) (err "odd")))
+(defn quarter [n : int] : (Result int cstr)
+  (let [h (? (halve n))]
+    (halve h)))
+
+(defn first-pos [x : int] : (Option int)
+  (if (> x 0) (some x) (none)))
+(defn two [a : int b : int] : (Option int)
+  (let [x (? (first-pos a))
+        y (? (first-pos b))]
+    (some {x + y})))
+
+(defn parse [s : int] : (Result int cstr)
+  (if (= s 7) (ok 7) (err "bad")))
+(defn sum2 [a : int b : int] : (Result int cstr)
+  (let [x (? (parse a))
+        r (parse b)
+        y (? r)]
+    (ok {x + y})))
+
+(defn show-r [r : (Result int cstr)] : int
+  (match r (Ok v) (do (println v) v) (Err m) (do (println m) -1)))
+(defn show-o [o : (Option int)] : int
+  (match o (Some v) (do (println v) v) (None) (do (println "none") -1)))
+
+(defn main [] : int
+  (show-r (quarter 12))
+  (show-r (quarter 6))
+  (show-r (quarter 5))
+  (show-o (two 1 2))
+  (show-o (two 1 -2))
+  (show-o (two -1 2))
+  (show-r (sum2 7 7))
+  (show-r (sum2 7 8))
+  (show-r (sum2 8 7))
+  0)

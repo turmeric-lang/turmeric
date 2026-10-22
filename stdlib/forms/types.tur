@@ -19,7 +19,7 @@
 ;;; kinds cannot be ascribed to each other at all -- the compiler cannot tell which
 ;;; of the two a program means, so it stops (see `::`). Several forms here differ
 ;;; between the compiler and the interpreter, or do not do what the guides say;
-;;; see docs/reported/type-forms-gaps.md.
+;;; each entry names its report or plan.
 ;; Reference only: tools/gendocs.py reads the ;;@ lines, the compiler skips them.
 
 ;;; as -- convert a number to another numeric kind.
@@ -85,28 +85,33 @@
 ;;;   (:: 7.1 :float32)  ; => 7.1
 ;;@form (:: expr type)
 
-;;; ? -- return early from a function when a Result is an error.
+;;; ? -- return early from a function when a Result (or Option) is an error.
 ;;;
 ;;; `(? expr)`, or `?(expr)` in neoteric syntax, evaluates `expr` once. If it is
-;;; an error the enclosing function returns it unchanged; otherwise the `?` is
-;;; the ok value. It is written inside a function body (`? operator is only
-;;; allowed inside a function body`) and the function must itself return a
-;;; Result. A non-Result operand such as `(? 5)` is TUR-E0001.
+;;; an error the enclosing function returns it; otherwise the `?` is the ok value.
+;;; It is written inside a function body (`? operator is only allowed inside a
+;;; function body`) and the function must itself return the same kind of value.
+;;; A non-Result operand such as `(? 5)` is TUR-E0001.
 ;;;
-;;; Today it works only on a Result carried as a `ptr<void>` -- the layout the
-;;; helpers `__tur-q-is-err?` and `__tur-q-ok-val` in stdlib/result.tur read -- and
-;;; not on the `(Result T E)` that `ok`, `err` and `match` use: a call such as
-;;; `(? (halve n))` with `halve` returning `(Result int cstr)` is `TUR-E0001:
-;;; function '__tur-q-is-err?' arg 1: expected ptr<void>, got (Result int cstr)`.
-;;; Interpreted, the same helper cannot be loaded at all. Until that is fixed use
-;;; `match` on the Result (error-handling-guide).
-;;; docs/reported/type-forms-gaps.md has the repro.
+;;; An operand statically typed `(Result T E)` -- a variable, or a call of a named
+;;; function that returns one -- lowers to `(if (err? q) (return (Err (err-val q)))
+;;; (ok-val q))`, so the error type must agree and the ok type may differ; a
+;;; `(Option T)` operand lowers the same way with `None` and `unwrap`. That works
+;;; on every engine. Any other operand (a call whose result type is not known
+;;; without elaborating it, or a Result carried as a `ptr<void>`) takes the
+;;; older route through the `__tur-q-is-err?` / `__tur-q-ok-val` helpers in
+;;; stdlib/result.tur, which read the pointer layout and do not run interpreted;
+;;; bind such a value to a typed variable first.
 ;;;
 ;;; Parameters:
-;;;   expr -- a Result value
+;;;   expr -- a Result or Option value
 ;;;
 ;;; Returns:
 ;;;   The ok payload; the error is returned from the function instead.
+;;;
+;;; Example:
+;;;   (defn halve [n : int] : (Result int cstr) (if (= (mod n 2) 0) (ok (/ n 2)) (err "odd")))
+;;;   (defn quarter [n : int] : (Result int cstr) (let [h (? (halve n))] (halve h)))
 ;;@form (? expr)
 
 ;;; cast -- take a value out of an any, checking its type.
@@ -158,9 +163,10 @@
 ;;; Takes an `any` and returns the type's name as a string: `float`, `int`, `cstr`,
 ;;; `bool`, `Sym` for a keyword, `fn` for a function, the type name of a struct
 ;;; or ADT (`Option` without its instantiation). A value that is not already an
-;;; `any` is `'type-of' expects an 'any'-typed argument`. A sized integer or
-;;; float gives `unknown` when compiled (`(:: 3i32 any)`) and the plain `int` or
-;;; `float` interpreted; see `is?`.
+;;; `any` is `'type-of' expects an 'any'-typed argument`. A sized integer is
+;;; named for its size when compiled (`int32` for `(:: 3i32 any)`, `uint8`, ...);
+;;; the interpreter has one integer and one float kind and says `int` / `float`.
+;;; A `float32` is widened as a float, so it reads `float` on both. See `is?`.
 ;;;
 ;;; Parameters:
 ;;;   x -- an `any`
@@ -177,13 +183,15 @@
 ;;;
 ;;; `(coerce proof x)` evaluates `proof`, which must be a value of the `Equal`
 ;;; type (`(Refl)` after `(load "stdlib/equal.tur")`, or a parameter annotated
-;;; with the bare name `Equal`), and returns `x`. Nothing is converted and no code
-;;; is emitted. In the form the guides describe (gadts-guide, gadts-cookbook),
-;;; `proof` witnesses `(Equal a b)` and `x : a` is accepted as a `b`. What is
-;;; implemented only returns `x` at its own type: `(defn conv [eq : Equal x : int]
-;;; : float (coerce eq x))` is TUR-E0707, and a parameter written `eq : (Equal int
-;;; int)` is rejected as `coerce requires an (Equal a b) proof`. A session channel
-;;; cannot be coerced. A first argument that is not an `Equal` is that same message.
+;;; with the bare name `Equal` or applied, `(Equal int int)`), and returns `x`.
+;;; Nothing is converted and no code is emitted. In the form the guides describe
+;;; (gadts-guide, gadts-cookbook), `proof` witnesses `(Equal a b)` and `x : a` is
+;;; accepted as a `b`. What is implemented returns `x` at its own type: `(defn
+;;; conv [eq : Equal x : int] : float (coerce eq x))` is TUR-E0707 -- the result
+;;; type is not taken from the proof's `b`. An applied proof checks only that its
+;;; `a` is `x`'s type when both are concrete (`coerce: the proof is about a value
+;;; of type ...`). A session channel cannot be coerced. A first argument that is
+;;; not an `Equal` is `coerce requires an (Equal a b) proof`.
 ;;;
 ;;; Parameters:
 ;;;   proof -- an `Equal` value
@@ -297,8 +305,8 @@
 ;;; evidence packed with the value to choose the operation, so two packed values
 ;;; of different types each reach their own instance. The interpreter does this by
 ;;; looking at the runtime value, which cannot tell two `defopaque` types over
-;;; `:int` apart: it can pick the wrong instance (docs/reported/type-forms-gaps.md).
-;;; The `(open c as [s v] ...)` spelling in hrt-guide is not accepted.
+;;; `:int` apart: it can pick the wrong instance
+;;; (docs/reported/turi-packed-defopaque-wrong-instance.md).
 ;;;
 ;;; Parameters:
 ;;;   e    -- an existential value
@@ -324,7 +332,7 @@
 ;;; borrowing `x` mutably afterwards in that same `let` is `cannot borrow 'x' as
 ;;; mutable while it is already borrowed`; close the `let` first.
 ;;;
-;;; Known gaps (docs/reported/type-forms-gaps.md): `set!` of a variable while an
+;;; Known gaps (docs/reported/borrow-checks-gaps.md): `set!` of a variable while an
 ;;; immutable borrow of it is live is accepted, and compiled and interpreted
 ;;; programs then see different values; `&` of a literal fails in the C
 ;;; compiler.
@@ -349,7 +357,8 @@
 ;;; can change its caller's variable: `(defn bump [r : &mut int] : nil (set! @r
 ;;; (+ @r 1)))` called as `(bump &mut x)`.
 ;;;
-;;; Known gaps (docs/reported/type-forms-gaps.md): the variable need not be
+;;; Known gaps (docs/reported/borrow-checks-gaps.md and
+;;; turi-borrow-is-a-copy.md): the variable need not be
 ;;; declared `^mut` -- `(let [x 1] (let [r &mut x] (set! @r 5)) x)` is 5 -- and a
 ;;; mutable borrow of a struct field changes the struct when compiled but not when
 ;;; interpreted.

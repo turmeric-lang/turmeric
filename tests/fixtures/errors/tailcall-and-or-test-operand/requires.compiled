@@ -1,1 +1,0 @@
-TUR-E0716 is raised by the emitter's tail grammar (emit_fns.c); the interpreter never emits C.

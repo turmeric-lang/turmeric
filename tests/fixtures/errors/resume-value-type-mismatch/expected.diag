@@ -1,0 +1,1 @@
+resume value has type cstr, but the effect operation this continuation answers declares a result of type int

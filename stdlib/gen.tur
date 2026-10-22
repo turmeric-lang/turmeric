@@ -46,6 +46,10 @@
 
 (defn gen-unwrap [p : ptr<void>] : int
   ```c
+  if (!p) {
+    tur_panic("gen-unwrap: the generator is exhausted (test gen-some? before gen-unwrap)");
+    return 0;
+  }
   return *(int64_t *)p;
   ```)
 ;;; gen-none -- return a null generator result representing no value.

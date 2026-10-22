@@ -782,6 +782,22 @@ Expr *elab_atomically(Elab *e, const Form *call) {
 
     uint32_t n = call->as.list.len - 1;
 
+    /* stm-forms-gaps item 3: a nested `atomically` was accepted and ran as a
+     * SEPARATE transaction -- the inner one did not see the outer's uncommitted
+     * writes, and an inner write committed first and was then overwritten by
+     * the outer's commit.  GHC rejects it (the type system keeps STM out of IO),
+     * and joining the outer transaction would change what the inner block means,
+     * so say so.  Lexical only: a function called from inside an atomically that
+     * runs its own is not seen here. */
+    if (elab_in_atomically) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "atomically cannot be nested: the inner block would be a separate "
+                  "transaction that does not see the outer one's writes. Put both "
+                  "bodies in one `(atomically ...)`, or use the `*-stm` helper "
+                  "(TUR-E0009)");
+        return NULL;
+    }
+
     /* MS2: Set atomically flag so elab_resume can detect TUR-E0502.
      * elab_in_stm is set too: the body forms are inside the transaction
      * whether or not the user wrote the `(stm ...)` by hand, so `retry`,

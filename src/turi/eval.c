@@ -81,6 +81,7 @@
 #include "runtime/hamt.h"   /* tur_hamt_hash_str -- struct-key content hash */
 #include "runtime/tur_string.h"  /* tur_string_cstr/release -- Show returns owned String */
 #include "diag.h"
+#include "tailcall_reasons.h"
 #include "elab.h"
 #include "expr.h"
 #include "forms.h"
@@ -680,9 +681,14 @@ static TuriValue native_gen_some(TuriEnv *env, TuriValue *args, uint32_t n, void
     if (n < 1) return turi_bool(false);
     return turi_bool(args[0].as_int != 0);
 }
+#define GEN_UNWRAP_EXHAUSTED_MSG \
+    "gen-unwrap: the generator is exhausted (test gen-some? before gen-unwrap)"
 static TuriValue native_gen_unwrap(TuriEnv *env, TuriValue *args, uint32_t n, void *ud) {
-    (void)env; (void)ud;
-    if (n < 1 || args[0].as_int == 0) return turi_int(0);
+    (void)ud;
+    if (n < 1 || args[0].as_int == 0) {
+        turi_runtime_panic(env, GEN_UNWRAP_EXHAUSTED_MSG);
+        return turi_nil();
+    }
     return turi_int(*(int64_t *)(intptr_t)args[0].as_int);
 }
 static TuriValue native_gen_none(TuriEnv *env, TuriValue *args, uint32_t n, void *ud) {
@@ -3657,6 +3663,13 @@ struct TuriEffectCont {
     /* result when body finishes */
     TuriValue          body_result;
     bool               done;
+    /* A one-shot work-stack continuation has been resumed: its TuriWsCont is
+     * freed at the resume, so the fact lives here, where `(cont? k)` and a
+     * second resume can still read it. */
+    bool               oneshot_resumed;
+    /* Any resume has run (one-shot or not): what `(cont? k)` reports for a
+     * continuation that is not ^multishot. */
+    bool               resumed;
 
     /* context for body evaluation (set before first swapcontext) */
     TuriEnv           *env;
@@ -3753,6 +3766,7 @@ static TuriValue eval_resume_cont(TuriEnv *env, EvalFrame *frame,
                           "TURI_TRACE_FIBER_FALLBACK=1 to see which form was "
                           "responsible");
     cont->resume_val = val;
+    cont->resumed = true;
 
     /* Re-install the handler frame around the body re-entry for a DEEP handler,
      * so a subsequent perform of the same effect in the resumed body is caught
@@ -3897,6 +3911,9 @@ static TuriValue eval_perform_fiber(TuriEnv *env, const char *effect_name,
     cont->perf_name   = effect_name;
     cont->perf_args   = args;
     cont->n_perf_args = n_args;
+    /* One struct serves every perform of a deep handler; each perform hands the
+     * clause a fresh, unresumed k (effect-deep-handler). */
+    cont->resumed = false;
 #if defined(__APPLE__)
 #  pragma clang diagnostic push
 #  pragma clang diagnostic ignored "-Wdeprecated-declarations"
@@ -11051,6 +11068,11 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                     cur = eval_resume_cont(env, rcf, k.as_cont, v);  /* fiber cont */
                     break;
                 }
+                k.as_cont->resumed = true;
+                if (k.as_cont->oneshot_resumed) {
+                    cur = turi_error("eval: resume: a one-shot continuation was resumed twice");
+                    break;
+                }
                 TuriWsCont *wc = k.as_cont->ws;
                 if (wc->oneshot && wc->consumed) {
                     cur = turi_error("eval: resume: a one-shot continuation was resumed twice");
@@ -11095,6 +11117,7 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                     env->in_no_unwind   = wc->perf_no_unwind;
                     env->defer_stack    = wc->perf_defer;
                     wc->consumed = true;
+                    k.as_cont->oneshot_resumed = true;
                     if (wc->case_frame == rcf) frame_release(env, rcf);
                     free(wc->frames);
                     free(wc->kval);
@@ -13607,32 +13630,21 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
         return eval_resume_cont(env, frame, k.as_cont, val);
     }
 
-    /* (discontinue k exception) — abort the body with an error. */
+    /* (discontinue k exception) -- not supported.  It used to store an error in
+     * the continuation and swapcontext() from the HANDLER's stack to the body's
+     * saved context, which is not a resume (the body was never suspended at a
+     * perform on this path): the process died with "stack smashing detected".
+     * Report it as the compiled backend does. */
     case EX_DISCONTINUE: {
         DiscontinueExpr *de = e->as.discontinue_.discontinue;
-        TuriValue k = eval_expr(env, frame, de->k);
-        if (turi_is_error(k) || env_signaled(env)) return k;
-        TuriValue exc = eval_expr(env, frame, de->exception);
-        if (turi_is_error(exc) || env_signaled(env)) return exc;
-
-        if (k.tag != TURI_EFFECT_CONT)
-            return turi_error("eval: discontinue: not a continuation");
-
-        TuriEffectCont *cont = k.as_cont;
-        cont->body_result = turi_is_error(exc)
-                            ? exc
-                            : turi_errorf("eval: discontinue: %s",
-                                          exc.tag == TURI_CSTR ? exc.as_cstr : "exception");
-        cont->done = true;
-#if defined(__APPLE__)
-#  pragma clang diagnostic push
-#  pragma clang diagnostic ignored "-Wdeprecated-declarations"
-#endif
-        swapcontext(&cont->body_ctx, &cont->handler_ctx);
-#if defined(__APPLE__)
-#  pragma clang diagnostic pop
-#endif
-        return turi_nil(); /* unreachable from caller's perspective */
+        if (de) {
+            TuriValue exc = eval_expr(env, frame, de->exception);
+            if (turi_is_error(exc) || env_signaled(env)) return exc;
+        }
+        return turi_error("eval: discontinue is not supported: neither the compiler "
+                          "nor the interpreter can raise at the perform. To end the "
+                          "handled body early, leave the clause without resuming k; "
+                          "for a failure the caller sees, return a Result from the clause");
     }
 
     /* (cont? k) — true if k is an unconsumed continuation. */
@@ -13650,7 +13662,14 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
             if (kt->as.cont.flavor == CONT_CLONEABLE || kt->as.cont.flavor == CONT_SERIAL)
                 return turi_bool(k.as_int != 0);
         }
-        return turi_bool(k.tag == TURI_EFFECT_CONT && k.as_cont != NULL);
+        /* `(cont? k)`: can k still be invoked?  A one-shot continuation is
+         * spent by its resume, as the compiled `cont?` reports (it answered true
+         * here, so `(if (cont? k) r -1)` took the other branch). */
+        if (k.tag != TURI_EFFECT_CONT || !k.as_cont) return turi_bool(false);
+        if (k.as_cont->oneshot_resumed) return turi_bool(false);
+        /* A `^multishot` k stays invocable after a resume; any other is spent. */
+        if (k.as_cont->resumed && kt->copy_kind != CK_MULTISHOT) return turi_bool(false);
+        return turi_bool(true);
     }
 
     /* --- Phase S5: inline-C is not executable in the tree-walk eval ------- */
@@ -15146,7 +15165,14 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
             (pv.tag != TURI_INT ||
              !turi_prov_check(env, TURI_HK_GENBOX, (const void *)(intptr_t)pv.as_int)))
             return prov_forged_value("generator value");
-        int64_t bits = pv.as_int ? *(int64_t *)(intptr_t)pv.as_int : 0;
+        if (!pv.as_int) {
+            /* gen-next hands back nil once the body has ended; the compiled
+             * program used to segfault here, the interpreter read 0. */
+            g_panic_site = e->span;
+            turi_runtime_panic(env, GEN_UNWRAP_EXHAUSTED_MSG);
+            return turi_nil();
+        }
+        int64_t bits = *(int64_t *)(intptr_t)pv.as_int;
         /* generator-in-generic: the element is the enclosing generic's `A`,
          * which the tree-walker never monomorphizes -- there is no kind to
          * re-tag the bits by, and the default arm printed 7.1's bits as an
@@ -16168,6 +16194,113 @@ static void collsweep_after_rewind(TuriEnv *env, TuriValue result) {
     }
 }
 
+/* ---- Collection cells at promotion ------------------------------------------
+ * turi-vec-struct-element-dangles-across-rewind: a tracked box's cells are
+ * values the promotion walk never saw -- the roots reach a box only as an
+ * opaque int carrier -- so a struct pushed onto a global Vec at a REPL prompt
+ * stayed in scratch, and the rewind left the cell dangling (the TR3 sweep then
+ * read it: ASan use-after-poison in collmark_value).  Before the rewind, mark
+ * which boxes the roots reach (the sweep's own marker, over valid memory),
+ * then require each reached box's cells to be relocatable: a box with a
+ * relocate hook has them promo_check'ed and later moved, a box without one
+ * must hold no scratch pointer at all.  Only reached boxes are asked, so a
+ * garbage Set holding a stale scratch word cannot block every rewind after it
+ * -- unless the mark was incomplete (a non-empty Set/Map may hide a box behind
+ * an untyped entry), when every live box is asked. */
+
+/* Does this value point into the scratch pool? */
+static bool promo_value_in_scratch(TuriEnv *env, TuriValue v) {
+    switch (v.tag) {
+    case TURI_INT:     return PROMO_SCRATCH(env, (void *)(intptr_t)v.as_int);
+    case TURI_CSTR:    return v.as_cstr && PROMO_SCRATCH(env, v.as_cstr);
+    case TURI_STRUCT:  return v.as_struct && PROMO_SCRATCH(env, v.as_struct);
+    case TURI_CLOSURE: return v.as_closure && PROMO_SCRATCH(env, v.as_closure);
+    default:           return false;
+    }
+}
+
+typedef struct {
+    TuriEnv  *env;
+    PromoMap *seen;
+    bool      movable;   /* the box can relocate its cells */
+    bool      ok;
+} PromoCellCheck;
+
+static void promo_cell_check(TuriValue v, void *ctx) {
+    PromoCellCheck *c = (PromoCellCheck *)ctx;
+    if (!c->ok) return;
+    if (c->movable) {
+        if (!promo_check(c->env, v, c->seen)) c->ok = false;
+    } else if (promo_value_in_scratch(c->env, v)) {
+        c->ok = false;
+    }
+}
+
+/* Pass 1 for the collection boxes: mark the boxes the roots reach (leaving
+ * node->marked set on every box whose cells were checked, for pass 2), and
+ * return whether all their cells can survive the rewind. */
+static bool promo_check_coll_bufs(TuriEnv *env, TuriValue result) {
+    if (!env->coll_bufs) return true;
+    PromoMap boxmap;
+    promo_map_init(&boxmap);
+    bool any_live = false;
+    for (TuriCollBuf *n = env->coll_bufs; n; n = n->next) {
+        n->marked = false;
+        if (n->box) { promo_map_put(&boxmap, n->box, n); any_live = true; }
+    }
+    if (!any_live) { promo_map_free(&boxmap); return true; }
+
+    CollMark mc = { env, &boxmap, NULL, 0, 0, true };
+    PromoMap seen;
+    promo_map_init(&seen);
+    collmark_value(env, result, &seen, &mc);
+    for (EnvBinding *b = env->globals; b; b = b->next)
+        collmark_value(env, b->value, &seen, &mc);
+    for (uint32_t i = 0; i < env->n_prelude_globals; i++)
+        collmark_value(env, env->prelude_globals[i].value, &seen, &mc);
+    CollMarkFnCtx fnctx = { &seen, &mc };
+    for (size_t i = 0; i < mc.wl_len; i++) {
+        TuriCollBuf *n = mc.wl[i];
+        if (!n->scan || !n->scan(n->box, collmark_markfn, &fnctx))
+            mc.complete = false;
+    }
+    promo_map_free(&seen);
+    promo_map_free(&boxmap);
+    free(mc.wl);
+
+    bool ok = true;
+    PromoMap cseen;
+    promo_map_init(&cseen);
+    for (TuriCollBuf *n = env->coll_bufs; ok && n; n = n->next) {
+        if (!n->box) continue;
+        if (!mc.complete) n->marked = true;   /* reachability unknown: ask all */
+        if (!n->marked) continue;
+        if (!n->scan) continue;   /* an embedder's opaque box: never walked */
+        PromoCellCheck cc = { env, &cseen, n->relocate != NULL, true };
+        n->scan(n->box, promo_cell_check, &cc);
+        if (!cc.ok) ok = false;
+    }
+    promo_map_free(&cseen);
+    return ok;
+}
+
+typedef struct { TuriEnv *env; PromoMap *fwd; } PromoCellMove;
+
+static TuriValue promo_cell_move(TuriValue v, void *ctx) {
+    PromoCellMove *m = (PromoCellMove *)ctx;
+    return promo_copy(m->env, v, m->fwd);
+}
+
+/* Pass 2 for the collection boxes: move the cells of every box pass 1
+ * checked, through the roots' forwarding table so a value shared between a
+ * root and a cell stays one value. */
+static void promo_relocate_coll_bufs(TuriEnv *env, PromoMap *fwd) {
+    PromoCellMove m = { env, fwd };
+    for (TuriCollBuf *n = env->coll_bufs; n; n = n->next)
+        if (n->box && n->marked && n->relocate)
+            n->relocate(n->box, promo_cell_move, &m);
+}
+
 /* ===========================================================================
  * r7rs-callcc-memory-never-freed: what a capture kept, put off to the sweep.
  *
@@ -16891,6 +17024,144 @@ static bool elab_session_replay(TuriEnv *env, Arena *arena, Form **forms,
     return true;
 }
 
+/* control-forms-gaps item 6: `^tailcall` is checked by the compiled emitter's
+ * tail-position walker (TUR-E0716), which needs a codegen context, so the
+ * interpreter -- which shares the elaborator but not the emitter -- accepted
+ * `(+ 1 (^tailcall (f (- n 1))))` and ran it, 3 for `(f 3)`.  This is the
+ * syntactic half of that check, mirroring emit_fns.c's tc_check grammar and
+ * sharing its reason text (tailcall_reasons.h): `why` is NULL where an
+ * annotated call would be in tail position, else the sentence for the context
+ * that takes it out.  The emitter's further reasons -- a call shape or function
+ * that cannot form a backedge (an owned local still live, a `fn` parameter
+ * passed on changed, a mutual group that cannot fuse) -- need its analyses and
+ * stay compiled-only.  A node kind not listed here is not entered, so a
+ * `^tailcall` buried in one goes unchecked rather than mis-reported, which is
+ * also how the emitter's own walker treats them. */
+typedef struct { bool tail_void; bool bad; } TcInterp;
+
+static void tc_interp_walk(TcInterp *c, const Expr *e, const char *why, int depth);
+
+static void tc_interp_fn(TcInterp *outer, const FnDef *fn, int depth) {
+    if (!fn || !fn->body) return;
+    TcInterp c = { fn->return_type.kind == TY_NIL, false };
+    tc_interp_walk(&c, fn->body, NULL, depth + 1);
+    if (c.bad) outer->bad = true;
+}
+
+static void tc_interp_report(TcInterp *c, const Expr *e, const char *why) {
+    diag_emit_with_code(DIAG_ERROR, e->span, TUR_E0716_TAILCALL_NOT_TAIL,
+                        "`^tailcall` call is not in tail position: %s", why);
+    c->bad = true;
+}
+
+static void tc_interp_walk(TcInterp *c, const Expr *e, const char *why, int depth) {
+    if (!e || depth > 200) return;
+    switch (e->kind) {
+        case EX_CALL:
+            if (e->as.call_.wants_tailcall && why) tc_interp_report(c, e, why);
+            for (uint32_t i = 0; i < e->as.call_.n_args; i++)
+                tc_interp_walk(c, e->as.call_.args[i], TC_ARG, depth + 1);
+            tc_interp_walk(c, e->as.call_.fn_expr, TC_ARG, depth + 1);
+            return;
+        case EX_DYN_CALL:
+            if (e->as.dyn_call_.wants_tailcall && why) tc_interp_report(c, e, why);
+            tc_interp_walk(c, e->as.dyn_call_.fn, TC_ARG, depth + 1);
+            for (uint32_t i = 0; i < e->as.dyn_call_.n_args; i++)
+                tc_interp_walk(c, e->as.dyn_call_.args[i], TC_ARG, depth + 1);
+            return;
+        case EX_DYN_OP:
+            for (uint32_t i = 0; i < e->as.dyn_op_.n_args; i++)
+                tc_interp_walk(c, e->as.dyn_op_.args[i], TC_ARG, depth + 1);
+            return;
+        case EX_LET:
+        case EX_LETREC:
+            for (uint32_t i = 0; i < e->as.let_.n; i++)
+                tc_interp_walk(c, e->as.let_.bindings[i].init, TC_LET_INIT, depth + 1);
+            tc_interp_walk(c, e->as.let_.body, why, depth + 1);
+            return;
+        case EX_IF:
+            tc_interp_walk(c, e->as.if_.cond, TC_IF_COND, depth + 1);
+            if (e->as.if_.else_or_null) {
+                tc_interp_walk(c, e->as.if_.then_, why, depth + 1);
+                tc_interp_walk(c, e->as.if_.else_or_null, why, depth + 1);
+            } else {
+                tc_interp_walk(c, e->as.if_.then_,
+                               why ? why : (c->tail_void ? NULL : TC_IF_ONE_ARM),
+                               depth + 1);
+            }
+            return;
+        case EX_DO: {
+            /* The value item, as emit_fns.c's tco_drop_glue_tail_idx sees it:
+             * the last item, or the last non-defer item when every defer after
+             * it is the elaborator's injected drop glue.  A `defer` the program
+             * wrote runs AFTER a call in its block, so nothing in such a block is
+             * in tail position. */
+            uint32_t n = e->as.do_.n;
+            int last_non_defer = -1;
+            for (int i = (int)n - 1; i >= 0; i--)
+                if (e->as.do_.items[i]->kind != EX_DEFER) { last_non_defer = i; break; }
+            bool user_defer = false;
+            for (uint32_t i = 0; i < n; i++) {
+                const Expr *it = e->as.do_.items[i];
+                if (it->kind != EX_DEFER) continue;
+                if (!((int)i > last_non_defer && it->as.defer_.is_drop_glue))
+                    user_defer = true;
+            }
+            int value_idx = last_non_defer >= 0 ? last_non_defer : (int)n - 1;
+            for (uint32_t i = 0; i < n; i++) {
+                const char *w = why ? why
+                              : user_defer ? TC_DEFER_USER
+                              : ((int)i == value_idx ? NULL : TC_NOT_LAST);
+                tc_interp_walk(c, e->as.do_.items[i], w, depth + 1);
+            }
+            return;
+        }
+        case EX_MATCH:
+            tc_interp_walk(c, e->as.match_.scrutinee, TC_MATCH_SCR, depth + 1);
+            for (uint32_t i = 0; i < e->as.match_.n_arms; i++) {
+                tc_interp_walk(c, e->as.match_.arms[i].guard, TC_GUARD, depth + 1);
+                tc_interp_walk(c, e->as.match_.arms[i].body, why, depth + 1);
+            }
+            return;
+        case EX_BUILTIN: {
+            bool sc = e->as.builtin.spec &&
+                      (e->as.builtin.spec->shape == BS_AND_SC ||
+                       e->as.builtin.spec->shape == BS_OR_SC) &&
+                      e->as.builtin.n >= 2;
+            for (uint32_t i = 0; i < e->as.builtin.n; i++) {
+                bool last = sc && i + 1 == e->as.builtin.n;
+                tc_interp_walk(c, e->as.builtin.args[i],
+                               last ? why : (sc ? TC_SC_TEST : TC_ARG), depth + 1);
+            }
+            return;
+        }
+        case EX_ASCRIBE:
+            tc_interp_walk(c, e->as.ascribe_.inner, why ? why : TC_ASCRIBE, depth + 1);
+            return;
+        case EX_RETURN:
+            tc_interp_walk(c, e->as.return_.value, why ? why : TC_RETURN, depth + 1);
+            return;
+        case EX_WHILE:
+            tc_interp_walk(c, e->as.while_.cond, TC_WHILE, depth + 1);
+            tc_interp_walk(c, e->as.while_.body, TC_WHILE, depth + 1);
+            return;
+        case EX_FN_DEF:  tc_interp_fn(c, e->as.fn_def_.fn, depth); return;
+        case EX_CLOSURE:
+            if (e->as.closure_.closure) tc_interp_fn(c, e->as.closure_.closure->fn, depth);
+            return;
+        default:
+            return;
+    }
+}
+
+static bool tailcall_check_syntactic(const Expr *program) {
+    if (!program || program->kind != EX_PROGRAM) return true;
+    TcInterp c = { false, false };
+    for (uint32_t i = 0; i < program->as.program.n; i++)
+        tc_interp_walk(&c, program->as.program.items[i], TC_NOT_LAST, 0);
+    return !c.bad;
+}
+
 static void turi_promote_escaping(TuriEnv *env, TuriValue *result) {
     if (!env || !env->scratch_promotion) return;
     /* S-5: the handle-provenance registry names scratch addresses (cons
@@ -16915,6 +17186,8 @@ static void turi_promote_escaping(TuriEnv *env, TuriValue *result) {
     for (uint32_t i = 0; ok && i < env->n_prelude_globals; i++)
         if (!promo_check(env, env->prelude_globals[i].value, &seen)) ok = false;
     promo_map_free(&seen);
+    /* The values the roots hold through tracked collection boxes. */
+    if (ok && !promo_check_coll_bufs(env, *result)) ok = false;
     if (!ok) { env->promo_decline_unrelocatable++; return; }   /* keep scratch intact this cycle */
 
     /* Pass 2: copy roots into perm, rewriting pointers (shared fwd table keeps
@@ -16927,6 +17200,7 @@ static void turi_promote_escaping(TuriEnv *env, TuriValue *result) {
     for (uint32_t i = 0; i < env->n_prelude_globals; i++)   /* PS5 */
         env->prelude_globals[i].value =
             promo_copy(env, env->prelude_globals[i].value, &fwd);
+    promo_relocate_coll_bufs(env, &fwd);
     promo_map_free(&fwd);
     *result = promoted;
 
@@ -17407,7 +17681,7 @@ static TuriValue turi_eval_impl(TuriEnv *env, const char *src, const char *path,
      * PASS_BORROW_CHECK; `errors/effect-handler-borrow` printed 42 and exited
      * 0 under --interpret. */
     if (eff_rc != 0 || !borrow_check_effect_handler_captures(prog) ||
-        !lifetime_check_program(prog)) {
+        !lifetime_check_program(prog) || !tailcall_check_syntactic(prog)) {
         env->n_acc_forms = acc_committed;   /* TR2: uncommit this turn's forms */
         if (env->elab_session) {            /* see the discard note above */
             elab_session_free(env->elab_session);
