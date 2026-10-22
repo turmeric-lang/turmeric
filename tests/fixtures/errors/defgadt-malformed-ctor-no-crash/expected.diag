@@ -1,2 +1,2 @@
-defgadt: constructor must be a list form
+defdata: constructor must be a list form
 is not a constructor of 'Bound'

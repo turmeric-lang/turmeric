@@ -11,7 +11,7 @@
 ;   - size-assert-eq! / require-msg! enforce the expected shape at the
 ;     Turmeric call site before the pointer is passed further into C code.
 
-(defgadt Size []
+(defdata Size []
   (Static (int) : (Size))
   (Add (Size) (Size) : (Size))
   (Mul (Size) (Size) : (Size)))

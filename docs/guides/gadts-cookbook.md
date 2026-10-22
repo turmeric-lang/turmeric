@@ -19,7 +19,7 @@ the result type, so the interpreter is total and type-safe.
 
 ```turmeric
 ; A two-type expression language: integers and booleans.
-(defgadt Expr [a]
+(defdata Expr [a]
   (IntLit  int                  : (Expr int))
   (BoolLit bool                 : (Expr bool))
   (Add     (Expr int) (Expr int) : (Expr int))
@@ -44,7 +44,7 @@ the result type, so the interpreter is total and type-safe.
 
 ```sweet-exp
 ; A two-type expression language: integers and booleans.
-defgadt Expr [a]
+defdata Expr [a]
   (IntLit  int                  : (Expr int))
   (BoolLit bool                 : (Expr bool))
   (Add     (Expr int) (Expr int) : (Expr int))
@@ -89,9 +89,9 @@ empty-vector arm, is expressible -- provided the values carry their index.
 
 The naturals are **phantom-parameter opaques**, not constructors: `Succ` has
 to be a type constructor (kind `* -> *`) so that `(NVec (Succ n))` is a type,
-and `defopaque` with a type-parameter vector is exactly that. (A `defgadt
-Nat` with `Zero` / `Succ` constructors puts those names in the VALUE
-namespace, where a type annotation cannot see them.)
+and `defopaque` with a type-parameter vector is exactly that. (A `defdata
+Nat` with `Zero` / `Succ` constructors -- `stdlib/nat.tur`'s -- puts those
+names in the VALUE namespace, where a type annotation cannot see them.)
 
 > **What is proven.** A `match` on a scrutinee typed `(NVec (Succ n))` reads
 > the index: `NNil : (NVec Zero)` provably cannot be the value, so it needs no
@@ -116,7 +116,7 @@ namespace, where a type annotation cannot see them.)
 
 ; Length-indexed int vector: (NVec n) has exactly n elements.
 ; (Uses int elements; see stdlib/gadt-vec.tur for the shipped module.)
-(defgadt NVec [n]
+(defdata NVec [n]
   (NNil            : (NVec Zero))
   (NCons int (NVec n) : (NVec (Succ n))))
 
@@ -159,7 +159,7 @@ defopaque Succ [n] :int
 
 ; Length-indexed int vector: (NVec n) has exactly n elements.
 ; (Uses int elements; see stdlib/gadt-vec.tur for the shipped module.)
-defgadt NVec [n]
+defdata NVec [n]
   (NNil            : (NVec Zero))
   (NCons int (NVec n) : (NVec (Succ n)))
 
@@ -201,7 +201,8 @@ defn main [] :int
 `gvec-len`, `gvec-sum`, `gvec-head-or`, `gvec-tail`, `gvmap`, and
 `gvzip-with` as a reusable module. Its `GVec` is indexed by `int` on both
 constructors -- a phantom index, so it ships `gvec-head-or` with an explicit
-default; the recipe above is how to write the length-indexed variant. Import
+default, and the type is not refined (an ordinary sum with a pinned
+parameter); the recipe above is how to write the length-indexed variant. Import
 it with `(load "stdlib/gadt-vec.tur")`.
 
 ---
@@ -215,7 +216,7 @@ arguments is a compile-time error.
 ; A format descriptor -- 'args' is a phantom type tracking argument types.
 ; This is a simplified version: real type-level lists need HKT.
 ; Here we show the two-argument case explicitly.
-(defgadt Fmt2 [a b]
+(defdata Fmt2 [a b]
   ; format string expecting (int, int)
   (FIntInt  : (Fmt2 int int))
   ; format string expecting (int, bool)
@@ -238,7 +239,7 @@ arguments is a compile-time error.
 ; A format descriptor -- 'args' is a phantom type tracking argument types.
 ; This is a simplified version: real type-level lists need HKT.
 ; Here we show the two-argument case explicitly.
-defgadt Fmt2 [a b]
+defdata Fmt2 [a b]
   ; format string expecting (int, int)
   (FIntInt  : (Fmt2 int int))
   ; format string expecting (int, bool)
@@ -278,7 +279,7 @@ function boundaries. Use `coerce` to convert values across proven equalities.
 
 ```turmeric
 ; Equal is built-in; you can also declare it yourself:
-; (defgadt Equal [a b]
+; (defdata Equal [a b]
 ;   (Refl : (Equal a a)))
 
 ; Symmetry: (Equal a b) -> (Equal b a)
@@ -314,7 +315,7 @@ function boundaries. Use `coerce` to convert values across proven equalities.
 
 ```sweet-exp
 ; Equal is built-in; you can also declare it yourself:
-; defgadt Equal [a b]
+; defdata Equal [a b]
 ;   (Refl : (Equal a a))
 
 ; Symmetry: (Equal a b) -> (Equal b a)
@@ -354,9 +355,9 @@ defn main [] :int
 
 ```turmeric
 ; A box that remembers the type of its contents via a witness.
-(defgadt TypeBox [a]
-  (MkBox : int -> (TypeBox int))
-  (MkBoolBox : bool -> (TypeBox bool)))
+(defdata TypeBox [a]
+  (MkBox     int  : (TypeBox int))
+  (MkBoolBox bool : (TypeBox bool)))
 
 ; Open a TypeBox knowing it holds an int.
 (defn open-int-box [box eq] : int
@@ -375,9 +376,9 @@ defn main [] :int
 
 ```sweet-exp
 ; A box that remembers the type of its contents via a witness.
-defgadt TypeBox [a]
-  (MkBox : int -> (TypeBox int))
-  (MkBoolBox : bool -> (TypeBox bool))
+defdata TypeBox [a]
+  (MkBox     int  : (TypeBox int))
+  (MkBoolBox bool : (TypeBox bool))
 
 ; Open a TypeBox knowing it holds an int.
 defn open-int-box [box eq] :int
@@ -405,7 +406,7 @@ value or a plain value through a union type:
 
 ```turmeric
 ; A typed tag for int-or-bool dispatch
-(defgadt Tag [a]
+(defdata Tag [a]
   (IntTag  : (Tag int))
   (BoolTag : (Tag bool)))
 
@@ -429,7 +430,7 @@ value or a plain value through a union type:
 
 ```sweet-exp
 ; A typed tag for int-or-bool dispatch
-defgadt Tag [a]
+defdata Tag [a]
   (IntTag  : (Tag int))
   (BoolTag : (Tag bool))
 

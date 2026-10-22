@@ -4,8 +4,8 @@
 ;;; fields at once. `defdata` is a sum: one of several constructors, each with its
 ;;; own payload, taken apart with `match`; a constructor may also say what type
 ;;; index it produces, `(Lit int : (Expr int))`, so `match` can learn something
-;;; from the arm that fired. `defgadt` is the older spelling of a `defdata` whose
-;;; every constructor says so. `defopaque` is a newtype: a distinct type that is, at run time,
+;;; from the arm that fired. `defgadt`, deprecated, is the older spelling of a
+;;; `defdata` whose every constructor says so. `defopaque` is a newtype: a distinct type that is, at run time,
 ;;; nothing but its representation. Each introduces constructor functions with the
 ;;; type's name; the type name itself works as an annotation.
 ;;;
@@ -124,14 +124,16 @@
 ;;@form (defdata Name :copy [A ...] (Ctor payload ...) ...)
 ;;@form (defdata Name [A ...] (Ctor payload ... : Result) ...)
 
-;;; defgadt -- a defdata whose every constructor declares its result type.
+;;; defgadt -- deprecated: a defdata whose every constructor declares its result type.
 ;;;
 ;;; `(defgadt Expr [a] (Lit int : (Expr int)) (IsZero (Expr int) : (Expr bool)))`
 ;;; is `defdata` with one more rule: every constructor must carry its
 ;;; `: ResultType` (an unannotated one is `requires an explicit return-type
 ;;; annotation`). Everything else -- the head keywords, record constructors, what
 ;;; a refining constructor tells `match` -- is defdata's, which documents it.
-;;; Write `defdata` in new code; `defgadt` is kept for the programs that spell it.
+;;; The form is deprecated (TUR-D0005, a warning; an error under
+;;; `--Werror=deprecated`): change the keyword to `defdata` and leave the
+;;; constructors as they are. `tur explain TUR-D0005` shows the rewrite.
 ;;;
 ;;; Parameters:
 ;;;   Name   -- the type's name

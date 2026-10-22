@@ -8,7 +8,7 @@
 ;; failure. The second ("is not a constructor of 'Bound'") only prints if
 ;; elaboration survived past the malformed constructor instead of crashing,
 ;; so requiring it locks the no-crash behavior in.
-(defgadt Bound [A]
+(defdata Bound [A]
   :bogus
   (Inclusive int : (Bound int)))
 

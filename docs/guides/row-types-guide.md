@@ -104,13 +104,15 @@ slots is `TUR-E0290`, and a repeated label is `TUR-E0291`:
 ## Declaring a row-kinded parameter -- `^&`
 
 A type parameter marked `^&` has kind `[*]` and accepts a row. It works on
-`defstruct`, `deftype`, `defdata`, `defgadt`, and `defn`:
+`defstruct`, `deftype`, `defdata` (annotated constructors included), and
+`defn` -- and on the deprecated `defgadt`, which is `defdata` with every
+constructor annotated:
 
 ```turmeric no-check
 (defstruct Query [^&reads ^&writes] (world :int))
 (deftype   Frame [^&cols]           (Frame :int))
 (defdata   Tagged [^&cols]          (Tagged :int))
-(defgadt   QueryG [^&cols]          (QueryG : (QueryG #row{int})))
+(defdata   QueryG [^&cols]          (QueryG : (QueryG #row{int})))
 (defn      frame-id [^&r] [f : (Frame r)] : (Frame r) f)
 ```
 

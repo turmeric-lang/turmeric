@@ -11,7 +11,7 @@
 ; would silently compile, since each `(mk-dense-k)` call would carry no
 ; inferred size_index.
 
-(defgadt Size []
+(defdata Size []
   (Static (int) : (Size))
   (Add (Size) (Size) : (Size))
   (Mul (Size) (Size) : (Size)))

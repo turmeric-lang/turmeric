@@ -453,9 +453,9 @@ The function builds the TU in this order:
    applications for monomorphization.
 6. **Find `main`.** Sets `user_has_main`. A near-miss name (`-main`, `Main`,
    ...) with no top-level statements gets TUR-W0624 later.
-7. **Pass 0, into `early_file`:** every `defdata`/`defgadt` typedef, its drop
-   glue and its base constructors; then the dynamic-variable runtime when the
-   program has a `defdynamic`.
+7. **Pass 0, into `early_file`:** every `defdata` typedef (a `defgadt` is an
+   `EX_DEFDATA` too), its drop glue and its base constructors; then the
+   dynamic-variable runtime when the program has a `defdynamic`.
 8. **Pass 1, into `fwd_decls`:** `emit_fn_forward_decls` (one prototype per
    emitted function, recording each into the signature table),
    `emit_abi_forward_decl` per spec, and `emit_global_def_forward_decls`.

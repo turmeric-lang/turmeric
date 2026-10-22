@@ -7,10 +7,10 @@
 ; (Not `Pair`: that names the auto-loaded stdlib struct, and redefining a
 ; stdlib type is its own error.)
 
-(defgadt Twin [a]
+(defdata Twin [a]
   (MkTwin a : (Twin a)))
 
-(defgadt Bad []
+(defdata Bad []
   (MkBad : (Bad Twin)))
 
 (defn main [] : int 0)

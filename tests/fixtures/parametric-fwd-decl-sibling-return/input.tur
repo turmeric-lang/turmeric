@@ -10,7 +10,7 @@
   (PFail)
   (POK a int))
 
-(defgadt Expr [a] (ENum int : (Expr int)))
+(defdata Expr [a] (ENum int : (Expr int)))
 
 (defn factor [xs : int] : (PRes Expr)
   (match (expr-parse xs)

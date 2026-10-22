@@ -11,12 +11,12 @@
 ; parameter `v` of prepend -- is un-inferable and prints (SizedVec ?); it
 ; stays length-polymorphic rather than erroring (SZ8 fallback).
 
-(defgadt Size []
+(defdata Size []
   (Static (int) : (Size))
   (Add (Size) (Size) : (Size))
   (Mul (Size) (Size) : (Size)))
 
-(defgadt SizedVec [n]
+(defdata SizedVec [n]
   (SVNil : (SizedVec (Static 0)))
   (SVCons int (SizedVec n) : (SizedVec (Add (Static 1) n))))
 

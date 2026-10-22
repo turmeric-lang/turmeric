@@ -2,7 +2,7 @@
 ; Exercises size-eq?, size-le?, size-lt?, size-ge?, size-gt?,
 ; size-normalize, and size-simplify.
 
-(defgadt Size []
+(defdata Size []
   (Static (int) : (Size))
   (Add (Size) (Size) : (Size))
   (Mul (Size) (Size) : (Size)))

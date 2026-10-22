@@ -5,12 +5,12 @@
 ; concatenates two vectors of arbitrary length; svlen/svsum fold them. No index
 ; annotation appears anywhere, yet the program type-checks and runs.
 
-(defgadt Size []
+(defdata Size []
   (Static (int) : (Size))
   (Add (Size) (Size) : (Size))
   (Mul (Size) (Size) : (Size)))
 
-(defgadt SizedVec [n]
+(defdata SizedVec [n]
   (SVNil : (SizedVec (Static 0)))
   (SVCons int (SizedVec n) : (SizedVec (Add (Static 1) n))))
 

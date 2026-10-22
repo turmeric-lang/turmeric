@@ -10,7 +10,7 @@
 ; recovers SZT_CONST per index position from each callee's declared return
 ; form and unifies `k` (3 = 3) and `m`/`n` (2 = 2, 3 = 3) without conflict.
 
-(defgadt Size []
+(defdata Size []
   (Static (int) : (Size))
   (Add (Size) (Size) : (Size))
   (Mul (Size) (Size) : (Size)))

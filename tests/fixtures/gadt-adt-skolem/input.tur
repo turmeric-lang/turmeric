@@ -3,7 +3,7 @@
 (defdata Foo
   (FooVal :int))
 
-(defgadt Expr [a]
+(defdata Expr [a]
   (Lit :int : (Expr int))
   (Box (Foo) : (Expr Foo)))
 

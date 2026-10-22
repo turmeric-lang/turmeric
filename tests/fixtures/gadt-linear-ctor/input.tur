@@ -1,6 +1,6 @@
 ; adt-gadt-unification slice 2: `:linear` on a type with annotated
 ; constructors -- each value must be consumed exactly once.
-(defgadt Tok [a] :linear
+(defdata Tok [a] :linear
   (ITok int : (Tok int)))
 
 (defn spend [t : (Tok int)] : int

@@ -13,7 +13,7 @@
 ; Successful compilation + matching stdout demonstrates the audit invariant:
 ; the body parses, the bound variable resolves to a fresh local tyvar, and the
 ; existential's overall type/runtime layout does not depend on the indices.
-(defgadt SizedVec [n a]
+(defdata SizedVec [n a]
   (SVNil : (SizedVec int int))
   (SVCons int (SizedVec int int) : (SizedVec int int)))
 

@@ -17,7 +17,7 @@ typedef enum {
     LSP_KIND_FUNCTION,    /* defn, and the implicit top-level `main` */
     LSP_KIND_VALUE,       /* def */
     LSP_KIND_STRUCT,      /* a record: defstruct, or a single-ctor defdata */
-    LSP_KIND_ENUM,        /* a sum: multi-ctor defdata, or any defgadt */
+    LSP_KIND_ENUM,        /* a sum: multi-ctor defdata, or any refined type */
 } LspSymKind;
 
 /* LspSymbol -- one entry in the per-document symbol index.

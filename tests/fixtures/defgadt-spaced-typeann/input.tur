@@ -1,6 +1,7 @@
-;; TA4: keep bare-colon defgadt constructor syntax working.
+;; TA4: keep the bare-colon constructor result syntax working (written defgadt
+;; until adt-gadt-unification-plan slice 4, defdata since).
 
-(defgadt Expr [a]
+(defdata Expr [a]
   (Wrap : (Expr int)))
 
 (defn main [] : int

@@ -276,7 +276,7 @@ lifted into file-scope `EX_FN_DEF`s as they are elaborated.
 | `elab_forms.c` | control-flow forms: `let`, `let*`, `letrec`, `if`, `do`, `while`, `case`, `set!`, `defer`, `return` |
 | `elab_fns.c` | `defn`, `fn` (lifting and closures), `def`, `extern-c`, ownership masks, contracts, loop invariants |
 | `elab_types.c` | type-expression forms: `type_expr_from_form`, `defkind`, `defrec`, `deftype`, `type-app`, ascription, `pack`/`open` |
-| `elab_structs.c` | `defstruct` (lowered to a record `defdata`), `defopaque`, `defdata`, `defgadt`, `match`, `make-struct` |
+| `elab_structs.c` | `defstruct` (lowered to a record `defdata`), `defopaque`, `defdata` and the deprecated `defgadt` (one elaborator, `elab_adt_def`), `match`, `make-struct` |
 | `elab_typeclasses.c` | `defclass`, `definstance`, method dispatch |
 | `elab_effects.c` | `reset`/`shift`/`shift0`, cloneable and serial continuations, `call/cc`, `defeffect`, `perform`, `handle`, `resume` |
 | `elab_macros.c` | `defmacro`, `defmacro*`, quasiquote, the compile-time evaluator |
@@ -313,7 +313,7 @@ pointer), `Span span`, a few drop-hint flags, and a union payload. There are
 | Binding | `EX_VAR`, `EX_LET`, `EX_LETREC`, `EX_SET`, `EX_DEF` |
 | Control | `EX_IF`, `EX_DO`, `EX_WHILE`, `EX_MATCH`, `EX_RETURN`, `EX_DEFER` |
 | Functions | `EX_FN_DEF`, `EX_FN`, `EX_CLOSURE`, `EX_CALL`, `EX_BUILTIN`, `EX_EXTERN_C`, `EX_INLINE_C`, `EX_POLY_WRAP`, `EX_FN_TO_FAT`, `EX_POLY_TO_FAT` |
-| Data | `EX_DEFDATA`, `EX_DEFGADT`, `EX_MAKE_STRUCT`, `EX_GET_FIELD`, `EX_SET_FIELD`, `EX_UNION_INJECT`, `EX_DEFAULT_OF` |
+| Data | `EX_DEFDATA` (also what `defgadt` elaborates to), `EX_MAKE_STRUCT`, `EX_GET_FIELD`, `EX_SET_FIELD`, `EX_UNION_INJECT`, `EX_DEFAULT_OF` |
 | Memory | `EX_REF`, `EX_DEREF`, `EX_SET_DEREF`, `EX_REF_PRED`, `EX_RC_OF`, `EX_RC_CLONE`, `EX_RC_DROP`, `EX_RC_PTR`, `EX_RC_COUNT`, `EX_RC_FROM_REF`, `EX_REF_FROM_RC`, `EX_WEAK`, `EX_WEAK_UPGRADE`, `EX_WEAK_PRED`, `EX_BORROW_IMMUT`, `EX_BORROW_MUT` |
 | Casts and `any` | `EX_CAST`, `EX_REINTERPRET`, `EX_ASCRIBE`, `EX_EXISTS_PACK`, `EX_EXISTS_OPEN`, `EX_EXISTS_DISPATCH`, `EX_ANY_TYPE_OF`, `EX_ANY_CAST`, `EX_ANY_IS` |
 | Typeclasses | `EX_TYPECLASS_DEF`, `EX_INSTANCE_DEF`, `EX_DICT` |
@@ -347,7 +347,7 @@ There are 61 `TY_*` kinds:
 |---|---|
 | Scalars | `TY_NIL` (unit/void), `TY_BOOL`, `TY_INT` (`int64_t`), `TY_FLOAT` (`double`), `TY_INT8`..`TY_INT64`, `TY_UINT8`..`TY_UINT64`, `TY_FLOAT32`, `TY_FLOAT64`, `TY_CSTR`, `TY_SYM`, `TY_PTR_VOID` |
 | Ownership | `TY_REF` (owning `ref<T>`), `TY_LREF` (linear `lref<T>`), `TY_RC`, `TY_WEAK`, `TY_REF_IMMUT` (`&T`), `TY_REF_MUT` (`&mut T`) |
-| User data | `TY_ADT` (every `defdata`, `defgadt`, `defstruct` and `defopaque`; a constructor's `: (Name ...)` annotation is `CtorDef.result_type_form`, and `AdtDef.is_refined` says whether the annotations refine the parameters), `TY_APP`, `TY_REC`, `TY_TYVAR` |
+| User data | `TY_ADT` (every `defdata`, `defstruct` and `defopaque`, and a deprecated `defgadt`; a constructor's `: (Name ...)` annotation is `CtorDef.result_type_form`, `AdtDef.has_result_types` says some constructor is annotated, and `AdtDef.is_refined` says whether the annotations refine the parameters -- the two replaced `is_gadt`), `TY_APP`, `TY_REC`, `TY_TYVAR` |
 | Functions, control | `TY_FN`, `TY_CONT`, `TY_CLONEABLE_CONT`, `TY_HANDLER`, `TY_GENERATOR`, `TY_EXCEPTION` |
 | Polymorphism, gradual | `TY_FORALL`, `TY_EXISTS`, `TY_UNION`, `TY_INTERSECTION`, `TY_ANY`, `TY_NEVER`, `TY_CONTRACT` |
 | Typeclasses | `TY_TYPECLASS`, `TY_TYPECLASS_INST` |

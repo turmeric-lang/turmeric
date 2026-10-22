@@ -17,8 +17,7 @@
 ;; The macros below sit on top of native pack/open (EX1c/EX1d) plus the
 ;; EX2-2 phantom-binder support in `open`.  Like stdlib/existential.tur,
 ;; this file is NOT auto-loaded -- load it explicitly after stdlib/sized
-;; and compile with -Xgadt so the underlying SizedVec defgadt is in
-;; scope:
+;; so the underlying SizedVec type is in scope:
 ;;
 ;;     (load "stdlib/sized.tur")
 ;;     (load "stdlib/vec-existential.tur")

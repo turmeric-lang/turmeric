@@ -3,12 +3,12 @@
 ; `(SizedVec n)`) elaborates and runs when both arguments have matching
 ; inferred sizes. Companion to errors/sized-cross-param-reject.
 
-(defgadt Size []
+(defdata Size []
   (Static (int) : (Size))
   (Add (Size) (Size) : (Size))
   (Mul (Size) (Size) : (Size)))
 
-(defgadt SizedVec [n]
+(defdata SizedVec [n]
   (SVNil  : (SizedVec (Static 0)))
   (SVCons int (SizedVec n) : (SizedVec (Add (Static 1) n))))
 

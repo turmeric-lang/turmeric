@@ -7,7 +7,7 @@
 ; rejects this at compile time with TUR-E0260 -- a genuine dimension mismatch,
 ; not merely an int-vs-Size kind error (the old SZ3 TUR-E0001 behaviour).
 
-(defgadt Size []
+(defdata Size []
   (Static (int) : (Size))
   (Add (Size) (Size) : (Size))
   (Mul (Size) (Size) : (Size)))

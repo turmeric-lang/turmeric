@@ -1,5 +1,5 @@
 ; adt-gadt-unification slice 2: a record constructor with a result type.
-(defgadt Shape [a]
+(defdata Shape [a]
   (Rect [w : int h : int] : (Shape int))
   (Circle [r : float] : (Shape float)))
 

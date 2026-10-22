@@ -51,7 +51,8 @@ string, two-space indent and Lisp indentation words.
 Once installed, any `.tur` file is automatically highlighted:
 
 - **Definition forms** -- `defn`, `defmacro`, `defstruct`, `defclass`,
-  `definstance`, `defgadt`, `defmodule`, and all other definition keywords
+  `definstance`, `defdata`, `defmodule`, and all other definition keywords
+  (the deprecated `defgadt` included)
 - **Control flow** -- `if`, `cond`, `case`, `match`, `loop`, `while`, `for`,
   `and`, `or`, `not`
 - **Type keywords** -- `type`, `typeclass`, `forall`, `where`, `impl`, `trait`

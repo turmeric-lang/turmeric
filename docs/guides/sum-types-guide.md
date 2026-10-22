@@ -133,14 +133,18 @@ annotated, it can fix the parameter:
 not list `IsZero`, and inside an arm the checker knows what `a` is. The
 annotation goes after the payload, a record field vector included:
 `(Rect [w : int h : int] : (Shape int))`. It must apply the type being
-defined to as many arguments as it has parameters. This is what `defgadt`
-spells (every constructor annotated); [gadts-guide.md](gadts-guide.md)
-covers what refinement buys.
+defined to as many arguments as it has parameters.
+[gadts-guide.md](gadts-guide.md) covers what refinement buys. `defgadt` --
+the same form with every constructor required to be annotated -- is the
+deprecated older spelling: it still compiles, with a `TUR-D0005` warning (an
+error under `--Werror=deprecated`), and the rewrite is the keyword alone.
 
 Whether a type needs the uniform carrier representation is decided by what
 the annotations say, not by the keyword: a type whose constructors all
-return one instantiation -- `(Bound int)` from every constructor -- is a
-plain sum with a pinned parameter.
+return one instantiation -- `(GVec int)` from both constructors of
+`stdlib/gadt-vec.tur` -- is a plain sum with a pinned parameter, and can go
+by value like any `defdata`. Only a type whose annotations refine its
+parameters (`Lit` and `IsZero` above) stays on the carrier.
 
 ## Pattern matching: `match`
 
@@ -263,7 +267,10 @@ match: non-exhaustive patterns -- constructor 'Left' of 'Either' not covered
 ```
 
 This is deliberate: the compiler will not let a new constructor silently slip
-past existing matches.
+past existing matches. The one exception is a constructor with its own result
+type that the scrutinee's annotated type rules out -- `IsZero : (Expr bool)`
+in a `match` on an `[e : (Expr int)]`. With an unannotated scrutinee every
+constructor is required.
 
 ### Opting out: `^non-exhaustive`
 

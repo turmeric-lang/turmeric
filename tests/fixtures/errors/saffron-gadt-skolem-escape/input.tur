@@ -11,7 +11,7 @@
 ;; the premise that "an `any` index refines to nothing".  The index is not an
 ;; `any`.
 
-(defgadt Box [a]
+(defdata Box [a]
   (MkBox a : (Box a)))
 
 (defn my-unbox [b] : int

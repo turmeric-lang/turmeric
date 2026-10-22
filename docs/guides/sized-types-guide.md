@@ -109,8 +109,9 @@ let [a static-int(3)
 
 ### Size expressions
 
-`Size` is a GADT that represents arithmetic expressions over compile-time sizes.
-Its constructors are:
+`Size` is a plain sum, `(defdata Size (Static int) (Add Size Size) (Mul Size
+Size))`, that represents arithmetic expressions over compile-time sizes. Its
+constructors are:
 
 | Constructor     | Meaning                        |
 |-----------------|--------------------------------|
@@ -405,7 +406,7 @@ value is inferred automatically by threading operand indices through the
 constructors -- no annotation is needed:
 
 ```turmeric
-(defgadt SizedVec [n]
+(defdata SizedVec [n]
   (SVNil : (SizedVec (Static 0)))
   (SVCons int (SizedVec n) : (SizedVec (Add (Static 1) n))))
 
@@ -413,7 +414,7 @@ constructors -- no annotation is needed:
 ```
 
 ```sweet-exp
-defgadt SizedVec [n]
+defdata SizedVec [n]
   SVNil : (SizedVec (Static 0))
   SVCons int (SizedVec n) : (SizedVec (Add (Static 1) n))
 

@@ -11,7 +11,7 @@
 ; first-index-only walk used to miss.  Companion accept fixture:
 ; sized-matrix-cross-param-accept.
 
-(defgadt Size []
+(defdata Size []
   (Static (int) : (Size))
   (Add (Size) (Size) : (Size))
   (Mul (Size) (Size) : (Size)))

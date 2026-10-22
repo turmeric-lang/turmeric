@@ -2412,7 +2412,16 @@ Expr *elab_defdata(Elab *e, const Form *call) {
  * by what the annotations say, not by this keyword (AdtDef.is_refined). */
 Expr *elab_defgadt(Elab *e, const Form *call) {
     /* range-gadt-typeclass-migration-plan A1: GADTs are enabled by default,
-     * so the former -Xgadt gate is gone. */
+     * so the former -Xgadt gate is gone.
+     * adt-gadt-unification-plan slice 4: the keyword is deprecated (TUR-D0005);
+     * the definition is still elaborated, so a program keeps compiling. */
+    diag_emit_with_code(elab_deprecation_level(), call->as.list.items[0]->span,
+                        TUR_D0005_DEFGADT,
+                        "'defgadt' is deprecated; write 'defdata' -- its constructors "
+                        "take the same ': (Name ...)' result type, and one that "
+                        "returns the generic instantiation needs none");
+    /* Elaborated under --Werror=deprecated too: the error above already fails
+     * the compile, and the type's uses then report nothing further. */
     return elab_adt_def(e, call, true);
 }
 

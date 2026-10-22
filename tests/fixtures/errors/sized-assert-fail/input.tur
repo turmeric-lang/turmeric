@@ -2,7 +2,7 @@
 ; Passing a plain integer where a Size is expected is a compile-time error.
 ; This demonstrates that size operations are well-typed: Add only accepts Size.
 
-(defgadt Size []
+(defdata Size []
   (Static (int) : (Size))
   (Add (Size) (Size) : (Size))
   (Mul (Size) (Size) : (Size)))

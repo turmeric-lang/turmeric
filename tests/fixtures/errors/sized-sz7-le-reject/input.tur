@@ -3,7 +3,7 @@
 ; size-assert-le! requires s1 <= s2. When both are statically known and the
 ; bound is exceeded, it is a compile-time error (TUR-E0260).
 
-(defgadt Size []
+(defdata Size []
   (Static (int) : (Size))
   (Add (Size) (Size) : (Size))
   (Mul (Size) (Size) : (Size)))

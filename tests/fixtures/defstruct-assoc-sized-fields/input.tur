@@ -7,7 +7,7 @@
 ;; apply a type of kind '*'") nor the SZ8 argument placeholder
 ;; ("unsupported type expression form" on the integer literal).
 
-(defgadt Size []
+(defdata Size []
   (Static (int) : (Size))
   (Add (Size) (Size) : (Size))
   (Mul (Size) (Size) : (Size)))

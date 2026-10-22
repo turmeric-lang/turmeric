@@ -1,0 +1,13 @@
+;; adt-gadt-unification-plan slice 4: `defgadt` still compiles -- TUR-D0005 is
+;; a warning without --Werror=deprecated, and the program behaves as the
+;; same definition spelled `defdata` does.
+(defgadt Expr [a]
+  (Lit int : (Expr int))
+  (IsZero (Expr int) : (Expr bool)))
+
+(defn eval-int [e : (Expr int)] : int
+  (match e (Lit n) n))
+
+(defn main [] : int
+  (println (eval-int (Lit 42)))
+  0)

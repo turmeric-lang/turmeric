@@ -1,7 +1,7 @@
 ; Phase SZ0: Size -- arithmetic expressions over compile-time sizes.
 ; Exercises size-static, size-add, size-mul, and size-eval.
 
-(defgadt Size []
+(defdata Size []
   (Static (int) : (Size))
   (Add (Size) (Size) : (Size))
   (Mul (Size) (Size) : (Size)))

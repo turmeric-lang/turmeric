@@ -1,6 +1,6 @@
 ; Phase SZ3: SizedBitVec -- packed bit vector.
 
-(defgadt Size []
+(defdata Size []
   (Static (int) : (Size))
   (Add (Size) (Size) : (Size))
   (Mul (Size) (Size) : (Size)))

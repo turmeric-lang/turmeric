@@ -242,7 +242,7 @@ as type-level compile-time integers.
 
 > **Implementation status.** The example below is shipped behavior: a
 > dimension mismatch whose sizes are statically known is caught at compile
-> time (`TUR-E0260`). The `Size` GADT, `SizedVec`, sized
+> time (`TUR-E0260`). The `Size` sum, `SizedVec`, sized
 > buffers/matrices/bitvecs are all in place, and the size index is lifted to the type level -- it unifies
 > across parameters, through `defstruct`/`defopaque` wrappers, and through
 > polymorphic helpers. Sizes only known at run time fall back to runtime

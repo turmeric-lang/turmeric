@@ -925,7 +925,7 @@ file scope and stays callable by name from the enclosing function:
 
 A nested `defn` may call itself and the nested `defn`s beside it, in either
 order: all the `defn`s in a body are declared before any of their bodies is
-checked. A `defstruct`, `defdata` or `defgadt` there is lifted the same way, so
+checked. A `defstruct` or `defdata` there is lifted the same way, so
 its type and constructors are visible from that point on.
 
 **It may not be the last form**, unless the function owes no value. A definition
@@ -1007,7 +1007,7 @@ Reserved in call-head position:
 | Group | Names |
 |---|---|
 | Binding / control | `def` `define` `let` `let*` `letrec` `if` `do` `unsafe` `set!` `while` `case` `defer` `return` `match` `quote` `gensym` `?` `->` `->>` |
-| Definition forms | `defn` `fn` (and its Greek-letter lambda alias) `extern-c` `defmacro` `defmodule` `import` `export` `load` `defstruct` `make-struct` `defopaque` `defdata` `defgadt` `defclass` `definstance` `defkind` `defrec` `deftype` `defalias` `defdynamic` `defeffect` `defprotocol` |
+| Definition forms | `defn` `fn` (and its Greek-letter lambda alias) `extern-c` `defmacro` `defmodule` `import` `export` `load` `defstruct` `make-struct` `defopaque` `defdata` `defgadt` (deprecated: `defdata` with `: Result` constructors) `defclass` `definstance` `defkind` `defrec` `deftype` `defalias` `defdynamic` `defeffect` `defprotocol` |
 | Generators | `gen` `yield` `gen-next` `gen-done?` |
 | References / rc / weak | `ref` `deref` `drop!` `ref?` `weak` `weak?` `upgrade` `lref/new` `rc/of` `rc/clone` `rc/drop` `rc->ptr` `rc/strong-count` `rc/from-ref` `ref/from-rc` |
 | Continuations | `reset` `shift` `shift0` `call/cc` `call/cc*` `escape` `cloneable-reset` `cloneable-shift` `serial-reset` `serial-shift` `cont?` |

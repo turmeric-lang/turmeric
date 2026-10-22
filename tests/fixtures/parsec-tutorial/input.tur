@@ -10,7 +10,7 @@
 ;;     don't need inline-C to read a character.
 ;;   * A parser is `(fn [xs : int] : (PRes A))` -- takes a list carrier,
 ;;     returns success + leftover or failure.
-;;   * Expr AST is a `(defgadt Expr [a])` with ENum/EAdd/ESub/EMul/EDiv.
+;;   * Expr AST is a `(defdata Expr [a])` with ENum/EAdd/ESub/EMul/EDiv.
 ;;   * The arithmetic grammar `1+2*(3+4)` is hardcoded as a list of Char
 ;;     literals.
 ;;
@@ -29,7 +29,7 @@
 
 ;; ---- Expr AST (GADT) --------------------------------------------------------
 
-(defgadt Expr [a]
+(defdata Expr [a]
   (ENum int                     : (Expr int))
   (EAdd (Expr int) (Expr int)   : (Expr int))
   (ESub (Expr int) (Expr int)   : (Expr int))

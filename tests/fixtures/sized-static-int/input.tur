@@ -1,7 +1,7 @@
 ; Phase SZ0: StaticInt -- compile-time integer annotation.
 ; Exercises static-int, static-int-val, static-int-add, and static-int-mul.
 
-(defgadt StaticInt []
+(defdata StaticInt []
   (SInt (int) : (StaticInt)))
 
 (defn static-int [n : int] : StaticInt

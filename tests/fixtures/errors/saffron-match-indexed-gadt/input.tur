@@ -20,7 +20,7 @@
 ;; declines, and must still reach the skolem-escape check -- so this
 ;; diagnostic must not swallow that one.
 
-(defgadt Shape [a]
+(defdata Shape [a]
   (Sq int : (Shape int)))
 
 (defn area [s]

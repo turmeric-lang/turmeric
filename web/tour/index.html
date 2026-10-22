@@ -419,15 +419,14 @@ display(Blue())    ;; =&gt; "blue"</div></div>
   <div>
     <p class="section-label">04 -- ADTs, GADTs &amp; Pattern Matching</p>
     <h2 class="section-title">Writing data structures is made easy, while making sure nothing goes unchecked.</h2>
-    <p class="section-desc"><code>defdata</code> declares sum types, while <code>defgadt</code> lets each constructor specialize its own type parameters. Every <code>match</code> arm refines what the checker knows. There's no casts, and there's no runtime tags.</p>
+    <p class="section-desc"><code>defdata</code> declares sum types, and a constructor's <code>: (Expr int)</code> result type lets it specialize the type's own parameters. Every <code>match</code> arm refines what the checker knows. There's no casts, and there's no runtime tags.</p>
     <p class="section-desc">Missing branches are caught at compile time. Every case is statically verified before the program runs.</p>
   </div>
   <div class="code-card">
     <div class="code-card-bar"><span class="code-card-filename" data-turmeric="expr.tur" data-sweet-exp="expr.tur.sweet">expr.tur</span><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div>
-    <div class="code-card-body" style="font-size:12px;padding:20px 22px;"><div class="code-version turmeric-version" role="tabpanel">;; GADT: each constructor carries its own return type.
+    <div class="code-card-body" style="font-size:12px;padding:20px 22px;"><div class="code-version turmeric-version" role="tabpanel">;; Each constructor can carry its own return type.
 ;; The type-checker refines what it knows per match arm.
-;; Requires: -Xgadt
-(defgadt Expr [a]
+(defdata Expr [a]
   (Lit int                         : (Expr int))
   (Add (Expr int) (Expr int)   : (Expr int))
   (Mul (Expr int) (Expr int)   : (Expr int)))
@@ -442,10 +441,9 @@ display(Blue())    ;; =&gt; "blue"</div></div>
 (println
   (eval (Mul (Add (Lit 2) (Lit 3))
              (Lit 4))))
-;; => 20</div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none">;; GADT: each constructor carries its own return type.
+;; => 20</div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none">;; Each constructor can carry its own return type.
 ;; The type-checker refines what it knows per match arm.
-;; Requires: -Xgadt
-defgadt Expr [a]
+defdata Expr [a]
   Lit int                    : (Expr int)
   Add (Expr int) (Expr int)  : (Expr int)
   Mul (Expr int) (Expr int)  : (Expr int)

@@ -1,12 +1,13 @@
-;;; tur/equal -- type-equality witness (Equal GADT) for type-safe coercions.
+;;; tur/equal -- type-equality witness (the refined Equal type) for type-safe coercions.
 ;;;
 ;;; (Equal a a) has one constructor Refl. Matching on Refl refines type variable a.
 ;;;
 ;;; Since: Phase G3
 ;; Phase G3: Type equality witnesses
-; The Equal GADT witnesses type equality: (Equal a a) has one constructor Refl.
-; Matching on Refl in a GADT arm refines the type variable a.
-(defgadt Equal [a b] (Refl : (Equal a a)))
+; Equal witnesses type equality: (Equal a a) has one constructor Refl, whose
+; result annotation equates the two parameters -- the one stdlib type that is
+; refined (AdtDef.is_refined).  Matching on Refl refines the type variable a.
+(defdata Equal [a b] (Refl : (Equal a a)))
 ; Symmetry: if a = a then a = a (trivially via Refl)
 
 (defn equal-sym [eq : Equal] : Equal (match eq (Refl) (Refl)))

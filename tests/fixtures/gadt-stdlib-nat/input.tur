@@ -1,7 +1,7 @@
 ; Phase G4: Test type-level Nat GADT from stdlib/nat.tur.
 ; Demonstrates nat-to-int, nat-add, and recursive Nat construction.
 
-(defgadt Nat []
+(defdata Nat []
   (Zero : (Nat))
   (Succ (Nat) : (Nat)))
 

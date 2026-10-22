@@ -1,5 +1,5 @@
 ; adt-gadt-unification slice 2: `:heap` on a type with annotated constructors.
-(defgadt Cell [a] :heap
+(defdata Cell [a] :heap
   (ICell [v : int] : (Cell int)))
 
 (defn cell-val [c : (Cell int)] : int

@@ -3,7 +3,7 @@
 ; In the WInt arm, a ~ int so v is int and arithmetic works.
 ; In the WBool arm, a ~ bool so v is bool and we just return 0.
 
-(defgadt Witness [a]
+(defdata Witness [a]
   (WInt  : (Witness int))
   (WBool : (Witness bool)))
 

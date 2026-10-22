@@ -6,10 +6,13 @@ description: Fold `defgadt` into `defdata` -- one elaborator, an optional per-co
 
 # ADT / GADT Unification
 
-> **Status:** IN PROGRESS 2026-10-22. Decisions taken 2026-10-22 (see
+> **Status:** SLICES 1-4 LANDED 2026-10-22; one item open -- removing
+> `defgadt` (a hard error) at the next major version once the TUR-D0005
+> warning has shipped in two minor releases. Decisions taken 2026-10-22 (see
 > "Decisions"): rename the flag to `is_refined`; an unrefined type reports as
-> a sum; `defgadt` is retired through the TUR-D deprecation band. Slices
-> 1-3 landed. Not a v1 blocker.
+> a sum; `defgadt` is retired through the TUR-D deprecation band. Where the
+> build departed from the text below, the slice's checklist says so under
+> *As built*. Not a v1 blocker.
 
 ## Summary
 
@@ -360,21 +363,37 @@ row per the CLAUDE.md rule rather than an env seam.
 
 ### Slice 4 -- retire `defgadt`
 
-- [ ] `TUR-D0005: defgadt is deprecated; write defdata with a : Result on
+- [x] `TUR-D0005: defgadt is deprecated; write defdata with a : Result on
       each constructor` at the form's head, in the TUR-D band (`diag.c`
       "Deprecation band", precedent TUR-D0002/D0003 for the legacy effect-row
       spellings, which carried two minor releases). `tur explain TUR-D0005`
-      shows the rewrite. Under `--Werror=deprecated` it is an error.
-- [ ] Migrate the seven stdlib `defgadt`s to `defdata`; `equal.tur`'s
+      shows the rewrite. Under `--Werror=deprecated` it is an error. (The
+      definition is still elaborated under `--Werror=deprecated`, so its uses
+      report nothing further.)
+- [x] Migrate the seven stdlib `defgadt`s to `defdata`; `equal.tur`'s
       `Equal` keeps its annotation and stays refined, the other six drop
-      theirs (every constructor returned the generic instantiation).
-- [ ] Migrate the 78 fixtures that spell `defgadt`, keeping one
+      theirs (every constructor returned the generic instantiation). *As
+      built:* only the parameterless ones' annotations were the generic
+      instantiation -- `Nat`, `StaticInt` and `Size` drop theirs and write
+      their self-references bare (`(Succ Nat)`). `GVec`'s `(GVec int)` and
+      `SizedVec`'s `(SizedVec Size int)` are not generic -- dropping them
+      would make `GVNil` an `(GVec a)` -- so both keep them and are simply
+      unrefined. `Bound` went in slice 3.
+- [x] Migrate the 78 fixtures that spell `defgadt`, keeping one
       `errors/defgadt-deprecated` fixture that pins TUR-D0005, and the
-      `gadt-*` fixture names (they test refinement, not the keyword).
-- [ ] Guides: the 19 docs files and `tools/genguides.py` / `tools/gendocs.py`
+      `gadt-*` fixture names (they test refinement, not the keyword). *As
+      built:* 81 fixture files. `errors/gadt-syntax-error` keeps `defgadt`:
+      it pins defgadt's own rule (an unannotated constructor is an error).
+      `defgadt-deprecated-warns` pins the warning and that the program still
+      runs; `errors/defgadt-deprecated` pins the error under
+      `--Werror=deprecated`.
+- [x] Guides: the 19 docs files and `tools/genguides.py` / `tools/gendocs.py`
       keyword lists. gadts-guide's "Your First GADT" becomes "Refined
       constructors" over `defdata`. `stdlib/forms/datatypes.tur`'s `defgadt`
-      entry becomes the deprecation note.
+      entry becomes the deprecation note. *As built:* the tools' keyword
+      lists keep `defgadt`, which still parses; the Try Turmeric tour and
+      landing page, `turi`'s REPL docstrings and the CHANGELOG are updated
+      too.
 - [ ] Removal: `defgadt` becomes a hard error with the same rewrite hint at
       the next major version after the warning has shipped in two minor
       releases. Tracked here, cut by the release skills' CHANGELOG step.
