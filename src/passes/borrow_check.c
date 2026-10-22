@@ -772,7 +772,6 @@ static bool borrow_check_expr_recursive(BorrowCheckCtx *ctx, const Expr *e) {
             return true;
         /* Phase G0/G1: ADTs */
         case EX_DEFDATA:
-        case EX_DEFGADT:
             return true;
         case EX_MATCH: {
             if (!borrow_check_expr_recursive(ctx, e->as.match_.scrutinee)) return false;

@@ -400,7 +400,7 @@ static void visit(Pr *p, const Expr *e) {
         case EX_NIL_LIT: case EX_BOOL_LIT: case EX_INT_LIT: case EX_FLOAT_LIT:
         case EX_CSTR_LIT: case EX_SYM_LIT: case EX_DEFAULT_OF: case EX_RETRY:
         case EX_EXTERN_C: case EX_TYPECLASS_DEF: case EX_DEFECT:
-        case EX_DEFDATA: case EX_DEFGADT: case EX_DYNVAR_READ:
+        case EX_DEFDATA: case EX_DYNVAR_READ:
             return;
         case EX_DICT:
             reach_instance(p, e->as.dict_.instance);

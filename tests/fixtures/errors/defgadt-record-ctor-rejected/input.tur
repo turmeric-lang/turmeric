@@ -1,0 +1,7 @@
+; A record field vector in a defgadt constructor used to be accepted as ONE
+; int field, after which `(Rect 3 4)` was "not callable" and `(Rect w h)` in a
+; match "expects 1 fields, got 2".  It is an error at the definition.
+(defgadt Shape [a]
+  (Rect [w : int h : int] : (Shape int)))
+
+(defn main [] : int 0)

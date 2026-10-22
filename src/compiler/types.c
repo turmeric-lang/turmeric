@@ -2224,7 +2224,7 @@ const char *type_register_adt_app(Type t) {
     Type args[16];
     uint8_t n_args = 0;
     if (!type_extract_adt_app(&t, &def, args, &n_args) || !def) return NULL;
-    if (def->is_gadt) return NULL;
+    if (def->has_result_types) return NULL;
     /* Require all type args to have concrete codegen layout. */
     for (uint32_t i = 0; i < n_args; i++) {
         if (args[i].kind == TY_TYVAR || args[i].kind == TY_UNKNOWN) return NULL;
@@ -2303,7 +2303,7 @@ char *type_adt_app_ctor_suffix(Type t) {
     Type args[16];
     uint8_t n_args = 0;
     if (!type_extract_adt_app(&t, &def, args, &n_args) || !def) return NULL;
-    if (def->is_gadt) return NULL;
+    if (def->has_result_types) return NULL;
     for (uint32_t i = 0; i < n_args; i++) {
         if (args[i].kind == TY_TYVAR || args[i].kind == TY_UNKNOWN) return NULL;
     }
@@ -4021,7 +4021,7 @@ static bool adt_graph_reaches(const AdtDef *from, const AdtDef *target,
  * them is the whole of SR1. */
 static bool adt_sr1_sum_candidate(const AdtDef *def) {
     if (!g_sr1_sum_byvalue) return false;
-    if (!def || def->is_gadt || def->is_heap) return false;
+    if (!def || def->has_result_types || def->is_heap) return false;
     if (def->n_ctors < 2 || def->n_type_params != 0) return false;
     if (!def->ctors) return false;
     /* SR4 measurement seam (2026-08-27): TUR_SR4_RECURSIVE_BYVALUE=1 admitted
@@ -4143,6 +4143,24 @@ static bool adt_is_byvalue_product_d(const AdtDef *def, int depth) {
     }
     }
     return true;
+}
+
+/* adt-gadt-unification: see types.h.  Structural over the annotation as
+ * written; a constructor with no annotation returns the generic instantiation
+ * by definition, and a type with no parameters has nothing to refine. */
+bool ctor_is_refining(const AdtDef *def, const CtorDef *ctor) {
+    if (!def || !ctor || !ctor->result_type_form || def->n_type_params == 0)
+        return false;
+    const Form *rt = ctor->result_type_form;
+    if (rt->tag != F_LIST || rt->as.list.len != (uint32_t)def->n_type_params + 1u)
+        return true;
+    for (uint8_t i = 0; i < def->n_type_params; i++) {
+        const Form *a = rt->as.list.items[1 + i];
+        if (a->tag != F_SYM || !def->type_params[i] ||
+            strcmp(a->as.sym->name, def->type_params[i]) != 0)
+            return true;
+    }
+    return false;
 }
 
 bool adt_is_byvalue_product(const AdtDef *def) {
@@ -4579,7 +4597,7 @@ static bool adt_app_is_byvalue_product_inner(Type t, AdtDef *def, Type *args,
                                              uint8_t n_args) {
     (void)t;
     bool app_sum = sr2_app_sum_byvalue() && def->n_ctors > 1 &&
-                   !def->is_gadt && !def->is_heap &&
+                   !def->has_result_types && !def->is_heap &&
                    !def->is_self_recursive && def->ctors != NULL;
     /* SR2 exclusion: an app over a recursive-carrier wrapper -- `(ExprF Expr)`,
      * `(ReF Re)`, the fixpoint functors -- stays on B4's machinery.  Its element

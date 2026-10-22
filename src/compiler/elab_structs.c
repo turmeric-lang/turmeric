@@ -13,7 +13,6 @@ static Type gadt_resolve_type_from_form(Elab *e, const AdtDef *gadt, const Form 
     const SkolemEnv *senv);
 static void gadt_build_skolem_env(Elab *e, SkolemEnv *out, const AdtDef *def,
     const CtorDef *ctor);
-static TypeKind gadt_field_typekind_from_form(const Form *f);
 static Type *adt_field_type_from_form(Arena *arena, const Form *ft_form,
     const char **type_params, uint8_t n_type_params);
 static void infer_type_param_kinds(AdtDef *def);
@@ -834,7 +833,7 @@ Expr *elab_defstruct(Elab *e, const Form *call) {
             for (uint32_t ai = 0; ai < e->n_adt_defs && !prior; ai++) {
                 AdtDef *ad = e->adt_defs[ai];
                 if (ad && ad->name && strcmp(ad->name, name->name) == 0 &&
-                    ad->n_ctors > 0 && !ad->is_gadt)
+                    ad->n_ctors > 0 && !ad->has_result_types)
                     prior = ad;
             }
             /* structdef-retirement DS-C: the parallel scan over the (always-empty)
@@ -1513,79 +1512,292 @@ static bool resolve_ctor_field(Elab *e, AdtDef *def, CtorDef *ctor, uint32_t fi,
     return true;
 }
 
-/* CONV-S0: a constructor form is record-style when its sole payload is a
- * vector, e.g. `(Circle [radius : float])`.  The vector holds `name : type`
- * pairs exactly like the old-style defstruct field list. */
-static bool ctor_form_is_record(const Form *ctor_form) {
-    return ctor_form->as.list.len == 2 &&
-           ctor_form->as.list.items[1]->tag == F_VEC;
+/* adt-gadt-unification: does the result-type argument `f` name no type
+ * variable?  A primitive, a type in scope, an alias, an integer literal, or an
+ * application built only from those is closed; a parameter of the type being
+ * defined and an unknown symbol (a constructor-local variable) are open. */
+static bool adt_result_arg_is_closed(Elab *e, const char **type_params,
+                                     uint8_t n_type_params, const Form *f) {
+    if (!f) return false;
+    if (f->tag == F_INT) return true;
+    if (f->tag == F_SYM || f->tag == F_KEYWORD) {
+        const char *n = f->as.sym->name;
+        for (uint8_t pi = 0; pi < n_type_params; pi++)
+            if (type_params[pi] && strcmp(type_params[pi], n) == 0) return false;
+        static const char *prims[] = {
+            "int", "bool", "float", "cstr", "nil", "void", "ptr",
+            "int8", "int16", "int32", "int64",
+            "uint8", "uint16", "uint32", "uint64",
+            "float32", "float64", NULL
+        };
+        for (int pi = 0; prims[pi]; pi++)
+            if (strcmp(prims[pi], n) == 0) return true;
+        Binding *tb = scope_lookup_type_def(e->scope, f->as.sym);
+        if (tb && (tb->type.kind == TY_ADT || tb->type.kind == TY_STRUCT)) return true;
+        return ctor_field_alias_target(e, f->as.sym) != NULL;
+    }
+    if (f->tag == F_LIST && f->as.list.len >= 1) {
+        for (uint32_t i = 0; i < f->as.list.len; i++)
+            if (!adt_result_arg_is_closed(e, type_params, n_type_params,
+                                          f->as.list.items[i]))
+                return false;
+        return true;
+    }
+    return false;
 }
 
-/* Phase G0: defdata — define a sum type (ADT)
- * Syntax: (defdata Name [:copy]
+/* adt-gadt-unification: AdtDef.is_refined, from the constructors' result
+ * annotations.  Unrefined iff one instantiation is shared by every
+ * constructor and each of its arguments is the parameter in its own position
+ * or a closed type -- the generic `(Box a)`, or the pinned `(Bound int)`.
+ * `Refl : (Equal a a)` is refined (its second argument is a variable that is
+ * not `b`), and so is any pair of constructors returning different indices. */
+static bool adt_compute_is_refined(Elab *e, const AdtDef *def) {
+    uint8_t np = def->n_type_params;
+    if (np == 0) return false;
+    const Form **shared = (const Form **)calloc(np, sizeof(const Form *));
+    bool *shared_own = (bool *)calloc(np, sizeof(bool));
+    if (!shared || !shared_own) { free(shared); free(shared_own); return true; }
+    bool refined = false, first = true;
+    for (uint32_t ci = 0; ci < def->n_ctors && !refined; ci++) {
+        const CtorDef *c = def->ctors[ci];
+        if (!c) continue;
+        const Form *rt = c->result_type_form;
+        if (rt && (rt->tag != F_LIST || rt->as.list.len != (uint32_t)np + 1u)) {
+            refined = true;
+            break;
+        }
+        for (uint8_t pi = 0; pi < np && !refined; pi++) {
+            const Form *a = rt ? rt->as.list.items[1 + pi] : NULL;
+            bool own = !a || (a->tag == F_SYM && def->type_params[pi] &&
+                              strcmp(a->as.sym->name, def->type_params[pi]) == 0);
+            if (!own && !adt_result_arg_is_closed(e, def->type_params, np, a))
+                refined = true;
+            else if (first) {
+                shared_own[pi] = own;
+                shared[pi] = own ? NULL : a;
+            } else if (shared_own[pi] != own ||
+                       (!own && !form_equal(shared[pi], a)))
+                refined = true;
+        }
+        first = false;
+    }
+    free(shared);
+    free(shared_own);
+    return refined;
+}
+
+/* adt-gadt-unification: the checks a constructor's `: Result` annotation must
+ * pass -- an application of the type being defined, with its declared arity,
+ * whose bare-symbol arguments are parameters, primitives or types in scope of
+ * kind `*`.  (These were defgadt's; every annotated constructor now runs
+ * them.)  Returns false with a diagnostic emitted. */
+static bool adt_check_result_form(Elab *e, const char *kw, const Symbol *name,
+                                  const char **type_params, uint8_t n_type_params,
+                                  const Symbol *ctor_name, const Form *rt) {
+    bool mentions_type = false;
+    if (rt->tag == F_LIST && rt->as.list.len >= 1) {
+        Form *head = rt->as.list.items[0];
+        if (head->tag == F_SYM && strcmp(head->as.sym->name, name->name) == 0)
+            mentions_type = true;
+    } else if (rt->tag == F_SYM && strcmp(rt->as.sym->name, name->name) == 0) {
+        mentions_type = true;
+    }
+    if (!mentions_type) {
+        diag_emit(DIAG_ERROR, rt->span,
+                  "%s: constructor '%s' return type must be an application of '%s'",
+                  kw, ctor_name->name, name->name);
+        return false;
+    }
+    if (rt->tag != F_LIST) return true;
+    uint32_t n_rt_args = rt->as.list.len - 1;
+    if (n_type_params > 0 && n_rt_args != n_type_params) {
+        diag_emit(DIAG_ERROR, rt->span,
+                  "%s: constructor '%s' return type has %u type argument(s) "
+                  "but '%s' has %u type parameter(s)",
+                  kw, ctor_name->name, n_rt_args, name->name, n_type_params);
+        return false;
+    }
+    for (uint32_t ai = 1; ai < rt->as.list.len; ai++) {
+        Form *arg = rt->as.list.items[ai];
+        if (arg->tag != F_SYM) continue;  /* an application or other form -- ok */
+        const char *an = arg->as.sym->name;
+        bool is_param = false;
+        for (uint8_t pi = 0; pi < n_type_params; pi++)
+            if (strcmp(type_params[pi], an) == 0) { is_param = true; break; }
+        if (is_param) continue;
+        static const char *primitives[] = {
+            "int", "bool", "float", "cstr", "nil", "void", "ptr",
+            "int8", "int16", "int32", "int64",
+            "uint8", "uint16", "uint32", "uint64",
+            "float32", "float64", NULL
+        };
+        bool is_prim = false;
+        for (int pi = 0; primitives[pi]; pi++)
+            if (strcmp(primitives[pi], an) == 0) { is_prim = true; break; }
+        if (is_prim) continue;
+        const Symbol *type_sym = symtab_intern(e->st,
+            strslice(an, (uint32_t)strlen(an)));
+        Binding *tb = scope_lookup_type_def(e->scope, type_sym);
+        if (tb && (tb->type.kind == TY_STRUCT || tb->type.kind == TY_ADT)) {
+            /* Phase G1/HKT: a type constructor of kind * -> * in a plain
+             * type-argument slot is a kind mismatch. */
+            if (tb->type.hkt_kind == KIND_ARROW ||
+                    tb->type.hkt_kind == KIND_ARROW2) {
+                diag_emit_with_code(DIAG_ERROR, arg->span,
+                    TUR_E0012_KIND_MISMATCH,
+                    "kind mismatch (TUR-E0012): type argument '%s' in constructor "
+                    "'%s' return type has kind '* -> *' but kind '*' is expected",
+                    an, ctor_name->name);
+                return false;
+            }
+            continue;
+        }
+        diag_emit(DIAG_ERROR, arg->span,
+                  "%s: unknown type argument '%s' in return type of constructor '%s' "
+                  "(must be a type parameter, primitive type, or defined type)",
+                  kw, an, ctor_name->name);
+        return false;
+    }
+    return true;
+}
+
+/* adt-gadt-unification: find a constructor form's `: Result` annotation -- a
+ * bare `:` symbol followed by the type, or the reader's folded F_TYPE_ANN.
+ * Sets *payload_end to the index one past the last payload item and
+ * *result_form to the annotation (NULL when there is none).  Returns false
+ * with a diagnostic on a malformed annotation. */
+static bool adt_ctor_split_result(Elab *e, const char *kw, const Form *ctor_form,
+                                  const Symbol *ctor_name, uint32_t *payload_end,
+                                  Form **result_form) {
+    uint32_t len = ctor_form->as.list.len;
+    *payload_end = len;
+    *result_form = NULL;
+    for (uint32_t fi = 1; fi < len; fi++) {
+        Form *item = ctor_form->as.list.items[fi];
+        uint32_t next;
+        if (item->tag == F_TYPE_ANN) {
+            if (item->as.list.len < 1) {
+                diag_emit(DIAG_ERROR, item->span,
+                          "%s: constructor '%s': missing return type after ':'",
+                          kw, ctor_name->name);
+                return false;
+            }
+            *result_form = item->as.list.items[0];
+            next = fi + 1;
+        } else if (item->tag == F_SYM && item->as.sym == e->sym_colon) {
+            if (fi + 1 >= len) {
+                diag_emit(DIAG_ERROR, ctor_form->span,
+                          "%s: constructor '%s': missing return type after ':'",
+                          kw, ctor_name->name);
+                return false;
+            }
+            *result_form = ctor_form->as.list.items[fi + 1];
+            next = fi + 2;
+        } else {
+            continue;
+        }
+        *payload_end = fi;
+        if (next < len) {
+            diag_emit(DIAG_ERROR, ctor_form->as.list.items[next]->span,
+                      "%s: constructor '%s': unexpected form after the return type",
+                      kw, ctor_name->name);
+            return false;
+        }
+        return true;
+    }
+    return true;
+}
+
+/* Phase G0: defdata -- define a sum type (ADT); adt-gadt-unification: also
+ * defgadt, which is this form with every constructor annotated.
+ * Syntax: (defdata Name [:copy] [type-params]
  *           (Ctor1)
  *           (Ctor2 :T1 :T2)               ; positional-style variant
  *           (Ctor3 [a : int b : cstr])    ; CONV-S0 record-style variant
  *           ...)
+ *         (defgadt Name [type-params] [:copy]
+ *           (Ctor1 T1 ... : (Name ...))   ; result type required
+ *           ...)
+ *
+ * The keywords and the type-parameter vector may come in either order; the
+ * first list form is the first constructor.  A constructor's `: (Name ...)`
+ * result annotation is stored as CtorDef.result_type_form and drives the
+ * per-constructor GADT machinery (skolem envs, index inference, reachability);
+ * AdtDef.is_refined is computed from the annotations once they are all read.
  */
-Expr *elab_defdata(Elab *e, const Form *call) {
+static Expr *elab_adt_def(Elab *e, const Form *call, bool spelled_defgadt) {
+    const char *kw = spelled_defgadt ? "defgadt" : "defdata";
     if (call->as.list.len < 3) {
-        diag_emit(DIAG_ERROR, call->span,
-                  "defdata requires a name and at least one constructor: "
-                  "(defdata Name (Ctor1) (Ctor2 :T1) ...)");
+        if (spelled_defgadt)
+            diag_emit(DIAG_ERROR, call->span,
+                      "defgadt requires a name, type-params, and constructors: "
+                      "(defgadt Name [params] (Ctor : return-type) ...)");
+        else
+            diag_emit(DIAG_ERROR, call->span,
+                      "defdata requires a name and at least one constructor: "
+                      "(defdata Name (Ctor1) (Ctor2 :T1) ...)");
         return NULL;
     }
 
     Form *name_form = call->as.list.items[1];
     if (name_form->tag != F_SYM) {
-        diag_emit(DIAG_ERROR, name_form->span,
-                  "defdata name must be a symbol");
+        diag_emit(DIAG_ERROR, name_form->span, "%s name must be a symbol", kw);
         return NULL;
     }
     const Symbol *name = name_form->as.sym;
 
-    /* Check for optional :copy / :move / :heap annotations (any order).
+    /* The head: optional :copy / :move / :heap / :linear / :no-auto-ctor
+     * keywords and at most one type-parameter vector, in any order (defdata
+     * wrote the keywords first, defgadt the vector).
      * CONV-S1 seam 3: :heap marks a typed-pointer record ADT (the analogue of a
      * :heap struct -- Vec/Map/Set), set by a lowered `:heap` defstruct. */
     bool is_copy = false;
     bool is_heap = false;
     bool is_linear = false;     /* structdef-retirement slice 4 (LT4) */
     bool no_auto_ctor = false;  /* structdef-retirement slice 2 (CTOR-V0) */
+    Form *tp_form = NULL;
     uint32_t ctors_start_idx = 2;
     while (ctors_start_idx < call->as.list.len) {
-        Form *kw_form = call->as.list.items[ctors_start_idx];
-        if (kw_form->tag != F_KEYWORD) break;
-        if (kw_form->as.sym == e->kw_copy) { is_copy = true; ctors_start_idx++; continue; }
-        if (kw_form->as.sym == e->kw_move) { is_copy = false; ctors_start_idx++; continue; }
-        if (kw_form->as.sym == e->kw_heap) { is_heap = true; ctors_start_idx++; continue; }
+        Form *hf = call->as.list.items[ctors_start_idx];
+        if (hf->tag == F_VEC && !tp_form) {
+            tp_form = hf;
+            ctors_start_idx++;
+            continue;
+        }
+        if (hf->tag != F_KEYWORD) break;
+        const Symbol *k = hf->as.sym;
+        if (k == e->kw_copy) is_copy = true;
+        else if (k == e->kw_move) is_copy = false;
         /* structdef-retirement slice 4: a lowered `:linear` defstruct (exactly-once)
          * carries CK_LINEAR on its ADT type; the value/binding-level linearity
          * enforcement then propagates from the type's copy_kind. */
-        if (kw_form->as.sym == e->kw_linear) {
-            is_linear = true; ctors_start_idx++; continue;
-        }
+        else if (k == e->kw_heap) is_heap = true;
+        else if (k == e->kw_linear) is_linear = true;
         /* structdef-retirement slice 2: a lowered `:no-auto-ctor` defstruct (and,
          * by extension, a `defdata` that opts in) suppresses the auto-bound
          * value-namespace constructor so the `(Name ...)` call form stays rejected
          * ("not a function"); construction goes through `make-struct`. */
-        if (kw_form->as.sym == e->kw_no_auto_ctor) {
-            no_auto_ctor = true; ctors_start_idx++; continue;
+        else if (k == e->kw_no_auto_ctor) no_auto_ctor = true;
+        else break;
+        if (spelled_defgadt && k != e->kw_copy && k != e->kw_move) {
+            diag_emit(DIAG_ERROR, hf->span,
+                      "defgadt: ':%s' is not supported on defgadt; only :copy and "
+                      ":move are", k->name);
+            return NULL;
         }
-        break;
+        ctors_start_idx++;
     }
 
-    /* Phase RF1: Check for an optional type-parameter vector [^f a b ...] between
-     * the name (or :copy annotation) and the first constructor.  Type parameters
-     * are stored on the AdtDef and used for documentation / future type-checking;
-     * they do not affect C codegen (all values are int64_t pointers). */
+    /* Phase RF1: the type-parameter vector [^f a b ...].  L6 follow-up C: a
+     * parallel kind array, so `^&name` carries KIND_TYPEROW (e.g. (defdata
+     * Frame [^&cols] (Frame :int))), `^^name` KIND_ARROW2 and `^name`
+     * KIND_ARROW; the stored name is the bare one so the body's references
+     * resolve. */
     const char **type_params = NULL;
     uint8_t n_type_params = 0;
-    /* L6 follow-up C: parallel kind array so `^&name` in a defdata type-param
-     * list (e.g. (defdata Frame [^&cols] (Frame :int))) carries KIND_TYPEROW. */
     Kind *parsed_type_param_kinds = NULL;
-    if (ctors_start_idx < call->as.list.len &&
-        call->as.list.items[ctors_start_idx]->tag == F_VEC) {
-        Form *tp_form = call->as.list.items[ctors_start_idx];
+    if (tp_form) {
         n_type_params = (uint8_t)tp_form->as.list.len;
         if (n_type_params > 0) {
             type_params = (const char **)arena_alloc(e->arena,
@@ -1596,22 +1808,15 @@ Expr *elab_defdata(Elab *e, const Form *call) {
                 Form *pf = tp_form->as.list.items[pi];
                 if (pf->tag != F_SYM) {
                     diag_emit(DIAG_ERROR, pf->span,
-                              "defdata: type parameter must be a symbol, e.g. a, ^f");
+                              "%s: type parameter must be a symbol, e.g. a, ^f", kw);
                     return NULL;
                 }
                 const Symbol *psym = pf->as.sym;
-                /* L6 follow-up C: '^&name' marks a row-kinded ([*]) parameter. */
                 if (psym->len > 2 && psym->name[0] == '^' && psym->name[1] == '&') {
                     const Symbol *bare = symtab_intern(e->st,
                         strslice(psym->name + 2, psym->len - 2));
                     type_params[pi] = bare->name;
                     parsed_type_param_kinds[pi] = KIND_TYPEROW;
-                /* '^^name' marks a kind '* -> * -> *' (binary type constructor)
-                 * parameter; '^name' marks a kind '* -> *' parameter.  Mirrors
-                 * the defclass handling so a higher-kinded defdata param like
-                 * `^f` in (defdata Fix [^f] (Roll (f (Fix f)))) stores the bare
-                 * name `f` (so the body's `f` references resolve) and carries the
-                 * arrow kind (so applying `f` is well-kinded). */
                 } else if (psym->len > 2 && psym->name[0] == '^' && psym->name[1] == '^') {
                     const Symbol *bare = symtab_intern(e->st,
                         strslice(psym->name + 2, psym->len - 2));
@@ -1628,7 +1833,6 @@ Expr *elab_defdata(Elab *e, const Form *call) {
                 }
             }
         }
-        ctors_start_idx++;
     }
 
     /* Phase RF0: allow re-elaboration of forward-declared stub types */
@@ -1652,6 +1856,36 @@ Expr *elab_defdata(Elab *e, const Form *call) {
         }
     }
     if (existing_adt_b) {
+        /* MF4 / CONV-S1 (defstruct-as-defadt): a struct lowers to an ADT, so
+         * structs and ADTs share one namespace, and a later same-name type
+         * SUPERSEDES the struct-origin ADT.  The value-preferring scope_lookup
+         * above returns the lowered struct's auto-bound CONSTRUCTOR (TY_FN),
+         * which shadows the record ADT type binding; consult the type
+         * namespace to recognise it.  The loser is marked superseded so it is
+         * skipped at C emission (no `tur_adt_<Name>` collision); `:Name`
+         * annotations resolve to the new type via elab_lookup_type_by_name's
+         * prefer-non-struct-origin rule.  A stdlib struct is not superseded:
+         * the stdlib code built on it would lose its type. */
+        Binding *existing_type_b = scope_lookup_type_def(e->scope, name);
+        AdtDef *lowered_struct_def = NULL;
+        if (existing_adt_b->type.kind == TY_ADT &&
+            existing_adt_b->type.as.adt_.def &&
+            existing_adt_b->type.as.adt_.def->from_struct_lowering)
+            lowered_struct_def = existing_adt_b->type.as.adt_.def;
+        else if (existing_type_b && existing_type_b->type.kind == TY_ADT &&
+                 existing_type_b->type.as.adt_.def &&
+                 existing_type_b->type.as.adt_.def->from_struct_lowering)
+            lowered_struct_def = existing_type_b->type.as.adt_.def;
+        if (lowered_struct_def &&
+            elab_file_is_stdlib(lowered_struct_def->origin_file_id)) {
+            diag_emit(DIAG_ERROR, name_form->span,
+                      "%s: '%s' is already defined by an auto-loaded stdlib "
+                      "module, and redefining it would change it for the stdlib "
+                      "code built on it; pick a distinct name", kw, name->name);
+            return NULL;
+        }
+        if (lowered_struct_def && elab_prior_turn_adt(e, lowered_struct_def))
+            lowered_struct_def = NULL;
         /* Reuse the pre-registered stub ONLY when it is genuinely an ADT stub.
          * A forward-typed binding whose payload is not a TY_ADT (e.g. a stdlib
          * type of the same name shadowed by a forward entry) would otherwise be
@@ -1659,40 +1893,49 @@ Expr *elab_defdata(Elab *e, const Form *call) {
          * misaligned-access crash.  Treat that as a redefinition. */
         const AdtDef *prior_def = existing_adt_b->type.kind == TY_ADT
                                 ? existing_adt_b->type.as.adt_.def : NULL;
-        /* A FILLED def (n_ctors > 0) is not a forward stub, whatever the
-         * forward-type list says: the stdlib's own type pre-pass registered
-         * `Option` / `Result` / `Cons` as forward types, so a user `defdata`
-         * reusing one of those names passed elab_is_forward_type after the
-         * stdlib had already filled the stub -- and re-elaborated the
-         * stdlib's type IN PLACE, turning `(Option a)` into a kind-`*` type
-         * and blaming stdlib/option.tur's Functor instance for it
-         * (compiled-defdata-over-stdlib-type-rewrites-the-stdlib-type).
-         * Mirror elab_defstruct's guard: a filled stdlib type is a
-         * redefinition in a compile AND in a session (PS4); a filled type from
-         * an earlier session turn is the one shape that legitimately
-         * re-elaborates over its binding (PS4's reuse path), and a filled
-         * type from THIS compile is "already defined". */
-        if (prior_def && prior_def->n_ctors > 0) {
+        if (lowered_struct_def) {
+            lowered_struct_def->superseded = true;
+            diag_emit(DIAG_WARNING, name_form->span,
+                      "%s '%s' supersedes the same-named struct '%s'; uses of "
+                      "':%s' resolve to the new type",
+                      kw, name->name, name->name, name->name);
+            existing_adt_b = NULL;  /* register a fresh binding/AdtDef below */
+        } else if (prior_def && prior_def->n_ctors > 0) {
+            /* A FILLED def (n_ctors > 0) is not a forward stub, whatever the
+             * forward-type list says: the stdlib's own type pre-pass registered
+             * `Option` / `Result` / `Cons` as forward types, so a user `defdata`
+             * reusing one of those names passed elab_is_forward_type after the
+             * stdlib had already filled the stub -- and re-elaborated the
+             * stdlib's type IN PLACE, turning `(Option a)` into a kind-`*` type
+             * and blaming stdlib/option.tur's Functor instance for it
+             * (compiled-defdata-over-stdlib-type-rewrites-the-stdlib-type).
+             * Mirror elab_defstruct's guard: a filled stdlib type is a
+             * redefinition in a compile AND in a session (PS4); a filled type from
+             * an earlier session turn is the one shape that legitimately
+             * re-elaborates over its binding (PS4's reuse path), and a filled
+             * type from THIS compile is "already defined". */
             bool from_stdlib = elab_file_is_stdlib(prior_def->origin_file_id);
             if (from_stdlib) {
                 diag_emit(DIAG_ERROR, name_form->span,
-                          "defdata: '%s' is already defined by an auto-loaded stdlib "
+                          "%s: '%s' is already defined by an auto-loaded stdlib "
                           "module, and redefining it would change it for the stdlib "
-                          "code built on it; pick a distinct name", name->name);
+                          "code built on it; pick a distinct name", kw, name->name);
                 return NULL;
             }
             if (!elab_prior_turn_adt(e, prior_def)) {
                 diag_emit(DIAG_ERROR, name_form->span,
-                          "defdata: '%s' is already defined by an earlier form; "
-                          "pick a distinct name", name->name);
+                          "%s: '%s' is already defined by an earlier form; "
+                          "pick a distinct name", kw, name->name);
                 return NULL;
             }
         }
-        if (elab_is_forward_type(e, name) && existing_adt_b->type.kind == TY_ADT) {
+        if (!existing_adt_b) {
+            /* superseded above */
+        } else if (elab_is_forward_type(e, name) && existing_adt_b->type.kind == TY_ADT) {
             is_forward_stub_adt = true;
         } else {
             diag_emit(DIAG_ERROR, name_form->span,
-                      "defdata: '%s' is already defined", name->name);
+                      "%s: '%s' is already defined", kw, name->name);
             return NULL;
         }
     }
@@ -1700,8 +1943,26 @@ Expr *elab_defdata(Elab *e, const Form *call) {
     uint32_t n_ctors = call->as.list.len - ctors_start_idx;
     if (n_ctors == 0) {
         diag_emit(DIAG_ERROR, call->span,
-                  "defdata: '%s' must have at least one constructor", name->name);
+                  "%s: '%s' must have at least one constructor", kw, name->name);
         return NULL;
+    }
+
+    /* Is any constructor annotated?  Read syntactically before the def is
+     * registered, so the conservative flags below are in place before the
+     * first field is resolved (a recursive field can probe this def's
+     * representation mid-definition). */
+    bool any_annotated = false;
+    for (uint32_t i = ctors_start_idx; i < call->as.list.len && !any_annotated; i++) {
+        const Form *cf = call->as.list.items[i];
+        if (cf->tag != F_LIST) continue;
+        for (uint32_t j = 1; j < cf->as.list.len; j++) {
+            const Form *it = cf->as.list.items[j];
+            if (it->tag == F_TYPE_ANN ||
+                (it->tag == F_SYM && it->as.sym == e->sym_colon)) {
+                any_annotated = true;
+                break;
+            }
+        }
     }
 
     /* Phase RF0: Allocate (or reuse forward stub) AdtDef and register BEFORE
@@ -1714,83 +1975,52 @@ Expr *elab_defdata(Elab *e, const Form *call) {
         /* Reuse the pre-registered stub and fill it in */
         adt_binding = existing_adt_b;
         def = adt_binding->type.as.adt_.def;
-        def->n_ctors = n_ctors;
-        def->ctors = (CtorDef **)arena_alloc(e->arena, n_ctors * sizeof(CtorDef *));
-        /* Zero the array: predicates reached MID-DEFINITION (a recursive field
-         * probing adt_is_byvalue_product while this def's ctors are still being
-         * filled) guard on `ctors[ci] == NULL`, and arena memory is not zeroed
-         * -- the guard only ever worked on lucky fresh pages.  turi's
-         * longer-lived arena handed back dirty memory and the guard read a
-         * garbage CtorDef (SEGV in adt_sr1_sum_candidate). */
-        memset(def->ctors, 0, n_ctors * sizeof(CtorDef *));
-        def->is_copy = is_copy;
-        def->is_heap = is_heap;
-        def->is_linear = is_linear; /* LT4 (structdef-retirement slice 4) */
-        def->no_auto_ctor = no_auto_ctor;
-        def->needs_drop_glue = false;
-        def->is_gadt = false;
-        def->type_params = type_params;
-        def->n_type_params = n_type_params;
-        /* TP1: allocate Kind array initialised to KIND_STAR (TP4 refines).
-         * L6 follow-up C: seed from parsed_type_param_kinds so `^&` is preserved. */
-        if (n_type_params > 0) {
-            Kind *tpk = (Kind *)arena_alloc(e->arena, n_type_params * sizeof(Kind));
-            for (uint8_t pi = 0; pi < n_type_params; pi++) {
-                tpk[pi] = parsed_type_param_kinds ? parsed_type_param_kinds[pi]
-                                                  : KIND_STAR;
-            }
-            def->type_param_kinds = tpk;
-        } else {
-            def->type_param_kinds = NULL;
+    } else {
+        def = (AdtDef *)arena_alloc(e->arena, sizeof(AdtDef));
+        memset(def, 0, sizeof(*def));  /* DS5: zero every bool / scalar field */
+        def->name = name->name;
+    }
+    def->n_ctors = n_ctors;
+    def->ctors = (CtorDef **)arena_alloc(e->arena, n_ctors * sizeof(CtorDef *));
+    /* Zero the array: predicates reached MID-DEFINITION (a recursive field
+     * probing adt_is_byvalue_product while this def's ctors are still being
+     * filled) guard on `ctors[ci] == NULL`, and arena memory is not zeroed
+     * -- the guard only ever worked on lucky fresh pages.  turi's
+     * longer-lived arena handed back dirty memory and the guard read a
+     * garbage CtorDef (SEGV in adt_sr1_sum_candidate). */
+    memset(def->ctors, 0, n_ctors * sizeof(CtorDef *));
+    def->is_copy = is_copy;
+    def->is_heap = is_heap;
+    def->is_linear = is_linear; /* LT4 (structdef-retirement slice 4) */
+    def->no_auto_ctor = no_auto_ctor;
+    def->needs_drop_glue = false;
+    def->has_result_types = any_annotated;
+    def->is_refined = any_annotated;      /* conservative until computed below */
+    /* Phase RF1: store type parameters */
+    def->type_params = type_params;
+    def->n_type_params = n_type_params;
+    /* TP1: allocate Kind array initialised to KIND_STAR (TP4 refines).
+     * L6 follow-up C: seed from parsed_type_param_kinds so `^&` is preserved. */
+    if (n_type_params > 0) {
+        Kind *tpk = (Kind *)arena_alloc(e->arena, n_type_params * sizeof(Kind));
+        for (uint8_t pi = 0; pi < n_type_params; pi++) {
+            tpk[pi] = parsed_type_param_kinds ? parsed_type_param_kinds[pi]
+                                              : KIND_STAR;
         }
-        /* Refresh adt_type from the def so copy_kind reflects is_copy correctly.
-         * The pre-pass stub was created with is_copy=false; now that we know the
-         * real is_copy flag, regenerate the type and update the binding. */
-        adt_type = type_adt(def);
-        /* Phase G1/HKT: Apply KIND_ARROW fix so that the kind check can detect
-         * when a parameterized defdata type is used in a kind-* slot. */
-        adt_type.hkt_kind = kind_for_arity(n_type_params);
+        def->type_param_kinds = tpk;
+    } else {
+        def->type_param_kinds = NULL;
+    }
+    /* Phase G1/HKT: hkt_kind follows the type-parameter count, so the kind
+     * check can detect a parameterized type used in a kind-* slot.  On the
+     * stub path the binding's type is refreshed too: the pre-pass stub was
+     * created before is_copy was known. */
+    adt_type = type_adt(def);
+    adt_type.hkt_kind = kind_for_arity(n_type_params);
+    if (is_forward_stub_adt) {
         adt_binding->type = adt_type;
         /* Already in global scope and elab registry from the pre-pass */
     } else {
-        def = (AdtDef *)arena_alloc(e->arena, sizeof(AdtDef));
-        memset(def, 0, sizeof(*def));  /* DS5: zero is_gadt and any future bool fields */
-        def->name = name->name;
-        def->n_ctors = n_ctors;
-        def->ctors = (CtorDef **)arena_alloc(e->arena, n_ctors * sizeof(CtorDef *));
-        /* Zero the array: predicates reached MID-DEFINITION (a recursive field
-         * probing adt_is_byvalue_product while this def's ctors are still being
-         * filled) guard on `ctors[ci] == NULL`, and arena memory is not zeroed
-         * -- the guard only ever worked on lucky fresh pages.  turi's
-         * longer-lived arena handed back dirty memory and the guard read a
-         * garbage CtorDef (SEGV in adt_sr1_sum_candidate). */
-        memset(def->ctors, 0, n_ctors * sizeof(CtorDef *));
-        def->is_copy = is_copy;
-        def->is_heap = is_heap;
-        def->is_linear = is_linear; /* LT4 (structdef-retirement slice 4) */
-        def->no_auto_ctor = no_auto_ctor;
-        /* Phase RF1: store type parameters */
-        def->type_params = type_params;
-        def->n_type_params = n_type_params;
-        /* TP1: allocate Kind array initialised to KIND_STAR (TP4 refines).
-         * L6 follow-up C: seed from parsed_type_param_kinds so `^&` is preserved. */
-        if (n_type_params > 0) {
-            Kind *tpk = (Kind *)arena_alloc(e->arena, n_type_params * sizeof(Kind));
-            for (uint8_t pi = 0; pi < n_type_params; pi++) {
-                tpk[pi] = parsed_type_param_kinds ? parsed_type_param_kinds[pi]
-                                                  : KIND_STAR;
-            }
-            def->type_param_kinds = tpk;
-        } else {
-            def->type_param_kinds = NULL;
-        }
-
-        /* Pre-register ADT type so constructors can reference it.
-         * Phase G1/HKT: Set hkt_kind based on type-parameter count so that
-         * elab_defgadt's belt-and-suspenders kind check can detect when a
-         * parameterized type constructor is used in a kind-* argument slot. */
-        adt_type = type_adt(def);
-        adt_type.hkt_kind = kind_for_arity(n_type_params);
         adt_binding = binding_new(e, name, adt_type, false, true, name_form->span);
         scope_add(&e->global, adt_binding);
     }
@@ -1820,41 +2050,80 @@ Expr *elab_defdata(Elab *e, const Form *call) {
      * `ci` is declared outside the loop so the `data_ctor_parse_error`
      * bail-out below can truncate `def->n_ctors` to the number of slots we
      * actually filled (every error path bails before `def->ctors[ci]` is
-     * assigned, so `ci` is exactly the populated-slot count) -- the same
-     * guard defgadt's ctor loop carries.  Without it, the pre-registered
-     * binding advertises n_ctors slots whose pointers were never written
-     * (arena memory is NOT zeroed), and later field-access elaboration in
-     * the same failing compile dereferences the junk. */
+     * assigned, so `ci` is exactly the populated-slot count).  Without it,
+     * the pre-registered binding advertises n_ctors slots whose pointers were
+     * never written, and later field-access / match elaboration in the same
+     * failing compile dereferences them (see
+     * docs/archive/history/defgadt-malformed-pattern-segfault.md). */
     uint32_t ci = 0;
     for (; ci < n_ctors; ci++) {
         Form *ctor_form = call->as.list.items[ctors_start_idx + ci];
         if (ctor_form->tag != F_LIST) {
             diag_emit(DIAG_ERROR, ctor_form->span,
-                      "defdata: constructor must be a list form (Ctor :T1 :T2 ...)");
+                      spelled_defgadt
+                          ? "defgadt: constructor must be a list form (Ctor T1 ... : (Name ...))"
+                          : "defdata: constructor must be a list form (Ctor :T1 :T2 ...)");
             goto data_ctor_parse_error;
         }
         if (ctor_form->as.list.len < 1) {
             diag_emit(DIAG_ERROR, ctor_form->span,
-                      "defdata: constructor form cannot be empty");
+                      "%s: constructor form cannot be empty", kw);
             goto data_ctor_parse_error;
         }
         Form *ctor_name_form = ctor_form->as.list.items[0];
         if (ctor_name_form->tag != F_SYM) {
             diag_emit(DIAG_ERROR, ctor_name_form->span,
-                      "defdata: constructor name must be a symbol");
+                      "%s: constructor name must be a symbol", kw);
             goto data_ctor_parse_error;
         }
         const Symbol *ctor_name = ctor_name_form->as.sym;
 
-        /* CONV-S0: detect record-style variant `(Ctor [a : T b : U ...])`. */
-        bool is_record = ctor_form_is_record(ctor_form);
+        /* The optional `: (Name ...)` result annotation ends the payload. */
+        uint32_t payload_end;
+        Form *result_form;
+        if (!adt_ctor_split_result(e, kw, ctor_form, ctor_name,
+                                   &payload_end, &result_form))
+            goto data_ctor_parse_error;
+        if (!result_form && spelled_defgadt) {
+            diag_emit(DIAG_ERROR, ctor_form->span,
+                      "defgadt: constructor '%s' requires an explicit return-type annotation\n"
+                      "  hint: add ': (return-type)' after the constructor name",
+                      ctor_name->name);
+            goto data_ctor_parse_error;
+        }
+        if (result_form && !spelled_defgadt) {
+            diag_emit(DIAG_ERROR, result_form->span,
+                      "defdata: constructor '%s' cannot declare a return type; "
+                      "use defgadt for constructors with their own result types",
+                      ctor_name->name);
+            goto data_ctor_parse_error;
+        }
+        if (result_form &&
+            !adt_check_result_form(e, kw, name, type_params, n_type_params,
+                                   ctor_name, result_form))
+            goto data_ctor_parse_error;
+
+        /* CONV-S0: detect record-style variant `(Ctor [a : T b : U ...])` --
+         * the sole payload item is a vector. */
+        bool is_record = payload_end == 2 &&
+                         ctor_form->as.list.items[1]->tag == F_VEC;
         Form *rec_vec = is_record ? ctor_form->as.list.items[1] : NULL;
+        if (is_record && spelled_defgadt) {
+            /* A field vector used to be accepted here as ONE int field,
+             * after which `(Rect 3 4)` was "not callable" and `(Rect w h)`
+             * in a match "expects 1 fields, got 2". */
+            diag_emit(DIAG_ERROR, rec_vec->span,
+                      "defgadt: constructor '%s' takes positional field types; "
+                      "a record field vector is not supported",
+                      ctor_name->name);
+            goto data_ctor_parse_error;
+        }
 
         CtorDef *ctor = (CtorDef *)arena_alloc(e->arena, sizeof(CtorDef));
         ctor->name = ctor_name->name;
         ctor->adt = def;
         ctor->tag = ci;
-        ctor->result_type_form = NULL; /* Phase G1: NULL for defdata */
+        ctor->result_type_form = result_form;
         ctor->is_record = is_record;
 
         uint32_t n_fields;
@@ -1875,8 +2144,8 @@ Expr *elab_defdata(Elab *e, const Form *call) {
             uint32_t n_items = rec_vec->as.list.len;
             if (n_items == 0) {
                 diag_emit(DIAG_ERROR, rec_vec->span,
-                          "defdata: record-style variant '%s' field list cannot be empty",
-                          ctor_name->name);
+                          "%s: record-style variant '%s' field list cannot be empty",
+                          kw, ctor_name->name);
                 goto data_ctor_parse_error;
             }
             /* Walk name/type pairs with a cursor rather than fixed `fi*2`
@@ -1893,22 +2162,22 @@ Expr *elab_defdata(Elab *e, const Form *call) {
                                   n_items * sizeof(Form *));
             field_effect_forms = (Form **)arena_alloc(e->arena,
                                   n_items * sizeof(Form *));
-            uint32_t nf = 0, ci = 0;
-            while (ci < n_items) {
-                Form *name_f = rec_vec->as.list.items[ci++];
+            uint32_t nf = 0, ri = 0;
+            while (ri < n_items) {
+                Form *name_f = rec_vec->as.list.items[ri++];
                 if (name_f->tag != F_SYM) {
                     diag_emit(DIAG_ERROR, name_f->span,
-                              "defdata: record-style variant '%s' expected a field "
-                              "name symbol", ctor_name->name);
+                              "%s: record-style variant '%s' expected a field "
+                              "name symbol", kw, ctor_name->name);
                     goto data_ctor_parse_error;
                 }
-                if (ci >= n_items) {
+                if (ri >= n_items) {
                     diag_emit(DIAG_ERROR, rec_vec->span,
-                              "defdata: record-style variant '%s' field list must be "
-                              "[name : type ...] pairs", ctor_name->name);
+                              "%s: record-style variant '%s' field list must be "
+                              "[name : type ...] pairs", kw, ctor_name->name);
                     goto data_ctor_parse_error;
                 }
-                Form *type_f = rec_vec->as.list.items[ci++];
+                Form *type_f = rec_vec->as.list.items[ri++];
                 /* Unwrap `: T` (F_TYPE_ANN) to the bare type form. */
                 if (type_f->tag == F_TYPE_ANN)
                     type_f = type_f->as.list.items[0];
@@ -1918,8 +2187,8 @@ Expr *elab_defdata(Elab *e, const Form *call) {
                 for (uint32_t pf = 0; pf < nf; pf++) {
                     if (rec_field_names[pf] == name_f->as.sym) {
                         diag_emit(DIAG_ERROR, name_f->span,
-                                  "defdata: record-style variant '%s' declares "
-                                  "field '%s' twice", ctor_name->name,
+                                  "%s: record-style variant '%s' declares "
+                                  "field '%s' twice", kw, ctor_name->name,
                                   name_f->as.sym->name);
                         goto data_ctor_parse_error;
                     }
@@ -1938,15 +2207,15 @@ Expr *elab_defdata(Elab *e, const Form *call) {
                      type_f->as.list.items[0]->tag == F_SYM &&
                      (type_f->as.list.items[0]->as.sym == e->sym_fn ||
                       type_f->as.list.items[0]->as.sym == e->sym_c_fn));
-                if (type_is_fn && ci < n_items &&
-                    rec_vec->as.list.items[ci]->tag == F_MAP) {
-                    field_effect_forms[nf] = rec_vec->as.list.items[ci++];
+                if (type_is_fn && ri < n_items &&
+                    rec_vec->as.list.items[ri]->tag == F_MAP) {
+                    field_effect_forms[nf] = rec_vec->as.list.items[ri++];
                 }
                 nf++;
             }
             n_fields = nf;
         } else {
-            n_fields = ctor_form->as.list.len - 1;
+            n_fields = payload_end - 1;
             if (n_fields > 0) {
                 field_type_forms = (Form **)arena_alloc(e->arena,
                                        n_fields * sizeof(Form *));
@@ -1980,6 +2249,11 @@ Expr *elab_defdata(Elab *e, const Form *call) {
                 goto data_ctor_parse_error;
             }
             ctor->fields[fi].name = rec_field_names ? rec_field_names[fi]->name : NULL;
+            /* Phase G2: an annotated constructor's arms resolve every field
+             * through the skolem env from the form as written, including the
+             * bare type-variable fields resolve_ctor_field leaves form-less. */
+            if (result_form && ctor->field_forms)
+                ctor->field_forms[fi] = field_type_forms[fi];
 
             /* structdef-retirement slice 5 A1: parse the optional `#fx{...}`
              * effect-row annotation collected for a `fn`-typed field, mirroring
@@ -2017,14 +2291,14 @@ Expr *elab_defdata(Elab *e, const Form *call) {
                 const char *fdesc = ctor->fields[fi].name;
                 if (fdesc) {
                     diag_emit(DIAG_ERROR, field_type_forms[fi]->span,
-                              "defdata: :copy type '%s' cannot contain non-copy "
+                              "%s: :copy type '%s' cannot contain non-copy "
                               "field '%s' of variant '%s'",
-                              def->name, fdesc, ctor->name);
+                              kw, def->name, fdesc, ctor->name);
                 } else {
                     diag_emit(DIAG_ERROR, field_type_forms[fi]->span,
-                              "defdata: :copy type '%s' cannot contain non-copy "
+                              "%s: :copy type '%s' cannot contain non-copy "
                               "field %u of variant '%s'",
-                              def->name, fi, ctor->name);
+                              kw, def->name, fi, ctor->name);
                 }
                 goto data_ctor_parse_error;
             }
@@ -2073,6 +2347,24 @@ Expr *elab_defdata(Elab *e, const Form *call) {
         }
     }
 
+    /* An unannotated constructor of a type that has annotated ones returns
+     * the generic instantiation; spell it out, so the GADT machinery sees one
+     * shape for every constructor of the type. */
+    if (def->has_result_types) {
+        for (uint32_t i = 0; i < def->n_ctors; i++) {
+            CtorDef *c = def->ctors[i];
+            if (!c || c->result_type_form) continue;
+            Form **items = (Form **)arena_alloc(e->arena,
+                               ((uint32_t)n_type_params + 1u) * sizeof(Form *));
+            items[0] = form_sym(e->arena, name_form->span, name);
+            for (uint8_t pi = 0; pi < n_type_params; pi++)
+                items[1 + pi] = form_sym(e->arena, name_form->span, tp_syms[pi]);
+            c->result_type_form = form_list(e->arena, name_form->span, items,
+                                            (uint32_t)n_type_params + 1u);
+        }
+    }
+    def->is_refined = def->has_result_types && adt_compute_is_refined(e, def);
+
     /* Register ADT in elab registry (skip if it was a forward stub -- already registered) */
     if (!is_forward_stub_adt) {
         elab_register_adt_def(e, def);
@@ -2096,9 +2388,28 @@ data_ctor_parse_error:
      * n_ctors` advertises the full declared count.  Later field-access /
      * match elaboration in the same (already failing) compile would then
      * dereference the junk (the ecs sized-* suite crash).  Truncate to the
-     * slots actually filled, mirroring defgadt's ctor_parse_error. */
+     * slots actually filled. */
     def->n_ctors = ci;
     return NULL;
+}
+
+Expr *elab_defdata(Elab *e, const Form *call) {
+    return elab_adt_def(e, call, false);
+}
+
+/* Phase G1: defgadt -- a defdata whose every constructor carries its result
+ * type.  Syntax: (defgadt Name [type-params...]
+ *                  (Ctor1 : return-type)
+ *                  (Ctor2 FieldType1 FieldType2 : return-type)
+ *                  ...)
+ * adt-gadt-unification: one elaborator (elab_adt_def) for both spellings;
+ * this entry only makes an unannotated constructor an error.  Whether the
+ * type is refined -- and so whether it needs the uniform carrier -- is decided
+ * by what the annotations say, not by this keyword (AdtDef.is_refined). */
+Expr *elab_defgadt(Elab *e, const Form *call) {
+    /* range-gadt-typeclass-migration-plan A1: GADTs are enabled by default,
+     * so the former -Xgadt gate is gone. */
+    return elab_adt_def(e, call, true);
 }
 
 /* Phase G2: Look up a type parameter name in the current skolem environment.
@@ -2337,7 +2648,7 @@ static bool gadt_index_form_may_match(Elab *e, const AdtDef *def,
  * instantiation, so every constructor stays reachable (today's behaviour). */
 static bool gadt_ctor_reachable_from_scrutinee(Elab *e, const AdtDef *adt,
                                                const CtorDef *c, const Type *scrut) {
-    if (!adt->is_gadt || adt->n_type_params == 0 || !c || !c->result_type_form)
+    if (adt->n_type_params == 0 || !c || !c->result_type_form)
         return true;
     if (!scrut || scrut->kind != TY_APP) return true;
     const Form *rt = c->result_type_form;
@@ -2448,35 +2759,6 @@ static void gadt_build_skolem_env(Elab *e, SkolemEnv *out, const AdtDef *def,
     }
 }
 
-/* Phase G1: Map a simple type form to a TypeKind for codegen.
- * Handles primitive names (int, bool, cstr, etc.) and falls back to
- * TY_INT (opaque int64_t) for ADT references and type variables. */
-static TypeKind gadt_field_typekind_from_form(const Form *f) {
-    if (!f) return TY_INT;
-    if (f->tag == F_SYM) {
-        const char *n = f->as.sym->name;
-        if (strcmp(n, "int")   == 0) return TY_INT;
-        if (strcmp(n, "bool")  == 0) return TY_BOOL;
-        if (strcmp(n, "float") == 0) return TY_FLOAT;
-        if (strcmp(n, "cstr")  == 0) return TY_CSTR;
-        if (strcmp(n, "ptr")   == 0) return TY_PTR_VOID;
-        if (strcmp(n, "int8")  == 0) return TY_INT8;
-        if (strcmp(n, "int16") == 0) return TY_INT16;
-        if (strcmp(n, "int32") == 0) return TY_INT32;
-        if (strcmp(n, "int64") == 0) return TY_INT64;
-        if (strcmp(n, "uint8") == 0) return TY_UINT8;
-        if (strcmp(n, "uint16")== 0) return TY_UINT16;
-        if (strcmp(n, "uint32")== 0) return TY_UINT32;
-        if (strcmp(n, "uint64")== 0) return TY_UINT64;
-        if (strcmp(n, "float32")== 0) return TY_FLOAT32;
-        if (strcmp(n, "float64")== 0) return TY_FLOAT64;
-        /* Type variable or unknown type — opaque int64_t */
-        return TY_INT;
-    }
-    /* List form like (Expr int) — ADT reference, opaque int64_t */
-    return TY_INT;
-}
-
 /* TP1/TP2: If ft_form is a bare symbol matching a declared type parameter,
  * return an arena-allocated TY_TYVAR Type* carrying the parameter name.
  * Returns NULL if the form is not a type-param reference (caller falls back
@@ -2494,494 +2776,6 @@ static Type *adt_field_type_from_form(Arena *arena, const Form *ft_form,
             return tv;
         }
     }
-    return NULL;
-}
-
-/* Phase G1: defgadt — define a GADT (Generalized Algebraic Data Type).
- * Syntax: (defgadt Name [type-params...]
- *           (Ctor1 : return-type)
- *           (Ctor2 FieldType1 FieldType2 : return-type)
- *           ...)
- *
- * The ':' separator is a bare F_SYM(":") token.
- * Field types are forms appearing between the constructor name and ':'.
- * The return-type annotation is stored on the CtorDef for future G2 use.
- * Codegen is identical to defdata (tagged union).
- */
-Expr *elab_defgadt(Elab *e, const Form *call) {
-    /* range-gadt-typeclass-migration-plan A1: GADTs are enabled by default,
-     * so the former -Xgadt gate is gone. */
-    if (call->as.list.len < 3) {
-        diag_emit(DIAG_ERROR, call->span,
-                  "defgadt requires a name, type-params, and constructors: "
-                  "(defgadt Name [params] (Ctor : return-type) ...)");
-        return NULL;
-    }
-
-    /* Parse name */
-    Form *name_form = call->as.list.items[1];
-    if (name_form->tag != F_SYM) {
-        diag_emit(DIAG_ERROR, name_form->span, "defgadt name must be a symbol");
-        return NULL;
-    }
-    const Symbol *name = name_form->as.sym;
-
-    /* Parse type parameters — must be a vector [a b c] */
-    uint32_t ctors_start_idx = 2;
-    uint8_t n_type_params = 0;
-    const char **type_params = NULL;
-    /* L6 follow-up C: parallel kind array, so a `^&name` row-kinded parameter
-     * carries KIND_TYPEROW through to def->type_param_kinds. Without it, the
-     * caller-side kind check at (MyGADT #row{...}) sees KIND_STAR and rejects
-     * the row as a non-row argument. */
-    Kind *parsed_type_param_kinds = NULL;
-    if (call->as.list.len >= 3 && call->as.list.items[2]->tag == F_VEC) {
-        Form *params_form = call->as.list.items[2];
-        n_type_params = (uint8_t)params_form->as.list.len;
-        if (n_type_params > 0) {
-            type_params = (const char **)arena_alloc(e->arena,
-                                                      n_type_params * sizeof(const char *));
-            parsed_type_param_kinds = (Kind *)arena_alloc(e->arena,
-                                                      n_type_params * sizeof(Kind));
-            for (uint8_t i = 0; i < n_type_params; i++) {
-                Form *pf = params_form->as.list.items[i];
-                if (pf->tag != F_SYM) {
-                    diag_emit(DIAG_ERROR, pf->span,
-                              "defgadt: type parameter must be a symbol");
-                    return NULL;
-                }
-                const Symbol *psym = pf->as.sym;
-                /* L6 follow-up C: '^&name' marks a row-kinded ([*]) parameter.
-                 * Strip the `^&` so body and call-site usages reference the
-                 * bare name; stash the row kind in parsed_type_param_kinds. */
-                if (psym->len > 2 && psym->name[0] == '^' && psym->name[1] == '&') {
-                    const Symbol *bare = symtab_intern(e->st,
-                        strslice(psym->name + 2, psym->len - 2));
-                    type_params[i] = bare->name;
-                    parsed_type_param_kinds[i] = KIND_TYPEROW;
-                } else {
-                    type_params[i] = psym->name;
-                    parsed_type_param_kinds[i] = KIND_STAR;
-                }
-            }
-        }
-        ctors_start_idx = 3;
-    }
-
-    /* Check for optional :copy / :move annotation after the type-param vector.
-     * Mirrors defdata: a GADT marked :copy opts out of affine move tracking so
-     * its values can be read repeatedly (e.g. shared range bounds). */
-    bool is_copy = false;
-    if (ctors_start_idx < call->as.list.len) {
-        Form *kw_form = call->as.list.items[ctors_start_idx];
-        if (kw_form->tag == F_KEYWORD && kw_form->as.sym == e->kw_copy) {
-            is_copy = true;
-            ctors_start_idx++;
-        } else if (kw_form->tag == F_KEYWORD && kw_form->as.sym == e->kw_move) {
-            is_copy = false;
-            ctors_start_idx++;
-        }
-    }
-
-    if (call->as.list.len <= ctors_start_idx) {
-        diag_emit(DIAG_ERROR, call->span,
-                  "defgadt: '%s' must have at least one constructor", name->name);
-        return NULL;
-    }
-
-    /* Phase RF0: allow re-elaboration of forward-declared stub types.
-     * MF4: only reuse the existing binding as a stub when its kind matches
-     * the kind we're elaborating (TY_ADT here).  A same-name struct
-     * binding (TY_STRUCT) does not block the GADT -- per the MF4 design,
-     * GADTs and structs occupy separate namespaces and type-annotation
-     * lookups prefer the GADT.  Emit a one-shot warning at the defgadt
-     * span so the shadowing is visible. */
-    bool is_forward_stub_gadt = false;
-    Binding *existing_gadt_b = scope_lookup(e->scope, name);
-    if (existing_gadt_b) {
-        bool same_kind_forward =
-            (existing_gadt_b->type.kind == TY_ADT) && elab_is_forward_type(e, name);
-        /* The value-preferring scope_lookup above returns the lowered struct's
-         * auto-bound CONSTRUCTOR (TY_FN), which shadows the struct-origin record
-         * ADT type binding; consult the type namespace to recognise it. */
-        Binding *existing_type_b = scope_lookup_type_def(e->scope, name);
-        AdtDef *lowered_struct_def = NULL;
-        if (existing_gadt_b->type.kind == TY_ADT &&
-            existing_gadt_b->type.as.adt_.def &&
-            existing_gadt_b->type.as.adt_.def->from_struct_lowering)
-            lowered_struct_def = existing_gadt_b->type.as.adt_.def;
-        else if (existing_type_b && existing_type_b->type.kind == TY_ADT &&
-                 existing_type_b->type.as.adt_.def &&
-                 existing_type_b->type.as.adt_.def->from_struct_lowering)
-            lowered_struct_def = existing_type_b->type.as.adt_.def;
-        if (same_kind_forward) {
-            is_forward_stub_gadt = true;
-        } else if (existing_gadt_b->type.kind == TY_STRUCT) {
-            /* MF4: GADT shadows an existing struct of the same name.
-             * Allow coexistence; warn so the shadowing is visible. */
-            diag_emit(DIAG_WARNING, name_form->span,
-                      "GADT '%s' shadows existing struct '%s'; uses of "
-                      "':%s' in type annotations resolve to the GADT",
-                      name->name, name->name, name->name);
-            /* fall through: is_forward_stub_gadt stays false, the else
-             * branch below registers a fresh GADT binding and AdtDef. */
-        } else if (lowered_struct_def) {
-            /* CONV-S1 (defstruct-as-defadt): under lowering the struct IS an
-             * ADT, so structs and ADTs share one namespace -- the GADT wins and
-             * SUPERSEDES the struct-origin ADT.  Mark the loser superseded so it
-             * is skipped at C emission (no `tur_adt_<Name>` collision), then fall
-             * through to register the GADT's own binding/AdtDef.  `:Name`
-             * annotations resolve to the GADT via elab_lookup_type_by_name's
-             * prefer-non-struct-origin rule. */
-            lowered_struct_def->superseded = true;
-            diag_emit(DIAG_WARNING, name_form->span,
-                      "GADT '%s' supersedes the same-named struct '%s'; uses of "
-                      "':%s' resolve to the GADT",
-                      name->name, name->name, name->name);
-            /* fall through: register a fresh GADT binding/AdtDef. */
-        } else {
-            diag_emit(DIAG_ERROR, name_form->span,
-                      "defgadt: '%s' is already defined", name->name);
-            return NULL;
-        }
-    }
-
-    uint32_t n_ctors = call->as.list.len - ctors_start_idx;
-
-    /* Phase RF0: Allocate (or reuse forward stub) AdtDef and register BEFORE
-     * parsing constructors so that self-referential and mutually-recursive
-     * constructor field types resolve correctly. */
-    AdtDef *def;
-    Binding *adt_binding;
-    Type adt_type;
-    if (is_forward_stub_gadt) {
-        /* Reuse the pre-registered stub and fill it in */
-        adt_binding = existing_gadt_b;
-        def = adt_binding->type.as.adt_.def;
-        def->n_ctors = n_ctors;
-        def->ctors = (CtorDef **)arena_alloc(e->arena, n_ctors * sizeof(CtorDef *));
-        /* Zero the array: predicates reached MID-DEFINITION (a recursive field
-         * probing adt_is_byvalue_product while this def's ctors are still being
-         * filled) guard on `ctors[ci] == NULL`, and arena memory is not zeroed
-         * -- the guard only ever worked on lucky fresh pages.  turi's
-         * longer-lived arena handed back dirty memory and the guard read a
-         * garbage CtorDef (SEGV in adt_sr1_sum_candidate). */
-        memset(def->ctors, 0, n_ctors * sizeof(CtorDef *));
-        def->is_copy = is_copy;
-        def->needs_drop_glue = false;
-        def->is_gadt = true;
-        def->type_params = type_params;
-        def->n_type_params = n_type_params;
-        /* TP2: allocate Kind array initialised to KIND_STAR (TP4 refines).
-         * L6 follow-up C: seed from parsed_type_param_kinds so a `^&name`
-         * row-kinded parameter is preserved as KIND_TYPEROW. */
-        if (n_type_params > 0) {
-            Kind *tpk = (Kind *)arena_alloc(e->arena, n_type_params * sizeof(Kind));
-            for (uint8_t pi = 0; pi < n_type_params; pi++) {
-                tpk[pi] = parsed_type_param_kinds ? parsed_type_param_kinds[pi]
-                                                  : KIND_STAR;
-            }
-            def->type_param_kinds = tpk;
-        } else {
-            def->type_param_kinds = NULL;
-        }
-        adt_type = type_adt(def);
-        /* Phase G1/HKT: Apply the same KIND_ARROW fix as the non-stub branch so
-         * that kind checks see the correct kind for parameterized GADTs. */
-        adt_type.hkt_kind = kind_for_arity(n_type_params);
-        adt_binding->type = adt_type;
-        /* Already in global scope and elab registry from the pre-pass */
-    } else {
-        def = (AdtDef *)arena_alloc(e->arena, sizeof(AdtDef));
-        memset(def, 0, sizeof(*def));  /* DS5: zero all bool / scalar fields by default */
-        def->name = name->name;
-        def->n_ctors = n_ctors;
-        def->ctors = (CtorDef **)arena_alloc(e->arena, n_ctors * sizeof(CtorDef *));
-        /* Zero the array: predicates reached MID-DEFINITION (a recursive field
-         * probing adt_is_byvalue_product while this def's ctors are still being
-         * filled) guard on `ctors[ci] == NULL`, and arena memory is not zeroed
-         * -- the guard only ever worked on lucky fresh pages.  turi's
-         * longer-lived arena handed back dirty memory and the guard read a
-         * garbage CtorDef (SEGV in adt_sr1_sum_candidate). */
-        memset(def->ctors, 0, n_ctors * sizeof(CtorDef *));
-        def->is_copy = is_copy;
-        def->is_gadt = true;
-        def->type_params = type_params;
-        def->n_type_params = n_type_params;
-        /* TP2: allocate Kind array initialised to KIND_STAR (TP4 refines).
-         * L6 follow-up C: seed from parsed_type_param_kinds so a `^&name`
-         * row-kinded parameter is preserved as KIND_TYPEROW. */
-        if (n_type_params > 0) {
-            Kind *tpk = (Kind *)arena_alloc(e->arena, n_type_params * sizeof(Kind));
-            for (uint8_t pi = 0; pi < n_type_params; pi++) {
-                tpk[pi] = parsed_type_param_kinds ? parsed_type_param_kinds[pi]
-                                                  : KIND_STAR;
-            }
-            def->type_param_kinds = tpk;
-        } else {
-            def->type_param_kinds = NULL;
-        }
-
-        /* Pre-register ADT type so constructors can reference it.
-         * Phase G1/HKT: Set hkt_kind based on type-parameter count so that
-         * the belt-and-suspenders kind check can detect when a parameterized
-         * GADT is used in a kind-* argument slot of another GADT. */
-        adt_type = type_adt(def);
-        adt_type.hkt_kind = kind_for_arity(n_type_params);
-        adt_binding = binding_new(e, name, adt_type, false, true, name_form->span);
-        scope_add(&e->global, adt_binding);
-    }
-
-    /* Record the owning compilation unit for the orphan-instance check
-     * (mirrors StructDef.origin_file_id). */
-    def->origin_file_id = name_form->span.file_id;
-
-    /* Parse each constructor.
-     * `ci` is declared outside the loop so the `ctor_parse_error` bail-out
-     * path below can truncate `def->n_ctors` to the number of slots we
-     * actually filled (every error path bails before `def->ctors[ci]` is
-     * assigned, so `ci` is exactly the populated-slot count). */
-    uint32_t ci = 0;
-    for (; ci < n_ctors; ci++) {
-        Form *ctor_form = call->as.list.items[ctors_start_idx + ci];
-        if (ctor_form->tag != F_LIST || ctor_form->as.list.len < 1) {
-            diag_emit(DIAG_ERROR, ctor_form->span,
-                      "defgadt: constructor must be a list form");
-            goto ctor_parse_error;
-        }
-        Form *ctor_name_form = ctor_form->as.list.items[0];
-        if (ctor_name_form->tag != F_SYM) {
-            diag_emit(DIAG_ERROR, ctor_name_form->span,
-                      "defgadt: constructor name must be a symbol");
-            goto ctor_parse_error;
-        }
-        const Symbol *ctor_name = ctor_name_form->as.sym;
-
-        /* Find the ':' separator in the constructor form.
-         * Format: (CtorName FieldType1 ... FieldTypeN : return-type-form)
-         * The ':' may be a bare F_SYM(":") token (legacy) or an F_TYPE_ANN node
-         * produced by the new `: type-expr` reader (Phase G3 compat). */
-        int colon_idx = -1;
-        bool type_ann_colon = false; /* true when the ':' was absorbed into F_TYPE_ANN */
-        for (uint32_t fi = 1; fi < ctor_form->as.list.len; fi++) {
-            Form *item = ctor_form->as.list.items[fi];
-            if (item->tag == F_SYM && item->as.sym == e->sym_colon) {
-                colon_idx = (int)fi;
-                break;
-            }
-            if (item->tag == F_TYPE_ANN) {
-                /* `: return-type` was folded into a single F_TYPE_ANN node.
-                 * Treat this index as the separator; the return type is inside. */
-                colon_idx = (int)fi;
-                type_ann_colon = true;
-                break;
-            }
-        }
-        if (colon_idx < 0) {
-            diag_emit(DIAG_ERROR, ctor_form->span,
-                      "defgadt: constructor '%s' requires an explicit return-type annotation\n"
-                      "  hint: add ': (return-type)' after the constructor name",
-                      ctor_name->name);
-            goto ctor_parse_error;
-        }
-        /* For the F_TYPE_ANN case the return-type form is the inner form;
-         * for the bare-':' case it is the item immediately after. */
-        Form *return_type_form;
-        if (type_ann_colon) {
-            Form *ann = ctor_form->as.list.items[colon_idx];
-            if (ann->as.list.len < 1) {
-                diag_emit(DIAG_ERROR, ann->span,
-                          "defgadt: constructor '%s': missing return type after ':'",
-                          ctor_name->name);
-                goto ctor_parse_error;
-            }
-            return_type_form = ann->as.list.items[0];
-        } else {
-            if ((uint32_t)colon_idx + 1 >= ctor_form->as.list.len) {
-                diag_emit(DIAG_ERROR, ctor_form->span,
-                          "defgadt: constructor '%s': missing return type after ':'",
-                          ctor_name->name);
-                goto ctor_parse_error;
-            }
-            return_type_form = ctor_form->as.list.items[colon_idx + 1];
-        }
-        /* Validate: return type must mention the GADT name */
-        bool mentions_gadt = false;
-        if (return_type_form->tag == F_LIST && return_type_form->as.list.len >= 1) {
-            Form *head = return_type_form->as.list.items[0];
-            if (head->tag == F_SYM && strcmp(head->as.sym->name, name->name) == 0) {
-                mentions_gadt = true;
-            }
-        } else if (return_type_form->tag == F_SYM &&
-                   strcmp(return_type_form->as.sym->name, name->name) == 0) {
-            mentions_gadt = true;
-        }
-        if (!mentions_gadt) {
-            diag_emit(DIAG_ERROR, return_type_form->span,
-                      "defgadt: constructor '%s' return type must be an application of '%s'",
-                      ctor_name->name, name->name);
-            goto ctor_parse_error;
-        }
-
-        /* Change 3: Validate that the number of type args in the return type
-         * matches the GADT's declared type-parameter count. */
-        if (return_type_form->tag == F_LIST) {
-            uint32_t n_rt_args = return_type_form->as.list.len - 1; /* subtract head */
-            if (n_type_params > 0 && n_rt_args != n_type_params) {
-                diag_emit(DIAG_ERROR, return_type_form->span,
-                          "defgadt: constructor '%s' return type has %u type argument(s) "
-                          "but '%s' has %u type parameter(s)",
-                          ctor_name->name, n_rt_args, name->name, n_type_params);
-                goto ctor_parse_error;
-            }
-        }
-
-        /* Change 4: Validate each type arg in the return type is a known type. */
-        if (return_type_form->tag == F_LIST) {
-            for (uint32_t ai = 1; ai < return_type_form->as.list.len; ai++) {
-                Form *arg = return_type_form->as.list.items[ai];
-                if (arg->tag == F_LIST) continue; /* type application -- ok */
-                if (arg->tag != F_SYM) continue;  /* other forms -- ok */
-                const char *an = arg->as.sym->name;
-                /* Check if it's a bound type param */
-                bool is_param = false;
-                for (uint8_t pi = 0; pi < n_type_params; pi++) {
-                    if (strcmp(type_params[pi], an) == 0) { is_param = true; break; }
-                }
-                if (is_param) continue;
-                /* Check if it's a concrete primitive */
-                static const char *primitives[] = {
-                    "int", "bool", "float", "cstr", "nil", "void", "ptr",
-                    "int8", "int16", "int32", "int64",
-                    "uint8", "uint16", "uint32", "uint64",
-                    "float32", "float64", NULL
-                };
-                bool is_prim = false;
-                for (int pi = 0; primitives[pi]; pi++) {
-                    if (strcmp(primitives[pi], an) == 0) { is_prim = true; break; }
-                }
-                if (is_prim) continue;
-                /* Check if it's a known type in scope */
-                const Symbol *type_sym = symtab_intern(e->st,
-                    strslice(an, (uint32_t)strlen(an)));
-                Binding *tb = scope_lookup_type_def(e->scope, type_sym);
-                if (tb && (tb->type.kind == TY_STRUCT || tb->type.kind == TY_ADT)) {
-                    /* Phase G1/HKT: Belt-and-suspenders kind check.
-                     * All GADT type parameters have kind * in Phase G1.  A
-                     * type constructor of kind * -> * (hkt_kind == KIND_ARROW)
-                     * in a plain type-argument slot is a kind mismatch. */
-                    if (tb->type.hkt_kind == KIND_ARROW ||
-                            tb->type.hkt_kind == KIND_ARROW2) {
-                        diag_emit_with_code(DIAG_ERROR, arg->span,
-                            TUR_E0012_KIND_MISMATCH,
-                            "kind mismatch (TUR-E0012): type argument '%s' in constructor "
-                            "'%s' return type has kind '* -> *' but kind '*' is expected",
-                            an, ctor_name->name);
-                        goto ctor_parse_error;
-                    }
-                    continue;
-                }
-                /* Unknown -- error */
-                diag_emit(DIAG_ERROR, arg->span,
-                          "defgadt: unknown type argument '%s' in return type of constructor '%s' "
-                          "(must be a type parameter, primitive type, or defined type)",
-                          an, ctor_name->name);
-                goto ctor_parse_error;
-            }
-        }
-
-        /* Field types: items[1 .. colon_idx-1] */
-        uint32_t n_fields = (uint32_t)(colon_idx - 1);
-        CtorDef *ctor = (CtorDef *)arena_alloc(e->arena, sizeof(CtorDef));
-        ctor->name = ctor_name->name;
-        ctor->n_fields = n_fields;
-        ctor->fields = n_fields > 0
-            ? (CtorField *)arena_alloc(e->arena, n_fields * sizeof(CtorField))
-            : NULL;
-        /* arena_alloc does not zero, and resolve_ctor_field writes
-         * `drop_inner_def` only on the nested-owning-aggregate branch -- so
-         * every other field kept the arena's 0xbe poison and the drop/walk glue
-         * emitter dereferenced it.  Latent for as long as the emitter only
-         * walked ctor 0; it surfaced when the sum-type glue fix widened that
-         * walk to every ctor.  Zero the whole array once rather than chase
-         * per-field defaults. */
-        if (ctor->fields) memset(ctor->fields, 0, n_fields * sizeof(CtorField));
-        ctor->adt = def;
-        ctor->tag = ci;
-        ctor->result_type_form = return_type_form;
-        ctor->is_record = false; /* CONV-S0: GADT variants are positional-only */
-        /* Phase G2: store raw field-type annotation forms for per-arm resolution */
-        ctor->field_forms = n_fields > 0
-            ? (const struct Form **)arena_alloc(e->arena, n_fields * sizeof(const Form *))
-            : NULL;
-
-        for (uint32_t fi = 0; fi < n_fields; fi++) {
-            Form *ft_form = ctor_form->as.list.items[1 + fi];
-            TypeKind fkind = gadt_field_typekind_from_form(ft_form);
-            ctor->fields[fi].kind = fkind;
-            ctor->fields[fi].inner_kind = TY_UNKNOWN;
-            ctor->fields[fi].name = NULL; /* CONV-S0: positional */
-            /* A positional/GADT ctor field carries no `#fx{...}` capability row;
-             * initialize the pointer explicitly (arena_alloc does not zero) so
-             * readers -- effect_check's CtorField-row resolve, cps_ir's
-             * expr_fn_effect_row -- never dereference uninitialized garbage. */
-            ctor->fields[fi].effect_row = NULL;
-            /* TP2: populate full_type when the field references a declared type
-             * parameter (e.g. `a` in `(MkBox a : (Box a))`).  The C-level kind
-             * stays TY_INT; full_type is elaboration-only. */
-            ctor->fields[fi].full_type =
-                adt_field_type_from_form(e->arena, ft_form,
-                                         def->type_params, def->n_type_params);
-            if (fkind == TY_RC || fkind == TY_REF || fkind == TY_WEAK) {
-                def->needs_drop_glue = true;
-            }
-            /* Phase G2: also stash the raw form for per-arm type resolution */
-            if (ctor->field_forms) ctor->field_forms[fi] = ft_form;
-        }
-        def->ctors[ci] = ctor;
-
-        /* Register constructor binding */
-        if (n_fields == 0) {
-            Binding *cb = binding_new(e, ctor_name, adt_type, false, true,
-                                      ctor_name_form->span);
-            scope_add(&e->global, cb);
-        } else {
-            TypeKind arg_kinds[MAX_FN_ARITY];
-            uint8_t arity = (uint8_t)(n_fields > MAX_FN_ARITY ? MAX_FN_ARITY : n_fields);
-            for (uint8_t fi = 0; fi < arity; fi++) {
-                arg_kinds[fi] = ctor->fields[fi].kind;
-            }
-            Type fn_type = type_fn(arg_kinds, arity, TY_ADT);
-            Binding *cb = binding_new(e, ctor_name, fn_type, false, true,
-                                      ctor_name_form->span);
-            scope_add(&e->global, cb);
-        }
-    }
-
-    /* Register ADT in elab registry (skip if it was a forward stub -- already registered) */
-    if (!is_forward_stub_gadt) {
-        elab_register_adt_def(e, def);
-    }
-
-    /* TP4: refine type_param_kinds based on CtorField.full_type usage */
-    infer_type_param_kinds(def);
-
-    Expr *out = expr_new(e->arena, EX_DEFGADT, TYPE_NIL, call->span);
-    out->as.defgadt_.def = def;
-    out->as.defgadt_.binding = adt_binding;
-    def->from_stdlib = e->in_stdlib_load;   /* r7rs-programs-compile-slowly */
-    def->from_implib = !e->in_stdlib_load && e->ids_implib;
-    return out;
-
-ctor_parse_error:
-    /* A constructor failed to parse after the AdtDef was pre-registered in
-     * scope. The slots `[ci, n_ctors)` are still NULL, but `def->n_ctors`
-     * advertises the full declared count, so a later `(match ...)` on this
-     * type would dereference a NULL CtorDef and crash (see
-     * docs/archive/history/defgadt-malformed-pattern-segfault.md). Truncate the
-     * count to the slots we actually filled. Compilation has already failed
-     * (a diagnostic was emitted), so this only prevents the crash. */
-    def->n_ctors = ci;
     return NULL;
 }
 
@@ -3153,7 +2947,7 @@ bool elab_retype_nullary_ctor_arm(Expr *arm, Type joined) {
         arm->as.call_.n_args != 0)
         return false;
     const CtorDef *ctor = arm->as.call_.ctor;
-    if (!ctor->adt || ctor->adt->is_gadt || ctor->adt->n_type_params == 0)
+    if (!ctor->adt || ctor_is_refining(ctor->adt, ctor) || ctor->adt->n_type_params == 0)
         return false;
     if (arm->type.kind != TY_ADT || arm->type.as.adt_.def != ctor->adt)
         return false;
@@ -3955,7 +3749,7 @@ Expr *elab_match(Elab *e, const Form *call) {
                     if (!is_own_param) { gadt_indexed = true; break; }
                 }
             }
-            if (only->is_gadt && only->n_type_params > 0) {
+            if (only->has_result_types && only->n_type_params > 0) {
                 /* Every parametric GADT declines the narrow, which is what it
                  * did before this change -- an UNINDEXED one
                  * (`errors/saffron-gadt-skolem-escape`) must keep reaching the
@@ -4774,12 +4568,12 @@ Expr *elab_match(Elab *e, const Form *call) {
              * type-variable field types to concrete kinds. */
             SkolemEnv arm_senv;
             arm_senv.n = 0;
-            if (adt->is_gadt && ctor->result_type_form) {
+            if (ctor->result_type_form) {
                 gadt_build_skolem_env(e, &arm_senv, adt, ctor);
             }
             SkolemEnv *saved_senv = e->g2_skolem_env;
             const CtorDef *saved_ctor = e->g2_current_ctor;
-            if (adt->is_gadt) {
+            if (adt->has_result_types) {
                 e->g2_skolem_env = &arm_senv;
                 e->g2_current_ctor = ctor;
             }
@@ -4802,7 +4596,7 @@ Expr *elab_match(Elab *e, const Form *call) {
                     goto match_fail;
                 }
                 Type ftype;
-                if (adt->is_gadt && ctor->field_forms && ctor->field_forms[bi]) {
+                if (adt->has_result_types && ctor->field_forms && ctor->field_forms[bi]) {
                     /* Phase G2: resolve field type using the skolem env.
                      * TP2: if full_type is a named TY_TYVAR, do the skolem
                      * lookup directly — avoids re-parsing and is authoritative. */
@@ -5083,7 +4877,7 @@ Expr *elab_match(Elab *e, const Form *call) {
              * active skolem equalities (e.g. "in this arm: a ~ int").
              * This surfaces the "why" behind type errors that occur because of
              * GADT-induced substitutions. */
-            if (!body && adt->is_gadt && arm_senv.n > 0) {
+            if (!body && adt->has_result_types && arm_senv.n > 0) {
                 char skolem_note[256];
                 int pos = 0;
                 for (uint8_t si = 0; si < arm_senv.n && pos < 230; si++) {
@@ -5114,7 +4908,7 @@ Expr *elab_match(Elab *e, const Form *call) {
              * set -- as in `[b] : int`, where matching a `(Box a)` binds `x : a`
              * and the arm yields `x` through a concrete `:int` return -- the
              * skolem `a` escapes the match arm. */
-            if (adt->is_gadt && body->type.kind == TY_TYVAR) {
+            if (adt->has_result_types && body->type.kind == TY_TYVAR) {
                 const char *tvname = body->type.as.tyvar_.name;
                 bool quantified = false;
                 if (tvname) {
@@ -5130,7 +4924,8 @@ Expr *elab_match(Elab *e, const Form *call) {
                     diag_emit(DIAG_ERROR, body_form->span,
                               "match: skolem type variable escapes match arm "
                               "(constructor '%s' of '%s'): the arm body has an "
-                              "unresolved GADT type variable as its result type",
+                              "unresolved type variable of the constructor's result type "
+                              "as its own result type",
                               ctor->name, adt->name);
                     goto match_fail;
                 }
@@ -5146,7 +4941,7 @@ Expr *elab_match(Elab *e, const Form *call) {
             if (result_type.kind != TY_UNKNOWN
                     && body->type.kind != TY_UNKNOWN
                     && !match_arm_type_compatible(e, result_type, body->type, &_arm_unified)) {
-                if (adt->is_gadt && arm_senv.n > 0) {
+                if (adt->has_result_types && arm_senv.n > 0) {
                     char skolem_note[256];
                     int pos = 0;
                     for (uint8_t si = 0; si < arm_senv.n && pos < 230; si++) {
@@ -5269,74 +5064,25 @@ Expr *elab_match(Elab *e, const Form *call) {
 
     /* Exhaustiveness check */
     if (!has_wildcard) {
-        /* Phase G2: For GADT ADTs, warn about unreachable constructors rather
-         * than erroring — a constructor whose concrete type-argument instantiation
-         * differs from every covered arm's instantiation is unreachable.
-         * An uncovered constructor that IS reachable (or whose reachability is
-         * unknown) is still an error. */
-        if (adt->is_gadt) {
-            /* Collect the first type-arg string from each covered arm's result type. */
-            const char *covered_arg0[64]; /* max constructors we check */
-            uint32_t n_covered = 0;
-            for (uint32_t ci = 0; ci < adt->n_ctors && n_covered < 64; ci++) {
-                if (!covered[ci]) continue;
-                CtorDef *c = adt->ctors[ci];
-                const char *a0 = NULL;
-                if (c->result_type_form && c->result_type_form->tag == F_LIST
-                    && c->result_type_form->as.list.len >= 2) {
-                    Form *arg = c->result_type_form->as.list.items[1];
-                    if (arg->tag == F_SYM) a0 = arg->as.sym->name;
-                }
-                covered_arg0[n_covered++] = a0;
-            }
-            for (uint32_t ci = 0; ci < adt->n_ctors; ci++) {
-                if (covered[ci]) continue;
-                CtorDef *c = adt->ctors[ci];
-                /* gadt-length-index-not-enforced: a constructor whose declared
-                 * result index provably differs from the SCRUTINEE's index --
-                 * `VNil : (Vec Zero)` when `v : (Vec (Succ n))` -- cannot be
-                 * the scrutinee's value, so it needs no arm.  Silently: that
-                 * omission is the whole point of the annotation. */
-                if (!gadt_ctor_reachable_from_scrutinee(e, adt, c, &scrutinee->type))
-                    continue;
-                /* Extract first type arg from this constructor's return type */
-                const char *my_a0 = NULL;
-                if (c->result_type_form && c->result_type_form->tag == F_LIST
-                    && c->result_type_form->as.list.len >= 2) {
-                    Form *arg = c->result_type_form->as.list.items[1];
-                    if (arg->tag == F_SYM) my_a0 = arg->as.sym->name;
-                }
-                /* Check if my_a0 conflicts with all covered arms */
-                bool all_covered_differ = (n_covered > 0) && (my_a0 != NULL);
-                for (uint32_t k = 0; k < n_covered && all_covered_differ; k++) {
-                    if (covered_arg0[k] == NULL ||
-                        strcmp(covered_arg0[k], my_a0) == 0) {
-                        all_covered_differ = false;
-                    }
-                }
-                if (all_covered_differ) {
-                    diag_emit(DIAG_WARNING, call->span,
-                              "match: constructor '%s' of '%s' is unreachable for "
-                              "this GADT instantiation",
-                              c->name, adt->name);
-                } else if (nonexhaustive_optout) {
-                    /* T6: programmer opted out with ^non-exhaustive. */
-                } else {
-                    diag_emit(DIAG_ERROR, call->span,
-                              "match: non-exhaustive patterns — constructor '%s' of '%s' not covered",
-                              c->name, adt->name);
-                    goto match_fail;
-                }
-            }
-        } else {
-            for (uint32_t ci = 0; ci < adt->n_ctors; ci++) {
-                if (!covered[ci] && !nonexhaustive_optout) {
-                    diag_emit(DIAG_ERROR, call->span,
-                              "match: non-exhaustive patterns — constructor '%s' of '%s' not covered",
-                              adt->ctors[ci]->name, adt->name);
-                    goto match_fail;
-                }
-            }
+        /* adt-gadt-unification: one loop for every type.  An uncovered
+         * constructor needs no arm when its declared result index provably
+         * differs from the SCRUTINEE's -- `VNil : (Vec Zero)` when `v : (Vec
+         * (Succ n))` cannot be the scrutinee's value (gadt-length-index-not-
+         * enforced) -- and is otherwise missing, whatever the covered arms'
+         * own indices are.  A constructor with no annotation is always
+         * reachable.  (This replaced a heuristic that guessed the scrutinee's
+         * index from the FIRST type argument of the covered arms and
+         * downgraded a missing arm to a warning on a guess.) */
+        for (uint32_t ci = 0; ci < adt->n_ctors; ci++) {
+            if (covered[ci]) continue;
+            CtorDef *c = adt->ctors[ci];
+            if (!gadt_ctor_reachable_from_scrutinee(e, adt, c, &scrutinee->type))
+                continue;
+            if (nonexhaustive_optout) continue; /* T6: ^non-exhaustive */
+            diag_emit(DIAG_ERROR, call->span,
+                      "match: non-exhaustive patterns — constructor '%s' of '%s' not covered",
+                      c->name, adt->name);
+            goto match_fail;
         }
     }
     free(covered);

@@ -9534,9 +9534,8 @@ static char *emit_dyn_field(EmitCtx *ctx, Buf *body, const Expr *e) {
     uint32_t n_cands = 0;
     for (uint32_t i = 0; i < n_items; i++) {
         const Expr *it = items[i];
-        if (!it || (it->kind != EX_DEFDATA && it->kind != EX_DEFGADT)) continue;
-        AdtDef *def = (it->kind == EX_DEFGADT) ? it->as.defgadt_.def
-                                               : it->as.defdata_.def;
+        if (!it || (it->kind != EX_DEFDATA)) continue;
+        AdtDef *def = it->as.defdata_.def;
         /* One record constructor: the `defstruct` shape, where "the type" is a
          * single C struct with the field as a member.  A multi-ctor sum needs
          * the ctor tag read before a field even has a location -- real, and
@@ -21105,10 +21104,9 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
             buf_free(&out);
             return result;
         }
-        /* Phase G0: EX_DEFDATA — nothing to emit in value position (handled in Pass 0) */
+        /* Phase G0: EX_DEFDATA (defdata and defgadt alike) -- nothing to emit
+         * in value position (handled in Pass 0) */
         case EX_DEFDATA:
-        /* Phase G1: EX_DEFGADT — same as EX_DEFDATA, handled in Pass 0 */
-        case EX_DEFGADT:
             return atom_nil();
 
         /* Phase G0: EX_MATCH -- emit as statement-expression ({ ... result; }) */

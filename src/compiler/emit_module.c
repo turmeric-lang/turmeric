@@ -1319,11 +1319,10 @@ static EmitSplitMode split_item_home(const Expr *e, bool *shared) {
         return emit_split_binding_home(e->as.fn_def_.fn ? e->as.fn_def_.fn->binding : NULL);
     case EX_DEF:
         return emit_split_binding_home(e->as.def_.binding);
-    case EX_DEFDATA:
-    case EX_DEFGADT: {
+    case EX_DEFDATA: {
         /* A library's type is written by every unit from its own on; a type
          * of the program's is the program unit's. */
-        const AdtDef *d = e->kind == EX_DEFGADT ? e->as.defgadt_.def : e->as.defdata_.def;
+        const AdtDef *d = e->as.defdata_.def;
         *shared = true;
         if (d && d->from_stdlib) return EMIT_SPLIT_LIB;
         if (d && g_split_imp && d->from_implib) return EMIT_SPLIT_IMP;
@@ -9424,9 +9423,8 @@ static void emit_abi_scan_expr(EmitCtx *ctx, const Expr *e,
                 const char *fname = e->as.dyn_field_.field->name;
                 for (uint32_t i = 0; i < n_items; i++) {
                     const Expr *it = items[i];
-                    if (!it || (it->kind != EX_DEFDATA && it->kind != EX_DEFGADT)) continue;
-                    AdtDef *def = (it->kind == EX_DEFGADT) ? it->as.defgadt_.def
-                                                           : it->as.defdata_.def;
+                    if (!it || (it->kind != EX_DEFDATA)) continue;
+                    AdtDef *def = it->as.defdata_.def;
                     if (!def || def->n_ctors != 1 || def->n_type_params != 0) continue;
                     CtorDef *ctor = def->ctors[0];
                     if (!ctor || !ctor->is_record) continue;
@@ -12389,9 +12387,8 @@ static bool adt_is_inline_byval_dep(const Expr **items, uint32_t n_items,
     if (!def) return false;
     for (uint32_t i = 0; i < n_items; i++) {
         const Expr *e = items[i];
-        if (!e || (e->kind != EX_DEFDATA && e->kind != EX_DEFGADT)) continue;
-        const AdtDef *od = (e->kind == EX_DEFGADT) ? e->as.defgadt_.def
-                                                   : e->as.defdata_.def;
+        if (!e || (e->kind != EX_DEFDATA)) continue;
+        const AdtDef *od = e->as.defdata_.def;
         if (!od || od == def || !od->ctors) continue;
         for (uint32_t ci = 0; ci < od->n_ctors; ci++) {
             const CtorDef *c = od->ctors[ci];
@@ -20470,8 +20467,8 @@ static int emit_program_inner(Buf *out, const Expr *program) {
     for (uint32_t i = 0; i < n_items; i++) {
         const Expr *e = items[i];
         /* Phase G0/G1: ADT typedef + constructor functions */
-        if (e->kind == EX_DEFDATA || e->kind == EX_DEFGADT) {
-            AdtDef *def = (e->kind == EX_DEFGADT) ? e->as.defgadt_.def : e->as.defdata_.def;
+        if (e->kind == EX_DEFDATA) {
+            AdtDef *def = e->as.defdata_.def;
             /* CONV-S1 (defstruct-as-defadt): skip a struct-origin ADT superseded
              * by a later same-name defgadt/defdata -- the winner owns the
              * `tur_adt_<Name>` C name (mirror of the guard in
@@ -22632,9 +22629,8 @@ static Type forced_spec_pos_type(TypeKind kind, const char *adt_name,
     if (adt_name) {
         for (uint32_t i = 0; i < n_items; i++) {
             const Expr *e = items[i];
-            if (!e || (e->kind != EX_DEFDATA && e->kind != EX_DEFGADT)) continue;
-            AdtDef *def = (e->kind == EX_DEFGADT) ? e->as.defgadt_.def
-                                                  : e->as.defdata_.def;
+            if (!e || (e->kind != EX_DEFDATA)) continue;
+            AdtDef *def = e->as.defdata_.def;
             if (def && !def->superseded && def->name &&
                 strcmp(def->name, adt_name) == 0)
                 return type_adt(def);
@@ -22982,9 +22978,8 @@ static int emit_header_inner(Buf *out, const char *module_name, const Expr *prog
     }
     for (uint32_t i = 0; i < h_n_items; i++) {
         const Expr *e = h_items[i];
-        if (e->kind != EX_DEFDATA && e->kind != EX_DEFGADT) continue;
-        AdtDef *def = (e->kind == EX_DEFGADT) ? e->as.defgadt_.def
-                                              : e->as.defdata_.def;
+        if (e->kind != EX_DEFDATA) continue;
+        AdtDef *def = e->as.defdata_.def;
         if (!def || def->superseded) continue;
         for (uint32_t ci = 0; ci < def->n_ctors; ci++) {
             CtorDef *pctor = def->ctors[ci];
@@ -23010,9 +23005,8 @@ static int emit_header_inner(Buf *out, const char *module_name, const Expr *prog
     if (separate_compilation) {
         for (uint32_t i = 0; i < h_n_items; i++) {
             const Expr *e = h_items[i];
-            if (e->kind != EX_DEFDATA && e->kind != EX_DEFGADT) continue;
-            AdtDef *adef = (e->kind == EX_DEFGADT) ? e->as.defgadt_.def
-                                                   : e->as.defdata_.def;
+            if (e->kind != EX_DEFDATA) continue;
+            AdtDef *adef = e->as.defdata_.def;
             if (adef && !adt_has_inline_byval_monomorph_field(adef))
                 emit_adt_typedef_and_ctors(out, adef, true);
         }
@@ -23036,9 +23030,8 @@ static int emit_header_inner(Buf *out, const char *module_name, const Expr *prog
     if (separate_compilation) {
         for (uint32_t i = 0; i < h_n_items; i++) {
             const Expr *e = h_items[i];
-            if (e->kind != EX_DEFDATA && e->kind != EX_DEFGADT) continue;
-            AdtDef *adef = (e->kind == EX_DEFGADT) ? e->as.defgadt_.def
-                                                   : e->as.defdata_.def;
+            if (e->kind != EX_DEFDATA) continue;
+            AdtDef *adef = e->as.defdata_.def;
             if (adef) emit_adt_typedef_and_ctors(out, adef, true);
         }
     }
@@ -23311,9 +23304,8 @@ static void emit_imported_adt_ctors(Buf *out, const Expr **items, uint32_t n_ite
     CtorAdtSet local = {0}, used = {0};
     for (uint32_t i = 0; i < n_items; i++) {
         const Expr *e = items[i];
-        if (e->kind == EX_DEFDATA || e->kind == EX_DEFGADT)
-            ctor_adt_set_add(&local, e->kind == EX_DEFGADT ? e->as.defgadt_.def
-                                                           : e->as.defdata_.def);
+        if (e->kind == EX_DEFDATA)
+            ctor_adt_set_add(&local, e->as.defdata_.def);
     }
     for (uint32_t i = 0; i < n_items; i++) collect_constructed_adts(items[i], &used);
     for (uint32_t i = 0; i < used.n; i++) {
@@ -23668,9 +23660,8 @@ static int emit_implementation_inner(Buf *out, const char *module_name, const Ex
     Buf impl_early; buf_init(&impl_early);
     for (uint32_t i = 0; i < impl_n_items; i++) {
         const Expr *e = impl_items[i];
-        if (e->kind == EX_DEFDATA || e->kind == EX_DEFGADT) {
-            const AdtDef *adef = (e->kind == EX_DEFGADT)
-                ? e->as.defgadt_.def : e->as.defdata_.def;
+        if (e->kind == EX_DEFDATA) {
+            const AdtDef *adef = e->as.defdata_.def;
             emit_adt_typedef_and_ctors(&impl_early, adef, false);
         }
     }

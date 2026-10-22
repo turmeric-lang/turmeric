@@ -1,9 +1,14 @@
+; An arm is required for every constructor that can produce the scrutinee's
+; type.  `e : (Expr int)` cannot be a `BoolLit` (its result is `(Expr bool)`),
+; so that arm may be left out -- but `Add` returns `(Expr int)`, and leaving
+; it out is non-exhaustive.  Reachability reads the scrutinee's declared
+; index; it no longer guesses one from the arms that are covered.
 (defgadt Expr [a]
   (Lit int : (Expr int))
   (BoolLit bool : (Expr bool))
   (Add (Expr int) (Expr int) : (Expr int)))
 
-(defn eval-int [e] : int
+(defn eval-int [e : (Expr int)] : int
   (match e
     (Lit n)   n))
 

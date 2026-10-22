@@ -319,8 +319,21 @@ typedef struct AdtDef {
      * by-value argument copy (turi_copy_byvalue_struct_arg) skips it.  Only
      * the interpreter reads it; the compiled backend copies by C semantics. */
     bool        field_written;
-    /* Phase G1: GADT flag and type parameters */
-    bool        is_gadt;         /* true for defgadt, false for defdata */
+    /* adt-gadt-unification: derived from the constructors, never from the
+     * keyword that spelled the type.  `has_result_types` is set when some
+     * constructor carries a `: (Name ...)` result annotation (every `defgadt`
+     * constructor does); the per-constructor GADT machinery -- skolem envs,
+     * index inference, reachability -- reads the annotation itself.
+     * `is_refined` is set when the constructors do not all return one
+     * instantiation whose every argument is the parameter in its own position
+     * or a closed type: `Refl : (Equal a a)`, or `Lit : (Expr int)` beside
+     * `IsZero : (Expr bool)`.  A type whose constructors all return `(Bound
+     * int)` is not refined; it is a sum with a pinned parameter.  Both are
+     * conservatively true while an annotated definition is being parsed (and
+     * on a defgadt forward stub), so a predicate reached mid-definition never
+     * sees a refined type as an unrefined one. */
+    bool        has_result_types;
+    bool        is_refined;
     /* SR1 (sum-representation-plan): a constructor field names this ADT, so the
      * type is self-recursive -- `(TPair :Term :Term)`, `(SBind :int :Term
      * :Subst)`, `(StCons :Subst :Stream)`.
@@ -434,7 +447,7 @@ typedef struct AdtDef {
  * read the tag word for an ADT gates on this predicate so the typedef, the
  * constructors, and the match sites stay in lockstep. */
 static inline bool adt_is_flat_product(const AdtDef *def) {
-    return def && def->n_ctors == 1 && !def->is_gadt;
+    return def && def->n_ctors == 1 && !def->has_result_types;
 }
 
 /* CONV-S1 seam 4: a NON-PARAMETRIC, single-variant, record-style ADT (the
@@ -462,7 +475,7 @@ static inline bool adt_is_flat_product(const AdtDef *def) {
  * base, types.c monomorph), the ctor stores, field reads, and match binds all
  * key off this one predicate. */
 static inline bool adt_uses_named_layout(const AdtDef *def) {
-    if (!def || def->n_ctors != 1 || def->is_gadt)
+    if (!def || def->n_ctors != 1 || def->has_result_types)
         return false;
     const CtorDef *c = def->ctors[0];
     if (!c || !c->is_record || c->n_fields == 0) return false;
@@ -485,6 +498,12 @@ static inline bool adt_uses_named_layout(const AdtDef *def) {
  * full_types, which are only forward-declared here).  See the definition and
  * docs/archive/history/struct-adt-convergence-s1-bridging-findings.md for the gate. */
 bool adt_is_byvalue_product(const AdtDef *def);
+
+/* adt-gadt-unification: true when `ctor` carries a result annotation that is
+ * not the generic instantiation `(Name p1 ... pn)` of its type's own
+ * parameters in order -- `Lit : (Expr int)` refines, `MkBox : (Box a)` does
+ * not, and neither does a constructor written without an annotation. */
+bool ctor_is_refining(const AdtDef *def, const CtorDef *ctor);
 /* B4 (byvalue-recursive-carrier): true when `def` is a single-variant,
  * single-field recursive carrier wrapper whose sole field is an (F Self)
  * type-application kept on the int64 carrier (Re/Expr).  Its by-value
@@ -1170,12 +1189,12 @@ static inline bool ty_is_sublinear(Type t) {
 
 /* Phase G1: type_requires_refinement -- true iff a value of this type may need
  * GADT-arm type refinement before its fields can be safely accessed.
- * A TY_ADT with is_gadt=true is rank-2 or higher in the GADT sense: matching
+ * A TY_ADT with is_refined=true is rank-2 or higher in the GADT sense: matching
  * on its constructor introduces skolem equalities that refine the type
  * parameters.  Supports future tooling and the HRT rank-checking path. */
 static inline bool type_requires_refinement(Type t) {
     if (t.kind != TY_ADT) return false;
-    return t.as.adt_.def && t.as.adt_.def->is_gadt;
+    return t.as.adt_.def && t.as.adt_.def->is_refined;
 }
 
 /* Convert TypeKind to string representation for debugging */

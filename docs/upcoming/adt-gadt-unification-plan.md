@@ -6,11 +6,10 @@ description: Fold `defgadt` into `defdata` -- one elaborator, an optional per-co
 
 # ADT / GADT Unification
 
-> **Status:** PROPOSED 2026-10-22. Decisions taken 2026-10-22 (see
+> **Status:** IN PROGRESS 2026-10-22. Decisions taken 2026-10-22 (see
 > "Decisions"): rename the flag to `is_refined`; an unrefined type reports as
-> a sum; `defgadt` is retired through the TUR-D deprecation band. Not
-> started. Not a v1 blocker; schedule after the v1 track or when a slice
-> below is on the way to something that is.
+> a sum; `defgadt` is retired through the TUR-D deprecation band. Slice 1
+> landed. Not a v1 blocker.
 
 ## Summary
 
@@ -123,6 +122,18 @@ Replace the keyword-set flag with a definition-time predicate:
 A `defgadt` whose constructors all return `(Bound int)` is then a plain sum
 with a phantom parameter -- which is what it is.
 
+*As built (slice 1):* the per-constructor test above is `ctor_is_refining`,
+and it is what call-site type-argument collection reads. The type-wide
+`is_refined` cannot be "any constructor is refining", because by that test
+`(Inclusive int : (Bound int))` refines -- `int` is not `A` -- and so would
+every type the Summary calls degenerate. It is: **a type is unrefined iff one
+instantiation is shared by every constructor, and each of its arguments is
+the parameter in its own position or a closed type** (no type variable in
+it). `Bound`'s `(Bound int)`, `SizedVec`'s `(SizedVec Size int)` and a generic
+`(Box a)` are unrefined; `Refl : (Equal a a)` (its second argument is a
+variable that is not `b`) and `Lit : (Expr int)` beside `IsZero : (Expr
+bool)` are refined. A type with no parameters is never refined.
+
 Everything today guarded by `is_gadt` splits by what it actually needs:
 
 | Today's guard | Needs | After |
@@ -203,26 +214,43 @@ row per the CLAUDE.md rule rather than an env seam.
 
 ### Slice 1 -- one elaborator, derived flag (no surface change)
 
-- [ ] `ctor_is_refining(const AdtDef *, const CtorDef *)` in `types.c`:
+- [x] `ctor_is_refining(const AdtDef *, const CtorDef *)` in `types.c`:
       compares `result_type_form` structurally against the parameter list.
-- [ ] `AdtDef.is_gadt` renamed `is_refined`, computed at the end of
+- [x] `AdtDef.is_gadt` renamed `is_refined`, computed at the end of
       constructor parsing (and when a forward stub is filled). Reads move per
-      the table above.
-- [ ] `elab_defgadt` reduced to: parse via `elab_defdata` with a
+      the table above. *As built:* the old flag split in two.
+      `has_result_types` (some constructor is annotated -- every `defgadt`
+      is) gates the def-level index machinery (`gx_gadt_head`,
+      `gadt_refine_to_index`, the call-site retype) and the match path's
+      skolem setup, and holds the representation gates until slice 3.
+      `is_refined` is the derived predicate (see "Semantics" below for the
+      pinned-instantiation rule). Both are set conservatively while an
+      annotated definition is parsed and on a `defgadt` stub.
+- [x] `elab_defgadt` reduced to: parse via `elab_defdata` with a
       `require_result_types` flag, which makes an unannotated constructor the
       existing error. The head parsing, stub handling and MF4 rules exist
-      once.
-- [ ] `elab_defdata`'s constructor loop accepts the `: Result` tail (both
+      once. *As built:* `elab_adt_def(e, call, spelled_defgadt)`; the head
+      takes keywords and the parameter vector in either order. One
+      consequence of the merged MF4 rule: a type no longer supersedes an
+      auto-loaded **stdlib** struct (`(defgadt Pair ...)`), it is the
+      defdata "already defined by an auto-loaded stdlib module" error --
+      superseding skipped the stdlib type at C emission under the stdlib code
+      built on it. `errors/gadt-kind-error` renamed its `Pair` to `Twin`.
+- [x] `elab_defdata`'s constructor loop accepts the `: Result` tail (both
       the bare `:` symbol and the folded `F_TYPE_ANN`), runs the defgadt
       result validations, and stores `result_type_form` / `field_forms`.
-- [ ] Constructor bindings carry `arg_full_types` whenever any field has a
+      (Behind the `defgadt` spelling only until slice 2.) Fields now resolve
+      through `resolve_ctor_field` for both spellings.
+- [x] Constructor bindings carry `arg_full_types` whenever any field has a
       full type (today's defdata rule), for annotated constructors too.
-- [ ] `EX_DEFGADT` removed; paired sites collapse.
-- [ ] Exhaustiveness: drop the `covered_arg0` strcmp heuristic; an uncovered
+- [x] `EX_DEFGADT` removed; paired sites collapse.
+- [x] Exhaustiveness: drop the `covered_arg0` strcmp heuristic; an uncovered
       constructor is unreachable iff `!gadt_ctor_reachable_from_scrutinee`,
-      else the existing error.
-- [ ] Diagnostics and `lsp_collect.c` wording follow decision 2.
-- [ ] Fixtures: every existing `gadt-*` fixture passes unchanged. New:
+      else the existing error. `errors/gadt-refine-exhaustive` now annotates
+      its scrutinee `(Expr int)`: `BoolLit` is dropped by the scrutinee's
+      index, `Add` is the missing arm.
+- [x] Diagnostics and `lsp_collect.c` wording follow decision 2.
+- [x] Fixtures: every existing `gadt-*` fixture passes unchanged. New:
       `errors/defgadt-record-ctor-rejected` is **replaced** by a positive
       `gadt-record-ctor` once slice 2 lands; until then the record vector in a
       `defgadt` must be a hard error, not a one-int field (the silent

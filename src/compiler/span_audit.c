@@ -328,7 +328,7 @@ static void audit_expr(const Expr *e, bool is_top,
 
     default:
         /* Leaf or no-Expr-child kind (literals, EX_VAR, EX_DICT, EX_INLINE_C,
-         * EX_EXTERN_C, EX_DEFDATA/EX_DEFGADT, EX_TYPECLASS_DEF, definstance,
+         * EX_EXTERN_C, EX_DEFDATA, EX_TYPECLASS_DEF, definstance,
          * effect defs, EX_SYM_LIT, EX_DEFAULT_OF, EX_RETRY, ...). */
         return;
     }

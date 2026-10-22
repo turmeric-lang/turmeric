@@ -54,10 +54,12 @@ static void collect_binding(const Binding *b, LspSymKind kind) {
  * `defstruct` lowers to a `defdata` before it gets here, so the surface form
  * is no longer recoverable -- but the shape it lowered to is, and that is the
  * distinction a reader wants anyway: one constructor is a record ("type" with
- * fields), several are a sum ("type" with variants). A GADT is always a sum. */
+ * fields), several are a sum ("type" with variants). A type whose constructors
+ * refine its parameters is a sum too, whatever keyword spelled it; one whose
+ * annotations all return the same instantiation is judged by its shape. */
 static LspSymKind adt_kind(const AdtDef *def) {
     if (!def) return LSP_KIND_STRUCT;
-    if (def->is_gadt) return LSP_KIND_ENUM;
+    if (def->is_refined) return LSP_KIND_ENUM;
     return def->n_ctors == 1 ? LSP_KIND_STRUCT : LSP_KIND_ENUM;
 }
 
@@ -76,9 +78,6 @@ static void collect_items(const Expr **items, uint32_t n) {
             case EX_DEFDATA:
                 collect_binding(item->as.defdata_.binding,
                                 adt_kind(item->as.defdata_.def));
-                break;
-            case EX_DEFGADT:
-                collect_binding(item->as.defgadt_.binding, LSP_KIND_ENUM);
                 break;
             case EX_DEFMODULE:
                 if (item->as.defmodule_.mod)
