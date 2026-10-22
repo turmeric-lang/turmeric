@@ -1,13 +1,16 @@
 ---
 title: ADT / GADT Unification Plan
 category: Planning
-description: Fold `defgadt` into `defdata` -- one elaborator, an optional per-constructor result type, and a representation rule that keys on whether a constructor actually refines the type parameters rather than on which keyword spelled the type.
+description: Fold `defgadt` into `defdata` -- one elaborator, an optional per-constructor result type, a representation rule that keys on whether a constructor actually refines the type parameters rather than on which keyword spelled the type, and retirement of the `defgadt` keyword through the deprecation band.
 ---
 
 # ADT / GADT Unification
 
-> **Status:** PROPOSED 2026-10-22. Not started. Not a v1 blocker; schedule
-> after the v1 track or when a slice below is on the way to something that is.
+> **Status:** PROPOSED 2026-10-22. Decisions taken 2026-10-22 (see
+> "Decisions"): rename the flag to `is_refined`; an unrefined type reports as
+> a sum; `defgadt` is retired through the TUR-D deprecation band. Not
+> started. Not a v1 blocker; schedule after the v1 track or when a slice
+> below is on the way to something that is.
 
 ## Summary
 
@@ -62,6 +65,23 @@ index checks at calls, ascriptions and returns (`gadt_refine_to_index`,
 constructor's `result_type_form` being present. It survives the merge
 unchanged.
 
+## Decisions (2026-10-22)
+
+1. **Rename the flag.** `AdtDef.is_gadt` becomes `AdtDef.is_refined`, a value
+   computed at the end of constructor parsing, never parsed from the keyword.
+   About 30 read sites move (listed under "Semantics").
+2. **An unrefined type reports as a sum.** The keyword is a spelling. What
+   is observable today is small: `type-of` on an `any`-widened value prints
+   the type's name for both forms (`B1` / `B2`; probed), the LSP symbol kind
+   (`lsp_collect.c:60`) and the "GADT" wording in diagnostics and docs. The
+   LSP kind follows `is_refined`; diagnostics say "refined constructor" /
+   "sum" rather than "GADT" where they name the type's kind. The real
+   `range.tur` consequence is representational, not cosmetic -- see
+   "range.tur under slice 3".
+3. **Retire `defgadt`.** It is kept through slices 1-3 as an alias so the
+   merge is a refactor, then warned on (slice 4) and removed at a later
+   major version. Stdlib, fixtures and guides migrate in slice 4.
+
 ## Design
 
 ### Surface: one form, optional result type
@@ -87,13 +107,12 @@ unchanged.
 - `:heap`, `:linear`, `:affine`, `:no-auto-ctor` and record constructors
   work on a type with annotated constructors because there is only one
   head parser.
-- **`defgadt` stays as an alias** that additionally requires every
-  constructor to carry an annotation (its current error, `:2782`). No
-  stdlib, fixture or spice migration is forced; `tur fmt`-style rewriting is
-  out of scope. This is OCaml's design (one `type`, optional `: t` per
-  constructor) rather than Haskell's two syntaxes.
+- **`defgadt` is an alias through slices 1-3** that additionally requires
+  every constructor to carry an annotation (its current error, `:2782`).
+  Slice 4 deprecates it. This is OCaml's design (one `type`, optional `: t`
+  per constructor) rather than Haskell's two syntaxes.
 
-### Semantics: `is_gadt` becomes derived
+### Semantics: `is_refined` is derived
 
 Replace the keyword-set flag with a definition-time predicate:
 
@@ -101,10 +120,8 @@ Replace the keyword-set flag with a definition-time predicate:
 > instantiation `(Name p1 ... pn)` of the type's own parameters in order.
 > A type **is refined** when any constructor is refining.
 
-`AdtDef.is_gadt` is renamed `is_refined` (or kept as a field name and
-documented as derived; either way it is computed, never parsed). A `defgadt`
-whose constructors all return `(Bound int)` is then a plain sum with a
-phantom parameter -- which is what it is.
+A `defgadt` whose constructors all return `(Bound int)` is then a plain sum
+with a phantom parameter -- which is what it is.
 
 Everything today guarded by `is_gadt` splits by what it actually needs:
 
@@ -116,7 +133,7 @@ Everything today guarded by `is_gadt` splits by what it actually needs:
 | ctor-call type-arg collection exclusion (`elab_call.c:5843`) | not to collect through a refined ctor | `!ctor_is_refining(ctor)` per constructor, so `If` above collects and `Lit` does not |
 | by-value / flat / niche / monomorph gates (`types.c`, `types.h`) | a uniform per-instantiation layout | `!def->is_refined` |
 | `kind_check.c:279` EX_DEFGADT walk | result forms | walks `EX_DEFDATA` too; the node kind merges (below) |
-| `lsp_collect.c:60` | a symbol kind | `is_refined` (cosmetic) |
+| `lsp_collect.c:60` | a symbol kind | `is_refined` (decision 2) |
 | `elab_toplevel.c:3223` forward stub | the head keyword | one stub path; stub `is_refined` is unknown until the body is seen, so stubs stay off the by-value path until filled (same as today's GADT stub) |
 
 Why the representation gate is exactly "refined": a refined constructor's
@@ -134,22 +151,63 @@ defgadt_.def : defdata_.def` selectors collapse (`emit_module.c`,
 `effect_check.c:2045`, `expr.c:591`, `lsp_collect.c:76`,
 `elab_call.c:4276`).
 
+### range.tur under slice 3
+
+`stdlib/range.tur` is the one stdlib module whose code depends on `Bound`
+being a carrier word. `Range` is not a Turmeric type: it is a hand-rolled C
+`struct { int64_t lower; int64_t upper; }` (`range.tur:16`, `:235`), and
+`range-new` / `range-lower` / `range-upper` (`:233-262`) are inline-C bodies
+that store and return a `Bound`-typed value as that `int64_t`. Twenty-six
+stdlib files and fixtures load `range.tur`, and 24 fixtures observe range
+output.
+
+Once `Bound` is by value that inline C does not compile. Probed 2026-10-22
+with the same three functions over a `defdata :copy Bound`:
+
+```
+error: incompatible types when assigning to type 'int64_t' from type 'tur_adt_Bound'
+error: incompatible types when returning type 'int64_t' but 'tur_adt_Bound' was expected
+```
+
+So slice 3 must carry a `range.tur` rewrite in the same PR, and it is the
+rewrite the module wanted anyway: `Range` becomes a record,
+`(defstruct Range :heap [lower : Bound upper : Bound])` (the module's own
+header comment calls it a "heap struct"), `range-new` is the constructor,
+`range-lower` / `range-upper` are field reads, and the `r : int` parameters
+of the predicates (`range-contains?`, `range-encloses?`, ... `:509-616`)
+become `r : Range`. That also retires a CLAUDE.md "lazy `:int` stand-in"
+(`r -- int64_t pointer to a Range`) and the three `range-abort-*` helpers
+stay as they are. `range-bound.tur`'s compatibility shims are unaffected.
+The `Show` / `Ord` / `Eq [Bound]` instances (`:121` onward) are pure
+Turmeric and need no change.
+
+One other stdlib body holds a `defgadt` value as a word from C:
+`sized-vec-from-list` (`stdlib/sized.tur:570`) calls the generated
+`ctor_SVNil()` / `ctor_SVCons(...)` from inline C, keeps the result in an
+`int64_t`, and returns it as `: SizedVec`. Once `SizedVec` is by value the
+constructors return a struct and that body stops compiling the same way.
+It is a list fold; slice 3 rewrites it in Turmeric (`SVCons` over a
+right-to-left walk of the cons list) rather than teaching C about the
+by-value layout. `nat.tur`, `gadt-vec.tur`, `equal.tur` and
+`sized-handle-existential.tur` have no inline C that takes or returns their
+GADT.
+
 ## Slices
 
 Each slice lands whole, with its fixtures and snapshot regen in the same PR.
 No experiment gate is planned: slice 1 is a refactor behind an unchanged
 surface, slice 2 adds surface without changing existing programs' meaning,
-and slice 3 is the only ABI change and is small and measurable. If slice 3
-has to land partially, it takes an `EXPERIMENTS[]` row per the CLAUDE.md
-rule rather than an env seam.
+slice 3 is the only ABI change and is small and measurable, and slice 4 is
+a deprecation. If slice 3 has to land partially, it takes an `EXPERIMENTS[]`
+row per the CLAUDE.md rule rather than an env seam.
 
 ### Slice 1 -- one elaborator, derived flag (no surface change)
 
 - [ ] `ctor_is_refining(const AdtDef *, const CtorDef *)` in `types.c`:
       compares `result_type_form` structurally against the parameter list.
-- [ ] `AdtDef.is_refined` computed at the end of constructor parsing (and
-      when a forward stub is filled). `is_gadt` reads replaced per the table
-      above; the field goes away.
+- [ ] `AdtDef.is_gadt` renamed `is_refined`, computed at the end of
+      constructor parsing (and when a forward stub is filled). Reads move per
+      the table above.
 - [ ] `elab_defgadt` reduced to: parse via `elab_defdata` with a
       `require_result_types` flag, which makes an unannotated constructor the
       existing error. The head parsing, stub handling and MF4 rules exist
@@ -163,6 +221,7 @@ rule rather than an env seam.
 - [ ] Exhaustiveness: drop the `covered_arg0` strcmp heuristic; an uncovered
       constructor is unreachable iff `!gadt_ctor_reachable_from_scrutinee`,
       else the existing error.
+- [ ] Diagnostics and `lsp_collect.c` wording follow decision 2.
 - [ ] Fixtures: every existing `gadt-*` fixture passes unchanged. New:
       `errors/defgadt-record-ctor-rejected` is **replaced** by a positive
       `gadt-record-ctor` once slice 2 lands; until then the record vector in a
@@ -176,8 +235,8 @@ rule rather than an env seam.
       `:heap`, `:linear`, `:affine`, `:no-auto-ctor`.
 - [ ] `stdlib/forms/datatypes.tur`: `defdata` docstring gains the annotated
       form; `defgadt` is documented as "defdata where every constructor is
-      annotated". gadts-guide, gadts-cookbook and sum-types-guide updated;
-      `tests/check-forms-documented.sh` stays green.
+      annotated; deprecated, see slice 4". gadts-guide, gadts-cookbook and
+      sum-types-guide updated; `tests/check-forms-documented.sh` stays green.
 - [ ] Fixtures: `defdata-mixed-refined-ctors` (the `Expr` above, with `If`
       unannotated), `gadt-record-ctor`, `gadt-heap-ctor`,
       `gadt-linear-ctor`, `errors/defdata-result-wrong-head`,
@@ -188,18 +247,41 @@ rule rather than an env seam.
 - [ ] `types.c` / `types.h` gates switch from `is_gadt` to `is_refined`.
       `Bound`, `GVec`, `Nat`, `StaticInt`, `Size`, `SizedVec` move to the
       by-value / flat paths; `Equal` stays on the carrier.
+- [ ] `range.tur` rewrite per "range.tur under slice 3", same PR.
+      `range-bound.tur` docstrings lose the "int64-encoded GADT cell"
+      wording.
+- [ ] `sized.tur`'s `sized-vec-from-list` rewritten in Turmeric (same
+      section), same PR.
 - [ ] `tests/check-emitted-float-conversions.py` and the region-escape
       fixtures (`region-escape-via-store`) re-run: a by-value `Bound` is a new
       shape for `TUR_REGION_NOTE_WORDS`.
 - [ ] Snapshots regenerated in the same PR (CLAUDE.md "Fixture churn is not
       a deferral reason"). Expect the `range-*`, `sized-*`, `nat-*` and
       `gadt-vec-*` fixtures to move.
-- [ ] Measure: `tur emit-c` of `stdlib/range.tur`'s callers shows no `malloc`
-      in `ctor_Bound_*`; the range benchmark, if one exists under
-      `bench/`, is re-run before and after.
-- [ ] Rewrite the six degenerate stdlib `defgadt`s as `defdata` only if a
-      reader benefits; the alias makes it optional, and leaving them is a
-      live test that the alias path gets by-value.
+- [ ] Measure: `tur emit-c` of a `range.tur` caller shows no `malloc` in
+      `ctor_Bound_*`; the range benchmark, if one exists under `bench/`, is
+      re-run before and after.
+
+### Slice 4 -- retire `defgadt`
+
+- [ ] `TUR-D0005: defgadt is deprecated; write defdata with a : Result on
+      each constructor` at the form's head, in the TUR-D band (`diag.c`
+      "Deprecation band", precedent TUR-D0002/D0003 for the legacy effect-row
+      spellings, which carried two minor releases). `tur explain TUR-D0005`
+      shows the rewrite. Under `--Werror=deprecated` it is an error.
+- [ ] Migrate the seven stdlib `defgadt`s to `defdata`; `equal.tur`'s
+      `Equal` keeps its annotation and stays refined, the other six drop
+      theirs (every constructor returned the generic instantiation).
+- [ ] Migrate the 78 fixtures that spell `defgadt`, keeping one
+      `errors/defgadt-deprecated` fixture that pins TUR-D0005, and the
+      `gadt-*` fixture names (they test refinement, not the keyword).
+- [ ] Guides: the 19 docs files and `tools/genguides.py` / `tools/gendocs.py`
+      keyword lists. gadts-guide's "Your First GADT" becomes "Refined
+      constructors" over `defdata`. `stdlib/forms/datatypes.tur`'s `defgadt`
+      entry becomes the deprecation note.
+- [ ] Removal: `defgadt` becomes a hard error with the same rewrite hint at
+      the next major version after the warning has shipped in two minor
+      releases. Tracked here, cut by the release skills' CHANGELOG step.
 
 ## Risks
 
@@ -207,6 +289,8 @@ rule rather than an env seam.
   every by-value path already bails on `is_gadt`, and `is_refined` implies
   `is_gadt` for every type written today. The only direction of change is
   degenerate GADTs gaining by-value.
+- **`range.tur` inline C.** Covered above; it is a hard C error, not a
+  silent change, so it cannot slip through. The rewrite is in slice 3's PR.
 - **ABI of degenerate GADTs across separate compilation.** `Bound` is
   `from_stdlib`; a client unit and the lib unit must agree, which the
   existing SR machinery handles for `defdata`. The `sepcomp-*` fixtures are
@@ -221,23 +305,17 @@ rule rather than an env seam.
   that conservative default so a recursive field probing
   `adt_is_byvalue_product` mid-definition sees the same answer before and
   after (the `ctors[ci] == NULL` guard and its SEGV history, `:2706`).
+- **Spices.** No spice spells `defgadt` (checked 2026-10-22), so slice 4
+  has no downstream migration.
 
 ## Non-goals
 
 - Changing what refinement can express (dependent indices, polymorphic
   recursion inference). See gadts-guide "Current Limitations".
-- Removing the `defgadt` keyword or rewriting existing sources.
 - Touching `defstruct` -> record-ADT lowering (CONV-S1, graduated) or
   `defopaque`.
-- `tur fmt` or any migration tooling.
-
-## Open questions
-
-1. Keep the field named `is_gadt` (fewer diffs, misleading) or rename to
-   `is_refined` (honest, ~30 sites)? This plan assumes the rename.
-2. Should an unrefined type with annotated constructors print as a GADT in
-   `type-of` / LSP symbol kind? Proposed: no, it is a sum; the keyword is a
-   spelling.
+- A `tur fmt` rewrite of `defgadt` to `defdata`; the migration is by hand
+  and the TUR-D0005 hint is the tooling.
 
 ## References
 
@@ -250,5 +328,7 @@ rule rather than an env seam.
 - `docs/archive/gadt-length-index-not-enforced.md` (the index checks that
   key on `result_type_form`)
 - `docs/archive/design-mf4-struct-gadt-namespaces.md`
+- `docs/archive/history/defgadt-copy-and-shared-bounds.md` (why `Bound` is
+  a `:copy` GADT in the first place)
 - `docs/guides/gadts-guide.md`, `docs/guides/gadts-cookbook.md`,
   `docs/guides/sum-types-guide.md`
