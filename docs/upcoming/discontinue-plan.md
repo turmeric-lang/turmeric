@@ -2,8 +2,8 @@
 
 > **Status:** PROPOSED 2026-10-21. Decision taken: keep `discontinue` and
 > implement it on both engines (from effect-forms-gaps item 1, archived). Not
-> started. **2026-10-22:** three open reports block its fixtures (two compiled,
-> one interpreted), see [Blockers](#blockers-checked-2026-10-22).
+> started. **2026-10-22:** open reports block its fixtures, see
+> [Blockers](#blockers-checked-2026-10-22).
 
 ## Blockers (checked 2026-10-22)
 
@@ -17,7 +17,7 @@ will raise.
 | Report | Engine | Blocks | Why |
 | --- | --- | --- | --- |
 | [cps-catch-unwind-cannot-cross-an-effect-capture](../reported/cps-catch-unwind-cannot-cross-an-effect-capture.md) | compiled | fixtures 2, 3, and 5 when the body catches | A `catch-unwind` around the `perform` (fixture 2) or around the `discontinue` in the clause (fixture 3) is refused with "no lowering here". This is the shape that justifies keeping `discontinue` ("a `catch-unwind` in the body ... catches it, and the body carries on"), so this report is the main blocker. Its fix direction 2 (the false TUR-W0033) is small and independent |
-| [turi-fiber-resume-from-clause-scope-crashes-on-body-defer](../reported/turi-fiber-resume-from-clause-scope-crashes-on-body-defer.md) | interpreted | fixtures 1 and 3 | A body with a `defer` takes the fiber runtime, and resuming it from inside any scope in the clause (`let`, a call, a `catch-unwind`) segfaults. "Fiber fallback" step 2 below builds on exactly this path |
+| ~~[turi-fiber-resume-from-clause-scope-crashes-on-body-defer](../archive/turi-fiber-resume-from-clause-scope-crashes-on-body-defer.md)~~ | interpreted | -- | **Resolved 2026-10-22.** The fiber body now has its own defer chain, so resuming from a scope in the clause works |
 | [compiled-uncaught-panic-skips-caller-defers](../reported/compiled-uncaught-panic-skips-caller-defers.md) | compiled | fixture 1 as written | The raise starts inside the body function. If nothing catches it, the compiled runtime aborts without running that function's `defer`, while the interpreter runs it. Fixture 1 can hold a `catch-unwind` in `main` (a different function from the `handle`, which works today) until this is fixed, but then it no longer tests the uncaught case |
 | [turi-fiber-handle-defers-fire-at-the-wrong-time](../reported/turi-fiber-handle-defers-fire-at-the-wrong-time.md) | interpreted | fixture 5 with a `defer` or `catch-unwind` in the body | The fiber runtime is single-shot. `(+ (resume k 1) (resume k 2))` over a defer-bearing body is refused with "already been resumed", and so is one whose `perform` sits under a `catch-unwind` (`ws_capturable` refuses both). Its fix direction 1 (work-stack-capturable `defer`, and `catch-unwind` too) is the real unblock for the interpreter, and would also retire the crash above |
 

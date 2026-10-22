@@ -3685,6 +3685,16 @@ struct TuriEffectCont {
      * so the cont outlived it and a later `(resume saved v)` runs the body on
      * its own stack from wherever it is called. */
     bool               handle_exited;
+
+    /* turi-fiber-resume-from-clause-scope-crashes-on-body-defer: the body's
+     * own defer chain while it is swapped out.  The body and the clause used
+     * to share env->defer_stack, so a scope the clause opened before resuming
+     * was popped by the body's returns, and the scope's exit then walked for a
+     * mark no longer on the chain.  fiber_enter_body installs this chain for
+     * the body and saves it back when the body yields, so each context only
+     * ever walks its own items. */
+    void              *body_defers;
+    void              *body_defer_base;  /* the handle's chain the body's began on */
 };
 
 /* Internal handler frame stored on TuriEnv.handler_stack. */
@@ -3733,6 +3743,38 @@ static void eval_body_thunk(void) {
 #    pragma clang diagnostic pop
 #  endif
 #endif
+
+/* Swap from the handler side into cont's body, giving the body its own defer
+ * chain (cont->body_defers) for as long as it runs, and give the handler side
+ * back the chain it had when the body yields (performs again or finishes). */
+static void fiber_enter_body(TuriEnv *env, TuriEffectCont *cont) {
+    void *mine = env->defer_stack;
+    env->defer_stack = cont->body_defers;
+#if defined(__APPLE__)
+#  pragma clang diagnostic push
+#  pragma clang diagnostic ignored "-Wdeprecated-declarations"
+#endif
+    swapcontext(&cont->handler_ctx, &cont->body_ctx);
+#if defined(__APPLE__)
+#  pragma clang diagnostic pop
+#endif
+    cont->body_defers = env->defer_stack;
+    env->defer_stack = mine;
+    if (cont->done && cont->body_defers != cont->body_defer_base) {
+        /* A `defer` at the top of the body belongs to the scope around the
+         * handle, as it does on the work-stack path: hand what the finished
+         * body left above its base to the handler side's chain, to fire at
+         * that scope's exit. */
+        DeferItem *last = (DeferItem *)cont->body_defers;
+        while (last && last->next != (DeferItem *)cont->body_defer_base)
+            last = last->next;
+        if (last) {
+            last->next = (DeferItem *)mine;
+            env->defer_stack = cont->body_defers;
+        }
+        cont->body_defers = cont->body_defer_base;
+    }
+}
 
 /* Resume body fiber with value val; return body's next result (or final). */
 static TuriValue eval_resume_cont(TuriEnv *env, EvalFrame *frame,
@@ -3784,14 +3826,7 @@ static TuriValue eval_resume_cont(TuriEnv *env, EvalFrame *frame,
         env->handler_stack = &hf;
     }
 
-#if defined(__APPLE__)
-#  pragma clang diagnostic push
-#  pragma clang diagnostic ignored "-Wdeprecated-declarations"
-#endif
-    swapcontext(&cont->handler_ctx, &cont->body_ctx);
-#if defined(__APPLE__)
-#  pragma clang diagnostic pop
-#endif
+    fiber_enter_body(env, cont);
 
     /* Pop the handler frame now that body has yielded control back (deep only;
      * shallow never pushed one). */
@@ -3864,14 +3899,7 @@ static TuriValue eval_handle_inner(TuriEnv *env, EvalFrame *frame,
                     inner_hf.cont    = cont;
                     inner_hf.prev    = (TuriHandlerFrame *)env->handler_stack;
                     env->handler_stack = &inner_hf;
-#if defined(__APPLE__)
-#  pragma clang diagnostic push
-#  pragma clang diagnostic ignored "-Wdeprecated-declarations"
-#endif
-                    swapcontext(&cont->handler_ctx, &cont->body_ctx);
-#if defined(__APPLE__)
-#  pragma clang diagnostic pop
-#endif
+                    fiber_enter_body(env, cont);
                     env->handler_stack = inner_hf.prev;
                     if (cont->done)
                         return cont->body_result;
@@ -4097,14 +4125,16 @@ static TuriValue eval_handle(TuriEnv *env, EvalFrame *frame,
     hf.prev            = (TuriHandlerFrame *)env->handler_stack;
     env->handler_stack = &hf;
 
-    /* turi-fiber-handle-defers-fire-at-the-wrong-time: the body pushes its
-     * `defer`s onto the shared env chain while it runs on its fiber.  Mark
-     * the chain here so a case that ABANDONS the body can fire exactly the
-     * body's pending defers when it returns (below). */
+    /* The body's defer chain starts on top of the handle's own; it is kept on
+     * the cont while the body is swapped out (fiber_enter_body).  The mark is
+     * where the body's chain begins, so a case that ABANDONS the body can fire
+     * exactly the body's pending defers when it returns (below). */
     DeferItem *body_defer_mark = (DeferItem *)env->defer_stack;
+    cont->body_defers = env->defer_stack;
+    cont->body_defer_base = env->defer_stack;
 
     /* Switch to body; saves current context into handler_ctx. */
-    swapcontext(&cont->handler_ctx, &cont->body_ctx);
+    fiber_enter_body(env, cont);
 #if !defined(__EMSCRIPTEN__) && defined(__APPLE__)
 #  pragma clang diagnostic pop
 #endif
@@ -4126,11 +4156,17 @@ static TuriValue eval_handle(TuriEnv *env, EvalFrame *frame,
          * runtime fires them (cps-defer-skipped-on-abortive-effect).  They
          * used to stay on the chain and fire at the next enclosing scope
          * exit, after everything the handle's continuation printed.  A case
-         * that may keep `k` is left alone: its defers belong to a later
-         * resume, which is the half of the report still open. */
+         * that may keep `k` is left alone: its defers stay parked on the cont
+         * (body_defers) and run when a later resume finishes the body, or
+         * never, as the compiled runtime does with a stored continuation. */
         if (!cont->done && !k_may_escape &&
-            env->defer_stack != (void *)body_defer_mark)
+            cont->body_defers != (void *)body_defer_mark) {
+            void *mine = env->defer_stack;
+            env->defer_stack = cont->body_defers;
             fire_defers_to_mark_by_scope(env, body_defer_mark, frame);
+            cont->body_defers = body_defer_mark;
+            env->defer_stack = mine;
+        }
     }
 
     /* A case that may have kept `k` keeps the cont: it can be resumed after

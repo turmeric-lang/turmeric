@@ -1,5 +1,38 @@
 # `tur --interpret`: resuming a defer-bearing body from inside a scope in the clause crashes
 
+**RESOLVED 2026-10-22** (archived). Each side of a fiber `handle` now has its
+own defer chain. `fiber_enter_body` (`src/turi/eval.c`) installs the body's
+chain (`TuriEffectCont.body_defers`) for as long as the body runs, saves it
+back when the body yields, and gives the handler side its own chain again.
+When the body finishes, what it left above its base (a `defer` at the top of
+the body, which belongs to the scope around the `handle`) is spliced onto the
+handler side's chain, as the shared chain used to leave it (`unsafe-defer`).
+The abortive case's firing in `eval_handle` runs on the body's saved chain.
+
+This also fixed the stored-`k` half of
+[turi-fiber-handle-defers-fire-at-the-wrong-time](../reported/turi-fiber-handle-defers-fire-at-the-wrong-time.md).
+A body a case kept but never resumed no longer fires its defer at the next
+enclosing scope exit; its items stay parked on the cont. A body resumed after
+its `handle` exited runs them at the resume. Both now match the compiled
+runtime.
+
+Pinned by `tests/fixtures/turi-fiber-defer-resume-from-clause-scope`, which
+`run.sh` and `run-turi.sh` both run: resume from a `let` and from a local
+function in the clause, a kept `k` never resumed, and a kept `k` resumed after
+its handle exited. The `catch-unwind`-in-the-clause shapes of the table below
+also run interpreted now. They are not in the fixture yet, because compiled
+they hit
+[cps-catch-unwind-cannot-cross-an-effect-capture](../reported/cps-catch-unwind-cannot-cross-an-effect-capture.md).
+
+Suite: `run-turi.sh` 2993 passed, 0 failed.
+
+**The root cause below is corrected.** The walk that crashes is the
+clause's, not the body's. The clause's `let` pushes a scope marker on top of
+the body's defer item and records the item as its fire-to mark. The resumed
+body's return from `body` then pops both the marker and the item. When the
+`let` exits, it walks from the chain's head for an item that is gone and runs
+off the NULL end.
+
 **Severity: high** (a segfault on an ordinary shape; interpreter only, the
 compiled program is correct). It **blocks
 [discontinue-plan](../upcoming/discontinue-plan.md)** on the interpreter: the
@@ -39,7 +72,7 @@ AddressSanitizer: SEGV ... in fire_defers_to_mark   (eval.c:3234)
 Without the `defer` in the body the `handle` stays on the work-stack path and
 all of these run.
 
-## Root cause (likely)
+## Root cause (as filed; corrected above)
 
 A `defer` in the body makes the `handle` take the fiber runtime
 (`ws_capturable` refuses `EX_DEFER`). The body and the clause share one

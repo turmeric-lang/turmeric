@@ -38,7 +38,7 @@ directory is worse for triage than no index.
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [turi-fiber-resume-from-clause-scope-crashes-on-body-defer](turi-fiber-resume-from-clause-scope-crashes-on-body-defer.md) | high | `(handle (body) (Ask [] k) (let [x 1] (resume k x)))` segfaults under `tur --interpret` when `body` has a `defer`: the fiber body and the clause share one defer chain, and the body's return walks it for a mark the clause's scope moved. Compiled is correct. Blocks [discontinue-plan](../upcoming/discontinue-plan.md) fixtures 1 and 3 interpreted |
+| ~~[turi-fiber-resume-from-clause-scope-crashes-on-body-defer](../archive/turi-fiber-resume-from-clause-scope-crashes-on-body-defer.md)~~ | high | **RESOLVED 2026-10-22** (archived): each side of a fiber `handle` has its own defer chain (`fiber_enter_body`), so a resume from inside a `let`, a call or a `catch-unwind` in the clause no longer crashes. This also fixed the stored-`k` half of turi-fiber-handle-defers-fire-at-the-wrong-time. Pinned by `turi-fiber-defer-resume-from-clause-scope` |
 | [cps-catch-unwind-cannot-cross-an-effect-capture](cps-catch-unwind-cannot-cross-an-effect-capture.md) | medium | Compiled, a `perform` inside a `catch-unwind` thunk cannot reach the handler outside it, and a `handle` cannot sit in a function holding a `catch-unwind` (`EX_CATCH_UNWIND` is outside the CPS IR). All three engines also give a false TUR-W0033 for the thunk's `perform`. The interpreter runs it. Blocks discontinue-plan fixtures 2 and 3 compiled, which are the plan's reason to keep the form |
 | [compiled-uncaught-panic-skips-caller-defers](compiled-uncaught-panic-skips-caller-defers.md) | medium | With no `catch-unwind` live, a compiled panic runs only the panicking function's defers and aborts. Callers' defers are skipped, where the interpreter and error-handling-guide run them all. Blocks discontinue-plan fixture 1 as written |
 
@@ -179,7 +179,7 @@ on `main` 3d9e02a2.
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [turi-fiber-handle-defers-fire-at-the-wrong-time](turi-fiber-handle-defers-fire-at-the-wrong-time.md) | low-medium (engine divergence; narrowed 2026-10-21: the abortive case is fixed, the stored-`k` case remains) | Under `tur --interpret`, a `handle` whose body has a pending `defer` takes the single-shot fiber runtime, and the defer fires at the next enclosing scope exit: after the abortive case's value, or even when a stored `k` is never resumed. Compiled fires it at the case's return, and multi-shot over such a body is refused. Filed while fixing the stored-`k` use-after-free (archived). |
+| [turi-fiber-handle-defers-fire-at-the-wrong-time](turi-fiber-handle-defers-fire-at-the-wrong-time.md) | low (narrowed 2026-10-22: both defer-timing cases are fixed; the single-shot refusal remains) | Under `tur --interpret`, a `handle` whose body reaches a `perform` under a `defer` or `catch-unwind` takes the single-shot fiber runtime, so a multi-shot resume of it is refused ("already been resumed"); compiled runs it. The defer timing (abortive case, stored `k`) now matches compiled. |
 
 ## Found revisiting the two dynvar plans (filed 2026-10-17)
 
