@@ -148,6 +148,15 @@ docs, wasm, web-dev, ...) are runnable via `tur run <recipe>` -- no extra
 ./build/tur docs --open                # the rendered guides and API reference
 ```
 
+Serving a directory is one line, with nothing installed
+([tur serve guide](docs/guides/tur-serve-guide.md)):
+
+```sh
+tur serve                 # . on http://127.0.0.1:8000/
+tur serve dist -p 8080    # a directory and a port
+tur serve --bind any      # every interface
+```
+
 The documentation reads offline everywhere: `tur doc` and `tur docs` in a
 terminal, and the **Docs** browser inside
 [Try Turmeric](https://turmeric-lang.com/try), which precaches every guide and
@@ -186,6 +195,9 @@ tur fetch                    # fetch all spices, write tur.lock
 tur build                    # build the project
 tur test                     # run tests
 ```
+
+A spice's tool runs without installing it: `tur x <url> --ref <tag> -- args`
+fetches, builds and caches it on first use.
 
 See [docs/archive/package-management-plan.md](docs/archive/package-management-plan.md) for the
 full design, and [docs/archive/cmake-cpm-integration-plan.md](docs/archive/cmake-cpm-integration-plan.md)

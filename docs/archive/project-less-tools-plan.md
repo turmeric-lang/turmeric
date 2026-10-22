@@ -1,19 +1,20 @@
 # Plan: Project-less tools -- `tur serve` in one line, and a spice binary run from anywhere
 
-> **Status:** Draft, not started. Written 2026-10-21.
-> **Last Updated:** 2026-10-21
+> **Status:** Done, 2026-10-22 -- PT0-PT4 landed; see "As built" below.
+> Written 2026-10-21.
+> **Last Updated:** 2026-10-22
 > **Type:** Tooling / CLI (`src/driver/cli.c`, `src/driver/cmd_run.c`,
 > `src/compiler/install.c`), stdlib (`stdlib/httpd.tur`, a new
 > `stdlib/tools/serve.tur`).
-> **Builds on:** [installed-spice-libraries-plan](../archive/installed-spice-libraries-plan.md)
+> **Builds on:** [installed-spice-libraries-plan](installed-spice-libraries-plan.md)
 > (IL0's install layout and "an installed root is a fetched project" helper)
-> and [script-spice-deps-plan](script-spice-deps-plan.md) (SD-D3's cache
+> and [script-spice-deps-plan](../upcoming/script-spice-deps-plan.md) (SD-D3's cache
 > directory, SD-D6's `tur <file> args` dispatch). PT0-PT2 below need neither;
 > PT3 reuses both and says what it carries itself when they have not landed.
-> **See also:** [global-spice-install-plan](../archive/global-spice-install-plan.md)
+> **See also:** [global-spice-install-plan](global-spice-install-plan.md)
 > (`tur install`, `:bin`, the `tur <name>` fallthrough -- all landed),
-> [engine-selection-plan](../archive/engine-selection-plan.md) (`tur run`'s
-> engine delegation), [security-audit-plan](security-audit-plan.md) (M-4, the
+> [engine-selection-plan](engine-selection-plan.md) (`tur run`'s
+> engine delegation), [security-audit-plan](../upcoming/security-audit-plan.md) (M-4, the
 > static-file hardening this plan keeps),
 > [releases-and-installation-guide](../guides/releases-and-installation-guide.md)
 > (why `tur run` does not work from a release tarball today).
@@ -256,16 +257,16 @@ in a source file.
 
 ### PT0 -- Index and listing in `stdlib/httpd.tur`
 
-- [ ] `StaticOpts`, `httpd-static-serve-with!`, `mw-static-with` (PT-D4).
+- [x] `StaticOpts`, `httpd-static-serve-with!`, `mw-static-with` (PT-D4).
       `httpd-static-serve!` and `mw-static` delegate with `(StaticOpts "" false)`.
-- [ ] The directory redirect, the index path, and the listing renderer.
+- [x] The directory redirect, the index path, and the listing renderer.
       HTML-escape and percent-encode helpers live next to the renderer (check
       `stdlib/httpd-string.tur` first; reuse if present).
-- [ ] MIME additions.
-- [ ] `__attribute__((unused))` on the preamble statics that gcc warns about
+- [x] MIME additions.
+- [x] `__attribute__((unused))` on the preamble statics that gcc warns about
       on the cc path (PT-D2). `tests/check-cc-warn-ratchet.sh` records the
       new baseline.
-- [ ] Fixture `tests/fixtures/httpd-static-index-listing` (compiled, in the
+- [x] Fixture `tests/fixtures/httpd-static-index-listing` (compiled, in the
       shape of `httpd-mw-static`): `/` serves `index.html`; `/sub` is `301` to
       `/sub/`; `/sub/` without an index lists `b.txt` and omits `.hidden`;
       `--no-listing` behavior gives 404; a listing of a directory containing
@@ -273,48 +274,48 @@ in a source file.
 
 ### PT1 -- `tur serve`
 
-- [ ] `stdlib/tools/serve.tur`: flags per PT-D3, `mw-log` unless `-q`,
+- [x] `stdlib/tools/serve.tur`: flags per PT-D3, `mw-log` unless `-q`,
       `mw-static-with` over a 404 base handler, the startup line, exit 2 on
       a bad flag or a directory that does not exist.
-- [ ] One driver function "build entry with includes, exec with args" shared
+- [x] One driver function "build entry with includes, exec with args" shared
       by `run_delegate_engine`, the `serve` arm and (PT3) `tur x`.
-- [ ] The `serve` row in `src/driver/cli.c`, its usage text, and the
+- [x] The `serve` row in `src/driver/cli.c`, its usage text, and the
       completion script (`src/cli/completion.c`).
-- [ ] `tools/gendocs.py` skips `stdlib/tools/` (programs, not modules), or
+- [x] `tools/gendocs.py` skips `stdlib/tools/` (programs, not modules), or
       documents it as a "Tools" page; decide when the first one exists.
-- [ ] Fixture `tests/fixtures/cli-serve/hook.sh` (in the shape of
+- [x] Fixture `tests/fixtures/cli-serve/hook.sh` (in the shape of
       `httpd-mw-log/hook.sh`): `tur serve --port 0 <dir>` in the background,
       read the port from the startup line, curl `/`, `/sub/`, a file, a
       dotfile, and `/../`, then kill it. Runs under `TUR_NO_GLOBAL_SPICES=1`
       like the rest of the suite.
-- [ ] A ctest that installs to a scratch prefix (`cmake --install`) and runs
+- [x] A ctest that installs to a scratch prefix (`cmake --install`) and runs
       `tur serve --port 0` from an unrelated directory, so the release-layout
       dependency in PT-D2 is a red test rather than a user report.
-- [ ] `docs/guides/web-emscripten-tutorial.md:188` replaces
+- [x] `docs/guides/web-emscripten-tutorial.md:188` replaces
       `python3 -m http.server 8080 --directory hello-wasm` with
       `tur serve hello-wasm -p 8080`. Same for the archived plan's copy if it
       is referenced by a guide.
 
 ### PT2 -- `tur <file.tur> args` and `tur run <file> args`
 
-- [ ] The dispatch rule (PT-D6) in `main.c` after the command-table lookup
+- [x] The dispatch rule (PT-D6) in `main.c` after the command-table lookup
       and before `drv_try_external_subcommand`.
-- [ ] `tur run <file> a b` passes `a b` through; `-I`, `--release`,
+- [x] `tur run <file> a b` passes `a b` through; `-I`, `--release`,
       `--offline` and `--engine` keep working on either side of the file.
-- [ ] Fixtures: `tur hello.tur a b` prints both args; `tur check.tur` runs
+- [x] Fixtures: `tur hello.tur a b` prints both args; `tur check.tur` runs
       the file, not `tur check`; `tur run f.tur a` reaches `*args*`;
       `tur run f.tur -- a` still does.
 
 ### PT3 -- `tur x`
 
-- [ ] Source resolution for name, path and URL (PT-D5). Name and path need
+- [x] Source resolution for name, path and URL (PT-D5). Name and path need
       no network.
-- [ ] The cache entry for a URL source: SD-D3's directory and naming, the
+- [x] The cache entry for a URL source: SD-D3's directory and naming, the
       IL0 fetched-project helper when it exists, else the carried minimum.
-- [ ] Build the chosen `:bin` with the shared driver function from PT1;
+- [x] Build the chosen `:bin` with the shared driver function from PT1;
       the freshness check for a path source.
-- [ ] `--bin`, `--refresh`, `--offline` (refuse to fetch), and the usage text.
-- [ ] `tests/run-install.sh` cases with a scratch `TUR_HOME`: `tur x` of a
+- [x] `--bin`, `--refresh`, `--offline` (refuse to fetch), and the usage text.
+- [x] `tests/run-install.sh` cases with a scratch `TUR_HOME`: `tur x` of a
       `file://` bare repo builds once and runs twice (the second run with the
       network unreachable), `tur x <path>` rebuilds after a source edit,
       `tur x <installed>` execs without building, a two-bin spice needs
@@ -322,17 +323,80 @@ in a source file.
 
 ### PT4 -- Docs
 
-- [ ] `docs/guides/consuming-spices-guide.md`: "Running a spice's tool
+- [x] `docs/guides/consuming-spices-guide.md`: "Running a spice's tool
       without installing it" (`tur x`), next to IL6's project-less section.
-- [ ] `docs/guides/tur-run-guide.md` or a new `docs/guides/tur-serve-guide.md`:
+- [x] `docs/guides/tur-run-guide.md` or a new `docs/guides/tur-serve-guide.md`:
       `tur serve`'s flags, the loopback default and how to open it up, the
       limits (in-memory files, no TLS, no ranges).
-- [ ] `docs/guides/developing-spices-guide.md`, the `:bin` section: a spice
+- [x] `docs/guides/developing-spices-guide.md`, the `:bin` section: a spice
       with a `:bin` is runnable with `tur x` before it is installed.
-- [ ] CLAUDE.md: one line under "Per-file Commands Inside a Spice" for
+- [x] CLAUDE.md: one line under "Per-file Commands Inside a Spice" for
       `tur <file.tur> args`, and one under "Dev server port" noting that
       `tur serve` defaults to 8000, never 3000.
-- [ ] README's quick-start gains the three-line serve example.
+- [x] README's quick-start gains the three-line serve example.
+
+## As built (2026-10-22)
+
+Where the implementation settled a detail the design left open, or departed
+from it:
+
+- **PT0, the static path.** `StaticOpts`, `httpd-static-serve-with!` and
+  `mw-static-with` as designed; `httpd-static-serve!` delegates with
+  `(StaticOpts "" false)`. The index is served by re-entering the file path
+  with `<dir>/<index>`, so it gets the containment check, the dotfile rule and
+  the ETag for free. The path is now **percent-decoded before the checks** --
+  without that a listing's encoded links (`my%20file.txt`) were 404, and
+  `%2e%2e` reached the filesystem undecoded (harmless, but only by luck). A
+  malformed escape or `%00` is a miss. The listing escapes and percent-encodes
+  in place (no `stdlib/httpd-string.tur` helper fits); dates are computed from
+  the epoch arithmetically, so nothing needs `gmtime_r`. A `../` row leads
+  every listing but the root's. Eleven preamble statics carry
+  `__attribute__((unused))`; `tests/check-cc-warn-ratchet.sh` has no unused
+  baseline to record, so none was added.
+- **PT1, `tur serve`.** `stdlib/tools/serve.tur` parses with
+  `stdlib/args.tur`, which gains `args/spec-short` for `-p`, `-b`, `-q`, `-h`
+  (args.tur had no short spellings). `drv_parse_global_flags` stops at
+  `serve`, so every word after it is the server's. The engine is the JIT when
+  the build has one, else cc; `TUR_ENGINE` overrides, `interp` is refused.
+  The program runs hermetic (`--no-auto-spice` and no installed spices). The
+  request log goes to stderr through `mw-log-to`. A JIT run quiets c2mir's
+  system-header warnings. `--engine` is not a `serve` flag: the arm takes no
+  flags of its own, so `TUR_ENGINE` is the debugging knob.
+- **PT-D1, the shared path.** `drv_run_program(engine, entry, inc, argv)` and
+  `drv_exec_program(exe, argv)` in `src/driver/cmd_run.c`; `tur run`'s engine
+  delegation and `tur serve` use the first, `RUN_ENTRY`, stdin mode and `tur x`
+  the second. On POSIX `drv_exec_program` forks and execs rather than calling
+  `system()`, and forwards SIGTERM/SIGHUP: stopping `tur run`/`tur serve` on
+  the cc path used to orphan the program (tur -> sh -> program). The `:bin`
+  build is one function too, `pkg_build_spice_bin` (`install.c`), used by
+  `tur install` and `tur x`.
+- **The installed-prefix test** is `tests/check-serve-release.sh` (ctest
+  `tur_serve_release`), staging the archive with `scripts/stage-release.sh`
+  rather than `cmake --install`, which does not install the stdlib. Both
+  engines serve from it: the cc path works from the archive today, so the
+  dependency PT-D2 expected to surface is not there.
+- **PT2.** `tur <file> args` already landed with script-spice-deps SD3. Here:
+  words after the file in `tur run <file> ...` that are not run's flags are
+  program arguments (dash words included, not only bare ones), compacted in
+  place in `argv` so no exit path frees anything. Fixture
+  `cli-run-program-args`.
+- **PT3, `tur x`.** `src/driver/cmd_x.c`. A URL goes through
+  `script_deps_cache_entry` (`script_deps.c`): the SD cache, naming and
+  index.tur, and the fetched-project setup, so no "carried minimum" was
+  needed. The entry name is the URL's (or `--subdir`'s) last segment, before
+  the manifest is read. Without `--ref` the default branch, kept in index.tur
+  as `HEAD`. A URL's binaries go into `<entry>/.tur-x-bin/` (left out of the
+  tree hash, so a script lock over the same commit still verifies) rather
+  than `build/`, built under a private name and renamed into place. A path's
+  freshness check compares the binary against the newest file under the
+  checkout (`build/`, `spices/`, `cmake/` and dot entries excluded), and a
+  rebuild runs `tur fetch` there first. `--refresh` re-resolves a URL's ref,
+  or forces a path rebuild. `--offline` refuses to fetch. Old entries are
+  removed by `tur cache clean` (SD's name for the plan's `tur cache prune`).
+- **Not done.** Windows is untested for `tur x` (a URL's binary has no `.exe`
+  suffix, which `system()` there may need) and for the cli-serve hook.
+  `tur x serve` reaching a shadowed `tur-serve` (PT-D7) works only when an
+  installed spice is named `serve`.
 
 ## Open questions
 
@@ -367,7 +431,7 @@ in a source file.
 - A registry of spice names resolvable without a URL. `tur x <name>` means
   an installed name only.
 - Spices declared inside a script, lock files, and `tur cache prune`:
-  [script-spice-deps-plan](script-spice-deps-plan.md).
+  [script-spice-deps-plan](../upcoming/script-spice-deps-plan.md).
 - Shipping `src/runtime/` in release tarballs so the cc path works from a
   downloaded `tur`: tracked from the releases guide, surfaced by PT1's ctest,
   not solved here.

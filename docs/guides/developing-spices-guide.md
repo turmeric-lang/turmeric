@@ -1302,6 +1302,11 @@ spice:
   `"kind": "library"` or `"tool"`, plus the `"modules"` the spice provides).
 - **A spice with neither** is refused: there is nothing to install.
 
+A spice with a `:bin` is runnable before anyone installs it: `tur x <url>
+--ref <tag> [--subdir <dir>] -- <args>` fetches, builds and runs it from a
+cache, and `tur x ./my-spice -- <args>` builds a checkout in place. See
+[consuming-spices-guide](consuming-spices-guide.md#running-a-spices-tool-without-installing-it-tur-x).
+
 ### Where an installed spice's dependencies live
 
 An installed spice is set up exactly as a fetched project: `tur install` runs

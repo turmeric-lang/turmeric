@@ -288,6 +288,45 @@ the file apply, and every word after it is the script's. A built-in command
 always wins (`tur check.tur` runs a script called `check.tur`; `tur check`
 is the command). Windows has no `#!`: run `tur report.tur args` there.
 
+## Running a spice's tool without installing it (`tur x`)
+
+`tur install` makes a spice's `:bin` a command you keep. To run one once --
+the way `npx` or `uvx` do -- use `tur x`:
+
+```sh
+tur x https://github.com/turmeric-lang/turmeric-spices \
+      --ref notebook-v0.1.0 --subdir spices/notebook -- render hello.tur.md
+tur x ~/src/my-tool -- --help        # a local checkout, built in place
+tur x notebook -- new hello.tur.md   # an installed spice, run directly
+```
+
+Everything after `--` is the program's. The source is read the way
+`tur install` reads it:
+
+| Source | What `tur x` does |
+| --- | --- |
+| an installed name | runs the binary `tur install` built; never builds |
+| a path (has a `/`, or starts with `.` or `~`) | builds the `:bin` into `<checkout>/build/`, where `tur install` puts it, and again whenever a file under the checkout is newer than the binary |
+| a URL (`--ref`, `--subdir`) | fetches into the script-dep cache and builds the `:bin` there once |
+
+A URL lands in the same cache as a [`defscript` header](#declaring-spices-in-the-script-itself-defscript)'s
+deps -- `<data>/cache/script-spices/<name>-<sha12>`, set up as a fetched
+project, so its own `:spices` and `:cmake-deps` come with it -- and a tool and
+a script naming the same commit share one tree. The first run fetches and
+builds; later runs need no network. A `--ref` naming a branch is resolved once
+and remembered; `--refresh` resolves it again (an older tree stays until
+`tur cache clean` removes it). Without `--ref`, the default branch.
+
+- `--bin <name>` picks a binary when the spice declares several; with one it
+  is implied, and with several and no `--bin`, `tur x` lists them and exits 2.
+- `--offline` never fetches: a URL not in the cache is an error.
+- `--refresh` on a path rebuilds even when nothing changed.
+
+`tur x` registers nothing: no `state.tur` row, nothing in `~/.local/bin/`,
+nothing added to the project-less search path. It also ignores any
+`build.tur` in the current directory -- inside a project or outside one it
+means the same thing.
+
 ---
 
 ## What `tur add` Changes
@@ -655,6 +694,11 @@ tur run [--offline|--update] <file>
 tur <file> <args...>
 tur cache list
 tur cache clean [--older-than <days>]
+
+# Run a spice's tool once, without installing it
+tur x <url> [--ref <ref>] [--subdir <dir>] [--bin <name>] [-- <args...>]
+tur x <path> [-- <args...>]
+tur x <installed-name> [-- <args...>]
 ```
 
 ---
