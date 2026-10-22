@@ -1,0 +1,66 @@
+;; cps-catch-unwind-cannot-cross-an-effect-capture: a `catch-unwind` between a
+;; `perform` and its handler.  The compiled backend refused every shape here
+;; ("no lowering here"): catch-unwind was outside the CPS IR, and its thunk was
+;; a fn value the handler could not reach through.  A thunk written at the form
+;; is now translated inline under a catch prompt on the DK chain, so the
+;; perform captures through it and a panic in the resumed continuation is
+;; caught there.  No inline C, so run-turi.sh runs it beside run.sh.
+(defeffect Ask [] : int)
+
+;; 1. The perform inside the thunk; the resumed continuation panics.
+(defn around-perform [] : int
+  (let [r (catch-unwind (fn [] : int (+ 1 (if (> (perform (Ask)) 0) (panic "boom") 0))))]
+    (if (err? r) 100 200)))
+
+;; 2. The perform in a helper the thunk calls.
+(defn ask-then-panic [] : int
+  (let [v (perform (Ask))] (if (> v 0) (panic "boom") v)))
+(defn through-helper [] : int
+  (let [r (catch-unwind (fn [] : int (ask-then-panic)))]
+    (if (err? r) 100 200)))
+
+;; 3. The helper has a defer: it runs before the catch delivers.
+(defn ask-defer-panic [] : int
+  (defer (println "ask-defer-panic: defer ran"))
+  (let [v (perform (Ask))] (if (> v 0) (panic "boom") v)))
+(defn helper-defer [] : int
+  (let [r (catch-unwind (fn [] : int (ask-defer-panic)))]
+    (if (err? r) 100 200)))
+
+;; 4. No panic: the thunk's value comes back as Ok.
+(defn no-panic [] : int
+  (let [r (catch-unwind (fn [] : int (+ 1 (perform (Ask)))))]
+    (if (err? r) -1 (ok-val r))))
+
+;; 5. Nested catches: the inner one takes the panic, the outer sees Ok.
+(defn nested [] : int
+  (let [outer (catch-unwind (fn [] : int
+                (let [inner (catch-unwind (fn [] : int (+ 1 (if (> (perform (Ask)) 0) (panic "boom") 0))))]
+                  (if (err? inner) 10 20))))]
+    (if (err? outer) 100 (ok-val outer))))
+
+;; 6. catch-panic-of takes a payload of its type.
+(defn typed [] : int
+  (let [r (catch-panic-of :int (fn [] : int (let [v (perform (Ask))] (if (> v 0) (panic-with 42) v))))]
+    (if (err? r) 100 200)))
+
+;; 7. The handler clause panics: a catch inside the handled body does not take
+;;    it (the clause runs outside the body); one around the handle does.
+(defn body-catch [] : int
+  (let [r (catch-unwind (fn [] : int (+ 1 (perform (Ask)))))]
+    (if (err? r) 100 200)))
+(defn clause-panics [] : int (handle (body-catch) (Ask [] k) (panic "in clause")))
+
+(defn main [] : int
+  (println (handle (around-perform) (Ask [] k) (resume k 5)))
+  (println (handle (through-helper) (Ask [] k) (resume k 5)))
+  (println (handle (helper-defer) (Ask [] k) (resume k 5)))
+  (println (handle (no-panic) (Ask [] k) (resume k 41)))
+  (println (handle (nested) (Ask [] k) (resume k 5)))
+  (println (handle (typed) (Ask [] k) (resume k 5)))
+  (let [r (catch-unwind (fn [] : int (clause-panics)))]
+    (println (if (err? r) "clause panic caught outside" "not caught")))
+  ;; 8. A catch around the whole handle, in the same function.
+  (let [r (catch-unwind (fn [] : int (handle (ask-defer-panic) (Ask [] k) (resume k 5))))]
+    (println (if (err? r) "caught around the handle" "not caught")))
+  0)

@@ -1,0 +1,36 @@
+;; turi-fiber-resume-from-clause-scope-crashes-on-body-defer: a body with a
+;; `defer` takes the interpreter's fiber runtime, and a clause that resumed it
+;; from inside a scope of its own (a `let`, a call) crashed
+;; `tur --interpret`: the body and the clause shared one defer chain, so the
+;; resumed body's returns popped the clause's scope marker and the scope's exit
+;; walked off the end of the chain.  Each context now has its own chain.  Also
+;; pins the stored-`k` half of turi-fiber-handle-defers-fire-at-the-wrong-time:
+;; a body a case kept but never resumed does not run its defer, and one resumed
+;; after its handle exited runs it at the resume -- as the compiled runtime
+;; does.  No inline C, so run-turi.sh runs it beside run.sh.
+(defeffect Ask [] : int)
+
+(defn body [tag : cstr] : int
+  (defer (println tag))
+  (+ 1 (perform (Ask))))
+
+(defn stash [] : int
+  (let [^mut saved 0]
+    (defer (println "stash: defer ran"))
+    (println (handle (body "stash body: defer ran") (Ask [] k) (do (set! saved k) 0)))
+    (println "stash: handle exited")
+    (resume saved 10)))
+
+(defn main [] : int
+  ;; 1. resume from inside a `let` in the clause
+  (println (handle (body "let: defer ran") (Ask [] k) (let [x 1] (resume k x))))
+  ;; 2. resume from inside a local function the clause calls
+  (println (handle (body "call: defer ran") (Ask [] k)
+             (let [f (fn [] : int (resume k 2))] (f))))
+  ;; 3. a kept `k` never resumed: its body's defer does not run
+  (let [^mut saved 0]
+    (println (handle (body "never: defer ran") (Ask [] k) (do (set! saved k) 0))))
+  (println "never resumed")
+  ;; 4. a kept `k` resumed after its handle exited
+  (println (stash))
+  0)

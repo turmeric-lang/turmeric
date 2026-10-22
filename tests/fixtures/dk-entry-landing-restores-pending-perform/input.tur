@@ -1,0 +1,26 @@
+;; jit-dk-entry-locals-clobbered-by-longjmp: a DK entry whose body tail-resumes
+;; lands on its driver by longjmp, and the landing restores the pending-perform
+;; list from what it saved.  Under `tur jit` the saved value came back as a DK
+;; node's address, and the next abortive handler case walked it as a pending
+;; perform: a heap-use-after-free in __dk_abort_pending (caught only by the
+;; JIT suite, whose runtime is ASan-built).  `run-no-panic` is the tail-resume
+;; entry, `run-abort` the abortive case after it.
+(defn boom [x : int] : int (if (> x 0) (panic "boom") x))
+(defeffect Ask [] : int)
+(defeffect Abort [] : int)
+(defn cps-no-panic [x : int] : int
+  (defer (println "cps-no-panic: defer ran"))
+  (+ (perform (Ask)) (boom x)))
+(defn run-no-panic [x : int] : int
+  (let [r (handle (cps-no-panic x) (Ask [] k) (resume k 1))]
+    (println "run-no-panic done")))
+(defn cps-aborted [] : int
+  (defer (println "cps-aborted: defer ran at the abort"))
+  (+ 1 (perform (Abort))))
+(defn run-abort [x : int] : int
+  (let [a (handle (cps-aborted) (Abort [] k) 0)]
+    (println "run-abort done")))
+(defn main [] : int
+  (run-no-panic 0)
+  (run-abort 1)
+  0)

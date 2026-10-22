@@ -1,0 +1,10 @@
+body: defer ran
+100
+inner: defer ran
+through-helper: caught
+1100
+300
+body: defer ran
+100
+uncaught: defer ran
+caught around the handle

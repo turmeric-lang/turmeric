@@ -417,6 +417,7 @@ extern bool g_opt_r7rs;
  * bounded ground unfolding (refine_collect.c).  Off, `^reflect` is inert
  * (warned, never silently enforced). */
 extern bool g_opt_reflected_measures;
+extern bool g_opt_discontinue;
 /* RF5: --dump-reflect -- one line per `^reflect` site: verdict, decreasing
  * argument position, rejection reason.  A diagnostic knob, not an
  * experiment (same footing as --dump-write-frames). */

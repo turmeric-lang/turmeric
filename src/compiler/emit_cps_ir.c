@@ -685,6 +685,37 @@ static const CTerm *first_unsupported(const CTerm *t) {
     }
 }
 
+/* discontinue-plan: does `t` hold a raising resume (a `discontinue`)
+ * anywhere?  Same traversal as first_unsupported. */
+static bool term_has_raise(const CTerm *t) {
+    if (!t) return false;
+    switch (t->kind) {
+        case CT_LETVAL:   return term_has_raise(t->as.letval.body);
+        case CT_LETPRIM:  return term_has_raise(t->as.letprim.body);
+        case CT_LETCALL:  return term_has_raise(t->as.letcall.body);
+        case CT_LETRAW:   return term_has_raise(t->as.letraw.body);
+        case CT_LETCONT:  return term_has_raise(t->as.letcont.jbody) || term_has_raise(t->as.letcont.body);
+        case CT_IF:       return term_has_raise(t->as.if_.then_) || term_has_raise(t->as.if_.else_);
+        case CT_MATCH:
+            for (uint32_t i = 0; i < t->as.match.n_arms; i++)
+                if (term_has_raise(t->as.match.arms[i].body)) return true;
+            return false;
+        case CT_RESET:    return term_has_raise(t->as.reset.delim) || term_has_raise(t->as.reset.body);
+        case CT_SHIFT:    return term_has_raise(t->as.shift.body);
+        case CT_HANDLE:
+            if (term_has_raise(t->as.handle.delim) || term_has_raise(t->as.handle.body)) return true;
+            for (uint32_t i = 0; i < t->as.handle.n_cases; i++)
+                if (term_has_raise(t->as.handle.cases[i].case_body)) return true;
+            return false;
+        case CT_PERFORM:  return term_has_raise(t->as.perform.body);
+        case CT_RESUME:   return t->as.resume.raise || term_has_raise(t->as.resume.body);
+        case CT_CLONEABLE: return term_has_raise(t->as.cloneable.body);
+        case CT_CALLCC:   return term_has_raise(t->as.callcc.body);
+        case CT_LOOP:     return term_has_raise(t->as.loop.body);
+        default: return false;
+    }
+}
+
 /* serial-receiver-effect-cannot-reach-enclosing-handler: every outward serial
  * receiver in `t` is CPS-emitted (the reset calls its `__cps` twin).  Read by
  * the classification fixpoint, once every entry exists: a function whose
@@ -1394,7 +1425,16 @@ static void cps_pend_hook_fire(EmitCtx *ctx, Buf *body) {
     if (cps_pend_any_firable()) cps_pend_fire(ctx, body);
     if (g_pend_k_ok && g_pend_k) {
         indent_buf(body, ctx->indent);
-        buf_printf(body, "__dk_panic_abandon(%s);\n", g_pend_k);
+        const char *rt = ctx->current_fn_ret_ctype;
+        if (rt && strcmp(rt, "void") != 0) {
+            /* cps-catch-unwind-cannot-cross-an-effect-capture: this body holds
+             * its chain and consumes it, so a catch prompt on it takes the
+             * panic here and the program goes on past the prompt with Err. */
+            buf_printf(body, "{ DKCaught __pcc = __dk_panic_catch(%s); "
+                             "if (__pcc.k) return dk_run(__pcc.k, __pcc.err); }\n", g_pend_k);
+        } else {
+            buf_printf(body, "__dk_panic_abandon(%s);\n", g_pend_k);
+        }
     }
 }
 /* The entries whose free variables `caps` does not carry: unfirable in a
@@ -6963,15 +7003,18 @@ static void ensure_S(const Expr *program) {
                  * fn-value was a candidate: a SIG-REJECT capturing lambda
                  * that only CALLS a performer used to taint nothing. */
                 EffSet fv_esc = {0};
+                /* cps-catch-unwind-cannot-cross-an-effect-capture: a catch
+                 * thunk whose body its caller inlines is never a fn value at
+                 * run time. */
                 if ((fd->binding->is_lifted_lambda || addr_taken_has(fd->binding))
                     && !threadable_has(fd->binding) && !serial_recv_has(fd->binding)
-                    && !direct_only_has(fd->binding))
+                    && !direct_only_has(fd->binding) && !fd->cps_catch_inlined)
                     fn_net_escaping(program, fd->body, &fv_esc);
                 for (int b = 0, nb = eff_bits_live(); b < nb; b++)
                     if (effset_has(&fv_esc, b) && !g_fvesc_src[b]) g_fvesc_src[b] = fd;
                 if (candidate
                     && (fd->binding->is_lifted_lambda || addr_taken_has(fd->binding))
-                    && !threadable_has(fd->binding) && !direct_only_has(fd->binding)) {
+                    && !threadable_has(fd->binding) && !direct_only_has(fd->binding) && !fd->cps_catch_inlined) {
                     /* B5: perm-taint only on the NET ESCAPING effect -- a perform
                      * this fn-value DISCHARGES internally (a self-handling body,
                      * e.g. the `(fn [] (handle (perform E) (E ...)))` async closure
@@ -10898,8 +10941,8 @@ static bool term_resumes_nontail(const CTerm *t, const Binding *k) {
     while (t) {
         switch (t->kind) {
             case CT_RESUME:
-                if (t->as.resume.k.kind == CA_VAR && t->as.resume.k.var == k
-                    && !resume_is_tail(t)) return true;
+                if (!t->as.resume.raise && t->as.resume.k.kind == CA_VAR
+                    && t->as.resume.k.var == k && !resume_is_tail(t)) return true;
                 t = t->as.resume.body; break;
             case CT_PERFORM: t = t->as.perform.body; break;
             case CT_LETVAL:  t = t->as.letval.body;  break;
@@ -10929,7 +10972,8 @@ static bool term_resumes_k_any(const CTerm *t, const Binding *k) {
     while (t) {
         switch (t->kind) {
             case CT_RESUME:
-                if (t->as.resume.k.kind == CA_VAR && t->as.resume.k.var == k) return true;
+                if (!t->as.resume.raise && t->as.resume.k.kind == CA_VAR
+                    && t->as.resume.k.var == k) return true;
                 t = t->as.resume.body; break;
             case CT_PERFORM: t = t->as.perform.body; break;
             case CT_LETVAL:  t = t->as.letval.body;  break;
@@ -10950,8 +10994,13 @@ static bool term_resumes_k_any(const CTerm *t, const Binding *k) {
     return false;
 }
 static bool case_body_tail_resumes(const CTerm *t);
+static bool term_has_raise(const CTerm *t);
 static bool case_resumes_into(const CHandleCase *c) {
+    /* discontinue-plan: a case that discontinues needs dk_perform's `sub`
+     * whole -- its enclosing-handler markers included -- because the body may
+     * catch the raise and go on to perform an outer effect. */
     return c && c->k && !c->resumable_payload && !is_shift_effect(c->effect)
+        && !term_has_raise(c->case_body)
         && (term_resumes_nontail(c->case_body, c->k)
             || (!case_body_tail_resumes(c->case_body) && term_resumes_k_any(c->case_body, c->k)));
 }
@@ -11023,6 +11072,7 @@ static bool term_resumes_k_once_impl(const CTerm *t, const Binding *k, bool allo
                     if (atom_is_binding(&t->as.perform.args[i], k)) return false;
                 t = t->as.perform.body; break;
             case CT_RESUME:
+                if (t->as.resume.raise) return false;
                 if (!atom_is_binding(&t->as.resume.k, k) || atom_is_binding(&t->as.resume.v, k))
                     return false;
                 return !term_mentions_binding(t->as.resume.body, k);
@@ -11080,6 +11130,7 @@ static bool term_k_copied_only(const CTerm *t, const Binding *k) {
         switch (t->kind) {
             case CT_APPCONT: return !atom_is_binding(&t->as.appcont.v, k);
             case CT_RESUME:
+                if (t->as.resume.raise && atom_is_binding(&t->as.resume.k, k)) return false;
                 if (atom_is_binding(&t->as.resume.v, k)) return false;
                 t = t->as.resume.body; break;
             case CT_PERFORM:
@@ -11151,6 +11202,7 @@ static bool term_k_only_resumed(const CTerm *t, const Binding *k) {
         switch (t->kind) {
             case CT_APPCONT: return !atom_is_binding(&t->as.appcont.v, k);
             case CT_RESUME:
+                if (t->as.resume.raise && atom_is_binding(&t->as.resume.k, k)) return false;
                 if (atom_is_binding(&t->as.resume.v, k)) return false;
                 t = t->as.resume.body; break;
             case CT_PERFORM:
@@ -12076,14 +12128,26 @@ static void emit_reset(CE *ce, const CTerm *t) {
      * freed here; register it for reaping at the outermost entry boundary
      * (docs/archive/cps-delimited-dk-node-leak.md) -- borrow_next keeps that
      * dk_free out of the enclosing chain. */
-    ce_line(ce, "DK *%s = __dk_reap_keep(dk_prompt(1, %sdk_frame_resume_borrow(%s, %s, %s)%s));",
-            pchain, uw, hname, envexpr, ce->cur_k, uwc);
+    if (t->as.reset.is_catch) {
+        /* cps-catch-unwind-cannot-cross-an-effect-capture: a CATCH prompt.
+         * It boxes the delimited body's value as Ok on the way to the
+         * continuation frame, and a panic raised while it is on the chain is
+         * delivered past it as Err (__dk_panic_catch). */
+        ce_line(ce, "DK *%s = __dk_reap_keep(dk_prompt_catch(%d, %d, %sdk_frame_resume_borrow(%s, %s, %s)%s));",
+                pchain, t->as.reset.catch_type, t->as.reset.catch_reap ? 1 : 0,
+                uw, hname, envexpr, ce->cur_k, uwc);
+    } else {
+        ce_line(ce, "DK *%s = __dk_reap_keep(dk_prompt(1, %sdk_frame_resume_borrow(%s, %s, %s)%s));",
+                pchain, uw, hname, envexpr, ce->cur_k, uwc);
+    }
     free(envexpr);
 
     const char *save = ce->cur_k;
     const Type *save_ty = ce->cur_ty;
     ce->cur_k = arena_strdup(&g_arena, pchain, strlen(pchain));
-    ce->cur_ty = t->as.reset.x.type;    /* KK_PROMPT crossing type = reset result */
+    /* KK_PROMPT crossing type = reset result; a catch's delimited body
+     * delivers the thunk's value, which the prompt boxes. */
+    ce->cur_ty = t->as.reset.is_catch ? t->as.reset.delim_ty : t->as.reset.x.type;
     /* defer-skipped-on-panic-in-cps-function: the reset continuation frame
      * exists from here on and owns the fires in reset.body. */
     uint64_t down_saved = g_pend_downstream;
@@ -13331,6 +13395,8 @@ static void emit_shift(CE *ce, const CTerm *t) {
  * the handler case's return (KK_RET/KK_PROMPT), with nothing after?  Then the
  * handler does no post-resume work and dk_perform can trampoline it. */
 static bool resume_is_tail(const CTerm *t) {
+    /* discontinue-plan: a raising resume always comes back to the case. */
+    if (t->as.resume.raise) return false;
     const CTerm *b = t->as.resume.body;
     return b && b->kind == CT_APPCONT
         && (b->as.appcont.kont.kind == KK_RET || b->as.appcont.kont.kind == KK_PROMPT)
@@ -13837,7 +13903,8 @@ static void emit_await(CE *ce, const CTerm *t) {
         ce_line(ce, "if (__awok) {");
         ce_line(ce, "    intptr_t __awr = %s((intptr_t)%s, __tur_await_value((void *)(%s)));",
                 pname, envv, fsa);
-        ce_line(ce, "    if (tur_panicking) { __dk_panic_abandon(%s); return 0; }", ce->cur_k);
+        ce_line(ce, "    if (tur_panicking) { DKCaught __pcc = __dk_panic_catch(%s); "
+                    "if (__pcc.k) return dk_run(__pcc.k, __pcc.err); return 0; }", ce->cur_k);
         ce_line(ce, "    return dk_run(%s, __awr);", ce->cur_k);
         ce_line(ce, "}");
         if (caps)
@@ -13908,6 +13975,38 @@ static void emit_resume(CE *ce, const CTerm *t) {
     /* resume k v = dk_invoke((DK*)k, v); slot-load the result and continue. */
     char *kk = atom_str(ce, &t->as.resume.k);
     char *vv = atom_str(ce, &t->as.resume.v);
+    /* discontinue-plan: `(discontinue k payload)`.  __dk_discontinue raises the
+     * payload at k's perform -- the body's pending defers fire, a catch prompt
+     * in the body takes it and the body goes on (its answer comes back here,
+     * as a resume's would), or else it returns with the panic still raised and
+     * the check below re-raises it here, in the clause.  Never a tail resume:
+     * the case always gets control back (resume_is_tail). */
+    if (t->as.resume.raise) {
+        char *sv = slot_store_reap(ce->ctx, t->as.resume.v.ty, t->as.resume.v.type, vv);
+        Span sp = t->as.resume.raise_span;
+        const char *path = sp.line ? diag_file_path(sp.file_id) : NULL;
+        const char *base = path ? path : "";
+        for (const char *q = base; *q; q++) if (*q == '/' || *q == '\\') base = q + 1;
+        Buf site; buf_init(&site);
+        buf_putc(&site, '"');
+        for (const char *q = base; *q; q++) {
+            if (*q == '\\' || *q == '"') buf_putc(&site, '\\');
+            buf_putc(&site, *q);
+        }
+        buf_putc(&site, '"'); buf_putc(&site, '\0');
+        Buf inv; buf_init(&inv);
+        buf_printf(&inv, "__dk_discontinue((DK *)(%s), %d, (intptr_t)(%s), %s, %u)",
+                   kk, t->as.resume.raise_type, sv, site.data, sp.line);
+        buf_putc(&inv, '\0');
+        char *ld = slot_load(ce->ctx, t->as.resume.x.ty, t->as.resume.x.type, inv.data, false);
+        char *bn = cvar_cname(ce, t->as.resume.x);
+        ce_line(ce, "%s = %s;", bn, ld);
+        buf_free(&inv); buf_free(&site);
+        free(bn); free(ld); free(sv); free(kk); free(vv);
+        cps_panic_check(ce);
+        emit_term(ce, t->as.resume.body);
+        return;
+    }
     /* E7: a TAIL resume directly inside a handler case yields to the entry driver
      * (dk_tail_resume) instead of resuming inline (dk_invoke) -- the trampoline
      * keeps deep effectful recursion flat.  dk_perform installed this case with
@@ -14635,6 +14734,22 @@ void emit_cps_ir_flush_groups(Buf *file) {
         if (g_ctg[gi].declared && !g_ctg[gi].defined) ctg_emit_def(file, &g_ctg[gi]);
 }
 
+/* jit-dk-entry-locals-clobbered-by-longjmp: what a DK entry's driver landing
+ * reads back after a longjmp -- the enclosing driver, the pending-perform list,
+ * the root prompt and the reap mark -- lives in one struct with the jump
+ * buffer, whose address is taken, so no backend keeps it in a register the
+ * jump does not restore.  Plain locals came back stale under the JIT (c2mir's
+ * setjmp; `volatile` did not help): the landing restored g_dk_pend_perform to a
+ * DK node's address, and the next abortive handler case walked it as a
+ * pending perform (heap-use-after-free in __dk_abort_pending).  Expects
+ * `__root` and `__dk_reap_mark` already declared. */
+static void emit_dk_entry_landing_state(Buf *file) {
+    buf_puts(file, "    struct { tur_jmp_buf jb; tur_jmp_buf *save; DKPendPerform *pp; DK *root; size_t mark; } __dke;\n");
+    buf_puts(file, "    __dke.save = g_dk_driver; __dke.pp = g_dk_pend_perform;\n");
+    buf_puts(file, "    __dke.root = __root; __dke.mark = __dk_reap_mark;\n");
+    buf_puts(file, "    g_dk_driver = &__dke.jb;\n");
+}
+
 /* await-parks-only-to-the-nearest-c-frame: a call in `e` (nested function
  * definitions excluded) through a rank-2 parameter that may receive an
  * awaiting function and that the translator cannot thread -- it calls the
@@ -15241,6 +15356,7 @@ static bool emit_cps_ir_try_fn_impl(EmitCtx *ctx, Buf *file, const Expr *e) {
         emit_main_deep_stack_prologue(file);
         buf_puts(file, "    __tur_static_init();\n");   /* S1b */
         emit_win_binary_stdio_prologue(file);
+        emit_main_root_unwind_prologue(file);
         buf_puts(file, "    /* *args*: build cons list from argv[1..argc-1]; *argv0* is argv[0] */\n");
         buf_puts(file, "    if (argc > 0 && argv[0]) g_tur_argv0 = argv[0];\n");
         buf_puts(file, "    g_tur_args = 0;\n");
@@ -15260,12 +15376,14 @@ static bool emit_cps_ir_try_fn_impl(EmitCtx *ctx, Buf *file, const Expr *e) {
         /* E7: install the trampoline driver.  A tail-resume longjmps here; the
          * else-branch runs the trampoline to completion. */
         if (!mvoid) buf_puts(file, "    int64_t __r;\n");
-        buf_puts(file, "    tur_jmp_buf __dkjb; tur_jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;\n");
-        buf_puts(file, "    DKPendPerform *__dkpp = g_dk_pend_perform;\n");
-        buf_printf(file, "    if (TUR_SETJMP(__dkjb) == 0) { %s%s__cps(__root); }\n",
+        emit_dk_entry_landing_state(file);
+        buf_printf(file, "    if (TUR_SETJMP(__dke.jb) == 0) { %s%s__cps(__root); }\n",
                    mvoid ? "(void)" : "__r = ", cn);
-        buf_printf(file, "    else { g_dk_pend_perform = __dkpp; %s__dk_drive_after(); }\n", mvoid ? "(void)" : "__r = ");
-        buf_puts(file, "    g_dk_driver = __dksave;\n");
+        buf_printf(file, "    else { g_dk_pend_perform = __dke.pp; %s__dk_drive_after(); }\n", mvoid ? "(void)" : "__r = ");
+        buf_puts(file, "    g_dk_driver = __dke.save;\n");
+        /* compiled-uncaught-panic-skips-caller-defers: the chain unwound to the
+         * root; end the unwind before the value (meaningless now) is read. */
+        buf_puts(file, "    if (tur_panicking) tur_panic_root_exit();\n");
         /* Read the delivered value out BEFORE the reap: a Tier-C return rides a
          * heap box owned by the reap list (consume=false, never freed at a load),
          * so the reap frees it -- copy the value into a local first, then reap. */
@@ -15279,7 +15397,7 @@ static bool emit_cps_ir_try_fn_impl(EmitCtx *ctx, Buf *file, const Expr *e) {
          * resumed body settles: a parked copy may still reference a registered
          * chain / env struct / box.  __dk_entry_leave (emit_module.c) has the
          * whole protocol (async-parked-body-chains-never-reaped). */
-        buf_puts(file, "    __dk_entry_leave(__root, __dk_reap_mark);\n");
+        buf_puts(file, "    __dk_entry_leave(__dke.root, __dke.mark);\n");
         if (mvoid) {
             buf_puts(file, "    return 0;\n}\n");
         } else {
@@ -15438,15 +15556,14 @@ static bool emit_cps_ir_try_fn_impl(EmitCtx *ctx, Buf *file, const Expr *e) {
      * the d2b main), so a colored body reached from a non-d2b caller (`run`
      * called by a plain main) still trampolines a deep tail-resume flat. */
     if (!void_ret) buf_puts(file, "    int64_t __r;\n");
-    buf_puts(file, "    tur_jmp_buf __dkjb; tur_jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;\n");
-    buf_puts(file, "    DKPendPerform *__dkpp = g_dk_pend_perform;\n");
-    buf_printf(file, "    if (TUR_SETJMP(__dkjb) == 0) { %s%s__cps(%s); }\n",
+    emit_dk_entry_landing_state(file);
+    buf_printf(file, "    if (TUR_SETJMP(__dke.jb) == 0) { %s%s__cps(%s); }\n",
                void_ret ? "(void)" : "__r = ", cn, __args.data);
     /* T6: after a tail-resume longjmp the drive runs continuations that are not
      * this entry's body; no bounce shortcut applies there. */
-    buf_printf(file, "    else { g_dk_pend_perform = __dkpp; %s%s__dk_drive_after(); }\n",
+    buf_printf(file, "    else { g_dk_pend_perform = __dke.pp; %s%s__dk_drive_after(); }\n",
                tb_entry ? "tur_tb_root = NULL; " : "", void_ret ? "(void)" : "__r = ");
-    buf_puts(file, "    g_dk_driver = __dksave;\n");
+    buf_puts(file, "    g_dk_driver = __dke.save;\n");
     if (tb_entry) buf_puts(file, "    tur_tb_root = __tb_save;\n");
     buf_free(&__args);
     /* Read the delivered value out BEFORE the reap: a Tier-C return rides a heap
@@ -15471,7 +15588,7 @@ static bool emit_cps_ir_try_fn_impl(EmitCtx *ctx, Buf *file, const Expr *e) {
     /* Free the root and reap, or hand both to the park the body parked on --
      * see __dk_entry_leave (emit_module.c, async-parked-body-chains-never-
      * reaped). */
-    buf_puts(file, "    __dk_entry_leave(__root, __dk_reap_mark);\n");
+    buf_puts(file, "    __dk_entry_leave(__dke.root, __dke.mark);\n");
     if (void_ret) {
         buf_puts(file, "    return;\n}\n");
     } else {

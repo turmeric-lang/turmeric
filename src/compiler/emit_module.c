@@ -13580,6 +13580,17 @@ void emit_win_binary_stdio_prologue(Buf *out) {
 }
 
 /*
+ * compiled-uncaught-panic-skips-caller-defers: every emitted C `main` turns on
+ * the root unwind (tur_root_unwind in the preamble) for its own thread, so an
+ * uncaught panic unwinds to `main` firing each frame's defers, and `main`
+ * aborts there.  Called right after emit_win_binary_stdio_prologue, at the
+ * same sites.
+ */
+void emit_main_root_unwind_prologue(Buf *out) {
+    buf_puts(out, "    tur_root_unwind = 1;\n");
+}
+
+/*
  * WIN1: emit a ucontext implementation backed by Win32 Fibers.
  *
  * MinGW has no <ucontext.h>.  Win32 Fibers are the genuine equivalent -- both
@@ -15491,6 +15502,8 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
      * Declared after tur_panic in the preamble; forward-declare tur_panic here. */
     buf_puts(out, "static void tur_panic(const char *msg);\n");
     buf_puts(out, "static void tur_panic_at(const char *file, int line, const char *msg);\n");
+    buf_puts(out, "static void tur_panic_at_site(const char *file, int line, const char *msg);\n");
+    buf_puts(out, "static void tur_panic_with_site(int type_tag, void *payload, const char *file, int line);\n");
     /* any-narrowing-broken-for-parametric-receivers: two ids can share a NAME.
      * The box id is interned per instantiation, so `(Option int)` and
      * `(Option float)` are distinct ids -- but `type-of` reports the head name
@@ -15987,6 +16000,15 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
      * Always-on since the panic-return-signal experiment graduated. */
     emit_rt_tls(out, shared, "TUR_THREAD_LOCAL int tur_panicking = 0;\n", "TUR_THREAD_LOCAL int tur_panicking",
                 "tur_panicking", "int *", "tur_tls_panicking_ptr", NULL);
+    /* compiled-uncaught-panic-skips-caller-defers: set only by the emitted C
+     * `main`, on its own thread.  While it is set, a panic with no
+     * catch-unwind boundary still prints at once, but then unwinds like a
+     * caught one -- every frame between the panic and `main` fires its defers
+     * on the way out -- and `main` aborts when the signal reaches it
+     * (tur_panic_root_exit).  Other threads and task-group fibers keep the
+     * immediate abort, since nothing above them would see the signal. */
+    emit_rt_tls(out, shared, "TUR_THREAD_LOCAL int tur_root_unwind = 0;\n", "TUR_THREAD_LOCAL int tur_root_unwind",
+                "tur_root_unwind", "int *", "tur_tls_root_unwind_ptr", NULL);
     /* Heap continuation node used by the general catch-unwind segment-splitter
      * trampoline (always-on since stackless-catch-unwind graduated).  `tag`
      * names the resume segment (0 = DONE / function return), `saved[]` (up to
@@ -16013,8 +16035,10 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
      * runtime, never the caller, so a `(panic ...)` site calls tur_panic_at
      * with its own .tur file and line (emit_panic_call); tur_panic is the
      * runtime's own entry, whose location is honestly its own. */
+    buf_puts(out, "static void tur_panic_root_print(void);\n");
     buf_puts(out, "static void tur_panic_at(const char *file, int line, const char *msg) {\n");
     buf_puts(out, "    if (tur_panic_in_progress) {\n");
+    buf_puts(out, "        tur_panic_root_print();\n");
     buf_puts(out, "        fprintf(stderr, \"double panic: aborting\\n\");\n");
     buf_puts(out, "        abort();\n");
     buf_puts(out, "    }\n");
@@ -16032,6 +16056,16 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "        tur_panicking = 1;\n");
     buf_puts(out, "        return;\n");
     buf_puts(out, "    }\n");
+    /* compiled-uncaught-panic-skips-caller-defers: unwind to `main`.  The
+     * message is printed when the unwind ends there (tur_panic_root_exit):
+     * a catch-unwind prompt on a CPS chain may still take the panic
+     * (cps-catch-unwind-cannot-cross-an-effect-capture). */
+    buf_puts(out, "    if (tur_root_unwind == 2) {\n");
+    buf_printf(out, "        global_panic_payload = panic_payload_new(%d, msg ? strdup(msg) : NULL, file, line, 1);\n", (int)TY_CSTR);
+    buf_puts(out, "        if (global_panic_frame) { tur_frame_fire_chain(global_panic_frame); global_panic_frame = NULL; }\n");
+    buf_puts(out, "        tur_panicking = 1;\n");
+    buf_puts(out, "        return;\n");
+    buf_puts(out, "    }\n");
     buf_puts(out, "    fprintf(stderr, \"panic at %s:%d: %s\\n\", file, line, msg ? msg : \"(no message)\");\n");
     buf_puts(out, "    if (global_panic_frame) {\n");
     buf_puts(out, "        tur_frame_fire_chain(global_panic_frame);\n");
@@ -16042,6 +16076,10 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    abort();\n");
     buf_puts(out, "}\n");
     buf_puts(out, "static void tur_panic(const char *msg) { tur_panic_at(__FILE__, __LINE__, msg); }\n\n");
+    /* compiled-uncaught-panic-skips-caller-defers: the end of an unwind that
+     * no catch-unwind took.  The message was printed where the panic was
+     * raised; every frame on the way here has fired its defers. */
+    buf_puts(out, "static void tur_panic_root_exit(void);\n");
     /* panic-location-names-the-runtime-not-the-call-site: the current panic
      * site and tur_panic_sited are PROGRAM-side, after the fixed preamble
      * (emit_panic_site_slot) -- a thread-local in this region is reached
@@ -16091,6 +16129,20 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
      * to leak unconditionally to stay sound. */
     buf_puts(out, "    int owns_value;\n");
     buf_puts(out, "};\n\n");
+    /* The message of a panic the root unwind is carrying, printed once: at
+     * the end of the unwind, or ahead of a double panic raised during it. */
+    buf_puts(out, "static void tur_panic_root_print(void) {\n");
+    buf_puts(out, "    tur_panic_payload *p = global_panic_payload;\n");
+    buf_puts(out, "    if (!tur_root_unwind || !p || p->line < 0) return;\n");
+    buf_puts(out, "    if (p->owns_value) fprintf(stderr, \"panic at %s:%d: %s\\n\", p->file, p->line, p->value ? (const char *)p->value : \"(no message)\");\n");
+    buf_puts(out, "    else fprintf(stderr, \"panic at %s:%d\\n\", p->file ? p->file : \"(unknown)\", p->line);\n");
+    buf_puts(out, "    p->line = -1;   /* printed */\n");
+    buf_puts(out, "}\n");
+    buf_puts(out, "static void tur_panic_root_exit(void) {\n");
+    buf_puts(out, "    tur_panic_root_print();\n");
+    buf_puts(out, "    fflush(NULL);\n");
+    buf_puts(out, "    abort();\n");
+    buf_puts(out, "}\n");
     emit_rt_global(out, shared, "tur_panic_payload *global_panic_payload = NULL;\n\n", "tur_panic_payload *global_panic_payload");
     buf_puts(out, "static tur_panic_payload *panic_payload_new(int type_tag, void *payload, const char *file, int line, int owns_value) {\n");
     buf_puts(out, "    tur_panic_payload *p = (tur_panic_payload *)malloc(sizeof(tur_panic_payload));\n");
@@ -16622,6 +16674,7 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
      * tur_current_fiber are in scope for the per-fiber panic check. */
     buf_puts(out, "static void tur_panic_with(int type_tag, void *payload, const char *file, int line) {\n");
     buf_puts(out, "    if (tur_panic_in_progress) {\n");
+    buf_puts(out, "        tur_panic_root_print();\n");
     buf_puts(out, "        fprintf(stderr, \"double panic: aborting\\n\");\n");
     /* payload is opaque (may be an inline scalar reinterpreted as a pointer,
      * e.g. (panic-with 7) -> (void*)7, or a value borrowed elsewhere), so we
@@ -16647,11 +16700,34 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "        global_panic_payload = panic_payload_new(type_tag, payload, file, line, 0);\n");
     buf_puts(out, "        TUR_LONGJMP(tur_current_fiber->panic_jmpbuf);\n");
     buf_puts(out, "    }\n");
+    buf_puts(out, "    if (tur_root_unwind == 2) {\n");
+    buf_puts(out, "        global_panic_payload = panic_payload_new(type_tag, payload, file, line, 0);\n");
+    buf_puts(out, "        if (global_panic_frame) { tur_frame_fire_chain(global_panic_frame); global_panic_frame = NULL; }\n");
+    buf_puts(out, "        tur_panicking = 1;\n");
+    buf_puts(out, "        return;\n");
+    buf_puts(out, "    }\n");
     buf_puts(out, "    fprintf(stderr, \"panic at %s:%d\\n\", file ? file : \"(unknown)\", line);\n");
     /* payload is opaque -- see the double-panic path above.  Do not free it:
      * a scalar/borrowed payload must never be freed, and abort() reclaims a
      * heap payload via the OS anyway. */
     buf_puts(out, "    abort();\n");
+    buf_puts(out, "}\n\n");
+    /* compiled-uncaught-panic-skips-caller-defers: the entries an emitted
+     * `panic` / `panic-with` site calls.  Such a site is always followed by
+     * the propagation check that hands the signal to its caller, so with the
+     * root unwind on (tur_root_unwind == 1, set by `main`) an uncaught panic
+     * raised here may unwind to `main` (state 2 while it is raised).  A panic
+     * a runtime helper raises (a failed dynamic operator, a bad cast) has no
+     * such check behind it, so with no catch-unwind live it still aborts. */
+    buf_puts(out, "static void tur_panic_at_site(const char *file, int line, const char *msg) {\n");
+    buf_puts(out, "    int __r = tur_root_unwind; if (__r) tur_root_unwind = 2;\n");
+    buf_puts(out, "    tur_panic_at(file, line, msg);\n");
+    buf_puts(out, "    if (__r) tur_root_unwind = __r;\n");
+    buf_puts(out, "}\n");
+    buf_puts(out, "static void tur_panic_with_site(int type_tag, void *payload, const char *file, int line) {\n");
+    buf_puts(out, "    int __r = tur_root_unwind; if (__r) tur_root_unwind = 2;\n");
+    buf_puts(out, "    tur_panic_with(type_tag, payload, file, line);\n");
+    buf_puts(out, "    if (__r) tur_root_unwind = __r;\n");
     buf_puts(out, "}\n\n");
     /* Phase T22: Cooperative cancellation flag */
     emit_rt_tls(out, shared, "TUR_THREAD_LOCAL bool tur_fiber_cancelled_flag = false;\n\n", "TUR_THREAD_LOCAL bool tur_fiber_cancelled_flag",
@@ -21224,7 +21300,9 @@ static int emit_program_inner(Buf *out, const Expr *program) {
                                       : "a stdlib top-level statement");
                 continue;
             }
+            ctx.in_user_main = true;
             emit_stmt(&ctx, &body, e);
+            ctx.in_user_main = false;
         }
     }
     for (uint32_t i = 0; i < ctx.n_abi_specializations; i++) {
@@ -22020,6 +22098,7 @@ static int emit_program_inner(Buf *out, const Expr *program) {
          * (before the Windows stdio mode switch). */
         buf_puts(out, "    __tur_static_init();\n");
         emit_win_binary_stdio_prologue(out);
+        emit_main_root_unwind_prologue(out);
         /* CLI-ARGS: Build *args* list from argv[1..] as a linked list of char* (as int64_t). */
         buf_puts(out, "    /* *args*: build cons list from argv[1..argc-1]; *argv0* is argv[0] */\n");
         buf_puts(out, "    if (argc > 0 && argv[0]) g_tur_argv0 = argv[0];\n");
@@ -22037,6 +22116,7 @@ static int emit_program_inner(Buf *out, const Expr *program) {
          * empty on this path and the write is kept for the shape only. */
         if (def_init_body.len) buf_write(out, def_init_body.data, def_init_body.len);
         if (body.len) buf_write(out, body.data, body.len);
+        buf_puts(out, "    if (tur_panicking) tur_panic_root_exit();\n");
         buf_puts(out, "    return 0;\n");
         buf_puts(out, "}\n");
     } else if (def_init_body.len) {
@@ -23824,6 +23904,7 @@ static int emit_implementation_inner(Buf *out, const char *module_name, const Ex
         emit_main_deep_stack_prologue(out);
         buf_puts(out, "    __tur_static_init();\n");   /* S1b */
         emit_win_binary_stdio_prologue(out);
+        emit_main_root_unwind_prologue(out);
         /* CLI-ARGS: Build *args* list from argv[1..] as a linked list of char* (as int64_t). */
         buf_puts(out, "    /* *args*: build cons list from argv[1..argc-1]; *argv0* is argv[0] */\n");
         buf_puts(out, "    if (argc > 0 && argv[0]) g_tur_argv0 = argv[0];\n");
@@ -23836,6 +23917,7 @@ static int emit_implementation_inner(Buf *out, const char *module_name, const Ex
         buf_puts(out, "        g_tur_args = (int64_t)(intptr_t)_c;\n");
         buf_puts(out, "    }\n");
         if (body.len) buf_write(out, body.data, body.len);
+        buf_puts(out, "    if (tur_panicking) tur_panic_root_exit();\n");
         buf_puts(out, "    return 0;\n");
         buf_puts(out, "}\n");
     }

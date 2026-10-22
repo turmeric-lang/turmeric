@@ -899,6 +899,8 @@ typedef struct { PendItem *items; uint32_t n, cap; } Pending;
 /* forward decls */
 static CTerm *cps_tail(CpsB *b, Expr *e, CKont kont);
 static CTerm *cps_bind(CpsB *b, Expr *e, CVar x, CTerm *rest);
+static CTerm *build_catch(CpsB *b, Expr *e, CVar x, CTerm *rest, bool reap);
+bool emit_let_binding_box_freeable(const Expr *e, uint32_t idx);  /* emit_expr.c */
 static CTerm *cps_bind_reinterp(CpsB *b, Expr *e, CVar x, CTerm *rest);
 static CTerm *cps_bind_cast(CpsB *b, Expr *e, CVar x, CTerm *rest);
 static CTerm *build_letraw(CpsB *b, Expr *e, CVar x, CTerm *rest);
@@ -1398,6 +1400,10 @@ static CTerm *cps_bind_let_init(CpsB *b, const Expr *let, uint32_t idx, CVar bx,
         t->as.letraw.reap_env = true;
         t->as.letraw.reap_at_backedge = cps_closure_only_invoked(let, idx);
         return t;
+    }
+    if (init && (init->kind == EX_CATCH_UNWIND || init->kind == EX_CATCH_PANIC_OF)) {
+        CTerm *c = build_catch(b, init, bx, rest, emit_let_binding_box_freeable(let, idx));
+        if (c) return c;
     }
     CTerm *t = cps_bind(b, init, bx, rest);
     /* Only when the call was delegated as a raw let: that is the one lowering
@@ -2482,6 +2488,7 @@ static bool safe_to_delegate(CpsB *b, const Expr *e) {
          *   - EX_BORROW_IMMUT: `(& x)` -- an address-of / pointer expression over
          *     an in-scope local; no control op, no allocation. */
         case EX_PANIC:    return safe_to_delegate(b, e->as.panic_.payload);
+        case EX_PANIC_WITH: return safe_to_delegate(b, e->as.panic_with_.payload);
         case EX_CONS_LIST:
             for (uint32_t i = 0; i < e->as.cons_list_.n; i++)
                 if (!safe_to_delegate(b, e->as.cons_list_.items[i])) return false;
@@ -2961,6 +2968,27 @@ static CTerm *build_await(CpsB *b, Expr *e, CVar x, CTerm *cont, Pending *p) {
      * is the await's to free (see cps_ir.h). */
     const Expr *fx = ascribe_peel(e->as.await_.fut_expr);
     t->as.await.fresh_fut = fx && fx->kind == EX_ASYNC;
+    return t;
+}
+
+/* discontinue-plan: `(discontinue k payload)` is a resume that raises (see
+ * cps_ir.h).  A `k` bound as a cloneable wrapper (a fn-payload or __Shift
+ * case) is not a chain the runtime can raise into: NULL, and the caller
+ * evicts. */
+static CTerm *build_discontinue(CpsB *b, Expr *e, CVar x, CTerm *cont, Pending *p) {
+    DiscontinueExpr *d = e->as.discontinue_.discontinue;
+    if (!g_opt_discontinue || !d || !d->k || !d->exception) return NULL;
+    const Expr *kv = ascribe_peel(d->k);
+    if (kv && kv->kind == EX_VAR && kv->as.var.binding && kv->as.var.binding->cont_is_wrapper)
+        return NULL;
+    CTerm *t = new_term(b, CT_RESUME);
+    t->as.resume.k = atomize(b, d->k, p);
+    t->as.resume.v = atomize(b, d->exception, p);
+    t->as.resume.x = x;
+    t->as.resume.body = cont;
+    t->as.resume.raise = true;
+    t->as.resume.raise_type = (int)d->exception->type.kind;
+    t->as.resume.raise_span = e->span;
     return t;
 }
 
@@ -5332,6 +5360,38 @@ static const Expr *tyvar_reinterp_wrapper(const Expr *e) {
             e->as.reinterpret_.expr) ? e : NULL;
 }
 
+/* cps-catch-unwind-cannot-cross-an-effect-capture: a `catch-unwind` /
+ * `catch-panic-of` whose thunk is a lambda written at the form becomes a
+ * CT_RESET under a CATCH prompt (is_catch): the thunk's body is translated
+ * inline as the delimited part, delivering its value to the prompt, so a
+ * `perform` in it captures through the prompt to a handler outside, and a
+ * panic raised in it -- or in the continuation a handler resumes -- is turned
+ * into Err where the prompt is.  The thunk's value must be one machine word
+ * (the prompt boxes it with tur_box_ok, as tur_catch_unwind_box does); any
+ * other thunk keeps the delegated, direct-emitted lowering.  `x` binds the
+ * Result. */
+static bool catch_delim_type_ok(const Type *t) {
+    if (!t) return false;
+    switch (t->kind) {
+        case TY_INT: case TY_BOOL: case TY_CSTR: case TY_NIL: return true;
+        default: return false;
+    }
+}
+static CTerm *build_catch(CpsB *b, Expr *e, CVar x, CTerm *rest, bool reap) {
+    const FnDef *tf = cps_catch_inline_thunk(e);
+    if (!tf || !catch_delim_type_ok(&tf->body->type)) return NULL;
+    CTerm *t = new_term(b, CT_RESET);
+    t->as.reset.x = x;
+    t->as.reset.is_catch = true;
+    t->as.reset.catch_type = e->kind == EX_CATCH_PANIC_OF
+                           ? (int)e->as.catch_panic_of_.type_kind : -1;
+    t->as.reset.delim_ty = &tf->body->type;
+    t->as.reset.delim = cps_tail(b, tf->body, kont_prompt(tf->body->type.kind));
+    t->as.reset.body = rest;
+    t->as.reset.catch_reap = reap;
+    return t;
+}
+
 static CTerm *cps_tail(CpsB *b, Expr *e, CKont kont) {
     {
         const Expr *w = tyvar_reinterp_wrapper(e);
@@ -5346,6 +5406,14 @@ static CTerm *cps_tail(CpsB *b, Expr *e, CKont kont) {
     }
     e = (Expr *)ascribe_peel(e);
     e = pap_maybe_rewrite(b, e);
+    if (e && (e->kind == EX_CATCH_UNWIND || e->kind == EX_CATCH_PANIC_OF) &&
+        kont.kind != KK_LOOP) {
+        CVar x = fresh_cvar(b, &e->type);
+        CTerm *ac = new_term(b, CT_APPCONT);
+        ac->as.appcont.kont = kont; ac->as.appcont.v = atom_cvar(x);
+        CTerm *c = build_catch(b, e, x, ac, false);
+        if (c) return c;
+    }
     /* A `letrec` of captureless members binds global names, not values. */
     if (e && e->kind == EX_LETREC && letrec_all_global_members(e))
         return cps_tail(b, e->as.let_.body, kont);
@@ -5855,6 +5923,15 @@ static CTerm *cps_tail(CpsB *b, Expr *e, CKont kont) {
             CTerm *core = build_perform(b, e, x, ac, &p);
             return fold_pending(b, &p, core);
         }
+        case EX_DISCONTINUE: {
+            Pending p = {0};
+            CVar x = fresh_cvar(b, &e->type);
+            CTerm *ac = new_term(b, CT_APPCONT);
+            ac->as.appcont.kont = kont; ac->as.appcont.v = atom_cvar(x);
+            CTerm *core = build_discontinue(b, e, x, ac, &p);
+            if (!core) return unsupported_form(b, e);
+            return fold_pending(b, &p, core);
+        }
         case EX_RESUME: {
             Pending p = {0};
             CVar x = fresh_cvar(b, &e->type);
@@ -5931,6 +6008,10 @@ static CTerm *cps_bind(CpsB *b, Expr *e, CVar x, CTerm *rest) {
     e = (Expr *)ascribe_peel(e);
     if (!e) return rest;
     e = pap_maybe_rewrite(b, e);
+    if (e->kind == EX_CATCH_UNWIND || e->kind == EX_CATCH_PANIC_OF) {
+        CTerm *c = build_catch(b, e, x, rest, false);
+        if (c) return c;
+    }
     if (e->kind == EX_LETREC && letrec_all_global_members(e))
         return cps_bind(b, e->as.let_.body, x, rest);
     if (letrec_local_closure(b, e)) {
@@ -6312,6 +6393,12 @@ static CTerm *cps_bind(CpsB *b, Expr *e, CVar x, CTerm *rest) {
             CTerm *core = build_perform(b, e, x, rest, &p);
             return fold_pending(b, &p, core);
         }
+        case EX_DISCONTINUE: {
+            Pending p = {0};
+            CTerm *core = build_discontinue(b, e, x, rest, &p);
+            if (!core) return unsupported_form(b, e);
+            return fold_pending(b, &p, core);
+        }
         case EX_RESUME: {
             Pending p = {0};
             CTerm *core = build_resume(b, e, x, rest, &p);
@@ -6600,7 +6687,8 @@ void cps_ir_print(const CTerm *t, FILE *out, int indent) {
             cps_ir_print(t->as.await.body, out, indent);
             break;
         case CT_RESUME:
-            fprintf(out, "let %s = resume ", t->as.resume.x.name);
+            fprintf(out, "let %s = %s ", t->as.resume.x.name,
+                    t->as.resume.raise ? "discontinue" : "resume");
             print_atom(&t->as.resume.k, out); fputc(' ', out);
             print_atom(&t->as.resume.v, out); fputs("\n", out);
             cps_ir_print(t->as.resume.body, out, indent);

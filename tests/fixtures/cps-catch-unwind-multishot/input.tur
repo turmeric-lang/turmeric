@@ -1,0 +1,16 @@
+;; cps-catch-unwind-cannot-cross-an-effect-capture: a ^multishot continuation
+;; whose body holds a catch-unwind around the perform.  Each resumed copy
+;; carries its own catch prompt: the copy resumed with 0 returns normally (Ok,
+;; 200), the copy resumed with 5 panics and its prompt turns that into Err
+;; (100).  Compiled only: the interpreter's single-shot fiber runtime refuses a
+;; second resume of a body that reaches its perform under a catch-unwind
+;; (turi-fiber-handle-defers-fire-at-the-wrong-time, case 5).
+(defeffect Ask [] : int)
+
+(defn body [] : int
+  (let [r (catch-unwind (fn [] : int (let [v (perform (Ask))] (if (> v 0) (panic "boom") v))))]
+    (if (err? r) 100 200)))
+
+(defn main [] : int
+  (println (handle (body) (Ask [] ^multishot k) (+ (resume k 0) (resume k 5))))
+  0)

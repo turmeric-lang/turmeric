@@ -1,5 +1,17 @@
 # `tur --interpret`: a fiber-path `handle` fires the body's pending `defer`s at the wrong time
 
+**Narrowed again 2026-10-22: the stored-`k` case is fixed too; what is left
+is the single-shot limit.** Each side of a fiber `handle` now has its own
+defer chain (`fiber_enter_body`; fixed with
+[turi-fiber-resume-from-clause-scope-crashes-on-body-defer](../archive/turi-fiber-resume-from-clause-scope-crashes-on-body-defer.md)),
+so a kept `k`'s body keeps its defers on the cont. They run when a later
+resume finishes the body, or never if nobody resumes it. Both rows of the
+table below now read as the compiled column
+(`tests/fixtures/turi-fiber-defer-resume-from-clause-scope`). The one open item
+is case 5: the fiber runtime is single-shot, so a multi-shot resume over a
+body that reaches a `perform` under a `defer` (or a `catch-unwind`; neither is
+work-stack capturable) is refused. Fix direction 1 is what is left.
+
 **Narrowed 2026-10-21: the abortive case is fixed; the stored-`k` case stays
 open.** `eval_handle` marks the defer chain before the body runs; when a case
 returns with the body suspended and no case can keep `k`

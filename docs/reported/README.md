@@ -34,6 +34,16 @@ sentence above does not cover them. If you touch this file, check
 `ls docs/reported/` against it -- an index that silently omits a quarter of the
 directory is worse for triage than no index.
 
+## Found checking what blocks discontinue-plan (filed 2026-10-22)
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| ~~[turi-fiber-resume-from-clause-scope-crashes-on-body-defer](../archive/turi-fiber-resume-from-clause-scope-crashes-on-body-defer.md)~~ | high | **RESOLVED 2026-10-22** (archived): each side of a fiber `handle` has its own defer chain (`fiber_enter_body`), so a resume from inside a `let`, a call or a `catch-unwind` in the clause no longer crashes. This also fixed the stored-`k` half of turi-fiber-handle-defers-fire-at-the-wrong-time. Pinned by `turi-fiber-defer-resume-from-clause-scope` |
+| [cps-catch-unwind-cannot-cross-an-effect-capture](cps-catch-unwind-cannot-cross-an-effect-capture.md) | low-medium (narrowed 2026-10-22) | A `catch-unwind` / `catch-panic-of` whose thunk is a lambda at the form now lowers as a catch prompt on the DK chain, so a `perform` inside it reaches the handler outside, and a panic in the resumed continuation is caught (multishot copies included). The false TUR-W0033 is fixed on every engine. **Left:** a `catch-unwind` inside a handler CLAUSE is still refused compiled (a case body admits no reset), as is a thunk that is not a lambda or returns more than a word. Pinned by `cps-catch-unwind-across-perform` and `cps-catch-unwind-multishot` |
+| ~~[turi-catch-panic-of-mismatch-in-fiber-body-overflows](../archive/turi-catch-panic-of-mismatch-in-fiber-body-overflows.md)~~ | medium | **RESOLVED 2026-10-22** (archived): each side of a fiber `handle` has its own catch-boundary stack, and the body runs under a boundary of its own that hands an uncaught panic back to the handler side, so a re-raise no longer longjmps across stacks. Pinned by `turi-catch-panic-of-mismatch-in-fiber-body` |
+| ~~[jit-dk-entry-locals-clobbered-by-longjmp](../archive/jit-dk-entry-locals-clobbered-by-longjmp.md)~~ | high | **RESOLVED 2026-10-22** (archived): under `tur jit`, a DK entry's driver landing restored `g_dk_pend_perform` from a local that c2mir's setjmp did not preserve, and the next abortive handler case read a freed handler (heap-use-after-free in `__dk_abort_pending`). The landing state now lives in a struct with the jump buffer. Pinned by `dk-entry-landing-restores-pending-perform` |
+| ~~[compiled-uncaught-panic-skips-caller-defers](../archive/compiled-uncaught-panic-skips-caller-defers.md)~~ | medium | **RESOLVED 2026-10-22** (archived): `main` turns on a root unwind (`tur_root_unwind`), so an uncaught `panic` / `panic-with` prints, unwinds to `main` firing every frame's defers (CPS chains included), then aborts. A runtime helper's panic with no `catch-unwind` still aborts at once. Also fixed: a statement-position `: !` call did not propagate the panic signal. Pinned by `panic-uncaught-unwinds-callers` and `never-call-panic-propagates` |
+
 ## Found rewriting the datalog examples onto typed data (filed 2026-10-21)
 
 | Report | Severity | One line |
@@ -171,7 +181,7 @@ on `main` 3d9e02a2.
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [turi-fiber-handle-defers-fire-at-the-wrong-time](turi-fiber-handle-defers-fire-at-the-wrong-time.md) | low-medium (engine divergence; narrowed 2026-10-21: the abortive case is fixed, the stored-`k` case remains) | Under `tur --interpret`, a `handle` whose body has a pending `defer` takes the single-shot fiber runtime, and the defer fires at the next enclosing scope exit: after the abortive case's value, or even when a stored `k` is never resumed. Compiled fires it at the case's return, and multi-shot over such a body is refused. Filed while fixing the stored-`k` use-after-free (archived). |
+| [turi-fiber-handle-defers-fire-at-the-wrong-time](turi-fiber-handle-defers-fire-at-the-wrong-time.md) | low (narrowed 2026-10-22: both defer-timing cases are fixed; the single-shot refusal remains) | Under `tur --interpret`, a `handle` whose body reaches a `perform` under a `defer` or `catch-unwind` takes the single-shot fiber runtime, so a multi-shot resume of it is refused ("already been resumed"); compiled runs it. The defer timing (abortive case, stored `k`) now matches compiled. |
 
 ## Found revisiting the two dynvar plans (filed 2026-10-17)
 

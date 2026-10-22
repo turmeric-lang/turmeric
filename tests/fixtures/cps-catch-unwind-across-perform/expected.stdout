@@ -1,0 +1,10 @@
+100
+100
+ask-defer-panic: defer ran
+100
+42
+10
+100
+clause panic caught outside
+ask-defer-panic: defer ran
+caught around the handle

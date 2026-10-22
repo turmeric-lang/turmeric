@@ -581,12 +581,26 @@ char *emit_effects_discontinue(EmitCtx *ctx, Buf *body, const Expr *e) {
      * evicted and the build used to fail with a message about the `perform`.
      * Name the form that is the cause. */
     (void)ctx; (void)body;
+    /* discontinue-plan: with the experiment on, the CPS backend lowers it
+     * (a raising CT_RESUME), so reaching the direct emitter means the
+     * enclosing function was evicted -- most often for a catch-unwind inside
+     * a handler clause, which a case body cannot hold yet. */
+    if (g_opt_discontinue) {
+        diag_emit(DIAG_ERROR, e->span,
+                  "this `discontinue` has no lowering here: the enclosing function "
+                  "left the CPS backend's supported subset (a `catch-unwind` inside "
+                  "a handler clause is the usual cause; it cannot be lowered yet). "
+                  "Catch around the `handle` instead, or run with TUR_TRACE_EVICT=1 "
+                  "to see which form evicted the function.");
+        return atom_nil();
+    }
     diag_emit(DIAG_ERROR, e->span,
               "`discontinue` has no lowering in the compiled backend yet: the "
               "CPS backend cannot raise at the `perform`. To end the handled "
               "body early, leave the clause without resuming `k`; for a failure "
               "the caller sees, return a `Result` from the clause. "
-              "(The interpreter does not run `discontinue` either.)");
+              "(The interpreter does not run `discontinue` either.) "
+              "--enable=discontinue lowers it (prototype).");
     return atom_nil();
 }
 

@@ -21,8 +21,9 @@
 ;;; handles from the row.
 ;;;
 ;;; The compiled program lowers effects through a CPS backend. A function that
-;;; leaves its supported subset -- one whose body uses `discontinue`, say -- is
-;;; rejected with `this effect operation has no lowering here`;
+;;; leaves its supported subset -- one that holds a `catch-unwind` inside a
+;;; handler clause, say -- is rejected with `this effect operation has no
+;;; lowering here`;
 ;;; `TUR_TRACE_EVICT=1` names the form that caused it. The interpreter has no such
 ;;; limit. A few forms below are unfinished or differ between the two; the work
 ;;; is planned in docs/upcoming/discontinue-plan.md and
@@ -159,26 +160,46 @@
 ;;;              (Ask [] ^multishot k) (+ (resume k 10) (resume k 20))))  ; prints 32
 ;;@form (resume k value)
 
-;;; discontinue -- abort the body from a handler clause with an exception.
+;;; discontinue -- resume a continuation by raising a panic at its perform.
 ;;;
-;;; Meant to resume the continuation by raising a failure at the `perform`
-;;; instead of returning a value, so that the body's cleanup runs. It is typed
-;;; `nil`, so a `handle` whose clause is a bare `discontinue` must itself be of
-;;; type `nil` (TUR-E0252 otherwise). Not usable today: the compiled program
-;;; rejects any function that contains it (a located error naming `discontinue`,
-;;; beside the `no lowering here` one on the `perform`), and the interpreter
-;;; stops with `discontinue is not supported`. Implementing it is planned
-;;; (docs/upcoming/discontinue-plan.md): the `perform` will raise a panic in the
-;;; body, which a `catch-unwind` there can catch. Until then, to end the body
-;;; early leave the clause without resuming it (the body's `defer`s still run);
-;;; for a failure the caller sees, return a `Result` from the clause. Like
-;;; `resume`, it consumes the continuation, so
-;;; using `k` afterwards is TUR-E0201 (TUR-E0101 for a `^linear` one), and it
-;;; satisfies the `^linear` requirement.
+;;; Prototype, behind `--enable=discontinue`. `(discontinue k payload)` resumes
+;;; `k` the way `resume` does, except that the `perform` that captured it does
+;;; not return: it raises a panic carrying `payload` there, inside the body. The
+;;; body's `defer`s run as it unwinds, and a `catch-unwind` / `catch-panic-of`
+;;; around the `perform` can catch the panic, after which the body carries on --
+;;; something not resuming cannot do. If nothing in the body catches it, the
+;;; panic is raised again at the `discontinue`, in the clause, and from there it
+;;; is an ordinary panic. It returns what `resume` returns (the handle's answer,
+;;; when the body recovered), so a clause can end in it. The payload is any
+;;; value: a `cstr` reads as the panic message, as `panic`'s does; anything else
+;;; is a typed payload, as `panic-with`'s is, which `catch-panic-of` filters by
+;;; type. The panic names the `discontinue`'s line. Like `resume`, it consumes
+;;; the continuation, so using `k` afterwards is TUR-E0201 (TUR-E0101 for a
+;;; `^linear` one), and it satisfies the `^linear` requirement.
+;;;
+;;; Still refused: compiled, a `catch-unwind` inside the clause around the
+;;; `discontinue` (catch around the `handle` instead); interpreted, a
+;;; `^multishot` continuation whose body reaches its `perform` under a `defer`
+;;; or `catch-unwind`. Without the flag both engines refuse the form, and it is
+;;; typed `nil`. See docs/upcoming/discontinue-plan.md.
 ;;;
 ;;; Parameters:
 ;;;   k         -- the continuation bound by the handler clause
-;;;   exception -- the failure to raise at the `perform`, normally a string
+;;;   exception -- the payload to raise at the `perform`, normally a string
+;;;
+;;; Returns:
+;;;   What a `resume` of `k` returns: the handle's value, when the body caught
+;;;   the panic and went on.
+;;;
+;;; Example:
+;;;   ;; tur --enable=discontinue run ...
+;;;   (defeffect Ask [] : int)
+;;;   (defn body [] : int
+;;;     (let [r (catch-unwind (fn [] : int (+ 1 (perform (Ask)))))]
+;;;       (if (err? r) 100 200)))
+;;;   (handle (body) (Ask [] k) (discontinue k "no answer"))  ; => 100
+;;;
+;;; Since: 0.68.0 (prototype)
 ;;@form (discontinue k exception)
 
 ;;; try-with -- another spelling of handle.

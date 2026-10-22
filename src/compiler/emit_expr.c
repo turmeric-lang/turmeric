@@ -3210,6 +3210,13 @@ static bool let_binding_box_freeable(const Expr *e, uint32_t idx) {
     return true;
 }
 
+/* cps-catch-unwind-cannot-cross-an-effect-capture: the same verdict for the
+ * CPS backend, which lowers such a let's catch as a catch prompt and has the
+ * runtime register the box it makes for a boundary free (build_catch). */
+bool emit_let_binding_box_freeable(const Expr *e, uint32_t idx) {
+    return let_binding_box_freeable(e, idx);
+}
+
 /* any-struct-box-leak-per-widen (the residue): decide whether let-binding `idx`
  * holds an `any` whose payload box this scope owns and may drop at scope exit.
  *
@@ -5711,10 +5718,10 @@ static void emit_if_dead_branch_zero(Buf *body, int indent, const char *tmp,
  * every expected.c snapshot); a node with no span falls back to tur_panic. */
 void emit_panic_call(Buf *body, Span span, const char *msg) {
     const char *path = span.line ? diag_file_path(span.file_id) : NULL;
-    if (!path) { buf_printf(body, "tur_panic(%s);\n", msg); return; }
+    if (!path) { buf_printf(body, "tur_panic_at_site(__FILE__, __LINE__, %s);\n", msg); return; }
     const char *base = path;
     for (const char *p = path; *p; p++) if (*p == '/' || *p == '\\') base = p + 1;
-    buf_puts(body, "tur_panic_at(\"");
+    buf_puts(body, "tur_panic_at_site(\"");
     for (const char *p = base; *p; p++) {
         if (*p == '\\' || *p == '"') buf_putc(body, '\\');
         buf_putc(body, *p);
@@ -5730,13 +5737,13 @@ void emit_panic_with_call(Buf *body, Span span, int type_tag, const char *payloa
      * source span; so does this. */
     const char *path = span.line ? diag_file_path(span.file_id) : NULL;
     if (!path) {
-        buf_printf(body, "tur_panic_with(%d, (void*)%s, __FILE__, __LINE__);\n",
+        buf_printf(body, "tur_panic_with_site(%d, (void*)%s, __FILE__, __LINE__);\n",
                    type_tag, payload);
         return;
     }
     const char *base = path;
     for (const char *p = path; *p; p++) if (*p == '/' || *p == '\\') base = p + 1;
-    buf_printf(body, "tur_panic_with(%d, (void*)%s, \"", type_tag, payload);
+    buf_printf(body, "tur_panic_with_site(%d, (void*)%s, \"", type_tag, payload);
     for (const char *p = base; *p; p++) {
         if (*p == '\\' || *p == '"') buf_putc(body, '\\');
         buf_putc(body, *p);
@@ -6914,6 +6921,12 @@ void emit_panic_signal_return(EmitCtx *ctx, Buf *body) {
         buf_printf(body, "if (tur_panicking) %sreturn %s;%s\n", fire_pre,
                    rzero ? rzero : "0", fire_post);
         free(rzero);
+    } else if (ctx->in_user_main) {
+        /* compiled-uncaught-panic-skips-caller-defers: `main` (or a top-level
+         * statement) has no caller to propagate to -- fire this frame's
+         * defers and end the unwind. */
+        buf_printf(body, "if (tur_panicking) { %stur_panic_root_exit();%s }\n",
+                   fire_pre, fire_post);
     } else {
         /* D1a prototype limit: the enclosing function's C return type is not
          * recorded here (some carrier/dict-clone closure shapes), so we cannot
@@ -22751,6 +22764,8 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
             buf_printf(body, "%s = *(int64_t *)(intptr_t)(%s);\n", raw, pv);
             indent_buf(body, ctx->indent);
             buf_printf(body, "}\n");
+            /* Hand the signal to the caller, as a `panic` site does. */
+            emit_panic_signal_return(ctx, body);
             free(pv);
             const char *rc = NULL;
             char rexpr[256];
