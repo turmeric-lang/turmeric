@@ -176,7 +176,8 @@
 ;;;
 ;;; Since: R3
 
-(defn range-lower-bound [r : Range] : Bound (range-bound->bound (range-lower r)))
+(defn range-lower-bound [r : Range] : Bound
+  (range-bound->bound (range-lower r)))
 ;;; range-upper-bound -- the upper endpoint of a Range as a Bound.
 ;;;
 ;;; Parameters:
@@ -190,7 +191,8 @@
 ;;;
 ;;; Since: R3
 
-(defn range-upper-bound [r : Range] : Bound (range-bound->bound (range-upper r)))
+(defn range-upper-bound [r : Range] : Bound
+  (range-bound->bound (range-upper r)))
 ;; -------------------------------------------------------------------
 ;; Rendering (range-gadt-typeclass-migration-plan B2)
 ;; -------------------------------------------------------------------

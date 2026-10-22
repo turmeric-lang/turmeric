@@ -52,10 +52,7 @@
 ;;;
 ;;; Since: LZ4 (sum form: range-gadt-typeclass-migration-plan B1)
 
-(defdata Bound :copy
-  (Inclusive int)
-  (Exclusive int)
-  (Unbounded))
+(defdata Bound :copy (Inclusive int) (Exclusive int) (Unbounded))
 ;;; range-bound-new -- build a Bound with given inclusivity and value.
 ;;;
 ;;; Parameters:
@@ -620,7 +617,8 @@
 ;;;
 ;;; Since: LZ4
 
-(defn bounded-above? [r : Range] : bool (not (bound-unbounded? (range-upper r))))
+(defn bounded-above? [r : Range] : bool
+  (not (bound-unbounded? (range-upper r))))
 ;;; bounded-below? -- true if r has a lower bound.
 ;;;
 ;;; Parameters:
@@ -628,7 +626,8 @@
 ;;;
 ;;; Since: LZ4
 
-(defn bounded-below? [r : Range] : bool (not (bound-unbounded? (range-lower r))))
+(defn bounded-below? [r : Range] : bool
+  (not (bound-unbounded? (range-lower r))))
 ;;; unbounded-above? -- true if r has no upper bound.
 ;;;
 ;;; Parameters:

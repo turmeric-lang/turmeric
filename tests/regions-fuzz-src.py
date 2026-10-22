@@ -471,19 +471,21 @@ def self_test(tur, build):
     """The plumbing: the two pinned fixtures must pass both arms and report
     the retire counts their comments promise (every bracket escapes)."""
     ok = True
-    for fx, brackets in (("region-escape-via-store", 12), ("region-escape-via-erasure", 4)):
+    for fx, brackets in (("region-escape-via-store", 13), ("region-escape-via-erasure", 4)):
         d = os.path.join(REPO, "tests", "fixtures", fx)
         with open(os.path.join(d, "input.tur")) as f:
             src = f.read()
         with open(os.path.join(d, "expected.stdout")) as f:
             expected = f.read().splitlines()
-        # store: eleven brackets escape and the nested case's inner rewinds
+        # store: twelve brackets escape and the nested case's inner rewinds
         # (case 10, the widened field store, arrived with r7rs-lang-plan R3,
-        # and case 11, tvar/write in a bracket, with
-        # stm-inside-closure-captured-tvar-undeclared -- CLAUDE.md's store-hook
-        # rule puts every new store in that fixture, so a new case moves this
+        # case 11, tvar/write in a bracket, with
+        # stm-inside-closure-captured-tvar-undeclared, and case 12, a by-value
+        # annotated recursive sum pushed into an outer vec, with
+        # adt-gadt-unification-plan slice 3 -- CLAUDE.md's store-hook rule
+        # puts every new store in that fixture, so a new case moves this
         # count too); erasure: all four retire.
-        rw, rt = (1, 11) if fx == "region-escape-via-store" else (0, 4)
+        rw, rt = (1, 12) if fx == "region-escape-via-store" else (0, 4)
         problems, on, off = check_program(tur, build, src, expected, rw, rt)
         if problems:
             ok = False

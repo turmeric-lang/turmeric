@@ -91,10 +91,7 @@
 ;;; Since: Phase SZ0
 
 
-(defdata Size
-  (Static int)
-  (Add Size Size)
-  (Mul Size Size))
+(defdata Size (Static int) (Add Size Size) (Mul Size Size))
 ;;; size-static -- create a literal Size from an integer.
 ;;;
 ;;; Parameters:
