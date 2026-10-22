@@ -192,6 +192,16 @@ offers `.tur` files, because `tur run` accepts either.
 classic compile-and-run path. `tur run build` (no `.tur` extension)
 invokes the Justfile task runner.
 
+The words after the file are the program's `*args*`:
+`tur run report.tur 2026 --csv` runs `report.tur` with `2026 --csv`.
+`tur run`'s own flags (`-I`, `--release`, `--offline`, `--update`,
+`--engine`) are still read on either side of the file, so a program that
+takes a literal `--release` of its own gets it after `--`:
+`tur run report.tur -- --release`.  `tur report.tur 2026 --csv` is the same
+run, and is what a `#!/usr/bin/env tur` line uses.  (Before
+project-less-tools PT2 the words after the file were dropped unless they
+came after `--`.)
+
 ## Writing Justfiles for spices
 
 Use only the supported subset so your spice works with both `tur run`

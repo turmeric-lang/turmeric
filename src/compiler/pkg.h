@@ -627,6 +627,15 @@ char *pkg_resolve_spice_dep_dir(const char *root_project_dir, const PkgSpice *s)
  * optional deps failing is success). */
 bool pkg_setup_fetched_project(const char *who, const char *src_dir,
                                const PkgManifest *m);
+/* project-less-tools-plan PT3 (install.c): build one `:bin` entry of the
+ * spice at `src_dir` (manifest `m`, already set up as a fetched project) into
+ * `out_path` with a child `tur build`, using the include list project mode
+ * computes for that root.  What `tur install` and `tur x` both build with.
+ * `who` prefixes the messages ("tur install", "tur x").  Returns false after
+ * printing why. */
+bool pkg_build_spice_bin(const char *who, const char *src_dir,
+                         const PkgManifest *m, const char *bin_name,
+                         const char *entry, const char *out_path);
 /* As above, for a dep declared by a spice somewhere inside a project:
  * `fetch_root` is the project whose `tur fetch` populated spices/ (it puts
  * the whole closure there, flat), tried when a fetched dep is not under

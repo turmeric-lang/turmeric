@@ -1,0 +1,10 @@
+;; Print *args*, one per line, then how many there were.
+(load "stdlib/list.tur")
+(defn show [l : int n : int] : int
+  (if (= l 0)
+    n
+    (do (println (:: (car l) cstr))
+        (show (cdr l) (+ n 1)))))
+(defn main [] : int
+  (println (show *args* 0))
+  0)

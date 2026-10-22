@@ -10,7 +10,8 @@ usage:
   tur run --chdir <dir> <r>      run recipe from <dir>
   tur run --init                 write a starter Justfile into cwd
   tur run --init --force         overwrite an existing Justfile
-  tur run <file.tur> [-- <args>] compile and run a .tur file
+  tur run <file.tur> [args...]   compile and run a .tur file (`--` before args
+                                 of the program's own that look like run's flags)
   tur run --release <file.tur>   the same, compiled at -O3 (default -O2)
 
 `tur just` is a synonym for `tur run`: every form above accepts

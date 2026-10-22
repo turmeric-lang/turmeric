@@ -3064,6 +3064,10 @@ def collect_tur_files(source):
         # Skip generated files
         if f.name == 'docstrings.tur':
             continue
+        # stdlib/tools/ holds programs the driver runs (`tur serve`), not
+        # modules anyone loads: no API page (project-less-tools-plan PT1).
+        if f.relative_to(source).parts[:1] == ('tools',):
+            continue
         files.append(f)
     return files
 

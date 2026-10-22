@@ -13,6 +13,8 @@
 ;; All internal structs are int64_t arrays; field layout:
 ;;
 ;;   spec    [0]=flags_list  [1]=options_list  [2]=subcmds_list  [3]=prog_cstr
+;;           [4]=aliases_list
+;;   alias   [0]=short_cstr  [1]=long_cstr     [2]=next_alias
 ;;   flag    [0]=name_cstr   [1]=next_flag
 ;;   option  [0]=name_cstr   [1]=type_cstr     [2]=dflt_cstr_or_0  [3]=next_option
 ;;   subcmd  [0]=name_cstr   [1]=sub_spec      [2]=next_subcmd
@@ -44,7 +46,7 @@
 ;;; Since: Phase A1
 (defn args/spec-new [] : ArgSpec
   ```c
-  int64_t *s = calloc(4, sizeof(int64_t));
+  int64_t *s = calloc(5, sizeof(int64_t));
   return (int64_t)(intptr_t)s;
   ```)
 ;;; args/spec-prog -- set the program name displayed in help text.
@@ -165,6 +167,35 @@
   s[2] = (int64_t)(intptr_t)cell;
   return spec;
   ```)
+;;; args/spec-short -- register a short spelling for a flag or an option.
+;;;
+;;; A token equal to `short-name` is read as `long-name` before anything else
+;;; looks at it, so `-p 8080` is `--port 8080` and `-q` is `--quiet`.  Only
+;;; the whole token is matched: `-p8080` and bundled `-qv` are not split.
+;;; `long-name` may also be "--help", which is always accepted.
+;;;
+;;; Parameters:
+;;;   spec       -- ArgSpec handle
+;;;   short-name -- the short spelling, e.g. "-p"
+;;;   long-name  -- the registered flag or option it stands for, e.g. "--port"
+;;;
+;;; Returns:
+;;;   The same ArgSpec (mutated in place).
+;;;
+;;; Example:
+;;;   (args/spec-short spec "-p" "--port")
+;;;
+;;; Since: project-less-tools-plan PT1
+(defn args/spec-short [spec : ArgSpec short-name : cstr long-name : cstr] : ArgSpec
+  ```c
+  int64_t *s = (int64_t*)(intptr_t)spec;
+  int64_t *cell = malloc(3 * sizeof(int64_t));
+  cell[0] = (int64_t)(intptr_t)short_name;
+  cell[1] = (int64_t)(intptr_t)long_name;
+  cell[2] = s[4];
+  s[4] = (int64_t)(intptr_t)cell;
+  return spec;
+  ```)
 ;;; args/parse -- parse a Turmeric *args* cons list against an arg spec.
 ;;;
 ;;; Accepts both --key=value (preferred) and --key value forms for options.
@@ -214,6 +245,13 @@
     const char *arg = argv_l[i];
     int64_t *sp  = (int64_t*)(intptr_t)spec_stk[depth];
     int64_t *res = (int64_t*)(intptr_t)res_stk[depth];
+    /* args/spec-short: a short spelling stands for its long one. */
+    for (int64_t *al = (int64_t*)(intptr_t)sp[4]; al; al = (int64_t*)(intptr_t)al[2]) {
+      if (strcmp(arg, (const char*)(intptr_t)al[0]) == 0) {
+        arg = (const char*)(intptr_t)al[1];
+        break;
+      }
+    }
 
     if (strncmp(arg, "--", 2) == 0) {
       const char *key_start = arg + 2;
@@ -663,6 +701,8 @@
   while (opt) { int64_t *nx = (int64_t*)(intptr_t)opt[3]; free(opt); opt = nx; }
   int64_t *sub = (int64_t*)(intptr_t)sp[2];
   while (sub) { int64_t *nx = (int64_t*)(intptr_t)sub[2]; free(sub); sub = nx; }
+  int64_t *al = (int64_t*)(intptr_t)sp[4];
+  while (al) { int64_t *nx = (int64_t*)(intptr_t)al[2]; free(al); al = nx; }
   free(sp);
   ```)
 ;;; args/result-free -- free a result created by args/parse (including sub-results).

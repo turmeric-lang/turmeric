@@ -146,7 +146,7 @@ int usage_build(void) {
 int usage_run(void) {
     fprintf(stderr,
         "usage:\n"
-        "  tur run [-I <dir>...] <file.tur> [-- <args...>]\n"
+        "  tur run [-I <dir>...] <file.tur> [<args...>] [-- <args...>]\n"
         "                                  build and execute a single file\n"
         "  tur run [-I <dir>...] - [-- <args...>]\n"
         "                                  read source from stdin, build and execute\n"
@@ -157,6 +157,9 @@ int usage_run(void) {
         "  --offline   skip dependency fetch (a script header resolves from the cache)\n"
         "  --update    re-resolve a script header's tag and branch refs\n"
         "  --          pass remaining arguments to the program\n"
+        "\n"
+        "Words after the file that are not one of these flags are the program's\n"
+        "arguments too; put a literal `--release` of the program's own after `--`.\n"
         "\n"
         "`tur <file.tur> <args...>` is `tur run <file.tur> -- <args...>`, so a\n"
         "script can start with `#!/usr/bin/env tur`.\n"
@@ -843,6 +846,9 @@ int drv_parse_global_flags(int *argc_io, char **argv) {
             continue;
         }
         if (drv_is_script_word(argv[i])) dd_at = i + 1;
+        /* project-less-tools-plan PT1: `tur serve`'s words are all the
+         * server program's (`tur serve --json` is not tur's --json). */
+        else if (strcmp(argv[i], "serve") == 0) dd_at = i + 1;
         break;
     }
     const int dd_tail = argc - dd_at;
@@ -948,6 +954,9 @@ static const DrvCommand COMMANDS[] = {
       "run a Justfile recipe, or build and execute a .tur file",
       "  tur run <input.tur>               build + execute a single file\n"
       "  tur run <recipe>                  run a Justfile recipe (`tur just` is a synonym)\n" },
+    { "serve", cmd_serve, 0,
+      "serve a directory over HTTP",
+      "  tur serve [dir] [-p <port>]       serve a directory over HTTP (127.0.0.1:8000 by default)\n" },
     { "repl", cmd_repl_main, 0,
       "interactive REPL",
       "  tur repl                          interactive REPL (Phase S1)\n" },
@@ -1046,6 +1055,10 @@ static const DrvCommand COMMANDS[] = {
       "install a spice binary globally",
       "  tur install <url> [--ref <ref>]   install a spice binary globally\n"
       "  tur install <path> --path         install a local spice binary globally\n" },
+    /* project-less-tools-plan PT3. */
+    { "x", cmd_x, DRV_CMD_PACKAGE,
+      "run a spice's binary without installing it",
+      "  tur x <name|path|url> [-- <args>] run a spice's :bin without installing it\n" },
     { "uninstall", cmd_pkg_uninstall, DRV_CMD_PACKAGE,
       "remove a globally installed spice",
       "  tur uninstall <name>              remove a globally installed spice\n" },

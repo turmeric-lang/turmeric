@@ -1,0 +1,179 @@
+;;; tur serve -- serve a directory over HTTP, the `python3 -m http.server` of Turmeric.
+;;;
+;;; The program behind `tur serve [dir] [flags]` (project-less-tools-plan
+;;; PT1).  It is an ordinary Turmeric program: `tur run stdlib/tools/serve.tur
+;;; -- dist -p 8080` does the same thing.  Files come from httpd's audited
+;;; static path (mw-static-with), so traversal, dotfiles and symlinks out of
+;;; the directory are refused; a directory answers with its index.html, else a
+;;; listing.  Loopback only unless `--bind` says otherwise.
+;;;
+;;; Since: project-less-tools-plan PT1
+;; A program, not a module: gendocs skips stdlib/tools/.
+(load "stdlib/args.tur")
+
+(load "stdlib/fs.tur")
+
+(load "stdlib/httpd.tur")
+
+(load "stdlib/process.tur")
+
+(load "stdlib/str-build.tur")
+
+;;; serve/usage -- the usage text, to stdout for --help and stderr otherwise.
+(defn serve/usage [to-stderr : bool] : nil
+  ```c
+  FILE *o = to_stderr ? stderr : stdout;
+  fputs("Usage: tur serve [dir] [options]\n"
+        "\n"
+        "Serve a directory over HTTP (default: the current directory).\n"
+        "\n"
+        "Options:\n"
+        "  -p, --port N        port to listen on (default 8000; 0 picks a free one)\n"
+        "  -b, --bind ADDR     address to listen on: 127.0.0.1 (default), any,\n"
+        "                      or a numeric IPv4/IPv6 address\n"
+        "      --index NAME    file served for a directory (default index.html)\n"
+        "      --no-listing    no listing for a directory without an index\n"
+        "  -q, --quiet         no request log\n"
+        "  -h, --help          show this help\n", o);
+  fflush(o);
+  ```)
+
+;;; serve/fail -- print `tur serve: <msg>` (and the usage, for a usage error)
+;;; to stderr, release the parsed arguments and exit with `code`.
+(defn serve/fail [spec : ArgSpec
+                  res : ArgResult
+                  msg : cstr
+                  usage : bool
+                  code : int] : nil
+  (eprint "tur serve: ")
+  (eprintln msg)
+  (when usage (serve/usage true))
+  (args/result-free res)
+  (args/spec-free spec)
+  (process/exit code))
+
+;;; serve/parse-port -- a decimal port in 0..65535, or None.
+(defn serve/parse-port [s : cstr] : (Option int)
+  ```c
+  if (!s || !*s) return tur_none();
+  long v = 0;
+  for (const char *p = s; *p; p++) {
+      if (*p < '0' || *p > '9') return tur_none();
+      v = v * 10 + (*p - '0');
+      if (v > 65535) return tur_none();
+  }
+  return tur_some_int((int64_t)v);
+  ```)
+
+;;; serve/bind! -- apply a --bind value: "any", "localhost", or a numeric
+;;; address.  False when the address does not parse.
+(defn serve/bind! [bind : cstr] : bool
+  (if (= 0 (serve/cstr-cmp bind "any"))
+    (httpd-set-bind-any! true)
+    (if (= 0 (serve/cstr-cmp bind "localhost"))
+      (httpd-set-bind-addr! "127.0.0.1")
+      (httpd-set-bind-addr! bind))))
+
+;;; serve/cstr-cmp -- strcmp.
+(defn serve/cstr-cmp [a : cstr b : cstr] : int
+  ```c
+  return strcmp(a, b);
+  ```)
+
+;;; serve/announce -- the startup line, flushed so it reaches a pipe at once.
+(defn serve/announce [dir : cstr bind : cstr port : int] : nil
+  ```c
+  const char *host = bind;
+  char v6[80];
+  if (strcmp(bind, "any") == 0 || strcmp(bind, "localhost") == 0) host = "127.0.0.1";
+  else if (strchr(bind, ':')) { snprintf(v6, sizeof v6, "[%s]", bind); host = v6; }
+  printf("Serving %s on http://%s:%lld/%s (Ctrl-C to stop)\n", dir, host, (long long)port,
+         strcmp(bind, "any") == 0 ? " on every interface," : "");
+  fflush(stdout);
+  ```)
+
+;;; serve/positional -- the directory: the one positional argument, or "."
+;;; when there is none.  Err names the problem: a word that looks like a
+;;; flag args/parse did not know (it reads `-x` as a positional), or more
+;;; than one directory.
+(defn serve/positional [res : ArgResult] : (Result cstr cstr)
+  ```c
+  int64_t *cell = (int64_t *)(intptr_t)__TUR_CNAME_args/positional__(res);
+  static char msg[300];
+  for (int64_t *c = cell; c; c = (int64_t *)(intptr_t)c[1]) {
+      const char *w = (const char *)(intptr_t)c[0];
+      if (w[0] == '-' && w[1]) {
+          snprintf(msg, sizeof msg, "unknown flag: %s", w);
+          return tur_err_ptr((void *)msg);
+      }
+  }
+  if (!cell) return tur_ok_ptr((void *)".");
+  if (cell[1]) return tur_err_ptr((void *)"expected at most one directory");
+  return tur_ok_ptr((void *)(intptr_t)cell[0]);
+  ```)
+
+(defn main [] : int
+  (let [spec (args/spec-new)]
+    (args/spec-prog spec "tur serve")
+    (args/spec-option spec "--port" "int" (Some "8000"))
+    (args/spec-option spec "--bind" "addr" (Some "127.0.0.1"))
+    (args/spec-option spec "--index" "name" (Some "index.html"))
+    (args/spec-flag spec "--no-listing")
+    (args/spec-flag spec "--quiet")
+    (args/spec-short spec "-p" "--port")
+    (args/spec-short spec "-b" "--bind")
+    (args/spec-short spec "-q" "--quiet")
+    (args/spec-short spec "-h" "--help")
+    (let [res (args/parse spec *args*)]
+      (when (args/error? res) (serve/fail spec res (args/error-msg res) true 2))
+      (when (args/has? res "help")
+        (serve/usage false)
+        (args/result-free res)
+        (args/spec-free spec)
+        (process/exit 0))
+      (let [dir  (match (serve/positional res)
+                   (Ok d)
+                   d
+                   (Err msg)
+                   (do (serve/fail spec res msg true 2) "."))
+            bind (args/get-str res "bind")
+            port (match (serve/parse-port (args/get-str res "port"))
+                   (Some p)
+                   p
+                   (None)
+                   (do
+                     (serve/fail spec
+                       res
+                       "--port takes a number from 0 to 65535"
+                       true
+                       2)
+                     0))]
+        (when (not (fs/dir? dir))
+          (serve/fail spec res (str-concat "not a directory: " dir) false 2))
+        (when (not (serve/bind! bind))
+          (serve/fail spec
+            res
+            "--bind takes any, localhost, or a numeric address"
+            true
+            2))
+        (let [base    (fn [c : ptr<void>] : nil
+                        (httpd-resp-status! c 404)
+                        (httpd-resp-body! c "Not Found"))
+              static  (mw-static-with (StaticOpts (args/get-str res "index")
+                                        (not (args/has? res "no-listing")))
+                        dir
+                        base)
+              handler (if (args/has? res "quiet")
+                        static
+                        (mw-log-to (fn [line : cstr] : nil (eprintln line))
+                          static))
+              h       (httpd-new port handler)]
+          (when (< (httpd-port h) 0)
+            (serve/fail spec
+              res
+              (str-concat "cannot listen on port " (args/get-str res "port"))
+              false
+              1))
+          (serve/announce dir bind (httpd-port h))
+          (httpd-run h)
+          0)))))

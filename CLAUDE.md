@@ -492,6 +492,8 @@ Use a different port every time:
   `npx vite --port <free port> --strictPort`, and stop it when you are done.
 - **Checking whether the developer's server is up** is fine and read-only:
   `lsof -nP -iTCP:3000 -sTCP:LISTEN`. Then leave it alone.
+- **`tur serve`** defaults to port 8000 on loopback, never 3000; in a test use
+  `tur serve --port 0` and read the port from its startup line.
 
 A `PreToolUse` hook (`.claude/hooks/no-dev-server-port.sh`, registered in
 `.claude/settings.json`) denies Bash commands that address port 3000, start a
@@ -717,6 +719,11 @@ produce no `tur.lock` entries.
   (`--enable=script-deps`) sees exactly the spices it declares, fetched into
   the script-dep cache -- not the installed set; `tur <file> args` runs it.
   See [consuming-spices-guide](docs/guides/consuming-spices-guide.md#declaring-spices-in-the-script-itself-defscript).
+- `tur run <file.tur> a b` (and `tur <file.tur> a b`) passes `a b` to the
+  program as `*args*`; run's own flags still work on either side of the file.
+- `tur x <name|path|url> -- args` runs a spice's `:bin` without installing it
+  (a URL is fetched into the script-dep cache). See
+  [consuming-spices-guide](docs/guides/consuming-spices-guide.md#running-a-spices-tool-without-installing-it-tur-x).
 - Explicit `-I <dir>` flags still work and win on name collisions.
 - `--no-auto-spice` (global flag, before the subcommand) opts out.
 - `tur build <file>` (single-file build) does **not** auto-discover --

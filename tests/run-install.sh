@@ -909,6 +909,107 @@ out="$(cd "$SCRATCH" && "$TUR_ABS" run report.tur 2>&1)"
 if [ "$out" = "42" ]; then ok "an installed spice that is not imported links nothing"
 else bad "an installed spice that is not imported links nothing" "$out"; fi
 
+# ------------------------------------------------------------------ #
+# project-less-tools-plan PT3: tur x                                  #
+# ------------------------------------------------------------------ #
+# A scratch TUR_HOME of its own, so "nothing was registered" is "state.tur
+# and bin/ do not exist" rather than a diff against earlier sections.
+XHOME="$WORK/x-home"
+XT="$WORK/xtool"
+mkdir -p "$XT/src"
+cat > "$XT/build.tur" <<'XEOF'
+(defpackage xtool :name "xtool" :version "0.1.0"
+  :bin #{"tur-xtool" "src/main.tur"})
+XEOF
+cat > "$XT/src/main.tur" <<'XEOF'
+(load "stdlib/list.tur")
+(defn main [] : int
+  (println "xtool v1")
+  (println (list-length *args*))
+  0)
+XEOF
+XURL="$(mkrepo "$XT")"
+xrun() { TUR_HOME="$XHOME" "$TUR_ABS" x "$@"; }
+
+# 60. A URL builds once and runs; a second run needs no network: the bare
+#     repo is moved away first, so a fetch would fail.
+out="$(cd "$WORK" && xrun "$XURL" -- a b 2>&1)"; rc=$?
+if [ "$rc" -eq 0 ] && echo "$out" | grep -q "building tur-xtool" &&
+   [ "$(echo "$out" | tail -2 | tr '\n' ' ')" = "xtool v1 2 " ]; then
+    ok "tur x <url> fetches, builds and runs"
+else
+    bad "tur x <url> fetches, builds and runs" "rc=$rc out: $out"
+fi
+mv "$XT.git" "$XT.git.away"
+out="$(cd "$WORK" && xrun "$XURL" -- c 2>&1)"; rc=$?
+if [ "$rc" -eq 0 ] && [ "$out" = "$(printf 'xtool v1\n1')" ]; then
+    ok "tur x <url> again: cached, no fetch, no build"
+else
+    bad "tur x <url> again: cached, no fetch, no build" "rc=$rc out: $out"
+fi
+out="$(cd "$WORK" && xrun "$XURL" --ref no-such-tag --offline 2>&1)"; rc=$?
+if [ "$rc" -ne 0 ] && echo "$out" | grep -q "forbids fetching"; then
+    ok "tur x --offline refuses an uncached ref"
+else
+    bad "tur x --offline refuses an uncached ref" "rc=$rc out: $out"
+fi
+mv "$XT.git.away" "$XT.git"
+
+# 61. A path builds into <checkout>/build/, and again after a source edit.
+out="$(cd "$WORK" && xrun ./xtool 2>&1)"; rc=$?
+if [ "$rc" -eq 0 ] && [ -x "$XT/build/tur-xtool" ] && echo "$out" | grep -q "xtool v1"; then
+    ok "tur x <path> builds in place"
+else
+    bad "tur x <path> builds in place" "rc=$rc out: $out"
+fi
+out="$(cd "$WORK" && xrun ./xtool 2>&1)"
+if ! echo "$out" | grep -q building; then ok "tur x <path> unchanged: no rebuild"
+else bad "tur x <path> unchanged: no rebuild" "$out"; fi
+sed 's/xtool v1/xtool v2/' "$XT/src/main.tur" > "$XT/src/main.tur.new" &&
+    mv "$XT/src/main.tur.new" "$XT/src/main.tur"
+touch -t 203001010000 "$XT/src/main.tur"
+out="$(cd "$WORK" && xrun ./xtool 2>&1)"
+if echo "$out" | grep -q building && echo "$out" | grep -q "xtool v2"; then
+    ok "tur x <path> rebuilds after a source edit"
+else
+    bad "tur x <path> rebuilds after a source edit" "$out"
+fi
+
+# 62. Two :bin entries need --bin; a wrong name lists them.
+cat > "$XT/build.tur" <<'XEOF'
+(defpackage xtool :name "xtool" :version "0.1.0"
+  :bin #{"tur-xtool" "src/main.tur" "tur-xtool2" "src/main.tur"})
+XEOF
+out="$(cd "$WORK" && xrun ./xtool 2>&1)"; rc=$?
+if [ "$rc" -eq 2 ] && echo "$out" | grep -q "tur-xtool2"; then
+    ok "tur x: several :bin entries need --bin"
+else
+    bad "tur x: several :bin entries need --bin" "rc=$rc out: $out"
+fi
+out="$(cd "$WORK" && xrun ./xtool --bin tur-xtool2 -- q 2>&1)"; rc=$?
+if [ "$rc" -eq 0 ] && echo "$out" | grep -q "xtool v2"; then
+    ok "tur x --bin picks one"
+else
+    bad "tur x --bin picks one" "rc=$rc out: $out"
+fi
+
+# 63. Nothing was registered by any of the above.
+if [ ! -e "$XHOME/state.tur" ] && [ ! -e "$XHOME/bin" ]; then
+    ok "tur x writes no state.tur and links nothing into bin/"
+else
+    bad "tur x writes no state.tur and links nothing into bin/" "$(ls -la "$XHOME")"
+fi
+
+# 64. An installed name execs the binary `tur install` built, without building.
+TUR_HOME="$XHOME" "$TUR_ABS" install "$XT" --path >/dev/null 2>&1
+out="$(cd "$WORK" && xrun xtool --bin tur-xtool -- 1 2 3 2>&1)"; rc=$?
+if [ "$rc" -eq 0 ] && ! echo "$out" | grep -q building &&
+   [ "$(echo "$out" | tail -1)" = "3" ]; then
+    ok "tur x <installed name> execs without building"
+else
+    bad "tur x <installed name> execs without building" "rc=$rc out: $out"
+fi
+
 echo
 echo "install summary: $PASS passed, $FAIL failed"
 if [ "$FAIL" -ne 0 ]; then

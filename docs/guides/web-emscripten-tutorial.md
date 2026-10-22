@@ -180,15 +180,15 @@ Why these helpers are needed:
 ### Step 4: Serve locally
 
 WASM modules require a real HTTP server (browsers block `file://` WASM loads).
-Either of these works:
+`tur` carries one:
 
 ```sh
-npx serve hello-wasm
-# or
-python3 -m http.server 8080 --directory hello-wasm
+tur serve hello-wasm -p 8080
 ```
 
-Then open `http://localhost:8080` (or whichever port `serve` prints).
+Then open `http://localhost:8080`.  It sends `.wasm` as `application/wasm`;
+`npx serve hello-wasm` or `python3 -m http.server 8080 --directory hello-wasm`
+work as well.
 
 ### COOP/COEP headers
 

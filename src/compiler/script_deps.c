@@ -46,11 +46,13 @@ bool g_script_deps_offline = false;
 bool g_script_deps_update  = false;
 bool g_script_deps_editor  = false;
 
-/* What an entry's spice dir grows when it is set up as a fetched project, and
- * the bookkeeping files at an entry's root: none of it is fetched content,
- * so the tree hash leaves it out. */
+/* What an entry's spice dir grows when it is set up as a fetched project, the
+ * bookkeeping files at an entry's root, and the binaries `tur x` builds into
+ * the entry (project-less-tools-plan PT3): none of it is fetched content, so
+ * the tree hash leaves it out. */
 static const char *const SD_HASH_SKIP[] = {
-    "spices", "cmake", "tur.lock", ".tur-script-entry", ".tur-last-used", NULL,
+    "spices", "cmake", "tur.lock", ".tur-script-entry", ".tur-last-used",
+    ".tur-x-bin", NULL,
 };
 
 #define SD_META    ".tur-script-entry"
@@ -314,7 +316,7 @@ static bool sd_build_entry(const char *script, const char *cache,
     (void)pkg_rm_rf(tmp);
 
     fprintf(stderr, "tur: fetching %s (%s) for %s\n", s->name,
-            s->ref ? s->ref : pin, sd_base(script));
+            s->ref ? s->ref : pin ? pin : "default branch", sd_base(script));
     SdStdout so;
     sd_stdout_to_stderr(&so);
     /* A commit id is not something `git clone --branch` takes: clone the
@@ -326,7 +328,7 @@ static bool sd_build_entry(const char *script, const char *cache,
     if (!sha) {
         (void)pkg_rm_rf(tmp);
         sd_error(script, "cannot fetch spice \"%s\" from %s (ref %s)",
-                 s->name, s->url, s->ref ? s->ref : "?");
+                 s->name, s->url, s->ref ? s->ref : "default branch");
         return false;
     }
 
@@ -350,7 +352,8 @@ static bool sd_build_entry(const char *script, const char *cache,
     if (!sd_is_dir(spice_dir)) {
         (void)pkg_rm_rf(tmp);
         sd_error(script, "spice \"%s\": %s has no directory '%s' at %s",
-                 s->name, s->url, s->subdir ? s->subdir : ".", s->ref);
+                 s->name, s->url, s->subdir ? s->subdir : ".",
+                 s->ref ? s->ref : sha);
         free(sha);
         return false;
     }
@@ -725,6 +728,96 @@ int script_deps_resolve(const char *script, bool in_project, bool ignore_lock,
     if (have_lock) pkg_lock_free(&lock);
     pkg_manifest_free(&hdr);
     if (rc < 0) script_deps_free(out);
+    return rc;
+}
+
+/* ------------------------------------------------------------------ */
+/* One entry, outside any header: `tur x <url>`                        */
+/* ------------------------------------------------------------------ */
+
+int script_deps_cache_entry(const char *who, const char *name,
+                            const char *url, const char *ref,
+                            const char *subdir, bool update, bool offline,
+                            char *spice_dir_out, size_t cap) {
+    char cache[4096];
+    if (!tur_script_cache_dir(cache, sizeof(cache))) {
+        sd_error(who, "no data directory to cache \"%s\" in -- set $HOME or "
+                 "$TUR_HOME", name);
+        return -1;
+    }
+    char index_path[4096];
+    snprintf(index_path, sizeof(index_path), "%s/index.tur", cache);
+    TurScriptIndex ix;
+    memset(&ix, 0, sizeof(ix));
+    (void)tur_script_index_read(index_path, &ix);
+    /* index.tur keys a ref; no ref is the default branch, kept as HEAD. */
+    const char *ix_ref = ref ? ref : "HEAD";
+
+    const char *pin = NULL;
+    if (sd_is_commit_id(ref))  pin = ref;
+    else if (!update)          pin = tur_script_index_lookup(&ix, url, ix_ref);
+
+    PkgSpice s;
+    memset(&s, 0, sizeof(s));
+    s.name   = (char *)name;
+    s.url    = (char *)url;
+    s.ref    = (char *)ref;
+    s.subdir = (char *)subdir;
+
+    int rc = 1;
+    char entry[4096] = "";
+    char *resolved = NULL;
+    if (pin) {
+        char ename[512];
+        sd_entry_name(name, subdir, pin, ename, sizeof(ename));
+        snprintf(entry, sizeof(entry), "%s/%s", cache, ename);
+        SdMeta meta;
+        if (sd_entry_complete(entry) && sd_meta_read(entry, &meta)) {
+            bool same = strcmp(meta.url, url) == 0 &&
+                        strcmp(meta.resolved, pin) == 0 &&
+                        ((!meta.subdir && !subdir) ||
+                         (meta.subdir && subdir && strcmp(meta.subdir, subdir) == 0));
+            sd_meta_free(&meta);
+            if (!same) {
+                sd_error(who, "cache entry %s holds a different spice than %s "
+                         "-- remove it with `tur cache clean`", entry, url);
+                rc = -1;
+            } else {
+                resolved = strdup(pin);
+            }
+        }
+    }
+    if (rc == 1 && !resolved) {
+        if (offline) {
+            sd_error(who, "%s (%s) is not in the cache, and --offline forbids "
+                     "fetching it -- run once without --offline", url,
+                     ref ? ref : "default branch");
+            rc = -1;
+        } else if (!sd_mkdirp(cache)) {
+            sd_error(who, "cannot create %s: %s", cache, strerror(errno));
+            rc = -1;
+        } else if (!sd_build_entry(who, cache, &s, pin, NULL,
+                                   entry, sizeof(entry), &resolved)) {
+            rc = -1;
+        }
+    }
+    if (rc == 1 && !sd_is_commit_id(ref)) {
+        const char *known = tur_script_index_lookup(&ix, url, ix_ref);
+        if (!known || strcmp(known, resolved) != 0) {
+            tur_script_index_set(&ix, url, ix_ref, resolved);
+            (void)tur_script_index_write(index_path, &ix);
+        }
+    }
+    if (rc == 1) {
+        sd_stamp(entry);
+        char spice_dir[4096];
+        sd_spice_dir(entry, subdir, spice_dir, sizeof(spice_dir));
+        char canon[4096];
+        snprintf(spice_dir_out, cap, "%s",
+                 realpath(spice_dir, canon) ? canon : spice_dir);
+    }
+    free(resolved);
+    tur_script_index_free(&ix);
     return rc;
 }
 

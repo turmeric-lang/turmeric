@@ -1,0 +1,159 @@
+;; project-less-tools-plan PT0: mw-static-with's index file and directory
+;; listing, beside mw-static's unchanged behaviour.
+;;
+;; Three servers over one scratch tree, each behind a base handler that
+;; always answers 404:
+;;   full   -- (mw-static-with (StaticOpts "index.html" true) ...)
+;;   nolist -- (mw-static-with (StaticOpts "index.html" false) ...)
+;;   plain  -- (mw-static ...), which must still treat a directory as a miss
+;;
+;; The tree:  index.html, sub/b.txt, sub/a&b.txt, sub/.hidden, sub/inner/
+;; The listing of /sub/ must put inner/ first, escape and percent-encode
+;; a&b.txt, and leave .hidden out.
+
+(defn tmp-path [name : cstr] : cstr
+  ```c
+  /* Run-time scratch path (see httpd-mw-static): a native Windows binary
+   * resolves a leading "/tmp" against the drive root; tests/run.sh exports
+   * TUR_TEST_TMPDIR. */
+  static char bufs[4][512];
+  static int slot = 0;
+  char *buf = bufs[slot];
+  slot = (slot + 1) & 3;
+  const char *d = getenv("TUR_TEST_TMPDIR");
+  if (!d || !*d) d = "/tmp";
+  snprintf(buf, sizeof bufs[0], "%s/%s", d, name);
+  return buf;
+  ```)
+
+(load "stdlib/httpd.tur")
+
+(defn setup-fs [root : cstr] : nil
+  ```c
+  #include <sys/stat.h>
+  #include <direct.h>
+  char p[600];
+#ifdef _WIN32
+  #define MKD(x) _mkdir(x)
+#else
+  #define MKD(x) mkdir((x), 0755)
+#endif
+  MKD(root);
+  snprintf(p, sizeof p, "%s/sub", root);       MKD(p);
+  snprintf(p, sizeof p, "%s/sub/inner", root); MKD(p);
+  #undef MKD
+  static const char *files[][2] = {
+      { "index.html",  "<p>home</p>" },
+      { "sub/b.txt",   "bee" },
+      { "sub/a&b.txt", "amp" },
+      { "sub/.hidden", "secret" },
+  };
+  for (int i = 0; i < 4; i++) {
+      snprintf(p, sizeof p, "%s/%s", root, files[i][0]);
+      FILE *f = fopen(p, "wb");
+      if (f) { fputs(files[i][1], f); fclose(f); }
+  }
+  ```)
+
+;; GET `path` from 127.0.0.1:`port` over HTTP/1.0 and print a summary line:
+;; the status, a Location when there is one, a short body, or the listing's
+;; links one per line.
+(defn show [label : cstr port : int path : cstr] : nil
+  ```c
+  struct sockaddr_in addr;
+  memset(&addr, 0, sizeof(addr));
+  addr.sin_family      = AF_INET;
+  addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+  addr.sin_port        = htons((uint16_t)port);
+  int fd = socket(AF_INET, SOCK_STREAM, 0);
+  if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) != 0) {
+      printf("%s %s connect failed\n", label, path);
+      close(fd);
+      return;
+  }
+  char req[600];
+  snprintf(req, sizeof req, "GET %s HTTP/1.0\r\n\r\n", path);
+  send(fd, req, strlen(req), 0);
+  static char resp[16384];
+  int total = 0;
+  while (total < (int)sizeof(resp) - 1) {
+      ssize_t r = recv(fd, resp + total, sizeof(resp) - 1 - (size_t)total, 0);
+      if (r <= 0) break;
+      total += (int)r;
+  }
+  resp[total] = '\0';
+  close(fd);
+  int status = 0;
+  if (strncmp(resp, "HTTP/1.", 7) == 0) status = atoi(resp + 9);
+  printf("%s %s status=%d", label, path, status);
+  const char *loc = strstr(resp, "\r\nLocation: ");
+  if (loc) {
+      loc += 12;
+      printf(" location=%.*s", (int)strcspn(loc, "\r\n"), loc);
+  }
+  const char *body = strstr(resp, "\r\n\r\n");
+  body = body ? body + 4 : "";
+  if (status == 200 && strstr(body, "<table>")) {
+      printf(" listing\n");
+      const char *a = body;
+      while ((a = strstr(a, "<a href=")) != NULL) {
+          const char *e = strstr(a, "</a>");
+          if (!e) break;
+          printf("  %.*s</a>\n", (int)(e - a), a);
+          a = e + 4;
+      }
+      printf("  hidden=%s\n", strstr(body, "hidden") ? "listed" : "absent");
+  } else if (status == 200) {
+      printf(" body=%s\n", body);
+  } else {
+      printf("\n");
+  }
+  fflush(stdout);
+  ```)
+
+(defn run-server [h : ptr<void>] : ptr<void> ```c httpd_hyrun(h); return NULL; ```)
+(defn spawn-server [h : ptr<void>] : ptr<void>
+  ```c pthread_t *t = (pthread_t *)malloc(sizeof(pthread_t));
+  pthread_create(t, NULL, (void *(*)(void *))run_hyserver, (void *)h);
+  return (void *)t; ```)
+(defn join-thread [t : ptr<void>] : nil ```c pthread_join(*(pthread_t *)t, NULL); free(t); ```)
+
+(defn main [] : int
+  (let [root (tmp-path "turmeric-static-index-listing")]
+    (setup-fs root)
+    (let [base   (fn [c : ptr<void>] : nil
+                   (httpd-resp-status! c 404)
+                   (httpd-resp-body! c "Not Found"))
+          full   (httpd-new-pool 0 1 (mw-static-with (StaticOpts "index.html" true) root base))
+          nolist (httpd-new-pool 0 1 (mw-static-with (StaticOpts "index.html" false) root base))
+          plain  (httpd-new-pool 0 1 (mw-static root base))
+          t1     (spawn-server full)
+          t2     (spawn-server nolist)
+          t3     (spawn-server plain)
+          pf     (httpd-port full)
+          pn     (httpd-port nolist)
+          pp     (httpd-port plain)]
+      (show "full" pf "/")
+      (show "full" pf "/sub")
+      (show "full" pf "/sub?x=1")
+      (show "full" pf "/sub/")
+      (show "full" pf "/sub/a%26b.txt")
+      (show "full" pf "/sub/.hidden")
+      (show "full" pf "/sub/%2e%2e/index.html")
+      (show "full" pf "/sub/inner/")
+      (show "nolist" pn "/")
+      (show "nolist" pn "/sub/")
+      (show "plain" pp "/")
+      (show "plain" pp "/sub/")
+      (show "plain" pp "/sub/b.txt")
+      (httpd-stop full)
+      (httpd-stop nolist)
+      (httpd-stop plain)
+      (join-thread t1)
+      (join-thread t2)
+      (join-thread t3)
+      (httpd-free full)
+      (httpd-free nolist)
+      (httpd-free plain)
+      (println "done")
+      0)))
