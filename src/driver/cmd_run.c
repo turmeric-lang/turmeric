@@ -53,6 +53,11 @@ int drv_exec_program(const char *exe, char **prog_argv, int prog_argc) {
      * output, mid-line, once stdout is a file. */
     fflush(NULL);
 #ifdef _WIN32
+    /* CreateProcess, not system(): cmd.exe strips the first and last quote
+     * of a command that starts with one, which tore `"exe" "a" "b"` apart,
+     * and it will not run a binary without an extension (what `tur x` and
+     * `tur install` build).  lpApplicationName runs exactly `exe`; the
+     * command line is quoted for the program's own argv parser. */
     Buf cmd; buf_init(&cmd);
     bool q = drv_buf_put_quoted(&cmd, exe);
     for (int i = 0; i < prog_argc; i++) {
@@ -60,12 +65,37 @@ int drv_exec_program(const char *exe, char **prog_argv, int prog_argc) {
         q = drv_buf_put_quoted(&cmd, prog_argv[i]) && q;
     }
     buf_putc(&cmd, '\0');
-    if (!q) fprintf(stderr, "tur: an argument was too long to quote\n");
+    if (!q) {
+        fprintf(stderr, "tur: an argument was too long to quote\n");
+        buf_free(&cmd);
+        return 2;
+    }
+    STARTUPINFOA si;
+    PROCESS_INFORMATION pi;
+    memset(&si, 0, sizeof si);
+    memset(&pi, 0, sizeof pi);
+    si.cb         = sizeof si;
+    si.dwFlags    = STARTF_USESTDHANDLES;
+    si.hStdInput  = GetStdHandle(STD_INPUT_HANDLE);
+    si.hStdOutput = GetStdHandle(STD_OUTPUT_HANDLE);
+    si.hStdError  = GetStdHandle(STD_ERROR_HANDLE);
     prof_enter(PROF_RUN);
-    int sys = q ? system(cmd.data) : 2;
+    BOOL ok = CreateProcessA(exe, cmd.data, NULL, NULL, TRUE, 0, NULL, NULL,
+                             &si, &pi);
+    DWORD code = 1;
+    if (ok) {
+        WaitForSingleObject(pi.hProcess, INFINITE);
+        if (!GetExitCodeProcess(pi.hProcess, &code)) code = 1;
+        CloseHandle(pi.hProcess);
+        CloseHandle(pi.hThread);
+    } else {
+        fprintf(stderr, "tur: cannot run '%s' (Windows error %lu)\n", exe,
+                (unsigned long)GetLastError());
+        code = 127;
+    }
     prof_exit(PROF_RUN);
     buf_free(&cmd);
-    return q ? decode_exit_status(sys) : 2;
+    return (int)code;
 #else
     char **av = (char **)malloc((size_t)(prog_argc + 2) * sizeof(char *));
     if (!av) return 2;
