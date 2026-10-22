@@ -106,7 +106,7 @@ and a `catch-unwind` around the `perform` can catch it and carry on:
 - It consumes `k` like a `resume`, and counts as the one use of a `^linear` k.
 - Not yet supported: compiled, a `catch-unwind` inside the clause around the
   `discontinue`; interpreted, a `^multishot` k whose body catches. See
-  [discontinue-plan](../upcoming/discontinue-plan.md).
+  [discontinue-plan](https://github.com/turmeric-lang/turmeric/blob/main/docs/upcoming/discontinue-plan.md).
 
 ### Properties
 
