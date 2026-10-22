@@ -1,0 +1,31 @@
+;; compiled-shift-delimited-by-root item 1: `run` is evicted from the CPS
+;; backend (its `(Vec int)` parameter), so its `reset`s are direct-emitted
+;; setjmp landings, while `h` is CPS-colored and runs its `shift` on its own DK
+;; chain, which holds no prompt for them.  The machine took the chain's root as
+;; the delimiter and returned f(v) as h's value, so `(reset (+ 10 (h)))` ran
+;; the `(+ 10 _)` and printed 16.  An abortive shift discards everything up to
+;; the reset: the DK machine now records f(v) in the live landing and the
+;; entry's exit jumps there.  Each line matches `tur --interpret`.
+(defn h [] : int (+ 1 (shift (fn [v : int] (* 2 v)) 3)))
+(defn h2 [] : int (* 100 (h)))
+(defn hf [] : float (+ 1.25 (shift (fn [v : float] (* 2.0 v)) 3.35)))
+(defn h0 [] : int (+ 1 (shift0 (fn [v : int] (* 3 v)) 4)))
+(defn inner [] : int (reset (+ 1000 (h))))
+(defn run [v : (Vec int)] : int
+  (println (reset (+ 10 (h))))            ; 6
+  (println (reset (+ 10 (h2))))           ; 6 -- the shift is a callee's callee
+  (println (reset (+ (h) (h))))           ; 6 -- the first shift aborts
+  (println (reset (+ 2.5 (hf))))          ; 6.7
+  (println (reset (+ 10 (h0))))           ; 12
+  (println (reset (+ 1 (inner))))         ; 7 -- inner's reset delimits h
+  (let [^mut i 0 ^mut acc 0]
+    (while (< i 1000)
+      (set! acc (+ acc (reset (+ 10 (h)))))
+      (set! i (+ i 1)))
+    (println acc))                        ; 6000
+  (vec-len v))
+(defn main [] : int
+  (let [v (:: (vec-new) (Vec int))]
+    (println (run v))
+    (vec-free v))
+  0)

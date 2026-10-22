@@ -1,6 +1,0 @@
-Witness-indirected existential `open` dispatch reads the constraint witness
-bundled into the runtime existential record -- a compiled-codegen mechanism.
-The interpreter erases the existential record and re-dispatches structurally on
-the receiver's runtime type; opaque-over-int newtypes (LinesR/PointsR here)
-collapse to their int carrier under --interpret, so the heterogeneous arms
-cannot be told apart there. Compiled-only by construction, not a bug.

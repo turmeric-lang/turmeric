@@ -616,7 +616,7 @@ this guide was written; link the reports here once they are.
 
 | Gap | Where |
 |---|---|
-| A forced spec at a by-value struct the owner does not define (the caller's own, or a third module's) is emitted with `int64_t` there ([forced-spec-at-foreign-aggregate](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/forced-spec-at-foreign-aggregate.md)) | `forced_spec_pos_type` finds only the owner's own `EX_DEFDATA` items; an imported `AdtDef` is not among them |
+| A forced spec at a by-value struct only the CALLER can see (its own) cannot be emitted by the generic's module, and is refused there with a diagnostic naming the struct; one at a third module's struct both import builds ([forced-spec-at-foreign-aggregate](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/forced-spec-at-foreign-aggregate.md), resolved 2026-10-22) | `forced_spec_pos_type` resolves the type from the owner's items, then the defs its elaboration saw (`ctor_census_find_adt`) |
 | An effect performed in one module's TU cannot reach a `handle` in another's. It is refused at the call site, not threaded | per-TU coloring; `static` `__cps` twins; the entry wrapper's fresh root continuation; the refusal is `effect_check.c` (`foreign_check`) |
 | Nested imports resolve against the entry file's directory, and the diagnostic calls it the importing file's | `elab_module.c:elab_load_module_impl` (`module_base_dir`) |
 
@@ -644,7 +644,6 @@ Each was reproduced against the compiler this guide describes and filed in
 update the passage above that describes it and drop it from this list.
 
 - [sepcomp-cross-module-effect-unhandled](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/sepcomp-cross-module-effect-unhandled.md) -- Separately compiled: an effect performed in one module cannot reach a handler in another (refused at build time since 2026-10-18)
-- [forced-spec-at-foreign-aggregate](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/forced-spec-at-foreign-aggregate.md) -- A cross-module specialization at a struct the owner does not define is emitted at `int64_t` (narrowed from the archived forced-spec-loses-aggregate-type)
 
 ## Maintenance
 

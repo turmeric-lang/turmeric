@@ -196,6 +196,6 @@ the 4 failures all `TUR_RUNTIME=source` link artifacts (`-O0` and
 fixture's program under ASan with leaks on, bounce forced, natural at `-O1`
 and absent at `-O2`: the same single 24 B leak each time, which is
 pre-existing and filed as
-[fat-shim-arg-to-mutual-cps-pair-leaks](../reported/fat-shim-arg-to-mutual-cps-pair-leaks.md).
+[fat-shim-arg-to-mutual-cps-pair-leaks](fat-shim-arg-to-mutual-cps-pair-leaks.md).
 The preamble change regenerated the split runtime and moved 157 `expected.c`
 snapshots.

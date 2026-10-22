@@ -48,12 +48,57 @@ A borrow is read with `@r` (`(println @r)`) and written through with
 `(set! @r v)` -- the `set!` form with a deref target. The prefix `@r` is the
 only spelling: `(@ r)` is not a call form.
 
-What the checker does not enforce today ([borrow-checks-gaps](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/borrow-checks-gaps.md)): a
-`&mut` of a local that is not declared `^mut` is accepted, and writes through it
-change the variable; and an assignment to a variable while a `&` of it is live
-is not a conflict. On both engines a borrow is a reference to the place: a
-write through `&mut (.x p)` reaches `p`, and a borrow sees a later `set!` of
-the variable (the interpreter used to borrow a copy --
+Three rules hold on every engine
+([borrow-checks-gaps](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/borrow-checks-gaps.md),
+resolved 2026-10-22):
+
+- **`&mut` needs a mutable place.** `(&mut x)` and `(&mut (.f x))` are refused
+  unless `x` is a `^mut` local ("cannot borrow `x` as mutable: it is not
+  declared `^mut`"). A place behind an `rc`, a `:heap` struct or another borrow
+  is interior-mutable and needs nothing.
+- **No assignment to a borrowed place while a `let` holds a live borrow of
+  it.** `(set! x v)`, or `(set! (.f x) v)` when the borrow covers `.f` (or all
+  of `x`), is refused while a `let`-bound borrow of `x` is used after the
+  assignment. Liveness is program order: a borrow the body is done with does not
+  block the write, a use earlier in an enclosing `while` counts (it runs again
+  on the next turn), and a borrow a closure captured is live for good. A borrow
+  of a different field (`(& (.a p))` against `(set! (.b p) 5)`) does not
+  conflict. An `if` is read in program order too, so a use in the else-branch
+  of an `if` whose then-branch assigns counts as a use after the write.
+- **A borrow of a literal borrows a temporary.** `(let [r (& 7.25)] ...)` spills
+  the literal to a temporary that lives as long as the `let`, and `&mut` of a
+  literal writes that temporary.
+
+```turmeric
+(let [^mut x 1
+      r (& x)]
+  (println @r)
+  (set! x 2)      ; fine: `r` is not used again
+  (println x))
+
+(let [^mut x 1
+      r (& x)]
+  (set! x 2)      ; error: cannot assign to `x` while it is borrowed by `r`
+  (println @r))
+```
+
+```sweet-exp
+#lang sweet-exp
+
+let [^mut x 1
+     r (& x)]
+  println(@r)
+  set!(x 2)      ; fine: `r` is not used again
+  println(x)
+
+let [^mut x 1
+     r (& x)]
+  set!(x 2)      ; error: cannot assign to `x` while it is borrowed by `r`
+  println(@r)
+```
+
+On both engines a borrow is a reference to the place: a write through
+`&mut (.x p)` reaches `p` (the interpreter used to borrow a copy --
 [turi-borrow-is-a-copy](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/turi-borrow-is-a-copy.md), resolved 2026-10-22).
 
 ## Move Tracking

@@ -751,6 +751,7 @@ static Expr *elab_form_impl(Elab *e, Form *f) {
                 out->as.dynvar_read_.entry = b->dynvar_entry;
                 return out;
             }
+            elab_borrow_note_use(e, b);   /* borrow-checks-gaps */
             Expr *out = expr_new(e->arena, EX_VAR, b->type, f->span);
             out->as.var.binding = b;
             /* Phase HRT/G2: Resolve named type variable through current GADT match arm skolem env.
@@ -2950,6 +2951,9 @@ void elab_session_free(ElabSession *session) {
         free(e->forward_type_syms);
         free(e->handled_effect_names);
         free(e->pending_reset_nodes);
+        free(e->borrow_loop_marks);
+        free(e->borrow_pending);
+        free(e->nonretain_pending);
         free(e->macros);
         free(e->macro_expansion_stack);
         free(e->loaded_modules);
@@ -3578,6 +3582,9 @@ Expr *elaborate_program_session(Arena *arena, SymbolTable *st,
         free(e.forward_type_syms);
         free(e.handled_effect_names);
         free(e.pending_reset_nodes);
+        free(e.borrow_loop_marks);
+        free(e.borrow_pending);
+        free(e.nonretain_pending);
         free(e.macros);
         free(e.macro_expansion_stack);
         free((void *)e.load_expanded_paths);
@@ -3930,6 +3937,9 @@ Expr *elaborate_program_session(Arena *arena, SymbolTable *st,
         free(e.forward_type_syms);
         free(e.handled_effect_names);
         free(e.pending_reset_nodes);
+        free(e.borrow_loop_marks);
+        free(e.borrow_pending);
+        free(e.nonretain_pending);
         free(e.macros);
         free(e.macro_expansion_stack);
         free(e.loaded_modules); /* Phase M2 */

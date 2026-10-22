@@ -626,6 +626,10 @@ typedef struct TuriEnv {
     bool        spice_image_borrowed;
 } TuriEnv;
 
+/* What one tracked collection box counts toward the pool sweep's budget
+ * (turi_env_track_collection). */
+#define TURI_COLL_BOX_POOL_COST 512u
+
 /* turi-dropped-closures-kept-until-teardown: count `n` bytes of values made
  * toward the pool sweep's budget. */
 static inline void turi_pool_count(TuriEnv *env, size_t n) {

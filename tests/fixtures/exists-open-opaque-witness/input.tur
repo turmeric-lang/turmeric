@@ -1,0 +1,28 @@
+;; turi-packed-defopaque-wrong-instance: two `defopaque` types over `:int` are
+;; the same int at run time, so the interpreter used to dispatch an `open`ed
+;; existential on the value and give `Rect`'s instance to a packed `Sq`
+;; (1005 vs 25 compiled).  `pack` now keeps the witnesses it resolved, as the
+;; compiled record does, through a `Vec`, with two constraints, and nested.
+(defclass Shape [a] (area [x : a] : int))
+(defclass Named [a] (tag [x : a] : cstr))
+(defopaque Sq :int)
+(defopaque Rect :int)
+(definstance Shape [Sq]   (area [x : Sq]   (* (:: x :int) (:: x :int))))
+(definstance Shape [Rect] (area [x : Rect] (+ 1000 (:: x :int))))
+(definstance Named [Sq]   (tag [x : Sq] "sq"))
+(definstance Named [Rect] (tag [x : Rect] "rect"))
+(defn area-of [e : (exists [a] [(Shape a)] a)] : int (open e [a v] (area v)))
+(defn describe [e : (exists [a] [(Shape a) (Named a)] a)] : int
+  (open e [a v] (do (println (tag v)) (area v))))
+(defn main [] : int
+  (let [v (vec-new)]
+    (vec-push! v (pack (:: 5 :Sq) (exists [a] [(Shape a)] a)))
+    (vec-push! v (pack (:: 5 :Rect) (exists [a] [(Shape a)] a)))
+    (println (area-of (vec-get v 0)))
+    (println (area-of (vec-get v 1))))
+  (println (describe (pack (:: 4 :Rect) (exists [a] [(Shape a) (Named a)] a))))
+  (println (describe (pack (:: 4 :Sq) (exists [a] [(Shape a) (Named a)] a))))
+  (println (open (pack (:: 3 :Sq) (exists [a] [(Shape a)] a)) [a v]
+             (open (pack (:: 3 :Rect) (exists [b] [(Shape b)] b)) [b w]
+               (+ (area v) (area w)))))
+  0)

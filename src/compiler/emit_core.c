@@ -987,6 +987,17 @@ bool expr_subtree_has_inline_c(const Expr *e) {
         case EX_RC_CLONE: return expr_subtree_has_inline_c(e->as.rc_clone_.expr);
         case EX_RC_DROP:  return expr_subtree_has_inline_c(e->as.rc_drop_.expr);
         case EX_DEFER:    return expr_subtree_has_inline_c(e->as.defer_.body);
+        /* struct-param-closure-env-never-freed: an assignment and a loop are
+         * plain C around their operands.  Left to `default`, every body with a
+         * `set!` or a `while` -- any counting loop -- read as "may hide inline
+         * C", and elab_infer_nonretain_masks skipped it whole: `(defn count-if
+         * [n pred] (let [^mut i 0 ...] (while ... (pred x) ...)))` never got
+         * its `pred` bit, so the capturing lambda a caller handed it was never
+         * dropped (24 B a call).  The fourth time a missing arm here has
+         * switched the inference off. */
+        case EX_SET:      return expr_subtree_has_inline_c(e->as.set_.value);
+        case EX_WHILE:    return expr_subtree_has_inline_c(e->as.while_.cond)
+                              || expr_subtree_has_inline_c(e->as.while_.body);
         default:
             /* Unmodeled kind -- conservatively assume it may hide inline-C. */
             return true;
@@ -3286,6 +3297,12 @@ static CtorCensusRow *g_ctor_census     = NULL;
 static uint32_t       g_n_ctor_census   = 0;
 static uint32_t       g_cap_ctor_census = 0;
 
+/* forced-spec-at-foreign-aggregate: the defs themselves, for a lookup by name
+ * (ctor_census_find_adt) -- every ADT the module being emitted can see, its
+ * imports' included, which its own program items are not. */
+static const AdtDef **g_census_defs   = NULL;
+static uint32_t       g_n_census_defs = 0;
+
 void ctor_census_reset(void) {
     for (uint32_t i = 0; i < g_n_ctor_census; i++) {
         free(g_ctor_census[i].adt_name);
@@ -3295,6 +3312,18 @@ void ctor_census_reset(void) {
     g_ctor_census = NULL;
     g_n_ctor_census = 0;
     g_cap_ctor_census = 0;
+    free(g_census_defs);
+    g_census_defs = NULL;
+    g_n_census_defs = 0;
+}
+
+const AdtDef *ctor_census_find_adt(const char *name) {
+    if (!name) return NULL;
+    for (uint32_t i = g_n_census_defs; i-- > 0;) {
+        const AdtDef *d = g_census_defs[i];
+        if (d && !d->superseded && d->name && strcmp(d->name, name) == 0) return d;
+    }
+    return NULL;
 }
 
 /* Both names are stored MANGLED.  The alias the census gates expands to
@@ -3330,6 +3359,12 @@ static void ctor_census_push(const char *adt_name, const char *ctor_name) {
 void ctor_census_snapshot(struct AdtDef *const *defs, uint32_t n_defs) {
     ctor_census_reset();
     if (!defs) return;
+    if (n_defs) {
+        g_census_defs = (const AdtDef **)malloc(n_defs * sizeof(AdtDef *));
+        if (!g_census_defs) { fprintf(stderr, "tur: oom\n"); abort(); }
+        for (uint32_t i = 0; i < n_defs; i++) g_census_defs[i] = defs[i];
+        g_n_census_defs = n_defs;
+    }
     for (uint32_t i = 0; i < n_defs; i++) {
         const AdtDef *d = defs[i];
         if (!d || !d->name || !d->ctors) continue;
@@ -3425,6 +3460,46 @@ char *mangle_ctor_symbol(const AdtDef *adt, const char *ctor_name) {
     free(madt);
     free(mctor);
     return r;
+}
+
+/* The body of a `:heap` ADT constructor -- one spine node -- shared by the
+ * three emitters that write one: the base ctor (emit_adt_typedef_and_ctors),
+ * the monomorph (emit_registered_adt_app_rec, types.c) and the
+ * non-parametric base in emit_program_inner (stale-comments-regions item 13:
+ * they used to be three copies kept in step by comments, and RM3 R2 missed
+ * two of them in turn).  The node is allocated in the innermost open region --
+ * `tur_region_alloc_or_malloc` falls back to malloc when none is open, so the
+ * same ctor works inside and outside one (docs/archive/regions-plan.md) --
+ * then the tag (unless `flat`) and one store per field, through
+ * adt_field_member_path.  `wide_box` (NULL: none) marks a WIDE by-value field
+ * the monomorph typedef stores as an int64 heap box; it is boxed here, of C
+ * type `val_ctype[fi]`, and its words noted for the region escape check. */
+void emit_heap_ctor_body(Buf *out, const AdtDef *def, const CtorDef *ctor,
+                         const char *c_name, bool flat,
+                         const bool *wide_box, const char *const *val_ctype) {
+    buf_printf(out, "    %s *__r = (%s *)%s(sizeof(%s));\n",
+               c_name, c_name, region_alloc_fn(), c_name);
+    if (!flat) buf_printf(out, "    __r->tag = %u;\n", ctor->tag);
+    for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
+        char *mp = adt_field_member_path(def, ctor, fi);
+        if (wide_box && wide_box[fi]) {
+            /* heap-adt-niche-option-some-payload-missing-cast (the by-value
+             * half): assigning the aggregate parameter straight into the
+             * word did not compile -- `(Bx (Pos 7 8))`.  Box it as the
+             * carrier ctor does. */
+            buf_printf(out,
+                "    { %s *__b = (%s *)malloc(sizeof(%s)); *__b = _%u;"
+                " __r->%s = (int64_t)(intptr_t)__b; }\n",
+                val_ctype[fi], val_ctype[fi], val_ctype[fi], fi, mp);
+            buf_printf(out,
+                "    TUR_REGION_NOTE_WORDS((void *)(intptr_t)__r->%s, sizeof(%s));\n",
+                mp, val_ctype[fi]);
+        } else {
+            buf_printf(out, "    __r->%s = _%u;\n", mp, fi);
+        }
+        free(mp);
+    }
+    buf_printf(out, "    return __r;\n");
 }
 
 /* CONV-S1 seam 4: build the C member-access path (without a leading '.'/'->')

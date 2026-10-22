@@ -190,6 +190,79 @@ routed through an opaque handle or a flat element buffer is invisible to it.
 Reach for it when the cycles are genuinely unstructured; reach for `weak<T>`
 when you can name which edge is the back-edge, which is most of the time.
 
+## The builtin reference forms
+
+`ref`, `lref`, `rc` and `weak` are compiler builtins -- no import -- documented
+one by one in [tur/forms/references](../html/api/tur-forms-references.html).
+What each is for:
+
+| Form | What it gives you | Released |
+|---|---|---|
+| `(ref x)` | a single-owner heap cell, `ref<T>` | when the binding's scope ends, or earlier by `(drop! r)` |
+| `(lref/new x)` | a **linear** cell, `lref<T>`: it must be consumed exactly once | by the `deref` that reads it (or a move into a field or call) |
+| `(rc/of x)` | a shared, counted cell, `rc<T>`, count 1 | by the last `rc/drop` |
+| `(rc/clone r)` | a second owner of the same cell | by its own `rc/drop` |
+| `(weak r)` | a non-owning observer, `weak<T>` | see `stdlib/weak.tur` above |
+
+`@r` and `(deref r)` are the same read, on every kind above (and on borrows and
+`ptr<T>`). Reading a `ref` or `rc` does not consume it; reading an `lref` does --
+that is how an `lref` is used up.
+
+```turmeric
+(defn main [] : int
+  (let [r (ref 41)]
+    (println (+ @r 1)))               ; 42 -- r is freed here
+  (let [a (rc/of 7.5)
+        b (rc/clone a)]
+    (println (rc/strong-count a))     ; 2
+    (rc/drop b)
+    (println (rc/strong-count a))     ; 1
+    (println @a)                      ; 7.5
+    (rc/drop a))
+  (let [l (lref/new 3)]
+    (println @l))                     ; 3 -- consuming read frees the cell
+  0)
+```
+
+```sweet-exp
+#lang sweet-exp
+
+defn main [] : int
+  let [r ref(41)]
+    println({@r + 1})               ; 42 -- r is freed here
+  let [a rc/of(7.5)
+       b rc/clone(a)]
+    println(rc/strong-count(a))     ; 2
+    rc/drop(b)
+    println(rc/strong-count(a))     ; 1
+    println(@a)                     ; 7.5
+    rc/drop(a)
+  let [l lref/new(3)]
+    println(@l)                     ; 3 -- consuming read frees the cell
+  0
+```
+
+Moving between the two cell kinds:
+
+- `(rc/from-ref r)` moves a `ref`'s value into a new `rc` (count 1) and
+  consumes the `ref` -- for a value that starts single-owner and later needs
+  sharing.
+- `(ref/from-rc r)` goes back, and only when the `rc` is unique: a strong count
+  of 1 and no weak observers, checked at run time (it panics otherwise).
+- `(rc->ptr r)` borrows a raw `ptr<void>` to the value, valid while the `rc`
+  lives; reading through it needs the [unsafe builtins](unsafe-guide.md).
+
+`(ref? x)` and `(weak? x)` answer from the argument's **static** type on both
+engines -- they are type queries for generic code and macros, not runtime
+inspection of an erased word.
+
+**The builtins or `stdlib/weak.tur`?** For `rc` there is only the builtin
+surface. For `weak`, use `stdlib/weak.tur`: `rc/downgrade` is the builtin
+`weak`, and `weak/upgrade` / `weak/unwrap` / `weak/alive?` / `weak/drop` are the
+only way to read and release one. The builtin `upgrade` is retired -- it is a
+compile error naming `weak/upgrade`, which returns an `(Option rc<T>)` holding a
+strong handle you release with `rc/drop`.
+
 ## Related
 
 - [gc-guide.md](gc-guide.md) -- reference counting, the cycle collector, and the

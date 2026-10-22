@@ -73,7 +73,7 @@ The size has a cost beyond scrolling:
 - **`src/runtime/region.h` is not split.** It is 188 lines. Its cost is being
   pasted verbatim into emitted programs, and the decided fix for that is
   stripping comments at embed time
-  ([stale-comments-regions](../reported/stale-comments-regions.md), item 13).
+  ([stale-comments-regions](stale-comments-regions.md), item 13).
 
 ## Constraints to know before touching anything
 

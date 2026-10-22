@@ -634,8 +634,8 @@ Check [`docs/reported/`](https://github.com/turmeric-lang/turmeric/blob/main/doc
   a capturing `async` body's env in the shapes the spawn cannot own.
 - [erased-capture-aggregate-box-never-freed](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/erased-capture-aggregate-box-never-freed.md) --
   a by-value struct captured as a generic's erased `T`.
-- [fat-shim-arg-to-mutual-cps-pair-leaks](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/fat-shim-arg-to-mutual-cps-pair-leaks.md) --
-  a fat-shim box handed around a mutually recursive CPS pair.
+- [closure-env-capturing-closures-not-released](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/closure-env-capturing-closures-not-released.md) --
+  a combinator's closure over another fresh closure, in a CPS-emitted caller.
 - [fn-param-at-type-variable-slot-boxed-per-call](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/fn-param-at-type-variable-slot-boxed-per-call.md) --
   a fn parameter boxed into a type-variable slot per call.
 

@@ -9,7 +9,7 @@
   [shift0-pop-plan](../upcoming/shift0-pop-plan.md).
 - Item 2 (a compiled `shift` delimited by the root; the wrong answer under a
   direct `reset`): its own report,
-  [compiled-shift-delimited-by-root](../reported/compiled-shift-delimited-by-root.md).
+  [compiled-shift-delimited-by-root](compiled-shift-delimited-by-root.md).
 - Item 3 (`call/cc` `k` reuse unchecked): decision -- leave as is; the guide says
   only `^linear` is checked.
 - Item 4 (serial continuation bytes interpreted): decision -- compiled-only,

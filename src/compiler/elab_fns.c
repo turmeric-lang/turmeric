@@ -8973,6 +8973,139 @@ void elab_infer_nonretain_masks(Binding *b, Binding **params, uint32_t n_params,
       } while (b->nonretain_param_mask != _prev_fn_mask ||
                _adt_bits != _prev_adt_bits || _ra_bits != _prev_ra_bits);
     }
+    b->nonretain_inferred = true;
+}
+
+/* fat-shim-arg-to-mutual-cps-pair-leaks: the fn-param candidates of `b` --
+ * the bits the greatest fixed point above starts from. */
+static uint32_t nonretain_fn_candidates(Binding *const *params, uint32_t n_params) {
+    uint32_t m = 0;
+    for (uint32_t i = 0; i < n_params && i < 32; i++) {
+        const Binding *pb = params[i];
+        if (pb && (pb->is_fat || pb->is_poly_fn || pb->type.kind == TY_FN ||
+                   pb->type.kind == TY_ANY))
+            m |= 1u << i;
+    }
+    return m;
+}
+
+/* Clear the fn-param bits of `b` its body contradicts, against the callees'
+ * CURRENT masks; true when one cleared. */
+static bool nonretain_fn_refine(Binding *b, Binding *const *params, uint32_t n_params,
+                                const Expr *body) {
+    bool changed = false;
+    for (uint32_t i = 0; i < n_params && i < 32; i++) {
+        if (!(b->nonretain_param_mask & (1u << i)) || !params[i]) continue;
+        if (closure_binding_escapes(body, params[i])) {
+            b->nonretain_param_mask &= ~(1u << i);
+            changed = true;
+        }
+    }
+    return changed;
+}
+
+/* Does `body` hand a fn-param that lost its bit to a function whose own
+ * inference has not run yet?  Returns that callee, or NULL. */
+typedef struct { const Binding *self; Binding *const *params; uint32_t n_params;
+                 uint32_t lost; const Binding *found; } NonretainFwdScan;
+static bool nonretain_fwd_visit(const Expr *x, void *ud) {
+    NonretainFwdScan *u = (NonretainFwdScan *)ud;
+    if (u->found) return true;
+    if (x->kind == EX_CALL && x->as.call_.fn_binding && !x->as.call_.fn_expr) {
+        const Binding *fb = x->as.call_.fn_binding;
+        if (fb != u->self && fb->type.kind == TY_FN && !fb->nonretain_inferred &&
+            !fb->is_param && fb->is_global) {
+            for (uint32_t a = 0; a < x->as.call_.n_args; a++) {
+                const Expr *arg = x->as.call_.args[a];
+                while (arg && (arg->kind == EX_ASCRIBE || arg->kind == EX_POLY_WRAP ||
+                               arg->kind == EX_FN_TO_FAT || arg->kind == EX_POLY_TO_FAT))
+                    arg = arg->kind == EX_ASCRIBE ? arg->as.ascribe_.inner
+                        : arg->kind == EX_POLY_WRAP ? arg->as.poly_wrap_.inner
+                        : arg->kind == EX_FN_TO_FAT ? arg->as.fn_to_fat_.inner
+                        : arg->as.poly_to_fat_.inner;
+                if (!arg || arg->kind != EX_VAR) continue;
+                for (uint32_t i = 0; i < u->n_params && i < 32; i++)
+                    if ((u->lost & (1u << i)) && u->params[i] == arg->as.var.binding) {
+                        u->found = fb;
+                        return true;
+                    }
+            }
+        }
+    }
+    return cps_visit_children(x, nonretain_fwd_visit, ud);
+}
+
+/* fat-shim-arg-to-mutual-cps-pair-leaks: a fn-param handed to a function whose
+ * mask is not known yet reads as retained -- `ping` passes `f` to `pong`,
+ * defined after it, so `ping`'s bit cleared; then `pong` passes `f` back to
+ * `ping`, whose bit is clear, so `pong`'s cleared too, and the fat-shim box a
+ * caller built for the lambda was never freed (24 B a call).  Each function's
+ * own inference is a greatest fixed point over its SELF-calls only.  So: a
+ * function that lost a bit that way waits here, and when the function it
+ * waited on is inferred, the group of everything waiting on it (transitively)
+ * is solved again TOGETHER -- every candidate bit set, then cleared against
+ * the others' current masks until nothing changes; a member that still waits
+ * on a function not yet inferred keeps its bit clear until that one arrives.  A bit that survives is
+ * one no use in the group contradicts.  Raising a bit after a caller was
+ * elaborated only leaves that caller's site as conservative as it was. */
+void elab_nonretain_resolve_forward(Elab *e, Binding *b, Binding **params,
+                                    uint32_t n_params, Expr *body) {
+    if (!body || expr_subtree_has_inline_c(body)) return;
+    uint32_t cand = nonretain_fn_candidates(params, n_params);
+    /* 1. Does b itself wait on a forward callee? */
+    if (cand & ~b->nonretain_param_mask) {
+        NonretainFwdScan u = { b, params, n_params, cand & ~b->nonretain_param_mask, NULL };
+        nonretain_fwd_visit(body, &u);
+        if (u.found) {
+            if (e->n_nonretain_pending == e->cap_nonretain_pending) {
+                e->cap_nonretain_pending = e->cap_nonretain_pending ? e->cap_nonretain_pending * 2 : 8;
+                e->nonretain_pending = (NonretainPending *)realloc(e->nonretain_pending,
+                    e->cap_nonretain_pending * sizeof(NonretainPending));
+                if (!e->nonretain_pending) { fprintf(stderr, "tur: oom\n"); abort(); }
+            }
+            NonretainPending *p = &e->nonretain_pending[e->n_nonretain_pending++];
+            p->fn = b; p->params = params; p->n_params = n_params; p->body = body;
+            p->waits_on = u.found;
+        }
+    }
+    /* 2. Solve b together with what waits on it, transitively. */
+    if (!e->n_nonretain_pending) return;
+    uint32_t n = e->n_nonretain_pending;
+    bool *in = (bool *)calloc(n, sizeof(bool));
+    if (!in) { fprintf(stderr, "tur: oom\n"); abort(); }
+    bool grew = true, any = false;
+    while (grew) {
+        grew = false;
+        for (uint32_t i = 0; i < n; i++) {
+            if (in[i]) continue;
+            const Binding *w = e->nonretain_pending[i].waits_on;
+            bool hit = w == b;
+            for (uint32_t j = 0; j < n && !hit; j++)
+                hit = in[j] && e->nonretain_pending[j].fn == w;
+            if (hit && e->nonretain_pending[i].fn != b) { in[i] = grew = any = true; }
+        }
+    }
+    if (!any) { free(in); return; }
+    b->nonretain_param_mask |= cand;
+    for (uint32_t i = 0; i < n; i++)
+        if (in[i])
+            e->nonretain_pending[i].fn->nonretain_param_mask |=
+                nonretain_fn_candidates(e->nonretain_pending[i].params,
+                                        e->nonretain_pending[i].n_params);
+    bool changed = true;
+    while (changed) {
+        changed = nonretain_fn_refine(b, params, n_params, body);
+        for (uint32_t i = 0; i < n; i++)
+            if (in[i] && nonretain_fn_refine(e->nonretain_pending[i].fn,
+                                             e->nonretain_pending[i].params,
+                                             e->nonretain_pending[i].n_params,
+                                             e->nonretain_pending[i].body))
+                changed = true;
+    }
+    /* The entries stay: a member that still waits on a function not yet
+     * inferred (a longer cycle, `c1 -> c2 -> c3 -> c1`) is solved again with
+     * it when that one arrives, and must bring the rest of its group. */
+    free(in);
 }
 
 /* saffron-lang-plan S2/D3: the declared type of an UNANNOTATED positional
@@ -13243,6 +13376,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
      * from the just-elaborated body; the conservative escape analysis only ever
      * clears the bit (a false "escapes" merely preserves the status-quo leak). */
     elab_infer_nonretain_masks(b, params, n_params, body);
+    elab_nonretain_resolve_forward(e, b, params, n_params, body);
     elab_stamp_self_call_sum_drops(b, body);
     b->returns_closure_fn_binding = expr_closure_fn_binding(body);
 

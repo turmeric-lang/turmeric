@@ -1,0 +1,11 @@
+;; compiled-shift-delimited-by-root item 2: a `shift` with no `reset` around
+;; it.  Compiled, the DK machine delimited it at the root of h's chain -- here
+;; main's entry -- so the receiver's value became main's result and the
+;; program exited with status 6 after printing one line.  It is the
+;; interpreter's error now: `shift used outside of any reset boundary`.
+(defn h [] : int (+ 1 (shift (fn [v : int] (* 2 v)) 3)))
+(defn main [] : int
+  (println (reset (h)))     ; 6
+  (println (h))             ; panics
+  (println "not reached")
+  0)

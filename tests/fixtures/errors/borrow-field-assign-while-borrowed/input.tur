@@ -1,0 +1,10 @@
+;; borrow-checks-gaps item 2, field form: a write to `(.a p)` while a `let`
+;; holds a borrow of that field is a conflict.  A write to the OTHER field
+;; is not (borrow-literal-and-disjoint-fields).
+(defstruct P [a : int b : int])
+(defn main [] : int
+  (let [^mut p (P 1 2)
+        r (& (.a p))]
+    (set! (.a p) 5)
+    (println @r))
+  0)

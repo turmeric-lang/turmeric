@@ -25,6 +25,7 @@ void emit_write_inline_c_fns(Buf *out) {
 #include "emit_cps_ir.h"  /* cps-ir-to-c-backend: colored-fn CPS lowering */
 #include "globals.h"   /* g_cps_path */
 #include "tailcall_reasons.h"
+#include "cps.h"         /* cps_visit_children -- the loop-owned box scan */
 
 /* carrier-return-concrete-tail: an `int64_t` (carrier) return fed a value whose
  * emitted C is concrete -- a by-value aggregate or a float kind.  The mixed
@@ -1162,6 +1163,50 @@ static void emit_tail_void_return(EmitCtx *ctx, Buf *body) {
     buf_puts(body, "return;\n");
 }
 
+/* fresh-option-arg-to-tail-self-call-loop-leaks: does this self tail call
+ * hand fd->params[i] a FRESH sum box its function provably does not keep?  The
+ * same question the non-tail self call's drop-after stamp answers
+ * (elab_stamp_self_call_sum_drops); here there is no "after", so the loop
+ * takes the box instead. */
+static bool tco_arg_owned_fresh(EmitCtx *ctx, const FnDef *fd, uint32_t off,
+                                const Expr *call, uint32_t i) {
+    const Binding *fb = fd->binding;
+    uint32_t ai = i - off;
+    if (!fb || i < off || ai >= 32 || ai >= call->as.call_.n_args ||
+        !(fb->nonretain_sum_param_mask & (1u << ai)))
+        return false;
+    return emit_call_owes_sum_drop(ctx, call->as.call_.args[ai]);
+}
+
+typedef struct { EmitCtx *ctx; const FnDef *fd; uint32_t off; uint64_t mask; } TcoOwnScan;
+static bool tco_own_scan_visit(const Expr *e, void *ud) {
+    TcoOwnScan *s = (TcoOwnScan *)ud;
+    if (e->kind == EX_CALL && e->as.call_.is_tail_self_call)
+        for (uint32_t i = s->off; i < s->fd->n_params && i < 64; i++)
+            if (tco_arg_owned_fresh(s->ctx, s->fd, s->off, e, i)) s->mask |= 1ull << i;
+    cps_visit_children(e, tco_own_scan_visit, ud);
+    return false;
+}
+
+/* The parameters some self tail call hands a fresh box (fd->params index
+ * bits).  Only a function whose own result is a non-pointer scalar: nothing
+ * it returns can point into the box (the mask's result gate). */
+static uint64_t tco_owned_params(EmitCtx *ctx, const Expr *fn_e, FnDef *fd) {
+    if (!fd->binding || !fd->binding->nonretain_sum_param_mask) return 0;
+    const char *rc = ctx->current_fn_ret_ctype;
+    if (!rc || strchr(rc, '*') || strcmp(rc, "tur_tagged_t") == 0) return 0;
+    TcoOwnScan s = { ctx, fd, tco_env_offset(fd), 0 };
+    tco_own_scan_visit(fd->body, &s);
+    for (uint32_t i = 0; i < fd->n_params && i < 64; i++) {
+        if (!(s.mask & (1ull << i))) continue;
+        Type pt = tco_param_type(ctx, fn_e, fd, (uint8_t)i);
+        if (tco_param_kept(ctx, fn_e, fd, i) ||
+            emit_sum_box_drop_kind(ctx, emit_type_c_name(ctx, pt), pt) < 0)
+            s.mask &= ~(1ull << i);
+    }
+    return s.mask;
+}
+
 /* Emit a self-tail-call as a backedge: evaluate all args into temporaries
  * first (so argument expressions still see the *old* parameter values, which
  * matters for reorderings/swaps), reassign the C parameter variables, then
@@ -1173,6 +1218,12 @@ static void emit_tail_backedge(EmitCtx *ctx, Buf *body, const Expr *fn_e,
      * -- reassign only params[env..n) from the call's args[0..). */
     uint32_t off = tco_env_offset(fd);
     char **tmps = n ? (char **)calloc(n, sizeof(char *)) : NULL;
+    /* fresh-option-arg-to-tail-self-call-loop-leaks: a fresh argument's box
+     * is queued for a free after its consumer, and a back edge is no
+     * consumer -- nothing would drain the entry but some later, unrelated
+     * call.  The loop owns the box (below), or nobody does: drop the queue. */
+    uint32_t pd_mark[3];
+    emit_pending_drops_mark(ctx, pd_mark);
     for (uint8_t i = (uint8_t)off; i < n; i++) {
         /* self-tco-refuses-fn-typed-params: a kept `fn`-typed parameter is
          * passed itself (tco_mark checked), so there is nothing to assign. */
@@ -1209,9 +1260,32 @@ static void emit_tail_backedge(EmitCtx *ctx, Buf *body, const Expr *fn_e,
         tmps[i] = t;
         free(av);
     }
+    emit_pending_drops_discard(ctx, pd_mark);
     /* T4: the arguments are all read, so an owned local's drop glue runs now --
      * tco_mark admitted the block only because none of them keeps it alive. */
     emit_tail_fire_frames(ctx, body);
+    /* fresh-option-arg-to-tail-self-call-loop-leaks: a parameter the loop owns
+     * a box in.  The arguments are read, so a fresh one's old box is dead --
+     * free it before the reassignment; the new one is the loop's from here.
+     * The parameter passed on unchanged keeps both box and flag.  Any other
+     * argument may alias the old box (`(let [p o] (walk p ..))`), so the loop
+     * lets go of it unfreed -- the status-quo leak, never a wrong free. */
+    uint64_t own_fresh = 0;
+    for (uint8_t i = (uint8_t)off; i < n && i < 64; i++) {
+        if (!tmps[i] || !(ctx->tco_own_mask & (1ull << i))) continue;
+        const Expr *a = call->as.call_.args[i - off];
+        while (a && a->kind == EX_ASCRIBE) a = a->as.ascribe_.inner;
+        if (a && a->kind == EX_VAR && a->as.var.binding == fd->params[i]) continue;
+        indent_buf(body, ctx->indent);
+        if (tco_arg_owned_fresh(ctx, fd, off, call, i)) {
+            own_fresh |= 1ull << i;
+            buf_puts(body, ctx->any_scope_drops[ctx->tco_own_lo +
+                         (uint32_t)__builtin_popcountll(ctx->tco_own_mask & ((1ull << i) - 1))]);
+            buf_puts(body, ";\n");
+        } else {
+            buf_printf(body, "__tur_lown_%u = 0;\n", (unsigned)i);
+        }
+    }
     for (uint8_t i = (uint8_t)off; i < n; i++) {
         if (!tmps[i]) continue;   /* a kept `fn`-typed parameter */
         char *pn = raw_name_for_binding(fd->params[i]);
@@ -1221,11 +1295,21 @@ static void emit_tail_backedge(EmitCtx *ctx, Buf *body, const Expr *fn_e,
         free(tmps[i]);
     }
     free(tmps);
+    for (uint32_t i = 0; i < 64; i++)
+        if (own_fresh & (1ull << i)) {
+            indent_buf(body, ctx->indent);
+            buf_printf(body, "__tur_lown_%u = 1;\n", i);
+        }
     /* any-struct-box-leak-per-widen: the back-edge re-enters the function, so
      * every trailing free between here and the loop head is skipped.  Drop the
      * enclosing scopes' `any` locals now -- after the argument temporaries
-     * above, which is where a use of one would have been read. */
-    emit_any_scope_drops(ctx, body);
+     * above, which is where a use of one would have been read.  The loop-owned
+     * boxes' entries are skipped: they were handled above. */
+    for (uint32_t i = ctx->n_any_scope_drops; i-- > 0; ) {
+        if (i >= ctx->tco_own_lo && i < ctx->tco_own_hi) continue;
+        indent_buf(body, ctx->indent);
+        buf_printf(body, "%s;\n", ctx->any_scope_drops[i]);
+    }
     indent_buf(body, ctx->indent);
     buf_puts(body, "goto __tur_tailcall;\n");
 }
@@ -6851,11 +6935,50 @@ static void emit_fn_def_body(EmitCtx *ctx, Buf *file, const Expr *e) {
          * T2 (T-D2): with no self call in the spine there is no backedge and so
          * no label -- emit_tail is entered purely to put the `return` in each
          * branch, which is what makes a non-self tail call a C tail call. */
+        /* fresh-option-arg-to-tail-self-call-loop-leaks: declare the
+         * loop-owned flags above the loop head, and give every `return` the
+         * free (tco_owned_params). */
+        uint64_t own_mask = (tco_wants_label && !ctx->tcg_cur) ? tco_owned_params(ctx, e, fd) : 0;
+        uint64_t saved_own_mask = ctx->tco_own_mask;
+        uint32_t saved_own_lo = ctx->tco_own_lo, saved_own_hi = ctx->tco_own_hi;
+        uint32_t own_mark = ctx->n_any_scope_drops;
+        for (uint32_t i = 0; i < 64 && own_mask; i++) {
+            if (!(own_mask & (1ull << i))) continue;
+            indent_buf(file, ctx->indent);
+            buf_printf(file, "int __tur_lown_%u = 0;\n", i);
+            char *pn = raw_name_for_binding(fd->params[i]);
+            Buf fb; buf_init(&fb);
+            int saved_indent = ctx->indent;
+            ctx->indent = 0;
+            Type pt = tco_param_type(ctx, e, fd, (uint8_t)i);
+            emit_pending_drop_stmt(ctx, &fb,
+                                   emit_sum_box_drop_kind(ctx, emit_type_c_name(ctx, pt), pt),
+                                   pn, pt);
+            ctx->indent = saved_indent;
+            buf_putc(&fb, '\0');
+            for (char *c = fb.data; *c; c++) if (*c == '\n') *c = ' ';
+            size_t L = strlen(fb.data);
+            while (L && (fb.data[L - 1] == ' ' || fb.data[L - 1] == ';')) fb.data[--L] = '\0';
+            Buf stmt; buf_init(&stmt);
+            buf_printf(&stmt, "if (__tur_lown_%u) { %s; }", i, fb.data);
+            buf_putc(&stmt, '\0');
+            any_scope_drops_push(ctx, stmt.data);
+            buf_free(&stmt);
+            buf_free(&fb);
+            free(pn);
+        }
+        ctx->tco_own_mask = own_mask;
+        ctx->tco_own_lo = own_mark;
+        ctx->tco_own_hi = ctx->n_any_scope_drops;
         if (tco_wants_label) {
             indent_buf(file, ctx->indent);
             buf_puts(file, "__tur_tailcall:;\n");
         }
         emit_tail(ctx, file, e, fd, fd->body, result_kind, is_main);
+        any_scope_drops_pop(ctx, own_mark);
+        ctx->tco_own_mask = saved_own_mask;
+        ctx->tco_own_lo = saved_own_lo;
+        ctx->tco_own_hi = saved_own_hi;
     } else if (fd->body->type.kind == TY_NIL) {
         /* Body is nil-typed (e.g. a bare void call like (show 99)) but the
          * function expects a return value -- typically (defn main [] :int

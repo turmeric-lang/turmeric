@@ -29,7 +29,9 @@ Quick orientation:
 Every form on this page is stable -- `call-ptr` and `callback-ptr` graduated
 from `--enable=jit-ffi` in 0.38.0 and need no flag. Everything here that
 touches raw pointers still lives inside `(unsafe ...)` blocks and behind the
-`TURI_CAP_FFI` capability in sandboxed interpreter environments.
+`TURI_CAP_FFI` capability in sandboxed interpreter environments; the
+[Unsafe Code guide](unsafe-guide.md) covers the block and the raw-pointer
+builtins (`ptr-deref`, `raw-malloc`, ...).
 
 ---
 

@@ -1,0 +1,42 @@
+;; struct-param-closure-env-never-freed: a capturing closure handed to a
+;; non-retaining fn parameter is dropped once the call returns -- but
+;; `count-if`'s body has a `while` and `set!`, which expr_subtree_has_inline_c
+;; did not model, so the body read as "may hide inline C" and the non-retain
+;; inference skipped it: `pred` never got its bit and no env was ever freed.
+;; The struct parameter only made LeakSanitizer see it; the `int` twin leaked
+;; the same 24 B, found conservatively.  requires.leak-check runs this under
+;; LeakSanitizer (tests/run-leak-check.sh).
+;;
+;; Each count is 1 (one e in 0..9 matches).  Shapes: an inline lambda, a
+;; let-bound one, a factory call passed directly and let-bound, and the `int`
+;; parameter twin.
+
+(defstruct D :copy [e : int x : int])
+
+(defn count-if [n : int pred : (fn [D] bool)] : int
+  (let [^mut i 0 ^mut c 0]
+    (while (< i n)
+      (when (pred (D i 0)) (set! c (+ c 1)))
+      (set! i (+ i 1)))
+    c))
+
+(defn count-if-int [n : int pred : (fn [int] bool)] : int
+  (let [^mut i 0 ^mut c 0]
+    (while (< i n)
+      (when (pred i) (set! c (+ c 1)))
+      (set! i (+ i 1)))
+    c))
+
+(defn mk [e : int] : (fn [D] bool)
+  (fn [d : D] : bool (= (.e d) e)))
+
+(defn main [] : int
+  (let [k 3]
+    (println (count-if 10 (fn [d : D] : bool (= (.e d) k))))
+    (let [p (fn [d : D] : bool (= (.e d) k))]
+      (println (count-if 10 p)))
+    (println (count-if 10 (mk 4)))
+    (let [q (mk 5)]
+      (println (count-if 10 q)))
+    (println (count-if-int 10 (fn [d : int] : bool (= d k)))))
+  0)
