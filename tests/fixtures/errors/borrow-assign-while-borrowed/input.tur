@@ -1,0 +1,9 @@
+;; borrow-checks-gaps item 2: N readers XOR 1 writer covers an assignment to
+;; the variable itself.  `r` still holds `(& x)`, so `(set! x 2)` is a
+;; conflict (compiled, `@r` used to read 2).
+(defn main [] : int
+  (let [^mut x 1
+        r (& x)]
+    (set! x 2)
+    (println @r))
+  0)

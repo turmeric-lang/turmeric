@@ -303,10 +303,8 @@
 ;;; mention `a`, so the value cannot leave: returning `v` itself is `open:
 ;;; existential type variable 'a' escapes its scope`. The unpacking uses the
 ;;; evidence packed with the value to choose the operation, so two packed values
-;;; of different types each reach their own instance. The interpreter does this by
-;;; looking at the runtime value, which cannot tell two `defopaque` types over
-;;; `:int` apart: it can pick the wrong instance
-;;; (docs/reported/turi-packed-defopaque-wrong-instance.md).
+;;; of different types each reach their own instance -- two `defopaque` types
+;;; over `:int` included, on every engine.
 ;;;
 ;;; Parameters:
 ;;;   e    -- an existential value
@@ -332,10 +330,11 @@
 ;;; borrowing `x` mutably afterwards in that same `let` is `cannot borrow 'x' as
 ;;; mutable while it is already borrowed`; close the `let` first.
 ;;;
-;;; Known gaps (docs/reported/borrow-checks-gaps.md): `set!` of a variable while an
-;;; immutable borrow of it is live is accepted, and compiled and interpreted
-;;; programs then see different values; `&` of a literal fails in the C
-;;; compiler.
+;;; While a `let` holds a borrow of a place, `set!` of that place is refused if
+;;; the borrow is used after the assignment (`cannot assign to 'x' while it is
+;;; borrowed by 'r'`); a borrow the body is done with does not block the write.
+;;; A borrow of a literal (`(& 7.25)`) borrows a temporary that lives as long as
+;;; the `let` holding it.
 ;;;
 ;;; Parameters:
 ;;;   place -- a variable, a field of one, or a borrow
@@ -357,11 +356,9 @@
 ;;; can change its caller's variable: `(defn bump [r : &mut int] : nil (set! @r
 ;;; (+ @r 1)))` called as `(bump &mut x)`.
 ;;;
-;;; Known gaps (docs/reported/borrow-checks-gaps.md and
-;;; turi-borrow-is-a-copy.md): the variable need not be
-;;; declared `^mut` -- `(let [x 1] (let [r &mut x] (set! @r 5)) x)` is 5 -- and a
-;;; mutable borrow of a struct field changes the struct when compiled but not when
-;;; interpreted.
+;;; The place must be one `set!` could write: a `^mut` variable or a field of
+;;; one (`cannot borrow 'x' as mutable: it is not declared '^mut'`). A place
+;;; behind an `rc`, a `:heap` struct or another borrow needs nothing.
 ;;;
 ;;; Parameters:
 ;;;   place -- a variable, or a field of one

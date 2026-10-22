@@ -1615,6 +1615,21 @@ Expr *elab_let(Elab *e, const Form *call) {
         init = let_bridge_sig_tyvar_result(e, init);
 
         Binding *b = binding_new(e, name, init->type, is_mut, false, name_span);
+        /* borrow-checks-gaps: a binding that holds a borrow remembers the
+         * place, so an assignment to it is refused while `b` is live
+         * (elab_borrow_check_write, from elab_set / elab_set_field). */
+        {
+            const Expr *bp = init;
+            while (bp && bp->kind == EX_ASCRIBE) bp = bp->as.ascribe_.inner;
+            const Expr *place = NULL;
+            if (bp && bp->kind == EX_BORROW_IMMUT) place = bp->as.borrow_immut_.expr;
+            else if (bp && bp->kind == EX_BORROW_MUT) place = bp->as.borrow_mut_.expr;
+            if (place && borrow_place_root(place)) {
+                b->borrow_of = borrow_place_root(place);
+                b->borrow_place = place;
+                b->borrow_bound_at = ++e->borrow_clock;
+            }
+        }
         /* perform-does-not-typecheck-its-arguments: an UNANNOTATED `let` bound
          * directly to a carrier-defaulted parameter inherits that provenance --
          * its TY_INT is the same "one untyped word", one indirection along.
@@ -2774,6 +2789,15 @@ Expr *elab_let(Elab *e, const Form *call) {
                 rc = -1;
             }
         }
+    }
+
+    /* borrow-checks-gaps: settle the writes this let's borrows were waiting
+     * on; nothing can use them after this point. */
+    if (e->n_borrow_pending) {
+        Binding **hs = n_binds ? (Binding **)malloc(n_binds * sizeof(Binding *)) : NULL;
+        for (uint32_t k = 0; k < n_binds; k++) hs[k] = binds[k].binding;
+        if (elab_borrow_pending_flush(e, hs, n_binds, rc == 0)) rc = -1;
+        free(hs);
     }
 
     /* Pop scope before returning. */
@@ -4436,6 +4460,22 @@ static Expr *elab_set_field(Elab *e, const Form *call, Form *target) {
             return NULL;
         }
     }
+    /* borrow-checks-gaps: a field write while a `let` holds a live borrow of
+     * an overlapping place -- the field, a field inside it, or the whole
+     * struct. */
+    if (!receiver_is_rc && !receiver_is_heap) {
+        Expr probe = {0};
+        probe.kind = EX_GET_FIELD;
+        probe.as.get_field_.struct_expr = receiver;
+        probe.as.get_field_.field_idx = fi;
+        const Binding *root = borrow_place_root(receiver);
+        if (root) {
+            size_t n = strlen(fname) + strlen(root->name->name) + 12;
+            char *what = (char *)arena_alloc(e->arena, n);
+            snprintf(what, n, "`.%s` of `%s`", fname, root->name->name);
+            if (!elab_borrow_check_write(e, &probe, target->span, what)) return NULL;
+        }
+    }
 
     /* Record-ADT field type, with type-arg substitution for a parametric
      * receiver (`(Box int)` -> field A becomes int), mirroring the read side
@@ -4630,6 +4670,18 @@ Expr *elab_set(Elab *e, const Form *call) {
                   b->name->name);
         return NULL;
     }
+    /* borrow-checks-gaps: N readers XOR 1 writer covers the assignment too,
+     * for a live borrow a `let` holds. */
+    {
+        Expr probe = {0};
+        probe.kind = EX_VAR;
+        probe.type = b->type;
+        probe.as.var.binding = b;
+        size_t n = strlen(b->name->name) + 3;
+        char *what = (char *)arena_alloc(e->arena, n);
+        snprintf(what, n, "`%s`", b->name->name);
+        if (!elab_borrow_check_write(e, &probe, target->span, what)) return NULL;
+    }
     /* G3 (mutable-globals-plan §4.3): an exported global is READ-ONLY outside
      * its defining module.  A module that exports a counter for reading should
      * not thereby export it for writing -- the same argument `:sealed` makes
@@ -4744,7 +4796,18 @@ static const char *while_loc_str(Elab *e, Span sp) {
     return arena_strdup(e->arena, buf, strlen(buf));
 }
 
+static Expr *elab_while_inner(Elab *e, const Form *call);
+
+/* borrow-checks-gaps: a `while`'s condition and body run again after each
+ * other, which program order does not show (elab_borrow_check_write). */
 Expr *elab_while(Elab *e, const Form *call) {
+    elab_borrow_loop_push(e);
+    Expr *out = elab_while_inner(e, call);
+    elab_borrow_loop_pop(e);
+    return out;
+}
+
+static Expr *elab_while_inner(Elab *e, const Form *call) {
     if (call->as.list.len < 2) {
         diag_emit(DIAG_ERROR, call->span, "while requires a condition");
         return NULL;

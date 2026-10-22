@@ -25,7 +25,7 @@ the [LSP guide](lsp-guide.md).
 
 ## The short version
 
-1. **A code is an enum member.** `DiagCode` in `src/compiler/diag.h` has 146
+1. **A code is an enum member.** `DiagCode` in `src/compiler/diag.h` has 154
    members. Each one also needs a row in up to three hand-written tables in
    `src/compiler/diag.c`: code to string, string to code, and the long-form
    explanation. Nothing checks that the four agree.
@@ -109,7 +109,7 @@ line there.
 
 ### Prefixes and bands
 
-The enum holds 115 `E` (error) codes, 26 `W` (warning), 4 `D`
+The enum holds 121 `E` (error) codes, 28 `W` (warning), 4 `D`
 (deprecation) and 1 `I` (`TUR-I0379`, retired).
 
 **The prefix does not set the severity.** The call site picks the
@@ -140,6 +140,7 @@ allocation table:
 | E0350-E0393 | Intersection, refinement, frames, superclasses |
 | E0500-E0502 | Multi-shot capture |
 | E0600-E0624, W0600-W0624 | Dynamic vars, manifest (`build.tur`) |
+| E0630-E0634 | A script's `defscript` header and its dep cache |
 | E0700-E0716, W0706 | Control flow and codegen refusals |
 | D0001-D0004 | Deprecations |
 

@@ -346,6 +346,54 @@ bool pkg_manifest_read(const char *path, PkgManifest *out);
 bool pkg_manifest_read_status(const char *path, PkgManifest *out,
                               PkgManifestStatus *status);
 
+/* script-spice-deps-plan SD0: the `(defscript :spices #map{...})` header a
+ * single-file script may carry as its FIRST form (after an optional shebang,
+ * an optional `#lang` line and comments).
+ *
+ * pkg_script_header_read reads only that form -- the text of the header, with
+ * the file's own reader -- and parses its `:spices` with the same entry
+ * grammar as build.tur (pkg_parse_spices_for).  `out->spices` /
+ * `out->n_spices` are the only fields it fills; free with pkg_manifest_free.
+ *
+ * `in_project` says whether the file sits inside a project (a build.tur
+ * above it), which makes a header an error (TUR-E0632): the project's
+ * manifest governs that file.  Other errors: an unknown key, or a `:url`
+ * dep without `:ref` (TUR-E0631), and a bad entry (the build.tur checks,
+ * naming the script).  Every error is emitted as a diagnostic at the form.
+ *
+ * Returns PKG_SCRIPT_NONE when the first form is not a header (the cheap
+ * case: a text scan, no read), PKG_SCRIPT_OK, or PKG_SCRIPT_ERROR. */
+typedef enum {
+    PKG_SCRIPT_NONE = 0,
+    PKG_SCRIPT_OK,
+    PKG_SCRIPT_ERROR,
+} PkgScriptStatus;
+
+PkgScriptStatus pkg_script_header_read(const char *path, bool in_project,
+                                       PkgManifest *out);
+
+/* Locate a header in `src` (the whole file, `rt` its reader): true when the
+ * first form is a `defscript`, with [*start, *end) its text.  No read and no
+ * diagnostics; `reader_type` is a ReaderType -- the cheap probe the include-path walk and `tur add --script`
+ * make before deciding to read. */
+bool pkg_script_header_locate(const char *src, size_t len, int reader_type,
+                              size_t *start, size_t *end);
+
+/* True when `src[0..n)` holds nothing but what may precede a header: a
+ * shebang line, a `#lang` line, whitespace and comments.  The elaborator's
+ * "is this `defscript` the file's first form" test. */
+bool pkg_text_is_preamble(const char *src, size_t n);
+/* The offset of the first byte past that preamble (`n` when it is all
+ * preamble) -- where `tur add --script` puts a new header. */
+size_t pkg_preamble_end(const char *src, size_t n);
+
+/* The `:spices` map parser behind build.tur, for a map read from somewhere
+ * else.  `who` names the file in its diagnostics ("build.tur", or a
+ * script's path). */
+struct Form;
+bool pkg_parse_spices_for(const struct Form *map, PkgManifest *m,
+                          const char *who);
+
 /* True if any manifest read in this process found a manifest and rejected it.
  * Sticky across diag_reset() -- see pkg_manifest_reassert().  When true,
  * `pkg_manifest_malformed_path()` is the offending manifest (NULL if none). */
@@ -414,6 +462,11 @@ bool pkg_cmd_arg(Buf *cmd, const char *arg);
 /* Content hash of a directory tree: "tree1:" + 64 hex.  Reproducible for a
  * given tree, with no subprocess and no tar.  Returns true on success. */
 bool pkg_hash_dir(const char *dir, char out[PKG_HASH_MAX]);
+/* The same hash, leaving out the top-level entries named in `skip_top` (a
+ * NULL-terminated list) -- for a tree that grew setup output beside what was
+ * fetched (a script-dep cache entry's spices/, cmake/ and tur.lock). */
+bool pkg_hash_dir_excluding(const char *dir, const char *const *skip_top,
+                            char out[PKG_HASH_MAX]);
 
 /* Can `recorded` (a lockfile :sha256 value) be compared against a fresh
  * pkg_hash_dir result?  False for anything an older tur wrote -- a bare
@@ -566,6 +619,14 @@ char *pkg_workspace_member_path(const char *project_dir, const char *dep_name);
  * not exist.  Shared by the transitive :cmake-deps and :c-sources walks so
  * the two agree on what a dependency IS. */
 char *pkg_resolve_spice_dep_dir(const char *root_project_dir, const PkgSpice *s);
+/* installed-spice-libraries D4 (install.c): set `src_dir` up as a fetched
+ * project -- run `tur fetch` there, so its :spices closure lands in its
+ * spices/ and its :cmake-deps are built in its cmake/.  `who` prefixes the
+ * progress line ("install", "script deps").  A spice with neither has nothing
+ * to fetch and is left untouched.  Returns false when the fetch failed (only
+ * optional deps failing is success). */
+bool pkg_setup_fetched_project(const char *who, const char *src_dir,
+                               const PkgManifest *m);
 /* As above, for a dep declared by a spice somewhere inside a project:
  * `fetch_root` is the project whose `tur fetch` populated spices/ (it puts
  * the whole closure there, flat), tried when a fetched dep is not under

@@ -24,8 +24,10 @@ The design history is the archived
 > the embedded runtime sources (`region.h`, `arena.{h,c}`, `region.c`,
 > `r7gc.c`) are pasted into emitted programs with their comments stripped, so
 > a comment edit there no longer touches the `expected.c` snapshots or the
-> split hash. What is still open in this area is listed in
-> [stale-comments-regions](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/stale-comments-regions.md).
+> split hash, and the three `:heap` constructor emitters share one body,
+> `emit_heap_ctor_body`
+> ([stale-comments-regions](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/stale-comments-regions.md),
+> resolved 2026-10-22).
 
 ---
 

@@ -15,6 +15,8 @@
 #include "pkg.h"          /* R2: the manifest decides the file set */
 #include "global.h"       /* tur_spice_modules: installed-spice completion */
 #include "spice_search.h" /* the project-less fallback */
+#include "script_deps.h"  /* script-spice-deps-plan SD5: a script header */
+#include "runtime/globals.h" /* g_opt_script_deps */
 
 #include <ctype.h>
 #include <dirent.h>
@@ -2526,7 +2528,36 @@ static void on_completion(const char *id_raw, size_t id_len,
          * resolves the installed spices' modules, so the editor offers them
          * too.  Inside one the manifest decides, and nothing is added. */
         char proot[4096];
-        if (doc->path && !spice_root_of(doc->path, proot, sizeof(proot)) &&
+        bool in_proj = doc->path && spice_root_of(doc->path, proot, sizeof(proot));
+        /* script-spice-deps-plan SD5: a script with a header sees its
+         * declared spices, from the cache, and not the installed set. */
+        ScriptDeps sd;
+        memset(&sd, 0, sizeof(sd));
+        bool prev_editor = g_script_deps_editor, prev_flag = g_opt_script_deps;
+        g_script_deps_editor = true;
+        g_opt_script_deps = true;   /* as tur_collect_symbols: cache-only */
+        int hs = (doc->path && !in_proj)
+                     ? script_deps_resolve(doc->path, false, false, &sd) : 0;
+        g_script_deps_editor = prev_editor;
+        g_opt_script_deps = prev_flag;
+        for (int i = 0; hs > 0 && i < sd.n; i++) {
+            char **mods = NULL;
+            int nm = tur_spice_modules(sd.deps[i].dir, &mods);
+            for (int j = 0; j < nm && emitted < LSP_COMPLETION_MAX; j++) {
+                if (prefix_len > 0 && !ci_starts_with(mods[j], prefix, prefix_len))
+                    continue;
+                if (emitted > 0) buf_putc(&items, ',');
+                buf_puts(&items, "{\"label\":");
+                json_str(&items, mods[j]);
+                buf_puts(&items, ",\"kind\":9,\"detail\":");
+                json_str(&items, sd.deps[i].name);
+                buf_putc(&items, '}');
+                emitted++;
+            }
+            tur_spice_modules_free(mods, nm);
+        }
+        if (hs > 0) script_deps_free(&sd);
+        if (doc->path && !in_proj && hs == 0 &&
             !spice_search_global_disabled()) {
             char **names = NULL, **dirs = NULL;
             int n = spice_search_installed_names(&names, &dirs);

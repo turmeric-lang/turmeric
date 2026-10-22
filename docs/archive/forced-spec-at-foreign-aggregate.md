@@ -1,5 +1,7 @@
 # A cross-module specialization at a struct the owner does not define is emitted at `int64_t`
 
+**RESOLVED 2026-10-22**; see Resolution at the end.
+
 **Severity:** low-medium (cc failure, separate compilation only). Narrowed
 2026-10-21 from
 [forced-spec-loses-aggregate-type](../archive/forced-spec-loses-aggregate-type.md),
@@ -61,3 +63,30 @@ include `app.h`.
   type the owner does not define. That needs the generic's body in the
   borrower's program, which separate compilation does not carry today.
 - Or refuse the call with a diagnostic naming the type, instead of a cc error.
+
+## Resolution (2026-10-22)
+
+The first and third fix directions.
+
+**A third module's struct** now builds and runs. `ctor_census_snapshot`
+(`src/compiler/emit_core.c`), which elaboration already calls with every ADT the
+module can see, keeps the defs as well as their constructor names, and
+`ctor_census_find_adt` looks one up by name. `forced_spec_pos_type`
+(`emit_module.c`) asks it when the owner's own items do not define the type, so
+`util` rebuilds `Pos` from the def its import of `types` brought in -- its header
+already includes `types.h`, so the C type is in scope.
+
+**The caller's own struct** stays unbuildable separately, and now says so: when
+neither the owner's items nor its imports know the type, the implementation
+pass refuses the clone with a diagnostic at the generic's definition --
+"`ident` is called at `Q` from another module, but `Q` is not visible in the
+module that defines `ident` ... Move `Q` into a module both import, or build
+the program as one unit" -- and the build stops there, before the C compiler
+sees the borrower's call. The header pass skips the clone silently, so the
+message appears once. Letting the borrower own the clone (direction 2) still
+needs the generic's body in the borrower's unit.
+
+`tests/run-forced-spec-aggregate.sh` gained both cases
+(`forced-spec-foreign-aggregate-third-module`,
+`forced-spec-foreign-aggregate-callers-own`); `tur build --shared` of the
+third-module project builds too.

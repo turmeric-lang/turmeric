@@ -140,6 +140,42 @@ bool tur_installed_spice_dir(const char *name, char *out, size_t out_sz,
 int  tur_spice_modules(const char *spice_dir, char ***out);
 void tur_spice_modules_free(char **mods, int n);
 
+/* ------------------------------------------------------------------ */
+/* script-spice-deps-plan SD1: the script-dep cache                    */
+/* ------------------------------------------------------------------ */
+
+/* `<data>/cache/script-spices` -- one immutable tree per (url, subdir,
+ * commit), never registered in state.tur.  Writes the path even when the
+ * directory does not exist yet; false only when no data root can be named. */
+bool tur_script_cache_dir(char *out, size_t out_sz);
+
+/* `index.tur` in that directory remembers which commit a tag or branch
+ * `:ref` resolved to, so a later run of any script naming the same
+ * (url, ref) needs no network until `--update`. */
+typedef struct TurScriptRef {
+    char *url;
+    char *ref;
+    char *resolved;     /* full commit id */
+    char *fetched_at;   /* ISO-8601 */
+} TurScriptRef;
+
+typedef struct TurScriptIndex {
+    TurScriptRef *refs;
+    int           n_refs;
+} TurScriptIndex;
+
+/* Missing or unreadable reads as empty (true).  Leaves the caller's
+ * diagnostic state alone, as tur_state_read does. */
+bool tur_script_index_read(const char *path, TurScriptIndex *out);
+bool tur_script_index_write(const char *path, const TurScriptIndex *ix);
+/* The recorded commit for (url, ref), or NULL. */
+const char *tur_script_index_lookup(const TurScriptIndex *ix,
+                                    const char *url, const char *ref);
+/* Record (or replace) the commit for (url, ref). */
+void tur_script_index_set(TurScriptIndex *ix, const char *url, const char *ref,
+                          const char *resolved);
+void tur_script_index_free(TurScriptIndex *ix);
+
 /* E14: the --json flag.  When true, `tur doc` and `tur test` print JSON and
  * `tur check` writes its diagnostics as JSON.  The storage lives in install.c,
  * not the driver, so libturi (which links tur_core but not the driver)

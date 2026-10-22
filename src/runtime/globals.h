@@ -422,6 +422,7 @@ extern bool g_opt_r7rs;
  * (warned, never silently enforced). */
 extern bool g_opt_reflected_measures;
 extern bool g_opt_discontinue;
+extern bool g_opt_script_deps;  /* script-spice-deps-plan: --enable=script-deps */
 /* RF5: --dump-reflect -- one line per `^reflect` site: verdict, decreasing
  * argument position, rejection reason.  A diagnostic knob, not an
  * experiment (same footing as --dump-write-frames). */

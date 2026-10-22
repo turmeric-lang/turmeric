@@ -302,6 +302,17 @@ int auto_append_spice_includes(const char *input,
     }
     if (g_no_auto_spice || !input) return 0;
 
+    /* script-spice-deps-plan SD-D7: whether a script header is honored
+     * depends on --enable=script-deps, which can come from the user
+     * experiments file -- read further down every command's path, after this
+     * walk.  A file outside any project has nothing to suppress that file, so
+     * apply it now (once per process). */
+    if (!g_user_config_experiments_done) {
+        char *proot = find_spice_root(input);
+        if (!proot) apply_user_config_experiments(NULL);
+        free(proot);
+    }
+
     /* SC4 + SC5 + LS2: the walk itself is spice_search_append
      * (src/compiler/spice_search.c), shared with libturi embedders; the LS2
      * bookkeeping rides on its hooks. */
@@ -310,7 +321,11 @@ int auto_append_spice_includes(const char *input,
         .on_manifest = ls2_on_search_manifest,
         .ud          = out_ls2,
     };
-    (void)spice_search_append(input, inc, n_inc, owned, n_owned, &hooks);
+    int src = spice_search_append(input, inc, n_inc, owned, n_owned, &hooks);
+    /* A script header that cannot be honored (TUR-E063x, already reported)
+     * stops the command: compiling on would only add a "module not found"
+     * for every import the header was there to satisfy. */
+    if (src == SPICE_SEARCH_SCRIPT_ERROR) exit(1);
 
     /* LS2: finalize ctx — set length to current *n_inc and allocate the
      * per-include warned[] dedup array so the elaborator can mark slots

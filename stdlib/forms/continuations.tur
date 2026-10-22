@@ -23,7 +23,6 @@
 ;;; delimited-control-operators-guide compares them; serializable-continuations-guide
 ;;; covers the serial pair. Several of these forms differ between the compiler
 ;;; and the interpreter, or are unfinished -- see
-;;; docs/reported/compiled-shift-delimited-by-root.md and
 ;;; docs/upcoming/shift0-pop-plan.md.
 ;; Reference only: tools/gendocs.py reads the ;;@ lines, the compiler skips them.
 
@@ -66,10 +65,9 @@
 ;;; The first argument must be a function (`shift requires a function as first
 ;;; argument`).
 ;;;
-;;; Without any `reset` around it the interpreter stops with `shift used outside
-;;; of any reset boundary`; the compiled program reports nothing and behaves
-;;; differently according to what else the program contains (it may end the
-;;; whole program). Keep every `shift` under a `reset`.
+;;; Without any `reset` around it the program panics with `shift used outside
+;;; of any reset boundary`, interpreted and compiled. Keep every `shift` under a
+;;; `reset`.
 ;;;
 ;;; Parameters:
 ;;;   f -- a function taking a value, or a `cont`

@@ -54,7 +54,15 @@ typedef struct SpiceSearchHooks {
  * (insertion order) for the caller to free.  Entries already in `*inc` stay in
  * front, so the elaborator's first-match-wins keeps them highest priority.
  * Appends nothing when `input` is NULL.
- * Returns 0, or -1 on allocation failure. */
+ *
+ * script-spice-deps-plan SD2: when `input` carries a `(defscript ...)` header
+ * (and --enable=script-deps is on), the header's deps -- fetched into the
+ * script-dep cache on first use -- and their closures are appended INSTEAD,
+ * and nothing else is: no installed-spice fallback.
+ *
+ * Returns 0, -1 on allocation failure, or SPICE_SEARCH_SCRIPT_ERROR when the
+ * header could not be honored (already reported; the command should stop). */
+#define SPICE_SEARCH_SCRIPT_ERROR (-2)
 int spice_search_append(const char *input,
                         char ***inc, int *n_inc,
                         char ***owned, int *n_owned,

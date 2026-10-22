@@ -94,6 +94,24 @@ defkind Unary  (* -> *)
 defkind Binary (* -> * -> *)
 ```
 
+### Recursive type constructors with `defrec`
+
+`(defrec Fix [^f])` registers `Fix` as a recursive type constructor of kind
+`* -> *`. Like `defkind`, it is a declaration and nothing more in this version:
+the body of `(defrec Name [params] body)` is accepted and not used -- nothing is
+unfolded or checked. `deftype` is the form that gives the stdlib's `Fix` and
+`Free` their meaning ([tur/forms/typedefs](../html/api/tur-forms-typedefs.html)),
+so reach for `defrec` only to name a recursive constructor ahead of the
+`deftype` that defines it.
+
+```turmeric
+(defrec Fix [^f])
+```
+
+```sweet-exp
+defrec Fix [^f]
+```
+
 ## Defining Instances
 
 Provide a concrete type constructor when implementing an HKT typeclass:

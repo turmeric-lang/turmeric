@@ -1,0 +1,32 @@
+;; borrow-checks-gaps item 3: `&` of a literal bound by `let` was a C compile
+;; error (`&7.25`: lvalue required); the literal is spilled to a temporary
+;; that lives as long as the `let`.  `&mut` of a literal borrows the same
+;; temporary on every engine, so a write through it reads back.
+;;
+;; Item 2's rule is per place and per last use: a write to a field the
+;; `let`-held borrow does not cover, to the variable once the borrow's `let`
+;; has ended, or after the holder's last use, is fine.
+(defstruct P [a : int b : int])
+
+(defn peek [r : &float] : float @r)
+
+(defn main [] : int
+  (let [r (& 7.25)] (println @r))           ; 7.25
+  (println (peek (& 4.25)))                 ; 4.25
+  (let [r &mut 3] (set! @r 9) (println @r)) ; 9
+  (let [^mut p (P 1 2)
+        r (& (.a p))]
+    (set! (.b p) 5)
+    (println @r)                            ; 1
+    (println (.b p)))                       ; 5
+  (let [^mut x 3]
+    (println @(& x))                        ; 3
+    (let [r (& x)] (println @r))            ; 3
+    (set! x 5)
+    (println x))                            ; 5
+  (let [^mut y 1
+        r (& y)]
+    (println @r)                            ; 1
+    (set! y 2)                              ; `r` is not used again
+    (println y))                            ; 2
+  0)

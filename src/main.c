@@ -106,6 +106,15 @@ static int tur_main_inner(int argc, char **argv) {
     if (ambiguous) return drv_usage();
     if (c) return c->run(argc, argv);
 
+    /* script-spice-deps-plan SD-D6: `tur report.tur a b` runs the script --
+     * after the built-ins (which always win), before `tur-<cmd>` lookup. */
+    if (drv_is_script_word(argv[1])) return drv_run_script(argc, argv);
+    if (drv_script_word_shaped(argv[1])) {
+        fprintf(stderr, "tur: no such file '%s' (and no command of that name). "
+                        "See 'tur --help'.\n", argv[1]);
+        return 2;
+    }
+
     /* GS-M2: subcommand fallthrough -- `tur foo bar` execs `tur-foo bar`
      * from $PATH when "foo" isn't a built-in. Built-ins always win.
      * If exec succeeds, this does not return. */

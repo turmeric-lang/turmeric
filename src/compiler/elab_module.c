@@ -1678,6 +1678,29 @@ Expr *elab_toplevel_import(Elab *e, const Form *call) {
     return e_nil(e, call->span);
 }
 
+/* script-spice-deps-plan SD0: every `(defscript ...)` that reaches here is
+ * one the driver did NOT consume -- elaborate_program_session drops the
+ * consumed header before elaboration -- so each is an error, and the message
+ * says which rule it broke. */
+Expr *elab_defscript(Elab *e, const Form *call) {
+    (void)e;
+    if (!g_opt_script_deps) {
+        diag_emit_with_code(DIAG_ERROR, call->span, TUR_E0633_DEFSCRIPT_NEEDS_FLAG,
+            "`defscript` declares a script's spices, which is experimental -- "
+            "run with --enable=script-deps (on a `#!` line: "
+            "`#!/usr/bin/env -S tur --enable=script-deps`)");
+        return NULL;
+    }
+    diag_emit_with_code(DIAG_ERROR, call->span, TUR_E0630_DEFSCRIPT_MISPLACED,
+        call->span.file_id == 0
+            ? "`defscript` must be the first form of the script -- only a "
+              "`#!` line, a `#lang` line and comments may come before it"
+            : "`defscript` is only valid as the first form of the script being "
+              "run, not in a file it imports or loads -- declare the spice in "
+              "the script's own header");
+    return NULL;
+}
+
 Expr *elab_defmodule(Elab *e, const Form *call) {
     /* Only valid at the top level */
     if (e->scope != &e->global) {

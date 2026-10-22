@@ -1,5 +1,7 @@
 # Regions comments still describe `--enable=regions`, a flag that no longer exists
 
+**RESOLVED 2026-10-22.** The last structural item (13, first bullet) landed; see Resolution at the end.
+
 **Narrowed 2026-10-21: one structural item stays open.** Items 1-10 and 12
 landed, with item 13's second bullet: `emit_embedded_runtime_source` strips
 `/* ... */` and `//` comments (outside string and character literals, line
@@ -213,3 +215,24 @@ Two changes would remove whole classes of the items above.
 Remove the three examples from the guide's "Trust the code over the comments"
 paragraph. (Its fixture sentence went when
 `region-rewind-fixtures-never-rewind` was archived, 2026-10-21.)
+
+## Resolution (2026-10-22)
+
+Item 13's first bullet: `emit_heap_ctor_body` (`src/compiler/emit_core.c`,
+declared in `emit_internal.h` and forward-declared in `types.c`, which does not
+include it) writes the `:heap` spine-node body -- the region allocation, the
+tag unless flat, one `adt_field_member_path` store per field, `return __r` --
+for all three emitters: the base ctor in `emit_adt_typedef_and_ctors`, the
+monomorph in `emit_registered_adt_app_rec`, and `emit_program_inner`'s
+non-parametric base. The monomorph passes its `wide_box` / `val_ctype` arrays,
+so the WIDE by-value field box and its `TUR_REGION_NOTE_WORDS` live in the
+helper too; the other two pass NULL. The three "mirror each other" comments are
+gone with the copies. The output is byte-identical: `tests/run.sh` passes with
+no snapshot regenerated.
+
+`emit_flush_dead_base_ctor_traps`' phantom base was left as it is: it takes
+`int64_t` arguments, writes through the mangled field names of a `struct
+tur_adt_<name>` pointer, and has no tag, so the shared body does not fit it.
+
+The regions-internals-guide "Trust the code over the comments" paragraph no
+longer points at an open report.

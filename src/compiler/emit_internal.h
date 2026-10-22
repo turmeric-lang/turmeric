@@ -485,6 +485,14 @@ typedef struct EmitCtx {
     char    **any_scope_drops;
     uint32_t  n_any_scope_drops;
     uint32_t  cap_any_scope_drops;
+    /* fresh-option-arg-to-tail-self-call-loop-leaks: the self-tail loop of
+     * the function being emitted owns the sum box in each parameter of
+     * tco_own_mask (fd->params index) while `__tur_lown_<i>` is set: a back
+     * edge handed it a fresh box.  Its free sits in any_scope_drops
+     * [tco_own_lo, tco_own_hi), which every `return` fires and a back edge
+     * skips -- the back edge frees the old box itself, before reassigning. */
+    uint64_t  tco_own_mask;
+    uint32_t  tco_own_lo, tco_own_hi;
     uint32_t  n_any_type_names;
     uint32_t  cap_any_type_names;
     /* poly-to-fat-typed-shim-plan: per-signature typed poly-to-fat shim tracking.
@@ -1166,6 +1174,8 @@ const char *match_binder_c_type(const Type *t);
  * (`__tur_any_drop`), 2 = boxed value-struct payload.  `name` is any C
  * expression naming the value; it is parenthesised where the walk needs it. */
 void emit_pending_drop_stmt(EmitCtx *ctx, Buf *body, int kind, const char *name, Type t);
+void emit_pending_drops_discard(EmitCtx *ctx, const uint32_t m[3]);
+int  emit_sum_box_drop_kind(EmitCtx *ctx, const char *ctype, Type t);
 bool emit_call_owes_sum_drop(EmitCtx *ctx, const Expr *e);
 /* global-def-store-misses-int-ptr-bridge: the int64<->pointer bridge for a
  * STORE (module-level def init, thread-local init return, `set!`).  Returns a
@@ -1586,9 +1596,13 @@ char *mangle_ctor_symbol(const struct AdtDef *adt, const char *ctor_name);
 void ctor_census_reset(void);
 void ctor_census_snapshot(struct AdtDef *const *defs, uint32_t n_defs);
 bool ctor_base_name_is_unique(const char *mangled_ctor_name);
+const struct AdtDef *ctor_census_find_adt(const char *name);
 void emit_ctor_bare_alias(Buf *out, const struct AdtDef *def,
                           const struct CtorDef *ctor);
 char *adt_field_member_path(const AdtDef *def, const CtorDef *ctor, uint32_t fi);
+void emit_heap_ctor_body(Buf *out, const AdtDef *def, const CtorDef *ctor,
+                         const char *c_name, bool flat,
+                         const bool *wide_box, const char *const *val_ctype);
 char *raw_name_for_binding(const Binding *b);
 size_t binding_module_prefix(const Binding *b, char *out, size_t cap);
 char *emit_call_name(EmitCtx *ctx, const Expr *call, const Binding *b);

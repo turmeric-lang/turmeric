@@ -12263,34 +12263,9 @@ static void emit_adt_typedef_and_ctors(Buf *out, const AdtDef *def,
         if (ctor->n_fields == 0) buf_puts(out, "void");   /* prototyped, not `()` */
         buf_printf(out, ") {\n");
         if (heap) {
-            /* malloc the by-value header, store fields inline, return the typed
-             * pointer (no int64 carrier cast -- the pointer IS the value). */
-            /* RM3 R2 (docs/archive/regions-plan.md): this is the spine node.
-             * A `:heap` ADT's monomorph ctor mallocs one per link, and it is
-             * the allocation RM1 cannot reach (it escapes its constructor by
-             * construction) and RM2 cannot own (a persistent tail is shared).
-             * Route it to the innermost open generation;
-             * `tur_region_alloc_or_malloc` falls back to malloc when none is
-             * open, so the SAME emitted ctor works inside and outside a region
-             * and R2 needs no branch here.
-             *
-             * Its siblings are the MONOMORPH ctor in types.c (search RM3 R2
-             * there) and the non-parametric base ctor in emit_program_inner;
-             * the three mirror each other and a change to one belongs in all
-             * three.  Changing only this one is what the first R2 pass did,
-             * and the monomorph ctor -- which is the one the leak sweep blames
-             * -- kept its plain malloc. */
-            buf_printf(out, "    %s *__r = (%s *)%s(sizeof(%s));\n",
-                       adt_c_name, adt_c_name,
-                       region_alloc_fn(),
-                       adt_c_name);
-            if (!flat) buf_printf(out, "    __r->tag = %u;\n", ctor->tag);
-            for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
-                char *mp = adt_field_member_path(def, ctor, fi);
-                buf_printf(out, "    __r->%s = _%u;\n", mp, fi);
-                free(mp);
-            }
-            buf_printf(out, "    return __r;\n");
+            /* RM3 R2: the spine node -- the typed pointer IS the value (no
+             * int64 carrier cast). */
+            emit_heap_ctor_body(out, def, ctor, adt_c_name, flat, NULL, NULL);
         } else if (byval) {
             /* CONV-S1: build and return the aggregate by value -- no heap box.
              * SR1: `byval` no longer implies single-variant, so the tag store
@@ -16517,6 +16492,34 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "}\n\n");
     } /* end if (cps_uses_cloneable_rt) */
 
+    /* Base-shift escape-reset context (direct-reset-shift-degrades fix): the
+     * direct emitter lowers a base (reset ...) onto a setjmp/longjmp landing
+     * rather than the DK abort-value model (which only handles a statically-
+     * first shift).  Base shift is abortive, so a shift is an escape: it
+     * computes f(operand), stores it here, and longjmps to the innermost reset
+     * landing, discarding the delimited continuation from anywhere --
+     * including inside a branch.  The thread-local stack targets the innermost
+     * reset; `prev` restores the enclosing one.
+     *
+     * compiled-shift-delimited-by-root: a shift in a CPS callee runs on its own
+     * DK chain, which holds no prompt for a direct reset, so the DK machine
+     * aborts to this landing too (`pending`, then __dk_reset_abort at the
+     * entry's exit) -- emitted ahead of the machine, which reads it, and with
+     * it.  The dk_* fields are the machine's per-thread state at the reset
+     * (__dk_reset_save), which the abort restores. */
+    if (shared || cps_uses_delimited || cps_uses_cloneable_dk ||
+        cps_uses_serial || cps_ir_emittable) {
+        buf_puts(out, "/* base-shift escape-reset context (setjmp/longjmp abort) */\n");
+        buf_puts(out, "typedef struct tur_shift_reset_ctx {\n");
+        buf_puts(out, "    tur_jmp_buf buf;\n");
+        buf_puts(out, "    int64_t result;  /* f(operand), set by an abortive shift before longjmp */\n");
+        buf_puts(out, "    struct tur_shift_reset_ctx *prev; /* nested resets */\n");
+        buf_puts(out, "    void *dk_driver; void *dk_pend; int dk_depth; size_t dk_reap_mark;\n");
+        buf_puts(out, "    int pending;     /* a DK shift stored `result`: jump at the entry's exit */\n");
+        buf_puts(out, "} tur_shift_reset_ctx;\n\n");
+        emit_rt_tls(out, shared, "TUR_THREAD_LOCAL tur_shift_reset_ctx *tur_cur_shift_reset = NULL;\n\n", "TUR_THREAD_LOCAL tur_shift_reset_ctx *tur_cur_shift_reset",
+                "tur_cur_shift_reset", "void **", "tur_tls_cur_shift_reset_ptr", "tur_shift_reset_ctx **");
+    }
     /* cps-transform-plan: emit the heap-reified CPS substrate (DK multi-prompt
      * machine) when the program uses base delimited control (reset/shift/
      * shift0), or when a cloneable-reset lowers onto the DK machine (CPS9).
@@ -16534,25 +16537,6 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
         r7gc_note_tls_root("__dk_reap_v");
         r7gc_note_tls_root("__dk_reap_kind");
         r7gc_note_tls_root("g_dk_resume_chain");
-    }
-    /* Base-shift escape-reset context (direct-reset-shift-degrades fix): the
-     * direct emitter lowers a base (reset ...) whose body reaches a shift through
-     * runtime BRANCHING -- `(reset (+ e (if c (shift ...) v)))` -- onto a
-     * setjmp/longjmp landing rather than the DK abort-value model (which only
-     * handles a statically-first shift).  Base shift is abortive, so a shift is
-     * an escape: it computes f(operand), stores it here, and longjmps to the
-     * innermost reset landing, discarding the delimited continuation from
-     * anywhere -- including inside a branch.  The thread-local stack targets the
-     * innermost reset; `prev` restores the enclosing one. */
-    if (shared || cps_uses_delimited) {
-        buf_puts(out, "/* base-shift escape-reset context (setjmp/longjmp abort) */\n");
-        buf_puts(out, "typedef struct tur_shift_reset_ctx {\n");
-        buf_puts(out, "    tur_jmp_buf buf;\n");
-        buf_puts(out, "    int64_t result;  /* f(operand), set by an abortive shift before longjmp */\n");
-        buf_puts(out, "    struct tur_shift_reset_ctx *prev; /* nested resets */\n");
-        buf_puts(out, "} tur_shift_reset_ctx;\n\n");
-        emit_rt_tls(out, shared, "TUR_THREAD_LOCAL tur_shift_reset_ctx *tur_cur_shift_reset = NULL;\n\n", "TUR_THREAD_LOCAL tur_shift_reset_ctx *tur_cur_shift_reset",
-                "tur_cur_shift_reset", "void **", "tur_tls_cur_shift_reset_ptr", "tur_shift_reset_ctx **");
     }
     /* CPS9: the cloneable-continuation <-> DK bridge needs both the cloneable
      * runtime (emitted above) and the DK machine (just emitted) in scope.  A
@@ -17697,6 +17681,7 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
 "    }\n"
 "    dk_free(root);\n"
 "    if (--__dk_entry_depth == 0) __dk_reap_run(); else __dk_reap_drop_to(mark);\n"
+"    if (tur_cur_shift_reset && tur_cur_shift_reset->pending) __dk_reset_abort(tur_cur_shift_reset);\n"
 "}\n\n");
         /* r7rs-conformance-program-emits-megabytes-of-c: the direct->cps entry
          * wrapper of a ZERO-parameter colored function (emit_cps_ir.c) is this one
@@ -20658,32 +20643,12 @@ static int emit_program_inner(Buf *out, const Expr *program) {
                 if (ctor->n_fields == 0) buf_puts(&early_file, "void");
                 buf_printf(&early_file, ") {\n");
                 if (heap) {
-                    /* RM3 R2/R4 (docs/archive/regions-plan.md): the THIRD
-                     * spine-node ctor emitter.  `emit_program` emits base ctors
-                     * HERE rather than through emit_adt_typedef_and_ctors, so a
+                    /* RM3 R2/R4: `emit_program` emits base ctors HERE rather
+                     * than through emit_adt_typedef_and_ctors, so a
                      * NON-parametric `:heap` ADT -- `(defdata Link :heap ...)`,
-                     * the plainest spine there is -- came out of R2 still
-                     * calling malloc while both of the other two routed.
-                     *
-                     * Found because R4's fixture measured the SAVING rather
-                     * than asserting the routing (the valgrind counts are in
-                     * docs/archive/regions-plan.md): the region was pushed,
-                     * popped, and never allocated into.  The SR3 slice-A note
-                     * a few lines below records this exact miss at this exact
-                     * site, one representation change earlier.  All three
-                     * emitters mirror each other; a change to one belongs in
-                     * all three. */
-                    buf_printf(&early_file, "    %s *__r = (%s *)%s(sizeof(%s));\n",
-                               adt_c_name, adt_c_name,
-                               region_alloc_fn(),
-                               adt_c_name);
-                    if (!flat) buf_printf(&early_file, "    __r->tag = %u;\n", ctor->tag);
-                    for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
-                        char *mp = adt_field_member_path(def, ctor, fi);
-                        buf_printf(&early_file, "    __r->%s = _%u;\n", mp, fi);
-                        free(mp);
-                    }
-                    buf_printf(&early_file, "    return __r;\n");
+                     * the plainest spine there is -- shares the body through
+                     * emit_heap_ctor_body like the other two. */
+                    emit_heap_ctor_body(&early_file, def, ctor, adt_c_name, flat, NULL, NULL);
                 } else if (byval) {
                     /* CONV-S1 / SR1: mirror of the emit_adt_typedef_and_ctors
                      * site -- conditional tag store, cheap deterministic dead
@@ -22639,7 +22604,8 @@ static char *forced_spec_adt_name(Type t) {
  * borrower passes; anything else is rebuilt from its kind, which turns a
  * struct into the int64_t carrier and left the borrower's call uncompilable. */
 static Type forced_spec_pos_type(TypeKind kind, const char *adt_name,
-                                 const Expr **items, uint32_t n_items) {
+                                 const Expr **items, uint32_t n_items,
+                                 bool *unresolved) {
     if (adt_name) {
         for (uint32_t i = 0; i < n_items; i++) {
             const Expr *e = items[i];
@@ -22649,6 +22615,16 @@ static Type forced_spec_pos_type(TypeKind kind, const char *adt_name,
                 strcmp(def->name, adt_name) == 0)
                 return type_adt(def);
         }
+        /* forced-spec-at-foreign-aggregate: a struct from a module this one
+         * imports -- `types`' `Pos`, for `util` that imports `types` -- is
+         * not among this module's items, but its elaboration saw the def, and
+         * this module's header already includes that module's. */
+        const AdtDef *imp = ctor_census_find_adt(adt_name);
+        if (imp) return type_adt((AdtDef *)imp);
+        /* A struct this module cannot see at all (the borrower's own): the
+         * clone cannot be emitted here, and the int64 carrier would only
+         * turn into a cc error at the borrower's call. */
+        if (unresolved) *unresolved = true;
     }
     return emit_type_from_kind(kind);
 }
@@ -22938,11 +22914,14 @@ static int emit_header_inner(Buf *out, const char *module_name, const Expr *prog
             /* Build arg_types[] and result_type from the recorded kinds and
              * ADT names. */
             Type arg_types[MAX_FN_ARITY];
+            bool unresolved = false;
             for (uint32_t ai = 0; ai < fs->n_args; ai++)
                 arg_types[ai] = forced_spec_pos_type(fs->arg_kinds[ai], fs->arg_adts[ai],
-                                                     h_items, h_n_items);
+                                                     h_items, h_n_items, &unresolved);
             Type result_type = forced_spec_pos_type(fs->result_kind, fs->result_adt,
-                                                    h_items, h_n_items);
+                                                    h_items, h_n_items, &unresolved);
+            /* Refused with a diagnostic by the implementation pass. */
+            if (unresolved) continue;
             /* Grow hdr_ctx.abi_specializations and add spec. */
             if (hdr_ctx.n_abi_specializations >= hdr_ctx.cap_abi_specializations) {
                 uint32_t nc = hdr_ctx.cap_abi_specializations ? hdr_ctx.cap_abi_specializations * 2 : 4;
@@ -23560,11 +23539,36 @@ static int emit_implementation_inner(Buf *out, const char *module_name, const Ex
         sp->fn = fd2;
         sp->binding = b;
         sp->n_args = fs->n_args;
+        bool unresolved = false;
+        const char *unresolved_adt = NULL;
         sp->result_type = forced_spec_pos_type(fs->result_kind, fs->result_adt,
-                                               impl_items, impl_n_items);
-        for (uint32_t ai = 0; ai < fs->n_args; ai++)
+                                               impl_items, impl_n_items, &unresolved);
+        if (unresolved) unresolved_adt = fs->result_adt;
+        for (uint32_t ai = 0; ai < fs->n_args; ai++) {
+            bool u = false;
             sp->arg_types[ai] = forced_spec_pos_type(fs->arg_kinds[ai], fs->arg_adts[ai],
-                                                     impl_items, impl_n_items);
+                                                     impl_items, impl_n_items, &u);
+            if (u && !unresolved_adt) unresolved_adt = fs->arg_adts[ai];
+            unresolved = unresolved || u;
+        }
+        if (unresolved) {
+            /* forced-spec-at-foreign-aggregate: the borrower's own struct.
+             * Only the borrower can name it, and it does not carry this
+             * generic's body, so no unit can emit the clone.  Say so here
+             * rather than leave the borrower's call to fail in the C
+             * compiler. */
+            diag_emit(DIAG_ERROR, fn_expr2->span,
+                      "`%s` is called at `%s` from another module, but `%s` is not "
+                      "visible in the module that defines `%s`: compiled separately, "
+                      "a generic is specialized in its own module, at a struct that "
+                      "module defines or imports. Move `%s` into a module both import, "
+                      "or build the program as one unit (a project with one `main`)",
+                      fs->fn_symbol, unresolved_adt, unresolved_adt, fs->fn_symbol,
+                      unresolved_adt);
+            free(sp->clone_name);
+            ctx.n_abi_specializations--;
+            continue;
+        }
         sp->clone_name = strdup(fs->clone_name);
         sp->external_linkage = true;
         /* No call-site rewrite needed (no local call site). */

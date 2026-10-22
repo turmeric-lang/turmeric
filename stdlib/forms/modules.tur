@@ -124,3 +124,31 @@
 ;;;   (load "stdlib/equal.tur")
 ;;;   (println (coerce (Refl) 5))  ; prints 5
 ;;@form (load path)
+
+;;; defscript -- declare the spices a single-file script needs.
+;;;
+;;; `(defscript :spices #map{...})` is the header of a script that lives outside
+;;; any project: it must be the file's first form, after an optional `#!` line,
+;;; an optional `#lang` line and comments. `tur run`, `tur check`, `tur build`
+;;; and the other per-file commands read it before compiling, fetch each declared
+;;; spice into the script-dep cache (`~/.local/share/turmeric/cache/script-spices/`)
+;;; on first use, and then search exactly those spices -- the installed set is not
+;;; consulted, so the script means the same thing on every machine. `:spices`
+;;; takes the build.tur entry grammar; every `:url` dep needs a `:ref`, a `:path`
+;;; dep is relative to the script, and `#map{:global true}` names an installed
+;;; spice explicitly. Experimental: it needs `--enable=script-deps`
+;;; (TUR-E0633 without it), and a `defscript` anywhere but the first form of the
+;;; file being run is TUR-E0630. `tur fetch --script f.tur --lock` writes an
+;;; `f.tur.lock` sidecar that later runs resolve from. See consuming-spices-guide.
+;;;
+;;; Parameters:
+;;;   :spices -- a map from dep name to its entry: `:url` + `:ref` [+ `:subdir`], `:path`, or `:global true`
+;;;
+;;; Example:
+;;;   #!/usr/bin/env -S tur --enable=script-deps
+;;;   (defscript
+;;;     :spices #map{"json" #map{:url    "https://github.com/turmeric-lang/turmeric-spices"
+;;;                              :ref    "json-v0.3.0"
+;;;                              :subdir "spices/json"}})
+;;;   (import json/decode)
+;;@form (defscript :spices #map{name entry ...})

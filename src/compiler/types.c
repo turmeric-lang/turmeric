@@ -59,6 +59,10 @@ char *mangle_adt_name(const char *name);
 char *mangle_ctor_symbol(const struct AdtDef *adt, const char *ctor_name);
 char *adt_field_member_path(const struct AdtDef *def, const struct CtorDef *ctor,
                             uint32_t fi);
+/* The `:heap` ctor body all three spine-node emitters share; emit_core.c. */
+void emit_heap_ctor_body(struct Buf *out, const struct AdtDef *def,
+                         const struct CtorDef *ctor, const char *c_name, bool flat,
+                         const bool *wide_box, const char *const *val_ctype);
 /* region-lock-hardening: the store-side region note for a ctor field write,
  * defined in emit_core.c and declared in emit_internal.h (not included here);
  * the monomorph ctor's boxed branch uses it exactly as the base ctor does. */
@@ -2680,44 +2684,9 @@ static void emit_registered_adt_app_rec(Buf *out, uint32_t idx) {
          * and a positional one writes `__r->as.<Ctor>._N`, in lockstep with the
          * typedef + field-read sites. */
         if (app_heap) {
-            /* RM3 R2 (docs/archive/regions-plan.md): the spine node, at the
-             * MONOMORPH ctor.  Its siblings are the base ctor in emit_module.c
-             * (`emit_adt_typedef_and_ctors`) and the non-parametric base ctor
-             * in emit_program_inner -- the three mirror each other and a
-             * change to one belongs in all three.  That is not a general
-             * caution: it is what happened here.  The first R2 pass changed
-             * only the base emitter, and `ctor_Cons_Cons__int` -- the ctor the
-             * leak sweep actually blames -- kept its plain malloc, which the
-             * reclamation plan's own standing habit predicts ("when a
-             * representation change lands in a ctor or temp emitter, grep for
-             * the other emitter before calling it done"). */
-            buf_printf(out, "    %s *__r = (%s *)%s(sizeof(%s));\n",
-                       adt_inst_name, adt_inst_name,
-                       region_alloc_fn(),
-                       adt_inst_name);
-            if (!flat) buf_printf(out, "    __r->tag = %u;\n", ctor->tag);
-            for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
-                char *mp = adt_field_member_path(def, ctor, fi);
-                if (wide_box[fi]) {
-                    /* heap-adt-niche-option-some-payload-missing-cast (the
-                     * by-value half): the typedef above stores a WIDE by-value
-                     * element as an int64 heap box (B4 slice 2), but this
-                     * branch assigned the aggregate parameter straight into
-                     * that word -- `(Bx (Pos 7 8))` did not compile.  Box it
-                     * as the carrier branch below does. */
-                    buf_printf(out,
-                        "    { %s *__b = (%s *)malloc(sizeof(%s)); *__b = _%u;"
-                        " __r->%s = (int64_t)(intptr_t)__b; }\n",
-                        val_ctype[fi], val_ctype[fi], val_ctype[fi], fi, mp);
-                    buf_printf(out,
-                        "    TUR_REGION_NOTE_WORDS((void *)(intptr_t)__r->%s, sizeof(%s));\n",
-                        mp, val_ctype[fi]);
-                } else {
-                    buf_printf(out, "    __r->%s = _%u;\n", mp, fi);
-                }
-                free(mp);
-            }
-            buf_printf(out, "    return __r;\n");
+            /* RM3 R2: the spine node, at the MONOMORPH ctor; the only emitter
+             * whose typedef boxes a wide by-value field. */
+            emit_heap_ctor_body(out, def, ctor, adt_inst_name, flat, wide_box, val_ctype);
         } else if (app_byval) {
             buf_printf(out, "    %s __r;\n", adt_inst_name);
             /* SR2: a by-value SUM monomorph stores its tag and makes the dead

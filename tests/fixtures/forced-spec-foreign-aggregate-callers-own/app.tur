@@ -1,0 +1,6 @@
+(defmodule app
+  (import util :refer [ident])
+  (defstruct Q [x : int y : int])
+  (defn main [] : int
+    (let [p (ident (Q 3 4))] (println (.y p)))
+    0))

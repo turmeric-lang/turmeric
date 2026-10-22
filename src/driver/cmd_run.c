@@ -119,6 +119,12 @@ int cmd_run(int argc, char **argv) {
             release = true;
         } else if (strcmp(argv[i], "--offline") == 0) {
             offline = true;
+            /* script-spice-deps-plan SD5: a script header resolves from the
+             * script-dep cache only. */
+            g_script_deps_offline = true;
+        } else if (strcmp(argv[i], "--update") == 0) {
+            /* SD4: re-resolve a script header's tag and branch refs. */
+            g_script_deps_update = true;
         } else if (strcmp(argv[i], "--engine") == 0 && i + 1 < scan_end) {
             /* engine-selection-plan E1: CLI rung of the ladder. */
             engine_flag = argv[++i];
@@ -898,6 +904,7 @@ int cmd_run_main(int argc, char **argv) {
         }
         if (strcmp(argv[i], "--release") == 0 ||
             strcmp(argv[i], "--offline") == 0  ||
+            strcmp(argv[i], "--update") == 0   ||
             strcmp(argv[i], "--engine") == 0   ||
             strncmp(argv[i], "--engine=", 9) == 0 ||
             strncmp(argv[i], "-I", 2) == 0) {

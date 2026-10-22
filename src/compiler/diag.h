@@ -488,6 +488,21 @@ typedef enum DiagCode {
      * now, so the call would run it twice (and, compiled, call C's `main`
      * with no arguments); it is dropped in both engines. */
     TUR_W0625_TOPLEVEL_MAIN_CALL_DROPPED,
+    /* script-spice-deps-plan SD0: the `(defscript ...)` header of a
+     * single-file script.
+     * E0630 -- a `defscript` that is not the first form of the file being
+     *          run, or one in a module the script imports.
+     * E0631 -- a malformed header: an unknown key, a non-keyword item, or a
+     *          `:url` dep without `:ref`.
+     * E0632 -- a header in a file inside a project (a build.tur above it).
+     * E0633 -- a header without `--enable=script-deps`.
+     * E0634 -- a declared dep cannot be had: a failed fetch, `--offline`
+     *          with a cold cache, a stale lock, a tree that fails its hash. */
+    TUR_E0630_DEFSCRIPT_MISPLACED,
+    TUR_E0631_DEFSCRIPT_MALFORMED,
+    TUR_E0632_DEFSCRIPT_IN_PROJECT,
+    TUR_E0633_DEFSCRIPT_NEEDS_FLAG,
+    TUR_E0634_SCRIPT_DEP_UNAVAILABLE,
     /* application-image-dumps-plan AI3.1: the `init` root of a
      * with-image-cache-after-init expansion writes a top-level global that no
      * `defimage-global` declared.  init runs only on a cold start and the

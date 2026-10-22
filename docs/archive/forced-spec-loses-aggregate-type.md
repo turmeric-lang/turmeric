@@ -63,4 +63,4 @@ the repro plus a two-generic-parameter `pick` at `int`/`Pos` and
 
 Left open: a struct the owner does not define -- the caller's own, or a third
 module's -- still reaches the owner as a bare kind, filed as
-[forced-spec-at-foreign-aggregate](../reported/forced-spec-at-foreign-aggregate.md).
+[forced-spec-at-foreign-aggregate](forced-spec-at-foreign-aggregate.md).

@@ -495,6 +495,70 @@ of any other type are re-raised to the next outer boundary.
 (catch-panic-of :int  (fn [] : int (panic "string panic")))  ;; re-raised
 ```
 
+**Typed payloads: `panic-with` and the `panic-payload-*` forms.** `(panic-with
+v)` is `panic` with a payload of any type instead of a message: an uncaught one
+aborts and names your file and line just as `panic` does, and a boundary can
+catch it by type (`(catch-panic-of :int ...)`). Under the `Panic` wrapper sit
+five compiler builtins, documented in
+[tur/forms/panics](../html/api/tur-forms-panics.html), that read the handle
+`result-panic` gives you:
+
+| Form | Answers |
+|---|---|
+| `(panic-payload-type p)` | the payload's type tag (`panic-type` is the same number; 5 is a string) |
+| `(panic-payload-value p)` | the payload as a `ptr<void>`: the message for a string, and for an integer `panic-with` the integer itself, not an address |
+| `(panic-payload-downcast p :T)` | the payload when its type is `T`, else a null pointer |
+| `(panic-payload-file p)` | the base name of the file the panic came from |
+| `(panic-payload-line p)` | its line |
+
+```turmeric
+(load "stdlib/panic.tur")
+
+(defn check-status [code : int] : int
+  (if (>= code 400) (panic-with code) code))
+
+(defn main [] : int
+  (let [r (catch-panic-of :int (fn [] : int (check-status 404)))]
+    (when (err? r)
+      (let [p (result-panic r)]
+        (println (:: (panic-payload-value p) int))   ; 404
+        (println (panic-payload-file p))             ; the file name
+        (println (panic-payload-line p)))))          ; 4
+  (let [r (catch-unwind (fn [] : int (panic "boom")))]
+    (when (err? r)
+      (let [p (result-panic r)]
+        (println (:: (panic-payload-downcast p :cstr) cstr)))))   ; boom
+  0)
+```
+```sweet-exp
+#lang sweet-exp
+
+load "stdlib/panic.tur"
+
+defn check-status [code : int] : int
+  if {code >= 400} panic-with(code) code
+
+defn main [] : int
+  let [r catch-panic-of(:int (fn [] : int check-status(404)))]
+    when err?(r)
+      let [p result-panic(r)]
+        println((:: panic-payload-value(p) int))   ; 404
+        println(panic-payload-file(p))             ; the file name
+        println(panic-payload-line(p))             ; 6
+  let [r catch-unwind((fn [] : int panic("boom")))]
+    when err?(r)
+      let [p result-panic(r)]
+        println((:: panic-payload-downcast(p :cstr) cstr))   ; boom
+  0
+```
+
+**Which layer to use.** For a message panic, the `stdlib/panic.tur` wrapper
+(`panic-message`, `panic-file`, `panic-line`, `panic-type`) is all a program
+needs, and it keeps the handle typed. Reach for the builtins when the payload is
+not a string: `catch-panic-of` to catch one type and let the rest through, then
+`panic-payload-value` or `panic-payload-downcast` to read it. Both engines
+answer all five alike.
+
 > See [docs/design/error-handling-rationale.md](https://github.com/turmeric-lang/turmeric/blob/main/docs/design/error-handling-rationale.md)
 > for the exception-vs-panic boundary `catch-unwind` is meant to sit on.
 

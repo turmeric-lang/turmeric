@@ -1,9 +1,12 @@
 # Plan: Spices declared inside a script -- a `defscript` header, a dep cache, and an opt-in lock
 
-> **Status:** Deferred. Written 2026-10-21 as the follow-up to
-> [installed-spice-libraries-plan](../archive/installed-spice-libraries-plan.md), and it
-> **assumes that plan has landed** (IL0-IL3 at least). Not scheduled.
-> **Last Updated:** 2026-10-21
+> **Status:** SD0-SD5 landed 2026-10-22 behind `--enable=script-deps`
+> (experiment row `script-deps`, introduced 0.70.0). SD6 (cache the compiled
+> script) is optional and open -- see its section. The plan stays here until
+> the experiment graduates.
+> Follow-up to [installed-spice-libraries-plan](../archive/installed-spice-libraries-plan.md),
+> which it builds on.
+> **Last Updated:** 2026-10-22
 > **Type:** Tooling / package management (`src/compiler/pkg.c`,
 > `src/compiler/global.c`), build driver (`src/main.c`), one new reserved
 > top-level form, behind `--enable=script-deps`.
@@ -239,23 +242,23 @@ experimental-features rule (CLAUDE.md):
 
 ### SD0 -- The header: grammar, reading, gating
 
-- [ ] Export `parse_spices` (`src/compiler/pkg.c:221`) so `defscript` can
+- [x] Export `parse_spices` (`src/compiler/pkg.c:221`) so `defscript` can
       call it, with no behavior change to `build.tur`. Its diagnostics say
       "build.tur: spice ..."; they should name the file they came from
       instead.
-- [ ] Driver pre-read of the first form (SD-D1):
+- [x] Driver pre-read of the first form (SD-D1):
       - a missing header is fine,
       - a misplaced header, an unknown key, a URL dep without `:ref`, and a
         header inside a project are each an error, in a new code in the
         package range (TUR-E06xx).
-- [ ] The elaborator treats the consumed header as a no-op top-level form. It
+- [x] The elaborator treats the consumed header as a no-op top-level form. It
       errors on a `defscript` anywhere the driver did not consume one (not
       first, or in an imported module).
-- [ ] The `EXPERIMENTS[]` row, `g_opt_script_deps`, the lifecycle warning,
+- [x] The `EXPERIMENTS[]` row, `g_opt_script_deps`, the lifecycle warning,
       and the "needs `--enable=script-deps`" error (SD-D7).
-- [ ] `tur fmt` round-trips the header (`SF_DEFSCRIPT`). Add the
+- [x] `tur fmt` round-trips the header (`SF_DEFSCRIPT`). Add the
       `stdlib/forms/` docstring.
-- [ ] Fixtures:
+- [x] Fixtures:
       - header accepted and ignored by elaboration,
       - each SD0 error,
       - the flag-off error,
@@ -263,13 +266,13 @@ experimental-features rule (CLAUDE.md):
 
 ### SD1 -- The dep cache
 
-- [ ] `cache/script-spices/` layout and `index.tur` reader/writer (SD-D3,
+- [x] `cache/script-spices/` layout and `index.tur` reader/writer (SD-D3,
       SD-D4), next to `state.tur`'s in `src/compiler/global.c`.
-- [ ] Fetch a `(url, subdir, SHA)` entry into a temp dir, set it up as a
+- [x] Fetch a `(url, subdir, SHA)` entry into a temp dir, set it up as a
       fetched project (the IL0 helper), and rename it into place.
-- [ ] `--update` re-resolves tag and branch refs. `--offline` never touches
+- [x] `--update` re-resolves tag and branch refs. `--offline` never touches
       the network (SD-D5).
-- [ ] Tests use local bare repos through `file://` URLs, so they need no
+- [x] Tests use local bare repos through `file://` URLs, so they need no
       network:
       - cold fetch,
       - warm offline run,
@@ -279,18 +282,18 @@ experimental-features rule (CLAUDE.md):
 
 ### SD2 -- Wiring the header into the build
 
-- [ ] For a file with a header, the include path is: its directory, the
+- [x] For a file with a header, the include path is: its directory, the
       stdlib, `-I`, then each declared dep's root `src/` and transitive closure
       (the walk the first plan moved into tur_core). The installed-spice
       fallback is off (SD-D2). `:global true` entries resolve from the
       registry.
-- [ ] Link inputs come from the declared closure, through
+- [x] Link inputs come from the declared closure, through
       `collect_build_aux`'s collectors, as the first plan's D7 does for
       installed roots.
-- [ ] Commands: `tur run`, `tur check`, `tur build <file>`, `tur --interpret`,
+- [x] Commands: `tur run`, `tur check`, `tur build <file>`, `tur --interpret`,
       `tur jit`, `tur emit-c`. That is every caller of
       `auto_append_spice_includes`, so the header is honored in one place.
-- [ ] Tests:
+- [x] Tests:
       - a header dep is importable,
       - an installed spice that the header does not declare is not,
       - `:global true` works,
@@ -299,27 +302,27 @@ experimental-features rule (CLAUDE.md):
 
 ### SD3 -- Shebang execution
 
-- [ ] The `tur <file> args...` dispatch rule (SD-D6), checked after built-ins
+- [x] The `tur <file> args...` dispatch rule (SD-D6), checked after built-ins
       and before `try_external_subcommand`.
-- [ ] Tests:
+- [x] Tests:
       - an executable script with `#!/usr/bin/env -S tur --enable=script-deps`
         receives its arguments,
       - exit status passes through,
       - a script named like a subcommand,
       - a missing file is still a clean usage error.
-- [ ] Windows has no shebang. Document `tur report.tur args` there. A `.tur`
+- [x] Windows has no shebang. Document `tur report.tur args` there. A `.tur`
       file association is out of scope.
 
 ### SD4 -- Editing and locking
 
-- [ ] `tur add --script <file> <url> [--ref] [--subdir] [--name]` creates or
+- [x] `tur add --script <file> <url> [--ref] [--subdir] [--name]` creates or
       updates the header, written back through the formatter. Add
       `tur add --script <file> <path> --path` for local deps.
-- [ ] `tur fetch --script <file> [--update] [--lock]` pre-warms the cache
+- [x] `tur fetch --script <file> [--update] [--lock]` pre-warms the cache
       and, with `--lock`, writes or refreshes `<file>.lock` (SD-D4).
-- [ ] With a sidecar present, runs resolve from it, hash-check every tree, and
+- [x] With a sidecar present, runs resolve from it, hash-check every tree, and
       reject a stale lock.
-- [ ] Tests:
+- [x] Tests:
       - the add round trip,
       - lock written, then honored,
       - a tampered cache entry fails the hash check,
@@ -327,10 +330,10 @@ experimental-features rule (CLAUDE.md):
 
 ### SD5 -- Editor and inspection
 
-- [ ] The LSP reads the header the way the driver does, so an editor resolves
+- [x] The LSP reads the header the way the driver does, so an editor resolves
       the same imports `tur run` does (`src/lsp/lsp.c`'s own walk-up, as in
       the first plan's IL2).
-- [ ] `tur cache list` shows script-dep entries with their size and when they
+- [x] `tur cache list` shows script-dep entries with their size and when they
       were last used. `tur cache clean [--older-than <days>]` removes them.
       A run stamps an entry's last use, which is what `--older-than` reads.
 
@@ -348,6 +351,70 @@ compile on every invocation, and shebang use makes that visible.
 - [ ] A hit execs the cached binary directly.
 - [ ] Measure before committing to it. With `--engine jit` the compile may
       already be cheap enough.
+
+## As built (2026-10-22)
+
+Where the implementation settled a detail the design left open, or departed
+from it:
+
+- **Where it lives.** `pkg_script_header_read` / `pkg_script_header_locate`
+  (`src/compiler/pkg.c`) read the header; `src/compiler/script_deps.c` turns it
+  into spice roots (the cache, the lock, `tur fetch/add --script`,
+  `tur cache`); `spice_search_append` (`src/compiler/spice_search.c`) calls it,
+  so every caller of `auto_append_spice_includes` -- and libturi's
+  `turi_env_set_search_path_for` -- honors the header in one place. A header
+  that cannot be honored stops the driver (`exit(1)` after the diagnostic);
+  the editor carries on.
+- **Reading only the header.** The driver locates the header with a text scan
+  (no read at all for a file without one) and hands the reader just the
+  header's bytes, so a reader error later in the file is reported once, by
+  the compile.
+- **The consumed header in the elaborator.** `elaborate_program_session` drops
+  the program's first form when it is a `defscript` with only a preamble
+  (shebang, `#lang`, comments) before it in its file. Every other `defscript`
+  reaches `elab_defscript`: TUR-E0633 with the flag off, else TUR-E0630. The
+  "defmodule must be the first form" check lets a `defscript` precede the
+  `defmodule`, so a script can still be a module.
+- **Codes.** TUR-E0630 misplaced, E0631 malformed (unknown key, `:url` without
+  `:ref`), E0632 in a project, E0633 flag off, E0634 a dep that cannot be had
+  (fetch failure, `--offline` miss, stale lock, hash mismatch).
+- **Cache entry names** are `<name>-<sha12>`, plus `-<6 hex>` of the
+  `:subdir` when there is one, so two subdirectories of one monorepo commit
+  under the same dep name do not collide. Each entry carries a
+  `.tur-script-entry` metadata file (url, ref, subdir, commit, tree hash) --
+  written last, so its presence is what "complete" means -- and a
+  `.tur-last-used` stamp `tur cache clean --older-than` reads. `.git` is
+  dropped: the tree is the content.
+- **Atomic publication.** A `:cmake-deps` build records absolute paths into
+  the tree, so a tree cannot be renamed after it is set up. On POSIX the tree
+  keeps its private name (`.tree-...`) and the visible name is a symlink to
+  it, created atomically; the loser of a race deletes its own tree. Windows
+  renames the tree into place (a declared spice with native deps may need a
+  second fetch there).
+- **The tree hash** is `pkg_hash_dir` with the setup output left out
+  (`pkg_hash_dir_excluding`: the top-level `spices/`, `cmake/`, `tur.lock` and
+  the two bookkeeping files), so a locked tree verifies after it was set up.
+- **The lock's closure rows** are named `<spice>/<dep>` and copied from the
+  entry's own tur.lock. Building an entry under a lock seeds its tur.lock with
+  them, so the `tur fetch` that sets it up checks out the pinned commits; a
+  cached entry whose dependency is at another commit, or whose tree no longer
+  hashes to the lock's, is TUR-E0634. A lock wins over `--update`;
+  `tur fetch --script f --lock --update` moves it.
+- **`--offline` / `--update`** are `tur run` flags (`--offline` already
+  existed there); `tur fetch --script` takes `--update`.
+- **The editor.** The LSP honors a header with or without the flag, reads the
+  cache only (`g_script_deps_editor`: never fetch, print or stamp), and
+  completes the declared spices' modules instead of the installed set's.
+- **`tur <file> args`.** `drv_parse_global_flags` stops at the script, as it
+  does at `--`, so every word after the file is the script's. A word shaped
+  like a script (a `/`, or `.tur` / `.tur.sweet`) that names no file is a
+  usage error naming it (exit 2).
+- **Tests.** `tests/run-script-deps.sh` (ctest `tur_script_deps_tests`) covers
+  each milestone's list against local `file://` repos; the fixtures
+  `defscript-header-consumed`, `errors/defscript-needs-flag` and
+  `errors/defscript-not-first` run in both `run.sh` and `run-turi.sh`. The
+  LSP half of SD5 (resolution and completion from the cache) has no automated
+  test yet.
 
 ## Open questions
 

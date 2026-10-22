@@ -361,7 +361,7 @@ static const char *const reserved_special_forms_[] = {
     "while", "case", "defer", "return", "match", "quote", "gensym",
     "^tailcall",
     /* definition forms */
-    "defn", "fn", "\xce\xbb", "extern-c", "defmacro", "defmodule", "import",
+    "defn", "fn", "\xce\xbb", "extern-c", "defmacro", "defmodule", "defscript", "import",
     "export", "load", "defstruct", "make-struct", "defopaque", "defdata",
     "defgadt", "defclass", "definstance", "defkind", "defrec", "deftype",
     "defalias", "defdynamic", "defeffect", "defprotocol",
@@ -4687,6 +4687,7 @@ static Expr *elab_call_inner(Elab *e, Form *call) {
     /* Phase M0: Module system */
     if (name == e->sym_load)      return elab_load(e, call);
     if (name == e->sym_defmodule) return elab_defmodule(e, call);
+    if (name == e->sym_defscript) return elab_defscript(e, call);
     if (name == e->sym_export) {
         diag_emit(DIAG_ERROR, call->span,
                   "export is only allowed inside defmodule");
@@ -7531,8 +7532,9 @@ static void stamp_self_call_sum_drops(const Binding *b, Expr *e) {
  * rule.  With the mask still zero during its own inference, a self-call
  * hand-off of a parameter counts as an escape, so a bit that survived is a
  * sound non-retain fact for this caller too.  A tail self-call keeps its
- * stamp but frees nothing: tco_mark lowers it to a back edge, which has no
- * "after" to free in (fresh-option-arg-to-tail-self-call-loop-leaks). */
+ * stamp, but tco_mark lowers it to a back edge, which has no "after" to free
+ * in: the loop takes the box instead (tco_owned_params, emit_fns.c;
+ * fresh-option-arg-to-tail-self-call-loop-leaks). */
 void elab_stamp_self_call_sum_drops(Binding *b, Expr *body) {
     if (!b || !b->nonretain_sum_param_mask || b->type.kind != TY_FN ||
         !effect_row_is_empty(b->type.as.fn.effect_row))

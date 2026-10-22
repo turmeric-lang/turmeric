@@ -2793,6 +2793,7 @@ void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     e->cap_macros = 0;
     /* Phase M0: Module system */
     e->sym_defmodule = intern_cstr(st, "defmodule");
+    e->sym_defscript = intern_cstr(st, "defscript");
     e->sym_export = intern_cstr(st, "export");
     e->sym_export_from = intern_cstr(st, "export-from");
     e->sym_effect = intern_cstr(st, "effect");
@@ -3652,6 +3653,166 @@ const Binding *borrow_referent_binding(const Expr *e) {
         default:
             return NULL;
     }
+}
+
+/* borrow-checks-gaps: the local binding whose own storage a borrow's place
+ * names -- `x` for `x`, `(.f x)` and `(.g (.f x))` -- or NULL when the place is
+ * not inside a local's storage: a global, a deref, a call result, or a field
+ * reached through an rc, a `:heap` pointer or a borrow, all of which are
+ * interior-mutable (elab_set_field's rule).  A `let`-held borrow of such a
+ * place records this binding (Binding.borrow_of), and `&mut` asks it whether
+ * the place may be written at all. */
+const Binding *borrow_place_root(const Expr *place) {
+    while (place) {
+        if (place->kind == EX_ASCRIBE) { place = place->as.ascribe_.inner; continue; }
+        if (place->kind == EX_VAR) {
+            const Binding *b = place->as.var.binding;
+            if (!b || b->is_global) return NULL;
+            switch (b->type.kind) {
+                case TY_REF: case TY_REF_IMMUT: case TY_REF_MUT: case TY_RC:
+                case TY_PTR_VOID: case TY_WEAK:
+                    return NULL;
+                default: break;
+            }
+            if (type_is_heap_struct(b->type) || type_is_heap_adt(b->type))
+                return NULL;
+            return b;
+        }
+        if (place->kind == EX_GET_FIELD) {
+            const Expr *recv = place->as.get_field_.struct_expr;
+            if (!recv) return NULL;
+            if (recv->type.kind == TY_RC || type_is_heap_struct(recv->type) ||
+                type_is_heap_adt(recv->type))
+                return NULL;
+            place = recv;
+            continue;
+        }
+        return NULL;
+    }
+    return NULL;
+}
+
+/* The field indices from a place's root outward (`(.g (.f x))` -> f, g);
+ * the count, or -1 when the path is deeper than `cap`. */
+static int borrow_place_path(const Expr *place, uint32_t *out, int cap) {
+    uint32_t rev[32];
+    int n = 0;
+    while (place) {
+        if (place->kind == EX_ASCRIBE) { place = place->as.ascribe_.inner; continue; }
+        if (place->kind != EX_GET_FIELD) break;
+        if (n >= 32 || n >= cap) return -1;
+        rev[n++] = place->as.get_field_.field_idx;
+        place = place->as.get_field_.struct_expr;
+    }
+    for (int i = 0; i < n; i++) out[i] = rev[n - 1 - i];
+    return n;
+}
+
+/* Whether the field paths of two places rooted at the same binding overlap:
+ * one is a prefix of the other (`x` overlaps every place in `x`; `(.a s)`
+ * does not overlap `(.b s)`). */
+static bool borrow_places_overlap(const Expr *a, const Expr *b) {
+    uint32_t pa[32], pb[32];
+    int na = borrow_place_path(a, pa, 32), nb = borrow_place_path(b, pb, 32);
+    if (na < 0 || nb < 0) return true;
+    int m = na < nb ? na : nb, k = 0;
+    while (k < m && pa[k] == pb[k]) k++;
+    return k == m;
+}
+
+/* Whether `b` is bound inside the function body being elaborated, rather than
+ * captured from an enclosing one. */
+static bool borrow_holder_is_local(const Elab *e, const Binding *b) {
+    for (const Scope *cur = e->scope; cur && cur != e->fn_entry_outer_scope; cur = cur->parent)
+        for (uint32_t i = 0; i < cur->n; i++)
+            if (cur->bindings[i] == b) return true;
+    return false;
+}
+
+void elab_borrow_note_use(Elab *e, Binding *b) {
+    if (!b || !b->borrow_of || b->borrow_last_use == UINT64_MAX) return;
+    /* A closure that captures the borrow keeps it for as long as the closure
+     * lives, which program order cannot bound. */
+    b->borrow_last_use = borrow_holder_is_local(e, b) ? ++e->borrow_clock : UINT64_MAX;
+}
+
+void elab_borrow_loop_push(Elab *e) {
+    if (e->n_borrow_loop_marks == e->cap_borrow_loop_marks) {
+        e->cap_borrow_loop_marks = e->cap_borrow_loop_marks ? e->cap_borrow_loop_marks * 2 : 8;
+        e->borrow_loop_marks = (uint64_t *)realloc(e->borrow_loop_marks,
+            e->cap_borrow_loop_marks * sizeof(uint64_t));
+        if (!e->borrow_loop_marks) { fprintf(stderr, "tur: oom\n"); abort(); }
+    }
+    e->borrow_loop_marks[e->n_borrow_loop_marks++] = ++e->borrow_clock;
+}
+
+void elab_borrow_loop_pop(Elab *e) {
+    if (e->n_borrow_loop_marks) e->n_borrow_loop_marks--;
+}
+
+/* borrow-checks-gaps: N readers XOR 1 writer, for an assignment to `place`
+ * while a `let` holds a borrow of an overlapping place.  The holder must be
+ * LIVE at the write -- used after it -- so a borrow the body is done with
+ * (`(let [b (& acc)] (use b) (set! acc 1))`) does not block the write; the
+ * scope rule the borrow tracker uses for taking a second borrow would refuse
+ * that.  Program order stands in for liveness, with two widenings: a use
+ * earlier in a `while` that began after the holder was bound runs again after
+ * the write, and a holder a closure captured is live for good.  A refusal
+ * that depends on uses still to come waits in Elab.borrow_pending until the
+ * holder's `let` ends.  Returns false when the write is refused now. */
+bool elab_borrow_check_write(Elab *e, const Expr *place, Span span, const char *what) {
+    const Binding *root = borrow_place_root(place);
+    if (!root) return true;
+    for (const Scope *cur = e->scope; cur && cur->parent; cur = cur->parent) {
+        for (uint32_t i = cur->n; i-- > 0;) {
+            const Binding *h = cur->bindings[i];
+            if (!h || h->borrow_of != root || !borrow_places_overlap(place, h->borrow_place))
+                continue;
+            bool live_now = h->borrow_last_use == UINT64_MAX;
+            for (uint32_t k = 0; k < e->n_borrow_loop_marks && !live_now; k++) {
+                uint64_t mark = e->borrow_loop_marks[k];
+                if (mark > h->borrow_bound_at && h->borrow_last_use > mark) live_now = true;
+            }
+            if (live_now) {
+                diag_emit(DIAG_ERROR, span, "cannot assign to %s while it is borrowed by `%s`",
+                          what, h->name->name);
+                return false;
+            }
+            if (e->n_borrow_pending == e->cap_borrow_pending) {
+                e->cap_borrow_pending = e->cap_borrow_pending ? e->cap_borrow_pending * 2 : 8;
+                e->borrow_pending = (BorrowPendingWrite *)realloc(e->borrow_pending,
+                    e->cap_borrow_pending * sizeof(BorrowPendingWrite));
+                if (!e->borrow_pending) { fprintf(stderr, "tur: oom\n"); abort(); }
+            }
+            BorrowPendingWrite *w = &e->borrow_pending[e->n_borrow_pending++];
+            w->holder = h;
+            w->at = ++e->borrow_clock;
+            w->span = span;
+            w->what = what;
+        }
+    }
+    return true;
+}
+
+/* Settle the pending writes whose holder is one of `holders` (a `let`'s own
+ * bindings, at its end): refused if the holder was used after the write.
+ * True when one was refused. */
+bool elab_borrow_pending_flush(Elab *e, Binding *const *holders, uint32_t n, bool report) {
+    uint32_t keep = 0;
+    bool refused = false;
+    for (uint32_t i = 0; i < e->n_borrow_pending; i++) {
+        BorrowPendingWrite *w = &e->borrow_pending[i];
+        bool mine = false;
+        for (uint32_t k = 0; k < n && !mine; k++) mine = holders[k] == w->holder;
+        if (!mine) { e->borrow_pending[keep++] = *w; continue; }
+        if (report && w->holder->borrow_last_use > w->at) {
+            diag_emit(DIAG_ERROR, w->span, "cannot assign to %s while it is borrowed by `%s`",
+                      w->what, w->holder->name->name);
+            refused = true;
+        }
+    }
+    e->n_borrow_pending = keep;
+    return refused;
 }
 
 Binding *expr_closure_fn_binding(const Expr *expr) {

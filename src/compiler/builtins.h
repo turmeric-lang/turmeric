@@ -67,6 +67,13 @@ struct BuiltinSpec {
  * name rather than a spec (a Saffron EX_DYN_OP). */
 const char *builtin_effect_for_name(const char *name);
 
+/* Is `spec` one of the unsafe primitives (`ptr-*`, `raw-*`, the unchecked
+ * array ops, the casts, `dlopen` / `dlsym` / `dlclose`) -- the builtins
+ * elab_unsafe.c refuses outside an `(unsafe ...)` block or an `#fx{Unsafe}`
+ * function?  The effect pass reads it so such a function's annotation does
+ * not count as over-annotated (TUR-W0031). */
+bool builtin_requires_unsafe(const BuiltinSpec *spec);
+
 /* One-time setup. Interns the names of every builtin into `st`. */
 void builtins_init(SymbolTable *st);
 
