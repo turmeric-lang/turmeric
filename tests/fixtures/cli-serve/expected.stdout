@@ -25,7 +25,7 @@ quiet log lines: 0
 Serving . on http://127.0.0.1:PORT/ (Ctrl-C to stop)
 serve --frob -> exit 2 (tur serve: unknown flag: --frob)
 serve -p 70000 -> exit 2 (tur serve: --port takes a number from 0 to 65535)
-serve TMP/missing -> exit 2 (tur serve: not a directory: TMP/missing)
+serve no-such-dir -> exit 2 (tur serve: not a directory: no-such-dir)
 serve a b -> exit 2 (tur serve: expected at most one directory)
 serve --bind nope -> exit 2 (tur serve: --bind takes any, localhost, or a numeric address)
 Usage: tur serve [dir] [options]

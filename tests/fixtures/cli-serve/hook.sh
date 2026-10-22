@@ -97,7 +97,7 @@ sed -E 's|:[0-9]+/|:PORT/|' "$TMP/serve.out"
 stop
 
 # Usage errors exit 2 without starting a server.
-for args in "--frob" "-p 70000" "$TMP/missing" "a b" "--bind nope"; do
+for args in "--frob" "-p 70000" "no-such-dir" "a b" "--bind nope"; do
     # shellcheck disable=SC2086
     "$TUR_ABS" serve $args > /dev/null 2> "$TMP/err"
     rc=$?
