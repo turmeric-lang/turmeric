@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/turmeric-lang/turmeric/actions/workflows/ci.yml/badge.svg)](https://github.com/turmeric-lang/turmeric/actions/workflows/ci.yml)
 
-**Latest release:** `v0.68.0` -- New OS stdlib surface (symlinks, permissions, dates, blocking TCP, signals), typed `ptr<T>`/`rc<T>` target checking at calls and returns, and a retired `upgrade` in favor of `weak/upgrade`.
+**Latest release:** `v0.69.0` -- The interpreter and REPL now run the whole `fs` stdlib, an uncaught compiled panic fires every frame's `defer`s on its way out, and `discontinue` lands behind `--enable=discontinue`.
 
 ## What
 
