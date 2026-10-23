@@ -2876,6 +2876,38 @@ static bool handle_case_ok_rec(const CTerm *t) {
             for (uint32_t i = 0; i < t->as.perform.n; i++)
                 if (!atom_ok(&t->as.perform.args[i])) return false;
             return handle_case_ok_rec(t->as.perform.body);
+        case CT_HANDLE: {
+            /* shallow-clause-handle-around-resume-not-lowered: a `handle` in a
+             * case, in tail position, whose handled body is the case's own
+             * resume -- `(Ask [] k) (handle (resume k 1) (Ask [] k2) ...)`,
+             * the shape `handle-shallow` exists for.  The case resumes into the
+             * chain (case_resumes_into sees the resume in the handle's body),
+             * so it runs with the real enclosing chain as `__kont`; emit_handle
+             * installs the group on it and the resume splices the continuation
+             * in under the group (dk_resume_into onto `__h<N>`), so an effect
+             * the resumed body performs finds this handle first.  The inner
+             * cases are ordinary handler cases. */
+            const CTerm *hb = t->as.handle.body;
+            if (t->as.handle.dyn || !hb || hb->kind != CT_APPCONT
+                || hb->as.appcont.kont.kind != KK_PROMPT
+                || hb->as.appcont.v.kind != CA_CVAR
+                || hb->as.appcont.v.cvar_id != t->as.handle.x.id)
+                return false;
+            if (!(slot_ok_t(t->as.handle.x.type, t->as.handle.x.ty) || t->as.handle.x.ty == TY_NIL))
+                return false;
+            if (!handle_case_ok_rec(t->as.handle.delim)) return false;
+            for (uint32_t ci = 0; ci < t->as.handle.n_cases; ci++) {
+                const CHandleCase *c = &t->as.handle.cases[ci];
+                CapSet ccs;
+                if (c->n_params > 1)
+                    for (uint32_t pi = 0; pi < c->n_params; pi++)
+                        if (!slot_ok_t(&c->params[pi]->type, c->params[pi]->type.kind))
+                            return false;
+                if (!handle_case_ok(c->case_body) || !collect_caps_case(c->case_body, c, &ccs))
+                    return false;
+            }
+            return true;
+        }
         default: return false;
     }
 }
@@ -11065,6 +11097,11 @@ static bool term_resumes_k_any(const CTerm *t, const Binding *k) {
             case CT_LETCALL: t = t->as.letcall.body; break;
             case CT_LETRAW:  t = t->as.letraw.body;  break;
             case CT_CALLCC:  t = t->as.callcc.body;  break;
+            case CT_HANDLE:
+                /* A resume in a handle the case installs around it
+                 * (handle_case_ok_rec's CT_HANDLE). */
+                if (term_resumes_k_any(t->as.handle.delim, k)) return true;
+                t = t->as.handle.body; break;
             case CT_IF:
                 return term_resumes_k_any(t->as.if_.then_, k)
                     || term_resumes_k_any(t->as.if_.else_, k);

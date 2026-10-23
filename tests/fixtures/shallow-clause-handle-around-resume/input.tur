@@ -1,0 +1,33 @@
+;; shallow-clause-handle-around-resume-not-lowered: a `handle` written around
+;; `(resume k ...)` in a handler clause -- the shape `handle-shallow` is for:
+;; the clause chooses what handles the rest of the body.  Compiled, the clause
+;; was refused ("no lowering here" on every perform), and both engines warned
+;; TUR-W0033 that the inner clause was unreachable.  The clause now resumes
+;; into the chain under the inner handler (dk_resume_into onto its group).
+(defeffect Ask [] : int)
+(defeffect Log [n : int] : nil)
+(defn two-asks [] : int
+  (+ (perform (Ask)) (* 10 (perform (Ask)))))
+(defn three-asks [] : int
+  (+ (perform (Ask)) (* 10 (perform (Ask))) (* 100 (perform (Ask)))))
+(defn ask-then-log [] : int
+  (let [a (perform (Ask))]
+    (perform (Log a))
+    (+ a 5)))
+(defn main [] : int
+  ;; the documented shape
+  (println (handle-shallow (two-asks)
+             (Ask [] k) (handle (resume k 1) (Ask [] k2) (resume k2 3))))
+  ;; the inner handle is deep: it answers every later Ask
+  (println (handle-shallow (three-asks)
+             (Ask [] k) (handle (resume k 1) (Ask [] k2) (resume k2 3))))
+  ;; the clause installs a handler for a different effect
+  (println (handle-shallow (ask-then-log)
+             (Ask [] k) (handle (resume k 7) (Log [n] k2) (do (println n) (resume k2 nil)))))
+  ;; a deep outer handle: its re-installed handler is nearer
+  (println (handle (two-asks)
+             (Ask [] k) (handle (resume k 1) (Ask [] k2) (resume k2 3))))
+  ;; the inner clause does work after its resume
+  (println (handle-shallow (three-asks)
+             (Ask [] k) (handle (resume k 1) (Ask [] k2) (+ 1 (resume k2 3)))))
+  0)

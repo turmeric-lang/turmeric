@@ -1506,6 +1506,33 @@ static bool check_call_site_rows_visit(const Expr *c, void *ud) {
 typedef struct { Arena *a; FnIndex *idx; EffectEnv *env; } UnreachUd;
 static bool unreach_visit(const Expr *c, void *ud);
 
+/* shallow-clause-handle-around-resume-not-lowered: a clause's `k` stands for
+ * the rest of its handle's body, so a `handle` written around `(resume k v)`
+ * in the clause -- the shape `handle-shallow` is for -- handles what that rest
+ * performs.  While a clause body is checked, its `k` maps to the row of the
+ * body it continues; a nested handle's body that resumes such a `k` counts
+ * that row as performed. */
+typedef struct { const Binding *k; EffectRow *row; } KResumeRow;
+static KResumeRow g_kres[64];
+static int g_nkres;
+typedef struct { Arena *a; EffectRow *row; } KResumeUd;
+static bool kres_visit(const Expr *c, void *ud) {
+    KResumeUd *u = (KResumeUd *)ud;
+    if (c->kind == EX_RESUME && c->as.resume_.resume && c->as.resume_.resume->k) {
+        const Expr *k = c->as.resume_.resume->k;
+        while (k && k->kind == EX_ASCRIBE) k = k->as.ascribe_.inner;
+        if (k && k->kind == EX_VAR)
+            for (int i = g_nkres - 1; i >= 0; i--)
+                if (g_kres[i].k == k->as.var.binding) {
+                    u->row = effect_row_merge(u->a, u->row, g_kres[i].row);
+                    break;
+                }
+    }
+    if (c->kind == EX_FN || c->kind == EX_CLOSURE) return false;  /* latent */
+    cps_visit_children(c, kres_visit, ud);
+    return false;
+}
+
 /* ---------------------------------------------------------------------------
  * ET1-C: check_unreachable_handlers_in_expr
  * Walk an expression tree; for each EX_HANDLE, recompute the body's inferred
@@ -1542,6 +1569,11 @@ static void check_unreachable_handlers_in_expr(
          * that merely prints look reachable. */
         EffectRow *body_row = effect_row_without_capabilities(a,
             collect_effects_in_expr(a, h->body, effect_row_empty(a), idx, env, subst));
+        if (g_nkres > 0) {
+            KResumeUd ku = { a, body_row };
+            kres_visit(h->body, &ku);
+            body_row = ku.row;
+        }
         bool none_reachable = h->n_cases > 0;
         for (uint8_t i = 0; i < h->n_cases; i++) {
             const Symbol *eff_name = h->cases[i].effect_name;
@@ -1561,8 +1593,12 @@ static void check_unreachable_handlers_in_expr(
         }
         h->no_clause_reachable = none_reachable;
         check_unreachable_handlers_in_expr(a, h->body, idx, env);
-        for (uint8_t i = 0; i < h->n_cases; i++)
+        for (uint8_t i = 0; i < h->n_cases; i++) {
+            bool pushed = h->cases[i].k_binding && g_nkres < (int)(sizeof g_kres / sizeof g_kres[0]);
+            if (pushed) g_kres[g_nkres++] = (KResumeRow){ h->cases[i].k_binding, body_row };
             check_unreachable_handlers_in_expr(a, h->cases[i].body, idx, env);
+            if (pushed) g_nkres--;
+        }
         return;
     }
     case EX_LET:

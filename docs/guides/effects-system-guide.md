@@ -158,9 +158,11 @@ defn main [] : int
 Because the body can still perform the effect after a shallow handler has gone,
 `handle-shallow` does not remove the effect from the enclosing function's row: a
 function declared `#fx{}` that handles only shallowly is TUR-E0009. A clause can
-also choose what answers the rest by wrapping its `resume` in another `handle`;
-the interpreter runs that today, and the compiled backend refuses it
-([shallow-clause-handle-around-resume-not-lowered](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/shallow-clause-handle-around-resume-not-lowered.md)).
+also choose what answers the rest by wrapping its `resume` in another `handle`:
+`(handle-shallow (two-asks) (Ask [] k) (handle (resume k 1) (Ask [] k2) (resume k2 3)))`
+is 31 on every engine. Compiled, that `handle` must be the clause's last form,
+with the `resume` as its body
+([shallow-clause-handle-around-resume-not-lowered](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/shallow-clause-handle-around-resume-not-lowered.md)).
 
 ### Properties
 
