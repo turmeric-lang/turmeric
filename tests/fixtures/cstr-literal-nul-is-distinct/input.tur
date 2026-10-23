@@ -1,0 +1,8 @@
+;; string-literal-interning-plan: the per-unit literal table is keyed on the
+;; bytes AND the length, so "a\0b" is not folded into "a" (its C-string
+;; prefix), and two "a\0b" are still one object.
+(defn main [] : int
+  (println (if (= (:: "a\0b" :int) (:: "a" :int)) 1 0))
+  (println (if (= (:: "a\0b" :int) (:: "a\0b" :int)) 1 0))
+  (println (if (= (:: "a" :int) (:: "a" :int)) 1 0))
+  0)

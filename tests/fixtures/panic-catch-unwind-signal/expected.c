@@ -6032,6 +6032,14 @@ static inline void tur_panic_sited(const char *msg) {
     if (s) tur_panic_at(s->file, s->line, msg); else tur_panic(msg);
 }
 
+/* string-literal-interning-plan: one object per distinct literal. */
+static const char __tur_str_0[] __attribute__((unused)) = "schema-decode!: validation failed";
+static const char __tur_str_1[] __attribute__((unused)) = "boom";
+static const char __tur_str_2[] __attribute__((unused)) = "caught";
+static const char __tur_str_3[] __attribute__((unused)) = "no";
+static const char __tur_str_4[] __attribute__((unused)) = "ok";
+static const char __tur_str_5[] __attribute__((unused)) = "err";
+
 typedef struct tur_adt_Map {
     void * hamt;
 } tur_adt_Map;
@@ -10911,7 +10919,7 @@ static int64_t schema_hydecode_hyabort(int64_t errs) {
         int64_t __ps_188 = (schema_hydecode_hyreport(errs));
         if (tur_panicking) return ((int64_t)0);
         (void)(__ps_188);
-        tur_panic_at_site("schema.tur", 1071, "schema-decode!: validation failed");
+        tur_panic_at_site("schema.tur", 1071, __tur_str_0);
         if (tur_panicking) return ((int64_t)0);
         return ((int64_t)0);
 }
@@ -11099,7 +11107,7 @@ static int64_t with_hyregion(int64_t body) {
 static int64_t deep_hypanic(int64_t n) {
         int64_t __t204;
         if ((n) == (INT64_C(0))) {
-            tur_panic_at_site("input.tur", 9, "boom");
+            tur_panic_at_site("input.tur", 9, __tur_str_1);
             if (tur_panicking) return ((int64_t)0);
             __t204 = ((int64_t)0);
         } else {
@@ -11141,9 +11149,9 @@ int main(int argc, char **argv) {
             bool __ps_210 = (err_qu(caught_7));
             if (tur_panicking) { tur_panic_root_exit(); }
             if (__ps_210) {
-                puts("caught");
+                puts(__tur_str_2);
             } else {
-                puts("no");
+                puts(__tur_str_3);
             }
             tur_result_box_free((int64_t)(intptr_t)caught_7);
         }
@@ -11161,9 +11169,9 @@ int main(int argc, char **argv) {
             bool __ps_215 = (ok_qu(ok_10));
             if (tur_panicking) { tur_panic_root_exit(); }
             if (__ps_215) {
-                puts("ok");
+                puts(__tur_str_4);
             } else {
-                puts("err");
+                puts(__tur_str_5);
             }
             tur_result_box_free((int64_t)(intptr_t)ok_10);
         }

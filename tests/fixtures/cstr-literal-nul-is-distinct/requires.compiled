@@ -1,0 +1,4 @@
+Interpreted, `(:: "a\0b" :int)` is the string itself, not an address
+(type-forms-gaps), and `=` compares it as a C string, which stops at the NUL --
+so the interpreter answers 1 for "a\0b" against "a".  What this pins is the
+emitted C's literal table.

@@ -6032,6 +6032,18 @@ static inline void tur_panic_sited(const char *msg) {
     if (s) tur_panic_at(s->file, s->line, msg); else tur_panic(msg);
 }
 
+/* string-literal-interning-plan: one object per distinct literal. */
+static const char __tur_str_0[] __attribute__((unused)) = "boom";
+static const char __tur_str_1[] __attribute__((unused)) = "schema-decode!: validation failed";
+static const char __tur_str_2[] __attribute__((unused)) = "if-ok";
+static const char __tur_str_3[] __attribute__((unused)) = "if-err";
+static const char __tur_str_4[] __attribute__((unused)) = "if-ok2";
+static const char __tur_str_5[] __attribute__((unused)) = "if-err2";
+static const char __tur_str_6[] __attribute__((unused)) = "match-ok";
+static const char __tur_str_7[] __attribute__((unused)) = "match-err";
+static const char __tur_str_8[] __attribute__((unused)) = "caught-err";
+static const char __tur_str_9[] __attribute__((unused)) = "caught-ok";
+
 typedef struct tur_adt_Map {
     void * hamt;
 } tur_adt_Map;
@@ -8158,7 +8170,7 @@ static int64_t __fn_17(void) {
 }
 
 static int64_t __fn_20(void) {
-        tur_panic_at_site("input.tur", 21, "boom");
+        tur_panic_at_site("input.tur", 21, __tur_str_0);
         if (tur_panicking) return ((int64_t)0);
         return ((int64_t)0);
 }
@@ -10962,7 +10974,7 @@ static int64_t schema_hydecode_hyabort(int64_t errs) {
         int64_t __ps_186 = (schema_hydecode_hyreport(errs));
         if (tur_panicking) return ((int64_t)0);
         (void)(__ps_186);
-        tur_panic_at_site("schema.tur", 1071, "schema-decode!: validation failed");
+        tur_panic_at_site("schema.tur", 1071, __tur_str_1);
         if (tur_panicking) return ((int64_t)0);
         return ((int64_t)0);
 }
@@ -11311,7 +11323,7 @@ static tur_adt_Result__int__int make_hyif_hycaught(int64_t c) {
            }
           }
           case 2: {
-           tur_panic_at_site("input.tur", 21, "boom");
+           tur_panic_at_site("input.tur", 21, __tur_str_0);
            break;
           }
           case 3: {
@@ -11374,9 +11386,9 @@ int main(int argc, char **argv) {
             bool __ps_222 = (ok___spec__bool_tur_adt_Result__int__int(a_24));
             if (tur_panicking) { tur_panic_root_exit(); }
             if (__ps_222) {
-                puts("if-ok");
+                puts(__tur_str_2);
             } else {
-                puts("if-err");
+                puts(__tur_str_3);
             }
         }
         {
@@ -11387,9 +11399,9 @@ int main(int argc, char **argv) {
             bool __ps_224 = (ok___spec__bool_tur_adt_Result__int__int(b_25));
             if (tur_panicking) { tur_panic_root_exit(); }
             if (__ps_224) {
-                puts("if-ok2");
+                puts(__tur_str_4);
             } else {
-                puts("if-err2");
+                puts(__tur_str_5);
             }
         }
         {
@@ -11402,9 +11414,9 @@ int main(int argc, char **argv) {
             bool __ps_227 = (ok___spec__bool_tur_adt_Result__int__int(m_26));
             if (tur_panicking) { tur_panic_root_exit(); }
             if (__ps_227) {
-                puts("match-ok");
+                puts(__tur_str_6);
             } else {
-                puts("match-err");
+                puts(__tur_str_7);
             }
         }
         {
@@ -11415,9 +11427,9 @@ int main(int argc, char **argv) {
             bool __ps_229 = (err___spec__bool_tur_adt_Result__int__int(d_27));
             if (tur_panicking) { tur_panic_root_exit(); }
             if (__ps_229) {
-                puts("caught-err");
+                puts(__tur_str_8);
             } else {
-                puts("caught-ok");
+                puts(__tur_str_9);
             }
         }
         int64_t __t230;

@@ -5307,14 +5307,100 @@ char *atom_var(EmitCtx *ctx, const Binding *b) {
     }
     return nm;
 }
+/* ============================================================================
+ * string-literal-interning-plan: one object per distinct string literal in a
+ * unit.
+ *
+ * A literal written inline at each use leaves "are these two identical
+ * literals one object?" to the C compiler: gcc merges them within a unit,
+ * c2mir does not, and an erasing `(:: "x" :int)` hands the address to the
+ * program -- so `tur run` and `tur jit` answered differently
+ * (cstr-literal-address-differs-by-engine).  Instead each distinct text gets
+ * one `static const char __tur_str_<N>[]` in the unit's literal band and every
+ * use names it, the way SYM1 does for keywords.
+ *
+ * Keyed on (bytes, length), so "a\0b" and "a" are two literals: the array is
+ * initialized from emit_c_string's spelling, which writes a NUL as `\000`, so
+ * the array holds every byte plus the terminator.  The guarantee is per unit;
+ * across units (separate compilation, a split build) two units' literals stay
+ * two objects, as they are under gcc without LTO.
+ * ============================================================================
+ */
+typedef struct CstrRecord {
+    char     *bytes;   /* malloc'd copy of the literal's bytes */
+    uint32_t  len;     /* byte length (the text may hold a NUL) */
+    char     *cid;     /* "__tur_str_<N>" */
+} CstrRecord;
+
+static CstrRecord *g_cstr_records;
+static uint32_t    g_n_cstr_records, g_cap_cstr_records;
+
+void cstr_codegen_reset(void) {
+    for (uint32_t i = 0; i < g_n_cstr_records; i++) {
+        free(g_cstr_records[i].bytes);
+        free(g_cstr_records[i].cid);
+    }
+    free(g_cstr_records);
+    g_cstr_records = NULL;
+    g_n_cstr_records = g_cap_cstr_records = 0;
+}
+
+const char *cstr_codegen_register(const char *text, size_t len) {
+    for (uint32_t i = 0; i < g_n_cstr_records; i++) {
+        CstrRecord *r = &g_cstr_records[i];
+        if (r->len == len && (len == 0 || memcmp(r->bytes, text, len) == 0))
+            return r->cid;
+    }
+    if (g_n_cstr_records == g_cap_cstr_records) {
+        uint32_t nc = g_cap_cstr_records ? g_cap_cstr_records * 2 : 16;
+        CstrRecord *nr = (CstrRecord *)realloc(g_cstr_records, nc * sizeof(CstrRecord));
+        if (!nr) { fprintf(stderr, "tur: oom\n"); abort(); }
+        g_cstr_records = nr;
+        g_cap_cstr_records = nc;
+    }
+    CstrRecord *r = &g_cstr_records[g_n_cstr_records];
+    r->bytes = (char *)malloc(len ? len : 1);
+    if (!r->bytes) { fprintf(stderr, "tur: oom\n"); abort(); }
+    if (len) memcpy(r->bytes, text, len);
+    r->len = (uint32_t)len;
+    char cid[32];
+    snprintf(cid, sizeof cid, "__tur_str_%u", (unsigned)g_n_cstr_records);
+    r->cid = strdup(cid);
+    g_n_cstr_records++;
+    return r->cid;
+}
+
+/* Write the unit's literal band into `out` at byte offset `at` (recorded
+ * where the band belongs, before anything that can name a literal).  Run once
+ * the whole unit is written, so a literal registered by a late emitter -- the
+ * CPS group flush, main's body -- is in it too.  `unused`: a body emitted
+ * speculatively and thrown away can leave a record nothing names, which
+ * -Wall's -Wunused-const-variable would report. */
+void cstr_codegen_splice(Buf *out, size_t at) {
+    if (g_n_cstr_records == 0) return;
+    if (at > out->len) at = out->len;
+    Buf band; buf_init(&band);
+    buf_puts(&band, "/* string-literal-interning-plan: one object per distinct literal. */\n");
+    for (uint32_t i = 0; i < g_n_cstr_records; i++) {
+        CstrRecord *r = &g_cstr_records[i];
+        buf_printf(&band, "static const char %s[] __attribute__((unused)) = ", r->cid);
+        emit_c_string(&band, strslice(r->bytes, r->len));
+        buf_puts(&band, ";\n");
+    }
+    buf_putc(&band, '\n');
+    size_t tail_len = out->len - at;
+    char *tail = (char *)malloc(tail_len + 1);
+    if (!tail) { fprintf(stderr, "tur: oom\n"); abort(); }
+    memcpy(tail, out->data + at, tail_len);
+    buf_truncate(out, at);
+    buf_write(out, band.data, band.len);
+    buf_write(out, tail, tail_len);
+    free(tail);
+    buf_free(&band);
+}
+
 char *atom_cstr(StrSlice s) {
-    /* Build into a Buf, then strdup out. */
-    Buf b; buf_init(&b);
-    emit_c_string(&b, s);
-    buf_putc(&b, '\0');
-    char *p = strdup(b.data);
-    buf_free(&b);
-    return p;
+    return strdup(cstr_codegen_register(s.p, s.len));
 }
 
 /* Phase G: scan an inline-C body for __TUR_TY_<NAME>__ template markers.

@@ -191,10 +191,10 @@ cstr-eq?(":user/name" ":user/name")   ; => true
 
 `=` has no `cstr` overload at all, so `(= a b)` on two strings is a
 `TUR-E0006` operator-lookup error rather than a comparison. Do not reach for a
-string's address as a cheap identity either: whether two identical string
-literals share one address is up to the C compiler, and the JIT does not merge
-them, so a lookup keyed that way finds its facts compiled and nothing under
-`tur jit` (see the [jit-guide](jit-guide.md#two-identical-string-literals-are-two-objects)).
+string's address as a cheap identity either: two identical string literals
+are one object only within one unit, and a string read or built at run time is
+never one of them, so a lookup keyed that way misses facts whose names did not
+come from the same literal (see the [jit-guide](jit-guide.md#a-string-literal-is-one-object-per-unit-not-across-units)).
 
 ---
 
