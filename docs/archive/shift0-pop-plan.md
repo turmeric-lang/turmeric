@@ -1,11 +1,9 @@
 # Plan: `shift0` removes the reset it captured to
 
-> **Status:** PROPOSED 2026-10-21 (from continuation-forms-gaps item 1; the
-> request was to implement it unless it is a large amount of work). Feasibility
-> investigated the same day: **small** on its own -- two local changes, below --
-> but the observable cases needed
-> [compiled-shift-delimited-by-root](../archive/compiled-shift-delimited-by-root.md)
-> fixed first (resolved 2026-10-22). Not started.
+> **Status:** DONE 2026-10-23 -- see Resolution at the end. Proposed
+> 2026-10-21 (from continuation-forms-gaps item 1); the observable cases needed
+> [compiled-shift-delimited-by-root](compiled-shift-delimited-by-root.md)
+> fixed first (resolved 2026-10-22).
 
 ## The semantics
 
@@ -72,3 +70,42 @@ whose receiver shifts (the interpreter's `shift used outside of any reset
 boundary`, and the compiled error once the root-delimiting report is fixed).
 Update the "Status" note in delimited-control-operators-guide and the `shift0`
 entry in `stdlib/forms/continuations.tur`.
+
+## Resolution (2026-10-23)
+
+Changes 1 and 2 as planned; 3 needed nothing more once the root-delimiting fix
+was in; 4 stays out of scope.
+
+1. **Interpreter.** `TuriResetBoundary` carries a `hidden` flag that
+   `reset_find` skips. A `shift0` finds its boundary before applying the
+   receiver, hides it while `f(x)` runs, and puts it back whatever way `f`
+   finished -- in `abortive_shift_resume`, which the driver calls for a value
+   and a signal alike, and after the `turi_call` on the synchronous
+   `eval_abortive_shift` path. It then aborts to that boundary.
+
+   **Every** abortive shift now aborts to the boundary it found
+   (`env->abort_target = b`), and `reset_consume_abort` takes a plain abort
+   that names it (or names none). The plan said this for `shift0`, but the
+   receiver's own `shift` needs it more: it finds the outer reset while the
+   inner one is hidden, and by the time its abort passes the inner reset's
+   `DK_RESET` that one is visible again, so an abort to "the nearest plain
+   reset" stopped there (nested `shift0`s showed it, 5100 for 5000).
+2. **Direct emitter.** `emit_effects_shift0`, in escape mode, pops
+   `tur_cur_shift_reset` around the receiver call and restores it before
+   `emit_shift_escape_abort`. A CPS callee's shift reached from the receiver
+   finds the outer landing (or none, and panics), via the root case
+   compiled-shift-delimited-by-root added.
+
+The plan's example is 5000 on `tur run`, `tur jit` and `tur --interpret`; its
+`shift` twin is 5100. Pinned by `shift0-receiver-runs-outside-its-reset` (the
+example and its twin, a receiver with no control, nested `shift0`s, a
+receiver's own reset, a CPS callee's shift reached from the receiver, a float
+result) and `shift0-receiver-shift-without-outer-reset-panics` (`shift used
+outside of any reset boundary` on both engines).
+
+**Not covered:** a `shift0` (or `shift`) in an evicted function whose `reset`
+is in a caller. The direct emitter makes a shift abortive only when a reset
+encloses it lexically, so there the receiver runs with the caller's reset in
+place -- and, independent of this plan, the shift's value flows on as an
+ordinary value. Filed as
+[direct-shift-outside-lexical-reset-not-abortive](../reported/direct-shift-outside-lexical-reset-not-abortive.md).
