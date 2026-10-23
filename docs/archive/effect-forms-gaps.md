@@ -7,7 +7,7 @@
 - Item 1 (`discontinue` runs on neither engine): decision -- keep it and
   implement it on both engines. Plan: [discontinue-plan](../upcoming/discontinue-plan.md).
 - Items 2-3 and the composed-handler note: decided and planned in
-  [effect-continuation-followups-plan](../upcoming/effect-continuation-followups-plan.md).
+  [effect-continuation-followups-plan](effect-continuation-followups-plan.md).
 - Everything else: resolved, see
   [effect-handler-forms-top-level-resume-compose](effect-handler-forms-top-level-resume-compose.md).
 
@@ -104,7 +104,7 @@ resuming, covers the rest.
 ## Items 2-3 and the composed-handler note: moved to a plan
 
 Decided 2026-10-21 and planned in
-[effect-continuation-followups-plan](../upcoming/effect-continuation-followups-plan.md):
+[effect-continuation-followups-plan](effect-continuation-followups-plan.md):
 `cont?` of a `^multishot` k is true after a resume; the compiled unhandled-effect
 error names the effect (the perform site passes its own name, since a separately
 compiled build never lets a perform reach another unit's handler); a composed

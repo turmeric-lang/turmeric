@@ -1055,6 +1055,10 @@ typedef struct Type {
              * when the yielded value is typed with one (element_kind is then
              * TY_TYVAR), so gen-unwrap can type its read `A`. */
             const char *element_tyvar;
+            /* generator-type-plan: the full element type -- a struct or ADT
+             * yield, or the `T` of a `(Generator T)` annotation.  NULL when
+             * nothing recorded one (element_kind alone is then all there is). */
+            const struct Type *element;
         } generator_;
     } as;
 } Type;
@@ -1111,6 +1115,8 @@ static inline TypeKind any_box_tag_for_type(const Type *t) {
  * Wraps the declared value type.  Only stored in DynVarEntry during elaboration;
  * user-visible expressions have the value type directly. */
 Type type_dynvar(Arena *a, Type value_type);
+/* generator-type-plan: `(Generator T)` -- a generator yielding `elem`. */
+Type type_generator(Arena *a, Type elem);
 
 /* Helper to check if a type has lifetime annotations */
 static inline bool type_has_lifetime(Type t) {

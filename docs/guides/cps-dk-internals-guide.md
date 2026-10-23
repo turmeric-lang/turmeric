@@ -578,7 +578,7 @@ static int64_t add_hyask__cps(int64_t x, DK *__kont) {
     add_hyask_pf0_env *__pfe0 = malloc(sizeof(add_hyask_pf0_env));
     __pfe0->f0 = x;
     __dk_reap_ptr((intptr_t)__pfe0);
-    return dk_perform(2, (intptr_t)(0),
+    return dk_perform(2, "Ask", (intptr_t)(0),
         __dk_reap_node(dk_env_sized(dk_frame_join(add_hyask_pf0, (intptr_t)__pfe0, __kont),
                                     sizeof(add_hyask_pf0_env))));
 }
@@ -616,7 +616,7 @@ Read it as:
    `dk_hgroup` stamps the run of case nodes with one group id. The handled body
    is then called with that chain as its continuation.
 2. **The perform pushes its own continuation** (`add_hyask_pf0`) and calls
-   `dk_perform(tag, arg, chain)`.
+   `dk_perform(tag, name, arg, chain)`.
 3. **The case resumes in tail position** with `dk_tail_resume`. That
    `longjmp`s to the driver, which runs the original chain:
    - `add_hyask_pf0` (`1 + 41`);
@@ -674,10 +674,12 @@ Read the `struct DK` comments in that text, or in its committed copy
   `reset` and discards the context in between, and `CT_SHIFT`'s body is
   exactly "apply the receiver to the value". A body that wants to keep `sub`
   must copy it.
-- **`dk_perform(tag, arg, k)`.**
+- **`dk_perform(tag, name, arg, k)`.**
   1. It walks from `k` to the first `DKK_HANDLER` with that tag, `H`. The
      search is by tag only; `hgroup` does not affect it. Reaching `DONE`
-     prints `unhandled effect (tag N)` and aborts.
+     prints `unhandled effect: Name (tag N)` and aborts. `name` is the
+     effect's name, a literal at the perform site; it is used only there,
+     since a tag is numbered per unit.
   2. It hands the case a continuation in one of four ways, cheapest first:
      1. **Tail, in place.** The case is `tail_inplace`, the handler is deep,
         and a driver is installed: the case gets the **original** `k`.

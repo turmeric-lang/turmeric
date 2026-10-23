@@ -3437,10 +3437,10 @@ __attribute__((unused)) static void __dk_escape_abandon(void *to_) {
         if (!__dk_pp_kept(p)) __dk_abort_abandon(p->k, p->H);
     g_dk_pend_perform = to;
 }
-static intptr_t dk_perform(int tag, intptr_t arg, DK *k) {
+static intptr_t dk_perform(int tag, const char *name, intptr_t arg, DK *k) {
     DK *H = k;
     while (H && !(H->kind == DKK_HANDLER && H->tag == tag) && H->kind != DKK_DONE) H = H->next;
-    if (!H || H->kind == DKK_DONE) { fprintf(stderr, "tur: unhandled effect (tag %d)\n", tag); abort(); }
+    if (!H || H->kind == DKK_DONE) { fflush(stdout); fprintf(stderr, "tur: unhandled effect: %s (tag %d)\n", name ? name : "?", tag); abort(); }
     if (H->tail_inplace && H->tail_resume && !H->shallow && g_dk_driver) {
         k->inplace_head = true;
         g_dk_case_reopen_hnode = H;

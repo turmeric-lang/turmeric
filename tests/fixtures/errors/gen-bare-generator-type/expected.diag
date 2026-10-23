@@ -1,0 +1,1 @@
+'generator' is not a type on its own: a generator type names what it yields -- write (Generator T)

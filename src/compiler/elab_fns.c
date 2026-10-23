@@ -7732,6 +7732,16 @@ static Type *fn_type_from_form_impl(Elab *e, const Form *form,
             head == e->sym_role_type || head == e->sym_project_type) {
             return type_expr_from_form(e, form, NULL, type_params, type_param_kinds, n_type_params);
         }
+        /* generator-type-plan: (Generator T); the element resolves through
+         * this ladder like any type argument. */
+        if (elab_is_generator_type_head(e, head)) {
+            Type *el = form->as.list.len == 2
+                ? fn_type_from_form(e, form->as.list.items[1],
+                                    type_params, type_param_kinds, n_type_params)
+                : NULL;
+            if (form->as.list.len == 2 && !el) return NULL;
+            return elab_generator_type_from_form(e, form, el);
+        }
         bool has_pipe = false, has_amp = false;
         for (uint32_t i = 0; i < form->as.list.len; i++) {
             Form *item = form->as.list.items[i];
@@ -10505,6 +10515,8 @@ Expr *elab_defn(Elab *e, const Form *call) {
                     continue;
                 }
             }
+            /* generator-type-plan: `:generator` names no element. */
+            if (elab_reject_bare_generator_type(e, kw, p_eff->span)) return NULL;
             /* Phase N: use typekind_from_symbol to resolve all known type names
              * (including fixed-width numeric types) before falling through to the
              * type-variable path.  The fast-path checks below are kept for the

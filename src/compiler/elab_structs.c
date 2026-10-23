@@ -377,6 +377,10 @@ static Type *struct_field_type_from_form(Elab *e, const Form *form,
         if (head == e->sym_lref || head == e->sym_borrow_mut) {
             return type_expr_from_form(e, form, NULL, type_params, type_param_kinds, n_type_params);
         }
+        /* generator-type-plan: `(Generator T)` is TY_GENERATOR, not an
+         * application of a kind-* head. */
+        if (elab_is_generator_type_head(e, head))
+            return type_expr_from_form(e, form, NULL, type_params, type_param_kinds, n_type_params);
         /* assoc-types: `(Storage Pos)` where the head is an ASSOCIATED TYPE
          * member of some registered typeclass is a type-level projection, not
          * a type application.  type_expr_from_form has the resolver (it

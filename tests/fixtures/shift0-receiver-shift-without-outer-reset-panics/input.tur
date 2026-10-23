@@ -1,0 +1,9 @@
+;; shift0-pop-plan: `shift0` runs its receiver with its reset removed, so a
+;; shift in the receiver with no reset further out has none around it --
+;; `shift used outside of any reset boundary`, on both engines.  Before, the
+;; receiver ran inside the reset and the line printed 5000.
+(defn main [] : int
+  (println (reset (+ 10 (shift0 (fn [v : int] (* 2 v)) 5))))                                    ; 10
+  (println (reset (+ 10 (shift0 (fn [v : int] (shift (fn [w : int] (* 1000 w)) v)) 5))))        ; panics
+  (println "not reached")
+  0)

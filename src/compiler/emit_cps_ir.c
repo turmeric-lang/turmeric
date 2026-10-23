@@ -40,6 +40,8 @@ char *mangle_adt_name(const char *name);
 char *adt_field_member_path(const AdtDef *def, const CtorDef *ctor, uint32_t fi);
 /* S1/findings 16: ground-truth return-type lookup for cps->direct call temps. */
 const char *emit_sig_lookup_ret_ctype(const char *cname);
+/* The effect name a perform hands dk_perform, as a C string literal. */
+void emit_c_string(Buf *out, StrSlice s);
 
 /* True for a NULL or `{}` (ERK_EMPTY) effect row.  Used to distinguish a
  * provably effect-free `TY_FN` param (safe to delegate an indirect call
@@ -13668,6 +13670,14 @@ static bool perform_cont_trivial(const CTerm *t) {
 
 static void emit_perform(CE *ce, const CTerm *t) {
     int tag = effect_tag(t->as.perform.effect);
+    /* The effect's name rides along for the unhandled-effect abort only: a tag
+     * is numbered per unit, so the perform site is what can name it
+     * (effect-continuation-followups Part B). */
+    Buf enb; buf_init(&enb);
+    const Symbol *esym = t->as.perform.effect;
+    emit_c_string(&enb, (StrSlice){ .p = esym ? esym->name : "?", .len = esym ? esym->len : 1 });
+    buf_putc(&enb, '\0');
+    const char *en = enb.data;
     /* effect value word: a 0-arg effect passes 0; a 1-arg effect passes the arg's
      * slot value directly; a multi-arg effect (n>1) heap-packs each arg's slot
      * word into an `int64_t[n]` and passes the array pointer -- the handler case
@@ -13709,7 +13719,7 @@ static void emit_perform(CE *ce, const CTerm *t) {
     }
 
     if (perform_cont_trivial(t)) {
-        ce_line(ce, "return dk_perform(%d, %s, %s);", tag, sa, ce->cur_k);
+        ce_line(ce, "return dk_perform(%d, %s, %s, %s);", tag, en, sa, ce->cur_k);
     } else if (perform_body_ok(t->as.perform.body)) {
         int id = (*ce->helper_ctr)++;
         char pname[256];
@@ -13757,11 +13767,11 @@ static void emit_perform(CE *ce, const CTerm *t) {
              * boundary (__dk_reap_node: kind=0, a bare free that does not walk into
              * cur_k) -- reached on both the normal-return and the tail-resume-yield
              * paths -- exactly like the Track-B resume-frame sibling below. */
-            ce_line(ce, "return dk_perform(%d, %s, %s__dk_reap_node(dk_env_sized(dk_frame_join(%s, (intptr_t)%s, %s), sizeof(%s_env)))%s);",
-                    tag, sa, uw, pname, envv, ce->cur_k, pname, uwc);
+            ce_line(ce, "return dk_perform(%d, %s, %s, %s__dk_reap_node(dk_env_sized(dk_frame_join(%s, (intptr_t)%s, %s), sizeof(%s_env)))%s);",
+                    tag, en, sa, uw, pname, envv, ce->cur_k, pname, uwc);
         } else {
-            ce_line(ce, "return dk_perform(%d, %s, %s__dk_reap_node(dk_frame_join(%s, 0, %s))%s);",
-                    tag, sa, uw, pname, ce->cur_k, uwc);
+            ce_line(ce, "return dk_perform(%d, %s, %s, %s__dk_reap_node(dk_frame_join(%s, 0, %s))%s);",
+                    tag, en, sa, uw, pname, ce->cur_k, uwc);
         }
     } else {
         /* Track A: the continuation contains a NESTED control op (a further
@@ -13801,15 +13811,16 @@ static void emit_perform(CE *ce, const CTerm *t) {
          * structural-node reaping discipline (docs/archive/cps-resume-frame-node-leak.md,
          * docs/archive/cps-delimited-dk-node-leak.md). */
         if (caps)
-            ce_line(ce, "return dk_perform(%d, %s, %s__dk_reap_node(dk_env_sized(dk_frame_resume_join(%s, %s, %s), sizeof(%s_env)))%s);",
-                    tag, sa, uw, pname, envexpr, ce->cur_k, pname, uwc);
+            ce_line(ce, "return dk_perform(%d, %s, %s, %s__dk_reap_node(dk_env_sized(dk_frame_resume_join(%s, %s, %s), sizeof(%s_env)))%s);",
+                    tag, en, sa, uw, pname, envexpr, ce->cur_k, pname, uwc);
         else
-            ce_line(ce, "return dk_perform(%d, %s, %s__dk_reap_node(dk_frame_resume_join(%s, %s, %s))%s);",
-                    tag, sa, uw, pname, envexpr, ce->cur_k, uwc);
+            ce_line(ce, "return dk_perform(%d, %s, %s, %s__dk_reap_node(dk_frame_resume_join(%s, %s, %s))%s);",
+                    tag, en, sa, uw, pname, envexpr, ce->cur_k, uwc);
         free(envexpr);
     }
     free(sa);
     free(arg);
+    buf_free(&enb);
 }
 
 /* F3 (cps-async): is the await continuation trivial (deliver the awaited value
@@ -14034,8 +14045,12 @@ static void emit_resume(CE *ce, const CTerm *t) {
         return;
     }
     /* (cont? k) support: mark k consumed at the user resume site so a later
-     * `cont?` on the same k reads false (matches the fiber path). */
-    ce_line(ce, "((DK *)(%s))->consumed = 1;", kk);
+     * `cont?` on the same k reads false (matches the fiber path).  A
+     * `^multishot` k can still be invoked after a resume, so it stays live
+     * (effect-continuation-followups Part A). */
+    if (!(t->as.resume.k.kind == CA_VAR && t->as.resume.k.var
+          && t->as.resume.k.var->type.copy_kind == CK_MULTISHOT))
+        ce_line(ce, "((DK *)(%s))->consumed = 1;", kk);
     if (ce->handler_case_mode && ce->case_tail_resume && resume_is_tail(t)) {
         char *sv = slot_store_reap(ce->ctx, t->as.resume.v.ty, t->as.resume.v.type, vv);
         ce_line(ce, "return dk_tail_resume((DK *)(%s), %s);", kk, sv);

@@ -1,9 +1,20 @@
 # Plan: `cont?` of a `^multishot` continuation, naming an unhandled effect, composed handler values
 
-> **Status:** PROPOSED 2026-10-21. Decisions taken (effect-forms-gaps items 2-4):
-> `cont?` of a `^multishot` k is true after a resume; name the effect in the
-> compiled unhandled-effect error; document (not change) a composed handler held
-> in a variable. Part C is done (docs). Not started otherwise.
+> **Status:** DONE 2026-10-23 (archived). Decisions taken (effect-forms-gaps
+> items 2-4): `cont?` of a `^multishot` k is true after a resume; name the effect
+> in the compiled unhandled-effect error; document (not change) a composed handler
+> held in a variable.
+>
+> - Part A: `emit_resume` skips the consumed store for a `CK_MULTISHOT` k;
+>   `ws_has_perform` answers `EX_CONT_PRED` from its operand, so the clause stays
+>   on the work-stack path. Fixture `effect-cont-pred-multishot-after-resume`
+>   (44 on `run.sh`, `run-turi.sh`, `run-jit.sh`).
+> - Part B: `dk_perform(tag, name, arg, k)` (emitted preamble and
+>   `src/runtime/cps_prompt.c`); each perform site passes its effect's name as a
+>   literal. The abort reads `tur: unhandled effect: Ask (tag 2)` and flushes
+>   stdout first. Fixture `effect-unhandled-names-effect`. Snapshots and the split
+>   runtime regenerated.
+> - Part C: done 2026-10-21 (docs).
 
 ## Part A -- `cont?` of a `^multishot` continuation stays true after a resume
 

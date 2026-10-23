@@ -122,6 +122,13 @@ All notable changes to Turmeric are documented here.
 
 ### Fixed
 
+- **`(cont? k)` of a `^multishot` continuation stays true after a resume.**
+  Compiled, it read false and could not guard a second `resume`; interpreted,
+  a clause asking it fell back to the one-shot path and the second `resume`
+  failed.
+- **A compiled unhandled effect names the effect.** The abort reads
+  `tur: unhandled effect: Ask (tag 2)` instead of only the tag, and output
+  printed before it is no longer lost.
 - **`tur run --enable=<x>` on a `#lang r7rs` program no longer crashes.** The
   global-flag parse shortened `argv` but left the saved count, and the
   split-library cache key read past the end.
