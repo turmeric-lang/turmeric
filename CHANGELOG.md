@@ -2,6 +2,43 @@
 
 All notable changes to Turmeric are documented here.
 
+## [0.70.1] -- 2026-10-23
+
+### Added
+
+- **`(Generator T)` is a first-class type.** A generator can be passed to,
+  returned from and stored by code that did not create it, on every annotation
+  path. `gen-unwrap` reads the element at its full type -- a struct, ADT or
+  other value, not a raw int -- and a call refuses a `(Generator cstr)` where a
+  `(Generator int)` is wanted. The bare `Generator` without an element type is
+  an error naming the spelling.
+- **`--enable=r7rs-segmented-stack` gives compiled `#lang r7rs` programs a
+  growable stack.** On Linux x86-64 and arm64, a procedure that would overflow
+  the stack moves onto an 8 MiB segmented stack, so deep recursion runs instead
+  of crashing; the steady-state cost is within noise to about 1.6%.
+
+### Changed
+
+- **`defer` fires at the end of its block and reads variables when it runs.** A
+  `^mut` scalar named in a defer body is read at fire time, not captured at
+  registration, and interpreted `do`/`when`/per-pass `while` defers now fire in
+  the compiled order on both engines.
+- **`shift0` runs its receiver outside the reset it captured.** A `shift` inside
+  the receiver is delimited by the next `reset` outward, so `(reset (+ 100
+  (reset (+ 10 (shift0 (fn [v] ...) 5)))))` evaluates to 5000, matching
+  `shift`'s 5100, on `tur run`, `tur jit` and `--interpret`.
+- **BREAKING -- `coerce` takes its result type from its `Equal` proof, and
+  `type-app` is retired.** `(coerce eq x)` with `eq : (Equal a b)` has type `b`,
+  so a generic wrapper like `conv` works without an explicit type application; a
+  proof relating two different closed types, such as `(Equal int float)`, is now
+  an error.
+
+### Docs
+
+- **The r7rs guide links the heap-frames plan by its GitHub URL.** The docs pack
+  renders guides only, so the relative link into `docs/upcoming/` was rejected
+  by `genpack --strict-links`.
+
 ## [0.70.0] -- 2026-10-23
 
 ### Added

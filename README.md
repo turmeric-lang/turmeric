@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/turmeric-lang/turmeric/actions/workflows/ci.yml/badge.svg)](https://github.com/turmeric-lang/turmeric/actions/workflows/ci.yml)
 
-**Latest release:** `v0.70.0` -- `defdata` constructors can declare their result types (folding GADTs into `defdata` and deprecating `defgadt`), and installed spices now resolve outside a project alongside new `tur serve` and `tur x` commands.
+**Latest release:** `v0.70.1` -- Generators get a first-class `(Generator T)` type with a typed `gen-unwrap`, and `coerce` now takes its result type from an `Equal` proof (retiring `type-app`) alongside new `defer` and `shift0` semantics fixes.
 
 ## What
 
