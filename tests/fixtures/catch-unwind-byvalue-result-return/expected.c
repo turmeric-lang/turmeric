@@ -6032,6 +6032,16 @@ static inline void tur_panic_sited(const char *msg) {
     if (s) tur_panic_at(s->file, s->line, msg); else tur_panic(msg);
 }
 
+/* string-literal-interning-plan: one object per distinct literal. */
+static const char __tur_str_0[] = "boom";
+static const char __tur_str_1[] = "schema-decode!: validation failed";
+static const char __tur_str_2[] = "let-ok";
+static const char __tur_str_3[] = "let-err";
+static const char __tur_str_4[] = "direct-ok";
+static const char __tur_str_5[] = "direct-err";
+static const char __tur_str_6[] = "caught-err";
+static const char __tur_str_7[] = "caught-ok";
+
 typedef struct tur_adt_Map {
     void * hamt;
 } tur_adt_Map;
@@ -8115,7 +8125,7 @@ static int64_t __fn_9(void) {
 }
 
 static int64_t __fn_11(void) {
-        tur_panic_at_site("input.tur", 15, "boom");
+        tur_panic_at_site("input.tur", 15, ((char *)__tur_str_0));
         if (tur_panicking) return ((int64_t)0);
         return ((int64_t)0);
 }
@@ -10915,7 +10925,7 @@ static int64_t schema_hydecode_hyabort(int64_t errs) {
         int64_t __ps_186 = (schema_hydecode_hyreport(errs));
         if (tur_panicking) return ((int64_t)0);
         (void)(__ps_186);
-        tur_panic_at_site("schema.tur", 1071, "schema-decode!: validation failed");
+        tur_panic_at_site("schema.tur", 1071, ((char *)__tur_str_1));
         if (tur_panicking) return ((int64_t)0);
         return ((int64_t)0);
 }
@@ -11182,9 +11192,9 @@ int main(int argc, char **argv) {
             bool __ps_223 = (ok___spec__bool_tur_adt_Result__int__int(a_14));
             if (tur_panicking) { tur_panic_root_exit(); }
             if (__ps_223) {
-                puts("let-ok");
+                puts(((char *)__tur_str_2));
             } else {
-                puts("let-err");
+                puts(((char *)__tur_str_3));
             }
         }
         {
@@ -11195,9 +11205,9 @@ int main(int argc, char **argv) {
             bool __ps_225 = (ok___spec__bool_tur_adt_Result__int__int(b_15));
             if (tur_panicking) { tur_panic_root_exit(); }
             if (__ps_225) {
-                puts("direct-ok");
+                puts(((char *)__tur_str_4));
             } else {
-                puts("direct-err");
+                puts(((char *)__tur_str_5));
             }
         }
         {
@@ -11208,9 +11218,9 @@ int main(int argc, char **argv) {
             bool __ps_227 = (err___spec__bool_tur_adt_Result__int__int(c_16));
             if (tur_panicking) { tur_panic_root_exit(); }
             if (__ps_227) {
-                puts("caught-err");
+                puts(((char *)__tur_str_6));
             } else {
-                puts("caught-ok");
+                puts(((char *)__tur_str_7));
             }
         }
         int64_t __t228;

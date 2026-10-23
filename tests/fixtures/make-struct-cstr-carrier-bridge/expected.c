@@ -6032,6 +6032,10 @@ static inline void tur_panic_sited(const char *msg) {
     if (s) tur_panic_at(s->file, s->line, msg); else tur_panic(msg);
 }
 
+/* string-literal-interning-plan: one object per distinct literal. */
+static const char __tur_str_0[] = "schema-decode!: validation failed";
+static const char __tur_str_1[] = "hello";
+
 typedef struct tur_adt_Map {
     void * hamt;
 } tur_adt_Map;
@@ -10885,7 +10889,7 @@ static int64_t schema_hydecode_hyabort(int64_t errs) {
         int64_t __ps_186 = (schema_hydecode_hyreport(errs));
         if (tur_panicking) return ((int64_t)0);
         (void)(__ps_186);
-        tur_panic_at_site("schema.tur", 1071, "schema-decode!: validation failed");
+        tur_panic_at_site("schema.tur", 1071, ((char *)__tur_str_0));
         if (tur_panicking) return ((int64_t)0);
         return ((int64_t)0);
 }
@@ -11088,7 +11092,7 @@ int main(int argc, char **argv) {
 #endif
     tur_root_unwind = 1;
         {
-            tur_adt_Box__cstr * __ps_202 = (ctor_Box_Box__cstr("hello", INT64_C(9)));
+            tur_adt_Box__cstr * __ps_202 = (ctor_Box_Box__cstr(((char *)__tur_str_1), INT64_C(9)));
             if (tur_panicking) { tur_panic_root_exit(); }
             tur_adt_Box__cstr * bc_5 = __ps_202;
             (void)bc_5;

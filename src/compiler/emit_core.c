@@ -5323,10 +5323,79 @@ char *atom_var(EmitCtx *ctx, const Binding *b) {
     }
     return nm;
 }
+/* string-literal-interning-plan: one object per distinct string literal in a
+ * unit.  The emitter used to write each literal inline at its use, so whether
+ * two identical literals were one object was up to the C compiler -- gcc
+ * merges them within a unit, c2mir does not -- and an erasing `(:: s :int)`
+ * handed that difference to an ordinary program
+ * (cstr-literal-address-differs-by-engine).  Now every literal a program body
+ * emits names one `static const char __tur_str_<N>[]` per distinct text, keyed
+ * on (bytes, length) so an embedded NUL keeps two literals apart.  The band
+ * (cstr_codegen_emit) is written at final assembly, ahead of every body that
+ * uses it.  Outside a window opened by cstr_codegen_reset, and after the band
+ * is written, a literal stays inline: those emissions (a preamble, a header,
+ * a late flush) could not see a band. */
+typedef struct StrLitRecord {
+    char     *bytes;   /* malloc'd copy of the literal's bytes */
+    uint32_t  len;
+    uint32_t  id;
+} StrLitRecord;
+
+static StrLitRecord *g_strlits;
+static uint32_t      g_n_strlits, g_cap_strlits;
+static bool          g_strlit_open;   /* a band will be written for this unit */
+
+void cstr_codegen_reset(void) {
+    for (uint32_t i = 0; i < g_n_strlits; i++) free(g_strlits[i].bytes);
+    free(g_strlits);
+    g_strlits = NULL;
+    g_n_strlits = g_cap_strlits = 0;
+    g_strlit_open = true;
+}
+
+static uint32_t cstr_codegen_register(StrSlice s) {
+    for (uint32_t i = 0; i < g_n_strlits; i++)
+        if (g_strlits[i].len == s.len &&
+            (s.len == 0 || memcmp(g_strlits[i].bytes, s.p, s.len) == 0))
+            return g_strlits[i].id;
+    if (g_n_strlits == g_cap_strlits) {
+        uint32_t nc = g_cap_strlits ? g_cap_strlits * 2 : 32;
+        StrLitRecord *nr = (StrLitRecord *)realloc(g_strlits, nc * sizeof(StrLitRecord));
+        if (!nr) { fprintf(stderr, "tur: oom\n"); abort(); }
+        g_strlits = nr;
+        g_cap_strlits = nc;
+    }
+    StrLitRecord *r = &g_strlits[g_n_strlits];
+    r->bytes = (char *)malloc(s.len ? s.len : 1);
+    if (!r->bytes) { fprintf(stderr, "tur: oom\n"); abort(); }
+    if (s.len) memcpy(r->bytes, s.p, s.len);
+    r->len = s.len;
+    r->id  = g_n_strlits;
+    return g_n_strlits++;
+}
+
+void cstr_codegen_emit(Buf *out) {
+    if (g_n_strlits > 0) {
+        buf_puts(out, "/* string-literal-interning-plan: one object per distinct literal. */\n");
+        for (uint32_t i = 0; i < g_n_strlits; i++) {
+            buf_printf(out, "static const char __tur_str_%u[] = ", g_strlits[i].id);
+            emit_c_string(out, (StrSlice){ g_strlits[i].bytes, g_strlits[i].len });
+            buf_puts(out, ";\n");
+        }
+    }
+    g_strlit_open = false;
+}
+
 char *atom_cstr(StrSlice s) {
     /* Build into a Buf, then strdup out. */
     Buf b; buf_init(&b);
-    emit_c_string(&b, s);
+    if (g_strlit_open) {
+        /* `char *`, the type the inline literal had; the array is const so it
+         * lands in read-only data, as a literal does. */
+        buf_printf(&b, "((char *)__tur_str_%u)", cstr_codegen_register(s));
+    } else {
+        emit_c_string(&b, s);
+    }
     buf_putc(&b, '\0');
     char *p = strdup(b.data);
     buf_free(&b);

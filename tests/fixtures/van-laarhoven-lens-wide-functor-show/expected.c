@@ -6032,6 +6032,13 @@ static inline void tur_panic_sited(const char *msg) {
     if (s) tur_panic_at(s->file, s->line, msg); else tur_panic(msg);
 }
 
+/* string-literal-interning-plan: one object per distinct literal. */
+static const char __tur_str_0[] = "neg";
+static const char __tur_str_1[] = "nonneg";
+static const char __tur_str_2[] = "true";
+static const char __tur_str_3[] = "false";
+static const char __tur_str_4[] = "schema-decode!: validation failed";
+
 typedef struct tur_adt_Map {
     void * hamt;
 } tur_adt_Map;
@@ -8187,9 +8194,9 @@ static dict_Functor_Identity dict_Functor_Identity_singleton = {
 static const char * __inst_Show_show_int(int64_t x) {
         const char * __t72;
         if ((x) < (INT64_C(0))) {
-            __t72 = "neg";
+            __t72 = ((char *)__tur_str_0);
         } else {
-            __t72 = "nonneg";
+            __t72 = ((char *)__tur_str_1);
         }
         return __t72;
 }
@@ -8205,9 +8212,9 @@ static dict_Show_int dict_Show_int_singleton = {
 static const char * __inst_Show_show_bool(bool x) {
         const char * __t73;
         if (x) {
-            __t73 = "true";
+            __t73 = ((char *)__tur_str_2);
         } else {
-            __t73 = "false";
+            __t73 = ((char *)__tur_str_3);
         }
         return __t73;
 }
@@ -11120,7 +11127,7 @@ static int64_t schema_hydecode_hyabort(int64_t errs) {
         int64_t __ps_216 = (schema_hydecode_hyreport(errs));
         if (tur_panicking) return ((int64_t)0);
         (void)(__ps_216);
-        tur_panic_at_site("schema.tur", 1071, "schema-decode!: validation failed");
+        tur_panic_at_site("schema.tur", 1071, ((char *)__tur_str_4));
         if (tur_panicking) return ((int64_t)0);
         return ((int64_t)0);
 }

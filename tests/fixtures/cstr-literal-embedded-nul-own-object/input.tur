@@ -1,0 +1,8 @@
+; A literal with an embedded NUL is its own object, not its prefix's: the
+; literal table is keyed on (bytes, length) (string-literal-interning-plan).
+; Compiled only: the interpreter compares an erased cstr by content, up to
+; the NUL.
+(defn main [] : int
+  (println (if (= (:: "a\0b" :int) (:: "a" :int)) 1 0))
+  (println (if (= (:: "a\0b" :int) (:: "a\0b" :int)) 1 0))
+  0)

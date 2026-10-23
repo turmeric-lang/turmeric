@@ -6032,6 +6032,11 @@ static inline void tur_panic_sited(const char *msg) {
     if (s) tur_panic_at(s->file, s->line, msg); else tur_panic(msg);
 }
 
+/* string-literal-interning-plan: one object per distinct literal. */
+static const char __tur_str_0[] = "<int>";
+static const char __tur_str_1[] = "<bool>";
+static const char __tur_str_2[] = "schema-decode!: validation failed";
+
 typedef struct tur_adt_Map {
     void * hamt;
 } tur_adt_Map;
@@ -8096,11 +8101,11 @@ static bool __inst_MyOrdPrim_gte_qu_int(int64_t x, int64_t y) {
 }
 
 static const char * __inst_MyShowPrim_show_int(int64_t x) {
-        return "<int>";
+        return ((char *)__tur_str_0);
 }
 
 static const char * __inst_MyShowPrim_show_bool(bool x) {
-        return "<bool>";
+        return ((char *)__tur_str_1);
 }
 
 static const char * __inst_MyShowPrim_show_cstr(const char * x) {
@@ -10902,7 +10907,7 @@ static int64_t schema_hydecode_hyabort(int64_t errs) {
         int64_t __ps_186 = (schema_hydecode_hyreport(errs));
         if (tur_panicking) return ((int64_t)0);
         (void)(__ps_186);
-        tur_panic_at_site("schema.tur", 1071, "schema-decode!: validation failed");
+        tur_panic_at_site("schema.tur", 1071, ((char *)__tur_str_2));
         if (tur_panicking) return ((int64_t)0);
         return ((int64_t)0);
 }

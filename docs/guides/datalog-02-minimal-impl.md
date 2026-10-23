@@ -194,7 +194,7 @@ cstr-eq?(":user/name" ":user/name")   ; => true
 string's address as a cheap identity either: whether two identical string
 literals share one address is up to the C compiler, and the JIT does not merge
 them, so a lookup keyed that way finds its facts compiled and nothing under
-`tur jit` (see the [jit-guide](jit-guide.md#two-identical-string-literals-are-two-objects)).
+`tur jit` (see the [jit-guide](jit-guide.md#string-literals-one-object-per-unit-not-across-units)).
 
 ---
 

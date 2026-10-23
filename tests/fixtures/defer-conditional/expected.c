@@ -6032,6 +6032,11 @@ static inline void tur_panic_sited(const char *msg) {
     if (s) tur_panic_at(s->file, s->line, msg); else tur_panic(msg);
 }
 
+/* string-literal-interning-plan: one object per distinct literal. */
+static const char __tur_str_0[] = "schema-decode!: validation failed";
+static const char __tur_str_1[] = "inner-if";
+static const char __tur_str_2[] = "outer";
+
 typedef struct tur_adt_Map {
     void * hamt;
 } tur_adt_Map;
@@ -10858,7 +10863,7 @@ static int64_t schema_hydecode_hyabort(int64_t errs) {
         int64_t __ps_186 = (schema_hydecode_hyreport(errs));
         if (tur_panicking) return ((int64_t)0);
         (void)(__ps_186);
-        tur_panic_at_site("schema.tur", 1071, "schema-decode!: validation failed");
+        tur_panic_at_site("schema.tur", 1071, ((char *)__tur_str_0));
         if (tur_panicking) return ((int64_t)0);
         return ((int64_t)0);
 }
@@ -11064,7 +11069,7 @@ int main(int argc, char **argv) {
         tur_frame_init(&__frame_202, NULL);
         tur_frame_push_defer(&__frame_202, __defer_203, NULL);
         if (true) {
-            puts("inner-if");
+            puts(((char *)__tur_str_1));
         } else {
         }
         int64_t __t204;
@@ -11094,7 +11099,7 @@ static tur_adt_Vec__int * vec_new__spec__tur_adt_Vec__int__(void) {
 
 
 static void __defer_203(void *__env) {
-    puts("outer");
+    puts(((char *)__tur_str_2));
 }
 
 static void __defer_199(void *__env) {

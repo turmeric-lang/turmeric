@@ -1689,6 +1689,8 @@ char *emit_fn_value_spec_clone(EmitCtx *ctx, const Binding *b);
  * the direct emitter even inside a CPS-lifted body. */
 bool emit_binding_is_byref_cell(const Binding *b);
 char *atom_cstr(StrSlice s);
+void  cstr_codegen_reset(void);
+void  cstr_codegen_emit(Buf *out);
 char *emit_builtin(EmitCtx *ctx, Buf *body, const Expr *e);
 void emit_dict_name(char *buf, size_t buflen, const TypeClassInstance *inst);
 void collect_defined(const Expr *e, Binding ***defs, uint32_t *ndefs, uint32_t *cdefs);

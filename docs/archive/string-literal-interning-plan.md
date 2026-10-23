@@ -1,8 +1,14 @@
 # Plan: one object per distinct string literal in a unit
 
-> **Status:** PROPOSED 2026-10-21. Decision taken: store literals once per unit
-> (from [cstr-literal-address-differs-by-engine](../reported/cstr-literal-address-differs-by-engine.md),
-> which this plan resolves). Not started.
+> **Status:** DONE 2026-10-23. Literals are stored once per unit
+> (from [cstr-literal-address-differs-by-engine](cstr-literal-address-differs-by-engine.md),
+> which this plan resolved). `cstr_codegen_register` / `cstr_codegen_emit`
+> live beside `atom_cstr` in `src/compiler/emit_core.c`; the band is written
+> first at final assembly in both the program and the implementation-unit
+> paths. A literal emitted outside that window (a preamble, a header, after the
+> band is written) keeps the inline spelling. Fixtures:
+> `cstr-literal-one-object-per-unit` (both harnesses, and `tur jit`) and
+> `cstr-literal-embedded-nul-own-object` (compiled).
 
 ## Problem
 

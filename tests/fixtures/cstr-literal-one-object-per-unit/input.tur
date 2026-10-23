@@ -1,0 +1,9 @@
+; Two identical string literals are one object in a unit, on every engine:
+; the emitter writes each distinct literal once (string-literal-interning-plan,
+; cstr-literal-address-differs-by-engine).  gcc merged them on its own and
+; c2mir did not, so `tur run` said 1 and `tur jit` 0.  The embedded-NUL
+; case is cstr-literal-embedded-nul-own-object (compiled only).
+(defn main [] : int
+  (println (if (= (:: ":user/name" :int) (:: ":user/name" :int)) 1 0))
+  (println "done")
+  0)

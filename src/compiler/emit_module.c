@@ -20777,6 +20777,7 @@ static int emit_program_inner(Buf *out, const Expr *program) {
     type_codegen_reset_adt_apps();
     type_codegen_reset_fn_ptr_typedefs();
     sym_codegen_reset();   /* SYM1: clear interned-symbol records for this TU */
+    cstr_codegen_reset();  /* string-literal-interning-plan: this TU's literals */
 
     /* r7rs-programs-compile-slowly: the runtime helpers that carry state are
      * written up front -- before any scan can ask for one -- in a split build, into their own buffer, so both units
@@ -22299,7 +22300,8 @@ static int emit_program_inner(Buf *out, const Expr *program) {
      * each band C visibility of the ones before it:
      *   1. the runtime preamble, the hoisted includes and the panic-site slot
      *      (the library unit's state under --split);
-     *   2. early_file -- struct typedefs + drop glue (visible to everything);
+     *   2. the string-literal band (cstr_codegen_emit), then early_file --
+     *      struct typedefs + drop glue (visible to everything);
      *   3. sym_records;
      *   4. concrete_fn_ptr_typedefs -- typed fn-ptr typedefs for parametric
      *      struct fields;
@@ -22375,6 +22377,13 @@ static int emit_program_inner(Buf *out, const Expr *program) {
      * its own mangle token: before, such a monomorph collided with the ordinary
      * `(fn ...)` one and the `#ifndef` guard preprocessed the whole block away,
      * so the dangling reference never reached cc. */
+    /* string-literal-interning-plan: the literal band, ahead of everything
+     * that can name a literal.  Plain `static const char` arrays: they need
+     * nothing before them. */
+    Buf str_lits; buf_init(&str_lits);
+    cstr_codegen_emit(&str_lits);
+    if (str_lits.len) { buf_write(out, str_lits.data, str_lits.len); buf_putc(out, '\n'); }
+    buf_free(&str_lits);
     if (early_file.len)  { buf_write(out, early_file.data, early_file.len); buf_putc(out, '\n'); }
     if (sym_records.len) { buf_write(out, sym_records.data, sym_records.len); buf_putc(out, '\n'); }
     if (concrete_fn_ptr_typedefs.len) { buf_write(out, concrete_fn_ptr_typedefs.data, concrete_fn_ptr_typedefs.len); buf_putc(out, '\n'); }
@@ -23711,6 +23720,7 @@ static int emit_implementation_inner(Buf *out, const char *module_name, const Ex
     type_codegen_reset_adt_apps();
     type_codegen_reset_fn_ptr_typedefs();
     sym_codegen_reset();   /* SYM1/SYM2: clear interned-symbol records for this TU */
+    cstr_codegen_reset();  /* string-literal-interning-plan: this TU's literals */
     /* gcc14-int-conversion / S1: reset the ground-truth side tables here rather
      * than inside emit_fn_forward_decls, so records made by earlier passes
      * (notably ADT ctor return types) survive.  See the note there. */
@@ -24252,6 +24262,10 @@ static int emit_implementation_inner(Buf *out, const char *module_name, const Ex
      * were emitted above and registered their keywords; emit the struct def +
      * records now, before the function definitions that reference them.  Weak
      * external linkage lets the linker fold same-named records across TUs. */
+    Buf str_lits2; buf_init(&str_lits2);
+    cstr_codegen_emit(&str_lits2);   /* string-literal-interning-plan */
+    if (str_lits2.len) { buf_write(out, str_lits2.data, str_lits2.len); buf_putc(out, '\n'); }
+    buf_free(&str_lits2);
     Buf sym_records2; buf_init(&sym_records2);
     sym_codegen_emit(&sym_records2, separate_compilation);
     if (sym_records2.len) { buf_write(out, sym_records2.data, sym_records2.len); buf_putc(out, '\n'); }
