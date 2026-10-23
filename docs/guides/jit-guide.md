@@ -571,22 +571,28 @@ tests the whole byte. A latent layout bug can therefore be invisible on
 Linux/`cc` (glibc happens to zero the byte) and deterministic under the JIT
 (macOS leaves `0x5A` there).
 
-### Two identical string literals are two objects
+### A string literal is one object per unit, not across units
 
-Whether `"abc"` written twice is one object or two is unspecified in C. gcc
-merges identical literals within a unit (`-fmerge-constants`), so on the `cc`
-path two `":user/name"` literals usually share an address; c2mir gives each
-occurrence its own storage, so under the JIT they never do. A program that
-reads a literal's address -- through inline C, or an erasing `(:: s :int)` --
-and compares it is therefore right compiled and silently wrong JIT'd.
-`examples/datalog/indexed.tur` keyed its index that way and found nothing
-under `tur jit`
-([jit-string-literal-identity-differs-from-cc](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/jit-string-literal-identity-differs-from-cc.md)).
+Whether `"abc"` written twice is one object or two is unspecified in C: gcc
+merges identical literals within a unit (`-fmerge-constants`), c2mir gives each
+occurrence its own storage. So the emitter does not leave it to them. Each
+distinct literal text in a unit is emitted once, as a
+`static const char __tur_str_<N>[]`, and every use names that array, so two
+`":user/name"` in one unit are one object under `tur run` and `tur jit` alike
+(`(= (:: ":user/name" :int) (:: ":user/name" :int))` is 1 on both). Literals are
+keyed on their bytes and length, so `"a\0b"` is not its prefix `"a"`.
+([string-literal-interning-plan](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/string-literal-interning-plan.md);
+before it, `examples/datalog/indexed.tur` keyed its index on literal addresses
+and found nothing JIT'd:
+[jit-string-literal-identity-differs-from-cc](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/jit-string-literal-identity-differs-from-cc.md).)
 
-This is not a JIT bug: Turmeric gives a `cstr` no identity (`=` does not
-accept one), and neither engine promises it. Compare contents (`strcmp`), or
-intern the string once at the edge and compare the ids, as that example now
-does with its attribute ids (`attr-intern`).
+The guarantee stops at the unit. Across units -- separately compiled modules, a
+`--shared` multi-module build, the two units of a split `#lang r7rs` build --
+two units' literals are two objects, as they are under gcc without LTO, and a
+string built at run time is never one of them. A `cstr` still has no identity
+(`=` does not accept one): compare contents (`strcmp`, `cstr-eq?`), or intern
+the string once at the edge and compare the ids, as that example does with its
+attribute ids (`attr-intern`).
 
 ### Weak-symbol overrides do not cross the JIT boundary
 

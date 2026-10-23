@@ -6032,6 +6032,10 @@ static inline void tur_panic_sited(const char *msg) {
     if (s) tur_panic_at(s->file, s->line, msg); else tur_panic(msg);
 }
 
+/* string-literal-interning-plan: one object per distinct literal. */
+static const char __tur_str_0[] __attribute__((unused)) = "schema-decode!: validation failed";
+static const char __tur_str_1[] __attribute__((unused)) = "shown";
+
 typedef struct tur_adt_Map {
     void * hamt;
 } tur_adt_Map;
@@ -10950,7 +10954,7 @@ static int64_t schema_hydecode_hyabort(int64_t errs) {
         int64_t __ps_188 = (schema_hydecode_hyreport(errs));
         if (tur_panicking) return ((int64_t)0);
         (void)(__ps_188);
-        tur_panic_at_site("schema.tur", 1071, "schema-decode!: validation failed");
+        tur_panic_at_site("schema.tur", 1071, __tur_str_0);
         if (tur_panicking) return ((int64_t)0);
         return ((int64_t)0);
 }
@@ -11151,7 +11155,7 @@ static intptr_t use_hyshow_j1(intptr_t env, intptr_t __t1__slot) {
     int64_t __t0;
     puts(__t1);
     __t0 = 0;
-    return (intptr_t)("shown");
+    return (intptr_t)(__tur_str_1);
 }
 typedef struct { tur_poly_fn_t f0; } use_hyshow_j0_env;
 static intptr_t use_hyshow_j0(intptr_t env, intptr_t __t5__slot, DK *__kont) {

@@ -1,0 +1,14 @@
+;; string-literal-interning-plan: two identical string literals in one unit
+;; are one object, so an erasing ascription of each to :int gives the same
+;; address on every engine.  `tur run` (gcc merges literals) and `tur jit`
+;; (c2mir did not) used to answer 1 and 0
+;; (cstr-literal-address-differs-by-engine).  Interpreted, the ascription is
+;; the string itself and `=` compares content, so it answers 1 too.
+(defn same-from-another-fn [] : int
+  (:: ":user/name" :int))
+
+(defn main [] : int
+  (println (if (= (:: ":user/name" :int) (:: ":user/name" :int)) 1 0))
+  (println (if (= (:: ":user/name" :int) (same-from-another-fn)) 1 0))
+  (println (if (= (:: "" :int) (:: "" :int)) 1 0))
+  0)

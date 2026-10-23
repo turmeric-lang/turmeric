@@ -1,7 +1,15 @@
 # Two identical string literals compare equal by address under `tur run`, unequal under `tur jit` -- in plain Turmeric
 
+**RESOLVED 2026-10-23** -- fix direction 1, by
+[string-literal-interning-plan](string-literal-interning-plan.md): the emitter
+gives each distinct literal text in a unit one `static const char
+__tur_str_<N>[]` (`cstr_codegen_register`, `src/compiler/emit_core.c`) and every
+use names it, so the repro prints 1 on all three engines. Pinned by the fixtures
+`cstr-literal-one-object-per-unit` and `cstr-literal-nul-is-distinct`. Across
+units literals stay two objects (jit-guide).
+
 **Decision (2026-10-21):** store each distinct literal once per unit (fix
-direction 1); plan: [string-literal-interning-plan](../upcoming/string-literal-interning-plan.md).
+direction 1).
 
 **Severity: low-medium** (engine divergence; silent wrong answer). Found
 2026-10-21 reviewing the resolution of

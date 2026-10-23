@@ -6032,6 +6032,10 @@ static inline void tur_panic_sited(const char *msg) {
     if (s) tur_panic_at(s->file, s->line, msg); else tur_panic(msg);
 }
 
+/* string-literal-interning-plan: one object per distinct literal. */
+static const char __tur_str_0[] __attribute__((unused)) = "schema-decode!: validation failed";
+static const char __tur_str_1[] __attribute__((unused)) = "hi";
+
 typedef struct tur_adt_Map {
     void * hamt;
 } tur_adt_Map;
@@ -10873,7 +10877,7 @@ static int64_t schema_hydecode_hyabort(int64_t errs) {
         int64_t __ps_186 = (schema_hydecode_hyreport(errs));
         if (tur_panicking) return ((int64_t)0);
         (void)(__ps_186);
-        tur_panic_at_site("schema.tur", 1071, "schema-decode!: validation failed");
+        tur_panic_at_site("schema.tur", 1071, __tur_str_0);
         if (tur_panicking) return ((int64_t)0);
         return ((int64_t)0);
 }
@@ -11124,7 +11128,7 @@ static int64_t main__cps(DK *__kont) {
     row_10 = __ps_210;
     __t1 = (tur_handler_table_t *)(row_10).h;
     DK *__h0 = __dk_reap_keep(dk_hgroup_from_table((const tur_handler_table_t *)(intptr_t)__t1, dk_frame_resume_borrow(main_hk0, 0, __kont)));
-    return dk_perform(3, "Tell", (intptr_t)("hi"), __dk_reap_node(dk_frame_resume_join(main_rf1, 0, __h0)));
+    return dk_perform(3, "Tell", (intptr_t)(__tur_str_1), __dk_reap_node(dk_frame_resume_join(main_rf1, 0, __h0)));
 }
 int main(int argc, char **argv) {
     __tur_static_init();

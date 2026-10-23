@@ -23,7 +23,8 @@
   [float-to-int-cast-out-of-range-differs](float-to-int-cast-out-of-range-differs.md)
   (which found the compiled side is a bare C cast too; resolved 2026-10-22,
   both engines saturate). `(:: "hi" :int)`: decision
-  -- store literals once per unit; [string-literal-interning-plan](../upcoming/string-literal-interning-plan.md).
+  -- store literals once per unit; [string-literal-interning-plan](string-literal-interning-plan.md)
+  (done 2026-10-23).
 
 **Severity: medium.** Found 2026-10-19 checking the examples for the type, cast,
 existential and borrow forms' API reference (`stdlib/forms/types.tur`). Each repro
@@ -152,7 +153,7 @@ Two packed values of different machine types (`int`, `cstr`) work on both.
 - `(:: "hi" :int)` is the string's address compiled and the string interpreted;
   and since the address is exposed, two identical literals compare equal under
   `tur run` and unequal under `tur jit`
-  ([cstr-literal-address-differs-by-engine](../reported/cstr-literal-address-differs-by-engine.md)).
+  ([cstr-literal-address-differs-by-engine](cstr-literal-address-differs-by-engine.md), resolved).
 - (hrt-guide's `pack` / `open` spellings are fixed.)
 
 ## Fix directions

@@ -1043,7 +1043,7 @@ shared `.tur` file.
 | Inline C that calls `longjmp` unexpectedly | Skips Turmeric defer/rc cleanup | Only use `longjmp` if you know the full unwind path |
 | Storing a `ref<T>` across an `extern-c` call | Borrow checker does not track C call boundaries | Use copy or `rc<T>` for data that outlives a single call |
 | Varadic `extern-c` with wrong arg types | UB at runtime | Check generated C with `emit-c`; cast explicitly in callers |
-| Keying on a string literal's address (`(int64_t)(intptr_t)s`) | Equal literals match compiled (gcc merges them) and miss under `tur jit` (c2mir does not) | Compare with `strcmp`, or intern once and compare ids -- a `cstr` has no identity ([jit-guide](jit-guide.md#two-identical-string-literals-are-two-objects)) |
+| Keying on a string literal's address (`(int64_t)(intptr_t)s`) | Equal literals are one object per unit, not across units, and a string built at run time matches none of them | Compare with `strcmp`, or intern once and compare ids -- a `cstr` has no identity ([jit-guide](jit-guide.md#a-string-literal-is-one-object-per-unit-not-across-units)) |
 | `static` name collision in multiple inline blocks | ODR violation / linker error | Prefix static helper names with a module-specific prefix |
 | Defining a helper *function* inside a `defn`'s inline-C body | `error: invalid storage class for function` / non-portable nested-function extension | Hoist it to a sibling `defn` (file-scope function), call via `__TUR_CNAME_<name>__` |
 | Using `cons`/`head`/`tail` in compiled code | `error: unknown function or operator 'cons'` (they are interpreter-only natives) | Define inline-C stubs, use a stdlib list helper, or pass `0` for an empty list (see Interpreter-only natives) |

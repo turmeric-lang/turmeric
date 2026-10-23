@@ -56,7 +56,9 @@ grounds that plain Turmeric cannot observe a literal's address and that it would
 rewrite every snapshot. **Both reasons were wrong** (corrected 2026-10-21): an
 erasing `(:: s :int)` is plain Turmeric and observes it, and snapshot churn is
 not a reason to defer under the fixture policy. That remaining divergence is open
-as [cstr-literal-address-differs-by-engine](../reported/cstr-literal-address-differs-by-engine.md).
+as [cstr-literal-address-differs-by-engine](cstr-literal-address-differs-by-engine.md),
+resolved 2026-10-23 by [string-literal-interning-plan](string-literal-interning-plan.md):
+one object per distinct literal per unit, on both engines.
 
 1. **The example.** `examples/datalog/indexed.tur` keys its EAVT index on an
    interned attribute id: `attr-id` keeps a table of the names it has seen,

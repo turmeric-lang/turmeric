@@ -20748,6 +20748,7 @@ static int emit_program_inner(Buf *out, const Expr *program) {
     type_codegen_reset_adt_apps();
     type_codegen_reset_fn_ptr_typedefs();
     sym_codegen_reset();   /* SYM1: clear interned-symbol records for this TU */
+    cstr_codegen_reset();  /* string-literal-interning-plan: and its literals */
 
     /* r7rs-programs-compile-slowly: the runtime helpers that carry state are
      * written up front -- before any scan can ask for one -- in a split build, into their own buffer, so both units
@@ -22270,6 +22271,8 @@ static int emit_program_inner(Buf *out, const Expr *program) {
      * each band C visibility of the ones before it:
      *   1. the runtime preamble, the hoisted includes and the panic-site slot
      *      (the library unit's state under --split);
+     *   1a. the string-literal band, spliced in at the end of this function
+     *      (cstr_codegen_splice) so late emitters' literals are in it;
      *   2. early_file -- struct typedefs + drop glue (visible to everything);
      *   3. sym_records;
      *   4. concrete_fn_ptr_typedefs -- typed fn-ptr typedefs for parametric
@@ -22307,6 +22310,10 @@ static int emit_program_inner(Buf *out, const Expr *program) {
         emit_hoisted_includes(out);
         emit_panic_site_slot(out, false);
     }
+    /* string-literal-interning-plan: the literal band goes here, ahead of
+     * every band that can name a literal; it is written last
+     * (cstr_codegen_splice), once every emitter has registered its own. */
+    size_t cstr_band_at = out->len;
 
     /* Phase 4 v1: Collect all defer thunks into a buffer so they can be
      * emitted after extern_decls and fwd_decls (defer bodies may call
@@ -22518,6 +22525,8 @@ static int emit_program_inner(Buf *out, const Expr *program) {
      * emission stays byte-identical -- shims would be dead weight in a
      * normal binary and would churn every fixture snapshot. */
     if (g_emit_ffi_export_shims) emit_ffi_export_shims(&ctx, out, program);
+
+    cstr_codegen_splice(out, cstr_band_at);
 
     buf_free(&file);
     buf_free(&body);
@@ -23691,6 +23700,7 @@ static int emit_implementation_inner(Buf *out, const char *module_name, const Ex
     type_codegen_reset_adt_apps();
     type_codegen_reset_fn_ptr_typedefs();
     sym_codegen_reset();   /* SYM1/SYM2: clear interned-symbol records for this TU */
+    cstr_codegen_reset();  /* string-literal-interning-plan: and its literals */
     /* gcc14-int-conversion / S1: reset the ground-truth side tables here rather
      * than inside emit_fn_forward_decls, so records made by earlier passes
      * (notably ADT ctor return types) survive.  See the note there. */
@@ -24232,6 +24242,8 @@ static int emit_implementation_inner(Buf *out, const char *module_name, const Ex
      * were emitted above and registered their keywords; emit the struct def +
      * records now, before the function definitions that reference them.  Weak
      * external linkage lets the linker fold same-named records across TUs. */
+    /* string-literal-interning-plan: the literal band, written last. */
+    size_t cstr_band_at = out->len;
     Buf sym_records2; buf_init(&sym_records2);
     sym_codegen_emit(&sym_records2, separate_compilation);
     if (sym_records2.len) { buf_write(out, sym_records2.data, sym_records2.len); buf_putc(out, '\n'); }
@@ -24325,6 +24337,8 @@ static int emit_implementation_inner(Buf *out, const char *module_name, const Ex
      * never pastes the collector (emit_r7rs_gc_prologue is the program
      * emitter's), so there is no allocator hook for it to install. */
     static_init_emit(out, false);
+
+    cstr_codegen_splice(out, cstr_band_at);
 
     buf_free(&file);
     buf_free(&body);
