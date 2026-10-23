@@ -34,6 +34,13 @@ sentence above does not cover them. If you touch this file, check
 `ls docs/reported/` against it -- an index that silently omits a quarter of the
 directory is worse for triage than no index.
 
+## Found verifying the spice READMEs and the advanced types guide (filed 2026-10-23)
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [spice-readmes-fail-strict-guide-pairs-check](spice-readmes-fail-strict-guide-pairs-check.md) | low | `check-guide-pairs.tur --spices` fails: 57 Turmeric blocks have no sweet-exp companion and 3 pairs (glsl, nng, sdf-raylib) do not parse-check. No CI job in either repo runs the check, and turmeric-spices still carries the old Python checker |
+| [advanced-type-system-rationale-stale-syntax](advanced-type-system-rationale-stale-syntax.md) | low-medium | `advanced-type-system-rationale.md` writes effect rows as `: T @ {Io \| e}` (now `#fx{IO e} : T`), and its union, intersection and existential examples do not compile. Its `alloca` and `extern-c` sized-layout paragraphs describe features the compiler does not have |
+
 ## Found executing rank2-argument-genericity-plan (filed 2026-10-22)
 
 | Report | Severity | One line |
