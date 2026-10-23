@@ -10,8 +10,11 @@
 > fork's `master`, every wasm branch is merged into it, and c2mp pins a
 > commit 23 behind it, so there are no patches to reconcile -- only a pin
 > to bump on c2mp's side and a CI leg to add on the fork's. The three gaps
-> of section 3 are sized in section 3.1; none needs further research before
-> P1.
+> of section 3 are sized in section 3.1. **P1 pre-spike 2026-10-23**
+> (section 7, `tools/wasm-jit-spike/`): MIR runs under emcc 6.0; `setjmp`
+> cannot be called indirectly on wasm, and the host-owned landing works;
+> depth 1,696; 13 ns per interpreted iteration, ~165 ns per trampolined
+> native call. Two fork bugs found (section 6).
 > **Type:** JIT engine (`src/jit_engine.c`, `external/mir/`), web build
 > (`src/CMakeLists.txt` `tur_wasm`, `src/web/wasm_glue.c`), driver split
 > (`src/driver/pipeline.c`), emitter (one knob, section 5.6).
@@ -173,12 +176,12 @@ compile.
   of run time against 11.7 ms for the generator and ~2.5 s for the
   tree-walker. c2mir's compile is 75-80 ms either way.
 
-What still needs Emscripten (P1): whether Emscripten's `setjmp` can be
-reached through the interpreter's direct-call path at all (`mir-interp.c`
-compares the callee against `setjmp_addr`, which `MIR_load_external` sets
-when the import named `setjmp` resolves, and calls it in `eval`'s own frame
--- a direct call Emscripten can lower, if the symbol has an address), the
-real recursion depth, and the JS-trampoline cost per call.
+The three questions that needed Emscripten were answered the same day
+with the spike in `tools/wasm-jit-spike/` (section 7.1): LLVM refuses any
+indirect use of `setjmp` outright, so the interpreter's own
+compare-and-call path can never reach it on wasm and the landing must be
+host-owned (which works); recursion depth is 1,696 frames; a call through
+the JS trampoline costs about 165 ns over an interpreted iteration.
 
 ## 4. What "JIT in wasm" can mean, and what to expect
 
@@ -321,6 +324,11 @@ Asyncify cannot unwind through, which matters the moment JIT'd code sits
 under a fiber (continuations, `#lang r7rs` `call/cc`) or under the
 playground's frame loop.
 
+Measured (section 7.1): an interpreted loop iteration costs 13 ns; the same
+iteration making one native call through the trampoline costs 180 ns. So a
+runtime call is ~13 interpreted instructions' worth of overhead, and a
+frame that makes ten thousand of them pays 1.7 ms.
+
 The runtime half has a finite signature set. Generate, from the decls
 region, one C stub per distinct signature (`void stub_N (void *fn, MIR_val_t
 *ras)` doing an exact `call_indirect`), and have `_MIR_get_ff_call` prefer a
@@ -342,12 +350,27 @@ arrives. This is true under `TUR_JIT_GEN=interp` natively too, which is why
 P0 runs the corpus there first: it tells us which fixtures this already
 breaks, with no Emscripten in the loop.
 
+On wasm this is not merely a dead-frame hazard but a hard refusal:
+`emcc` fails the build with `error in backend: Indirect use of setjmp is
+not supported` the moment anything takes `setjmp`'s address (section 7.1).
+So `setjmp` can never be in the symbol table, the interpreter's
+`func_addr == setjmp_addr` path (`mir-interp.c:1540`, a direct call in
+`eval`'s frame natively) is unreachable there, and the program half must
+not call `setjmp` at all. `longjmp`'s address *can* be taken and called
+through the trampoline.
+
 The fix is to give the landing to the host. A `tur_rt_try (body, env)`
 runtime function does the `setjmp` in compiled code and calls the body (an
 interpreted function, reached through the callback path c2mp proved);
 `longjmp` then unwinds interpreter frames, which MIR's interpreter tolerates
 as long as nothing it holds across the call lives on its C stack (c2mp hit
-exactly one such buffer, `call_res_args`, and moved it). The emitter selects
+exactly one such buffer, `call_res_args`, and moved it). **Verified
+2026-10-23** in `tools/wasm-jit-spike/sjlj.c`: a compiled frame does a
+direct `setjmp`, calls a function through `wasmTable.get(fp)()`, that
+function calls `longjmp` by address through the same trampoline, and
+control returns to the landing with the right value, twice in a row, with
+the code after the `longjmp` never running. The JS frames in between do
+not stop the unwind. The emitter selects
 this lowering under a new `g_emit_for_interp` knob the wasm front half sets.
 `emit_split.c:896-901` already treats `setjmp` as a frame-owning call the
 splitter must not move, so the places to change are enumerable.
@@ -369,8 +392,15 @@ an interpreted thread entry would need its own context), and any
 ### 5.8 Stack depth
 
 An interpreted call nests a wasm frame of the interpreter's `eval`; the
-browser's JS stack limit bounds the depth, and c2mp measured 1,122 frames at
-`-O2`. Turmeric programs recurse: the emitter turns self tail calls into
+browser's JS stack limit bounds the depth. c2mp measured 1,122 frames at
+`-O2`; the spike measured **1,696** on the vendored MIR under node 22's
+default stack (section 7.1). Two kinds of overflow, with different
+recoveries: the JS stack limit is a catchable `RangeError` that leaves the
+wasm linear stack pointer and the interpreter's frame state where they
+were, so the page must `stackRestore` and rebuild the context before the
+next call (the spike does both; c2mp rebuilds the worker); the linear
+stack (`-sSTACK_SIZE`) overflowing instead is a wasm trap after which the
+module is not usable. Turmeric programs recurse: the emitter turns self tail calls into
 loops (and `TUR_MUSTTAIL` where the compiler honours it, which emcc does
 not), but a non-tail list recursion over 10k elements will overflow where
 the native JIT's 1 GB stack would not. Three responses, cheapest first:
@@ -416,10 +446,23 @@ the reference for the parts C2 has not specified, and its measured cost
 The MIR-fork rule in CLAUDE.md allows one open PR at a time, so everything
 below rides together once P1 has the list:
 
+- **`mir-wasm.c` declares one hard register with a `NULL` name**
+  (`target_hard_reg_names[] = {NULL}`, `MAX_HARD_REG 0`), and `_MIR_init`
+  hashes every hard-register name, so it runs `strlen (NULL)`. Address 0
+  reads as an empty string in a plain wasm module, which is why the fork's
+  test and c2mp never saw it; under `-sSAFE_HEAP=1` it is a segfault at
+  init. Found 2026-10-23; the spike patches a scratch copy to `{"wasm_hr0"}`.
+- **`wasm-tests/run.sh` is stale**: after `12ee70c` dropped the bundled libc
+  headers, three of its four cases fail with `error in opening file
+  stdio.h`. It needs an `include_dirs` entry and a header to serve, like
+  the spike's `hdr/`.
+- A wasm CI leg running that test (6.1).
 - Exact-signature stub registry in `mir-wasm.c` (5.5).
 - Whatever P1 finds in `wasm_ff_dispatch` for our carrier-word signatures
   (`int64_t` everywhere, by-value aggregates through `BLK`).
 - If 5.8's option 3 is taken, the interpreter frame change.
+- Housekeeping: emcc 6.0 reports `-sWASM_BIGINT` as deprecated and always
+  on; the fork's README and c2mp's Justfile still pass it.
 
 Nothing in this plan edits `external/mir/` by hand; the sync is
 `tools/update-mir.sh` after the fork PR merges.
@@ -481,16 +524,38 @@ holds -- effects, handlers, `defer`, regions, GC, the stdlib, inline C,
 `#lang saffron`, the r7rs programs that do not capture a continuation --
 runs under the interpreter with output identical to the generator.
 
-### P1 -- the spike
+### P1 pre-spike -- MIR alone under Emscripten: DONE 2026-10-23
 
-By hand, outside CMake: emcc over `mir.c` + `c2mir.c` + `jit_engine.c` with
-the `__EMSCRIPTEN__` arm stubbed to the minimum, linked into a copy of the
-`tur_wasm` command, a hand-written symbol table for one program, and the
-section 1 `c-mix` program run under node. Measure c2mir time for a pruned
-hello TU (native is ~120 ms, 80-85% of end-to-end), module size delta over
-today's `turmeric.wasm`, recursion depth with our frame, and the JS-trampoline
-cost per runtime call. The fork's `wasm-tests/run.sh` is the smallest
-working emcc command line for the engine and the right starting point.
+`tools/wasm-jit-spike/run.sh`: the vendored MIR (`mir.c` + `c2mir.c`, the
+scratch patch of section 6) built with emcc 6.0.13, a 60-line driver that
+compiles C through c2mir with headers served from an embedded directory and
+interprets it, driven from node 22. `spike.wasm` is 675 KB. Results:
+
+| question | answer |
+|---|---|
+| Does the vendored wasm target build and run without the patch step c2mp used to need? | Yes (one latent bug, section 6). |
+| Can `setjmp` be in the symbol table? | **No.** `emcc` refuses the build: `Indirect use of setjmp is not supported`. `longjmp` can. |
+| Does a host-owned landing work across the JS trampoline? | **Yes** (`sjlj.c`): direct `setjmp` in a compiled frame, body entered through `wasmTable.get(fp)()`, `longjmp` by address through the trampoline, control returns to the landing with the value; repeatable. |
+| Recursion depth | **1,696** frames (`int sum (int n)`, `-O2`, node default stack). A JS `RangeError`; recovery is `stackRestore` plus a context rebuild. |
+| Interpreted loop, steady state | **13 ns per iteration** (`s += i`, 10 M iterations in 130 ms). The first run of a loop is ~3x slower while V8 tiers the interpreter up. Native `TUR_JIT_GEN=interp` ran the Turmeric loop at 12 ns per step, so the interpreter loses almost nothing to wasm. |
+| One native call per iteration through the JS trampoline | **180 ns per iteration**: the trampoline costs ~165 ns per call. |
+| An interpreted-to-interpreted call (`loop_tail`) | ~140 ns per call. |
+
+What it did not do: link anything from `tur`. That is P1 proper, below,
+and it is now a smaller step than this plan first wrote.
+
+### P1 -- the engine in a copy of the `tur_wasm` link
+
+emcc over the spike's MIR plus `jit_engine.c` with the `__EMSCRIPTEN__` arm
+stubbed to the minimum, linked into a copy of the `tur_wasm` command, a
+hand-written symbol table for one program (the eight libc names of 3.1
+plus what the decls region resolves), and the section 1 `c-mix` program run
+under node. Measure c2mir time for a pruned hello TU (native is 75-80 ms),
+the module size delta over today's `turmeric.wasm`, and depth with our
+frame. The `setjmp` landing of 5.6 has to exist in some form before any
+program's `main` can be entered, since the entry landing is unconditional:
+the quickest form for the spike is a `tur_rt_try` in the host and an
+emitter knob that routes `__dke` through it.
 
 ### P2 -- `tur_front`
 
@@ -547,10 +612,12 @@ precede them.
 
 1. **Speed against the tree-walker.** Measured natively (section 4): the
    MIR interpreter is ~20x faster on a loop. P1 confirms the ratio on wasm.
-2. **The JS trampoline tax** (5.5) until the stub registry lands, and its
-   interaction with Asyncify and fibers: a JIT'd frame under a `call/cc`
-   capture, or under the playground's frame loop, has JS frames below it.
-   Until 5.5, programs that need to suspend across JIT'd code fall back.
+2. **The JS trampoline tax** (5.5): measured at ~165 ns per call, against
+   13 ns per interpreted iteration. Real but bounded; the stub registry
+   removes it for the runtime's signatures. Its interaction with Asyncify
+   and fibers stands: a JIT'd frame under a `call/cc` capture, or under the
+   playground's frame loop, has JS frames below it, and until 5.5 programs
+   that need to suspend across JIT'd code fall back.
 3. **`setjmp`** (5.6) is the largest correctness item and the one P0 sizes.
 4. **Depth** (5.8).
 5. **Two sources of truth for headers** if 5.4 picks generation.
