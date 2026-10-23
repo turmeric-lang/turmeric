@@ -234,7 +234,7 @@ static bool g_inner_sub_has_handler;
 static intptr_t case_inner_reperform(intptr_t env, intptr_t arg, DK *subk) {
     (void)env; (void)arg;
     g_inner_sub_has_handler = dk_has_handler(subk, TAG);
-    return dk_perform(TAG, 5, subk);   /* re-perform; caught by outer -> 5+100=105 */
+    return dk_perform(TAG, "Test", 5, subk);   /* re-perform; caught by outer -> 5+100=105 */
 }
 
 int main(void) {
@@ -302,7 +302,7 @@ int main(void) {
         DK *chain = dk_frame(add1, 0,
                        dk_handler(TAG, case_probe, 0,
                          dk_frame(mul2, 0, dk_done())));
-        intptr_t r = dk_perform(TAG, 0, chain);
+        intptr_t r = dk_perform(TAG, "Test", 0, chain);
         check(g_case_sub_has_handler && r == 4, "cps-effect-deep-reinstall",
               "deep handler did not re-install on the captured sub-continuation");
         dk_free(chain);
@@ -319,7 +319,7 @@ int main(void) {
         DK *chain = dk_frame(add1, 0,
                        dk_handler_shallow(TAG, case_probe, 0,
                          dk_frame(mul2, 0, dk_done())));
-        intptr_t r = dk_perform(TAG, 0, chain);
+        intptr_t r = dk_perform(TAG, "Test", 0, chain);
         check(!g_case_sub_has_handler && r == 4, "cps-effect-shallow-no-reinstall",
               "shallow handler wrongly re-installed on the captured sub-continuation");
         dk_free(chain);
@@ -340,7 +340,7 @@ int main(void) {
                        dk_handler_shallow(TAG, case_inner_reperform, 0,
                          dk_handler(TAG, case_outer_add100, 0,
                            dk_done())));
-        intptr_t r = dk_perform(TAG, 0, chain);
+        intptr_t r = dk_perform(TAG, "Test", 0, chain);
         check(g_inner_sub_has_handler && r == 106,
               "cps-effect-shallow-outer-propagation",
               "shallow resume's re-perform did not reach the enclosing handler");
