@@ -1,0 +1,34 @@
+;; closure-env-capturing-closures-not-released: a combinator that wraps a
+;; closure parameter in a closure of its own -- `(q-not (q-e 3))` -- handed to
+;; a parameter that only calls it.  The inner factory's env was hoisted and
+;; freed; the combinator's env, and the closure it held, leaked (24 B + 24 B a
+;; call), on the CPS path (`demo`, which performs) and the direct one (`plain`)
+;; alike.  The combinator is now a fresh-closure factory too (its closure
+;; captures only a closure PARAMETER, which its env holds without owning), and
+;; the closure passed there is hoisted with it, so both die at the call.
+(defstruct D :copy [e : int x : int])
+(defeffect Tick [] : nil)
+(defn count-if [n : int pred : (fn [D] bool)] : int
+  (let [^mut i 0 ^mut c 0]
+    (while (< i n) (when (pred (D i 0)) (set! c (+ c 1))) (set! i (+ i 1)))
+    c))
+(defn q-e [e : int] : (fn [D] bool) (fn [d : D] : bool (= (.e d) e)))
+(defn q-not [p : (fn [D] bool)] : (fn [D] bool) (fn [d : D] : bool (not (p d))))
+(defn q-and [p : (fn [D] bool) q : (fn [D] bool)] : (fn [D] bool)
+  (fn [d : D] : bool (and (p d) (q d))))
+(defn shapes [k : int] : int
+  (println (count-if 10 (q-e 3)))                                     ; 1
+  (println (count-if 10 (q-not (q-e 3))))                             ; 9
+  (println (count-if 10 (q-not (q-not (q-e 3)))))                     ; 1
+  (println (count-if 10 (q-and (q-not (q-e 3)) (q-not (q-e 4)))))     ; 8
+  (println (count-if 10 (q-and (q-e 5) (fn [d : D] : bool (> (.e d) k)))))  ; 1
+  0)
+(defn demo [] : int
+  (perform (Tick))                           ; makes demo CPS-colored
+  (shapes 2)
+  (println (count-if 10 (q-not (q-e 3))))
+  0)
+(defn main [] : int
+  (handle (demo) (Tick [] k) (resume k nil))
+  (shapes 2)
+  0)

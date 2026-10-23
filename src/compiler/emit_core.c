@@ -1287,6 +1287,14 @@ static bool binding_escapes_impl_x(const Expr *e, const Binding *b,
                                     barg->as.var.binding == b;
                     if (box_accessor && arg_is_b)
                         continue;
+                    /* closure-env-capturing-closures-not-released: `b` is a
+                     * hoisted fresh closure handed to the combinator whose
+                     * result env holds it, and that result dies at the same
+                     * call (hoist_borrowed_closure_args). */
+                    if (arg_is_b && b->closure_dies_with_fn && !fe && i < 32 &&
+                        cur->as.call_.fn_binding == b->closure_dies_with_fn &&
+                        (b->closure_dies_with_fn->fresh_closure_captured_params & (1u << i)))
+                        continue;
                     /* ... and a USER callee whose body was inferred not to
                      * retain this sum-typed parameter (nonretain_sum_param_mask)
                      * confines it exactly as the audited readers do.  Only under

@@ -13418,11 +13418,25 @@ Expr *elab_defn(Elab *e, const Form *call) {
             _fc->as.closure_.closure->fn) {
             struct Closure *_c = _fc->as.closure_.closure;
             bool _ok = fn_result_kind_is_scalar_copy(_c->fn->return_type.kind);
-            for (uint8_t _ci = 0; _ok && _ci < _c->n_captures; _ci++)
-                if (!_c->captures[_ci] ||
-                    !fn_result_kind_is_scalar_copy(_c->captures[_ci]->type.kind))
-                    _ok = false;
+            /* closure-env-capturing-closures-not-released: a closure-typed
+             * PARAMETER captured by a combinator's closure -- `q-not`'s `p`.
+             * The env holds it without owning it (its glue frees only the
+             * env), so a bare free stays safe; admitted only when the body is
+             * the closure itself, so nothing else can have kept the argument. */
+            const Expr *_bare = body;
+            while (_bare && _bare->kind == EX_ASCRIBE) _bare = _bare->as.ascribe_.inner;
+            uint32_t _pmask = 0;
+            for (uint8_t _ci = 0; _ok && _ci < _c->n_captures; _ci++) {
+                const Binding *_cb = _c->captures[_ci];
+                if (_cb && fn_result_kind_is_scalar_copy(_cb->type.kind)) continue;
+                bool _param = false;
+                if (_cb && _bare == _fc && _cb->type.kind == TY_FN)
+                    for (uint32_t _pi = 0; _pi < n_params && _pi < 32; _pi++)
+                        if (params[_pi] == _cb) { _param = true; _pmask |= 1u << _pi; break; }
+                if (!_param) _ok = false;
+            }
             b->returns_fresh_closure = _ok;
+            b->fresh_closure_captured_params = _ok ? _pmask : 0;
         }
     }
     /* any-struct-box-leak-per-widen: the `any` twin of the above.  A function
