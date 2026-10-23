@@ -1,0 +1,6 @@
+(defn sum-to [n : int acc : int] : int
+  (if (= n 0) acc (sum-to (- n 1) (+ acc n))))
+(defn fsum [n : int acc : float] : float
+  (if (= n 0) acc (fsum (- n 1) (+ acc 7.1))))
+(println (sum-to 10000000 0))
+(println (fsum 1000000 0.0))

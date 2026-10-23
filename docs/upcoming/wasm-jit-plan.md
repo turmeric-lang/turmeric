@@ -14,7 +14,12 @@
 > (section 7, `tools/wasm-jit-spike/`): MIR runs under emcc 6.0; `setjmp`
 > cannot be called indirectly on wasm, and the host-owned landing works;
 > depth 1,696; 13 ns per interpreted iteration, ~165 ns per trampolined
-> native call. Two fork bugs found (section 6).
+> native call. **P1 2026-10-23** (section 7, `tools/wasm-jit-spike/engine/`):
+> the engine linked into a copy of the REPL module with a generated
+> symbol table runs the inline-C program on the page -- a compiled turn
+> costs 288 ms in steady state, c2mir on wasm is no slower than native.
+> Four fork bugs found (section 6); `setjmp` (5.6) and module size are
+> what P3 starts with.
 > **Type:** JIT engine (`src/jit_engine.c`, `external/mir/`), web build
 > (`src/CMakeLists.txt` `tur_wasm`, `src/web/wasm_glue.c`), driver split
 > (`src/driver/pipeline.c`), emitter (one knob, section 5.6).
@@ -468,6 +473,21 @@ below rides together once P1 has the list:
   reads as an empty string in a plain wasm module, which is why the fork's
   test and c2mp never saw it; under `-sSAFE_HEAP=1` it is a segfault at
   init. Found 2026-10-23; the spike patches a scratch copy to `{"wasm_hr0"}`.
+- **The wasm32 target's basic types disagree with clang's.**
+  `mirc_wasm32_emscripten.h` predefines `__PTRDIFF_TYPE__ int`, and its
+  `stdint.h`/`stddef.h` make `intptr_t`, `uintptr_t` and `ptrdiff_t` `int`;
+  clang on wasm32 uses `long` for all four (`emcc -dM`), and musl derives
+  `_Addr`, hence `size_t`, from `__PTRDIFF_TYPE__`, so `size_t` arrived as
+  two different types ("repeated declaration size_t"). Found 2026-10-23
+  in P1; the engine build patches a scratch copy.
+- **The wasm32 target lacks the compiler-provided type macros musl
+  typedefs from**: `__WCHAR_TYPE__`, `__WINT_TYPE__` and the sixteen
+  `__INT_FAST*`/`__INT_LEAST*`/`__UINT_*` ones. `bits/alltypes.h`'s
+  `typedef __WCHAR_TYPE__ wchar_t;` then fails and every later declaration
+  naming `wchar_t` (`mbtowc` in `stdlib.h`) derails the parser, which
+  surfaced as a syntax error on an unrelated `static inline` function
+  hundreds of lines later. The engine build takes the 21 values from
+  `emcc -dM`.
 - **`wasm-tests/run.sh` is stale**: after `12ee70c` dropped the bundled libc
   headers, three of its four cases fail with `error in opening file
   stdio.h`. It needs an `include_dirs` entry and a header to serve, like
@@ -560,18 +580,99 @@ interprets it, driven from node 22. `spike.wasm` is 675 KB. Results:
 What it did not do: link anything from `tur`. That is P1 proper, below,
 and it is now a smaller step than this plan first wrote.
 
-### P1 -- the engine in a copy of the `tur_wasm` link
+### P1 -- the engine in a copy of the `tur_wasm` link: DONE 2026-10-23
 
-emcc over the spike's MIR plus `jit_engine.c` with the `__EMSCRIPTEN__` arm
-stubbed to the minimum, linked into a copy of the `tur_wasm` command, a
-hand-written symbol table for one program (the eight libc names of 3.1
-plus what the decls region resolves), and the section 1 `c-mix` program run
-under node. Measure c2mir time for a pruned hello TU (native is 75-80 ms),
-the module size delta over today's `turmeric.wasm`, and depth with our
-frame. The `setjmp` landing of 5.6 has to exist in some form before any
-program's `main` can be entered, since the entry landing is unconditional:
-the quickest form for the spike is a `tur_rt_try` in the host and an
-emitter knob that routes `__dke` through it.
+`tools/wasm-jit-spike/engine/build.sh` links `jit_engine.c`, `jit_ffi.c`,
+MIR, the driver's front half and a generated symbol table into a copy of
+the stock `tur_wasm` emcc command; `run.js` feeds it a `.tur` file under
+node. The section 1 program prints `97`:
+
+```
+$ node run.js tests/cmix.tur
+tur-wasm-jit: split=1 pruned=1 bytes=422261 -> 118334 (837 of 893 defs, 6 includes dropped)
+TUR_JIT_TIMING  interp  c2mir  150.9
+TUR_JIT_TIMING  interp  link   2.6
+[out] 97
+TUR_JIT_TIMING  interp  run    1.9
+```
+
+`hello` and the 10-million-step `loop` run too. Measured, node 22, emcc
+6.0.13, the same loop three times in one process:
+
+| | first run | steady state | native Release, `TUR_JIT_GEN=interp` |
+|---|---|---|---|
+| front half (emit + split + prune) | ~260 ms | ~60 ms | -- |
+| c2mir | 164 ms | **63 ms** | 75-80 ms |
+| link | 2.6 ms | 2.6 ms | 0.6 ms |
+| run, `loop` | 526 ms | **170 ms** | 121 ms |
+| whole turn | 889 ms | **288 ms** | -- |
+
+So in steady state a compiled turn on the page costs under 300 ms, c2mir
+on wasm is no slower than native, and the interpreted loop is 1.4x native.
+The S2 split applies unchanged (the hash of the re-emitted runtime
+matches the native artifacts), so the program half is 118 KB of C against
+a 422 KB full unit, and the retry path was never needed for these three.
+
+**What it took**, each a line in section 6 or a design decision above:
+
+- **Engine arms** (`src/jit_engine.c`, `src/turi/jit_ffi.c`, all under
+  `__EMSCRIPTEN__`): the resolver and `resolve_sym` consult the generated
+  table; interpreter mode is forced; `main` is entered through
+  `MIR_interp_arr`, because on wasm an interpreted function's `addr` is a
+  thunk slot only `wasm_ff_dispatch` can call, so `box.fn (...)` traps with
+  `table index is out of bounds`; a `TUR_JIT_DUMP_FULL` dump of the exact
+  text c2mir receives; and five lines of musl compatibility in
+  `JIT_PRELUDE` (5.4). The native build is untouched and still runs.
+- **The glue** (`engine/wasm_jit_glue.c`): `cmd_jit`'s sequence minus the
+  command line, with `g_interpret_mode` saved and cleared around the
+  emitter exactly as `repl_jit_build` does -- the module's `turi_env_new`
+  leaves it on, and under it the CPS backend evicts every handler ("this
+  effect operation has no lowering here"), which was the first thing the
+  effect program hit. Generator stubs for `MIR_gen_init`,
+  `MIR_gen_set_optimize_level`, `MIR_gen`, which `mir-wasm.c` does not
+  provide.
+- **The symbol table** (`engine/gen-symtab.py`): every identifier in the
+  declarations region that `llvm-nm` finds defined in the linked objects
+  (463 after exclusions), minus the names the hosted arm turns into
+  macros (asked of the preprocessor), minus the names no declaration
+  covers (the compiler names them, the build drops them and retries),
+  plus 187 libc names. Data objects matter: `g_tur_args` was the first
+  missing import. The table TU reads the region as the hosted externs
+  (`TUR_RT_SPLIT_HOSTED`), so every address is taken at its declared type.
+- **Headers** (5.4, decided): musl's sysroot headers, embedded at
+  `/sysinclude`, with five prelude defines (`__restrict`, `__inline`,
+  `__inline__`, and `__builtin_va_list` as c2mir's own `void *[1]`) and
+  the fork fixes below. Fourteen headers parse; `math.h` does not
+  (`__ISREL_DEF` over `__builtin_isless`) and the pruned unit never
+  includes it.
+- **Three more fork fixes** (section 6).
+- **Left out of the link:** `web/wasm_lsp.c` (its own `tur_collect_symbols`
+  collides with the driver's now that `pipeline.c` is linked),
+  `driver/cmd_run.c`, `cmd_misc.c` and `worker.c` (they include
+  `<signal.h>` after `turi/env.h`, whose Emscripten `ucontext_t` stub
+  conflicts with musl's), and `mir-gen.c`. `getcontext`/`makecontext`/
+  `swapcontext` are stubbed to abort loudly in their own TU: the symbol
+  table keeps the resident runtime's fiber code alive, and Emscripten
+  declares ucontext without implementing it.
+
+**What P1 leaves for P3**, measured:
+
+- **`setjmp`** (5.6): `eff.tur` stops at `import of undefined item setjmp`,
+  the predicted family, with the host-owned landing still to build. Note
+  that `hello`, `cmix` and `loop` link without it: the pruner drops the
+  entry landing from a program whose `main` cannot escape.
+- **Size**: `turmeric-jit.wasm` is 30 MB against the stock module's 6.8 MB.
+  The table takes the address of the whole runtime (nothing is dead to
+  the linker any more), the driver is in, and nothing is `-Os`. Measuring
+  what each costs is P3's first job; the plan's "only the iframe loads
+  the big module" split (section 9.3) is the fallback.
+- **The full-unit retry** (TUR-W0071) fails on `#include <stdatomic.h>`
+  in the embedded `arena.c`: c2mir ships no such header and clang's uses
+  `_Atomic`. Natively the same include resolves to the host's. Either
+  the embedded runtime sources get a `__MIRC__` arm around it, or the
+  retry stays unavailable on wasm and a split-TU failure is final.
+- **Bare-module scale**: the loop's first run is 3x its steady state
+  while V8 tiers the interpreter up, as in the bare spike.
 
 ### P2 -- `tur_front`
 

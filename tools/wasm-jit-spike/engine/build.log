@@ -1,0 +1,6 @@
+type macros added from clang: 21
+compiling 4 translation unit(s)
+symtab: 490 runtime + 187 libc rows (4 macro names excluded)
+symtab: 471 runtime + 187 libc rows (23 macro names excluded)
+symtab: 463 runtime + 187 libc rows (31 macro names excluded)
+-rwxr-xr-x 1 root root 30022108 Oct 23 05:29 /home/user/turmeric/tools/wasm-jit-spike/engine/build/turmeric-jit.wasm
