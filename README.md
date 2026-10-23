@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/turmeric-lang/turmeric/actions/workflows/ci.yml/badge.svg)](https://github.com/turmeric-lang/turmeric/actions/workflows/ci.yml)
 
-**Latest release:** `v0.70.1` -- Generators get a first-class `(Generator T)` type with a typed `gen-unwrap`, and `coerce` now takes its result type from an `Equal` proof (retiring `type-app`) alongside new `defer` and `shift0` semantics fixes.
+**Latest release:** `v0.70.2` -- Identical string literals now compare consistently across `tur run`, `tur jit` and `--interpret`, and the Try Turmeric app fills the screen on iOS 27.
 
 ## What
 

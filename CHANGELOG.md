@@ -2,6 +2,20 @@
 
 All notable changes to Turmeric are documented here.
 
+## [0.70.2] -- 2026-10-23
+
+### Fixed
+
+- **Identical string literals are one object on every engine.** An erasing `(::
+  ":user/name" :int)` compared equal under `tur run` but unequal under `tur
+  jit`, because whether two identical inline C literals merged was up to the C
+  compiler. Each distinct literal text in a unit is now emitted once, so the
+  comparison is consistent on run, jit and `--interpret`; `"a\0b"` stays
+  distinct from `"a"`.
+- **Try Turmeric fills the screen on iOS 27 installed apps.** The installed app
+  no longer stops one status bar short of the bottom edge on iPhone, and the top
+  status-bar area is now opaque instead of showing content under it.
+
 ## [0.70.1] -- 2026-10-23
 
 ### Added
