@@ -512,7 +512,7 @@ What `out` contains, in order (single-file, non-split):
 |---|---|---|
 | 1 | preamble | runtime text up to the end marker (see the [preamble guide](runtime-preamble-and-linkage-guide.md)) |
 | 2 | hoisted includes, panic-site slot | `#include`s lifted from inline-C bodies; `tur_site_t`, `tur_site_push`/`pop`, `tur_panic_sited` |
-| 3 | string literals | one `static const char __tur_str_<N>[]` per distinct literal in the unit (`cstr_codegen_emit`) |
+| 3 | string literals | one `static const char __tur_str_<N>[]` per distinct literal in the unit, spliced in here once the whole unit is written (`cstr_codegen_splice`) |
 | 4 | `early_file` | ADT typedefs, drop glue, base constructors, dynvar runtime |
 | 5 | symbol records | `struct __tur_sym` and one record per keyword |
 | 6 | fn-pointer typedefs | for concrete fn fields of parametric ADTs |
@@ -533,7 +533,7 @@ What `out` contains, in order (single-file, non-split):
 | 21 | FFI export shims | `<mangled>__ffi` shims, only for the REPL's in-process spice build (J2) |
 | 22 | `tur:inline-c-fns` | appended by `emit_program_job` |
 
-Bands 3 to 13 are the fields of `ProgramDeclBands` (`src/compiler/emit_module.c`),
+Bands 4 to 13 are the fields of `ProgramDeclBands` (`src/compiler/emit_module.c`),
 in declaration order, and `emit_program_assemble_decls` writes them; the list
 at `Final assembly.` in `emit_program_inner` covers the rest.
 
