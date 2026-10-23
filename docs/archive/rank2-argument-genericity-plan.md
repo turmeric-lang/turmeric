@@ -106,4 +106,4 @@ Still unchecked: the result type; a bound variable under a type application
 function value (`!is_global`) reaching a forall slot. Found on the way: passing
 an `any`-parameter function to a forall slot type-checks but segfaults at run
 time, before and after this change --
-[rank2-any-param-function-segfaults](../reported/rank2-any-param-function-segfaults.md).
+[rank2-any-param-function-segfaults](rank2-any-param-function-segfaults.md).

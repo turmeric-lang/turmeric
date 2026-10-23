@@ -1,5 +1,7 @@
 # `tur build --target wasm` runs the program on emcc's 64 KiB default stack, unchecked, with no tail calls
 
+**Resolved 2026-10-23.** All four items, following the fix directions: (1) `pkg_web_compose_link_flags` (`src/compiler/pkg.c`) composes `-sSTACK_SIZE` from a new `:web :stack` key, default 16 MiB (`PKG_WEB_DEFAULT_STACK`, what `tur_wasm` links with); the composer runs with or without a `:web` block, so a bare `tur build --target wasm` gets it too. (2) The default wasm `cc_flags` (`src/driver/cmd_build.c`) carry `-sSTACK_OVERFLOW_CHECK=1` except under `--release`. (3) `emit_deep_stack_runtime` compiles out under `__EMSCRIPTEN__`. (4) `-mtail-call` is composed from `:web :tail-calls` (default true), and `TUR_MUSTTAIL` spells `musttail` on wasm when `__wasm_tail_call__` is defined (the `requires.musttail` probe in `tests/run.sh` mirrors the gate). Checked with emcc 6.0.10 (the CI pin) under node 22: `tailcall-musttail-deep`'s nine-function cycle built `--target wasm` at -O0 prints `5` with 11 `return_call`s in the module; the same C linked without `-mtail-call` dies with `Maximum call stack size exceeded`. No CI job builds `--target wasm` today, so nothing pins this automatically.
+
 **Severity:** medium-high -- silent memory corruption class on the web
 target, no diagnostic. Found 2026-10-23 measuring recursion for
 [wasm-jit-plan](../upcoming/wasm-jit-plan.md); the AOT target is
@@ -35,7 +37,7 @@ and nothing says so:
    (`emit_module.c:10996`), so a mutual tail-call cycle recurses. clang does
    honour `musttail` on wasm with `-mtail-call`, and every evergreen browser
    ships the tail-call feature. See also
-   [jit-musttail-expands-to-nothing](jit-musttail-expands-to-nothing.md).
+   [jit-musttail-expands-to-nothing](../reported/jit-musttail-expands-to-nothing.md).
 
 ## Repro
 

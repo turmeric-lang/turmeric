@@ -38,34 +38,28 @@ directory is worse for triage than no index.
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [r7rs-toplevel-define-sees-empty-command-line](r7rs-toplevel-define-sees-empty-command-line.md) | medium | `(define n (command-line))` at top level gives `("")`: the initializer runs in `__tur_module_def_init`, from the static-init constructor, before `main` builds `*args*`. A procedure or top-level expression reading it sees the arguments |
 
 ## Found measuring recursion for the wasm JIT plan (filed 2026-10-23)
 
 | Report | Severity | One line |
 |---|---|---|
-| [wasm-target-stack-is-emcc-default](wasm-target-stack-is-emcc-default.md) | medium-high | `tur build --target wasm` passes no `-sSTACK_SIZE`, so the program runs on emcc's 64 KiB default with `STACK_OVERFLOW_CHECK` off: a 200-level recursion with 1 KiB frames dies in `memory access out of bounds`; the 1 GiB entry-thread wrapper is compiled in and silently fails; `TUR_MUSTTAIL` is empty under `__wasm__` though `-mtail-call` makes it work. |
 | [jit-musttail-expands-to-nothing](jit-musttail-expands-to-nothing.md) | low (high for the wasm JIT) | `TUR_MUSTTAIL` is empty under c2mir, so mutual tail calls recurse under `tur jit`; the 1 GiB entry thread hides it (`tailcall-musttail-deep` passes by room), `TUR_JIT_GEN=interp` overflows, and the browser engine's ceiling is 1,696 frames. c2mir's `__builtin_jcall` is not a general tail call. |
 
 ## Found executing generator-type-plan (filed 2026-10-23)
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [gen-body-two-vec-literals-duplicate-state-member](gen-body-two-vec-literals-duplicate-state-member.md) | low-medium | A `gen` body with two `[...]` literals promotes two `let` temporaries both named `__vw` / `__v` into the state struct, and cc rejects the duplicate members; one literal compiles, `--interpret` runs both |
-| [gen-collect-rejects-float-elements](gen-collect-rejects-float-elements.md) | low | `gen-collect` of a float generator is `gen-arr-push! arg 2: expected int, got float`: the typed `gen-unwrap` meets the untyped `gen-arr` helpers' `int` default, reported inside the macro expansion |
 
 ## Found verifying the spice READMEs and the advanced types guide (filed 2026-10-23)
 
 | Report | Severity | One line |
 | --- | --- | --- |
 | [spice-readmes-fail-strict-guide-pairs-check](spice-readmes-fail-strict-guide-pairs-check.md) | low | `check-guide-pairs.tur --spices` fails: 57 Turmeric blocks have no sweet-exp companion and 3 pairs (glsl, nng, sdf-raylib) do not parse-check. No CI job in either repo runs the check, and turmeric-spices still carries the old Python checker |
-| [advanced-type-system-rationale-stale-syntax](advanced-type-system-rationale-stale-syntax.md) | low-medium | `advanced-type-system-rationale.md` writes effect rows as `: T @ {Io \| e}` (now `#fx{IO e} : T`), and its union, intersection and existential examples do not compile. Its `alloca` and `extern-c` sized-layout paragraphs describe features the compiler does not have |
 
 ## Found executing rank2-argument-genericity-plan (filed 2026-10-22)
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [rank2-any-param-function-segfaults](rank2-any-param-function-segfaults.md) | medium | A function whose parameter is `any`, passed to a `forall [a] (-> a a)` parameter, prints `0` for `7` (both engines) and segfaults compiled at a `cstr`: the forwarding wrapper takes and returns `tur_tagged_t` but the forall carrier calls it through an `int64_t` slot. Pre-existing; the genericity check accepts `any` as generic |
 
 ## Found checking what blocks discontinue-plan (filed 2026-10-22)
 
@@ -105,7 +99,6 @@ directory is worse for triage than no index.
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [letrec-struct-arg-and-env-leak](letrec-struct-arg-and-env-leak.md) | low-medium (narrowed 2026-10-21: the struct-argument box is fixed; the env leak with `open` remains) | A by-value struct argument to a `letrec` closure is malloc-boxed at the call and never freed (per iteration when the self-call is not a loop), and a `letrec` whose body opens a captured existential and takes a struct argument never drops its env. Found by LeakSanitizer in tur-plot's folds, which are now top-level `defn`s. |
 
 ## Found writing the typeclass API docs (filed 2026-10-19)
 
@@ -189,7 +182,6 @@ keep it at zero.
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [stale-comments-emitter](stale-comments-emitter.md) | low (narrowed 2026-10-21: three structural items remain) | The comment items are fixed and `tests/check-src-doc-citations.sh` now catches a dead `docs/` citation in `src/`. Open: pull the ~20-band final assembly of `emit_program_inner` into an `emit_program_assemble` over a struct of bands (and re-check the guide's "Output bands" table), fold the three copies of the "recorded spelling, else representation" question into one `emit_value_spelled_ctype` helper, and re-sort `emit_internal.h` into real per-file sections (its "emit_core.c" banner covers 239 prototypes, 133 defined elsewhere). |
 | ~~[stale-comments-build-driver](../archive/stale-comments-build-driver.md)~~ | low | **RESOLVED 2026-10-21** (archived, main-c-split-plan Phase 0): the comments are fixed, the add-a-pass recipe names all four places, the two dead `needs_hamt` fields are gone, and `begin_compile_unit()` is the one per-unit reset. Deleting `effect_lower` moved to its own report |
 | ~~[stale-comments-regions](../archive/stale-comments-regions.md)~~ | low | **RESOLVED 2026-10-22** (archived): the comments were fixed 2026-10-21; the three `:heap` ctor emitters now share one `emit_heap_ctor_body` (byte-identical output), so their "mirror each other" comments are gone |
 | ~~[stale-comments-diagnostics](../archive/stale-comments-diagnostics.md)~~ | low / low-medium | **RESOLVED 2026-10-18** (archived): `--Werror=deprecated` promotes D0002/D0003 through one helper, `elab_deprecation_level()`; `tur explain TUR-D0001` describes an error; `tur explain` (and the REPL's bare `:explain`) accept `I` codes, and TUR-I0379 has an entry; the stale comments are fixed. Pinned by `errors/deprecated-fx-row-{hash,at}-as-error` and four `run-flags.sh` explain checks |
@@ -3354,4 +3346,3 @@ the `__int128` work only surfaced them.  Both resolved the same day.
 | --- | --- | --- |
 | [tsan-nightly-exit-1-2026-10-18](tsan-nightly-exit-1-2026-10-18.md) | unknown (untriaged) | Sentry `turmeric-ci` 7784962154: the nightly TSan run of 2026-10-18 (head `7af0e323`) exited **1**, not 66, so it is a harness failure (build, stdout mismatch or timeout), probably not a race report. The event names no fixture; the cause is in the attached `tsan.log`. Lists the steps to triage it |
 | [fuzz-search-type-2026-10-19](fuzz-search-type-2026-10-19.md) | unknown (untriaged) | Sentry `turmeric-ci` 7769783525: the nightly fuzz search's `type` harness found a defect on 2026-10-19 (head `901f2142`). The event as filed carries no seed or program; both are in the Sentry attachment. Lists how to reproduce and classify it |
-| [fuzz-manifest-deadly-signal-2026-10-19](fuzz-manifest-deadly-signal-2026-10-19.md) | unknown, untrusted-input surface (untriaged) | Sentry `turmeric-ci` 7786308509: libFuzzer `fuzz_manifest` died on a deadly signal on 2026-10-19 (head `901f2142`). Stack shows only libFuzzer's own printer, so the signal and the faulting frame are unknown; the crashing input is in the Sentry attachment |

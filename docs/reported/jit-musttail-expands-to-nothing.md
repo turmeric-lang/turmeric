@@ -21,7 +21,7 @@ passes under `tur jit` by having room, not by making tail calls.
 
 The same macro arm also excludes `__wasm__`, so `tur build --target wasm`
 gets no tail calls either; that half is in
-[wasm-target-stack-is-emcc-default](wasm-target-stack-is-emcc-default.md).
+[wasm-target-stack-is-emcc-default](../archive/wasm-target-stack-is-emcc-default.md).
 
 ## Repro
 

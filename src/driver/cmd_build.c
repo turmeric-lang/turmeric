@@ -310,7 +310,15 @@ static int cmd_build_once(const char *input, const char *out_path,
     const char *cc_flags = getenv("TUR_CC_FLAGS");
     if (!cc_flags || !*cc_flags) {
         if (wasm_target)
-            cc_flags = "-O2 -std=c99 -Wall -fno-strict-aliasing -s WASM=1";
+            /* wasm-target-stack-is-emcc-default: the linear stack overflows
+             * into whatever sits below it unless the build checks; the check
+             * is a bounds compare on each `sp` move, so every build but
+             * --release pays it.  The stack size itself is composed from
+             * `:web :stack` (pkg_web_compose_link_flags). */
+            cc_flags = g_cc_release
+                ? "-O3 -std=c99 -Wall -fno-strict-aliasing -s WASM=1"
+                : "-O2 -std=c99 -Wall -fno-strict-aliasing -s WASM=1 "
+                  "-sSTACK_OVERFLOW_CHECK=1";
         else if (g_emit_debug_lines)
             /* Debugger Phase 4 (--debug): -g for DWARF, -Og for a debugging-
              * friendly optimization level that still maps cleanly onto the

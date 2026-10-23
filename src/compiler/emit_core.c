@@ -998,6 +998,20 @@ bool expr_subtree_has_inline_c(const Expr *e) {
         case EX_SET:      return expr_subtree_has_inline_c(e->as.set_.value);
         case EX_WHILE:    return expr_subtree_has_inline_c(e->as.while_.cond)
                               || expr_subtree_has_inline_c(e->as.while_.body);
+        /* letrec-struct-arg-and-env-leak (leak 2): `pack`, `open` and the
+         * method call on an open-bound value are emitter code -- a record
+         * build, a field read, a witness-vtable call -- around their operands.
+         * Left to `default`, a closure whose body opened an existential read as
+         * "may hide inline C", so one returning a struct lost its scope-exit
+         * env drop (a 32-byte env a call in tur-plot's fold).  The fifth
+         * missing arm here. */
+        case EX_EXISTS_PACK:  return expr_subtree_has_inline_c(e->as.exists_pack_.value);
+        case EX_EXISTS_OPEN:  return expr_subtree_has_inline_c(e->as.exists_open_.packed)
+                                  || expr_subtree_has_inline_c(e->as.exists_open_.body);
+        case EX_EXISTS_DISPATCH:
+            for (uint32_t i = 0; i < e->as.exists_dispatch_.n_args; i++)
+                if (expr_subtree_has_inline_c(e->as.exists_dispatch_.args[i])) return true;
+            return false;
         default:
             /* Unmodeled kind -- conservatively assume it may hide inline-C. */
             return true;
@@ -4932,6 +4946,21 @@ char *emit_call_name(EmitCtx *ctx, const Expr *call, const Binding *b) {
     return raw_name_for_binding(b);
 }
 
+/* The field a generator's state struct holds `b` in.  Id-suffixed, because
+ * every `let` in a gen body is promoted to a field and two of them can share
+ * a source name: two `[...]` literals each bind the hygienic `__vw` / `__v`
+ * (gen-body-two-vec-literals-duplicate-state-member), as do two user lets of
+ * one name.  Caller frees. */
+char *gen_field_name(const Binding *b) {
+    char *raw = raw_name_for_binding(b);
+    size_t n = strlen(raw) + 16;
+    char *p = (char *)malloc(n);
+    if (!p) { fprintf(stderr, "tur: oom\n"); abort(); }
+    snprintf(p, n, "%s_%u", raw, b->id);
+    free(raw);
+    return p;
+}
+
 /* Return a sanitized C identifier for a Binding. If the binding is a
  * function parameter in the current context, use the raw name (without ID).
  * Otherwise, append the ID suffix. Caller frees. */
@@ -4974,7 +5003,8 @@ static char *capture_env_access(EmitCtx *ctx, const Binding *b) {
         }
     }
     if (!env) return NULL;
-    char *field_name = raw_name_for_binding(b);
+    char *field_name = (env == ctx->gen_var_name) ? gen_field_name(b)
+                                                  : raw_name_for_binding(b);
     size_t sz = strlen(env) + strlen(sep) + strlen(field_name) + 1;
     char *result = (char *)malloc(sz);
     if (!result) { fprintf(stderr, "tur: oom\n"); abort(); }
@@ -7938,8 +7968,14 @@ typedef struct StaticInitEntry {
 static StaticInitEntry *g_static_inits   = NULL;
 static uint32_t         g_n_static_inits = 0;
 static uint32_t         g_cap_static_inits = 0;
+/* This unit emits `main` (static_init_note_main), which builds *args* and
+ * then calls __tur_static_init itself. */
+static bool             g_static_init_unit_main = false;
+
+void static_init_note_main(void) { g_static_init_unit_main = true; }
 
 void static_init_reset(void) {
+    g_static_init_unit_main = false;
     for (uint32_t i = 0; i < g_n_static_inits; i++) free(g_static_inits[i].fn);
     free(g_static_inits);
     g_static_inits     = NULL;
@@ -8002,12 +8038,30 @@ void static_init_emit(Buf *out, bool gc_collector_pasted) {
     const bool split_imp = split_client && emit_split_has_imp();
     if (split_client) buf_puts(out, "extern void __tur_split_lib_init(void);\n");
     if (split_imp) buf_puts(out, "extern void __tur_split_imp_init(void);\n");
+    /* r7rs-toplevel-define-sees-empty-command-line: in a unit that has `main`
+     * and def initializers, the constructor must not run those initializers
+     * -- it runs before `main` has built *args*, so a top-level
+     * `(define n (command-line))` read `("")`.  The runtime half (allocator
+     * hook, atexit, keys, registries) moves to __tur_static_init_rt, which the
+     * constructor still runs early; the DEFS band waits for main's own call. */
+    bool has_defs = false;
+    for (uint32_t i = 0; i < g_n_static_inits; i++)
+        if (g_static_inits[i].band == STATIC_INIT_DEFS) has_defs = true;
+    const bool split_rt = g_static_init_unit_main && has_defs;
+    const bool any = g_n_static_inits > 0 || split_client;
     buf_puts(out,
         "/* S1b: explicit static initialization -- see docs/archive/jit-engine-plan.md.\n"
         " * Called from main(); the constructor below covers the no-main cases\n"
-        " * (separate compilation, --shared).  Whichever runs first wins. */\n"
-        "static void __tur_static_init(void) {\n");
-    if (g_n_static_inits > 0 || split_client) {
+        " * (separate compilation, --shared).  Whichever runs first wins. */\n");
+    if (split_rt)
+        buf_puts(out,
+            "/* The runtime half, which the constructor runs early.  The def\n"
+            " * initializers run user code that may read *args*, so they wait for\n"
+            " * main, which builds it first. */\n"
+            "static void __tur_static_init_rt(void) {\n");
+    else
+        buf_puts(out, "static void __tur_static_init(void) {\n");
+    if (any) {
         buf_puts(out, "    static int __tur_static_init_done = 0;\n"
                       "    if (__tur_static_init_done) return;\n"
                       "    __tur_static_init_done = 1;\n");
@@ -8037,16 +8091,29 @@ void static_init_emit(Buf *out, bool gc_collector_pasted) {
         emit_region_shutdown_atexit(out, 4);
         if (split_client) buf_puts(out, "    __tur_split_lib_init();\n");
         if (split_imp) buf_puts(out, "    __tur_split_imp_init();\n");
-        for (int band = STATIC_INIT_KEYS; band <= STATIC_INIT_DEFS; band++)
+        int last_band = split_rt ? STATIC_INIT_ATEXIT : STATIC_INIT_DEFS;
+        for (int band = STATIC_INIT_KEYS; band <= last_band; band++)
             for (uint32_t i = 0; i < g_n_static_inits; i++)
                 if (g_static_inits[i].band == (StaticInitBand)band)
                     buf_printf(out, "    %s();\n", g_static_inits[i].fn);
     }
     buf_puts(out, "}\n");
-    if (g_n_static_inits > 0 || split_client)
-        buf_puts(out,
+    if (split_rt) {
+        buf_puts(out, "static void __tur_static_init(void) {\n"
+                      "    static int __tur_static_init_done = 0;\n"
+                      "    if (__tur_static_init_done) return;\n"
+                      "    __tur_static_init_done = 1;\n"
+                      "    __tur_static_init_rt();\n");
+        for (uint32_t i = 0; i < g_n_static_inits; i++)
+            if (g_static_inits[i].band == STATIC_INIT_DEFS)
+                buf_printf(out, "    %s();\n", g_static_inits[i].fn);
+        buf_puts(out, "}\n");
+    }
+    if (any)
+        buf_printf(out,
             "__attribute__((constructor))\n"
-            "static void __tur_static_init_ctor(void) { __tur_static_init(); }\n");
+            "static void __tur_static_init_ctor(void) { %s(); }\n",
+            split_rt ? "__tur_static_init_rt" : "__tur_static_init");
     buf_putc(out, '\n');
 }
 

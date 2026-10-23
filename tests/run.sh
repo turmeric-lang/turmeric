@@ -260,8 +260,9 @@ export TUR_STRESS
 TUR_HAS_MUSTTAIL=0
 _mt_probe_dir="$(mktemp -d)"
 cat > "$_mt_probe_dir/p.c" <<'MTEOF'
-#if defined(__clang__) && defined(__has_attribute) && !defined(__wasm__) && \
-    (defined(__x86_64__) || defined(__aarch64__))
+#if defined(__clang__) && defined(__has_attribute) && \
+    ((!defined(__wasm__) && (defined(__x86_64__) || defined(__aarch64__))) || \
+     (defined(__wasm__) && defined(__wasm_tail_call__)))
 #  if __has_attribute(musttail)
 #    define TUR_MUSTTAIL __attribute__((musttail))
 #  endif

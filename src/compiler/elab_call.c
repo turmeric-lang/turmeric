@@ -186,8 +186,9 @@ static bool hrt_validate_hk_actual(Elab *e, Kind f_kind, Type actual,
 /* rank2-argument-genericity-plan: a `forall [a]` parameter promises the callee
  * may use `a` at any type at each application, so the named function passed to
  * it must be generic wherever the forall body has a bare bound variable -- its
- * parameter there a type variable, `any`, or un-annotated (the carrier
- * default).  `(both inc 5 "hi")` with `inc : int -> int` was accepted and
+ * parameter there a type variable or un-annotated (the carrier default).  Not
+ * `any`, which is a tagged value rather than the carrier word
+ * (rank2-any-param-function-segfaults).  `(both inc 5 "hi")` with `inc : int -> int` was accepted and
  * `(f s)` added one to a string's address.
  *
  * The opt-out is an ascription to the forall type, `(:: inc (forall [a] (-> a
@@ -231,7 +232,29 @@ static bool hrt_rank2_params_generic(const Type *forall_ty, const Expr *arg,
         const Type *act = fn_b->type.as.fn.arg_full_types
                               ? fn_b->type.as.fn.arg_full_types[ap] : NULL;
         Type actual = act ? *act : type_from_kind(fn_b->type.as.fn.arg_kinds[ap]);
-        if (actual.kind == TY_TYVAR || actual.kind == TY_ANY) continue;
+        if (actual.kind == TY_TYVAR) continue;
+        /* rank2-any-param-function-segfaults: `any` LOOKS generic but is not
+         * the carrier word -- it is the 16-byte tagged `tur_tagged_t`.  The
+         * forall carrier calls every wrapper through `int64_t (*)(void *,
+         * int64_t)`, and the word does not say which type it holds, so the
+         * wrapper cannot box it into an `any`: the callee read the word plus a
+         * garbage tag (0 for an int, a segfault for a cstr).  Refused until the
+         * wrapper can widen. */
+        if (actual.kind == TY_ANY) {
+            bool lambda = fn_b->synth_kind == SYNTH_LAMBDA;
+            const char *nm = fn_b->name ? fn_b->name->name : "?";
+            diag_emit_with_code(DIAG_ERROR, arg->span, TUR_E0001_TYPE_MISMATCH,
+                                "rank-2 argument %s%s%s takes `any` at parameter "
+                                "%u, where the parameter it is passed to promises "
+                                "'%s' at every type: an `any` parameter is a tagged "
+                                "value, not the untyped word a forall argument is "
+                                "called with, so it cannot be passed here yet; make "
+                                "the parameter a type variable (`(defn f [A] [x : A] "
+                                ": A ...)`) or leave it un-annotated",
+                                lambda ? "(a lambda)" : "'", lambda ? "" : nm,
+                                lambda ? "" : "'", bp + 1, ft->as.tyvar_.name);
+            return false;
+        }
         if (ap < fd->n_params && fd->params[ap] &&
             (fd->params[ap]->type_is_carrier_default ||
              fd->params[ap]->type.kind == TY_TYVAR))
@@ -11298,8 +11321,12 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
      * current call's own `type_bindings` -- and thus its carrier/relay emission
      * -- untouched.  It composes off the callee's OWN parameter tyvar names, so
      * it does not depend on the receiver's tyvar name matching the pusher's. */
-    if (fn_type.kind == TY_FN && fn_type.as.fn.arg_full_types && n_args > 1 &&
-        e->macro_expand_depth == 0) {
+    /* Inside a macro expansion too (gen-collect-rejects-float-elements): a
+     * `(vec-push! v x)` that a macro wrote -- `gen-collect`'s loop, or one
+     * the user's `(when ...)` wraps -- pins the element exactly as a
+     * hand-written one does.  Gated off there, the binding fell back to
+     * `(Vec int)` and a float push stored its bits into an int vector. */
+    if (fn_type.kind == TY_FN && fn_type.as.fn.arg_full_types && n_args > 1) {
         /* Map each callee parameter tyvar that a concrete sibling argument
          * fills (param slot is a bare TY_TYVAR) to that concrete type. */
         CallTypeBinding fwd[16];

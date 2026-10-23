@@ -89,7 +89,7 @@ Related but not blocking:
   `term_k_only_resumed` should count a `discontinue` as the case's one resume,
   or a discontinue case falls back to the copy path.
 - [missing-guides-for-language-primitives](../archive/missing-guides-for-language-primitives.md)
-  item 5 and [stale-comments-emitter](../reported/stale-comments-emitter.md)
+  item 5 and [stale-comments-emitter](../archive/stale-comments-emitter.md)
   item 6 cover the guide section and the `emit_effects.c` header. This plan's
   last step already does both.
 

@@ -1,0 +1,9 @@
+; With a user `main`, a top-level `def` initializer runs from the module's
+; def-init band.  `main` builds *args* before that band runs, so the
+; initializer sees the real command line
+; (r7rs-toplevel-define-sees-empty-command-line).
+(load "stdlib/args.tur")
+(def n-args (list-length *args*))
+(defn main [] : int
+  (println n-args)
+  0)

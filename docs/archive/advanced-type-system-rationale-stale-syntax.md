@@ -1,5 +1,7 @@
 # The advanced type system rationale teaches syntax the compiler rejects
 
+**Resolved 2026-10-23.** Every example in the table now uses the current form (`#fx{IO}` / `#fx{Ask e}` before the return type, `(i : int)` union arms with `: nil`, `(int & Serializable)`, an existential packed from a concrete `int`), and each was run with `tur run`, turmeric and sweet-exp side. The `alloca` and `extern-c` layout paragraphs are reworded as intent, and the Rank-2 sentence now says effect polymorphism is a lowercase row variable in `#fx{...}`.
+
 **Severity: low-medium (docs)** -- `docs/guides/advanced-type-system-rationale.md`
 is the "Advanced Types" entry in the guide index. Its effect-row example uses
 the retired `@ {Io}` syntax, and the union, intersection and existential

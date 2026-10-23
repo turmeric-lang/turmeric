@@ -66,7 +66,7 @@ defn swap-apply [f (forall [a b] (-> a b a)) x :int y :int] :int
 A `forall [a]` parameter is a promise to the callee: it may apply the function
 at any type it likes. So the function a caller passes must be generic wherever
 the forall body has a bare bound variable -- its parameter there is a type
-parameter, `any`, or un-annotated:
+parameter or un-annotated:
 
 ```turmeric
 (defn id [A] [x : A] : A x)    ; generic: OK
@@ -85,6 +85,11 @@ defn inc [x :int] :int {x + 1}
 apply-poly(id 7)               ; => 7
 apply-poly(inc 7)              ; error[TUR-E0001]: rank-2 argument 'inc' is not generic
 ```
+
+An `any` parameter is refused too, although it accepts every type: `any` is
+a tagged value, and a forall argument is called with one untyped word, so the
+function would read a garbage tag (`(defn ida [x : any] : any x)` passed to
+`apply-poly` printed `0`). Write it with a type parameter instead.
 
 Without the check, `inc` would be applied to whatever type the callee chose --
 a callee that also did `(f "hi")` added one to the string's address. A lambda

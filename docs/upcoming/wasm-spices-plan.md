@@ -230,6 +230,10 @@ App authors and spice authors describe browser needs declaratively. Read when
                                      ;   drives BOTH raylib's OPENGL_VERSION
                                      ;   and emcc's MAX_WEBGL_VERSION -- 6.9
     :heap         134217728          ; fixed heap; see Memory and threads
+    :stack        16777216           ; -sSTACK_SIZE (default 16 MiB; emcc's
+                                     ;   own is 64 KiB)
+    :tail-calls   true               ; -mtail-call, so TUR_MUSTTAIL is a real
+                                     ;   tail call (default true)
     :threads      false              ; DEFAULT false for apps (reversal, see 11)
     :title        "My Game"
     :lazy-assets  ["assets/music/long-track.ogg"]

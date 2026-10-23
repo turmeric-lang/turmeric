@@ -10980,9 +10980,13 @@ int emit_sig_lookup_n_params(const char *cname) {
  * spelled with it.  It expands to `__attribute__((musttail))` only where that
  * is known to hold -- clang on x86-64 / aarch64 -- and to nothing everywhere
  * else: gcc (the attribute arrived in 15 and is not exercised here), c2mir
- * (the JIT's C compiler has no such attribute), and wasm (clang rejects
- * musttail there without the tail-call feature).  Where it expands to
- * nothing, the call is exactly the `return f(args);` T2 already emitted.
+ * (the JIT's C compiler has no such attribute, and MIR has no general tail
+ * call to spell it with -- jit-musttail-expands-to-nothing; `tur jit` hides
+ * the gap behind its 1 GiB entry thread), and wasm WITHOUT the tail-call
+ * feature (clang rejects musttail there).  `tur build --target wasm` passes
+ * `-mtail-call` by default (`:web :tail-calls`), which defines
+ * __wasm_tail_call__ (wasm-target-stack-is-emcc-default).  Where it expands
+ * to nothing, the call is exactly the `return f(args);` T2 already emitted.
  * `-DTUR_MUSTTAIL=` turns it off from the command line. */
 void ensure_musttail_macro(EmitCtx *ctx) {
     if (!ctx || ctx->musttail_macro_emitted) return;
@@ -10993,8 +10997,9 @@ void ensure_musttail_macro(EmitCtx *ctx) {
         "/* proper-tail-calls T2b: a guaranteed tail call where the C compiler\n"
         " * can promise one, and an ordinary `return f(args);` elsewhere. */\n"
         "#ifndef TUR_MUSTTAIL\n"
-        "#  if defined(__clang__) && defined(__has_attribute) && !defined(__wasm__) && \\\n"
-        "     (defined(__x86_64__) || defined(__aarch64__))\n"
+        "#  if defined(__clang__) && defined(__has_attribute) && \\\n"
+        "     ((!defined(__wasm__) && (defined(__x86_64__) || defined(__aarch64__))) || \\\n"
+        "      (defined(__wasm__) && defined(__wasm_tail_call__)))\n"
         "#    if __has_attribute(musttail)\n"
         "#      define TUR_MUSTTAIL __attribute__((musttail))\n"
         "#      define TUR_MUSTTAIL_PINS 1\n"
@@ -13561,6 +13566,27 @@ static bool preamble_uses_serial(const Expr *e) {
  * shared-library emitter, and the CPS backend's D2b entry wrapper); a prologue
  * this easy to forget should exist once.
  */
+/*
+ * CLI-ARGS: build *args* (argv[1..] as a cons list of char*) and *argv0*.
+ * Emitted by every generated `main`, AHEAD of its __tur_static_init() call:
+ * that call runs the unit's def initializers (the STATIC_INIT_DEFS band), and
+ * a top-level `(define n (command-line))` reads these globals there
+ * (r7rs-toplevel-define-sees-empty-command-line).  Needs nothing initialized:
+ * it is plain malloc and two global stores.
+ */
+void emit_main_args_block(Buf *out) {
+    buf_puts(out, "    /* *args*: build cons list from argv[1..argc-1]; *argv0* is argv[0] */\n");
+    buf_puts(out, "    if (argc > 0 && argv[0]) g_tur_argv0 = argv[0];\n");
+    buf_puts(out, "    g_tur_args = 0;\n");
+    buf_puts(out, "    for (int _ai = argc - 1; _ai >= 1; _ai--) {\n");
+    buf_puts(out, "        typedef struct { int64_t value; int64_t next; } __tur_args_cell;\n");
+    buf_puts(out, "        __tur_args_cell *_c = (__tur_args_cell *)malloc(sizeof(__tur_args_cell));\n");
+    buf_puts(out, "        _c->value = (int64_t)(intptr_t)argv[_ai];\n");
+    buf_puts(out, "        _c->next = g_tur_args;\n");
+    buf_puts(out, "        g_tur_args = (int64_t)(intptr_t)_c;\n");
+    buf_puts(out, "    }\n");
+}
+
 void emit_win_binary_stdio_prologue(Buf *out) {
     buf_puts(out, "#ifdef _WIN32\n");
     buf_puts(out, "    _setmode(_fileno(stdout), _O_BINARY);\n");
@@ -14656,8 +14682,11 @@ static const char TUR_DEEP_SIZE_FN[] =
  * to make the thread is not an error -- main just runs where it is, as
  * before, with a line on stderr when TUR_MAIN_STACK_MB asked for the size. */
 static void emit_deep_stack_runtime(Buf *out) {
+    /* Nor under emscripten (wasm-target-stack-is-emcc-default): there the
+     * stack is the -sSTACK_SIZE link flag, and the 1 GiB pthread either fails
+     * (no -pthread) or asks for a 1 GiB wasm thread stack (`:threads true`). */
     buf_puts(out,
-        "#if !defined(_WIN32) && !defined(__MIRC__)\n"
+        "#if !defined(_WIN32) && !defined(__MIRC__) && !defined(__EMSCRIPTEN__)\n"
         "#include <signal.h>\n"
         "#include <pthread.h>\n"
         "#include <unistd.h>\n"
@@ -20588,6 +20617,74 @@ bool g_emit_ffi_export_shims = false;
 static void emit_ffi_export_shims(const EmitCtx *ctx, Buf *out,
                                   const Expr *program);
 
+/* stale-comments-emitter item 2: the declaration bands of a program unit,
+ * declared in the order emit_program_assemble_decls writes them -- so the
+ * order is visible here, and a band added to the struct lands where it is
+ * declared.  Each band sees the C of every band above it.  The bodies that
+ * follow (handler functions, `file`, the entry point, the init sequence) are
+ * written by emit_program_inner itself, because each carries logic of its own.
+ *
+ * Two orders are load-bearing besides the obvious ones
+ * (macos-int-conversion-carrier-pointer-straddles):
+ * concrete_fn_ptr_typedefs is written BEFORE concrete_adt_apps but generated
+ * after it.  Emitting a monomorph calls type_c_name, which is what registers
+ * the fn-ptr typedefs, so generating them first would miss every one; and a
+ * monomorph over a `(c-fn ...)` element names one in its own typedef and ctor
+ * signature (`tur_adt_Option__fnc1_int__int` holds a
+ * `tur_fnptr_int64_t_int64_t_t`), so they are written first. */
+typedef struct ProgramDeclBands {
+    Buf *early_file;               /* ADT typedefs, drop glue, base ctors */
+    Buf *sym_records;              /* struct __tur_sym + one record per keyword */
+    Buf *concrete_fn_ptr_typedefs; /* fn-ptr typedefs for parametric fields */
+    Buf *concrete_adt_apps;        /* monomorphized ADT typedefs + ctors */
+    Buf *rt_lazy;                  /* lazy runtime state (split builds only) */
+    Buf *thunk_typedefs;           /* thunk typedefs, shims, the `any` names */
+    Buf *extern_decls;             /* user extern-c declarations */
+    Buf *fwd_decls;                /* every Turmeric prototype, ctor traps */
+    Buf *defer_thunks;             /* defer env structs + thunk prototypes */
+    Buf *cprelude;                 /* top-level inline-C (shared under split) */
+    Buf *cprelude_own;             /* the library unit's own prelude blocks */
+    Buf *cprelude_user;            /* the program's own top-level inline-C */
+} ProgramDeclBands;
+
+static void emit_band(Buf *out, const Buf *b) {
+    if (b && b->len) { buf_write(out, b->data, b->len); buf_putc(out, '\n'); }
+}
+
+static void emit_program_assemble_decls(Buf *out, const ProgramDeclBands *b) {
+    emit_band(out, b->early_file);
+    emit_band(out, b->sym_records);
+    emit_band(out, b->concrete_fn_ptr_typedefs);
+    emit_band(out, b->concrete_adt_apps);
+    if (b->rt_lazy->len) {
+        emit_split_state(b->rt_lazy->data, b->rt_lazy->len,
+                         split_state_mode(EMIT_SPLIT_LIB), out);
+        buf_putc(out, '\n');
+    }
+    emit_band(out, b->thunk_typedefs);
+    emit_band(out, b->extern_decls);
+    emit_band(out, b->fwd_decls);
+    emit_band(out, b->defer_thunks);
+    /* file-scope-c-block: top-level raw-C prelude -- after fwd_decls (so it
+     * may call Turmeric functions) and before handler fns / file (so function
+     * defs may reference the file-scope helpers it declares).  In a split
+     * build the stdlib's blocks share their state the way the runtime
+     * preamble does. */
+    if (b->cprelude->len) {
+        emit_split_state(b->cprelude->data, b->cprelude->len,
+                         g_emit_split == EMIT_SPLIT_NONE ? EMIT_SPLIT_NONE
+                                                         : EMIT_SPLIT_CLIENT,
+                         out);
+        buf_putc(out, '\n');
+    }
+    if (b->cprelude_own->len) {
+        emit_split_state(b->cprelude_own->data, b->cprelude_own->len,
+                         EMIT_SPLIT_LIB, out);
+        buf_putc(out, '\n');
+    }
+    emit_band(out, b->cprelude_user);
+}
+
 static int emit_program_inner(Buf *out, const Expr *program) {
     if (!program || program->kind != EX_PROGRAM) {
         fprintf(stderr, "tur: emit: expected EX_PROGRAM\n");
@@ -22273,18 +22370,12 @@ static int emit_program_inner(Buf *out, const Expr *program) {
      *      (the library unit's state under --split);
      *   1a. the string-literal band, spliced in at the end of this function
      *      (cstr_codegen_splice) so late emitters' literals are in it;
-     *   2. early_file -- struct typedefs + drop glue (visible to everything);
-     *   3. sym_records;
-     *   4. concrete_fn_ptr_typedefs -- typed fn-ptr typedefs for parametric
-     *      struct fields;
-     *   5. concrete_adt_apps -- monomorphized polymorphic ADT typedefs + ctors;
-     *   6. rt_lazy (split builds only);
-     *   7. thunk_typedefs, after emit_any_type_name_table appends to it;
-     *   8. extern_decls -- user extern-c declarations;
-     *   9. fwd_decls -- Turmeric function forward declarations;
-     *  10. defer_thunks -- defer env structs and thunk prototypes (their
-     *      bodies follow `file`: they may name its globals);
-     *  11. cprelude, then cprelude_own, then cprelude_user;
+     *   2-11. the declaration bands, in ProgramDeclBands' field order
+     *      (emit_program_assemble_decls): early_file,
+     *      sym_records, concrete_fn_ptr_typedefs, concrete_adt_apps, rt_lazy,
+     *      thunk_typedefs (after emit_any_type_name_table appends to it),
+     *      extern_decls, fwd_decls, defer_thunks, then cprelude, cprelude_own
+     *      and cprelude_user;
      *  12. pending_handler_fns -- effect handler functions;
      *  13. file -- the Turmeric function definitions;
      *  14. defer_thunk_defs;
@@ -22340,49 +22431,29 @@ static int emit_program_inner(Buf *out, const Expr *program) {
      * whose bodies can register too. */
     emit_flush_dead_base_ctor_traps(&ctx, &fwd_decls);
 
-    /* The band order is listed at `Final assembly.` above.
-     *
-     * macos-int-conversion-carrier-pointer-straddles: concrete_fn_ptr_typedefs
-     * and concrete_adt_apps are written in the opposite order to the one they
-     * are GENERATED in above, and both orders are load-bearing.  Generation must run adt_apps first because emitting a
-     * monomorph calls type_c_name, which is what REGISTERS the fn-ptr typedefs;
-     * collecting them earlier would miss every one.  Output must put the
-     * typedefs first because a monomorph over a `(c-fn ...)` element names one
-     * in its own typedef and ctor signature -- `tur_adt_Option__fnc1_int__int`
-     * holds a `tur_fnptr_int64_t_int64_t_t`.  That was latent until cfnptr got
-     * its own mangle token: before, such a monomorph collided with the ordinary
-     * `(fn ...)` one and the `#ifndef` guard preprocessed the whole block away,
-     * so the dangling reference never reached cc. */
-    if (early_file.len)  { buf_write(out, early_file.data, early_file.len); buf_putc(out, '\n'); }
-    if (sym_records.len) { buf_write(out, sym_records.data, sym_records.len); buf_putc(out, '\n'); }
-    if (concrete_fn_ptr_typedefs.len) { buf_write(out, concrete_fn_ptr_typedefs.data, concrete_fn_ptr_typedefs.len); buf_putc(out, '\n'); }
-    if (concrete_adt_apps.len) { buf_write(out, concrete_adt_apps.data, concrete_adt_apps.len); buf_putc(out, '\n'); }
-    if (rt_lazy.len) {
-        emit_split_state(rt_lazy.data, rt_lazy.len, split_state_mode(EMIT_SPLIT_LIB), out);
-        buf_putc(out, '\n');
-    }
-    buf_free(&rt_lazy);
+    /* The band order is listed at `Final assembly.` above; ProgramDeclBands
+     * says why concrete_fn_ptr_typedefs is generated after concrete_adt_apps
+     * but written before it. */
+    /* The declaration bands, 2 to 11 of the list at `Final assembly.`,
+     * written in ProgramDeclBands' field order. */
     emit_any_type_name_table(&ctx, &thunk_typedefs);
-    if (thunk_typedefs.len) { buf_write(out, thunk_typedefs.data, thunk_typedefs.len); buf_putc(out, '\n'); }
-    if (extern_decls.len){ buf_write(out, extern_decls.data, extern_decls.len); buf_putc(out, '\n'); }
-    if (fwd_decls.len)   { buf_write(out, fwd_decls.data, fwd_decls.len); buf_putc(out, '\n'); }
-    if (defer_thunks.len){ buf_write(out, defer_thunks.data, defer_thunks.len); buf_putc(out, '\n'); }
-    /* file-scope-c-block: top-level raw-C prelude -- after fwd_decls (so it may
-     * call Turmeric functions) and before handler fns / file (so function defs
-     * may reference the file-scope helpers it declares).  In a split build the
-     * stdlib's blocks share their state the way the runtime preamble does. */
-    if (cprelude.len)    {
-        emit_split_state(cprelude.data, cprelude.len,
-                         g_emit_split == EMIT_SPLIT_NONE ? EMIT_SPLIT_NONE : EMIT_SPLIT_CLIENT,
-                         out);
-        buf_putc(out, '\n');
-    }
-    if (cprelude_own.len) {
-        emit_split_state(cprelude_own.data, cprelude_own.len, EMIT_SPLIT_LIB, out);
-        buf_putc(out, '\n');
-    }
+    ProgramDeclBands bands = {
+        .early_file = &early_file,
+        .sym_records = &sym_records,
+        .concrete_fn_ptr_typedefs = &concrete_fn_ptr_typedefs,
+        .concrete_adt_apps = &concrete_adt_apps,
+        .rt_lazy = &rt_lazy,
+        .thunk_typedefs = &thunk_typedefs,
+        .extern_decls = &extern_decls,
+        .fwd_decls = &fwd_decls,
+        .defer_thunks = &defer_thunks,
+        .cprelude = &cprelude,
+        .cprelude_own = &cprelude_own,
+        .cprelude_user = &cprelude_user,
+    };
+    emit_program_assemble_decls(out, &bands);
+    buf_free(&rt_lazy);
     buf_free(&cprelude_own);
-    if (cprelude_user.len) { buf_write(out, cprelude_user.data, cprelude_user.len); buf_putc(out, '\n'); }
     buf_free(&cprelude_user);
     buf_free(&early_file);
     buf_free(&thunk_typedefs);
@@ -22442,22 +22513,13 @@ static int emit_program_inner(Buf *out, const Expr *program) {
         }
         buf_puts(out, "int main(int argc, char **argv) {\n");
         emit_main_deep_stack_prologue(out);
-        /* S1b: first statement, matching where the constructors used to run
-         * (before the Windows stdio mode switch). */
+        emit_main_args_block(out);
+        static_init_note_main();
+        /* S1b: first statement after *args*, matching where the constructors
+         * used to run (before the Windows stdio mode switch). */
         buf_puts(out, "    __tur_static_init();\n");
         emit_win_binary_stdio_prologue(out);
         emit_main_root_unwind_prologue(out);
-        /* CLI-ARGS: Build *args* list from argv[1..] as a linked list of char* (as int64_t). */
-        buf_puts(out, "    /* *args*: build cons list from argv[1..argc-1]; *argv0* is argv[0] */\n");
-        buf_puts(out, "    if (argc > 0 && argv[0]) g_tur_argv0 = argv[0];\n");
-        buf_puts(out, "    g_tur_args = 0;\n");
-        buf_puts(out, "    for (int _ai = argc - 1; _ai >= 1; _ai--) {\n");
-        buf_puts(out, "        typedef struct { int64_t value; int64_t next; } __tur_args_cell;\n");
-        buf_puts(out, "        __tur_args_cell *_c = (__tur_args_cell *)malloc(sizeof(__tur_args_cell));\n");
-        buf_puts(out, "        _c->value = (int64_t)(intptr_t)argv[_ai];\n");
-        buf_puts(out, "        _c->next = g_tur_args;\n");
-        buf_puts(out, "        g_tur_args = (int64_t)(intptr_t)_c;\n");
-        buf_puts(out, "    }\n");
         /* Gap F: def initializers used to run here, ahead of every
          * top-level statement; they are now statements of `body` at their
          * source position (see the EX_DEF arm above), so `def_init_body` is
@@ -24288,20 +24350,11 @@ static int emit_implementation_inner(Buf *out, const char *module_name, const Ex
         /* Only generate main() if user didn't define one (single-file mode) */
         buf_puts(out, "int main(int argc, char **argv) {\n");
         emit_main_deep_stack_prologue(out);
+        emit_main_args_block(out);
+        static_init_note_main();
         buf_puts(out, "    __tur_static_init();\n");   /* S1b */
         emit_win_binary_stdio_prologue(out);
         emit_main_root_unwind_prologue(out);
-        /* CLI-ARGS: Build *args* list from argv[1..] as a linked list of char* (as int64_t). */
-        buf_puts(out, "    /* *args*: build cons list from argv[1..argc-1]; *argv0* is argv[0] */\n");
-        buf_puts(out, "    if (argc > 0 && argv[0]) g_tur_argv0 = argv[0];\n");
-        buf_puts(out, "    g_tur_args = 0;\n");
-        buf_puts(out, "    for (int _ai = argc - 1; _ai >= 1; _ai--) {\n");
-        buf_puts(out, "        typedef struct { int64_t value; int64_t next; } __tur_args_cell;\n");
-        buf_puts(out, "        __tur_args_cell *_c = (__tur_args_cell *)malloc(sizeof(__tur_args_cell));\n");
-        buf_puts(out, "        _c->value = (int64_t)(intptr_t)argv[_ai];\n");
-        buf_puts(out, "        _c->next = g_tur_args;\n");
-        buf_puts(out, "        g_tur_args = (int64_t)(intptr_t)_c;\n");
-        buf_puts(out, "    }\n");
         if (body.len) buf_write(out, body.data, body.len);
         buf_puts(out, "    if (tur_panicking) tur_panic_root_exit();\n");
         buf_puts(out, "    return 0;\n");

@@ -147,28 +147,29 @@ function could perform any effect, and the type system did not track which
 effects a computation used. Effect types make effect rows first-class.
 
 ```turmeric
-;; Typed: this function may perform Io and nothing else.
-(defn read-file [path : cstr] : cstr @ {Io}
+;; Typed: this function may perform IO and nothing else.
+(defn read-file [path : cstr] #fx{IO} : cstr
   ...)
 
 ;; Effect-polymorphic: works with any effect set e that includes Ask.
-(defn ask-and-add [x : int] : int @ {Ask | e}
+(defn ask-and-add [x : int] #fx{Ask e} : int
   (+ x (perform (Ask))))
 ```
 ```sweet-exp
-;; Typed: this function may perform Io and nothing else.
-defn read-file [path :cstr] :cstr @ {Io}
+;; Typed: this function may perform IO and nothing else.
+defn read-file [path : cstr] #fx{IO} : cstr
   ...
 ;; Effect-polymorphic: works with any effect set e that includes Ask.
-defn ask-and-add [x :int] :int @ {Ask | e}
+defn ask-and-add [x : int] #fx{Ask e} : int
   {x + perform(Ask())}
 ```
 
 ### Why these features fit
 
 Row polymorphism is the correct model for effects because it is structural and
-compositional. An effect row `{Io | e}` can be substituted into any context that
-expects a superset of `Io`. This is exactly what the CPS transformation the
+compositional. An effect row `#fx{IO e}` -- `IO` plus whatever the row
+variable `e` stands for -- can be substituted into any context that expects a
+superset of `IO`. This is exactly what the CPS transformation the
 existing elaborator already performs wants: a function that performs `Write` is
 safe in any context that handles `Write`, regardless of what else it handles.
 
@@ -176,9 +177,10 @@ Effect rows are compile-time only. They carry no runtime representation --
 nothing is boxed, tagged, or heap-allocated because of an effect annotation.
 This satisfies the zero-cost constraint.
 
-The `forall [e]` quantifier (effect polymorphism) requires Rank-2 types. HKT
-and HRT were prerequisites for this reason. The dependency is explicit and
-documented.
+Effect polymorphism is written with a lowercase row variable inside the
+`#fx{...}` annotation (`#fx{Ask e}`), not with a separate quantifier: the
+row variable is generalised with the function's other type variables. See the
+[effects guide](effects-system-guide.md) for the row rules.
 
 Linear continuations (`^linear k`) and multi-shot continuations (`^multishot`)
 extend effect handling to resource-safe and nondeterministic use cases
@@ -191,29 +193,31 @@ separate features but modes of the existing continuation representation.
 
 ```turmeric
 ;; Union: a value that may be int, cstr, or bool.
-(defn print-any [x :(int | cstr | bool)] : unit
+(defn print-any [x : (int | cstr | bool)] : nil
   (match x
-    (i :int)  (println i)
-    (s :cstr) (println s)
-    (b :bool) (println (if b "true" "false"))))
+    (i : int)  (println i)
+    (s : cstr) (println s)
+    (b : bool) (println (if b "true" "false"))))
 
-;; Intersection: a value that is both Serializable and Printable.
-(defn log-and-save [^Serializable ^Printable x : a] : unit ...)
+;; Intersection: an int that also has a Serializable instance.
+(defn log-and-save [x : (int & Serializable)] : nil ...)
 ```
 ```sweet-exp
 ;; Union: a value that may be int, cstr, or bool.
-defn print-any [x : (int | cstr | bool)] :unit
+defn print-any [x : (int | cstr | bool)] : nil
   match x
-    (i :int)
+    (i : int)
     println(i)
-    (s :cstr)
+    (s : cstr)
     println(s)
-    (b :bool)
+    (b : bool)
     println $ if b "true" "false"
-;; Intersection: a value that is both Serializable and Printable.
-defn log-and-save [^Serializable ^Printable x :a] :unit
-  ...
+;; Intersection: an int that also has a Serializable instance.
+defn log-and-save [x : (int & Serializable)] : nil ...
 ```
+
+See the [union and intersection guide](union-intersection-types-guide.md)
+for the full rules.
 
 ### Why these features fit
 
@@ -279,14 +283,12 @@ vectors, matrix dimension checks, bit-vector widths for hardware description,
 stack-allocated arrays with known sizes -- only needs compile-time integer
 arithmetic on dimensions, not full Pi types with value-dependent types.
 
-The codegen benefit is concrete: when the elaborator can prove that a buffer
-size is statically known and fits on the stack, it emits `alloca` instead of
-`malloc`. This is a zero-cost path for the common case in embedded and
-performance-sensitive code.
-
-Sized types also serve FFI: an `extern-c` declaration can annotate a C struct
-with its Turmeric-side sized type, allowing the elaborator to verify layout
-compatibility at import time.
+Today the size index is a compile-time check only: it does not change the
+emitted allocation. Two codegen and FFI uses are intent, not shipped
+behaviour -- placing a buffer whose size is statically known on the stack
+instead of the heap, and checking an `extern-c` struct's layout against a
+Turmeric-side sized type at import. Nothing in the compiler does either yet;
+the [sized-types guide](sized-types-guide.md) describes what is shipped.
 
 The GADT infrastructure (G0--G4) was the natural home for sized types because
 GADT pattern matching already refines index types in match arms. Adding
@@ -362,18 +364,20 @@ caller is allowed to do with it.
 
 ```turmeric
 ;; A boxed value paired with evidence that its type implements Show.
-(defn box-it [x : a] :(exists [a] [(Show a)] a)
+;; The pack site must know the concrete type, so pack a concrete value.
+(defn box-it [x : int] : (exists [a] [(Show a)] a)
   (pack x (exists [a] [(Show a)] a)))
 
-(defn print-it [e :(exists [a] [(Show a)] a)] : unit
-  (open e [x] (println (show x))))
+(defn print-it [e : (exists [a] [(Show a)] a)] : nil
+  (open e [a v] (println (.show v))))
 ```
 ```sweet-exp
 ;; A boxed value paired with evidence that its type implements Show.
-defn box-it [x :a] : (exists [a] [(Show a)] a)
+;; The pack site must know the concrete type, so pack a concrete value.
+defn box-it [x : int] : (exists [a] [(Show a)] a)
   pack(x (exists [a] [(Show a)] a))
-defn print-it [e : (exists [a] [(Show a)] a)] :unit
-  open(e [x] println(show(x)))
+defn print-it [e : (exists [a] [(Show a)] a)] : nil
+  open(e [a v] println(.show(v)))
 ```
 
 ### Why these features fit

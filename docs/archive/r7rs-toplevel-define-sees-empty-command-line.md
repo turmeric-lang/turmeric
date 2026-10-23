@@ -1,5 +1,7 @@
 # A top-level `define` of `(command-line)` sees `("")`, not the arguments
 
+**Resolved 2026-10-23.** Fix direction 1. Every generated `main` (`emit_main_args_block`, shared by the synthesized-main, user-main, implementation-unit and CPS D2b paths) now builds `*args*` / `*argv0*` BEFORE it calls `__tur_static_init()`. In a unit with `main` and def initializers, `static_init_emit` (`src/compiler/emit_core.c`) splits the init: `__tur_static_init_rt` holds the allocator hook, the region-shutdown atexit and the KEYS/REGISTRY/ATEXIT bands, and is what the constructor runs; `__tur_static_init` runs that and then the STATIC_INIT_DEFS band, from `main`. A unit with no `main` (`--shared`, separate compilation) keeps the one function and its constructor. The same gap hit a plain Turmeric `(def n (list-length *args*))` beside a user `main` (it read 0). Pinned by `tests/fixtures/r7rs-toplevel-define-reads-command-line` and `tests/fixtures/def-init-reads-args-with-user-main`; `region-shutdown-order`'s placement check reads `__tur_static_init_rt` now.
+
 > Severity: medium -- a plain R7RS program reads the wrong command line,
 > silently, in the most natural place to read it.
 > Found executing docs/upcoming/r7rs-heap-frames-plan.md (2026-10-23).

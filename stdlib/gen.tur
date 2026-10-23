@@ -66,10 +66,11 @@
   ```c
   return NULL;
   ```)
-;; --- Growable array helpers used by gen-collect ---
+;; --- Growable int64 array helpers (seq-collect's result) ---
 ;; Internal layout: int64_t[3] = { len, cap, data_ptr }
-;; All four helpers are exported so callers can iterate collected arrays.
-;;; gen-arr-new -- allocate an empty array for use with gen-collect.
+;; gen-collect returns a typed (Vec T) instead; these stay for seq-collect,
+;; whose elements are carrier words.
+;;; gen-arr-new -- allocate an empty int64 array (the seq-collect result).
 ;;;
 ;;; Returns:
 ;;;   Opaque pointer to an empty array (len=0).
@@ -152,18 +153,19 @@
   int64_t *data = (int64_t *)(intptr_t)h[2];
   return data[i];
   ```)
-;;; gen-collect -- materialise all yielded values into a gen-arr array.
+;;; gen-collect -- materialise all yielded values into a vector.
 ;;;
 ;;; Parameters:
 ;;;   g -- a generator expression
 ;;;
 ;;; Returns:
-;;;   A gen-arr-new array containing all int64_t values yielded by g.
-;;;   Iterate with gen-arr-len and gen-arr-get.
+;;;   A (Vec T) holding every value g yields, in order, typed at the
+;;;   generator's element type T (int, float, cstr, a struct, ...).
+;;;   Iterate with vec-len and vec-get.
 ;;;
 ;;; Example:
-;;;   (let [arr (gen-collect g)]
-;;;     (println (gen-arr-len arr)))
+;;;   (let [arr (gen-collect (gen [] (yield 1.5) (yield 2.5)))]
+;;;     (println (vec-get arr 1)))  ; => 2.5
 ;;;
 ;;; Since: GF2
 
@@ -172,14 +174,14 @@
         res (gensym res)
         it  (gensym it)]
     (list let
-      (vec gv g res (list gen-arr-new))
+      (vec gv g res (list vec-new))
       (list while
         (list not (list gen-done? gv))
         (list let
           (vec it (list gen-next gv))
           (list when
             (list gen-some? it)
-            (list gen-arr-push! res (list gen-unwrap it)))))
+            (list vec-push! res (list gen-unwrap it)))))
       res)))
 ;;; gen-for-each -- call f with every value yielded by a generator.
 ;;;

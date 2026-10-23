@@ -1,5 +1,7 @@
 # A `letrec` closure leaks its struct arguments, and its env when it opens an existential
 
+**Resolved 2026-10-23: leak 2 is fixed too** (leak 1 was fixed 2026-10-21, below). The env drop was skipped by `let_binding_env_freeable`'s result gate: a closure returning a struct (`TY_ADT`) is admitted only when its body has no inline C, and `expr_subtree_has_inline_c` (`src/compiler/emit_core.c`) had no arm for `EX_EXISTS_OPEN`, `EX_EXISTS_PACK` or `EX_EXISTS_DISPATCH`, so a body that opened an existential fell to the conservative `default` and read as "may hide inline C". The int-accumulator closure passed only because an `int` result needs no such gate. The three arms walk their operands, as the other emitter-code nodes do. `tests/fixtures/letrec-open-existential-env-leak` (`requires.leak-check`) leaks 48 B without the change and is clean with it; the whole leak-check harness stays green.
+
 **Narrowed 2026-10-21: leak 1 is fixed; leak 2 stays open.** The direct
 closure-call site (`src/compiler/emit_expr.c`, the B4 branch of the thunk
 call's argument loop) now spills a wide by-value struct argument into the

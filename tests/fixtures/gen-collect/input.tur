@@ -1,4 +1,6 @@
-; GF2 fixture: gen-collect -- materialise all generator values into an array.
+; GF2 fixture: gen-collect -- materialise all generator values into a vector.
+; The vector is typed at the element: a float generator collects floats
+; (gen-collect-rejects-float-elements).
 
 (load "stdlib/gen.tur")
 
@@ -9,6 +11,11 @@
               (yield 30))
         arr (gen-collect g)
         ^mut i 0]
-    (while (< i (gen-arr-len arr))
-      (println (gen-arr-get arr i))
-      (set! i (+ i 1)))))
+    (while (< i (vec-len arr))
+      (println (vec-get arr i))
+      (set! i (+ i 1))))
+  (let [fs (gen-collect (gen [] (yield 1.5) (yield 2.25)))]
+    (println (vec-len fs))
+    (println (+ (vec-get fs 0) (vec-get fs 1))))
+  (let [ss (gen-collect (gen [] (yield "a") (yield "bc")))]
+    (println (vec-get ss 1))))

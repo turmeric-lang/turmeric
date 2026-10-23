@@ -13,6 +13,12 @@
 # was right, with valgrind's "Invalid read".  The only always-earlier place is
 # the first statement of __tur_static_init itself, behind its idempotent guard.
 #
+# In a unit with `main` and def initializers the runtime half of the init --
+# this registration and the module defers among it -- is __tur_static_init_rt,
+# which the constructor runs; the def initializers wait for main
+# (r7rs-toplevel-define-sees-empty-command-line).  The awk reads whichever
+# holds the registration.
+#
 # Three assertions, and the third is the one that matters:
 #   1. PLACEMENT: in the emitted C, atexit(tur_region_shutdown) appears inside
 #      __tur_static_init, AFTER `__tur_static_init_done = 1` and BEFORE the
@@ -46,7 +52,7 @@ TUR_REGIONS=0 "$TUR" emit-c "$TMP/in.tur" 2>/dev/null > "$TMP/off.c"
 
 # 1. placement: line numbers inside __tur_static_init, in order
 read -r l_done l_atexit l_defers < <(awk '
-  /^static void __tur_static_init\(void\) \{/ {f=1}
+  /^static void __tur_static_init(_rt)?\(void\) \{/ && !f {f=1}
   f && /__tur_static_init_done = 1/       {d=NR}
   f && /atexit\(tur_region_shutdown\)/     {a=NR}
   f && /__module_defers_init\(\)/          {m=NR}

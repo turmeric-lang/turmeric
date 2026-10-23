@@ -1,0 +1,9 @@
+; `#use-reader-macros "."` names a directory, which the reader opened and
+; sized with ftell -- LONG_MAX on glibc -- and aborted on the wrapped arena
+; request (fuzz-manifest-deadly-signal-2026-10-19).  The input libFuzzer
+; found is tests/fuzz/seeds/fuzz_manifest/use-reader-macros-directory-oom.bin.
+; The diagnostic differs by platform -- "is not a regular file" where fopen
+; opens a directory (glibc, macOS), "cannot open" where it does not (MinGW)
+; -- so only the prefix is pinned.
+#use-reader-macros "."
+(defn main [] : int 0)

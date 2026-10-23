@@ -317,7 +317,7 @@ the recursive result).
   spelling still works and is what the spice carries.)
 - The folds are top-level recursive `defn`s again: as `letrec` closures they
   leaked their env and a struct box per call on every `plot`
-  (`docs/reported/letrec-struct-arg-and-env-leak.md`).
+  (`docs/archive/letrec-struct-arg-and-env-leak.md`).
 - Verified: a program rendering all 30 kinds in 34 scenes through the public
   API compiled unchanged against both versions; 33 PNGs are byte-identical.
   `arrows.png` differs because `arrows`' bounds read each arrow's second cons

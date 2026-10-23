@@ -245,8 +245,9 @@
 ;;; function cannot be stored in a list or option.
 ;;;
 ;;; The function passed must be generic wherever the forall body has a bare bound
-;;; variable: its parameter there is a type parameter (`[A] [x : A]`), `any`, or
-;;; un-annotated. Passing `inc : int -> int` where `(forall [a] (-> a a))` is
+;;; variable: its parameter there is a type parameter (`[A] [x : A]`) or
+;;; un-annotated -- not `any`, a tagged value the untyped word cannot fill
+;;; (TUR-E0001 says so). Passing `inc : int -> int` where `(forall [a] (-> a a))` is
 ;;; expected is `rank-2 argument 'inc' is not generic` (TUR-E0001), for a named
 ;;; function, a lambda, or a function defined later in the file alike. When the
 ;;; callee only ever applies it at the type it handles, ascribe it to the forall
