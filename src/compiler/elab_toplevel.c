@@ -9,6 +9,7 @@
 #include "scheme_lower.h"       /* r7rs-lang-plan R2: the Scheme core forms */
 #include "prof.h"               /* --timings: elaborate / module-load / refine */
 #include "pkg.h"                /* script-spice-deps-plan: pkg_text_is_preamble */
+#include "runtime/experiments.h" /* quote-list-data-plan: experiment_warn_if_used */
 
 /* duplicate-ctor-names-collide-in-emitted-c: the constructor-name census lives
  * in emit_core.c; declared here because elab_toplevel.c does not include
@@ -547,6 +548,154 @@ static Expr *elab_form_impl(Elab *e, Form *f);
  * work is elaboration, not the carving zone's; re-entering PROF_ELAB here is
  * what hands it back.  When elaborate is already the innermost zone, which is
  * nearly every call, the push would change nothing and is skipped. */
+/* ---------------------------------------------------------------------------
+ * quote-list-data-plan: `(quote x)`.
+ * ------------------------------------------------------------------------- */
+
+static Form *quote_datum_sym(Elab *e, Span sp, const char *name) {
+    const Symbol *s = symtab_intern(e->st, strslice(name, (uint32_t)strlen(name)));
+    return form_sym(e->arena, sp, s);
+}
+
+/* `(head arg)` */
+static Form *quote_datum_call1(Elab *e, Span sp, const char *head, Form *arg) {
+    Form **items = (Form **)arena_alloc(e->arena, 2 * sizeof(Form *));
+    items[0] = quote_datum_sym(e, sp, head);
+    items[1] = arg;
+    return form_list(e->arena, sp, items, 2);
+}
+
+static Form *quote_datum_build(Elab *e, Form *f, bool *ok);
+
+/* `(ctor (list-of d...))` over already-built element forms, or
+ * `(ctor (datum-no-items-))` when there are none -- `list-of` with no
+ * argument has nothing to infer its element type from. */
+static Form *quote_datum_seq(Elab *e, Span sp, const char *ctor,
+                             Form **elems, uint32_t n) {
+    Form *items_form;
+    if (n == 0) {
+        Form **call = (Form **)arena_alloc(e->arena, sizeof(Form *));
+        call[0] = quote_datum_sym(e, sp, "datum-no-items-");
+        items_form = form_list(e->arena, sp, call, 1);
+    } else {
+        Form **call = (Form **)arena_alloc(e->arena, (n + 1) * sizeof(Form *));
+        call[0] = quote_datum_sym(e, sp, "list-of");
+        for (uint32_t i = 0; i < n; i++) call[i + 1] = elems[i];
+        items_form = form_list(e->arena, sp, call, n + 1);
+    }
+    return quote_datum_call1(e, sp, ctor, items_form);
+}
+
+/* A reader-sugar wrapper (`'x`, `` `x ``, `,x`, `,@x`) inside a quoted list is
+ * the two-element list it abbreviates: `'(a 'b)` is `(a (quote b))`. */
+static Form *quote_datum_wrapped(Elab *e, Form *f, const char *head, bool *ok) {
+    Form *elems[2];
+    elems[0] = quote_datum_build(e, quote_datum_sym(e, f->span, head), ok);
+    elems[1] = quote_datum_build(e, f->as.list.items[0], ok);
+    return quote_datum_seq(e, f->span, "DList", elems, 2);
+}
+
+/* The constructor form that builds the `Datum` for one quoted form. */
+static Form *quote_datum_build(Elab *e, Form *f, bool *ok) {
+    Span sp = f->span;
+    switch (f->tag) {
+        case F_SYM:
+            return quote_datum_call1(e, sp, "DSym", form_quote(e->arena, sp, f));
+        case F_KEYWORD: {
+            /* The `DSym` of `:k` is named ":k", so a quoted keyword renders
+             * as written and a DSL can tell it from the symbol `k`. */
+            char *nm = (char *)arena_alloc(e->arena, f->as.sym->len + 2);
+            nm[0] = ':';
+            memcpy(nm + 1, f->as.sym->name, f->as.sym->len);
+            nm[f->as.sym->len + 1] = '\0';
+            return quote_datum_call1(e, sp, "DSym",
+                form_quote(e->arena, sp, quote_datum_sym(e, sp, nm)));
+        }
+        case F_NIL:
+            return quote_datum_call1(e, sp, "DSym",
+                form_quote(e->arena, sp, quote_datum_sym(e, sp, "nil")));
+        case F_BOOL:
+            return quote_datum_call1(e, sp, "DBool", f);
+        case F_INT:
+            if (f->lit_suffix == LIT_SUF_CHAR) break;
+            /* A width suffix is how the literal was spelled, not part of the
+             * datum: `DInt` holds an int. */
+            return quote_datum_call1(e, sp, "DInt", form_int(e->arena, sp, f->as.i));
+        case F_FLOAT:
+            return quote_datum_call1(e, sp, "DFloat", form_float(e->arena, sp, f->as.f));
+        case F_STR:
+            return quote_datum_call1(e, sp, "DStr", f);
+        case F_LIST:
+        case F_VEC: {
+            /* A type annotation `x : T` reads as `x` then one F_TYPE_ANN
+             * node; as data it is the two elements written, `:` and `T`, so
+             * `'[x : int]` renders `[x : int]`. */
+            uint32_t n = f->as.list.len, m = 0;
+            Form **elems = n ? (Form **)arena_alloc(e->arena, 2 * n * sizeof(Form *)) : NULL;
+            for (uint32_t i = 0; i < n; i++) {
+                Form *it = f->as.list.items[i];
+                if (it->tag == F_TYPE_ANN && it->as.list.len == 1) {
+                    elems[m++] = quote_datum_build(e, quote_datum_sym(e, it->span, ":"), ok);
+                    elems[m++] = quote_datum_build(e, it->as.list.items[0], ok);
+                } else {
+                    elems[m++] = quote_datum_build(e, it, ok);
+                }
+            }
+            return quote_datum_seq(e, sp, f->tag == F_VEC ? "DVec" : "DList", elems, m);
+        }
+        case F_QUOTE:            return quote_datum_wrapped(e, f, "quote", ok);
+        case F_QUASIQUOTE:       return quote_datum_wrapped(e, f, "quasiquote", ok);
+        case F_UNQUOTE:          return quote_datum_wrapped(e, f, "unquote", ok);
+        case F_UNQUOTE_SPLICING: return quote_datum_wrapped(e, f, "unquote-splicing", ok);
+        default:
+            break;
+    }
+    diag_emit(DIAG_ERROR, sp,
+              "quote: a %s cannot be held in a Datum -- a quoted list holds "
+              "symbols, keywords, int / float / string / bool literals, lists, "
+              "vectors and `: T` annotations",
+              f->tag == F_INT ? "character literal" : form_tag_name(f->tag));
+    *ok = false;
+    return f;
+}
+
+/* `(quote x)`, from the F_QUOTE case above and from a `quote`-headed call
+ * (elab_call.c).
+ *
+ * A bare symbol is its `Sym` -- DSL helpers in defns build AST nodes this way
+ * without TUR-E0003 chasing the inner symbol against scope (see
+ * docs/archive/history/defgodot-script-macro-vec-quote-semantics.md).  Under
+ * `--enable=quote-data` a list or vector is a `Datum` (stdlib/datum.tur):
+ * `'(+ 1 2)` is `(DList (list-of (DSym '+) (DInt 1) (DInt 2)))`, built as
+ * constructor forms and elaborated like any other call, so the interpreter
+ * and both compiled back ends get it from here.  Anything else -- a
+ * self-evaluating literal, or a list with the experiment off -- is elaborated
+ * as the expression itself, the legacy meaning. */
+Expr *elab_quote(Elab *e, Form *quoted, Span span) {
+    if (quoted->tag == F_SYM) {
+        Expr *out = expr_new(e->arena, EX_SYM_LIT, TYPE_SYM, span);
+        out->as.sym_lit_.sym = quoted->as.sym;
+        return out;
+    }
+    if (g_opt_quote_data && (quoted->tag == F_LIST || quoted->tag == F_VEC)) {
+        experiment_warn_if_used("quote-data");
+        const Symbol *datum = symtab_intern(e->st, strslice("Datum", 5));
+        if (!scope_lookup_type_def(e->scope, datum)) {
+            diag_emit(DIAG_ERROR, span,
+                      "quote: a quoted %s is a Datum, and stdlib/datum.tur is "
+                      "not loaded -- it is autoloaded under --enable=quote-data "
+                      "unless the stdlib autoload is off; (load \"stdlib/datum.tur\")",
+                      quoted->tag == F_VEC ? "vector" : "list");
+            return NULL;
+        }
+        bool ok = true;
+        Form *built = quote_datum_build(e, quoted, &ok);
+        if (!ok) return NULL;
+        return elab_form(e, built);
+    }
+    return elab_form(e, quoted);
+}
+
 Expr *elab_form(Elab *e, Form *f) {
     if (!g_timings || prof_top_is(PROF_ELAB)) return elab_form_impl(e, f);
     prof_enter(PROF_ELAB);
@@ -877,23 +1026,7 @@ static Expr *elab_form_impl(Elab *e, Form *f) {
                           "quote requires exactly one argument");
                 return NULL;
             }
-            Form *quoted = f->as.list.items[0];
-            /* Quoting a bare symbol yields a first-class :Sym literal --
-             * the same lowering the F_KEYWORD branch below uses for
-             * `:foo`. This lets DSL helpers in defns construct AST
-             * nodes without TUR-E0003 chasing the inner symbol against
-             * scope. See
-             * docs/archive/history/defgodot-script-macro-vec-quote-semantics.md. */
-            if (quoted->tag == F_SYM) {
-                Expr *out = expr_new(e->arena, EX_SYM_LIT, TYPE_SYM, f->span);
-                out->as.sym_lit_.sym = quoted->as.sym;
-                return out;
-            }
-            /* Non-symbol quoted forms (literals, lists): fall back to
-             * the legacy "elaborate as expression" behaviour. Runtime
-             * list-of-values construction for `(quote (a b c))` is a
-             * follow-up. */
-            return elab_form(e, quoted);
+            return elab_quote(e, f->as.list.items[0], f->span);
         }
         /* Phase 6: quasiquote forms - expand them */
         case F_QUASIQUOTE:

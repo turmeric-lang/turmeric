@@ -125,6 +125,10 @@ static bool typekind_is_copy_for_struct(TypeKind k) {
         case TY_INT8: case TY_INT16: case TY_INT32:
         case TY_UINT8: case TY_UINT16: case TY_UINT32: case TY_UINT64:
         case TY_FLOAT32:
+        /* An interned symbol is a pointer into a table that is never freed, and
+         * TYPE_SYM is CK_COPY everywhere else; a :copy ADT may hold one
+         * (quote-list-data-plan: Datum's DSym). */
+        case TY_SYM:
         /* Phase 16 v2: :fn fields are stored as int64_t at the C level, so they are
          * trivially copyable (function pointer stored as an integer value). */
         case TY_FN:

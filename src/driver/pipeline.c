@@ -812,6 +812,10 @@ static Form **load_project_prelude_impl(Arena *arena, SymbolTable *st,
      * stdlib bindings; exported ones (`ok`, `ok-val`,
      * `make-struct Result ...`) are static-or-inline-C wrappers so the
      * per-TU duplication mirrors `emit_closure_fat_runtime`. */
+    /* quote-list-data-plan: project mode has no single entry file to scan,
+     * so a build that enables quote-data (its manifest, or the CLI) loads
+     * stdlib/datum.tur into every TU. */
+    g_quote_data_autoload = g_opt_quote_data;
     const char *const *prelude_files = tur_stdlib_autoload_files();
 
     uint32_t total = 0;

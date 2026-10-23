@@ -614,6 +614,7 @@ void split_lib_cache_init(SplitLibCache *c, const Expr *prog, const char *input)
     SLK(g_opt_option_niche); SLK(g_opt_regions); SLK(g_opt_dynamic_any);
     SLK(g_opt_saffron_gc); SLK(g_opt_r7rs); SLK(g_opt_reflected_measures);
     SLK(g_opt_repl_jit_inline_c); SLK(g_opt_r7rs_gc); SLK(g_strict_refine);
+    SLK(g_quote_data_autoload);
     SLK(g_emit_for_link); SLK(g_emit_ffi_export_shims); SLK(g_runtime_mode);
     SLK(emit_rcgc_from_archive());
 #undef SLK

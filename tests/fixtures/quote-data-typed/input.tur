@@ -1,0 +1,39 @@
+;; quote-list-data-plan: under --enable=quote-data a quoted list or vector is a
+;; Datum (stdlib/datum.tur), not the list elaborated as code.
+
+(defn head-name [d : Datum] : cstr
+  (match d
+    (DList xs) (if (list-empty? xs) "<empty>" (datum->str (list-first xs)))
+    _ "<leaf>"))
+
+(defn count-ints [d : Datum] : int
+  (match d
+    (DInt _) 1
+    (DList xs) (list-foldl xs 0 (fn [acc : int x : Datum] : int (+ acc (count-ints x))))
+    (DVec xs) (list-foldl xs 0 (fn [acc : int x : Datum] : int (+ acc (count-ints x))))
+    _ 0))
+
+(defn main [] : int
+  ;; The plan's headline case: data, not 3.
+  (println (quote (+ 1 2)))
+  (println '(+ 1 2))
+  ;; Nesting, vectors, every leaf kind, and the annotations of typed code.
+  (println '(defn f [x : int y :float] : (List int) (g x 7.1 "s\"q" true nil)))
+  (println '(a 'b [c]))
+  (println '())
+  (println '[])
+  ;; A quoted symbol is still a Sym, and a quoted literal the literal.
+  (println (sym->str 'hello))
+  (println (quote 5))
+  ;; A Datum is :copy, so one value can be used twice.
+  (let [d '(+ 1 (* 2 3))]
+    (println (head-name d))
+    (println (count-ints d))
+    (println (datum-length d))
+    (println (datum-nth d 2))
+    (println (datum=? d '(+ 1 (* 2 3))))
+    (println (eq? d '(+ 1 (* 2 4))))
+    (println (datum=? '(1) '[1]))
+    (println (datum-list? d))
+    (println (datum-sym? (datum-nth d 0))))
+  0)

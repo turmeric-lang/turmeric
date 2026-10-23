@@ -6,6 +6,12 @@ All notable changes to Turmeric are documented here.
 
 ### Added
 
+- **`--enable=quote-data`: a quoted list is data.** `'(+ 1 2)` is a `Datum`
+  (new `stdlib/datum.tur`) -- `(DList [(DSym +) (DInt 1) (DInt 2)])` -- instead
+  of the list evaluated as code, and `(println '(+ 1 2))` prints `(+ 1 2)`. It
+  works in typed Turmeric and in Saffron (through `any` parameters too), on
+  every engine; a quoted symbol is still a `Sym`. datum.tur is loaded only when
+  the program quotes a list. See docs/upcoming/quote-list-data-plan.md.
 - **A `defdata` constructor may declare its result type.** `(Lit int : (Expr
   int))`, and after a record field vector `(Rect [w : int h : int] : (Shape
   int))`; an unannotated constructor returns the generic `(Expr a)`, and one
@@ -82,6 +88,11 @@ All notable changes to Turmeric are documented here.
 
 ### Fixed
 
+- **`tur run --enable=<x>` on a `#lang r7rs` program no longer crashes.** The
+  global-flag parse shortened `argv` but left the saved count, and the
+  split-library cache key read past the end.
+- **A `:copy` `defdata` may hold a `Sym` field.** Symbols are interned and
+  already copy everywhere else.
 - **Recursive `Option`-of-struct code no longer leaks a box per level.** A fresh
   sum argument to a self-recursive call is freed once it returns, a
   self-recursive function returning `(some v)` on its base path counts as a
