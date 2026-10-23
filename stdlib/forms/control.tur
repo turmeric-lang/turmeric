@@ -10,8 +10,7 @@
 ;;; the playground) differ, an entry says so. Guides: binding-forms-guide,
 ;;; sum-types-guide (for `match`), macros-guide (`gensym`), dynamic-vars-guide
 ;;; (`binding`), error-handling-guide (`defer`). What is still to change:
-;;; docs/upcoming/quote-list-data-plan.md (`quote` of a list) and
-;;; docs/upcoming/defer-semantics-plan.md (`defer` scope and read time).
+;;; docs/upcoming/quote-list-data-plan.md (`quote` of a list).
 ;; Reference only: tools/gendocs.py reads the ;;@ lines, the compiler skips them.
 
 ;;; let -- bind local names, then evaluate a body.
@@ -101,7 +100,7 @@
 ;;; Runs each form and returns the last one's value. `(do)` with nothing in it is
 ;;; `nil`. Use it where one form is expected but several steps are needed, such
 ;;; as an `if` branch or a `handle` clause body. A `defer` directly inside a `do`
-;;; belongs to that `do`'s scope when compiled.
+;;; belongs to that `do`'s scope and fires when the `do` ends.
 ;;;
 ;;; Parameters:
 ;;;   forms -- the forms to run
@@ -118,8 +117,7 @@
 ;;; The condition is re-evaluated before every pass and must be a `bool`. The
 ;;; body may have several forms. The loop has type `nil`, so it is a statement:
 ;;; keep its result in a `^mut` variable the body updates with `set!`. A
-;;; `defer` in the body fires at the end of each pass when compiled; the
-;;; interpreter holds them until the function ends.
+;;; `defer` in the body fires at the end of each pass.
 ;;;
 ;;; Parameters:
 ;;;   cond -- a `bool` expression tested before each pass
@@ -172,14 +170,15 @@
 ;;; defer -- run a body when the enclosing scope exits.
 ;;;
 ;;; Registers cleanup to run later, last registered first. The scope is the
-;;; function body or the `let` body it appears in, and it runs on normal exit,
-;;; on `return`, and while a panic unwinds. The variables it reads are captured
-;;; when `defer` runs, not when the cleanup fires: after
-;;; `(let [^mut x 10] (defer (println x)) (set! x 20))` the cleanup prints 10.
-;;; Inside a `do`, `when` or `while` body, the compiled program fires it at the
-;;; end of that block (each pass, for a loop); the interpreter fires it when the
-;;; function ends. A defer that panics while one is already unwinding aborts the
-;;; program.
+;;; innermost block it appears in -- a function or `let` body, a `do`, a `when`,
+;;; or one pass of a `while` body -- as with Zig's and Swift's `defer` (Go's is
+;;; function-wide). It runs when that block ends: on normal exit, on `return`
+;;; (innermost block first), and while a panic unwinds. The cleanup reads its
+;;; variables when it runs, not when `defer` registers it: after
+;;; `(let [^mut x 10] (defer (println x)) (set! x 20))` it prints 20. That holds
+;;; for a `^mut` number, `bool`, `cstr`, `Sym` or payload-free opaque; a `^mut`
+;;; struct or other aggregate is still copied when `defer` runs. A defer that
+;;; panics while one is already unwinding aborts the program.
 ;;;
 ;;; Parameters:
 ;;;   body -- the forms to run at scope exit
@@ -191,6 +190,8 @@
 ;;;     (println "body")
 ;;;     0)
 ;;;   ; calling (f) prints: body, second registered, first registered
+;;;   (do (defer (println "d")) (println "body"))
+;;;   (println "after")  ; prints body, d, after
 ;;@form (defer body ...)
 
 ;;; quote -- produce a symbol without evaluating it.
