@@ -82,6 +82,13 @@ All notable changes to Turmeric are documented here.
 
 ### Fixed
 
+- **`(cont? k)` of a `^multishot` continuation stays true after a resume.**
+  Compiled, it read false and could not guard a second `resume`; interpreted,
+  a clause asking it fell back to the one-shot path and the second `resume`
+  failed.
+- **A compiled unhandled effect names the effect.** The abort reads
+  `tur: unhandled effect: Ask (tag 2)` instead of only the tag, and output
+  printed before it is no longer lost.
 - **Recursive `Option`-of-struct code no longer leaks a box per level.** A fresh
   sum argument to a self-recursive call is freed once it returns, a
   self-recursive function returning `(some v)` on its base path counts as a

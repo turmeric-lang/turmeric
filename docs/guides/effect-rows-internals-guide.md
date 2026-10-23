@@ -201,7 +201,7 @@ Two details:
   `tur explain TUR-E0008` answers "no explanation". Inside a function body
   there is no static unhandled-perform check: an effect that escapes an
   un-annotated `main` builds, and aborts at run time with
-  `tur: unhandled effect (tag 2)`. Only a declared row on `main` catches it
+  `tur: unhandled effect: Ask (tag 2)`. Only a declared row on `main` catches it
   statically (TUR-E0009; `errors/effect-main-leak`).
 - **TUR-E0014** fires per captured binding, at the reset:
 

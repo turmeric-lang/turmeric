@@ -9616,6 +9616,11 @@ static bool ws_has_perform(const Expr *e) {
     case EX_UNION_INJECT: return ws_has_perform(e->as.union_inject_.value);
     case EX_RESUME:     return ws_has_perform(e->as.resume_.resume->k) ||
                                ws_has_perform(e->as.resume_.resume->value);
+    /* `(cont? k)` reads the continuation's state and performs nothing itself;
+     * left to the default, a clause asking it fell back to the one-shot fiber
+     * and a `^multishot` k's second resume failed (effect-continuation-
+     * followups Part A). */
+    case EX_CONT_PRED:  return ws_has_perform(e->as.cont_pred_.expr);
     /* fn-to-fat / poly wrappers are transparent: evaluating one just builds a
      * closure value (eval unwraps to `inner`, see the EX_*_TO_FAT / EX_POLY_WRAP
      * eval cases), so a wrapped bare/poly fn is no more a synchronous perform
