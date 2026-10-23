@@ -6,7 +6,7 @@
 
 - Item 1 (no generator parameter type; `gen-unwrap` typed `int`): decision -- add
   `(Generator T)` and a typed `gen-unwrap`. Plan:
-  [generator-type-plan](../upcoming/generator-type-plan.md).
+  [generator-type-plan](generator-type-plan.md) (done 2026-10-23).
 - The rest is resolved: see
   [generator-capture-yield-and-exhausted-reads](generator-capture-yield-and-exhausted-reads.md).
 

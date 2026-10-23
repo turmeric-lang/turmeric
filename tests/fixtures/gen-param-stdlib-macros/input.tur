@@ -1,0 +1,23 @@
+;;; generator-type-plan: the tur/gen macros read a struct element at its own
+;;; type too, from a generator made locally or passed in as (Generator P).
+(load "stdlib/gen.tur")
+
+(defstruct P [a : int b : float])
+
+(defn show-b [p : P] : nil (println (.b p)))
+
+(defn show-all [g : (Generator P)] : nil (gen-for-each show-b g))
+
+(defn count-some [g : (Generator int)] : int
+  (let [^mut n 0
+        ^mut v (gen-next g)]
+    (while (gen-some? v)
+      (set! n (+ n (gen-unwrap v)))
+      (set! v (gen-next g)))
+    n))
+
+(defn main [] : int
+  (gen-for-each show-b (gen [] (yield (P 1 0.5)) (yield (P 2 1.75))))  ; 0.5 1.75
+  (show-all (gen [] (yield (P 3 2.25)) (yield (P 4 3.125))))          ; 2.25 3.125
+  (println (count-some (gen [] (yield 5) (yield 6))))                  ; 11
+  0)

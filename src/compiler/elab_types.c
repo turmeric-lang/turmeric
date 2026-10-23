@@ -778,6 +778,44 @@ bool elab_assoc_projection(Elab *e, const Symbol *assoc, const Type *args,
     return true;
 }
 
+/* generator-type-plan: is `head` the built-in `Generator` -- not a type the
+ * program declared under that name? */
+bool elab_is_generator_type_head(Elab *e, const Symbol *head) {
+    if (!head || head->len != 9 || memcmp(head->name, "Generator", 9) != 0)
+        return false;
+    return elab_lookup_type_by_name(e, head) == NULL;
+}
+
+/* generator-type-plan: the bare spellings `generator` / `Generator` name no
+ * element, so nothing could read what the generator yields; they used to
+ * become an implicit type variable and fail later at `gen-next` ("expects a
+ * generator value, got tyvar").  Reject them at the annotation. */
+bool elab_reject_bare_generator_type(Elab *e, const Symbol *sym, Span span) {
+    if (!sym) return false;
+    bool lower = sym->len == 9 && memcmp(sym->name, "generator", 9) == 0;
+    if (!lower && !elab_is_generator_type_head(e, sym)) return false;
+    diag_emit(DIAG_ERROR, span,
+              "'%.*s' is not a type on its own: a generator type names what it "
+              "yields -- write (Generator T), e.g. (Generator int)",
+              (int)sym->len, sym->name);
+    return true;
+}
+
+/* generator-type-plan: `(Generator T)` from its form; `elem` is the resolved
+ * T, or NULL when resolving it failed (already reported). */
+Type *elab_generator_type_from_form(Elab *e, const Form *form, const Type *elem) {
+    if (form->as.list.len != 2) {
+        diag_emit(DIAG_ERROR, form->span,
+                  "(Generator T) takes exactly one type, the element the "
+                  "generator yields: (Generator int)");
+        return NULL;
+    }
+    if (!elem) return NULL;
+    Type *t = (Type *)arena_alloc(e->arena, sizeof(Type));
+    *t = type_generator(e->arena, *elem);
+    return t;
+}
+
 Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
                                   const Symbol **type_params, Kind *type_param_kinds,
                                   uint8_t n_type_params) {
@@ -994,6 +1032,8 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
                                                         n_type_params);
             if (rt) return rt;
         }
+
+        if (elab_reject_bare_generator_type(e, sym, form->span)) return NULL;
 
         /* Unknown -- return an unresolved named type variable.
          * structdef-retirement slice 5 (P7): an unknown bare type name is an
@@ -2009,6 +2049,17 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
             return fn_t;
         }
 
+        /* generator-type-plan: (Generator T) */
+        if (form->as.list.len >= 1 && form->as.list.items[0]->tag == F_SYM &&
+            elab_is_generator_type_head(e, form->as.list.items[0]->as.sym)) {
+            Type *el = form->as.list.len == 2
+                ? type_expr_from_form(e, form->as.list.items[1], rec_name,
+                                      type_params, type_param_kinds, n_type_params)
+                : NULL;
+            if (form->as.list.len == 2 && !el) return NULL;
+            return elab_generator_type_from_form(e, form, el);
+        }
+
         /* SS0b: Session type constructors */
         if (form->as.list.len >= 2
                 && form->as.list.items[0]->tag == F_SYM) {
@@ -2580,6 +2631,8 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
                                                         n_type_params);
             if (rt) return rt;
         }
+
+        if (elab_reject_bare_generator_type(e, sym, form->span)) return NULL;
 
         /* Unknown keyword type -- return an unresolved named type variable.
          * structdef-retirement slice 5 (P8): keyword analog of the bare-symbol

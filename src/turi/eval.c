@@ -15614,6 +15614,14 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
                 }
                 return turi_cstr_from_carrier(env, bits);
             }
+            /* generator-type-plan: a struct, ADT, container or function
+             * element is not a word the bits can be re-tagged from; the
+             * yielded value is beside the box. */
+            case TY_ADT: case TY_STRUCT: case TY_APP: case TY_FN: {
+                const TuriGen *og = (const TuriGen *)(
+                    (const char *)(intptr_t)pv.as_int - offsetof(TuriGen, box));
+                return og->box_val;
+            }
             default:
                 return turi_int(bits);
         }

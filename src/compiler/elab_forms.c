@@ -2003,6 +2003,7 @@ Expr *elab_let(Elab *e, const Form *call) {
                 ai->as.gen_next_.gen_expr->type.kind == TY_GENERATOR) {
                 b->gen_elem_kind = ai->as.gen_next_.gen_expr->type.as.generator_.element_kind;
                 b->gen_elem_tyvar = ai->as.gen_next_.gen_expr->type.as.generator_.element_tyvar;
+                b->gen_elem_type = ai->as.gen_next_.gen_expr->type.as.generator_.element;
                 b->gen_elem_set  = true;
             }
         }
@@ -5647,9 +5648,16 @@ Expr *elab_gen(Elab *e, const Form *call) {
     /* Build result type: TY_GENERATOR */
     Type gen_type;
     memset(&gen_type, 0, sizeof(gen_type));
-    gen_type.kind = TY_GENERATOR;
-    gen_type.copy_kind = CK_COPY;
-    gen_type.hkt_kind  = KIND_STAR;
+    if (gctx.element_kind_set) {
+        /* generator-type-plan: the generator's type carries the first yield's
+         * full type, so a struct element reads back as that struct and a
+         * `(Generator T)` parameter can be checked against it. */
+        gen_type = type_generator(e->arena, gctx.element_type);
+    } else {
+        gen_type.kind = TY_GENERATOR;
+        gen_type.copy_kind = CK_COPY;
+        gen_type.hkt_kind  = KIND_STAR;
+    }
     gen_type.as.generator_.element_kind = def->element_kind;
     gen_type.as.generator_.element_tyvar = gctx.element_tyvar;
 
@@ -5715,13 +5723,20 @@ Expr *elab_yield(Elab *e, const Form *call) {
     if (e->gen_ctx->element_kind_set) {
         TypeKind first = e->gen_ctx->element_kind;
         TypeKind now   = value->type.kind;
+        /* generator-type-plan: a struct / ADT / container element is read
+         * back at the first yield's full type, so the kind agreeing is not
+         * enough -- a `P` then a `Q` would read the `Q` as a `P`. */
+        bool full_differs =
+            first == now &&
+            (now == TY_ADT || now == TY_STRUCT || now == TY_APP) &&
+            !type_eq(e->gen_ctx->element_type, value->type);
         if (first != TY_TYVAR && now != TY_TYVAR &&
             first != TY_UNKNOWN && now != TY_UNKNOWN &&
-            gen_yield_family(first) != gen_yield_family(now)) {
+            (gen_yield_family(first) != gen_yield_family(now) || full_differs)) {
             diag_emit(DIAG_ERROR, value->span,
                       "'yield' of %s in a generator whose first yield is %s: "
                       "every yield of one generator must have the same type",
-                      type_name(value->type), type_name(type_from_kind(first)));
+                      type_name(value->type), type_name(e->gen_ctx->element_type));
             return NULL;
         }
     }
@@ -5729,6 +5744,7 @@ Expr *elab_yield(Elab *e, const Form *call) {
     /* Record element kind on first yield */
     if (!e->gen_ctx->element_kind_set) {
         e->gen_ctx->element_kind     = value->type.kind;
+        e->gen_ctx->element_type     = value->type;
         e->gen_ctx->element_kind_set = true;
         /* generator-in-generic: remember WHICH tyvar, when it is one the
          * enclosing signature quantifies -- the kind alone collapsed the
@@ -5774,7 +5790,10 @@ Expr *elab_gen_next(Elab *e, const Form *call) {
 
     Expr *out = expr_new(e->arena, EX_GEN_NEXT, ptr_type, call->span);
     out->as.gen_next_.gen_expr = gen_expr;
-    out->as.gen_next_.def      = gen_expr->as.gen_.def;
+    /* Only a `(gen-next (gen [] ...))` names its definition; a generator
+     * reached through a variable or a parameter does not (reading `gen_` off
+     * any other node read another union member). */
+    out->as.gen_next_.def      = gen_expr->kind == EX_GEN ? gen_expr->as.gen_.def : NULL;
     return out;
 }
 
@@ -5801,15 +5820,18 @@ Expr *elab_gen_unwrap(Elab *e, const Form *call) {
     const Expr *src = p;
     while (src && src->kind == EX_ASCRIBE) src = src->as.ascribe_.inner;
     const char *elem_tyvar = NULL;
+    const Type *elem_full = NULL;
     if (src && src->kind == EX_GEN_NEXT && src->as.gen_next_.gen_expr &&
         src->as.gen_next_.gen_expr->type.kind == TY_GENERATOR) {
         elem = src->as.gen_next_.gen_expr->type.as.generator_.element_kind;
         elem_tyvar = src->as.gen_next_.gen_expr->type.as.generator_.element_tyvar;
+        elem_full = src->as.gen_next_.gen_expr->type.as.generator_.element;
         have = true;
     } else if (src && src->kind == EX_VAR && src->as.var.binding &&
                src->as.var.binding->gen_elem_set) {
         elem = src->as.var.binding->gen_elem_kind;
         elem_tyvar = src->as.var.binding->gen_elem_tyvar;
+        elem_full = src->as.var.binding->gen_elem_type;
         have = true;
     }
     /* generator-in-generic: an element typed with the enclosing signature's
@@ -5823,6 +5845,8 @@ Expr *elab_gen_unwrap(Elab *e, const Form *call) {
         tout->as.gen_unwrap_.elem     = TY_TYVAR;
         return tout;
     }
+    Type rt = TYPE_UNKNOWN;
+    bool have_rt = false;
     if (have) {
         switch (elem) {
             case TY_BOOL: case TY_FLOAT: case TY_FLOAT64: case TY_FLOAT32:
@@ -5830,13 +5854,33 @@ Expr *elab_gen_unwrap(Elab *e, const Form *call) {
             case TY_INT: case TY_INT64: case TY_UINT64: case TY_INT32:
             case TY_UINT32: case TY_INT16: case TY_UINT16: case TY_INT8:
             case TY_UINT8:
+                /* The full type keeps what the kind drops (a typed
+                 * `ptr<T>`'s pointee, a sized integer's spelling). */
+                if (elem_full && elem_full->kind == elem) {
+                    rt = *elem_full;
+                    have_rt = true;
+                }
+                break;
+            /* generator-type-plan: a struct, ADT, container or function
+             * element is a carrier word in the slot (a by-value aggregate is
+             * boxed by the yield, as a container element is); the read
+             * bridges it back at the element's own type, so `(.a ...)` on a
+             * struct yield finds the field. */
+            case TY_ADT: case TY_STRUCT: case TY_APP: case TY_FN:
+                if (elem_full && elem_full->kind == elem) {
+                    rt = *elem_full;
+                    have_rt = true;
+                    break;
+                }
+                elem = TY_INT;
                 break;
             default:
                 elem = TY_INT;
                 break;
         }
     }
-    Expr *out = expr_new(e->arena, EX_GEN_UNWRAP, type_from_kind(elem), call->span);
+    Expr *out = expr_new(e->arena, EX_GEN_UNWRAP,
+                         have_rt ? rt : type_from_kind(elem), call->span);
     out->as.gen_unwrap_.ptr_expr = p;
     out->as.gen_unwrap_.elem     = elem;
     return out;
