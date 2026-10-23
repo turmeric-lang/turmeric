@@ -487,7 +487,7 @@ jobs:
       # steps so they are covered by both. Bump TVM_REF to ship a tvm change.
       - name: Attach tvm
         env:
-          TVM_REF: 8c5f225d0cc17efc53de926258c9f02ad41bbde6
+          TVM_REF: e30c74493081968e9c05339ffbda1649c0219309
         run: |
           for f in tvm.sh install.sh; do
             curl -fsSL "https://raw.githubusercontent.com/turmeric-lang/tvm/${TVM_REF}/${f}" \

@@ -20,8 +20,6 @@
 
 # T4 -- the supply chain. Manifest parsing, fetch, and tur.lock verification.
 /src/compiler/pkg.c                 @rjungemann
-/tvm/                               @rjungemann
-/Formula/turmeric.rb                @rjungemann
 
 # T1 -- the compiler driver: every place a string reaches a shell.
 /src/main.c                         @rjungemann

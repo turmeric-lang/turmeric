@@ -58,14 +58,7 @@ brew install --HEAD turmeric-lang/turmeric/turmeric
 
 The formula lives in its own tap repo,
 [`turmeric-lang/homebrew-turmeric`](https://github.com/turmeric-lang/homebrew-turmeric),
-so the bare tap name resolves. **If you tapped it before by spelling out this
-repo's URL**, that tap still points here and will stop receiving updates once
-`Formula/` is removed from this repo (after the next release). Re-point it:
-
-```sh
-brew untap turmeric-lang/turmeric
-brew tap turmeric-lang/turmeric
-```
+so the bare tap name resolves.
 
 The Homebrew formula is **`--HEAD`-only**: it builds whatever is on `main` at
 that moment and verifies no checksum. That is useful for tracking development
@@ -90,16 +83,19 @@ alternative Linux install paths (prebuilt binaries, build-from-source).
 **Version manager (`tvm`):**
 
 To install, switch between, and pin multiple Turmeric releases per-shell
-(the `nvm`/`rustup` model), use the bundled Turmeric Version Manager:
+(the `nvm`/`rustup` model), use the Turmeric Version Manager. The one-liner
+above already installs it; to install it on its own:
 
 ```sh
-sh tvm/install.sh        # bootstrap into ~/.tvm and wire up your shell rc
-tvm install 0.23.1       # download + cache a prebuilt release
-tvm use 0.23.1           # activate it for this shell
-tvm alias default 0.23.1 # make it the default for new shells
+git clone https://github.com/turmeric-lang/tvm
+sh tvm/install.sh            # bootstrap into ~/.tvm and wire up your shell rc
+tvm ls-remote                # list the released versions
+tvm install <version>        # download + cache a prebuilt release
+tvm use <version>            # activate it for this shell
+tvm alias default <version>  # make it the default for new shells
 ```
 
-See [`tvm/README.md`](tvm/README.md) for the full command set
+See [`turmeric-lang/tvm`](https://github.com/turmeric-lang/tvm#readme) for the full command set
 (`ls`, `ls-remote`, `which`, `run`, `--build`, `.tur-version` auto-switch).
 
 **GitHub Codespaces:**

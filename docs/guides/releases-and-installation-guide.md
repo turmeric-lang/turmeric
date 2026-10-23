@@ -25,11 +25,14 @@ of Option 2.
 
 ### Option 1: Version manager (`tvm`)
 
-The bundled [Turmeric Version Manager](https://github.com/turmeric-lang/turmeric/blob/main/tvm/README.md) installs,
+The [Turmeric Version Manager](https://github.com/turmeric-lang/tvm#readme) installs,
 caches, and switches between releases per-shell -- the `nvm`/`rustup`
-model. Bootstrap it once from a checkout:
+model. `curl -sSf https://turmeric-lang.com/install | sh` bootstraps it and
+installs the latest release; to bootstrap it on its own, from a checkout of
+[`turmeric-lang/tvm`](https://github.com/turmeric-lang/tvm):
 
 ```sh
+git clone https://github.com/turmeric-lang/tvm
 sh tvm/install.sh        # installs into ~/.tvm and wires up your shell rc
 ```
 
@@ -77,7 +80,7 @@ version under `~/.tvm/versions/<v>/`.
 > When no prebuilt
 asset exists for a tag (older than the prebuild matrix, or an
 unpublished platform), `tvm install --build <v>` falls back to a CMake
-source build. See [`tvm/README.md`](https://github.com/turmeric-lang/turmeric/blob/main/tvm/README.md) for the full
+source build. See the [tvm README](https://github.com/turmeric-lang/tvm#readme) for the full
 command set, including `.tur-version` auto-switching.
 
 ### Option 2: Prebuilt binary from GitHub Releases
@@ -445,9 +448,8 @@ failed attempt's history is preserved.
 
 ## See also
 
-- `Formula/turmeric.rb` -- the Homebrew formula. The maintained copy now lives
-  in the `turmeric-lang/homebrew-turmeric` tap; this one is kept for one
-  release for people who tapped this repo by URL, then removed.
+- [`turmeric-lang/homebrew-turmeric`](https://github.com/turmeric-lang/homebrew-turmeric)
+  -- the Homebrew tap and its `Formula/turmeric.rb`.
 - `.github/workflows/release.yml` -- the release pipeline.
 - `src/driver/paths.c` (`resolve_stdlib_root`) -- the stdlib-discovery logic
   that makes both the tarball and Homebrew layouts work without code

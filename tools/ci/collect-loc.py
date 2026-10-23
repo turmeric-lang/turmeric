@@ -97,7 +97,6 @@ BENCH = (
 TEST = (
     "tests/",
     "web/tests/",
-    "tvm/tests/",
     "validation/",
     "*/conftest.py",
     "*.spec.js",
