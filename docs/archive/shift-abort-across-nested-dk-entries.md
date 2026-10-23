@@ -1,5 +1,33 @@
 # A shift that crosses more than one DK entry: the abort leaks the skipped roots, and a CPS `reset` behind an evicted caller panics
 
+**Resolved 2026-10-23, both items.**
+
+1. **The skipped roots are freed.** Each DK entry notes its root on the
+   innermost direct reset landing (`__dk_entry_note`, a `__dk_entry_rec` in
+   the entry's own C frame, so no allocation and no new thread-local) and
+   unnotes it at its exit (`__dk_entry_unnote`, in `__dk_entry_leave`); the
+   abort frees what is still noted before it jumps (`__dk_reset_abort`,
+   `src/compiler/emit_dk_runtime.c`). The repro below at 200,000 turns peaks
+   at 1.3 MB RSS, against 63 MB without the free. LeakSanitizer never saw
+   this one -- the nodes stay reachable -- so the number in the report was a
+   sanitizer run of an older build; RSS is the measure that shows it now.
+2. **A CPS `reset` behind an evicted caller gets a landing.** Not at the
+   reset, whose C frame is gone once its body suspends, but at each
+   cps->direct call whose callee can reach a base shift
+   (`fn_may_reach_base_shift`, `cps_reset_landing_open`,
+   `src/compiler/emit_cps_ir.c`): when the caller's chain holds a reset prompt
+   at run time (`__dk_chain_has_reset`), the call pushes a
+   `tur_shift_reset_ctx`, and a jump to it delivers the shift's value past the
+   prompt (`__dk_reset_abort_to`), as the machine's own abort does. The
+   repro prints 6 on all three engines, and so do a reset one CPS function
+   further out, one after a `perform`, and nested resets (the innermost takes
+   it).
+
+Pinned by `tests/fixtures/shift-abort-across-nested-dk-entries` (both
+programs and four more shapes, run on both engines).
+
+## As filed
+
 **Severity: low** (a bounded leak per abort, and a panic where the interpreter
 answers, both in shapes nothing in the suites reaches). The residue of
 [compiled-shift-delimited-by-root](../archive/compiled-shift-delimited-by-root.md),

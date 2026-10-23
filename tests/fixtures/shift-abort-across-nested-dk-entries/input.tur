@@ -1,0 +1,49 @@
+;; shift-abort-across-nested-dk-entries.  A `(Vec int)` parameter evicts `b`
+;; from the CPS backend, so the CPS `h` it calls runs on a fresh DK entry whose
+;; chain holds no prompt for the shift.
+;;  1. `run`'s direct reset is reached past two entries (`a`'s and `h`'s): the
+;;     abort used to leak the skipped entry's root and done node every turn
+;;     (a ~300 B/turn RSS climb; the nodes stay reachable, so LSan is silent).
+;;  2. A CPS `reset` behind the evicted caller (`a1`..`a5`) was a panic --
+;;     "shift used outside of any reset boundary": a cps->direct call now gets
+;;     a landing when its chain holds a reset prompt.
+(defeffect Tick [] : nil)
+(def gv (:: (vec-new) (Vec int)))
+(defn h [] : int (+ 1 (shift (fn [v : int] (* 2 v)) 3)))
+(defn hn [] : int (+ 1 (reset (+ 5 (shift (fn [v : int] (* 3 v)) 4)))))
+(defn b [v : (Vec int)] : int (+ 100 (h)))
+(defn bn [v : (Vec int)] : int (+ 100 (hn)))
+(defn plain [v : (Vec int)] : int (+ 7 (vec-len v)))
+
+(defn a [] : int
+  (handle (do (perform (Tick)) (+ 1000 (b gv)))
+    (Tick [] k) (resume k nil)))
+(defn run [v : (Vec int)] : int
+  (let [^mut i 0 ^mut acc 0]
+    (while (< i 1000)
+      (set! acc (+ acc (reset (+ 10 (a)))))
+      (set! i (+ i 1)))
+    acc))
+
+;; the reset is in the caller of a CPS function that calls b
+(defn mid [] : int (+ 50 (b gv)))
+(defn a1 [] : int (reset (+ 1000 (mid))))
+;; a perform before the call, under a handler
+(defn a2b [] : int (reset (do (perform (Tick)) (+ 1000 (b gv)))))
+(defn a2 [] : int (handle (a2b) (Tick [] k) (resume k nil)))
+;; the callee shifts to its own reset; ours is not touched
+(defn a3 [] : int (reset (+ 1000 (bn gv))))
+;; no shift reached: the value flows on
+(defn a4 [] : int (reset (+ 1000 (plain gv))))
+;; nested CPS resets: the innermost takes it
+(defn a5 [] : int (reset (+ 2000 (reset (+ 1000 (b gv))))))
+
+(defn main [] : int
+  (println (run gv))
+  (println (reset (+ 1000 (b gv))))
+  (println (a1))
+  (println (a2))
+  (println (a3))
+  (println (a4))
+  (println (a5))
+  0)

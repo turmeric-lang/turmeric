@@ -1678,9 +1678,43 @@ void emit_cps_runtime_prelude(Buf *out) {
 "__attribute__((unused)) static void __dk_reset_save(tur_shift_reset_ctx *rs) {\n"
 "    rs->dk_driver = (void *)g_dk_driver; rs->dk_pend = (void *)g_dk_pend_perform;\n"
 "    rs->dk_depth = __dk_entry_depth; rs->dk_reap_mark = __dk_reap_n; rs->pending = 0;\n"
+"    rs->dk_entries = NULL;\n"
+"}\n"
+/* shift-abort-across-nested-dk-entries: an abort leaves every entry between
+ * the shift and the landing without running its exit, and the innermost one's
+ * exit is the only one that frees its root.  Each entry notes its root on the
+ * innermost landing (a record in its own C frame, live until the jump) and
+ * unnotes it at its exit; the abort frees what is still noted. */
+"typedef struct __dk_entry_rec { DK *root; struct __dk_entry_rec *prev; } __dk_entry_rec;\n"
+"__attribute__((unused)) static void __dk_entry_note(__dk_entry_rec *r, DK *root) {\n"
+"    tur_shift_reset_ctx *rs = tur_cur_shift_reset;\n"
+"    r->root = root; r->prev = NULL;\n"
+"    if (rs) { r->prev = (__dk_entry_rec *)rs->dk_entries; rs->dk_entries = r; }\n"
+"}\n"
+"__attribute__((unused)) static void __dk_entry_unnote(DK *root) {\n"
+"    tur_shift_reset_ctx *rs = tur_cur_shift_reset;\n"
+"    __dk_entry_rec *r = rs ? (__dk_entry_rec *)rs->dk_entries : NULL;\n"
+"    if (r && r->root == root) rs->dk_entries = r->prev;\n"
+"}\n"
+/* shift-abort-across-nested-dk-entries item 2: a cps->direct call landing
+ * (emit_cps_ir.c, cps_reset_landing_open) is wanted only when the caller's
+ * chain holds a reset prompt within its entry, and a jump to it delivers the
+ * value there. */
+"__attribute__((unused)) static int __dk_chain_has_reset(DK *k) {\n"
+"    for (; k && k->kind != DKK_DONE; k = k->next)\n"
+"        if (k->kind == DKK_PROMPT && k->tag == 1) return 1;\n"
+"    return 0;\n"
+"}\n"
+"__attribute__((unused)) static intptr_t dk_run(DK *k, intptr_t v);\n"
+"__attribute__((unused)) static intptr_t __dk_reset_abort_to(DK *k, int64_t w) {\n"
+"    for (; k && k->kind != DKK_DONE; k = k->next)\n"
+"        if (k->kind == DKK_PROMPT && k->tag == 1) return dk_run(k->next, (intptr_t)w);\n"
+"    return (intptr_t)w;\n"
 "}\n"
 "__attribute__((unused)) static void __dk_reset_abort(tur_shift_reset_ctx *rs) {\n"
 "    rs->pending = 0;\n"
+"    for (__dk_entry_rec *r = (__dk_entry_rec *)rs->dk_entries; r; r = r->prev) dk_free(r->root);\n"
+"    rs->dk_entries = NULL;\n"
 "    g_dk_driver = (tur_jmp_buf *)rs->dk_driver;\n"
 "    g_dk_pend_perform = (DKPendPerform *)rs->dk_pend;\n"
 "    if (__dk_entry_depth > rs->dk_depth) {\n"

@@ -45,5 +45,5 @@ landing around the receiver call as in escape mode. Two cautions:
 - A CPS `reset` (a DK prompt) between the landing and the evicted function is
   not on `tur_cur_shift_reset`, so the jump would skip it -- today a shift in
   tail position there gives the right answer by accident. That is
-  [shift-abort-across-nested-dk-entries](shift-abort-across-nested-dk-entries.md)
+  [shift-abort-across-nested-dk-entries](../archive/shift-abort-across-nested-dk-entries.md)
   item 2; fix it first, or keep the old behaviour when a DK prompt is nearer.

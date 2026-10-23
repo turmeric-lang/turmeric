@@ -16910,6 +16910,11 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
         buf_puts(out, "    struct tur_shift_reset_ctx *prev; /* nested resets */\n");
         buf_puts(out, "    void *dk_driver; void *dk_pend; int dk_depth; size_t dk_reap_mark;\n");
         buf_puts(out, "    int pending;     /* a DK shift stored `result`: jump at the entry's exit */\n");
+        /* shift-abort-across-nested-dk-entries: the DK entries opened while
+         * this landing is the innermost (__dk_entry_rec, linked through the
+         * entries' own C frames), so an abort that skips their exits frees
+         * their roots. */
+        buf_puts(out, "    void *dk_entries;\n");
         buf_puts(out, "} tur_shift_reset_ctx;\n\n");
         emit_rt_tls(out, shared, "TUR_THREAD_LOCAL tur_shift_reset_ctx *tur_cur_shift_reset = NULL;\n\n", "TUR_THREAD_LOCAL tur_shift_reset_ctx *tur_cur_shift_reset",
                 "tur_cur_shift_reset", "void **", "tur_tls_cur_shift_reset_ptr", "tur_shift_reset_ctx **");
@@ -18069,10 +18074,12 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
 "        if (!p || p->depth != __dk_entry_depth) return;\n"
 "        __dk_reap_seg_take(&p->seg, mark);\n"
 "        __dk_reap_seg_add(&p->seg, root, 1);\n"
+"        __dk_entry_unnote(root);\n"
 "        p->depth = -1;  /* owned now: an outer exit is not its owner */\n"
 "        --__dk_entry_depth;\n"
 "        return;\n"
 "    }\n"
+"    __dk_entry_unnote(root);\n"
 "    dk_free(root);\n"
 "    if (--__dk_entry_depth == 0) __dk_reap_run(); else __dk_reap_drop_to(mark);\n"
 "    if (tur_cur_shift_reset && tur_cur_shift_reset->pending) __dk_reset_abort(tur_cur_shift_reset);\n"
@@ -18090,6 +18097,7 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
 "    __dk_entry_depth++;\n"
 "    size_t __dk_reap_mark = __dk_reap_n;\n"
 "    DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());\n"
+"    __dk_entry_rec __dkr; __dk_entry_note(&__dkr, __root);\n"
 "    int64_t __r;\n"
 "    tur_jmp_buf __dkjb; tur_jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;\n"
 "    DKPendPerform *__dkpp = g_dk_pend_perform;\n"

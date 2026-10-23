@@ -8137,6 +8137,81 @@ static void cps_panic_check(CE *ce) {
     ce->ctx->indent = saved;
 }
 
+/* shift-abort-across-nested-dk-entries item 2: a direct reset landing at a
+ * cps->direct call.  A shift in a CPS function the (evicted) callee reaches
+ * runs on a fresh entry chain with no prompt, so the DK machine's root case
+ * aborts to the innermost direct landing -- and a CPS `reset` on THIS chain
+ * has none, so it was a panic ("shift used outside of any reset boundary"),
+ * or the abort went past it to an outer direct landing.  When this chain
+ * holds a reset prompt at run time, the call gets a landing of its own; a
+ * jump to it delivers the shift's value to that prompt, as the machine's own
+ * abort does (`k = P->next`).  The same landing catches an evicted
+ * function's own direct shift (direct-shift-outside-lexical-reset-not-
+ * abortive).  Only for a callee that can reach a base shift. */
+static bool shift_reach_visit(const Expr *e, void *ud);
+typedef struct { const FnDef *fd; int state; } ShiftReachMemo;  /* 1 computing, 2 no, 3 yes */
+static ShiftReachMemo *g_shift_reach;
+static size_t g_shift_reach_n, g_shift_reach_cap;
+static bool fn_may_reach_base_shift(const FnDef *fd) {
+    if (!fd) return false;
+    for (size_t i = 0; i < g_shift_reach_n; i++)
+        if (g_shift_reach[i].fd == fd) return g_shift_reach[i].state == 3;
+    if (g_shift_reach_n == g_shift_reach_cap) {
+        g_shift_reach_cap = g_shift_reach_cap ? g_shift_reach_cap * 2 : 64;
+        g_shift_reach = realloc(g_shift_reach, g_shift_reach_cap * sizeof *g_shift_reach);
+    }
+    size_t at = g_shift_reach_n++;
+    g_shift_reach[at] = (ShiftReachMemo){ fd, 1 };
+    bool yes = fd->body && shift_reach_visit(fd->body, NULL);
+    g_shift_reach[at].state = yes ? 3 : 2;
+    return yes;
+}
+static bool shift_reach_visit(const Expr *e, void *ud) {
+    (void)ud;
+    switch (e->kind) {
+        case EX_SHIFT: case EX_SHIFT0: case EX_DYN_CALL:
+            return true;
+        case EX_FN:
+            return e->as.fn_.fn && e->as.fn_.fn->body &&
+                   shift_reach_visit(e->as.fn_.fn->body, NULL);
+        case EX_CLOSURE:
+            return e->as.closure_.closure && e->as.closure_.closure->fn &&
+                   e->as.closure_.closure->fn->body &&
+                   shift_reach_visit(e->as.closure_.closure->fn->body, NULL);
+        case EX_CALL: {
+            const Binding *fb = e->as.call_.fn_binding;
+            if (fb && g_prog && fn_may_reach_base_shift(fd_for_binding(g_prog, fb)))
+                return true;
+            break;
+        }
+        default: break;
+    }
+    return cps_visit_children(e, shift_reach_visit, NULL);
+}
+/* Open the landing before the call line; -1 when none is wanted. */
+static int cps_reset_landing_open(CE *ce, const Binding *callee) {
+    const char *rt = ce->ctx->current_fn_ret_ctype;
+    if (!g_pend_k_ok || !ce->cur_k || !rt ||
+        (strcmp(rt, "int64_t") != 0 && strcmp(rt, "intptr_t") != 0))
+        return -1;
+    if (!callee || !g_prog || !fn_may_reach_base_shift(fd_for_binding(g_prog, callee)))
+        return -1;
+    int id = (int)ce->ctx->tmp_n++;
+    ce_line(ce, "tur_shift_reset_ctx __rsl_%d; int __rsl_on_%d = 0;", id, id);
+    ce_line(ce, "if (__dk_chain_has_reset(%s)) {", ce->cur_k);
+    ce_line(ce, "    __rsl_%d.prev = tur_cur_shift_reset; __dk_reset_save(&__rsl_%d); "
+                "tur_cur_shift_reset = &__rsl_%d; __rsl_on_%d = 1;", id, id, id, id);
+    ce_line(ce, "    if (TUR_SETJMP(__rsl_%d.buf)) { tur_cur_shift_reset = __rsl_%d.prev; "
+                "return (%s)__dk_reset_abort_to(%s, __rsl_%d.result); }", id, id, rt, ce->cur_k, id);
+    ce_line(ce, "}");
+    return id;
+}
+/* Close it right after the call line, before anything that may return. */
+static void cps_reset_landing_close(CE *ce, int id) {
+    if (id < 0) return;
+    ce_line(ce, "if (__rsl_on_%d) tur_cur_shift_reset = __rsl_%d.prev;", id, id);
+}
+
 static const char *join_param(CE *ce, uint32_t id) {
     for (int i = ce->n_joins - 1; i >= 0; i--)
         if (ce->joins[i].id == id) return ce->joins[i].param;
@@ -9607,6 +9682,7 @@ static void emit_term_inner(CE *ce, const CTerm *t) {
              * cps->direct call rides a lifted join/frame body (P6). */
             /* panic-location-names-the-runtime-not-the-call-site: the site
              * set / clear bracket the one call line each arm below writes. */
+            int rsl_lc = cps_reset_landing_open(ce, t->as.letcall.fn);
             char *site_lc = cps_site_set(ce, t->as.letcall.fn, t->as.letcall.call_expr);
             if (t->as.letcall.x.ty == TY_NIL) {
                 ce_line(ce, "%s(%s); /* cps->direct (nil) */", fn, argv);
@@ -9684,6 +9760,7 @@ static void emit_term_inner(CE *ce, const CTerm *t) {
                 else
                     ce_line(ce, "%s = %s(%s); /* cps->direct */", bn, fn, argv);
             }
+            cps_reset_landing_close(ce, rsl_lc);
             cps_site_clear(ce, site_lc);
             emit_letcall_sum_closure_reap(ce, t, bn);
             /* A by-value clone result is boxed and reaped above, so only the
@@ -10086,9 +10163,11 @@ static void emit_term_inner(CE *ce, const CTerm *t) {
                 /* panic-location-names-the-runtime-not-the-call-site: the
                  * site set / clear bracket the call line, before the panic
                  * check and the delivery (either may leave this body). */
+                int rsl_tc = cps_reset_landing_open(ce, t->as.tailcall.fn);
                 char *site_tc = cps_site_set(ce, t->as.tailcall.fn, t->as.tailcall.call_expr);
                 if (crt && (crt->kind == TY_NIL || crt->kind == TY_NEVER)) {
                     ce_line(ce, "%s(%s); /* cps->direct (nil) */", fn, argv_t);
+                    cps_reset_landing_close(ce, rsl_tc);
                     cps_site_clear(ce, site_tc);
                     cps_panic_check(ce);   /* cps-body-panic-not-propagated */
                     cps_deferred_consume_atoms(ce, t->as.tailcall.args, t->as.tailcall.n);
@@ -10104,6 +10183,7 @@ static void emit_term_inner(CE *ce, const CTerm *t) {
                         ce_line(ce, "%s %s = %s(%s); /* cps->direct */", drt, tmp, fn, argv_t);
                     else
                         ce_line(ce, "__auto_type %s = %s(%s); /* cps->direct */", tmp, fn, argv_t);
+                    cps_reset_landing_close(ce, rsl_tc);
                     cps_site_clear(ce, site_tc);
                     /* region-escape-through-unhooked-stores item 3: the panic
                      * check returns before the pop below, stranding the
@@ -14759,6 +14839,9 @@ void emit_cps_ir_flush_groups(Buf *file) {
  * pending perform (heap-use-after-free in __dk_abort_pending).  Expects
  * `__root` and `__dk_reap_mark` already declared. */
 static void emit_dk_entry_landing_state(Buf *file) {
+    /* shift-abort-across-nested-dk-entries: note the root on the innermost
+     * direct reset landing, which frees it if an abort skips this exit. */
+    buf_puts(file, "    __dk_entry_rec __dkr; __dk_entry_note(&__dkr, __root);\n");
     buf_puts(file, "    struct { tur_jmp_buf jb; tur_jmp_buf *save; DKPendPerform *pp; DK *root; size_t mark; } __dke;\n");
     buf_puts(file, "    __dke.save = g_dk_driver; __dke.pp = g_dk_pend_perform;\n");
     buf_puts(file, "    __dke.root = __root; __dke.mark = __dk_reap_mark;\n");
