@@ -3390,10 +3390,37 @@ typedef struct TuriCatchBoundary {
     void    *saved_defer_stack;
     const char *saved_module;
     bool     saved_no_unwind;
+    /* catch-unwind-misses-panic-in-shift-receiver: a shift's receiver runs
+     * outside the part of its reset's body it cut off, so a panic it raises
+     * passes the catches in that part.  The shift marks them dead for the
+     * receiver's run (catch_kill_to); a panic looks past a dead boundary, and
+     * a dead DK_CATCH_UNWIND lets the signal through.  The abort that follows
+     * the receiver unwinds every one of them, so none is ever revived. */
+    bool     dead;
     struct TuriCatchBoundary *prev;
 } TuriCatchBoundary;
 
 static _Thread_local TuriCatchBoundary *g_catch_stack;
+
+/* The innermost catch boundary a panic can reach: the top of the stack, past
+ * any a shift's receiver cut off. */
+static inline TuriCatchBoundary *catch_top(void) {
+    TuriCatchBoundary *cb = g_catch_stack;
+    while (cb && cb->dead) cb = cb->prev;
+    return cb;
+}
+
+/* Mark the catch boundaries above `end` dead -- those registered since the
+ * reset that saved `end` as its catch stack.  Only when `end` is on this
+ * stack: a shift reaching a reset across a handle's fiber sees the fiber's
+ * own stack, whose bottom pad hands the panic to the handler side, and that
+ * keeps the old behaviour. */
+static void catch_kill_to(TuriCatchBoundary *end) {
+    TuriCatchBoundary *cb = g_catch_stack;
+    while (cb && cb != end) cb = cb->prev;
+    if (cb != end) return;
+    for (cb = g_catch_stack; cb != end; cb = cb->prev) cb->dead = true;
+}
 
 /* Fill env's in-flight panic payload for a plain (cstr-message) panic. */
 static inline void panic_fill_cstr_payload(TuriEnv *env, const char *s) {
@@ -3503,7 +3530,7 @@ void turi_runtime_panic(TuriEnv *env, const char *msg) {
         abort();
     }
     /* If a catch-unwind boundary is active, unwind to it. */
-    TuriCatchBoundary *cb = g_catch_stack;
+    TuriCatchBoundary *cb = catch_top();
     if (cb && !env->in_no_unwind) {
         panic_fill_cstr_payload(env, s);
         /* The payload records where the panic was raised, as the compiled
@@ -3549,7 +3576,7 @@ static TuriValue turi_panic_with_value(TuriEnv *env, TuriValue pv, int ptype, Sp
         fflush(stdout);
         abort();
     }
-    TuriCatchBoundary *cb = g_catch_stack;
+    TuriCatchBoundary *cb = catch_top();
     if (cb && !env->in_no_unwind) {
         strncpy(env->catch_panic_msg, "typed panic", sizeof(env->catch_panic_msg) - 1);
         env->catch_panic_msg[sizeof(env->catch_panic_msg) - 1] = '\0';
@@ -3590,7 +3617,7 @@ static void turi_raise_payload(TuriEnv *env, TuriValue pv, int ptype, Span site)
  * holds -- one that ended a fiber body (eval_body_thunk's boundary took it
  * there) and continues at the resume or discontinue that ran the body. */
 static void turi_panic_reraise(TuriEnv *env) {
-    TuriCatchBoundary *cb = g_catch_stack;
+    TuriCatchBoundary *cb = catch_top();
     if (cb && !env->in_no_unwind) {
         env->panicking = true;
         if (cb->is_driver) return;
@@ -4600,6 +4627,9 @@ typedef struct TuriResetBoundary {
     /* env state to restore after a longjmp unwinds the intervening C frames */
     void                     *saved_handler_stack;
     void                     *saved_defer_stack;
+    /* The catch stack at the reset's entry: a shift's receiver runs with the
+     * catches registered since marked dead (catch_kill_to). */
+    struct TuriCatchBoundary *saved_catch;
     struct TuriResetBoundary *prev;
 } TuriResetBoundary;
 
@@ -4648,6 +4678,7 @@ static TuriValue eval_reset_boundary(TuriEnv *env, EvalFrame *frame,
     b.result              = turi_nil();
     b.saved_handler_stack = env->handler_stack;
     b.saved_defer_stack   = env->defer_stack;
+    b.saved_catch         = g_catch_stack;
     b.prev                = g_reset_stack;
     g_reset_stack = &b;
 
@@ -4670,6 +4701,8 @@ static TuriValue eval_abortive_shift(TuriEnv *env, EvalFrame *frame,
     if (turi_is_error(fn) || env_signaled(env)) return fn;
     /* shift0 runs f with its reset removed (shift0-pop-plan). */
     TuriResetBoundary *b0 = is0 ? reset_find(PROMPT_PLAIN) : NULL;
+    TuriResetBoundary *bt = b0 ? b0 : reset_find(PROMPT_PLAIN);
+    if (bt) catch_kill_to(bt->saved_catch);
     if (b0) b0->hidden = true;
     TuriValue r = turi_call(env, fn, &v, 1);
     if (b0) b0->hidden = false;
@@ -11074,6 +11107,7 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                 b->result              = turi_nil();
                 b->saved_handler_stack = env->handler_stack;
                 b->saved_defer_stack   = env->defer_stack;
+                b->saved_catch         = g_catch_stack;
                 b->prev                = g_reset_stack;
                 g_reset_stack = b;
                 DRIVE_PUSH(((DriveCont){ .kind = DK_RESET, .aux = b }));
@@ -11139,6 +11173,7 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                 b->result              = turi_nil();
                 b->saved_handler_stack = env->handler_stack;
                 b->saved_defer_stack   = env->defer_stack;
+                b->saved_catch         = g_catch_stack;
                 b->prev                = g_reset_stack;
                 g_reset_stack = b;
                 DRIVE_PUSH(((DriveCont){ .kind = DK_RESET, .aux = b }));
@@ -11196,6 +11231,7 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                 b->saved_defer_stack   = env->defer_stack;
                 b->saved_module        = env->current_module;
                 b->saved_no_unwind     = env->in_no_unwind;
+                b->dead                = false;
                 b->prev                = g_catch_stack;
                 g_catch_stack = b;
                 DRIVE_PUSH(((DriveCont){ .kind = DK_CATCH_UNWIND, .aux = b }));
@@ -11232,6 +11268,11 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                  * hidden until abortive_shift_resume, which f's every exit
                  * reaches. */
                 s->target = is0 ? reset_find(PROMPT_PLAIN) : NULL;
+                {
+                    /* The receiver runs outside what the shift cut off. */
+                    TuriResetBoundary *bt = s->target ? s->target : reset_find(PROMPT_PLAIN);
+                    if (bt) catch_kill_to(bt->saved_catch);
+                }
                 if (s->target) s->target->hidden = true;
                 NativeResume *nr = (NativeResume *)malloc(sizeof(NativeResume));
                 nr->resume = abortive_shift_resume; nr->state = s;
@@ -11343,7 +11384,7 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                  *   - a normal value: wrap in (ok value). */
                 TuriCatchBoundary *b = (TuriCatchBoundary *)top->aux;
                 g_catch_stack = b->prev;
-                if (env->panicking) {
+                if (env->panicking && !b->dead) {
                     env->panicking      = false;
                     env->handler_stack  = b->saved_handler_stack;
                     env->in_no_unwind   = b->saved_no_unwind;
@@ -14495,7 +14536,7 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
              * the outer boundary sees the original panic.  C1: if the next
              * boundary is a work-stack DK_CATCH_UNWIND, return so the panic
              * propagates as a signal; a setjmp boundary is longjmp'd to. */
-            TuriCatchBoundary *outer = g_catch_stack;
+            TuriCatchBoundary *outer = catch_top();
             if (outer && !env->in_no_unwind) {
                 if (outer->is_driver) return env->catch_panic_value;
                 longjmp(*outer->jmp, 1);
