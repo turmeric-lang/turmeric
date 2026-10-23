@@ -6,13 +6,15 @@
 ;; path now casts the carrier result through intptr_t to the concrete pointer
 ;; type, so the C compiler sees a real `const char *` with no warning.
 
-(defn my-show [x : int] : cstr "hi")
+;; rank2-argument-genericity: the forall promises `a` at every type, so
+;; the function passed to it is generic.
+(defn my-show [A] [x : A] : cstr "hi")
 
 ;; unary poly-call returning cstr -- exercises the generic unary branch.
 (defn use-show [f (forall [a] (-> a cstr))] : cstr
   (f 42))
 
-(defn pick [x : int y : int] : cstr "yo")
+(defn pick [A] [x : A y : A] : cstr "yo")
 
 ;; 2-ary poly-call returning cstr -- exercises the generic N-ary branch.
 (defn use-pick [f (forall [a] (-> a a cstr))] : cstr

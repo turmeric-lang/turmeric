@@ -1,0 +1,13 @@
+;; rank2-argument-genericity: a typeclass method whose parameter is a rank-2
+;; `forall` checks its argument too.
+(defclass Transform []
+  (transform [[f (forall [a] (-> a a))] x] : int))
+
+(definstance Transform []
+  (transform [f x] (f x)))
+
+(defn inc [x : int] : int (+ x 1))
+
+(defn main [] : int
+  (println (.transform inc 10))
+  0)

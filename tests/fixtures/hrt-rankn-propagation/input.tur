@@ -4,7 +4,9 @@
   (let [y (f x)]
     (f y)))
 
-(defn id [x : int] : int x)
+; rank2-argument-genericity: the forall promises `a` at every type, so
+; the function passed to it is generic.
+(defn id [A] [x : A] : A x)
 
 (defn main [] : int
   (let [result (apply-twice id 7)]

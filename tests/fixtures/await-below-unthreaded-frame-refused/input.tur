@@ -56,7 +56,11 @@
 (defstruct P [a : int b : int])
 (defn level3p [p : P] : P (P (+ (.a p) (sum-values 0 300 0)) (.b p)))
 (defn r2p-apply [f (forall [a] (-> a a)) p : P] : P (f p))
-(defn body [] : int (.a (r2p-apply level3p (P 13 0))))
+
+;; The functions passed to the rank-2 parameters below are not generic, so
+;; each is ascribed to the parameter's forall type -- the trusted opt-out of
+;; rank2-argument-genericity, which asserts what the checker cannot see.
+(defn body [] : int (.a (r2p-apply (:: level3p (forall [a] (-> a a))) (P 13 0))))
 
 (defn main [] : nil
   (cur-cell true)
