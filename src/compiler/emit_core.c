@@ -4932,6 +4932,21 @@ char *emit_call_name(EmitCtx *ctx, const Expr *call, const Binding *b) {
     return raw_name_for_binding(b);
 }
 
+/* The field a generator's state struct holds `b` in.  Id-suffixed, because
+ * every `let` in a gen body is promoted to a field and two of them can share
+ * a source name: two `[...]` literals each bind the hygienic `__vw` / `__v`
+ * (gen-body-two-vec-literals-duplicate-state-member), as do two user lets of
+ * one name.  Caller frees. */
+char *gen_field_name(const Binding *b) {
+    char *raw = raw_name_for_binding(b);
+    size_t n = strlen(raw) + 16;
+    char *p = (char *)malloc(n);
+    if (!p) { fprintf(stderr, "tur: oom\n"); abort(); }
+    snprintf(p, n, "%s_%u", raw, b->id);
+    free(raw);
+    return p;
+}
+
 /* Return a sanitized C identifier for a Binding. If the binding is a
  * function parameter in the current context, use the raw name (without ID).
  * Otherwise, append the ID suffix. Caller frees. */
@@ -4974,7 +4989,8 @@ static char *capture_env_access(EmitCtx *ctx, const Binding *b) {
         }
     }
     if (!env) return NULL;
-    char *field_name = raw_name_for_binding(b);
+    char *field_name = (env == ctx->gen_var_name) ? gen_field_name(b)
+                                                  : raw_name_for_binding(b);
     size_t sz = strlen(env) + strlen(sep) + strlen(field_name) + 1;
     char *result = (char *)malloc(sz);
     if (!result) { fprintf(stderr, "tur: oom\n"); abort(); }

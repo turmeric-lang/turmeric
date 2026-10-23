@@ -99,5 +99,5 @@ plan.
   `errors/gen-bare-generator-type`, `errors/gen-type-arity`,
   `errors/gen-yield-struct-mismatch`. All three engines.
 - Found on the way, filed, not fixed:
-  [gen-body-two-vec-literals-duplicate-state-member](../reported/gen-body-two-vec-literals-duplicate-state-member.md),
+  [gen-body-two-vec-literals-duplicate-state-member](gen-body-two-vec-literals-duplicate-state-member.md),
   [gen-collect-rejects-float-elements](gen-collect-rejects-float-elements.md).

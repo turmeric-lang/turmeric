@@ -1,0 +1,15 @@
+; Every `let` in a gen body becomes a field of the generator's state struct.
+; Two vector literals each bind the hygienic `__vw` / `__v`, and two user
+; lets can share a name too; the fields are id-suffixed so they do not
+; collide (gen-body-two-vec-literals-duplicate-state-member).
+
+(defn main [] : int
+  (let [gv (gen [] (yield [1 2 3]) (yield [4 5]))
+        a  (gen-unwrap (gen-next gv))
+        b  (gen-unwrap (gen-next gv))]
+    (println (vec-len a))
+    (println (vec-get b 1)))
+  (let [g2 (gen [] (let [x 7] (yield x)) (let [x 8] (yield (+ x 1))))]
+    (println (gen-unwrap (gen-next g2)))
+    (println (gen-unwrap (gen-next g2))))
+  0)

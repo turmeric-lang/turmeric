@@ -51,7 +51,6 @@ directory is worse for triage than no index.
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [gen-body-two-vec-literals-duplicate-state-member](gen-body-two-vec-literals-duplicate-state-member.md) | low-medium | A `gen` body with two `[...]` literals promotes two `let` temporaries both named `__vw` / `__v` into the state struct, and cc rejects the duplicate members; one literal compiles, `--interpret` runs both |
 
 ## Found verifying the spice READMEs and the advanced types guide (filed 2026-10-23)
 

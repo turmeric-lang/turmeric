@@ -1,7 +1,9 @@
 # A gen body with two vector literals emits a state struct C rejects
 
+**Resolved 2026-10-23.** Fix direction 1: a generator's state-struct field is now named by binding identity -- `gen_field_name` (`src/compiler/emit_core.c`) appends the binding id to the raw name, and the struct typedef, the `_create` fill, the frame-field ctype records and `capture_env_access`'s `__g->` path all spell it that way. Two `[...]` literals no longer collide on `__vw` / `__v`, and neither do two user lets of one name (`(let [x 7] ...) (let [x 8] ...)`, the same defect without the literal). Pinned by `tests/fixtures/gen-body-duplicate-local-names`.
+
 **Severity: low-medium.** Found 2026-10-23 executing
-[generator-type-plan](../archive/generator-type-plan.md). Reproduces on `main`
+[generator-type-plan](generator-type-plan.md). Reproduces on `main`
 before that work.
 
 ## Repro

@@ -1604,6 +1604,7 @@ void emit_heap_ctor_body(Buf *out, const AdtDef *def, const CtorDef *ctor,
                          const char *c_name, bool flat,
                          const bool *wide_box, const char *const *val_ctype);
 char *raw_name_for_binding(const Binding *b);
+char *gen_field_name(const Binding *b);
 size_t binding_module_prefix(const Binding *b, char *out, size_t cap);
 char *emit_call_name(EmitCtx *ctx, const Expr *call, const Binding *b);
 /* struct-of-closures monomorphization: find the inner-closure body spec (the

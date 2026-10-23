@@ -6285,7 +6285,7 @@ static void emit_gen_functions(EmitCtx *ctx, const GenDef *def) {
     buf_printf(out, "typedef struct { int32_t __state; void *(*__next_fn)(void *);");
     for (uint32_t i = 0; i < def->n_struct_bindings; i++) {
         Binding *b = def->struct_bindings[i];
-        char *fn = raw_name_for_binding(b);
+        char *fn = gen_field_name(b);
         buf_printf(out, " %s %s;", emit_type_c_name(ctx, b->type), fn);
         free(fn);
     }
@@ -6315,7 +6315,9 @@ static void emit_gen_functions(EmitCtx *ctx, const GenDef *def) {
     for (uint32_t i = 0; i < def->n_captures; i++) {
         Binding *b = def->captures[i];
         char *fn = raw_name_for_binding(b);
-        buf_printf(out, "    __g->%s = %s;\n", fn, fn);
+        char *fld = gen_field_name(b);
+        buf_printf(out, "    __g->%s = %s;\n", fld, fn);
+        free(fld);
         free(fn);
     }
     buf_printf(out, "    return (void *)__g;\n");
@@ -6349,7 +6351,7 @@ static void emit_gen_functions(EmitCtx *ctx, const GenDef *def) {
      * body uses, so the bridges that key on a local's recorded C type see a
      * field declared `tur_adt_Vec__float *` for what it is. */
     for (uint32_t i = 0; i < def->n_struct_bindings; i++) {
-        char *fn = raw_name_for_binding(def->struct_bindings[i]);
+        char *fn = gen_field_name(def->struct_bindings[i]);
         Buf ab; buf_init(&ab);
         buf_printf(&ab, "__g->%s", fn);
         buf_putc(&ab, '\0');
