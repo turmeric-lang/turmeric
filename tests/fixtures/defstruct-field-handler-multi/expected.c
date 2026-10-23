@@ -206,7 +206,12 @@ extern void tur_sjlj_jump(void *);
 #else
 typedef jmp_buf tur_jmp_buf;
 #define TUR_SETJMP(b)  setjmp(b)
+#if defined(__GLIBC__) && defined(__USE_FORTIFY_LEVEL) && __USE_FORTIFY_LEVEL > 0 && !defined(__MIRC__)
+extern void tur_longjmp_nochk(struct __jmp_buf_tag *, int) __asm__("longjmp") __attribute__((__noreturn__));
+#define TUR_LONGJMP(b) tur_longjmp_nochk((b), 1)
+#else
 #define TUR_LONGJMP(b) longjmp((b), 1)
+#endif
 #endif
 /* Phase X3: tur_set_t — sorted int64_t array */
 typedef struct { int64_t *items; uint32_t n; } tur_set_t;
@@ -3812,9 +3817,21 @@ static int64_t tur_fiber_block_resume(FiberBlock *f, int64_t arg) {
     void *_dk_pp = (void *)g_dk_pend_perform; g_dk_pend_perform = (DKPendPerform *)f->dk_pend;
     g_dk_driver = f->dk_driver;   /* the fiber's own landing, on its own stack */
     for (TurDynSwap *_ds = g_tur_dyn_swaps; _ds; _ds = _ds->next) _ds->swap(&f->dynsave);
+#if defined(TUR_SEG_ON)
+    tur_seg_pair _seg_hot = tur_seg_hot;
+    tur_seg_hot.lo = 0; tur_seg_hot.span = (uintptr_t)-1;
+#elif defined(TUR_SEG_JIT_ON)
+    tur_seg_pair _seg_hot = *tur_seg_jit_hot();
+    tur_seg_jit_hot()->lo = 0; tur_seg_jit_hot()->span = (uintptr_t)-1;
+#endif
     TUR_GC_FIBER_ENTER((void *)&_dk_save);
     swapcontext(&f->caller_ctx, &f->ctx);
     TUR_GC_FIBER_LEAVE();
+#if defined(TUR_SEG_ON)
+    tur_seg_hot = _seg_hot;
+#elif defined(TUR_SEG_JIT_ON)
+    *tur_seg_jit_hot() = _seg_hot;
+#endif
     for (TurDynSwap *_ds = g_tur_dyn_swaps; _ds; _ds = _ds->next) _ds->swap(&f->dynsave);
     f->dk_reap_v = __dk_reap_v; f->dk_reap_kind = __dk_reap_kind;
     f->dk_reap_n = __dk_reap_n; f->dk_reap_cap = __dk_reap_cap; f->dk_entry_depth = __dk_entry_depth;

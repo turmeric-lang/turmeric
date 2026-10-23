@@ -48,6 +48,8 @@
 #include "mir-gen.h"
 #include "c2mir.h"
 #include "runtime/buf.h"
+#include "runtime/globals.h"
+#include "runtime/r7seg_host.h"
 #include "prof.h"   /* --timings: the jit and run zones */
 
 /* ------------------------------------------------------------------ */
@@ -155,6 +157,12 @@ static const char JIT_PRELUDE[] =
    * r7rs-gc experiment) switches its collector off, since a JIT'd
    * program's globals are not in the data segment it scans. */
   "#define TUR_JIT_ENGINE 1\n"
+#if defined(TUR_SEG_HOST_ON)
+  /* r7rs-heap-frames-plan H6: this host carries the segmented stack's state
+   * and trampoline (runtime/r7seg.c), so a program built with
+   * --enable=r7rs-segmented-stack compiles its entry check against them. */
+  "#define TUR_SEG_JIT 1\n"
+#endif
 #if defined(__EMSCRIPTEN__)
   /* wasm-jit-plan 5.4: the program half reads musl's headers out of MEMFS,
    * and c2mir lacks three spellings they use on every line: the __restrict
@@ -753,6 +761,11 @@ struct jit_entry_box {
   int argc;
   char **argv;
   int rc;
+  /* r7rs-heap-frames-plan H6: arm the segmented stack on the entry thread,
+   * with this cap on its stack plus segments (TUR_MAIN_STACK_MB, `asked`). */
+  bool seg;
+  int seg_asked;
+  size_t seg_total;
 };
 
 /* jit-stack-overflow-has-no-message: a recursion that ran off this thread's
@@ -777,7 +790,11 @@ static struct sigaction g_jit_prev_segv, g_jit_prev_bus;
 static void jit_entry_fault (int sig, siginfo_t *si, void *uc) {
   (void) uc;
   unsigned char *a = (unsigned char *) si->si_addr, *lo = g_jit_entry_lo;
-  if (TUR_STACK_FAULT_IS_OVERFLOW (a, lo)) {
+  bool ov = TUR_STACK_FAULT_IS_OVERFLOW (a, lo);
+#  if defined(TUR_SEG_HOST_ON)
+  ov = ov || tur_seg_jit_fault_is_overflow (a);   /* a segment's guard (H6) */
+#  endif
+  if (ov) {
     static const char m[] = TUR_STACK_OVERFLOW_MSG "\n";
     if (write (2, m, sizeof m - 1) < 0) { }
     signal (sig, SIG_DFL);   /* the fault repeats on return, unhandled */
@@ -861,9 +878,15 @@ static void *jit_run_entry (void *p) {
   stack_t old_alt;
   void *alt = jit_entry_guard_enter (&old_alt);
 #endif
+#if defined(TUR_SEG_HOST_ON)
+  if (box->seg) tur_seg_jit_arm (box->seg_total, box->seg_asked);
+#endif
   box->rc = box->fn (box->argc, box->argv, fake_envp);
   jit_atexit_drain ();
   fflush (stdout);
+#if defined(TUR_SEG_HOST_ON)
+  if (box->seg) tur_seg_jit_end ();
+#endif
 #ifndef _WIN32
   jit_entry_guard_leave (alt, &old_alt);
 #endif
@@ -1236,7 +1259,7 @@ int tur_jit_execute (const char *csrc, size_t csrc_len, const char *autolink,
   }
 
   typedef int (*main_fn) (int, char **, char **);
-  struct jit_entry_box box = { (main_fn) main_item->addr, prog_argc, prog_argv, 0 };
+  struct jit_entry_box box = { (main_fn) main_item->addr, prog_argc, prog_argv, 0, false, 0, 0 };
 
   /* r7rs-deep-recursion-segfaults-silently: the same 1 GiB the cc path gives
    * a `#lang r7rs` main (emit_deep_stack_runtime) -- address space, committed
@@ -1264,6 +1287,21 @@ int tur_jit_execute (const char *csrc, size_t csrc_len, const char *autolink,
     }
   }
   bool stack_asked = senv_name != NULL;
+#if defined(TUR_SEG_HOST_ON)
+  /* r7rs-heap-frames-plan H6/H5: under --enable=r7rs-segmented-stack the
+   * size is the total, stack plus segments (unset: half of physical memory),
+   * and the entry stack itself is at most 1 GiB -- what the cc path's
+   * tur_deep_size gives, TUR_SEG_BASE_MB included. */
+  if (g_opt_r7rs && g_opt_r7rs_segmented_stack) {
+    box.seg = true;
+    box.seg_asked = stack_asked;
+    box.seg_total = stack_mb << 20;
+    if (stack_mb > 1024) stack_mb = 1024;
+    const char *b = getenv ("TUR_SEG_BASE_MB");
+    unsigned long long bm = b ? strtoull (b, NULL, 10) : 0;
+    if (bm && bm < stack_mb) stack_mb = (size_t) bm;
+  }
+#endif
 #ifdef __EMSCRIPTEN__
   /* wasm-jit-plan 5.1: no entry thread on the page.  The caller is the eval
    * worker, whose stack is the module's -sSTACK_SIZE; a sized pthread would

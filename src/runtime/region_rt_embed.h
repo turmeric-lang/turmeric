@@ -32,5 +32,9 @@ extern const size_t        tur_rt_embed_region_c_len;
  * compiled `#lang r7rs` program's unit when --enable=r7rs-gc is on. */
 extern const unsigned char tur_rt_embed_r7gc_c[];
 extern const size_t        tur_rt_embed_r7gc_c_len;
+/* The segmented stack (src/runtime/r7seg.c), pasted into a `#lang r7rs`
+ * program's unit under --enable=r7rs-segmented-stack. */
+extern const unsigned char tur_rt_embed_r7seg_c[];
+extern const size_t        tur_rt_embed_r7seg_c_len;
 
 #endif /* TUR_REGION_RT_EMBED_H */

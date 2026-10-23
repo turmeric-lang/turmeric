@@ -2036,4 +2036,11 @@ void emit_flush_dead_base_ctor_traps(EmitCtx *ctx, Buf *out);
 /* G4: reset the per-module shared-driver group registry. */
 void gs_reset_group_registry(void);
 
+/* r7rs-heap-frames-plan: the segmented stack's entry check (emit_fns.c),
+ * shared with the CPS backend. */
+bool emit_fn_wants_seg_check(const EmitCtx *ctx, const Expr *e);
+void emit_seg_check_at_header(Buf *file, size_t link, size_t ret, size_t name,
+                              const char *cname, int indent,
+                              const char *const *args, uint32_t n);
+
 #endif

@@ -1,10 +1,9 @@
 # Plan: Scheme recursion depth bounded by memory, not by the C stack
 
 > **Status:** IN PROGRESS (prototype) behind `--enable=r7rs-segmented-stack`
-> since 2026-10-23. H0, H1, H2, H5 landed for Linux x86-64 and arm64 (arm64
-> assembled, not yet run: no arm64 box was at hand); H3 landed in part
-> (a capture on a segment is escape-only); H4 and H6 are open. See
-> [Progress](#progress-2026-10-23).
+> since 2026-10-23. Every stage has landed for Linux x86-64 and arm64 (arm64
+> run under qemu-aarch64, gcc and clang), compiled and under `tur jit`. macOS
+> and Windows are open. See [Progress](#progress-2026-10-23).
 > **Type:** Compiler / r7rs runtime
 > **Predecessors:** `docs/archive/r7rs-deep-recursion-segfaults-silently.md`
 > (PR #1082: `main` runs on a 1 GiB thread, and an overflow prints a message).
@@ -155,10 +154,10 @@ planned; [Progress](#progress-2026-10-23) says where each stands.
 | H0, measure | Done. Numbers below; the check costs "a few percent" or less once it is placed with care. |
 | H1, the switch | Done, Linux x86-64 and arm64, the deep-stack thread. |
 | H2, the collector | Done. `r7gc.c` walks the segment chain (`tur_gc_scan_segments`). |
-| H3, `call/cc` | In part: a capture whose frames are on a segment is escape-only; a re-entry from a segment into an image of the thread's own stack works. Copying the chain is open. |
-| H4, threads and platforms | Open. Only the deep-stack thread is armed; macOS and Windows compile no check. |
+| H3, `call/cc` | Done. A capture on a segment copies the chain down to the thread's own stack, and a re-entry maps each segment back at its address. |
+| H4, threads and platforms | Done on Linux: every thread the program starts has a chain of its own, and a fiber runs unchecked on its own stack. macOS and Windows compile no check (below). |
 | H5, the cap | Done. `TUR_MAIN_STACK_MB` is the total; unset, half of physical memory. |
-| H6, the JIT | Open. Under `tur jit` (`__MIRC__`) the check compiles to nothing. |
+| H6, the JIT | Done for the engine's entry thread, which runs `main`. Threads a JIT'd program starts run unchecked. |
 
 ### What landed
 
@@ -170,7 +169,8 @@ planned; [Progress](#progress-2026-10-23) says where each stands.
   limit the procedure re-enters itself, same arguments, through
   `tur_seg_tramp` -- as a tail call (`musttail` under clang), so the slow
   path needs no frame.
-- **The switch** (`emit_seg_stack_runtime`, `src/compiler/emit_module.c`):
+- **The switch** (`src/runtime/r7seg.c`, which `emit_seg_stack_runtime`
+  embeds):
   the trampoline saves the argument registers, asks `tur_seg_enter` for an
   8 MiB segment (a 64 KiB guard at the bottom, one spare kept per thread),
   copies the stack-passed arguments to its top (a bound from `sizeof` of each
@@ -185,16 +185,58 @@ planned; [Progress](#progress-2026-10-23) says where each stands.
   `TUR_SEG_BASE_MB` shrinks it, for tests.
 - **The collector** scans each segment from where its frames start, then the
   one before it from where the frames there resume.
-- **`call/cc`** asks the prelude's `r7k_seg_off_base` hook, which the
-  runtime sets at thread start: the prelude's continuation helpers are
-  hoisted above the preamble, so an `#ifdef` on the runtime's macro there
-  silently compiles to nothing.
+- **`call/cc`** reaches the runtime through weak functions
+  (`tur_seg_r7k_off_base`, `tur_seg_r7k_capture`, `tur_seg_r7k_restore`):
+  the prelude's continuation helpers are hoisted above the preamble, so an
+  `#ifdef` on the runtime's macro there silently compiles to nothing, and so
+  did the first version's hook pointer, which the runtime set too late.
+- **H3, the chain in the image.** A capture on a segment copies the live part
+  of each segment, with its record, down to the thread's own stack; the
+  usual copy of the thread's own stack starts where the oldest segment's
+  frames resume. A re-entry needs each segment at its old address, since the
+  frames point into it: a segment address is released only into a per-thread
+  pool of reserved slots (`PROT_NONE`, memory returned), so it is reused only
+  as the same whole slot, and the re-entry takes it from the chain, the
+  spare or the pool, or maps it again with `MAP_FIXED_NOREPLACE` (and stops
+  with a message if something else took it). The rebuild runs on the
+  thread's own stack below the image, then copies the image and jumps.
+- **H4.** `tur_gc_thread_main` arms each started thread (its own chain, a
+  signal stack so its overflow prints the message, everything unmapped when
+  it ends). A fiber's stack is a heap block no record describes, so the
+  resume disarms the pair for the fiber and restores it after. glibc's
+  fortified `longjmp` (`__longjmp_chk`) refuses a jump to a lower stack
+  pointer, which a jump from a segment into the thread's own stack is when
+  the segment sits higher (qemu-aarch64 puts it there): `TUR_LONGJMP` and
+  `R7K_LONGJMP` call the unchecked symbol.
+- **H6, the JIT.** c2mir has no thread-locals, no inline asm, no `typeof`
+  and no sibling calls. So `tur` compiles `r7seg.c` itself (`TUR_SEG_HOST`):
+  the state and the trampoline live in the engine, which arms its entry
+  thread (`jit_run_entry`; the entry stack is the size of the cc path's,
+  `TUR_SEG_BASE_MB` included), and the program's check reads the pair
+  through one call (`tur_seg_jit_hot`) and the stack pointer from a local's
+  address. Its slow path calls the trampoline through the procedure's own
+  type, which the emitter writes ahead of it as `tur_seg_fnty_<name>`. The
+  r7k call/cc hooks are the host's too. Because MIR makes no sibling calls,
+  two cycles gcc and clang close flat need a check there: a CPS procedure's
+  `return g__cps(...)`, and running a continuation chain (`dk_run_impl` ->
+  a frame's function -> `dk_run`, which SICP's `map` does once per element
+  on the way back up); the second is `TUR_SEG_CHECK_JIT`, empty natively.
+- **A CPS procedure's body is checked natively too.** A call it makes for a
+  value goes through the callee's direct entry, which has no check, so
+  SICP's `accumulate` -- `(op (car l) (accumulate op init (cdr l)))` --
+  recursed accumulate__cps -> accumulate -> accumulate__cps with none on
+  the way, and overflowed the thread's own stack with the flag on. (The H0
+  note below was about the direct entry, and still holds.)
 - **Tests:** `tests/check-r7rs-segmented-stack.sh` (ctest
-  `tur_r7rs_segmented_stack`) runs a recursion, collections under torture
-  and `call/cc` across segments past an 8 MiB stack, and the budget's
-  overflow message; `tests/fixtures/r7rs-segmented-stack-deep-recursion`
-  keeps the flag's codegen in `run.sh`. The 136 r7rs fixtures and
-  `run-r7rs-gc.sh` (267 cases) pass with the flag on.
+  `tur_r7rs_segmented_stack`) runs, past an 8 MiB stack: a recursion,
+  collections under torture, `call/cc` across segments and captured on them
+  (escaping, and re-entered late over other frames), two threads, a fiber,
+  SICP's list functions, and the budget's overflow message -- compiled, and
+  again under `tur jit` (all but the threads; a JIT that fell back to cc
+  fails the case). `nightly-arm64.yml` runs it on an arm64 runner.
+  `tests/fixtures/r7rs-segmented-stack-deep-recursion` keeps the flag's
+  codegen in `run.sh`. The r7rs fixtures (`run.sh` and `run-jit.sh`) and
+  `run-r7rs-gc.sh` (268 cases) pass with the flag on.
 
 ### H0: what the check costs
 
@@ -232,11 +274,12 @@ How it got there, which is the part worth keeping:
    direct calls left, one member -- the one with fewest callers, a slow
    path's internal rather than the `=` every comparison goes through -- until
    no cycle is left. 651 checks in a one-procedure program became 133.
-3. **No check in a CPS function's direct entry.** Its `__cps` body's calls
-   are tail calls into heap continuations already (option A, in effect), and
-   a check in the entry stopped clang inlining the body there, which shifted
-   the stack enough for the conservative collector to keep 93 MB of dead
-   lists alive through one stale word (lists, +139% wall clock).
+3. **No check in a CPS function's direct entry.** A check in the entry
+   stopped clang inlining the body there, which shifted the stack enough for
+   the conservative collector to keep 93 MB of dead lists alive through one
+   stale word (lists, +139% wall clock). The `__cps` body is checked instead
+   (H3/H6 work, above): its calls to other CPS procedures are sibling calls,
+   but a call it makes for a value goes through a direct entry.
 4. **A slow path at the trampoline's stack pointer, not the check's.** clang
    puts the check after the prologue, gcc before it; a trampoline that
    judged "room left" by its own smaller frame re-entered forever under clang
@@ -258,19 +301,72 @@ check, not by the plain one.
   `run.sh` and `run-r7rs-gc.sh` corpora, tail-call fixtures included, pass
   with the flag on.
 
+### The cost, after H3-H6
+
+Best of five, wall clock, Release `tur`, flag off against on, 4-core x86-64
+(the JIT's includes its ~1.1 s compile):
+
+| | cc | `tur jit` |
+| --- | --- | --- |
+| fib 33 | 0.41 s -> 0.42 s (+4%) | 2.41 s -> 2.47 s (+3%) |
+| tak 30 20 10 | 2.87 s -> 3.04 s (+6%) | 12.93 s -> 12.80 s (-1%) |
+| SICP lists, 1e6 | 1.77 s -> 1.73 s (-2%) | 3.96 s -> 4.06 s (+2%) |
+
+The JIT's check is a call into the engine per procedure entry, which is
+lost in MIR's own call cost.
+
+### A program that needs it
+
+`sum-odd-squares` from SICP 2.2.3, written the textbook way -- the
+signal-flow version, every list function non-tail-recursive:
+
+```scheme
+(define (enumerate-interval lo hi)
+  (if (> lo hi) '() (cons lo (enumerate-interval (+ lo 1) hi))))
+(define (my-map f l)
+  (if (null? l) '() (cons (f (car l)) (my-map f (cdr l)))))
+(define (my-filter keep? l)
+  (cond ((null? l) '())
+        ((keep? (car l)) (cons (car l) (my-filter keep? (cdr l))))
+        (else (my-filter keep? (cdr l)))))
+(define (accumulate op initial l)
+  (if (null? l) initial (op (car l) (accumulate op initial (cdr l)))))
+(define (sum-odd-squares n)
+  (accumulate + 0 (my-map (lambda (x) (* x x))
+                          (my-filter odd? (enumerate-interval 1 n)))))
+```
+
+At n = 3e6 it outgrows the default 1 GiB stack ("stack overflow: recursion
+too deep" after 4.6 s). With the flag it prints 4499999999999500000 in 5.7 s
+at a 1.76 GiB peak (`tur jit`: 10.7 s, 3.0 GiB); n = 1e7 takes 38.5 s and
+5.5 GiB. `accumulate` holds 3e6 frames of its own at the deepest point, each
+with a direct entry's landing (a `jmp_buf`), which is why the frames are
+large. It is a toy, not the "real program" the graduation condition asks
+for, but it is the program every SICP reader writes first.
+
 ### Left, in order
 
-- **H4 on Linux:** arm the check on every thread the program starts (each
-  thread its own chain), and on a fiber's stack, which today disarms the
-  thread's check for the rest of the run.
-- **Run arm64.** The trampoline assembles for aarch64 and follows AAPCS64
-  (x0-x8 and q0-q7 saved, the stack-passed arguments at the entry `sp`), but
-  it has not run. `nightly-arm64.yml` runs the ctest when it next fires.
-- **H3 proper:** copy the chain into the image, so a capture on a segment
-  can be re-entered.
-- **macOS** (Mach-O symbol spelling in the trampoline,
-  `pthread_get_stackaddr_np` bounds) and **Windows**.
-- **H6:** a check under c2mir needs thread-locals there.
+- **macOS.** Not doable from the Linux sandbox this was built in (no
+  Darwin SDK or runner). Needed: the Mach-O spelling of the trampoline's
+  symbols (`_tur_seg_tramp`, `_tur_seg_enter`), `pthread_get_stackaddr_np`
+  / `pthread_get_stacksize_np` bounds instead of `pthread_getattr_np`,
+  `MAP_ANON`, no `MAP_FIXED_NOREPLACE` (a hinted `mmap` checked for the
+  address it got), and arm64's AAPCS64 variant (Apple passes variadic
+  arguments on the stack, and stack arguments are packed to their natural
+  size, so the `nb` bound stays an upper bound but the copy is the same).
+- **Windows.** The cross toolchain is available (mingw-w64, Wine), but the
+  work is a port, not a build: a Win64 trampoline (rcx/rdx/r8/r9 and
+  xmm0-3, the 32-byte shadow space, stack arguments above it), segments from
+  `VirtualAlloc` with a `PAGE_GUARD` page, and the TEB's `StackBase` /
+  `StackLimit` switched with the stack -- `__chkstk`, SEH and the CRT's
+  `longjmp` (which unwinds through `RtlUnwindEx`) all read them, so a
+  segment they do not describe faults or aborts. Wine's TEB and unwinder
+  are not a faithful enough stand-in to trust a pass there; it wants a
+  Windows runner.
+- **Threads under `tur jit`.** A thread a JIT'd program starts runs
+  unchecked on its own stack. Arming it needs a hook from the program's
+  thread start into the engine (`tur_gc_thread_main` is in the program,
+  and the collector is off under the JIT).
 - **Graduation** wants a program that needs it (the hold condition above),
   then the plain-check decision revisited if typed code ever wants it.
 

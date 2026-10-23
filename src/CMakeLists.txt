@@ -474,7 +474,7 @@ add_custom_command(
     DEPENDS
         ${CMAKE_SOURCE_DIR}/cmake/embed_region_runtime.cmake
         runtime/region.h runtime/region.c runtime/arena.h runtime/arena.c
-        runtime/r7gc.c
+        runtime/r7gc.c runtime/r7seg.c
     COMMENT "Embedding src/runtime/{arena,region}.{h,c} for the emitter"
     VERBATIM
 )
@@ -588,7 +588,10 @@ if(TUR_JIT)
   # onto tur_core's eighteen consumers.
   # tur_rt_split_embed.c is NOT here any more -- it moved to tur_core, because
   # --runtime=split made the cc path read it. See the note at its new home.
-  add_library(tur_jit_obj OBJECT jit_engine.c turi/jit_ffi.c)
+  # runtime/r7seg.c, compiled for the host: the segmented stack's state and
+  # trampoline under `tur jit` (r7rs-heap-frames-plan H6).  The same file is
+  # embedded into compiled programs above.
+  add_library(tur_jit_obj OBJECT jit_engine.c turi/jit_ffi.c runtime/r7seg.c)
   target_include_directories(tur_jit_obj PRIVATE ${TUR_INCLUDE_DIRS})
   target_link_libraries(tur_jit_obj PRIVATE tur_mir)
   target_compile_definitions(tur_jit_obj PRIVATE TUR_HAVE_JIT=1)
@@ -603,6 +606,8 @@ if(TUR_JIT)
   # the generated ffi_dispatch.c above.
   set_source_files_properties(jit_engine.c PROPERTIES
     COMPILE_OPTIONS "-Wno-pedantic")
+  set_source_files_properties(runtime/r7seg.c PROPERTIES
+    COMPILE_DEFINITIONS TUR_SEG_HOST=1)
   # $<TARGET_OBJECTS:> carries objects only -- no usage requirements, no
   # transitive link -- so each consumer states the engine's needs itself.
   target_sources(tur PRIVATE $<TARGET_OBJECTS:tur_jit_obj>)

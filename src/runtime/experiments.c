@@ -472,8 +472,9 @@ static const ExperimentDescriptor EXPERIMENTS[] = {
      * limit at entry and, past it, re-enters itself on a fresh stack segment,
      * so recursion is bounded by TUR_MAIN_STACK_MB as a memory budget rather
      * than by the C stack.  Gated because the check is on every call and the
-     * plan is part-way: the deep-stack thread on Linux x86-64 and arm64 only,
-     * and a call/cc captured on a segment is escape-only. */
+     * plan is part-way: Linux x86-64 and arm64 only (compiled, every thread;
+     * `tur jit`, main's thread), and graduation wants a program that needs
+     * it. */
     { "r7rs-segmented-stack",
       "a compiled `#lang r7rs` procedure checks the stack limit at entry and grows onto a new segment",
       "docs/upcoming/r7rs-heap-frames-plan.md",

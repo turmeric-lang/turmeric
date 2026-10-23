@@ -676,14 +676,15 @@ so depth is bounded by memory: a recursion 100 million calls deep (about
 3 GB of frames) runs, where the 1 GiB stack stops near 30 million. The
 limit becomes a budget: `TUR_MAIN_STACK_MB`, when set, is the total of the
 stack and its segments; unset, half of physical memory. Past it, the same
-`stack overflow: recursion too deep`. A `call/cc` captured while frames are
-on a segment is escape-only: it escapes, but invoked after its extent it
-stops the program with `continuation invoked after its call/cc prompt
-returned`, as on a platform with no stack copy. A continuation captured on
-the thread's own stack re-enters from anywhere, and `raise`, `guard` and
-escapes work anywhere. Not under `tur jit`, and not on other threads. The
-cost is a compare per procedure call -- 1-2% more instructions at `-O2` on
-the plan's benchmarks under gcc, within code-layout noise under clang. See
+`stack overflow: recursion too deep`. `call/cc` works across segments: a
+continuation captured while frames are on segments takes them with it and,
+re-entered later, puts each one back at its address. Every thread the
+program starts recurses onto segments of its own; a fiber runs on its own
+stack, as without the flag. Under `tur jit` the same holds for `main`'s
+thread, while a thread the program starts runs on its own stack. The cost is
+a compare per procedure call -- a few percent of wall clock on fib and tak,
+compiled or under `tur jit`. SICP's `sum-odd-squares`, written with
+non-tail-recursive list functions, needs it from n = 3e6. See
 [r7rs-heap-frames-plan](https://github.com/turmeric-lang/turmeric/blob/main/docs/upcoming/r7rs-heap-frames-plan.md).
 
 ## Where it differs from R7RS

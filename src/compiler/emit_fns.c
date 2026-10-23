@@ -5770,7 +5770,7 @@ static void seg_graph_build(const EmitCtx *ctx) {
     g_seg_key = ctx->tcg_fn_exprs;
 }
 
-static bool emit_fn_wants_seg_check(const EmitCtx *ctx, const Expr *e) {
+bool emit_fn_wants_seg_check(const EmitCtx *ctx, const Expr *e) {
     if (!g_opt_r7rs_segmented_stack || !emit_fn_is_scheme(e)) return false;
     const FnDef *fd = e->kind == EX_FN_DEF ? e->as.fn_def_.fn : NULL;
     if (!fd) return true;
@@ -5786,15 +5786,43 @@ static bool emit_fn_wants_seg_check(const EmitCtx *ctx, const Expr *e) {
  * re-enter it with, and a bound on the bytes of them the ABI may pass on the
  * stack (emit_seg_stack_runtime). */
 static void emit_seg_check(Buf *file, int indent, const char *cname,
-                           const char *const *args, uint32_t n) {
+                           const char *const *args, uint32_t n, bool is_void) {
     indent_buf(file, indent);
-    buf_printf(file, "TUR_SEG_CHECK(%s, ", cname);
+    buf_printf(file, "TUR_SEG_CHECK%s(%s, ", is_void ? "_V" : "", cname);
     for (uint32_t i = 0; i < n; i++)
         buf_printf(file, "%sTUR_SEG_WORDS(%s)", i ? " + " : "", args[i]);
     if (!n) buf_puts(file, "0");
     buf_puts(file, ", (");
     for (uint32_t i = 0; i < n; i++) buf_printf(file, "%s%s", i ? ", " : "", args[i]);
     buf_puts(file, "));\n");
+}
+
+/* The check, for a function whose header was just written into `file`:
+ * `link` is where the header starts (its linkage), `ret` where its return
+ * type does, `name` where the space before its C name is; the header ends
+ * with ") {\n".  H6: under `tur jit` the check calls the trampoline through
+ * the function's own type, and c2mir has no typeof -- so a typedef of it goes
+ * in ahead of the header, named for the check to paste (tur_seg_fnty_<name>,
+ * src/runtime/r7seg.c).  A void function gets TUR_SEG_CHECK_V: under `tur
+ * jit` its slow path cannot be `return f(...)`, which c2mir rejects there. */
+void emit_seg_check_at_header(Buf *file, size_t link, size_t ret, size_t name,
+                              const char *cname, int indent,
+                              const char *const *args, uint32_t n) {
+    bool is_void = name - ret == 4 && memcmp(file->data + ret, "void", 4) == 0;
+    size_t name_end = name + strlen(cname) + 2;   /* " name(" */
+    size_t hdr_end = file->len;
+    const char *close = ") {\n";
+    if (hdr_end >= name_end + strlen(close)) {
+        size_t plen = hdr_end - strlen(close) - name_end;
+        char *rt = strndup(file->data + ret, name - ret);
+        char *par = strndup(file->data + name_end, plen);
+        char *tail = strndup(file->data + link, hdr_end - link);
+        buf_truncate(file, link);
+        buf_printf(file, "typedef %s tur_seg_fnty_%s(%s);\n", rt, cname, par);
+        buf_puts(file, tail);
+        free(rt); free(par); free(tail);
+    }
+    emit_seg_check(file, indent, cname, args, n, is_void);
 }
 
 /* panic-location-names-the-runtime-not-the-call-site: a `__poly_N` forwarding
@@ -6228,6 +6256,7 @@ static void emit_fn_def_body(EmitCtx *ctx, Buf *file, const Expr *e) {
      * inferred.  emit_program writes the list as one trailing comment. */
     if (fd->body && fd->body->kind == EX_INLINE_C)
         emit_note_inline_c_fn(fn_name);
+    size_t seg_link_start = file->len;   /* r7rs-heap-frames-plan H6, below */
     if (needs_static) {
         buf_printf(file, "static ");
     } else if (ctx->separate_compilation && user_inst_method) {
@@ -6235,6 +6264,9 @@ static void emit_fn_def_body(EmitCtx *ctx, Buf *file, const Expr *e) {
          * holds a `(load ...)`-ed copy (emit_inst_method_linkage_attr). */
         buf_puts(file, emit_inst_method_linkage_attr(fd));
     }
+    /* r7rs-heap-frames-plan H6: where the return type starts, and where the
+     * name does, so the entry check can spell this function's type. */
+    size_t seg_sig_start = file->len;
     /* Return type from fn_type */
     if (e->type.kind == TY_FN) {
         TypeKind result = e->type.as.fn.result_kind;
@@ -6451,6 +6483,7 @@ static void emit_fn_def_body(EmitCtx *ctx, Buf *file, const Expr *e) {
     } else {
         buf_puts(file, "void");
     }
+    size_t seg_sig_name = file->len;
     buf_printf(file, " %s(", fn_name);
 
     /* CLI-ARGS: a user-defined zero-arg `main` must still take (argc, argv)
@@ -6674,7 +6707,8 @@ static void emit_fn_def_body(EmitCtx *ctx, Buf *file, const Expr *e) {
             snprintf(an[i], len, "%s%s", pre, pn);
             free((void *)pn);
         }
-        emit_seg_check(file, ctx->indent + 4, fn_name, (const char *const *)an, fd->n_params);
+        emit_seg_check_at_header(file, seg_link_start, seg_sig_start, seg_sig_name, fn_name,
+                                 ctx->indent + 4, (const char *const *)an, fd->n_params);
         for (uint32_t i = 0; i < fd->n_params; i++) free(an[i]);
         free(an);
     }

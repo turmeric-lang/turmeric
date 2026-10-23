@@ -2076,6 +2076,10 @@
       // r7rs-eval-continuation-reentry-across-bridge: the (scheme eval)
       // evaluator's side of this capture (r7k_hook_capture), NULL without it.
       void *turi;
+      // r7rs-heap-frames-plan H3: the segments of a capture made on a
+      // segmented stack (tur_seg_r7k_capture), NULL for one on the thread's
+      // own stack.  `lo`/`img`/`n` are then the thread's own stack's part.
+      void *seg;
   } r7k_cont;
   // The evaluator's continuation hooks (src/turi/r7rs_embed.h), installed by
   // r7rs-cont-hooks-install__ from stdlib/r7rs/eval.tur, which links libturi.
@@ -2143,18 +2147,41 @@
   #define r7k_base_tls (*(unsigned char **)tur_tls_r7k_base_ptr())
   #define r7k_form_base (*(unsigned char **)tur_tls_r7k_form_base_ptr())
   #endif
-  // r7rs-heap-frames-plan: under --enable=r7rs-segmented-stack, whether an
-  // address is on a stack segment rather than the thread's own stack.  This
-  // block precedes the preamble that defines it, so the segmented stack's
-  // runtime sets it when the deep-stack thread starts; NULL otherwise.
-  static int (*r7k_seg_off_base)(const void *);
+  // The low end of this thread's own stack, where pthreads says (0: unknown).
+  // A capture whose frames are not between it and the base -- on a fiber's
+  // stack, which is a heap block -- is escape-only (r7k_measure).
+  #if defined(__GNUC__) || defined(__clang__)
+  static _Thread_local unsigned char *r7k_lo_tls;
+  #else
+  static unsigned char *r7k_lo_tls;
+  #endif
+  // r7rs-heap-frames-plan: the segmented stack's runtime
+  // (emit_seg_stack_runtime, --enable=r7rs-segmented-stack).  By weak name:
+  // this block can land on either side of the preamble, and a program
+  // without segments reads NULL.  Linux x86-64 and arm64 only, as segments.
+  #if defined(__linux__) && (defined(__GNUC__) || defined(__clang__)) && !defined(__MIRC__) && \
+      (defined(__x86_64__) || defined(__aarch64__))
+  #define R7K_SEG 1
+  extern int   tur_seg_r7k_off_base(const void *) __attribute__((weak));
+  extern void *tur_seg_r7k_capture(const unsigned char *, unsigned char **) __attribute__((weak));
+  extern void  tur_seg_r7k_restore(void *, unsigned char *, void (*)(void *), void *) __attribute__((weak, noreturn));
+  #elif defined(__MIRC__) && defined(TUR_SEG_JIT)
+  // H6: under `tur jit` the segmented stack lives in the engine (r7seg.c),
+  // which defines these whether or not the program asked for segments.
+  #define R7K_SEG 1
+  extern int   tur_seg_r7k_off_base(const void *);
+  extern void *tur_seg_r7k_capture(const unsigned char *, unsigned char **);
+  extern void  tur_seg_r7k_restore(void *, unsigned char *, void (*)(void *), void *);
+  #endif
   static unsigned char *r7k_stack_base(void) {
       if (r7k_base_tls) return r7k_base_tls;
   #if defined(__GLIBC__)
       pthread_attr_t a; void *addr = 0; size_t sz = 0;
       if (pthread_getattr_np(pthread_self(), &a) == 0) {
-          if (pthread_attr_getstack(&a, &addr, &sz) == 0 && addr)
+          if (pthread_attr_getstack(&a, &addr, &sz) == 0 && addr) {
               r7k_base_tls = (unsigned char *)addr + sz;
+              r7k_lo_tls = (unsigned char *)addr;
+          }
           pthread_attr_destroy(&a);
       }
       // jit-r7rs-callcc-reads-unknown-tag-after-per-thread-dynenv: that top is
@@ -2251,11 +2278,22 @@
       // call/cc as an escape.
       unsigned char *sb = r7k_stack_base();
       if (!sb) return 0;
-      // r7rs-heap-frames-plan: frames on a segment are not under one
-      // contiguous copy to the stack base, so a capture there is escape-only.
-      if (r7k_seg_off_base && r7k_seg_off_base(mark)) return 0;
-      unsigned char *base = (r7k_form_base && r7k_form_base > mark) ? r7k_form_base : sb;
-      unsigned char *lo = (unsigned char *)(((uintptr_t)mark - 64) & ~(uintptr_t)15);
+      // r7rs-heap-frames-plan H3: frames on segments go into the image piece
+      // by piece (tur_seg_r7k_capture), and the copy of this thread's own
+      // stack starts where the oldest segment's frames resume.
+      unsigned char *at = mark;
+  #if defined(R7K_SEG)
+      if (tur_seg_r7k_off_base && tur_seg_r7k_off_base(mark)) {
+          unsigned char *resume = 0;
+          c->seg = tur_seg_r7k_capture ? tur_seg_r7k_capture(mark, &resume) : 0;
+          if (!c->seg) return 0;
+          at = resume;
+      }
+  #endif
+      // Frames on no stack this thread knows (a fiber's): escape-only.
+      if (r7k_lo_tls && (at < r7k_lo_tls || at >= sb)) { c->seg = 0; return 0; }
+      unsigned char *base = (r7k_form_base && r7k_form_base > at && r7k_form_base <= sb) ? r7k_form_base : sb;
+      unsigned char *lo = (unsigned char *)(((uintptr_t)at - 64) & ~(uintptr_t)15);
       if (!base || base <= lo) return 0;
       c->lo = lo;
       c->n = (size_t)(base - lo) & ~(sizeof(uintptr_t) - 1);
@@ -2269,13 +2307,19 @@
   #endif
       R7K_LONGJMP(c->jb);
   }
+  static void r7k_jump_any(void *c) { r7k_jump((r7k_cont *)c); }
   __attribute__((noinline, noreturn))
   static void r7k_restore(r7k_cont *c) {
       unsigned char here = 0;
-      // r7rs-heap-frames-plan: running on a segment, the image's stack is not
-      // the one under this frame -- copy it in place; the segments die with
-      // the jump, and the next entry check drops them.
-      if (r7k_seg_off_base && r7k_seg_off_base(&here)) r7k_jump(c);
+  #if defined(R7K_SEG)
+      // r7rs-heap-frames-plan H3: an image with segments puts them back, at
+      // their own addresses, from below the image on this thread's stack.
+      if (c->seg && tur_seg_r7k_restore) tur_seg_r7k_restore(c->seg, c->lo, r7k_jump_any, c);
+      // Running on a segment, the image's stack is not the one under this
+      // frame -- copy it in place; the segments die with the jump, and the
+      // next entry check drops them.
+      if (tur_seg_r7k_off_base && tur_seg_r7k_off_base(&here)) r7k_jump(c);
+  #endif
       uintptr_t sp = (uintptr_t)&here, want = (uintptr_t)c->lo - 4096;
       if (sp > want) {
           volatile unsigned char *pad = (volatile unsigned char *)__builtin_alloca(sp - want);

@@ -1706,8 +1706,20 @@ void emit_cps_runtime_prelude(Buf *out) {
 "    TUR_LONGJMP(rs->buf);\n"
 "}\n"
     );
+    /* r7rs-heap-frames-plan H6: running a continuation chain is a cycle of
+     * calls -- dk_run -> a frame's function -> dk_run -- that gcc and clang
+     * make sibling calls, but MIR makes none, so under `tur jit` a deep
+     * chain (SICP's `map`, unwinding) is that many frames with no check
+     * among them.  One here, which only the JIT defines to a check
+     * (TUR_SEG_CHECK_JIT, src/runtime/r7seg.c). */
+    bool seg = g_opt_r7rs && g_opt_r7rs_segmented_stack;
+    if (seg)
+        buf_puts(out, "typedef intptr_t tur_seg_fnty_dk_run_impl(DK *k, intptr_t v, bool root);\n");
+    buf_puts(out, "static intptr_t dk_run_impl(DK *k, intptr_t v, bool root) {\n");
+    if (seg)
+        buf_puts(out, "    TUR_SEG_CHECK_JIT(dk_run_impl, TUR_SEG_WORDS(k) + TUR_SEG_WORDS(v) + "
+                      "TUR_SEG_WORDS(root), (k, v, root));\n");
     buf_puts(out,
-"static intptr_t dk_run_impl(DK *k, intptr_t v, bool root) {\n"
 "    while (k) {\n"
 "        switch (k->kind) {\n"
 "            case DKK_DONE: return v;\n"

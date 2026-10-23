@@ -14866,6 +14866,32 @@ bool emit_cps_ir_try_fn(EmitCtx *ctx, Buf *file, const Expr *e) {
     if (ctx) ctx->in_cps_fn = prev;
     return r;
 }
+/* r7rs-heap-frames-plan: a Scheme procedure lowered here opens with the
+ * segmented stack's check too (emit_seg_check_at_header).  Its calls to
+ * other CPS procedures are `return g__cps(...)`, sibling calls at -O2 -- but
+ * one it makes for a value is a plain call through the callee's direct
+ * entry, which has no check (SICP's `accumulate`, `(op (car l) (accumulate
+ * op init (cdr l)))`, recursed through accumulate__cps -> accumulate ->
+ * accumulate__cps with none on the way), and under `tur jit` MIR makes no
+ * sibling calls at all (H6).  The header was just written at `link`:
+ * `nlink` bytes of linkage, then `int64_t`, then the name. */
+static void cps_emit_seg_check(EmitCtx *ctx, Buf *file, const Expr *e, const FnDef *fd,
+                               const char *cn, size_t link, size_t nlink) {
+    if (!emit_fn_wants_seg_check(ctx, e)) return;
+    uint32_t n = fd->n_params + 1;
+    char **an = (char **)calloc(n, sizeof(char *));
+    for (uint32_t i = 0; i < fd->n_params; i++) an[i] = name_for_binding(ctx, fd->params[i]);
+    an[fd->n_params] = strdup("__kont");
+    size_t clen = strlen(cn) + sizeof "__cps";
+    char *cname = (char *)malloc(clen);
+    snprintf(cname, clen, "%s__cps", cn);
+    emit_seg_check_at_header(file, link, link + nlink, link + nlink + strlen("int64_t"), cname, 4,
+                             (const char *const *)an, n);
+    for (uint32_t i = 0; i < n; i++) free(an[i]);
+    free(an);
+    free(cname);
+}
+
 static bool emit_cps_ir_try_fn_impl(EmitCtx *ctx, Buf *file, const Expr *e) {
     if (g_dump_cps_mono && e && e->kind == EX_FN_DEF && e->as.fn_def_.fn
         && ctx->current_abi_specialization)
@@ -15322,10 +15348,13 @@ static bool emit_cps_ir_try_fn_impl(EmitCtx *ctx, Buf *file, const Expr *e) {
             buf_puts(file, ";\n");
             grp->declared = true;
         }
+        size_t seg_link = file->len;
         buf_printf(file, "static int64_t %s__cps(", cn);
         emit_params(ctx, file, fd);
         if (fd->n_params) buf_puts(file, ", ");
-        buf_printf(file, "DK *__kont) {\n    return %s(%d", grp->name, ctg_idx);
+        buf_puts(file, "DK *__kont) {\n");
+        cps_emit_seg_check(ctx, file, e, fd, cn, seg_link, strlen("static "));
+        buf_printf(file, "    return %s(%d", grp->name, ctg_idx);
         for (int m = 0; m < grp->n_mem; m++)
             for (uint32_t k = 0; k < grp->mem[m]->n_params; k++) {
                 if (m == ctg_idx) {
@@ -15346,11 +15375,13 @@ static bool emit_cps_ir_try_fn_impl(EmitCtx *ctx, Buf *file, const Expr *e) {
         if (all) ctg_emit_def(file, grp);
     } else {
     /* ---- CPS body: int64_t <name>__cps(<params>, DK *__kont) ---- */
-    buf_printf(file, "%sint64_t %s__cps(",
-               (emit_split_lib_owns(fd->binding) && !mono_emit) ? "" : "static ", cn);
+    size_t seg_link = file->len;
+    const char *cps_link = (emit_split_lib_owns(fd->binding) && !mono_emit) ? "" : "static ";
+    buf_printf(file, "%sint64_t %s__cps(", cps_link, cn);
     emit_params(ctx, file, fd);
     if (fd->n_params) buf_puts(file, ", ");
     buf_puts(file, "DK *__kont) {\n");
+    cps_emit_seg_check(ctx, file, e, fd, cn, seg_link, strlen(cps_link));
     buf_puts(file, body_buf.data);
     buf_puts(file, "}\n");
     }
