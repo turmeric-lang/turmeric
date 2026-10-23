@@ -9,7 +9,10 @@
 - Item 2 (`defer` scope differs): decision -- end of block on both engines.
 - Item 3 (`defer` captures at registration): decision -- the deferred expression
   reads its variables when it runs (prototyped). Items 2 and 3:
-  [defer-semantics-plan](../upcoming/defer-semantics-plan.md).
+  [defer-semantics-plan](defer-semantics-plan.md). **Fixed 2026-10-23** by that
+  plan: both engines fire a `defer` at the end of its block
+  (`tests/fixtures/defer-block-scope`), and a scalar `^mut` it names is the
+  shared cell (`defer-mutated-binding` prints 20, `defer-in-loop` `1 2 3`).
 - Items 4-7: fixed earlier the same day (see "Fixed").
 
 **Narrowed 2026-10-21: items 4-7 are fixed** (`return` is checked against the
