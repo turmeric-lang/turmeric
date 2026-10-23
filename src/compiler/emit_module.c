@@ -20617,6 +20617,76 @@ bool g_emit_ffi_export_shims = false;
 static void emit_ffi_export_shims(const EmitCtx *ctx, Buf *out,
                                   const Expr *program);
 
+/* stale-comments-emitter item 2: the declaration bands of a program unit,
+ * declared in the order emit_program_assemble_decls writes them -- so the
+ * order is visible here, and a band added to the struct lands where it is
+ * declared.  Each band sees the C of every band above it.  The bodies that
+ * follow (handler functions, `file`, the entry point, the init sequence) are
+ * written by emit_program_inner itself, because each carries logic of its own.
+ *
+ * Two orders are load-bearing besides the obvious ones
+ * (macos-int-conversion-carrier-pointer-straddles):
+ * concrete_fn_ptr_typedefs is written BEFORE concrete_adt_apps but generated
+ * after it.  Emitting a monomorph calls type_c_name, which is what registers
+ * the fn-ptr typedefs, so generating them first would miss every one; and a
+ * monomorph over a `(c-fn ...)` element names one in its own typedef and ctor
+ * signature (`tur_adt_Option__fnc1_int__int` holds a
+ * `tur_fnptr_int64_t_int64_t_t`), so they are written first. */
+typedef struct ProgramDeclBands {
+    Buf *str_lits;                 /* one static array per distinct literal */
+    Buf *early_file;               /* ADT typedefs, drop glue, base ctors */
+    Buf *sym_records;              /* struct __tur_sym + one record per keyword */
+    Buf *concrete_fn_ptr_typedefs; /* fn-ptr typedefs for parametric fields */
+    Buf *concrete_adt_apps;        /* monomorphized ADT typedefs + ctors */
+    Buf *rt_lazy;                  /* lazy runtime state (split builds only) */
+    Buf *thunk_typedefs;           /* thunk typedefs, shims, the `any` names */
+    Buf *extern_decls;             /* user extern-c declarations */
+    Buf *fwd_decls;                /* every Turmeric prototype, ctor traps */
+    Buf *defer_thunks;             /* defer env structs + thunk prototypes */
+    Buf *cprelude;                 /* top-level inline-C (shared under split) */
+    Buf *cprelude_own;             /* the library unit's own prelude blocks */
+    Buf *cprelude_user;            /* the program's own top-level inline-C */
+} ProgramDeclBands;
+
+static void emit_band(Buf *out, const Buf *b) {
+    if (b && b->len) { buf_write(out, b->data, b->len); buf_putc(out, '\n'); }
+}
+
+static void emit_program_assemble_decls(Buf *out, const ProgramDeclBands *b) {
+    emit_band(out, b->str_lits);
+    emit_band(out, b->early_file);
+    emit_band(out, b->sym_records);
+    emit_band(out, b->concrete_fn_ptr_typedefs);
+    emit_band(out, b->concrete_adt_apps);
+    if (b->rt_lazy->len) {
+        emit_split_state(b->rt_lazy->data, b->rt_lazy->len,
+                         split_state_mode(EMIT_SPLIT_LIB), out);
+        buf_putc(out, '\n');
+    }
+    emit_band(out, b->thunk_typedefs);
+    emit_band(out, b->extern_decls);
+    emit_band(out, b->fwd_decls);
+    emit_band(out, b->defer_thunks);
+    /* file-scope-c-block: top-level raw-C prelude -- after fwd_decls (so it
+     * may call Turmeric functions) and before handler fns / file (so function
+     * defs may reference the file-scope helpers it declares).  In a split
+     * build the stdlib's blocks share their state the way the runtime
+     * preamble does. */
+    if (b->cprelude->len) {
+        emit_split_state(b->cprelude->data, b->cprelude->len,
+                         g_emit_split == EMIT_SPLIT_NONE ? EMIT_SPLIT_NONE
+                                                         : EMIT_SPLIT_CLIENT,
+                         out);
+        buf_putc(out, '\n');
+    }
+    if (b->cprelude_own->len) {
+        emit_split_state(b->cprelude_own->data, b->cprelude_own->len,
+                         EMIT_SPLIT_LIB, out);
+        buf_putc(out, '\n');
+    }
+    emit_band(out, b->cprelude_user);
+}
+
 static int emit_program_inner(Buf *out, const Expr *program) {
     if (!program || program->kind != EX_PROGRAM) {
         fprintf(stderr, "tur: emit: expected EX_PROGRAM\n");
@@ -22300,19 +22370,12 @@ static int emit_program_inner(Buf *out, const Expr *program) {
      * each band C visibility of the ones before it:
      *   1. the runtime preamble, the hoisted includes and the panic-site slot
      *      (the library unit's state under --split);
-     *   2. the string-literal band (cstr_codegen_emit), then early_file --
-     *      struct typedefs + drop glue (visible to everything);
-     *   3. sym_records;
-     *   4. concrete_fn_ptr_typedefs -- typed fn-ptr typedefs for parametric
-     *      struct fields;
-     *   5. concrete_adt_apps -- monomorphized polymorphic ADT typedefs + ctors;
-     *   6. rt_lazy (split builds only);
-     *   7. thunk_typedefs, after emit_any_type_name_table appends to it;
-     *   8. extern_decls -- user extern-c declarations;
-     *   9. fwd_decls -- Turmeric function forward declarations;
-     *  10. defer_thunks -- defer env structs and thunk prototypes (their
-     *      bodies follow `file`: they may name its globals);
-     *  11. cprelude, then cprelude_own, then cprelude_user;
+     *   2-11. the declaration bands, in ProgramDeclBands' field order
+     *      (emit_program_assemble_decls): the string literals, early_file,
+     *      sym_records, concrete_fn_ptr_typedefs, concrete_adt_apps, rt_lazy,
+     *      thunk_typedefs (after emit_any_type_name_table appends to it),
+     *      extern_decls, fwd_decls, defer_thunks, then cprelude, cprelude_own
+     *      and cprelude_user;
      *  12. pending_handler_fns -- effect handler functions;
      *  13. file -- the Turmeric function definitions;
      *  14. defer_thunk_defs;
@@ -22364,56 +22427,33 @@ static int emit_program_inner(Buf *out, const Expr *program) {
      * whose bodies can register too. */
     emit_flush_dead_base_ctor_traps(&ctx, &fwd_decls);
 
-    /* The band order is listed at `Final assembly.` above.
-     *
-     * macos-int-conversion-carrier-pointer-straddles: concrete_fn_ptr_typedefs
-     * and concrete_adt_apps are written in the opposite order to the one they
-     * are GENERATED in above, and both orders are load-bearing.  Generation must run adt_apps first because emitting a
-     * monomorph calls type_c_name, which is what REGISTERS the fn-ptr typedefs;
-     * collecting them earlier would miss every one.  Output must put the
-     * typedefs first because a monomorph over a `(c-fn ...)` element names one
-     * in its own typedef and ctor signature -- `tur_adt_Option__fnc1_int__int`
-     * holds a `tur_fnptr_int64_t_int64_t_t`.  That was latent until cfnptr got
-     * its own mangle token: before, such a monomorph collided with the ordinary
-     * `(fn ...)` one and the `#ifndef` guard preprocessed the whole block away,
-     * so the dangling reference never reached cc. */
-    /* string-literal-interning-plan: the literal band, ahead of everything
-     * that can name a literal.  Plain `static const char` arrays: they need
-     * nothing before them. */
+    /* The band order is listed at `Final assembly.` above; ProgramDeclBands
+     * says why concrete_fn_ptr_typedefs is generated after concrete_adt_apps
+     * but written before it. */
+    /* The declaration bands, 2 to 11 of the list at `Final assembly.`,
+     * written in ProgramDeclBands' field order. */
+    emit_any_type_name_table(&ctx, &thunk_typedefs);
     Buf str_lits; buf_init(&str_lits);
     cstr_codegen_emit(&str_lits);
-    if (str_lits.len) { buf_write(out, str_lits.data, str_lits.len); buf_putc(out, '\n'); }
+    ProgramDeclBands bands = {
+        .str_lits = &str_lits,
+        .early_file = &early_file,
+        .sym_records = &sym_records,
+        .concrete_fn_ptr_typedefs = &concrete_fn_ptr_typedefs,
+        .concrete_adt_apps = &concrete_adt_apps,
+        .rt_lazy = &rt_lazy,
+        .thunk_typedefs = &thunk_typedefs,
+        .extern_decls = &extern_decls,
+        .fwd_decls = &fwd_decls,
+        .defer_thunks = &defer_thunks,
+        .cprelude = &cprelude,
+        .cprelude_own = &cprelude_own,
+        .cprelude_user = &cprelude_user,
+    };
+    emit_program_assemble_decls(out, &bands);
     buf_free(&str_lits);
-    if (early_file.len)  { buf_write(out, early_file.data, early_file.len); buf_putc(out, '\n'); }
-    if (sym_records.len) { buf_write(out, sym_records.data, sym_records.len); buf_putc(out, '\n'); }
-    if (concrete_fn_ptr_typedefs.len) { buf_write(out, concrete_fn_ptr_typedefs.data, concrete_fn_ptr_typedefs.len); buf_putc(out, '\n'); }
-    if (concrete_adt_apps.len) { buf_write(out, concrete_adt_apps.data, concrete_adt_apps.len); buf_putc(out, '\n'); }
-    if (rt_lazy.len) {
-        emit_split_state(rt_lazy.data, rt_lazy.len, split_state_mode(EMIT_SPLIT_LIB), out);
-        buf_putc(out, '\n');
-    }
     buf_free(&rt_lazy);
-    emit_any_type_name_table(&ctx, &thunk_typedefs);
-    if (thunk_typedefs.len) { buf_write(out, thunk_typedefs.data, thunk_typedefs.len); buf_putc(out, '\n'); }
-    if (extern_decls.len){ buf_write(out, extern_decls.data, extern_decls.len); buf_putc(out, '\n'); }
-    if (fwd_decls.len)   { buf_write(out, fwd_decls.data, fwd_decls.len); buf_putc(out, '\n'); }
-    if (defer_thunks.len){ buf_write(out, defer_thunks.data, defer_thunks.len); buf_putc(out, '\n'); }
-    /* file-scope-c-block: top-level raw-C prelude -- after fwd_decls (so it may
-     * call Turmeric functions) and before handler fns / file (so function defs
-     * may reference the file-scope helpers it declares).  In a split build the
-     * stdlib's blocks share their state the way the runtime preamble does. */
-    if (cprelude.len)    {
-        emit_split_state(cprelude.data, cprelude.len,
-                         g_emit_split == EMIT_SPLIT_NONE ? EMIT_SPLIT_NONE : EMIT_SPLIT_CLIENT,
-                         out);
-        buf_putc(out, '\n');
-    }
-    if (cprelude_own.len) {
-        emit_split_state(cprelude_own.data, cprelude_own.len, EMIT_SPLIT_LIB, out);
-        buf_putc(out, '\n');
-    }
     buf_free(&cprelude_own);
-    if (cprelude_user.len) { buf_write(out, cprelude_user.data, cprelude_user.len); buf_putc(out, '\n'); }
     buf_free(&cprelude_user);
     buf_free(&early_file);
     buf_free(&thunk_typedefs);

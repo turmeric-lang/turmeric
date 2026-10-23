@@ -1,5 +1,7 @@
 # Emitter comments that disagree with the code
 
+**Resolved 2026-10-23: the three structural items landed.** Item 10: `emit_internal.h`'s prototypes are re-sorted into real per-defining-file sections (scripted; every prototype keeps its comment, no text changed), with the shared types and macros in one band ahead of them. Item 3: `emit_value_spelled_ctype` (`src/compiler/emit_expr.c`) asks the two-step question once for its three former copies; `with_params` keeps each site's existing lookup, so no emitted C moved (snapshots identical). Item 2: the declaration bands are the fields of `ProgramDeclBands`, in output order, written by `emit_program_assemble_decls`; the `Final assembly.` list and the guide's "Output bands" table are re-checked against the code (they now include the string-literal band, `rt_lazy`, `cprelude_own`/`cprelude_user` and the FFI shims). The guide's "Trust the code over the comments" note points here as the last sweep.
+
 **Narrowed 2026-10-21: the comment items are fixed; three structural items
 stay open.** Items 1, 4, 5, 6, 7, 8, 9 and 11 landed, with item 2's comment
 half and item 3's comment half. `tests/check-src-doc-citations.sh` (item 11's

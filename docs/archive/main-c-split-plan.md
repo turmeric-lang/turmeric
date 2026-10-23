@@ -163,7 +163,7 @@ prototypes really are defined in that file.** It is about 30 lines of Python,
 wired into ctest and into `tests/check-docs-lint.sh`'s neighbour list. The
 stale-comments audit found that `emit_internal.h`, which claims the same
 grouping, has about 133 of 239 prototypes in the wrong section
-([stale-comments-emitter](../reported/stale-comments-emitter.md), item 10). A
+([stale-comments-emitter](stale-comments-emitter.md), item 10). A
 header this plan creates should not start down that road. The same check can
 then be pointed at `emit_internal.h`.
 

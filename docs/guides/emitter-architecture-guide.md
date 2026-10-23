@@ -34,8 +34,8 @@ Out of scope, with the guide that covers each:
 > When this guide and the code disagree, the code wins; fix the guide. A
 > `docs/` path cited in a source comment is checked by `tests/check-src-doc-citations.sh`
 > (the docs-lint job), so a moved report cannot leave a dead citation behind.
-> The comment fixes still open in this area are listed in
-> [stale-comments-emitter](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/stale-comments-emitter.md).
+> The last sweep of emitter comments against the code is
+> [stale-comments-emitter](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/stale-comments-emitter.md).
 
 ---
 
@@ -512,25 +512,32 @@ What `out` contains, in order (single-file, non-split):
 |---|---|---|
 | 1 | preamble | runtime text up to the end marker (see the [preamble guide](runtime-preamble-and-linkage-guide.md)) |
 | 2 | hoisted includes, panic-site slot | `#include`s lifted from inline-C bodies; `tur_site_t`, `tur_site_push`/`pop`, `tur_panic_sited` |
-| 3 | `early_file` | ADT typedefs, drop glue, base constructors, dynvar runtime |
-| 4 | symbol records | `struct __tur_sym` and one record per keyword |
-| 5 | fn-pointer typedefs | for concrete fn fields of parametric ADTs |
-| 6 | ADT-app monomorphs | `tur_adt_Option__int` and friends, with constructors |
-| 7 | `thunk_typedefs` | typed thunk typedefs, shims, adapters, static fat-box declarations, lazy runtimes, the `any` name table |
-| 8 | `extern_decls` | `extern` prototypes for `extern-c` forms |
-| 9 | `fwd_decls` | every function and clone prototype, global forward declarations, dead-base-constructor traps |
-| 10 | `defer_thunks` | defer env structs and thunk prototypes |
-| 11 | `cprelude` | top-level inline-C blocks (`tur:inline-c-begin/end`) |
-| 12 | `pending_handler_fns` | handler functions not yet flushed |
-| 13 | `file` | `^thread-local` block, globals, every function definition, spec bodies, module defers |
-| 14 | defer thunk bodies | after `file`, since they may name its globals |
-| 15 | `main` or `__tur_module_def_init` | the entry point |
-| 16 | fat boxes | `TUR_FATBOX_DEF` lines and `__tur_fatbox_init` |
-| 17 | instance rows, GC roots, CPS groups | Saffron dispatch registry; r7rs GC; fused CPS tail-call groups |
-| 18 | `__tur_static_init` | the explicit init sequence and its constructor |
-| 19 | `tur:inline-c-fns` | appended by `emit_program_job` |
+| 3 | string literals | one `static const char __tur_str_<N>[]` per distinct literal in the unit (`cstr_codegen_emit`) |
+| 4 | `early_file` | ADT typedefs, drop glue, base constructors, dynvar runtime |
+| 5 | symbol records | `struct __tur_sym` and one record per keyword |
+| 6 | fn-pointer typedefs | for concrete fn fields of parametric ADTs |
+| 7 | ADT-app monomorphs | `tur_adt_Option__int` and friends, with constructors |
+| 8 | `rt_lazy` | lazily emitted runtime state (split builds only; otherwise it lands in `thunk_typedefs`) |
+| 9 | `thunk_typedefs` | typed thunk typedefs, shims, adapters, static fat-box declarations, lazy runtimes, the `any` name table |
+| 10 | `extern_decls` | `extern` prototypes for `extern-c` forms |
+| 11 | `fwd_decls` | every function and clone prototype, global forward declarations, dead-base-constructor traps |
+| 12 | `defer_thunks` | defer env structs and thunk prototypes |
+| 13 | `cprelude`, `cprelude_own`, `cprelude_user` | top-level inline-C blocks (`tur:inline-c-begin/end`): the stdlib's (shared under a split build), the library unit's own, the program's own |
+| 14 | `pending_handler_fns` | handler functions not yet flushed |
+| 15 | `file` | `^thread-local` block, globals, every function definition, spec bodies, module defers |
+| 16 | defer thunk bodies | after `file`, since they may name its globals |
+| 17 | `main` or `__tur_module_def_init` | the entry point |
+| 18 | fat boxes | `TUR_FATBOX_DEF` lines and `__tur_fatbox_init` |
+| 19 | instance rows, GC roots, CPS groups | Saffron dispatch registry; r7rs GC; fused CPS tail-call groups |
+| 20 | `__tur_static_init` | the explicit init sequence and its constructor |
+| 21 | FFI export shims | `<mangled>__ffi` shims, only for the REPL's in-process spice build (J2) |
+| 22 | `tur:inline-c-fns` | appended by `emit_program_job` |
 
-Bands 5 and 6 are generated in the opposite order to how they are written,
+Bands 3 to 13 are the fields of `ProgramDeclBands` (`src/compiler/emit_module.c`),
+in declaration order, and `emit_program_assemble_decls` writes them; the list
+at `Final assembly.` in `emit_program_inner` covers the rest.
+
+Bands 6 and 7 are generated in the opposite order to how they are written,
 and both orders matter. Emitting a monomorph calls `type_c_name`, which is
 what registers the fn-pointer typedefs, so the monomorphs are generated
 first; a monomorph can name such a typedef, so the typedefs are written
@@ -541,7 +548,10 @@ first.
 `__attribute__((constructor))`, which c2mir discards. The bands run in order:
 `STATIC_INIT_KEYS` (pthread keys, fat-box fills), `STATIC_INIT_REGISTRY`,
 `STATIC_INIT_ATEXIT` (module defers), `STATIC_INIT_DEFS` (user def
-initializers, last).
+initializers, last). In a unit with `main` and def initializers the first
+three bands are `__tur_static_init_rt`, which the constructor runs; the DEFS
+band waits for `main`, which builds `*args*` first so a def initializer can
+read the command line.
 
 **Two `main`s.** When a program has no `main` and every top-level form is
 plainly classifiable, the elaborator folds the top-level statements into a
