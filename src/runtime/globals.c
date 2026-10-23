@@ -137,6 +137,8 @@ bool g_opt_regions = true;       /* graduated 2026-09-05; TUR_REGIONS=0 restores
 bool g_opt_reflected_measures = false; /* reflected-measures RF0: --enable=reflected-measures */
 bool g_opt_discontinue = false; /* discontinue-plan: --enable=discontinue */
 bool g_opt_script_deps = false; /* script-spice-deps-plan: --enable=script-deps */
+bool g_opt_quote_data = false;  /* quote-list-data-plan: --enable=quote-data */
+bool g_quote_data_autoload = false; /* quote-list-data-plan: datum.tur this compile */
 bool g_dump_reflect = false;           /* reflected-measures RF5: --dump-reflect */
 bool g_opt_r7rs = false;         /* r7rs (graduated 2026-10-01): this build contains an r7rs TU; set by the `#lang r7rs` line, never by a flag.  emit_module.c's r7rs_gc_active reads it to pick the collector opt-out (docs/archive/r7rs-lang-plan.md) */
 bool g_opt_repl_jit_inline_c = true; /* repl-jit-inline-c (graduated 2026-10-17): turi JIT-compiles an inline-C defn it cannot run; TUR_REPL_JIT_INLINE_C=0 restores the "inline-C not supported" error (aot-compiled-repl-plan C1) */

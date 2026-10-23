@@ -3110,6 +3110,11 @@ static bool mut_cell_escapes(const Expr *x, const Binding *cell, int depth) {
         case EX_CLOSURE:
             /* Not in a let-init position the rule below can vouch for. */
             return mut_cell_closure_captures(x, cell);
+        case EX_DEFER:
+            /* A defer runs before the scope that owns the cell exits, so
+             * capturing the cell is not an escape; only its body can let the
+             * cell out (defer-semantics-plan Part B). */
+            return mut_cell_escapes(x->as.defer_.body, cell, depth + 1);
         case EX_LET:
         case EX_LETREC:
             for (uint32_t j = 0; j < x->as.let_.n; j++) {

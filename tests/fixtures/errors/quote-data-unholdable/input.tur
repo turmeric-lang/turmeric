@@ -1,0 +1,5 @@
+;; quote-list-data-plan: a Datum holds symbols, keywords, literals, lists and
+;; vectors; a map literal inside a quoted list has no Datum to become.
+(defn main [] : int
+  (println '(config #map{:port 8080}))
+  0)

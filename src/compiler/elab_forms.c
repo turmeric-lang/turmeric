@@ -828,8 +828,11 @@ static bool cell_fn_mentions(Elab *e, const Form *f, const Symbol *n,
         if (h == e->sym_quote) return false;
         /* A `gen` body is a capturing scope as well: its state struct holds
          * what it names, so a `^mut` it reads or sets must be the shared cell
-         * too, as for a `fn` (the interpreter has always shared it). */
-        if (h == e->sym_gen) in_fn = true;
+         * too, as for a `fn` (the interpreter has always shared it).  So is a
+         * `defer` body: it runs when its block ends and must read the
+         * variable as it is then, not a snapshot taken at registration
+         * (defer-semantics-plan Part B). */
+        if (h == e->sym_gen || h == e->sym_defer) in_fn = true;
         if (h == e->sym_fn || h == e->sym_lambda) {
             for (uint32_t k = 1; k < len && k <= 2; k++) {
                 if (f->as.list.items[k]->tag == F_VEC) {

@@ -81,22 +81,30 @@ const LOC_DEFAULT = ['code_lines', 'test_lines'];
 
 // The open-work series, in palette order. `open_reports` and `active_plans`
 // are the two the panel opens on -- the question is "how much open work, split
-// by kind" -- and `held_plans` / `v1_plans` / `spices_plans` are there so the
-// breakdown of the plan total is visible without being the default view.
-// `held_plans` and `v1_plans` are retired buckets (docs/upcoming/hold/ and v1/
-// were flattened away); they chart as history that falls to 0, and
-// `active_plans` now means "top-level plans", i.e. everything but spices. The
-// total open_plans is the sum of the four plan buckets; it is not a separate
-// series because a sum line on the same chart as its addends is a visual
-// tautology.
+// by kind" -- and the other plan buckets are there so the breakdown of the plan
+// total is visible without being the default view. `active_plans` is the STRAY
+// set: plans at the top level of docs/upcoming/, filed under no topic
+// directory -- not the total. `godot_plans` and `spices_plans` are the topic
+// directories docs/upcoming/godot/ and spices/. `retired_plans` is derived on
+// load from `held_plans` + `v1_plans`, the status directories hold/ and v1/
+// that were flattened away; it charts as history that falls to 0. The total is
+// not a separate series because a sum line on the same chart as its addends is
+// a visual tautology.
 const DOCS_SERIES = [
-  ['open_reports',  'Open reports',  '--chart-1'],
-  ['active_plans',  'Active plans',  '--chart-2'],
-  ['held_plans',    'Held plans',    '--chart-3'],
-  ['v1_plans',      'v1 plans',      '--chart-4'],
-  ['spices_plans',  'Spices plans',  '--chart-5'],
+  ['open_reports',  'Open reports',    '--chart-1'],
+  ['active_plans',  'Stray plans',     '--chart-2'],
+  ['godot_plans',   'Godot plans',     '--chart-3'],
+  ['retired_plans', 'Held / v1 plans', '--chart-4'],
+  ['spices_plans',  'Spice plans',     '--chart-5'],
 ];
 const DOCS_DEFAULT = ['open_reports', 'active_plans'];
+
+// The disjoint plan buckets a docs row carries. The headline total is their
+// sum -- stray plus each topic directory -- so it always equals the breakdown
+// printed under it. A row published before a bucket existed lacks it; that
+// bucket counts 0 there.
+const PLAN_BUCKETS = ['active_plans', 'godot_plans', 'spices_plans', 'held_plans', 'v1_plans'];
+const planTotal = (r) => PLAN_BUCKETS.reduce((n, k) => n + (r[k] ?? 0), 0);
 
 // Count series that come from the same docs-counts rows but are not "open
 // work": guides (Turmeric's own, and the spices repo's) and the spice count.
@@ -1339,14 +1347,15 @@ function renderDocsTiles() {
     </div>`;
 
   host.innerHTML = [
-    tile('', 'clipboard-list', 'Open plans', String(latest.open_plans),
-      [`${latest.active_plans} core`, latest.held_plans ? `${latest.held_plans} held` : '',
-       latest.v1_plans ? `${latest.v1_plans} v1` : '', `${latest.spices_plans} spices`]
+    tile('', 'clipboard-list', 'Open plans', String(planTotal(latest)),
+      [`${latest.active_plans ?? 0} stray`, latest.godot_plans ? `${latest.godot_plans} godot` : '',
+       latest.held_plans ? `${latest.held_plans} held` : '',
+       latest.v1_plans ? `${latest.v1_plans} v1` : '', `${latest.spices_plans ?? 0} spices`]
         .filter(Boolean).join(', ')),
     tile('', 'circle-dot', 'Open reports', String(latest.open_reports),
       'Findings in docs/reported/'),
     tile('', 'layers', 'Total open work',
-      String(latest.open_plans + latest.open_reports),
+      String(planTotal(latest) + latest.open_reports),
       'Plans plus reports'),
     tile('', 'book-open', 'Turmeric guides',
       latestGuides ? String(latestGuides.turmeric_guides) : '--',
@@ -1377,7 +1386,7 @@ function renderDocs() {
   const latest = state.docs[state.docs.length - 1];
 
   sub.innerHTML = latest
-    ? `${esc(latest.open_plans)} open plans / ${esc(latest.open_reports)} open reports
+    ? `${esc(planTotal(latest))} open plans / ${esc(latest.open_reports)} open reports
        at
        <a class="mono ci-link"
           href="${GITHUB_URL}/commit/${esc(latest.sha ?? '')}"
@@ -2205,6 +2214,9 @@ async function boot() {
 
   if (docs.status === 'fulfilled') {
     state.docs = docs.value.rows.sort((a, b) => a.ts - b.ts);
+    for (const r of state.docs) {
+      r.retired_plans = (r.held_plans ?? 0) + (r.v1_plans ?? 0);
+    }
     if (!state.docs.length) {
       state.docsError = 'No doc counts have been published yet.';
     }

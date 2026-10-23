@@ -1,0 +1,33 @@
+#lang saffron
+
+;; quote-list-data-plan, the Saffron side: a Datum passed through unannotated
+;; (`any`) parameters prints, matches and compares the same as typed code.
+
+(defn show-it [x] (println x))
+
+(defn op-of [d]
+  (match d
+    (DList xs) (list-first xs)
+    _ d))
+
+(defn eval-arith [d]
+  (match d
+    (DInt n) n
+    (DList xs)
+      (let [a (eval-arith (datum-nth d 1))
+            b (eval-arith (datum-nth d 2))]
+        (if (datum=? (list-first xs) (DSym '+)) (+ a b) (* a b)))
+    _ 0))
+
+(defn main []
+  (show-it '(+ 1 (* 2 3)))
+  (show-it 7.1)
+  (show-it "plain")
+  (println '[a :k "s"])
+  (show-it (op-of '(* 4 5)))
+  (println (eval-arith '(+ 1 (* 2 3))))
+  (println (if (datum=? '(a b) '(a b)) "equal" "different"))
+  (println (type-of-datum '(x)))
+  0)
+
+(defn type-of-datum [x] (type-of x))
