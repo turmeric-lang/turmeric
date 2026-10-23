@@ -1557,6 +1557,15 @@ add_test(
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
 set_tests_properties(tur_r7rs_main_stack_size PROPERTIES TIMEOUT 720)
+# r7rs-heap-frames-plan (option C): under --enable=r7rs-segmented-stack a
+# recursion, a collection and call/cc run across stack segments past an 8 MiB
+# stack of the thread's own, and TUR_MAIN_STACK_MB caps the total.
+add_test(
+  NAME tur_r7rs_segmented_stack
+  COMMAND bash tests/check-r7rs-segmented-stack.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+set_tests_properties(tur_r7rs_segmented_stack PROPERTIES TIMEOUT 720)
 # jit-stack-overflow-has-no-message: under `tur jit` a runaway recursion
 # prints the same line as the compiled r7rs path, in every dialect, and a wild
 # pointer does not.  SKIPs on a binary without the JIT engine.

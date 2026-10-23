@@ -212,6 +212,7 @@ typedef struct tur_gc_thread {
     unsigned char *stack_sp;     /* its stack pointer at its last park */
     unsigned char *sig_sp;       /* its stack pointer in the stop handler */
     unsigned char *os_sp;        /* where it left its own stack for a fiber's, or NULL */
+    void         **seg_curp;     /* its segmented stack's newest record (tur_gc_seg_attach), or NULL */
     int            fiber_depth;
     int            park_depth;   /* nesting of parks; `parked` follows the outermost */
     volatile int   parked;       /* in a blocking call: regs and stack_sp are current */
@@ -951,6 +952,40 @@ TUR_RT_API bool tur_region_registry_trylock(void);
 TUR_RT_API void tur_region_registry_unlock(void);
 TUR_RT_API void tur_region_each_registered(void (*cb)(const void *p, size_t n, void *ud), void *ud);
 
+/* r7rs-heap-frames-plan (H2): a thread on a segmented stack
+ * (--enable=r7rs-segmented-stack, emit_seg_stack_runtime in emit_module.c)
+ * has frames on a chain of stacks, each record naming the one before it and
+ * where its frames resume there.  The layout is shared with the emitted
+ * runtime, which this file precedes. */
+#ifndef TUR_SEG_REC_DEFINED
+#define TUR_SEG_REC_DEFINED 1
+typedef struct tur_seg_rec {
+    struct tur_seg_rec *prev;
+    unsigned char *map; size_t map_size;   /* the mapping; NULL for the thread's own stack */
+    unsigned char *bot, *lo, *top;         /* usable [bot, top); the entry check fails below lo */
+    unsigned char *saved_sp;               /* where the frames on prev resume */
+} tur_seg_rec;
+#endif
+/* On the thread: where its chain's newest record lives (a thread-local). */
+static __attribute__((unused)) void tur_gc_seg_attach(void **curp) {
+    tur_gc_thread *t = tur_gc_self;
+    if (t) t->seg_curp = curp;
+}
+/* The segments from the one holding `sp` down: each from `sp` to its top,
+ * then the one before it from where its frames resume.  A segment that does
+ * not hold the pointer was left by a longjmp and is dead (the runtime drops it
+ * at its next check).  Returns where the thread's own stack resumes. */
+TUR_GC_NOASAN static unsigned char *tur_gc_scan_segments(tur_gc_thread *t, unsigned char *sp) {
+    const tur_seg_rec *r = t->seg_curp ? (const tur_seg_rec *)*t->seg_curp : NULL;
+    for (; r && r->map; r = r->prev) {
+        if (sp >= r->map && sp < r->top) {
+            tur_gc_scan(sp, (size_t)(r->top - sp));
+            sp = r->saved_sp;
+        }
+    }
+    return sp;
+}
+
 /* A thread's stack from `sp` up.  A thread running a fiber has `sp` on the
  * fiber's stack, a heap object: the rest of that object is scanned from
  * `sp`, and the thread's own stack from the point it left it
@@ -974,6 +1009,7 @@ TUR_GC_NOASAN static void tur_gc_scan_stack(tur_gc_thread *t, unsigned char *sp)
             sp = t->os_sp;
         }
     }
+    if (t->seg_curp) sp = tur_gc_scan_segments(t, sp);
     if (t->stack_base && sp < t->stack_base) tur_gc_scan(sp, (size_t)(t->stack_base - sp));
 }
 

@@ -424,6 +424,9 @@ extern bool g_opt_reflected_measures;
 extern bool g_opt_discontinue;
 extern bool g_opt_script_deps;  /* script-spice-deps-plan: --enable=script-deps */
 extern bool g_opt_quote_data;   /* quote-list-data-plan: --enable=quote-data */
+/* r7rs-heap-frames-plan (H0): --enable=r7rs-segmented-stack.  Every compiled
+ * `#lang r7rs` procedure opens with a stack-limit check (emit_fns.c). */
+extern bool g_opt_r7rs_segmented_stack;
 /* quote-list-data-plan: load stdlib/datum.tur in THIS compile -- the flag is on
  * and the entry program quotes a list (tur_quote_data_wanted_forms / _source),
  * or the entry point loads it eagerly (project mode, the REPL).  Recomputed per

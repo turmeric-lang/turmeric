@@ -14615,6 +14615,16 @@ static const char TUR_DEEP_SIZE_FN[] =
     "            fprintf(stderr, \"tur: ignoring TUR_MAIN_STACK_MB=%s (want a positive number of MiB)\\n\", e);\n"
     "        }\n"
     "    }\n"
+    "#if defined(TUR_SEG_ON)\n"
+    "    tur_seg_budget_set(sz, *asked);   /* the total; segments grow past this stack */\n"
+    "    if (sz > TUR_SEG_BASE_MAX) sz = TUR_SEG_BASE_MAX;\n"
+    "    {\n"
+    "        /* A smaller stack of its own, so a test reaches the segments early. */\n"
+    "        const char *b = getenv(\"TUR_SEG_BASE_MB\");\n"
+    "        unsigned long long bm = b ? strtoull(b, 0, 10) : 0;\n"
+    "        if (bm && bm < (unsigned long long)(sz >> 20)) sz = (size_t)bm << 20;\n"
+    "    }\n"
+    "#endif\n"
     "    return sz;\n"
     "}\n"
     "static void tur_deep_size_failed(size_t sz) {\n"
@@ -14651,6 +14661,9 @@ static void emit_deep_stack_runtime(Buf *out) {
         "#include <stdio.h>\n"
         "#include <stdlib.h>\n"
         "int main(int, char **);\n"
+        "#ifndef TUR_SEG_THREAD_START\n"
+        "#define TUR_SEG_THREAD_START(lo) ((void)0)\n"
+        "#endif\n"
         "typedef struct { int argc; char **argv; unsigned char *lo; void *gc; } tur_deep_state_t;\n");
     buf_puts(out, TUR_DEEP_SIZE_FN);
     buf_puts(out,
@@ -14658,7 +14671,11 @@ static void emit_deep_stack_runtime(Buf *out) {
         "static void tur_deep_fault(int sig, siginfo_t *si, void *uc) {\n"
         "    (void)uc;\n"
         "    unsigned char *a = (unsigned char *)si->si_addr, *lo = tur_deep_state()->lo;\n"
-        "    if (" TUR_STACK_OVERFLOW_STR(TUR_STACK_FAULT_IS_OVERFLOW(a, lo)) ") {\n"
+        "    int ov = " TUR_STACK_OVERFLOW_STR(TUR_STACK_FAULT_IS_OVERFLOW(a, lo)) ";\n"
+        "#if defined(TUR_SEG_ON)\n"
+        "    ov = ov || tur_seg_fault_is_overflow(a);\n"
+        "#endif\n"
+        "    if (ov) {\n"
         "        static const char m[] = \"" TUR_STACK_OVERFLOW_MSG "\\n\";\n"
         "        if (write(2, m, sizeof m - 1) < 0) { }\n"
         "    }\n"
@@ -14690,6 +14707,7 @@ static void emit_deep_stack_runtime(Buf *out) {
         "        sigaction(SIGSEGV, &sa, NULL);\n"
         "        sigaction(SIGBUS, &sa, NULL);\n"
         "    }\n"
+        "    TUR_SEG_THREAD_START(s->lo);\n"
         "    exit(main(s->argc, s->argv));\n"
         "}\n"
         "/* 1 when main ran on the big stack (the process has exited); 0 to run here. */\n"
@@ -14777,6 +14795,346 @@ static void emit_deep_stack_runtime(Buf *out) {
         "#define TUR_DEEP_STACK_ENTER(argc, argv) do { if (tur_deep_enter((argc), (argv))) return 0; } while (0)\n"
         "#else\n"
         "#define TUR_DEEP_STACK_ENTER(argc, argv) ((void)0)\n"
+        "#endif\n");
+}
+
+/* r7rs-heap-frames-plan (option C): the segmented stack of a compiled `#lang
+ * r7rs` program under --enable=r7rs-segmented-stack.
+ *
+ * H0, the check.  A procedure of an r7rs file opens with TUR_SEG_CHECK --
+ * every one of the program's, and those of the stdlib that a cycle of calls
+ * needs (emit_fn_wants_seg_check, emit_fns.c): read the stack pointer, and
+ * while `sp - lo` (unsigned) is within `span` (tur_seg_hot, one thread-local)
+ * carry on.  One compare, which also fails for a stack pointer on a stack the
+ * pair does not describe -- after a longjmp out of a segment.  The stack
+ * pointer comes from an asm that is not volatile, not
+ * __builtin_frame_address, which forces a frame pointer.  Below the limit the
+ * procedure re-enters itself with the same arguments through tur_seg_tramp,
+ * as a TAIL call, so the slow path needs no frame of its own.  The plan has
+ * the measured cost.
+ *
+ * H1, the switch.  tur_seg_tramp (asm, x86-64 and arm64) saves the argument
+ * registers and asks tur_seg_enter for a stack: a new segment (8 MiB mapped,
+ * a guard at the bottom, one spare kept per thread against a boundary
+ * crossed in a loop), the stack-passed arguments copied to its top -- the
+ * trampoline is entered exactly as the procedure was, so they start just
+ * above its return address either way -- or none, when the check passes again
+ * where it is.  It calls the procedure there, and on the way back drops the
+ * segment.  An entry check leaves TUR_SEG_HEADROOM under its limit, for inline
+ * C, libc and signal frames that run without passing one.
+ *
+ * H2, the collector: r7gc.c walks the chain (tur_gc_scan_segments) from the
+ * record it is told about at thread start (tur_gc_seg_attach).
+ *
+ * H5, the cap: TUR_MAIN_STACK_MB, when set, is the total of the thread's own
+ * stack and its segments; unset, half of physical memory.  The thread's own
+ * stack is what it was without segments, up to TUR_SEG_BASE_MAX (1 GiB, the
+ * default) -- so code no check covers (a CPS body's calls at -O0, inline C)
+ * has every byte it had before -- and segments start past it.
+ * TUR_SEG_BASE_MB makes it smaller, for a test that wants to reach them.
+ * Past the cap, the overflow message and the SIGSEGV the guard page would
+ * have given.
+ *
+ * Linux x86-64 and arm64, the deep-stack thread only: another thread's pair
+ * passes everything.  Off under `tur jit` (`__MIRC__`: plan H6) and in a
+ * --shared build, where no deep-stack thread arms it.  The split writes the
+ * static helpers and the asm into every unit (each object's trampoline calls
+ * its own tur_seg_enter) and keeps the state in the library unit. */
+static const char *const TUR_SEG_STACK_RT[] = {
+    "#if !defined(__MIRC__) && (defined(__GNUC__) || defined(__clang__)) && defined(__linux__) && \\\n"
+    "    (defined(__x86_64__) || defined(__aarch64__))\n"
+    "#define TUR_SEG_ON 1\n"
+    "#include <sys/mman.h>\n"
+    "#include <signal.h>\n"
+    "#include <unistd.h>\n"
+    "#include <string.h>\n"
+    "#include <stdlib.h>\n"
+    "#include <stdint.h>\n"
+    "#include <pthread.h>\n"
+    "/* One stack: the thread's own (map NULL) or a segment.  The usable range is\n"
+    " * [bot, top); a procedure's entry check fails below lo, which leaves\n"
+    " * TUR_SEG_HEADROOM under it for inline C, libc and signal frames.  saved_sp is\n"
+    " * where the frames on prev resume, so the collector scans prev from there. */\n"
+    "#ifndef TUR_SEG_REC_DEFINED\n"
+    "#define TUR_SEG_REC_DEFINED 1\n"
+    "typedef struct tur_seg_rec {\n"
+    "    struct tur_seg_rec *prev;\n"
+    "    unsigned char *map; size_t map_size;\n"
+    "    unsigned char *bot, *lo, *top;\n"
+    "    unsigned char *saved_sp;\n"
+    "} tur_seg_rec;\n"
+    "#endif\n"
+    "#define TUR_SEG_SIZE     ((size_t)8 << 20)\n"
+    "#define TUR_SEG_GUARD    ((size_t)64 << 10)\n"
+    "#define TUR_SEG_HEADROOM ((size_t)256 << 10)\n"
+    "#define TUR_SEG_TOPPAD   ((size_t)4 << 10)\n"
+    "#define TUR_SEG_SLACK    ((size_t)64 << 10)\n"
+    "#define TUR_SEG_BASE_MAX ((size_t)1 << 30)\n"
+    "/* The hot pair: a check passes while sp - lo <= span (unsigned), so a stack\n"
+    " * pointer below lo, or on a stack the record does not describe, fails it.\n"
+    " * Unarmed (every thread but the deep-stack one) the pair passes everything. */\n"
+    "typedef struct { unsigned char *lo; uintptr_t span; } tur_seg_pair;\n"
+    "static TUR_THREAD_LOCAL tur_seg_pair tur_seg_hot = { 0, (uintptr_t)-1 };\n"
+    "static TUR_THREAD_LOCAL tur_seg_rec *tur_seg_cur = 0;\n"
+    "static TUR_THREAD_LOCAL tur_seg_rec *tur_seg_spare = 0;\n"
+    "static TUR_THREAD_LOCAL void *tur_seg_fn = 0;\n"
+    "static TUR_THREAD_LOCAL size_t tur_seg_nb = 0;\n"
+    "static TUR_THREAD_LOCAL size_t tur_seg_used = 0;\n"
+    "static TUR_THREAD_LOCAL unsigned char *tur_seg_last = 0;\n"
+    "static size_t tur_seg_budget_v;\n"
+    "static tur_seg_rec tur_seg_base_rec;\n"
+    "static void tur_seg_budget_set(size_t sz, int asked) {\n"
+    "    size_t b = sz;\n"
+    "    if (!asked) {\n"
+    "        long pages = sysconf(_SC_PHYS_PAGES), psz = sysconf(_SC_PAGESIZE);\n"
+    "        b = (pages > 0 && psz > 0) ? (size_t)pages * (size_t)psz / 2 : sz;\n"
+    "        if (b < sz) b = sz;\n"
+    "    }\n"
+    "    tur_seg_budget_v = b;\n"
+    "}\n"
+    "static void tur_seg_overflow(void) {\n"
+    "    static const char m[] = TUR_SEG_OVERFLOW_MSG;\n"
+    "    if (write(2, m, sizeof m - 1) < 0) { }\n"
+    "    signal(SIGSEGV, SIG_DFL);\n"
+    "    raise(SIGSEGV);\n"
+    "    _exit(139);\n"
+    "}\n"
+    "static void tur_seg_arm(const tur_seg_rec *r) {\n"
+    "    tur_seg_hot.lo = r->lo;\n"
+    "    tur_seg_hot.span = (uintptr_t)(r->top - r->lo);\n"
+    "}\n"
+    "static int tur_seg_holds(const tur_seg_rec *r, const unsigned char *sp) {\n"
+    "    return sp >= r->bot && sp < r->top;\n"
+    "}\n"
+    "static void tur_seg_release(tur_seg_rec *r) {\n",
+    "    tur_seg_used -= r->map_size;\n"
+    "    if (!tur_seg_spare) { tur_seg_spare = r; return; }\n"
+    "    munmap(r->map, r->map_size);\n"
+    "}\n"
+    "/* The record holding sp, after dropping every newer segment: a longjmp out\n"
+    " * of one never passes its trampoline's return.  NULL, dropping nothing, when\n"
+    " * no record does -- a fiber's stack, entered from frames that are still live. */\n"
+    "static tur_seg_rec *tur_seg_resync(const unsigned char *sp) {\n"
+    "    tur_seg_rec *h = tur_seg_cur;\n"
+    "    while (h && !tur_seg_holds(h, sp)) h = h->prev;\n"
+    "    if (!h) return NULL;\n"
+    "    while (tur_seg_cur != h) {\n"
+    "        tur_seg_rec *r = tur_seg_cur;\n"
+    "        tur_seg_cur = r->prev;\n"
+    "        __asm__ volatile (\"\" ::: \"memory\");\n"
+    "        tur_seg_release(r);\n"
+    "    }\n"
+    "    return h;\n"
+    "}\n"
+    "static tur_seg_rec *tur_seg_new(void) {\n"
+    "    tur_seg_rec *r = tur_seg_spare;\n"
+    "    size_t base = tur_seg_base_rec.top ? (size_t)(tur_seg_base_rec.top - tur_seg_base_rec.bot) : 0;\n"
+    "    if (tur_seg_used + TUR_SEG_SIZE + base > tur_seg_budget_v) tur_seg_overflow();\n"
+    "    if (r) {\n"
+    "        tur_seg_spare = NULL;\n"
+    "    } else {\n"
+    "        unsigned char *m = (unsigned char *)mmap(NULL, TUR_SEG_SIZE, PROT_READ | PROT_WRITE,\n"
+    "                                                 MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);\n"
+    "        if (m == (unsigned char *)MAP_FAILED) tur_seg_overflow();\n"
+    "        mprotect(m, TUR_SEG_GUARD, PROT_NONE);\n"
+    "        r = (tur_seg_rec *)(m + TUR_SEG_SIZE - sizeof(tur_seg_rec));\n"
+    "        r->map = m; r->map_size = TUR_SEG_SIZE;\n"
+    "        r->bot = m + TUR_SEG_GUARD;\n"
+    "        r->lo = r->bot + TUR_SEG_HEADROOM;\n"
+    "        r->top = (unsigned char *)((uintptr_t)(m + TUR_SEG_SIZE - TUR_SEG_TOPPAD) & ~(uintptr_t)63);\n"
+    "    }\n"
+    "    tur_seg_used += r->map_size;\n"
+    "    return r;\n"
+    "}\n"
+    "typedef struct { unsigned char *sp; void *fn; } tur_seg_go;\n"
+    "/* From the trampoline: `sp` is the bottom of its register save, everything\n"
+    " * live on this stack is at or above it; `args` is where the procedure's\n"
+    " * stack-passed arguments start.  Returns the stack pointer to call it at on a\n"
+    " * new segment, or NULL to call it where it is (the check passes there now). */\n"
+    "__attribute__((used)) static tur_seg_go tur_seg_enter(unsigned char *sp, const unsigned char *args) {\n"
+    "    tur_seg_go g = { NULL, tur_seg_fn };\n"
+    "    size_t nb = tur_seg_nb;\n"
+    "    tur_seg_rec *c = tur_seg_resync(sp);\n"
+    "    if (!c) {\n"
+    "        /* No record describes this stack (a fiber's, or an unarmed thread's):\n"
+    "         * stop checking rather than re-enter forever. */\n"
+    "        tur_seg_hot.lo = 0; tur_seg_hot.span = (uintptr_t)-1;\n"
+    "        return g;\n"
+    "    }\n"
+    "    /* Room left: the check failed on a stale pair (a longjmp out of a segment).\n"
+    "     * The procedure's check may run below its entry, after its prologue, so\n"
+    "     * room means TUR_SEG_SLACK of it; and a second failure at the same point\n"
+    "     * means even that was not enough -- grow, rather than re-enter forever. */\n"
+    "    if (sp >= c->lo + TUR_SEG_SLACK && sp != tur_seg_last) {\n"
+    "        tur_seg_last = sp;\n"
+    "        tur_seg_arm(c);\n"
+    "        return g;\n"
+    "    }\n"
+    "    tur_seg_last = NULL;\n",
+    "    if (nb > TUR_SEG_TOPPAD / 2) tur_seg_overflow();\n"
+    "    tur_seg_rec *n = tur_seg_new();\n"
+    "    n->prev = c; n->saved_sp = sp;\n"
+    "    __asm__ volatile (\"\" ::: \"memory\");\n"
+    "    tur_seg_cur = n;\n"
+    "    tur_seg_arm(n);\n"
+    "    unsigned char *nsp = (unsigned char *)((uintptr_t)(n->top - nb) & ~(uintptr_t)15);\n"
+    "    memcpy(nsp, args, nb);\n"
+    "    g.sp = nsp;\n"
+    "    return g;\n"
+    "}\n"
+    "/* From the trampoline, back on the stack it left. */\n"
+    "__attribute__((used)) static void tur_seg_leave(unsigned char *sp) {\n"
+    "    tur_seg_rec *c = tur_seg_resync(sp);\n"
+    "    if (c) tur_seg_arm(c);\n"
+    "}\n"
+    "static int tur_seg_off_base(const void *p);\n"
+    "static void tur_seg_thread_start(unsigned char *lo) {\n"
+    "    pthread_attr_t a; void *addr = 0; size_t sz = 0;\n"
+    "    extern int pthread_getattr_np(pthread_t, pthread_attr_t *);\n"
+    "    if (!lo || pthread_getattr_np(pthread_self(), &a) != 0) return;\n"
+    "    if (pthread_attr_getstack(&a, &addr, &sz) != 0) sz = 0;\n"
+    "    pthread_attr_destroy(&a);\n"
+    "    if (!sz) return;\n"
+    "    tur_seg_rec *b = &tur_seg_base_rec;\n"
+    "    b->bot = lo; b->lo = lo + TUR_SEG_HEADROOM; b->top = (unsigned char *)addr + sz;\n"
+    "    tur_seg_cur = b;\n"
+    "#if defined(R7K_SETJMP)\n"
+    "    r7k_seg_off_base = tur_seg_off_base;   /* the prelude's call/cc asks (it precedes this) */\n"
+    "#endif\n"
+    "#if defined(TUR_GC_ON) && TUR_GC_ON\n"
+    "    tur_gc_seg_attach((void **)&tur_seg_cur);\n"
+    "#endif\n"
+    "    tur_seg_arm(b);\n"
+    "}\n"
+    "#define TUR_SEG_THREAD_START(lo) tur_seg_thread_start((unsigned char *)(lo))\n"
+    "/* The fault handler's test: an address in a live segment's guard. */\n"
+    "static int tur_seg_fault_is_overflow(const unsigned char *a) {\n"
+    "    for (const tur_seg_rec *r = tur_seg_cur; r && r->map; r = r->prev)\n"
+    "        if (a >= r->map && a < r->bot + 65536) return 1;\n"
+    "    return 0;\n"
+    "}\n"
+    "/* 1 when `p` is on a segment, not the thread's own stack: a continuation\n"
+    " * image is one contiguous copy, so a capture there is escape-only and a\n"
+    " * re-entry from there need not step out of its way (r7k_measure, r7k_restore\n"
+    " * in stdlib/r7rs/prelude.tur, through r7k_seg_off_base). */\n"
+    "static int tur_seg_off_base(const void *p) {\n"
+    "    return tur_seg_cur && tur_seg_cur->map && !tur_seg_holds(&tur_seg_base_rec, (const unsigned char *)p);\n"
+    "}\n"
+    "/* The asm below defines it, in every unit; an object, so that calling it\n"
+    " * through the procedure's own type is a cast no compiler warns about. */\n"
+    "extern char tur_seg_tramp_code[] __asm__(\"tur_seg_tramp\");\n"
+    "#if defined(__x86_64__)\n"
+    "__asm__ (\n"
+    "    \".text\\n\"\n"
+    "    \".p2align 4\\n\"\n"
+    "    \"tur_seg_tramp:\\n\"\n"
+    "    \"    pushq %rbp\\n\"\n"
+    "    \"    movq %rsp, %rbp\\n\"\n"
+    "    \"    subq $176, %rsp\\n\"\n"
+    "    \"    movq %rdi, 0(%rsp)\\n    movq %rsi, 8(%rsp)\\n    movq %rdx, 16(%rsp)\\n\"\n"
+    "    \"    movq %rcx, 24(%rsp)\\n    movq %r8, 32(%rsp)\\n    movq %r9, 40(%rsp)\\n\"\n"
+    "    \"    movaps %xmm0, 48(%rsp)\\n    movaps %xmm1, 64(%rsp)\\n    movaps %xmm2, 80(%rsp)\\n\"\n"
+    "    \"    movaps %xmm3, 96(%rsp)\\n    movaps %xmm4, 112(%rsp)\\n    movaps %xmm5, 128(%rsp)\\n\"\n"
+    "    \"    movaps %xmm6, 144(%rsp)\\n    movaps %xmm7, 160(%rsp)\\n\"\n",
+    "    \"    movq %rsp, %rdi\\n\"\n"
+    "    \"    leaq 16(%rbp), %rsi\\n\"\n"
+    "    \"    call tur_seg_enter\\n\"\n"
+    "    \"    movq %rax, %r10\\n\"\n"
+    "    \"    movq %rdx, %r11\\n\"\n"
+    "    \"    movq 0(%rsp), %rdi\\n    movq 8(%rsp), %rsi\\n    movq 16(%rsp), %rdx\\n\"\n"
+    "    \"    movq 24(%rsp), %rcx\\n    movq 32(%rsp), %r8\\n    movq 40(%rsp), %r9\\n\"\n"
+    "    \"    movaps 48(%rsp), %xmm0\\n    movaps 64(%rsp), %xmm1\\n    movaps 80(%rsp), %xmm2\\n\"\n"
+    "    \"    movaps 96(%rsp), %xmm3\\n    movaps 112(%rsp), %xmm4\\n    movaps 128(%rsp), %xmm5\\n\"\n"
+    "    \"    movaps 144(%rsp), %xmm6\\n    movaps 160(%rsp), %xmm7\\n\"\n"
+    "    \"    testq %r10, %r10\\n\"\n"
+    "    \"    jz 1f\\n\"\n"
+    "    \"    movq %r10, %rsp\\n\"\n"
+    "    \"    call *%r11\\n\"\n"
+    "    \"    leaq -176(%rbp), %rsp\\n\"\n"
+    "    \"    movq %rax, 0(%rsp)\\n    movq %rdx, 8(%rsp)\\n\"\n"
+    "    \"    movaps %xmm0, 16(%rsp)\\n    movaps %xmm1, 32(%rsp)\\n\"\n"
+    "    \"    movq %rsp, %rdi\\n\"\n"
+    "    \"    call tur_seg_leave\\n\"\n"
+    "    \"    movq 0(%rsp), %rax\\n    movq 8(%rsp), %rdx\\n\"\n"
+    "    \"    movaps 16(%rsp), %xmm0\\n    movaps 32(%rsp), %xmm1\\n\"\n"
+    "    \"    leave\\n\"\n"
+    "    \"    ret\\n\"\n"
+    "    \"1:  leave\\n\"\n"
+    "    \"    jmp *%r11\\n\");\n"
+    "#elif defined(__aarch64__)\n"
+    "__asm__ (\n"
+    "    \".text\\n\"\n"
+    "    \".p2align 4\\n\"\n"
+    "    \"tur_seg_tramp:\\n\"\n"
+    "    \"    stp x29, x30, [sp, #-16]!\\n\"\n"
+    "    \"    mov x29, sp\\n\"\n"
+    "    \"    sub sp, sp, #208\\n\"\n"
+    "    \"    stp x0, x1, [sp, #0]\\n    stp x2, x3, [sp, #16]\\n\"\n"
+    "    \"    stp x4, x5, [sp, #32]\\n    stp x6, x7, [sp, #48]\\n\"\n"
+    "    \"    str x8, [sp, #64]\\n\"\n"
+    "    \"    stp q0, q1, [sp, #80]\\n    stp q2, q3, [sp, #112]\\n\"\n"
+    "    \"    stp q4, q5, [sp, #144]\\n    stp q6, q7, [sp, #176]\\n\"\n"
+    "    \"    mov x0, sp\\n\"\n"
+    "    \"    add x1, x29, #16\\n\"\n"
+    "    \"    bl tur_seg_enter\\n\"\n"
+    "    \"    mov x9, x0\\n\"\n"
+    "    \"    mov x10, x1\\n\"\n"
+    "    \"    ldp x0, x1, [sp, #0]\\n    ldp x2, x3, [sp, #16]\\n\"\n"
+    "    \"    ldp x4, x5, [sp, #32]\\n    ldp x6, x7, [sp, #48]\\n\"\n"
+    "    \"    ldr x8, [sp, #64]\\n\"\n"
+    "    \"    ldp q0, q1, [sp, #80]\\n    ldp q2, q3, [sp, #112]\\n\"\n"
+    "    \"    ldp q4, q5, [sp, #144]\\n    ldp q6, q7, [sp, #176]\\n\"\n"
+    "    \"    cbz x9, 1f\\n\"\n"
+    "    \"    mov sp, x9\\n\"\n"
+    "    \"    blr x10\\n\"\n"
+    "    \"    sub sp, x29, #208\\n\"\n"
+    "    \"    stp x0, x1, [sp, #0]\\n\"\n"
+    "    \"    stp q0, q1, [sp, #16]\\n    stp q2, q3, [sp, #48]\\n\"\n"
+    "    \"    mov x0, sp\\n\"\n"
+    "    \"    bl tur_seg_leave\\n\"\n"
+    "    \"    ldp x0, x1, [sp, #0]\\n\"\n"
+    "    \"    ldp q0, q1, [sp, #16]\\n    ldp q2, q3, [sp, #48]\\n\"\n"
+    "    \"    mov sp, x29\\n\"\n"
+    "    \"    ldp x29, x30, [sp], #16\\n\"\n"
+    "    \"    ret\\n\"\n"
+    "    \"1:  mov sp, x29\\n\"\n",
+    "    \"    ldp x29, x30, [sp], #16\\n\"\n"
+    "    \"    br x10\\n\");\n"
+    "#endif\n"
+    "#if defined(__x86_64__)\n"
+    "#define TUR_SEG_SP(sp) __asm__ (\"movq %%rsp, %0\" : \"=r\"(sp))\n"
+    "#else\n"
+    "#define TUR_SEG_SP(sp) __asm__ (\"mov %0, sp\" : \"=r\"(sp))\n"
+    "#endif\n"
+    "/* clang guarantees the tail call; gcc makes it at -O2 all the same, and a\n"
+    " * plain call reaches the trampoline with the arguments laid out alike. */\n"
+    "#if defined(__clang__) && defined(__has_attribute)\n"
+    "#if __has_attribute(musttail)\n"
+    "#define TUR_SEG_MUSTTAIL __attribute__((musttail))\n"
+    "#endif\n"
+    "#endif\n"
+    "#ifndef TUR_SEG_MUSTTAIL\n"
+    "#define TUR_SEG_MUSTTAIL\n"
+    "#endif\n"
+    "#define TUR_SEG_WORDS(x) ((sizeof(x) + 7) & ~(size_t)7)\n"
+    "#define TUR_SEG_CHECK(f, nb, args) do { \\\n"
+    "    unsigned char *tur_seg_sp_; TUR_SEG_SP(tur_seg_sp_); \\\n"
+    "    if (__builtin_expect((uintptr_t)(tur_seg_sp_ - tur_seg_hot.lo) > tur_seg_hot.span, 0)) { \\\n"
+    "        tur_seg_fn = (void *)(f); tur_seg_nb = (nb); \\\n"
+    "        TUR_SEG_MUSTTAIL return ((__typeof__(&f))(void *)tur_seg_tramp_code) args; \\\n"
+    "    } } while (0)\n"
+    "#endif\n",
+    NULL,
+};
+
+static void emit_seg_stack_runtime(Buf *out, bool shared) {
+    if (!shared) {
+        buf_puts(out, "#define TUR_SEG_OVERFLOW_MSG \"" TUR_STACK_OVERFLOW_MSG "\\n\"\n");
+        for (const char *const *p = TUR_SEG_STACK_RT; *p; p++) buf_puts(out, *p);
+    }
+    buf_puts(out,
+        "#ifndef TUR_SEG_CHECK\n"
+        "#define TUR_SEG_CHECK(f, nb, args) ((void)0)\n"
         "#endif\n");
 }
 
@@ -16081,6 +16439,10 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
      * In a split build that is the library unit, which defines the functions
      * once (emit_split_once_fns) for the program unit's main to call: they
      * name `main` only as an external, resolved where the units link. */
+    if (g_opt_r7rs && g_opt_r7rs_segmented_stack) {
+        experiment_warn_if_used("r7rs-segmented-stack");
+        emit_seg_stack_runtime(out, shared);
+    }
     if (g_opt_r7rs && !shared) {
         Buf deep; buf_init(&deep);
         emit_deep_stack_runtime(&deep);

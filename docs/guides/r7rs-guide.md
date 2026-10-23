@@ -669,6 +669,23 @@ sooner. A size that cannot be reserved is reported, and `main` then runs on
 the process's own stack. `tur jit` reads the same variable.
 `TUR_NO_DEEP_STACK=1` keeps `main` on the process's own stack.
 
+**Deeper than the stack (experimental).** Built with
+`--enable=r7rs-segmented-stack`, a program on Linux x86-64 or arm64 keeps
+recursing past the end of that stack onto 8 MiB segments mapped as it goes,
+so depth is bounded by memory: a recursion 100 million calls deep (about
+3 GB of frames) runs, where the 1 GiB stack stops near 30 million. The
+limit becomes a budget: `TUR_MAIN_STACK_MB`, when set, is the total of the
+stack and its segments; unset, half of physical memory. Past it, the same
+`stack overflow: recursion too deep`. A `call/cc` captured while frames are
+on a segment is escape-only: it escapes, but invoked after its extent it
+stops the program with `continuation invoked after its call/cc prompt
+returned`, as on a platform with no stack copy. A continuation captured on
+the thread's own stack re-enters from anywhere, and `raise`, `guard` and
+escapes work anywhere. Not under `tur jit`, and not on other threads. The
+cost is a compare per procedure call -- 1-2% more instructions at `-O2` on
+the plan's benchmarks under gcc, within code-layout noise under clang. See
+[r7rs-heap-frames-plan](../upcoming/r7rs-heap-frames-plan.md).
+
 ## Where it differs from R7RS
 
 - **String literals are immutable.** R7RS allows this. See Lists,

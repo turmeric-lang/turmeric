@@ -5521,6 +5521,282 @@ static void tcg_emit_def(EmitCtx *ctx, Buf *file, TcgGroup *g) {
 
 static void emit_fn_def_body(EmitCtx *ctx, Buf *file, const Expr *e);
 
+/* r7rs-heap-frames-plan (H0): a function written in a `#lang r7rs` file --
+ * the program's procedures and lambdas, and the r7rs prelude's, whose
+ * recursive helpers (list walks, the bignum folds) go as deep as the data. */
+static bool emit_fn_is_scheme(const Expr *e) {
+    const SourceFile *sf = diag_source_file(e->span.file_id);
+    return sf && sf->lang == LANG_R7RS;
+}
+
+/* Which of them carry the check.  A check costs a function more than its
+ * compare when the function has a frameless fast path: neither gcc nor clang
+ * shrink-wraps a prologue past a read of the stack pointer, so the prelude's
+ * arithmetic helpers (`r7rs-lt2__`, whose two-fixnum case used to return
+ * after one push) would save every callee-saved register on every call --
+ * +36% to +52% on clang -O2 (r7rs-heap-frames-plan, H0).  A recursion without
+ * bound has to go round a cycle of the call graph, and a cycle stays checked
+ * while one member of it is, so:
+ *
+ *   - a procedure of the program is always checked;
+ *   - a function of the stdlib (the prelude, an imported library) is checked
+ *     when it makes a call it cannot name -- a dynamic call, a call through a
+ *     function value -- since that call may close a cycle through anything,
+ *     or when it calls inline C that calls back into Scheme;
+ *   - on every cycle of direct calls left after those, one member is checked,
+ *     the one least likely to be hot, until no cycle is left
+ *     (seg_scc_round).  A function calling itself is always one.
+ *
+ * A function the CPS backend lowers is never the one.  It carries no check:
+ * its `__cps` body's calls are tail calls into heap continuations, and a
+ * check in its direct entry stops clang inlining the body there -- which
+ * changed the stack enough for the conservative collector to keep 93 MB of
+ * dead lists alive through one stale word (lists.scm in the plan).  So a cycle
+ * through it is checked at a direct member, and a cycle of CPS functions alone
+ * needs none.
+ *
+ * Every other function adds a bounded depth, which the segment's headroom
+ * covers.  A cycle this misses ends at a guard page with the overflow
+ * message, as it did before segments.  A function this never saw (a
+ * specialization cloned at emission) is checked. */
+typedef struct SegNode {
+    const FnDef *fd;
+    uint32_t    *succ;
+    uint32_t     n_succ, cap_succ;
+    int          index, low;
+    uint32_t     size;      /* expression nodes in its body */
+    uint32_t     callers;   /* functions calling it directly */
+    bool         on_stack, unknown, checked, removed;
+    bool         cps;       /* lowered by the CPS backend: no check of its own */
+} SegNode;
+typedef struct SegGraph {
+    SegNode   *nodes;
+    uint32_t   n, cap;
+    uint32_t  *map;        /* open addressing over fd pointers: node index + 1 */
+    uint32_t   map_cap;
+    uint32_t  *work;       /* nodes whose bodies are still to walk */
+    uint32_t   n_work, cap_work;
+    uint32_t   cur;        /* the node whose body is being walked */
+} SegGraph;
+static SegGraph    g_seg;
+static const void *g_seg_key;   /* the item list the graph was built from */
+
+static uint32_t seg_hash(const void *p, uint32_t cap) {
+    uintptr_t x = (uintptr_t)p;
+    x ^= x >> 17; x *= (uintptr_t)0x9E3779B97F4A7C15ull; x ^= x >> 29;
+    return (uint32_t)x & (cap - 1);
+}
+static int seg_find(const FnDef *fd) {
+    if (!g_seg.map_cap) return -1;
+    for (uint32_t i = seg_hash(fd, g_seg.map_cap); g_seg.map[i]; i = (i + 1) & (g_seg.map_cap - 1))
+        if (g_seg.nodes[g_seg.map[i] - 1].fd == fd) return (int)(g_seg.map[i] - 1);
+    return -1;
+}
+static uint32_t seg_node(const FnDef *fd) {
+    int f = seg_find(fd);
+    if (f >= 0) return (uint32_t)f;
+    if ((g_seg.n + 1) * 2 > g_seg.map_cap) {
+        uint32_t nc = g_seg.map_cap ? g_seg.map_cap * 2 : 1024;
+        uint32_t *nm = (uint32_t *)calloc(nc, sizeof *nm);
+        for (uint32_t k = 0; k < g_seg.n; k++) {
+            uint32_t i = seg_hash(g_seg.nodes[k].fd, nc);
+            while (nm[i]) i = (i + 1) & (nc - 1);
+            nm[i] = k + 1;
+        }
+        free(g_seg.map);
+        g_seg.map = nm; g_seg.map_cap = nc;
+    }
+    if (g_seg.n == g_seg.cap) {
+        g_seg.cap = g_seg.cap ? g_seg.cap * 2 : 512;
+        g_seg.nodes = (SegNode *)realloc(g_seg.nodes, g_seg.cap * sizeof *g_seg.nodes);
+    }
+    uint32_t k = g_seg.n++;
+    memset(&g_seg.nodes[k], 0, sizeof g_seg.nodes[k]);
+    g_seg.nodes[k].fd = fd;
+    g_seg.nodes[k].index = -1;
+    g_seg.nodes[k].cps = fd->cps_colored;
+    uint32_t i = seg_hash(fd, g_seg.map_cap);
+    while (g_seg.map[i]) i = (i + 1) & (g_seg.map_cap - 1);
+    g_seg.map[i] = k + 1;
+    if (g_seg.n_work == g_seg.cap_work) {
+        g_seg.cap_work = g_seg.cap_work ? g_seg.cap_work * 2 : 512;
+        g_seg.work = (uint32_t *)realloc(g_seg.work, g_seg.cap_work * sizeof *g_seg.work);
+    }
+    g_seg.work[g_seg.n_work++] = k;
+    return k;
+}
+static void seg_edge(uint32_t from, uint32_t to) {
+    SegNode *n = &g_seg.nodes[from];
+    for (uint32_t i = 0; i < n->n_succ; i++) if (n->succ[i] == to) return;
+    if (n->n_succ == n->cap_succ) {
+        n->cap_succ = n->cap_succ ? n->cap_succ * 2 : 4;
+        n->succ = (uint32_t *)realloc(n->succ, n->cap_succ * sizeof *n->succ);
+    }
+    n->succ[n->n_succ++] = to;
+    g_seg.nodes[to].callers++;
+}
+/* Inline C that calls a Scheme procedure it was handed: a closure's code
+ * pointer, the dynamic-call runtime, a top-level form's thunk. */
+static bool seg_inline_c_calls_back(const FnDef *fd) {
+    if (!fd || !fd->body || fd->body->kind != EX_INLINE_C || !fd->body->as.inline_c_.inline_c)
+        return false;
+    StrSlice c = fd->body->as.inline_c_.inline_c->code;
+    static const char *const tok[] = { "TUR_CLOSURE_FN", "__tur_dyn", "__tur_tb_", "r7k_run_form" };
+    for (size_t t = 0; t < sizeof tok / sizeof *tok; t++) {
+        size_t tl = strlen(tok[t]);
+        for (uint32_t i = 0; i + tl <= c.len; i++)
+            if (memcmp(c.p + i, tok[t], tl) == 0) return true;
+    }
+    return false;
+}
+static bool seg_visit(const Expr *e, void *ud);
+static void seg_walk(const Expr *e) {
+    if (!e) return;
+    g_seg.nodes[g_seg.cur].size++;
+    switch (e->kind) {
+    case EX_FN_DEF: if (e->as.fn_def_.fn) seg_node(e->as.fn_def_.fn); return;
+    case EX_FN:     if (e->as.fn_.fn) seg_node(e->as.fn_.fn); return;
+    case EX_CLOSURE:
+        if (e->as.closure_.closure && e->as.closure_.closure->fn)
+            seg_node(e->as.closure_.closure->fn);
+        return;
+    case EX_DYN_CALL:
+        g_seg.nodes[g_seg.cur].unknown = true;
+        break;
+    case EX_CALL: {
+        const Binding *fb = e->as.call_.fn_binding;
+        if (e->as.call_.fn_expr) {
+            g_seg.nodes[g_seg.cur].unknown = true;
+        } else if (fb && fb->source_fn_def) {
+            if (seg_inline_c_calls_back(fb->source_fn_def)) g_seg.nodes[g_seg.cur].unknown = true;
+            uint32_t from = g_seg.cur;
+            uint32_t to = seg_node(fb->source_fn_def);
+            seg_edge(from, to);
+        } else if (fb && !fb->is_global && fb->type.kind == TY_FN) {
+            g_seg.nodes[g_seg.cur].unknown = true;
+        }
+        break;
+    }
+    default: break;
+    }
+    cps_visit_children(e, seg_visit, NULL);
+}
+static bool seg_visit(const Expr *e, void *ud) { (void)ud; seg_walk(e); return false; }
+
+/* One round of Tarjan (iteratively: the graph is the whole prelude) over the
+ * nodes not yet removed: in each cycle-carrying component, check the member
+ * fewest functions call, the largest of those -- an internal of a slow path,
+ * not the `=` every comparison goes through -- and take it out.
+ * Returns whether any was found; the caller repeats until none is, so every
+ * cycle ends up through a checked function. */
+static bool seg_scc_round(void) {
+    uint32_t *stack = (uint32_t *)malloc((g_seg.n ? g_seg.n : 1) * sizeof *stack);
+    uint32_t *cs_node = (uint32_t *)malloc((g_seg.n ? g_seg.n : 1) * sizeof *cs_node);
+    uint32_t *cs_edge = (uint32_t *)malloc((g_seg.n ? g_seg.n : 1) * sizeof *cs_edge);
+    uint32_t *pick = (uint32_t *)malloc((g_seg.n ? g_seg.n : 1) * sizeof *pick);
+    uint32_t sp = 0, cp = 0, np = 0;
+    int idx = 0;
+    for (uint32_t i = 0; i < g_seg.n; i++) { g_seg.nodes[i].index = -1; g_seg.nodes[i].on_stack = false; }
+    for (uint32_t r = 0; r < g_seg.n; r++) {
+        if (g_seg.nodes[r].removed || g_seg.nodes[r].index >= 0) continue;
+        cs_node[cp] = r; cs_edge[cp] = 0; cp++;
+        g_seg.nodes[r].index = g_seg.nodes[r].low = idx++;
+        stack[sp++] = r; g_seg.nodes[r].on_stack = true;
+        while (cp) {
+            uint32_t v = cs_node[cp - 1];
+            SegNode *nv = &g_seg.nodes[v];
+            if (cs_edge[cp - 1] < nv->n_succ) {
+                uint32_t w = nv->succ[cs_edge[cp - 1]++];
+                SegNode *nw = &g_seg.nodes[w];
+                if (nw->removed) continue;
+                if (nw->index < 0) {
+                    nw->index = nw->low = idx++;
+                    stack[sp++] = w; nw->on_stack = true;
+                    cs_node[cp] = w; cs_edge[cp] = 0; cp++;
+                } else if (nw->on_stack && nw->index < nv->low) {
+                    nv->low = nw->index;
+                }
+                continue;
+            }
+            if (nv->low == nv->index) {
+                uint32_t first = sp;
+                do { first--; } while (stack[first] != v);
+                bool cyc = sp - first > 1;
+                for (uint32_t i = 0; !cyc && i < nv->n_succ; i++) if (nv->succ[i] == v) cyc = true;
+                int best = -1;
+                for (uint32_t i = first; i < sp; i++) {
+                    g_seg.nodes[stack[i]].on_stack = false;
+                    const SegNode *c = &g_seg.nodes[stack[i]];
+                    if (c->cps) continue;
+                    const SegNode *b = best >= 0 ? &g_seg.nodes[best] : NULL;
+                    if (!b || c->callers < b->callers || (c->callers == b->callers && c->size > b->size))
+                        best = (int)stack[i];
+                }
+                if (cyc && best >= 0) pick[np++] = (uint32_t)best;
+                sp = first;
+            }
+            cp--;
+            if (cp) {
+                SegNode *nu = &g_seg.nodes[cs_node[cp - 1]];
+                if (nv->low < nu->low) nu->low = nv->low;
+            }
+        }
+    }
+    for (uint32_t i = 0; i < np; i++) {
+        g_seg.nodes[pick[i]].checked = true;
+        g_seg.nodes[pick[i]].removed = true;
+    }
+    free(stack); free(cs_node); free(cs_edge); free(pick);
+    return np > 0;
+}
+
+static void seg_graph_build(const EmitCtx *ctx) {
+    for (uint32_t i = 0; i < g_seg.n; i++) free(g_seg.nodes[i].succ);
+    free(g_seg.nodes); free(g_seg.map); free(g_seg.work);
+    memset(&g_seg, 0, sizeof g_seg);
+    for (uint32_t i = 0; i < ctx->n_tcg_fn_exprs; i++)
+        if (ctx->tcg_fn_exprs[i]->as.fn_def_.fn) seg_node(ctx->tcg_fn_exprs[i]->as.fn_def_.fn);
+    while (g_seg.n_work) {
+        uint32_t k = g_seg.work[--g_seg.n_work];
+        g_seg.cur = k;
+        seg_walk(g_seg.nodes[k].fd->body);
+    }
+    /* A function making a call it cannot name is checked, and so is out of
+     * every cycle before the rounds start. */
+    for (uint32_t i = 0; i < g_seg.n; i++)
+        if (g_seg.nodes[i].unknown && !g_seg.nodes[i].cps)
+            g_seg.nodes[i].checked = g_seg.nodes[i].removed = true;
+    while (seg_scc_round()) { }
+    g_seg_key = ctx->tcg_fn_exprs;
+}
+
+static bool emit_fn_wants_seg_check(const EmitCtx *ctx, const Expr *e) {
+    if (!g_opt_r7rs_segmented_stack || !emit_fn_is_scheme(e)) return false;
+    const FnDef *fd = e->kind == EX_FN_DEF ? e->as.fn_def_.fn : NULL;
+    if (!fd) return true;
+    if (!(fd->binding && (fd->binding->is_from_stdlib || fd->binding->is_from_implib)))
+        return true;
+    if (!ctx->n_tcg_fn_exprs) return true;
+    if (g_seg_key != (const void *)ctx->tcg_fn_exprs) seg_graph_build(ctx);
+    int k = seg_find(fd);
+    return k < 0 || g_seg.nodes[k].checked;
+}
+
+/* The check at the top of a function body: the C name, the arguments to
+ * re-enter it with, and a bound on the bytes of them the ABI may pass on the
+ * stack (emit_seg_stack_runtime). */
+static void emit_seg_check(Buf *file, int indent, const char *cname,
+                           const char *const *args, uint32_t n) {
+    indent_buf(file, indent);
+    buf_printf(file, "TUR_SEG_CHECK(%s, ", cname);
+    for (uint32_t i = 0; i < n; i++)
+        buf_printf(file, "%sTUR_SEG_WORDS(%s)", i ? " + " : "", args[i]);
+    if (!n) buf_puts(file, "0");
+    buf_puts(file, ", (");
+    for (uint32_t i = 0; i < n; i++) buf_printf(file, "%s%s", i ? ", " : "", args[i]);
+    buf_puts(file, "));\n");
+}
+
 /* panic-location-names-the-runtime-not-the-call-site: a `__poly_N` forwarding
  * wrapper's body is emitted with ctx->in_forwarding_wrapper set, so its one
  * forwarding call keeps the panic site the call through the value set, and
@@ -6376,6 +6652,32 @@ static void emit_fn_def_body(EmitCtx *ctx, Buf *file, const Expr *e) {
     /* `(void)`, not `()`: see the forward declaration in emit_module.c. */
     if (fd->n_params == 0 && !emit_main_argv) buf_puts(file, "void");
     buf_puts(file, ") {\n");
+
+    /* r7rs-heap-frames-plan (H0/H1): a procedure of a `#lang r7rs` file opens
+     * with the segmented stack's entry check (emit_seg_stack_runtime).  Below
+     * the limit it re-enters itself, with the same arguments, through the
+     * trampoline that moves it onto a new segment -- a tail call, so the check
+     * costs the function no frame.  So the macro gets the C name, the
+     * arguments as they were declared above, and a bound on the bytes of
+     * them the ABI may pass on the stack.  Ahead of the bouncer's guard
+     * below, which clears an arming the re-entered call must see.  Never
+     * main, which runs before any limit, nor an inline-C body. */
+    if (!is_main && !body_is_inline_c && emit_fn_wants_seg_check(ctx, e)) {
+        char **an = (char **)calloc(fd->n_params ? fd->n_params : 1, sizeof(char *));
+        for (uint32_t i = 0; i < fd->n_params; i++) {
+            const char *pn = raw_name_for_binding(fd->params[i]);
+            const char *pre = needs_box_load[i] ? "__tur_b4box_"
+                            : fd->params[i]->arrives_as_carrier_box ? "__tur_nbox_"
+                            : needs_box_spill[i] ? "__tur_inbox_" : "";
+            size_t len = strlen(pre) + strlen(pn) + 1;
+            an[i] = (char *)malloc(len);
+            snprintf(an[i], len, "%s%s", pre, pn);
+            free((void *)pn);
+        }
+        emit_seg_check(file, ctx->indent + 4, fn_name, (const char *const *)an, fd->n_params);
+        for (uint32_t i = 0; i < fd->n_params; i++) free(an[i]);
+        free(an);
+    }
 
     /* proper-tail-calls T6 (T-D6): a bouncer -- a function whose tail reaches a
      * dynamic call -- learns on entry whether the call that entered it came

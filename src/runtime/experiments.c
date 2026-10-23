@@ -467,6 +467,20 @@ static const ExperimentDescriptor EXPERIMENTS[] = {
       "0.73.0",                  /* expires_at -- advisory; never blocks a release */
       XF_LIFECYCLE_PROTOTYPE,
       &g_opt_quote_data },
+    /* r7rs-segmented-stack (r7rs-heap-frames-plan, option C): a compiled
+     * `#lang r7rs` procedure checks the stack pointer against a per-thread
+     * limit at entry and, past it, re-enters itself on a fresh stack segment,
+     * so recursion is bounded by TUR_MAIN_STACK_MB as a memory budget rather
+     * than by the C stack.  Gated because the check is on every call and the
+     * plan is part-way: the deep-stack thread on Linux x86-64 and arm64 only,
+     * and a call/cc captured on a segment is escape-only. */
+    { "r7rs-segmented-stack",
+      "a compiled `#lang r7rs` procedure checks the stack limit at entry and grows onto a new segment",
+      "docs/upcoming/r7rs-heap-frames-plan.md",
+      "0.70.0",                  /* introduced */
+      "0.76.0",                  /* expires_at -- advisory; never blocks a release */
+      XF_LIFECYCLE_PROTOTYPE,
+      &g_opt_r7rs_segmented_stack },
     /* loop-invariants GRADUATED 2026-10-03, in the 0.61 line (introduced
      * 0.57.0, prototype, advisory expires_at 0.58.0).  `(while c :invariant p
      * ...)` is always on: the runtime checks, the initiation/preservation
