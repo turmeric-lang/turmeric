@@ -906,6 +906,9 @@ static void repl_preload_stdlib_and_natives(TuriEnv *env) {
      * compiled and `--interpret` paths gave 65.  See
      * docs/archive/repl-list-head-over-cons-returns-nil.md. */
     turi_env_preload_native_stubs(env);
+    /* quote-list-data-plan: a prompt has no program to scan ahead of time, so
+     * --enable=quote-data loads stdlib/datum.tur up front. */
+    g_quote_data_autoload = g_opt_quote_data;
     turi_env_preload_collections(env, stdlib_root);
     turi_env_preload_typeclasses(env, stdlib_root);
     /* Pin everything the preload just accumulated so a `#lang` switch at the

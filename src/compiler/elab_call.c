@@ -4447,6 +4447,67 @@ Expr *elab_call(Elab *e, Form *call) {
     return r;
 }
 
+/* A list form over a copy of `items` (elab_try_println_datum). */
+static Form *pd_list(Elab *e, Span sp, Form **items, uint32_t n) {
+    Form **xs = (Form **)arena_alloc(e->arena, n * sizeof(Form *));
+    for (uint32_t i = 0; i < n; i++) xs[i] = items[i];
+    return form_list(e->arena, sp, xs, n);
+}
+
+/* quote-list-data-plan: `(println d)` on a `Datum` prints its source
+ * rendering, `(+ 1 2)` -- the builtin println rows are scalar-only, so this is
+ * `(println (datum->str d))`.  In a Saffron file the argument is usually an
+ * `any`, whose println is decided at run time; there it becomes
+ *
+ *     (let [g d] (if (is? g Datum) (println (datum->str g)) (println g)))
+ *
+ * so a datum prints the same through an unannotated parameter as through a
+ * typed one, on both back ends, and every other value keeps the dynamic
+ * println it had (`is?` narrows `g` in the then-branch).  Only while stdlib/datum.tur is loaded (--enable=quote-data).
+ *
+ * The argument form is elaborated again, as the Num dispatch above does after
+ * its peek; a Datum is :copy, so the first elaboration poisoned nothing. */
+static Expr *elab_try_println_datum(Elab *e, Form *call, const Symbol *name,
+                                    Type first_t) {
+    if (!g_opt_quote_data || strcmp(name->name, "println") != 0) return NULL;
+    if (call == e->println_datum_fallback) return NULL;   /* the `(println g)` below */
+    bool is_any = first_t.kind == TY_ANY && lang_span_is_dynamic(call->span);
+    if (!is_any && !(first_t.kind == TY_ADT && strcmp(type_name(first_t), "Datum") == 0))
+        return NULL;
+    const Symbol *datum = symtab_intern(e->st, strslice("Datum", 5));
+    if (!scope_lookup_type_def(e->scope, datum)) return NULL;
+    Span sp = call->span;
+#define PD_SYM(nm) form_sym(e->arena, sp, symtab_intern(e->st, strslice(nm, (uint32_t)strlen(nm))))
+#define PD_LIST(...) pd_list(e, sp, (Form *[]){__VA_ARGS__}, \
+                             (uint32_t)(sizeof((Form *[]){__VA_ARGS__}) / sizeof(Form *)))
+    Form *arg = call->as.list.items[1];
+    if (!is_any) {
+        Form *f = PD_LIST(PD_SYM("println"), PD_LIST(PD_SYM("datum->str"), arg));
+        return elab_form(e, f);
+    }
+    char nm[48];
+    snprintf(nm, sizeof nm, "__pdatum_%u", elab_fresh_id(e));
+    Form *g = PD_SYM(nm);
+    Form **bind_items = (Form **)arena_alloc(e->arena, 2 * sizeof(Form *));
+    bind_items[0] = g;
+    bind_items[1] = arg;
+    Form *bind = form_vec(e->arena, sp, bind_items, 2);
+    Form *fallback = PD_LIST(PD_SYM("println"), g);
+    Form *f = PD_LIST(PD_SYM("let"), bind,
+        PD_LIST(PD_SYM("if"), PD_LIST(PD_SYM("is?"), g, PD_SYM("Datum")),
+                PD_LIST(PD_SYM("println"), PD_LIST(PD_SYM("datum->str"), g)),
+                fallback));
+#undef PD_SYM
+#undef PD_LIST
+    /* Saved and restored: a println of an `any` inside `arg` rewrites (and
+     * restores) before the body's fallback is reached. */
+    Form *saved = e->println_datum_fallback;
+    e->println_datum_fallback = fallback;
+    Expr *out = elab_form(e, f);
+    e->println_datum_fallback = saved;
+    return out;
+}
+
 static Expr *elab_call_inner(Elab *e, Form *call) {
     /* Already established: call->tag == F_LIST and len >= 1. */
     Form *head = call->as.list.items[0];
@@ -5084,17 +5145,10 @@ static Expr *elab_call_inner(Elab *e, Form *call) {
     /* Stage 2 (macro-system-direction-plan): procedural macros. */
     if (name == e->sym_defmacro_star) return elab_defmacro_star(e, call);
     if (name == e->sym_quote) {
-        /* (quote x) -- mirrors F_QUOTE in elab_toplevel.c. Quoting a
-         * bare symbol yields a :Sym literal so DSL helpers in defns
-         * can construct AST nodes without the inner symbol being
-         * TUR-E0003-resolved against the scope. */
-        Form *quoted = call->as.list.items[1];
-        if (quoted->tag == F_SYM) {
-            Expr *out = expr_new(e->arena, EX_SYM_LIT, TYPE_SYM, call->span);
-            out->as.sym_lit_.sym = quoted->as.sym;
-            return out;
-        }
-        return elab_form(e, quoted);
+        /* (quote x) -- the same lowering as F_QUOTE (elab_quote,
+         * elab_toplevel.c): a symbol is its :Sym, a list under
+         * --enable=quote-data a Datum. */
+        return elab_quote(e, call->as.list.items[1], call->span);
     }
     if (name == e->sym_gensym)   return elab_gensym(e, call);
     if (name == e->sym_thread)    return elab_thread(e, call);
@@ -6234,6 +6288,10 @@ static Expr *elab_call_inner(Elab *e, Form *call) {
     }
     Type first_t = (n_args > 0) ? arg0_peek->type : TYPE_NIL;
     const BuiltinSpec *spec = builtin_lookup(name, first_t, n_args);
+    if (!spec && n_args == 1) {
+        Expr *dp = elab_try_println_datum(e, call, name, first_t);
+        if (dp) return dp;
+    }
     if (!spec) {
         Expr *num_disp = elab_try_num_operator_dispatch(e, call, head, name,
                                                         &first_t, n_args);

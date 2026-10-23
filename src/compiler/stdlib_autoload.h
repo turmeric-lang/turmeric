@@ -3,6 +3,7 @@
 
 #include <stdbool.h>
 #include <stdint.h>
+#include <stddef.h>
 
 #include "arena.h"
 #include "forms.h"
@@ -34,6 +35,13 @@
  * load-bearing -- macros.tur first, and the typeclass files before the
  * containers that instantiate them. */
 const char *const *tur_stdlib_autoload_files(void);
+
+/* quote-list-data-plan: does the entry program quote a list or vector under
+ * --enable=quote-data, so stdlib/datum.tur should join the autoload?  Over
+ * read forms (the compiled paths) or source text (the interpreter, which
+ * preloads before it reads).  Both answer false for a Scheme program. */
+bool tur_quote_data_wanted_forms(Form *const *forms, uint32_t n);
+bool tur_quote_data_wanted_source(const char *src, size_t len);
 
 /* Read every autoload file out of `stdlib_dir`, parse it, and prepend the
  * resulting forms onto *forms_in_out (reallocating into `arena`). Updates

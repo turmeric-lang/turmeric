@@ -232,6 +232,9 @@ typedef struct Elab {
      * the stdlib's C by a hash of its text, so it has to be the same text for
      * every program.  Draw an id through elab_fresh_id, never `next_id++`. */
     uint32_t     next_stdlib_id;
+    /* quote-list-data-plan: the dynamic `(println g)` fallback of the Datum
+     * println rewrite (elab_try_println_datum), which must not rewrite again. */
+    Form        *println_datum_fallback;
     bool         ids_stdlib;
     /* r7rs-imported-libraries-recompiled-every-build: the same for a library
      * the program imports from the stdlib (diag_file_is_imported_stdlib) --
@@ -2555,6 +2558,7 @@ Expr *elab_any_type_of(Elab *e, const Form *call);
 Expr *elab_any_cast(Elab *e, const Form *call);
 Expr *elab_is_q(Elab *e, const Form *call);
 Expr *elab_form(Elab *e, Form *f);
+Expr *elab_quote(Elab *e, Form *quoted, Span span); /* quote-list-data-plan (elab_toplevel.c) */
 
 /* elab_global.c -- SS5: multi-party global protocol types */
 Expr *elab_defprotocol(Elab *e, const Form *call);
