@@ -73,6 +73,11 @@ static int tur_main_inner(int argc, char **argv) {
      * that fails (an unknown --enable=, say) has already said why. */
     int flags_rc = drv_parse_global_flags(&argc, argv);
     if (flags_rc) return flags_rc;
+    /* The parse strips what it consumed and NULL-terminates the shorter argv;
+     * a stale count let the split-library cache key (preamble_split.c) walk
+     * past that NULL, so `tur run --enable=<x> prog.scm` crashed.  The
+     * experiments it stripped are keyed there from their own globals. */
+    g_main_argc = argc;
 
     /* Initialize diagnostics - use color unless --no-color or --json-diagnostics specified */
     /* JSON output disables color */

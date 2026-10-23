@@ -1,0 +1,17 @@
+(+ 1 2)
+(+ 1 2)
+(defn f [x : int y :float] : (List int) (g x 7.1 "s\"q" true nil))
+(a (quote b) [c])
+()
+[]
+hello
+5
++
+3
+3
+(* 2 3)
+true
+false
+false
+true
+true

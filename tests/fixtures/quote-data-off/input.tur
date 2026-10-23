@@ -1,0 +1,7 @@
+;; quote-list-data-plan: without --enable=quote-data a quoted list keeps its
+;; legacy meaning -- it is elaborated as code -- and a quoted symbol is a Sym.
+(defn main [] : int
+  (println (quote (+ 1 2)))
+  (println '(* 2 3))
+  (println (sym->str 'hello))
+  0)

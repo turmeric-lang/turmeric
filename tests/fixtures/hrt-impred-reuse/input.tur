@@ -9,6 +9,9 @@
 
 (defn inc [x : int] : int (+ x 1))
 
+; The functions passed to the rank-2 parameters below are not generic, so
+; each is ascribed to the parameter's forall type -- the trusted opt-out of
+; rank2-argument-genericity, which asserts what the checker cannot see.
 (defn main [] : int
-  (println (apply-twice inc 10))
+  (println (apply-twice (:: inc (forall [a] (-> a a))) 10))
   0)

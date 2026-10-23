@@ -8,7 +8,9 @@
 (defn use-poly-id [poly-id (forall [b] (-> b b))] : int
   (poly-id 42))
 
-(defn id [x : int] : int x)
+; rank2-argument-genericity: the forall promises its variable at every type,
+; so the function passed is generic.
+(defn id [A] [x : A] : A x)
 
 (defn main [] : int
   (println (with-poly-id use-poly-id))

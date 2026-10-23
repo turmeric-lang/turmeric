@@ -455,6 +455,18 @@ static const ExperimentDescriptor EXPERIMENTS[] = {
       "0.74.0",                  /* expires_at -- advisory; never blocks a release */
       XF_LIFECYCLE_PROTOTYPE,
       &g_opt_script_deps },
+    /* quote-data (quote-list-data-plan): `(quote (a b c))` is a runtime
+     * `Datum` (stdlib/datum.tur) instead of the list elaborated as code.
+     * Gated because it changes the meaning of existing code -- a quoted list
+     * used to evaluate -- and because datum.tur is autoloaded whole while the
+     * gate is on, where graduation wants it loaded on first use. */
+    { "quote-data",
+      "`(quote (a b c))` is a runtime `Datum` (stdlib/datum.tur), not the list evaluated as code",
+      "docs/upcoming/quote-list-data-plan.md",
+      "0.69.0",                  /* introduced */
+      "0.73.0",                  /* expires_at -- advisory; never blocks a release */
+      XF_LIFECYCLE_PROTOTYPE,
+      &g_opt_quote_data },
     /* loop-invariants GRADUATED 2026-10-03, in the 0.61 line (introduced
      * 0.57.0, prototype, advisory expires_at 0.58.0).  `(while c :invariant p
      * ...)` is always on: the runtime checks, the initiation/preservation

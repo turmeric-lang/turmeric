@@ -145,6 +145,11 @@ static const TuriNativeCapRow k_rows[] = {
     { "cstr-len", 0 },
     { "cstr-nth", 0 },
     { "cstr-sub", 0 },
+    { "datum-cat-", 0 },
+    { "datum-float-str-", 0 },
+    { "datum-int-str-", 0 },
+    { "datum-quote-str-", 0 },
+    { "datum-str=?-", 0 },
     { "doc-lookup", 0 },
     { "doc-print", TURI_CAP_IO },                            /* writes stdout */
     { "err", 0 },

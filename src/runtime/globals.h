@@ -423,6 +423,12 @@ extern bool g_opt_r7rs;
 extern bool g_opt_reflected_measures;
 extern bool g_opt_discontinue;
 extern bool g_opt_script_deps;  /* script-spice-deps-plan: --enable=script-deps */
+extern bool g_opt_quote_data;   /* quote-list-data-plan: --enable=quote-data */
+/* quote-list-data-plan: load stdlib/datum.tur in THIS compile -- the flag is on
+ * and the entry program quotes a list (tur_quote_data_wanted_forms / _source),
+ * or the entry point loads it eagerly (project mode, the REPL).  Recomputed per
+ * compile, never accumulated. */
+extern bool g_quote_data_autoload;
 /* RF5: --dump-reflect -- one line per `^reflect` site: verdict, decreasing
  * argument position, rejection reason.  A diagnostic knob, not an
  * experiment (same footing as --dump-write-frames). */

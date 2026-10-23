@@ -7,6 +7,9 @@
 (defn twice [x : int] : int
   (* x 2))
 
+; The functions passed to the rank-2 parameters below are not generic, so
+; each is ascribed to the parameter's forall type -- the trusted opt-out of
+; rank2-argument-genericity, which asserts what the checker cannot see.
 (defn main [] : int
-  (println (apply-twice twice 3 5))
+  (println (apply-twice (:: twice (forall [a] (-> a a))) 3 5))
   0)

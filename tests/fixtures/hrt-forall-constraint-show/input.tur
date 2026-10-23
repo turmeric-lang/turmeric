@@ -14,7 +14,10 @@
     return (const char *)buf;
     ```))
 
-(defn my-show [x : int] : cstr (show x))
+;; rank2-argument-genericity: the forall promises `a` at every type, so
+;; the function passed to it is generic (and
+;; carries the same constraint).
+(defn my-show [A] [(Show A)] [x : A] : cstr (show x))
 
 (defn use-show [f (forall [a] [(Show a)] (-> a cstr))] : cstr
   (f 42))

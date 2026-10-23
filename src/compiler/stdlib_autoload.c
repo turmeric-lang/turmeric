@@ -91,22 +91,108 @@ static const char *const autoload_files_[] = {
  * the current entry file alone, never on what ran before it. */
 static const char *autoload_files_prelude_[64];
 static const char *autoload_files_prelude_for_ = NULL;
+static bool        autoload_files_datum_for_   = false;
 
 const char *const *tur_stdlib_autoload_files(void) {
-    if (!g_lang_prelude) return autoload_files_;
-    if (autoload_files_prelude_for_ != g_lang_prelude) {
+    /* quote-list-data-plan: stdlib/datum.tur, the `Datum` a quoted list
+     * elaborates to, when this compile wants it (g_quote_data_autoload) --
+     * after the base list (it loads list-typed.tur, which needs it) and before
+     * any language prelude, so a Saffron file sees `Datum` too. */
+    bool want_datum = g_quote_data_autoload;
+    if (!g_lang_prelude && !want_datum) return autoload_files_;
+    if (autoload_files_prelude_for_ != g_lang_prelude ||
+        autoload_files_datum_for_ != want_datum ||
+        autoload_files_prelude_[0] == NULL) {
         size_t n = 0;
         while (autoload_files_[n] != NULL &&
-               n + 2 < sizeof(autoload_files_prelude_) /
+               n + 3 < sizeof(autoload_files_prelude_) /
                        sizeof(autoload_files_prelude_[0])) {
             autoload_files_prelude_[n] = autoload_files_[n];
             n++;
         }
-        autoload_files_prelude_[n++] = g_lang_prelude;
+        if (want_datum) autoload_files_prelude_[n++] = "datum.tur";
+        if (g_lang_prelude) autoload_files_prelude_[n++] = g_lang_prelude;
         autoload_files_prelude_[n]   = NULL;
         autoload_files_prelude_for_  = g_lang_prelude;
+        autoload_files_datum_for_    = want_datum;
     }
     return (const char *const *)autoload_files_prelude_;
+}
+
+/* ---------------------------------------------------------------------------
+ * quote-list-data-plan: is stdlib/datum.tur wanted?
+ *
+ * The plan's "auto-loaded on first use".  datum.tur loads list-typed.tur, and
+ * through it string.tur and the typeclass stack, so loading it into every
+ * program under the flag would reserve all of those names (MF3) for programs
+ * that never quote a list -- and the LSP runs with every experiment on.  So
+ * the entry program is scanned for a quoted list or vector first.  A quote
+ * that only a `(load ...)`ed file or a macro expansion produces is not seen;
+ * elab_quote then says to load datum.tur explicitly.
+ *
+ * Never for a Scheme program: `#lang r7rs` quotes through its own pairs.
+ * ------------------------------------------------------------------------- */
+static bool quote_data_entry_is_scheme(void) {
+    return g_opt_r7rs || (g_lang_prelude && strncmp(g_lang_prelude, "r7rs/", 5) == 0);
+}
+
+static bool form_quotes_a_list(const Form *f, unsigned depth) {
+    if (!f || depth > 4096) return false;
+    switch (f->tag) {
+        case F_QUOTE:
+            return f->as.list.len == 1 &&
+                   (f->as.list.items[0]->tag == F_LIST || f->as.list.items[0]->tag == F_VEC);
+        case F_LIST:
+            /* `(quote (a b))` written out, as a macro might leave it. */
+            if (f->as.list.len == 2 && f->as.list.items[0]->tag == F_SYM &&
+                strcmp(f->as.list.items[0]->as.sym->name, "quote") == 0 &&
+                (f->as.list.items[1]->tag == F_LIST || f->as.list.items[1]->tag == F_VEC))
+                return true;
+            /* fallthrough */
+        case F_VEC: case F_MAP: case F_SET: case F_QUASIQUOTE: case F_UNQUOTE:
+        case F_UNQUOTE_SPLICING: case F_TYPE_ANN: case F_CONTRACT_TYPE:
+        case F_READER_COND: case F_RANGE_VAR: case F_MAP_LITERAL:
+        case F_SET_LITERAL: case F_ROW_LITERAL:
+            for (uint32_t i = 0; i < f->as.list.len; i++)
+                if (form_quotes_a_list(f->as.list.items[i], depth + 1)) return true;
+            return false;
+        default:
+            return false;
+    }
+}
+
+bool tur_quote_data_wanted_forms(Form *const *forms, uint32_t n) {
+    if (!g_opt_quote_data || quote_data_entry_is_scheme()) return false;
+    for (uint32_t i = 0; i < n; i++)
+        if (form_quotes_a_list(forms[i], 0)) return true;
+    return false;
+}
+
+/* The same question over source text, for the interpreter, which preloads the
+ * stdlib before it reads the entry file.  Lexical: comments, strings and
+ * character literals are skipped, then `'` or `(quote` followed by `(` or `[`
+ * answers yes.  A false yes only loads a module the program did not need. */
+bool tur_quote_data_wanted_source(const char *src, size_t len) {
+    if (!g_opt_quote_data || quote_data_entry_is_scheme() || !src) return false;
+    for (size_t i = 0; i < len; i++) {
+        char c = src[i];
+        if (c == ';') {
+            while (i < len && src[i] != '\n') i++;
+        } else if (c == '"') {
+            for (i++; i < len && src[i] != '"'; i++)
+                if (src[i] == '\\') i++;
+        } else if (c == '#' && i + 1 < len && src[i + 1] == '\\') {
+            i += 2;
+        } else if (c == '\'' ||
+                   (c == '(' && i + 6 <= len && memcmp(src + i + 1, "quote", 5) == 0 &&
+                    (src[i + 6] == ' ' || src[i + 6] == '\t' || src[i + 6] == '\n'))) {
+            size_t j = i + (c == '\'' ? 1 : 6);
+            while (j < len && (src[j] == ' ' || src[j] == '\t' || src[j] == '\n' || src[j] == '\r'))
+                j++;
+            if (j < len && (src[j] == '(' || src[j] == '[')) return true;
+        }
+    }
+    return false;
 }
 
 void tur_source_file_apply_lang_header(SourceFile *sf, const char *whole_src,
@@ -162,6 +248,10 @@ uint32_t tur_stdlib_prepend_forms(Arena *arena, SymbolTable *st,
                                   uint32_t *nforms_in_out,
                                   uint8_t *file_id_in_out) {
     if (!stdlib_dir || !*stdlib_dir) stdlib_dir = "stdlib";
+
+    /* quote-list-data-plan: decided from the user's own forms, before the
+     * list is read. */
+    g_quote_data_autoload = tur_quote_data_wanted_forms(*forms_in_out, *nforms_in_out);
 
     /* Through the accessor, not the raw array: that is where the SX1
      * experiment gate adds trail.tur, and reading `autoload_files_` directly

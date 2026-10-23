@@ -10,7 +10,8 @@
 ;;; the playground) differ, an entry says so. Guides: binding-forms-guide,
 ;;; sum-types-guide (for `match`), macros-guide (`gensym`), dynamic-vars-guide
 ;;; (`binding`), error-handling-guide (`defer`). What is still to change:
-;;; docs/upcoming/quote-list-data-plan.md (`quote` of a list).
+;;; docs/upcoming/quote-list-data-plan.md (`quote` of a list, behind
+;;; `--enable=quote-data`).
 ;; Reference only: tools/gendocs.py reads the ;;@ lines, the compiler skips them.
 
 ;;; let -- bind local names, then evaluate a body.
@@ -194,21 +195,28 @@
 ;;;   (println "after")  ; prints body, d, after
 ;;@form (defer body ...)
 
-;;; quote -- produce a symbol without evaluating it.
+;;; quote -- produce a symbol, or a quoted form as data, without evaluating it.
 ;;;
 ;;; `(quote hello)`, or `'hello`, is the `Sym` for the name, usable with
-;;; `sym->str` and `=`. It is how a macro or DSL helper builds names. Quoting a
-;;; list is not supported as data today: `(quote (+ 1 2))` evaluates the list and
-;;; gives 3 on both engines.
+;;; `sym->str` and `=`. It is how a macro or DSL helper builds names. A quoted
+;;; literal is the literal itself.
+;;;
+;;; Under `--enable=quote-data` a quoted list or vector is a `Datum` (tur/datum):
+;;; `'(+ 1 2)` is `(DList [(DSym +) (DInt 1) (DInt 2)])`, `println` prints it as
+;;; `(+ 1 2)`, and `match` takes it apart -- on every engine, and in Saffron
+;;; through an unannotated parameter too. Without the flag a quoted list is still
+;;; elaborated as code: `(quote (+ 1 2))` gives 3. See
+;;; docs/upcoming/quote-list-data-plan.md.
 ;;;
 ;;; Parameters:
-;;;   x -- a symbol or literal, not evaluated
+;;;   x -- a symbol, literal, list or vector, not evaluated
 ;;;
 ;;; Returns:
-;;;   The symbol (a `Sym`), or the literal.
+;;;   The symbol (a `Sym`), the literal, or (with quote-data) the `Datum`.
 ;;;
 ;;; Example:
 ;;;   (sym->str (quote hello))  ; => "hello"
+;;;   (datum-length '(+ 1 2))   ; => 3, with --enable=quote-data
 ;;@form (quote x)
 
 ;;; case -- pick a result by comparing a value with constants.
