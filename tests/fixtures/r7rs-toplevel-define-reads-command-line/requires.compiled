@@ -1,0 +1,1 @@
+run-turi.sh does not pass run.args; the interpreter reads (command-line) at the define either way (tur --interpret prints the same lines by hand)
