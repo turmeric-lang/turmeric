@@ -4645,6 +4645,7 @@ static Form *read_form(Reader *r) {
 }
 
 #include <stdio.h>
+#include <sys/stat.h>
 
 /* RM4: implementation backing both `#use-reader-macros "..."` and the
  * spice-manifest `:reader-macros [...]` preloader. Reads `abs_path` and
@@ -4658,6 +4659,17 @@ int reader_macros_load_file(Arena *arena, SymbolTable *st,
     if (!fp) {
         diag_emit(DIAG_ERROR, SPAN_UNKNOWN,
                   "reader-macros: cannot open '%s'", abs_path);
+        return -1;
+    }
+    /* fuzz-manifest-deadly-signal-2026-10-19: fopen succeeds on a directory
+     * (`#use-reader-macros "."`), and ftell on it is LONG_MAX on glibc, so the
+     * `sz + 1` arena request below overflowed into an abort.  Only a regular
+     * file is a reader-macro file. */
+    struct stat st_rm;
+    if (fstat(fileno(fp), &st_rm) != 0 || !S_ISREG(st_rm.st_mode)) {
+        fclose(fp);
+        diag_emit(DIAG_ERROR, SPAN_UNKNOWN,
+                  "reader-macros: '%s' is not a regular file", abs_path);
         return -1;
     }
     fseek(fp, 0, SEEK_END);

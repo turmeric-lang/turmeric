@@ -4,6 +4,7 @@
 #include "mangle.h"
 #include "cps.h"          /* cps_visit_children -- collect_free_vars' fallback */
 #include <string.h>  /* memset for elab_init_state */
+#include <sys/stat.h> /* elab_read_file: fstat / S_ISREG */
 
 /* ---- shared file-scope state (declared in elab_internal.h) ---- */
 bool elab_in_atomically = false;
@@ -4040,6 +4041,11 @@ bool expr_closure_return_dispatches(const Expr *expr) {
 int elab_read_file(const char *path, char **out, size_t *out_len) {
     FILE *f = fopen(path, "rb");
     if (!f) return -1;
+    /* fuzz-manifest-deadly-signal-2026-10-19: a directory opens fine, and its
+     * ftell (LONG_MAX on glibc) made `size + 1` wrap -- `(load ".")` aborted
+     * the compiler.  Only a regular file is source. */
+    struct stat st;
+    if (fstat(fileno(f), &st) != 0 || !S_ISREG(st.st_mode)) { fclose(f); return -1; }
     if (fseek(f, 0, SEEK_END) != 0) { fclose(f); return -1; }
     long size = ftell(f);
     if (size < 0) { fclose(f); return -1; }

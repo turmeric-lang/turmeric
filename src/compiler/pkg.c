@@ -936,9 +936,20 @@ bool pkg_manifest_read_status(const char *path, PkgManifest *out,
         fprintf(stderr, "spice: cannot open '%s': %s\n", path, strerror(errno));
         return false;
     }
+    /* fuzz-manifest-deadly-signal-2026-10-19: a directory opens fine, and its
+     * ftell is LONG_MAX on glibc (and -1 elsewhere), so `sz + 1` wrapped.  A
+     * manifest is a regular file; anything else at the path is malformed. */
+    struct stat mst;
     fseek(f, 0, SEEK_END);
     long sz = ftell(f);
     rewind(f);
+    if (fstat(fileno(f), &mst) != 0 || !S_ISREG(mst.st_mode) || sz < 0) {
+        fclose(f);
+        fprintf(stderr, "spice: '%s' is not a regular file\n", path);
+        if (status) *status = PKG_MANIFEST_MALFORMED;
+        pkg_manifest_mark_malformed(path);
+        return false;
+    }
     char *src = (char *)malloc(sz + 1);
     /* Past this point the file EXISTS, so any failure is MALFORMED (or a
      * read error on a real file) -- never "no manifest here". */

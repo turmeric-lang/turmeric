@@ -1,0 +1,6 @@
+; `(load ".")` names a directory.  fopen succeeds on one and its ftell is
+; LONG_MAX on glibc, so reading it aborted the compiler on a wrapped
+; allocation (fuzz-manifest-deadly-signal-2026-10-19); it is a plain
+; "cannot open" error now.
+(load ".")
+(defn main [] : int 0)
