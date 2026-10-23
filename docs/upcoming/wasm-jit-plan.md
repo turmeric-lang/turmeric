@@ -1,11 +1,17 @@
 # Plan: the JIT engine in the browser (c2mir + MIR on wasm32)
 
-> **Status:** Draft, 2026-10-23. Investigation only; nothing built. P0 needs
-> no Emscripten and can start today (section 7). **Fork state verified
+> **Status:** Draft, 2026-10-23. Investigation only; nothing built.
+> **P0 run 2026-10-23** (section 7): the corpus under `TUR_JIT_GEN=interp`
+> on a Release build is 3853/113/70; every interpreter-only failure is in
+> one of three families (threads 82, continuations 10, deep recursion 2),
+> and the MIR interpreter runs a tail-recursive loop ~10x slower than the
+> generator and ~20x faster than the tree-walker. **Fork state verified
 > 2026-10-23** (section 6.1): the vendored copy is byte-identical to the
 > fork's `master`, every wasm branch is merged into it, and c2mp pins a
 > commit 23 behind it, so there are no patches to reconcile -- only a pin
-> to bump on c2mp's side and a CI leg to add on the fork's.
+> to bump on c2mp's side and a CI leg to add on the fork's. The three gaps
+> of section 3 are sized in section 3.1; none needs further research before
+> P1.
 > **Type:** JIT engine (`src/jit_engine.c`, `external/mir/`), web build
 > (`src/CMakeLists.txt` `tur_wasm`, `src/web/wasm_glue.c`), driver split
 > (`src/driver/pipeline.c`), emitter (one knob, section 5.6).
