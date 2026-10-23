@@ -38,7 +38,6 @@ directory is worse for triage than no index.
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [r7rs-toplevel-define-sees-empty-command-line](r7rs-toplevel-define-sees-empty-command-line.md) | medium | `(define n (command-line))` at top level gives `("")`: the initializer runs in `__tur_module_def_init`, from the static-init constructor, before `main` builds `*args*`. A procedure or top-level expression reading it sees the arguments |
 
 ## Found measuring recursion for the wasm JIT plan (filed 2026-10-23)
 

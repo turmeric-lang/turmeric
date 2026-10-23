@@ -15369,19 +15369,11 @@ static bool emit_cps_ir_try_fn_impl(EmitCtx *ctx, Buf *file, const Expr *e) {
         bool mvoid = (mrt->kind == TY_NIL);
         buf_puts(file, "int main(int argc, char **argv) {\n");
         emit_main_deep_stack_prologue(file);
+        emit_main_args_block(file);
+        static_init_note_main();
         buf_puts(file, "    __tur_static_init();\n");   /* S1b */
         emit_win_binary_stdio_prologue(file);
         emit_main_root_unwind_prologue(file);
-        buf_puts(file, "    /* *args*: build cons list from argv[1..argc-1]; *argv0* is argv[0] */\n");
-        buf_puts(file, "    if (argc > 0 && argv[0]) g_tur_argv0 = argv[0];\n");
-        buf_puts(file, "    g_tur_args = 0;\n");
-        buf_puts(file, "    for (int _ai = argc - 1; _ai >= 1; _ai--) {\n");
-        buf_puts(file, "        typedef struct { int64_t value; int64_t next; } __tur_args_cell;\n");
-        buf_puts(file, "        __tur_args_cell *_c = (__tur_args_cell *)malloc(sizeof(__tur_args_cell));\n");
-        buf_puts(file, "        _c->value = (int64_t)(intptr_t)argv[_ai];\n");
-        buf_puts(file, "        _c->next = g_tur_args;\n");
-        buf_puts(file, "        g_tur_args = (int64_t)(intptr_t)_c;\n");
-        buf_puts(file, "    }\n");
         buf_puts(file, TUR_TOPLEVEL_STMTS_SENTINEL);
         buf_puts(file, "    __dk_entry_depth++;\n");
     /* r7rs-callcc-memory-never-freed: where this entry's registrations

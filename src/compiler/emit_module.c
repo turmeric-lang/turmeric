@@ -13561,6 +13561,27 @@ static bool preamble_uses_serial(const Expr *e) {
  * shared-library emitter, and the CPS backend's D2b entry wrapper); a prologue
  * this easy to forget should exist once.
  */
+/*
+ * CLI-ARGS: build *args* (argv[1..] as a cons list of char*) and *argv0*.
+ * Emitted by every generated `main`, AHEAD of its __tur_static_init() call:
+ * that call runs the unit's def initializers (the STATIC_INIT_DEFS band), and
+ * a top-level `(define n (command-line))` reads these globals there
+ * (r7rs-toplevel-define-sees-empty-command-line).  Needs nothing initialized:
+ * it is plain malloc and two global stores.
+ */
+void emit_main_args_block(Buf *out) {
+    buf_puts(out, "    /* *args*: build cons list from argv[1..argc-1]; *argv0* is argv[0] */\n");
+    buf_puts(out, "    if (argc > 0 && argv[0]) g_tur_argv0 = argv[0];\n");
+    buf_puts(out, "    g_tur_args = 0;\n");
+    buf_puts(out, "    for (int _ai = argc - 1; _ai >= 1; _ai--) {\n");
+    buf_puts(out, "        typedef struct { int64_t value; int64_t next; } __tur_args_cell;\n");
+    buf_puts(out, "        __tur_args_cell *_c = (__tur_args_cell *)malloc(sizeof(__tur_args_cell));\n");
+    buf_puts(out, "        _c->value = (int64_t)(intptr_t)argv[_ai];\n");
+    buf_puts(out, "        _c->next = g_tur_args;\n");
+    buf_puts(out, "        g_tur_args = (int64_t)(intptr_t)_c;\n");
+    buf_puts(out, "    }\n");
+}
+
 void emit_win_binary_stdio_prologue(Buf *out) {
     buf_puts(out, "#ifdef _WIN32\n");
     buf_puts(out, "    _setmode(_fileno(stdout), _O_BINARY);\n");
@@ -22435,22 +22456,13 @@ static int emit_program_inner(Buf *out, const Expr *program) {
         }
         buf_puts(out, "int main(int argc, char **argv) {\n");
         emit_main_deep_stack_prologue(out);
-        /* S1b: first statement, matching where the constructors used to run
-         * (before the Windows stdio mode switch). */
+        emit_main_args_block(out);
+        static_init_note_main();
+        /* S1b: first statement after *args*, matching where the constructors
+         * used to run (before the Windows stdio mode switch). */
         buf_puts(out, "    __tur_static_init();\n");
         emit_win_binary_stdio_prologue(out);
         emit_main_root_unwind_prologue(out);
-        /* CLI-ARGS: Build *args* list from argv[1..] as a linked list of char* (as int64_t). */
-        buf_puts(out, "    /* *args*: build cons list from argv[1..argc-1]; *argv0* is argv[0] */\n");
-        buf_puts(out, "    if (argc > 0 && argv[0]) g_tur_argv0 = argv[0];\n");
-        buf_puts(out, "    g_tur_args = 0;\n");
-        buf_puts(out, "    for (int _ai = argc - 1; _ai >= 1; _ai--) {\n");
-        buf_puts(out, "        typedef struct { int64_t value; int64_t next; } __tur_args_cell;\n");
-        buf_puts(out, "        __tur_args_cell *_c = (__tur_args_cell *)malloc(sizeof(__tur_args_cell));\n");
-        buf_puts(out, "        _c->value = (int64_t)(intptr_t)argv[_ai];\n");
-        buf_puts(out, "        _c->next = g_tur_args;\n");
-        buf_puts(out, "        g_tur_args = (int64_t)(intptr_t)_c;\n");
-        buf_puts(out, "    }\n");
         /* Gap F: def initializers used to run here, ahead of every
          * top-level statement; they are now statements of `body` at their
          * source position (see the EX_DEF arm above), so `def_init_body` is
@@ -24276,20 +24288,11 @@ static int emit_implementation_inner(Buf *out, const char *module_name, const Ex
         /* Only generate main() if user didn't define one (single-file mode) */
         buf_puts(out, "int main(int argc, char **argv) {\n");
         emit_main_deep_stack_prologue(out);
+        emit_main_args_block(out);
+        static_init_note_main();
         buf_puts(out, "    __tur_static_init();\n");   /* S1b */
         emit_win_binary_stdio_prologue(out);
         emit_main_root_unwind_prologue(out);
-        /* CLI-ARGS: Build *args* list from argv[1..] as a linked list of char* (as int64_t). */
-        buf_puts(out, "    /* *args*: build cons list from argv[1..argc-1]; *argv0* is argv[0] */\n");
-        buf_puts(out, "    if (argc > 0 && argv[0]) g_tur_argv0 = argv[0];\n");
-        buf_puts(out, "    g_tur_args = 0;\n");
-        buf_puts(out, "    for (int _ai = argc - 1; _ai >= 1; _ai--) {\n");
-        buf_puts(out, "        typedef struct { int64_t value; int64_t next; } __tur_args_cell;\n");
-        buf_puts(out, "        __tur_args_cell *_c = (__tur_args_cell *)malloc(sizeof(__tur_args_cell));\n");
-        buf_puts(out, "        _c->value = (int64_t)(intptr_t)argv[_ai];\n");
-        buf_puts(out, "        _c->next = g_tur_args;\n");
-        buf_puts(out, "        g_tur_args = (int64_t)(intptr_t)_c;\n");
-        buf_puts(out, "    }\n");
         if (body.len) buf_write(out, body.data, body.len);
         buf_puts(out, "    if (tur_panicking) tur_panic_root_exit();\n");
         buf_puts(out, "    return 0;\n");

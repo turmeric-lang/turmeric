@@ -7868,8 +7868,14 @@ typedef struct StaticInitEntry {
 static StaticInitEntry *g_static_inits   = NULL;
 static uint32_t         g_n_static_inits = 0;
 static uint32_t         g_cap_static_inits = 0;
+/* This unit emits `main` (static_init_note_main), which builds *args* and
+ * then calls __tur_static_init itself. */
+static bool             g_static_init_unit_main = false;
+
+void static_init_note_main(void) { g_static_init_unit_main = true; }
 
 void static_init_reset(void) {
+    g_static_init_unit_main = false;
     for (uint32_t i = 0; i < g_n_static_inits; i++) free(g_static_inits[i].fn);
     free(g_static_inits);
     g_static_inits     = NULL;
@@ -7932,12 +7938,30 @@ void static_init_emit(Buf *out, bool gc_collector_pasted) {
     const bool split_imp = split_client && emit_split_has_imp();
     if (split_client) buf_puts(out, "extern void __tur_split_lib_init(void);\n");
     if (split_imp) buf_puts(out, "extern void __tur_split_imp_init(void);\n");
+    /* r7rs-toplevel-define-sees-empty-command-line: in a unit that has `main`
+     * and def initializers, the constructor must not run those initializers
+     * -- it runs before `main` has built *args*, so a top-level
+     * `(define n (command-line))` read `("")`.  The runtime half (allocator
+     * hook, atexit, keys, registries) moves to __tur_static_init_rt, which the
+     * constructor still runs early; the DEFS band waits for main's own call. */
+    bool has_defs = false;
+    for (uint32_t i = 0; i < g_n_static_inits; i++)
+        if (g_static_inits[i].band == STATIC_INIT_DEFS) has_defs = true;
+    const bool split_rt = g_static_init_unit_main && has_defs;
+    const bool any = g_n_static_inits > 0 || split_client;
     buf_puts(out,
         "/* S1b: explicit static initialization -- see docs/archive/jit-engine-plan.md.\n"
         " * Called from main(); the constructor below covers the no-main cases\n"
-        " * (separate compilation, --shared).  Whichever runs first wins. */\n"
-        "static void __tur_static_init(void) {\n");
-    if (g_n_static_inits > 0 || split_client) {
+        " * (separate compilation, --shared).  Whichever runs first wins. */\n");
+    if (split_rt)
+        buf_puts(out,
+            "/* The runtime half, which the constructor runs early.  The def\n"
+            " * initializers run user code that may read *args*, so they wait for\n"
+            " * main, which builds it first. */\n"
+            "static void __tur_static_init_rt(void) {\n");
+    else
+        buf_puts(out, "static void __tur_static_init(void) {\n");
+    if (any) {
         buf_puts(out, "    static int __tur_static_init_done = 0;\n"
                       "    if (__tur_static_init_done) return;\n"
                       "    __tur_static_init_done = 1;\n");
@@ -7967,16 +7991,29 @@ void static_init_emit(Buf *out, bool gc_collector_pasted) {
         emit_region_shutdown_atexit(out, 4);
         if (split_client) buf_puts(out, "    __tur_split_lib_init();\n");
         if (split_imp) buf_puts(out, "    __tur_split_imp_init();\n");
-        for (int band = STATIC_INIT_KEYS; band <= STATIC_INIT_DEFS; band++)
+        int last_band = split_rt ? STATIC_INIT_ATEXIT : STATIC_INIT_DEFS;
+        for (int band = STATIC_INIT_KEYS; band <= last_band; band++)
             for (uint32_t i = 0; i < g_n_static_inits; i++)
                 if (g_static_inits[i].band == (StaticInitBand)band)
                     buf_printf(out, "    %s();\n", g_static_inits[i].fn);
     }
     buf_puts(out, "}\n");
-    if (g_n_static_inits > 0 || split_client)
-        buf_puts(out,
+    if (split_rt) {
+        buf_puts(out, "static void __tur_static_init(void) {\n"
+                      "    static int __tur_static_init_done = 0;\n"
+                      "    if (__tur_static_init_done) return;\n"
+                      "    __tur_static_init_done = 1;\n"
+                      "    __tur_static_init_rt();\n");
+        for (uint32_t i = 0; i < g_n_static_inits; i++)
+            if (g_static_inits[i].band == STATIC_INIT_DEFS)
+                buf_printf(out, "    %s();\n", g_static_inits[i].fn);
+        buf_puts(out, "}\n");
+    }
+    if (any)
+        buf_printf(out,
             "__attribute__((constructor))\n"
-            "static void __tur_static_init_ctor(void) { __tur_static_init(); }\n");
+            "static void __tur_static_init_ctor(void) { %s(); }\n",
+            split_rt ? "__tur_static_init_rt" : "__tur_static_init");
     buf_putc(out, '\n');
 }
 

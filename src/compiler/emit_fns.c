@@ -6850,8 +6850,16 @@ static void emit_fn_def_body(EmitCtx *ctx, Buf *file, const Expr *e) {
         /* S1b (jit-engine-plan): explicit static initialization, ahead of
          * everything else in main -- that is where the `constructor`
          * attributes it replaces used to run.  Idempotent, so the constructor
-         * wrapper emitted alongside the definition is harmless here. */
+         * wrapper emitted alongside the definition is harmless here.
+         *
+         * CLI-ARGS: *args* is built first, so a def initializer -- run by
+         * __tur_static_init's STATIC_INIT_DEFS band -- reads the real command
+         * line (r7rs-toplevel-define-sees-empty-command-line).  Mirrors the
+         * synthesized-main path in emit_module.c so user-main and
+         * synthesized-main programs see *args* identically. */
         emit_main_deep_stack_prologue(file);
+        if (emit_main_argv) emit_main_args_block(file);
+        static_init_note_main();
         ctx->indent += 4;
         indent_buf(file, ctx->indent);
         buf_puts(file, "__tur_static_init();\n");
@@ -6860,33 +6868,6 @@ static void emit_fn_def_body(EmitCtx *ctx, Buf *file, const Expr *e) {
         emit_main_root_unwind_prologue(file);
     }
 
-    /* CLI-ARGS: build *args* cons list from argv[1..argc-1] before user code runs.
-     * Mirrors the synthesized-main path in emit_module.c so user-main and
-     * synthesized-main programs see *args* identically. */
-    if (emit_main_argv) {
-        ctx->indent += 4;
-        indent_buf(file, ctx->indent);
-        buf_puts(file, "/* *args*: build cons list from argv[1..argc-1]; *argv0* is argv[0] */\n");
-        indent_buf(file, ctx->indent);
-        buf_puts(file, "if (argc > 0 && argv[0]) g_tur_argv0 = argv[0];\n");
-        indent_buf(file, ctx->indent);
-        buf_puts(file, "g_tur_args = 0;\n");
-        indent_buf(file, ctx->indent);
-        buf_puts(file, "for (int _ai = argc - 1; _ai >= 1; _ai--) {\n");
-        indent_buf(file, ctx->indent);
-        buf_puts(file, "    typedef struct { int64_t value; int64_t next; } __tur_args_cell;\n");
-        indent_buf(file, ctx->indent);
-        buf_puts(file, "    __tur_args_cell *_c = (__tur_args_cell *)malloc(sizeof(__tur_args_cell));\n");
-        indent_buf(file, ctx->indent);
-        buf_puts(file, "    _c->value = (int64_t)(intptr_t)argv[_ai];\n");
-        indent_buf(file, ctx->indent);
-        buf_puts(file, "    _c->next = g_tur_args;\n");
-        indent_buf(file, ctx->indent);
-        buf_puts(file, "    g_tur_args = (int64_t)(intptr_t)_c;\n");
-        indent_buf(file, ctx->indent);
-        buf_puts(file, "}\n");
-        ctx->indent -= 4;
-    }
     if (is_main) buf_puts(file, TUR_TOPLEVEL_STMTS_SENTINEL);
 
     /* Phase 9 follow-up: Run last-use elision analysis on the function body

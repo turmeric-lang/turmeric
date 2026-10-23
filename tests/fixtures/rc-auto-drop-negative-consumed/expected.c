@@ -11094,12 +11094,6 @@ static void __defer_194(void *__env) {
 
 
 int main(int argc, char **argv) {
-    __tur_static_init();
-#ifdef _WIN32
-    _setmode(_fileno(stdout), _O_BINARY);
-    _setmode(_fileno(stderr), _O_BINARY);
-#endif
-    tur_root_unwind = 1;
     /* *args*: build cons list from argv[1..argc-1]; *argv0* is argv[0] */
     if (argc > 0 && argv[0]) g_tur_argv0 = argv[0];
     g_tur_args = 0;
@@ -11110,6 +11104,12 @@ int main(int argc, char **argv) {
         _c->next = g_tur_args;
         g_tur_args = (int64_t)(intptr_t)_c;
     }
+    __tur_static_init();
+#ifdef _WIN32
+    _setmode(_fileno(stdout), _O_BINARY);
+    _setmode(_fileno(stderr), _O_BINARY);
+#endif
+    tur_root_unwind = 1;
     SCHEMA_unSTR_1001532 = INT64_C(0);
     SCHEMA_unINT_1001533 = INT64_C(1);
     SCHEMA_unFLOAT_1001534 = INT64_C(2);

@@ -164,6 +164,7 @@ typedef enum StaticInitBand {
     STATIC_INIT_DEFS     = 3,  /* __tur_module_def_init -- runs user code, last */
 } StaticInitBand;
 void     static_init_reset(void);
+void     static_init_note_main(void);
 void     static_init_register(const char *fn, StaticInitBand band);
 uint32_t static_init_count(void);
 /* `gc_collector_pasted`: this unit has src/runtime/r7gc.c in it, so
@@ -1668,6 +1669,7 @@ char *name_for_binding(EmitCtx *ctx, const Binding *b);
  into 
 . */
 void emit_win_binary_stdio_prologue(Buf *out);
+void emit_main_args_block(Buf *out);
 void emit_main_root_unwind_prologue(Buf *out);
 
 void emit_c_string(Buf *out, StrSlice s);

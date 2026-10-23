@@ -1,0 +1,13 @@
+#lang r7rs
+; A top-level `define` whose initializer reads `(command-line)` sees the real
+; arguments, as a procedure body does (r7rs-toplevel-define-sees-empty-command-line):
+; main builds *args* before it runs the def initializers.
+(import (scheme base) (scheme write) (scheme process-context))
+(define args (cdr (command-line)))
+(define n (string->number (car args)))
+(write args)
+(newline)
+(write (* n 2))
+(newline)
+(write (cdr (command-line)))
+(newline)

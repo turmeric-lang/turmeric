@@ -11052,22 +11052,22 @@ static int64_t mul(int64_t x, int64_t y) {
 }
 
 int main(int argc, char **argv) {
+    /* *args*: build cons list from argv[1..argc-1]; *argv0* is argv[0] */
+    if (argc > 0 && argv[0]) g_tur_argv0 = argv[0];
+    g_tur_args = 0;
+    for (int _ai = argc - 1; _ai >= 1; _ai--) {
+        typedef struct { int64_t value; int64_t next; } __tur_args_cell;
+        __tur_args_cell *_c = (__tur_args_cell *)malloc(sizeof(__tur_args_cell));
+        _c->value = (int64_t)(intptr_t)argv[_ai];
+        _c->next = g_tur_args;
+        g_tur_args = (int64_t)(intptr_t)_c;
+    }
         __tur_static_init();
 #ifdef _WIN32
     _setmode(_fileno(stdout), _O_BINARY);
     _setmode(_fileno(stderr), _O_BINARY);
 #endif
     tur_root_unwind = 1;
-        /* *args*: build cons list from argv[1..argc-1]; *argv0* is argv[0] */
-        if (argc > 0 && argv[0]) g_tur_argv0 = argv[0];
-        g_tur_args = 0;
-        for (int _ai = argc - 1; _ai >= 1; _ai--) {
-            typedef struct { int64_t value; int64_t next; } __tur_args_cell;
-            __tur_args_cell *_c = (__tur_args_cell *)malloc(sizeof(__tur_args_cell));
-            _c->value = (int64_t)(intptr_t)argv[_ai];
-            _c->next = g_tur_args;
-            g_tur_args = (int64_t)(intptr_t)_c;
-        }
         int64_t __t202;
         {
             int64_t __ps_203 = (add(INT64_C(5), INT64_C(10)));
@@ -11148,15 +11148,24 @@ static void __tur_fatbox_init(void) {
 /* S1b: explicit static initialization -- see docs/archive/jit-engine-plan.md.
  * Called from main(); the constructor below covers the no-main cases
  * (separate compilation, --shared).  Whichever runs first wins. */
-static void __tur_static_init(void) {
+/* The runtime half, which the constructor runs early.  The def
+ * initializers run user code that may read *args*, so they wait for
+ * main, which builds it first. */
+static void __tur_static_init_rt(void) {
     static int __tur_static_init_done = 0;
     if (__tur_static_init_done) return;
     __tur_static_init_done = 1;
     atexit(tur_region_shutdown);
     __tur_fatbox_init();
+}
+static void __tur_static_init(void) {
+    static int __tur_static_init_done = 0;
+    if (__tur_static_init_done) return;
+    __tur_static_init_done = 1;
+    __tur_static_init_rt();
     __tur_module_def_init();
 }
 __attribute__((constructor))
-static void __tur_static_init_ctor(void) { __tur_static_init(); }
+static void __tur_static_init_ctor(void) { __tur_static_init_rt(); }
 
 /* tur:inline-c-fns: __inst_Eq_eq_qu_cstr __inst_Clone_clone_T __inst_Hash_hash_cstr __inst_Hash_hash_float32 __inst_Hash_hash_float __inst_Hash_hash_Sym __inst_MapKey_mk_hycmp_int __inst_MapKey_mk_hycmp_bool __inst_MapKey_mk_hybox_cstr __inst_MapKey_mk_hycmp_cstr __inst_MapKey_mk_hybox_float32 __inst_MapKey_mk_hycmp_float32 __inst_MapKey_mk_hybox_float __inst_MapKey_mk_hycmp_float __inst_MapKey_mk_hybox_Sym __inst_MapKey_mk_hycmp_Sym __inst_MonadError_throw_hyerror_Result_tyvar __inst_MonadError_catch_hyerror_Result_tyvar __inst_Eq_eq_qu_Sym array_hyget array_hyset array_hyslice with_hyc_hystring box unbox tur_hycontract_hycheck tur_hycontract_hycheck_hyat tur_hycontract_hycheck_hyinv set_hycontract_hyhandler_ex with_hycontract_hyhandler hamt_slautolink_hyhint cstr_hycompare_un_un map_hynew map_hyhamt cstr_hyhash tur_hycstr_hykey_hyeq_qu tur_hyf32_hycarrier_hyeq_qu tur_hyf64_hycarrier_hyeq_qu map_hycount map_hyeq_hyraw_qu map_hyeq_hyraw_hyk_qu map_hyeq_hydynamic map_hyiter_hycur_hyval_hyas map_hyget_hydynamic_hyas tur_hymap_hyhomog_un_un vec_hylen vec_hyget vec_hypush_ex tur_hyvec_hyhomog_un_un vec_hyeq_qu vec_hydata_hyget_un_un vec_hydata_hyget_hychecked_un_un slice_hynew slice_hylen slice_hyget slice_hyfree slice_hyeq_qu unwrap_hyor_hycarrier option_hyfree result_hyfree result_hyeq_qu _un_untur_hyq_hyis_hyerr_qu _un_untur_hyq_hyok_hyval result_hybimap pair_hyeq_hycarrier_qu tuple2_hyeq_hycarrier_qu list_hylength tur_hylist_hyhomog_un_un list_hyhead list_hytail grid_hynew grid_hyget grid_hyset_ex grid_hywidth grid_hyheight grid_hyfree zipper_hynew_hyraw zipper_hyfocus_hyraw zipper_hymove_hyleft_hyraw zipper_hymove_hyright_hyraw zipper_hyfree_hyraw set_hynew set_hycount set_hyeq_qu set_hyeq_hycmp_qu set_hyhamt mutmap_hylen mutmap_hyget mutmap_hyhas_qu mutmap_hycap mutmap_hyslot_hyoccupied_qu mutmap_hyslot_hyhash mutmap_hyslot_hykey mutmap_hyslot_hyvalue mutmap_hyeq_hystorage_qu json_slnull json_slbool json_slint json_slfloat json_slstring json_slarray_hynew json_slarray_hypush json_slobject_hynew json_slobject_hyput json_sltype json_slget_hybool json_slget_hyint json_slget_hyfloat json_slget_hystring json_slarray_hylen json_slarray_hyget json_slget json_slget_ex json_hyenc_hyensure_hy json_hyenc_hyappend_hys_hy json_hyenc_hyappend_hyc_hy json_hyenc_hystr_hy json_hyenc_hynode_hy json_slencode json_hydec_hyskip_hyws_hy json_hydec_hyparse_hystring_hy json_hydec_hyparse_hyvalue_hy json_sldecode json_sldecode_hyfile_ex json_hyfree_hynode_hy json_slfree schema_slstr schema_slint schema_slfloat schema_slbool schema_slnil schema_slliteral_hyint schema_slliteral_hystr schema_slobject_hynew schema_slfield schema_slarray schema_sloptional schema_slunion schema_sltransform schema_slrec schema_slkind schema_slalways schema_slnever schema_slap schema_slfield_hyof schema_slfmap schema_slap_hyfat schema_hyerror_hypath schema_hyerror_hytext schema_hyerror_hycount schema_hyerror_hyat schema_hyerror_hymessage sch_hyvpush_hy sch_hypush_hyerr_hy sch_hymkpath_hy sch_hymkidx_hy sch_hytyname_hy sch_hywant_hyname_hy sch_hyjtype_hy sch_hyjpayload_hy sch_hydecode_hyrec_hy schema_hydecode schema_hydecode_hyok_qu schema_hydecode_hyvalue schema_hydecode_hyerrors schema_hydecode_hyreport sym_hy_gtstr sym_eq_qu bt_hycell_hynew bt_hylvar_hynew bt_hycell_hyfree bt_hyget bt_hybound_qu bt_hyset_ex g_hycell_hynew g_hycell_hyfree g_hyget g_hyset_ex bt_hymark bt_hyundo_hyto_ex bt_hycommit_hyto_ex bt_hylevel bt_hydepth untrailed_hybegin untrailed_hyend trail_hyreset_ex trail_slautolink_hyhint vec_new__spec__tur_adt_Vec__int__ */
