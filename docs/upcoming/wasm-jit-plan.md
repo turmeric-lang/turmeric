@@ -1,0 +1,445 @@
+# Plan: the JIT engine in the browser (c2mir + MIR on wasm32)
+
+> **Status:** Draft, 2026-10-23. Investigation only; nothing built. P0 needs
+> no Emscripten and can start today (section 7).
+> **Type:** JIT engine (`src/jit_engine.c`, `external/mir/`), web build
+> (`src/CMakeLists.txt` `tur_wasm`, `src/web/wasm_glue.c`), driver split
+> (`src/driver/pipeline.c`), emitter (one knob, section 5.6).
+> **Why now:** `turmeric-lang/c2mp` (the browser C REPL at
+> `c.turmeric-lang.com`) has run c2mir and the MIR interpreter in the browser
+> for months, on the **same MIR fork this repo vendors**. The wasm32 target it
+> needed is already in `external/mir/` (`mir-wasm.c`, `c2mir/wasm32/`). What
+> is missing is the wiring on this side, and this plan is the list of it.
+> **Builds on:** [jit-guide](../guides/jit-guide.md),
+> [mir-interp-tier-plan](../archive/mir-interp-tier-plan.md) (the
+> `TUR_JIT_GEN=interp` vehicle, and a premise this plan reverses for wasm),
+> [cc-path-preamble-split-plan](cc-path-preamble-split-plan.md) (the resident
+> runtime half), [aot-compiled-repl-plan](aot-compiled-repl-plan.md) (C1's
+> per-defn inline-C images), [jit-ffi-c2mir-plan](../archive/jit-ffi-c2mir-plan.md).
+> **Sibling:** [raylib-web-playground-plan](raylib-web-playground-plan.md),
+> whose "build service" phase this plan would make unnecessary.
+
+## 1. Goal
+
+Run a Turmeric program in the browser **the way `tur jit` runs it**: through
+the emitted C, c2mir, and MIR -- so inline-C bodies, `extern-c`, and spices
+written as inline-C work on the page, with compiled semantics rather than the
+tree-walker's, and with no server.
+
+Concretely, in Try Turmeric:
+
+````turmeric
+(defn c-mix [a : int b : int] : int
+  ```c
+  int64_t t = a;
+  return t * 31 + b;
+  ```)
+(println (c-mix 3 4))
+````
+
+prints `97` instead of
+`error: eval: inline-C not supported in interpreter mode`.
+
+Non-goals: native-speed execution (section 4 says what speed to expect),
+`spawn`/threads inside JIT'd code on the page (section 5.7), and replacing
+the tree-walker, which stays the fallback and the LSP's engine.
+
+## 2. What c2mp has already established
+
+Everything in this table is measured in `turmeric-lang/c2mp`'s
+`docs/limitations.md` and `docs/wasm-ffi-notes.md` (2026-08-26, fork
+`cfb17d85`; later work merged to the fork's master, which
+`external/mir/UPSTREAM` pins at `fa8a5d69`). Read it as "known to work",
+not "known to work for us" -- section 5 is the delta.
+
+| Fact | Where it lives now | What it means here |
+|---|---|---|
+| MIR has a wasm32/Emscripten target: interpreter only, `MIR_gen` absent. | `external/mir/mir-wasm.c` (639 lines), `external/mir/mir-code-alloc-wasm.c`, `external/mir/c2mir/wasm32/` | Already vendored. `cmake/mir.cmake` does not build it and `src/CMakeLists.txt` says "An Emscripten toolchain build gets no JIT (MIR's wasm32 target is not wired up as a host engine)". That sentence is this plan. |
+| Calls from interpreted code to native go through a JS trampoline: `wasmTable.get(fp)` plus `apply`, with a signature string, `i64` as `BigInt`. | `mir-wasm.c` `_MIR_get_ff_call`, `mir_wasm_js_call` | Needs `-sWASM_BIGINT` and `wasmTable`,`UTF8ToString` exported. Every runtime call pays a JS round trip (section 5.5). |
+| Interpreted-to-interpreted calls work (thunk = table slot, re-entered via `MIR_interp_arr`); native-to-interpreted callbacks work (`addFunction` on demand). | `mir-wasm.c` `_MIR_get_thunk`, `_MIR_get_interp_shim`, `wasm_ff_dispatch` | `qsort` with an interpreted comparator works. Needs `-sALLOW_TABLE_GROWTH` and `addFunction`,`stackAlloc`,`stackSave`,`stackRestore`. |
+| Recursion depth: each interpreted call nests a wasm `eval` frame; V8 counts them against the JS stack. **1,122 frames at `-O2`, 194 at `-O0`.** Overflow is a catchable `RangeError`. | c2mp `limitations.md` section 1.1 | The optimisation level of the *interpreter* is a correctness knob. Our `tur_wasm` is `-O2` already. See section 5.8. |
+| Throughput: `for (i<1e7) s+=i` in 94 ms, about 7x slower than `clang -O0`. | `limitations.md` section 7 | Section 4 puts this next to the tree-walker. |
+| Variadic *calls* to native work (`%lld` correct); variadic functions *defined* in interpreted C do not. Struct-by-value in a variadic tail is rejected. | `limitations.md` section 1.2 | The emitted C defines no variadic functions. Inline-C that does will fail to compile, loudly. |
+| ILP32: `long` and pointers are 4 bytes, `long double` is `double`, `sizeof (MIR_val_t)` is 16. | `limitations.md` sections 3, 5; `c2mir/wasm32/cwasm32.h` | The emitter already targets ILP32 under `tur build --target wasm` (`g_emit_for_wasm`). Carrier words stay `int64_t`. |
+| No `dlsym` under a plain Emscripten build. c2mp hands `MIR_link` a table generated from one X-macro list, which also generates the headers it serves from MEMFS, so declared and linkable never drift. | c2mp `src/libc_wasm32.def`, `docs/wasm-libc-plan.md` | Our `jit_import_resolver` is `JIT_SHIMS[]` then `dlsym(RTLD_DEFAULT)`. The second half needs a table (section 5.3). |
+| c2mir reads headers out of MEMFS through `ops.include_dirs`; a compiled-in `standard_includes` entry shadows a MEMFS file of the same name. | `wasm-libc-plan.md` section 1 | Section 5.4. |
+| A persistent MIR context across REPL turns: each turn compiles as a small module against a declarations preamble, links into the same context. 0.5 to 0.8 ms per `1 + 1`. | `limitations.md` section 8 | The same shape as C1's resident images (aot-compiled-repl-plan). Section 5.9. |
+| The interpreter runs in a Web Worker; Stop terminates the worker and replays the accepted turns into a fresh one. | c2mp `vite-wasm/public/worker.js` | Try Turmeric's eval worker already does the first half (`stopEvalWorker`). |
+| Module size: 767 KB `.wasm` for c2mir + MIR interpreter + c2mp. | `vite-wasm/public/` | The engine is small; our module's size is libturi. |
+| `exit`/`abort`/failed `assert` unwind the evaluation rather than ending the host. | `limitations.md` section 4 | Our `jit_mir_error` already `longjmp`s to a landing pad; `exit` from a program needs the same treatment on the page. |
+
+## 3. What this repo already has, and the three gaps
+
+| Have | Where |
+|---|---|
+| The interpreter mode as a production-path switch: `TUR_JIT_GEN=interp` selects `MIR_set_interp_interface` and skips `MIR_gen_init`. | `src/jit_engine.c` (`g_jit_interp_mode`) |
+| The runtime half of every program resident in the host, with a 2,126-line declarations-only region (582 prototypes) for the program half to compile against. **`tur_rt_split.c` and `tur_rt_split_embed.c` are in `tur_core`, so `libturi_wasm` already carries the runtime.** | `src/runtime/generated/`, `src/driver/preamble_split.c`, `src/CMakeLists.txt:325-338` |
+| A pruner that drops unreferenced prelude functions and the heavy system includes a split TU does not use. | `src/compiler/jit_prune.h` |
+| `main` found by walking MIR's item list, not `dlsym`. | `jit_find_func` |
+| 79 host shims for `__builtin_*` and pthread entry points, consulted before `dlsym`. | `JIT_SHIMS[]` |
+| An embedder fallback: a host with no `cc` falls back to `turi_eval`; `tests/turi/jit-embed.c` asserts parity. | mir-interp-tier-plan section 7.3 |
+| Per-defn inline-C images for the REPL (C1), and the image API that keeps them resident. | `tur_jit_compile_image`, `repl_inline_c_jit_build` in `src/driver/jit.c` |
+| An Emscripten build of the interpreter with pthreads, 16 MB stack, `ALLOW_TABLE_GROWTH`, and the stdlib in MEMFS. | `tur_wasm` target |
+
+The gaps:
+
+1. **The front half is in the executable, not the library.** `compile_to_c`
+   is `src/driver/pipeline.c`, listed under `TUR_DRIVER_SOURCES` with the
+   comment "these belong to the executable, NOT tur_core: they call
+   `system()`, `fork()`, the cc toolchain and the JIT engine". `libturi_wasm`
+   cannot emit C today. Section 5.2.
+2. **The engine is excluded from the wasm build by design.** I4 put the
+   engine in `tur_jit_obj` precisely so that it "would not force MIR into
+   the WASM build, where it has no business being". It has business there
+   now. Section 5.1.
+3. **Everything that assumes a process:** `dlsym`, `dlopen` autolink, a
+   fresh pthread for `main` with a 1 GB stack, `setjmp` landings in the
+   program half, system headers on disk. Sections 5.3 to 5.8.
+
+## 4. What "JIT in wasm" can mean, and what to expect
+
+Three tiers. This plan builds the first and sketches the second.
+
+**T1: the MIR interpreter (c2mp's path).** c2mir compiles the emitted C to
+MIR IR in the browser; MIR interprets it. No code generation. This is what
+exists and is the whole of sections 5 to 7.
+
+**T2: a MIR-to-wasm code generator.** A real JIT: emit a wasm binary per
+module from MIR IR, `WebAssembly.instantiate` it against the main module's
+memory and table, and install each function in a table slot. Not a port of
+`mir-gen`: wasm has unlimited locals (no register allocation), typed
+structured control flow (no `goto`), and no runtime patching. The honest
+shape is a new `mir-gen-wasm.c` whose hard part is turning MIR's basic
+blocks into `block`/`loop`/`br_table`, either properly (a relooper) or with
+the dispatch-loop trick (one `loop` around a `br_table` on a block index,
+which is simple and still many times faster than interpreting). Section 8
+scopes it; it is not v0.
+
+**T3: a C compiler in the browser.** clang+lld compiled to wasm exists and
+works; it is a 30+ MB download and is the playground plan's build service
+moved client-side. Rejected for the same reason that service was deferred:
+cost at the wrong end.
+
+Expected throughput, to set the frame before anyone measures:
+
+| Engine | Tight integer loop | Source |
+|---|---|---|
+| `tur jit` native, `MIR_gen` | 1x | mir-interp-tier-plan 6.3 |
+| `tur jit` native, `TUR_JIT_GEN=interp` | ~10x slower in steady state | mir-interp-tier-plan 6.3 |
+| MIR interpreter on wasm32 (c2mp) | ~7x slower than `clang -O0` | c2mp limitations 7 |
+| `turi` tree-walker on wasm | unmeasured against the above | P0 measures it |
+
+The claim this plan rests on, to be verified in P0 rather than assumed: a
+bytecode interpreter over c2mir's output is faster than a tree-walker over
+the AST for most programs, and it runs inline C. If P0 shows the tree-walker
+winning on common shapes, T1 is still worth shipping for the inline-C and
+semantics reasons, as an engine the user picks, not the default.
+
+One premise of the archived interp-tier plan reverses here and is worth
+saying plainly: that plan closed because the MIR interpreter needs the same
+executable memory as the generator, so it was "not an escape hatch". On
+wasm there is no executable memory to want; thunks are table slots. The
+interpreter is the only MIR engine wasm can have, and the 18% cold-code win
+that plan measured is a bonus, not the reason.
+
+## 5. Design (T1)
+
+### 5.1 Build shape
+
+- `cmake/mir.cmake` gains an Emscripten arm: `mir.c` and `c2mir/c2mir.c`
+  only (no `mir-gen.c`); `mir.c` includes `mir-wasm.c` under
+  `__EMSCRIPTEN__` the way the fork's own CMake does. **Verify in P1** that
+  the vendored `mir.c` carries that `#elif defined(__EMSCRIPTEN__)` branch
+  and the `mir-code-alloc-wasm.c` include; c2mp's old `emcc-setup.sh`
+  patched both in by `sed` before the fork absorbed them, and
+  `tools/update-mir.sh` copies files, not build rules.
+- A `TUR_WASM_JIT` option (default ON when `TUR_WASM`) adds `jit_engine.c`,
+  `turi/jit_ffi.c`, and the MIR TUs to the `tur_wasm` emcc command, with
+  `TUR_HAVE_JIT=1`. Link flags added: `-sWASM_BIGINT`, and
+  `wasmTable,addFunction,stackAlloc,stackSave,stackRestore` in
+  `EXPORTED_RUNTIME_METHODS`. `ALLOW_TABLE_GROWTH` is already set.
+- `jit_engine.c` grows an `__EMSCRIPTEN__` arm, kept small: no `dlopen`
+  autolink (the autolink markers become a hard `TUR_JIT_ERR_LINK` with the
+  library named), `g_jit_interp_mode` forced on, `MIR_gen_*` calls compiled
+  out, the import resolver of section 5.3, and `main` run on the calling
+  thread rather than a fresh pthread (the calling thread is the eval worker,
+  which already has the 16 MB stack).
+- `src/web/wasm_glue.c` exports `turi_wasm_jit_run(src)` beside
+  `turi_wasm_eval`, returning output and a status the page can show as the
+  engine line ("compiled" / "fell back: reason").
+
+### 5.2 The front half moves into a library
+
+`compile_to_c` and what `cmd_jit` runs after it (`hoist_tur_include_directives`,
+`scan_autolink_markers`, `jit_try_split_preamble`, the pruner call) are
+pure functions over buffers; the driver file they live in also holds the
+`cc` and `fork` paths, which is why it is excluded from `tur_core`.
+
+Split `pipeline.c` and `preamble_split.c` along that line into a `tur_front`
+OBJECT library (the in-memory front half: read, elaborate, passes, emit,
+hoist, split, prune) that `tur` and `libturi_wasm` both consume, leaving
+`cc.c`, `compile_link.c`, `cmd_*.c` and the subprocess parts where they are.
+`tests/check-driver-headers.py` already polices which file defines what, so
+the move is checkable. This is the one change that touches the native `tur`
+and it is a move, not a rewrite.
+
+### 5.3 Symbols: a generated table instead of `dlsym`
+
+`jit_import_resolver` keeps `JIT_SHIMS[]` first. Its `dlsym` tail becomes,
+under Emscripten, a lookup in `tur_wasm_jit_symtab.c`, generated at build
+time from:
+
+- the 582 prototypes of the decls region (`tools/gen-runtime-split.py`
+  already parses that text to produce it), and
+- a libc/libm subset: what the emitted program half and the stdlib's inline
+  C actually reference. c2mp's `libc_wasm32.def` is the model and a starting
+  list; a reference the table lacks fails at `MIR_link` with the name, the
+  same loud failure c2mp designed for.
+
+Taking each function's address in C forces Emscripten to retain it and
+yields the table index `MIR_load_external` wants. The whole table is
+registered once per context, before `MIR_link`.
+
+Rejected alternative: `-sMAIN_MODULE=2`, which makes `dlsym` work by
+exporting every symbol. It would resolve names with no table to maintain,
+at the cost of retaining everything and PIC codegen across the module. Keep
+it as the fallback if the generated table proves brittle.
+
+### 5.4 Headers
+
+The decls region `#include`s about twenty system headers (`stdio.h`,
+`pthread.h`, `setjmp.h`, `ucontext.h`, `regex.h`, the socket headers, ...).
+On the page there is no disk. Two ways to serve them from MEMFS, to be
+chosen by measurement in P1:
+
+- **Embed Emscripten's sysroot subset** (`--embed-file` of the headers the
+  decls region names, plus what they include). musl's headers are plain C11
+  and c2mir parses musl-derived headers today on Linux. Larger, exact.
+- **Generate declarations the way c2mp does**, from the same list that
+  generates the symbol table, so headers and symbols cannot drift. Smaller,
+  and the one c2mp settled on, but it is a second source of truth for types
+  (`pthread_t`, `jmp_buf`, `struct sockaddr`) the runtime half also sees.
+
+The pruner's "drop the heavy system includes nothing uses" already shrinks
+the problem for most programs.
+
+### 5.5 Foreign calls: exact-signature stubs for the runtime
+
+Under T1 every call from the program half into the runtime half is a foreign
+call, and `mir-wasm.c` makes each one a JS round trip with BigInt
+conversions. For a tree-walker replacement that is the hot path, not the
+edge case, and it has a second cost: a JS frame on the stack is what
+Asyncify cannot unwind through, which matters the moment JIT'd code sits
+under a fiber (continuations, `#lang r7rs` `call/cc`) or under the
+playground's frame loop.
+
+The runtime half has a finite signature set. Generate, from the decls
+region, one C stub per distinct signature (`void stub_N (void *fn, MIR_val_t
+*ras)` doing an exact `call_indirect`), and have `_MIR_get_ff_call` prefer a
+stub when the signature matches, falling back to the JS trampoline
+otherwise. c2mp's FFI notes rejected enumerating stubs because the general
+space is `4^nargs`; the runtime's actual set is a few dozen, which is a
+different problem. This is a fork change (`mir-wasm.c` gains a stub
+registry), so it rides one fork PR with anything else P1 finds.
+
+### 5.6 `setjmp` in the program half
+
+The emitter puts `setjmp` landings **in the program half**: effect handler
+escapes (`emit_effects.c`, `tur_handler_node { jmp_buf buf; ... }` in the
+decls region, `TUR_SETJMP`), `call/cc` escape landings in the CPS backend
+(`emit_cps_ir.c`, `emit_callcc`), and the DK runtime's landing pad. An
+interpreted function cannot call `setjmp` through a foreign-call stub: the
+stub's frame is what gets recorded, and it is gone when the `longjmp`
+arrives. This is true under `TUR_JIT_GEN=interp` natively too, which is why
+P0 runs the corpus there first: it tells us which fixtures this already
+breaks, with no Emscripten in the loop.
+
+The fix is to give the landing to the host. A `tur_rt_try (body, env)`
+runtime function does the `setjmp` in compiled code and calls the body (an
+interpreted function, reached through the callback path c2mp proved);
+`longjmp` then unwinds interpreter frames, which MIR's interpreter tolerates
+as long as nothing it holds across the call lives on its C stack (c2mp hit
+exactly one such buffer, `call_res_args`, and moved it). The emitter selects
+this lowering under a new `g_emit_for_interp` knob the wasm front half sets.
+`emit_split.c:896-901` already treats `setjmp` as a frame-owning call the
+splitter must not move, so the places to change are enumerable.
+
+v0 may ship before this lands: a program whose TU still calls `setjmp` is
+detected at prune time and takes the fallback (section 5.7), loudly.
+
+### 5.7 The fallback contract on the page
+
+`tur jit`'s step-6 fallback is `cc`. The page has no `cc`; its fallback is
+`turi_eval`, exactly as the embed test (`tests/turi/jit-embed.c`) does it,
+with the same parity assertion in CI. The W0070-shaped line goes to the
+console so the user knows which engine ran. The families that always fall
+back today (`__atomic_*`, `_Thread_local`) still do; two more join them on
+the page: `spawn` (the MIR interpreter is not thread-safe per context, and
+an interpreted thread entry would need its own context), and any
+`-l<name>` autolink.
+
+### 5.8 Stack depth
+
+An interpreted call nests a wasm frame of the interpreter's `eval`; the
+browser's JS stack limit bounds the depth, and c2mp measured 1,122 frames at
+`-O2`. Turmeric programs recurse: the emitter turns self tail calls into
+loops (and `TUR_MUSTTAIL` where the compiler honours it, which emcc does
+not), but a non-tail list recursion over 10k elements will overflow where
+the native JIT's 1 GB stack would not. Three responses, cheapest first:
+
+1. Report it: the worker catches `RangeError` and prints the same
+   `stack overflow: recursion too deep` line the native engine prints, then
+   rebuilds the worker (c2mp's model; Try's `stopEvalWorker` is most of it).
+2. Measure the real frame size of our `-O2` interpreter and whether
+   `-O3`/`-Os` on `mir-interp.c` alone buys depth.
+3. Longer term, a fork change: heap-allocate the interpreter's frames so
+   depth is bounded by linear memory, not the JS stack. Scope it only if 1
+   and 2 leave real programs out.
+
+### 5.9 Session model for the REPL
+
+C1 already compiles each inline-C `defn` into a resident image and binds it
+as a native; C2 (compile whole turns) is designed and not started. On the
+page the same image API runs on the interpreter engine: an image is a MIR
+module linked into the shared context, kept for the session, and redefinition
+follows the REPL's existing rules. c2mp's persistent-context model (a
+declarations preamble per turn, `MIR_set_func_redef_permission` for
+re-included inline definitions, replay-on-rebuild as the recovery path) is
+the reference for the parts C2 has not specified, and its measured cost
+(sub-millisecond per turn) is the target.
+
+### 5.10 Where it plugs in
+
+- **Try Turmeric:** an engine toggle next to `#lang` -- Interpret (today)
+  or Compile (this). Compile runs `turi_wasm_jit_run`; the console shows
+  which engine produced the output. The LSP worker stays on the interpreter
+  module.
+- **The raylib playground:** its "Build" button and the build service it
+  needed become this engine, client-side. Pure and inline-C spices (`math`,
+  `ecs`, `json`'s Turmeric half, ...) need no baked image at all under it:
+  c2mir compiles their source like any other inline C. Only cmake deps
+  (raylib's `libraylib.a`) stay pre-linked, and their exports join the
+  symbol table of 5.3. The playground plan's section 3 is amended to say so.
+- **`tur jit` natively:** unchanged. `TUR_JIT_GEN=interp` stays the
+  diagnostic it is.
+
+## 6. Fork changes (one PR, batched)
+
+The MIR-fork rule in CLAUDE.md allows one open PR at a time, so everything
+below rides together once P1 has the list:
+
+- Exact-signature stub registry in `mir-wasm.c` (5.5).
+- Whatever P1 finds in `wasm_ff_dispatch` for our carrier-word signatures
+  (`int64_t` everywhere, by-value aggregates through `BLK`).
+- If 5.8's option 3 is taken, the interpreter frame change.
+
+Nothing in this plan edits `external/mir/` by hand; the sync is
+`tools/update-mir.sh` after the fork PR merges.
+
+## 7. Phases
+
+### P0 -- the corpus under the interpreter, natively (no Emscripten)
+
+`TUR_JIT_GEN=interp bash tests/run-jit.sh` on a Release build (the
+interp-tier plan's own warning: Debug+ASan numbers are 400x off). This is
+free and answers the two questions that decide the shape of P1: which
+fixtures break under interpretation at all (the `setjmp` families of 5.6
+are the prediction), and how far the interpreter is from the generator and
+from `turi` on the shapes Try Turmeric's examples use. Record it in
+`docs/reported/` or this plan's status line.
+
+### P1 -- the spike
+
+By hand, outside CMake: emcc over `mir.c` + `c2mir.c` + `jit_engine.c` with
+the `__EMSCRIPTEN__` arm stubbed to the minimum, linked into a copy of the
+`tur_wasm` command, a hand-written symbol table for one program, and the
+section 1 `c-mix` program run under node. Measure c2mir time for a pruned
+hello TU (native is ~120 ms, 80-85% of end-to-end), module size delta over
+today's `turmeric.wasm`, recursion depth with our frame, and the JS-trampoline
+cost per runtime call. Confirm the vendored `mir.c` builds the wasm target
+without `sed`.
+
+### P2 -- `tur_front`
+
+The driver split of 5.2, landed on its own: `tur` links the same objects
+and `tests/check-driver-headers.py` passes. No wasm in this PR.
+
+### P3 -- the engine in `tur_wasm`
+
+5.1, 5.3, 5.4, and `turi_wasm_jit_run`. A node-driven twin of
+`tests/run-jit.sh` (`tests/run-jit-wasm.sh`) runs the corpus through the
+module with its own baseline file for fallbacks, the way
+`tests/jit-fallback-baseline.txt` works today. Gate: the Try Turmeric
+examples all run compiled or fall back loudly, none wrong.
+
+### P4 -- the page
+
+The engine toggle, the console's engine line, `RangeError` as a stack
+overflow message, Stop still working (worker teardown). Playwright covers
+one inline-C example end to end.
+
+### P5 -- stubs and `setjmp`
+
+5.5 (fork PR, then sync) and 5.6 (emitter knob). Re-run P3's harness; the
+baseline file should shrink, and that shrink is the test.
+
+### P6 -- REPL session
+
+5.9: C1's images on the page, then C2 as its plan specifies.
+
+## 8. T2, scoped but not scheduled
+
+What a MIR-to-wasm generator would need, so the cost is on record:
+
+- A wasm binary writer (the format is small; types, functions, code, a
+  names section for stack traces).
+- Instruction selection from MIR insns to wasm ops: nearly one-to-one for
+  arithmetic, compares, loads and stores; MIR registers become locals;
+  `BLK` arguments become memory copies, as `mir-gen` does.
+- Control flow: the dispatch-loop lowering first (every block a case of one
+  `br_table` inside one `loop`), a relooper only if profiling says so.
+- Linking: instantiate each module with the main module's `memory` and
+  `table` imported; every MIR import resolves to a table index from the 5.3
+  table; every function gets a table slot so interpreted or native code can
+  call it; `_MIR_redirect_thunk` becomes a table write.
+- Calls out of generated code are exact `call_indirect`s, so the JS
+  trampoline and 5.5's stubs are not on the hot path at all.
+
+It is a backend, and a few thousand lines in the fork. The payoff is the
+difference between "runs inline C in the browser" and "runs it near native
+speed", and the decision to build it should follow P3's numbers, not
+precede them.
+
+## 9. Risks and open questions
+
+1. **Speed against the tree-walker.** The reason to prefer this engine on
+   the page by default. P0 measures it natively; P1 on wasm.
+2. **The JS trampoline tax** (5.5) until the stub registry lands, and its
+   interaction with Asyncify and fibers: a JIT'd frame under a `call/cc`
+   capture, or under the playground's frame loop, has JS frames below it.
+   Until 5.5, programs that need to suspend across JIT'd code fall back.
+3. **`setjmp`** (5.6) is the largest correctness item and the one P0 sizes.
+4. **Depth** (5.8).
+5. **Two sources of truth for headers** if 5.4 picks generation.
+6. **Emscripten pinning.** c2mp pins by Justfile; our CI's "Set up
+   Emscripten" step should pin the same major so the trampoline ABI
+   (`wasmTable`, `addFunction`) does not move under both repos.
+7. **Threads.** The `tur_wasm` module is `-pthread`; the engine runs on the
+   eval worker only. `spawn` in JIT'd code falls back.
+
+## 10. Relationship to existing plans
+
+- **raylib-web-playground-plan.** Its architecture B (a build service) is
+  what this plan replaces; architecture A (baked interpreter images) is
+  still the right first step for raylib itself, since raylib is a cmake
+  dep either way. Amended there.
+- **mir-interp-tier-plan (archived).** Its vehicle is this plan's P0. Its
+  closing premise does not apply on wasm (section 4).
+- **aot-compiled-repl-plan.** C2 and C3 get a second host; nothing in them
+  changes.
+- **wasm-spices-plan.** W1's `*args*` hook is shared; `tur build --target
+  wasm` (AOT, emcc) and this (JIT, c2mir) are the two ways a program reaches
+  the browser, and the web-emscripten tutorial should say which is which.
+- **extras-repo-split / c2mp.** c2mp stays its own product. What this plan
+  borrows from it is design and measurements, not code; the one shared
+  artifact is the fork, which already serves both.

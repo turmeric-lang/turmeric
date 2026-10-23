@@ -125,6 +125,16 @@ that bundle.
   wall-clock limits, rate limits, content hash cache). The turmeric repo's
   deploy must not depend on it being up.
 
+### B'. The JIT engine on the page (amendment, 2026-10-23)
+
+[wasm-jit-plan](wasm-jit-plan.md) would give B's two wins -- inline C and
+any inline-C spice compiled from source -- **without the server**: c2mir and
+the MIR interpreter run in the browser (`turmeric-lang/c2mp` already does
+this on the same MIR fork this repo vendors). If that plan lands, the Build
+button runs client-side and B's service is not built. raylib itself is a
+cmake dep either way, so A's baked module stays the first step; the two
+compose rather than compete.
+
 ### C. Both, behind one screen pane
 
 The screen pane's contract is "load an Emscripten `MODULARIZE`d bundle into
