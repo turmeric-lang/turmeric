@@ -1793,6 +1793,42 @@ body.split-dragging * {
     }
 }
 
+/* Installed app still on the old black-translucent status bar (iOS reads that
+   tag only at install time). iOS sizes its viewport one status bar short while
+   the document is shorter than the screen, and paints nothing below that edge,
+   so the pinned #app above cannot reach the bottom by itself (WebKit 301108).
+   A document at least screen-tall gets the full viewport. With an opaque
+   status bar the top inset is 0 and this resolves to 100%: no change. min()
+   keeps it from overshooting where 100lvh counts the status bar (WebKit
+   316008). Specificity beats the mobile block's `html { min-height: 0 }`. */
+html.pwa {
+    min-height: min(100lvh, calc(100% + env(safe-area-inset-top, 0px)));
+}
+
+/* iOS 27 blurs the top of an installed app, well below the status bar. WebKit
+   skips the blur when a fixed box with an opaque background sits within 4px of
+   the top edge, is taller than 10px and spans at least 90% of the width
+   (LocalFrameView::fixedContainerEdges), and colours the status bar from it.
+   --safe-top grows to the strip's height so #app and every overlay that
+   already reserves --safe-top clears it. */
+.status-bar-fill { display: none; }
+@supports (-webkit-touch-callout: none) {
+    html.pwa {
+        --safe-top: max(11px, env(safe-area-inset-top, 0px));
+    }
+    html.pwa .status-bar-fill {
+        display: block;
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        height: var(--safe-top);
+        background: var(--bg-base);
+        z-index: 2147483647;
+        pointer-events: none;
+    }
+}
+
 /* The overflow popover started out mobile-only, on the reasoning that on
    desktop the buttons themselves are present in the tab bar. Two rows have
    since landed in it that have no button of their own -- "Force update", and
