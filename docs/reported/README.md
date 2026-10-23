@@ -34,6 +34,12 @@ sentence above does not cover them. If you touch this file, check
 `ls docs/reported/` against it -- an index that silently omits a quarter of the
 directory is worse for triage than no index.
 
+## Found executing r7rs-heap-frames-plan (filed 2026-10-23)
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [r7rs-toplevel-define-sees-empty-command-line](r7rs-toplevel-define-sees-empty-command-line.md) | medium | `(define n (command-line))` at top level gives `("")`: the initializer runs in `__tur_module_def_init`, from the static-init constructor, before `main` builds `*args*`. A procedure or top-level expression reading it sees the arguments |
+
 ## Found measuring recursion for the wasm JIT plan (filed 2026-10-23)
 
 | Report | Severity | One line |
@@ -623,8 +629,9 @@ prelude-variant cost it also found was
 
 Follow-ups to PR #1082, which runs a compiled `#lang r7rs` program on a 1 GiB
 stack and prints a message when it overflows. The longer-term design, a stack
-bounded by memory rather than by the C stack, is on hold in
-[r7rs-heap-frames-plan](../upcoming/r7rs-heap-frames-plan.md).
+bounded by memory rather than by the C stack, is a prototype behind
+`--enable=r7rs-segmented-stack` since 2026-10-23
+([r7rs-heap-frames-plan](../upcoming/r7rs-heap-frames-plan.md)).
 
 | Report | Severity | One line |
 | --- | --- | --- |

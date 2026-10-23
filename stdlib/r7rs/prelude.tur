@@ -2133,6 +2133,11 @@
   #define r7k_base_tls (*(unsigned char **)tur_tls_r7k_base_ptr())
   #define r7k_form_base (*(unsigned char **)tur_tls_r7k_form_base_ptr())
   #endif
+  // r7rs-heap-frames-plan: under --enable=r7rs-segmented-stack, whether an
+  // address is on a stack segment rather than the thread's own stack.  This
+  // block precedes the preamble that defines it, so the segmented stack's
+  // runtime sets it when the deep-stack thread starts; NULL otherwise.
+  static int (*r7k_seg_off_base)(const void *);
   static unsigned char *r7k_stack_base(void) {
       if (r7k_base_tls) return r7k_base_tls;
   #if defined(__GLIBC__)
@@ -2236,6 +2241,9 @@
       // call/cc as an escape.
       unsigned char *sb = r7k_stack_base();
       if (!sb) return 0;
+      // r7rs-heap-frames-plan: frames on a segment are not under one
+      // contiguous copy to the stack base, so a capture there is escape-only.
+      if (r7k_seg_off_base && r7k_seg_off_base(mark)) return 0;
       unsigned char *base = (r7k_form_base && r7k_form_base > mark) ? r7k_form_base : sb;
       unsigned char *lo = (unsigned char *)(((uintptr_t)mark - 64) & ~(uintptr_t)15);
       if (!base || base <= lo) return 0;
@@ -2253,7 +2261,11 @@
   }
   __attribute__((noinline, noreturn))
   static void r7k_restore(r7k_cont *c) {
-      unsigned char here;
+      unsigned char here = 0;
+      // r7rs-heap-frames-plan: running on a segment, the image's stack is not
+      // the one under this frame -- copy it in place; the segments die with
+      // the jump, and the next entry check drops them.
+      if (r7k_seg_off_base && r7k_seg_off_base(&here)) r7k_jump(c);
       uintptr_t sp = (uintptr_t)&here, want = (uintptr_t)c->lo - 4096;
       if (sp > want) {
           volatile unsigned char *pad = (volatile unsigned char *)__builtin_alloca(sp - want);
