@@ -2116,9 +2116,16 @@ function isSuiteRow(r) {
   return !r.kind;
 }
 
+// How long one metrics file may take, headers and body together. Generous --
+// the recent window is ~12 MB -- but finite: a request that never settles
+// would otherwise leave the page on "Loading timings..." with nothing to say.
+const FETCH_TIMEOUT_MS = 90_000;
+
+class HttpError extends Error {}
+
 async function fetchNDJSON(url) {
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+  const res = await fetch(url, { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
+  if (!res.ok) throw new HttpError(`${res.status} ${res.statusText}`);
   return {
     year: res.headers.get('X-Metrics-Year'),
     rows: parseNDJSON(await res.text()),
@@ -2176,7 +2183,12 @@ async function boot() {
       try {
         const recent = await fetchNDJSON(`${API}?window=recent`);
         if (recent.rows.length) return { ...recent, windowed: true };
-      } catch { /* fall through to the full log */ }
+      } catch (err) {
+        // Only an unpublished window (the proxy's 502) falls through to the
+        // full log. A timeout or a dropped connection would not get the file
+        // five times its size any faster; say so instead.
+        if (!(err instanceof HttpError)) throw err;
+      }
     }
     return { ...(await fetchNDJSON(API)), windowed: false };
   };
@@ -2345,4 +2357,11 @@ async function boot() {
   for (const el of redraw.keys()) ro.observe(el);
 }
 
-boot();
+// Anything boot() throws past its own fail() calls would otherwise leave the
+// spinner up forever with the reason only in the console.
+boot().catch((err) => {
+  console.error(err);
+  document.getElementById('ci-body').hidden = true;
+  document.getElementById('ci-state').hidden = false;
+  fail(`The dashboard failed to load (${err.message}).`);
+});

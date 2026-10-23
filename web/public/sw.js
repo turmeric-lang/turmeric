@@ -268,6 +268,14 @@ self.addEventListener('fetch', (event) => {
     const url = new URL(request.url);
     if (url.origin !== self.location.origin) return;
 
+    // The Worker's /api/* routes (the /ci metrics proxies) are live data, not
+    // app assets: leave them to the browser. The worker is scoped to `/`, so
+    // without this /ci's requests fell to cacheFirst -- every visit after the
+    // first was served the copy cached on the first, and each response, up to
+    // the 65 MB full timings log, was cloned into Cache Storage on its way to
+    // the page -- a lot to ask of a phone, and stale data on a dashboard.
+    if (url.pathname.startsWith('/api/')) return;
+
     // pack-status is written by this worker, not served by the origin. Answer
     // it straight from the cache so it never costs a doomed network round-trip.
     if (url.pathname === PACK_STATUS_URL) {

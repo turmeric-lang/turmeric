@@ -751,6 +751,23 @@ test.describe('CI metrics dashboard', () => {
     await expect(page.locator('#ci-provenance')).toContainText('suite-timings-2026.jsonl');
   });
 
+  // A recent window that fails on the wire (timeout, dropped connection) is not
+  // a missing window: the full log is five times its size and would not arrive
+  // either. The page says it failed instead of spinning on "Loading timings".
+  test('a failed recent-window request reports the error without fetching the full log', async ({ page }) => {
+    await stubLoc(page);
+    await stubDocs(page);
+    const full = [];
+    await page.route('**/api/ci-timings*', (route) => {
+      if (route.request().url().includes('window=recent')) return route.abort('connectionreset');
+      full.push(route.request().url());
+      return route.fulfill({ status: 200, headers: { 'X-Metrics-Year': '2026' }, body: timingsFixture() });
+    });
+    await page.goto('/ci');
+    await expect(page.locator('#ci-state.is-error')).toContainText('Could not load CI timings');
+    expect(full).toHaveLength(0);
+  });
+
   test('a missing docs file costs only its own panel', async ({ page }) => {
     const errors = [];
     page.on('pageerror', (e) => errors.push(e.message));
