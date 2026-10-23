@@ -1,8 +1,10 @@
 # A function with an `any` parameter passed to a `forall` slot reads garbage
 
+**Resolved 2026-10-23, by refusal (fix direction 2).** `hrt_rank2_params_generic` (`src/compiler/elab_call.c`) no longer counts an `any` parameter as generic at a bare forall variable: it is TUR-E0001, "rank-2 argument 'ida' takes `any` at parameter 1 ... make the parameter a type variable or leave it un-annotated", on both engines (the check is in the elaborator). Widening the word into an `any` inside the poly wrapper (direction 1) still needs the call site's instantiation, which the carrier word does not carry; reopen as a plan if a program needs it. hrt-guide and the `forall` forms entry no longer list `any` as generic. Pinned by `tests/fixtures/errors/rank2-argument-any-param`.
+
 **Severity:** medium -- wrong answer at an `int`, segfault at a `cstr`, no
 diagnostic. Found 2026-10-22 executing
-[rank2-argument-genericity-plan](../archive/rank2-argument-genericity-plan.md);
+[rank2-argument-genericity-plan](rank2-argument-genericity-plan.md);
 present before that change (it accepts `any` as generic, as the plan says, and
 the old checker accepted everything).
 

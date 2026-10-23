@@ -61,7 +61,6 @@ directory is worse for triage than no index.
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [rank2-any-param-function-segfaults](rank2-any-param-function-segfaults.md) | medium | A function whose parameter is `any`, passed to a `forall [a] (-> a a)` parameter, prints `0` for `7` (both engines) and segfaults compiled at a `cstr`: the forwarding wrapper takes and returns `tur_tagged_t` but the forall carrier calls it through an `int64_t` slot. Pre-existing; the genericity check accepts `any` as generic |
 
 ## Found checking what blocks discontinue-plan (filed 2026-10-22)
 

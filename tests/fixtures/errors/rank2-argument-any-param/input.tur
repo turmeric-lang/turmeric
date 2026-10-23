@@ -1,0 +1,7 @@
+; An `any` parameter is not generic enough for a forall slot: the forall
+; carrier calls the function with one untyped word, and `any` is a tagged
+; value, so the function read a garbage tag (0 for an int, a segfault for a
+; cstr).  Refused (rank2-any-param-function-segfaults).
+(defn apply-poly [f (forall [a] (-> a a)) x : int] : int (f x))
+(defn ida [x : any] : any x)
+(defn main [] : int (println (apply-poly ida 7)) 0)
