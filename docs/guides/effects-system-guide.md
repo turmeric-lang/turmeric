@@ -77,11 +77,10 @@ what its handle delivers, not as the value it resumes with.
   `(fn [effect-cont] R)` payload.
 - A cloneable `cont` cannot take a handler's `k`: it runs a different runtime.
 
-### Discontinuing a continuation (prototype)
+### Discontinuing a continuation
 
 `(discontinue k payload)` resumes `k` by raising a panic at the `perform`
-instead of answering it. It is a prototype behind `--enable=discontinue`.
-The raise starts inside the body, so the body's `defer`s run as it unwinds,
+instead of answering it. The raise starts inside the body, so the body's `defer`s run as it unwinds,
 and a `catch-unwind` around the `perform` can catch it and carry on:
 
 ```turmeric
@@ -104,9 +103,12 @@ and a `catch-unwind` around the `perform` can catch it and carry on:
   recovered. A `cstr` payload is the panic message. Any other payload is typed,
   as with `panic-with`, and `catch-panic-of` filters on it.
 - It consumes `k` like a `resume`, and counts as the one use of a `^linear` k.
-- Not yet supported: compiled, a `catch-unwind` inside the clause around the
-  `discontinue`; interpreted, a `^multishot` k whose body catches. See
-  [discontinue-plan](https://github.com/turmeric-lang/turmeric/blob/main/docs/upcoming/discontinue-plan.md).
+- A `catch-unwind` / `catch-panic-of` in the clause around the `discontinue`
+  takes what comes back, and a `^multishot` k can be resumed in one copy and
+  discontinued in another, on both engines. The one shape the interpreter runs
+  single-shot is a `^multishot` k whose body reaches its `perform` under a
+  `defer`. See
+  [discontinue-plan](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/discontinue-plan.md).
 
 ### Deep and shallow handlers: `handle-shallow`
 

@@ -431,19 +431,12 @@ static const ExperimentDescriptor EXPERIMENTS[] = {
       "0.64.0",                  /* expires_at -- advisory; never blocks a release */
       XF_LIFECYCLE_PROTOTYPE,
       &g_opt_reflected_measures },
-    /* discontinue (discontinue-plan): `(discontinue k payload)` resumes `k` by
-     * raising a panic at the `perform` it captured -- the body's defers run,
-     * a catch-unwind in the body may take it, and otherwise it is re-raised
-     * at the `discontinue` in the clause.  Gated while the two engines still
-     * disagree on a shape each refuses: compiled, a catch-unwind inside the
-     * clause; interpreted, a ^multishot k whose body catches. */
-    { "discontinue",
-      "`(discontinue k payload)` resumes a handler continuation by raising a panic at its `perform`",
-      "docs/upcoming/discontinue-plan.md",
-      "0.68.0",                  /* introduced */
-      "0.71.0",                  /* expires_at -- advisory; never blocks a release */
-      XF_LIFECYCLE_PROTOTYPE,
-      &g_opt_discontinue },
+    /* discontinue GRADUATED 2026-10-23, in the 0.70 line (introduced 0.68.0,
+     * prototype, advisory expires_at 0.71.0).  `(discontinue k payload)`
+     * resumes `k` by raising a panic at its `perform`, on both engines, a
+     * catch-unwind inside the clause and a ^multishot k over a catching body
+     * included.  The name moves to GRADUATED[] below.  See
+     * docs/archive/discontinue-plan.md. */
     /* script-deps (script-spice-deps-plan): a single-file script declares
      * its spices in a `(defscript :spices #map{...})` header, fetched into
      * the script-dep cache and resolved hermetically.  Gated while the key
@@ -601,6 +594,10 @@ static const char *const GRADUATED[] = {
      * it keeps the full window.  Eligible to age out at 0.66.0.
      * See docs/upcoming/aot-compiled-repl-plan.md (C1). */
     "repl-jit-inline-c",
+    /* graduated 2026-10-23, in the 0.70 line.  A program or build.tur that
+     * names --enable=discontinue keeps building.  Eligible to age out at
+     * 0.71.0.  See docs/archive/discontinue-plan.md. */
+    "discontinue",
     NULL,
 };
 

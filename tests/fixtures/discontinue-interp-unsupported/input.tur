@@ -1,7 +1,0 @@
-;;; Under --interpret `discontinue` is reported, not run: it used to
-;;; swapcontext() from the handler's stack into the body's saved context and the
-;;; process died with "stack smashing detected" (exit 134).
-(defeffect Ask [] : int)
-(defn main [] : int
-  (handle (+ 1 (perform (Ask))) (Ask [] k) (do (discontinue k "boom") 0))
-  0)

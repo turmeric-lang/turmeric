@@ -421,7 +421,6 @@ extern bool g_opt_r7rs;
  * bounded ground unfolding (refine_collect.c).  Off, `^reflect` is inert
  * (warned, never silently enforced). */
 extern bool g_opt_reflected_measures;
-extern bool g_opt_discontinue;
 extern bool g_opt_script_deps;  /* script-spice-deps-plan: --enable=script-deps */
 extern bool g_opt_quote_data;   /* quote-list-data-plan: --enable=quote-data */
 /* r7rs-heap-frames-plan (H0): --enable=r7rs-segmented-stack.  Every compiled

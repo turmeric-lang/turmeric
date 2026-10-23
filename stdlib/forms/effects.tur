@@ -21,12 +21,11 @@
 ;;; handles from the row.
 ;;;
 ;;; The compiled program lowers effects through a CPS backend. A function that
-;;; leaves its supported subset -- one that holds a `catch-unwind` inside a
-;;; handler clause, say -- is rejected with `this effect operation has no
+;;; leaves its supported subset -- a `catch-unwind` whose thunk is not a lambda
+;;; written at the form, say -- is rejected with `this effect operation has no
 ;;; lowering here`;
 ;;; `TUR_TRACE_EVICT=1` names the form that caused it. The interpreter has no such
-;;; limit. A few forms below are unfinished or differ between the two; the work
-;;; is planned in docs/upcoming/discontinue-plan.md.
+;;; limit.
 ;; Reference only: tools/gendocs.py reads the ;;@ lines, the compiler skips them.
 
 ;;; perform -- raise an effect and wait for the handler's answer.
@@ -161,7 +160,7 @@
 
 ;;; discontinue -- resume a continuation by raising a panic at its perform.
 ;;;
-;;; Prototype, behind `--enable=discontinue`. `(discontinue k payload)` resumes
+;;; `(discontinue k payload)` resumes
 ;;; `k` the way `resume` does, except that the `perform` that captured it does
 ;;; not return: it raises a panic carrying `payload` there, inside the body. The
 ;;; body's `defer`s run as it unwinds, and a `catch-unwind` / `catch-panic-of`
@@ -176,11 +175,11 @@
 ;;; the continuation, so using `k` afterwards is TUR-E0201 (TUR-E0101 for a
 ;;; `^linear` one), and it satisfies the `^linear` requirement.
 ;;;
-;;; Still refused: compiled, a `catch-unwind` inside the clause around the
-;;; `discontinue` (catch around the `handle` instead); interpreted, a
-;;; `^multishot` continuation whose body reaches its `perform` under a `defer`
-;;; or `catch-unwind`. Without the flag both engines refuse the form, and it is
-;;; typed `nil`. See docs/upcoming/discontinue-plan.md.
+;;; A `catch-unwind` / `catch-panic-of` in the clause around the
+;;; `discontinue` catches what comes back, and a `^multishot` continuation can
+;;; be resumed and discontinued in copies, on both engines. One shape the
+;;; interpreter still runs single-shot: a `^multishot` continuation whose body
+;;; reaches its `perform` under a `defer`. See docs/archive/discontinue-plan.md.
 ;;;
 ;;; Parameters:
 ;;;   k         -- the continuation bound by the handler clause
@@ -191,14 +190,13 @@
 ;;;   the panic and went on.
 ;;;
 ;;; Example:
-;;;   ;; tur --enable=discontinue run ...
 ;;;   (defeffect Ask [] : int)
 ;;;   (defn body [] : int
 ;;;     (let [r (catch-unwind (fn [] : int (+ 1 (perform (Ask)))))]
 ;;;       (if (err? r) 100 200)))
 ;;;   (handle (body) (Ask [] k) (discontinue k "no answer"))  ; => 100
 ;;;
-;;; Since: 0.68.0 (prototype)
+;;; Since: 0.68.0 (prototype); 0.70 (graduated)
 ;;@form (discontinue k exception)
 
 ;;; try-with -- another spelling of handle.

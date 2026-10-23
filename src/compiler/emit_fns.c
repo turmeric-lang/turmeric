@@ -5424,6 +5424,8 @@ static void tcg_emit_def(EmitCtx *ctx, Buf *file, TcgGroup *g) {
     Buf *saved_file = ctx->file;
     int saved_indent = ctx->indent;
     const char *saved_ret = ctx->current_fn_ret_ctype;
+    const char *saved_goto = ctx->panic_signal_goto;
+    ctx->panic_signal_goto = NULL;   /* a label belongs to its own function */
     /* byval-spine-drop-past-early-exit: a fused group is one C function for
      * several signatures; refuse the spine push in it rather than judge them. */
     bool saved_spine_safe = ctx->current_fn_spine_drop_safe;
@@ -5494,6 +5496,7 @@ static void tcg_emit_def(EmitCtx *ctx, Buf *file, TcgGroup *g) {
     ctx->file = saved_file;
     ctx->indent = saved_indent;
     ctx->current_fn_ret_ctype = saved_ret;
+    ctx->panic_signal_goto = saved_goto;
     ctx->current_fn_spine_drop_safe = saved_spine_safe;
     ctx->fn_params = saved_params;
     ctx->n_fn_params = saved_n_params;
@@ -5986,6 +5989,8 @@ static void emit_fn_def_body(EmitCtx *ctx, Buf *file, const Expr *e) {
     }
     const char *saved_current_fn_ret_ctype = ctx->current_fn_ret_ctype;
     ctx->current_fn_ret_ctype = current_fn_ret_ctype_eff;
+    const char *saved_panic_goto = ctx->panic_signal_goto;
+    ctx->panic_signal_goto = NULL;   /* a label belongs to its own function */
     bool saved_in_user_main = ctx->in_user_main;
     ctx->in_user_main = is_main_check;
     /* byval-spine-drop-past-early-exit: see EmitCtx.current_fn_spine_drop_safe.
@@ -7317,6 +7322,7 @@ static void emit_fn_def_body(EmitCtx *ctx, Buf *file, const Expr *e) {
     free((void*)ctx->env_var_name);
     ctx->env_var_name = saved_env_var_name;
     ctx->current_fn_ret_ctype = saved_current_fn_ret_ctype;
+    ctx->panic_signal_goto = saved_panic_goto;
     ctx->in_user_main = saved_in_user_main;
     ctx->current_fn_spine_drop_safe = saved_current_fn_spine_drop_safe;
     ctx->own_cur_fn = saved_own_cur_fn;

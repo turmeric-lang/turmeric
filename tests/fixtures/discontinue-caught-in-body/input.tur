@@ -1,7 +1,7 @@
 ;; discontinue-plan fixture 2 (and 4): a `catch-unwind` in the body around the
 ;; `perform` catches the panic a `discontinue` raises there, and the body goes
 ;; on: its value is the handle's, and what the `discontinue` returns.  This is
-;; what not resuming cannot do.  Behind --enable=discontinue (`flags`).
+;; what not resuming cannot do.
 (defeffect Ask [] : int)
 
 ;; 1. Caught in the body; the body's defer runs when it returns.

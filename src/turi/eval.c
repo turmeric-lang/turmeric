@@ -8868,6 +8868,78 @@ static void clone_ws_slice(TuriEnv *env, const DriveCont *src, size_t n, DriveCo
     }
 }
 
+/* turi-fiber-handle-defers-fire-at-the-wrong-time (catch-unwind half): a
+ * captured slice may hold DK_CATCH_UNWIND frames, whose boundaries are linked
+ * on g_catch_stack.  While the slice is off the stack -- the clause runs, or
+ * `k` waits to be resumed -- a panic must not find them: the clause is not
+ * under the body's catch.  So the capture unlinks them (they are the newest
+ * entries, the slice being the top of the work stack), and each resume links
+ * them back, bottom to top, as the slice's frames go back on the stack --
+ * `fresh` copies for a multishot clone, so two runs never share a boundary
+ * (each is freed when its DK_CATCH_UNWIND pops).  The capture-time originals
+ * move into the env pool, like the slice's accumulators. */
+static void ws_slice_unlink_catches(TuriEnv *env, DriveCont *frames, size_t n, bool to_pool) {
+    for (size_t i = n; i-- > 0;) {
+        if (frames[i].kind != DK_CATCH_UNWIND || !frames[i].aux) continue;
+        TuriCatchBoundary *b = (TuriCatchBoundary *)frames[i].aux;
+        for (TuriCatchBoundary **pp = &g_catch_stack; *pp; pp = &(*pp)->prev)
+            if (*pp == b) { *pp = b->prev; break; }
+        if (to_pool) {
+            TuriCatchBoundary *pb = (TuriCatchBoundary *)turi_val_alloc(env, sizeof *pb);
+            *pb = *b;
+            free(b);
+            frames[i].aux = pb;
+        }
+    }
+}
+static void ws_slice_relink_catches(DriveCont *frames, size_t n, bool fresh) {
+    for (size_t i = 0; i < n; i++) {
+        if (frames[i].kind != DK_CATCH_UNWIND || !frames[i].aux) continue;
+        TuriCatchBoundary *b = (TuriCatchBoundary *)frames[i].aux;
+        if (fresh) {
+            TuriCatchBoundary *c = (TuriCatchBoundary *)malloc(sizeof *c);
+            if (!c) abort();
+            *c = *b;
+            frames[i].aux = c;
+            b = c;
+        }
+        b->prev = g_catch_stack;
+        g_catch_stack = b;
+    }
+}
+
+/* The body a `catch-unwind` thunk runs when the driver applies it: the thunk
+ * must be a lambda written at the form (the driver evaluates it to a closure
+ * and applies it on the work stack, so a perform in it sees the prompt).  The
+ * elaborator lifts such a lambda and leaves a reference to it, resolved here
+ * as ws_capturable's EX_CALL arm resolves a direct callee. */
+static const Expr *ws_catch_thunk_body(TuriEnv *env, EvalFrame *frame, const Expr *th) {
+    while (th) {
+        switch (th->kind) {
+            case EX_ASCRIBE:     th = th->as.ascribe_.inner; continue;
+            case EX_POLY_WRAP:   th = th->as.poly_wrap_.inner; continue;
+            case EX_FN_TO_FAT:   th = th->as.fn_to_fat_.inner; continue;
+            case EX_POLY_TO_FAT: th = th->as.poly_to_fat_.inner; continue;
+            case EX_FN:      return ((FnDef *)th->as.fn_.fn)->body;
+            case EX_FN_DEF:  return ((FnDef *)th->as.fn_def_.fn)->body;
+            case EX_CLOSURE:
+                return th->as.closure_.closure && th->as.closure_.closure->fn
+                     ? th->as.closure_.closure->fn->body : NULL;
+            case EX_VAR: {
+                if (!th->as.var.binding || !th->as.var.binding->name) return NULL;
+                TuriValue fv = eval_lookup(env, frame, th->as.var.binding->name->name);
+                if (fv.tag != TURI_CLOSURE || !fv.as_closure || fv.as_closure->native ||
+                    !fv.as_closure->fn)
+                    return NULL;
+                const Expr *b = ((FnDef *)fv.as_closure->fn)->body;
+                return (b && b->kind != EX_INLINE_C) ? b : NULL;
+            }
+            default: return NULL;
+        }
+    }
+    return NULL;
+}
+
 /* turi-effect-perform-keeps-its-continuation: an expression that can neither
  * perform nor capture anything, nor mention `k` -- literals, variables other
  * than k, and builtin operators over those. */
@@ -9752,6 +9824,14 @@ static bool ws_capturable_rec(TuriEnv *env, EvalFrame *frame, const Expr *e, int
         return ws_capturable(env, frame, e->as.if_.cond, depth) &&
                ws_capturable(env, frame, e->as.if_.then_, depth) &&
                ws_capturable(env, frame, e->as.if_.else_or_null, depth);
+    case EX_CATCH_UNWIND: {
+        /* The driver runs the thunk beneath a DK_CATCH_UNWIND frame, which a
+         * capture carries in the slice (ws_slice_unlink_catches), so a
+         * perform in the thunk is as capturable as one outside it -- and a
+         * ^multishot k over it is no longer the fiber's single shot. */
+        const Expr *tb = ws_catch_thunk_body(env, frame, e->as.catch_unwind_.thunk);
+        return tb && ws_capturable(env, frame, tb, depth - 1);
+    }
     case EX_WHILE:
         /* DK_WHILE descends both halves, so a perform/resume in either lands
          * in the driver with the prompt visible -- exactly like an `if`.  A
@@ -9812,6 +9892,19 @@ static bool ws_capturable_rec(TuriEnv *env, EvalFrame *frame, const Expr *e, int
          * DK_RESUME_K.  Either may perform without forcing the fiber path. */
         return ws_capturable(env, frame, e->as.resume_.resume->k, depth) &&
                ws_capturable(env, frame, e->as.resume_.resume->value, depth);
+    case EX_PANIC:
+        /* A raise is a leaf: evaluated synchronously, it sets the panic
+         * signal, which the driver's frames unwind -- through a captured
+         * slice's DK_CATCH_UNWIND too.  Capturable when its payload cannot
+         * perform. */
+        return !ws_has_perform(e->as.panic_.payload);
+    case EX_DISCONTINUE:
+        /* discontinue-plan: the driver's EX_DISCONTINUE arm is a resume whose
+         * delivery raises (DK_RESUME with the raise), so it is as capturable
+         * as a resume -- a clause that resumes one copy of a ^multishot k and
+         * discontinues another stays on the work-stack path. */
+        return ws_capturable(env, frame, e->as.discontinue_.discontinue->k, depth) &&
+               ws_capturable(env, frame, e->as.discontinue_.discontinue->exception, depth);
     case EX_CALL: {
         for (uint32_t i = 0; i < e->as.call_.n_args; i++)
             if (!ws_capturable(env, frame, e->as.call_.args[i], depth)) return false;
@@ -10863,6 +10956,7 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                         wc->frames = (DriveCont *)malloc(nf * sizeof(DriveCont));
                         if (!wc->frames) abort();
                         memcpy(wc->frames, &st[pidx + 1], nf * sizeof(DriveCont));
+                        ws_slice_unlink_catches(env, wc->frames, nf, false);
                     }
                     wc->handler        = (HandleExpr *)st[pidx].aux;
                     wc->handler_frame  = st[pidx].frame;
@@ -10888,6 +10982,7 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                 if (nf) {
                     wc->frames = (DriveCont *)turi_val_alloc(env, nf * sizeof(DriveCont));
                     memcpy(wc->frames, &st[pidx + 1], nf * sizeof(DriveCont));
+                    ws_slice_unlink_catches(env, wc->frames, nf, true);
                     /* Re-home each captured frame's malloc'd arg accumulator
                      * (DK_BUILTIN_ARG / DK_CALL_ARG / DK_MAKE_STRUCT `.aux`)
                      * into pool memory.  The slice slots st[pidx+1 ..] are
@@ -10968,9 +11063,7 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
             }
             case EX_DISCONTINUE: {
                 /* discontinue-plan: the same two halves as a resume (k, then
-                 * the payload); DK_RESUME raises instead of delivering.  Off
-                 * by default: the eval_expr arm reports it. */
-                if (!g_opt_discontinue) goto drive_default;
+                 * the payload); DK_RESUME raises instead of delivering. */
                 DRIVE_PUSH(((DriveCont){ .kind = DK_RESUME_K, .expr = control,
                                          .frame = cf, .tail = tail }));
                 control = control->as.discontinue_.discontinue->k; tail = false; descending = true;
@@ -11243,7 +11336,7 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                 have_apply = true;
                 break;
             }
-            default: drive_default: {
+            default: {
                 /* SR N3: single-operand black-box forms descend their operand on
                  * the work-stack (DK_UNARY), so recursion threaded through a
                  * cast/ascribe/return/set/transparent-shim stays heap-bounded. */
@@ -11522,6 +11615,7 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                      * its activations finish and release as if nothing had
                      * been performed.  The clause was only this resume, so its
                      * frame, k and the capture are dead from here. */
+                    ws_slice_relink_catches(wc->frames, wc->n_frames, false);
                     for (size_t i = 0; i < wc->n_frames; i++)
                         DRIVE_PUSH(wc->frames[i]);
                     env->current_module = wc->perf_module;
@@ -11540,6 +11634,7 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                 if (wc->n_frames) {
                     DriveCont *clone = (DriveCont *)malloc(wc->n_frames * sizeof(DriveCont));
                     clone_ws_slice(env, wc->frames, wc->n_frames, clone);
+                    ws_slice_relink_catches(clone, wc->n_frames, true);
                     for (size_t i = 0; i < wc->n_frames; i++)
                         DRIVE_PUSH(clone[i]);
                     TURI_DRIVE_FREE(clone);
@@ -11552,9 +11647,11 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                 drive_raise_in_slice:
                     /* The slice is back on the stack; raise at its hole.  A
                      * driver boundary takes the signal as the loop unwinds the
-                     * slice's frames (no slice holds a defer or catch-unwind:
-                     * ws_capturable refuses both), so the panic reaches the
-                     * clause, as the compiled runtime re-raises it there. */
+                     * slice's frames -- a DK_CATCH_UNWIND in the slice (linked
+                     * back above) catches it there; nothing else does, since
+                     * ws_capturable refuses a defer -- so otherwise the panic
+                     * reaches the clause, as the compiled runtime re-raises it
+                     * there. */
                     turi_raise_payload(env, v, (int)dex->as.discontinue_.discontinue->exception->type.kind,
                                        dex->span);
                     cur = turi_nil();
@@ -14057,16 +14154,12 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
         return eval_resume_cont(env, frame, k.as_cont, val);
     }
 
-    /* (discontinue k exception) -- not supported.  It used to store an error in
-     * the continuation and swapcontext() from the HANDLER's stack to the body's
-     * saved context, which is not a resume (the body was never suspended at a
-     * perform on this path): the process died with "stack smashing detected".
-     * Report it as the compiled backend does. */
+    /* (discontinue k exception): resume k by raising the payload at its
+     * perform (discontinue-plan).  The fiber path: the work-stack driver has
+     * its own arm (EX_DISCONTINUE, DK_RESUME raising). */
     case EX_DISCONTINUE: {
         DiscontinueExpr *de = e->as.discontinue_.discontinue;
-        /* discontinue-plan, behind --enable=discontinue: resume k by raising
-         * the payload at its perform. */
-        if (g_opt_discontinue && de) {
+        if (de) {
             TuriValue k = eval_expr(env, frame, de->k);
             if (turi_is_error(k) || env_signaled(env)) return k;
             TuriValue exc = eval_expr(env, frame, de->exception);
@@ -14079,15 +14172,7 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
             return eval_resume_cont_raise(env, frame, k.as_cont, exc,
                                           (int)de->exception->type.kind, e->span);
         }
-        if (de) {
-            TuriValue exc = eval_expr(env, frame, de->exception);
-            if (turi_is_error(exc) || env_signaled(env)) return exc;
-        }
-        return turi_error("eval: discontinue is not supported: neither the compiler "
-                          "nor the interpreter can raise at the perform. To end the "
-                          "handled body early, leave the clause without resuming k; "
-                          "for a failure the caller sees, return a Result from the clause "
-                          "(--enable=discontinue runs it: prototype)");
+        return turi_error("eval: discontinue: malformed form");
     }
 
     /* (cont? k) — true if k is an unconsumed continuation. */

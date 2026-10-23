@@ -38,7 +38,7 @@ panic/defer/catch/effect/handle/gen 588 passed, 0 failed; `run-leak-check.sh`
 
 **Severity: medium** (engine divergence; contradicts error-handling-guide's
 "Defer thunks registered before the panic are fired in reverse order during
-unwinding"). It also **blocks [discontinue-plan](../upcoming/discontinue-plan.md)
+unwinding"). It also **blocks [discontinue-plan](discontinue-plan.md)
 fixture 1 as written**: a `discontinue` raises inside the body, the body's
 `defer` lives in the body function, and the plan says the panic reaches the
 top level uncaught after that defer runs. Found 2026-10-22 checking what blocks

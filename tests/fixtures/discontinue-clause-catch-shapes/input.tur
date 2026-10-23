@@ -1,0 +1,53 @@
+;; cps-catch-unwind-cannot-cross-an-effect-capture: a catch-unwind /
+;; catch-panic-of inside a handler CLAUSE, on both engines -- around a resume
+;; whose body returns, around one whose body panics, around a discontinue, a
+;; typed catch that takes the payload and one that lets it pass to an outer
+;; catch, and a ^multishot k resumed under one catch and discontinued under
+;; another.
+(defeffect Ask [] : int)
+
+(defn quiet [] : int (+ 1 (perform (Ask))))
+(defn loud [] : int (do (perform (Ask)) (panic "body panicked") 0))
+
+(defn ok-path [] : int
+  (handle (quiet) (Ask [] k)
+    (let [r (catch-unwind (fn [] : int (resume k 41)))]
+      (if (err? r) -1 (ok-val r)))))
+
+(defn body-panics [] : int
+  (handle (loud) (Ask [] k)
+    (let [r (catch-unwind (fn [] : int (resume k 1)))]
+      (if (err? r) 7 -2))))
+
+(defn discontinued [] : int
+  (handle (quiet) (Ask [] k)
+    (let [r (catch-unwind (fn [] : int (discontinue k "stop")))]
+      (if (err? r) 8 -3))))
+
+(defn typed-takes [] : int
+  (handle (quiet) (Ask [] k)
+    (let [r (catch-panic-of int (fn [] : int (discontinue k 99)))]
+      (if (err? r) 9 -4))))
+
+(defn typed-passes [] : int
+  (let [outer (catch-unwind
+                (fn [] : int
+                  (handle (quiet) (Ask [] k)
+                    (let [r (catch-panic-of int (fn [] : int (discontinue k "a string")))]
+                      (if (err? r) -5 -6)))))]
+    (if (err? outer) 10 -7)))
+
+(defn multishot [] : int
+  (handle (quiet) (Ask [] ^multishot k)
+    (let [a (catch-unwind (fn [] : int (resume k 1)))
+          b (catch-unwind (fn [] : int (discontinue k "x")))]
+      (+ (if (err? a) -100 (ok-val a)) (if (err? b) 1000 -1000)))))
+
+(defn main [] : int
+  (println (ok-path))
+  (println (body-panics))
+  (println (discontinued))
+  (println (typed-takes))
+  (println (typed-passes))
+  (println (multishot))
+  0)

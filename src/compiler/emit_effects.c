@@ -575,32 +575,27 @@ char *emit_effects_resume(EmitCtx *ctx, Buf *body, const Expr *e) {
 }
 
 char *emit_effects_discontinue(EmitCtx *ctx, Buf *body, const Expr *e) {
-    /* (discontinue k exception): the fiber lowering that marked the fiber done
-     * and abort()ed is gone, and the CPS backend has no rule for it
-     * (`BODY-UNSUPPORTED EX_DISCONTINUE`), so every function holding one is
-     * evicted and the build used to fail with a message about the `perform`.
-     * Name the form that is the cause. */
-    (void)ctx; (void)body;
-    /* discontinue-plan: with the experiment on, the CPS backend lowers it
-     * (a raising CT_RESUME), so reaching the direct emitter means the
-     * enclosing function was evicted -- most often for a catch-unwind inside
-     * a handler clause, which a case body cannot hold yet. */
-    if (g_opt_discontinue) {
-        diag_emit(DIAG_ERROR, e->span,
-                  "this `discontinue` has no lowering here: the enclosing function "
-                  "left the CPS backend's supported subset (a `catch-unwind` inside "
-                  "a handler clause is the usual cause; it cannot be lowered yet). "
-                  "Catch around the `handle` instead, or run with TUR_TRACE_EVICT=1 "
-                  "to see which form evicted the function.");
+    /* (discontinue k exception) in a function the direct emitter holds.  The
+     * CPS backend is its lowering; here the form names itself as the cause
+     * of the failed build rather than leaving a message about the `perform`. */
+    /* cps-catch-unwind-cannot-cross-an-effect-capture: a `catch-unwind` thunk
+     * the CPS backend translated inline in a handler clause (its FnDef is
+     * cps_catch_inlined) still gets a definition of its own, emitted here,
+     * that nothing calls -- the clause runs the inline copy.  Its body only
+     * has to compile; reaching it would mean the inline lowering did not run. */
+    if (ctx->own_cur_fn && ctx->own_cur_fn->cps_catch_inlined) {
+        indent_buf(body, ctx->indent);
+        buf_puts(body, "tur_panic(\"discontinue: a catch-unwind thunk ran outside its handler clause\");\n");
         return atom_nil();
     }
+    (void)body;
+    /* discontinue-plan: the CPS backend lowers it (a raising CT_RESUME), so
+     * reaching the direct emitter means the enclosing function left the CPS
+     * backend's supported subset. */
     diag_emit(DIAG_ERROR, e->span,
-              "`discontinue` has no lowering in the compiled backend yet: the "
-              "CPS backend cannot raise at the `perform`. To end the handled "
-              "body early, leave the clause without resuming `k`; for a failure "
-              "the caller sees, return a `Result` from the clause. "
-              "(The interpreter does not run `discontinue` either.) "
-              "--enable=discontinue lowers it (prototype).");
+              "this `discontinue` has no lowering here: the enclosing function "
+              "left the CPS backend's supported subset. Run with "
+              "TUR_TRACE_EVICT=1 to see which form evicted the function.");
     return atom_nil();
 }
 

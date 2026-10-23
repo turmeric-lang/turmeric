@@ -1,5 +1,18 @@
 # `tur --interpret`: a fiber-path `handle` fires the body's pending `defer`s at the wrong time
 
+**Narrowed 2026-10-23: the `catch-unwind` half of case 5 is fixed; a `defer`
+is what is left.** A `catch-unwind` whose thunk is a lambda at the form is now
+work-stack capturable: the driver already ran it as a DK_CATCH_UNWIND frame,
+and a capture now carries that frame in the slice -- its boundary unlinked
+from `g_catch_stack` while the slice is off the stack, and linked back (a
+fresh copy per multishot clone) when a resume pushes the slice back
+(`ws_slice_unlink_catches` / `ws_slice_relink_catches`, `src/turi/eval.c`).
+A `panic` whose payload cannot perform and a `discontinue` are capturable too.
+So `cps-catch-unwind-multishot` and `discontinue-multishot` run on both
+engines. A multi-shot resume over a body that reaches a `perform` under a
+`defer` still takes the single-shot fiber and is refused: fix direction 1
+below, for the defer half, is what is left.
+
 **Narrowed again 2026-10-22: the stored-`k` case is fixed too; what is left
 is the single-shot limit.** Each side of a fiber `handle` now has its own
 defer chain (`fiber_enter_body`; fixed with

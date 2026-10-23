@@ -6366,6 +6366,7 @@ static void emit_gen_functions(EmitCtx *ctx, const GenDef *def) {
     const char *gen_saved_ret = ctx->current_fn_ret_ctype;
     const char *gen_saved_frame = ctx->frame_var;
     bool gen_saved_brk = ctx->panic_signal_is_break;
+    const char *gen_saved_goto = ctx->panic_signal_goto;
     /* ...nor are its pass-by-pointer parameters: a captured `r` that the
      * enclosing spec takes as `const T *` is a plain carrier field here, and
      * reading it as the spec's pbp param spilled the word and passed its
@@ -6377,6 +6378,7 @@ static void emit_gen_functions(EmitCtx *ctx, const GenDef *def) {
     ctx->current_fn_spine_drop_safe = false;
     ctx->frame_var = NULL;
     ctx->panic_signal_is_break = false;
+    ctx->panic_signal_goto = NULL;
     ctx->n_pbp_params = 0;
 
     emit_stmt(ctx, &fn_body, def->body);
@@ -6384,6 +6386,7 @@ static void emit_gen_functions(EmitCtx *ctx, const GenDef *def) {
     ctx->current_fn_spine_drop_safe = gen_saved_spine_safe;
     ctx->frame_var = gen_saved_frame;
     ctx->panic_signal_is_break = gen_saved_brk;
+    ctx->panic_signal_goto = gen_saved_goto;
     ctx->n_pbp_params = gen_saved_npbp;
 
     /* After body: mark done and return NULL */
@@ -6837,6 +6840,11 @@ void emit_panic_signal_return(EmitCtx *ctx, Buf *body) {
     if (ctx->panic_signal_is_break) {
         indent_buf(body, ctx->indent);
         buf_puts(body, "if (tur_panicking) break;\n");
+        return;
+    }
+    if (ctx->panic_signal_goto) {
+        indent_buf(body, ctx->indent);
+        buf_printf(body, "if (tur_panicking) goto %s;\n", ctx->panic_signal_goto);
         return;
     }
     /* defer-in-generic-hof-skipped-on-caught-panic: this early return leaves

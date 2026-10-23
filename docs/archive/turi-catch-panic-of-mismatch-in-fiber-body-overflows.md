@@ -1,7 +1,7 @@
 # `tur --interpret`: a mismatched `catch-panic-of` re-raising out of a fiber body corrupts the driver stack
 
 **RESOLVED 2026-10-22** (archived), while implementing `discontinue`
-([discontinue-plan](../upcoming/discontinue-plan.md)). The mechanism was the
+([discontinue-plan](discontinue-plan.md)). The mechanism was the
 one guessed below. A fiber body's catch boundaries were on the same
 thread-local stack as the handler side's, so the mismatched `catch-panic-of`
 re-raise longjmp'd from the body's fiber stack to a boundary on the handler's

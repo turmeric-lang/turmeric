@@ -5,7 +5,7 @@
 ## Disposition (2026-10-21)
 
 - Item 1 (`discontinue` runs on neither engine): decision -- keep it and
-  implement it on both engines. Plan: [discontinue-plan](../upcoming/discontinue-plan.md).
+  implement it on both engines. Plan: [discontinue-plan](discontinue-plan.md).
 - Items 2-3 and the composed-handler note: decided and planned in
   [effect-continuation-followups-plan](effect-continuation-followups-plan.md).
 - Everything else: resolved, see

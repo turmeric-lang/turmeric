@@ -2,7 +2,7 @@
 
 **RESOLVED 2026-10-22** (archived the day it was found). Found while landing the
 CPS `catch-unwind` lowering
-([cps-catch-unwind-cannot-cross-an-effect-capture](../reported/cps-catch-unwind-cannot-cross-an-effect-capture.md)):
+([cps-catch-unwind-cannot-cross-an-effect-capture](cps-catch-unwind-cannot-cross-an-effect-capture.md)):
 `defer-cps-caught-panic` started failing under `tests/run-jit.sh` once its
 catch-unwind thunks became part of their callers' CPS bodies. The defect was
 already on `main` (`a0a718f3`); the new lowering only routed that fixture

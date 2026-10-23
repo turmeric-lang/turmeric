@@ -1,9 +1,8 @@
 ;; discontinue-plan fixture 3: nothing in the body catches the raise, so it
 ;; comes back to the clause at the `discontinue`, where a `catch-unwind` takes
-;; it.  The body's defer runs first, as the body unwinds.  Interpreter only for
-;; now: the compiled backend cannot hold a catch-unwind in a handler clause
-;; (cps-catch-unwind-cannot-cross-an-effect-capture); catching around the
-;; handle (discontinue-caught-in-body case 4) is the compiled way.
+;; it.  The body's defer runs first, as the body unwinds.  Both engines: the
+;; compiled backend holds a catch-unwind in a handler clause as an inline
+;; catch region (cps-catch-unwind-cannot-cross-an-effect-capture).
 (defeffect Ask [] : int)
 
 (defn body [] : int

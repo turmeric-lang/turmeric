@@ -3367,13 +3367,8 @@ Expr *elab_discontinue(Elab *e, const Form *call) {
 
     /* discontinue-plan: a discontinue returns what a resume of `k` would --
      * the handle's answer, when the body caught the raise and went on -- so a
-     * clause can end in it.  Without the experiment it stays `nil`, and both
-     * engines refuse it. */
-    Type dtype = TYPE_NIL;
-    if (g_opt_discontinue) {
-        experiment_warn_if_used("discontinue");
-        dtype = cont_resume_result_type(k, TYPE_NIL);
-    }
+     * clause can end in it. */
+    Type dtype = cont_resume_result_type(k, TYPE_NIL);
     Expr *out = expr_new(e->arena, EX_DISCONTINUE, dtype, call->span);
     out->as.discontinue_.discontinue = discontinue;
     return out;

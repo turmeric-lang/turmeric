@@ -22,7 +22,7 @@ function in the clause, a kept `k` never resumed, and a kept `k` resumed after
 its handle exited. The `catch-unwind`-in-the-clause shapes of the table below
 also run interpreted now. They are not in the fixture yet, because compiled
 they hit
-[cps-catch-unwind-cannot-cross-an-effect-capture](../reported/cps-catch-unwind-cannot-cross-an-effect-capture.md).
+[cps-catch-unwind-cannot-cross-an-effect-capture](cps-catch-unwind-cannot-cross-an-effect-capture.md).
 
 Suite: `run-turi.sh` 2993 passed, 0 failed.
 
@@ -35,7 +35,7 @@ off the NULL end.
 
 **Severity: high** (a segfault on an ordinary shape; interpreter only, the
 compiled program is correct). It **blocks
-[discontinue-plan](../upcoming/discontinue-plan.md)** on the interpreter: the
+[discontinue-plan](discontinue-plan.md)** on the interpreter: the
 plan's fixture 1 gives the body a `defer`, which sends the `handle` to the
 fiber runtime, and its fixture 3 discontinues from inside a `catch-unwind` in
 the clause, a scope like the `let` below. Found 2026-10-22 checking what blocks

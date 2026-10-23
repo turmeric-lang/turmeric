@@ -1,5 +1,26 @@
 # Compiled: an effect capture cannot cross a `catch-unwind`
 
+**Resolved 2026-10-23: a catch inside a handler clause lowers too.** A handler
+case is straight-line C that dk_perform calls and that returns its value, so it
+holds no chain to put a catch prompt on -- but it needs none: inside a case a
+`resume` or `discontinue` is a synchronous `dk_invoke`, which comes back with
+the panic signal raised when the resumed body panicked and nothing in it caught.
+So `handle_case_ok_rec` admits a catch CT_RESET there (its delimited body by the
+case grammar minus perform, loop and call/cc), and `emit_case_catch`
+(`src/compiler/emit_cps_ir.c`) emits it as an inline region: the delimited
+body's delivery boxes Ok into the binder and jumps past the catch arm, and every
+panic check inside the region -- the CPS emitter's and the delegated direct
+emitter's, through `emit_panic_signal_return`'s new `panic_signal_goto` --
+jumps to the arm, which takes the panic as `__dk_panic_catch` does (a
+`catch-panic-of` only one of its type). The thunk's own lifted definition,
+which nothing calls, compiles to a trap instead of refusing its `discontinue`.
+Pinned by `discontinue-caught-in-clause` and `discontinue-clause-catch-shapes`
+(Ok path, a resumed body that panics, a discontinue, a typed catch that takes
+and one that passes, `^multishot` copies), all on both engines. The limits named
+below as outside the lowering -- a thunk that is not a lambda at the form, a
+value wider than a word, a runtime helper's panic, another thread -- are
+unchanged.
+
 **Narrowed 2026-10-22: the body-side shapes are fixed; a `catch-unwind` inside
 a handler CLAUSE is what is left.** The false TUR-W0033 is gone on every engine
 (`collect_called_thunk`, `src/passes/effect_check.c`). Compiled, a
@@ -57,7 +78,7 @@ And on a thread other than `main`'s, a catch prompt never sees a panic at all.
 
 **Severity: medium** (as filed; low-medium for what is left). A compile-time refusal, not a wrong answer, and
 `tur --interpret` runs every shape below. It **blocks
-[discontinue-plan](../upcoming/discontinue-plan.md)** on the compiled engine:
+[discontinue-plan](../archive/discontinue-plan.md)** on the compiled engine:
 the plan's reason for keeping `discontinue` is that a `catch-unwind` in the
 body, around the `perform`, can catch the raise and carry on, and today no
 compiled program can put a `catch-unwind` between a `perform` and its handler.

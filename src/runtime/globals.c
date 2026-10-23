@@ -135,7 +135,6 @@ const char *g_repl_start_lang = NULL; /* saffron-lang-plan S8 / r7rs R9: `tur re
 bool g_opt_option_niche = true;   /* graduated 2026-09-03; TUR_OPTION_NICHE=0 restores the tagged monomorph */
 bool g_opt_regions = true;       /* graduated 2026-09-05; TUR_REGIONS=0 restores malloc + unbracketed calls */
 bool g_opt_reflected_measures = false; /* reflected-measures RF0: --enable=reflected-measures */
-bool g_opt_discontinue = false; /* discontinue-plan: --enable=discontinue */
 bool g_opt_script_deps = false; /* script-spice-deps-plan: --enable=script-deps */
 bool g_opt_quote_data = false;  /* quote-list-data-plan: --enable=quote-data */
 bool g_opt_r7rs_segmented_stack = false; /* r7rs-heap-frames-plan: --enable=r7rs-segmented-stack */

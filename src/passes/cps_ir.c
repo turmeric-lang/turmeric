@@ -2977,7 +2977,7 @@ static CTerm *build_await(CpsB *b, Expr *e, CVar x, CTerm *cont, Pending *p) {
  * evicts. */
 static CTerm *build_discontinue(CpsB *b, Expr *e, CVar x, CTerm *cont, Pending *p) {
     DiscontinueExpr *d = e->as.discontinue_.discontinue;
-    if (!g_opt_discontinue || !d || !d->k || !d->exception) return NULL;
+    if (!d || !d->k || !d->exception) return NULL;
     const Expr *kv = ascribe_peel(d->k);
     if (kv && kv->kind == EX_VAR && kv->as.var.binding && kv->as.var.binding->cont_is_wrapper)
         return NULL;

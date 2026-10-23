@@ -1,8 +1,8 @@
 ;; discontinue-plan fixture 5: copies of a ^multishot k, one resumed and one
 ;; discontinued.  Each copy carries the body's catch-unwind: the resumed one
-;; returns Ok 2, the discontinued one is caught (100).  Compiled only: the
-;; interpreter's fiber runtime is single-shot
-;; (turi-fiber-handle-defers-fire-at-the-wrong-time).
+;; returns Ok 2, the discontinued one is caught (100).  Both engines: the
+;; interpreter's work-stack capture carries the body's catch-unwind boundary
+;; (turi-fiber-handle-defers-fire-at-the-wrong-time's catch-unwind half).
 (defeffect Ask [] : int)
 
 (defn body [] : int

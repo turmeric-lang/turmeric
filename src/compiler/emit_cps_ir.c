@@ -2777,9 +2777,27 @@ static bool handle_case_ok(const CTerm *t) {
     return joins_closed_rec(t, def, 0);
 }
 
+/* cps-catch-unwind-cannot-cross-an-effect-capture: >0 while admitting the
+ * delimited body of a catch inside a handler case (emit_case_catch).  The
+ * region is emitted inline in the case's C function, so what it may hold is
+ * the case grammar minus what would need a chain of its own: no perform (a
+ * re-opening case delivers through `__kont`), no loop helper, no call/cc. */
+static int g_case_catch_depth;
+
 static bool handle_case_ok_rec(const CTerm *t) {
     if (!t) return false;
     switch (t->kind) {
+        case CT_RESET: {
+            /* A `catch-unwind` / `catch-panic-of` in the case body: a catch
+             * region around straight-line case code, where a `resume` or a
+             * `discontinue` is a synchronous dk_invoke, so a panic it brings
+             * back is a signal the region's checks can take. */
+            if (!t->as.reset.is_catch) return false;
+            g_case_catch_depth++;
+            bool ok = handle_case_ok_rec(t->as.reset.delim);
+            g_case_catch_depth--;
+            return ok && handle_case_ok_rec(t->as.reset.body);
+        }
         case CT_APPCONT:
             /* A jump to a join the case binds (KK_VAR), or the case's own
              * delivery of its value to the handle's prompt.  The KK_VAR arm is
@@ -2829,6 +2847,7 @@ static bool handle_case_ok_rec(const CTerm *t) {
             return t->as.resume.k.kind == CA_VAR && atom_ok(&t->as.resume.v)
                 && handle_case_ok_rec(t->as.resume.body);
         case CT_LOOP: {
+            if (g_case_catch_depth) return false;
             /* A `while` in the case body (`(Choose [lo hi] ^multishot k)
              * (let [^mut a 0 ^mut i lo] (while (<= i hi) ...) a)` -- the
              * multi-shot fold).  The loop is emitted as its own helper whose
@@ -2849,6 +2868,7 @@ static bool handle_case_ok_rec(const CTerm *t) {
         case CT_LETRAW:
             return letraw_ok(t) && handle_case_ok_rec(t->as.letraw.body);
         case CT_CALLCC:
+            if (g_case_catch_depth) return false;
             /* A call/cc / escape hoisted into a handler case body (e.g. `(resume k
              * (+ 1 (escape f)))`): emit_lifted emits the case through emit_term,
              * which lowers CT_CALLCC via the native setjmp landing (emit_callcc),
@@ -2873,6 +2893,7 @@ static bool handle_case_ok_rec(const CTerm *t) {
              * and Track A LH_RESUME_CONT paths).  Args must be slot atoms; the
              * continuation stays in the CASE context (it may resume the case's own
              * `k`), so it is admitted by handle_case_ok, not perform_body_ok. */
+            if (g_case_catch_depth) return false;
             for (uint32_t i = 0; i < t->as.perform.n; i++)
                 if (!atom_ok(&t->as.perform.args[i])) return false;
             return handle_case_ok_rec(t->as.perform.body);
@@ -8007,6 +8028,12 @@ typedef struct {
     int        *helper_ctr;  /* per-function unique-helper counter */
     bool        shift_mode;  /* true inside a shift-body / handler-case helper: KK_PROMPT -> return */
     bool        ret_mode;    /* true inside a perform-continuation frame: KK_RET -> return value */
+    /* cps-catch-unwind-cannot-cross-an-effect-capture: inside a catch region
+     * of a handler case (emit_case_catch), the Result binder a KK_PROMPT
+     * delivery boxes Ok into, its C type, and the label past the catch arm. */
+    const char *catch_box;
+    const char *catch_box_ct;
+    const char *catch_done;
     bool        handler_case_mode;  /* E7: true directly inside a LH_HANDLER_CASE body -- a
                                      * terminal tail `resume` here emits dk_tail_resume (yield) */
     bool        case_tail_resume;   /* E7: this case was installed with dk_handler_tail (DEEP +
@@ -9266,6 +9293,14 @@ static void emit_deliver_ty(CE *ce, const CKont *kont, const char *v, const Type
             ce_line(ce, "return %s;", sv);
         else
             ce_line(ce, "return dk_run(__kont, %s);", sv);
+        free(sv);
+    } else if (kont->kind == KK_PROMPT && ce->catch_box) {
+        /* The delimited body of a catch in a handler case (emit_case_catch):
+         * box its value as Ok, as dk_prompt_catch does, and skip the arm. */
+        char *sv = slot_store_reap(ce->ctx, kont->ty, vty, v);
+        ce_line(ce, "%s = (%s)(intptr_t)tur_box_ok((int64_t)(intptr_t)%s);",
+                ce->catch_box, ce->catch_box_ct, sv);
+        ce_line(ce, "goto %s;", ce->catch_done);
         free(sv);
     } else if (kont->kind == KK_PROMPT) {
         /* Deliver to the innermost prompt.  In a shift-body helper the delivered
@@ -10837,8 +10872,18 @@ static void emit_binder_decls(CE *ce, const CTerm *t) {
             break;
         case CT_RESET:
             /* Only the delimited body lives in this function; reset.body is
-             * lifted into a helper with its own decls. */
+             * lifted into a helper with its own decls -- except for a catch in
+             * a handler case, which is emitted inline (emit_case_catch): its
+             * Result binder and the rest live here too. */
             emit_binder_decls(ce, t->as.reset.delim);
+            if (ce->handler_case_mode && t->as.reset.is_catch) {
+                char *bn = cvar_cname(ce, t->as.reset.x);
+                const char *bct = binder_ctype_full(ce->ctx, t->as.reset.x.ty, t->as.reset.x.type);
+                ce_line(ce, "%s %s;", bct, bn);
+                emit_localvar_record_ctype(bn, bct);
+                free(bn);
+                emit_binder_decls(ce, t->as.reset.body);
+            }
             break;
         case CT_SHIFT: break;   /* shift.body is lifted into a helper */
         case CT_HANDLE:
@@ -11293,6 +11338,8 @@ static void emit_lifted(CE *ce, const char *name, LHMode mode,
      * the enclosing body still runs under the closure context and reads
      * `__env_X->w` correctly. */
     struct Closure *saved_lh_closure = ce->ctx->closure;
+    const char *saved_lh_goto = ce->ctx->panic_signal_goto;
+    ce->ctx->panic_signal_goto = NULL;   /* a helper is its own C function */
     const char *saved_lh_env_var = ce->ctx->env_var_name;
     ce->ctx->closure = NULL;
     ce->ctx->env_var_name = NULL;
@@ -11311,6 +11358,7 @@ static void emit_lifted(CE *ce, const char *name, LHMode mode,
      * effect appends its own (inner) helpers ahead of this one in ce->helpers. */
     Buf tmp; buf_init(&tmp);
     CE hc = *ce;
+    hc.catch_box = hc.catch_box_ct = hc.catch_done = NULL;   /* a region belongs to its own function */
     hc.out = &tmp;
     hc.indent = 4;
     hc.n_joins = 0;
@@ -11528,12 +11576,15 @@ static void emit_lifted(CE *ce, const char *name, LHMode mode,
         const char *srt = ce->ctx->current_fn_ret_ctype;
         ce->ctx->indent = 4;
         ce->ctx->current_fn_ret_ctype = "void";   /* the unwinder returns nothing */
+        const char *sgo = ce->ctx->panic_signal_goto;
+        ce->ctx->panic_signal_goto = NULL;
         /* byval-spine-drop-past-early-exit: nor shares the signature verdict. */
         bool sss = ce->ctx->current_fn_spine_drop_safe;
         ce->ctx->current_fn_spine_drop_safe = false;
         cps_pend_fire(ce->ctx, &unw);
         ce->ctx->current_fn_spine_drop_safe = sss;
         ce->ctx->current_fn_ret_ctype = srt;
+        ce->ctx->panic_signal_goto = sgo;
         ce->ctx->indent = si;
         buf_puts(&unw, "}\n");
         buf_putc(&unw, '\0');
@@ -11592,6 +11643,7 @@ static void emit_lifted(CE *ce, const char *name, LHMode mode,
     g_pend_downstream = pend_saved_down;
     g_pend_k_ok = pend_saved_k_ok;
     ce->ctx->closure = saved_lh_closure;
+    ce->ctx->panic_signal_goto = saved_lh_goto;
     ce->ctx->env_var_name = saved_lh_env_var;
 }
 
@@ -11909,6 +11961,7 @@ static void emit_loop(CE *ce, const CTerm *t) {
                           ? ce->shift_mode
                           : (t->as.loop.result_kont.kind == KK_RET ? ce->ret_mode : false);
     CE hc = *ce;
+    hc.catch_box = hc.catch_box_ct = hc.catch_done = NULL;   /* a region belongs to its own function */
     hc.out = &tmp;
     hc.indent = 4;
     hc.n_joins = 0;
@@ -12099,7 +12152,72 @@ static char *emit_cont_env_impl(CE *ce, const char *hname, const CapSet *caps, b
  * (carrying k + captures), then emit the delimited body threading that prompt
  * chain.  The per-reset DK nodes are leaked (DK is opaque; see
  * docs/archive/cps-delimited-dk-node-leak.md), matching the abortive path. */
+/* cps-catch-unwind-cannot-cross-an-effect-capture: a catch inside a handler
+ * CASE body.  A case is straight-line C that dk_perform calls and that
+ * returns its value, so it holds no chain to put a catch prompt on -- but it
+ * needs none: in a case a `resume` or `discontinue` is a synchronous
+ * dk_invoke, which comes back with the panic signal raised when the resumed
+ * body panicked and nothing in it caught.  So the region is plain control
+ * flow.  The delimited body's delivery (KK_PROMPT) boxes Ok into the binder
+ * and skips the catch arm; every panic check inside the region -- this
+ * emitter's and the delegated direct emitter's, through
+ * emit_panic_signal_return -- jumps to the catch arm instead of returning
+ * from the case.  The arm takes the panic as __dk_panic_catch does (a
+ * catch-panic-of only one of its payload type; any other goes on to the
+ * case's own check), and the rest of the case runs with the binder. */
+static void emit_case_catch(CE *ce, const CTerm *t) {
+    int id = (*ce->helper_ctr)++;
+    char lpanic[48], ldone[48];
+    snprintf(lpanic, sizeof lpanic, "__cc%d_caught", id);
+    snprintf(ldone, sizeof ldone, "__cc%d_done", id);
+    char *xn = cvar_cname(ce, t->as.reset.x);
+    const char *xct = binder_ctype_full(ce->ctx, t->as.reset.x.ty, t->as.reset.x.type);
+
+    const char *save_goto = ce->ctx->panic_signal_goto;
+    const char *save_box = ce->catch_box;
+    const char *save_done = ce->catch_done;
+    const char *save_xct = ce->catch_box_ct;
+    const Type *save_ty = ce->cur_ty;
+    ce->ctx->panic_signal_goto = lpanic;
+    ce->catch_box = xn;
+    ce->catch_done = ldone;
+    ce->catch_box_ct = xct;
+    ce->cur_ty = t->as.reset.delim_ty;
+    ce_line(ce, "{ /* catch region */");
+    ce->indent += 4;
+    emit_term(ce, t->as.reset.delim);
+    ce->indent -= 4;
+    ce_line(ce, "}");
+    ce->ctx->panic_signal_goto = save_goto;
+    ce->catch_box = save_box;
+    ce->catch_done = save_done;
+    ce->catch_box_ct = save_xct;
+    ce->cur_ty = save_ty;
+
+    ce_line(ce, "%s:", lpanic);
+    ce->indent += 4;
+    if (t->as.reset.catch_type >= 0)
+        ce_line(ce, "if (!global_panic_payload || global_panic_payload->type_tag != %d) {",
+                t->as.reset.catch_type);
+    else
+        ce_line(ce, "if (0) {");
+    /* Not this catch's payload: on to the case's own check (an enclosing
+     * region's arm, or the return to dk_perform). */
+    ce->indent += 4;
+    cps_panic_check(ce);
+    ce->indent -= 4;
+    ce_line(ce, "}");
+    ce_line(ce, "tur_panicking = 0; tur_panic_in_progress = 0;");
+    ce_line(ce, "{ tur_panic_payload *__cp = global_panic_payload; global_panic_payload = NULL;");
+    ce_line(ce, "  %s = (%s)(intptr_t)tur_box_err((int64_t)(intptr_t)__cp); }", xn, xct);
+    ce->indent -= 4;
+    ce_line(ce, "%s:;", ldone);
+    free(xn);
+    emit_term(ce, t->as.reset.body);
+}
+
 static void emit_reset(CE *ce, const CTerm *t) {
+    if (ce->handler_case_mode && t->as.reset.is_catch) { emit_case_catch(ce, t); return; }
     int id = (*ce->helper_ctr)++;
     char hname[256];
     snprintf(hname, sizeof(hname), "%s_k%d", ce->fn_cn, id);
@@ -15227,6 +15345,8 @@ static bool emit_cps_ir_try_fn_impl(EmitCtx *ctx, Buf *file, const Expr *e) {
      * under `catch-unwind`. */
     const char *saved_cps_ret_ctype = ctx->current_fn_ret_ctype;
     ctx->current_fn_ret_ctype = "int64_t";
+    const char *saved_cps_goto = ctx->panic_signal_goto;
+    ctx->panic_signal_goto = NULL;
     /* byval-spine-drop-past-early-exit: a CPS term is a different C function
      * from the one whose signature was judged; refuse the spine push in it. */
     bool saved_cps_spine_safe = ctx->current_fn_spine_drop_safe;
@@ -15255,6 +15375,7 @@ static bool emit_cps_ir_try_fn_impl(EmitCtx *ctx, Buf *file, const Expr *e) {
     }
     emit_term(&ce, se->term);
     ctx->current_fn_ret_ctype = saved_cps_ret_ctype;
+    ctx->panic_signal_goto = saved_cps_goto;
     ctx->current_fn_spine_drop_safe = saved_cps_spine_safe;
     if (self_backedge) {
         /* The label goes after the binder declarations, ahead of the first

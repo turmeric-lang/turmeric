@@ -689,7 +689,16 @@ static void cps_mark_catch_thunks(const Expr *e) {
     if (!e) return;
     if (e->kind == EX_CATCH_UNWIND || e->kind == EX_CATCH_PANIC_OF) {
         const FnDef *tf = cps_catch_inline_thunk(e);
-        if (tf) { ((FnDef *)tf)->cps_catch_inlined = true; cps_mark_catch_thunks(tf->body); return; }
+        if (tf) {
+            ((FnDef *)tf)->cps_catch_inlined = true;
+            /* A capturing thunk is an EX_CLOSURE whose fn is not the FnDef
+             * the lifted definition is emitted from; mark that one too, so
+             * its unused definition knows (emit_effects_discontinue). */
+            if (tf->binding && tf->binding->source_fn_def)
+                ((FnDef *)tf->binding->source_fn_def)->cps_catch_inlined = true;
+            cps_mark_catch_thunks(tf->body);
+            return;
+        }
     }
     cps_visit_children(e, cps_mark_catch_visit, NULL);
 }

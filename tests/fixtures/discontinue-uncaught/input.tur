@@ -2,7 +2,7 @@
 ;; `perform` k captured.  Nothing in the body catches it, so the body's defer
 ;; runs as it unwinds, the panic is raised again at the `discontinue` in the
 ;; clause, and from there it is an ordinary uncaught panic: the message names
-;; the payload and the program aborts.  Behind --enable=discontinue (`flags`).
+;; the payload and the program aborts.
 (defeffect Ask [] : int)
 
 (defn body [] : int

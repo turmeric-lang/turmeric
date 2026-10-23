@@ -799,6 +799,13 @@ typedef struct EmitCtx {
      * live continuation chain).  emit_panic_signal_return honors this flag; the
      * BR3b pre-emit sets it around the reader call and clears it after. */
     bool         panic_signal_is_break;
+    /* cps-catch-unwind-cannot-cross-an-effect-capture: inside a catch region
+     * of a handler CASE body (emit_case_catch, emit_cps_ir.c), the label the
+     * post-call panic signal jumps to -- the region's own catch arm -- instead
+     * of returning from the case.  NULL everywhere else.  Every site that
+     * starts emitting a different C function clears it, as it resets the
+     * return ctype: a label is local to the function that holds it. */
+    const char  *panic_signal_goto;
     /* proper-tail-calls T2 (T-D2): the call emit_tail is about to emit as the
      * enclosing function's tail `return f(args);`.  emit_value hands such a
      * call's text back UN-hoisted -- no `__ps_N` temp and no per-call-site
