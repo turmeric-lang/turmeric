@@ -73,7 +73,15 @@ one_case() {
     local dir="$1" name rc want flags args=()
     name="$(basename "$dir")"
     flags=""; [ -f "$dir/flags" ] && flags="$(cat "$dir/flags")"
-    [ -f "$dir/run.args" ] && mapfile -t args < "$dir/run.args"
+    # Not `mapfile`: macOS ships bash 3.2, which has no such builtin, so the
+    # fixture ran with no arguments there (the read loop run-jit.sh uses).
+    if [ -f "$dir/run.args" ]; then
+        local _ra
+        while IFS= read -r _ra; do
+            [ -z "$_ra" ] && continue
+            args+=("$_ra")
+        done < "$dir/run.args"
+    fi
     local stdin=/dev/null; [ -f "$dir/input.stdin" ] && stdin="$dir/input.stdin"
     # shellcheck disable=SC2086
     if ! TUR_CC_FLAGS="$CC_FLAGS" CC="$BUILD_CC" timeout 600 "$TUR" $flags build \
