@@ -11981,6 +11981,9 @@ static const char *adt_field_scalar_c_type(TypeKind k) {
          * has been bitten by before. */
         case TY_SYM:      return "const struct __tur_sym *";
         case TY_PTR_VOID: return "void *";
+        /* generator-type-plan: a `(Generator T)` field holds the state
+         * pointer, spelled as types.c spells TY_GENERATOR. */
+        case TY_GENERATOR: return "void *";
         case TY_RC:
         case TY_WEAK:     return "RcControlBlock *";
         case TY_REF:

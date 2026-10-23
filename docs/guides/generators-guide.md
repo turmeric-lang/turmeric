@@ -72,13 +72,13 @@ when a value was yielded, NULL when exhausted. Use the `gen.tur` helpers:
 
 ```turmeric
 ;; gen-for-each macro -- preferred for side effects
-(gen-for-each (range-gen 0 5)
-              (fn [x] (println x)))
+(gen-for-each (fn [x : int] : nil (println x))
+              (range-gen 0 5))
 ; prints 0 1 2 3 4
 ```
 
 ```sweet-exp
-gen-for-each(range-gen(0 5) (fn [x] println(x)))
+gen-for-each((fn [x : int] : nil (println x)) range-gen(0 5))
 ```
 
 ### `gen-collect` -- materialise to array
@@ -92,17 +92,48 @@ gen-for-each(range-gen(0 5) (fn [x] println(x)))
 ### `gen-nth` -- nth yielded value
 
 ```turmeric
-(gen-nth (range-gen 10 20) 3)   ; => 13 (0-indexed)
+(gen-unwrap (gen-nth 3 (range-gen 10 20)))   ; => 13 (0-indexed)
 ```
 
 ### `yield*` -- re-yield from an inner generator
 
 ```turmeric
-(defn concat-gen [g1 g2] : (Generator :int)
+(defn concat-gen [g1 : (Generator int) g2 : (Generator int)] : (Generator int)
   (gen []
     (yield* g1)
     (yield* g2)))
 ```
+
+### Generator types: `(Generator T)`
+
+A generator is a value of type `(Generator T)`, where `T` is what it yields:
+the type of its first `yield`. Write it wherever a type goes -- a parameter, a
+return type, a `let` binding, a struct field -- and `gen-next`, `gen-done?` and
+`gen-unwrap` work on the value there exactly as they do where it was made.
+`gen-unwrap` reads the element back at `T`: a float as a float, a string as a
+string, a struct or ADT as that struct or ADT.
+
+```turmeric
+(defstruct P [a : int b : float])
+
+(defn take-float [g : (Generator float)] : float (gen-unwrap (gen-next g)))
+
+(defn first-a [g : (Generator P)] : int (.a (gen-unwrap (gen-next g))))
+
+;; In a generic, T is bound from the generator passed in.
+(defn second-of [T] [g : (Generator T)] : T
+  (do (gen-next g)
+      (gen-unwrap (gen-next g))))
+
+(take-float (gen [] (yield 7.1)))                     ; => 7.1
+(first-a (gen [] (yield (P 10 2.5))))                 ; => 10
+(second-of (gen [] (yield "x") (yield "y")))          ; => "y"
+```
+
+The element is checked at a call: passing a generator of strings to a
+`(Generator int)` parameter is `expected (Generator int), got (Generator
+cstr)`. The bare names `generator` and `Generator` are not types -- a
+generator type always names its element.
 
 ### Supported control flow in `gen` bodies
 

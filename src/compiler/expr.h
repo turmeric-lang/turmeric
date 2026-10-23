@@ -73,6 +73,7 @@ struct Binding {
     TypeKind      gen_elem_kind;
     bool          gen_elem_set;
     const char   *gen_elem_tyvar;   /* generator-in-generic: see TY_GENERATOR */
+    const Type   *gen_elem_type;    /* generator-type-plan: full element type, or NULL */
     bool          is_mut;
     bool          is_global;     /* top-level def vs. local let */
     bool          is_param;      /* function/extern parameter binding */

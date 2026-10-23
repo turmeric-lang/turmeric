@@ -1,0 +1,1 @@
+'yield' of Q in a generator whose first yield is P: every yield of one generator must have the same type

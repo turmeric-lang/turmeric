@@ -34,6 +34,13 @@ sentence above does not cover them. If you touch this file, check
 `ls docs/reported/` against it -- an index that silently omits a quarter of the
 directory is worse for triage than no index.
 
+## Found executing generator-type-plan (filed 2026-10-23)
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [gen-body-two-vec-literals-duplicate-state-member](gen-body-two-vec-literals-duplicate-state-member.md) | low-medium | A `gen` body with two `[...]` literals promotes two `let` temporaries both named `__vw` / `__v` into the state struct, and cc rejects the duplicate members; one literal compiles, `--interpret` runs both |
+| [gen-collect-rejects-float-elements](gen-collect-rejects-float-elements.md) | low | `gen-collect` of a float generator is `gen-arr-push! arg 2: expected int, got float`: the typed `gen-unwrap` meets the untyped `gen-arr` helpers' `int` default, reported inside the macro expansion |
+
 ## Found verifying the spice READMEs and the advanced types guide (filed 2026-10-23)
 
 | Report | Severity | One line |
@@ -113,7 +120,7 @@ directory is worse for triage than no index.
 | Report | Severity | One line |
 | --- | --- | --- |
 | ~~[panic-forms-gaps](../archive/panic-forms-gaps.md)~~ | medium | **RESOLVED 2026-10-21** (archived): `panic-payload-downcast` returns the payload (and reads the `:cstr` keyword); a mismatched `catch-panic-of` with no boundary above aborts instead of being swallowed; `panic-with` reports the `.tur` file and line; `catch-unwind` / `catch-panic-of` refuse a non-thunk; the interpreter's `stdlib/panic.tur` accessors (`result-panic`, `panic-message`, `-file`, `-line`, `-type`) are natives, and the payload records its site. Pinned by four fixtures and two `errors/` fixtures |
-| ~~[generator-forms-gaps](../archive/generator-forms-gaps.md)~~ | medium | **ARCHIVED 2026-10-21**: resolved items in [generator-capture-yield-and-exhausted-reads](../archive/generator-capture-yield-and-exhausted-reads.md); the generator parameter type is planned in [generator-type-plan](../upcoming/generator-type-plan.md) |
+| ~~[generator-forms-gaps](../archive/generator-forms-gaps.md)~~ | medium | **ARCHIVED 2026-10-21**: resolved items in [generator-capture-yield-and-exhausted-reads](../archive/generator-capture-yield-and-exhausted-reads.md); the generator parameter type `(Generator T)` landed 2026-10-23 ([generator-type-plan](../archive/generator-type-plan.md)) |
 | ~~[stm-forms-gaps](../archive/stm-forms-gaps.md)~~ | medium | **RESOLVED 2026-10-21** (archived): a `stm` run with no transaction panics `stm used outside of an atomically block` instead of segfaulting (not a compile error: a `stm` in a helper function is legitimate); `retry` ends the attempt and a retry that read no TVar stops with the interpreter's message instead of spinning; a nested `atomically` is refused (TUR-E0009). Pinned by `stm-outside-atomically`, `stm-helper-fn`, `stm-retry-ends-attempt`, `errors/atomically-nested` |
 | ~~[control-forms-gaps](../archive/control-forms-gaps.md)~~ | medium | **ARCHIVED 2026-10-21**: items 4-7 fixed; `quote` of a list is planned in [quote-list-data-plan](../upcoming/quote-list-data-plan.md), `defer` scope and read time fixed 2026-10-23 by [defer-semantics-plan](../archive/defer-semantics-plan.md) |
 | ~~[effect-forms-gaps](../archive/effect-forms-gaps.md)~~ | medium | **ARCHIVED 2026-10-21**: resolved items in [effect-handler-forms-top-level-resume-compose](../archive/effect-handler-forms-top-level-resume-compose.md); `discontinue` is kept and planned in [discontinue-plan](../upcoming/discontinue-plan.md), the rest in [effect-continuation-followups-plan](../upcoming/effect-continuation-followups-plan.md) |

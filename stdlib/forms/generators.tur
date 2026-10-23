@@ -11,13 +11,14 @@
 ;;; a whole generator. The lazy `Seq` combinators (tur/seq) are built on these.
 ;;; See generators-guide.
 ;;;
+;;; A generator's type is `(Generator T)`, `T` being what it yields (its first
+;;; `yield`'s type). Write it on a parameter, a return, a `let` or a struct field
+;;; to pass a generator around; `gen-unwrap` reads the element back at `T`, a
+;;; struct or ADT included, and a generic `(Generator T)` parameter binds `T`.
+;;;
 ;;; Limits today (the post-1.0 CPS pass lifts them): the capture vector must be
-;;; empty, a generator cannot contain another generator, `yield` cannot appear in
-;;; a `match` arm (TUR-E0702) or in a recursive generator (TUR-E0703), and there
-;;; is no type to annotate a generator parameter with -- a function that takes
-;;; one cannot call `gen-next` on it. Consume a generator where it is made, or
-;;; through the tur/gen macros; docs/upcoming/generator-type-plan.md adds
-;;; `(Generator T)`.
+;;; empty, a generator cannot contain another generator, and `yield` cannot
+;;; appear in a `match` arm (TUR-E0702) or in a recursive generator (TUR-E0703).
 ;; Reference only: tools/gendocs.py reads the ;;@ lines, the compiler skips them.
 
 ;;; gen -- create a generator from a body.
@@ -46,9 +47,10 @@
 ;;; yield -- hand a value out of a generator body and pause.
 ;;;
 ;;; Valid only inside a `gen` body (anywhere else is `yield is only valid inside
-;;; a gen body`). The first `yield` fixes the generator's element type: ints,
-;;; floats and strings work, and a later `yield` of a different type is an error
-;;; (integer widths may mix). A `yield` inside a `fn` literal in the body is an
+;;; a gen body`). The first `yield` fixes the generator's element type -- the
+;;; `T` of its `(Generator T)`: ints, floats, strings, structs and ADTs work,
+;;; and a later `yield` of a different type is an error (integer widths may
+;;; mix). A `yield` inside a `fn` literal in the body is an
 ;;; error too: the fn is its own function, not part of the generator. A `yield`
 ;;; form has type void, so `(let [r (yield 1)] ...)` is TUR-E0023.
 ;;;
@@ -76,7 +78,7 @@
 ;;;
 ;;; Example:
 ;;;   (let [g (gen [] (yield 1))] (gen-unwrap (gen-next g)))  ; => 1
-;;@builtin (gen-next [g : generator] : ptr<void>)
+;;@builtin (gen-next [g : (Generator T)] : ptr<void>)
 
 ;;; gen-done? -- has a generator run to its end?
 ;;;
@@ -95,4 +97,4 @@
 ;;; Example:
 ;;;   (let [g (gen [] (yield 1))] (gen-next g) (gen-done? g))  ; => false
 ;;;   (let [g (gen [] (yield 1))] (gen-next g) (gen-next g) (gen-done? g))  ; => true
-;;@builtin (gen-done? [g : generator] : bool)
+;;@builtin (gen-done? [g : (Generator T)] : bool)
