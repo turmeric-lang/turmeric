@@ -1,0 +1,18 @@
+; A `(vec-push! v x)` written inside a macro call pins `(vec-new)`'s element
+; exactly as a hand-written one does (gen-collect-rejects-float-elements):
+; the forward element inference used to be gated off inside expansions, so
+; `v` stayed `(Vec int)` and a float push stored its bits.
+
+(defmacro myid [x] x)
+
+(defn main [] : int
+  (let [v (vec-new)] (when true (vec-push! v 1.5)) (println (vec-get v 0)))
+  (let [v (vec-new)] (unless false (vec-push! v 2.25)) (println (vec-get v 0)))
+  (let [v (vec-new)] (myid (vec-push! v "three")) (println (vec-get v 0)))
+  (let [v (vec-new) ^mut i 0]
+    (while (< i 3)
+      (when (> i 0) (vec-push! v (+ 0.5 (as float i))))
+      (set! i (+ i 1)))
+    (println (vec-len v))
+    (println (vec-get v 1)))
+  0)

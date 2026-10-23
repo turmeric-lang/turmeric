@@ -1,7 +1,9 @@
 # `gen-collect` of a float generator is a type error
 
+**Resolved 2026-10-23.** `gen-collect` now builds a `(Vec T)` with `vec-new` / `vec-push!` (fix direction 1), typed at the generator's element, so float and `cstr` generators collect. That surfaced a second bug the macro needed fixed: the S4 forward element inference that lets a `(vec-push! v x)` pin `(vec-new)`'s element (`src/compiler/elab_call.c`) was gated on `macro_expand_depth == 0`, so a push written inside ANY macro call -- `gen-collect`'s loop, or a user's `(when c (vec-push! v 1.5))` -- left `v` at `(Vec int)` and stored the float's bits. The gate is gone (full `tests/run.sh` stays green). `gen-arr-*` stay for `seq-collect`, whose elements are carrier words. Pinned by `tests/fixtures/gen-collect` (int, float, cstr) and `tests/fixtures/vec-push-in-macro-pins-element`.
+
 **Severity: low.** Found 2026-10-23 executing
-[generator-type-plan](../archive/generator-type-plan.md). Reproduces on `main`
+[generator-type-plan](generator-type-plan.md). Reproduces on `main`
 before that work.
 
 ## Repro

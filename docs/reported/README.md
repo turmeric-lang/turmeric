@@ -52,7 +52,6 @@ directory is worse for triage than no index.
 | Report | Severity | One line |
 | --- | --- | --- |
 | [gen-body-two-vec-literals-duplicate-state-member](gen-body-two-vec-literals-duplicate-state-member.md) | low-medium | A `gen` body with two `[...]` literals promotes two `let` temporaries both named `__vw` / `__v` into the state struct, and cc rejects the duplicate members; one literal compiles, `--interpret` runs both |
-| [gen-collect-rejects-float-elements](gen-collect-rejects-float-elements.md) | low | `gen-collect` of a float generator is `gen-arr-push! arg 2: expected int, got float`: the typed `gen-unwrap` meets the untyped `gen-arr` helpers' `int` default, reported inside the macro expansion |
 
 ## Found verifying the spice READMEs and the advanced types guide (filed 2026-10-23)
 

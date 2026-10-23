@@ -81,12 +81,17 @@ when a value was yielded, NULL when exhausted. Use the `gen.tur` helpers:
 gen-for-each((fn [x : int] : nil (println x)) range-gen(0 5))
 ```
 
-### `gen-collect` -- materialise to array
+### `gen-collect` -- materialise to a vector
+
+`gen-collect` returns a `(Vec T)` typed at the generator's element, so a
+float or `cstr` generator collects floats or strings:
 
 ```turmeric
 (let [arr (gen-collect (range-gen 1 6))]
-  (println (gen-arr-len arr))        ; 5
-  (println (gen-arr-get arr 2)))     ; 3
+  (println (vec-len arr))            ; 5
+  (println (vec-get arr 2)))         ; 3
+(let [fs (gen-collect (gen [] (yield 1.5) (yield 2.25)))]
+  (println (vec-get fs 1)))          ; 2.25
 ```
 
 ### `gen-nth` -- nth yielded value
@@ -493,11 +498,11 @@ For discrete (integer) ranges, use `seq/from-range` or `seq/from-range-step`:
 | `gen-some?` | True if `gen-next` returned a value (non-NULL) |
 | `gen-unwrap` | Extract the yielded value from a non-NULL `gen-next` result, at the generator's element type (a yielded `7.25` reads back as a float) |
 | `gen-none` | Return NULL to represent no value |
-| `gen-arr-new` | Allocate an empty growable array |
-| `gen-arr-push!` | Append a value to a gen array |
+| `gen-arr-new` | Allocate an empty growable int64 array (what `seq-collect` returns) |
+| `gen-arr-push!` | Append a word to a gen array |
 | `gen-arr-len` | Number of elements in a gen array |
 | `gen-arr-get` | Element at index (0-based) |
-| `gen-collect` | Macro: drive a generator, collect all values into a gen array |
+| `gen-collect` | Macro: drive a generator, collect all values into a `(Vec T)` |
 | `gen-for-each` | Macro: drive a generator, call `f` on each value |
 | `gen-nth` | Macro: return the nth value from a generator, or `gen-none` |
 | `yield*` | Macro: re-yield every value from an inner generator |

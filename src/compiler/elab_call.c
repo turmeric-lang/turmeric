@@ -11298,8 +11298,12 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
      * current call's own `type_bindings` -- and thus its carrier/relay emission
      * -- untouched.  It composes off the callee's OWN parameter tyvar names, so
      * it does not depend on the receiver's tyvar name matching the pusher's. */
-    if (fn_type.kind == TY_FN && fn_type.as.fn.arg_full_types && n_args > 1 &&
-        e->macro_expand_depth == 0) {
+    /* Inside a macro expansion too (gen-collect-rejects-float-elements): a
+     * `(vec-push! v x)` that a macro wrote -- `gen-collect`'s loop, or one
+     * the user's `(when ...)` wraps -- pins the element exactly as a
+     * hand-written one does.  Gated off there, the binding fell back to
+     * `(Vec int)` and a float push stored its bits into an int vector. */
+    if (fn_type.kind == TY_FN && fn_type.as.fn.arg_full_types && n_args > 1) {
         /* Map each callee parameter tyvar that a concrete sibling argument
          * fills (param slot is a bare TY_TYVAR) to that concrete type. */
         CallTypeBinding fwd[16];
