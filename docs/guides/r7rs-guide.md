@@ -684,7 +684,7 @@ the thread's own stack re-enters from anywhere, and `raise`, `guard` and
 escapes work anywhere. Not under `tur jit`, and not on other threads. The
 cost is a compare per procedure call -- 1-2% more instructions at `-O2` on
 the plan's benchmarks under gcc, within code-layout noise under clang. See
-[r7rs-heap-frames-plan](../upcoming/r7rs-heap-frames-plan.md).
+[r7rs-heap-frames-plan](https://github.com/turmeric-lang/turmeric/blob/main/docs/upcoming/r7rs-heap-frames-plan.md).
 
 ## Where it differs from R7RS
 
