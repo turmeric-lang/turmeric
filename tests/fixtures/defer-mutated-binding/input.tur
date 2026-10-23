@@ -1,5 +1,5 @@
 (defn main [] : int
   (let [^mut x 10]
-    (defer (println x))  ; Should print 20, not 10
+    (defer (println x))  ; prints 20: a defer reads x when it runs
     (set! x 20))
   0)

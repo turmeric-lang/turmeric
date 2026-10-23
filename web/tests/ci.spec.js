@@ -250,14 +250,14 @@ test.describe('CI metrics dashboard', () => {
     expect(row.open_reports).toBeGreaterThanOrEqual(0);
     // The total open_plans is the recursive count under docs/upcoming, which
     // is exactly the sum of the per-bucket breakdowns the collector emits
-    // (active + held + v1 + spices) -- but only once a row published AFTER a
+    // (stray + held + v1 + spices + godot) -- but only once a row published AFTER a
     // new bucket lands carries that bucket.  A row published before the
     // spices_plans field existed has no spices_plans, so its three buckets
     // sum to less than the total (the spices plans are in the tree but
     // uncategorized in that row).  Assert strict equality when every bucket
     // is present, and the weaker >= while the live row is in transition, so a
     // stale row does not redden a PR that did not touch the collector.
-    const PLAN_BUCKETS = ['active_plans', 'held_plans', 'v1_plans', 'spices_plans'];
+    const PLAN_BUCKETS = ['active_plans', 'held_plans', 'v1_plans', 'spices_plans', 'godot_plans'];
     const known = PLAN_BUCKETS.filter((k) => k in row);
     const sum = known.reduce((s, k) => s + row[k], 0);
     if (known.length === PLAN_BUCKETS.length) {
@@ -549,7 +549,7 @@ test.describe('CI metrics dashboard', () => {
     await expect(page.locator('#ci-docs-sub')).toContainText('30 open plans');
     await expect(page.locator('#ci-docs-sub')).toContainText('29 open reports');
 
-    // Two series by default (open reports + active plans).
+    // Two series by default (open reports + stray plans).
     await expect(page.locator('#ci-docs-chart .ci-series-line')).toHaveCount(2);
     const legend = page.locator('#ci-docs-legend .ci-legend-toggle');
     await expect(legend).toHaveCount(5);
@@ -560,12 +560,14 @@ test.describe('CI metrics dashboard', () => {
     // Tiles show the current counts.
     await expect(page.locator('#ci-docs-tiles .ci-tile')).toHaveCount(6);
     await expect(page.locator('#ci-docs-tiles .ci-tile').nth(0)).toContainText('30');
+    // The total is the sum of the buckets under it, led by the stray plans.
+    await expect(page.locator('#ci-docs-tiles .ci-tile').nth(0)).toContainText('10 stray');
     await expect(page.locator('#ci-docs-tiles .ci-tile').nth(1)).toContainText('29');
 
-    // Adding held plans adds a third line and records it in the URL.
+    // Adding Godot plans adds a third line and records it in the URL.
     await legend.nth(2).click();
     await expect(page.locator('#ci-docs-chart .ci-series-line')).toHaveCount(3);
-    await expect(page).toHaveURL(/docs=open_reports%2Cactive_plans%2Cheld_plans/);
+    await expect(page).toHaveURL(/docs=open_reports%2Cactive_plans%2Cgodot_plans/);
 
     // Its own tooltip, on its own hit area.
     await page.locator('#ci-docs-hit').hover();

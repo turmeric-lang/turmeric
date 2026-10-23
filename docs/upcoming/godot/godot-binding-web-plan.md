@@ -2,13 +2,13 @@
 
 > **Status:** On hold, not started. The plan sat in `docs/upcoming/hold/`
 > until the 2026-10-16 flatten. Still blocked on
-> [`wasm-spices-plan.md`](wasm-spices-plan.md), which is only partly built:
+> [`wasm-spices-plan.md`](../wasm-spices-plan.md), which is only partly built:
 > its `:web` manifest block and raylib's browser frame loop exist, but not the
 > HTML app shell (W1). Checked 2026-10-18 against turmeric-godot `main`: CI
 > builds desktop targets only, and no `.gdextension` lists a `web.*` library.
 > **Last Updated:** 2026-06-26
 > **Type:** Integration / Game Engine -- post-v1 follow-up to
-> [godot-language-binding-plan.md](../archive/godot-language-binding-plan.md).
+> [godot-language-binding-plan.md](../../archive/godot-language-binding-plan.md).
 > Split out from
 > [godot-binding-shipping-breadth-plan.md](godot-binding-shipping-breadth-plan.md)
 > (originally Phase T5.D).
@@ -28,7 +28,7 @@ demand exists.
 ## Scope (~depends on wasm-spices)
 
 Blocked on
-[`wasm-spices-plan.md`](wasm-spices-plan.md) landing first. Godot's
+[`wasm-spices-plan.md`](../wasm-spices-plan.md) landing first. Godot's
 web export uses its own Emscripten profile (`-sMODULARIZE`, specific
 sysroot, `--js-library` hooks); ours has to agree.
 

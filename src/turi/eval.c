@@ -8375,13 +8375,16 @@ typedef struct {
     uint32_t    epoch;  /* g_turi_cont_epoch at the push (DRIVE_PUSH): a call/cc
                          * image taken before it cannot hold this frame's `aux` */
     TuriValue   last;   /* DO/PROGRAM: last non-defer value; CALL_ARG: callee closure */
-    void       *aux;    /* LET_BODY/CALL_RET: DeferItem* defer-stack mark;
+    void       *aux;    /* LET_BODY/CALL_RET (and a defer_scope DO_SEQ):
+                         * DeferItem* defer-stack mark;
                          * MAKE_STRUCT / *_ARG: TuriValue* heap accumulator */
     /* T3.2b: tail-position threading + folded-call (DK_CALL_RET) saved state. */
     bool        tail;          /* tail-ness to apply to this form's tail child */
     const char *saved_module;  /* DK_CALL_RET / DK_PROMPT: module to restore */
     bool        was_returning; /* DK_CALL_RET: env->returning at call entry */
     bool        was_no_unwind; /* DK_CALL_RET / DK_PROMPT: env->in_no_unwind to restore */
+    bool        defer_scope;   /* DK_DO_SEQ: a non-tail do that registers defers;
+                                * aux = its defer mark, fired when it ends */
 } DriveCont;
 
 /* ---------------------------------------------------------------------------
@@ -10240,11 +10243,23 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                 }
                 /* A do-block that registers defers is its own defer scope: push a
                  * boundary marker so its defers stay grouped (same-scope LIFO,
-                 * outer scopes first) when fired at an early exit. */
-                if (seq_has_direct_defer(de))
-                    defer_push_scope_marker(env);
+                 * outer scopes first) when fired at an early exit.  A non-tail
+                 * one also fires them when it ends, as the compiled block does
+                 * (defer-semantics-plan Part A): `(do (defer d) body) after`
+                 * runs body, d, after, and a `while` body's defers fire per
+                 * pass.  A tail do leaves them to the enclosing DK_CALL_RET --
+                 * nothing else in the activation runs after it, and a tail call
+                 * in its last item must run before them. */
+                bool  scoped = false;
+                void *mark   = NULL;
+                if (seq_has_direct_defer(de)) {
+                    mark   = defer_push_scope_marker(env);
+                    scoped = !do_tail;
+                }
                 DRIVE_PUSH(((DriveCont){ .kind = DK_DO_SEQ, .expr = de,
-                                         .frame = cf, .tail = do_tail }));
+                                         .frame = cf, .tail = do_tail,
+                                         .aux = scoped ? mark : NULL,
+                                         .defer_scope = scoped }));
                 control = items[0];
                 /* multi-item / non-tail-do: item 0 is never in tail position;
                  * the final item's tail-ness is decided in the DK_DO_SEQ path. */
@@ -11556,6 +11571,12 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                         tail = false; descending = true;
                     }
                 } else {
+                    /* End of a non-tail defer scope: fire its defers (and its
+                     * marker).  An early exit (signaled, above) leaves them to
+                     * the enclosing DK_CALL_RET's by-scope walk, as DK_LET_BODY
+                     * does. */
+                    if (top->defer_scope)
+                        fire_defers_to_mark(env, (DeferItem *)top->aux, NULL);
                     cur = top->last; len--;  /* pop; keep returning the last value */
                 }
                 break;
@@ -16950,10 +16971,14 @@ static void gc_drive(TuriContGc *gc, const DriveCont *d, bool saved) {
         /* A defer mark: the live chain is walked whole (turi_cont_gc_roots). */
         if (saved && d->aux) turi_cont_gc_doubt(gc, "a defer in a saved continuation");
         break;
+    case DK_DO_SEQ:
+        if (saved && d->defer_scope && d->aux)
+            turi_cont_gc_doubt(gc, "a defer in a saved continuation");
+        break;
     case DK_ESCAPE:   /* aux: the escape boundary, which holds no live value */
         if (d->aux) promo_map_put(&gc->temps, d->aux, d->aux);
         break;
-    case DK_DONE: case DK_IF_BRANCH: case DK_DO_SEQ: case DK_LET_BIND:
+    case DK_DONE: case DK_IF_BRANCH: case DK_LET_BIND:
     case DK_MATCH_BODY: case DK_UNARY: case DK_GET_FIELD: case DK_WHILE:
     case DK_MATCH_SCRUT:
         break;

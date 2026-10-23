@@ -6,8 +6,12 @@
   (fn [x] : int (+ base-val x)))
 
 (defn main [] : int
-  (let [^mut my-x 10]
+  ;; `my-y` is captured by value into the defer env; `my-x` is `^mut`, so
+  ;; the defer reads it through its shared cell (defer-semantics-plan).
+  (let [^mut my-x 10
+        my-y      30]
     (defer (println my-x))
+    (defer (println my-y))
     (set! my-x 20))
   (println (make-adder 100 5))
   0)
