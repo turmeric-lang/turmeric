@@ -2,33 +2,51 @@
 
 All notable changes to Turmeric are documented here.
 
-## [Unreleased]
+## [0.70.0] -- 2026-10-23
 
 ### Added
 
 - **A `defdata` constructor may declare its result type.** `(Lit int : (Expr
   int))`, and after a record field vector `(Rect [w : int h : int] : (Shape
   int))`; an unannotated constructor returns the generic `(Expr a)`, and one
-  type can mix both -- `(If c t f)` then takes its index from its branches.
-  The head takes its keywords and type-parameter vector in either order, and
+  type can mix both -- `(If c t f)` then takes its index from its branches. The
+  head takes its keywords and type-parameter vector in either order, and
   `:affine` is accepted.
+- **Installed spices resolve outside a project.** A file with no `build.tur`
+  above it searches every installed spice's `src/` and its dependency closure
+  after the importing dir, the stdlib and `-I`; `--no-global-spices` turns the
+  fallback off. `tur repl` gains `-I <dir>`, `tur install` records the install
+  dir so `tur uninstall` removes exactly that root, and library-only installs
+  work.
+- **New project-less commands: `tur serve`, `tur x` and `tur run <file> a b`.**
+  `tur serve [dir]` serves static files with index and directory-listing support
+  (`--bind`, `--index`, `--no-listing`); `tur x <name|path|url>` runs a spice's
+  `:bin` without installing it; `tur run` passes trailing arguments to the
+  program. A `(defscript :spices ...)` header, behind `--enable=script-deps`,
+  lets a single-file script declare its spices.
+- **The `httpd` static path serves index files and directory listings.** A
+  directory request 301s to its trailing slash, then serves the index file or an
+  escaped HTML listing; the path percent-decodes first, and the MIME table gains
+  `mjs`, `woff2`, `mp4` and more.
+- **New guides: `unsafe` and operators.** The unsafe guide covers the `(unsafe
+  ...)` block, raw memory, the casts and `c-call`; the operators guide covers
+  arity, types, wrapping and short-circuiting. New sections document
+  `ref`/`lref`/`rc`/`weak`, panic payloads, `handle-shallow`, `->`/`->>`, `let*`
+  and `defrec`, plus guides for `tur serve` and `tur x`.
 
 ### Changed
 
-- **Whether a type is a GADT is read from its constructors, not its keyword.**
-  A type whose constructors all return one instantiation -- `(Bound int)` from
+- **Whether a type is a GADT is read from its constructors, not its keyword.** A
+  type whose constructors all return one instantiation -- `(Bound int)` from
   every one, or the generic `(Box a)` -- is an ordinary sum and goes by value;
   only a type whose annotations refine its parameters (`Refl : (Equal a a)`)
   keeps the boxed carrier. `defgadt` now takes record constructors, `:heap`,
-  `:linear` and `:affine`; a record field vector there used to become one
-  `int` field. A missing `match` arm is excused only when its result index
-  provably differs from the scrutinee's type, not by a guess from the other
-  arms (the "unreachable for this GADT instantiation" warning is gone).
+  `:linear` and `:affine`. A missing `match` arm is excused only when its result
+  index provably differs from the scrutinee's type.
 - **`range.tur` ranges are a typed `Range` and go by value.** `Range` is a
-  `:copy` record of two `Bound`s instead of a malloc'd pointer passed as
-  `:int`, and `Bound` lost its never-used type parameter (`(Bound int)` no
-  longer names it). A range-heavy loop runs about 4x faster and no longer
-  leaks every endpoint.
+  `:copy` record of two `Bound`s instead of a malloc'd pointer passed as `:int`,
+  and `Bound` lost its never-used type parameter. A range-heavy loop runs about
+  4x faster and no longer leaks every endpoint.
 - **A type can no longer replace an auto-loaded stdlib struct of the same
   name.** `(defgadt Pair ...)` used to supersede stdlib's `Pair` under the
   stdlib code built on it; it is the "already defined by an auto-loaded stdlib
@@ -36,10 +54,26 @@ All notable changes to Turmeric are documented here.
 
 ### Deprecated
 
-- **`defgadt` (TUR-D0005).** Write `defdata`; its constructors take the same
-  `: (Name ...)` result type. The old spelling still compiles with a warning,
-  is an error under `--Werror=deprecated`, and `tur explain TUR-D0005` shows
-  the rewrite. It is removed at a future major release.
+- **`defgadt` (TUR-D0005).** Write `defdata`; its constructors take the same `:
+  (Name ...)` result type. The old spelling still compiles with a warning, is an
+  error under `--Werror=deprecated`, and `tur explain TUR-D0005` shows the
+  rewrite. It is removed at a future major release.
+
+### Fixed
+
+- **Borrow checking, leaks and `pack` fixes.** `&mut` needs a mutable place and
+  a write under a live `let`-held borrow is an error; a fresh `(Option S)`
+  argument to a tail self-call, a closure over a struct or int parameter, and a
+  lambda handed between mutually recursive functions no longer leak; a
+  constrained `pack` keeps its witnesses under `--interpret`.
+- **Effects, proofs and rank-2 checks.** A compiled `shift` is delimited by a
+  direct `reset` in its callees and panics outside any boundary instead of
+  exiting with the value; `(:: (Refl) (Equal int bool))` is now an error; a
+  rank-2 `forall` argument must be generic (`(both inc 5 "hi")` is TUR-E0001).
+- **Separate compilation and Windows.** A separately compiled generic resolves a
+  third module's by-value struct instead of failing in `cc`; on Windows, `tur x`
+  and `tur install` binaries run via `CreateProcess` and `tur serve` goes
+  straight to `cc`.
 
 ## [0.69.0] -- 2026-10-22
 
