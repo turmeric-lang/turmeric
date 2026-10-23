@@ -34,6 +34,13 @@ sentence above does not cover them. If you touch this file, check
 `ls docs/reported/` against it -- an index that silently omits a quarter of the
 directory is worse for triage than no index.
 
+## Found measuring recursion for the wasm JIT plan (filed 2026-10-23)
+
+| Report | Severity | One line |
+|---|---|---|
+| [wasm-target-stack-is-emcc-default](wasm-target-stack-is-emcc-default.md) | medium-high | `tur build --target wasm` passes no `-sSTACK_SIZE`, so the program runs on emcc's 64 KiB default with `STACK_OVERFLOW_CHECK` off: a 200-level recursion with 1 KiB frames dies in `memory access out of bounds`; the 1 GiB entry-thread wrapper is compiled in and silently fails; `TUR_MUSTTAIL` is empty under `__wasm__` though `-mtail-call` makes it work. |
+| [jit-musttail-expands-to-nothing](jit-musttail-expands-to-nothing.md) | low (high for the wasm JIT) | `TUR_MUSTTAIL` is empty under c2mir, so mutual tail calls recurse under `tur jit`; the 1 GiB entry thread hides it (`tailcall-musttail-deep` passes by room), `TUR_JIT_GEN=interp` overflows, and the browser engine's ceiling is 1,696 frames. c2mir's `__builtin_jcall` is not a general tail call. |
+
 ## Found verifying the spice READMEs and the advanced types guide (filed 2026-10-23)
 
 | Report | Severity | One line |

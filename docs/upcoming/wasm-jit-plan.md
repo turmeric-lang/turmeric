@@ -403,7 +403,23 @@ stack (`-sSTACK_SIZE`) overflowing instead is a wasm trap after which the
 module is not usable. Turmeric programs recurse: the emitter turns self tail calls into
 loops (and `TUR_MUSTTAIL` where the compiler honours it, which emcc does
 not), but a non-tail list recursion over 10k elements will overflow where
-the native JIT's 1 GB stack would not. Three responses, cheapest first:
+the native JIT's 1 GB stack would not. Two facts sharpen this (2026-10-23). The tree-walker on the page has **no**
+such limit: since C4 (`turi-c-scoped-forms-heap-bounding`) every
+interpreter recursion folds onto a heap work-stack, and `tur interpret`
+runs a million-deep non-tail recursion natively where the MIR interpreter
+overflows even on the JIT's 1 GiB entry thread (its frame is over 1 KiB).
+So switching the page's engine from Interpret to Compile trades
+memory-bounded depth for ~1,700 frames, which the toggle must say. And the
+emitter's `TUR_MUSTTAIL` is empty under c2mir, so mutual tail calls the T5
+fusion did not collapse count against that limit too
+([jit-musttail-expands-to-nothing](../reported/jit-musttail-expands-to-nothing.md)).
+The AOT wasm target is in the same family at a higher ceiling:
+[wasm-target-stack-is-emcc-default](../reported/wasm-target-stack-is-emcc-default.md).
+Between them they are the "real program that needs more than 1 GiB of
+stack" that [r7rs-heap-frames-plan](r7rs-heap-frames-plan.md) names as
+what lifts its hold.
+
+Three responses, cheapest first:
 
 1. Report it: the worker catches `RangeError` and prints the same
    `stack overflow: recursion too deep` line the native engine prints, then
