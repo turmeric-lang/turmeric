@@ -1,0 +1,42 @@
+;;; generator-type-plan: a struct or ADT yield reads back as itself.  The
+;;; element used to be read as an `int`, so `(.a (gen-unwrap ...))` was "no
+;;; typeclass method found for 'a'" -- locally and through a parameter alike.
+(defstruct P [a : int b : float])
+
+(defdata Shape
+  (Circle float)
+  (Square int))
+
+(defn first-a [g : (Generator P)] : int
+  (let [it (gen-next g)]
+    (.a (gen-unwrap it))))
+
+(defn sum-b [g : (Generator P)] : float
+  (let [x (gen-unwrap (gen-next g))
+        y (gen-unwrap (gen-next g))]
+    (+ (.b x) (.b y))))
+
+(defn first-p [g : (Generator P)] : P (gen-unwrap (gen-next g)))
+
+(defn describe [s : Shape] : nil
+  (match s
+    (Circle r) (println r)
+    (Square n) (println n)))
+
+(defn main [] : int
+  (let [gp (gen [] (yield (P 10 2.5)) (yield (P 30 4.25)))]
+    (println (first-a gp))       ; 10
+    (println (first-a gp)))      ; 30
+  (println (sum-b (gen [] (yield (P 1 1.5)) (yield (P 2 2.25)))))   ; 3.75
+  (println (.a (first-p (gen [] (yield (P 9 9.5))))))               ; 9
+  ;; Where the generator is made, too.
+  (println (.b (gen-unwrap (gen-next (gen [] (yield (P 5 6.5)))))))  ; 6.5
+  (let [gs (gen [] (yield (Circle 1.5)) (yield (Square 4)))]
+    (describe (gen-unwrap (gen-next gs)))   ; 1.5
+    (describe (gen-unwrap (gen-next gs))))  ; 4
+  ;; A container and a function come back as themselves as well.
+  (let [gv (gen [] (yield [4 5 6]))
+        gf (gen [] (yield (fn [x : int] : int (* x 3))))]
+    (println (vec-get (gen-unwrap (gen-next gv)) 2))  ; 6
+    (println ((gen-unwrap (gen-next gf)) 5)))         ; 15
+  0)

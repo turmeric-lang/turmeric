@@ -1,0 +1,22 @@
+;;; generator-type-plan: `(Generator T)` in a generic binds T from the
+;;; generator passed in, so the read is a T at every instantiation -- an int,
+;;; a float (not its bits), a string, a struct.
+(defstruct P [a : int b : float])
+
+(defn take2 [T] [g : (Generator T)] : T
+  (do (gen-next g)
+      (gen-unwrap (gen-next g))))
+
+(defn second-of [T] [g : (Generator T)] : T
+  (let [_ (gen-next g)
+        v (gen-next g)]
+    (gen-unwrap v)))
+
+(defn main [] : int
+  (println (take2 (gen [] (yield 1) (yield 2))))            ; 2
+  (println (take2 (gen [] (yield 7.1) (yield 3.25))))       ; 3.25
+  (println (take2 (gen [] (yield "x") (yield "y"))))        ; y
+  (println (.b (take2 (gen [] (yield (P 1 1.5)) (yield (P 2 2.75))))))  ; 2.75
+  (println (second-of (gen [] (yield 0.5) (yield 8.125))))  ; 8.125
+  (println (.a (second-of (gen [] (yield (P 3 0.5)) (yield (P 4 0.25))))))  ; 4
+  0)

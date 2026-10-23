@@ -6,7 +6,7 @@
 
 - Item 1 (`shift0` is `shift`): decision -- implement the pop; feasibility
   investigated (small, after the root-delimiting fix). Plan:
-  [shift0-pop-plan](../upcoming/shift0-pop-plan.md).
+  [shift0-pop-plan](shift0-pop-plan.md).
 - Item 2 (a compiled `shift` delimited by the root; the wrong answer under a
   direct `reset`): its own report,
   [compiled-shift-delimited-by-root](compiled-shift-delimited-by-root.md).

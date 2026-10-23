@@ -14,7 +14,7 @@
 ;;; Only a `perform` written directly at top level, with no handler around it, is
 ;;; caught by the compiler (TUR-E0008). One inside a function is not: if nothing
 ;;; above it handles the effect, the program aborts when it gets there
-;;; (`tur: unhandled effect (tag 2)`, exit status 134, when compiled;
+;;; (`tur: unhandled effect: Ask (tag 2)`, exit status 134, when compiled;
 ;;; `unhandled effect: Ask`, exit status 1, interpreted). A function may declare
 ;;; the effects it performs with `#fx{Ask}`; one that performs an effect missing
 ;;; from its declared row is TUR-E0009, and `handle` removes the effects it
@@ -26,8 +26,7 @@
 ;;; lowering here`;
 ;;; `TUR_TRACE_EVICT=1` names the form that caused it. The interpreter has no such
 ;;; limit. A few forms below are unfinished or differ between the two; the work
-;;; is planned in docs/upcoming/discontinue-plan.md and
-;;; docs/upcoming/effect-continuation-followups-plan.md.
+;;; is planned in docs/upcoming/discontinue-plan.md.
 ;; Reference only: tools/gendocs.py reads the ;;@ lines, the compiler skips them.
 
 ;;; perform -- raise an effect and wait for the handler's answer.
@@ -294,11 +293,9 @@
 ;;; before it is resumed, an escape continuation while its `call/cc` is still on
 ;;; the stack, and a cloneable or serial continuation always, since those can be
 ;;; invoked repeatedly. Anything that is not a continuation -- `5` -- gives false.
-;;; A handler's `k` is false once it has been resumed, on both engines. That
-;;; includes a `^multishot` one compiled, so it cannot guard a second `resume`
-;;; there; interpreted, a `^multishot` clause that calls `cont?` between two
-;;; `resume`s fails the second with `this continuation has already been
-;;; resumed`. Use it before the first use.
+;;; A handler's `k` is false once it has been resumed, on both engines, unless
+;;; it is `^multishot`: that one can be resumed again, so it stays true and can
+;;; guard a second `resume`.
 ;;;
 ;;; Parameters:
 ;;;   k -- a continuation, or any value
@@ -310,4 +307,7 @@
 ;;;   (cont? 5)  ; => false
 ;;;   (defeffect Ask [] : int)
 ;;;   (println (handle (+ 1 (perform (Ask))) (Ask [] k) (if (cont? k) (resume k 41) 0)))  ; prints 42
+;;;   (println (handle (+ 1 (perform (Ask)))
+;;;              (Ask [] ^multishot k)
+;;;              (let [r (resume k 41)] (if (cont? k) (+ r (resume k 1)) -1))))  ; prints 44
 ;;@form (cont? k)

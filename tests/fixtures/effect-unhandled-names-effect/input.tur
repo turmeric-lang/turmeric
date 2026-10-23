@@ -1,0 +1,13 @@
+;;; A perform nothing handles aborts naming the effect, compiled as interpreted
+;;; (`tur: unhandled effect: Ask (tag 2)` vs `tur: eval: unhandled effect:
+;;; Ask`).  The compiled abort used to give only the tag.  Output printed before
+;;; the abort still reaches stdout.
+(defeffect Ask [] : int)
+
+(defn ask-plus-one [] : int
+  (+ 1 (perform (Ask))))
+
+(defn main [] : int
+  (println 7)
+  (println (ask-plus-one))
+  0)

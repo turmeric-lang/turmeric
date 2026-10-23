@@ -27,9 +27,9 @@
 ;;; gen-unwrap -- extract the yielded value from a gen-next pointer.
 ;;;
 ;;; The compiler treats `gen-unwrap` as a core form: the result is typed at
-;;; the generator's element type (a yielded 7.25 reads back as a float, a
-;;; cstr as a cstr) when the argument is a `(gen-next g)` or a binding that
-;;; holds one.  This definition is the reader's documented shape and the
+;;; the generator's element type -- the `T` of its `(Generator T)` (a yielded
+;;; 7.25 reads back as a float, a cstr as a cstr, a struct as that struct) --
+;;; when the argument is a `(gen-next g)` or a binding that holds one.  This definition is the reader's documented shape and the
 ;;; interpreter's native fallback; only an opaque pointer of unknown
 ;;; provenance reads the slot as an int.
 ;;;

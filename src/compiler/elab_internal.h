@@ -1593,6 +1593,7 @@ typedef struct GenContext {
     TypeKind          element_kind;     /* TypeKind of the first yield (TY_UNKNOWN until set) */
     bool              element_kind_set; /* true once first yield is elaborated */
     const char       *element_tyvar;    /* first yield typed with a signature tyvar */
+    Type              element_type;     /* generator-type-plan: the first yield's full type */
     struct GenContext *parent;          /* enclosing GenContext (NULL for outermost) */
     /* CF5: true when the enclosing function calls itself inside this gen body */
     bool              is_recursive;
@@ -2482,6 +2483,10 @@ Type *fn_type_from_form(Elab *e, const Form *form,
  * arena-allocated Type* (TY_ADT or TY_STRUCT) when found, else NULL.
  * Prefers GADTs over structs when both share a name, per the MF4 design. */
 Type *elab_lookup_type_by_name(Elab *e, const Symbol *name);
+/* generator-type-plan: the `(Generator T)` annotation (elab_types.c). */
+bool  elab_is_generator_type_head(Elab *e, const Symbol *head);
+bool  elab_reject_bare_generator_type(Elab *e, const Symbol *sym, Span span);
+Type *elab_generator_type_from_form(Elab *e, const Form *form, const Type *elem);
 /* CTOR-V0: scope-aware lookup that returns the nearest TY_STRUCT/TY_ADT binding
  * for `name` (skipping shadowing value bindings of other kinds), or NULL. */
 Binding *scope_lookup_type_def(struct Scope *s, const Symbol *name);

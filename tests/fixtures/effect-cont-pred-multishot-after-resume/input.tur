@@ -1,0 +1,13 @@
+;;; `(cont? k)` of a `^multishot` continuation stays true after a resume: it
+;;; can still be invoked, so the second resume runs (41+1 + 1+1 = 44).  The
+;;; compiled program marked k consumed at every resume and answered -1; the
+;;; interpreter fell back to the one-shot fiber for a clause asking `cont?` and
+;;; failed the second resume.  The one-shot shape is
+;;; effect-cont-pred-after-resume.
+(defeffect Ask [] : int)
+
+(defn main [] : int
+  (println (handle (+ 1 (perform (Ask)))
+             (Ask [] ^multishot k)
+             (let [r (resume k 41)] (if (cont? k) (+ r (resume k 1)) -1))))
+  0)

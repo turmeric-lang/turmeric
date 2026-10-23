@@ -388,6 +388,19 @@ int type_eq(Type a, Type b) {
         return type_eq(*a.as.app.fn, *b.as.app.fn) && type_eq(*a.as.app.arg, *b.as.app.arg);
     }
     /* Phase HKT-P2: Recursive types - identity by name pointer (interned) */
+    /* generator-type-plan: two generators are one type when they yield one
+     * type.  An element nothing recorded (a generator of unknown element) or a
+     * type variable stands for any. */
+    if (a.kind == TY_GENERATOR) {
+        const Type *ea = a.as.generator_.element, *eb = b.as.generator_.element;
+        TypeKind ka = ea ? ea->kind : a.as.generator_.element_kind;
+        TypeKind kb = eb ? eb->kind : b.as.generator_.element_kind;
+        if (ka == TY_TYVAR || kb == TY_TYVAR ||
+            ka == TY_UNKNOWN || kb == TY_UNKNOWN)
+            return 1;
+        if (ea && eb) return type_eq(*ea, *eb);
+        return ka == kb;
+    }
     if (a.kind == TY_REC) {
         return a.as.rec.name == b.as.rec.name;
     }
@@ -3335,9 +3348,15 @@ const char *type_name(Type t) {
             buf_free(&tmp);
             return r;
         }
-        /* GF1: Generator type */
-        case TY_GENERATOR:
-            return "generator";
+        /* GF1: Generator type -- spelled the way an annotation writes it. */
+        case TY_GENERATOR: {
+            Buf tmp; buf_init(&tmp);
+            type_name_buf(&tmp, t);
+            buf_putc(&tmp, '\0');
+            const char *r = intern_type_name(tmp.data);
+            buf_free(&tmp);
+            return r;
+        }
     }
     return "?";
 }
@@ -3810,9 +3829,16 @@ static void type_name_buf(Buf *b, Type t) {
             break;
         /* GF1: Generator type */
         case TY_GENERATOR:
-            buf_puts(b, "generator<");
-            buf_puts(b, type_name(type_from_kind(t.as.generator_.element_kind)));
-            buf_putc(b, '>');
+            buf_puts(b, "(Generator ");
+            if (t.as.generator_.element)
+                type_name_buf(b, *t.as.generator_.element);
+            else if (t.as.generator_.element_tyvar)
+                buf_puts(b, t.as.generator_.element_tyvar);
+            else if (t.as.generator_.element_kind == TY_UNKNOWN)
+                buf_putc(b, '?');
+            else
+                buf_puts(b, type_name(type_from_kind(t.as.generator_.element_kind)));
+            buf_putc(b, ')');
             break;
     }
 }
@@ -4881,6 +4907,24 @@ Type type_dynvar(Arena *a, Type value_type) {
     t.hkt_kind = KIND_STAR;
     t.as.dynvar_.value_type = (Type *)arena_alloc(a, sizeof(Type));
     *t.as.dynvar_.value_type = value_type;
+    return t;
+}
+
+/* generator-type-plan: `(Generator T)`.  element_kind keeps the scalar fast
+ * paths (gen-unwrap's reinterpret); element_tyvar names a type variable
+ * element, which is how gen-unwrap types its read inside a generic. */
+Type type_generator(Arena *a, Type elem) {
+    Type t;
+    memset(&t, 0, sizeof(t));
+    t.kind = TY_GENERATOR;
+    t.copy_kind = CK_COPY;
+    t.hkt_kind = KIND_STAR;
+    t.as.generator_.element_kind = elem.kind;
+    t.as.generator_.element_tyvar =
+        elem.kind == TY_TYVAR ? elem.as.tyvar_.name : NULL;
+    Type *ep = (Type *)arena_alloc(a, sizeof(Type));
+    *ep = elem;
+    t.as.generator_.element = ep;
     return t;
 }
 

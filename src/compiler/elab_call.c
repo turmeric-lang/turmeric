@@ -1395,6 +1395,8 @@ static bool call_type_has_named_tyvar(const Type *t) {
         case TY_APP:
             return call_type_has_named_tyvar(t->as.app.fn) ||
                    call_type_has_named_tyvar(t->as.app.arg);
+        case TY_GENERATOR:   /* generator-type-plan: (Generator A) */
+            return call_type_has_named_tyvar(t->as.generator_.element);
         case TY_FN:
             /* poly-closure-inner-dispatch-result-erased (Part 1): a (fn [A] B)
              * param type carries named tyvars in arg_full_types / result_full_type
@@ -1440,6 +1442,8 @@ static bool type_mentions_tyvar(const Type *t) {
         case TY_APP:
             return type_mentions_tyvar(t->as.app.fn) ||
                    type_mentions_tyvar(t->as.app.arg);
+        case TY_GENERATOR:
+            return type_mentions_tyvar(t->as.generator_.element);
         case TY_FN:
             if (type_mentions_tyvar(t->as.fn.result_full_type)) return true;
             if (t->as.fn.arg_full_types)
@@ -1482,6 +1486,9 @@ bool handle_targets_conflict(const Type *a, const Type *b) {
         if (!da || !db || da == db) return false;
         return !(da->name && db->name && strcmp(da->name, db->name) == 0);
     }
+    /* generator-type-plan: a `(Generator int)` is not a `(Generator cstr)`;
+     * type_eq lets an unknown or type-variable element match anything. */
+    if (a->kind == TY_GENERATOR) return !type_eq(*a, *b);
     return false;
 }
 
@@ -1493,6 +1500,8 @@ static bool type_mentions_tyvar_name(const Type *t, const char *name) {
         case TY_APP:
             return type_mentions_tyvar_name(t->as.app.fn, name) ||
                    type_mentions_tyvar_name(t->as.app.arg, name);
+        case TY_GENERATOR:
+            return type_mentions_tyvar_name(t->as.generator_.element, name);
         case TY_FN:
             if (type_mentions_tyvar_name(t->as.fn.result_full_type, name)) return true;
             if (t->as.fn.arg_full_types) {
@@ -2200,6 +2209,21 @@ static bool call_collect_type_bindings(const Type *expected, Type actual,
         case TY_UNION:
         case TY_INTERSECTION:
             return type_eq(*expected, actual);
+        /* generator-type-plan: `(Generator A)` binds A from what the argument
+         * generator yields -- its recorded full element, else its kind. */
+        case TY_GENERATOR: {
+            const Type *ee = expected->as.generator_.element;
+            if (actual.kind != TY_GENERATOR) return type_eq(*expected, actual);
+            if (!ee) return true;
+            Type ae;
+            if (actual.as.generator_.element)
+                ae = *actual.as.generator_.element;
+            else if (actual.as.generator_.element_kind == TY_UNKNOWN)
+                return true;
+            else
+                ae = type_from_kind(actual.as.generator_.element_kind);
+            return call_collect_type_bindings(ee, ae, bindings, n_bindings);
+        }
         default:
             return type_eq(*expected, actual);
     }
@@ -2385,6 +2409,11 @@ static Type call_instantiate_type(Elab *e, const Type *t,
             }
             return type_union_build(e->arena, members, n);
         }
+        case TY_GENERATOR:
+            if (!t->as.generator_.element) return *t;
+            return type_generator(e->arena,
+                                  call_instantiate_type(e, t->as.generator_.element,
+                                                        bindings, n_bindings));
         case TY_INTERSECTION: {
             uint8_t n = t->as.intersection_.n_members;
             Type **members = (Type **)arena_alloc(e->arena, (n ? n : 1) * sizeof(Type *));
@@ -4411,6 +4440,8 @@ static bool type_mentions_tyvar_named(const Type *t, const char *name) {
         case TY_APP:
             return type_mentions_tyvar_named(t->as.app.fn, name) ||
                    type_mentions_tyvar_named(t->as.app.arg, name);
+        case TY_GENERATOR:
+            return type_mentions_tyvar_named(t->as.generator_.element, name);
         case TY_FN:
             if (t->as.fn.result_full_type &&
                 type_mentions_tyvar_named(t->as.fn.result_full_type, name)) return true;
@@ -4439,6 +4470,9 @@ static void call_collect_tyvar_names(const Type *t, const char **names, uint8_t 
         case TY_APP:
             call_collect_tyvar_names(t->as.app.fn, names, n, cap);
             call_collect_tyvar_names(t->as.app.arg, names, n, cap);
+            return;
+        case TY_GENERATOR:
+            call_collect_tyvar_names(t->as.generator_.element, names, n, cap);
             return;
         case TY_FN:
             if (t->as.fn.arg_full_types)
@@ -8933,7 +8967,7 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
          * left to the binding collection below.  `rc<S>` / `weak<S>` had the
          * same hole: type_eq compares only their target kind. */
         if (arg_ok && (expected_arg_kind == TY_PTR_VOID || expected_arg_kind == TY_RC ||
-                       expected_arg_kind == TY_WEAK) &&
+                       expected_arg_kind == TY_WEAK || expected_arg_kind == TY_GENERATOR) &&
                 fn_type.kind == TY_FN && fn_type.as.fn.arg_full_types) {
             uint32_t nidx = fn_binding->closure_fn_binding ? i + 1 : i;
             Type *ef = (nidx < fn_type.as.fn.arity)
@@ -10233,7 +10267,8 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
                 uint32_t fn_arg_idx5 = fn_binding->closure_fn_binding ? i + 1 : i;
                 Type *ct = (fn_arg_idx5 < fn_type.as.fn.arity)
                     ? fn_type.as.fn.arg_full_types[fn_arg_idx5] : NULL;
-                if (ct && (ct->kind == TY_APP || ct->kind == TY_ADT))
+                if (ct && (ct->kind == TY_APP || ct->kind == TY_ADT ||
+                           ct->kind == TY_GENERATOR))
                     expected_ty = *ct;
                 /* borrowed-aggregate-key-skips-the-key-check: a concrete
                  * `(& Pt)` prints its target, not `&adt`. */
