@@ -1,8 +1,8 @@
 # Plan: `defer` runs at the end of its block and sees the variables as they are then
 
-> **Status:** PROPOSED 2026-10-21 (from control-forms-gaps items 2 and 3).
+> **Status:** DONE 2026-10-23 -- archived (from control-forms-gaps items 2 and 3).
 > Decisions taken: end-of-block scope on both engines; a deferred expression reads
-> its variables when it runs. Part B was prototyped (below). Not started.
+> its variables when it runs. See "Outcome" at the end.
 
 ## Part A -- end of block, on the interpreter too
 
@@ -82,3 +82,27 @@ limit).
 3. `defer` entry in `stdlib/forms/control.tur` (scope and read time), the
    control-forms guide text if any; archive control-forms-gaps' items with this
    plan.
+
+## Outcome (2026-10-23)
+
+- **Part B** landed as prototyped: `cell_fn_mentions` (`elab_forms.c`) treats a
+  `defer` body as a capturing scope, and `mut_cell_escapes` (`emit_expr.c`) has an
+  `EX_DEFER` arm that walks only the body. `defer-mutated-binding` prints 20 and
+  `defer-in-loop` `1 2 3` on `tur run`, `tur jit` and `--interpret`, both clean
+  under `tests/run-leak-check.sh`. An aggregate `^mut` keeps the snapshot; the
+  `defer` entry in `stdlib/forms/control.tur` says so.
+- **Part A** needed one evaluator, not two: the tree walker hands every `do` and
+  `let` to the work-stack driver. A non-tail `do` that directly registers a defer
+  now stores its scope marker's parent as a mark on its `DK_DO_SEQ` frame
+  (`defer_scope`) and fires down to it when the block ends; an early exit leaves
+  the entries to the enclosing `DK_CALL_RET`'s by-scope walk, as `DK_LET_BODY`
+  does. A tail `do` keeps leaving them to `DK_CALL_RET`: nothing else in the
+  activation runs after it, and a tail call in its last item must run before
+  them. `tests/fixtures/defer-block-scope` (block end, per-pass `while`, `when`,
+  nesting, `return` through nested blocks, a block's value) runs on both
+  harnesses.
+- The fiber-handle report
+  ([turi-fiber-handle-defers-fire-at-the-wrong-time](../reported/turi-fiber-handle-defers-fire-at-the-wrong-time.md))
+  is not closed by this: its remaining case is the fiber runtime's single-shot
+  limit (a multi-shot resume over a defer-bearing body), which is about capture,
+  not scope.

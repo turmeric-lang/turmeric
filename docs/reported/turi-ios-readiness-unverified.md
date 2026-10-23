@@ -2,7 +2,7 @@
 
 **Severity: medium (platform readiness)** -- nothing is broken today, because
 no iOS target exists. The risk is that one is planned
-([godot-binding-ios-plan](../upcoming/godot-binding-ios-plan.md):
+([godot-binding-ios-plan](../upcoming/godot/godot-binding-ios-plan.md):
 "ship interpreter mode only"), the interpreter is the only engine that plan
 can use, and since the JIT became the default build (v0.60.0, `923b803a`) no
 CI leg builds the interpreter the way iOS would need it. Anything turi picks
@@ -140,7 +140,7 @@ The list above comes from reading the code. To get one that is complete:
 
 ## Related
 
-- [godot-binding-ios-plan](../upcoming/godot-binding-ios-plan.md) -- the
+- [godot-binding-ios-plan](../upcoming/godot/godot-binding-ios-plan.md) -- the
   consumer; its success criterion is an interpreter-mode script on TestFlight.
 - [turi-parity-guide](../guides/turi-parity-guide.md) -- where the
   interpreter is known to differ from compiled output.

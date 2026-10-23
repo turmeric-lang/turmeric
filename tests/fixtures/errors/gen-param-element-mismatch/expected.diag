@@ -1,0 +1,1 @@
+function 'take-int' arg 1: expected (Generator int), got (Generator cstr)

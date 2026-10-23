@@ -3437,10 +3437,10 @@ __attribute__((unused)) static void __dk_escape_abandon(void *to_) {
         if (!__dk_pp_kept(p)) __dk_abort_abandon(p->k, p->H);
     g_dk_pend_perform = to;
 }
-static intptr_t dk_perform(int tag, intptr_t arg, DK *k) {
+static intptr_t dk_perform(int tag, const char *name, intptr_t arg, DK *k) {
     DK *H = k;
     while (H && !(H->kind == DKK_HANDLER && H->tag == tag) && H->kind != DKK_DONE) H = H->next;
-    if (!H || H->kind == DKK_DONE) { fprintf(stderr, "tur: unhandled effect (tag %d)\n", tag); abort(); }
+    if (!H || H->kind == DKK_DONE) { fflush(stdout); fprintf(stderr, "tur: unhandled effect: %s (tag %d)\n", name ? name : "?", tag); abort(); }
     if (H->tail_inplace && H->tail_resume && !H->shallow && g_dk_driver) {
         k->inplace_head = true;
         g_dk_case_reopen_hnode = H;
@@ -6550,6 +6550,26 @@ static int64_t ctor_Option_Some__Zipper__struct(int64_t _0) {
 }
 
 #endif
+#ifndef TUR_TY_tur_adt_TurMutCell__int
+#define TUR_TY_tur_adt_TurMutCell__int
+#ifndef TUR_FWD_tur_adt_TurMutCell__int
+#define TUR_FWD_tur_adt_TurMutCell__int
+typedef struct tur_adt_TurMutCell__int tur_adt_TurMutCell__int;
+#endif
+struct tur_adt_TurMutCell__int {
+    int64_t v;
+};
+#endif
+
+#ifndef TUR_FN_tur_adt_TurMutCell__int
+#define TUR_FN_tur_adt_TurMutCell__int
+static tur_adt_TurMutCell__int * ctor_TurMutCell_TurMutCell__int(int64_t _0) {
+    tur_adt_TurMutCell__int *__r = (tur_adt_TurMutCell__int *)tur_region_alloc_or_malloc(sizeof(tur_adt_TurMutCell__int));
+    __r->v = _0;
+    return __r;
+}
+
+#endif
 
 /* proper-tail-calls T2b: a guaranteed tail call where the C compiler
  * can promise one, and an ordinary `return f(args);` elsewhere. */
@@ -7057,9 +7077,9 @@ static tur_adt_Cons__int * tcons__spec__tur_adt_Cons__int___int64_t_int64_t(int6
 static tur_adt_Vec__int * vec_empty_like____spec__tur_adt_Vec__int___int64_t(int64_t);
 static tur_adt_Vec__int * vec_new__spec__tur_adt_Vec__int__(void);
 
-struct __defer_env_203 {int64_t i; };
+struct __defer_env_204 {tur_adt_TurMutCell__int * __tur_mutcell_3; };
 
-static void __defer_204(void *__env);
+static void __defer_205(void *__env);
 static void __defer_199(void *__env);
 struct __defer_env_193 {int64_t m; };
 
@@ -11064,20 +11084,26 @@ int main(int argc, char **argv) {
         {
             int64_t i_3 = INT64_C(0);
             (void)i_3;
+            tur_adt_TurMutCell__int * __ps_202 = (ctor_TurMutCell_TurMutCell__int(i_3));
+            if (tur_panicking) { tur_panic_root_exit(); }
+            tur_adt_TurMutCell__int * _un_untur_unmutcell_un3_4 = __ps_202;
+            (void)_un_untur_unmutcell_un3_4;
             while (1) {
-                if (!((i_3) < (INT64_C(3)))) break;
-                tur_frame __frame_202;
-                tur_frame_init(&__frame_202, NULL);
-                struct __defer_env_203 __t205 = {.i = i_3};
-                tur_frame_push_defer(&__frame_202, __defer_204, &__t205);
-                i_3 = (i_3) + (INT64_C(1));
-                tur_frame_fire_lifo(&__frame_202);
+                if (!(((int64_t)((tur_adt_TurMutCell__int *)(intptr_t)(_un_untur_unmutcell_un3_4))->v) < (INT64_C(3)))) break;
+                tur_frame __frame_203;
+                tur_frame_init(&__frame_203, NULL);
+                struct __defer_env_204 __t206 = {.__tur_mutcell_3 = _un_untur_unmutcell_un3_4};
+                tur_frame_push_defer(&__frame_203, __defer_205, &__t206);
+                (_un_untur_unmutcell_un3_4)->v = ((int64_t)((tur_adt_TurMutCell__int *)(intptr_t)(_un_untur_unmutcell_un3_4))->v) + (INT64_C(1));
+                TUR_REGION_NOTE_WORDS(&((_un_untur_unmutcell_un3_4)->v), sizeof((_un_untur_unmutcell_un3_4)->v));
+                tur_frame_fire_lifo(&__frame_203);
             }
             puts("loop done");
+            tur_region_free((void *)(intptr_t)(_un_untur_unmutcell_un3_4));
         }
-        int64_t __t206;
-        __t206 = INT64_C(0);
-        return (int)__t206;
+        int64_t __t207;
+        __t207 = INT64_C(0);
+        return (int)__t207;
 }
 
 static tur_adt_Cons__int * tcons__spec__tur_adt_Cons__int___int64_t_int64_t(int64_t h, int64_t t) {
@@ -11085,9 +11111,9 @@ static tur_adt_Cons__int * tcons__spec__tur_adt_Cons__int___int64_t_int64_t(int6
 }
 
 static tur_adt_Vec__int * vec_empty_like____spec__tur_adt_Vec__int___int64_t(int64_t witness) {
-        tur_adt_Vec__int * __ps_207 = (vec_new__spec__tur_adt_Vec__int__());
+        tur_adt_Vec__int * __ps_208 = (vec_new__spec__tur_adt_Vec__int__());
         if (tur_panicking) return ((tur_adt_Vec__int *)0);
-        return __ps_207;
+        return __ps_208;
 }
 
 static tur_adt_Vec__int * vec_new__spec__tur_adt_Vec__int__(void) {
@@ -11100,9 +11126,9 @@ static tur_adt_Vec__int * vec_new__spec__tur_adt_Vec__int__(void) {
 }
 
 
-static void __defer_204(void *__env) {
-    struct __defer_env_203 *__e = (struct __defer_env_203 *)__env;
-    printf("%lld\n", (long long)(__e->i));
+static void __defer_205(void *__env) {
+    struct __defer_env_204 *__e = (struct __defer_env_204 *)__env;
+    printf("%lld\n", (long long)((int64_t)((tur_adt_TurMutCell__int *)(intptr_t)(__e->__tur_mutcell_3))->v));
 }
 
 static void __defer_199(void *__env) {
@@ -11112,9 +11138,9 @@ static void __defer_199(void *__env) {
 
 static void __defer_194(void *__env) {
     struct __defer_env_193 *__e = (struct __defer_env_193 *)__env;
-    bool __ps_208 = (bt_hyundo_hyto_ex(__e->m));
+    bool __ps_209 = (bt_hyundo_hyto_ex(__e->m));
     /* panic-return-signal: ret ctype unknown; no propagation here */
-    (void)(__ps_208);
+    (void)(__ps_209);
 }
 
 

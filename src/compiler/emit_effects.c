@@ -950,14 +950,25 @@ char *emit_effects_shift(EmitCtx *ctx, Buf *body, const Expr *e) {
 }
 
 char *emit_effects_shift0(EmitCtx *ctx, Buf *body, const Expr *e) {
-    /* (shift0 k body) - one-shot shift
-     * Similar to shift but k cannot resume the continuation.
-     * For now, same implementation as shift.
+    /* (shift0 k body) - abortive, like shift, but k runs with the reset it
+     * aborts to removed (shift0-pop-plan): the landing is popped off the
+     * tur_cur_shift_reset stack around the call, so a shift inside k -- a
+     * direct one, or a CPS callee's that reaches its chain's root -- lands on
+     * the next reset out, or finds none.  The landing goes back before the
+     * abort to it below.
      */
     char *body_val = emit_value(ctx, body, e->as.shift0_.body);
     char *result = fresh_tmp(ctx);
 
     char *k_fn = emit_value(ctx, body, e->as.shift0_.k_fn);
+    char *popped = NULL;
+    if (ctx->in_shift_escape && ctx->shift_escape_ctype) {
+        popped = fresh_tmp(ctx);
+        indent_buf(body, ctx->indent);
+        buf_printf(body, "tur_shift_reset_ctx *%s = tur_cur_shift_reset;\n", popped);
+        indent_buf(body, ctx->indent);
+        buf_printf(body, "if (%s) tur_cur_shift_reset = %s->prev;\n", popped, popped);
+    }
 
     /* Check if this is a closure call by looking at the expression */
     if (e->as.shift0_.k_fn->kind == EX_CLOSURE) {
@@ -981,6 +992,11 @@ char *emit_effects_shift0(EmitCtx *ctx, Buf *body, const Expr *e) {
     }
     free(k_fn);
     free(body_val);
+    if (popped) {
+        indent_buf(body, ctx->indent);
+        buf_printf(body, "tur_cur_shift_reset = %s;\n", popped);
+        free(popped);
+    }
     emit_shift_escape_abort(ctx, body, result);
     return result;
 }

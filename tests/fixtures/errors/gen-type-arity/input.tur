@@ -1,0 +1,6 @@
+;;; generator-type-plan: (Generator T) takes one type, the element.
+(defn take1 [g : (Generator int float)] : int (gen-unwrap (gen-next g)))
+
+(defn main [] : int
+  (println (take1 (gen [] (yield 1))))
+  0)

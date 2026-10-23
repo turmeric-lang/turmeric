@@ -3437,10 +3437,10 @@ __attribute__((unused)) static void __dk_escape_abandon(void *to_) {
         if (!__dk_pp_kept(p)) __dk_abort_abandon(p->k, p->H);
     g_dk_pend_perform = to;
 }
-static intptr_t dk_perform(int tag, intptr_t arg, DK *k) {
+static intptr_t dk_perform(int tag, const char *name, intptr_t arg, DK *k) {
     DK *H = k;
     while (H && !(H->kind == DKK_HANDLER && H->tag == tag) && H->kind != DKK_DONE) H = H->next;
-    if (!H || H->kind == DKK_DONE) { fprintf(stderr, "tur: unhandled effect (tag %d)\n", tag); abort(); }
+    if (!H || H->kind == DKK_DONE) { fflush(stdout); fprintf(stderr, "tur: unhandled effect: %s (tag %d)\n", name ? name : "?", tag); abort(); }
     if (H->tail_inplace && H->tail_resume && !H->shallow && g_dk_driver) {
         k->inplace_head = true;
         g_dk_case_reopen_hnode = H;
@@ -11094,7 +11094,7 @@ static intptr_t main_pf2(intptr_t env, intptr_t __t4__slot) {
 static intptr_t main_rf1(intptr_t env, intptr_t __t5__slot, DK *__kont) {
     (void)env;
     int64_t __t5 = (int64_t)(__t5__slot);
-    return dk_perform(2, (intptr_t)(0), __dk_reap_node(dk_frame_join(main_pf2, 0, __kont)));
+    return dk_perform(2, "Ask", (intptr_t)(0), __dk_reap_node(dk_frame_join(main_pf2, 0, __kont)));
 }
 static int64_t main__cps(DK *__kont) {
     tur_handler_table_t * _un_unctlhoist_un8_9;
@@ -11124,7 +11124,7 @@ static int64_t main__cps(DK *__kont) {
     row_10 = __ps_210;
     __t1 = (tur_handler_table_t *)(row_10).h;
     DK *__h0 = __dk_reap_keep(dk_hgroup_from_table((const tur_handler_table_t *)(intptr_t)__t1, dk_frame_resume_borrow(main_hk0, 0, __kont)));
-    return dk_perform(3, (intptr_t)("hi"), __dk_reap_node(dk_frame_resume_join(main_rf1, 0, __h0)));
+    return dk_perform(3, "Tell", (intptr_t)("hi"), __dk_reap_node(dk_frame_resume_join(main_rf1, 0, __h0)));
 }
 int main(int argc, char **argv) {
     __tur_static_init();

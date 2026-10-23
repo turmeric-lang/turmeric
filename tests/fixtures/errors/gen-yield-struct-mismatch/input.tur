@@ -1,0 +1,10 @@
+;;; generator-type-plan: a struct element is read back at the first yield's
+;;; type, so a later yield of another struct is refused -- the kinds agreeing
+;;; is not enough.
+(defstruct P [a : int])
+(defstruct Q [b : float])
+
+(defn main [] : int
+  (let [g (gen [] (yield (P 1)) (yield (Q 2.5)))]
+    (println (.a (gen-unwrap (gen-next g)))))
+  0)

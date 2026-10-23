@@ -1,0 +1,64 @@
+;;; generator-type-plan: a generator is a value with a type, (Generator T), so
+;;; a function can take one, return one, and read what it yields at T.  A float
+;;; element comes back as a float through the parameter, not as its bits.
+(defstruct Holder [g : (Generator int) tag : int])
+
+(defn take-int [g : (Generator int)] : int (gen-unwrap (gen-next g)))
+(defn take-float [g : (Generator float)] : float (gen-unwrap (gen-next g)))
+(defn take-cstr [g : (Generator cstr)] : cstr (gen-unwrap (gen-next g)))
+
+(defn make-range [lo : int hi : int] : (Generator int)
+  (gen []
+    (let [^mut i lo]
+      (while (< i hi)
+        (yield i)
+        (set! i (+ i 1))))))
+
+;; A generator parameter driven from inside another generator.  gen-done?
+;; turns true at the gen-next that finds the body finished.
+(defn doubled [g : (Generator int)] : (Generator int)
+  (gen []
+    (while (not (gen-done? g))
+      (let [v (gen-next g)]
+        (when (not (gen-done? g))
+          (yield (* 2 (gen-unwrap v))))))))
+
+(defn sum-all [g : (Generator int)] : int
+  (let [^mut acc 0]
+    (while (not (gen-done? g))
+      (let [v (gen-next g)]
+        (when (not (gen-done? g))
+          (set! acc (+ acc (gen-unwrap v))))))
+    acc))
+
+(defn sum-floats [g : (Generator float)] : float
+  (let [^mut acc 0.0]
+    (while (not (gen-done? g))
+      (let [v (gen-next g)]
+        (when (not (gen-done? g))
+          (set! acc (+ acc (gen-unwrap v))))))
+    acc))
+
+(defn main [] : int
+  (let [gi (gen [] (yield 1) (yield 2))
+        gf (gen [] (yield 7.1) (yield 3.25))
+        gs (gen [] (yield "hello") (yield "world"))]
+    (println (take-int gi))      ; 1
+    (println (take-int gi))      ; 2
+    (println (take-float gf))    ; 7.1
+    (println (take-float gf))    ; 3.25
+    (println (take-cstr gs))     ; hello
+    (println (take-cstr gs)))    ; world
+  (println (sum-all (make-range 0 5)))            ; 10
+  (println (sum-all (doubled (make-range 1 4))))  ; 12
+  (println (sum-floats (gen [] (yield 0.5) (yield 1.25) (yield 2.125))))  ; 3.875
+  ;; A let annotation and a lambda parameter take the type too.
+  (let [g : (Generator float) (gen [] (yield 1.25) (yield 2.5))
+        f (fn [x : (Generator float)] : float (gen-unwrap (gen-next x)))]
+    (println (f g))              ; 1.25
+    (println (f g)))             ; 2.5
+  ;; ... and so does a struct field.
+  (let [h (Holder (make-range 41 43) 7)]
+    (println (take-int (.g h)))  ; 41
+    (println (take-int (.g h)))) ; 42
+  0)

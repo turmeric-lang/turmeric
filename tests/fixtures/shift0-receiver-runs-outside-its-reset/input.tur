@@ -1,0 +1,26 @@
+;; shift0-pop-plan: `shift0` runs its receiver with the reset it aborts to
+;; removed, so a shift inside the receiver is delimited by the next reset out.
+;; `shift` runs it inside that reset.  Before, both engines ran a shift0's
+;; receiver inside the reset, as for shift, and the first line printed 5100.
+;; Each line matches `tur --interpret` and `tur jit`.
+(defn h [] : int (+ 1 (shift (fn [w : int] (* 1000 w)) 7)))
+(defn main [] : int
+  ;; the receiver's shift replaces (+ 100 _) up to the outer reset
+  (println (reset (+ 100 (reset (+ 10 (shift0 (fn [v : int] (shift (fn [w : int] (* 1000 w)) v)) 5))))))  ; 5000
+  ;; the shift twin: the receiver's shift is delimited by the inner reset
+  (println (reset (+ 100 (reset (+ 10 (shift (fn [v : int] (shift (fn [w : int] (* 1000 w)) v)) 5))))))   ; 5100
+  ;; a receiver that does no control of its own: shift0 is shift
+  (println (reset (+ 100 (reset (+ 10 (shift0 (fn [v : int] (* 2 v)) 5))))))                              ; 110
+  ;; nested shift0: the inner one aborts past the reset the outer one removed
+  (println (reset (+ 100 (reset (+ 10 (shift0 (fn [v : int] (+ 1 (shift0 (fn [w : int] (* 1000 w)) v))) 5))))))  ; 5000
+  ;; a reset of the receiver's own delimits its shift; the receiver's value
+  ;; then goes to the shift0's reset
+  (println (reset (+ 10 (shift0 (fn [v : int] (+ 1 (reset (+ 2 (shift (fn [w : int] w) v))))) 5))))      ; 6
+  ;; a CPS callee's shift reached from the receiver lands on the outer reset
+  (println (reset (+ 100 (reset (+ 10 (shift0 (fn [v : int] (+ v (h))) 5))))))                           ; 7000
+  (println (reset (+ 100 (reset (+ 10 (shift (fn [v : int] (+ v (h))) 5))))))                            ; 7100
+  ;; the inner reset is back afterwards: a plain shift still sees it
+  (println (reset (+ 100 (reset (+ 10 (shift (fn [v : int] (+ 1 v)) 5))))))                              ; 106
+  ;; a float result rides the outer landing as its bits
+  (println (reset (+ 0.5 (reset (+ 10.25 (shift0 (fn [v : float] (shift (fn [w : float] (* 2.0 w)) v)) 3.25))))))  ; 6.5
+  0)

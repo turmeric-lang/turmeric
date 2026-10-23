@@ -3437,10 +3437,10 @@ __attribute__((unused)) static void __dk_escape_abandon(void *to_) {
         if (!__dk_pp_kept(p)) __dk_abort_abandon(p->k, p->H);
     g_dk_pend_perform = to;
 }
-static intptr_t dk_perform(int tag, intptr_t arg, DK *k) {
+static intptr_t dk_perform(int tag, const char *name, intptr_t arg, DK *k) {
     DK *H = k;
     while (H && !(H->kind == DKK_HANDLER && H->tag == tag) && H->kind != DKK_DONE) H = H->next;
-    if (!H || H->kind == DKK_DONE) { fprintf(stderr, "tur: unhandled effect (tag %d)\n", tag); abort(); }
+    if (!H || H->kind == DKK_DONE) { fflush(stdout); fprintf(stderr, "tur: unhandled effect: %s (tag %d)\n", name ? name : "?", tag); abort(); }
     if (H->tail_inplace && H->tail_resume && !H->shallow && g_dk_driver) {
         k->inplace_head = true;
         g_dk_case_reopen_hnode = H;
@@ -6550,6 +6550,26 @@ static int64_t ctor_Option_Some__Zipper__struct(int64_t _0) {
 }
 
 #endif
+#ifndef TUR_TY_tur_adt_TurMutCell__int
+#define TUR_TY_tur_adt_TurMutCell__int
+#ifndef TUR_FWD_tur_adt_TurMutCell__int
+#define TUR_FWD_tur_adt_TurMutCell__int
+typedef struct tur_adt_TurMutCell__int tur_adt_TurMutCell__int;
+#endif
+struct tur_adt_TurMutCell__int {
+    int64_t v;
+};
+#endif
+
+#ifndef TUR_FN_tur_adt_TurMutCell__int
+#define TUR_FN_tur_adt_TurMutCell__int
+static tur_adt_TurMutCell__int * ctor_TurMutCell_TurMutCell__int(int64_t _0) {
+    tur_adt_TurMutCell__int *__r = (tur_adt_TurMutCell__int *)tur_region_alloc_or_malloc(sizeof(tur_adt_TurMutCell__int));
+    __r->v = _0;
+    return __r;
+}
+
+#endif
 
 /* proper-tail-calls T2b: a guaranteed tail call where the C compiler
  * can promise one, and an ordinary `return f(args);` elsewhere. */
@@ -7059,9 +7079,12 @@ static tur_adt_Cons__int * tcons__spec__tur_adt_Cons__int___int64_t_int64_t(int6
 static tur_adt_Vec__int * vec_empty_like____spec__tur_adt_Vec__int___int64_t(int64_t);
 static tur_adt_Vec__int * vec_new__spec__tur_adt_Vec__int__(void);
 
-struct __defer_env_206 {int64_t my_x; };
+struct __defer_env_210 {int64_t my_y; };
 
-static void __defer_207(void *__env);
+static void __defer_211(void *__env);
+struct __defer_env_207 {tur_adt_TurMutCell__int * __tur_mutcell_11; };
+
+static void __defer_208(void *__env);
 static void __defer_199(void *__env);
 struct __defer_env_193 {int64_t m; };
 
@@ -11087,28 +11110,38 @@ int main(int argc, char **argv) {
         {
             int64_t my_hyx_11 = INT64_C(10);
             (void)my_hyx_11;
-            tur_frame __frame_205;
-            tur_frame_init(&__frame_205, NULL);
-            struct __defer_env_206 __t208 = {.my_x = my_hyx_11};
-            tur_frame_push_defer(&__frame_205, __defer_207, &__t208);
-            my_hyx_11 = INT64_C(20);
-            tur_frame_fire_lifo(&__frame_205);
+            tur_adt_TurMutCell__int * __ps_205 = (ctor_TurMutCell_TurMutCell__int(my_hyx_11));
+            if (tur_panicking) { tur_panic_root_exit(); }
+            tur_adt_TurMutCell__int * _un_untur_unmutcell_un11_12 = __ps_205;
+            (void)_un_untur_unmutcell_un11_12;
+            int64_t my_hyy_14 = INT64_C(30);
+            (void)my_hyy_14;
+            tur_frame __frame_206;
+            tur_frame_init(&__frame_206, NULL);
+            struct __defer_env_207 __t209 = {.__tur_mutcell_11 = _un_untur_unmutcell_un11_12};
+            tur_frame_push_defer(&__frame_206, __defer_208, &__t209);
+            struct __defer_env_210 __t212 = {.my_y = my_hyy_14};
+            tur_frame_push_defer(&__frame_206, __defer_211, &__t212);
+            (_un_untur_unmutcell_un11_12)->v = INT64_C(20);
+            TUR_REGION_NOTE_WORDS(&((_un_untur_unmutcell_un11_12)->v), sizeof((_un_untur_unmutcell_un11_12)->v));
+            tur_frame_fire_lifo(&__frame_206);
+            tur_region_free((void *)(intptr_t)(_un_untur_unmutcell_un11_12));
         }
-        int64_t __t209;
+        int64_t __t213;
         {
-            void * __ps_210 = (make_hyadder(INT64_C(100)));
+            void * __ps_214 = (make_hyadder(INT64_C(100)));
             if (tur_panicking) { tur_panic_root_exit(); }
-            void * _un_unoar12_13 = __ps_210;
-            (void)_un_unoar12_13;
-            int64_t __ps_211 = ((*( tur_thunk_int64_t_int64_t_t *)(_un_unoar12_13))(_un_unoar12_13, INT64_C(5)));
+            void * _un_unoar15_16 = __ps_214;
+            (void)_un_unoar15_16;
+            int64_t __ps_215 = ((*( tur_thunk_int64_t_int64_t_t *)(_un_unoar15_16))(_un_unoar15_16, INT64_C(5)));
             if (tur_panicking) { tur_panic_root_exit(); }
-            __t209 = __ps_211;
-            TUR_CLOSURE_DROP(_un_unoar12_13);
+            __t213 = __ps_215;
+            TUR_CLOSURE_DROP(_un_unoar15_16);
         }
-        printf("%lld\n", (long long)(__t209));
-        int64_t __t212;
-        __t212 = INT64_C(0);
-        return (int)__t212;
+        printf("%lld\n", (long long)(__t213));
+        int64_t __t216;
+        __t216 = INT64_C(0);
+        return (int)__t216;
 }
 
 static tur_adt_Cons__int * tcons__spec__tur_adt_Cons__int___int64_t_int64_t(int64_t h, int64_t t) {
@@ -11116,9 +11149,9 @@ static tur_adt_Cons__int * tcons__spec__tur_adt_Cons__int___int64_t_int64_t(int6
 }
 
 static tur_adt_Vec__int * vec_empty_like____spec__tur_adt_Vec__int___int64_t(int64_t witness) {
-        tur_adt_Vec__int * __ps_213 = (vec_new__spec__tur_adt_Vec__int__());
+        tur_adt_Vec__int * __ps_217 = (vec_new__spec__tur_adt_Vec__int__());
         if (tur_panicking) return ((tur_adt_Vec__int *)0);
-        return __ps_213;
+        return __ps_217;
 }
 
 static tur_adt_Vec__int * vec_new__spec__tur_adt_Vec__int__(void) {
@@ -11131,9 +11164,14 @@ static tur_adt_Vec__int * vec_new__spec__tur_adt_Vec__int__(void) {
 }
 
 
-static void __defer_207(void *__env) {
-    struct __defer_env_206 *__e = (struct __defer_env_206 *)__env;
-    printf("%lld\n", (long long)(__e->my_x));
+static void __defer_211(void *__env) {
+    struct __defer_env_210 *__e = (struct __defer_env_210 *)__env;
+    printf("%lld\n", (long long)(__e->my_y));
+}
+
+static void __defer_208(void *__env) {
+    struct __defer_env_207 *__e = (struct __defer_env_207 *)__env;
+    printf("%lld\n", (long long)((int64_t)((tur_adt_TurMutCell__int *)(intptr_t)(__e->__tur_mutcell_11))->v));
 }
 
 static void __defer_199(void *__env) {
@@ -11143,9 +11181,9 @@ static void __defer_199(void *__env) {
 
 static void __defer_194(void *__env) {
     struct __defer_env_193 *__e = (struct __defer_env_193 *)__env;
-    bool __ps_214 = (bt_hyundo_hyto_ex(__e->m));
+    bool __ps_218 = (bt_hyundo_hyto_ex(__e->m));
     /* panic-return-signal: ret ctype unknown; no propagation here */
-    (void)(__ps_214);
+    (void)(__ps_218);
 }
 
 

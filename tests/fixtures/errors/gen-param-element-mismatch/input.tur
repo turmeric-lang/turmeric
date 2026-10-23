@@ -1,0 +1,8 @@
+;;; generator-type-plan: a (Generator int) parameter takes a generator of
+;;; ints; a generator of strings is refused at the call.
+(defn take-int [g : (Generator int)] : int (gen-unwrap (gen-next g)))
+
+(defn main [] : int
+  (let [g (gen [] (yield "a") (yield "b"))]
+    (println (take-int g)))
+  0)

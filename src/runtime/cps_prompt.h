@@ -119,13 +119,14 @@ intptr_t dk_run_root(DK *k, intptr_t v);
 /* Invoke a captured sub-continuation with `w` (multi-shot: copies internally). */
 intptr_t dk_invoke(DK *sub, intptr_t w);
 
-/* Perform effect `tag` with argument `arg` against continuation `k`: find the
+/* Perform effect `tag` (named `name`, for the unhandled-effect abort) with
+ * argument `arg` against continuation `k`: find the
  * nearest enclosing dk_handler with a matching tag, reify the sub-continuation
  * from the perform point up to that handler (re-installing the handler on the
  * captured copy, for deep-handler semantics), run the handler case with (arg,
  * subk), and deliver its result to the handler's outer continuation.  Aborts on
  * an unhandled effect. */
-intptr_t dk_perform(int tag, intptr_t arg, DK *k);
+intptr_t dk_perform(int tag, const char *name, intptr_t arg, DK *k);
 
 /* Does the chain contain a prompt marker? (used to assert re-install). */
 bool dk_has_prompt(const DK *k);

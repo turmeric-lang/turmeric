@@ -255,13 +255,14 @@ intptr_t dk_invoke(DK *sub, intptr_t w) {
     return r;
 }
 
-intptr_t dk_perform(int tag, intptr_t arg, DK *k) {
+intptr_t dk_perform(int tag, const char *name, intptr_t arg, DK *k) {
     /* Find the nearest enclosing handler for this effect tag. */
     DK *H = k;
     while (H && !(H->kind == DKK_HANDLER && H->tag == tag) && H->kind != DKK_DONE)
         H = H->next;
     if (!H || H->kind == DKK_DONE) {
-        fprintf(stderr, "tur: unhandled effect (tag %d)\n", tag);
+        fflush(stdout);
+        fprintf(stderr, "tur: unhandled effect: %s (tag %d)\n", name ? name : "?", tag);
         abort();
     }
     /* Reify the sub-continuation from the perform point up to the handler.  For a

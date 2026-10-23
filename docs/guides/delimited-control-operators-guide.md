@@ -130,12 +130,15 @@ The *local* result-typing rule is identical to `shift`: the `(shift0 f x)`
 expression has the type of `f`'s codomain. Only the runtime delimiter behavior
 differs.
 
-> **Status.** Today `shift0` runs as the abortive `shift` on both engines: the
-> reset is not popped, so a `shift` inside the receiver is delimited by that
-> same reset (`(reset (+ 100 (reset (+ 10 (shift0 (fn [v : int] (shift (fn [w : int] (* 1000 w)) v)) 5)))))`
-> is 5100, where the pop would give 5000), and `shift0` takes no `k` to resume
-> with. Implementing the pop is planned:
-> [shift0-pop-plan](https://github.com/turmeric-lang/turmeric/blob/main/docs/upcoming/shift0-pop-plan.md).
+> **Status.** Turmeric's `shift0` is abortive, like its `shift`, and takes no
+> `k` to resume with -- only a value receiver. It does pop the reset: the
+> receiver runs with that reset removed, so a `shift` inside it is delimited
+> by the next reset out. `(reset (+ 100 (reset (+ 10 (shift0 (fn [v : int] (shift (fn [w : int] (* 1000 w)) v)) 5)))))`
+> is 5000 on both engines; with `shift` in place of `shift0` it is 5100.
+> Compiled, a `shift0` pops only a `reset` that encloses it in the same
+> function
+> ([direct-shift-outside-lexical-reset-not-abortive](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/direct-shift-outside-lexical-reset-not-abortive.md)).
+> See [shift0-pop-plan](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/shift0-pop-plan.md).
 
 ```turmeric
 ;; The expression has f's codomain type (here :bool), exactly like shift.
