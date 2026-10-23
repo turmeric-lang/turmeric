@@ -1,4 +1,4 @@
-/* elab_types.c -- type-expression forms: defkind/defrec/deftype/type-app, ascribe/pack/open. */
+/* elab_types.c -- type-expression forms: defkind/defrec/deftype, ascribe/pack/open. */
 #include <stdint.h>
 #include "elab_internal.h"
 #include "experiments.h"  /* Slice 1 (constrained-hkt-forall): forall-kinds gate */
@@ -819,6 +819,7 @@ Type *elab_generator_type_from_form(Elab *e, const Form *form, const Type *elem)
 Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
                                   const Symbol **type_params, Kind *type_param_kinds,
                                   uint8_t n_type_params) {
+    if (elab_reject_type_app_form(e, form)) return NULL;
     /* ET3: bare `nil` literal (F_NIL) in a type expression means the nil/unit type */
     if (form->tag == F_NIL) {
         Type *t = (Type *)arena_alloc(e->arena, sizeof(Type));
@@ -2888,125 +2889,41 @@ Expr *elab_deftype(Elab *e, const Form *call) {
     return e_nil(e, call->span);
 }
 
-/* Elaborate (type-app F A)
- *
- * Type-level application: applies type constructor F to type argument A.
- * Creates a TY_APP type and validates kind constraints.
- *
- * Syntax: (type-app result int)
- *         (type-app Fix (result int))
- *
- * The result kind is derived from F's kind:
- *   - If F has kind KIND_ARROW (* -> *), result is KIND_STAR
- *   - If F has kind KIND_ARROW2 (* -> * -> *), result is KIND_ARROW
- *
- * Phase HKT-P1.
- */
+/* coerce-result-and-type-app-retirement-plan Part B: `(type-app F A)` has been
+ * removed.  In a type annotation it was TUR-E0012 for every constructor (the
+ * head `type-app` read as a type of kind `*`), and as a statement it checked
+ * an arity and did nothing.  `(F A)` is the spelling that works, so both
+ * positions now say that, naming the applied type the form meant.  The word
+ * stays reserved (elab_call.c) for a release.  Returns true when `form` is a
+ * `type-app` form, after reporting it. */
+bool elab_reject_type_app_form(Elab *e, const Form *form) {
+    if (!form || form->tag != F_LIST || form->as.list.len < 1) return false;
+    const Form *hd = form->as.list.items[0];
+    if (hd->tag != F_SYM || hd->as.sym != e->sym_type_app) return false;
+    /* An annotation can be resolved more than once (a typed `let` reads its
+     * type twice); one report per form. */
+    if (form == e->type_app_reported) return true;
+    e->type_app_reported = form;
+    Buf want;
+    buf_init(&want);
+    buf_putc(&want, '(');
+    if (form->as.list.len < 2) buf_puts(&want, "F A");
+    for (uint32_t i = 1; i < form->as.list.len; i++) {
+        if (i > 1) buf_putc(&want, ' ');
+        form_print(&want, form->as.list.items[i]);
+    }
+    buf_putc(&want, ')');
+    buf_putc(&want, '\0');
+    diag_emit(DIAG_ERROR, form->span,
+              "type-app has been removed: write the applied type %s", want.data);
+    buf_free(&want);
+    return true;
+}
+
+/* `(type-app F A)` in expression position: removed (elab_reject_type_app_form). */
 Expr *elab_type_app(Elab *e, const Form *call) {
-    /* Minimum: (type-app F A) */
-    if (call->as.list.len < 3) {
-        diag_emit(DIAG_ERROR, call->span,
-                  "type-app requires (type-app F A)");
-        return NULL;
-    }
-
-    /* Parse type constructor F (arg 1) - must be a symbol */
-    Form *fn_form = call->as.list.items[1];
-    if (fn_form->tag != F_SYM) {
-        diag_emit(DIAG_ERROR, fn_form->span,
-                  "type-app: type constructor must be a symbol");
-        return NULL;
-    }
-
-    /* Look up F in the type environment */
-    Binding *fn_binding = scope_lookup(e->scope, fn_form->as.sym);
-    if (!fn_binding) {
-        fn_binding = scope_lookup(&e->global, fn_form->as.sym);
-    }
-    Type fn_type;
-    if (!fn_binding) {
-        /* Fall back to typeclass environment: (type-app Functor option) */
-        TypeClass *tc = typeclass_env_lookup_typeclass(&e->typeclass_env, fn_form->as.sym);
-        if (!tc) {
-            diag_emit(DIAG_ERROR, fn_form->span,
-                      "type-app: unknown type constructor '%s'", fn_form->as.sym->name);
-            return NULL;
-        }
-        fn_type = type_typeclass(tc);
-        /* Set hkt_kind from number of type parameters so kind_of_type_app succeeds */
-        fn_type.hkt_kind = kind_for_arity(tc->n_type_params);
-    } else {
-        fn_type = fn_binding->type;
-    }
-
-    /* Parse type argument A (arg 2) - can be a symbol, keyword, or nested type-app */
-    Form *arg_form = call->as.list.items[2];
-    Type arg_type;
-    
-    if (arg_form->tag == F_SYM || arg_form->tag == F_KEYWORD || arg_form->tag == F_TYPE_ANN) {
-        /* Unwrap F_TYPE_ANN if present */
-        if (arg_form->tag == F_TYPE_ANN) {
-            arg_form = (arg_form->as.list.len > 0) ? arg_form->as.list.items[0] : arg_form;
-        }
-        const Symbol *arg_sym = arg_form->as.sym;
-        /* Try primitive types first */
-        if (arg_sym->len == 3 && memcmp(arg_sym->name, "int", 3) == 0) {
-            arg_type = TYPE_INT;
-        } else if (arg_sym->len == 4 && memcmp(arg_sym->name, "bool", 4) == 0) {
-            arg_type = TYPE_BOOL;
-        } else if (arg_sym->len == 4 && memcmp(arg_sym->name, "cstr", 4) == 0) {
-            arg_type = TYPE_CSTR;
-        } else if ((arg_sym->len == 4 && memcmp(arg_sym->name, "void", 4) == 0) ||
-                   (arg_sym->len == 3 && memcmp(arg_sym->name, "nil", 3) == 0)) {
-            arg_type = TYPE_NIL;
-        } else if (arg_sym->len == 9 && memcmp(arg_sym->name, "ptr<void>", 9) == 0) {
-            arg_type = TYPE_PTR_VOID;
-        } else {
-            /* Look up as a type binding */
-            Binding *arg_binding = scope_lookup(e->scope, arg_sym);
-            if (!arg_binding) {
-                arg_binding = scope_lookup(&e->global, arg_sym);
-            }
-            if (!arg_binding) {
-                /* Unknown name — treat as an unresolved type variable (like
-                 * definstance does).  structdef-retirement slice 5 B2 (P2):
-                 * emit a named TY_TYVAR carrying the arg name rather than the
-                 * legacy def-less TY_STRUCT placeholder.  An unresolved tyvar
-                 * already lowers to the int64 carrier in codegen (types.c
-                 * type_c_name), matching the previous "container values are
-                 * int64-sized opaque handles" intent.  See
-                 * ty-struct-null-def-inventory.md P2. */
-                arg_type = type_tyvar_named(arg_sym->name);
-                arg_type.copy_kind = CK_MOVE;
-            } else {
-                arg_type = arg_binding->type;
-            }
-        }
-    } else if (arg_form->tag == F_LIST) {
-        /* Nested type application: (type-app result (type-app option int))
-         * For now, recursively elaborate as type-app */
-        Expr *arg_expr = elab_type_app(e, arg_form);
-        if (!arg_expr) {
-            return NULL;
-        }
-        diag_emit(DIAG_ERROR, arg_form->span,
-                  "type-app: nested type applications not yet supported");
-        return NULL;
-    } else {
-        diag_emit(DIAG_ERROR, arg_form->span,
-                  "type-app: type argument must be a symbol, keyword, or type application");
-        return NULL;
-    }
-
-    /* Create TY_APP type using the type_app helper */
-    /* The type is computed but not stored - in v1, type-app is a compile-time-only
-     * construct that validates the kind application. Future work will register
-     * the result type for use in type annotations. */
-    Type app_type = type_app(e->arena, fn_type, arg_type, call->span);
-    (void)app_type;  /* Suppress unused variable warning in v1 */
-
-    /* type-app has no runtime effect; return nil */
-    return e_nil(e, call->span);
+    elab_reject_type_app_form(e, call);
+    return NULL;
 }
 
 /* Phase HRT1: (:: expr type) — type ascription.

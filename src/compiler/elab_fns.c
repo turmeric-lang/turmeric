@@ -7647,6 +7647,7 @@ static Type *fn_type_from_form_impl(Elab *e, const Form *form,
                                     Kind *type_param_kinds,
                                     uint8_t n_type_params) {
     if (!form) return NULL;
+    if (elab_reject_type_app_form(e, form)) return NULL;
     if (form->tag == F_TYPE_ANN && form->as.list.len > 0) {
         return fn_type_from_form_impl(e, form->as.list.items[0],
                                       type_params, type_param_kinds, n_type_params);

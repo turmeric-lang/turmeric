@@ -1,0 +1,10 @@
+;; `(type-app F A)` as a statement of its own: it used to check the arity and
+;; do nothing (this was tests/fixtures/type-app).  It is removed in this
+;; position too.
+
+(defclass TestFunctor [^f]
+  (fmap [container fn] : int))
+
+(type-app TestFunctor Option)
+
+(defn main [] : int 0)

@@ -1044,7 +1044,7 @@ Reserved in call-head position:
 | References / rc / weak | `ref` `deref` `drop!` `ref?` `weak` `weak?` `upgrade` `lref/new` `rc/of` `rc/clone` `rc/drop` `rc->ptr` `rc/strong-count` `rc/from-ref` `ref/from-rc` |
 | Continuations | `reset` `shift` `shift0` `call/cc` `call/cc*` `escape` `cloneable-reset` `cloneable-shift` `serial-reset` `serial-shift` `cont?` |
 | Effects | `binding` `perform` `handle` `handle-shallow` `try-with` `with-handler` `resume` `discontinue` `compose-handlers` |
-| Types / casts | `as` `type-of` `cast` `is?` `coerce` `&` `&mut` `forall` `exists` `type-app` `::` `pack` `open` |
+| Types / casts | `as` `type-of` `cast` `is?` `coerce` `&` `&mut` `forall` `exists` `type-app` (removed: an error naming the applied type `(F A)`; reserved for one more release) `::` `pack` `open` |
 | Sessions | `make-protocol` `make-session` |
 | Panic | `panic` `panic-with` `catch-unwind` `catch-panic-of` `panic-payload-type` `panic-payload-value` `panic-payload-file` `panic-payload-line` `panic-payload-downcast` |
 | Unsafe / FFI | `ptr-deref` `ptr-write` `ptr-add` `ptr-sub` `ptr-null?` `ptr-of` `unsafe-cast` `reinterpret` `transmute` `array-get-unchecked` `array-set-unchecked` `raw-malloc` `raw-free` `raw-realloc` `raw-memcpy` `raw-memset` `c-call` `dlopen` `dlsym` `dlclose` |

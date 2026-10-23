@@ -909,7 +909,7 @@ int64_t emit_any_type_id(EmitCtx *ctx, Type t) {
      * `int64_t`, which every carrier ADT shares -- keying on it would give two
      * different ADTs the same id and reintroduce the very confusion this
      * replaces.  `type_name` renders a TY_APP per instantiation
-     * ("(type-app Box int)"), so `(Box int)` and `(Box float)` are distinct. */
+     * ("(Box int)"), so `(Box int)` and `(Box float)` are distinct. */
     const char *key = type_name(r);
     if (!key || !*key) return (int64_t)any_box_tag_for_type(&r);
     /* partial-application-widened-to-any-is-a-ptr: a FAT closure and a bare fn
@@ -10259,7 +10259,7 @@ static void tcg_collect_fn_exprs(EmitCtx *ctx, const Expr **items, uint32_t n) {
  *    the tag axis disposes of it by construction rather than by special case.
  *  - An HKT receiver (`definstance Functor [Option]`) whose type arg is the type
  *    CONSTRUCTOR: a widened value's id is minted from the APPLIED type
- *    ("(type-app Option float)"), so the two keys cannot meet.  Dispatching a
+ *    ("(Option float)"), so the two keys cannot meet.  Dispatching a
  *    method on an un-narrowed `any` holding an `(Option T)` is exactly the
  *    HKT-receiver question D8 defers, so a clean panic is the right v0 answer.
  */
