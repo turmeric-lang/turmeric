@@ -1,9 +1,10 @@
 # Extras to break out into their own repos
 
-> Status: soaking (2026-10-18). Every extraction has shipped; what is left is
-> the cleanup after a one-minor-version soak (see "Soak and cleanup" below).
-> v0.67.0 is the first release carrying tvm as a release asset; the cleanup
-> lands once v0.68.0 is out.
+> Status: **done** (2026-10-23). Every extraction shipped, and the soak
+> cleanup landed after v0.70.1 (see "Soak and cleanup" below): `tvm/`,
+> `Formula/` and the three editor stub READMEs are gone, the Worker's install
+> test lives at `tests/tvm-install-script.sh`, and CI's `tvm` job runs it
+> against a `turmeric-lang/tvm` checkout at `release.yml`'s `TVM_REF`.
 >
 > | Step | New repo | Compiler-side PRs |
 > |---|---|---|
@@ -11,7 +12,18 @@
 > | 2. Homebrew tap | `turmeric-lang/homebrew-turmeric` | #1276 |
 > | 3. Editors | `vim-turmeric`, `turmeric-mode`, `vscode-turmeric` | #1277 (palette contract), #1279 (removal) |
 > | 4. Benchmarks + bench box | `turmeric-lang/benchmarks` | #1278 |
-> | 5. tvm | `turmeric-lang/tvm` | #1280 (release asset), cleanup pending |
+> | 5. tvm | `turmeric-lang/tvm` | #1280 (release asset), soak cleanup |
+>
+> Left in the other repos, none of it blocking here:
+>
+> - **Vim colorschemes** in `vim-turmeric` still link the old syntax group
+>   names. Harmless (the syntax links standard groups) but dead weight.
+> - **VS Code Marketplace.** `vscode-turmeric` says publisher
+>   `turmeric-lang`; that publisher has to exist before `vsce publish`.
+> - **tvm's rc choice on a bare `$HOME`.** With no `~/.bashrc`, tvm's
+>   `install.sh` wires `~/.bash_profile`, which only a login shell reads.
+>   Real Linux homes get a `.bashrc` from `/etc/skel`, so this showed up only
+>   in the clean-`$HOME` run below.
 >
 > Where it departed from the text below:
 >
@@ -240,16 +252,19 @@ cut, one PR against `main`:
 - **Editor stubs.** Delete `vim-syntax/README.md`, `emacs/README.md` and
   `vscode-syntax-ext/README.md`.
 
-Before that PR, still open:
+Before that PR, open then; how each closed:
 
 - **Linux end to end.** `curl -fsSL turmeric-lang.com/install | sh` from a
-  clean `$HOME` was verified on macOS against v0.67.0; Linux has not been run.
-- **tvm's own hint is stale.** `install.sh` (in `turmeric-lang/tvm`) prints
-  `tvm install 0.23.1` as its example. Fix it there, then bump `TVM_REF`.
-- **Vim colorschemes** in `vim-turmeric` still link the old syntax group
-  names. Harmless (the syntax links standard groups) but dead weight.
-- **VS Code Marketplace.** `vscode-turmeric` now says publisher
-  `turmeric-lang`; that publisher has to exist before `vsce publish`.
+  clean `$HOME` was verified on macOS against v0.67.0. On Linux x86-64
+  (2026-10-23, v0.70.1): the `/install` script rendered from `web/worker.js`
+  on `main`, run against the real GitHub release from an empty `$HOME`,
+  installed 0.70.1 checksum-verified, and a fresh login shell found `tur` on
+  `PATH` and compiled and ran a program. That sandbox could not reach
+  `turmeric-lang.com` itself, so the Cloudflare hop was not part of the run.
+- **tvm's own hint is stale.** Fixed in `turmeric-lang/tvm` (#1, `e30c744`);
+  `TVM_REF` bumped to it in the cleanup PR, so the next release ships it.
+- **Vim colorschemes** and the **VS Code Marketplace** publisher: still open
+  in their repos; see the status block at the top.
 
 ## Common mechanics for every extraction
 

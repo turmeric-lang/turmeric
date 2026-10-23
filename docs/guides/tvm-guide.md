@@ -15,9 +15,12 @@ spirit: if you know `nvm install <v>` / `nvm use <v>`, you already know
 
 ## Install
 
-From a checkout of the [turmeric repo](https://github.com/turmeric-lang/turmeric):
+`curl -sSf https://turmeric-lang.com/install | sh` installs `tvm` and then
+the latest release. To install `tvm` on its own, from a checkout of
+[`turmeric-lang/tvm`](https://github.com/turmeric-lang/tvm):
 
 ```sh
+git clone https://github.com/turmeric-lang/tvm
 sh tvm/install.sh
 ```
 
@@ -333,7 +336,8 @@ exactly `versions/<v>/` -- no leftover state.
 
 ## See also
 
-- `tvm/README.md` -- short cheat sheet next to the source.
+- [`turmeric-lang/tvm`](https://github.com/turmeric-lang/tvm#readme) --
+  the source, and a short cheat sheet in its README.
 - `tvm doctor` -- the first stop for any "why isn't this working"
   question.
 - [Releases page](https://github.com/turmeric-lang/turmeric/releases) --

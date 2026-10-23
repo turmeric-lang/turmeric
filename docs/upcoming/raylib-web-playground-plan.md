@@ -13,7 +13,7 @@
 > (`defscript :spices`, landed 2026-10-22 behind `--enable=script-deps`),
 > [spice-repl-plan](../archive/spice-repl-plan.md) (compiled spice exports
 > bound as interpreter natives through `src/turi/ffi_thunk.c`),
-> [extras-repo-split-plan](extras-repo-split-plan.md) (the pattern for a
+> [extras-repo-split-plan](../archive/extras-repo-split-plan.md) (the pattern for a
 > sibling repo that pins a `tur` release).
 > **Not this plan:** a general web-app scaffold (`tur new-web`), which stays
 > in wasm-spices-plan W4; any change to the raylib spice's native arm.

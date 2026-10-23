@@ -337,7 +337,7 @@ println(run-test(compute(1)))  ;; =&gt; 1</div>
       <div class="install-panel" id="panel-installer" role="tabpanel"
            aria-labelledby="tab-installer" data-method="installer">
         <div class="step-code">curl -sSf https://turmeric-lang.com/install | sh</div>
-        <p class="step-desc">macOS and Linux. Installs the <a href="https://github.com/turmeric-lang/turmeric/blob/main/tvm/README.md" style="color:var(--gold);">version manager</a> (<code>tvm</code>) and then the latest <strong>release</strong>, whose tarball is checked against that release&rsquo;s <code>sha256sums.txt</code> before it is unpacked &mdash; and the install <strong>stops</strong> rather than continuing if that check cannot be made.</p>
+        <p class="step-desc">macOS and Linux. Installs the <a href="https://github.com/turmeric-lang/tvm#readme" style="color:var(--gold);">version manager</a> (<code>tvm</code>) and then the latest <strong>release</strong>, whose tarball is checked against that release&rsquo;s <code>sha256sums.txt</code> before it is unpacked &mdash; and the install <strong>stops</strong> rather than continuing if that check cannot be made.</p>
         <p class="step-desc">Release assets also carry <a href="https://docs.github.com/actions/security-for-github-actions/using-artifact-attestations" style="color:var(--gold);">build provenance</a>, so you can confirm which workflow run produced the bytes you have.</p>
         <p class="step-desc">On a platform with no prebuilt binary it builds the same release tag from source instead.</p>
         <p class="step-desc">Afterwards, <code>tvm install</code> and <code>tvm use</code> switch between releases per-shell.</p>
