@@ -419,7 +419,7 @@ emitter's `TUR_MUSTTAIL` is empty under c2mir, so mutual tail calls the T5
 fusion did not collapse count against that limit too
 ([jit-musttail-expands-to-nothing](../reported/jit-musttail-expands-to-nothing.md)).
 The AOT wasm target is in the same family at a higher ceiling:
-[wasm-target-stack-is-emcc-default](../reported/wasm-target-stack-is-emcc-default.md).
+[wasm-target-stack-is-emcc-default](../archive/wasm-target-stack-is-emcc-default.md).
 Between them they are the "real program that needs more than 1 GiB of
 stack" that [r7rs-heap-frames-plan](r7rs-heap-frames-plan.md) names as
 what lifts its hold.

@@ -10980,9 +10980,13 @@ int emit_sig_lookup_n_params(const char *cname) {
  * spelled with it.  It expands to `__attribute__((musttail))` only where that
  * is known to hold -- clang on x86-64 / aarch64 -- and to nothing everywhere
  * else: gcc (the attribute arrived in 15 and is not exercised here), c2mir
- * (the JIT's C compiler has no such attribute), and wasm (clang rejects
- * musttail there without the tail-call feature).  Where it expands to
- * nothing, the call is exactly the `return f(args);` T2 already emitted.
+ * (the JIT's C compiler has no such attribute, and MIR has no general tail
+ * call to spell it with -- jit-musttail-expands-to-nothing; `tur jit` hides
+ * the gap behind its 1 GiB entry thread), and wasm WITHOUT the tail-call
+ * feature (clang rejects musttail there).  `tur build --target wasm` passes
+ * `-mtail-call` by default (`:web :tail-calls`), which defines
+ * __wasm_tail_call__ (wasm-target-stack-is-emcc-default).  Where it expands
+ * to nothing, the call is exactly the `return f(args);` T2 already emitted.
  * `-DTUR_MUSTTAIL=` turns it off from the command line. */
 void ensure_musttail_macro(EmitCtx *ctx) {
     if (!ctx || ctx->musttail_macro_emitted) return;
@@ -10993,8 +10997,9 @@ void ensure_musttail_macro(EmitCtx *ctx) {
         "/* proper-tail-calls T2b: a guaranteed tail call where the C compiler\n"
         " * can promise one, and an ordinary `return f(args);` elsewhere. */\n"
         "#ifndef TUR_MUSTTAIL\n"
-        "#  if defined(__clang__) && defined(__has_attribute) && !defined(__wasm__) && \\\n"
-        "     (defined(__x86_64__) || defined(__aarch64__))\n"
+        "#  if defined(__clang__) && defined(__has_attribute) && \\\n"
+        "     ((!defined(__wasm__) && (defined(__x86_64__) || defined(__aarch64__))) || \\\n"
+        "      (defined(__wasm__) && defined(__wasm_tail_call__)))\n"
         "#    if __has_attribute(musttail)\n"
         "#      define TUR_MUSTTAIL __attribute__((musttail))\n"
         "#      define TUR_MUSTTAIL_PINS 1\n"
@@ -14677,8 +14682,11 @@ static const char TUR_DEEP_SIZE_FN[] =
  * to make the thread is not an error -- main just runs where it is, as
  * before, with a line on stderr when TUR_MAIN_STACK_MB asked for the size. */
 static void emit_deep_stack_runtime(Buf *out) {
+    /* Nor under emscripten (wasm-target-stack-is-emcc-default): there the
+     * stack is the -sSTACK_SIZE link flag, and the 1 GiB pthread either fails
+     * (no -pthread) or asks for a 1 GiB wasm thread stack (`:threads true`). */
     buf_puts(out,
-        "#if !defined(_WIN32) && !defined(__MIRC__)\n"
+        "#if !defined(_WIN32) && !defined(__MIRC__) && !defined(__EMSCRIPTEN__)\n"
         "#include <signal.h>\n"
         "#include <pthread.h>\n"
         "#include <unistd.h>\n"

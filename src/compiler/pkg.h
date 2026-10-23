@@ -104,6 +104,9 @@ typedef struct PkgCmakeDep {
  * before anything is built. */
 typedef enum { PKG_WEB_GL_ES3 = 0, PKG_WEB_GL_ES2 } PkgWebGl;
 
+/* `:web :stack` default: 16 MiB, what the REPL's own wasm module links with. */
+#define PKG_WEB_DEFAULT_STACK 16777216L
+
 typedef struct PkgWebOpts {
     bool      present;     /* a `:web` key was in the manifest at all */
     PkgWebGl  gl;          /* default ES3 == WebGL2 */
@@ -111,6 +114,8 @@ typedef struct PkgWebOpts {
     bool      audio;       /* wire Web Audio; needs the heap-view export */
     bool      threads;     /* -pthread; needs COOP/COEP, off by default */
     long      heap;        /* -sINITIAL_MEMORY; 0 selects memory growth */
+    long      stack;       /* -sSTACK_SIZE; default 16 MiB (emcc's is 64 KiB) */
+    bool      tail_calls;  /* -mtail-call, so TUR_MUSTTAIL is real; default on */
     char     *main_loop;   /* "callback" (default) | "asyncify" | "none" */
 } PkgWebOpts;
 

@@ -6578,8 +6578,9 @@ static int64_t ctor_Option_Some__Zipper__struct(int64_t _0) {
 /* proper-tail-calls T2b: a guaranteed tail call where the C compiler
  * can promise one, and an ordinary `return f(args);` elsewhere. */
 #ifndef TUR_MUSTTAIL
-#  if defined(__clang__) && defined(__has_attribute) && !defined(__wasm__) && \
-     (defined(__x86_64__) || defined(__aarch64__))
+#  if defined(__clang__) && defined(__has_attribute) && \
+     ((!defined(__wasm__) && (defined(__x86_64__) || defined(__aarch64__))) || \
+      (defined(__wasm__) && defined(__wasm_tail_call__)))
 #    if __has_attribute(musttail)
 #      define TUR_MUSTTAIL __attribute__((musttail))
 #      define TUR_MUSTTAIL_PINS 1

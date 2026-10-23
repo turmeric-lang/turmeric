@@ -156,7 +156,7 @@ TUR-E0620, and turns a bare `{...}` -- curly-infix, not a map -- into a
 | `:experiments` | `experiments[]`, `has_experiments_key` | must be a vector | `apply_manifest_experiments` (unknown name exits with TUR-E0310); the key's presence suppresses the user file |
 | `:reader-macros` | `reader_macros[]` | none | `resolve_manifest_reader_macros` |
 | `:bin` | `bin_names[]`, `bin_paths[]` | names start with `tur-` | `tur install` |
-| `:web` | `web` | `:gl`, `:heap`, `:main-loop` values | `drv_collect_web_link_flags` (wasm only) |
+| `:web` | `web` | `:gl`, `:heap`, `:stack`, `:tail-calls`, `:main-loop` values | `drv_collect_web_link_flags` (wasm only) |
 
 ### Failure: ABSENT, OK, MALFORMED
 

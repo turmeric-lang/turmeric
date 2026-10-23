@@ -1261,6 +1261,17 @@ bool pkg_manifest_read_status(const char *path, PkgManifest *out,
                                   "non-negative byte count (0 selects "
                                   "-sALLOW_MEMORY_GROWTH)");
                 }
+                const Form *stf = map_get_kw(vf, "stack");
+                if (stf) {
+                    if (stf->tag == F_INT && stf->as.i > 0)
+                        out->web.stack = (long)stf->as.i;
+                    else
+                        diag_emit(DIAG_ERROR, stf->span,
+                                  "build.tur: :web :stack must be a positive "
+                                  "byte count (-sSTACK_SIZE)");
+                }
+                const Form *tcf = map_get_kw(vf, "tail-calls");
+                if (tcf) out->web.tail_calls = form_bool_val(tcf);
                 const Form *mf = map_get_kw(vf, "main-loop");
                 if (mf && mf->tag == F_KEYWORD && mf->as.sym &&
                     mf->as.sym->name) {
@@ -1838,6 +1849,9 @@ bool pkg_manifest_write(const char *path, const PkgManifest *m) {
         if (m->web.audio)   fprintf(f, "    :audio true\n");
         if (m->web.threads) fprintf(f, "    :threads true\n");
         fprintf(f, "    :heap %ld\n", m->web.heap);
+        if (m->web.stack != PKG_WEB_DEFAULT_STACK)
+            fprintf(f, "    :stack %ld\n", m->web.stack);
+        if (!m->web.tail_calls) fprintf(f, "    :tail-calls false\n");
         if (m->web.main_loop)
             fprintf(f, "    :main-loop :%s\n", m->web.main_loop);
         fprintf(f, "  }\n");
@@ -4433,6 +4447,14 @@ void pkg_web_opts_defaults(PkgWebOpts *w) {
      * frame-time spike exactly when a level loads.  `:heap 0` opts into
      * growth for a program whose working set is not known at link time. */
     w->heap      = 134217728L;
+    /* wasm-target-stack-is-emcc-default: emcc's own STACK_SIZE is 64 KiB, and
+     * the 1 GiB entry thread a native `main` gets is not there.  16 MiB is
+     * what the REPL module links with (tur_wasm in src/CMakeLists.txt). */
+    w->stack     = PKG_WEB_DEFAULT_STACK;
+    /* Every evergreen browser ships the wasm tail-call feature (2023), and
+     * without it a guaranteed tail call is an ordinary call: a mutual
+     * tail-call cycle recurses into the JS engine's frame limit. */
+    w->tail_calls = true;
     w->threads   = false;   /* -pthread needs COOP/COEP, which GitHub Pages
                              * cannot serve, and a droppable static site is
                              * the point of this target. */
@@ -4457,6 +4479,16 @@ void pkg_web_compose_link_flags(const PkgWebOpts *w, Buf *out) {
         buf_printf(out, " -sINITIAL_MEMORY=%ld", w->heap);
     else
         buf_printf(out, " -sALLOW_MEMORY_GROWTH=1");
+
+    /* wasm-target-stack-is-emcc-default: the linear stack is a link flag on
+     * this target, not a thread (emit_deep_stack_runtime compiles out under
+     * __EMSCRIPTEN__).  -mtail-call is a compile flag as well as a link one:
+     * it defines __wasm_tail_call__, which is what lets TUR_MUSTTAIL spell
+     * `musttail` here. */
+    if (w->stack > 0)
+        buf_printf(out, " -sSTACK_SIZE=%ld", w->stack);
+    if (w->tail_calls)
+        buf_printf(out, " -mtail-call");
 
     if (w->canvas) {
         /* raylib and the opengl spice both reach the canvas through the
