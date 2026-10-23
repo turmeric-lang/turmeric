@@ -23,11 +23,10 @@ static void note_call_ret(EmitCtx *ctx, const char *ct) {
  * spec already spells as one?  The emitted spelling decides, not the static
  * type: a `(Result any any)` match binder and a `vec-get` temp are both typed
  * as the element tyvar (or its `int` carrier), yet one is declared
- * `tur_tagged_t` and the other `int64_t`.  The same two-step question the
- * `any` temp reader asks (bridge_control_result_int_ptr's temp_is_tagged arm):
- * the local's recorded spelling, else the value's own representation. */
-static const char *emit_binding_repr_c_name(EmitCtx *ctx, Type binding_ty,
-                                            const Expr *init);
+ * `tur_tagged_t` and the other `int64_t`.  The emitted spelling is
+ * emit_value_spelled_ctype's answer. */
+static const char *emit_value_spelled_ctype(EmitCtx *ctx, const char *v,
+                                            const Expr *expr, bool with_params);
 static bool emit_arg_is_any_carrier_word(EmitCtx *ctx, const char *raw,
                                          const Expr *arg) {
     if (!raw || !arg) return false;
@@ -39,11 +38,7 @@ static bool emit_arg_is_any_carrier_word(EmitCtx *ctx, const char *raw,
         strcmp(raw, ctx->any_field_read_note) == 0)
         return false;
     if (strncmp(raw, "(tur_tagged_t)", 14) == 0) return false;
-    const Expr *tp = arg;
-    while (tp && tp->kind == EX_ASCRIBE) tp = tp->as.ascribe_.inner;
-    const char *ct = NULL;
-    if (emit_str_is_bare_ident(raw)) ct = emit_localvar_lookup_ctype(raw);
-    if (!ct && tp) ct = emit_binding_repr_c_name(ctx, tp->type, tp);
+    const char *ct = emit_value_spelled_ctype(ctx, raw, arg, false);
     return ct && strcmp(ct, "int64_t") == 0;
 }
 
@@ -2721,6 +2716,27 @@ static const char *emit_ident_emitted_ctype(EmitCtx *ctx, const char *v) {
     return NULL;
 }
 
+/* The C type value text `v`, emitted for `expr`, is spelled as.  A bare
+ * identifier's RECORDED spelling is ground truth -- the source type's c-name
+ * collides under the carrier duality (a closure carrier declared int64 whose
+ * fn type c-names to a pointer; an `any` element read as the slot word) -- so
+ * it wins; otherwise the expression's own representation answers.
+ * `with_params` also consults the current function's parameters (their
+ * recorded signature slots, emit_ident_emitted_ctype); without it only the
+ * localvar table is asked, which is what the two `any`-carrier questions
+ * want: a `tur_tagged_t` temp or argument is never filled straight from a
+ * parameter's word.  NULL when nothing knows. */
+static const char *emit_value_spelled_ctype(EmitCtx *ctx, const char *v,
+                                            const Expr *expr, bool with_params) {
+    const char *ct = with_params ? emit_ident_emitted_ctype(ctx, v)
+                     : (v && emit_str_is_bare_ident(v)) ? emit_localvar_lookup_ctype(v)
+                     : NULL;
+    if (ct) return ct;
+    const Expr *tp = expr;
+    while (tp && tp->kind == EX_ASCRIBE) tp = tp->as.ascribe_.inner;
+    return tp ? emit_binding_repr_c_name(ctx, tp->type, tp) : NULL;
+}
+
 /* gcc14-int-conversion (carrier-to-typed-param): reconcile a control-form result
  * assignment `tmp = <value>` whose temp C type and value representation straddle
  * the int64<->pointer boundary.  The temp is declared by
@@ -2756,11 +2772,7 @@ static char *bridge_control_result_int_ptr(EmitCtx *ctx, char *v, Type ltype,
      * value that already is the aggregate is untouched. */
     bool temp_is_tagged = strcmp(tcty, "tur_tagged_t") == 0;
     if (temp_is_tagged) {
-        const Expr *tp = tail;
-        while (tp && tp->kind == EX_ASCRIBE) tp = tp->as.ascribe_.inner;
-        const char *tvcty = NULL;
-        if (emit_str_is_bare_ident(v)) tvcty = emit_localvar_lookup_ctype(v);
-        if (!tvcty && tp) tvcty = emit_binding_repr_c_name(ctx, tp->type, tp);
+        const char *tvcty = emit_value_spelled_ctype(ctx, v, tail, false);
         if (tvcty && strcmp(tvcty, "int64_t") == 0) {
             Buf b; buf_init(&b);
             buf_printf(&b, "(*(tur_tagged_t *)(intptr_t)(%s))", v);
@@ -2769,18 +2781,10 @@ static char *bridge_control_result_int_ptr(EmitCtx *ctx, char *v, Type ltype,
         return v;
     }
     if (!temp_is_i64 && !temp_is_ptr && !temp_is_voidptr) return v;
-    /* the value's own representation C type */
-    const Expr *p = tail;
-    while (p && p->kind == EX_ASCRIBE) p = p->as.ascribe_.inner;
-    const char *vcty = p ? emit_binding_repr_c_name(ctx, p->type, p) : NULL;
-    /* A bare local's RECORDED emitted C type is ground truth -- the source-type
-     * c-name collides under the carrier duality (a closure carrier declared int64
-     * whose fn type c-names to a pointer, which would hide the int64->void*
-     * straddle).  A parameter's is its recorded signature slot. */
-    {
-        const char *lvty = emit_ident_emitted_ctype(ctx, v);
-        if (lvty) vcty = lvty;
-    }
+    /* The value's spelling: a bare local's or parameter's recorded C type,
+     * else its representation -- the int64->void* straddle of a closure
+     * carrier declared int64 is only visible in the recorded one. */
+    const char *vcty = emit_value_spelled_ctype(ctx, v, tail, true);
     if (!vcty) return v;
     size_t vL = strlen(vcty);
     bool val_is_i64 = strcmp(vcty, "int64_t") == 0;
