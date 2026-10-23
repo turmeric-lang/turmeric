@@ -7,7 +7,7 @@
 ;;; reaches and in what the continuation `k` is allowed to do:
 ;;;
 ;;;   shift / reset                   up to the nearest `reset`; `k` optional
-;;;   shift0                          the abortive `shift` only; takes no `k`
+;;;   shift0                          abortive; `f` runs outside the reset; no `k`
 ;;;   cloneable-shift / -reset        up to the nearest cloneable-reset; `k` many times
 ;;;   serial-shift / -reset           as above, and `k` can be written to bytes
 ;;;   call/cc, escape                 up to the call itself; `k` leaves, once
@@ -23,7 +23,7 @@
 ;;; delimited-control-operators-guide compares them; serializable-continuations-guide
 ;;; covers the serial pair. Several of these forms differ between the compiler
 ;;; and the interpreter, or are unfinished -- see
-;;; docs/upcoming/shift0-pop-plan.md.
+;;; delimited-control-operators-guide.
 ;; Reference only: tools/gendocs.py reads the ;;@ lines, the compiler skips them.
 
 ;;; reset -- mark how far a shift reaches.
@@ -86,11 +86,12 @@
 ;;; `(shift0 f x)` has the syntax and typing of the abortive `shift`: `f` takes a
 ;;; value, the context up to the nearest `reset` is discarded, and the `reset`
 ;;; yields `(f x)`; the expression has `f`'s result type. A receiver that takes a
-;;; continuation is TUR-E0001 -- use `shift`. The guides say a `shift0` pops the
-;;; reset it captured to, so that a `shift` inside `f` reaches the next one out.
-;;; Today that does not show: `(reset (+ 100 (reset (+ 10 (shift0 (fn [v : int]
-;;; (shift (fn [w : int] (* 1000 w)) v)) 5)))))` is 5100 on both engines, the
-;;; same as with `shift`, where popping the reset would give 5000.
+;;; continuation is TUR-E0001 -- use `shift`. The difference is where `f` runs:
+;;; `shift` runs it inside the reset, `shift0` with that reset removed, so a
+;;; `shift` inside `f` reaches the next reset out (or finds none -- `shift used
+;;; outside of any reset boundary`). `(reset (+ 100 (reset (+ 10 (shift0 (fn [v :
+;;; int] (shift (fn [w : int] (* 1000 w)) v)) 5)))))` is 5000; with `shift` it is
+;;; 5100. A receiver that does no control of its own makes the two the same.
 ;;;
 ;;; Parameters:
 ;;;   f -- a function taking a value

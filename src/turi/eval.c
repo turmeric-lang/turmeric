@@ -4572,9 +4572,13 @@ static TuriValue gen_advance(TuriEnv *env, TuriGen *g) {
  * `__dk_abort_body` in emitted C and src/runtime/cps_prompt.c -- the captured
  * sub-continuation is never resumed).  Because the continuation is discarded, a
  * plain setjmp/longjmp prompt boundary models the semantics exactly, with no
- * fiber capture needed.  shift0 differs from shift only in prompt
- * re-installation when the continuation is *resumed*; since it is never
- * resumed here, shift0 behaves identically to shift.
+ * fiber capture needed.  shift0 differs from shift in where the receiver
+ * runs: shift runs f inside the reset, shift0 runs it with that reset removed
+ * (the boundary is `hidden` from reset_find while f runs), so a shift inside f
+ * is delimited by the next reset out (shift0-pop-plan).  Every abortive shift
+ * therefore aborts to the boundary it found (env->abort_target), not to the
+ * nearest one of its kind: a boundary hidden while f ran is live again by the
+ * time f's own abort passes it.
  *
  * The context-capturing variants (serial-shift / cloneable-shift), which DO
  * hand a resumable continuation to f, are a separate, larger piece of work and
@@ -4590,6 +4594,9 @@ typedef struct TuriResetBoundary {
     jmp_buf                   jmp;
     TuriPromptKind            kind;
     TuriValue                 result;       /* value an abortive shift delivers */
+    bool                      hidden;       /* a shift0's receiver is running
+                                             * with this boundary removed:
+                                             * reset_find skips it */
     /* env state to restore after a longjmp unwinds the intervening C frames */
     void                     *saved_handler_stack;
     void                     *saved_defer_stack;
@@ -4598,10 +4605,11 @@ typedef struct TuriResetBoundary {
 
 static _Thread_local TuriResetBoundary *g_reset_stack;
 
-/* Nearest enclosing boundary of the given kind, or NULL. */
+/* Nearest enclosing boundary of the given kind, or NULL.  A boundary a shift0
+ * removed for its receiver's run is not there. */
 static TuriResetBoundary *reset_find(TuriPromptKind kind) {
     for (TuriResetBoundary *b = g_reset_stack; b; b = b->prev)
-        if (b->kind == kind) return b;
+        if (b->kind == kind && !b->hidden) return b;
     return NULL;
 }
 
@@ -4611,11 +4619,12 @@ static TuriResetBoundary *reset_find(TuriPromptKind kind) {
  * propagated up (through `returning || throwing || aborting` guards) to this
  * boundary.  On a matching abort, deliver the abort value and restore the env
  * state the original longjmp path restored; a non-matching abort (e.g. a plain
- * abort passing through a serial boundary) is left set to propagate outward. */
+ * abort passing through a serial boundary, or a shift's abort to a boundary
+ * further out) is left set to propagate outward. */
 static inline TuriValue reset_consume_abort(TuriEnv *env, const TuriResetBoundary *b,
                                             TuriValue v) {
-    if (env->aborting && env->abort_target == NULL &&
-        env->abort_prompt_kind == (int)b->kind) {
+    if (env->aborting && env->abort_prompt_kind == (int)b->kind &&
+        (env->abort_target == NULL || env->abort_target == (const void *)b)) {
         env->aborting      = false;
         env->handler_stack = b->saved_handler_stack;
         env->defer_stack   = b->saved_defer_stack;
@@ -4635,6 +4644,7 @@ static TuriValue eval_reset_boundary(TuriEnv *env, EvalFrame *frame,
                                      const Expr *body, TuriPromptKind kind) {
     TuriResetBoundary b;
     b.kind                = kind;
+    b.hidden              = false;
     b.result              = turi_nil();
     b.saved_handler_stack = env->handler_stack;
     b.saved_defer_stack   = env->defer_stack;
@@ -4653,21 +4663,25 @@ static TuriValue eval_reset_boundary(TuriEnv *env, EvalFrame *frame,
  * matching DK_RESET / eval_reset_boundary, which consumes it. */
 static TuriValue eval_abortive_shift(TuriEnv *env, EvalFrame *frame,
                                      const Expr *k_fn, const Expr *body,
-                                     const char *form) {
+                                     const char *form, bool is0) {
     TuriValue v = eval_expr(env, frame, body);
     if (turi_is_error(v) || env_signaled(env)) return v;
     TuriValue fn = eval_expr(env, frame, k_fn);
     if (turi_is_error(fn) || env_signaled(env)) return fn;
+    /* shift0 runs f with its reset removed (shift0-pop-plan). */
+    TuriResetBoundary *b0 = is0 ? reset_find(PROMPT_PLAIN) : NULL;
+    if (b0) b0->hidden = true;
     TuriValue r = turi_call(env, fn, &v, 1);
+    if (b0) b0->hidden = false;
     if (turi_is_error(r) || env_signaled(env)) return r;
 
-    TuriResetBoundary *b = reset_find(PROMPT_PLAIN);
+    TuriResetBoundary *b = b0 ? b0 : reset_find(PROMPT_PLAIN);
     if (!b)
         return turi_errorf("eval: %s used outside of any reset boundary", form);
     env->aborting          = true;
     env->abort_value       = r;
     env->abort_prompt_kind = (int)PROMPT_PLAIN;
-    env->abort_target      = NULL;   /* prompt-kind abort, not an escape */
+    env->abort_target      = b;      /* this boundary, not the nearest plain one */
     return r;
 }
 
@@ -8949,7 +8963,10 @@ static TuriValue tvar_modify_resume(TuriEnv *env, void *state, TuriValue applied
 /* abortive shift (SR N3b/N4): the receiver application f(body) runs on the
  * work-stack, then the result aborts to the nearest plain reset boundary.
  * `form` names the operator for the out-of-boundary diagnostic. */
-typedef struct { const char *form; } AbortiveShiftState;
+typedef struct {
+    const char        *form;
+    TuriResetBoundary *target;   /* shift0: the reset hidden while f runs */
+} AbortiveShiftState;
 
 /* resume for shift/shift0: `applied` is f(body).  If the receiver signalled,
  * propagate without aborting; otherwise raise the work-stack abort signal
@@ -8961,12 +8978,15 @@ static TuriValue abortive_shift_resume(TuriEnv *env, void *state, TuriValue appl
                                        bool *done, TuriValue *out) {
     AbortiveShiftState *s = (AbortiveShiftState *)state;
     *done = true;
+    /* shift0: f has finished, however it finished -- put its reset back. */
+    if (s->target) s->target->hidden = false;
     if (turi_is_error(applied) || env_signaled(env)) {
         *out = applied;     /* receiver signalled: propagate, no abort raised */
         free(s);
         return *out;
     }
-    if (!reset_find(PROMPT_PLAIN)) {
+    TuriResetBoundary *b = s->target ? s->target : reset_find(PROMPT_PLAIN);
+    if (!b) {
         *out = turi_errorf("eval: %s used outside of any reset boundary", s->form);
         free(s);
         return *out;
@@ -8974,7 +8994,7 @@ static TuriValue abortive_shift_resume(TuriEnv *env, void *state, TuriValue appl
     env->aborting          = true;
     env->abort_value       = applied;
     env->abort_prompt_kind = (int)PROMPT_PLAIN;
-    env->abort_target      = NULL;   /* prompt-kind abort, not an escape */
+    env->abort_target      = b;      /* this boundary, not the nearest plain one */
     *out = applied;
     free(s);
     return *out;
@@ -11030,6 +11050,7 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                  * signal when the body value returns. */
                 TuriResetBoundary *b = (TuriResetBoundary *)malloc(sizeof(TuriResetBoundary));
                 b->kind                = PROMPT_PLAIN;
+                b->hidden              = false;
                 b->result              = turi_nil();
                 b->saved_handler_stack = env->handler_stack;
                 b->saved_defer_stack   = env->defer_stack;
@@ -11094,6 +11115,7 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                 }
                 TuriResetBoundary *b = (TuriResetBoundary *)malloc(sizeof(TuriResetBoundary));
                 b->kind                = is_clone ? PROMPT_CLONEABLE : PROMPT_SERIAL;
+                b->hidden              = false;
                 b->result              = turi_nil();
                 b->saved_handler_stack = env->handler_stack;
                 b->saved_defer_stack   = env->defer_stack;
@@ -11186,6 +11208,11 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                 }
                 AbortiveShiftState *s = (AbortiveShiftState *)malloc(sizeof(AbortiveShiftState));
                 s->form = is0 ? "shift0" : "shift";
+                /* shift0 runs f with its reset removed (shift0-pop-plan):
+                 * hidden until abortive_shift_resume, which f's every exit
+                 * reaches. */
+                s->target = is0 ? reset_find(PROMPT_PLAIN) : NULL;
+                if (s->target) s->target->hidden = true;
                 NativeResume *nr = (NativeResume *)malloc(sizeof(NativeResume));
                 nr->resume = abortive_shift_resume; nr->state = s;
                 DRIVE_PUSH(((DriveCont){ .kind = DK_NATIVE_RESUME, .expr = control, .aux = nr }));
@@ -15634,11 +15661,11 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
 
     case EX_SHIFT:
         return eval_abortive_shift(env, frame, e->as.shift_.k_fn,
-                                   e->as.shift_.body, "shift");
+                                   e->as.shift_.body, "shift", false);
 
     case EX_SHIFT0:
         return eval_abortive_shift(env, frame, e->as.shift0_.k_fn,
-                                   e->as.shift0_.body, "shift0");
+                                   e->as.shift0_.body, "shift0", true);
 
     /* serial-reset / cloneable-reset.  When the body performs the matching
      * capturing shift, reify the delimited context and hand the receiver a
