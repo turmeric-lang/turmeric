@@ -4,7 +4,8 @@
 > orphan branch as the store behind /ci. Needs two things only the owner can
 > do first (see "Prerequisites"). The owner has signed off on everything this
 > gives up (git history of the data, the year files, raw-row access via
-> GitHub): none of it is kept or replaced.
+> GitHub): none of it is kept or replaced. The account is on the Workers Paid
+> plan (confirmed 2026-10-23), so responses are computed on a cache miss.
 
 ## Why
 
@@ -350,21 +351,21 @@ Each phase is its own PR from `main`.
 2. Generate a token (`openssl rand -hex 32`) and store it twice:
    `wrangler secret put CI_METRICS_TOKEN` (Worker), and a repository secret
    `CI_METRICS_TOKEN` (GitHub, Settings -> Secrets and variables -> Actions).
-3. Confirm the Workers plan. See the risks below.
+3. ~~Confirm the Workers plan.~~ Workers Paid (2026-10-23).
 
 ## Risks and things to verify before phase 1
 
 The limits here are from memory, not checked against Cloudflare's current
 documentation. Check them before relying on them.
 
-- **Worker CPU time.** Building `/api/ci/counts` or an all-time daily view
-  reads tens of thousands of rows. That fits in the Workers Paid plan's
-  default CPU limit, but not in the free plan's ~10 ms. On the free plan,
-  those two responses would have to be computed at write time and stored (in
-  a `view` table) rather than computed on a cache miss.
-- **D1 free tier** (5M rows read a day, 100k rows written a day, 5 GB): the
-  load here is ~5k writes and, with the caching above, well under 1M reads a
-  day. A cache miss on all-time `timings` reads ~50k rows, and there are at
+- **Worker CPU time: settled.** Building `/api/ci/counts` or an all-time
+  daily view reads tens of thousands of rows, which needs more than the free
+  plan's ~10 ms. The account is on Workers Paid, whose default CPU limit
+  covers it, so these are computed on a cache miss. No write-time `view`
+  table is needed.
+- **D1 usage** is far inside the paid plan's included reads and writes:
+  ~5k rows written a day and, with the caching above, well under 1M rows read
+  a day. A cache miss on all-time `timings` reads ~50k rows, and there are at
   most a few dozen misses a day.
 - **The edge cache is per data center.** A first view from a new location
   computes once. That is irrelevant at this traffic.
