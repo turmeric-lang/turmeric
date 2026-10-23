@@ -1198,7 +1198,7 @@ One item, and it is a product question rather than a technical one:
 - `src/compiler/pkg.c:4007` already branches on `target == "wasm"` for
   `emcmake`. v0 reuses that branch and adds `:web` parsing plus
   `:cmake-options` passthrough alongside.
-- [godot-binding-web-plan.md](godot-binding-web-plan.md) is blocked on this
+- [godot-binding-web-plan.md](godot/godot-binding-web-plan.md) is blocked on this
   plan and needs its Emscripten profile to agree with ours -- particularly
   `-sMODULARIZE` and `EXPORT_NAME`, since Godot's web export runs its own
   `Module` instance. **Its link to this plan is stale:** it points at

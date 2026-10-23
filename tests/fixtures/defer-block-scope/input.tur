@@ -1,0 +1,59 @@
+;; defer-block-scope: a defer fires when its enclosing block ends, on both
+;; engines (defer-semantics-plan Part A).
+
+(defn block-end [] : int
+  (do (defer (println "d")) (println "body"))
+  (println "after")
+  0)
+
+(defn per-pass [] : int
+  (let [^mut i 0]
+    (while (< i 3)
+      (defer (println "d"))
+      (println i)
+      (set! i (+ i 1)))
+    (println "after"))
+  0)
+
+(defn when-block [] : int
+  (when true
+    (defer (println "when d"))
+    (println "when body"))
+  (println "after when")
+  0)
+
+(defn nested [] : int
+  (defer (println "outer d"))
+  (do
+    (defer (println "mid d"))
+    (do (defer (println "inner d1"))
+        (defer (println "inner d2"))
+        (println "inner body"))
+    (println "mid body"))
+  (println "outer body")
+  0)
+
+(defn early-return [n : int] : int
+  (defer (println "fn d"))
+  (let [^mut i 0]
+    (while (< i 10)
+      (defer (println "pass d"))
+      (when (= i n)
+        (defer (println "when d"))
+        (return i))
+      (set! i (+ i 1))))
+  -1)
+
+(defn value-of-block [] : int
+  (let [v (do (defer (println "d")) 41)]
+    (println "got value")
+    (+ v 1)))
+
+(defn main [] : int
+  (block-end)
+  (per-pass)
+  (when-block)
+  (nested)
+  (println (early-return 1))
+  (println (value-of-block))
+  0)

@@ -420,7 +420,7 @@ loop.
 | `DriveKind` | Pushed for | `aux` / notes |
 |---|---|---|
 | `DK_DONE` | bottom of every drive | -- |
-| `DK_IF_BRANCH`, `DK_DO_SEQ` | `if`, `do`/program | a sequence with a direct `defer` pushes a scope marker |
+| `DK_IF_BRANCH`, `DK_DO_SEQ` | `if`, `do`/program | a sequence with a direct `defer` pushes a scope marker; a non-tail one (`defer_scope`) fires down to its mark when it ends |
 | `DK_LET_BIND`, `DK_LET_BODY` | `let`/`letrec` | owned frame; defer mark |
 | `DK_MAKE_STRUCT`, `DK_BUILTIN_ARG`, `DK_CALL_ARG` | field / argument accumulation | malloc'd `TuriValue[]` accumulator |
 | `DK_CALL_RET` | a Turmeric callee's body | the activation: defer mark, saved module, `returning`, `no_unwind` |
