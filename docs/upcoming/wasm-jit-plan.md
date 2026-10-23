@@ -100,6 +100,80 @@ The gaps:
    fresh pthread for `main` with a 1 GB stack, `setjmp` landings in the
    program half, system headers on disk. Sections 5.3 to 5.8.
 
+### 3.1 What research each gap needed, and what it found (2026-10-23)
+
+**Gap 1 is a file move, not a design problem.** `compile_to_c`
+(`src/driver/pipeline.c:549`) makes no process call: its only environment
+reads are `getenv` knobs. The `cc` invocations that keep `pipeline.c` and
+`preamble_split.c` out of `tur_core` belong to the r7rs library-unit and
+prelude caches (`prelude_compile_pieces`, `prelude_split_object`, through
+`cc_system`), which the wasm front half declines anyway (the runtime is
+host-resident). The post-passes `cmd_jit` runs are pure too:
+`hoist_tur_include_directives` and `scan_autolink_markers` (`cc.c:41`,
+`:372`; the latter only validates strings against shell syntax),
+`jit_try_split_preamble` (`preamble_split.c:839`), and the pruner, which is
+already in `tur_core` (`src/compiler/jit_prune.c`). So `tur_front` is those
+functions, cut from the files that also hold `cc_system` callers. No
+measurement needed; `tests/check-driver-headers.py` is the check.
+
+**Gap 2 is a third platform arm, same shape as the two that exist.**
+`jit_engine.c` already branches on `_WIN32` and `__APPLE__` in about
+thirty places. Its process-shaped surface is 45 lines: `dlsym` in the
+resolver (`:607`) and `jit_ffi.c:414`, four `dlopen`s in autolink
+(`:687-703`), `sigaction`/`sigaltstack` for the entry fault handler
+(`:753-829`, already `#ifndef _WIN32`), and the entry pthread with its
+stack-size knobs (`:1216-1236`). `jit_run_entry` (`:835`) is three lines
+of work (call `main`, drain `atexit`, flush), so the Emscripten arm calls
+it inline. `getenv` works under Emscripten. Nothing to research; P1 is the
+compile.
+
+**Gap 3 splits into four, three of which P0 measured natively.**
+
+- *Symbols.* The decls region holds 523 prototypes in roughly 100
+  distinct signatures by value class (a rough parse; `v(p)`, `p()`, `v()`,
+  `p(p,p)`, `j(j)`, `j(p)` cover half), one variadic. The pruned TU of a
+  trivial program references 8 libc names (`malloc`, `free`, `printf`,
+  `setjmp`, `longjmp`, `exit`, `atexit`, `abort`). The table of 5.3 is
+  small; the stub set of 5.5 is on the order of 100, not `4^n`. Confirmed
+  by reading, no spike needed.
+- *Headers.* After pruning, the TU keeps `stdint stdbool stdio setjmp
+  pthread stdlib stddef string stdarg fcntl time unistd errno ucontext`
+  (plus Windows-only ones under `#ifdef`); `regex`, the socket headers and
+  `hamt.h` are the prunable set (`jit_prune.c` `k_heavy`). Fourteen musl
+  headers to serve from MEMFS, or to generate. Decision deferred to P1.
+- *`setjmp`.* **Measured, real.** Every program's entry does
+  `TUR_SETJMP(__dke.jb)` in the program half (`emit_cps_ir.c:15380`), and
+  the continuation fixtures crash under the native interpreter in
+  `__longjmp` with a garbage frame -- the dead-thunk-frame failure 5.6
+  predicts. Ten fixtures. `TUR_SETJMP` is defined in one place per platform
+  (`emit_dk_runtime.c:620-647`: `tur_sjlj_set`, `setjmp`,
+  `__builtin_setjmp`), which is where an interpreter-engine lowering plugs
+  in. The entry landing is hit only on an escape, which is why the trivial
+  programs pass.
+- *Threads.* **Measured: the dominant family.** 82 of the 94
+  interpreter-only failures are threaded or socket programs (`httpd-*`,
+  `session-*`, `r7rs-threads-*`, `stm-stress`, `fiber-scheduler-*`,
+  `g4b-thread-local-global`) dying in `malloc(): corrupted top size`,
+  `double free`, or `tur: jit: undeclared reg N` -- the interpreter's
+  per-context state raced from several threads. On wasm `spawn` is excluded
+  by 5.7 regardless; natively this says `TUR_JIT_GEN=interp` must never be
+  offered for threaded programs either.
+- *Depth.* **Measured: 2 fixtures** (`tailcall-musttail-deep`,
+  `r7rs-deep-recursion-million`) overflow the interpreter's stack natively.
+  The browser limit (5.8) is far lower, so the wasm count will be higher;
+  P1 measures it.
+- *Speed against the tree-walker.* **Measured** (section 4): on a
+  10-million-step tail-recursive loop the MIR interpreter runs in 121 ms
+  of run time against 11.7 ms for the generator and ~2.5 s for the
+  tree-walker. c2mir's compile is 75-80 ms either way.
+
+What still needs Emscripten (P1): whether Emscripten's `setjmp` can be
+reached through the interpreter's direct-call path at all (`mir-interp.c`
+compares the callee against `setjmp_addr`, which `MIR_load_external` sets
+when the import named `setjmp` resolves, and calls it in `eval`'s own frame
+-- a direct call Emscripten can lower, if the symbol has an address), the
+real recursion depth, and the JS-trampoline cost per call.
+
 ## 4. What "JIT in wasm" can mean, and what to expect
 
 Three tiers. This plan builds the first and sketches the second.
@@ -128,16 +202,19 @@ Expected throughput, to set the frame before anyone measures:
 
 | Engine | Tight integer loop | Source |
 |---|---|---|
-| `tur jit` native, `MIR_gen` | 1x | mir-interp-tier-plan 6.3 |
-| `tur jit` native, `TUR_JIT_GEN=interp` | ~10x slower in steady state | mir-interp-tier-plan 6.3 |
+| `tur jit` native, `MIR_gen` | 1x (11.7 ms run) | P0, 2026-10-23, Release, x86-64 |
+| `tur jit` native, `TUR_JIT_GEN=interp` | ~10x slower (121 ms run) | P0; agrees with mir-interp-tier-plan 6.3 |
+| `tur interpret` (tree-walker), native | ~200x slower than gen, ~20x slower than the MIR interpreter (~2.5 s wall) | P0 |
 | MIR interpreter on wasm32 (c2mp) | ~7x slower than `clang -O0` | c2mp limitations 7 |
-| `turi` tree-walker on wasm | unmeasured against the above | P0 measures it |
 
-The claim this plan rests on, to be verified in P0 rather than assumed: a
-bytecode interpreter over c2mir's output is faster than a tree-walker over
-the AST for most programs, and it runs inline C. If P0 shows the tree-walker
-winning on common shapes, T1 is still worth shipping for the inline-C and
-semantics reasons, as an engine the user picks, not the default.
+The loop is `sum-to` over 10 million steps plus a 1-million-step float
+accumulation (probe `7.1`); c2mir's compile is 75-80 ms in both engine
+modes, and the pruner hands it 118 KB of the 280 KB TU. The claim this plan
+rests on is therefore measured natively: a bytecode interpreter over
+c2mir's output is an order of magnitude faster than the tree-walker on the
+shape a playground program has, and it runs inline C. The wasm numbers will
+be worse than native on both sides (P1), but the ratio has no reason to
+invert.
 
 One premise of the archived interp-tier plan reverses here and is worth
 saying plainly: that plan closed because the MIR interpreter needs the same
@@ -370,16 +447,33 @@ small actions, none of them a merge:
 
 ## 7. Phases
 
-### P0 -- the corpus under the interpreter, natively (no Emscripten)
+### P0 -- the corpus under the interpreter, natively: DONE 2026-10-23
 
-`TUR_JIT_GEN=interp bash tests/run-jit.sh` on a Release build (the
-interp-tier plan's own warning: Debug+ASan numbers are 400x off). This is
-free and answers the two questions that decide the shape of P1: which
-fixtures break under interpretation at all (the `setjmp` families of 5.6
-are the prediction), and how far the interpreter is from the generator and
-from `turi` on the shapes Try Turmeric's examples use. Record it in
-`docs/reported/` or this plan's status line. This is the one claim in
-section 4 still unmeasured after the 2026-10-23 verification pass.
+`TUR=./build-rel/tur TUR_JIT_GEN=interp bash tests/run-jit.sh` on a Release
+`-DTUR_JIT=ON` build, x86-64 Linux, 4 cores, 12-minute cap (it took about
+9 minutes).
+
+| | passed | failed | skipped | via cc fallback |
+|---|---|---|---|---|
+| interpreter | 3853 | 113 | 70 | 18 |
+| generator, the 113 re-run | 94 | 19 | -- | -- |
+
+The 19 that fail under both are the contract and refinement fixtures a
+Release binary strips (`contract-*`, `refine-*`, `loop-invariant-*`,
+`saffron-*refinement*`; jit-guide: "a fully green run needs a Debug
+binary"). They are not engine failures. The 94 interpreter-only failures,
+each re-run by hand to read its exit and stderr:
+
+| family | count | how they die | wasm consequence |
+|---|---|---|---|
+| threads and sockets (`httpd-*` 43, `session-*` 23, `r7rs-threads-*` 15, `stm-stress`, `fiber-scheduler-mt-migration`, `threads-effects-tail-resume`, `g4b-thread-local-global`, `defstruct-field-session-project`, `r7rs-srfi-18`) | 82 | SIGSEGV (55), `malloc(): corrupted top size` / `double free` / `free(): invalid pointer` (16), `tur: jit: undeclared reg N of func ...` (2), silent empty output (13), 20 s timeout (8) | Already excluded by 5.7 (`spawn` falls back). Natively: the interpreter's context is not thread-safe, so `TUR_JIT_GEN=interp` is wrong for any threaded program. |
+| continuations (`r7rs-callcc-*` 4, `r7rs-continuations`, `r7rs-eval-callcc-reentry`, `r7rs-toplevel-reentry`, `r7rs-gc-basic`, `r7rs-sicp-extras`, `r7rs-srfi-216`, `docs-sicp-guide-examples`) | 10 | SIGSEGV in `__longjmp` (gdb: `#0 __longjmp ... #1 0x3c0c5ef042f74a3e in ?? ()`), i.e. a `longjmp` into a frame that no longer exists | 5.6 is confirmed and is the one emitter/engine change the plan needs. |
+| deep recursion (`tailcall-musttail-deep`, `r7rs-deep-recursion-million`) | 2 | `stack overflow: recursion too deep` | 5.8; the browser's limit is lower, so expect more. |
+
+Nothing fell outside those three families. Everything else the corpus
+holds -- effects, handlers, `defer`, regions, GC, the stdlib, inline C,
+`#lang saffron`, the r7rs programs that do not capture a continuation --
+runs under the interpreter with output identical to the generator.
 
 ### P1 -- the spike
 
@@ -445,8 +539,8 @@ precede them.
 
 ## 9. Risks and open questions
 
-1. **Speed against the tree-walker.** The reason to prefer this engine on
-   the page by default. P0 measures it natively; P1 on wasm.
+1. **Speed against the tree-walker.** Measured natively (section 4): the
+   MIR interpreter is ~20x faster on a loop. P1 confirms the ratio on wasm.
 2. **The JS trampoline tax** (5.5) until the stub registry lands, and its
    interaction with Asyncify and fibers: a JIT'd frame under a `call/cc`
    capture, or under the playground's frame loop, has JS frames below it.
