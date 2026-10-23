@@ -16,7 +16,13 @@
     <meta name="theme-color" content="#0C0A08">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-title" content="Turmeric">
-    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <!-- Opaque ("default"), not black-translucent: with black-translucent and
+         viewport-fit=cover an installed app gets a viewport one status bar
+         short and WebKit paints nothing below it (WebKit 301108; 812 of 874pt
+         on an iPhone 16 Pro). iOS reads this tag only at install time, so an
+         existing install keeps black-translucent until it is re-added; the
+         html.pwa min-height rule in styles.css covers that case. -->
+    <meta name="apple-mobile-web-app-status-bar-style" content="default">
     <!-- Mark the installed-app shell BEFORE first paint (a classic, blocking
          script, so it still runs before first paint). Why the `pwa` class
          exists is in the file; it is external because the site's CSP
@@ -35,6 +41,7 @@
     <script type="module" src="/site.js"></script>
 </head>
 <body>
+    <div class="status-bar-fill" aria-hidden="true"></div>
 <site-nav active="Try It"></site-nav>
     <div id="app">
         <!-- Main Layout -->
