@@ -155,6 +155,19 @@ static const char JIT_PRELUDE[] =
    * r7rs-gc experiment) switches its collector off, since a JIT'd
    * program's globals are not in the data segment it scans. */
   "#define TUR_JIT_ENGINE 1\n"
+#if defined(__EMSCRIPTEN__)
+  /* wasm-jit-plan 5.4: the program half reads musl's headers out of MEMFS,
+   * and c2mir lacks three spellings they use on every line: the __restrict
+   * qualifier, __inline, and the compiler-provided __builtin_va_list that
+   * bits/alltypes.h typedefs va_list from.  c2mir's own <stdarg.h> makes
+   * va_list `void *[1]`, so the builtin is given that same type and the two
+   * typedefs agree. */
+  "typedef void *__tur_c2mir_va_list[1];\n"
+  "#define __builtin_va_list __tur_c2mir_va_list\n"
+  "#define __restrict restrict\n"
+  "#define __inline inline\n"
+  "#define __inline__ inline\n"
+#endif
   /* The HOST's sanitizer state, passed into the program because the program
    * cannot see it: c2mir defines neither `__SANITIZE_ADDRESS__` nor
    * `__has_feature`, so inline C compiled here has no way to tell that the
@@ -604,7 +617,16 @@ static void MIR_NO_RETURN jit_mir_error (MIR_error_type_t type, const char *fmt,
 static void *jit_import_resolver (const char *name) {
   for (size_t i = 0; i < sizeof JIT_SHIMS / sizeof JIT_SHIMS[0]; i++)
     if (strcmp (name, JIT_SHIMS[i].name) == 0) return JIT_SHIMS[i].addr;
+#ifdef __EMSCRIPTEN__
+  /* wasm-jit-plan 5.3: a plain Emscripten module has no dlsym, so the
+   * program's imports resolve against a table generated at build time from
+   * the runtime's declarations region plus the libc names the emitted C
+   * uses (tools/wasm-jit-spike/gen-symtab.py). */
+  extern void *tur_wasm_jit_symtab_lookup (const char *);
+  return tur_wasm_jit_symtab_lookup (name);
+#else
   return dlsym (RTLD_DEFAULT, name);
+#endif
 }
 
 /* ------------------------------------------------------------------ */
@@ -1028,6 +1050,17 @@ static int jit_compile_and_link (const char *csrc, size_t csrc_len,
   free (prelude_win_owned);
 #endif
   memcpy (full + sizeof JIT_PRELUDE - 1 + prelude_win_len, csrc, csrc_len);
+#ifdef __EMSCRIPTEN__
+  /* wasm-jit-plan P1: the text c2mir is handed, with the prelude, so a
+   * <tur-jit>:LINE diagnostic can be looked up from the page. */
+  {
+    const char *dump = getenv ("TUR_JIT_DUMP_FULL");
+    if (dump && *dump) {
+      FILE *df = fopen (dump, "wb");
+      if (df) { fwrite (full, 1, full_len, df); fclose (df); }
+    }
+  }
+#endif
   full[full_len] = '\0';
 
   g_src = full;
@@ -1074,6 +1107,11 @@ static int jit_compile_and_link (const char *csrc, size_t csrc_len,
     const char *g = getenv ("TUR_JIT_GEN");
     if (g != NULL && strcmp (g, "interp") == 0) g_jit_interp_mode = 1;
   }
+#ifdef __EMSCRIPTEN__
+  /* wasm-jit-plan 5.1: WebAssembly cannot generate code at runtime, so the
+   * interpreter is the only engine here (mir-gen.c is not linked). */
+  g_jit_interp_mode = 1;
+#endif
   jit_timing_mark ("c2mir");
   if (!g_jit_interp_mode) {
     MIR_gen_init (ctx);
@@ -1226,6 +1264,32 @@ int tur_jit_execute (const char *csrc, size_t csrc_len, const char *autolink,
     }
   }
   bool stack_asked = senv_name != NULL;
+#ifdef __EMSCRIPTEN__
+  /* wasm-jit-plan 5.1: no entry thread on the page.  The caller is the eval
+   * worker, whose stack is the module's -sSTACK_SIZE; a sized pthread would
+   * put the interpreter on a thread the JS trampoline cannot serve. */
+  (void) stack_asked;
+  (void) stack_mb;
+  double t_run = jit_now_ms ();
+  prof_enter (PROF_RUN);
+  {
+    /* On wasm an interpreted function's `addr` is a table slot only
+     * wasm_ff_dispatch can call (mir-wasm.c), not a wasm function pointer,
+     * so the host enters main through MIR_interp_arr instead of calling
+     * box.fn: the host-to-interpreted direction needs no shim. */
+    MIR_val_t res, args[3];
+    char *fake_envp[] = { NULL };
+    args[0].i = box.argc;
+    args[1].a = box.argv;
+    args[2].a = fake_envp;
+    MIR_interp_arr (ctx, main_item, &res, 3, args);
+    box.rc = (int) res.i;
+    jit_atexit_drain ();
+    fflush (stdout);
+  }
+  prof_exit (PROF_RUN);
+  g_jit_stat_run_ms = jit_now_ms () - t_run;
+#else
   pthread_attr_t attr;
   pthread_t entry_thread;
   pthread_attr_init (&attr);
@@ -1279,6 +1343,7 @@ int tur_jit_execute (const char *csrc, size_t csrc_len, const char *autolink,
 #endif
   g_jit_stat_run_ms = jit_now_ms () - t_run;
   pthread_attr_destroy (&attr);
+#endif
   jit_timing_mark ("run");
   jit_timing_rss ();
 

@@ -1,0 +1,5 @@
+(defeffect Ask [] :int)
+(defn compute [] : int
+  (+ (perform (Ask)) 10))
+(println (handle (compute)
+  (Ask [] k) (resume k 32)))

@@ -1,0 +1,6 @@
+(defn c-mix [a : int b : int] : int
+  ```c
+  int64_t t = a;
+  return t * 31 + b;
+  ```)
+(println (c-mix 3 4))

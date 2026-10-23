@@ -411,7 +411,13 @@ static TurJitFfiThunkFn thunk_for(const char *sig, char *errbuf,
 
 static void *resolve_sym(const char *name) {
     if (!name) return NULL;
+#ifdef __EMSCRIPTEN__
+    /* wasm-jit-plan 5.3: the same generated table jit_import_resolver uses. */
+    extern void *tur_wasm_jit_symtab_lookup(const char *);
+    return tur_wasm_jit_symtab_lookup(name);
+#else
     return dlsym(RTLD_DEFAULT, name);
+#endif
 }
 
 /* ------------------------------------------------------------------ */
