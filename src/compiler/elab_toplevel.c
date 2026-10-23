@@ -89,7 +89,7 @@ Expr *elab_any_type_of(Elab *e, const Form *call) {
  * then has to accept.
  *
  * The `any` box id is interned by `type_name`, which renders a TY_APP PER
- * INSTANTIATION ("(type-app Option float)") so that `(Box int)` and
+ * INSTANTIATION ("(Option float)") so that `(Box int)` and
  * `(Box float)` stay distinct.  A target written as a bare `Option` resolves to
  * the head ADT instead -- a different key, hence a different id -- so the test
  * compared against an id no widen ever mints.  `(is? x Option)` was silently

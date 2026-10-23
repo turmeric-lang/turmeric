@@ -481,8 +481,9 @@ typedef struct Elab {
     Type         **type_alias_types;  /* resolved target type, arena-allocated */
     uint32_t       n_type_aliases;    /* number of declared aliases */
     uint32_t       cap_type_aliases;  /* allocated capacity */
-    /* Phase HKT-P1: type-app — type-level application */
+    /* `type-app`: removed, still reserved (elab_reject_type_app_form) */
     const Symbol *sym_type_app;    /* type-app */
+    const Form   *type_app_reported; /* last `type-app` form reported (one report per form) */
     /* Phase HRT0: Higher-ranked type quantifiers (type-level only; reject in expression position) */
     const Symbol *sym_forall;      /* forall */
     const Symbol *sym_exists;      /* exists */
@@ -2491,6 +2492,10 @@ bool check_row_type_arg_kind(Type ctor_type, uint8_t arg_index, Type arg_type,
                              Span arg_span);
 Expr *elab_deftype(Elab *e, const Form *call);
 Expr *elab_type_app(Elab *e, const Form *call);
+/* `(type-app F A)` has been removed: report it, naming `(F A)`, and return
+ * true.  False (and silent) for any other form.  Called by the expression form
+ * and by every type-annotation resolver. */
+bool elab_reject_type_app_form(Elab *e, const Form *form);
 Expr *elab_ascribe(Elab *e, const Form *call);
 Expr *elab_pack(Elab *e, const Form *call);
 Expr *elab_open(Elab *e, const Form *call);

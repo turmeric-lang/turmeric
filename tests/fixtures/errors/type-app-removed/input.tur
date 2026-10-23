@@ -1,0 +1,8 @@
+;; coerce-result-and-type-app-retirement-plan Part B: `(type-app F A)` has been
+;; removed.  In an annotation it was TUR-E0012 for every constructor, and as a
+;; statement it checked an arity and did nothing; both now name the applied
+;; type `(F A)` to write instead.
+
+(defn size [o : (type-app Option int)] : int 0)
+
+(defn main [] : int 0)

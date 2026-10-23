@@ -275,7 +275,7 @@ lifted into file-scope `EX_FN_DEF`s as they are elaborated.
 | `elab_core.c` | the `Elab` state, scopes, `binding_new`, move and linear state, `collect_free_vars` |
 | `elab_forms.c` | control-flow forms: `let`, `let*`, `letrec`, `if`, `do`, `while`, `case`, `set!`, `defer`, `return` |
 | `elab_fns.c` | `defn`, `fn` (lifting and closures), `def`, `extern-c`, ownership masks, contracts, loop invariants |
-| `elab_types.c` | type-expression forms: `type_expr_from_form`, `defkind`, `defrec`, `deftype`, `type-app`, ascription, `pack`/`open` |
+| `elab_types.c` | type-expression forms: `type_expr_from_form`, `defkind`, `defrec`, `deftype`, ascription, `pack`/`open`, and the removed `type-app` (an error naming `(F A)`) |
 | `elab_structs.c` | `defstruct` (lowered to a record `defdata`), `defopaque`, `defdata` and the deprecated `defgadt` (one elaborator, `elab_adt_def`), `match`, `make-struct` |
 | `elab_typeclasses.c` | `defclass`, `definstance`, method dispatch |
 | `elab_effects.c` | `reset`/`shift`/`shift0`, cloneable and serial continuations, `call/cc`, `defeffect`, `perform`, `handle`, `resume` |

@@ -9,7 +9,7 @@
 ;;;                        put a value in a tagged box and take it back out by its tag
 ;;;   ?                    return early from a function on a failed Result
 ;;;   coerce               use an `Equal` proof to treat a value as another type
-;;;   type-app             write a type constructor applied to an argument
+;;;   type-app             removed -- write the applied type (Option int)
 ;;;   forall, exists, pack, open
 ;;;                        polymorphic function arguments, and values whose type is hidden
 ;;;   &, &mut              borrow a value without taking it
@@ -184,43 +184,50 @@
 ;;; `(coerce proof x)` evaluates `proof`, which must be a value of the `Equal`
 ;;; type (`(Refl)` after `(load "stdlib/equal.tur")`, or a parameter annotated
 ;;; with the bare name `Equal` or applied, `(Equal int int)`), and returns `x`.
-;;; Nothing is converted and no code is emitted. In the form the guides describe
-;;; (gadts-guide, gadts-cookbook), `proof` witnesses `(Equal a b)` and `x : a` is
-;;; accepted as a `b`. What is implemented returns `x` at its own type: `(defn
-;;; conv [eq : Equal x : int] : float (coerce eq x))` is TUR-E0707 -- the result
-;;; type is not taken from the proof's `b`. An applied proof checks only that its
+;;; Nothing is converted and no code is emitted. With `proof : (Equal a b)` and
+;;; `x : a`, the result has type `b`: `(defn conv [A B] [eq : (Equal A B) x : A]
+;;; : B (coerce eq x))` type-checks, and `(conv (Refl) 7.1)` is a float -- the
+;;; call reads `B = A` from `Refl`'s `(Equal a a)`. With the bare `Equal`
+;;; annotation the result keeps `x`'s own type. An applied proof checks that its
 ;;; `a` is `x`'s type when both are concrete (`coerce: the proof is about a value
-;;; of type ...`). A session channel cannot be coerced. A first argument that is
-;;; not an `Equal` is `coerce requires an (Equal a b) proof`.
+;;; of type ...`), and a proof relating two different concrete types, `(Equal int
+;;; float)`, is `coerce: the proof (Equal int float) relates different types` --
+;;; `Refl` cannot be built there. A proof `(Equal A int)` with a type-variable
+;;; `a` and a concrete `b` still returns `x` at `A`. A session channel cannot be
+;;; coerced. A first argument that is not an `Equal` is `coerce requires an
+;;; (Equal a b) proof`.
 ;;;
 ;;; Parameters:
 ;;;   proof -- an `Equal` value
 ;;;   x     -- the value
 ;;;
 ;;; Returns:
-;;;   `x`.
+;;;   `x`, at the proof's `b`.
 ;;;
 ;;; Example:
 ;;;   (load "stdlib/equal.tur")
 ;;;   (println (coerce (Refl) 42))  ; prints 42
+;;;   (defn conv [A B] [eq : (Equal A B) x : A] : B (coerce eq x))
+;;;   (println (conv (Refl) 7.1))   ; prints 7.1
 ;;@form (coerce proof x)
 
-;;; type-app -- apply a type constructor to a type.
+;;; type-app -- removed: write the applied type `(F A)`.
 ;;;
-;;; `(type-app F A)` is the explicit spelling of applying the type constructor `F`
-;;; to the type `A` -- the form the checker prints in messages (`expected
-;;; (type-app Option float)`). To write the type of a parameter or result use
-;;; the applied form `(Option int)`: `(type-app Option int)` there is TUR-E0012
-;;; `cannot apply a type of kind '*' as a type constructor`, for `Option`, `Result`
-;;; and user types alike. As a statement of its own it is elaborated and has no
-;;; effect and no value, except that it checks the arity: `(type-app TestFunctor
-;;; Option)` for a class `TestFunctor` is accepted, and `(type-app Nope int)` is
-;;; `type-app: unknown type constructor 'Nope'`. Nothing in the stdlib or the
-;;; test suite uses it in a program; prefer the applied form.
+;;; `(type-app F A)` used to be the explicit spelling of applying the type
+;;; constructor `F` to the type `A`. In a type annotation it never worked (it was
+;;; TUR-E0012 `cannot apply a type of kind '*' as a type constructor` for every
+;;; constructor), and as a statement it checked an arity and did nothing. It is
+;;; now an error in every position that names the spelling to use instead:
+;;; `(type-app Option int)` is `type-app has been removed: write the applied type
+;;; (Option int)`. The word stays reserved for a release. Messages print a type
+;;; application the same way, `(Option float)`.
 ;;;
 ;;; Parameters:
-;;;   F -- a type constructor or typeclass
+;;;   F -- a type constructor
 ;;;   A -- the type argument
+;;;
+;;; Example:
+;;;   (defn size [o : (Option int)] : int 0)  ; not (type-app Option int)
 ;;@form (type-app F A)
 
 ;;; forall -- a type that works for every type: polymorphic arguments.

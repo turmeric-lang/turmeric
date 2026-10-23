@@ -66,7 +66,7 @@ Three neighbouring areas have their own guides and are only summarized here:
 | `elab_fns.c` | `elab_defn`, `elab_fn` (lambda lifting and closure construction), `elab_def`, `elab_extern_c`, the inferred ownership masks, contracts and loop invariants |
 | `elab_forms.c` | `let`, `let*`, `letrec`, `if`, `do`, `while`, `case`, `set!`, `defer`, `return`, `?`, generators |
 | `elab_core.c` | `elab_init_state`, scopes, `binding_new`, move and linear state, `collect_free_vars`, `elab_register_file_def`, the return-position conflict predicates, `elab_lookup_macro` |
-| `elab_types.c` | `type_expr_from_form` (annotation -> `Type`), `defkind`, `defalias`, `defrec`, `deftype`, `type-app`, `::`, `pack`/`open`, `default-of` |
+| `elab_types.c` | `type_expr_from_form` (annotation -> `Type`), `defkind`, `defalias`, `defrec`, `deftype`, `::`, `pack`/`open`, `default-of`, and the removed `type-app` (`elab_reject_type_app_form`, which every annotation resolver calls) |
 | `elab_structs.c` | `defstruct` (lowered to a record `defdata`), `defopaque`, `defdata` and the deprecated `defgadt` (both `elab_adt_def`; `elab_defgadt` only adds TUR-D0005 and requires every constructor annotated), `match`, `make-struct`, `with`, `&`, `&mut` |
 | `elab_typeclasses.c` | `defclass`, `definstance`, `elab_method_call`, return-directed dispatch. See [typeclass-internals-guide.md](typeclass-internals-guide.md) |
 | `elab_effects.c` | `reset`/`shift`/`shift0`, cloneable and serial continuations, `call/cc`, `escape`, `defeffect`, `perform`, `handle`, handler values, `resume` |
@@ -628,6 +628,13 @@ A call to a generic function does the following in `elab_call_fn_inner`:
      collected from inside it by `call_collect_forall_outer_bindings`; the
      forall's own variables are wildcards.
    - **Anything else:** `type_eq`.
+   - **A refined-ADT argument** (`(Refl)` for `eq : (Equal A B)`): the value
+     fixes no index of its own, but every constructor's result annotation
+     spells some positions alike (`Refl : (Equal a a)`), so after the loop
+     `call_bind_refined_index_equations` binds whichever of `A`/`B` is still
+     unbound to what the other is. `(conv (Refl) 7.1)` against `[eq : (Equal A
+     B) x : A] : B` then reads `B := float`
+     ([coerce-result-and-type-app-retirement-plan](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/coerce-result-and-type-app-retirement-plan.md)).
 3. After the loop, if the call sits under a **ground** expected type and the
    callee is a global, bind the result's remaining variables from it. Further
    arms handle a bare-variable result in a generic body and a few other
