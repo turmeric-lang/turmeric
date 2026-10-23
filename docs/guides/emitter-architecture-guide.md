@@ -71,7 +71,7 @@ Out of scope, with the guide that covers each:
 | File | Lines | Role |
 |---|---|---|
 | `src/compiler/emit.h` | 150 | Public API: `emit_program`, `emit_header`, `emit_implementation`, `emit_exports_manifest`, `emit_shared_runtime_header`, `emit_rt_split_source`, the split-build controls |
-| `src/compiler/emit_internal.h` | ~1950 | `EmitCtx`, `EmitAbiSpecialization`, and the cross-file prototypes, grouped by defining file |
+| `src/compiler/emit_internal.h` | ~2050 | `EmitCtx`, `EmitAbiSpecialization`, and the cross-file prototypes, grouped by defining file |
 | `src/compiler/emit_module.c` | ~23.5k | `emit_program_inner` and the multi-module drivers; the ABI scan (`emit_abi_*`); the signature and local-variable side tables; forward declarations; ADT typedefs and constructors; shims, adapters and static fat boxes; the runtime preamble (`emit_runtime_preamble`); the split-build bookkeeping |
 | `src/compiler/emit_expr.c` | ~22.5k | `emit_value` and `emit_value_dispatch` (the expression switch, ~12.9k lines); the call arm; the control-form merge temps; the panic-signal return |
 | `src/compiler/emit_core.c` | ~8.2k | Helpers: `fresh_tmp`, `indent_buf`, naming (`name_for_binding`, `raw_name_for_binding`, `emit_call_name`), atoms, `emit_builtin`, `inline_c_substitute`, include hoisting, the carrier bridge, escape analyses, re-resolution of typeclass calls inside a spec |
