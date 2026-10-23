@@ -1,4 +1,4 @@
-const M = require(process.argv[2] || './build/spike-dbg.js');
+const M = require(require('path').resolve(process.argv[2] || 'build/spike-dbg.js'));
 M().then(mod => {
   const compile = mod.cwrap('spike_compile', 'number', ['string']);
   const call = mod.cwrap('spike_call', 'number', ['string', 'number']);
