@@ -23,7 +23,7 @@
 >
 > **Last Updated:** 2026-06-25
 > **Type:** Integration / Game Engine -- post-v1 follow-up to
-> [godot-language-binding-plan.md](../archive/godot-language-binding-plan.md).
+> [godot-language-binding-plan.md](../../archive/godot-language-binding-plan.md).
 > Long-horizon; each phase is independent and can land on its own
 > schedule once a real driving demand exists.
 
@@ -67,19 +67,19 @@ explicit override clicks.
 ### Phase T5.B -- Android
 
 Split out into its own plan:
-[v2/godot-binding-android-plan.md](godot-binding-android-plan.md).
+[godot-binding-android-plan.md](godot-binding-android-plan.md).
 
 ### Phase T5.C -- iOS
 
 Split out into its own plan:
-[v2/godot-binding-ios-plan.md](godot-binding-ios-plan.md). Note
+[godot-binding-ios-plan.md](godot-binding-ios-plan.md). Note
 that iOS is the platform that makes the export-time signing story
 from T5.A mandatory rather than optional.
 
 ### Phase T5.D -- Web export
 
 Split out into its own plan:
-[v2/godot-binding-web-plan.md](godot-binding-web-plan.md).
+[godot-binding-web-plan.md](godot-binding-web-plan.md).
 
 ### Phase T5.E -- Cross-language inheritance (~2-3 weeks)
 
@@ -103,7 +103,7 @@ Worth doing if a user actually asks; defer until then.
 
 ### Phase T5.F -- Visual debugger inspector for Turmeric values (~2 weeks)
 
-Separate from the breakpoint debugger plan ([godot-binding-debugger-plan.md](../archive/godot-binding-debugger-plan.md)).
+Separate from the breakpoint debugger plan ([godot-binding-debugger-plan.md](../../archive/godot-binding-debugger-plan.md)).
 
 In Godot's debugger panel, paused-frame locals are currently shown as
 `Variant` stringifications. A Turmeric Cons cell or HAMT map shows up
