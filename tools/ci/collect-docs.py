@@ -9,13 +9,16 @@ commit, so like collect-loc.py it has no (os, cc, nproc) dimension.
 The project tracks open work in two directories under `docs/`:
 
   docs/upcoming/   -- plans (work intended but not yet done).  Top-level files
-                      are the compiler/language plans; `spices/` holds the
-                      spice plans.  That is the whole layout: the former
-                      `hold/` and `v1/` subdirectories were flattened away
-                      (a plan's status lives in its own header, not in a
-                      directory).  `held_plans` and `v1_plans` are still
-                      counted, from those directories, so published history
-                      stays comparable -- they are 0 now, and become non-zero
+                      are the stray plans (compiler, language, stdlib, tool
+                      and CI plans not filed under a topic), counted as
+                      `active_plans`; `spices/` holds the spice plans and
+                      `godot/` the Godot binding plans.  Those are topic
+                      directories; the former `hold/` and `v1/` status
+                      subdirectories were flattened away (a plan's status
+                      lives in its own header, not in a directory).
+                      `held_plans` and `v1_plans` are still counted, from
+                      those directories, so published history stays
+                      comparable -- they are 0 now, and become non-zero
                       again only if someone recreates the directories.
   docs/reported/   -- open bug reports / findings.  Resolved reports are moved
                       to docs/archive/ (see CLAUDE.md), so everything left here
@@ -83,8 +86,8 @@ def git_sha(repo):
 def count_md(repo, subdir):
     """Count .md files directly under `repo/subdir`, excluding subdirectories.
 
-    A plan in a subdirectory (spices/) belongs to that sub-bucket, not to
-    the top-level count, so the top-level number is the non-spice set.
+    A plan in a subdirectory (spices/, godot/) belongs to that sub-bucket,
+    not to the top-level count, so the top-level number is the stray set.
     """
     base = os.path.join(repo, subdir)
     if not os.path.isdir(base):
@@ -197,6 +200,7 @@ def main():
     held_plans = count_md(args.repo, "docs/upcoming/hold")
     v1_plans = count_md(args.repo, "docs/upcoming/v1")
     spices_plans = count_md_tree(args.repo, "docs/upcoming/spices")
+    godot_plans = count_md_tree(args.repo, "docs/upcoming/godot")
     open_reports = count_md(args.repo, "docs/reported")
     open_plans = count_md_tree(args.repo, "docs/upcoming")
     reports_filed, reports_archived = report_flow(args.repo)
@@ -217,11 +221,14 @@ def main():
         "open_plans": open_plans,
         "open_reports": open_reports,
         # Breakdown so the chart can toggle them in.  The total is the sum:
-        # open_plans == active_plans + held_plans + v1_plans + spices_plans.
+        # open_plans == active_plans + held_plans + v1_plans + spices_plans
+        #               + godot_plans.
+        # active_plans is the stray (top-level) set, not the total.
         "active_plans": active_plans,
         "held_plans": held_plans,
         "v1_plans": v1_plans,
         "spices_plans": spices_plans,
+        "godot_plans": godot_plans,
         # Report flow: running totals, differenced by /ci.  Null in a shallow
         # clone.  reports_filed - reports_archived == open_reports.
         "reports_filed": reports_filed,
@@ -239,10 +246,11 @@ def main():
     if args.explain:
         print(f"{'open_reports':>12}  {open_reports:>4}", file=sys.stderr)
         print(f"{'open_plans':>12}  {open_plans:>4}", file=sys.stderr)
-        print(f"{'  active':>12}  {active_plans:>4}", file=sys.stderr)
+        print(f"{'  stray':>12}  {active_plans:>4}", file=sys.stderr)
         print(f"{'  held':>12}  {held_plans:>4}", file=sys.stderr)
         print(f"{'  v1':>12}  {v1_plans:>4}", file=sys.stderr)
         print(f"{'  spices':>12}  {spices_plans:>4}", file=sys.stderr)
+        print(f"{'  godot':>12}  {godot_plans:>4}", file=sys.stderr)
         print(f"{'filed':>12}  {reports_filed!s:>4}", file=sys.stderr)
         print(f"{'archived':>12}  {reports_archived!s:>4}", file=sys.stderr)
         print(f"{'guides':>12}  {turmeric_guides:>4}", file=sys.stderr)

@@ -279,7 +279,7 @@ Two caveats on the above, from re-auditing it 2026-09-07:
 >
 > The two premises are true. **The conclusion is not**, and the parked plans I
 > cited say so in as many words -- I cited them without reading them.
-> [godot-binding-ios-plan.md](../upcoming/hold/godot-binding-ios-plan.md):
+> [godot-binding-ios-plan.md](../upcoming/godot/godot-binding-ios-plan.md):
 >
 > > iOS does not permit dlopen of arbitrary `.dylib` files in App Store builds.
 > > **AOT-as-shipping-shared-libs is not viable** on iOS. Practical answer: ship
@@ -290,7 +290,7 @@ Two caveats on the above, from re-auditing it 2026-09-07:
 > exactly what is prohibited. The plan's own recommendation is
 > **interpreter-only on iOS for v1.x**.
 >
-> [godot-binding-web-plan.md](../upcoming/hold/godot-binding-web-plan.md) is different again:
+> [godot-binding-web-plan.md](../upcoming/godot/godot-binding-web-plan.md) is different again:
 > an AOT path there is "doable", but as per-script `.wasm` artifacts through
 > Godot's own loader -- a different mechanism, not this cache.
 
@@ -316,7 +316,7 @@ different from doing it in `tur`:
 - **macOS:** Godot's export templates are pre-signed. A JIT needs
   `com.apple.security.cs.allow-jit`, and adding an entitlement to a template you
   did not sign means re-signing it. This interacts directly with T5.A of the
-  [shipping-breadth plan](../upcoming/hold/godot-binding-shipping-breadth-plan.md).
+  [shipping-breadth plan](../upcoming/godot/godot-binding-shipping-breadth-plan.md).
 - **Windows:** EDR and antivirus reaction to RWX pages in a game process.
 
 Neither is answered by `tur`'s own JIT working, because `tur` is a developer
@@ -541,7 +541,7 @@ unproven compilation path is how the current situation arose.
 - [godot-binding-aot-plan.md](../archive/godot-binding-aot-plan.md) -- the AOT design this refreshes.
 - [jit-godot-embedding-spike.md](../reported/jit-godot-embedding-spike.md) -- the open spike J1-J10 annotate.
 - [jit-windows-support-spike.md](../archive/jit-windows-support-spike.md) -- run 2026-08-05; its verdict feeds J3.
-- [godot-binding-shipping-breadth-plan.md](../upcoming/hold/godot-binding-shipping-breadth-plan.md) -- T5.A signing intersects J5.
+- [godot-binding-shipping-breadth-plan.md](../upcoming/godot/godot-binding-shipping-breadth-plan.md) -- T5.A signing intersects J5.
 - `cc-path-preamble-split-plan.md` -- the split runtime the Windows JIT spike
   named as its route around the MinGW header wall. Deliberately not linked: it
   lives on the in-flight `cc-preamble-split` branch and is not on `main` yet.

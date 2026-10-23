@@ -23,8 +23,9 @@ It reads the working tree, so commit the fix before pushing again.
 ### Plans -- `docs/upcoming/` is flat
 
 `docs/upcoming/<plan>.md` for compiler, language, stdlib, tooling, web and CI
-plans; `docs/upcoming/spices/<plan>.md` for plans about a spice. **No `hold/`,
-`v1/` or other status subdirectories** -- put the status in the plan's own
+plans; `docs/upcoming/spices/<plan>.md` for plans about a spice;
+`docs/upcoming/godot/<plan>.md` for plans about the Godot binding. **No
+`hold/`, `v1/` or other status subdirectories** -- put the status in the plan's own
 `> Status:` line. Finished plans go to `docs/archive/`. See
 [docs/upcoming/README.md](docs/upcoming/README.md).
 

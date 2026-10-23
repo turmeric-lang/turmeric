@@ -19,7 +19,7 @@ facade, the codegen'd ClassDB facade, the editor plugin, the typed
 `godot-call` variants, and the known gaps you'll trip over while the
 binding matures.
 
-The plans in `docs/upcoming/` (the `godot-binding-*` plans) are the
+The plans in `docs/upcoming/godot/` (the `godot-binding-*` plans) are the
 source of truth for *what's coming*; this guide is the source of truth
 for *what works today*.
 
