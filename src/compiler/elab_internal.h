@@ -840,6 +840,13 @@ typedef struct Elab {
     struct NoInstPending *noinst_pending;
     uint32_t         n_noinst_pending;
     uint32_t         cap_noinst_pending;
+    /* rank2-argument-genericity-plan: a rank-2 argument naming a defn that is
+     * not defined yet (a forward reference, whose pass-1 declaration cannot
+     * tell `[x]` from `[x : int]`) is checked when that defn's FnDef is built
+     * (hrt_rank2_pending_flush).  Arena-allocated. */
+    struct Rank2Pending *rank2_pending;
+    uint32_t         n_rank2_pending;
+    uint32_t         cap_rank2_pending;
     /* The instance-list head at the last retry: an unchanged head means no
      * instance registered since, so a retry could not succeed. */
     const struct TypeClassInstance *noinst_seen_head;
@@ -2328,6 +2335,14 @@ Binding *make_poly_wrapper(Elab *e, Binding *inner_b, uint8_t inner_arity, Span 
 Binding *make_poly_wrapper_ex(Elab *e, Binding *inner_b, uint8_t inner_arity,
                               uint8_t n_lead_ignore, Span span, bool typed_concrete);
 Binding *poly_arg_fn_binding(Expr *arg);
+/* rank2-argument-genericity-plan: false (TUR-E0001 emitted) when the named
+ * function fn_b, passed as `arg` to a `forall_ty` parameter, is not generic
+ * where the forall body has a bare bound variable.  See elab_call.c. */
+bool hrt_check_rank2_arg_generic(Elab *e, const Type *forall_ty, const Expr *arg,
+                                 const Binding *fn_b);
+/* Run the checks parked on `b` by hrt_check_rank2_arg_generic, now that its
+ * FnDef (b->source_fn_def) exists. */
+void hrt_rank2_pending_flush(Elab *e, const Binding *b);
 /* MB1: build a dict-clone of a single-constraint polymorphic constrained fn. */
 Binding *make_dict_clone(Elab *e, Binding *inner_b, Span span);
 

@@ -1,7 +1,7 @@
 # Plan: check that a rank-2 (`forall`) argument is generic
 
-> **Status:** PROPOSED 2026-10-21. Decision taken: enforce it (from
-> type-forms-gaps item 1). Not started.
+> **Status:** DONE 2026-10-22 (from type-forms-gaps item 1). See
+> [Outcome](#outcome) for what landed and what is still unchecked.
 
 ## Problem
 
@@ -68,3 +68,42 @@ Regenerate their snapshots in the same change.
    above) and a passing fixture for the ascription opt-out.
 3. hrt-guide and the `forall` entry of `stdlib/forms/types.tur`: replace "not
    checked" with the rule and the opt-out; regenerate the docstrings.
+
+## Outcome
+
+Landed as planned, with three widenings:
+
+- **Every rank-2 argument site**, not only the HRT1/HRT4 call arm:
+  `hrt_check_rank2_arg_generic` (`src/compiler/elab_call.c`) also runs at a
+  partial application (CY4), a rank-3 argument, and a typeclass method's rank-2
+  parameter (`elab_typeclasses.c`, receiver and argument positions).
+- **Forward references are checked, not trusted.** A function defined below the
+  call has no `FnDef` yet, and its pass-1 declaration cannot tell `[x]` from
+  `[x : int]`, so the check is parked on the binding (`Elab.rank2_pending`) and
+  run by `hrt_rank2_pending_flush` when the definition's `FnDef` is built.
+- **Lambdas are checked** like named functions -- they lift to one -- and the
+  diagnostic names them `(a lambda)` rather than `__fn_N`.
+
+Fixtures: 22 rejected. Identity-shaped functions became generic
+(`currying-rank2-partial`, `fn-type-constraint`, `hrt-impred-let`,
+`hrt-rankn-propagation`, `hrt-rank2-identity`, `hrt-rankn-rank3`,
+`hrt-rankn-typeclass`, `hrt-poly-call-cstr-result`), the `Show` ones
+constrained generics (`hrt-forall-constraint-show`; `hrt-forall-constraint-multi`
+now shows both arguments, `42`). Functions that are int-only by nature -- `inc`,
+`double32`, the awaiting `level3` family -- keep their behaviour through the
+ascription opt-out (`emit-abi-trace`, `hrt-impred-closure`, `hrt-impred-reuse`,
+`hrt-integration`, `hrt-rank2-apply`, `hrt-rankn-hkt`, `hrt-stdlib-church`,
+`hrt-stdlib-cont`, `phase-f-poly-concrete`, `phase-f-poly-concrete-unsigned`,
+`await-through-rank2-param`, `await-below-unthreaded-frame-refused`), as does
+`benchmarks/bench-poly-specialize.tur`. None carry an `expected.c`.
+
+New: `errors/rank2-argument-not-generic` (the program above) and its
+`-forward`, `-lambda` and `-method` siblings; `rank2-argument-generic` for the
+accepted shapes and the opt-out (`hrt-rank2-annotation` already exercised it).
+
+Still unchecked: the result type; a bound variable under a type application
+(`(List a)`); a callee with no `FnDef` at all (an `extern-c`); a local
+function value (`!is_global`) reaching a forall slot. Found on the way: passing
+an `any`-parameter function to a forall slot type-checks but segfaults at run
+time, before and after this change --
+[rank2-any-param-function-segfaults](../reported/rank2-any-param-function-segfaults.md).

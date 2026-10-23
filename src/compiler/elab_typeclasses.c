@@ -7250,6 +7250,8 @@ static bool method_call_coerce_args(Elab *e, const Form *call,
                 return false;
             }
         } else {
+            if (!hrt_check_rank2_arg_generic(e, method->params[0]->poly_type, obj, inner_b))
+                return false;
             Expr *wrap = expr_new(e->arena, EX_POLY_WRAP, TYPE_PTR_VOID, obj->span);
             wrap->as.poly_wrap_.inner = obj;
             poly_wrap_stamp_carrier_erased(wrap, method->params[0]);
@@ -7297,6 +7299,9 @@ static bool method_call_coerce_args(Elab *e, const Form *call,
                           "rank-N typeclass method argument must be a named function or closure");
                 return false;
             }
+            if (!hrt_check_rank2_arg_generic(e, method->params[param_idx]->poly_type,
+                                             args[i], inner_b))
+                return false;
             Expr *orig = args[i];
             Expr *wrap = expr_new(e->arena, EX_POLY_WRAP, TYPE_PTR_VOID, orig->span);
             wrap->as.poly_wrap_.inner = orig;

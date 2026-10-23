@@ -4,7 +4,9 @@
 (defn apply-poly [f (forall [a] (-> a a)) x : int] : int
   (f x))
 
-(defn id [x : int] : int x)
+; rank2-argument-genericity: the forall promises `a` at every type, so
+; the function passed to it is generic.
+(defn id [A] [x : A] : A x)
 
 (defn main [] : int
   (let [f id]

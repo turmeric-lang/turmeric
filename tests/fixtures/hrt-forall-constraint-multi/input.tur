@@ -2,6 +2,8 @@
 ;; `forall` parameter.  `use-two` accepts `forall a b. (Show a, Show b) =>
 ;; a -> b -> cstr` and applies it at `a = int`, `b = int` inside its body.
 ;; Both constraints are re-discharged independently at the instantiation site.
+(load "stdlib/str-build.tur")
+
 (defclass Show [a] (show [x] : cstr))
 (definstance Show [int]
   (show [x] : cstr
@@ -11,9 +13,10 @@
     return (const char *)buf;
     ```))
 
-;; Uses both parameters, so the poly fn genuinely ranges over `a` and `b`.
-(defn pick [x : int y : int] : cstr
-  (if (> x y) (show x) (show y)))
+;; Uses both parameters, so the poly fn genuinely ranges over `a` and `b`;
+;; generic in both, as the forall promises (rank2-argument-genericity).
+(defn pick [A B] [(Show A) (Show B)] [x : A y : B] : cstr
+  (str-concat (show x) (show y)))
 
 (defn use-two [f (forall [a b] [(Show a) (Show b)] (-> a b cstr))] : cstr
   (f 4 2))
