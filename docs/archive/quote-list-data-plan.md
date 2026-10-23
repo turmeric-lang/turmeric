@@ -1,10 +1,10 @@
 # Plan: `(quote (a b c))` is data, not code
 
-> **Status:** IMPLEMENTED BEHIND `--enable=quote-data` 2026-10-22 (from
-> control-forms-gaps item 1). Direction: Lisp semantics -- `quote` never
-> evaluates its argument. **Representation decided 2026-10-21: a `Datum` ADT
-> (option 1 below).** Steps 1-5 landed for typed Turmeric and Saffron on all
-> three engines; what graduation still needs is under "Graduation" at the end.
+> **Status:** GRADUATED 2026-10-23, in the 0.70 line (from control-forms-gaps
+> item 1; behind `--enable=quote-data` from 2026-10-22, 0.69.0). `quote` never
+> evaluates its argument: a quoted list or vector is a `Datum` (option 1
+> below) on every engine, typed Turmeric and Saffron alike. See
+> [Graduated](#graduated-2026-10-23).
 
 ## Problem
 
@@ -128,17 +128,43 @@ Behind `--enable=quote-data` (an `EXPERIMENTS[]` prototype row, introduced
   crashed, because global-flag parsing shortened `argv` but not `g_main_argc`,
   and the split-library cache key walked past the NULL (main.c).
 
-## Graduation
+## Graduated (2026-10-23)
 
-1. **Demand-load beyond the entry file.** A quoted list in a loaded or
-   imported module, or in a macro expansion, needs an explicit
-   `(load "stdlib/datum.tur")` today. Graduating should load datum.tur at the
-   first `elab_quote` of a list instead (or scan every module read), so no
-   program sees a load error for using `quote`.
-2. **Option 3's Saffron arm** (`(List any)` in Saffron) stays unbuilt: the
-   `Datum` already works there through `any`, matching and printing included.
-   Revisit only if Saffron users ask for untyped lists.
-3. Decide whether `defmacro*` bodies (procedural macros) should see a quoted
-   list as a `Datum` or as a `Syntax` value; today they get the `Datum`.
-4. Drop the gate: delete the `EXPERIMENTS[]` row, move the name to
-   `GRADUATED[]`, make `g_opt_quote_data` unconditional, and archive this plan.
+The four graduation items, as done:
+
+1. **Demand-load beyond the entry file.** The load pre-pass
+   (`load_expand_forms`, elab_toplevel.c) splices `(load "stdlib/datum.tur")`
+   ahead of the first form it walks that quotes a list -- in the entry file,
+   a loaded file, an imported module's body, or a macro's template -- once
+   per compile through the visited set, which the autoload seeds. Project
+   mode and the REPL no longer load datum.tur up front; a project or a turn
+   that quotes a list gets it from the same splice, and nothing else reserves
+   its names (MF3). The entry-file scan stays for `tur --interpret`, whose
+   preload runs before the entry is read. Only a quote a macro builds at
+   expansion time from its argument is not seen; elab_quote's message says
+   so and names the `load`. Fixture: `quote-data-demand-load`.
+2. **Option 3's Saffron arm** stays unbuilt, as decided: the `Datum` works
+   there through `any`.
+3. **`defmacro*` bodies see a `Datum`**, as everywhere else (decided
+   2026-10-23). `stdlib/datum-syntax.tur`, loaded into the macro environment,
+   converts: `datum->syntax` (the datum rendered and read back, so a keyword,
+   a vector and a `: T` annotation come back as written) and `syntax->datum`
+   (the datum `(quote s)` would build; a map or character literal stops the
+   expansion). `syntax-type-ann-inner` is the native it needed. A `defmacro*`
+   that returns a `Datum` is told to wrap it in `datum->syntax` or use
+   quasiquote, instead of "a non-syntax value". The REPL echoes a datum by its
+   `Show` instance (`turi_try_show` now falls back from a constructor's name
+   to its type's). Fixtures: `quote-data-macro`,
+   `errors/quote-data-macro-returns-datum`.
+4. **The gate is gone.** The `EXPERIMENTS[]` row moved to `GRADUATED[]`
+   (a lingering `--enable=quote-data` is a TUR-W0063 no-op until 0.71.0),
+   `g_opt_quote_data` is deleted, `quote-data-off` (the flag-off meaning) is
+   retired and the other fixtures lost their `flags` files.
+
+   **The corpus, again.** One more fixture than the 2026-10-21 search found
+   relied on a quoted list meaning code: `errors/nil-tail-macro-expanded-definition`
+   wrote its macro's template as `(quote (defclass ...))`. Its template is a
+   quasiquote now. It also surfaced a type hole that predates this plan: a
+   `:copy` ADT with a list field -- a `Datum` -- passes a committed `: int` /
+   `: cstr` return check, so that macro's `Datum` was returned as an int with no
+   error ([carrier-adt-returns-through-a-scalar-declaration](../reported/carrier-adt-returns-through-a-scalar-declaration.md)).

@@ -423,14 +423,14 @@ extern bool g_opt_r7rs;
 extern bool g_opt_reflected_measures;
 extern bool g_opt_discontinue;
 extern bool g_opt_script_deps;  /* script-spice-deps-plan: --enable=script-deps */
-extern bool g_opt_quote_data;   /* quote-list-data-plan: --enable=quote-data */
 /* r7rs-heap-frames-plan (H0): --enable=r7rs-segmented-stack.  Every compiled
  * `#lang r7rs` procedure opens with a stack-limit check (emit_fns.c). */
 extern bool g_opt_r7rs_segmented_stack;
-/* quote-list-data-plan: load stdlib/datum.tur in THIS compile -- the flag is on
- * and the entry program quotes a list (tur_quote_data_wanted_forms / _source),
- * or the entry point loads it eagerly (project mode, the REPL).  Recomputed per
- * compile, never accumulated. */
+/* quote-list-data-plan: autoload stdlib/datum.tur in THIS compile -- the entry
+ * program quotes a list (tur_quote_data_wanted_forms / _source).  Recomputed
+ * per compile, never accumulated.  Anything else that quotes a list (a loaded
+ * file, an imported module, a project, a REPL turn) gets datum.tur spliced in
+ * ahead of it by the load pre-pass (elab_toplevel.c load_expand_forms). */
 extern bool g_quote_data_autoload;
 /* RF5: --dump-reflect -- one line per `^reflect` site: verdict, decreasing
  * argument position, rejection reason.  A diagnostic knob, not an

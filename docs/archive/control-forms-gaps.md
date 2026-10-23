@@ -5,7 +5,7 @@
 ## Disposition (2026-10-21) -- archived; every open item has a home
 
 - Item 1 (`quote` of a list evaluates it): decision -- Lisp semantics, `quote`
-  never evaluates. Plan: [quote-list-data-plan](../upcoming/quote-list-data-plan.md).
+  never evaluates. Plan: [quote-list-data-plan](quote-list-data-plan.md).
 - Item 2 (`defer` scope differs): decision -- end of block on both engines.
 - Item 3 (`defer` captures at registration): decision -- the deferred expression
   reads its variables when it runs (prototyped). Items 2 and 3:

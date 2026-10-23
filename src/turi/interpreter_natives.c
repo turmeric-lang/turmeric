@@ -592,7 +592,7 @@ static TuriValue native_cstr_eq(TuriEnv *env, TuriValue *a, uint32_t n, void *ud
 }
 
 /* quote-list-data-plan: shims over the inline-C helpers of stdlib/datum.tur,
- * which is autoloaded under --enable=quote-data.  Each mirrors its body there
+ * which is loaded when a program quotes a list.  Each mirrors its body there
  * byte for byte (same cstr ABI); results come from the env value pool, as
  * str-concat's do. */
 static const char *datum_arg_cstr(TuriValue *a, uint32_t n, uint32_t i) {
@@ -7502,6 +7502,17 @@ static TuriValue native_syntax_type_ann(TuriEnv *e, TuriValue *a, uint32_t n, vo
     return turi_syntax_val(form_type_ann(&e->sym_arena, inner->span, inner));
 }
 
+/* syntax-type-ann-inner: the `T` of a `: T` annotation form, the inverse of
+ * syntax-type-ann (quote-list-data-plan: syntax->datum holds it as `:` `T`). */
+static TuriValue native_syntax_type_ann_inner(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    Form *f = sx_arg(a, n, 0);
+    if (!f || f->tag != F_TYPE_ANN || f->as.list.len != 1)
+        return turi_errorf("syntax-type-ann-inner: expected a `: T` annotation, got %s",
+                           f ? form_tag_name(f->tag) : (n >= 1 ? sx_tag_name(a[0].tag) : "no argument"));
+    return turi_syntax_val(f->as.list.items[0]);
+}
+
 static TuriValue native_syntax_quote(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
     (void)ud;
     Form *inner = sx_arg(a, n, 0);
@@ -7614,6 +7625,7 @@ static void wk_register_syntax_natives(TuriEnv *env) {
     turi_env_register_native_typed(env, "kw->syntax",      native_kw_to_syntax,    NULL, TUR_NRT_SYNTAX);
     turi_env_register_native_typed(env, "nil->syntax",     native_nil_to_syntax,   NULL, TUR_NRT_SYNTAX);
     turi_env_register_native_typed(env, "syntax-type-ann", native_syntax_type_ann, NULL, TUR_NRT_SYNTAX);
+    turi_env_register_native_typed(env, "syntax-type-ann-inner", native_syntax_type_ann_inner, NULL, TUR_NRT_SYNTAX);
     turi_env_register_native_typed(env, "syntax-quote",    native_syntax_quote,    NULL, TUR_NRT_SYNTAX);
     turi_env_register_native_typed(env, "syntax-append",   native_syntax_append,   NULL, TUR_NRT_SYNTAX);
     turi_env_register_native_typed(env, "syntax-gensym",   native_syntax_gensym,   NULL, TUR_NRT_SYNTAX);

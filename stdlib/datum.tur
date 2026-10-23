@@ -1,12 +1,15 @@
 ;;; tur/datum -- quoted forms as runtime data.
 ;;;
-;;; `(quote (+ 1 2))`, or `'(+ 1 2)`, is a `Datum` under `--enable=quote-data`:
+;;; `(quote (+ 1 2))`, or `'(+ 1 2)`, is a `Datum`:
 ;;; `(DList [(DSym +) (DInt 1) (DInt 2)])`. A symbol inside a quoted list is a
 ;;; `DSym`, a literal is the matching leaf, a parenthesised form is a `DList`
 ;;; and a bracketed one a `DVec`. A quoted bare symbol is still a `Sym`, and a
 ;;; quoted literal is the literal itself, as in Lisp.
 ;;;
-;;; The module is loaded automatically when the `quote-data` experiment is on.
+;;; The module is loaded automatically ahead of the first form that quotes a
+;;; list -- in the program, a loaded file, an imported module or a macro's
+;;; template. A `defmacro*` body converts between a `Datum` and the `Syntax`
+;;; it works on with stdlib/datum-syntax.tur.
 ;;; It loads stdlib/list-typed.tur for `(List Datum)`.
 ;;;
 ;;; Since: quote-list-data-plan

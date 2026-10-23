@@ -1,0 +1,14 @@
+;; quote-list-data-plan: stdlib/datum.tur is loaded ahead of the first form
+;; that quotes a list wherever that form is -- here an imported module, a
+;; loaded file and a macro's template, with no quoted list in this file's own
+;; code -- not only when the entry file quotes one.
+(defmodule main-mod
+  (import qmod :refer [table])
+  (load "qload.tur")
+  (defmacro mk-data [] '(x [y : int]))
+  (defn main [] : int
+    (println (table))
+    (println (loaded-table))
+    (println (mk-data))
+    (println (datum-length (table)))
+    0))

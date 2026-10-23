@@ -1,0 +1,75 @@
+;;; tur/datum-syntax -- between a quoted `Datum` and `Syntax`, for macros.
+;;;
+;;; A quoted list is a `Datum` everywhere, a `defmacro*` body included, while
+;;; a `defmacro*` takes its arguments and returns its expansion as `Syntax`.
+;;; These two convert between them, so a procedural macro can keep a table
+;;; of quoted data, read an argument as data, and expand to a datum it built.
+;;;
+;;; Macro time only: the procedural-macro environment loads this file (and
+;;; stdlib/datum.tur); `Syntax` and the `syntax-*` vocabulary exist nowhere
+;;; else.
+;;;
+;;; Since: quote-list-data-plan
+;; Datum <-> Syntax.
+(load "stdlib/datum.tur")
+(load "stdlib/sym-dynamic.tur")
+
+;;; datum->syntax -- the form a datum would be written as, as `Syntax`.
+;;;
+;;; Parameters:
+;;;   d -- the datum to turn into a form
+;;;
+;;; Returns:
+;;;   The `Syntax` of `d` as source: a `DList` is a list form, a `DVec` a
+;;;   bracketed one, a `DSym` named ":k" a keyword, `(DSym :) T` inside a
+;;;   list the annotation `: T`.
+;;;
+;;; Example:
+;;;   (defmacro* plus12 [] (datum->syntax '(+ 1 2)))
+;;;   (plus12)   ; => 3
+;;;
+;;; Since: quote-list-data-plan
+(defn datum->syntax [d : Datum] : Syntax
+  (read-string (datum->str d)))
+
+;;; syntax-items->datum- -- the data of a sequence form's items from `i` on.
+(defn syntax-items->datum- [s : Syntax i : int] : (List Datum)
+  (if (>= i (syntax-len s))
+    (list-nil)
+    (let [it (syntax-nth s i)]
+      (if (datum-str=?- (syntax-tag it) "type-ann")
+        (list-cons (DSym (str->sym ":"))
+                   (list-cons (syntax->datum (syntax-type-ann-inner it))
+                              (syntax-items->datum- s (+ i 1))))
+        (list-cons (syntax->datum it) (syntax-items->datum- s (+ i 1)))))))
+
+;;; syntax->datum -- a form as the `Datum` its quote would be.
+;;;
+;;; Parameters:
+;;;   s -- the form, e.g. a `defmacro*` argument
+;;;
+;;; Returns:
+;;;   The datum `(quote s)` would build: a symbol is a `DSym`, a keyword the
+;;;   `DSym` named ":k", a literal its leaf, a list a `DList`, a bracketed
+;;;   form a `DVec`.  A form a datum cannot hold (a map, a character
+;;;   literal) stops the expansion with a message naming it.
+;;;
+;;; Example:
+;;;   (defmacro* count-items [form]
+;;;     (int->syntax (datum-length (syntax->datum form))))
+;;;   (count-items (a b c))   ; => 3
+;;;
+;;; Since: quote-list-data-plan
+(defn syntax->datum [s : Syntax] : Datum
+  (let [tag (syntax-tag s)]
+    (if (datum-str=?- tag "symbol")  (DSym (str->sym (syntax-sym-name s)))
+    (if (datum-str=?- tag "keyword") (DSym (str->sym (datum-cat- ":" (syntax-sym-name s))))
+    (if (datum-str=?- tag "nil")     (DSym (str->sym "nil"))
+    (if (datum-str=?- tag "int")     (DInt (syntax->int s))
+    (if (datum-str=?- tag "float")   (DFloat (syntax->float s))
+    (if (datum-str=?- tag "string")  (DStr (syntax->str s))
+    (if (datum-str=?- tag "bool")    (DBool (datum-str=?- (syntax->string s) "true"))
+    (if (datum-str=?- tag "list")    (DList (syntax-items->datum- s 0))
+    (if (datum-str=?- tag "vector")  (DVec (syntax-items->datum- s 0))
+      (do (panic (datum-cat- "syntax->datum: a " (datum-cat- tag " cannot be held in a Datum")))
+          (DInt 0)))))))))))))

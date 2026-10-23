@@ -137,7 +137,6 @@ bool g_opt_regions = true;       /* graduated 2026-09-05; TUR_REGIONS=0 restores
 bool g_opt_reflected_measures = false; /* reflected-measures RF0: --enable=reflected-measures */
 bool g_opt_discontinue = false; /* discontinue-plan: --enable=discontinue */
 bool g_opt_script_deps = false; /* script-spice-deps-plan: --enable=script-deps */
-bool g_opt_quote_data = false;  /* quote-list-data-plan: --enable=quote-data */
 bool g_opt_r7rs_segmented_stack = false; /* r7rs-heap-frames-plan: --enable=r7rs-segmented-stack */
 bool g_quote_data_autoload = false; /* quote-list-data-plan: datum.tur this compile */
 bool g_dump_reflect = false;           /* reflected-measures RF5: --dump-reflect */

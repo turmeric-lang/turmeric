@@ -4585,13 +4585,14 @@ static Form *pd_list(Elab *e, Span sp, Form **items, uint32_t n) {
  *
  * so a datum prints the same through an unannotated parameter as through a
  * typed one, on both back ends, and every other value keeps the dynamic
- * println it had (`is?` narrows `g` in the then-branch).  Only while stdlib/datum.tur is loaded (--enable=quote-data).
+ * println it had (`is?` narrows `g` in the then-branch).  Only while
+ * stdlib/datum.tur is loaded.
  *
  * The argument form is elaborated again, as the Num dispatch above does after
  * its peek; a Datum is :copy, so the first elaboration poisoned nothing. */
 static Expr *elab_try_println_datum(Elab *e, Form *call, const Symbol *name,
                                     Type first_t) {
-    if (!g_opt_quote_data || strcmp(name->name, "println") != 0) return NULL;
+    if (strcmp(name->name, "println") != 0) return NULL;
     if (call == e->println_datum_fallback) return NULL;   /* the `(println g)` below */
     bool is_any = first_t.kind == TY_ANY && lang_span_is_dynamic(call->span);
     if (!is_any && !(first_t.kind == TY_ADT && strcmp(type_name(first_t), "Datum") == 0))
@@ -5268,8 +5269,7 @@ static Expr *elab_call_inner(Elab *e, Form *call) {
     if (name == e->sym_defmacro_star) return elab_defmacro_star(e, call);
     if (name == e->sym_quote) {
         /* (quote x) -- the same lowering as F_QUOTE (elab_quote,
-         * elab_toplevel.c): a symbol is its :Sym, a list under
-         * --enable=quote-data a Datum. */
+         * elab_toplevel.c): a symbol is its :Sym, a list a Datum. */
         return elab_quote(e, call->as.list.items[1], call->span);
     }
     if (name == e->sym_gensym)   return elab_gensym(e, call);

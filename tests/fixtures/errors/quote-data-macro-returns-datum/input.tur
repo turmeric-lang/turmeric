@@ -1,0 +1,4 @@
+;; quote-list-data-plan: a quoted list is data in a defmacro* body as well, so
+;; returning one is not an expansion; the message says how to get one.
+(defmacro* bad [] '(+ 1 2))
+(defn main [] : int (println (bad)) 0)

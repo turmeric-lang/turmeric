@@ -36,8 +36,9 @@
  * containers that instantiate them. */
 const char *const *tur_stdlib_autoload_files(void);
 
-/* quote-list-data-plan: does the entry program quote a list or vector under
- * --enable=quote-data, so stdlib/datum.tur should join the autoload?  Over
+/* quote-list-data-plan: do these forms quote a list or vector, so
+ * stdlib/datum.tur should join the autoload (the entry program) or be spliced
+ * in ahead of them (load_expand_forms, every other form)?  Over
  * read forms (the compiled paths) or source text (the interpreter, which
  * preloads before it reads).  Both answer false for a Scheme program. */
 bool tur_quote_data_wanted_forms(Form *const *forms, uint32_t n);

@@ -1,0 +1,26 @@
+;; quote-list-data-plan: a quoted list in a defmacro* body is a Datum too.
+;; datum->syntax turns one into the expansion, syntax->datum an argument into
+;; one (stdlib/datum-syntax.tur, loaded into the macro environment).
+(defmacro* plus12 [] (datum->syntax '(+ 1 2)))
+;; A table kept as quoted data and read at expansion time.
+(defn add2 [a : int b : int] : int (+ a b))
+(defn mul2 [a : int b : int] : int (* a b))
+(defmacro* op-of [name]
+  (let [ops '((add add2) (mul mul2))
+        want (syntax-sym-name name)]
+    (letrec [find (fn [xs : (List Datum)] : Syntax
+                    (if (list-empty? xs)
+                      (syntax-error "op-of: unknown operation" name)
+                      (let [row (list-first xs)]
+                        (if (datum-str=?- (datum->str (datum-nth row 0)) want)
+                          (datum->syntax (datum-nth row 1))
+                          (find (list-rest xs))))))]
+      (find (datum-items ops)))))
+(defmacro* count-items [form] (int->syntax (datum-length (syntax->datum form))))
+(defmacro* echo [form] (datum->syntax (syntax->datum form)))
+(defn main [] : int
+  (println (plus12))
+  (println ((op-of mul) 6 7))
+  (println (count-items (a [b : int] :k "s" 2.5 true)))
+  (println (echo (+ 40 2)))
+  0)

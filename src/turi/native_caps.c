@@ -631,6 +631,7 @@ static const TuriNativeCapRow k_rows[] = {
     { "syntax-sym?", 0 },
     { "syntax-tag", 0 },
     { "syntax-type-ann", 0 },
+    { "syntax-type-ann-inner", 0 },
     { "syntax-vec", 0 },
     { "syntax-vec?", 0 },
     { "syntax=?", 0 },

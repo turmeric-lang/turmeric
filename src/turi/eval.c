@@ -19485,7 +19485,14 @@ const char *turi_try_show(TuriEnv *env, TuriValue val) {
         return NULL;
     /* A TURI_STRUCT receiver names its own type and carries its fields as real
      * values, so it needs no element-type seeding. */
-    return turi_call_show_named(env, val.as_struct->name, val, NULL);
+    const char *r = turi_call_show_named(env, val.as_struct->name, val, NULL);
+    /* An ADT value is named by its constructor (`DList`), and its instance is
+     * on the type (`Show [Datum]`): ask the type when the name has none. */
+    const CtorDef *ctor = val.as_struct->ctor;
+    if (!r && ctor && ctor->adt && ctor->adt->name &&
+        strcmp(ctor->adt->name, val.as_struct->name) != 0)
+        r = turi_call_show_named(env, ctor->adt->name, val, NULL);
+    return r;
 }
 
 /* Tags that must NOT route through a Show-instance lookup: primitives (their

@@ -9,9 +9,7 @@
 ;;; Where the compiled program and the interpreter (`tur --interpret`, the REPL,
 ;;; the playground) differ, an entry says so. Guides: binding-forms-guide,
 ;;; sum-types-guide (for `match`), macros-guide (`gensym`), dynamic-vars-guide
-;;; (`binding`), error-handling-guide (`defer`). What is still to change:
-;;; docs/upcoming/quote-list-data-plan.md (`quote` of a list, behind
-;;; `--enable=quote-data`).
+;;; (`binding`), error-handling-guide (`defer`).
 ;; Reference only: tools/gendocs.py reads the ;;@ lines, the compiler skips them.
 
 ;;; let -- bind local names, then evaluate a body.
@@ -201,22 +199,22 @@
 ;;; `sym->str` and `=`. It is how a macro or DSL helper builds names. A quoted
 ;;; literal is the literal itself.
 ;;;
-;;; Under `--enable=quote-data` a quoted list or vector is a `Datum` (tur/datum):
+;;; A quoted list or vector is a `Datum` (tur/datum), never code:
 ;;; `'(+ 1 2)` is `(DList [(DSym +) (DInt 1) (DInt 2)])`, `println` prints it as
 ;;; `(+ 1 2)`, and `match` takes it apart -- on every engine, and in Saffron
-;;; through an unannotated parameter too. Without the flag a quoted list is still
-;;; elaborated as code: `(quote (+ 1 2))` gives 3. See
-;;; docs/upcoming/quote-list-data-plan.md.
+;;; through an unannotated parameter too. In a `defmacro*` body it is a `Datum`
+;;; as well: `datum->syntax` turns one into an expansion and `syntax->datum` an
+;;; argument into one (tur/datum-syntax). See docs/archive/quote-list-data-plan.md.
 ;;;
 ;;; Parameters:
 ;;;   x -- a symbol, literal, list or vector, not evaluated
 ;;;
 ;;; Returns:
-;;;   The symbol (a `Sym`), the literal, or (with quote-data) the `Datum`.
+;;;   The symbol (a `Sym`), the literal, or the `Datum`.
 ;;;
 ;;; Example:
 ;;;   (sym->str (quote hello))  ; => "hello"
-;;;   (datum-length '(+ 1 2))   ; => 3, with --enable=quote-data
+;;;   (datum-length '(+ 1 2))   ; => 3
 ;;@form (quote x)
 
 ;;; case -- pick a result by comparing a value with constants.

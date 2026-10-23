@@ -1,0 +1,2 @@
+;; Loaded, not imported: its quoted vector is the only one in the file.
+(defn loaded-table [] : Datum '[1 2.5 "s" :k])

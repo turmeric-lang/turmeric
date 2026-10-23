@@ -455,18 +455,11 @@ static const ExperimentDescriptor EXPERIMENTS[] = {
       "0.74.0",                  /* expires_at -- advisory; never blocks a release */
       XF_LIFECYCLE_PROTOTYPE,
       &g_opt_script_deps },
-    /* quote-data (quote-list-data-plan): `(quote (a b c))` is a runtime
-     * `Datum` (stdlib/datum.tur) instead of the list elaborated as code.
-     * Gated because it changes the meaning of existing code -- a quoted list
-     * used to evaluate -- and because datum.tur is autoloaded whole while the
-     * gate is on, where graduation wants it loaded on first use. */
-    { "quote-data",
-      "`(quote (a b c))` is a runtime `Datum` (stdlib/datum.tur), not the list evaluated as code",
-      "docs/upcoming/quote-list-data-plan.md",
-      "0.69.0",                  /* introduced */
-      "0.73.0",                  /* expires_at -- advisory; never blocks a release */
-      XF_LIFECYCLE_PROTOTYPE,
-      &g_opt_quote_data },
+    /* quote-data GRADUATED 2026-10-23, in the 0.70 line (introduced 0.69.0,
+     * prototype, advisory expires_at 0.73.0).  `(quote (a b c))` is a runtime
+     * `Datum` (stdlib/datum.tur) unconditionally; datum.tur is spliced in
+     * ahead of the first form that quotes a list, wherever it is.  The name
+     * moves to GRADUATED[] below.  See docs/archive/quote-list-data-plan.md. */
     /* r7rs-segmented-stack (r7rs-heap-frames-plan, option C): a compiled
      * `#lang r7rs` procedure checks the stack pointer against a per-thread
      * limit at entry and, past it, re-enters itself on a fresh stack segment,
@@ -601,6 +594,10 @@ static const char *const GRADUATED[] = {
      * it keeps the full window.  Eligible to age out at 0.66.0.
      * See docs/upcoming/aot-compiled-repl-plan.md (C1). */
     "repl-jit-inline-c",
+    /* graduated 2026-10-23, in the 0.70 line.  A program that passed
+     * --enable=quote-data, or a build.tur that listed it, keeps building.
+     * Eligible to age out at 0.71.0.  See docs/archive/quote-list-data-plan.md. */
+    "quote-data",
     NULL,
 };
 

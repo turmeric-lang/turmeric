@@ -1,5 +1,5 @@
-;; quote-list-data-plan: under --enable=quote-data a quoted list or vector is a
-;; Datum (stdlib/datum.tur), not the list elaborated as code.
+;; quote-list-data-plan: a quoted list or vector is a Datum (stdlib/datum.tur),
+;; not the list elaborated as code.
 
 (defn head-name [d : Datum] : cstr
   (match d

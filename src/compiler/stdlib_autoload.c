@@ -124,10 +124,11 @@ const char *const *tur_stdlib_autoload_files(void) {
  *
  * The plan's "auto-loaded on first use".  datum.tur loads list-typed.tur, and
  * through it string.tur and the typeclass stack, so loading it into every
- * program under the flag would reserve all of those names (MF3) for programs
- * that never quote a list -- and the LSP runs with every experiment on.  So
- * the entry program is scanned for a quoted list or vector first.  A quote
- * that only a `(load ...)`ed file or a macro expansion produces is not seen;
+ * program would reserve all of those names (MF3) for programs that never
+ * quote a list.  So the entry program is scanned for a quoted list or vector
+ * first, and the load pre-pass asks the same question of every other form it
+ * walks (load_expand_forms): a loaded file, an imported module, a macro's
+ * template.  Only a quote a macro builds at expansion time is not seen;
  * elab_quote then says to load datum.tur explicitly.
  *
  * Never for a Scheme program: `#lang r7rs` quotes through its own pairs.
@@ -162,7 +163,7 @@ static bool form_quotes_a_list(const Form *f, unsigned depth) {
 }
 
 bool tur_quote_data_wanted_forms(Form *const *forms, uint32_t n) {
-    if (!g_opt_quote_data || quote_data_entry_is_scheme()) return false;
+    if (quote_data_entry_is_scheme()) return false;
     for (uint32_t i = 0; i < n; i++)
         if (form_quotes_a_list(forms[i], 0)) return true;
     return false;
@@ -173,7 +174,7 @@ bool tur_quote_data_wanted_forms(Form *const *forms, uint32_t n) {
  * character literals are skipped, then `'` or `(quote` followed by `(` or `[`
  * answers yes.  A false yes only loads a module the program did not need. */
 bool tur_quote_data_wanted_source(const char *src, size_t len) {
-    if (!g_opt_quote_data || quote_data_entry_is_scheme() || !src) return false;
+    if (quote_data_entry_is_scheme() || !src) return false;
     for (size_t i = 0; i < len; i++) {
         char c = src[i];
         if (c == ';') {

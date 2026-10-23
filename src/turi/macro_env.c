@@ -155,6 +155,17 @@ static TuriValue native_syntax_struct_fields(TuriEnv *e, TuriValue *a,
                                      items, ctor->n_fields));
 }
 
+/* A value of stdlib/datum.tur's Datum: its constructors' names. */
+static bool macro_value_is_datum(TuriValue v) {
+    static const char *const ctors[] = { "DSym", "DInt", "DFloat", "DStr",
+                                         "DBool", "DList", "DVec", NULL };
+    const char *nm = turi_struct_name(v);
+    if (!nm) return false;
+    for (const char *const *c = ctors; *c; c++)
+        if (strcmp(nm, *c) == 0) return true;
+    return false;
+}
+
 struct TuriEnv *elab_macro_env_get(ElabSession *session) {
     Elab *e = (Elab *)session;
     if (!e) return NULL;
@@ -196,15 +207,19 @@ struct TuriEnv *elab_macro_env_get(ElabSession *session) {
          * override their inline-C bodies at runtime, per the preload
          * ordering contract.) */
         {
-            char loadbuf[8600], eroot[8200];
+            char loadbuf[24800], eroot[8200];
             const char *root = (stdlib_root && *stdlib_root) ? stdlib_root
                                                              : "stdlib";
             /* generated SOURCE -- a Windows path needs escaping to survive
              * the string lexer.  See source_literal.h. */
             if (tur_source_literal_escape(root, eroot, sizeof eroot)) {
+            /* quote-list-data-plan: a quoted list in a defmacro* body is a
+             * Datum, and datum-syntax.tur (which loads datum.tur) converts
+             * between it and the Syntax a macro takes and returns. */
             snprintf(loadbuf, sizeof(loadbuf),
-                     "(load \"%s/cstr.tur\")(load \"%s/str-build.tur\")",
-                     eroot, eroot);
+                     "(load \"%s/cstr.tur\")(load \"%s/str-build.tur\")"
+                     "(load \"%s/datum-syntax.tur\")",
+                     eroot, eroot, eroot);
             turi_eval(env, loadbuf);
             }
         }
@@ -440,6 +455,17 @@ Form *elab_macro_env_call_proc(Elab *e, MacroDef *macro,
                   "macro '%s' failed at expansion time: %s",
                   macro->name->name,
                   turi_error_message(r) ? turi_error_message(r) : "unknown error");
+        return NULL;
+    }
+    if (r.tag == TURI_STRUCT && macro_value_is_datum(r)) {
+        /* quote-list-data-plan: `'(+ 1 2)` in a defmacro* body is data, not
+         * the expansion -- say how to get from one to the other. */
+        diag_emit(DIAG_ERROR, call_span,
+                  "macro '%s' returned a Datum, not a syntax object: a quoted "
+                  "list is data in a defmacro* body too; return "
+                  "(datum->syntax d) for it, or build the expansion with "
+                  "quasiquote",
+                  macro->name->name);
         return NULL;
     }
     if (r.tag != TURI_SYNTAX || !r.as_syntax) {

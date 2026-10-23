@@ -9,6 +9,7 @@
 #include "scheme_lower.h"       /* r7rs-lang-plan R2: the Scheme core forms */
 #include "prof.h"               /* --timings: elaborate / module-load / refine */
 #include "pkg.h"                /* script-spice-deps-plan: pkg_text_is_preamble */
+#include "stdlib_autoload.h"    /* quote-list-data-plan: tur_quote_data_wanted_forms */
 #include "runtime/experiments.h" /* quote-list-data-plan: experiment_warn_if_used */
 
 /* duplicate-ctor-names-collide-in-emitted-c: the constructor-name census lives
@@ -664,27 +665,28 @@ static Form *quote_datum_build(Elab *e, Form *f, bool *ok) {
  *
  * A bare symbol is its `Sym` -- DSL helpers in defns build AST nodes this way
  * without TUR-E0003 chasing the inner symbol against scope (see
- * docs/archive/history/defgodot-script-macro-vec-quote-semantics.md).  Under
- * `--enable=quote-data` a list or vector is a `Datum` (stdlib/datum.tur):
+ * docs/archive/history/defgodot-script-macro-vec-quote-semantics.md).  A list
+ * or vector is a `Datum` (stdlib/datum.tur):
  * `'(+ 1 2)` is `(DList (list-of (DSym '+) (DInt 1) (DInt 2)))`, built as
  * constructor forms and elaborated like any other call, so the interpreter
  * and both compiled back ends get it from here.  Anything else -- a
- * self-evaluating literal, or a list with the experiment off -- is elaborated
- * as the expression itself, the legacy meaning. */
+ * self-evaluating literal -- is the literal itself, as in Lisp. */
 Expr *elab_quote(Elab *e, Form *quoted, Span span) {
     if (quoted->tag == F_SYM) {
         Expr *out = expr_new(e->arena, EX_SYM_LIT, TYPE_SYM, span);
         out->as.sym_lit_.sym = quoted->as.sym;
         return out;
     }
-    if (g_opt_quote_data && (quoted->tag == F_LIST || quoted->tag == F_VEC)) {
-        experiment_warn_if_used("quote-data");
+    if (quoted->tag == F_LIST || quoted->tag == F_VEC) {
         const Symbol *datum = symtab_intern(e->st, strslice("Datum", 5));
         if (!scope_lookup_type_def(e->scope, datum)) {
+            /* A quote no file spells out -- one a macro builds at expansion
+             * time from its argument -- is not seen by the load pre-pass. */
             diag_emit(DIAG_ERROR, span,
                       "quote: a quoted %s is a Datum, and stdlib/datum.tur is "
-                      "not loaded -- it is autoloaded under --enable=quote-data "
-                      "unless the stdlib autoload is off; (load \"stdlib/datum.tur\")",
+                      "not loaded -- it is loaded ahead of any form that quotes "
+                      "a list, but this quote was built by a macro; "
+                      "(load \"stdlib/datum.tur\")",
                       quoted->tag == F_VEC ? "vector" : "list");
             return NULL;
         }
@@ -1371,6 +1373,21 @@ static void load_expand_forms(LoadExpandCtx *lx, Elab *e, Arena *arena,
         if (lx->track_boundary && i == lx->boundary_in)
             lx->boundary_out = lx->out_n;
         Form *f = forms[i];
+
+        /* quote-list-data-plan: a quoted list or vector is a `Datum`, so the
+         * first form that quotes one -- in the entry file, a loaded file, an
+         * imported module, or a macro's template -- gets stdlib/datum.tur
+         * spliced in ahead of it, as a `(load ...)` written there would.  The
+         * visited set makes it once per compile, and a no-op when the
+         * autoload already brought it in. */
+        if (tur_quote_data_wanted_forms(&f, 1)) {
+            static const char datum_path[] = "stdlib/datum.tur";
+            Form *ld_items[2];
+            ld_items[0] = form_sym(arena, f->span, e->sym_load);
+            ld_items[1] = form_str(arena, f->span, datum_path, (uint32_t)(sizeof datum_path - 1));
+            Form *const one[1] = { form_list(arena, f->span, ld_items, 2) };
+            load_expand_forms(lx, e, arena, st, one, 1);
+        }
 
         /* r7rs-lang-plan R7: a Scheme `(import (scheme time))` (or
          * process-context / file) splices in that library's file first, as a

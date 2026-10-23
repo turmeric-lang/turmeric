@@ -1,0 +1,4 @@
+;; qmod -- a module whose only quoted list is here, not in the entry file.
+(defmodule qmod
+  (export table)
+  (defn table [] : Datum '(a b c)))
