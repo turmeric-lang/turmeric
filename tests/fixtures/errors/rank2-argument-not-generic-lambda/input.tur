@@ -1,0 +1,8 @@
+;; rank2-argument-genericity: a lambda with an annotated parameter is checked
+;; the same way as a named function.
+(defn both [f (forall [a] (-> a a)) x : int s : cstr] : int
+  (do (println (f s)) (f x)))
+
+(defn main [] : int
+  (println (both (fn [x : int] : int (+ x 1)) 5 "hi"))
+  0)

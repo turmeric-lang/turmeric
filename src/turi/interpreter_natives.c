@@ -591,6 +591,66 @@ static TuriValue native_cstr_eq(TuriEnv *env, TuriValue *a, uint32_t n, void *ud
     return turi_bool(strcmp(x, y) == 0);
 }
 
+/* quote-list-data-plan: shims over the inline-C helpers of stdlib/datum.tur,
+ * which is autoloaded under --enable=quote-data.  Each mirrors its body there
+ * byte for byte (same cstr ABI); results come from the env value pool, as
+ * str-concat's do. */
+static const char *datum_arg_cstr(TuriValue *a, uint32_t n, uint32_t i) {
+    return (n > i && a[i].tag == TURI_CSTR && a[i].as_cstr) ? a[i].as_cstr : "";
+}
+
+static TuriValue native_datum_cat(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    return native_str_concat(env, a, n, ud);
+}
+
+static TuriValue native_datum_int_str(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)ud;
+    char *buf = (char *)turi_val_alloc(env, 32);
+    if (!buf) return turi_nil();
+    snprintf(buf, 32, "%lld", (long long)((n > 0) ? a[0].as_int : 0));
+    return turi_cstr(buf);
+}
+
+static TuriValue native_datum_float_str(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)ud;
+    double v = (n > 0) ? a[0].as_float : 0.0;
+    char *buf = (char *)turi_val_alloc(env, 48);
+    if (!buf) return turi_nil();
+    snprintf(buf, 40, "%.17g", v);
+    for (int p = 1; p <= 17; p++) {
+        char tmp[40];
+        snprintf(tmp, sizeof tmp, "%.*g", p, v);
+        if (strtod(tmp, NULL) == v) { memcpy(buf, tmp, strlen(tmp) + 1); break; }
+    }
+    if (!strpbrk(buf, ".eEn")) strcat(buf, ".0");
+    return turi_cstr(buf);
+}
+
+static TuriValue native_datum_quote_str(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)ud;
+    const char *s = datum_arg_cstr(a, n, 0);
+    size_t len = strlen(s);
+    char *out = (char *)turi_val_alloc(env, 2 * len + 3);
+    if (!out) return turi_nil();
+    size_t j = 0;
+    out[j++] = '"';
+    for (size_t i = 0; i < len; i++) {
+        char c = s[i];
+        if (c == '"' || c == '\\') { out[j++] = '\\'; out[j++] = c; }
+        else if (c == '\n') { out[j++] = '\\'; out[j++] = 'n'; }
+        else if (c == '\t') { out[j++] = '\\'; out[j++] = 't'; }
+        else out[j++] = c;
+    }
+    out[j++] = '"';
+    out[j] = '\0';
+    return turi_cstr(out);
+}
+
+static TuriValue native_datum_str_eq(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    return turi_bool(strcmp(datum_arg_cstr(a, n, 0), datum_arg_cstr(a, n, 1)) == 0);
+}
+
 /* str->int: parse decimal string to int64 */
 static TuriValue native_str_to_int(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)env; (void)ud;
@@ -5084,6 +5144,12 @@ void wk_register_stdlib_natives(TuriEnv *env) {
     turi_env_register_native(env, "cstr-nth",        native_cstr_nth,        NULL);
     turi_env_register_native(env, "cstr-sub",        native_cstr_sub,        NULL);
     turi_env_register_native(env, "cstr-eq?",        native_cstr_eq,         NULL);
+    /* quote-list-data-plan: stdlib/datum.tur's inline-C helpers. */
+    turi_env_register_native(env, "datum-cat-",       native_datum_cat,       NULL);
+    turi_env_register_native(env, "datum-int-str-",   native_datum_int_str,   NULL);
+    turi_env_register_native(env, "datum-float-str-", native_datum_float_str, NULL);
+    turi_env_register_native(env, "datum-quote-str-", native_datum_quote_str, NULL);
+    turi_env_register_native(env, "datum-str=?-",     native_datum_str_eq,    NULL);
     /* Common math/array fixture helpers */
     turi_env_register_native(env, "c-abs",           native_c_abs,           NULL);
     turi_env_register_native(env, "popcount",        native_popcount,        NULL);

@@ -222,6 +222,15 @@ void turi_env_preload_collections(TuriEnv *env, const char *stdlib_root) {
      * (tools/check_turi_native_parity.py checks module-preload parity), so the
      * append has to happen in both or `tur --interpret` reports
      * "unknown name 'vec-map'" on a program the compiler accepts. */
+    /* quote-list-data-plan: the `Datum` a quoted list elaborates to, when the
+     * entry point decided it is wanted (g_quote_data_autoload).  Twin of the
+     * compiled path's append in tur_stdlib_autoload_files(), and like it
+     * ahead of the language prelude. */
+    if (g_quote_data_autoload) {
+        buf_puts(&src, "(load \"");
+        buf_puts(&src, eroot);
+        buf_puts(&src, "/datum.tur\")\n");
+    }
     if (g_lang_prelude) {
         buf_puts(&src, "(load \"");
         buf_puts(&src, eroot);

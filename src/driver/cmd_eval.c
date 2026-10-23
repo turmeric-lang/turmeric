@@ -16,6 +16,7 @@
 #include "turi/preload.h"
 #include "turi/repl.h"
 #include "globals.h"
+#include "stdlib_autoload.h" /* quote-list-data-plan: tur_quote_data_wanted_source */
 #include "turi/dap.h"
 #include "turi/trace.h"
 
@@ -218,6 +219,32 @@ static int cmd_eval_h(const char *path, bool use_color,
      * (wk_register_stdlib_natives et al.), which is why this preload runs BEFORE
      * that registration.  See docs/archive/history/turi-map-set-hamt-interpreter-gap.md
      * and docs/archive/history/web-repl-missing-stdlib-preload.md. */
+    /* quote-list-data-plan: stdlib/datum.tur joins the preload when the entry
+     * file quotes a list under --enable=quote-data.  Read whole here (the
+     * lang probe above read only its head); the compiled path asks the same
+     * question of the read forms in tur_stdlib_prepend_forms. */
+    g_quote_data_autoload = false;
+    if (g_opt_quote_data) {
+        FILE *qf = fopen(path, "rb");
+        if (qf) {
+            char *qsrc = NULL;
+            size_t qlen = 0, qcap = 0, got;
+            char chunk[8192];
+            while ((got = fread(chunk, 1, sizeof chunk, qf)) > 0) {
+                if (qlen + got > qcap) {
+                    qcap = (qlen + got) * 2;
+                    char *grown = (char *)realloc(qsrc, qcap);
+                    if (!grown) break;
+                    qsrc = grown;
+                }
+                memcpy(qsrc + qlen, chunk, got);
+                qlen += got;
+            }
+            fclose(qf);
+            g_quote_data_autoload = tur_quote_data_wanted_source(qsrc, qlen);
+            free(qsrc);
+        }
+    }
     turi_env_preload_collections(env, resolve_stdlib_root());
     /* JR0/RD (turi-json-schema-interpreter-plan, Layers 1-2): auto-load
      * json.tur, then schema.tur on top of it, so the #json(...) reader-macro

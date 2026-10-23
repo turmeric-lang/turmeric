@@ -1,13 +1,15 @@
 ; Phase HRT3: typeclass with a rank-N polymorphic method parameter.
 ; `poly-apply` takes a rank-2 poly fn `f` and applies it to `x`.
-; The call site passes `id` (a concrete function) which gets wrapped.
+; The call site passes `id` (a generic function) which gets wrapped.
 (defclass PolyApply []
   (poly-apply [[f (forall [a] (-> a a))] x] : int))
 
 (definstance PolyApply []
   (poly-apply [f x] (f x)))
 
-(defn id [x : int] : int x)
+; rank2-argument-genericity: the forall promises its variable at every type,
+; so the function passed is generic.
+(defn id [A] [x : A] : A x)
 
 (defn main [] : int
   (println (.poly-apply id 55))

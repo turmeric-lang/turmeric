@@ -5,7 +5,8 @@
 ## Disposition (2026-10-21) -- archived; every open item has a home
 
 - Item 1 (`forall` argument trusted): decision -- enforce it. Plan:
-  [rank2-argument-genericity-plan](../upcoming/rank2-argument-genericity-plan.md).
+  [rank2-argument-genericity-plan](rank2-argument-genericity-plan.md) (done
+  2026-10-22).
 - Item 2 (borrows): reports
   [borrow-checks-gaps](borrow-checks-gaps.md) (the checker) and
   [turi-borrow-is-a-copy](turi-borrow-is-a-copy.md) (the interpreter; resolved

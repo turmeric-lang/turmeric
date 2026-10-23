@@ -183,6 +183,114 @@ static bool hrt_validate_hk_actual(Elab *e, Kind f_kind, Type actual,
     return true;
 }
 
+/* rank2-argument-genericity-plan: a `forall [a]` parameter promises the callee
+ * may use `a` at any type at each application, so the named function passed to
+ * it must be generic wherever the forall body has a bare bound variable -- its
+ * parameter there a type variable, `any`, or un-annotated (the carrier
+ * default).  `(both inc 5 "hi")` with `inc : int -> int` was accepted and
+ * `(f s)` added one to a string's address.
+ *
+ * The opt-out is an ascription to the forall type, `(:: inc (forall [a] (-> a
+ * a)))`, which asserts the genericity; only a bare named function is checked.
+ * Not checked in this slice: the result (an un-annotated result reads as `int`
+ * with no "defaulted" marker), positions under a type application (`(List
+ * a)`), and higher-kinded foralls (hrt_validate_hk_actual covers those).  A
+ * lambda is checked like a named function: it is lifted to one.  A callee with no FnDef yet -- a forward reference, whose pass-1
+ * declaration cannot tell `[x]` from `[x : int]` -- is parked and checked when
+ * its FnDef is built (hrt_rank2_pending_flush). */
+static bool hrt_forall_binds(const Type *forall_ty, const char *name) {
+    if (!name) return false;
+    for (uint8_t i = 0; i < forall_ty->as.forall_.n_vars; i++) {
+        const char *vn = forall_ty->as.forall_.var_names[i];
+        if (vn && strcmp(vn, name) == 0) return true;
+    }
+    return false;
+}
+
+typedef struct Rank2Pending {
+    const Type    *forall_ty;
+    const Expr    *arg;
+    const Binding *fn_b;
+} Rank2Pending;
+
+/* Check fn_b's parameters against the forall body; fn_b->source_fn_def is set. */
+static bool hrt_rank2_params_generic(const Type *forall_ty, const Expr *arg,
+                                     const Binding *fn_b) {
+    const FnDef *fd = fn_b->source_fn_def;
+    const Type *body = forall_ty->as.forall_.body;
+    if (!body || body->kind != TY_FN || !body->as.fn.arg_full_types ||
+        fn_b->type.kind != TY_FN)
+        return true;
+    uint32_t env_off = fn_b->closure_fn_binding ? 1 : 0;
+    for (uint32_t bp = 0; bp < body->as.fn.arity; bp++) {
+        const Type *ft = body->as.fn.arg_full_types[bp];
+        if (!ft || ft->kind != TY_TYVAR || !hrt_forall_binds(forall_ty, ft->as.tyvar_.name))
+            continue;
+        uint32_t ap = bp + env_off;
+        if (ap >= fn_b->type.as.fn.arity) continue;
+        const Type *act = fn_b->type.as.fn.arg_full_types
+                              ? fn_b->type.as.fn.arg_full_types[ap] : NULL;
+        Type actual = act ? *act : type_from_kind(fn_b->type.as.fn.arg_kinds[ap]);
+        if (actual.kind == TY_TYVAR || actual.kind == TY_ANY) continue;
+        if (ap < fd->n_params && fd->params[ap] &&
+            (fd->params[ap]->type_is_carrier_default ||
+             fd->params[ap]->type.kind == TY_TYVAR))
+            continue;
+        bool lambda = fn_b->synth_kind == SYNTH_LAMBDA;
+        const char *nm = fn_b->name ? fn_b->name->name : "?";
+        diag_emit_with_code(DIAG_ERROR, arg->span, TUR_E0001_TYPE_MISMATCH,
+                            "rank-2 argument %s%s%s is not generic: its parameter "
+                            "%u has type %s, but the parameter it is passed to "
+                            "promises '%s' at every type; make it generic, or "
+                            "assert that it is with an ascription to the forall "
+                            "type, `(:: %s (forall ...))`",
+                            lambda ? "(a lambda)" : "'", lambda ? "" : nm,
+                            lambda ? "" : "'", bp + 1, type_name(actual),
+                            ft->as.tyvar_.name, lambda ? "(fn ...)" : nm);
+        return false;
+    }
+    return true;
+}
+
+bool hrt_check_rank2_arg_generic(Elab *e, const Type *forall_ty, const Expr *arg,
+                                 const Binding *fn_b) {
+    if (!forall_ty || forall_ty->kind != TY_FORALL || !arg || !fn_b) return true;
+    for (const Expr *a = arg; a->kind == EX_ASCRIBE; a = a->as.ascribe_.inner) {
+        if (a->type.kind == TY_FORALL) return true;   /* the trusted opt-out */
+        if (!a->as.ascribe_.inner) return true;
+    }
+    if (fn_b->is_poly_fn || !fn_b->is_global || fn_b->type.kind != TY_FN)
+        return true;
+    if (forall_has_higher_kinded_var(forall_ty)) return true;
+    if (fn_b->source_fn_def) return hrt_rank2_params_generic(forall_ty, arg, fn_b);
+    /* A forward reference: park it until the defn is built.  A name that is
+     * never defined by a defn (an extern) is never flushed. */
+    if (e->n_rank2_pending >= e->cap_rank2_pending) {
+        uint32_t nc = e->cap_rank2_pending ? e->cap_rank2_pending * 2 : 4;
+        Rank2Pending *np = (Rank2Pending *)arena_alloc(e->arena, nc * sizeof(Rank2Pending));
+        if (e->n_rank2_pending)
+            memcpy(np, e->rank2_pending, e->n_rank2_pending * sizeof(Rank2Pending));
+        e->rank2_pending = np;
+        e->cap_rank2_pending = nc;
+    }
+    e->rank2_pending[e->n_rank2_pending++] = (Rank2Pending){ forall_ty, arg, fn_b };
+    return true;
+}
+
+void hrt_rank2_pending_flush(Elab *e, const Binding *b) {
+    if (!e || !b || !b->source_fn_def || e->n_rank2_pending == 0) return;
+    uint32_t k = 0;
+    for (uint32_t i = 0; i < e->n_rank2_pending; i++) {
+        Rank2Pending p = e->rank2_pending[i];
+        if (p.fn_b == b) {
+            hrt_rank2_params_generic(p.forall_ty, p.arg, b);
+            continue;
+        }
+        e->rank2_pending[k++] = p;
+    }
+    e->n_rank2_pending = k;
+}
+
 /* ---- file-local helper forward declarations ---- */
 static Expr *elab_call_hamt_fn(Elab *e, Span span, const Symbol *fn_name, uint32_t n_args, Expr **args);
 static Expr *elab_lower_map_call(Elab *e, const Form *call, const Symbol *name);
@@ -4339,6 +4447,67 @@ Expr *elab_call(Elab *e, Form *call) {
     return r;
 }
 
+/* A list form over a copy of `items` (elab_try_println_datum). */
+static Form *pd_list(Elab *e, Span sp, Form **items, uint32_t n) {
+    Form **xs = (Form **)arena_alloc(e->arena, n * sizeof(Form *));
+    for (uint32_t i = 0; i < n; i++) xs[i] = items[i];
+    return form_list(e->arena, sp, xs, n);
+}
+
+/* quote-list-data-plan: `(println d)` on a `Datum` prints its source
+ * rendering, `(+ 1 2)` -- the builtin println rows are scalar-only, so this is
+ * `(println (datum->str d))`.  In a Saffron file the argument is usually an
+ * `any`, whose println is decided at run time; there it becomes
+ *
+ *     (let [g d] (if (is? g Datum) (println (datum->str g)) (println g)))
+ *
+ * so a datum prints the same through an unannotated parameter as through a
+ * typed one, on both back ends, and every other value keeps the dynamic
+ * println it had (`is?` narrows `g` in the then-branch).  Only while stdlib/datum.tur is loaded (--enable=quote-data).
+ *
+ * The argument form is elaborated again, as the Num dispatch above does after
+ * its peek; a Datum is :copy, so the first elaboration poisoned nothing. */
+static Expr *elab_try_println_datum(Elab *e, Form *call, const Symbol *name,
+                                    Type first_t) {
+    if (!g_opt_quote_data || strcmp(name->name, "println") != 0) return NULL;
+    if (call == e->println_datum_fallback) return NULL;   /* the `(println g)` below */
+    bool is_any = first_t.kind == TY_ANY && lang_span_is_dynamic(call->span);
+    if (!is_any && !(first_t.kind == TY_ADT && strcmp(type_name(first_t), "Datum") == 0))
+        return NULL;
+    const Symbol *datum = symtab_intern(e->st, strslice("Datum", 5));
+    if (!scope_lookup_type_def(e->scope, datum)) return NULL;
+    Span sp = call->span;
+#define PD_SYM(nm) form_sym(e->arena, sp, symtab_intern(e->st, strslice(nm, (uint32_t)strlen(nm))))
+#define PD_LIST(...) pd_list(e, sp, (Form *[]){__VA_ARGS__}, \
+                             (uint32_t)(sizeof((Form *[]){__VA_ARGS__}) / sizeof(Form *)))
+    Form *arg = call->as.list.items[1];
+    if (!is_any) {
+        Form *f = PD_LIST(PD_SYM("println"), PD_LIST(PD_SYM("datum->str"), arg));
+        return elab_form(e, f);
+    }
+    char nm[48];
+    snprintf(nm, sizeof nm, "__pdatum_%u", elab_fresh_id(e));
+    Form *g = PD_SYM(nm);
+    Form **bind_items = (Form **)arena_alloc(e->arena, 2 * sizeof(Form *));
+    bind_items[0] = g;
+    bind_items[1] = arg;
+    Form *bind = form_vec(e->arena, sp, bind_items, 2);
+    Form *fallback = PD_LIST(PD_SYM("println"), g);
+    Form *f = PD_LIST(PD_SYM("let"), bind,
+        PD_LIST(PD_SYM("if"), PD_LIST(PD_SYM("is?"), g, PD_SYM("Datum")),
+                PD_LIST(PD_SYM("println"), PD_LIST(PD_SYM("datum->str"), g)),
+                fallback));
+#undef PD_SYM
+#undef PD_LIST
+    /* Saved and restored: a println of an `any` inside `arg` rewrites (and
+     * restores) before the body's fallback is reached. */
+    Form *saved = e->println_datum_fallback;
+    e->println_datum_fallback = fallback;
+    Expr *out = elab_form(e, f);
+    e->println_datum_fallback = saved;
+    return out;
+}
+
 static Expr *elab_call_inner(Elab *e, Form *call) {
     /* Already established: call->tag == F_LIST and len >= 1. */
     Form *head = call->as.list.items[0];
@@ -4976,17 +5145,10 @@ static Expr *elab_call_inner(Elab *e, Form *call) {
     /* Stage 2 (macro-system-direction-plan): procedural macros. */
     if (name == e->sym_defmacro_star) return elab_defmacro_star(e, call);
     if (name == e->sym_quote) {
-        /* (quote x) -- mirrors F_QUOTE in elab_toplevel.c. Quoting a
-         * bare symbol yields a :Sym literal so DSL helpers in defns
-         * can construct AST nodes without the inner symbol being
-         * TUR-E0003-resolved against the scope. */
-        Form *quoted = call->as.list.items[1];
-        if (quoted->tag == F_SYM) {
-            Expr *out = expr_new(e->arena, EX_SYM_LIT, TYPE_SYM, call->span);
-            out->as.sym_lit_.sym = quoted->as.sym;
-            return out;
-        }
-        return elab_form(e, quoted);
+        /* (quote x) -- the same lowering as F_QUOTE (elab_quote,
+         * elab_toplevel.c): a symbol is its :Sym, a list under
+         * --enable=quote-data a Datum. */
+        return elab_quote(e, call->as.list.items[1], call->span);
     }
     if (name == e->sym_gensym)   return elab_gensym(e, call);
     if (name == e->sym_thread)    return elab_thread(e, call);
@@ -6126,6 +6288,10 @@ static Expr *elab_call_inner(Elab *e, Form *call) {
     }
     Type first_t = (n_args > 0) ? arg0_peek->type : TYPE_NIL;
     const BuiltinSpec *spec = builtin_lookup(name, first_t, n_args);
+    if (!spec && n_args == 1) {
+        Expr *dp = elab_try_println_datum(e, call, name, first_t);
+        if (dp) return dp;
+    }
     if (!spec) {
         Expr *num_disp = elab_try_num_operator_dispatch(e, call, head, name,
                                                         &first_t, n_args);
@@ -6766,6 +6932,9 @@ static Expr *elab_partial_apply(Elab *e, const Form *call, Binding *fn_binding,
                           "rank-2 argument must be a named function (capturing closures not yet supported)");
                 return NULL;
             }
+            if (!hrt_check_rank2_arg_generic(e, cap_bindings[i]->poly_type,
+                                             elab_args[i], inner_fn_b))
+                return NULL;
             Expr *wrap = expr_new(e->arena, EX_POLY_WRAP, TYPE_PTR_VOID, elab_args[i]->span);
             wrap->as.poly_wrap_.inner = elab_args[i];
             wrap->as.poly_wrap_.is_closure = false;
@@ -10073,6 +10242,8 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
                           "rank-2 argument must be a named function (capturing closures not yet supported)");
                 return NULL;
             }
+            if (!hrt_check_rank2_arg_generic(e, rank2_forall_ty, args[i], inner_fn_b))
+                return NULL;
             /* Slice 3 (constrained-hkt-forall): gate + validate a higher-kinded
              * rank-2 parameter.  When the forall quantifies an `f :: * -> *`
              * used as `(f a)` in a body parameter, the passed function's
@@ -13316,6 +13487,8 @@ static Expr *elab_poly_call(Elab *e, const Form *call, Binding *fn_binding) {
                                   "rank-3: polymorphic function argument must be a named function");
                         return NULL;
                     }
+                    if (!hrt_check_rank2_arg_generic(e, aft, args[i], inner_b))
+                        return NULL;
                     Expr *orig_arg = args[i];
                     Expr *wrap = expr_new(e->arena, EX_POLY_WRAP, TYPE_PTR_VOID, orig_arg->span);
                     wrap->as.poly_wrap_.inner = orig_arg;

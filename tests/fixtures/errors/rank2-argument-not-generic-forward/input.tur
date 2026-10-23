@@ -1,0 +1,9 @@
+;; rank2-argument-genericity: the same check when the function passed is
+;; defined after the call -- its pass-1 forward declaration cannot tell
+;; `[x : int]` from `[x]`, so the check waits for the definition.
+(defn both [f (forall [a] (-> a a)) x : int s : cstr] : int
+  (do (println (f s)) (f x)))
+
+(defn main [] : int (println (both inc 5 "hi")) 0)
+
+(defn inc [x : int] : int (+ x 1))

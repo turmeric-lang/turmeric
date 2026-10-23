@@ -1,0 +1,9 @@
+;; rank2-argument-genericity: a `forall [a]` parameter promises the callee may
+;; use `a` at any type, so an int-only function is not a valid argument.
+;; `both` applies f to a cstr; this used to add one to the string's address.
+(defn both [f (forall [a] (-> a a)) x : int s : cstr] : int
+  (do (println (f s)) (f x)))
+
+(defn inc [x : int] : int (+ x 1))
+
+(defn main [] : int (println (both inc 5 "hi")) 0)

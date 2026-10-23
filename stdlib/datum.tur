@@ -1,0 +1,347 @@
+;;; tur/datum -- quoted forms as runtime data.
+;;;
+;;; `(quote (+ 1 2))`, or `'(+ 1 2)`, is a `Datum` under `--enable=quote-data`:
+;;; `(DList [(DSym +) (DInt 1) (DInt 2)])`. A symbol inside a quoted list is a
+;;; `DSym`, a literal is the matching leaf, a parenthesised form is a `DList`
+;;; and a bracketed one a `DVec`. A quoted bare symbol is still a `Sym`, and a
+;;; quoted literal is the literal itself, as in Lisp.
+;;;
+;;; The module is loaded automatically when the `quote-data` experiment is on.
+;;; It loads stdlib/list-typed.tur for `(List Datum)`.
+;;;
+;;; Since: quote-list-data-plan
+;; Datum ADT, rendering, equality and accessors.
+(load "stdlib/list-typed.tur")
+
+;;; Datum -- one quoted form: a symbol, a literal, or a list of data.
+;;;
+;;; Variants:
+;;;   (DSym s)    -- a symbol, as the interned `Sym`
+;;;   (DInt n)    -- an integer literal
+;;;   (DFloat x)  -- a float literal
+;;;   (DStr s)    -- a string literal
+;;;   (DBool b)   -- `true` or `false`
+;;;   (DList xs)  -- a parenthesised form `(a b c)`
+;;;   (DVec xs)   -- a bracketed form `[a b c]`
+;;;
+;;; Example:
+;;;   (match '(+ 1 2)
+;;;     (DList xs) (list-count xs)
+;;;     _ 0)                        ; => 3
+;;;
+;;; Since: quote-list-data-plan
+(defdata Datum
+  :copy
+  (DSym Sym)
+  (DInt int)
+  (DFloat float)
+  (DStr cstr)
+  (DBool bool)
+  (DList (List Datum))
+  (DVec (List Datum)))
+
+;;; datum-cat- -- concatenate two cstrs into a fresh buffer.
+(defn datum-cat- [a : cstr b : cstr] : cstr
+  ```c
+  size_t la = strlen(a), lb = strlen(b);
+  char *out = (char *)malloc(la + lb + 1);
+  memcpy(out, a, la);
+  memcpy(out + la, b, lb);
+  out[la + lb] = '\0';
+  return (const char *)out;
+  ```)
+
+;;; datum-str=?- -- byte equality of two cstrs.
+(defn datum-str=?- [a : cstr b : cstr] : bool
+  ```c
+  return strcmp(a, b) == 0;
+  ```)
+
+;;; datum-int-str- -- an int in decimal.
+(defn datum-int-str- [v : int] : cstr
+  ```c
+  char *buf = (char *)malloc(32);
+  snprintf(buf, 32, "%lld", (long long)v);
+  return (const char *)buf;
+  ```)
+
+;;; datum-float-str- -- a float that reads back as a float (`3.0`, not `3`).
+(defn datum-float-str- [v : float] : cstr
+  ```c
+  char *buf = (char *)malloc(48);
+  snprintf(buf, 40, "%.17g", v);
+  /* Shortest form that round-trips. */
+  for (int p = 1; p <= 17; p++) {
+    char tmp[40];
+    snprintf(tmp, sizeof tmp, "%.*g", p, v);
+    if (strtod(tmp, NULL) == v) { memcpy(buf, tmp, strlen(tmp) + 1); break; }
+  }
+  if (!strpbrk(buf, ".eEn")) strcat(buf, ".0");
+  return (const char *)buf;
+  ```)
+
+;;; datum-quote-str- -- a string literal with its quotes and escapes.
+(defn datum-quote-str- [s : cstr] : cstr
+  ```c
+  size_t n = strlen(s);
+  char *out = (char *)malloc(2 * n + 3);
+  size_t j = 0;
+  out[j++] = '"';
+  for (size_t i = 0; i < n; i++) {
+    char c = s[i];
+    if (c == '"' || c == '\\') { out[j++] = '\\'; out[j++] = c; }
+    else if (c == '\n') { out[j++] = '\\'; out[j++] = 'n'; }
+    else if (c == '\t') { out[j++] = '\\'; out[j++] = 't'; }
+    else out[j++] = c;
+  }
+  out[j++] = '"';
+  out[j] = '\0';
+  return (const char *)out;
+  ```)
+
+;;; datum-items-str- -- the elements of a list datum after the first, each
+;;; preceded by a space.
+(defn datum-items-str- [xs : (List Datum) acc : cstr] : cstr
+  (if (list-empty? xs)
+    acc
+    (datum-items-str- (list-rest xs)
+      (datum-cat- (datum-cat- acc " ") (datum->str (list-first xs))))))
+
+;;; datum-seq-str- -- the elements of a list datum, space-separated.
+(defn datum-seq-str- [xs : (List Datum)] : cstr
+  (if (list-empty? xs)
+    ""
+    (datum-items-str- (list-rest xs) (datum->str (list-first xs)))))
+
+;;; datum->str -- render a datum the way it would be written in source.
+;;;
+;;; Parameters:
+;;;   d -- the datum to render
+;;;
+;;; Returns:
+;;;   A fresh cstr: `(+ 1 2)` for `'(+ 1 2)`, `[a "b"]` for `'[a "b"]`. A
+;;;   string leaf is quoted and escaped; a float keeps its decimal point.
+;;;
+;;; Example:
+;;;   (println (datum->str '(+ 1 (f 2.5 "s"))))  ; prints (+ 1 (f 2.5 "s"))
+;;;
+;;; Since: quote-list-data-plan
+(defn datum->str [d : Datum] : cstr
+  (match d
+    (DSym s)
+    (sym->str s)
+    (DInt n)
+    (datum-int-str- n)
+    (DFloat x)
+    (datum-float-str- x)
+    (DStr s)
+    (datum-quote-str- s)
+    (DBool b)
+    (if b "true" "false")
+    (DList xs)
+    (datum-cat- (datum-cat- "(" (datum-seq-str- xs)) ")")
+    (DVec xs)
+    (datum-cat- (datum-cat- "[" (datum-seq-str- xs)) "]")))
+
+;;; datum-list=?- -- element-wise equality of two lists of data.
+(defn datum-list=?- [xs : (List Datum) ys : (List Datum)] : bool
+  (if (list-empty? xs)
+    (list-empty? ys)
+    (if (list-empty? ys)
+      false
+      (if (datum=? (list-first xs) (list-first ys))
+        (datum-list=?- (list-rest xs) (list-rest ys))
+        false))))
+
+;;; datum=? -- structural equality of two data.
+;;;
+;;; Parameters:
+;;;   a -- the first datum
+;;;   b -- the second datum
+;;;
+;;; Returns:
+;;;   true when both are the same kind of leaf with equal values, or both
+;;;   lists (or both vectors) of pairwise-equal data. `'(1)` is not `'[1]`,
+;;;   and `(DInt 1)` is not `(DFloat 1.0)`.
+;;;
+;;; Example:
+;;;   (datum=? '(a 1) '(a 1))  ; => true
+;;;   (datum=? '(a 1) '[a 1])  ; => false
+;;;
+;;; Since: quote-list-data-plan
+(defn datum=? [a : Datum b : Datum] : bool
+  (match a
+    (DSym x)
+    (match b (DSym y) (sym=? x y) _ false)
+    (DInt x)
+    (match b (DInt y) (= x y) _ false)
+    (DFloat x)
+    (match b (DFloat y) (= x y) _ false)
+    (DStr x)
+    (match b (DStr y) (datum-str=?- x y) _ false)
+    (DBool x)
+    (match b (DBool y) (= x y) _ false)
+    (DList xs)
+    (match b (DList ys) (datum-list=?- xs ys) _ false)
+    (DVec xs)
+    (match b (DVec ys) (datum-list=?- xs ys) _ false)))
+
+;;; Eq [Datum] -- structural equality, as datum=?.
+(definstance Eq [Datum] (eq? [x y] : bool (datum=? x y)))
+
+;;; Show [Datum] -- the source rendering, as datum->str.
+(definstance Show [Datum] (show [x] : String (string/from-cstr (datum->str x))))
+
+;;; datum-sym? -- is the datum a symbol?
+;;;
+;;; Parameters:
+;;;   d -- the datum to inspect
+;;;
+;;; Returns:
+;;;   true for a `DSym`.
+;;;
+;;; Example:
+;;;   (datum-sym? (datum-nth '(+ 1 2) 0))  ; => true
+;;;
+;;; Since: quote-list-data-plan
+(defn datum-sym? [d : Datum] : bool (match d (DSym _) true _ false))
+
+;;; datum-int? -- is the datum an integer?
+;;;
+;;; Parameters:
+;;;   d -- the datum to inspect
+;;;
+;;; Returns:
+;;;   true for a `DInt`.
+;;;
+;;; Example:
+;;;   (datum-int? (datum-nth '(+ 1 2) 1))  ; => true
+;;;
+;;; Since: quote-list-data-plan
+(defn datum-int? [d : Datum] : bool (match d (DInt _) true _ false))
+
+;;; datum-float? -- is the datum a float?
+;;;
+;;; Parameters:
+;;;   d -- the datum to inspect
+;;;
+;;; Returns:
+;;;   true for a `DFloat`.
+;;;
+;;; Example:
+;;;   (datum-float? (datum-nth '(x 7.1) 1))  ; => true
+;;;
+;;; Since: quote-list-data-plan
+(defn datum-float? [d : Datum] : bool (match d (DFloat _) true _ false))
+
+;;; datum-str? -- is the datum a string?
+;;;
+;;; Parameters:
+;;;   d -- the datum to inspect
+;;;
+;;; Returns:
+;;;   true for a `DStr`.
+;;;
+;;; Example:
+;;;   (datum-str? (datum-nth '(say "hi") 1))  ; => true
+;;;
+;;; Since: quote-list-data-plan
+(defn datum-str? [d : Datum] : bool (match d (DStr _) true _ false))
+
+;;; datum-bool? -- is the datum a boolean?
+;;;
+;;; Parameters:
+;;;   d -- the datum to inspect
+;;;
+;;; Returns:
+;;;   true for a `DBool`.
+;;;
+;;; Example:
+;;;   (datum-bool? (datum-nth '(if true 1 2) 1))  ; => true
+;;;
+;;; Since: quote-list-data-plan
+(defn datum-bool? [d : Datum] : bool (match d (DBool _) true _ false))
+
+;;; datum-list? -- is the datum a parenthesised list?
+;;;
+;;; Parameters:
+;;;   d -- the datum to inspect
+;;;
+;;; Returns:
+;;;   true for a `DList`; false for a `DVec`.
+;;;
+;;; Example:
+;;;   (datum-list? '(a b))  ; => true
+;;;   (datum-list? '[a b])  ; => false
+;;;
+;;; Since: quote-list-data-plan
+(defn datum-list? [d : Datum] : bool (match d (DList _) true _ false))
+
+;;; datum-vec? -- is the datum a bracketed vector?
+;;;
+;;; Parameters:
+;;;   d -- the datum to inspect
+;;;
+;;; Returns:
+;;;   true for a `DVec`.
+;;;
+;;; Example:
+;;;   (datum-vec? '[a b])  ; => true
+;;;
+;;; Since: quote-list-data-plan
+(defn datum-vec? [d : Datum] : bool (match d (DVec _) true _ false))
+
+;;; datum-no-items- -- the empty (List Datum), for a quoted `()` or `[]`.
+(defn datum-no-items- [] : (List Datum) (list-nil))
+
+;;; datum-items -- the elements of a list or vector datum.
+;;;
+;;; Parameters:
+;;;   d -- the datum to take apart
+;;;
+;;; Returns:
+;;;   The `(List Datum)` of a `DList` or `DVec`; the empty list for a leaf.
+;;;
+;;; Example:
+;;;   (list-count (datum-items '(+ 1 2)))  ; => 3
+;;;
+;;; Since: quote-list-data-plan
+(defn datum-items [d : Datum] : (List Datum)
+  (match d (DList xs) xs (DVec xs) xs _ (list-nil)))
+
+;;; datum-length -- the number of elements of a list or vector datum.
+;;;
+;;; Parameters:
+;;;   d -- the datum to measure
+;;;
+;;; Returns:
+;;;   The element count of a `DList` or `DVec`; 0 for a leaf.
+;;;
+;;; Example:
+;;;   (datum-length '(+ 1 2))  ; => 3
+;;;
+;;; Since: quote-list-data-plan
+(defn datum-length [d : Datum] : int (list-count (datum-items d)))
+
+;;; datum-nth-loop- -- the i-th element of a list of data.
+(defn datum-nth-loop- [xs : (List Datum) i : int] : Datum
+  (if (= i 0) (list-first xs) (datum-nth-loop- (list-rest xs) (- i 1))))
+
+;;; datum-nth -- the i-th element of a list or vector datum.
+;;;
+;;; Parameters:
+;;;   d -- a `DList` or `DVec`
+;;;   i -- the zero-based index
+;;;
+;;; Returns:
+;;;   The element at i. Panics when i is out of range or d is a leaf.
+;;;
+;;; Example:
+;;;   (datum->str (datum-nth '(+ 1 2) 0))  ; => "+"
+;;;
+;;; Since: quote-list-data-plan
+(defn datum-nth [d : Datum i : int] : Datum
+  (let [xs (datum-items d)]
+    (when (or (< i 0) (>= i (list-count xs)))
+      (panic "datum-nth: index out of range"))
+    (datum-nth-loop- xs i)))
