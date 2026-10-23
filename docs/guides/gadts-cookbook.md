@@ -296,10 +296,14 @@ tells the checker, inside the arm, that the two parameters are one type.
     (Refl) (match bc
              (Refl) (Refl))))
 
-; coerce checks that x has the proof's left type and hands x back:
-; nothing is converted and no code is emitted.
+; coerce checks that x has the proof's left type and hands x back at the
+; proof's right type: nothing is converted and no code is emitted.
 (defn use-eq [eq : (Equal int int) x : int] : int
   (+ (coerce eq x) 1))
+
+; With a type-variable right side, the result is that variable.
+(defn conv [a b] [eq : (Equal a b) x : a] : b
+  (coerce eq x))
 
 (defn main [] : int
   ; Refl at int = int; an unequal pair is a TUR-E0001 here.
@@ -308,6 +312,7 @@ tells the checker, inside the arm, that the two parameters are one type.
     (println (use-eq (sym proof) 99))         ; 100
     (println (use-eq (trans proof proof) 0))  ; 1
     (println (coerce proof 100)))             ; 100
+  (println (conv (Refl) 7.1))                 ; 7.1
   0)
 ```
 
@@ -332,10 +337,14 @@ defn trans [a b c] [ab : (Equal a b) bc : (Equal b c)] : (Equal a c)
       (Refl)
       (Refl)
 
-; coerce checks that x has the proof's left type and hands x back:
-; nothing is converted and no code is emitted.
+; coerce checks that x has the proof's left type and hands x back at the
+; proof's right type: nothing is converted and no code is emitted.
 defn use-eq [eq : (Equal int int) x : int] :int
   {coerce(eq x) + 1}
+
+; With a type-variable right side, the result is that variable.
+defn conv [a b] [eq : (Equal a b) x : a] : b
+  coerce(eq x)
 
 defn main [] :int
   ; Refl at int = int; an unequal pair is a TUR-E0001 here.
@@ -344,6 +353,7 @@ defn main [] :int
     println(use-eq(sym(proof) 99))
     println(use-eq(trans(proof proof) 0))
     println(coerce(proof 100))
+  println(conv((Refl) 7.1))
   0
 ```
 
@@ -357,10 +367,12 @@ What the checker holds you to, and what it does not:
 - **`coerce` checks the value against the proof.** With `proof : (Equal int
   int)`, `(coerce proof 7.1)` is TUR-E0001 (`the proof is about a value of
   type int, but this value has type float`).
-- **`coerce` does not change the value's type.** It hands `x` back at `x`'s own
-  type, so `(defn conv [a b] [eq : (Equal a b) x : a] : b (coerce eq x))` does
-  not type-check yet; taking the result type from the proof's `b` is
-  [coerce-result-and-type-app-retirement-plan](https://github.com/turmeric-lang/turmeric/blob/main/docs/upcoming/coerce-result-and-type-app-retirement-plan.md).
+- **`coerce` returns the proof's right-hand type.** With `eq : (Equal a b)`
+  and `x : a`, `(coerce eq x)` is a `b`, so `(defn conv [a b] [eq : (Equal a
+  b) x : a] : b (coerce eq x))` type-checks, and `(conv (Refl) 7.1)` is the
+  float 7.1: the call reads `b = a` from `Refl`'s `(Equal a a)`. A proof
+  relating two different concrete types, `(Equal int float)`, is `coerce: the
+  proof (Equal int float) relates different types`.
 - **A declared result is not derived from the arm.** `sym`'s `(Equal b a)` is
   accepted, but so would a wrong signature be: the arm's `a = b` refines the
   arm's bindings, it is not used to check the function's declared result.

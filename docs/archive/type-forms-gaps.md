@@ -16,7 +16,7 @@
   `type-of` forms entry. Compiled `type-of` names them since 2026-10-21.
 - Item 4 (`coerce` keeps `x`'s type) and item 5 (`type-app`): decisions -- the
   proof's `b` when it is a type variable; retire `type-app`. Plan:
-  [coerce-result-and-type-app-retirement-plan](../upcoming/coerce-result-and-type-app-retirement-plan.md).
+  [coerce-result-and-type-app-retirement-plan](coerce-result-and-type-app-retirement-plan.md).
 - Item 6 (interpreter picks the wrong instance for packed `defopaque`): report
   [turi-packed-defopaque-wrong-instance](turi-packed-defopaque-wrong-instance.md).
 - Item 7, float casts: decision -- saturate on both; report

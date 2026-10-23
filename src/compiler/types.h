@@ -120,7 +120,7 @@ typedef enum TypeKind {
     /* Phase R2: Panic - diverging/never type */
     TY_NEVER,        /* ! - diverging type (never returns; bottom type) */
     /* Phase HKT-P1: Type application (partially-applied type constructor) */
-    TY_APP,          /* (type-app F A) — apply type constructor F to argument A */
+    TY_APP,          /* (F A) — apply type constructor F to argument A */
     /* Phase HKT-P2: Recursive types */
     TY_REC,          /* (defrec Name [params] body) — recursive type binder */
     /* Phase N: fixed-width numeric types */
@@ -898,7 +898,7 @@ typedef struct Type {
              * equality (as `returns_known`). */
             const struct Type *returns_full;
         } cont;
-        /* Phase HKT-P1: Type application — (type-app F A) */
+        /* Phase HKT-P1: Type application — (F A) */
         struct {
             struct Type *fn;   /* The type constructor being applied (kind * -> * or * -> * -> *) */
             struct Type *arg;  /* The type argument (kind *) */

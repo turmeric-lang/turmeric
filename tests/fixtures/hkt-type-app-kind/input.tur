@@ -1,5 +1,6 @@
 ;; Phase HKT-P1: TY_APP — type-level application infrastructure.
-;; Decision: (type-app F A) is the canonical syntax at type-annotation positions.
+;; A type application is written `(F A)`; the old `(type-app F A)` form has been
+;; removed (errors/type-app-removed).
 ;; This fixture verifies that the TY_APP infrastructure compiles without errors.
 
 (defclass BifMap [^^f]

@@ -1,8 +1,8 @@
 # Plan: `coerce` takes its result type from the proof; retire `type-app`
 
-> **Status:** PROPOSED 2026-10-21. Decisions taken (type-forms-gaps items 4 and
-> 5): give `coerce` the proof's `b` when it is a type variable; retire the
-> `type-app` form. Not started.
+> **Status:** DONE 2026-10-23. Both parts landed. Decisions taken (type-forms-gaps
+> items 4 and 5): give `coerce` the proof's `b` when it is a type variable; retire
+> the `type-app` form. See "Outcome" at the end for what shipped beyond the plan.
 
 Two small type-form cleanups, grouped because both touch how a type application
 `(F A)` is spelled and read.
@@ -84,3 +84,38 @@ Diagnostics also print a type application as `(type-app Box int)` (`type_name` f
 4. Guides: compiler-internals, elaborator-internals-guide and
    value-representations-guide describe `TY_APP` as "(type-app F A)"; say
    "`(F A)`" and keep `TY_APP` as the internal name.
+
+## Outcome (2026-10-23)
+
+**Part A.** `elab_coerce` (`src/compiler/elab_structs.c`) retypes `x` at the
+proof's `b` with an erased `EX_ASCRIBE` when `b` is a type variable, keeps `x`
+when `a` and `b` are the same, and reports `coerce: the proof (Equal int float)
+relates different types` for two different closed indices. The bare `Equal`
+annotation keeps `x`'s type.
+
+That alone made `conv` type-check but not compute: `(conv (Refl) 7.1)` printed
+`7`. The call site bound `A := float` from `x` and left `B` on the callee's own
+`B` (`(Refl)` arrives as `(Equal A B)` from the constructor channel, or as
+`(Equal ? ?)` / the bare ADT of KB-022), so the result fell to the int carrier
+and the spec's `return x` converted the double. A new step after the argument
+loop of `elab_call_fn_inner`, `call_bind_refined_index_equations`
+(`src/compiler/elab_call.c`), reads which index positions every constructor's
+result annotation spells alike (`Refl : (Equal a a)` equates 0 and 1) and binds
+the unbound side of each to the other. Floats and strings now come through on
+all three engines (`tests/fixtures/coerce-result-from-proof`).
+
+Not covered, as the plan scoped it: a proof `(Equal A int)` with a type-variable
+`a` and a concrete `b` still returns `x` at `A` (so `: int` on such a function is
+TUR-E0709). Retyping there would need a carrier-to-concrete conversion for a
+float `b`, not just a retag.
+
+**Part B.** `(type-app F A)` is `type-app has been removed: write the applied
+type (F A)` in expression position and in every annotation resolver
+(`elab_reject_type_app_form`, called from `type_expr_from_form`,
+`fn_type_from_form_impl` and `struct_field_type_from_form`). The word stays in
+the reserved list for one more release. Step 2 had already happened:
+`type_name` printed a `TY_APP` as `(Box int)` before this plan ran (the
+parametric-stdlib-diagnostics-print-tyvar-internals fix), so no snapshot or
+`expected.diag` moved; only stale comments quoting the old rendering changed.
+`tests/fixtures/type-app` became `errors/type-app-removed-statement`, beside
+`errors/type-app-removed` for the annotation position.

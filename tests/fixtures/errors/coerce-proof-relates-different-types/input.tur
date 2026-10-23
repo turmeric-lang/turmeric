@@ -1,0 +1,7 @@
+;;; A proof `(Equal int float)` relates two different concrete types.  `Refl`
+;;; cannot be built at that type (errors/equal-refl-false-claim), so a coerce
+;;; through it is dead code -- and were it ever reached, it would be a silent
+;;; bit cast.
+(load "stdlib/equal.tur")
+(defn bad [eq : (Equal int float) x : int] : float (coerce eq x))
+(defn main [] : int 0)

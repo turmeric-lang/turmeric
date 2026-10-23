@@ -270,6 +270,7 @@ static Type *struct_field_type_from_form(Elab *e, const Form *form,
                                          Kind *type_param_kinds,
                                          uint8_t n_type_params) {
     if (!form) return NULL;
+    if (elab_reject_type_app_form(e, form)) return NULL;
     if (form->tag == F_TYPE_ANN && form->as.list.len > 0) {
         return struct_field_type_from_form(e, form->as.list.items[0],
                                            type_params, type_param_kinds, n_type_params);
@@ -2800,10 +2801,36 @@ static Type *adt_field_type_from_form(Arena *arena, const Form *ft_form,
     return NULL;
 }
 
+/* coerce: no type variable anywhere in `t` -- an `(Equal a b)` index that is
+ * known all the way down. */
+static bool coerce_type_is_closed(const Type *t) {
+    if (!t || t->kind == TY_TYVAR || t->kind == TY_UNKNOWN) return false;
+    if (t->kind == TY_APP)
+        return coerce_type_is_closed(t->as.app.fn) &&
+               coerce_type_is_closed(t->as.app.arg);
+    return true;
+}
+
+/* coerce: two closed proof indices name the same type.  `int` and `int64` are
+ * one type here, as in the proof-vs-value check below. */
+static bool coerce_same_type(const Type *a, const Type *b) {
+    bool a_int = a->kind == TY_INT || a->kind == TY_INT64;
+    bool b_int = b->kind == TY_INT || b->kind == TY_INT64;
+    if (a_int && b_int) return true;
+    return strcmp(type_name(*a), type_name(*b)) == 0;
+}
+
 /* Phase G3: coerce — (coerce eq x) where eq : (Equal a b), x : a → x : b
  * Zero-cost cast: the runtime representation of a and b are identical (both int64_t).
  * The equality proof eq is evaluated for side-effects but its value is discarded.
- * Error if eq is not a value of the built-in Equal GADT. */
+ * Error if eq is not a value of the built-in Equal GADT.
+ *
+ * coerce-result-and-type-app-retirement-plan Part A: the result has the proof's
+ * `b` when `b` is a type variable (a type variable is carried as the same word
+ * whatever it is instantiated at, so only the node's type changes), and `x`'s
+ * own type when `a` and `b` are the same.  Two different concrete types are an
+ * error: `Refl` cannot be built at that type, and a reinterpret would be a
+ * silent bit cast.  The bare `Equal` annotation keeps `x`'s type. */
 Expr *elab_coerce(Elab *e, const Form *call) {
     if (call->as.list.len != 3) {
         diag_emit(DIAG_ERROR, call->span,
@@ -2816,11 +2843,13 @@ Expr *elab_coerce(Elab *e, const Form *call) {
      * type application of the bare ADT, which only the bare `Equal` spelling used
      * to satisfy; peel it, keeping the first argument (the type `x` has). */
     const Type *proof_lhs = NULL;
+    const Type *proof_rhs = NULL;
     Type eqt = eq->type;
     if (eqt.kind == TY_APP && eqt.as.app.fn && eqt.as.app.arg) {
         const Type *head = eqt.as.app.fn;
         if (head->kind == TY_APP && head->as.app.fn && head->as.app.arg) {
             proof_lhs = head->as.app.arg;      /* ((Equal a) b) */
+            proof_rhs = eqt.as.app.arg;
             head = head->as.app.fn;
         }
         if (head->kind == TY_ADT) eqt = *head;
@@ -2830,6 +2859,15 @@ Expr *elab_coerce(Elab *e, const Form *call) {
         strcmp(eqt.as.adt_.def->name, "Equal") != 0) {
         diag_emit(DIAG_ERROR, call->as.list.items[1]->span,
                   "coerce requires an (Equal a b) proof as first argument");
+        return NULL;
+    }
+    if (proof_lhs && proof_rhs && coerce_type_is_closed(proof_lhs) &&
+        coerce_type_is_closed(proof_rhs) &&
+        !coerce_same_type(proof_lhs, proof_rhs)) {
+        diag_emit_with_code(DIAG_ERROR, call->as.list.items[1]->span,
+                            TUR_E0001_TYPE_MISMATCH,
+                            "coerce: the proof %s relates different types",
+                            type_name(eq->type));
         return NULL;
     }
     Expr *x = elab_form(e, call->as.list.items[2]);
@@ -2857,7 +2895,14 @@ Expr *elab_coerce(Elab *e, const Form *call) {
                   "use session operations (send/recv/close/...) to advance the protocol");
         return NULL;
     }
-    /* Zero-cost cast: return x unchanged (same runtime representation) */
+    /* Zero-cost cast: the value is unchanged (same runtime representation).
+     * Only a type-variable `b` retypes it; `a` = `b` already has x's type. */
+    if (proof_rhs && proof_rhs->kind == TY_TYVAR) {
+        Expr *asc = expr_new(e->arena, EX_ASCRIBE, *proof_rhs, x->span);
+        asc->as.ascribe_.inner = x;
+        asc->as.ascribe_.type_form = NULL;
+        return asc;
+    }
     return x;
 }
 

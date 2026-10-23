@@ -1,0 +1,21 @@
+;;; `(coerce eq x)` with `eq : (Equal a b)` has type `b`.  It used to keep
+;;; `x`'s own type, so the canonical `conv` was TUR-E0709 ("its body returns
+;;; A").  The call site also learns `B = A` from `(Refl)`'s `(Equal a a)`: the
+;;; float and string calls read `B` from `x`, not the int carrier (7.1 used to
+;;; print as 7 once `conv` type-checked).
+(load "stdlib/equal.tur")
+
+(defn conv [A B] [eq : (Equal A B) x : A] : B (coerce eq x))
+(defn into [B] [eq : (Equal float B) x : float] : B (coerce eq x))
+(defn same [eq : (Equal int int) x : int] : int (coerce eq x))
+
+(defn main [] : int
+  (println (conv (Refl) 5))
+  (println (conv (Refl) 7.1))
+  (println (conv (Refl) "hi"))
+  (println (+ (conv (Refl) 3.25) 0.5))
+  (let [r : float (conv (Refl) 2.5)]
+    (println r))
+  (println (into (Refl) 3.25))
+  (println (same (Refl) 9))
+  0)

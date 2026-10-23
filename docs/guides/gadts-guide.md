@@ -450,7 +450,8 @@ a proof, and `(:: (Refl) (Equal int bool))` is TUR-E0001 -- as is a declared
 return or an annotated `let` making that claim.
 
 `coerce` takes a proof and a value, checks that the value has the proof's left
-type, and hands the value back -- no conversion, no code:
+type, and hands the value back at the proof's right type -- no conversion, no
+code:
 
 ```turmeric
 (load "stdlib/equal.tur")
@@ -470,9 +471,11 @@ defn main [] :int
     0
 ```
 
-With that proof, `(coerce proof 7.1)` is TUR-E0001. `coerce` returns the value
-at its own type; taking the result type from the proof's `b` is
-[coerce-result-and-type-app-retirement-plan](https://github.com/turmeric-lang/turmeric/blob/main/docs/upcoming/coerce-result-and-type-app-retirement-plan.md).
+With that proof, `(coerce proof 7.1)` is TUR-E0001. With `eq : (Equal a b)`
+the result is a `b`, so `(defn conv [a b] [eq : (Equal a b) x : a] : b (coerce
+eq x))` type-checks and `(conv (Refl) 7.1)` is the float 7.1 -- the call reads
+`b = a` from `Refl`'s `(Equal a a)`. A proof relating two different concrete
+types, `(Equal int float)`, is an error: `Refl` cannot be built there.
 
 Symmetry -- turning `(Equal a b)` into `(Equal b a)` -- follows from matching
 on `Refl` and returning `Refl`: in the arm `a = b`, so `Refl` is also an

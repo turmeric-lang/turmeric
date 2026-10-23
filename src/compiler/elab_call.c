@@ -488,7 +488,8 @@ static const char *const reserved_special_forms_[] = {
     "with-handler", "resume", "discontinue", "compose-handlers",
     /* types, casts, ascription */
     "as", "type-of", "cast", "is?", "coerce", "&", "&mut",
-    "forall", "exists", "type-app", "::", "pack", "open",
+    "forall", "exists", "::", "pack", "open",
+    "type-app",   /* removed (elab_reject_type_app_form); reserved one more release */
     /* sessions -- the definition/constructor forms only; the value-level ops
      * are shadowable and deliberately absent */
     "make-protocol", "make-session",
@@ -1694,11 +1695,98 @@ static bool call_find_type_binding(CallTypeBinding *bindings, uint8_t n_bindings
 
 /* Walk an applied type down its `fn` spine to the head, returning the head's
  * AdtDef when the spine bottoms out at a TY_ADT (e.g. the head of
- * (type-app (type-app Equal a) b) is the ADT `Equal`). Returns NULL otherwise. */
+ * ((Equal a) b) is the ADT `Equal`). Returns NULL otherwise. */
 static const AdtDef *call_app_head_adt(const Type *t) {
     while (t && t->kind == TY_APP) t = t->as.app.fn;
     if (t && t->kind == TY_ADT) return t->as.adt_.def;
     return NULL;
+}
+
+/* coerce-result-and-type-app-retirement-plan Part A: the index positions `i`
+ * and `j` of refined ADT `def` that EVERY constructor's result annotation
+ * spells with the same symbol -- `Refl : (Equal a a)` equates 0 and 1 -- so a
+ * value of the type, whichever constructor built it, has equal indices
+ * there. */
+static bool call_refined_indices_equal(const AdtDef *def, uint32_t i, uint32_t j) {
+    if (!def || def->n_ctors == 0) return false;
+    for (uint32_t c = 0; c < def->n_ctors; c++) {
+        const CtorDef *ctor = def->ctors[c];
+        const Form *rf = ctor ? ctor->result_type_form : NULL;
+        if (!rf || rf->tag != F_LIST || rf->as.list.len <= j + 1) return false;
+        const Form *fi = rf->as.list.items[1 + i];
+        const Form *fj = rf->as.list.items[1 + j];
+        if (fi->tag != F_SYM || fj->tag != F_SYM || fi->as.sym != fj->as.sym)
+            return false;
+    }
+    return true;
+}
+
+/* The binding a refined-index equation reads for one side: a named tyvar's
+ * binding, or the side itself when it is closed.  NULL when it is neither. */
+static const Type *call_refined_index_side(const Elab *e, const Type *t,
+                                           CallTypeBinding *bindings,
+                                           uint8_t n_bindings) {
+    if (!t || t->kind == TY_UNKNOWN) return NULL;
+    if (t->kind != TY_TYVAR) return call_type_has_named_tyvar(t) ? NULL : t;
+    uint8_t idx = 0;
+    if (!t->as.tyvar_.name ||
+        !call_find_type_binding(bindings, n_bindings, t->as.tyvar_.name, &idx))
+        return NULL;
+    /* A variable bound to a variable that is not the caller's own -- the
+     * callee's `B := B`, or an open constructor slot -- is fixed by nothing. */
+    const Type *b = &bindings[idx].type;
+    if (b->kind == TY_UNKNOWN ||
+        (b->kind == TY_TYVAR &&
+         (b->as.tyvar_.open_slot || !b->as.tyvar_.name ||
+          !ng_tyvar_in_sig(e, b->as.tyvar_.name))))
+        return NULL;
+    return b;
+}
+
+/* A parameter `(Equal A B)` given a value of the refined ADT `Equal`: bind
+ * whichever of A and B is still unbound to what the other is.  `(Refl)` carries
+ * no per-position arguments that fix anything (`(Equal ? ?)`, or the bare ADT
+ * of KB-022), but the constructors' result annotations equate the positions,
+ * whichever of them built the value. */
+static void call_bind_refined_index_equations(const Elab *e, const Type *pf,
+                                              const Type *actual,
+                                              CallTypeBinding *bindings,
+                                              uint8_t *n_bindings) {
+    if (!pf || pf->kind != TY_APP || !actual) return;
+    const AdtDef *def = call_app_head_adt(pf);
+    if (!def || !def->is_refined || def != call_app_head_adt(actual)) return;
+    const Type *idx[8];
+    uint32_t n = 0;
+    for (const Type *t = pf; t && t->kind == TY_APP; t = t->as.app.fn) {
+        if (n == 8) return;
+        idx[n++] = t->as.app.arg;
+    }
+    /* idx[] holds the arguments last-first; flip to declaration order. */
+    for (uint32_t a = 0, b = n ? n - 1 : 0; a < b; a++, b--) {
+        const Type *tmp = idx[a]; idx[a] = idx[b]; idx[b] = tmp;
+    }
+    for (uint32_t i = 0; i < n; i++) {
+        for (uint32_t j = i + 1; j < n; j++) {
+            if (!call_refined_indices_equal(def, i, j)) continue;
+            const Type *si = call_refined_index_side(e, idx[i], bindings, *n_bindings);
+            const Type *sj = call_refined_index_side(e, idx[j], bindings, *n_bindings);
+            const Type *unbound = !si ? idx[i] : !sj ? idx[j] : NULL;
+            const Type *known = !si ? sj : si;
+            if (!unbound || !known || unbound->kind != TY_TYVAR ||
+                !unbound->as.tyvar_.name || *n_bindings >= 16)
+                continue;
+            uint8_t at = 0;
+            Type val = *known;
+            if (call_find_type_binding(bindings, *n_bindings,
+                                       unbound->as.tyvar_.name, &at)) {
+                bindings[at].type = val;
+            } else {
+                bindings[*n_bindings].name = unbound->as.tyvar_.name;
+                bindings[*n_bindings].type = val;
+                (*n_bindings)++;
+            }
+        }
+    }
 }
 
 /* saffron-lang-plan D5, saffron-unannotated-param-container-cast-panics:
@@ -11171,6 +11259,23 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
                 args[i]->as.call_.n_abi_bindings = ogn;
             }
             args[i]->type = inst;
+        }
+    }
+
+    /* coerce-result-and-type-app-retirement-plan Part A: a bare refined-ADT
+     * argument (`(Refl) : Equal`) binds nothing of its parameter `(Equal A B)`
+     * (KB-022), but every value of the type says some of those indices are
+     * equal -- `Refl : (Equal a a)`.  Carry each binding across the equation,
+     * so `(conv (Refl) 7.1)` against `[eq : (Equal A B) x : A] : B` reads
+     * `B := float` from `x` rather than leaving the result on the int
+     * carrier. */
+    if (fn_type.kind == TY_FN && fn_type.as.fn.arg_full_types) {
+        for (uint32_t i = 0; i < n_args; i++) {
+            uint32_t pidx = fn_binding->closure_fn_binding ? i + 1 : i;
+            if (pidx >= fn_type.as.fn.arity || !args[i]) continue;
+            call_bind_refined_index_equations(e, fn_type.as.fn.arg_full_types[pidx],
+                                              &args[i]->type, type_bindings,
+                                              &n_type_bindings);
         }
     }
 

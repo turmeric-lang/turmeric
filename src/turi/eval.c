@@ -2130,7 +2130,7 @@ static bool turi_struct_is_struct_like(TuriValue v) {
 /* any-narrowing-broken-for-parametric-receivers: the name an `is?` / `cast`
  * TARGET presents to the interpreter's `any` reflection.
  *
- * `type_name` renders a TY_APP per instantiation ("(type-app Option float)"),
+ * `type_name` renders a TY_APP per instantiation ("(Option float)"),
  * which is what makes the compiled path able to tell `(Box int)` from
  * `(Box float)`.  A TuriValue records only the ADT it was built from, so it can
  * never match that spelling -- an applied target has to compare against its
@@ -14976,7 +14976,7 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
                 if (inst->typeclass != tc || inst->n_type_args == 0) continue;
                 /* An HKT instance head can be written partially applied --
                  * `Functor [(Result _ B)]` -- which is a TY_APP chain, so
-                 * `type_name` spells it `(type-app ...)` and never the
+                 * `type_name` spells it `(Result _ B)` and never the
                  * `Result` the box reports.  Key on the chain's HEAD, the
                  * constructor the receiver names.  The COMPILED side declines
                  * this shape instead (see the note at
