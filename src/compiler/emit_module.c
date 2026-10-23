@@ -14838,8 +14838,9 @@ static void emit_deep_stack_runtime(Buf *out) {
  * Past the cap, the overflow message and the SIGSEGV the guard page would
  * have given.
  *
- * Linux x86-64 and arm64, the deep-stack thread only: another thread's pair
- * passes everything.  Off under `tur jit` (`__MIRC__`: plan H6) and in a
+ * Linux x86-64 and arm64.  The deep-stack thread arms itself, and every thread
+ * the program starts is armed by tur_gc_thread_main (H4) with a chain of its
+ * own; a fiber runs unchecked on its own stack (tur_fiber_block_resume).  Off under `tur jit` (`__MIRC__`: plan H6) and in a
  * --shared build, where no deep-stack thread arms it.  The split writes the
  * static helpers and the asm into every unit (each object's trampoline calls
  * its own tur_seg_enter) and keeps the state in the library unit. */
@@ -14885,7 +14886,8 @@ static const char *const TUR_SEG_STACK_RT[] = {
     "static TUR_THREAD_LOCAL size_t tur_seg_used = 0;\n"
     "static TUR_THREAD_LOCAL unsigned char *tur_seg_last = 0;\n"
     "static size_t tur_seg_budget_v;\n"
-    "static tur_seg_rec tur_seg_base_rec;\n"
+    "static TUR_THREAD_LOCAL tur_seg_rec tur_seg_base_rec;   /* the thread's own stack */\n"
+    "static TUR_THREAD_LOCAL unsigned char *tur_seg_alt = 0;   /* a started thread's signal stack */\n"
     "static void tur_seg_budget_set(size_t sz, int asked) {\n"
     "    size_t b = sz;\n"
     "    if (!asked) {\n"
@@ -14959,8 +14961,9 @@ static const char *const TUR_SEG_STACK_RT[] = {
     "    size_t nb = tur_seg_nb;\n"
     "    tur_seg_rec *c = tur_seg_resync(sp);\n"
     "    if (!c) {\n"
-    "        /* No record describes this stack (a fiber's, or an unarmed thread's):\n"
-    "         * stop checking rather than re-enter forever. */\n"
+    "        /* No record describes this stack: stop checking rather than re-enter\n"
+    "         * forever.  A fiber never gets here -- tur_fiber_block_resume runs it\n"
+    "         * with the pair unarmed and re-arms the thread when it comes back. */\n"
     "        tur_seg_hot.lo = 0; tur_seg_hot.span = (uintptr_t)-1;\n"
     "        return g;\n"
     "    }\n"
@@ -14991,14 +14994,20 @@ static const char *const TUR_SEG_STACK_RT[] = {
     "    if (c) tur_seg_arm(c);\n"
     "}\n"
     "static int tur_seg_off_base(const void *p);\n"
+    "static void tur_seg_thread_arm(void);\n"
+    "static void tur_seg_thread_end(void);\n"
+    "/* Arm the calling thread: its own stack is the chain's first record.  `lo`\n"
+    " * is that stack's low end, or NULL to ask pthreads for it. */\n"
     "static void tur_seg_thread_start(unsigned char *lo) {\n"
     "    pthread_attr_t a; void *addr = 0; size_t sz = 0;\n"
     "    extern int pthread_getattr_np(pthread_t, pthread_attr_t *);\n"
-    "    if (!lo || pthread_getattr_np(pthread_self(), &a) != 0) return;\n"
+    "    if (pthread_getattr_np(pthread_self(), &a) != 0) return;\n"
     "    if (pthread_attr_getstack(&a, &addr, &sz) != 0) sz = 0;\n"
     "    pthread_attr_destroy(&a);\n"
     "    if (!sz) return;\n"
+    "    if (!lo) lo = (unsigned char *)addr;\n"
     "    tur_seg_rec *b = &tur_seg_base_rec;\n"
+    "    b->prev = 0; b->map = 0; b->map_size = 0;\n"
     "    b->bot = lo; b->lo = lo + TUR_SEG_HEADROOM; b->top = (unsigned char *)addr + sz;\n"
     "    tur_seg_cur = b;\n"
     "#if defined(R7K_SETJMP)\n"
@@ -15006,8 +15015,43 @@ static const char *const TUR_SEG_STACK_RT[] = {
     "#endif\n"
     "#if defined(TUR_GC_ON) && TUR_GC_ON\n"
     "    tur_gc_seg_attach((void **)&tur_seg_cur);\n"
+    "    /* H4: each thread the program starts gets a chain of its own. */\n"
+    "    tur_gc_thread_start_hook = tur_seg_thread_arm;\n"
+    "    tur_gc_thread_end_hook = tur_seg_thread_end;\n"
     "#endif\n"
     "    tur_seg_arm(b);\n"
+    "}\n",
+    "/* A started thread, before its function runs (tur_gc_thread_main): arm it,\n"
+    " * and give it a signal stack, so an overflow on it prints the message too. */\n"
+    "static void tur_seg_thread_arm(void) {\n"
+    "    unsigned char *m = (unsigned char *)mmap(NULL, 65536, PROT_READ | PROT_WRITE,\n"
+    "                                             MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);\n"
+    "    if (m != (unsigned char *)MAP_FAILED) {\n"
+    "        stack_t ss; ss.ss_sp = m; ss.ss_size = 65536; ss.ss_flags = 0;\n"
+    "        if (sigaltstack(&ss, NULL) == 0) tur_seg_alt = m; else munmap(m, 65536);\n"
+    "    }\n"
+    "    tur_seg_thread_start(NULL);\n"
+    "}\n"
+    "/* The thread's function has returned, so every trampoline under it has: it\n"
+    " * is back on its own stack, and a segment still on the chain was left by a\n"
+    " * longjmp no check saw.  Unmap them, and the spare.  A thread that leaves\n"
+    " * through pthread_exit from a segment never gets here, and keeps its\n"
+    " * mappings until the process ends. */\n"
+    "static void tur_seg_thread_end(void) {\n"
+    "    tur_seg_hot.lo = 0; tur_seg_hot.span = (uintptr_t)-1;\n"
+    "#if defined(TUR_GC_ON) && TUR_GC_ON\n"
+    "    tur_gc_seg_attach(NULL);\n"
+    "#endif\n"
+    "    tur_seg_rec *r = tur_seg_cur;\n"
+    "    tur_seg_cur = 0;\n"
+    "    while (r && r->map) { tur_seg_rec *p = r->prev; munmap(r->map, r->map_size); r = p; }\n"
+    "    if (tur_seg_spare) { munmap(tur_seg_spare->map, tur_seg_spare->map_size); tur_seg_spare = 0; }\n"
+    "    tur_seg_used = 0;\n"
+    "    if (tur_seg_alt) {\n"
+    "        stack_t ss; memset(&ss, 0, sizeof ss); ss.ss_flags = SS_DISABLE;\n"
+    "        sigaltstack(&ss, NULL);\n"
+    "        munmap(tur_seg_alt, 65536); tur_seg_alt = 0;\n"
+    "    }\n"
     "}\n"
     "#define TUR_SEG_THREAD_START(lo) tur_seg_thread_start((unsigned char *)(lo))\n"
     "/* The fault handler's test: an address in a live segment's guard. */\n"
@@ -17296,9 +17340,20 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     /* r7rs-gc: the collector scans this thread's own stack from here while
      * the fiber runs on its (heap-allocated) stack. */
     buf_puts(out, "    for (TurDynSwap *_ds = g_tur_dyn_swaps; _ds; _ds = _ds->next) _ds->swap(&f->dynsave);\n");
+    /* r7rs-heap-frames-plan H4: a fiber's stack is a heap block no segment
+     * record describes, so its frames run unchecked -- bounded by that block,
+     * as without segments -- and the thread's pair comes back with control.
+     * A failed check there used to disarm the thread for the rest of the run. */
+    buf_puts(out, "#if defined(TUR_SEG_ON)\n");
+    buf_puts(out, "    tur_seg_pair _seg_hot = tur_seg_hot;\n");
+    buf_puts(out, "    tur_seg_hot.lo = 0; tur_seg_hot.span = (uintptr_t)-1;\n");
+    buf_puts(out, "#endif\n");
     buf_puts(out, "    TUR_GC_FIBER_ENTER((void *)&_dk_save);\n");
     buf_puts(out, "    swapcontext(&f->caller_ctx, &f->ctx);\n");
     buf_puts(out, "    TUR_GC_FIBER_LEAVE();\n");
+    buf_puts(out, "#if defined(TUR_SEG_ON)\n");
+    buf_puts(out, "    tur_seg_hot = _seg_hot;\n");
+    buf_puts(out, "#endif\n");
     buf_puts(out, "    for (TurDynSwap *_ds = g_tur_dyn_swaps; _ds; _ds = _ds->next) _ds->swap(&f->dynsave);\n");
     buf_puts(out, "    f->dk_reap_v = __dk_reap_v; f->dk_reap_kind = __dk_reap_kind;\n");
     buf_puts(out, "    f->dk_reap_n = __dk_reap_n; f->dk_reap_cap = __dk_reap_cap; f->dk_entry_depth = __dk_entry_depth;\n");

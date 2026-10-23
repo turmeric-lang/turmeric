@@ -966,11 +966,18 @@ typedef struct tur_seg_rec {
     unsigned char *saved_sp;               /* where the frames on prev resume */
 } tur_seg_rec;
 #endif
-/* On the thread: where its chain's newest record lives (a thread-local). */
+/* On the thread: where its chain's newest record lives (a thread-local);
+ * NULL when the thread is done with its chain. */
 static __attribute__((unused)) void tur_gc_seg_attach(void **curp) {
     tur_gc_thread *t = tur_gc_self;
     if (t) t->seg_curp = curp;
 }
+/* H4: every thread the unit starts gets a chain of its own.  The segmented
+ * stack's runtime, which follows this file, sets these when it arms the
+ * deep-stack thread; tur_gc_thread_main runs them on each new thread before
+ * its function and after it returns. */
+static void (*tur_gc_thread_start_hook)(void);
+static void (*tur_gc_thread_end_hook)(void);
 /* The segments from the one holding `sp` down: each from `sp` to its top,
  * then the one before it from where its frames resume.  A segment that does
  * not hold the pointer was left by a longjmp and is dead (the runtime drops it
@@ -1489,7 +1496,9 @@ static void *tur_gc_thread_main(void *raw) {
     t->started = true;
     tur_rt_tls_roots(tur_gc_add_tls_root);
     pthread_mutex_unlock(&G->world);
+    if (tur_gc_thread_start_hook) tur_gc_thread_start_hook();
     void *r = t->fn(t->arg);
+    if (tur_gc_thread_end_hook) tur_gc_thread_end_hook();
     tur_gc_thread_end(t, r);
     return r;
 }

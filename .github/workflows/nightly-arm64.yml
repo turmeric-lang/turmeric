@@ -277,6 +277,39 @@ jobs:
   # were retrievable per run and plotted nowhere
   # (docs/archive/nightly-arm64-timings-not-on-ci-metrics.md).
   #
+  # The two jobs above are macOS arm64.  The segmented stack
+  # (--enable=r7rs-segmented-stack, docs/upcoming/r7rs-heap-frames-plan.md)
+  # compiles to a check only on Linux x86-64 and arm64, so its test SKIPs on
+  # them and Linux arm64 ran nowhere: its trampoline was assembled, never run,
+  # until a qemu-aarch64 run found glibc's fortified longjmp refusing a
+  # re-entry from a segment.  A Release tur is enough -- the test is about the
+  # programs it builds, which are never sanitized.
+  segmented-stack-linux:
+    name: Segmented stack (Linux arm64)
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y libedit-dev
+
+      - name: Configure (Release)
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_POLICY_VERSION_MINIMUM=3.5
+
+      # ALL targets: `tur build` links libturt_runtime.a when it is there.
+      - name: Build
+        run: cmake --build build -j
+
+      - name: Run the segmented-stack test, gcc and clang
+        run: |
+          rc=0
+          for cc in gcc clang; do
+            echo "== CC=$cc"
+            CC=$cc timeout 720 bash tests/check-r7rs-segmented-stack.sh || rc=1
+          done
+          exit $rc
+
   # A separate ubuntu job rather than a step in `suites`: the write token stays
   # off the macOS job, and this needs no build.  always(): a red nightly's
   # timings are the interesting ones.  main only: a workflow_dispatch from a

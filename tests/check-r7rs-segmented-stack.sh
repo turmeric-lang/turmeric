@@ -19,9 +19,19 @@
 #      and invoked after its extent it stops the program with the message an
 #      escape-only continuation gives;
 #   4. TUR_MAIN_STACK_MB=16, runaway: the overflow message and a non-zero exit
-#      once the budget is spent (H5).
+#      once the budget is spent (H5);
+#   5. H4: two SRFI 18 threads, each recursing 5e5 deep past its own 8 MiB
+#      stack under collector torture, and a fiber run on the deep-stack
+#      thread before it recurses past its stack.
 #
 # Linux x86-64 and arm64: elsewhere the flag compiles to no check at all.
+#
+# Cross-checking the other architecture from one host:
+#   CC=aarch64-linux-gnu-gcc TUR_RUNTIME=source TUR_SEG_EXEC=qemu-aarch64-static \
+#   QEMU_LD_PREFIX=/usr/aarch64-linux-gnu bash tests/check-r7rs-segmented-stack.sh
+# builds the programs with the cross compiler (TUR_RUNTIME=source: not
+# against the host's prebuilt runtime archive) and runs each through the
+# TUR_SEG_EXEC prefix, so the host's uname is not the target's.
 set -uo pipefail
 cd "$(dirname "$0")/.."
 TUR_REL="${TUR:-./build/tur}"
@@ -31,10 +41,13 @@ if [ ! -x "$TUR" ]; then
     echo "$NAME: $TUR not built" >&2
     exit 2
 fi
-case "$(uname -s)/$(uname -m)" in
-    Linux/x86_64|Linux/aarch64) ;;
-    *) echo "SKIP $NAME: Linux x86-64 and arm64 only"; exit 0 ;;
-esac
+EXEC="${TUR_SEG_EXEC:-}"
+if [ -z "$EXEC" ]; then
+    case "$(uname -s)/$(uname -m)" in
+        Linux/x86_64|Linux/aarch64) ;;
+        *) echo "SKIP $NAME: Linux x86-64 and arm64 only"; exit 0 ;;
+    esac
+fi
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
@@ -97,27 +110,85 @@ cat > "$TMP/late.scm" <<'EOF'
 (test #f)
 (test (pair? (cddr (command-line))))
 EOF
+cat > "$TMP/thread.scm" <<'EOF'
+#lang r7rs
+(import (scheme base) (scheme write) (scheme process-context) (srfi 18))
+;; H4: a thread the program starts recurses past its own (8 MiB) stack, and
+;; allocates on the way, so collections run while its frames are on
+;; segments.  Two at once, each with its own chain.
+(define (build n)
+  (if (= n 0)
+      '()
+      (let ((p (list n n)))
+        (let ((rest (build (- n 1))))
+          (cons (+ (car p) (cadr p)) rest)))))
+(define (sum l acc) (if (null? l) acc (sum (cdr l) (+ acc (car l)))))
+;; (A procedure, not a top-level define: r7rs-toplevel-define-sees-empty-command-line.)
+(define (arg) (string->number (cadr (command-line))))
+(define ts (map (lambda (i) (make-thread (lambda () (sum (build (arg)) 0)))) '(1 2)))
+(for-each thread-start! ts)
+(write (map thread-join! ts))
+(newline)
+EOF
+cat > "$TMP/fibcrew.tur" <<'EOF'
+;; fibcrew -- run one fiber on the calling thread, to its end.
+(defmodule fibcrew
+  (import fibwork :refer [fib-part])
+  (export run-fiber)
+  (defn fib-body [] : nil
+    (fib-part)
+    nil)
+  (defn run-fiber-c [body : ptr<void>] : nil
+    ```c
+    FiberBlock *f = tur_fiber_block_new((void (*)(void))body, 256 * 1024);
+    while (!f->done) tur_fiber_block_resume(f, 0);
+    ```)
+  (defn run-fiber [] : nil
+    (run-fiber-c fib-body)))
+EOF
+cat > "$TMP/fibwork.tur" <<'EOF'
+#lang r7rs
+(define-library (fibwork)
+  (export fib-part)
+  (import (scheme base))
+  (begin
+    (define (shallow n) (if (= n 0) 0 (+ 1 (shallow (- n 1)))))
+    (define (fib-part) (shallow 100))))
+EOF
+cat > "$TMP/fiber.scm" <<'EOF'
+#lang r7rs
+(import (scheme base) (scheme write) (scheme process-context) (turmeric fibcrew))
+;; H4: Scheme code runs in a fiber on the deep-stack thread, and then the
+;; thread recurses past its own stack.  The fiber's checks used to fail on
+;; a stack no record describes and disarm the thread for good.
+(define (down n) (if (= n 0) 0 (+ 1 (down (- n 1)))))
+(run-fiber)
+(write (down (string->number (cadr (command-line)))))
+(newline)
+EOF
 
 fail=0
-for p in down alloc callcc late; do
+for p in down alloc callcc late thread fiber; do
     if ! "$TUR" --enable=r7rs-segmented-stack build "$TMP/$p.scm" -o "$TMP/$p" > "$TMP/build.log" 2>&1; then
         echo "FAIL $NAME: tur build $p.scm failed: $(grep -m1 -i error "$TMP/build.log")"
         exit 1
     fi
 done
-if ! "$TUR" build "$TMP/down.scm" -o "$TMP/down-plain" > "$TMP/build.log" 2>&1; then
-    echo "FAIL $NAME: tur build down.scm (no flag) failed: $(grep -m1 -i error "$TMP/build.log")"
-    exit 1
-fi
+for p in down thread; do
+    if ! "$TUR" build "$TMP/$p.scm" -o "$TMP/$p-plain" > "$TMP/build.log" 2>&1; then
+        echo "FAIL $NAME: tur build $p.scm (no flag) failed: $(grep -m1 -i error "$TMP/build.log")"
+        exit 1
+    fi
+done
 
-check() {   # check <label> <want-rc: 0|nonzero> <want-stdout> <want-stderr-substring|-> <env...> -- <exe> <args...>
+check() {   # check <label> <want-rc: 0|nonzero> <want-stdout> <want-stderr-substring|-|*> <env...> -- <exe> <args...>
     local label="$1" want_rc="$2" want_out="$3" want_err="$4"; shift 4
     local envs=()
     while [ "$1" != "--" ]; do envs+=("$1"); shift; done
     shift
     local out rc
     local exe="$1"; shift
-    out="$(env "${envs[@]}" timeout 300 "$TMP/$exe" "$@" 2>"$TMP/err")"; rc=$?
+    out="$(env "${envs[@]}" timeout 300 $EXEC "$TMP/$exe" "$@" 2>"$TMP/err")"; rc=$?
     if [ "$want_rc" = 0 ] && [ "$rc" != 0 ]; then
         echo "FAIL $NAME ($label): exited $rc: $(head -2 "$TMP/err")"; fail=1; return
     fi
@@ -127,7 +198,9 @@ check() {   # check <label> <want-rc: 0|nonzero> <want-stdout> <want-stderr-subs
     if [ "$out" != "$want_out" ]; then
         echo "FAIL $NAME ($label): stdout '$out', expected '$want_out'"; fail=1; return
     fi
-    if [ "$want_err" = - ]; then
+    if [ "$want_err" = '*' ]; then
+        :   # anything (a fault on a thread prints nothing of ours)
+    elif [ "$want_err" = - ]; then
         if [ -s "$TMP/err" ]; then
             echo "FAIL $NAME ($label): unexpected stderr: $(head -2 "$TMP/err")"; fail=1
         fi
@@ -154,6 +227,12 @@ check "call/cc captured on a segment, as an escape" 0 "1
 check "call/cc captured on a segment, invoked late" nonzero "1
 1" "continuation invoked after its call/cc prompt returned" \
       TUR_SEG_BASE_MB=8 -- late 1000000 late
+# A started thread's own stack is 8 MiB, which 5e5 frames of build overflow.
+check "threads, no flag" nonzero "" '*' -- thread-plain 500000
+check "threads past their own stacks, collecting" 0 "(250000500000 250000500000)" - \
+      TUR_GC_TORTURE=2000 TUR_GC_TORTURE_SCALE=64 -- thread 500000
+check "a fiber, then 1e6 deep past an 8 MiB stack" 0 1000000 - \
+      TUR_SEG_BASE_MB=8 -- fiber 1000000
 check "16 MiB budget, runaway" nonzero "" "stack overflow: recursion too deep" \
       TUR_MAIN_STACK_MB=16 -- down 100000000
 

@@ -2052,7 +2052,17 @@
   #else
   typedef jmp_buf r7k_jmp_buf;
   #define R7K_SETJMP(b)  setjmp(b)
+  // r7rs-heap-frames-plan: a fortified glibc longjmp (__longjmp_chk) aborts
+  // on a jump to a lower stack pointer, and a re-entry from a segment of a
+  // segmented stack into an image on the thread's own stack is one whenever
+  // the segment sits higher (qemu-aarch64 puts it there).  The unchecked
+  // symbol takes the same jmp_buf.  TUR_LONGJMP makes the same choice.
+  #if defined(__GLIBC__) && defined(__USE_FORTIFY_LEVEL) && __USE_FORTIFY_LEVEL > 0 && !defined(__MIRC__)
+  extern void r7k_longjmp_nochk(struct __jmp_buf_tag *, int) __asm__("longjmp") __attribute__((__noreturn__));
+  #define R7K_LONGJMP(b) r7k_longjmp_nochk((b), 1)
+  #else
   #define R7K_LONGJMP(b) longjmp((b), 1)
+  #endif
   #endif
   typedef struct r7k_cont {
       r7k_jmp_buf jb;

@@ -538,6 +538,22 @@ void emit_cps_serial_runtime_prelude(Buf *out) {
 /* ---- runtime prelude: a faithful C port of src/runtime/cps_prompt.c ----- */
 
 
+/* r7rs-heap-frames-plan: glibc's _FORTIFY_SOURCE turns longjmp into
+ * __longjmp_chk, which aborts ("longjmp causes uninitialized stack frame")
+ * on a jump to a stack pointer below the current one unless both are on the
+ * signal stack.  A jump from a segment of a segmented stack back to the
+ * thread's own stack is such a jump whenever the kernel put the segment
+ * higher -- under qemu-aarch64 it does -- so a fortified build binds the
+ * unchecked symbol.  The two take the same jmp_buf.  Not under c2mir, which
+ * never fortifies (no __OPTIMIZE__). */
+#define TUR_LONGJMP_NOCHK_TEXT \
+"#if defined(__GLIBC__) && defined(__USE_FORTIFY_LEVEL) && __USE_FORTIFY_LEVEL > 0 && !defined(__MIRC__)\n" \
+"extern void tur_longjmp_nochk(struct __jmp_buf_tag *, int) __asm__(\"longjmp\") __attribute__((__noreturn__));\n" \
+"#define TUR_LONGJMP(b) tur_longjmp_nochk((b), 1)\n" \
+"#else\n" \
+"#define TUR_LONGJMP(b) longjmp((b), 1)\n" \
+"#endif\n"
+
 /* The landing pad every emitted setjmp/longjmp pair uses.  Emitted
  * UNCONDITIONALLY and early, because its consumers are not all gated the
  * same way: the DK trampoline, the call/cc escape, the shift/reset and
@@ -622,7 +638,7 @@ void emit_tur_jmp_buf_prelude(Buf *out) {
 "#else\n"
 "typedef jmp_buf tur_jmp_buf;\n"
 "#define TUR_SETJMP(b)  setjmp(b)\n"
-"#define TUR_LONGJMP(b) longjmp((b), 1)\n"
+TUR_LONGJMP_NOCHK_TEXT
 "#endif\n");
     } else {
         /* One TU and one compiler here, so the halves always agree -- but the
@@ -645,7 +661,7 @@ void emit_tur_jmp_buf_prelude(Buf *out) {
 "#else\n"
 "typedef jmp_buf tur_jmp_buf;\n"
 "#define TUR_SETJMP(b)  setjmp(b)\n"
-"#define TUR_LONGJMP(b) longjmp((b), 1)\n"
+TUR_LONGJMP_NOCHK_TEXT
 "#endif\n");
     }
 }
