@@ -2,6 +2,37 @@
 
 All notable changes to Turmeric are documented here.
 
+## [0.70.3] -- 2026-10-23
+
+### Fixed
+
+- **`gen-collect` returns a typed `(Vec T)`, and `vec-push!` pins `(vec-new)`
+  inside macros.** A float generator fed to `gen-collect` was a type error, and
+  a push under `(when ...)` or in a loop left the vector at `(Vec int)` and
+  stored a float's bits. Both now infer the element type correctly.
+- **Two same-named lets in a `gen` body no longer collide.** Two vector literals
+  (or two user lets of one name) in one generator emitted duplicate state
+  fields; each is now distinct.
+- **Top-level `define` reading `(command-line)` sees the real arguments.** A
+  `#lang r7rs` `(define n (command-line))` or a `(def ...)` on `*args*` ran
+  before `main` filled the arguments and saw `("")`.
+- **A rank-2 function with an `any` parameter at a `forall` slot is refused with
+  `TUR-E0001`.** It previously read a garbage tag and could segfault.
+- **`tur build --target wasm` gets a 16 MiB stack, an overflow check and real
+  tail calls.** The target previously ran on emcc's 64 KiB default stack,
+  unchecked, with tail calls compiled as empty; `:web :stack` and `:web
+  :tail-calls` configure it.
+- **A struct-result closure whose body opens an existential no longer leaks its
+  environment.** The scope-exit drop was skipped, losing 32 B per call.
+- **Reading a directory is an error, not an abort.** `(load ".")` and
+  `#use-reader-macros "."` now report an error instead of crashing.
+
+### Docs
+
+- **The advanced type system rationale matches the compiler.** Effect rows,
+  union, intersection and existential examples use the current syntax; the
+  stale-syntax version is archived.
+
 ## [0.70.2] -- 2026-10-23
 
 ### Fixed

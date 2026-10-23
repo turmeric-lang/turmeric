@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/turmeric-lang/turmeric/actions/workflows/ci.yml/badge.svg)](https://github.com/turmeric-lang/turmeric/actions/workflows/ci.yml)
 
-**Latest release:** `v0.70.2` -- Identical string literals now compare consistently across `tur run`, `tur jit` and `--interpret`, and the Try Turmeric app fills the screen on iOS 27.
+**Latest release:** `v0.70.3` -- `gen-collect` now returns a typed `(Vec T)` with correct element inference, and the wasm target gets a 16 MiB stack, overflow checks and real tail calls.
 
 ## What
 
