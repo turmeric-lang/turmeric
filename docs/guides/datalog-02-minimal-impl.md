@@ -327,13 +327,13 @@ The database and every query result are `Vec`s, and the demo frees each one
 with `vec-free` when it is done with it. The datums and values inside are
 plain `:copy` data with nothing of their own to free.
 
-One allocation is still left behind: the predicate closure a combinator
-(`q-and`, `q-not`) builds over other predicates is never freed, because the
-demo's `demo` is compiled through the CPS backend. That is a compiler leak with an open report
-([closure-env-capturing-closures-not-released](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/closure-env-capturing-closures-not-released.md)),
-not something the example should work around. A plain predicate passed straight
-to `db-q` is freed when the query returns
-([struct-param-closure-env-never-freed](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/struct-param-closure-env-never-freed.md),
+The predicate closures are freed too. A plain predicate passed straight to
+`db-q` is freed when the query returns, and so is the closure a combinator
+(`q-and`, `q-not`) builds over other predicates, together with the predicates
+it holds
+([closure-env-capturing-closures-not-released](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/closure-env-capturing-closures-not-released.md),
+resolved 2026-10-23;
+[struct-param-closure-env-never-freed](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/struct-param-closure-env-never-freed.md),
 resolved 2026-10-22).
 
 ---
