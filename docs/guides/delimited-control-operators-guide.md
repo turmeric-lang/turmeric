@@ -135,9 +135,9 @@ differs.
 > receiver runs with that reset removed, so a `shift` inside it is delimited
 > by the next reset out. `(reset (+ 100 (reset (+ 10 (shift0 (fn [v : int] (shift (fn [w : int] (* 1000 w)) v)) 5)))))`
 > is 5000 on both engines; with `shift` in place of `shift0` it is 5100.
-> Compiled, a `shift0` pops only a `reset` that encloses it in the same
-> function
-> ([direct-shift-outside-lexical-reset-not-abortive](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/direct-shift-outside-lexical-reset-not-abortive.md)).
+> That holds compiled too when the `reset` is in a caller
+> ([direct-shift-outside-lexical-reset-not-abortive](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/direct-shift-outside-lexical-reset-not-abortive.md),
+> fixed 2026-10-23).
 > See [shift0-pop-plan](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/shift0-pop-plan.md).
 
 ```turmeric

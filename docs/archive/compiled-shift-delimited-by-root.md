@@ -93,7 +93,7 @@ exit rather than from inside the machine keeps the entry's root and reap list
 freed (LeakSanitizer-clean over 1000 aborts); the restore covers a jump out of
 nested entries, whose roots are then left behind -- 2 nodes per skipped entry
 per abort, measured and filed as
-[shift-abort-across-nested-dk-entries](../reported/shift-abort-across-nested-dk-entries.md).
+[shift-abort-across-nested-dk-entries](shift-abort-across-nested-dk-entries.md).
 
 The original repro no longer shows the bug as written: since 2026-10-22 a
 `catch-unwind` with a lambda thunk lowers on the DK chain and does not evict
