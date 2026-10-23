@@ -12,11 +12,14 @@
 (defn inc [x : int] : int (+ x 1))
 (defn double-it [x : int] : int (* x 2))
 
+; The functions passed to the rank-2 parameters below are not generic, so
+; each is ascribed to the parameter's forall type -- the trusted opt-out of
+; rank2-argument-genericity, which asserts what the checker cannot see.
 (defn main [] : int
   ; inc then double: (0+1)*2 = 2
-  (println (pipe2 inc double-it 0))
+  (println (pipe2 (:: inc (forall [a] (-> a a))) (:: double-it (forall [a] (-> a a))) 0))
   ; double then inc: 0*2+1 = 1
-  (println (pipe2 double-it inc 0))
+  (println (pipe2 (:: double-it (forall [a] (-> a a))) (:: inc (forall [a] (-> a a))) 0))
   ; apply inc 3 times then double: (0+3)*2 = 6
-  (println (pipe-n inc double-it 3 0))
+  (println (pipe-n (:: inc (forall [a] (-> a a))) (:: double-it (forall [a] (-> a a))) 3 0))
   0)

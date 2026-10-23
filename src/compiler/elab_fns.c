@@ -13624,6 +13624,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
     fd->params = params;
     fd->n_params = n_params;
     fd->body = body;
+    hrt_rank2_pending_flush(e, b);
     /* reflected-measures RF0: the eager verdict, now that the purity walk can
      * see this body.  Only a TOTAL verdict is stamped here; rejections wait
      * for the deferred pass so they never depend on definition order. */
@@ -14957,6 +14958,7 @@ static Expr *elab_fn_impl(Elab *e, const Form *call) {
     fd->params = params;
     fd->n_params = n_params;
     fd->body = body;
+    hrt_rank2_pending_flush(e, b);
     fd->is_variadic = fn_is_variadic;  /* AR5: propagate variadic flag */
     if (fn_is_variadic) {
         extern bool g_has_variadics;
