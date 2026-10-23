@@ -67,9 +67,11 @@ whole API reference, precached, so it works offline too.
 Prefer a terminal? Install the compiler with the version manager:
 
 ```sh
-sh tvm/install.sh
-tvm install 0.47.0 && tvm use 0.47.0
+curl -sSf https://turmeric-lang.com/install | sh
 ```
+
+That installs [`tvm`](https://github.com/turmeric-lang/tvm#readme) and the latest release; `tvm install <version>`
+and `tvm use <version>` switch between releases later.
 
 Homebrew, prebuilt binaries, Docker and build-from-source are all covered in
 the [releases and installation guide](releases-and-installation-guide.md).

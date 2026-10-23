@@ -6033,10 +6033,10 @@ static inline void tur_panic_sited(const char *msg) {
 }
 
 /* string-literal-interning-plan: one object per distinct literal. */
-static const char __tur_str_0[] = "schema-decode!: validation failed";
-static const char __tur_str_1[] = "deep";
-static const char __tur_str_2[] = "caught-outer";
-static const char __tur_str_3[] = "no-catch";
+static const char __tur_str_0[] __attribute__((unused)) = "schema-decode!: validation failed";
+static const char __tur_str_1[] __attribute__((unused)) = "deep";
+static const char __tur_str_2[] __attribute__((unused)) = "caught-outer";
+static const char __tur_str_3[] __attribute__((unused)) = "no-catch";
 
 typedef struct tur_adt_Map {
     void * hamt;
@@ -10896,7 +10896,7 @@ static int64_t schema_hydecode_hyabort(int64_t errs) {
         int64_t __ps_187 = (schema_hydecode_hyreport(errs));
         if (tur_panicking) return ((int64_t)0);
         (void)(__ps_187);
-        tur_panic_at_site("schema.tur", 1071, ((char *)__tur_str_0));
+        tur_panic_at_site("schema.tur", 1071, __tur_str_0);
         if (tur_panicking) return ((int64_t)0);
         return ((int64_t)0);
 }
@@ -11103,7 +11103,7 @@ static int64_t f(int64_t n) {
           case 0: { free(__k); return (int64_t)(intptr_t)(__v); }
           case 1: {
            if ((n) == (INT64_C(0))) {
-            tur_panic_at_site("input.tur", 11, ((char *)__tur_str_1));
+            tur_panic_at_site("input.tur", 11, __tur_str_1);
             break;
            } else {
             tur_handler_node *__b205 = (tur_handler_node*)malloc(sizeof(tur_handler_node));
@@ -11171,9 +11171,9 @@ int main(int argc, char **argv) {
             bool __ps_212 = (err_qu(r_9));
             if (tur_panicking) { tur_panic_root_exit(); }
             if (__ps_212) {
-                puts(((char *)__tur_str_2));
+                puts(__tur_str_2);
             } else {
-                puts(((char *)__tur_str_3));
+                puts(__tur_str_3);
             }
             int64_t __t213;
             __t213 = INT64_C(0);

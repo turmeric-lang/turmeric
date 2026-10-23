@@ -10,7 +10,7 @@ The [`asdf-turmeric`](https://github.com/turmeric-lang/asdf-turmeric) plugin
 installs Turmeric compiler versions from the official GitHub releases and
 plugs into both [`mise`](https://mise.jdx.dev) and
 [`asdf`](https://asdf-vm.com). You do **not** need
-[`tvm`](https://github.com/turmeric-lang/turmeric/blob/main/tvm/README.md) to use it -- the plugin is a self-contained
+[`tvm`](https://github.com/turmeric-lang/tvm#readme) to use it -- the plugin is a self-contained
 installer.
 
 Pick whichever tool you already use; the plugin works the same either way.

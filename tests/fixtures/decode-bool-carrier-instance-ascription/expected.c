@@ -6033,9 +6033,9 @@ static inline void tur_panic_sited(const char *msg) {
 }
 
 /* string-literal-interning-plan: one object per distinct literal. */
-static const char __tur_str_0[] = "schema-decode!: validation failed";
-static const char __tur_str_1[] = "true";
-static const char __tur_str_2[] = "false";
+static const char __tur_str_0[] __attribute__((unused)) = "schema-decode!: validation failed";
+static const char __tur_str_1[] __attribute__((unused)) = "true";
+static const char __tur_str_2[] __attribute__((unused)) = "false";
 
 typedef struct tur_adt_Map {
     void * hamt;
@@ -10964,7 +10964,7 @@ static int64_t schema_hydecode_hyabort(int64_t errs) {
         int64_t __ps_186 = (schema_hydecode_hyreport(errs));
         if (tur_panicking) return ((int64_t)0);
         (void)(__ps_186);
-        tur_panic_at_site("schema.tur", 1071, ((char *)__tur_str_0));
+        tur_panic_at_site("schema.tur", 1071, __tur_str_0);
         if (tur_panicking) return ((int64_t)0);
         return ((int64_t)0);
 }
@@ -11151,9 +11151,9 @@ static int64_t with_hyregion(int64_t body) {
 
 static void decode_unbool_uncarrier_untest__show_hybool(bool b) {
         if (b) {
-            puts(((char *)__tur_str_1));
+            puts(__tur_str_1);
         } else {
-            puts(((char *)__tur_str_2));
+            puts(__tur_str_2);
         }
 }
 

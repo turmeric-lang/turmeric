@@ -206,7 +206,7 @@ Three edits, a comment, and nothing else:
 3. `.github/workflows/ci.yml:337`: the engage probe is
    `runner.os == 'Linux' && matrix.part == 'fixtures'`. The split fails closed,
    so a macOS flip without widening this has no check that it engaged.
-4. `tvm/tvm.sh:407`: `__tvm_build_from_source` copies `libturi.a` and
+4. `tvm.sh:407` in [turmeric-lang/tvm](https://github.com/turmeric-lang/tvm) (moved out of this repo): `__tvm_build_from_source` copies `libturi.a` and
    `libturt_runtime.a` and not `libturt_preamble.a`, so a `tvm install --build`
    toolchain silently never takes the split -- the same miss `cmake --install`
    and the release archives already had fixed. Platform-independent, but it is

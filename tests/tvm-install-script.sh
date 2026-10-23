@@ -16,12 +16,17 @@
 #      worker.js's own /install route, not copy-pasted, so an edit to the
 #      route that breaks the script fails here.
 #
-# Needs node (to drive the Worker module) and a host with a release target.
-# Skips cleanly without either.
+# tvm itself lives in turmeric-lang/tvm. Point TVM_SRC at a checkout of it
+# (CI checks out the commit release.yml pins as TVM_REF); a sibling
+# ../tvm checkout is used when TVM_SRC is unset.
+#
+# Needs node (to drive the Worker module), a host with a release target and a
+# tvm checkout. Skips cleanly without any of them, unless TVM_SRC was set and
+# is not a tvm checkout -- that is a mistake, and fails.
 set -u
 
 HERE="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
-ROOT="$(CDPATH= cd -- "$HERE/../.." && pwd)"
+ROOT="$(CDPATH= cd -- "$HERE/.." && pwd)"
 
 PASS=0
 FAIL=0
@@ -30,6 +35,18 @@ bad() { FAIL=$((FAIL+1)); printf 'FAIL - %s\n' "$1"; }
 
 if ! command -v node >/dev/null 2>&1; then
   echo "SKIP: node is required to render the Worker's /install route"
+  exit 0
+fi
+
+if [ -n "${TVM_SRC:-}" ]; then
+  if [ ! -f "$TVM_SRC/tvm.sh" ] || [ ! -f "$TVM_SRC/install.sh" ]; then
+    echo "FAIL: TVM_SRC=$TVM_SRC is not a turmeric-lang/tvm checkout (no tvm.sh/install.sh)"
+    exit 1
+  fi
+elif [ -f "$ROOT/../tvm/tvm.sh" ] && [ -f "$ROOT/../tvm/install.sh" ]; then
+  TVM_SRC="$ROOT/../tvm"
+else
+  echo "SKIP: set TVM_SRC to a turmeric-lang/tvm checkout (or clone one at ../tvm)"
   exit 0
 fi
 
@@ -94,12 +111,11 @@ fi
 mkdir -p "$WORK/api/releases"
 printf '{"tag_name": "%s", "name": "%s"}\n' "$TAG" "$VER" > "$WORK/api/releases/latest"
 
-# tvm taken from THIS checkout (or TVM_SRC, a checkout of turmeric-lang/tvm),
-# which is what makes this a test of that tvm rather than of main. It is served
+# tvm taken from TVM_SRC, which is what makes this a test of that tvm rather
+# than of whatever turmeric-lang/tvm's main holds today. It is served
 # two ways, as GitHub does: as release assets (releases cut after tvm moved to
 # its own repo) and from raw.githubusercontent.com/<repo>/<tag>/tvm/ (older
 # tags, where tvm/ is still in the tagged tree).
-TVM_SRC="${TVM_SRC:-$ROOT/tvm}"
 mkdir -p "$WORK/raw/$TAG/tvm"
 cp "$TVM_SRC/tvm.sh" "$TVM_SRC/install.sh" "$WORK/raw/$TAG/tvm/"
 # Marked, so a run can tell which of the two sources it was handed.

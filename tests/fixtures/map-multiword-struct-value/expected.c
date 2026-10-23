@@ -6033,31 +6033,31 @@ static inline void tur_panic_sited(const char *msg) {
 }
 
 /* string-literal-interning-plan: one object per distinct literal. */
-static const char __tur_str_0[] = "true";
-static const char __tur_str_1[] = "false";
-static const char __tur_str_2[] = "[";
-static const char __tur_str_3[] = "]";
-static const char __tur_str_4[] = "#set{";
-static const char __tur_str_5[] = "}";
-static const char __tur_str_6[] = "#map{";
-static const char __tur_str_7[] = "#\\";
-static const char __tur_str_8[] = "u";
-static const char __tur_str_9[] = ":";
-static const char __tur_str_10[] = "(";
-static const char __tur_str_11[] = ",";
-static const char __tur_str_12[] = ")";
-static const char __tur_str_13[] = "schema-decode!: validation failed";
-static const char __tur_str_14[] = " ";
-static const char __tur_str_15[] = "space";
-static const char __tur_str_16[] = "newline";
-static const char __tur_str_17[] = "tab";
-static const char __tur_str_18[] = "return";
-static const char __tur_str_19[] = "null";
-static const char __tur_str_20[] = "backspace";
-static const char __tur_str_21[] = "delete";
-static const char __tur_str_22[] = "escape";
-static const char __tur_str_23[] = "alarm";
-static const char __tur_str_24[] = "";
+static const char __tur_str_0[] __attribute__((unused)) = "true";
+static const char __tur_str_1[] __attribute__((unused)) = "false";
+static const char __tur_str_2[] __attribute__((unused)) = "[";
+static const char __tur_str_3[] __attribute__((unused)) = "]";
+static const char __tur_str_4[] __attribute__((unused)) = "#set{";
+static const char __tur_str_5[] __attribute__((unused)) = "}";
+static const char __tur_str_6[] __attribute__((unused)) = "#map{";
+static const char __tur_str_7[] __attribute__((unused)) = "#\\";
+static const char __tur_str_8[] __attribute__((unused)) = "u";
+static const char __tur_str_9[] __attribute__((unused)) = ":";
+static const char __tur_str_10[] __attribute__((unused)) = "(";
+static const char __tur_str_11[] __attribute__((unused)) = ",";
+static const char __tur_str_12[] __attribute__((unused)) = ")";
+static const char __tur_str_13[] __attribute__((unused)) = "schema-decode!: validation failed";
+static const char __tur_str_14[] __attribute__((unused)) = " ";
+static const char __tur_str_15[] __attribute__((unused)) = "space";
+static const char __tur_str_16[] __attribute__((unused)) = "newline";
+static const char __tur_str_17[] __attribute__((unused)) = "tab";
+static const char __tur_str_18[] __attribute__((unused)) = "return";
+static const char __tur_str_19[] __attribute__((unused)) = "null";
+static const char __tur_str_20[] __attribute__((unused)) = "backspace";
+static const char __tur_str_21[] __attribute__((unused)) = "delete";
+static const char __tur_str_22[] __attribute__((unused)) = "escape";
+static const char __tur_str_23[] __attribute__((unused)) = "alarm";
+static const char __tur_str_24[] __attribute__((unused)) = "";
 
 typedef struct tur_adt_Map {
     void * hamt;
@@ -8756,9 +8756,9 @@ static const char * __inst_Debug_debug_cstr(const char * x) {
 static const char * __inst_Display_display_bool(bool x) {
         const char * __t70;
         if (x) {
-            __t70 = ((char *)__tur_str_0);
+            __t70 = __tur_str_0;
         } else {
-            __t70 = ((char *)__tur_str_1);
+            __t70 = __tur_str_1;
         }
         return __t70;
 }
@@ -8766,9 +8766,9 @@ static const char * __inst_Display_display_bool(bool x) {
 static const char * __inst_Debug_debug_bool(bool x) {
         const char * __t71;
         if (x) {
-            __t71 = ((char *)__tur_str_0);
+            __t71 = __tur_str_0;
         } else {
-            __t71 = ((char *)__tur_str_1);
+            __t71 = __tur_str_1;
         }
         return __t71;
 }
@@ -8974,9 +8974,9 @@ static dict_BuilderPush_int dict_BuilderPush_int_singleton = {
 static void __inst_BuilderPush_builder_sl_hypush_hyinto_ex_bool(bool x, void * b) {
         const char * __t72;
         if (x) {
-            __t72 = ((char *)__tur_str_0);
+            __t72 = __tur_str_0;
         } else {
-            __t72 = ((char *)__tur_str_1);
+            __t72 = __tur_str_1;
         }
         builder_slpush_hycstr_ex((void *)(intptr_t)(b), __t72);
         if (tur_panicking) return;
@@ -9061,9 +9061,9 @@ static void * __inst_Show_show_cstr(const char * x) {
 static void * __inst_Show_show_bool(bool x) {
         const char * __t79;
         if (x) {
-            __t79 = ((char *)__tur_str_0);
+            __t79 = __tur_str_0;
         } else {
-            __t79 = ((char *)__tur_str_1);
+            __t79 = __tur_str_1;
         }
         return string_slfrom_hycstr(__t79);
 }
@@ -9149,14 +9149,14 @@ static void * __inst_Show_show_Vec(int64_t x) {
             if (tur_panicking) return ((void *)0);
             void * b_2000646 = __ps_81;
             (void)b_2000646;
-            builder_slpush_hycstr_ex((void *)(intptr_t)(b_2000646), ((char *)__tur_str_2));
+            builder_slpush_hycstr_ex((void *)(intptr_t)(b_2000646), __tur_str_2);
             if (tur_panicking) return ((void *)0);
             int64_t __ps_82 = (vec_hylen(xx_2000645));
             if (tur_panicking) return ((void *)0);
             void * __ps_83 = (vec_hyshow_hyloop(xx_2000645, INT64_C(0), __ps_82, (void *)(intptr_t)(b_2000646)));
             if (tur_panicking) return ((void *)0);
             (void)(__ps_83);
-            builder_slpush_hycstr_ex((void *)(intptr_t)(b_2000646), ((char *)__tur_str_3));
+            builder_slpush_hycstr_ex((void *)(intptr_t)(b_2000646), __tur_str_3);
             if (tur_panicking) return ((void *)0);
             void * __t84;
             void * __ps_85 = (builder_slfinish((void *)(intptr_t)(b_2000646)));
@@ -9182,14 +9182,14 @@ static void * __inst_Show_show_Set(int64_t x) {
             if (tur_panicking) return ((void *)0);
             void * iter_2000656 = __ps_89;
             (void)iter_2000656;
-            builder_slpush_hycstr_ex((void *)(intptr_t)(b_2000655), ((char *)__tur_str_4));
+            builder_slpush_hycstr_ex((void *)(intptr_t)(b_2000655), __tur_str_4);
             if (tur_panicking) return ((void *)0);
             void * __ps_90 = (set_hyshow_hyloop(ss_2000654, (void *)(intptr_t)(iter_2000656), true, (void *)(intptr_t)(b_2000655)));
             if (tur_panicking) return ((void *)0);
             (void)(__ps_90);
             hamt_sliter_hydestroy_ex((void *)(intptr_t)(iter_2000656));
             if (tur_panicking) return ((void *)0);
-            builder_slpush_hycstr_ex((void *)(intptr_t)(b_2000655), ((char *)__tur_str_5));
+            builder_slpush_hycstr_ex((void *)(intptr_t)(b_2000655), __tur_str_5);
             if (tur_panicking) return ((void *)0);
             void * __t91;
             void * __ps_92 = (builder_slfinish((void *)(intptr_t)(b_2000655)));
@@ -9215,14 +9215,14 @@ static void * __inst_Show_show_Map(int64_t x) {
             if (tur_panicking) return ((void *)0);
             void * iter_2000667 = __ps_96;
             (void)iter_2000667;
-            builder_slpush_hycstr_ex((void *)(intptr_t)(b_2000666), ((char *)__tur_str_6));
+            builder_slpush_hycstr_ex((void *)(intptr_t)(b_2000666), __tur_str_6);
             if (tur_panicking) return ((void *)0);
             void * __ps_97 = (map_hyshow_hyloop(mm_2000665, (void *)(intptr_t)(iter_2000667), true, (void *)(intptr_t)(b_2000666)));
             if (tur_panicking) return ((void *)0);
             (void)(__ps_97);
             hamt_sliter_hydestroy_ex((void *)(intptr_t)(iter_2000667));
             if (tur_panicking) return ((void *)0);
-            builder_slpush_hycstr_ex((void *)(intptr_t)(b_2000666), ((char *)__tur_str_5));
+            builder_slpush_hycstr_ex((void *)(intptr_t)(b_2000666), __tur_str_5);
             if (tur_panicking) return ((void *)0);
             void * __t98;
             void * __ps_99 = (builder_slfinish((void *)(intptr_t)(b_2000666)));
@@ -9243,7 +9243,7 @@ static void * __inst_Show_show_Char(int64_t x) {
             if (tur_panicking) return ((void *)0);
             int64_t n_2000674 = __ps_101;
             (void)n_2000674;
-            builder_slpush_hycstr_ex((void *)(intptr_t)(b_2000673), ((char *)__tur_str_7));
+            builder_slpush_hycstr_ex((void *)(intptr_t)(b_2000673), __tur_str_7);
             if (tur_panicking) return ((void *)0);
             bool __ps_102 = (show_hychar_hynamed_qu_un_un(n_2000674));
             if (tur_panicking) return ((void *)0);
@@ -9261,7 +9261,7 @@ static void * __inst_Show_show_Char(int64_t x) {
                     builder_slpush_hychar_ex((void *)(intptr_t)(b_2000673), x);
                     if (tur_panicking) return ((void *)0);
                 } else {
-                    builder_slpush_hycstr_ex((void *)(intptr_t)(b_2000673), ((char *)__tur_str_8));
+                    builder_slpush_hycstr_ex((void *)(intptr_t)(b_2000673), __tur_str_8);
                     if (tur_panicking) return ((void *)0);
                     if ((n_2000674) > (INT64_C(15))) {
                         int64_t __ps_105 = (show_hyhex_hydigit_un_un(tur_idiv(n_2000674, INT64_C(16))));
@@ -9286,7 +9286,7 @@ static void * __inst_Show_show_Sym(const struct __tur_sym * x) {
             if (tur_panicking) return ((void *)0);
             void * b_2000677 = __ps_107;
             (void)b_2000677;
-            builder_slpush_hycstr_ex((void *)(intptr_t)(b_2000677), ((char *)__tur_str_9));
+            builder_slpush_hycstr_ex((void *)(intptr_t)(b_2000677), __tur_str_9);
             if (tur_panicking) return ((void *)0);
             const char * __ps_108 = (sym_hy_gtstr(x));
             if (tur_panicking) return ((void *)0);
@@ -9302,7 +9302,7 @@ static void * __inst_Show_show_Point(tur_adt_Point p) {
             if (tur_panicking) return ((void *)0);
             void * b_7 = __ps_109;
             (void)b_7;
-            builder_slpush_hycstr_ex((void *)(intptr_t)(b_7), ((char *)__tur_str_10));
+            builder_slpush_hycstr_ex((void *)(intptr_t)(b_7), __tur_str_10);
             if (tur_panicking) return ((void *)0);
             {
                 void * __ps_110 = (__inst_Show_show_int((int64_t)(p).x));
@@ -9314,7 +9314,7 @@ static void * __inst_Show_show_Point(tur_adt_Point p) {
                 string_slrelease((void *)(intptr_t)(sx_8));
                 if (tur_panicking) return ((void *)0);
             }
-            builder_slpush_hycstr_ex((void *)(intptr_t)(b_7), ((char *)__tur_str_11));
+            builder_slpush_hycstr_ex((void *)(intptr_t)(b_7), __tur_str_11);
             if (tur_panicking) return ((void *)0);
             {
                 void * __ps_111 = (__inst_Show_show_int((int64_t)(p).y));
@@ -9326,7 +9326,7 @@ static void * __inst_Show_show_Point(tur_adt_Point p) {
                 string_slrelease((void *)(intptr_t)(sy_9));
                 if (tur_panicking) return ((void *)0);
             }
-            builder_slpush_hycstr_ex((void *)(intptr_t)(b_7), ((char *)__tur_str_12));
+            builder_slpush_hycstr_ex((void *)(intptr_t)(b_7), __tur_str_12);
             if (tur_panicking) return ((void *)0);
             return builder_slfinish((void *)(intptr_t)(b_7));
         }
@@ -12188,7 +12188,7 @@ static int64_t schema_hydecode_hyabort(int64_t errs) {
         int64_t __ps_228 = (schema_hydecode_hyreport(errs));
         if (tur_panicking) return ((int64_t)0);
         (void)(__ps_228);
-        tur_panic_at_site("schema.tur", 1071, ((char *)__tur_str_13));
+        tur_panic_at_site("schema.tur", 1071, __tur_str_13);
         if (tur_panicking) return ((int64_t)0);
         return ((int64_t)0);
 }
@@ -13416,7 +13416,7 @@ static void * vec_hyshow_hyloop(int64_t v, int64_t i, int64_t len, void * b) {
             __t438 = b;
         } else {
             if ((i) > (INT64_C(0))) {
-                builder_slpush_hycstr_ex((void *)(intptr_t)(b), ((char *)__tur_str_14));
+                builder_slpush_hycstr_ex((void *)(intptr_t)(b), __tur_str_14);
                 if (tur_panicking) return ((void *)0);
             } else {
             }
@@ -13447,7 +13447,7 @@ static void * set_hyshow_hyloop(int64_t s, void * iter, bool first, void * b) {
         if (tur_panicking) return ((void *)0);
         if (__ps_445) {
             if (!(first)) {
-                builder_slpush_hycstr_ex((void *)(intptr_t)(b), ((char *)__tur_str_14));
+                builder_slpush_hycstr_ex((void *)(intptr_t)(b), __tur_str_14);
                 if (tur_panicking) return ((void *)0);
             } else {
             }
@@ -13480,7 +13480,7 @@ static void * map_hyshow_hyloop(int64_t m, void * iter, bool first, void * b) {
         if (tur_panicking) return ((void *)0);
         if (__ps_451) {
             if (!(first)) {
-                builder_slpush_hycstr_ex((void *)(intptr_t)(b), ((char *)__tur_str_14));
+                builder_slpush_hycstr_ex((void *)(intptr_t)(b), __tur_str_14);
                 if (tur_panicking) return ((void *)0);
             } else {
             }
@@ -13501,7 +13501,7 @@ static void * map_hyshow_hyloop(int64_t m, void * iter, bool first, void * b) {
                 if (tur_panicking) return ((void *)0);
                 string_slrelease((void *)(intptr_t)(ks_2000661));
                 if (tur_panicking) return ((void *)0);
-                builder_slpush_hycstr_ex((void *)(intptr_t)(b), ((char *)__tur_str_14));
+                builder_slpush_hycstr_ex((void *)(intptr_t)(b), __tur_str_14);
                 if (tur_panicking) return ((void *)0);
                 builder_slpush_hystring_ex((void *)(intptr_t)(b), (void *)(intptr_t)(vs_2000662));
                 if (tur_panicking) return ((void *)0);
@@ -13522,41 +13522,41 @@ static void * map_hyshow_hyloop(int64_t m, void * iter, bool first, void * b) {
 static const char * show_hychar_hyname_un_un(int64_t n) {
         const char * __t458;
         if ((n) == (INT64_C(32))) {
-            __t458 = ((char *)__tur_str_15);
+            __t458 = __tur_str_15;
         } else {
             const char * __t459;
             if ((n) == (INT64_C(10))) {
-                __t459 = ((char *)__tur_str_16);
+                __t459 = __tur_str_16;
             } else {
                 const char * __t460;
                 if ((n) == (INT64_C(9))) {
-                    __t460 = ((char *)__tur_str_17);
+                    __t460 = __tur_str_17;
                 } else {
                     const char * __t461;
                     if ((n) == (INT64_C(13))) {
-                        __t461 = ((char *)__tur_str_18);
+                        __t461 = __tur_str_18;
                     } else {
                         const char * __t462;
                         if ((n) == (INT64_C(0))) {
-                            __t462 = ((char *)__tur_str_19);
+                            __t462 = __tur_str_19;
                         } else {
                             const char * __t463;
                             if ((n) == (INT64_C(8))) {
-                                __t463 = ((char *)__tur_str_20);
+                                __t463 = __tur_str_20;
                             } else {
                                 const char * __t464;
                                 if ((n) == (INT64_C(127))) {
-                                    __t464 = ((char *)__tur_str_21);
+                                    __t464 = __tur_str_21;
                                 } else {
                                     const char * __t465;
                                     if ((n) == (INT64_C(27))) {
-                                        __t465 = ((char *)__tur_str_22);
+                                        __t465 = __tur_str_22;
                                     } else {
                                         const char * __t466;
                                         if ((n) == (INT64_C(7))) {
-                                            __t466 = ((char *)__tur_str_23);
+                                            __t466 = __tur_str_23;
                                         } else {
-                                            __t466 = ((char *)__tur_str_24);
+                                            __t466 = __tur_str_24;
                                         }
                                         __t465 = __t466;
                                     }

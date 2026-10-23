@@ -137,6 +137,16 @@ extern bool g_sessions_enabled;
  *                             records use external weak linkage so the linker
  *                             folds same-named records across TUs (SYM2);
  *                             otherwise they are `static` (single-file/emit-c). */
+/* string-literal-interning-plan: per-unit string-literal registry.
+ *   cstr_codegen_reset()    -- clear it (once per compilation unit, beside
+ *                              sym_codegen_reset).
+ *   cstr_codegen_register() -- the C name (`__tur_str_<N>`) of the unit's one
+ *                              object holding these bytes; atom_cstr's result.
+ *   cstr_codegen_splice()   -- write the literal band into `out` at offset
+ *                              `at`, after the whole unit is emitted. */
+void        cstr_codegen_reset(void);
+const char *cstr_codegen_register(const char *text, size_t len);
+void        cstr_codegen_splice(Buf *out, size_t at);
 struct Symbol;
 void        sym_codegen_reset(void);
 const char *sym_codegen_register(const struct Symbol *sym);
@@ -1398,8 +1408,6 @@ char *atom_var(EmitCtx *ctx, const Binding *b);
  * bindings (emit_abi_scan_fn_values), or NULL. */
 char *emit_fn_value_spec_clone(EmitCtx *ctx, const Binding *b);
 char *atom_cstr(StrSlice s);
-void  cstr_codegen_reset(void);
-void  cstr_codegen_emit(Buf *out);
 char *emit_builtin(EmitCtx *ctx, Buf *body, const Expr *e);
 void emit_dict_name(char *buf, size_t buflen, const TypeClassInstance *inst);
 void collect_defined(const Expr *e, Binding ***defs, uint32_t *ndefs, uint32_t *cdefs);

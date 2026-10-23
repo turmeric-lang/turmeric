@@ -6033,9 +6033,9 @@ static inline void tur_panic_sited(const char *msg) {
 }
 
 /* string-literal-interning-plan: one object per distinct literal. */
-static const char __tur_str_0[] = "schema-decode!: validation failed";
-static const char __tur_str_1[] = "division by zero";
-static const char __tur_str_2[] = "not positive";
+static const char __tur_str_0[] __attribute__((unused)) = "schema-decode!: validation failed";
+static const char __tur_str_1[] __attribute__((unused)) = "division by zero";
+static const char __tur_str_2[] __attribute__((unused)) = "not positive";
 
 typedef struct tur_adt_Map {
     void * hamt;
@@ -10864,7 +10864,7 @@ static int64_t schema_hydecode_hyabort(int64_t errs) {
         int64_t __ps_186 = (schema_hydecode_hyreport(errs));
         if (tur_panicking) return ((int64_t)0);
         (void)(__ps_186);
-        tur_panic_at_site("schema.tur", 1071, ((char *)__tur_str_0));
+        tur_panic_at_site("schema.tur", 1071, __tur_str_0);
         if (tur_panicking) return ((int64_t)0);
         return ((int64_t)0);
 }
@@ -11052,7 +11052,7 @@ static int64_t with_hyregion(int64_t body) {
 static int64_t checked_hydiv(int64_t a, int64_t b) {
         int64_t __t202;
         if ((b) == (INT64_C(0))) {
-            tur_panic_at_site("input.tur", 8, ((char *)__tur_str_1));
+            tur_panic_at_site("input.tur", 8, __tur_str_1);
             if (tur_panicking) return ((int64_t)0);
             __t202 = ((int64_t)0);
         } else {
@@ -11066,7 +11066,7 @@ static int64_t checked_hypos(int64_t a) {
         if ((a) > (INT64_C(0))) {
             __t203 = a;
         } else {
-            tur_panic_at_site("input.tur", 14, ((char *)__tur_str_2));
+            tur_panic_at_site("input.tur", 14, __tur_str_2);
             if (tur_panicking) return ((int64_t)0);
             __t203 = ((int64_t)0);
         }

@@ -2008,17 +2008,18 @@ jobs:
       - name: Check fused annotations in stdlib/ and docs/guides/
         run: python3 tools/spaced-types-rewrite.py --check stdlib/ docs/guides/
 
-  # C-1: tvm is the advertised install path now -- turmeric-lang.com/install
-  # bootstraps it and installs a checksum-verified release through it. Its two
-  # suites ran NOWHERE automatic before that change: not in this file, not in
-  # ctest, not in the Justfile. A version manager nobody tests is a poor thing
-  # to make load-bearing, so they run here.
+  # C-1: tvm is the advertised install path -- turmeric-lang.com/install
+  # bootstraps it and installs a checksum-verified release through it. tvm
+  # itself lives in turmeric-lang/tvm, whose own CI runs its suite. What stays
+  # here is the installer end-to-end: it drives web/worker.js's /install route,
+  # so it belongs with the Worker, against the tvm commit release.yml attaches
+  # to the next release (TVM_REF there is the one pin; this job reads it).
   #
-  # Both are fully offline -- a fake release served over file:// URLs -- so
-  # this job is seconds, needs no compiler, and cannot flake on the network.
-  # It runs on both OSes because the install path is platform-shaped: shell rc
-  # detection, tar layouts, `sha256sum` vs `shasum`, and the target triple all
-  # differ, and macOS is where the advertised one-liner is most used.
+  # Fully offline -- a fake release served over file:// URLs -- so this job is
+  # seconds, needs no compiler, and cannot flake on the network. It runs on
+  # both OSes because the install path is platform-shaped: shell rc detection,
+  # tar layouts, `sha256sum` vs `shasum`, and the target triple all differ, and
+  # macOS is where the advertised one-liner is most used.
   tvm:
     needs: changes
     if: needs.changes.outputs.code == 'true'
@@ -2032,24 +2033,27 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      # The suite asserts `tvm current` is `none` before anything is
-      # installed, which a tur already on PATH would contradict. The runners
-      # have none; this guard says so out loud rather than leaving a future
-      # toolchain image to make it a mystery failure.
-      - name: Check no tur is already on PATH
+      - name: Read the tvm pin from release.yml
+        id: pin
         run: |
-          if command -v tur >/dev/null 2>&1; then
-            echo "::error::a tur is already on PATH ($(command -v tur)); the tvm suite assumes none"
+          ref=$(sed -n 's/^ *TVM_REF: *\([0-9a-f]\{40\}\) *$/\1/p' .github/workflows/release.yml)
+          if [ -z "$ref" ] || [ "$(printf '%s\n' "$ref" | wc -l)" -ne 1 ]; then
+            echo "::error::expected exactly one 40-hex TVM_REF in release.yml, got: '$ref'"
             exit 1
           fi
+          echo "ref=$ref" >> "$GITHUB_OUTPUT"
 
-      - name: tvm suite
-        run: sh tvm/tests/run.sh
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: turmeric-lang/tvm
+          ref: ${{ steps.pin.outputs.ref }}
+          path: tvm-src
+          persist-credentials: false
 
       # Drives web/worker.js's own /install route, so an edit that breaks the
       # served installer fails here rather than on someone's laptop.
       - name: Installer end-to-end (C-1)
-        run: sh tvm/tests/install-script.sh
+        run: TVM_SRC="$PWD/tvm-src" sh tests/tvm-install-script.sh
 
   check-snapshots:
     needs: changes

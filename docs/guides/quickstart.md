@@ -24,7 +24,8 @@ By the end you will have seen: expressions, functions, conditionals, recursion,
 needed.
 
 **Don't have `tur` yet?** Install it with the version manager
-(`sh tvm/install.sh` then `tvm install 0.36.0 && tvm use 0.36.0`), or see
+(`curl -sSf https://turmeric-lang.com/install | sh` installs
+[`tvm`](https://github.com/turmeric-lang/tvm#readme) and the latest release), or see
 the [Releases and Installation guide](releases-and-installation-guide.md)
 for Homebrew, prebuilt binaries, Docker, and build-from-source.
 

@@ -6033,9 +6033,9 @@ static inline void tur_panic_sited(const char *msg) {
 }
 
 /* string-literal-interning-plan: one object per distinct literal. */
-static const char __tur_str_0[] = "schema-decode!: validation failed";
-static const char __tur_str_1[] = "outer panic";
-static const char __tur_str_2[] = "defer panic";
+static const char __tur_str_0[] __attribute__((unused)) = "schema-decode!: validation failed";
+static const char __tur_str_1[] __attribute__((unused)) = "outer panic";
+static const char __tur_str_2[] __attribute__((unused)) = "defer panic";
 
 typedef struct tur_adt_Map {
     void * hamt;
@@ -10863,7 +10863,7 @@ static int64_t schema_hydecode_hyabort(int64_t errs) {
         int64_t __ps_186 = (schema_hydecode_hyreport(errs));
         if (tur_panicking) return ((int64_t)0);
         (void)(__ps_186);
-        tur_panic_at_site("schema.tur", 1071, ((char *)__tur_str_0));
+        tur_panic_at_site("schema.tur", 1071, __tur_str_0);
         if (tur_panicking) return ((int64_t)0);
         return ((int64_t)0);
 }
@@ -11069,7 +11069,7 @@ int main(int argc, char **argv) {
         tur_frame_init(&__frame_202, NULL);
         tur_frame_push_defer(&__frame_202, __defer_203, NULL);
         tur_panic_set_frame(&__frame_202);
-tur_panic_at_site("input.tur", 4, ((char *)__tur_str_1));
+tur_panic_at_site("input.tur", 4, __tur_str_1);
         if (tur_panicking) { { tur_panicking = 0; tur_frame_fire_lifo(&__frame_202); tur_panicking = 1; tur_panic_root_exit(); } }
         return (int)0;
 }
@@ -11095,7 +11095,7 @@ static tur_adt_Vec__int * vec_new__spec__tur_adt_Vec__int__(void) {
 
 
 static void __defer_203(void *__env) {
-    tur_panic_at_site("input.tur", 3, ((char *)__tur_str_2));
+    tur_panic_at_site("input.tur", 3, __tur_str_2);
     /* panic-return-signal: ret ctype unknown; no propagation here */
 }
 

@@ -1,14 +1,8 @@
 # Plan: one object per distinct string literal in a unit
 
-> **Status:** DONE 2026-10-23. Literals are stored once per unit
-> (from [cstr-literal-address-differs-by-engine](cstr-literal-address-differs-by-engine.md),
-> which this plan resolved). `cstr_codegen_register` / `cstr_codegen_emit`
-> live beside `atom_cstr` in `src/compiler/emit_core.c`; the band is written
-> first at final assembly in both the program and the implementation-unit
-> paths. A literal emitted outside that window (a preamble, a header, after the
-> band is written) keeps the inline spelling. Fixtures:
-> `cstr-literal-one-object-per-unit` (both harnesses, and `tur jit`) and
-> `cstr-literal-embedded-nul-own-object` (compiled).
+> **Status:** DONE 2026-10-23. Decision taken 2026-10-21: store literals once per
+> unit (from [cstr-literal-address-differs-by-engine](cstr-literal-address-differs-by-engine.md),
+> which this plan resolved). See [Outcome](#outcome-2026-10-23).
 
 ## Problem
 
@@ -72,3 +66,38 @@ spelling.
 4. jit-guide and c-integration-guide: the "two identical literals are two
    objects" notes become "one object per unit, not across units". Archive the
    report.
+
+## Outcome (2026-10-23)
+
+Done as designed, with three refinements found while building it:
+
+- **The band is spliced in last.** `cstr_codegen_splice` writes it at an offset
+  recorded right after the runtime preamble (ahead of every band that can name
+  a literal), but only once the whole unit is written, so a literal registered
+  by a late emitter -- main's body, the CPS group flush -- is in it too. Both
+  unit emitters (`emit_program`, `emit_implementation`) reset the table beside
+  `sym_codegen_reset` and splice at their end.
+- **No explicit initializer for a NUL.** `emit_c_string` already spells a NUL
+  as `\000`, so `static const char __tur_str_<N>[] = "a\000b";` holds every
+  byte plus the terminator; keying on (bytes, length) is what keeps it apart
+  from `"a"`.
+- **`__attribute__((unused))` on each record.** A body emitted speculatively and
+  discarded can leave a record nothing names, which `-Wall`'s
+  `-Wunused-const-variable` would report.
+
+The audit of call sites found nothing that needs a literal *token*: `atom_cstr`
+has two callers (`EX_CSTR_LIT`, the CPS `CA_STR` atom), and the name is an
+address constant wherever the inline literal was, static initializers included.
+The other `emit_c_string` callers -- a string `match` pattern's `strcmp`
+operand, panic/diagnostic text, the keyword records' names -- compare or print
+contents and stay inline.
+
+Pinned by `cstr-literal-one-object-per-unit` (the repro, plus a literal from
+another function and the empty string; 1 on `tur run`, `tur jit` and
+`--interpret`) and `cstr-literal-nul-is-distinct` (`requires.compiled`:
+interpreted, the ascription is the string and `=` stops at the NUL). 158
+snapshots regenerated. `tests/run.sh` and `tests/run-jit.sh` (all three
+shards) report no failures; the multi-unit harnesses (`run-build-project`,
+`run-build-shared`, `run-any-type-id-multi-module`, the r7rs split checks)
+pass. The emitted-float and fconv lints key on the preamble marker and the
+inline-C ranges, not on literal spelling.

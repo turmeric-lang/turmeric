@@ -6033,11 +6033,11 @@ static inline void tur_panic_sited(const char *msg) {
 }
 
 /* string-literal-interning-plan: one object per distinct literal. */
-static const char __tur_str_0[] = "schema-decode!: validation failed";
-static const char __tur_str_1[] = "walked";
-static const char __tur_str_2[] = "ref done";
-static const char __tur_str_3[] = "any done";
-static const char __tur_str_4[] = "count-down done";
+static const char __tur_str_0[] __attribute__((unused)) = "schema-decode!: validation failed";
+static const char __tur_str_1[] __attribute__((unused)) = "walked";
+static const char __tur_str_2[] __attribute__((unused)) = "ref done";
+static const char __tur_str_3[] __attribute__((unused)) = "any done";
+static const char __tur_str_4[] __attribute__((unused)) = "count-down done";
 
 typedef struct tur_adt_Map {
     void * hamt;
@@ -10872,7 +10872,7 @@ static int64_t schema_hydecode_hyabort(int64_t errs) {
         int64_t __ps_186 = (schema_hydecode_hyreport(errs));
         if (tur_panicking) return ((int64_t)0);
         (void)(__ps_186);
-        tur_panic_at_site("schema.tur", 1071, ((char *)__tur_str_0));
+        tur_panic_at_site("schema.tur", 1071, __tur_str_0);
         if (tur_panicking) return ((int64_t)0);
         return ((int64_t)0);
 }
@@ -11096,7 +11096,7 @@ static void walk(int64_t i, int64_t n) {
                 n = __t206;
                 goto __tur_tailcall;
             } else {
-                puts(((char *)__tur_str_1));
+                puts(__tur_str_1);
                 return;
             }
         }
@@ -11114,7 +11114,7 @@ static void with_hyref(int64_t n) {
             struct __defer_env_209 __t211 = {.b = b_15};
             tur_frame_push_defer(&__frame_208, __defer_210, &__t211);
             if ((n) == (INT64_C(0))) {
-                puts(((char *)__tur_str_2));
+                puts(__tur_str_2);
                 tur_frame_fire_lifo(&__frame_208);
                 return;
             } else {
@@ -11132,7 +11132,7 @@ static void with_hyany(int64_t n) {
             tur_tagged_t a_17 = TUR_TAG(3, (int64_t)(intptr_t)(n));
             (void)a_17;
             if ((n) == (INT64_C(0))) {
-                puts(((char *)__tur_str_3));
+                puts(__tur_str_3);
                 __tur_any_drop(a_17);
                 return;
             } else {
@@ -11163,7 +11163,7 @@ int main(int argc, char **argv) {
     tur_root_unwind = 1;
         count_hydown(INT64_C(1000000));
         if (tur_panicking) { tur_panic_root_exit(); }
-        puts(((char *)__tur_str_4));
+        puts(__tur_str_4);
         count_hyup(INT64_C(0), INT64_C(1000000));
         if (tur_panicking) { tur_panic_root_exit(); }
         walk(INT64_C(0), INT64_C(1000000));

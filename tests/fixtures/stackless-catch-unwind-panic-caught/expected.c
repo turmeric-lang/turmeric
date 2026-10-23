@@ -6033,8 +6033,8 @@ static inline void tur_panic_sited(const char *msg) {
 }
 
 /* string-literal-interning-plan: one object per distinct literal. */
-static const char __tur_str_0[] = "boom";
-static const char __tur_str_1[] = "schema-decode!: validation failed";
+static const char __tur_str_0[] __attribute__((unused)) = "boom";
+static const char __tur_str_1[] __attribute__((unused)) = "schema-decode!: validation failed";
 
 typedef struct tur_adt_Map {
     void * hamt;
@@ -8070,7 +8070,7 @@ static bool __inst_Eq_eq_qu_Sym(const struct __tur_sym * x, const struct __tur_s
 }
 
 static int64_t __fn_5(void) {
-        tur_panic_at_site("input.tur", 10, ((char *)__tur_str_0));
+        tur_panic_at_site("input.tur", 10, __tur_str_0);
         if (tur_panicking) return ((int64_t)0);
         return ((int64_t)0);
 }
@@ -10891,7 +10891,7 @@ static int64_t schema_hydecode_hyabort(int64_t errs) {
         int64_t __ps_187 = (schema_hydecode_hyreport(errs));
         if (tur_panicking) return ((int64_t)0);
         (void)(__ps_187);
-        tur_panic_at_site("schema.tur", 1071, ((char *)__tur_str_1));
+        tur_panic_at_site("schema.tur", 1071, __tur_str_1);
         if (tur_panicking) return ((int64_t)0);
         return ((int64_t)0);
 }
@@ -11114,7 +11114,7 @@ static int64_t h(int64_t n) {
            }
           }
           case 2: {
-           tur_panic_at_site("input.tur", 10, ((char *)__tur_str_0));
+           tur_panic_at_site("input.tur", 10, __tur_str_0);
            break;
           }
           case 3: {

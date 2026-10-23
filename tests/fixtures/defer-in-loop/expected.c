@@ -6033,8 +6033,8 @@ static inline void tur_panic_sited(const char *msg) {
 }
 
 /* string-literal-interning-plan: one object per distinct literal. */
-static const char __tur_str_0[] = "schema-decode!: validation failed";
-static const char __tur_str_1[] = "loop done";
+static const char __tur_str_0[] __attribute__((unused)) = "schema-decode!: validation failed";
+static const char __tur_str_1[] __attribute__((unused)) = "loop done";
 
 typedef struct tur_adt_Map {
     void * hamt;
@@ -10884,7 +10884,7 @@ static int64_t schema_hydecode_hyabort(int64_t errs) {
         int64_t __ps_186 = (schema_hydecode_hyreport(errs));
         if (tur_panicking) return ((int64_t)0);
         (void)(__ps_186);
-        tur_panic_at_site("schema.tur", 1071, ((char *)__tur_str_0));
+        tur_panic_at_site("schema.tur", 1071, __tur_str_0);
         if (tur_panicking) return ((int64_t)0);
         return ((int64_t)0);
 }
@@ -11103,7 +11103,7 @@ int main(int argc, char **argv) {
                 TUR_REGION_NOTE_WORDS(&((_un_untur_unmutcell_un3_4)->v), sizeof((_un_untur_unmutcell_un3_4)->v));
                 tur_frame_fire_lifo(&__frame_203);
             }
-            puts(((char *)__tur_str_1));
+            puts(__tur_str_1);
             tur_region_free((void *)(intptr_t)(_un_untur_unmutcell_un3_4));
         }
         int64_t __t207;

@@ -6033,9 +6033,9 @@ static inline void tur_panic_sited(const char *msg) {
 }
 
 /* string-literal-interning-plan: one object per distinct literal. */
-static const char __tur_str_0[] = "schema-decode!: validation failed";
-static const char __tur_str_1[] = "a";
-static const char __tur_str_2[] = "b";
+static const char __tur_str_0[] __attribute__((unused)) = "schema-decode!: validation failed";
+static const char __tur_str_1[] __attribute__((unused)) = "a";
+static const char __tur_str_2[] __attribute__((unused)) = "b";
 
 typedef struct tur_adt_Map {
     void * hamt;
@@ -11111,7 +11111,7 @@ static int64_t schema_hydecode_hyabort(int64_t errs) {
         int64_t __ps_191 = (schema_hydecode_hyreport(errs));
         if (tur_panicking) return ((int64_t)0);
         (void)(__ps_191);
-        tur_panic_at_site("schema.tur", 1071, ((char *)__tur_str_0));
+        tur_panic_at_site("schema.tur", 1071, __tur_str_0);
         if (tur_panicking) return ((int64_t)0);
         return ((int64_t)0);
 }
@@ -11396,22 +11396,22 @@ int main(int argc, char **argv) {
         printf("%lld\n", (long long)((int64_t)((tur_adt_Box__int *)(intptr_t)(__t225))->v));
         tur_adt_Box__cstr * __t228;
         {
-            int64_t __ps_229 = (mk_f__spec__int64_t_const_char__(((char *)__tur_str_1)));
+            int64_t __ps_229 = (mk_f__spec__int64_t_const_char__(__tur_str_1));
             if (tur_panicking) { tur_panic_root_exit(); }
             int64_t (*__call_head_44)(const char *) = (int64_t (*)(const char *))(intptr_t)(__ps_229);
             (void)__call_head_44;
-            tur_adt_Box__cstr * __ps_230 = (((tur_adt_Box__cstr * (*)(const char *))(intptr_t)__call_head_44)(((char *)__tur_str_2)));
+            tur_adt_Box__cstr * __ps_230 = (((tur_adt_Box__cstr * (*)(const char *))(intptr_t)__call_head_44)(__tur_str_2));
             if (tur_panicking) { tur_panic_root_exit(); }
             __t228 = __ps_230;
         }
         puts((const char *)((tur_adt_Box__cstr *)(intptr_t)(__t228))->v);
         tur_adt_Box__cstr * __t231;
         {
-            void * __ps_232 = (mk_k__spec__void___const_char__(((char *)__tur_str_1)));
+            void * __ps_232 = (mk_k__spec__void___const_char__(__tur_str_1));
             if (tur_panicking) { tur_panic_root_exit(); }
             int64_t _un_uncall_unhead_un46_47 = (int64_t)(intptr_t)(__ps_232);
             (void)_un_uncall_unhead_un46_47;
-            tur_adt_Box__cstr * __ps_233 = (__fn_17__spec__tur_adt_Box__cstr___void___const_char__((void *)(intptr_t)(_un_uncall_unhead_un46_47), ((char *)__tur_str_2)));
+            tur_adt_Box__cstr * __ps_233 = (__fn_17__spec__tur_adt_Box__cstr___void___const_char__((void *)(intptr_t)(_un_uncall_unhead_un46_47), __tur_str_2));
             if (tur_panicking) { tur_panic_root_exit(); }
             __t231 = __ps_233;
         }

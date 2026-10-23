@@ -1,13 +1,19 @@
 # Two identical string literals compare equal by address under `tur run`, unequal under `tur jit` -- in plain Turmeric
 
-**Resolved 2026-10-23** by [string-literal-interning-plan](string-literal-interning-plan.md) (fix direction 1). `atom_cstr` now names one `static const char __tur_str_<N>[]` per distinct literal in the unit (`cstr_codegen_register` / `cstr_codegen_emit`, `src/compiler/emit_core.c`), keyed on (bytes, length), written first at final assembly in both the program and implementation-unit paths. The repro is `1` under `tur run`, `tur jit` and `--interpret`; full `tests/run.sh` and `tests/run-jit.sh` are green on the change. Across units (a `--shared` build) two literals stay two objects; jit-guide and c-integration-guide now say "one object per unit, not across units". Item 3 (what the interpreter's `(:: "hi" :int)` should be) is unchanged: it compares by content, which agrees on equal literals and differs only past an embedded NUL. Pinned by `tests/fixtures/cstr-literal-one-object-per-unit` and `tests/fixtures/cstr-literal-embedded-nul-own-object`.
+**RESOLVED 2026-10-23** -- fix direction 1, by
+[string-literal-interning-plan](string-literal-interning-plan.md): the emitter
+gives each distinct literal text in a unit one `static const char
+__tur_str_<N>[]` (`cstr_codegen_register`, `src/compiler/emit_core.c`) and every
+use names it, so the repro prints 1 on all three engines. Pinned by the fixtures
+`cstr-literal-one-object-per-unit` and `cstr-literal-nul-is-distinct`. Across
+units literals stay two objects (jit-guide).
 
 **Decision (2026-10-21):** store each distinct literal once per unit (fix
-direction 1); plan: [string-literal-interning-plan](string-literal-interning-plan.md).
+direction 1).
 
 **Severity: low-medium** (engine divergence; silent wrong answer). Found
 2026-10-21 reviewing the resolution of
-[jit-string-literal-identity-differs-from-cc](jit-string-literal-identity-differs-from-cc.md),
+[jit-string-literal-identity-differs-from-cc](../archive/jit-string-literal-identity-differs-from-cc.md),
 which declined to make literal identity a guarantee partly because it "would
 rewrite every snapshot" -- not a reason under CLAUDE.md's fixture policy -- and
 partly because only inline C could observe it. The second reason does not hold.
