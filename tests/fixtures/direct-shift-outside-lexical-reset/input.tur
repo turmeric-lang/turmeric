@@ -1,0 +1,35 @@
+;; direct-shift-outside-lexical-reset-not-abortive: a `(Vec int)` parameter
+;; evicts `g`, `g0`, `gf` and `gt` from the CPS backend (and `h0`'s shift body
+;; is not straight-line), so their shift is lowered by the direct emitter.  It
+;; was abortive only under a `reset` in the same function: with the reset in a
+;; caller, f(x) flowed on as the shift's value (17, not 6).  It now aborts to
+;; the live landing -- a caller's direct reset, or a CPS reset's landing at the
+;; cps->direct call -- and a shift0 hides that landing for its receiver.
+;; `run` is evicted (direct resets); `main` is CPS (DK-prompt resets).
+(defn g [xs : (Vec int) x : int] : int (+ 1 (shift (fn [v : int] (* 2 v)) x)))
+(defn g0 [xs : (Vec int) x : int] : int (+ 1 (shift0 (fn [v : int] (* 2 v)) x)))
+(defn h0 [x : int] : int (shift0 (fn [v : int] (+ 1 (shift0 (fn [w : int] (* 1000 w)) v))) x))
+(defn h0c [x : int] : int (+ 0 (shift0 (fn [v : int] (+ 1 (shift0 (fn [w : int] (* 1000 w)) v))) x)))
+(defn gf [xs : (Vec int) x : float] : float (+ 1.5 (shift (fn [v : float] (* 2.25 v)) x)))
+;; a tail-position shift whose value used to flow back by accident
+(defn gt [xs : (Vec int) x : int] : int (shift (fn [v : int] (* 7 v)) x))
+(defn run [xs : (Vec int)] : int
+  (println (reset (+ 10 (g xs 3))))
+  (println (reset (+ 10 (g0 xs 3))))
+  (println (reset (+ 100 (reset (+ 10 (h0 5))))))
+  (println (reset (+ 100 (reset (+ 10 (h0c 5))))))
+  (println (reset (+ 10.1 (gf xs 3.1))))
+  (println (reset (+ 10 (gt xs 3))))
+  ;; the shift's own reset in a callee still wins
+  (println (reset (+ 10 (reset (+ 20 (g xs 3))))))
+  0)
+(def gv (:: (vec-new) (Vec int)))
+(defn main [] : int
+  (run gv)
+  (println "-- cps")
+  (println (reset (+ 10 (g gv 3))))
+  (println (reset (+ 10 (g0 gv 3))))
+  (println (reset (+ 100 (reset (+ 10 (h0 5))))))
+  (println (reset (+ 10.1 (gf gv 3.1))))
+  (println (reset (+ 10 (gt gv 3))))
+  0)

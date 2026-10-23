@@ -8200,9 +8200,11 @@ static int cps_reset_landing_open(CE *ce, const Binding *callee) {
     ce_line(ce, "tur_shift_reset_ctx __rsl_%d; int __rsl_on_%d = 0;", id, id);
     ce_line(ce, "if (__dk_chain_has_reset(%s)) {", ce->cur_k);
     ce_line(ce, "    __rsl_%d.prev = tur_cur_shift_reset; __dk_reset_save(&__rsl_%d); "
-                "tur_cur_shift_reset = &__rsl_%d; __rsl_on_%d = 1;", id, id, id, id);
+                "__rsl_%d.dk_chain = %s; tur_cur_shift_reset = &__rsl_%d; __rsl_on_%d = 1;",
+            id, id, id, ce->cur_k, id, id);
     ce_line(ce, "    if (TUR_SETJMP(__rsl_%d.buf)) { tur_cur_shift_reset = __rsl_%d.prev; "
-                "return (%s)__dk_reset_abort_to(%s, __rsl_%d.result); }", id, id, rt, ce->cur_k, id);
+                "return (%s)__dk_reset_abort_to(%s, __rsl_%d.result, __rsl_%d.dk_skip); }",
+            id, id, rt, ce->cur_k, id, id);
     ce_line(ce, "}");
     return id;
 }

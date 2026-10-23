@@ -16915,6 +16915,10 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
          * entries' own C frames), so an abort that skips their exits frees
          * their roots. */
         buf_puts(out, "    void *dk_entries;\n");
+        /* A cps->direct call landing (cps_reset_landing_open) stands for the
+         * reset prompts on its caller's chain: `dk_chain`, of which a shift0's
+         * receiver has hidden `dk_skip` (__dk_reset_hide). */
+        buf_puts(out, "    void *dk_chain; int dk_skip;\n");
         buf_puts(out, "} tur_shift_reset_ctx;\n\n");
         emit_rt_tls(out, shared, "TUR_THREAD_LOCAL tur_shift_reset_ctx *tur_cur_shift_reset = NULL;\n\n", "TUR_THREAD_LOCAL tur_shift_reset_ctx *tur_cur_shift_reset",
                 "tur_cur_shift_reset", "void **", "tur_tls_cur_shift_reset_ptr", "tur_shift_reset_ctx **");

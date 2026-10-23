@@ -889,8 +889,32 @@ char *emit_effects_cloneable_reset(EmitCtx *ctx, Buf *body, const Expr *e) {
  * shift sits (including inside an `if` branch).  Outside escape mode this is a
  * no-op and the shift's value flows on as before (the DK abort-value model, or
  * the legacy degrade). */
-static void emit_shift_escape_abort(EmitCtx *ctx, Buf *body, const char *result) {
-    if (!ctx->in_shift_escape || !ctx->shift_escape_ctype) return;
+static void emit_shift_escape_abort(EmitCtx *ctx, Buf *body, const char *result,
+                                    const Expr *e) {
+    if (!ctx->in_shift_escape || !ctx->shift_escape_ctype) {
+        /* direct-shift-outside-lexical-reset-not-abortive: no reset in this
+         * function, but one further out may have a landing live -- a direct
+         * reset in a caller (emit_effects_reset), or a CPS reset's at the
+         * cps->direct call that reached here (cps_reset_landing_open).  Abort
+         * to it as the DK machine's root case does: the value travels as the
+         * shift's own bits, and __dk_reset_abort restores the machine's state
+         * and frees the roots of any entries it leaves.  A shift0 has put
+         * back the landing it hid for its receiver by now. */
+        const char *ct = type_kind_is_order_spillable(e->type.kind)
+                             ? type_c_name(e->type) : NULL;
+        if (!ct) return;
+        indent_buf(body, ctx->indent);
+        buf_puts(body, "if (tur_cur_shift_reset) {\n");
+        indent_buf(body, ctx->indent + 4);
+        buf_printf(body, "%s __sv = %s;\n", ct, result);
+        indent_buf(body, ctx->indent + 4);
+        buf_puts(body, "memcpy(&tur_cur_shift_reset->result, &__sv, sizeof __sv);\n");
+        indent_buf(body, ctx->indent + 4);
+        buf_puts(body, "__dk_reset_abort(tur_cur_shift_reset);\n");
+        indent_buf(body, ctx->indent);
+        buf_puts(body, "}\n");
+        return;
+    }
     /* The value is copied at the reset's own C type, bit for bit: a cast
      * through int64_t would convert a double's value.  Guarded on the stack
      * head, so a shift reached with no landing live keeps its old value. */
@@ -945,7 +969,7 @@ char *emit_effects_shift(EmitCtx *ctx, Buf *body, const Expr *e) {
     }
     free(k_fn);
     free(body_val);
-    emit_shift_escape_abort(ctx, body, result);
+    emit_shift_escape_abort(ctx, body, result, e);
     return result;
 }
 
@@ -962,12 +986,15 @@ char *emit_effects_shift0(EmitCtx *ctx, Buf *body, const Expr *e) {
 
     char *k_fn = emit_value(ctx, body, e->as.shift0_.k_fn);
     char *popped = NULL;
-    if (ctx->in_shift_escape && ctx->shift_escape_ctype) {
+    bool escape = ctx->in_shift_escape && ctx->shift_escape_ctype;
+    /* Outside escape mode the landing a caller's reset left live is popped
+     * the same way (direct-shift-outside-lexical-reset-not-abortive). */
+    if (escape || type_kind_is_order_spillable(e->type.kind)) {
         popped = fresh_tmp(ctx);
         indent_buf(body, ctx->indent);
         buf_printf(body, "tur_shift_reset_ctx *%s = tur_cur_shift_reset;\n", popped);
         indent_buf(body, ctx->indent);
-        buf_printf(body, "if (%s) tur_cur_shift_reset = %s->prev;\n", popped, popped);
+        buf_printf(body, "int %s_h = __dk_reset_hide(%s);\n", popped, popped);
     }
 
     /* Check if this is a closure call by looking at the expression */
@@ -994,10 +1021,10 @@ char *emit_effects_shift0(EmitCtx *ctx, Buf *body, const Expr *e) {
     free(body_val);
     if (popped) {
         indent_buf(body, ctx->indent);
-        buf_printf(body, "tur_cur_shift_reset = %s;\n", popped);
-        free(popped);
+        buf_printf(body, "__dk_reset_unhide(%s, %s_h);\n", popped, popped);
     }
-    emit_shift_escape_abort(ctx, body, result);
+    emit_shift_escape_abort(ctx, body, result, e);
+    free(popped);
     return result;
 }
 

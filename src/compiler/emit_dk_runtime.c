@@ -1678,7 +1678,7 @@ void emit_cps_runtime_prelude(Buf *out) {
 "__attribute__((unused)) static void __dk_reset_save(tur_shift_reset_ctx *rs) {\n"
 "    rs->dk_driver = (void *)g_dk_driver; rs->dk_pend = (void *)g_dk_pend_perform;\n"
 "    rs->dk_depth = __dk_entry_depth; rs->dk_reap_mark = __dk_reap_n; rs->pending = 0;\n"
-"    rs->dk_entries = NULL;\n"
+"    rs->dk_entries = NULL; rs->dk_chain = NULL; rs->dk_skip = 0;\n"
 "}\n"
 /* shift-abort-across-nested-dk-entries: an abort leaves every entry between
  * the shift and the landing without running its exit, and the innermost one's
@@ -1706,10 +1706,31 @@ void emit_cps_runtime_prelude(Buf *out) {
 "    return 0;\n"
 "}\n"
 "__attribute__((unused)) static intptr_t dk_run(DK *k, intptr_t v);\n"
-"__attribute__((unused)) static intptr_t __dk_reset_abort_to(DK *k, int64_t w) {\n"
+"__attribute__((unused)) static intptr_t __dk_reset_abort_to(DK *k, int64_t w, int skip) {\n"
 "    for (; k && k->kind != DKK_DONE; k = k->next)\n"
-"        if (k->kind == DKK_PROMPT && k->tag == 1) return dk_run(k->next, (intptr_t)w);\n"
+"        if (k->kind == DKK_PROMPT && k->tag == 1 && skip-- == 0) return dk_run(k->next, (intptr_t)w);\n"
 "    return (intptr_t)w;\n"
+"}\n"
+/* direct-shift-outside-lexical-reset-not-abortive: a shift0 runs its receiver
+ * with the reset it aborts to removed.  For a direct landing that is a pop;
+ * for a call landing whose chain holds another reset prompt past the hidden
+ * ones it is one more hidden prompt, so a shift inside the receiver lands on
+ * the next reset out on the same chain.  Undone (__dk_reset_unhide) before
+ * the shift0 aborts to the landing. */
+"__attribute__((unused)) static int __dk_reset_hide(tur_shift_reset_ctx *rs) {\n"
+"    if (!rs) return 0;\n"
+"    if (rs->dk_chain) {\n"
+"        int n = 0;\n"
+"        for (DK *k = (DK *)rs->dk_chain; k && k->kind != DKK_DONE; k = k->next)\n"
+"            if (k->kind == DKK_PROMPT && k->tag == 1) n++;\n"
+"        if (n > rs->dk_skip + 1) { rs->dk_skip++; return 1; }\n"
+"    }\n"
+"    tur_cur_shift_reset = rs->prev;\n"
+"    return 0;\n"
+"}\n"
+"__attribute__((unused)) static void __dk_reset_unhide(tur_shift_reset_ctx *rs, int hid) {\n"
+"    if (!rs) return;\n"
+"    if (hid) rs->dk_skip--; else tur_cur_shift_reset = rs;\n"
 "}\n"
 "__attribute__((unused)) static void __dk_reset_abort(tur_shift_reset_ctx *rs) {\n"
 "    rs->pending = 0;\n"
@@ -1806,7 +1827,12 @@ void emit_cps_runtime_prelude(Buf *out) {
 "                DK *tail = reinstall\n"
 "                    ? dk_prompt(to_root ? DK_ROOT_TAG : k->tag, dk_done()) : dk_done();\n"
 "                sub = dk_append(sub, tail);\n"
+"                /* A shift0 with no prompt on this chain removes the landing\n"
+"                 * it will abort to for its body, as a direct shift0 does. */\n"
+"                tur_shift_reset_ctx *__hrs = (to_root && !reinstall) ? tur_cur_shift_reset : NULL;\n"
+"                int __hid = __dk_reset_hide(__hrs);\n"
 "                intptr_t bodyval = k->body(k->body_env, sub);\n"
+"                __dk_reset_unhide(__hrs, __hid);\n"
 "                dk_free(sub);\n"
 "                if (tur_panicking) {\n"
 "                    /* The shift body ran at the prompt, outside the part it cut off. */\n"
