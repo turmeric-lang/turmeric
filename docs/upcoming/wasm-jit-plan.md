@@ -1,7 +1,11 @@
 # Plan: the JIT engine in the browser (c2mir + MIR on wasm32)
 
 > **Status:** Draft, 2026-10-23. Investigation only; nothing built. P0 needs
-> no Emscripten and can start today (section 7).
+> no Emscripten and can start today (section 7). **Fork state verified
+> 2026-10-23** (section 6.1): the vendored copy is byte-identical to the
+> fork's `master`, every wasm branch is merged into it, and c2mp pins a
+> commit 23 behind it, so there are no patches to reconcile -- only a pin
+> to bump on c2mp's side and a CI leg to add on the fork's.
 > **Type:** JIT engine (`src/jit_engine.c`, `external/mir/`), web build
 > (`src/CMakeLists.txt` `tur_wasm`, `src/web/wasm_glue.c`), driver split
 > (`src/driver/pipeline.c`), emitter (one knob, section 5.6).
@@ -147,12 +151,13 @@ that plan measured is a bonus, not the reason.
 ### 5.1 Build shape
 
 - `cmake/mir.cmake` gains an Emscripten arm: `mir.c` and `c2mir/c2mir.c`
-  only (no `mir-gen.c`); `mir.c` includes `mir-wasm.c` under
-  `__EMSCRIPTEN__` the way the fork's own CMake does. **Verify in P1** that
-  the vendored `mir.c` carries that `#elif defined(__EMSCRIPTEN__)` branch
-  and the `mir-code-alloc-wasm.c` include; c2mp's old `emcc-setup.sh`
-  patched both in by `sed` before the fork absorbed them, and
-  `tools/update-mir.sh` copies files, not build rules.
+  only (no `mir-gen.c`), mirroring the fork's own `if(EMSCRIPTEN)` block.
+  **Verified 2026-10-23:** the vendored `mir.c` selects the target with
+  `#elif defined(__wasm32__) || defined(__EMSCRIPTEN__)` (`mir.c:6996`,
+  including `mir-wasm.c`) and the code allocator the same way
+  (`mir.c:731`, `mir-code-alloc-wasm.c`); `c2mir.c` does likewise at
+  `:41`, `:369` and `:12749` for `c2mir/wasm32/`. No `sed` step: c2mp's
+  `scripts/emcc-setup.sh` is the pre-merge relic (section 6.1).
 - A `TUR_WASM_JIT` option (default ON when `TUR_WASM`) adds `jit_engine.c`,
   `turi/jit_ffi.c`, and the MIR TUs to the `tur_wasm` emcc command, with
   `TUR_HAVE_JIT=1`. Link flags added: `-sWASM_BIGINT`, and
@@ -336,6 +341,33 @@ below rides together once P1 has the list:
 Nothing in this plan edits `external/mir/` by hand; the sync is
 `tools/update-mir.sh` after the fork PR merges.
 
+### 6.1 Fork state, verified 2026-10-23
+
+Checked against a clone of `turmeric-lang/mir` and `git ls-remote`:
+
+| Question | Answer |
+|---|---|
+| Does `external/mir/` match the fork? | Byte-identical to `master` at `fa8a5d69` (every file compared; `UPSTREAM` agrees). `tools/update-mir.sh` lists `mir-wasm.c` and `c2mir/wasm32` explicitly, so a re-sync keeps the target. |
+| Is the wasm work on a branch? | No. `wasm` (`7106386`, the original target with foreign calls) and `fix/wasm-interp-recursion` (`cfb17d8`: interpreted-to-interpreted calls, callbacks via `addFunction`, `%lld`, bundled headers dropped, implicit-declaration warning) are both ancestors of `master`; the second merged as fork PR #2 (`b7e72a9`). A first shallow check reported them 109 commits "ahead" -- that was a `--depth=1` fetch cutting the merge commit's parents, not divergence. |
+| What does c2mp pin? | `b7e72a9`, the PR #2 merge, in its `CMakeLists.txt`. That is **23 commits behind** `master` and a strict ancestor of it: this repo's pin is a superset of c2mp's. Its docs still cite `7106386` and `cfb17d85`. |
+| Does c2mp patch MIR? | Not any more. `scripts/emcc-setup.sh` (the `sed` patches, the stub `mir-wasm.c`, the types header) is unreferenced by its Justfile and CMake -- only `docs/wasm-ffi-notes.md` mentions it. |
+| Does the fork's CI run the wasm target? | No. `.github/workflows/test.yml` is the four native legs; `wasm-tests/run.sh` (emcc + node, 4 cases) runs by hand only. |
+| Has upstream moved? | Yes: `vnmakarov/mir` `master` is at `861c295`, past the fork's base `a8ab7c3`. Not measured how far; the "point `update-mir.sh` back at upstream when it has every fix" note in `VENDORED.md` stays open. |
+| Stray branches | Merged and deletable: `__probe` (points at `b7e72a9`), `wasm`, `fix/wasm-interp-recursion`, `claude/aarch64-hfa-abi`, `claude/c2mir-rejects-uint128-hmemc3`, `feat/c2mir-macos-sdk-support`, `fix/llp64-uint-llong-conversion`, `fix/make-one-ret-distinct-targets`, `fix/pragma-pack-macro-arg`, `integration/pragma-pack-and-aarch64-hfa`, `jit/win64-wrapper-offsets`. Unmerged: `claude/ci-baseline-pre-mir10` (one CI-baseline commit). A session cannot delete remote branches (CLAUDE.md), so this is the owner's cleanup. |
+
+So "reconcile the turmeric patches and the c2mp patches" reduces to three
+small actions, none of them a merge:
+
+1. **c2mp:** bump `GIT_TAG` to `fa8a5d69` (or whatever `master` is when the
+   fork PR of section 6 lands), delete `scripts/emcc-setup.sh`, and update
+   the two doc citations. Its build already uses the fork's `if(EMSCRIPTEN)`
+   block, so nothing else changes.
+2. **Fork:** add a wasm leg to `test.yml` (emsdk + node, running
+   `wasm-tests/run.sh`), so the target both repos depend on is covered by
+   the same CI that gates every other fork PR. This rides the section 6 PR,
+   or precedes it as its own one-at-a-time PR.
+3. **This repo:** nothing. The pin is current.
+
 ## 7. Phases
 
 ### P0 -- the corpus under the interpreter, natively (no Emscripten)
@@ -346,7 +378,8 @@ free and answers the two questions that decide the shape of P1: which
 fixtures break under interpretation at all (the `setjmp` families of 5.6
 are the prediction), and how far the interpreter is from the generator and
 from `turi` on the shapes Try Turmeric's examples use. Record it in
-`docs/reported/` or this plan's status line.
+`docs/reported/` or this plan's status line. This is the one claim in
+section 4 still unmeasured after the 2026-10-23 verification pass.
 
 ### P1 -- the spike
 
@@ -356,8 +389,8 @@ the `__EMSCRIPTEN__` arm stubbed to the minimum, linked into a copy of the
 section 1 `c-mix` program run under node. Measure c2mir time for a pruned
 hello TU (native is ~120 ms, 80-85% of end-to-end), module size delta over
 today's `turmeric.wasm`, recursion depth with our frame, and the JS-trampoline
-cost per runtime call. Confirm the vendored `mir.c` builds the wasm target
-without `sed`.
+cost per runtime call. The fork's `wasm-tests/run.sh` is the smallest
+working emcc command line for the engine and the right starting point.
 
 ### P2 -- `tur_front`
 
