@@ -998,6 +998,20 @@ bool expr_subtree_has_inline_c(const Expr *e) {
         case EX_SET:      return expr_subtree_has_inline_c(e->as.set_.value);
         case EX_WHILE:    return expr_subtree_has_inline_c(e->as.while_.cond)
                               || expr_subtree_has_inline_c(e->as.while_.body);
+        /* letrec-struct-arg-and-env-leak (leak 2): `pack`, `open` and the
+         * method call on an open-bound value are emitter code -- a record
+         * build, a field read, a witness-vtable call -- around their operands.
+         * Left to `default`, a closure whose body opened an existential read as
+         * "may hide inline C", so one returning a struct lost its scope-exit
+         * env drop (a 32-byte env a call in tur-plot's fold).  The fifth
+         * missing arm here. */
+        case EX_EXISTS_PACK:  return expr_subtree_has_inline_c(e->as.exists_pack_.value);
+        case EX_EXISTS_OPEN:  return expr_subtree_has_inline_c(e->as.exists_open_.packed)
+                                  || expr_subtree_has_inline_c(e->as.exists_open_.body);
+        case EX_EXISTS_DISPATCH:
+            for (uint32_t i = 0; i < e->as.exists_dispatch_.n_args; i++)
+                if (expr_subtree_has_inline_c(e->as.exists_dispatch_.args[i])) return true;
+            return false;
         default:
             /* Unmodeled kind -- conservatively assume it may hide inline-C. */
             return true;

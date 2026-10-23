@@ -99,7 +99,6 @@ directory is worse for triage than no index.
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [letrec-struct-arg-and-env-leak](letrec-struct-arg-and-env-leak.md) | low-medium (narrowed 2026-10-21: the struct-argument box is fixed; the env leak with `open` remains) | A by-value struct argument to a `letrec` closure is malloc-boxed at the call and never freed (per iteration when the self-call is not a loop), and a `letrec` whose body opens a captured existential and takes a struct argument never drops its env. Found by LeakSanitizer in tur-plot's folds, which are now top-level `defn`s. |
 
 ## Found writing the typeclass API docs (filed 2026-10-19)
 

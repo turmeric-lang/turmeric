@@ -1,0 +1,1 @@
+leak 2 of letrec-struct-arg-and-env-leak: the letrec env when the body opens an existential

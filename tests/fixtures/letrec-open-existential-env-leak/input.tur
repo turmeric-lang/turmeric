@@ -1,0 +1,24 @@
+; leak 2 of letrec-struct-arg-and-env-leak: a letrec closure whose body opens
+; a captured existential and that returns a struct dropped no env -- `open`
+; had no arm in expr_subtree_has_inline_c, so the body read as "may hide
+; inline C" and the struct-result closure lost its scope-exit drop.  Run under
+; LeakSanitizer by tests/run-leak-check.sh.
+(defclass Sized [a] (size [x] : float))
+(defstruct Sq [s : float])
+(definstance Sized [Sq] (size [x] : float (.s x)))
+(defstruct Acc :copy [lo : float  hi : float])
+(defn widen [a : Acc  x : float] : Acc
+  (make-struct Acc (if (< x (.lo a)) x (.lo a)) (if (> x (.hi a)) x (.hi a))))
+(defn span [rs : (Vec (exists [a] [(Sized a)] a))] : Acc
+  (letrec [go (fn [i : int  acc : Acc] : Acc
+                (if (>= i (vec-len rs)) acc
+                  (go (+ i 1) (widen acc (open (vec-get rs i) [a v] (size v))))))]
+    (go 0 (make-struct Acc 0.0 0.0))))
+(defn main [] : int
+  (let [rs (:: (vec-new) (Vec (exists [a] [(Sized a)] a)))]
+    (vec-push! rs (pack (Sq 2.5) (exists [a] [(Sized a)] a)))
+    (vec-push! rs (pack (Sq 4.25) (exists [a] [(Sized a)] a)))
+    (println (.hi (span rs)))
+    (println (.hi (span rs)))
+    (vec-free rs))
+  0)
