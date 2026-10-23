@@ -237,9 +237,15 @@
 ;;; named function`); a non-function is `expected ptr<void>, got int`; and a poly
 ;;; function cannot be stored in a list or option.
 ;;;
-;;; Known gap: nothing checks that the function passed really is generic. Passing
-;;; `inc : int -> int` where `(forall [a] (-> a a))` is expected is accepted, and
-;;; applying it to a string reads garbage.
+;;; The function passed must be generic wherever the forall body has a bare bound
+;;; variable: its parameter there is a type parameter (`[A] [x : A]`), `any`, or
+;;; un-annotated. Passing `inc : int -> int` where `(forall [a] (-> a a))` is
+;;; expected is `rank-2 argument 'inc' is not generic` (TUR-E0001), for a named
+;;; function, a lambda, or a function defined later in the file alike. When the
+;;; callee only ever applies it at the type it handles, ascribe it to the forall
+;;; type to say so: `(apply-poly (:: inc (forall [a] (-> a a))) 7)`. The
+;;; ascription is trusted, not checked. Not checked yet: the result type, and a
+;;; variable under a type application such as `(List a)`.
 ;;;
 ;;; Parameters:
 ;;;   [a ...]       -- the bound type variables

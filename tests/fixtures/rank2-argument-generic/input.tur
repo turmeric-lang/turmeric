@@ -1,0 +1,51 @@
+;; rank2-argument-genericity: what a `forall [a]` parameter accepts.  The
+;; function passed must be generic where the forall body has `a`: a type
+;; parameter, an un-annotated parameter, or a constrained generic.  An
+;; ascription to the forall type is the trusted opt-out for a function the
+;; checker cannot see is generic enough for how the callee uses it.
+
+(defclass Show [a] (show [x] : cstr))
+(definstance Show [int]
+  (show [x] : cstr
+    ```c
+    char *buf = (char *)malloc(24);
+    snprintf(buf, 24, "%lld", (long long)x);
+    return (const char *)buf;
+    ```))
+(definstance Show [cstr]
+  (show [x] : cstr x))
+
+(defn both [f (forall [a] (-> a a)) x : int s : cstr] : int
+  (do (println (f s)) (f x)))
+
+(defn show-both [f (forall [a] [(Show a)] (-> a cstr)) x : int s : cstr] : cstr
+  (do (println (f s)) (f x)))
+
+;; Generic: a type parameter.
+(defn id [A] [x : A] : A x)
+
+;; Generic: an un-annotated parameter is one untyped word.
+(defn id-word [x] x)
+
+;; Generic and constrained like the forall.
+(defn shown [A] [(Show A)] [x : A] : cstr (show x))
+
+;; Int-only: passed only to a callee that applies it at int.
+(defn inc [x : int] : int (+ x 1))
+(defn apply-int [f (forall [a] (-> a a)) x : int] : int (f x))
+
+(defn main [] : int
+  (println (both id 1 "a"))
+  (println (both id-word 2 "b"))
+  (println (show-both shown 3 "c"))
+  ;; A let-bound alias of a generic function.
+  (let [g id]
+    (println (both g 4 "d")))
+  ;; A function defined below this call.
+  (println (both later-id 5 "e"))
+  ;; The opt-out: the ascription asserts the genericity.
+  (println (apply-int (:: inc (forall [a] (-> a a))) 6))
+  (println (apply-int (:: (fn [x : int] : int (* x 7)) (forall [a] (-> a a))) 7))
+  0)
+
+(defn later-id [A] [x : A] : A x)

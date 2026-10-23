@@ -10,9 +10,12 @@
 (defn inc [x : int] : int (+ x 1))
 (defn double-it [x : int] : int (* x 2))
 
+; The functions passed to the rank-2 parameters below are not generic, so
+; each is ascribed to the parameter's forall type -- the trusted opt-out of
+; rank2-argument-genericity, which asserts what the checker cannot see.
 (defn main [] : int
   ; apply inc 3 times to 0: 0+3 = 3
-  (println (church-apply inc 3 0))
+  (println (church-apply (:: inc (forall [a] (-> a a))) 3 0))
   ; apply double-it 4 times to 1: 1*2^4 = 16
-  (println (church-apply double-it 4 1))
+  (println (church-apply (:: double-it (forall [a] (-> a a))) 4 1))
   0)

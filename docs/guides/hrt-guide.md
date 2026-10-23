@@ -61,6 +61,54 @@ defn swap-apply [f (forall [a b] (-> a b a)) x :int y :int] :int
   f(x y)
 ```
 
+### What you may pass
+
+A `forall [a]` parameter is a promise to the callee: it may apply the function
+at any type it likes. So the function a caller passes must be generic wherever
+the forall body has a bare bound variable -- its parameter there is a type
+parameter, `any`, or un-annotated:
+
+```turmeric
+(defn id [A] [x : A] : A x)    ; generic: OK
+(defn id-word [x] x)           ; un-annotated, one untyped word: OK
+(defn inc [x : int] : int (+ x 1))
+
+(apply-poly id 7)              ; => 7
+(apply-poly inc 7)             ; error[TUR-E0001]: rank-2 argument 'inc' is not generic
+```
+
+```sweet-exp
+defn id [A] [x :A] :A x
+defn id-word [x] x
+defn inc [x :int] :int {x + 1}
+
+apply-poly(id 7)               ; => 7
+apply-poly(inc 7)              ; error[TUR-E0001]: rank-2 argument 'inc' is not generic
+```
+
+Without the check, `inc` would be applied to whatever type the callee chose --
+a callee that also did `(f "hi")` added one to the string's address. A lambda
+is checked the same way, and so is a function defined later in the file.
+
+For a constrained forall, `(forall [a] [(Show a)] (-> a cstr))`, pass a
+generic function with the same constraint: `(defn shown [A] [(Show A)] [x : A]
+: cstr (show x))`.
+
+**The opt-out.** When you know the callee only ever applies the function at a
+type it handles, ascribe it to the forall type. The ascription is trusted, not
+checked:
+
+```turmeric
+(apply-poly (:: inc (forall [a] (-> a a))) 7)  ; => 8
+```
+
+```sweet-exp
+apply-poly((:: inc (forall [a] (-> a a))) 7)  ; => 8
+```
+
+Not checked yet: the function's result type, and a bound variable under a type
+application, such as a parameter of type `(List a)`.
+
 ### Existential types
 
 Use `exists` to hide a type implementation:
@@ -98,8 +146,9 @@ Apply a single function uniformly over data, without fixing its type:
 
 (defn inc [x : int] : int (+ x 1))
 
-; At the call site, `inc` is wrapped automatically
-(apply-to-both inc 3 7)  ; => 12
+; `inc` is int-only and apply-to-both uses it only at int, so it is ascribed
+; to the forall type (see "What you may pass"); it is wrapped automatically
+(apply-to-both (:: inc (forall [a] (-> a a))) 3 7)  ; => 12
 ```
 
 ```sweet-exp
@@ -109,8 +158,9 @@ defn apply-to-both [f (forall [a] (-> a a)) x :int y :int] :int
 defn inc [x :int] :int
   {x + 1}
 
-; At the call site, `inc` is wrapped automatically
-apply-to-both(inc 3 7)  ; => 12
+; `inc` is int-only and apply-to-both uses it only at int, so it is ascribed
+; to the forall type (see "What you may pass"); it is wrapped automatically
+apply-to-both((:: inc (forall [a] (-> a a))) 3 7)  ; => 12
 ```
 
 ### Pattern 2: Church-numeral iteration
@@ -123,8 +173,8 @@ Apply a polymorphic function n times -- the essence of Church numerals:
     x
     (church-apply f (- n 1) (f x))))
 
-(church-apply inc 5 0)       ; => 5
-(church-apply double-it 3 1) ; => 8
+(church-apply (:: inc (forall [a] (-> a a))) 5 0)       ; => 5
+(church-apply (:: double-it (forall [a] (-> a a))) 3 1) ; => 8
 ```
 
 ```sweet-exp
@@ -133,8 +183,8 @@ defn church-apply [f (forall [a] (-> a a)) n :int x :int] :int
     x
     church-apply(f {n - 1} f(x))
 
-church-apply(inc 5 0)       ; => 5
-church-apply(double-it 3 1) ; => 8
+church-apply((:: inc (forall [a] (-> a a))) 5 0)       ; => 5
+church-apply((:: double-it (forall [a] (-> a a))) 3 1) ; => 8
 ```
 
 This works because HRT5 correctly propagates the poly fn type through recursive calls.
@@ -147,14 +197,16 @@ Thread a value through a sequence of polymorphic transforms:
 (defn pipe2 [f (forall [a] (-> a a)) g (forall [a] (-> a a)) x : int] : int
   (g (f x)))
 
-(pipe2 inc double-it 3)  ; => (3+1)*2 = 8
+(pipe2 (:: inc (forall [a] (-> a a))) (:: double-it (forall [a] (-> a a))) 3)
+; => (3+1)*2 = 8
 ```
 
 ```sweet-exp
 defn pipe2 [f (forall [a] (-> a a)) g (forall [a] (-> a a)) x :int] :int
   g(f(x))
 
-pipe2(inc double-it 3)  ; => (3+1)*2 = 8
+pipe2((:: inc (forall [a] (-> a a))) (:: double-it (forall [a] (-> a a))) 3)
+; => (3+1)*2 = 8
 ```
 
 ### Pattern 4: Let-binding of poly fn aliases
@@ -165,6 +217,8 @@ You can bind a poly fn to a local name and use it multiple times:
 (defn apply-poly [f (forall [a] (-> a a)) x : int] : int
   (f x))
 
+(defn id [A] [x : A] : A x)
+
 (defn use-poly-id [] : int
   (let [f id]  ; f is a poly fn alias for id
     (+ (apply-poly f 10) (apply-poly f 20))))
@@ -173,6 +227,8 @@ You can bind a poly fn to a local name and use it multiple times:
 ```sweet-exp
 defn apply-poly [f (forall [a] (-> a a)) x :int] :int
   f(x)
+
+defn id [A] [x :A] :A x
 
 defn use-poly-id [] :int
   let [f id]  ; f is a poly fn alias for id
@@ -214,8 +270,9 @@ Define typeclass methods that accept polymorphic function arguments:
 (definstance Transform []
   (transform [f x] (f x)))
 
-; Call with any function
-(.transform inc 5)  ; => 6
+; Call with a generic function, or ascribe an int-only one
+(.transform id 5)                               ; => 5
+(.transform (:: inc (forall [a] (-> a a))) 5)  ; => 6
 ```
 
 ```sweet-exp
@@ -225,8 +282,9 @@ defclass Transform []
 definstance Transform []
   transform([f x] f(x))
 
-; Call with any function
-.transform(inc 5)  ; => 6
+; Call with a generic function, or ascribe an int-only one
+.transform(id 5)                               ; => 5
+.transform((:: inc (forall [a] (-> a a))) 5)  ; => 6
 ```
 
 ### Pattern 7: Rank-3 types
@@ -312,6 +370,7 @@ The compiler automatically:
 |-------|-------|-----|
 | `arg N: expected ptr<void>, got int` | Non-function passed as poly fn arg | Pass a named function instead |
 | `rank-2 argument must be a named function` | Tried to pass a non-global binding | Use a top-level `defn` instead of a local fn |
+| `rank-2 argument 'f' is not generic` (TUR-E0001) | The function's parameter is a concrete type where the forall has a bound variable | Make it generic (`[A] [x : A]`), or ascribe it to the forall type: `(:: f (forall ...))` |
 | `function 'X' expects M argument(s), got N` | Arity mismatch | Check the poly fn param counts |
 
 ## See also

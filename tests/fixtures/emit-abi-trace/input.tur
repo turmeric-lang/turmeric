@@ -21,6 +21,9 @@
 (defn twice [x : int] : int
   (* x 2))
 
+;; The functions passed to the rank-2 parameters below are not generic, so
+;; each is ascribed to the parameter's forall type -- the trusted opt-out of
+;; rank2-argument-genericity, which asserts what the checker cannot see.
 (defn main [] : int
   ;; carrier: cube at :int keeps the int64_t carrier ABI
   (let [a (cube 3)]
@@ -29,7 +32,7 @@
   (let [b (cube 2.5)]
     (println b))
   ;; polymorphic-wrapper: twice is called through f's tur_poly_fn_t wrapper
-  (println (apply-twice twice 3 5))
+  (println (apply-twice (:: twice (forall [a] (-> a a))) 3 5))
   ;; dictionary: Eq method dispatch through the typeclass machinery
   (let [t1 (tuple2 1 2)
         t2 (tuple2 1 2)]

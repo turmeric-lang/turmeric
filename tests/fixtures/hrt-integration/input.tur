@@ -21,12 +21,15 @@
 
 (defn inc [x : int] : int (+ x 1))
 
+; The functions passed to the rank-2 parameters below are not generic, so
+; each is ascribed to the parameter's forall type -- the trusted opt-out of
+; rank2-argument-genericity, which asserts what the checker cannot see.
 (defn main [] : int
   ; let-bound poly fn through typeclass: inc(10) = 11
   (let [poly-id inc]
-    (println (.transform poly-id 10)))
+    (println (.transform (:: poly-id (forall [a] (-> a a))) 10)))
   ; apply-twice through typeclass: inc(inc(5)) = 7
-  (println (apply-twice inc 5))
+  (println (apply-twice (:: inc (forall [a] (-> a a))) 5))
   ; church-apply via typeclass dispatch inside: inc 4 times from 0 = 4
-  (println (church-apply inc 4 0))
+  (println (church-apply (:: inc (forall [a] (-> a a))) 4 0))
   0)

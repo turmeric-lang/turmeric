@@ -23,10 +23,12 @@
 (defn square32 [x :int32] :int32
   (as int32 (* (as int x) (as int x))))
 
+;; double32 / square32 are int32-only, so each is ascribed to the forall type:
+;; the trusted opt-out of rank2-argument-genericity.
 (defn main [] :int
   ;; Named function path: avoids int32->int64->int32 round-trip in wrapper
-  (println (as int (apply32 double32 21i32)))   ;; 42
-  (println (as int (apply32 square32 7i32)))    ;; 49
+  (println (as int (apply32 (:: double32 (forall [a] (-> a a))) 21i32)))   ;; 42
+  (println (as int (apply32 (:: square32 (forall [a] (-> a a))) 7i32)))    ;; 49
   ;; Chained: applies poly fn twice
-  (println (as int (apply32 double32 (apply32 double32 5i32))))  ;; 20
+  (println (as int (apply32 (:: double32 (forall [a] (-> a a))) (apply32 (:: double32 (forall [a] (-> a a))) 5i32))))  ;; 20
   0)

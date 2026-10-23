@@ -21,16 +21,19 @@
 (defn double32 [x : uint32] : uint32
   (as uint32 (* (as int x) 2)))
 
+;; The functions passed to the rank-2 parameters below are not generic, so
+;; each is ascribed to the parameter's forall type -- the trusted opt-out of
+;; rank2-argument-genericity, which asserts what the checker cannot see.
 (defn main [] : int
   ;; Named function through a poly fn param (non-closure path).
-  (println (as int (apply8 inc8 200u8)))
-  (println (as int (apply32 double32 100u32)))
+  (println (as int (apply8 (:: inc8 (forall [a] (-> a a))) 200u8)))
+  (println (as int (apply32 (:: double32 (forall [a] (-> a a))) 100u32)))
 
   ;; Closure through a poly fn param.
-  (println (as int (apply16 (fn [x : uint16] : uint16 (as uint16 (+ (as int x) 5))) 1000u16)))
+  (println (as int (apply16 (:: (fn [x : uint16] : uint16 (as uint16 (+ (as int x) 5))) (forall [a] (-> a a))) 1000u16)))
 
   ;; Chained: apply a poly fn to the result of another poly fn call.
-  (let [r (apply32 double32 (apply32 double32 3u32))]
+  (let [r (apply32 (:: double32 (forall [a] (-> a a))) (apply32 (:: double32 (forall [a] (-> a a))) 3u32))]
     (println (as int r)))
 
   0)
