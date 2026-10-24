@@ -34,6 +34,12 @@ sentence above does not cover them. If you touch this file, check
 `ls docs/reported/` against it -- an index that silently omits a quarter of the
 directory is worse for triage than no index.
 
+## Found by the quote-data corpus sweep (filed 2026-10-24)
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [carrier-adt-body-passes-int-return](carrier-adt-body-passes-int-return.md) | medium | A defn declared `: int` whose body returns a word-carried ADT (one holding a `(List ...)`, `Datum` included) compiles and returns a heap address, because the return check decides "aggregate" from the C spelling and a word-carried node spells `int64_t`. A by-value ADT gets TUR-E0709 for the same mistake; `--interpret` accepts every shape |
+
 ## Found adding trend lines and zoom to /ci (filed 2026-10-24)
 
 | Report | Severity | One line |
