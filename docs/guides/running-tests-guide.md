@@ -204,6 +204,7 @@ such patterns.
 | `TUR_SKIP_CROSSING_CHECK` | `run.sh` | `1`: skip the carrier-crossing audit |
 | `TUR_JIT_FALLBACK_UPDATE` | `run-jit.sh` | `1`: rewrite the cc-fallback baseline (refused in a sharded run) |
 | `TUR_HEADROOM_TOP` | `run-jit.sh` | How many of the slowest fixtures to report (default 8) |
+| `TUR_JIT_GEN` | `run-jit.sh` | Passed through to `tur jit` (`interp` runs the corpus on the MIR interpreter); under `interp` the 8 MiB `jit-musttail-8mib` check is a SKIP, since the interpreter makes no tail calls |
 
 Leak checking of *emitted* programs is a separate harness,
 `tests/run-leak-check.sh`, for fixtures carrying `requires.leak-check`.

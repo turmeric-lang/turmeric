@@ -49,7 +49,7 @@ directory is worse for triage than no index.
 
 | Report | Severity | One line |
 |---|---|---|
-| [jit-musttail-expands-to-nothing](jit-musttail-expands-to-nothing.md) | low (high for the wasm JIT) | `TUR_MUSTTAIL` is empty under c2mir, so mutual tail calls recurse under `tur jit`; the 1 GiB entry thread hides it (`tailcall-musttail-deep` passes by room), `TUR_JIT_GEN=interp` overflows, and the browser engine's ceiling is 1,696 frames. c2mir's `__builtin_jcall` is not a general tail call. Documented and pinned 2026-10-23 (`run-jit.sh`'s `jit-musttail-gap-pinned` expects the 8 MiB overflow); the fix is a MIR fork tail-call form. |
+| [mir-interp-tail-calls-grow-the-stack](mir-interp-tail-calls-grow-the-stack.md) | low (high for the wasm JIT) | The MIR interpreter runs `MIR_TCALL` (c2mir's `musttail`) as a call and a return, so a mutual tail-call cycle the emitter did not fuse grows the stack under `TUR_JIT_GEN=interp` -- and in the planned browser engine, whose ceiling is 1,696 frames. The generator half, `jit-musttail-expands-to-nothing`, was fixed 2026-10-24 (mir#13). |
 
 ## Found executing generator-type-plan (filed 2026-10-23)
 

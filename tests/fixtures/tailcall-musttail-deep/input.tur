@@ -11,11 +11,12 @@
 ;; `requires.musttail` skips this fixture in tests/run.sh where the fixture
 ;; compiler does not honour the attribute: gcc 13 expands `TUR_MUSTTAIL` to
 ;; nothing, and there this cycle is ordinary recursion that overflows at -O0 --
-;; exactly why T5's `goto` is the floor and musttail is not.  The JIT's c2mir
-;; also drops the attribute, and tests/run-jit.sh runs this fixture: it PASSES
-;; there only because the JIT runs `main` on a 1 GiB entry thread.  On an
-;; 8 MiB one it overflows, which run-jit.sh pins (jit-musttail-gap-pinned,
-;; jit-musttail-expands-to-nothing).  The `flags`
+;; exactly why T5's `goto` is the floor and musttail is not.  Under `tur jit`
+;; c2mir defines __MIRC_MUSTTAIL__ and MIR makes the call a tail jump, and
+;; tests/run-jit.sh runs this fixture twice: in the corpus, on the JIT's 1 GiB
+;; entry thread, and again on an 8 MiB one, where the cycle overflows unless
+;; the calls are jumps (jit-musttail-8mib; jit-musttail-expands-to-nothing).
+;; The `flags`
 ;; file builds at -O0 (`--debug`): at -O2 clang would sibling-call the cycle
 ;; anyway and the fixture would measure the optimizer.
 ;;
