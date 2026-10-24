@@ -1,5 +1,15 @@
 # `TUR_MUSTTAIL` is empty under `tur jit`, so mutual tail calls grow the stack there
 
+**Status 2026-10-23: documented and pinned; the fix itself is fork work.**
+The macro's emitted comment and the JIT guide's `TUR_MAIN_STACK_MB` row say
+that `tur jit` makes no guaranteed tail calls and that its entry stack is what
+hides it, and `tailcall-musttail-deep`'s own comment no longer claims MIR-gen's
+code does not overflow (it does, on 8 MiB). `tests/run-jit.sh` now runs that
+fixture on an 8 MiB entry stack after the corpus and expects the overflow
+(`jit-musttail-gap-pinned`); it fails, asking for this report to be closed,
+the day the cycle runs there. What is left is direction 1 below: a tail-call
+form in MIR/c2mir, batched into the fork's one open PR.
+
 **Severity:** low natively, high for the planned wasm JIT. Found 2026-10-23
 running the fixture corpus under `TUR_JIT_GEN=interp` for
 [wasm-jit-plan](../upcoming/wasm-jit-plan.md) P0.

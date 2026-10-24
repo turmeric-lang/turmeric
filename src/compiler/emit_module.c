@@ -10995,7 +10995,8 @@ void ensure_musttail_macro(EmitCtx *ctx) {
     if (!out) return;
     buf_puts(out,
         "/* proper-tail-calls T2b: a guaranteed tail call where the C compiler\n"
-        " * can promise one, and an ordinary `return f(args);` elsewhere. */\n"
+        " * can promise one, and an ordinary `return f(args);` elsewhere -- `tur jit`\n"
+        " * included (c2mir has no musttail; its 1 GiB entry stack hides that). */\n"
         "#ifndef TUR_MUSTTAIL\n"
         "#  if defined(__clang__) && defined(__has_attribute) && \\\n"
         "     ((!defined(__wasm__) && (defined(__x86_64__) || defined(__aarch64__))) || \\\n"
