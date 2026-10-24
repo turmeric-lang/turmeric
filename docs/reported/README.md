@@ -34,6 +34,38 @@ sentence above does not cover them. If you touch this file, check
 `ls docs/reported/` against it -- an index that silently omits a quarter of the
 directory is worse for triage than no index.
 
+## Found checking the installed-spice `:bin` conflict exemption (filed 2026-10-24)
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [installed-bin-entry-modules-still-importable](installed-bin-entry-modules-still-importable.md) | low-medium (silent wrong resolution) | The conflict check skips `:bin` entry files, but `spice_search` still puts them on the path, so a project-less `(import main)` picks the first installed tool's entry and hides the rest. A bin-name collision between `--path` installs is also refused as "not owned by tur" |
+
+## Found checking two agent claims: wasm stack depth, diag file 0 (filed 2026-10-24)
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [wasm-linear-stack-overflow-unchecked](wasm-linear-stack-overflow-unchecked.md) | medium (planned wasm JIT) | The wasm link has no `-sSTACK_OVERFLOW_CHECK`, so a linear-stack overflow is an OOB trap or memory corruption. The JS limit binds first only for plain small-frame recursion; a 16 KiB local overflows near depth 1,000. `=2` turns every measured case into a clean `stack overflow` abort |
+| [diag-file0-registrations-outlive-their-frame](diag-file0-registrations-outlive-their-frame.md) | low (latent) | The open residue of the archived manifest file-0 fix: `pkg_lock_read`, `fmt_format_buffer`, `cmd_format`, `cmd_explain` and the driver's `compile_to_*` leave `files_[0]` naming a dead frame. No caller trips it. `global.c` is not affected (it saves and restores) |
+
+## Found checking tvm's installer rc choice (filed 2026-10-24)
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [tvm-install-bash-rc-choice-shadows-profile](tvm-install-bash-rc-choice-shadows-profile.md) | medium-low | With no `.bashrc`, tvm's `install.sh` creates `.bash_profile`, which stops bash login shells reading an existing `.profile`, and interactive non-login shells still don't load tvm. On macOS it writes `.bashrc`, which Terminal's login shells skip. Fix in turmeric-lang/tvm: choose by platform, and don't prompt (it runs as `curl \| sh`) |
+
+## Found checking r7rs-heap-frames-plan H6 against the JIT (filed 2026-10-24)
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [jit-inline-c-thread-local-collapses-to-global](jit-inline-c-thread-local-collapses-to-global.md) | medium (silent wrong value) | Under `tur jit`, c2mir only warns on inline C's `_Thread_local` and compiles it as one global shared by all threads (a two-thread probe prints `99` where cc prints `7`). The JIT guide promises a cc fallback, which happens only for `__thread` |
+
+## Found checking the wasm residue of mir-interp-tail-calls-grow-the-stack (filed 2026-10-24)
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [wasm-mir-interp-tail-call-keeps-allocas](wasm-mir-interp-tail-call-keeps-allocas.md) | medium (planned wasm JIT) | On wasm the MIR interpreter's `bend` is a no-op, so a tail call from a function that allocated keeps its allocas and a frame: about 350 B per call, and the module traps after about 24k calls at 16 MiB. A C-level stack restore does not help, because LLVM caches `eval`'s SP. An interpreter-owned frame arena would |
+| [c2mir-wasm-vararg-buffer-allocas-per-call](c2mir-wasm-vararg-buffer-allocas-per-call.md) | high (planned wasm JIT) | On wasm32, c2mir allocas a variadic call's argument buffer at the call site, so `printf` in a loop (`println` on an int) grows the stack 16 B per iteration until the function returns. About 1M prints overflow 16 MiB, with signs of memory corruption |
+
 ## Found by the quote-data corpus sweep (filed 2026-10-24)
 
 | Report | Severity | One line |
