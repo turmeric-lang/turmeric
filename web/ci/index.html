@@ -85,6 +85,13 @@
                 id="ci-tab-bench" aria-selected="false"
                 aria-controls="ci-panel-bench" data-tab="bench">Benchmarks</button>
       </div>
+      <div class="ci-range-group">
+      <!-- Shown while a window dragged out on a chart narrows the range. -->
+      <button type="button" class="ci-zoom" id="ci-zoom" hidden
+              title="Zoom back out to the whole range">
+        <t-icon name="zoom-in"></t-icon><span id="ci-zoom-label"></span>
+        <span class="x" aria-label="Clear zoom">&times;</span>
+      </button>
       <div class="ci-field ci-field--range">
         <label class="ci-field-label" for="ci-range">Range</label>
         <select class="ci-select" id="ci-range">
@@ -94,6 +101,7 @@
           <option value="7d" selected>Last 7 days</option>
           <option value="1d">Last 24 hours</option>
         </select>
+      </div>
       </div>
     </div>
 
@@ -110,10 +118,22 @@
           <div>
             <h2 class="ci-panel-title">Duration over time</h2>
             <p class="ci-panel-sub" id="ci-chart-sub"></p>
+            <p class="ci-panel-sub ci-panel-hint">
+              Drag across any chart to zoom every tab to that stretch of time;
+              double-click to zoom back out.
+            </p>
           </div>
-          <div class="ci-seg" role="group" aria-label="Y axis scale">
-            <button type="button" class="ci-seg-btn is-active" data-scale="linear">Linear</button>
-            <button type="button" class="ci-seg-btn" data-scale="log">Log</button>
+          <div class="ci-panel-controls">
+            <div class="ci-seg" role="group" aria-label="Line drawn per suite">
+              <button type="button" class="ci-seg-btn is-active" data-smooth="trend"
+                      title="Rolling median and spread band, raw runs faded">Trend</button>
+              <button type="button" class="ci-seg-btn" data-smooth="raw"
+                      title="A line through every run">Raw</button>
+            </div>
+            <div class="ci-seg" role="group" aria-label="Y axis scale">
+              <button type="button" class="ci-seg-btn is-active" data-scale="linear">Linear</button>
+              <button type="button" class="ci-seg-btn" data-scale="log">Log</button>
+            </div>
           </div>
         </div>
         <div class="ci-chart-wrap">
@@ -144,7 +164,9 @@
             <h2 class="ci-panel-title">Suite table</h2>
             <p class="ci-panel-sub">
               The same data as the chart, in full. Sorted by absolute change
-              across the selected range.
+              across the selected range: the median of the last few points
+              against the median of the first few, so one fast or slow runner
+              at either end does not decide it.
             </p>
           </div>
         </div>

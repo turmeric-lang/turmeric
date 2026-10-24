@@ -122,6 +122,32 @@
 .ci-tab:hover { color: var(--text-sec); }
 .ci-tab.is-active { color: var(--text-primary); background: var(--bg-hover); }
 
+.ci-range-group {
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
+  min-width: 0;
+}
+
+/* The zoom chip: the window a drag selected, and its way out. */
+.ci-zoom {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-family: 'Iosevka', monospace;
+  font-size: 12px;
+  color: var(--text-primary);
+  background: var(--bg-hover);
+  border: 1px solid var(--border-str);
+  border-radius: 999px;
+  padding: 6px 12px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.ci-zoom[hidden] { display: none; }
+.ci-zoom:hover { background: var(--bg-surface); }
+.ci-zoom .x { color: var(--text-dim); font-size: 14px; line-height: 1; }
+
 .ci-field--range { min-width: 0; }
 .ci-field--range .ci-select { min-width: 160px; }
 
@@ -288,6 +314,15 @@
 
 /* ── SEGMENTED TOGGLE ──────────────────── */
 
+.ci-panel-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  flex: none;
+}
+
+.ci-panel-hint { margin-top: 2px; color: var(--text-dim); }
+
 .ci-seg {
   display: inline-flex;
   background: var(--bg-panel);
@@ -337,7 +372,16 @@
   dominant-baseline: middle;
 }
 .ci-crosshair { stroke: var(--border-str); stroke-width: 1; stroke-dasharray: 3 3; }
-.ci-hit { fill: transparent; cursor: crosshair; }
+.ci-hit { fill: transparent; cursor: crosshair; touch-action: pan-y; }
+.is-brushing .ci-hit { cursor: col-resize; }
+.ci-brush { fill: var(--text-primary); fill-opacity: 0.08; stroke: var(--border-str); stroke-width: 1; }
+/* The trend view: a band for the spread, faded dots for the runs, and the
+ * rolling median as the only line. */
+.ci-series-band { fill-opacity: 0.12; stroke: none; }
+.ci-point-raw { fill-opacity: 0.4; }
+/* A run above the axis, pinned to its top edge. */
+.ci-point-over { fill-opacity: 0.7; }
+path.ci-point-fail { stroke-width: 1.5; }
 
 .ci-empty {
   padding: 44px 0;
@@ -391,6 +435,11 @@
   font-family: 'Iosevka', monospace;
   color: var(--text-primary);
   font-size: 11.5px;
+}
+.ci-tooltip-row .trend {
+  font-family: 'Iosevka', monospace;
+  color: var(--text-dim);
+  font-size: 11px;
 }
 
 /* ── LEGEND ────────────────────────────── */
@@ -651,5 +700,7 @@
   .ci-tabs-bar { flex-direction: column; align-items: stretch; }
   .ci-tabs { flex-wrap: wrap; }
   .ci-field--range .ci-select { min-width: 0; width: 100%; }
+  .ci-range-group { flex-direction: column; align-items: stretch; }
+  .ci-zoom { justify-content: center; }
 }
 

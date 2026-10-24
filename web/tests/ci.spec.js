@@ -394,7 +394,7 @@ test.describe('CI metrics dashboard', () => {
     // So assert on what is always drawn -- the series path in the DOM and at
     // least one run marker -- rather than on the line's own visibility.
     await expect(page.locator('#ci-chart .ci-series-line').first()).toBeAttached();
-    await expect(page.locator('#ci-chart .ci-point, #ci-chart .ci-point-fail').first()).toBeVisible();
+    await expect(page.locator('#ci-chart .ci-point, #ci-chart .ci-point-raw, #ci-chart .ci-point-fail').first()).toBeVisible();
 
     await page.locator('#ci-range').selectOption('all');
     await expect(page).toHaveURL(/range=all/);
@@ -801,6 +801,113 @@ test.describe('CI metrics dashboard', () => {
     const name = await target.getAttribute('data-suite');
     await target.click();
     await expect(page.locator(`#ci-legend .ci-legend-item[data-suite="${name}"]`)).toHaveCount(1);
+  });
+
+  // Drag across the plot from 30% of its width to past its right edge: the
+  // fixture's six runs are an hour apart, so that keeps the newest four.
+  // Raw mouse moves do not scroll, so bring the plot into view first.
+  async function dragZoom(page, hitId = '#ci-hit') {
+    await page.locator(hitId).scrollIntoViewIfNeeded();
+    const box = await page.locator(hitId).boundingBox();
+    const y = box.y + box.height / 2;
+    await page.mouse.move(box.x + box.width * 0.3, y);
+    await page.mouse.down();
+    await page.mouse.move(box.x + box.width * 0.7, y, { steps: 5 });
+    await page.mouse.move(box.x + box.width + 30, y, { steps: 5 });
+    await page.mouse.up();
+  }
+
+  test('dragging across a chart zooms every tab, and the zoom round-trips', async ({ page }) => {
+    await page.goto('/ci');
+    await expect(page.locator('#ci-body')).toBeVisible({ timeout: 20_000 });
+    const footer = page.locator('#ci-chart .ci-axis-title');
+    await expect(footer).toContainText('6 runs');
+    await expect(page.locator('#ci-zoom')).toBeHidden();
+    await dragZoom(page);
+    await expect(page.locator('#ci-zoom')).toBeVisible();
+    await expect(page).toHaveURL(/from=\d+&to=\d+/);
+    await expect(page.locator('#ci-zoom')).toBeVisible();
+    await expect(footer).toContainText('4 runs');
+    // The table reads the same window as the chart.
+    await expect(page.locator('#ci-table tbody tr').first().locator('td').nth(1)).toHaveText('4');
+
+    // The window is the page's, not the chart's: the line counts, five hours
+    // apart, have one row inside it.
+    await page.locator('.ci-tab[data-tab="code"]').click();
+    await expect(page.locator('#ci-loc-chart .ci-empty')).toContainText('Only one measurement');
+
+    // A shared link reopens on the window.
+    await page.reload();
+    await expect(page.locator('#ci-body')).toBeVisible({ timeout: 20_000 });
+    await expect(page.locator('#ci-zoom')).toBeVisible();
+    await page.locator('.ci-tab[data-tab="tests"]').click();
+    await expect(footer).toContainText('4 runs');
+
+    // Double-click zooms out; so does the chip.
+    await page.locator('#ci-hit').dblclick();
+    await expect(page.locator('#ci-zoom')).toBeHidden();
+    await expect(page).not.toHaveURL(/from=/);
+    await expect(footer).toContainText('6 runs');
+
+    await dragZoom(page);
+    await expect(page.locator('#ci-zoom')).toBeVisible();
+    await page.locator('#ci-zoom').click();
+    await expect(page.locator('#ci-zoom')).toBeHidden();
+    await expect(footer).toContainText('6 runs');
+  });
+
+  test('a click on the plot is not a zoom, and a new range clears one', async ({ page }) => {
+    await page.goto('/ci');
+    await expect(page.locator('#ci-body')).toBeVisible({ timeout: 20_000 });
+    await page.locator('#ci-hit').click();
+    await expect(page.locator('#ci-zoom')).toBeHidden();
+
+    await dragZoom(page);
+    await expect(page.locator('#ci-zoom')).toBeVisible();
+    await page.locator('#ci-range').selectOption('1d');
+    await expect(page.locator('#ci-zoom')).toBeHidden();
+    await expect(page).not.toHaveURL(/from=/);
+  });
+
+  test('the duration chart opens on the trend and can show raw runs', async ({ page }) => {
+    await page.goto('/ci');
+    await expect(page.locator('#ci-body')).toBeVisible({ timeout: 20_000 });
+
+    // Trend: one band and one line per suite, the runs as faded dots.
+    await expect(page.locator('.ci-seg-btn[data-smooth="trend"]')).toHaveClass(/is-active/);
+    await expect(page.locator('#ci-chart .ci-series-band')).toHaveCount(5);
+    await expect(page.locator('#ci-chart .ci-series-line')).toHaveCount(5);
+    await expect(page.locator('#ci-chart .ci-point-raw').first()).toBeAttached();
+    await expect(page).not.toHaveURL(/smooth=/);
+    await page.locator('#ci-hit').hover();
+    await expect(page.locator('#ci-tooltip .ci-tooltip-row .trend').first()).toHaveText(/^~/);
+
+    await page.locator('.ci-seg-btn[data-smooth="raw"]').click();
+    await expect(page).toHaveURL(/smooth=raw/);
+    await expect(page.locator('#ci-chart .ci-series-band')).toHaveCount(0);
+    await expect(page.locator('#ci-chart .ci-point').first()).toBeVisible();
+
+    await page.reload();
+    await expect(page.locator('#ci-body')).toBeVisible({ timeout: 20_000 });
+    await expect(page.locator('.ci-seg-btn[data-smooth="raw"]')).toHaveClass(/is-active/);
+    await expect(page.locator('#ci-chart .ci-series-band')).toHaveCount(0);
+  });
+
+  // One slow runner at the start of the range used to be the whole "Change":
+  // first point against last read -90% for a suite that never moved.
+  test('the table\'s change ignores one outlier at the edge of the range', async ({ page }) => {
+    const now = Math.floor(Date.now() / 1000);
+    const timings = Array.from({ length: 9 }, (_, i) => ({
+      branch: 'main', build_type: 'Debug', os: 'Linux', cc: 'GNU-13.3.0', nproc: 4, jit: false,
+      ts: now - i * 3600, sha: 'b'.repeat(40), run_id: String(i), suite: 'steady', status: 'pass',
+      duration_ms: i === 8 ? 10_000 : 1000, shard_index: null, shard_total: null, skip_reason: null,
+    }));
+    await page.unrouteAll();
+    await stubApi(page, { timings });
+    await page.goto('/ci');
+    await expect(page.locator('#ci-body')).toBeVisible({ timeout: 20_000 });
+    const row = page.locator('#ci-table tbody tr[data-suite="steady"]');
+    await expect(row.locator('td').nth(5)).toHaveText('0.0%');
   });
 
   test('layout does not overflow horizontally at 480px', async ({ page }) => {
