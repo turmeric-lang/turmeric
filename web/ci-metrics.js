@@ -25,7 +25,7 @@
 
 import './icons.js'; // <t-icon>
 import { GITHUB_URL } from './repo.js';
-import { DAY, STATUSES, rangeCutoff } from './ci-aggregate.js';
+import { DAY, STATUSES, rangeCutoff, prettyCPU } from './ci-aggregate.js';
 
 const API = '/api/ci';
 
@@ -148,8 +148,20 @@ const state = {
   // compacting would repaint every survivor when you remove a series.
   suites: new Array(MAX_SERIES).fill(null),
   statuses: new Set(STATUSES),
+  // Runner CPU models left out of the chart, the table and the sparklines --
+  // '' is the rows recorded before collect-suite-timings.py read the model.
+  // Run-by-run ranges only: a daily median already mixes machines.
+  cpuOff: new Set(),
   range: DEFAULT_RANGE,
+  // A window dragged out on any chart, { from, to } in unix seconds, or null.
+  // It narrows the preset range rather than replacing it: every tab filters
+  // by both, so the window you zoomed into on one chart is the one the others
+  // show. Cleared when the preset range changes.
+  zoom: null,
   scale: 'linear',
+  // 'trend' draws each suite's rolling median and spread band over faded raw
+  // points; 'raw' draws a line through every point, as the chart used to.
+  smooth: 'trend',
   sort: { col: 'delta', dir: 'desc' },
   sparkFilter: '',
   // The Test counts timeline (/api/ci/counts), fetched the first time its tab
@@ -216,6 +228,13 @@ function fmtPct(x) {
   return `${sign}${Math.abs(x) < 10 ? x.toFixed(1) : Math.round(x)}%`;
 }
 
+// An axis label on the Relative scale, whose values are 100 = the baseline.
+function fmtPctTick(v) {
+  const d = +(v - 100).toFixed(1);
+  if (d === 0) return '0%';
+  return `${d > 0 ? '+' : '−'}${Number.isInteger(d) ? Math.abs(d) : Math.abs(d).toFixed(1)}%`;
+}
+
 function fmtCount(n) {
   return n == null || Number.isNaN(n) ? '--' : Math.round(n).toLocaleString();
 }
@@ -274,8 +293,8 @@ function setTimings(t) {
   let xs;
   if (t.mode === 'run') {
     for (const [s, r, ms, st] of t.cells) {
-      const [ts, sha] = t.runs[r];
-      push(t.suites[s], { ts, ms, status: STATUSES[st], sha });
+      const [ts, sha, c] = t.runs[r];
+      push(t.suites[s], { ts, ms, status: STATUSES[st], sha, cpu: t.cpus?.[c] ?? '' });
     }
     xs = t.runs.map(([ts]) => ts);
   } else {
@@ -298,21 +317,25 @@ const dayMode = () => state.timings?.mode === 'day';
 // week still shows its last data.
 const latestOf = (rows) => rows.reduce((m, r) => Math.max(m, r.ts), 0);
 
-function locRows() {
-  const cutoff = rangeCutoff(latestOf(state.loc), state.range);
-  return state.loc.filter((r) => r.ts >= cutoff);
+// [lo, hi]: the preset range for a dataset whose newest row is `latestTs`,
+// narrowed to the zoom window when there is one.
+function windowOf(latestTs) {
+  const lo = rangeCutoff(latestTs, state.range);
+  return state.zoom
+    ? [Math.max(lo, state.zoom.from), state.zoom.to]
+    : [lo, Infinity];
 }
 
-function docsRows() {
-  const cutoff = rangeCutoff(latestOf(state.docs), state.range);
-  return state.docs.filter((r) => r.ts >= cutoff);
+const inWindow = ([lo, hi]) => (ts) => ts >= lo && ts <= hi;
+
+function windowed(rows) {
+  const keep = inWindow(windowOf(latestOf(rows)));
+  return rows.filter((r) => keep(r.ts));
 }
 
-function benchRows() {
-  const rows = state.bench ?? [];
-  const cutoff = rangeCutoff(latestOf(rows), state.range);
-  return rows.filter((r) => r.ts >= cutoff);
-}
+const locRows = () => windowed(state.loc);
+const docsRows = () => windowed(state.docs);
+const benchRows = () => windowed(state.bench ?? []);
 
 // The newest docs row that actually carries `key`, for the headline numbers:
 // the newest row may predate the field (published before it shipped) or lack the
@@ -324,13 +347,23 @@ function latestDocWith(key) {
   return null;
 }
 
+// The timings arrive already cut to the preset range, so only the zoom is
+// left to apply to them.
+const zoomKeep = () => (state.zoom ? inWindow([state.zoom.from, state.zoom.to]) : () => true);
+
+// The run axis, narrowed to the zoom window.
+const timingXs = () => state.xs.filter(zoomKeep());
+
 // suite -> [{ ts, ms, status, sha?, n? }], ascending by ts, with the status
 // filter applied. Status filtering is deliberately NOT applied to the run axis
 // (state.xs) -- a run where a suite failed is still a run.
 function bySuite() {
   const m = new Map();
+  const keep = zoomKeep();
+  const off = cpuOff();
   for (const [name, pts] of state.points) {
-    const kept = pts.filter((p) => state.statuses.has(p.status));
+    const kept = pts.filter((p) => state.statuses.has(p.status) && keep(p.ts)
+      && !off.has(p.cpu ?? ''));
     if (kept.length) m.set(name, kept);
   }
   return m;
@@ -346,21 +379,84 @@ function quantile(sorted, q) {
   return lo === hi ? sorted[lo] : sorted[lo] + (sorted[hi] - sorted[lo]) * (pos - lo);
 }
 
+const median = (xs) => quantile([...xs].sort((a, b) => a - b), 0.5);
+
+// ── TREND ───────────────────────────────────────────────────────────────────
+//
+// A suite's wall time moves ~15% from one run to the next with nothing
+// changed. Each CI job lands on whatever runner the pool hands it, and the
+// pool mixes machine speeds: in October 2026 tur_tests (a job of its own) took
+// ~12 min on most runners and ~7.5 min on about a quarter, at the same test
+// count, and the ~60 multi-second suites sharing one Linux aux job ran
+// 0.63-1.2x their typical time TOGETHER. That shared machine factor is ~40% of
+// a suite's spread; the rest is the suite's own. A line through every point
+// draws mostly both. The runner CPU filter (renderCpuField) takes out the
+// machine part once runs carry the model.
+//
+// The trend is a centred rolling MEDIAN, which a minority of fast or slow
+// runners cannot drag the way they drag a mean, then a moving mean of that,
+// which turns the median's flat steps into a line. The band is the same
+// window's interquartile range, so the spread is drawn as a width instead of
+// as zigzag. Only passing runs feed it: a failed run stopped early or ran into
+// its timeout, and neither is a measurement of how long the suite takes.
+
+// Odd, about a sixth of the series, between 3 and 21 points.
+function trendWindow(n) {
+  const k = Math.round(n / 6);
+  return Math.max(3, Math.min(21, k % 2 ? k : k + 1));
+}
+
+// Centred moving mean over a window of k, clipped at the ends.
+function movingMean(values, k) {
+  const h = (k - 1) / 2;
+  return values.map((_, i) => mean(values.slice(Math.max(0, i - h), i + h + 1)));
+}
+
+// values -> [{ mid, lo, hi }]: the median and quartiles of the window centred
+// on each point, clipped at the ends so the newest point's window is the
+// newest few runs, then each smoothed by a moving mean half as wide.
+function rollingQuartiles(values, k = trendWindow(values.length)) {
+  const h = (k - 1) / 2;
+  const q = values.map((_, i) => {
+    const w = values.slice(Math.max(0, i - h), i + h + 1).sort((a, b) => a - b);
+    return [quantile(w, 0.25), quantile(w, 0.5), quantile(w, 0.75)];
+  });
+  const m = h % 2 ? h : h + 1;
+  const [lo, mid, hi] = [0, 1, 2].map((j) => movingMean(q.map((r) => r[j]), m));
+  return values.map((_, i) => ({ mid: mid[i], lo: lo[i], hi: hi[i] }));
+}
+
+// A series' trend, from its passing points: [{ x, mid, lo, hi }].
+function trendOf(pts) {
+  const ok = pts.filter((p) => !p.fail);
+  const q = rollingQuartiles(ok.map((p) => p.y));
+  return ok.map((p, i) => ({ x: p.x, ...q[i] }));
+}
+
+// The median of the first few and of the last few values. Change is the one
+// against the other, not the last point against the first: at this spread one
+// lucky runner at either end decided first-vs-last, and the table, sorted by
+// it, ranked runner luck. `head` is also the Relative axis's 100%.
+function edgeMedians(values) {
+  const k = Math.min(trendWindow(values.length), Math.floor(values.length / 2)) || 1;
+  return { head: median(values.slice(0, k)), tail: median(values.slice(-k)) };
+}
+
 function suiteStats(series) {
   const stats = [];
   for (const [suite, pts] of series) {
     const ms = pts.map((p) => p.ms);
     const sorted = [...ms].sort((a, b) => a - b);
-    const first = ms[0];
-    const last = ms[ms.length - 1];
+    const { head, tail } = edgeMedians(ms);
     stats.push({
       suite,
       runs: pts.length,
       mean: mean(ms),
       p90: quantile(sorted, 0.9),
-      last,
-      delta: last - first,
-      deltaPct: first > 0 ? ((last - first) / first) * 100 : 0,
+      last: ms[ms.length - 1],
+      now: rollingQuartiles(pts.filter((p) => p.status !== 'fail').map((p) => p.ms)).at(-1)?.mid ?? ms[ms.length - 1],
+      delta: tail - head,
+      deltaPct: head > 0 ? ((tail - head) / head) * 100 : 0,
       status: pts[pts.length - 1].status,
       pts,
     });
@@ -401,8 +497,13 @@ function readURL() {
     // Keep empty entries: they are slot holes, not junk.
     suites: q.get('suites') ? q.get('suites').split(',') : null,
     statuses: q.get('status') ? q.get('status').split(',').filter(Boolean) : null,
+    // '|'-separated: a CPU model string can carry a comma. '-' is "not recorded".
+    cpuOff: q.get('nocpu') ? q.get('nocpu').split('|').map((c) => (c === '-' ? '' : c)) : null,
     range: q.get('range'),
+    from: Number(q.get('from')) || null,
+    to: Number(q.get('to')) || null,
     scale: q.get('scale'),
+    smooth: q.get('smooth'),
     loc: q.get('loc') ? q.get('loc').split(',').filter(Boolean) : null,
     docs: q.get('docs') ? q.get('docs').split(',').filter(Boolean) : null,
     tab: q.get('tab'),
@@ -421,8 +522,16 @@ function writeURL() {
   if (state.statuses.size !== STATUSES.length) {
     q.set('status', [...state.statuses].join(','));
   }
+  if (state.cpuOff.size) {
+    q.set('nocpu', [...state.cpuOff].map((c) => c || '-').join('|'));
+  }
   if (state.range !== DEFAULT_RANGE) q.set('range', state.range);
+  if (state.zoom) {
+    q.set('from', String(state.zoom.from));
+    q.set('to', String(state.zoom.to));
+  }
   if (state.scale !== 'linear') q.set('scale', state.scale);
+  if (state.smooth !== 'trend') q.set('smooth', state.smooth);
   // Only when it differs from the default pair, so a bare link stays bare.
   const loc = LOC_SERIES.map(([k]) => k).filter((k) => state.locKeys.has(k));
   if (loc.join(',') !== LOC_DEFAULT.join(',')) q.set('loc', loc.join(','));
@@ -601,6 +710,7 @@ function renderFilters() {
           </button>`).join('')}
       </div>
     </div>
+${renderCpuField()}
 
 `;
 
@@ -625,6 +735,18 @@ function renderFilters() {
     render();
   };
 
+  for (const btn of document.querySelectorAll('.ci-chip[data-cpu]')) {
+    btn.onclick = () => {
+      const c = btn.dataset.cpu;
+      if (state.cpuOff.has(c)) state.cpuOff.delete(c);
+      // Never the last one on: an empty CPU set is an empty page.
+      else if ([...cpuCounts().keys()].filter((k) => !state.cpuOff.has(k)).length > 1) {
+        state.cpuOff.add(c);
+      }
+      render();
+    };
+  }
+
   for (const btn of document.querySelectorAll('.ci-chip[data-status]')) {
     btn.onclick = () => {
       const s = btn.dataset.status;
@@ -637,6 +759,54 @@ function renderFilters() {
       render();
     };
   }
+}
+
+// CPU model -> runs in the (zoomed) range, over the run axis -- '' for runs
+// from before the model was recorded. Empty in a daily-median range.
+function cpuCounts() {
+  const counts = new Map();
+  if (dayMode()) return counts;
+  const keep = zoomKeep();
+  const seen = new Set();
+  for (const pts of state.points.values()) {
+    for (const p of pts) {
+      if (!keep(p.ts) || seen.has(p.ts)) continue;
+      seen.add(p.ts);
+      counts.set(p.cpu ?? '', (counts.get(p.cpu ?? '') ?? 0) + 1);
+    }
+  }
+  return counts;
+}
+
+// The CPU models actually left out here. A choice made in another range or
+// environment can name every model this one has, or none of them; it is kept
+// (it is in the URL) but never allowed to empty the chart.
+function cpuOff() {
+  const here = [...cpuCounts().keys()];
+  return here.some((c) => !state.cpuOff.has(c)) ? state.cpuOff : new Set();
+}
+
+// The runner-CPU chips: only once the range holds runs from two machines,
+// since one chip filters nothing. Same shape as the status chips.
+function renderCpuField() {
+  const counts = cpuCounts();
+  if (counts.size < 2) return '';
+  const order = [...counts].sort((a, b) => (a[0] === '') - (b[0] === '') || b[1] - a[1]
+    || a[0].localeCompare(b[0]));
+  return `
+    <div class="ci-field">
+      <span class="ci-field-label">
+        Runner CPU <span class="hint">— runs on each</span>
+      </span>
+      <div class="ci-chips">
+        ${order.map(([c, n]) => `
+          <button type="button" class="ci-chip" data-cpu="${esc(c)}"
+                  aria-pressed="${!cpuOff().has(c)}"
+                  title="${esc(c || 'Runs from before the CPU model was recorded')}">
+            ${esc(prettyCPU(c))} <span class="count">${n}</span>
+          </button>`).join('')}
+      </div>
+    </div>`;
 }
 
 // ── THE CHART ───────────────────────────────────────────────────────────────
@@ -661,9 +831,22 @@ function renderFilters() {
 //   directLabels  false where a title already names the one series
 //   fmtX      (x) => string               -- the tooltip head; a date for a
 //             chart of daily points, where a time of day would be invented
+//   baseline  the value the linear axis always includes and rules, 0 unless
+//             the chart is of something relative to a reference (100 = it)
+//   onZoom    ({ from, to } | null) => void -- a drag across the plot asks for
+//             that window, a double-click for none. Every chart zooms the one
+//             shared window by default.
+//
+// A series may carry `trend`: [{ x, mid, lo, hi }] (trendOf). It is then drawn
+// as its band and its trend line over faded raw points, and the tooltip gives
+// both numbers; a point's `tip`, when it has one, replaces fmtY(y) there. The
+// y axis then fits the trends rather than the extremes: a
+// run more than half again above the highest band is pinned to the top edge
+// as a caret, so one 40-minute timeout no longer flattens every line.
 function drawLineChart({
   host, tooltip, idPrefix, series, xs, log = false,
   ticksY, fmtY, fmtTickY, footer, label, directLabels = true, fmtX = fmtDateTime,
+  baseline = 0, onZoom = setZoom,
 }) {
   const x0 = xs[0];
   const x1 = xs[xs.length - 1];
@@ -675,7 +858,12 @@ function drawLineChart({
   const iw = W - pad.l - pad.r;
   const ih = H - pad.t - pad.b;
 
-  const values = series.flatMap((s) => s.pts.map((p) => p.y));
+  const trended = series.filter((s) => s.trend?.length);
+  const cap = trended.length
+    ? Math.max(...trended.flatMap((s) => s.trend.map((t) => t.hi))) * 1.5
+    : Infinity;
+  const values = series.flatMap((s) => s.pts.map((p) => p.y)).filter((v) => v <= cap)
+    .concat(trended.flatMap((s) => s.trend.flatMap((t) => [t.lo, t.hi])));
   const vmax = Math.max(...values);
   const vmin = Math.min(...values);
 
@@ -689,14 +877,14 @@ function drawLineChart({
     yLo = Math.max(1, vmin * 0.7);
     yHi = vmax * 1.3;
   } else {
-    // Math.min/max with 0 so a series that dips below zero keeps its baseline
-    // on the chart; for all-positive data this is yLo = 0 and yHi = vmax *
-    // 1.08, as it has always been.
-    yLo = Math.min(0, vmin);
-    yHi = Math.max(0, vmax);
+    // Math.min/max with the baseline so a series that dips below it keeps the
+    // baseline on the chart; for all-positive data against 0 this is yLo = 0
+    // and yHi = vmax * 1.08, as it has always been.
+    yLo = Math.min(baseline, vmin);
+    yHi = Math.max(baseline, vmax);
     const slack = (yHi - yLo) * 0.08 || 1;
     yHi += slack;
-    if (yLo < 0) yLo -= slack;
+    if (yLo < baseline) yLo -= slack;
   }
 
   const sx = (x) => (x1 === x0 ? pad.l + iw / 2 : pad.l + ((x - x0) / (x1 - x0)) * iw);
@@ -712,7 +900,8 @@ function drawLineChart({
   for (const t of (log ? logTicks(yLo, yHi) : ticksY(yLo, yHi))) {
     const y = sy(t);
     parts.push(svgEl('line', {
-      class: 'ci-grid-line', x1: pad.l, x2: pad.l + iw, y1: y, y2: y,
+      class: baseline && t === baseline && !log ? 'ci-zero-line' : 'ci-grid-line',
+      x1: pad.l, x2: pad.l + iw, y1: y, y2: y,
     }));
     parts.push(`<text class="ci-axis-text" x="${pad.l - 10}" y="${y + 3}"
       text-anchor="end">${esc(fmtTickY(t))}</text>`);
@@ -739,32 +928,54 @@ function drawLineChart({
   parts.push(`<text class="ci-axis-title" x="${pad.l}" y="${H - 4}">
     ${esc(footer)}${log ? ' · log scale' : ''}</text>`);
 
-  // Series, in the fixed palette order.
+  const path = (pts, y) => pts
+    .map((p, i) => `${i ? 'L' : 'M'}${sx(p.x).toFixed(1)},${sy(y(p)).toFixed(1)}`)
+    .join(' ');
+  // A point above the axis sits on the top edge; it is drawn as a caret there.
+  const over = (p) => p.y > yHi;
+  const caret = (x) => `M${(x - 4).toFixed(1)},${pad.t + 5} L${x.toFixed(1)},${pad.t - 2} L${(x + 4).toFixed(1)},${pad.t + 5} Z`;
+
+  // Series, in the fixed palette order, in layers: every band under every
+  // point, every point under every line, so no series' spread hides another's
+  // trend.
+  for (const s of trended) {
+    const back = path(s.trend.slice().reverse(), (t) => t.lo);
+    parts.push(`<path class="ci-series-band"
+      d="${path(s.trend, (t) => t.hi)} ${back.replace(/^M/, 'L')} Z"
+      style="fill:${s.color}" />`);
+  }
+  for (const s of series) {
+    for (const p of s.pts) {
+      if (p.fail) continue;
+      if (over(p)) {
+        parts.push(`<path class="ci-point-over" d="${caret(sx(p.x))}" style="fill:${s.color}" />`);
+        continue;
+      }
+      parts.push(svgEl('circle', s.trend
+        ? { class: 'ci-point-raw', cx: sx(p.x), cy: sy(p.y), r: 2.5 }
+        : { class: 'ci-point', cx: sx(p.x), cy: sy(p.y), r: 3.5 }, `fill:${s.color}`));
+    }
+  }
   const labelSlots = [];
   for (const s of series) {
-    const d = s.pts
-      .map((p, i) => `${i ? 'L' : 'M'}${sx(p.x).toFixed(1)},${sy(p.y).toFixed(1)}`)
-      .join(' ');
-    parts.push(`<path class="ci-series-line" d="${d}" style="stroke:${s.color}" />`);
-
-    for (const p of s.pts) {
-      if (p.fail) {
-        // A red run is a fact about the trend line, so it gets its own mark.
-        parts.push(svgEl('circle', {
-          class: 'ci-point-fail', cx: sx(p.x), cy: sy(p.y), r: 5,
-        }));
-      } else {
-        parts.push(svgEl('circle', {
-          class: 'ci-point', cx: sx(p.x), cy: sy(p.y), r: 3.5,
-        }, `fill:${s.color}`));
-      }
-    }
-
+    const line = s.trend?.length ? s.trend : s.pts;
+    const y = s.trend?.length ? (t) => t.mid : (p) => p.y;
+    if (!line.length) continue;
+    parts.push(`<path class="ci-series-line" d="${path(line, y)}" style="stroke:${s.color}" />`);
     if (showLabels) {
-      const last = s.pts[s.pts.length - 1];
+      const last = line[line.length - 1];
       labelSlots.push({
-        text: s.label, color: s.color, y: sy(last.y), x: sx(last.x) + 10,
+        text: s.label, color: s.color, y: sy(y(last)), x: sx(last.x) + 10,
       });
+    }
+  }
+  // A red run is a fact about the trend line, so it gets its own mark, on top.
+  for (const s of series) {
+    for (const p of s.pts) {
+      if (!p.fail) continue;
+      parts.push(over(p)
+        ? `<path class="ci-point-fail" d="${caret(sx(p.x))}" />`
+        : svgEl('circle', { class: 'ci-point-fail', cx: sx(p.x), cy: sy(p.y), r: 5 }));
     }
   }
 
@@ -784,10 +995,15 @@ function drawLineChart({
       style="fill:${l.color}">${esc(name)}</text>`);
   }
 
-  // Hover layer: one crosshair + one shared tooltip per run.
+  // Hover layer: one crosshair + one shared tooltip per run, and the brush a
+  // drag draws.
   parts.push(svgEl('line', {
     class: 'ci-crosshair', id: `${idPrefix}-cross`,
     x1: 0, x2: 0, y1: pad.t, y2: pad.t + ih, opacity: 0,
+  }));
+  parts.push(svgEl('rect', {
+    class: 'ci-brush', id: `${idPrefix}-brush`,
+    x: pad.l, y: pad.t, width: 0, height: ih, opacity: 0,
   }));
   parts.push(svgEl('rect', {
     class: 'ci-hit', id: `${idPrefix}-hit`,
@@ -798,6 +1014,66 @@ function drawLineChart({
     role="img" aria-label="${esc(label)}">${parts.join('')}</svg>`;
 
   wireHover({ host, tooltip, idPrefix, series, sx, fmtY, fmtX, pad, ih });
+  if (onZoom && x1 > x0) {
+    wireBrush({ host, idPrefix, series, pad, iw, x0, x1, onZoom });
+  }
+}
+
+// Client px -> SVG user units. The SVG is width:100% with a fixed viewBox, so
+// a pointer position has to be mapped back before it is compared to a scale.
+function userX(svg, ev) {
+  const box = svg.getBoundingClientRect();
+  return ((ev.clientX - box.left) / box.width) * svg.viewBox.baseVal.width;
+}
+
+// Drag across the plot to zoom every chart to that stretch of time;
+// double-click to zoom back out. A press that moves less than a few px is a
+// click and changes nothing, so hovering and clicking stay as they were.
+function wireBrush({ host, idPrefix, series, pad, iw, x0, x1, onZoom }) {
+  const svg = host.querySelector('svg');
+  const hit = host.querySelector(`#${idPrefix}-hit`);
+  const brush = host.querySelector(`#${idPrefix}-brush`);
+  if (!svg || !hit || !brush) return;
+  const clamp = (u) => Math.max(pad.l, Math.min(pad.l + iw, u));
+  const toX = (u) => x0 + ((u - pad.l) / iw) * (x1 - x0);
+  const drawnXs = [...new Set(series.flatMap((s) => s.pts.map((p) => p.x)))];
+  const MIN_DRAG = 8;
+
+  let start = null;
+  const clear = () => {
+    start = null;
+    host.classList.remove('is-brushing');
+    brush.setAttribute('opacity', 0);
+  };
+  hit.addEventListener('pointerdown', (ev) => {
+    if (ev.button !== 0) return;
+    start = clamp(userX(svg, ev));
+    hit.setPointerCapture?.(ev.pointerId);
+  });
+  hit.addEventListener('pointermove', (ev) => {
+    if (start == null) return;
+    const u = clamp(userX(svg, ev));
+    if (Math.abs(u - start) < MIN_DRAG) return;
+    host.classList.add('is-brushing');
+    brush.setAttribute('x', Math.min(start, u));
+    brush.setAttribute('width', Math.abs(u - start));
+    brush.setAttribute('opacity', 1);
+  });
+  hit.addEventListener('pointerup', (ev) => {
+    if (start == null) return;
+    const u = clamp(userX(svg, ev));
+    const [a, b] = [Math.min(start, u), Math.max(start, u)];
+    clear();
+    if (b - a < MIN_DRAG) return;
+    const from = Math.floor(toX(a));
+    const to = Math.ceil(toX(b));
+    // A window needs two points to draw a line through; a narrower drag is
+    // dropped rather than zooming into an empty chart.
+    if (drawnXs.filter((x) => x >= from && x <= to).length < 2) return;
+    onZoom({ from, to });
+  });
+  hit.addEventListener('pointercancel', clear);
+  hit.addEventListener('dblclick', () => onZoom(null));
 }
 
 function wireHover({ host, tooltip, idPrefix, series, sx, fmtY, fmtX, pad, ih }) {
@@ -820,10 +1096,10 @@ function wireHover({ host, tooltip, idPrefix, series, sx, fmtY, fmtX, pad, ih })
 
   hit.addEventListener('mouseleave', hide);
   hit.addEventListener('mousemove', (ev) => {
+    // A drag in progress owns the pointer: no tooltip over the brush.
+    if (host.classList.contains('is-brushing')) { hide(); return; }
     const box = svg.getBoundingClientRect();
-    // The SVG is width:100% with a fixed viewBox, so map client px back into
-    // user units before comparing against the scale.
-    const ux = ((ev.clientX - box.left) / box.width) * svg.viewBox.baseVal.width;
+    const ux = userX(svg, ev);
 
     let best = xs[0];
     let bestD = Infinity;
@@ -839,15 +1115,22 @@ function wireHover({ host, tooltip, idPrefix, series, sx, fmtY, fmtX, pad, ih })
 
     const rows = [];
     let sha = '';
+    let note = '';
     for (const s of series) {
-      const p = s.pts.find((q) => q.x === best);
-      if (!p) continue;
+      const i = s.pts.findIndex((q) => q.x === best);
+      if (i < 0) continue;
+      const p = s.pts[i];
       if (p.sha) sha = p.sha;
+      if (p.note) note = p.note;
       rows.push(`
         <div class="ci-tooltip-row">
           <span class="dot" style="background:${s.color}"></span>
           <span class="name">${esc(s.label)}</span>
-          <span class="val">${esc(fmtY(p.y))}</span>
+          <span class="val">${esc(p.tip ?? fmtY(p.y))}</span>
+          ${(() => {
+        const t = !p.fail && s.trend?.find((q) => q.x === best);
+        return t ? `<span class="trend" title="Trend: rolling median">~${esc(fmtY(t.mid))}</span>` : '';
+      })()}
         </div>`);
     }
     if (!rows.length) { hide(); return; }
@@ -856,7 +1139,7 @@ function wireHover({ host, tooltip, idPrefix, series, sx, fmtY, fmtX, pad, ih })
       <div class="ci-tooltip-head">
         <span>${esc(fmtX(best))}</span>
         <span class="mono">${esc(sha.slice(0, 7))}</span>
-      </div>${rows.join('')}`;
+      </div>${note ? `<div class="ci-tooltip-note">${esc(note)}</div>` : ''}${rows.join('')}`;
     tooltip.hidden = false;
 
     // Keep the tooltip inside the panel; flip it left near the right edge.
@@ -1021,31 +1304,55 @@ function renderChart() {
 
   // The x domain comes from every run in the environment, not just the
   // selected suites, so the axis holds still while you swap series in and out.
-  const xs = state.xs;
+  const xs = timingXs();
   const days = dayMode();
+  const smooth = state.smooth === 'trend';
+  // Relative: each suite as a percentage of its own median over the first few
+  // passing points in the window, so a 2-minute suite and a 12-minute one
+  // share an axis and the question "which moved, by how much" reads straight
+  // off it. Each line ends near its row's Change in the table, which compares
+  // the same first few points.
+  const relative = state.scale === 'relative';
+  const scaleOf = (pts) => {
+    if (!relative) return 1;
+    const base = edgeMedians(pts.filter((p) => p.status !== 'fail').map((p) => p.ms)).head;
+    return base > 0 ? 100 / base : 1;
+  };
 
   drawLineChart({
     host,
     tooltip: document.getElementById('ci-tooltip'),
     idPrefix: 'ci',
-    series: drawn.map(({ suite, pts }) => ({
-      key: suite,
-      label: suite,
-      color: colorOf(suite),
-      pts: pts.map((p) => ({
-        x: p.ts, y: p.ms, fail: p.status === 'fail', sha: p.sha,
-      })),
-    })),
+    series: drawn.map(({ suite, pts }) => {
+      const k = scaleOf(pts);
+      return {
+        key: suite,
+        label: suite,
+        color: colorOf(suite),
+        pts: pts.map((p) => ({
+          x: p.ts,
+          y: p.ms * k,
+          fail: p.status === 'fail',
+          sha: p.sha,
+          ...(p.cpu ? { note: p.cpu } : {}),
+          ...(relative ? { tip: `${fmtPct(p.ms * k - 100)} · ${fmtDuration(p.ms)}` } : {}),
+        })),
+      };
+    }).map((s) => (smooth ? { ...s, trend: trendOf(s.pts) } : s)),
     xs,
     log: state.scale === 'log',
-    ticksY: (lo, hi) => niceTicks(lo, hi, 5),
-    fmtY: fmtDuration,
-    fmtTickY: fmtTick,
+    baseline: relative ? 100 : 0,
+    ticksY: (lo, hi) => (relative ? decimalTicks(lo, hi, 5) : niceTicks(lo, hi, 5)),
+    fmtY: relative ? (v) => fmtPct(v - 100) : fmtDuration,
+    fmtTickY: relative ? fmtPctTick : fmtTick,
     fmtX: days ? fmtDate : fmtDateTime,
-    footer: days
+    footer: (days
       ? `${xs.length} day${xs.length === 1 ? '' : 's'} · daily median per suite`
-      : `${xs.length} run${xs.length === 1 ? '' : 's'}`,
-    label: 'Suite duration over time',
+      : `${xs.length} run${xs.length === 1 ? '' : 's'}`)
+      + (relative ? ' · change from each suite\'s first few points' : '')
+      + (smooth ? ` · line: rolling median of ${trendWindow(Math.max(...drawn.map((d) => d.pts.length)))}, band: middle half of each window` : ''),
+    label: relative ? 'Suite duration over time, relative to the start of the range'
+      : 'Suite duration over time',
   });
 
   renderLegend(drawn);
@@ -1436,8 +1743,7 @@ function renderCounts() {
     return;
   }
 
-  const cutoff = rangeCutoff(state.counts.latest_ts, state.range);
-  const inRange = timeline.filter((p) => p.ts >= cutoff);
+  const inRange = timeline.filter((p) => inWindow(windowOf(state.counts.latest_ts))(p.ts));
   const first = inRange[0];
   const last = inRange[inRange.length - 1];
 
@@ -1560,10 +1866,10 @@ function renderFlow() {
     return;
   }
 
-  const cutoff = rangeCutoff(latestOf(state.docs), state.range);
-  const flows = reportFlows().filter((f) => f.ts >= cutoff);
+  const win = windowOf(latestOf(state.docs));
+  const flows = reportFlows().filter((f) => inWindow(win)(f.ts));
   // From the start of the range, or of the data when the range reaches past it.
-  const buckets = flowBuckets(flows, Math.max(cutoff, state.docs[0]?.ts ?? 0));
+  const buckets = flowBuckets(flows, Math.max(win[0], state.docs[0]?.ts ?? 0));
 
   const net = flows.reduce((a, f) => a + f.net, 0);
   const split = flows.every((f) => f.filed != null);
@@ -1739,7 +2045,13 @@ function renderSparks(stats) {
 
   host.innerHTML = shown.map((s) => {
     // Per-suite y scale: a shared one would flatten all but the largest few.
-    const ms = s.pts.map((p) => p.ms);
+    // Under the trend toggle a sparkline is its suite's rolling median, so the
+    // grid reads as which suites moved rather than which were noisy.
+    const smooth = state.smooth === 'trend';
+    const passing = s.pts.filter((p) => p.status !== 'fail').map((p) => p.ms);
+    const ms = smooth && passing.length
+      ? rollingQuartiles(passing).map((q) => q.mid)
+      : s.pts.map((p) => p.ms);
     const lo = Math.min(...ms);
     const hi = Math.max(...ms);
     const span = hi - lo || 1;
@@ -1753,13 +2065,13 @@ function renderSparks(stats) {
     return `
       <button type="button" class="ci-spark${on ? ' is-selected' : ''}"
               data-suite="${esc(s.suite)}"
-              title="${esc(s.suite)} — mean ${esc(fmtDuration(s.mean))}, ${s.runs} ${dayMode() ? 'days' : 'runs'}">
+              title="${esc(s.suite)} — mean ${esc(fmtDuration(s.mean))}, ${s.runs} ${dayMode() ? 'days' : 'runs'}${smooth ? `, latest run ${esc(fmtDuration(s.last))}` : ''}">
         <span class="ci-spark-name">${esc(s.suite)}</span>
         <svg viewBox="0 0 ${W} ${H}" aria-hidden="true">
           <path class="ci-spark-line" d="${d}" style="stroke:${color}" />
           ${svgEl('circle', { cx: px(n - 1), cy: py(ms[n - 1]), r: 2 }, `fill:${color}`)}
         </svg>
-        <span class="ci-spark-val">${esc(fmtDuration(s.last))}</span>
+        <span class="ci-spark-val">${esc(fmtDuration(smooth ? s.now : s.last))}</span>
       </button>`;
   }).join('');
 
@@ -1930,8 +2242,29 @@ function defaultSuites() {
   return Array.from({ length: MAX_SERIES }, (_, i) => top[i] ?? null);
 }
 
+// The zoom chip beside the Range picker: what window every chart is showing,
+// and the way back out of it.
+function renderZoom() {
+  const chip = document.getElementById('ci-zoom');
+  if (!chip) return;
+  chip.hidden = !state.zoom;
+  if (!state.zoom) return;
+  const { from, to } = state.zoom;
+  const fmt = to - from < 2 * DAY ? fmtDateTime : fmtDate;
+  document.getElementById('ci-zoom-label').textContent = `${fmt(from)} – ${fmt(to)}`;
+}
+
+// Every chart's drag lands here. The window is kept as dragged, so a shared
+// link reopens on it.
+function setZoom(zoom) {
+  if (!zoom && !state.zoom) return;
+  state.zoom = zoom;
+  render();
+}
+
 function render() {
   const stats = suiteStats(bySuite());
+  renderZoom();
   renderProvenance();
   renderTiles();
   renderFilters();
@@ -2083,6 +2416,7 @@ async function boot() {
   const url = readURL();
   state.env = state.envs.some((e) => e.key === url.env) ? url.env : state.envs[0].key;
   if (url.range && RANGES.some(([v]) => v === url.range)) state.range = url.range;
+  if (url.from && url.to && url.to > url.from) state.zoom = { from: url.from, to: url.to };
 
   // The timings, line counts and doc counts at once, and settled rather than
   // raced: the line and doc counts are independent, so they must neither
@@ -2116,7 +2450,9 @@ async function boot() {
     state.docsError = `Doc counts are unavailable (${docs.reason.message}).`;
   }
 
-  if (url.scale === 'log') state.scale = 'log';
+  if (url.scale === 'log' || url.scale === 'relative') state.scale = url.scale;
+  if (url.smooth === 'raw') state.smooth = 'raw';
+  if (url.cpuOff) state.cpuOff = new Set(url.cpuOff);
   if (url.statuses) {
     const valid = url.statuses.filter((s) => STATUSES.includes(s));
     if (valid.length) state.statuses = new Set(valid);
@@ -2148,6 +2484,15 @@ async function boot() {
     b.classList.toggle('is-active', b.getAttribute('data-scale') === state.scale);
   }
   wireSegToggle('data-scale', (v) => { state.scale = v; renderChart(); });
+  for (const b of document.querySelectorAll('.ci-seg-btn[data-smooth]')) {
+    b.classList.toggle('is-active', b.getAttribute('data-smooth') === state.smooth);
+  }
+  wireSegToggle('data-smooth', (v) => {
+    state.smooth = v;
+    renderChart();
+    renderSparks(suiteStats(bySuite()));
+  });
+  document.getElementById('ci-zoom').onclick = () => setZoom(null);
 
   // The range <select> is static HTML shared across all tabs, so it is wired
   // here rather than in renderFilters (which only owns the Tests-tab controls).
@@ -2162,6 +2507,8 @@ async function boot() {
     try {
       await loadTimings(state.env, want);
       state.range = want;
+      // The zoom refines a range; a new range starts from all of itself.
+      state.zoom = null;
       const kept = new Set(state.timings.suites);
       state.suites = state.suites.map((s) => (s && kept.has(s) ? s : null));
       if (!selected().length) state.suites = defaultSuites();

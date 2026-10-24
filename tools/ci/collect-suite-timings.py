@@ -51,7 +51,9 @@ import argparse
 import glob
 import json
 import os
+import platform
 import re
+import subprocess
 import sys
 import time
 import xml.etree.ElementTree as ET
@@ -158,6 +160,39 @@ def read_compiler_id(build_dir):
     return f"{cid}-{short}" if short else cid
 
 
+def read_cpu_model():
+    """The runner's CPU model, e.g. "AMD EPYC 7763 64-Core Processor", or None.
+
+    A hosted runner pool mixes machine generations under one (os, nproc), and
+    the speed difference is most of a suite's run-to-run spread: in October
+    2026 every suite in one Linux aux job ran ~0.75x or ~1.1x its typical time
+    together.  Recording the model lets /ci split or filter runs by it.  It is
+    a row field, not part of the environment key, so history stays one series.
+    """
+    try:
+        if sys.platform.startswith("linux"):
+            with open("/proc/cpuinfo", "r", errors="replace") as fh:
+                for line in fh:
+                    key, _, value = line.partition(":")
+                    if key.strip() == "model name" and value.strip():
+                        return " ".join(value.split())
+            # arm64 kernels print no "model name"; lscpu decodes the part.
+            out = subprocess.run(["lscpu"], capture_output=True, text=True,
+                                 timeout=10).stdout
+            for line in out.splitlines():
+                key, _, value = line.partition(":")
+                if key.strip() == "Model name" and value.strip():
+                    return " ".join(value.split())
+        elif sys.platform == "darwin":
+            out = subprocess.run(["sysctl", "-n", "machdep.cpu.brand_string"],
+                                 capture_output=True, text=True, timeout=10).stdout
+            if out.strip():
+                return " ".join(out.split())
+        return platform.processor() or None
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+
 def cmake_bool(value):
     """CMake truthiness, as documented for if() constants."""
     if value is None:
@@ -256,6 +291,7 @@ def main():
         "os": os.environ.get("RUNNER_OS") or os.uname().sysname,
         "cc": read_compiler_id(args.build_dir),
         "nproc": os.cpu_count(),
+        "cpu": read_cpu_model(),
         "jit": cmake_bool(cache.get("TUR_JIT")),
         "sanitize": cmake_bool(cache.get("TUR_DEBUG_SANITIZE")),
         "shard_index": shard_index,
