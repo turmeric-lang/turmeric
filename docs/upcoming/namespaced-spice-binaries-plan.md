@@ -1,7 +1,8 @@
 # Plan: Namespaced spice binaries -- `tur <spice>/<bin>`, and a bin-name collision that installs with a warning
 
 > **Status:** Draft, 2026-10-24. Nothing built. D2 (install with a warning)
-> and D4's spelling (`tur install --link`, not `tur link`) decided 2026-10-24.
+> and D4's spelling (`tur install --link`, not `tur link`) decided 2026-10-24,
+> as is D5's "uninstalling the holder leaves the name unlinked".
 > **Type:** Tooling / CLI (`src/compiler/install.c`, `src/compiler/global.c`,
 > `src/compiler/spice_search.c`, `src/driver/cli.c`, `src/driver/cmd_x.c`).
 > **Builds on:** [global-spice-install-plan](../archive/global-spice-install-plan.md)
@@ -127,13 +128,28 @@ not install. `tur list` marks a shadowed bin as
 `tur-foo (shadowed by alpha; tur beta/foo)`, and `tur list --json` carries the
 `:linked` flag.
 
-### D5. Uninstall and upgrade keep the bare name held
+### D5. Uninstall and upgrade never choose a holder
 
 - `tur uninstall alpha` removes `bin_dir/tur-foo` only if the registry says
-  alpha holds it. If another installed spice provides `tur-foo`, that one is
-  **promoted**: linked, flagged, and named in a note (the earliest
-  `:installed-at` wins, so the outcome is predictable). Uninstalling a
-  shadowed provider touches no link.
+  alpha holds it. If another installed spice still provides `tur-foo`, the
+  bare name is **left unlinked**. Nothing is promoted, and a note says what
+  is left:
+
+  ```
+  tur uninstall: note: 'tur-foo' is now unlinked; beta still provides it.
+    Run it as `tur beta/foo`, or make it the default with
+    `tur install --link beta/foo`.
+  ```
+
+  The user picked which tool `tur-foo` meant, either by install order or with
+  `--link`. Uninstall cannot know which remaining provider they would pick, and
+  quietly substituting a different tool under a familiar command is the
+  surprise this plan exists to remove. The qualified form keeps working
+  throughout, so nothing becomes unreachable.
+- Uninstalling a shadowed provider touches no link.
+- An unlinked name is free. The next `tur install` of a spice that declares it
+  takes it under D2's ordinary rule, the same as a name nobody ever held.
+  Shadowed providers stay shadowed: becoming the holder takes `--link`.
 - `tur upgrade` keeps each bin's flag. A newly added `:bin` is placed by D2's
   rule, and a removed one is unlinked only if it was linked.
 
@@ -174,7 +190,7 @@ syntax stays free.
   `tur x <spice>/<bin>`, the `@` rejection, and docs in
   `consuming-spices-guide`. Useful even before NB3, since it always reaches a
   specific spice's build.
-- **NB3, install with a warning (D2) and uninstall promotion (D5).** The
+- **NB3, install with a warning (D2) and uninstall's unlinked name (D5).** The
   behaviour change. CHANGELOG entry: a collision no longer fails `tur install`.
 - **NB4, `tur install --link` and the `tur list` marks (D4).**
 
@@ -184,9 +200,12 @@ All in `tests/run-install.sh`, under a throwaway `TUR_HOME`:
 
 - two `--path` spices that each declare `tur-foo`. The second install exits 0
   with the warning; `tur-foo` runs the first; `tur second/foo` runs the second;
-- `tur install --link second/foo` swaps them without a rebuild, and `tur list --json` shows the flags;
-- uninstalling the holder promotes the other, and uninstalling a shadowed
-  provider leaves the link alone;
+- `tur install --link second/foo` swaps them without a rebuild, and
+  `tur list --json` shows the flags;
+- uninstalling the holder removes `tur-foo`, prints the note, and leaves the
+  other provider shadowed (`tur-foo` is not found; `tur second/foo` runs).
+  Installing a third provider afterwards takes the name, and uninstalling a
+  shadowed provider leaves the link alone;
 - a foreign file at `bin_dir/tur-foo` still refuses without `--force`;
 - two tools with `src/main.tur`: a manifest-less `(import main)` reports
   `module 'main' not found` (NB0);
@@ -196,6 +215,6 @@ All in `tests/run-install.sh`, under a throwaway `TUR_HOME`:
 
 ## Open questions
 
-- **Promotion order on uninstall.** Earliest-installed is predictable. Asking
-  is not an option, because uninstall runs unattended in scripts. Leaving the
-  name unlinked is safer but surprising.
+None at the time of writing. The three design calls (install with a warning,
+`--link` on `install`, and uninstall leaving the name unlinked) were made
+2026-10-24.
