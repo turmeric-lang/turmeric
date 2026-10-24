@@ -10,6 +10,7 @@
 #include "prof.h"               /* --timings: elaborate / module-load / refine */
 #include "pkg.h"                /* script-spice-deps-plan: pkg_text_is_preamble */
 #include "runtime/experiments.h" /* quote-list-data-plan: experiment_warn_if_used */
+#include "stdlib_autoload.h"    /* quote-list-data-plan: tur_quote_data_wanted_user_forms */
 
 /* duplicate-ctor-names-collide-in-emitted-c: the constructor-name census lives
  * in emit_core.c; declared here because elab_toplevel.c does not include
@@ -683,8 +684,10 @@ Expr *elab_quote(Elab *e, Form *quoted, Span span) {
         if (!scope_lookup_type_def(e->scope, datum)) {
             diag_emit(DIAG_ERROR, span,
                       "quote: a quoted %s is a Datum, and stdlib/datum.tur is "
-                      "not loaded -- it is autoloaded under --enable=quote-data "
-                      "unless the stdlib autoload is off; (load \"stdlib/datum.tur\")",
+                      "not loaded -- it is loaded when a file the program reads "
+                      "quotes a list, and this quote was built where that scan "
+                      "cannot see it (a macro computing the `quote` head); "
+                      "(load \"stdlib/datum.tur\")",
                       quoted->tag == F_VEC ? "vector" : "list");
             return NULL;
         }
@@ -1673,6 +1676,52 @@ int elab_expand_module_loads(Elab *e, Arena *arena, SymbolTable *st,
     *out_forms = lx.out;
     *out_n = lx.out_n;
     return lx.rc;
+}
+
+/* quote-list-data-plan, graduation item 1: load stdlib/datum.tur on demand.
+ *
+ * The autoload (tur_stdlib_prepend_forms, and the interpreter's preload) only
+ * sees the entry file.  This runs over a load-expanded form list -- the whole
+ * program in elaborate_program, an imported module's forms in
+ * elab_load_module -- and, when a user form in [at, *n) quotes a list (or
+ * defines a macro that will: tur_quote_data_wanted_user_forms) and datum.tur
+ * is in neither the load-visited set nor scope, splices the forms of
+ * `(load "stdlib/datum.tur")` in at index `at`.  That is exactly what the
+ * program would get by writing the load itself, which is the form every
+ * engine already ran: the compiled path, `tur jit` and `tur --interpret`
+ * (whose user file arrives here as a `(load ...)`).
+ *
+ * A program that never quotes a list loads nothing, so datum.tur's names
+ * (and list-typed.tur's) stay free for it -- the reason it is not simply
+ * autoloaded under the flag.  Returns false only when the load failed. */
+bool elab_quote_data_demand_load(Elab *e, Arena *arena, SymbolTable *st,
+                                 Form ***forms_io, uint32_t *n_io, uint32_t at) {
+    if (!g_opt_quote_data || !forms_io || !n_io || at >= *n_io) return true;
+    const Symbol *key = load_path_key(st, "stdlib/datum.tur", e->module_stdlib_dir);
+    for (uint32_t k = 0; k < e->n_load_expanded_paths; k++)
+        if (e->load_expanded_paths[k] == key) return true;
+    if (scope_lookup_type_def(&e->global, symtab_intern(st, strslice("Datum", 5))))
+        return true;
+    if (!tur_quote_data_wanted_user_forms(*forms_io + at, *n_io - at)) return true;
+
+    Span sp = (*forms_io)[at]->span;
+    Form *ld_items[2];
+    ld_items[0] = form_sym(arena, sp, e->sym_load);
+    ld_items[1] = form_str(arena, sp, "stdlib/datum.tur", 16);
+    Form *const one[1] = { form_list(arena, sp, ld_items, 2) };
+    Form **pre = NULL;
+    uint32_t npre = 0;
+    if (elab_expand_module_loads(e, arena, st, one, 1, &pre, &npre) != 0) return false;
+    if (npre == 0) return true;
+    uint32_t n = *n_io;
+    Form **joined = (Form **)arena_alloc(arena, (n + npre + 1) * sizeof(Form *));
+    for (uint32_t i = 0; i < at; i++) joined[i] = (*forms_io)[i];
+    for (uint32_t i = 0; i < npre; i++) joined[at + i] = pre[i];
+    for (uint32_t i = at; i < n; i++) joined[npre + i] = (*forms_io)[i];
+    joined[n + npre] = NULL;
+    *forms_io = joined;
+    *n_io = n + npre;
+    return true;
 }
 
 /* defdata-parametric-forward-decl-inference: resolve one type-argument form
@@ -3266,6 +3315,19 @@ Expr *elaborate_program_session(Arena *arena, SymbolTable *st,
          * stdlib promotion sweep and in_stdlib_load window line up with where
          * the auto-loaded forms actually landed. */
         if (lx.track_boundary) stdlib_prefix = lx.boundary_out;
+        /* quote-list-data-plan: a quoted list anywhere in the user's files --
+         * the entry, or a file it `(load ...)`s, or a macro that will expand
+         * to one -- loads stdlib/datum.tur ahead of the user's forms, as an
+         * explicit `(load "stdlib/datum.tur")` there would.  A no-op when the
+         * autoload already brought it in. */
+        {
+            Form **qf = (Form **)forms;
+            uint32_t qn = nforms;
+            uint32_t at = stdlib_prefix < nforms ? stdlib_prefix : nforms;
+            if (!elab_quote_data_demand_load(&e, arena, st, &qf, &qn, at)) rc = -1;
+            forms  = (Form *const *)qf;
+            nforms = qn;
+        }
     }
 
     /* r7rs-lang-plan R2: lower the Scheme core forms of every `#lang r7rs`

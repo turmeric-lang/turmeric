@@ -1,0 +1,37 @@
+;; quote-list-data-plan, graduation item 3: in a defmacro* body a quoted list
+;; is the Syntax it spells, as the quasiquote with nothing unquoted is -- not
+;; a runtime Datum.  So it can be returned as the expansion, compared with
+;; syntax=?, and walked with the syntax-* natives.  A quoted symbol is still
+;; a Sym there, as everywhere.
+
+;; Returned as the expansion: (+ 3 4), so 7.
+(defmacro* seven [] '(+ 3 4))
+
+;; The same, written out, and the quasiquote it matches.
+(defmacro* seven-long [] (quote (+ 3 4)))
+(defmacro* seven-qq [] `(+ 3 4))
+
+;; Compared against the call-site form.
+(defmacro* is-ab [x] (if (syntax=? x '(a b)) (int->syntax 1) (int->syntax 0)))
+
+;; Walked: the length of a quoted vector.
+(defmacro* vec-len [] (int->syntax (syntax-len '[p q r])))
+
+;; A nested quote stays a quote in the expansion: a quoted symbol at run time.
+(defmacro* hello-name [] '(sym->str 'hello))
+
+;; A quoted symbol in the body is a Sym.
+(defmacro* sym-len [] (int->syntax (cstr-len (sym->str 'abcd))))
+
+(defn main [] : int
+  (println (seven))
+  (println (seven-long))
+  (println (seven-qq))
+  (println (is-ab (a b)))
+  (println (is-ab (a c)))
+  (println (vec-len))
+  (println (hello-name))
+  (println (sym-len))
+  ;; Runtime code still gets the Datum.
+  (println '(+ 3 4))
+  0)

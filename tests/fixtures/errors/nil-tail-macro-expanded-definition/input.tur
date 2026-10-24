@@ -11,7 +11,11 @@
 ; subsumed, it fires first.
 ;
 ; See docs/archive/nil-tail-not-checked-against-declared-return.md.
-(defmacro make-a-class [] (quote (defclass Foo [a] (bar [x] : int))))
+;
+; The template is a quasiquote, not `(quote ...)`: under quote-data a quoted
+; list in an expansion is a runtime Datum, not the definition it spells
+; (quote-list-data-plan's corpus check).
+(defmacro make-a-class [] `(defclass Foo [a] (bar [x] : int)))
 
 (defn f [] : int (make-a-class))
 

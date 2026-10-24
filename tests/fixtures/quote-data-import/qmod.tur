@@ -1,0 +1,13 @@
+;; quote-list-data-plan: an imported module that quotes a list.  Importing it
+;; brings stdlib/datum.tur in ahead of this module's own forms.
+(defmodule qmod
+  (export mod-form mod-count)
+
+  (defn mod-form [] : Datum
+    '(from module [1 2] "s" true 7.1))
+
+  (defn mod-count [d : Datum] : int
+    (match d
+      (DList xs) (list-count xs)
+      (DVec xs) (list-count xs)
+      _ 0)))

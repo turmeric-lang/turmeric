@@ -1,6 +1,7 @@
 /* elab_macros.c -- compile-time evaluation, quasiquote, macro definition and expansion. */
 #include "elab_internal.h"
 #include "prof.h"   /* --timings: the macro-expand zone */
+#include "runtime/experiments.h" /* quote-list-data-plan: experiment_warn_if_used */
 
 /* ---- file-local helper forward declarations ---- */
 static CtValue ct_value_form(Form *f);
@@ -1851,22 +1852,25 @@ static Form *sxqq_call_strlit(Elab *e, Span sp, const char *fn,
 }
 
 static Form *sxqq_lower(Elab *e, Form *f, bool *ok);
+static Form *sxqq_lower_quoted(Elab *e, Form *f, bool *ok);
 
 /* Lower the items of a list/vec template body.  With no `~@` present the
  * result is one (syntax-list ...) / (syntax-vec ...) call; a splice turns
  * the list case into (syntax-append seg...) where runs of plain items group
  * into (syntax-list ...) segments and each `~@e` contributes `e` verbatim. */
-static Form *sxqq_lower_seq(Elab *e, Form *f, bool is_vec, bool *ok) {
+static Form *sxqq_lower_seq(Elab *e, Form *f, bool is_vec, bool quoted, bool *ok) {
     uint32_t n = f->as.list.len;
     bool has_splice = false;
-    for (uint32_t i = 0; i < n; i++)
-        if (f->as.list.items[i]->tag == F_UNQUOTE_SPLICING) { has_splice = true; break; }
+    if (!quoted)
+        for (uint32_t i = 0; i < n; i++)
+            if (f->as.list.items[i]->tag == F_UNQUOTE_SPLICING) { has_splice = true; break; }
 
     if (!has_splice) {
         Form **items = (n == 0) ? NULL
             : (Form **)arena_alloc(e->arena, n * sizeof(Form *));
         for (uint32_t i = 0; i < n; i++) {
-            items[i] = sxqq_lower(e, f->as.list.items[i], ok);
+            items[i] = quoted ? sxqq_lower_quoted(e, f->as.list.items[i], ok)
+                              : sxqq_lower(e, f->as.list.items[i], ok);
             if (!*ok) return f;
         }
         return sxqq_callv(e, f->span, is_vec ? "syntax-vec" : "syntax-list",
@@ -1935,9 +1939,9 @@ static Form *sxqq_lower(Elab *e, Form *f, bool *ok) {
             *ok = false;
             return f;
         case F_LIST:
-            return sxqq_lower_seq(e, f, false, ok);
+            return sxqq_lower_seq(e, f, false, false, ok);
         case F_VEC:
-            return sxqq_lower_seq(e, f, true, ok);
+            return sxqq_lower_seq(e, f, true, false, ok);
         case F_TYPE_ANN:
             return sxqq_call1(e, f->span, "syntax-type-ann",
                               sxqq_lower(e, f->as.list.items[0], ok));
@@ -1962,15 +1966,65 @@ static Form *sxqq_lower(Elab *e, Form *f, bool *ok) {
     }
 }
 
-/* Walk a defmacro* body form, lowering every quasiquote.  Quoted data is
- * left untouched; everything list-shaped recurses. */
+/* quote-list-data-plan (graduation item 3): a quoted list in a defmacro*
+ * body is the Syntax it spells, not a runtime Datum.  The body computes
+ * forms, so `'(+ 3 4)` means what `` `(+ 3 4) `` does -- the quasiquote with
+ * nothing unquoted -- and can be returned as the expansion or compared with
+ * `syntax=?`.  The leaves lower as sxqq_lower's do; a nested quote is
+ * `syntax-quote`; an unquote inside a quote has no constructor, so it is
+ * refused rather than silently spliced. */
+static Form *sxqq_lower_quoted(Elab *e, Form *f, bool *ok) {
+    switch (f->tag) {
+        case F_LIST:
+            return sxqq_lower_seq(e, f, false, true, ok);
+        case F_VEC:
+            return sxqq_lower_seq(e, f, true, true, ok);
+        case F_TYPE_ANN:
+            return sxqq_call1(e, f->span, "syntax-type-ann",
+                              sxqq_lower_quoted(e, f->as.list.items[0], ok));
+        case F_QUOTE:
+            return sxqq_call1(e, f->span, "syntax-quote",
+                              sxqq_lower_quoted(e, f->as.list.items[0], ok));
+        case F_QUASIQUOTE:
+        case F_UNQUOTE:
+        case F_UNQUOTE_SPLICING:
+            diag_emit(DIAG_ERROR, f->span,
+                      "defmacro*: a quoted list holding a %s has no Syntax "
+                      "constructor; use a quasiquote template to splice, or "
+                      "build it with the syntax constructors",
+                      form_tag_name(f->tag));
+            *ok = false;
+            return f;
+        default:
+            return sxqq_lower(e, f, ok);
+    }
+}
+
+/* Walk a defmacro* body form, lowering every quasiquote -- and, under
+ * --enable=quote-data, every quoted list or vector (sxqq_lower_quoted).  A
+ * quoted symbol stays the `Sym` it is everywhere else; everything
+ * list-shaped recurses. */
 static Form *sxqq_walk(Elab *e, Form *f, bool *ok) {
     switch (f->tag) {
         case F_QUASIQUOTE:
             return sxqq_lower(e, f->as.list.items[0], ok);
         case F_QUOTE:
+            if (g_opt_quote_data && f->as.list.len == 1 &&
+                (f->as.list.items[0]->tag == F_LIST || f->as.list.items[0]->tag == F_VEC)) {
+                experiment_warn_if_used("quote-data");
+                return sxqq_lower_quoted(e, f->as.list.items[0], ok);
+            }
             return f;
         case F_LIST:
+            /* `(quote (a b))` written out means `'(a b)`. */
+            if (g_opt_quote_data && f->as.list.len == 2 &&
+                f->as.list.items[0]->tag == F_SYM &&
+                strcmp(f->as.list.items[0]->as.sym->name, "quote") == 0 &&
+                (f->as.list.items[1]->tag == F_LIST || f->as.list.items[1]->tag == F_VEC)) {
+                experiment_warn_if_used("quote-data");
+                return sxqq_lower_quoted(e, f->as.list.items[1], ok);
+            }
+            /* fallthrough */
         case F_VEC:
         case F_MAP:
         case F_SET:

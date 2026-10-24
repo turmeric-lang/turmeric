@@ -6,8 +6,11 @@
 ;;; and a bracketed one a `DVec`. A quoted bare symbol is still a `Sym`, and a
 ;;; quoted literal is the literal itself, as in Lisp.
 ;;;
-;;; The module is loaded automatically when the `quote-data` experiment is on.
-;;; It loads stdlib/list-typed.tur for `(List Datum)`.
+;;; Under the `quote-data` experiment the module is loaded on first use: when
+;;; any file the program reads -- the entry, a loaded file, an imported module --
+;;; quotes a list or defines a macro that expands to one. A program that never
+;;; quotes a list does not load it, so its names stay free. It loads
+;;; stdlib/list-typed.tur for `(List Datum)`.
 ;;;
 ;;; Since: quote-list-data-plan
 ;; Datum ADT, rendering, equality and accessors.

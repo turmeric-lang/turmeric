@@ -1,0 +1,48 @@
+w1: defer ran
+1: handle -> 0
+w2-inner: defer ran
+w2: defer ran
+2: handle -> 0
+w3: defer ran
+3: handle -> 0
+4: handle -> 0
+4: before resume
+w4: defer ran
+4: resumed -> 6
+w5: defer ran
+w5: defer ran
+5: handle -> 5
+w6: defer ran
+6: handle -> 0
+w7: defer ran with its tag
+7: handle -> 0
+w8: second declared, fires first
+w8: first declared, fires last
+8: handle -> 0
+w9: defer ran
+9: handle -> 0
+w10: defer ran
+10: handle -> 0
+w11-inner: defer ran
+w11: defer ran (at the resume)
+11: handle -> 12
+w11-inner: defer ran
+w11: defer ran (at the resume)
+11b: handle -> 12
+12: handle -> 0
+12: before resume
+w12: defer ran (at the resume)
+12: resumed -> 6
+w13: defer ran
+13: handle -> 0
+w14: defer ran
+w14: defer ran
+w14: defer ran
+14: loop -> 3
+w15: defer ran
+15: handle -> 43
+w18: defer ran
+18: escape -> 107
+w19: defer ran
+19: escape -> 107
+done

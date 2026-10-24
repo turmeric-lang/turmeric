@@ -1,7 +1,9 @@
 ;; The one-shot fiber fallback must report, not abort().
 ;;
 ;; A handle whose body reaches its `perform` through a form the driver cannot
-;; descend -- here a `catch-unwind` thunk -- is rejected by ws_capturable and
+;; descend -- here a `catch-panic-of` thunk (a `catch-unwind` one is descended
+;; since turi-fiber-handle-defers-fire-at-the-wrong-time; the driver has no
+;; frame for a typed catch) -- is rejected by ws_capturable and
 ;; runs on a ucontext fiber instead of the work-stack.  That fiber is
 ;; single-shot: once the body finishes there is nothing to re-enter, and a
 ;; second resume used to swapcontext into the dead fiber and land on
@@ -11,16 +13,15 @@
 ;; requires.interp-only: this is an interpreter-path diagnostic, owned by
 ;; tests/run-turi.sh (which runs it under `--interpret`); the compiled suite
 ;; PASS-skips it.  The compiled path rejects the same program for its own
-;; unrelated reason -- a perform inside a catch-unwind thunk is outside the CPS
-;; backend's subset -- so asserting this text there would assert the wrong
+;; unrelated reason, so asserting this text there would assert the wrong
 ;; mechanism.
 ;;
-;; If the driver ever learns to descend catch-unwind thunks, pick a different
+;; If the driver ever learns to descend catch-panic-of thunks, pick a different
 ;; non-capturable shape rather than deleting the assertion -- the fallback
 ;; still exists and must still report.
 (defeffect Ask [] : int)
 
 (defn main [] : int
-  (println (handle (ok-val (catch-unwind (fn [] : int (perform (Ask)))))
+  (println (handle (ok-val (catch-panic-of :cstr (fn [] : int (perform (Ask)))))
                    (Ask [] ^multishot k) (+ (resume k 1) (resume k 2))))
   0)

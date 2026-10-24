@@ -192,6 +192,23 @@ The lowering is purely syntactic (`` `(+ ~e ~e) `` becomes
 Turmeric.  Nested quasiquote and `~@` into vector templates are not
 supported -- build those with the constructors.
 
+Under `--enable=quote-data` a quoted list or vector in a `defmacro*` body is
+the Syntax it spells, exactly as the quasiquote with nothing unquoted is --
+not the runtime `Datum` it is in ordinary code
+([quote-list-data-plan](https://github.com/turmeric-lang/turmeric/blob/main/docs/upcoming/quote-list-data-plan.md)).  So it can be
+returned as the expansion or compared against an argument:
+
+```turmeric
+(defmacro* seven [] '(+ 3 4))                    ; expands to (+ 3 4)
+(defmacro* is-ab [x]
+  (if (syntax=? x '(a b)) (int->syntax 1) (int->syntax 0)))
+```
+
+A quote nested inside stays a quote in the expansion (`syntax-quote`); an
+unquote inside a quote is refused -- splicing is what the quasiquote is for.
+A quoted symbol is still a `Sym`, as everywhere.  See
+`tests/fixtures/quote-data-defmacro-star/`.
+
 Facts that matter in practice:
 
 - **Definition-time checking.**  The body is compiled as

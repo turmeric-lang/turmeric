@@ -42,6 +42,9 @@ const char *const *tur_stdlib_autoload_files(void);
  * preloads before it reads).  Both answer false for a Scheme program. */
 bool tur_quote_data_wanted_forms(Form *const *forms, uint32_t n);
 bool tur_quote_data_wanted_source(const char *src, size_t len);
+/* Over a form list that may mix stdlib and user files (the load-expanded
+ * program, an imported module's forms): only user, non-Scheme forms count. */
+bool tur_quote_data_wanted_user_forms(Form *const *forms, uint32_t n);
 
 /* Read every autoload file out of `stdlib_dir`, parse it, and prepend the
  * resulting forms onto *forms_in_out (reallocating into `arena`). Updates
