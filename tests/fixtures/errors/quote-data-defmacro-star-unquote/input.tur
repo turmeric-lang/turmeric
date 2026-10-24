@@ -1,0 +1,8 @@
+;; quote-list-data-plan: a quoted list in a defmacro* body is Syntax, and an
+;; unquote inside a quote has no Syntax constructor -- splicing is what a
+;; quasiquote template is for -- so it is refused, not silently spliced.
+(defmacro* bad [x] '(+ ~x 1))
+
+(defn main [] : int
+  (println (bad 2))
+  0)
