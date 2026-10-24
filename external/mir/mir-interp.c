@@ -187,6 +187,11 @@ static void generate_icode (MIR_context_t ctx, MIR_item_t func_item) {
     MIR_insn_code_t code = insn->code;
     size_t nops = MIR_insn_nops (ctx, insn);
     MIR_op_t *ops = insn->ops;
+    /* The interpreter runs a tail call as a call followed by a return of its
+       results: it gives no constant-stack guarantee. */
+    int tcall_p = code == MIR_TCALL;
+
+    if (tcall_p) code = MIR_CALL;
 
     insn->data = (void *) VARR_LENGTH (MIR_val_t, code_varr);
     switch (code) {
@@ -473,6 +478,18 @@ static void generate_icode (MIR_context_t ctx, MIR_item_t func_item) {
           mir_assert (ops[i].mode == MIR_OP_REG);
           v.i = get_reg (ops[i], &max_nreg);
         }
+        VARR_PUSH (MIR_val_t, code_varr, v);
+      }
+    }
+    if (tcall_p) {
+      size_t nres = ops[0].u.ref->u.proto->nres;
+
+      push_insn_start (interp_ctx, MIR_RET, insn);
+      v.i = nres;
+      VARR_PUSH (MIR_val_t, code_varr, v);
+      for (i = 0; i < nres; i++) {
+        mir_assert (ops[i + 2].mode == MIR_OP_REG);
+        v.i = get_reg (ops[i + 2], &max_nreg);
         VARR_PUSH (MIR_val_t, code_varr, v);
       }
     }

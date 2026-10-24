@@ -264,4 +264,22 @@ full history mirrored there) plus three fixes on fix/make-one-ret-distinct-targe
     the shim's own count of named stack bytes (by memcpy: va_list is char *
     for clang but a struct for c2m).  Covered by c-tests/new/va-struct-args.c
     there, an upstream test that had failed on every macOS run of the fork.
+
+  fce6aa5 (merged as a67bc73b, turmeric-lang/mir#13) -- a tail call.  MIR
+    had none: c2mir dropped `__attribute__ ((musttail))`, so TUR_MUSTTAIL
+    expanded to nothing under `tur jit` and a mutual tail-call cycle the
+    emitter did not fuse grew the stack, hidden by the 1 GiB entry thread
+    (docs/archive/jit-musttail-expands-to-nothing.md).  MIR_TCALL takes
+    MIR_CALL's operands and returns the call's results; on x86-64 and
+    aarch64 the generator makes one whose args and results are all in
+    registers the epilogue plus a jump (jmp *%r11 / br x16), and lowers any
+    other to a call and a return, as the interpreter runs every one
+    (docs/reported/mir-interp-tail-calls-grow-the-stack.md).  c2mir makes
+    `__attribute__ ((musttail)) return f (...)` a TCALL when the call's
+    results are exactly what the function returns, accepts
+    `__attribute__ ((fallthrough));`, and defines __MIRC_MUSTTAIL__, which
+    the emitted TUR_MUSTTAIL keys on.  New feature, not a fix:
+    tailcall-musttail-deep now runs on an 8 MiB entry stack
+    (run-jit.sh's jit-musttail-8mib).  Covered by c-tests/new/musttail.c and
+    musttail-deep.c there.
 ```

@@ -334,6 +334,13 @@ DEF_VARR (MIR_code_reloc_t);
 #error "undefined or unsupported generation target"
 #endif
 
+#ifndef TARGET_TCALL
+/* The target makes no tail jumps: every TCALL becomes a call and a return. */
+static int target_tail_call_p (gen_ctx_t gen_ctx MIR_UNUSED, MIR_insn_t tcall MIR_UNUSED) {
+  return FALSE;
+}
+#endif
+
 typedef struct bb_stub *bb_stub_t;
 DEF_DLIST_LINK (bb_version_t);
 
@@ -931,7 +938,7 @@ static bb_t split_edge_if_necessary (gen_ctx_t gen_ctx, edge_t e) {
       return src;
     } else { /* jump with one dest only: move jmp to new fall-though block */
       gen_assert (last_insn->code == MIR_JMP || last_insn->code == MIR_RET
-                  || last_insn->code == MIR_JRET);
+                  || last_insn->code == MIR_JRET || last_insn->code == MIR_TCALL);
       delete_bb_insn (gen_ctx, last_bb_insn);
       insn = last_insn;
     }
@@ -1810,7 +1817,7 @@ static void build_func_cfg (gen_ctx_t gen_ctx) {
     nops = MIR_insn_nops (ctx, insn);
     if (next_insn != NULL
         && (MIR_any_branch_code_p (insn->code) || insn->code == MIR_RET || insn->code == MIR_JRET
-            || insn->code == MIR_PRBEQ || insn->code == MIR_PRBNE
+            || insn->code == MIR_TCALL || insn->code == MIR_PRBEQ || insn->code == MIR_PRBNE
             || next_insn->code == MIR_LABEL)) {
       prev_bb = bb;
       if (next_insn->code == MIR_LABEL && next_insn->data != NULL)
@@ -1819,7 +1826,7 @@ static void build_func_cfg (gen_ctx_t gen_ctx) {
         bb = create_bb (gen_ctx, next_insn);
       add_new_bb (gen_ctx, bb);
       if (insn->code != MIR_JMP && insn->code != MIR_JMPI && insn->code != MIR_RET
-          && insn->code != MIR_JRET && insn->code != MIR_SWITCH)
+          && insn->code != MIR_JRET && insn->code != MIR_TCALL && insn->code != MIR_SWITCH)
         create_edge (gen_ctx, prev_bb, bb, TRUE, TRUE); /* fall through */
     }
     for (i = 0; i < nops; i++) { /* Transform all ops to var ops */
@@ -2057,7 +2064,8 @@ static int clone_bbs (gen_ctx_t gen_ctx) {
     dst = e->dst;
     dst_bb_insn = DLIST_TAIL (bb_insn_t, dst->bb_insns);
     if (dst_bb_insn->insn->code == MIR_RET || dst_bb_insn->insn->code == MIR_JRET
-        || dst_bb_insn->insn->code == MIR_SWITCH || size > max_bb_growth_factor * orig_size)
+        || dst_bb_insn->insn->code == MIR_TCALL || dst_bb_insn->insn->code == MIR_SWITCH
+        || size > max_bb_growth_factor * orig_size)
       continue;
     res = TRUE;
     DEBUG (2, {
@@ -9304,6 +9312,125 @@ static void *print_and_execute_wrapper (gen_ctx_t gen_ctx, MIR_item_t called_fun
 
 static const int collect_bb_stat_p = FALSE;
 
+/* Return the label to jump to for returning from the current function after
+   a call: a label just before the function's only RET (simplification leaves
+   at most one), or before a RET added at the end when there is none -- every
+   path out then ended in a TCALL.  Put the registers a call's results should
+   be moved into in RET_OPS. */
+static MIR_insn_t get_tcall_ret_label (gen_ctx_t gen_ctx, MIR_insn_t ret_insn,
+                                       VARR (MIR_op_t) * ret_ops) {
+  MIR_context_t ctx = gen_ctx->ctx;
+  MIR_func_t func = curr_func_item->u.func;
+  MIR_insn_t label = MIR_new_label (ctx), new_insn;
+  MIR_insn_code_t ext_code;
+  MIR_type_t type;
+  MIR_op_t op;
+
+  VARR_TRUNC (MIR_op_t, ret_ops, 0);
+  if (ret_insn == NULL) {
+    MIR_append_insn (ctx, curr_func_item, label);
+    VARR_TRUNC (MIR_op_t, temp_ops, 0);
+    for (uint32_t i = 0; i < func->nres; i++) {
+      type = func->res_types[i];
+      op = MIR_new_reg_op (ctx, _MIR_new_temp_reg (ctx,
+                                                   type == MIR_T_F || type == MIR_T_D
+                                                       || type == MIR_T_LD
+                                                     ? type
+                                                     : MIR_T_I64,
+                                                   func));
+      VARR_PUSH (MIR_op_t, ret_ops, op);
+      /* A return truncates its operands to the result types (see make_one_ret): */
+      switch (type) {
+      case MIR_T_I8: ext_code = MIR_EXT8; break;
+      case MIR_T_U8: ext_code = MIR_UEXT8; break;
+      case MIR_T_I16: ext_code = MIR_EXT16; break;
+      case MIR_T_U16: ext_code = MIR_UEXT16; break;
+      case MIR_T_I32: ext_code = MIR_EXT32; break;
+      case MIR_T_U32: ext_code = MIR_UEXT32; break;
+      default: ext_code = MIR_INVALID_INSN; break;
+      }
+      if (ext_code != MIR_INVALID_INSN) {
+        new_insn = MIR_new_insn (ctx, ext_code,
+                                 MIR_new_reg_op (ctx, _MIR_new_temp_reg (ctx, MIR_T_I64, func)),
+                                 op);
+        MIR_append_insn (ctx, curr_func_item, new_insn);
+        op = new_insn->ops[0];
+      }
+      VARR_PUSH (MIR_op_t, temp_ops, op);
+    }
+    MIR_append_insn (ctx, curr_func_item,
+                     MIR_new_insn_arr (ctx, MIR_RET, func->nres, VARR_ADDR (MIR_op_t, temp_ops)));
+    return label;
+  }
+  for (uint32_t i = 0; i < func->nres; i++) {
+    if (ret_insn->ops[i].mode != MIR_OP_REG) { /* move it to a reg the calls can set */
+      type = func->res_types[i];
+      op = MIR_new_reg_op (ctx, _MIR_new_temp_reg (ctx,
+                                                   type == MIR_T_F || type == MIR_T_D
+                                                       || type == MIR_T_LD
+                                                     ? type
+                                                     : MIR_T_I64,
+                                                   func));
+      MIR_insert_insn_before (ctx, curr_func_item, ret_insn,
+                              MIR_new_insn (ctx,
+                                            type == MIR_T_F    ? MIR_FMOV
+                                            : type == MIR_T_D  ? MIR_DMOV
+                                            : type == MIR_T_LD ? MIR_LDMOV
+                                                               : MIR_MOV,
+                                            op, ret_insn->ops[i]));
+      ret_insn->ops[i] = op;
+    }
+    VARR_PUSH (MIR_op_t, ret_ops, ret_insn->ops[i]);
+  }
+  MIR_insert_insn_before (ctx, curr_func_item, ret_insn, label);
+  return label;
+}
+
+/* Change each TCALL the target can not make a tail jump into a call, moves of
+   its results into the return's operands, and a jump to the return.  */
+static void lower_tcalls (gen_ctx_t gen_ctx) {
+  MIR_context_t ctx = gen_ctx->ctx;
+  MIR_func_t func = curr_func_item->u.func;
+  MIR_insn_t insn, next_insn, ret_insn = NULL, ret_label = NULL, new_insn;
+  MIR_type_t type;
+  VARR (MIR_op_t) * ret_ops;
+  int tcall_p = FALSE;
+
+  for (insn = DLIST_HEAD (MIR_insn_t, func->insns); insn != NULL;
+       insn = DLIST_NEXT (MIR_insn_t, insn))
+    if (insn->code == MIR_RET)
+      ret_insn = insn;
+    else if (insn->code == MIR_TCALL)
+      tcall_p = TRUE;
+  if (!tcall_p) return;
+  VARR_CREATE (MIR_op_t, ret_ops, gen_alloc (gen_ctx), 4);
+  for (insn = DLIST_HEAD (MIR_insn_t, func->insns); insn != NULL; insn = next_insn) {
+    next_insn = DLIST_NEXT (MIR_insn_t, insn);
+    /* Global vars are used at the return (see build_func_cfg), not at a tail call: */
+    if (insn->code != MIR_TCALL
+        || (func->global_vars == NULL && target_tail_call_p (gen_ctx, insn)))
+      continue;
+    if (ret_label == NULL) ret_label = get_tcall_ret_label (gen_ctx, ret_insn, ret_ops);
+    insn->code = MIR_CALL;
+    new_insn = insn;
+    for (uint32_t i = 0; i < func->nres; i++) {
+      type = func->res_types[i];
+      MIR_insert_insn_after (ctx, curr_func_item, new_insn,
+                             MIR_new_insn (ctx,
+                                           type == MIR_T_F    ? MIR_FMOV
+                                           : type == MIR_T_D  ? MIR_DMOV
+                                           : type == MIR_T_LD ? MIR_LDMOV
+                                                              : MIR_MOV,
+                                           VARR_GET (MIR_op_t, ret_ops, i),
+                                           insn->ops[i + 2]));
+      new_insn = DLIST_NEXT (MIR_insn_t, new_insn);
+    }
+    MIR_insert_insn_after (ctx, curr_func_item, new_insn,
+                           MIR_new_insn (ctx, MIR_JMP, MIR_new_label_op (ctx, ret_label)));
+  }
+  VARR_DESTROY (MIR_op_t, ret_ops);
+}
+
 static void *generate_func_code (MIR_context_t ctx, MIR_item_t func_item, int machine_code_p) {
   gen_ctx_t gen_ctx = *gen_ctx_loc (ctx);
   uint8_t *code;
@@ -9331,6 +9458,7 @@ static void *generate_func_code (MIR_context_t ctx, MIR_item_t func_item, int ma
   });
   curr_func_item = func_item;
   _MIR_duplicate_func_insns (ctx, func_item);
+  lower_tcalls (gen_ctx);
   curr_cfg = func_item->data = gen_malloc (gen_ctx, sizeof (struct func_cfg));
   build_func_cfg (gen_ctx);
   bbs_num = curr_bb_index;
@@ -9617,7 +9745,7 @@ static void create_bb_stubs (gen_ctx_t gen_ctx) {
       n_bbs++;
     }
     new_bb_p = MIR_any_branch_code_p (insn->code) || insn->code == MIR_RET || insn->code == MIR_JRET
-               || insn->code == MIR_PRBEQ || insn->code == MIR_PRBNE;
+               || insn->code == MIR_TCALL || insn->code == MIR_PRBEQ || insn->code == MIR_PRBNE;
   }
   curr_func_item->data = bb_stubs = gen_malloc (gen_ctx, sizeof (struct bb_stub) * n_bbs);
   n_bbs = 0;
@@ -9640,7 +9768,7 @@ static void create_bb_stubs (gen_ctx_t gen_ctx) {
       n_bbs++;
     }
     new_bb_p = MIR_any_branch_code_p (insn->code) || insn->code == MIR_RET || insn->code == MIR_JRET
-               || insn->code == MIR_PRBEQ || insn->code == MIR_PRBNE;
+               || insn->code == MIR_TCALL || insn->code == MIR_PRBEQ || insn->code == MIR_PRBNE;
   }
   bb_stubs[n_bbs - 1].last_insn = DLIST_TAIL (MIR_insn_t, curr_func_item->u.func->insns);
   if (debug_file != NULL) {
@@ -9999,7 +10127,8 @@ static void generate_bb_version_machine_code (gen_ctx_t gen_ctx, bb_version_t bb
     target_bb_insn_translate (gen_ctx, curr_insn, VARR_ADDR (void_ptr_t, succ_bb_addrs));
   }
   if (curr_insn->code != MIR_JMP && curr_insn->code != MIR_JMPI && curr_insn->code != MIR_SWITCH
-      && curr_insn->code != MIR_RET && curr_insn->code != MIR_JRET) {
+      && curr_insn->code != MIR_RET && curr_insn->code != MIR_JRET
+      && curr_insn->code != MIR_TCALL) {
     VARR_TRUNC (void_ptr_t, succ_bb_addrs, 0);
     (void) get_bb_version (gen_ctx, bb_stub + 1, (uint32_t) VARR_LENGTH (spot_attr_t, spot_attrs),
                            VARR_ADDR (spot_attr_t, spot_attrs), FALSE, &addr);

@@ -335,6 +335,7 @@ static const struct insn_desc insn_descs[] = {
   {MIR_PRSET, "prset", {MIR_OP_UNDEF, MIR_OP_INT, MIR_OP_BOUND}},
   {MIR_PRBEQ, "prbeq", {MIR_OP_LABEL, MIR_OP_UNDEF, MIR_OP_INT, MIR_OP_BOUND}},
   {MIR_PRBNE, "prbne", {MIR_OP_LABEL, MIR_OP_UNDEF, MIR_OP_INT, MIR_OP_BOUND}},
+  {MIR_TCALL, "tcall", {MIR_OP_BOUND}},
   {MIR_USE, "use", {MIR_OP_BOUND}},
   {MIR_PHI, "phi", {MIR_OP_BOUND}},
   {MIR_INVALID_INSN, "invalid-insn", {MIR_OP_BOUND}},
@@ -1553,7 +1554,7 @@ void MIR_finish_func (MIR_context_t ctx) {
   MIR_insn_t insn, prev_insn;
   MIR_insn_code_t code;
   const char *func_name;
-  int ret_p = FALSE, jret_p = FALSE;
+  int ret_p = FALSE, jret_p = FALSE, tcall_p = FALSE;
 
   if (curr_func == NULL)
     MIR_get_error_func (ctx) (MIR_no_func_error, "finish of non-existing function");
@@ -1569,6 +1570,7 @@ void MIR_finish_func (MIR_context_t ctx) {
     code = insn->code;
     if (code == MIR_RET) ret_p = TRUE;
     if (code == MIR_JRET) jret_p = TRUE;
+    if (code == MIR_TCALL) tcall_p = TRUE;
     if (code == MIR_PHI || code == MIR_USE) {
       curr_func = NULL;
       MIR_get_error_func (ctx) (MIR_vararg_func_error, "use or phi can be used only internally");
@@ -1585,6 +1587,24 @@ void MIR_finish_func (MIR_context_t ctx) {
       curr_func = NULL;
       MIR_get_error_func (ctx) (MIR_vararg_func_error, "func %s: mix of RET and JRET insns",
                                 func_name);
+    } else if ((code == MIR_JRET && tcall_p) || (code == MIR_TCALL && jret_p)) {
+      curr_func = NULL;
+      MIR_get_error_func (ctx) (MIR_vararg_func_error, "func %s: mix of TCALL and JRET insns",
+                                func_name);
+    } else if (code == MIR_TCALL) {
+      MIR_proto_t proto = insn->ops[0].u.ref->u.proto;
+      int match_p = proto->nres == curr_func->nres;
+
+      expr_p = FALSE;
+      for (size_t n = 0; match_p && n < proto->nres; n++)
+        match_p = proto->res_types[n] == curr_func->res_types[n];
+      if (!match_p) {
+        curr_func = NULL;
+        MIR_get_error_func (ctx) (MIR_call_op_error,
+                                  "func %s: in instruction '%s': the prototype results do not "
+                                  "correspond to the function results",
+                                  func_name, insn_descs[code].name);
+      }
     } else if (code == MIR_RET && actual_nops != curr_func->nres) {
       curr_func = NULL;
       MIR_get_error_func (
@@ -1736,7 +1756,8 @@ void MIR_finish_func (MIR_context_t ctx) {
     }
   }
   if (!ret_p && !jret_p
-      && ((insn = DLIST_TAIL (MIR_insn_t, curr_func->insns)) == NULL || insn->code != MIR_JMP)) {
+      && ((insn = DLIST_TAIL (MIR_insn_t, curr_func->insns)) == NULL
+          || (insn->code != MIR_JMP && insn->code != MIR_TCALL))) {
     VARR_TRUNC (MIR_op_t, temp_ops, 0);
     for (size_t i = 0; i < curr_func->nres; i++) { /* add absent ret */
       MIR_op_t op;
@@ -2123,6 +2144,7 @@ MIR_op_mode_t MIR_insn_op_mode (MIR_context_t ctx, MIR_insn_t insn, size_t nop, 
   case MIR_USE: return insn->ops[nop].mode;
   case MIR_CALL:
   case MIR_INLINE:
+  case MIR_TCALL:
   case MIR_UNSPEC: {
     MIR_op_t proto_op;
     MIR_proto_t proto;
@@ -2330,6 +2352,13 @@ MIR_insn_t MIR_new_jcall_insn (MIR_context_t ctx, size_t nops, ...) {
 
   va_start (argp, nops);
   return new_insn (ctx, MIR_JCALL, nops, argp);
+}
+
+MIR_insn_t MIR_new_tcall_insn (MIR_context_t ctx, size_t nops, ...) {
+  va_list argp;
+
+  va_start (argp, nops);
+  return new_insn (ctx, MIR_TCALL, nops, argp);
 }
 
 MIR_insn_t MIR_new_ret_insn (MIR_context_t ctx, size_t nops, ...) {
@@ -4017,8 +4046,16 @@ static void change_inline_insn_regs (MIR_context_t ctx, MIR_insn_t new_insn) {
   }
 }
 
+static int func_tcall_p (MIR_func_t func) {
+  for (MIR_insn_t insn = DLIST_HEAD (MIR_insn_t, func->insns); insn != NULL;
+       insn = DLIST_NEXT (MIR_insn_t, insn))
+    if (insn->code == MIR_TCALL) return TRUE;
+  return FALSE;
+}
+
 /* Only simplified code should be inlined because we need already
    extensions and one return.  */
+
 static void process_inlines (MIR_context_t ctx, MIR_item_t func_item) {
   int non_top_alloca_p, func_top_alloca_used_p, called_func_top_alloca_used_p;
   int64_t alloca_size, alloca_align, max_func_top_alloca_align;
@@ -4077,11 +4114,15 @@ static void process_inlines (MIR_context_t ctx, MIR_item_t func_item) {
     }
     called_func = called_func_item->u.func;
     called_func_insns_num = DLIST_LENGTH (MIR_insn_t, called_func->insns);
-    if (called_func->first_lref != NULL || called_func->vararg_p || called_func->jret_p
+    /* A tail call is never inlined, and neither is a function making one: its
+       TCALL would have to become a call plus a jump out of the inlined body. */
+    if (func_insn->code == MIR_TCALL || called_func->first_lref != NULL || called_func->vararg_p
+        || called_func->jret_p
         || called_func_insns_num > (func_insn->code != MIR_CALL ? MIR_MAX_INSNS_FOR_INLINE
                                                                 : MIR_MAX_INSNS_FOR_CALL_INLINE)
         || (func_insns_num > MIR_MAX_FUNC_INLINE_GROWTH * original_func_insns_num / 100
-            && func_insns_num > MIR_MAX_CALLER_SIZE_FOR_ANY_GROWTH_INLINE)) {
+            && func_insns_num > MIR_MAX_CALLER_SIZE_FOR_ANY_GROWTH_INLINE)
+        || func_tcall_p (called_func)) {
       simplify_op (ctx, func_item, func_insn, 1, FALSE, func_insn->code, FALSE, TRUE);
       continue;
     }
@@ -5844,7 +5885,9 @@ void MIR_read_with_func (MIR_context_t ctx, int (*const reader) (MIR_context_t))
     } else if (TAG_U0 <= tag && tag <= TAG_U8) { /* insn code */
       MIR_insn_code_t insn_code = attr.u;
 
-      if (insn_code >= MIR_LABEL)
+      /* TCALL comes after LABEL so that adding it renumbered no code that could be
+         in an existing binary: */
+      if (insn_code >= MIR_LABEL && insn_code != MIR_TCALL)
         MIR_get_error_func (ctx) (MIR_binary_io_error, "wrong insn code %d", insn_code);
       if (insn_code == MIR_UNSPEC || insn_code == MIR_USE || insn_code == MIR_PHI)
         MIR_get_error_func (ctx) (MIR_binary_io_error,

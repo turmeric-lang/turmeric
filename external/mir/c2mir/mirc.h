@@ -5,6 +5,10 @@
 static const char mirc[]
   = "#define __mirc__ 1\n"
     "#define __MIRC__ 1\n"
+    /* `__attribute__ ((musttail)) return f (...);` is accepted and makes the
+       call a MIR tail call (MIR_TCALL) -- a jump on targets and calls that
+       allow one, see MIR.md: */
+    "#define __MIRC_MUSTTAIL__ 1\n"
     "#define __STDC_HOSTED__ 1\n"
     "//#define __STDC_ISO_10646__ 201103L\n"
     "#define __STDC_NO_ATOMICS__ 1\n"
