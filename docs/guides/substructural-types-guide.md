@@ -177,10 +177,10 @@ linear or unique.** The obligation travels with the closure, so every check that
 applied to the captured value applies to the closure that swallowed it:
 
 ```turmeric
-(let [b (bytes-alloc 8)]
-  (let [f (fn [] : void (bytes-free b))]
-    (f)
-    (f)))          ;; ERROR TUR-E0101: linear value used after being consumed
+(let [b (bytes-alloc 8)
+      f (fn [] : void (bytes-free b))]
+  (f)
+  (f))           ;; ERROR TUR-E0101: linear value used after being consumed
 ```
 
 | Shape | `^linear` | `^unique` |

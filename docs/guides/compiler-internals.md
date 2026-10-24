@@ -162,7 +162,7 @@ src/
 |   +-- arena.c buf.c globals.c experiments.c pass.h platform.h
 |   +-- rc.c arc.c gc.c rc_free_queue.c rt_alloc.c region.c r7gc.c
 |   +-- hamt.c tur_string.c symbols.c trail.c contract_handler.c
-|   +-- tur_tls.c tur_atomics.c ffi_dispatch*.c image.c sha256.c serial.c
+|   +-- tur_tls.c tur_atomics.c image.c sha256.c serial.c
 |   +-- generated/    tur_rt_split.c tur_rt_split_decls.h tur_rt_split_embed.c
 |   +-- (not built)   runtime.c stm.c cps_prompt.c
 |   +-- (dead)        interp.c cps_rt.c
@@ -570,7 +570,6 @@ Deep dive: [separate-compilation-internals-guide.md](separate-compilation-intern
 | `hamt.c`, `tur_string.c`, `symbols.c`, `trail.c` | persistent maps, owned strings, the runtime symbol table, the backtracking trail -- linked from `libturt_runtime.a` or compiled beside a program via `__tur_autolink__` |
 | `contract_handler.c` | the contract-violation handler registry programs call by extern |
 | `tur_tls.c`, `tur_atomics.c` | thread-local state and atomics for front ends without them (the JIT) |
-| `ffi_dispatch.c`, `ffi_dispatch_thunk.c` | generated FFI trampolines (`tools/gen_ffi_dispatch.py`) for the interpreter |
 | `image.c`, `serial.c` | the application-image header codec; the host copy of the TSER continuation wire format (only the fuzzer calls it; programs get theirs from `emit_dk_runtime.c`) |
 
 Deep dive for memory management: [gc-guide.md](gc-guide.md).

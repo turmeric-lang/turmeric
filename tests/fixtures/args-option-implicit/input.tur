@@ -1,0 +1,51 @@
+;; args-option-implicit -- an option registered with args/spec-option-implicit
+;; may be given bare.  Absent, it takes its default; bare `--isolate` is its
+;; implicit value; `--isolate=x` is x.  A bare `--isolate` never takes the
+;; next word as its value: `--isolate dist` leaves `dist` positional.  A short
+;; spelling works the same, and an ordinary option beside it still reads
+;; `--port 8080` with a space.
+
+(load "stdlib/args.tur")
+
+(defn print-cstr [s : cstr] : void
+  ```c
+  printf("%s\n", s ? s : "(null)");
+  ```)
+
+;; The first positional (the list is reversed: last word is the head).
+(defn first-positional [res : ArgResult] : cstr
+  ```c
+  int64_t *cell = (int64_t *)(intptr_t)__TUR_CNAME_args/positional__(res);
+  return cell ? (const char *)(intptr_t)cell[0] : "(none)";
+  ```)
+
+(defn show [label : cstr argv : int] : void
+  (let [spec (args/spec-new)]
+    (args/spec-option-implicit spec "--isolate" "mode" (some "off") "require-corp")
+    (args/spec-option spec "--port" "int" (some "8000"))
+    (args/spec-short spec "-i" "--isolate")
+    (let [res (args/parse spec argv)]
+      (print-cstr label)
+      (if (args/error? res)
+        (print-cstr (args/error-msg res))
+        (do
+          (print-cstr (args/get-str res "isolate"))
+          (print-cstr (args/get-str res "port"))
+          (print-cstr (first-positional res))))
+      (args/result-free res))
+    (args/spec-free spec)))
+
+(defn main [] : int
+  (show "absent:" (cons "dist" 0))
+  (show "bare:" (cons "--isolate" 0))
+  (show "valued:" (cons "--isolate=credentialless" 0))
+  (show "bare then positional:" (cons "--isolate" (cons "dist" 0)))
+  (show "short:" (cons "-i" (cons "dist" 0)))
+  (show "beside a spaced option:" (cons "--isolate" (cons "--port" (cons "9000" 0))))
+  (show "unknown still errors:" (cons "--isolatee" 0))
+  (let [spec (args/spec-new)]
+    (args/spec-option-implicit spec "--isolate" "mode" (some "off") "require-corp")
+    (args/spec-option spec "--port" "int" (some "8000"))
+    (args/print-help spec)
+    (args/spec-free spec))
+  0)

@@ -74,8 +74,15 @@ not(true)                      ; => false
 let [x 10 y 20] {x + y}   ; => 30
 ```
 
-All bindings in the same `let` share the same scope; they cannot refer to
-each other. Nest `let` forms when you need sequential bindings.
+The bindings are made in order, and each value sees the names bound before
+it, so one `let` handles sequential bindings -- no need to nest them:
+
+```turmeric
+(let [x 10 y (* x 2)] (+ x y))   ; => 30
+```
+```sweet-exp
+let [x 10 y {x * 2}] {x + y}   ; => 30
+```
 
 ### Defining functions
 

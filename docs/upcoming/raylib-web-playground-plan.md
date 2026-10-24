@@ -275,19 +275,40 @@ eval uses, so a program the LSP accepts is one the module runs.
 
 Ordered by dependency. Items A0-A3 are what A needs; B0-B2 are what B needs.
 
-- **A0. Verify the thunk dispatcher under emcc.** `src/runtime/ffi_dispatch_thunk.c`
-  is shape-keyed C with no MIR dependency on paper; `extern_thunk_native`
-  gates on `tur_jit_ffi_provider()`, which the spice-image path
-  (`ffi_native_shim`) does not. Build `libturi_wasm` with the dispatcher and
-  call one int-class export. Also confirm whether `tur_wasm` is linked with
-  `-sASYNCIFY` today, and if not, what the interpreter's fiber shim costs
-  when it is (binary size: wasm-spices-plan measured +21.7 % on a tiny
-  program; libturi is not tiny).
+- **A0. How spice exports are called under emcc -- the call mechanism
+  answered 2026-10-24; use the per-export `__ffi` shims, not the shape
+  table.** Measured with emcc 6.0.13 / node: six exports and their `__ffi`
+  shims copied verbatim from a `tur build --shared` of a small spice, plus
+  the real generated table (`src/runtime/ffi_dispatch{,_thunk}.c`), each
+  export called both ways. Natively all ten calls agree. Under wasm32 the
+  shims return the right value for every export, while **the table traps --
+  `RuntimeError: null function or function signature mismatch` -- for any
+  export with a `bool` or `cstr` parameter**, because the exports keep their
+  real C types (`bool f(bool)`, `int64_t g(const char *, int64_t)`) and the
+  table calls every int-class argument through an `int64_t` function-pointer
+  cast; on wasm32 a pointer and a `bool` are `i32`, and wasm checks the type
+  of every indirect call. `int`, `float` and opaque handles (`:any` in the
+  manifest, int class) work either way. In the raylib spice, 15 of 84 defns
+  take or return a `cstr` or `bool` -- every `load-*` path and the input
+  predicates (`is-key-down`, `is-key-pressed`, ...) -- so **the table cannot
+  serve this plan even if it is kept**; the shims can. The `__ffi` shim is
+  therefore part of A1's image (below), and this plan no longer depends on
+  the table at all ([ffi-spices-integration-plan](../archive/ffi-spices-integration-plan.md)
+  S5 deletes it). The table also adds ~28 KB to a linked wasm module, so
+  dropping it trims the browser bundle.
+  Still open from A0: `tur_wasm` is **not** linked with `-sASYNCIFY` today
+  (`src/CMakeLists.txt`, the `tur_wasm` emcc link flags); what the
+  interpreter's fiber shim costs with it (wasm-spices-plan measured +21.7 %
+  on a tiny program; libturi is not tiny) is measured in P0.
 - **A1. A static spice image.** Today a `TurSpiceImage` is built by
   `tur build --shared`, `dlopen`ed, and its exports manifest read from disk
   (`spice_loader.c`). Add the static twin: `tur build --target wasm --image
   <spice>` emits the spice's object code plus a generated
-  `<spice>_image.c` holding the manifest text and a `{ name, fnptr }` table,
+  `<spice>_image.c` holding the manifest text and a `{ name, fnptr, ffi_shim }`
+  table -- `--image` emits the `__ffi` shims as `--shared` does
+  (`emit_ffi_export_shims`), and the image sets each export's `ffi_shim`
+  from the table, since the shim is how an export is called in the
+  browser (A0),
   and `tur_spice_image_from_table(manifest, table)` constructs the image
   without `dlopen`. `turi_env_attach_spice_image(env, img)` then installs
   the bindings through `tur_ffi_install_spice_bindings_owned`. `--shared`
@@ -344,8 +365,9 @@ Answer A0 by measurement, the way wasm-spices-plan section 12 did: a
 hand-linked module (`libturi_wasm` + web `libraylib.a` + the raylib spice's
 AOT objects + a hand-written image table) that evaluates the section 1
 program on a page and draws its text. Record binary size with and without
-`-sASYNCIFY`, time-to-first-frame, and fps for the blocking loop. If the
-dispatcher or the fibers do not survive emcc, that is the finding, and B
+`-sASYNCIFY`, time-to-first-frame, and fps for the blocking loop. Exports
+are called through their `__ffi` shims (A0 settled that the shape table
+cannot be used). If the fibers do not survive emcc, that is the finding, and B
 moves first.
 
 ### P1 -- The arcade module (this repo)

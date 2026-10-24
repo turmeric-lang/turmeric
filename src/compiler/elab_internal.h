@@ -1511,7 +1511,7 @@ typedef struct RfReadsSite {
     bool      is_clone;
 } RfReadsSite;
 
-/* reflected-measures RF0/RF1/RF2 (docs/upcoming/reflected-measures-plan.md):
+/* reflected-measures RF0/RF1/RF2 (docs/archive/reflected-measures-plan.md):
  * one `^reflect`-annotated function.  The body is kept as FORMS (the
  * refinement encoder consumes Forms, and Binding::defn_form is only retained
  * on two unrelated paths), the same shape WriteFrameSite carries. */

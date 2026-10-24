@@ -1,4 +1,4 @@
-;; reflected-measures RF3 (docs/upcoming/reflected-measures-plan.md): the
+;; reflected-measures RF3 (docs/archive/reflected-measures-plan.md): the
 ;; motivating example.  `len` is a named measure -- an uninterpreted function
 ;; to the solver -- and `(> (len (Cons 1 (Nil))) 0)` used to fall to
 ;; TUR-W0372 because nothing related `len` to the STRUCTURE of its argument.

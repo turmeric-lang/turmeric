@@ -394,7 +394,7 @@ gate and a discharge:
    handle, the inference walk removes `Unsafe` from the body's row: the block
    **discharges** the effect, so a safe wrapper over an unsafe primitive has an
    empty row. That is decision "Option A" in the
-   [effect-row honesty plan](https://github.com/turmeric-lang/turmeric/blob/main/docs/upcoming/effect-row-honesty-plan.md#3-decision-option-a-for-fxunsafe).
+   [effect-row honesty plan](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/effect-row-honesty-plan.md#3-decision-option-a-for-fxunsafe).
 3. W0033 skips the marker's clause. CPS coloring does **not** skip it:
    `cps_control_walk` seeds on every `EX_HANDLE`, so a function containing an
    `(unsafe ...)` block is colored, and so is every caller:
@@ -458,12 +458,11 @@ rows, never with `effect_row_is_empty` on a type.
 
 ### The effect-row honesty plan
 
-[effect-row-honesty-plan](https://github.com/turmeric-lang/turmeric/blob/main/docs/upcoming/effect-row-honesty-plan.md) is open.
-W0 (attributes out of `#fx{}`), W1 (TUR-E0026), W2 (compiler-known
+[effect-row-honesty-plan](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/effect-row-honesty-plan.md) is done and
+archived. W0 (attributes out of `#fx{}`), W1 (TUR-E0026), W2 (compiler-known
 capabilities), W3 (guide corrections) and W4 (`IO` on `println`, the
-runtime-pure gates) are done and described above. W5 -- whether
-`--strict-effects` should default on -- is the open item, and the plan
-recommends against it.
+runtime-pure gates) are described above. W5 -- whether `--strict-effects`
+should default on -- was answered no: the flag stays off by default.
 
 ---
 

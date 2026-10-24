@@ -45,7 +45,7 @@ The original filing follows.
 
 **Severity: medium (a non-optional acceptance criterion is not met, in the one
 place the plan names as highest-risk).**
-[reflected-measures-plan](../upcoming/reflected-measures-plan.md) RF3 states
+[reflected-measures-plan](reflected-measures-plan.md) RF3 states
 its fuzz requirement in those words: "Source fuzzer
 (`tests/refine-fuzz-src.py`) gains reflected shapes -- both prior soundness
 bugs lived in the encoder, so `--n 400` at two seeds is non-optional." The

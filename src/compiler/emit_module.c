@@ -22873,7 +22873,7 @@ static int emit_exports_manifest_inner(Buf *out, const Expr *program) {
  *   'v' -- :void return only (never an arg class).
  *   '?' -- not representable as a scalar the FFI layer marshals (structs,
  *          ADTs, carriers, :never).  The shim is omitted for this export and
- *          the loader falls back to the legacy shape table / clean error.
+ *          the loader reports it cleanly.
  *
  * The 'i'/'f'/'v' results agree with the loader's class_for_tag(
  * manifest_type_tag(k)) mapping in src/turi/spice_loader.c so the shim reads
@@ -22960,13 +22960,19 @@ static char ffi_shim_class_for_type(const Type *t, bool is_return) {
  * trampolines, which rely on a blanket function-pointer cast).  The result is
  * written back to *out_i (int-class return) or *out_f (float-class return); a
  * :void return writes neither.  The shim symbol name is the export's mangled
- * name plus `__ffi`; the loader probes it with dlsym and falls back to the
- * legacy shape table when it is absent (spices built before this change).
+ * name plus `__ffi`; the loader probes it with dlsym.  Without a JIT the shim
+ * is the only way the interpreter calls the export (ffi-spices-integration-
+ * plan S5), so a library built before shims existed must be rebuilt.
  *
- * Skipped (no shim; legacy path / clean error handles the call): variadic
- * exports, and any export whose return or a parameter is not a scalar the FFI
- * layer represents (its class is '?').  The set walked here mirrors
- * emit_exports_manifest exactly so the manifest and the shim stay in lockstep.
+ * A variadic export gets one too: its last parameter is the rest list, an
+ * `int64_t` cons-list pointer, which the interpreter builds and stores in
+ * iv[fixed] (ffi_thunk.c, S2) -- so the shim is an ordinary one whose last
+ * slot is int-class, whatever the rest's element type.
+ *
+ * Skipped (no shim; the loader's clean error handles the call): any export
+ * whose return or a parameter is not a scalar the FFI layer represents (its
+ * class is '?').  The set walked here mirrors emit_exports_manifest exactly
+ * so the manifest and the shim stay in lockstep.
  *
  * Emitted with external linkage (no `static`) so dlsym can find it. */
 static void emit_ffi_export_shims(const EmitCtx *ctx, Buf *out,
@@ -22985,9 +22991,6 @@ static void emit_ffi_export_shims(const EmitCtx *ctx, Buf *out,
         if (b->is_from_stdlib) continue;
         if (b->name->len == 4 && memcmp(b->name->name, "main", 4) == 0) continue;
         if (e->type.kind != TY_FN) continue;
-        /* Variadic exports are not callable from the REPL yet (cons-list
-         * marshaling is a separate feature); leave them to the clean error. */
-        if (e->type.as.fn.is_variadic) continue;
         /* A generic export the program never instantiates -- linalg/sized's
          * `lamat-set! [m n]`, generic only in phantom indices -- has no
          * definition in this TU (only its per-spec monomorphs would), so a

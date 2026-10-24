@@ -1,0 +1,37 @@
+;; unary-minus-negates: `(- x)` and `(-. x)` with one argument negate, on
+;; every builtin numeric kind.  It used to be TUR-E0006 ("there is no
+;; one-argument negation"), and the advertised stand-in, `(- 0.0 x)`, is not
+;; negation for a float: at x = 0.0 it gives +0.0, not -0.0.  The sign of
+;; zero is printed through 1/x, where it shows as -inf vs inf.
+;;
+;; Integers wrap at their kind's width, as + - * do: (- min-int) is min-int,
+;; (- 1u8) is 255, (- -128i8) is -128.  (`Num`'s `neg`, which now reads
+;; `(- x)`, is num-neg-keeps-sign-of-zero; this file loads nothing, so
+;; run-turi.sh runs it under the interpreter too.)
+
+(defn negate [x : float] : float (- x))
+
+(defn main [] : int
+  ;; floats
+  (println (- 7.1))                       ; -7.1
+  (println (- (- 7.1)))                   ; 7.1
+  (println (-. 3.25))                     ; -3.25
+  (println (/ 1.0 (- 0.0)))               ; -inf
+  (println (/ 1.0 (negate 0.0)))          ; -inf, through a variable
+  (println (/ 1.0 (negate (- 0.0))))      ; inf
+  (println (/ 1.0 (- 0.0 0.0)))           ; inf -- why (- 0.0 x) is not negation
+  (println (- 2.5f32))                    ; -2.5
+  ;; int
+  (let [x 42]
+    (println (- x)))                      ; -42
+  (println (- -9))                        ; 9
+  (println (- (- 0 9223372036854775807 1)))   ; min-int: wraps to itself
+  ;; sized integers wrap at their own width
+  (println (- 5i8))                       ; -5
+  (println (- (- 0i8 127i8 1i8)))         ; -128 wraps to -128
+  (println (- 1u8))                       ; 255
+  (println (- 1u16))                      ; 65535
+  (println (- 1u32))                      ; 4294967295
+  (println (- 1u64))                      ; 18446744073709551615
+  (println (- 7i32))                      ; -7
+  0)

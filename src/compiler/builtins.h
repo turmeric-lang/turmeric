@@ -128,10 +128,18 @@ const char *builtin_int_divmod_helper(const BuiltinSpec *spec);
  * `(+ x y)` at uint8 was 300 until something of type uint8_t received it, and
  * the interpreter (int64 carriers throughout) never reduced it at all.  Non-
  * NULL for the kinds narrower than 64 bits (int8/16/32, uint8/16/32) on the
- * rows whose result can leave the operand range: + - * (BS_VARIADIC_FOLD), `/`
+ * rows whose result can leave the operand range: + - * (BS_VARIADIC_FOLD),
+ * one-argument `-` (BS_PREFIX_UNARY: -(uint8_t)1 is -1, -INT8_MIN is 128), `/`
  * (INT8_MIN / -1), `bit-shl` and `bit-shr`.  Comparisons, `mod` and
  * and/or/xor stay in range, and int/int64/uint64 are their own width. */
 const char *builtin_int_wrap_ctype(const BuiltinSpec *spec);
+
+/* The C type a one-argument `-` on an integer kind negates into, by way of
+ * `(T)(0 - (uint64_t)(x))`; NULL for a float row (plain unary minus, which
+ * keeps the sign of zero) and for uint64 (unsigned negation is already
+ * modular).  int negates through uint64_t too, so -INT64_MIN is not a signed
+ * overflow even where the C compiler folds it as a constant. */
+const char *builtin_negate_ctype(const BuiltinSpec *spec);
 
 /* The unsigned C type of the same width as a sized integer kind
  * ("uint8_t" for int8 and uint8, ...), or NULL for a 64-bit or non-integer

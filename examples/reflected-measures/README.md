@@ -1,7 +1,7 @@
 # reflected-measures -- a scoreboard with provable contracts
 
 A small judged-competition scoreboard that exercises the `reflected-measures`
-experiment (`^reflect`, [plan](../../docs/upcoming/reflected-measures-plan.md)).
+experiment (`^reflect`, [plan](../../docs/archive/reflected-measures-plan.md)).
 
 Each API function states its contract with a recursive measure over the board:
 

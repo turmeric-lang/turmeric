@@ -385,15 +385,15 @@ When the size is determined at runtime (e.g. from a list value), use
 `sized-vec-from-list`:
 
 ```turmeric
-(let [lst (list 10 20 30)]
-  (let [v (unsafe (sized-vec-from-list lst))]
-    (println (sized-vec-len v))))   ; => 3
+(let [lst (list 10 20 30)
+      v   (unsafe (sized-vec-from-list lst))]
+  (println (sized-vec-len v)))   ; => 3
 ```
 
 ```sweet-exp
-let [lst list(10 20 30)]
-  let [v unsafe(sized-vec-from-list(lst))]
-    println(sized-vec-len(v))   ; => 3
+let [lst list(10 20 30)
+     v   unsafe(sized-vec-from-list(lst))]
+  println(sized-vec-len(v))   ; => 3
 ```
 
 `sized-vec-from-list` requires `#fx{Unsafe}` because it casts the cons cell

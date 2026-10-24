@@ -548,7 +548,7 @@ static const char *enc_fresh_name(Enc *E, const char *base) {
 
 /* ------------------------------------------------------------------------- *
  * reflected-measures RF3: bounded ground unfolding
- * (docs/upcoming/reflected-measures-plan.md)
+ * (docs/archive/reflected-measures-plan.md)
  *
  * A `^reflect` function that passed the totality gate (elab_reflect.c) has a
  * defining equation the solver may use.  The supported fragment is

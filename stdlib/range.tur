@@ -529,35 +529,35 @@
 ;;; Since: LZ4
 
 (defn range-encloses? [r : Range other : Range] : bool
-  (let [rl (range-lower r)
-        ru (range-upper r)
-        ol (range-lower other)
-        ou (range-upper other)]
-    (let [lower-ok (if (bound-unbounded? rl)
-                     true
-                     (if (bound-unbounded? ol)
-                       false
-                       (let [rv (range-bound-value rl)
-                             ov (range-bound-value ol)]
-                         (if (< rv ov)
-                           true
-                           (if (= rv ov)
-                             (or (range-bound-inclusive? rl)
-                               (not (range-bound-inclusive? ol)))
-                             false)))))
-          upper-ok (if (bound-unbounded? ru)
-                     true
-                     (if (bound-unbounded? ou)
-                       false
-                       (let [rv (range-bound-value ru)
-                             ov (range-bound-value ou)]
-                         (if (> rv ov)
-                           true
-                           (if (= rv ov)
-                             (or (range-bound-inclusive? ru)
-                               (not (range-bound-inclusive? ou)))
-                             false)))))]
-      (and lower-ok upper-ok))))
+  (let [rl       (range-lower r)
+        ru       (range-upper r)
+        ol       (range-lower other)
+        ou       (range-upper other)
+        lower-ok (if (bound-unbounded? rl)
+                   true
+                   (if (bound-unbounded? ol)
+                     false
+                     (let [rv (range-bound-value rl)
+                           ov (range-bound-value ol)]
+                       (if (< rv ov)
+                         true
+                         (if (= rv ov)
+                           (or (range-bound-inclusive? rl)
+                             (not (range-bound-inclusive? ol)))
+                           false)))))
+        upper-ok (if (bound-unbounded? ru)
+                   true
+                   (if (bound-unbounded? ou)
+                     false
+                     (let [rv (range-bound-value ru)
+                           ov (range-bound-value ou)]
+                       (if (> rv ov)
+                         true
+                         (if (= rv ov)
+                           (or (range-bound-inclusive? ru)
+                             (not (range-bound-inclusive? ou)))
+                           false)))))]
+    (and lower-ok upper-ok)))
 ;;; range-connected? -- true if no gap exists between r1 and r2.
 ;;;
 ;;; Two ranges are connected if their union forms a contiguous interval

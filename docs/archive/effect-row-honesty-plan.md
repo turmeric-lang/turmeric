@@ -1,11 +1,23 @@
 # Effect-row honesty -- answer WP8 as Option A, and make `#fx{}` mean something
 
-> **Status: PROPOSED 2026-10-01, all three open questions resolved the same
-> day** (section 6 -- Q1 and Q2 by measurement, Q3 by the author).
-> **W0-W4 DONE 2026-10-02** (W1 first; W0 turned out not to be its
-> prerequisite), and **W5's two gating defects fixed the same day.** What
-> remains is W5 itself -- the `--strict-effects` default -- which this plan
-> recommends against, now with the post-W4 measurement it asked for (see W5).
+> **Archived 2026-10-24** at the author's request: W0-W4 are done and W5's
+> answer is this plan's own recommendation -- `--strict-effects` stays
+> default-off.
+>
+> **Status (re-audited 2026-10-24): W0-W4 DONE 2026-10-02; W5 not acted on,
+> by this plan's own recommendation.** Proposed 2026-10-01 (`a689d7fd`), all
+> three open questions resolved the same day (`93010bf0`, `e1e4ea29`;
+> section 6 -- Q1 and Q2 by measurement, Q3 by the author). Landed on `main`
+> 2026-10-02 as `c9625895` (W1 + W5's two gating defects: TUR-E0026, no
+> gensyms, one strict flag), `e20d2ee2` (W0), `14d026bc` (W2), `8ee1fec8` (W3),
+> `7ea30dac` (W4) and `65abe603` (module members effect-checked, the gap W4's
+> measurement found); shipped in v0.59.0 (`f6f84b22`). Each exit re-probed on
+> 2026-10-24 with `build/tur` v0.70.5 -- see the per-item notes. What remains
+> is W5 itself -- the `--strict-effects` default -- which this plan recommends
+> against, with the post-W4 measurement it asked for (see W5); the flag is
+> still default-off (`src/runtime/globals.c:154`). Nothing else is open, so the
+> plan is ready for `docs/archive/` once W5's "do not default it" is accepted
+> as its answer.
 > Written in response to
 > two questions about the security guide -- whether `--no-proc-macros` should
 > default on "because Rust defaults `procMacro.enable = false`", and whether
@@ -14,18 +26,18 @@
 > `Write` / `println` pair already has, with the defaults inverted.
 >
 > **Type:** effects system, diagnostics, guide corrections
-> **Touches:** `src/compiler/builtins.c` (the 14 `println` rows),
+> **Touches:** `src/compiler/builtins.c` (the 14 `println` rows, `:149-163`),
 > `src/passes/effect.h` + effect-row resolution, `src/passes/effect_check.c`,
 > `stdlib/effects.tur`, `docs/guides/security-guide.md`,
 > `docs/guides/effects-system-guide.md`, and the
-> [security-audit-plan](security-audit-plan.md)'s WP8 and open question 3.
+> [security-audit-plan](../upcoming/security-audit-plan.md)'s WP8 and open question 3.
 >
 > **Answers:** security-audit-plan open question 3 (`#fx{Unsafe}` semantics)
 > as **Option A**, and supersedes WP8's first bullet.
 > **Files alongside:**
-> [capability-effect-tag-silently-resolves-to-empty-row](../archive/capability-effect-tag-silently-resolves-to-empty-row.md),
-> [strict-effects-w0030-names-synthesized-lambdas](../archive/strict-effects-w0030-names-synthesized-lambdas.md),
-> [strict-effects-and-lint-effects-are-indistinguishable](../archive/strict-effects-and-lint-effects-are-indistinguishable.md).
+> [capability-effect-tag-silently-resolves-to-empty-row](capability-effect-tag-silently-resolves-to-empty-row.md),
+> [strict-effects-w0030-names-synthesized-lambdas](strict-effects-w0030-names-synthesized-lambdas.md),
+> [strict-effects-and-lint-effects-are-indistinguishable](strict-effects-and-lint-effects-are-indistinguishable.md).
 
 ## 1. The thesis
 
@@ -67,9 +79,12 @@ feature: it is how a safe abstraction gets built over an unsafe primitive.
 
 | Haskell | Turmeric | Where |
 | --- | --- | --- |
-| `putStrLn :: String -> IO ()` | `(perform (Write s))`, `Write ^extends IO` | `stdlib/effects.tur:109` |
-| `runIO` / `main :: IO ()` | `(with-write ...)` -- handles `Write` by calling `println` | `stdlib/effects.tur:175` |
-| `Debug.Trace.trace` | `println` -- builtin, row `#{}` | `src/compiler/builtins.c:133-147` |
+| `putStrLn :: String -> IO ()` | `(perform (Write s))`, `Write ^extends IO` | `stdlib/effects.tur:114` |
+| `runIO` / `main :: IO ()` | `(with-write ...)` -- handles `Write` by calling `println` | `stdlib/effects.tur:180` |
+| `Debug.Trace.trace` | `println` -- builtin, row `#{}` | `src/compiler/builtins.c:149-163` |
+
+(Line numbers refreshed 2026-10-24. The `println` row is `#fx{IO}` since W4,
+so the last line describes the state this section measured, not today's.)
 
 **But the defaults are inverted.** Haskell makes `putStrLn` ergonomic and
 `Debug.Trace` an import you go out of your way for; the asymmetry *is* the
@@ -143,6 +158,15 @@ any time.
 > spelling, and an unknown pre-name `^attr` is now an error rather than being
 > taken as the function's name.  Turned out not to be W1's prerequisite -- see
 > W1 -- so it landed after it.
+>
+> **Re-verified 2026-10-24** (commit `e20d2ee2`): the exit grep for
+> `#fx{Construct}`/`#fx{ByVal}` over `*.tur` is empty; `stdlib/result.tur` and
+> `stdlib/option.tur` use `^construct`; `#fx{Construct}` in a row is TUR-E0026
+> naming `^construct`; `(match #fx{NonExhaustive} x ...)` warns TUR-D0004
+> (`src/compiler/diag.h:328`, `src/compiler/elab_structs.c:3576-3596`).
+> Fixtures: `sum-either-nonexhaustive-opt-out` (new spelling),
+> `sum-either-nonexhaustive-legacy-marker` (old spelling);
+> `docs/guides/sum-types-guide.md:275` teaches `^non-exhaustive`.
 
 Move the three compiler attribute markers onto the `^attr` syntax the language
 already has, leaving `#fx{...}` holding effect names and row variables only.
@@ -171,7 +195,8 @@ it.
 Transition, because one of them is published syntax:
 
 - `#fx{NonExhaustive}` has its own documented section at
-  [`sum-types-guide.md:241`](../guides/sum-types-guide.md) and a line in that
+  [`sum-types-guide.md:241`](../guides/sum-types-guide.md) (now `:275`,
+  rewritten to `^non-exhaustive`) and a line in that
   page's front-matter description. So: **dual-accept** both spellings, emit
   `^deprecated`-style guidance on the `#fx{}` form, and rewrite the guide to
   teach `^non-exhaustive`. `^deprecated` and the TUR-W0050 retired-flag
@@ -200,9 +225,15 @@ Transition, because one of them is published syntax:
 >   `println` until W4) and three fixtures' undeclared `Write` and `#fx{|e}`.
 >   All fixed in the same change; turmeric-spices has none. Details in the
 >   archived report's Resolution.
+>
+> **Re-verified 2026-10-24** (commit `c9625895`): `(defn g [] #fx{Bogus} ...)`
+> is `TUR-E0026: unknown effect 'Bogus' in effect row: no defeffect declares
+> it (did you load the module that declares it?)`. Pinned by
+> `tests/fixtures/errors/unknown-effect-in-row`,
+> `unknown-capability-tag-pure-caller`, `loaded-capability-tag-pure-caller`.
 
 Filed as
-[capability-effect-tag-silently-resolves-to-empty-row](../archive/capability-effect-tag-silently-resolves-to-empty-row.md).
+[capability-effect-tag-silently-resolves-to-empty-row](capability-effect-tag-silently-resolves-to-empty-row.md).
 An uppercase name in `#fx{...}` that no `defeffect` in the compile declares is
 dropped silently, so `#fx{IO}` checks as `#fx{}` -- and a caller's `#fx{}`
 then passes a check it should fail.
@@ -234,14 +265,20 @@ and `stdlib/` still compiles.
 > annotates, in an autoloaded file, and since W1 an undeclared name is an
 > error rather than a silent drop -- so its placement is ordinary now, not a
 > workaround, and it did not need to become compiler-known.
+>
+> **Re-verified 2026-10-24** (commit `14d026bc`): `(defn g [] #fx{IO} ...)` in
+> a file that loads nothing checks clean. Registration is
+> `effect_env_register_builtin_capabilities` (`src/passes/effect.c:576`),
+> called from `src/compiler/elab_core.c:2587`, `src/driver/pipeline.c:151`
+> and `src/turi/eval.c:18197`.
 
-`IO` lives in `stdlib/effects.tur:29`, which is not autoloaded. `println` is
+`IO` lives in `stdlib/effects.tur:29` (now `:34`), which is not autoloaded. `println` is
 available everywhere. Tagging the builtin without fixing that would make the
 tag a no-op in exactly the small programs that need it -- and, after W1, a
 hard error in every program that does not import `effects.tur`.
 
 Follow the `Unsafe` precedent: it is compiler-known via
-`EFFECT_NAME_UNSAFE` (`src/passes/effect.h:164`). Make the five stdlib
+`EFFECT_NAME_UNSAFE` (`src/passes/effect.h:190`). Make the five stdlib
 capability tags (`IO`, `FS`, `Net`, `Proc`, `Rand`) compiler-known the same
 way. This also retires the hand-placement of `Bt` in `trail.tur`, which exists
 only to dodge this problem.
@@ -257,6 +294,14 @@ only to dodge this problem.
 > written against W4's semantics -- with W4, `println` maps to `putStrLn`
 > (tracked) rather than `Debug.Trace`, and `Write` to an interpretable output
 > effect.
+>
+> **Re-verified 2026-10-24** (commit `8ee1fec8`): the rust-analyzer sentence
+> is now `security-guide.md:103-109` ("turning ... `procMacro.enable` *off*",
+> "ships it **on**"), the `#fx{Unsafe}` paragraph `:453-473` ("**enforced**,
+> the way Rust's `unsafe fn` is"); the audit plan's M-7 row is
+> `security-audit-plan.md:170`; the print-path section is
+> `effects-system-guide.md:549`. The line numbers in items 1-2 below are where
+> the wrong text sat on 2026-10-01.
 
 Two factual errors, both in `docs/guides/security-guide.md` (plus W0's
 `sum-types-guide.md` rewrite, which lands with W0 rather than here):
@@ -270,7 +315,7 @@ Two factual errors, both in `docs/guides/security-guide.md` (plus W0's
    `cargo.buildScripts.enable = true`, so it **runs `build.rs`** on a tree you
    merely opened. Rewrite the sentence to say the flag *is* that setting
    turned off, not that upstream ships it off.
-   (`docs/guides/macros-guide.md:328` is already correct -- it names the
+   (`docs/guides/macros-guide.md:332` is already correct -- it names the
    setting without claiming a default. Leave it.)
 2. **`:432-438` undersells `#fx{Unsafe}`.** "documentation and a lint, not a
    boundary" is wrong on the first clause: the call-site rule is a hard error.
@@ -279,7 +324,7 @@ Two factual errors, both in `docs/guides/security-guide.md` (plus W0's
    row erasure means it is not a queryable boundary. This is WP8's "one
    paragraph in the security guide" exit.
 
-Also correct the audit plan's own M-7 row (`:166`), which describes only the
+Also correct the audit plan's own M-7 row (`:166`, now `:170`), which describes only the
 default-off lint half and reads as though nothing is enforced.
 
 3. **Say which print path to reach for** (from Q3). Nothing today tells a
@@ -330,18 +375,28 @@ re-derive it.
 > before and after.  Partly for a bad reason: module members are not
 > effect-checked at all (only top-level functions are), and every spice-test
 > `main` that prints under a row sits inside a `defmodule`.  That gap is filed
-> as [module-members-skip-effect-row-checking](../archive/module-members-skip-effect-row-checking.md);
+> as [module-members-skip-effect-row-checking](module-members-skip-effect-row-checking.md);
 > closing it is the next step toward `#fx{}` meaning something everywhere.
 >
 > **Closed 2026-10-02:** module members (and defns inside a top-level `do`)
 > are effect-row checked.  Re-measured over the same 777 files, exactly three
 > spice tests go from clean to `TUR-E0009` -- each a `#fx{Unsafe}` that
 > prints and now needs `#fx{Unsafe IO}`.
+>
+> **Re-verified 2026-10-24** (commits `7ea30dac`, `65abe603`): the exit holds
+> -- `(defn f [] #fx{} : int (do (println "x") 0))` is `TUR-E0009: function
+> 'f' performs effect 'IO' but its declared row {} does not include it` under
+> both `tur check` and `tur --interpret`, and the unannotated twin checks
+> clean. The field is `BuiltinSpec.effect` (`src/compiler/builtins.h:57`);
+> the merge is in `src/passes/effect_check.c:51`. **Since 2026-10-04**
+> (`950c2932`, stdlib-os-surface P0) `println` is no longer the only print
+> builtin: `eprintln` and `eprint` (14 rows each, `builtins.c:170-`) also
+> declare `"IO"`, so the "no other print builtin" bullet below is historical.
 
 With W1 and W2 landed, tag the `println` builtin `#fx{IO}`.
 
 Why `^capability` and not `Write`: the effects guide draws exactly this
-distinction at `effects-system-guide.md:322` -- capability tags are for
+distinction at `effects-system-guide.md:322` (now `:442`) -- capability tags are for
 "side effects [that] are not expressed with `perform` at all [...] they happen
 inside inline-C or `extern-c` calls". A builtin that writes to stdout is that
 case. And capability tags already have the right properties: justified by
@@ -349,7 +404,8 @@ annotation alone (no `TUR-W0031` over-annotation noise), propagated from
 declared rows, and a `#fx{}` caller of one is a hard `TUR-E0009`.
 
 - 14 overload rows under the single name `println` in
-  `src/compiler/builtins.c:133-147`; there is no other print builtin.
+  `src/compiler/builtins.c:133-147` (now `:149-163`); there is no other
+  print builtin (true on 2026-10-01; see the note above for `eprintln`).
 - The builtin table has **no effect-row field** today -- that is the actual
   compiler work. Adding one is reusable for any future effectful builtin.
 - Keep `println` ergonomic. This is explicitly *not* a migration: the guide's
@@ -361,7 +417,16 @@ declared rows, and a `#fx{}` caller of one is a hard `TUR-E0009`.
 **Exit:** `(defn f [] #fx{} : int (do (println "x") 0))` is a `TUR-E0009`;
 the same function unannotated still compiles.
 
-### W5 -- Then, and only then, revisit the `--strict-effects` default
+### W5 -- Then, and only then, revisit the `--strict-effects` default -- NOT DEFAULTED (as recommended)
+
+> **Status 2026-10-24:** both gating defects fixed and archived (`c9625895`);
+> the post-W4 re-measurement below is done; the default was **not** flipped,
+> per the recommendation at the end of this item. `g_strict_effects` is still
+> `false` (`src/runtime/globals.c:154`), a `TUR-W0030` still exits 0, and
+> `-Werror=strict-effects` (`globals.c:239`) still promotes it. The `main`
+> exemption floated in the re-measurement was not built -- an unannotated
+> printing `main` still draws W0030 under `--strict-effects`. Nothing in this
+> item is pending unless someone reopens the default.
 
 Two filed defects gated this, both found while measuring it. **Both fixed
 2026-10-02:** no effect diagnostic names a gensym (a lambda is *anonymous
@@ -369,10 +434,10 @@ function in 'dfs-or'*), and `--strict-effects` is the one flag, promotable
 with `-Werror=strict-effects`, with `--lint-effects` a deprecated alias. What
 is left of W5 is the default itself, after W4:
 
-- [strict-effects-w0030-names-synthesized-lambdas](../archive/strict-effects-w0030-names-synthesized-lambdas.md)
+- [strict-effects-w0030-names-synthesized-lambdas](strict-effects-w0030-names-synthesized-lambdas.md)
   -- 47 of 358 warnings name `__fn_38`-style gensyms. A default-on lint that
   is 13% unactionable teaches people to ignore the category.
-- [strict-effects-and-lint-effects-are-indistinguishable](../archive/strict-effects-and-lint-effects-are-indistinguishable.md)
+- [strict-effects-and-lint-effects-are-indistinguishable](strict-effects-and-lint-effects-are-indistinguishable.md)
   -- the two flags emit the same warning, neither can become an error, and the
   comment claiming otherwise is wrong. Decide which flag survives before
   giving either a default.
@@ -405,7 +470,8 @@ measurement says nothing about it.
 actually checks. A default-on W0030 is a *style* lint over unannotated code,
 which is a separate question with a worse cost/benefit -- 63% of the corpus
 after W4, above -- and it buys nothing for security: a warning never fails a
-build (`diag.c:110`), and the opt-in `-Werror=strict-effects` is the way a
+build (`diag.c:110` as of 2026-10-01; re-probed 2026-10-24: `tur check
+--strict-effects` on a file with W0030s exits 0), and the opt-in `-Werror=strict-effects` is the way a
 project that wants the gate already gets it.
 
 ## 5. What this does not do
@@ -447,6 +513,11 @@ interned by name in the elaborator rather than declared by `defeffect`:
 | `NonExhaustive` | `src/compiler/elab_structs.c:3568,3607` | `match` exhaustiveness opt-out |
 
 (`Unsafe` is a fourth, via `sym_effect_unsafe`, `elab_core.c:2243`.)
+
+(Historical as of 2026-10-24: W0 removed these three interning sites. The
+`match` markers are now `sym_caret_non_exhaustive` / the deprecated
+`sym_non_exhaustive_legacy` at `elab_structs.c:3576-3583`; `Unsafe` is
+interned at `elab_core.c:2585`.)
 
 A naive "hard error on an unknown name in `#fx{...}`" therefore breaks
 `stdlib/result.tur` and `stdlib/option.tur` on the first compile.
@@ -495,7 +566,7 @@ bare `#{...}`, with `@{...}` as an alternate sugar; `fx-row-syntax-rename-plan`
 free the bare `#{` slot, and retired `@{...}` in the same pass precisely
 because "two ways to spell the same thing was the original problem." Its
 siblings in the *same signature slot* -- `#reads <sym>` and `#writes [...]`
-(`src/compiler/reader.c:1452`) -- share the shape. A third spelling would
+(`src/compiler/reader.c:1520`, `:1565`) -- share the shape. A third spelling would
 re-create the problem that plan closed.
 
 **The migration is ~10,600 sites across two repos.** Measured:
@@ -531,7 +602,7 @@ by ordinary scoping, so the silent drop becomes *impossible* rather than
 *fixed*. Its costs, beyond the 10,600 sites:
 
 - **The terminator problem is already documented against it.** `#writes`' own
-  rationale (`reader.c:1452-1461`) records that the return-type marker `:`
+  rationale (`reader.c:1571-1576`) records that the return-type marker `:`
   reads as a symbol, so a greedy token run in signature position cannot be
   delimited -- which is why `#writes` takes a bracketed vector. Any
   unbracketed effect-name run hits the same wall, so the sketch still needs
@@ -555,7 +626,8 @@ Both halves check out:
 
 - **One table.** The interpreter consults the same builtin table --
   `src/turi/eval.c:80` includes `builtins.h`, calls `builtin_lookup`
-  (`:13155`), and runs `builtins_init`. `src/turi/docstrings.c:215` holds only
+  (`:15441`), and runs `builtins_init` (`src/turi/macro_env.c:85`).
+  `src/turi/docstrings.c:223` holds only
   a doc string for `println`, not a second registration. So an effect-row
   field on the builtin row is **one edit covering both paths**.
 - **The check already runs on both.** Measured with a declared capability
@@ -563,7 +635,8 @@ Both halves check out:
   *identical* `TUR-E0009`, same span, same text.
 
 W4's exit criterion therefore needs no interpreter-specific clause; add an
-`--interpret` fixture to keep it honest.
+`--interpret` fixture to keep it honest. (Done with W4:
+`tests/fixtures/errors/println-in-pure-fn` runs under both engines.)
 
 ### Q3. `with-write` -- RESOLVED: keep both (author, 2026-10-01)
 

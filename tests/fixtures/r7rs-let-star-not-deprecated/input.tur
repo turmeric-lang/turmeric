@@ -1,0 +1,8 @@
+#lang r7rs
+;; let-star-redundant-with-sequential-let: TUR-D0006 deprecates `let*` in the
+;; Turmeric dialects only.  Under #lang r7rs the Scheme report holds: `let*`
+;; binds sequentially, `let` binds in parallel, and neither warns
+;; (unexpected.stderr).
+(define x 10)
+(display (let* ((x 1) (y (+ x 1))) (* x y))) (newline)   ; 2: y sees the inner x
+(display (let ((x 1) (y x)) y)) (newline)                 ; 10: y sees the outer x

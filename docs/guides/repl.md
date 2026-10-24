@@ -705,13 +705,15 @@ tur repl
 subprocess reported a compile error. The full output is replayed.
 Fix the source and type `(reload)` (no need to restart the REPL).
 
-**`no dispatcher for shape`** -- a defn's arity exceeds the FFI
-dispatcher table's coverage (default: arity 0..6). Regenerate with a
-larger bound:
+**`cannot be called from the interpreter: its library has no __ffi shim`**
+-- the spice's library was built before per-export `__ffi` shims existed
+(July 2026), and this `tur` has no JIT to call the export another way.
+Rebuild the spice: type `(reload)` after touching its source, or delete the
+cache and restart:
 
 ```sh
-python3 tools/gen_ffi_dispatch.py --max-arity 8
-# rebuild the tur binary
+rm -rf .tur-repl-cache
+tur repl
 ```
 
 ---

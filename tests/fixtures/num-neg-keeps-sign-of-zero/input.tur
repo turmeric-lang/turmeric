@@ -1,0 +1,15 @@
+;; num-neg-keeps-sign-of-zero: the builtin `Num` instances spelled `neg` as
+;; `(- 0.0 x)` (and `(- 0 x)`, `(- 0u8 x)`, ...), which for a float is not
+;; negation: (neg 0.0) came out +0.0.  They now read `(- x)`, the one-argument
+;; minus (unary-minus-negates).  The sign of zero is printed through 1/x.
+(load "stdlib/typeclass.tur")
+
+(defn main [] : int
+  (println (neg 7.1))                     ; -7.1
+  (println (/ 1.0 (neg 0.0)))             ; -inf
+  (println (/ 1.0 (neg (- 0.0))))         ; inf
+  (println (/ 1.0f32 (neg 0.0f32)))       ; -inf
+  (println (neg 5))                       ; -5
+  (println (neg 1u8))                     ; 255
+  (println (neg (- 0i16 32767i16 1i16)))  ; -32768 wraps to itself
+  0)

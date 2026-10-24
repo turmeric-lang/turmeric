@@ -232,18 +232,15 @@ For mutually-recursive helpers, use `letrec`.
 
 ---
 
-## `let*` -- the Scheme spelling of `let`
+## `let*` -- deprecated: write `let`
 
-`(let* [a 1 b (+ a 1)] ...)` binds strictly in order, each value seeing the
-names before it. So does `let`: `let*` desugars to one nested `let` per binding,
-and the two behave the same. It is there for code written in the Scheme style
-([tur/forms/control](../html/api/tur-forms-control.html)); new Turmeric code
-writes `let`.
+`let` binds in order -- each value sees the names before it -- so write one
+`let` for sequential bindings, not a nest of them:
 
 ```turmeric
 (defn main [] : int
-  (let* [a 1
-         b (+ a 1)]
+  (let [a 1
+        b (+ a 1)]
     (println (+ a b)))   ; 3
   0)
 ```
@@ -251,11 +248,19 @@ writes `let`.
 #lang sweet-exp
 
 defn main [] : int
-  let* [a 1
-        b {a + 1}]
+  let [a 1
+       b {a + 1}]
     println {a + b}   ; 3
   0
 ```
+
+`(let* [a 1 b (+ a 1)] ...)` still compiles, as a second spelling of the same
+thing, but it is deprecated: it warns with `TUR-D0006` (an error under
+`--Werror=deprecated`; `tur explain TUR-D0006`). Change the keyword; the
+bindings stay as written. Neither form costs anything at run time.
+
+`#lang r7rs` is the exception: there `let` is parallel and `let*` sequential,
+as the Scheme report specifies, and neither is deprecated.
 
 ---
 

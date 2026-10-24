@@ -1,15 +1,14 @@
 /* ffi_thunk.h -- RP4 of docs/archive/spice-repl-plan.md.
  *
- * Bridge between the REPL's eval layer (TuriValue / TuriEnv) and the
- * shape-keyed dispatcher in src/runtime/ffi_dispatch_thunk.c. For each
- * export in a loaded TurSpiceImage, tur_ffi_install_spice_bindings()
- * registers a TuriNativeFn shim that:
+ * Bridge between the REPL's eval layer (TuriValue / TuriEnv) and a
+ * compiled spice's exports. For each export in a loaded TurSpiceImage,
+ * tur_ffi_install_spice_bindings() registers a TuriNativeFn shim that:
  *
  *   1. Validates arg count against the recorded signature.
  *   2. Marshals each TuriValue arg to int64_t (':int' class) or
  *      double (':float' class) per the export's arg_classes.
- *   3. Calls tur_ffi_thunk_call() to pick the right typed dispatcher
- *      from src/runtime/ffi_dispatch.h.
+ *   3. Calls the export through a JIT-synthesized thunk (JIT builds) or
+ *      the export's own `__ffi` shim (ffi_thunk.c's ladder).
  *   4. Wraps the result back into a TuriValue ('i' -> turi_int,
  *      'f' -> turi_float, 'v' -> turi_nil).
  *

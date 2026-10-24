@@ -575,8 +575,10 @@ test.describe('CI metrics dashboard', () => {
     await page.locator('#ci-counts-hit').hover();
     await expect(page.locator('#ci-counts-tooltip')).toBeVisible();
 
-    // Not environment-locked: no picker of its own.
-    await expect(page.locator('#ci-panel-counts select')).toHaveCount(0);
+    // Not environment-locked: no picker of its own. The shared Range select
+    // is carried into whichever tab is open, so it does not count.
+    await expect(page.locator('#ci-panel-counts select:not(#ci-range)')).toHaveCount(0);
+    await expect(page.locator('#ci-panel-counts #ci-range')).toBeVisible();
   });
 
   // A push runs only the jobs its diff needs, so the newest run often executed

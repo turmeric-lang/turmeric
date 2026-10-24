@@ -355,17 +355,17 @@ moving the struct:
 ```turmeric
 (defstruct Point :copy [x : int y : int])
 
-(let [p (make-struct Point 3 4)]
-  (let [rx &(.x p)]
-    (println @rx)))   ; prints 3
+(let [p  (make-struct Point 3 4)
+      rx &(.x p)]
+  (println @rx))   ; prints 3
 ```
 
 ```sweet-exp
 defstruct Point :copy [x :int y :int]
 
-let [p make-struct(Point 3 4)]
-  let [rx &(.x p)]
-    println(@rx)   ; prints 3
+let [p  make-struct(Point 3 4)
+     rx &(.x p)]
+  println(@rx)   ; prints 3
 ```
 
 ---
@@ -386,10 +386,10 @@ moved. A second extraction from the same binding is a use-after-move error
 
 ;; ERROR TUR-E0005: second extraction of a moved struct
 (defstruct Box :move [val : lref<int>])
-(let [b (make-struct Box (lref/new 42))]
-  (let [x (.val b)]
-    (let [y (.val b)]   ; use-after-move
-      (println (deref x)))))
+(let [b (make-struct Box (lref/new 42))
+      x (.val b)
+      y (.val b)]   ; use-after-move
+  (println (deref x)))
 ```
 
 ```sweet-exp
@@ -401,10 +401,10 @@ let [b make-struct(PtrBox lref/new(42))]
 
 ;; ERROR TUR-E0005: second extraction of a moved struct
 defstruct Box :move [val :lref<int>]
-let [b make-struct(Box lref/new(42))]
-  let [x .val(b)]
-    let [y .val(b)]   ; use-after-move
-      println(deref(x))
+let [b make-struct(Box lref/new(42))
+     x .val(b)
+     y .val(b)]   ; use-after-move
+  println(deref(x))
 ```
 
 ---
@@ -417,17 +417,17 @@ wrapper manages drop glue automatically when the count reaches zero.
 ```turmeric
 (defstruct Wrapper :move [val : rc<int>])
 
-(let [inner (rc/of 10)]
-  (let [w (rc/of (make-struct Wrapper inner))]
-    (println (rc/strong-count w))))
+(let [inner (rc/of 10)
+      w     (rc/of (make-struct Wrapper inner))]
+  (println (rc/strong-count w)))
 ```
 
 ```sweet-exp
 defstruct Wrapper :move [val :rc<int>]
 
-let [inner rc/of(10)]
-  let [w rc/of(make-struct(Wrapper inner))]
-    println(rc/strong-count(w))
+let [inner rc/of(10)
+     w     rc/of(make-struct(Wrapper inner))]
+  println(rc/strong-count(w))
 ```
 
 If the struct itself contains `:rc<T>` fields, the compiler generates nested

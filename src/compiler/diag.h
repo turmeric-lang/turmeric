@@ -307,7 +307,7 @@ typedef enum DiagCode {
      * boxes.  Erased parameters there have no decidable convention. */
     TUR_E0715_NICHE_ELEMENT_ERASED_COMPARATOR,
     /* Deprecation band (TUR-D####): syntax slated for removal, or already
-     * removed.  D0002-D0005 are emitted at elab_deprecation_level()
+     * removed.  D0002-D0006 are emitted at elab_deprecation_level()
      * (elab_internal.h): a warning, promoted to an error under
      * --Werror=deprecated.  D0001 is the exception, below. */
     /* fn-type-bare-identifier-plan: a leading colon on a type inside a
@@ -331,6 +331,10 @@ typedef enum DiagCode {
     /* adt-gadt-unification-plan slice 4: `defgadt` is deprecated; a
      * `defdata` constructor takes the same `: Result` annotation. */
     TUR_D0005_DEFGADT,
+    /* let-star-redundant-with-sequential-let: `let*` is deprecated in the
+     * Turmeric dialects; `let` already binds sequentially.  Never emitted for
+     * a `#lang r7rs` source, whose `let*` is the spec's. */
+    TUR_D0006_LET_STAR,
     /* XF (experimental-flag-mechanism-plan): the `--enable=<name>` surface.
      * E0310 fires at CLI/manifest parse on an unknown experiment name;
      * W0060/W0061 fire once per compile at the first use site of an enabled
@@ -428,7 +432,7 @@ typedef enum DiagCode {
      * because it reports a live trust-boundary fact and changes no behavior;
      * escalating warn -> refuse-the-override is a later, gated step. */
     TUR_W0383_READS_FRAME_OMITS_MUTABLE,
-    /* reflected-measures (docs/upcoming/reflected-measures-plan.md), behind
+    /* reflected-measures (docs/archive/reflected-measures-plan.md), behind
      * `--enable=reflected-measures`.  The plan reserved E0383/W0384; W0383
      * had been taken by `#reads` by land time, so the pair sits one up.
      * E0384 -- a `^reflect` function failed the TOTALITY gate: it is not

@@ -248,13 +248,13 @@ enclosing `let`-bound locals the same way it names parameters:
 
 ```turmeric
 (defn history [db : int] : ptr<void>
-  (let [raw (db-q db)]
-    (let [^mut i 1]
-      (let [key (rvec-get raw i)]
-        ```c
-        { struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)raw;
-          vec->data[i] = key; }
-        ```))))
+  (let [raw    (db-q db)
+        ^mut i 1
+        key    (rvec-get raw i)]
+    ```c
+    { struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)raw;
+      vec->data[i] = key; }
+    ```))
 ```
 
 The local **is** the C variable, not a copy of it: reads see whatever the

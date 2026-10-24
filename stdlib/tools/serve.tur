@@ -5,11 +5,15 @@
 ;;; -- dist -p 8080` does the same thing.  Files come from httpd's audited
 ;;; static path (mw-static-with), so traversal, dotfiles and symlinks out of
 ;;; the directory are refused; a directory answers with its index.html, else a
-;;; listing.  Loopback only unless `--bind` says otherwise.
+;;; listing.  Loopback only unless `--bind` says otherwise.  `--isolate` adds
+;;; the COOP/COEP headers a page needs to be cross-origin isolated (for
+;;; SharedArrayBuffer, so a WASM build with threads can run).
 ;;;
 ;;; Since: project-less-tools-plan PT1
 ;; A program, not a module: gendocs skips stdlib/tools/.
 (load "stdlib/args.tur")
+
+(load "stdlib/cstr.tur")
 
 (load "stdlib/fs.tur")
 
@@ -33,6 +37,11 @@
         "                      or a numeric IPv4/IPv6 address\n"
         "      --index NAME    file served for a directory (default index.html)\n"
         "      --no-listing    no listing for a directory without an index\n"
+        "      --isolate[=MODE]\n"
+        "                      send the COOP/COEP headers that make a page cross-origin\n"
+        "                      isolated (SharedArrayBuffer, WASM threads).  MODE is\n"
+        "                      require-corp (what a bare --isolate means),\n"
+        "                      credentialless, or off (the default: no headers)\n"
         "  -q, --quiet         no request log\n"
         "  -h, --help          show this help\n", o);
   fflush(o);
@@ -73,6 +82,25 @@
     (if (= 0 (serve/cstr-cmp bind "localhost"))
       (httpd-set-bind-addr! "127.0.0.1")
       (httpd-set-bind-addr! bind))))
+
+;;; serve/isolate-mode? -- true for a value --isolate takes.
+(defn serve/isolate-mode? [mode : cstr] : bool
+  (or (= 0 (serve/cstr-cmp mode "off"))
+    (= 0 (serve/cstr-cmp mode "require-corp"))
+    (= 0 (serve/cstr-cmp mode "credentialless"))))
+
+;;; serve/isolate -- wrap `next` so every response carries
+;;; Cross-Origin-Opener-Policy: same-origin and Cross-Origin-Embedder-Policy:
+;;; `coep`, the pair that makes the page cross-origin isolated.  Set after
+;;; `next` returns, as mw-secure-headers does: the response is sent once the
+;;; handler chain is done, so every status -- file, listing, redirect, 404 --
+;;; gets them.
+(defn serve/isolate [coep : cstr ^fat next : (fn [ptr<void>] nil)] : ptr<void>
+  (let [_n next]
+    (fn [c : ptr<void>] : nil
+      (httpd-call _n c)
+      (httpd-resp-header! c "Cross-Origin-Opener-Policy" "same-origin")
+      (httpd-resp-header! c "Cross-Origin-Embedder-Policy" coep))))
 
 ;;; serve/cstr-cmp -- strcmp.
 (defn serve/cstr-cmp [a : cstr b : cstr] : int
@@ -119,6 +147,11 @@
     (args/spec-option spec "--bind" "addr" (Some "127.0.0.1"))
     (args/spec-option spec "--index" "name" (Some "index.html"))
     (args/spec-flag spec "--no-listing")
+    (args/spec-option-implicit spec
+      "--isolate"
+      "mode"
+      (Some "off")
+      "require-corp")
     (args/spec-flag spec "--quiet")
     (args/spec-short spec "-p" "--port")
     (args/spec-short spec "-b" "--bind")
@@ -156,6 +189,14 @@
             "--bind takes any, localhost, or a numeric address"
             true
             2))
+        (when (not (serve/isolate-mode? (args/get-str res "isolate")))
+          ;; The tail is freed here: serve/fail exits, and LeakSanitizer
+          ;; counts an intermediate nothing points at any more.
+          (let [got (str-concat (args/get-str res "isolate") "')")
+                msg (str-concat "--isolate takes off, require-corp or credentialless (got '"
+                      got)]
+            (cstr-free got)
+            (serve/fail spec res msg true 2)))
         (let [base    (fn [c : ptr<void>] : nil
                         (httpd-resp-status! c 404)
                         (httpd-resp-body! c "Not Found"))
@@ -163,10 +204,14 @@
                                         (not (args/has? res "no-listing")))
                         dir
                         base)
-              handler (if (args/has? res "quiet")
+              mode    (args/get-str res "isolate")
+              served  (if (= 0 (serve/cstr-cmp mode "off"))
                         static
+                        (serve/isolate mode static))
+              handler (if (args/has? res "quiet")
+                        served
                         (mw-log-to (fn [line : cstr] : nil (eprintln line))
-                          static))
+                          served))
               h       (httpd-new port handler)]
           (when (< (httpd-port h) 0)
             (serve/fail spec

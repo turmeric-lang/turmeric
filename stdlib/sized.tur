@@ -399,19 +399,17 @@
     (Static n)
     (Static n)
     (Add s1 s2)
-    (let [n1 (size-eval s1)]
-      (let [n2 (size-eval s2)]
-        (if (= n1 0) (Static n2) (if (= n2 0) (Static n1) (Static (+ n1 n2))))))
+    (let [n1 (size-eval s1)
+          n2 (size-eval s2)]
+      (if (= n1 0) (Static n2) (if (= n2 0) (Static n1) (Static (+ n1 n2)))))
     (Mul s1 s2)
-    (let [n1 (size-eval s1)]
-      (let [n2 (size-eval s2)]
-        (if (= n1 0)
+    (let [n1 (size-eval s1)
+          n2 (size-eval s2)]
+      (if (= n1 0)
+        (Static 0)
+        (if (= n2 0)
           (Static 0)
-          (if (= n2 0)
-            (Static 0)
-            (if (= n1 1)
-              (Static n2)
-              (if (= n2 1) (Static n1) (Static (* n1 n2))))))))))
+          (if (= n1 1) (Static n2) (if (= n2 1) (Static n1) (Static (* n1 n2)))))))))
 ;; ----- Size assertions -----
 ;;; size-assert-eq! -- panic at runtime if two Size expressions evaluate differently.
 ;;;

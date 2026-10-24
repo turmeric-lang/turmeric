@@ -153,11 +153,11 @@ runtime dispatch when the stdlib is extended to check this constant.
   ...)
 
 (defn queens [n] : int
-  (let [result (mreturn 0)]  ;; start with empty board (encoded as 0)
-    (let [board (mbind result (fn [packed]
-      ;; for each row 0..n-1, expand the board
-      ...))]
-      board)))
+  (let [result (mreturn 0)  ;; start with empty board (encoded as 0)
+        board  (mbind result (fn [packed]
+                 ;; for each row 0..n-1, expand the board
+                 ...))]
+    board))
 ```
 
 ```sweet-exp
@@ -167,12 +167,12 @@ defn safe? [col row packed n] :bool
   ...
 
 defn queens [n] :int
-  let [result mreturn(0)]  ;; start with empty board (encoded as 0)
-    let [board mbind(result
-                     (fn [packed]
-                       ;; for each row 0..n-1, expand the board
-                       ...))]
-      board
+  let [result mreturn(0)  ;; start with empty board (encoded as 0)
+       board  mbind(result
+                    (fn [packed]
+                      ;; for each row 0..n-1, expand the board
+                      ...))]
+    board
 ```
 
 See `tests/fixtures/backtrack-n-queens/input.tur` for the full self-contained

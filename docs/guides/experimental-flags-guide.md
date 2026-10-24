@@ -19,7 +19,7 @@ every flag carries a hard expiry by which it must graduate or be removed.
 > authoritative current set (at the time of writing it holds one row:
 > `reflected-measures` -- `^reflect` on a defn admits a total measure's
 > defining equation to the refinement solver, see
-> [reflected-measures-plan.md](https://github.com/turmeric-lang/turmeric/blob/main/docs/upcoming/reflected-measures-plan.md)
+> [reflected-measures-plan.md](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/reflected-measures-plan.md)
 > and the refinement guide's "Reflected measures" section.
 > `repl-jit-inline-c` graduated on 2026-10-17 and is always on, see the REPL
 > guide's "Inline-C at the prompt" section); this guide describes how the

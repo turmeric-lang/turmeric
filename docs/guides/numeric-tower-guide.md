@@ -44,7 +44,7 @@ these two types: any user numeric type with a `Num` instance gets the operators.
   (sub [a b] (V2 (- (.x a) (.x b)) (- (.y a) (.y b))))
   (mul [a b] (V2 (* (.x a) (.x b)) (* (.y a) (.y b))))
   (div [a b] (V2 (/ (.x a) (.x b)) (/ (.y a) (.y b))))
-  (neg [a]   (V2 (- 0.0 (.x a)) (- 0.0 (.y a)))))
+  (neg [a]   (V2 (- (.x a)) (- (.y a)))))
 
 (+ (V2 3.25 1.5) (V2 0.5 2.5))     ; => V2 3.75 4.0
 (- (V2 3.25 1.5))                   ; => neg
