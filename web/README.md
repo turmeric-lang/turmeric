@@ -95,10 +95,15 @@ without `WEB_PERF=1` it skips, so the ordinary suite does not pay for it.
 ### Deploy
 
 ```bash
+tur run migrate-ci-db   # only when a pull brought a new web/migrations/ file
 tur run deploy-web
 ```
 
-This will deploy the web app to GitHub Pages.
+`deploy-web` rebuilds the wasm and the bundle and deploys the Worker to
+Cloudflare. `migrate-ci-db` applies any pending migration to the production
+D1 database behind `/ci` (below), and has to go first: a Worker that writes a
+column the database does not have yet fails every CI report. With nothing
+pending it prints "No migrations to apply!" and exits.
 
 ## The /ci dashboard and its D1 store
 
@@ -131,8 +136,10 @@ its server a fresh one under `.wrangler/ci-test-state-<port>` and a test token
 (see `playwright.config.js`).
 
 In production, a schema change is a new file in `migrations/`, applied with
-`npx wrangler d1 migrations apply ci-metrics --remote` **before** deploying
-code that needs it. The report token is a Worker secret
+`tur run migrate-ci-db` (`npx wrangler d1 migrations apply ci-metrics
+--remote`, run from `web/`) **before** deploying code that needs it. To see
+what is pending without applying it, run
+`npx wrangler d1 migrations list ci-metrics --remote` from `web/`. The report token is a Worker secret
 (`wrangler secret put CI_METRICS_TOKEN`) and a repository secret of the same
 name.
 

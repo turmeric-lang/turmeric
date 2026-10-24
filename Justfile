@@ -462,6 +462,15 @@ deploy-web: web
     python3 tools/check-pack-spices.py web/public/docs-pack/
     cd web && npm run deploy
 
+# Apply web/migrations/ to the production /ci D1 database, `ci-metrics`
+# (requires `wrangler` auth). Run it BEFORE `deploy-web` whenever a pull brings
+# a new migration: the Worker that writes a new column fails every CI report
+# until the column exists. Already-applied migrations are skipped, so running
+# it with nothing pending is harmless. wrangler finds the database through
+# web/wrangler.jsonc, which is why this has to run from web/.
+migrate-ci-db: web-deps
+    cd web && npx wrangler d1 migrations apply ci-metrics --remote
+
 # Run web dev server.
 # web/public/turmeric.{js,wasm} and doc-names.json are gitignored build
 # outputs, so a fresh clone has none. Vite would happily serve the site with a
