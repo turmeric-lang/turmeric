@@ -38,7 +38,7 @@ directory is worse for triage than no index.
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [let-star-redundant-with-sequential-let](let-star-redundant-with-sequential-let.md) | low | `let` is already sequential, so `let*` is a second spelling of it (no run-time cost either way); proposes deprecating it in the Turmeric dialects (r7rs untouched). `quickstart.md:77-78` wrongly says `let` bindings cannot see each other and to nest `let`s. Also lists nested-`let` chains that could be one sequential `let` |
+| ~~[let-star-redundant-with-sequential-let](../archive/let-star-redundant-with-sequential-let.md)~~ | low | **RESOLVED 2026-10-24** (archived): `let*` is deprecated in the Turmeric dialects (`TUR-D0006`; silent under `#lang r7rs`, whose `let`/`let*` keep the spec's meaning), the quickstart no longer says `let` bindings cannot see each other, and the nested-`let` chains in the guides, stdlib and benchmarks are one sequential `let`. Pinned by `errors/let-star-deprecated`, `let-star` and `r7rs-let-star-not-deprecated` |
 
 ## Found adding trend lines and zoom to /ci (filed 2026-10-24)
 

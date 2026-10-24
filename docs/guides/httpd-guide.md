@@ -152,22 +152,22 @@ with `.` other than `.well-known`.
 ## Lifecycle
 
 ```turmeric
-(let [h (httpd-new 0 handler)]
-  ;; run on a background thread so the main thread can signal shutdown
-  (let [server (spawn-server h)]
-    ...                            ; do work, wait for a signal, etc.
-    (httpd-stop h)                 ; thread-safe; wakes the listener
-    (join-thread server)
-    (httpd-free h)))               ; releases reactor + worker pool
+(let [h      (httpd-new 0 handler)
+      ;; run on a background thread so the main thread can signal shutdown
+      server (spawn-server h)]
+  ...                            ; do work, wait for a signal, etc.
+  (httpd-stop h)                 ; thread-safe; wakes the listener
+  (join-thread server)
+  (httpd-free h))                ; releases reactor + worker pool
 ```
 ```sweet-exp
-let [h httpd-new(0 handler)]
-  ;; run on a background thread so the main thread can signal shutdown
-  let [server spawn-server(h)]
-    ...                            ; do work, wait for a signal, etc.
-    httpd-stop(h)                  ; thread-safe; wakes the listener
-    join-thread(server)
-    httpd-free(h)                  ; releases reactor + worker pool
+let [h      httpd-new(0 handler)
+     ;; run on a background thread so the main thread can signal shutdown
+     server spawn-server(h)]
+  ...                            ; do work, wait for a signal, etc.
+  httpd-stop(h)                  ; thread-safe; wakes the listener
+  join-thread(server)
+  httpd-free(h)                  ; releases reactor + worker pool
 ```
 
 `httpd-stop` delegates to `reactor-stop` on the listener's reactor and

@@ -385,9 +385,9 @@
 (defn sized-matrix-assert-shape! [m expected-rows : Size expected-cols : Size]
   #fx{Unsafe}
   : nil
-  (let [actual-rows (sized-matrix-rows m)]
-    (let [actual-cols (sized-matrix-cols m)]
-      (require-msg! (= actual-rows (size-eval expected-rows))
-        "sized-matrix-assert-shape!: row count mismatch")
-      (require-msg! (= actual-cols (size-eval expected-cols))
-        "sized-matrix-assert-shape!: col count mismatch"))))
+  (let [actual-rows (sized-matrix-rows m)
+        actual-cols (sized-matrix-cols m)]
+    (require-msg! (= actual-rows (size-eval expected-rows))
+      "sized-matrix-assert-shape!: row count mismatch")
+    (require-msg! (= actual-cols (size-eval expected-cols))
+      "sized-matrix-assert-shape!: col count mismatch")))

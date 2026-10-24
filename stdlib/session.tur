@@ -110,7 +110,9 @@
                                                   Close)))] : nil
   (match (offer ch)
     (Left ch)
-    (let [[n ch] (recv ch)] (let [ch (send ch n)] (echo-server-loop ch)))
+    (let [[n ch] (recv ch)
+          ch     (send ch n)]
+      (echo-server-loop ch))
     (Right ch)
     (close ch)))
 ;;; echo-client-call -- send one integer, hand the echo to `handler`, return the channel.
@@ -148,8 +150,11 @@
                                                                        (Recv int
                                                                          self))
                                                                Close)))
-  (let [ch (choose-left ch)]
-    (let [ch (send ch val)] (let [[r ch] (recv ch)] (handler r) ch))))
+  (let [ch     (choose-left ch)
+        ch     (send ch val)
+        [r ch] (recv ch)]
+    (handler r)
+    ch))
 ;; ---------------------------------------------------------------------------
 ;; rpc -- generic single-shot request/response
 ;;
@@ -174,7 +179,10 @@
 
 
 (defn rpc-call [^linear ch : (Session (Send int (Recv int Close))) req : int] : int
-  (let [ch (send ch req)] (let [[resp ch] (recv ch)] (close ch) resp)))
+  (let [ch        (send ch req)
+        [resp ch] (recv ch)]
+    (close ch)
+    resp))
 ;; ---------------------------------------------------------------------------
 ;; pubsub -- publish-subscribe protocol template
 ;;

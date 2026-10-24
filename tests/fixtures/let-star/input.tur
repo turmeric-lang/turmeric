@@ -1,4 +1,6 @@
 ; let* -- sequential bindings: each binding sees the ones before it.
+; Deprecated (TUR-D0006, pinned by expected.stderr): `let` binds in order
+; too.  This fixture keeps checking that the old spelling still works.
 (defn seq-bindings [] : int
   (let* [a 1
          b (+ a 1)

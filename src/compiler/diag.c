@@ -439,6 +439,7 @@ const char *diag_code_to_string(DiagCode code) {
         case TUR_D0003_FX_ROW_LEGACY_AT:          return "TUR-D0003";
         case TUR_D0004_NONEXHAUSTIVE_FX_MARKER:   return "TUR-D0004";
         case TUR_D0005_DEFGADT:                   return "TUR-D0005";
+        case TUR_D0006_LET_STAR:                  return "TUR-D0006";
         /* XF: experimental-flag mechanism */
         case TUR_E0310_UNKNOWN_EXPERIMENT:        return "TUR-E0310";
         case TUR_E0311_UNKNOWN_ENGINE:            return "TUR-E0311";
@@ -646,6 +647,7 @@ DiagCode diag_code_from_string(const char *s) {
     if (strcmp(s, "TUR-D0003") == 0) return TUR_D0003_FX_ROW_LEGACY_AT;
     if (strcmp(s, "TUR-D0004") == 0) return TUR_D0004_NONEXHAUSTIVE_FX_MARKER;
     if (strcmp(s, "TUR-D0005") == 0) return TUR_D0005_DEFGADT;
+    if (strcmp(s, "TUR-D0006") == 0) return TUR_D0006_LET_STAR;
     /* XF: experimental-flag mechanism */
     if (strcmp(s, "TUR-E0310") == 0) return TUR_E0310_UNKNOWN_EXPERIMENT;
     if (strcmp(s, "TUR-E0311") == 0) return TUR_E0311_UNKNOWN_ENGINE;
@@ -2842,6 +2844,25 @@ static const DiagExplanation diag_explanations_[] = {
       "a))`, can be dropped.  The old spelling still compiles; under\n"
       "--Werror=deprecated it is an error.  It is removed in a future major\n"
       "release.\n",
+    },
+    /* let-star-redundant-with-sequential-let */
+    { TUR_D0006_LET_STAR,
+      "TUR-D0006: `let*` is deprecated; write `let`\n"
+      "\n"
+      "`let` already binds in order: each value sees the names bound before it.\n"
+      "`let*` was a second spelling of the same thing, so one form covers both.\n"
+      "Neither costs anything at run time.\n"
+      "\n"
+      "Example triggering this warning:\n"
+      "  (let* [a 1 b (+ a 1)] (+ a b))\n"
+      "\n"
+      "Fix: change the keyword; the bindings stay as written:\n"
+      "  (let [a 1 b (+ a 1)] (+ a b))\n"
+      "\n"
+      "`#lang r7rs` is not affected: there `let` is parallel and `let*`\n"
+      "sequential, as the Scheme report specifies.  The old spelling still\n"
+      "compiles; under --Werror=deprecated it is an error.  It is removed in a\n"
+      "future major release.\n",
     },
     /* XF (experimental-flag-mechanism-plan): unknown --enable= name */
     { TUR_E0310_UNKNOWN_EXPERIMENT,

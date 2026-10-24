@@ -3,9 +3,10 @@
 **Severity:** low. No wrong code: a redundant special form, and one guide that
 teaches the opposite of what `let` does.
 
-**Status:** open. Filed 2026-10-24 while asking whether `let` should become
-`let*` and `let*` be deprecated. The answer to the first half is that it
-already is; this report is the cleanup that follows.
+**Status:** RESOLVED 2026-10-24 (see "Resolution" at the end). Filed the
+same day while asking whether `let` should become `let*` and `let*` be
+deprecated. The answer to the first half is that it already is; this report
+is the cleanup that follows.
 
 **Scope: the Turmeric dialects only (`turmeric`, `saffron`, and their
 readers).** `#lang r7rs` must keep to the spec -- `let` parallel, `let*`
@@ -120,3 +121,32 @@ flattened (destructuring `[r ch]` included) compiles and prints the same
 Suggested order: the quickstart fix first (it is actively wrong), then the
 guides' examples (readers copy them), then stdlib and benchmarks, regenerating
 any snapshot that moves in the same change.
+
+## Resolution (2026-10-24)
+
+- **Deprecated.** `elab_letstar` emits `TUR-D0006` ("'let*' is deprecated;
+  write 'let', which already binds in order") at `elab_deprecation_level()`:
+  a warning, an error under `--Werror=deprecated`. It checks the form's source
+  file and stays silent for a `#lang r7rs` one. `tur explain TUR-D0006` has
+  the long form. Pinned by `errors/let-star-deprecated` (the error under
+  `--Werror=deprecated`, both engines), `let-star`'s `expected.stderr` (the
+  plain warning), and `r7rs-let-star-not-deprecated` (`unexpected.stderr`:
+  no D0006 under r7rs, whose `let*` stays sequential and `let` parallel).
+- **Docs.** `let*`'s docstring and `binding-forms-guide`'s `let*` section say
+  it is deprecated and that r7rs is not affected; `quickstart.md`'s wrong
+  paragraph now says `let` binds in order, with an example.
+- **Fixtures migrated.** `hamt-lisp-show` and `hkt-free-stdlib` use `let`.
+  `let-star` and `letstar-typed-binding-spaced` test `let*` itself, and
+  `let-bound-generic-call-result-keeps-its-tyvar` tests `let*` at a generic
+  call site, so those three keep it while the form exists.
+- **Nested lets flattened:** every chain listed above in the guides (in both
+  the Turmeric and the sweet-exp blocks; `check-guide-pairs.tur` reports 975
+  of 975 pairs equal), the stdlib (`range`, `sized`, `sized-matrix`,
+  `session`, the `map-assoc-consuming__` macro) and the four hamt benchmarks.
+  Two guide nestings stay on purpose: `binding-forms-guide.md`'s
+  "exactly equivalent to" block shows what body-level `def` desugars to, and
+  `substructural-types-guide.md`'s `deref-outer` contrasts a borrow from an
+  outer scope with the error case beside it. `data-literal-nested`'s snapshot
+  moved with the macro (one block instead of two).
+- No fixtures were flattened, per "When not to flatten".
+
