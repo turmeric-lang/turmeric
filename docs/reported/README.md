@@ -34,6 +34,12 @@ sentence above does not cover them. If you touch this file, check
 `ls docs/reported/` against it -- an index that silently omits a quarter of the
 directory is worse for triage than no index.
 
+## Found checking tvm's installer rc choice (filed 2026-10-24)
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [tvm-install-bash-rc-choice-shadows-profile](tvm-install-bash-rc-choice-shadows-profile.md) | medium-low | With no `.bashrc`, tvm's `install.sh` creates `.bash_profile`, which stops bash login shells reading an existing `.profile`, and interactive non-login shells still don't load tvm. On macOS it writes `.bashrc`, which Terminal's login shells skip. Fix in turmeric-lang/tvm: choose by platform, and don't prompt (it runs as `curl \| sh`) |
+
 ## Found checking r7rs-heap-frames-plan H6 against the JIT (filed 2026-10-24)
 
 | Report | Severity | One line |
