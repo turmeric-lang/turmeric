@@ -2,6 +2,49 @@
 
 All notable changes to Turmeric are documented here.
 
+## [0.70.5] -- 2026-10-24
+
+### Added
+
+- **`/ci` charts get drag-to-zoom and a denoised Trend view.** Drag across any
+  line chart to zoom every tab to that window; double-click or the chip beside
+  the Range picker zooms back out, and the window round-trips through `?from=`
+  and `?to=` so shared links reopen on it. The duration chart opens on a Trend
+  view: a rolling median with an interquartile band and raw runs as faded dots;
+  failed runs no longer feed the trend.
+- **`/ci` records the runner CPU and can plot a Relative axis.** Every timing
+  row carries the machine's CPU model, filterable in the UI, so suites can be
+  compared against a chosen machine's speed instead of the runner pool's mix.
+
+### Fixed
+
+- **Shifts and resets agree between `tur` and `turi`.** A shift's receiver now
+  runs outside the catches it cut off in the interpreter too; a direct shift
+  with no reset in its own function aborts to the caller's live reset; and a
+  shift inside a CPS callee of an evicted function lands on a CPS reset instead
+  of panicking.
+- **A `handle` around a resume in a handler clause lowers correctly.** A case
+  body ending in a `handle` whose body is the case's own resume now splices the
+  continuation in under the inner handler group, and the reachability check no
+  longer emits a false `W0033` for a resumed clause.
+- **Three closure and aggregate leaks are freed.** A combinator factory whose
+  closure captures closure-typed parameters releases both environments at the
+  call; a by-value struct boxed into a generic lambda's erased capture is freed;
+  and a returning `let`'s spine is dropped when its exits reach nothing it
+  built.
+- **Two type-fuzz findings are fixed.** A lifted join boxes a by-value ADT again
+  on its way to the slot, and a spec clone's double parameter gets its bits
+  rather than a value conversion.
+- **Fiber switches no longer confuse ThreadSanitizer.** Under
+  `-fsanitize=thread` the fiber runtime tells TSan about each switch, so
+  multi-threaded fiber programs no longer fault silently.
+
+### Docs
+
+- **The JIT guide says plainly that `TUR_MUSTTAIL` makes no tail call under
+  c2mir.** The entry stack hides it; the guide and the emitted macro comment
+  both state this.
+
 ## [0.70.4] -- 2026-10-24
 
 ### Changed
