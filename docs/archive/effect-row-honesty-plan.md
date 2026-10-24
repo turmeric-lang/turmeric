@@ -1,5 +1,9 @@
 # Effect-row honesty -- answer WP8 as Option A, and make `#fx{}` mean something
 
+> **Archived 2026-10-24** at the author's request: W0-W4 are done and W5's
+> answer is this plan's own recommendation -- `--strict-effects` stays
+> default-off.
+>
 > **Status (re-audited 2026-10-24): W0-W4 DONE 2026-10-02; W5 not acted on,
 > by this plan's own recommendation.** Proposed 2026-10-01 (`a689d7fd`), all
 > three open questions resolved the same day (`93010bf0`, `e1e4ea29`;
@@ -26,14 +30,14 @@
 > `src/passes/effect.h` + effect-row resolution, `src/passes/effect_check.c`,
 > `stdlib/effects.tur`, `docs/guides/security-guide.md`,
 > `docs/guides/effects-system-guide.md`, and the
-> [security-audit-plan](security-audit-plan.md)'s WP8 and open question 3.
+> [security-audit-plan](../upcoming/security-audit-plan.md)'s WP8 and open question 3.
 >
 > **Answers:** security-audit-plan open question 3 (`#fx{Unsafe}` semantics)
 > as **Option A**, and supersedes WP8's first bullet.
 > **Files alongside:**
-> [capability-effect-tag-silently-resolves-to-empty-row](../archive/capability-effect-tag-silently-resolves-to-empty-row.md),
-> [strict-effects-w0030-names-synthesized-lambdas](../archive/strict-effects-w0030-names-synthesized-lambdas.md),
-> [strict-effects-and-lint-effects-are-indistinguishable](../archive/strict-effects-and-lint-effects-are-indistinguishable.md).
+> [capability-effect-tag-silently-resolves-to-empty-row](capability-effect-tag-silently-resolves-to-empty-row.md),
+> [strict-effects-w0030-names-synthesized-lambdas](strict-effects-w0030-names-synthesized-lambdas.md),
+> [strict-effects-and-lint-effects-are-indistinguishable](strict-effects-and-lint-effects-are-indistinguishable.md).
 
 ## 1. The thesis
 
@@ -229,7 +233,7 @@ Transition, because one of them is published syntax:
 > `unknown-capability-tag-pure-caller`, `loaded-capability-tag-pure-caller`.
 
 Filed as
-[capability-effect-tag-silently-resolves-to-empty-row](../archive/capability-effect-tag-silently-resolves-to-empty-row.md).
+[capability-effect-tag-silently-resolves-to-empty-row](capability-effect-tag-silently-resolves-to-empty-row.md).
 An uppercase name in `#fx{...}` that no `defeffect` in the compile declares is
 dropped silently, so `#fx{IO}` checks as `#fx{}` -- and a caller's `#fx{}`
 then passes a check it should fail.
@@ -371,7 +375,7 @@ re-derive it.
 > before and after.  Partly for a bad reason: module members are not
 > effect-checked at all (only top-level functions are), and every spice-test
 > `main` that prints under a row sits inside a `defmodule`.  That gap is filed
-> as [module-members-skip-effect-row-checking](../archive/module-members-skip-effect-row-checking.md);
+> as [module-members-skip-effect-row-checking](module-members-skip-effect-row-checking.md);
 > closing it is the next step toward `#fx{}` meaning something everywhere.
 >
 > **Closed 2026-10-02:** module members (and defns inside a top-level `do`)
@@ -430,10 +434,10 @@ function in 'dfs-or'*), and `--strict-effects` is the one flag, promotable
 with `-Werror=strict-effects`, with `--lint-effects` a deprecated alias. What
 is left of W5 is the default itself, after W4:
 
-- [strict-effects-w0030-names-synthesized-lambdas](../archive/strict-effects-w0030-names-synthesized-lambdas.md)
+- [strict-effects-w0030-names-synthesized-lambdas](strict-effects-w0030-names-synthesized-lambdas.md)
   -- 47 of 358 warnings name `__fn_38`-style gensyms. A default-on lint that
   is 13% unactionable teaches people to ignore the category.
-- [strict-effects-and-lint-effects-are-indistinguishable](../archive/strict-effects-and-lint-effects-are-indistinguishable.md)
+- [strict-effects-and-lint-effects-are-indistinguishable](strict-effects-and-lint-effects-are-indistinguishable.md)
   -- the two flags emit the same warning, neither can become an error, and the
   comment claiming otherwise is wrong. Decide which flag survives before
   giving either a default.

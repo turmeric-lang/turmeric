@@ -712,7 +712,7 @@ walk whose invariant mentions the container's length.
 Found investigating two security-guide questions -- whether `--no-proc-macros`
 should default on, and whether `--strict-effects` should -- and scoping
 `^capability` for `println`. The plan these feed is
-[effect-row-honesty-plan](../upcoming/effect-row-honesty-plan.md), which also
+[effect-row-honesty-plan](../archive/effect-row-honesty-plan.md), which also
 answers [security-audit-plan](../upcoming/security-audit-plan.md) open
 question 3 as Option A.
 

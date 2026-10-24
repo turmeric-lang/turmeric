@@ -72,7 +72,7 @@ this defect, applied once, by hand, for one tag.
 ## Why it matters more now
 
 Tagging `println` with `#fx{IO}` (see
-[effect-row-honesty-plan](../upcoming/effect-row-honesty-plan.md)) walks
+[effect-row-honesty-plan](effect-row-honesty-plan.md)) walks
 straight into this. `println` is a builtin available in every program;
 `IO` is declared in a module most small programs never import. A `println`
 tagged `#fx{IO}` would be a no-op in precisely the files that need it, and
@@ -136,7 +136,7 @@ user-facing syntax**, with its own section at
 [`sum-types-guide.md:241`](../guides/sum-types-guide.md) and a line in that
 page's description, so it needs a deprecation cycle rather than a rename.
 Tracked in
-[effect-row-honesty-plan](../upcoming/effect-row-honesty-plan.md) section 6
+[effect-row-honesty-plan](effect-row-honesty-plan.md) section 6
 Q1.
 
 ## Resolution
