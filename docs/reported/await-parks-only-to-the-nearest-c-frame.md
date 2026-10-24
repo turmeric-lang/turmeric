@@ -452,7 +452,7 @@ refusal).
   run (`generic_base_never_runs`).
 
 Found on the way, not about `await`:
-[erased-capture-aggregate-box-never-freed](erased-capture-aggregate-box-never-freed.md)
+[erased-capture-aggregate-box-never-freed](../archive/erased-capture-aggregate-box-never-freed.md)
 -- the struct instantiation boxes `v` into the erased env field and the shared
 drop glue never frees it (16 B per closure, on the direct path too).
 

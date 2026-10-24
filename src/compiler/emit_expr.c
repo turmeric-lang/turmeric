@@ -5153,7 +5153,10 @@ static char *emit_let_value(EmitCtx *ctx, Buf *body, const Expr *e) {
      * result, and the gate says it is a number, so it cannot point into the
      * spine.  Ungated, the trailing frees below still run on fall-through,
      * which is the free the ungated path always emitted. */
-    if (body_has_return_or_throw && ctx->current_fn_spine_drop_safe) {
+    if (body_has_return_or_throw &&
+        (ctx->current_fn_spine_drop_safe == 1 ||
+         (ctx->current_fn_spine_drop_safe == 2 && n_locown &&
+          emit_spine_exits_unaliased(ctx, e->as.let_.body)))) {
         for (uint32_t i = 0; i < n_locown; i++) {
             Buf ds;
             buf_init(&ds);
@@ -6378,7 +6381,7 @@ static void emit_gen_functions(EmitCtx *ctx, const GenDef *def) {
      * ADDRESS (`ok_hyval(&__t)`). */
     uint32_t gen_saved_npbp = ctx->n_pbp_params;
     /* byval-spine-drop-past-early-exit: nor is its signature verdict. */
-    bool gen_saved_spine_safe = ctx->current_fn_spine_drop_safe;
+    uint8_t gen_saved_spine_safe = ctx->current_fn_spine_drop_safe;
     ctx->current_fn_ret_ctype = "void *";
     ctx->current_fn_spine_drop_safe = false;
     ctx->frame_var = NULL;
@@ -16957,6 +16960,9 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                 }
                 free(slot0_widen);
             }
+            /* erased-capture-aggregate-box-never-freed: the fields this fill
+             * heap-boxes (a by-value aggregate in an erased carrier field). */
+            Buf cbox_fields; buf_init(&cbox_fields);
             for (uint8_t i = 0; i < closure->n_captures; i++) {
                 Binding *captured = closure->captures[i];
                 /* Edge 1: skip an eagerly-captured letrec member that became a
@@ -17079,6 +17085,10 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                             "TUR_REGION_NOTE_WORDS(__tur_cbox, sizeof *__tur_cbox); "
                             "%s->%s = (int64_t)(intptr_t)__tur_cbox; }\n",
                             val_cty, val_cty, val_cty, cn, lhs, field);
+                        if (!knot_lhs) {
+                            if (cbox_fields.len) buf_putc(&cbox_fields, ' ');
+                            buf_puts(&cbox_fields, field);
+                        }
                     } else if (captured->type.kind == TY_FN && !captured->is_poly_fn &&
                                !captured_is_pbp) {
                         /* A function value's field is the int64_t carrier (see
@@ -17158,6 +17168,35 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     free(knot_lhs);
                 }
             }
+            if (cbox_fields.len) {
+                /* erased-capture-aggregate-box-never-freed: the env's glue
+                 * belongs to the layout every instance of the generic shares,
+                 * where the field is a plain word, so it cannot free the box.
+                 * This instance boxed it: point the env's header at a glue
+                 * variant that frees the boxes, then runs the shared glue.
+                 * Emitted once per C file (the #ifndef), at file scope. */
+                buf_putc(&cbox_fields, '\0');
+                Buf gn; buf_init(&gn);
+                buf_printf(&gn, "drop_glue_%s__cbox_", env_name->name);
+                for (const char *q = cbox_fields.data; *q; q++)
+                    buf_putc(&gn, *q == ' ' ? '_' : *q);
+                buf_putc(&gn, '\0');
+                Buf *gout = ctx->pending_handler_fns ? ctx->pending_handler_fns : ctx->file;
+                buf_printf(gout, "#ifndef %s\n#define %s %s\n"
+                                 "static void %s(void *__p) {\n"
+                                 "    struct %s *__e = (struct %s *)__p;\n",
+                           gn.data, gn.data, gn.data, gn.data, env_name->name, env_name->name);
+                char *flds = strdup(cbox_fields.data);
+                for (char *f = strtok(flds, " "); f; f = strtok(NULL, " "))
+                    buf_printf(gout, "    free((void *)(intptr_t)__e->%s);\n", f);
+                free(flds);
+                buf_printf(gout, "    drop_glue_%s(__p);\n}\n#endif\n", env_name->name);
+                indent_buf(body, ctx->indent);
+                buf_printf(body, "*(void (**)(void *))((char *)%s - sizeof(void *)) = %s;\n",
+                           fat_tmp, gn.data);
+                buf_free(&gn);
+            }
+            buf_free(&cbox_fields);
             char *ptr_tmp = fresh_tmp(ctx);
             indent_buf(body, ctx->indent);
             buf_printf(body, "void *%s = %s;\n", ptr_tmp, fat_tmp);

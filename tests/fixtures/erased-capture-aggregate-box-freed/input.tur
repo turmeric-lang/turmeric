@@ -1,0 +1,25 @@
+;; erased-capture-aggregate-box-never-freed: a lambda inside a generic
+;; captures a `T`.  It is emitted once, against the base env layout, where the
+;; field is the int64 carrier word; the specialization at a by-value struct
+;; heap-boxes the struct into that field, and the env's glue -- the base
+;; layout's, shared by every instance -- frees only the env.  The fill now
+;; points the env's header at a glue variant that frees the box first.  At
+;; `T := int` the field holds the value itself and the plain glue runs.
+(defstruct P [a : int b : int])
+(defstruct Q [x : int y : int z : int])
+(defn gid [T] [x : T] : T x)
+(defn apply3 [f : (fn [int] int) x : int] : int (f x))
+(defn gen-cap [T] [v : T m : int] : int
+  (* 2 (apply3 (fn [y : int] : int (let [w (gid v)] (+ y 600))) (+ m 1))))
+(defn gen-cap2 [T U] [v : T u : U m : int] : int
+  (apply3 (fn [y : int] : int (let [w (gid v) z (gid u)] (+ y 1))) m))
+(defn main [] : int
+  (println (+ 7 (gen-cap (P 3 4) 2)))          ; 1213
+  (println (gen-cap 5 2))                       ; 1206
+  (println (gen-cap2 (P 1 2) (Q 1 2 3) 41))    ; 42
+  (let [^mut i 0 ^mut acc 0]
+    (while (< i 100)
+      (set! acc (+ acc (gen-cap (Q i 2 3) 0)))
+      (set! i (+ i 1)))
+    (println acc))                              ; 120200
+  0)
