@@ -34,6 +34,12 @@ sentence above does not cover them. If you touch this file, check
 `ls docs/reported/` against it -- an index that silently omits a quarter of the
 directory is worse for triage than no index.
 
+## Found prototyping simd-and-vectorization-plan (filed 2026-10-24)
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [assoc-type-method-at-applied-opaque-instance-no-instance](assoc-type-method-at-applied-opaque-instance-no-instance.md) | medium-low | A method returning the class's associated type, called on the constraint tyvar in a generic, errors `no instance '<Class> tyvar'` when the instances are keyed on an applied opaque like `(NumVec float)`; plain opaques work. Likely the return-directed representative search accepts only `TY_INT` / bare opaque `TY_ADT` heads |
+
 ## Found adding trend lines and zoom to /ci (filed 2026-10-24)
 
 | Report | Severity | One line |

@@ -7,6 +7,10 @@
 > experiment-gated set of vector types lowered to GCC/Clang vector
 > extensions; (2) yes, but in the C the emitter writes, not in MIR. Both rest
 > on a `flvector`-style typed numeric array, which is phase N0.
+> **2026-10-24 update:** the generic-vs-five-types question was prototyped
+> (section 3.1; author leans generic with `defalias` names, one compiler
+> bug in the way), N2's options were expanded to seven (A-G), and wasm
+> stays open.
 > **Type:** Stdlib / compiler (emitter, elaborator) / driver
 > **Depends on:** the sized primitives (`int32`, `uint8`, `float32`, ...;
 > `src/compiler/elab_core.c:49`), the inline-C site discipline
@@ -154,9 +158,9 @@ worth having:
 
 - **Real types.** Each is a `defopaque` (or a `defstruct` with a typed
   pointer), never `:int` at the public surface (CLAUDE.md, "No Lazy `:int`
-  Stand-Ins"). Whether the five share one parametric `(NumVec T)` with the
-  element type restricted to the sized primitives, or are five types, is open
-  question 1.
+  Stand-Ins"). Whether the five share one parametric `(NumVec T)` or are
+  five types is open question 1; section 3.1 has what a prototype found. The
+  author leans generic, with honest names kept through `defalias`.
 - **Fixed length**, like `flvector`. Growth stays `Vec`'s job; a fixed length
   lets the emitter and gcc trust `len` across a loop. `f64vec->vec` /
   `vec->f64vec` convert.
@@ -178,6 +182,71 @@ worth having:
   `3.25` per CLAUDE.md): construction, ref/set, out-of-bounds panic and its
   site on both engines (`expected.stderr`), conversions, and a
   `requires.leak-check` fixture for the drop glue.
+
+### 3.1 N0's type shape -- generic or five types (prototyped 2026-10-24)
+
+Whatever the surface, the C underneath is five sets of loops: a `float32`
+kernel walks a `float *`, a `float64` one a `double *`. The question is only
+how Turmeric names and reaches them. A prototype against `289d688d`:
+
+**What works.** One `(defopaque NumVec [t] :int)`, a class keyed on the
+*whole container type*, one instance per element type with an inline-C
+body over the real C pointer, and generic code over the class:
+
+~~~turmeric
+(defopaque NumVec [t] :int)
+(defalias F64Vec (NumVec float))
+(defalias F32Vec (NumVec float32))
+(defclass NumSum [v] (nv-sum [v] : float))
+(definstance NumSum [(NumVec float)]   (nv-sum [v] : float ```c /* double * loop */ ```))
+(definstance NumSum [(NumVec float32)] (nv-sum [v] : float ```c /* float * loop */ ```))
+(defn total [V] [(NumSum V)] [v : V] : float (nv-sum v))
+~~~
+
+`total` gets one specialization per instance (`total__spec__double_int64_t`
+and `..._int64_t__h1`) that calls that instance's C loop directly, so there is
+no runtime dispatch and gcc sees each loop concretely. The aliases are
+transparent: `a : F64Vec` and `a : (NumVec float)` are the same type. Correct
+on cc and `tur jit`.
+
+**What does not work today:**
+
+1. **A class keyed on the element** -- `(defclass NumElem [t] (ne-sum [v :
+   (NumVec t)] : t))` -- refuses at every call, even at a concrete type:
+   `TUR-E0020: ambiguous method dispatch ... receiver type is erased
+   (int64_t)`. Dispatch reads the first parameter's type, and the opaque's
+   carrier hides the `t` inside it. So instances must be keyed on
+   `(NumVec float)`, not on `float`.
+2. **An element-typed result through an associated type** -- `(type Elem :
+   Type)` and `(nv-sum [v] : Elem)`, so `nv-sum` on a `(NumVec float32)` returns
+   a `float32` -- fails inside a generic with `no instance 'NumSum tyvar'`,
+   though it works with plain (non-applied) opaques. Filed as
+   [assoc-type-method-at-applied-opaque-instance-no-instance](../reported/assoc-type-method-at-applied-opaque-instance-no-instance.md).
+   Until it is fixed, a generic `nv-sum` or `nv-ref` cannot return the honest
+   element type, which most of the API needs.
+3. **No dispatch on the result type.** A constructor that takes only a length
+   cannot pick an instance. Constructors either take an element first
+   (`(nv-new 7.1 n)` dispatches on `7.1`'s type) or stay per-type
+   (`f64vec-new`).
+4. **The interpreter** refuses an inline-C defn returning an opaque
+   (`the REPL JIT returns only int-class, float, cstr, bool and unit
+   results`). N0 needs turi natives whichever shape is chosen.
+
+**The trade, as it stands:**
+
+| | Generic `(NumVec T)` + aliases | Five types |
+|---|---|---|
+| Names users see | `F64Vec` etc. via `defalias`, plus `(NumVec T)` in generic code | `F64Vec` etc. |
+| Writing a generic algorithm (`mean`, `normalize!`) | once, over the class | needs a class anyway, keyed on five types |
+| Function names | one family (`nv-ref`, `nv-sum`), plus per-type constructors | five families (`f64vec-ref`, `f32vec-ref`, ...) |
+| C written | five instances | five sets of functions |
+| Blocked on | item 2 for element-typed results | nothing |
+| Extensible by users | yes -- anyone can add an instance (a feature, or a hole: a `NumVec Complex` would need its own kernels) | no |
+
+Recommendation: **generic, with `defalias` names**, starting after item 2 is
+fixed (a compiler fix, not a design change). If N0 has to start before that,
+the five-type version is a strict subset: its per-type functions become the
+generic instances' bodies later, and the names stay valid as aliases.
 
 ### N1 -- bulk kernels
 
@@ -216,19 +285,68 @@ calls to a panicking body, no `tur_site_*` writes and no `tur_panicking`
 checks, so gcc can vectorize it at `-O3`.
 
 The site wrap and the panic check exist only because the callee's inline-C
-body can panic. So an accessor whose body cannot panic needs neither. Three
-candidate shapes, cheapest first (open question 3 picks):
+body can panic. So an accessor whose body cannot panic needs neither, and
+every approach below is a way to get a non-panicking access while keeping
+it safe. They differ in who carries the proof that the index is in range.
+Open question 3 picks; they are not exclusive.
 
-1. **A ranged iteration form** -- e.g. `(f64vec-each-index v (fn [i] ...))`,
-   or a `for`-style macro -- that checks `len` once and calls an unchecked,
-   non-panicking accessor in the body. Needs the closure to be inlined into a
-   C loop; check what the emitter does with a known lambda argument first.
-2. **`f64vec-ref-unchecked`** under `#fx{Unsafe}`: a body with no `tur_panic`.
-   Trivial to add; puts the proof on the programmer.
-3. **A refinement-typed index**: `f64vec-ref` taking
-   `#refine{i : int | 0 <= i < (f64vec-len v)}`, discharged by the existing
-   solver (`src/compiler/refine_*.c`), with the checked version as fallback
-   when the solver cannot prove it. Best ergonomics, most work.
+| | Approach | Who proves the index | Index arithmetic (`i+1`, stencils) | Cost | Engines |
+|---|---|---|---|---|---|
+| A | Unchecked accessor | the programmer | anything | trivial | all |
+| B | Element-iteration macro | the macro | none -- no index exposed | small | all |
+| C | Higher-order kernels taking a lambda | the library | none | large | all, fast only on cc |
+| D | Branded indices | the type checker | checked re-entry | medium | all |
+| E | Refinement-typed index | the SMT solver | anything provable | large | all |
+| F | Bounds-check hoisting in the compiler | the compiler | simple counted loops | large, fragile | all |
+| G | Cheaper checked path | nobody -- still checked | anything | medium | all; no vectorization |
+
+- **A. Unchecked accessor.** `nv-ref-unchecked` under `#fx{Unsafe}`, a body
+  with no `tur_panic`. Trivial. Puts the proof on the programmer, so it is a
+  building block for B and C rather than the main answer.
+- **B. Element-iteration macro**, after Racket's `(for ([x (in-flvector v)])
+  ...)`, which its `for` macro specializes into an unchecked loop.
+  `(nv-for [x v] body)` binds `x` to each element; `(nv-for [x a y b] body)`
+  walks two arrays together after one length check; `(nv-for-index [i x v]
+  body)` also binds the index read-only; `(nv-build n [i] expr)` builds a new
+  array like `for/flvector`. The macro expands to a tail-recursive local loop
+  (already emitted as a C `goto` loop, section 1.1) whose reads use A. Safe,
+  because no index the user can get wrong is ever in scope. Covers maps,
+  zips, folds and reductions; does not cover stencils (`v[i-1] + v[i+1]`) or
+  gathers.
+- **C. Higher-order kernels** (`nv-map!`, `nv-fold`, `nv-zip-with!` taking a
+  `(fn [float] float)`). The nicest surface, but only fast if the lambda is
+  inlined into the C loop. An inline-C kernel calling a Turmeric closure per
+  element is an indirect call per element, which neither vectorizes nor
+  beats B. Needs specialization of the kernel per lambda; deferred until the
+  emitter does that for other reasons.
+- **D. Branded indices.** `(SizedBuf n)` already carries a phantom length
+  `n`. Give `(NumVec n T)` the same, and an index type `(Ix n)` that only
+  `(nv-indices v)` produces. `nv-ref` taking an `(Ix n)` cannot be out of
+  range, so it is unchecked. `i+1` leaves the brand and comes back through a
+  checked `(nv-ix v k) : (Option (Ix n))`. Safe without a solver; the brand
+  makes signatures heavier, and it changes `NumVec`'s type, so decide before
+  N0 ships.
+- **E. Refinement-typed index.** `nv-ref` taking
+  `#refine{i : int | 0 <= i < (nv-len v)}`, discharged by the existing solver
+  (`src/compiler/refine_*.c`); where it cannot prove it, the call falls back
+  to the checked version. Covers stencils and arbitrary arithmetic. The most
+  work; the solver must reason about `nv-len` across a loop, which is what
+  the `reflected-measures` experiment is for.
+- **F. Bounds-check hoisting.** The compiler recognises a counted loop
+  `i < (nv-len v)` and drops or hoists the checks inside it. Invisible to
+  users. Turmeric loops are tail-recursive functions, not a loop IR, so the
+  pattern matching is fragile, and a missed match silently loses the speed.
+- **G. A cheaper checked path.** Keep the check, cut the rest: set the call
+  site only on the failure branch instead of around every call, and do the
+  compare at the call site instead of behind a call. Loops still do not
+  vectorize, since the check is still control flow (gcc 14+ and recent LLVM
+  can vectorize some early-exit loops, but not reliably enough to plan on).
+  It is the only option that also speeds up every existing `vec-get`, so it
+  is worth doing separately from this plan.
+
+Recommendation: **A + B first** (small, safe, every engine), N1 kernels for
+the common cases, then **D or E** when stencil-shaped code needs it. G as its
+own piece of work for `Vec`. C waits.
 
 Acceptance: the probe from 1.1 rewritten over `F64Vec` reports
 `loop vectorized` under `gcc -O3 -fopt-info-vec-optimized` for an integer
@@ -343,18 +461,24 @@ Results identical in every cell.
 
 ## 6. Open questions
 
-1. Five monomorphic types, or one `(NumVec T)` restricted to sized
-   primitives? The parametric one is nicer to document; the five are simpler
-   for the emitter to lower to the right C pointer type.
-2. Names: `F64Vec`/`f64vec-ref` (descriptive) vs `FlVec`/`flvector-ref`
-   (Racket's). This plan uses the former.
-3. Which N2 shape: ranged iteration, unchecked accessor, refinement-typed
-   index, or the first two now and the third later?
+1. Five types, or one `(NumVec T)`? **Author leans generic.** Section 3.1:
+   generic works today for fixed-result methods and is blocked for
+   element-typed results by
+   [assoc-type-method-at-applied-opaque-instance-no-instance](../reported/assoc-type-method-at-applied-opaque-instance-no-instance.md).
+2. Names. **Author leans toward honest names: `F64Vec`, not `FlVec`.** With a
+   generic type, those become `defalias`es of `(NumVec float)` etc., and the
+   function family is `nv-*` (or `numvec-*`) rather than `f64vec-*`. Still
+   open: the generic type's own name, and whether per-type function names
+   (`f64vec-new`) survive for constructors (3.1, item 3).
+3. Which N2 approaches (A-G in N2)? Recommended: A + B first, D or E later,
+   G separately. Note D changes `NumVec`'s type, so it has to be decided
+   before N0 ships.
 4. Is eight the right partial-sum count for N1 reductions on every target,
    or should it be fixed per element width (8 for `float64`, 16 for
    `float32`)? Either way it must not depend on the build machine.
 5. wasm: turn on `-msimd128` always (every current browser supports it) or
-   only when the program uses S1 types?
+   only when the program uses S1 types? **Undecided**; it does not block
+   anything before S1.
 6. Multiversioned N1 kernels on x86-64 Linux -- worth it, and does a
    portable fallback exist for the other hosts?
 
