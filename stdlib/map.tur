@@ -964,9 +964,9 @@
 ;;; only at zero), which is the same guarantee map-free's own body documents.
 
 (defmacro map-assoc-consuming__ [m k v]
-  `(let [__tur_mprev__ ~m]
-     (let [__tur_mnext__ (map-assoc __tur_mprev__ ~k ~v)]
-       (do (map-free __tur_mprev__) __tur_mnext__))))
+  `(let [__tur_mprev__ ~m
+         __tur_mnext__ (map-assoc __tur_mprev__ ~k ~v)]
+     (do (map-free __tur_mprev__) __tur_mnext__)))
 ;;; hamt-assoc-each__ -- internal helper for the hamt-of macro.
 ;;;
 ;;; Threads (map-assoc m k v) over the kv-pairs in xs, returning the final

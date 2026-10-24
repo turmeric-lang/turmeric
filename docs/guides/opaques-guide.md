@@ -163,9 +163,9 @@ That is fine for interop, and it silently bounds every guarantee built
 on top of an opaque handle:
 
 ```turmeric
-(let [__b (& w)]                 ; w is immutably borrowed
-  (let [w2 (:: (:: w :int) H)]   ; unwrap, re-wrap -> a NEW handle
-    (h-bump! w2)))               ; w2 is OWNED, not the borrowed w: no TUR-E0200
+(let [__b (& w)                  ; w is immutably borrowed
+      w2  (:: (:: w :int) H)]    ; unwrap, re-wrap -> a NEW handle
+  (h-bump! w2))                  ; w2 is OWNED, not the borrowed w: no TUR-E0200
 ```
 
 Mutating the borrowed `w` directly is correctly rejected. Mutating the

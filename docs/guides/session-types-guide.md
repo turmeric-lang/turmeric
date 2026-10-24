@@ -103,9 +103,9 @@ the receiver uses `offer` and pattern-matches on `Left`/`Right`:
 
 ```turmeric
 ;; Sender side: Choose<Send int Close, Close>
-(let [ch (choose-left ch)]  ; picks the Left branch
-  (let [ch (send ch 7)]
-    (close ch)))
+(let [ch (choose-left ch)   ; picks the Left branch
+      ch (send ch 7)]
+  (close ch))
 
 ;; Receiver side: Branch<Recv int Close, Close>
 (match (offer ch)
@@ -118,9 +118,9 @@ the receiver uses `offer` and pattern-matches on `Left`/`Right`:
 
 ```sweet-exp
 ;; Sender side: Choose<Send int Close, Close>
-let [ch choose-left(ch)]  ; picks the Left branch
-  let [ch send(ch 7)]
-    close(ch)
+let [ch choose-left(ch)   ; picks the Left branch
+     ch send(ch 7)]
+  close(ch)
 
 ;; Receiver side: Branch<Recv int Close, Close>
 match offer(ch)
@@ -141,9 +141,9 @@ loop iteration:
 (defn echo-server [^linear ch :(Session (Rec self (Branch (Recv int (Send int self)) Close)))] : nil
   (match (offer ch)
     (Left ch)
-      (let [[n ch] (recv ch)]
-        (let [ch (send ch n)]
-          (echo-server ch)))
+      (let [[n ch] (recv ch)
+            ch     (send ch n)]
+        (echo-server ch))
     (Right ch)
       (close ch)))
 ```
@@ -153,9 +153,9 @@ loop iteration:
 defn echo-server [^linear ch :(Session (Rec self (Branch (Recv int (Send int self)) Close)))] :nil
   match offer(ch)
     (Left ch)
-    let [[n ch] recv(ch)]
-      let [ch send(ch n)]
-        echo-server(ch)
+    let [[n ch] recv(ch)
+         ch     send(ch n)]
+      echo-server(ch)
     (Right ch)
     close(ch)
 ```
@@ -253,11 +253,11 @@ somewhere else. `stdlib/session.tur` provides the portable way to do that:
 ```turmeric
 (load "stdlib/session.tur")
 
-(let [[s r] (make-session (Send int Close))]
-  (let [t (session-spawn (fn [] (let [[n r] (recv r)] (println n) (close r))))]
-    (let [s (send s 42)]
-      (close s)
-      (session-join t))))
+(let [[s r] (make-session (Send int Close))
+      t     (session-spawn (fn [] (let [[n r] (recv r)] (println n) (close r))))
+      s     (send s 42)]
+  (close s)
+  (session-join t))
 ```
 
 `session-spawn` takes a zero-argument thunk and returns a `SessionPeer`;
@@ -358,21 +358,21 @@ Full two-role ping example:
   (-> B A int))
 
 (defn role-a [^linear ch :(Role Ping A)] : nil
-  (let [ch (send-to ch B 42)]
-    (let [[v ch] (recv-from ch B)]
-      (println v)
-      (close ch))))
+  (let [ch     (send-to ch B 42)
+        [v ch] (recv-from ch B)]
+    (println v)
+    (close ch)))
 
 (defn role-b [^linear ch :(Role Ping B)] : nil
-  (let [[v ch] (recv-from ch A)]
-    (let [ch (send-to ch A v)]
-      (close ch))))
+  (let [[v ch] (recv-from ch A)
+        ch     (send-to ch A v)]
+    (close ch)))
 
 (defn main [] : int
-  (let [[ra rb] (make-protocol Ping)]
-    (let [t (session-spawn (fn [] (role-b rb)))]
-      (role-a ra)
-      (session-join t)))
+  (let [[ra rb] (make-protocol Ping)
+        t       (session-spawn (fn [] (role-b rb)))]
+    (role-a ra)
+    (session-join t))
   0)
 ```
 
@@ -382,21 +382,21 @@ defprotocol Ping [A B]
   (-> B A int)
 
 defn role-a [^linear ch :(Role Ping A)] :nil
-  let [ch send-to(ch B 42)]
-    let [[v ch] recv-from(ch B)]
-      println(v)
-      close(ch)
+  let [ch     send-to(ch B 42)
+       [v ch] recv-from(ch B)]
+    println(v)
+    close(ch)
 
 defn role-b [^linear ch :(Role Ping B)] :nil
-  let [[v ch] recv-from(ch A)]
-    let [ch send-to(ch A v)]
-      close(ch)
+  let [[v ch] recv-from(ch A)
+       ch     send-to(ch A v)]
+    close(ch)
 
 defn main [] :int
-  let [[ra rb] make-protocol(Ping)]
-    let [t session-spawn((fn [] role-b(rb)))]
-      role-a(ra)
-      session-join(t)
+  let [[ra rb] make-protocol(Ping)
+       t       session-spawn((fn [] role-b(rb)))]
+    role-a(ra)
+    session-join(t)
   0
 ```
 
@@ -411,12 +411,12 @@ a three-role pipeline:
   (-> B C int))  ; B forwards to C
 
 (defn main [] : int
-  (let [[ra rb rc] (make-protocol Pipeline)]
-    (let [ta (session-spawn (fn [] (role-a ra)))]
-      (let [tb (session-spawn (fn [] (role-b rb)))]
-        (role-c rc)
-        (session-join ta)
-        (session-join tb))))
+  (let [[ra rb rc] (make-protocol Pipeline)
+        ta          (session-spawn (fn [] (role-a ra)))
+        tb          (session-spawn (fn [] (role-b rb)))]
+    (role-c rc)
+    (session-join ta)
+    (session-join tb))
   0)
 ```
 
@@ -426,12 +426,12 @@ defprotocol Pipeline [A B C]
   (-> B C int)   ; B forwards to C
 
 defn main [] :int
-  let [[ra rb rc] make-protocol(Pipeline)]
-    let [ta session-spawn((fn [] role-a(ra)))]
-      let [tb session-spawn((fn [] role-b(rb)))]
-        role-c(rc)
-        session-join(ta)
-        session-join(tb)
+  let [[ra rb rc] make-protocol(Pipeline)
+       ta          session-spawn((fn [] role-a(ra)))
+       tb          session-spawn((fn [] role-b(rb)))]
+    role-c(rc)
+    session-join(ta)
+    session-join(tb)
   0
 ```
 

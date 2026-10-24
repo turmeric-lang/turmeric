@@ -31,7 +31,7 @@
   ```)
 
 (defn main [] :int
-  (let [n 100000]
-    (let [hits (bench-hamt-lookup n)]
-      (println hits)
-      0)))
+  (let [n    100000
+        hits (bench-hamt-lookup n)]
+    (println hits)
+    0))

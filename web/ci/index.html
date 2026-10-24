@@ -62,8 +62,9 @@
 
   <div class="ci-body" id="ci-body" hidden>
 
-    <!-- Tab bar + shared range filter. Range applies to every tab, so it
-         lives here rather than inside the Tests-only filter bar. -->
+    <!-- Tab bar. The range filter applies to every tab, but it sits inside
+         the active one, under its tiles, so it is next to the charts it
+         narrows: switchTab() in ci-metrics.js moves it there. -->
     <div class="ci-tabs-bar">
       <div class="ci-tabs" role="tablist" aria-label="CI metric categories">
         <button type="button" class="ci-tab is-active" role="tab"
@@ -85,24 +86,6 @@
                 id="ci-tab-bench" aria-selected="false"
                 aria-controls="ci-panel-bench" data-tab="bench">Benchmarks</button>
       </div>
-      <div class="ci-range-group">
-      <!-- Shown while a window dragged out on a chart narrows the range. -->
-      <button type="button" class="ci-zoom" id="ci-zoom" hidden
-              title="Zoom back out to the whole range">
-        <t-icon name="zoom-in"></t-icon><span id="ci-zoom-label"></span>
-        <span class="x" aria-label="Clear zoom">&times;</span>
-      </button>
-      <div class="ci-field ci-field--range">
-        <label class="ci-field-label" for="ci-range">Range</label>
-        <select class="ci-select" id="ci-range">
-          <option value="all">All time</option>
-          <option value="90d">Last 90 days</option>
-          <option value="30d">Last 30 days</option>
-          <option value="7d" selected>Last 7 days</option>
-          <option value="1d">Last 24 hours</option>
-        </select>
-      </div>
-      </div>
     </div>
 
     <!-- ── Tests tab ─────────────────────────────────────────────────── -->
@@ -110,6 +93,28 @@
          aria-labelledby="ci-tab-tests">
 
       <section class="ci-tiles" id="ci-tiles" aria-label="Latest run summary"></section>
+
+      <!-- Shared range filter, one element for every tab: switchTab() moves
+           it into the active panel, after its tiles (or first, in a panel
+           with none). It starts here because Tests is the default tab. -->
+      <div class="ci-range-group" id="ci-range-group">
+        <!-- Shown while a window dragged out on a chart narrows the range. -->
+        <button type="button" class="ci-zoom" id="ci-zoom" hidden
+                title="Zoom back out to the whole range">
+          <t-icon name="zoom-in"></t-icon><span id="ci-zoom-label"></span>
+          <span class="x" aria-label="Clear zoom">&times;</span>
+        </button>
+        <div class="ci-field ci-field--range">
+          <label class="ci-field-label" for="ci-range">Range</label>
+          <select class="ci-select" id="ci-range">
+            <option value="all">All time</option>
+            <option value="90d">Last 90 days</option>
+            <option value="30d">Last 30 days</option>
+            <option value="7d" selected>Last 7 days</option>
+            <option value="1d">Last 24 hours</option>
+          </select>
+        </div>
+      </div>
 
       <section class="ci-filters" id="ci-filters" aria-label="Filters"></section>
 

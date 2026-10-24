@@ -24,10 +24,8 @@ extern "C" {
  * ffi_thunk.c): calls at or below it avoid a heap allocation.  It is NOT a cap
  * on how many parameters an exported spice symbol may have -- the descriptor's
  * arg_classes is a heap array of length n_args (arbitrary), and the
- * exports.manifest arg-class string is naturally variable-length.  A call whose
- * arg-shape exceeds the generated dispatcher's --max-arity still fails cleanly
- * at call time with a regenerate-the-table diagnostic; that is a separate
- * interpreter-FFI limit, not a descriptor limit. */
+ * exports.manifest arg-class string is naturally variable-length, and neither
+ * the JIT thunk nor the __ffi shim has an arity ceiling. */
 #define TUR_SPICE_ARITY_FASTPATH 16
 
 /* interpreter-arbitrary-arity-ffi (Phase 2): the uniform-signature FFI shim
@@ -35,15 +33,15 @@ extern "C" {
  * emit_ffi_export_shims).  It reads the interpreter's marshalled int-register
  * / float args from `iv` / `fv` and writes the result to *out_i (int-class
  * return) or *out_f (float-class return); a :void return writes neither.
- * Calling through it lifts the shape-table arity ceiling entirely -- the shim
- * was generated with the export's concrete signature, so arity and int/float
- * mix are irrelevant.  NULL when the loaded .so predates shim emission; the
- * caller then falls back to the generated shape table (still capped). */
+ * The shim was generated with the export's concrete signature, so arity and
+ * int/float mix are irrelevant.  NULL when the loaded .so predates shim
+ * emission (2026-07-22); without a JIT such an export cannot be called, and the
+ * call reports "rebuild the spice". */
 typedef void (*TurFfiShimFn)(const int64_t *iv, const double *fv,
                              int64_t *out_i, double *out_f);
 
 /* One row from exports.manifest, post-parse. The dispatcher class chars
- * use the encoding shared with src/runtime/ffi_dispatch.h:
+ * use this encoding:
  *   'i' -- int64_t (covers :int / :cstr / :bool / :ptr / sized ints)
  *   'f' -- double  (covers :float / :float64)
  *   'v' -- void return only (never appears in arg_classes)

@@ -31,8 +31,8 @@
   ```)
 
 (defn main [] :int
-  (let [n 1000]
-    (let [total (bench-hamt-snapshot n)]
-      ; Each snapshot should have 101 entries: 100 + 1 new
-      (println (/ total n))
-      0)))
+  (let [n     1000
+        total (bench-hamt-snapshot n)]
+    ; Each snapshot should have 101 entries: 100 + 1 new
+    (println (/ total n))
+    0))

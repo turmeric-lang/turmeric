@@ -1,6 +1,6 @@
 /* elab_reflect.c -- reflected measures: the `^reflect` totality gate.
  *
- * docs/upcoming/reflected-measures-plan.md, phases RF0 (the site table),
+ * docs/archive/reflected-measures-plan.md, phases RF0 (the site table),
  * RF1 (purity + structural termination) and RF2 (coverage), behind
  * `--enable=reflected-measures`.
  *

@@ -34,6 +34,12 @@ sentence above does not cover them. If you touch this file, check
 `ls docs/reported/` against it -- an index that silently omits a quarter of the
 directory is worse for triage than no index.
 
+## Found asking whether `let` should become `let*` (filed 2026-10-24)
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| ~~[let-star-redundant-with-sequential-let](../archive/let-star-redundant-with-sequential-let.md)~~ | low | **RESOLVED 2026-10-24** (archived): `let*` is deprecated in the Turmeric dialects (`TUR-D0006`; silent under `#lang r7rs`, whose `let`/`let*` keep the spec's meaning), the quickstart no longer says `let` bindings cannot see each other, and the nested-`let` chains in the guides, stdlib and benchmarks are one sequential `let`. Pinned by `errors/let-star-deprecated`, `let-star` and `r7rs-let-star-not-deprecated` |
+
 ## Found adding trend lines and zoom to /ci (filed 2026-10-24)
 
 | Report | Severity | One line |
@@ -706,7 +712,7 @@ walk whose invariant mentions the container's length.
 Found investigating two security-guide questions -- whether `--no-proc-macros`
 should default on, and whether `--strict-effects` should -- and scoping
 `^capability` for `println`. The plan these feed is
-[effect-row-honesty-plan](../upcoming/effect-row-honesty-plan.md), which also
+[effect-row-honesty-plan](../archive/effect-row-honesty-plan.md), which also
 answers [security-audit-plan](../upcoming/security-audit-plan.md) open
 question 3 as Option A.
 
@@ -721,7 +727,7 @@ question 3 as Option A.
 
 Found reviewing the two live `EXPERIMENTS[]` rows --
 [loop-invariants](../archive/loop-invariants-plan.md) (`expires_at 0.58.0`,
-so due) and [reflected-measures](../upcoming/reflected-measures-plan.md)
+so due) and [reflected-measures](../archive/reflected-measures-plan.md)
 (`expires_at 0.61.0`, not due) -- against what graduating each would freeze.
 Every row below was reproduced against a v0.59.0 Debug build. None is a
 soundness bug: in all four the runtime check is kept, so the programs are

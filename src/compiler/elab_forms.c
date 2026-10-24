@@ -2885,6 +2885,19 @@ Expr *elab_do(Elab *e, const Form *call) {
  * initializer form.  This mirrors how elab_let parses each entry.
  */
 Expr *elab_letstar(Elab *e, const Form *call) {
+    /* let-star-redundant-with-sequential-let: deprecated (TUR-D0006) in the
+     * Turmeric dialects, where `let` is already sequential.  An r7rs source
+     * keeps its own `let*` (lower_letstar turns the Scheme form into nested
+     * lets before this point); a vector-form one written there still lands
+     * here, and stays silent. */
+    {
+        const SourceFile *sf = diag_source_file(call->span.file_id);
+        if (!sf || sf->lang != LANG_R7RS)
+            diag_emit_with_code(elab_deprecation_level(),
+                                call->as.list.items[0]->span, TUR_D0006_LET_STAR,
+                                "'let*' is deprecated; write 'let', which already "
+                                "binds in order");
+    }
     if (call->as.list.len < 2) {
         diag_emit(DIAG_ERROR, call->span, "let* requires a binding vector");
         return NULL;

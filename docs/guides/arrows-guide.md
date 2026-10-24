@@ -48,22 +48,21 @@ see `tests/fixtures/arrow-instance-vs-bare`.
 (import stdlib/arrow.tur)
 
 ;; arr: lift a function (identity for the function Arrow)
-(let [add1   (arr (fn [x] (+ x 1)))
-      double (arr (fn [x] (* x 2)))]
-
-  ;; >>> : compose left-to-right: add1 first, then double
-  (let [pipeline (>>> add1 double)]
-    (println (pipeline 5))))   ; => 12
+(let [add1     (arr (fn [x] (+ x 1)))
+      double   (arr (fn [x] (* x 2)))
+      ;; >>> : compose left-to-right: add1 first, then double
+      pipeline (>>> add1 double)]
+  (println (pipeline 5)))   ; => 12
 ```
 
 ```sweet-exp
 import stdlib/arrow.tur
 
-let [add1   arr((fn [x] {x + 1}))
-     double arr((fn [x] {x * 2}))]
-
-  let [pipeline >>>(add1 double)]
-    println pipeline(5)        ; => 12
+let [add1     arr((fn [x] {x + 1}))
+     double   arr((fn [x] {x * 2}))
+     ;; >>> : compose left-to-right: add1 first, then double
+     pipeline >>>(add1 double)]
+  println pipeline(5)        ; => 12
 ```
 
 The dataflow reads left-to-right: input enters `add1`, the result flows into

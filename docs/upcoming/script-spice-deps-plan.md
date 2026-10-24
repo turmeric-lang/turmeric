@@ -2,13 +2,14 @@
 
 > **Status:** SD0-SD5 landed 2026-10-22 behind `--enable=script-deps`
 > (experiment row `script-deps`, introduced 0.70.0). SD6 (cache the compiled
-> script) is optional and open -- see its section. The plan stays here until
-> the experiment graduates.
+> script) is open: researched and measured 2026-10-24, found worth doing, and
+> rewritten from those measurements -- see its section. The plan stays here
+> until the experiment graduates.
 > Follow-up to [installed-spice-libraries-plan](../archive/installed-spice-libraries-plan.md),
 > which it builds on.
 > **Last Updated:** 2026-10-22
 > **Type:** Tooling / package management (`src/compiler/pkg.c`,
-> `src/compiler/global.c`), build driver (`src/main.c`), one new reserved
+> `src/compiler/global.c`), build driver (`src/driver/`), one new reserved
 > top-level form, behind `--enable=script-deps`.
 > **See also:** [installed-spice-libraries-plan](../archive/installed-spice-libraries-plan.md),
 > [global-spice-install-plan](../archive/global-spice-install-plan.md),
@@ -27,11 +28,14 @@ A single `.tur` file declares the spices it needs, and `tur run` gets them:
                 :ref    "json-v0.3.0"
                 :subdir "spices/json"}})
 
-(import json/decode)
-
-(defn main [] : int
-  ...)
+(defmodule report
+  (import json/parse :refer [json-parse])
+  (defn main [] : int
+    ...))
 ```
+
+(`import` is only allowed inside a `defmodule`, so a script that imports
+wraps its body in one; a `defscript` header may precede the `defmodule`.)
 
 ```sh
 chmod +x report.tur
@@ -337,20 +341,139 @@ experimental-features rule (CLAUDE.md):
       were last used. `tur cache clean [--older-than <days>]` removes them.
       A run stamps an entry's last use, which is what `--older-than` reads.
 
-### SD6 -- Optional: cache the compiled script
+### SD6 -- Cache the compiled script
 
-Single-file `tur run` builds to a temporary executable and deletes it after
-every run (`src/main.c:6953-7001`). A script with a heavy dep pays the whole
-compile on every invocation, and shebang use makes that visible.
+Rewritten 2026-10-24 from measurements. The first version (kept in git
+history) asked to measure before committing and guessed that `--engine jit`
+might make a cache unnecessary. The measurements say otherwise.
 
-- [ ] Cache the executable under `cache/script-bins/`, keyed by:
-      - the `tur` version, build flags and engine,
-      - the content hash of every file the elaborator loaded (it already knows
-        the set),
-      - every dep's SHA.
-- [ ] A hit execs the cached binary directly.
-- [ ] Measure before committing to it. With `--engine jit` the compile may
-      already be cheap enough.
+#### Findings (2026-10-24)
+
+A single-file `tur run` resolves to the **cc** engine unless `--engine`,
+`TUR_ENGINE` or a manifest says otherwise (`drv_resolve_engine`,
+`src/driver/spice.c:699`). It writes a temporary executable, runs it, and
+deletes it on every invocation (`src/driver/cmd_run.c:395-404`). Measured on a
+release build of `tur` 0.70.5, Linux x86-64, 4 cores, gcc, warm caches:
+
+| Program | `tur run`, cc (default) | `tur run --engine jit` | the built binary run directly |
+| --- | --- | --- | --- |
+| a script with a `defscript` header declaring the json spice (`:path` dep; yyjson linked) | 150-200 ms; `--timings`: cc 138 ms of 171 ms (81%), front end and emit ~30 ms, the program 1.6 ms | 360-400 ms | 2-3 ms |
+| `stdlib/tools/serve.tur` (loads all 6,754 lines of `httpd.tur`) | 1.1-1.2 s (gcc `-O2`); `tur build` 2.0 s, cc 96% | 260 ms | 2 ms |
+
+- **The C compiler is the cost.** Turmeric's own phases are 30-60 ms; gcc is
+  the rest. A cache hit removes nearly all of it: 60x to 500x faster.
+- **The JIT is not the answer.** It is twice as slow as cc on the small
+  script, and on the large one still about 100x slower than a cached binary.
+  It cannot be cached the same way either: it compiles in process and leaves
+  no executable.
+- **The same compile-run-discard path serves more than scripts.**
+  `tur serve` compiles `serve.tur` on every launch, on cc always on Windows
+  (`cmd_serve`), so 1-2 s each start there; `tur x` (project-less-tools PT3)
+  runs a spice's tool the same way.
+- **There is precedent for a compile cache, and for its security.**
+  `prelude_split_object` (`src/driver/preamble_split.c:291`) caches a compiled
+  object keyed by a hash of its text, the compiler and every flag, and
+  publishes it by rename. `cc.c:241` (WP2 D-4) records why a shared cache
+  directory must be checked, not assumed: a planted file there was linked
+  into users' binaries. SD6 caches files that are *executed*, so the same rule
+  applies with more force.
+
+#### Design
+
+**Scope.** The cc path of a single-file run: `tur run <file>`, `tur <file>`,
+and later `tur serve` and `tur x`. First only for files with a `defscript`
+header, under the existing `script-deps` gate; widened once it has run
+without a stale hit.
+
+**Where.** `<global cache>/script-bins/<key>` -- beside the dep cache
+(`tur_script_cache_dir`, `src/compiler/global.c:663`), so `tur cache list` and
+`tur cache clean --older-than` cover it. The directory is checked as WP2 D-4
+checks `tur-build`: a real directory (not a symlink), owned by the user, not
+writable by group or other. A directory that fails the check disables the
+cache for the run (compile as today) and says so once; it is never repaired.
+
+**The key.** A hash over everything that can change the binary:
+
+- `tur`'s version and build id, the engine, and every flag that reaches the
+  compile (`--enable` set, `-I`, reader macros, `--debug`, sanitizers);
+- the C toolchain: the resolved `CC`, its version string, and the C and link
+  flags, including `TUR_*` variables that change code generation;
+- the content of every file the front end loaded: the script, stdlib modules,
+  each dep's modules;
+- every declared dep's commit, as SD2 resolves it;
+- **native link inputs**: each static library a dep's `:cmake-deps` built
+  (e.g. `libyyjson.a`) and each `:c-sources` file. The first version of SD6
+  omitted these; without them, rebuilding a dep's C would leave the cached
+  binary in use.
+
+**Checking a hit without compiling.** The set of loaded files is only known
+after a front-end run, so the entry records it. Each entry stores, beside the
+binary, a manifest: the key's fixed inputs, and for every loaded file and link
+input its path, size, modification time and content hash, plus the
+modification time of every directory searched on the module path (a new file
+that would now shadow a loaded one changes its directory). A run:
+
+1. computes the fixed part of the key (version, flags, toolchain, script
+   path and content) and looks up candidate entries;
+2. for a candidate, `stat`s each recorded file and directory; if size and
+   modification time match, it trusts the recorded hash, otherwise it rehashes
+   and rejects on a mismatch;
+3. on a hit, execs the cached binary with the script's arguments; on a miss,
+   compiles as today, then publishes.
+
+The common hit is one hash of the script plus a few dozen `stat` calls.
+
+**Publishing.** Compile to a private name in the cache directory and rename
+it into place (as `prelude_split_object` does), then write the manifest last,
+so its presence means complete. Two runs racing on one key both compile; one
+rename wins, and the loser's binary is discarded.
+
+**Escape hatches.** `tur run --no-cache` (also `TUR_NO_SCRIPT_CACHE=1`)
+compiles as today. `tur cache clean` removes binaries with the deps. `--timings`
+reports a hit as its own phase, so a slow run is easy to diagnose.
+
+**Not cached.** `--engine jit` and `--interpret` (no executable), a file
+inside a project (a project has `tur build`), and any run with a sanitizer
+the cached binary was not built with -- the key covers it, but the point is
+stated.
+
+#### Checklist
+
+- [ ] Key computation and manifest format; the fast `stat` check.
+- [ ] Cache lookup, exec on hit, publish on miss, in the cc arm of
+      single-file `tur run` (`cmd_run.c`).
+- [ ] Directory checks (WP2 D-4 rules), `--no-cache` / `TUR_NO_SCRIPT_CACHE`.
+- [ ] `tur cache list` shows binaries (size, last used); `tur cache clean
+      [--older-than]` removes them. A hit stamps last use.
+- [ ] `--timings` names the hit.
+- [ ] Tests (`tests/run-script-deps.sh`): a second run is a hit and produces
+      the same output; **each key input, changed one at a time, forces a
+      rebuild** -- the script, an imported stdlib module (via `-I` shadowing),
+      a dep's module, a dep's commit, a dep's static library, a `:c-sources`
+      file, an `--enable` flag, `CC`; a new file shadowing a loaded module
+      forces a rebuild; a group-writable cache directory disables the cache;
+      `--no-cache` compiles; two concurrent first runs both succeed.
+- [ ] Measure again: hit time for the json script and for `serve.tur`.
+- [ ] Then widen: every single-file `tur run` on cc, `tur serve` (Windows
+      first), `tur x`.
+
+**Risk.** A stale hit runs old code silently, which is worse than a slow run.
+That is why the key is conservative, why every input has a test that changes
+it, and why the first scope is the gated `defscript` path.
+
+#### Found while researching SD6
+
+- **The Goal example did not compile** (a bare `import` outside a
+  `defmodule`); fixed above.
+- **`:path` deps and native code.** A `:path` dep's own `:cmake-deps` are not
+  fetched by the script run: the json checkout needed one `tur fetch` before
+  `yyjson.h` was found. Arguably right for a local checkout, but the
+  consuming-spices guide should say so in one sentence. (`:url` deps go
+  through the script-dep cache, which sets them up.)
+- **`tur run --engine jit` prints three `unknown pragma` warnings** for every
+  program, even `(println 7.1)`. `tur serve` silences them
+  (`tur_jit_set_quiet_warnings`, `cmd_run.c:1130`); a plain JIT run does not.
+  A small separate fix.
 
 ## As built (2026-10-22)
 

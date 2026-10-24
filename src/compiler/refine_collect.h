@@ -114,7 +114,7 @@ typedef struct RefineFnInfo {
     uint32_t     writes_param_mask;
     bool         writes_declared;
     bool         writes_checked;
-    /* reflected-measures (docs/upcoming/reflected-measures-plan.md):
+    /* reflected-measures (docs/archive/reflected-measures-plan.md):
      * is_ctor -- the name is a DATA CONSTRUCTOR, which is what makes an
      *   argument form "ground" for the unfolder: a `match` arm can be
      *   selected syntactically against `(Cons 1 (Nil))` and against nothing

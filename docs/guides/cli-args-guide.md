@@ -222,6 +222,30 @@ args/has?(result "verbose")
 ; => true/false
 ```
 
+### Options With an Optional Value
+
+`args/spec-option-implicit` registers an option that may also be given bare.
+Absent, it takes its default; bare, its implicit value; with `=value`, that
+value. A bare one never takes the next word as its value, so the value must
+be attached with `=` -- `--color auto` is `--color` followed by the positional
+`auto`.
+
+```turmeric
+;; absent => "never", --color => "always", --color=auto => "auto"
+(args/spec-option-implicit spec "--color" "string" (some "never") "always")
+
+;; At runtime:
+(args/get-str result "color")
+```
+```sweet-exp
+;; absent => "never", --color => "always", --color=auto => "auto"
+args/spec-option-implicit(spec "--color" "string" some("never") "always")
+;; At runtime:
+args/get-str(result "color")
+```
+
+`tur serve --isolate[=MODE]` is built this way.
+
 ### Positional Arguments
 
 Positional arguments are everything that is not a flag or option value.
@@ -395,6 +419,7 @@ args/result-free(result)
 | `args/spec-prog` | `spec :ArgSpec name :cstr -> ArgSpec` | Set program name for help |
 | `args/spec-flag` | `spec :ArgSpec name :cstr -> ArgSpec` | Register a boolean flag |
 | `args/spec-option` | `spec :ArgSpec name :cstr type :cstr dflt :(Option cstr) -> ArgSpec` | Register a named option |
+| `args/spec-option-implicit` | `spec :ArgSpec name :cstr type :cstr dflt :(Option cstr) implicit :cstr -> ArgSpec` | Register an option whose value may be left out |
 | `args/spec-subcommand` | `spec :ArgSpec name :cstr sub :ArgSpec -> ArgSpec` | Register a subcommand |
 | `args/parse` | `spec :ArgSpec argv :int -> ArgResult` | Parse `*args*` against spec |
 | `args/has?` | `result :ArgResult key :cstr -> :bool` | True if flag/option was supplied |

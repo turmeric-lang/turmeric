@@ -6,7 +6,7 @@ entry and README line exactly as `release_prepare.py` would have at vOLD
 (CHANGELOG and README taken from the vOLD tag, so the hand-cut answer is not
 in the prompt), with that model alone, and write a Markdown report that puts
 every draft beside the hand-cut entry.  This is how the "Model choice" table
-in docs/upcoming/ci-release-workflows-plan.md is measured.
+in docs/archive/ci-release-workflows-plan.md is measured.
 
 Usage:
   tools/release_model_eval.py --models zai-glm-latest@low,mistral-large-4 \\

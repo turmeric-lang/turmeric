@@ -7,7 +7,7 @@ refinement feature and for the `tests/fixtures/refine-*` corpus -- read it as a
 record, per the two-document note below. Work that builds on it and is still
 open lives in [`loop-invariants-plan.md`](loop-invariants-plan.md)
 (landed 2026-09-29 behind `--enable=loop-invariants`) and
-[`reflected-measures-plan.md`](../upcoming/reflected-measures-plan.md)
+[`reflected-measures-plan.md`](reflected-measures-plan.md)
 (in progress since 2026-09-29, behind `--enable=reflected-measures`).
 
 ## How to read this file -- it is TWO documents

@@ -56,6 +56,14 @@
                              until the editor initialises. -->
                         <div class="editor-tabs"></div>
                         <div class="editor-actions">
+                            <!-- The Turmeric mark, leading the action row. It is
+                                 the site nav's icon (precached by sw.js, so it is
+                                 there offline), whose `t` is knocked out of the
+                                 block: the row shows through, light in the light
+                                 theme and dark in the dark one. Purely decorative;
+                                 the site nav already carries the home link. -->
+                            <img class="editor-brand" src="/logo-icon.svg" alt="" aria-hidden="true"
+                                 width="23" height="20" draggable="false">
                             <button class="btn btn-icon" id="run-btn" title="Run (Ctrl/Cmd + Enter)" aria-label="Run">
                                 <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
                                     <path d="M8 5v14l11-7z"/>
@@ -481,13 +489,16 @@
                         <span class="docs-status" id="docs-status"></span>
                         <!-- On a phone the pane is a full-screen sheet, not a
                              dialog floating over a visible page, so a bare
-                             "x" in a corner does not read as the way out. The
-                             chevron and label are shown at <=768px only (and
-                             the button moves to the leading edge there); the
+                             "x" does not read as the way out. At <=768px the
+                             button becomes a bordered "return to the editor"
+                             arrow, the same size as the Contents toggle; the
                              desktop pane keeps the plain close glyph. -->
-                        <button class="btn-close" id="docs-close" aria-label="Close documentation">
-                            <span class="docs-close-chevron" aria-hidden="true">&lsaquo;</span>
-                            <span class="docs-close-label" aria-hidden="true">Back</span>
+                        <button class="btn-close" id="docs-close" aria-label="Close documentation"
+                                title="Back to the editor">
+                            <svg class="docs-close-return" width="20" height="20" viewBox="0 0 24 24"
+                                 fill="currentColor" aria-hidden="true">
+                                <path d="M19 7v4H5.83l3.58-3.59L8 6l-6 6 6 6 1.41-1.41L5.83 13H21V7z"/>
+                            </svg>
                             <span class="docs-close-x" aria-hidden="true">&times;</span>
                         </button>
                     </div>

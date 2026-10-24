@@ -8582,7 +8582,7 @@ static int64_t __inst_Num_div_int(int64_t x, int64_t y) {
 }
 
 static int64_t __inst_Num_neg_int(int64_t x) {
-        return (INT64_C(0)) - (x);
+        return (int64_t)(0 - (uint64_t)(x));
 }
 
 static int8_t __inst_Num_add_int8(int8_t x, int8_t y) {
@@ -8602,7 +8602,7 @@ static int8_t __inst_Num_div_int8(int8_t x, int8_t y) {
 }
 
 static int8_t __inst_Num_neg_int8(int8_t x) {
-        return (int8_t)((uint64_t)(INT8_C(0)) - (uint64_t)(x));
+        return (int8_t)(0 - (uint64_t)(x));
 }
 
 static int16_t __inst_Num_add_int16(int16_t x, int16_t y) {
@@ -8622,7 +8622,7 @@ static int16_t __inst_Num_div_int16(int16_t x, int16_t y) {
 }
 
 static int16_t __inst_Num_neg_int16(int16_t x) {
-        return (int16_t)((uint64_t)(INT16_C(0)) - (uint64_t)(x));
+        return (int16_t)(0 - (uint64_t)(x));
 }
 
 static int32_t __inst_Num_add_int32(int32_t x, int32_t y) {
@@ -8642,7 +8642,7 @@ static int32_t __inst_Num_div_int32(int32_t x, int32_t y) {
 }
 
 static int32_t __inst_Num_neg_int32(int32_t x) {
-        return (int32_t)((uint64_t)(INT32_C(0)) - (uint64_t)(x));
+        return (int32_t)(0 - (uint64_t)(x));
 }
 
 static uint8_t __inst_Num_add_uint8(uint8_t x, uint8_t y) {
@@ -8662,7 +8662,7 @@ static uint8_t __inst_Num_div_uint8(uint8_t x, uint8_t y) {
 }
 
 static uint8_t __inst_Num_neg_uint8(uint8_t x) {
-        return (uint8_t)((uint64_t)(UINT8_C(0)) - (uint64_t)(x));
+        return (uint8_t)(0 - (uint64_t)(x));
 }
 
 static uint16_t __inst_Num_add_uint16(uint16_t x, uint16_t y) {
@@ -8682,7 +8682,7 @@ static uint16_t __inst_Num_div_uint16(uint16_t x, uint16_t y) {
 }
 
 static uint16_t __inst_Num_neg_uint16(uint16_t x) {
-        return (uint16_t)((uint64_t)(UINT16_C(0)) - (uint64_t)(x));
+        return (uint16_t)(0 - (uint64_t)(x));
 }
 
 static uint32_t __inst_Num_add_uint32(uint32_t x, uint32_t y) {
@@ -8702,7 +8702,7 @@ static uint32_t __inst_Num_div_uint32(uint32_t x, uint32_t y) {
 }
 
 static uint32_t __inst_Num_neg_uint32(uint32_t x) {
-        return (uint32_t)((uint64_t)(UINT32_C(0)) - (uint64_t)(x));
+        return (uint32_t)(0 - (uint64_t)(x));
 }
 
 static uint64_t __inst_Num_add_uint64(uint64_t x, uint64_t y) {
@@ -8722,7 +8722,7 @@ static uint64_t __inst_Num_div_uint64(uint64_t x, uint64_t y) {
 }
 
 static uint64_t __inst_Num_neg_uint64(uint64_t x) {
-        return (UINT64_C(0)) - (x);
+        return -(x);
 }
 
 static float __inst_Num_add_float32(float x, float y) {
@@ -8742,7 +8742,7 @@ static float __inst_Num_div_float32(float x, float y) {
 }
 
 static float __inst_Num_neg_float32(float x) {
-        return (((float)0)) - (x);
+        return -(x);
 }
 
 static double __inst_Num_add_float(double x, double y) {
@@ -8762,7 +8762,7 @@ static double __inst_Num_div_float(double x, double y) {
 }
 
 static double __inst_Num_neg_float(double x) {
-        return (0.0) - (x);
+        return -(x);
 }
 
 static bool __inst_Clone_clone_bool(bool x) {

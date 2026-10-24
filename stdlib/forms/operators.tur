@@ -36,25 +36,26 @@
 ;;;   (+ 1.5 2.25)   ; => 3.75
 ;;@builtin (+ [a : N b : N & more : N] : N)
 
-;;; - -- subtract numbers, left to right.
+;;; - -- subtract numbers left to right, or negate one.
 ;;;
-;;; Takes two or more arguments: `(- a b c)` is `(a - b) - c`.  There is no
-;;; one-argument negation on the builtin kinds -- `(- x)` is TUR-E0006; write
-;;; `(- 0 x)` or a negative literal.  On a type with a `Num` instance,
-;;; `(- x)` is its `neg`.
+;;; With two or more arguments, `(- a b c)` is `(a - b) - c`.  With one,
+;;; `(- x)` is `x` negated: a float keeps the sign of zero (`(- 0.0)` is
+;;; -0.0, which `(- 0.0 x)` is not), and an integer wraps at its kind's width
+;;; (`(- min-int)` is min-int, `(- 1u8)` is 255).  On a type with a `Num`
+;;; instance, `(- x)` is its `neg`.
 ;;;
 ;;; Parameters:
-;;;   a    -- the minuend; its type selects the overload
-;;;   b    -- the first subtrahend, of the same type
-;;;   more -- further subtrahends, of the same type
+;;;   a    -- the minuend, or the value to negate; its type selects the overload
+;;;   more -- the subtrahends, of the same type
 ;;;
 ;;; Returns:
-;;;   The difference, of the arguments' type.
+;;;   The difference, or the negation, of the arguments' type.
 ;;;
 ;;; Example:
 ;;;   (- 10 3 2)     ; => 5
 ;;;   (- 7.5 0.25)   ; => 7.25
-;;@builtin (- [a : N b : N & more : N] : N)
+;;;   (- 7.1)        ; => -7.1
+;;@builtin (- [a : N & more : N] : N)
 
 ;;; * -- multiply numbers, left to right.
 ;;;
@@ -287,21 +288,21 @@
 ;;;   (+. 1.5 2.25)  ; => 3.75
 ;;@builtin (+. [a : float b : float & more : float] : float)
 
-;;; -. -- subtract floats.
+;;; -. -- subtract floats, or negate one.
 ;;;
-;;; `-` restricted to `float`; see `+.`.
+;;; `-` restricted to `float`; see `+.`.  `(-. x)` is `x` negated.
 ;;;
 ;;; Parameters:
-;;;   a    -- the minuend
-;;;   b    -- the first subtrahend
-;;;   more -- further subtrahends
+;;;   a    -- the minuend, or the value to negate
+;;;   more -- the subtrahends
 ;;;
 ;;; Returns:
-;;;   The difference.
+;;;   The difference, or the negation.
 ;;;
 ;;; Example:
 ;;;   (-. 7.5 0.25)  ; => 7.25
-;;@builtin (-. [a : float b : float & more : float] : float)
+;;;   (-. 7.1)       ; => -7.1
+;;@builtin (-. [a : float & more : float] : float)
 
 ;;; *. -- multiply floats.
 ;;;

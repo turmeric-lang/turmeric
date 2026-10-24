@@ -179,9 +179,9 @@ A simple view template (`views/home.html.tur`):
 
 ;; Home page -- public, template-rendered
 (defn home-handler [ctx : int] : int
-  (let [user-res (session-get ctx "user")]
-    (let [user (if (ok? user-res) (ok-val user-res) "")]
-      (html (render-page "views/home.html.tur" "Home" user)))))
+  (let [user-res (session-get ctx "user")
+        user     (if (ok? user-res) (ok-val user-res) "")]
+    (html (render-page "views/home.html.tur" "Home" user))))
 
 ;; Login form (GET) and login action (POST)
 (defn login-get [ctx : int] : int
@@ -267,41 +267,41 @@ middleware function receives the context and returns `option<int>`:
     (tls-ctx-load-cert-pem tls-ctx "/tmp/tls-smoke-test/test-cert.pem")
     (tls-ctx-load-key-pem  tls-ctx "/tmp/tls-smoke-test/test-key.pem")
 
-    ;; Sessions
-    (let [store (memory-store-new)
-          sess-mw (session-mw store (default-session-config))]
+    (let [;; Sessions
+          store   (memory-store-new)
+          sess-mw (session-mw store (default-session-config))
 
-      ;; Routes
-      (let [public-routes
-              (url-map!
-                (mount! "/" (get! "/" home-handler))
-                (mount! "/login"
-                  (url-map!
-                    (mount! "/" (get! "/" login-get)
-                                 (post! "/" login-post)))))
+          ;; Routes
+          public-routes
+            (url-map!
+              (mount! "/" (get! "/" home-handler))
+              (mount! "/login"
+                (url-map!
+                  (mount! "/" (get! "/" login-get)
+                               (post! "/" login-post)))))
 
           protected-routes
-              (url-map!
-                (mount! "/dashboard" (get! "/" dashboard-handler))
-                (mount! "/logout"   (get! "/" logout-handler)))]
+            (url-map!
+              (mount! "/dashboard" (get! "/" dashboard-handler))
+              (mount! "/logout"   (get! "/" logout-handler)))
 
-        ;; Server
-        (let [srv (tourist 8443
-                    sess-mw
-                    (serve-static! "/assets" "./public")
-                    (use! (fn [ctx]
-                      (let [path (req-path ctx)]
-                        ;; gate /dashboard and /logout behind auth
-                        (if (or (str-prefix? path "/dashboard")
-                                (str-prefix? path "/logout"))
-                          (require-auth ctx)
-                          (none-value)))))
-                    public-routes
-                    protected-routes)]
-          ;; run until killed
-          (server-stop srv)
-          (tls-ctx-free tls-ctx)
-          0)))))
+          ;; Server
+          srv (tourist 8443
+                sess-mw
+                (serve-static! "/assets" "./public")
+                (use! (fn [ctx]
+                  (let [path (req-path ctx)]
+                    ;; gate /dashboard and /logout behind auth
+                    (if (or (str-prefix? path "/dashboard")
+                            (str-prefix? path "/logout"))
+                      (require-auth ctx)
+                      (none-value)))))
+                public-routes
+                protected-routes)]
+      ;; run until killed
+      (server-stop srv)
+      (tls-ctx-free tls-ctx)
+      0)))
 ```
 
 ```sweet-exp
@@ -323,28 +323,28 @@ defn main [] :int
   let [tls-ctx tls-ctx-new()]
     tls-ctx-load-cert-pem(tls-ctx "/tmp/tls-smoke-test/test-cert.pem")
     tls-ctx-load-key-pem(tls-ctx "/tmp/tls-smoke-test/test-key.pem")
-    let [store memory-store-new()
-         sess-mw session-mw(store default-session-config())]
-      let [public-routes    url-map!(mount!("/" get!("/" home-handler))
-                                     mount!("/login"
-                                            url-map!(mount!("/" get!("/" login-get)
-                                                                post!("/" login-post)))))
-           protected-routes url-map!(mount!("/dashboard" get!("/" dashboard-handler))
-                                     mount!("/logout" get!("/" logout-handler)))]
-        let [srv tourist(8443
-                         sess-mw
-                         serve-static!("/assets" "./public")
-                         use!((fn [ctx]
-                                (let [path req-path(ctx)]
-                                  (if or(str-prefix?(path "/dashboard")
-                                         str-prefix?(path "/logout"))
-                                    require-auth(ctx)
-                                    none-value()))))
-                         public-routes
-                         protected-routes)]
-          server-stop(srv)
-          tls-ctx-free(tls-ctx)
-          0
+    let [store            memory-store-new()
+         sess-mw          session-mw(store default-session-config())
+         public-routes    url-map!(mount!("/" get!("/" home-handler))
+                                   mount!("/login"
+                                          url-map!(mount!("/" get!("/" login-get)
+                                                              post!("/" login-post)))))
+         protected-routes url-map!(mount!("/dashboard" get!("/" dashboard-handler))
+                                   mount!("/logout" get!("/" logout-handler)))
+         srv              tourist(8443
+                                  sess-mw
+                                  serve-static!("/assets" "./public")
+                                  use!((fn [ctx]
+                                         (let [path req-path(ctx)]
+                                           (if or(str-prefix?(path "/dashboard")
+                                                  str-prefix?(path "/logout"))
+                                             require-auth(ctx)
+                                             none-value()))))
+                                  public-routes
+                                  protected-routes)]
+      server-stop(srv)
+      tls-ctx-free(tls-ctx)
+      0
 ```
 
 ### What the wiring does

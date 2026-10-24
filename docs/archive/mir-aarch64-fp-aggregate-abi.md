@@ -306,7 +306,7 @@ written. It describes the broken behaviour in the present tense; see
 This is not only a jit-ffi problem. Any `tur jit` program that calls an
 external C function taking or returning an FP aggregate -- e.g. a spice
 binding to raylib's `Vector2`-flavored API, exactly the case
-[ffi-spices-integration-plan](../upcoming/ffi-spices-integration-plan.md)
+[ffi-spices-integration-plan](ffi-spices-integration-plan.md)
 targets -- hits it today, with no diagnostic. `tur run` (cc) is correct, so
 the two backends disagree, which is the shape of bug that gets blamed on
 the spice.

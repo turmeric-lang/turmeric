@@ -122,12 +122,20 @@
 .ci-tab:hover { color: var(--text-sec); }
 .ci-tab.is-active { color: var(--text-primary); background: var(--bg-hover); }
 
+/* Inside the active tab, under its tiles (switchTab moves it there), so it
+   sits right above the charts it narrows. Right-aligned like the chart
+   controls below it. */
 .ci-range-group {
   display: flex;
-  align-items: flex-end;
+  align-items: center;
+  justify-content: flex-end;
   gap: 10px;
   min-width: 0;
+  margin-bottom: 20px;
 }
+/* The tiles' own bottom margin already spaces them from what follows; pull
+   the range up so it reads as part of the chart block, not a third band. */
+.ci-tiles + .ci-range-group { margin-top: -12px; }
 
 /* The zoom chip: the window a drag selected, and its way out. */
 .ci-zoom {
@@ -148,7 +156,9 @@
 .ci-zoom:hover { background: var(--bg-surface); }
 .ci-zoom .x { color: var(--text-dim); font-size: 14px; line-height: 1; }
 
-.ci-field--range { min-width: 0; }
+/* Label beside the select rather than above it: on its own row under the
+   tiles, a stacked label would be a tall band with one short control in it. */
+.ci-field.ci-field--range { min-width: 0; flex-direction: row; align-items: center; gap: 10px; }
 .ci-field--range .ci-select { min-width: 160px; }
 
 /* ── STAT TILES ────────────────────────── */
@@ -702,8 +712,8 @@ path.ci-point-fail { stroke-width: 1.5; }
   .ci-spark svg { width: 72px; }
   .ci-tooltip { min-width: 150px; font-size: 11px; }
 
-  /* Stack the tab bar so the tabs and range control sit on separate rows,
-     and let five tabs wrap rather than push the page sideways. */
+  /* Let the tabs wrap rather than push the page sideways, and stack the
+     range control so the select stretches across the column. */
   .ci-tabs-bar { flex-direction: column; align-items: stretch; }
   .ci-tabs { flex-wrap: wrap; }
   .ci-field--range .ci-select { min-width: 0; width: 100%; }

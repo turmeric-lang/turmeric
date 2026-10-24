@@ -261,26 +261,26 @@ protocol step, so skipping a step or reordering is a compile-time error.
 
 ```turmeric
 ;; A protocol: send an int, then receive an int, then close
-(let [c (:: (schan-new 4) (SChan (SSend int (SRecv int SClose))))]
-  (let [c2 (schan-send c 42)]
-    (let [p (schan-recv c2)
-          v  (pair-fst p)
-          c3 (pair-snd p)]
-      (println v)
-      (schan-close c3))))
+(let [c  (:: (schan-new 4) (SChan (SSend int (SRecv int SClose))))
+      c2 (schan-send c 42)
+      p  (schan-recv c2)
+      v  (pair-fst p)
+      c3 (pair-snd p)]
+  (println v)
+  (schan-close c3))
 ```
 
 ```sweet-exp
 #lang sweet-exp
 
 ;; A protocol: send an int, then receive an int, then close
-let [c (:: (schan-new 4) (SChan (SSend int (SRecv int SClose))))]
-  let [c2 schan-send(c 42)]
-    let [p schan-recv(c2)
-         v pair-fst(p)
-         c3 pair-snd(p)]
-      println(v)
-      schan-close(c3)
+let [c  (:: (schan-new 4) (SChan (SSend int (SRecv int SClose))))
+     c2 schan-send(c 42)
+     p  schan-recv(c2)
+     v  pair-fst(p)
+     c3 pair-snd(p)]
+  println(v)
+  schan-close(c3)
 ```
 
 See [session-types-guide.md](session-types-guide.md) for the full protocol

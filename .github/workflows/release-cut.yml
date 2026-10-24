@@ -1,6 +1,6 @@
 name: "Release: cut"
 
-# One dispatch cuts a release, no human step -- docs/upcoming/ci-release-workflows-plan.md.
+# One dispatch cuts a release, no human step -- docs/archive/ci-release-workflows-plan.md.
 #
 #   prepare     bump, draft the notes over the Mistral API, VALIDATE (a bad
 #               draft fails here), commit to the scratch branch release/vNEW

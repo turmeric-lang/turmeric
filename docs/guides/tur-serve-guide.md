@@ -27,6 +27,7 @@ GET /app.js -> 200 20511 1ms
 | `-b ADDR`, `--bind ADDR` | `127.0.0.1` | `any` (every interface), `localhost`, or a numeric IPv4/IPv6 address |
 | `--index NAME` | `index.html` | the file served for a directory |
 | `--no-listing` | off | a directory without an index is a 404 instead of a listing |
+| `--isolate[=MODE]` | `off` | send COOP/COEP so the page is cross-origin isolated; a bare `--isolate` is `require-corp`, see below |
 | `-q`, `--quiet` | off | no request log |
 | `-h`, `--help` | | the usage |
 
@@ -58,6 +59,38 @@ from a phone on the same network, say so:
 tur serve --bind any
 ```
 
+## Cross-origin isolation: `--isolate`
+
+A page can use `SharedArrayBuffer` -- which a WASM build with threads needs --
+only when it is *cross-origin isolated*, and that takes two response headers.
+`--isolate` sends them on every response, a 404 included:
+
+| `--isolate` | `Cross-Origin-Opener-Policy` | `Cross-Origin-Embedder-Policy` |
+| --- | --- | --- |
+| absent, or `--isolate=off` | not sent | not sent |
+| `--isolate`, or `--isolate=require-corp` | `same-origin` | `require-corp` |
+| `--isolate=credentialless` | `same-origin` | `credentialless` |
+
+```sh
+tur serve --isolate dist                  # require-corp
+tur serve dist --isolate=credentialless
+```
+
+The value has to be attached with `=`: a bare `--isolate` never takes the next
+word, so `tur serve --isolate dist` serves `dist`. Any other value is a usage
+error.
+
+It is off by default because isolation has a cost. Under `require-corp` the
+page may load something from another origin -- an image, a script, a font, an
+iframe -- only if that server opts in (`Cross-Origin-Resource-Policy:
+cross-origin`, or CORS). Anything that does not is blocked, and the console
+says `ERR_BLOCKED_BY_RESPONSE`. `credentialless` lets such requests through
+without cookies instead, but not every browser supports it.
+`Cross-Origin-Opener-Policy: same-origin` also cuts the page off from popups
+on other origins, which breaks sign-in popups that report back through
+`window.opener`. A page that loads only its own files is unaffected, and
+remember that `localhost` and `127.0.0.1` are different origins.
+
 ## Limits
 
 It is a development server.
@@ -65,7 +98,8 @@ It is a development server.
 - Files are read whole into memory per request; a multi-gigabyte file is not
   a use case.
 - No TLS, no range requests, no compression, no CGI.
-- No COOP/COEP headers. A WASM build that uses threads needs them; see
+- COOP/COEP only on request (`--isolate`, above). A WASM build that uses
+  threads needs them; see
   [web-emscripten-tutorial](web-emscripten-tutorial.md#coopcoep-headers).
 
 A program that needs more builds its own server from `stdlib/httpd.tur`

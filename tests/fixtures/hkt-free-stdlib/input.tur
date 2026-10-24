@@ -80,41 +80,41 @@
     (println (free-pure? (free-pure 42)))   ;; true
 
     ;; Test 2: free-run on PureFree returns the value
-    (let* [z  0
-           id (fn [x] (+ x z))]
+    (let [z  0
+          id (fn [x] (+ x z))]
       (println (free-run id (free-pure 42))))   ;; 42
 
     ;; Test 3: free-bind adds 4 to 3 -> 7
-    (let* [add4 4
-           r    (free-bind (free-pure 3) (fn [x] (free-pure (+ x add4))))
-           z    0
-           id   (fn [x] (+ x z))]
+    (let [add4 4
+          r    (free-bind (free-pure 3) (fn [x] (free-pure (+ x add4))))
+          z    0
+          id   (fn [x] (+ x z))]
       (println (free-run id r)))   ;; 7
 
     ;; Test 4: free-run on Suspend with identity interpreter -> 99
-    (let* [z  0
-           id (fn [x] (+ x z))]
+    (let [z  0
+          id (fn [x] (+ x z))]
       (println (free-run id (free-lift 99))))   ;; 99
 
     ;; Test 5: free-fmap multiplies by 5: fmap (*5) (pure 11) = pure 55
-    (let* [m5     5
-           mapped (free-fmap (free-pure 11) (fn [x] (* x m5)))
-           z      0
-           id     (fn [x] (+ x z))]
+    (let [m5     5
+          mapped (free-fmap (free-pure 11) (fn [x] (* x m5)))
+          z      0
+          id     (fn [x] (+ x z))]
       (println (free-run id mapped)))   ;; 55
 
     ;; Test 6: chained free-bind: (1 + 3) * 2 = 8
-    (let* [step 3
-           r1   (free-bind (free-pure 1) (fn [x] (free-pure (+ x step))))
-           mul2 2
-           r2   (free-bind r1 (fn [y] (free-pure (* y mul2))))
-           z    0
-           id   (fn [x] (+ x z))]
+    (let [step 3
+          r1   (free-bind (free-pure 1) (fn [x] (free-pure (+ x step))))
+          mul2 2
+          r2   (free-bind r1 (fn [y] (free-pure (* y mul2))))
+          z    0
+          id   (fn [x] (+ x z))]
       (println (free-run id r2)))   ;; 8
 
     ;; Test 7: constant interpreter overrides Suspend payload -> -1
-    (let* [neg          -1
-           const-interp (fn [x] neg)]
+    (let [neg          -1
+          const-interp (fn [x] neg)]
       (println (free-run const-interp (free-lift 42))))   ;; -1
 
     0))

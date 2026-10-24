@@ -251,18 +251,18 @@ the `__tur-q-is-err?` helper fails to accept them.
 ```turmeric
 ;; parse-config threads three fallible steps; any err short-circuits.
 (defn parse-config [src : ptr<void>] : ptr<void>
-  (let [raw    (? (read-source  src))]
-    (let [toks (? (tokenize     raw))]
-      (let [ast (? (parse-forms toks))]
-        (ok ast)))))
+  (let [raw  (? (read-source src))
+        toks (? (tokenize raw))
+        ast  (? (parse-forms toks))]
+    (ok ast)))
 ```
 ```sweet-exp
 ;; parse-config threads three fallible steps; any err short-circuits.
 defn parse-config [src : ptr<void>] : ptr<void>
-  let [raw    ?(read-source(src))]
-    let [toks ?(tokenize(raw))]
-      let [ast ?(parse-forms(toks))]
-        ok(ast)
+  let [raw  ?(read-source(src))
+       toks ?(tokenize(raw))
+       ast  ?(parse-forms(toks))]
+    ok(ast)
 ```
 
 If `read-source`, `tokenize`, or `parse-forms` returns an err, `parse-config`

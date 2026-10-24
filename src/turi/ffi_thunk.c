@@ -3,11 +3,12 @@
  * The per-call hot path is:
  *
  *     TuriValue args[]  --(marshal_i/f)-->  int64_t i_vals[] / double f_vals[]
- *                                    \
- *                                     ----> tur_ffi_thunk_call (giant switch)
  *                                                   |
  *                                                   v
- *                                          typed tur_ffi_call_<ret>_<args>
+ *                      1. JIT thunk (JIT builds): an exact-signature
+ *                         trampoline c2mir synthesizes for the call's shape
+ *                      2. the export's own `<mangled>__ffi` shim, which the
+ *                         spice build emits with the real C types
  *                                                   |
  *                                                   v
  *                                          dlsym'd spice export
@@ -24,7 +25,6 @@
 
 #include "ffi_thunk.h"
 #include "eval.h"                  /* turi_env_register_native */
-#include "ffi_dispatch_thunk.h"    /* tur_ffi_thunk_call */
 #include "jit_ffi.h"               /* jit-ffi-c2mir-plan: runtime call thunks */
 
 #include <stdint.h>
@@ -39,7 +39,7 @@
 /* int-class: int / bool / cstr / nil / struct-as-int all flatten to
  * an int64_t register. Float values are NOT auto-converted because
  * the call site expects a register class match -- silently widening
- * would corrupt the dispatcher's ABI. */
+ * would corrupt the callee's ABI. */
 static int marshal_arg_i(const TuriValue *v, int64_t *out) {
     switch (v->tag) {
         case TURI_INT:   *out = v->as_int; return 0;
@@ -89,7 +89,7 @@ static const char *class_name(char c) {
 /* ------------------------------------------------------------------ */
 
 /* The user-data pointer carried by each installed binding. The shim
- * looks up the typed dispatcher via tur_ffi_thunk_call using these
+ * calls the export through the JIT thunk or its __ffi shim using these
  * fields, then marshals args/results. We allocate one of these per
  * (binding-name, export) pair and leak them at REPL teardown -- the
  * image owns the underlying TurSpiceExport storage, and the shims
@@ -162,6 +162,20 @@ static int ffi_build_rest_list(const char *export_name, TuriValue *args,
     }
     *out_list = list;
     return 0;
+}
+
+/* TUR_FFI_NO_JIT_THUNK=1 skips the ladder's JIT rung, so a JIT build calls a
+ * spice export through its `__ffi` shim -- the rung a JIT-less build relies
+ * on, which the JIT would otherwise answer first for every scalar export.
+ * For tests (repl-spice-call.sh's shim pass) and for bisecting a suspected
+ * thunk bug; read once. */
+static bool ffi_skip_jit_thunk(void) {
+    static int cached = -1;
+    if (cached < 0) {
+        const char *v = getenv("TUR_FFI_NO_JIT_THUNK");
+        cached = (v && *v && strcmp(v, "0") != 0) ? 1 : 0;
+    }
+    return cached == 1;
 }
 
 static TuriValue ffi_native_shim(TuriEnv *env, TuriValue *args, uint32_t n,
@@ -314,10 +328,13 @@ static TuriValue ffi_native_shim(TuriEnv *env, TuriValue *args, uint32_t n,
         }
         /* Fallback ladder (jit-ffi-c2mir-plan section 2.4).  Step 1: a JIT
          * build synthesizes the exact-signature thunk at runtime -- any
-         * arity, any int/float mix, no shape table.  A provider failure
-         * (c2mir error) falls through to the shim/table rungs rather than
-         * erroring, so a JIT build is never WORSE than a non-JIT one. */
-        const TurJitFfiProvider *jp = has_rec ? NULL : tur_jit_ffi_provider();
+         * arity, any int/float mix.  A provider failure (c2mir error) falls
+         * through to the shim rung rather than erroring, so a JIT build is
+         * never WORSE than a non-JIT one.  Step 2: the export's own __ffi
+         * shim.  There is no step 3 since the generated shape table was
+         * retired (ffi-spices-integration-plan S5). */
+        const TurJitFfiProvider *jp = has_rec || ffi_skip_jit_thunk()
+                                    ? NULL : tur_jit_ffi_provider();
         TurJitFfiThunkFn jt = NULL;
         if (jp) {
             char sig[TUR_SPICE_ARITY_FASTPATH + 3];
@@ -341,30 +358,23 @@ static TuriValue ffi_native_shim(TuriEnv *env, TuriValue *args, uint32_t n,
         } else if (e->ffi_shim) {
             /* interpreter-arbitrary-arity-ffi (Phase 3): the spice emitted a
              * per-export shim with its concrete signature baked in.  Call it
-             * directly with the marshalled buffers -- no shape table, so no
-             * arity ceiling and int/float mix is irrelevant. */
+             * directly with the marshalled buffers -- no arity ceiling, and
+             * the int/float mix is irrelevant. */
             e->ffi_shim(i_vals, f_vals, &out_i, &out_f);
         } else {
-            /* Fallback: a spice built before shim emission.  The generated
-             * dispatcher covers arg-shapes up to its --max-arity (6 by
-             * default); a call whose shape exceeds that fails here with a
-             * rebuild/regenerate diagnostic.  This is an interpreter-FFI
-             * dispatch limit, independent of the (now unbounded) descriptor:
-             * the export loaded fine and its siblings remain callable. */
-            int rc = tur_ffi_thunk_call(e->ret_class,
-                                        e->arg_classes, e->n_args,
-                                        e->fn_ptr, i_vals, f_vals,
-                                        &out_i, &out_f);
-            if (rc != 0) {
-                result = turi_errorf(
-                    "ffi: '%s/%s' has no registered dispatcher for shape "
-                    "(arity %u). Rebuild the spice (its sources changed -> "
-                    "the REPL regenerates an unbounded per-export shim), or "
-                    "regenerate src/runtime/ffi_dispatch_thunk.c with "
-                    "`python3 tools/gen_ffi_dispatch.py --max-arity N`.",
-                    e->module, e->name, (unsigned)e->n_args);
-                goto cleanup;
-            }
+            /* No JIT thunk and no shim: a library built before shim emission
+             * (2026-07-22), on a build without the JIT -- or one whose JIT
+             * declined this signature.  The generated shape table that used
+             * to answer here is gone (ffi-spices-integration-plan S5); the
+             * export loaded fine and its siblings remain callable, and
+             * rebuilding the spice gives it a shim. */
+            result = turi_errorf(
+                "ffi: '%s/%s' cannot be called from the interpreter: its "
+                "library has no __ffi shim%s. Rebuild the spice (the REPL "
+                "rebuilds it when its sources change).",
+                e->module, e->name,
+                tur_jit_ffi_provider() ? "" : " and this build has no JIT");
+            goto cleanup;
         }
         switch (e->ret_class) {
             /* A :cstr export returned a pointer the compiled code owns, a

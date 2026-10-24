@@ -1,0 +1,9 @@
+;; let-star-redundant-with-sequential-let: `let*` is deprecated (TUR-D0006) in
+;; the Turmeric dialects, because `let` already binds in order.  It still
+;; compiles -- a warning -- and under --Werror=deprecated it is an error, which
+;; is what this fixture pins (flags).  The rewrite is the keyword.
+(defn main [] : int
+  (let* [a 1
+         b (+ a 1)]
+    (println (+ a b)))
+  0)

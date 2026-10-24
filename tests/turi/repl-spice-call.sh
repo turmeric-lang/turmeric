@@ -203,6 +203,27 @@ if grep -q 'expects at least 1' <<< "$out"; then pass "s2-variadic-underflow"
 else fail "s2-variadic-underflow" "expected an at-least-arity error for (vsum); got: $(echo "$out" | tail -3 | tr '\n' ' ')"
 fi
 
+# --- the same calls through the `__ffi` shim rung -------------------------
+# ffi-spices-integration-plan S5: a JIT build answers every scalar call with
+# its JIT thunk (rung 1), so the passes above never reach the shim on one.
+# TUR_FFI_NO_JIT_THUNK=1 skips rung 1, making the shim -- the only rung a
+# JIT-less build has -- the path under test on every platform.
+
+shim_case() {   # shim_case NAME EXPR EXPECTED
+    local out
+    out=$(TUR_FFI_NO_JIT_THUNK=1 run "$2")
+    if grep -qx "$3" <<< "$out"; then pass "shim-$1"
+    else fail "shim-$1" "expected $3 from $2; got: $(echo "$out" | tail -3 | tr '\n' ' ')"; fi
+}
+shim_case 'int->int'              '(add42 100)'                          '=> 142'
+shim_case 'float-float->float'    '(scale 1.5 3.0)'                      '=> 4.5'
+shim_case 'zero-arg'              '(answer)'                             '=> 42'
+shim_case 'void-return'           '(noisy 99)'                           '=> nil'
+shim_case 'arity12-all-int'       '(sum12 1 2 3 4 5 6 7 8 9 10 11 12)'   '=> 78'
+shim_case 'arity8-int-float'      '(wide-mix 1 1.5 2 2.25 3 0.25 4 4.0)' '=> 8'
+shim_case 'variadic-rest'         '(vsum 1 2 3 4)'                       '=> 10'
+shim_case 'variadic-empty-rest'   '(vsum 5)'                             '=> 5'
+
 echo
 echo "repl-spice-call: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

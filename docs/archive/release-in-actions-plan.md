@@ -1,7 +1,7 @@
 # Release in Actions -- one-shot patch/minor/major cuts, with LM-drafted notes
 
 > **SUPERSEDED -- archived 2026-10-17. Not implemented as written.**
-> [ci-release-workflows-plan](../upcoming/ci-release-workflows-plan.md) was
+> [ci-release-workflows-plan](ci-release-workflows-plan.md) was
 > executed instead (2026-10-05): the one-shot `release-cut.yml` plus
 > `tools/release_prepare.py`, which has cut every release since v0.63.1. How
 > this plan's phases came out:
@@ -32,7 +32,7 @@
 > major)", the open question of which LM writes the release notes (Cloudflare
 > Workers AI vs. a Mistral API key), and the requirement that docstrings be
 > regenerated as part of the release.
-> **2026-10-05:** [ci-release-workflows-plan](../upcoming/ci-release-workflows-plan.md)
+> **2026-10-05:** [ci-release-workflows-plan](ci-release-workflows-plan.md)
 > was executed instead -- one shot like this plan, but notes over the Mistral
 > API and `release.yml` dispatched unchanged rather than extracted. It
 > measured Mistral: GLM at `reasoning_effort: low` won there too. Section 3.3's

@@ -437,7 +437,7 @@ bet and elaboration confirmed it.
   A non-terminating loop with a true invariant is perfectly well-typed.
 - **Ranking functions / decreasing measures.** Same reason. (A measure's
   *definition* entering the logic is the separate
-  [reflected-measures-plan.md](../upcoming/reflected-measures-plan.md), which carves out
+  [reflected-measures-plan.md](reflected-measures-plan.md), which carves out
   its own totality obligation without touching program termination.)
 - **`for` / `loop` surface support.** Nothing to support -- see settled
   decision 3. Macros that expand to `while` compose for free.

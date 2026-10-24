@@ -754,7 +754,7 @@ struct Binding {
      * a default-deny walk of the body; see the comment there for why the
      * declared effect row is not sufficient evidence on its own. */
     uint8_t             refine_purity;
-    /* reflected-measures (docs/upcoming/reflected-measures-plan.md):
+    /* reflected-measures (docs/archive/reflected-measures-plan.md):
      * is_reflected -- the defn carried `^reflect` (gate on).
      * reflect_total -- the totality verdict, zero-means-uncomputed like
      *   refine_purity: 0 = not yet classified, 1 = TOTAL (the defining

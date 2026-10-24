@@ -47,7 +47,7 @@ binary.
 | The old text said | The tree says |
 | --- | --- |
 | Prerequisite: DV0-DV4 behind `-Xdynamic-vars`. | Always on. The flag is a no-op. |
-| Wait for the sibling plan's `defthreadlocal` (ADO-0b). | `(def ^mut ^thread-local s : (Option Ctx) (None))` works today, one copy per thread. It lowers to a `pthread_key_t`, because plain `__thread` is shared by every thread under `tur jit` (`src/compiler/expr.h:274-286`). |
+| Wait for the sibling plan's `defthreadlocal` (ADO-0b). | `(def ^mut ^thread-local s : (Option Ctx) (None))` works today, one copy per thread. It lowers to a `pthread_key_t`, because plain `__thread` is shared by every thread under `tur jit` (`src/compiler/expr.h:295-309`). |
 | Open question: with an explicit `defn main`, the root initializer is not emitted. | Fixed. The initializer goes through `def_init_body` (`src/compiler/emit_module.c:20714-20727`). Every probe below uses an explicit `main` and reads the root correctly. |
 | A: httpd is the producer; tourist exports `*current-ctx*` for httpd to bind. | tourist builds and frees the `Ctx` itself, in `__tourist-handler` (`spices/tourist/src/tourist/app.tur:395-400`), so httpd is not involved. spices/httpd has also become a typed layer over stdlib httpd (turmeric-spices #98). The cross-spice declaration question goes away. |
 | A: about 29 functions take `[ctx : Ctx]`. | 80 `ctx : Ctx` annotations across tourist, tourist-session and tourist-ws (the sweep below). |
