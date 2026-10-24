@@ -164,6 +164,20 @@ static int ffi_build_rest_list(const char *export_name, TuriValue *args,
     return 0;
 }
 
+/* TUR_FFI_NO_JIT_THUNK=1 skips the ladder's JIT rung, so a JIT build calls a
+ * spice export through its `__ffi` shim -- the rung a JIT-less build relies
+ * on, which the JIT would otherwise answer first for every scalar export.
+ * For tests (repl-spice-call.sh's shim pass) and for bisecting a suspected
+ * thunk bug; read once. */
+static bool ffi_skip_jit_thunk(void) {
+    static int cached = -1;
+    if (cached < 0) {
+        const char *v = getenv("TUR_FFI_NO_JIT_THUNK");
+        cached = (v && *v && strcmp(v, "0") != 0) ? 1 : 0;
+    }
+    return cached == 1;
+}
+
 static TuriValue ffi_native_shim(TuriEnv *env, TuriValue *args, uint32_t n,
                                   void *ud) {
     (void)env;
@@ -317,7 +331,8 @@ static TuriValue ffi_native_shim(TuriEnv *env, TuriValue *args, uint32_t n,
          * arity, any int/float mix, no shape table.  A provider failure
          * (c2mir error) falls through to the shim/table rungs rather than
          * erroring, so a JIT build is never WORSE than a non-JIT one. */
-        const TurJitFfiProvider *jp = has_rec ? NULL : tur_jit_ffi_provider();
+        const TurJitFfiProvider *jp = has_rec || ffi_skip_jit_thunk()
+                                    ? NULL : tur_jit_ffi_provider();
         TurJitFfiThunkFn jt = NULL;
         if (jp) {
             char sig[TUR_SPICE_ARITY_FASTPATH + 3];
