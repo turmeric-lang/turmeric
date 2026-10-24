@@ -2204,9 +2204,8 @@ html.pwa {
 .docs-status.partial { color: var(--amber); }
 
 /* Desktop: the close control is the plain glyph it has always been. The
-   chevron and label only exist for the phone sheet (see the <=768px block). */
-.docs-close-chevron,
-.docs-close-label { display: none; }
+   return arrow only exists for the phone sheet (see the <=768px block). */
+.docs-close-return { display: none; }
 
 /* site.css styles the bare `nav` selector as the site's fixed header bar, and
  * a guide fragment legitimately contains <nav class="guide-toc"> for its
@@ -2501,30 +2500,21 @@ html.pwa {
     .docs-status { display: none; }
     .docs-load-btn { opacity: 1; }
 
-    /* Labeled, in the upper-right corner, and a full 44px tall: the way out
-       of a full-screen sheet has to be big enough to hit and read as the way
-       out. At 28px as a bare "x" it did neither -- and until the inset fix
-       above it was not on screen at all. It stays in its source position,
-       after the search box, so it sits at the trailing edge of the bar. */
+    /* A bordered "return to the editor" button in the upper-right corner, a
+       full 44px square: the way out of a full-screen sheet has to be big
+       enough to hit and read as the way out. At 28px as a bare "x" it did
+       neither -- and until the inset fix above it was not on screen at all.
+       It stays in its source position, after the search box, so it sits at
+       the trailing edge of the bar. Bordered like .btn so it pairs with the
+       Contents toggle at the other end. */
     .docs-topbar .btn-close {
-        width: auto;
-        min-width: 44px;
+        width: 44px;
         height: 44px;
-        padding: 0 8px 0 4px;
-        gap: 1px;
-        font-size: 15px;
+        flex-shrink: 0;
+        border: 1px solid var(--border-str);
         color: var(--gold);
     }
-    .docs-close-chevron {
-        display: block;
-        font-size: 22px;
-        line-height: 1;
-    }
-    .docs-close-label {
-        display: block;
-        font-family: var(--font-family);
-        font-size: 14px;
-    }
+    .docs-close-return { display: block; }
     .docs-close-x { display: none; }
 
     /* Same reasoning for the only other control in the bar: on a phone the
@@ -2534,12 +2524,12 @@ html.pwa {
        center: `.btn` is an inline-flex that only sets `align-items`, so the
        cross axis was handled and the main axis was left at `flex-start`. That
        is invisible while the button is sized by its own content -- every
-       desktop use of it -- but here min-width is 40px against a 16px icon in
-       8px padding inside a 1px border, and all 6px of the surplus went to the
-       right of the glyph, drawing it 3px left of the box it sits in. */
+       desktop use of it -- but here min-width is 44px against a 16px icon in
+       8px padding inside a 1px border, and all of the surplus went to the
+       right of the glyph, drawing it off the center of the box it sits in. */
     .docs-topbar .docs-nav-toggle {
-        height: 40px;
-        min-width: 40px;
+        height: 44px;
+        min-width: 44px;
         justify-content: center;
     }
 }

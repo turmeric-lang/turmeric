@@ -112,7 +112,7 @@ test.describe('PWA safe-area insets', () => {
         expect(Math.round(footer.height)).toBe(30);
     });
 
-    test('the phone sheet offers a labeled Back control that closes the pane',
+    test('the phone sheet offers a return button that closes the pane',
          async ({ page }) => {
         await openTry(page);
         await applyInsets(page);
@@ -120,10 +120,11 @@ test.describe('PWA safe-area insets', () => {
         await expect(page.locator('#docs-overlay')).toBeVisible();
 
         // A bare "x" does not read as the way out of a full-screen sheet; on
-        // a phone the control is labeled, in the upper-right corner.
-        const label = page.locator('.docs-close-label');
-        await expect(label).toBeVisible();
-        await expect(label).toHaveText('Back');
+        // a phone the control is a "return to the editor" arrow button, in
+        // the upper-right corner.
+        await expect(page.locator('.docs-close-return')).toBeVisible();
+        await expect(page.locator('.docs-close-x')).toBeHidden();
+        await expect(page.locator('#docs-close')).toHaveAttribute('aria-label', 'Close documentation');
 
         const closeBox = await boxOf(page, '#docs-close');
         const toggleBox = await boxOf(page, '#docs-nav-toggle');
