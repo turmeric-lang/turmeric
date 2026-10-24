@@ -34,6 +34,13 @@ sentence above does not cover them. If you touch this file, check
 `ls docs/reported/` against it -- an index that silently omits a quarter of the
 directory is worse for triage than no index.
 
+## Found checking the wasm residue of mir-interp-tail-calls-grow-the-stack (filed 2026-10-24)
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [wasm-mir-interp-tail-call-keeps-allocas](wasm-mir-interp-tail-call-keeps-allocas.md) | medium (planned wasm JIT) | On wasm the MIR interpreter's `bend` is a no-op, so a tail call from a function that allocated keeps its allocas and a frame: about 350 B per call, and the module traps after about 24k calls at 16 MiB. A C-level stack restore does not help, because LLVM caches `eval`'s SP. An interpreter-owned frame arena would |
+| [c2mir-wasm-vararg-buffer-allocas-per-call](c2mir-wasm-vararg-buffer-allocas-per-call.md) | high (planned wasm JIT) | On wasm32, c2mir allocas a variadic call's argument buffer at the call site, so `printf` in a loop (`println` on an int) grows the stack 16 B per iteration until the function returns. About 1M prints overflow 16 MiB, with signs of memory corruption |
+
 ## Found prototyping simd-and-vectorization-plan (filed 2026-10-24)
 
 | Report | Severity | One line |
