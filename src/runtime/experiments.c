@@ -480,15 +480,23 @@ static const ExperimentDescriptor EXPERIMENTS[] = {
      * `#lang r7rs` procedure checks the stack pointer against a per-thread
      * limit at entry and, past it, re-enters itself on a fresh stack segment,
      * so recursion is bounded by TUR_MAIN_STACK_MB as a memory budget rather
-     * than by the C stack.  Gated because the check is on every call and the
-     * plan is part-way: the deep-stack thread on Linux x86-64 and arm64 only,
-     * and a call/cc captured on a segment is escape-only. */
+     * than by the C stack.  BETA since 2026-10-24: the surface is frozen and
+     * every Linux stage is in -- every thread the program starts is armed, a
+     * fiber's stack is checked against its own bounds, a call/cc captured on
+     * a segment re-enters (the chain is copied into the image), arm64 ran
+     * under qemu.  Graduating is the gate drop alone, which turns the check on
+     * for every compiled r7rs program; TUR_R7RS_SEGMENTED_STACK=0 is the
+     * hatch (to the compiler: the C without the flag; to a program: no thread
+     * armed), and tests/run-r7rs-segmented-stack-seam.sh inverts to SEG_ARM=off
+     * then.  Elsewhere -- macOS, Windows, `tur jit`, other architectures --
+     * the check compiles to nothing and the 1 GiB deep stack stays: the
+     * graduated contract (the plan, "Platforms"). */
     { "r7rs-segmented-stack",
       "a compiled `#lang r7rs` procedure checks the stack limit at entry and grows onto a new segment",
       "docs/upcoming/r7rs-heap-frames-plan.md",
       "0.70.0",                  /* introduced */
-      "0.76.0",                  /* expires_at -- advisory; never blocks a release */
-      XF_LIFECYCLE_PROTOTYPE,
+      "0.71.0",                  /* expires_at -- advisory; never blocks a release */
+      XF_LIFECYCLE_BETA,
       &g_opt_r7rs_segmented_stack },
     /* loop-invariants GRADUATED 2026-10-03, in the 0.61 line (introduced
      * 0.57.0, prototype, advisory expires_at 0.58.0).  `(while c :invariant p

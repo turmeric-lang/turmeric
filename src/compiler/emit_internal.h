@@ -1513,6 +1513,9 @@ bool emit_c_type_is_scalar(const char *cname);
 char *emit_c_zero_of(const char *cname);
 /* `#lang r7rs`: main's first statement, re-entering on a big stack (emit_module.c). */
 void emit_main_deep_stack_prologue(Buf *out);
+/* r7rs-heap-frames-plan: --enable=r7rs-segmented-stack, less the compile-time
+ * hatch TUR_R7RS_SEGMENTED_STACK=0 (emit_module.c). */
+bool emit_seg_stack_wanted(void);
 bool emit_fn_def_is_monomorphic(const FnDef *fd);
 /* Phase 5 dead-instance elimination: is this HKT typeclass instance live (any
  * method base directly referenced)?  Used to skip dead instances' dict + bases
