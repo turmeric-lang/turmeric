@@ -58,7 +58,7 @@ evaluator has no arithmetic" note stays true.  New expressiveness demand
 routes to Stage 2's procedural macros, where the answer is "the whole
 language" instead of one more bespoke builtin.  (Type-level reflection
 remains governed by R3 of
-[row-types-followups-plan.md](../upcoming/hold/row-types-followups-plan.md): bounded,
+[row-types-followups-plan.md](../upcoming/row-types-followups-plan.md): bounded,
 total accessors if ever, never a general evaluator.)
 
 ## Stage 0 -- quick wins (LANDED)
@@ -237,7 +237,7 @@ remaining roadmap work is the demand-driven Stage 4 convergence items.
   macro-env-only native (src/turi/macro_env.c) returning a
   single-constructor record's field names as a Syntax list of symbols --
   a bounded, TOTAL, flat projection of the compile's ADT registry, per
-  R3's ruling (../upcoming/hold/row-types-followups-plan.md): no Type value ever
+  R3's ruling (../upcoming/row-types-followups-plan.md): no Type value ever
   crosses into an evaluator.  The registry is reached through a
   reflection window (a saved/restored current-Elab pointer) that
   call_proc opens around each expansion, since Elab is a stack local of
