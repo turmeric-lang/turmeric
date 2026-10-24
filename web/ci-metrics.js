@@ -25,7 +25,7 @@
 
 import './icons.js'; // <t-icon>
 import { GITHUB_URL } from './repo.js';
-import { DAY, STATUSES, rangeCutoff } from './ci-aggregate.js';
+import { DAY, STATUSES, rangeCutoff, prettyCPU } from './ci-aggregate.js';
 
 const API = '/api/ci';
 
@@ -148,6 +148,10 @@ const state = {
   // compacting would repaint every survivor when you remove a series.
   suites: new Array(MAX_SERIES).fill(null),
   statuses: new Set(STATUSES),
+  // Runner CPU models left out of the chart, the table and the sparklines --
+  // '' is the rows recorded before collect-suite-timings.py read the model.
+  // Run-by-run ranges only: a daily median already mixes machines.
+  cpuOff: new Set(),
   range: DEFAULT_RANGE,
   // A window dragged out on any chart, { from, to } in unix seconds, or null.
   // It narrows the preset range rather than replacing it: every tab filters
@@ -224,6 +228,13 @@ function fmtPct(x) {
   return `${sign}${Math.abs(x) < 10 ? x.toFixed(1) : Math.round(x)}%`;
 }
 
+// An axis label on the Relative scale, whose values are 100 = the baseline.
+function fmtPctTick(v) {
+  const d = +(v - 100).toFixed(1);
+  if (d === 0) return '0%';
+  return `${d > 0 ? '+' : '−'}${Number.isInteger(d) ? Math.abs(d) : Math.abs(d).toFixed(1)}%`;
+}
+
 function fmtCount(n) {
   return n == null || Number.isNaN(n) ? '--' : Math.round(n).toLocaleString();
 }
@@ -282,8 +293,8 @@ function setTimings(t) {
   let xs;
   if (t.mode === 'run') {
     for (const [s, r, ms, st] of t.cells) {
-      const [ts, sha] = t.runs[r];
-      push(t.suites[s], { ts, ms, status: STATUSES[st], sha });
+      const [ts, sha, c] = t.runs[r];
+      push(t.suites[s], { ts, ms, status: STATUSES[st], sha, cpu: t.cpus?.[c] ?? '' });
     }
     xs = t.runs.map(([ts]) => ts);
   } else {
@@ -349,8 +360,10 @@ const timingXs = () => state.xs.filter(zoomKeep());
 function bySuite() {
   const m = new Map();
   const keep = zoomKeep();
+  const off = cpuOff();
   for (const [name, pts] of state.points) {
-    const kept = pts.filter((p) => state.statuses.has(p.status) && keep(p.ts));
+    const kept = pts.filter((p) => state.statuses.has(p.status) && keep(p.ts)
+      && !off.has(p.cpu ?? ''));
     if (kept.length) m.set(name, kept);
   }
   return m;
@@ -371,10 +384,14 @@ const median = (xs) => quantile([...xs].sort((a, b) => a - b), 0.5);
 // ── TREND ───────────────────────────────────────────────────────────────────
 //
 // A suite's wall time moves ~15% from one run to the next with nothing
-// changed. Every suite is its own job, so each run lands on its own runner,
-// and the pool mixes machine speeds: in October 2026 tur_tests took ~12 min on
-// most runners and ~7.5 min on about a quarter, at the same test count. A line
-// through every point draws mostly that.
+// changed. Each CI job lands on whatever runner the pool hands it, and the
+// pool mixes machine speeds: in October 2026 tur_tests (a job of its own) took
+// ~12 min on most runners and ~7.5 min on about a quarter, at the same test
+// count, and the ~60 multi-second suites sharing one Linux aux job ran
+// 0.63-1.2x their typical time TOGETHER. That shared machine factor is ~40% of
+// a suite's spread; the rest is the suite's own. A line through every point
+// draws mostly both. The runner CPU filter (renderCpuField) takes out the
+// machine part once runs carry the model.
 //
 // The trend is a centred rolling MEDIAN, which a minority of fast or slow
 // runners cannot drag the way they drag a mean, then a moving mean of that,
@@ -416,18 +433,21 @@ function trendOf(pts) {
   return ok.map((p, i) => ({ x: p.x, ...q[i] }));
 }
 
+// The median of the first few and of the last few values. Change is the one
+// against the other, not the last point against the first: at this spread one
+// lucky runner at either end decided first-vs-last, and the table, sorted by
+// it, ranked runner luck. `head` is also the Relative axis's 100%.
+function edgeMedians(values) {
+  const k = Math.min(trendWindow(values.length), Math.floor(values.length / 2)) || 1;
+  return { head: median(values.slice(0, k)), tail: median(values.slice(-k)) };
+}
+
 function suiteStats(series) {
   const stats = [];
   for (const [suite, pts] of series) {
     const ms = pts.map((p) => p.ms);
     const sorted = [...ms].sort((a, b) => a - b);
-    // Change is the median of the last few points against the median of the
-    // first few, not the last point against the first: at this spread one
-    // lucky runner at either end decided first-vs-last, and the table, sorted
-    // by it, ranked runner luck.
-    const k = Math.min(trendWindow(ms.length), Math.floor(ms.length / 2)) || 1;
-    const head = median(ms.slice(0, k));
-    const tail = median(ms.slice(-k));
+    const { head, tail } = edgeMedians(ms);
     stats.push({
       suite,
       runs: pts.length,
@@ -477,6 +497,8 @@ function readURL() {
     // Keep empty entries: they are slot holes, not junk.
     suites: q.get('suites') ? q.get('suites').split(',') : null,
     statuses: q.get('status') ? q.get('status').split(',').filter(Boolean) : null,
+    // '|'-separated: a CPU model string can carry a comma. '-' is "not recorded".
+    cpuOff: q.get('nocpu') ? q.get('nocpu').split('|').map((c) => (c === '-' ? '' : c)) : null,
     range: q.get('range'),
     from: Number(q.get('from')) || null,
     to: Number(q.get('to')) || null,
@@ -499,6 +521,9 @@ function writeURL() {
   }
   if (state.statuses.size !== STATUSES.length) {
     q.set('status', [...state.statuses].join(','));
+  }
+  if (state.cpuOff.size) {
+    q.set('nocpu', [...state.cpuOff].map((c) => c || '-').join('|'));
   }
   if (state.range !== DEFAULT_RANGE) q.set('range', state.range);
   if (state.zoom) {
@@ -685,6 +710,7 @@ function renderFilters() {
           </button>`).join('')}
       </div>
     </div>
+${renderCpuField()}
 
 `;
 
@@ -709,6 +735,18 @@ function renderFilters() {
     render();
   };
 
+  for (const btn of document.querySelectorAll('.ci-chip[data-cpu]')) {
+    btn.onclick = () => {
+      const c = btn.dataset.cpu;
+      if (state.cpuOff.has(c)) state.cpuOff.delete(c);
+      // Never the last one on: an empty CPU set is an empty page.
+      else if ([...cpuCounts().keys()].filter((k) => !state.cpuOff.has(k)).length > 1) {
+        state.cpuOff.add(c);
+      }
+      render();
+    };
+  }
+
   for (const btn of document.querySelectorAll('.ci-chip[data-status]')) {
     btn.onclick = () => {
       const s = btn.dataset.status;
@@ -721,6 +759,54 @@ function renderFilters() {
       render();
     };
   }
+}
+
+// CPU model -> runs in the (zoomed) range, over the run axis -- '' for runs
+// from before the model was recorded. Empty in a daily-median range.
+function cpuCounts() {
+  const counts = new Map();
+  if (dayMode()) return counts;
+  const keep = zoomKeep();
+  const seen = new Set();
+  for (const pts of state.points.values()) {
+    for (const p of pts) {
+      if (!keep(p.ts) || seen.has(p.ts)) continue;
+      seen.add(p.ts);
+      counts.set(p.cpu ?? '', (counts.get(p.cpu ?? '') ?? 0) + 1);
+    }
+  }
+  return counts;
+}
+
+// The CPU models actually left out here. A choice made in another range or
+// environment can name every model this one has, or none of them; it is kept
+// (it is in the URL) but never allowed to empty the chart.
+function cpuOff() {
+  const here = [...cpuCounts().keys()];
+  return here.some((c) => !state.cpuOff.has(c)) ? state.cpuOff : new Set();
+}
+
+// The runner-CPU chips: only once the range holds runs from two machines,
+// since one chip filters nothing. Same shape as the status chips.
+function renderCpuField() {
+  const counts = cpuCounts();
+  if (counts.size < 2) return '';
+  const order = [...counts].sort((a, b) => (a[0] === '') - (b[0] === '') || b[1] - a[1]
+    || a[0].localeCompare(b[0]));
+  return `
+    <div class="ci-field">
+      <span class="ci-field-label">
+        Runner CPU <span class="hint">— runs on each</span>
+      </span>
+      <div class="ci-chips">
+        ${order.map(([c, n]) => `
+          <button type="button" class="ci-chip" data-cpu="${esc(c)}"
+                  aria-pressed="${!cpuOff().has(c)}"
+                  title="${esc(c || 'Runs from before the CPU model was recorded')}">
+            ${esc(prettyCPU(c))} <span class="count">${n}</span>
+          </button>`).join('')}
+      </div>
+    </div>`;
 }
 
 // ── THE CHART ───────────────────────────────────────────────────────────────
@@ -745,19 +831,22 @@ function renderFilters() {
 //   directLabels  false where a title already names the one series
 //   fmtX      (x) => string               -- the tooltip head; a date for a
 //             chart of daily points, where a time of day would be invented
+//   baseline  the value the linear axis always includes and rules, 0 unless
+//             the chart is of something relative to a reference (100 = it)
 //   onZoom    ({ from, to } | null) => void -- a drag across the plot asks for
 //             that window, a double-click for none. Every chart zooms the one
 //             shared window by default.
 //
 // A series may carry `trend`: [{ x, mid, lo, hi }] (trendOf). It is then drawn
 // as its band and its trend line over faded raw points, and the tooltip gives
-// both numbers. The y axis then fits the trends rather than the extremes: a
+// both numbers; a point's `tip`, when it has one, replaces fmtY(y) there. The
+// y axis then fits the trends rather than the extremes: a
 // run more than half again above the highest band is pinned to the top edge
 // as a caret, so one 40-minute timeout no longer flattens every line.
 function drawLineChart({
   host, tooltip, idPrefix, series, xs, log = false,
   ticksY, fmtY, fmtTickY, footer, label, directLabels = true, fmtX = fmtDateTime,
-  onZoom = setZoom,
+  baseline = 0, onZoom = setZoom,
 }) {
   const x0 = xs[0];
   const x1 = xs[xs.length - 1];
@@ -788,14 +877,14 @@ function drawLineChart({
     yLo = Math.max(1, vmin * 0.7);
     yHi = vmax * 1.3;
   } else {
-    // Math.min/max with 0 so a series that dips below zero keeps its baseline
-    // on the chart; for all-positive data this is yLo = 0 and yHi = vmax *
-    // 1.08, as it has always been.
-    yLo = Math.min(0, vmin);
-    yHi = Math.max(0, vmax);
+    // Math.min/max with the baseline so a series that dips below it keeps the
+    // baseline on the chart; for all-positive data against 0 this is yLo = 0
+    // and yHi = vmax * 1.08, as it has always been.
+    yLo = Math.min(baseline, vmin);
+    yHi = Math.max(baseline, vmax);
     const slack = (yHi - yLo) * 0.08 || 1;
     yHi += slack;
-    if (yLo < 0) yLo -= slack;
+    if (yLo < baseline) yLo -= slack;
   }
 
   const sx = (x) => (x1 === x0 ? pad.l + iw / 2 : pad.l + ((x - x0) / (x1 - x0)) * iw);
@@ -811,7 +900,8 @@ function drawLineChart({
   for (const t of (log ? logTicks(yLo, yHi) : ticksY(yLo, yHi))) {
     const y = sy(t);
     parts.push(svgEl('line', {
-      class: 'ci-grid-line', x1: pad.l, x2: pad.l + iw, y1: y, y2: y,
+      class: baseline && t === baseline && !log ? 'ci-zero-line' : 'ci-grid-line',
+      x1: pad.l, x2: pad.l + iw, y1: y, y2: y,
     }));
     parts.push(`<text class="ci-axis-text" x="${pad.l - 10}" y="${y + 3}"
       text-anchor="end">${esc(fmtTickY(t))}</text>`);
@@ -1025,16 +1115,18 @@ function wireHover({ host, tooltip, idPrefix, series, sx, fmtY, fmtX, pad, ih })
 
     const rows = [];
     let sha = '';
+    let note = '';
     for (const s of series) {
       const i = s.pts.findIndex((q) => q.x === best);
       if (i < 0) continue;
       const p = s.pts[i];
       if (p.sha) sha = p.sha;
+      if (p.note) note = p.note;
       rows.push(`
         <div class="ci-tooltip-row">
           <span class="dot" style="background:${s.color}"></span>
           <span class="name">${esc(s.label)}</span>
-          <span class="val">${esc(fmtY(p.y))}</span>
+          <span class="val">${esc(p.tip ?? fmtY(p.y))}</span>
           ${(() => {
         const t = !p.fail && s.trend?.find((q) => q.x === best);
         return t ? `<span class="trend" title="Trend: rolling median">~${esc(fmtY(t.mid))}</span>` : '';
@@ -1047,7 +1139,7 @@ function wireHover({ host, tooltip, idPrefix, series, sx, fmtY, fmtX, pad, ih })
       <div class="ci-tooltip-head">
         <span>${esc(fmtX(best))}</span>
         <span class="mono">${esc(sha.slice(0, 7))}</span>
-      </div>${rows.join('')}`;
+      </div>${note ? `<div class="ci-tooltip-note">${esc(note)}</div>` : ''}${rows.join('')}`;
     tooltip.hidden = false;
 
     // Keep the tooltip inside the panel; flip it left near the right edge.
@@ -1215,30 +1307,52 @@ function renderChart() {
   const xs = timingXs();
   const days = dayMode();
   const smooth = state.smooth === 'trend';
+  // Relative: each suite as a percentage of its own median over the first few
+  // passing points in the window, so a 2-minute suite and a 12-minute one
+  // share an axis and the question "which moved, by how much" reads straight
+  // off it. Each line ends near its row's Change in the table, which compares
+  // the same first few points.
+  const relative = state.scale === 'relative';
+  const scaleOf = (pts) => {
+    if (!relative) return 1;
+    const base = edgeMedians(pts.filter((p) => p.status !== 'fail').map((p) => p.ms)).head;
+    return base > 0 ? 100 / base : 1;
+  };
 
   drawLineChart({
     host,
     tooltip: document.getElementById('ci-tooltip'),
     idPrefix: 'ci',
-    series: drawn.map(({ suite, pts }) => ({
-      key: suite,
-      label: suite,
-      color: colorOf(suite),
-      pts: pts.map((p) => ({
-        x: p.ts, y: p.ms, fail: p.status === 'fail', sha: p.sha,
-      })),
-    })).map((s) => (smooth ? { ...s, trend: trendOf(s.pts) } : s)),
+    series: drawn.map(({ suite, pts }) => {
+      const k = scaleOf(pts);
+      return {
+        key: suite,
+        label: suite,
+        color: colorOf(suite),
+        pts: pts.map((p) => ({
+          x: p.ts,
+          y: p.ms * k,
+          fail: p.status === 'fail',
+          sha: p.sha,
+          ...(p.cpu ? { note: p.cpu } : {}),
+          ...(relative ? { tip: `${fmtPct(p.ms * k - 100)} · ${fmtDuration(p.ms)}` } : {}),
+        })),
+      };
+    }).map((s) => (smooth ? { ...s, trend: trendOf(s.pts) } : s)),
     xs,
     log: state.scale === 'log',
-    ticksY: (lo, hi) => niceTicks(lo, hi, 5),
-    fmtY: fmtDuration,
-    fmtTickY: fmtTick,
+    baseline: relative ? 100 : 0,
+    ticksY: (lo, hi) => (relative ? decimalTicks(lo, hi, 5) : niceTicks(lo, hi, 5)),
+    fmtY: relative ? (v) => fmtPct(v - 100) : fmtDuration,
+    fmtTickY: relative ? fmtPctTick : fmtTick,
     fmtX: days ? fmtDate : fmtDateTime,
     footer: (days
       ? `${xs.length} day${xs.length === 1 ? '' : 's'} · daily median per suite`
       : `${xs.length} run${xs.length === 1 ? '' : 's'}`)
+      + (relative ? ' · change from each suite\'s first few points' : '')
       + (smooth ? ` · line: rolling median of ${trendWindow(Math.max(...drawn.map((d) => d.pts.length)))}, band: middle half of each window` : ''),
-    label: 'Suite duration over time',
+    label: relative ? 'Suite duration over time, relative to the start of the range'
+      : 'Suite duration over time',
   });
 
   renderLegend(drawn);
@@ -2336,8 +2450,9 @@ async function boot() {
     state.docsError = `Doc counts are unavailable (${docs.reason.message}).`;
   }
 
-  if (url.scale === 'log') state.scale = 'log';
+  if (url.scale === 'log' || url.scale === 'relative') state.scale = url.scale;
   if (url.smooth === 'raw') state.smooth = 'raw';
+  if (url.cpuOff) state.cpuOff = new Set(url.cpuOff);
   if (url.statuses) {
     const valid = url.statuses.filter((s) => STATUSES.includes(s));
     if (valid.length) state.statuses = new Set(valid);

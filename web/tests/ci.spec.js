@@ -94,7 +94,11 @@ test.describe('CI metrics dashboard', () => {
     return rows;
   }
 
-  // Two environments, 26 suites, six runs an hour apart.
+  // Two environments, 26 suites, six runs an hour apart. The Linux runs
+  // alternate between two runner CPUs, the newest on the EPYC; the macOS rows
+  // predate the CPU field and carry none.
+  const EPYC = 'AMD EPYC 7763 64-Core Processor';
+  const XEON = 'Intel(R) Xeon(R) Platinum 8370C CPU @ 2.80GHz';
   function timingsFixture() {
     const now = Math.floor(Date.now() / 1000);
     const envs = [
@@ -126,6 +130,7 @@ test.describe('CI metrics dashboard', () => {
             // Differs per environment so switching it visibly redraws the table.
             duration_ms: 1000 * (suites.length - k) * (e + 1) + i * 10 * (e + 1),
             shard_index: null, shard_total: null, skip_reason: null, ...counted,
+            ...(e === 0 ? { cpu: i % 2 ? XEON : EPYC } : {}),
           });
         });
       }
@@ -908,6 +913,63 @@ test.describe('CI metrics dashboard', () => {
     await expect(page.locator('#ci-body')).toBeVisible({ timeout: 20_000 });
     const row = page.locator('#ci-table tbody tr[data-suite="steady"]');
     await expect(row.locator('td').nth(5)).toHaveText('0.0%');
+  });
+
+  test('the runner CPU is named on hover and can be filtered out', async ({ page }) => {
+    await page.goto('/ci');
+    await expect(page.locator('#ci-body')).toBeVisible({ timeout: 20_000 });
+
+    const chips = page.locator('.ci-chip[data-cpu]');
+    await expect(chips).toHaveCount(2);
+    await expect(chips.nth(0)).toContainText('EPYC 7763');
+    await expect(chips.nth(0)).toContainText('3');
+    await expect(chips.nth(0)).toHaveAttribute('title', EPYC);
+
+    // The right edge snaps to the newest run, which ran on the EPYC.
+    await page.locator('#ci-hit').scrollIntoViewIfNeeded();
+    const box = await page.locator('#ci-hit').boundingBox();
+    await page.mouse.move(box.x + box.width - 2, box.y + box.height / 2);
+    await expect(page.locator('#ci-tooltip .ci-tooltip-note')).toHaveText(EPYC);
+
+    // Leave the Xeon runs out: three of six remain, and the choice is linked.
+    await page.locator(`.ci-chip[data-cpu="${XEON}"]`).click();
+    await expect(page.locator(`.ci-chip[data-cpu="${XEON}"]`)).toHaveAttribute('aria-pressed', 'false');
+    await expect(page).toHaveURL(/nocpu=/);
+    await expect(page.locator('#ci-table tbody tr').first().locator('td').nth(1)).toHaveText('3');
+    // The last one on stays on.
+    await page.locator(`.ci-chip[data-cpu="${EPYC}"]`).click();
+    await expect(page.locator(`.ci-chip[data-cpu="${EPYC}"]`)).toHaveAttribute('aria-pressed', 'true');
+
+    await page.reload();
+    await expect(page.locator('#ci-body')).toBeVisible({ timeout: 20_000 });
+    await expect(page.locator(`.ci-chip[data-cpu="${XEON}"]`)).toHaveAttribute('aria-pressed', 'false');
+  });
+
+  test('an environment with no recorded CPU shows no CPU filter', async ({ page }) => {
+    await page.goto('/ci');
+    await expect(page.locator('#ci-body')).toBeVisible({ timeout: 20_000 });
+    const mac = await page.locator('#ci-env option').evaluateAll(
+      (os) => os.find((o) => o.textContent.includes('macOS')).value);
+    await page.locator('#ci-env').selectOption(mac);
+    await expect(page.locator('.ci-chip[data-status="pass"]')).toBeVisible();
+    await expect(page.locator('.ci-chip[data-cpu]')).toHaveCount(0);
+  });
+
+  test('the Relative axis charts each suite as % change from its start', async ({ page }) => {
+    await page.goto('/ci');
+    await expect(page.locator('#ci-body')).toBeVisible({ timeout: 20_000 });
+    await page.locator('.ci-seg-btn[data-scale="relative"]').click();
+    await expect(page).toHaveURL(/scale=relative/);
+    await expect(page.locator('#ci-chart .ci-zero-line')).toHaveCount(1);
+    await expect(page.locator('#ci-chart .ci-axis-text', { hasText: /^0%$/ })).toHaveCount(1);
+    await expect(page.locator('#ci-chart .ci-axis-title')).toContainText('change from each suite');
+
+    await page.locator('#ci-hit').hover();
+    await expect(page.locator('#ci-tooltip .ci-tooltip-row .val').first()).toHaveText(/%.*·/);
+
+    await page.reload();
+    await expect(page.locator('#ci-body')).toBeVisible({ timeout: 20_000 });
+    await expect(page.locator('.ci-seg-btn[data-scale="relative"]')).toHaveClass(/is-active/);
   });
 
   test('layout does not overflow horizontally at 480px', async ({ page }) => {

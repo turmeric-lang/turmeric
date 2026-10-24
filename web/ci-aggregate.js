@@ -119,22 +119,53 @@ export function rangeCutoff(latestTs, range) {
 // ── TIMINGS ─────────────────────────────────────────────────────────────────
 
 // `rows`: one environment's suite rows in range, each { suite, shard_index,
-// shard_total, ts, sha, duration_ms, status }. One point per run:
+// shard_total, ts, sha, duration_ms, status, cpu? }. One point per run:
 //   suites  series names, sorted
-//   runs    [[ts, sha12]], ascending -- the x domain, one per run
+//   cpus    the runners' CPU models seen, sorted
+//   runs    [[ts, sha12, cpuIdx]], ascending -- the x domain, one per run;
+//           cpuIdx is -1 for a row from before the model was recorded
 //   cells   [[suiteIdx, runIdx, ms, statusCode]]
+//
+// The CPU is per run, not per cell, because a `ts` is one job's upload and a
+// job is one machine.
 export function shapeRuns(rows) {
   const suites = [...new Set(rows.map(seriesName))].sort();
   const sIdx = new Map(suites.map((s, i) => [s, i]));
-  const shaAt = new Map();
-  for (const r of rows) if (!shaAt.has(r.ts)) shaAt.set(r.ts, String(r.sha ?? '').slice(0, 12));
-  const ts = [...shaAt.keys()].sort((a, b) => a - b);
+  const cpus = [...new Set(rows.map((r) => r.cpu).filter(Boolean))].sort();
+  const cIdx = new Map(cpus.map((c, i) => [c, i]));
+  const runAt = new Map();
+  for (const r of rows) {
+    const run = runAt.get(r.ts);
+    if (!run) runAt.set(r.ts, { sha: String(r.sha ?? '').slice(0, 12), cpu: r.cpu || null });
+    else if (!run.cpu && r.cpu) run.cpu = r.cpu;
+  }
+  const ts = [...runAt.keys()].sort((a, b) => a - b);
   const rIdx = new Map(ts.map((t, i) => [t, i]));
   const cells = rows.map((r) => [
     sIdx.get(seriesName(r)), rIdx.get(r.ts), r.duration_ms, statusCode(r.status),
   ]);
   cells.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
-  return { suites, runs: ts.map((t) => [t, shaAt.get(t)]), cells };
+  const runs = ts.map((t) => {
+    const { sha, cpu } = runAt.get(t);
+    return [t, sha, cpu ? cIdx.get(cpu) : -1];
+  });
+  return { suites, cpus, runs, cells };
+}
+
+// "AMD EPYC 7763 64-Core Processor" -> "EPYC 7763", "Intel(R) Xeon(R)
+// Platinum 8370C CPU @ 2.80GHz" -> "Xeon Platinum 8370C", "Apple M1 (Virtual)"
+// -> "Apple M1 (Virtual)". For chips and tooltips; the full string stays in
+// the data and in the chip's title.
+export function prettyCPU(cpu) {
+  if (!cpu) return 'not recorded';
+  const short = cpu
+    .replace(/\((R|TM)\)/gi, '')
+    .replace(/\s+@\s*[\d.]+\s*GHz/i, '')
+    .replace(/\b(\d+-Core|CPU|Processor)\b/gi, '')
+    .replace(/^(AMD|Intel)\s+/i, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return short || cpu;
 }
 
 // The daily medians, from raw rows: one per series, UTC day and status. The

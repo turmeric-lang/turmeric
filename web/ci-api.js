@@ -53,7 +53,7 @@ const TABLES = {
       ['shard_total', `coalesce(j.value ->> '$.shard_total', 0)`],
       ['kind'], ['ts'], ['sha'], ['branch'], ['duration_ms'], ['status'],
       ['skip_reason'], ['partial_skip_reason'], ['passed'], ['failed'],
-      ['skipped'], ['discovered'], ['samples'],
+      ['skipped'], ['discovered'], ['samples'], ['cpu'],
     ],
     required: {
       run_id: id, run_attempt: int, suite: str, ts: int, sha: str,
@@ -306,7 +306,7 @@ async function timings(db, url, envs) {
 
   const [body, latest] = await db.batch([
     mode === 'run'
-      ? db.prepare(`SELECT suite, shard_index, shard_total, ts, sha, duration_ms, status
+      ? db.prepare(`SELECT suite, shard_index, shard_total, ts, sha, duration_ms, status, cpu
           FROM suite_run WHERE env_id IN (${inList(ids)}) AND kind IS NULL AND ts >= ?${n + 1}`)
         .bind(...ids, Number.isFinite(cutoff) ? cutoff : 0)
       : db.prepare(dailySQL(ids)).bind(...ids, Number.isFinite(cutoff) ? cutoff : 0),

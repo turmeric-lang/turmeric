@@ -85,6 +85,21 @@ test.describe('/api/ci D1 store', () => {
     expect(t.cells).toHaveLength(rows.length);
   });
 
+  test('a row\'s runner CPU round-trips onto its run', async ({ request }) => {
+    const cc = `TestCC-${uniq()}`;
+    const rows = suiteRows(cc).map((r, i) => (
+      // Every other run on a second machine, and one run from before the
+      // field existed.
+      r.run_id.endsWith('r3') ? r : { ...r, cpu: Number(r.run_id.split('-r').pop()) % 2 ? 'CPU A' : 'CPU B' }));
+    expect((await post(request, { timings: rows })).status()).toBe(200);
+    const key = envKey(rows[0]);
+    const t = await (await request.get(
+      `/api/ci/timings?env=${encodeURIComponent(key)}&range=7d`)).json();
+    expect(t).toEqual(timingsFromRows(rows, key, '7d'));
+    expect(t.cpus).toEqual(['CPU A', 'CPU B']);
+    expect(t.runs.map((r) => r[2]).sort()).toEqual([-1, 0, 1]);
+  });
+
   test('the same report twice overwrites rather than doubles', async ({ request }) => {
     const cc = `TestCC-${uniq()}`;
     const rows = suiteRows(cc);
