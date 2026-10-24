@@ -524,7 +524,7 @@ body.split-dragging * {
    sits on its trailing side: the mark stays at the start and the buttons are
    pushed to the end the same way. */
 .editor-actions > .editor-brand {
-    width: 20px;
+    width: 23px;
     height: 20px;
     margin-inline: 2px auto;
     user-select: none;
