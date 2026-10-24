@@ -1,5 +1,30 @@
 # Nightly TSan run failed with exit 1 (Sentry `turmeric-ci` 7784962154)
 
+**Resolved 2026-10-23: TSan was never told about the fiber switches.** The
+run's own log (run 39115563799, job "TSan concurrency fixtures") named the
+fixture: `FAIL fiber-scheduler-mt-migration -- stdout mismatch`, expected
+`360`, got nothing, 76 of 77 passing. It is one failure in 23 nights of the
+workflow, and it reproduces locally about once in 150 runs of that fixture's
+TSan binary (Release `tur`, `-O2 -fsanitize=thread`): `ThreadSanitizer: SEGV
+... WRITE memory access`, then "nested bug in the same thread, aborting" --
+exit 66 from the program, inside TSan's own runtime, before anything is
+printed.
+
+The fixture is nine fibers on a three-thread `tur_scheduler_mt` that migrate
+between workers at every yield. The fiber runtime switches with
+`swapcontext`, and ThreadSanitizer keeps a shadow stack per thread: a switch
+it is not told about leaves that state describing the wrong stack, which is
+unsupported and, here, occasionally fatal. The emitted runtime now announces
+every switch when it is compiled under `-fsanitize=thread`
+(`TUR_TSAN_FIBERS`, `src/compiler/emit_module.c`): each `FiberBlock` gets a
+TSan fiber (`__tsan_create_fiber`, destroyed with the block), and
+`tur_fiber_block_resume` / `_yield` and the shim's final switch call
+`__tsan_switch_to_fiber` first. Without TSan the macros are empty. With them,
+450 runs of the fixture's binary are clean (and 600 of a hand-patched one),
+and `tests/run-tsan.sh` passes all 80 fixtures.
+
+## As filed
+
 **Severity: unknown until triaged.** Filed from the Sentry issue alone; the
 run log was not available when this was written, so the cause is open.
 

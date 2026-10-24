@@ -17061,7 +17061,38 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     /* dynvar-binding-not-swapped-on-fiber-switch: the fiber's own dynvar
      * chain heads, one TurDynSave per TU with defdynamics (NULL: the root). */
     buf_puts(out, "    TurDynSave *dynsave;\n");
+    /* tsan-nightly-exit-1-2026-10-18: ThreadSanitizer keeps a shadow stack
+     * per thread, and a swapcontext it is not told about leaves it describing
+     * the wrong stack -- a fiber that migrates between workers faulted inside
+     * TSan about once in 150 runs (fiber-scheduler-mt-migration, printing
+     * nothing).  Under -fsanitize=thread each fiber gets a TSan fiber, and
+     * every switch announces itself (TUR_TSAN_FIBER_*); everywhere else the
+     * macros are empty and these two words stay zero. */
+    buf_puts(out, "    void *tsan_fiber; void *tsan_caller;\n");
     buf_puts(out, "};\n\n");
+    buf_puts(out,
+        "#if defined(__SANITIZE_THREAD__)\n"
+        "#  define TUR_TSAN_FIBERS 1\n"
+        "#elif defined(__has_feature)\n"
+        "#  if __has_feature(thread_sanitizer)\n"
+        "#    define TUR_TSAN_FIBERS 1\n"
+        "#  endif\n"
+        "#endif\n"
+        "#ifdef TUR_TSAN_FIBERS\n"
+        "void *__tsan_get_current_fiber(void);\n"
+        "void *__tsan_create_fiber(unsigned flags);\n"
+        "void __tsan_destroy_fiber(void *fiber);\n"
+        "void __tsan_switch_to_fiber(void *fiber, unsigned flags);\n"
+        "#  define TUR_TSAN_FIBER_NEW(f)   ((f)->tsan_fiber = __tsan_create_fiber(0))\n"
+        "#  define TUR_TSAN_FIBER_ENTER(f) ((f)->tsan_caller = __tsan_get_current_fiber(), __tsan_switch_to_fiber((f)->tsan_fiber, 0))\n"
+        "#  define TUR_TSAN_FIBER_LEAVE(f) __tsan_switch_to_fiber((f)->tsan_caller, 0)\n"
+        "#  define TUR_TSAN_FIBER_FREE(f)  do { if ((f)->tsan_fiber) __tsan_destroy_fiber((f)->tsan_fiber); } while (0)\n"
+        "#else\n"
+        "#  define TUR_TSAN_FIBER_NEW(f)   ((void)0)\n"
+        "#  define TUR_TSAN_FIBER_ENTER(f) ((void)0)\n"
+        "#  define TUR_TSAN_FIBER_LEAVE(f) ((void)0)\n"
+        "#  define TUR_TSAN_FIBER_FREE(f)  ((void)0)\n"
+        "#endif\n");
     emit_rt_tls(out, shared, "TUR_THREAD_LOCAL FiberBlock *tur_current_fiber = NULL;\n", "TUR_THREAD_LOCAL FiberBlock *tur_current_fiber",
                 "tur_current_fiber", "void **", "tur_tls_current_fiber_ptr", "FiberBlock **");
     /* Read on the fiber's side of every yield (TUR_TLS_FRESH says why). */
@@ -17238,6 +17269,7 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    f->done = 1;\n");
     /* Phase T22: Notify task group on completion (TG-002: only if task_group is set) */
     buf_puts(out, "    if (task_group) tur_task_group_notify_done(task_group);\n");
+    buf_puts(out, "    TUR_TSAN_FIBER_LEAVE(f);\n");
     buf_puts(out, "    swapcontext(&f->ctx, &f->caller_ctx);\n");
     buf_puts(out, "    abort();\n");
     buf_puts(out, "}\n\n");
@@ -17269,6 +17301,7 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    uint32_t _hi = (uint32_t)(_fp >> 32);\n");
     buf_puts(out, "    uint32_t _lo = (uint32_t)(_fp & 0xFFFFFFFFU);\n");
     buf_puts(out, "    makecontext(&f->ctx, (void(*)(void))tur_fiber_shim, 2, _hi, _lo);\n");
+    buf_puts(out, "    TUR_TSAN_FIBER_NEW(f);\n");
     buf_puts(out, "    return f;\n");
     buf_puts(out, "}\n\n");
     buf_puts(out, "static int64_t tur_fiber_block_resume(FiberBlock *f, int64_t arg) {\n");
@@ -17336,6 +17369,7 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
      * the fiber runs on its (heap-allocated) stack. */
     buf_puts(out, "    for (TurDynSwap *_ds = g_tur_dyn_swaps; _ds; _ds = _ds->next) _ds->swap(&f->dynsave);\n");
     buf_puts(out, "    TUR_GC_FIBER_ENTER((void *)&_dk_save);\n");
+    buf_puts(out, "    TUR_TSAN_FIBER_ENTER(f);\n");
     buf_puts(out, "    swapcontext(&f->caller_ctx, &f->ctx);\n");
     buf_puts(out, "    TUR_GC_FIBER_LEAVE();\n");
     buf_puts(out, "    for (TurDynSwap *_ds = g_tur_dyn_swaps; _ds; _ds = _ds->next) _ds->swap(&f->dynsave);\n");
@@ -17359,6 +17393,7 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    FiberBlock *f = tur_current_fiber;\n");
     buf_puts(out, "    if (!f) { fprintf(stderr, \"fiber-yield: not in fiber\\n\"); abort(); }\n");
     buf_puts(out, "    f->result = value;\n");
+    buf_puts(out, "    TUR_TSAN_FIBER_LEAVE(f);\n");
     buf_puts(out, "    swapcontext(&f->ctx, &f->caller_ctx);\n");
     buf_puts(out, "}\n\n");
     /* Phase T21: Fiber-local storage */
@@ -17390,6 +17425,7 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    if (!f) return;\n");
     buf_puts(out, "    tur_fiber_local_free(f);\n");
     buf_puts(out, "    while (f->dynsave) { TurDynSave *_n = f->dynsave->next; free(f->dynsave); f->dynsave = _n; }\n");
+    buf_puts(out, "    TUR_TSAN_FIBER_FREE(f);\n");
     buf_puts(out, "    free(f->stack); free(f);\n");
     buf_puts(out, "}\n\n");
     /* Phase T22: Fiber cancellation */
