@@ -1,6 +1,7 @@
 # Plan: Namespaced spice binaries -- `tur <spice>/<bin>`, and a bin-name collision that installs with a warning
 
-> **Status:** Draft, 2026-10-24. Nothing built.
+> **Status:** Draft, 2026-10-24. Nothing built. D2 (install with a warning)
+> and D4's spelling (`tur install --link`, not `tur link`) decided 2026-10-24.
 > **Type:** Tooling / CLI (`src/compiler/install.c`, `src/compiler/global.c`,
 > `src/compiler/spice_search.c`, `src/driver/cli.c`, `src/driver/cmd_x.c`).
 > **Builds on:** [global-spice-install-plan](../archive/global-spice-install-plan.md)
@@ -78,11 +79,11 @@ When `tur-foo` is held by another installed spice, `tur install beta`:
    ```
    tur install: warning: 'tur-foo' is already provided by installed spice 'alpha';
      beta's copy is installed but not linked. Run it as `tur beta/foo`,
-     or make it the default with `tur link beta/foo`.
+     or make it the default with `tur install --link beta/foo`.
    ```
 
 `--force` keeps its meaning: install and take every bare name the spice
-declares (as `tur link` would, D4). It is no longer the only way past a
+declares (as `--link` would, D4). It is no longer the only way past a
 collision.
 
 D6's module conflicts are a different matter and keep refusing. Two spices
@@ -110,12 +111,19 @@ No built-in subcommand contains a `/`, so the form cannot collide with one.
 works whether the bin is linked or shadowed, so a script can always use it to
 pin which tool it means.
 
-### D4. Moving the bare name: `tur link <spice>/<bin>`
+### D4. Moving the bare name: `tur install --link <spice>/<bin>`
 
-`tur link beta/foo` points `bin_dir/tur-foo` at beta's build. It flips the two
-registry flags (`alpha :linked false`, `beta :linked true`) and prints what it
-displaced. With no argument it lists every bin name more than one spice
-provides, and which spice holds it. `tur list` marks a shadowed bin as
+`tur install --link beta/foo` points `bin_dir/tur-foo` at beta's build. It
+flips the two registry flags (`alpha :linked false`, `beta :linked true`) and
+prints what it displaced. It is a flag on `install`, not a top-level
+command: `tur link` is already the compile linker, which links the objects
+`tur compile` lowers (`cli.c:944`, `--link-flags`). A second meaning for
+"link" at the top level would collide outright. Given an already-installed spice it neither fetches
+nor rebuilds: it only moves the link. Given one that is not installed, it is
+`tur install` followed by the move. `tur install --link alpha` (no `/<bin>`)
+takes every bare name alpha declares, which is what `--force` does to
+another spice's links; unlike `--force`, it never overwrites a file `tur` did
+not install. `tur list` marks a shadowed bin as
 `tur-foo (shadowed by alpha; tur beta/foo)`, and `tur list --json` carries the
 `:linked` flag.
 
@@ -168,7 +176,7 @@ syntax stays free.
   specific spice's build.
 - **NB3, install with a warning (D2) and uninstall promotion (D5).** The
   behaviour change. CHANGELOG entry: a collision no longer fails `tur install`.
-- **NB4, `tur link` and the `tur list` marks (D4).**
+- **NB4, `tur install --link` and the `tur list` marks (D4).**
 
 ## Tests
 
@@ -176,7 +184,7 @@ All in `tests/run-install.sh`, under a throwaway `TUR_HOME`:
 
 - two `--path` spices that each declare `tur-foo`. The second install exits 0
   with the warning; `tur-foo` runs the first; `tur second/foo` runs the second;
-- `tur link second/foo` swaps them, and `tur list --json` shows the flags;
+- `tur install --link second/foo` swaps them without a rebuild, and `tur list --json` shows the flags;
 - uninstalling the holder promotes the other, and uninstalling a shadowed
   provider leaves the link alone;
 - a foreign file at `bin_dir/tur-foo` still refuses without `--force`;
@@ -188,9 +196,6 @@ All in `tests/run-install.sh`, under a throwaway `TUR_HOME`:
 
 ## Open questions
 
-- **The command name for D4.** `tur link` reads naturally and has no built-in
-  today, but it would shadow an external `tur-link` tool. The alternative is
-  `tur install --link beta/foo`, which adds no top-level name.
 - **Promotion order on uninstall.** Earliest-installed is predictable. Asking
   is not an option, because uninstall runs unattended in scripts. Leaving the
   name unlinked is safer but surprising.
