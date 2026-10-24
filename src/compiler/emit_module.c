@@ -22868,7 +22868,7 @@ static int emit_exports_manifest_inner(Buf *out, const Expr *program) {
  *   'v' -- :void return only (never an arg class).
  *   '?' -- not representable as a scalar the FFI layer marshals (structs,
  *          ADTs, carriers, :never).  The shim is omitted for this export and
- *          the loader falls back to the legacy shape table / clean error.
+ *          the loader reports it cleanly.
  *
  * The 'i'/'f'/'v' results agree with the loader's class_for_tag(
  * manifest_type_tag(k)) mapping in src/turi/spice_loader.c so the shim reads

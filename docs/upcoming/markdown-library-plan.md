@@ -1108,7 +1108,7 @@ The questions this plan first left open, settled with the author on 2026-10-15.
   targets, `tests/run.sh`'s parity checks, the fuzzers, `tools/ci/` and
   `tools/release_prepare.py` all use it. This plan removes the only third-party
   package on the docs path, not Python itself. The Python generators that write
-  committed compiler C (`gen-runtime-split.py`, `gen_ffi_dispatch.py`,
+  committed compiler C (`gen-runtime-split.py`,
   `gen-r7rs-*.py`) should stay out of Turmeric, because they would need a
   working `tur` to produce `tur`'s own source.
 
