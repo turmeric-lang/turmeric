@@ -1,0 +1,14 @@
+;; quote-list-data-plan, graduation item 1: a quoted list in a `(load ...)`ed
+;; file needs no explicit load of stdlib/datum.tur.  This entry file never
+;; quotes a list itself, so the entry-file autoload does not fire; the scan of
+;; the loaded file does.
+
+(load "qhelper.tur")
+
+(defn main [] : int
+  (let [d (helper-form)]
+    (println d)
+    (println (helper-head d))
+    (println (datum-length d))
+    (println (datum-nth d 2)))
+  0)
