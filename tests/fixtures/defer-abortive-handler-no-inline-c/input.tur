@@ -1,0 +1,190 @@
+;; The inline-C-free twin of defer-cps-abortive-handler (whose `note` is
+;; inline C, so run-turi.sh never ran it): every case but the two whose
+;; deferred body panics (16, 17 -- the interpreter swallows a panic raised in
+;; a deferred body: turi-defer-body-panic-is-swallowed).  Under --interpret a
+;; body with a defer now stays on the work stack, whose captured slice carries
+;; the body's defers (turi-fiber-handle-defers-fire-at-the-wrong-time), so
+;; case 5 -- multi-shot over a defer-bearing body -- runs there too.
+;;
+;; cps-defer-skipped-on-abortive-effect: a `defer` pending in a CPS-converted
+;; function runs when a handler case ABANDONS the function's continuation --
+;; returns without resuming it and without keeping it -- exactly once, at the
+;; moment the case returns (before the handle's continuation runs).  A case
+;; that resumes, stores or multi-shots its `k` is untouched: the defers run
+;; in the resumed copy, when (and as often as) it runs.
+
+(defn note [s : cstr] : int (do (println s) 0))
+
+(defeffect Abort [] : int)
+(defeffect Ask [] : int)
+(defeffect Mid [] : int)
+(defeffect Outer [] : int)
+
+;; 1. The plain abort: `(Abort [] k) 0`.
+(defn w1 [] : int
+  (defer (note "w1: defer ran"))
+  (+ 1 (perform (Abort))))
+
+;; 2. The abort crosses a colored non-tail callee: a join frame sits between
+;;    the perform and the handler; both functions' defers run, innermost first.
+(defn w2-inner [] : int
+  (defer (note "w2-inner: defer ran"))
+  (+ 1 (perform (Abort))))
+(defn w2 [] : int
+  (defer (note "w2: defer ran"))
+  (let [r (w2-inner)]
+    (+ r 100)))
+
+;; 3. A non-tail resume, then the case returns its own value: the defer ran
+;;    once, in the resumed copy -- not again at the case's return.
+(defn w3 [] : int
+  (defer (note "w3: defer ran"))
+  (+ 1 (perform (Ask))))
+
+;; 4. The case stores `k` and returns: the defer runs at the later resume,
+;;    after the handle has exited -- never at the store.
+(defn w4 [] : int
+  (defer (note "w4: defer ran"))
+  (+ 1 (perform (Ask))))
+
+;; 5. Multi-shot: twice, once per resumed copy (the existing semantics).
+(defn w5 [] : int
+  (defer (note "w5: defer ran"))
+  (+ 1 (perform (Ask))))
+
+;; 6. The case RE-OPENS an outer effect whose case aborts: the inner perform's
+;;    frames are abandoned along with the case, and their defer runs at the
+;;    abort -- before the outer handle's continuation -- not when the C stack
+;;    unwinds after the rest of the program.
+(defn w6 [] : int
+  (defer (note "w6: defer ran"))
+  (+ 1 (perform (Ask))))
+
+;; 7. The defer reads a local: it rides the abandoned frame's env.
+(defn w7 [tag : cstr] : int
+  (defer (note tag))
+  (+ 1 (perform (Abort))))
+
+;; 8. Two defers fire LIFO.
+(defn w8 [] : int
+  (defer (note "w8: first declared, fires last"))
+  (defer (note "w8: second declared, fires first"))
+  (+ 1 (perform (Abort))))
+
+;; 9. A shallow handler's abort.
+(defn w9 [] : int
+  (defer (note "w9: defer ran"))
+  (+ 1 (perform (Abort))))
+
+;; 10. A resumed perform earlier in the same body, then an abort: the copy ran
+;;     its share; the abort fires the pending defer exactly once.
+(defn w10 [] : int
+  (defer (note "w10: defer ran"))
+  (let [a (perform (Ask))]
+    (+ a (perform (Abort)))))
+
+;; 11. A handle INSIDE the case aborts, then the case resumes `k`: the inner
+;;     abort fires only its own frames; the outer function's defer waits for
+;;     the resume.  Twice: a tail resume and a non-tail one.
+(defn w11 [] : int
+  (defer (note "w11: defer ran (at the resume)"))
+  (+ 1 (perform (Ask))))
+(defn w11-inner [] : int
+  (defer (note "w11-inner: defer ran"))
+  (+ 1 (perform (Abort))))
+(defn w11-case [] : int
+  (handle (w11-inner) (Abort [] k2) 0))
+
+;; 12. The case stores `k`, then re-opens an outer effect that aborts: the
+;;     stored continuation lives, so the defer runs at the later resume.
+(defn w12 [] : int
+  (defer (note "w12: defer ran (at the resume)"))
+  (+ 1 (perform (Ask))))
+
+;; 13. Three levels: Ask's case re-opens Mid, Mid's case re-opens Outer, and
+;;     Outer's case aborts -- the innermost perform's defer runs at the abort.
+(defn w13 [] : int
+  (defer (note "w13: defer ran"))
+  (+ 1 (perform (Ask))))
+
+;; 14. A loop of aborts: the defer runs every iteration.
+(defn w14 [i : int] : int
+  (defer (note "w14: defer ran"))
+  (+ i (perform (Abort))))
+(defn w14-loop [n : int acc : int] : int
+  (if (= n 0)
+    acc
+    (w14-loop (- n 1) (+ acc (handle (w14 n) (Abort [] k) 1)))))
+
+;; 15. A non-tail case re-opens an outer effect that TAIL-resumes (a yield to
+;;     the trampoline driver across the inner perform), then the program goes
+;;     on: nothing fires early, the defer runs once at its normal exit.
+(defn w15 [] : int
+  (defer (note "w15: defer ran"))
+  (+ 1 (perform (Ask))))
+
+;; 18. An `escape` whose receiver installs the handle, and whose case invokes
+;;     the escape: the longjmp discards the perform's C frame, and the
+;;     landing fires the defer pending in the abandoned continuation.
+(defn w18 [] : int
+  (defer (note "w18: defer ran"))
+  (+ 1 (perform (Ask))))
+(defn w18-run [] : int
+  (+ 100 (escape (fn [k] (handle (w18) (Ask [] k2) (k 7))))))
+
+;; 19. The escape continuation is passed to a function that installs the
+;;     handle: the same landing, one C frame further out.
+(defn w19 [] : int
+  (defer (note "w19: defer ran"))
+  (+ 1 (perform (Ask))))
+(defn w19-handle [esc : escape-cont] : int
+  (handle (w19) (Ask [] k) (esc 7)))
+(defn w19-run [] : int
+  (+ 100 (escape (fn [k] (w19-handle k)))))
+
+(defn run1 [] : int
+  (note (if (= 0 (handle (w1) (Abort [] k) 0)) "1: handle -> 0" "1: ?")))
+(defn run2 [] : int
+  (note (if (= 0 (handle (w2) (Abort [] k) 0)) "2: handle -> 0" "2: ?")))
+(defn run3 [] : int
+  (note (if (= 0 (handle (w3) (Ask [] k) (do (resume k 1) 0))) "3: handle -> 0" "3: ?")))
+(defn run4 [] : int
+  (let [^mut saved 0]
+    (note (if (= 0 (handle (w4) (Ask [] k) (do (set! saved k) 0))) "4: handle -> 0" "4: ?"))
+    (note "4: before resume")
+    (note (if (= 6 (resume saved 5)) "4: resumed -> 6" "4: ?"))))
+(defn run5 [] : int
+  (note (if (= 5 (handle (w5) (Ask [] ^multishot k) (+ (resume k 1) (resume k 2)))) "5: handle -> 5" "5: ?")))
+(defn run6 [] : int
+  (note (if (= 0 (handle (handle (w6) (Ask [] k) (resume k (perform (Outer)))) (Outer [] k) 0)) "6: handle -> 0" "6: ?")))
+(defn run7 [] : int
+  (note (if (= 0 (handle (w7 "w7: defer ran with its tag") (Abort [] k) 0)) "7: handle -> 0" "7: ?")))
+(defn run8 [] : int
+  (note (if (= 0 (handle (w8) (Abort [] k) 0)) "8: handle -> 0" "8: ?")))
+(defn run9 [] : int
+  (note (if (= 0 (handle (w9) (Abort [] k) 0)) "9: handle -> 0" "9: ?")))
+(defn run10 [] : int
+  (note (if (= 0 (handle (w10) (Ask [] k) (resume k 1) (Abort [] k) 0)) "10: handle -> 0" "10: ?")))
+(defn run11 [] : int
+  (note (if (= 12 (handle (w11) (Ask [] k) (resume k (+ (w11-case) 11)))) "11: handle -> 12" "11: ?"))
+  (note (if (= 12 (handle (w11) (Ask [] k) (+ 1 (resume k (+ (w11-case) 10))))) "11b: handle -> 12" "11b: ?")))
+(defn run12 [] : int
+  (let [^mut saved 0]
+    (note (if (= 0 (handle (handle (w12) (Ask [] k) (do (set! saved k) (perform (Outer)))) (Outer [] k) 0)) "12: handle -> 0" "12: ?"))
+    (note "12: before resume")
+    (note (if (= 6 (resume saved 5)) "12: resumed -> 6" "12: ?"))))
+(defn run13 [] : int
+  (note (if (= 0 (handle (handle (handle (w13) (Ask [] k) (resume k (perform (Mid)))) (Mid [] k) (resume k (perform (Outer)))) (Outer [] k) 0)) "13: handle -> 0" "13: ?")))
+(defn run14 [] : int
+  (note (if (= 3 (w14-loop 3 0)) "14: loop -> 3" "14: ?")))
+(defn run15 [] : int
+  (note (if (= 43 (handle (handle (w15) (Ask [] k) (+ 1 (resume k (perform (Outer))))) (Outer [] k) (resume k 41))) "15: handle -> 43" "15: ?")))
+(defn run18 [] : int
+  (note (if (= 107 (w18-run)) "18: escape -> 107" "18: ?")))
+(defn run19 [] : int
+  (note (if (= 107 (w19-run)) "19: escape -> 107" "19: ?")))
+(defn main [] : int
+  (run1) (run2) (run3) (run4) (run5) (run6) (run7) (run8)
+  (run9) (run10) (run11) (run12) (run13) (run14) (run15) (run18) (run19)
+  (note "done")
+  0)

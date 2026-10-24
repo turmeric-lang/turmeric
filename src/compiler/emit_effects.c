@@ -580,20 +580,77 @@ char *emit_effects_discontinue(EmitCtx *ctx, Buf *body, const Expr *e) {
      * (`BODY-UNSUPPORTED EX_DISCONTINUE`), so every function holding one is
      * evicted and the build used to fail with a message about the `perform`.
      * Name the form that is the cause. */
-    (void)ctx; (void)body;
-    /* discontinue-plan: with the experiment on, the CPS backend lowers it
-     * (a raising CT_RESUME), so reaching the direct emitter means the
-     * enclosing function was evicted -- most often for a catch-unwind inside
-     * a handler clause, which a case body cannot hold yet. */
+    /* discontinue-plan: with the experiment on, the CPS backend lowers it (a
+     * raising CT_RESUME).  The direct emitter meets one where a handler-case
+     * continuation word reaches a function of its own -- above all the thunk
+     * of a `catch-unwind` written in the clause around it, which the case
+     * inlines (a catch prompt, so the thunk's own body is never run there),
+     * or a helper the case passes `k` to.  Lower it as emit_resume's raising
+     * arm does: __dk_discontinue raises at k's perform and returns what the
+     * body answers if a catch there takes the panic, else returns with the
+     * panic raised, which the check below hands on.  A `k` bound as the
+     * cloneable wrapper (a fn-payload case) is no chain to raise into. */
     if (g_opt_discontinue) {
+        const DiscontinueExpr *d = e->as.discontinue_.discontinue;
+        const Expr *kv = d ? d->k : NULL;
+        while (kv && kv->kind == EX_ASCRIBE) kv = kv->as.ascribe_.inner;
+        bool wrapper = kv && kv->kind == EX_VAR && kv->as.var.binding
+                    && kv->as.var.binding->cont_is_wrapper;
+        if (d && d->k && d->exception && !wrapper) {
+            char *k_var = emit_value(ctx, body, d->k);
+            char *v_var = emit_value(ctx, body, d->exception);
+            Type vtype = d->exception->type;
+            char *v_arg;
+            if (vtype.kind == TY_NIL || vtype.kind == TY_NEVER) {
+                v_arg = strdup("(int64_t)0");
+            } else {
+                char *st = eff_slot_store(vtype, v_var);
+                if (eff_type_boxed(vtype)) {
+                    Buf rb; buf_init(&rb);
+                    buf_printf(&rb, "(int64_t)__dk_reap_ptr((intptr_t)%s)", st);
+                    buf_putc(&rb, '\0');
+                    v_arg = strdup(rb.data);
+                    buf_free(&rb);
+                    free(st);
+                } else {
+                    v_arg = st;
+                }
+            }
+            const char *path = e->span.line ? diag_file_path(e->span.file_id) : NULL;
+            const char *base = path ? path : "";
+            for (const char *q = base; *q; q++) if (*q == '/' || *q == '\\') base = q + 1;
+            Buf rcall; buf_init(&rcall);
+            buf_printf(&rcall, "__dk_discontinue((DK *)(intptr_t)(%s), %d, (intptr_t)(%s), \"",
+                       k_var, (int)vtype.kind, v_arg);
+            for (const char *q = base; *q; q++) {
+                if (*q == '\\' || *q == '"') buf_putc(&rcall, '\\');
+                buf_putc(&rcall, *q);
+            }
+            buf_printf(&rcall, "\", %u)", e->span.line);
+            buf_putc(&rcall, '\0');
+            char *tmp = fresh_tmp(ctx);
+            indent_buf(body, ctx->indent);
+            if (e->type.kind == TY_NIL || e->type.kind == TY_NEVER) {
+                buf_printf(body, "int64_t %s = (int64_t)%s;\n", tmp, rcall.data);
+            } else {
+                char *ld = eff_slot_load(e->type, rcall.data);
+                buf_printf(body, "%s %s = %s;\n", type_c_name(e->type), tmp, ld);
+                free(ld);
+            }
+            buf_free(&rcall);
+            emit_panic_signal_return(ctx, body);
+            free(v_arg);
+            free(k_var);
+            free(v_var);
+            return tmp;
+        }
         diag_emit(DIAG_ERROR, e->span,
-                  "this `discontinue` has no lowering here: the enclosing function "
-                  "left the CPS backend's supported subset (a `catch-unwind` inside "
-                  "a handler clause is the usual cause; it cannot be lowered yet). "
-                  "Catch around the `handle` instead, or run with TUR_TRACE_EVICT=1 "
-                  "to see which form evicted the function.");
+                  "this `discontinue` has no lowering here: its continuation is "
+                  "the wrapper a fn-payload or `shift` clause binds, not a handler "
+                  "chain the runtime can raise into.");
         return atom_nil();
     }
+    (void)ctx; (void)body;
     diag_emit(DIAG_ERROR, e->span,
               "`discontinue` has no lowering in the compiled backend yet: the "
               "CPS backend cannot raise at the `perform`. To end the handled "

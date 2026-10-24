@@ -200,7 +200,7 @@ What graduation accepted, rather than fixed:
     [turi-defer-in-stored-continuation-use-after-free](../archive/turi-defer-in-stored-continuation-use-after-free.md)
     (resolved 2026-10-18). Past it, the fixture still diverges under the
     interpreter on the timing of an abandoned body's defers:
-    [turi-fiber-handle-defers-fire-at-the-wrong-time](../reported/turi-fiber-handle-defers-fire-at-the-wrong-time.md).
+    [turi-fiber-handle-defers-fire-at-the-wrong-time](../archive/turi-fiber-handle-defers-fire-at-the-wrong-time.md).
 
   The two `:int`-result crashes recorded on 2026-10-04,
   `closure-drop-affine-chain-autodrop` and `httpd-mw-fold-many`, now pass.

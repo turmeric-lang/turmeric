@@ -1,14 +1,33 @@
 ;; discontinue-plan fixture 5: copies of a ^multishot k, one resumed and one
 ;; discontinued.  Each copy carries the body's catch-unwind: the resumed one
-;; returns Ok 2, the discontinued one is caught (100).  Compiled only: the
-;; interpreter's fiber runtime is single-shot
-;; (turi-fiber-handle-defers-fire-at-the-wrong-time).
+;; returns Ok 2, the discontinued one is caught (100).  The interpreter runs
+;; it on the work stack, whose captured slice carries the body's catch
+;; boundaries and defers per copy (turi-fiber-handle-defers-fire-at-the-
+;; wrong-time).
 (defeffect Ask [] : int)
 
 (defn body [] : int
   (let [r (catch-unwind (fn [] : int (+ 1 (perform (Ask)))))]
     (if (err? r) 100 (ok-val r))))
 
+;; A defer in the body runs once per copy: as the resumed copy returns, and
+;; as the discontinued one unwinds to the catch.
+(defn guarded [] : int
+  (defer (println "guarded: defer ran"))
+  (let [r (catch-unwind (fn [] : int (+ 1 (perform (Ask)))))]
+    (if (err? r) 100 (ok-val r))))
+
+;; Nothing in the body catches: the discontinued copy's raise comes back to
+;; the clause, past its defer, and the clause catches it there.
+(defn bare [] : int
+  (defer (println "bare: defer ran"))
+  (+ 1 (perform (Ask))))
+
 (defn main [] : int
   (println (handle (body) (Ask [] ^multishot k) (+ (resume k 1) (discontinue k "boom"))))
+  (println (handle (guarded) (Ask [] ^multishot k) (+ (resume k 1) (discontinue k "boom"))))
+  (println (handle (bare) (Ask [] ^multishot k)
+             (+ (resume k 1)
+                (let [r (catch-unwind (fn [] : int (discontinue k "boom")))]
+                  (if (err? r) 1000 2000)))))
   0)

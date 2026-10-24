@@ -3993,10 +3993,11 @@ static TuriValue eval_resume_cont(TuriEnv *env, EvalFrame *frame,
                           "outside of: its body or one of its clauses reaches "
                           "`perform` through a form the interpreter cannot "
                           "descend (a native higher-order call, a "
-                          "`catch-unwind`/`reset`/`atomically` boundary, a "
+                          "`catch-panic-of`/`reset`/`atomically` boundary, a "
                           "match guard, or similar). Reaching the `perform` "
                           "through plain control flow -- `if`, `do`, `let`, "
-                          "`while`, `match`, `set!`, a direct call -- keeps the "
+                          "`while`, `match`, `set!`, a direct call, a "
+                          "`catch-unwind` or `defer` -- keeps the "
                           "handler on the multi-shot path. Run with "
                           "TURI_TRACE_FIBER_FALLBACK=1 to see which form was "
                           "responsible");
@@ -4212,9 +4213,21 @@ struct TuriHandlerVal {
  * any other use of it -- stored, passed, captured -- may, and so may anything
  * this scan does not model (the default).  Conservative in the safe direction:
  * a false "may escape" only keeps a cont alive. */
+/* ws_case_abandoned (work-stack handles): a perform in the clause hands
+ * control to an outer handler, which could keep the clause's continuation --
+ * and `k` with it -- but the work-stack answer is asked only once the case
+ * has returned without resuming, so a perform whose arguments do not name
+ * `k` does not keep it.  The fiber path frees the cont on this answer, so it
+ * keeps the conservative one. */
+static _Thread_local bool g_k_local_performs;
 static bool fiber_k_stays_local(const Expr *e, const Binding *k) {
     if (!e) return true;
     switch (e->kind) {
+        case EX_PERFORM:
+            if (!g_k_local_performs || !e->as.perform_.perform) return false;
+            for (uint32_t i = 0; i < e->as.perform_.perform->n_args; i++)
+                if (!fiber_k_stays_local(e->as.perform_.perform->args[i], k)) return false;
+            return true;
         case EX_INT_LIT: case EX_FLOAT_LIT: case EX_BOOL_LIT: case EX_NIL_LIT:
         case EX_CSTR_LIT: case EX_SYM_LIT:
             return true;
@@ -8432,6 +8445,18 @@ typedef struct {
     bool        was_no_unwind; /* DK_CALL_RET / DK_PROMPT: env->in_no_unwind to restore */
     bool        defer_scope;   /* DK_DO_SEQ: a non-tail do that registers defers;
                                 * aux = its defer mark, fired when it ends */
+    /* DK_PROMPT (turi-fiber-handle-defers-fire-at-the-wrong-time): the defer
+     * chain and the catch-boundary stack as they were at the push.  What a
+     * perform finds above them belongs to the body it captures: the defers
+     * its scopes registered and the catch-unwinds it is under travel with
+     * the continuation (TuriWsCont.dseg, the slice's DK_CATCH_UNWIND
+     * frames) rather than staying where the clause runs. */
+    void       *dbase;
+    void       *cbase;
+    /* DK_PROMPT: the continuation whose case runs under this (disabled)
+     * prompt, so its return can run the body's defers when the case
+     * abandoned it (ws_case_abandoned). */
+    struct TuriWsCont *pend_wc;
 } DriveCont;
 
 /* ---------------------------------------------------------------------------
@@ -8826,6 +8851,22 @@ struct TuriWsCont {
     bool         consumed;
     EvalFrame   *case_frame;
     struct TuriEffectCont *kval;
+    /* turi-fiber-handle-defers-fire-at-the-wrong-time, fix direction 1: the
+     * body's pending defers -- the chain above the prompt's `dbase` at the
+     * capture, newest first -- taken off env->defer_stack so the clause runs
+     * without them.  A resume puts them back on top of the chain where it
+     * resumes (a copy per resume, unless `oneshot`), remapping every defer
+     * mark the slice holds (ws_slice_reinstall); the catch boundaries ride
+     * the slice's DK_CATCH_UNWIND frames the same way, re-linked above
+     * g_catch_stack.  A case that returns having neither resumed nor kept
+     * `k` fires them (ws_case_abandoned), as the compiled runtime does. */
+    DeferItem  **dseg;
+    size_t       n_dseg;
+    void        *dbase;
+    void        *cbase;
+    bool         dsplit, csplit;   /* the chains had the expected shape and were split */
+    const HandleCase *hcase;   /* the case that runs: may it keep `k`? */
+    uint32_t     n_resumed;
 };
 
 /* Shallow-copy a frame's bindings into a fresh frame (parent set by caller).
@@ -8899,6 +8940,224 @@ static void clone_ws_slice(TuriEnv *env, const DriveCont *src, size_t n, DriveCo
             }
         }
     }
+}
+
+/* turi-fiber-handle-defers-fire-at-the-wrong-time, fix direction 1: at a
+ * capture under prompt `p`, take what the body holds above the prompt off the
+ * env.  The defers its scopes registered (env->defer_stack down to p's
+ * `dbase`) go to wc->dseg, newest first; the catch boundaries it is under
+ * (g_catch_stack down to p's `cbase`, which must be exactly the slice's
+ * DK_CATCH_UNWIND frames) are unlinked, their frames keeping them.  The
+ * clause then runs with neither: a clause's panic does not land in a catch
+ * of the body it cut off, and its scope exits do not fire the body's defers.
+ * `pool`: the continuation may be resumed more than once, so the snapshot
+ * frames the defers read are shared by every resume (escaped, never handed
+ * back).  A chain of any other shape is left as it is (the old behaviour). */
+static void ws_capture_body_state(TuriEnv *env, TuriWsCont *wc, const DriveCont *p,
+                                  const DriveCont *slice, size_t nf, bool pool) {
+    DeferItem *dbase = (DeferItem *)p->dbase;
+    size_t nd = 0;
+    DeferItem *d = (DeferItem *)env->defer_stack;
+    for (; d && d != dbase; d = d->next) nd++;
+    wc->dbase  = dbase;
+    wc->dsplit = (d == dbase);
+    if (wc->dsplit && nd) {
+        wc->dseg = pool ? (DeferItem **)turi_val_alloc(env, nd * sizeof(DeferItem *))
+                        : (DeferItem **)malloc(nd * sizeof(DeferItem *));
+        if (!wc->dseg) abort();
+        d = (DeferItem *)env->defer_stack;
+        for (size_t i = 0; i < nd; i++, d = d->next) {
+            wc->dseg[i] = d;
+            if (pool && d->snapshot) frame_escape(d->snapshot);
+        }
+        wc->n_dseg = nd;
+    }
+    if (wc->dsplit) env->defer_stack = dbase;
+    size_t nc = 0, ns = 0;
+    TuriCatchBoundary *cb = g_catch_stack;
+    for (; cb && cb != (TuriCatchBoundary *)p->cbase; cb = cb->prev) nc++;
+    for (size_t i = 0; i < nf; i++) if (slice[i].kind == DK_CATCH_UNWIND) ns++;
+    wc->cbase  = p->cbase;
+    wc->csplit = (cb == (TuriCatchBoundary *)p->cbase) && nc == ns;
+    if (wc->csplit) g_catch_stack = (TuriCatchBoundary *)p->cbase;
+}
+
+/* A defer mark of the captured slice, as the resumed slice must see it: the
+ * prompt's base is the chain where the resume runs (`rbase`), a captured
+ * defer is its re-installed copy (`to`), anything else stays. */
+static void *ws_remap_mark(const TuriWsCont *wc, void *m, void *rbase, DeferItem **to) {
+    if (m == wc->dbase) return rbase;
+    for (size_t i = 0; i < wc->n_dseg; i++) if ((void *)wc->dseg[i] == m) return to[i];
+    return m;
+}
+
+/* A resume of `wc` is about to push `fr[0..n)` (the slice, or a clone of it)
+ * above a freshly pushed prompt: put the body's state back on top of what is
+ * there now.  The captured defers are re-installed above env->defer_stack --
+ * copies when `fresh` (another resume may run the same continuation), the
+ * captured items themselves otherwise -- and every defer mark the frames hold
+ * is remapped onto them (ws_remap_mark).  The slice's catch boundaries are
+ * linked back above g_catch_stack, bottom first, copied when `fresh` (the
+ * DK_CATCH_UNWIND frame frees its own).  Leaves env->defer_stack where the
+ * perform left it, relative to the new chain. */
+/* Remap every defer mark `fr[0..n)` holds (ws_remap_mark): an activation's or
+ * a scope's fire-to mark, a nested prompt's base, a catch boundary's saved
+ * chain.  The boundaries are the frames' own (a copy per resume). */
+static void ws_remap_frame_marks(const TuriWsCont *wc, DriveCont *fr, size_t n,
+                                 void *rbase, DeferItem **to) {
+    for (size_t i = 0; i < n; i++) {
+        DriveCont *f = &fr[i];
+        switch (f->kind) {
+        case DK_LET_BODY: case DK_CALL_RET:
+            f->aux = ws_remap_mark(wc, f->aux, rbase, to);
+            break;
+        case DK_DO_SEQ:
+            if (f->defer_scope) f->aux = ws_remap_mark(wc, f->aux, rbase, to);
+            break;
+        case DK_PROMPT:   /* a handle inside the body: its base is the body's too */
+            f->dbase = ws_remap_mark(wc, f->dbase, rbase, to);
+            break;
+        case DK_CATCH_UNWIND:
+            if (f->aux) {
+                TuriCatchBoundary *b = (TuriCatchBoundary *)f->aux;
+                b->saved_defer_stack = ws_remap_mark(wc, b->saved_defer_stack, rbase, to);
+            }
+            break;
+        default:
+            break;
+        }
+    }
+}
+
+/* A multi-shot capture: the continuation outlives the work stack it came from
+ * and may be resumed any number of times, so the captured defers move into
+ * the env's pool with it, the marks the slice holds following them, and the
+ * driver's malloc'd items go back.  Each resume then installs copies. */
+static void ws_capture_rehome_defers(TuriEnv *env, TuriWsCont *wc) {
+    size_t nd = wc->n_dseg;
+    if (!wc->dsplit || !nd) return;
+    DeferItem **to = (DeferItem **)malloc(nd * sizeof(DeferItem *));
+    if (!to) abort();
+    for (size_t i = nd; i-- > 0; ) {
+        DeferItem *c = (DeferItem *)turi_val_alloc(env, sizeof(DeferItem));
+        *c = *wc->dseg[i];
+        c->next = (i == nd - 1) ? (DeferItem *)wc->dbase : to[i + 1];
+        to[i] = c;
+    }
+    ws_remap_frame_marks(wc, wc->frames, wc->n_frames, wc->dbase, to);
+    wc->perf_defer = ws_remap_mark(wc, wc->perf_defer, wc->dbase, to);
+    for (size_t i = 0; i < nd; i++) {
+        free(wc->dseg[i]);
+        wc->dseg[i] = to[i];
+    }
+    free(to);
+}
+
+static void ws_slice_reinstall(TuriEnv *env, TuriWsCont *wc, DriveCont *fr, size_t n, bool fresh) {
+    if (!wc->dsplit) { env->defer_stack = wc->perf_defer; return; }
+    void *rbase = env->defer_stack;
+    size_t nd = wc->n_dseg;
+    DeferItem **to = nd ? (DeferItem **)malloc(nd * sizeof(DeferItem *)) : NULL;
+    if (nd && !to) abort();
+    for (size_t i = nd; i-- > 0; ) {   /* oldest first, so each links to the one below */
+        DeferItem *o = wc->dseg[i];
+        DeferItem *c = o;
+        if (fresh) {
+            c = (DeferItem *)malloc(sizeof(DeferItem));
+            if (!c) abort();
+            c->body = o->body;
+            c->snapshot = o->snapshot;
+        }
+        c->next = (i == nd - 1) ? (DeferItem *)rbase : to[i + 1];
+        to[i] = c;
+    }
+    /* The catch boundaries first (a copy each when `fresh`, so the marks
+     * below are remapped on the copies), bottom first, so the innermost ends
+     * on top; a nested prompt's catch base follows its boundary. */
+    if (wc->csplit) {
+        TuriCatchBoundary *rcbase = g_catch_stack;
+        size_t ncb = 0;
+        for (size_t i = 0; i < n; i++) if (fr[i].kind == DK_CATCH_UNWIND) ncb++;
+        TuriCatchBoundary **corig = ncb
+            ? (TuriCatchBoundary **)malloc(2 * ncb * sizeof(TuriCatchBoundary *)) : NULL;
+        if (ncb && !corig) abort();
+        TuriCatchBoundary **cnew = corig ? corig + ncb : NULL;
+        size_t kc = 0;
+        for (size_t i = 0; i < n; i++) {
+            DriveCont *f = &fr[i];
+            if (f->kind == DK_PROMPT) {
+                if (f->cbase == wc->cbase) f->cbase = rcbase;
+                else for (size_t j = 0; j < kc; j++)
+                    if ((void *)corig[j] == f->cbase) { f->cbase = cnew[j]; break; }
+                continue;
+            }
+            if (f->kind != DK_CATCH_UNWIND || !f->aux) continue;
+            TuriCatchBoundary *b = (TuriCatchBoundary *)f->aux;
+            corig[kc] = b;
+            if (fresh) {
+                TuriCatchBoundary *nb = (TuriCatchBoundary *)malloc(sizeof(TuriCatchBoundary));
+                if (!nb) abort();
+                *nb = *b;
+                b = nb;
+                f->aux = nb;
+            }
+            cnew[kc++] = b;
+            b->saved_handler_stack = env->handler_stack;
+            b->dead = false;
+            b->prev = g_catch_stack;
+            g_catch_stack = b;
+        }
+        free(corig);
+    }
+    ws_remap_frame_marks(wc, fr, n, rbase, to);
+    env->defer_stack = ws_remap_mark(wc, wc->perf_defer, rbase, to);
+    free(to);
+}
+
+/* The case of `wc` has returned to its prompt.  If it neither resumed `k` nor
+ * can have kept it, the body it captured is abandoned for good: fire the
+ * defers its scopes registered now, innermost scope first, before the
+ * handle's value is used -- as the compiled runtime fires an abortive case's
+ * abandoned frames (__dk_abort_abandon).  The captured items are the
+ * continuation's (pool memory), so the fire runs on copies. */
+static void ws_case_abandoned(TuriEnv *env, TuriWsCont *wc) {
+    if (!wc || wc->n_resumed || wc->oneshot) return;
+    const HandleCase *hc = wc->hcase;
+    g_k_local_performs = true;
+    bool local = !(hc && hc->k_binding) || fiber_k_stays_local(hc->body, hc->k_binding);
+    g_k_local_performs = false;
+    if (!local) return;
+    if (wc->n_dseg) {
+        DeferItem *top = (DeferItem *)env->defer_stack, *chain = top;
+        for (size_t i = wc->n_dseg; i-- > 0; ) {
+            DeferItem *c = (DeferItem *)malloc(sizeof(DeferItem));
+            if (!c) abort();
+            c->body = wc->dseg[i]->body;
+            c->snapshot = wc->dseg[i]->snapshot;
+            c->next = chain;
+            chain = c;
+        }
+        wc->n_dseg = 0;
+        env->defer_stack = chain;
+        /* The case may be leaving by an escape (`(k 7)` on a call/ec landing
+         * outside the handle): the abort signal passes through here, and the
+         * fire clears every other signal for the bodies it runs. */
+        bool aborting = env->aborting;
+        env->aborting = false;
+        fire_defers_to_mark_by_scope(env, top, NULL);
+        env->aborting = aborting;
+    }
+    /* A case of an inner handle was running in the abandoned body (it
+     * performed this effect -- a re-opening clause): it is abandoned with
+     * it, and so is the body IT cut off, unless it resumed or kept its own
+     * `k`.  Innermost first, as __dk_abort_pending walks them. */
+    for (size_t i = wc->n_frames; i-- > 0; )
+        if (wc->frames[i].kind == DK_PROMPT && wc->frames[i].pend_wc &&
+            wc->frames[i].pend_wc != wc) {
+            TuriWsCont *inner = wc->frames[i].pend_wc;
+            wc->frames[i].pend_wc = NULL;
+            ws_case_abandoned(env, inner);
+        }
 }
 
 /* turi-effect-perform-keeps-its-continuation: an expression that can neither
@@ -9672,6 +9931,10 @@ static bool ws_has_perform(const Expr *e) {
     case EX_UNION_INJECT: return ws_has_perform(e->as.union_inject_.value);
     case EX_RESUME:     return ws_has_perform(e->as.resume_.resume->k) ||
                                ws_has_perform(e->as.resume_.resume->value);
+    case EX_DISCONTINUE:
+        return !e->as.discontinue_.discontinue ||
+               ws_has_perform(e->as.discontinue_.discontinue->k) ||
+               ws_has_perform(e->as.discontinue_.discontinue->exception);
     /* `(cont? k)` reads the continuation's state and performs nothing itself;
      * left to the default, a clause asking it fell back to the one-shot fiber
      * and a `^multishot` k's second resume failed (effect-continuation-
@@ -9693,6 +9956,19 @@ static bool ws_has_perform(const Expr *e) {
     case EX_WHILE:
         return ws_has_perform(e->as.while_.cond) ||
                ws_has_perform(e->as.while_.body);
+    /* Registering a defer performs nothing; its body runs at the scope's
+     * exit, where a perform in it would be a black box (fire_defers_to_mark
+     * runs it through eval_expr).  turi-fiber-handle-defers-fire-at-the-
+     * wrong-time: the captured slice carries the body's defers now
+     * (ws_capture_body_state), so a defer is no reason to leave the work
+     * stack. */
+    case EX_DEFER:
+        return ws_has_perform(e->as.defer_.body);
+    /* A panic raises; it performs only what its payload does.  The driver
+     * unwinds it as a signal to a DK_CATCH_UNWIND (or the boundary past the
+     * handle), so a body that may panic need not leave the work stack. */
+    case EX_PANIC:      return ws_has_perform(e->as.panic_.payload);
+    case EX_PANIC_WITH: return ws_has_perform(e->as.panic_with_.payload);
     default:
         /* EX_CALL, EX_HANDLE, EX_TRY_CATCH, ... -- conservatively
          * assume a perform may run synchronously. */
@@ -9768,10 +10044,64 @@ static bool ws_capturable(TuriEnv *env, EvalFrame *frame, const Expr *e, int dep
     return ok;
 }
 
+/* turi-fiber-handle-defers-fire-at-the-wrong-time: can a deferred body run
+ * at its scope's exit without performing?  It runs there through eval_expr
+ * (fire_defers_to_mark), a black box to the driver, so a perform in it would
+ * find no prompt.  Unlike ws_has_perform, a direct call to a Turmeric
+ * function is answered from the callee's body (`(defer (note "x"))`, the
+ * common shape), with the same cycle guard ws_capturable uses. */
+static bool ws_defer_body_ok(TuriEnv *env, EvalFrame *frame, const Expr *e, int depth) {
+    if (!e) return true;
+    if (depth <= 0) return false;
+    switch (e->kind) {
+    case EX_DO:
+        for (uint32_t i = 0; i < e->as.do_.n; i++)
+            if (!ws_defer_body_ok(env, frame, e->as.do_.items[i], depth)) return false;
+        return true;
+    case EX_LET: case EX_LETREC:
+        for (uint32_t i = 0; i < e->as.let_.n; i++)
+            if (!ws_defer_body_ok(env, frame, e->as.let_.bindings[i].init, depth)) return false;
+        return ws_defer_body_ok(env, frame, e->as.let_.body, depth);
+    case EX_IF:
+        return ws_defer_body_ok(env, frame, e->as.if_.cond, depth) &&
+               ws_defer_body_ok(env, frame, e->as.if_.then_, depth) &&
+               ws_defer_body_ok(env, frame, e->as.if_.else_or_null, depth);
+    case EX_BUILTIN:
+        for (uint32_t i = 0; i < e->as.builtin.n; i++)
+            if (!ws_defer_body_ok(env, frame, e->as.builtin.args[i], depth)) return false;
+        return true;
+    case EX_CALL: {
+        for (uint32_t i = 0; i < e->as.call_.n_args; i++)
+            if (ws_has_perform(e->as.call_.args[i])) return false;
+        if (!e->as.call_.fn_binding) return false;
+        TuriValue fv = eval_lookup(env, frame, e->as.call_.fn_binding->name->name);
+        if (fv.tag != TURI_CLOSURE || !fv.as_closure) return false;
+        if (fv.as_closure->native) return true;   /* a native performs nothing itself */
+        FnDef *fn = (FnDef *)fv.as_closure->fn;
+        if (!fn || !fn->body) return false;
+        if (fn->body->kind == EX_INLINE_C) return true;
+        for (int i = 0; i < g_wscap_n; i++)
+            if (g_wscap_fns[i] == (const void *)fn) return true;
+        if (g_wscap_n >= WSCAP_MAX_FNS) return false;
+        g_wscap_fns[g_wscap_n++] = (const void *)fn;
+        bool ok = ws_defer_body_ok(env, fv.as_closure->captured, fn->body, depth - 1);
+        g_wscap_n--;
+        return ok;
+    }
+    default:
+        return !ws_has_perform(e);
+    }
+}
+
 static bool ws_capturable_rec(TuriEnv *env, EvalFrame *frame, const Expr *e, int depth) {
     if (!e) return true;
     if (depth <= 0) return false;   /* give up on very deep / cyclic chains */
     switch (e->kind) {
+    case EX_DEFER:
+        /* The captured slice carries the body's defers (ws_capture_body_state)
+         * -- so a defer keeps its handle on the work stack, as long as its
+         * body performs nothing when it fires. */
+        return ws_defer_body_ok(env, frame, e->as.defer_.body, depth);
     case EX_PERFORM: {
         /* Args are driven when any may perform (DK_PERFORM_ARG), so each only
          * needs to be capturable -- `(perform (Log (perform (Ask))))` no
@@ -9845,6 +10175,12 @@ static bool ws_capturable_rec(TuriEnv *env, EvalFrame *frame, const Expr *e, int
          * DK_RESUME_K.  Either may perform without forcing the fiber path. */
         return ws_capturable(env, frame, e->as.resume_.resume->k, depth) &&
                ws_capturable(env, frame, e->as.resume_.resume->value, depth);
+    case EX_DISCONTINUE:
+        /* Driven as a resume is (DK_RESUME_K, then DK_RESUME raising at the
+         * slice's hole), so it is no reason to leave the work stack. */
+        return e->as.discontinue_.discontinue &&
+               ws_capturable(env, frame, e->as.discontinue_.discontinue->k, depth) &&
+               ws_capturable(env, frame, e->as.discontinue_.discontinue->exception, depth);
     case EX_CALL: {
         for (uint32_t i = 0; i < e->as.call_.n_args; i++)
             if (!ws_capturable(env, frame, e->as.call_.args[i], depth)) return false;
@@ -9886,6 +10222,34 @@ static bool ws_capturable_rec(TuriEnv *env, EvalFrame *frame, const Expr *e, int
     case EX_POLY_WRAP:   return ws_capturable(env, frame, e->as.poly_wrap_.inner, depth);
     case EX_FN_TO_FAT:   return ws_capturable(env, frame, e->as.fn_to_fat_.inner, depth);
     case EX_POLY_TO_FAT: return ws_capturable(env, frame, e->as.poly_to_fat_.inner, depth);
+    case EX_CATCH_UNWIND: {
+        /* The driver models the boundary (DK_CATCH_UNWIND) and applies the
+         * thunk beneath it on the work stack, so a perform in a thunk written
+         * at the form lands in the driver with the prompt visible.  The
+         * captured slice carries the boundary (ws_capture_body_state, and
+         * ws_slice_reinstall per resume), so it is capturable when the
+         * thunk's body is.  Any other thunk: as before. */
+        const Expr *th = e->as.catch_unwind_.thunk;
+        while (th && (th->kind == EX_ASCRIBE || th->kind == EX_FN_TO_FAT ||
+                      th->kind == EX_POLY_TO_FAT || th->kind == EX_POLY_WRAP))
+            th = th->kind == EX_ASCRIBE      ? th->as.ascribe_.inner
+               : th->kind == EX_FN_TO_FAT    ? th->as.fn_to_fat_.inner
+               : th->kind == EX_POLY_TO_FAT  ? th->as.poly_to_fat_.inner
+                                             : th->as.poly_wrap_.inner;
+        /* The lambda as the elaborator leaves it: a lifted one named by a
+         * var (no captures), a closure over its captures, or a plain fn. */
+        const FnDef *tf = NULL;
+        if (th && th->kind == EX_FN)
+            tf = (const FnDef *)th->as.fn_.fn;
+        else if (th && th->kind == EX_CLOSURE && th->as.closure_.closure)
+            tf = th->as.closure_.closure->fn;
+        else if (th && th->kind == EX_VAR && th->as.var.binding &&
+                 th->as.var.binding->is_lifted_lambda)
+            tf = th->as.var.binding->source_fn_def;
+        if (tf && tf->body)
+            return ws_capturable(env, frame, tf->body, depth - 1);
+        return !ws_has_perform(e);
+    }
     /* Leaves / values with no synchronous perform. */
     case EX_NIL_LIT: case EX_BOOL_LIT: case EX_INT_LIT: case EX_FLOAT_LIT:
     case EX_CSTR_LIT: case EX_SYM_LIT: case EX_VAR: case EX_DEFAULT_OF:
@@ -10766,7 +11130,9 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                         DRIVE_PUSH(((DriveCont){ .kind = DK_PROMPT, .aux = (void *)h,
                                                  .frame = cf, .tail = tail, .index = 1,
                                                  .saved_module = env->current_module,
-                                                 .was_no_unwind = env->in_no_unwind }));
+                                                 .was_no_unwind = env->in_no_unwind,
+                                                 .dbase = env->defer_stack,
+                                                 .cbase = g_catch_stack }));
                         control = h->body; tail = false;   /* body runs under the prompt */
                         break;                             /* keep descending */
                     }
@@ -10809,7 +11175,9 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                     DRIVE_PUSH(((DriveCont){ .kind = DK_PROMPT, .aux = (void *)h,
                                              .frame = cf, .tail = tail, .index = 1,
                                              .saved_module = env->current_module,
-                                             .was_no_unwind = env->in_no_unwind }));
+                                             .was_no_unwind = env->in_no_unwind,
+                                             .dbase = env->defer_stack,
+                                             .cbase = g_catch_stack }));
                     control = h->body; tail = false;
                     break;
                 }
@@ -10903,6 +11271,8 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                     wc->perf_module    = env->current_module;
                     wc->perf_no_unwind = env->in_no_unwind;
                     wc->perf_defer     = env->defer_stack;
+                    wc->hcase          = matched;
+                    ws_capture_body_state(env, wc, &st[pidx], &st[pidx + 1], nf, false);
                     len = (size_t)pidx + 1;
                     st[pidx].index = 0;   /* disable while its own case body runs */
                     EvalFrame *hf = eval_frame_new_call(env, st[pidx].frame);
@@ -10918,6 +11288,12 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                 /* Escaping payload: bound as the multishot k; pool-owned. */
                 TuriWsCont *wc = (TuriWsCont *)turi_val_calloc(env, sizeof(TuriWsCont));
                 wc->n_frames = nf;
+                /* Before the re-homing below frees the slice's catch
+                 * boundaries: they are still linked on g_catch_stack. */
+                wc->perf_defer = env->defer_stack;
+                wc->hcase      = matched;
+                ws_capture_body_state(env, wc, &st[pidx], &st[pidx + 1], nf, true);
+                st[pidx].pend_wc = wc;
                 if (nf) {
                     wc->frames = (DriveCont *)turi_val_alloc(env, nf * sizeof(DriveCont));
                     memcpy(wc->frames, &st[pidx + 1], nf * sizeof(DriveCont));
@@ -10946,6 +11322,19 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                             cnt = wc->frames[i].expr->as.make_struct_.n_fields; break;
                         case DK_PERFORM_ARG:
                             cnt = wc->frames[i].expr->as.perform_.perform->n_args; break;
+                        case DK_CATCH_UNWIND: {
+                            /* A catch-unwind the body is under: the boundary
+                             * is the continuation's now (ws_capture_body_state
+                             * unlinks it); each resume links a copy back.
+                             * Left alone if it could not be unlinked. */
+                            if (!wc->csplit) continue;
+                            TuriCatchBoundary *pb =
+                                (TuriCatchBoundary *)turi_val_alloc(env, sizeof(TuriCatchBoundary));
+                            memcpy(pb, wc->frames[i].aux, sizeof(TuriCatchBoundary));
+                            TURI_DRIVE_FREE(wc->frames[i].aux);
+                            wc->frames[i].aux = pb;
+                            continue;
+                        }
                         default: break;  /* aux is a defer mark / boundary, not owned here */
                         }
                         if (!cnt) continue;
@@ -10960,9 +11349,9 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                 wc->handler_frame  = st[pidx].frame;
                 frame_escape(st[pidx].frame);
                 for (size_t i = 0; i < nf; i++) frame_escape(wc->frames[i].frame);
+                ws_capture_rehome_defers(env, wc);
                 wc->perf_module    = env->current_module;
                 wc->perf_no_unwind = env->in_no_unwind;
-                wc->perf_defer     = env->defer_stack;
                 /* Unwind to the prompt and run its matched case body; its value
                  * becomes the handle's value (received by DK_PROMPT@pidx). */
                 len = (size_t)pidx + 1;
@@ -11555,7 +11944,10 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                                          .frame = wc->handler_frame, .tail = rtl,
                                          .index = reinstall_active,
                                          .saved_module = env->current_module,
-                                         .was_no_unwind = env->in_no_unwind }));
+                                         .was_no_unwind = env->in_no_unwind,
+                                         .dbase = env->defer_stack,
+                                         .cbase = g_catch_stack }));
+                if (!wc->oneshot && wc->n_resumed != UINT32_MAX) wc->n_resumed++;
                 if (wc->oneshot) {
                     /* turi-effect-perform-keeps-its-continuation: the slice
                      * goes back exactly as it was taken -- its frames never
@@ -11563,15 +11955,16 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                      * its activations finish and release as if nothing had
                      * been performed.  The clause was only this resume, so its
                      * frame, k and the capture are dead from here. */
+                    ws_slice_reinstall(env, wc, wc->frames, wc->n_frames, false);
                     for (size_t i = 0; i < wc->n_frames; i++)
                         DRIVE_PUSH(wc->frames[i]);
                     env->current_module = wc->perf_module;
                     env->in_no_unwind   = wc->perf_no_unwind;
-                    env->defer_stack    = wc->perf_defer;
                     wc->consumed = true;
                     k.as_cont->oneshot_resumed = true;
                     if (wc->case_frame == rcf) frame_release(env, rcf);
                     free(wc->frames);
+                    free(wc->dseg);
                     free(wc->kval);
                     free(wc);
                     cur = v;
@@ -11581,20 +11974,23 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                 if (wc->n_frames) {
                     DriveCont *clone = (DriveCont *)malloc(wc->n_frames * sizeof(DriveCont));
                     clone_ws_slice(env, wc->frames, wc->n_frames, clone);
+                    ws_slice_reinstall(env, wc, clone, wc->n_frames, true);
                     for (size_t i = 0; i < wc->n_frames; i++)
                         DRIVE_PUSH(clone[i]);
                     TURI_DRIVE_FREE(clone);
+                } else {
+                    ws_slice_reinstall(env, wc, NULL, 0, true);
                 }
                 env->current_module = wc->perf_module;
                 env->in_no_unwind   = wc->perf_no_unwind;
-                env->defer_stack    = wc->perf_defer;
                 cur = v;   /* feed v into the cloned slice; keep returning */
                 if (dex) {
                 drive_raise_in_slice:
-                    /* The slice is back on the stack; raise at its hole.  A
-                     * driver boundary takes the signal as the loop unwinds the
-                     * slice's frames (no slice holds a defer or catch-unwind:
-                     * ws_capturable refuses both), so the panic reaches the
+                    /* The slice is back on the stack, with the body's defers
+                     * and catch boundaries (ws_slice_reinstall); raise at its
+                     * hole.  A catch-unwind in the slice takes the signal as
+                     * the loop unwinds to it, firing the defers on the way;
+                     * else the panic passes the prompt and reaches the
                      * clause, as the compiled runtime re-raises it there. */
                     turi_raise_payload(env, v, (int)dex->as.discontinue_.discontinue->exception->type.kind,
                                        dex->span);
@@ -12231,7 +12627,11 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                  * propagate. */
                 env->current_module = top->saved_module;
                 env->in_no_unwind   = top->was_no_unwind;
+                TuriWsCont *pwc = top->pend_wc;
                 len--;   /* pop; propagate cur (value or signal) */
+                /* The case that ran under this prompt is done: a body it
+                 * abandoned runs its defers now. */
+                ws_case_abandoned(env, pwc);
                 break;
             }
             case DK_GET_FIELD: {
@@ -14455,6 +14855,9 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
          * nested black box) targets the innermost catch consistently. */
         TuriCatchBoundary cbnd = { .is_driver = false, .jmp = &jb, .prev = g_catch_stack };
         g_catch_stack = &cbnd;
+        /* The jump skips every driver between the panic and here, and with
+         * them their registrations (as eval_body_run's pad restores them). */
+        struct DriveReg *volatile cregs = g_drive_regs;
 
         TuriValue result;
         if (setjmp(jb) == 0) {
@@ -14475,6 +14878,7 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
              * accessors recover the caught value/type/file/line (the message is
              * the cstr value for a plain panic). */
             g_catch_stack     = cbnd.prev;
+            g_drive_regs      = cregs;
             env->catch_jmp    = prev_jmp;
             env->panicking    = false;
             env->returning    = prev_returning;
@@ -14507,6 +14911,7 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
         env->catch_jmp = &jb;
         TuriCatchBoundary cbnd = { .is_driver = false, .jmp = &jb, .prev = g_catch_stack };
         g_catch_stack = &cbnd;
+        struct DriveReg *volatile cregs = g_drive_regs;   /* see catch-unwind above */
 
         TuriValue result;
         if (setjmp(jb) == 0) {
@@ -14520,6 +14925,7 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
             /* A panic reached this boundary.  Restore the saved control state
              * (the payload fields in env still describe the in-flight panic). */
             g_catch_stack     = cbnd.prev;
+            g_drive_regs      = cregs;
             env->catch_jmp    = prev_jmp;
             env->returning    = prev_returning;
             env->throwing     = prev_throwing;
