@@ -11325,7 +11325,9 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                         case DK_CATCH_UNWIND: {
                             /* A catch-unwind the body is under: the boundary
                              * is the continuation's now (ws_capture_body_state
-                             * unlinks it); each resume links a copy back. */
+                             * unlinks it); each resume links a copy back.
+                             * Left alone if it could not be unlinked. */
+                            if (!wc->csplit) continue;
                             TuriCatchBoundary *pb =
                                 (TuriCatchBoundary *)turi_val_alloc(env, sizeof(TuriCatchBoundary));
                             memcpy(pb, wc->frames[i].aux, sizeof(TuriCatchBoundary));
