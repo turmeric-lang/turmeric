@@ -292,8 +292,14 @@ again without having published a broken release.
 ## Step 7: Build and deploy web
 
 ```sh
+tur run migrate-ci-db
 tur run deploy-web
 ```
+
+`migrate-ci-db` applies any pending `web/migrations/` file to the production
+`/ci` D1 database. It goes FIRST: a deployed Worker that writes a column the
+database lacks fails every CI report. With nothing pending it prints "No
+migrations to apply!" and returns, so run it on every cut.
 
 This runs `tur run wasm` (which runs `tur run docs`), then `tur run web-deps`,
 then `npm run build`, then `wrangler deploy ...` to push the web app
@@ -307,7 +313,7 @@ that habit is what left every release tag carrying the previous release's
 binary, and (until v0.32.3) a doc-name index missing the release's own new
 stdlib symbols.
 
-If `tur run deploy-web` fails:
+If `tur run migrate-ci-db` or `tur run deploy-web` fails:
 - Report the failure to the user.
 - Run `git tag -d v<NEW>` to remove the local tag.
 - Do NOT delete the commit -- the user can amend or fix forward.

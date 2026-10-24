@@ -223,8 +223,22 @@ retried without having published a broken release.
 ### Step 7: Build and deploy web
 
 ```sh
+tur run migrate-ci-db
 tur run deploy-web
 ```
+
+`migrate-ci-db` applies any pending file in `web/migrations/` to
+`ci-metrics`, the production D1 database behind `/ci`. It has to come
+first: once the Worker writes a column the database does not have yet,
+every CI report fails. Migrations already applied are skipped, so with
+nothing pending it prints "No migrations to apply!" and returns, which is
+why it runs on every cut rather than only when a migration landed. It
+needs the same `wrangler` login as the deploy. The recipe runs wrangler
+from `web/`, because that is where `wrangler.jsonc` names the database:
+the bare `npx wrangler d1 migrations apply ci-metrics --remote` run from
+the repo root fails with "No configuration file found". Any deploy outside
+a release follows the same order. See
+[web/README.md](https://github.com/turmeric-lang/turmeric/blob/main/web/README.md#the-ci-dashboard-and-its-d1-store) for the store itself.
 
 This runs `tur run wasm` (which runs `tur run docs`), then `tur run web-deps`,
 then `npm run build`, then `wrangler deploy` to push the web app to
@@ -236,7 +250,7 @@ are **not** committed. `git status` stays clean through this step.
 There is no follow-up "regenerate web artifacts" commit -- that habit
 left every release tag carrying the previous release's binary.
 
-If the deploy fails:
+If the migration or the deploy fails:
 
 - Report the failure.
 - Delete the local tag: `git tag -d v<NEW>`.
