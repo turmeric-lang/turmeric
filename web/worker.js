@@ -1,5 +1,6 @@
 import { CONTENT_SECURITY_POLICY } from './csp.js';
 import { GH_REPO } from './repo.js';
+import { handleCiApi } from './ci-api.js';
 
 // C-1 in docs/upcoming/security-audit-plan.md.
 //
@@ -187,9 +188,15 @@ async function proxyMetricsFile(name, missing) {
 }
 
 export default {
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     const url = new URL(request.url);
     const { hostname, pathname } = url;
+
+    // The D1 store behind /ci: CI reports here, the page reads from here
+    // (ci-api.js, docs/upcoming/ci-metrics-d1-plan.md).
+    if (pathname.startsWith('/api/ci/')) {
+      return handleCiApi(request, env, ctx);
+    }
 
     if (pathname === '/install') {
       return new Response(INSTALL_SCRIPT, {

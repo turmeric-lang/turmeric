@@ -4,10 +4,15 @@
 // /ci route: Vite resolves the extensionless request to the module, not to
 // ci/index.html.
 //
-// Reads NDJSON from /api/ci-timings and /api/ci-loc (worker.js proxies the
-// `ci-metrics` orphan branch) and renders it as hand-built SVG. No charting
-// library: the site bundles nothing from a CDN, and the shapes here are simple
-// enough that a dependency would cost more than it saves.
+// Reads chart-ready JSON from /api/ci/* (ci-api.js, a D1 database CI reports
+// into) and renders it as hand-built SVG. No charting library: the site bundles
+// nothing from a CDN, and the shapes here are simple enough that a dependency
+// would cost more than it saves.
+//
+// Every read but /api/ci/meta carries the meta's ingest version (?v=), so the
+// responses are immutable and a repeat view between pushes downloads only the
+// meta. The server does the reduction: one environment and range per request,
+// one point per run for 1d/7d and a daily median per suite for wider ranges.
 //
 // THE ONE RULE THIS FILE ENFORCES: suite timings are only comparable within a
 // fixed (build_type, os, cc, nproc, jit) tuple. Rather than document that and
@@ -20,11 +25,13 @@
 
 import './icons.js'; // <t-icon>
 import { GITHUB_URL } from './repo.js';
+import { DAY, STATUSES, rangeCutoff } from './ci-aggregate.js';
 
-const API = '/api/ci-timings';
-const LOC_API = '/api/ci-loc';
-const DOCS_API = '/api/ci-docs';
-const BENCH_API = '/api/ci-bench';
+const API = '/api/ci';
+
+// A request that has not answered in this long is reported, not waited on: a
+// spinner that never resolves reads as a broken page.
+const FETCH_TIMEOUT_MS = 30_000;
 
 // The nightly benchmarks (performance-audit-plan WP6): one chart per view,
 // each at most five series -- the palette's cap -- so a view is one metric on
@@ -46,7 +53,6 @@ const BENCH_DEFAULT = 'run_ms/jit';
 const SERIES_VARS = ['--chart-1', '--chart-2', '--chart-3', '--chart-4', '--chart-5'];
 const MAX_SERIES = SERIES_VARS.length;
 
-const STATUSES = ['pass', 'skip', 'fail'];
 const STATUS_ICON = { pass: 'check', skip: 'minus', fail: 'x' };
 
 const RANGES = [
@@ -122,14 +128,20 @@ const SPICE_SERIES = [
 
 const TABS = ['tests', 'counts', 'code', 'spices', 'reports', 'bench'];
 
-// Ranges the 8-day recent window can answer. Anything wider needs the full log.
-const RECENT_RANGES = ['1d', '7d'];
-
 // ── STATE ───────────────────────────────────────────────────────────────────
 
 const state = {
-  rows: [],
-  envs: [],           // [{ key, label, ts }]
+  // /api/ci/meta: the ingest version every other read carries, and when it
+  // landed.
+  version: 0,
+  ingestAt: null,
+  // The /api/ci/timings response for (env, range), and its cells decoded into
+  // series name -> [{ ts, ms, status, sha?, n? }] (`points`) over the x domain
+  // `xs`. In `day` mode a point is one suite's median for one UTC day.
+  timings: null,
+  points: new Map(),
+  xs: [],
+  envs: [],           // [{ key, label, ts, breadth }], from the meta
   env: null,          // env key
   // Fixed-length slot array, one per palette color. A deselected suite leaves
   // a null HOLE rather than compacting, because the slot index IS the color:
@@ -140,31 +152,30 @@ const state = {
   scale: 'linear',
   sort: { col: 'delta', dir: 'desc' },
   sparkFilter: '',
-  year: null,
-  // Line counts: a separate NDJSON file, one row per push to main, no env
-  // dimension. Empty when /api/ci-loc has nothing yet (the file does not exist
-  // until the first publish after this shipped), which the panel says out loud
-  // rather than drawing an empty axis.
+  // The Test counts timeline (/api/ci/counts), fetched the first time its tab
+  // opens: no other tab reads it.
+  counts: null,
+  countsError: null,
+  // Line counts: one row per push to main, no env dimension. Empty until the
+  // first push is reported, which the panel says out loud rather than drawing
+  // an empty axis.
   loc: [],
   locKeys: new Set(LOC_DEFAULT),
   locError: null,
-  // Open plans and reports: same shape as loc -- one NDJSON row per push to
-  // main, no env dimension. Empty until /api/ci-docs has its first row.
+  // Open plans and reports: same shape as loc -- one row per push to main, no
+  // env dimension.
   docs: [],
   docsKeys: new Set(DOCS_DEFAULT),
   docsError: null,
-  // Nightly benchmarks: their own NDJSON file (/api/ci-bench), one row per
-  // program, engine and metric per night, from the nightly arm64 workflow.
-  bench: [],
+  // Nightly benchmarks: one row per program, engine and metric per night, from
+  // the nightly arm64 workflow. Fetched the first time the tab opens.
+  bench: null,
   benchError: null,
   benchView: BENCH_DEFAULT,
   // Which tab is visible. Tests is the default; the others render their charts
   // on first reveal so the SVG picks up the real panel width instead of the
   // 860px fallback a hidden panel forces.
   tab: 'tests',
-  // True while `rows` is only the recent window (/api/ci-timings?window=recent)
-  // rather than the full year. The full log is 40+ MB; the page opens on 7 days.
-  windowed: false,
 };
 
 // ── FORMATTING ──────────────────────────────────────────────────────────────
@@ -244,130 +255,63 @@ function fmtBytesTick(n) {
   return `${Math.round(n)}B`;
 }
 
-// `AppleClang-21.0.0` -> `AppleClang 21`, `GNU-13.3.0` -> `GNU 13.3`.
-function prettyCC(cc) {
-  const dash = cc.lastIndexOf('-');
-  if (dash < 0) return cc;
-  const name = cc.slice(0, dash);
-  const parts = cc.slice(dash + 1).split('.');
-  const ver = parts[1] && parts[1] !== '0'
-    ? `${parts[0]}.${parts[1]}`
-    : parts[0];
-  return `${name} ${ver}`;
-}
-
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => (
   { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
 ));
 
 // ── DATA ────────────────────────────────────────────────────────────────────
 
-function parseNDJSON(text) {
-  const out = [];
-  for (const line of text.split('\n')) {
-    const t = line.trim();
-    if (!t) continue;
-    try {
-      out.push(JSON.parse(t));
-    } catch {
-      // A torn final line is expected while CI is mid-append. Drop it.
+// Decode a /api/ci/timings response into state.points and state.xs. The
+// response indexes suites and runs to stay small; everything downstream wants
+// a series name -> points map, as it always has.
+function setTimings(t) {
+  const points = new Map();
+  const push = (name, p) => {
+    let a = points.get(name);
+    if (!a) points.set(name, (a = []));
+    a.push(p);
+  };
+  let xs;
+  if (t.mode === 'run') {
+    for (const [s, r, ms, st] of t.cells) {
+      const [ts, sha] = t.runs[r];
+      push(t.suites[s], { ts, ms, status: STATUSES[st], sha });
     }
-  }
-  return out;
-}
-
-// build_type is single-valued today but need not stay so, so it is part of the
-// key. It is only shown in the label when the data actually varies.
-function envKey(r) {
-  return [r.build_type, r.os, r.cc, r.nproc, r.jit ? 'jit' : 'nojit'].join('|');
-}
-
-// A sharded job (TUR_TEST_SHARD="i/N") reports the same suite once per shard,
-// each with ~1/N of the work.  Keyed on the bare name they would land in one
-// series as N points per run at a fraction of the real duration -- a suite that
-// appears to have got faster and noisier on the day sharding was switched on.
-// The shard is therefore part of the series identity, so each slice trends
-// against its own history.  Unsharded rows (shard_total null, which is every
-// row written before sharding existed) keep the bare name and their continuity.
-function seriesName(r) {
-  return r.shard_total ? `${r.suite} [${r.shard_index}/${r.shard_total}]` : r.suite;
-}
-
-function buildEnvs(rows) {
-  const seen = new Map();
-  for (const r of rows) {
-    const key = envKey(r);
-    const cur = seen.get(key);
-    if (!cur) seen.set(key, { key, row: r, ts: r.ts, suites: new Set([seriesName(r)]) });
-    else {
-      if (r.ts > cur.ts) cur.ts = r.ts;
-      cur.suites.add(seriesName(r));
+    xs = t.runs.map(([ts]) => ts);
+  } else {
+    // A day's point sits at its UTC noon, so it lands mid-day on the axis.
+    const at = (day) => day * DAY + DAY / 2;
+    for (const [s, day, ms, n, st] of t.cells) {
+      push(t.suites[s], { ts: at(day), ms, status: STATUSES[st], n });
     }
+    xs = [...new Set(t.cells.map((c) => at(c[1])))].sort((a, b) => a - b);
   }
-
-  const buildTypes = new Set(rows.map((r) => r.build_type));
-  const envs = [...seen.values()].map(({ key, row, ts, suites }) => {
-    const bits = [row.os, prettyCC(row.cc), `${row.nproc} cores`];
-    if (row.jit) bits.push('JIT');
-    if (buildTypes.size > 1) bits.unshift(row.build_type);
-    return { key, label: bits.join(' · '), ts, breadth: suites.size };
-  });
-
-  const newest = envs.reduce((m, e) => Math.max(m, e.ts), 0);
-
-  // Still-active environments first, then the BROADEST of those — not simply
-  // the freshest, which is how the page used to open on three sparklines.
-  //
-  // The JIT legs are their own environment (jit is part of the tuple) but
-  // register only ~3 ctest suites, and they publish seconds apart from the
-  // ~176-suite legs in the same workflow. Ordering on `ts` alone therefore
-  // decided the default view on which of two near-simultaneous uploads landed
-  // last: a coin flip between the whole dashboard and 2% of it.
-  //
-  // "Active" is a day rather than an exact tie because the macOS 5-core runner
-  // is a different image that appears intermittently; it should rank below
-  // today's runs without being hidden.
-  const DAY = 86400;
-  envs.sort((a, b) => (
-    (a.ts >= newest - DAY ? 0 : 1) - (b.ts >= newest - DAY ? 0 : 1)
-    || b.breadth - a.breadth
-    || b.ts - a.ts
-    || a.label.localeCompare(b.label)
-  ));
-  return envs;
+  for (const a of points.values()) a.sort((x, y) => x.ts - y.ts);
+  state.timings = t;
+  state.points = points;
+  state.xs = xs;
 }
 
-// Relative to the newest row in `rows`, not to wall-clock now: if CI has been
-// quiet for two days, "last 24 hours" must still show the last day that has
-// data rather than an empty chart. Each dataset therefore anchors on its own
-// latest row.
-function rangeCutoff(rows) {
-  if (state.range === 'all') return -Infinity;
-  const days = parseInt(state.range, 10);
-  const latest = rows.reduce((m, r) => Math.max(m, r.ts), 0);
-  return latest - days * 86400;
-}
+const dayMode = () => state.timings?.mode === 'day';
 
-// Every view starts here. Status filtering is deliberately NOT applied to the
-// env/run axis — a run where a suite failed is still a run.
-function envRows() {
-  const cutoff = rangeCutoff(state.rows);
-  return state.rows.filter((r) => envKey(r) === state.env && r.ts >= cutoff);
-}
+// The newest row anchors each dataset's range (see rangeCutoff), so a quiet
+// week still shows its last data.
+const latestOf = (rows) => rows.reduce((m, r) => Math.max(m, r.ts), 0);
 
 function locRows() {
-  const cutoff = rangeCutoff(state.loc);
+  const cutoff = rangeCutoff(latestOf(state.loc), state.range);
   return state.loc.filter((r) => r.ts >= cutoff);
 }
 
 function docsRows() {
-  const cutoff = rangeCutoff(state.docs);
+  const cutoff = rangeCutoff(latestOf(state.docs), state.range);
   return state.docs.filter((r) => r.ts >= cutoff);
 }
 
 function benchRows() {
-  const cutoff = rangeCutoff(state.bench);
-  return state.bench.filter((r) => r.ts >= cutoff);
+  const rows = state.bench ?? [];
+  const cutoff = rangeCutoff(latestOf(rows), state.range);
+  return rows.filter((r) => r.ts >= cutoff);
 }
 
 // The newest docs row that actually carries `key`, for the headline numbers:
@@ -380,23 +324,15 @@ function latestDocWith(key) {
   return null;
 }
 
-// suite -> [{ ts, ms, status, sha, run_id }], ascending by ts.
-function bySuite(rows) {
+// suite -> [{ ts, ms, status, sha?, n? }], ascending by ts, with the status
+// filter applied. Status filtering is deliberately NOT applied to the run axis
+// (state.xs) -- a run where a suite failed is still a run.
+function bySuite() {
   const m = new Map();
-  for (const r of rows) {
-    if (!state.statuses.has(r.status)) continue;
-    const key = seriesName(r);
-    let a = m.get(key);
-    if (!a) m.set(key, (a = []));
-    a.push({
-      ts: r.ts,
-      ms: r.duration_ms,
-      status: r.status,
-      sha: r.sha,
-      run_id: r.run_id,
-    });
+  for (const [name, pts] of state.points) {
+    const kept = pts.filter((p) => state.statuses.has(p.status));
+    if (kept.length) m.set(name, kept);
   }
-  for (const a of m.values()) a.sort((x, y) => x.ts - y.ts);
   return m;
 }
 
@@ -568,31 +504,25 @@ function intTicks(lo, hi, count) {
 // ── RENDER: PROVENANCE + TILES ──────────────────────────────────────────────
 
 function renderProvenance() {
-  const rows = state.rows.filter((r) => envKey(r) === state.env);
-  const latestTs = rows.reduce((m, r) => Math.max(m, r.ts), 0);
-  const latest = rows.find((r) => r.ts === latestTs);
-  if (!latest) return;
+  const t = state.timings;
+  if (!t?.latest_sha) return;
 
-  const short = latest.sha.slice(0, 7);
+  const short = t.latest_sha.slice(0, 7);
   document.getElementById('ci-provenance').innerHTML = `
     <span>Latest run</span>
     <a class="mono ci-link"
-       href="${GITHUB_URL}/commit/${esc(latest.sha)}">${esc(short)}</a>
+       href="${GITHUB_URL}/commit/${esc(t.latest_sha)}">${esc(short)}</a>
     <span class="dot-sep">/</span>
-    <span>${esc(fmtDateTime(latestTs))}</span>
+    <span>${esc(fmtDateTime(t.latest_ts))}</span>
     <span class="dot-sep">/</span>
-    <span>${state.rows.length.toLocaleString()} rows on
-      <span class="mono">${state.windowed
-        ? 'suite-timings-recent.jsonl'
-        : `suite-timings-${esc(state.year ?? '')}.jsonl`}</span></span>`;
+    <span>Ingest <span class="mono">#${esc(state.version)}</span>${state.ingestAt
+      ? `, ${esc(fmtDateTime(state.ingestAt))}` : ''}</span>`;
 }
 
 function renderTiles() {
-  const rows = state.rows.filter((r) => envKey(r) === state.env);
-  const latestTs = rows.reduce((m, r) => Math.max(m, r.ts), 0);
-  const latest = rows.filter((r) => r.ts === latestTs);
+  const latest = state.timings.latest;
 
-  const total = latest.reduce((a, r) => a + r.duration_ms, 0);
+  const total = latest.reduce((a, r) => a + r.ms, 0);
   const failed = latest.filter((r) => r.status === 'fail');
   const skipped = latest.filter(
     (r) => r.status === 'skip' || r.partial_skip_reason != null,
@@ -611,13 +541,13 @@ function renderTiles() {
     tile('', 'clock', 'Total wall time', esc(fmtDuration(total)),
       'Sum of every suite in the latest run'),
     tile('', 'layers', 'Suites', String(latest.length),
-      `${new Set(rows.map(seriesName)).size} seen in range`),
+      `${state.timings.suites.length} seen in range`),
     tile(
       failed.length ? 'is-fail' : 'is-clean',
       failed.length ? 'circle-x' : 'circle-check',
       failed.length ? 'Failing' : 'All passing',
       String(failed.length),
-      failed.length ? failed.map(seriesName).join(', ') : 'No failures in the latest run',
+      failed.length ? failed.map((r) => r.suite).join(', ') : 'No failures in the latest run',
     ),
     tile(skipped.length ? 'is-skip' : '', 'circle-minus', 'Skipped',
       String(skipped.length), 'Fully or partially skipped'),
@@ -627,9 +557,7 @@ function renderTiles() {
 // ── RENDER: FILTERS ─────────────────────────────────────────────────────────
 
 function renderFilters() {
-  const allSuites = [...new Set(
-    state.rows.filter((r) => envKey(r) === state.env).map(seriesName),
-  )].sort();
+  const allSuites = state.timings.suites;
 
   const chosen = selected();
   const atCap = chosen.length >= MAX_SERIES;
@@ -676,10 +604,19 @@ function renderFilters() {
 
 `;
 
-  document.getElementById('ci-env').onchange = (e) => {
-    state.env = e.target.value;
-    state.suites = defaultSuites();
-    render();
+  document.getElementById('ci-env').onchange = async (e) => {
+    const select = e.target;
+    select.disabled = true;
+    let failed = null;
+    try {
+      await loadTimings(select.value, state.range);
+      state.env = select.value;
+      state.suites = defaultSuites();
+    } catch (err) {
+      failed = err;
+    }
+    render();   // redraws the select, enabled, on the environment in effect
+    if (failed) notice(`Could not load that environment (${failed.message}).`);
   };
 
   document.getElementById('ci-add-suite').onchange = (e) => {
@@ -722,9 +659,11 @@ function renderFilters() {
 //   footer    axis-title text under the plot
 //   label     the SVG's aria-label
 //   directLabels  false where a title already names the one series
+//   fmtX      (x) => string               -- the tooltip head; a date for a
+//             chart of daily points, where a time of day would be invented
 function drawLineChart({
   host, tooltip, idPrefix, series, xs, log = false,
-  ticksY, fmtY, fmtTickY, footer, label, directLabels = true,
+  ticksY, fmtY, fmtTickY, footer, label, directLabels = true, fmtX = fmtDateTime,
 }) {
   const x0 = xs[0];
   const x1 = xs[xs.length - 1];
@@ -858,10 +797,10 @@ function drawLineChart({
   host.innerHTML = `<svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}"
     role="img" aria-label="${esc(label)}">${parts.join('')}</svg>`;
 
-  wireHover({ host, tooltip, idPrefix, series, sx, fmtY, pad, ih });
+  wireHover({ host, tooltip, idPrefix, series, sx, fmtY, fmtX, pad, ih });
 }
 
-function wireHover({ host, tooltip, idPrefix, series, sx, fmtY, pad, ih }) {
+function wireHover({ host, tooltip, idPrefix, series, sx, fmtY, fmtX, pad, ih }) {
   const svg = host.querySelector('svg');
   const hit = host.querySelector(`#${idPrefix}-hit`);
   const cross = host.querySelector(`#${idPrefix}-cross`);
@@ -915,7 +854,7 @@ function wireHover({ host, tooltip, idPrefix, series, sx, fmtY, pad, ih }) {
 
     tooltip.innerHTML = `
       <div class="ci-tooltip-head">
-        <span>${esc(fmtDateTime(best))}</span>
+        <span>${esc(fmtX(best))}</span>
         <span class="mono">${esc(sha.slice(0, 7))}</span>
       </div>${rows.join('')}`;
     tooltip.hidden = false;
@@ -1064,8 +1003,7 @@ function renderChart() {
   const host = document.getElementById('ci-chart');
   const sub = document.getElementById('ci-chart-sub');
   const legend = document.getElementById('ci-legend');
-  const rows = envRows();
-  const bucketed = bySuite(rows);
+  const bucketed = bySuite();
 
   const drawn = selected()
     .map((s) => ({ suite: s, pts: bucketed.get(s) ?? [] }))
@@ -1083,7 +1021,8 @@ function renderChart() {
 
   // The x domain comes from every run in the environment, not just the
   // selected suites, so the axis holds still while you swap series in and out.
-  const xs = [...new Set(rows.map((r) => r.ts))].sort((a, b) => a - b);
+  const xs = state.xs;
+  const days = dayMode();
 
   drawLineChart({
     host,
@@ -1102,7 +1041,10 @@ function renderChart() {
     ticksY: (lo, hi) => niceTicks(lo, hi, 5),
     fmtY: fmtDuration,
     fmtTickY: fmtTick,
-    footer: `${xs.length} run${xs.length === 1 ? '' : 's'}`,
+    fmtX: days ? fmtDate : fmtDateTime,
+    footer: days
+      ? `${xs.length} day${xs.length === 1 ? '' : 's'} · daily median per suite`
+      : `${xs.length} run${xs.length === 1 ? '' : 's'}`,
     label: 'Suite duration over time',
   });
 
@@ -1258,6 +1200,12 @@ function renderBench() {
 
   if (state.benchError) {
     host.innerHTML = `<div class="ci-empty">${esc(state.benchError)}</div>`;
+    sub.textContent = '';
+    legend.innerHTML = '';
+    return;
+  }
+  if (!state.bench) {
+    host.innerHTML = '<div class="ci-empty">Loading the nightly benchmarks…</div>';
     sub.textContent = '';
     legend.innerHTML = '';
     return;
@@ -1460,128 +1408,41 @@ function renderDocsLegend() {
 }
 
 // ── RENDER: TEST COUNTS ─────────────────────────────────────────────────────
-
-// How many tests a suite row counted, or null when the suite printed no census
-// line (collect-suite-timings.py's SUMMARY_RE). `discovered` when the harness
-// reports it; otherwise what it ran plus what it skipped.
-function testCount(r) {
-  if (r.passed == null) return null;
-  return r.discovered ?? (r.passed + (r.failed ?? 0) + (r.skipped ?? 0));
-}
-
-const runKey = (r) => (r.run_id != null ? `${r.run_id}|${r.run_attempt ?? ''}` : `ts|${r.ts}`);
-
-// suite -> [{ ts, run, sha, count, passed, failed, skipped }], ascending.
 //
-// Each suite is counted ONCE, from its home environment: the one it has the
-// most whole (unsharded) runs in. Counting it in every environment would add
-// tur_tests up twice for running on Linux and macOS, and the environment lock
-// the timings need would hide the browser suites, which only run under
-// emscripten. A suite that only ever runs sharded is summed across its shards
-// per run, so it is not dropped for having no whole run.
-function suiteCounts() {
-  const rowsBy = new Map();   // suite -> envKey -> rows
-  for (const r of state.rows) {
-    if (testCount(r) == null) continue;
-    let envs = rowsBy.get(r.suite);
-    if (!envs) rowsBy.set(r.suite, (envs = new Map()));
-    const k = envKey(r);
-    if (!envs.has(k)) envs.set(k, []);
-    envs.get(k).push(r);
-  }
-  const envRank = new Map(state.envs.map((e, i) => [e.key, i]));
-  const out = new Map();
-  for (const [suite, envs] of rowsBy) {
-    const whole = (rows) => rows.filter((r) => !r.shard_total).length;
-    const [, rows] = [...envs].sort((a, b) => (
-      whole(b[1]) - whole(a[1]) || b[1].length - a[1].length
-      || (envRank.get(a[0]) ?? 0) - (envRank.get(b[0]) ?? 0)
-    ))[0];
-    const byRun = new Map();
-    const unsharded = rows.filter((r) => !r.shard_total);
-    for (const r of unsharded.length ? unsharded : rows) {
-      const key = runKey(r);
-      const p = byRun.get(key);
-      const v = { count: testCount(r), passed: r.passed, failed: r.failed ?? 0, skipped: r.skipped ?? 0 };
-      if (!p) byRun.set(key, { ts: r.ts, run: key, sha: r.sha, ...v });
-      else {
-        // Another shard of the same run: add it in.
-        p.ts = Math.max(p.ts, r.ts);
-        for (const k of ['count', 'passed', 'failed', 'skipped']) p[k] += v[k];
-      }
-    }
-    out.set(suite, [...byRun.values()].sort((a, b) => a.ts - b.ts));
-  }
-  return out;
-}
-
-// Totals over time, one point per CI run: { ts, sha, total, failedHere }. Every suite contributes its NEWEST count as of that run, not
-// only the suites the run itself executed -- a push runs only the jobs its
-// diff needs, so a plain per-run sum sawtooths between ~3.7k and ~9k with no
-// test added or removed.
-//
-// Two edges keep the carry-forward honest. A suite last seen more than a week
-// before the newest data has been removed, so it leaves the sum after its last
-// run instead of being carried to the end. And the points start once every
-// suite present on the data's first day has reported: before that, the sum is
-// missing suites that simply had not run yet in the loaded window.
-function countTimeline(series) {
-  const events = [];
-  for (const [suite, pts] of series) for (const p of pts) events.push({ suite, ...p });
-  events.sort((a, b) => a.ts - b.ts);
-  if (!events.length) return [];
-  const newest = events[events.length - 1].ts;
-  const lastTs = new Map([...series].map(([s, pts]) => [s, pts[pts.length - 1].ts]));
-  const firstTs = [...series.values()].map((pts) => pts[0].ts);
-  const dataStart = Math.min(...firstTs);
-  const warm = Math.max(...firstTs.filter((t) => t <= dataStart + 86400));
-
-  const cur = new Map();
-  const snaps = new Map();   // run -> snapshot after that run's last event
-  for (const e of events) {
-    cur.set(e.suite, e);
-    for (const s of cur.keys()) {
-      const end = lastTs.get(s);
-      if (end < e.ts && end < newest - 7 * 86400) cur.delete(s);   // retired
-    }
-    const snap = { ts: e.ts, sha: e.sha, total: 0, failedHere: snaps.get(e.run)?.failedHere ?? false };
-    for (const p of cur.values()) snap.total += p.count;
-    snap.failedHere = snap.failedHere || e.failed > 0;
-    snaps.set(e.run, snap);
-  }
-  return [...snaps.values()].filter((p) => p.ts >= warm).sort((a, b) => a.ts - b.ts);
-}
+// The server builds this tab's timeline (ci-aggregate.js suiteCounts() and
+// countTimeline()): each suite counted once, from its home environment, and
+// every suite's newest count carried forward to each run. The page filters it
+// to the range and draws it.
 
 function renderCounts() {
   const tiles = document.getElementById('ci-counts-tiles');
   const host = document.getElementById('ci-counts-chart');
   const sub = document.getElementById('ci-counts-sub');
 
-  const series = suiteCounts();
-  if (!series.size) {
+  if (state.countsError || !state.counts) {
+    tiles.innerHTML = '';
+    sub.textContent = '';
+    host.innerHTML = `<div class="ci-empty">${esc(state.countsError ?? 'Loading test counts…')}</div>`;
+    return;
+  }
+
+  const { current, silent } = state.counts;
+  const timeline = state.counts.timeline.map(([ts, sha, total, failedHere]) => (
+    { ts, sha, total, failedHere: !!failedHere }));
+  if (!timeline.length) {
     tiles.innerHTML = '';
     sub.textContent = '';
     host.innerHTML = '<div class="ci-empty">No suite prints a test count yet.</div>';
     return;
   }
 
-  const timeline = countTimeline(series);
-  const cutoff = rangeCutoff(state.rows);
+  const cutoff = rangeCutoff(state.counts.latest_ts, state.range);
   const inRange = timeline.filter((p) => p.ts >= cutoff);
-
-  // Headline: each current suite's newest count -- the same rule the timeline
-  // applies at its last point, so the tile and the line end on one number.
-  const newestTs = Math.max(...[...series.values()].map((pts) => pts[pts.length - 1].ts));
-  const current = [...series]
-    .map(([suite, pts]) => ({ suite, ...pts[pts.length - 1] }))
-    .filter((p) => p.ts >= newestTs - 7 * 86400);
-  const sum = (rows, k) => rows.reduce((a, p) => a + p[k], 0);
-  const total = sum(current, 'count');
-  const failed = sum(current, 'failed');
-  const skipped = sum(current, 'skipped');
   const first = inRange[0];
   const last = inRange[inRange.length - 1];
 
+  // Headline: each current suite's newest count -- the same rule the timeline
+  // applies at its last point, so the tile and the line end on one number.
   const tile = (cls, icon, label, value, note) => `
     <div class="ci-tile ${cls}">
       <div class="ci-tile-label"><t-icon name="${icon}"></t-icon>${esc(label)}</div>
@@ -1589,22 +1450,21 @@ function renderCounts() {
       <div class="ci-tile-note">${esc(note)}</div>
     </div>`;
   tiles.innerHTML = [
-    tile('', 'list-checks', 'Tests', esc(fmtCount(total)),
-      `Across ${current.length} suite${current.length === 1 ? '' : 's'} that print a count`),
-    tile(failed ? 'is-fail' : '', failed ? 'circle-x' : 'circle-check', 'Failing tests',
-      esc(fmtCount(failed)), failed ? 'In each suite\'s newest run' : 'None in any suite\'s newest run'),
-    tile(skipped ? 'is-skip' : '', 'circle-minus', 'Skipped tests',
-      esc(fmtCount(skipped)), 'Counted, but not run'),
+    tile('', 'list-checks', 'Tests', esc(fmtCount(current.total)),
+      `Across ${current.suites} suite${current.suites === 1 ? '' : 's'} that print a count`),
+    tile(current.failed ? 'is-fail' : '', current.failed ? 'circle-x' : 'circle-check',
+      'Failing tests', esc(fmtCount(current.failed)),
+      current.failed ? 'In each suite\'s newest run' : 'None in any suite\'s newest run'),
+    tile(current.skipped ? 'is-skip' : '', 'circle-minus', 'Skipped tests',
+      esc(fmtCount(current.skipped)), 'Counted, but not run'),
     tile('', 'trending-up', 'Change in range',
       esc(inRange.length > 1 ? fmtSignedCount(last.total - first.total) : '--'),
       inRange.length > 1 ? `Since ${fmtDate(first.ts)}` : 'Needs two runs in range'),
   ].join('');
 
   // Suites that ran but printed no census line are not in any of this.
-  const silent = new Set(state.rows.map((r) => r.suite));
-  for (const name of series.keys()) silent.delete(name);
   sub.textContent = `Every suite that prints a test count, each at its newest count as of `
-    + `each run.${silent.size ? ` ${silent.size} other suites print none and are not counted.` : ''}`;
+    + `each run.${silent ? ` ${silent} other suites print none and are not counted.` : ''}`;
 
   if (inRange.length < 2) {
     host.innerHTML = `<div class="ci-empty">${timeline.length > inRange.length
@@ -1700,7 +1560,7 @@ function renderFlow() {
     return;
   }
 
-  const cutoff = rangeCutoff(state.docs);
+  const cutoff = rangeCutoff(latestOf(state.docs), state.range);
   const flows = reportFlows().filter((f) => f.ts >= cutoff);
   // From the start of the range, or of the data when the range reaches past it.
   const buckets = flowBuckets(flows, Math.max(cutoff, state.docs[0]?.ts ?? 0));
@@ -1893,7 +1753,7 @@ function renderSparks(stats) {
     return `
       <button type="button" class="ci-spark${on ? ' is-selected' : ''}"
               data-suite="${esc(s.suite)}"
-              title="${esc(s.suite)} — mean ${esc(fmtDuration(s.mean))}, ${s.runs} runs">
+              title="${esc(s.suite)} — mean ${esc(fmtDuration(s.mean))}, ${s.runs} ${dayMode() ? 'days' : 'runs'}">
         <span class="ci-spark-name">${esc(s.suite)}</span>
         <svg viewBox="0 0 ${W} ${H}" aria-hidden="true">
           <path class="ci-spark-line" d="${d}" style="stroke:${color}" />
@@ -1945,9 +1805,15 @@ function renderTable(stats) {
     return sign * (a[col] - b[col]);
   });
 
+  // Over 30 days and up, every point is a suite's median for one day, so the
+  // columns are statistics over days, and say so.
+  const days = dayMode();
+  const colLabel = (key, label) => (days
+    ? { runs: 'Days', mean: 'Mean of daily medians', p90: 'p90 of daily medians' }[key] ?? label
+    : label);
   const head = COLS.map(([key, label]) => `
     <th scope="col">
-      <button type="button" data-col="${key}">${label}${
+      <button type="button" data-col="${key}">${colLabel(key, label)}${
         col === key ? `<span class="arrow">${dir === 'asc' ? '↑' : '↓'}</span>` : ''
       }</button>
     </th>`).join('');
@@ -1996,9 +1862,7 @@ function statusPill(status) {
 // ── RENDER: SKIP LEDGER ─────────────────────────────────────────────────────
 
 function renderSkips() {
-  const rows = state.rows.filter((r) => envKey(r) === state.env);
-  const latestTs = rows.reduce((m, r) => Math.max(m, r.ts), 0);
-  const latest = rows.filter((r) => r.ts === latestTs);
+  const latest = state.timings.latest;
 
   // The two reason fields are nullable by different conventions: skip_reason
   // is an explicit null on most rows, partial_skip_reason is absent entirely.
@@ -2011,9 +1875,9 @@ function renderSkips() {
 
   for (const r of latest) {
     if (r.status === 'skip') {
-      add('skip', r.skip_reason || 'no reason recorded', seriesName(r));
+      add('skip', r.skip_reason || 'no reason recorded', r.suite);
     } else if (r.partial_skip_reason != null) {
-      add('partial', r.partial_skip_reason, seriesName(r));
+      add('partial', r.partial_skip_reason, r.suite);
     }
   }
 
@@ -2056,7 +1920,7 @@ function renderSkips() {
 // is exactly what happened on 2026-10-01. They stay one click away in the
 // sparkline grid; they are just not what the page opens on.
 function defaultSuites() {
-  const stats = suiteStats(bySuite(envRows()));
+  const stats = suiteStats(bySuite());
   const top = stats
     .sort((a, b) => (a.runs > 1 ? 0 : 1) - (b.runs > 1 ? 0 : 1) || b.mean - a.mean)
     .slice(0, MAX_SERIES)
@@ -2067,7 +1931,7 @@ function defaultSuites() {
 }
 
 function render() {
-  const stats = suiteStats(bySuite(envRows()));
+  const stats = suiteStats(bySuite());
   renderProvenance();
   renderTiles();
   renderFilters();
@@ -2109,20 +1973,69 @@ function wireSegToggle(attr, apply) {
   }
 }
 
-// A row with a `kind` is a measurement, not a suite run (the web-perf rows
-// tools/ci/collect-playwright-timings.py --web-perf writes); the suite views
-// leave it out rather than plot it as a suite.
-function isSuiteRow(r) {
-  return !r.kind;
+// A transient problem worth saying, without taking the page down: it goes
+// where the provenance line was, until the next render puts that back.
+function notice(message) {
+  document.getElementById('ci-provenance').textContent = message;
 }
 
-async function fetchNDJSON(url) {
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
-  return {
-    year: res.headers.get('X-Metrics-Year'),
-    rows: parseNDJSON(await res.text()),
-  };
+// GET /api/ci/<path>, pinned to the meta's ingest version. A versioned URL's
+// response never changes, so the browser keeps it; between pushes a reload
+// costs only the meta. A stale version is redirected to the current one, so a
+// tab left open across a push still gets current data.
+async function fetchJSON(path, params = {}) {
+  const q = new URLSearchParams({ ...params, v: String(state.version) });
+  const res = await fetch(`${API}/${path}?${q}`, {
+    signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+  });
+  if (!res.ok) {
+    let detail = res.statusText;
+    try { detail = (await res.json()).error ?? detail; } catch { /* not JSON */ }
+    throw new Error(`${res.status} ${detail}`.trim());
+  }
+  return res.json();
+}
+
+// One (environment, range) pair is one request, kept for the session: the
+// response is immutable for this version, so going back to a pair is free.
+const timingsMemo = new Map();
+
+async function loadTimings(env, range) {
+  const key = `${env}\u0000${range}`;
+  let t = timingsMemo.get(key);
+  if (!t) {
+    t = await fetchJSON('timings', { env, range });
+    timingsMemo.set(key, t);
+  }
+  setTimings(t);
+}
+
+// The Test counts and Benchmarks tabs are the only readers of their data, so
+// it is fetched the first time either opens rather than on every view.
+let countsLoad = null;
+function ensureCounts() {
+  countsLoad ??= fetchJSON('counts')
+    .then((c) => { state.counts = c; })
+    .catch((err) => {
+      state.countsError = `Test counts are unavailable (${err.message}).`;
+    })
+    .then(() => { if (state.tab === 'counts') renderCounts(); });
+  return countsLoad;
+}
+
+let benchLoad = null;
+function ensureBench() {
+  benchLoad ??= fetchJSON('bench')
+    .then(({ rows }) => {
+      state.bench = rows.sort((a, b) => a.ts - b.ts);
+      if (!state.bench.length) state.benchError = 'No benchmark rows have been published yet.';
+    })
+    .catch((err) => {
+      state.benchError = `Benchmarks are unavailable (${err.message}). The`
+        + ' nightly arm64 workflow publishes them.';
+    })
+    .then(() => { if (state.tab === 'bench') renderBench(); });
+  return benchLoad;
 }
 
 // Show one tab panel and hide the others. Re-renders the newly visible chart
@@ -2140,51 +2053,44 @@ function switchTab(tab) {
   }
   // A chart drawn into a hidden panel has a fallback viewBox width; redraw now
   // that the panel is visible so it fits the real column.
-  if (tab === 'counts') renderCounts();
+  if (tab === 'counts') { renderCounts(); ensureCounts(); }
   if (tab === 'code') renderLoc();
   if (tab === 'spices') renderSpices();
   if (tab === 'reports') { renderDocsTiles(); renderDocs(); renderFlow(); renderGuides(); }
-  if (tab === 'bench') renderBench();
+  if (tab === 'bench') { renderBench(); ensureBench(); }
   writeURL();
 }
 
-// Replace the recent window with the full year, keeping the selected
-// environment. Only reachable from a wide range or an aged-out shared link.
-async function loadFull() {
-  const full = await fetchNDJSON(API);
-  if (!full.rows.length) throw new Error('empty');
-  state.rows = full.rows.filter(isSuiteRow);
-  state.year = full.year;
-  state.windowed = false;
-  state.envs = buildEnvs(state.rows);
-}
-
 async function boot() {
-  // All three files at once, and settled rather than raced: the line counts
-  // and doc counts are independent files, so they must neither delay the
-  // timings nor be able to take the page down with them. A fresh ci-metrics
-  // branch legitimately has no repo-loc or docs-counts file at all, and that
-  // costs one panel each.
-  //
-  // Timings: the recent window first. The full year is 40+ MB and the page opens
-  // on 7 days, so downloading it all up front was most of the load time. A missing
-  // window (the publisher has not written one yet) falls back to the full log.
-  const firstUrl = new URLSearchParams(location.search).get('range');
-  const wantsFull = firstUrl && !RECENT_RANGES.includes(firstUrl);
-  const fetchTimings = async () => {
-    if (!wantsFull) {
-      try {
-        const recent = await fetchNDJSON(`${API}?window=recent`);
-        if (recent.rows.length) return { ...recent, windowed: true };
-      } catch { /* fall through to the full log */ }
-    }
-    return { ...(await fetchNDJSON(API)), windowed: false };
-  };
-  const [timings, loc, docs, bench] = await Promise.allSettled([
-    fetchTimings(),
-    fetchNDJSON(LOC_API),
-    fetchNDJSON(DOCS_API),
-    fetchNDJSON(BENCH_API),
+  let meta;
+  try {
+    const res = await fetch(`${API}/meta`, { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
+    if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+    meta = await res.json();
+  } catch (err) {
+    fail(`Could not load CI metrics (${err.message}). The data is published from
+          pushes to main; try again in a few minutes.`);
+    return;
+  }
+  state.version = meta.version;
+  state.ingestAt = meta.at;
+  state.envs = meta.envs;
+  if (!state.envs.length) {
+    fail('No timing rows have been published yet.');
+    return;
+  }
+
+  const url = readURL();
+  state.env = state.envs.some((e) => e.key === url.env) ? url.env : state.envs[0].key;
+  if (url.range && RANGES.some(([v]) => v === url.range)) state.range = url.range;
+
+  // The timings, line counts and doc counts at once, and settled rather than
+  // raced: the line and doc counts are independent, so they must neither
+  // delay the timings nor be able to take the page down with them.
+  const [timings, loc, docs] = await Promise.allSettled([
+    loadTimings(state.env, state.range),
+    fetchJSON('loc'),
+    fetchJSON('docs'),
   ]);
 
   if (timings.status === 'rejected') {
@@ -2193,66 +2099,23 @@ async function boot() {
     return;
   }
 
-  state.year = timings.value.year;
-  state.rows = timings.value.rows.filter(isSuiteRow);
-  state.windowed = timings.value.windowed;
-  if (!state.rows.length) {
-    fail('No timing rows have been published yet.');
-    return;
-  }
-
   if (loc.status === 'fulfilled') {
-    state.loc = loc.value.rows.sort((a, b) => a.ts - b.ts);
-    if (!state.loc.length) {
-      state.locError = 'No line counts have been published yet.';
-    }
+    state.loc = loc.value.rows;
+    if (!state.loc.length) state.locError = 'No line counts have been published yet.';
   } else {
-    state.locError = `Line counts are unavailable (${loc.reason.message}). They are`
-      + ' published on each push to main, starting with the first one after'
-      + ' this panel shipped.';
+    state.locError = `Line counts are unavailable (${loc.reason.message}).`;
   }
 
   if (docs.status === 'fulfilled') {
-    state.docs = docs.value.rows.sort((a, b) => a.ts - b.ts);
+    state.docs = docs.value.rows;
     for (const r of state.docs) {
       r.retired_plans = (r.held_plans ?? 0) + (r.v1_plans ?? 0);
     }
-    if (!state.docs.length) {
-      state.docsError = 'No doc counts have been published yet.';
-    }
+    if (!state.docs.length) state.docsError = 'No doc counts have been published yet.';
   } else {
-    state.docsError = `Doc counts are unavailable (${docs.reason.message}). They are`
-      + ' published on each push to main, starting with the first one after'
-      + ' this panel shipped.';
+    state.docsError = `Doc counts are unavailable (${docs.reason.message}).`;
   }
 
-  if (bench.status === 'fulfilled') {
-    state.bench = bench.value.rows.filter((r) => r.kind === 'bench')
-      .sort((a, b) => a.ts - b.ts);
-    if (!state.bench.length) {
-      state.benchError = 'No benchmark rows have been published yet.';
-    }
-  } else {
-    state.benchError = `Benchmarks are unavailable (${bench.reason.message}). The`
-      + ' nightly arm64 workflow publishes them, starting with its first run after'
-      + ' this panel shipped.';
-  }
-
-  state.envs = buildEnvs(state.rows);
-
-  const url = readURL();
-  // A shared link can name an environment or suite the recent window has already
-  // aged out. Rather than silently open on a different one, fetch the full log.
-  if (state.windowed) {
-    const missingEnv = url.env && !state.envs.some((e) => e.key === url.env);
-    const known0 = new Set(state.rows.map(seriesName));
-    const missingSuite = (url.suites ?? []).some((n) => n && !known0.has(n));
-    if (missingEnv || missingSuite) {
-      try { await loadFull(); } catch { /* keep the window; defaults apply */ }
-    }
-  }
-  state.env = state.envs.some((e) => e.key === url.env) ? url.env : state.envs[0].key;
-  if (url.range && RANGES.some(([v]) => v === url.range)) state.range = url.range;
   if (url.scale === 'log') state.scale = 'log';
   if (url.statuses) {
     const valid = url.statuses.filter((s) => STATUSES.includes(s));
@@ -2269,7 +2132,9 @@ async function boot() {
   if (url.tab && TABS.includes(url.tab)) state.tab = url.tab;
   if (url.bench && BENCH_VIEWS.some(([key]) => key === url.bench)) state.benchView = url.bench;
 
-  const known = new Set(state.rows.map(seriesName));
+  // A shared link can name a suite this environment and range never ran; its
+  // slot is left empty rather than charted as nothing.
+  const known = new Set(state.timings.suites);
   state.suites = url.suites
     ? Array.from({ length: MAX_SERIES }, (_, i) =>
         (known.has(url.suites[i]) ? url.suites[i] : null))
@@ -2286,25 +2151,29 @@ async function boot() {
 
   // The range <select> is static HTML shared across all tabs, so it is wired
   // here rather than in renderFilters (which only owns the Tests-tab controls).
+  // A new range is one request for this environment; the other tabs filter
+  // what they already have.
   const range = document.getElementById('ci-range');
   range.value = state.range;
   range.onchange = async (e) => {
-    state.range = e.target.value;
-    if (state.windowed && !RECENT_RANGES.includes(state.range)) {
-      range.disabled = true;
-      document.getElementById('ci-provenance').textContent = 'Loading full history…';
-      try {
-        await loadFull();
-      } catch (err) {
-        // Stay on what we have: the window covers 7 days, so say so and snap back.
-        state.range = DEFAULT_RANGE;
-        range.value = state.range;
-        document.getElementById('ci-provenance').textContent =
-          `Could not load the full history (${err.message}).`;
-      }
-      range.disabled = false;
+    const want = e.target.value;
+    range.disabled = true;
+    let failed = null;
+    try {
+      await loadTimings(state.env, want);
+      state.range = want;
+      const kept = new Set(state.timings.suites);
+      state.suites = state.suites.map((s) => (s && kept.has(s) ? s : null));
+      if (!selected().length) state.suites = defaultSuites();
+    } catch (err) {
+      failed = err;
+      range.value = state.range;
     }
+    range.disabled = false;
     render();
+    // After the render, which would otherwise put the provenance line back
+    // over it.
+    if (failed) notice(`Could not load that range (${failed.message}).`);
   };
 
   // Tab bar: static HTML, wired here.
@@ -2315,7 +2184,7 @@ async function boot() {
   const search = document.getElementById('ci-spark-search');
   search.addEventListener('input', () => {
     state.sparkFilter = search.value;
-    renderSparks(suiteStats(bySuite(envRows())));
+    renderSparks(suiteStats(bySuite()));
   });
 
   render();
@@ -2345,4 +2214,11 @@ async function boot() {
   for (const el of redraw.keys()) ro.observe(el);
 }
 
-boot();
+// Anything boot() throws past its own fail() calls would otherwise leave the
+// spinner up forever with the reason only in the console.
+boot().catch((err) => {
+  console.error(err);
+  document.getElementById('ci-body').hidden = true;
+  document.getElementById('ci-state').hidden = false;
+  fail(`The dashboard failed to load (${err.message}).`);
+});

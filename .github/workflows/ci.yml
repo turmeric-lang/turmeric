@@ -1497,7 +1497,21 @@ jobs:
           else
             echo "::warning::no suite timings collected; publishing the line and doc counts alone"
           fi
-          bash tools/ci/publish-timings.sh all-timings.jsonl --loc repo-loc.jsonl --docs docs-counts.jsonl
+
+      # The store /ci reads (docs/upcoming/ci-metrics-d1-plan.md): one POST to
+      # the site's Worker, which writes D1 in one transaction. Idempotent, so a
+      # re-run of this job overwrites its rows rather than doubling them.
+      - name: Report to the /ci store
+        env:
+          CI_METRICS_TOKEN: ${{ secrets.CI_METRICS_TOKEN }}
+        run: python3 tools/ci/report-metrics.py all-timings.jsonl --loc repo-loc.jsonl --docs docs-counts.jsonl
+
+      # The ci-metrics branch keeps being appended until the D1 store has run
+      # in production for a while (the plan's retirement phase). Independent of
+      # the step above: either one failing leaves the other's copy whole.
+      - name: Append to the ci-metrics branch
+        if: always()
+        run: bash tools/ci/publish-timings.sh all-timings.jsonl --loc repo-loc.jsonl --docs docs-counts.jsonl
 
   windows:
     needs: changes

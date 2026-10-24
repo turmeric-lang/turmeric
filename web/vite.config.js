@@ -187,6 +187,20 @@ const SERVER_HEADERS = {
   'Content-Security-Policy': CONTENT_SECURITY_POLICY,
 };
 
+// The /ci store under test (web/tests/ci-d1-setup.mjs). The Playwright run sets
+// both variables: a local D1 in a throwaway directory, so a test run never
+// writes into the developer's own `.wrangler/state`, and a known bearer token
+// for the report endpoint. Without them this is the ordinary dev server, whose
+// token (if any) comes from web/.dev.vars.
+const ciTestState = process.env.TUR_CI_TEST_STATE;
+const ciTestToken = process.env.TUR_CI_TEST_TOKEN;
+const cloudflareOptions = ciTestState && ciTestToken
+  ? {
+      persistState: { path: ciTestState },
+      config: { vars: { CI_METRICS_TOKEN: ciTestToken } },
+    }
+  : {};
+
 export default defineConfig({
   base: '/',
   environments: {
@@ -218,5 +232,5 @@ export default defineConfig({
   preview: {
     headers: SERVER_HEADERS,
   },
-  plugins: [injectVersion(), injectSwVersion(), swKillSwitch(), stampCsp(), cloudflare()],
+  plugins: [injectVersion(), injectSwVersion(), swKillSwitch(), stampCsp(), cloudflare(cloudflareOptions)],
 });

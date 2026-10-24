@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/turmeric-lang/turmeric/actions/workflows/ci.yml/badge.svg)](https://github.com/turmeric-lang/turmeric/actions/workflows/ci.yml)
 
-**Latest release:** `v0.70.3` -- `gen-collect` now returns a typed `(Vec T)` with correct element inference, and the wasm target gets a 16 MiB stack, overflow checks and real tail calls.
+**Latest release:** `v0.70.4` -- The /ci metrics page now reads a compact D1-backed store, cutting the default view from 12.8 MB to about 95 KB and showing a clear error instead of spinning forever when loading fails.
 
 ## What
 

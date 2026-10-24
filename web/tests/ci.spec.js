@@ -1,24 +1,21 @@
 import { test, expect } from '@playwright/test';
+import {
+  orderEnvs, summarizeEnvs, timingsFromRows, countsFromRows, slimCommitRows,
+  LOC_BULKY, DOCS_BULKY,
+} from '../ci-aggregate.js';
 
 // /ci — the CI suite-timings dashboard.
 //
-// These hit the live worker route, which proxies the `ci-metrics` branch on
-// GitHub. That is deliberate: the proxy is the part most likely to break
-// silently (a renamed branch, a year rollover), and a fixture would hide it.
+// The page tests run on FIXTURES, served at /api/ci/* in the shapes the Worker
+// sends. The stub builds each response with ci-aggregate.js -- the module the
+// Worker itself builds them with -- so a stubbed response cannot drift from a
+// real one. The Worker's D1 side has its own round-trip tests in
+// ci-api.spec.js; the `request` tests below still cover the old branch proxy
+// while it is kept.
 
 test.describe('CI metrics dashboard', () => {
-  // Every page test runs on the fixture. The live route is covered by the
-  // `request` tests below; a page test that downloaded the real log would be
-  // measuring GitHub's CDN, and the full year is 40+ MB.
-  test.beforeEach(async ({ page }) => { await stubTimings(page); });
+  test.beforeEach(async ({ page }) => { await stubApi(page); });
 
-  // The line-count and docs panels are driven from FIXTURES, unlike everything
-  // else here. repo-loc-<year>.jsonl and docs-counts-<year>.jsonl are absent
-  // from the ci-metrics branch until the first publish after the panels
-  // shipped, so against live data these assertions would be skipped exactly
-  // when they are new -- which is when they are worth most. The proxy that
-  // serves each file keeps its own live test below.
-  //
   // Timestamps are relative to now, a few hours apart, so the rows land inside
   // every range the page offers -- including the 7-day default and `1d`.
   function locFixture() {
@@ -29,7 +26,7 @@ test.describe('CI metrics dashboard', () => {
       ['ccccccc3333333333333333333333333333cccc3', 406100, 168900, 13500, 4140, 1556000],
       ['ddddddd4444444444444444444444444444dddd4', 407783, 168879, 13528, 4144, 1556131],
     ];
-    return rows.map(([sha, code, tests, bench, example, generated], i) => JSON.stringify({
+    return rows.map(([sha, code, tests, bench, example, generated], i) => ({
       ts: now - (rows.length - 1 - i) * 5 * 3600,
       sha,
       code_lines: code,
@@ -37,7 +34,7 @@ test.describe('CI metrics dashboard', () => {
       bench_lines: bench,
       example_lines: example,
       generated_lines: generated,
-    })).join('\n');
+    }));
   }
 
   function docsFixture() {
@@ -54,7 +51,7 @@ test.describe('CI metrics dashboard', () => {
       ['ccccccc3333333333333333333333333333cccc3', 30, 27, 10, 15, 3, 2, 154, 20, 103, 76],
       ['ddddddd4444444444444444444444444444dddd4', 30, 29, 10, 14, 3, 3, 155, 21, 106, 77],
     ];
-    return rows.map(([sha, open_plans, open_reports, active, held, v1, spices, tg, sg, rf, ra], i) => JSON.stringify({
+    return rows.map(([sha, open_plans, open_reports, active, held, v1, spices, tg, sg, rf, ra], i) => ({
       ts: now - (rows.length - 1 - i) * 5 * 3600,
       sha,
       open_plans,
@@ -68,24 +65,6 @@ test.describe('CI metrics dashboard', () => {
       spices: sg == null ? null : 40 + i,
       spice_names: sg == null ? null : ['ansi', 'json', 'raylib'],
       ...(rf == null ? {} : { reports_filed: rf, reports_archived: ra }),
-    })).join('\n');
-  }
-
-  async function stubLoc(page) {
-    const body = locFixture();
-    await page.route('**/api/ci-loc*', (route) => route.fulfill({
-      status: 200,
-      headers: { 'Content-Type': 'application/x-ndjson', 'X-Metrics-Year': '2026' },
-      body,
-    }));
-  }
-
-  async function stubDocs(page) {
-    const body = docsFixture();
-    await page.route('**/api/ci-docs*', (route) => route.fulfill({
-      status: 200,
-      headers: { 'Content-Type': 'application/x-ndjson', 'X-Metrics-Year': '2026' },
-      body,
     }));
   }
 
@@ -112,21 +91,10 @@ test.describe('CI metrics dashboard', () => {
                   suite: 'bench:mut-map-reassign-1m/cc/binary_bytes',
                   value: 48144 + i, cv: null, noisy: false });
     }
-    return rows.map((r) => JSON.stringify(r)).join('\n');
+    return rows;
   }
 
-  async function stubBench(page) {
-    const body = benchFixture();
-    await page.route('**/api/ci-bench*', (route) => route.fulfill({
-      status: 200,
-      headers: { 'Content-Type': 'application/x-ndjson', 'X-Metrics-Year': '2026' },
-      body,
-    }));
-  }
-
-  // A small timings fixture for the tests that need known data or must not
-  // depend on a 40 MB live download. `recentOnly` makes the full log 502, so a
-  // test can prove the page did not need it.
+  // Two environments, 26 suites, six runs an hour apart.
   function timingsFixture() {
     const now = Math.floor(Date.now() / 1000);
     const envs = [
@@ -152,28 +120,52 @@ test.describe('CI metrics dashboard', () => {
               : suite === 'tur_spice_resolver_tests'
                 ? { passed: 80, failed: 0 }
                 : {};
-          rows.push(JSON.stringify({
+          rows.push({
             branch: 'main', build_type: 'Debug', ...env, ts: now - i * 3600,
             sha: 'a'.repeat(40), run_id: String(i), suite, status: 'pass',
             // Differs per environment so switching it visibly redraws the table.
             duration_ms: 1000 * (suites.length - k) * (e + 1) + i * 10 * (e + 1),
             shard_index: null, shard_total: null, skip_reason: null, ...counted,
-          }));
+          });
         });
       }
     }
-    return rows.join('\n');
+    return rows;
   }
 
-  async function stubTimings(page, { recentOnly = false } = {}) {
-    const body = timingsFixture();
-    await page.route('**/api/ci-timings*', (route) => {
-      const recent = route.request().url().includes('window=recent');
-      if (recentOnly && !recent) return route.fulfill({ status: 502, body: 'no\n' });
+  // Serve /api/ci/* from fixtures. `fail` maps an endpoint name to a status to
+  // answer it with instead. A later call replaces an earlier one: Playwright
+  // tries the most recently registered route first.
+  async function stubApi(page, {
+    timings = timingsFixture(), loc = locFixture(), docs = docsFixture(),
+    bench = benchFixture(), fail = {},
+  } = {}) {
+    const latest = timings.reduce((m, r) => Math.max(m, r.ts), 0);
+    await page.route('**/api/ci/**', (route) => {
+      const url = new URL(route.request().url());
+      const name = url.pathname.split('/').pop();
+      if (fail[name]) {
+        return route.fulfill({
+          status: fail[name],
+          contentType: 'application/json',
+          body: JSON.stringify({ error: `stubbed ${name} failure` }),
+        });
+      }
+      const p = url.searchParams;
+      const body = {
+        meta: () => ({
+          version: 1, at: latest, latest_ts: latest,
+          envs: orderEnvs(summarizeEnvs(timings)),
+        }),
+        timings: () => timingsFromRows(timings, p.get('env'), p.get('range')),
+        counts: () => ({ ...countsFromRows(timings), latest_ts: latest }),
+        loc: () => ({ rows: slimCommitRows(loc, LOC_BULKY) }),
+        docs: () => ({ rows: slimCommitRows(docs, DOCS_BULKY) }),
+        bench: () => ({ rows: bench }),
+      }[name];
+      if (!body) return route.fulfill({ status: 404, body: '{}' });
       return route.fulfill({
-        status: 200,
-        headers: { 'Content-Type': 'application/x-ndjson', 'X-Metrics-Year': '2026' },
-        body,
+        status: 200, contentType: 'application/json', body: JSON.stringify(body()),
       });
     });
   }
@@ -272,13 +264,6 @@ test.describe('CI metrics dashboard', () => {
     page.on('pageerror', (e) => errors.push(e.message));
     page.on('console', (m) => { if (m.type() === 'error') errors.push(m.text()); });
 
-    // Stubbed so a legitimately-absent repo-loc / docs-counts / bench file does
-    // not show up here as a 502 in the console (bench-<year>.jsonl does not
-    // exist until the nightly's first publish). The degraded paths have their
-    // own tests.
-    await stubLoc(page);
-    await stubDocs(page);
-    await stubBench(page);
     await page.goto('/ci');
 
     await expect(page.locator('#ci-body')).toBeVisible({ timeout: 20_000 });
@@ -345,9 +330,11 @@ test.describe('CI metrics dashboard', () => {
     expect(options.join(' ')).toMatch(/macOS|Linux/);
 
     const before = await page.locator('#ci-table tbody').innerHTML();
+    // Switching is a request for that environment's timings, so the redraw
+    // lands when it answers.
     await env.selectOption({ index: 1 });
     await expect(page.locator('#ci-table tbody')).not.toHaveText('');
-    expect(await page.locator('#ci-table tbody').innerHTML()).not.toBe(before);
+    await expect.poll(() => page.locator('#ci-table tbody').innerHTML()).not.toBe(before);
     await expect(page).toHaveURL(/env=/);
   });
 
@@ -414,7 +401,6 @@ test.describe('CI metrics dashboard', () => {
   });
 
   test('the benchmarks panel charts the nightly rows, one engine per view', async ({ page }) => {
-    await stubBench(page);
     await page.goto('/ci');
     await expect(page.locator('#ci-body')).toBeVisible({ timeout: 20_000 });
 
@@ -440,9 +426,7 @@ test.describe('CI metrics dashboard', () => {
   });
 
   test('the benchmarks panel says so when nothing has been published', async ({ page }) => {
-    await page.route('**/api/ci-bench*', (route) => route.fulfill({
-      status: 502, headers: { 'Content-Type': 'text/plain' }, body: 'no benchmark rows available\n',
-    }));
+    await stubApi(page, { fail: { bench: 502 } });
     await page.goto('/ci?tab=bench');
     await expect(page.locator('#ci-body')).toBeVisible({ timeout: 20_000 });
     await expect(page.locator('#ci-bench-chart .ci-empty')).toContainText('Benchmarks are unavailable');
@@ -452,8 +436,6 @@ test.describe('CI metrics dashboard', () => {
   });
 
   test('the line-count panel charts product vs test lines', async ({ page }) => {
-    await stubLoc(page);
-    await stubDocs(page);
     await page.goto('/ci');
     await expect(page.locator('#ci-body')).toBeVisible({ timeout: 20_000 });
 
@@ -494,15 +476,13 @@ test.describe('CI metrics dashboard', () => {
   // What the panel shows the day the first row lands: one point is a dot and no
   // line, which reads as a broken chart unless it says otherwise.
   test('a single line-count row says so instead of drawing a lone dot', async ({ page }) => {
-    await page.route('**/api/ci-loc*', (route) => route.fulfill({
-      status: 200,
-      headers: { 'Content-Type': 'application/x-ndjson' },
-      body: JSON.stringify({
+    await stubApi(page, {
+      loc: [{
         ts: Math.floor(Date.now() / 1000), sha: 'fffffff9999999999999999999999999999fffff',
         code_lines: 407783, test_lines: 168879, bench_lines: 13528,
         example_lines: 4144, generated_lines: 1556131,
-      }),
-    }));
+      }],
+    });
     await page.goto('/ci');
     await expect(page.locator('#ci-body')).toBeVisible({ timeout: 20_000 });
 
@@ -514,16 +494,12 @@ test.describe('CI metrics dashboard', () => {
     await expect(page.locator('#ci-loc-legend .ci-legend-toggle')).toHaveCount(5);
   });
 
-  // The route legitimately 502s until the first publish after this shipped, so
-  // the degraded path is the one users see first. It must cost one panel, not
-  // the page.
-  test('a missing line-count file costs only its own panel', async ({ page }) => {
+  // A failed panel must cost that panel, not the page.
+  test('a failed line-count request costs only its own panel', async ({ page }) => {
     const errors = [];
     page.on('pageerror', (e) => errors.push(e.message));
 
-    await page.route('**/api/ci-loc*', (route) => route.fulfill({
-      status: 502, body: 'no line counts available\n',
-    }));
+    await stubApi(page, { fail: { loc: 502 } });
     await page.goto('/ci');
     await expect(page.locator('#ci-body')).toBeVisible({ timeout: 20_000 });
 
@@ -537,8 +513,6 @@ test.describe('CI metrics dashboard', () => {
   });
 
   test('the docs panel charts open plans and reports', async ({ page }) => {
-    await stubLoc(page);
-    await stubDocs(page);
     await page.goto('/ci');
     await expect(page.locator('#ci-body')).toBeVisible({ timeout: 20_000 });
 
@@ -577,8 +551,6 @@ test.describe('CI metrics dashboard', () => {
   });
 
   test('the Test counts tab charts total tests', async ({ page }) => {
-    await stubLoc(page);
-    await stubDocs(page);
     await page.goto('/ci');
     await expect(page.locator('#ci-body')).toBeVisible({ timeout: 20_000 });
 
@@ -606,15 +578,9 @@ test.describe('CI metrics dashboard', () => {
   // a few suites. The total carries every other suite's newest count forward
   // rather than dropping to what that one run happened to execute.
   test('a run that executed only some suites does not dip the total', async ({ page }) => {
-    const body = timingsFixture().split('\n').filter((l) => {
-      const r = JSON.parse(l);
-      return !(r.run_id === '0' && r.suite !== 'tur_tests');
-    }).join('\n');
-    await page.route('**/api/ci-timings*', (route) => route.fulfill({
-      status: 200,
-      headers: { 'Content-Type': 'application/x-ndjson', 'X-Metrics-Year': '2026' },
-      body,
-    }));
+    await stubApi(page, {
+      timings: timingsFixture().filter((r) => !(r.run_id === '0' && r.suite !== 'tur_tests')),
+    });
     await page.goto('/ci?tab=counts');
     await expect(page.locator('#ci-body')).toBeVisible({ timeout: 20_000 });
 
@@ -628,8 +594,6 @@ test.describe('CI metrics dashboard', () => {
   });
 
   test('the Reports tab charts reports archived minus filed', async ({ page }) => {
-    await stubLoc(page);
-    await stubDocs(page);
     await page.goto('/ci?tab=reports');
     await expect(page.locator('#ci-body')).toBeVisible({ timeout: 20_000 });
 
@@ -650,12 +614,7 @@ test.describe('CI metrics dashboard', () => {
   });
 
   test('the report flow names the split when every push carries it', async ({ page }) => {
-    await stubLoc(page);
-    await page.route('**/api/ci-docs*', (route) => route.fulfill({
-      status: 200,
-      headers: { 'Content-Type': 'application/x-ndjson' },
-      body: docsFixture().split('\n').slice(1).join('\n'),
-    }));
+    await stubApi(page, { docs: docsFixture().slice(1) });
     await page.goto('/ci?tab=reports');
     await expect(page.locator('#ci-body')).toBeVisible({ timeout: 20_000 });
 
@@ -666,8 +625,6 @@ test.describe('CI metrics dashboard', () => {
   });
 
   test('the Reports tab counts Turmeric guides and spice guides', async ({ page }) => {
-    await stubLoc(page);
-    await stubDocs(page);
     await page.goto('/ci?tab=reports');
     await expect(page.locator('#ci-body')).toBeVisible({ timeout: 20_000 });
 
@@ -681,8 +638,6 @@ test.describe('CI metrics dashboard', () => {
   });
 
   test('the Spices tab shows the spice count, its trend and the names', async ({ page }) => {
-    await stubLoc(page);
-    await stubDocs(page);
     await page.goto('/ci');
     await expect(page.locator('#ci-body')).toBeVisible({ timeout: 20_000 });
 
@@ -694,70 +649,106 @@ test.describe('CI metrics dashboard', () => {
   });
 
   test('the Spices tab says "not measured" when no row carries the field', async ({ page }) => {
-    await stubLoc(page);
-    await page.route('**/api/ci-docs*', (route) => route.fulfill({
-      status: 200,
-      headers: { 'Content-Type': 'application/x-ndjson' },
-      body: docsFixture().split('\n').map((l) => {
-        const r = JSON.parse(l);
-        delete r.spices; delete r.spice_guides; delete r.spice_names;
-        return JSON.stringify(r);
-      }).join('\n'),
-    }));
+    await stubApi(page, {
+      docs: docsFixture().map(({ spices, spice_guides, spice_names, ...r }) => r),
+    });
     await page.goto('/ci?tab=spices');
     await expect(page.locator('#ci-body')).toBeVisible({ timeout: 20_000 });
     await expect(page.locator('#ci-spices-tiles .ci-tile').first()).toContainText('--');
     await expect(page.locator('#ci-spices-chart .ci-empty')).toContainText(/not measured/i);
   });
 
-  test('the page loads only the recent window, and the full log only for wide ranges', async ({ page }) => {
-    await stubLoc(page);
-    await stubDocs(page);
-    const urls = [];
-    page.on('request', (r) => { if (r.url().includes('/api/ci-timings')) urls.push(r.url()); });
+  // The server answers one (environment, range) pair per request. The page
+  // asks for exactly what it shows, never twice in a session, and fetches the
+  // Test counts and Benchmarks data only when their tab opens.
+  test('one request per environment and range, and lazy tabs load on first open', async ({ page }) => {
+    const calls = [];
+    page.on('request', (r) => {
+      const u = new URL(r.url());
+      if (u.pathname.startsWith('/api/ci/')) calls.push(`${u.pathname.slice(8)}${u.search}`);
+    });
+    const of = (name) => calls.filter((c) => c.startsWith(name));
 
     await page.goto('/ci');
     await expect(page.locator('#ci-body')).toBeVisible({ timeout: 20_000 });
-    expect(urls.filter((u) => u.includes('window=recent'))).toHaveLength(1);
-    expect(urls.filter((u) => !u.includes('window=recent'))).toHaveLength(0);
-    await expect(page.locator('#ci-provenance')).toContainText('suite-timings-recent.jsonl');
+    expect(of('meta')).toHaveLength(1);
+    expect(of('timings')).toHaveLength(1);
+    expect(of('timings')[0]).toMatch(/range=7d/);
+    expect(of('timings')[0]).toMatch(/v=1/);
+    expect(of('loc')).toHaveLength(1);
+    expect(of('docs')).toHaveLength(1);
+    expect(of('counts')).toHaveLength(0);
+    expect(of('bench')).toHaveLength(0);
+    await expect(page.locator('#ci-provenance')).toContainText('Ingest #1');
 
-    // 1d is still inside the window.
     await page.locator('#ci-range').selectOption('1d');
-    expect(urls.filter((u) => !u.includes('window=recent'))).toHaveLength(0);
+    await expect.poll(() => of('timings').length).toBe(2);
+    await page.locator('#ci-range').selectOption('7d');
+    await page.locator('#ci-range').selectOption('1d');
+    await expect(page.locator('#ci-chart .ci-series-line').first()).toBeAttached();
+    expect(of('timings')).toHaveLength(2);
 
-    // A wider range upgrades to the full log, once, and keeps the environment.
-    const envBefore = await page.locator('#ci-env').inputValue().catch(() => null);
-    await page.locator('#ci-range').selectOption('all');
-    await expect(page.locator('#ci-provenance')).toContainText('suite-timings-2026.jsonl');
-    expect(urls.filter((u) => !u.includes('window=recent'))).toHaveLength(1);
-    await page.locator('#ci-range').selectOption('30d');
-    expect(urls.filter((u) => !u.includes('window=recent'))).toHaveLength(1);
-    if (envBefore) await expect(page.locator('#ci-env')).toHaveValue(envBefore);
-    await expect(page.locator('#ci-chart .ci-series-line').first()).toBeVisible();
+    await page.locator('#ci-tab-counts').click();
+    await expect(page.locator('#ci-counts-chart .ci-series-line')).toHaveCount(1);
+    await page.locator('#ci-tab-tests').click();
+    await page.locator('#ci-tab-counts').click();
+    expect(of('counts')).toHaveLength(1);
   });
 
-  test('a missing recent window falls back to the full log', async ({ page }) => {
-    await stubLoc(page);
-    await stubDocs(page);
-    const body = timingsFixture();
-    await page.route('**/api/ci-timings*', (route) => (
-      route.request().url().includes('window=recent')
-        ? route.fulfill({ status: 502, body: 'no recent timings available\n' })
-        : route.fulfill({ status: 200, headers: { 'X-Metrics-Year': '2026' }, body })
-    ));
+  // 30 days and up chart one point per suite per day -- its median -- so the
+  // page says so rather than calling a day a run.
+  test('wide ranges chart daily medians and label them', async ({ page }) => {
+    await page.goto('/ci?range=30d');
+    await expect(page.locator('#ci-body')).toBeVisible({ timeout: 20_000 });
+    await expect(page.locator('#ci-chart .ci-axis-title')).toContainText('daily median');
+    await expect(page.locator('#ci-table thead')).toContainText('Days');
+    await expect(page.locator('#ci-table thead')).toContainText('Mean of daily medians');
+
+    await page.locator('#ci-range').selectOption('7d');
+    await expect(page.locator('#ci-chart .ci-axis-title')).toContainText('runs');
+    await expect(page.locator('#ci-table thead')).toContainText('Runs');
+  });
+
+  test('a failed range request keeps the current range and says why', async ({ page }) => {
     await page.goto('/ci');
     await expect(page.locator('#ci-body')).toBeVisible({ timeout: 20_000 });
-    await expect(page.locator('#ci-provenance')).toContainText('suite-timings-2026.jsonl');
+    await page.route('**/api/ci/timings?*range=all*', (route) => route.fulfill({
+      status: 503, contentType: 'application/json', body: '{"error":"stubbed"}',
+    }));
+    await page.locator('#ci-range').selectOption('all');
+    await expect(page.locator('#ci-provenance')).toContainText('Could not load that range (503 stubbed)');
+    await expect(page.locator('#ci-range')).toHaveValue('7d');
+    await expect(page.locator('#ci-range')).toBeEnabled();
+    await expect(page.locator('#ci-chart .ci-series-line').first()).toBeVisible();
+    await expect(page).not.toHaveURL(/range=/);
   });
 
-  test('a missing docs file costs only its own panel', async ({ page }) => {
+  // A response the page cannot render (here, timings with no `latest`) throws
+  // inside boot() after every fetch succeeded. It must still end the spinner.
+  test('an exception while booting is shown, not left in the console', async ({ page }) => {
+    await page.route('**/api/ci/timings?*', (route) => route.fulfill({
+      status: 200, contentType: 'application/json',
+      body: JSON.stringify({ mode: 'run', suites: [], runs: [], cells: [] }),
+    }));
+    await page.goto('/ci');
+    await expect(page.locator('#ci-state')).toHaveClass(/is-error/, { timeout: 20_000 });
+    await expect(page.locator('#ci-state')).toContainText('The dashboard failed to load');
+    await expect(page.locator('#ci-body')).toBeHidden();
+  });
+
+  test('a failed meta request says so instead of spinning', async ({ page }) => {
+    await stubApi(page, { fail: { meta: 503 } });
+    await page.goto('/ci');
+    await expect(page.locator('#ci-state')).toHaveClass(/is-error/, { timeout: 20_000 });
+    await expect(page.locator('#ci-state')).toContainText('503');
+    await expect(page.locator('#ci-body')).toBeHidden();
+  });
+
+  test('a failed docs request costs only its own panel', async ({ page }) => {
     const errors = [];
     page.on('pageerror', (e) => errors.push(e.message));
 
-    await page.route('**/api/ci-docs*', (route) => route.fulfill({
-      status: 502, body: 'no doc counts available\n',
-    }));
+    await stubApi(page, { fail: { docs: 502 } });
     await page.goto('/ci');
     await expect(page.locator('#ci-body')).toBeVisible({ timeout: 20_000 });
 
@@ -814,8 +805,6 @@ test.describe('CI metrics dashboard', () => {
 
   test('layout does not overflow horizontally at 480px', async ({ page }) => {
     await page.setViewportSize({ width: 480, height: 900 });
-    await stubLoc(page);
-    await stubDocs(page);
     await page.goto('/ci');
     await expect(page.locator('#ci-body')).toBeVisible({ timeout: 20_000 });
 

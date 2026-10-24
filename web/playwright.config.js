@@ -24,6 +24,13 @@ if (PORT === '3000') {
 }
 const ORIGIN = `http://localhost:${PORT}`;
 
+// /api/ci/* under test runs on a local D1 of its own (tests/ci-d1-setup.mjs
+// wipes and migrates it before the server starts) and a known report token.
+// Both reach the dev server through vite.config.js. Set here, in the runner, so
+// the server and the test workers agree.
+process.env.TUR_CI_TEST_STATE ??= `.wrangler/ci-test-state-${PORT}`;
+process.env.TUR_CI_TEST_TOKEN ??= 'ci-test-token';
+
 export default defineConfig({
     testDir: './tests',
     timeout: 60_000,
@@ -60,7 +67,7 @@ export default defineConfig({
         },
     ],
     webServer: {
-        command: `npm run dev -- --port ${PORT} --strictPort`,
+        command: `node tests/ci-d1-setup.mjs && npm run dev -- --port ${PORT} --strictPort`,
         url: ORIGIN,
         reuseExistingServer: false,
         timeout: 30_000,

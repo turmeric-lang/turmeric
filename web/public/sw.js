@@ -34,7 +34,7 @@
 // and note that until 2026-08-26 the plugin looked in dist/sw.js, which the
 // Cloudflare plugin does not write, so this literal was the *only* thing
 // keeping the version right.
-const CACHE_VERSION = 'tur-try-v1-0.70.3';
+const CACHE_VERSION = 'tur-try-v1-0.70.4';
 const PRECACHE = `${CACHE_VERSION}-precache`;
 const RUNTIME  = `${CACHE_VERSION}-runtime`;
 
@@ -267,6 +267,13 @@ self.addEventListener('fetch', (event) => {
 
     const url = new URL(request.url);
     if (url.origin !== self.location.origin) return;
+
+    // The Worker's API is never this worker's to cache. /api/ci/meta must be
+    // fresh -- answered cache-first it would hold /ci one ingest behind
+    // forever -- and the versioned /api/ci/* reads are immutable, which the
+    // browser's own HTTP cache already honors; storing every version here too
+    // would only grow the runtime cache by a copy per push.
+    if (url.pathname.startsWith('/api/')) return;
 
     // pack-status is written by this worker, not served by the origin. Answer
     // it straight from the cache so it never costs a doomed network round-trip.
