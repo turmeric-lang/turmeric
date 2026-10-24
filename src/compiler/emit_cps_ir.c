@@ -11648,7 +11648,7 @@ static void emit_lifted(CE *ce, const char *name, LHMode mode,
         ce->ctx->indent = 4;
         ce->ctx->current_fn_ret_ctype = "void";   /* the unwinder returns nothing */
         /* byval-spine-drop-past-early-exit: nor shares the signature verdict. */
-        bool sss = ce->ctx->current_fn_spine_drop_safe;
+        uint8_t sss = ce->ctx->current_fn_spine_drop_safe;
         ce->ctx->current_fn_spine_drop_safe = false;
         cps_pend_fire(ce->ctx, &unw);
         ce->ctx->current_fn_spine_drop_safe = sss;
@@ -15351,7 +15351,7 @@ static bool emit_cps_ir_try_fn_impl(EmitCtx *ctx, Buf *file, const Expr *e) {
     ctx->current_fn_ret_ctype = "int64_t";
     /* byval-spine-drop-past-early-exit: a CPS term is a different C function
      * from the one whose signature was judged; refuse the spine push in it. */
-    bool saved_cps_spine_safe = ctx->current_fn_spine_drop_safe;
+    uint8_t saved_cps_spine_safe = ctx->current_fn_spine_drop_safe;
     ctx->current_fn_spine_drop_safe = false;
     /* cps-self-tail-call-relies-on-sibling-call: a self tail call in this
      * body may jump back to here.  Not for a monomorph (the call names the

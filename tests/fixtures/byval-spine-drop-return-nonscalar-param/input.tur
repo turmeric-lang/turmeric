@@ -1,0 +1,28 @@
+;; byval-spine-drop-past-early-exit, residue 1: a by-value recursive local in
+;; a function that leaves through an explicit `return`.  Its spine joins the
+;; early-exit channel only when the channel's exits cannot carry a pointer into
+;; it.  That used to be read off the SIGNATURE -- every parameter and the result
+;; a plain number -- so one `Cfg` parameter leaked the spine on every call.  It
+;; is now read off the exits themselves: each `return`'s value, and each
+;; self-call's arguments, must reach nothing the let built.
+(defdata Rec [] (RCons [hd : int tl : Rec]) (RNil))
+(defstruct Cfg :copy [name : cstr k : int])
+
+;; a number out of the spine
+(defn once [i : int cfg : Cfg] : int
+  (let [xs (RCons i (RCons (.k cfg) (RNil)))]
+    (return (match xs (RCons h t) h (RNil) 0))))
+
+;; a fresh struct holding a number out of the spine, or the parameter
+(defn fresh-of [i : int cfg : Cfg] : Cfg
+  (let [xs (RCons i (RCons (.k cfg) (RNil)))]
+    (if (> i 100) (return cfg) 0)
+    (return (Cfg (.name cfg) (match xs (RCons h t) (+ h 1) (RNil) 0)))))
+
+(defn main [] : int
+  (let [^mut i 0 ^mut acc 0 c (Cfg "a" 2)]
+    (while (< i 50)
+      (set! acc (+ acc (once i c) (.k (fresh-of i c))))
+      (set! i (+ i 1)))
+    (println acc))                                   ; 1225 + 1275
+  0)

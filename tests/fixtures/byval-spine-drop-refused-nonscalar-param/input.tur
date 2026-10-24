@@ -10,9 +10,9 @@
 ;; `match`) would read a freed cell.
 ;;
 ;; So both gates refuse: the confinement walk sees the binder alias leave as an
-;; argument, and no drop is flagged for `xs`; the emitter's signature gate
-;; (`current_fn_spine_drop_safe`) is false besides, since `carry` is not a
-;; number.  The loop leaks its spine every turn, and that leak is the open
+;; argument, and no drop is flagged for `xs`; the emitter's own exit check
+;; (`tco_drop_use_ok`, and for a `return` `emit_spine_exits_unaliased`) refuses
+;; besides, since `t` is bound inside the let.  The loop leaks its spine every turn, and that leak is the open
 ;; residue `known-leak` names; a wrongly admitted free would show here as a
 ;; use-after-free, which a marker does not excuse.
 ;;

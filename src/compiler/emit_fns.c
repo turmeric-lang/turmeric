@@ -381,6 +381,79 @@ static bool tco_tail_values_scalar(const Expr *e) {
     }
 }
 
+/* byval-spine-drop-past-early-exit residue 1: can value `v`, leaving through
+ * the tail structure, carry a pointer to anything the enclosing let built?
+ * Not when its non-number parts name only parameters and globals: a part
+ * that is a plain number carries no pointer, and a parameter or a global was
+ * bound before the let, so it cannot hold the let's fresh spine (a `set!`
+ * that put one there is an escape the elaborator's confinement walk already
+ * refused the drop for).  Anything bound inside the let -- its own bindings,
+ * a match binder, an inner let -- may alias the spine and answers no. */
+static bool tco_leave_visit(const Expr *c, void *ud);
+static bool tco_leave_unaliased(const Expr *v) {
+    if (!v) return true;
+    if (tco_plain_scalar(v->type.kind)) return true;
+    switch (v->kind) {
+        case EX_VAR: {
+            const Binding *b = v->as.var.binding;
+            return b && (b->is_global || (b->is_param && !b->is_mut));
+        }
+        case EX_INT_LIT: case EX_FLOAT_LIT: case EX_BOOL_LIT: case EX_NIL_LIT:
+        case EX_CSTR_LIT: case EX_SYM_LIT:
+            return true;
+        case EX_LET: case EX_LETREC: case EX_MATCH: case EX_FN: case EX_CLOSURE:
+        case EX_SET: case EX_RETURN: case EX_DYN_CALL:
+            return false;
+        case EX_CALL: {
+            /* A call through a local closure can hand back what the closure
+             * reads (a cell the let frees); only a named function, whose
+             * arguments are checked here, cannot reach the let otherwise. */
+            const Binding *fb = v->as.call_.fn_binding;
+            if (v->as.call_.fn_expr || !fb || !fb->is_global) return false;
+            for (uint32_t i = 0; i < v->as.call_.n_args; i++)
+                if (!tco_leave_unaliased(v->as.call_.args[i])) return false;
+            return true;
+        }
+        default: {
+            bool bad = false;
+            cps_visit_children(v, tco_leave_visit, &bad);
+            return !bad;
+        }
+    }
+}
+static bool tco_leave_visit(const Expr *c, void *ud) {
+    if (!tco_leave_unaliased(c)) { *(bool *)ud = true; return true; }
+    return false;
+}
+/* byval-spine-drop-past-early-exit residue 1: may the spine drops of a let
+ * whose body `return`s join the early-exit channel in a function whose
+ * signature does not vouch for it (current_fn_spine_drop_safe == 2)?  The
+ * channel fires at each `return`, after its value is hoisted, and at each
+ * back-edge, after the parameters are assigned -- so ask exactly those: every
+ * `return`'s value and every self-call's arguments must reach nothing the let
+ * built.  A typed panic or a `discontinue` carries a payload out: no. */
+typedef struct { const Binding *self; bool bad; } SpineExitUd;
+static bool spine_exit_visit(const Expr *c, void *ud) {
+    SpineExitUd *u = (SpineExitUd *)ud;
+    if (c->kind == EX_PANIC_WITH || c->kind == EX_DISCONTINUE) { u->bad = true; return true; }
+    if (c->kind == EX_RETURN && !tco_leave_unaliased(c->as.return_.value)) {
+        u->bad = true; return true;
+    }
+    if (c->kind == EX_CALL && !c->as.call_.fn_expr && u->self &&
+        c->as.call_.fn_binding == u->self)
+        for (uint32_t i = 0; i < c->as.call_.n_args; i++)
+            if (!tco_leave_unaliased(c->as.call_.args[i])) { u->bad = true; return true; }
+    if (c->kind == EX_FN || c->kind == EX_CLOSURE) return false;   /* their own exits */
+    cps_visit_children(c, spine_exit_visit, ud);
+    return u->bad;
+}
+bool emit_spine_exits_unaliased(EmitCtx *ctx, const Expr *body) {
+    SpineExitUd u = { ctx->current_fn_spine_self, false };
+    if (!body || !u.self) return false;
+    spine_exit_visit(body, &u);
+    return !u.bad;
+}
+
 static const char *tco_let_refusal(EmitCtx *ctx, const Expr *e) {
     for (uint32_t i = 0; i < e->as.let_.n; i++) {
         const Binding *b = e->as.let_.bindings[i].binding;
@@ -5426,7 +5499,7 @@ static void tcg_emit_def(EmitCtx *ctx, Buf *file, TcgGroup *g) {
     const char *saved_ret = ctx->current_fn_ret_ctype;
     /* byval-spine-drop-past-early-exit: a fused group is one C function for
      * several signatures; refuse the spine push in it rather than judge them. */
-    bool saved_spine_safe = ctx->current_fn_spine_drop_safe;
+    uint8_t saved_spine_safe = ctx->current_fn_spine_drop_safe;
     ctx->current_fn_spine_drop_safe = false;
     Binding **saved_params = ctx->fn_params;
     uint32_t saved_n_params = ctx->n_fn_params;
@@ -5994,7 +6067,8 @@ static void emit_fn_def_body(EmitCtx *ctx, Buf *file, const Expr *e) {
      * whatever runs next, so those are the only words that could still point
      * into a spine freed on the way out.  tco_plain_scalar is the numeric
      * whitelist, which deliberately leaves out cstr and ptr. */
-    bool saved_current_fn_spine_drop_safe = ctx->current_fn_spine_drop_safe;
+    uint8_t saved_current_fn_spine_drop_safe = ctx->current_fn_spine_drop_safe;
+    const Binding *saved_current_fn_spine_self = ctx->current_fn_spine_self;
     {
         bool safe = fd && e->type.kind == TY_FN &&
                     (e->type.as.fn.result_kind == TY_NIL ||
@@ -6002,7 +6076,8 @@ static void emit_fn_def_body(EmitCtx *ctx, Buf *file, const Expr *e) {
         for (uint32_t pi = 0; safe && pi < fd->n_params; pi++)
             if (!fd->params[pi] || !tco_plain_scalar(fd->params[pi]->type.kind))
                 safe = false;
-        ctx->current_fn_spine_drop_safe = safe;
+        ctx->current_fn_spine_drop_safe = safe ? 1 : (fd ? 2 : 0);
+        ctx->current_fn_spine_self = fd ? fd->binding : NULL;
     }
     const struct FnDef *saved_own_cur_fn = ctx->own_cur_fn;
     ctx->own_cur_fn = fd;
@@ -7300,6 +7375,7 @@ static void emit_fn_def_body(EmitCtx *ctx, Buf *file, const Expr *e) {
     ctx->current_fn_ret_ctype = saved_current_fn_ret_ctype;
     ctx->in_user_main = saved_in_user_main;
     ctx->current_fn_spine_drop_safe = saved_current_fn_spine_drop_safe;
+    ctx->current_fn_spine_self = saved_current_fn_spine_self;
     ctx->own_cur_fn = saved_own_cur_fn;
     ctx->tail_void = saved_tail_void;
 
