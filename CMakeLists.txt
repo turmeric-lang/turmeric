@@ -1558,14 +1558,25 @@ add_test(
 )
 set_tests_properties(tur_r7rs_main_stack_size PROPERTIES TIMEOUT 720)
 # r7rs-heap-frames-plan (option C): under --enable=r7rs-segmented-stack a
-# recursion, a collection and call/cc run across stack segments past an 8 MiB
-# stack of the thread's own, and TUR_MAIN_STACK_MB caps the total.
+# recursion, collections, call/cc re-entry, threads and fibers run across
+# stack segments past an 8 MiB stack of the thread's own, TUR_MAIN_STACK_MB
+# caps the total, and TUR_R7RS_SEGMENTED_STACK=0 turns it all off.
+# (TUR_SEG_CROSS=aarch64 runs it as arm64 binaries under qemu, by hand.)
 add_test(
   NAME tur_r7rs_segmented_stack
   COMMAND bash tests/check-r7rs-segmented-stack.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
 set_tests_properties(tur_r7rs_segmented_stack PROPERTIES TIMEOUT 720)
+# The same, across every `#lang r7rs` fixture: SEG_ARM=on (the flag, an 8 MiB
+# base stack) until graduation, when the default inverts to SEG_ARM=off (the
+# hatch).  Fans out across nproc itself, so it gets the machine.
+add_test(
+  NAME tur_r7rs_segmented_stack_seam
+  COMMAND bash tests/run-r7rs-segmented-stack-seam.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+set_tests_properties(tur_r7rs_segmented_stack_seam PROPERTIES TIMEOUT 720 RUN_SERIAL TRUE)
 # jit-stack-overflow-has-no-message: under `tur jit` a runaway recursion
 # prints the same line as the compiled r7rs path, in every dialect, and a wild
 # pointer does not.  SKIPs on a binary without the JIT engine.

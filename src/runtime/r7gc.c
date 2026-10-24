@@ -964,6 +964,8 @@ typedef struct tur_seg_rec {
     unsigned char *map; size_t map_size;   /* the mapping; NULL for the thread's own stack */
     unsigned char *bot, *lo, *top;         /* usable [bot, top); the entry check fails below lo */
     unsigned char *saved_sp;               /* where the frames on prev resume */
+    struct tur_seg_rec *pool_next;         /* the runtime's: a pinned segment off the chain */
+    unsigned flags;                        /* the runtime's: TUR_SEG_PINNED */
 } tur_seg_rec;
 #endif
 /* On the thread: where its chain's newest record lives (a thread-local). */
