@@ -10,8 +10,9 @@ generates it for `__attribute__ ((musttail)) return f (...);` and defines
 prints `5` under `tur jit` on an 8 MiB entry stack, and `tests/run-jit.sh`'s
 `jit-musttail-8mib` (the flipped `jit-musttail-gap-pinned`) checks that. The
 MIR interpreter -- `TUR_JIT_GEN=interp`, and the planned browser engine --
-still runs a tail call as a call and a return; that half is
-[mir-interp-tail-calls-grow-the-stack](../reported/mir-interp-tail-calls-grow-the-stack.md).
+still ran a tail call as a call and a return; that half was
+[mir-interp-tail-calls-grow-the-stack](mir-interp-tail-calls-grow-the-stack.md),
+fixed the same day (turmeric-lang/mir#14).
 
 **Earlier status 2026-10-23: documented and pinned; the fix itself is fork work.**
 The macro's emitted comment and the JIT guide's `TUR_MAIN_STACK_MB` row say

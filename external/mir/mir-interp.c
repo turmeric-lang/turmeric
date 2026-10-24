@@ -66,7 +66,7 @@ typedef enum {
   REP7 (IC_EL, STI8, STU8, STI16, STU16, STI32, STU32, STI64),
   REP8 (IC_EL, STF, STD, STLD, MOVI, MOVP, MOVF, MOVD, MOVLD),
   REP6 (IC_EL, IMM_CALL, IMM_JCALL, MOVFG, FMOVFG, DMOVFG, LDMOVFG),
-  REP5 (IC_EL, MOVTG, FMOVTG, DMOVTG, LDMOVTG, INSN_BOUND),
+  REP7 (IC_EL, MOVTG, FMOVTG, DMOVTG, LDMOVTG, TCALL, IMM_TCALL, INSN_BOUND),
 } MIR_full_insn_code_t;
 #undef REP_SEP
 
@@ -102,6 +102,9 @@ struct interp_ctx {
   VARR (_MIR_arg_desc_t) * call_arg_descs_varr;
   _MIR_arg_desc_t *call_arg_descs;
   HTAB (ff_interface_t) * ff_interface_tab;
+  /* The interpreted functions by the address of their thunk, which is what a
+     call through a pointer has: see IC_TCALL. */
+  HTAB (MIR_item_t) * thunk_func_tab;
 };
 
 #define dispatch_label_tab interp_ctx->dispatch_label_tab
@@ -118,6 +121,7 @@ struct interp_ctx {
 #define call_arg_descs_varr interp_ctx->call_arg_descs_varr
 #define call_arg_descs interp_ctx->call_arg_descs
 #define ff_interface_tab interp_ctx->ff_interface_tab
+#define thunk_func_tab interp_ctx->thunk_func_tab
 
 static void get_icode (struct interp_ctx *interp_ctx, MIR_val_t *v, int code) {
 #if DIRECT_THREADED_DISPATCH
@@ -187,8 +191,9 @@ static void generate_icode (MIR_context_t ctx, MIR_item_t func_item) {
     MIR_insn_code_t code = insn->code;
     size_t nops = MIR_insn_nops (ctx, insn);
     MIR_op_t *ops = insn->ops;
-    /* The interpreter runs a tail call as a call followed by a return of its
-       results: it gives no constant-stack guarantee. */
+    /* A tail call is a call followed by a return of its results.  One to a
+       function the interpreter runs (IC_IMM_TCALL, IC_TCALL) replaces the
+       current activation instead (see eval), and so never reaches the return. */
     int tcall_p = code == MIR_TCALL;
 
     if (tcall_p) code = MIR_CALL;
@@ -435,7 +440,10 @@ static void generate_icode (MIR_context_t ctx, MIR_item_t func_item) {
                           || ops[1].u.ref->item_type == MIR_forward_item
                           || ops[1].u.ref->item_type == MIR_func_item));
       push_insn_start (interp_ctx,
-                       imm_call_p           ? (code == MIR_JCALL ? IC_IMM_JCALL : IC_IMM_CALL)
+                       imm_call_p           ? (code == MIR_JCALL ? IC_IMM_JCALL
+                                               : tcall_p          ? IC_IMM_TCALL
+                                                                  : IC_IMM_CALL)
+                       : tcall_p            ? IC_TCALL
                        : code == MIR_INLINE ? MIR_CALL
                                             : code,
                        insn);
@@ -918,6 +926,8 @@ static void finish_insn_trace (MIR_context_t ctx, MIR_full_insn_code_t code, cod
   case IC_STLD: break;
   case IC_IMM_CALL: break;
   case IC_IMM_JCALL: break;
+  case IC_TCALL:
+  case IC_IMM_TCALL: break;
   default:
     op_mode = _MIR_insn_code_op_mode (ctx, (MIR_insn_code_t) code, 0, &out_p);
     if (op_mode == MIR_OP_BOUND || !out_p) op_mode = MIR_OP_UNDEF;
@@ -970,14 +980,104 @@ static code_t call_insn_execute (MIR_context_t ctx, code_t pc, MIR_val_t *bp, co
 
 static int64_t addr_offset8, addr_offset16, addr_offset32;
 
-static void OPTIMIZE eval (MIR_context_t ctx, func_desc_t func_desc, MIR_val_t *bp,
-                           MIR_val_t *results) {
+static inline func_desc_t get_func_desc (MIR_item_t func_item);
+
+/* The function ITEM -- the callee of tail call TCALL -- if the interpreter can
+   run it in its current activation, or NULL when the call should be an
+   ordinary one: the callee is a MIR function with no machine code, the
+   prototype is not vararg, and the callee takes no block args (the caller's
+   copies of those would go with its frame).  */
+static MIR_item_t interp_tail_callee (MIR_insn_t tcall, MIR_item_t item) {
+  MIR_proto_t proto = tcall->ops[0].u.ref->u.proto;
+  MIR_func_t func;
+  MIR_var_t *vars;
+
+  while (item != NULL
+         && (item->item_type == MIR_import_item || item->item_type == MIR_export_item
+             || item->item_type == MIR_forward_item))
+    item = item->ref_def;
+  if (item == NULL || item->item_type != MIR_func_item) return NULL;
+  func = item->u.func;
+  if (func->machine_code != NULL || func->vararg_p || proto->vararg_p) return NULL;
+  vars = VARR_ADDR (MIR_var_t, func->vars);
+  for (uint32_t i = 0; i < func->nargs; i++)
+    if (MIR_all_blk_type_p (vars[i].type)) return NULL;
+  return item;
+}
+
+/* Run FUNC_DESC's function with NARGS args VALS (and va_list address VA, for a
+   vararg function), putting its results in RESULTS.  The frame is allocated
+   here, below the stack pointer recorded on entry, so that a tail call can
+   reset the stack to it and allocate the callee's frame in its place.  Called
+   with FUNC_DESC == NULL only to fill the dispatch table. */
+#if defined(__GNUC__)
+#define NOINLINE __attribute__ ((noinline))
+#else
+#define NOINLINE
+#endif
+
+/* The callee eval should run in its activation for tail call TCALL (whose
+   icode operands are OPS), with its args, converted as call and interp would
+   pass them, in arg_vals and their number in *NARGS; or NULL when the call is
+   an ordinary one.  FUNC_ADDR is the address called through when TCALL is not
+   direct.  Kept out of eval so that its frame -- one per nested call -- does
+   not grow with the work done only here. */
+static NOINLINE func_desc_t prepare_tail_call (MIR_context_t ctx, MIR_insn_t tcall,
+                                               void *func_addr, code_t ops, MIR_val_t *bp,
+                                               size_t *nargs) {
   struct interp_ctx *interp_ctx = ctx->interp_ctx;
+  MIR_item_t callee;
+  MIR_var_t *vars;
+  size_t start;
+
+  if (func_addr == NULL) { /* a direct call */
+    callee = tcall->ops[1].u.ref;
+  } else {
+    struct MIR_item key;
+
+    key.addr = func_addr;
+    if (!HTAB_DO (MIR_item_t, thunk_func_tab, &key, HTAB_FIND, callee)) return NULL;
+  }
+  if ((callee = interp_tail_callee (tcall, callee)) == NULL) return NULL;
+  if (callee->data == NULL) generate_icode (ctx, callee);
+  start = tcall->ops[0].u.ref->u.proto->nres + 5;
+  *nargs = get_i (ops) + 3 - start; /* #args w/o nop, insn, and ff interface address */
+  vars = VARR_ADDR (MIR_var_t, callee->u.func->vars);
+  if (VARR_EXPAND (MIR_val_t, arg_vals_varr, *nargs))
+    arg_vals = VARR_ADDR (MIR_val_t, arg_vals_varr);
+  for (size_t i = 0; i < *nargs; i++) {
+    MIR_val_t v = bp[get_i (ops + start + i)];
+
+    switch (vars[i].type) {
+    case MIR_T_I8: v.i = (int8_t) v.i; break;
+    case MIR_T_U8: v.i = (uint8_t) v.i; break;
+    case MIR_T_I16: v.i = (int16_t) v.i; break;
+    case MIR_T_U16: v.i = (uint16_t) v.i; break;
+    case MIR_T_I32: v.i = (int32_t) v.i; break;
+    case MIR_T_U32: v.i = (uint32_t) v.i; break;
+    default: break;
+    }
+    arg_vals[i] = v;
+  }
+  return get_func_desc (callee);
+}
+
+static void OPTIMIZE eval (MIR_context_t ctx, func_desc_t func_desc, MIR_val_t *results,
+                           size_t nargs, MIR_val_t *vals, void *va) {
+  struct interp_ctx *interp_ctx = ctx->interp_ctx;
+  MIR_val_t *bp;
   MIR_val_t *globals = global_regs;
   code_t pc, ops, code;
   void *jmpi_val; /* where label thunk execution result will be: */
   int64_t offset;
   int signed_overflow_p = FALSE, unsigned_overflow_p = FALSE; /* to avoid uninitialized warnings */
+  /* Tail calls (IC_TCALL, IC_IMM_TCALL): the stack pointer on entry, before
+     the frame was allocated, the regs a tail callee can have and still use
+     the frame at bp -- 0 once the running function made an alloca, which the
+     next tail call should drop -- and the args of the tail call being made. */
+  void *entry_sp;
+  MIR_reg_t frame_nregs;
+  size_t tail_nargs;
 
 #if MIR_INTERP_TRACE
   MIR_full_insn_code_t trace_insn_code;
@@ -1001,7 +1101,7 @@ static void OPTIMIZE eval (MIR_context_t ctx, func_desc_t func_desc, MIR_val_t *
 
 #define LAB_EL(i) ltab[i] = &&L_##i
 #define REP_SEP ;
-  if (bp == NULL) {
+  if (func_desc == NULL) {
     REP4 (LAB_EL, MIR_MOV, MIR_FMOV, MIR_DMOV, MIR_LDMOV);
     REP6 (LAB_EL, MIR_EXT8, MIR_EXT16, MIR_EXT32, MIR_UEXT8, MIR_UEXT16, MIR_UEXT32);
     REP6 (LAB_EL, MIR_I2F, MIR_I2D, MIR_I2LD, MIR_UI2F, MIR_UI2D, MIR_UI2LD);
@@ -1035,6 +1135,8 @@ static void OPTIMIZE eval (MIR_context_t ctx, func_desc_t func_desc, MIR_val_t *
     REP3 (LAB_EL, IC_MOVLD, IC_IMM_CALL, IC_IMM_JCALL);
     REP4 (LAB_EL, IC_MOVFG, IC_FMOVFG, IC_DMOVFG, IC_LDMOVFG);
     REP4 (LAB_EL, IC_MOVTG, IC_FMOVTG, IC_DMOVTG, IC_LDMOVTG);
+    LAB_EL (IC_TCALL);
+    LAB_EL (IC_IMM_TCALL);
     return;
   }
 #undef REP_SEP
@@ -1070,6 +1172,15 @@ static void OPTIMIZE eval (MIR_context_t ctx, func_desc_t func_desc, MIR_val_t *
     END_INSN;                  \
   }
 
+  entry_sp = bstart_builtin ();
+  frame_nregs = func_desc->nregs;
+  bp = alloca ((frame_nregs + 2) * sizeof (MIR_val_t));
+  bp++; /* reserved for setjmp/longjmp */
+  bp[0].a = va;
+  bp++;
+  if (frame_nregs < nargs + 1) nargs = frame_nregs - 1;
+  bp[0].i = 0;
+  memcpy (&bp[1], vals, sizeof (MIR_val_t) * nargs);
   code = func_desc->code;
   pc = code;
 
@@ -1590,6 +1701,50 @@ common_addr:;
     END_INSN;
   }
 
+  CASE (IC_TCALL, 0) {
+    void *func_addr = *get_aop (bp, ops + 4);
+    func_desc_t callee_desc;
+
+    if (func_addr == setjmp_addr
+        || (callee_desc
+            = prepare_tail_call (ctx, get_a (ops + 1), func_addr, ops, bp, &tail_nargs))
+             == NULL) {
+      /* an ordinary call; the return generated after it follows */
+      pc = call_insn_execute (ctx, pc, bp, ops, FALSE);
+      END_INSN;
+    }
+    func_desc = callee_desc;
+    goto tail_call;
+  }
+  CASE (IC_IMM_TCALL, 0) {
+    func_desc_t callee_desc;
+
+    if (get_a (ops + 4) == setjmp_addr
+        || (callee_desc = prepare_tail_call (ctx, get_a (ops + 1), NULL, ops, bp, &tail_nargs))
+             == NULL) {
+      pc = call_insn_execute (ctx, pc, bp, ops, TRUE);
+      END_INSN;
+    }
+    func_desc = callee_desc;
+  tail_call: /* run the callee in this activation: */
+    if (func_desc->nregs > frame_nregs) {
+      /* Drop the frame and the allocas made since entry, and allocate a frame
+         of the callee's size.  (Where bend_builtin is a no-op, wasm, nothing
+         is dropped: as for BSTART/BEND, the allocas stay until we return.) */
+      bend_builtin (entry_sp);
+      frame_nregs = func_desc->nregs;
+      bp = alloca ((frame_nregs + 2) * sizeof (MIR_val_t));
+      bp += 2; /* reserved for setjmp/longjmp and va */
+    }
+    if (func_desc->nregs < tail_nargs + 1) tail_nargs = func_desc->nregs - 1;
+    bp[-1].a = NULL;
+    bp[0].i = 0;
+    memcpy (&bp[1], arg_vals, sizeof (MIR_val_t) * tail_nargs);
+    code = func_desc->code;
+    pc = code;
+    END_INSN;
+  }
+
   SCASE (MIR_INLINE, 0, mir_assert (FALSE));
 
   CASE (MIR_JCALL, 0) {
@@ -1637,6 +1792,7 @@ common_addr:;
 
     r = get_2iops (bp, ops, &s);
     *r = (uint64_t) alloca (s);
+    frame_nregs = 0;
     END_INSN;
   }
   CASE (MIR_BSTART, 1) {
@@ -1889,6 +2045,15 @@ static void call (MIR_context_t ctx, MIR_val_t *bp, MIR_op_t *insn_arg_ops, code
   }
 }
 
+static htab_hash_t thunk_func_hash (MIR_item_t item, void *arg MIR_UNUSED) {
+  return (htab_hash_t) mir_hash_finish (
+    mir_hash_step (mir_hash_init (0), (uint64_t) (uintptr_t) item->addr));
+}
+
+static int thunk_func_eq (MIR_item_t item1, MIR_item_t item2, void *arg MIR_UNUSED) {
+  return item1->addr == item2->addr;
+}
+
 static void interp_init (MIR_context_t ctx) {
   MIR_alloc_t alloc = ctx->alloc;
   struct interp_ctx *interp_ctx;
@@ -1899,7 +2064,7 @@ static void interp_init (MIR_context_t ctx) {
   if ((interp_ctx = ctx->interp_ctx = MIR_malloc (alloc, sizeof (struct interp_ctx))) == NULL)
     MIR_get_error_func (ctx) (MIR_alloc_error, "Not enough memory for ctx");
 #if DIRECT_THREADED_DISPATCH
-  eval (ctx, NULL, NULL, NULL);
+  eval (ctx, NULL, NULL, 0, NULL, NULL);
 #endif
   VARR_CREATE (MIR_insn_t, branches, alloc, 0);
   VARR_CREATE (MIR_val_t, code_varr, alloc, 0);
@@ -1909,6 +2074,7 @@ static void interp_init (MIR_context_t ctx) {
   call_arg_descs = VARR_ADDR (_MIR_arg_desc_t, call_arg_descs_varr);
   HTAB_CREATE_WITH_FREE_FUNC (ff_interface_t, ff_interface_tab, alloc, 1000, ff_interface_hash,
                               ff_interface_eq, ff_interface_clear, alloc);
+  HTAB_CREATE (MIR_item_t, thunk_func_tab, alloc, 1000, thunk_func_hash, thunk_func_eq, NULL);
 #if MIR_INTERP_TRACE
   trace_insn_ident = 0;
 #endif
@@ -1924,6 +2090,7 @@ static void interp_finish (MIR_context_t ctx) {
   VARR_DESTROY (MIR_val_t, arg_vals_varr);
   VARR_DESTROY (_MIR_arg_desc_t, call_arg_descs_varr);
   HTAB_DESTROY (ff_interface_t, ff_interface_tab);
+  HTAB_DESTROY (MIR_item_t, thunk_func_tab);
   /* Clear func descs???  */
   MIR_free (ctx->alloc, ctx->interp_ctx);
   ctx->interp_ctx = NULL;
@@ -1938,19 +2105,11 @@ typedef va_list va_t;
 static void interp_arr_varg (MIR_context_t ctx, MIR_item_t func_item, MIR_val_t *results,
                              size_t nargs, MIR_val_t *vals, va_t va) {
   func_desc_t func_desc;
-  MIR_val_t *bp;
 
   mir_assert (func_item->item_type == MIR_func_item);
   if (func_item->data == NULL) generate_icode (ctx, func_item);
   func_desc = get_func_desc (func_item);
-  bp = alloca ((func_desc->nregs + 2) * sizeof (MIR_val_t));
-  bp++; /* reserved for setjmp/longjmp */
-  bp[0].a = va;
-  bp++;
-  if (func_desc->nregs < nargs + 1) nargs = func_desc->nregs - 1;
-  bp[0].i = 0;
-  memcpy (&bp[1], vals, sizeof (MIR_val_t) * nargs);
-  eval (ctx, func_desc, bp, results);
+  eval (ctx, func_desc, results, nargs, vals, va);
   if (va != NULL)
 #if VA_LIST_IS_ARRAY_P
     va_end (va);
@@ -1978,23 +2137,15 @@ void MIR_interp (MIR_context_t ctx, MIR_item_t func_item, MIR_val_t *results, si
 void MIR_interp_arr_varg (MIR_context_t ctx, MIR_item_t func_item, MIR_val_t *results, size_t nargs,
                           MIR_val_t *vals, va_list va) {
   func_desc_t func_desc;
-  MIR_val_t *bp;
 
   mir_assert (func_item->item_type == MIR_func_item);
   if (func_item->data == NULL) generate_icode (ctx, func_item);
   func_desc = get_func_desc (func_item);
-  bp = alloca ((func_desc->nregs + 2) * sizeof (MIR_val_t));
-  bp++; /* reserved for setjmp/longjmp */
 #if VA_LIST_IS_ARRAY_P
-  bp[0].a = va;
+  eval (ctx, func_desc, results, nargs, vals, va);
 #else
-      bp[0].a = &va;
+      eval (ctx, func_desc, results, nargs, vals, &va);
 #endif
-  bp++;
-  if (func_desc->nregs < nargs + 1) nargs = func_desc->nregs - 1;
-  bp[0].i = 0;
-  memcpy (&bp[1], vals, sizeof (MIR_val_t) * nargs);
-  eval (ctx, func_desc, bp, results);
 }
 
 void MIR_interp_arr (MIR_context_t ctx, MIR_item_t func_item, MIR_val_t *results, size_t nargs,
@@ -2074,7 +2225,11 @@ static void interp (MIR_context_t ctx, MIR_item_t func_item, va_list va, MIR_val
 }
 
 static void redirect_interface_to_interp (MIR_context_t ctx, MIR_item_t func_item) {
+  struct interp_ctx *interp_ctx = ctx->interp_ctx;
+  MIR_item_t tab_item;
+
   _MIR_redirect_thunk (ctx, func_item->addr, _MIR_get_interp_shim (ctx, func_item, interp));
+  HTAB_DO (MIR_item_t, thunk_func_tab, func_item, HTAB_REPLACE, tab_item);
 }
 
 void MIR_set_interp_interface (MIR_context_t ctx, MIR_item_t func_item) {

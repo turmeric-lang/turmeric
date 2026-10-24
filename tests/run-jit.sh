@@ -687,32 +687,38 @@ for rf in "$RESULTS_DIR"/*.result; do
     esac
 done
 
-# jit-musttail-expands-to-nothing (archived): under c2mir `TUR_MUSTTAIL` is
-# `__attribute__((musttail))`, which MIR makes a tail jump (MIR_TCALL), so the
-# mutual tail-call cycle in tailcall-musttail-deep runs in constant stack.  The
+# jit-musttail-expands-to-nothing, mir-interp-tail-calls-grow-the-stack
+# (archived): under c2mir `TUR_MUSTTAIL` is `__attribute__((musttail))`, which
+# MIR makes a tail call (MIR_TCALL) -- a jump under the generator, the callee
+# run in the caller's activation by the interpreter -- so the mutual tail-call
+# cycle in tailcall-musttail-deep runs in constant stack on both engines.  The
 # corpus run above cannot tell that apart from having room -- `main` gets a
 # 1 GiB entry thread -- so run the cycle again on 8 MiB, where it overflows as
-# calls, and expect `5`.  The MIR interpreter runs a tail call as a call
-# (mir-interp-tail-calls-grow-the-stack), so TUR_JIT_GEN=interp is a SKIP, as
-# is any shard but the first.
+# calls, and expect `5`: on the engine under test (TUR_JIT_GEN), and on the
+# interpreter (`-interp`) when that is not it.  Only the first shard runs it.
 if [ "$SHARD_INDEX" -eq 0 ] && { [ -z "$JIT_FILTER" ] || [[ "tailcall-musttail-deep" =~ $JIT_FILTER ]]; }; then
     _mt_dir="tests/fixtures/tailcall-musttail-deep"
-    if [ "${TUR_JIT_GEN:-}" = "interp" ]; then
-        echo "PASS jit-musttail-8mib (skipped: TUR_JIT_GEN=interp makes no tail calls; docs/reported/mir-interp-tail-calls-grow-the-stack.md)"
-        SKIP=$((SKIP + 1))
-    else
+    _mt_engines="${TUR_JIT_GEN:-default}"
+    [ "${TUR_JIT_GEN:-}" = "interp" ] || _mt_engines="$_mt_engines interp"
+    for _mt_engine in $_mt_engines; do
+        _mt_name="jit-musttail-8mib"
+        [ "$_mt_engine" = "interp" ] && [ "${TUR_JIT_GEN:-}" != "interp" ] && _mt_name="jit-musttail-8mib-interp"
         _mt_rc=0
-        _mt_out="$(TUR_MAIN_STACK_MB=8 _run_timed 120 "$TUR" jit --debug "$_mt_dir/input.tur" 2>&1)" || _mt_rc=$?
+        if [ "$_mt_engine" = "default" ]; then
+            _mt_out="$(TUR_MAIN_STACK_MB=8 _run_timed 120 "$TUR" jit --debug "$_mt_dir/input.tur" 2>&1)" || _mt_rc=$?
+        else
+            _mt_out="$(TUR_JIT_GEN="$_mt_engine" TUR_MAIN_STACK_MB=8 _run_timed 120 "$TUR" jit --debug "$_mt_dir/input.tur" 2>&1)" || _mt_rc=$?
+        fi
         if [ "$_mt_rc" -eq 0 ] && grep -qx "5" <<< "$_mt_out"; then
-            echo "PASS jit-musttail-8mib (the musttail cycle runs on an 8 MiB entry stack)"
+            echo "PASS $_mt_name (the musttail cycle runs on an 8 MiB entry stack, engine $_mt_engine)"
             PASS=$((PASS + 1))
         else
-            echo "FAIL jit-musttail-8mib -- exit $_mt_rc on an 8 MiB entry stack: \`tur jit\` made no tail call."
+            echo "FAIL $_mt_name -- exit $_mt_rc on an 8 MiB entry stack: \`tur jit\` (engine $_mt_engine) made no tail call."
             echo "$_mt_out" | tail -5 | sed 's/^/  /'
             FAIL=$((FAIL + 1))
-            FAILED+=("jit-musttail-8mib")
+            FAILED+=("$_mt_name")
         fi
-    fi
+    done
 fi
 
 echo

@@ -61,7 +61,6 @@ directory is worse for triage than no index.
 
 | Report | Severity | One line |
 |---|---|---|
-| [mir-interp-tail-calls-grow-the-stack](mir-interp-tail-calls-grow-the-stack.md) | low (high for the wasm JIT) | The MIR interpreter runs `MIR_TCALL` (c2mir's `musttail`) as a call and a return, so a mutual tail-call cycle the emitter did not fuse grows the stack under `TUR_JIT_GEN=interp` -- and in the planned browser engine, whose ceiling is 1,696 frames. The generator half, `jit-musttail-expands-to-nothing`, was fixed 2026-10-24 (mir#13). |
 
 ## Found executing generator-type-plan (filed 2026-10-23)
 
