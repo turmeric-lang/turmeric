@@ -91,9 +91,9 @@ sends what, in which order, and whether the channel branches.
 ;; and `send` in the body is checked against it -- swapping them is a
 ;; TUR-E0212, not a runtime hang.
 (defn echo-server [^linear ch : (Session EchoProto)] : nil
-  (let [[n ch1] (recv ch)]
-    (let [ch2 (send ch1 (* n 2))]
-      (echo-server ch2))))
+  (let [[n ch1] (recv ch)
+        ch2      (send ch1 (* n 2))]
+    (echo-server ch2)))
 ```
 ```sweet-exp
 ;; A recursive protocol: receive an int, send one back, repeat.
@@ -103,9 +103,9 @@ defalias EchoProto (Rec self (Recv int (Send int self)))
 ;; and `send` in the body is checked against it -- swapping them is a
 ;; TUR-E0212, not a runtime hang.
 defn echo-server [^linear ch : (Session EchoProto)] : nil
-  let [[n ch1] recv(ch)]
-    let [ch2 send(ch1 {n * 2})]
-      echo-server(ch2)
+  let [[n ch1] recv(ch)
+       ch2      send(ch1 {n * 2})]
+    echo-server(ch2)
 ```
 
 The protocol constructors are capitalised -- `Recv`, `Send`, `Close`, `Rec` --

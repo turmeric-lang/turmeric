@@ -21,7 +21,7 @@
   ```)
 
 (defn main [] :int
-  (let [n 100000]
-    (let [count (bench-hamt-insert n)]
-      (println count)
-      0)))
+  (let [n     100000
+        count (bench-hamt-insert n)]
+    (println count)
+    0))

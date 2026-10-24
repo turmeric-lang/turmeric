@@ -10,9 +10,9 @@
  *   3. dlopen the library and dlsym each export listed in
  *      exports.manifest, materialising a TurSpiceExport row per defn.
  *
- * The dispatcher class encoding (`i`/`f`/`v`) is shared with
- * src/runtime/ffi_dispatch.h; the binding layer in RP4 picks the
- * matching `tur_ffi_call_<ret>_<args>` trampoline based on it.
+ * The class encoding (`i`/`f`/`v`/`?`) is spice_loader.h's; the binding
+ * layer (ffi_thunk.c) marshals each argument by it and calls the export
+ * through a JIT thunk or the export's `__ffi` shim.
  */
 
 #include "platform_proc.h"
@@ -590,9 +590,11 @@ static int parse_manifest_line(TurSpiceImage *img, char *line) {
         return -2;  /* RP7: caller skips the generic "malformed" message */
     }
     /* interpreter-arbitrary-arity-ffi (Phase 2): probe for the per-export
-     * `<mangled>__ffi` shim.  Its absence is expected and benign -- a spice
-     * built before shim emission has no such symbol -- so a NULL result is
-     * not an error; the call path falls back to the generated shape table. */
+     * `<mangled>__ffi` shim.  Its absence is not a load error -- a spice
+     * built before shim emission has no such symbol, and a JIT build can
+     * still call the export through a thunk -- so a NULL result is recorded,
+     * and the call path reports "rebuild the spice" only if nothing else can
+     * reach the export. */
     TurFfiShimFn ffi_shim = NULL;
     {
         size_t shim_len = strlen(mangled) + 5 + 1;  /* "__ffi" + NUL */

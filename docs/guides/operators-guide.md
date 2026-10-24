@@ -27,19 +27,21 @@ builtin row -- `Rational`, `Complex`, your own -- `+ - * /` fall back to its
 | Operators | Arguments | Types |
 |---|---|---|
 | `+ - *` | two or more, left to right | any numeric kind |
+| `-` | one: negation | any numeric kind |
 | `/` | exactly two | any numeric kind |
 | `mod` | exactly two | integer kinds only |
 | `= not=` | exactly two | numeric kinds, `bool`, `Sym` |
 | `< > <= >=` | exactly two | numeric kinds |
 | `and or` | two or more, short-circuiting | `bool` |
 | `not` | one | `bool` |
-| `+. -. *. /.` | `+.`/`-.`/`*.`: two or more; `/.`: two | `float` only |
+| `+. -. *. /.` | `+.`/`-.`/`*.`: two or more; `/.`: two; `-.` also one (negation) | `float` only |
 | `bit-and bit-or bit-xor bit-shl bit-shr` | exactly two | integer kinds |
 
 ```turmeric
 (defn main [] : int
   (println (+ 1 2 3))          ; 6
   (println (- 10 3 2))         ; 5  -- (10 - 3) - 2
+  (println (- 7.1))            ; -7.1
   (println (/ 7.5 2.0))        ; 3.75
   (println (and (< 1 2) (< 2 3)))   ; true
   0)
@@ -51,6 +53,7 @@ builtin row -- `Rational`, `Complex`, your own -- `+ - * /` fall back to its
 defn main [] : int
   println(+(1 2 3))          ; 6
   println(-(10 3 2))         ; 5  -- (10 - 3) - 2
+  println(-(7.1))            ; -7.1
   println({7.5 / 2.0})       ; 3.75
   println(and({1 < 2} {2 < 3}))   ; true
   0
@@ -58,9 +61,6 @@ defn main [] : int
 
 A few calls you might expect to work do not:
 
-- `(- x)` on a builtin kind is TUR-E0006 -- there is no one-argument
-  negation. Write `(- 0 x)` or a negative literal. (On a `Num` type,
-  `(- x)` is its `neg`.)
 - `(< 1 2 3)` is TUR-E0006: comparisons take exactly two arguments.
 - `=` is not defined on `cstr` (use `cstr-eq?`) or on structs and ADTs
   (`=` does not dispatch to `Eq`; call `eq?`).
@@ -71,6 +71,8 @@ A few calls you might expect to work do not:
 
 Integer arithmetic wraps on overflow, two's complement, **at the kind's own
 width** -- `(+ 200u8 100u8)` is 44 -- whether or not the result is stored.
+Negation is no exception: `(- 1u8)` is 255, and `(- x)` on the smallest `int`
+is that same value.
 
 `/` on integers truncates toward zero, and `mod` takes the sign of the
 dividend, as C's `%` does:
@@ -87,6 +89,10 @@ dividend, as C's `%` does:
 
 Float division follows IEEE 754 instead: dividing by zero gives `inf`, `-inf`
 or `nan`, with no check, and a `nan` is `=` to nothing, itself included.
+
+To negate a float, write `(- x)`, not `(- 0.0 x)`. They differ at zero:
+`(- 0.0)` is -0.0, while `(- 0.0 0.0)` is +0.0, and the sign shows the moment
+something divides by it (`(/ 1.0 (- 0.0))` is `-inf`).
 
 ## `and` and `or` short-circuit
 

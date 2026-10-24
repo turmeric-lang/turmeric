@@ -50,7 +50,7 @@ which is a claim that the code is wrong. It is not: in half 1 the predicate is
 a tautological restatement of one that proves, and in half 2 the identical
 fact proves ten lines above. Filed 2026-10-02, found reviewing the
 `reflected-measures` row at the v0.59.0 cut. Both are noted as limitations in
-[reflected-measures-plan](../upcoming/reflected-measures-plan.md); this is the
+[reflected-measures-plan](reflected-measures-plan.md); this is the
 measured version with repros.
 
 Run both repros with `--enable=reflected-measures`.

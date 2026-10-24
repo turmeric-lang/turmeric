@@ -1234,6 +1234,23 @@ jobs:
           set -o pipefail
           timeout 720 bash tests/run-turi.sh 2>&1 | tee turi.log
 
+      # How the REPL calls a compiled spice's exports without a JIT: through
+      # each export's `__ffi` shim, the only rung a JIT-less build has
+      # (ffi-spices-integration-plan S5).  Every other job carries the JIT,
+      # whose thunk answers scalar calls first, so this is the one place the
+      # shim rung is the path under test.  Same scripts as the ctest targets
+      # tur_repl_spice_{call,load,errors,reload,linklibs}.
+      - name: REPL spice suites without the JIT
+        if: always()
+        run: |
+          rc=0
+          for t in call load errors reload linklibs; do
+            echo "::group::repl-spice-$t"
+            timeout 720 bash "tests/turi/repl-spice-$t.sh" || rc=1
+            echo "::endgroup::"
+          done
+          exit $rc
+
       # Skips are where interpreter gaps hide (fixtures with user inline-C are
       # skipped outright), so record the count where a reader will see it.
       - name: Record the skip count

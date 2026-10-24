@@ -1,5 +1,10 @@
 # Plan: Reflected Measures (`^reflect`)
 
+> **Archived 2026-10-24** at the author's request. The experiment itself is
+> unchanged -- still `--enable=reflected-measures`, prototype, waiting on a
+> consumer -- and its `EXPERIMENTS[]` row's `plan_path` now points here.
+> The status text below is as of 2026-10-17.
+>
 > **Status:** **In progress** since 2026-09-29, behind
 > `--enable=reflected-measures` (`EXPERIMENTS[]` row, introduced 0.57.0,
 > `expires_at` 0.64.0, prototype -- bumped from 0.61.0 on 2026-10-03: built and fuzzed, waiting on a consumer; see "What graduation waits on"). RF0, RF1, RF2, RF3 and RF5 landed in the
@@ -16,15 +21,15 @@
 > fixed argument position, exhaustively matching) before its defining
 > equation is admitted as an axiom. Program termination and total
 > correctness in general remain **out of scope, permanently**, exactly as
-> [refinement-types-plan.md](../archive/refinement-types-plan.md) and
-> [loop-invariants-plan.md](../archive/loop-invariants-plan.md) state; nothing here
+> [refinement-types-plan.md](refinement-types-plan.md) and
+> [loop-invariants-plan.md](loop-invariants-plan.md) state; nothing here
 > makes an un-annotated non-terminating program fail to compile. The gate is
 > a hard error (`TUR-E0384`) on the definition, never a silent downgrade.
 > **Type:** Compiler / Refinement types
-> **Depends on:** [refinement-types-plan.md](../archive/refinement-types-plan.md)
+> **Depends on:** [refinement-types-plan.md](refinement-types-plan.md)
 > (RT0--RT7 + S0--S4, all landed), the `refined` graduation (**happened
 > 2026-08-01**, shipped v0.33.0), and
-> [refine-predicate-measures-plan.md](../archive/refine-predicate-measures-plan.md)
+> [refine-predicate-measures-plan.md](refine-predicate-measures-plan.md)
 > (RM-B, landed).
 
 ## Landed (2026-09-29, first cut)
@@ -44,7 +49,7 @@
 **2026-10-04:** a Bool measure's `iff` equations used to overflow the cube
 cap at four ground elements; unit propagation in the solver's DNF expansion
 fixed it, so Bool measures now run to the same fuel limit as Int ones
-([reflect-bool-measure-cube-blowup](../archive/reflect-bool-measure-cube-blowup.md)).
+([reflect-bool-measure-cube-blowup](reflect-bool-measure-cube-blowup.md)).
 `examples/reflected-measures` is the end-to-end program for the feature.
 
 **2026-10-17: a `let`-bound argument unfolds as the term it is bound to.**
@@ -74,7 +79,7 @@ changes came with it:
     read the parameter's `x > 0` of an `x` that is -5. Every such crossing is
     now decided without the path's facts: an `unknown` crossing and a
     TUR-W0372, which `--strict-refine` makes an error (archived:
-    [refine-abandoned-crossing-silent-under-strict](../archive/refine-abandoned-crossing-silent-under-strict.md)).
+    [refine-abandoned-crossing-silent-under-strict](refine-abandoned-crossing-silent-under-strict.md)).
 
 Fixtures: `reflect-let-bound`, `errors/reflect-let-bound-false`,
 `refine-let-multi-binding`, `errors/refine-crossing-self-shadow-let`, and
@@ -84,7 +89,7 @@ self-shadowing and `^mut`-reassigned bindings, at a return obligation and at a
 crossing).
 
 The same day the example was made honest again
-([report](../archive/reflected-measures-example-float-contract-no-longer-proves.md)).
+([report](reflected-measures-example-float-contract-no-longer-proves.md)).
 Since float-proofs-assume-exact-reals (2026-10-08) a real-sorted `+` is opaque
 to S2, so its summing Float contract had gone unknown. `within-cutoff` is now
 stated over the comparison-only `slowest`, and `tests/run-flags.sh`
@@ -126,7 +131,7 @@ proves from the precondition's unfolding plus `t = (.tl xs)`) proves, its
 sibling `errors/reflect-nonground-no-tag` stays unknown. The fixture
 returns a `bool` because two pre-existing bugs surfaced on the way: a
 refined **ADT** result type miscompiles outright
-([refined-adt-return-type-miscompiles](../archive/refined-adt-return-type-miscompiles.md), filed then, since archived; unrelated
+([refined-adt-return-type-miscompiles](refined-adt-return-type-miscompiles.md), filed then, since archived; unrelated
 to reflection), and a `match` arm's binders were declared at the result
 refinement's sort instead of their field's, which in a `bool`-returning
 body dropped every `(= t (.tl xs))` as a Bool/Int mismatch -- fixed in
@@ -147,7 +152,7 @@ that writes no `^reflect`.
 One thing to know about crossings: since 2026-10-03, `rt_collect_path_conds`
 gives a CALL-SITE crossing an arm's tag and selector facts too, so RF4 fires
 there as it does on return obligations
-([reflect-two-provable-facts-report-as-not-holding](../archive/reflect-two-provable-facts-report-as-not-holding.md)).
+([reflect-two-provable-facts-report-as-not-holding](reflect-two-provable-facts-report-as-not-holding.md)).
 Three guards, because those facts were omitted for real reasons:
 
 - They are added only when the callee's predicate mentions a reflected
@@ -222,10 +227,10 @@ are the predicates users actually want to write.
 Two documents in this tree list termination checking as an explicit non-goal,
 and **this plan does not reopen either of them**:
 
-- [refinement-types-plan.md](../archive/refinement-types-plan.md), under
+- [refinement-types-plan.md](refinement-types-plan.md), under
   "Non-goals for this prototype": *"Termination checking or total-correctness
   verification."*
-- [loop-invariants-plan.md](../archive/loop-invariants-plan.md), "Explicitly not in
+- [loop-invariants-plan.md](loop-invariants-plan.md), "Explicitly not in
   scope": *"A refinement says nothing about whether the loop finishes... A
   non-terminating loop with a true invariant is perfectly well-typed. Ranking
   functions / decreasing measures. Same reason."*
@@ -379,7 +384,7 @@ unchanged.
 ### 5. Diagnostic codes: the ones this plan reserved are gone
 
 Write-frames took `TUR-E0381`/`TUR-E0382`. The sibling
-[loop-invariants-plan.md](../archive/loop-invariants-plan.md) needs no codes (its
+[loop-invariants-plan.md](loop-invariants-plan.md) needs no codes (its
 obligations report through `TUR-E0371`/`TUR-W0372` like `:pre`/`:post` do),
 so this plan takes the next free slots: **`TUR-E0383`** (a `^reflect` whose
 function fails the totality gate -- purity, termination, or coverage; the
@@ -615,7 +620,7 @@ should weigh. Only item 2 is still open:
 1. ~~**RF3's fuzz acceptance, as this plan wrote it.**~~ **Discharged
    2026-10-03.** The 2026-10-02 run passed but never generated a recursive
    measure, a fuel boundary, or an arm selection
-   ([reflect-fuzz-never-reaches-the-rf3-rf4-encoder](../archive/reflect-fuzz-never-reaches-the-rf3-rf4-encoder.md)).
+   ([reflect-fuzz-never-reaches-the-rf3-rf4-encoder](reflect-fuzz-never-reaches-the-rf3-rf4-encoder.md)).
    `tests/refine-fuzz-src.py` now has `shape_reflect` (`--only-shape
    reflect`), and the plan's `--n 400` at two seeds is:
 
@@ -630,7 +635,7 @@ should weigh. Only item 2 is still open:
 
    Its first run found a soundness bug in the selector sorts rather than in
    reflection
-   ([refine-float-field-selector-declared-int](../archive/refine-float-field-selector-declared-int.md)),
+   ([refine-float-field-selector-declared-int](refine-float-field-selector-declared-int.md)),
    fixed the same day. The rows marked "unfixed" are that bug.
 2. **Still no consumer.** Nothing in `stdlib/` or on the v1 track writes
    `^reflect`. Graduating makes always-on a feature with no caller, which
@@ -644,7 +649,7 @@ should weigh. Only item 2 is still open:
    `(= r true)` stays unknown where bare `r` proves, and an RF4 fact that
    proves at a return obligation is unknown at a call-site crossing.~~
    **Resolved 2026-10-03**
-   ([archived report](../archive/reflect-two-provable-facts-report-as-not-holding.md)):
+   ([archived report](reflect-two-provable-facts-report-as-not-holding.md)):
    a Boolean equality is encoded as an `iff`, and a crossing in a match arm
    gets the arm's constructor facts behind the guards described under
    "One thing to know about crossings". RF6.2 (`ENC_MAX_PROPAGATE` as a well-founded budget) remains
@@ -662,7 +667,7 @@ fixtures; see the dated note under "Landed"):
   a function call, or held by a top-level `def` whose value is computed (an
   immutable `def` of a constructor term is a fact at a crossing since
   2026-10-21:
-  [refine-top-level-def-not-a-fact](../archive/refine-top-level-def-not-a-fact.md));
+  [refine-top-level-def-not-a-fact](refine-top-level-def-not-a-fact.md));
   a `float` measure that does arithmetic;
   a reflected function that builds data (`app` is `TUR-E0384` at the purity
   gate, whose walk admits "literals, if/let/do/match, arithmetic, and calls to
@@ -714,18 +719,18 @@ of these would supply one, and would settle item 2 above:
 
 ## References
 
-- [refinement-types-plan.md](../archive/refinement-types-plan.md) -- the
+- [refinement-types-plan.md](refinement-types-plan.md) -- the
   parent plan; "Why checking, not inference" is the constraint this one
   inherits, and its termination non-goal is what RF0 carves out from.
-- [refine-predicate-measures-plan.md](../archive/refine-predicate-measures-plan.md)
+- [refine-predicate-measures-plan.md](refine-predicate-measures-plan.md)
   -- RM-B; bool-returning measures as predicate atoms (what makes reflecting
   them worth anything) and the `ret_sort` plumbing RF3 rides.
-- [refine-float-measure-missort.md](../archive/history/refine-float-measure-missort.md)
+- [refine-float-measure-missort.md](history/refine-float-measure-missort.md)
   -- the soundness bug that mandates RF3's `3.25` fixture discipline.
-- [checked-write-frames-plan.md](../archive/checked-write-frames-plan.md) -- WF2's
+- [checked-write-frames-plan.md](checked-write-frames-plan.md) -- WF2's
   `WriteFrameSite` + deferred resolver is the structural template for RF0/RF1,
   and its sabotage-run convention is the acceptance style RF1/RF3 adopt.
-- [loop-invariants-plan.md](../archive/loop-invariants-plan.md) -- the sibling plan;
+- [loop-invariants-plan.md](loop-invariants-plan.md) -- the sibling plan;
   shares the termination non-goal and the structure-indexed-type trigger, and
   reuses `TUR-E0371`/`TUR-W0372` rather than claiming codes of its own.
 - [../../guides/refinement-types-guide.md](../guides/refinement-types-guide.md)

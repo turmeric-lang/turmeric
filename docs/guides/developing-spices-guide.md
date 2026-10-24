@@ -538,11 +538,11 @@ Use `include-c` to pull in the C header and `extern-c` to declare symbols:
 (extern-c sqlite3_errmsg [:ptr] :cstr)
 
 (defn db-open [path :cstr] (result :ptr)
-  (let [db-ptr (make-ptr)]
-    (let [rc (sqlite3_open path db-ptr)]
-      (if (= rc 0)
-        (ok (deref-ptr db-ptr))
-        (err (cstr->str (sqlite3_errmsg (deref-ptr db-ptr))))))))
+  (let [db-ptr (make-ptr)
+        rc     (sqlite3_open path db-ptr)]
+    (if (= rc 0)
+      (ok (deref-ptr db-ptr))
+      (err (cstr->str (sqlite3_errmsg (deref-ptr db-ptr)))))))
 ```
 
 ```sweet-exp
@@ -555,11 +555,11 @@ extern-c sqlite3_exec   [:ptr :cstr :ptr :ptr :ptr] :int
 extern-c sqlite3_errmsg [:ptr] :cstr
 
 defn db-open [path :cstr] (result :ptr)
-  let [db-ptr (make-ptr)]
-    let [rc (sqlite3_open path db-ptr)]
-      if {rc = 0}
-        ok(deref-ptr(db-ptr))
-        err(cstr->str(sqlite3_errmsg(deref-ptr(db-ptr))))
+  let [db-ptr (make-ptr)
+       rc     (sqlite3_open path db-ptr)]
+    if {rc = 0}
+      ok(deref-ptr(db-ptr))
+      err(cstr->str(sqlite3_errmsg(deref-ptr(db-ptr))))
 ```
 
 `extern-c` trusts the signature you give it -- double-check it against the

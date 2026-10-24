@@ -201,6 +201,12 @@ Cross-Origin-Opener-Policy: same-origin
 Cross-Origin-Embedder-Policy: require-corp
 ```
 
+`tur serve` sends both when asked:
+
+```sh
+tur serve --isolate hello-wasm -p 8080
+```
+
 `npx serve` does not set these by default. For a quick fix, create a
 `serve.json` config alongside your `index.html`:
 

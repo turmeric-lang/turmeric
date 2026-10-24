@@ -520,8 +520,16 @@ body.split-dragging * {
    (scrollWidth stays == clientWidth, scrollLeft is pinned at 0), so Run and
    Trace were clipped away with no way to scroll them back. An auto start
    margin right-aligns the same way when there is free space and collapses to
-   zero when there isn't. */
-.editor-actions > :first-child { margin-inline-start: auto; }
+   zero when there isn't. The Turmeric mark leads the row, so the auto margin
+   sits on its trailing side: the mark stays at the start and the buttons are
+   pushed to the end the same way. */
+.editor-actions > .editor-brand {
+    width: 23px;
+    height: 20px;
+    margin-inline: 2px auto;
+    user-select: none;
+    -webkit-user-drag: none;
+}
 /* Buttons keep their size and push the row wider; they do not compress. */
 .editor-actions > * { flex: 0 0 auto; }
 .editor-tabs::-webkit-scrollbar,
@@ -2196,9 +2204,8 @@ html.pwa {
 .docs-status.partial { color: var(--amber); }
 
 /* Desktop: the close control is the plain glyph it has always been. The
-   chevron and label only exist for the phone sheet (see the <=768px block). */
-.docs-close-chevron,
-.docs-close-label { display: none; }
+   return arrow only exists for the phone sheet (see the <=768px block). */
+.docs-close-return { display: none; }
 
 /* site.css styles the bare `nav` selector as the site's fixed header bar, and
  * a guide fragment legitimately contains <nav class="guide-toc"> for its
@@ -2493,30 +2500,22 @@ html.pwa {
     .docs-status { display: none; }
     .docs-load-btn { opacity: 1; }
 
-    /* Leading edge, labeled, and a full 44px tall: the way out of a
-       full-screen sheet has to be where a reader looks for it and big enough
-       to hit. At 28px in a trailing corner it was neither -- and until the
-       inset fix above it was not on screen at all. */
+    /* A bordered "return to the editor" button in the upper-right corner, a
+       36px square: the way out of a full-screen sheet has to be big enough to
+       hit and read as the way out, without towering over the 28px search box
+       beside it. At 28px as a bare "x" it did neither -- and until the inset
+       fix above it was not on screen at all.
+       It stays in its source position, after the search box, so it sits at
+       the trailing edge of the bar. Bordered like .btn so it pairs with the
+       Contents toggle at the other end. */
     .docs-topbar .btn-close {
-        order: -1;
-        width: auto;
-        min-width: 44px;
-        height: 44px;
-        padding: 0 8px 0 4px;
-        gap: 1px;
-        font-size: 15px;
+        width: 36px;
+        height: 36px;
+        flex-shrink: 0;
+        border: 1px solid var(--border-str);
         color: var(--gold);
     }
-    .docs-close-chevron {
-        display: block;
-        font-size: 22px;
-        line-height: 1;
-    }
-    .docs-close-label {
-        display: block;
-        font-family: var(--font-family);
-        font-size: 14px;
-    }
+    .docs-close-return { display: block; }
     .docs-close-x { display: none; }
 
     /* Same reasoning for the only other control in the bar: on a phone the
@@ -2526,12 +2525,14 @@ html.pwa {
        center: `.btn` is an inline-flex that only sets `align-items`, so the
        cross axis was handled and the main axis was left at `flex-start`. That
        is invisible while the button is sized by its own content -- every
-       desktop use of it -- but here min-width is 40px against a 16px icon in
-       8px padding inside a 1px border, and all 6px of the surplus went to the
-       right of the glyph, drawing it 3px left of the box it sits in. */
+       desktop use of it -- but here the box is wider than its 16px icon, and
+       all of the surplus went to the right of the glyph, drawing it off the
+       center of the box it sits in. The padding goes too: .btn-icon's 10px a
+       side would make the box 38px, wider than it is tall. */
     .docs-topbar .docs-nav-toggle {
-        height: 40px;
-        min-width: 40px;
+        width: 36px;
+        height: 36px;
+        padding: 0;
         justify-content: center;
     }
 }

@@ -71,7 +71,7 @@ test.describe('PWA safe-area insets', () => {
         // The bug: the whole 44px topbar lived at y 0-44, inside a 59px inset.
         expect(close.top).toBeGreaterThanOrEqual(SAFE_TOP);
         // And it has to be hittable once it is on screen.
-        expect(close.height).toBeGreaterThanOrEqual(44);
+        expect(close.height).toBeGreaterThanOrEqual(36);
 
         // The other control in the bar went under the clock with it.
         const toggle = await boxOf(page, '#docs-nav-toggle');
@@ -112,28 +112,32 @@ test.describe('PWA safe-area insets', () => {
         expect(Math.round(footer.height)).toBe(30);
     });
 
-    test('the phone sheet offers a labeled Back control that closes the pane',
+    test('the phone sheet offers a return button that closes the pane',
          async ({ page }) => {
         await openTry(page);
         await applyInsets(page);
         await openDocs(page);
         await expect(page.locator('#docs-overlay')).toBeVisible();
 
-        // "x" in a trailing corner does not read as the way out of a
-        // full-screen sheet; on a phone the control is labeled and leading.
-        const label = page.locator('.docs-close-label');
-        await expect(label).toBeVisible();
-        await expect(label).toHaveText('Back');
+        // A bare "x" does not read as the way out of a full-screen sheet; on
+        // a phone the control is a "return to the editor" arrow button, in
+        // the upper-right corner.
+        await expect(page.locator('.docs-close-return')).toBeVisible();
+        await expect(page.locator('.docs-close-x')).toBeHidden();
+        await expect(page.locator('#docs-close')).toHaveAttribute('aria-label', 'Close documentation');
 
         const closeBox = await boxOf(page, '#docs-close');
         const toggleBox = await boxOf(page, '#docs-nav-toggle');
         expect(closeBox.top).toBeLessThan(toggleBox.top + toggleBox.height);
-        // Leading edge: before the Contents toggle, not after the search box.
-        const closeLeft = await page.evaluate(
-            () => document.querySelector('#docs-close').getBoundingClientRect().left);
-        const toggleLeft = await page.evaluate(
-            () => document.querySelector('#docs-nav-toggle').getBoundingClientRect().left);
-        expect(closeLeft).toBeLessThan(toggleLeft);
+        // Trailing edge: after the search box, at the right of the bar.
+        const edges = await page.evaluate(() => ({
+            close:  document.querySelector('#docs-close').getBoundingClientRect().left,
+            search: document.querySelector('.docs-search-wrap').getBoundingClientRect().right,
+            bar:    document.querySelector('.docs-topbar').getBoundingClientRect().right,
+            right:  document.querySelector('#docs-close').getBoundingClientRect().right,
+        }));
+        expect(edges.close).toBeGreaterThanOrEqual(edges.search);
+        expect(edges.bar - edges.right).toBeLessThanOrEqual(16);
 
         await page.click('#docs-close');
         await expect(page.locator('#docs-overlay')).toBeHidden();

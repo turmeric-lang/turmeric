@@ -7,6 +7,7 @@
 ;;
 ;; Builder-pattern API for parsing CLI arguments.
 ;; Supports flags (--verbose), options (--input=file or --input file),
+;; options whose value is optional (--isolate or --isolate=credentialless),
 ;; positional args, per-option defaults with type coercion, and
 ;; arbitrarily nested subcommands.
 ;;
@@ -17,6 +18,7 @@
 ;;   alias   [0]=short_cstr  [1]=long_cstr     [2]=next_alias
 ;;   flag    [0]=name_cstr   [1]=next_flag
 ;;   option  [0]=name_cstr   [1]=type_cstr     [2]=dflt_cstr_or_0  [3]=next_option
+;;           [4]=implicit_cstr_or_0 (the value a bare --name stands for)
 ;;   subcmd  [0]=name_cstr   [1]=sub_spec      [2]=next_subcmd
 ;;   result  [0]=entries     [1]=positional    [2]=subcommand_cstr
 ;;           [3]=sub_result  [4]=error_flag    [5]=errmsg_cstr
@@ -103,11 +105,12 @@
 (defn args/-spec-option-raw [spec : ArgSpec name : cstr type : cstr dflt : cstr] : ArgSpec
   ```c
   int64_t *s = (int64_t*)(intptr_t)spec;
-  int64_t *cell = malloc(4 * sizeof(int64_t));
+  int64_t *cell = malloc(5 * sizeof(int64_t));
   cell[0] = (int64_t)(intptr_t)name;
   cell[1] = (int64_t)(intptr_t)type;
   cell[2] = (int64_t)(intptr_t)dflt;
   cell[3] = s[1];
+  cell[4] = 0;
   s[1] = (int64_t)(intptr_t)cell;
   return spec;
   ```)
@@ -140,6 +143,46 @@
     (args/-spec-option-raw spec name type d)
     (None)
     (args/-spec-option-raw spec name type (args/-no-default))))
+;;; args/-set-implicit -- give the most recently registered option an implicit value.
+
+(defn args/-set-implicit [spec : ArgSpec implicit : cstr] : ArgSpec
+  ```c
+  int64_t *s = (int64_t*)(intptr_t)spec;
+  int64_t *cell = (int64_t*)(intptr_t)s[1];
+  if (cell) cell[4] = (int64_t)(intptr_t)implicit;
+  return spec;
+  ```)
+
+;;; args/spec-option-implicit -- register an option whose value may be left out.
+;;;
+;;; Like args/spec-option, but the option may also be given bare: `--name`
+;;; with no `=value` stands for `implicit`.  A value must then be attached
+;;; with `=` (`--name=value`); the next word is never taken as the value, so
+;;; `--isolate dist` is `--isolate` followed by the positional `dist`.  Left
+;;; out entirely, the option takes `dflt` as usual.
+;;;
+;;; Parameters:
+;;;   spec     -- ArgSpec handle
+;;;   name     -- option name with dashes (e.g., "--isolate")
+;;;   type     -- one of "string", "int", "float", "bool" (shown in help)
+;;;   dflt     -- (some "value") for the value when the option is absent,
+;;;               (none) if the option is required
+;;;   implicit -- the value a bare `--name` stands for
+;;;
+;;; Returns:
+;;;   The same ArgSpec (mutated in place).
+;;;
+;;; Example:
+;;;   (args/spec-option-implicit spec "--color" "string" (some "never") "always")
+;;;   ;; (no flag) => "never", --color => "always", --color=auto => "auto"
+;;;
+;;; Since: tur serve --isolate
+(defn args/spec-option-implicit [spec : ArgSpec
+                                 name : cstr
+                                 type : cstr
+                                 dflt : (Option cstr)
+                                 implicit : cstr] : ArgSpec
+  (args/-set-implicit (args/spec-option spec name type dflt) implicit))
 ;;; args/spec-subcommand -- register a nested subcommand.
 ;;;
 ;;; Parameters:
@@ -198,7 +241,9 @@
   ```)
 ;;; args/parse -- parse a Turmeric *args* cons list against an arg spec.
 ;;;
-;;; Accepts both --key=value (preferred) and --key value forms for options.
+;;; Accepts both --key=value (preferred) and --key value forms for options;
+;;; an option registered with args/spec-option-implicit takes only
+;;; --key=value, and a bare --key stands for its implicit value.
 ;;; Flags are set to "1" when present. --help is always accepted.
 ;;; The first non-flag token matching a registered subcommand name triggers
 ;;; recursive dispatch: remaining tokens are parsed against the sub-spec.
@@ -334,7 +379,15 @@
           while (opt) {
             const char *oname = (const char*)(intptr_t)opt[0];
             if (strcmp(oname + 2, key_start) == 0) {
-              if (i + 1 < argc_l) {
+              if (opt[4]) {
+                /* args/spec-option-implicit: a bare --key is its implicit
+                 * value, and the next word is left for whatever it is. */
+                int64_t *ent = malloc(3 * sizeof(int64_t));
+                ent[0] = (int64_t)(intptr_t)strdup(key_start);
+                ent[1] = (int64_t)(intptr_t)strdup((const char*)(intptr_t)opt[4]);
+                ent[2] = res[0];
+                res[0] = (int64_t)(intptr_t)ent;
+              } else if (i + 1 < argc_l) {
                 i++;
                 const char *val = argv_l[i];
                 int64_t *ent = malloc(3 * sizeof(int64_t));
@@ -663,7 +716,15 @@
       const char *oname = (const char*)(intptr_t)opt[0];
       const char *otype = (const char*)(intptr_t)opt[1];
       int64_t odflt = opt[2];
-      if (odflt)
+      if (opt[4]) {
+        /* Optional value: `--name[=<type>]`, and what a bare --name means. */
+        if (odflt)
+          printf("  %s[=<%s>]  (default: %s; bare: %s)\n", oname, otype,
+                 (const char*)(intptr_t)odflt, (const char*)(intptr_t)opt[4]);
+        else
+          printf("  %s[=<%s>]  (required; bare: %s)\n", oname, otype,
+                 (const char*)(intptr_t)opt[4]);
+      } else if (odflt)
         printf("  %s=<%s>  (default: %s)\n", oname, otype, (const char*)(intptr_t)odflt);
       else
         printf("  %s=<%s>  (required)\n", oname, otype);

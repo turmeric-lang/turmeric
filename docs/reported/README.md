@@ -40,6 +40,18 @@ directory is worse for triage than no index.
 | --- | --- | --- |
 | [carrier-adt-body-passes-int-return](carrier-adt-body-passes-int-return.md) | medium | A defn declared `: int` whose body returns a word-carried ADT (one holding a `(List ...)`, `Datum` included) compiles and returns a heap address, because the return check decides "aggregate" from the C spelling and a word-carried node spells `int64_t`. A by-value ADT gets TUR-E0709 for the same mistake; `--interpret` accepts every shape |
 
+## Found prototyping simd-and-vectorization-plan (filed 2026-10-24)
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [assoc-type-method-at-applied-opaque-instance-no-instance](assoc-type-method-at-applied-opaque-instance-no-instance.md) | medium-low | A method returning the class's associated type, called on the constraint tyvar in a generic, errors `no instance '<Class> tyvar'` when the instances are keyed on an applied opaque like `(NumVec float)`; plain opaques work. Likely the return-directed representative search accepts only `TY_INT` / bare opaque `TY_ADT` heads |
+
+## Found asking whether `let` should become `let*` (filed 2026-10-24)
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| ~~[let-star-redundant-with-sequential-let](../archive/let-star-redundant-with-sequential-let.md)~~ | low | **RESOLVED 2026-10-24** (archived): `let*` is deprecated in the Turmeric dialects (`TUR-D0006`; silent under `#lang r7rs`, whose `let`/`let*` keep the spec's meaning), the quickstart no longer says `let` bindings cannot see each other, and the nested-`let` chains in the guides, stdlib and benchmarks are one sequential `let`. Pinned by `errors/let-star-deprecated`, `let-star` and `r7rs-let-star-not-deprecated` |
+
 ## Found adding trend lines and zoom to /ci (filed 2026-10-24)
 
 | Report | Severity | One line |
@@ -55,7 +67,6 @@ directory is worse for triage than no index.
 
 | Report | Severity | One line |
 |---|---|---|
-| [mir-interp-tail-calls-grow-the-stack](mir-interp-tail-calls-grow-the-stack.md) | low (high for the wasm JIT) | The MIR interpreter runs `MIR_TCALL` (c2mir's `musttail`) as a call and a return, so a mutual tail-call cycle the emitter did not fuse grows the stack under `TUR_JIT_GEN=interp` -- and in the planned browser engine, whose ceiling is 1,696 frames. The generator half, `jit-musttail-expands-to-nothing`, was fixed 2026-10-24 (mir#13). |
 
 ## Found executing generator-type-plan (filed 2026-10-23)
 
@@ -713,7 +724,7 @@ walk whose invariant mentions the container's length.
 Found investigating two security-guide questions -- whether `--no-proc-macros`
 should default on, and whether `--strict-effects` should -- and scoping
 `^capability` for `println`. The plan these feed is
-[effect-row-honesty-plan](../upcoming/effect-row-honesty-plan.md), which also
+[effect-row-honesty-plan](../archive/effect-row-honesty-plan.md), which also
 answers [security-audit-plan](../upcoming/security-audit-plan.md) open
 question 3 as Option A.
 
@@ -728,7 +739,7 @@ question 3 as Option A.
 
 Found reviewing the two live `EXPERIMENTS[]` rows --
 [loop-invariants](../archive/loop-invariants-plan.md) (`expires_at 0.58.0`,
-so due) and [reflected-measures](../upcoming/reflected-measures-plan.md)
+so due) and [reflected-measures](../archive/reflected-measures-plan.md)
 (`expires_at 0.61.0`, not due) -- against what graduating each would freeze.
 Every row below was reproduced against a v0.59.0 Debug build. None is a
 soundness bug: in all four the runtime check is kept, so the programs are

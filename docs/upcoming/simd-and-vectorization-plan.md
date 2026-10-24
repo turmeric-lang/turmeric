@@ -1,0 +1,507 @@
+# SIMD and vectorization -- typed numeric arrays, then explicit vector types
+
+> **Status: PROPOSED 2026-10-24. Nothing started.** Written in response to
+> "are (1) SIMD functions for manual calling and (2) vectorization
+> optimizations, likely in MIR, useful or viable for Turmeric?", with Racket's
+> `flvector` raised as a related idea. Short answer: (1) yes, as an
+> experiment-gated set of vector types lowered to GCC/Clang vector
+> extensions; (2) yes, but in the C the emitter writes, not in MIR. Both rest
+> on a `flvector`-style typed numeric array, which is phase N0.
+> **2026-10-24 update:** the generic-vs-five-types question was prototyped
+> (section 3.1; author leans generic with `defalias` names, one compiler
+> bug in the way), N2's options were expanded to seven (A-G), and wasm
+> stays open.
+> **Type:** Stdlib / compiler (emitter, elaborator) / driver
+> **Depends on:** the sized primitives (`int32`, `uint8`, `float32`, ...;
+> `src/compiler/elab_core.c:49`), the inline-C site discipline
+> (`emit_direct_call_site_mode`, `src/compiler/emit_core.c:2026`), the
+> experiments registry (`src/runtime/experiments.c`).
+> **Related:** [`docs/archive/history/unboxing-and-monomorphization-plan.md`](../archive/history/unboxing-and-monomorphization-plan.md)
+> and [`docs/archive/outstanding-followups-plan.md`](../archive/outstanding-followups-plan.md)
+> (both name "SIMD / vector primitives" as a separate axis whose prerequisite
+> is sized primitives -- those now exist),
+> [`docs/guides/performance-guide.md`](../guides/performance-guide.md),
+> [`docs/guides/value-representations-guide.md`](../guides/value-representations-guide.md),
+> [`docs/guides/jit-guide.md`](../guides/jit-guide.md).
+
+## 0. Summary
+
+Five phases, each useful on its own and each landing in its own PR:
+
+| Phase | What | Compiler work | Gate |
+|---|---|---|---|
+| **N0** | Typed numeric arrays: `F64Vec`, `F32Vec`, `I64Vec`, `I32Vec`, `U8Vec` | none (stdlib) | none -- new API surface, not a semantic change |
+| **N1** | Bulk kernels over them (`sum`, `dot`, `axpy!`, `scale!`, `fill!`, `copy!`, `min`/`max`) as plain C loops gcc vectorizes | none (stdlib) | none |
+| **N2** | An element-access path cheap enough that a Turmeric-written loop over an N0 array vectorizes | emitter / elaborator | none, unless it adds a form |
+| **S0** | A spice prototyping explicit SIMD on inline-C vector extensions | none | none (it is a spice) |
+| **S1** | Compiler-known vector types `f64x2`, `f64x4`, `f32x4`, `f32x8`, `i32x4`, `i64x2`, `u8x16` | elaborator, emitter, preamble, turi natives | `--enable=simd` |
+
+Explicitly **not** in this plan: a vectorizer inside MIR, `-march=native` by
+default, or `-ffast-math` anywhere global (section 5).
+
+## 1. Findings
+
+Measured 2026-10-24 on this repo at `289d688d`, gcc 13.3, x86-64 with
+AVX2/AVX-512, Release `tur`.
+
+### 1.1 Turmeric loops over `Vec` do not vectorize, even at `-O3`
+
+A tail-recursive dot product over two `(Vec float)` and an integer sum over a
+`(Vec int)`, through `tur emit-c` and `gcc -O3 -fopt-info-vec-missed`:
+
+```
+probe.c:11169:21: missed: not vectorized: control flow in loop.
+probe.c:11191:21: missed: not vectorized: control flow in loop.
+```
+
+Each `vec-get` (`stdlib/vec.tur:108`) emits, per element:
+
+1. `tur_site_push` / `tur_site_pop` -- two writes to a thread-local, because
+   the inline-C body can `tur_panic` (`binding_panics_in_inline_c` ->
+   `emit_direct_call_site_mode`, `src/compiler/emit_core.c:2026`);
+2. the bounds check and `tur_panic` branch inside the body;
+3. `if (tur_panicking) return ...;` after the call;
+4. a `union { int64_t s; double d; }` reinterpretation of the stored word.
+
+The control flow from (2) and (3) is what the vectorizer refuses. The same
+loop written in C over `const double *` vectorizes at `-O3`.
+
+### 1.2 Storage is not the problem; width and access are
+
+`Vec float` already stores doubles unboxed: eight bytes each, contiguous, in
+an `int64_t *data` slot array. So unlike Racket before `flvector`, Turmeric is
+not paying an allocation per float. What it lacks is:
+
+- **Narrow element types.** Every `Vec` slot is eight bytes, so a `float32`,
+  `int32` or `uint8` array uses half, half, or an eighth of each SIMD
+  register. Image, audio and ML-shaped data are all narrow.
+- **A cheap access path** (1.1).
+- **A layout the emitter can rely on.** `Vec A` is generic over a carrier
+  word; nothing tells the emitter "this is a `double *`".
+
+`SizedBuf` (`stdlib/sized-buf.tur`) and `SizedMatrix` are flat too, but are
+`int64_t`-only and typed through a `:int` carrier.
+
+### 1.3 Benchmark
+
+Dot product of 4096 doubles, repeated 200,000 times (819M multiply-adds;
+the arrays stay in L1/L2, so it is compute-bound). "Emitted shape" is a C
+model of 1.1's four steps, not compiled Turmeric. All rows printed the same
+result.
+
+| version | `-O2` (default) | `-O3` (`--release`) | `-O3 -ffast-math` | `-O3 -march=native -ffast-math` |
+|---|---|---|---|---|
+| emitted shape | 2.53s | 2.45s | 2.44s | 2.61s |
+| plain `double *` loop (N0+N1 shape) | 1.08s (2.3x) | 1.02s | 0.52s (4.8x) | 0.26s (~10x) |
+| explicit `f64x4` vector extension (S1 shape) | 0.59s (4.3x) | 0.71s | 0.76s | 0.27s (~9.7x) |
+
+What the table says:
+
+- **Removing the per-element overhead is worth 2.3x before any SIMD.**
+- **A float reduction needs permission to reassociate.** At plain `-O3`, gcc
+  must keep the scalar addition order, so the dot product gains almost
+  nothing. Only `-ffast-math` (or `-fassociative-math`) unlocks it.
+- **Explicit SIMD gets 4.3x on today's default flags**, because writing four
+  partial sums *is* the reassociation; the programmer chose it.
+- **AVX2-width registers need `-march`.** Turmeric deliberately never sets
+  it (`performance-guide.md`, "Build flags").
+
+The gcc report also shows that the default `-O2` (gcc 12+'s "very cheap"
+cost model) vectorizes none of the clean loops either, because their trip
+count is not known at compile time. `--release` (`-O3`) does.
+
+### 1.4 The engines
+
+- **cc**: gcc/clang. GCC vector extensions and `<immintrin.h>` intrinsics both
+  work in inline-C today (checked: a `vector_size(16)` multiply and an
+  `_mm_mul_pd`, both print `18.775`).
+- **`tur jit`** (c2mir): MIR's IR has scalar integer, float and block types
+  only (`external/mir/mir.h:179`). c2mir ignores `vector_size`, so the typedef
+  becomes a scalar and the program fails to compile (`excess elements in
+  scalar initializer`); `<immintrin.h>` does not parse. In both cases the
+  engine refuses and falls back to cc with TUR-W0070 -- safe, but no JIT.
+  The emitted C can detect c2mir with `__MIRC__` (already used in the
+  preamble, `src/compiler/emit_module.c:14695`).
+- **turi** (interpreter): no SIMD; natives are scalar C.
+- **wasm** (Emscripten): built without `-msimd128`
+  (`src/driver/cmd_build.c:319`), so vector extensions lower to scalar code.
+
+## 2. Goals and non-goals
+
+Goals:
+
+1. Numeric code over arrays can reach the speed of the equivalent C, on the
+   cc engine, without inline-C.
+2. Explicit SIMD is expressible in Turmeric with real types (no `:int`
+   handles), portable across x86-64, arm64 and wasm from the same source.
+3. All three engines give **the same answer** for every new operation,
+   bit for bit. Speed may differ by engine; results may not.
+
+Non-goals: a vectorizer in MIR; changing default C flags (`-march`,
+`-ffast-math`); auto-vectorizing `Vec A`, HAMTs or lists; GPU.
+
+## 3. Phases
+
+### N0 -- typed numeric arrays (`flvector`-style)
+
+Racket's `flvector` is a fixed-length, homogeneous, unboxed array of
+float64 with its own fast operations. N0 is that, for each sized element type
+worth having:
+
+| Type | Element | C layout |
+|---|---|---|
+| `F64Vec` | `float` | `struct { int64_t len; double *data; }` |
+| `F32Vec` | `float32` | `struct { int64_t len; float *data; }` |
+| `I64Vec` | `int` | `struct { int64_t len; int64_t *data; }` |
+| `I32Vec` | `int32` | `struct { int64_t len; int32_t *data; }` |
+| `U8Vec` | `uint8` | `struct { int64_t len; uint8_t *data; }` |
+
+- **Real types.** Each is a `defopaque` (or a `defstruct` with a typed
+  pointer), never `:int` at the public surface (CLAUDE.md, "No Lazy `:int`
+  Stand-Ins"). Whether the five share one parametric `(NumVec T)` or are
+  five types is open question 1; section 3.1 has what a prototype found. The
+  author leans generic, with honest names kept through `defalias`.
+- **Fixed length**, like `flvector`. Growth stays `Vec`'s job; a fixed length
+  lets the emitter and gcc trust `len` across a loop. `f64vec->vec` /
+  `vec->f64vec` convert.
+- **The data block is 32-byte aligned** (`aligned_alloc`), so S1 aligned
+  loads are legal on it and gcc can skip its peeling prologue.
+- **Surface per type** (shown for `F64Vec`): `f64vec-new n init`,
+  `f64vec-of x ...`, `f64vec-len`, `f64vec-ref`, `f64vec-set!`,
+  `f64vec-copy`, `f64vec->vec`, `vec->f64vec`, `f64vec-show`. `f64vec-ref`
+  keeps a bounds check and panics like `vec-get` does today; N2 is where the
+  loop-friendly path comes from.
+- **Region hooks.** An element store writes a number, never a pointer, so
+  `f64vec-set!` needs no `TUR_REGION_NOTE` (CLAUDE.md, "Region Store Hooks"
+  covers "a caller's word that can outlive a bracket" -- a pointer). Say so in
+  a comment on each setter so the next reader does not "fix" it.
+- **Ownership.** Drop glue frees `data` and the header; no element drop.
+- **Interpreter.** turi gets natives over the same struct, so the three engines
+  share one layout.
+- **Fixtures** (ASCII, floats probed with fractional values like `7.1` and
+  `3.25` per CLAUDE.md): construction, ref/set, out-of-bounds panic and its
+  site on both engines (`expected.stderr`), conversions, and a
+  `requires.leak-check` fixture for the drop glue.
+
+### 3.1 N0's type shape -- generic or five types (prototyped 2026-10-24)
+
+Whatever the surface, the C underneath is five sets of loops: a `float32`
+kernel walks a `float *`, a `float64` one a `double *`. The question is only
+how Turmeric names and reaches them. A prototype against `289d688d`:
+
+**What works.** One `(defopaque NumVec [t] :int)`, a class keyed on the
+*whole container type*, one instance per element type with an inline-C
+body over the real C pointer, and generic code over the class:
+
+~~~turmeric
+(defopaque NumVec [t] :int)
+(defalias F64Vec (NumVec float))
+(defalias F32Vec (NumVec float32))
+(defclass NumSum [v] (nv-sum [v] : float))
+(definstance NumSum [(NumVec float)]   (nv-sum [v] : float ```c /* double * loop */ ```))
+(definstance NumSum [(NumVec float32)] (nv-sum [v] : float ```c /* float * loop */ ```))
+(defn total [V] [(NumSum V)] [v : V] : float (nv-sum v))
+~~~
+
+`total` gets one specialization per instance (`total__spec__double_int64_t`
+and `..._int64_t__h1`) that calls that instance's C loop directly, so there is
+no runtime dispatch and gcc sees each loop concretely. The aliases are
+transparent: `a : F64Vec` and `a : (NumVec float)` are the same type. Correct
+on cc and `tur jit`.
+
+**What does not work today:**
+
+1. **A class keyed on the element** -- `(defclass NumElem [t] (ne-sum [v :
+   (NumVec t)] : t))` -- refuses at every call, even at a concrete type:
+   `TUR-E0020: ambiguous method dispatch ... receiver type is erased
+   (int64_t)`. Dispatch reads the first parameter's type, and the opaque's
+   carrier hides the `t` inside it. So instances must be keyed on
+   `(NumVec float)`, not on `float`.
+2. **An element-typed result through an associated type** -- `(type Elem :
+   Type)` and `(nv-sum [v] : Elem)`, so `nv-sum` on a `(NumVec float32)` returns
+   a `float32` -- fails inside a generic with `no instance 'NumSum tyvar'`,
+   though it works with plain (non-applied) opaques. Filed as
+   [assoc-type-method-at-applied-opaque-instance-no-instance](../reported/assoc-type-method-at-applied-opaque-instance-no-instance.md).
+   Until it is fixed, a generic `nv-sum` or `nv-ref` cannot return the honest
+   element type, which most of the API needs.
+3. **No dispatch on the result type.** A constructor that takes only a length
+   cannot pick an instance. Constructors either take an element first
+   (`(nv-new 7.1 n)` dispatches on `7.1`'s type) or stay per-type
+   (`f64vec-new`).
+4. **The interpreter** refuses an inline-C defn returning an opaque
+   (`the REPL JIT returns only int-class, float, cstr, bool and unit
+   results`). N0 needs turi natives whichever shape is chosen.
+
+**The trade, as it stands:**
+
+| | Generic `(NumVec T)` + aliases | Five types |
+|---|---|---|
+| Names users see | `F64Vec` etc. via `defalias`, plus `(NumVec T)` in generic code | `F64Vec` etc. |
+| Writing a generic algorithm (`mean`, `normalize!`) | once, over the class | needs a class anyway, keyed on five types |
+| Function names | one family (`nv-ref`, `nv-sum`), plus per-type constructors | five families (`f64vec-ref`, `f32vec-ref`, ...) |
+| C written | five instances | five sets of functions |
+| Blocked on | item 2 for element-typed results | nothing |
+| Extensible by users | yes -- anyone can add an instance (a feature, or a hole: a `NumVec Complex` would need its own kernels) | no |
+
+Recommendation: **generic, with `defalias` names**, starting after item 2 is
+fixed (a compiler fix, not a design change). If N0 has to start before that,
+the five-type version is a strict subset: its per-type functions become the
+generic instances' bodies later, and the names stay valid as aliases.
+
+### N1 -- bulk kernels
+
+Stdlib functions whose bodies are plain C loops over `restrict` pointers, so
+gcc vectorizes them at `-O3` without help:
+
+- `f64vec-fill!`, `f64vec-copy!` (with a length check up front), `f64vec-scale!`,
+  `f64vec-add!`, `f64vec-axpy!` (`y += a*x`), `f64vec-min`, `f64vec-max`,
+  `f64vec-dot`, `f64vec-sum`; the same for the other element types where they
+  make sense (no `dot` on `U8Vec`; `sum` on `U8Vec` widens to `int`).
+- **Reductions have one defined order, the same on every engine and ISA.**
+  The kernel accumulates into **eight interleaved partial sums** (lane `k`
+  takes elements `i` with `i mod 8 = k`), then adds them in a fixed tree.
+  This is the reassociation `-ffast-math` would have made, but chosen by
+  the library, written in plain C, and identical under cc, c2mir, turi,
+  `-march=native`, and wasm. It gets the vectorized speed at `-O3` with no
+  fast-math flag, and it is reproducible. A strict left-to-right
+  `f64vec-sum-ordered` sits beside it for callers who need the scalar answer.
+  Eight covers AVX-512 with `double` and AVX2 with `float`.
+- **Bounds checks happen once per call, outside the loop.** A kernel that
+  panics does so before its loop starts, so the loop body has no control flow.
+- **A vectorization check.** A small script (gcc-only; clang has
+  `-Rpass=loop-vectorize` if wanted later) emits the kernels, compiles them
+  with `-O3 -fopt-info-vec-optimized`, and fails if a listed kernel's loop is
+  not reported as vectorized. Registered as a ctest, run on the Linux CI
+  leg. Without it, a later preamble change could quietly put control flow
+  back in a kernel.
+- **Benchmark.** `benchmarks/bench-f64vec-dot.tur` beside a C baseline, in the
+  style of `fmap-vec.tur` / `fmap-vec-baseline.c`.
+
+### N2 -- a loop-friendly element access path
+
+N1 covers the common kernels; N2 is for the loop someone writes themselves.
+The goal is: a Turmeric loop over an `F64Vec` emits C whose loop body has no
+calls to a panicking body, no `tur_site_*` writes and no `tur_panicking`
+checks, so gcc can vectorize it at `-O3`.
+
+The site wrap and the panic check exist only because the callee's inline-C
+body can panic. So an accessor whose body cannot panic needs neither, and
+every approach below is a way to get a non-panicking access while keeping
+it safe. They differ in who carries the proof that the index is in range.
+Open question 3 picks; they are not exclusive.
+
+| | Approach | Who proves the index | Index arithmetic (`i+1`, stencils) | Cost | Engines |
+|---|---|---|---|---|---|
+| A | Unchecked accessor | the programmer | anything | trivial | all |
+| B | Element-iteration macro | the macro | none -- no index exposed | small | all |
+| C | Higher-order kernels taking a lambda | the library | none | large | all, fast only on cc |
+| D | Branded indices | the type checker | checked re-entry | medium | all |
+| E | Refinement-typed index | the SMT solver | anything provable | large | all |
+| F | Bounds-check hoisting in the compiler | the compiler | simple counted loops | large, fragile | all |
+| G | Cheaper checked path | nobody -- still checked | anything | medium | all; no vectorization |
+
+- **A. Unchecked accessor.** `nv-ref-unchecked` under `#fx{Unsafe}`, a body
+  with no `tur_panic`. Trivial. Puts the proof on the programmer, so it is a
+  building block for B and C rather than the main answer.
+- **B. Element-iteration macro**, after Racket's `(for ([x (in-flvector v)])
+  ...)`, which its `for` macro specializes into an unchecked loop.
+  `(nv-for [x v] body)` binds `x` to each element; `(nv-for [x a y b] body)`
+  walks two arrays together after one length check; `(nv-for-index [i x v]
+  body)` also binds the index read-only; `(nv-build n [i] expr)` builds a new
+  array like `for/flvector`. The macro expands to a tail-recursive local loop
+  (already emitted as a C `goto` loop, section 1.1) whose reads use A. Safe,
+  because no index the user can get wrong is ever in scope. Covers maps,
+  zips, folds and reductions; does not cover stencils (`v[i-1] + v[i+1]`) or
+  gathers.
+- **C. Higher-order kernels** (`nv-map!`, `nv-fold`, `nv-zip-with!` taking a
+  `(fn [float] float)`). The nicest surface, but only fast if the lambda is
+  inlined into the C loop. An inline-C kernel calling a Turmeric closure per
+  element is an indirect call per element, which neither vectorizes nor
+  beats B. Needs specialization of the kernel per lambda; deferred until the
+  emitter does that for other reasons.
+- **D. Branded indices.** `(SizedBuf n)` already carries a phantom length
+  `n`. Give `(NumVec n T)` the same, and an index type `(Ix n)` that only
+  `(nv-indices v)` produces. `nv-ref` taking an `(Ix n)` cannot be out of
+  range, so it is unchecked. `i+1` leaves the brand and comes back through a
+  checked `(nv-ix v k) : (Option (Ix n))`. Safe without a solver; the brand
+  makes signatures heavier, and it changes `NumVec`'s type, so decide before
+  N0 ships.
+- **E. Refinement-typed index.** `nv-ref` taking
+  `#refine{i : int | 0 <= i < (nv-len v)}`, discharged by the existing solver
+  (`src/compiler/refine_*.c`); where it cannot prove it, the call falls back
+  to the checked version. Covers stencils and arbitrary arithmetic. The most
+  work; the solver must reason about `nv-len` across a loop, which is what
+  the `reflected-measures` experiment is for.
+- **F. Bounds-check hoisting.** The compiler recognises a counted loop
+  `i < (nv-len v)` and drops or hoists the checks inside it. Invisible to
+  users. Turmeric loops are tail-recursive functions, not a loop IR, so the
+  pattern matching is fragile, and a missed match silently loses the speed.
+- **G. A cheaper checked path.** Keep the check, cut the rest: set the call
+  site only on the failure branch instead of around every call, and do the
+  compare at the call site instead of behind a call. Loops still do not
+  vectorize, since the check is still control flow (gcc 14+ and recent LLVM
+  can vectorize some early-exit loops, but not reliably enough to plan on).
+  It is the only option that also speeds up every existing `vec-get`, so it
+  is worth doing separately from this plan.
+
+Recommendation: **A + B first** (small, safe, every engine), N1 kernels for
+the common cases, then **D or E** when stencil-shaped code needs it. G as its
+own piece of work for `Vec`. C waits.
+
+Acceptance: the probe from 1.1 rewritten over `F64Vec` reports
+`loop vectorized` under `gcc -O3 -fopt-info-vec-optimized` for an integer
+sum, and for a float sum written with explicit partial sums. Add it to the
+N1 vectorization check.
+
+Also in N2, as a separate small decision: whether `tur build` (not only
+`--release`) should pass `-fvect-cost-model=cheap`, so unknown-trip-count
+loops vectorize at the default `-O2`. Measure compile time on the fixture
+corpus before deciding; the default `-O2` was chosen for build time.
+
+### S0 -- an explicit-SIMD spice
+
+Before touching the compiler, a spice in turmeric-spices (plan under
+`docs/upcoming/spices/` if it grows) with inline-C bodies over GCC vector
+extensions: load from and store to an N0 array, lanewise arithmetic,
+`splat`, horizontal sum. Its job is to validate the API names and op set
+against two or three real kernels (a dot product, an image blend over
+`U8Vec`, a biquad filter over `F32Vec`) and to measure what crossing a
+function boundary costs.
+
+The vector values in S0 cannot be first-class Turmeric values yet -- a
+16/32-byte value does not fit a carrier word -- so S0 exposes whole kernels
+or operates in place on N0 arrays. That limit is the motivation for S1.
+
+### S1 -- compiler-known vector types (`--enable=simd`)
+
+Types `f64x2`, `f64x4`, `f32x4`, `f32x8`, `i32x4`, `i64x2`, `u8x16`, plus
+mask types from comparisons (`m64x2`, ...; or one mask type per width).
+
+**Lowering.**
+
+- **cc**: GCC/Clang vector extensions, declared in the preamble:
+  `typedef double tur_f64x4 __attribute__((vector_size(32)));`. Not
+  `<immintrin.h>`: vector extensions are portable to SSE, AVX, NEON and wasm
+  simd128 from the same text, and an `f64x4` on an SSE2-only target becomes
+  two 128-bit operations, which is correct and still faster than scalar.
+- **`tur jit`**: under `#ifdef __MIRC__` the same typedef names are a struct
+  of lanes (`typedef struct { double v[4]; } tur_f64x4;`) and every operation
+  is a preamble helper looping over lanes. Correct, scalar speed, and no
+  TUR-W0070 fallback. The emitter writes operations as helper calls on both
+  engines (e.g. `tur_f64x4_add(a, b)`, an inline `a + b` on cc) so the two
+  preambles are the only place the difference lives.
+- **turi**: the same struct-of-lanes layout with scalar natives.
+- **wasm**: add `-msimd128` to the Emscripten flags when the program uses a
+  vector type (open question 5).
+
+**Values.** A vector value is a by-value aggregate. A wide (> 8 byte)
+by-value aggregate crossing a generic boundary is heap-boxed today
+(`value-representations-guide.md`, "wide by-value aggregate"), which would
+erase the point. So in S1 a vector type may appear in a local, a
+parameter, a return, a struct field and an N0 load/store, but **not** as a
+type argument to anything generic (`Vec`, `Option`, a typeclass dictionary
+method). That is a compile error in S1 naming the plan, not a silent box.
+Lifting it is a later phase if needed.
+
+**Operations.** Lanewise `+ - * /` (via `Num` instances, so `{a + b}` works),
+`min`, `max`, `abs`, `sqrt`; `splat`; `lane` and `with-lane` with
+constant indices; `load`/`store` from and to an N0 array at an index
+(one bounds check per load, outside any lane loop); comparisons returning a
+mask; `select mask a b`; `shuffle` with constant indices; horizontal
+`hsum` with the same fixed tree order as N1 so it agrees across engines;
+conversions between widths (`f32x4->f64x2-lo`, ...) as named functions,
+never implicit, spelled with `TUR_AS` where they convert so
+`tests/check-emitted-float-conversions.py` stays at zero findings.
+
+**Gate.** Per CLAUDE.md's experimental-features rule: one `EXPERIMENTS[]`
+row (`"simd"`, a summary, `plan_path` pointing here, `introduced`,
+`expires_at`, `XF_LIFECYCLE_PROTOTYPE`, `&g_opt_simd`), and
+`experiment_warn_if_used("simd")` where the elaborator first resolves a
+vector type name.
+
+**Graduation.** All three engines agree on the S1 fixture set; the
+generic-position restriction is either lifted or accepted as permanent and
+documented; at least one spice kernel from S0 has moved onto S1 types and
+measured no slower than its inline-C version.
+
+## 4. Engine matrix after each phase
+
+| | cc | `tur jit` | turi | wasm |
+|---|---|---|---|---|
+| N0/N1 | vectorized kernels at `-O3`; scalar but cheap at `-O2` | same C, MIR scalar code | scalar natives | scalar (no simd128) |
+| N2 | user loops vectorize at `-O3` | scalar | scalar | scalar |
+| S1 | vector extensions (SSE2 baseline, AVX with `-march`) | struct-of-lanes helpers | struct-of-lanes natives | simd128 if enabled |
+
+Results identical in every cell.
+
+## 5. Rejected and deferred
+
+- **A vectorizer in MIR.** The project linked in the original question,
+  [SparrowLii/vectorization](https://github.com/SparrowLii/vectorization),
+  is a loop vectorizer over *Rust's* MIR inside a patched rustc -- unrelated
+  to vnmakarov's MIR, which `tur jit` uses. vnmakarov's MIR has no vector
+  types; the one upstream request
+  ([vnmakarov/mir#58](https://github.com/vnmakarov/mir/issues/58)) was
+  closed in 2020. Adding one means vector types in the IR, vector register
+  allocation, instruction selection on four back ends and vector-extension
+  parsing in c2mir, through a fork limited to one open PR at a time
+  (CLAUDE.md, "MIR fork"). And it would speed up the engine meant for the
+  run-edit-run loop; deployed code goes through gcc/clang, whose vectorizers
+  already exist. Revisit only if the JIT becomes a deployment engine.
+- **Global `-ffast-math`.** It changes results program-wide, including NaN
+  and infinity handling, and would make the cc engine disagree with turi.
+  N1's fixed partial-sum order gets the reduction speedup without it.
+- **`-march=native` by default.** Already declined in the performance guide:
+  the binary needs the machine that built it. `TUR_CC_FLAGS` remains the way
+  to opt in.
+- **Function multiversioning** (`__attribute__((target_clones("avx2",
+  "default")))` on the N1 kernels): would give AVX2 speed in a portable
+  binary on x86-64 Linux (glibc ifunc). Deferred to open question 6; not
+  portable to macOS or Windows as-is.
+
+## 6. Open questions
+
+1. Five types, or one `(NumVec T)`? **Author leans generic.** Section 3.1:
+   generic works today for fixed-result methods and is blocked for
+   element-typed results by
+   [assoc-type-method-at-applied-opaque-instance-no-instance](../reported/assoc-type-method-at-applied-opaque-instance-no-instance.md).
+2. Names. **Author leans toward honest names: `F64Vec`, not `FlVec`.** With a
+   generic type, those become `defalias`es of `(NumVec float)` etc., and the
+   function family is `nv-*` (or `numvec-*`) rather than `f64vec-*`. Still
+   open: the generic type's own name, and whether per-type function names
+   (`f64vec-new`) survive for constructors (3.1, item 3).
+3. Which N2 approaches (A-G in N2)? Recommended: A + B first, D or E later,
+   G separately. Note D changes `NumVec`'s type, so it has to be decided
+   before N0 ships.
+4. Is eight the right partial-sum count for N1 reductions on every target,
+   or should it be fixed per element width (8 for `float64`, 16 for
+   `float32`)? Either way it must not depend on the build machine.
+5. wasm: turn on `-msimd128` always (every current browser supports it) or
+   only when the program uses S1 types? **Undecided**; it does not block
+   anything before S1.
+6. Multiversioned N1 kernels on x86-64 Linux -- worth it, and does a
+   portable fallback exist for the other hosts?
+
+## Appendix -- reproducing 1.1 and 1.3
+
+The probe and benchmark used for this plan:
+
+```sh
+# 1.1: does the emitted loop vectorize?
+./build-release/tur emit-c probe.tur > probe.c
+gcc -O3 -std=gnu99 -fno-strict-aliasing -w -c probe.c -o /dev/null \
+    -fopt-info-vec-missed 2>&1 | grep 'not vectorized'
+
+# 1.3: four C variants of one dot product
+for f in "-O2" "-O3" "-O3 -ffast-math" "-O3 -march=native -ffast-math"; do
+  gcc $f -fno-strict-aliasing -w -o bench bench.c && ./bench
+done
+```
+
+`probe.tur` is a tail-recursive `(dot-go a b i n acc)` over two
+`(Vec float)` filled with `7.1` and `3.25`, plus the same shape over a
+`(Vec int)`. `bench.c` has three versions of the dot product: the emitted
+shape (bounds check, thread-local site push/pop, panic flag, union
+reinterpretation), a plain `const double *` loop, and an `f64x4` vector
+extension with four partial sums. They are not committed; N1's benchmark
+replaces them.

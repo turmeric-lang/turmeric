@@ -414,12 +414,14 @@ interpreter recursion folds onto a heap work-stack, and `tur interpret`
 runs a million-deep non-tail recursion natively where the MIR interpreter
 overflows even on the JIT's 1 GiB entry thread (its frame is over 1 KiB).
 So switching the page's engine from Interpret to Compile trades
-memory-bounded depth for ~1,700 frames, which the toggle must say. And the
-emitter's `TUR_MUSTTAIL` is a jump only under MIR's generator: the MIR
-interpreter runs a tail call as a call, so mutual tail calls the T5 fusion did
-not collapse count against that limit too
-([mir-interp-tail-calls-grow-the-stack](../reported/mir-interp-tail-calls-grow-the-stack.md);
-the generator half was [jit-musttail-expands-to-nothing](../archive/jit-musttail-expands-to-nothing.md)).
+memory-bounded depth for ~1,700 frames, which the toggle must say. Mutual
+tail calls the T5 fusion did not collapse do not count against it: the
+emitter's `TUR_MUSTTAIL` is a MIR tail call, which the interpreter runs in the
+caller's activation
+([mir-interp-tail-calls-grow-the-stack](../archive/mir-interp-tail-calls-grow-the-stack.md),
+fixed 2026-10-24). One wasm-specific residue: the interpreter cannot reset the
+stack pointer there, so a tail call from a function that allocated (a local
+aggregate) leaves those allocas and a frame behind until the chain returns.
 The AOT wasm target is in the same family at a higher ceiling:
 [wasm-target-stack-is-emcc-default](../archive/wasm-target-stack-is-emcc-default.md).
 Between them they are the "real program that needs more than 1 GiB of

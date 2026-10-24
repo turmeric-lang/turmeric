@@ -423,10 +423,12 @@ static const ExperimentDescriptor EXPERIMENTS[] = {
      * encoder, where both historical refinement soundness bugs were.  The
      * decision the plan's RF0 required is recorded in its header: a
      * REFLECTED function must be shown total; program termination in general
-     * stays out of scope.  See docs/upcoming/reflected-measures-plan.md. */
+     * stays out of scope.  See docs/archive/reflected-measures-plan.md
+     * (archived 2026-10-24 while the experiment stays gated: nothing
+     * technical is outstanding, graduation waits on a consumer). */
     { "reflected-measures",
       "`^reflect` admits a total measure's defining equation to the refinement solver (bounded unfolding)",
-      "docs/upcoming/reflected-measures-plan.md",
+      "docs/archive/reflected-measures-plan.md",
       "0.57.0",                  /* introduced */
       "0.64.0",                  /* expires_at -- advisory; never blocks a release */
       XF_LIFECYCLE_PROTOTYPE,

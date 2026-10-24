@@ -10,7 +10,7 @@
 ;; structurally recursive, exhaustively matching) and the encoder may unfold
 ;; its defining equation, so the same call sites PROVE.
 ;;
-;; What each section exercises (see docs/upcoming/reflected-measures-plan.md):
+;; What each section exercises (see docs/archive/reflected-measures-plan.md):
 ;;
 ;;   1. ground unfolding (RF3)       -- call sites with constructor-built
 ;;                                      boards: Int, Bool and Float measures

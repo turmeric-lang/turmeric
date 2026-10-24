@@ -8365,7 +8365,12 @@ static char *prim_expr(const BuiltinSpec *sp, char **as, uint32_t n) {
             }
             break;
         case BS_PREFIX_UNARY:
-            buf_printf(&b, "%s(%s)", sp->c_op, as[0]);
+            /* (- x) on an integer kind: as in emit_core.c. */
+            if (builtin_negate_ctype(sp))
+                buf_printf(&b, "(%s)(0 - (uint64_t)(%s))",
+                           builtin_negate_ctype(sp), as[0]);
+            else
+                buf_printf(&b, "%s(%s)", sp->c_op, as[0]);
             break;
         case BS_AND_SC:
         case BS_OR_SC: {

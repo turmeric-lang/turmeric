@@ -56,7 +56,7 @@
   (sub [x y] (- x y))
   (mul [x y] (* x y))
   (div [x y] (/ x y))
-  (neg [x] (- 0 x)))
+  (neg [x] (- x)))
 ;; Phase N4: Num instances for new numeric types
 ;;; Num [int8] -- Num instance for int8.
 
@@ -65,7 +65,7 @@
   (sub [x y] (- x y))
   (mul [x y] (* x y))
   (div [x y] (/ x y))
-  (neg [x] (- 0i8 x)))
+  (neg [x] (- x)))
 ;;; Num [int16] -- Num instance for int16.
 
 (definstance Num [int16]
@@ -73,7 +73,7 @@
   (sub [x y] (- x y))
   (mul [x y] (* x y))
   (div [x y] (/ x y))
-  (neg [x] (- 0i16 x)))
+  (neg [x] (- x)))
 ;;; Num [int32] -- Num instance for int32.
 
 (definstance Num [int32]
@@ -81,7 +81,7 @@
   (sub [x y] (- x y))
   (mul [x y] (* x y))
   (div [x y] (/ x y))
-  (neg [x] (- 0i32 x)))
+  (neg [x] (- x)))
 ;;; Num [uint8] -- Num instance for uint8.
 
 (definstance Num [uint8]
@@ -89,7 +89,7 @@
   (sub [x y] (- x y))
   (mul [x y] (* x y))
   (div [x y] (/ x y))
-  (neg [x] (- 0u8 x)))
+  (neg [x] (- x)))
 ;;; Num [uint16] -- Num instance for uint16.
 
 (definstance Num [uint16]
@@ -97,7 +97,7 @@
   (sub [x y] (- x y))
   (mul [x y] (* x y))
   (div [x y] (/ x y))
-  (neg [x] (- 0u16 x)))
+  (neg [x] (- x)))
 ;;; Num [uint32] -- Num instance for uint32.
 
 (definstance Num [uint32]
@@ -105,7 +105,7 @@
   (sub [x y] (- x y))
   (mul [x y] (* x y))
   (div [x y] (/ x y))
-  (neg [x] (- 0u32 x)))
+  (neg [x] (- x)))
 ;;; Num [uint64] -- Num instance for uint64.
 
 (definstance Num [uint64]
@@ -113,7 +113,7 @@
   (sub [x y] (- x y))
   (mul [x y] (* x y))
   (div [x y] (/ x y))
-  (neg [x] (- 0u64 x)))
+  (neg [x] (- x)))
 ;;; Num [float32] -- Num instance for float32.
 
 (definstance Num [float32]
@@ -121,7 +121,7 @@
   (sub [x y] (- x y))
   (mul [x y] (* x y))
   (div [x y] (/ x y))
-  (neg [x] (- 0.0f32 x)))
+  (neg [x] (- x)))
 ;;; Num [float] -- Num instance for float (double).
 
 (definstance Num [float]
@@ -129,7 +129,7 @@
   (sub [x y] (- x y))
   (mul [x y] (* x y))
   (div [x y] (/ x y))
-  (neg [x] (- 0.0 x)))
+  (neg [x] (- x)))
 ;;; Clone -- values that can be copied into an independently owned value.
 ;;;
 ;;; Parameters:

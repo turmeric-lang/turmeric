@@ -181,27 +181,27 @@ thread and a Future freed on another are race-free.
 ### Producer/Consumer with Promise/Future
 
 ```turmeric
-(let [p (promise-new)]
-  (let [f (future-handle p)]
-    (promise-fulfill p 42)       ; producer settles (consumes p)
-    (let [result (future-get f)] ; consumer blocks until settled
-      ;; result is a ptr<void> to a Result in canonical tagged layout
-      (println (ok? result))     ; => true
-      (println (ok-val result))  ; => 42
-      (future-free f))))
+(let [p (promise-new)
+      f (future-handle p)]
+  (promise-fulfill p 42)       ; producer settles (consumes p)
+  (let [result (future-get f)] ; consumer blocks until settled
+    ;; result is a ptr<void> to a Result in canonical tagged layout
+    (println (ok? result))     ; => true
+    (println (ok-val result))  ; => 42
+    (future-free f)))
 ```
 
 ```sweet-exp
 #lang sweet-exp
 
-let [p promise-new()]
-  let [f future-handle(p)]
-    promise-fulfill(p 42)        ; producer settles (consumes p)
-    let [result future-get(f)]   ; consumer blocks until settled
-      ;; result is a ptr<void> to a Result in canonical tagged layout
-      println(ok?(result))       ; => true
-      println(ok-val(result))    ; => 42
-      future-free(f)
+let [p promise-new()
+     f future-handle(p)]
+  promise-fulfill(p 42)        ; producer settles (consumes p)
+  let [result future-get(f)]   ; consumer blocks until settled
+    ;; result is a ptr<void> to a Result in canonical tagged layout
+    println(ok?(result))       ; => true
+    println(ok-val(result))    ; => 42
+    future-free(f)
 ```
 
 ### Pre-fulfilled Future
@@ -229,25 +229,25 @@ let [f future-of(99)]
 returns a `Result` whose `err?` is true:
 
 ```turmeric
-(let [p (promise-new)]
-  (let [f (future-handle p)]
-    (promise-fail p 1)          ; settle with error code 1
-    (let [result (future-get f)]
-      (println (err? result))   ; => true
-      (println (err-val result)) ; => 1
-      (future-free f))))
+(let [p (promise-new)
+      f (future-handle p)]
+  (promise-fail p 1)          ; settle with error code 1
+  (let [result (future-get f)]
+    (println (err? result))   ; => true
+    (println (err-val result)) ; => 1
+    (future-free f)))
 ```
 
 ```sweet-exp
 #lang sweet-exp
 
-let [p promise-new()]
-  let [f future-handle(p)]
-    promise-fail(p 1)           ; settle with error code 1
-    let [result future-get(f)]
-      println(err?(result))     ; => true
-      println(err-val(result))  ; => 1
-      future-free(f)
+let [p promise-new()
+     f future-handle(p)]
+  promise-fail(p 1)           ; settle with error code 1
+  let [result future-get(f)]
+    println(err?(result))     ; => true
+    println(err-val(result))  ; => 1
+    future-free(f)
 ```
 
 ## Combining TaskGroup and Future
@@ -257,40 +257,40 @@ its result, then wait for the group and collect results from the futures.
 
 ```turmeric
 ;; Spawn N workers, each fulfills a promise with its result
-(let [g (task-group-new)]
-  (let [p1 (promise-new)
-        p2 (promise-new)
-        f1 (future-handle p1)
-        f2 (future-handle p2)]
-    (task-group-spawn g (fn [] (do (promise-fulfill p1 (compute-1)) (task-group-task-done g))))
-    (task-group-spawn g (fn [] (do (promise-fulfill p2 (compute-2)) (task-group-task-done g))))
-    (task-group-wait g)
-    (let [r1 (ok-val (future-get f1))
-          r2 (ok-val (future-get f2))]
-      (println (+ r1 r2))
-      (future-free f1)
-      (future-free f2)
-      (task-group-free g))))
+(let [g  (task-group-new)
+      p1 (promise-new)
+      p2 (promise-new)
+      f1 (future-handle p1)
+      f2 (future-handle p2)]
+  (task-group-spawn g (fn [] (do (promise-fulfill p1 (compute-1)) (task-group-task-done g))))
+  (task-group-spawn g (fn [] (do (promise-fulfill p2 (compute-2)) (task-group-task-done g))))
+  (task-group-wait g)
+  (let [r1 (ok-val (future-get f1))
+        r2 (ok-val (future-get f2))]
+    (println (+ r1 r2))
+    (future-free f1)
+    (future-free f2)
+    (task-group-free g)))
 ```
 
 ```sweet-exp
 #lang sweet-exp
 
 ;; Spawn N workers, each fulfills a promise with its result
-let [g task-group-new()]
-  let [p1 promise-new()
-       p2 promise-new()
-       f1 future-handle(p1)
-       f2 future-handle(p2)]
-    task-group-spawn(g (fn [] do(promise-fulfill(p1 compute-1()) task-group-task-done(g))))
-    task-group-spawn(g (fn [] do(promise-fulfill(p2 compute-2()) task-group-task-done(g))))
-    task-group-wait(g)
-    let [r1 ok-val(future-get(f1))
-         r2 ok-val(future-get(f2))]
-      println({r1 + r2})
-      future-free(f1)
-      future-free(f2)
-      task-group-free(g)
+let [g  task-group-new()
+     p1 promise-new()
+     p2 promise-new()
+     f1 future-handle(p1)
+     f2 future-handle(p2)]
+  task-group-spawn(g (fn [] do(promise-fulfill(p1 compute-1()) task-group-task-done(g))))
+  task-group-spawn(g (fn [] do(promise-fulfill(p2 compute-2()) task-group-task-done(g))))
+  task-group-wait(g)
+  let [r1 ok-val(future-get(f1))
+       r2 ok-val(future-get(f2))]
+    println({r1 + r2})
+    future-free(f1)
+    future-free(f2)
+    task-group-free(g)
 ```
 
 ## async/await

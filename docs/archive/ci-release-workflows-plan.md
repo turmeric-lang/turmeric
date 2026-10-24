@@ -1,5 +1,11 @@
 # CI Release Workflows Plan -- one-shot GitHub Actions cut + Cloudflare deploy
 
+> **Archived 2026-10-24.** The workflow has since run for real: every
+> release from v0.68.0 (2026-10-21) to v0.70.5 (2026-10-24) is a
+> `chore: release vX.Y.Z` commit by `github-actions[bot]`, which is the commit
+> `release-cut.yml` makes -- the condition the note below set for archiving.
+> The status text below is as of 2026-10-05.
+>
 > **Status: IMPLEMENTED, not yet exercised (2026-10-05).** One workflow,
 > `.github/workflows/release-cut.yml`, plus the drafter
 > `tools/release_prepare.py`. Nothing has run end to end: the Cloudflare
@@ -11,7 +17,7 @@
 > a one-shot cut instead -- the author's call, 2026-10-05: an interactive
 > review PR was more mess than the review was worth, and the one-shot shape
 > also needs no PAT. That brings it close to
-> [release-in-actions-plan](../archive/release-in-actions-plan.md); the differences are
+> [release-in-actions-plan](release-in-actions-plan.md); the differences are
 > that notes come from the Mistral API, and `release.yml` is dispatched
 > unchanged rather than extracted into a reusable workflow. One of the two
 > plans should be archived once a real release has gone through.

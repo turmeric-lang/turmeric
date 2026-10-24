@@ -5820,6 +5820,15 @@ static TuriValue eval_builtin(TuriEnv *env, const BuiltinSpec *spec,
         if (spec->name && strcmp(spec->name, "ptr-null?") == 0)
             return turi_bool(args[0].as_int == 0);
         if (op && strcmp(op, "!") == 0) return turi_bool(!args[0].as_bool);
+        /* (- x): negation.  A float negates as C's unary minus does, sign of
+         * zero included; an integer wraps (in uint64_t, so this C has no
+         * signed overflow) and is reduced to its kind's width, as the
+         * compiled cast does (builtin_int_wrap_value). */
+        if (op && strcmp(op, "-") == 0) {
+            if (args[0].tag == TURI_FLOAT) return turi_float(-args[0].as_float);
+            return turi_int(builtin_int_wrap_value(spec->result_type.kind,
+                                                   0 - (uint64_t)args[0].as_int));
+        }
         if (op && strcmp(op, "&") == 0) {
             /* ptr-of: emulate &var by boxing the value into a pool cell that
              * escapes as an int carrier (reclaimed at turi_env_free). */

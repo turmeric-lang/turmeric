@@ -2384,6 +2384,14 @@ function switchTab(tab) {
   for (const p of document.querySelectorAll('.ci-tab-panel')) {
     p.hidden = p.id !== `ci-panel-${tab}`;
   }
+  // The range filter is one element shared by every tab; carry it into this
+  // panel, under its tiles, so it sits next to the charts it narrows.
+  const panel = document.getElementById(`ci-panel-${tab}`);
+  const range = document.getElementById('ci-range-group');
+  if (panel && range) {
+    const tiles = panel.querySelector(':scope > .ci-tiles');
+    if (tiles) tiles.after(range); else panel.prepend(range);
+  }
   // A chart drawn into a hidden panel has a fallback viewBox width; redraw now
   // that the panel is visible so it fits the real column.
   if (tab === 'counts') { renderCounts(); ensureCounts(); }

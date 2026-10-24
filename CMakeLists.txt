@@ -1274,14 +1274,6 @@ add_test(
   COMMAND bash tests/run-scscm-compile.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
-# RP2: unit test for the generated FFI dispatcher trampolines in
-# src/runtime/ffi_dispatch.{h,c}. The executable is defined in
-# src/CMakeLists.txt as tur_ffi_dispatch_unit.
-add_test(
-  NAME tur_ffi_dispatch_unit
-  COMMAND "${CMAKE_BINARY_DIR}/tur_ffi_dispatch_unit"
-  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
-)
 # RT2/S0--S3: refinement VC + decision-procedure unit test
 # (docs/archive/refinement-types-plan.md).
 add_test(
@@ -2279,7 +2271,7 @@ set_tests_properties(tur_tests tur_cli_tests tur_span_tests tur_flags_tests
                      tur_install_tests
                      turi_fixture_tests
                      tur_repl_tests tur_repl_smoke tur_eval_import tur_eval_basic
-                     tur_eval_sandbox tur_codegen_reinterpret tur_ffi_dispatch_unit
+                     tur_eval_sandbox tur_codegen_reinterpret
                      tur_eval_effects tur_eval_s4 tur_eval_tco
                      tur_eval_async_basic tur_eval_async_composition
                      tur_eval_async_effects tur_eval_async_timeout
@@ -2315,7 +2307,7 @@ set_tests_properties(tur_flags_tests
                      tur_install_tests
                      turi_fixture_tests
                      tur_repl_tests tur_repl_smoke tur_eval_basic
-                     tur_eval_sandbox tur_codegen_reinterpret tur_ffi_dispatch_unit
+                     tur_eval_sandbox tur_codegen_reinterpret
                      tur_eval_effects tur_eval_s4 tur_eval_tco
                      tur_eval_async_basic tur_eval_async_composition
                      tur_eval_async_effects tur_eval_async_timeout

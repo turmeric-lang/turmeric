@@ -282,4 +282,19 @@ full history mirrored there) plus three fixes on fix/make-one-ret-distinct-targe
     tailcall-musttail-deep now runs on an 8 MiB entry stack
     (run-jit.sh's jit-musttail-8mib).  Covered by c-tests/new/musttail.c and
     musttail-deep.c there.
+
+  e6914e5 (merged as 24bcf8e6, turmeric-lang/mir#14) -- the interpreter ran
+    MIR_TCALL as a call and a return, so a TUR_MUSTTAIL cycle still grew the
+    stack under TUR_JIT_GEN=interp, the engine of the planned browser JIT
+    (docs/archive/mir-interp-tail-calls-grow-the-stack.md).  A tail call to a
+    MIR function without machine code -- direct, or through the thunk of a
+    function with the interpreter interface -- now runs in the caller's eval
+    activation, which allocates its own frame below its entry sp and resets
+    to it (the bend builtin) when the callee needs a bigger frame or the
+    caller made an alloca.  The tail-call work is out of line, so eval's
+    frame stays small: r7rs-tail-call-through-procedure-value, a deep
+    non-tail recursion, needs slightly less stack than before.  On wasm,
+    where bend is a no-op, a tail-calling function's allocas stay until the
+    chain returns.  run-jit.sh's jit-musttail-8mib-interp checks it; covered
+    by c-tests/new/musttail-deep.c under -ei there.
 ```

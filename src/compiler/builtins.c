@@ -12,6 +12,12 @@ static BuiltinSpec table_[] = {
     /* Arithmetic — variadic, int. */
     { "+",   NULL, 2, -1, {.kind=TY_INT},  {.kind=TY_INT},  BS_VARIADIC_FOLD, "+", NULL },
     { "-",   NULL, 2, -1, {.kind=TY_INT},  {.kind=TY_INT},  BS_VARIADIC_FOLD, "-", NULL },
+    /* One argument: `(- x)` negates.  A row of its own (arity exactly 1) so
+     * the fold above keeps its two-or-more reading.  Emitted as C's unary
+     * minus, which is real negation for a float -- (- 0.0) is -0.0, where
+     * (- 0.0 x) gives +0.0 -- and wraps for an integer (-fwrapv; the narrow
+     * kinds through builtin_int_wrap_ctype), so (- min-int) is min-int. */
+    { "-",   NULL, 1,  1, {.kind=TY_INT},  {.kind=TY_INT},  BS_PREFIX_UNARY,  "-", NULL },
     { "*",   NULL, 2, -1, {.kind=TY_INT},  {.kind=TY_INT},  BS_VARIADIC_FOLD, "*", NULL },
     { "/",   NULL, 2,  2, {.kind=TY_INT},  {.kind=TY_INT},  BS_DIV_CHECK,    "/", NULL },
     { "mod", NULL, 2,  2, {.kind=TY_INT},  {.kind=TY_INT},  BS_BIN_INFIX,     "%", NULL },
@@ -19,10 +25,12 @@ static BuiltinSpec table_[] = {
     /* Arithmetic — float. */
     { "+",   NULL, 2, -1, {.kind=TY_FLOAT}, {.kind=TY_FLOAT}, BS_VARIADIC_FOLD, "+", NULL },
     { "-",   NULL, 2, -1, {.kind=TY_FLOAT}, {.kind=TY_FLOAT}, BS_VARIADIC_FOLD, "-", NULL },
+    { "-",   NULL, 1,  1, {.kind=TY_FLOAT}, {.kind=TY_FLOAT}, BS_PREFIX_UNARY,  "-", NULL },
     { "*",   NULL, 2, -1, {.kind=TY_FLOAT}, {.kind=TY_FLOAT}, BS_VARIADIC_FOLD, "*", NULL },
     { "/",   NULL, 2,  2, {.kind=TY_FLOAT}, {.kind=TY_FLOAT}, BS_DIV_CHECK,     "/", NULL },
     { "+.",  NULL, 2, -1, {.kind=TY_FLOAT}, {.kind=TY_FLOAT}, BS_VARIADIC_FOLD, "+", NULL },
     { "-.",  NULL, 2, -1, {.kind=TY_FLOAT}, {.kind=TY_FLOAT}, BS_VARIADIC_FOLD, "-", NULL },
+    { "-.",  NULL, 1,  1, {.kind=TY_FLOAT}, {.kind=TY_FLOAT}, BS_PREFIX_UNARY,  "-", NULL },
     { "*.",  NULL, 2, -1, {.kind=TY_FLOAT}, {.kind=TY_FLOAT}, BS_VARIADIC_FOLD, "*", NULL },
     { "/.",  NULL, 2,  2, {.kind=TY_FLOAT}, {.kind=TY_FLOAT}, BS_DIV_CHECK,     "/", NULL },
 
@@ -68,6 +76,7 @@ static BuiltinSpec table_[] = {
 #define SINT_OPS(TK) \
     { "+",   NULL, 2, -1, {.kind=TK}, {.kind=TK}, BS_VARIADIC_FOLD, "+", NULL }, \
     { "-",   NULL, 2, -1, {.kind=TK}, {.kind=TK}, BS_VARIADIC_FOLD, "-", NULL }, \
+    { "-",   NULL, 1,  1, {.kind=TK}, {.kind=TK}, BS_PREFIX_UNARY,  "-", NULL }, \
     { "*",   NULL, 2, -1, {.kind=TK}, {.kind=TK}, BS_VARIADIC_FOLD, "*", NULL }, \
     { "/",   NULL, 2,  2, {.kind=TK}, {.kind=TK}, BS_DIV_CHECK,    "/", NULL }, \
     { "mod", NULL, 2,  2, {.kind=TK}, {.kind=TK}, BS_BIN_INFIX,    "%", NULL }, \
@@ -86,6 +95,7 @@ static BuiltinSpec table_[] = {
 #define UINT_OPS(TK) \
     { "+",   NULL, 2, -1, {.kind=TK}, {.kind=TK}, BS_VARIADIC_FOLD, "+", NULL }, \
     { "-",   NULL, 2, -1, {.kind=TK}, {.kind=TK}, BS_VARIADIC_FOLD, "-", NULL }, \
+    { "-",   NULL, 1,  1, {.kind=TK}, {.kind=TK}, BS_PREFIX_UNARY,  "-", NULL }, \
     { "*",   NULL, 2, -1, {.kind=TK}, {.kind=TK}, BS_VARIADIC_FOLD, "*", NULL }, \
     { "/",   NULL, 2,  2, {.kind=TK}, {.kind=TK}, BS_DIV_CHECK,    "/", NULL }, \
     { "mod", NULL, 2,  2, {.kind=TK}, {.kind=TK}, BS_BIN_INFIX,    "%", NULL }, \
@@ -122,6 +132,7 @@ static BuiltinSpec table_[] = {
     /* Phase N: Arithmetic for float32. */
     { "+",   NULL, 2, -1, {.kind=TY_FLOAT32}, {.kind=TY_FLOAT32}, BS_VARIADIC_FOLD, "+", NULL },
     { "-",   NULL, 2, -1, {.kind=TY_FLOAT32}, {.kind=TY_FLOAT32}, BS_VARIADIC_FOLD, "-", NULL },
+    { "-",   NULL, 1,  1, {.kind=TY_FLOAT32}, {.kind=TY_FLOAT32}, BS_PREFIX_UNARY,  "-", NULL },
     { "*",   NULL, 2, -1, {.kind=TY_FLOAT32}, {.kind=TY_FLOAT32}, BS_VARIADIC_FOLD, "*", NULL },
     { "/",   NULL, 2,  2, {.kind=TY_FLOAT32}, {.kind=TY_FLOAT32}, BS_DIV_CHECK,    "/", NULL },
     { "=",    NULL, 2, 2, {.kind=TY_FLOAT32}, {.kind=TY_BOOL}, BS_BIN_INFIX, "==", NULL },
@@ -462,6 +473,9 @@ const char *builtin_int_wrap_ctype(const BuiltinSpec *spec) {
     if (!spec) return NULL;
     switch (spec->shape) {
         case BS_VARIADIC_FOLD: case BS_DIV_CHECK: break;
+        case BS_PREFIX_UNARY:   /* (- x): -(uint8_t)1 is the int -1 in C */
+            if (spec->c_op && strcmp(spec->c_op, "-") == 0) break;
+            return NULL;
         case BS_BIN_INFIX:
             if (spec->c_op && (strcmp(spec->c_op, "<<") == 0 ||
                                strcmp(spec->c_op, ">>") == 0)) break;
@@ -477,6 +491,13 @@ const char *builtin_int_wrap_ctype(const BuiltinSpec *spec) {
         case TY_UINT32: return "uint32_t";
         default:        return NULL;
     }
+}
+
+const char *builtin_negate_ctype(const BuiltinSpec *spec) {
+    if (!spec || spec->shape != BS_PREFIX_UNARY || !spec->c_op ||
+        strcmp(spec->c_op, "-") != 0) return NULL;
+    if (spec->result_type.kind == TY_INT) return "int64_t";
+    return builtin_int_wrap_ctype(spec);
 }
 
 int64_t builtin_int_wrap_value(TypeKind k, uint64_t v) {

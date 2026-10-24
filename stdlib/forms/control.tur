@@ -41,11 +41,13 @@
 ;;@form (let [name value ...] body ...)
 ;;@form (let name [name value ...] body ...)
 
-;;; let* -- let with the bindings spelled as strictly sequential.
+;;; let* -- deprecated: a second spelling of `let`.
 ;;;
-;;; It desugars to nested `let`s, one per binding, and `let` already lets each
-;;; value see the names before it, so the two behave the same. It exists for code
-;;; written in the Scheme style.
+;;; `let` already lets each value see the names before it, so `let*` -- which
+;;; desugars to nested `let`s, one per binding -- behaves the same. It is
+;;; deprecated (TUR-D0006, a warning; an error under `--Werror=deprecated`):
+;;; write `let`. Under `#lang r7rs` it is the Scheme report's `let*` and is not
+;;; deprecated.
 ;;;
 ;;; Parameters:
 ;;;   bindings -- a vector of `name value` pairs

@@ -50,6 +50,13 @@ stop() {
     wait "$pid" 2>/dev/null
     pid=""
 }
+# iso -- the cross-origin isolation headers of the last response, or none.
+iso() {
+    local coop coep
+    coop=$(tr -d '\r' < "$TMP/head" | sed -nE 's|^Cross-Origin-Opener-Policy: (.*)|\1|p')
+    coep=$(tr -d '\r' < "$TMP/head" | sed -nE 's|^Cross-Origin-Embedder-Policy: (.*)|\1|p')
+    echo "  coop=${coop:-none} coep=${coep:-none}"
+}
 get() {
     curl --noproxy '*' --path-as-is -s -o "$TMP/body" -D "$TMP/head" "http://127.0.0.1:$port$1"
     local status loc
@@ -63,6 +70,7 @@ get() {
 start site --port 0
 get /
 echo "  body: $(cat "$TMP/body")"
+iso
 get /sub
 get /sub/
 grep -o '<a href="[^"]*">[^<]*</a>' "$TMP/body" | sed 's/^/  /'
@@ -85,6 +93,24 @@ get /sub/
 stop
 echo "quiet log lines: $(grep -cE '^(GET|HEAD|POST) ' "$TMP/serve.err")"
 
+# --isolate: COOP/COEP on every response, a 404 included.  Bare, before the
+# directory, it is require-corp and leaves `site` positional; =credentialless
+# and =off say so explicitly.
+start -q --isolate site -p 0
+get /
+iso
+get /nope
+iso
+stop
+start site -q -p 0 --isolate=credentialless
+get /
+iso
+stop
+start site -q -p 0 --isolate=off
+get /
+iso
+stop
+
 # Default directory: the current one.
 (cd "$root" && exec "$TUR_ABS" serve -p 0) > "$TMP/serve.out" 2> "$TMP/serve.err" &
 pid=$!
@@ -97,7 +123,7 @@ sed -E 's|:[0-9]+/|:PORT/|' "$TMP/serve.out"
 stop
 
 # Usage errors exit 2 without starting a server.
-for args in "--frob" "-p 70000" "no-such-dir" "a b" "--bind nope"; do
+for args in "--frob" "-p 70000" "no-such-dir" "a b" "--bind nope" "--isolate=strict"; do
     # shellcheck disable=SC2086
     "$TUR_ABS" serve $args > /dev/null 2> "$TMP/err"
     rc=$?

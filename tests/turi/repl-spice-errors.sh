@@ -137,21 +137,24 @@ else
 fi
 rm -f "$FIFO"
 
-# -------- scenario 4: no-dispatcher message (regression guard) -----------
-# This message lives in src/turi/ffi_thunk.c. It's hard to trigger
-# without a defn whose arity exceeds the generator's --max-arity (6).
-# The cheaper check is grepping the binary's strings for the actionable
-# wording -- if the message text changes, this test catches it.
+# -------- scenario 4: no-shim message (regression guard) -----------------
+# This message lives in src/turi/ffi_thunk.c: an export whose library has no
+# `__ffi` shim (built before 2026-07-22) on a build without the JIT.  It is
+# hard to trigger -- every library the REPL builds now has its shims -- so
+# grep the binary's strings for the actionable wording instead; if the text
+# changes, this test catches it.  (The FFI shape table that used to answer
+# here was retired by ffi-spices-integration-plan S5.)
 # Materialise strings(1) output to a file first; piping into `grep -q`
 # under `set -o pipefail` propagates SIGPIPE from grep's early exit
 # back to strings and flips the test result.
 TUR_STRINGS_TMP="$WORK/tur.strings"
 strings "$TUR" >"$TUR_STRINGS_TMP" 2>/dev/null || true
-if grep -q 'gen_ffi_dispatch.py --max-arity' "$TUR_STRINGS_TMP"; then
-    pass "rp7-no-dispatcher-message-intact"
+if grep -q 'has no __ffi shim' "$TUR_STRINGS_TMP" \
+   && grep -q 'Rebuild the spice' "$TUR_STRINGS_TMP"; then
+    pass "rp7-no-shim-message-intact"
 else
-    fail "rp7-no-dispatcher-message-intact" \
-         "missing 'gen_ffi_dispatch.py --max-arity' hint in tur binary"
+    fail "rp7-no-shim-message-intact" \
+         "missing the 'has no __ffi shim ... Rebuild the spice' message in tur binary"
 fi
 
 # -------- scenario 5: (reload) outside any project ----------------------

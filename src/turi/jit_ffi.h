@@ -50,8 +50,7 @@
  * sig carries layout only.
  *
  * In a non-JIT build no provider is ever installed and every consumer keeps
- * today's behavior (per-export __ffi shims, the generated shape table, the
- * extern-c nil stub, a clean "requires a JIT-enabled build" diagnostic for
+ * today's behavior (per-export __ffi shims, the extern-c nil stub, a clean "requires a JIT-enabled build" diagnostic for
  * call-ptr).  The provider interface is deliberately the swap point if
  * Windows/WASM ever need a non-MIR thunk source (dyncall / libffi). */
 #ifndef TUR_TURI_JIT_FFI_H
@@ -66,7 +65,7 @@
 /* A compiled call thunk.  `fn` is the target function pointer; `iv`/`fv`
  * are the position-indexed marshalled argument buffers (arg k reads iv[k]
  * or fv[k] by its class -- the same convention the per-export __ffi shims
- * and the generated shape table already use).  F4: `sv` follows the same
+ * already use).  F4: `sv` follows the same
  * position-indexed convention -- sv[k] points at the raw bytes of arg k
  * when arg k is an aggregate, and is unread otherwise (NULL when the
  * signature has no aggregate parameters).  The return value is written to

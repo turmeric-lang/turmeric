@@ -6079,7 +6079,15 @@ char *emit_builtin(EmitCtx *ctx, Buf *body, const Expr *e) {
             }
             break;
         case BS_PREFIX_UNARY:
-            buf_printf(&out, "%s(%s)", spec->c_op, arg_strs[0]);
+            /* (- x) on an integer kind negates in uint64_t and casts back,
+             * as the folds above do: C would leave a narrow kind an `int`,
+             * and -INT64_MIN would be a signed overflow
+             * (builtin_negate_ctype). */
+            if (builtin_negate_ctype(spec))
+                buf_printf(&out, "(%s)(0 - (uint64_t)(%s))",
+                           builtin_negate_ctype(spec), arg_strs[0]);
+            else
+                buf_printf(&out, "%s(%s)", spec->c_op, arg_strs[0]);
             break;
         case BS_PREFIX_UNARY_FREE:
             /* Special case for drop!: free the ref pointer directly

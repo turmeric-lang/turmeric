@@ -3,7 +3,7 @@
 > **Status: WP1 and WP2 DONE (2026-09-29); WP3, WP4, WP5 and WP6 DONE
 > (2026-09-30); WP7, WP8 PROPOSED.** WP8's decision is made (2026-10-02):
 > `#fx{Unsafe}` is Option A, pointer arithmetic only -- see open question 3
-> and [effect-row-honesty-plan](effect-row-honesty-plan.md); its lint-default
+> and [effect-row-honesty-plan](../archive/effect-row-honesty-plan.md); its lint-default
 > bullet is still open. Written 2026-09-30
 > against `main` @ 81e12de4 (v0.56.3). Section 2 lists what a one-afternoon
 > survey already turned up, so the audit starts from a map, not from zero;
@@ -56,7 +56,7 @@
 > CMake config (`src/CMakeLists.txt:481`) are the tooling this plan builds on.
 > **Related:** [sandboxing-guide](../guides/sandboxing-guide.md) (the
 > promise WP3 audits), [consuming-spices-guide](../guides/consuming-spices-guide.md#security)
-> (the promise WP7 audits), [ci-release-workflows-plan](ci-release-workflows-plan.md)
+> (the promise WP7 audits), [ci-release-workflows-plan](../archive/ci-release-workflows-plan.md)
 > and [release-in-actions-plan](../archive/release-in-actions-plan.md) (WP7 lands
 > alongside them), `docs/reported/README.md` (where findings go).
 
@@ -167,7 +167,7 @@ line-by-line during the survey; otherwise a read-only claim awaiting repro.
 | M-4 | medium | **FIXED (WP4)**, residue filed as `docs/archive/httpd-residual-request-hardening.md` (all closed 2026-10-03) -- fixture `httpd-request-hardening`; fuzz target `fuzz_httpd_head`. `httpd`: `Content-Length` is `(int)strtol` into `malloc(content_len + 1)` with no cap (`stdlib/httpd.tur:293, 329, 2491`); `Transfer-Encoding` ignored (smuggling behind a proxy); static-file traversal guard is `strstr(path, "..")` with `stat` not `lstat` (`:4143-4200`); binds `INADDR_ANY` by default (`:720`). Multipart (`:2102-2176`) and Basic auth (`:1963, 2014`) unreviewed. |
 | M-5 | medium | **FIXED by WP5** (section 2d), with 26 more sites the sweep found. `read-async` does `malloc((size_t)bytes + 1)` with an unchecked, possibly negative `int` (`src/turi/fiber.c:763`); `tur_string_substring`/`slice` compute `start + len > n` with signed overflow (`src/runtime/tur_string.c:183, 300`); `n_from_bytes` accepts `len > strlen` (`src/turi/string_native.c:25-30`); `sb_reserve` doubles unchecked (`tur_string.c:238-243`); `bytes-alloc` `malloc(8 + (size_t)n)` with negative `n` (`stdlib/serial.tur:56-62`); `alloca(n * 8)` with user `n` in `stdlib/sized-buf.tur:445, 484` (gated `#fx{Unsafe}`). |
 | M-6 | medium (silent UAF class) | **FIXED by WP5** (section 2d): one survey site confirmed -- as a class, not a site -- three retired, and a second class the survey did not have. Region escape hooks missing, per the CLAUDE.md rule: `tur_hamt_transient_set` (`src/runtime/hamt.c:1879`, from `stdlib/hamt.tur:740`), `tvar/write`/`tvar/swap` (`stdlib/stm.tur:88, 109`; `src/runtime/stm.c` has no note), `sized-buf-set!` (`sized-buf.tur:307`), `sized-matrix-set!` (`:232`), `sized-bitvec-set!` (`sized-bits.tur:139`), `httpd-resp-header-add!` (`httpd.tur:1281`). Each is a candidate use-after-rewind on the default build. |
-| M-7 | info | The effect system is not a security boundary today, though one half of it is enforced. **Enforced:** calling an `#fx{Unsafe}` function outside `(unsafe ...)` is a hard error unless the caller declares `#fx{Unsafe}` (which propagates); `(unsafe ...)` discharges the obligation and erases the row, by design (Option A, decided in [effect-row-honesty-plan](effect-row-honesty-plan.md) section 3). **Not enforced by default:** `--strict-effects` is opt-in and warns (`-Werror=strict-effects` makes it fail the build); inline-C outside `Unsafe` is a lint behind `--lint-inline-c-unsafe`, default off (`globals.c:19`, `src/compiler/elab_toplevel.c:875`); the deserializers above infer plain rows. Because wrappers erase the row, `Unsafe` cannot answer "what may corrupt memory on bad input". |
+| M-7 | info | The effect system is not a security boundary today, though one half of it is enforced. **Enforced:** calling an `#fx{Unsafe}` function outside `(unsafe ...)` is a hard error unless the caller declares `#fx{Unsafe}` (which propagates); `(unsafe ...)` discharges the obligation and erases the row, by design (Option A, decided in [effect-row-honesty-plan](../archive/effect-row-honesty-plan.md) section 3). **Not enforced by default:** `--strict-effects` is opt-in and warns (`-Werror=strict-effects` makes it fail the build); inline-C outside `Unsafe` is a lint behind `--lint-inline-c-unsafe`, default off (`globals.c:19`, `src/compiler/elab_toplevel.c:875`); the deserializers above infer plain rows. Because wrappers erase the row, `Unsafe` cannot answer "what may corrupt memory on bad input". |
 
 ### Web (WP6)
 
@@ -1619,7 +1619,7 @@ Linux and macOS), and the mermaid pin WP6 handed over in section 2f.
 ### WP8 -- Effects as a stated boundary (1 day, decision-heavy)
 
 - ~~Decide what `#fx{Unsafe}` promises (section 7).~~ **DECIDED 2026-10-02:
-  Option A, pointer arithmetic only** ([effect-row-honesty-plan](effect-row-honesty-plan.md)
+  Option A, pointer arithmetic only** ([effect-row-honesty-plan](../archive/effect-row-honesty-plan.md)
   section 3). The marker describes a body, `(unsafe ...)` discharges it and
   erases the row, so the M-1/M-5 deserializers are not retro-tagged. The
   security guide says so in one section, "What the effect system does and
