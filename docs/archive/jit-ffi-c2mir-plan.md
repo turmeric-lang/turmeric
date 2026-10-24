@@ -26,7 +26,7 @@
 > **Supersedes-in-spirit:** "Phase 4: retire the generated table" of
 > [docs/archive/interpreter-arbitrary-arity-ffi-plan.md](../archive/interpreter-arbitrary-arity-ffi-plan.md),
 > which contemplated libffi for the same retirement.
-> **See also:** [ffi-spices-integration-plan.md](../upcoming/ffi-spices-integration-plan.md)
+> **See also:** [ffi-spices-integration-plan.md](ffi-spices-integration-plan.md)
 > (the package-layer follow-ons: REPL JIT-hook link flags, variadic
 > exports, where F4/F5 pay off for spices),
 > [docs/guides/ffi-guide.md](../guides/ffi-guide.md) (user-facing guide).

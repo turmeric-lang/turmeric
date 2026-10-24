@@ -1,6 +1,14 @@
 # FFI x spices: closing the gaps between the dynamic FFI and the package layer
 
-> **Status:** re-audited 2026-10-24 against `main` (289d688d): S1, S2, S4
+> **Status: DONE 2026-10-24 -- archived.** S5 landed as Option A: the JIT-less
+> CI job runs the REPL spice suites, `TUR_FFI_NO_JIT_THUNK=1` exercises the shim
+> rung on JIT builds (`3e1aee45`), variadic exports get `__ffi` shims
+> (`9c8796c7`), and the generated shape table is gone (`2ba576f6`). The
+> interpreter calls a spice export through a JIT thunk or its `__ffi` shim;
+> one with neither reports "rebuild the spice". The text below records how it
+> got there.
+>
+> **Earlier status:** re-audited 2026-10-24 against `main` (289d688d): S1, S2, S4
 > implemented (2026-08-17) and still in the tree; S3 satisfied -- its
 > jit-ffi-c2mir-plan F4/F5 landed 2026-08-18 (follow-ons 2026-08-21, aarch64
 > HFA fixed 2026-08-26), and that plan graduated in 0.38.0 and is archived.
@@ -49,7 +57,7 @@
 > - S4: the constants convention is documented in
 >   developing-spices-guide.md ("Constants: #defines do not survive
 >   linking").
-> **Builds on:** [jit-ffi-c2mir-plan.md](../archive/jit-ffi-c2mir-plan.md) (F1-F5
+> **Builds on:** [jit-ffi-c2mir-plan.md](jit-ffi-c2mir-plan.md) (F1-F5
 > implemented; graduated 2026-08-21),
 > [docs/guides/developing-spices-guide.md](../guides/developing-spices-guide.md),
 > [docs/guides/ffi-guide.md](../guides/ffi-guide.md).
@@ -255,24 +263,33 @@ shim is an ordinary shim with one more int parameter.
 
 #### Steps, in order
 
-- [ ] **1. Cover the JIT-less ladder in CI.** Add the REPL spice suites
+- [x] **1. Cover the JIT-less ladder in CI.** *Done `3e1aee45`: ci.yml's
+      `interp-nojit` job, step "REPL spice suites without the JIT".* Add the REPL spice suites
       (`tests/turi/repl-spice-{call,load,errors,reload,linklibs}.sh`) to
       the JIT-less CI job. They are green there today, so this is a pure
       addition. The three `s2-variadic-*` cases are this phase's
       acceptance test: deleting the table without step 3 makes exactly
       them fail.
-- [ ] **2. (Optional) Exercise rung 2 on JIT builds too.** A test-only
+- [x] **2. (Optional) Exercise rung 2 on JIT builds too.** *Done `3e1aee45`:
+      `TUR_FFI_NO_JIT_THUNK=1` (`ffi_thunk.c`, `ffi_skip_jit_thunk`) and an
+      eight-case shim pass in `repl-spice-call.sh`.* A test-only
       switch that skips rung 1 for scalar exports, run with the
       spice-call suite, so the shim rung is covered on macOS and Windows,
       not just the Linux JIT-less job.
-- [ ] **3. Emit `__ffi` shims for variadic exports.** Stop skipping them in
+- [x] **3. Emit `__ffi` shims for variadic exports.** *Done `9c8796c7`:
+      removing the skip was the whole change -- the compiler already counts
+      the rest parameter as an `int64_t` cons-list slot, which the shim reads
+      from `iv[fixed]`, where the interpreter stores the list.* Stop skipping them in
       `emit_ffi_export_shims` and read the rest slot as an int parameter.
       Acceptance: the `s2-variadic-*` cases pass on the JIT-less build
       with the table still present (so they pass through rung 2, not 3).
       No fixture snapshot moves: shims are emitted only in library builds
       (`--shared`, the REPL's in-process build), never in the single-file
       output `expected.c` records.
-- [ ] **4. Delete the table.** Remove `src/runtime/ffi_dispatch{,_thunk}.{c,h}`,
+- [x] **4. Delete the table.** *Done `2ba576f6`. On a `-DTUR_JIT=OFF` build
+      whose binary carries none of the table's symbols, all five REPL spice
+      suites pass (44 tests, the variadic cases included -- so through their
+      shims), as on the JIT build.* Remove `src/runtime/ffi_dispatch{,_thunk}.{c,h}`,
       `tools/gen_ffi_dispatch.py`, the `tur_ffi_dispatch_unit` test
       (`tests/runtime/ffi-dispatch-unit.c`, its `add_executable` in
       `src/CMakeLists.txt`, its ctest entry and the two ctest part lists in
@@ -286,11 +303,11 @@ shim is an ordinary shim with one more int parameter.
       comments in `spice_loader.{c,h}`, `ffi_thunk.h` and
       `tests/unit/experiments_user_config.c`. Archived plans keep their
       history.
-- [ ] **5. Archive this plan** -- S5 was the last open item.
+- [x] **5. Archive this plan** -- S5 was the last open item. *Done 2026-10-24.*
 
 #### The raylib web playground: no dependency (measured 2026-10-24)
 
-[raylib-web-playground-plan](raylib-web-playground-plan.md) (draft) step A0
+[raylib-web-playground-plan](../upcoming/raylib-web-playground-plan.md) (draft) step A0
 once planned to call baked spice exports from the browser interpreter -- a
 JIT-less build -- through this shape table. That was checked under emcc
 6.0.13 and the table cannot serve it: exports keep their real C types, the

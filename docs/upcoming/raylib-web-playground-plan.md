@@ -293,7 +293,7 @@ Ordered by dependency. Items A0-A3 are what A needs; B0-B2 are what B needs.
   predicates (`is-key-down`, `is-key-pressed`, ...) -- so **the table cannot
   serve this plan even if it is kept**; the shims can. The `__ffi` shim is
   therefore part of A1's image (below), and this plan no longer depends on
-  the table at all ([ffi-spices-integration-plan](ffi-spices-integration-plan.md)
+  the table at all ([ffi-spices-integration-plan](../archive/ffi-spices-integration-plan.md)
   S5 deletes it). The table also adds ~28 KB to a linked wasm module, so
   dropping it trims the browser bundle.
   Still open from A0: `tur_wasm` is **not** linked with `-sASYNCIFY` today

@@ -302,7 +302,7 @@ branches can merge `main` promptly. Open plans whose next steps touch
 - [security-audit-plan](../upcoming/security-audit-plan.md);
 - [aot-compiled-repl-plan](../upcoming/aot-compiled-repl-plan.md): REPL JIT;
 - [wasm-spices-plan](../upcoming/wasm-spices-plan.md);
-- [ffi-spices-integration-plan](../upcoming/ffi-spices-integration-plan.md);
+- [ffi-spices-integration-plan](ffi-spices-integration-plan.md);
 - [windows-remaining-plan](../upcoming/windows-remaining-plan.md).
 
 Prefer moving a region right after such a plan's step lands, not while one is

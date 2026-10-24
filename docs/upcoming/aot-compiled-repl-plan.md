@@ -746,8 +746,10 @@ The C2 transcript corpus covers:
    configure-time fetch. The release workflow ships the engine, and it now
    runs a program through `tur jit` from each extracted archive. The `cc` +
    `dlopen` alternative for C2 is not needed. For
-   [ffi-spices-integration-plan](ffi-spices-integration-plan.md) S5 this
+   [ffi-spices-integration-plan](../archive/ffi-spices-integration-plan.md) S5 this
    turned a blocker into a decision: a `-DTUR_JIT=OFF` build still exists.
+   (S5 has since landed: the FFI shape table is gone, and a JIT-less build
+   calls spice exports through their `__ffi` shims.)
 2. **CLI after graduation.** While experimental, the feature is
    `--enable=compiled-repl`. Afterwards it could become `tur repl --eval jit`,
    or extend `--engine`, which today only chooses how a spice is built.
