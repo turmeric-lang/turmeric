@@ -1,0 +1,12 @@
+;; quote-list-data-plan, graduation item 1: a quoted list in an imported
+;; module needs no explicit load of stdlib/datum.tur.  The importer never
+;; quotes a list, so it is the module's own scan that loads datum.tur; the
+;; `Datum` it returns still prints as its source here.
+(defmodule prog
+  (import qmod :refer [mod-form mod-count])
+  (defn main [] : int
+    (let [d (mod-form)]
+      (println d)
+      (println (mod-count d))
+      (println (mod-count (datum-nth d 2))))
+    0))

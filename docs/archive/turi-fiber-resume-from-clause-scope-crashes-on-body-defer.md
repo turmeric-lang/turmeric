@@ -10,7 +10,7 @@ handler side's chain, as the shared chain used to leave it (`unsafe-defer`).
 The abortive case's firing in `eval_handle` runs on the body's saved chain.
 
 This also fixed the stored-`k` half of
-[turi-fiber-handle-defers-fire-at-the-wrong-time](../reported/turi-fiber-handle-defers-fire-at-the-wrong-time.md).
+[turi-fiber-handle-defers-fire-at-the-wrong-time](turi-fiber-handle-defers-fire-at-the-wrong-time.md).
 A body a case kept but never resumed no longer fires its defer at the next
 enclosing scope exit; its items stay parked on the cont. A body resumed after
 its `handle` exited runs them at the resume. Both now match the compiled

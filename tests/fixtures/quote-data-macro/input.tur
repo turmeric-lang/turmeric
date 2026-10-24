@@ -1,0 +1,20 @@
+;; quote-list-data-plan, graduation item 1: a quoted list that only a macro
+;; expansion produces needs no explicit load of stdlib/datum.tur.  No form
+;; of this file quotes a list as written; each macro below builds the quote,
+;; and the scan sees it in the macro's definition.
+
+;; A template filling in the quoted form.
+(defmacro quoted [x] `(quote ~x))
+
+;; A template body computing the form at expansion time.
+(defmacro quoted-list [x] (list 'quote x))
+
+;; A procedural macro building the quote with the syntax constructors.
+(defmacro* quoted* [x] (syntax-quote x))
+
+(defn main [] : int
+  (println (quoted (a b c)))
+  (println (quoted-list (d [e] 1)))
+  (println (quoted* (f "g" 2.5)))
+  (println (datum-length (quoted (+ 1 2))))
+  0)

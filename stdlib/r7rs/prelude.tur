@@ -2066,6 +2066,11 @@
       // r7rs-eval-continuation-reentry-across-bridge: the (scheme eval)
       // evaluator's side of this capture (r7k_hook_capture), NULL without it.
       void *turi;
+      // r7rs-heap-frames-plan (H3): a capture whose frames run onto stack
+      // segments is one piece per stack (tur_seg_piece, segd), copied into
+      // img one after the other; segn 0 for the one contiguous piece lo/n.
+      void *segd;
+      int segn;
   } r7k_cont;
   // The evaluator's continuation hooks (src/turi/r7rs_embed.h), installed by
   // r7rs-cont-hooks-install__ from stdlib/r7rs/eval.tur, which links libturi.
@@ -2136,8 +2141,19 @@
   // r7rs-heap-frames-plan: under --enable=r7rs-segmented-stack, whether an
   // address is on a stack segment rather than the thread's own stack.  This
   // block precedes the preamble that defines it, so the segmented stack's
-  // runtime sets it when the deep-stack thread starts; NULL otherwise.
+  // runtime sets it when a thread arms (tur_seg_thread_start); NULL otherwise.
+  // r7k_seg_pieces and r7k_seg_restore are its H3 half: a capture on a
+  // segment as one piece per stack of the chain, and the re-entry that puts
+  // the chain back (emit_seg_stack_runtime, src/compiler/emit_module.c).
+  #ifndef TUR_SEG_PIECE_DEFINED
+  #define TUR_SEG_PIECE_DEFINED 1
+  typedef struct { void *rec; unsigned char *lo; size_t n; void *prev; unsigned char *saved_sp; } tur_seg_piece;
+  #endif
   static int (*r7k_seg_off_base)(const void *);
+  static int (*r7k_seg_pieces)(const unsigned char *, const unsigned char *, const unsigned char *,
+                               tur_seg_piece *, int);
+  static void (*r7k_seg_restore)(const tur_seg_piece *, int, const unsigned char *,
+                                 unsigned char *, size_t, void (*)(void *), void *);
   static unsigned char *r7k_stack_base(void) {
       if (r7k_base_tls) return r7k_base_tls;
   #if defined(__GLIBC__)
@@ -2233,6 +2249,10 @@
       r7k_form_base = r7k_form_saved[--r7k_form_depth];
   }
   static void (*volatile r7k_run_form_p)(void (*)(void *), void *) = r7k_run_form;
+  // 1: the image is the one contiguous piece c->lo/c->n.  0: no image, the
+  // call/cc is an escape.  -k (r7rs-heap-frames-plan H3): the capture's frames
+  // run onto stack segments, k pieces of them, from c->lo; the capture fills
+  // them in (r7k_seg_fill) once it has allocated their records.
   static int r7k_measure(r7k_cont *c, unsigned char *mark) {
       // No image without a stack base, whatever the form base says -- call/cc
       // is the escape wherever r7k_stack_base finds none (a c2mir compile on
@@ -2241,16 +2261,35 @@
       // call/cc as an escape.
       unsigned char *sb = r7k_stack_base();
       if (!sb) return 0;
-      // r7rs-heap-frames-plan: frames on a segment are not under one
-      // contiguous copy to the stack base, so a capture there is escape-only.
+      unsigned char *lo = (unsigned char *)(((uintptr_t)mark - 64) & ~(uintptr_t)15);
+      if (r7k_seg_pieces) {
+          int k = r7k_seg_pieces(lo, r7k_form_base, sb, NULL, 0);
+          if (k == 0) return 0;
+          if (k > 0) {
+              // The (scheme eval) evaluator's side of a capture is measured
+              // against one contiguous image (r7k_hook_restore): escape-only.
+              if (c->turi) return 0;
+              c->lo = lo;
+              return -k;
+          }
+      }
+      // A mark on no segment of the chain while the thread runs on one (a
+      // fiber's stack): no contiguous copy to the stack base holds it.
       if (r7k_seg_off_base && r7k_seg_off_base(mark)) return 0;
       unsigned char *base = (r7k_form_base && r7k_form_base > mark) ? r7k_form_base : sb;
-      unsigned char *lo = (unsigned char *)(((uintptr_t)mark - 64) & ~(uintptr_t)15);
       if (!base || base <= lo) return 0;
       c->lo = lo;
       c->n = (size_t)(base - lo) & ~(sizeof(uintptr_t) - 1);
       return 1;
   }
+  // The pieces of a segmented capture, into `pc` (k of them); 1 when the
+  // chain still has exactly that many.  Out here for the reason
+  // r7rs-cont-save-state is: it reads thread-locals.
+  __attribute__((noinline))
+  static int r7k_seg_fill(r7k_cont *c, void *pc, int k) {
+      return r7k_seg_pieces(c->lo, r7k_form_base, r7k_stack_base(), (tur_seg_piece *)pc, k) == k;
+  }
+  static int (*volatile r7k_seg_fill_p)(r7k_cont *, void *, int) = r7k_seg_fill;
   __attribute__((noinline, noreturn)) R7K_NOASAN
   static void r7k_jump(r7k_cont *c) {
       r7k_copy(c->lo, c->img, c->n);
@@ -2259,13 +2298,31 @@
   #endif
       R7K_LONGJMP(c->jb);
   }
+  // The segmented stack's re-entry ends here, its pieces copied back.
+  __attribute__((noinline, noreturn)) R7K_NOASAN
+  static void r7k_seg_jump(void *p) {
+      r7k_cont *c = (r7k_cont *)p;
+  #ifdef R7K_ASAN
+      if (c->segn) {
+          tur_seg_piece *pc = (tur_seg_piece *)c->segd;
+          for (int i = 0; i < c->segn; i++) __asan_unpoison_memory_region(pc[i].lo, pc[i].n);
+      } else {
+          __asan_unpoison_memory_region(c->lo, c->n);
+      }
+  #endif
+      R7K_LONGJMP(c->jb);
+  }
   __attribute__((noinline, noreturn))
   static void r7k_restore(r7k_cont *c) {
       unsigned char here = 0;
-      // r7rs-heap-frames-plan: running on a segment, the image's stack is not
-      // the one under this frame -- copy it in place; the segments die with
-      // the jump, and the next entry check drops them.
-      if (r7k_seg_off_base && r7k_seg_off_base(&here)) r7k_jump(c);
+      // r7rs-heap-frames-plan (H3): on a thread with a segmented stack the
+      // runtime does the re-entry, whatever the image -- a chain of pieces or
+      // the one contiguous piece -- and whatever stack this frame is on: it
+      // moves below the image's lowest frame, puts the chain back as it was at
+      // the capture, and jumps in through r7k_seg_jump.  It returns only on a
+      // thread with no chain.
+      if (r7k_seg_restore)
+          r7k_seg_restore((const tur_seg_piece *)c->segd, c->segn, c->img, c->lo, c->n, r7k_seg_jump, (void *)c);
       uintptr_t sp = (uintptr_t)&here, want = (uintptr_t)c->lo - 4096;
       if (sp > want) {
           volatile unsigned char *pad = (volatile unsigned char *)__builtin_alloca(sp - want);
@@ -2289,10 +2346,27 @@
     if (rc->turi && r7k_hook_resumed) r7k_hook_resumed(rc->turi);
     return (void *)((uintptr_t)rc | 1);
   }
-  if (!r7k_measure(c, (unsigned char *)mark)) return NULL;
+  int np = r7k_measure(c, (unsigned char *)mark);
+  if (np == 0) return NULL;
+  if (np < 0) {
+    /* r7rs-heap-frames-plan (H3): one piece per stack of the chain, copied
+     * into the image one after another.  The records are on the collected
+     * heap with the image, reached through c. */
+    tur_seg_piece *pc = (tur_seg_piece *)malloc((size_t)(-np) * sizeof(tur_seg_piece));
+    if (!pc || !r7k_seg_fill_p(c, (void *)pc, -np)) return NULL;
+    c->segd = (void *)pc; c->segn = -np;
+    c->n = 0;
+    for (int i = 0; i < c->segn; i++) c->n += pc[i].n;
+  }
   c->img = (unsigned char *)malloc(c->n);
   if (!c->img) return NULL;
-  r7k_copy(c->img, c->lo, c->n);
+  if (c->segn) {
+    tur_seg_piece *pc = (tur_seg_piece *)c->segd;
+    size_t off = 0;
+    for (int i = 0; i < c->segn; i++) { r7k_copy(c->img + off, pc[i].lo, pc[i].n); off += pc[i].n; }
+  } else {
+    r7k_copy(c->img, c->lo, c->n);
+  }
   /* T8, the region store-hook rule: the image is a store of every word on the
    * stack into memory that outlives any bracket around this call/cc.  A word
    * that points into a live region generation marks it escaped, so a bracket

@@ -2908,6 +2908,32 @@ static bool handle_case_ok_rec(const CTerm *t) {
             }
             return true;
         }
+        case CT_RESET: {
+            /* cps-catch-unwind-cannot-cross-an-effect-capture: a `catch-unwind`
+             * / `catch-panic-of` in the CLAUSE (a catch prompt, build_catch),
+             * around a `resume` or a `discontinue` of the case's own `k` or
+             * anything else.  emit_reset installs the prompt on the case's
+             * `__kont` -- the real enclosing chain for a re-opening case, a
+             * done node of the case's own otherwise (emit_lifted) -- with the
+             * rest of the case lifted as the frame past it, and emits the
+             * delimited part in the case's grammar, delivering to the prompt
+             * (dk_run, not a return: emit_reset turns shift_mode off for it).
+             * A panic the delimited part sees -- the resumed body's, coming
+             * back through dk_invoke / __dk_discontinue, or its own -- is
+             * caught at the prompt by the ordinary panic check, which names
+             * the prompt chain there (g_pend_k_ok).  Both halves are lifted or
+             * emitted on their own, so their joins must close within them. */
+            if (!t->as.reset.is_catch) return false;
+            if (!(slot_ok_t(t->as.reset.x.type, t->as.reset.x.ty) || t->as.reset.x.ty == TY_NIL))
+                return false;
+            uint32_t ddef[CC_MAX_BOUND], bdef[CC_MAX_BOUND];
+            CapSet rcs;
+            return handle_case_ok_rec(t->as.reset.delim)
+                && handle_case_ok_rec(t->as.reset.body)
+                && joins_closed_rec(t->as.reset.delim, ddef, 0)
+                && joins_closed_rec(t->as.reset.body, bdef, 0)
+                && collect_caps(t->as.reset.body, t->as.reset.x.id, &rcs);
+        }
         default: return false;
     }
 }
@@ -11047,6 +11073,39 @@ static bool case_reopens(const CTerm *t) {
                 for (uint32_t i = 0; i < t->as.match.n_arms; i++)
                     if (case_reopens(t->as.match.arms[i].body)) return true;
                 return false;
+            /* A catch prompt in the clause (handle_case_ok_rec's CT_RESET):
+             * a perform in its delimited part or in the rest of the case
+             * (lifted past the prompt) reaches the enclosing handlers through
+             * the prompt chain, which must then be the real one. */
+            case CT_RESET:
+                return case_reopens(t->as.reset.delim) || case_reopens(t->as.reset.body);
+            default: return false;
+        }
+    }
+    return false;
+}
+/* Does this handler CASE body hold a catch prompt (a `catch-unwind` written in
+ * the clause, handle_case_ok_rec's CT_RESET) on its own structure?  Such a
+ * case needs a `__kont` for emit_reset to install the prompt on. */
+static bool case_has_catch(const CTerm *t) {
+    while (t) {
+        switch (t->kind) {
+            case CT_RESET:   return true;
+            case CT_LETVAL:  t = t->as.letval.body;  break;
+            case CT_LETPRIM: t = t->as.letprim.body; break;
+            case CT_LETCALL: t = t->as.letcall.body; break;
+            case CT_RESUME:  t = t->as.resume.body;  break;
+            case CT_LETRAW:  t = t->as.letraw.body;  break;
+            case CT_CALLCC:  t = t->as.callcc.body;  break;
+            case CT_PERFORM: t = t->as.perform.body; break;
+            case CT_LETCONT:
+                return case_has_catch(t->as.letcont.jbody) || case_has_catch(t->as.letcont.body);
+            case CT_IF:
+                return case_has_catch(t->as.if_.then_) || case_has_catch(t->as.if_.else_);
+            case CT_MATCH:
+                for (uint32_t i = 0; i < t->as.match.n_arms; i++)
+                    if (case_has_catch(t->as.match.arms[i].body)) return true;
+                return false;
             default: return false;
         }
     }
@@ -11638,6 +11697,13 @@ static void emit_lifted(CE *ce, const char *name, LHMode mode,
     if (reopens) {
         indent_buf(&tmp, 4);
         buf_puts(&tmp, "DK *__kont = dk_case_enclosing_real(g_dk_case_reopen_hnode);\n");
+    } else if (mode == LH_HANDLER_CASE && case_has_catch(body)) {
+        /* cps-catch-unwind-cannot-cross-an-effect-capture: a catch prompt in
+         * a case that returns its value to dk_perform.  The prompt and the
+         * rest of the case past it end in a done node of this case's own, so
+         * running them (dk_run) hands the case's value back here. */
+        indent_buf(&tmp, 4);
+        buf_puts(&tmp, "DK *__kont = __dk_reap_node(dk_done());\n");
     }
     emit_binder_decls(&hc, body);
     emit_term(&hc, body);
@@ -12293,7 +12359,22 @@ static void emit_reset(CE *ce, const CTerm *t) {
      * exists from here on and owns the fires in reset.body. */
     uint64_t down_saved = g_pend_downstream;
     g_pend_downstream |= term_pops_mask(t->as.reset.body);
+    /* cps-catch-unwind-cannot-cross-an-effect-capture: a catch prompt in a
+     * handler CASE (handle_case_ok_rec's CT_RESET).  The delimited part
+     * delivers by running the prompt chain, never by the case's plain return
+     * (shift_mode off), and the chain it holds is in scope for the panic
+     * checks written in it (g_pend_k_ok), so a panic it sees -- the resumed
+     * body's, back through dk_invoke / __dk_discontinue -- is caught at the
+     * prompt and the rest of the case goes on with Err. */
+    bool save_shift = ce->shift_mode;
+    bool save_k_ok  = g_pend_k_ok;
+    if (t->as.reset.is_catch && ce->handler_case_mode) {
+        ce->shift_mode = false;
+        g_pend_k_ok = true;
+    }
     emit_term(ce, t->as.reset.delim);   /* delivers to the prompt chain, tail */
+    ce->shift_mode = save_shift;
+    g_pend_k_ok = save_k_ok;
     g_pend_downstream = down_saved;
     ce->cur_k = save;
     ce->cur_ty = save_ty;

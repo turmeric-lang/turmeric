@@ -1727,6 +1727,11 @@ void elab_force_load_module(Elab *e, const char *module_name);
 int elab_expand_module_loads(Elab *e, Arena *arena, SymbolTable *st,
                              Form *const *forms, uint32_t nforms,
                              Form ***out_forms, uint32_t *out_n);
+/* quote-list-data-plan: splice `(load "stdlib/datum.tur")`'s forms in at
+ * index `at` of a load-expanded form list when a user form from `at` on
+ * quotes a list and datum.tur is not loaded yet.  False if the load failed. */
+bool elab_quote_data_demand_load(Elab *e, Arena *arena, SymbolTable *st,
+                                 Form ***forms_io, uint32_t *n_io, uint32_t at);
 /* Pass-1 forward declaration of a single top-level (defn ...) form into
  * e->global.  Shared by elaborate_program (entry unit) and import_module
  * (imported/loaded modules) so bare top-level defns spliced by (load ...) can

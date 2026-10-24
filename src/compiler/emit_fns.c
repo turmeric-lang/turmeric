@@ -5844,7 +5844,7 @@ static void seg_graph_build(const EmitCtx *ctx) {
 }
 
 static bool emit_fn_wants_seg_check(const EmitCtx *ctx, const Expr *e) {
-    if (!g_opt_r7rs_segmented_stack || !emit_fn_is_scheme(e)) return false;
+    if (!emit_seg_stack_wanted() || !emit_fn_is_scheme(e)) return false;
     const FnDef *fd = e->kind == EX_FN_DEF ? e->as.fn_def_.fn : NULL;
     if (!fd) return true;
     if (!(fd->binding && (fd->binding->is_from_stdlib || fd->binding->is_from_implib)))

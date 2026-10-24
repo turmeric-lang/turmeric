@@ -1,6 +1,7 @@
 #include "stdlib_autoload.h"
 
 #include "diag.h"
+#include "lang_dialects.h"   /* quote-list-data-plan: lang_span_is_scheme */
 #include "reader.h"
 #include "runtime/globals.h"
 
@@ -126,9 +127,16 @@ const char *const *tur_stdlib_autoload_files(void) {
  * through it string.tur and the typeclass stack, so loading it into every
  * program under the flag would reserve all of those names (MF3) for programs
  * that never quote a list -- and the LSP runs with every experiment on.  So
- * the entry program is scanned for a quoted list or vector first.  A quote
- * that only a `(load ...)`ed file or a macro expansion produces is not seen;
- * elab_quote then says to load datum.tur explicitly.
+ * the program is scanned for a quote of a list or vector first: the entry
+ * file here (the autoload), then every `(load ...)`ed file and every imported
+ * module as it is read (elab_quote_data_demand_load, elab_toplevel.c), which
+ * splices `(load "stdlib/datum.tur")` ahead of the first one that wants it.
+ *
+ * A quote a macro expansion produces is seen through the macro's definition:
+ * a template holding `'~x` / `(quote ~x)`, a body naming the symbol `quote`
+ * (`(list 'quote x)`) or `syntax-quote`, or the string "quote" (a defmacro*
+ * building it with `sym->syntax`).  A false yes only loads a module the
+ * program did not need.
  *
  * Never for a Scheme program: `#lang r7rs` quotes through its own pairs.
  * ------------------------------------------------------------------------- */
@@ -136,17 +144,35 @@ static bool quote_data_entry_is_scheme(void) {
     return g_opt_r7rs || (g_lang_prelude && strncmp(g_lang_prelude, "r7rs/", 5) == 0);
 }
 
+/* Could a quote whose argument is `q` hold a list once expanded: a list or
+ * vector written out, or an unquote a macro template fills in. */
+static bool quoted_item_may_be_list(const Form *q) {
+    return q && (q->tag == F_LIST || q->tag == F_VEC ||
+                 q->tag == F_UNQUOTE || q->tag == F_UNQUOTE_SPLICING);
+}
+
 static bool form_quotes_a_list(const Form *f, unsigned depth) {
     if (!f || depth > 4096) return false;
     switch (f->tag) {
         case F_QUOTE:
-            return f->as.list.len == 1 &&
-                   (f->as.list.items[0]->tag == F_LIST || f->as.list.items[0]->tag == F_VEC);
+            if (f->as.list.len != 1) return false;
+            if (quoted_item_may_be_list(f->as.list.items[0])) return true;
+            /* `'quote` -- a macro building `(list 'quote x)`. */
+            return f->as.list.items[0]->tag == F_SYM &&
+                   strcmp(f->as.list.items[0]->as.sym->name, "quote") == 0;
+        case F_STR:
+            /* `(sym->syntax "quote")` in a defmacro* body. */
+            return f->as.s.len == 5 && memcmp(f->as.s.p, "quote", 5) == 0;
         case F_LIST:
-            /* `(quote (a b))` written out, as a macro might leave it. */
+            /* `(quote (a b))` written out, as a macro might leave it, or
+             * `(quote ~x)` in a template. */
             if (f->as.list.len == 2 && f->as.list.items[0]->tag == F_SYM &&
                 strcmp(f->as.list.items[0]->as.sym->name, "quote") == 0 &&
-                (f->as.list.items[1]->tag == F_LIST || f->as.list.items[1]->tag == F_VEC))
+                quoted_item_may_be_list(f->as.list.items[1]))
+                return true;
+            /* `(syntax-quote stx)` -- a defmacro* body building a quote. */
+            if (f->as.list.len >= 1 && f->as.list.items[0]->tag == F_SYM &&
+                strcmp(f->as.list.items[0]->as.sym->name, "syntax-quote") == 0)
                 return true;
             /* fallthrough */
         case F_VEC: case F_MAP: case F_SET: case F_QUASIQUOTE: case F_UNQUOTE:
@@ -165,6 +191,24 @@ bool tur_quote_data_wanted_forms(Form *const *forms, uint32_t n) {
     if (!g_opt_quote_data || quote_data_entry_is_scheme()) return false;
     for (uint32_t i = 0; i < n; i++)
         if (form_quotes_a_list(forms[i], 0)) return true;
+    return false;
+}
+
+/* The same question over a form list that may hold stdlib forms too (the
+ * load-expanded program, an imported module): only forms of a user file
+ * count -- no stdlib code quotes a list, and a stdlib macro naming `quote`
+ * must not load datum.tur into every program -- and a `#lang r7rs` file's
+ * forms never do. */
+bool tur_quote_data_wanted_user_forms(Form *const *forms, uint32_t n) {
+    if (!g_opt_quote_data || quote_data_entry_is_scheme()) return false;
+    for (uint32_t i = 0; i < n; i++) {
+        const Form *f = forms[i];
+        if (!f) continue;
+        const char *path = diag_file_path(f->span.file_id);
+        if (path && strstr(path, "stdlib/") != NULL) continue;
+        if (lang_span_is_scheme(f->span)) continue;
+        if (form_quotes_a_list(f, 0)) return true;
+    }
     return false;
 }
 

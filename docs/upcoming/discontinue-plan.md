@@ -1,15 +1,18 @@
 # Plan: implement `discontinue` -- resume a continuation by raising at the `perform`
 
-> **Status:** IMPLEMENTED BEHIND `--enable=discontinue` 2026-10-22 (an
-> `EXPERIMENTS[]` row, prototype, introduced 0.68.0, advisory expiry 0.71.0).
-> Both engines run fixtures 1, 2 and 4. Graduation waits on two shapes, one
-> per engine, that each refuses: compiled, fixture 3 (a `catch-unwind` inside
-> the clause, which a CPS case body cannot hold yet:
-> [cps-catch-unwind-cannot-cross-an-effect-capture](../reported/cps-catch-unwind-cannot-cross-an-effect-capture.md));
-> interpreted, fixture 5 (a `^multishot` k over a body that catches, which
-> the single-shot fiber runtime refuses:
-> [turi-fiber-handle-defers-fire-at-the-wrong-time](../reported/turi-fiber-handle-defers-fire-at-the-wrong-time.md)).
-> See "Implemented" below.
+> **Status:** BETA BEHIND `--enable=discontinue` since 2026-10-24 (an
+> `EXPERIMENTS[]` row, `XF_LIFECYCLE_BETA`, introduced 0.68.0, advisory
+> expiry 0.71.0; implemented as a prototype 2026-10-22). All five fixtures
+> run with the same output compiled (`tur run`), under `tur jit` and under
+> `tur --interpret`: the two shapes graduation waited on landed 2026-10-24 --
+> compiled, fixture 3 (a `catch-unwind` in the clause is a catch prompt the
+> case holds:
+> [cps-catch-unwind-cannot-cross-an-effect-capture](../reported/cps-catch-unwind-cannot-cross-an-effect-capture.md),
+> narrowed); interpreted, fixture 5 (a `^multishot` k over a body with a
+> `defer` or `catch-unwind` runs on the work stack:
+> [turi-fiber-handle-defers-fire-at-the-wrong-time](../archive/turi-fiber-handle-defers-fire-at-the-wrong-time.md),
+> resolved). What is left is the mechanical gate drop in "Graduation" below,
+> after the beta soaks a release.
 
 ## Implemented (2026-10-22)
 
@@ -48,16 +51,48 @@ of a fiber handle to have its own catch-boundary stack, which also fixed
 **Site.** The panic names the `discontinue`'s line, not the `perform`'s, on
 both engines: neither runtime keeps a perform's location in its continuation.
 
-**Fixtures** (`flags`: `--enable=discontinue`): `discontinue-uncaught` (1),
-`discontinue-caught-in-body` (2, 4, a typed payload, a catch around the
-handle), `discontinue-caught-in-clause` (3, interpreter only),
-`discontinue-multishot` (5, compiled only), `errors/discontinue-linear-twice`
-(4: TUR-E0101).
+**Caught in the clause (2026-10-24, compiled).** A handler case body admits a
+catch prompt (`handle_case_ok_rec`'s CT_RESET, src/compiler/emit_cps_ir.c).
+`emit_reset` installs it on the case's `__kont` -- the real enclosing chain
+for a re-opening case, otherwise a done node of the case's own (`emit_lifted`)
+-- with the rest of the case lifted past it; the delimited part delivers
+through the chain and its panic checks name the prompt, so the panic
+`__dk_discontinue` (or a `resume`) hands back is caught there and the rest of
+the case goes on with Err. The thunk the case inlines is still emitted as a
+function of its own; a `discontinue` there now has a direct lowering
+(`emit_effects_discontinue` calls `__dk_discontinue`) instead of an eviction
+error.
 
-**Graduation.** When the two shapes in the Status line run on both engines,
-drop the `EXPERIMENTS[]` row and the gates (`g_opt_discontinue` in
-elab_effects.c, cps_ir.c, emit_effects.c, eval.c), retire the two refusal
-fixtures and the `flags` files, and archive this plan.
+**Multi-shot over a catching body (2026-10-24, interpreted).** `defer` and
+`catch-unwind` are work-stack capturable: a capture takes the body's pending
+defers and catch boundaries off the env with the slice
+(`ws_capture_body_state`), and each resume puts a copy back where it resumes,
+remapping the slice's defer marks (`ws_slice_reinstall`). A case that
+abandons its `k` fires the body's defers when it returns
+(`ws_case_abandoned`), as the compiled runtime does. So a `^multishot` k over
+such a body is no longer refused, and its `discontinue` raises at the copy's
+hole as a resume would deliver there. `discontinue` itself is no longer a
+black box to `ws_capturable`.
+
+**Fixtures** (`flags`: `--enable=discontinue`), all on all three engines:
+`discontinue-uncaught` (1), `discontinue-caught-in-body` (2, 4, a typed
+payload, a catch around the handle), `discontinue-caught-in-clause` (3, plus
+a body that recovers first and a `catch-panic-of` of another type in the
+clause), `discontinue-multishot` (5, with and without a `defer`, and caught in
+the clause), `errors/discontinue-linear-twice` (4: TUR-E0101).
+`discontinue-caught-in-body`, `-caught-in-clause` and `-multishot` are
+leak-checked compiled (`requires.leak-check`; `tests/run-leak-check.sh` now
+passes a fixture's `flags`).
+The `resume` shapes of the same clause catch are `cps-catch-unwind-in-clause`
+(no flag).
+
+**Graduation.** Nothing but the gate drop is left: delete the `EXPERIMENTS[]`
+row and move the name to `GRADUATED[]` (src/runtime/experiments.c), remove the
+`g_opt_discontinue` gates (elab_effects.c, cps_ir.c, emit_effects.c, eval.c),
+retire the two refusal fixtures (`errors/discontinue-no-lowering`,
+`discontinue-interp-unsupported`) and the five `flags` files, update the
+`discontinue` entry in `stdlib/forms/effects.tur` and the effects guide, and
+archive this plan.
 
 ## Blockers (checked 2026-10-22)
 
@@ -70,10 +105,10 @@ will raise.
 
 | Report | Engine | Blocks | Why |
 | --- | --- | --- | --- |
-| [cps-catch-unwind-cannot-cross-an-effect-capture](../reported/cps-catch-unwind-cannot-cross-an-effect-capture.md) | compiled | fixture 3 only (narrowed 2026-10-22) | Fixtures 2 and 5 are unblocked: a `catch-unwind` written in the body around the `perform` lowers as a catch prompt, and a panic raised in the resumed continuation -- where `discontinue`'s raise will start -- is caught there, per `^multishot` copy too. Still refused: a `catch-unwind` inside the CLAUSE around the `discontinue` (fixture 3). Until that lands, fixture 3 can catch around the `handle` instead, which works in the same function. The raise itself should enter the existing catch path: set `tur_panicking` with the payload staged, and the frame check / body hook / `dk_perform` find the prompt (`__dk_panic_catch`) |
+| [cps-catch-unwind-cannot-cross-an-effect-capture](../reported/cps-catch-unwind-cannot-cross-an-effect-capture.md) | compiled | -- (**fixture 3 unblocked 2026-10-24**: a case body holds a catch prompt; what the report keeps open are thunk shapes no fixture needs) | Fixtures 2 and 5 are unblocked: a `catch-unwind` written in the body around the `perform` lowers as a catch prompt, and a panic raised in the resumed continuation -- where `discontinue`'s raise will start -- is caught there, per `^multishot` copy too. Still refused: a `catch-unwind` inside the CLAUSE around the `discontinue` (fixture 3). Until that lands, fixture 3 can catch around the `handle` instead, which works in the same function. The raise itself should enter the existing catch path: set `tur_panicking` with the payload staged, and the frame check / body hook / `dk_perform` find the prompt (`__dk_panic_catch`) |
 | ~~[turi-fiber-resume-from-clause-scope-crashes-on-body-defer](../archive/turi-fiber-resume-from-clause-scope-crashes-on-body-defer.md)~~ | interpreted | -- | **Resolved 2026-10-22.** The fiber body now has its own defer chain, so resuming from a scope in the clause works |
 | ~~[compiled-uncaught-panic-skips-caller-defers](../archive/compiled-uncaught-panic-skips-caller-defers.md)~~ | compiled | -- | **Resolved 2026-10-22.** An uncaught panic unwinds to `main` firing every defer. The raise `discontinue` makes must enter through the root-unwind path (`tur_panic_with_site`, or set `tur_root_unwind` to 2 around its raise), not a runtime helper's plain `tur_panic_with` |
-| [turi-fiber-handle-defers-fire-at-the-wrong-time](../reported/turi-fiber-handle-defers-fire-at-the-wrong-time.md) | interpreted | fixture 5 with a `defer` or `catch-unwind` in the body (narrowed 2026-10-22: only the single-shot limit is left) | The fiber runtime is single-shot. `(+ (resume k 1) (resume k 2))` over a defer-bearing body is refused with "already been resumed", and so is one whose `perform` sits under a `catch-unwind` (`ws_capturable` refuses both). Its fix direction 1 (work-stack-capturable `defer`, and `catch-unwind` too) is the real unblock for the interpreter, and would also retire the crash above |
+| ~~[turi-fiber-handle-defers-fire-at-the-wrong-time](../archive/turi-fiber-handle-defers-fire-at-the-wrong-time.md)~~ | interpreted | -- (**Resolved 2026-10-24** by its fix direction 1: `defer` and `catch-unwind` are work-stack capturable, so fixture 5 runs) | The fiber runtime is single-shot. `(+ (resume k 1) (resume k 2))` over a defer-bearing body is refused with "already been resumed", and so is one whose `perform` sits under a `catch-unwind` (`ws_capturable` refuses both). Its fix direction 1 (work-stack-capturable `defer`, and `catch-unwind` too) is the real unblock for the interpreter, and would also retire the crash above |
 
 | ~~[turi-catch-panic-of-mismatch-in-fiber-body-overflows](../archive/turi-catch-panic-of-mismatch-in-fiber-body-overflows.md)~~ | interpreted | -- | **Resolved 2026-10-22** with the interpreter half of this plan |
 
@@ -92,6 +127,9 @@ Related but not blocking:
   item 5 and [stale-comments-emitter](../archive/stale-comments-emitter.md)
   item 6 cover the guide section and the `emit_effects.c` header. This plan's
   last step already does both.
+
+(2026-10-24: done -- every fixture runs on all three engines; the order below
+is kept as the record of how it went.)
 
 Suggested order (updated 2026-10-22, after the first three rows were worked):
 both halves of this plan can start, behind `--enable=discontinue`. Compiled,
@@ -139,9 +177,9 @@ it. The payload follows `panic-with`: any value, typed by `catch-panic-of`; a
 `cstr` payload is the common case and reads as the panic message.
 
 For comparison, a clause that does not resume abandons the body; the body's
-cleanup still runs (compiled at once, interpreted late:
-[turi-fiber-handle-defers-fire-at-the-wrong-time](../reported/turi-fiber-handle-defers-fire-at-the-wrong-time.md)),
-but the body cannot intervene.
+cleanup still runs (at once, when the clause returns, on both engines since
+[turi-fiber-handle-defers-fire-at-the-wrong-time](../archive/turi-fiber-handle-defers-fire-at-the-wrong-time.md)
+was fixed), but the body cannot intervene.
 
 ## Compiled (CPS / DK backend)
 
