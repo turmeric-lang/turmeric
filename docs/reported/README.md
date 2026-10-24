@@ -34,6 +34,13 @@ sentence above does not cover them. If you touch this file, check
 `ls docs/reported/` against it -- an index that silently omits a quarter of the
 directory is worse for triage than no index.
 
+## Found checking two agent claims: wasm stack depth, diag file 0 (filed 2026-10-24)
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [wasm-linear-stack-overflow-unchecked](wasm-linear-stack-overflow-unchecked.md) | medium (planned wasm JIT) | The wasm link has no `-sSTACK_OVERFLOW_CHECK`, so a linear-stack overflow is an OOB trap or memory corruption. The JS limit binds first only for plain small-frame recursion; a 16 KiB local overflows near depth 1,000. `=2` turns every measured case into a clean `stack overflow` abort |
+| [diag-file0-registrations-outlive-their-frame](diag-file0-registrations-outlive-their-frame.md) | low (latent) | The open residue of the archived manifest file-0 fix: `pkg_lock_read`, `fmt_format_buffer`, `cmd_format`, `cmd_explain` and the driver's `compile_to_*` leave `files_[0]` naming a dead frame. No caller trips it. `global.c` is not affected (it saves and restores) |
+
 ## Found checking tvm's installer rc choice (filed 2026-10-24)
 
 | Report | Severity | One line |
