@@ -119,8 +119,8 @@ test.describe('PWA safe-area insets', () => {
         await openDocs(page);
         await expect(page.locator('#docs-overlay')).toBeVisible();
 
-        // "x" in a trailing corner does not read as the way out of a
-        // full-screen sheet; on a phone the control is labeled and leading.
+        // A bare "x" does not read as the way out of a full-screen sheet; on
+        // a phone the control is labeled, in the upper-right corner.
         const label = page.locator('.docs-close-label');
         await expect(label).toBeVisible();
         await expect(label).toHaveText('Back');
@@ -128,12 +128,15 @@ test.describe('PWA safe-area insets', () => {
         const closeBox = await boxOf(page, '#docs-close');
         const toggleBox = await boxOf(page, '#docs-nav-toggle');
         expect(closeBox.top).toBeLessThan(toggleBox.top + toggleBox.height);
-        // Leading edge: before the Contents toggle, not after the search box.
-        const closeLeft = await page.evaluate(
-            () => document.querySelector('#docs-close').getBoundingClientRect().left);
-        const toggleLeft = await page.evaluate(
-            () => document.querySelector('#docs-nav-toggle').getBoundingClientRect().left);
-        expect(closeLeft).toBeLessThan(toggleLeft);
+        // Trailing edge: after the search box, at the right of the bar.
+        const edges = await page.evaluate(() => ({
+            close:  document.querySelector('#docs-close').getBoundingClientRect().left,
+            search: document.querySelector('.docs-search-wrap').getBoundingClientRect().right,
+            bar:    document.querySelector('.docs-topbar').getBoundingClientRect().right,
+            right:  document.querySelector('#docs-close').getBoundingClientRect().right,
+        }));
+        expect(edges.close).toBeGreaterThanOrEqual(edges.search);
+        expect(edges.bar - edges.right).toBeLessThanOrEqual(16);
 
         await page.click('#docs-close');
         await expect(page.locator('#docs-overlay')).toBeHidden();

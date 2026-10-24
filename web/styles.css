@@ -520,8 +520,16 @@ body.split-dragging * {
    (scrollWidth stays == clientWidth, scrollLeft is pinned at 0), so Run and
    Trace were clipped away with no way to scroll them back. An auto start
    margin right-aligns the same way when there is free space and collapses to
-   zero when there isn't. */
-.editor-actions > :first-child { margin-inline-start: auto; }
+   zero when there isn't. The Turmeric mark leads the row, so the auto margin
+   sits on its trailing side: the mark stays at the start and the buttons are
+   pushed to the end the same way. */
+.editor-actions > .editor-brand {
+    width: 20px;
+    height: 20px;
+    margin-inline: 2px auto;
+    user-select: none;
+    -webkit-user-drag: none;
+}
 /* Buttons keep their size and push the row wider; they do not compress. */
 .editor-actions > * { flex: 0 0 auto; }
 .editor-tabs::-webkit-scrollbar,
@@ -2493,12 +2501,12 @@ html.pwa {
     .docs-status { display: none; }
     .docs-load-btn { opacity: 1; }
 
-    /* Leading edge, labeled, and a full 44px tall: the way out of a
-       full-screen sheet has to be where a reader looks for it and big enough
-       to hit. At 28px in a trailing corner it was neither -- and until the
-       inset fix above it was not on screen at all. */
+    /* Labeled, in the upper-right corner, and a full 44px tall: the way out
+       of a full-screen sheet has to be big enough to hit and read as the way
+       out. At 28px as a bare "x" it did neither -- and until the inset fix
+       above it was not on screen at all. It stays in its source position,
+       after the search box, so it sits at the trailing edge of the bar. */
     .docs-topbar .btn-close {
-        order: -1;
         width: auto;
         min-width: 44px;
         height: 44px;

@@ -56,6 +56,12 @@
                              until the editor initialises. -->
                         <div class="editor-tabs"></div>
                         <div class="editor-actions">
+                            <!-- The Turmeric mark, leading the action row. It is
+                                 the favicon itself (precached by sw.js, so it is
+                                 there offline) and purely decorative: the site
+                                 nav already carries the home link. -->
+                            <img class="editor-brand" src="/favicon.svg" alt="" aria-hidden="true"
+                                 width="20" height="20" draggable="false">
                             <button class="btn btn-icon" id="run-btn" title="Run (Ctrl/Cmd + Enter)" aria-label="Run">
                                 <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
                                     <path d="M8 5v14l11-7z"/>
