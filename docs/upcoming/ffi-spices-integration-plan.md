@@ -9,7 +9,9 @@
 > JIT build.
 > **Remaining: S5 only. Decided 2026-10-24: Option A** -- give variadic
 > exports `__ffi` shims, then delete the shape table, after closing a CI
-> coverage gap first; the ordered steps are in S5.  Its old blocker
+> coverage gap first; the ordered steps are in S5. Independent of the
+> raylib web playground plan, which cannot use the table in the browser
+> anyway (measured under emcc, see S5).  Its old blocker
 > moved on 2026-10-02: `TUR_JIT` now
 > defaults ON on 64-bit x86-64 and arm64 (MIR vendored under `external/mir/`),
 > so default builds and release binaries carry the c2mir thunk provider.  But
@@ -286,18 +288,19 @@ shim is an ordinary shim with one more int parameter.
       history.
 - [ ] **5. Archive this plan** -- S5 was the last open item.
 
-#### Cross-plan dependency: the raylib web playground
+#### The raylib web playground: no dependency (measured 2026-10-24)
 
 [raylib-web-playground-plan](raylib-web-playground-plan.md) (draft) step A0
-plans to call baked spice exports from the browser interpreter -- a JIT-less
-build -- through this shape table. That plan should target rung 2 instead:
-have its static spice image (its A1) carry each export's `__ffi` shim beside
-the function pointer. This is likely required, not just tidier: WebAssembly
-traps on a call through a mismatched function-pointer type, the table relies
-on exactly such a blanket cast, and a shim calls the export with its real
-declared C types. (Not verified under emcc; that is that plan's A0 to
-confirm.) Step 4 should not land while that plan still names the table --
-update its A0 first, or together.
+once planned to call baked spice exports from the browser interpreter -- a
+JIT-less build -- through this shape table. That was checked under emcc
+6.0.13 and the table cannot serve it: exports keep their real C types, the
+table calls every int-class argument through an `int64_t` function-pointer
+cast, and wasm32 traps on the mismatch (`RuntimeError: null function or
+function signature mismatch`) for every export with a `bool` or `cstr`
+parameter -- 15 of the raylib spice's 84 defns, the input predicates and
+every `load-*` among them. The `__ffi` shims work for all of them. That
+plan now carries the shims in its static image (its A0/A1), so it needs
+nothing from the table, and step 4 here can land independently of it.
 
 Cross-referenced from aot-compiled-repl-plan.md "Open questions" item 1.
 
