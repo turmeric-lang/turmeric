@@ -2,6 +2,52 @@
 
 All notable changes to Turmeric are documented here.
 
+## [0.71.0] -- 2026-10-24
+
+### Added
+
+- **One-argument `-` and `-.` now negate on the builtin kinds.** `(- x)` works
+  on int, float and the sized kinds; integers wrap at their own width and floats
+  keep the sign of `-0.0`, where the old `(- 0 x)` stand-in did not. Every
+  builtin Num instance's `neg` is `(- x)` now too.
+- **`tur serve --isolate[=MODE]` makes a served page cross-origin isolated.** It
+  sends `Cross-Origin-Opener-Policy: same-origin` and
+  `Cross-Origin-Embedder-Policy: MODE` on every response, enabling
+  SharedArrayBuffer and WASM threads. `args.tur` options can take an optional
+  value: bare `--name` means the implicit one, `--name=value` overrides.
+- **`TUR_MUSTTAIL` makes real tail calls under c2mir.** The vendored MIR turns
+  `musttail` returns into jumps on x86-64 and aarch64, and the interpreter runs
+  them in the caller's activation too, so tail-call cycles run in constant stack
+  under `TUR_JIT_GEN=interp` as well.
+- **The `r7rs-segmented-stack` experiment moves to beta.** Behind
+  `--enable=r7rs-segmented-stack`, deep r7rs recursion now runs on heap frames
+  in every thread and fiber the program starts, with the emitted C unchanged
+  when the flag is off.
+
+### Changed
+
+- **`quote-data` moves to beta.** A quoted list in a `(load ...)`ed file, an
+  imported module or a macro expansion now loads `stdlib/datum.tur` on first
+  use, and a quoted list in a `defmacro*` body is the Syntax it spells,
+  returnable as an expansion and comparable with `syntax=?`.
+- **`discontinue` moves to beta.** A `catch-unwind` in a handler clause now
+  catches a panic the resumed body raises and the case goes on with `Err`; in
+  `turi` a `handle` body over a `defer` or `catch-unwind` runs on the work
+  stack, so a multi-shot continuation resumes per copy.
+
+### Deprecated
+
+- **`let*` is deprecated in the Turmeric dialects (TUR-D0006).** `let` already
+  binds sequentially, so `let*` was a second spelling of it; write `let`
+  instead. `#lang r7rs` sources keep the spec's meaning and never warn.
+
+### Removed
+
+- **The generated FFI shape table is gone.** The interpreter calls a spice
+  export through its `__ffi` shim, which variadic exports now get too; a library
+  built before 2026-07-22 with neither shim nor JIT reports that the spice must
+  be rebuilt.
+
 ## [0.70.5] -- 2026-10-24
 
 ### Added

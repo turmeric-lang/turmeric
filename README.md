@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/turmeric-lang/turmeric/actions/workflows/ci.yml/badge.svg)](https://github.com/turmeric-lang/turmeric/actions/workflows/ci.yml)
 
-**Latest release:** `v0.70.5` -- `/ci` charts gain drag-to-zoom, a denoised Trend view and per-runner CPU filtering, while shift/reset semantics now agree between `tur` and `turi` and several closure and aggregate leaks are fixed.
+**Latest release:** `v0.71.0` -- Unary `-` and `-.` negate on the builtin kinds, `tur serve --isolate` enables cross-origin isolation, `TUR_MUSTTAIL` makes real tail calls under c2mir, and `let*` is deprecated in favor of sequential `let`.
 
 ## What
 
