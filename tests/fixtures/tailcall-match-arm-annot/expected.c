@@ -2387,6 +2387,8 @@ typedef struct tur_shift_reset_ctx {
     struct tur_shift_reset_ctx *prev; /* nested resets */
     void *dk_driver; void *dk_pend; int dk_depth; size_t dk_reap_mark;
     int pending;     /* a DK shift stored `result`: jump at the entry's exit */
+    void *dk_entries;
+    void *dk_chain; int dk_skip;
 } tur_shift_reset_ctx;
 
 #if defined(__GNUC__) || defined(__clang__)
@@ -3073,9 +3075,49 @@ static void __dk_copy_last_release(DK *last) {
 __attribute__((unused)) static void __dk_reset_save(tur_shift_reset_ctx *rs) {
     rs->dk_driver = (void *)g_dk_driver; rs->dk_pend = (void *)g_dk_pend_perform;
     rs->dk_depth = __dk_entry_depth; rs->dk_reap_mark = __dk_reap_n; rs->pending = 0;
+    rs->dk_entries = NULL; rs->dk_chain = NULL; rs->dk_skip = 0;
+}
+typedef struct __dk_entry_rec { DK *root; struct __dk_entry_rec *prev; } __dk_entry_rec;
+__attribute__((unused)) static void __dk_entry_note(__dk_entry_rec *r, DK *root) {
+    tur_shift_reset_ctx *rs = tur_cur_shift_reset;
+    r->root = root; r->prev = NULL;
+    if (rs) { r->prev = (__dk_entry_rec *)rs->dk_entries; rs->dk_entries = r; }
+}
+__attribute__((unused)) static void __dk_entry_unnote(DK *root) {
+    tur_shift_reset_ctx *rs = tur_cur_shift_reset;
+    __dk_entry_rec *r = rs ? (__dk_entry_rec *)rs->dk_entries : NULL;
+    if (r && r->root == root) rs->dk_entries = r->prev;
+}
+__attribute__((unused)) static int __dk_chain_has_reset(DK *k) {
+    for (; k && k->kind != DKK_DONE; k = k->next)
+        if (k->kind == DKK_PROMPT && k->tag == 1) return 1;
+    return 0;
+}
+__attribute__((unused)) static intptr_t dk_run(DK *k, intptr_t v);
+__attribute__((unused)) static intptr_t __dk_reset_abort_to(DK *k, int64_t w, int skip) {
+    for (; k && k->kind != DKK_DONE; k = k->next)
+        if (k->kind == DKK_PROMPT && k->tag == 1 && skip-- == 0) return dk_run(k->next, (intptr_t)w);
+    return (intptr_t)w;
+}
+__attribute__((unused)) static int __dk_reset_hide(tur_shift_reset_ctx *rs) {
+    if (!rs) return 0;
+    if (rs->dk_chain) {
+        int n = 0;
+        for (DK *k = (DK *)rs->dk_chain; k && k->kind != DKK_DONE; k = k->next)
+            if (k->kind == DKK_PROMPT && k->tag == 1) n++;
+        if (n > rs->dk_skip + 1) { rs->dk_skip++; return 1; }
+    }
+    tur_cur_shift_reset = rs->prev;
+    return 0;
+}
+__attribute__((unused)) static void __dk_reset_unhide(tur_shift_reset_ctx *rs, int hid) {
+    if (!rs) return;
+    if (hid) rs->dk_skip--; else tur_cur_shift_reset = rs;
 }
 __attribute__((unused)) static void __dk_reset_abort(tur_shift_reset_ctx *rs) {
     rs->pending = 0;
+    for (__dk_entry_rec *r = (__dk_entry_rec *)rs->dk_entries; r; r = r->prev) dk_free(r->root);
+    rs->dk_entries = NULL;
     g_dk_driver = (tur_jmp_buf *)rs->dk_driver;
     g_dk_pend_perform = (DKPendPerform *)rs->dk_pend;
     if (__dk_entry_depth > rs->dk_depth) {
@@ -3162,7 +3204,12 @@ static intptr_t dk_run_impl(DK *k, intptr_t v, bool root) {
                 DK *tail = reinstall
                     ? dk_prompt(to_root ? DK_ROOT_TAG : k->tag, dk_done()) : dk_done();
                 sub = dk_append(sub, tail);
+                /* A shift0 with no prompt on this chain removes the landing
+                 * it will abort to for its body, as a direct shift0 does. */
+                tur_shift_reset_ctx *__hrs = (to_root && !reinstall) ? tur_cur_shift_reset : NULL;
+                int __hid = __dk_reset_hide(__hrs);
                 intptr_t bodyval = k->body(k->body_env, sub);
+                __dk_reset_unhide(__hrs, __hid);
                 dk_free(sub);
                 if (tur_panicking) {
                     /* The shift body ran at the prompt, outside the part it cut off. */
@@ -3592,8 +3639,31 @@ struct FiberBlock {
     void *esc_live; int esc_live_n, esc_live_cap;
     int64_t r7dyn[8];
     TurDynSave *dynsave;
+    void *tsan_fiber; void *tsan_caller;
 };
 
+#if defined(__SANITIZE_THREAD__)
+#  define TUR_TSAN_FIBERS 1
+#elif defined(__has_feature)
+#  if __has_feature(thread_sanitizer)
+#    define TUR_TSAN_FIBERS 1
+#  endif
+#endif
+#ifdef TUR_TSAN_FIBERS
+void *__tsan_get_current_fiber(void);
+void *__tsan_create_fiber(unsigned flags);
+void __tsan_destroy_fiber(void *fiber);
+void __tsan_switch_to_fiber(void *fiber, unsigned flags);
+#  define TUR_TSAN_FIBER_NEW(f)   ((f)->tsan_fiber = __tsan_create_fiber(0))
+#  define TUR_TSAN_FIBER_ENTER(f) ((f)->tsan_caller = __tsan_get_current_fiber(), __tsan_switch_to_fiber((f)->tsan_fiber, 0))
+#  define TUR_TSAN_FIBER_LEAVE(f) __tsan_switch_to_fiber((f)->tsan_caller, 0)
+#  define TUR_TSAN_FIBER_FREE(f)  do { if ((f)->tsan_fiber) __tsan_destroy_fiber((f)->tsan_fiber); } while (0)
+#else
+#  define TUR_TSAN_FIBER_NEW(f)   ((void)0)
+#  define TUR_TSAN_FIBER_ENTER(f) ((void)0)
+#  define TUR_TSAN_FIBER_LEAVE(f) ((void)0)
+#  define TUR_TSAN_FIBER_FREE(f)  ((void)0)
+#endif
 #if defined(__GNUC__) || defined(__clang__)
 static TUR_THREAD_LOCAL FiberBlock *tur_current_fiber = NULL;
 #else
@@ -3765,6 +3835,7 @@ static void tur_fiber_shim(uint32_t hi, uint32_t lo) {
     }
     f->done = 1;
     if (task_group) tur_task_group_notify_done(task_group);
+    TUR_TSAN_FIBER_LEAVE(f);
     swapcontext(&f->ctx, &f->caller_ctx);
     abort();
 }
@@ -3791,6 +3862,7 @@ static FiberBlock *tur_fiber_block_new(void (*fn)(void), size_t stack_size) {
     uint32_t _hi = (uint32_t)(_fp >> 32);
     uint32_t _lo = (uint32_t)(_fp & 0xFFFFFFFFU);
     makecontext(&f->ctx, (void(*)(void))tur_fiber_shim, 2, _hi, _lo);
+    TUR_TSAN_FIBER_NEW(f);
     return f;
 }
 
@@ -3813,6 +3885,7 @@ static int64_t tur_fiber_block_resume(FiberBlock *f, int64_t arg) {
     g_dk_driver = f->dk_driver;   /* the fiber's own landing, on its own stack */
     for (TurDynSwap *_ds = g_tur_dyn_swaps; _ds; _ds = _ds->next) _ds->swap(&f->dynsave);
     TUR_GC_FIBER_ENTER((void *)&_dk_save);
+    TUR_TSAN_FIBER_ENTER(f);
     swapcontext(&f->caller_ctx, &f->ctx);
     TUR_GC_FIBER_LEAVE();
     for (TurDynSwap *_ds = g_tur_dyn_swaps; _ds; _ds = _ds->next) _ds->swap(&f->dynsave);
@@ -3831,6 +3904,7 @@ static void tur_fiber_block_yield(int64_t value) {
     FiberBlock *f = tur_current_fiber;
     if (!f) { fprintf(stderr, "fiber-yield: not in fiber\n"); abort(); }
     f->result = value;
+    TUR_TSAN_FIBER_LEAVE(f);
     swapcontext(&f->ctx, &f->caller_ctx);
 }
 
@@ -3866,6 +3940,7 @@ static void tur_fiber_block_free(FiberBlock *f) {
     if (!f) return;
     tur_fiber_local_free(f);
     while (f->dynsave) { TurDynSave *_n = f->dynsave->next; free(f->dynsave); f->dynsave = _n; }
+    TUR_TSAN_FIBER_FREE(f);
     free(f->stack); free(f);
 }
 
@@ -4496,10 +4571,12 @@ __attribute__((unused)) static void __dk_entry_leave(DK *root, size_t mark) {
         if (!p || p->depth != __dk_entry_depth) return;
         __dk_reap_seg_take(&p->seg, mark);
         __dk_reap_seg_add(&p->seg, root, 1);
+        __dk_entry_unnote(root);
         p->depth = -1;  /* owned now: an outer exit is not its owner */
         --__dk_entry_depth;
         return;
     }
+    __dk_entry_unnote(root);
     dk_free(root);
     if (--__dk_entry_depth == 0) __dk_reap_run(); else __dk_reap_drop_to(mark);
     if (tur_cur_shift_reset && tur_cur_shift_reset->pending) __dk_reset_abort(tur_cur_shift_reset);
@@ -4509,6 +4586,7 @@ __attribute__((unused)) static int64_t __dk_enter0(int64_t (*body)(DK *), void *
     __dk_entry_depth++;
     size_t __dk_reap_mark = __dk_reap_n;
     DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
+    __dk_entry_rec __dkr; __dk_entry_note(&__dkr, __root);
     int64_t __r;
     tur_jmp_buf __dkjb; tur_jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;
     DKPendPerform *__dkpp = g_dk_pend_perform;
@@ -6589,7 +6667,8 @@ static int64_t ctor_Option_Some__Zipper__struct(int64_t _0) {
 #endif
 
 /* proper-tail-calls T2b: a guaranteed tail call where the C compiler
- * can promise one, and an ordinary `return f(args);` elsewhere. */
+ * can promise one, and an ordinary `return f(args);` elsewhere -- `tur jit`
+ * included (c2mir has no musttail; its 1 GiB entry stack hides that). */
 #ifndef TUR_MUSTTAIL
 #  if defined(__clang__) && defined(__has_attribute) && \
      ((!defined(__wasm__) && (defined(__x86_64__) || defined(__aarch64__))) || \
@@ -8729,6 +8808,7 @@ __attribute__((unused)) static bool map_hyeq_hyloop(void * iter, void * m2_hamt,
     size_t __dk_reap_mark = __dk_reap_n;
     DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
     int64_t __r;
+    __dk_entry_rec __dkr; __dk_entry_note(&__dkr, __root);
     struct { tur_jmp_buf jb; tur_jmp_buf *save; DKPendPerform *pp; DK *root; size_t mark; } __dke;
     __dke.save = g_dk_driver; __dke.pp = g_dk_pend_perform;
     __dke.root = __root; __dke.mark = __dk_reap_mark;
@@ -9129,6 +9209,7 @@ __attribute__((unused)) static bool list_hyeq_qu(int64_t l1, int64_t l2, int64_t
     size_t __dk_reap_mark = __dk_reap_n;
     DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
     int64_t __r;
+    __dk_entry_rec __dkr; __dk_entry_note(&__dkr, __root);
     struct { tur_jmp_buf jb; tur_jmp_buf *save; DKPendPerform *pp; DK *root; size_t mark; } __dke;
     __dke.save = g_dk_driver; __dke.pp = g_dk_pend_perform;
     __dke.root = __root; __dke.mark = __dk_reap_mark;
@@ -9235,6 +9316,7 @@ __attribute__((unused)) static int64_t _un_uncons_hyfmap(int64_t cell, void * f)
     size_t __dk_reap_mark = __dk_reap_n;
     DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
     int64_t __r;
+    __dk_entry_rec __dkr; __dk_entry_note(&__dkr, __root);
     struct { tur_jmp_buf jb; tur_jmp_buf *save; DKPendPerform *pp; DK *root; size_t mark; } __dke;
     __dke.save = g_dk_driver; __dke.pp = g_dk_pend_perform;
     __dke.root = __root; __dke.mark = __dk_reap_mark;
