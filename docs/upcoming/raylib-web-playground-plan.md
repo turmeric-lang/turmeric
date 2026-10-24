@@ -275,7 +275,11 @@ eval uses, so a program the LSP accepts is one the module runs.
 
 Ordered by dependency. Items A0-A3 are what A needs; B0-B2 are what B needs.
 
-- **A0. Verify the thunk dispatcher under emcc.** `src/runtime/ffi_dispatch_thunk.c`
+- **A0. Verify the thunk dispatcher under emcc.** *(2026-10-24: the shape
+  table is slated for deletion -- [ffi-spices-integration-plan](ffi-spices-integration-plan.md)
+  S5. Target the per-export `__ffi` shims in the static image instead; they
+  call each export with its real C types, which wasm's typed indirect calls
+  require. The rest of this item stands.)* `src/runtime/ffi_dispatch_thunk.c`
   is shape-keyed C with no MIR dependency on paper; `extern_thunk_native`
   gates on `tur_jit_ffi_provider()`, which the spice-image path
   (`ffi_native_shim`) does not. Build `libturi_wasm` with the dispatcher and

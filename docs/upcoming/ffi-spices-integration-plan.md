@@ -7,7 +7,9 @@
 > Re-verified 2026-10-24: `tests/turi/repl-spice-linklibs.sh` (S1) and the
 > `s2-variadic-*` cases of `tests/turi/repl-spice-call.sh` (S2) pass on the
 > JIT build.
-> **Remaining: S5 only, and it is a decision, not a blocker.**  Its blocker
+> **Remaining: S5 only. Decided 2026-10-24: Option A** -- give variadic
+> exports `__ffi` shims, then delete the shape table, after closing a CI
+> coverage gap first; the ordered steps are in S5.  Its old blocker
 > moved on 2026-10-02: `TUR_JIT` now
 > defaults ON on 64-bit x86-64 and arm64 (MIR vendored under `external/mir/`),
 > so default builds and release binaries carry the c2mir thunk provider.  But
@@ -191,19 +193,113 @@ regeneration advice in the ladder's error message) can be deleted.
 Blocked on the default flipping; record it so the 381-entry file does
 not outlive its reason.
 
-**Open -- a decision now (2026-10-24).** The default flipped on 2026-10-02
+**State on 2026-10-24.** The default flipped on 2026-10-02
 (`CMakeLists.txt:145-178`), so the blocker is gone, but nothing has been
 deleted: `src/runtime/ffi_dispatch_thunk.{c,h}` (still 381 shapes: arity
 0-6 over i/f, three return classes), `src/runtime/ffi_dispatch.{c,h}`,
 `tools/gen_ffi_dispatch.py`, and the regeneration advice in the ladder's
-error (`src/turi/ffi_thunk.c:360-365`) are all live.  On a JIT build the
-table is reached only for a spice `.so` built before per-export `__ffi`
-shims existed.  On a `-DTUR_JIT=OFF` build (or ppc64/s390x/riscv64, where
-the default is OFF) it is also the only rung for variadic exports (S2),
-which get no shim.  Deleting it therefore means accepting that such a
-build cannot call variadic spice exports from the REPL, and that old
-shim-less `.so` files must be rebuilt.  Cross-referenced from
-aot-compiled-repl-plan.md "Open questions" item 1.
+error (`src/turi/ffi_thunk.c:360-365`) are all live.
+
+#### How a spice export is called (the ladder)
+
+`ffi_native_shim` (`src/turi/ffi_thunk.c`) tries, in order:
+
+1. **JIT thunk** -- c2mir synthesizes an exact-signature trampoline (any
+   arity, any int/float mix). JIT builds only; skipped for record-taking
+   exports.
+2. **`__ffi` shim** -- the spice's own library carries a per-export
+   trampoline with the real C types. Emitted since 2026-07-22
+   (interpreter-arbitrary-arity-ffi) on every library build: the `--shared`
+   module path always (`emit_module.c`, `emit_ffi_export_shims`), the REPL's
+   in-process single-file build when it sets `g_emit_ffi_export_shims`
+   (`src/driver/jit.c:704`).
+3. **Shape table** -- the 381 generated trampolines. The table's only caller
+   is this rung (`ffi_thunk.c:354`); plain `extern-c` under `--interpret`
+   never used it (it needs the JIT; see `requires.jit`).
+
+Rung 3 is reached in exactly three cases: a spice library built before
+2026-07-22 (no shims); a **variadic** export on a build without the JIT,
+because the emitter skips variadic exports (`emit_module.c`, "Skipped ...:
+variadic exports"); and a JIT build whose thunk synthesis failed. Builds
+without the JIT: Emscripten and Apple's embedded platforms (which cannot load
+a native spice library at all), 32-bit hosts, and ppc64 / s390x / riscv64
+unless configured `-DTUR_JIT=ON`.
+
+#### Measured 2026-10-24 on a `-DTUR_JIT=OFF` build
+
+All five REPL spice suites pass on a JIT-less build today: `repl-spice-call`
+17/17 (the arity-12 and int/float-split calls through rung 2, the three
+`s2-variadic-*` cases through rung 3), `-load` 9/9, `-errors` 5/5, `-reload`
+4/4, `-linklibs` 1/1. They also pass on the JIT build.
+
+**The gap.** No CI job runs them without the JIT. The JIT-less job
+(`ci.yml`, "Configure (Debug, JIT off)") runs only `tests/run-turi.sh`, and
+every other job has the JIT, where rung 1 answers scalar calls before rung 2
+is tried -- so in CI rung 2 is reached only by record-taking exports. After
+this phase rung 2 is all a JIT-less build has, and nothing would notice it
+breaking.
+
+#### Decision (2026-10-24): Option A -- variadic shims, then delete
+
+Options weighed: (A) give variadic exports shims, then delete the table;
+(B) delete as is, losing variadic exports from the REPL on JIT-less builds;
+(C) keep the table permanently as the JIT-less rung (~200 KB of generated C
+and its generator, maintained for a rare case). A, because the gap B would
+open is small to close: a variadic export's C function is its fixed
+parameters plus **one int slot holding the rest list** -- the S2 path already
+counts that slot in `n_args` and builds the list (`ffi_thunk.c`, "S2: a
+variadic export's n_args INCLUDES the trailing rest-list slot") -- so its
+shim is an ordinary shim with one more int parameter.
+
+#### Steps, in order
+
+- [ ] **1. Cover the JIT-less ladder in CI.** Add the REPL spice suites
+      (`tests/turi/repl-spice-{call,load,errors,reload,linklibs}.sh`) to
+      the JIT-less CI job. They are green there today, so this is a pure
+      addition. The three `s2-variadic-*` cases are this phase's
+      acceptance test: deleting the table without step 3 makes exactly
+      them fail.
+- [ ] **2. (Optional) Exercise rung 2 on JIT builds too.** A test-only
+      switch that skips rung 1 for scalar exports, run with the
+      spice-call suite, so the shim rung is covered on macOS and Windows,
+      not just the Linux JIT-less job.
+- [ ] **3. Emit `__ffi` shims for variadic exports.** Stop skipping them in
+      `emit_ffi_export_shims` and read the rest slot as an int parameter.
+      Acceptance: the `s2-variadic-*` cases pass on the JIT-less build
+      with the table still present (so they pass through rung 2, not 3).
+      No fixture snapshot moves: shims are emitted only in library builds
+      (`--shared`, the REPL's in-process build), never in the single-file
+      output `expected.c` records.
+- [ ] **4. Delete the table.** Remove `src/runtime/ffi_dispatch{,_thunk}.{c,h}`,
+      `tools/gen_ffi_dispatch.py`, the `tur_ffi_dispatch_unit` test
+      (`tests/runtime/ffi-dispatch-unit.c`, its `add_executable` in
+      `src/CMakeLists.txt`, its ctest entry and the two ctest part lists in
+      `CMakeLists.txt` that name it) and the generated files' warning
+      carve-outs in `src/CMakeLists.txt`. Replace rung 3 in `ffi_thunk.c`
+      with an error for a library that has no shim: "rebuild the spice".
+      Update what refers to the old rung: `tests/turi/repl-spice-errors.sh`
+      (asserts the `gen_ffi_dispatch.py --max-arity` hint is in the binary),
+      `docs/guides/repl.md` (the `--max-arity 8` advice),
+      `docs/guides/compiler-internals.md` (the runtime file listing), and the
+      comments in `spice_loader.{c,h}`, `ffi_thunk.h` and
+      `tests/unit/experiments_user_config.c`. Archived plans keep their
+      history.
+- [ ] **5. Archive this plan** -- S5 was the last open item.
+
+#### Cross-plan dependency: the raylib web playground
+
+[raylib-web-playground-plan](raylib-web-playground-plan.md) (draft) step A0
+plans to call baked spice exports from the browser interpreter -- a JIT-less
+build -- through this shape table. That plan should target rung 2 instead:
+have its static spice image (its A1) carry each export's `__ffi` shim beside
+the function pointer. This is likely required, not just tidier: WebAssembly
+traps on a call through a mismatched function-pointer type, the table relies
+on exactly such a blanket cast, and a shim calls the export with its real
+declared C types. (Not verified under emcc; that is that plan's A0 to
+confirm.) Step 4 should not land while that plan still names the table --
+update its A0 first, or together.
+
+Cross-referenced from aot-compiled-repl-plan.md "Open questions" item 1.
 
 ## 3. Explicitly not doing
 
