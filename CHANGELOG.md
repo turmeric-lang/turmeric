@@ -2,6 +2,20 @@
 
 All notable changes to Turmeric are documented here.
 
+## [0.70.4] -- 2026-10-24
+
+### Changed
+
+- **The `/ci` metrics page now reads a compact server-side store.** Chart data
+  is served per environment and range instead of as raw NDJSON from the
+  `ci-metrics` branch: the default view drops from 12.8 MB to about 95 KB
+  gzipped, and repeat views between pushes fetch only the metadata.
+
+### Fixed
+
+- **`/ci` shows an error instead of spinning forever.** If page loading fails,
+  the spinner ends and the reason appears on the page.
+
 ## [0.70.3] -- 2026-10-23
 
 ### Fixed
