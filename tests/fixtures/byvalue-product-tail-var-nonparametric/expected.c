@@ -6692,8 +6692,8 @@ static tur_adt_Box2__int__int ctor_Box2_Box2__int__int(int64_t _0, int64_t _1) {
 #endif
 
 /* proper-tail-calls T2b: a guaranteed tail call where the C compiler
- * can promise one, and an ordinary `return f(args);` elsewhere -- `tur jit`
- * included (c2mir has no musttail; its 1 GiB entry stack hides that). */
+ * (or c2mir, under `tur jit`) can promise one, and an ordinary
+ * `return f(args);` elsewhere. */
 #ifndef TUR_MUSTTAIL
 #  if defined(__clang__) && defined(__has_attribute) && \
      ((!defined(__wasm__) && (defined(__x86_64__) || defined(__aarch64__))) || \
@@ -6702,6 +6702,9 @@ static tur_adt_Box2__int__int ctor_Box2_Box2__int__int(int64_t _0, int64_t _1) {
 #      define TUR_MUSTTAIL __attribute__((musttail))
 #      define TUR_MUSTTAIL_PINS 1
 #    endif
+#  endif
+#  if !defined(TUR_MUSTTAIL) && defined(__MIRC_MUSTTAIL__)
+#    define TUR_MUSTTAIL __attribute__((musttail))
 #  endif
 #  ifndef TUR_MUSTTAIL
 #    define TUR_MUSTTAIL
