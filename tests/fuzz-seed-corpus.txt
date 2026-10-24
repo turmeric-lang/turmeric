@@ -65,3 +65,7 @@ type 20261003 373-373   # found generator-thunk-call-site-returns-void-ptr-not-c
 #                         filed as case 376, the progress count, but the program
 #                         (tags closure_ret,gbody,gid,scalar_bool,thin_hof,thunk)
 #                         is case 373
+type 20261019 164-164   # found fuzz-search-type-2026-10-19 (1): a cps->cps let's join
+#                         returned a by-value ADT raw as the slot word
+type 20261019 172-172   # found fuzz-search-type-2026-10-19 (2): a float carrier word
+#                         passed by VALUE to a spec clone's double parameter

@@ -8956,7 +8956,12 @@ static char *atoms_csv_call_clone(CE *ce, const CAtom *args, uint32_t n,
         if (bridge) {
             size_t PL = strlen(pc), AL = strlen(ac);
             bool pp = PL && pc[PL - 1] == '*', ap = AL && ac[AL - 1] == '*';
-            if (pp || ap) emit_scalar_word_conv(&b, ac, pc, a);
+            /* fuzz-search-type-2026-10-19: a float kind crosses as its bits
+             * too.  A `double` clone parameter fed the int64 carrier word the
+             * translator atomized converted the VALUE (bits read as a number). */
+            bool fl = strcmp(pc, "double") == 0 || strcmp(pc, "float") == 0 ||
+                      strcmp(ac, "double") == 0 || strcmp(ac, "float") == 0;
+            if (pp || ap || fl) emit_scalar_word_conv(&b, ac, pc, a);
             else buf_puts(&b, a);
         } else if (!atom_is_fat_fn(&args[i]) &&
                    (args[i].kind == CA_VAR || args[i].kind == CA_CVAR) &&
@@ -11491,13 +11496,22 @@ static void emit_lifted(CE *ce, const char *name, LHMode mode,
      * (reset/perform continuation), or bind the handler case's params/k.  The
      * value-param load leaks a Tier C box (consume=false): this frame can run
      * more than once under a multi-shot resume. */
+    /* fuzz-search-type-2026-10-19: the value param's spelling is this
+     * helper's, recorded as a capture's is.  A record left by another body
+     * (the erased base's `int64_t`) made slot_store_reap read the unboxed
+     * aggregate as an already-boxed word and hand it back raw. */
+    char *xparam_prev = NULL; bool xparam_saved = false;
     if (mode == LH_PERFORM_CONT || mode == LH_RESUME_CONT) {
         char slotexpr[160];
         snprintf(slotexpr, sizeof slotexpr, "%s__slot", xname);
         char *ld = slot_load(ce->ctx, xty, xt, slotexpr, false);
+        const char *xcty = binder_ctype_full(ce->ctx, xty, xt);
         indent_buf(&tmp, 4);
-        buf_printf(&tmp, "%s %s = %s;\n", binder_ctype_full(ce->ctx, xty, xt), xname, ld);
+        buf_printf(&tmp, "%s %s = %s;\n", xcty, xname, ld);
         free(ld);
+        xparam_prev = emit_localvar_save_ctype(xname);
+        xparam_saved = true;
+        emit_localvar_record_ctype(xname, xcty);
     }
     if (mode == LH_HANDLER_CASE && hcase) {
         if (hcase->n_params == 1) {
@@ -11662,6 +11676,7 @@ static void emit_lifted(CE *ce, const char *name, LHMode mode,
             emit_localvar_restore_ctype(cap_prev_name[i], cap_prev_ctype[i]);
             free(cap_prev_name[i]);
         }
+    if (xparam_saved) emit_localvar_restore_ctype(xname, xparam_prev);
     free(cap_prev_name);
     free(cap_prev_ctype);
 

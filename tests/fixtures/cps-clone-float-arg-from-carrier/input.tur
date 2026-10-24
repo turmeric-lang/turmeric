@@ -1,0 +1,25 @@
+;; fuzz-search-type-2026-10-19 (type harness, seed 20261019, case 172): a
+;; float handed from a CPS-emitted function (main's handle continuation) to a
+;; generic's spec clone.  The translator atomized it as the int64 carrier word
+;; for the generic's base ABI, and the call to `l1g5__spec__double_double`
+;; passed that word to a `double` parameter, which C converts by VALUE: the
+;; bits read as a number, and the comparison printed false.  The clone's
+;; argument bridge now crosses a float kind as its bits.
+(defeffect l1FzEf1 [x :float] :float)
+
+(defstruct l1FzFE2 :copy [run : (fn [float] float) #fx{l1FzEf1}])
+
+(defn l1fe3 [v : float] : float (perform (l1FzEf1 v)))
+
+(defn l1g4 [A] [x : A] : A x)
+
+(defn l1g5 [A] [x : A] : A (let [y (l1g4 x)] y))
+
+(defn l1g6 [A] [x : A] : A x)
+
+(defn l1g7 [A] [x : A] : A (let [y (l1g6 x)] y))
+
+(defn main [] : int
+  (println (= (l1g7 (l1g5 (handle (.run (make-struct l1FzFE2 l1fe3) -4.25)
+    (l1FzEf1 [x] k) (resume k x)))) -4.25))
+  0)
