@@ -2501,15 +2501,16 @@ html.pwa {
     .docs-load-btn { opacity: 1; }
 
     /* A bordered "return to the editor" button in the upper-right corner, a
-       full 44px square: the way out of a full-screen sheet has to be big
-       enough to hit and read as the way out. At 28px as a bare "x" it did
-       neither -- and until the inset fix above it was not on screen at all.
+       36px square: the way out of a full-screen sheet has to be big enough to
+       hit and read as the way out, without towering over the 28px search box
+       beside it. At 28px as a bare "x" it did neither -- and until the inset
+       fix above it was not on screen at all.
        It stays in its source position, after the search box, so it sits at
        the trailing edge of the bar. Bordered like .btn so it pairs with the
        Contents toggle at the other end. */
     .docs-topbar .btn-close {
-        width: 44px;
-        height: 44px;
+        width: 36px;
+        height: 36px;
         flex-shrink: 0;
         border: 1px solid var(--border-str);
         color: var(--gold);
@@ -2524,12 +2525,14 @@ html.pwa {
        center: `.btn` is an inline-flex that only sets `align-items`, so the
        cross axis was handled and the main axis was left at `flex-start`. That
        is invisible while the button is sized by its own content -- every
-       desktop use of it -- but here min-width is 44px against a 16px icon in
-       8px padding inside a 1px border, and all of the surplus went to the
-       right of the glyph, drawing it off the center of the box it sits in. */
+       desktop use of it -- but here the box is wider than its 16px icon, and
+       all of the surplus went to the right of the glyph, drawing it off the
+       center of the box it sits in. The padding goes too: .btn-icon's 10px a
+       side would make the box 38px, wider than it is tall. */
     .docs-topbar .docs-nav-toggle {
-        height: 44px;
-        min-width: 44px;
+        width: 36px;
+        height: 36px;
+        padding: 0;
         justify-content: center;
     }
 }

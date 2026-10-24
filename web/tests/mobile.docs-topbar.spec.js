@@ -4,8 +4,8 @@
 // `display: inline-flex; align-items: center` -- vertical centering, and
 // nothing about the main axis. That is invisible everywhere the button is
 // sized by its own content, which is every desktop use of it. The phone rule
-// gives it `min-width: 40px` so a thumb can land on it, and 40px is wider than
-// a 16px icon inside 8px padding inside a 1px border: the leftover 6px all
+// gives it a 36px box so a thumb can land on it (it was `min-width: 40px` when
+// this was found), and that is wider than its 16px icon: the leftover all
 // went to the right of the glyph under the default `justify-content:
 // flex-start`, sitting the icon 3px left of the box it is drawn in.
 //
@@ -58,8 +58,8 @@ test.describe('docs topbar Contents toggle', () => {
         });
 
         // The tap target the phone rule exists to create.
-        expect(geom.btnWidth).toBeGreaterThanOrEqual(40);
-        expect(geom.btnHeight).toBeGreaterThanOrEqual(40);
+        expect(geom.btnWidth).toBeGreaterThanOrEqual(36);
+        expect(geom.btnHeight).toBeGreaterThanOrEqual(36);
 
         // Sub-pixel tolerance only: 0.5px absorbs a fractional layout, and the
         // bug this pins was a whole 3px.

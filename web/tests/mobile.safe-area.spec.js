@@ -71,7 +71,7 @@ test.describe('PWA safe-area insets', () => {
         // The bug: the whole 44px topbar lived at y 0-44, inside a 59px inset.
         expect(close.top).toBeGreaterThanOrEqual(SAFE_TOP);
         // And it has to be hittable once it is on screen.
-        expect(close.height).toBeGreaterThanOrEqual(44);
+        expect(close.height).toBeGreaterThanOrEqual(36);
 
         // The other control in the bar went under the clock with it.
         const toggle = await boxOf(page, '#docs-nav-toggle');
