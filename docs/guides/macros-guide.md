@@ -195,7 +195,7 @@ supported -- build those with the constructors.
 Under `--enable=quote-data` a quoted list or vector in a `defmacro*` body is
 the Syntax it spells, exactly as the quasiquote with nothing unquoted is --
 not the runtime `Datum` it is in ordinary code
-([quote-list-data-plan](../upcoming/quote-list-data-plan.md)).  So it can be
+([quote-list-data-plan](https://github.com/turmeric-lang/turmeric/blob/main/docs/upcoming/quote-list-data-plan.md)).  So it can be
 returned as the expansion or compared against an argument:
 
 ```turmeric
