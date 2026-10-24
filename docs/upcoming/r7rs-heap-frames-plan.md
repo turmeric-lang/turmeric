@@ -270,7 +270,16 @@ check, not by the plain one.
   can be re-entered.
 - **macOS** (Mach-O symbol spelling in the trampoline,
   `pthread_get_stackaddr_np` bounds) and **Windows**.
-- **H6:** a check under c2mir needs thread-locals there.
+- **H6:** a check under c2mir needs thread-locals there. H2 does not apply:
+  the collector compiles to plain libc under `tur jit` (`TUR_JIT_ENGINE`,
+  `src/runtime/r7gc.c:97`), so there is no segment scan to teach. That does
+  not make the rest small, though, because c2mir lacks every ingredient the
+  check uses. It has no inline-asm statements: `__asm__ (...)` fails with
+  `unfinished compound statement` and falls back to cc, so reading `sp` and
+  the trampoline both have to live on the host. The hot pair would have to go
+  through a host accessor (`src/runtime/tur_tls.c`), which turns the one
+  compare into an out-of-line call per procedure entry. The JIT's entry thread
+  is the host's (`jit_engine.c`), so the host has to arm it. (2026-10-24)
 - **Graduation** wants a program that needs it (the hold condition above),
   then the plain-check decision revisited if typed code ever wants it.
 

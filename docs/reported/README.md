@@ -34,6 +34,12 @@ sentence above does not cover them. If you touch this file, check
 `ls docs/reported/` against it -- an index that silently omits a quarter of the
 directory is worse for triage than no index.
 
+## Found checking r7rs-heap-frames-plan H6 against the JIT (filed 2026-10-24)
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [jit-inline-c-thread-local-collapses-to-global](jit-inline-c-thread-local-collapses-to-global.md) | medium (silent wrong value) | Under `tur jit`, c2mir only warns on inline C's `_Thread_local` and compiles it as one global shared by all threads (a two-thread probe prints `99` where cc prints `7`). The JIT guide promises a cc fallback, which happens only for `__thread` |
+
 ## Found checking the wasm residue of mir-interp-tail-calls-grow-the-stack (filed 2026-10-24)
 
 | Report | Severity | One line |
