@@ -458,14 +458,20 @@ static const ExperimentDescriptor EXPERIMENTS[] = {
     /* quote-data (quote-list-data-plan): `(quote (a b c))` is a runtime
      * `Datum` (stdlib/datum.tur) instead of the list elaborated as code.
      * Gated because it changes the meaning of existing code -- a quoted list
-     * used to evaluate -- and because datum.tur is autoloaded whole while the
-     * gate is on, where graduation wants it loaded on first use. */
+     * used to evaluate.  BETA 2026-10-24 (prototype since 0.69.0, advisory
+     * expires_at was 0.73.0): the surface is frozen and every graduation
+     * item but the gate drop is closed -- datum.tur loads on first use from
+     * any file the program reads (elab_quote_data_demand_load), a defmacro*
+     * body sees a quoted list as Syntax, and the forced-on corpus sweep
+     * changes nothing but the gate-off fixture.  Soaks one release cycle,
+     * then graduates: delete this row, move the name to GRADUATED[], make
+     * g_opt_quote_data unconditional, and invert quote-data-off. */
     { "quote-data",
       "`(quote (a b c))` is a runtime `Datum` (stdlib/datum.tur), not the list evaluated as code",
       "docs/upcoming/quote-list-data-plan.md",
       "0.69.0",                  /* introduced */
-      "0.73.0",                  /* expires_at -- advisory; never blocks a release */
-      XF_LIFECYCLE_PROTOTYPE,
+      "0.71.0",                  /* expires_at -- advisory; never blocks a release */
+      XF_LIFECYCLE_BETA,
       &g_opt_quote_data },
     /* r7rs-segmented-stack (r7rs-heap-frames-plan, option C): a compiled
      * `#lang r7rs` procedure checks the stack pointer against a per-thread
