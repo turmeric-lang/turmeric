@@ -1,5 +1,41 @@
 # Compiled: an effect capture cannot cross a `catch-unwind`
 
+**Narrowed again 2026-10-24: the clause shape is fixed too; what is left are
+thunk shapes the inline lowering does not take.** A handler case body now
+admits a catch prompt (`handle_case_ok_rec`'s CT_RESET,
+`src/compiler/emit_cps_ir.c`). `emit_reset` installs it on the case's
+`__kont`: the real enclosing chain for a re-opening case
+(`dk_case_enclosing_real`), otherwise a done node of the case's own
+(`emit_lifted`, `case_has_catch`), so running the prompt chain hands the
+case's value back to `dk_perform` as before. The rest of the case is lifted
+past the prompt (LH_RESUME_CONT), the delimited part delivers through the
+chain (`shift_mode` off there) and its panic checks name the prompt
+(`g_pend_k_ok`), so a panic the resumed body raises -- coming back through
+`dk_invoke`, or `__dk_discontinue` -- is caught at the prompt and the rest of
+the case goes on with Err. `case_reopens` looks inside the prompt. The third
+row of the table below prints `100` compiled and under `tur jit`; pinned by
+`tests/fixtures/cps-catch-unwind-in-clause` (all three engines,
+leak-checked) and, for `discontinue`, `discontinue-caught-in-clause`.
+
+**Left** (none blocks [discontinue-plan](../upcoming/discontinue-plan.md)):
+
+- A thunk that captures a local and performs -- `(fn [] : int (+ x (perform
+  (Ask))))`, or in a clause `(fn [] : int (resume k (perform (Log 7))))` --
+  is still refused: the lifted thunk is a closure, fails `fn_sig_ok`, and its
+  effect is perm-tainted (`sig_perm`, `emit_cps_ir.c` near `fn_net_escaping`)
+  although its caller inlines it and never calls it. A capture-free thunk, or
+  one that captures and only resumes / discontinues, is fine. Fix direction:
+  skip the perm-taint for a `cps_catch_inlined` thunk, and emit its dead body
+  as a trap rather than its direct lowering -- but only when the catch that
+  inlines it was CPS-emitted, or an evicted caller's direct `catch-unwind`
+  would call the trap.
+- A thunk whose body is typed `never` (`(fn [] : int (panic "x"))`) is not
+  one word to `catch_delim_type_ok`, so the catch keeps the delegated
+  lowering -- which evicts a function that also holds a `handle`.
+- As before: a thunk that is not a lambda at the form or returns more than a
+  word; a runtime helper's panic inside a catch prompt with no direct
+  `catch-unwind` live; a catch prompt on a thread other than `main`'s.
+
 **Narrowed 2026-10-22: the body-side shapes are fixed; a `catch-unwind` inside
 a handler CLAUSE is what is left.** The false TUR-W0033 is gone on every engine
 (`collect_called_thunk`, `src/passes/effect_check.c`). Compiled, a
@@ -38,10 +74,12 @@ compiled. In more detail:
   BODY-UNSUPPORTED (`EX_#41`); it is now delegated like `panic`.
 
 Pinned by `tests/fixtures/cps-catch-unwind-across-perform` (eight shapes, all
-three engines, leak-checked) and `cps-catch-unwind-multishot` (compiled only:
-the interpreter's fiber runtime is single-shot).
+three engines, leak-checked) and `cps-catch-unwind-multishot` (compiled only
+then: the interpreter's fiber runtime was single-shot; all three engines since
+turi-fiber-handle-defers-fire-at-the-wrong-time was fixed, 2026-10-24).
 
-**What is left.** The third row: a `catch-unwind` in the handler clause around
+**What was left on 2026-10-22** (the clause half is fixed since 2026-10-24,
+see the top). The third row: a `catch-unwind` in the handler clause around
 a `resume` is still refused compiled. A handler case body has its own grammar
 (`handle_case_ok_rec`, `src/compiler/emit_cps_ir.c`), it delivers its value by
 returning to `dk_perform` rather than through a chain, and it admits no
@@ -55,9 +93,10 @@ panic forms unwind (see
 [compiled-uncaught-panic-skips-caller-defers](../archive/compiled-uncaught-panic-skips-caller-defers.md)).
 And on a thread other than `main`'s, a catch prompt never sees a panic at all.
 
-**Severity: medium** (as filed; low-medium for what is left). A compile-time refusal, not a wrong answer, and
-`tur --interpret` runs every shape below. It **blocks
-[discontinue-plan](../upcoming/discontinue-plan.md)** on the compiled engine:
+**Severity: medium** (as filed; low for what is left). A compile-time refusal, not a wrong answer, and
+`tur --interpret` runs every shape below. It **blocked
+[discontinue-plan](../upcoming/discontinue-plan.md)** on the compiled engine
+(no longer, since 2026-10-24):
 the plan's reason for keeping `discontinue` is that a `catch-unwind` in the
 body, around the `perform`, can catch the raise and carry on, and today no
 compiled program can put a `catch-unwind` between a `perform` and its handler.
@@ -79,7 +118,7 @@ Found 2026-10-22 checking what blocks that plan; reproduces on `main` (`a0a718f3
 | --- | --- | --- |
 | `perform` inside the thunk (above) | refused: `this effect operation has no lowering here`, plus ``note: `Ask` escapes this function value`` | `100` |
 | the same, with the `perform` in a helper the thunk calls | refused the same way | `100` |
-| `catch-unwind` in the CLAUSE around `(resume k 5)` | refused: `no lowering here` on the body's `perform` (`TUR_TRACE_EVICT=1`: `BODY-UNSUPPORTED main unsupported form: EX_CATCH_UNWIND`) | `100` |
+| `catch-unwind` in the CLAUSE around `(resume k 5)` | refused: `no lowering here` on the body's `perform` (`TUR_TRACE_EVICT=1`: `BODY-UNSUPPORTED main unsupported form: EX_CATCH_UNWIND`); **`100` since 2026-10-24** | `100` |
 
 All three engines also warn, wrongly, `TUR-W0033: handler clause for 'Ask' is
 unreachable: the body does not perform 'Ask'` on the first two shapes.

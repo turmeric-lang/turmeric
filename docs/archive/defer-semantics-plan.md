@@ -28,7 +28,7 @@ that block ends, on the normal path and on every non-local exit through it
 that does not resume). Both evaluators need it: the tree walker (`eval_expr_impl`)
 and the work-stack driver (`eval_drive_ex`), which has its own frames for `do`,
 `let` and loops (`DK_DO_SEQ`, `DK_LET_BODY`, `DK_WHILE`). The fiber-handle defer timing report
-([turi-fiber-handle-defers-fire-at-the-wrong-time](../reported/turi-fiber-handle-defers-fire-at-the-wrong-time.md))
+([turi-fiber-handle-defers-fire-at-the-wrong-time](turi-fiber-handle-defers-fire-at-the-wrong-time.md))
 is the same mechanism and should be closed by this.
 
 Fixtures: the program above and the `while` shape, on both engines; drop the
@@ -102,7 +102,7 @@ limit).
   nesting, `return` through nested blocks, a block's value) runs on both
   harnesses.
 - The fiber-handle report
-  ([turi-fiber-handle-defers-fire-at-the-wrong-time](../reported/turi-fiber-handle-defers-fire-at-the-wrong-time.md))
+  ([turi-fiber-handle-defers-fire-at-the-wrong-time](turi-fiber-handle-defers-fire-at-the-wrong-time.md))
   is not closed by this: its remaining case is the fiber runtime's single-shot
   limit (a multi-shot resume over a defer-bearing body), which is about capture,
   not scope.

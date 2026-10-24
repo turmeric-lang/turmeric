@@ -20,7 +20,7 @@ and it is clean under the Debug `tur`'s ASan and LeakSanitizer.
 
 Fix direction 1 (make `defer` work-stack capturable) is not done. The fiber
 runtime still fires an abandoned body's defers at the wrong time, which is now
-[turi-fiber-handle-defers-fire-at-the-wrong-time](../reported/turi-fiber-handle-defers-fire-at-the-wrong-time.md).
+[turi-fiber-handle-defers-fire-at-the-wrong-time](turi-fiber-handle-defers-fire-at-the-wrong-time.md).
 
 **Severity:** high (memory safety, interpreter only). Under `tur --interpret` a
 handler case that stores its continuation and returns, followed by a

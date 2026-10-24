@@ -1,5 +1,44 @@
 # `tur --interpret`: a fiber-path `handle` fires the body's pending `defer`s at the wrong time
 
+**RESOLVED 2026-10-24 by fix direction 1: `defer` and `catch-unwind` are
+work-stack capturable**, so a body that reaches its `perform` under either no
+longer takes the single-shot fiber runtime, and a `^multishot` resume of it
+runs (case 5). In `src/turi/eval.c`:
+
+- A `DK_PROMPT` records the defer chain and the catch-boundary stack at its
+  push (`dbase` / `cbase`). A capture takes what the body holds above them off
+  the env (`ws_capture_body_state`): the body's pending defers go to the
+  continuation (`TuriWsCont.dseg`, moved into the env's pool for a multi-shot
+  `k`, `ws_capture_rehome_defers`), its catch boundaries ride the slice's
+  `DK_CATCH_UNWIND` frames. The clause runs with neither -- its scope exits do
+  not fire the body's defers, and its panics do not land in the body's catches.
+- A resume (`ws_slice_reinstall`) puts them back above the chain where it
+  resumes -- a copy per resume unless the continuation is one-shot --
+  remapping every defer mark the slice holds (call, `let` and `do` scopes, a
+  nested prompt's base, a catch boundary's saved chain), and links the
+  boundaries back above `g_catch_stack`.
+- A case that returns having neither resumed nor kept `k` fires the body's
+  defers then (`ws_case_abandoned`), innermost scope first, and those of an
+  inner handle's case abandoned with it (a re-opening clause), as the compiled
+  runtime does -- also when the case leaves by an escape.
+- `ws_capturable` admits a `defer` whose body performs nothing when it fires
+  (`ws_defer_body_ok`, which answers a direct call from the callee's body) and
+  a `catch-unwind` whose thunk is a lambda (its body is checked). `panic`,
+  `panic-with` and `discontinue` are no longer black boxes to it.
+
+Pinned by `defer-abortive-handler-no-inline-c` -- the inline-C-free twin of
+`defer-cps-abortive-handler` the last paragraph asked for, all its cases but
+16 and 17, on all three engines -- plus `cps-catch-unwind-multishot` and
+`discontinue-multishot`, which lost their `requires.compiled`.
+
+Still on the fiber: a body that reaches its `perform` under `catch-panic-of`
+(the driver has no frame for a typed catch; `errors/turi-multishot-resume-
+past-fiber-body` now uses that shape), or under a `defer` whose body itself
+performs. Not this report: cases 16 and 17 of the compiled fixture -- a
+deferred body that panics -- are swallowed by the interpreter at any scope
+exit, handle or not:
+[turi-defer-body-panic-is-swallowed](../reported/turi-defer-body-panic-is-swallowed.md).
+
 **Narrowed again 2026-10-22: the stored-`k` case is fixed too; what is left
 is the single-shot limit.** Each side of a fiber `handle` now has its own
 defer chain (`fiber_enter_body`; fixed with

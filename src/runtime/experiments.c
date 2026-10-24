@@ -434,15 +434,18 @@ static const ExperimentDescriptor EXPERIMENTS[] = {
     /* discontinue (discontinue-plan): `(discontinue k payload)` resumes `k` by
      * raising a panic at the `perform` it captured -- the body's defers run,
      * a catch-unwind in the body may take it, and otherwise it is re-raised
-     * at the `discontinue` in the clause.  Gated while the two engines still
-     * disagree on a shape each refuses: compiled, a catch-unwind inside the
-     * clause; interpreted, a ^multishot k whose body catches. */
+     * at the `discontinue` in the clause.  Beta since 2026-10-24: the plan's
+     * five fixtures run with the same output compiled, under `tur jit` and
+     * `tur --interpret` (the last two shapes landed: a catch-unwind in the
+     * clause, compiled; a ^multishot k over a catching body, interpreted).
+     * Soaking one release; graduation is the mechanical gate drop the plan
+     * lists. */
     { "discontinue",
       "`(discontinue k payload)` resumes a handler continuation by raising a panic at its `perform`",
       "docs/upcoming/discontinue-plan.md",
       "0.68.0",                  /* introduced */
       "0.71.0",                  /* expires_at -- advisory; never blocks a release */
-      XF_LIFECYCLE_PROTOTYPE,
+      XF_LIFECYCLE_BETA,
       &g_opt_discontinue },
     /* script-deps (script-spice-deps-plan): a single-file script declares
      * its spices in a `(defscript :spices #map{...})` header, fetched into
