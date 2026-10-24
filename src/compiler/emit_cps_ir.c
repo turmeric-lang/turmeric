@@ -2876,6 +2876,38 @@ static bool handle_case_ok_rec(const CTerm *t) {
             for (uint32_t i = 0; i < t->as.perform.n; i++)
                 if (!atom_ok(&t->as.perform.args[i])) return false;
             return handle_case_ok_rec(t->as.perform.body);
+        case CT_HANDLE: {
+            /* shallow-clause-handle-around-resume-not-lowered: a `handle` in a
+             * case, in tail position, whose handled body is the case's own
+             * resume -- `(Ask [] k) (handle (resume k 1) (Ask [] k2) ...)`,
+             * the shape `handle-shallow` exists for.  The case resumes into the
+             * chain (case_resumes_into sees the resume in the handle's body),
+             * so it runs with the real enclosing chain as `__kont`; emit_handle
+             * installs the group on it and the resume splices the continuation
+             * in under the group (dk_resume_into onto `__h<N>`), so an effect
+             * the resumed body performs finds this handle first.  The inner
+             * cases are ordinary handler cases. */
+            const CTerm *hb = t->as.handle.body;
+            if (t->as.handle.dyn || !hb || hb->kind != CT_APPCONT
+                || hb->as.appcont.kont.kind != KK_PROMPT
+                || hb->as.appcont.v.kind != CA_CVAR
+                || hb->as.appcont.v.cvar_id != t->as.handle.x.id)
+                return false;
+            if (!(slot_ok_t(t->as.handle.x.type, t->as.handle.x.ty) || t->as.handle.x.ty == TY_NIL))
+                return false;
+            if (!handle_case_ok_rec(t->as.handle.delim)) return false;
+            for (uint32_t ci = 0; ci < t->as.handle.n_cases; ci++) {
+                const CHandleCase *c = &t->as.handle.cases[ci];
+                CapSet ccs;
+                if (c->n_params > 1)
+                    for (uint32_t pi = 0; pi < c->n_params; pi++)
+                        if (!slot_ok_t(&c->params[pi]->type, c->params[pi]->type.kind))
+                            return false;
+                if (!handle_case_ok(c->case_body) || !collect_caps_case(c->case_body, c, &ccs))
+                    return false;
+            }
+            return true;
+        }
         default: return false;
     }
 }
@@ -8137,6 +8169,83 @@ static void cps_panic_check(CE *ce) {
     ce->ctx->indent = saved;
 }
 
+/* shift-abort-across-nested-dk-entries item 2: a direct reset landing at a
+ * cps->direct call.  A shift in a CPS function the (evicted) callee reaches
+ * runs on a fresh entry chain with no prompt, so the DK machine's root case
+ * aborts to the innermost direct landing -- and a CPS `reset` on THIS chain
+ * has none, so it was a panic ("shift used outside of any reset boundary"),
+ * or the abort went past it to an outer direct landing.  When this chain
+ * holds a reset prompt at run time, the call gets a landing of its own; a
+ * jump to it delivers the shift's value to that prompt, as the machine's own
+ * abort does (`k = P->next`).  The same landing catches an evicted
+ * function's own direct shift (direct-shift-outside-lexical-reset-not-
+ * abortive).  Only for a callee that can reach a base shift. */
+static bool shift_reach_visit(const Expr *e, void *ud);
+typedef struct { const FnDef *fd; int state; } ShiftReachMemo;  /* 1 computing, 2 no, 3 yes */
+static ShiftReachMemo *g_shift_reach;
+static size_t g_shift_reach_n, g_shift_reach_cap;
+static bool fn_may_reach_base_shift(const FnDef *fd) {
+    if (!fd) return false;
+    for (size_t i = 0; i < g_shift_reach_n; i++)
+        if (g_shift_reach[i].fd == fd) return g_shift_reach[i].state == 3;
+    if (g_shift_reach_n == g_shift_reach_cap) {
+        g_shift_reach_cap = g_shift_reach_cap ? g_shift_reach_cap * 2 : 64;
+        g_shift_reach = realloc(g_shift_reach, g_shift_reach_cap * sizeof *g_shift_reach);
+    }
+    size_t at = g_shift_reach_n++;
+    g_shift_reach[at] = (ShiftReachMemo){ fd, 1 };
+    bool yes = fd->body && shift_reach_visit(fd->body, NULL);
+    g_shift_reach[at].state = yes ? 3 : 2;
+    return yes;
+}
+static bool shift_reach_visit(const Expr *e, void *ud) {
+    (void)ud;
+    switch (e->kind) {
+        case EX_SHIFT: case EX_SHIFT0: case EX_DYN_CALL:
+            return true;
+        case EX_FN:
+            return e->as.fn_.fn && e->as.fn_.fn->body &&
+                   shift_reach_visit(e->as.fn_.fn->body, NULL);
+        case EX_CLOSURE:
+            return e->as.closure_.closure && e->as.closure_.closure->fn &&
+                   e->as.closure_.closure->fn->body &&
+                   shift_reach_visit(e->as.closure_.closure->fn->body, NULL);
+        case EX_CALL: {
+            const Binding *fb = e->as.call_.fn_binding;
+            if (fb && g_prog && fn_may_reach_base_shift(fd_for_binding(g_prog, fb)))
+                return true;
+            break;
+        }
+        default: break;
+    }
+    return cps_visit_children(e, shift_reach_visit, NULL);
+}
+/* Open the landing before the call line; -1 when none is wanted. */
+static int cps_reset_landing_open(CE *ce, const Binding *callee) {
+    const char *rt = ce->ctx->current_fn_ret_ctype;
+    if (!g_pend_k_ok || !ce->cur_k || !rt ||
+        (strcmp(rt, "int64_t") != 0 && strcmp(rt, "intptr_t") != 0))
+        return -1;
+    if (!callee || !g_prog || !fn_may_reach_base_shift(fd_for_binding(g_prog, callee)))
+        return -1;
+    int id = (int)ce->ctx->tmp_n++;
+    ce_line(ce, "tur_shift_reset_ctx __rsl_%d; int __rsl_on_%d = 0;", id, id);
+    ce_line(ce, "if (__dk_chain_has_reset(%s)) {", ce->cur_k);
+    ce_line(ce, "    __rsl_%d.prev = tur_cur_shift_reset; __dk_reset_save(&__rsl_%d); "
+                "__rsl_%d.dk_chain = %s; tur_cur_shift_reset = &__rsl_%d; __rsl_on_%d = 1;",
+            id, id, id, ce->cur_k, id, id);
+    ce_line(ce, "    if (TUR_SETJMP(__rsl_%d.buf)) { tur_cur_shift_reset = __rsl_%d.prev; "
+                "return (%s)__dk_reset_abort_to(%s, __rsl_%d.result, __rsl_%d.dk_skip); }",
+            id, id, rt, ce->cur_k, id, id);
+    ce_line(ce, "}");
+    return id;
+}
+/* Close it right after the call line, before anything that may return. */
+static void cps_reset_landing_close(CE *ce, int id) {
+    if (id < 0) return;
+    ce_line(ce, "if (__rsl_on_%d) tur_cur_shift_reset = __rsl_%d.prev;", id, id);
+}
+
 static const char *join_param(CE *ce, uint32_t id) {
     for (int i = ce->n_joins - 1; i >= 0; i--)
         if (ce->joins[i].id == id) return ce->joins[i].param;
@@ -8847,7 +8956,12 @@ static char *atoms_csv_call_clone(CE *ce, const CAtom *args, uint32_t n,
         if (bridge) {
             size_t PL = strlen(pc), AL = strlen(ac);
             bool pp = PL && pc[PL - 1] == '*', ap = AL && ac[AL - 1] == '*';
-            if (pp || ap) emit_scalar_word_conv(&b, ac, pc, a);
+            /* fuzz-search-type-2026-10-19: a float kind crosses as its bits
+             * too.  A `double` clone parameter fed the int64 carrier word the
+             * translator atomized converted the VALUE (bits read as a number). */
+            bool fl = strcmp(pc, "double") == 0 || strcmp(pc, "float") == 0 ||
+                      strcmp(ac, "double") == 0 || strcmp(ac, "float") == 0;
+            if (pp || ap || fl) emit_scalar_word_conv(&b, ac, pc, a);
             else buf_puts(&b, a);
         } else if (!atom_is_fat_fn(&args[i]) &&
                    (args[i].kind == CA_VAR || args[i].kind == CA_CVAR) &&
@@ -9607,6 +9721,7 @@ static void emit_term_inner(CE *ce, const CTerm *t) {
              * cps->direct call rides a lifted join/frame body (P6). */
             /* panic-location-names-the-runtime-not-the-call-site: the site
              * set / clear bracket the one call line each arm below writes. */
+            int rsl_lc = cps_reset_landing_open(ce, t->as.letcall.fn);
             char *site_lc = cps_site_set(ce, t->as.letcall.fn, t->as.letcall.call_expr);
             if (t->as.letcall.x.ty == TY_NIL) {
                 ce_line(ce, "%s(%s); /* cps->direct (nil) */", fn, argv);
@@ -9684,6 +9799,7 @@ static void emit_term_inner(CE *ce, const CTerm *t) {
                 else
                     ce_line(ce, "%s = %s(%s); /* cps->direct */", bn, fn, argv);
             }
+            cps_reset_landing_close(ce, rsl_lc);
             cps_site_clear(ce, site_lc);
             emit_letcall_sum_closure_reap(ce, t, bn);
             /* A by-value clone result is boxed and reaped above, so only the
@@ -10086,9 +10202,11 @@ static void emit_term_inner(CE *ce, const CTerm *t) {
                 /* panic-location-names-the-runtime-not-the-call-site: the
                  * site set / clear bracket the call line, before the panic
                  * check and the delivery (either may leave this body). */
+                int rsl_tc = cps_reset_landing_open(ce, t->as.tailcall.fn);
                 char *site_tc = cps_site_set(ce, t->as.tailcall.fn, t->as.tailcall.call_expr);
                 if (crt && (crt->kind == TY_NIL || crt->kind == TY_NEVER)) {
                     ce_line(ce, "%s(%s); /* cps->direct (nil) */", fn, argv_t);
+                    cps_reset_landing_close(ce, rsl_tc);
                     cps_site_clear(ce, site_tc);
                     cps_panic_check(ce);   /* cps-body-panic-not-propagated */
                     cps_deferred_consume_atoms(ce, t->as.tailcall.args, t->as.tailcall.n);
@@ -10104,6 +10222,7 @@ static void emit_term_inner(CE *ce, const CTerm *t) {
                         ce_line(ce, "%s %s = %s(%s); /* cps->direct */", drt, tmp, fn, argv_t);
                     else
                         ce_line(ce, "__auto_type %s = %s(%s); /* cps->direct */", tmp, fn, argv_t);
+                    cps_reset_landing_close(ce, rsl_tc);
                     cps_site_clear(ce, site_tc);
                     /* region-escape-through-unhooked-stores item 3: the panic
                      * check returns before the pop below, stranding the
@@ -10983,6 +11102,11 @@ static bool term_resumes_k_any(const CTerm *t, const Binding *k) {
             case CT_LETCALL: t = t->as.letcall.body; break;
             case CT_LETRAW:  t = t->as.letraw.body;  break;
             case CT_CALLCC:  t = t->as.callcc.body;  break;
+            case CT_HANDLE:
+                /* A resume in a handle the case installs around it
+                 * (handle_case_ok_rec's CT_HANDLE). */
+                if (term_resumes_k_any(t->as.handle.delim, k)) return true;
+                t = t->as.handle.body; break;
             case CT_IF:
                 return term_resumes_k_any(t->as.if_.then_, k)
                     || term_resumes_k_any(t->as.if_.else_, k);
@@ -11372,13 +11496,22 @@ static void emit_lifted(CE *ce, const char *name, LHMode mode,
      * (reset/perform continuation), or bind the handler case's params/k.  The
      * value-param load leaks a Tier C box (consume=false): this frame can run
      * more than once under a multi-shot resume. */
+    /* fuzz-search-type-2026-10-19: the value param's spelling is this
+     * helper's, recorded as a capture's is.  A record left by another body
+     * (the erased base's `int64_t`) made slot_store_reap read the unboxed
+     * aggregate as an already-boxed word and hand it back raw. */
+    char *xparam_prev = NULL; bool xparam_saved = false;
     if (mode == LH_PERFORM_CONT || mode == LH_RESUME_CONT) {
         char slotexpr[160];
         snprintf(slotexpr, sizeof slotexpr, "%s__slot", xname);
         char *ld = slot_load(ce->ctx, xty, xt, slotexpr, false);
+        const char *xcty = binder_ctype_full(ce->ctx, xty, xt);
         indent_buf(&tmp, 4);
-        buf_printf(&tmp, "%s %s = %s;\n", binder_ctype_full(ce->ctx, xty, xt), xname, ld);
+        buf_printf(&tmp, "%s %s = %s;\n", xcty, xname, ld);
         free(ld);
+        xparam_prev = emit_localvar_save_ctype(xname);
+        xparam_saved = true;
+        emit_localvar_record_ctype(xname, xcty);
     }
     if (mode == LH_HANDLER_CASE && hcase) {
         if (hcase->n_params == 1) {
@@ -11529,7 +11662,7 @@ static void emit_lifted(CE *ce, const char *name, LHMode mode,
         ce->ctx->indent = 4;
         ce->ctx->current_fn_ret_ctype = "void";   /* the unwinder returns nothing */
         /* byval-spine-drop-past-early-exit: nor shares the signature verdict. */
-        bool sss = ce->ctx->current_fn_spine_drop_safe;
+        uint8_t sss = ce->ctx->current_fn_spine_drop_safe;
         ce->ctx->current_fn_spine_drop_safe = false;
         cps_pend_fire(ce->ctx, &unw);
         ce->ctx->current_fn_spine_drop_safe = sss;
@@ -11543,6 +11676,7 @@ static void emit_lifted(CE *ce, const char *name, LHMode mode,
             emit_localvar_restore_ctype(cap_prev_name[i], cap_prev_ctype[i]);
             free(cap_prev_name[i]);
         }
+    if (xparam_saved) emit_localvar_restore_ctype(xname, xparam_prev);
     free(cap_prev_name);
     free(cap_prev_ctype);
 
@@ -14759,6 +14893,9 @@ void emit_cps_ir_flush_groups(Buf *file) {
  * pending perform (heap-use-after-free in __dk_abort_pending).  Expects
  * `__root` and `__dk_reap_mark` already declared. */
 static void emit_dk_entry_landing_state(Buf *file) {
+    /* shift-abort-across-nested-dk-entries: note the root on the innermost
+     * direct reset landing, which frees it if an abort skips this exit. */
+    buf_puts(file, "    __dk_entry_rec __dkr; __dk_entry_note(&__dkr, __root);\n");
     buf_puts(file, "    struct { tur_jmp_buf jb; tur_jmp_buf *save; DKPendPerform *pp; DK *root; size_t mark; } __dke;\n");
     buf_puts(file, "    __dke.save = g_dk_driver; __dke.pp = g_dk_pend_perform;\n");
     buf_puts(file, "    __dke.root = __root; __dke.mark = __dk_reap_mark;\n");
@@ -15229,7 +15366,7 @@ static bool emit_cps_ir_try_fn_impl(EmitCtx *ctx, Buf *file, const Expr *e) {
     ctx->current_fn_ret_ctype = "int64_t";
     /* byval-spine-drop-past-early-exit: a CPS term is a different C function
      * from the one whose signature was judged; refuse the spine push in it. */
-    bool saved_cps_spine_safe = ctx->current_fn_spine_drop_safe;
+    uint8_t saved_cps_spine_safe = ctx->current_fn_spine_drop_safe;
     ctx->current_fn_spine_drop_safe = false;
     /* cps-self-tail-call-relies-on-sibling-call: a self tail call in this
      * body may jump back to here.  Not for a monomorph (the call names the

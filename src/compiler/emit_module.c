@@ -10995,7 +10995,8 @@ void ensure_musttail_macro(EmitCtx *ctx) {
     if (!out) return;
     buf_puts(out,
         "/* proper-tail-calls T2b: a guaranteed tail call where the C compiler\n"
-        " * can promise one, and an ordinary `return f(args);` elsewhere. */\n"
+        " * can promise one, and an ordinary `return f(args);` elsewhere -- `tur jit`\n"
+        " * included (c2mir has no musttail; its 1 GiB entry stack hides that). */\n"
         "#ifndef TUR_MUSTTAIL\n"
         "#  if defined(__clang__) && defined(__has_attribute) && \\\n"
         "     ((!defined(__wasm__) && (defined(__x86_64__) || defined(__aarch64__))) || \\\n"
@@ -16910,6 +16911,15 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
         buf_puts(out, "    struct tur_shift_reset_ctx *prev; /* nested resets */\n");
         buf_puts(out, "    void *dk_driver; void *dk_pend; int dk_depth; size_t dk_reap_mark;\n");
         buf_puts(out, "    int pending;     /* a DK shift stored `result`: jump at the entry's exit */\n");
+        /* shift-abort-across-nested-dk-entries: the DK entries opened while
+         * this landing is the innermost (__dk_entry_rec, linked through the
+         * entries' own C frames), so an abort that skips their exits frees
+         * their roots. */
+        buf_puts(out, "    void *dk_entries;\n");
+        /* A cps->direct call landing (cps_reset_landing_open) stands for the
+         * reset prompts on its caller's chain: `dk_chain`, of which a shift0's
+         * receiver has hidden `dk_skip` (__dk_reset_hide). */
+        buf_puts(out, "    void *dk_chain; int dk_skip;\n");
         buf_puts(out, "} tur_shift_reset_ctx;\n\n");
         emit_rt_tls(out, shared, "TUR_THREAD_LOCAL tur_shift_reset_ctx *tur_cur_shift_reset = NULL;\n\n", "TUR_THREAD_LOCAL tur_shift_reset_ctx *tur_cur_shift_reset",
                 "tur_cur_shift_reset", "void **", "tur_tls_cur_shift_reset_ptr", "tur_shift_reset_ctx **");
@@ -17051,7 +17061,38 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     /* dynvar-binding-not-swapped-on-fiber-switch: the fiber's own dynvar
      * chain heads, one TurDynSave per TU with defdynamics (NULL: the root). */
     buf_puts(out, "    TurDynSave *dynsave;\n");
+    /* tsan-nightly-exit-1-2026-10-18: ThreadSanitizer keeps a shadow stack
+     * per thread, and a swapcontext it is not told about leaves it describing
+     * the wrong stack -- a fiber that migrates between workers faulted inside
+     * TSan about once in 150 runs (fiber-scheduler-mt-migration, printing
+     * nothing).  Under -fsanitize=thread each fiber gets a TSan fiber, and
+     * every switch announces itself (TUR_TSAN_FIBER_*); everywhere else the
+     * macros are empty and these two words stay zero. */
+    buf_puts(out, "    void *tsan_fiber; void *tsan_caller;\n");
     buf_puts(out, "};\n\n");
+    buf_puts(out,
+        "#if defined(__SANITIZE_THREAD__)\n"
+        "#  define TUR_TSAN_FIBERS 1\n"
+        "#elif defined(__has_feature)\n"
+        "#  if __has_feature(thread_sanitizer)\n"
+        "#    define TUR_TSAN_FIBERS 1\n"
+        "#  endif\n"
+        "#endif\n"
+        "#ifdef TUR_TSAN_FIBERS\n"
+        "void *__tsan_get_current_fiber(void);\n"
+        "void *__tsan_create_fiber(unsigned flags);\n"
+        "void __tsan_destroy_fiber(void *fiber);\n"
+        "void __tsan_switch_to_fiber(void *fiber, unsigned flags);\n"
+        "#  define TUR_TSAN_FIBER_NEW(f)   ((f)->tsan_fiber = __tsan_create_fiber(0))\n"
+        "#  define TUR_TSAN_FIBER_ENTER(f) ((f)->tsan_caller = __tsan_get_current_fiber(), __tsan_switch_to_fiber((f)->tsan_fiber, 0))\n"
+        "#  define TUR_TSAN_FIBER_LEAVE(f) __tsan_switch_to_fiber((f)->tsan_caller, 0)\n"
+        "#  define TUR_TSAN_FIBER_FREE(f)  do { if ((f)->tsan_fiber) __tsan_destroy_fiber((f)->tsan_fiber); } while (0)\n"
+        "#else\n"
+        "#  define TUR_TSAN_FIBER_NEW(f)   ((void)0)\n"
+        "#  define TUR_TSAN_FIBER_ENTER(f) ((void)0)\n"
+        "#  define TUR_TSAN_FIBER_LEAVE(f) ((void)0)\n"
+        "#  define TUR_TSAN_FIBER_FREE(f)  ((void)0)\n"
+        "#endif\n");
     emit_rt_tls(out, shared, "TUR_THREAD_LOCAL FiberBlock *tur_current_fiber = NULL;\n", "TUR_THREAD_LOCAL FiberBlock *tur_current_fiber",
                 "tur_current_fiber", "void **", "tur_tls_current_fiber_ptr", "FiberBlock **");
     /* Read on the fiber's side of every yield (TUR_TLS_FRESH says why). */
@@ -17228,6 +17269,7 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    f->done = 1;\n");
     /* Phase T22: Notify task group on completion (TG-002: only if task_group is set) */
     buf_puts(out, "    if (task_group) tur_task_group_notify_done(task_group);\n");
+    buf_puts(out, "    TUR_TSAN_FIBER_LEAVE(f);\n");
     buf_puts(out, "    swapcontext(&f->ctx, &f->caller_ctx);\n");
     buf_puts(out, "    abort();\n");
     buf_puts(out, "}\n\n");
@@ -17259,6 +17301,7 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    uint32_t _hi = (uint32_t)(_fp >> 32);\n");
     buf_puts(out, "    uint32_t _lo = (uint32_t)(_fp & 0xFFFFFFFFU);\n");
     buf_puts(out, "    makecontext(&f->ctx, (void(*)(void))tur_fiber_shim, 2, _hi, _lo);\n");
+    buf_puts(out, "    TUR_TSAN_FIBER_NEW(f);\n");
     buf_puts(out, "    return f;\n");
     buf_puts(out, "}\n\n");
     buf_puts(out, "static int64_t tur_fiber_block_resume(FiberBlock *f, int64_t arg) {\n");
@@ -17326,6 +17369,7 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
      * the fiber runs on its (heap-allocated) stack. */
     buf_puts(out, "    for (TurDynSwap *_ds = g_tur_dyn_swaps; _ds; _ds = _ds->next) _ds->swap(&f->dynsave);\n");
     buf_puts(out, "    TUR_GC_FIBER_ENTER((void *)&_dk_save);\n");
+    buf_puts(out, "    TUR_TSAN_FIBER_ENTER(f);\n");
     buf_puts(out, "    swapcontext(&f->caller_ctx, &f->ctx);\n");
     buf_puts(out, "    TUR_GC_FIBER_LEAVE();\n");
     buf_puts(out, "    for (TurDynSwap *_ds = g_tur_dyn_swaps; _ds; _ds = _ds->next) _ds->swap(&f->dynsave);\n");
@@ -17349,6 +17393,7 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    FiberBlock *f = tur_current_fiber;\n");
     buf_puts(out, "    if (!f) { fprintf(stderr, \"fiber-yield: not in fiber\\n\"); abort(); }\n");
     buf_puts(out, "    f->result = value;\n");
+    buf_puts(out, "    TUR_TSAN_FIBER_LEAVE(f);\n");
     buf_puts(out, "    swapcontext(&f->ctx, &f->caller_ctx);\n");
     buf_puts(out, "}\n\n");
     /* Phase T21: Fiber-local storage */
@@ -17380,6 +17425,7 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    if (!f) return;\n");
     buf_puts(out, "    tur_fiber_local_free(f);\n");
     buf_puts(out, "    while (f->dynsave) { TurDynSave *_n = f->dynsave->next; free(f->dynsave); f->dynsave = _n; }\n");
+    buf_puts(out, "    TUR_TSAN_FIBER_FREE(f);\n");
     buf_puts(out, "    free(f->stack); free(f);\n");
     buf_puts(out, "}\n\n");
     /* Phase T22: Fiber cancellation */
@@ -18069,10 +18115,12 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
 "        if (!p || p->depth != __dk_entry_depth) return;\n"
 "        __dk_reap_seg_take(&p->seg, mark);\n"
 "        __dk_reap_seg_add(&p->seg, root, 1);\n"
+"        __dk_entry_unnote(root);\n"
 "        p->depth = -1;  /* owned now: an outer exit is not its owner */\n"
 "        --__dk_entry_depth;\n"
 "        return;\n"
 "    }\n"
+"    __dk_entry_unnote(root);\n"
 "    dk_free(root);\n"
 "    if (--__dk_entry_depth == 0) __dk_reap_run(); else __dk_reap_drop_to(mark);\n"
 "    if (tur_cur_shift_reset && tur_cur_shift_reset->pending) __dk_reset_abort(tur_cur_shift_reset);\n"
@@ -18090,6 +18138,7 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
 "    __dk_entry_depth++;\n"
 "    size_t __dk_reap_mark = __dk_reap_n;\n"
 "    DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());\n"
+"    __dk_entry_rec __dkr; __dk_entry_note(&__dkr, __root);\n"
 "    int64_t __r;\n"
 "    tur_jmp_buf __dkjb; tur_jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;\n"
 "    DKPendPerform *__dkpp = g_dk_pend_perform;\n"

@@ -173,5 +173,5 @@ Two defects turned up writing the examples:
 - A `handle` around `resume` in a `handle-shallow` clause -- the pattern the
   form reference names as `handle-shallow`'s purpose -- does not compile.
   Filed as
-  [shallow-clause-handle-around-resume-not-lowered](../reported/shallow-clause-handle-around-resume-not-lowered.md);
-  the guide states it.
+  [shallow-clause-handle-around-resume-not-lowered](shallow-clause-handle-around-resume-not-lowered.md),
+  since fixed; the guide states it.

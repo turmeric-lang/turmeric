@@ -1,5 +1,36 @@
 # In an evicted function, a `shift` with no `reset` around it in that function is not abortive
 
+**Resolved 2026-10-23.** Outside escape mode a direct `shift` / `shift0` now
+aborts to the live landing when there is one (`emit_shift_escape_abort`,
+`src/compiler/emit_effects.c`): it stores f(x)'s bits in
+`tur_cur_shift_reset` and calls `__dk_reset_abort`, which restores the DK
+machine's state and frees the roots of the entries it leaves. Both repros
+print 6, and `(reset (+ 100 (reset (+ 10 (h0 5)))))` prints 5000, on all
+three engines.
+
+The caution below (a CPS `reset` nearer than the landing) is what
+[shift-abort-across-nested-dk-entries](shift-abort-across-nested-dk-entries.md)
+item 2 fixed in the same change: a cps->direct call whose callee can reach a
+base shift gets a landing of its own when its chain holds a reset prompt, so
+`tur_cur_shift_reset` is the nearest reset either way. A `shift0` hides the
+landing for its receiver with `__dk_reset_hide`: a pop for a direct landing,
+one more skipped prompt (`dk_skip`) for a call landing whose chain has another
+reset past it. The DK machine's own `shift0` at a chain root (`DKK_SHIFT0`,
+`to_root`) hides it the same way now -- it did not, so a CPS `h0` gave the
+same 5100.
+
+What is still open: a call landing is opened only at a cps->direct call to a
+known function. A shift reached from CPS code through a dynamic call (a
+closure value whose body the direct emitter lowered) under a CPS `reset`
+aborts to the next landing out, past that reset. Nothing in the suites does
+that, and a lambda that holds a shift is CPS-colored itself.
+
+Pinned by `tests/fixtures/direct-shift-outside-lexical-reset` (seven shapes
+under direct resets, five under CPS resets, a float among them; all three
+engines).
+
+## As filed
+
 **Severity: medium** (silent wrong answer). Found 2026-10-23 working
 [shift0-pop-plan](../archive/shift0-pop-plan.md).
 

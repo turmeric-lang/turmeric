@@ -1,8 +1,8 @@
 ;; await-parks-only-to-the-nearest-c-frame: await-in-generic-capturing-lambda
-;; at a by-value struct.  The await parks the whole body (1213), but the
-;; specialization boxes the struct into the lambda's erased carrier field and
-;; nothing frees the box: a leak independent of awaiting, filed as
-;; erased-capture-aggregate-box-never-freed (known-leak).
+;; at a by-value struct.  The await parks the whole body (1213).  The
+;; specialization boxes the struct into the lambda's erased carrier field; the
+;; env's header names a glue variant that frees the box
+;; (erased-capture-aggregate-box-never-freed, resolved).
 
 (defn cur-cell [fresh : bool] : ptr<void>
   ```c

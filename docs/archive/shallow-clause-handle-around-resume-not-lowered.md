@@ -1,5 +1,30 @@
 # A `handle` around `resume` in a `handle-shallow` clause does not compile, and warns its clause is unreachable
 
+**Resolved 2026-10-23, both halves.**
+
+- **Lowering.** A handler case body may now end in a `handle` whose body is
+  the case's own `resume` (`handle_case_ok_rec`'s CT_HANDLE arm,
+  `src/compiler/emit_cps_ir.c`). Such a case counts as resuming into the chain
+  (`term_resumes_k_any` looks into the handle's body), so it runs with the
+  real enclosing chain as `__kont`; `emit_handle` installs the inner group on
+  it, and the resume, being the handle body's tail, is
+  `dk_resume_into(k, v, __h<N>, 1)` -- the continuation is spliced in under
+  the inner group, so whatever it performs reaches that handler first. The
+  repro prints 31 on all three engines; so do a deep inner handler answering
+  two later performs (331), an inner handler for a different effect, an outer
+  DEEP handle (its re-installed handler is nearer: 11), and an inner clause
+  that works after its own resume (333). Still refused: a `handle` that is not
+  the case's last form, or whose body is more than the resume.
+- **TUR-W0033.** While a clause body is checked, its `k` maps to the effect
+  row of the body it continues; a nested handle whose body resumes such a `k`
+  counts that row as performed (`kres_visit`, `src/passes/effect_check.c`).
+  A clause for an effect the rest really never performs still warns.
+
+Pinned by `tests/fixtures/shallow-clause-handle-around-resume` (five shapes,
+both engines).
+
+## As filed
+
 **Severity: low-medium** (compile failure on a documented pattern; the
 interpreter is correct). Found 2026-10-22 writing the `handle-shallow` section
 of effects-system-guide for

@@ -704,8 +704,15 @@ typedef struct EmitCtx {
      * binder aliasing the spine (`t` in `(Cons h t)`) returned out of the scope
      * is exactly what this refuses.  Computed once per FnDef beside
      * `current_fn_ret_ctype`; reset to false wherever a nested C function body
-     * is emitted, so the default is the status-quo leak, never a free. */
-    bool current_fn_spine_drop_safe;
+     * is emitted, so the default is the status-quo leak, never a free.
+     *
+     * 1: the signature alone vouches.  2 (residue 1 of the report): the
+     * signature does not, but this is a plain function body, so the let may
+     * still ask whether what its exits hand out -- each `return`'s value and
+     * each self-call's arguments, the back-edge's parameters -- reaches
+     * anything it built (emit_spine_exits_unaliased).  0: neither. */
+    uint8_t current_fn_spine_drop_safe;
+    const struct Binding *current_fn_spine_self;   /* the fn whose self-calls are back-edges */
     /* MB1 / forall-dict-pass-multi-constraint-hkt-plan (Task 1.4): set while
      * emitting a dict-clone FnDef body (see FnDef.dict_clone_*).  A class-method
      * call carrying a `dict_arg` whose instance's class matches one of
@@ -1209,6 +1216,7 @@ void emit_line_reset(EmitCtx *ctx);
 void indent_buf(Buf *b, int n);
 bool expr_is_divergent(const Expr *e);
 bool expr_contains_return_or_throw(const Expr *e);
+bool emit_spine_exits_unaliased(EmitCtx *ctx, const Expr *body);  /* emit_fns.c, byval-spine-drop-past-early-exit */
 bool expr_tail_diverges(const Expr *e);
 /* Fat-closure-env scoped-free escape analysis: true if `b` (holding a fat
  * closure value) is used as a value rather than only as a direct-call callee

@@ -1,0 +1,21 @@
+;; fuzz-search-type-2026-10-19 (type harness, seed 20261019, case 164): a
+;; generic whose `let` binds a CPS call -- `app` calls its fn parameter, so it
+;; is CPS-emitted -- specialized at a by-value ADT.  The let's join helper
+;; unboxes the value from the slot into a `tur_adt_W` local, but its spelling
+;; was never recorded for the helper, so a stale `int64_t` record from another
+;; body made the return to the slot hand the aggregate back raw:
+;; "aggregate value used where an integer was expected".
+(defdata W (Wc :float32))
+(defdata V (Vc :int :int))
+(defn app [B] [f : (fn [B] B) v : B] : B (f v))
+(defn gb [A] [x : A] : A (let [r (app (fn [y : A] : A y) x)] r))
+(defclass N [a] (nn [x : a y : a] : a))
+(definstance N [int] (nn [x y] x))
+(definstance N [W] (nn [x y] x))
+(defn ng [^N A] [x : A] : A (nn (nn x x) x))
+(defn main [] : int
+  (println (match (gb (Wc (:: 6.5 float32))) (Wc x) x))
+  (println (match (gb (Vc 3 4)) (Vc a b) (+ a b)))
+  (println (match (ng (gb (Wc (:: 6.5 float32)))) (Wc x) (= x (:: 6.5 float32))))
+  (println (gb 41))
+  0)

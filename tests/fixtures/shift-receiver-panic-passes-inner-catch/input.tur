@@ -1,0 +1,27 @@
+;; catch-unwind-misses-panic-in-shift-receiver: a shift's receiver runs outside
+;; the part of its reset's body it cut off, as a handler clause runs outside its
+;; body, so a panic it raises passes a catch-unwind inside the reset and reaches
+;; one around it.  The compiled backend always did this (__dk_catch_kill); the
+;; interpreter caught it at the inner catch.  No inline C: run-turi.sh runs it.
+(defn boom [v : int] : int (do (panic "boom") v))
+(defn twice [v : int] : int (* 2 v))
+
+(defn inner-catch-skipped [] : int
+  (reset (let [r (catch-unwind (fn [] : int (shift boom 1)))] (if (err? r) 1 0))))
+
+(defn main [] : int
+  ;; 1. The catch around the reset takes it.
+  (let [r (catch-unwind (fn [] : int (reset (+ 1 (shift boom 1)))))]
+    (println (if (err? r) "around the reset: caught" "around the reset: missed")))
+  ;; 2. A catch inside the reset, between it and the shift, does not.
+  (let [r (catch-unwind (fn [] : int (inner-catch-skipped)))]
+    (println (if (err? r) "inside the reset: passed to the outer catch" "inside the reset: caught")))
+  ;; 3. shift0 removes the reset too, and the catch outside it takes it.
+  (let [r (catch-unwind (fn [] : int (reset (+ 1 (shift0 boom 1)))))]
+    (println (if (err? r) "shift0: caught" "shift0: missed")))
+  ;; 4. A receiver that returns: its value aborts to the reset as usual.
+  (println (reset (+ 100 (let [r (catch-unwind (fn [] : int (shift twice 21)))] (if (err? r) 1 0)))))
+  ;; 5. The catch still works for a plain panic afterwards.
+  (let [r (catch-unwind (fn [] : int (boom 1)))]
+    (println (if (err? r) "plain: caught" "plain: missed")))
+  0)

@@ -1,5 +1,21 @@
 # A by-value aggregate captured as a generic's erased `T` is boxed into the closure env and never freed
 
+**Resolved 2026-10-23 (fix direction 1, the second variant).** The fill that
+boxes a by-value aggregate into an erased carrier field now records the field,
+and after the fill it points the env's header at a glue variant,
+`drop_glue_<env>__cbox_<fields>`, which frees each box and then runs the shared
+glue (`src/compiler/emit_expr.c`, the closure-construction arm). The variant is
+emitted once per C file under an `#ifndef`, at file scope beside the env's own
+glue. Instances that do not box (`T := int`) keep the shared glue. The repro is
+leak-clean (it prints 1213, not the 1215 the filing said), and so is the
+`await` fixture that pinned it, whose `known-leak` marker is gone.
+
+Pinned by `tests/fixtures/erased-capture-aggregate-box-freed`
+(`requires.leak-check`: one boxed field, two, the `int` instance, and 100
+constructions in a loop) and `await-in-generic-capturing-lambda-struct`.
+
+## As filed
+
 **Severity: low** (a fixed 8-to-N-byte leak per closure built, where N is the
 aggregate's size; correct output). Found 2026-10-14 while pinning
 await-parks-only-to-the-nearest-c-frame. Not specific to `await`: a lambda that

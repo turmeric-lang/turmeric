@@ -1,0 +1,5 @@
+around the reset: caught
+inside the reset: passed to the outer catch
+shift0: caught
+42
+plain: caught

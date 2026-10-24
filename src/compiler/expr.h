@@ -865,6 +865,19 @@ struct Binding {
      * exit (the make-scaler shape).  False for non-fns and any fn that returns a
      * shared/owning-capture/param closure. */
     bool                returns_fresh_closure;
+    /* closure-env-capturing-closures-not-released: the parameters (bit i =
+     * param i) a returns_fresh_closure function's closure captures as a
+     * closure -- `(defn q-not [p : (fn [D] bool)] (fn [d] (not (p d))))`.  The
+     * body is the closure itself, so the env is the only place the argument
+     * goes; the env's glue does not own it.  A fresh closure passed there dies
+     * with the env (hoist_borrowed_closure_args). */
+    uint32_t            fresh_closure_captured_params;
+    /* ...and on a hoisted `__borrowc` temp passed at such a position: the
+     * combinator whose result env holds it.  Handing it to that combinator is
+     * not an escape -- the call's result is itself a hoisted temp a
+     * non-retaining parameter takes, so both are dead when the outer call
+     * returns.  The temp is used at that one call only. */
+    const struct Binding *closure_dies_with_fn;
     /* any-struct-box-leak-per-widen (the temporary case): every call to this
      * function produces a FRESH `any` -- its body's tail is a widen, so the
      * payload box is minted per call and aliases nothing the callee keeps.

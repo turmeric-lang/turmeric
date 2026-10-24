@@ -2938,17 +2938,10 @@ static bool arg_is_freeable_closure_source(const Binding *fb, uint32_t i,
     return false;
 }
 
-static Expr *hoist_borrowed_closure_args(Elab *e, Expr *call, Span span) {
-    if (!call || call->kind != EX_CALL) return call;
-    const Binding *fb = call->as.call_.fn_binding;
-    if (!fb || fb->type.kind != TY_FN || !fb->type.as.fn.arg_flags) return call;
-    Expr **args = call->as.call_.args;
-    uint32_t n_args = call->as.call_.n_args;
-    uint32_t n_hoist = 0;
-    /* RM1 (bind chains): a continuation into a poly / fat slot arrives under
-     * an EX_POLY_WRAP / EX_FN_TO_FAT / EX_POLY_TO_FAT; the closure to hoist is
-     * the wrap's INNER, and the wrap stays in place around the hoisted var so
-     * the call site still packs it the way the slot expects. */
+/* RM1 (bind chains): a continuation into a poly / fat slot arrives under
+ * an EX_POLY_WRAP / EX_FN_TO_FAT / EX_POLY_TO_FAT; the closure to hoist is
+ * the wrap's INNER, and the wrap stays in place around the hoisted var so
+ * the call site still packs it the way the slot expects. */
 #define HOIST_PEEL_SLOT(slot_)                                                  \
     do {                                                                       \
         for (;;) {                                                             \
@@ -2961,50 +2954,86 @@ static Expr *hoist_borrowed_closure_args(Elab *e, Expr *call, Span span) {
             else break;                                                        \
         }                                                                      \
     } while (0)
-    for (uint32_t i = 0; i < n_args && i < fb->type.as.fn.arity; i++) {
-        Expr **slot = &args[i];
-        HOIST_PEEL_SLOT(slot);
-        if (arg_is_freeable_closure_source(fb, i, *slot))
-            n_hoist++;
+
+typedef struct { LetBinding *v; uint32_t n, cap; } HoistList;
+
+/* Bind the fresh closure at `*slot` to a `__borrowc` temp, appended to `hl`,
+ * and point the slot at the temp.  closure-env-capturing-closures-not-released:
+ * when it is a combinator call -- `(q-not (q-e 3))` -- whose closure captures
+ * a parameter (fresh_closure_captured_params), a fresh closure passed there is
+ * hoisted first: the combinator's env is then the only thing that holds it, so
+ * it is dead when that env is, and its temp's scope exit frees it too.  The
+ * escape walk is told the hand-off is not an escape (closure_dies_with_call). */
+static Binding *hoist_fresh_closure(Elab *e, Expr **slot, Span span, HoistList *hl) {
+    Expr *a = *slot;
+    if (a->kind == EX_CALL && a->as.call_.fn_binding && a->as.call_.fn_binding->returns_fresh_closure) {
+        uint32_t mask = a->as.call_.fn_binding->fresh_closure_captured_params;
+        for (uint32_t j = 0; mask && j < a->as.call_.n_args && j < 32; j++) {
+            if (!(mask & (1u << j))) continue;
+            Expr **s2 = &a->as.call_.args[j];
+            HOIST_PEEL_SLOT(s2);
+            const Expr *x = *s2;
+            bool fresh = x && ((x->kind == EX_CLOSURE && x->as.closure_.closure
+                                && x->as.closure_.closure->n_captures > 0)
+                               || (x->kind == EX_CALL && x->as.call_.fn_binding
+                                   && x->as.call_.fn_binding->returns_fresh_closure));
+            if (!fresh) continue;
+            Binding *ib = hoist_fresh_closure(e, s2, span, hl);
+            ib->closure_dies_with_fn = a->as.call_.fn_binding;
+        }
     }
-    if (n_hoist == 0) return call;
-    LetBinding *lbs = (LetBinding *)arena_alloc(e->arena, n_hoist * sizeof(LetBinding));
-    uint32_t h = 0;
+    char nm[48];
+    snprintf(nm, sizeof nm, "__borrowc_%u", elab_fresh_id(e));
+    const Symbol *sym = symtab_intern(e->st, strslice(nm, (uint32_t)strlen(nm)));
+    Binding *cb = binding_new(e, sym, a->type, false, false, span);
+    /* fn-value-fat-normalization (effect-row increment): record the lifted
+     * lambda behind this hoist temp so the CPS coloring / threadability
+     * walks resolve the temp back to the lambda (without this, a capturing
+     * callback into an effectful param reads as an opaque var, is never
+     * force-colored or threadable, and perm-taints its effect row to the
+     * deleted fiber engine).  Deliberately NOT closure_fn_binding, which
+     * carries direct-call semantics at emit. */
+    if (a->kind == EX_CLOSURE && a->as.closure_.closure &&
+        a->as.closure_.closure->fn)
+        cb->hoist_closure_fn_binding = a->as.closure_.closure->fn->binding;
+    if (hl->n == hl->cap) {
+        uint32_t nc = hl->cap ? hl->cap * 2 : 4;
+        LetBinding *nv = (LetBinding *)arena_alloc(e->arena, nc * sizeof(LetBinding));
+        if (hl->n) memcpy(nv, hl->v, hl->n * sizeof(LetBinding));
+        hl->v = nv; hl->cap = nc;
+    }
+    hl->v[hl->n].binding = cb;
+    hl->v[hl->n].init = a;           /* ascribe-peeled EX_CLOSURE literal or a
+                                      * fresh-closure-returning call */
+    hl->n++;
+    Expr *v = expr_new(e->arena, EX_VAR, a->type, span);
+    v->as.var.binding = cb;
+    *slot = v;                       /* the call (or its wrap) now references the binding */
+    return cb;
+}
+
+static Expr *hoist_borrowed_closure_args(Elab *e, Expr *call, Span span) {
+    if (!call || call->kind != EX_CALL) return call;
+    const Binding *fb = call->as.call_.fn_binding;
+    if (!fb || fb->type.kind != TY_FN || !fb->type.as.fn.arg_flags) return call;
+    Expr **args = call->as.call_.args;
+    uint32_t n_args = call->as.call_.n_args;
+    HoistList hl = { NULL, 0, 0 };
     for (uint32_t i = 0; i < n_args && i < fb->type.as.fn.arity; i++) {
         Expr **slot = &args[i];
         HOIST_PEEL_SLOT(slot);
-        Expr *a = *slot;
-        if (!arg_is_freeable_closure_source(fb, i, a))
+        if (!arg_is_freeable_closure_source(fb, i, *slot))
             continue;
-        char nm[48];
-        snprintf(nm, sizeof nm, "__borrowc_%u", elab_fresh_id(e));
-        const Symbol *sym = symtab_intern(e->st, strslice(nm, (uint32_t)strlen(nm)));
-        Binding *cb = binding_new(e, sym, a->type, false, false, span);
-        /* fn-value-fat-normalization (effect-row increment): record the lifted
-         * lambda behind this hoist temp so the CPS coloring / threadability
-         * walks resolve the temp back to the lambda (without this, a capturing
-         * callback into an effectful param reads as an opaque var, is never
-         * force-colored or threadable, and perm-taints its effect row to the
-         * deleted fiber engine).  Deliberately NOT closure_fn_binding, which
-         * carries direct-call semantics at emit. */
-        if (a->kind == EX_CLOSURE && a->as.closure_.closure &&
-            a->as.closure_.closure->fn)
-            cb->hoist_closure_fn_binding = a->as.closure_.closure->fn->binding;
-        lbs[h].binding = cb;
-        lbs[h].init = a;                 /* ascribe-peeled EX_CLOSURE literal or a
-                                          * fresh-closure-returning call */
-        h++;
-        Expr *v = expr_new(e->arena, EX_VAR, a->type, span);
-        v->as.var.binding = cb;
-        *slot = v;                       /* the call (or its wrap) now references the binding */
+        (void)hoist_fresh_closure(e, slot, span, &hl);
     }
-#undef HOIST_PEEL_SLOT
+    if (hl.n == 0) return call;
     Expr *let = expr_new(e->arena, EX_LET, call->type, span);
-    let->as.let_.bindings = lbs;
-    let->as.let_.n = n_hoist;
+    let->as.let_.bindings = hl.v;
+    let->as.let_.n = hl.n;
     let->as.let_.body = call;
     return let;
 }
+#undef HOIST_PEEL_SLOT
 
 /* Phase P3: HAMT lowering - lower map function calls when first arg is persistent */
 static Expr *elab_lower_map_call(Elab *e, const Form *call, const Symbol *name) {

@@ -108,4 +108,4 @@ is in a caller. The direct emitter makes a shift abortive only when a reset
 encloses it lexically, so there the receiver runs with the caller's reset in
 place -- and, independent of this plan, the shift's value flows on as an
 ordinary value. Filed as
-[direct-shift-outside-lexical-reset-not-abortive](../reported/direct-shift-outside-lexical-reset-not-abortive.md).
+[direct-shift-outside-lexical-reset-not-abortive](direct-shift-outside-lexical-reset-not-abortive.md), since fixed.

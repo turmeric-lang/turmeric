@@ -1,13 +1,17 @@
 # A by-value ADT local's spine is not released when the exit could carry a pointer into it
 
-**Severity:** low (a leak, linear in iterations). Both common faces are fixed;
-what is open is the loop whose signature is not all numbers.
+**Severity:** low (a leak, linear in iterations, in the one shape where an
+exit really does carry a pointer into the spine).
 
-**Status:** partially fixed. Face i (tail self-call) was fixed on `main`
-independently, by the inline tail arm's `let_binding_push_scope_frees`. Face ii
-(an explicit `return`) was fixed 2026-10-21, ported from the abandoned branch
+**Status:** narrowed to that shape 2026-10-23. Face i (tail self-call) was
+fixed on `main` independently, by the inline tail arm's
+`let_binding_push_scope_frees`. Face ii (an explicit `return`) was fixed
+2026-10-21, ported from the abandoned branch
 `claude/non-macos-windows-reports-6pz2pr` (2026-09-18), which found both.
-Residue 1 is open.
+Residue 1 -- a function whose signature is not all numbers -- was fixed
+2026-10-23 for the `return` face; see "Residue 1" below. What is left is the
+aliasing shape itself: a back-edge or `return` that hands on a pointer INTO the
+spine, where only the cells that pointer does not reach could be freed.
 
 ## The two faces
 
@@ -42,7 +46,28 @@ exits never reach it:
 Pinned by `tests/fixtures/byval-spine-drop-past-early-exit` (both faces, both
 glue paths -- a recursive field and an `:any` field -- leak-clean).
 
-## Open: residue 1, the non-scalar signature
+## Residue 1, the non-scalar signature (fixed 2026-10-23 for `return`)
+
+The `return` face was gated on the signature (`current_fn_spine_drop_safe`:
+every parameter and the result a plain number), because the channel fires at
+each `return` after hoisting its value and at each back-edge after assigning
+the parameters. A function with one `Cfg` parameter leaked the spine at every
+`return`, 2 boxes a call. The flag is now three-valued: when the signature
+does not vouch, a plain function body asks the let itself
+(`emit_spine_exits_unaliased`, `src/compiler/emit_fns.c`): every `return`'s
+value and every self-call's arguments must reach nothing the let built
+(`tco_leave_unaliased`: a plain number, a parameter, a global, a literal, or a
+named function's call over those). A typed panic or `discontinue` answers no.
+Pinned by `tests/fixtures/byval-spine-drop-return-nonscalar-param`
+(`requires.leak-check`: a number out of the spine, and a fresh struct built
+from one, in a function with a struct parameter).
+
+The back-edge face did not need the same change: in every shape tried
+(a number out of the spine, a fresh constructor over one, the parameter passed
+on unchanged, the spine handed to a reader) the use-based check
+(`tco_drop_use_ok`) already admits the drop.
+
+## Open: the aliasing shape
 
 ```turmeric
 #lang saffron
@@ -64,8 +89,9 @@ spine is refused the same way, because neither gate can tell the two apart.
 carries `known-leak` naming this report; a wrongly admitted free would show
 there as a use-after-free, which the marker does not excuse.
 
-Fix direction: ask the confinement walk about the back-edge ARGUMENTS rather
-than the parameter types -- an argument that is `xs` or a tracked alias of it
-refuses, anything else admits -- and replace the signature gate with that
-answer. The walk already tracks match binders as aliases in strict mode, which
-is the part that makes this possible.
+Fix direction: the refusal is right for the cells the handed-on pointer
+reaches, and wrong for the rest -- here `xs`'s first cell, which `t` does not
+point into. A drop that stops where the alias begins (free the head cell,
+leave the tail to whoever holds `t`) would need the alias's position in the
+spine, which the confinement walk knows only syntactically (`t` is field 1 of
+the head).
