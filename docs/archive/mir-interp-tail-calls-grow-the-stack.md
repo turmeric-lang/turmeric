@@ -1,5 +1,26 @@
 # The MIR interpreter runs a tail call as a call, so `musttail` cycles grow its stack
 
+**Status 2026-10-24: RESOLVED** (turmeric-lang/mir#14). A `MIR_TCALL` whose
+callee is a MIR function without machine code -- named directly
+(`IC_IMM_TCALL`) or reached through the thunk of a function given the
+interpreter interface (`IC_TCALL`, looked up in a thunk -> item table) -- now
+runs in the caller's `eval` activation: the args are copied, `eval` switches to
+the callee's code, and the frame -- which `eval` now allocates itself -- is
+reused, or reallocated after resetting the stack pointer (the `bend` builtin) to
+where it was when `eval` was entered, so neither frames nor the callers' allocas
+pile up. The tail-call work sits out of line (`prepare_tail_call`), so `eval`'s
+own frame stays small: a deep non-tail recursion through it needs slightly less
+stack than before (`r7rs-tail-call-through-procedure-value` at n=20000: 333 MiB
+against 339). `tailcall-musttail-deep`
+prints `5` under `TUR_JIT_GEN=interp` on an 8 MiB entry stack, and
+`tests/run-jit.sh` checks that (`jit-musttail-8mib-interp`). Still a call and a
+return: a vararg prototype, a callee with block args, `setjmp`, a callee that
+has machine code, and a pointer that is not an interpreted function's thunk.
+On wasm the `bend` builtin is a no-op, so there a tail call made by a function
+that allocated (a local aggregate) leaves its allocas and a callee frame on the
+stack until the chain returns, as `MIR_BSTART`/`MIR_BEND` blocks leave theirs; a
+chain of functions that allocate nothing runs in constant stack there too.
+
 **Severity:** low natively (`TUR_JIT_GEN=interp` is a debugging mode), high
 for the planned wasm JIT, whose engine is this interpreter. Split off
 2026-10-24 from

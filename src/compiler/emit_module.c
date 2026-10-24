@@ -10980,8 +10980,8 @@ int emit_sig_lookup_n_params(const char *cname) {
  * spelled with it.  It expands to `__attribute__((musttail))` only where that
  * is known to hold -- clang on x86-64 / aarch64, and c2mir, which defines
  * __MIRC_MUSTTAIL__ and makes the call a MIR tail call (MIR_TCALL: a jump
- * under the generator when the args are all in registers, a call and a
- * return in the MIR interpreter -- mir-interp-tail-calls-grow-the-stack) --
+ * under the generator when the args are all in registers, the callee run in
+ * the caller's activation by the MIR interpreter) --
  * and to nothing everywhere else: gcc (the attribute arrived in 15 and is not
  * exercised here) and wasm WITHOUT the tail-call feature (clang rejects
  * musttail there).  c2mir gets no TUR_MUSTTAIL_PINS: it has no `__asm__`,
