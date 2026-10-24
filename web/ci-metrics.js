@@ -2214,4 +2214,11 @@ async function boot() {
   for (const el of redraw.keys()) ro.observe(el);
 }
 
-boot();
+// Anything boot() throws past its own fail() calls would otherwise leave the
+// spinner up forever with the reason only in the console.
+boot().catch((err) => {
+  console.error(err);
+  document.getElementById('ci-body').hidden = true;
+  document.getElementById('ci-state').hidden = false;
+  fail(`The dashboard failed to load (${err.message}).`);
+});

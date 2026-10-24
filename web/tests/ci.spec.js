@@ -723,6 +723,19 @@ test.describe('CI metrics dashboard', () => {
     await expect(page).not.toHaveURL(/range=/);
   });
 
+  // A response the page cannot render (here, timings with no `latest`) throws
+  // inside boot() after every fetch succeeded. It must still end the spinner.
+  test('an exception while booting is shown, not left in the console', async ({ page }) => {
+    await page.route('**/api/ci/timings?*', (route) => route.fulfill({
+      status: 200, contentType: 'application/json',
+      body: JSON.stringify({ mode: 'run', suites: [], runs: [], cells: [] }),
+    }));
+    await page.goto('/ci');
+    await expect(page.locator('#ci-state')).toHaveClass(/is-error/, { timeout: 20_000 });
+    await expect(page.locator('#ci-state')).toContainText('The dashboard failed to load');
+    await expect(page.locator('#ci-body')).toBeHidden();
+  });
+
   test('a failed meta request says so instead of spinning', async ({ page }) => {
     await stubApi(page, { fail: { meta: 503 } });
     await page.goto('/ci');
