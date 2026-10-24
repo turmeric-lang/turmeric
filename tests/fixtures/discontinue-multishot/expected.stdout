@@ -1,1 +1,7 @@
 102
+guarded: defer ran
+guarded: defer ran
+102
+bare: defer ran
+bare: defer ran
+1002
