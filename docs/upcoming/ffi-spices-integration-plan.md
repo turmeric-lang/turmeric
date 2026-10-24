@@ -1,9 +1,14 @@
 # FFI x spices: closing the gaps between the dynamic FFI and the package layer
 
-> **Status:** S1, S2, S4 implemented (2026-08-17); S3 satisfied -- its
+> **Status:** re-audited 2026-10-24 against `main` (289d688d): S1, S2, S4
+> implemented (2026-08-17) and still in the tree; S3 satisfied -- its
 > jit-ffi-c2mir-plan F4/F5 landed 2026-08-18 (follow-ons 2026-08-21, aarch64
 > HFA fixed 2026-08-26), and that plan graduated in 0.38.0 and is archived.
-> **Remaining: S5 only.**  Its blocker moved on 2026-10-02: `TUR_JIT` now
+> Re-verified 2026-10-24: `tests/turi/repl-spice-linklibs.sh` (S1) and the
+> `s2-variadic-*` cases of `tests/turi/repl-spice-call.sh` (S2) pass on the
+> JIT build.
+> **Remaining: S5 only, and it is a decision, not a blocker.**  Its blocker
+> moved on 2026-10-02: `TUR_JIT` now
 > defaults ON on 64-bit x86-64 and arm64 (MIR vendored under `external/mir/`),
 > so default builds and release binaries carry the c2mir thunk provider.  But
 > `-DTUR_JIT=OFF` and the hosts the default leaves off (ppc64, s390x, riscv64)
@@ -11,6 +16,8 @@
 > (`src/runtime/ffi_dispatch_thunk.c`, `tools/gen_ffi_dispatch.py`) is still
 > the live non-JIT rung.  Deleting it now means deciding that a non-JIT build
 > loses the interpreter's dynamic FFI -- a decision, no longer a blocker.
+> As of 2026-10-24 the table, its generator and the `--max-arity` advice
+> (`src/turi/ffi_thunk.c:360-365`) are all still present; see S5.
 > Proposed 2026-08-17.
 > **Track:** post-v1, incremental -- each phase is independently landable.
 >
@@ -75,7 +82,7 @@ S5). Ordered by value.
 ### S1 -- thread `:cmake-deps` / `:link-libs` flags into the REPL's in-process JIT hook
 
 **The defect.** `repl_jit_build` collects only `__tur_autolink__`
-markers (`src/main.c:3920-3922`) before handing the TU to
+markers (then `src/main.c:3920-3922`; today `src/driver/jit.c:723`) before handing the TU to
 `tur_jit_compile_image`. A spice that declares its C dependency the
 *recommended* way -- `:cmake-deps` or `:build-opts :link-libs`, with no
 marker in any source -- compiles fine in-process, but nothing dlopens
@@ -88,7 +95,7 @@ unaffected because `tur build` injects the manifest flags into cc.
 `drv_collect_build_aux`/`pkg_cmake_manifest_append_cc_flags` pair
 `cmd_build` uses and append the collected `-L`/`-l` entries to the
 autolink string handed to `tur_jit_compile_image`. Two engine-side
-follow-ons in `jit_load_autolink` (`src/jit_engine.c:387`):
+follow-ons in `jit_load_autolink` (`src/jit_engine.c:670`):
 
 - It currently ignores `-L` entirely and probes `lib<name>.so` by
   soname only. Track `-L` dirs and try `<dir>/lib<name>.so` (and
@@ -103,6 +110,14 @@ follow-ons in `jit_load_autolink` (`src/jit_engine.c:387`):
 symbol the process does not otherwise pull in; assert it is callable at
 the REPL with the JIT hook active.
 
+**Done (2026-08-17; re-verified 2026-10-24).** `repl_jit_build` calls
+`drv_collect_build_aux` and appends the cmake/`:link-libs` flags to the
+autolink string (`src/driver/jit.c:728-766`), failing the hook to the
+subprocess path when the spice vendors `:c-sources`; `jit_load_autolink`
+honours `-L` dirs and probes `<dir>/lib<name>.so` / `.dylib` before the bare
+soname (`src/jit_engine.c:670`).  Test: `tests/turi/repl-spice-linklibs.sh`,
+ctest `tur_repl_spice_linklibs` (`CMakeLists.txt:1652`).
+
 ### S2 -- variadic spice exports (cons-list marshalling)
 
 `ffi_native_shim` still rejects variadic exports outright
@@ -114,6 +129,17 @@ moment of the call, which is exactly a signature string -- render
 No shape table entry could ever cover this; the thunk cache handles the
 per-call-shape variety naturally. Non-JIT builds keep the clean
 rejection.
+
+**Done (2026-08-17; re-verified 2026-10-24).** The paragraph above
+describes the tree before the fix: `ffi_native_shim`
+(`src/turi/ffi_thunk.c:167`) now accepts a variadic export, checks "at
+least" the fixed arity, and builds the rest list with
+`ffi_build_rest_list` (`src/turi/ffi_thunk.c:118`).  It went further than
+"non-JIT builds keep the rejection": the call also works through the
+shape-table rung, within its arity ceiling.  The compiled side emits no
+`__ffi` shim for a variadic export (`emit_ffi_export_shims`,
+`src/compiler/emit_module.c`), so on a non-JIT build the shape table is the
+only rung a variadic export has -- which matters for S5.
 
 ### S3 -- struct-by-value and callbacks for spice APIs (cross-reference)
 
@@ -134,6 +160,14 @@ forgets the other:
   spice-side workaround (fat-closure handles through `:int`) is the
   measure of the hole.
 
+**Satisfied (2026-08-18; note 2026-10-24).** F4 and F5 landed in the
+archived jit-ffi-c2mir-plan.  F4 did not build the shared signature
+registry suggested above: it encodes layout inline in the signature string
+instead, so the "extend the exports manifest with layout hashes" transport
+was never needed -- superseded, not open.  No spice in turmeric-spices
+(origin/main bdeea3f) uses `callback-ptr` yet; adopting it is per-spice
+work, not an item of this plan.
+
 ### S4 -- constants do not survive dynamic linking: make wrapping them a documented convention
 
 `#define ZMQ_REP 4` never reaches a symbol table, so both the dynamic
@@ -144,6 +178,9 @@ belongs in developing-spices-guide.md's C-wrapping section, with a
 sentence on keeping them adjacent to the `extern-c` block they belong
 to so drift is reviewable.
 
+**Done (2026-08-17).** developing-spices-guide.md, "Constants: `#define`s do
+not survive linking -- re-export them" (line 569).
+
 ### S5 -- shape-table retirement bookkeeping
 
 jit-ffi-c2mir-plan section 2.4 demoted the generated table
@@ -153,6 +190,20 @@ configuration, the table (and its generator, and the `--max-arity`
 regeneration advice in the ladder's error message) can be deleted.
 Blocked on the default flipping; record it so the 381-entry file does
 not outlive its reason.
+
+**Open -- a decision now (2026-10-24).** The default flipped on 2026-10-02
+(`CMakeLists.txt:145-178`), so the blocker is gone, but nothing has been
+deleted: `src/runtime/ffi_dispatch_thunk.{c,h}` (still 381 shapes: arity
+0-6 over i/f, three return classes), `src/runtime/ffi_dispatch.{c,h}`,
+`tools/gen_ffi_dispatch.py`, and the regeneration advice in the ladder's
+error (`src/turi/ffi_thunk.c:360-365`) are all live.  On a JIT build the
+table is reached only for a spice `.so` built before per-export `__ffi`
+shims existed.  On a `-DTUR_JIT=OFF` build (or ppc64/s390x/riscv64, where
+the default is OFF) it is also the only rung for variadic exports (S2),
+which get no shim.  Deleting it therefore means accepting that such a
+build cannot call variadic spice exports from the REPL, and that old
+shim-less `.so` files must be rebuilt.  Cross-referenced from
+aot-compiled-repl-plan.md "Open questions" item 1.
 
 ## 3. Explicitly not doing
 
