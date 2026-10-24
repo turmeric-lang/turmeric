@@ -161,7 +161,7 @@
 
 ;;; discontinue -- resume a continuation by raising a panic at its perform.
 ;;;
-;;; Prototype, behind `--enable=discontinue`. `(discontinue k payload)` resumes
+;;; Beta, behind `--enable=discontinue`. `(discontinue k payload)` resumes
 ;;; `k` the way `resume` does, except that the `perform` that captured it does
 ;;; not return: it raises a panic carrying `payload` there, inside the body. The
 ;;; body's `defer`s run as it unwinds, and a `catch-unwind` / `catch-panic-of`
@@ -176,11 +176,11 @@
 ;;; the continuation, so using `k` afterwards is TUR-E0201 (TUR-E0101 for a
 ;;; `^linear` one), and it satisfies the `^linear` requirement.
 ;;;
-;;; Still refused: compiled, a `catch-unwind` inside the clause around the
-;;; `discontinue` (catch around the `handle` instead); interpreted, a
-;;; `^multishot` continuation whose body reaches its `perform` under a `defer`
-;;; or `catch-unwind`. Without the flag both engines refuse the form, and it is
-;;; typed `nil`. See docs/upcoming/discontinue-plan.md.
+;;; A `catch-unwind` in the clause around the `discontinue` takes the panic
+;;; there, and a `^multishot` continuation can be resumed by one copy and
+;;; discontinued by another; compiled, `tur jit` and `tur --interpret` agree.
+;;; Without the flag both engines refuse the form, and it is typed `nil`. See
+;;; docs/upcoming/discontinue-plan.md.
 ;;;
 ;;; Parameters:
 ;;;   k         -- the continuation bound by the handler clause

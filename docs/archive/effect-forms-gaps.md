@@ -63,7 +63,7 @@ runs the body's cleanup when a clause simply does not resume:
 
 Compiled and `tur jit`: `clause gives up`, `body cleanup`, `-1`. Interpreted:
 `clause gives up`, `-1`, `body cleanup` -- the same cleanup, run late
-([turi-fiber-handle-defers-fire-at-the-wrong-time](../reported/turi-fiber-handle-defers-fire-at-the-wrong-time.md),
+([turi-fiber-handle-defers-fire-at-the-wrong-time](turi-fiber-handle-defers-fire-at-the-wrong-time.md),
 which the defer-semantics plan should also close). So what `discontinue` adds is
 narrower:
 
@@ -114,7 +114,7 @@ handler held in a variable stays a flat table and is documented.
 
 - The interpreter's `handle` runs the body's pending `defer`s at the wrong time
   when a clause does not resume:
-  [turi-fiber-handle-defers-fire-at-the-wrong-time](../reported/turi-fiber-handle-defers-fire-at-the-wrong-time.md)
+  [turi-fiber-handle-defers-fire-at-the-wrong-time](turi-fiber-handle-defers-fire-at-the-wrong-time.md)
   (already filed; the `handle` page links it).
 - A composed handler held in a variable is still one flat table: a clause that
   performs an effect of its sibling aborts as unhandled (nest `with-handler`s, or

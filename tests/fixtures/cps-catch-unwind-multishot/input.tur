@@ -2,8 +2,8 @@
 ;; whose body holds a catch-unwind around the perform.  Each resumed copy
 ;; carries its own catch prompt: the copy resumed with 0 returns normally (Ok,
 ;; 200), the copy resumed with 5 panics and its prompt turns that into Err
-;; (100).  Compiled only: the interpreter's single-shot fiber runtime refuses a
-;; second resume of a body that reaches its perform under a catch-unwind
+;; (100).  The interpreter runs it on the work stack: the captured slice
+;; carries the catch boundary, a copy per resume
 ;; (turi-fiber-handle-defers-fire-at-the-wrong-time, case 5).
 (defeffect Ask [] : int)
 

@@ -676,14 +676,21 @@ so depth is bounded by memory: a recursion 100 million calls deep (about
 3 GB of frames) runs, where the 1 GiB stack stops near 30 million. The
 limit becomes a budget: `TUR_MAIN_STACK_MB`, when set, is the total of the
 stack and its segments; unset, half of physical memory. Past it, the same
-`stack overflow: recursion too deep`. A `call/cc` captured while frames are
-on a segment is escape-only: it escapes, but invoked after its extent it
-stops the program with `continuation invoked after its call/cc prompt
-returned`, as on a platform with no stack copy. A continuation captured on
-the thread's own stack re-enters from anywhere, and `raise`, `guard` and
-escapes work anywhere. Not under `tur jit`, and not on other threads. The
-cost is a compare per procedure call -- 1-2% more instructions at `-O2` on
-the plan's benchmarks under gcc, within code-layout noise under clang. See
+`stack overflow: recursion too deep`. Every thread the program starts grows
+the same way, each with its own budget (a thread's own stack is otherwise
+the 8 MiB default, and a deep recursion there dies with no message). A
+fiber's stack is checked against its own end and does not grow: a runaway on
+a fiber stops with the same message instead of running off its stack. A
+`call/cc` captured while frames are on segments re-enters from anywhere, as
+one captured on the thread's own stack does; the copy is of every segment
+under the capture, so it costs what the depth costs. One exception: inside
+an `eval` (`(scheme eval)`), a capture on a segment is escape-only. Not under
+`tur jit`, and nothing of it on macOS, Windows or a 32-bit host, which keep
+the 1 GiB stack. `TUR_R7RS_SEGMENTED_STACK=0` turns it off: set when
+compiling, the program is built as without the flag; set when running a
+program built with it, no thread grows. The cost is a compare per procedure
+call -- 1-2% more instructions at `-O2` on the plan's benchmarks under gcc,
+within code-layout noise under clang. See
 [r7rs-heap-frames-plan](https://github.com/turmeric-lang/turmeric/blob/main/docs/upcoming/r7rs-heap-frames-plan.md).
 
 ## Where it differs from R7RS

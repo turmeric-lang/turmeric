@@ -206,15 +206,21 @@
 ;;; Under `--enable=quote-data` a quoted list or vector is a `Datum` (tur/datum):
 ;;; `'(+ 1 2)` is `(DList [(DSym +) (DInt 1) (DInt 2)])`, `println` prints it as
 ;;; `(+ 1 2)`, and `match` takes it apart -- on every engine, and in Saffron
-;;; through an unannotated parameter too. Without the flag a quoted list is still
-;;; elaborated as code: `(quote (+ 1 2))` gives 3. See
+;;; through an unannotated parameter too. tur/datum loads on first use: when any
+;;; file the program reads (the entry, a loaded file, an imported module) quotes
+;;; a list, or defines a macro that expands to one, with no load to write. In a
+;;; `defmacro*` body a quoted list is instead the `Syntax` it spells, as the
+;;; quasiquote with nothing unquoted is, so it can be returned as the expansion.
+;;; Without the flag a quoted list is still elaborated as code: `(quote (+ 1 2))`
+;;; gives 3. The flag is in beta and graduates in 0.71.0; see
 ;;; docs/upcoming/quote-list-data-plan.md.
 ;;;
 ;;; Parameters:
 ;;;   x -- a symbol, literal, list or vector, not evaluated
 ;;;
 ;;; Returns:
-;;;   The symbol (a `Sym`), the literal, or (with quote-data) the `Datum`.
+;;;   The symbol (a `Sym`), the literal, or (with quote-data) the `Datum` --
+;;;   the `Syntax` in a `defmacro*` body.
 ;;;
 ;;; Example:
 ;;;   (sym->str (quote hello))  ; => "hello"

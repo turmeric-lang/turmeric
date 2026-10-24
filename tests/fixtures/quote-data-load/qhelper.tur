@@ -1,0 +1,11 @@
+;; quote-list-data-plan: the only quotes in the program are in this loaded
+;; file.  `Datum` in the signatures resolves because the load of this file is
+;; what brings stdlib/datum.tur in -- ahead of the user's forms.
+
+(defn helper-form [] : Datum
+  '(helper (x 1) [y 2.5] "s" true))
+
+(defn helper-head [d : Datum] : cstr
+  (match d
+    (DList xs) (datum->str (list-first xs))
+    _ "<leaf>"))

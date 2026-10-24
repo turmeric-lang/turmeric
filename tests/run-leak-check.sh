@@ -108,8 +108,13 @@ for marker in "${marked[@]}"; do
     saffron_gc=1
     IFS= read -r _first < "$input" || true
     [[ "$_first" == "#lang saffron"* ]] && saffron_gc=0
+    # The fixture's own compiler flags (`flags`, e.g. an --enable=<name>
+    # experiment), placed before the subcommand as tests/run.sh places them.
+    fixture_flags=""
+    [ -f "$dir/flags" ] && fixture_flags=$(cat "$dir/flags")
+    # shellcheck disable=SC2086
     if ! TUR_SAFFRON_GC="$saffron_gc" TUR_CC_FLAGS="$CC_FLAGS" CC="$BUILD_CC" \
-         "$TUR" build "$input" -o "$exe" > "$WORK/$name.build" 2>&1; then
+         "$TUR" $fixture_flags build "$input" -o "$exe" > "$WORK/$name.build" 2>&1; then
         fail "$name" "build failed: $(tail -3 "$WORK/$name.build" | tr '\n' ' ')"
         continue
     fi

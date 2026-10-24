@@ -1153,6 +1153,15 @@ static ElabModule *elab_load_module_impl(Elab *e, const Symbol *name, Span impor
         }
         forms = expanded;
         nforms = n_expanded;
+        /* quote-list-data-plan: a module that quotes a list brings
+         * stdlib/datum.tur in ahead of its own forms -- once per compile (the
+         * load-visited set), as forms of datum.tur's own file, so the
+         * module's defmodule is still the first form of ITS file.  The
+         * importer's autoload only looked at the entry file. */
+        if (!elab_quote_data_demand_load(e, e->arena, e->st, &forms, &nforms, 0)) {
+            slot->is_loading = false;
+            return NULL;
+        }
         /* r7rs-lang-plan R2: an imported `#lang r7rs` module gets the same
          * Scheme-form lowering the entry program gets, at the same point --
          * after its loads are spliced, before anything is elaborated. */

@@ -436,15 +436,18 @@ static const ExperimentDescriptor EXPERIMENTS[] = {
     /* discontinue (discontinue-plan): `(discontinue k payload)` resumes `k` by
      * raising a panic at the `perform` it captured -- the body's defers run,
      * a catch-unwind in the body may take it, and otherwise it is re-raised
-     * at the `discontinue` in the clause.  Gated while the two engines still
-     * disagree on a shape each refuses: compiled, a catch-unwind inside the
-     * clause; interpreted, a ^multishot k whose body catches. */
+     * at the `discontinue` in the clause.  Beta since 2026-10-24: the plan's
+     * five fixtures run with the same output compiled, under `tur jit` and
+     * `tur --interpret` (the last two shapes landed: a catch-unwind in the
+     * clause, compiled; a ^multishot k over a catching body, interpreted).
+     * Soaking one release; graduation is the mechanical gate drop the plan
+     * lists. */
     { "discontinue",
       "`(discontinue k payload)` resumes a handler continuation by raising a panic at its `perform`",
       "docs/upcoming/discontinue-plan.md",
       "0.68.0",                  /* introduced */
       "0.71.0",                  /* expires_at -- advisory; never blocks a release */
-      XF_LIFECYCLE_PROTOTYPE,
+      XF_LIFECYCLE_BETA,
       &g_opt_discontinue },
     /* script-deps (script-spice-deps-plan): a single-file script declares
      * its spices in a `(defscript :spices #map{...})` header, fetched into
@@ -460,28 +463,44 @@ static const ExperimentDescriptor EXPERIMENTS[] = {
     /* quote-data (quote-list-data-plan): `(quote (a b c))` is a runtime
      * `Datum` (stdlib/datum.tur) instead of the list elaborated as code.
      * Gated because it changes the meaning of existing code -- a quoted list
-     * used to evaluate -- and because datum.tur is autoloaded whole while the
-     * gate is on, where graduation wants it loaded on first use. */
+     * used to evaluate.  BETA 2026-10-24 (prototype since 0.69.0, advisory
+     * expires_at was 0.73.0): the surface is frozen and every graduation
+     * item but the gate drop is closed -- datum.tur loads on first use from
+     * any file the program reads (elab_quote_data_demand_load), a defmacro*
+     * body sees a quoted list as Syntax, and the forced-on corpus sweep
+     * changes nothing but the gate-off fixture.  Soaks one release cycle,
+     * then graduates: delete this row, move the name to GRADUATED[], make
+     * g_opt_quote_data unconditional, and invert quote-data-off. */
     { "quote-data",
       "`(quote (a b c))` is a runtime `Datum` (stdlib/datum.tur), not the list evaluated as code",
       "docs/upcoming/quote-list-data-plan.md",
       "0.69.0",                  /* introduced */
-      "0.73.0",                  /* expires_at -- advisory; never blocks a release */
-      XF_LIFECYCLE_PROTOTYPE,
+      "0.71.0",                  /* expires_at -- advisory; never blocks a release */
+      XF_LIFECYCLE_BETA,
       &g_opt_quote_data },
     /* r7rs-segmented-stack (r7rs-heap-frames-plan, option C): a compiled
      * `#lang r7rs` procedure checks the stack pointer against a per-thread
      * limit at entry and, past it, re-enters itself on a fresh stack segment,
      * so recursion is bounded by TUR_MAIN_STACK_MB as a memory budget rather
-     * than by the C stack.  Gated because the check is on every call and the
-     * plan is part-way: the deep-stack thread on Linux x86-64 and arm64 only,
-     * and a call/cc captured on a segment is escape-only. */
+     * than by the C stack.  BETA since 2026-10-24: the surface is frozen and
+     * every Linux stage is in -- every thread the program starts is armed, a
+     * fiber's stack is checked against its own bounds, a call/cc captured on
+     * a segment re-enters (the chain is copied into the image), arm64 ran
+     * under qemu.  Graduating is the gate drop alone, which turns the check on
+     * for every compiled r7rs program; TUR_R7RS_SEGMENTED_STACK=0 is the
+     * hatch (to the compiler: the C without the flag; to a program: no thread
+     * armed), and tests/run-r7rs-segmented-stack-seam.sh inverts to SEG_ARM=off
+     * then.  Elsewhere -- macOS, Windows, `tur jit`, other architectures --
+     * the check compiles to nothing and the 1 GiB deep stack stays: the
+     * graduated contract (the plan, "Platforms").  Graduation APPROVED
+     * 2026-10-24 (the plan's hold condition lifted by its owner); the gate
+     * drop lands after the next version bump. */
     { "r7rs-segmented-stack",
       "a compiled `#lang r7rs` procedure checks the stack limit at entry and grows onto a new segment",
       "docs/upcoming/r7rs-heap-frames-plan.md",
       "0.70.0",                  /* introduced */
-      "0.76.0",                  /* expires_at -- advisory; never blocks a release */
-      XF_LIFECYCLE_PROTOTYPE,
+      "0.71.0",                  /* expires_at -- advisory; never blocks a release */
+      XF_LIFECYCLE_BETA,
       &g_opt_r7rs_segmented_stack },
     /* loop-invariants GRADUATED 2026-10-03, in the 0.61 line (introduced
      * 0.57.0, prototype, advisory expires_at 0.58.0).  `(while c :invariant p
