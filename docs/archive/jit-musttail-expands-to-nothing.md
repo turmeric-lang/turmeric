@@ -1,6 +1,19 @@
 # `TUR_MUSTTAIL` is empty under `tur jit`, so mutual tail calls grow the stack there
 
-**Status 2026-10-23: documented and pinned; the fix itself is fork work.**
+**Status 2026-10-24: RESOLVED for the generator.** The MIR fork learned a
+tail call (turmeric-lang/mir#13): `MIR_TCALL` takes `MIR_CALL`'s operands and
+returns the call's results, and on x86-64 and aarch64 the generator makes one
+whose args and results are all in registers the epilogue plus a jump. c2mir
+generates it for `__attribute__ ((musttail)) return f (...);` and defines
+`__MIRC_MUSTTAIL__`, which `TUR_MUSTTAIL` now keys on
+(`ensure_musttail_macro`, `src/compiler/emit_module.c`). `tailcall-musttail-deep`
+prints `5` under `tur jit` on an 8 MiB entry stack, and `tests/run-jit.sh`'s
+`jit-musttail-8mib` (the flipped `jit-musttail-gap-pinned`) checks that. The
+MIR interpreter -- `TUR_JIT_GEN=interp`, and the planned browser engine --
+still runs a tail call as a call and a return; that half is
+[mir-interp-tail-calls-grow-the-stack](../reported/mir-interp-tail-calls-grow-the-stack.md).
+
+**Earlier status 2026-10-23: documented and pinned; the fix itself is fork work.**
 The macro's emitted comment and the JIT guide's `TUR_MAIN_STACK_MB` row say
 that `tur jit` makes no guaranteed tail calls and that its entry stack is what
 hides it, and `tailcall-musttail-deep`'s own comment no longer claims MIR-gen's

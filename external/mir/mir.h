@@ -152,6 +152,11 @@ typedef enum {
   INSN_EL (LABEL),                     /* One immediate operand is unique label number  */
   INSN_EL (UNSPEC),                    /* First operand unspec code and the rest are args */
   REP3 (INSN_EL, PRSET, PRBEQ, PRBNE), /* work with properties */
+  /* Tail call: the operands are the same as for CALL.  The insn calls the
+     function and returns its results from the current function, reusing the
+     current function's frame when the target can (see MIR.md).  The results
+     of its prototype should be the current function's results. */
+  INSN_EL (TCALL),
   INSN_EL (USE), /* Used only internally in the generator, all operands are input */
   INSN_EL (PHI), /* Used only internally in the generator, the first operand is output */
   INSN_EL (INVALID_INSN),
@@ -440,7 +445,7 @@ static inline int MIR_FP_branch_code_p (MIR_insn_code_t code) {
 }
 
 static inline int MIR_call_code_p (MIR_insn_code_t code) {
-  return code == MIR_CALL || code == MIR_INLINE || code == MIR_JCALL;
+  return code == MIR_CALL || code == MIR_INLINE || code == MIR_JCALL || code == MIR_TCALL;
 }
 
 static inline int MIR_int_branch_code_p (MIR_insn_code_t code) {
@@ -547,6 +552,7 @@ extern MIR_insn_t MIR_new_insn_arr (MIR_context_t ctx, MIR_insn_code_t code, siz
 extern MIR_insn_t MIR_new_insn (MIR_context_t ctx, MIR_insn_code_t code, ...);
 extern MIR_insn_t MIR_new_call_insn (MIR_context_t ctx, size_t nops, ...);
 extern MIR_insn_t MIR_new_jcall_insn (MIR_context_t ctx, size_t nops, ...);
+extern MIR_insn_t MIR_new_tcall_insn (MIR_context_t ctx, size_t nops, ...);
 extern MIR_insn_t MIR_new_ret_insn (MIR_context_t ctx, size_t nops, ...);
 extern MIR_insn_t MIR_copy_insn (MIR_context_t ctx, MIR_insn_t insn);
 

@@ -687,28 +687,31 @@ for rf in "$RESULTS_DIR"/*.result; do
     esac
 done
 
-# jit-musttail-expands-to-nothing: TUR_MUSTTAIL is empty under c2mir, so the
-# mutual tail-call cycle in tailcall-musttail-deep runs in O(n) stack here.
-# The fixture passes only because `main` runs on a 1 GiB entry thread.  Pin the
-# gap: on an 8 MiB entry stack the cycle must still overflow.  The day MIR
-# makes real tail calls this check fails -- then close the report, and turn
-# this into a check that the 8 MiB run prints `5`.  A platform whose stack
-# guard prints nothing (Windows) is a SKIP, as is any shard but the first.
+# jit-musttail-expands-to-nothing (archived): under c2mir `TUR_MUSTTAIL` is
+# `__attribute__((musttail))`, which MIR makes a tail jump (MIR_TCALL), so the
+# mutual tail-call cycle in tailcall-musttail-deep runs in constant stack.  The
+# corpus run above cannot tell that apart from having room -- `main` gets a
+# 1 GiB entry thread -- so run the cycle again on 8 MiB, where it overflows as
+# calls, and expect `5`.  The MIR interpreter runs a tail call as a call
+# (mir-interp-tail-calls-grow-the-stack), so TUR_JIT_GEN=interp is a SKIP, as
+# is any shard but the first.
 if [ "$SHARD_INDEX" -eq 0 ] && { [ -z "$JIT_FILTER" ] || [[ "tailcall-musttail-deep" =~ $JIT_FILTER ]]; }; then
     _mt_dir="tests/fixtures/tailcall-musttail-deep"
-    _mt_rc=0
-    _mt_out="$(TUR_MAIN_STACK_MB=8 _run_timed 120 "$TUR" jit --debug "$_mt_dir/input.tur" 2>&1)" || _mt_rc=$?
-    if [ "$_mt_rc" -ne 0 ] && grep -q "stack overflow" <<< "$_mt_out"; then
-        echo "PASS jit-musttail-gap-pinned (8 MiB entry stack still overflows; docs/reported/jit-musttail-expands-to-nothing.md)"
-        PASS=$((PASS + 1))
-    elif [ "$_mt_rc" -eq 0 ] && grep -qx "5" <<< "$_mt_out"; then
-        echo "FAIL jit-musttail-gap-pinned -- the cycle now runs on an 8 MiB stack: the JIT makes tail calls."
-        echo "  Close docs/reported/jit-musttail-expands-to-nothing.md and flip this check (tests/run-jit.sh)."
-        FAIL=$((FAIL + 1))
-        FAILED+=("jit-musttail-gap-pinned (gap closed)")
-    else
-        echo "PASS jit-musttail-gap-pinned (skipped: exit $_mt_rc and no stack-guard line on this host)"
+    if [ "${TUR_JIT_GEN:-}" = "interp" ]; then
+        echo "PASS jit-musttail-8mib (skipped: TUR_JIT_GEN=interp makes no tail calls; docs/reported/mir-interp-tail-calls-grow-the-stack.md)"
         SKIP=$((SKIP + 1))
+    else
+        _mt_rc=0
+        _mt_out="$(TUR_MAIN_STACK_MB=8 _run_timed 120 "$TUR" jit --debug "$_mt_dir/input.tur" 2>&1)" || _mt_rc=$?
+        if [ "$_mt_rc" -eq 0 ] && grep -qx "5" <<< "$_mt_out"; then
+            echo "PASS jit-musttail-8mib (the musttail cycle runs on an 8 MiB entry stack)"
+            PASS=$((PASS + 1))
+        else
+            echo "FAIL jit-musttail-8mib -- exit $_mt_rc on an 8 MiB entry stack: \`tur jit\` made no tail call."
+            echo "$_mt_out" | tail -5 | sed 's/^/  /'
+            FAIL=$((FAIL + 1))
+            FAILED+=("jit-musttail-8mib")
+        fi
     fi
 fi
 

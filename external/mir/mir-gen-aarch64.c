@@ -232,6 +232,36 @@ static void gen_blk_mov (gen_ctx_t gen_ctx, MIR_insn_t anchor, size_t to_disp,
     gen_mov (gen_ctx, anchor, MIR_MOV, _MIR_new_var_op (ctx, R2_HARD_REG), treg_op3);
 }
 
+#define TARGET_TCALL
+/* Whether TCALL can be a jump to the callee after the epilogue: it can when
+   the callee takes its args and returns its results only in registers, so
+   nothing it uses outlives the frame of the current function.  */
+static int target_tail_call_p (gen_ctx_t gen_ctx, MIR_insn_t tcall) {
+  MIR_proto_t proto = tcall->ops[0].u.ref->u.proto;
+  size_t nargs, int_arg_num = 0, fp_arg_num = 0, n_iregs = 0, n_vregs = 0;
+  MIR_var_t *arg_vars;
+  MIR_insn_code_t mov_code;
+  MIR_type_t type;
+
+  gen_assert (tcall->code == MIR_TCALL);
+  if (proto->vararg_p || curr_func_item->u.func->jret_p) return FALSE;
+  for (size_t i = 0; i < proto->nres; i++) {
+    type = proto->res_types[i];
+    if (type == MIR_T_LD) return FALSE;
+    if (type == MIR_T_F || type == MIR_T_D ? n_vregs++ >= 8 : n_iregs++ >= 8) return FALSE;
+  }
+  if (proto->args == NULL) return TRUE;
+  nargs = VARR_LENGTH (MIR_var_t, proto->args);
+  arg_vars = VARR_ADDR (MIR_var_t, proto->args);
+  for (size_t i = 0; i < nargs; i++) {
+    type = arg_vars[i].type;
+    if (MIR_all_blk_type_p (type) || type == MIR_T_LD
+        || get_arg_reg (type, &int_arg_num, &fp_arg_num, &mov_code) == MIR_NON_VAR)
+      return FALSE;
+  }
+  return TRUE;
+}
+
 static void machinize_call (gen_ctx_t gen_ctx, MIR_insn_t call_insn) {
   MIR_context_t ctx = gen_ctx->ctx;
   MIR_func_t func = curr_func_item->u.func;
@@ -487,6 +517,11 @@ static void machinize_call (gen_ctx_t gen_ctx, MIR_insn_t call_insn) {
     gen_assert (ret_reg_op.mode == MIR_OP_VAR);
     type = proto->res_types[i];
     float_p = type == MIR_T_F || type == MIR_T_D || type == MIR_T_LD;
+    if (call_insn->code == MIR_TCALL) { /* the results are already where our caller wants them */
+      call_insn->ops[i + 2]
+        = _MIR_new_var_op (ctx, float_p ? V0_HARD_REG + n_vregs++ : R0_HARD_REG + n_iregs++);
+      continue;
+    }
     if (float_p && n_vregs < 8) {
       new_insn = MIR_new_insn (ctx,
                                type == MIR_T_F   ? MIR_FMOV
@@ -510,6 +545,10 @@ static void machinize_call (gen_ctx_t gen_ctx, MIR_insn_t call_insn) {
       new_insn = DLIST_NEXT (MIR_insn_t, new_insn);
     }
     create_new_bb_insns (gen_ctx, call_insn, DLIST_NEXT (MIR_insn_t, new_insn), call_insn);
+  }
+  if (call_insn->code == MIR_TCALL) {
+    gen_assert (mem_size == 0);
+    return;
   }
   if (mem_size != 0) {                    /* allocate/deallocate stack for args passed on stack */
     mem_size = (mem_size + 15) / 16 * 16; /* make it of several 16 bytes */
@@ -1237,44 +1276,52 @@ static void target_make_prolog_epilog (gen_ctx_t gen_ctx, bitmap_t used_hard_reg
                              MIR_new_int_op (ctx, small_aggregate_save_area));
     gen_add_insn_before (gen_ctx, anchor, new_insn); /* sp -= <small aggr save area size> */
   }
-  /* Epilogue: */
-  for (anchor = DLIST_TAIL (MIR_insn_t, func->insns); anchor != NULL;
-       anchor = DLIST_PREV (MIR_insn_t, anchor))
-    if (anchor->code == MIR_RET || anchor->code == MIR_JRET) break;
-  if (anchor == NULL) return;
-  /* Restoring hard registers: */
-  offset = frame_size - frame_size_after_saved_regs;
-  for (i = 0; i <= MAX_HARD_REG; i++)
-    if (!target_call_used_hard_reg_p (i, MIR_T_UNDEF) && bitmap_bit_p (used_hard_regs, i)) {
-      if (i < V0_HARD_REG) {
-        gen_mov (gen_ctx, anchor, MIR_MOV, _MIR_new_var_op (ctx, i),
-                 new_hard_reg_mem_op (gen_ctx, anchor, MIR_T_I64, offset, FP_HARD_REG));
-        offset += 8;
-      } else {
-        if (offset % 16 != 0) offset = (offset + 15) / 16 * 16;
-        new_insn = gen_mov (gen_ctx, anchor, MIR_LDMOV, _MIR_new_var_op (ctx, i),
-                            new_hard_reg_mem_op (gen_ctx, anchor, MIR_T_LD, offset, FP_HARD_REG));
-#if defined(__APPLE__)
-        if (new_insn->code == MIR_DMOV) new_insn->code = MIR_LDMOV;
-#endif
-        offset += 16;
-      }
+  /* Epilogue, before the return and each tail call: */
+  for (anchor = DLIST_HEAD (MIR_insn_t, func->insns); anchor != NULL;
+       anchor = DLIST_NEXT (MIR_insn_t, anchor)) {
+    if (anchor->code != MIR_RET && anchor->code != MIR_JRET && anchor->code != MIR_TCALL) continue;
+    if (anchor->code == MIR_TCALL) {
+      /* The callee address can be in a reg the epilogue restores or in a stack slot it
+         frees: take it to x16, which neither the epilogue nor the args use and which is
+         the reg a BTI landing pad accepts an indirect branch through.  */
+      new_insn
+        = gen_mov (gen_ctx, anchor, MIR_MOV, _MIR_new_var_op (ctx, R16_HARD_REG), anchor->ops[1]);
+      anchor->ops[1] = new_insn->ops[0];
     }
-  /* Restore lr, sp, fp */
-  if (!func->jret_p)
-    gen_mov (gen_ctx, anchor, MIR_MOV, _MIR_new_var_op (ctx, LINK_HARD_REG),
-             _MIR_new_var_mem_op (ctx, MIR_T_I64, 8, FP_HARD_REG, MIR_NON_VAR, 1));
-  gen_mov (gen_ctx, anchor, MIR_MOV, treg_op2, fp_reg_op); /* r10 = fp */
-  gen_mov (gen_ctx, anchor, MIR_MOV, fp_reg_op,
-           _MIR_new_var_mem_op (ctx, MIR_T_I64, 0, FP_HARD_REG, MIR_NON_VAR, 1));
-  if (frame_size < (1 << 12)) {
-    new_insn = MIR_new_insn (ctx, MIR_ADD, sp_reg_op, treg_op2, MIR_new_int_op (ctx, frame_size));
-  } else {
-    new_insn = MIR_new_insn (ctx, MIR_MOV, treg_op, MIR_new_int_op (ctx, frame_size));
-    gen_add_insn_before (gen_ctx, anchor, new_insn); /* t(r9) = frame_size */
-    new_insn = MIR_new_insn (ctx, MIR_ADD, sp_reg_op, treg_op2, treg_op);
+    /* Restoring hard registers: */
+    offset = frame_size - frame_size_after_saved_regs;
+    for (i = 0; i <= MAX_HARD_REG; i++)
+      if (!target_call_used_hard_reg_p (i, MIR_T_UNDEF) && bitmap_bit_p (used_hard_regs, i)) {
+        if (i < V0_HARD_REG) {
+          gen_mov (gen_ctx, anchor, MIR_MOV, _MIR_new_var_op (ctx, i),
+                   new_hard_reg_mem_op (gen_ctx, anchor, MIR_T_I64, offset, FP_HARD_REG));
+          offset += 8;
+        } else {
+          if (offset % 16 != 0) offset = (offset + 15) / 16 * 16;
+          new_insn = gen_mov (gen_ctx, anchor, MIR_LDMOV, _MIR_new_var_op (ctx, i),
+                              new_hard_reg_mem_op (gen_ctx, anchor, MIR_T_LD, offset, FP_HARD_REG));
+#if defined(__APPLE__)
+          if (new_insn->code == MIR_DMOV) new_insn->code = MIR_LDMOV;
+#endif
+          offset += 16;
+        }
+      }
+    /* Restore lr, sp, fp */
+    if (!func->jret_p)
+      gen_mov (gen_ctx, anchor, MIR_MOV, _MIR_new_var_op (ctx, LINK_HARD_REG),
+               _MIR_new_var_mem_op (ctx, MIR_T_I64, 8, FP_HARD_REG, MIR_NON_VAR, 1));
+    gen_mov (gen_ctx, anchor, MIR_MOV, treg_op2, fp_reg_op); /* r10 = fp */
+    gen_mov (gen_ctx, anchor, MIR_MOV, fp_reg_op,
+             _MIR_new_var_mem_op (ctx, MIR_T_I64, 0, FP_HARD_REG, MIR_NON_VAR, 1));
+    if (frame_size < (1 << 12)) {
+      new_insn = MIR_new_insn (ctx, MIR_ADD, sp_reg_op, treg_op2, MIR_new_int_op (ctx, frame_size));
+    } else {
+      new_insn = MIR_new_insn (ctx, MIR_MOV, treg_op, MIR_new_int_op (ctx, frame_size));
+      gen_add_insn_before (gen_ctx, anchor, new_insn); /* t(r9) = frame_size */
+      new_insn = MIR_new_insn (ctx, MIR_ADD, sp_reg_op, treg_op2, treg_op);
+    }
+    gen_add_insn_before (gen_ctx, anchor, new_insn); /* sp = r10 + (frame_size|t) */
   }
-  gen_add_insn_before (gen_ctx, anchor, new_insn); /* sp = r10 + (frame_size|t) */
 }
 
 struct pattern {
@@ -1844,6 +1891,7 @@ static const struct pattern patterns[] = {
   {MIR_RET, "$", "d65f0000:fffffc1f hn1e"},       /* ret R30  */
 
   {MIR_JCALL, "X r $", "d61f0000:fffffc00 rn1"}, /* br r1 */
+  {MIR_TCALL, "X r $", "d61f0000:fffffc00 rn1"}, /* br r1: tail call, after the epilogue */
   {MIR_JRET, "r $", "d61f0000:fffffc00 rn0"},    /* br r0  */
 
   /* add r0, r1, 15; and r0, r0, -16; sub sp, sp, r0; mov r0, sp: */

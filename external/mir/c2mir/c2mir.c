@@ -647,6 +647,9 @@ struct node {
      and the N_ENUM arity the rest of the file assumes is unchanged; the checker
      resolves it explicitly. */
   node_t enum_base;
+  /* N_RETURN only: the statement carries __attribute__ ((musttail)) -- its
+     call is generated as a MIR tail call (see N_RETURN in gen). */
+  char musttail_p;
   void *attr; /* used a scope for parser and as an attribute after */
   DLIST_LINK (node_t) op_link;
   union {
@@ -724,6 +727,7 @@ static node_t new_node (c2m_ctx_t c2m_ctx, node_code_t nc) {
   n->uid = curr_uid++;
   n->pack = 0;
   n->enum_base = NULL;
+  n->musttail_p = FALSE;
   DLIST_INIT (node_t, n->u.ops);
   n->attr = NULL;
   set_node_pos (c2m_ctx, n, no_pos);
@@ -5389,14 +5393,39 @@ D (label) {
   return r;
 }
 
+/* Whether the GCC attribute list ATTRS names ATTR (or __ATTR__). */
+static int attrs_have_p (node_t attrs, const char *attr) {
+  size_t len = strlen (attr);
+
+  if (attrs == NULL || attrs == err_node) return FALSE;
+  for (node_t a = NL_HEAD (attrs->u.ops); a != NULL; a = NL_NEXT (a)) {
+    const char *name;
+
+    if (a->code != N_ATTR || (name = NL_HEAD (a->u.ops)->u.s.s) == NULL) continue;
+    if (strcmp (name, attr) == 0
+        || (strncmp (name, "__", 2) == 0 && strncmp (name + 2, attr, len) == 0
+            && strcmp (name + 2 + len, "__") == 0))
+      return TRUE;
+  }
+  return FALSE;
+}
+
 D (stmt) {
   parse_ctx_t parse_ctx = c2m_ctx->parse_ctx;
-  node_t l, n, op1, op2, op3, r;
+  node_t l, n, op1, op2, op3, r, attrs;
   pos_t pos;
 
   l = new_node (c2m_ctx, N_LIST);
   while ((op1 = TRY (label)) != err_node) {
     op_append (c2m_ctx, l, op1);
+  }
+  /* GCC statement attributes: `__attribute__ ((fallthrough));` is a null
+     statement, `__attribute__ ((musttail)) return f (...);` a tail call.  The
+     others are ignored, as on declarations. */
+  attrs = try_attr_spec (c2m_ctx, curr_token->pos, NULL);
+  if (attrs != NULL && attrs != err_node && C (';')) {
+    PT (';');
+    return new_pos_node2 (c2m_ctx, N_EXPR, POS (attrs), l, new_node (c2m_ctx, N_IGNORE));
   }
   if (C ('{')) {
     P (compound_stmt);
@@ -5504,6 +5533,7 @@ D (stmt) {
       PT (';');
     }
     r = new_pos_node2 (c2m_ctx, N_RETURN, pos, l, r);
+    r->musttail_p = attrs_have_p (attrs, "musttail");
   } else { /* expression-statement */
     if (C (';')) {
       r = new_node (c2m_ctx, N_IGNORE);
@@ -11148,6 +11178,30 @@ static void emit_insn (c2m_ctx_t c2m_ctx, MIR_insn_t insn) {
   MIR_append_insn (c2m_ctx->ctx, curr_func, insn);
 }
 
+/* Whether INSN, the last insn generated, is a call returning exactly the
+   current return operands (ret_ops) with the current function's result types:
+   then `__attribute__ ((musttail)) return <call>` can be the call made a MIR
+   tail call.  Anything else -- a conversion of the result, a struct returned in
+   memory -- stays an ordinary call and return. */
+static int musttail_call_p (c2m_ctx_t c2m_ctx, MIR_insn_t insn) {
+  gen_ctx_t gen_ctx = c2m_ctx->gen_ctx;
+  MIR_func_t func = curr_func->u.func;
+  MIR_proto_t proto;
+  MIR_op_t op, res;
+
+  if (insn == NULL || (insn->code != MIR_CALL && insn->code != MIR_INLINE)) return FALSE;
+  proto = insn->ops[0].u.ref->u.proto;
+  if (proto->nres != func->nres || VARR_LENGTH (MIR_op_t, ret_ops) != func->nres) return FALSE;
+  for (uint32_t i = 0; i < func->nres; i++) {
+    op = VARR_GET (MIR_op_t, ret_ops, i);
+    res = insn->ops[i + 2];
+    if (proto->res_types[i] != func->res_types[i] || op.mode != MIR_OP_REG
+        || res.mode != MIR_OP_REG || op.u.reg != res.u.reg)
+      return FALSE;
+  }
+  return TRUE;
+}
+
 /* BCOND T, L1; JMP L2; L1: => BNCOND T, L2; L1:
    JMP L; L: => L: */
 static void emit_label_insn_opt (c2m_ctx_t c2m_ctx, MIR_insn_t insn) {
@@ -15227,8 +15281,14 @@ static op_t gen (c2m_ctx_t c2m_ctx, node_t r, MIR_label_t true_label, MIR_label_
     }
     VARR_TRUNC (MIR_op_t, ret_ops, 0);
     target_add_ret_ops (c2m_ctx, func_type->u.func_type->ret_type, val);
-    emit_insn (c2m_ctx, MIR_new_insn_arr (ctx, MIR_RET, VARR_LENGTH (MIR_op_t, ret_ops),
-                                          VARR_ADDR (MIR_op_t, ret_ops)));
+    if (r->musttail_p && !ret_by_addr_p && scalar_p
+        && musttail_call_p (c2m_ctx, DLIST_TAIL (MIR_insn_t, curr_func->u.func->insns)))
+      /* The return returns exactly what the last call produced: make the call
+         a tail call, which returns them itself. */
+      DLIST_TAIL (MIR_insn_t, curr_func->u.func->insns)->code = MIR_TCALL;
+    else
+      emit_insn (c2m_ctx, MIR_new_insn_arr (ctx, MIR_RET, VARR_LENGTH (MIR_op_t, ret_ops),
+                                            VARR_ADDR (MIR_op_t, ret_ops)));
     break;
   }
   case N_EXPR: {

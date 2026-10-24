@@ -10978,12 +10978,14 @@ int emit_sig_lookup_n_params(const char *cname) {
 /* proper-tail-calls T2b (docs/archive/proper-tail-calls-plan.md, T-D2):
  * `TUR_MUSTTAIL`, written once per program, the first time a tail call is
  * spelled with it.  It expands to `__attribute__((musttail))` only where that
- * is known to hold -- clang on x86-64 / aarch64 -- and to nothing everywhere
- * else: gcc (the attribute arrived in 15 and is not exercised here), c2mir
- * (the JIT's C compiler has no such attribute, and MIR has no general tail
- * call to spell it with -- jit-musttail-expands-to-nothing; `tur jit` hides
- * the gap behind its 1 GiB entry thread), and wasm WITHOUT the tail-call
- * feature (clang rejects musttail there).  `tur build --target wasm` passes
+ * is known to hold -- clang on x86-64 / aarch64, and c2mir, which defines
+ * __MIRC_MUSTTAIL__ and makes the call a MIR tail call (MIR_TCALL: a jump
+ * under the generator when the args are all in registers, a call and a
+ * return in the MIR interpreter -- mir-interp-tail-calls-grow-the-stack) --
+ * and to nothing everywhere else: gcc (the attribute arrived in 15 and is not
+ * exercised here) and wasm WITHOUT the tail-call feature (clang rejects
+ * musttail there).  c2mir gets no TUR_MUSTTAIL_PINS: it has no `__asm__`,
+ * and no dead argument elimination to pin against.  `tur build --target wasm` passes
  * `-mtail-call` by default (`:web :tail-calls`), which defines
  * __wasm_tail_call__ (wasm-target-stack-is-emcc-default).  Where it expands
  * to nothing, the call is exactly the `return f(args);` T2 already emitted.
@@ -10995,8 +10997,8 @@ void ensure_musttail_macro(EmitCtx *ctx) {
     if (!out) return;
     buf_puts(out,
         "/* proper-tail-calls T2b: a guaranteed tail call where the C compiler\n"
-        " * can promise one, and an ordinary `return f(args);` elsewhere -- `tur jit`\n"
-        " * included (c2mir has no musttail; its 1 GiB entry stack hides that). */\n"
+        " * (or c2mir, under `tur jit`) can promise one, and an ordinary\n"
+        " * `return f(args);` elsewhere. */\n"
         "#ifndef TUR_MUSTTAIL\n"
         "#  if defined(__clang__) && defined(__has_attribute) && \\\n"
         "     ((!defined(__wasm__) && (defined(__x86_64__) || defined(__aarch64__))) || \\\n"
@@ -11005,6 +11007,9 @@ void ensure_musttail_macro(EmitCtx *ctx) {
         "#      define TUR_MUSTTAIL __attribute__((musttail))\n"
         "#      define TUR_MUSTTAIL_PINS 1\n"
         "#    endif\n"
+        "#  endif\n"
+        "#  if !defined(TUR_MUSTTAIL) && defined(__MIRC_MUSTTAIL__)\n"
+        "#    define TUR_MUSTTAIL __attribute__((musttail))\n"
         "#  endif\n"
         "#  ifndef TUR_MUSTTAIL\n"
         "#    define TUR_MUSTTAIL\n"
