@@ -115,6 +115,8 @@ web/dist/
 web/test-results/
 web/.vite/
 web/.wrangler/
+# The local Worker's secrets (CI_METRICS_TOKEN for /api/ci/report); never committed.
+web/.dev.vars
 
 # WASM build outputs. `tur_wasm` copies these out of build-wasm/ into
 # web/public/ (src/CMakeLists.txt), where vite picks them up as static assets.

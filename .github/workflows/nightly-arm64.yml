@@ -239,16 +239,14 @@ jobs:
       - name: Build
         run: cmake --build build-release -j
 
-      # The tripwire's history: this and last year's bench rows from ci-metrics.
-      # A first night (no file yet) just has no bounds.
+      # The tripwire's history: the last 60 nights of bench rows, from the /ci
+      # store (web/ci-api.js), in the shape bench-rows.py writes them. A first
+      # night (nothing stored yet) just has no bounds.
       - name: Fetch the benchmark history
         continue-on-error: true
         run: |
-          git fetch --depth=1 origin ci-metrics:refs/remotes/origin/ci-metrics
-          y=$(date -u +%Y)
-          for yr in "$((y - 1))" "$y"; do
-            git show "origin/ci-metrics:bench-${yr}.jsonl" >> bench-history.jsonl 2>/dev/null || true
-          done
+          curl -fsS --retry 3 -o bench-history.jsonl \
+            "https://turmeric-lang.com/api/ci/bench?format=ndjson&days=60"
           echo "history: $(wc -l < bench-history.jsonl 2>/dev/null || echo 0) row(s)"
 
       - name: Run the tracked benchmarks (serial, best of 3)
@@ -330,4 +328,20 @@ jobs:
           [ -s "$b" ] || echo "::warning::no nightly benchmark rows collected; publishing the suite timings alone"
           rows() { if [ -s "$1" ]; then wc -l < "$1" | tr -d ' '; else echo 0; fi; }
           echo "publishing $(rows "$t") suite row(s), $(rows "$b") bench row(s)"
+
+      # The store /ci reads, as in ci.yml's publisher. report-metrics.py warns
+      # about a missing file and reports the rest.
+      - name: Report to the /ci store
+        env:
+          CI_METRICS_TOKEN: ${{ secrets.CI_METRICS_TOKEN }}
+        run: python3 tools/ci/report-metrics.py nightly-artifact/timings.jsonl --bench bench-artifact/bench.jsonl
+
+      # Kept until the plan's retirement phase; independent of the step above.
+      - name: Append to the ci-metrics branch
+        if: always()
+        run: |
+          set -euo pipefail
+          t=nightly-artifact/timings.jsonl
+          b=bench-artifact/bench.jsonl
+          if [ ! -s "$t" ] && [ ! -s "$b" ]; then exit 0; fi
           bash tools/ci/publish-timings.sh "$t" --bench "$b"

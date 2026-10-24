@@ -100,6 +100,42 @@ tur run deploy-web
 
 This will deploy the web app to GitHub Pages.
 
+## The /ci dashboard and its D1 store
+
+`/ci` (`ci/index.html`, `ci-metrics.js`) reads `/api/ci/*`, which `worker.js`
+hands to `ci-api.js`. That module keeps a Cloudflare D1 database, `ci-metrics`
+(binding `CI_DB` in `wrangler.jsonc`, schema in `migrations/`), and CI writes
+each push's rows into it through `POST /api/ci/report` with
+`tools/ci/report-metrics.py`. `ci-aggregate.js` holds the data rules (env
+order, series names, daily medians, the test-count carry-forward) that the
+Worker, the page and the page tests all share. Design and rationale:
+`docs/upcoming/ci-metrics-d1-plan.md`.
+
+Every read except `/api/ci/meta` carries the newest ingest id (`?v=`). Those
+responses are immutable, and a stale `v` is redirected to the current one.
+
+Locally, `npm run dev` runs the Worker against a local D1 under
+`.wrangler/state`. To see the page with data:
+
+```bash
+npx wrangler d1 migrations apply ci-metrics --local
+echo 'CI_METRICS_TOKEN=dev' > .dev.vars      # the report endpoint's token
+npx vite --port 3100 --strictPort           # any port but 3000
+# From the repo root, with a checkout of the ci-metrics branch in /tmp/cim:
+CI_METRICS_TOKEN=dev CI_METRICS_URL=http://localhost:3100/api/ci/report \
+  python3 tools/ci/report-metrics.py --backfill /tmp/cim
+```
+
+The Playwright run does not touch that database: `tests/ci-d1-setup.mjs` gives
+its server a fresh one under `.wrangler/ci-test-state-<port>` and a test token
+(see `playwright.config.js`).
+
+In production, a schema change is a new file in `migrations/`, applied with
+`npx wrangler d1 migrations apply ci-metrics --remote` **before** deploying
+code that needs it. The report token is a Worker secret
+(`wrangler secret put CI_METRICS_TOKEN`) and a repository secret of the same
+name.
+
 ## Project Structure
 
 ```

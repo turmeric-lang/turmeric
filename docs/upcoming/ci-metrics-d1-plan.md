@@ -1,11 +1,17 @@
 # CI Metrics in D1 -- CI reports to the Worker, /ci reads chart-ready data
 
-> **Status: DRAFT (2026-10-23).** Not started. Replaces the `ci-metrics`
-> orphan branch as the store behind /ci. Needs two things only the owner can
-> do first (see "Prerequisites"). The owner has signed off on everything this
-> gives up (git history of the data, the year files, raw-row access via
-> GitHub): none of it is kept or replaced. The account is on the Workers Paid
-> plan (confirmed 2026-10-23), so responses are computed on a cache miss.
+> **Status: PHASES 1-3 IMPLEMENTED (2026-10-23), in one PR (#1355) at the
+> owner's request; live once that PR is merged and the site deployed. Phase 4
+> (retirement) is open.** Replaces the `ci-metrics` orphan branch as the store
+> behind /ci. The prerequisites are done: database `ci-metrics`
+> (`b25ff4cf-0e0c-4233-b79a-b15147fa4a6e`) exists with the schema applied, and
+> `CI_METRICS_TOKEN` is set as a Worker secret and a repository secret. The
+> history through 2026-10-23 22:25 UTC is already in it (see "Backfill"). The
+> owner has signed off on everything this gives up (git history of the data,
+> the year files, raw-row access via GitHub): none of it is kept or replaced.
+> The account is on the Workers Paid plan (confirmed 2026-10-23), so responses
+> are computed on a cache miss. What implementation changed from this draft is
+> in "As built", at the end.
 
 ## Why
 
@@ -326,7 +332,9 @@ overwritten, not doubled.
 4. **Retirement.** Everything in the list above. The bench tripwire reads the
    API.
 
-Each phase is its own PR from `main`.
+Phases 1-3 shipped together in #1355 (the owner chose one PR over three).
+Phase 4 is its own PR from `main`, after the store has run in production for a
+while.
 
 ## Testing
 
@@ -372,3 +380,62 @@ documentation. Check them before relying on them.
 - **`json_each` statement size.** One push's array is ~120 KB, under D1's
   statement and bound-value size limits. A backfill chunk of 2,000 rows is
   ~750 KB. Lower the chunk size if that is rejected.
+
+## As built (2026-10-23)
+
+What implementation measured or changed relative to the draft above.
+
+- **Files.** `web/migrations/0001_ci_metrics.sql`; `web/ci-api.js` (every
+  `/api/ci/*` route); `web/ci-aggregate.js` (the shared rules);
+  `tools/ci/report-metrics.py` (report and `--backfill`); `web/ci-metrics.js`
+  (the page, on the new endpoints); `web/tests/ci-api.spec.js` (D1 round
+  trips) and `web/tests/ci-d1-setup.mjs` (the test server's own local D1).
+- **D1 limits, checked against Cloudflare's docs:** 100 KB per statement, 100
+  bound parameters, 1,000 queries per invocation (Paid), and **2 MB per bound
+  value**. The draft bound each array as one JSON string, so a report over
+  2 MB would have failed. `ci-api.js` splits any array over 1 MB into several
+  statements in the same batch, so it stays one transaction.
+- **The service worker cached `/api/*`.** `/sw.js` registers with scope `/`
+  from /try and answered everything it did not recognize cache-first. Any
+  browser that had opened /try therefore served /ci one fetch stale, and would
+  have kept `/api/ci/meta` one ingest behind forever. It would also have stored
+  a copy of every versioned response. `sw.js` now leaves `/api/` alone.
+- **Duplicate rows collapse.** 70 key pairs on the branch (`tur_flags_tests`,
+  2026-10-03..04, when it ran in two jobs of one environment) share a primary
+  key, so D1 keeps the later row of each: 174,123 rows in, 174,053 stored.
+  That episode drew a zig-zag, which this removes.
+- **Env keys stay strings.** `/api/ci/meta` returns each environment's
+  existing `envKey()` string, and `/api/ci/timings?env=` takes it, so `?env=`
+  links keep working. Two `env` rows that differ only in `sanitize` merge
+  under one key (none do today).
+- **Daily medians are computed in SQL** (window functions). The same rule is
+  `dailyMedians()` in JS, which the page-test stubs use, and
+  `ci-api.spec.js` holds the two equal. **Test counts are computed in JS** on the
+  Worker, from the counted rows (31k), with the page's own
+  `suiteCounts()`/`countTimeline()`, now in `ci-aggregate.js`.
+- **The page tests stub with the server's code.** The `/api/ci/*` stubs in
+  `ci.spec.js` build each response with `ci-aggregate.js`, the module the
+  Worker uses, so a stub cannot drift from a real response.
+- **Measured, real data (all 174k rows, local D1, 2026-10-23):** the default
+  view (broadest environment, 7d) is 313 KB raw, **94 KB gzipped**. 30d is
+  27 KB gzipped, all time 28 KB, counts 7 KB, loc 13 KB, docs 8 KB, meta under
+  1 KB. A repeat request for the same version comes from the Workers cache. The
+  server's timings, daily medians, env order and count timeline were checked
+  equal to the JS rules over the same rows, for the broadest and narrowest
+  environments at every range.
+- **Backfill** went in through the real endpoint into a local D1 (174,581 rows
+  on the branch at 22:25 UTC; 10 s for ~90 requests), then was copied to the
+  remote database as SQL, so /ci has its history from the first deploy. Pushes
+  after that and before the deploy land only on the branch (the endpoint does
+  not exist in production until the deploy), so after deploying, run the
+  idempotent backfill once more from a fresh checkout of the branch:
+  `CI_METRICS_TOKEN=$(cat ~/.config/turmeric/ci-metrics-token)
+  python3 tools/ci/report-metrics.py --backfill <checkout>`.
+- **Both writers run in phases 1-3.** Each publish job reports to D1 first,
+  then appends to the branch in an `if: always()` step, so either failing
+  leaves the other's copy whole. The nightly's tripwire history already reads
+  `/api/ci/bench?format=ndjson&days=60`.
+- **Not changed:** the "latest run" the tiles and skip ledger read is still
+  "rows with the environment's newest `ts`". Each CI job stamps its own `ts`,
+  so that is often one job's handful of suites, not the whole run. It was
+  already so, and it is unchanged here.
