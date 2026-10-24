@@ -529,10 +529,10 @@
 ;;; Since: LZ4
 
 (defn range-encloses? [r : Range other : Range] : bool
-  (let [rl (range-lower r)
-        ru (range-upper r)
-        ol (range-lower other)
-        ou (range-upper other)
+  (let [rl       (range-lower r)
+        ru       (range-upper r)
+        ol       (range-lower other)
+        ou       (range-upper other)
         lower-ok (if (bound-unbounded? rl)
                    true
                    (if (bound-unbounded? ol)

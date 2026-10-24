@@ -13,6 +13,8 @@
 ;; A program, not a module: gendocs skips stdlib/tools/.
 (load "stdlib/args.tur")
 
+(load "stdlib/cstr.tur")
+
 (load "stdlib/fs.tur")
 
 (load "stdlib/httpd.tur")
@@ -84,8 +86,8 @@
 ;;; serve/isolate-mode? -- true for a value --isolate takes.
 (defn serve/isolate-mode? [mode : cstr] : bool
   (or (= 0 (serve/cstr-cmp mode "off"))
-      (= 0 (serve/cstr-cmp mode "require-corp"))
-      (= 0 (serve/cstr-cmp mode "credentialless"))))
+    (= 0 (serve/cstr-cmp mode "require-corp"))
+    (= 0 (serve/cstr-cmp mode "credentialless"))))
 
 ;;; serve/isolate -- wrap `next` so every response carries
 ;;; Cross-Origin-Opener-Policy: same-origin and Cross-Origin-Embedder-Policy:
@@ -145,7 +147,11 @@
     (args/spec-option spec "--bind" "addr" (Some "127.0.0.1"))
     (args/spec-option spec "--index" "name" (Some "index.html"))
     (args/spec-flag spec "--no-listing")
-    (args/spec-option-implicit spec "--isolate" "mode" (Some "off") "require-corp")
+    (args/spec-option-implicit spec
+      "--isolate"
+      "mode"
+      (Some "off")
+      "require-corp")
     (args/spec-flag spec "--quiet")
     (args/spec-short spec "-p" "--port")
     (args/spec-short spec "-b" "--bind")
@@ -184,12 +190,13 @@
             true
             2))
         (when (not (serve/isolate-mode? (args/get-str res "isolate")))
-          (serve/fail spec
-            res
-            (str-concat "--isolate takes off, require-corp or credentialless (got '"
-              (str-concat (args/get-str res "isolate") "')"))
-            true
-            2))
+          ;; The tail is freed here: serve/fail exits, and LeakSanitizer
+          ;; counts an intermediate nothing points at any more.
+          (let [got (str-concat (args/get-str res "isolate") "')")
+                msg (str-concat "--isolate takes off, require-corp or credentialless (got '"
+                      got)]
+            (cstr-free got)
+            (serve/fail spec res msg true 2)))
         (let [base    (fn [c : ptr<void>] : nil
                         (httpd-resp-status! c 404)
                         (httpd-resp-body! c "Not Found"))
