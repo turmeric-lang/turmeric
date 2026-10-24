@@ -1,0 +1,42 @@
+;; cps-catch-unwind-cannot-cross-an-effect-capture, the clause half: a
+;; `catch-unwind` written in a handler CLAUSE.  Compiled, the case holds a
+;; catch prompt on a chain of its own (its `__kont`), with the rest of the
+;; case past it, so a panic the resumed body raises -- coming back to the
+;; clause through the resume -- is caught there.  The clause's own panics are
+;; caught the same way, and a re-performing clause can still resume after its
+;; catch.  All three engines.
+(defeffect Ask [] : int)
+
+(defn panics [] : int
+  (defer (println "panics: defer ran"))
+  (+ 1 (if (> (perform (Ask)) 0) (panic "boom") 0)))
+
+(defn plain [] : int
+  (defer (println "plain: defer ran"))
+  (+ 1 (perform (Ask))))
+
+(defn two-asks [] : int
+  (+ (perform (Ask)) (perform (Ask))))
+
+(defn main [] : int
+  ;; 1. the resumed body panics: Err in the clause (the report's third row)
+  (println (handle (panics) (Ask [] k)
+             (let [r (catch-unwind (fn [] : int (resume k 5)))]
+               (if (err? r) 100 200))))
+  ;; 2. the resumed body returns: Ok of the handle's answer
+  (println (handle (plain) (Ask [] k)
+             (let [r (catch-unwind (fn [] : int (resume k 5)))]
+               (if (err? r) 100 (+ 1000 (ok-val r))))))
+  ;; 3. the clause's own panic, caught there, then a resume after the catch
+  (println (handle (plain) (Ask [] k)
+             (let [r (catch-unwind (fn [] : int (if (> 1 0) (panic "own") 5)))]
+               (resume k (if (err? r) 40 50)))))
+  ;; 4. a perform per call: each clause holds its own catch
+  (println (handle (two-asks) (Ask [] k)
+             (let [r (catch-unwind (fn [] : int (resume k 3)))]
+               (if (err? r) 100 (ok-val r)))))
+  ;; 5. a ^multishot k resumed twice, each resume under its own catch
+  (println (handle (panics) (Ask [] ^multishot k)
+             (+ (let [a (catch-unwind (fn [] : int (resume k 0)))] (if (err? a) 10 (ok-val a)))
+                (let [b (catch-unwind (fn [] : int (resume k 1)))] (if (err? b) 20 (ok-val b))))))
+  0)

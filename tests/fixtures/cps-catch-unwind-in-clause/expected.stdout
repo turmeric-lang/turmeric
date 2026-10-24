@@ -1,0 +1,10 @@
+panics: defer ran
+100
+plain: defer ran
+1006
+plain: defer ran
+41
+6
+panics: defer ran
+panics: defer ran
+21
