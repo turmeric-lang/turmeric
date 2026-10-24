@@ -228,6 +228,14 @@ planned; [Progress](#progress-2026-10-24) says where each stands.
   `tur_r7rs_segmented_stack_seam`): every `#lang r7rs` fixture with the flag
   and an 8 MiB base stack (`SEG_ARM=on`), or under the hatch (`SEG_ARM=off`),
   against its expected output, behind a canary that the hatch bites.
+- **Results (2026-10-24, Linux x86-64):** the seam, 135 of 135 r7rs fixtures
+  on each arm; `run-r7rs-gc.sh` with the flag on (through a `TUR` that adds
+  `--enable=r7rs-segmented-stack`), 269 of 269; `bash tests/run.sh` without
+  the flag, 4149 passed and 0 failed; the check, natively and as arm64 under
+  qemu. At `-O0` with `TUR_SEG_BASE_MB=8` a CPS-colored recursion overflows
+  the 8 MiB base stack, as the base stack's note above says it would (its
+  calls are real calls there and pass no check); the default 1 GiB base
+  stack is why that never shows.
 
 ### What landed (2026-10-23)
 
