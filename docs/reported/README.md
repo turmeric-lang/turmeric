@@ -34,6 +34,12 @@ sentence above does not cover them. If you touch this file, check
 `ls docs/reported/` against it -- an index that silently omits a quarter of the
 directory is worse for triage than no index.
 
+## Found asking whether `let` should become `let*` (filed 2026-10-24)
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [let-star-redundant-with-sequential-let](let-star-redundant-with-sequential-let.md) | low | `let` is already sequential, so `let*` is a second spelling of it (no run-time cost either way); proposes deprecating it in the Turmeric dialects (r7rs untouched). `quickstart.md:77-78` wrongly says `let` bindings cannot see each other and to nest `let`s. Also lists nested-`let` chains that could be one sequential `let` |
+
 ## Found adding trend lines and zoom to /ci (filed 2026-10-24)
 
 | Report | Severity | One line |
