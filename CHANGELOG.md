@@ -2,6 +2,49 @@
 
 All notable changes to Turmeric are documented here.
 
+## [0.70.6] -- 2026-10-24
+
+### Added
+
+- **`tur serve --isolate[=MODE]`.** Every response carries
+  `Cross-Origin-Opener-Policy: same-origin` and `Cross-Origin-Embedder-Policy:
+  MODE`, so a served page can be cross-origin isolated (SharedArrayBuffer, WASM
+  threads). Options declared in `args.tur` may now take an optional value: bare
+  `--name` means an implicit value and never swallows the next word.
+- **One-argument `-` and `-.` negate on the builtin kinds.** `(- x)` works
+  directly on int, float and the sized kinds; integers wrap at their own width
+  and `-INT64_MIN` is no longer a signed overflow.
+
+### Changed
+
+- **`TUR_MUSTTAIL` is a real tail call under c2mir.** With the vendored MIR's
+  tail-call support, `tur jit` lowers a musttail return to a jump, so deep tail
+  recursion no longer grows the entry stack; the JIT guide says so.
+- **Try Turmeric polishes its chrome.** The editor action row leads with the
+  Turmeric mark, and the phone docs sheet's Back control is a return-arrow icon
+  button sized to match the Contents toggle.
+
+### Deprecated
+
+- **`let*` in the Turmeric dialects (TUR-D0006).** `let` already binds in order,
+  so `let*` was a second spelling of it; the compiler now warns (an error under
+  `--Werror=deprecated`). `#lang r7rs` sources keep the spec's meaning, and the
+  guides now teach sequential `let`.
+
+### Removed
+
+- **The generated FFI shape table is gone.** Variadic spice exports now get an
+  `__ffi` shim like every other export, so a build without the JIT no longer
+  needs the 381-trampoline table. Calling an export whose library has neither a
+  JIT thunk nor a shim now says to rebuild the spice; spices built before
+  2026-07-22 need a rebuild on JIT-less builds.
+
+### Fixed
+
+- **`(neg 0.0)` keeps the sign.** The builtin Num instances spelled `neg` as `(-
+  0 x)`, which yields `+0.0` at zero; they now use `(- x)`, and the interpreter
+  negates the same way as the compiler.
+
 ## [0.70.5] -- 2026-10-24
 
 ### Added
