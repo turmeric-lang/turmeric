@@ -13,6 +13,18 @@
   "compatibility_flags": [
     "nodejs_compat"
   ],
+  // The store behind /ci (ci-api.js, docs/upcoming/ci-metrics-d1-plan.md).
+  // Schema: migrations/, applied with `wrangler d1 migrations apply ci-metrics
+  // --remote`. CI_METRICS_TOKEN, the bearer token CI reports with, is a secret
+  // (`wrangler secret put CI_METRICS_TOKEN`), never a var here.
+  "d1_databases": [
+    {
+      "binding": "CI_DB",
+      "database_name": "ci-metrics",
+      "database_id": "b25ff4cf-0e0c-4233-b79a-b15147fa4a6e",
+      "migrations_dir": "migrations"
+    }
+  ],
   "routes": [
     { "pattern": "turmeric-lang.com", "custom_domain": true },
     { "pattern": "www.turmeric-lang.com", "custom_domain": true }

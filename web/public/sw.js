@@ -268,6 +268,13 @@ self.addEventListener('fetch', (event) => {
     const url = new URL(request.url);
     if (url.origin !== self.location.origin) return;
 
+    // The Worker's API is never this worker's to cache. /api/ci/meta must be
+    // fresh -- answered cache-first it would hold /ci one ingest behind
+    // forever -- and the versioned /api/ci/* reads are immutable, which the
+    // browser's own HTTP cache already honors; storing every version here too
+    // would only grow the runtime cache by a copy per push.
+    if (url.pathname.startsWith('/api/')) return;
+
     // pack-status is written by this worker, not served by the origin. Answer
     // it straight from the cache so it never costs a doomed network round-trip.
     if (url.pathname === PACK_STATUS_URL) {
