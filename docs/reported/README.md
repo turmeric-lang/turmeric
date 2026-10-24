@@ -34,6 +34,12 @@ sentence above does not cover them. If you touch this file, check
 `ls docs/reported/` against it -- an index that silently omits a quarter of the
 directory is worse for triage than no index.
 
+## Found checking the installed-spice `:bin` conflict exemption (filed 2026-10-24)
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [installed-bin-entry-modules-still-importable](installed-bin-entry-modules-still-importable.md) | low-medium (silent wrong resolution) | The conflict check skips `:bin` entry files, but `spice_search` still puts them on the path, so a project-less `(import main)` picks the first installed tool's entry and hides the rest. A bin-name collision between `--path` installs is also refused as "not owned by tur" |
+
 ## Found checking two agent claims: wasm stack depth, diag file 0 (filed 2026-10-24)
 
 | Report | Severity | One line |
