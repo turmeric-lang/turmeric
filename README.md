@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/turmeric-lang/turmeric/actions/workflows/ci.yml/badge.svg)](https://github.com/turmeric-lang/turmeric/actions/workflows/ci.yml)
 
-**Latest release:** `v0.70.4` -- The /ci metrics page now reads a compact D1-backed store, cutting the default view from 12.8 MB to about 95 KB and showing a clear error instead of spinning forever when loading fails.
+**Latest release:** `v0.70.5` -- `/ci` charts gain drag-to-zoom, a denoised Trend view and per-runner CPU filtering, while shift/reset semantics now agree between `tur` and `turi` and several closure and aggregate leaks are fixed.
 
 ## What
 
