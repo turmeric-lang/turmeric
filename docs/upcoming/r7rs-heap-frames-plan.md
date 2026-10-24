@@ -3,8 +3,9 @@
 > **Status:** BETA behind `--enable=r7rs-segmented-stack` since 2026-10-24
 > (prototype since 2026-10-23), `expires_at` 0.71.0. READY TO GRADUATE: every
 > stage is done on Linux x86-64 and arm64 (arm64 run under qemu), and what is
-> left is the gate drop alone -- held only by the graduation condition, which
-> is the owner's call ([Graduation](#graduation-what-is-left)). On every other
+> left is the gate drop alone. **The owner ruled 2026-10-24: graduate it** --
+> the hold condition is lifted, and the gate drop lands after the next version
+> bump ([Graduation](#graduation-what-is-left)). On every other
 > host -- macOS, Windows, `tur jit`, 32-bit -- the check compiles to nothing
 > and the 1 GiB stack stays: that is the graduated contract
 > ([Platforms](#platforms-the-graduated-contract)), with macOS and Windows
@@ -15,7 +16,8 @@
 > (PR #1082: `main` runs on a 1 GiB thread, and an overflow prints a message).
 > **Was on hold until:** a real program needs more than 1 GiB of stack, or a
 > `call/cc`-heavy program's capture cost is dominated by stack depth. It was
-> picked up on request; graduation still wants one of those.
+> picked up on request. Graduation waited on one of those until the owner
+> lifted the condition on 2026-10-24 (see [Graduation](#graduation-what-is-left)).
 
 ## Why this exists
 
@@ -393,7 +395,9 @@ proof on that host's CI; neither changes the contract above until it lands.
 
 ## Graduation: what is left
 
-**The gate drop is all that is left**, and it is not taken here. Dropping it
+**The gate drop is all that is left.** The owner ruled on 2026-10-24 that the
+feature graduates; the drop itself lands after the next version bump, with the
+owner doing it, alongside the `quote-data` and `discontinue` drops. Dropping it
 (the EXPERIMENTS[] row to GRADUATED[], `g_opt_r7rs_segmented_stack` on by
 default for `#lang r7rs`) turns the check on in every compiled Scheme program
 on Linux x86-64 and arm64. Three things go with it, all ready:
@@ -406,8 +410,9 @@ on Linux x86-64 and arm64. Three things go with it, all ready:
   recursion a million deep dies with a bare SIGSEGV and no message (the
   overflow handler covers the deep-stack thread only); a fiber that recurses
   too deep runs off its `malloc`'d stack into the heap. With the flag both are
-  handled (the thread grows; the fiber stops with the message). Whether that
-  meets the hold condition is the owner's call; this plan does not make it.
+  handled (the thread grows; the fiber stops with the message).
+  **Ruled 2026-10-24: the owner lifted the hold condition -- graduate.** The
+  8 MiB worker-thread SIGSEGV above is the concrete case it fixes today.
 - **The bisection hatch:** `TUR_R7RS_SEGMENTED_STACK=0`, both halves already
   in (above). After graduation it is the A/B switch: set when compiling, the
   C is what a build gets today without the flag; set when running, no thread
@@ -429,8 +434,9 @@ where a cycle needs it) if typed code ever wants it.
 ### Left, in order
 
 1. **Graduate** -- the gate drop, the seam's inversion and the fixture's
-   `flags`, above -- once the owner rules on the hold condition. Due by
-   `expires_at` 0.71.0 (advisory).
+   `flags`, above. Approved 2026-10-24 (the hold condition is lifted); the
+   owner takes the drop after the next version bump. Due by `expires_at`
+   0.71.0 (advisory).
 2. **After graduation, not blocking it:** `nightly-arm64.yml` running the ctest
    on real arm64 hardware (it ran under qemu only), and the seam's both arms
    there.

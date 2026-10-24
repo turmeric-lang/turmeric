@@ -490,7 +490,9 @@ static const ExperimentDescriptor EXPERIMENTS[] = {
      * armed), and tests/run-r7rs-segmented-stack-seam.sh inverts to SEG_ARM=off
      * then.  Elsewhere -- macOS, Windows, `tur jit`, other architectures --
      * the check compiles to nothing and the 1 GiB deep stack stays: the
-     * graduated contract (the plan, "Platforms"). */
+     * graduated contract (the plan, "Platforms").  Graduation APPROVED
+     * 2026-10-24 (the plan's hold condition lifted by its owner); the gate
+     * drop lands after the next version bump. */
     { "r7rs-segmented-stack",
       "a compiled `#lang r7rs` procedure checks the stack limit at entry and grows onto a new segment",
       "docs/upcoming/r7rs-heap-frames-plan.md",
