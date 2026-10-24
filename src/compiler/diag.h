@@ -432,7 +432,7 @@ typedef enum DiagCode {
      * because it reports a live trust-boundary fact and changes no behavior;
      * escalating warn -> refuse-the-override is a later, gated step. */
     TUR_W0383_READS_FRAME_OMITS_MUTABLE,
-    /* reflected-measures (docs/upcoming/reflected-measures-plan.md), behind
+    /* reflected-measures (docs/archive/reflected-measures-plan.md), behind
      * `--enable=reflected-measures`.  The plan reserved E0383/W0384; W0383
      * had been taken by `#reads` by land time, so the pair sits one up.
      * E0384 -- a `^reflect` function failed the TOTALITY gate: it is not

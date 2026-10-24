@@ -2188,7 +2188,7 @@ static const DiagExplanation diag_explanations_[] = {
       "This is NOT a termination checker for programs.  A function that is\n"
       "never `^reflect`ed is untouched; only a function whose equation you\n"
       "asked to admit into the logic must be shown total.  Behind\n"
-      "`--enable=reflected-measures`; see docs/upcoming/reflected-measures-plan.md.\n" },
+      "`--enable=reflected-measures`; see docs/archive/reflected-measures-plan.md.\n" },
     { TUR_W0385_REFLECT_FUEL_EXHAUSTED,
       "TUR-W0385: `^reflect` unfolding fuel exhausted; obligation left unknown\n"
       "\n"

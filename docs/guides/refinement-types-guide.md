@@ -722,7 +722,7 @@ by a `let` first: the binding's equation defines the variable for the search.
 `REJECTED gate=... reason=...`). Without the flag, `^reflect` warns that it
 is ignored and the measure stays opaque. The plan, with what each phase
 settled and what graduation waits on, is
-[reflected-measures-plan.md](https://github.com/turmeric-lang/turmeric/blob/main/docs/upcoming/reflected-measures-plan.md)
+[reflected-measures-plan.md](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/reflected-measures-plan.md)
 (the docs pack carries guides, not plans, so the link is by URL).
 
 ---

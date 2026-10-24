@@ -414,7 +414,7 @@ extern bool g_opt_saffron_gc;
  * SourceFile.reader_type == READER_R7RS, all per-FILE, where this is
  * per-build. */
 extern bool g_opt_r7rs;
-/* reflected-measures (docs/upcoming/reflected-measures-plan.md, RF0): the
+/* reflected-measures (docs/archive/reflected-measures-plan.md, RF0): the
  * `--enable=reflected-measures` bit.  When on, a `^reflect` defn is
  * registered for the deferred totality pass (elab_reflect.c) and, once it
  * passes, its defining equation is admitted to the refinement encoder by

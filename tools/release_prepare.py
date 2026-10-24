@@ -47,7 +47,7 @@ import urllib.request
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 # Measured on v0.62.0..v0.63.0 and v0.61.0..v0.62.0 against the hand-cut
-# entries (docs/upcoming/ci-release-workflows-plan.md, "Model choice").
+# entries (docs/archive/ci-release-workflows-plan.md, "Model choice").
 DEFAULT_MODELS = ["zai-glm-latest@low", "mistral-medium-latest", "mistral-small-latest"]
 
 SECTIONS = ["Added", "Changed", "Deprecated", "Removed", "Fixed", "Docs"]

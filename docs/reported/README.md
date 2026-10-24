@@ -727,7 +727,7 @@ question 3 as Option A.
 
 Found reviewing the two live `EXPERIMENTS[]` rows --
 [loop-invariants](../archive/loop-invariants-plan.md) (`expires_at 0.58.0`,
-so due) and [reflected-measures](../upcoming/reflected-measures-plan.md)
+so due) and [reflected-measures](../archive/reflected-measures-plan.md)
 (`expires_at 0.61.0`, not due) -- against what graduating each would freeze.
 Every row below was reproduced against a v0.59.0 Debug build. None is a
 soundness bug: in all four the runtime check is kept, so the programs are
