@@ -1,6 +1,7 @@
 Serving site on http://127.0.0.1:PORT/ (Ctrl-C to stop)
 / -> 200
   body: <p>home</p>
+  coop=none coep=none
 /sub -> 301 location=/sub/
 /sub/ -> 200
   <a href="../">../</a>
@@ -22,10 +23,22 @@ Serving site on http://127.0.0.1:PORT/ (Ctrl-C to stop)
 / -> 200
 /sub/ -> 404
 quiet log lines: 0
+Serving site on http://127.0.0.1:PORT/ (Ctrl-C to stop)
+/ -> 200
+  coop=same-origin coep=require-corp
+/nope -> 404
+  coop=same-origin coep=require-corp
+Serving site on http://127.0.0.1:PORT/ (Ctrl-C to stop)
+/ -> 200
+  coop=same-origin coep=credentialless
+Serving site on http://127.0.0.1:PORT/ (Ctrl-C to stop)
+/ -> 200
+  coop=none coep=none
 Serving . on http://127.0.0.1:PORT/ (Ctrl-C to stop)
 serve --frob -> exit 2 (tur serve: unknown flag: --frob)
 serve -p 70000 -> exit 2 (tur serve: --port takes a number from 0 to 65535)
 serve no-such-dir -> exit 2 (tur serve: not a directory: no-such-dir)
 serve a b -> exit 2 (tur serve: expected at most one directory)
 serve --bind nope -> exit 2 (tur serve: --bind takes any, localhost, or a numeric address)
+serve --isolate=strict -> exit 2 (tur serve: --isolate takes off, require-corp or credentialless (got 'strict'))
 Usage: tur serve [dir] [options]

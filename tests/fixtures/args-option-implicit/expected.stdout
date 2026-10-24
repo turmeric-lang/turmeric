@@ -1,0 +1,31 @@
+absent:
+off
+8000
+dist
+bare:
+require-corp
+8000
+(none)
+valued:
+credentialless
+8000
+(none)
+bare then positional:
+require-corp
+8000
+dist
+short:
+require-corp
+8000
+dist
+beside a spaced option:
+require-corp
+9000
+(none)
+unknown still errors:
+unknown flag: --isolatee
+Usage: program [options]
+
+Options:
+  --port=<int>  (default: 8000)
+  --isolate[=<mode>]  (default: off; bare: require-corp)
