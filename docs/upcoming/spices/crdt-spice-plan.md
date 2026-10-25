@@ -8,8 +8,8 @@
 > for all eight C1-C3 types, and `crdt/rga`, the sequence. Eleven suites, all
 > green on both CI platforms. The two typeclass defects below, and every
 > defect the C1-C3 build filed, are fixed and archived.
-> **Spice follow-ups done 2026-10-25** as 0.3.0 (turmeric-spices branch
-> `claude/crdt-plan-followups`): `ReplicaId` is a `defopaque` over `Sym` in
+> **Spice follow-ups done 2026-10-25** as 0.3.0 (turmeric-spices #115,
+> `e4707e2`): `ReplicaId` is a `defopaque` over `Sym` in
 > a new `crdt/replica` module and every type takes it (C1); `gset-add` uses
 > the typed `set-add1` (C2); `bench/join.tur` is the section 7 benchmark,
 > and it found `orset-apply` rebuilding the whole state for an add delta,

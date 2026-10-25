@@ -42,6 +42,12 @@ directory is worse for triage than no index.
 | [ok-nil-lowercase-miscompiles](ok-nil-lowercase-miscompiles.md) | low-medium | `(ok nil)` for a `(Result nil E)` monomorphises `ok` with a `void` parameter -- two C errors; `(Ok nil)` works |
 | [bare-nullary-ctor-as-value-emits-undeclared-c](bare-nullary-ctor-as-value-emits-undeclared-c.md) | low | `(let [c Red] ...)` / `[Red Green]` -- a bare nullary constructor as a value -- emits an undeclared C identifier; `(Red)` works |
 
+## Found re-checking the ADT/GADT unification's representation change (filed 2026-10-25)
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [parametric-sum-stays-on-carrier](parametric-sum-stays-on-carrier.md) | low (performance) | A parametric sum's bare name always `malloc`s onto the int64 carrier, even with a phantom parameter or every result pinned to one instantiation (`adt_sr1_sum_candidate` refuses `n_type_params != 0`). Its applied self-recursive monomorph `(L int)` stays on the carrier too, because RM4 flipped only the non-parametric side to by value. So `GVec` and `SizedVec` gained nothing from the unification's slice 3 |
+
 ## Found moving crdt's ReplicaId to a newtype (filed 2026-10-25)
 
 | Report | Severity | One line |
