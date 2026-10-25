@@ -106,7 +106,10 @@ and the cap.
   per call. Code that never goes deep never sees a second segment. The
   existing stackful fiber runtime (`src/async/fiber.c`, and
   `src/platform_ucontext_win.h` on Windows) already switches stacks, so the
-  switch primitive and its sanitizer annotations exist.
+  switch primitive exists. Its sanitizer annotations are TSan's only: the
+  emitted fiber runtime announces each switch (`TUR_TSAN_FIBER_*`,
+  `emit_module.c`), and nothing anywhere tells ASan about a switch -- see
+  [Sanitizers](#sanitizers-what-keeping-segments-would-take).
 - Against: the "hot split" problem. A call at a segment boundary inside a
   loop allocates and frees a segment every iteration. Go hit this and moved
   to contiguous stacks that are copied when they grow, but copying is not
@@ -394,6 +397,94 @@ on Windows (the ucontext shim or fibers, the TEB's stack bounds, and the
 vectored handler for the guard) are work after graduation, each behind its own
 proof on that host's CI; neither changes the contract above until it lands.
 
+### Sanitizers: what keeping segments would take
+
+Written 2026-10-25, after graduation compiled the segmented stack out of every
+build under ASan, HWASan, MSan or TSan (`TUR_SEG_SANITIZED`, `emit_module.c`).
+This is what it would take to turn it back on, starting with ASan.
+
+**Already in place.** The ASan side of copying stacks was done with H3,
+in the prelude (`stdlib/r7rs/prelude.tur`, under `R7K_ASAN`):
+
+- The copies in and out of a continuation image are `no_sanitize_address`
+  (`R7K_NOASAN`, and `TUR_SEG_NOASAN` on `tur_seg_copy`), so reading a
+  frame's redzones is not a report.
+- After a re-entry copies frames back, `r7k_jump` and `r7k_seg_jump` call
+  `__asan_unpoison_memory_region` over every restored piece, so the shadow
+  left by whatever ran there before does not describe the restored frames.
+- `__asan_default_options` turns `detect_stack_use_after_return` off,
+  because ASan's "fake stack" holds address-taken locals where a copy of the
+  real stack cannot see them. A user's `ASAN_OPTIONS` still overrides it.
+
+**What is missing: ASan's idea of the current stack.** ASan keeps one stack
+range per thread, read at thread start. Every `longjmp` (and every other
+no-return path: a `raise` unwinding, `abort`) goes through
+`__asan_handle_no_return`, which unpoisons from the current `sp` to the top
+of THAT range and, on the way, reads the thread's signal stack through its
+own `sigaltstack` interceptor. Execution on any other stack makes those
+bounds wrong. Three switches put it there, and none is announced:
+
+1. **The re-entry's temporary stack** -- the one that failed. On an armed
+   thread every `call/cc` re-entry goes through `tur_seg_restore`, which
+   moves onto a stack just below the image (`tur_seg_run_at`, asm), runs
+   `tur_seg_restore_on` there, copies the pieces back and calls the prelude's
+   `r7k_seg_jump`, whose `longjmp` aborts inside ASan's `sigaltstack`
+   interceptor. This happens with no segment in the chain at all, which is
+   why `r7rs-gc-basic` failed without recursing deep: it re-enters a
+   continuation on an armed thread, and that is enough.
+2. **Entering and leaving a segment** (`tur_seg_tramp` / `tur_seg_enter`).
+   Never seen under ASan, because no sanitized run reaches a segment: the
+   base stack is 1 GiB and `run-r7rs-sanitize.sh` does not shrink it.
+   Expected to fail the same way at the first no-return call made on a
+   segment, and an ASan report about a segment address would not know it is
+   a stack.
+3. **The fiber swap** (`tur_seg_fiber_swap`) moves the check's bounds onto
+   a fiber's stack, and the fiber runtime's own `swapcontext` is not
+   announced to ASan either. That half predates this plan.
+
+**The fix's shape.** The sanitizer interface pairs
+`__sanitizer_start_switch_fiber(&fake, bottom, size)`, called on the old
+stack just before the switch, with `__sanitizer_finish_switch_fiber(fake,
+&old_bottom, &old_size)`, called first thing on the new one. `fake` can be
+NULL while use-after-return is off. If someone turns it on through
+`ASAN_OPTIONS`, the runtime should refuse it rather than run with a fake stack
+nobody saves. The pairs go at each switch above:
+
+- Re-entry (1): start before `tur_seg_run_at` with the temporary stack's
+  bounds; finish at the top of `tur_seg_restore_on`; start again in
+  `r7k_seg_jump` before the `longjmp`, with the bounds of the stack it lands
+  on (the chain's top piece, or the thread's own stack); finish where the
+  capture site's `setjmp` returns non-zero. That last call is the awkward
+  one: the landing site is the prelude's generic capture code, not the
+  segment runtime, so it has to finish a switch only when one was started.
+  A thread-local "switch pending" word handles that.
+- Segments (2): the trampolines are asm, so the calls go in C on either
+  side. Start in `tur_seg_enter` with the new segment's range, finish in
+  the first C the segment runs, and the mirror pair on the way back. A
+  procedure that leaves a segment by `longjmp` (a `raise` caught below it, a
+  continuation escape) needs the same start-before-jump, finish-on-landing
+  as (1).
+- Fibers (3): a pair around the fiber runtime's switch, which helps the
+  fiber scheduler under ASan with or without segments.
+
+**The other sanitizers.** TSan intercepts `setjmp`/`longjmp` and matches them
+by `sp`, so a jump onto another stack confuses its shadow call stack. Its
+fiber API (`__tsan_create_fiber` / `__tsan_switch_to_fiber`) is what the
+fiber runtime already uses, and it would need one TSan fiber per stack the
+chain moves between: separate work, after ASan. HWASan has
+`__hwasan_handle_longjmp` and no fiber API. MSan was excluded **by caution,
+not by a failure**: nothing was run under it. Narrow `TUR_SEG_SANITIZED` to
+ASan and TSan once someone runs MSan with segments on.
+
+**How to test it.** Run `tests/run-r7rs-sanitize.sh` with
+`TUR_SEG_BASE_MB=8` in the program's environment, so the deep fixtures
+actually cross onto segments under ASan. Build
+`tests/check-r7rs-segmented-stack.sh`'s seven programs with
+`-fsanitize=address` (re-entry eleven times, threads, fibers, collector
+torture). Both runs must pass with ASan removed from `TUR_SEG_SANITIZED`.
+Then the Platforms row above shrinks, and the r7rs guide's sentence about
+sanitized builds goes.
+
 ## Graduation (done 2026-10-25)
 
 The gate drop landed after the 0.71.0 bump, as the owner ruled on
@@ -433,10 +524,11 @@ stands; revisit it if typed code ever wants the check.
    under qemu only), and the seam's both arms there.
 2. **macOS segments**, then **Windows segments** (Platforms, above), each
    leaving the contract unchanged until it lands.
-3. **Sanitizer support:** `__sanitizer_start_switch_fiber` /
-   `__sanitizer_finish_switch_fiber` around `tur_seg_run_at`, segment entry
-   and the re-entry's `longjmp`, so an ASan build keeps segments instead of
-   compiling them out. Until then `TUR_SEG_SANITIZED` holds the contract.
+3. **Sanitizer support**, ASan first: announce every stack switch so an ASan
+   build keeps segments instead of compiling them out. What is in place,
+   what is missing and how to test it are in
+   [Sanitizers](#sanitizers-what-keeping-segments-would-take). Until then
+   `TUR_SEG_SANITIZED` holds the contract.
 4. **H6**, as a design of its own (above), if a JIT user ever needs more than
    the engine's entry stack.
 5. **A fiber's stack that grows**: segments for a fiber need the collector to
