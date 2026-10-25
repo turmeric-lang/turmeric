@@ -341,10 +341,10 @@ predicate `pred`. Bare `{...}` is curly-infix in every dialect (see
 `#row{...}`, and `#r{...}`.
 
 ```turmeric no-check
-#refine{ x : :int | (> x 0) }
+#refine{ x : int | (> x 0) }
 ```
 ```sweet-exp
-#refine{ x : :int | (> x 0) }
+#refine{ x : int | (> x 0) }
 ```
 
 ### Curly-infix -- `{a + b}`
