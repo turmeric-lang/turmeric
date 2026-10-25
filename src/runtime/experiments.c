@@ -478,30 +478,23 @@ static const ExperimentDescriptor EXPERIMENTS[] = {
       "0.71.0",                  /* expires_at -- advisory; never blocks a release */
       XF_LIFECYCLE_BETA,
       &g_opt_quote_data },
-    /* r7rs-segmented-stack (r7rs-heap-frames-plan, option C): a compiled
-     * `#lang r7rs` procedure checks the stack pointer against a per-thread
-     * limit at entry and, past it, re-enters itself on a fresh stack segment,
-     * so recursion is bounded by TUR_MAIN_STACK_MB as a memory budget rather
-     * than by the C stack.  BETA since 2026-10-24: the surface is frozen and
-     * every Linux stage is in -- every thread the program starts is armed, a
-     * fiber's stack is checked against its own bounds, a call/cc captured on
-     * a segment re-enters (the chain is copied into the image), arm64 ran
-     * under qemu.  Graduating is the gate drop alone, which turns the check on
-     * for every compiled r7rs program; TUR_R7RS_SEGMENTED_STACK=0 is the
-     * hatch (to the compiler: the C without the flag; to a program: no thread
-     * armed), and tests/run-r7rs-segmented-stack-seam.sh inverts to SEG_ARM=off
-     * then.  Elsewhere -- macOS, Windows, `tur jit`, other architectures --
-     * the check compiles to nothing and the 1 GiB deep stack stays: the
-     * graduated contract (the plan, "Platforms").  Graduation APPROVED
-     * 2026-10-24 (the plan's hold condition lifted by its owner); the gate
-     * drop lands after the next version bump. */
-    { "r7rs-segmented-stack",
-      "a compiled `#lang r7rs` procedure checks the stack limit at entry and grows onto a new segment",
-      "docs/upcoming/r7rs-heap-frames-plan.md",
-      "0.70.0",                  /* introduced */
-      "0.71.0",                  /* expires_at -- advisory; never blocks a release */
-      XF_LIFECYCLE_BETA,
-      &g_opt_r7rs_segmented_stack },
+    /* r7rs-segmented-stack GRADUATED 2026-10-25, in the 0.71 line (introduced
+     * 0.70.0, beta 2026-10-24, advisory expires_at 0.71.0; graduation approved
+     * by the plan's owner 2026-10-24).  Every compiled `#lang r7rs` procedure
+     * checks the stack pointer against a per-thread limit at entry and, past
+     * it, re-enters itself on a fresh segment, so recursion is bounded by
+     * TUR_MAIN_STACK_MB as a memory budget rather than by the C stack -- in
+     * every thread the program starts, with a fiber checked against its own
+     * bounds.  Linux x86-64 and arm64 only; on macOS, Windows, `tur jit`,
+     * other architectures and under a stack-tracking sanitizer (ASan, HWASan,
+     * MSan, TSan -- TUR_SEG_SANITIZED, added at graduation) the check compiles
+     * to nothing and the 1 GiB deep stack stays (the plan's "Platforms: the
+     * graduated contract").
+     * TUR_R7RS_SEGMENTED_STACK=0 is the bisection hatch (to the compiler: no
+     * check and no runtime; to a program: no thread armed), kept green by
+     * tests/run-r7rs-segmented-stack-seam.sh, whose default arm inverted to
+     * `off` here.  g_opt_r7rs_segmented_stack is retired with the row.  The
+     * name moves to GRADUATED[] below.  See docs/upcoming/r7rs-heap-frames-plan.md. */
     /* loop-invariants GRADUATED 2026-10-03, in the 0.61 line (introduced
      * 0.57.0, prototype, advisory expires_at 0.58.0).  `(while c :invariant p
      * ...)` is always on: the runtime checks, the initiation/preservation
@@ -588,7 +581,12 @@ static const char *const GRADUATED[] = {
      * this shim, and stay; so do g_opt_r7rs and g_opt_dynamic_any, which
      * the `#lang` line sets.
      *
-     * The list is empty until the next graduation; the NULL keeps it legal C. */
+     * The NULL keeps the list legal C when it is empty. */
+    /* graduated 2026-10-25, in the 0.71 line.  No source syntax, but it
+     * shipped as a listed `--enable` row for two releases and the r7rs guide
+     * told users to pass it, so it keeps the full window.  Eligible to age out
+     * at 0.72.0.  See docs/upcoming/r7rs-heap-frames-plan.md. */
+    "r7rs-segmented-stack",
     NULL,
 };
 

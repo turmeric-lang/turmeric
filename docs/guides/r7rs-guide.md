@@ -666,11 +666,11 @@ recursion goes, but a runaway recursion touches all of it before the message
 prints. `TUR_MAIN_STACK_MB=N` sets the size in MiB: more for a program that
 needs it, less on a small machine where a missing base case should stop
 sooner. A size that cannot be reserved is reported, and `main` then runs on
-the process's own stack. `tur jit` reads the same variable.
+the process's own stack (where segments are on, below, the size is a budget
+and the stack itself is capped at 1 GiB, so nothing is too large to reserve). `tur jit` reads the same variable.
 `TUR_NO_DEEP_STACK=1` keeps `main` on the process's own stack.
 
-**Deeper than the stack (experimental).** Built with
-`--enable=r7rs-segmented-stack`, a program on Linux x86-64 or arm64 keeps
+**Deeper than the stack.** A program on Linux x86-64 or arm64 keeps
 recursing past the end of that stack onto 8 MiB segments mapped as it goes,
 so depth is bounded by memory: a recursion 100 million calls deep (about
 3 GB of frames) runs, where the 1 GiB stack stops near 30 million. The
@@ -685,10 +685,14 @@ a fiber stops with the same message instead of running off its stack. A
 one captured on the thread's own stack does; the copy is of every segment
 under the capture, so it costs what the depth costs. One exception: inside
 an `eval` (`(scheme eval)`), a capture on a segment is escape-only. Not under
-`tur jit`, and nothing of it on macOS, Windows or a 32-bit host, which keep
+`tur jit`, and nothing of it on macOS, Windows, a 32-bit host or in a
+program built under ASan, HWASan, MSan or TSan (UBSan is fine), which keep
 the 1 GiB stack. `TUR_R7RS_SEGMENTED_STACK=0` turns it off: set when
-compiling, the program is built as without the flag; set when running a
-program built with it, no thread grows. The cost is a compare per procedure
+compiling, the program is built with no check, as every program was before
+the feature graduated; set when running a program built with it, no
+thread grows. This was the `r7rs-segmented-stack` experiment until it
+graduated on 2026-10-25; `--enable=r7rs-segmented-stack` is now a
+`TUR-W0063` no-op for one minor line, so drop it from your scripts. The cost is a compare per procedure
 call -- 1-2% more instructions at `-O2` on the plan's benchmarks under gcc,
 within code-layout noise under clang. See
 [r7rs-heap-frames-plan](https://github.com/turmeric-lang/turmeric/blob/main/docs/upcoming/r7rs-heap-frames-plan.md).

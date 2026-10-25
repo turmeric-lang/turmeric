@@ -14,6 +14,14 @@
 #   3. TUR_MAIN_STACK_MB=abc             -- reported and ignored; still runs
 #   4. a size no host can reserve        -- reported; main runs where it is
 #
+# Case 4 depends on the segmented stack (docs/upcoming/r7rs-heap-frames-plan.md,
+# graduated 2026-10-25).  Where it is compiled in (Linux x86-64 and arm64) the
+# variable is a BUDGET for a thread's own stack plus its segments, and the
+# deep-stack thread's own stack is capped at 1 GiB, so no size is unreservable:
+# a huge one runs silently.  The message is still what a build under the hatch
+# (TUR_R7RS_SEGMENTED_STACK=0) and every other host give, so case 4 runs on that
+# build there, and on the default build elsewhere.
+#
 # Linux and macOS (the pthread branch of emit_deep_stack_runtime).
 set -uo pipefail
 cd "$(dirname "$0")/.."
@@ -38,10 +46,16 @@ cat > "$TMP/down.scm" <<'EOF'
 (write (down (string->number (cadr (command-line)))))
 (newline)
 EOF
-if ! "$TUR" build "$TMP/down.scm" -o "$TMP/down" > "$TMP/build.log" 2>&1; then
+if ! "$TUR" build "$TMP/down.scm" -o "$TMP/down" > "$TMP/build.log" 2>&1 ||
+   ! TUR_R7RS_SEGMENTED_STACK=0 "$TUR" build "$TMP/down.scm" -o "$TMP/down-hatch" > "$TMP/build.log" 2>&1; then
     echo "FAIL $NAME: tur build failed: $(grep -m1 -i error "$TMP/build.log")"
     exit 1
 fi
+case "$(uname -s)/$(uname -m)" in
+    Linux/x86_64|Linux/aarch64) SEGMENTS=1 ;;
+    *) SEGMENTS=0 ;;
+esac
+EXE=down
 
 fail=0
 check() {   # check <label> <want-rc: 0|nonzero> <want-stdout> <want-stderr-substring|-> <env...> -- <depth>
@@ -50,7 +64,7 @@ check() {   # check <label> <want-rc: 0|nonzero> <want-stdout> <want-stderr-subs
     while [ "$1" != "--" ]; do envs+=("$1"); shift; done
     shift
     local out rc
-    out="$(env "${envs[@]}" "$TMP/down" "$1" 2>"$TMP/err")"; rc=$?
+    out="$(env "${envs[@]}" "$TMP/$EXE" "$1" 2>"$TMP/err")"; rc=$?
     if [ "$want_rc" = 0 ] && [ "$rc" != 0 ]; then
         echo "FAIL $NAME ($label): exited $rc: $(head -2 "$TMP/err")"; fail=1; return
     fi
@@ -74,8 +88,14 @@ check "16 MiB, runaway" nonzero "" "stack overflow: recursion too deep" \
       TUR_MAIN_STACK_MB=16 -- 100000000
 check "not a number" 0 10000 "ignoring TUR_MAIN_STACK_MB=abc" \
       TUR_MAIN_STACK_MB=abc -- 10000
+if [ "$SEGMENTS" = 1 ]; then
+    check "huge budget, segmented stack" 0 1000 - \
+          TUR_MAIN_STACK_MB=100000000000 -- 1000
+    EXE=down-hatch
+fi
 check "unreservable" 0 1000 "cannot make a 100000000000 MiB stack for main" \
       TUR_MAIN_STACK_MB=100000000000 -- 1000
+EXE=down
 
 [ "$fail" = 0 ] || exit 1
 echo "PASS $NAME: TUR_MAIN_STACK_MB sizes main's stack, and a bad or unreservable size is reported"

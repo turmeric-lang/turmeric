@@ -1,23 +1,23 @@
 # Plan: Scheme recursion depth bounded by memory, not by the C stack
 
-> **Status:** BETA behind `--enable=r7rs-segmented-stack` since 2026-10-24
-> (prototype since 2026-10-23), `expires_at` 0.71.0. READY TO GRADUATE: every
-> stage is done on Linux x86-64 and arm64 (arm64 run under qemu), and what is
-> left is the gate drop alone. **The owner ruled 2026-10-24: graduate it** --
-> the hold condition is lifted, and the gate drop lands after the next version
-> bump ([Graduation](#graduation-what-is-left)). On every other
-> host -- macOS, Windows, `tur jit`, 32-bit -- the check compiles to nothing
-> and the 1 GiB stack stays: that is the graduated contract
-> ([Platforms](#platforms-the-graduated-contract)), with macOS and Windows
-> segments and H6 deferred past graduation. See
-> [Progress](#progress-2026-10-24).
+> **Status:** GRADUATED 2026-10-25 (prototype 2026-10-23, beta 2026-10-24,
+> owner's ruling to graduate 2026-10-24). Every compiled `#lang r7rs` program on
+> Linux x86-64 and arm64 carries the check and grows onto segments; on every
+> other host -- macOS, Windows, `tur jit`, 32-bit -- and in a build under a
+> stack-tracking sanitizer, the check compiles to nothing and the 1 GiB stack
+> stays ([Platforms](#platforms-the-graduated-contract)).
+> `TUR_R7RS_SEGMENTED_STACK=0` is the bisection hatch, and
+> `--enable=r7rs-segmented-stack` is a TUR-W0063 no-op until 0.72.0. The plan
+> stays in `docs/upcoming/` for the work after graduation:
+> [Left, in order](#left-in-order) (macOS and Windows segments, sanitizer
+> support, H6, a fiber's stack that grows).
 > **Type:** Compiler / r7rs runtime
 > **Predecessors:** `docs/archive/r7rs-deep-recursion-segfaults-silently.md`
 > (PR #1082: `main` runs on a 1 GiB thread, and an overflow prints a message).
 > **Was on hold until:** a real program needs more than 1 GiB of stack, or a
 > `call/cc`-heavy program's capture cost is dominated by stack depth. It was
 > picked up on request. Graduation waited on one of those until the owner
-> lifted the condition on 2026-10-24 (see [Graduation](#graduation-what-is-left)).
+> lifted the condition on 2026-10-24 (see [Graduation](#graduation-done-2026-10-25)).
 
 ## Why this exists
 
@@ -382,9 +382,10 @@ What graduation turns on, by host. Read from the `#if` structure on
 | Windows (MinGW gcc/clang) | Nothing of it, by the same `__linux__` test. Checked: the C `tur build` compiles for three of the test programs, flag on, compiles for x86_64-w64-mingw32 (gcc 13, `-c`) with no `tur_seg_` symbol in the object, as the flag-off C does. |
 | Linux with `__linux__` undefined (a stand-in for "no trampoline here") | Built and run on 2026-10-24: no `tur_seg_` symbol in the binary; a 1e6-deep recursion and eleven re-entries run on the 1 GiB stack, `TUR_SEG_BASE_MB` is ignored, and a thread 1e6 deep dies as without the flag. |
 | 32-bit, other architectures, `tur jit`, emscripten, a `--shared` build | Nothing of it (`x86_64`/`aarch64` only; `__MIRC__`; no deep-stack thread; `emit_seg_stack_runtime` writes only the no-op check when `shared`). |
+| Any host, built under ASan, HWASan, MSan or TSan | Nothing of it (`TUR_SEG_SANITIZED`, added at graduation). Found by `tests/run-r7rs-sanitize.sh` once the check was on by default: a call/cc re-entry runs `tur_seg_restore_on` on a stack ASan was never told about (`tur_seg_run_at`), and the prelude's `longjmp` back (`r7k_seg_jump`) then aborts inside ASan's `sigaltstack` interceptor (`r7rs-callcc-reentry-many`, `r7rs-gc-basic`). UBSan alone does not track stacks and keeps the check. |
 
-That is the contract: **where the trampoline exists, recursion is bounded by
-memory on every thread; everywhere else the program is exactly what it was
+That is the contract: **where the trampoline exists (and no sanitizer tracks
+the stack), recursion is bounded by memory on every thread; everywhere else the program is exactly what it was
 before this plan, with the deep-stack thread's 1 GiB stack and its overflow
 message.** The cost of the check's call sites everywhere else is nothing (the
 macro is empty). Segments on macOS (the trampoline's Mach-O symbol spelling,
@@ -393,55 +394,49 @@ on Windows (the ucontext shim or fibers, the TEB's stack bounds, and the
 vectored handler for the guard) are work after graduation, each behind its own
 proof on that host's CI; neither changes the contract above until it lands.
 
-## Graduation: what is left
+## Graduation (done 2026-10-25)
 
-**The gate drop is all that is left.** The owner ruled on 2026-10-24 that the
-feature graduates; the drop itself lands after the next version bump, with the
-owner doing it, alongside the `quote-data` and `discontinue` drops. Dropping it
-(the EXPERIMENTS[] row to GRADUATED[], `g_opt_r7rs_segmented_stack` on by
-default for `#lang r7rs`) turns the check on in every compiled Scheme program
-on Linux x86-64 and arm64. Three things go with it, all ready:
+The gate drop landed after the 0.71.0 bump, as the owner ruled on
+2026-10-24 (the hold condition -- "a real program needs more than 1 GiB of
+stack, or a `call/cc`-heavy program's capture cost is dominated by stack
+depth" -- lifted; the 8 MiB worker-thread SIGSEGV H4 found is the concrete
+case it fixes today). What it did:
 
-- **The hold condition** (top of this plan): "a real program needs more than
-  1 GiB of stack, or a `call/cc`-heavy program's capture cost is dominated by
-  stack depth". Neither has been seen in a real program. What H4 found is a
-  narrower need that does exist today: **every thread but `main` has only the
-  8 MiB pthread default**, and a SRFI 18 thread that runs SICP 1.2.1's linear
-  recursion a million deep dies with a bare SIGSEGV and no message (the
-  overflow handler covers the deep-stack thread only); a fiber that recurses
-  too deep runs off its `malloc`'d stack into the heap. With the flag both are
-  handled (the thread grows; the fiber stops with the message).
-  **Ruled 2026-10-24: the owner lifted the hold condition -- graduate.** The
-  8 MiB worker-thread SIGSEGV above is the concrete case it fixes today.
-- **The bisection hatch:** `TUR_R7RS_SEGMENTED_STACK=0`, both halves already
-  in (above). After graduation it is the A/B switch: set when compiling, the
-  C is what a build gets today without the flag; set when running, no thread
-  arms. `--enable=r7rs-segmented-stack` becomes the accept-and-warn no-op the
-  guide describes.
-- **The harness that covers the off path:** `tests/run-r7rs-segmented-stack-seam.sh`.
-  Today its default arm is `on`. At graduation its default INVERTS to
-  `SEG_ARM=off` (one line, `ARM="${SEG_ARM:-off}"`, and its header), per the
-  flags guide's "Graduating flips a default": `bash tests/run.sh` then covers
-  the on path, and the seam keeps the hatch's off path green, behind the
-  canary that fails loudly if the hatch stops biting.
-  `check-r7rs-segmented-stack.sh` keeps both halves of the hatch as cases.
-  The fixture `r7rs-segmented-stack-deep-recursion` loses its `flags` file
-  (the flag is implied).
+- **The registry.** The EXPERIMENTS[] row went to GRADUATED[], and
+  `g_opt_r7rs_segmented_stack` was retired with it: `emit_seg_stack_wanted`
+  reads only the hatch now, so the check is on for every `#lang r7rs`
+  procedure. `--enable=r7rs-segmented-stack` is the TUR-W0063 no-op, eligible
+  to age out at 0.72.0.
+- **The hatch,** `TUR_R7RS_SEGMENTED_STACK=0`, both halves unchanged: set
+  when compiling, no check and no segment runtime (the C every program got
+  before); set when running, no thread arms.
+- **The seam inverted.** `tests/run-r7rs-segmented-stack-seam.sh` defaults to
+  `SEG_ARM=off`, per the flags guide's "Graduating flips a default"; its
+  canary now checks that the default build carries the check, the hatch build
+  carries neither check nor runtime, and the no-op `--enable` changes nothing.
+  `check-r7rs-segmented-stack.sh` builds its "no flag" programs under the
+  hatch. The fixture `r7rs-segmented-stack-deep-recursion` lost its `flags`.
+- **`check-r7rs-main-stack-size.sh`.** Its "unreservable" case assumed
+  `TUR_MAIN_STACK_MB` sizes a stack reserved up front. With segments it is a
+  budget and the thread's own stack is capped at 1 GiB, so a huge value runs
+  silently; the case now runs on the hatch build where segments are compiled
+  in, and the default build elsewhere.
+- **Sanitized builds are off** (Platforms, above) -- the one thing graduation
+  found. `run-r7rs-sanitize.sh` had never run with the flag on.
 
-At the drop, also revisit the plain-check decision (H0: the check goes only
-where a cycle needs it) if typed code ever wants it.
+The plain-check decision (H0: the check goes only where a cycle needs it)
+stands; revisit it if typed code ever wants the check.
 
 ### Left, in order
 
-1. **Graduate** -- the gate drop, the seam's inversion and the fixture's
-   `flags`, above. Approved 2026-10-24 (the hold condition is lifted); the
-   owner takes the drop after the next version bump. Due by `expires_at`
-   0.71.0 (advisory).
-2. **After graduation, not blocking it:** `nightly-arm64.yml` running the ctest
-   on real arm64 hardware (it ran under qemu only), and the seam's both arms
-   there.
-3. **macOS segments**, then **Windows segments** (Platforms, above), each
+1. **`nightly-arm64.yml`** running the ctest on real arm64 hardware (it ran
+   under qemu only), and the seam's both arms there.
+2. **macOS segments**, then **Windows segments** (Platforms, above), each
    leaving the contract unchanged until it lands.
+3. **Sanitizer support:** `__sanitizer_start_switch_fiber` /
+   `__sanitizer_finish_switch_fiber` around `tur_seg_run_at`, segment entry
+   and the re-entry's `longjmp`, so an ASan build keeps segments instead of
+   compiling them out. Until then `TUR_SEG_SANITIZED` holds the contract.
 4. **H6**, as a design of its own (above), if a JIT user ever needs more than
    the engine's entry stack.
 5. **A fiber's stack that grows**: segments for a fiber need the collector to

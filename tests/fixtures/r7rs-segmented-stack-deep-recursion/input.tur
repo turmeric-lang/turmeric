@@ -1,9 +1,12 @@
 #lang r7rs
 ;; r7rs-heap-frames-plan (option C): the million-deep recursion of
 ;; r7rs-deep-recursion-million with every procedure's entry check compiled in
-;; (--enable=r7rs-segmented-stack).  On the default 1 GiB stack it never
-;; reaches a segment; tests/check-r7rs-segmented-stack.sh shrinks that stack
-;; to make the same program cross onto segments.  Fixnum-only, as the
+;; (the default since r7rs-segmented-stack graduated 2026-10-25; this fixture
+;; carried --enable=r7rs-segmented-stack in a `flags` file before, and
+;; tests/run-r7rs-segmented-stack-seam.sh uses it as its canary).  On the
+;; default 1 GiB stack it never reaches a segment;
+;; tests/check-r7rs-segmented-stack.sh shrinks that stack to make the same
+;; program cross onto segments.  Fixnum-only, as the
 ;; original is, so run-r7rs-gc.sh's torture stays linear.
 (import (scheme base) (scheme write))
 (define (sum-to n) (if (= n 0) 0 (+ n (sum-to (- n 1)))))
