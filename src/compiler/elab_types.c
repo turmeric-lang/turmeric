@@ -1705,18 +1705,40 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
                 return NULL;
             }
             Form *params_vec = form->as.list.items[idx++];
-            /* Parse param types from the vector */
-            uint8_t n_fn_args = (uint8_t)params_vec->as.list.len;
+            /* fn-type-borrow-param: a `^borrow` before a parameter type marks
+             * that slot FA_BORROW, as it does on a defn or lambda parameter,
+             * so a callback typed (fn [^borrow Txn] R) is called without
+             * consuming its argument and accepts a (fn [^borrow t : Txn] ...)
+             * lambda.  Without this the marker reached type_expr_from_form,
+             * which read `^borrow` as a type parameter named `borrow` -- a
+             * second parameter slot -- so no function value ever matched. */
+            uint8_t n_fn_args = 0;
+            for (uint32_t pi0 = 0; pi0 < params_vec->as.list.len; pi0++) {
+                const Form *p0 = params_vec->as.list.items[pi0];
+                if (p0->tag == F_SYM && p0->as.sym == e->sym_caret_borrow) continue;
+                n_fn_args++;
+            }
             TypeKind fn_arg_kinds[MAX_FN_ARITY];
             Type *fn_arg_full[MAX_FN_ARITY];
+            bool fn_arg_borrow[MAX_FN_ARITY];
+            bool any_borrow_arg = false;
             bool any_compound_arg = false;
             memset(fn_arg_kinds, 0, sizeof(fn_arg_kinds));
             memset(fn_arg_full, 0, sizeof(fn_arg_full));
+            memset(fn_arg_borrow, 0, sizeof(fn_arg_borrow));
+            uint32_t vec_i = 0;
             for (uint32_t pi2 = 0; pi2 < n_fn_args && pi2 < MAX_FN_ARITY; pi2++) {
-                reject_fn_type_colon(e, params_vec->as.list.items[pi2]);
-                Type *at = type_expr_from_form(e, params_vec->as.list.items[pi2],
+                while (params_vec->as.list.items[vec_i]->tag == F_SYM &&
+                       params_vec->as.list.items[vec_i]->as.sym == e->sym_caret_borrow) {
+                    fn_arg_borrow[pi2] = true;
+                    any_borrow_arg = true;
+                    vec_i++;
+                }
+                Form *slot_form = params_vec->as.list.items[vec_i++];
+                reject_fn_type_colon(e, slot_form);
+                Type *at = type_expr_from_form(e, slot_form,
                                                rec_name, type_params, type_param_kinds, n_type_params);
-                reject_fn_type_contract(e, at, params_vec->as.list.items[pi2],
+                reject_fn_type_contract(e, at, slot_form,
                                         "parameter");
                 fn_arg_full[pi2] = at;
                 /* Type variables map to the int64 carrier kind; use TY_INT so
@@ -1824,6 +1846,10 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
                 Type **aFT = (Type **)arena_alloc(e->arena, n_fn_args * sizeof(Type *));
                 for (uint32_t i = 0; i < n_fn_args; i++) aFT[i] = fn_arg_full[i];
                 fn_t->as.fn.arg_full_types = aFT;
+            }
+            if (any_borrow_arg) {
+                for (uint32_t i = 0; i < n_fn_args; i++)
+                    FN_ARG_SET(fn_t->as.fn, i, FA_BORROW, fn_arg_borrow[i]);
             }
             /* typed-c-abi-function-pointers: a (c-fn ...) is a bare C function
              * pointer, never a closure box. */

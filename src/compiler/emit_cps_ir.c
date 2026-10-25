@@ -11525,7 +11525,7 @@ static void emit_lifted(CE *ce, const char *name, LHMode mode,
     char **cap_prev_name = (char **)calloc(n_cap_prev ? n_cap_prev : 1, sizeof *cap_prev_name);
     if (has_caps) {
         indent_buf(&tmp, 4);
-        buf_printf(&tmp, "%s_env *__cap = (%s_env *)(intptr_t)env;\n", name, name);
+        buf_printf(&tmp, "%s_env *__cap = (%s_env *)(intptr_t)__lh_env;\n", name, name);
         for (int i = 0; i < caps->n; i++) {
             char *cn = caps->e[i].b ? name_for_binding(ce->ctx, caps->e[i].b) : strdup(caps->e[i].cvname);
             indent_buf(&tmp, 4);
@@ -11716,9 +11716,9 @@ static void emit_lifted(CE *ce, const char *name, LHMode mode,
     bool have_unw = false;
     if (pend_frame && cps_pend_any_firable()) {
         have_unw = true;
-        buf_printf(&unw, "static void %s_unw(intptr_t env) {\n", name);
+        buf_printf(&unw, "static void %s_unw(intptr_t __lh_env) {\n", name);
         if (has_caps) {
-            buf_printf(&unw, "    %s_env *__cap = (%s_env *)(intptr_t)env;\n", name, name);
+            buf_printf(&unw, "    %s_env *__cap = (%s_env *)(intptr_t)__lh_env;\n", name, name);
             for (int i = 0; i < caps->n; i++) {
                 char *cn = caps->e[i].b ? name_for_binding(ce->ctx, caps->e[i].b) : strdup(caps->e[i].cvname);
                 buf_printf(&unw, "    %s %s = __cap->f%d; (void)%s;\n",
@@ -11726,7 +11726,7 @@ static void emit_lifted(CE *ce, const char *name, LHMode mode,
                 free(cn);
             }
         } else {
-            buf_puts(&unw, "    (void)env;\n");
+            buf_puts(&unw, "    (void)__lh_env;\n");
         }
         int si = ce->ctx->indent;
         const char *srt = ce->ctx->current_fn_ret_ctype;
@@ -11762,24 +11762,24 @@ static void emit_lifted(CE *ce, const char *name, LHMode mode,
 
     switch (mode) {
         case LH_SHIFT_BODY:
-            buf_printf(ce->helpers, "static intptr_t %s(intptr_t env, DK *subk) {\n", name);
+            buf_printf(ce->helpers, "static intptr_t %s(intptr_t __lh_env, DK *subk) {\n", name);
             if (has_caps) buf_puts(ce->helpers, "    (void)subk;\n");
-            else          buf_puts(ce->helpers, "    (void)env; (void)subk;\n");
+            else          buf_puts(ce->helpers, "    (void)__lh_env; (void)subk;\n");
             break;
         case LH_HANDLER_CASE:
-            buf_printf(ce->helpers, "static intptr_t %s(intptr_t env, intptr_t arg, DK *subk) {\n", name);
+            buf_printf(ce->helpers, "static intptr_t %s(intptr_t __lh_env, intptr_t arg, DK *subk) {\n", name);
             if (has_caps) buf_puts(ce->helpers, "    (void)arg; (void)subk;\n");
-            else          buf_puts(ce->helpers, "    (void)env; (void)arg; (void)subk;\n");
+            else          buf_puts(ce->helpers, "    (void)__lh_env; (void)arg; (void)subk;\n");
             break;
         case LH_PERFORM_CONT:
-            buf_printf(ce->helpers, "static intptr_t %s(intptr_t env, intptr_t %s__slot) {\n", name, xname);
-            if (!has_caps) buf_puts(ce->helpers, "    (void)env;\n");
+            buf_printf(ce->helpers, "static intptr_t %s(intptr_t __lh_env, intptr_t %s__slot) {\n", name, xname);
+            if (!has_caps) buf_puts(ce->helpers, "    (void)__lh_env;\n");
             break;
         case LH_RESUME_CONT:
             /* Track A: a resume-frame.  __kont is the run-time downstream chain
              * (a DKResumeFrame parameter, not the env); caps (if any) ride env. */
-            buf_printf(ce->helpers, "static intptr_t %s(intptr_t env, intptr_t %s__slot, DK *__kont) {\n", name, xname);
-            if (!has_caps) buf_puts(ce->helpers, "    (void)env;\n");
+            buf_printf(ce->helpers, "static intptr_t %s(intptr_t __lh_env, intptr_t %s__slot, DK *__kont) {\n", name, xname);
+            if (!has_caps) buf_puts(ce->helpers, "    (void)__lh_env;\n");
             break;
     }
     buf_puts(ce->helpers, tmp.data);

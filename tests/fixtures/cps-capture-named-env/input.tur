@@ -1,0 +1,18 @@
+;; cps-capture-named-env: a parameter named `env` live across a CPS call.
+;;
+;; The CPS backend lifts the rest of `fill` after the higher-order call into a
+;; join-point helper, reading the live locals out of a capture struct.  The
+;; helper's own capture-struct parameter was ALSO named `env`, so the C had
+;; `intptr_t env` and `int64_t env = __cap->f1;` in one scope: "'env'
+;; redeclared as different kind of symbol".  `env` is a common parameter name.
+
+(defn step [f : (fn [int] int) x : int] : int (f x))
+
+(defn fill [env : int i : int n : int] : int
+  (if (>= i n)
+    env
+    (let [w (step (fn [x : int] : int (+ x 1)) i)]
+      (if (< w 0) w (fill (+ env w) (+ i 1) n)))))
+
+(defn main [] : int
+  (do (println (fill 0 0 4)) 0))

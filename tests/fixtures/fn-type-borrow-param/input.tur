@@ -1,0 +1,32 @@
+;; fn-type-borrow-param: a callback type may borrow a linear argument.
+;;
+;; `(fn [^borrow Handle] R)` marks the slot FA_BORROW, as `^borrow` does on a
+;; defn or lambda parameter.  The higher-order function calls the callback
+;; without spending the handle, and closes it itself afterwards; a lambda or a
+;; named defn whose parameter is `^borrow` satisfies the type.  This is the
+;; shape a scoped resource form (`with-read-txn`, `with-open-file`) needs.
+;; Before the fix `^borrow` was read as a type parameter named `borrow`, so
+;; the type had two parameters and nothing matched it.
+
+(defopaque Handle :int :linear)
+
+(defn handle-open [n : int] : Handle ```c return n; ```)
+(defn handle-close [h : Handle] : nil ```c (void)h; ```)
+(defn handle-peek [^borrow h : Handle] : int ```c return h; ```)
+
+(defn with-handle [n : int f : (fn [^borrow Handle] int)] : int
+  (let [h (handle-open n)
+        r (f h)
+        s (f h)]
+    (do (handle-close h) (+ r s))))
+
+(defn twice-plus-one [^borrow h : Handle] : int
+  (+ 1 (handle-peek h)))
+
+(defn main [] : int
+  (do
+    (println (with-handle 20 (fn [^borrow h : Handle] : int (+ 1 (handle-peek h)))))
+    (println (with-handle 3 twice-plus-one))
+    (let [k 100]
+      (println (with-handle 5 (fn [^borrow h : Handle] : int (+ k (handle-peek h))))))
+    0))

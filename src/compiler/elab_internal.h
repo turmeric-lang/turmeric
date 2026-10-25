@@ -1203,6 +1203,13 @@ typedef struct Elab {
      * NULL when there are none, when contracts are not emitted, and inside any
      * nested function body (a lambda's `return` is the lambda's). */
     const struct RetContract *ret_contract;
+    /* return-value-typed-by-enclosing-argument: the declared result type of
+     * the function whose body is being elaborated, which elab_return puts on
+     * the expected-type channel for its value -- the `return` hands it to the
+     * caller, so the channel's current contents (a call argument's parameter
+     * type, say) are not its type.  NULL when undeclared; saved and restored
+     * exactly where ret_contract is. */
+    Type *ret_expected_type;
 } Elab;
 
 /* See Elab.ret_contract.  Each predicate is NULL when absent; they are applied

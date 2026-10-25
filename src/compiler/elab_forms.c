@@ -5183,7 +5183,16 @@ Expr *elab_return(Elab *e, const Form *call) {
     Expr *value = NULL;
     if (call->as.list.len == 2) {
         /* (return expr) */
+        /* return-value-typed-by-enclosing-argument: the value goes to the
+         * function's caller, not to whatever the `return` sits inside.  A
+         * `(? r)` written as a call argument lowers to a `return` there, and
+         * elaborating its `(Err ...)` under the CALLEE's parameter type built
+         * the untyped carrier, so the function returned an int64 where its
+         * `(Result T E)` struct was declared (a C type error). */
+        Type *saved_expected = e->expected_type;
+        e->expected_type = e->ret_expected_type;
         value = elab_form(e, call->as.list.items[1]);
+        e->expected_type = saved_expected;
         if (!value) return NULL;
 
         /* Phase 11: returning a move-only binding transfers ownership. */
