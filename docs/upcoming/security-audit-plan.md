@@ -49,6 +49,22 @@
 > the survey did not have (every generated doc page ran inline script, so the
 > CSP needed the doc generators changed), and a broken Share button filed as an
 > ordinary bug.
+>
+> **Paths after the extras split (2026-10-23).** The findings below cite the
+> tree as it stood when each pass ran, and several of those paths have since
+> moved out of this repo
+> ([extras-repo-split-plan](../archive/extras-repo-split-plan.md)): `tvm/` is
+> [`turmeric-lang/tvm`](https://github.com/turmeric-lang/tvm), `Formula/` is
+> [`turmeric-lang/homebrew-turmeric`](https://github.com/turmeric-lang/homebrew-turmeric),
+> and `vscode-syntax-ext/` is
+> [`turmeric-lang/vscode-turmeric`](https://github.com/turmeric-lang/vscode-turmeric).
+> Line numbers in `tvm/tvm.sh` and `Formula/turmeric.rb` are as of those
+> passes and are not maintained. The Worker's installer test, which drives
+> `web/worker.js`, stayed here as `tests/tvm-install-script.sh` (it was
+> `tvm/tests/install-script.sh`); the `tvm` CI job runs it against a
+> `turmeric-lang/tvm` checkout at `release.yml`'s `TVM_REF`, and tvm's own
+> suite runs in that repo's CI. The places below that describe the current
+> state rather than a dated finding are updated to match.
 > **Type:** Security / process / tooling
 > **Depends on:** nothing that is not already in the tree. The Debug build's
 > ASan+UBSan (`CMakeLists.txt:33`), the four differential fuzzers
@@ -284,7 +300,9 @@ survey cited moved between 81e12de4 and dc95b2fdc.
   ignores the folder's value while highlighting and formatting keep working.
   The debug wiring (now in `vscode-syntax-ext/extension.js`) takes its adapter
   path from the launch configuration (`TurmericAdapterFactory`), which Restricted Mode covers by
-  refusing to debug.
+  refusing to debug. Since the extras split the surviving extension is
+  `turmeric-lang/vscode-turmeric`; the `restrictedConfigurations` entry is
+  that repo's to keep.
 - **`main` has no branch protection** (`GET /branches/main/protection` ->
   `404 Branch not protected`). Worth a decision given that the workflow is
   PR-only and that CI does not run for PRs not based on `main`. Not assigned to
@@ -1168,7 +1186,9 @@ fix lands, then is archived normally.
 - [x] `CODEOWNERS` at the repo root, grouped by the boundary each path sits on
   rather than by directory, and covering the survey's seven plus
   `justrun.c`, `macro_env.c`, `interpreter_natives.c`, `src/lsp/`, `dap.c`,
-  `tvm/` and `Formula/turmeric.rb`.
+  `tvm/` and `Formula/turmeric.rb`. The last two entries went with their
+  directories in the extras split's soak cleanup; those files are owned in
+  `turmeric-lang/tvm` and `turmeric-lang/homebrew-turmeric` now.
 - [x] Four overclaims corrected (the survey's three, re-graded, plus the `tvm`
   one it missed -- see section 2a): `sandboxing-guide.md` (the false
   "`read-async`/`write-async` are similarly blocked" claim, the I/O row of the
@@ -1569,7 +1589,7 @@ survey did not have, so read that before this list. What landed:
 
 | Row | Outcome |
 | --- | --- |
-| C-1 | **Fixed.** `/install` bootstraps `tvm` (the plan's "or, better") and installs a checksum-verified release; works on Linux, which it never did. `--HEAD` stays as the documented opt-in, so `Formula/turmeric.rb` is unchanged. Answers section 7 question 5. |
+| C-1 | **Fixed.** `/install` bootstraps `tvm` (the plan's "or, better") and installs a checksum-verified release; works on Linux, which it never did. `--HEAD` stays as the documented opt-in, so `Formula/turmeric.rb` is unchanged (it lives in `turmeric-lang/homebrew-turmeric` since the extras split). Answers section 7 question 5. |
 | C-2 | **Fixed.** All three refusals plus `--insecure`; `--from` warns. A mismatch is deliberately not `--insecure`-able. |
 | C-3 | **Fixed.** Drift is detected, `tur build` and `tur audit` verify, and a *third* defect turned up: `tur fetch` was a no-op on a fresh clone. Checking out `:resolved` landed 2026-10-01 ([lock-tracks-ref-not-resolved-commit](../archive/lock-tracks-ref-not-resolved-commit.md)): a fetch checks out the locked commit, fails rather than falling back to `:ref` when it is gone, and `tur fetch --frozen` holds a fetch to the lock. The guide half was already done by WP1. |
 | C-4 | **Fixed.** Sigstore keyless attestation on every asset. Tag signing deliberately not switched on, with the reason recorded in all three `cut-*-release` commands; answers section 7 question 6. |
@@ -1580,7 +1600,10 @@ survey did not have, so read that before this list. What landed:
 
 Two things WP7 added that were not in the list: **the tvm suites ran nowhere
 automatic** before tvm became the install path (a new `tvm` CI job runs both on
-Linux and macOS), and the mermaid pin WP6 handed over in section 2f.
+Linux and macOS), and the mermaid pin WP6 handed over in section 2f. Since the
+extras split, tvm's own suite runs in `turmeric-lang/tvm`'s CI, and this repo's
+`tvm` job runs only the installer test (`tests/tvm-install-script.sh`) against
+the tvm commit `release.yml` pins as `TVM_REF`.
 
 - **Installer (C-1):** make `/install` fetch the latest *release* tarball
   and verify `sha256sums.txt` against a value pinned *in the script* for
@@ -1609,7 +1632,8 @@ Linux and macOS), and the mermaid pin WP6 handed over in section 2f.
 - **Exit:** every action SHA-pinned; release assets carry attestations; the
   installer verifies a checksum; the lock check has a fixture. **All four met**
   -- 56 of 56 pinned, `actions/attest-build-provenance` on every asset,
-  `tvm/tests/install-script.sh` (11 assertions) driving the Worker's real
+  `tvm/tests/install-script.sh` (11 assertions; `tests/tvm-install-script.sh`
+  since the extras split) driving the Worker's real
   `/install` route, and seven new cases in `tests/run-spice-fetch.sh` (17
   total; 5 of the 7 fail against the pre-fix binary). The lock cases went into
   that existing harness rather than a new one -- it is already wired into ctest
@@ -1686,7 +1710,8 @@ checklist, not a gate.
    **Met by WP7 (2026-09-30):** `actions/attest-build-provenance` signs every
    asset through Sigstore keyless, and `/install` installs a checksum-verified
    release through `tvm`, which fails closed. Both covered by
-   `tvm/tests/install-script.sh`.
+   `tests/tvm-install-script.sh` (`tvm/tests/install-script.sh` before the
+   extras split).
 6. Every workflow action is SHA-pinned with least-privilege permissions.
 
 ## 7. Open questions for the author
