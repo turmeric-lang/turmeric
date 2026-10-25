@@ -51,7 +51,7 @@ directory is worse for triage than no index.
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [tvm-install-bash-rc-choice-shadows-profile](tvm-install-bash-rc-choice-shadows-profile.md) | medium-low | With no `.bashrc`, tvm's `install.sh` creates `.bash_profile`, which stops bash login shells reading an existing `.profile`, and interactive non-login shells still don't load tvm. On macOS it writes `.bashrc`, which Terminal's login shells skip. Fix in turmeric-lang/tvm: choose by platform, and don't prompt (it runs as `curl \| sh`) |
+| ~~[tvm-install-bash-rc-choice-shadows-profile](../archive/tvm-install-bash-rc-choice-shadows-profile.md)~~ | medium-low | **RESOLVED 2026-10-25** (archived): turmeric-lang/tvm#2 chooses the bash rc by platform: `~/.bashrc` on Linux (created if missing), and on macOS the first existing of `.bash_profile`/`.bash_login`/`.profile`. It never creates a `.bash_profile` that shadows `.profile`. Shipped by `TVM_REF` `5217967` in `release.yml`; pinned by tvm `tests/run.sh` |
 
 ## Found checking r7rs-heap-frames-plan H6 against the JIT (filed 2026-10-24)
 
