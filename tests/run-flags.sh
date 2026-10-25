@@ -2030,7 +2030,9 @@ fi
 
 # jit-ffi-graduated: the experiment graduated 2026-08-21, so the form needs no
 # --enable on any build.  This replaces the old jit-ffi-gate case, which
-# asserted the opposite.
+# asserted the opposite.  The name aged out of GRADUATED[] at 0.71.0, so
+# `--enable=jit-ffi` is TUR-E0310 now (errors/experiment-retired-name pins
+# that state for every retired name; the old jit-ffi-enable-noop case went).
 printf '(defn main [] : int\n  (unsafe (println (call-ptr 1 [-> :int])))\n  0)\n' > "$TMP_FFI"
 out=$("$TUR" emit-c "$TMP_FFI" 2>&1); rc=$?
 if [ $rc -ne 0 ]; then
@@ -2039,18 +2041,6 @@ elif grep -q "enable=jit-ffi" <<< "$out"; then
     fail "jit-ffi-graduated" "still pointing at the retired --enable=jit-ffi: $out"
 else
     pass "jit-ffi-graduated"
-fi
-
-# jit-ffi-enable-noop: a downstream build.tur / command line that still says
-# --enable=jit-ffi keeps compiling, as an accept-and-warn TUR-W0063 no-op
-# rather than the hard TUR-E0310 an unknown experiment name gets.
-out=$("$TUR" --enable=jit-ffi emit-c "$TMP_FFI" 2>&1); rc=$?
-if [ $rc -ne 0 ]; then
-    fail "jit-ffi-enable-noop" "a lingering --enable=jit-ffi failed the build: $out"
-elif ! grep -q "TUR-W0063" <<< "$out"; then
-    fail "jit-ffi-enable-noop" "expected the TUR-W0063 graduated no-op, got: $out"
-else
-    pass "jit-ffi-enable-noop"
 fi
 
 # refine-crossing-shadowing-binders: a crossing under ANY binder that rebinds a

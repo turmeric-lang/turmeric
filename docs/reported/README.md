@@ -687,8 +687,9 @@ prelude-variant cost it also found was
 
 Follow-ups to PR #1082, which runs a compiled `#lang r7rs` program on a 1 GiB
 stack and prints a message when it overflows. The longer-term design, a stack
-bounded by memory rather than by the C stack, is behind
-`--enable=r7rs-segmented-stack` since 2026-10-23 (beta since 2026-10-24)
+bounded by memory rather than by the C stack, graduated on 2026-10-25
+(prototype 2026-10-23, beta 2026-10-24) and is on for every compiled Scheme
+program on Linux x86-64 and arm64
 ([r7rs-heap-frames-plan](../upcoming/r7rs-heap-frames-plan.md)).
 
 | Report | Severity | One line |

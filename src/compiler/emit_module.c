@@ -14837,7 +14837,7 @@ static void emit_deep_stack_runtime(Buf *out) {
 }
 
 /* r7rs-heap-frames-plan (option C): the segmented stack of a compiled `#lang
- * r7rs` program under --enable=r7rs-segmented-stack.
+ * r7rs` program (the r7rs-segmented-stack experiment, graduated 2026-10-25).
  *
  * H0, the check.  A procedure of an r7rs file opens with TUR_SEG_CHECK --
  * every one of the program's, and those of the stdlib that a cycle of calls
@@ -14899,21 +14899,37 @@ static void emit_deep_stack_runtime(Buf *out) {
  * reach them.  Past the cap, the overflow message and the SIGSEGV the guard
  * page would have given.
  *
- * TUR_R7RS_SEGMENTED_STACK=0 is the bisection hatch: to the compiler it means
- * no check at all (emit_seg_stack_wanted); to a program built with the checks
- * it means no thread is armed, so every check passes and the deep-stack thread
- * is the size it is without the flag.
+ * On by default since graduation (2026-10-25).  TUR_R7RS_SEGMENTED_STACK=0 is
+ * the bisection hatch: to the compiler it means no check at all
+ * (emit_seg_stack_wanted); to a program built with the checks it means no
+ * thread is armed, so every check passes and the deep-stack thread is the size
+ * it was before the feature.
  *
  * Linux x86-64 and arm64 with gcc or clang.  Anywhere else -- macOS,
  * Windows, another architecture, `tur jit` (`__MIRC__`: no inline asm and no
  * thread-locals in c2mir, plan H6) -- TUR_SEG_CHECK is `((void)0)`, nothing
  * else of this is compiled, and the program keeps the deep-stack thread's
- * 1 GiB stack.  Nor in a --shared build, where no deep-stack thread arms it.
+ * 1 GiB stack.  The same goes for a program built under a sanitizer that
+ * tracks stacks (ASan, HWASan, MSan, TSan; UBSan is fine): a re-entry runs on
+ * a stack the sanitizer was never told about (tur_seg_run_at), and ASan's
+ * longjmp interceptor then aborts in sigaltstack.  Teaching it would take
+ * __sanitizer_start_switch_fiber around every stack switch here (plan H7);
+ * until then a sanitized build is simply off (tests/run-r7rs-sanitize.sh runs
+ * that build).  Nor in a --shared build, where no deep-stack thread arms it.
  * The split writes the static helpers and the asm into every unit (each
  * object's trampoline calls its own tur_seg_enter) and keeps the state in the
  * library unit. */
 static const char *const TUR_SEG_STACK_RT[] = {
-    "#if !defined(__MIRC__) && (defined(__GNUC__) || defined(__clang__)) && defined(__linux__) && \\\n"
+    "#if defined(__SANITIZE_ADDRESS__) || defined(__SANITIZE_HWADDRESS__) || defined(__SANITIZE_THREAD__)\n"
+    "#define TUR_SEG_SANITIZED 1\n"
+    "#elif defined(__has_feature)\n"
+    "#if __has_feature(address_sanitizer) || __has_feature(hwaddress_sanitizer) || \\\n"
+    "    __has_feature(memory_sanitizer) || __has_feature(thread_sanitizer)\n"
+    "#define TUR_SEG_SANITIZED 1\n"
+    "#endif\n"
+    "#endif\n"
+    "#if !defined(__MIRC__) && !defined(TUR_SEG_SANITIZED) && \\\n"
+    "    (defined(__GNUC__) || defined(__clang__)) && defined(__linux__) && \\\n"
     "    (defined(__x86_64__) || defined(__aarch64__))\n"
     "#define TUR_SEG_ON 1\n"
     "#include <sys/mman.h>\n"
@@ -15488,10 +15504,9 @@ static const char *const TUR_SEG_STACK_RT[] = {
 };
 
 /* The compile-time half of the hatch: TUR_R7RS_SEGMENTED_STACK=0 in the
- * compiler's environment emits no check and none of the runtime, whatever
- * --enable says -- the C a build without the flag gets. */
+ * compiler's environment emits no check and none of the runtime -- the C every
+ * build got before the feature graduated (2026-10-25). */
 bool emit_seg_stack_wanted(void) {
-    if (!g_opt_r7rs_segmented_stack) return false;
     const char *e = getenv("TUR_R7RS_SEGMENTED_STACK");
     return !(e && e[0] == '0');
 }
@@ -16865,7 +16880,6 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
      * In a split build that is the library unit, which defines the functions
      * once (emit_split_once_fns) for the program unit's main to call: they
      * name `main` only as an external, resolved where the units link. */
-    if (g_opt_r7rs && g_opt_r7rs_segmented_stack) experiment_warn_if_used("r7rs-segmented-stack");
     if (g_opt_r7rs && emit_seg_stack_wanted()) emit_seg_stack_runtime(out, shared);
     if (g_opt_r7rs && !shared) {
         Buf deep; buf_init(&deep);

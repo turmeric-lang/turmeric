@@ -11,7 +11,8 @@
 # pre-graduation default -- the "inline-C not supported" error -- survives as
 # TUR_REPL_JIT_INLINE_C=0, and the first case below keeps it covered (the
 # experimental-flags guide: a kept hatch keeps a harness).  The old
-# `--enable=repl-jit-inline-c` is a TUR-W0063 no-op for one minor line.
+# `--enable=repl-jit-inline-c` was a TUR-W0063 no-op until the name aged out
+# of GRADUATED[] at 0.71.0; it is TUR-E0310 now.
 #
 # Asserts on the evaluated output, never on exit status alone: a feature that
 # silently did nothing would still exit 0.
@@ -93,13 +94,6 @@ has   "loop body: compiled and called"     "=> 93345" "$out"
 has   "loop body: second call (cached)"    "=> 993"   "$out"
 lacks "loop body: no refusal"              "inline-C not supported" "$out"
 lacks "graduated: no lifecycle warning"    "TUR-W006" "$out"
-
-# --- The retired flag is a graduated no-op ----------------------------------
-out="$(printf '%s\n' "${C_MIX[@]}" '(c-mix 3 4)' ':quit' \
-       | repl_out --enable=repl-jit-inline-c)"
-has   "old --enable: TUR-W0063, not an unknown-name error" "TUR-W0063" "$out"
-lacks "old --enable: not TUR-E0310"        "TUR-E0310" "$out"
-has   "old --enable: still compiled"       "=> 93345"  "$out"
 
 # --- Branches, a hoisted #include, and every scalar result kind ------------
 # The float probe uses 7.1, not an integer (CLAUDE.md): 7.1 * 2.5^2 = 44.375.
