@@ -9173,8 +9173,8 @@ static intptr_t list_hyeq_qu_b1(intptr_t env, intptr_t v, DK *__kont) {
     return (intptr_t)list_hyeq_qu__cps(a0, a1, a2, __kont); /* cps->cps, bounced */
 }
 typedef struct { int64_t f0; int64_t f1; int64_t f2; } list_hyeq_qu_j0_env;
-static intptr_t list_hyeq_qu_j0(intptr_t env, intptr_t __t3__slot, DK *__kont) {
-    list_hyeq_qu_j0_env *__cap = (list_hyeq_qu_j0_env *)(intptr_t)env;
+static intptr_t list_hyeq_qu_j0(intptr_t __lh_env, intptr_t __t3__slot, DK *__kont) {
+    list_hyeq_qu_j0_env *__cap = (list_hyeq_qu_j0_env *)(intptr_t)__lh_env;
     int64_t l1 = __cap->f0;
     int64_t l2 = __cap->f1;
     int64_t cmp_fn = __cap->f2;
@@ -9324,8 +9324,8 @@ static bool cons_hyeq_hygo(int64_t c1, int64_t c2) {
 }
 
 typedef struct { int64_t f0; } _un_uncons_hyfmap_j0_env;
-static intptr_t _un_uncons_hyfmap_j0(intptr_t env, intptr_t __t2__slot, DK *__kont) {
-    _un_uncons_hyfmap_j0_env *__cap = (_un_uncons_hyfmap_j0_env *)(intptr_t)env;
+static intptr_t _un_uncons_hyfmap_j0(intptr_t __lh_env, intptr_t __t2__slot, DK *__kont) {
+    _un_uncons_hyfmap_j0_env *__cap = (_un_uncons_hyfmap_j0_env *)(intptr_t)__lh_env;
     int64_t __t1 = __cap->f0;
     __dk_join_release_env((intptr_t)__cap);
     int64_t __t2 = (int64_t)(__t2__slot);
@@ -11235,8 +11235,8 @@ static int64_t poly_hyrank(int64_t x) {
         TUR_MUSTTAIL return __inst_Rank_rank_int(x);
 }
 
-static intptr_t use_hyshow_j1(intptr_t env, intptr_t __t1__slot) {
-    (void)env;
+static intptr_t use_hyshow_j1(intptr_t __lh_env, intptr_t __t1__slot) {
+    (void)__lh_env;
     const char * __t1 = (const char *)(__t1__slot);
     int64_t __t0;
     puts(__t1);
@@ -11244,8 +11244,8 @@ static intptr_t use_hyshow_j1(intptr_t env, intptr_t __t1__slot) {
     return (intptr_t)(__tur_str_1);
 }
 typedef struct { tur_poly_fn_t f0; } use_hyshow_j0_env;
-static intptr_t use_hyshow_j0(intptr_t env, intptr_t __t5__slot, DK *__kont) {
-    use_hyshow_j0_env *__cap = (use_hyshow_j0_env *)(intptr_t)env;
+static intptr_t use_hyshow_j0(intptr_t __lh_env, intptr_t __t5__slot, DK *__kont) {
+    use_hyshow_j0_env *__cap = (use_hyshow_j0_env *)(intptr_t)__lh_env;
     tur_poly_fn_t f = __cap->f0;
     __dk_join_release_env((intptr_t)__cap);
     const char * __t5 = (const char *)(__t5__slot);
@@ -11304,8 +11304,8 @@ __attribute__((unused)) static const char * use_hyshow(tur_poly_fn_t f) {
     return __ret;
 }
 typedef struct { int64_t f0; } use_hyrank_j1_env;
-static intptr_t use_hyrank_j1(intptr_t env, intptr_t __t1__slot, DK *__kont) {
-    use_hyrank_j1_env *__cap = (use_hyrank_j1_env *)(intptr_t)env;
+static intptr_t use_hyrank_j1(intptr_t __lh_env, intptr_t __t1__slot, DK *__kont) {
+    use_hyrank_j1_env *__cap = (use_hyrank_j1_env *)(intptr_t)__lh_env;
     int64_t __t0 = __cap->f0;
     __dk_join_release_env((intptr_t)__cap);
     int64_t __t1 = (int64_t)(__t1__slot);
@@ -11314,8 +11314,8 @@ static intptr_t use_hyrank_j1(intptr_t env, intptr_t __t1__slot, DK *__kont) {
     return dk_run(__kont, (intptr_t)(__t2));
 }
 typedef struct { tur_poly_fn_t f0; } use_hyrank_j0_env;
-static intptr_t use_hyrank_j0(intptr_t env, intptr_t __t0__slot, DK *__kont) {
-    use_hyrank_j0_env *__cap = (use_hyrank_j0_env *)(intptr_t)env;
+static intptr_t use_hyrank_j0(intptr_t __lh_env, intptr_t __t0__slot, DK *__kont) {
+    use_hyrank_j0_env *__cap = (use_hyrank_j0_env *)(intptr_t)__lh_env;
     tur_poly_fn_t f = __cap->f0;
     __dk_join_release_env((intptr_t)__cap);
     int64_t __t0 = (int64_t)(__t0__slot);

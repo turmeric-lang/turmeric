@@ -34,6 +34,14 @@ sentence above does not cover them. If you touch this file, check
 `ls docs/reported/` against it -- an index that silently omits a quarter of the
 directory is worse for triage than no index.
 
+## Found building `spices/lmdb` (filed 2026-10-25)
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [borrow-param-consumed-in-own-body](borrow-param-consumed-in-own-body.md) | medium | `^borrow` is enforced only at call sites: inside the borrowing function (or a `(fn [^borrow h : H] ...)` lambda) the parameter can be passed to a consuming slot, so a double close compiles clean |
+| [ok-nil-lowercase-miscompiles](ok-nil-lowercase-miscompiles.md) | low-medium | `(ok nil)` for a `(Result nil E)` monomorphises `ok` with a `void` parameter -- two C errors; `(Ok nil)` works |
+| [bare-nullary-ctor-as-value-emits-undeclared-c](bare-nullary-ctor-as-value-emits-undeclared-c.md) | low | `(let [c Red] ...)` / `[Red Green]` -- a bare nullary constructor as a value -- emits an undeclared C identifier; `(Red)` works |
+
 ## Found re-checking the ADT/GADT unification's representation change (filed 2026-10-25)
 
 | Report | Severity | One line |

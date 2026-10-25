@@ -560,6 +560,16 @@ int fn_type_subtype(Type actual, Type expected) {
     if (actual.kind != TY_FN || expected.kind != TY_FN) return 1;
     if (actual.as.fn.arity != expected.as.fn.arity) return 1; /* arity mismatch caught elsewhere */
     for (uint32_t i = 0; i < actual.as.fn.arity; i++) {
+        /* fn-type-borrow-param: a slot the expected type borrows must be
+         * borrowed by the function passed in -- one that consumed it would
+         * spend an obligation the caller still holds.  Where both borrow, the
+         * slot consumes nothing, so its linearity flags are moot: a defn
+         * stamps FA_LINEAR on a `^borrow h : Handle` parameter of a linear
+         * type, and a (fn [^borrow Handle] R) type does not. */
+        bool ab = FN_ARG_FLAG(actual.as.fn, i, FA_BORROW);
+        bool eb = FN_ARG_FLAG(expected.as.fn, i, FA_BORROW);
+        if (eb && !ab) return 0;
+        if (eb && ab) continue;
         if (FN_ARG_FLAG(actual.as.fn, i, FA_LINEAR) != FN_ARG_FLAG(expected.as.fn, i, FA_LINEAR)) return 0;
     }
     return 1;
@@ -4489,12 +4499,33 @@ size_t adt_app_byval_value_size_bytes(Type t) {
         size_t total = 0;
         for (uint32_t i = 0; i < c->n_fields; i++) {
             TypeKind k = c->fields[i].kind;
+            size_t fsz = 0;
             if (c->fields[i].full_type) {
                 Type rf = substitute_adt_app_type_owned(c->fields[i].full_type, def, args);
                 k = rf.kind;
+                /* nested-byval-app-field-sized-as-a-word: measure the field
+                 * the way the monomorph layout (emit_adt_app_instance) lays it
+                 * out.  A field whose C type is an INLINE aggregate --
+                 * `tur_adt_Option__cstr _0;` inside `(Result (Option cstr) E)`
+                 * -- takes its own width, 16 bytes there, not the 8-byte
+                 * carrier slot.  Counting it as 8 called the 24-byte Result
+                 * 16, so a closure returning one kept the generic word shim in
+                 * slot 0 (thunk_type_has_concrete_c_abi), the caller's sret
+                 * pointer was read as the shim's env, and the first call
+                 * jumped to address 0.  Boxed and pointer fields stay a word. */
+                if (!adt_field_is_wide_box(def, &rf)) {
+                    const char *ct = adt_field_c_type(def, &c->fields[i], args);
+                    size_t ctl = ct ? strlen(ct) : 0;
+                    if (ctl > 8 && strncmp(ct, "tur_adt_", 8) == 0 && ct[ctl - 1] != '*') {
+                        if (rf.kind == TY_APP)
+                            fsz = adt_app_byval_value_size_bytes(rf);
+                        else if (rf.kind == TY_ADT && rf.as.adt_.def)
+                            fsz = adt_byval_value_size_bytes(rf.as.adt_.def);
+                    }
+                }
                 free_struct_app_type(rf);
             }
-            total += adt_field_size_bytes(k);
+            total += fsz ? fsz : adt_field_size_bytes(k);
         }
         if (total > widest) widest = total;
     }

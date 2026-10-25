@@ -1,0 +1,24 @@
+;; question-op-on-unit-result: `(? r)` where r is a `(Result nil E)`.
+;;
+;; The `?` lowers to `ok-val`, monomorphised at A := nil.  Its match result
+;; temp was declared at nil's C name, `void __tN = 0;`, and its Err arm's
+;; `(default-of A)` written `(void){0}` -- two hard C errors for the most
+;; common shape in a C-wrapping library: a chain of setters, each returning
+;; "it worked, nothing to say" or an error.  The temp is nil's int64 slot.
+
+(defdata E (Bad int))
+
+(defn set-one [n : int] : (Result nil E)
+  (if (> n 0) (Ok nil) (err (Bad n))))
+
+(defn set-two [n : int] : (Result nil E)
+  (do
+    (? (set-one n))
+    (set-one (- n 1))))
+
+(defn main [] : int
+  (do
+    (println (if (ok? (set-two 2)) "ok" "err"))
+    (println (if (ok? (set-two 1)) "ok" "err"))
+    (println (if (ok? (set-two 0)) "ok" "err"))
+    0))

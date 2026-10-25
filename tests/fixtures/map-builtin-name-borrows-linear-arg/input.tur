@@ -1,0 +1,27 @@
+;; map-builtin-name-borrows-linear-arg: a user function named like a map
+;; builtin (`get`, `has?`) taking a `^borrow` linear handle.
+;;
+;; Calls to those names first check whether the map argument is a
+;; `^persistent` binding.  The check used to ELABORATE the arguments and then,
+;; on the ordinary path, hand the call to elab_call_fn -- which elaborated
+;; them again.  The discarded first pass spent the linear handle, so the next
+;; use of it was "linear value 'h' used after being consumed" (TUR-E0101).
+
+(defopaque Store :int :linear)
+
+(defn store-open [] : Store ```c return 40; ```)
+(defn store-close [s : Store] : nil ```c (void)s; ```)
+(defn get [^borrow s : Store k : int] : int ```c return s + k; ```)
+(defn has? [^borrow s : Store k : int] : bool ```c return k < s; ```)
+
+(defn main [] : int
+  (let [h (store-open)
+        a (get h 2)
+        b (has? h 1)
+        c (get h 0)]
+    (do
+      (store-close h)
+      (println a)
+      (println (if b "yes" "no"))
+      (println c)
+      0)))

@@ -1,11 +1,13 @@
 # `spices/lmdb`: LMDB bindings, an embedded key-value store
 
-> **Status:** draft, not started. Written 2026-10-24 after a survey of
-> embeddable key-value stores (section 1) chose LMDB. The Windows assessment
-> (section 7) is to be run by hand on a Windows box before L0 closes.
+> **Status:** L0-L4 implemented 2026-10-25 on branch `lmdb-spice` in both
+> repos (section 11 records what landed and where it departs from the
+> draft). **Open: section 7's Windows assessment**, which needs a Windows box
+> and is the one thing between this plan and the archive.
 > **Track:** post-v1 -- nothing on the v1 line depends on it.
-> **Type:** spice (in `../turmeric-spices/`). No compiler or stdlib change is
-> needed; section 9 lists where it leans on stdlib as it stands.
+> **Type:** spice (in `../turmeric-spices/`). The draft expected no compiler
+> change; building it found six compiler defects, fixed on turmeric's
+> `lmdb-spice` branch (section 11), which the spice needs.
 
 ## 0. Summary
 
@@ -446,7 +448,7 @@ reference for what "working" looks like.
 | A4 reported map on reopen; entries intact? | 39 MiB (the file's size, not the 1 MiB asked); yes | |
 | A5 reader blocked or concurrent; errors | (not run) | |
 | A6 error deleting an open db; clean delete after close? | n.a. (POSIX unlinks open files) | |
-| A7 `tur test` result | (no spice yet) | |
+| A7 `tur test` result | 5 files, 41 cases, all pass (2026-10-25) | |
 
 How each answer lands in the plan:
 
@@ -490,3 +492,84 @@ How each answer lands in the plan:
   share an env, and that is LMDB's business, not ours.
 - Cross-architecture file portability.
 - Following libmdbx; revisit only if LMDB stops being maintained.
+
+## 11. What landed (2026-10-25)
+
+All five phases' code and tests, on branch `lmdb-spice` in turmeric-spices
+(`spices/lmdb`) and turmeric (the compiler fixes). Linux x86-64 measured;
+the other CI legs run when the spice PR does.
+
+### Departures from the draft
+
+- **Flags are a `DbiFlags` bit set**, not a vector: `(dbi-flags+
+  (dbi-create) (dbi-dup-sort))`. A `[(DbiCreate)]` literal leaked its vector
+  on every `dbi-open` (nothing frees a `[...]` temporary), and a typed `&
+  rest` of a `defdata` cannot be walked as a list.
+- **`Incompatible` is not "reopened without `:dup-sort`".** LMDB 0.9.33
+  reopens a named database with the flags stored in the file, whatever is
+  passed (`dbi-dup-sort?` reports them). `MDB_INCOMPATIBLE` there means the
+  name is an ordinary key of the main database; that is what section 6's
+  test checks now.
+- **`lmdb/bytes`** holds the `Bytes` twins (and `put-reserve!`), so plain
+  users of `lmdb/ops` do not load `stdlib/serial.tur`.
+- **Added:** `with-cursor` (closes on panic), `with-nested-txn`,
+  `cursor-fold` / `cursor-fold-from` (from the L4 review: a recursive walk
+  overflowed the default stack near 1e5 entries), `has?`, `put-append!`,
+  `dbi-main`, `env-map-size`, `env-read-only?`, `txn-id`, the `-dup` cursor
+  moves, `cursor-del-all-dups!`, `cursor-dup-count`.
+- **Txn reset/renew** (L3, "if a benchmark wants it"): not wanted; the
+  benchmark's read loop is one transaction.
+- **Abort on panic** is a malloc'd C guard the scoped forms' `defer` fires,
+  not a `^mut` flag (which leaked its cell per transaction). A `defer`
+  cannot test the runtime's `tur_panicking`: it is cleared before defers run.
+
+### Compiler fixes it needed (turmeric `lmdb-spice`, one commit)
+
+| Fix | Symptom in the spice |
+| --- | --- |
+| `fn-type-borrow-param` | `(fn [^borrow Txn] R)` read `^borrow` as a type parameter; no scoped form could be typed |
+| `map-call-elaborates-args-twice` | `(get txn dbi k)`: the user `get` / `has?` spent the borrowed `Txn` |
+| `return-value-typed-by-enclosing-argument` | `(put! t (? (dbi-main t)) k v)` -- `?` as an argument -- emitted invalid C |
+| `let-ending-in-panic-declares-void-temp`, `nil-instantiated-merge-temp-declared-void` | the panic test; `(? (put! ...))` |
+| `cps-capture-named-env` | any CPS-lifted function with a parameter named `env` |
+| `nested-byval-app-field-sized-as-a-word` | a `(Result (Option cstr) E)` callback segfaulted (sret through the word shim) |
+
+Filed, not fixed: `borrow-param-consumed-in-own-body`,
+`ok-nil-lowercase-miscompiles`, `bare-nullary-ctor-as-value-emits-undeclared-c`
+(docs/reported/).
+
+### Tests and leaks
+
+`tur test tests`: smoke, core (20), cursor (14), bytes (6), threads (1) --
+every section 6 bullet, the panic and thread cases included.
+`errors/run.sh`: five compile-fail fixtures (leaked `Env`, unfinished `Txn`,
+double `cursor-close`, use after commit, a consuming callback).
+
+Every suite rebuilt with `-fsanitize=address` and run with leak detection:
+no memory errors. The leaks reported are the copies `get` and the cursor
+moves hand to the caller (the caller frees them, as with stdlib's "caller
+frees" functions) and `Result` payload boxes the compiler never frees
+(`(ok (DbStat ...))`, `(err (MapFull))`), not anything the binding keeps.
+This was a manual run: `tests/run-leak-check.sh` covers turmeric fixtures,
+not spices.
+
+### Benchmark (L4)
+
+`spices/lmdb/bench/` (its own project, so `lmdb` does not depend on
+`sqlite`); median of three, Linux x86-64, fsync off on both, 1e5 keys:
+
+| ns/op | lmdb | sqlite |
+| --- | ---: | ---: |
+| load (one txn) | 705 | 1 519 |
+| point get | 818 | 5 312 |
+| scan | 66 | 218 |
+| one-put commits | 5 689 | 10 913 |
+
+### `kv` adapter review (L4)
+
+`bench/src/bench/kv_adapter.tur` writes get, put, put-if-absent, delete,
+has, increment and key listing against the binding and runs them. What it
+found is fixed above (folds, flags, the compiler fixes); what remains for the
+`kv` spice to decide is ownership of returned strings (document the copy, or
+adopt it into `String`) and expiry, which LMDB does not have.
+

@@ -9095,8 +9095,8 @@ static intptr_t list_hyeq_qu_b1(intptr_t env, intptr_t v, DK *__kont) {
     return (intptr_t)list_hyeq_qu__cps(a0, a1, a2, __kont); /* cps->cps, bounced */
 }
 typedef struct { int64_t f0; int64_t f1; int64_t f2; } list_hyeq_qu_j0_env;
-static intptr_t list_hyeq_qu_j0(intptr_t env, intptr_t __t3__slot, DK *__kont) {
-    list_hyeq_qu_j0_env *__cap = (list_hyeq_qu_j0_env *)(intptr_t)env;
+static intptr_t list_hyeq_qu_j0(intptr_t __lh_env, intptr_t __t3__slot, DK *__kont) {
+    list_hyeq_qu_j0_env *__cap = (list_hyeq_qu_j0_env *)(intptr_t)__lh_env;
     int64_t l1 = __cap->f0;
     int64_t l2 = __cap->f1;
     int64_t cmp_fn = __cap->f2;
@@ -9246,8 +9246,8 @@ static bool cons_hyeq_hygo(int64_t c1, int64_t c2) {
 }
 
 typedef struct { int64_t f0; } _un_uncons_hyfmap_j0_env;
-static intptr_t _un_uncons_hyfmap_j0(intptr_t env, intptr_t __t2__slot, DK *__kont) {
-    _un_uncons_hyfmap_j0_env *__cap = (_un_uncons_hyfmap_j0_env *)(intptr_t)env;
+static intptr_t _un_uncons_hyfmap_j0(intptr_t __lh_env, intptr_t __t2__slot, DK *__kont) {
+    _un_uncons_hyfmap_j0_env *__cap = (_un_uncons_hyfmap_j0_env *)(intptr_t)__lh_env;
     int64_t __t1 = __cap->f0;
     __dk_join_release_env((intptr_t)__cap);
     int64_t __t2 = (int64_t)(__t2__slot);
@@ -11155,13 +11155,13 @@ static intptr_t __dk_hcase_202(intptr_t __dkenv, intptr_t __dkarg, struct DK *__
     return dk_tail_resume((struct DK *)(intptr_t)k_5, (intptr_t)((int64_t)INT64_C(41)));
 }
 
-static intptr_t main_hk0(intptr_t env, intptr_t __t0__slot, DK *__kont) {
-    (void)env;
+static intptr_t main_hk0(intptr_t __lh_env, intptr_t __t0__slot, DK *__kont) {
+    (void)__lh_env;
     int64_t __t0 = (int64_t)(__t0__slot);
     return dk_run(__kont, (intptr_t)(__t0));
 }
-static intptr_t main_pf1(intptr_t env, intptr_t __t4__slot) {
-    (void)env;
+static intptr_t main_pf1(intptr_t __lh_env, intptr_t __t4__slot) {
+    (void)__lh_env;
     int64_t __t4 = (int64_t)(__t4__slot);
     int64_t __t3;
     int64_t __t2;

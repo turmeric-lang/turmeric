@@ -1,0 +1,16 @@
+;; let-ending-in-panic-aggregate-return: a `let` whose body panics, in a
+;; function that returns a by-value aggregate.
+;;
+;; The `let` is typed never.  Its result temp was declared with that type's C
+;; spelling, `void __tN;` -- a hard C error -- whenever the never did not
+;; unify into a word (an `int` return hid it; a `(Result T E)` did not).
+
+(defn always-fails [n : int] : (Result int cstr)
+  (let [m (+ n 1)]
+    (panic "always-fails")))
+
+(defn main [] : int
+  (let [r (catch-unwind (fn [] : int (do (always-fails 1) 0)))]
+    (do
+      (println (if (err? r) "caught" "returned"))
+      0)))

@@ -9094,8 +9094,8 @@ static intptr_t list_hyeq_qu_b1(intptr_t env, intptr_t v, DK *__kont) {
     return (intptr_t)list_hyeq_qu__cps(a0, a1, a2, __kont); /* cps->cps, bounced */
 }
 typedef struct { int64_t f0; int64_t f1; int64_t f2; } list_hyeq_qu_j0_env;
-static intptr_t list_hyeq_qu_j0(intptr_t env, intptr_t __t3__slot, DK *__kont) {
-    list_hyeq_qu_j0_env *__cap = (list_hyeq_qu_j0_env *)(intptr_t)env;
+static intptr_t list_hyeq_qu_j0(intptr_t __lh_env, intptr_t __t3__slot, DK *__kont) {
+    list_hyeq_qu_j0_env *__cap = (list_hyeq_qu_j0_env *)(intptr_t)__lh_env;
     int64_t l1 = __cap->f0;
     int64_t l2 = __cap->f1;
     int64_t cmp_fn = __cap->f2;
@@ -9245,8 +9245,8 @@ static bool cons_hyeq_hygo(int64_t c1, int64_t c2) {
 }
 
 typedef struct { int64_t f0; } _un_uncons_hyfmap_j0_env;
-static intptr_t _un_uncons_hyfmap_j0(intptr_t env, intptr_t __t2__slot, DK *__kont) {
-    _un_uncons_hyfmap_j0_env *__cap = (_un_uncons_hyfmap_j0_env *)(intptr_t)env;
+static intptr_t _un_uncons_hyfmap_j0(intptr_t __lh_env, intptr_t __t2__slot, DK *__kont) {
+    _un_uncons_hyfmap_j0_env *__cap = (_un_uncons_hyfmap_j0_env *)(intptr_t)__lh_env;
     int64_t __t1 = __cap->f0;
     __dk_join_release_env((intptr_t)__cap);
     int64_t __t2 = (int64_t)(__t2__slot);
@@ -11146,8 +11146,8 @@ static int64_t with_hyregion(int64_t body) {
         return ((int64_t (*)(void*))(intptr_t)((int64_t *)((void *)(intptr_t)(body)))[0])((void *)(intptr_t)(body));
 }
 
-static intptr_t test_hyreset_k0(intptr_t env, intptr_t __t0__slot, DK *__kont) {
-    (void)env;
+static intptr_t test_hyreset_k0(intptr_t __lh_env, intptr_t __t0__slot, DK *__kont) {
+    (void)__lh_env;
     int64_t __t0 = (int64_t)(__t0__slot);
     return dk_run(__kont, (intptr_t)(__t0));
 }
@@ -11159,13 +11159,13 @@ __attribute__((unused)) static int64_t test_hyreset() {
     int64_t __r = __dk_enter0(test_hyreset__cps, NULL, 0);
     return (int64_t)(__r);
 }
-static intptr_t test_hyshift_k0(intptr_t env, intptr_t __t0__slot, DK *__kont) {
-    (void)env;
+static intptr_t test_hyshift_k0(intptr_t __lh_env, intptr_t __t0__slot, DK *__kont) {
+    (void)__lh_env;
     int64_t __t0 = (int64_t)(__t0__slot);
     return dk_run(__kont, (intptr_t)(__t0));
 }
-static intptr_t test_hyshift_s1(intptr_t env, DK *subk) {
-    (void)env; (void)subk;
+static intptr_t test_hyshift_s1(intptr_t __lh_env, DK *subk) {
+    (void)__lh_env; (void)subk;
     int64_t __t2;
     int64_t __ps_202 = (((int64_t (*)(int64_t))(intptr_t)(__fn_6))(INT64_C(42)));
     if (tur_panicking) return ((int64_t)0);
@@ -11183,13 +11183,13 @@ __attribute__((unused)) static int64_t test_hyshift() {
     int64_t __r = __dk_enter0(test_hyshift__cps, NULL, 0);
     return (int64_t)(__r);
 }
-static intptr_t test_hyshift_hynested_k0(intptr_t env, intptr_t __t0__slot, DK *__kont) {
-    (void)env;
+static intptr_t test_hyshift_hynested_k0(intptr_t __lh_env, intptr_t __t0__slot, DK *__kont) {
+    (void)__lh_env;
     int64_t __t0 = (int64_t)(__t0__slot);
     return dk_run(__kont, (intptr_t)(__t0));
 }
-static intptr_t test_hyshift_hynested_s1(intptr_t env, DK *subk) {
-    (void)env; (void)subk;
+static intptr_t test_hyshift_hynested_s1(intptr_t __lh_env, DK *subk) {
+    (void)__lh_env; (void)subk;
     int64_t __t2;
     int64_t __ps_203 = (((int64_t (*)(int64_t))(intptr_t)(__fn_9))(INT64_C(5)));
     if (tur_panicking) return ((int64_t)0);

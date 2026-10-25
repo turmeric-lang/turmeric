@@ -3057,31 +3057,24 @@ static Expr *elab_lower_map_call(Elab *e, const Form *call, const Symbol *name) 
         }
     }
     
-    Expr *first_arg = NULL;
-    if (n_args > 0) {
-        first_arg = elab_form(e, call->as.list.items[1]);
-        if (!first_arg) return NULL;
-    }
-    
     /* Check if first argument is a variable reference to a persistent binding */
-    /* For map-new, first_arg is NULL, so we treat it as non-persistent (it creates a new map) */
+    /* For map-new, there is no first argument, so we treat it as non-persistent (it creates a new map) */
+    /* map-call-elaborates-args-twice: decide from the binding, not by
+     * elaborating the argument.  This used to elab_form every argument and
+     * then, for the ordinary (non-persistent) case, throw the results away
+     * and let elab_call_fn elaborate them again -- so each argument was
+     * elaborated twice, and a linear one was consumed by the discarded pass:
+     * `(get txn dbi "k")` with `get` a user function taking `^borrow txn`
+     * reported TUR-E0101 on the NEXT use of `txn`.  A persistent map is
+     * always a plain symbol naming a `^persistent` let binding. */
     bool is_persistent_map = false;
-    if (first_arg && first_arg->kind == EX_VAR && first_arg->as.var.binding->is_persistent) {
-        is_persistent_map = true;
+    if (n_args > 0 && call->as.list.items[1]->tag == F_SYM) {
+        Binding *fb = scope_lookup_visible(e, e->scope, call->as.list.items[1]->as.sym);
+        if (fb && fb->is_persistent) is_persistent_map = true;
     }
-    
+
     if (!is_persistent_map) {
         /* Not a persistent binding - fall through to normal elaboration */
-        /* Re-elaborate all args together */
-        Expr **args = (Expr **)arena_alloc(e->arena, n_args * sizeof(Expr *));
-        if (n_args > 0) {
-            args[0] = first_arg;
-            for (uint32_t i = 1; i < n_args; i++) {
-                args[i] = elab_form(e, call->as.list.items[1 + i]);
-                if (!args[i]) return NULL;
-            }
-        }
-        
         /* Look up the function binding */
         bool fn_qual_err = false;
         Binding *fn_binding = elab_lookup_sym(e, name, call->as.list.items[0]->span, &fn_qual_err);
@@ -3097,10 +3090,11 @@ static Expr *elab_lower_map_call(Elab *e, const Form *call, const Symbol *name) 
     extern bool g_needs_hamt;
     g_needs_hamt = true;
     
-    /* Elaborate remaining arguments (for map-new, n_args is 0, so this is safe) */
+    /* Elaborate the arguments (for map-new, n_args is 0, so this is safe) */
     Expr **args = (Expr **)arena_alloc(e->arena, n_args * sizeof(Expr *));
     if (n_args > 0) {
-        args[0] = first_arg;
+        args[0] = elab_form(e, call->as.list.items[1]);
+        if (!args[0]) return NULL;
         for (uint32_t i = 1; i < n_args; i++) {
             args[i] = elab_form(e, call->as.list.items[1 + i]);
             if (!args[i]) return NULL;
@@ -9885,7 +9879,7 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
                                         TUR_E0001_TYPE_MISMATCH,
                                         "function '%s' arg %u: linear function type mismatch"
                                         " -- expected %s but got a function with different"
-                                        " linearity annotations; ^linear parameters must match exactly",
+                                        " linearity annotations; ^linear and ^borrow parameters must match exactly",
                                         fn_binding->name->name, i + 1,
                                         exp_buf.data);
                     buf_free(&exp_buf);

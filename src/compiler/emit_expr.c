@@ -2406,6 +2406,15 @@ static bool merge_temp_fn_is_fat(EmitCtx *ctx, Type type) {
     return repr_of(&r, REPR_POS_RESULT) == REPR_FAT_HANDLE;
 }
 
+/* nil-instantiated-merge-temp-declared-void: the C spelling of a scalar
+ * match result temp.  A result a spec binds to `nil` (`ok-val` at
+ * `(Result nil E)`) c-names to `void`, which no variable can be; it rides the
+ * int64 slot a nil payload already uses (adt_field_c_type). */
+static const char *match_temp_word_ctype(Type t) {
+    const char *cn = type_c_name(t);
+    return (cn && strcmp(cn, "void") == 0) ? "int64_t" : cn;
+}
+
 static void emit_control_result_temp_decl(EmitCtx *ctx, Buf *body, Type type,
                                           const Expr *tail_expr, const char *name) {
     /* generic-instance-result-byvalue-struct-okarm: when the control form's tail
@@ -2465,6 +2474,20 @@ static void emit_control_result_temp_decl(EmitCtx *ctx, Buf *body, Type type,
         buf_printf(body, "void * %s;\n", name);
         emit_localvar_record_ctype(name, "void *");
         return;
+    }
+    /* nil-instantiated-merge-temp-declared-void: a type variable a spec
+     * binds to `nil` -- `ok-val` at `(Result nil E)`, which `(? (put! ...))`
+     * reaches -- resolves here to nil, whose C name is `void`, and `void
+     * __tN = 0;` is a hard C error.  The value is the int64 slot a nil
+     * payload already rides (adt_field_c_type), so the temp is that word. */
+    {
+        const char *cn = emit_type_c_name(ctx, type);
+        if (cn && strcmp(cn, "void") == 0) {
+            indent_buf(body, ctx->indent);
+            buf_printf(body, "int64_t %s = 0;\n", name);
+            emit_localvar_record_ctype(name, "int64_t");
+            return;
+        }
     }
     emit_temp_decl(ctx, body, type, name, NULL);
     emit_localvar_record_ctype(name, emit_type_c_name(ctx, type));
@@ -4930,7 +4953,11 @@ static char *emit_let_value(EmitCtx *ctx, Buf *body, const Expr *e) {
     bool body_has_return_or_throw = expr_contains_return_or_throw(e->as.let_.body);
     
     char *tmp = NULL;
-    bool nil_result = (e->type.kind == TY_NIL);
+    /* let-ending-in-panic-declares-void-temp: a `let` whose body never
+     * returns (it ends in `panic`) is typed never, which has no C value --
+     * declaring its result temp emitted `void __tN;`, a hard C error, in any
+     * function the never did not unify into a word (a `(Result T E)` return). */
+    bool nil_result = (e->type.kind == TY_NIL || e->type.kind == TY_NEVER);
     /* Phase R1: Also create temp if body has return/throw but let has non-nil type */
     if (!nil_result && !body_has_return_or_throw) {
         tmp = fresh_tmp(ctx);
@@ -21488,8 +21515,8 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                             _lrt.kind == TY_ANY || _lrt.kind == TY_UNION)
                             buf_printf(body, "%s %s = {0};\n", type_c_name(_lrt), tmp);
                         else
-                            buf_printf(body, "%s %s = 0;\n", type_c_name(_lrt), tmp);
-                        emit_localvar_record_ctype(tmp, type_c_name(_lrt));
+                            buf_printf(body, "%s %s = 0;\n", match_temp_word_ctype(_lrt), tmp);
+                        emit_localvar_record_ctype(tmp, match_temp_word_ctype(_lrt));
                     }
                     char *scrut_val = emit_value(ctx, body, e->as.match_.scrutinee);
                     TypeKind _sk = e->as.match_.scrutinee->type.kind;
@@ -21743,10 +21770,10 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     res_ty.kind == TY_ANY || res_ty.kind == TY_UNION)
                     buf_printf(body, "%s %s = {0};\n", type_c_name(res_ty), tmp);
                 else
-                    buf_printf(body, "%s %s = 0;\n", type_c_name(res_ty), tmp);
+                    buf_printf(body, "%s %s = 0;\n", match_temp_word_ctype(res_ty), tmp);
                 /* Record the declared type: the arm assignments ask it
                  * (emit_merge_assign_bridged). */
-                emit_localvar_record_ctype(tmp, type_c_name(res_ty));
+                emit_localvar_record_ctype(tmp, match_temp_word_ctype(res_ty));
             }
 
             /* Emit scrutinee */

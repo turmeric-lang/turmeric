@@ -11947,7 +11947,9 @@ Expr *elab_defn(Elab *e, const Form *call) {
     /* early-return-bypasses-return-refinement: a `return` in this body gets
      * the checks the whole-body wrap below gives the fall-through value. */
     const RetContract *saved_ret_contract = e->ret_contract;
+    Type *saved_ret_expected = e->ret_expected_type;
     e->ret_contract = NULL;
+    e->ret_expected_type = body_expected;
     if ((ct_post_form || ct_ret_pred) && rt_contracts_emitted()) {
         RetContract *rc = (RetContract *)arena_alloc(e->arena, sizeof(RetContract));
         memset(rc, 0, sizeof(*rc));
@@ -11981,6 +11983,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
                 e->cur_fn_constraint_param_mask = saved_cur_fn_con_param_mask;
                 e->fn_entry_outer_scope = saved_fn_entry_outer_scope;
                 e->ret_contract = saved_ret_contract;
+                e->ret_expected_type = saved_ret_expected;
                 e->scope = inner.parent;
                 scope_free(&inner);
                 return NULL;
@@ -12006,6 +12009,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
                 e->cur_fn_constraint_param_mask = saved_cur_fn_con_param_mask;
                 e->fn_entry_outer_scope = saved_fn_entry_outer_scope;
                 e->ret_contract = saved_ret_contract;
+                e->ret_expected_type = saved_ret_expected;
                 e->scope = inner.parent;
                 scope_free(&inner);
                 return NULL;
@@ -12032,6 +12036,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
                     e->cur_fn_constraint_param_mask = saved_cur_fn_con_param_mask;
                     e->fn_entry_outer_scope = saved_fn_entry_outer_scope;
                     e->ret_contract = saved_ret_contract;
+                    e->ret_expected_type = saved_ret_expected;
                     e->scope = inner.parent;
                     scope_free(&inner);
                     return NULL;
@@ -12056,6 +12061,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
         }
     }
     e->ret_contract = saved_ret_contract;
+    e->ret_expected_type = saved_ret_expected;
     /* nested-defn-accepted-outer-returns-zero: a body whose LAST form is a
      * definition leaves the function with no tail value, and codegen falls back
      * to `return 0;` -- it runs, exits 0, and returns the wrong answer with no
@@ -14508,7 +14514,9 @@ static Expr *elab_fn_impl(Elab *e, const Form *call) {
     /* A lambda's `return` leaves the lambda: the enclosing function's
      * result checks do not apply to it. */
     const RetContract *fn_saved_ret_contract = e->ret_contract;
+    Type *fn_saved_ret_expected = e->ret_expected_type;
     e->ret_contract = NULL;
+    e->ret_expected_type = return_full_type ? return_full_type : return_fn_type;
     if (fn_declared_unsafe) e->unsafe_depth++;
     /* Propagate the lambda's declared return type onto the expected-type
      * channel during body elaboration.  Mirrors what elab_defn already does
@@ -14540,6 +14548,7 @@ static Expr *elab_fn_impl(Elab *e, const Form *call) {
                 if (fn_declared_unsafe) e->unsafe_depth--;
                 e->fn_body_depth--;
                 e->ret_contract = fn_saved_ret_contract;
+                e->ret_expected_type = fn_saved_ret_expected;
                 e->n_sig_tyvars = saved_n_sig_tyvars;
                 e->fn_entry_outer_scope = saved_fn_entry_outer_scope;
                 e->scope = inner.parent;
@@ -14552,6 +14561,7 @@ static Expr *elab_fn_impl(Elab *e, const Form *call) {
                 if (fn_declared_unsafe) e->unsafe_depth--;
                 e->fn_body_depth--;
                 e->ret_contract = fn_saved_ret_contract;
+                e->ret_expected_type = fn_saved_ret_expected;
                 e->n_sig_tyvars = saved_n_sig_tyvars;
                 e->fn_entry_outer_scope = saved_fn_entry_outer_scope;
                 e->scope = inner.parent;
@@ -14566,6 +14576,7 @@ static Expr *elab_fn_impl(Elab *e, const Form *call) {
                     if (fn_declared_unsafe) e->unsafe_depth--;
                     e->fn_body_depth--;
                     e->ret_contract = fn_saved_ret_contract;
+                    e->ret_expected_type = fn_saved_ret_expected;
                     e->n_sig_tyvars = saved_n_sig_tyvars;
                     e->fn_entry_outer_scope = saved_fn_entry_outer_scope;
                     e->scope = inner.parent;
@@ -14582,6 +14593,7 @@ static Expr *elab_fn_impl(Elab *e, const Form *call) {
     if (fn_declared_unsafe) e->unsafe_depth--;
     e->fn_body_depth--;
     e->ret_contract = fn_saved_ret_contract;
+    e->ret_expected_type = fn_saved_ret_expected;
     e->n_sig_tyvars = saved_n_sig_tyvars;
     e->fn_entry_outer_scope = saved_fn_entry_outer_scope;
 
@@ -15085,6 +15097,9 @@ static Expr *elab_fn_impl(Elab *e, const Form *call) {
          * shifted for exactly the same reason; arg_fat must travel with it. */
         for (uint32_t i = 0; i < n_params; i++) {
             FN_ARG_SET(new_fn_type.as.fn, i + 1, FA_FAT, FN_ARG_FLAG(b->type.as.fn, i, FA_FAT));
+            /* fn-type-borrow-param: the ^borrow markers travel the same way, so
+             * a call through the thunk does not spend a borrowed argument. */
+            FN_ARG_SET(new_fn_type.as.fn, i + 1, FA_BORROW, FN_ARG_FLAG(b->type.as.fn, i, FA_BORROW));
         }
         new_fn_type.as.fn.result_fat = b->type.as.fn.result_fat;
         /* closure-capture-escapes-linearity: carry the inherited obligation onto
@@ -15222,6 +15237,11 @@ static Expr *elab_fn_impl(Elab *e, const Form *call) {
          * has to be restated at each. */
         if (capture_consumes_linear)      clo_ty.copy_kind = CK_LINEAR;
         else if (capture_consumes_unique) clo_ty.copy_kind = CK_UNIQUE;
+        /* fn-type-borrow-param: and so do the ^borrow markers, or a capturing
+         * lambda no longer fits a (fn [^borrow T] R) slot its captureless
+         * twin satisfies.  The user-facing signature: no env shift. */
+        for (uint32_t i = 0; i < n_params; i++)
+            FN_ARG_SET(clo_ty.as.fn, i, FA_BORROW, params[i]->is_borrow);
         Expr *closure_expr = expr_new(e->arena, EX_CLOSURE, clo_ty, call->span);
         closure_expr->as.closure_.closure = closure;
 

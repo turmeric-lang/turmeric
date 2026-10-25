@@ -1,0 +1,27 @@
+;; fat-closure-nested-option-result-sret: a lambda returning a monomorph
+;; that EMBEDS another by-value monomorph, called through a function-typed
+;; parameter.
+;;
+;; `(Result (Option cstr) E)` is laid out `{ int tag; union { struct {
+;; tur_adt_Option__cstr _0; } Ok; ... } }` -- the Option inline, 16 bytes,
+;; so 24 in all.  The size routine counted the Option field as one 8-byte
+;; carrier slot and called the Result 16 bytes, so the captureless lambda's
+;; static closure box kept the generic word shim in slot 0.  The caller,
+;; casting slot 0 at the real 24-byte result, passed a hidden sret pointer
+;; that the shim read as its env: the first call jumped to address 0.
+
+(defdata E (Bad int))
+
+(defn run [A] [n : int f : (fn [int] (Result A E))] : (Result A E)
+  (f n))
+
+(defn lookup [n : int] : bool
+  (let [r (run n (fn [k : int] : (Result (Option cstr) E)
+                   (if (> k 0) (ok (some "found")) (ok (none)))))]
+    (and (ok? r) (some? (ok-val r)))))
+
+(defn main [] : int
+  (do
+    (println (if (lookup 1) "some" "none"))
+    (println (if (lookup 0) "some" "none"))
+    0))

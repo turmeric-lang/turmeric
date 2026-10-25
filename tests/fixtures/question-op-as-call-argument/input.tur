@@ -1,0 +1,34 @@
+;; question-op-as-call-argument: `(? r)` written as a call argument.
+;;
+;; The `?` lowers to a `return` of `(Err (err-val r))`.  That value goes to
+;; the function's caller, so it is typed by the function's declared result,
+;; `(Result nil E)` -- not by the parameter of the call the `?` sits in.  It
+;; used to be elaborated under that parameter's type (`int`), which built the
+;; untyped carrier, and the C failed: "incompatible types when returning type
+;; 'int64_t' but 'tur_adt_Result__nil__E' was expected".  The same in a lambda
+;; passed to a generic higher-order function.
+
+(defdata E (Bad int))
+
+(defn half [n : int] : (Result int E)
+  (if (= (mod n 2) 0) (ok (/ n 2)) (err (Bad n))))
+
+(defn use2 [a : int b : int] : (Result nil E) (Ok nil))
+
+(defn g [n : int] : (Result nil E)
+  (use2 n (? (half n))))
+
+(defn run [A] [n : int f : (fn [int] (Result A E))] : (Result A E) (f n))
+
+(defn describe-r [r : (Result nil E)] : cstr
+  (if (ok? r)
+    "ok"
+    (match (err-val r) (Bad n) (if (= n 3) "err 3" "err ?"))))
+
+(defn main [] : int
+  (do
+    (println (describe-r (g 4)))
+    (println (describe-r (g 3)))
+    (println (describe-r (run 4 (fn [n : int] : (Result nil E) (use2 n (? (half n)))))))
+    (println (describe-r (run 3 (fn [n : int] : (Result nil E) (use2 n (? (half n)))))))
+    0))

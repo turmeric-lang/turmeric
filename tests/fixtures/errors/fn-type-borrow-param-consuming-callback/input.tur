@@ -1,0 +1,16 @@
+;; fn-type-borrow-param: a callback that CONSUMES its argument does not fit a
+;; slot the type borrows -- the caller still owns the handle and closes it,
+;; so accepting this would close it twice.
+
+(defopaque Handle :int :linear)
+
+(defn handle-open [n : int] : Handle ```c return n; ```)
+(defn handle-close [h : Handle] : nil ```c (void)h; ```)
+
+(defn with-handle [f : (fn [^borrow Handle] int)] : int
+  (let [h (handle-open 1)
+        r (f h)]
+    (do (handle-close h) r)))
+
+(defn main [] : int
+  (with-handle (fn [h : Handle] : int (do (handle-close h) 0))))

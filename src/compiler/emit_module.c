@@ -11313,6 +11313,9 @@ bool emit_c_type_is_scalar(const char *cname) {
 
 char *emit_c_zero_of(const char *cname) {
     if (!cname) return tur_strdup("0");
+    /* nil-instantiated-merge-temp-declared-void: nil's slot is the int64
+     * word (see emit_control_result_temp_decl); `(void){0}` is not C. */
+    if (strcmp(cname, "void") == 0) return tur_strdup("((int64_t)0)");
     size_t n = strlen(cname) + 8;
     char *out = (char *)malloc(n);
     if (!out) return NULL;
