@@ -259,10 +259,52 @@ Prints `36` -- `(10+1) + (10+2) + (10+3)`, one full run of the continuation per
 iteration.
 
 When the resumption strategy is itself recursive -- or you want it in a named
-helper -- pass it through the effect payload instead. `k` is type-erased inside
-a handler clause and cannot be handed to a helper directly, but a receiver
-carried in the payload gets it as a properly typed continuation and may call it
-as often as it likes:
+helper -- hand `k` to that helper. A parameter declared `effect-cont` takes a
+clause's `k`, and may resume a `^multishot` one as often as it likes:
+
+```turmeric
+(defeffect Choose [lo : int hi : int] : int)
+
+(defn each [k : effect-cont lo : int hi : int] : int
+  (if (> lo hi)
+    0
+    (+ (resume k lo) (each k (+ lo 1) hi))))
+
+(defn pair-sum [] #fx{Choose} : int
+  (+ (perform (Choose 1 3)) (perform (Choose 10 20))))
+
+(defn main [] : int
+  (println (handle (pair-sum)
+             (Choose [lo hi] ^multishot k) (each k lo hi)))
+  0)
+```
+
+```sweet-exp
+defeffect Choose [lo : int hi : int] : int
+
+defn each [k : effect-cont lo : int hi : int] : int
+  if {lo > hi}
+    0
+    {resume(k lo) + each(k {lo + 1} hi)}
+
+defn pair-sum [] #fx{Choose} : int
+  {perform(Choose(1 3)) + perform(Choose(10 20))}
+
+defn main [] : int
+  println
+    (handle (pair-sum)
+      (Choose [lo hi] ^multishot k) (each k lo hi))
+  0
+```
+
+Prints `561` -- the sum over all 3 x 11 combinations. A bare `effect-cont`
+types the resume as `int`; write `effect-cont<T>` when the handle delivers
+something else (see [Passing `k` to a helper](effects-system-guide.md#passing-k-to-a-helper)).
+
+The strategy can also travel in the effect payload, so the code that performs
+the effect decides how its continuation is used. Declare the payload's
+parameter `multishot-effect-cont`, which takes only the `k` of a case whose
+effect carries such a payload:
 
 ```turmeric
 (defeffect ChooseE [f : (fn [multishot-effect-cont] int)] : int)
@@ -678,9 +720,11 @@ one:
   above). The one shape still unsupported is writing a mutable that a `while`
   loop *carries* while the loop also spans the `handle`; that evicts with a
   located error rather than miscompiling.
-- `k` is type-erased inside the clause and cannot be passed to a helper
-  expecting a `cont<...>`. Route the resumption strategy through the effect
-  payload instead (as the nondeterminism example above does).
+- `k` can be passed to a helper whose parameter is declared `effect-cont`
+  (or `effect-cont<T>`), but not to one expecting a cloneable `cont<...>`,
+  which is a different runtime. A `multishot-effect-cont` parameter takes only
+  the `k` of a case whose effect carries a `(fn [multishot-effect-cont] R)`
+  payload (the nondeterminism examples above show both).
 - Loops and conditionals in a clause are supported -- including a `while` that
   `resume`s per iteration (the multi-shot fold above). A `perform` from inside
   a loop, in a clause or anywhere else, is supported too, including a loop that

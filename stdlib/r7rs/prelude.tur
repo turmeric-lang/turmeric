@@ -2138,7 +2138,7 @@
   #define r7k_base_tls (*(unsigned char **)tur_tls_r7k_base_ptr())
   #define r7k_form_base (*(unsigned char **)tur_tls_r7k_form_base_ptr())
   #endif
-  // r7rs-heap-frames-plan: under --enable=r7rs-segmented-stack, whether an
+  // r7rs-heap-frames-plan: with the segmented stack compiled in, whether an
   // address is on a stack segment rather than the thread's own stack.  This
   // block precedes the preamble that defines it, so the segmented stack's
   // runtime sets it when a thread arms (tur_seg_thread_start); NULL otherwise.

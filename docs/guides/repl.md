@@ -109,8 +109,8 @@ straight to the compiled function, and redefining the defn compiles the new
 body on its next call. `tur --interpret` does the same.
 
 This was the `repl-jit-inline-c` experiment until it graduated on 2026-10-17;
-`--enable=repl-jit-inline-c` is now accepted as a no-op (`TUR-W0063`) for one
-minor line, so drop it from your scripts. `TUR_REPL_JIT_INLINE_C=0` turns the
+`--enable=repl-jit-inline-c` was a `TUR-W0063` no-op until 0.71.0 and is an
+unknown-experiment error (`TUR-E0310`) now, so drop it from your scripts. `TUR_REPL_JIT_INLINE_C=0` turns the
 compile off and brings back the `inline-C not supported` error -- useful for
 telling a JIT problem from an interpreter one. A build without the JIT engine
 (`-DTUR_JIT=OFF`, Try Turmeric) always gives the error.

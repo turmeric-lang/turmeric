@@ -49,9 +49,140 @@ def name perform(Read())
   (Read [] k) (resume k "World"))
 ```
 
-### One-Shot Continuations
+### One-shot, `^linear` and `^multishot` continuations
 
-Continuations in Turmeric are **one-shot**: calling `(resume k v)` consumes `k`, preventing reuse. This matches Turmeric's ownership model. (See [Logic Programming Guide](logic-programming-guide.md) for cloneable continuations.)
+The clause head picks how many times its `k` may be resumed:
+
+| Clause head | `k` may be resumed | Checked by |
+| --- | --- | --- |
+| `(Eff [p] k)` | at most once; not resuming abandons the rest of the body | a second `resume` is TUR-E0201 |
+| `(Eff [p] ^linear k)` | exactly once, by `resume` or `discontinue`, on every path | TUR-E0100 for a path that does not, TUR-E0101 for a second use |
+| `(Eff [p] ^multishot k)` | any number of times, zero included | the rules below |
+
+By default a continuation is **one-shot**: `(resume k v)` consumes `k`, which
+matches Turmeric's ownership model. Mark it `^multishot` to resume it more than
+once. Each `resume` then runs the rest of the handled body again with a
+different answer, and returns what that run produced. This is how search and
+backtracking are written:
+
+```turmeric
+(defeffect Flip [] : bool)
+
+(defn count-heads [] #fx{Flip} : int
+  (+ (if (perform (Flip)) 1 0) (if (perform (Flip)) 1 0)))
+
+(defn main [] : int
+  ;; every outcome of two coin flips, summed: 2 + 1 + 1 + 0
+  (println (handle (count-heads)
+             (Flip [] ^multishot k) (+ (resume k true) (resume k false))))   ; 4
+  0)
+```
+```sweet-exp
+defeffect Flip [] : bool
+
+defn count-heads [] #fx{Flip} : int
+  {if(perform(Flip()) 1 0) + if(perform(Flip()) 1 0)}
+
+defn main [] : int
+  ;; every outcome of two coin flips, summed: 2 + 1 + 1 + 0
+  println
+    (handle (count-heads)
+      (Flip [] ^multishot k) {(resume k true) + (resume k false)})
+  0
+```
+
+The clause runs once per `perform`. The second `Flip` is performed again in
+each run the first one starts, so the handler explores all four outcomes. For a
+variable number of resumes, put a loop in the clause; for a recursive strategy,
+pass `k` to a helper (next section). [Effects vs. Monads](effects-vs-monads.md#nondeterminism)
+has both.
+
+**What each run sees.** Every resume runs its own copy of the rest of the
+handled body. Locals bound *inside* the handled body are copied with it, so
+every run starts from their values at the `perform`, even `^mut` ones the body
+assigns afterwards. Everything else is shared by all the runs: globals, heap
+data, and mutables of the enclosing function. A write one run makes is seen by
+the next.
+
+```turmeric
+(defeffect Choose [] : int)
+(def ^mut runs 0)
+
+(defn body [] #fx{Choose} : int
+  (let [^mut acc 100
+        v        (perform (Choose))]
+    (set! acc (+ acc v))      ; a local of the body: each copy starts from 100
+    (set! runs (+ runs 1))    ; a global: every copy writes the same one
+    acc))
+
+(defn main [] : int
+  (println (handle (body)
+             (Choose [] ^multishot k) (+ (* 1000 (resume k 1)) (resume k 2))))  ; 101102
+  (println runs)                                                                ; 2
+  0)
+```
+```sweet-exp
+defeffect Choose [] : int
+def ^mut runs 0
+
+defn body [] #fx{Choose} : int
+  let [^mut acc 100
+       v        perform(Choose())]
+    set!(acc {acc + v})      ; a local of the body: each copy starts from 100
+    set!(runs {runs + 1})    ; a global: every copy writes the same one
+    acc
+
+defn main [] : int
+  println
+    (handle (body)
+      (Choose [] ^multishot k) {{1000 * (resume k 1)} + (resume k 2)})  ; 101102
+  println(runs)                                                         ; 2
+  0
+```
+
+Two engine bugs break this rule today:
+
+- In compiled code (and `tur jit`), a `set!` from a handled body to a `^mut` of
+  the enclosing function is lost once the `handle` returns, unless a clause
+  also uses that variable. This is not specific to `^multishot`
+  ([handle-body-set-to-enclosing-mut-lost-compiled](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/handle-body-set-to-enclosing-mut-lost-compiled.md)).
+- `tur --interpret` shares a `^mut` local of a function's tail-position `let`
+  between the copies instead of copying it
+  ([turi-multishot-tail-let-frame-shared-across-resumes](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/turi-multishot-tail-let-frame-shared-across-resumes.md)).
+
+**Rules.**
+
+- **No move-only or linear captures in the clause** (TUR-E0500). A
+  `^multishot` clause may not refer to a `^unique` or `^linear` binding of the
+  enclosing code. A plain `defstruct` value counts as move-only: declare the
+  struct `:copy`, or pass the fields you need. The check covers only the
+  clause. A linear value the *handled body* consumes after the `perform` is
+  consumed once per run, with no diagnostic
+  ([multishot-capture-check-skips-the-continuation](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/multishot-capture-check-skips-the-continuation.md)).
+- **Only on a clause's `k`** (TUR-E0501). `^multishot` goes in the head of a
+  clause of `handle`, `handle-shallow`, `try-with` or a `(handler ...)` value,
+  and nowhere else.
+- **Not inside `atomically`** (TUR-E0502). A retry could run the continuation
+  again, so move the `handle` out of the transaction.
+- **`cont?` stays true.** After a resume, `(cont? k)` is false for a one-shot
+  `k` but still true for a `^multishot` one. One copy can be resumed and
+  another discontinued ([below](#discontinuing-a-continuation-beta)).
+- **Interpreter fallback.** `tur --interpret` copies a continuation only when
+  every `perform` the `handle` can reach goes through forms its driver
+  descends. A `perform` reached through a native higher-order call, a
+  `catch-panic-of`, `reset` or `atomically` boundary, or a `match` guard drops
+  the `handle` to a single-shot fiber, and the second resume reports `resume:
+  this continuation has already been resumed`. `TURI_TRACE_FIBER_FALLBACK=1`
+  names the form ([eval-api](eval-api.md#not-interpreted-carve-outs), "Multi-shot
+  `resume` under a non-capturable handle").
+- **Cost.** A resume after the first runs a copy of the continuation, and a
+  loop that performs such an effect each turn grows until its outermost call
+  returns ([memory-usage-guide](memory-usage-guide.md#calls-through-function-values-and-effects)).
+
+`^multishot` is for effect handlers. The delimited-control operators have
+their own re-entrant continuations: `call/cc*`, `cloneable-shift`
+([Logic Programming Guide](logic-programming-guide.md)) and the serializable
+variants.
 
 ### Passing `k` to a helper
 
@@ -720,8 +851,12 @@ remain evict the function to the direct emitter, with a located error at the
 `perform`:
 
 - a `while` nested inside a `while` that performs;
-- a conditional assignment whose value itself performs (`(when c (set! x
-  (perform ...)))` -- assign the performed value to a `let` first);
+- a `set!` whose value itself performs, unless it is an unconditional
+  assignment to a loop's carried variable. So `(when c (set! x (perform ...)))`
+  inside a loop is refused, and so is `(set! x (+ x (perform ...)))` anywhere
+  outside one, even in straight-line code. Bind the performed value with a
+  `let` first: `(let [v (perform ...)] (set! x (+ x v)))`
+  ([cps-set-whose-value-performs-always-evicts](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/cps-set-whose-value-performs-always-evicts.md));
 - a loop that sits inside a handler clause and performs an effect handled
   further out (hoisting the loop into a helper does not escape this one: the
   helper is evicted with its caller);

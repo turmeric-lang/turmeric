@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # tests/check-r7rs-segmented-stack.sh --
-# docs/upcoming/r7rs-heap-frames-plan.md (option C): under
-# --enable=r7rs-segmented-stack a compiled `#lang r7rs` program's recursion
+# docs/upcoming/r7rs-heap-frames-plan.md (option C): a compiled `#lang r7rs`
+# program's recursion (r7rs-segmented-stack, graduated 2026-10-25)
 # goes on past the thread's own stack onto segments, bounded by the
 # TUR_MAIN_STACK_MB budget instead.  A fixture cannot set an environment
 # variable, and reaching the segments on the default 1 GiB stack would take
@@ -9,7 +9,8 @@
 # TUR_SEG_BASE_MB=8 (other threads' own stacks are 8 MiB already) and runs:
 #
 #   1. a recursion 1e6 deep (~30 MiB of frames), which the same 8 MiB stack
-#      alone could not hold -- checked by running it again without the flag;
+#      alone could not hold -- checked by running it again built under the
+#      hatch (TUR_R7RS_SEGMENTED_STACK=0), which is the "no flag" build below;
 #   2. a recursion that allocates in every frame, under collector torture, so
 #      collections run while frames live on several segments (H2);
 #   3. call/cc (H3): an escape from deep on a segment, a re-entry from deep on
@@ -33,8 +34,9 @@
 #   6. TUR_MAIN_STACK_MB=16, runaway: the overflow message and a non-zero exit
 #      once the budget is spent (H5);
 #   7. the hatch, TUR_R7RS_SEGMENTED_STACK=0: in the compiler's environment the
-#      C is byte-identical to a build without the flag; at run time no thread
-#      arms (the four 1e6-deep threads die again).
+#      C carries no check and no segment runtime; at run time no thread arms
+#      (the four 1e6-deep threads die again).  A lingering
+#      --enable=r7rs-segmented-stack is a graduated no-op: the same C.
 #
 # Linux x86-64 and arm64: elsewhere the flag compiles to no check at all.
 #
@@ -258,10 +260,12 @@ build() {   # build <prog> <out> [tur flags...]
     fi
 }
 for p in down alloc callcc late reenter threads fiber; do
-    build "$p" "$p" --enable=r7rs-segmented-stack
+    build "$p" "$p"
 done
-build down down-plain
-build threads threads-plain
+# "no flag": the hatch at compile time, the build every program got before
+# graduation.
+TUR_R7RS_SEGMENTED_STACK=0 build down down-plain
+TUR_R7RS_SEGMENTED_STACK=0 build threads threads-plain
 
 fail=0
 check() {   # check <label> <want-rc: 0|nonzero> <want-stdout> <want-stderr-substring|-|*> <env...> -- <exe> <args...>
@@ -346,13 +350,13 @@ check "a runaway on a fiber's stack" nonzero "" "stack overflow: recursion too d
 # 7: the hatch.
 check "TUR_R7RS_SEGMENTED_STACK=0 at run time: no thread arms" nonzero "" "*" \
       TUR_R7RS_SEGMENTED_STACK=0 -- threads 1000000
-"$TUR" emit-c "$TMP/reenter.scm" > "$TMP/plain.c" 2> /dev/null
-TUR_R7RS_SEGMENTED_STACK=0 "$TUR" --enable=r7rs-segmented-stack emit-c "$TMP/reenter.scm" > "$TMP/hatch.c" 2> /dev/null
-"$TUR" --enable=r7rs-segmented-stack emit-c "$TMP/reenter.scm" > "$TMP/on.c" 2> /dev/null
-if ! cmp -s "$TMP/plain.c" "$TMP/hatch.c"; then
-    echo "FAIL $NAME (TUR_R7RS_SEGMENTED_STACK=0 to the compiler): the C differs from a build without the flag"; fail=1
-elif ! grep -q "TUR_SEG_CHECK(" "$TMP/on.c" || grep -q "TUR_SEG_CHECK(" "$TMP/hatch.c"; then
+"$TUR" emit-c "$TMP/reenter.scm" > "$TMP/on.c" 2> /dev/null
+TUR_R7RS_SEGMENTED_STACK=0 "$TUR" emit-c "$TMP/reenter.scm" > "$TMP/hatch.c" 2> /dev/null
+"$TUR" --enable=r7rs-segmented-stack emit-c "$TMP/reenter.scm" > "$TMP/noop.c" 2> /dev/null
+if ! grep -q "TUR_SEG_CHECK(" "$TMP/on.c" || grep -q "TUR_SEG_CHECK(\|define TUR_SEG_ON" "$TMP/hatch.c"; then
     echo "FAIL $NAME (TUR_R7RS_SEGMENTED_STACK=0 to the compiler): the check is not where it should be"; fail=1
+elif ! cmp -s "$TMP/on.c" "$TMP/noop.c"; then
+    echo "FAIL $NAME (--enable=r7rs-segmented-stack): the graduated no-op changed the C"; fail=1
 fi
 
 [ "$fail" = 0 ] || exit 1

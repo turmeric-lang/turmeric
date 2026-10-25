@@ -478,30 +478,23 @@ static const ExperimentDescriptor EXPERIMENTS[] = {
       "0.71.0",                  /* expires_at -- advisory; never blocks a release */
       XF_LIFECYCLE_BETA,
       &g_opt_quote_data },
-    /* r7rs-segmented-stack (r7rs-heap-frames-plan, option C): a compiled
-     * `#lang r7rs` procedure checks the stack pointer against a per-thread
-     * limit at entry and, past it, re-enters itself on a fresh stack segment,
-     * so recursion is bounded by TUR_MAIN_STACK_MB as a memory budget rather
-     * than by the C stack.  BETA since 2026-10-24: the surface is frozen and
-     * every Linux stage is in -- every thread the program starts is armed, a
-     * fiber's stack is checked against its own bounds, a call/cc captured on
-     * a segment re-enters (the chain is copied into the image), arm64 ran
-     * under qemu.  Graduating is the gate drop alone, which turns the check on
-     * for every compiled r7rs program; TUR_R7RS_SEGMENTED_STACK=0 is the
-     * hatch (to the compiler: the C without the flag; to a program: no thread
-     * armed), and tests/run-r7rs-segmented-stack-seam.sh inverts to SEG_ARM=off
-     * then.  Elsewhere -- macOS, Windows, `tur jit`, other architectures --
-     * the check compiles to nothing and the 1 GiB deep stack stays: the
-     * graduated contract (the plan, "Platforms").  Graduation APPROVED
-     * 2026-10-24 (the plan's hold condition lifted by its owner); the gate
-     * drop lands after the next version bump. */
-    { "r7rs-segmented-stack",
-      "a compiled `#lang r7rs` procedure checks the stack limit at entry and grows onto a new segment",
-      "docs/upcoming/r7rs-heap-frames-plan.md",
-      "0.70.0",                  /* introduced */
-      "0.71.0",                  /* expires_at -- advisory; never blocks a release */
-      XF_LIFECYCLE_BETA,
-      &g_opt_r7rs_segmented_stack },
+    /* r7rs-segmented-stack GRADUATED 2026-10-25, in the 0.71 line (introduced
+     * 0.70.0, beta 2026-10-24, advisory expires_at 0.71.0; graduation approved
+     * by the plan's owner 2026-10-24).  Every compiled `#lang r7rs` procedure
+     * checks the stack pointer against a per-thread limit at entry and, past
+     * it, re-enters itself on a fresh segment, so recursion is bounded by
+     * TUR_MAIN_STACK_MB as a memory budget rather than by the C stack -- in
+     * every thread the program starts, with a fiber checked against its own
+     * bounds.  Linux x86-64 and arm64 only; on macOS, Windows, `tur jit`,
+     * other architectures and under a stack-tracking sanitizer (ASan, HWASan,
+     * MSan, TSan -- TUR_SEG_SANITIZED, added at graduation) the check compiles
+     * to nothing and the 1 GiB deep stack stays (the plan's "Platforms: the
+     * graduated contract").
+     * TUR_R7RS_SEGMENTED_STACK=0 is the bisection hatch (to the compiler: no
+     * check and no runtime; to a program: no thread armed), kept green by
+     * tests/run-r7rs-segmented-stack-seam.sh, whose default arm inverted to
+     * `off` here.  g_opt_r7rs_segmented_stack is retired with the row.  The
+     * name moves to GRADUATED[] below.  See docs/upcoming/r7rs-heap-frames-plan.md. */
     /* loop-invariants GRADUATED 2026-10-03, in the 0.61 line (introduced
      * 0.57.0, prototype, advisory expires_at 0.58.0).  `(while c :invariant p
      * ...)` is always on: the runtime checks, the initiation/preservation
@@ -574,54 +567,26 @@ static const char *const GRADUATED[] = {
      * a pair and had to go together.  The layer axis has since been
      * decommissioned outright, so that token is now simply a trailing one.
      *
-     * Only `jit-ffi` stays.  It graduated in 0.38.0 -- this line -- so its
-     * window has not opened yet; it becomes eligible at 0.39.0. */
-    "jit-ffi",       /* graduated 2026-08-21; call-ptr / callback-ptr are ordinary `unsafe` forms (-DTUR_JIT=ON still gates the interpreter path) */
-    /* r7rs-gc GRADUATED 2026-09-25 (introduced 0.52.0, graduated in the same
-     * line) -- the conservative collector is the allocator of every compiled
-     * single-unit `#lang r7rs` program on Linux and macOS (g_opt_r7rs_gc
-     * defaults true; emit_module.c's r7rs_gc_active).  A program that starts
-     * threads opts out with TUR_R7RS_GC=0 or --no-r7rs-gc.  See
-     * docs/archive/r7rs-gc-plan.md.  Eligible to age out at 0.54.0. */
-    "r7rs-gc",       /* graduated 2026-09-25; a compiled #lang r7rs program's allocator is the collector (TUR_R7RS_GC=0 / --no-r7rs-gc opt out) */
-    /* graduated 2026-08-27, in the 0.39 line.  A representation change with no
-     * syntax, so the population that could have written it into a build.tur is
-     * the narrow one the backend names above describe -- but it shipped as a
-     * user-facing `--enable` for a full release, so it keeps the window. */
-    "parametric-sum-byvalue",
-    "option-niche",  /* graduated 2026-09-03; TUR_OPTION_NICHE=0 restores the tagged monomorph */
-    "regions",       /* graduated 2026-09-05; TUR_REGIONS=0 restores malloc and unbracketed calls */
-    /* graduated 2026-09-10, in the 0.46 line.  Unlike the names above, nobody
-     * had to write this one anywhere: `#lang saffron` was always its own enable
-     * (D9), so a hand-written `--enable=saffron` only ever duplicated the
-     * directive.  It keeps the window anyway -- it shipped as a listed
-     * `tur experiments` row for a full release, which is enough for a
-     * build.tur somewhere to name it. */
-    "saffron",
-    /* graduated 2026-10-01, at 0.57.0 (introduced 0.52.0).  Same case as
-     * `saffron` directly above and kept for the same reason: the `#lang r7rs`
-     * line was always its own enable (D11), so a hand-written
-     * `--enable=r7rs` only ever duplicated the directive -- but it shipped as
-     * a listed `tur experiments` row for five minor lines, which is enough
-     * for a build.tur or an experiments.tur somewhere to name it.  Eligible
-     * to age out at 0.58.0.  See docs/archive/r7rs-lang-plan.md. */
-    "r7rs",
-    /* graduated 2026-09-25, in the 0.53 line (introduced 0.49.0, carrying an
-     * advisory expires_at of 0.55.0 -- graduating early is routine).  Source
-     * syntax someone had to write into a file and then enable, so a lingering
-     * enable is exactly what a real adopter's config looks like: it keeps the
-     * full migration window.  Eligible to age out at 0.54.0. */
-    "class-superclasses",
-    /* graduated 2026-10-03, in the 0.61 line.  Source syntax a user had to
-     * write and enable, so it keeps the full window.  Eligible to age out at
-     * 0.62.0.  See docs/archive/loop-invariants-plan.md. */
-    "loop-invariants",
-    /* graduated 2026-10-17, in the 0.65 line.  No source syntax, but it
-     * shipped as a listed `--enable` row from 0.59.0 and the REPL guide told
-     * users to pass it, so a wrapper script or experiments.tur may name it:
-     * it keeps the full window.  Eligible to age out at 0.66.0.
-     * See docs/upcoming/aot-compiled-repl-plan.md (C1). */
-    "repl-jit-inline-c",
+     * AGED OUT 2026-10-25, at 0.71.0 -- the last ten, every one past the
+     * minor line its own comment named as its window: jit-ffi (graduated
+     * 0.38.0), parametric-sum-byvalue (0.39 line), option-niche (2026-09-03),
+     * regions (2026-09-05), saffron (0.46 line), r7rs-gc and
+     * class-superclasses (0.53 line), r7rs (0.57.0), loop-invariants (0.61
+     * line) and repl-jit-inline-c (0.65 line).  The newest of them was eligible
+     * at 0.66.0.  Same reasoning as the 0.38.0 round: a migration window, not
+     * a permanent alias.  `--enable=<any of them>` is now TUR-E0310, pinned by
+     * errors/experiment-retired-name.  The bisection hatches some of them kept
+     * (TUR_OPTION_NICHE=0, TUR_REGIONS=0, TUR_R7RS_GC=0,
+     * TUR_SR2_APP_SUM_BYVALUE=0, TUR_REPL_JIT_INLINE_C=0) are env vars, not
+     * this shim, and stay; so do g_opt_r7rs and g_opt_dynamic_any, which
+     * the `#lang` line sets.
+     *
+     * The NULL keeps the list legal C when it is empty. */
+    /* graduated 2026-10-25, in the 0.71 line.  No source syntax, but it
+     * shipped as a listed `--enable` row for two releases and the r7rs guide
+     * told users to pass it, so it keeps the full window.  Eligible to age out
+     * at 0.72.0.  See docs/upcoming/r7rs-heap-frames-plan.md. */
+    "r7rs-segmented-stack",
     NULL,
 };
 

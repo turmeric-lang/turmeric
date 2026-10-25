@@ -3,7 +3,7 @@
 **Severity: medium** (compile failure in the emitted C).
 
 **Status: RESOLVED 2026-10-11** -- see [Resolution](#resolution). Found 2026-10-10 implementing
-[xml-html-parsers-plan](../upcoming/spices/xml-html-parsers-plan.md) on `tur`
+[xml-html-parsers-plan](xml-html-parsers-plan.md) on `tur`
 v0.64.0. Worked around in turmeric-spices `spices/html/tests/sax_tokens.tur`
 (`feed-all` binds the result and matches on it).
 

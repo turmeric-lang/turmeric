@@ -15,7 +15,8 @@ net.
 ## Overview
 
 Loop invariants graduated to always-on in v0.62.0. The `--enable=loop-invariants`
-flag is now a `TUR-W0063` no-op. Every `(while c :invariant p body...)`
+flag was a `TUR-W0063` no-op until 0.71.0 and is an unknown-experiment error
+(`TUR-E0310`) now. Every `(while c :invariant p body...)`
 form is analysed by the refinement solver -- the same in-house decision
 procedure that discharges `#refine{...}` annotations.
 

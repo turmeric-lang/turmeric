@@ -953,7 +953,7 @@ TUR_RT_API void tur_region_registry_unlock(void);
 TUR_RT_API void tur_region_each_registered(void (*cb)(const void *p, size_t n, void *ud), void *ud);
 
 /* r7rs-heap-frames-plan (H2): a thread on a segmented stack
- * (--enable=r7rs-segmented-stack, emit_seg_stack_runtime in emit_module.c)
+ * (r7rs-segmented-stack, emit_seg_stack_runtime in emit_module.c)
  * has frames on a chain of stacks, each record naming the one before it and
  * where its frames resume there.  The layout is shared with the emitted
  * runtime, which this file precedes. */

@@ -157,8 +157,8 @@ the inline-C capability, so `tur repl` and `tur --interpret` alike. The
 Turmeric has no JIT and is unchanged.
 
 **Graduation (2026-10-17).** The row left `EXPERIMENTS[]` for `GRADUATED[]`,
-so a lingering `--enable=repl-jit-inline-c` is a `TUR-W0063` no-op for one
-minor line (eligible to age out at 0.66.0). The frozen "Supported subset"
+so a lingering `--enable=repl-jit-inline-c` was a `TUR-W0063` no-op for one
+minor line (it aged out at 0.71.0 and is `TUR-E0310` now). The frozen "Supported subset"
 below is the shipped surface. `TUR_REPL_JIT_INLINE_C=0` restores the "inline-C
 not supported" error, for bisection and for the two harnesses that test the
 pattern executor on its own (`run-interp-show-inline-c.sh`,

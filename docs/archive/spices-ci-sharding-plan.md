@@ -1,6 +1,9 @@
 # turmeric-spices CI -- build the compiler once, shard the spices
 
-> **Status: S1-S5 landed 2026-10-04; S6 open.** S1-S4 are
+> **Status: done -- archived 2026-10-25.** S1-S5 landed 2026-10-04; S6, the
+> measurement, is section 9: 58 runs of the new shape average 10 jobs, 43
+> runner-minutes and a 32-minute wall clock, and the 4/3 shard counts stay.
+> S1-S4 are
 > [turmeric-spices#84](https://github.com/turmeric-lang/turmeric-spices/pull/84)
 > (`3c63614`): a `build-tur` job per OS with the tarred artifact, the
 > folded-in manifest parse and the toolchain guard, the shard matrices,
@@ -9,8 +12,7 @@
 > build-then-shard chain, two callers of a reusable `spices-leg.yml`, rather
 > than one shared build matrix, because a job that `needs` a matrix job waits
 > for every leg and the Linux shards sat behind the macOS build's queue time.
-> S6 -- replacing section 1's projections with measured numbers and retuning
-> the 4/3 shard counts -- has not been done. Section 2.1 is the probe run that
+> Section 2.1 is the probe run that
 > verified S1 and S3 before #84. Written 2026-10-03 in response to
 > "turmeric-spices CI runs seem to clog up CI runs for other repos, because it
 > swamps GH Actions with dozens of small actions."
@@ -20,7 +22,7 @@
 > [`turmeric-spices/.github/workflows/ci.yml`](https://github.com/turmeric-lang/turmeric-spices/blob/main/.github/workflows/ci.yml)
 > (the `test-spice`, `discover-spices` and `manifest-parse` jobs), a new
 > `scripts/run-shard.sh` there, and -- section 7 -- a `concurrency:` block on this
-> repo's [`.github/workflows/ci.yml`](../../../.github/workflows/ci.yml).
+> repo's [`.github/workflows/ci.yml`](../../.github/workflows/ci.yml).
 >
 > **Decided:**
 > 1. **Build `tur` once per OS** and hand it to the test jobs as an artifact.
@@ -39,13 +41,14 @@ spice per OS (48 spices x 2 OSes), plus `discover-spices` and
 Debug+ASan `tur` at the same pinned SHA before doing anything else.
 
 The org's runners are shared between turmeric and turmeric-spices, and the
-macOS pool is small. [ci-aux-suite-latency-plan](../../archive/ci-aux-suite-latency-plan.md)
+macOS pool is small. [ci-aux-suite-latency-plan](ci-aux-suite-latency-plan.md)
 section 3 already measured this repo's macOS jobs waiting 40-80 minutes to
 start. A spices run puts 48 macOS jobs into that same queue, and those jobs
 are mostly recompiling the compiler.
 
 The proposed shape is about 11 jobs instead of 98, and about 85
-runner-minutes instead of about 280:
+runner-minutes instead of about 280. *(Measured, S6: 10 jobs and a median
+43 runner-minutes; section 9.)*
 
 ```mermaid
 flowchart LR
@@ -197,7 +200,8 @@ weights file to maintain.
 
 At about 16 and 22 minutes of spice work per OS (section 1), the projection
 is about 4-5 minutes per Linux shard and 7-8 minutes per macOS shard, plus
-one dependency install and one artifact download each. If one shard turns
+one dependency install and one artifact download each. *(Measured: 4.1 and
+7.2, setup included; section 9.)* If one shard turns
 out much slower than the rest, the next step is a checked-in
 `ci/shard-weights.json` with greedy longest-first assignment. Don't add it
 until a measurement calls for it.
@@ -307,8 +311,85 @@ them the `ci-metrics` publisher, are unaffected, because their
 | S3 | spices | `scripts/run-shard.sh`: per-spice groups, keep going past a failure, spice-prefixed annotations, step-summary table |
 | S4 | spices | workflow `concurrency:`, cancel on PRs only |
 | S5 | turmeric | the same `concurrency:` block on `ci.yml` |
-| S6 | both | after the first run of the new shape, replace section 1's projections with measured numbers and retune the shard counts |
+| S6 | both | after the first run of the new shape, replace section 1's projections with measured numbers and retune the shard counts -- **done 2026-10-25**, section 9; counts unchanged |
 
 S1-S4 land as one turmeric-spices PR, because the shard jobs depend on the
 build artifact. S5 is independent and can land first. (Both landed on
-2026-10-04; see the status line. S6 is what remains.)
+2026-10-04; see the status line. S6 is section 9.)
+
+## 9. Measured (S6, 2026-10-25)
+
+**Sample.** Every turmeric-spices CI run from 2026-10-04 (when S1-S4
+landed) to 2026-10-23 that succeeded with all seven shards: 58 runs, 27
+pushes to `main` and 31 pull requests. Cancelled, failed and
+`workflow_dispatch`-subset runs are left out. Job and step times come from
+the Actions API. Per-spice times come from `run-shard.sh`'s
+`<spice>: pass (Ns)` log lines in the three most recent runs (the step
+summary is not in the API). The GitHub tool returns only the last 5000 lines
+of a log, which cut the first three spices of macOS shard 2/3. Its step total
+less the spices found puts those three at about 30 seconds together.
+
+### Against the projections
+
+| | before (section 1) | projected | measured (median) |
+| --- | ---: | ---: | ---: |
+| jobs per run | 98 | ~11 | **10** (manifest-parse folded into the Linux build) |
+| runner-minutes per run | ~280 | ~85 | **43** (p90 52): 19 Linux, 25 macOS |
+| wall clock | 2h05 | -- | **32 min** (p90 62, max 109) |
+| `build-tur` job | 1.4 / 2.8 min per build | +1.5 / +3 min | **2.1 / 3.8 min** (Linux / macOS) |
+| Linux shard job | -- | 4-5 min | **4.1 min** (p90 5.3) |
+| macOS shard job | -- | 7-8 min | **7.2 min** (p90 9.2) |
+| spice work per OS | 16 / 22 min (48 spices) | -- | **17 / 21 min** (52 spices) |
+
+Runner time came in at half the projection. Section 5 assumed each shard
+would pay a dependency install and an artifact download on top of its
+spices. Measured, everything in a shard job but the `Test` step comes to
+0.4 min on macOS and 0.5 min on Linux, about 3 runner-minutes per run in all.
+
+### Where the wall clock goes now: waiting for runners
+
+A macOS job finished last in 55 of the 58 runs. Measured from its own
+`build-tur` finishing, the macOS leg takes a median **16.8 min**. If its
+three shards ran side by side it would take 8.3, and one after another 21.1.
+All three ran at once in only 29 runs. In 24 the peak was two, and in 5 it
+was one. The Linux leg queues too, less: 9.9 min against 5.0 parallel and
+16.9 serial. The macOS `build-tur` waits a median 3.6 min to start (p90 16,
+max 30), and a macOS shard waits 4.4 after the build (p90 24, max 79). That
+is the shared, small macOS pool section 0 describes, now with 4 macOS jobs
+per run instead of 48.
+
+### Shard counts: keep 4 Linux and 3 macOS
+
+- **The count barely moves runner time.** At 0.4-0.5 min of setup a shard,
+  a shard more or less is half a runner-minute.
+- **macOS 2 would cost time whenever runners are free and save nothing when
+  they are not.** The parallel bound goes from 7.1 to 10.4 min. The only gain
+  is one fewer macOS job, and the leg already runs mostly in series.
+- **macOS 4 would ask for a fourth runner the pool rarely has**: three at
+  once happened in half the runs.
+- **Linux 5 helps less than it looks.** Round-robin over 52 spices gives a
+  5.7 min slowest shard at 5, against 5.3 at 4. Linux is also not the critical
+  path: macOS finishes last.
+
+### Weights file: still not needed
+
+Longest-first assignment over the measured per-spice medians (heaviest:
+notebook 97 s, tourist 90, httpd 71 on Linux; html 97, tourist 87,
+tourist-session 75 on macOS) would cut the slowest Linux shard from 5.3 to
+4.4 min. On macOS round-robin is already within 0.4 min of even. The macOS
+leg is what finishes last, and it would not change. So section 3's rule
+holds: no `ci/shard-weights.json`. Over the 58 runs, macOS shard 2/3 was
+slowest 38 times (median 8.0 min against 6.4 and 6.8). Its spices change as
+spices are added, and in the latest split (httpd, notebook, tourist,
+tourist-ws, ws-server) it is within 0.4 min of the others.
+
+### When to look again
+
+Shard times are growing: comparing the first 15 runs with the last 15,
+Linux shards went from 3.8 to 4.7 min and macOS from 6.5 to 7.7. That is 4 more
+spices and heavier suites. Revisit the counts when a macOS shard's median
+passes about 10 minutes. Revisit weights when the macOS shards drift more
+than 2 minutes apart, which is the leg that finishes last.
+Section 6, the shared native-dependency cache, is still the next lever on
+runner time. It was not measured here: per-spice seconds include the fetch.
+

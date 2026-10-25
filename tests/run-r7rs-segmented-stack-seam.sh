@@ -3,27 +3,28 @@
 # (docs/upcoming/r7rs-heap-frames-plan.md, option C) across the `#lang r7rs`
 # fixture corpus, on one arm at a time.
 #
-#   SEG_ARM=on   (the default while the feature is behind --enable) every
-#                `#lang r7rs` fixture compiled with --enable=r7rs-segmented-stack
-#                and run with TUR_SEG_BASE_MB=8, so the deep ones cross onto
-#                segments, against its committed expected.stdout and
-#                expected.exit -- the answer the corpus gives without the flag.
-#   SEG_ARM=off  the bisection hatch: the same population compiled AND run with
-#                TUR_R7RS_SEGMENTED_STACK=0 (and the flag), which must be the
-#                build without the flag.
+#   SEG_ARM=off  (the default since graduation, 2026-10-25) the bisection
+#                hatch: every `#lang r7rs` fixture compiled AND run with
+#                TUR_R7RS_SEGMENTED_STACK=0, against its committed
+#                expected.stdout and expected.exit -- the build every r7rs
+#                program got before the feature graduated.
+#   SEG_ARM=on   the default build, run with TUR_SEG_BASE_MB=8 so the deep
+#                fixtures cross onto segments rather than staying on the
+#                1 GiB stack `bash tests/run.sh` gives them.
 #
-# INVERT AT GRADUATION, per the flags guide ("Graduating flips a default -- so
-# the old default's harness INVERTS"): once every compiled r7rs program carries
-# the check, `bash tests/run.sh` covers the ON path, and nothing compiles the
-# off path any more -- so the default arm here becomes `off`, and this harness
-# keeps the hatch working.  The canary below is what makes that arm honest.
+# INVERTED AT GRADUATION, per the flags guide ("Graduating flips a default --
+# so the old default's harness INVERTS"): every compiled r7rs program carries
+# the check now, so `bash tests/run.sh` covers the ON path and nothing else
+# compiles the off path -- this harness keeps the hatch working.  The canary
+# below is what makes that arm honest.
 #
-# A CANARY first: under the hatch, emit-c of the deep-recursion fixture must be
-# byte-identical to the build without the flag and carry no TUR_SEG_CHECK and
-# no runtime (TUR_SEG_ON; the collector's and the prelude's copies of the
-# record types, tur_seg_rec and tur_seg_piece, are in every r7rs program); on
-# the ON arm it must carry one.  A renamed variable or a gate that stopped
-# reading it fails here, loudly, instead of re-testing the default.
+# A CANARY first: under the hatch, emit-c of the deep-recursion fixture must
+# carry no TUR_SEG_CHECK and no runtime (TUR_SEG_ON; the collector's and the
+# prelude's copies of the record types, tur_seg_rec and tur_seg_piece, are in
+# every r7rs program); the default build must carry the check, and a lingering
+# --enable=r7rs-segmented-stack (a graduated no-op) must change nothing.  A
+# renamed variable or a gate that stopped reading it fails here, loudly,
+# instead of re-testing the default.
 #
 # Linux x86-64 and arm64, where the check is compiled in; elsewhere the arms
 # are the same build and this skips.  Fixtures marked requires.interp-only,
@@ -40,7 +41,7 @@ case "$(uname -s)/$(uname -m)" in
     Linux/x86_64|Linux/aarch64) ;;
     *) echo "r7rs-segmented-stack-seam: SKIP (no check is compiled on $(uname -s)/$(uname -m))"; exit 0 ;;
 esac
-ARM="${SEG_ARM:-on}"
+ARM="${SEG_ARM:-off}"
 case "$ARM" in
     on)  ARM_ENV=(TUR_SEG_BASE_MB=8) ;;
     off) ARM_ENV=(TUR_R7RS_SEGMENTED_STACK=0) ;;
@@ -53,15 +54,18 @@ FAIL=0
 
 # --- 1. The canary. ----------------------------------------------------------
 canary=tests/fixtures/r7rs-segmented-stack-deep-recursion/input.tur
-"$TUR" emit-c "$canary" > "$WORK/plain.c" 2> /dev/null
-TUR_R7RS_SEGMENTED_STACK=0 "$TUR" --enable=r7rs-segmented-stack emit-c "$canary" > "$WORK/hatch.c" 2> /dev/null
-"$TUR" --enable=r7rs-segmented-stack emit-c "$canary" > "$WORK/on.c" 2> /dev/null
+"$TUR" emit-c "$canary" > "$WORK/on.c" 2> /dev/null
+TUR_R7RS_SEGMENTED_STACK=0 "$TUR" emit-c "$canary" > "$WORK/hatch.c" 2> /dev/null
+"$TUR" --enable=r7rs-segmented-stack emit-c "$canary" > "$WORK/noop.c" 2> /dev/null
 if ! grep -q 'TUR_SEG_CHECK(' "$WORK/on.c"; then
-    echo "FAIL seam-canary -- the flag emitted no TUR_SEG_CHECK: this harness could never see the check"
+    echo "FAIL seam-canary -- the default build emitted no TUR_SEG_CHECK: this harness could never see the check"
     FAIL=$((FAIL + 1))
-elif grep -q 'TUR_SEG_CHECK(\|define TUR_SEG_ON' "$WORK/hatch.c" || ! cmp -s "$WORK/plain.c" "$WORK/hatch.c"; then
-    echo "FAIL seam-canary -- under TUR_R7RS_SEGMENTED_STACK=0 the C is not the build without the flag:" \
+elif grep -q 'TUR_SEG_CHECK(\|define TUR_SEG_ON' "$WORK/hatch.c"; then
+    echo "FAIL seam-canary -- under TUR_R7RS_SEGMENTED_STACK=0 the C still carries the check or its runtime:" \
          "the hatch did not bite (renamed, or emit_seg_stack_wanted stopped reading it)"
+    FAIL=$((FAIL + 1))
+elif ! cmp -s "$WORK/on.c" "$WORK/noop.c"; then
+    echo "FAIL seam-canary -- a lingering --enable=r7rs-segmented-stack changed the C; it should be a no-op"
     FAIL=$((FAIL + 1))
 else
     echo "PASS seam-canary"
@@ -93,7 +97,7 @@ one() {
     local stdin=/dev/null; [ -f "$dir/input.stdin" ] && stdin="$dir/input.stdin"
     local tmo=60; [ -f "$dir/expected.timeout" ] && tmo="$(tr -d '[:space:]' < "$dir/expected.timeout")"
     # shellcheck disable=SC2086
-    if ! env "${ARM_ENV[@]}" timeout 600 "$TUR" --enable=r7rs-segmented-stack $flags build "$dir/input.tur" \
+    if ! env "${ARM_ENV[@]}" timeout 600 "$TUR" $flags build "$dir/input.tur" \
             -o "$WORK/$name" > "$WORK/$name.build" 2>&1; then
         echo "FAIL $name -- build failed: $(grep -m1 -i error "$WORK/$name.build" | cut -c1-160)"
         return

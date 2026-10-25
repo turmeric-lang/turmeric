@@ -42,6 +42,21 @@ directory is worse for triage than no index.
 | [ok-nil-lowercase-miscompiles](ok-nil-lowercase-miscompiles.md) | low-medium | `(ok nil)` for a `(Result nil E)` monomorphises `ok` with a `void` parameter -- two C errors; `(Ok nil)` works |
 | [bare-nullary-ctor-as-value-emits-undeclared-c](bare-nullary-ctor-as-value-emits-undeclared-c.md) | low | `(let [c Red] ...)` / `[Red Green]` -- a bare nullary constructor as a value -- emits an undeclared C identifier; `(Red)` works |
 
+## Found moving crdt's ReplicaId to a newtype (filed 2026-10-25)
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [defopaque-over-sym-implicit-return-drops-const](defopaque-over-sym-implicit-return-drops-const.md) | low (C warning) | A `Sym` returned as a `defopaque` over `:Sym` with no ascription emits `return s;` from `const struct __tur_sym *` into `void *`, which gcc and clang warn about; `(:: s T)` emits the cast and is the workaround |
+
+## Found documenting `^multishot` in the effects guides (filed 2026-10-25)
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [handle-body-set-to-enclosing-mut-lost-compiled](handle-body-set-to-enclosing-mut-lost-compiled.md) | high (silent wrong value) | Compiled and `tur jit`: a `set!` from a `handle` body to an enclosing `^mut` that no clause uses is lost after the `handle` (`1` for `51`; also with no `perform` at all), because the handle's continuation captures the mutable by value at install. B7b promoted clause-touched mutables only. The interpreter is right |
+| [multishot-capture-check-skips-the-continuation](multishot-capture-check-skips-the-continuation.md) | medium (soundness) | TUR-E0500 inspects the `^multishot` clause, which runs once per `perform`, not the continuation, which runs once per resume: a `^linear` value the body consumes after the `perform` is consumed twice with no diagnostic, while a clause reading a plain struct once is refused |
+| [turi-multishot-tail-let-frame-shared-across-resumes](turi-multishot-tail-let-frame-shared-across-resumes.md) | medium-low (engine disagreement) | `tur --interpret` shares a function's tail-`let` locals between the copies a `^multishot` resume runs (`11031` where compiled prints `11021`): `clone_ws_slice` clones only frames a `DriveCont` owns, and the F1 tail let leaves none |
+| [cps-set-whose-value-performs-always-evicts](cps-set-whose-value-performs-always-evicts.md) | low (compile-time limit) | Any `set!` whose value performs evicts its function unless it updates a loop's carried variable, even in straight-line code; the guide and the error said only the conditional in-loop case. Both now say so; binding the value with `let` first works |
+
 ## Found checking the installed-spice `:bin` conflict exemption (filed 2026-10-24)
 
 | Report | Severity | One line |
@@ -59,7 +74,7 @@ directory is worse for triage than no index.
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [tvm-install-bash-rc-choice-shadows-profile](tvm-install-bash-rc-choice-shadows-profile.md) | medium-low | With no `.bashrc`, tvm's `install.sh` creates `.bash_profile`, which stops bash login shells reading an existing `.profile`, and interactive non-login shells still don't load tvm. On macOS it writes `.bashrc`, which Terminal's login shells skip. Fix in turmeric-lang/tvm: choose by platform, and don't prompt (it runs as `curl \| sh`) |
+| ~~[tvm-install-bash-rc-choice-shadows-profile](../archive/tvm-install-bash-rc-choice-shadows-profile.md)~~ | medium-low | **RESOLVED 2026-10-25** (archived): turmeric-lang/tvm#2 chooses the bash rc by platform: `~/.bashrc` on Linux (created if missing), and on macOS the first existing of `.bash_profile`/`.bash_login`/`.profile`. It never creates a `.bash_profile` that shadows `.profile`. Shipped by `TVM_REF` `5217967` in `release.yml`; pinned by tvm `tests/run.sh` |
 
 ## Found checking r7rs-heap-frames-plan H6 against the JIT (filed 2026-10-24)
 
@@ -581,7 +596,7 @@ around in the shipped code and documented in the guide.
 ## Found implementing the XML/HTML parsers plan (filed 2026-10-10)
 
 Building `tur-dom-core`, `tur-xml` and `tur-html` in turmeric-spices for
-[xml-html-parsers-plan](../upcoming/spices/xml-html-parsers-plan.md) on v0.64.0.
+[xml-html-parsers-plan](../archive/xml-html-parsers-plan.md) on v0.64.0.
 Each is worked around in the spices (the workaround is cited at the site);
 every repro below was re-run as written on v0.64.0. Five are emitted-C type
 mismatches that gcc only warns about, so they pass Linux CI and fail macOS --
@@ -680,8 +695,9 @@ prelude-variant cost it also found was
 
 Follow-ups to PR #1082, which runs a compiled `#lang r7rs` program on a 1 GiB
 stack and prints a message when it overflows. The longer-term design, a stack
-bounded by memory rather than by the C stack, is behind
-`--enable=r7rs-segmented-stack` since 2026-10-23 (beta since 2026-10-24)
+bounded by memory rather than by the C stack, graduated on 2026-10-25
+(prototype 2026-10-23, beta 2026-10-24) and is on for every compiled Scheme
+program on Linux x86-64 and arm64
 ([r7rs-heap-frames-plan](../upcoming/r7rs-heap-frames-plan.md)).
 
 | Report | Severity | One line |

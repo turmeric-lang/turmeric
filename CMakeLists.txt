@@ -1549,7 +1549,7 @@ add_test(
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
 set_tests_properties(tur_r7rs_main_stack_size PROPERTIES TIMEOUT 720)
-# r7rs-heap-frames-plan (option C): under --enable=r7rs-segmented-stack a
+# r7rs-heap-frames-plan (option C; graduated 2026-10-25): a
 # recursion, collections, call/cc re-entry, threads and fibers run across
 # stack segments past an 8 MiB stack of the thread's own, TUR_MAIN_STACK_MB
 # caps the total, and TUR_R7RS_SEGMENTED_STACK=0 turns it all off.
@@ -1560,9 +1560,9 @@ add_test(
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
 set_tests_properties(tur_r7rs_segmented_stack PROPERTIES TIMEOUT 720)
-# The same, across every `#lang r7rs` fixture: SEG_ARM=on (the flag, an 8 MiB
-# base stack) until graduation, when the default inverts to SEG_ARM=off (the
-# hatch).  Fans out across nproc itself, so it gets the machine.
+# The same, across every `#lang r7rs` fixture: SEG_ARM=off (the hatch) by
+# default since graduation, which `bash tests/run.sh` no longer compiles;
+# SEG_ARM=on runs the default build on an 8 MiB base stack.  Fans out across nproc itself, so it gets the machine.
 add_test(
   NAME tur_r7rs_segmented_stack_seam
   COMMAND bash tests/run-r7rs-segmented-stack-seam.sh

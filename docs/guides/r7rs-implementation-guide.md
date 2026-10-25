@@ -743,10 +743,10 @@ From `docs/reported/` on 2026-10-16:
 - [jit-r7rs-threads-lifecycle-exited-1-once](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/jit-r7rs-threads-lifecycle-exited-1-once.md)
   -- one unreproduced JIT failure of `r7rs-threads-lifecycle`.
 
-Recursion past the 1 GiB stack is in beta behind
-`--enable=r7rs-segmented-stack` (segments mapped as the stack runs out, on
-every thread; call/cc copies the chain; Linux x86-64 and arm64, nothing
-elsewhere):
+Recursion past the 1 GiB stack graduated on 2026-10-25 (segments mapped as
+the stack runs out, on every thread; call/cc copies the chain; Linux x86-64
+and arm64, nothing elsewhere or under a stack-tracking sanitizer;
+`TUR_R7RS_SEGMENTED_STACK=0` is the hatch):
 [r7rs-heap-frames-plan](https://github.com/turmeric-lang/turmeric/blob/main/docs/upcoming/r7rs-heap-frames-plan.md).
 
 ---
