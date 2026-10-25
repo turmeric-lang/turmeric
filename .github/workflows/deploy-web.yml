@@ -1,0 +1,152 @@
+name: "Deploy: Try Turmeric"
+
+# Build, gate and deploy try.turmeric-lang.com, applying any pending /ci D1
+# migration first.  Two callers, one job, so they cannot drift:
+#
+#   workflow_dispatch   deploy current `main` without cutting a release
+#   workflow_call       release-cut.yml's deploy-web, at the release commit
+#
+# A dispatch always deploys `main`'s HEAD, whichever branch the "Run workflow"
+# menu names: a deploy from a feature branch is not something this repo does.
+#
+# Requires secrets CLOUDFLARE_API_TOKEN (Workers deploy + D1 edit on
+# `ci-metrics`) and CLOUDFLARE_ACCOUNT_ID.
+
+on:
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      ref:
+        description: Commit to build and deploy
+        type: string
+        required: true
+    secrets:
+      CLOUDFLARE_API_TOKEN:
+        required: true
+      CLOUDFLARE_ACCOUNT_ID:
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    name: Build, gate and deploy Try Turmeric
+    runs-on: ubuntu-latest
+    # Job-level, not workflow-level, so it also holds when release-cut.yml
+    # calls this: a manual deploy and a release cut's deploy never overlap,
+    # and the second waits rather than cancelling the first.
+    concurrency:
+      group: deploy-web
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref || 'main' }}
+          # Full history: the guides index and the docs pack date every page
+          # from git (first commit = added, last = updated).  A shallow clone
+          # gives every page the deployed commit's date for both, which empties
+          # Recently Updated and turns Recently Added into the alphabetically
+          # first ten pages.
+          fetch-depth: 0
+
+      - name: Record the deployed commit
+        run: |
+          echo "Deploying $(git rev-parse HEAD): $(git log -1 --format=%s)"
+          echo "Deploying \`$(git rev-parse --short HEAD)\` -- $(git log -1 --format=%s)" >> "$GITHUB_STEP_SUMMARY"
+
+      # The deploy insists on spices (tools/check-pack-spices.py, the same
+      # check `tur run deploy-web` runs): genspices.py degrades to zero spice
+      # pages without the sibling checkout, which is fine for CI and wrong for
+      # the site.  Unpinned for the reason recorded at the same clone in ci.yml.
+      # Full history, not --depth 1, for the same page-dating reason as the
+      # checkout above: gendocs dates the spice pages from this clone's log.
+      - name: Check out turmeric-spices (sibling)
+        run: |
+          git clone \
+            "https://github.com/${{ github.repository_owner }}/turmeric-spices" \
+            ../turmeric-spices
+
+      - name: Install dependencies (Linux)
+        run: |
+          sudo rm -f /etc/apt/sources.list.d/google-chrome*
+          sudo apt-get update || { sleep 20; sudo apt-get update; }
+          sudo apt-get install -y libedit-dev
+
+      # No pip install: the doc generators render Markdown with tur/markdown,
+      # through the native tur built below (markdown-library-plan M4).
+      - name: Set up Python (for gendocs)
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+
+      - name: Set up Emscripten
+        uses: mymindstorm/setup-emsdk@4528d102f7230f0e7b276855c01ea1159be0e984 # v16
+        with:
+          # Keep in step with ci.yml's web-smoke job.
+          version: 6.0.10
+          actions-cache-folder: 'emsdk-cache'
+
+      - name: Set up Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          # wrangler 4.x (web/package.json) refuses to run below Node 22.
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: web/package-lock.json
+
+      - name: Build native tur (Release; needed for docs)
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_POLICY_VERSION_MINIMUM=3.5
+          cmake --build build -j --target tur
+
+      - name: Generate docs (writes web/public/doc-names.json + docs pack)
+        run: ./build/tur run docs
+
+      - name: The docs pack carries the spices
+        run: python3 tools/check-pack-spices.py web/public/docs-pack/
+
+      - name: Configure + build WASM
+        run: |
+          cmake -S . -B build-wasm -DTUR_WASM=ON -DCMAKE_POLICY_VERSION_MINIMUM=3.5
+          cmake --build build-wasm -j --target tur_wasm
+
+      - name: Install web deps
+        working-directory: web
+        run: npm ci
+
+      - name: Install Playwright Chromium
+        working-directory: web
+        run: npx playwright install --with-deps chromium
+
+      # BLOCKING: a failure here ends the run before the migration or deploy.
+      - name: Deploy-gate smoke test
+        working-directory: web
+        timeout-minutes: 5
+        run: npx playwright test deploy-gate.spec.js --project=desktop
+
+      - name: Build the web bundle
+        working-directory: web
+        run: npm run build
+
+      # `tur run migrate-ci-db`, minus its web-deps step (done above).  Before
+      # the deploy: a Worker that writes a new column fails every CI report
+      # until the column exists.  Already-applied migrations are skipped, so
+      # with nothing pending this prints "No migrations to apply!" and moves
+      # on.  wrangler's "continue?" prompt takes its fallback (yes) in CI.
+      # After the gate, so a branch that fails it never touches the database.
+      - name: Apply pending /ci D1 migrations
+        working-directory: web
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: npx wrangler d1 migrations apply ci-metrics --remote
+
+      # `npm run deploy` minus its own rebuild.  The Cloudflare vite plugin
+      # writes the deployable config to dist/<worker name, '-' -> '_'>/.
+      - name: Deploy to Cloudflare
+        working-directory: web
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: npx wrangler deploy --config dist/try_turmeric/wrangler.json
