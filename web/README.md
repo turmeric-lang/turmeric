@@ -106,10 +106,11 @@ column the database does not have yet fails every CI report. With nothing
 pending it prints "No migrations to apply!" and exits.
 
 To deploy current `main` without a local build or `wrangler` login, run the
-**Deploy: Try Turmeric** workflow (`.github/workflows/deploy-web.yml`) from the
-Actions tab, or `gh workflow run deploy-web.yml`. It builds `main`'s HEAD, runs
-the deploy gate, applies pending migrations, and deploys -- the same job a
-release cut runs.
+**Deploy: Try Turmeric + spices** workflow (`.github/workflows/deploy-web.yml`)
+from the Actions tab, or `gh workflow run deploy-web.yml`. It builds `main`'s
+HEAD, runs the deploy gate, applies pending migrations, and deploys -- and
+deploys spices.turmeric-lang.com from turmeric-spices `main` alongside it.
+These are the same jobs a release cut runs.
 
 ## The /ci dashboard and its D1 store
 

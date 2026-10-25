@@ -5,7 +5,8 @@ name: "Release: cut"
 #   prepare     bump, draft the notes over the Mistral API, VALIDATE (a bad
 #               draft fails here), commit to the scratch branch release/vNEW
 #   deploy-web  build Try Turmeric from that commit, deploy-gate, migrate the
-#               /ci D1 database, deploy (deploy-web.yml, also run by hand)
+#               /ci D1 database, deploy; and deploy spices.turmeric-lang.com
+#               from turmeric-spices main (deploy-web.yml, also run by hand)
 #   publish     open + merge the release PR, tag, dispatch release.yml
 #
 # Nothing a user or a clone can see changes before `publish`: the scratch
@@ -154,10 +155,12 @@ jobs:
           git push --force origin "$BRANCH"
           echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
-  # The same job `Deploy: Try Turmeric` runs on a manual dispatch: build,
-  # deploy-gate, apply pending /ci D1 migrations, deploy.
+  # The same jobs `Deploy: Try Turmeric + spices` runs on a manual dispatch:
+  # build, deploy-gate, apply pending /ci D1 migrations, deploy -- and deploy
+  # the spices site.  `publish` waits on both, since a called workflow's job
+  # finishes only when all of its jobs have.
   deploy-web:
-    name: Build, gate and deploy Try Turmeric
+    name: Deploy Try Turmeric and the spices site
     needs: prepare
     if: ${{ !inputs.dry_run }}
     uses: ./.github/workflows/deploy-web.yml
@@ -167,89 +170,9 @@ jobs:
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
       CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
 
-  deploy-spices:
-    name: Build and deploy spices.turmeric-lang.com
-    needs: prepare
-    if: ${{ !inputs.dry_run }}
-    runs-on: ubuntu-latest
-    steps:
-      # Deploys from turmeric-spices main, not the release scratch branch: the
-      # spices site is its own repo, and a spice landing between two turmeric
-      # releases should not wait for the next cut to appear online.  Full
-      # history so genguides can date each guide from git.
-      - name: Check out turmeric-spices
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          repository: ${{ github.repository_owner }}/turmeric-spices
-          fetch-depth: 0
-
-      - name: Set up Python
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        with:
-          python-version: '3.12'
-
-      # No pip install: the spices repo's genguides.py and genspices.py render
-      # Markdown with tur/markdown, as this repo's do (markdown-library-plan
-      # M4), so they need a tur and no Python package.  This one is built from
-      # the release being cut, beside the workspace in .turmeric/ -- outside
-      # web/dist, so none of it reaches the deploy.  A Release build of the
-      # one target, as deploy-web makes.
-      - name: Check out turmeric (for tur)
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ needs.prepare.outputs.sha }}
-          path: .turmeric
-          persist-credentials: false
-
-      - name: Install dependencies (Linux)
-        run: |
-          sudo rm -f /etc/apt/sources.list.d/google-chrome*
-          sudo apt-get update || { sleep 20; sudo apt-get update; }
-          sudo apt-get install -y libedit-dev
-
-      - name: Build native tur (Release; renders the Markdown)
-        run: |
-          cmake -S .turmeric -B .turmeric/build -DCMAKE_BUILD_TYPE=Release -DCMAKE_POLICY_VERSION_MINIMUM=3.5
-          cmake --build .turmeric/build -j --target tur
-
-      - name: Set up Node
-        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version: '22'
-          cache: 'npm'
-          cache-dependency-path: web/package-lock.json
-
-      # Mirrors the spices repo's `tur run deploy-web` recipe: render guides +
-      # spice pages, copy them with the static assets into web/dist, deploy.
-      - name: Generate spice docs
-        env:
-          TUR: ${{ github.workspace }}/.turmeric/build/tur
-        run: |
-          python3 tools/genguides.py docs/guides/ --out docs/html/guides/
-          python3 tools/genspices.py --out docs/html/ --emit-json docs/html/doc-names-spices.json
-
-      - name: Build web bundle
-        run: |
-          rm -rf web/dist
-          mkdir -p web/dist
-          cp -R docs/html/. web/dist/
-          cp -R web/public/. web/dist/
-          cp -R web/styles web/dist/styles
-
-      - name: Install web deps
-        working-directory: web
-        run: npm ci
-
-      - name: Deploy to Cloudflare
-        working-directory: web
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-        run: npx wrangler deploy --config wrangler.jsonc
-
   publish:
     name: Merge, tag v${{ needs.prepare.outputs.new }}, dispatch release.yml
-    needs: [prepare, deploy-web, deploy-spices]
+    needs: [prepare, deploy-web]
     runs-on: ubuntu-latest
     permissions:
       contents: write        # merge, tag, delete the scratch branch
