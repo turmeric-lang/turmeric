@@ -14,7 +14,8 @@
 ;; saffron-default-any and its siblings.
 ;;
 ;; saffron GRADUATED at 0.46.0.  The directive is all that is needed: there is
-;; no EXPERIMENTS[] row, `--enable=saffron` is a TUR-W0063 no-op, a project
+;; no EXPERIMENTS[] row, `--enable=saffron` is TUR-E0310 (the name aged out
+;; of GRADUATED[] at 0.71.0), a project
 ;; manifest can no longer refuse the dialect, and nothing is printed to stderr
 ;; (TUR-W0060, the prototype lifecycle warning, is gone).  What the `#lang`
 ;; line still does behind the scenes is set g_opt_dynamic_any, which tells the

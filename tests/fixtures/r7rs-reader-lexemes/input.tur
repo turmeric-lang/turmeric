@@ -10,8 +10,9 @@
 ;; Scheme now, so the values print in Scheme's spelling (`#t`, `10.0`).
 ;;
 ;; r7rs GRADUATED at 0.57.0, so the directive is all that is needed and
-;; nothing is printed to stderr: no EXPERIMENTS[] row, `--enable=r7rs` a
-;; TUR-W0063 no-op, no manifest able to refuse the dialect, and no TUR-W0061
+;; nothing is printed to stderr: no EXPERIMENTS[] row (`--enable=r7rs` is
+;; TUR-E0310 since the name aged out at 0.71.0), no manifest able to refuse the
+;; dialect, and no TUR-W0061
 ;; (this file used to print one per compile, which the harness ignored because
 ;; it compares stdout only).
 (import (scheme base) (scheme write) (scheme char))

@@ -84,8 +84,8 @@ That shim is a **migration window, not a permanent alias**. One minor line
 after graduation the name ages out of `GRADUATED[]` and goes back to being a
 hard `TUR-E0310` -- so treat `TUR-W0063` as a deprecation notice with a
 deadline and delete the flag when you see it. Twelve names aged out this way at
-0.37.0 and 0.38.0; `jit-ffi`, which graduated in 0.38.0, is the only shim
-currently live and becomes eligible at 0.39.0. The same rule and the same
+0.37.0 and 0.38.0, and the remaining ten (`jit-ffi` through
+`repl-jit-inline-c`) at 0.71.0, so no shim is currently live. The same rule and the same
 one-line window apply to a graduated `#lang` layer token (`TUR-W0064`, then
 `TUR-E0330`).
 

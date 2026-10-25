@@ -27,7 +27,8 @@ Quick orientation:
 | Wrap a C library as a reusable package | a spice with `:cmake-deps` | see [Developing Spices](developing-spices-guide.md) |
 
 Every form on this page is stable -- `call-ptr` and `callback-ptr` graduated
-from `--enable=jit-ffi` in 0.38.0 and need no flag. Everything here that
+from `--enable=jit-ffi` in 0.38.0 and need no flag (the old flag is an
+unknown-experiment error since 0.71.0, so drop it). Everything here that
 touches raw pointers still lives inside `(unsafe ...)` blocks and behind the
 `TURI_CAP_FFI` capability in sandboxed interpreter environments; the
 [Unsafe Code guide](unsafe-guide.md) covers the block and the raw-pointer

@@ -30,8 +30,8 @@ tur --interpret fact.tur  # the tree-walking interpreter
 The dialect **graduated in v0.57.0** and is an ordinary base dialect, on the
 same footing as `#lang turmeric` and `#lang saffron`: `tur dialects` lists it
 as `stable`, nothing needs enabling, a project manifest cannot refuse it, and
-no lifecycle warning is printed (`--enable=r7rs` is accepted as a no-op for a
-release, with a TUR-W0063 notice). The stages, design decisions and known gaps
+no lifecycle warning is printed. `--enable=r7rs` was accepted as a TUR-W0063
+no-op until 0.71.0 and is an unknown-experiment error (TUR-E0310) now. The stages, design decisions and known gaps
 live in
 [docs/archive/r7rs-lang-plan.md](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/r7rs-lang-plan.md).
 
