@@ -8,7 +8,7 @@ time -- a `defmacro*` body's `letrec`, or a module imported `:for-macros`
 Mutually recursive helpers over `Syntax` therefore fail at definition time.
 The same top-level forward reference works compiled and under
 `tur interpret`. Found 2026-10-16 prototyping hiccup vector rewriting
-(`docs/upcoming/spices/xml-html-parsers-plan.md`, D-1); reproduced on
+([xml-html-followups-plan](../upcoming/spices/xml-html-followups-plan.md), D-1); reproduced on
 `main` at `d60c40f6`.
 
 ## Repro

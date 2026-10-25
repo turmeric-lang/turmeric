@@ -573,7 +573,7 @@ around in the shipped code and documented in the guide.
 ## Found implementing the XML/HTML parsers plan (filed 2026-10-10)
 
 Building `tur-dom-core`, `tur-xml` and `tur-html` in turmeric-spices for
-[xml-html-parsers-plan](../upcoming/spices/xml-html-parsers-plan.md) on v0.64.0.
+[xml-html-parsers-plan](../archive/xml-html-parsers-plan.md) on v0.64.0.
 Each is worked around in the spices (the workaround is cited at the site);
 every repro below was re-run as written on v0.64.0. Five are emitted-C type
 mismatches that gcc only warns about, so they pass Linux CI and fail macOS --
