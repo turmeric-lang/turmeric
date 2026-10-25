@@ -440,6 +440,8 @@ row per the CLAUDE.md rule rather than an env seam.
   surface over one ADT representation)
 - `docs/archive/sum-representation-plan.md` (the by-value gates this plan
   widens)
+- `docs/reported/parametric-sum-stays-on-carrier.md` (slice 3's open
+  remainder: why `GVec` and `SizedVec` stay on the carrier)
 - `docs/archive/gadt-length-index-not-enforced.md` (the index checks that
   key on `result_type_form`)
 - `docs/archive/design-mf4-struct-gadt-namespaces.md`
