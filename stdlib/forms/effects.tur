@@ -109,7 +109,7 @@
 ;;; Parameters:
 ;;;   body   -- the expression to run
 ;;;   clause -- an `(Effect [param ...] k)` head followed by its handler expression,
-;;;             repeated
+;;;             repeated; the head may be `(Effect [param ...] ^multishot k)`
 ;;;
 ;;; Returns:
 ;;;   The body's value, or the value of the clause that took over.
@@ -138,6 +138,9 @@
 ;;; `^multishot` -- `(Flip [] ^multishot k)` -- to resume it any number of times,
 ;;; each running the rest of the body afresh; `(+ (resume k 10) (resume k 20))`
 ;;; explores two answers (the standard way to write search and backtracking).
+;;; Each run starts from its own copy of the body's locals; globals and heap data
+;;; are shared by every run. The clause may not capture a `^unique` or `^linear`
+;;; binding, a plain `defstruct` value included (TUR-E0500).
 ;;; `^linear` demands exactly one resume or `discontinue` on every path. A
 ;;; `^multishot` continuation cannot be resumed inside `atomically` (TUR-E0502).
 ;;; The value must be of the effect's declared result type: `(resume k "x")` for
@@ -212,7 +215,7 @@
 ;;; Parameters:
 ;;;   body   -- the expression to run
 ;;;   clause -- an `(Effect [param ...] k)` head followed by its handler expression,
-;;;             repeated
+;;;             repeated; the head may be `(Effect [param ...] ^multishot k)`
 ;;;
 ;;; Returns:
 ;;;   The body's value, or the value of the clause that took over.
