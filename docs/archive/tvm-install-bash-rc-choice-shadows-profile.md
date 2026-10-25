@@ -1,5 +1,17 @@
 # tvm's `install.sh` picks the wrong bash startup file both ways: it can disable `~/.profile` on Linux, and on macOS it misses Terminal's login shells
 
+**Status 2026-10-25: RESOLVED** in turmeric-lang/tvm#2 (`5217967`), and shipped
+by bumping `TVM_REF` in `.github/workflows/release.yml` to that commit. The fix
+followed the directions below. Bash on Linux writes `~/.bashrc`, creating it if
+missing. Bash on macOS writes the first existing of `~/.bash_profile`,
+`~/.bash_login` and `~/.profile`, or a new `~/.bash_profile`. The script still
+never prompts, and it says when it created the file. tvm's `tests/run.sh` covers
+each case through a `uname` stub (15 cases, green on both the ubuntu and macOS
+legs), including that a bash login shell still reads `~/.profile`. Against the
+old `install.sh`, 11 of those cases fail. turmeric's
+`tests/tvm-install-script.sh` greps the whole of `$HOME` for the snippet, so the
+new choice does not affect it.
+
 **Severity:** medium-low. `install.sh` ships in every release, and the
 `/install` bootstrap runs it (`web/worker.js:77-90`, `release.yml:483`). The
 code lives in **turmeric-lang/tvm**, so the fix lands there. It is indexed here
