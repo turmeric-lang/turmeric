@@ -109,7 +109,7 @@ and the cap.
   switch primitive exists. Its sanitizer annotations are TSan's only: the
   emitted fiber runtime announces each switch (`TUR_TSAN_FIBER_*`,
   `emit_module.c`), and nothing anywhere tells ASan about a switch -- see
-  [Sanitizers](#sanitizers-what-keeping-segments-would-take).
+  [H7](#h7-sanitizers-what-keeping-segments-would-take).
 - Against: the "hot split" problem. A call at a segment boundary inside a
   loop allocates and frees a segment every iteration. Go hit this and moved
   to contiguous stacks that are copied when they grow, but copying is not
@@ -397,7 +397,7 @@ on Windows (the ucontext shim or fibers, the TEB's stack bounds, and the
 vectored handler for the guard) are work after graduation, each behind its own
 proof on that host's CI; neither changes the contract above until it lands.
 
-### Sanitizers: what keeping segments would take
+### H7: sanitizers, what keeping segments would take
 
 Written 2026-10-25, after graduation compiled the segmented stack out of every
 build under ASan, HWASan, MSan or TSan (`TUR_SEG_SANITIZED`, `emit_module.c`).
@@ -524,10 +524,10 @@ stands; revisit it if typed code ever wants the check.
    under qemu only), and the seam's both arms there.
 2. **macOS segments**, then **Windows segments** (Platforms, above), each
    leaving the contract unchanged until it lands.
-3. **Sanitizer support**, ASan first: announce every stack switch so an ASan
+3. **H7, sanitizer support**, ASan first: announce every stack switch so an ASan
    build keeps segments instead of compiling them out. What is in place,
    what is missing and how to test it are in
-   [Sanitizers](#sanitizers-what-keeping-segments-would-take). Until then
+   [H7](#h7-sanitizers-what-keeping-segments-would-take). Until then
    `TUR_SEG_SANITIZED` holds the contract.
 4. **H6**, as a design of its own (above), if a JIT user ever needs more than
    the engine's entry stack.

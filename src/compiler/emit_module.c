@@ -14913,8 +14913,9 @@ static void emit_deep_stack_runtime(Buf *out) {
  * tracks stacks (ASan, HWASan, MSan, TSan; UBSan is fine): a re-entry runs on
  * a stack the sanitizer was never told about (tur_seg_run_at), and ASan's
  * longjmp interceptor then aborts in sigaltstack.  Teaching it would take
- * __sanitizer_start_switch_fiber around every stack switch here; until then a
- * sanitized build is simply off (tests/run-r7rs-sanitize.sh runs that build).  Nor in a --shared build, where no deep-stack thread arms it.
+ * __sanitizer_start_switch_fiber around every stack switch here (plan H7);
+ * until then a sanitized build is simply off (tests/run-r7rs-sanitize.sh runs
+ * that build).  Nor in a --shared build, where no deep-stack thread arms it.
  * The split writes the static helpers and the asm into every unit (each
  * object's trampoline calls its own tur_seg_enter) and keeps the state in the
  * library unit. */
