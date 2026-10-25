@@ -34,6 +34,12 @@ sentence above does not cover them. If you touch this file, check
 `ls docs/reported/` against it -- an index that silently omits a quarter of the
 directory is worse for triage than no index.
 
+## Found moving crdt's ReplicaId to a newtype (filed 2026-10-25)
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [defopaque-over-sym-implicit-return-drops-const](defopaque-over-sym-implicit-return-drops-const.md) | low (C warning) | A `Sym` returned as a `defopaque` over `:Sym` with no ascription emits `return s;` from `const struct __tur_sym *` into `void *`, which gcc and clang warn about; `(:: s T)` emits the cast and is the workaround |
+
 ## Found documenting `^multishot` in the effects guides (filed 2026-10-25)
 
 | Report | Severity | One line |

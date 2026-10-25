@@ -8,13 +8,17 @@
 > for all eight C1-C3 types, and `crdt/rga`, the sequence. Eleven suites, all
 > green on both CI platforms. The two typeclass defects below, and every
 > defect the C1-C3 build filed, are fixed and archived.
-> **Open:** C6 only (the separate `crdt-sync` spice) -- not started. Spice
-> follow-ups also open: `ReplicaId` is still a `defalias` for `Sym` although
-> the `defopaque`-over-`Sym` defect was fixed 2026-09-16 (C1); `crdt/set`
-> still uses the explicit-hash macros although the typed adder was fixed
-> 2026-09-16 (C2); no HAMT-join benchmark yet (section 7); the spice has no
-> `README.md`, so it does not appear on the docs site (44 of 48 spices have
-> one). **Track:** post-v1 -- nothing on the v1
+> **Spice follow-ups done 2026-10-25** as 0.3.0 (turmeric-spices branch
+> `claude/crdt-plan-followups`): `ReplicaId` is a `defopaque` over `Sym` in
+> a new `crdt/replica` module and every type takes it (C1); `gset-add` uses
+> the typed `set-add1` (C2); `bench/join.tur` is the section 7 benchmark,
+> and it found `orset-apply` rebuilding the whole state for an add delta,
+> fixed in the same change. The README an earlier status said was missing
+> already existed (`388aa99`).
+> **Open:** C6 (the separate `crdt-sync` spice) -- not started. Two
+> performance findings from the benchmark, neither started (section 7):
+> full joins are super-linear, and `ormap-apply` and an `ORSet` remove
+> delta still walk the whole state. **Track:** post-v1 -- nothing on the v1
 > line depends on this; it is written down so the design survives.
 > **Type:** spice (in `../turmeric-spices/`), plus one candidate stdlib
 > addition (`map-merge-with`) that the plan deliberately declines to make.
@@ -415,7 +419,13 @@ One stdlib-adjacent fix is worth doing regardless of this plan's fate:
     transparent `defalias` for `Sym` for now: it names the concept without
     buying type safety, and `Sym` is a real type (an interned name), not the
     `:int` stand-in CLAUDE.md forbids. One line to change when the defect
-    lands.
+    lands. *(2026-10-25: more than one line. Only crdt/counter took a
+    `ReplicaId`; dots, the HLC, the registers, `orset-add`, `ormap-put` and
+    the rga inserts took a bare `Sym`. 0.3.0 threads the newtype through all
+    of them, from its own module `crdt/replica` so every module can import
+    it, and it is exported now. `replica` returns `(:: s ReplicaId)` rather
+    than `s`: the bare return drops `const` in the emitted C,
+    [defopaque-over-sym-implicit-return-drops-const](../../reported/defopaque-over-sym-implicit-return-drops-const.md).)*
   - **A `defalias` is not an exportable name**, so `ReplicaId` cannot appear in
     the module's `(export ...)` list. Callers spell `Sym` or use `replica`.
     Another reason to want the newtype.
@@ -500,7 +510,8 @@ One stdlib-adjacent fix is worth doing regardless of this plan's fate:
   find, so `crdt/set` uses the explicit-hash macro pair throughout. Fixed
   2026-09-16 (two emitter defects, neither in set.tur); the typed adder is
   usable again and the spice's spelling can be simplified when it is next
-  touched.
+  touched. *(2026-10-25: `gset-add` uses `set-add1`. Membership keeps the
+  explicit-hash `set-member?`: stdlib has no typed lookup.)*
 - **C3 -- registers + maps. DONE 2026-09-12.** `crdt/hlc`, `crdt/register`
   (`LwwRegister`, `MvRegister`), `crdt/ormap`. Seven test suites green.
 
@@ -674,12 +685,8 @@ follow-on, C6 is plumbing. C1-C5 are in; only C6 is left.
 
 ## 7. Risks and open questions
 
-- **`defopaque` over `Sym` is unverified.** `(defopaque ReplicaId :Sym)` is
-  the natural spelling, but the fixture coverage that landed in v0.46.1 is
-  for `Sym` as a `defstruct`/`defdata` **field**, not as a `defopaque`
-  representation. Probe it first; the fallback is a one-field
-  `(defstruct ReplicaId [name : Sym])`, which is verified. Do not fall back
-  to `:int`.
+- ~~**`defopaque` over `Sym` is unverified.**~~ Verified and shipped in 0.3.0
+  (see C1); the defect C1 filed was fixed 2026-09-16.
 - **Tombstone growth is the standing CRDT complaint.** `TwoPSet` and `ORSet`
   grow without bound under churn. The honest answer is a documented
   compaction protocol (stable-causal-cut based) in C6, not a claim that it
@@ -702,10 +709,34 @@ follow-on, C6 is plumbing. C1-C5 are in; only C6 is left.
 - **HLC needs a bounded-drift check.** An HLC whose wall component runs away
   from real time is a correctness problem that looks like nothing until
   restart. Ship the max-drift rejection with the clock, not after.
-- **Nothing here is measured.** No benchmark exists for HAMT join cost at
-  the sizes a real document hits. C1 should land a small benchmark alongside
-  the correctness suite, so C5's design (which is where performance stops
-  being free) has a baseline to argue against.
+- **Measured 2026-10-25** (`spices/crdt/bench/run.sh`, Linux x86-64, gcc
+  13, `tur` v0.71.0, best of 4-200):
+
+  | entries | `GCounter` join | `ORSet` join | `ORSet` add delta |
+  |--------:|----------------:|-------------:|------------------:|
+  | 16 | 6 us | 40 us | 1 us (was 25 us) |
+  | 1024 | 1.4 ms | 14 ms | 3 us (was 6.3 ms) |
+  | 16384 | 129 ms | 334 ms | 6 us (was 129 ms) |
+  | 65536 | 708 ms | 1.6 s | 9 us (was 658 ms) |
+
+  Three findings, one fixed:
+  - **`orset-apply` rebuilt the whole element map for every delta** --
+    `__retract` copied every element's dot map even when the delta retracted
+    nothing. An add delta now skips it (the "was" column). Fixed in 0.3.0.
+  - **Full joins are super-linear**: 1.4 us an entry at 1024, 11 us at
+    65536, and the whole run spends four fifths of its time in the kernel,
+    which fits allocation churn (unmeasured past that). `map-merge-with` folds
+    one side into the other a `map-assoc` at a time, each a path copy, where
+    a node-wise HAMT union would share every untouched subtree and do one
+    allocation per changed node. That is an argument for revisiting section
+    5's "not in stdlib" -- a union that walks two tries is stdlib/hamt.c's
+    business, not a spice's. Not started.
+  - **Deltas that cannot short-circuit still walk the state.** An `ORSet`
+    remove delta visits every element to find the dots it names (the state
+    keeps no dot -> element index), and `ormap-apply` rebuilds its entry,
+    dot and replica maps for every delta: its `__keep-keys` pass also prunes
+    dots that stale writes left behind, so the `orset` short-circuit does
+    not transfer as it stands. Not started.
 
 ## 8. References
 
