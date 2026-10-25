@@ -6,7 +6,7 @@ most natural code: a helper that walks the result of `node-children` or
 
 **Status: RESOLVED 2026-10-11** (see [Resolution](#resolution)). Found
 2026-10-10 implementing
-[xml-html-parsers-plan](../upcoming/spices/xml-html-parsers-plan.md) on `tur`
+[xml-html-parsers-plan](xml-html-parsers-plan.md) on `tur`
 v0.64.0. Worked around in turmeric-spices `spices/xml/tests/dom_tree.tur` by
 defining the helper first.
 

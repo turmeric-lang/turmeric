@@ -3,7 +3,7 @@
 **Severity: high** (silent miscompile -- wrong branch taken, no diagnostic).
 
 **Status: RESOLVED 2026-10-11.** Found 2026-10-10 implementing
-[xml-html-parsers-plan](../upcoming/spices/xml-html-parsers-plan.md) on `tur`
+[xml-html-parsers-plan](xml-html-parsers-plan.md) on `tur`
 v0.64.0. Worked around in turmeric-spices `spices/xml/src/xml/sax.tur`
 (`__run`) with nested `if`s; the workaround can go once the spices pin a `tur`
 with this fix. The cause was not `cond`: every template macro evaluated its

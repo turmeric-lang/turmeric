@@ -5,7 +5,7 @@
 **Status: RESOLVED 2026-10-11** -- the niche case first, then the non-niche
 case and the wider `:heap` by-value field family it belonged to; see
 [Resolution](#resolution). Found 2026-10-10 implementing
-[xml-html-parsers-plan](../upcoming/spices/xml-html-parsers-plan.md) on `tur`
+[xml-html-parsers-plan](xml-html-parsers-plan.md) on `tur`
 v0.64.0. Worked around in turmeric-spices `spices/dom-core/src/dom/event.tur`:
 `SaxEvent`'s `Doctype` carries its public and system identifiers as `String`s
 (empty when absent) rather than `(Option String)`.

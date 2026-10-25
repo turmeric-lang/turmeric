@@ -4,7 +4,7 @@
 
 **Status: RESOLVED 2026-10-11** (see [Resolution](#resolution)). Found
 2026-10-10 implementing
-[xml-html-parsers-plan](../upcoming/spices/xml-html-parsers-plan.md) on `tur`
+[xml-html-parsers-plan](xml-html-parsers-plan.md) on `tur`
 v0.64.0. Worked around in turmeric-spices `spices/xml/tests/sax_events.tur`
 (the retained String is stashed through C).
 
