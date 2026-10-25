@@ -21,6 +21,7 @@ A step-by-step guide to algebraic effects in Turmeric. Each section builds on th
 [Multiple effects in one handler](#multiple-effects-in-one-handler)
 [Nested handlers](#nested-handlers)
 [Multiple sequential performs](#multiple-sequential-performs)
+[Resuming more than once: `^multishot`](#resuming-more-than-once-multishot)
 [Effects with `defer`](#effects-with-defer)
 [Effects with refs and rc](#effects-with-refs-and-rc)
 [Wrapping a handler in a macro](#wrapping-a-handler-in-a-macro)
@@ -294,7 +295,57 @@ println
 ; => 30
 ```
 
-Continuations are **one-shot**: you must call `resume k` exactly once per handler activation.
+A clause may call `resume k` **at most once** per activation: a second
+`resume` of the same `k` is TUR-E0201. Not calling it at all is fine -- the
+rest of the body is abandoned (see [Bridging effects to panics](#bridging-effects-to-panics)).
+To require exactly one resume, write `^linear k`; to allow more than one, read on.
+
+---
+
+## Resuming more than once: `^multishot`
+
+Mark the continuation `^multishot` and the clause may resume it any number of
+times. Each `resume` runs the rest of the body again from the `perform`, with
+that answer, and returns what that run produced:
+
+```turmeric
+(defeffect Pick [] :int)
+
+;; One perform, resumed twice: the rest of the body runs once per answer.
+(defn plus-one [] : int
+  (+ 1 (perform (Pick))))
+
+(println (handle (plus-one)
+  (Pick [] ^multishot k) (+ (resume k 10) (resume k 20))))
+; First run:  1 + 10 = 11
+; Second run: 1 + 20 = 21
+; => 32
+```
+```sweet-exp
+defeffect Pick [] :int
+
+;; One perform, resumed twice: the rest of the body runs once per answer.
+defn plus-one [] :int
+  {1 + perform(Pick())}
+
+println
+  (handle (plus-one)
+    (Pick [] ^multishot k) {(resume k 10) + (resume k 20)})
+; First run:  1 + 10 = 11
+; Second run: 1 + 20 = 21
+; => 32
+```
+
+Without `^multishot` the second `resume` is TUR-E0201 (`continuation 'k' has
+already been resumed or discontinued`). This is the building block for search
+and backtracking: resume once per alternative and combine the results.
+
+Each run gets its own copy of the body's locals, but globals and heap data are
+shared between runs. The clause may not use a `^unique` or `^linear` value from
+the enclosing code, and that includes a plain `defstruct` value (TUR-E0500).
+The [effects guide](effects-system-guide.md#one-shot-linear-and-multishot-continuations)
+has the full rules, and [Effects vs. Monads](effects-vs-monads.md#nondeterminism)
+has larger examples.
 
 ---
 
@@ -477,7 +528,7 @@ Not calling `resume` at all is valid -- the computation past the `perform` is si
 
 ## Checking the continuation with `cont?`
 
-`(cont? k)` returns `true` if the continuation has not been consumed. For algebraic effects the static one-shot check guarantees `k` is always unconsumed in the handler body, so this is mostly useful for defensive assertions.
+`(cont? k)` returns `true` if the continuation has not been consumed. For a plain `k` the static one-shot check already guarantees that before the first `resume`, so this is mostly useful for defensive assertions. A `^multishot` `k` is never used up, so `cont?` stays `true` after a resume.
 
 ```turmeric
 (defeffect Ask [] :int)
@@ -668,6 +719,7 @@ with-stderr-log
 | Handle effects | `(handle expr (Name [p ...] k) body ...)` |
 | Resume computation | `(resume k value)` |
 | Abort computation | Omit `resume` (e.g. panic instead) |
+| Resume more than once | `(Name [p ...] ^multishot k)` |
 | Multiple effects | Multiple clauses in one `handle` |
 | Nested scoping | Inner `handle` shadows outer for same effect |
 | Macro wrappers | `(defmacro with-x [body] (handle body ...))` |

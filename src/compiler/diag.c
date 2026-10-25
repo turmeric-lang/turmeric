@@ -2401,7 +2401,7 @@ static const DiagExplanation diag_explanations_[] = {
       "  (let [d (MyData 42)]\n"
       "    (handle (perform (Ask))\n"
       "      (Ask [] ^multishot k)\n"
-      "        (resume k (.-x d))))  ; ERROR: d is move-only (TUR-E0500)\n"
+      "        (resume k (.x d))))   ; ERROR: d is move-only (TUR-E0500)\n"
       "\n"
       "Fix options:\n"
       "  1. Change the captured type to be Copy (e.g. use primitive int, not a struct):\n"
