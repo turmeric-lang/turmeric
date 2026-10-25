@@ -34,6 +34,12 @@ sentence above does not cover them. If you touch this file, check
 `ls docs/reported/` against it -- an index that silently omits a quarter of the
 directory is worse for triage than no index.
 
+## Found re-checking the ADT/GADT unification's representation change (filed 2026-10-25)
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [parametric-sum-stays-on-carrier](parametric-sum-stays-on-carrier.md) | low (performance) | A parametric sum's bare name always `malloc`s onto the int64 carrier, even with a phantom parameter or every result pinned to one instantiation (`adt_sr1_sum_candidate` refuses `n_type_params != 0`). Its applied self-recursive monomorph `(L int)` stays on the carrier too, because RM4 flipped only the non-parametric side to by value. So `GVec` and `SizedVec` gained nothing from the unification's slice 3 |
+
 ## Found moving crdt's ReplicaId to a newtype (filed 2026-10-25)
 
 | Report | Severity | One line |
