@@ -115,7 +115,10 @@ def build_categories_from_meta(meta_by_stem: dict, all_stems: set) -> list:
         cat = meta.get('category', '').strip() or 'Other'
         title = meta.get('title', stem.replace('-', ' ').title()).strip()
         desc = meta.get('description', '').strip()
-        buckets.setdefault(cat, []).append({'stem': stem, 'label': title, 'desc': desc})
+        # `tags` is a list when the frontmatter has a block list, '' otherwise.
+        tags = meta.get('tags') or []
+        buckets.setdefault(cat, []).append(
+            {'stem': stem, 'label': title, 'desc': desc, 'tags': list(tags)})
     cat_names = sorted(k for k in buckets if k != 'Other')
     if 'Other' in buckets:
         cat_names.append('Other')
@@ -478,6 +481,77 @@ document.addEventListener('DOMContentLoaded', function(){
       show(0);
     });
 
+    // ---- By Category / By Tag -----------------------------------------------
+    // Two grids of cards hold the same guides. The control picks which one is
+    // on screen, and the sidebar swaps its Categories / Tags list to match. The
+    // choice is remembered like the Recent tab's; a hash that points into the
+    // other grid (a sidebar link, a shared URL such as #tag-effects) switches
+    // to it for that visit without saving it.
+    var VIEW_KEY = 'guide-index-view';
+    var viewBtns = Array.prototype.slice.call(
+      document.querySelectorAll('.view-tablist .seg-btn'));
+    var refilter = function(){};   // the filter box below takes this over
+
+    function selectView(key, focus) {
+      var found = viewBtns.some(function(b){ return b.dataset.viewTab === key; });
+      if (!found) return false;
+      viewBtns.forEach(function(b){
+        var on = b.dataset.viewTab === key;
+        b.classList.toggle('active', on);
+        b.setAttribute('aria-selected', on ? 'true' : 'false');
+        b.tabIndex = on ? 0 : -1;
+        if (on && focus) b.focus();
+      });
+      document.querySelectorAll('.index-grid[data-view], .sidebar [data-view]')
+        .forEach(function(el){ el.hidden = el.dataset.view !== key; });
+      refilter();
+      return true;
+    }
+
+    function rememberView(key) {
+      try { localStorage.setItem(VIEW_KEY, key); } catch (e) {}
+    }
+
+    function viewFromHash() {
+      var id = location.hash.slice(1);
+      var el = id ? document.getElementById(id) : null;
+      var grid = el && el.closest('.index-grid[data-view]');
+      if (!grid) return false;
+      var changed = grid.hidden;
+      selectView(grid.dataset.view, false);
+      // The browser could not scroll to a card that was hidden when it tried.
+      if (changed) el.scrollIntoView();
+      return true;
+    }
+
+    if (viewBtns.length) {
+      document.querySelector('.view-switch').hidden = false;
+      if (!viewFromHash()) {
+        var storedView = null;
+        try { storedView = localStorage.getItem(VIEW_KEY); } catch (e) {}
+        if (storedView) selectView(storedView, false);
+      }
+      window.addEventListener('hashchange', viewFromHash);
+      viewBtns.forEach(function(btn, i){
+        btn.addEventListener('click', function(){
+          selectView(btn.dataset.viewTab, false);
+          rememberView(btn.dataset.viewTab);
+        });
+        // Arrow / Home / End move between the two, as for the Recent tabs.
+        btn.addEventListener('keydown', function(e){
+          var n = viewBtns.length, j = -1;
+          if (e.key === 'ArrowRight') j = (i + 1) % n;
+          else if (e.key === 'ArrowLeft') j = (i - 1 + n) % n;
+          else if (e.key === 'Home') j = 0;
+          else if (e.key === 'End') j = n - 1;
+          if (j < 0) return;
+          e.preventDefault();
+          selectView(viewBtns[j].dataset.viewTab, true);
+          rememberView(viewBtns[j].dataset.viewTab);
+        });
+      });
+    }
+
     // ---- Filter box ---------------------------------------------------------
     var input = document.querySelector('.search-input');
     if (!input) return;
@@ -492,7 +566,8 @@ document.addEventListener('DOMContentLoaded', function(){
       var recentBox = document.querySelector('.recent-tabs');
       if (recentBox) recentBox.style.display = q ? 'none' : 'block';
 
-      document.querySelectorAll('.index-card:not(.recent-tabs)').forEach(function(card) {
+      // Only the grid on screen is searched; switching view filters the other.
+      document.querySelectorAll('.index-grid:not([hidden]) .index-card').forEach(function(card) {
         var items = card.querySelectorAll('ul li');
         var shown = 0;
         items.forEach(function(li) {
@@ -522,6 +597,7 @@ document.addEventListener('DOMContentLoaded', function(){
     }
 
     input.addEventListener('input', filter);
+    refilter = filter;
 
     // Clear on Escape
     input.addEventListener('keydown', function(e) {
@@ -1735,10 +1811,50 @@ def render_index(categories: list[dict], all_stems: set[str], out_dir: Path,
       <ul style="list-style:none;margin:0">{"".join(items)}</ul>
     </div>''')
 
+    # The same guides regrouped by tag: one card per tag, alphabetical, each
+    # listing its guides by title. A guide with several tags appears under each
+    # of them; one with none goes in a closing "Untagged" card. Card ids carry a
+    # `tag-` prefix because a tag can share its name with a category slug
+    # (`performance`).
+    by_tag: dict[str, list[dict]] = {}
+    untagged: list[dict] = []
+    for cat in categories:
+        for g in cat['guides']:
+            if g['stem'] not in all_stems:
+                continue
+            for t in g.get('tags') or []:
+                by_tag.setdefault(t, []).append(g)
+            if not g.get('tags'):
+                untagged.append(g)
+
+    def tag_card(card_id: str, name: str, guides: list[dict]) -> str:
+        items = ''.join(guide_item(g) for g in
+                        sorted(guides, key=lambda g: g['label'].lower()))
+        count = f' <span class="tag-count">{len(guides)}</span>'
+        return f'''\
+    <div class="index-card" style="display:block" id="{_html.escape(card_id, quote=True)}">
+      <h3 style="font-family:system-ui;font-size:0.9rem;margin-bottom:0.5rem">{_html.escape(name)}{count}</h3>
+      <ul style="list-style:none;margin:0">
+        {items}
+      </ul>
+    </div>'''
+
+    tag_cards = [tag_card(f'tag-{t}', t, by_tag[t]) for t in sorted(by_tag)]
+    if untagged:
+        tag_cards.append(tag_card('tag-untagged', 'Untagged', untagged))
+
+    # One sidebar list serves both views: the Recently links are always there,
+    # and the category / tag links carry data-view so guide-index.js shows
+    # only the ones for the grid on screen. The tag links ship `hidden`.
     sidebar_cats_list = [
-        f'<li><a href="#{re.sub(r" +", "-", c["name"].lower())}" '
+        f'<li data-view="category"><a href="#{re.sub(r" +", "-", c["name"].lower())}" '
         f'title="Jump to {_html.escape(c["name"], quote=True)}">{c["name"]}</a></li>'
         for c in categories if any(g['stem'] in all_stems for g in c['guides'])
+    ]
+    sidebar_cats_list += [
+        f'<li data-view="tag" hidden><a href="#tag-{_html.escape(t, quote=True)}" '
+        f'title="Jump to {_html.escape(t, quote=True)}">{_html.escape(t)}</a></li>'
+        for t in sorted(by_tag)
     ]
     if recent_updated:
         sidebar_cats_list.insert(
@@ -1750,7 +1866,9 @@ def render_index(categories: list[dict], all_stems: set[str], out_dir: Path,
                'Recently Added</a></li>')
     sidebar_cats = '\n'.join(sidebar_cats_list)
     sidebar_html = build_sidebar(
-        toc=f'      <h3>Categories</h3>\n      <ul>{sidebar_cats}</ul>')
+        toc=f'      <h3 data-view="category">Categories</h3>\n'
+            f'      <h3 data-view="tag" hidden>Tags</h3>\n'
+            f'      <ul>{sidebar_cats}</ul>')
 
     # Title | date | description, one table row each, with no headings and no
     # rules. The title and date columns size to their content; the
@@ -1821,6 +1939,22 @@ def render_index(categories: list[dict], all_stems: set[str], out_dir: Path,
         {panels}
       </div>''' if tabs else ''
 
+    # By Category | By Tag, under the Recent card: which grid of cards the page
+    # shows. By Category is selected server-side and the control ships
+    # `hidden`, so a page read without JS is the category grid with no dead
+    # buttons; guide-index.js reveals it and remembers the choice.
+    views = (('category', 'By Category'), ('tag', 'By Tag'))
+    view_buttons = ''.join(
+        f'<button class="seg-btn{" active" if i == 0 else ""}" role="tab"'
+        f' id="view-{key}-tab" data-view-tab="{key}" aria-controls="grid-{key}"'
+        f' aria-selected="{"true" if i == 0 else "false"}"'
+        f' tabindex="{0 if i == 0 else -1}">{label}</button>'
+        for i, (key, label) in enumerate(views))
+    view_switch = (f'      <div class="view-switch" hidden>\n'
+                   f'        <div class="view-tablist" role="tablist"'
+                   f' aria-label="Group guides by">{view_buttons}</div>\n'
+                   f'      </div>') if by_tag else ''
+
     html = f'''<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -1835,12 +1969,17 @@ def render_index(categories: list[dict], all_stems: set[str], out_dir: Path,
     .index-card ul li {{ margin:0.3rem 0; font-size:0.875rem; }}
     .index-card ul li a {{ color:var(--text-primary); }}
     .index-card ul li a:hover {{ color:var(--gold); }}
-    .recent-tablist {{ display:inline-flex; border:1px solid var(--border); border-radius:4px; overflow:hidden; margin-bottom:0.6rem; font-family:system-ui; font-size:0.8rem; }}
-    .recent-tablist .seg-btn {{ padding:4px 12px; background:transparent; color:var(--text-sec); border:none; cursor:pointer; font:inherit; }}
-    .recent-tablist .seg-btn + .seg-btn {{ border-left:1px solid var(--border); }}
-    .recent-tablist .seg-btn:hover {{ color:var(--text-primary); }}
-    .recent-tablist .seg-btn.active {{ color:var(--gold-bright); background:var(--bg-hover); }}
-    .recent-tablist .seg-btn:focus-visible {{ outline:2px solid var(--gold); outline-offset:-2px; }}
+    .recent-tablist, .view-tablist {{ display:inline-flex; border:1px solid var(--border); border-radius:4px; overflow:hidden; margin-bottom:0.6rem; font-family:system-ui; font-size:0.8rem; }}
+    .recent-tablist .seg-btn, .view-tablist .seg-btn {{ padding:4px 12px; background:transparent; color:var(--text-sec); border:none; cursor:pointer; font:inherit; }}
+    .recent-tablist .seg-btn + .seg-btn, .view-tablist .seg-btn + .seg-btn {{ border-left:1px solid var(--border); }}
+    .recent-tablist .seg-btn:hover, .view-tablist .seg-btn:hover {{ color:var(--text-primary); }}
+    .recent-tablist .seg-btn.active, .view-tablist .seg-btn.active {{ color:var(--gold-bright); background:var(--bg-hover); }}
+    .recent-tablist .seg-btn:focus-visible, .view-tablist .seg-btn:focus-visible {{ outline:2px solid var(--gold); outline-offset:-2px; }}
+    .view-switch[hidden], .index-grid[hidden], .sidebar [data-view][hidden] {{ display:none; }}
+    .view-switch {{ margin-bottom:0; }}
+    .view-tablist {{ margin-bottom:0; }}
+    .index-grid[data-view] {{ margin-top:0.75rem; }}
+    .tag-count {{ margin-left:0.35rem; font-weight:normal; color:var(--text-dim); font-variant-numeric:tabular-nums; }}
     .recent-table {{ width:100%; border-collapse:collapse; font-size:0.875rem; }}
     .recent-table td {{ padding:0.2rem 1.25rem 0.2rem 0; border:none; white-space:nowrap; vertical-align:baseline; }}
     .recent-table td:last-child {{ padding-right:0; }}
@@ -1881,8 +2020,12 @@ def render_index(categories: list[dict], all_stems: set[str], out_dir: Path,
         <p class="module-path">For docs for the Trowel editor, <a href="https://github.com/turmeric-lang/trowel#using-trowel">go here</a>.</p>
       </div>
 {recent_html}
-      <div class="index-grid">
+{view_switch}
+      <div class="index-grid" id="grid-category" data-view="category" role="tabpanel" aria-labelledby="view-category-tab">
         {"".join(cards)}
+      </div>
+      <div class="index-grid" id="grid-tag" data-view="tag" role="tabpanel" aria-labelledby="view-tag-tab" hidden>
+        {"".join(tag_cards)}
       </div>
     </div>
   </div>
