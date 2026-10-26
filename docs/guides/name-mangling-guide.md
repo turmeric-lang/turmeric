@@ -2,6 +2,8 @@
 title: Name Mangling Guide
 category: Compiler Internals
 description: How Turmeric turns source names into valid C identifiers -- the injective scheme, the legacy fold, and when each applies.
+tags:
+  - codegen
 ---
 
 # Name Mangling Guide

@@ -2,6 +2,10 @@
 title: Typing Handles, Callbacks, and Results -- Avoiding `:int` Stand-Ins
 category: Language Basics
 description: How to type opaque handles, callbacks, and option/result values properly in Turmeric. Concrete patterns and fix recipes drawn from the 2026-06-14 spice ecosystem audit.
+tags:
+  - result-option
+  - style
+  - inline-c
 ---
 
 # Typing Handles, Callbacks, and Results

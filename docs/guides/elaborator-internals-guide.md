@@ -2,6 +2,9 @@
 title: Elaborator Internals
 category: Compiler Internals
 description: How the elaborator turns reader Forms into the typed Expr IR -- the Elab state and scope model, the two-pass top-level driver and the synthesized main, call-site-local type inference, the Expr and Type data model, what the elaborator records for later passes, incremental sessions, macros, and the checklist for adding a form
+tags:
+  - type-checking
+  - macros
 ---
 
 # Elaborator Internals

@@ -2,6 +2,8 @@
 title: Syntax Guide
 category: Getting Started
 description: How to read and write Turmeric -- s-expression and sweet-expression syntax
+tags:
+  - syntax
 ---
 
 # Turmeric Syntax Guide

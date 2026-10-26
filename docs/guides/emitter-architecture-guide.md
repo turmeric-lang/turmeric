@@ -2,6 +2,9 @@
 title: C Emitter Architecture
 category: Compiler Internals
 description: How the C emitter turns an elaborated program into one translation unit -- the emit_value/emit_stmt contract, EmitCtx, the phase order of emit_program, ABI specializations, the side tables call sites consult, inline C, function definitions, and how to add an emit arm
+tags:
+  - codegen
+  - abi
 ---
 
 # C Emitter Architecture (internals)

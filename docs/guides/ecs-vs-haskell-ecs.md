@@ -2,6 +2,9 @@
 title: ECS -- tur-ecs vs apecs vs aztecs
 category: Data Structures and Libraries
 description: A side-by-side walk through a small game in apecs (Haskell), aztecs (Haskell), and tur-ecs (Turmeric), tabulating what each system catches at compile time vs. runtime, what each gives up to get there, and where the trade-offs actually land.
+tags:
+  - ecs
+  - comparison
 ---
 
 # tur-ecs vs apecs vs aztecs -- what moved to compile time

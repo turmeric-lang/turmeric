@@ -2,6 +2,10 @@
 title: Effects vs. Monads
 category: Functional Patterns
 description: When to reach for an effect handler and when to reach for a monad value
+tags:
+  - effects
+  - monads
+  - comparison
 ---
 
 # Effects vs. Monads in Turmeric

@@ -2,6 +2,9 @@
 title: Reader Forms Reference
 category: Language Basics
 description: Complete reference for every syntactic form the Turmeric reader recognises -- comments, literals, collections, prefix macros, and reader extensions
+tags:
+  - syntax
+  - macros
 ---
 
 # Reader Forms Reference

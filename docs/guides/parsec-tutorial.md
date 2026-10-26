@@ -2,6 +2,9 @@
 title: Parsec Tutorial
 category: Tutorials
 description: A step-by-step introduction to the stdlib parser-combinator library tur/parsec -- characters, sequencing with do-m, choice, repetition, optional pieces, and mapping results into real values
+tags:
+  - parsing
+  - monads
 ---
 
 # Parsec Tutorial

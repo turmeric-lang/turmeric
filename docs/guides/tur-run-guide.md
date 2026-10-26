@@ -2,6 +2,8 @@
 title: Tur Run Guide
 category: CLI Tools
 description: Built-in Justfile-compatible task runner for building, testing, and managing Turmeric projects without installing just
+tags:
+  - build-system
 ---
 
 # tur run -- Justfile-compatible task runner

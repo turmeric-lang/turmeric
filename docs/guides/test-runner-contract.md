@@ -2,6 +2,8 @@
 title: Test Runner Contract
 category: CLI Tools
 description: Test framework API and contract
+tags:
+  - testing
 ---
 
 # Test Runner Contract

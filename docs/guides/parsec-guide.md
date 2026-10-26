@@ -2,6 +2,8 @@
 title: Parsec Reference Guide
 category: Data Structures and Libraries
 description: Reference for the stdlib parser-combinator library tur/parsec -- core types, primitive parsers, sequencing, choice, repetition, optional values, mapping, runners, and common patterns
+tags:
+  - parsing
 ---
 
 # Parsec Reference Guide

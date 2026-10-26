@@ -2,6 +2,10 @@
 title: The Build Driver
 category: Compiler Internals
 description: How the `tur` driver turns a command line into a binary -- command dispatch and the global-flag parsers, the compile entry points and the real pass schedule, how `cc` is chosen and invoked, `tur run` and project mode, every cache and what invalidates it, the build-directory ladder, and the driver's environment variables
+tags:
+  - build-system
+  - caching
+  - compiler-flags
 ---
 
 # The Build Driver (internals)

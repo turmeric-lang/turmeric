@@ -2,6 +2,8 @@
 title: Software Transactional Memory (STM) Tutorial
 category: Concurrency and Async
 description: STM tutorial: concepts, patterns, and worked examples
+tags:
+  - shared-state
 ---
 
 # Software Transactional Memory (STM) Tutorial

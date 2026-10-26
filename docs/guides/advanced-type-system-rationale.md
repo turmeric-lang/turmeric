@@ -2,6 +2,10 @@
 title: Advanced Type System -- Design Rationale
 category: Advanced Types
 description: Why Turmeric chose the type system features it did, why dependent types remain deferred, and how refinement types went from deferred to shipped
+tags:
+  - refinement-types
+  - ownership
+  - session-types
 ---
 
 # Advanced Type System -- Design Rationale

@@ -2,6 +2,9 @@
 title: Web Continuations Tutorial
 category: Tutorials
 description: Multi-page web forms using serializable continuations (guestbook example)
+tags:
+  - continuations
+  - web
 ---
 
 # Web Continuations Tutorial -- Multi-Page Forms Without Session State

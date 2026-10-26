@@ -2,6 +2,8 @@
 title: Language Server (LSP) Guide
 category: Editor and IDE
 description: Configuring editors to use the Turmeric language server for diagnostics
+tags:
+  - lsp
 ---
 
 # Language Server Protocol (LSP) Guide

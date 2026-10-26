@@ -2,6 +2,8 @@
 title: CLI Arguments Guide
 category: Language Basics
 description: Passing arguments to scripts with `*args*` and parsing them with `stdlib/args.tur`
+tags:
+  - io
 ---
 
 # CLI Arguments Guide

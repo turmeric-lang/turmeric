@@ -2,6 +2,9 @@
 title: Stateful Refinements
 category: Type Safety
 description: Refining predicates over mutable state -- the `frozen` region and the `#reads w` annotation that grants congruence, why a trusted annotation is sound here, and how the guarded crossings codegen
+tags:
+  - refinement-types
+  - mutable-state
 ---
 
 # Stateful Refinements -- frozen regions and `#reads`

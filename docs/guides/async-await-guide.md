@@ -2,6 +2,10 @@
 title: Async/Await Guide
 category: Concurrency and Async
 description: Async/await with fibers and delimited continuations
+tags:
+  - async
+  - fibers
+  - continuations
 ---
 
 # Async/Await Guide

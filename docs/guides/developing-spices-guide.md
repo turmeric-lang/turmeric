@@ -2,6 +2,9 @@
 title: Developing Spices Guide
 category: Package Management
 description: Creating, testing, and publishing Turmeric spice packages
+tags:
+  - spices
+  - build-system
 ---
 
 # Developing Spices Guide

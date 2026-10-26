@@ -2,6 +2,9 @@
 title: Effect Rows (internals)
 category: Compiler Internals
 description: How effect rows are represented, parsed, inferred and checked -- the EffectRow kinds, the EffectEnv registry, the elaborator's effect checks, the effect-row pass and its fixpoint, capabilities and Unsafe, --dump-effects, and where codegen reads the rows
+tags:
+  - effects
+  - type-checking
 ---
 
 # Effect Rows (internals)

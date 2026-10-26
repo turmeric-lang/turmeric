@@ -2,6 +2,9 @@
 title: Web Stack Guide
 category: Networking and Web
 description: Building HTTP servers with tur-httpd, tur-template, and tur-tourist -- the composable web stack for Turmeric
+tags:
+  - httpd
+  - tourist
 ---
 
 # Web Stack Guide

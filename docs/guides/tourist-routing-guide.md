@@ -4,6 +4,8 @@ category: Networking and Web
 description: Compose tur-tourist HTTP sub-apps with mount and prefix combinators for larger applications
 audience: developers building larger HTTP applications with tur-tourist
 since: tourist v0.2.0
+tags:
+  - tourist
 ---
 
 # Tourist Routing Composition

@@ -2,6 +2,10 @@
 title: Returning `Result` / `Option` from Inline-C
 category: Interoperability
 description: Build typed Result/Option values inside inline-C bodies with the preamble helpers (tur_ok_ptr, tur_err_int, tur_some_ptr, tur_none, ...) instead of hand-rolling the struct or returning a magic-sentinel :int
+tags:
+  - inline-c
+  - result-option
+  - ffi
 ---
 
 # Returning `Result` / `Option` from Inline-C

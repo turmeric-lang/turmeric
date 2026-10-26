@@ -2,6 +2,8 @@
 title: Type-Level Rows
 category: Type System
 description: The `#row{...}` reader form and the kind-`[*]` row type -- writing rows, row-kinded (`^&`) parameters, the row algebra (concat/union/intersect/canon), erasure, and what rows deliberately cannot do
+tags:
+  - polymorphism
 ---
 
 # Type-Level Rows in Turmeric

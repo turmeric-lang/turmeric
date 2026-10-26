@@ -2,6 +2,9 @@
 title: Uniqueness Types
 category: Type Safety
 description: `^unique`: at-most-one-reference ownership
+tags:
+  - ownership
+  - mutable-state
 ---
 
 # Uniqueness Types in Turmeric

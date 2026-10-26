@@ -2,6 +2,8 @@
 title: Diagnostics Internals
 category: Compiler Internals
 description: How the compiler reports errors and warnings -- the DiagCode enum and its four tables, the diag_emit family, spans through sweet-exp, macros and loaded files, the terminal/JSON/LSP/embed sinks, tur explain, the errors/ fixture harness, and a checklist for adding a code
+tags:
+  - diagnostics
 ---
 
 # Diagnostics (internals)

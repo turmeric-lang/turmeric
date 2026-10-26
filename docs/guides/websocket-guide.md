@@ -4,6 +4,8 @@ category: Networking and Web
 description: Build RFC 6455 WebSocket clients and servers in Turmeric with the tur-ws-client and tur-ws-server spices
 audience: developers writing real-time clients or upgrading tur-httpd endpoints to WebSocket
 since: ws-client v0.1.0 / ws-server v0.1.0
+tags:
+  - web
 ---
 
 # WebSockets

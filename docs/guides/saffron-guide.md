@@ -2,6 +2,10 @@
 title: "Saffron -- the dynamically typed dialect"
 category: Getting Started
 description: "#lang saffron makes `any` the default type, so parameters and returns need no annotations. This guide covers what changes, what stays, the eight dynamic operations, the checked boundary with typed Turmeric, and the one feature Saffron gives up."
+tags:
+  - dialects
+  - saffron
+  - gradual-typing
 ---
 
 # Saffron

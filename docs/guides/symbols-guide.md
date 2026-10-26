@@ -2,6 +2,8 @@
 title: Symbols Guide
 category: Language Basics
 description: First-class runtime symbols (:Sym type) with compile-time interning and optional dynamic str->sym table
+tags:
+  - strings
 ---
 
 # Runtime Symbols: `:Sym`

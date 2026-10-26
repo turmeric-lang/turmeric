@@ -2,6 +2,9 @@
 title: Regular Expressions Guide
 category: Data Structures and Libraries
 description: Pure-Turmeric POSIX ERE regex engine -- compile, match, find, and replace
+tags:
+  - strings
+  - parsing
 ---
 
 # Regular Expressions Guide

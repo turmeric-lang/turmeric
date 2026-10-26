@@ -2,6 +2,9 @@
 title: "MiniKanren Part 1: Relations and Queries"
 category: Tutorials
 description: Logic programming with miniKanren -- relations, composition, and bidirectional queries
+tags:
+  - logic-programming
+  - queries
 ---
 
 # MiniKanren Part 1: Relations and Queries

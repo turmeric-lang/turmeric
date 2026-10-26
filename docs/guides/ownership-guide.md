@@ -2,6 +2,9 @@
 title: Ownership Guide
 category: Compiler Internals
 description: Which ownership strategy to reach for -- persistent-immutable, single-owner mutable, linear/affine handles, rc<T> for genuine sharing, and weak<T> to break the resulting cycles
+tags:
+  - ownership
+  - memory
 ---
 
 # Ownership Guide

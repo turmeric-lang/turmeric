@@ -2,6 +2,9 @@
 title: Web Continuations Guide
 category: Advanced Control Flow
 description: Compact reference: one continuation per page, the continuation store, routing model
+tags:
+  - continuations
+  - web
 ---
 
 # Web Continuations Guide

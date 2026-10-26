@@ -2,6 +2,9 @@
 title: Strings Guide
 category: Language Basics
 description: The three string tiers -- borrowed `cstr`, borrowed `str` view, and owned refcounted `String` -- which to reach for, `#s"..."` literals, zero-copy `StringSlice`, the lifetime rules, and the dangling-pointer pitfalls
+tags:
+  - strings
+  - ownership
 ---
 
 # Strings in Turmeric -- `cstr` vs `str` vs `String`

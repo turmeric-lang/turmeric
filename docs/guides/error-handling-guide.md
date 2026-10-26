@@ -2,6 +2,8 @@
 title: Error Handling Guide
 category: Error Handling
 description: `Result`, `Option`, `panic`, contract macros (`assert!`, `require!`, `ensure!`)
+tags:
+  - result-option
 ---
 
 # Error Handling Guide

@@ -2,6 +2,9 @@
 title: Borrow Checking and Lifetimes Guide
 category: Type Safety
 description: How Turmeric's borrow checker and lifetime elision work, and how to fix the errors they report
+tags:
+  - ownership
+  - memory-safety
 ---
 
 # Borrow Checking and Lifetimes Guide

@@ -70,18 +70,40 @@ def parse_front_matter(text: str) -> tuple[dict, str]:
     rest_start = text.find('\n', end + 1)
     body = text[rest_start + 1:] if rest_start != -1 else ''
     meta: dict = {}
+
+    def _unquote(v: str) -> str:
+        # A YAML value quoted because it contains a colon -- which is why
+        # several guide titles are quoted -- is still just its text. Left
+        # in, the quotes render as part of the title everywhere the title
+        # goes: the page's <title>, the index card, and the docs pane.
+        if len(v) >= 2 and v[0] == v[-1] and v[0] in '"\'':
+            v = v[1:-1]
+        return v
+
+    # Scalar keys are `key: value`. A key with an empty value may introduce a
+    # block YAML list (`tags:` followed by `  - item` lines); collect those
+    # items into a Python list. Anything else stays a flat string, so existing
+    # scalar frontmatter parses exactly as before.
+    list_key: str | None = None
     for line in fm_text.splitlines():
+        item = re.match(r'^\s+-\s+(.*)$', line)
+        if item and list_key is not None:
+            meta[list_key].append(_unquote(item.group(1).strip()))
+            continue
+        if list_key is not None and meta[list_key] == []:
+            meta[list_key] = ''
+        list_key = None
         if ':' in line:
             k, _, v = line.partition(':')
-            k, v = k.strip(), v.strip()
-            # A YAML value quoted because it contains a colon -- which is why
-            # several guide titles are quoted -- is still just its text. Left
-            # in, the quotes render as part of the title everywhere the title
-            # goes: the page's <title>, the index card, and the docs pane.
-            if len(v) >= 2 and v[0] == v[-1] and v[0] in '"\'':
-                v = v[1:-1]
+            k, v = k.strip(), _unquote(v.strip())
             if k:
-                meta[k] = v
+                if v == '':
+                    meta[k] = []
+                    list_key = k
+                else:
+                    meta[k] = v
+    if list_key is not None and meta[list_key] == []:
+        meta[list_key] = ''
     return meta, body
 
 

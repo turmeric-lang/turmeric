@@ -2,6 +2,8 @@
 title: Markdown Guide
 category: Data Structures and Libraries
 description: Parse CommonMark and GitHub Flavored Markdown into a document tree with `tur/markdown`, render it as HTML, walk its blocks and inlines, and what is implemented so far
+tags:
+  - parsing
 ---
 
 # Markdown -- `tur/markdown`

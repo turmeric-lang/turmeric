@@ -2,6 +2,9 @@
 title: Release Process
 category: Contributor Notes
 description: How Turmeric releases are cut -- the three cut-*-release commands, their shared nine-step flow, the ordering constraints that make a failed cut recoverable, and what the release workflow does once the tag is pushed.
+tags:
+  - contributing
+  - releases
 ---
 
 # Release Process

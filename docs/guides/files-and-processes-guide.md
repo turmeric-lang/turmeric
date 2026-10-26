@@ -2,6 +2,8 @@
 title: Files and Processes
 category: Data Structures and Libraries
 description: Read and write files, walk directories, manage symlinks and permissions, read stdin line by line, run child processes, handle signals, speak TCP and work with calendar dates through the typed fs / io / process / net / time / os stdlib -- every failure is a (Result T IoError)
+tags:
+  - io
 ---
 
 # Files and Processes

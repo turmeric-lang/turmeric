@@ -2,6 +2,9 @@
 title: GADTs Cookbook
 category: Advanced Types
 description: GADTs cookbook: practical patterns and recipes
+tags:
+  - data-types
+  - polymorphism
 ---
 
 # GADTs Cookbook
