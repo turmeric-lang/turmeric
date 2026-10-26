@@ -2086,6 +2086,14 @@ function configureMonaco() {
         mimetypes: ['text/x-turmeric']
     });
     
+    // The characters that may continue a symbol, as the reader takes them
+    // (is_sym_cont in src/compiler/reader.c): alphanumerics and
+    // `- + * / = < > ! ? _ $ & . # ^ | '`. A word is a keyword only when none
+    // of them follows it, which is what `\b` got wrong: it counts `-`, `/` and
+    // `!` as boundaries, so `apply-to` read as the builtin `apply` plus `-to`.
+    const SYM_CONT = "[a-zA-Z0-9_\\-+*/=<>!?$&.#^|']";
+    const wholeSymbol = (alternatives) => new RegExp('\\b(?:' + alternatives + ')(?!' + SYM_CONT + ')');
+
     // `<...>` after a type name: space-free, balanced, up to three deep
     // (`ptr<ptr<ptr<void>>>`) -- a regex cannot count, so the depth is fixed.
     const GENERIC_ARGS = '<(?:[^\\s<>()\\[\\]{}",;]|<(?:[^\\s<>()\\[\\]{}",;]|<[^\\s<>()\\[\\]{}",;]*>)*>)*>';
@@ -2118,22 +2126,31 @@ function configureMonaco() {
                 [/\b\d+\b/, 'number'],
                 [/\b\d+\.\d+\b/, 'number.float'],
                 
-                // Keywords
-                [/\b(defn|def|fn|let|if|when|unless|loop|for|while|do|return|break|continue)\b/, 'keyword'],
-                [/\b(println|print|read|eval|apply|map|filter|reduce|fold)\b/, 'keyword.operator'],
+                // Keywords. Each is a whole symbol: `apply` is a builtin but
+                // `apply-to` is not, so a keyword matches only when nothing the
+                // reader would continue the symbol with follows it (SYM_END).
+                [wholeSymbol('defn|def|fn|let|if|when|unless|loop|for|while|do|return|break|continue'), 'keyword'],
+                [wholeSymbol('println|print|read|eval|apply|map|filter|reduce|fold'), 'keyword.operator'],
                 
                 // Built-in types and functions
-                [/\b(int|float|bool|str|char|nil|true|false)\b/, 'type'],
-                [/\b(rc\/of|rc\/clone|rc\/drop|rc\/strong-count)\b/, 'keyword.operator'],
-                [/\b(defeffect|perform|handle|resume|cont)\b/, 'keyword.operator'],
-                [/\b(try|catch|throw|raise)\b/, 'keyword.operator'],
+                [wholeSymbol('int|float|bool|str|char|nil|true|false'), 'type'],
+                [wholeSymbol('rc\\/of|rc\\/clone|rc\\/drop|rc\\/strong-count'), 'keyword.operator'],
+                [wholeSymbol('defeffect|perform|handle|resume|cont'), 'keyword.operator'],
+                [wholeSymbol('try|catch|throw|raise'), 'keyword.operator'],
                 
+                // An earmuffed global, `*args*`: a `*` that runs straight into a
+                // name is the start of a symbol, not multiplication (`(* a b)`
+                // has a space after it).
+                [new RegExp('\\*[a-zA-Z_]' + SYM_CONT + '*'), 'identifier'],
+
                 // Symbols
                 [/[\+\-\*\/\=\<\>\!\&\|\%\^~]/, 'operator'],
                 [/[\(\)\[\]\{\}]/, 'delimiter'],
                 
-                // Identifiers
-                [/[a-zA-Z_][a-zA-Z0-9_\-]*/, 'identifier']
+                // Identifiers: a symbol runs on through every character the reader
+                // allows inside one, so `set-field!`, `string/adopt-cstr` and
+                // `string->cstr` are each a single token.
+                [new RegExp('[a-zA-Z_]' + SYM_CONT + '*'), 'identifier']
             ]
         }
     });

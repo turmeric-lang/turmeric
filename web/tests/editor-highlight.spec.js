@@ -71,5 +71,62 @@ test.describe(`editor highlighting (${scheme})`, () => {
         expect(spans.find(([t]) => t.startsWith('; a ^note'))?.[1]).toBe(rgb(colours.comment));
         expect(spans.find(([t]) => t.startsWith('"a ^str'))?.[1]).toBe(rgb(colours.string));
     });
+
+    test('a keyword is a whole symbol: apply-to is not the builtin apply', async ({ page }) => {
+        // Hyphenated, namespaced and punctuated names that start with a keyword
+        // or builtin, and the bare words themselves. [source line, symbol, palette key].
+        const CASES = [
+            ['(apply-to f x)', 'apply-to', 'foreground'],
+            ['(map-new)', 'map-new', 'foreground'],
+            ['(read-line)', 'read-line', 'foreground'],
+            ['(for-each f l)', 'for-each', 'foreground'],
+            ['(do-m x)', 'do-m', 'foreground'],
+            ['(when-let [a b] a)', 'when-let', 'foreground'],
+            ['(def-struct P)', 'def-struct', 'foreground'],
+            ['(int-to-str n)', 'int-to-str', 'foreground'],
+            ['(true-if a b)', 'true-if', 'foreground'],
+            ['(rc/of-thing x)', 'rc/of-thing', 'foreground'],
+            ['(set-field! c n 1)', 'set-field!', 'foreground'],
+            ['(string/adopt-cstr s)', 'string/adopt-cstr', 'foreground'],
+            ['(string->cstr s)', 'string->cstr', 'foreground'],
+            ['(println *args*)', '*args*', 'foreground'],
+            // still keywords when they stand alone
+            ['(apply f x)', 'apply', 'keywordOperator'],
+            ['(map f l)', 'map', 'keywordOperator'],
+            ['(rc/of x)', 'rc/of', 'keywordOperator'],
+            ['(defn f [] 1)', 'defn', 'keyword'],
+            ['(let [x 1] x)', 'let', 'keyword'],
+            ['(f nil)', 'nil', 'type'],
+            // and the operators are untouched
+            ['(- a 1)', '-', 'operator'],
+            ['(<= a b)', '<=', 'operator'],
+        ];
+        await page.goto('/try/');
+        await page.waitForFunction(() => !!window.turmericApp && !!window._turiEditor,
+                                   null, { timeout: 30_000 });
+        await page.evaluate((src) => window._turiEditor.setValue(src), CASES.map(c => c[0]).join('\n'));
+        await page.waitForFunction((n) => document.querySelectorAll('#editor .view-line').length >= n,
+                                   CASES.length, { timeout: 15_000 });
+        await page.waitForTimeout(500);
+
+        const theme = (await page.evaluate(() => document.documentElement.getAttribute('data-theme')))
+            === 'light' ? 'light' : 'dark';
+        const colours = PALETTE[theme];
+
+        // Per source line, every rendered token as [text, colour]. Monaco merges
+        // neighbouring tokens of one colour into one span, so a symbol is "whole"
+        // when one span contains all of it; a split leaves no such span.
+        const lines = await page.evaluate(() =>
+            [...document.querySelectorAll('#editor .view-line')]
+                .sort((a, b) => a.getBoundingClientRect().top - b.getBoundingClientRect().top)
+                .map(l => [...l.querySelectorAll(':scope > span > span')].map(
+                    s => [s.textContent.replace(/\u00a0/g, ' '), getComputedStyle(s).color])));
+
+        CASES.forEach(([src, sym, key], i) => {
+            const hit = lines[i].find(([t]) => t.includes(sym));
+            expect(hit, `${sym} in ${src} is one token`).toBeTruthy();
+            expect(hit[1], `${sym} in ${src}`).toBe(rgb(colours[key]));
+        });
+    });
 });
 }
