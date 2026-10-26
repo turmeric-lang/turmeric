@@ -808,9 +808,32 @@ GUIDE_JS_CORE = '''\
     'language-gdscript': GD_SPEC,
   };
 
+  // ---- Rainbow brackets ---------------------------------------------------
+  // Depth-colored (), [] and {}, as Try Turmeric's editor and trowel draw
+  // them: one color per nesting level, cycling after six, whatever the kind
+  // of bracket. A closer that does not match the innermost open bracket is
+  // marked as an error and leaves the nesting alone, as Monaco does. Strings
+  // and comments are scanned before this is reached, so a paren inside
+  // either is not counted. The colors are the --syn-br* tokens (HL_CSS).
+  var BR_OPEN = { '(':')', '[':']', '{':'}' };
+  var BR_DEPTHS = 6;
+  function bracket(c, stack){
+    var cls;
+    if(BR_OPEN[c]){
+      cls = 'hl-br' + (stack.length % BR_DEPTHS + 1);
+      stack.push(BR_OPEN[c]);
+    } else if(stack.length && stack[stack.length-1] === c){
+      stack.pop();
+      cls = 'hl-br' + (stack.length % BR_DEPTHS + 1);
+    } else {
+      cls = 'hl-br-err';
+    }
+    return '<span class="' + cls + '">' + c + '</span>';
+  }
+
   function hl(code, spec){
     spec = spec || TUR_SPEC;
-    var out='', i=0, n=code.length;
+    var out='', i=0, n=code.length, stack=[];
     while(i<n){
       var c=code[i];
       // Line comment
@@ -865,7 +888,7 @@ GUIDE_JS_CORE = '''\
       if(spec.hashVector){
         var hv=/^#(?:u8)?\\(/.exec(code.slice(i,i+5));
         if(hv){
-          out+='<span class="hl-type">'+esc(hv[0].slice(0,-1))+'</span>'+esc('(');
+          out+='<span class="hl-type">'+esc(hv[0].slice(0,-1))+'</span>'+bracket('(',stack);
           i+=hv[0].length; continue;
         }
       }
@@ -935,16 +958,21 @@ GUIDE_JS_CORE = '''\
         }
         i=j; continue;
       }
+      if(c==='('||c===')'||c==='['||c===']'||c==='{'||c==='}'){
+        out+=bracket(c, stack); i++; continue;
+      }
       out+=esc(c); i++;
     }
     return out;
   }
 
-  // The five Scheme-family flags are off for Turmeric, which has none of that
-  // syntax, and on for both Racket and Scheme, which share all of it.
+  // The Scheme-family flags are off for Turmeric, which has none of that
+  // syntax, and on for both Racket and Scheme, which share all of it -- bar
+  // charLit: Turmeric reads `#\\A` too (reader.c), and the rainbow needs the
+  // `(` of `(pchar #\\()` to be a character, not an opener.
   var TUR_SPEC = { kw:KW,     lit:TUR_LIT, inlineC:true,  colonType:true,
                    blockComment:false, hashKeyword:false,
-                   datumComment:false, charLit:false, hashVector:false,
+                   datumComment:false, charLit:true,  hashVector:false,
                    schemeNum:false };
   var RKT_SPEC = { kw:RKT_KW, lit:RKT_LIT, inlineC:false, colonType:false,
                    blockComment:true,  hashKeyword:true,
@@ -1203,6 +1231,29 @@ GUIDE_PAGE_SCRIPTS = {
     'guide-index.js':   INDEX_FILTER_JS_SRC,
 }
 
+# The token colors highlightGuideCode paints with. Split out of GUIDE_CSS so the
+# API pages (gendocs.py), which highlight their Example blocks with the same
+# runtime but do not take the guide prose styles, carry the same rules.
+#
+# The fallbacks are the dark theme's values; the --syn-* tokens themselves live
+# in web/vars.css (Try Turmeric's docs pane) and gendocs.CSS (every generated
+# page), both themes. The --syn-br* rainbow is the one web/main.js gives
+# Monaco (RAINBOW_BRACKETS), itself taken from trowel's turmeric-dark theme --
+# keep the three in step.
+HL_CSS = '''\
+    .hl-comment { color:var(--syn-cmt, #48433D); font-style:italic; }
+    .hl-string  { color:var(--syn-str, #D9735A); }
+    .hl-number  { color:var(--syn-num, #A8C98A); }
+    .hl-keyword { color:var(--syn-kw, #EFA030); font-weight:bold; }
+    .hl-type    { color:var(--syn-type, #7AC4B8); }
+    .hl-br1     { color:var(--syn-br1, #EFA030); }
+    .hl-br2     { color:var(--syn-br2, #D7C94A); }
+    .hl-br3     { color:var(--syn-br3, #A8C98A); }
+    .hl-br4     { color:var(--syn-br4, #7AC4B8); }
+    .hl-br5     { color:var(--syn-br5, #8AB0E8); }
+    .hl-br6     { color:var(--syn-br6, #C4A0E8); }
+    .hl-br-err  { color:var(--syn-br-err, #FF5C57); }'''
+
 # Gold leads, green answers -- the same two-colour split the home page uses for
 # headline and emphasis, carried into long-form prose so a guide, an API page
 # and a spice page all rank their headings by the same pair.
@@ -1272,11 +1323,7 @@ GUIDE_CSS = '''\
     .guide-toc li { margin:0.2rem 0; font-size:0.875rem; }
     .guide-toc a { color:var(--gold-bright); }
     .guide-toc a:hover { color:var(--gold); }
-    .hl-comment { color:var(--syn-cmt, #48433D); font-style:italic; }
-    .hl-string  { color:var(--syn-str, #D9735A); }
-    .hl-number  { color:var(--syn-num, #A8C98A); }
-    .hl-keyword { color:var(--syn-kw, #EFA030); font-weight:bold; }
-    .hl-type    { color:var(--syn-type, #7AC4B8); }
+''' + HL_CSS + '''
     .code-toggle { border:1px solid var(--border); border-radius:4px; margin-bottom:1rem; overflow:hidden; }
     .code-card-bar { background:var(--bg-surface); border-bottom:1px solid var(--border); padding:0.35rem 0.75rem; display:flex; align-items:center; }
     .code-syntax-toggle { margin-left:auto; display:flex; border:1px solid var(--border); border-radius:4px; overflow:hidden; font-family:"Iosevka","Fira Code",monospace; font-size:11px; }

@@ -64,6 +64,13 @@
   --syn-num:       #A8C98A;
   --syn-fn:        #C4A0E8;
   --syn-punc:      #5A5448;
+  --syn-br1:       #EFA030;   /* rainbow brackets, by depth: the */
+  --syn-br2:       #D7C94A;   /* RAINBOW_BRACKETS Monaco gets in */
+  --syn-br3:       #A8C98A;   /* web/main.js, from trowel's */
+  --syn-br4:       #7AC4B8;   /* turmeric-dark theme */
+  --syn-br5:       #8AB0E8;
+  --syn-br6:       #C4A0E8;
+  --syn-br-err:    #FF5C57;
 
   /* Accent palette (roadmap / badges) */
   --green:         #A8C98A;
@@ -178,6 +185,13 @@
   --syn-num:       #456F20;
   --syn-fn:        #7748AE;
   --syn-punc:      #9F927F;
+  --syn-br1:       #B5650A;
+  --syn-br2:       #8A7800;
+  --syn-br3:       #4E7F24;
+  --syn-br4:       #13756A;
+  --syn-br5:       #2F62B0;
+  --syn-br6:       #7748AE;
+  --syn-br-err:    #D0312D;
 
   --green:         #456F20;
   --green-subtle:  rgba(69,111,32,0.10);
