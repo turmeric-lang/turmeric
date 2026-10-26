@@ -15,7 +15,12 @@
  * Forked from this binary, the floor is this binary's ~1 MB -- the same reason
  * GNU time is a small C program.  run-corpus.py compiles this at start. */
 #define _POSIX_C_SOURCE 200809L
+/* wait4() and the BSD rusage fields (ru_maxrss) are outside POSIX: glibc
+ * shows them under _DEFAULT_SOURCE, Darwin under _DARWIN_C_SOURCE.  Without
+ * the latter, _POSIX_C_SOURCE alone hides both on macOS and this file fails
+ * to compile -- which kept every nightly bench job from producing a row. */
 #define _DEFAULT_SOURCE
+#define _DARWIN_C_SOURCE
 #include <errno.h>
 #include <fcntl.h>
 #include <signal.h>
