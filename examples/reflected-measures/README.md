@@ -36,7 +36,7 @@ tur check --dump-refine=json examples/reflected-measures/src/main.tur
 `build.tur` declares `:experiments ["reflected-measures"]`, so the commands
 above need no `--enable=` flag. `tur build <file>`, `tur compile` and
 project-mode `tur run` do not read it yet
-([report](../../docs/reported/build-file-and-run-project-ignore-manifest-experiments.md));
+([report](../../docs/archive/build-file-and-run-project-ignore-manifest-experiments.md));
 pass `--enable=reflected-measures` to those.
 
 ## Things to try

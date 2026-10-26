@@ -19,7 +19,7 @@
 ;; why every case below checks the error code too.
 ;;
 ;; Turmeric-side regression for
-;; docs/reported/result-nil-ok-payload-emits-void-field.md, found writing the
+;; docs/archive/result-nil-ok-payload-emits-void-field.md, found writing the
 ;; nng spice -- whose dial/listen/setters all want exactly this signature.
 
 ;; The producers are inline C, which is how this shape arises in practice: a

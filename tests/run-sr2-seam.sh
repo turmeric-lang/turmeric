@@ -9,7 +9,7 @@
 # restores the int64 carrier for bisection -- which means nothing in the
 # ordinary suite compiles a parametric sum through the carrier any more.  A gate
 # nobody turns on decays to a gate nobody notices (the lesson of
-# docs/reported/sanitizer-gate-not-armed-in-ci.md); this harness keeps the
+# docs/archive/sanitizer-gate-not-armed-in-ci.md); this harness keeps the
 # carrier path green so a bisection stays a switch instead of a re-excavation.
 #
 # This file is the mirror image of the harness of the same name that was RETIRED
@@ -41,7 +41,7 @@
 # So the only coherent bisection mode is BOTH hatches down, and that is what
 # this harness pins.  Anyone reaching for TUR_SR2_APP_SUM_BYVALUE=0 alone gets
 # a crash whose cause is two layers away from the switch they flipped; see
-# docs/reported/sr2-carrier-seam-rotted.md.
+# docs/archive/sr2-carrier-seam-rotted.md.
 # ---------------------------------------------------------------------------
 #
 # Two checks, mirroring run-sr4-seam.sh and run-option-niche-seam.sh:

@@ -12,7 +12,7 @@
 
 ;; Top-level `define`s with an `eval` initializer would run before the
 ;; statements above them on the compiled back end
-;; (docs/reported/toplevel-def-initializers-run-before-toplevel-expressions.md),
+;; (docs/archive/toplevel-def-initializers-run-before-toplevel-expressions.md),
 ;; so the program is one procedure body.
 (define (run)
   ;; The four chibi tests T4 names.

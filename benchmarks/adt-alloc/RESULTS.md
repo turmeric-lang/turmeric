@@ -79,7 +79,7 @@ proposed *fix* that still climbs.
 ## What reproduces and what does not
 
 **B reproduces** -- 2.49x here against a published 2.6x. That is the row the
-[slab-shelving decision](../../docs/reported/multi-variant-adts-always-heap-allocate.md)
+[slab-shelving decision](../../docs/archive/multi-variant-adts-always-heap-allocate.md)
 turns on, and it holds.
 
 **The slab looks worse, not better.** E measures 1.72x against a published 2.4x,

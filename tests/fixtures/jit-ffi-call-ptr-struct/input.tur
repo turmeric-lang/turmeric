@@ -21,7 +21,7 @@
 
 ;; Two accessors rather than one fold: mixing the fields would need an
 ;; int->float conversion, and `::` reinterprets rather than converts there
-;; (docs/reported/ascribe-int-to-float-reinterprets.md).
+;; (docs/archive/ascribe-int-to-float-reinterprets.md).
 (defn mixedn [m : Mixed] : int   (.n m))
 (defn mixedd [m : Mixed] : float (.d m))
 
@@ -58,7 +58,7 @@
     ;; a floating-point aggregate (AAPCS64 HFA).  The COMPILED path is
     ;; correct here on every target because cc implements the ABI; the
     ;; interpreter refuses it on aarch64 rather than miscall it (see
-    ;; docs/reported/mir-aarch64-fp-aggregate-abi.md).
+    ;; docs/archive/mir-aarch64-fp-aggregate-abi.md).
     (println (call-ptr (addrofveclensq) [Vec2 -> :float] (Vec2 3.0 4.0)))
     ;; aggregate RETURN, unpacked back into a record
     (let [r (call-ptr (addrofmkpair) [:int :int -> IPair] 8 9)]

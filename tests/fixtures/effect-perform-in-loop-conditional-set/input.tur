@@ -1,5 +1,5 @@
 ;; effect-perform-in-loop-conditional-set -- the examples/snake game loop, the
-;; residue of docs/reported/perform-inside-loop-has-no-lowering.md.  `tick` is
+;; residue of docs/archive/perform-inside-loop-has-no-lowering.md.  `tick` is
 ;; assigned twice per iteration, once inside a `when` arm; `dir` and `frames`
 ;; are assigned once, unconditionally; the effect is performed from a nested
 ;; `when` inside the arm; the body's tail is a call; and (second function) the

@@ -3,7 +3,7 @@
 ;; ports, the call-with and with- forms, and a file error on a failed open.
 ;; Everything runs inside procedures: a top-level `define` whose initializer
 ;; opens a file runs before the top-level expressions on the compiled path
-;; (docs/reported/toplevel-def-initializers-run-before-toplevel-expressions.md).
+;; (docs/archive/toplevel-def-initializers-run-before-toplevel-expressions.md).
 (import (scheme base) (scheme write) (scheme read) (scheme file)
         (scheme process-context))
 (define (show x) (write x) (newline))

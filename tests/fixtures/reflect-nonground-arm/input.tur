@@ -16,7 +16,7 @@
 ;; `t = (.tl xs)`.  The sibling errors/reflect-nonground-no-tag drops the
 ;; inner match so nothing pins `t`, and must stay unknown.  (The result is a
 ;; bool rather than the refined list itself because a refined ADT RETURN type
-;; miscompiles today -- docs/reported/refined-adt-return-type-miscompiles.md
+;; miscompiles today -- docs/archive/refined-adt-return-type-miscompiles.md
 ;; -- which is unrelated to reflection.)
 (defdata Lst [] (Cons [hd : int tl : Lst]) (Nil))
 

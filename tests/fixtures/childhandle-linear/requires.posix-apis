@@ -4,4 +4,4 @@ There is no Windows fork(). Emulating it means a CreateProcess re-exec with
 explicit state hand-off, which is a real project and not worth it for one
 fixture. src/platform_fs.h:110 takes the same posture for symlink().
 
-See docs/reported/windows-posix-inline-c-gaps.md
+See docs/archive/windows-posix-inline-c-gaps.md

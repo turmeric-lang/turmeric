@@ -758,7 +758,7 @@ static char *__tur_io_read_line(FILE *f, int *err) {
 ;;
 ;; (Result (Option cstr) IoError) cannot be built from inline-C (the Option is
 ;; stored by value inside the Result; see
-;; docs/reported/inline-c-builders-cannot-nest-option-in-result.md), so this
+;; docs/archive/inline-c-builders-cannot-nest-option-in-result.md), so this
 ;; helper answers (Err 0) at end of file and file-read-line nests in Turmeric.
 (defn file-read-line-raw [^borrow fh : FileHandle]
   #fx{FS}

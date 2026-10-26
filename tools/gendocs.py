@@ -2764,7 +2764,7 @@ def read_verified_manifest(path=VERIFIED_MANIFEST):
     results" as "no function passes its doctests" is what let a plain
     `tur run docs` in a fresh clone delete the whole table -- silently, into a
     tracked file, on the release path, for most of the feature's life.
-    See docs/reported/docstrings-verified-table-zeroed-by-regen.md.
+    See docs/archive/docstrings-verified-table-zeroed-by-regen.md.
 
     A manifest is authoritative only when run-doctests.sh finished and said so
     with its `# complete:` header.  Anything else -- absent, or present without

@@ -82,7 +82,7 @@ fi
 #   way.  The generic-helper shape (option-niche-vec-word, a `push-it`/
 #   `get-it` spec) is NOT here: it asserts the word form itself ("word" vs
 #   "box"), and its `get-it` spec does not even build with the niche off --
-#   docs/reported/generic-vec-read-wrapper-spec-returns-carrier-word.md, the
+#   docs/archive/generic-vec-read-wrapper-spec-returns-carrier-word.md, the
 #   pre-existing tagged-element defect.  The ordinary suite covers it.
 # httpd-req-string-opt / bound-string / inline-c-option-byval-param: the
 #   (Option String) census shapes -- header lookups, bounds, inline-C

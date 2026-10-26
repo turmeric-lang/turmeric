@@ -17,7 +17,7 @@ hiding a real default-path defect in the other.
 | fixture scaffolding | `httpd-req-string-opt`'s `fake-conn-cookie` / `fake-conn-body` | ~3.5 K | **nobody's** -- the fixture's own `calloc`'d `HttpdConn` and `strdup`'d headers, never freed by the test |
 | fixture-owned runtime values | `option-niche-crossings` (`vec_new`, `vec_push_ex`, `tur_string_from_bytes`) | ~0.4 K | **nobody's** -- Vecs and Strings the fixture allocates and never `vec-free`s |
 | recursive sum spine | `re-string`'s `ctor_RxCons` / `ctor_REmpty` / `ctor_RxNil` | ~0.6 K | **RM2** (the recursive spine), not RM1 |
-| **value-struct payload box** | `rational-*`'s `ok__spec__...` / `err__spec__...` | 0.46 K -> 0.13 K | **a defect**, filed: [value-struct-payload-sum-monomorph-box-has-no-owner](../reported/value-struct-payload-sum-monomorph-box-has-no-owner.md); a scope-exit drop covers the let-bound shape, an inferred non-retaining sum-param mask (now admitting `cstr` results) plus a statement-position drain cover the argument shape, and the carrier free is deep for a boxed struct arm (7 of 9 fixtures clean); the remaining 2 are dictionary-dispatched inline-C class methods, which need the glue route |
+| **value-struct payload box** | `rational-*`'s `ok__spec__...` / `err__spec__...` | 0.46 K -> 0.13 K | **a defect**, filed: [value-struct-payload-sum-monomorph-box-has-no-owner](../archive/value-struct-payload-sum-monomorph-box-has-no-owner.md); a scope-exit drop covers the let-bound shape, an inferred non-retaining sum-param mask (now admitting `cstr` results) plus a statement-position drain cover the argument shape, and the carrier free is deep for a boxed struct arm (7 of 9 fixtures clean); the remaining 2 are dictionary-dispatched inline-C class methods, which need the glue route |
 | erased sum carrier | `hkt-*`, `result-basic` | ~0.7 K remaining | **RM1**, partially closed 2026-08-30; bind chains closed 2026-09-02 (sweep 7200 -> 6856 B; 704 B of SUM-BOX rows left, dominated by inline-C `:int` readers in fixtures and dictionary-dispatched sites) |
 
 ## The two things worth carrying forward
@@ -88,7 +88,7 @@ are not leaks came first:
   box**: the aggregate return spill boxes a `(Identity bool)` monomorph at
   `sizeof` 1 and the erased generic reader dereferences it as the int64
   layout. Pre-existing on `main`, right answer by little-endian luck; filed as
-  [erased-generic-field-read-overruns-subword-monomorph-box](../reported/erased-generic-field-read-overruns-subword-monomorph-box.md).
+  [erased-generic-field-read-overruns-subword-monomorph-box](../archive/erased-generic-field-read-overruns-subword-monomorph-box.md).
 
 Then the leaks: 735 of 2,186 fixtures leaked something, 31.4 MB in total --
 and 30.8 MB of that was ONE shape in three fixtures. The stackless

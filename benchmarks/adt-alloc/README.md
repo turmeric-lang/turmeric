@@ -1,7 +1,7 @@
 # ADT allocation ceiling harness
 
 Prices the fixes proposed in
-[docs/reported/multi-variant-adts-always-heap-allocate.md](../../docs/reported/multi-variant-adts-always-heap-allocate.md)
+[docs/archive/multi-variant-adts-always-heap-allocate.md](../../docs/archive/multi-variant-adts-always-heap-allocate.md)
 before anyone spends compiler time on them: seven representations of the same
 workload (build an n-binding substitution, walk all n, discard), so the two
 proposed fixes can be costed separately, together, and against region reclamation.

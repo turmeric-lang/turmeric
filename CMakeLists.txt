@@ -285,7 +285,7 @@ set_tests_properties(tur_leak_check PROPERTIES RUN_SERIAL TRUE)
 # r7rs-lang-plan T8: every `#lang r7rs` fixture compiled with ASan and UBSan
 # (UB fatal) and run -- a memory error in the prelude's inline C, the emitted
 # Scheme code or the runtime fails it.  Leaks are not checked: Scheme heap data
-# is never freed by design (docs/reported/r7rs-heap-data-never-reclaimed.md).
+# is never freed by design (docs/archive/r7rs-heap-data-never-reclaimed.md).
 # Fans out across nproc on its own, so RUN_SERIAL.
 add_test(
   NAME tur_r7rs_sanitize
@@ -491,7 +491,7 @@ add_test(
 # restored harness found a hard C compile error and a silent wrong answer on the
 # carrier path, plus a layering defect that makes TUR_SR2_APP_SUM_BYVALUE=0
 # abort the compiler unless TUR_OPTION_NICHE=0 comes with it.  See
-# docs/reported/sr2-carrier-seam-rotted.md and the harness header.
+# docs/archive/sr2-carrier-seam-rotted.md and the harness header.
 add_test(
   NAME tur_sr2_seam
   COMMAND bash tests/run-sr2-seam.sh
@@ -824,7 +824,7 @@ add_test(
 # reaching whichever ADT was emitted first.  It did not, when the uniqueness
 # test keyed on the raw name and the #ifndef guard on the mangled one -- a
 # silent wrong constructor with no diagnostic at any layer.  See
-# docs/reported/separator-fold-collides-emitted-c-names.md.
+# docs/archive/separator-fold-collides-emitted-c-names.md.
 add_test(
   NAME tur_ctor_alias_ambiguity
   COMMAND bash tests/check-ctor-alias-ambiguity.sh
@@ -1321,7 +1321,7 @@ set_tests_properties(tur_type_fuzz_src PROPERTIES TIMEOUT 600)
 # routes, terminal dynamic operations), asserting check-accepted => the C
 # compiles, runs and prints the predicted output AND `tur --interpret` agrees.
 # Shapes reproducing the open findings in
-# docs/reported/saffron-dynamic-surface-pass.md are excluded via KNOWN (pinned
+# docs/archive/saffron-dynamic-surface-pass.md are excluded via KNOWN (pinned
 # by --known-probes instead), so a finding here is NEW.  Smoke size -- run
 # tests/saffron-fuzz-src.py directly for a session.
 add_test(

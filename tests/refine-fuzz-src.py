@@ -1052,7 +1052,7 @@ class Gen:
 
     # Dyadic float literals: every sum of a handful of them is exact in double,
     # so a reflected `fz-sum` is never a float-rounding question.  That one is
-    # docs/reported/float-proofs-assume-exact-reals.md, a separate known gap,
+    # docs/archive/float-proofs-assume-exact-reals.md, a separate known gap,
     # and it must not show up here as noise.
     EXACT_FLOATS = ["0.5", "1.25", "2.75", "3.25", "-1.5", "-4.25", "6.5"]
 

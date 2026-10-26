@@ -542,7 +542,7 @@ Do not reach for `bash tests/run.sh` -- it cannot see one. Four harnesses can
   `#lang r7rs` fixture compiled with ASan and UBSan (UB fatal) and run with
   leak detection OFF: it gates memory errors, not leaks, because a Scheme
   program's data is never freed by design
-  (`docs/reported/r7rs-heap-data-never-reclaimed.md`).
+  (`docs/archive/r7rs-heap-data-never-reclaimed.md`).
 - `tests/run-closure-env-leak.sh`, `tests/run-fat-shim-leak.sh` -- one
   regression each; they emit C and compile it by hand with ASan.
 - `tests/run-leak-gate.sh` -- despite the name, this is the COMPILER's error

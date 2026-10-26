@@ -230,7 +230,7 @@
           (do
             (if (code-block? d k)
               ;; Bound before the push: vec-push! of a with expression
-              ;; emits invalid C (docs/reported/vec-push-of-with-expression-emits-invalid-c.md).
+              ;; emits invalid C (docs/archive/vec-push-of-with-expression-emits-invalid-c.md).
               (let [f (with (fence-of d k)
                         [paired
                          (if (< (+ i 1) n)

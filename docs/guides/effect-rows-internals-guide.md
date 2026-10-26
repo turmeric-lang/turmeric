@@ -511,7 +511,7 @@ many times a diagnostic prints.
 - **`(unsafe ...)` colors.** The marker handle is a coloring seed, so a safe
   wrapper and all its callers are CPS-colored although nothing can be
   performed (see [Capabilities and `Unsafe`](#capabilities-and-unsafe)).
-- [effect-tags-collide-past-128-effects](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/effect-tags-collide-past-128-effects.md)
+- [effect-tags-collide-past-128-effects](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/effect-tags-collide-past-128-effects.md)
   -- the emitter's effect tag table, downstream of rows but keyed on the same
   effects.
 - [cps-effectful-callback-through-multi-arg-or-untyped-param](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/cps-effectful-callback-through-multi-arg-or-untyped-param.md)

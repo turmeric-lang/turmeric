@@ -8,7 +8,7 @@
 ;;;
 ;;; Compiled only, like the rest of fs.tur: under --interpret it stops with
 ;;; "inline-C not supported in interpreter mode"
-;;; (docs/reported/fs-functions-compiled-only.md).
+;;; (docs/archive/fs-functions-compiled-only.md).
 ;;;
 ;;; Since: markdown-library-plan S3
 ;; IoError and the FS effect come from fs.tur; String from string.tur.

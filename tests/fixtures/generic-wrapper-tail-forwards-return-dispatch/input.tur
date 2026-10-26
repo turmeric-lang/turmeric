@@ -17,7 +17,7 @@
 ;; Covers scalar, cstr and by-value struct payloads, and both Result arms.
 ;; NOTE: the struct-payload arm still leaks its 16-byte payload box -- the
 ;; caller-side drop does not fire for this producer shape.  See
-;; docs/reported/generic-wrapper-tail-forwarding-a-return-dispatch-method.md;
+;; docs/archive/generic-wrapper-tail-forwarding-a-return-dispatch-method.md;
 ;; that is why this fixture carries requires.no-leak-check.
 
 (defstruct User [name : cstr age : int])

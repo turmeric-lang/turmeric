@@ -18,7 +18,7 @@
 ;;   poll-helper  same let, hoisted into a non-recursive helper (ditto)
 ;;
 ;; This is the turmeric-side regression for
-;; docs/reported/tail-recursive-let-drops-carrier-bridge.md, found writing the
+;; docs/archive/tail-recursive-let-drops-carrier-bridge.md, found writing the
 ;; nng spice's pub/sub retry helper -- a retry loop over a fallible operation is
 ;; the obvious spelling of a poll, and it did not compile.
 

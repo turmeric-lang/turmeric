@@ -53,7 +53,7 @@ done
 # is what "call site does not dispatch to chain__low__low_hyadd" meant in CI
 # while the same assertion passed when run by hand on a smaller build.
 # Reproduced 10/10 with a pattern sitting on line 1. Third time this repo has
-# hit grep -q + pipefail; see docs/reported/pipefail-grep-q-false-failures.md.
+# hit grep -q + pipefail; see docs/archive/pipefail-grep-q-false-failures.md.
 if [[ "$c" != *'chain__low__low_hyadd(INT64_C(20), INT64_C(22))'* ]]; then
     echo "FAIL export-from-no-wrapper: call site does not dispatch to chain__low__low_hyadd"
     status=1

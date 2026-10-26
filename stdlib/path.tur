@@ -171,7 +171,7 @@
    * sign-extended -- non-NULL, so a loop that only counts tokens looks correct,
    * and a crash the moment one is dereferenced.  Measured: strstr, strchr,
    * strrchr and getenv all return intact pointers in the same translation unit;
-   * only strtok truncates.  docs/reported/jit-c2mir-implicit-decl-truncates-pointers.md
+   * only strtok truncates.  docs/archive/jit-c2mir-implicit-decl-truncates-pointers.md
    *
    * Hand-splitting also drops strtok's static cursor, which was never
    * thread-safe. */

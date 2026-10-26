@@ -141,7 +141,7 @@ If you see one of these in a link error under separate compilation (see the
   emits a borrowed spec only after the build's second pass forces it there; a
   module missing from the build set, or a forced spec the owner rebuilt with
   the wrong C types
-  ([report](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/forced-spec-loses-aggregate-type.md)), shows up here. `<build-dir>/.tur-abi-cache/index` lists
+  ([report](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/forced-spec-loses-aggregate-type.md)), shows up here. `<build-dir>/.tur-abi-cache/index` lists
   which owner each borrowed clone was forced onto.
 - **`#[used]` defn reached only by mangled symbol.** A pure-Turmeric
   defn called only via a hand-written inline-C bridge or a C-ABI

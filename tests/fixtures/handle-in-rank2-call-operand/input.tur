@@ -1,5 +1,5 @@
 ;; A `handle` over an effectful fn-field call in the operand of a rank-2 call.
-;; Shape (1) of docs/reported/cps-evicts-handle-in-operand-positions.md, and
+;; Shape (1) of docs/archive/cps-evicts-handle-in-operand-positions.md, and
 ;; the type fuzzer's `x_rank2_class` + `fn_field_eff` crossing.
 ;;
 ;;   - `(l (handle ...))`: a call through a rank-2 poly param is an INDIRECT

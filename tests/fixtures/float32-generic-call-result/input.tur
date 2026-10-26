@@ -16,7 +16,7 @@
 ;; that used to be a spurious TUR-E0707.  NOT pinned: a typeclass-method
 ;; result feeding a generic call -- that shape fails at the PRODUCER
 ;; (`return self;` value-converts) and is the still-open sibling report
-;; docs/reported/method-result-float-spec-return-value-converts.md.
+;; docs/archive/method-result-float-spec-return-value-converts.md.
 (defn idf [A] [x : A] : A x)
 (defn second2 [A] [x : A y : A] : A y)
 (defn g [] : float32 (idf (:: 7.1 float32)))

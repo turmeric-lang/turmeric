@@ -2,7 +2,7 @@
 ;;
 ;; It is dropped today for every instantiation except `int` -- the side effect
 ;; is lost, with no diagnostic and no crash.  See
-;; docs/reported/poly-call-in-statement-position-dropped.md.
+;; docs/archive/poly-call-in-statement-position-dropped.md.
 ;;
 ;; The assertion is the printed order: each "ran" line must appear between its
 ;; label and the next.  A dropped call removes a line, so the diff catches it.

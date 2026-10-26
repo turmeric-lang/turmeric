@@ -222,7 +222,7 @@ fi
 # docs/archive/emitted-c-pointer-integer-warnings-unwatched.md closed for the
 # pointer/integer half.  An int64 carrier reaching a double slot (or the
 # reverse) is a wrong ANSWER, not a style nit: it is how
-# docs/reported/nested-class-method-call-picks-the-first-instance.md turns 7.1
+# docs/archive/nested-class-method-call-picks-the-first-instance.md turns 7.1
 # into 7 with nothing else complaining.  Understood by both GCC (>= 4.9) and
 # clang with the same diagnostic tag, so the ratchet's grep is portable.
 # Deliberately NOT -Wconversion: that adds ~7 warnings out of the hand-written

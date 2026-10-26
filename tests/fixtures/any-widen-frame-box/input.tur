@@ -5,7 +5,7 @@
 ;; Widening a by-value struct to `any` heap-copies it, because the payload
 ;; cannot ride tur_tagged_t's 8-byte value slot.  Nothing owned that copy: one
 ;; malloc per widen, with no drop point anywhere, so a loop over it grew RSS
-;; without bound (docs/reported/any-struct-box-leak-per-widen.md).
+;; without bound (docs/archive/any-struct-box-leak-per-widen.md).
 ;;
 ;; When the callee's `any` parameter is inferred non-retaining -- the same
 ;; inference the closure-env and catch-box frees already use -- and the callee

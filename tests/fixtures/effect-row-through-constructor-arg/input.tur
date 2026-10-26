@@ -20,7 +20,7 @@
 ;; tests/fixtures/typed/result-basic (every stdlib HOF calls its callback inside
 ;; a `match`) and each newly colored frame LEAKED, because the CPS path does not
 ;; emit the region frees the direct path does.  See
-;; docs/reported/cps-edge-walk-misses-nodes-and-colored-frames-leak.md.
+;; docs/archive/cps-edge-walk-misses-nodes-and-colored-frames-leak.md.
 ;; Coloring the caller then
 ;; exposed a second layer: a ctor call has no `fn_binding`, so the CPS
 ;; translation took its indirect-callee arm and rejected the non-atomic argument

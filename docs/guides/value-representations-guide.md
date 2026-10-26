@@ -222,7 +222,7 @@ add the row.
 
 | Open cell (producer -> boundary) | Report |
 | --- | --- |
-| `^Class`-constrained parameter (carrier `int64_t`) -> generated instance method taking a `defdata` ADT by value; instantiating at `int` is a no-op erasure and works | [`typeclass-constrained-param-erases-adt-to-int64`](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/typeclass-constrained-param-erases-adt-to-int64.md) |
+| `^Class`-constrained parameter (carrier `int64_t`) -> generated instance method taking a `defdata` ADT by value; instantiating at `int` is a no-op erasure and works | [`typeclass-constrained-param-erases-adt-to-int64`](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/typeclass-constrained-param-erases-adt-to-int64.md) |
 
 The table was empty between 2026-08-21 and these two filings. The pair that
 emptied it closed on the same day, and the `let` merge-temp one is worth a
@@ -383,9 +383,9 @@ than failed. Three seams that are already correct (`perform`/`resume`,
 where every seam fails is distinguishable from a broken emitter.
 
 Open seam cells:
-[router-payloads-are-int64-only](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/router-payloads-are-int64-only.md),
-[generator-yield-payload-is-int64-only](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/generator-yield-payload-is-int64-only.md),
-[async-await-payload-is-int64-only](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/async-await-payload-is-int64-only.md).
+[router-payloads-are-int64-only](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/router-payloads-are-int64-only.md),
+[generator-yield-payload-is-int64-only](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/generator-yield-payload-is-int64-only.md),
+[async-await-payload-is-int64-only](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/async-await-payload-is-int64-only.md).
 The fix convention to reuse rather than reinvent is the `union { double d;
 int64_t i; }` bit-reinterpret the direct/fiber effect path already ships
 ([fiber-effect-float-result-truncated](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/fiber-effect-float-result-truncated.md)),

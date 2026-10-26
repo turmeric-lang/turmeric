@@ -9,7 +9,7 @@
 #
 #   - pkg_git_fetch interpolated POSIX '...' quoting into a string cmd.exe runs,
 #     so git got `''./spices/demo''` and nothing could be fetched
-#     (docs/reported/windows-spice-fetch-shell-quoting.md)
+#     (docs/archive/windows-spice-fetch-shell-quoting.md)
 #   - pkg_lock_read sized with ftell and read in text mode, so it rejected every
 #     tur.lock tur itself wrote
 #     (docs/archive/windows-text-mode-read-rejects-own-files.md)

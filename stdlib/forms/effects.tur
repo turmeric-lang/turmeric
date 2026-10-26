@@ -75,7 +75,7 @@
 ;;; Defers in the body run when the body is abandoned or finishes. When a clause
 ;;; does not resume, the compiled program runs them as the `handle` returns; the
 ;;; interpreter runs them later, at the end of an enclosing scope
-;;; (docs/reported/turi-fiber-handle-defers-fire-at-the-wrong-time.md).
+;;; (docs/archive/turi-fiber-handle-defers-fire-at-the-wrong-time.md).
 ;;;
 ;;; Parameters:
 ;;;   body   -- the expression to run

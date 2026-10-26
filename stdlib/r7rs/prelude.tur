@@ -1396,7 +1396,7 @@
   (if (r7rs-null? r) len (if (r7rs-null? (r7rs-cdr r)) len (r7rs-int-of__ (r7rs-car (r7rs-cdr r)) "range end must be an exact integer"))))
 ;;; A range out of bounds raises an error object a program can `guard`, the
 ;;; start and end its irritants (r7rs-srfi-plan S7; it was a panic,
-;;; docs/reported/r7rs-type-errors-are-uncatchable-panics.md).
+;;; docs/archive/r7rs-type-errors-are-uncatchable-panics.md).
 (defn r7rs-range-check__ [who : cstr start : int end : int len : int] : nil
   (if (if (>= start 0) (if (<= start end) (<= end len) false) false)
     nil
@@ -1577,7 +1577,7 @@
     (r7rs-make-vector-go__ n (if (r7rs-null? fl) (:: false any) (r7rs-car fl)) (:: (vec-new) (Vec any)))))
 ;;; An index out of range raises an error object a program can `guard`
 ;;; (SRFI 64's test-error tests exactly this), where vec-get's own check
-;;; panics (docs/reported/r7rs-type-errors-are-uncatchable-panics.md).
+;;; panics (docs/archive/r7rs-type-errors-are-uncatchable-panics.md).
 (defn r7rs-index-error__ [who : cstr v i : int] : any
   (r7rs-raise (R7rsError (r7rs-string-append2__ who ": index out of range")
                          (r7rs-list v (:: i any)) 0)))

@@ -7,4 +7,4 @@ so the select-based backend (src/async/io_iocp.c) could never service them.
 Skipping is the honest answer; switching to _pipe() would trade a clear build
 error for a hang.
 
-See docs/reported/windows-pipe-reactor-fixtures-do-not-build.md
+See docs/archive/windows-pipe-reactor-fixtures-do-not-build.md

@@ -14,7 +14,7 @@
 ;; Still open for the NON-parametric case (a plain `defstruct` lowered to
 ;; `tur_adt_Pt`): widening the predicate to reach it regresses 10 fixtures, so
 ;; it needs a position-sensitive predicate rather than a broader type test. See
-;; docs/reported/byvalue-product-tail-var-double-unboxed-nonparametric.md.
+;; docs/archive/byvalue-product-tail-var-double-unboxed-nonparametric.md.
 
 (defmodule byvalue_product_tail_var_parametric
   (export)

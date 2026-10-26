@@ -1,5 +1,5 @@
 ;; erased-reader-subword-record-monomorph -- pins
-;; docs/reported/erased-generic-field-read-overruns-subword-monomorph-box.md.
+;; docs/archive/erased-generic-field-read-overruns-subword-monomorph-box.md.
 ;;
 ;; A parametric RECORD monomorph whose type-parameter field is narrower than a
 ;; word (`(Identity bool)`, `(Identity int8)`, `(Identity int32)`) crosses the

@@ -1,4 +1,4 @@
-;; dap-toplevel -- docs/reported/debugger-and-tracer-only-instrument-main.md:
+;; dap-toplevel -- docs/archive/debugger-and-tracer-only-instrument-main.md:
 ;; a TOP-LEVEL program (no `main`).  Driven by tests/dap-toplevel-driver.py.
 (defeffect Ask [] :int)
 

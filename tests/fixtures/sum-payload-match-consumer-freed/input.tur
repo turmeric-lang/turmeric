@@ -1,6 +1,6 @@
 ; sum-payload-match-consumer-freed -- a `match` that consumes a fresh
 ; (Result T S) / (Option S) frees S's payload box (S a by-value struct, stored
-; boxed by the ros pointer-box rule).  docs/reported/sum-payload-box-leaks-at-match.md
+; boxed by the ros pointer-box rule).  docs/archive/sum-payload-box-leaks-at-match.md
 ;
 ; Leak-checked: every shape below must free its box, and every value that is
 ; KEPT (pushed to `store`, returned by a stashing producer) must still read

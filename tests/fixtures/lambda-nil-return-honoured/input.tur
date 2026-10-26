@@ -17,7 +17,7 @@
 ;; The capture is deliberate: it forces the heap-env two-parameter shape
 ;; (void *env, void *arg), which is the one the thunk typedef describes.
 ;;
-;; See docs/reported/emitter-thunk-type-return-mismatch.md
+;; See docs/archive/emitter-thunk-type-return-mismatch.md
 (defn bump [x : int] : int (+ x 1))
 
 (defn make-nil-tailing-into-int [] : ptr<void>

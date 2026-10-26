@@ -69,7 +69,7 @@ exist, but only as stacks for threads and async I/O (see
 | `src/compiler/emit_cps_ir.c`, `.h` | Classification (`ensure_S`) and the CT-IR-to-C backend (`emit_cps_ir_try_fn`) |
 | `src/compiler/emit_dk_runtime.c`, `.h` | String emitters for the runtime: the DK machine, the cloneable<->DK bridge, the serial marshaler, the call/cc escape runtime, the `setjmp` selection |
 | `src/compiler/emit_module.c` | Prelude gating; `__dk_enter0` and `__dk_entry_leave`; the per-fiber state swap; `emit_rt_split_source` |
-| `src/compiler/emit_effects.c` | Handler literals and handler tables (`tur_handler_entry_t`), `cont?`, the cloneable reset fallback, and the direct emitter's `reset`/`shift`/`handle` for evicted functions. `emit_effects_handle` past its `Unsafe`-marker short-circuit is leftover fiber-era code that no longer compiles ([report](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/evicted-handle-reaches-deleted-fiber-emitter.md)) |
+| `src/compiler/emit_effects.c` | Handler literals and handler tables (`tur_handler_entry_t`), `cont?`, the cloneable reset fallback, and the direct emitter's `reset`/`shift`/`handle` for evicted functions. `emit_effects_handle` past its `Unsafe`-marker short-circuit is leftover fiber-era code that no longer compiles ([report](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/evicted-handle-reaches-deleted-fiber-emitter.md)) |
 | `src/compiler/emit_expr.c` | The poly-wrap `fn_cps` twin; the "this effect operation has no lowering here" error |
 | `src/runtime/generated/tur_rt_split*.{c,h}` | A committed snapshot of the preamble runtime (see [The split runtime](#the-split-runtime)) |
 
@@ -653,7 +653,7 @@ Read the `struct DK` comments in that text, or in its committed copy
   memoized per interned effect symbol. The table holds `CPS_MAX_EFFECTS` (128)
   entries. Past that, `effect_tag` returns 2 for every further effect, which
   collides with the first one; nothing diagnoses it
-  ([report](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/effect-tags-collide-past-128-effects.md)).
+  ([report](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/effect-tags-collide-past-128-effects.md)).
 
 ### Operations
 

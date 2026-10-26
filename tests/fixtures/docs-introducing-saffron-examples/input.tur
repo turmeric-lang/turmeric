@@ -127,7 +127,7 @@
 ;; A `handle` lives in its own function rather than inline in `main`: a
 ;; function that both performs and builds a `[...]` literal or reads an
 ;; element back out is a build breaker today
-;; (docs/reported/saffron-cps-vec-element-carrier-mismatch.md), and `main`
+;; (docs/archive/saffron-cps-vec-element-carrier-mismatch.md), and `main`
 ;; below does plenty of both.
 (defn run-effects []
   (println
