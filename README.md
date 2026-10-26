@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/turmeric-lang/turmeric/actions/workflows/ci.yml/badge.svg)](https://github.com/turmeric-lang/turmeric/actions/workflows/ci.yml)
 
-**Latest release:** `v0.71.0` -- Unary `-` and `-.` negate on the builtin kinds, `tur serve --isolate` enables cross-origin isolation, `TUR_MUSTTAIL` makes real tail calls under c2mir, and `let*` is deprecated in favor of sequential `let`.
+**Latest release:** `v0.71.1` -- Heap frames are now the default for `#lang r7rs` recursion, `^borrow` function types and other fixes unblock C-wrapping spices, and the docs gain tag browsing and full syntax highlighting.
 
 ## What
 

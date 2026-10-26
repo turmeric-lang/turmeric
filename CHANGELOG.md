@@ -2,6 +2,50 @@
 
 All notable changes to Turmeric are documented here.
 
+## [0.71.1] -- 2026-10-26
+
+### Added
+
+- **`r7rs-segmented-stack` graduates: heap frames are the default for `#lang
+  r7rs`.** Every compiled r7rs procedure on Linux x86-64 and arm64 checks the
+  stack limit at entry and grows onto segments; recursion is bounded by
+  `TUR_MAIN_STACK_MB` as a memory budget. A lingering `--enable=` is now a
+  `TUR-W0063` no-op, and `TUR_R7RS_SEGMENTED_STACK=0` still turns it off.
+
+### Fixed
+
+- **Six compiler fixes for idiomatic C-wrapping spices.** Building `spices/lmdb`
+  exposed them: `(fn [^borrow T] R)` now marks the slot as borrowed instead of
+  parsing `borrow` as a type parameter, a user `get` or `has?` taking a
+  `^borrow` linear handle no longer spends it, and a consuming function is
+  refused where a borrowing one is expected.
+- **`set!` of an enclosing `^mut` survives `handle` and `reset` bodies.** A
+  mutable the handled or reset body touches is promoted to a shared cell, as
+  handler clauses already were, so the write is no longer lost.
+- **The `^multishot` liveness check is both stricter and looser.** `TUR-E0500`
+  now also checks the handled body a `^multishot` clause answers, refusing a
+  linear or unique value live across the `perform`; but a variable passed to a
+  `^borrow` parameter no longer counts as a second use, so safe code is
+  accepted.
+- **The installer no longer shadows `~/.profile`.** `tvm`'s `install.sh` chooses
+  the bash rc by platform, so it stops creating a `.bash_profile` that prevents
+  bash from reading `~/.profile`, and on macOS it writes the file Terminal's
+  login shells read.
+
+### Docs
+
+- **Guides are tagged, and the index browses by tag.** Every guide carries a
+  curated tag list; the website index and Try Turmeric's docs pane gain a
+  Categories | Tags switch, with untagged guides under `other`.
+- **Turmeric code is highlighted everywhere it appears.** Guide and API-doc
+  snippets get rainbow brackets, `^annotations` get their own color, and a
+  generic type like `:ptr<void>` is one token; the Try Turmeric editor matches,
+  and hyphenated names like `apply-to` no longer light up as the keyword
+  `apply`. API signatures and fenced docstring code are colored too.
+- **The effects guides document one-shot, `^linear` and `^multishot`.** A new
+  section covers the per-run state rule, `TUR-E0500`/`E0501`/`E0502`, `cont?`
+  and the interpreter fallback, and corrects the resume-once rule.
+
 ## [0.71.0] -- 2026-10-24
 
 ### Added
