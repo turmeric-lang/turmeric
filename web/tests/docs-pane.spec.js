@@ -236,6 +236,11 @@ test.describe('docs pane', () => {
         // The shared guide runtime from /docs-pack/guide.js ran against the
         // freshly rendered fragment.
         expect(await page.locator('#docs-article .hl-keyword').count()).toBeGreaterThan(10);
+        // Rainbow brackets, as the editor draws them: an outermost and a
+        // nested depth both appear, and the guide's code is balanced.
+        expect(await page.locator('#docs-article .hl-br1').count()).toBeGreaterThan(10);
+        expect(await page.locator('#docs-article .hl-br2').count()).toBeGreaterThan(10);
+        expect(await page.locator('#docs-article .hl-br-err').count()).toBe(0);
         expect(await page.locator('#docs-article .code-syntax-toggle').count()).toBeGreaterThan(0);
         expect(await page.locator('#docs-article .docs-load-btn').count()).toBeGreaterThan(0);
     });

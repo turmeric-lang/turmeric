@@ -530,6 +530,13 @@ body.split-dragging * {
     user-select: none;
     -webkit-user-drag: none;
 }
+/* The mark is a mobile touch only: on desktop the site nav's logo sits just
+   above it. Without it, the auto margin moves to whatever now leads the row,
+   so the buttons stay right-aligned. */
+@media (min-width: 769px) {
+    .editor-actions > .editor-brand { display: none; }
+    .editor-actions > .editor-brand + * { margin-inline-start: auto; }
+}
 /* Buttons keep their size and push the row wider; they do not compress. */
 .editor-actions > * { flex: 0 0 auto; }
 .editor-tabs::-webkit-scrollbar,
