@@ -441,7 +441,9 @@ test.describe('docs pane', () => {
         const names = await groups.evaluateAll(
             els => els.map(e => e.firstChild.textContent.trim()));
         expect(names.length).toBeGreaterThan(categoryGroups.length);
-        const named = names.filter(n => n !== 'Untagged');
+        // The pseudo-tag `other` holds untagged guides and sorts last.
+        expect(names[names.length - 1]).toBe('other');
+        const named = names.filter(n => n !== 'other');
         expect(named).toEqual([...named].sort((a, b) => a.localeCompare(b)));
         await expect(groups.first().locator('.docs-nav-count')).toHaveText(/^\d+$/);
 
@@ -493,5 +495,24 @@ test.describe('docs pane', () => {
         const api = await page.evaluate(() =>
             parseFloat(getComputedStyle(document.querySelector('#docs-article h1')).borderBottomWidth));
         expect(api).toBeGreaterThan(0);
+    });
+
+    test('API signatures and fenced prose code are syntax-highlighted', async ({ page }) => {
+        await openTry(page);
+        await openDocs(page);
+        await gotoDoc(page, 'api/httpd-compress');
+
+        // Both come from the generator marking the block language-turmeric: a
+        // signature always, and a prose block only when its docstring fences it.
+        // The pane's highlighter then stamps each with data-hl-done.
+        const sig = page.locator('#docs-article pre.def-signature code.language-turmeric');
+        await expect(sig.first()).toHaveAttribute('data-hl-done', '1');
+        expect(await sig.count()).toBeGreaterThan(0);
+        // A bracket inside a signature is wrapped in a coloured span.
+        await expect(sig.first().locator('[class^="hl-br"]').first()).toBeVisible();
+
+        const prose = page.locator('#docs-article pre.def-prose-code code.language-turmeric');
+        await expect(prose.first()).toHaveAttribute('data-hl-done', '1');
+        expect(await prose.count()).toBeGreaterThan(1);
     });
 });

@@ -940,6 +940,14 @@ GUIDE_JS_CORE = '''\
     var out='', i=0, n=code.length, stack=[];
     while(i<n){
       var c=code[i];
+      // A `#lang` line names the file's dialect. It is a header rather than
+      // code to read, so it is set back in the comment colour instead of lit
+      // as a keyword. Only at the start of a line, and only with an argument.
+      if(c==='#' && code.substr(i,5)==='#lang' && (i===0||code[i-1]==='\\n')
+         && /[ \\t]/.test(code[i+5]||'')){
+        var le=code.indexOf('\\n',i); if(le===-1)le=n;
+        out+='<span class="hl-lang">'+esc(code.slice(i,le))+'</span>'; i=le; continue;
+      }
       // Line comment
       if(c===';'){
         var e=code.indexOf('\\n',i); if(e===-1)e=n;
@@ -1346,6 +1354,7 @@ GUIDE_PAGE_SCRIPTS = {
 # keep the three in step.
 HL_CSS = '''\
     .hl-comment { color:var(--syn-cmt, #48433D); font-style:italic; }
+    .hl-lang    { color:var(--syn-cmt, #48433D); }
     .hl-string  { color:var(--syn-str, #D9735A); }
     .hl-number  { color:var(--syn-num, #A8C98A); }
     .hl-keyword { color:var(--syn-kw, #EFA030); font-weight:bold; }
@@ -1819,19 +1828,22 @@ def render_index(categories: list[dict], all_stems: set[str], out_dir: Path,
 
     # The same guides regrouped by tag: one card per tag, alphabetical, each
     # listing its guides by title. A guide with several tags appears under each
-    # of them; one with none goes in a closing "Untagged" card. Card ids carry a
-    # `tag-` prefix because a tag can share its name with a category slug
-    # (`performance`).
+    # of them; one with none goes under the pseudo-tag `other`, which sorts
+    # last. Card ids carry a `tag-` prefix because a tag can share its name
+    # with a category slug (`performance`).
+    OTHER_TAG = 'other'
     by_tag: dict[str, list[dict]] = {}
-    untagged: list[dict] = []
+    any_tagged = False
     for cat in categories:
         for g in cat['guides']:
             if g['stem'] not in all_stems:
                 continue
-            for t in g.get('tags') or []:
+            any_tagged = any_tagged or bool(g.get('tags'))
+            for t in g.get('tags') or [OTHER_TAG]:
                 by_tag.setdefault(t, []).append(g)
-            if not g.get('tags'):
-                untagged.append(g)
+    tag_order = sorted(t for t in by_tag if t != OTHER_TAG)
+    if OTHER_TAG in by_tag:
+        tag_order.append(OTHER_TAG)
 
     def tag_card(card_id: str, name: str, guides: list[dict]) -> str:
         items = ''.join(guide_item(g) for g in
@@ -1845,9 +1857,7 @@ def render_index(categories: list[dict], all_stems: set[str], out_dir: Path,
       </ul>
     </div>'''
 
-    tag_cards = [tag_card(f'tag-{t}', t, by_tag[t]) for t in sorted(by_tag)]
-    if untagged:
-        tag_cards.append(tag_card('tag-untagged', 'Untagged', untagged))
+    tag_cards = [tag_card(f'tag-{t}', t, by_tag[t]) for t in tag_order]
 
     # One sidebar list serves both views: the Recently links are always there,
     # and the category / tag links carry data-view so guide-index.js shows
@@ -1860,7 +1870,7 @@ def render_index(categories: list[dict], all_stems: set[str], out_dir: Path,
     sidebar_cats_list += [
         f'<li data-view="tag" hidden><a href="#tag-{_html.escape(t, quote=True)}" '
         f'title="Jump to {_html.escape(t, quote=True)}">{_html.escape(t)}</a></li>'
-        for t in sorted(by_tag)
+        for t in tag_order
     ]
     if recent_updated:
         sidebar_cats_list.insert(
@@ -1891,7 +1901,7 @@ def render_index(categories: list[dict], all_stems: set[str], out_dir: Path,
         '      <div class="view-switch sidebar-view-switch" hidden>'
         + view_tablist({'category': 'Categories', 'tag': 'Tags'},
                        'Group guides by', ids=False)
-        + '</div>\n') if by_tag else ''
+        + '</div>\n') if any_tagged else ''
     sidebar_html = build_sidebar(
         toc=f'      <h3 class="sidebar-view-heading">Categories</h3>\n'
             f'{sidebar_switch}'
@@ -1974,7 +1984,7 @@ def render_index(categories: list[dict], all_stems: set[str], out_dir: Path,
                    f'        '
                    + view_tablist({'category': 'By Category', 'tag': 'By Tag'},
                                   'Group guides by', ids=True)
-                   + '\n      </div>') if by_tag else ''
+                   + '\n      </div>') if any_tagged else ''
 
     html = f'''<!DOCTYPE html>
 <html lang="en">
@@ -2112,7 +2122,8 @@ def emit_pack_guides(docs: list[dict], guides_dir: Path, pack_dir: Path,
         }
         # The guide's frontmatter tags, for the pane's By Tag view. Left off an
         # untagged guide rather than written as [], so the pane files it under
-        # "Untagged" and a pack with no tags at all shows no tag switch.
+        # the pseudo-tag `other` and a pack with no tags at all shows no tag
+        # switch.
         if meta.get('tags'):
             entry['tags'] = list(meta['tags'])
         # Only when git knows: a guide written but not yet committed has no

@@ -84,7 +84,8 @@ The pack is a build output and is gitignored, like `turmeric.wasm` and
   out -- Recently Added has already said what there is to say about it.
 - `tags` is on each guide that has them: the list from its front matter, in the
   order written. The pane's **Tags** view groups the Guides section by it; a
-  guide with none carries no `tags` key and is filed under "Untagged". A pack
+  guide with none carries no `tags` key and is filed under the pseudo-tag
+  `other`, which sorts last. A pack
   whose guides carry no tags at all shows no Categories | Tags switch.
 - `files` doubles as the service worker's **precache manifest**. One list, so a
   page cannot be in the pack but missing from precache.

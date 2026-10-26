@@ -5747,25 +5747,24 @@ function docsGroupByCategory(pages) {
 }
 
 /**
- * Group pack pages by tag: one group per tag, alphabetical, with 'Untagged'
- * last for a page that carries none. A page with several tags is listed under
- * each of them -- that is the point of a tag, and what the website's By Tag
- * cards do.
+ * Group pack pages by tag: one group per tag, alphabetical, with the
+ * pseudo-tag 'other' last, holding every page that carries none. A page with
+ * several tags is listed under each of them -- that is the point of a tag, and
+ * what the website's By Tag cards do.
  */
+const DOCS_OTHER_TAG = 'other';
 function docsGroupByTag(pages) {
     const groups = new Map();
-    const untagged = [];
     for (const p of pages) {
-        if (!p.tags || !p.tags.length) { untagged.push(p); continue; }
-        for (const t of p.tags) {
+        for (const t of (p.tags && p.tags.length ? p.tags : [DOCS_OTHER_TAG])) {
             if (!groups.has(t)) groups.set(t, []);
             groups.get(t).push(p);
         }
     }
-    const out = [...groups.keys()].sort((a, b) => a.localeCompare(b))
-        .map(name => ({ name, pages: groups.get(name) }));
-    if (untagged.length) out.push({ name: 'Untagged', pages: untagged });
-    return out;
+    // 'other' last, whether it is the pseudo-tag or (unlikely) a real one.
+    const names = [...groups.keys()].sort((a, b) =>
+        (a === DOCS_OTHER_TAG) - (b === DOCS_OTHER_TAG) || a.localeCompare(b));
+    return names.map(name => ({ name, pages: groups.get(name) }));
 }
 
 /**
