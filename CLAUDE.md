@@ -834,6 +834,11 @@ The separator can also be any non-comment, non-blank, non-definition form
 - Prose paragraphs render too: before the first section under the summary,
   after a section as notes. A section ends at an **unindented** paragraph
   after a blank line, so indent section bodies.
+- Turmeric code in prose is fenced and labelled, as in a guide: a `;;;` line of
+  three backticks plus `turmeric` opens the block and a `;;;` line of three
+  backticks closes it. Reuse the blank `;;;` lines around the block as the
+  fences, so a stdlib file's line numbers do not move. An indented run is plain
+  text and is never guessed at.
 
 ### Docstring Levels
 

@@ -1,9 +1,9 @@
 ;;; tur/weak -- weak<T> non-owning references, and the cycle break they exist for.
 ;;;
 ;;; Opt-in: load it when you need one.
-;;;
+;;; ```turmeric
 ;;;   (load "stdlib/weak.tur")
-;;;
+;;; ```
 ;;; `weak` and `upgrade` have been language intrinsics since Phase 9, but the
 ;;; library gave them no surface -- so the moment a program adopted `rc<T>` for
 ;;; a parent/child or observer graph, the one tool that keeps such a graph

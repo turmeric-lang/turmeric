@@ -2,9 +2,9 @@
 ;;;
 ;;; This module is NOT auto-loaded.  Load it explicitly when you need to build
 ;;; symbols from strings at runtime (deserialization, REPL-style tools):
-;;;
+;;; ```turmeric
 ;;;   (load "stdlib/sym-dynamic.tur")
-;;;
+;;; ```
 ;;; It pulls in the process-global intern table (src/runtime/symbols.c).  The
 ;;; default :Sym surface (literal `:foo`, sym->str, sym=?, Eq/Hash/MapKey[Sym])
 ;;; needs no runtime table and stays in sym.tur; keep this opt-in so programs

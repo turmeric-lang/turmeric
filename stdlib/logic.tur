@@ -542,15 +542,15 @@
 ;;;
 ;;; Without this, a self-recursive relation diverges while the goal is being
 ;;; BUILT, before any search runs:
-;;;
+;;; ```turmeric
 ;;;   (defn nats [] : (Goal int) (disjoined (succeed) (nats)))   ; SIGSEGV
-;;;
+;;; ```
 ;;; `disjoined` takes its goals strictly, so `(nats)` calls itself forever.
 ;;; `zzz` wraps the goal EXPRESSION unevaluated, so nothing recurses until the
 ;;; resulting stream is pulled -- and then only one step at a time:
-;;;
+;;; ```turmeric
 ;;;   (defn nats [] : (Goal int) (disjoined (succeed) (zzz (nats))))
-;;;
+;;; ```
 ;;; This is the `Zzz` of the miniKanren literature. It is a macro and has to
 ;;; be: a function would evaluate its argument at the call site, which is the
 ;;; divergence it exists to prevent.

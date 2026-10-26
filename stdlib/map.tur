@@ -42,9 +42,9 @@
 ;;; map-new is generic and nullary, so its K/V cannot be inferred from
 ;;; arguments.  Annotate it at the binding site when the type is otherwise
 ;;; unconstrained:
-;;;
+;;; ```turmeric
 ;;;   (let [m (:: (map-new) (Map cstr int))] ...)
-;;;
+;;; ```
 ;;; In a function whose declared return type fixes K/V, a bare (map-new) tail
 ;;; is enough (the return annotation pins K/V) -- see map-empty-for.
 ;;;

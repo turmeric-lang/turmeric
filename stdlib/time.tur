@@ -4,9 +4,9 @@
 ;;; direct helpers (sleep-ms / get-time-ms / get-cpu-time).
 ;;;
 ;;; Not auto-loaded -- import the names you need explicitly:
-;;;
+;;; ```turmeric
 ;;;   (import time :refer [sleep-ms get-time-ms])
-;;;
+;;; ```
 ;;; Since: Phase 16
 ;; Phase 16: Real Time implementation
 ;;

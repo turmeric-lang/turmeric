@@ -77,10 +77,10 @@
 ;;; owned-adoption bridge for the many stdlib functions that return a malloc'd
 ;;; cstr ("caller frees the result") -- wrap such a call in string/adopt-cstr and
 ;;; the result is a real owned String, leak-free:
-;;;
+;;; ```turmeric
 ;;;   (string/adopt-cstr (path/join base seg))   ; owned path String
 ;;;   (string/adopt-cstr (digest/sha256-hex ...)) ; owned digest String
-;;;
+;;; ```
 ;;; WARNING: `s` MUST be a heap buffer the caller owns. Never pass a string
 ;;; literal or a borrowed cstr (an accessor's return, a struct field) -- freeing
 ;;; that is undefined behavior. When in doubt, use string/from-cstr (which copies

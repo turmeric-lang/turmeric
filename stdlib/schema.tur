@@ -1105,17 +1105,17 @@
 ;;;
 ;;; An instance pairs a schema (the wire shape) with a builder that turns the
 ;;; validated node into the typed value, e.g.
-;;;
+;;; ```turmeric
 ;;;   (definstance HasSchema [User]
 ;;;     (decode! [node]
 ;;;       (let [v (schema-decode! (user-schema) node)]
 ;;;         (make-struct User (json/get-string (json/get! v "name"))
 ;;;                           (json/get-int    (json/get! v "age"))))))
-;;;
+;;; ```
 ;;; and is then driven by an ascription:
-;;;
+;;; ```turmeric
 ;;;   (:: (decode! (json/decode body)) User)   ; => a real User struct
-;;;
+;;; ```
 ;;; decode! panics (via schema-decode!) on any schema violation; it is for
 ;;; trusted data and tests.  For graceful handling, validate first with
 ;;; schema-decode against the type's schema and branch on schema-decode-ok?.
