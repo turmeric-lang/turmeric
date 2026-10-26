@@ -492,7 +492,9 @@ document.addEventListener('DOMContentLoaded', function(){
       document.querySelectorAll('.view-tablist .seg-btn'));
     var refilter = function(){};   // the filter box below takes this over
 
-    function selectView(key, focus) {
+    // `focusBtn`, when given, is the button to leave focused: the control the
+    // keyboard is in, since the sidebar and the page each have one.
+    function selectView(key, focusBtn) {
       var found = viewBtns.some(function(b){ return b.dataset.viewTab === key; });
       if (!found) return false;
       viewBtns.forEach(function(b){
@@ -500,8 +502,8 @@ document.addEventListener('DOMContentLoaded', function(){
         b.classList.toggle('active', on);
         b.setAttribute('aria-selected', on ? 'true' : 'false');
         b.tabIndex = on ? 0 : -1;
-        if (on && focus) b.focus();
       });
+      if (focusBtn) focusBtn.focus();
       document.querySelectorAll('.index-grid[data-view], .sidebar [data-view]')
         .forEach(function(el){ el.hidden = el.dataset.view !== key; });
       refilter();
@@ -518,36 +520,40 @@ document.addEventListener('DOMContentLoaded', function(){
       var grid = el && el.closest('.index-grid[data-view]');
       if (!grid) return false;
       var changed = grid.hidden;
-      selectView(grid.dataset.view, false);
+      selectView(grid.dataset.view, null);
       // The browser could not scroll to a card that was hidden when it tried.
       if (changed) el.scrollIntoView();
       return true;
     }
 
     if (viewBtns.length) {
-      document.querySelector('.view-switch').hidden = false;
+      document.querySelectorAll('.view-switch').forEach(function(el){ el.hidden = false; });
+      document.querySelectorAll('.sidebar-view-heading').forEach(function(el){ el.hidden = true; });
       if (!viewFromHash()) {
         var storedView = null;
         try { storedView = localStorage.getItem(VIEW_KEY); } catch (e) {}
-        if (storedView) selectView(storedView, false);
+        if (storedView) selectView(storedView, null);
       }
       window.addEventListener('hashchange', viewFromHash);
-      viewBtns.forEach(function(btn, i){
+      viewBtns.forEach(function(btn){
         btn.addEventListener('click', function(){
-          selectView(btn.dataset.viewTab, false);
+          selectView(btn.dataset.viewTab, null);
           rememberView(btn.dataset.viewTab);
         });
-        // Arrow / Home / End move between the two, as for the Recent tabs.
+        // Arrow / Home / End move between the two buttons of the control that
+        // has focus, as for the Recent tabs.
         btn.addEventListener('keydown', function(e){
-          var n = viewBtns.length, j = -1;
+          var group = Array.prototype.slice.call(
+            btn.parentNode.querySelectorAll('.seg-btn'));
+          var i = group.indexOf(btn), n = group.length, j = -1;
           if (e.key === 'ArrowRight') j = (i + 1) % n;
           else if (e.key === 'ArrowLeft') j = (i - 1 + n) % n;
           else if (e.key === 'Home') j = 0;
           else if (e.key === 'End') j = n - 1;
           if (j < 0) return;
           e.preventDefault();
-          selectView(viewBtns[j].dataset.viewTab, true);
-          rememberView(viewBtns[j].dataset.viewTab);
+          selectView(group[j].dataset.viewTab, group[j]);
+          rememberView(group[j].dataset.viewTab);
         });
       });
     }
@@ -1865,9 +1871,30 @@ def render_index(categories: list[dict], all_stems: set[str], out_dir: Path,
             0, '<li><a href="#recently-added" title="Jump to Recently Added">'
                'Recently Added</a></li>')
     sidebar_cats = '\n'.join(sidebar_cats_list)
+    # The list's heading is the same Categories | Tags switch as the one under
+    # the Recent card, and the two stay in step. Without JS the switch stays
+    # `hidden` and the plain "Categories" heading stands in for it.
+    def view_tablist(labels: dict[str, str], aria_label: str, ids: bool) -> str:
+        btns = []
+        for i, (key, text) in enumerate(labels.items()):
+            attrs = [f'class="seg-btn{" active" if i == 0 else ""}"', 'role="tab"']
+            if ids:
+                attrs.append(f'id="view-{key}-tab"')
+            attrs += [f'data-view-tab="{key}"', f'aria-controls="grid-{key}"',
+                      f'aria-selected="{"true" if i == 0 else "false"}"',
+                      f'tabindex="{0 if i == 0 else -1}"']
+            btns.append(f'<button {" ".join(attrs)}>{text}</button>')
+        return (f'<div class="view-tablist" role="tablist"'
+                f' aria-label="{aria_label}">{"".join(btns)}</div>')
+
+    sidebar_switch = (
+        '      <div class="view-switch sidebar-view-switch" hidden>'
+        + view_tablist({'category': 'Categories', 'tag': 'Tags'},
+                       'Group guides by', ids=False)
+        + '</div>\n') if by_tag else ''
     sidebar_html = build_sidebar(
-        toc=f'      <h3 data-view="category">Categories</h3>\n'
-            f'      <h3 data-view="tag" hidden>Tags</h3>\n'
+        toc=f'      <h3 class="sidebar-view-heading">Categories</h3>\n'
+            f'{sidebar_switch}'
             f'      <ul>{sidebar_cats}</ul>')
 
     # Title | date | description, one table row each, with no headings and no
@@ -1943,17 +1970,11 @@ def render_index(categories: list[dict], all_stems: set[str], out_dir: Path,
     # shows. By Category is selected server-side and the control ships
     # `hidden`, so a page read without JS is the category grid with no dead
     # buttons; guide-index.js reveals it and remembers the choice.
-    views = (('category', 'By Category'), ('tag', 'By Tag'))
-    view_buttons = ''.join(
-        f'<button class="seg-btn{" active" if i == 0 else ""}" role="tab"'
-        f' id="view-{key}-tab" data-view-tab="{key}" aria-controls="grid-{key}"'
-        f' aria-selected="{"true" if i == 0 else "false"}"'
-        f' tabindex="{0 if i == 0 else -1}">{label}</button>'
-        for i, (key, label) in enumerate(views))
     view_switch = (f'      <div class="view-switch" hidden>\n'
-                   f'        <div class="view-tablist" role="tablist"'
-                   f' aria-label="Group guides by">{view_buttons}</div>\n'
-                   f'      </div>') if by_tag else ''
+                   f'        '
+                   + view_tablist({'category': 'By Category', 'tag': 'By Tag'},
+                                  'Group guides by', ids=True)
+                   + '\n      </div>') if by_tag else ''
 
     html = f'''<!DOCTYPE html>
 <html lang="en">
@@ -1975,10 +1996,13 @@ def render_index(categories: list[dict], all_stems: set[str], out_dir: Path,
     .recent-tablist .seg-btn:hover, .view-tablist .seg-btn:hover {{ color:var(--text-primary); }}
     .recent-tablist .seg-btn.active, .view-tablist .seg-btn.active {{ color:var(--gold-bright); background:var(--bg-hover); }}
     .recent-tablist .seg-btn:focus-visible, .view-tablist .seg-btn:focus-visible {{ outline:2px solid var(--gold); outline-offset:-2px; }}
-    .view-switch[hidden], .index-grid[hidden], .sidebar [data-view][hidden] {{ display:none; }}
+    .view-switch[hidden], .index-grid[hidden], .sidebar [data-view][hidden], .sidebar-view-heading[hidden] {{ display:none; }}
     .view-switch {{ margin-bottom:0; }}
     .view-tablist {{ margin-bottom:0; }}
     .index-grid[data-view] {{ margin-top:0.75rem; }}
+    .sidebar .sidebar-view-switch {{ margin:0.25rem 0 0.75rem; }}
+    .sidebar .view-tablist {{ display:flex; font-size:0.75rem; }}
+    .sidebar .view-tablist .seg-btn {{ flex:1; padding:4px 8px; }}
     .tag-count {{ margin-left:0.35rem; font-weight:normal; color:var(--text-dim); font-variant-numeric:tabular-nums; }}
     .recent-table {{ width:100%; border-collapse:collapse; font-size:0.875rem; }}
     .recent-table td {{ padding:0.2rem 1.25rem 0.2rem 0; border:none; white-space:nowrap; vertical-align:baseline; }}
