@@ -34,6 +34,13 @@ sentence above does not cover them. If you touch this file, check
 `ls docs/reported/` against it -- an index that silently omits a quarter of the
 directory is worse for triage than no index.
 
+## Found extending the highlighting in Try Turmeric and the docs (filed 2026-10-26)
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [web-specs-fail-instead-of-skipping-without-the-wasm-bundle](web-specs-fail-instead-of-skipping-without-the-wasm-bundle.md) | low (developer experience) | 21 browser spec files wait 30 s for `#wasm-status-text` to read `Ready` and fail when `web/public/turmeric.wasm` is not built; four other specs already skip with a message. Verified on an untouched checkout. |
+| [editor-packs-do-not-colour-annotations-and-generic-types](editor-packs-do-not-colour-annotations-and-generic-types.md) | low (cosmetic) | vim-turmeric, vscode-turmeric, turmeric-mode and trowel colour `^annotations` gold or teal (Emacs is already violet), match only a lowercase subset of the names the reader accepts, and split `:ptr<void>` or treat it as a keyword literal. The docs and Try Turmeric now use one violet and one teal token. |
+
 ## Found building `spices/lmdb` (filed 2026-10-25)
 
 | Report | Severity | One line |
