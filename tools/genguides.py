@@ -1999,6 +1999,8 @@ def render_index(categories: list[dict], all_stems: set[str], out_dir: Path,
     .view-switch[hidden], .index-grid[hidden], .sidebar [data-view][hidden], .sidebar-view-heading[hidden] {{ display:none; }}
     .view-switch {{ margin-bottom:0; }}
     .view-tablist {{ margin-bottom:0; }}
+    /* The shared .module-heading draws a rule under its text; the index runs the intro straight into the cards. */
+    .module-heading.index-heading {{ border-bottom:none; padding-bottom:0; margin-bottom:1.25rem; }}
     .index-grid[data-view] {{ margin-top:0.75rem; }}
     .sidebar .sidebar-view-switch {{ margin:0.25rem 0 0.75rem; }}
     .sidebar .view-tablist {{ display:flex; font-size:0.75rem; }}
@@ -2037,7 +2039,7 @@ def render_index(categories: list[dict], all_stems: set[str], out_dir: Path,
 {sidebar_html}
     </div>
     <div class="content">
-      <div class="module-heading">
+      <div class="module-heading index-heading">
         <h1 style="font-family:system-ui;color:var(--gold)">Guides</h1>
         <div class="module-path guide-count">There are currently {len(all_stems)} tutorials, how-tos, and in-depth feature guides for Turmeric.</div>
         <p class="module-path">Visit the <a href="https://spices.turmeric-lang.com/">Spices</a> page for spice-specific guides.</p>
