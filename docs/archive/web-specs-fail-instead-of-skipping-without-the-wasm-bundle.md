@@ -3,8 +3,9 @@
 **Severity:** low (developer experience; a red result that reads as a product
 bug). CI is unaffected -- it builds the bundle first.
 
-**Status:** open. Found 2026-10-26 running `tests/minimap.spec.js` in a cloud
-sandbox that has no Emscripten.
+**Status:** **RESOLVED 2026-10-26.** Found the same day running
+`tests/minimap.spec.js` in a cloud sandbox that had no Emscripten; fixed in
+`web/playwright.config.js` (see "Resolution"). Archived from `docs/reported/`.
 
 ## What happens
 
@@ -30,11 +31,12 @@ missing".
 
 ## Root cause
 
-- **21 spec files** (25 call sites) do
-  `expect(page.locator('#wasm-status-text')).toHaveText('Ready', { timeout: 30_000 })`:
-  `minimap`, `smoke`, `lsp`, `diag`, `run-session`, `repl-intelligence`,
-  `meta-commands`, `lang-picker`, `toolbar-overflow`, `security`,
-  `deploy-gate`, `prod-smoke`, and the `mobile.*` specs.
+- **23 spec files** wait for `#wasm-status-text` to read Ready, as
+  `expect(...).toHaveText('Ready', { timeout: 30_000 })` or, in `sw-dev` and
+  `trace`, `toHaveText(/Ready/i, ...)`: `minimap`, `smoke`, `lsp`, `diag`,
+  `run-session`, `repl-intelligence`, `meta-commands`, `lang-picker`,
+  `toolbar-overflow`, `security`, `deploy-gate`, `prod-smoke`, `sw-dev`,
+  `trace`, and the `mobile.*` specs.
 - **Four spec files already do the right thing** and `test.skip` with a message
   when their build output is absent: `docs-pane`, `docs-offline` (the docs
   pack), `web-perf` (`turmeric.wasm`) and `trace`. The WASM-dependent specs just
@@ -67,3 +69,30 @@ unbuilt-bundle failures.
 
 Option 1 plus 2 is the smallest change that makes the common case (an unbuilt
 bundle on a laptop or in a sandbox) quiet and keeps the gate where it matters.
+
+## Resolution
+
+**Confirmed first, by building the bundle.** Emscripten came from a git clone of
+`emscripten-core/emsdk` plus `./emsdk install 6.0.10` (the version CI pins); no
+host was blocked. `cmake -S . -B build-wasm -DTUR_WASM=ON ...` and
+`cmake --build build-wasm -j4 --target tur_wasm` took about 2.5 minutes and left
+`turmeric.js` and a 6.8 MB `turmeric.wasm` in `web/public/`. With the bundle in
+place the five minimap specs pass in 27 s total -- the same five that failed at
+30 s apiece without it -- so the missing bundle was the whole cause.
+
+**Fix: option 1 plus 2, in one place.** `web/playwright.config.js` now finds the
+spec files that wait for the evaluator (by that very assertion) and, when
+`web/public/turmeric.wasm` is absent and `CI` is not set, adds them to
+`testIgnore` for both projects and prints one notice. Measured with `--list`:
+
+| Case | Tests listed |
+| --- | --- |
+| bundle present | 272 in 27 files |
+| bundle absent, no `CI` | 108 in 12 files, one notice; `docs-pane` still runs |
+| bundle absent, `CI=1` | 272 in 27 files, no notice |
+
+Detecting the wait, rather than listing files, means a new spec that waits for
+the evaluator is covered without anyone remembering to add it. Option 3 (fail
+fast) was not needed. `docs/guides/running-tests-guide.md` now has a section on
+the browser specs with the build steps.
+
