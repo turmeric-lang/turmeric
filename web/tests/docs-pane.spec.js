@@ -511,6 +511,16 @@ test.describe('docs pane', () => {
         // A bracket inside a signature is wrapped in a coloured span.
         await expect(sig.first().locator('[class^="hl-br"]').first()).toBeVisible();
 
+        // `^fat` is one annotation token, caret included, and `ptr<void>` is
+        // one type token, angle brackets included -- not a name with a plain
+        // `<void>` trailing it.
+        const sigPre = page.locator('#mw-compress-with pre.def-signature');
+        await expect(sigPre.locator('.hl-ann')).toHaveText(['^fat']);
+        const types = await sigPre.locator('.hl-type').allTextContents();
+        expect(types).toContain(':ptr<void>');
+        expect(types.some(t => t === 'ptr<void>')).toBe(true);
+        expect(types.every(t => !/^</.test(t))).toBe(true);   // never a stranded <void>
+
         const prose = page.locator('#docs-article pre.def-prose-code code.language-turmeric');
         await expect(prose.first()).toHaveAttribute('data-hl-done', '1');
         expect(await prose.count()).toBeGreaterThan(1);

@@ -935,6 +935,32 @@ GUIDE_JS_CORE = '''\
     return '<span class="' + cls + '">' + c + '</span>';
   }
 
+  // End of a generic's argument list starting at code[j] -- `<void>` in
+  // `ptr<void>`, `<ptr<void>>` in `ptr<ptr<void>>` -- or j itself when there is
+  // none. Only a balanced, space-free `<...>` counts, so a lone `<` (the
+  // less-than operator) is never taken for one.
+  function typeArgsEnd(code, j){
+    if(code[j]!=='<') return j;
+    var depth=0, k=j;
+    while(k<code.length){
+      var ch=code[k];
+      if(ch==='<') depth++;
+      else if(ch==='>'){ depth--; if(depth===0) return k+1; }
+      else if(!/[a-zA-Z0-9_\\-?!,:.\\/]/.test(ch)) return j;
+      k++;
+    }
+    return j;
+  }
+
+  // A whole symbol that is a generic type name: `ptr<void>`, `option<int>`,
+  // `rc<T>`. A name, then a balanced <...> that runs to the end of the symbol.
+  // `char<?`, `string->cstr` and `<=` are not (no closing `>` after a name).
+  function isGenericType(sym){
+    var m=/^[A-Za-z_][A-Za-z0-9_\\-?!\\/]*/.exec(sym);
+    if(!m||sym[m[0].length]!=='<') return false;
+    return typeArgsEnd(sym, m[0].length)===sym.length;
+  }
+
   function hl(code, spec){
     spec = spec || TUR_SPEC;
     var out='', i=0, n=code.length, stack=[];
@@ -1032,10 +1058,13 @@ GUIDE_JS_CORE = '''\
         if(fe===-1){ i=n; } else { out+=esc('```'); i=fe+3; }
         continue;
       }
-      // Type annotation :keyword
+      // Type annotation :keyword. A generic's arguments belong to the name --
+      // `:ptr<void>` is one type, not `:ptr` followed by `<void>` -- so the
+      // whole of it takes one colour.
       if(spec.colonType&&c===':'&&i+1<n&&/[a-zA-Z_]/.test(code[i+1])){
         var j=i+1;
         while(j<n&&/[a-zA-Z0-9_\\-?!]/.test(code[j]))j++;
+        j=typeArgsEnd(code,j);
         out+='<span class="hl-type">'+esc(code.slice(i,j))+'</span>'; i=j; continue;
       }
       // R7RS number: one match for the whole grammar (SCM_NUM), gated on a
@@ -1061,7 +1090,14 @@ GUIDE_JS_CORE = '''\
         var j=i;
         while(j<n&&/[a-zA-Z0-9_\\-!?*+<>=\\/&%^~#@\\.]/.test(code[j]))j++;
         var sym=code.slice(i,j);
-        if(spec.lit.has(sym)){
+        if(spec.caretAnn&&sym.length>1&&sym[0]==='^'){
+          // `^mut`, `^fat`, `^state/GameState`, `^&cols`: the reader takes a
+          // `^` as the start of a metadata symbol (reader.c), so the caret is
+          // part of the name and the whole symbol is one annotation token.
+          out+='<span class="hl-ann">'+esc(sym)+'</span>';
+        } else if(spec.colonType&&isGenericType(sym)){
+          out+='<span class="hl-type">'+esc(sym)+'</span>';
+        } else if(spec.lit.has(sym)){
           out+='<span class="hl-number">'+esc(sym)+'</span>';
         } else if(spec.kw.has(sym)){
           out+='<span class="hl-keyword">'+esc(sym)+'</span>';
@@ -1082,7 +1118,7 @@ GUIDE_JS_CORE = '''\
   // syntax, and on for both Racket and Scheme, which share all of it -- bar
   // charLit: Turmeric reads `#\\A` too (reader.c), and the rainbow needs the
   // `(` of `(pchar #\\()` to be a character, not an opener.
-  var TUR_SPEC = { kw:KW,     lit:TUR_LIT, inlineC:true,  colonType:true,
+  var TUR_SPEC = { kw:KW,     lit:TUR_LIT, inlineC:true,  colonType:true,  caretAnn:true,
                    blockComment:false, hashKeyword:false,
                    datumComment:false, charLit:true,  hashVector:false,
                    schemeNum:false };
@@ -1355,6 +1391,7 @@ GUIDE_PAGE_SCRIPTS = {
 HL_CSS = '''\
     .hl-comment { color:var(--syn-cmt, #48433D); font-style:italic; }
     .hl-lang    { color:var(--syn-cmt, #48433D); }
+    .hl-ann     { color:var(--syn-ann, #C4A0E8); }
     .hl-string  { color:var(--syn-str, #D9735A); }
     .hl-number  { color:var(--syn-num, #A8C98A); }
     .hl-keyword { color:var(--syn-kw, #EFA030); font-weight:bold; }
