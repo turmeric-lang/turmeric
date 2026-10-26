@@ -343,7 +343,7 @@ use the formula parser to obtain column lists and pass them to existing function
 (import stats/regress :refer [ols-frame])
 
 ;; Simple linear model
-(let [f (read-csv "mtcars.csv")
+(let [f     (read-csv "mtcars.csv")
       terms (formula-parse-terms f "mpg ~ wt + hp")]
   (ols-frame f (formula-terms-response terms)
              (formula-terms-predictors terms)

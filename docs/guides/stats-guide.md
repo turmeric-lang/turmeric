@@ -100,7 +100,7 @@ import stats/rng :refer [rng-make rng-free]
 ;; Build a float64 column (see tur-frame guide for helpers).
 ;; Assume `my-col` is already a frame column handle.
 let [m (col-mean my-col)
-      s (col-sd   my-col)]
+     s (col-sd   my-col)]
   println(str-concat("mean=" float->str(m) " sd=" float->str(s)))
 ;; Standard normal CDF / quantile.
 pnorm(1.96 0.0 1.0)
@@ -221,7 +221,7 @@ Each distribution has four operations:
 import stats/dist :refer [dist-normal pdf cdf quantile random random-n]
 import stats/rng :refer [rng-make rng-free]
 let [d   (dist-normal 0.0 1.0)  ; mean=0, sd=1
-      rng (rng-make 0 0)]
+     rng (rng-make 0 0)]
   pdf(d 1.0)
   ; 0.2420
   cdf(d 1.96)
@@ -476,9 +476,9 @@ let [rng (rng-make 42 0)]
   ;; Train-test split (20% test, no stratification).
   let [res (train-test-split my-frame 0.2 0 rng)]
     if ok?(res)
-      let [pair   (ok-val res)
-            train  (car pair)
-            test   (cdr pair)]
+      let [pair  (ok-val res)
+           train (car pair)
+           test  (cdr pair)]
         ...
   ;; 5-fold CV.
   let [folds (cv-folds 100 5 1 rng)]

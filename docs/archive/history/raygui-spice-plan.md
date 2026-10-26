@@ -436,7 +436,7 @@ lifetime and must free it when the widget is no longer used.
 Usage:
 
 ```turmeric
-(let [name-buf (make-text-buf 64)
+(let [name-buf     (make-text-buf 64)
       name-editing 0]
   (while (not (window-should-close))
     (begin-drawing)
@@ -459,7 +459,7 @@ deactivates on Enter or focus loss. The canonical Turmeric pattern:
 ```turmeric
 ;;; Only one control may be in edit mode at a time in raygui.
 ;;; Use a single edit-state int to track which (if any) is active.
-(let [speed     5
+(let [speed      5
       speed-edit 0]
   (while (not (window-should-close))
     (begin-drawing)
@@ -618,7 +618,7 @@ defn draw-props [p :Props panel :Rect] :Props
 defn main [] :int
   init-window(800 600 "Inspector")
   set-target-fps(60)
-  let [props Props(5.0 -9.8 0)
+  let [props  Props(5.0 -9.8 0)
        scroll 0]
     while not(window-should-close())
       begin-drawing()

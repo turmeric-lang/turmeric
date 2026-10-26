@@ -64,11 +64,11 @@ This is the *vec* sibling of
 
 (defn main [] : int
   ;; (invert) is captureless -> bare fn ptr stored as int64_t in the vec
-  (let [effects  (vec-of (gain 2.0) (invert))
-        ^fat sf0 : (fn [ptr<void>] #{} ptr<void>) (:: (vec-get effects 0) :ptr<void>)
-        ^fat sf1 : (fn [ptr<void>] #{} ptr<void>) (:: (vec-get effects 1) :ptr<void>)
+  (let [effects                                     (vec-of (gain 2.0) (invert))
+        ^fat sf0 : (fn [ptr<void>] #{} ptr<void>)   (:: (vec-get effects 0) :ptr<void>)
+        ^fat sf1 : (fn [ptr<void>] #{} ptr<void>)   (:: (vec-get effects 1) :ptr<void>)
         ^fat chain : (fn [ptr<void>] #{} ptr<void>) (>>> sf0 sf1)
-        ^fat out : (fn [float] #{} float) (chain (:: (konst 0.5) :ptr<void>))]
+        ^fat out : (fn [float] #{} float)           (chain (:: (konst 0.5) :ptr<void>))]
     (println (out 0.0)))  ;; expected: -1.0 (0.5*2=1.0, inverted), actual: Segfault
   0)
 ```
@@ -88,7 +88,7 @@ Direct `>>>` without vec-of ALSO works (the direct ascription fix covers this):
 
 ```turmeric
 (let [^fat chain : (fn [ptr<void>] #{} ptr<void>) (>>> (gain 2.0) (invert))
-      ^fat out   : (fn [float] #{} float) (chain (konst 0.5))]
+      ^fat out   : (fn [float] #{} float)         (chain (konst 0.5))]
   (println (out 0.0)))  ;; prints -1.0 -- works fine
 ```
 

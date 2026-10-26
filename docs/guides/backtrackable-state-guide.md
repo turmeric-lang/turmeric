@@ -31,7 +31,7 @@ It is autoloaded, so there is nothing to import and no flag to pass.
 ```sweet-exp
 defn main [] : int
   let [c bt-cell-new(10)
-        m bt-mark()]
+       m bt-mark()]
     bt-set!(c 20)
     println(bt-get(c))    ; 20
     bt-undo-to!(m)
@@ -93,8 +93,8 @@ forgets to pass.
 ```
 ```sweet-exp
 let [g g-cell-new(5)      ; never trailed
-      c bt-cell-new(1)     ; trailed
-      m bt-mark()]
+     c bt-cell-new(1)     ; trailed
+     m bt-mark()]
   g-set!(g 6)
   bt-set!(c 2)
   println(bt-depth())      ; 1 -- only the BtCell reached the trail
@@ -165,7 +165,7 @@ place it is observable:
 ```
 ```sweet-exp
 let [c bt-cell-new(0)
-      m bt-mark()]
+     m bt-mark()]
   spin(c 500)              ; 500 writes
   println(bt-depth())      ; 1, not 500
   bt-undo-to!(m)

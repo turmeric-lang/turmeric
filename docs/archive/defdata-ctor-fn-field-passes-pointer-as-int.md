@@ -15,7 +15,7 @@ change.
 (defdata Either :copy [A E] (Right A) (Left E))
 (defn main [] : int
   (let [bump 5
-        cap (:: (Right (fn [x : int] : int (+ x bump))) (Either (fn [int] int) int))]
+        cap  (:: (Right (fn [x : int] : int (+ x bump))) (Either (fn [int] int) int))]
     (println (match cap (Right f) (f 1) (Left e) e)))
   0)
 ```

@@ -123,7 +123,7 @@ import watch/opts :refer [watch-opts-make watch-opts-free]
 import watch/watch :refer [watch-open-tree watch-close watch-next]
 defn main [] :int
   let [opts (watch-opts-make 1 150 1 0 1)  ;; recursive, 150 ms debounce
-        w    (watch-open-tree "src/" opts)]
+       w    (watch-open-tree "src/" opts)]
     watch-opts-free(opts)
     loop([] let([ev (watch-next w -1)] if({ev = 0} 0 do(println(str-concat(watch-kind->cstr(watch-event-kind(ev)) " " watch-event-path(ev))) watch-event-free(ev) recur()))))
     watch-close(w)

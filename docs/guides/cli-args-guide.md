@@ -151,12 +151,12 @@ Two conventions to know:
 
 ```turmeric
 (defn main [] : int
-  (let [spec (-> (args/spec-new)
-                 (args/spec-prog "mytool")
-                 (args/spec-flag "--verbose")
-                 (args/spec-option "--input"  "string" (none))       ; required
-                 (args/spec-option "--count"  "int"    (some "1"))    ; default 1
-                 (args/spec-option "--output" "string" (some "out.txt")))
+  (let [spec   (-> (args/spec-new)
+                   (args/spec-prog "mytool")
+                   (args/spec-flag "--verbose")
+                   (args/spec-option "--input"  "string" (none))       ; required
+                   (args/spec-option "--count"  "int"    (some "1"))    ; default 1
+                   (args/spec-option "--output" "string" (some "out.txt")))
         result (args/parse spec *args*)]
     (if (args/error? result)
       (do
@@ -172,13 +172,13 @@ Two conventions to know:
 ```
 ```sweet-exp
 defn main [] :int
-  let [spec (-> (args/spec-new)
-                 (args/spec-prog "mytool")
-                 (args/spec-flag "--verbose")
-                 (args/spec-option "--input"  "string" (none))       ; required
-                 (args/spec-option "--count"  "int"    (some "1"))    ; default 1
-                 (args/spec-option "--output" "string" (some "out.txt")))
-        result (args/parse spec *args*)]
+  let [spec   (-> (args/spec-new)
+                   (args/spec-prog "mytool")
+                   (args/spec-flag "--verbose")
+                   (args/spec-option "--input"  "string" (none))       ; required
+                   (args/spec-option "--count"  "int"    (some "1"))    ; default 1
+                   (args/spec-option "--output" "string" (some "out.txt")))
+       result (args/parse spec *args*)]
     if args/error?(result)
       do
         println $ str-concat "error: " args/error-msg(result)
@@ -319,14 +319,14 @@ defn main [] :int
   let [build-spec (-> (args/spec-new)
                        (args/spec-flag "--release")
                        (args/spec-option "--output" "string" (some "a.out")))
-        test-spec  (-> (args/spec-new)
-                       (args/spec-flag "--verbose")
-                       (args/spec-option "--filter" "string" (none)))
-        spec       (-> (args/spec-new)
-                       (args/spec-prog "myapp")
-                       (args/spec-subcommand "build" build-spec)
-                       (args/spec-subcommand "test"  test-spec))
-        result     (args/parse spec *args*)]
+       test-spec  (-> (args/spec-new)
+                      (args/spec-flag "--verbose")
+                      (args/spec-option "--filter" "string" (none)))
+       spec       (-> (args/spec-new)
+                      (args/spec-prog "myapp")
+                      (args/spec-subcommand "build" build-spec)
+                      (args/spec-subcommand "test"  test-spec))
+       result     (args/parse spec *args*)]
     if args/error?(result)
       do
         args/print-help(spec)

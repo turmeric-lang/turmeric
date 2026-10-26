@@ -268,9 +268,9 @@ import template/render :refer [render-ast]
 import template/token :refer [lex]
 import template/parse :refer [parse]
 let [src  (slurp "views/index.html")   ;; read file as cstr
-      toks (lex src)
-      ast  (parse toks)
-      e    (env-new)]
+     toks (lex src)
+     ast  (parse toks)
+     e    (env-new)]
   env-set(e "title" "Home")
   render-ast(ast e)
 ```

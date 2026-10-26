@@ -36,7 +36,7 @@ A symmetric hard-clip SF written naturally as
   (let [lv limit]                                  ;; outer (captured) let
     (fn [^fat sig : (fn [float] float)]
       (fn [t :float] :float
-        (let [x (sig t)
+        (let [x  (sig t)
               nv (- 0.0 lv)]                       ;; inner (local) let
           (if (< x nv) nv                          ;; use #1, use #2
             (if (< lv x) lv x)))))))               ;; lv used the same way; OK
@@ -94,7 +94,7 @@ the local-let case appears to be a missed copy-type check.
   (let [lv limit]
     (fn [^fat sig : (fn [float] float)]
       (fn [t :float] :float
-        (let [x (sig t)
+        (let [x  (sig t)
               nv (- 0.0 lv)]
           (if (< x nv) nv
             (if (< lv x) lv x)))))))

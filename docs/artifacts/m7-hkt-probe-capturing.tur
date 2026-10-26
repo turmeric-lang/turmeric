@@ -35,10 +35,10 @@
 (defn main [] : int
   (let [delta 100
         ;; bimap: capturing (fn [n] (+ n delta)) maps 21 -> 121.
-        rb (cbimap (fn [n : int] : int (+ n delta)) (fn [n : int] : int n)
-                   (:: (ok 21) (Result int int)))
+        rb    (cbimap (fn [n : int] : int (+ n delta)) (fn [n : int] : int n)
+                      (:: (ok 21) (Result int int)))
         ;; partial-app fmap: same capturing mapper, 21 -> 121.
-        rp (cpmap (:: (ok 21) (Result int int)) (fn [n : int] : int (+ n delta)))]
+        rp    (cpmap (:: (ok 21) (Result int int)) (fn [n : int] : int (+ n delta)))]
     ;; both must be 121; return the bimap one (the partial-app one is checked
     ;; identical by construction).
     (let [_ (ok-val (:: rp (Result int int)))]

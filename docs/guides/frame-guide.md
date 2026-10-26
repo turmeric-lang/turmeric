@@ -104,11 +104,11 @@ import frame/print  :refer [print-frame frame-describe]
       ages  (column-int64   (list 30 25 35) 0 0)
       score (column-float64 (list 8.5 7.0 9.1) 0 0)
 
-      s (schema (list (field "name"  (type-utf8)    0)
-                      (field "age"   (type-int64)   0)
-                      (field "score" (type-float64) 0)))
+      s     (schema (list (field "name"  (type-utf8)    0)
+                          (field "age"   (type-int64)   0)
+                          (field "score" (type-float64) 0)))
 
-      df (frame s (list names ages score))]
+      df    (frame s (list names ages score))]
 
   ;; quick sanity check
   (print-frame df)
@@ -124,11 +124,11 @@ let [names column-utf8(list("Alice" "Bob" "Carol") 0 0)
      ages  column-int64(list(30 25 35) 0 0)
      score column-float64(list(8.5 7.0 9.1) 0 0)
 
-     s schema(list(field("name"  type-utf8()    0)
-                   field("age"   type-int64()   0)
-                   field("score" type-float64() 0)))
+     s     schema(list(field("name"  type-utf8()    0)
+                       field("age"   type-int64()   0)
+                       field("score" type-float64() 0)))
 
-     df frame(s list(names ages score))]
+     df    frame(s list(names ages score))]
 
   print-frame(df)
 ```
@@ -199,17 +199,17 @@ The type inference order is int64 -> float64 -> date32 -> timestamp -> bool -> u
 Use `read-csv-typed` to supply an explicit schema and skip inference:
 
 ```turmeric
-(let [s (schema (list (field "id"    (type-int64)   0)
-                      (field "name"  (type-utf8)    0)
-                      (field "price" (type-float64) 0)))
+(let [s  (schema (list (field "id"    (type-int64)   0)
+                       (field "name"  (type-utf8)    0)
+                       (field "price" (type-float64) 0)))
       df (read-csv-typed "products.csv" s (default-csv-opts))]
   ...)
 ```
 
 ```sweet-exp
-let [s schema(list(field("id"    type-int64()   0)
-                   field("name"  type-utf8()    0)
-                   field("price" type-float64() 0)))
+let [s  schema(list(field("id"    type-int64()   0)
+                    field("name"  type-utf8()    0)
+                    field("price" type-float64() 0)))
      df read-csv-typed("products.csv" s default-csv-opts())]
   ...
 ```

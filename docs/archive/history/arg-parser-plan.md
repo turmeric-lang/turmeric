@@ -37,20 +37,20 @@ The [CLI Arguments plan](cli-arguments-plan.md) introduces raw argument passing 
                                         "remove" {:flags   []
                                                   :options {}
                                                   :args    [:string]}}}}}  ; subcommand specs
-### 2. Features
-- **Flags**: Boolean flags (e.g., `--verbose`).
-- **Options**: Named arguments with types, preferring `--key=value` syntax (e.g., `--input=file.txt`), but also accepting a space-separated form (e.g., `--input file.txt`). Option values may be a bare type keyword (required, no default) or a map `{:type :int :default 1}` (optional with default).
-- **Positional Args**: Ordered arguments with types (e.g., `input.txt output.txt`).
-- **Type Conversion**: Automatic conversion to `:string`, `:int`, `:float`, or `:bool`.
-- **Subcommands**: Support arbitrarily nested subcommands (e.g., `git remote add`), each with their own spec containing `:flags`, `:options`, `:args`, and further `:subcommands`.
-- **Help Generation**: Auto-generate help text from the spec, including per-subcommand help.
-- **Error Handling**: Clear error messages for invalid arguments.
+  ### 2. Features
+  - **Flags**: Boolean flags (e.g., `--verbose`).
+  - **Options**: Named arguments with types, preferring `--key=value` syntax (e.g., `--input=file.txt`), but also accepting a space-separated form (e.g., `--input file.txt`). Option values may be a bare type keyword (required, no default) or a map `{:type :int :default 1}` (optional with default).
+  - **Positional Args**: Ordered arguments with types (e.g., `input.txt output.txt`).
+  - **Type Conversion**: Automatic conversion to `:string`, `:int`, `:float`, or `:bool`.
+  - **Subcommands**: Support arbitrarily nested subcommands (e.g., `git remote add`), each with their own spec containing `:flags`, `:options`, `:args`, and further `:subcommands`.
+  - **Help Generation**: Auto-generate help text from the spec, including per-subcommand help.
+  - **Error Handling**: Clear error messages for invalid arguments.
 
-### 3. Example Usage
+  ### 3. Example Usage
 
-**Simple options** (`--key=value` preferred, space also accepted):
-```turmeric
-(defn main []
+  **Simple options** (`--key=value` preferred, space also accepted):
+  ```turmeric
+  (defn main []
   (let [args-spec {:flags   ["--verbose"]
                    :options {"--input"  :string                          ; required
                              "--count"  {:type :int    :default 1}

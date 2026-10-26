@@ -74,13 +74,13 @@ resolved 2026-10-22):
 
 ```turmeric
 (let [^mut x 1
-      r (& x)]
+      r      (& x)]
   (println @r)
   (set! x 2)      ; fine: `r` is not used again
   (println x))
 
 (let [^mut x 1
-      r (& x)]
+      r      (& x)]
   (set! x 2)      ; error: cannot assign to `x` while it is borrowed by `r`
   (println @r))
 ```
@@ -89,13 +89,13 @@ resolved 2026-10-22):
 #lang sweet-exp
 
 let [^mut x 1
-     r (& x)]
+     r      (& x)]
   println(@r)
   set!(x 2)      ; fine: `r` is not used again
   println(x)
 
 let [^mut x 1
-     r (& x)]
+     r      (& x)]
   set!(x 2)      ; error: cannot assign to `x` while it is borrowed by `r`
   println(@r)
 ```

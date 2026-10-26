@@ -17,7 +17,8 @@ forwards it to its fold helpers.
 (defn add [a : int b : int] : int (+ a b))
 
 (defn caller [g : (fn [int int] int) ^borrow a : S ^borrow b : S] : int
-  (let [x (.v a) y (.v b)
+  (let [x (.v a)
+        y (.v b)
         r (helper g x y 0 true)]         ;; forwards g to a LATER defn
     r))
 

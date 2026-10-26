@@ -686,7 +686,7 @@ The spice manifest lives in `../turmeric-spices/spices/sdf-raylib/build.tur`:
 
 (defn main [] :int
   (let [scene (make-scene)
-        mesh (extract-mesh-from-sdf scene [256 256 256] [[-5 -5 -5] [5 5 5]])]
+        mesh  (extract-mesh-from-sdf scene [256 256 256] [[-5 -5 -5] [5 5 5]])]
     (export-obj mesh "output.obj")
     (println "Exported output.obj with per-vertex colors")
     0))

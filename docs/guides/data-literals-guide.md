@@ -143,7 +143,7 @@ How a key lowers depends on its form:
   ```
   ```sweet-exp
   let [m #map{:name 1 :age 2}
-          k (hamt/hash-str "name")]
+       k (hamt/hash-str "name")]
     map-get(m k)
   ; => 1
   ```

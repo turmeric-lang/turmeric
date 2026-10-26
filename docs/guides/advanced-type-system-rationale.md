@@ -96,7 +96,7 @@ sends what, in which order, and whether the channel branches.
 ;; TUR-E0212, not a runtime hang.
 (defn echo-server [^linear ch : (Session EchoProto)] : nil
   (let [[n ch1] (recv ch)
-        ch2      (send ch1 (* n 2))]
+        ch2     (send ch1 (* n 2))]
     (echo-server ch2)))
 ```
 ```sweet-exp
@@ -108,7 +108,7 @@ defalias EchoProto (Rec self (Recv int (Send int self)))
 ;; TUR-E0212, not a runtime hang.
 defn echo-server [^linear ch : (Session EchoProto)] : nil
   let [[n ch1] recv(ch)
-       ch2      send(ch1 {n * 2})]
+       ch2     send(ch1 {n * 2})]
     echo-server(ch2)
 ```
 

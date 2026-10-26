@@ -149,7 +149,8 @@ jobs:
       # One entry point, shared with the Claude Code pre-push hook
       # (.claude/hooks/docs-lint-before-push.sh): add a check to the script,
       # not a step here.  Today: docs/reported/README.md lists exactly the open
-      # reports, and the r7rs guide's SRFI list matches the prelude.
+      # reports, the r7rs guide's SRFI list matches the prelude, and the docs'
+      # `let` snippets keep their bindings aligned.
       - name: Docs lint checks (tests/check-docs-lint.sh)
         run: bash tests/check-docs-lint.sh
 

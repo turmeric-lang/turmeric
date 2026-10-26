@@ -312,12 +312,12 @@ client spice.
 
 (defn main [] : int
   (let [store (memory-store-new)
-        s (tourist 3000
-            (use! (session-mw store dev-session-config))
-            (get!  "/login"     (fn [ctx] (redirect "/login-form")))
-            (post! "/login"     login-handler)
-            (get!  "/dashboard" dashboard-handler)
-            (post! "/logout"    logout-handler))]
+        s     (tourist 3000
+                (use! (session-mw store dev-session-config))
+                (get!  "/login"     (fn [ctx] (redirect "/login-form")))
+                (post! "/login"     login-handler)
+                (get!  "/dashboard" dashboard-handler)
+                (post! "/logout"    logout-handler))]
     (server-stop s)
     0))
 ```
@@ -347,12 +347,12 @@ defn logout-handler [ctx :int] :int
 
 defn main [] :int
   let [store memory-store-new()
-       s tourist(3000
-           use! session-mw(store dev-session-config)
-           get!  "/login"     fn [ctx] redirect("/login-form")
-           post! "/login"     login-handler
-           get!  "/dashboard" dashboard-handler
-           post! "/logout"    logout-handler)]
+       s     tourist(3000
+               use! session-mw(store dev-session-config)
+               get!  "/login"     fn [ctx] redirect("/login-form")
+               post! "/login"     login-handler
+               get!  "/dashboard" dashboard-handler
+               post! "/logout"    logout-handler)]
     server-stop(s)
     0
 ```

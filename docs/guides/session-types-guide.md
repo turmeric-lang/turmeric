@@ -416,8 +416,8 @@ a three-role pipeline:
 
 (defn main [] : int
   (let [[ra rb rc] (make-protocol Pipeline)
-        ta          (session-spawn (fn [] (role-a ra)))
-        tb          (session-spawn (fn [] (role-b rb)))]
+        ta         (session-spawn (fn [] (role-a ra)))
+        tb         (session-spawn (fn [] (role-b rb)))]
     (role-c rc)
     (session-join ta)
     (session-join tb))
@@ -431,8 +431,8 @@ defprotocol Pipeline [A B C]
 
 defn main [] :int
   let [[ra rb rc] make-protocol(Pipeline)
-       ta          session-spawn((fn [] role-a(ra)))
-       tb          session-spawn((fn [] role-b(rb)))]
+       ta         session-spawn((fn [] role-a(ra)))
+       tb         session-spawn((fn [] role-b(rb)))]
     role-c(rc)
     session-join(ta)
     session-join(tb)

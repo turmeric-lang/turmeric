@@ -25,7 +25,7 @@ is a genuine migration target, unlike the `Unsafe`-marker or session-thread case
 ```turmeric
 (defeffect Ask [] :int)
 (defn run [] : int
-  (let [^mut i 0
+  (let [^mut i     0
         ^mut total 0]
     (while (< i 5)
       (let [cur i]

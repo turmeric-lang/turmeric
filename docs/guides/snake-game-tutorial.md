@@ -485,7 +485,7 @@ defn init-state [] : GameState
   (draw-snake s.snake))
 
 (defn update-snake [^state/Snake snake] : state/Snake
-  (let [head (vec-get snake.segments 0)
+  (let [head     (vec-get snake.segments 0)
         new-head (match snake.direction
                    0 (Segment head.x (- head.y 20))  ;; UP
                    1 (Segment (+ head.x 20) head.y)  ;; RIGHT
@@ -532,7 +532,7 @@ defn draw-state [^state/GameState s]
   draw-snake(s.snake)
 
 defn update-snake [^state/Snake snake] : state/Snake
-  let [head vec-get(snake.segments 0)
+  let [head     vec-get(snake.segments 0)
        new-head (match snake.direction
                   0 Segment(head.x {head.y - 20})
                   1 Segment({head.x + 20} head.y)
@@ -1057,7 +1057,7 @@ Add food that the snake can eat, with score tracking.
     (perform (Render self))))
 
 (defn grow-snake [^Snake snake] : Snake
-  (let [head (vec-get snake.segments 0)
+  (let [head    (vec-get snake.segments 0)
         new-seg (match snake.direction
                   0 (Segment head.x (- head.y 20))
                   1 (Segment (+ head.x 20) head.y)
@@ -1068,7 +1068,7 @@ Add food that the snake can eat, with score tracking.
 
 (defn update-on-food [^GameState state] : GameState
   (let [new-snake (grow-snake state.snake)
-        new-food (random-food state.width state.height)]
+        new-food  (random-food state.width state.height)]
     (update state ($nfx$ snake : new-snake
                          food : new-food
                          score : (+ state.score 10)))))
@@ -1119,7 +1119,7 @@ definstance Drawable Food
     perform(Render(self))
 
 defn grow-snake [^Snake snake] : Snake
-  let [head vec-get(snake.segments 0)
+  let [head    vec-get(snake.segments 0)
        new-seg (match snake.direction
                  0 Segment(head.x {head.y - 20})
                  1 Segment({head.x + 20} head.y)
@@ -1130,7 +1130,7 @@ defn grow-snake [^Snake snake] : Snake
 
 defn update-on-food [^GameState state] : GameState
   let [new-snake grow-snake(state.snake)
-       new-food random-food(state.width state.height)]
+       new-food  random-food(state.width state.height)]
     update(state
       { snake : new-snake
         food : new-food
@@ -1166,7 +1166,7 @@ defn check-collisions [^GameState state] : (or bool GameState)
 
 (defn game-loop [^state/GameState state]
   (handle
-    (let [new-state (update-state state)
+    (let [new-state        (update-state state)
           collision-result (state/check-collisions new-state)]
       (match collision-result
         (true (perform (Game-Over new-state.score)))
@@ -1207,7 +1207,7 @@ defn handle-render [obj]
 
 defn game-loop [^state/GameState state]
   (handle
-    (let [new-state update-state(state)
+    (let [new-state        update-state(state)
           collision-result state/check-collisions(new-state)]
       (match collision-result
         (true perform(Game-Over(new-state.score)))
@@ -1251,7 +1251,7 @@ Properly handle game over with a clean exit and final score display.
 
 (defn game-loop [^state/GameState state]
   (handle
-    (let [new-state (update-state state)
+    (let [new-state        (update-state state)
           collision-result (state/check-collisions new-state)]
       (match collision-result
         (true (perform (Game-Over new-state.score)))
@@ -1294,7 +1294,7 @@ defn draw-game-over [^int score]
 
 defn game-loop [^state/GameState state]
   (handle
-    (let [new-state update-state(state)
+    (let [new-state        update-state(state)
           collision-result state/check-collisions(new-state)]
       (match collision-result
         (true perform(Game-Over(new-state.score)))
@@ -1389,8 +1389,8 @@ Use actual time instead of fixed speed.
 (extern-c get-frame-time [] : float)
 
 (defn update-snake [^state/Snake snake ^float dt] : state/Snake
-  (let [speed (* 200 dt)
-        head (vec-get snake.segments 0)
+  (let [speed    (* 200 dt)
+        head     (vec-get snake.segments 0)
         new-head (match snake.direction
                    0 (Segment head.x (- head.y (cast speed int)))
                    1 (Segment (+ head.x (cast speed int)) head.y)
@@ -1410,8 +1410,8 @@ Use actual time instead of fixed speed.
 
 (defn game-loop [^state/GameState state]
   (handle
-    (let [dt (perform (Get-Time))
-          new-state (update-state state dt)
+    (let [dt               (perform (Get-Time))
+          new-state        (update-state state dt)
           collision-result (state/check-collisions new-state)]
       (match collision-result
         (true (perform (Game-Over new-state.score)))
@@ -1438,8 +1438,8 @@ Use actual time instead of fixed speed.
 extern-c get-frame-time [] : float
 
 defn update-snake [^state/Snake snake ^float dt] : state/Snake
-  let [speed {200 * dt}
-       head vec-get(snake.segments 0)
+  let [speed    {200 * dt}
+       head     vec-get(snake.segments 0)
        new-head (match snake.direction
                   0 Segment(head.x {head.y - cast(speed int)})
                   1 Segment({head.x + cast(speed int)} head.y)
@@ -1459,8 +1459,8 @@ defn update-state [^state/GameState s ^float dt] : state/GameState
 
 defn game-loop [^state/GameState state]
   (handle
-    (let [dt perform(Get-Time())
-          new-state update-state(state dt)
+    (let [dt               perform(Get-Time())
+          new-state        update-state(state dt)
           collision-result state/check-collisions(new-state)]
       (match collision-result
         (true perform(Game-Over(new-state.score)))
@@ -1508,8 +1508,8 @@ Show the score during gameplay.
 ;; Update game-loop to draw score
 (defn game-loop [^state/GameState state]
   (handle
-    (let [dt (perform (Get-Time))
-          new-state (update-state state dt)
+    (let [dt               (perform (Get-Time))
+          new-state        (update-state state dt)
           collision-result (state/check-collisions new-state)]
       (match collision-result
         (true (perform (Game-Over new-state.score)))
@@ -1551,8 +1551,8 @@ defn handle-render [obj]
 ;; Update game-loop to draw score
 defn game-loop [^state/GameState state]
   (handle
-    (let [dt perform(Get-Time())
-          new-state update-state(state dt)
+    (let [dt               perform(Get-Time())
+          new-state        update-state(state dt)
           collision-result state/check-collisions(new-state)]
       (match collision-result
         (true perform(Game-Over(new-state.score)))
@@ -1582,7 +1582,7 @@ Make the snake move in a grid (20x20 pixels per cell).
 (defn update-snake [^state/Snake snake ^float dt] : state/Snake
   (if (< dt 0.15)
     snake
-    (let [head (vec-get snake.segments 0)
+    (let [head     (vec-get snake.segments 0)
           new-head (grid-move head snake.direction)]
       (state/Snake (vec-conj (vec-rest snake.segments) new-head) snake.direction))))
 ```
@@ -1605,7 +1605,7 @@ defn grid-move [^Segment seg ^int dir] : Segment
 defn update-snake [^state/Snake snake ^float dt] : state/Snake
   if {dt < 0.15}
     snake
-    let [head vec-get(snake.segments 0)
+    let [head     vec-get(snake.segments 0)
          new-head grid-move(head snake.direction)]
       state/Snake(vec-conj(vec-rest(snake.segments) new-head) snake.direction)
 ```
@@ -1654,15 +1654,15 @@ Here's the final, polished game loop:
 
 (defn game-loop [^state/GameState state]
   (handle
-    (let [dt (perform (Get-Time))
-          dir (cond
-                (is-key-down KEY_RIGHT) 1
-                (is-key-down KEY_LEFT) 3
-                (is-key-down KEY_UP) 0
-                (is-key-down KEY_DOWN) 2
-                else state.snake.direction)
-          new-snake (state/update-snake state.snake dir dt)
-          new-state (state/GameState new-snake state.food state.score state.width state.height)
+    (let [dt               (perform (Get-Time))
+          dir              (cond
+                             (is-key-down KEY_RIGHT) 1
+                             (is-key-down KEY_LEFT) 3
+                             (is-key-down KEY_UP) 0
+                             (is-key-down KEY_DOWN) 2
+                             else state.snake.direction)
+          new-snake        (state/update-snake state.snake dir dt)
+          new-state        (state/GameState new-snake state.food state.score state.width state.height)
           collision-result (state/check-collisions new-state)]
       (match collision-result
         (true (perform (Game-Over new-state.score)))
@@ -1736,15 +1736,15 @@ defn draw-game-over [^int score]
 
 defn game-loop [^state/GameState state]
   (handle
-    (let [dt perform(Get-Time())
-          dir (cond
-                (is-key-down KEY_RIGHT) 1
-                (is-key-down KEY_LEFT) 3
-                (is-key-down KEY_UP) 0
-                (is-key-down KEY_DOWN) 2
-                else state.snake.direction)
-          new-snake state/update-snake(state.snake dir dt)
-          new-state state/GameState(new-snake state.food state.score state.width state.height)
+    (let [dt               perform(Get-Time())
+          dir              (cond
+                             (is-key-down KEY_RIGHT) 1
+                             (is-key-down KEY_LEFT) 3
+                             (is-key-down KEY_UP) 0
+                             (is-key-down KEY_DOWN) 2
+                             else state.snake.direction)
+          new-snake        state/update-snake(state.snake dir dt)
+          new-state        state/GameState(new-snake state.food state.score state.width state.height)
           collision-result state/check-collisions(new-state)]
       (match collision-result
         (true perform(Game-Over(new-state.score)))
