@@ -1,0 +1,7 @@
+(defeffect Ask [] : int)
+(defstruct D [x : int])
+(defn peek [^borrow d : D] : int (.x d))
+(defn main [] : int
+  (println (handle (let [d (D 7)] (let [v (perform (Ask))] (+ v (peek d))))
+             (Ask [] ^multishot k) (+ (resume k 1) (resume k 2))))
+  0)

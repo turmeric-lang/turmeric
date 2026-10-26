@@ -1,0 +1,7 @@
+(defeffect Ask [] : int)
+(defn close! [^linear h : int] : int
+  (do (println "close") h))
+(defn main [] : int
+  (println (handle (let [^linear h 7] (let [v (perform (Ask))] (+ v (close! h))))
+             (Ask [] ^multishot k) (+ (resume k 1) (resume k 2))))
+  0)

@@ -156,9 +156,12 @@ Two engine bugs break this rule today:
   `^multishot` clause may not refer to a `^unique` or `^linear` binding of the
   enclosing code. A plain `defstruct` value counts as move-only: declare the
   struct `:copy`, or pass the fields you need. The check covers only the
-  clause. A linear value the *handled body* consumes after the `perform` is
-  consumed once per run, with no diagnostic
-  ([multishot-capture-check-skips-the-continuation](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/multishot-capture-check-skips-the-continuation.md)).
+  clause. The continuation is checked too: a `^unique` or `^linear` value the
+  *handled body* holds across a `perform` the clause answers and uses after it
+  is refused, since every resume would use it again. A `perform` inside a
+  called function is followed to four calls deep; one behind an indirect call
+  is not seen
+  ([multishot-capture-check-skips-the-continuation](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/multishot-capture-check-skips-the-continuation.md)).
 - **Only on a clause's `k`** (TUR-E0501). `^multishot` goes in the head of a
   clause of `handle`, `handle-shallow`, `try-with` or a `(handler ...)` value,
   and nowhere else.
