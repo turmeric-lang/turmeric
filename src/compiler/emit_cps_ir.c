@@ -7997,7 +7997,7 @@ static void byref_scan(const CTerm *t) {
              * continuation (`handle.body`), which is its own C function that
              * snapshots enclosing mutables when the handler is installed.
              * Promote every enclosing `^mut` the body touches, as for a clause
-             * (docs/reported/handle-body-set-to-enclosing-mut-lost-compiled.md). */
+             * (docs/archive/handle-body-set-to-enclosing-mut-lost-compiled.md). */
             uint32_t db[CC_MAX_BOUND];
             case_mut_scan(t->as.handle.delim, db, 0);
             byref_scan(t->as.handle.delim); byref_scan(t->as.handle.body);
