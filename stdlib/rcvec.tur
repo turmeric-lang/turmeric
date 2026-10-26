@@ -1,9 +1,9 @@
 ;;; tur/rcvec -- a flat vector of rc<A> the cycle collector can trace through.
 ;;;
 ;;; Opt-in: load it when you need one.
-;;;
+;;; ```turmeric
 ;;;   (load "stdlib/rcvec.tur")
-;;;
+;;; ```
 ;;; This is the O(1) sibling of stdlib/rcchain.tur, and the actual fix for the
 ;;; flat-buffer blind spot that module works around.  A plain `(Vec rc<T>)` is
 ;;; refcount-correct but INVISIBLE to the cycle collector: its elements live in

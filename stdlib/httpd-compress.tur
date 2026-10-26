@@ -2,13 +2,14 @@
 ;;;
 ;;; An optional module: import it, and declare the tur/zlib spice in your
 ;;; build.tur, and it gzips responses for clients that accept it:
-;;;
+;;; ```turmeric
 ;;;   :spices #map{"tur-zlib" #map{:url "https://github.com/turmeric-lang/turmeric-spices"
 ;;;                                :ref "v0.1.0" :subdir "spices/zlib"}}
-;;;
+;;; ```
+;;; ```turmeric
 ;;;   (import httpd-compress :refer [mw-compress mw-compress-with])
 ;;;   (compose-middleware base mw-log mw-compress)
-;;;
+;;; ```
 ;;; tur/zlib is resolved like any other spice import -- from the program's
 ;;; declared :spices or its workspace -- so this works from an installed
 ;;; toolchain.  It used to (load) the spice by a path relative to the

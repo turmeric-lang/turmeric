@@ -70,18 +70,40 @@ def parse_front_matter(text: str) -> tuple[dict, str]:
     rest_start = text.find('\n', end + 1)
     body = text[rest_start + 1:] if rest_start != -1 else ''
     meta: dict = {}
+
+    def _unquote(v: str) -> str:
+        # A YAML value quoted because it contains a colon -- which is why
+        # several guide titles are quoted -- is still just its text. Left
+        # in, the quotes render as part of the title everywhere the title
+        # goes: the page's <title>, the index card, and the docs pane.
+        if len(v) >= 2 and v[0] == v[-1] and v[0] in '"\'':
+            v = v[1:-1]
+        return v
+
+    # Scalar keys are `key: value`. A key with an empty value may introduce a
+    # block YAML list (`tags:` followed by `  - item` lines); collect those
+    # items into a Python list. Anything else stays a flat string, so existing
+    # scalar frontmatter parses exactly as before.
+    list_key: str | None = None
     for line in fm_text.splitlines():
+        item = re.match(r'^\s+-\s+(.*)$', line)
+        if item and list_key is not None:
+            meta[list_key].append(_unquote(item.group(1).strip()))
+            continue
+        if list_key is not None and meta[list_key] == []:
+            meta[list_key] = ''
+        list_key = None
         if ':' in line:
             k, _, v = line.partition(':')
-            k, v = k.strip(), v.strip()
-            # A YAML value quoted because it contains a colon -- which is why
-            # several guide titles are quoted -- is still just its text. Left
-            # in, the quotes render as part of the title everywhere the title
-            # goes: the page's <title>, the index card, and the docs pane.
-            if len(v) >= 2 and v[0] == v[-1] and v[0] in '"\'':
-                v = v[1:-1]
+            k, v = k.strip(), _unquote(v.strip())
             if k:
-                meta[k] = v
+                if v == '':
+                    meta[k] = []
+                    list_key = k
+                else:
+                    meta[k] = v
+    if list_key is not None and meta[list_key] == []:
+        meta[list_key] = ''
     return meta, body
 
 
@@ -93,7 +115,10 @@ def build_categories_from_meta(meta_by_stem: dict, all_stems: set) -> list:
         cat = meta.get('category', '').strip() or 'Other'
         title = meta.get('title', stem.replace('-', ' ').title()).strip()
         desc = meta.get('description', '').strip()
-        buckets.setdefault(cat, []).append({'stem': stem, 'label': title, 'desc': desc})
+        # `tags` is a list when the frontmatter has a block list, '' otherwise.
+        tags = meta.get('tags') or []
+        buckets.setdefault(cat, []).append(
+            {'stem': stem, 'label': title, 'desc': desc, 'tags': list(tags)})
     cat_names = sorted(k for k in buckets if k != 'Other')
     if 'Other' in buckets:
         cat_names.append('Other')
@@ -456,6 +481,83 @@ document.addEventListener('DOMContentLoaded', function(){
       show(0);
     });
 
+    // ---- By Category / By Tag -----------------------------------------------
+    // Two grids of cards hold the same guides. The control picks which one is
+    // on screen, and the sidebar swaps its Categories / Tags list to match. The
+    // choice is remembered like the Recent tab's; a hash that points into the
+    // other grid (a sidebar link, a shared URL such as #tag-effects) switches
+    // to it for that visit without saving it.
+    var VIEW_KEY = 'guide-index-view';
+    var viewBtns = Array.prototype.slice.call(
+      document.querySelectorAll('.view-tablist .seg-btn'));
+    var refilter = function(){};   // the filter box below takes this over
+
+    // `focusBtn`, when given, is the button to leave focused: the control the
+    // keyboard is in, since the sidebar and the page each have one.
+    function selectView(key, focusBtn) {
+      var found = viewBtns.some(function(b){ return b.dataset.viewTab === key; });
+      if (!found) return false;
+      viewBtns.forEach(function(b){
+        var on = b.dataset.viewTab === key;
+        b.classList.toggle('active', on);
+        b.setAttribute('aria-selected', on ? 'true' : 'false');
+        b.tabIndex = on ? 0 : -1;
+      });
+      if (focusBtn) focusBtn.focus();
+      document.querySelectorAll('.index-grid[data-view], .sidebar [data-view]')
+        .forEach(function(el){ el.hidden = el.dataset.view !== key; });
+      refilter();
+      return true;
+    }
+
+    function rememberView(key) {
+      try { localStorage.setItem(VIEW_KEY, key); } catch (e) {}
+    }
+
+    function viewFromHash() {
+      var id = location.hash.slice(1);
+      var el = id ? document.getElementById(id) : null;
+      var grid = el && el.closest('.index-grid[data-view]');
+      if (!grid) return false;
+      var changed = grid.hidden;
+      selectView(grid.dataset.view, null);
+      // The browser could not scroll to a card that was hidden when it tried.
+      if (changed) el.scrollIntoView();
+      return true;
+    }
+
+    if (viewBtns.length) {
+      document.querySelectorAll('.view-switch').forEach(function(el){ el.hidden = false; });
+      document.querySelectorAll('.sidebar-view-heading').forEach(function(el){ el.hidden = true; });
+      if (!viewFromHash()) {
+        var storedView = null;
+        try { storedView = localStorage.getItem(VIEW_KEY); } catch (e) {}
+        if (storedView) selectView(storedView, null);
+      }
+      window.addEventListener('hashchange', viewFromHash);
+      viewBtns.forEach(function(btn){
+        btn.addEventListener('click', function(){
+          selectView(btn.dataset.viewTab, null);
+          rememberView(btn.dataset.viewTab);
+        });
+        // Arrow / Home / End move between the two buttons of the control that
+        // has focus, as for the Recent tabs.
+        btn.addEventListener('keydown', function(e){
+          var group = Array.prototype.slice.call(
+            btn.parentNode.querySelectorAll('.seg-btn'));
+          var i = group.indexOf(btn), n = group.length, j = -1;
+          if (e.key === 'ArrowRight') j = (i + 1) % n;
+          else if (e.key === 'ArrowLeft') j = (i - 1 + n) % n;
+          else if (e.key === 'Home') j = 0;
+          else if (e.key === 'End') j = n - 1;
+          if (j < 0) return;
+          e.preventDefault();
+          selectView(group[j].dataset.viewTab, group[j]);
+          rememberView(group[j].dataset.viewTab);
+        });
+      });
+    }
+
     // ---- Filter box ---------------------------------------------------------
     var input = document.querySelector('.search-input');
     if (!input) return;
@@ -470,7 +572,8 @@ document.addEventListener('DOMContentLoaded', function(){
       var recentBox = document.querySelector('.recent-tabs');
       if (recentBox) recentBox.style.display = q ? 'none' : 'block';
 
-      document.querySelectorAll('.index-card:not(.recent-tabs)').forEach(function(card) {
+      // Only the grid on screen is searched; switching view filters the other.
+      document.querySelectorAll('.index-grid:not([hidden]) .index-card').forEach(function(card) {
         var items = card.querySelectorAll('ul li');
         var shown = 0;
         items.forEach(function(li) {
@@ -500,6 +603,7 @@ document.addEventListener('DOMContentLoaded', function(){
     }
 
     input.addEventListener('input', filter);
+    refilter = filter;
 
     // Clear on Escape
     input.addEventListener('keydown', function(e) {
@@ -831,11 +935,45 @@ GUIDE_JS_CORE = '''\
     return '<span class="' + cls + '">' + c + '</span>';
   }
 
+  // End of a generic's argument list starting at code[j] -- `<void>` in
+  // `ptr<void>`, `<ptr<void>>` in `ptr<ptr<void>>` -- or j itself when there is
+  // none. Only a balanced, space-free `<...>` counts, so a lone `<` (the
+  // less-than operator) is never taken for one.
+  function typeArgsEnd(code, j){
+    if(code[j]!=='<') return j;
+    var depth=0, k=j;
+    while(k<code.length){
+      var ch=code[k];
+      if(ch==='<') depth++;
+      else if(ch==='>'){ depth--; if(depth===0) return k+1; }
+      else if(!/[a-zA-Z0-9_\\-?!,:.\\/]/.test(ch)) return j;
+      k++;
+    }
+    return j;
+  }
+
+  // A whole symbol that is a generic type name: `ptr<void>`, `option<int>`,
+  // `rc<T>`. A name, then a balanced <...> that runs to the end of the symbol.
+  // `char<?`, `string->cstr` and `<=` are not (no closing `>` after a name).
+  function isGenericType(sym){
+    var m=/^[A-Za-z_][A-Za-z0-9_\\-?!\\/]*/.exec(sym);
+    if(!m||sym[m[0].length]!=='<') return false;
+    return typeArgsEnd(sym, m[0].length)===sym.length;
+  }
+
   function hl(code, spec){
     spec = spec || TUR_SPEC;
     var out='', i=0, n=code.length, stack=[];
     while(i<n){
       var c=code[i];
+      // A `#lang` line names the file's dialect. It is a header rather than
+      // code to read, so it is set back in the comment colour instead of lit
+      // as a keyword. Only at the start of a line, and only with an argument.
+      if(c==='#' && code.substr(i,5)==='#lang' && (i===0||code[i-1]==='\\n')
+         && /[ \\t]/.test(code[i+5]||'')){
+        var le=code.indexOf('\\n',i); if(le===-1)le=n;
+        out+='<span class="hl-lang">'+esc(code.slice(i,le))+'</span>'; i=le; continue;
+      }
       // Line comment
       if(c===';'){
         var e=code.indexOf('\\n',i); if(e===-1)e=n;
@@ -920,10 +1058,13 @@ GUIDE_JS_CORE = '''\
         if(fe===-1){ i=n; } else { out+=esc('```'); i=fe+3; }
         continue;
       }
-      // Type annotation :keyword
+      // Type annotation :keyword. A generic's arguments belong to the name --
+      // `:ptr<void>` is one type, not `:ptr` followed by `<void>` -- so the
+      // whole of it takes one colour.
       if(spec.colonType&&c===':'&&i+1<n&&/[a-zA-Z_]/.test(code[i+1])){
         var j=i+1;
         while(j<n&&/[a-zA-Z0-9_\\-?!]/.test(code[j]))j++;
+        j=typeArgsEnd(code,j);
         out+='<span class="hl-type">'+esc(code.slice(i,j))+'</span>'; i=j; continue;
       }
       // R7RS number: one match for the whole grammar (SCM_NUM), gated on a
@@ -949,7 +1090,14 @@ GUIDE_JS_CORE = '''\
         var j=i;
         while(j<n&&/[a-zA-Z0-9_\\-!?*+<>=\\/&%^~#@\\.]/.test(code[j]))j++;
         var sym=code.slice(i,j);
-        if(spec.lit.has(sym)){
+        if(spec.caretAnn&&sym.length>1&&sym[0]==='^'){
+          // `^mut`, `^fat`, `^state/GameState`, `^&cols`: the reader takes a
+          // `^` as the start of a metadata symbol (reader.c), so the caret is
+          // part of the name and the whole symbol is one annotation token.
+          out+='<span class="hl-ann">'+esc(sym)+'</span>';
+        } else if(spec.colonType&&isGenericType(sym)){
+          out+='<span class="hl-type">'+esc(sym)+'</span>';
+        } else if(spec.lit.has(sym)){
           out+='<span class="hl-number">'+esc(sym)+'</span>';
         } else if(spec.kw.has(sym)){
           out+='<span class="hl-keyword">'+esc(sym)+'</span>';
@@ -970,7 +1118,7 @@ GUIDE_JS_CORE = '''\
   // syntax, and on for both Racket and Scheme, which share all of it -- bar
   // charLit: Turmeric reads `#\\A` too (reader.c), and the rainbow needs the
   // `(` of `(pchar #\\()` to be a character, not an opener.
-  var TUR_SPEC = { kw:KW,     lit:TUR_LIT, inlineC:true,  colonType:true,
+  var TUR_SPEC = { kw:KW,     lit:TUR_LIT, inlineC:true,  colonType:true,  caretAnn:true,
                    blockComment:false, hashKeyword:false,
                    datumComment:false, charLit:true,  hashVector:false,
                    schemeNum:false };
@@ -1242,6 +1390,8 @@ GUIDE_PAGE_SCRIPTS = {
 # keep the three in step.
 HL_CSS = '''\
     .hl-comment { color:var(--syn-cmt, #48433D); font-style:italic; }
+    .hl-lang    { color:var(--syn-cmt, #48433D); }
+    .hl-ann     { color:var(--syn-ann, #C4A0E8); }
     .hl-string  { color:var(--syn-str, #D9735A); }
     .hl-number  { color:var(--syn-num, #A8C98A); }
     .hl-keyword { color:var(--syn-kw, #EFA030); font-weight:bold; }
@@ -1713,10 +1863,51 @@ def render_index(categories: list[dict], all_stems: set[str], out_dir: Path,
       <ul style="list-style:none;margin:0">{"".join(items)}</ul>
     </div>''')
 
+    # The same guides regrouped by tag: one card per tag, alphabetical, each
+    # listing its guides by title. A guide with several tags appears under each
+    # of them; one with none goes under the pseudo-tag `other`, which sorts
+    # last. Card ids carry a `tag-` prefix because a tag can share its name
+    # with a category slug (`performance`).
+    OTHER_TAG = 'other'
+    by_tag: dict[str, list[dict]] = {}
+    any_tagged = False
+    for cat in categories:
+        for g in cat['guides']:
+            if g['stem'] not in all_stems:
+                continue
+            any_tagged = any_tagged or bool(g.get('tags'))
+            for t in g.get('tags') or [OTHER_TAG]:
+                by_tag.setdefault(t, []).append(g)
+    tag_order = sorted(t for t in by_tag if t != OTHER_TAG)
+    if OTHER_TAG in by_tag:
+        tag_order.append(OTHER_TAG)
+
+    def tag_card(card_id: str, name: str, guides: list[dict]) -> str:
+        items = ''.join(guide_item(g) for g in
+                        sorted(guides, key=lambda g: g['label'].lower()))
+        count = f' <span class="tag-count">{len(guides)}</span>'
+        return f'''\
+    <div class="index-card" style="display:block" id="{_html.escape(card_id, quote=True)}">
+      <h3 style="font-family:system-ui;font-size:0.9rem;margin-bottom:0.5rem">{_html.escape(name)}{count}</h3>
+      <ul style="list-style:none;margin:0">
+        {items}
+      </ul>
+    </div>'''
+
+    tag_cards = [tag_card(f'tag-{t}', t, by_tag[t]) for t in tag_order]
+
+    # One sidebar list serves both views: the Recently links are always there,
+    # and the category / tag links carry data-view so guide-index.js shows
+    # only the ones for the grid on screen. The tag links ship `hidden`.
     sidebar_cats_list = [
-        f'<li><a href="#{re.sub(r" +", "-", c["name"].lower())}" '
+        f'<li data-view="category"><a href="#{re.sub(r" +", "-", c["name"].lower())}" '
         f'title="Jump to {_html.escape(c["name"], quote=True)}">{c["name"]}</a></li>'
         for c in categories if any(g['stem'] in all_stems for g in c['guides'])
+    ]
+    sidebar_cats_list += [
+        f'<li data-view="tag" hidden><a href="#tag-{_html.escape(t, quote=True)}" '
+        f'title="Jump to {_html.escape(t, quote=True)}">{_html.escape(t)}</a></li>'
+        for t in tag_order
     ]
     if recent_updated:
         sidebar_cats_list.insert(
@@ -1727,8 +1918,31 @@ def render_index(categories: list[dict], all_stems: set[str], out_dir: Path,
             0, '<li><a href="#recently-added" title="Jump to Recently Added">'
                'Recently Added</a></li>')
     sidebar_cats = '\n'.join(sidebar_cats_list)
+    # The list's heading is the same Categories | Tags switch as the one under
+    # the Recent card, and the two stay in step. Without JS the switch stays
+    # `hidden` and the plain "Categories" heading stands in for it.
+    def view_tablist(labels: dict[str, str], aria_label: str, ids: bool) -> str:
+        btns = []
+        for i, (key, text) in enumerate(labels.items()):
+            attrs = [f'class="seg-btn{" active" if i == 0 else ""}"', 'role="tab"']
+            if ids:
+                attrs.append(f'id="view-{key}-tab"')
+            attrs += [f'data-view-tab="{key}"', f'aria-controls="grid-{key}"',
+                      f'aria-selected="{"true" if i == 0 else "false"}"',
+                      f'tabindex="{0 if i == 0 else -1}"']
+            btns.append(f'<button {" ".join(attrs)}>{text}</button>')
+        return (f'<div class="view-tablist" role="tablist"'
+                f' aria-label="{aria_label}">{"".join(btns)}</div>')
+
+    sidebar_switch = (
+        '      <div class="view-switch sidebar-view-switch" hidden>'
+        + view_tablist({'category': 'Categories', 'tag': 'Tags'},
+                       'Group guides by', ids=False)
+        + '</div>\n') if any_tagged else ''
     sidebar_html = build_sidebar(
-        toc=f'      <h3>Categories</h3>\n      <ul>{sidebar_cats}</ul>')
+        toc=f'      <h3 class="sidebar-view-heading">Categories</h3>\n'
+            f'{sidebar_switch}'
+            f'      <ul>{sidebar_cats}</ul>')
 
     # Title | date | description, one table row each, with no headings and no
     # rules. The title and date columns size to their content; the
@@ -1799,6 +2013,16 @@ def render_index(categories: list[dict], all_stems: set[str], out_dir: Path,
         {panels}
       </div>''' if tabs else ''
 
+    # By Category | By Tag, under the Recent card: which grid of cards the page
+    # shows. By Category is selected server-side and the control ships
+    # `hidden`, so a page read without JS is the category grid with no dead
+    # buttons; guide-index.js reveals it and remembers the choice.
+    view_switch = (f'      <div class="view-switch" hidden>\n'
+                   f'        '
+                   + view_tablist({'category': 'By Category', 'tag': 'By Tag'},
+                                  'Group guides by', ids=True)
+                   + '\n      </div>') if any_tagged else ''
+
     html = f'''<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -1813,12 +2037,22 @@ def render_index(categories: list[dict], all_stems: set[str], out_dir: Path,
     .index-card ul li {{ margin:0.3rem 0; font-size:0.875rem; }}
     .index-card ul li a {{ color:var(--text-primary); }}
     .index-card ul li a:hover {{ color:var(--gold); }}
-    .recent-tablist {{ display:inline-flex; border:1px solid var(--border); border-radius:4px; overflow:hidden; margin-bottom:0.6rem; font-family:system-ui; font-size:0.8rem; }}
-    .recent-tablist .seg-btn {{ padding:4px 12px; background:transparent; color:var(--text-sec); border:none; cursor:pointer; font:inherit; }}
-    .recent-tablist .seg-btn + .seg-btn {{ border-left:1px solid var(--border); }}
-    .recent-tablist .seg-btn:hover {{ color:var(--text-primary); }}
-    .recent-tablist .seg-btn.active {{ color:var(--gold-bright); background:var(--bg-hover); }}
-    .recent-tablist .seg-btn:focus-visible {{ outline:2px solid var(--gold); outline-offset:-2px; }}
+    .recent-tablist, .view-tablist {{ display:inline-flex; border:1px solid var(--border); border-radius:4px; overflow:hidden; margin-bottom:0.6rem; font-family:system-ui; font-size:0.8rem; }}
+    .recent-tablist .seg-btn, .view-tablist .seg-btn {{ padding:4px 12px; background:transparent; color:var(--text-sec); border:none; cursor:pointer; font:inherit; }}
+    .recent-tablist .seg-btn + .seg-btn, .view-tablist .seg-btn + .seg-btn {{ border-left:1px solid var(--border); }}
+    .recent-tablist .seg-btn:hover, .view-tablist .seg-btn:hover {{ color:var(--text-primary); }}
+    .recent-tablist .seg-btn.active, .view-tablist .seg-btn.active {{ color:var(--gold-bright); background:var(--bg-hover); }}
+    .recent-tablist .seg-btn:focus-visible, .view-tablist .seg-btn:focus-visible {{ outline:2px solid var(--gold); outline-offset:-2px; }}
+    .view-switch[hidden], .index-grid[hidden], .sidebar [data-view][hidden], .sidebar-view-heading[hidden] {{ display:none; }}
+    .view-switch {{ margin-bottom:0; }}
+    .view-tablist {{ margin-bottom:0; }}
+    /* The shared .module-heading draws a rule under its text; the index runs the intro straight into the cards. */
+    .module-heading.index-heading {{ border-bottom:none; padding-bottom:0; margin-bottom:1.25rem; }}
+    .index-grid[data-view] {{ margin-top:0.75rem; }}
+    .sidebar .sidebar-view-switch {{ margin:0.25rem 0 0.75rem; }}
+    .sidebar .view-tablist {{ display:flex; font-size:0.75rem; }}
+    .sidebar .view-tablist .seg-btn {{ flex:1; padding:4px 8px; }}
+    .tag-count {{ margin-left:0.35rem; font-weight:normal; color:var(--text-dim); font-variant-numeric:tabular-nums; }}
     .recent-table {{ width:100%; border-collapse:collapse; font-size:0.875rem; }}
     .recent-table td {{ padding:0.2rem 1.25rem 0.2rem 0; border:none; white-space:nowrap; vertical-align:baseline; }}
     .recent-table td:last-child {{ padding-right:0; }}
@@ -1852,15 +2086,19 @@ def render_index(categories: list[dict], all_stems: set[str], out_dir: Path,
 {sidebar_html}
     </div>
     <div class="content">
-      <div class="module-heading">
+      <div class="module-heading index-heading">
         <h1 style="font-family:system-ui;color:var(--gold)">Guides</h1>
         <div class="module-path guide-count">There are currently {len(all_stems)} tutorials, how-tos, and in-depth feature guides for Turmeric.</div>
         <p class="module-path">Visit the <a href="https://spices.turmeric-lang.com/">Spices</a> page for spice-specific guides.</p>
         <p class="module-path">For docs for the Trowel editor, <a href="https://github.com/turmeric-lang/trowel#using-trowel">go here</a>.</p>
       </div>
 {recent_html}
-      <div class="index-grid">
+{view_switch}
+      <div class="index-grid" id="grid-category" data-view="category" role="tabpanel" aria-labelledby="view-category-tab">
         {"".join(cards)}
+      </div>
+      <div class="index-grid" id="grid-tag" data-view="tag" role="tabpanel" aria-labelledby="view-tag-tab" hidden>
+        {"".join(tag_cards)}
       </div>
     </div>
   </div>
@@ -1919,6 +2157,12 @@ def emit_pack_guides(docs: list[dict], guides_dir: Path, pack_dir: Path,
                 stem.replace('-', ' '), doc['title'], description,
                 *headings, prose=packlib.strip_tags(doc['body'])),
         }
+        # The guide's frontmatter tags, for the pane's By Tag view. Left off an
+        # untagged guide rather than written as [], so the pane files it under
+        # the pseudo-tag `other` and a pack with no tags at all shows no tag
+        # switch.
+        if meta.get('tags'):
+            entry['tags'] = list(meta['tags'])
         # Only when git knows: a guide written but not yet committed has no
         # date to claim, and the pane leaves an undated page out of Recently
         # Added / Recently Updated rather than dating it from the build.

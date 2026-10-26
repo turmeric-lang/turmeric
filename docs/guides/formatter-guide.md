@@ -2,6 +2,8 @@
 title: Formatter Guide
 category: Editor and IDE
 description: `tur format` CLI and web REPL Format button
+tags:
+  - style
 ---
 
 # Code Formatting in Turmeric

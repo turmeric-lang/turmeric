@@ -1,5 +1,10 @@
 import { defineConfig, devices } from '@playwright/test';
 import { execFileSync } from 'node:child_process';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const HERE = path.dirname(fileURLToPath(import.meta.url));
 
 // Port 3000 is the developer's own dev server (`tur run web-dev`). The suite must
 // never use it: pointed at a running server, it silently tests whatever
@@ -31,6 +36,35 @@ const ORIGIN = `http://localhost:${PORT}`;
 process.env.TUR_CI_TEST_STATE ??= `.wrangler/ci-test-state-${PORT}`;
 process.env.TUR_CI_TEST_TOKEN ??= 'ci-test-token';
 
+// A spec that waits for the evaluator -- `#wasm-status-text` reading Ready --
+// needs web/public/turmeric.js and turmeric.wasm. Those are build products of
+// `tur run wasm` (gitignored), so a fresh clone, a laptop without Emscripten and
+// a cloud sandbox have neither. Left in, every such test burns its full 30 s and
+// fails with "Failed to load WASM", which reads as a product bug in whatever you
+// were editing (docs/reported/web-specs-fail-instead-of-skipping-without-the-wasm-bundle.md).
+//
+// So when the bundle is absent those specs are left out and the runner says so
+// once. CI is never excused: there a missing bundle is a broken build, so every
+// spec runs and fails loudly. `docs-pane` and the others that do not wait for the
+// evaluator keep running either way -- the pane must not depend on the boot.
+function specsNeedingWasm() {
+    if (process.env.CI || existsSync(path.join(HERE, 'public', 'turmeric.wasm'))) return [];
+    const dir = path.join(HERE, 'tests');
+    const waits = /toHaveText\(\s*(?:['"]Ready['"]|\/Ready\/)/;
+    const needing = readdirSync(dir).filter(
+        f => f.endsWith('.spec.js') && waits.test(readFileSync(path.join(dir, f), 'utf8')));
+    // Every worker re-evaluates this file; say it once, from the runner.
+    if (needing.length && !process.env.TRY_TEST_WASM_NOTICE) {
+        process.env.TRY_TEST_WASM_NOTICE = '1';
+        console.warn(
+            `web/public/turmeric.wasm is not built, so ${needing.length} spec files that wait ` +
+            'for the evaluator are left out of this run. Build it with `tur run wasm` ' +
+            '(Emscripten; see docs/guides/running-tests-guide.md) to run them. CI runs all of them.');
+    }
+    return needing.map(f => new RegExp(f.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '$'));
+}
+const WASM_SPECS = specsNeedingWasm();
+
 export default defineConfig({
     testDir: './tests',
     timeout: 60_000,
@@ -58,12 +92,13 @@ export default defineConfig({
         {
             name: 'desktop',
             use: { ...devices['Desktop Chrome'] },
-            testIgnore: /mobile\..*\.spec\.js$/,
+            testIgnore: [/mobile\..*\.spec\.js$/, ...WASM_SPECS],
         },
         {
             name: 'mobile',
             use: { ...devices['iPhone 13'] },
             testMatch: /mobile\..*\.spec\.js$/,
+            testIgnore: WASM_SPECS,
         },
     ],
     webServer: {

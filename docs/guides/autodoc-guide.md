@@ -2,6 +2,9 @@
 title: Autodoc Guide
 category: CLI Tools
 description: Writing `;;;` docstrings and generating API docs with `tools/gendocs.py`
+tags:
+  - docs
+  - style
 ---
 
 # Autodoc Guide
@@ -68,7 +71,16 @@ a blank line or any non-`;;;` line resets the buffer.
   an **unindented** paragraph after a blank line, so keep section bodies
   indented.
 - Inside prose, an indented run renders as a code block, and lines starting
-  with `- ` render as a bullet list.
+  with `- ` render as a bullet list. An indented run is plain text: it is as
+  often wrapped prose, C or shell as Turmeric, so the generator never guesses.
+- To show Turmeric code in prose, fence it and say so, as in a guide: after the
+  `;;;` marker, open the block with a line of three backticks followed by
+  `turmeric`, and close it with a line of three backticks. The fence is what
+  gets the block syntax-highlighted on the API page and in Try Turmeric's docs
+  pane; a language other than `turmeric` (`c`, `sh`) is labelled with it, and a
+  bare fence is plain. A fenced block keeps its blank lines. The fences can
+  reuse the blank `;;;` lines around the block, so adding them does not shift
+  a stdlib file's line numbers (which the codegen snapshots embed).
 - **ASCII only** -- use `--` (double hyphen), never em dashes. The Turmeric
   parser hangs on non-ASCII bytes.
 - Internal helpers (e.g. `tur-contract-check`, `__functor_*`) get a one-liner

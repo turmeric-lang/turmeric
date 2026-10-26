@@ -34,6 +34,14 @@ sentence above does not cover them. If you touch this file, check
 `ls docs/reported/` against it -- an index that silently omits a quarter of the
 directory is worse for triage than no index.
 
+## Found extending the highlighting in Try Turmeric and the docs (filed 2026-10-26)
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| ~~[web-specs-fail-instead-of-skipping-without-the-wasm-bundle](../archive/web-specs-fail-instead-of-skipping-without-the-wasm-bundle.md)~~ | low (developer experience) | **RESOLVED 2026-10-26** (archived): 23 browser spec files waited 30 s for `Ready` and failed when `web/public/turmeric.wasm` was unbuilt. Confirmed by building the bundle (the five minimap specs then pass in 27 s); `playwright.config.js` now leaves those specs out locally with one notice, and never under `CI`. |
+| [try-turmeric-specs-outside-the-ci-path-list-have-rotted](try-turmeric-specs-outside-the-ci-path-list-have-rotted.md) | low-medium (test rot) | Four `repl-intelligence.spec.js` tests fail against a built bundle and CI never runs the file: one stale against the `::` doc entry, one stale against the TUR-W0040 unknown-name warning, two undiagnosed (completions after a Run; an Escape timeout). |
+| [editor-packs-do-not-colour-annotations-and-generic-types](editor-packs-do-not-colour-annotations-and-generic-types.md) | low (cosmetic) | vim-turmeric, vscode-turmeric, turmeric-mode and trowel colour `^annotations` gold or teal (Emacs is already violet), match only a lowercase subset of the names the reader accepts, and split `:ptr<void>` or treat it as a keyword literal. The docs and Try Turmeric now use one violet and one teal token. |
+
 ## Found building `spices/lmdb` (filed 2026-10-25)
 
 | Report | Severity | One line |

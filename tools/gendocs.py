@@ -1297,6 +1297,7 @@ CSS = """\
   --syn-cmt:       #48433D;
   --syn-type:      #7AC4B8;
   --syn-num:       #A8C98A;
+  --syn-ann:       #C4A0E8;   /* ^annotations: the palette's keywordOperator purple */
   --syn-br1:       #EFA030;   /* rainbow brackets, by depth: the */
   --syn-br2:       #D7C94A;   /* RAINBOW_BRACKETS Monaco gets in */
   --syn-br3:       #A8C98A;   /* web/main.js, from trowel's */
@@ -1350,6 +1351,7 @@ CSS = """\
   --syn-cmt:       #A39682;
   --syn-type:      #127065;
   --syn-num:       #456F20;
+  --syn-ann:       #7748AE;
   --syn-br1:       #B5650A;
   --syn-br2:       #8A7800;
   --syn-br3:       #4E7F24;
@@ -2038,10 +2040,47 @@ def _example_pre(text):
     """An Example / Laws block, marked as Turmeric so guide-runtime.js (and
     the Try Turmeric docs pane, which runs the same highlighter over an API
     fragment) colors it as it colors a guide's code -- rainbow brackets
-    included. Indented prose code (_prose_html) is left plain: a docstring
-    quotes C and shell there as often as Turmeric."""
+    included. Prose code (_prose_html) is Turmeric only when the docstring
+    says so with a ```turmeric fence: a docstring quotes C and shell there as
+    often as Turmeric, and an indented run is as often wrapped prose."""
     return ('<pre class="def-example"><code class="language-turmeric">'
             f'{html_module.escape(text)}</code></pre>')
+
+
+_FENCE_LANG = re.compile(r'[A-Za-z0-9_+-]+')
+
+
+def _split_fences(text):
+    """Split prose into [('prose', text) | ('fence', lang, lines)] segments.
+
+    A fence is a line that opens with three backticks, as in a guide's
+    markdown: ```turmeric (or ```c, ```sh) ... ```.  Its body keeps its blank
+    lines, which paragraph splitting would otherwise cut it at.  An unclosed
+    fence runs to the end of the text.
+    """
+    segs, cur = [], []
+    lines = text.split('\n')
+    i = 0
+    while i < len(lines):
+        head = lines[i].strip()
+        if not head.startswith('```'):
+            cur.append(lines[i])
+            i += 1
+            continue
+        if cur:
+            segs.append(('prose', '\n'.join(cur)))
+            cur = []
+        lang = head[3:].strip()
+        i += 1
+        body = []
+        while i < len(lines) and not lines[i].strip().startswith('```'):
+            body.append(lines[i])
+            i += 1
+        i += 1                              # past the closing fence
+        segs.append(('fence', lang if _FENCE_LANG.fullmatch(lang) else '', body))
+    if cur:
+        segs.append(('prose', '\n'.join(cur)))
+    return segs
 
 
 def _prose_html(text, indent='  '):
@@ -2053,9 +2092,26 @@ def _prose_html(text, indent='  '):
     keeps its lines (a law, a signature, a snippet under `Two caveats:`); a
     paragraph whose lines open with `- ` is a bullet list, its indented
     lines continuing the item above.
+
+    A fenced block (```turmeric ... ```) is a code block that says what it is:
+    the language becomes the <code> class, so ```turmeric is highlighted as
+    Turmeric and a bare fence stays plain.  An indented run is never guessed
+    at -- it is as often wrapped prose, C or shell as Turmeric.
     """
     if not text.strip():
         return ''
+    if '```' in text:
+        parts = []
+        for seg in _split_fences(text):
+            if seg[0] == 'prose':
+                parts.append(_prose_html(seg[1], indent))
+            else:
+                _, lang, body = seg
+                code = html_module.escape(_dedent_block(body).strip('\n'))
+                cls = f' class="language-{lang}"' if lang else ''
+                parts.append(f'{indent}<pre class="def-prose-code">'
+                             f'<code{cls}>{code}</code></pre>\n')
+        return ''.join(parts)
     out = []
     paras, cur = [], []
     for line in text.split('\n'):
@@ -2298,7 +2354,10 @@ def _render_def_card(defn, anchor_prefix=''):
         h += f'    <span class="linear-badge">affine</span>\n'
     h += f'    <h2>{html_module.escape(name)}</h2>\n'
     h += f'  </div>\n'
-    h += f'  <pre class="def-signature">{html_module.escape(sig)}</pre>\n'
+    # Marked as Turmeric so the runtime highlighter colours the signature as it
+    # colours an example: the name, the `:type` annotations, the brackets.
+    h += (f'  <pre class="def-signature"><code class="language-turmeric">'
+          f'{html_module.escape(sig)}</code></pre>\n')
 
     if doc:
         # Summary: strip leading 'name -- '

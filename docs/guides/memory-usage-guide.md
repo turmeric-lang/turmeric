@@ -2,6 +2,9 @@
 title: Memory Usage Guide
 category: Performance
 description: What each language feature costs in heap memory, measured -- scalars, structs, sums, lists, Vec, MutableMap, Map, String, rc, closures, function-value calls, effects and regions -- what frees it, and strategies for using less
+tags:
+  - memory
+  - performance
 ---
 
 # Memory Usage Guide

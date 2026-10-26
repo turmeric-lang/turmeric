@@ -2,9 +2,9 @@
 ;;;
 ;;; Generalises stdlib/vec-existential.tur (which hard-wires SizedVec)
 ;;; to any phantom-indexed sized handle declared as
-;;;
+;;; ```turmeric
 ;;;     (defopaque SizedThing [n] :int)
-;;;
+;;; ```
 ;;; or as a sized defdata/defstruct of the same shape. Validated against
 ;;; both `(SizedVec n int)` (defdata head, bare-nominal call sites) and
 ;;; `(SizedBuf n)` (defopaque head, applied-form call sites) so the same
@@ -17,11 +17,11 @@
 ;;;
 ;;; This file is NOT auto-loaded; load it explicitly after the handle
 ;;; type's own stdlib module:
-;;;
+;;; ```turmeric
 ;;;     (load "stdlib/sized.tur")
 ;;;     (load "stdlib/sized-buf.tur")
 ;;;     (load "stdlib/sized-handle-existential.tur")
-;;;
+;;; ```
 ;;; See `docs/archive/history/ecs-e2c-sized-dense-needs-bounded-world.md` P4
 ;;; for the motivating use case (lifting `(world-new 1024)` into
 ;;; `(exists [n] (World n))` so `for-each` can unify against a fresh

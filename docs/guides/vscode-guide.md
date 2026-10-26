@@ -2,6 +2,9 @@
 title: VS Code Extension
 category: Editor and IDE
 description: VS Code extension installation and configuration
+tags:
+  - lsp
+  - vscode
 ---
 
 # VS Code Extension for Turmeric

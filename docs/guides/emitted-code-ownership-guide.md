@@ -2,6 +2,10 @@
 title: Who Frees What in Emitted Code
 category: Compiler Internals
 description: How the direct-style C the compiler emits releases memory -- the ownership model and move tracking, drop glue, the by-value recursive spine drops (scope exit, lend, own-discharge), scope-exit frees and the shapes they decline, closure environments, carrier and element boxes, the rc<T> surface, and the workflow for confirming and pinning a leak
+tags:
+  - memory
+  - ownership
+  - codegen
 ---
 
 # Who Frees What in Emitted Code (internals)

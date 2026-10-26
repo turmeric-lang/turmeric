@@ -2,6 +2,9 @@
 title: How #lang r7rs Is Implemented
 category: Compiler Internals
 description: How a #lang r7rs file becomes a Turmeric program -- dialect selection, the Scheme-to-Turmeric lowering and its rename table, the value representation, libraries and the split build, call/cc and the dynamic environment, the conservative collector, SRFIs, and the harnesses that cover them
+tags:
+  - scheme
+  - codegen
 ---
 
 # How `#lang r7rs` Is Implemented (internals)

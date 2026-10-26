@@ -2,6 +2,9 @@
 title: Dynamic FFI
 category: Interoperability
 description: Calling C libraries at runtime -- dlopen/dlsym, call-ptr, extern-c under the interpreter, and the JIT thunk engine
+tags:
+  - ffi
+  - jit
 ---
 
 # Dynamic FFI Guide

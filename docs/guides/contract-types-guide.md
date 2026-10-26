@@ -2,6 +2,9 @@
 title: Contract Types Guide
 category: Error Handling
 description: Contract types: `#refine{ x : T | p }`, `:pre`/`:post` annotations, FFI contracts
+tags:
+  - refinement-types
+  - ffi
 ---
 
 # Contract Types Guide

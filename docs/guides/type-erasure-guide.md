@@ -2,6 +2,9 @@
 title: Type Erasure to int64_t
 category: Compiler Internals
 description: Snapshot of where the tur compiler collapses higher-level types down to int64_t at the C boundary, and the three mechanisms it uses
+tags:
+  - abi
+  - codegen
 ---
 
 # Type Erasure to `int64_t`

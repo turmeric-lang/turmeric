@@ -2,6 +2,9 @@
 title: Mutable Globals Guide
 category: Language Basics
 description: def ^mut, what the compiler checks about a global write, and the concurrency story -- including what it deliberately does not cover
+tags:
+  - mutable-state
+  - threads
 ---
 
 # Mutable Globals Guide

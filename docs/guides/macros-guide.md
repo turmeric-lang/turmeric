@@ -2,6 +2,8 @@
 title: Macros Guide
 category: Language Basics
 description: `defmacro` as a compile-time function from syntax to syntax -- quasiquote and splicing, manual hygiene, procedural `defmacro*`, macro-time imports, and why an expansion is type checked exactly like hand-written code
+tags:
+  - macros
 ---
 
 # Macros (`defmacro`)

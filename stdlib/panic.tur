@@ -7,11 +7,12 @@
 ;;; to dereference the raw pointer themselves.
 ;;;
 ;;; Typical use:
+;;; ```turmeric
 ;;;   (let [r (catch-unwind (fn [] :int (risky)))]
 ;;;     (if (err? r)
 ;;;       (println (panic-message (result-panic r)))
 ;;;       (use (ok-val r))))
-;;;
+;;; ```
 ;;; Compiled, the accessors call the tur_panic_payload_* helpers emitted into
 ;;; every program's C preamble (Phase R2); a program that never catches a panic
 ;;; still links cleanly. Under --interpret the same names are natives over the

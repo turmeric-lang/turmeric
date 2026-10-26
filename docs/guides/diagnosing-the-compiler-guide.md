@@ -2,6 +2,10 @@
 title: Diagnosing the Compiler
 category: Contributor Notes
 description: How Turmeric contributors narrow a suspected compiler bug -- ruling out the environment, finding the failing stage, the dump flags, three-way back-end comparison, the float and leak checkers, the source fuzzers, and the test-harness traps that produce false failures
+tags:
+  - debugging
+  - testing
+  - contributing
 ---
 
 # Diagnosing the Compiler

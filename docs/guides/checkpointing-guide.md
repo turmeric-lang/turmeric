@@ -2,6 +2,9 @@
 title: Checkpointing and Persistent Workflows
 category: Advanced Control Flow
 description: Cloneable continuations for persistent workflows and checkpointing
+tags:
+  - continuations
+  - serialization
 ---
 
 # Checkpointing and Persistent Workflows with Serializable Continuations

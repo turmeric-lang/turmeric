@@ -2,6 +2,8 @@
 title: Offline Docs Guide
 category: CLI Tools
 description: How the guides and API reference reach you without a network -- the docs pack, Try Turmeric's in-app docs browser, and the `tur doc` / `tur docs` commands
+tags:
+  - docs
 ---
 
 # Offline docs
@@ -55,7 +57,7 @@ The pack is a build output and is gitignored, like `turmeric.wasm` and
   "generated": "2026-08-26T01:35:38Z",
   "guides": [{ "slug": "...", "path": "...", "title": "...", "category": "...",
                "description": "...", "bytes": 15435, "words": "...",
-               "added": "2026-08-26", "updated": "2026-09-21" }],
+               "tags": ["..."], "added": "2026-08-26", "updated": "2026-09-21" }],
   "api":    [{ "slug": "...", "module": "...", "symbols": ["..."], ... }],
   "spices": [ ... ],
   "files":  ["guides/....html", "api/....html", "guide.css", ...]
@@ -80,6 +82,11 @@ The pack is a build output and is gitignored, like `turmeric.wasm` and
   rather than quietly shipping an empty section. A page whose two dates are
   equal has not been touched since it arrived, and Recently Updated leaves it
   out -- Recently Added has already said what there is to say about it.
+- `tags` is on each guide that has them: the list from its front matter, in the
+  order written. The pane's **Tags** view groups the Guides section by it; a
+  guide with none carries no `tags` key and is filed under the pseudo-tag
+  `other`, which sorts last. A pack
+  whose guides carry no tags at all shows no Categories | Tags switch.
 - `files` doubles as the service worker's **precache manifest**. One list, so a
   page cannot be in the pack but missing from precache.
 - `version` is stamped from `VERSION`, and the pane displays it -- which makes
@@ -134,7 +141,10 @@ Inside the pane:
   in-app counterparts of the two cards at the top of the website's guides index
   -- same pages, same counts, same dates. Below them, the tree itself: guides by
   category, API modules by group, and spices when this build carries their
-  pages.
+  pages. A **Categories | Tags** switch under the Guides heading regroups the
+  guides by tag instead -- one group per tag, with a guide count, a guide listed
+  under each of its tags -- the in-app twin of the By Category / By Tag switch on
+  the website's guides index. The choice is remembered between launches.
 - **Search** takes one query and returns two kinds of result: pages (from the
   pack) and symbols (from `doc-names.json`). Picking a symbol routes to the
   existing docstring panel.

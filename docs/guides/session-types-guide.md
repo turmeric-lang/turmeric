@@ -2,6 +2,10 @@
 title: Session Types Guide
 category: Concurrency and Async
 description: Model protocols as types, whether the protocol has two participants, or more
+tags:
+  - session-types
+  - channels
+  - ownership
 ---
 
 # Session Types Guide

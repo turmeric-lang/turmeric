@@ -2,6 +2,8 @@
 title: "Delimited Control Operators: shift/reset vs shift0/escape"
 category: Advanced Control Flow
 description: How shift/reset, shift0/reset0, call/cc, and escape differ -- prompt re-installation, where the captured value returns, and which to reach for
+tags:
+  - continuations
 ---
 
 # Delimited Control Operators: shift/reset vs shift0/escape

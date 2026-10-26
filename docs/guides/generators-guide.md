@@ -2,6 +2,9 @@
 title: Generators and Lazy Sequences Guide
 category: Functional Patterns
 description: Zero-overhead generators with `gen`/`yield`, lazy `Seq` combinators, and the `Range` type
+tags:
+  - iteration
+  - collections
 ---
 
 # Generators and Lazy Sequences Guide

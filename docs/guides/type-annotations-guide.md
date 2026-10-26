@@ -2,6 +2,9 @@
 title: Type Annotation Syntax
 category: Type System
 description: Compound type annotation syntax: `(-> a b)`, `(vec T)`, `forall`, and more
+tags:
+  - syntax
+  - polymorphism
 ---
 
 # Type Annotation Syntax

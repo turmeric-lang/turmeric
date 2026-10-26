@@ -2,6 +2,9 @@
 title: Unsafe Code
 category: Interoperability
 description: The (unsafe ...) block, raw pointers and raw memory, bit reinterpretation, and when to reach for something safer
+tags:
+  - ffi
+  - memory-safety
 ---
 
 # Unsafe Code

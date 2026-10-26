@@ -2,6 +2,8 @@
 title: Consuming Spices Guide
 category: Package Management
 description: Adding, fetching, and using spice packages in a Turmeric project
+tags:
+  - spices
 ---
 
 # Consuming Spices Guide

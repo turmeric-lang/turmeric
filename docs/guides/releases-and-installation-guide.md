@@ -2,6 +2,10 @@
 title: Releases and Installation
 category: Getting Started
 description: How to install Turmeric from a prebuilt release or Homebrew, what's in the tarball, and how a maintainer cuts a new release.
+tags:
+  - installation
+  - releases
+  - version-management
 ---
 
 # Releases and Installation

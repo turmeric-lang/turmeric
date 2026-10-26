@@ -2,6 +2,9 @@
 title: Compiler Flags
 category: CLI Tools
 description: Diagnostic and debug flags accepted by `tur`; list of removed `-X` feature flags
+tags:
+  - compiler-flags
+  - diagnostics
 ---
 
 # Turmeric Compiler Flags

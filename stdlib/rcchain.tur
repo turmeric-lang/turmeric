@@ -1,9 +1,9 @@
 ;;; tur/rcchain -- a collection of rc<A> the cycle collector can trace through.
 ;;;
 ;;; Opt-in: load it when you need one.
-;;;
+;;; ```turmeric
 ;;;   (load "stdlib/rcchain.tur")
-;;;
+;;; ```
 ;;; The problem it solves: a `(Vec rc<T>)` is refcount-correct but INVISIBLE to
 ;;; the cycle collector.  A Vec's elements live in an ordinary malloc'd
 ;;; { data, len, cap } buffer with no walk_fn, so `gc_each_child` enumerates

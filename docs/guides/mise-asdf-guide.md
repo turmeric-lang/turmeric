@@ -2,6 +2,9 @@
 title: Using Turmeric with mise or asdf
 category: Package Management
 description: Install and switch Turmeric compiler versions with the asdf-turmeric plugin (works for both mise and asdf)
+tags:
+  - installation
+  - version-management
 ---
 
 # Using Turmeric with `mise` or `asdf`

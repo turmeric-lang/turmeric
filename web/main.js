@@ -308,6 +308,9 @@ const STORAGE_KEYS = {
     // Where the docs pane was when the app last went away: {ref, scrollTop},
     // or null once it is closed. See persistDocsState().
     docs:      'tur.try.docs.v1',
+    // How the docs nav groups the Guides section: 'category' or 'tag'. Absent
+    // until the reader has chosen, which reads as 'category'.
+    docsView:  'tur.try.docs-view.v1',
 };
 
 // Multi-tab editor state. Each tab carries its persisted record plus a
@@ -2083,6 +2086,18 @@ function configureMonaco() {
         mimetypes: ['text/x-turmeric']
     });
     
+    // The characters that may continue a symbol, as the reader takes them
+    // (is_sym_cont in src/compiler/reader.c): alphanumerics and
+    // `- + * / = < > ! ? _ $ & . # ^ | '`. A word is a keyword only when none
+    // of them follows it, which is what `\b` got wrong: it counts `-`, `/` and
+    // `!` as boundaries, so `apply-to` read as the builtin `apply` plus `-to`.
+    const SYM_CONT = "[a-zA-Z0-9_\\-+*/=<>!?$&.#^|']";
+    const wholeSymbol = (alternatives) => new RegExp('\\b(?:' + alternatives + ')(?!' + SYM_CONT + ')');
+
+    // `<...>` after a type name: space-free, balanced, up to three deep
+    // (`ptr<ptr<ptr<void>>>`) -- a regex cannot count, so the depth is fixed.
+    const GENERIC_ARGS = '<(?:[^\\s<>()\\[\\]{}",;]|<(?:[^\\s<>()\\[\\]{}",;]|<[^\\s<>()\\[\\]{}",;]*>)*>)*>';
+
     // Define syntax highlighting rules
     monaco.languages.setMonarchTokensProvider('turmeric', {
         tokenizer: {
@@ -2093,26 +2108,49 @@ function configureMonaco() {
                 // Strings
                 [/"([^"\\]|\\.)*"/, 'string'],
                 
+                // ^annotation (^fat, ^mut, ^state/GameState, ^&cols). The reader
+                // takes a ^ as the start of a metadata symbol, so the caret is
+                // part of the name and the whole symbol is one token.
+                [/\^[^\s()\[\]{}",;'`]+/, 'annotation'],
+
+                // A type annotation, `:int` or `:ptr<void>`: the colon and any
+                // generic arguments belong to the name, so it is one token.
+                [new RegExp(':[a-zA-Z_][a-zA-Z0-9_\\-?!]*(?:' + GENERIC_ARGS + ')?'), 'type'],
+                // A generic type name on its own, `ptr<void>` or
+                // `option<ptr<int>>`, as in a function type `(fn [ptr<void>] nil)`.
+                // A lone `<` (less-than) never reaches here: it needs a name
+                // before it and a closing `>` after the arguments.
+                [new RegExp('[a-zA-Z_][a-zA-Z0-9_\\-?!/]*' + GENERIC_ARGS), 'type'],
+
                 // Numbers
                 [/\b\d+\b/, 'number'],
                 [/\b\d+\.\d+\b/, 'number.float'],
                 
-                // Keywords
-                [/\b(defn|def|fn|let|if|when|unless|loop|for|while|do|return|break|continue)\b/, 'keyword'],
-                [/\b(println|print|read|eval|apply|map|filter|reduce|fold)\b/, 'keyword.operator'],
+                // Keywords. Each is a whole symbol: `apply` is a builtin but
+                // `apply-to` is not, so a keyword matches only when nothing the
+                // reader would continue the symbol with follows it (SYM_END).
+                [wholeSymbol('defn|def|fn|let|if|when|unless|loop|for|while|do|return|break|continue'), 'keyword'],
+                [wholeSymbol('println|print|read|eval|apply|map|filter|reduce|fold'), 'keyword.operator'],
                 
                 // Built-in types and functions
-                [/\b(int|float|bool|str|char|nil|true|false)\b/, 'type'],
-                [/\b(rc\/of|rc\/clone|rc\/drop|rc\/strong-count)\b/, 'keyword.operator'],
-                [/\b(defeffect|perform|handle|resume|cont)\b/, 'keyword.operator'],
-                [/\b(try|catch|throw|raise)\b/, 'keyword.operator'],
+                [wholeSymbol('int|float|bool|str|char|nil|true|false'), 'type'],
+                [wholeSymbol('rc\\/of|rc\\/clone|rc\\/drop|rc\\/strong-count'), 'keyword.operator'],
+                [wholeSymbol('defeffect|perform|handle|resume|cont'), 'keyword.operator'],
+                [wholeSymbol('try|catch|throw|raise'), 'keyword.operator'],
                 
+                // An earmuffed global, `*args*`: a `*` that runs straight into a
+                // name is the start of a symbol, not multiplication (`(* a b)`
+                // has a space after it).
+                [new RegExp('\\*[a-zA-Z_]' + SYM_CONT + '*'), 'identifier'],
+
                 // Symbols
                 [/[\+\-\*\/\=\<\>\!\&\|\%\^~]/, 'operator'],
                 [/[\(\)\[\]\{\}]/, 'delimiter'],
                 
-                // Identifiers
-                [/[a-zA-Z_][a-zA-Z0-9_\-]*/, 'identifier']
+                // Identifiers: a symbol runs on through every character the reader
+                // allows inside one, so `set-field!`, `string/adopt-cstr` and
+                // `string->cstr` are each a single token.
+                [new RegExp('[a-zA-Z_]' + SYM_CONT + '*'), 'identifier']
             ]
         }
     });
@@ -2280,6 +2318,7 @@ const MONACO_THEMES = {
             { token: 'number.float',     foreground: 'A8C98A' },
             { token: 'keyword',          foreground: 'EFA030', fontStyle: 'bold' },
             { token: 'keyword.operator', foreground: 'C4A0E8' },
+            { token: 'annotation',       foreground: 'C4A0E8' },
             { token: 'type',             foreground: '7AC4B8' },
             { token: 'operator',         foreground: '6A5F58' },
             { token: 'delimiter',        foreground: '5A5448' },
@@ -2362,6 +2401,7 @@ const MONACO_THEMES = {
             { token: 'number.float',     foreground: '456F20' },
             { token: 'keyword',          foreground: '965500', fontStyle: 'bold' },
             { token: 'keyword.operator', foreground: '7748AE' },
+            { token: 'annotation',       foreground: '7748AE' },
             { token: 'type',             foreground: '127065' },
             { token: 'operator',         foreground: '8A7D6C' },
             { token: 'delimiter',        foreground: '9F927F' },
@@ -5586,6 +5626,14 @@ let docsIndexPromise = null;   // in-flight load, so concurrent opens share one
 let docsCurrentRef = null;     // e.g. 'guides/hkt-guide'
 let docsNavCollapsed = false;
 /**
+ * How the nav's Guides section is grouped: 'category' (the default) or 'tag'.
+ * The same choice, and the same two names, as the By Category / By Tag switch
+ * on the website's guides index (tools/genguides.py). Remembered across
+ * launches like the website remembers it; anything but 'tag' reads as
+ * 'category', so a stale or hand-edited value cannot strand the nav.
+ */
+let docsGuideView = safeRead(STORAGE_KEYS.docsView) === 'tag' ? 'tag' : 'category';
+/**
  * Where you were in each page you have read this session, keyed by ref.
  *
  * Per-ref rather than one global offset on purpose: the pane is a browser over
@@ -5643,7 +5691,8 @@ function docsAllPages() {
     for (const g of docsIndex.guides || []) {
         out.push({ ref: `guides/${g.slug}`, title: g.title, kind: 'guide',
                    category: g.category, description: g.description, words: g.words,
-                   added: g.added, updated: g.updated });
+                   added: g.added, updated: g.updated,
+                   tags: Array.isArray(g.tags) ? g.tags : [] });
     }
     for (const m of docsIndex.api || []) {
         out.push({ ref: `api/${m.slug}`, title: m.title, kind: 'module',
@@ -5731,6 +5780,27 @@ function docsGroupByCategory(pages) {
         const rank = (n) => (n === 'core' ? -1 : n === 'Other' ? 1 : 0);
         return rank(a) - rank(b) || a.localeCompare(b);
     });
+    return names.map(name => ({ name, pages: groups.get(name) }));
+}
+
+/**
+ * Group pack pages by tag: one group per tag, alphabetical, with the
+ * pseudo-tag 'other' last, holding every page that carries none. A page with
+ * several tags is listed under each of them -- that is the point of a tag, and
+ * what the website's By Tag cards do.
+ */
+const DOCS_OTHER_TAG = 'other';
+function docsGroupByTag(pages) {
+    const groups = new Map();
+    for (const p of pages) {
+        for (const t of (p.tags && p.tags.length ? p.tags : [DOCS_OTHER_TAG])) {
+            if (!groups.has(t)) groups.set(t, []);
+            groups.get(t).push(p);
+        }
+    }
+    // 'other' last, whether it is the pseudo-tag or (unlikely) a real one.
+    const names = [...groups.keys()].sort((a, b) =>
+        (a === DOCS_OTHER_TAG) - (b === DOCS_OTHER_TAG) || a.localeCompare(b));
     return names.map(name => ({ name, pages: groups.get(name) }));
 }
 
@@ -5844,10 +5914,29 @@ function docsDatedSection(cls, heading, field, pages) {
     return html + '</ul></details>';
 }
 
-function docsNavSection(label, groups) {
-    let html = `<div class="docs-nav-section"><h4>${escapeHtml(label)}</h4>`;
+/**
+ * The Categories | Tags switch under the Guides heading.
+ *
+ * A tablist of two buttons, the in-pane twin of the website's sidebar switch.
+ * Shown only when the pack carries tags (see docsNavSection's `switchHtml`), so
+ * a pack built before guides were tagged keeps its plain category tree.
+ */
+function docsViewSwitch() {
+    const btn = (view, text) =>
+        `<button type="button" class="docs-view-btn${docsGuideView === view ? ' active' : ''}"`
+      + ` role="tab" data-docs-view="${view}"`
+      + ` aria-selected="${docsGuideView === view ? 'true' : 'false'}"`
+      + ` tabindex="${docsGuideView === view ? 0 : -1}">${text}</button>`;
+    return '<div class="docs-view-tablist" role="tablist" aria-label="Group guides by">'
+         + btn('category', 'Categories') + btn('tag', 'Tags') + '</div>';
+}
+
+function docsNavSection(label, groups, switchHtml = '', countGroups = false) {
+    let html = `<div class="docs-nav-section"><h4>${escapeHtml(label)}</h4>${switchHtml}`;
     for (const g of groups) {
-        html += `<details class="docs-nav-group"><summary>${escapeHtml(g.name)}</summary><ul>`;
+        const count = countGroups
+            ? ` <span class="docs-nav-count">${g.pages.length}</span>` : '';
+        html += `<details class="docs-nav-group"><summary>${escapeHtml(g.name)}${count}</summary><ul>`;
         for (const p of g.pages) {
             html += `<li><a href="#doc=${escapeAttr(p.ref)}" data-doc-ref="${escapeAttr(p.ref)}"`
                  +  ` title="${escapeAttr(p.description || '')}">${escapeHtml(p.title)}</a></li>`;
@@ -5887,13 +5976,65 @@ function renderDocsNav() {
     }
     const modules = pages.filter(p => p.kind === 'module');
     const spices = pages.filter(p => p.kind === 'spice');
-    if (guides.length) html += docsNavSection('Guides', docsGroupByCategory(guides));
+    if (guides.length) {
+        // By category, or by tag when the reader has chosen that and the pack
+        // has tags to group by. Without tags there is nothing to switch to, so
+        // no switch is drawn and the category tree stands as it always has.
+        const tagged = guides.some(g => g.tags && g.tags.length);
+        const byTag = tagged && docsGuideView === 'tag';
+        html += docsNavSection(
+            'Guides',
+            byTag ? docsGroupByTag(guides) : docsGroupByCategory(guides),
+            tagged ? docsViewSwitch() : '', byTag);
+    }
     if (modules.length) html += docsNavSection('API', docsGroupByCategory(modules));
     // Spices only appear when this build actually carries their pages, so the
     // nav never offers a link the pack cannot serve offline.
     if (spices.length) html += docsNavSection('Spices', docsGroupByCategory(spices));
     nav.innerHTML = html;
     markDocsNavActive();
+}
+
+/**
+ * Choose how the Guides section is grouped, remember it, and redraw the nav.
+ *
+ * `refocus` is for the keyboard path: the redraw replaces the buttons, so the
+ * one that was just activated is focused again on the new nav.
+ */
+function setDocsGuideView(view, refocus = false) {
+    if (view !== 'category' && view !== 'tag') return;
+    if (view === docsGuideView) return;
+    docsGuideView = view;
+    safeWrite(STORAGE_KEYS.docsView, view);
+    renderDocsNav();
+    if (refocus) {
+        document.querySelector('#docs-nav .docs-view-btn.active')?.focus();
+    }
+}
+
+/** Click and arrow-key handling for the Categories | Tags switch. */
+function initDocsViewSwitch() {
+    const nav = document.getElementById('docs-nav');
+    if (!nav) return;
+    nav.addEventListener('click', (e) => {
+        const btn = e.target.closest('.docs-view-btn');
+        if (btn) setDocsGuideView(btn.dataset.docsView);
+    });
+    // Arrow / Home / End move between the two tabs (WAI-ARIA tabs pattern).
+    nav.addEventListener('keydown', (e) => {
+        const btn = e.target.closest('.docs-view-btn');
+        if (!btn) return;
+        const views = ['category', 'tag'];
+        const i = views.indexOf(btn.dataset.docsView);
+        let j = -1;
+        if (e.key === 'ArrowRight') j = (i + 1) % views.length;
+        else if (e.key === 'ArrowLeft') j = (i - 1 + views.length) % views.length;
+        else if (e.key === 'Home') j = 0;
+        else if (e.key === 'End') j = views.length - 1;
+        if (j < 0) return;
+        e.preventDefault();
+        setDocsGuideView(views[j], true);
+    });
 }
 
 function markDocsNavActive() {
@@ -6280,6 +6421,7 @@ function initDocsLinkInterception() {
 }
 
 function initDocsPane() {
+    initDocsViewSwitch();
     document.getElementById('docs-btn')?.addEventListener('click', () => openDocsPane());
     document.getElementById('docs-close')?.addEventListener('click', closeDocsPane);
 
@@ -6399,6 +6541,7 @@ window.turmericApp = {
         hasWasm: !!evalWorker && wasmState === WASM_STATE.READY,
         docsOpen: docsPaneIsOpen(),
         docsRef: docsCurrentRef,
+        docsGuideView,
     })
 };
 

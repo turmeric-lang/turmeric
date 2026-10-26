@@ -2,6 +2,8 @@
 title: Structs
 category: Language Basics
 description: Defining and using struct types with `defstruct`
+tags:
+  - data-types
 ---
 
 # Structs in Turmeric

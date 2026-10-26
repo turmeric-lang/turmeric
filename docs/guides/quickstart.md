@@ -2,6 +2,10 @@
 title: Quickstart
 category: Getting Started
 description: Prose introduction: expressions, functions, control flow, Option, Result, collections, closures, structs, and algebraic effects
+tags:
+  - syntax
+  - effects
+  - result-option
 ---
 
 # Turmeric Quickstart

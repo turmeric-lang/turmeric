@@ -123,7 +123,7 @@ for ok, what in checks:
 # Docstring prose renders its Markdown `code` spans as <code> -- and nothing
 # else as Markdown: before the fix every summary, parameter and Returns line
 # reached the API pages with its backticks showing.
-from gendocs import _inline_html, _render_def_card  # noqa: E402
+from gendocs import _inline_html, _prose_html, _render_def_card  # noqa: E402
 
 INLINE_CASES = [
     ('a `vec-get` call', 'a <code>vec-get</code> call'),
@@ -154,6 +154,39 @@ for want in ('read slot <code>i</code> of <code>v</code>.', 'the <code>Vec</code
     if want not in card:
         fails += 1
         print(f"FAIL gendocs-inline: def card lacks {want!r}")
+
+# A signature is marked as Turmeric so the page's highlighter colours it.
+if '<pre class="def-signature"><code class="language-turmeric">(vec-get ' not in card:
+    fails += 1
+    print("FAIL gendocs-prose: the signature is not marked language-turmeric")
+
+# Code in docstring prose is Turmeric only when its fence says so.  Measured
+# before: an indented run was never highlighted, and guessing it was wrong too
+# -- a wrapped line of prose, a C struct and a shell line are all indented runs.
+# (want, text) pairs; every `want` must appear in the rendered HTML.
+PROSE_CASES = [
+    # a fence keeps its blank lines, and prose resumes after it
+    ('Intro.\n\n```turmeric\n(f 1)\n\n(g 2)\n```\nTail.',
+     ['<code class="language-turmeric">(f 1)\n\n(g 2)</code>',
+      '<p class="def-prose">Tail.</p>']),
+    # a language other than turmeric is labelled, not highlighted as Turmeric
+    ('```c\nint x;\n```', ['<code class="language-c">int x;</code>']),
+    # a bare fence is plain code
+    ('```\nplain\n```', ['<pre class="def-prose-code"><code>plain</code></pre>']),
+    # an unclosed fence runs to the end of the text
+    ('```turmeric\n(f 1)', ['<code class="language-turmeric">(f 1)</code>']),
+    # an indented run is never guessed at, even when it looks like Turmeric
+    ('see:\n\n    (f 1)\n', ['<pre class="def-prose-code">(f 1)</pre>']),
+]
+for text, wants in PROSE_CASES:
+    got = _prose_html(text)
+    for want in wants:
+        if want not in got:
+            fails += 1
+            print(f"FAIL gendocs-prose: _prose_html({text!r}) lacks {want!r}; got {got!r}")
+if 'language-turmeric' in _prose_html('see:\n\n    (f 1)\n'):
+    fails += 1
+    print("FAIL gendocs-prose: an indented run was marked as Turmeric")
 
 # A typeclass is documented as a class.  Measured before: `defclass` was not a
 # definition kind at all, so a class's docstring and every method signature
@@ -437,5 +470,6 @@ if fails:
     sys.exit(1)
 print(f"PASS check-gendocs-parse ({len(CASES)} signatures, both spellings; "
       f"{len(SCHEME_CASES)} Scheme forms and a define-library; "
-      f"{len(INLINE_CASES)} inline-code cases; {len(CLASS_CASES)} defclass forms; "
+      f"{len(INLINE_CASES)} inline-code cases; {len(PROSE_CASES)} prose-fence cases; "
+      f"{len(CLASS_CASES)} defclass forms; "
       f"{len(LOSSY_CASES)} sum/struct/effect/opaque renderings and the four declaration forms)")

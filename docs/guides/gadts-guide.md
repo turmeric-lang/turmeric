@@ -2,6 +2,9 @@
 title: GADTs -- A Practical Guide
 category: Advanced Types
 description: GADTs: refined constructors (`defdata` with `: Result`), type refinement, equality witnesses, union types, gradual typing
+tags:
+  - data-types
+  - polymorphism
 ---
 
 # GADTs in Turmeric -- A Practical Guide

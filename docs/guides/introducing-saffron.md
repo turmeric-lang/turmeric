@@ -2,6 +2,9 @@
 title: "Introducing Saffron"
 category: Getting Started
 description: "A first tour of Saffron, the dynamically typed dialect of Turmeric: Try Turmeric in the browser, printing, flow control, functions, ADTs, typeclasses, and algebraic effects -- every example in both s-expression and sweet-expression syntax."
+tags:
+  - dialects
+  - saffron
 ---
 
 # Introducing Saffron

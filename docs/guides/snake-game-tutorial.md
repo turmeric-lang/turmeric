@@ -2,6 +2,9 @@
 title: Snake Game Tutorial
 category: Tutorials
 description: Building the snake game example
+tags:
+  - game-development
+  - build-system
 ---
 
 # Snake Game Tutorial -- Step-by-Step Implementation

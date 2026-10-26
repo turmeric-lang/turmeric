@@ -2,6 +2,9 @@
 title: Running the Tests
 category: Contributor Notes
 description: Which harness runs what, how to narrow a run to the tests you care about, the fixture marker files, and how to reproduce a red CI job locally
+tags:
+  - testing
+  - contributing
 ---
 
 # Running the Tests
@@ -177,6 +180,51 @@ timeout 720 ctest --test-dir build -R 'r7rs' -E 'conformance'
 
 `-R` and `-E` are regexes on the target name. CI's parts (below) are exactly
 such patterns.
+
+### The Try Turmeric browser specs (`web/tests`)
+
+Playwright, not the fixture harnesses. From `web/`:
+
+```sh
+npm ci
+timeout 720 npx playwright test --project=desktop                 # the suite
+timeout 720 npx playwright test --project=desktop tests/minimap.spec.js
+```
+
+The runner starts its own dev server on a free port and never uses port 3000,
+which belongs to the developer's own dev session. The `mobile` project drives
+WebKit, which `npm ci` does not install.
+
+**Most of the specs need the WASM bundle.** `web/public/turmeric.js` and
+`turmeric.wasm` are build products (gitignored), so a clone without them cannot
+evaluate anything. Rather than let 23 spec files wait 30 s each and fail with
+"Failed to load WASM", `playwright.config.js` leaves those files out of the run
+and says so once. The specs that do not wait for the evaluator, such as
+`docs-pane.spec.js`, still run. **CI is never excused:** when `CI` is set every
+spec runs, so a build that stops producing the bundle fails loudly.
+
+To run them, build the bundle with the same Emscripten CI pins (6.0.10; the pin
+is in `.github/workflows/ci.yml`):
+
+```sh
+git clone --depth 1 https://github.com/emscripten-core/emsdk
+./emsdk/emsdk install 6.0.10 && ./emsdk/emsdk activate 6.0.10
+source ./emsdk/emsdk_env.sh
+tur run wasm       # `just wasm`: regenerates the docs, then builds build-wasm/
+```
+
+The compile takes about three minutes and copies the bundle into `web/public/`.
+`tur run wasm` also regenerates `stdlib/docstrings.tur`; if you only want the
+bundle, `cmake -S . -B build-wasm -DTUR_WASM=ON -DCMAKE_POLICY_VERSION_MINIMUM=3.5`
+followed by `cmake --build build-wasm -j --target tur_wasm` does the same without
+touching tracked files.
+
+Two more prerequisites that are not the bundle:
+
+- **The docs pack.** `docs-pane` and `docs-offline` skip with a message when
+  `web/public/docs-pack/` is absent; `tur run docs` builds it.
+- **Network access.** `prod-smoke.spec.js` drives the live site, so it needs to
+  reach turmeric-lang.com; offline, all of its tests fail.
 
 ## 3. Caching, parallelism and binaries
 

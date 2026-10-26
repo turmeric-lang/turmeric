@@ -2,6 +2,9 @@
 title: Union and Intersection Types Guide
 category: Type System
 description: Union (`A | B`) and intersection (`A & B`) types, `any`, gradual typing
+tags:
+  - polymorphism
+  - gradual-typing
 ---
 
 # Union and Intersection Types Guide

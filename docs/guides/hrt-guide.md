@@ -2,6 +2,8 @@
 title: Higher-Ranked Types
 category: Type System
 description: Higher-ranked types: rank-2/3 polymorphic function parameters
+tags:
+  - polymorphism
 ---
 
 # Higher-Ranked Types in Turmeric

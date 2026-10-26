@@ -413,4 +413,116 @@ test.describe('docs pane', () => {
         expect(delta).not.toBeNull();
         expect(Math.abs(delta)).toBeLessThan(60);
     });
+
+    test('the Guides section switches between Categories and Tags', async ({ page }) => {
+        await openTry(page);
+
+        // Tags come from the guides' frontmatter. A pack built before they
+        // existed carries none, and the nav then draws no switch by design.
+        const tagged = await page.evaluate(async () => {
+            const idx = await (await fetch('/docs-pack/index.json')).json();
+            return (idx.guides || []).filter(e => e.tags && e.tags.length).length;
+        });
+        test.skip(!tagged, 'pack carries no guide tags -- rebuild it with `tur run docs`');
+
+        await openDocs(page);
+        const guides = page.locator('#docs-nav .docs-nav-section', { has: page.locator('h4', { hasText: /^Guides$/ }) });
+        const tabs = guides.locator('.docs-view-btn');
+        await expect(tabs).toHaveText(['Categories', 'Tags']);
+        await expect(guides.locator('.docs-view-btn.active')).toHaveText('Categories');
+        const groups = guides.locator('details.docs-nav-group > summary');
+        const categoryGroups = await groups.allTextContents();
+        expect(categoryGroups).toContain('Getting Started');
+
+        // Tags: one group per tag with a guide count, alphabetical.
+        await guides.locator('.docs-view-btn', { hasText: 'Tags' }).click();
+        await expect(guides.locator('.docs-view-btn.active')).toHaveText('Tags');
+        await expect(guides.locator('.docs-view-btn.active')).toHaveAttribute('aria-selected', 'true');
+        const names = await groups.evaluateAll(
+            els => els.map(e => e.firstChild.textContent.trim()));
+        expect(names.length).toBeGreaterThan(categoryGroups.length);
+        // The pseudo-tag `other` holds untagged guides and sorts last.
+        expect(names[names.length - 1]).toBe('other');
+        const named = names.filter(n => n !== 'other');
+        expect(named).toEqual([...named].sort((a, b) => a.localeCompare(b)));
+        await expect(groups.first().locator('.docs-nav-count')).toHaveText(/^\d+$/);
+
+        // A guide with several tags is listed under each of them.
+        const multi = await page.evaluate(async () => {
+            const idx = await (await fetch('/docs-pack/index.json')).json();
+            const g = (idx.guides || []).find(e => (e.tags || []).length > 1);
+            return g ? { ref: `guides/${g.slug}`, n: g.tags.length } : null;
+        });
+        test.skip(!multi, 'no guide carries more than one tag');
+        expect(await guides.locator(`a[data-doc-ref="${multi.ref}"]`).count()).toBe(multi.n);
+
+        // The choice survives a reload, and the state says so.
+        await openTry(page, '#doc=guides/quickstart');
+        await page.waitForSelector('#docs-nav .docs-nav-section', { timeout: 15_000 });
+        expect(await page.evaluate(() => window.turmericApp.getState().docsGuideView)).toBe('tag');
+        await expect(guides.locator('.docs-view-btn.active')).toHaveText('Tags');
+
+        // Arrow keys move between the two tabs, and focus stays on the active one.
+        await guides.locator('.docs-view-btn.active').focus();
+        await page.keyboard.press('ArrowLeft');
+        await expect(guides.locator('.docs-view-btn.active')).toHaveText('Categories');
+        await expect(guides.locator('.docs-view-btn.active')).toBeFocused();
+        expect(await groups.allTextContents()).toEqual(categoryGroups);
+    });
+
+    test('a guide draws one rule under its headline, not two', async ({ page }) => {
+        await openTry(page);
+        await openDocs(page);
+        await gotoDoc(page, 'guides/hamt-guide');
+
+        // The Contents card has a border of its own, so the headline's rule
+        // above it made every guide read as two lines in a row.
+        const rules = await page.evaluate(() => {
+            const h1 = document.querySelector('#docs-article h1');
+            const toc = document.querySelector('#docs-article .guide-toc');
+            if (!h1 || !toc) return null;
+            return {
+                h1: parseFloat(getComputedStyle(h1).borderBottomWidth),
+                toc: parseFloat(getComputedStyle(toc).borderTopWidth),
+            };
+        });
+        test.skip(!rules, 'guide has no Contents card to sit under its headline');
+        expect(rules.h1).toBe(0);
+        expect(rules.toc).toBeGreaterThan(0);
+
+        // An API page has no Contents card, so its headline keeps its rule.
+        await gotoDoc(page, 'api/tur-list');
+        const api = await page.evaluate(() =>
+            parseFloat(getComputedStyle(document.querySelector('#docs-article h1')).borderBottomWidth));
+        expect(api).toBeGreaterThan(0);
+    });
+
+    test('API signatures and fenced prose code are syntax-highlighted', async ({ page }) => {
+        await openTry(page);
+        await openDocs(page);
+        await gotoDoc(page, 'api/httpd-compress');
+
+        // Both come from the generator marking the block language-turmeric: a
+        // signature always, and a prose block only when its docstring fences it.
+        // The pane's highlighter then stamps each with data-hl-done.
+        const sig = page.locator('#docs-article pre.def-signature code.language-turmeric');
+        await expect(sig.first()).toHaveAttribute('data-hl-done', '1');
+        expect(await sig.count()).toBeGreaterThan(0);
+        // A bracket inside a signature is wrapped in a coloured span.
+        await expect(sig.first().locator('[class^="hl-br"]').first()).toBeVisible();
+
+        // `^fat` is one annotation token, caret included, and `ptr<void>` is
+        // one type token, angle brackets included -- not a name with a plain
+        // `<void>` trailing it.
+        const sigPre = page.locator('#mw-compress-with pre.def-signature');
+        await expect(sigPre.locator('.hl-ann')).toHaveText(['^fat']);
+        const types = await sigPre.locator('.hl-type').allTextContents();
+        expect(types).toContain(':ptr<void>');
+        expect(types.some(t => t === 'ptr<void>')).toBe(true);
+        expect(types.every(t => !/^</.test(t))).toBe(true);   // never a stranded <void>
+
+        const prose = page.locator('#docs-article pre.def-prose-code code.language-turmeric');
+        await expect(prose.first()).toHaveAttribute('data-hl-done', '1');
+        expect(await prose.count()).toBeGreaterThan(1);
+    });
 });

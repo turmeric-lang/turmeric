@@ -3048,9 +3048,9 @@
 ;;; `(mw-cors-opts opts next)` returns a wrapped handler; the curried form
 ;;; `(mw-cors-opts opts)` is a one-arg middleware value suitable for
 ;;; `compose-middleware`:
-;;;
+;;; ```turmeric
 ;;;   (compose-middleware base (mw-cors-opts my-opts))
-;;;
+;;; ```
 ;;; Build `opts` with `cors-opts` to have an invalid combination refused up
 ;;; front; options that slip through (made with make-struct) are served
 ;;; fail-closed as described in the section notes.
@@ -3867,10 +3867,11 @@
 ;;;   ptr<void> -- HttpdAsync handle (or NULL on error)
 ;;;
 ;;; Lifecycle:
+;;; ```turmeric
 ;;;   (let [h (httpd-new-async 0 handler)]
 ;;;     (httpd-run-async h)         ;; blocks until httpd-stop-async fires
 ;;;     (httpd-async-free h))
-;;;
+;;; ```
 ;;; Since: Phase H8 (A0+A1)
 
 (defn httpd-new-async-with-limit [port : int
@@ -4793,9 +4794,10 @@
 ;;; Returns: nothing.
 ;;;
 ;;; Example (legacy -- prefer the Handler auto-drop):
+;;; ```turmeric
 ;;;   (let [composed (:: (httpd-mw-fold base chain) :Handler)]
 ;;;     (httpd-call (:: composed :int) conn))   ; composed auto-drops at scope exit
-;;;
+;;; ```
 ;;; Since: R3a; superseded by Handler auto-drop (automatic R3a).
 
 (defn httpd-mw-drop [handler : int] : nil
@@ -4828,10 +4830,11 @@
 ;;; Returns: nothing.
 ;;;
 ;;; Example (legacy -- prefer the ClosureChain auto-drop):
+;;; ```turmeric
 ;;;   (let [chain    (:: (build-chain 70 (tnil)) :ClosureChain)
 ;;;         composed (:: (httpd-mw-fold base (:: chain :int)) :Handler)]
 ;;;     (httpd-call (:: composed :int) conn))  ; composed + chain auto-drop at scope exit
-;;;
+;;; ```
 ;;; Since: R3a; superseded by ClosureChain auto-drop (automatic R3a half 2).
 
 (defn httpd-mw-free-chain [mws : int] : nil
@@ -4858,12 +4861,12 @@
 ;;; docs/archive/history/variadic-rest-closure-cast-plan.md fix) but the fat-
 ;;; closure dispatch dereferences code bytes as the fn pointer and
 ;;; BUS-faults. Bridge a bare defn through a let-captured `fn` literal:
-;;;
+;;; ```turmeric
 ;;;   (let [_ 0
 ;;;         mw-log-val (fn [n :int] :ptr<void> (mw-log n))
 ;;;         _ 0]
 ;;;     (compose-middleware-of base mw-log-val ...))
-;;;
+;;; ```
 ;;; For statically-known chains the macro form `compose-middleware`
 ;;; remains the better choice -- it accepts bare defns and catches
 ;;; non-callable mistakes at elaboration.

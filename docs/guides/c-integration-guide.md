@@ -2,6 +2,9 @@
 title: C Integration Guide
 category: Interoperability
 description: Foreign function interface (FFI) and C interop
+tags:
+  - ffi
+  - inline-c
 ---
 
 # Turmeric <-> C Integration Guide

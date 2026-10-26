@@ -1,3 +1,12 @@
+---
+title: tur serve
+category: CLI Tools
+description: Serve a directory over HTTP with `tur serve`, the Turmeric spelling of `python3 -m http.server`
+tags:
+  - httpd
+  - io
+---
+
 # `tur serve` -- serve a directory over HTTP
 
 `tur serve` is the Turmeric spelling of `python3 -m http.server`: one line,

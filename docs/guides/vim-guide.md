@@ -2,6 +2,8 @@
 title: Vim Guide
 category: Editor and IDE
 description: Vim / Neovim syntax highlighting installation and configuration
+tags:
+  - syntax
 ---
 
 # Vim Syntax Highlighting for Turmeric
