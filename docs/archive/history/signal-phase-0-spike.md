@@ -118,7 +118,7 @@ hard-coded `int64_t` from layer 1.
 (defn low-pass [alpha :float]
   (let [av alpha]
     (fn [sig]
-      (let [sv sig
+      (let [sv    sig
             state (__dsp_alloc_state)]
         (fn [t]
           ```c

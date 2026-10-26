@@ -333,7 +333,7 @@ tur build
 
 (defn main [] :int
   (with-window [w 800 600 "Hello Triangle"]
-    (let [vao (setup-triangle)
+    (let [vao  (setup-triangle)
           prog (make-triangle-program)]
       (set-clear-color 0.1 0.1 0.1 1.0)
       (loop-while (not (window-should-close? w))

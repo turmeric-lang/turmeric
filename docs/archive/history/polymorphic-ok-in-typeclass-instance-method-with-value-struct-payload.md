@@ -18,7 +18,7 @@ Result struct. The standalone shape works:
 ```turmeric
 (defstruct User [id : int  name : cstr])
 (let [r : (Result User cstr) (ok (make-struct User 7 "alice"))
-      u (ok-val r)]
+      u                      (ok-val r)]
   (println (.name u)))   ; => alice
 ```
 

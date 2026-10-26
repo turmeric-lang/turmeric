@@ -153,7 +153,7 @@ defstruct Node :move [tag : int child : rc<Node> parent : weak<Node>]
 
 defn build-pair [] : int
   let [child  rc/of(make-struct(Node 2 null-child() null-parent()))
-        parent rc/of(make-struct(Node 1 rc/clone(child) null-parent()))]
+       parent rc/of(make-struct(Node 1 rc/clone(child) null-parent()))]
     set!(.parent(child) rc/downgrade(parent))
     0
 ```

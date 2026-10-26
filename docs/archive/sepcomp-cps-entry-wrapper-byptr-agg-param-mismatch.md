@@ -49,7 +49,8 @@ control op, or is dragged onto the DK). `linalg`'s:
 ```turmeric
 (defn chol [^borrow a : mat] : cholfac
   (when (not (= (mat-square? a) 1)) (panic "chol: matrix must be square"))
-  (let [n (mat-rows a) l (mat-new-zeroed n n)
+  (let [n      (mat-rows a)
+        l      (mat-new-zeroed n n)
         status (__chol-kernel (.data l) (.data a) n)]
     (when (< status 0) (do (mat-free l) (panic "...")))
     (make-struct cholfac l)))

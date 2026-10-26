@@ -104,7 +104,7 @@ So the second word of a block is `(array-get-unchecked p 1)` or
       (while (< i n)
         (array-set-unchecked p i (* i i))
         (set! i (+ i 1)))
-      (let [last (ptr-deref (ptr-add p (* (- n 1) 8)))
+      (let [last     (ptr-deref (ptr-add p (* (- n 1) 8)))
             ^mut acc 0
             ^mut j   0]
         (while (< j n)
@@ -128,7 +128,7 @@ defn squares-sum [n : int] : int
       while {i < n}
         array-set-unchecked(p i {i * i})
         set!(i {i + 1})
-      let [last ptr-deref(ptr-add(p {{n - 1} * 8}))
+      let [last     ptr-deref(ptr-add(p {{n - 1} * 8}))
            ^mut acc 0
            ^mut j   0]
         while {j < n}

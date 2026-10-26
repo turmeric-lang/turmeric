@@ -58,9 +58,9 @@ env of a capturing closure.
 
 (defn main [] : int
   (let [delta 100
-        r (bimap2 (fn [n : int] : int (+ n delta))   ;; CAPTURES delta
-                  (fn [n : int] : int n)
-                  (:: (ok 21) (Result int int)))]
+        r     (bimap2 (fn [n : int] : int (+ n delta))   ;; CAPTURES delta
+                      (fn [n : int] : int n)
+                      (:: (ok 21) (Result int int)))]
     (ok-val (:: r (Result int int)))))   ;; TARGET 121
 ```
 

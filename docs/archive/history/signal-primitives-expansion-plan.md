@@ -433,7 +433,7 @@ Then `sine-wavetable`, `square-wavetable`, `sawtooth-wavetable`,
 
 ```turmeric
 (defn sine-wavetable [size :int]
-  (let [tbl (vec-create size 0)
+  (let [tbl    (vec-create size 0)
         ^mut i 0]
     (while (< i size)
       (let [phase (* 6.283185307179586 (/ (:: i :float) (:: size :float)))]
@@ -462,7 +462,7 @@ with a real two-operator implementation:
         ;; (Strictly this is PM, which is musically equivalent to FM for our
         ;; purposes and easier to implement on a per-sample basis.)
         carrier  (fn [t]
-                   (let [m (:: (__arrow_call1 mod-out t) :float)
+                   (let [m     (:: (__arrow_call1 mod-out t) :float)
                          phase (+ (* 6.283185307179586 carrier-freq
                                      (:: t :float))
                                   m)]

@@ -35,7 +35,7 @@ binding (as `cont_result_type` rides a continuation binding).
 
 ```turmeric
 (let [^mut x 1
-      r (& x)]
+      r      (& x)]
   (set! x 2)
   (println @r))                 ; 2 compiled
 ```

@@ -446,7 +446,7 @@ defn barrier-wait [barrier n]
 (defn merge-sort-stm [vec]
   (if (<= (len vec) 1)
     vec
-    (let [mid (/ (len vec) 2)
+    (let [mid          (/ (len vec) 2)
           left-result  (tvar/new (ptr/null))
           right-result (tvar/new (ptr/null))]
 
@@ -475,7 +475,7 @@ defn barrier-wait [barrier n]
 defn merge-sort-stm [vec]
   if {len(vec) <= 1}
     vec
-    let [mid {len(vec) / 2}
+    let [mid          {len(vec) / 2}
          left-result  tvar/new(ptr/null())
          right-result tvar/new(ptr/null())]
 

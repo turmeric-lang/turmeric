@@ -466,7 +466,7 @@ the identity (the value *is* the schema pointer). Build a struct field by field:
 ;; ->User is a curried constructor: name -> (age -> boxed User)
 defn user-schema [] :int
   let [name-s (:: (make-struct Schema (schema/field-of "name" (schema/str))) (Schema int))
-        age-s  (:: (make-struct Schema (schema/field-of "age"  (schema/int))) (Schema int))]
+       age-s  (:: (make-struct Schema (schema/field-of "age"  (schema/int))) (Schema int))]
     .raw(ap(fmap(name-s ->User) age-s))
 ; Validation: both fields decoded, errors accumulated
 ```

@@ -16,7 +16,7 @@
     (let [m &mut (.x p)] (set! @m 10))
     (println (.x p)))           ; 10 compiled, 3 interpreted
   (let [^mut x 1
-        r (& x)]
+        r      (& x)]
     (set! x 2)
     (println @r))               ; 2 compiled, 1 interpreted
   0)

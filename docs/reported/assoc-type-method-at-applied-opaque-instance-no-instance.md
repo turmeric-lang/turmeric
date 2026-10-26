@@ -26,7 +26,7 @@ the associated one.
 (defn total [V] [(NumSum V)] [v : V] : (Elem V)
   (nv-sum v))
 (defn main [] : int
-  (let [a : (NumVec float) (:: 0 (NumVec float))
+  (let [a : (NumVec float)   (:: 0 (NumVec float))
         b : (NumVec float32) (:: 0 (NumVec float32))]
     (println (total a))
     (println (total b))

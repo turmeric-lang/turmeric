@@ -32,11 +32,11 @@ compose `ptr<void>->ptr<void>` Signal Functions.
   ;; Binding via ^fat let generates a shim. >>> stores the shim.
   ;; When the composed closure dispatches through the shim, it calls
   ;; make-scale's thunk with one arg instead of two -> segfault.
-  (let [^fat sf1 : (fn [ptr<void>] #{} ptr<void>) (make-scale 2.0)
-        ^fat sf2 : (fn [ptr<void>] #{} ptr<void>) (make-scale 3.0)
+  (let [^fat sf1 : (fn [ptr<void>] #{} ptr<void>)      (make-scale 2.0)
+        ^fat sf2 : (fn [ptr<void>] #{} ptr<void>)      (make-scale 3.0)
         ^fat composed : (fn [ptr<void>] #{} ptr<void>) (>>> sf1 sf2)
-        ^fat input : (fn [float] #{} float) (constant 1.0)
-        ^fat out : (fn [float] #{} float) (composed input)]
+        ^fat input : (fn [float] #{} float)            (constant 1.0)
+        ^fat out : (fn [float] #{} float)              (composed input)]
     (println (out 0.0)))   ;; expected 6.0, actual: Segmentation fault
   0)
 ```

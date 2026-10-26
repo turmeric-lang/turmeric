@@ -817,7 +817,7 @@ defn main [] : int
     println("the spawn itself does not unwind")   ; runs
 
   let [fut async(boom)
-        r   catch-unwind((fn [] : int await(fut)))]
+       r   catch-unwind((fn [] : int await(fut)))]
     if err?(r)
       println("recovered from the task's panic")   ; taken
       println("no panic")

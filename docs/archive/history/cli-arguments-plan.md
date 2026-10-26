@@ -39,7 +39,7 @@ tur run script.tur -- input.txt output.txt
 ```turmeric
 ;; script.tur
 defn main []
-  (let [input (nth *args* 0)
+  (let [input  (nth *args* 0)
         output (nth *args* 1)]
     (process-file input output))
 ```

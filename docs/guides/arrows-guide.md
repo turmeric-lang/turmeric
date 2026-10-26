@@ -572,10 +572,10 @@ let [hp  high-pass(0.1)
 ### Amplitude operations
 
 ```turmeric
-(let [sig    ((sine 440.0 0.0) (constant ()))
+(let [sig     ((sine 440.0 0.0) (constant ()))
 
       ;; gain: scale every sample by a constant
-      gained ((gain 0.5) sig)
+      gained  ((gain 0.5) sig)
 
       ;; mix: weighted blend of a pair signal
       ;; alpha=0 -> all first, alpha=1 -> all second
@@ -606,8 +606,8 @@ as "then": input flows left-to-right through each stage.
 (import stdlib/signal/core.tur)
 (import stdlib/signal/dsp.tur)
 
-(let [dummy (constant ())
-      input ((sine 440.0 0.0) dummy)
+(let [dummy  (constant ())
+      input  ((sine 440.0 0.0) dummy)
 
       ;; Signal graph:
       ;;   sine 440 Hz
@@ -615,10 +615,10 @@ as "then": input flows left-to-right through each stage.
       ;;     -> low-pass (alpha 0.1)
       ;;     -> DC offset +0.1
       ;;     -> clip [-0.8, 0.8]
-      chain (>>> (>>> (>>> (gain 0.5)
-                           (low-pass 0.1))
-                      (offset 0.1))
-                 (clip -0.8 0.8))
+      chain  (>>> (>>> (>>> (gain 0.5)
+                            (low-pass 0.1))
+                       (offset 0.1))
+                  (clip -0.8 0.8))
 
       output (chain input)]
 

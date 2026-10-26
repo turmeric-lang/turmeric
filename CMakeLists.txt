@@ -864,6 +864,16 @@ add_test(
   COMMAND bash tests/check-src-doc-citations.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# Multi-line `let` vectors in the docs' Turmeric snippets keep names and values
+# in two columns (CLAUDE.md, "Binding vectors").  A one-space slip compiles,
+# so nothing else notices it, and it is what readers copy (the session-types
+# example in advanced-type-system-rationale shipped one).  --selftest first:
+# the script also carries the --fix rewriter, which must stay whitespace-only.
+add_test(
+  NAME tur_let_alignment_lint
+  COMMAND python3 tests/check-let-alignment.py --selftest
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
 # src/driver/driver.h and commands.h are sectioned by defining file; each
 # section may declare only what its file defines (main-c-split-plan).  The
 # section grouping in emit_internal.h drifted until most of its prototypes sat

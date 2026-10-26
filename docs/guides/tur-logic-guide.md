@@ -73,9 +73,9 @@ let [results (run-logic 1 (lequal (term-int 5) (term-int 5)))]
 ; => 1
 ;; Q: what value does x have if x == 7?
 let [x      (term-var 0)
-      goal   (lequal x (term-int 7))
-      result (run-logic 1 goal)
-      walked (reify-walk x result)]
+     goal   (lequal x (term-int 7))
+     result (run-logic 1 goal)
+     walked (reify-walk x result)]
   println(term-int-val(walked))
 ; => 7
 ```
@@ -135,7 +135,7 @@ numbered from 0:
 ```
 ```sweet-exp
 let [x (term-var 0)
-      y (term-var 1)]
+     y (term-var 1)]
   ...
 ```
 
@@ -247,10 +247,10 @@ let [results (run-logic 1 (lequal (term-int 1) (term-int 2)))]
 ```
 ```sweet-exp
 let [x   (term-var 0)
-      g   (disjoined (lequal x (term-int 1))
-                     (disjoined (lequal x (term-int 2))
-                                (lequal x (term-int 3))))
-      res (run-logic 5 g)]
+     g   (disjoined (lequal x (term-int 1))
+                    (disjoined (lequal x (term-int 2))
+                               (lequal x (term-int 3))))
+     res (run-logic 5 g)]
   println(bt-length(res))
 ; => 3
 ```
@@ -293,10 +293,10 @@ let [res (run-logic 1
 ```
 ```sweet-exp
 let [x   (term-var 0)
-      y   (term-var 1)
-      lhs (term-pair x (term-int 2))
-      rhs (term-pair (term-int 1) y)
-      res (run-logic 1 (lequal lhs rhs))]
+     y   (term-var 1)
+     lhs (term-pair x (term-int 2))
+     rhs (term-pair (term-int 1) y)
+     res (run-logic 1 (lequal lhs rhs))]
   ;; after unification: x=1, y=2
   println(term-int-val(reify-walk(x res)))
   ; => 1
@@ -356,7 +356,7 @@ defn grandparento [grand : Term child : Term] : (Goal int)
   fresh((fn [mid] conjoined(parento(grand mid) parento(mid child))))
 ;; Query: who are the grandchildren of Alice (id=0)?
 let [child (term-var 0)
-      res   (run-logic 10 (grandparento (term-int 0) child))]
+     res   (run-logic 10 (grandparento (term-int 0) child))]
   ;; walks each solution
   ...
 ```
@@ -541,7 +541,7 @@ For relations that revisit the same subgoal, add a memo table keyed on
 import tur/hamt :refer [hamt-empty hamt-insert hamt-lookup]
 defn tabled [name goal-fn args subs] :int
   let [key  (hash-key name args subs)
-        memo (hamt-lookup *memo-table* key)]
+       memo (hamt-lookup *memo-table* key)]
     if option-some?(memo)
       option-unwrap(memo)
       let [result (apply-goal (goal-fn args) subs)]

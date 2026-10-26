@@ -206,8 +206,8 @@ The corresponding *positive* case is just as direct:
   [Pos Vel]
   [Pos]
   (let [w' : World (:: w World)
-        rp (get-Pos Pos-read-cap w' 0)
-        rv (get-Vel Vel-read-cap w' 0)]
+        rp         (get-Pos Pos-read-cap w' 0)
+        rv         (get-Vel Vel-read-cap w' 0)]
     (set-Pos! Pos-write-cap w' 0 (make-struct Pos
                                               (+ (.x rp) (.x rv))
                                               (+ (.y rp) (.y rv))))))

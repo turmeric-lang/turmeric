@@ -218,7 +218,7 @@ transaction:
 
 ```turmeric
 (defn retracted? [db : Db entity : int attr : cstr as-of-tx : int] : bool
-  (let [^mut i 0
+  (let [^mut i     0
         ^mut found false]
     (while (< i (db-count db))
       (let [d (db-ref db i)]
@@ -233,7 +233,7 @@ transaction:
 
 ```sweet-exp
 defn retracted? [db : Db entity : int attr : cstr as-of-tx : int] : bool
-  let [^mut i 0
+  let [^mut i     0
        ^mut found false]
     while {i < db-count(db)}
       let [d db-ref(db i)]

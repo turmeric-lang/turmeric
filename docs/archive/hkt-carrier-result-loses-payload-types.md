@@ -55,7 +55,7 @@ baseline measurement of code the M2 change deliberately leaves untouched.
 ```turmeric
 (defn main [] : int
   (let [e : (Result int cstr) (err "bad")
-        n (fmap e (fn [x : int] : int (* x 2)))]
+        n                     (fmap e (fn [x : int] : int (* x 2)))]
     (match n (Ok v) (println v) (Err s) (println s))
     0))
 ```
@@ -70,7 +70,7 @@ Either shows the same thing on its varying arm:
 (load "stdlib/either.tur")
 (defn main [] : int
   (let [e : (Either int cstr) (Right "x")
-        m (fmap e (fn [s : cstr] : cstr s))]
+        m                     (fmap e (fn [s : cstr] : cstr s))]
     (match m (Left a) (println a) (Right b) (println b))
     0))
 ```

@@ -81,8 +81,8 @@ which is most fallible resource code:
 (let [h (scratch-alloc n)]
   (if (= h 0)
     (err "allocation failed")
-    (let [_ (compute-into (scratch-ptr h))
-          r (wrap (scratch-ptr h) n)      ;; the Result
+    (let [_  (compute-into (scratch-ptr h))
+          r  (wrap (scratch-ptr h) n)      ;; the Result
           _2 (scratch-free h)]            ;; cleanup AFTER producing it
       r)))
 ```
