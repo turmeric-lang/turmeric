@@ -1,6 +1,6 @@
 # Compiled: a `set!` from a `handle` body to an enclosing `^mut` is lost after the `handle`
 
-**RESOLVED 2026-10-26.** `byref_scan`'s `CT_HANDLE` case now runs `case_mut_scan` over the handled body, promoting every enclosing `^mut` it touches to a shared cell. Pinned by `tests/fixtures/handle-body-set-enclosing-mut`.
+**RESOLVED 2026-10-26.** `byref_scan`'s `CT_HANDLE` case now runs `case_mut_scan` over the handled body, promoting every enclosing `^mut` it touches to a shared cell. The `reset` body had the same loss (compiled `8`, interpreter `58`) and gets the same promotion; `with-handler` was already correct. Pinned by `tests/fixtures/handle-body-set-enclosing-mut`. Checked on compiled, `tur jit` and `--interpret`.
 
 **Severity:** high (silent wrong value, on the default engine). Compiled code
 and `tur jit` both lose the write; `tur --interpret` keeps it. It needs no

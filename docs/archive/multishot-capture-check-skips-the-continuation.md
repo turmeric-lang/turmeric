@@ -1,6 +1,6 @@
 # TUR-E0500 checks a `^multishot` clause's captures, not the continuation that actually runs twice
 
-**RESOLVED 2026-10-26** (fix direction 1): `ms2b_walk` in `src/compiler/elab_effects.c` walks the handled body in evaluation order, following known callees, and refuses a unique/linear binding used after a perform the `^multishot` clause answers. Pinned by `errors/multishot-continuation-linear-callee` and `-inline`. Not done: direction 2 (relaxing the clause-side rule), and a perform behind an indirect call or deeper than 4 calls is not seen.
+**RESOLVED 2026-10-26** (fix direction 1): `ms2b_walk` in `src/compiler/elab_effects.c` walks the handled body in evaluation order, following known callees, and refuses a unique/linear binding used after a perform the `^multishot` clause answers. Pinned by `errors/multishot-continuation-linear-callee` and `-inline`. A bare variable passed to a `^borrow` parameter is not counted as a use (`multishot-continuation-borrow-after-perform`). Not done: direction 2 (relaxing the clause-side rule, a policy change), and a perform behind an indirect call or deeper than 4 calls is not seen.
 
 **Severity:** medium (soundness hole in the ownership checks). A `^linear` or
 move-only value that the handled body consumes after a `perform` is consumed

@@ -7990,7 +7990,14 @@ static void byref_scan(const CTerm *t) {
         case CT_MATCH:   for (uint32_t i = 0; i < t->as.match.n_arms; i++)
                              byref_scan(t->as.match.arms[i].body);
                          return;
-        case CT_RESET:   byref_scan(t->as.reset.delim); byref_scan(t->as.reset.body); return;
+        case CT_RESET: {
+            /* As for a handle body: the code after the reset is its own C
+             * function and snapshots enclosing mutables, so promote every one
+             * the reset's delimited body touches. */
+            uint32_t rb[CC_MAX_BOUND];
+            case_mut_scan(t->as.reset.delim, rb, 0);
+            byref_scan(t->as.reset.delim); byref_scan(t->as.reset.body); return;
+        }
         case CT_SHIFT:   byref_scan(t->as.shift.body); return;
         case CT_HANDLE: {
             /* The handled BODY's writes must survive into the handle's

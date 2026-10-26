@@ -2370,7 +2370,17 @@ static void ms2b_walk(const Expr *x, Ms2bState *st) {
         return;
     }
     case EX_CALL: {
-        for (uint32_t i = 0; i < x->as.call_.n_args; i++) ms2b_walk(x->as.call_.args[i], st);
+        const Binding *fb = x->as.call_.fn_binding;
+        for (uint32_t i = 0; i < x->as.call_.n_args; i++) {
+            const Expr *a = x->as.call_.args[i];
+            /* A `^borrow` parameter reads without consuming: a bare variable
+             * passed there is not used up by a second run. */
+            if (a && a->kind == EX_VAR && fb && fb->type.kind == TY_FN
+                && i < fb->type.as.fn.arity && fb->type.as.fn.arg_flags
+                && FN_ARG_FLAG(fb->type.as.fn, i, FA_BORROW))
+                continue;
+            ms2b_walk(a, st);
+        }
         /* Follow a call to a function whose body is known: it may hold a linear
          * value across a perform of the effect, or perform it outright. */
         const Binding *cb = x->as.call_.fn_binding;
