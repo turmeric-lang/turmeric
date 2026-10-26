@@ -215,3 +215,10 @@ build-i4/
 # by accident in #728 -- both stubs from a run that executed no tests.
 /Testing/
 build-clang/
+
+# Stray build output dropped in the repo root by an ad hoc `tur build x.tur -o j`.
+/j
+
+# Playwright test output (HTML report, traces, screenshots); regenerated per run.
+web/playwright-report/
+web/test-results/
