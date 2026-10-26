@@ -7993,6 +7993,13 @@ static void byref_scan(const CTerm *t) {
         case CT_RESET:   byref_scan(t->as.reset.delim); byref_scan(t->as.reset.body); return;
         case CT_SHIFT:   byref_scan(t->as.shift.body); return;
         case CT_HANDLE: {
+            /* The handled BODY's writes must survive into the handle's
+             * continuation (`handle.body`), which is its own C function that
+             * snapshots enclosing mutables when the handler is installed.
+             * Promote every enclosing `^mut` the body touches, as for a clause
+             * (docs/reported/handle-body-set-to-enclosing-mut-lost-compiled.md). */
+            uint32_t db[CC_MAX_BOUND];
+            case_mut_scan(t->as.handle.delim, db, 0);
             byref_scan(t->as.handle.delim); byref_scan(t->as.handle.body);
             for (uint32_t i = 0; i < t->as.handle.n_cases; i++) {
                 /* B7b: every enclosing `^mut` this CLAUSE touches becomes a

@@ -1,0 +1,24 @@
+;; A `set!` in a `handle` body to an enclosing ^mut survives the handle.
+(defeffect Ask [] : int)
+
+(defn g [] : int
+  (let [^mut c 0]
+    (let [r (handle (do (set! c 5) (perform (Ask))) (Ask [] k) (resume k 1))]
+      (+ (* 10 c) r))))
+
+(defn h [] : int
+  (let [^mut c 0]
+    (handle (do (set! c 5) 1)
+      (Ask [] k) (resume k 1))
+    c))
+
+(defn after-perform [] : int
+  (let [^mut c 0]
+    (let [r (handle (do (perform (Ask)) (set! c 7) 2) (Ask [] k) (resume k 1))]
+      (+ (* 10 c) r))))
+
+(defn main [] : int
+  (println (g))
+  (println (h))
+  (println (after-perform))
+  0)
