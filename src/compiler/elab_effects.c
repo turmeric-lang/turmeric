@@ -2317,6 +2317,91 @@ Expr *elab_perform(Elab *e, const Form *call) {
  * differ only in the `shallow` bit stamped on the resulting HandleExpr -- parse,
  * pre-scan, typecheck, and case elaboration are identical (deep vs shallow is
  * type-transparent). */
+/* MS2b (docs/archive/multishot-capture-check-skips-the-continuation.md): a
+ * `^multishot` k re-runs the CONTINUATION -- the handled body from the `perform`
+ * outward -- once per resume.  A unique or linear binding that was live before
+ * the `perform` and is used after it is therefore used once per run.  This walks
+ * the handled body in evaluation order and reports the first such use of each
+ * binding.  Conservative: it follows let / do / if / call and builtin operands
+ * and DIRECT performs only, so a `perform` hidden in a callee is not seen. */
+typedef struct {
+    const Symbol *effect;
+    bool          performed;
+    Binding      *post[32];      /* bindings introduced after the perform: fresh per run */
+    int           n_post;
+    Binding      *seen[16];
+    int           n_seen;
+    Binding      *first;
+    Binding      *via;           /* callee whose body holds `first`, or NULL */
+    int           depth;
+} Ms2bState;
+
+static void ms2b_walk(const Expr *x, Ms2bState *st) {
+    if (!x || st->first) return;
+    switch (x->kind) {
+    case EX_VAR: {
+        Binding *b = x->as.var.binding;
+        if (!st->performed || !b) return;
+        CopyKind ck = b->type.copy_kind;
+        if (ck != CK_UNIQUE && ck != CK_LINEAR) return;
+        for (int i = 0; i < st->n_post; i++) if (st->post[i] == b) return;
+        st->first = b;
+        return;
+    }
+    case EX_LET:
+        for (uint32_t i = 0; i < x->as.let_.n; i++) {
+            ms2b_walk(x->as.let_.bindings[i].init, st);
+            if (st->performed && st->n_post < 32 && x->as.let_.bindings[i].binding)
+                st->post[st->n_post++] = x->as.let_.bindings[i].binding;
+        }
+        ms2b_walk(x->as.let_.body, st);
+        return;
+    case EX_DO:
+        for (uint32_t i = 0; i < x->as.do_.n; i++) ms2b_walk(x->as.do_.items[i], st);
+        return;
+    case EX_IF: {
+        ms2b_walk(x->as.if_.cond, st);
+        bool before = st->performed;
+        ms2b_walk(x->as.if_.then_, st);
+        bool after_then = st->performed;
+        st->performed = before;
+        ms2b_walk(x->as.if_.else_or_null, st);
+        st->performed = st->performed || after_then;
+        return;
+    }
+    case EX_CALL: {
+        for (uint32_t i = 0; i < x->as.call_.n_args; i++) ms2b_walk(x->as.call_.args[i], st);
+        /* Follow a call to a function whose body is known: it may hold a linear
+         * value across a perform of the effect, or perform it outright. */
+        const Binding *cb = x->as.call_.fn_binding;
+        if (st->first || !cb || !cb->source_fn_def || st->depth >= 4) return;
+        Ms2bState sub;
+        memset(&sub, 0, sizeof sub);
+        sub.effect = st->effect;
+        sub.depth  = st->depth + 1;
+        ms2b_walk(cb->source_fn_def->body, &sub);
+        if (sub.first) {
+            st->first = sub.first;
+            st->via   = sub.via ? sub.via : (Binding *)cb;
+        } else if (sub.performed) {
+            st->performed = true;
+        }
+        return;
+    }
+    case EX_BUILTIN:
+        for (uint32_t i = 0; i < x->as.builtin.n; i++) ms2b_walk(x->as.builtin.args[i], st);
+        return;
+    case EX_PERFORM: {
+        const PerformExpr *pf = x->as.perform_.perform;
+        for (uint32_t i = 0; pf && i < pf->n_args; i++) ms2b_walk(pf->args[i], st);
+        if (pf && pf->effect_name == st->effect) st->performed = true;
+        return;
+    }
+    default:
+        return;
+    }
+}
+
 static Expr *elab_handle_impl(Elab *e, const Form *call, bool shallow) {
     if (call->as.list.len < 2) {
         diag_emit(DIAG_ERROR, call->span,
@@ -2616,6 +2701,34 @@ static Expr *elab_handle_impl(Elab *e, const Form *call, bool shallow) {
                 }
             }
             free(caps);
+        }
+
+        /* MS2b: the continuation a ^multishot k re-runs must not use a unique or
+         * linear binding that was live across the perform. */
+        if (cases[i].cont_kind == CK_MULTISHOT && body) {
+            Ms2bState st;
+            memset(&st, 0, sizeof st);
+            st.effect = cases[i].effect_name;
+            ms2b_walk(body, &st);
+            if (st.first)
+{
+                const char *kind = st.first->type.copy_kind == CK_UNIQUE
+                                       ? "unique (move-only)" : "linear";
+                if (st.via)
+                    diag_emit_with_code(DIAG_ERROR, body->span,
+                        TUR_E0500_MULTISHOT_UNIQUE_CAPTURE,
+                        "'%s' in '%s' is %s and live across a perform answered by a "
+                        "^multishot handler -- each resume re-runs the rest of the "
+                        "body and would use it again",
+                        st.first->name->name, st.via->name->name, kind);
+                else
+                    diag_emit_with_code(DIAG_ERROR, body->span,
+                        TUR_E0500_MULTISHOT_UNIQUE_CAPTURE,
+                        "'%s' is %s and live across a perform answered by a "
+                        "^multishot handler -- each resume re-runs the rest of the "
+                        "body and would use it again",
+                        st.first->name->name, kind);
+            }
         }
 
         /* LC1/LC2: ^linear k must be consumed (resumed or discontinued) in the handler body.
