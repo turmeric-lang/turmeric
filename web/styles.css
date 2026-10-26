@@ -2163,11 +2163,21 @@ html.pwa {
 }
 
 .docs-brand {
-    font-family: var(--font-serif, serif);
-    font-size: 14px;
+    font-family: var(--font-family);
+    font-size: 13px;
+    font-weight: 600;
     color: var(--gold);
     letter-spacing: 0.04em;
     flex-shrink: 0;
+}
+
+/* A guide's headline draws a rule, and the Contents card right under it draws a
+   border of its own, so every guide read as two lines in a row below the title.
+   The card is the divider there; a guide with no Contents card keeps the
+   headline's rule. */
+#docs-article h1:has(+ .guide-toc) {
+    border-bottom: none;
+    padding-bottom: 0;
 }
 
 .docs-search-wrap {
@@ -2266,6 +2276,32 @@ html.pwa {
     color: var(--text-dim);
     margin: 0 0 6px 8px;
 }
+
+/* Categories | Tags: how the Guides section is grouped. The in-pane twin of the
+   guides index's By Category / By Tag switch, so it borrows the same two-button
+   segmented look and fills the nav's width. */
+.docs-view-tablist {
+    display: flex;
+    margin: 0 8px 8px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    overflow: hidden;
+    font-size: 11px;
+}
+.docs-view-btn {
+    flex: 1;
+    padding: 3px 8px;
+    background: transparent;
+    color: var(--text-sec);
+    border: none;
+    cursor: pointer;
+    font: inherit;
+}
+.docs-view-btn + .docs-view-btn { border-left: 1px solid var(--border); }
+.docs-view-btn:hover { color: var(--text-primary); }
+.docs-view-btn.active { color: var(--gold-bright); background: var(--bg-hover); }
+.docs-view-btn:focus-visible { outline: 2px solid var(--gold); outline-offset: -2px; }
+.docs-nav-count { margin-left: 4px; color: var(--text-dim); font-variant-numeric: tabular-nums; }
 
 .docs-nav-group > summary {
     cursor: pointer;

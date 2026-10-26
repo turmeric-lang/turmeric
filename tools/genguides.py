@@ -2110,6 +2110,11 @@ def emit_pack_guides(docs: list[dict], guides_dir: Path, pack_dir: Path,
                 stem.replace('-', ' '), doc['title'], description,
                 *headings, prose=packlib.strip_tags(doc['body'])),
         }
+        # The guide's frontmatter tags, for the pane's By Tag view. Left off an
+        # untagged guide rather than written as [], so the pane files it under
+        # "Untagged" and a pack with no tags at all shows no tag switch.
+        if meta.get('tags'):
+            entry['tags'] = list(meta['tags'])
         # Only when git knows: a guide written but not yet committed has no
         # date to claim, and the pane leaves an undated page out of Recently
         # Added / Recently Updated rather than dating it from the build.
