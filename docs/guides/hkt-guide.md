@@ -2,6 +2,12 @@
 title: Higher-Kinded Types
 category: Type System
 description: Higher-kinded types (functor, monad, applicative abstractions, performance/dispatch model)
+tags:
+  - higher-kinded-types
+  - typeclasses
+  - functor
+  - monad
+  - applicative
 ---
 
 # Higher-Kinded Types in Turmeric

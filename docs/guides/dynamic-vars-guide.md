@@ -2,6 +2,12 @@
 title: Dynamic Vars Guide
 category: Concurrency and Async
 description: Thread-local, dynamically-scoped mutable cells with defdynamic and binding
+tags:
+  - dynamic-vars
+  - thread-local
+  - defdynamic
+  - binding
+  - concurrency
 ---
 
 # Dynamic Vars Guide

@@ -2,6 +2,12 @@
 title: Data Literals Guide
 category: Language Basics
 description: Compact literal syntax for maps, vecs, and sets using #map{...}, #set{...}, and [...]
+tags:
+  - data-literals
+  - maps
+  - sets
+  - vecs
+  - rationals
 ---
 
 # Data Literals: `#map{...}`, `#set{...}`, and `[...]`

@@ -2,6 +2,11 @@
 title: Effects System Guide
 category: Advanced Control Flow
 description: Algebraic effects, dependency injection, custom control flow
+tags:
+  - algebraic-effects
+  - handlers
+  - continuations
+  - dependency-injection
 ---
 
 # Effects System Guide

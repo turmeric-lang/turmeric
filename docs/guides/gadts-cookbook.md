@@ -2,6 +2,11 @@
 title: GADTs Cookbook
 category: Advanced Types
 description: GADTs cookbook: practical patterns and recipes
+tags:
+  - gadts
+  - type-refinement
+  - equality-witnesses
+  - patterns
 ---
 
 # GADTs Cookbook

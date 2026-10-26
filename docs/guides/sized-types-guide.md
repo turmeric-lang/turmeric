@@ -2,6 +2,12 @@
 title: Sized Types
 category: Type System
 description: Tracking data-structure sizes in the type system for memory layout, stack allocation, and type-safe array operations
+tags:
+  - sized-types
+  - staticint
+  - sizedvec
+  - type-level-numbers
+  - arrays
 ---
 
 # Sized Types in Turmeric

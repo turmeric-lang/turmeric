@@ -4,6 +4,12 @@ category: Concurrency and Async
 description: Bounded POSIX worker-thread pool with back-pressure for fan-out work over ptr<void> items
 audience: developers running CPU- or IO-bound work across a fixed set of OS threads
 since: thread-pool v0.1.0
+tags:
+  - thread-pool
+  - concurrency
+  - workers
+  - back-pressure
+  - posix
 ---
 
 # Thread Pool

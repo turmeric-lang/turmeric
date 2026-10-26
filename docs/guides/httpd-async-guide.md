@@ -2,6 +2,12 @@
 title: HTTPD Async Guide
 category: Networking and Web
 description: Run handlers as fibers on a reactor thread -- non-blocking I/O, await primitives, in-flight cap, and middleware interop
+tags:
+  - httpd
+  - async
+  - reactor
+  - fibers
+  - middleware
 ---
 
 # `stdlib/httpd` -- Async Handlers

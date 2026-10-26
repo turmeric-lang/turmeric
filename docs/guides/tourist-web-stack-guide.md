@@ -4,6 +4,12 @@ category: Networking and Web
 description: Build a complete web application with tourist routing, httpd, TLS, sessions, and template rendering -- the full stack wired together
 audience: developers building a production web application with Turmeric
 since: tourist v0.2.5, tourist-session v0.1.0, tls v0.1.0, template v0.2.0
+tags:
+  - tourist
+  - web-stack
+  - tls
+  - sessions
+  - templates
 ---
 
 # Tourist Web Stack End-to-End

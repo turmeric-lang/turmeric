@@ -2,6 +2,11 @@
 title: Experimental Feature Flags
 category: CLI Tools
 description: The `--enable=<name>` surface for genuinely in-flight compiler features, the two lifecycles, the TUR-W006x warnings, and the `tur experiments` command.
+tags:
+  - experimental-flags
+  - feature-flags
+  - lifecycles
+  - tur-experiments
 ---
 
 # Experimental Feature Flags

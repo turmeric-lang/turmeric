@@ -2,6 +2,12 @@
 title: Language Server (LSP) Guide
 category: Editor and IDE
 description: Configuring editors to use the Turmeric language server for diagnostics
+tags:
+  - lsp
+  - language-server
+  - editors
+  - neovim
+  - vscode
 ---
 
 # Language Server Protocol (LSP) Guide

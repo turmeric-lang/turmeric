@@ -2,6 +2,12 @@
 title: Separate Compilation and Module Loading
 category: Compiler Internals
 description: How the compiler finds, loads and resolves modules, which builds split a program into one C translation unit per module, what goes into each module's .h and .c, who owns a generic specialization or an instance across TUs, and how to read the link errors when the split goes wrong
+tags:
+  - separate-compilation
+  - modules
+  - compiler-internals
+  - translation-units
+  - linking
 ---
 
 # Separate Compilation and Module Loading (internals)

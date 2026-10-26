@@ -2,6 +2,12 @@
 title: AI Assistant Integration Guide
 category: Editor and IDE
 description: Using the Turmeric MCP server and LSP with Copilot CLI, Claude CLI, OpenCode, and VS Code Copilot
+tags:
+  - mcp
+  - lsp
+  - ai-assistants
+  - copilot
+  - claude-code
 ---
 
 # AI Assistant Integration Guide

@@ -2,6 +2,12 @@
 title: Sandboxing Guide
 category: Interoperability
 description: Restricting Turmeric code inside a C host with turi_env_new_sandboxed, capability flags, the native classification table, and resource limits -- and the memory-safety gap that keeps it from being a boundary against hostile code
+tags:
+  - sandboxing
+  - security
+  - capabilities
+  - resource-limits
+  - embedding
 ---
 
 # Sandboxing Guide

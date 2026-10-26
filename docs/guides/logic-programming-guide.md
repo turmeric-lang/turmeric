@@ -2,6 +2,12 @@
 title: Logic Programming Guide
 category: Advanced Control Flow
 description: Backtracking, logic programming, constraint solving with cloneable continuations
+tags:
+  - logic-programming
+  - backtracking
+  - continuations
+  - minikanren
+  - constraints
 ---
 
 # Logic Programming with Backtracking

@@ -2,6 +2,11 @@
 title: Monomorphization ABI Guide
 category: Performance
 description: How Turmeric's end-to-end monomorphization ABI works, why the by-value path replaced the int64 carrier, how to read `__spec_*` symbols in error messages, and what the small residual ABI bridge does.
+tags:
+  - monomorphization
+  - abi
+  - performance
+  - codegen
 ---
 
 # Monomorphization ABI Guide

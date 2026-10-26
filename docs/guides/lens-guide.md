@@ -2,6 +2,11 @@
 title: Lens Guide
 category: Functional Patterns
 description: First-class functional lenses (view / set / over) via stdlib/lens.tur, which ships the profunctor-by-record encoding. The classic van Laarhoven form is also expressible by hand.
+tags:
+  - lenses
+  - profunctor
+  - functional-references
+  - stdlib
 ---
 
 # Lens Guide

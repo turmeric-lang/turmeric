@@ -2,6 +2,11 @@
 title: Fat-Closure Annotation Guide (`^fat`)
 category: Language Basics
 description: When and why to mark function-typed parameters and return positions `^fat`, and what breaks without it
+tags:
+  - closures
+  - fat-closure
+  - abi
+  - function-values
 ---
 
 # Fat-Closure Annotation Guide (`^fat`)

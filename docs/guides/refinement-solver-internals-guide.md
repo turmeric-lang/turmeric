@@ -2,6 +2,12 @@
 title: Refinement Solver Internals
 category: Compiler Internals
 description: How the compiler proves a refinement predicate at compile time -- the obligation pipeline, the normalized verification condition, the staged in-house solver (no SMT dependency), memoization, caps, and how to debug an obligation
+tags:
+  - refinement-solver
+  - compiler-internals
+  - verification
+  - solver
+  - obligations
 ---
 
 # The Refinement Solver (Internals)

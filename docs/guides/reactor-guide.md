@@ -2,6 +2,12 @@
 title: Reactor Guide
 category: Concurrency and Async
 description: Lightweight evented I/O with tur/reactor
+tags:
+  - reactor
+  - evented-io
+  - async
+  - channels
+  - fibers
 ---
 
 # Reactor Guide

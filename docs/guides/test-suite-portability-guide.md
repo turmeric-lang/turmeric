@@ -2,6 +2,12 @@
 title: Test Suite Portability & Performance Guide
 category: Contributor Notes
 description: macOS / Bash 3.2 gotchas, background-terminal SIGTTOU guards, inline-C math wrapper shadowing, and stamp-cache patterns for the test harnesses
+tags:
+  - testing
+  - portability
+  - macos
+  - bash
+  - ctest
 ---
 
 # Test Suite Portability & Performance Guide

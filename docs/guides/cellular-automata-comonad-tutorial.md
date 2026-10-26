@@ -2,6 +2,12 @@
 title: Cellular Automata with Comonads
 category: Tutorials
 description: Cellular automata with comonads
+tags:
+  - comonads
+  - cellular-automata
+  - zipper
+  - game-of-life
+  - typeclasses
 ---
 
 # Cellular Automata with Comonads in Turmeric

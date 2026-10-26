@@ -2,6 +2,12 @@
 title: CPS and the DK Continuation Machine
 category: Compiler Internals
 description: How the compiled path lowers effects and delimited control -- the coloring analysis, the CT-IR, the emitter's DK-threading ABI, the DK heap-continuation machine, who frees what, and the tools for debugging it
+tags:
+  - cps
+  - delimited-continuations
+  - compiler-internals
+  - abi
+  - coloring
 ---
 
 # CPS and the DK Continuation Machine (internals)

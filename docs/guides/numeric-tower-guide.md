@@ -2,6 +2,12 @@
 title: Numeric Tower Guide
 category: Language Basics
 description: Exact Rational and hand-written Complex arithmetic, the #rat{...} / #cx{...} literals, and Num-typeclass operator overloading
+tags:
+  - numerics
+  - rational
+  - complex
+  - num-typeclass
+  - literals
 ---
 
 # Numeric Tower: `Rational` and `Complex`

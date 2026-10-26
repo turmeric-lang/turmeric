@@ -2,6 +2,12 @@
 title: Snake Game Tutorial
 category: Tutorials
 description: Building the snake game example
+tags:
+  - snake
+  - game-tutorial
+  - raylib
+  - cmake
+  - tutorials
 ---
 
 # Snake Game Tutorial -- Step-by-Step Implementation

@@ -2,6 +2,12 @@
 title: Package Manager Internals
 category: Compiler Internals
 description: How tur reads build.tur, resolves :spices and workspace siblings, writes and honours tur.lock, generates and consumes the :cmake-deps CMake project, and threads :build-opts into the C compile -- with the traps each stage leaves for spice authors
+tags:
+  - package-manager
+  - compiler-internals
+  - build-tur
+  - tur-lock
+  - cmake-deps
 ---
 
 # Package Manager Internals

@@ -2,6 +2,12 @@
 title: Typeclass Guide
 category: Type System
 description: Comprehensive guide to Turmeric's typeclass system -- defining typeclasses with defclass, implementing instances with definstance, constraints, associated types, functional dependencies, and default implementations.
+tags:
+  - typeclasses
+  - defclass
+  - definstance
+  - constraints
+  - associated-types
 ---
 
 # Typeclasses in Turmeric

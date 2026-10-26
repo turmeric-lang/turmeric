@@ -2,6 +2,10 @@
 title: Currying Guide
 category: Language Basics
 description: Haskell-style partial application and over-application of Turmeric functions
+tags:
+  - currying
+  - partial-application
+  - functions
 ---
 
 # Currying Guide

@@ -2,6 +2,12 @@
 title: Semigroups, Monoids, and Lattices
 category: Functional Patterns
 description: The algebraic combining vocabulary in stdlib/typeclass-lattice.tur -- Semigroup, Monoid, the join/meet lattice classes, the selection newtypes that carry them, mconcat, and the law predicates.
+tags:
+  - semigroup
+  - monoid
+  - lattice
+  - typeclasses
+  - mconcat
 ---
 
 # Semigroups, Monoids, and Lattices

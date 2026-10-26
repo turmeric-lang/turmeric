@@ -2,6 +2,12 @@
 title: Backtracking Guide
 category: Advanced Control Flow
 description: Nondeterministic backtracking using the list monad in Turmeric's stdlib/backtrack.tur
+tags:
+  - backtracking
+  - nondeterminism
+  - list-monad
+  - search
+  - sudoku
 ---
 
 # Turmeric Backtracking Guide

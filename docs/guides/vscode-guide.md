@@ -2,6 +2,12 @@
 title: VS Code Extension
 category: Editor and IDE
 description: VS Code extension installation and configuration
+tags:
+  - vscode
+  - extension
+  - editors
+  - language-server
+  - formatting
 ---
 
 # VS Code Extension for Turmeric

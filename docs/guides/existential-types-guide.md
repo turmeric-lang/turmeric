@@ -2,6 +2,11 @@
 title: Existential Types
 category: Advanced Types
 description: Existential types: pack/open, typeclass constraints, hiding concrete types behind opaque boundaries
+tags:
+  - existential-types
+  - pack-open
+  - typeclasses
+  - abstraction
 ---
 
 # Existential Types in Turmeric

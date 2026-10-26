@@ -2,6 +2,11 @@
 title: Loop Invariants Guide
 category: Refinement Types
 description: Proving loop properties with :invariant annotations on while loops
+tags:
+  - loop-invariants
+  - refinements
+  - proofs
+  - solver
 ---
 
 # Loop Invariants Guide

@@ -2,6 +2,12 @@
 title: Garbage Collection
 category: Compiler Internals
 description: How memory is managed in Turmeric — reference counting, the Bacon-Rajan cycle collector, arenas, and what is (and isn't) GC-managed in the compiled and interpreted paths
+tags:
+  - garbage-collection
+  - reference-counting
+  - cycle-collector
+  - memory
+  - arenas
 ---
 
 # Garbage Collection in Turmeric

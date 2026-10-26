@@ -2,6 +2,12 @@
 title: "Working through SICP with Turmeric"
 category: Tutorials
 description: "Run the code from Structure and Interpretation of Computer Programs in Turmeric's Scheme dialect: installing, the interpreter and the REPL, the few definitions the book assumes, chapter-by-chapter notes, and the rough edges to know about."
+tags:
+  - sicp
+  - scheme
+  - tutorials
+  - r7rs
+  - textbook
 ---
 
 # Working through SICP with Turmeric

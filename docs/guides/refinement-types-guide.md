@@ -2,6 +2,12 @@
 title: Refinement Types
 category: Type Safety
 description: `#refine{ x : T | p }` predicates the compiler tries to prove statically, emitting a runtime check only where the proof fails -- the predicate language, named refinements, diagnostics, and the documented limits
+tags:
+  - refinement-types
+  - predicates
+  - static-checking
+  - contracts
+  - diagnostics
 ---
 
 # Refinement Types

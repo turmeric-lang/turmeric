@@ -2,6 +2,12 @@
 title: Package Management Guide (Spice)
 category: Package Management
 description: Creating projects, adding spices, `build.tur`, `tur.lock`, CLI reference
+tags:
+  - package-management
+  - spices
+  - build-tur
+  - tur-lock
+  - projects
 ---
 
 # Turmeric Package Management Guide (Spice)

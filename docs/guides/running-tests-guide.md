@@ -2,6 +2,12 @@
 title: Running the Tests
 category: Contributor Notes
 description: Which harness runs what, how to narrow a run to the tests you care about, the fixture marker files, and how to reproduce a red CI job locally
+tags:
+  - testing
+  - test-harness
+  - ctest
+  - fixtures
+  - contributors
 ---
 
 # Running the Tests

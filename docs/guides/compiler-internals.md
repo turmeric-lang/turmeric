@@ -2,6 +2,12 @@
 title: Compiler Internals
 category: Compiler Internals
 description: The map of the tur compiler -- the pipeline and pass schedule, the src/ layout, and one paragraph per subsystem with a link to its deep-dive guide; the entry point for contributors
+tags:
+  - compiler-internals
+  - pipeline
+  - pass-schedule
+  - source-layout
+  - contributors
 ---
 
 # Turmeric Compiler Internals

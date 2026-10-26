@@ -2,6 +2,11 @@
 title: Autodoc Guide
 category: CLI Tools
 description: Writing `;;;` docstrings and generating API docs with `tools/gendocs.py`
+tags:
+  - docstrings
+  - api-docs
+  - documentation
+  - gendocs
 ---
 
 # Autodoc Guide

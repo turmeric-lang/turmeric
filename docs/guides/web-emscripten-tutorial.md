@@ -2,6 +2,12 @@
 title: Building for the Web with Emscripten
 category: Tutorials
 description: Compile a Turmeric project to WebAssembly and run it in a browser
+tags:
+  - wasm
+  - emscripten
+  - web
+  - tutorials
+  - browser
 ---
 
 # Building for the Web with Emscripten

@@ -3,6 +3,11 @@ title: Application Image Dumps
 category: CLI Tools
 description: Warm-start a Turmeric program by saving and restoring a post-init continuation, Lisp/Smalltalk/pdumper style.
 since: Phase AI
+tags:
+  - image-dumps
+  - warm-start
+  - continuations
+  - pdumper
 ---
 
 # Application Image Dumps

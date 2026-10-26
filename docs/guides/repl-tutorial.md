@@ -2,6 +2,11 @@
 title: Interactive REPL Tutorial
 category: Getting Started
 description: 22-step interactive tutorial to follow at `tur repl` or the web REPL
+tags:
+  - repl
+  - tutorials
+  - getting-started
+  - interactive
 ---
 
 # Turmeric Interactive REPL Tutorial

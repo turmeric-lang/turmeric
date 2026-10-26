@@ -2,6 +2,12 @@
 title: "R7RS Scheme -- #lang r7rs"
 category: Getting Started
 description: "#lang r7rs runs R7RS-small Scheme on the Turmeric compiler and runtime, compiled or interpreted, and lets Scheme and Turmeric modules import each other. This guide covers getting started, what is there, how it differs from the standard, and the tooling."
+tags:
+  - r7rs
+  - scheme
+  - dialects
+  - getting-started
+  - srfis
 ---
 
 # R7RS Scheme

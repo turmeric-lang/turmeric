@@ -2,6 +2,11 @@
 title: The Runtime Preamble and Its Linkage
 category: Compiler Internals
 description: Where the C runtime every compiled program needs comes from -- the emitted preamble, its feature gates and linkage postures, the runtime archives, the S2 split runtime and its generator, tur_tls.c -- which copy each build path links, and how to change any of it without silently losing the fast path
+tags:
+  - runtime-preamble
+  - linkage
+  - compiler-internals
+  - archives
 ---
 
 # The Runtime Preamble and Its Linkage (internals)

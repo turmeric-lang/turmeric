@@ -2,6 +2,11 @@
 title: JSON Guide
 category: Data Structures and Libraries
 description: Compile-time #json(...) reader macro and runtime tur/json library for parsing and serializing JSON
+tags:
+  - json
+  - reader-macro
+  - parsing
+  - serialization
 ---
 
 # JSON in Turmeric: the `#json(...)` reader macro and `tur/json`

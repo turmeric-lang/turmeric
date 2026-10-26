@@ -2,6 +2,12 @@
 title: Datalog Tutorial Pt. 1: Concepts
 category: Tutorials
 description: Create a database and a query system to go with it
+tags:
+  - datalog
+  - database
+  - eavt
+  - queries
+  - tutorials
 ---
 
 # Datalog Tutorial Pt. 1: Concepts

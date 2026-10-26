@@ -2,6 +2,12 @@
 title: Deploying Turmeric Services to Cloudflare
 category: Networking and Web
 description: Three approaches for deploying Turmeric-written services to Cloudflare -- Containers (simplest, works today), Interpreter-in-WASM (portable edge execution), and AOT WASM via emit-c (fastest cold starts).
+tags:
+  - cloudflare
+  - deployment
+  - wasm
+  - containers
+  - edge
 ---
 
 # Deploying Turmeric Services to Cloudflare

@@ -2,6 +2,12 @@
 title: Notebook Guide
 category: Editor and IDE
 description: Literate-programming .tur.md notebooks with tur-notebook -- TUI interface, HTML export, and scripted exec mode
+tags:
+  - notebooks
+  - literate-programming
+  - tur-notebook
+  - tui
+  - html-export
 ---
 
 # Turmeric Notebook Guide

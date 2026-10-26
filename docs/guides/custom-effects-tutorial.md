@@ -2,6 +2,11 @@
 title: Custom Effects Tutorial
 category: Tutorials
 description: Writing custom effects
+tags:
+  - algebraic-effects
+  - handlers
+  - custom-effects
+  - tutorials
 ---
 
 # Custom Effects Tutorial

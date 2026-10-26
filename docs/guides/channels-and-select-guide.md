@@ -2,6 +2,12 @@
 title: Channels and Select Guide
 category: Concurrency and Async
 description: Buffered channels for inter-fiber communication and multi-channel select
+tags:
+  - channels
+  - select
+  - fibers
+  - concurrency
+  - message-passing
 ---
 
 # Channels and Select Guide

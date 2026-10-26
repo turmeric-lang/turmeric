@@ -2,6 +2,12 @@
 title: Substructural Types
 category: Type Safety
 description: `^linear`, `^affine`, `^relevant` type disciplines
+tags:
+  - substructural-types
+  - linear
+  - affine
+  - relevant
+  - borrowing
 ---
 
 # Substructural Types in Turmeric

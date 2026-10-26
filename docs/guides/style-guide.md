@@ -2,6 +2,12 @@
 title: Turmeric Style Guide
 category: Reference
 description: Canonical idioms and formatting conventions for Turmeric code -- function arity, indentation, naming, and inline-C style
+tags:
+  - style-guide
+  - idioms
+  - formatting
+  - naming
+  - conventions
 ---
 
 # Turmeric Style Guide

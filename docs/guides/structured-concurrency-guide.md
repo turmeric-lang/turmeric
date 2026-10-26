@@ -2,6 +2,12 @@
 title: Structured Concurrency Guide
 category: Concurrency and Async
 description: TaskGroup for scoped task spawning and Future/Promise for asynchronous results
+tags:
+  - structured-concurrency
+  - taskgroup
+  - futures
+  - promises
+  - cancellation
 ---
 
 # Structured Concurrency Guide

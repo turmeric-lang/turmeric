@@ -2,6 +2,12 @@
 title: Range Reader Shorthand Plan
 category: Language Basics
 description: Plan for #r{...} reader-level range shorthand (RR0-RR4) -- desugars to Range constructor calls at read time
+tags:
+  - reader-macros
+  - ranges
+  - shorthand
+  - syntax
+  - plan
 ---
 
 # Range Reader Shorthand -- Plan (RR0--RR4)

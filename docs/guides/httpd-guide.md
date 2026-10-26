@@ -2,6 +2,12 @@
 title: HTTP Server with stdlib/httpd
 category: Networking and Web
 description: Build HTTP/1.1 servers with stdlib/httpd -- handlers, routing, middleware, and keep-alive
+tags:
+  - httpd
+  - http-server
+  - routing
+  - middleware
+  - keep-alive
 ---
 
 # HTTP Server with `stdlib/httpd`

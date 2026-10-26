@@ -2,6 +2,12 @@
 title: Threading and Concurrency Primitives Guide
 category: Concurrency and Async
 description: OS threads, `Arc<T>`, `Mutex<T>`, `Atomic<T>`, channels
+tags:
+  - threading
+  - os-threads
+  - arc
+  - mutex
+  - atomics
 ---
 
 # Threading and Concurrency Primitives Guide

@@ -2,6 +2,12 @@
 title: Operators
 category: Language Basics
 description: Arithmetic, comparison, logical and bitwise operators -- which types each takes, how integers wrap and divide, and the float-only forms
+tags:
+  - operators
+  - arithmetic
+  - comparison
+  - bitwise
+  - floats
 ---
 
 # Operators

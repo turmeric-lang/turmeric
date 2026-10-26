@@ -2,6 +2,12 @@
 title: Approaches to Polymorphism
 category: Type System
 description: A tour of the polymorphism mechanisms Turmeric provides -- parametric, ad-hoc, structural, row, kind, rank, and substructural -- with guidance on which one to reach for
+tags:
+  - polymorphism
+  - parametric
+  - typeclasses
+  - row-types
+  - substructural
 ---
 
 # Approaches to Polymorphism

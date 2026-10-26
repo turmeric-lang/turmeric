@@ -2,6 +2,12 @@
 title: Parser Combinators Tutorial
 category: Tutorials
 description: Build a small parser in pure Turmeric using algebraic data types, GADTs, higher-order combinators, and pattern matching
+tags:
+  - parser-combinators
+  - gadts
+  - parsing
+  - tutorials
+  - combinators
 ---
 
 # Parser Combinators Tutorial

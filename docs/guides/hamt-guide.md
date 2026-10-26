@@ -2,6 +2,11 @@
 title: HAMT Guide
 category: Data Structures and Libraries
 description: Persistent hash maps with structural sharing (HAMT)
+tags:
+  - hamt
+  - persistent-maps
+  - hash-maps
+  - structural-sharing
 ---
 
 # HAMT Guide

@@ -2,6 +2,11 @@
 title: Security Guide
 category: Security
 description: What Turmeric promises to handle safely -- the trust boundary for each input, the promise made at it, and where the implementation does not yet keep that promise
+tags:
+  - security
+  - trust-boundaries
+  - supply-chain
+  - sandboxing
 ---
 
 # Security Guide

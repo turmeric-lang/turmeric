@@ -2,6 +2,12 @@
 title: Regions (RM3) Internals
 category: Compiler Internals
 description: How region brackets work on the compiled path -- arena generations, rewind vs retire, the static walk and the runtime escape note, the store-hook rule and every place it is applied, the CPS and call/cc interactions, and the tools that tell a rewind from a retire
+tags:
+  - regions
+  - arenas
+  - compiler-internals
+  - memory
+  - generations
 ---
 
 # Regions (RM3) internals

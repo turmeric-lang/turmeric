@@ -2,6 +2,12 @@
 title: Turmeric Version Manager (`tvm`)
 category: CLI Tools
 description: Install, switch between, and pin Turmeric compiler releases the same way nvm does for Node -- per-user, no root, no system package manager.
+tags:
+  - tvm
+  - version-manager
+  - installation
+  - releases
+  - pinning
 ---
 
 # Turmeric Version Manager (`tvm`)

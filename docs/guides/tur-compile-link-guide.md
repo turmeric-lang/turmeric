@@ -2,6 +2,12 @@
 title: `tur compile` and `tur link`
 category: CLI Tools
 description: Splitting the monolithic `tur build` into a cacheable object compile plus a cheap link -- `tur compile`, `tur link`, `--split-build`, and how `--runtime=` decides the way the runtime gets linked
+tags:
+  - tur-compile
+  - tur-link
+  - split-build
+  - caching
+  - runtime
 ---
 
 # `tur compile` and `tur link` -- the compile/link split

@@ -2,6 +2,12 @@
 title: Runtime Schema Validation
 category: Data Structures and Libraries
 description: Validate untyped boundary data (HTTP bodies, config, IPC) with composable schema values using stdlib/schema.tur, with accumulating, path-tagged errors.
+tags:
+  - schema
+  - validation
+  - decoding
+  - boundary-data
+  - stdlib
 ---
 
 # Runtime Schema Validation with `tur/schema`

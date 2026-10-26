@@ -2,6 +2,12 @@
 title: ECS Storage Guide -- Dense, Sparse, Tag
 category: Data Structures and Libraries
 description: How `tur-ecs`'s three component-storage backends -- `Dense`, `Sparse`, `Tag` -- differ in layout, cost, and ergonomics; when to pick each; how `StorageOps` unifies them; and how the `Sized*` variants thread a capacity through the type.
+tags:
+  - ecs
+  - storage-backends
+  - dense
+  - sparse
+  - tag
 ---
 
 # ECS Storage Guide -- Dense, Sparse, Tag

@@ -2,6 +2,11 @@
 title: Datalog Tutorial Pt. 4: Indexing
 category: Tutorials
 description: Create a database and a query system to go with it
+tags:
+  - datalog
+  - indexing
+  - hash-tables
+  - performance
 ---
 
 # Datalog Tutorial Pt. 4: Indexing

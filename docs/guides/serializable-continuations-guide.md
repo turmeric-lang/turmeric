@@ -2,6 +2,11 @@
 title: Serializable Continuations Guide
 category: Advanced Control Flow
 description: Serializable continuations for persistent workflows and cross-process computation
+tags:
+  - continuations
+  - serialization
+  - persistent-workflows
+  - serializable
 ---
 
 # Serializable Continuations Guide

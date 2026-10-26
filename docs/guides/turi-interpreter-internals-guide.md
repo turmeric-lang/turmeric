@@ -2,6 +2,12 @@
 title: The turi Interpreter (internals)
 category: Compiler Internals
 description: How the tree-walking interpreter works -- its entry points, the shared front end it runs, value and frame representations, the explicit-stack driver, native overrides and inline-C, the two effect runtimes, what memory it gives back and what it keeps, process-global hazards, and how to add a form or native
+tags:
+  - interpreter
+  - turi
+  - compiler-internals
+  - tree-walking
+  - natives
 ---
 
 # The turi Interpreter (internals)

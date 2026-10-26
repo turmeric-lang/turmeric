@@ -2,6 +2,11 @@
 title: Wiring a ResourceFormatLoader for the Turmeric/Godot Binding
 category: Integration / Godot
 description: Why and how the turmeric-godot GDExtension has to register its own ResourceFormatLoader so .tur files load through Godot's resource pipeline
+tags:
+  - godot
+  - resource-loader
+  - gdextension
+  - resource-pipeline
 ---
 
 # Wiring a ResourceFormatLoader for the Turmeric/Godot Binding

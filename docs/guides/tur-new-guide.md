@@ -2,6 +2,12 @@
 title: Tur New Guide
 category: CLI Tools
 description: Scaffold a new Turmeric spice (library or binary) with standard layout, build manifest, tests, and optional CI
+tags:
+  - tur-new
+  - scaffolding
+  - spices
+  - project-creation
+  - ci
 ---
 
 # tur new -- spice scaffolder

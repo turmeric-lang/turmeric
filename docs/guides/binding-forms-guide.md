@@ -2,6 +2,12 @@
 title: Binding Forms Guide
 category: Language Basics
 description: def in a body, letrec, and named-let -- the three local binding idioms that complement let and defn
+tags:
+  - binding-forms
+  - let
+  - letrec
+  - def
+  - recursion
 ---
 
 # Binding Forms Guide

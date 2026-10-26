@@ -2,6 +2,12 @@
 title: Typeclass Dictionary Internals
 category: Compiler Internals
 description: How the compiler resolves a typeclass method call to an instance (receiver- and return-directed), what the call records, how constrained generics reach the right instance (monomorphization, dict clones, captured dictionaries), superclasses, default methods, HKT instances on the by-value path, instances across modules, how `definstance` lowers to a C dictionary struct + singleton, the closure-handle convention, and the failure shapes with their diagnostics.
+tags:
+  - typeclasses
+  - compiler-internals
+  - dictionaries
+  - resolution
+  - monomorphization
 ---
 
 # Typeclass Dictionary Internals

@@ -2,6 +2,12 @@
 title: tur/logic -- Logic Programming Guide
 category: Advanced Control Flow
 description: How to use and extend tur/logic for miniKanren-style relational programming in Turmeric
+tags:
+  - logic-programming
+  - minikanren
+  - unification
+  - relations
+  - goals
 ---
 
 # `tur/logic` -- Logic Programming Guide

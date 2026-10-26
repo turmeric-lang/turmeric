@@ -4,6 +4,12 @@ category: Networking and Web
 description: Cookie-backed sessions for tur-tourist with swappable storage backends (memory, file)
 audience: developers adding login / per-user state to a tur-tourist app
 since: tourist-session v0.1.0
+tags:
+  - tourist
+  - sessions
+  - cookies
+  - web
+  - middleware
 ---
 
 # Tourist Session Middleware

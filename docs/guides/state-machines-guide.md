@@ -2,6 +2,12 @@
 title: State Machines Guide
 category: Advanced Control Flow
 description: Five different approaches to modeling state machines in turmeric
+tags:
+  - state-machines
+  - control-flow
+  - effects
+  - free-monad
+  - arrows
 ---
 
 # State Machines in Turmeric

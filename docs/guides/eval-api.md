@@ -2,6 +2,11 @@
 title: libturi -- C Embedding API Reference
 category: Interoperability
 description: C embedding API for evaluating Turmeric expressions and calling Turmeric functions from within a C program using libturi.a
+tags:
+  - libturi
+  - c-embedding
+  - embedding-api
+  - c-interop
 ---
 
 # libturi -- C Embedding API Reference

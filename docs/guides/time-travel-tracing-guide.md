@@ -2,6 +2,12 @@
 title: Time-Travel Tracing Guide (`tur trace`)
 category: Editor and IDE
 description: Recording an interpreted run and scrubbing it -- what the .turtrace format holds, what the step cap protects, and how `tur dap` replays a recording so a debugger can step backwards
+tags:
+  - tracing
+  - time-travel
+  - dap
+  - debugging
+  - tur-trace
 ---
 
 # Time-Travel Tracing Guide (`tur trace`)

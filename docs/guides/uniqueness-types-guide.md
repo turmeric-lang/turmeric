@@ -2,6 +2,12 @@
 title: Uniqueness Types
 category: Type Safety
 description: `^unique`: at-most-one-reference ownership
+tags:
+  - uniqueness-types
+  - ownership
+  - linear
+  - mutation
+  - aliasing
 ---
 
 # Uniqueness Types in Turmeric

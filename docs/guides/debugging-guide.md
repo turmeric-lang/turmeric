@@ -2,6 +2,12 @@
 title: Debugging Turmeric Programs
 category: Troubleshooting
 description: Finding out why a program does not compile, panics, crashes or prints the wrong thing -- reading diagnostics, `tur explain`, the `tur debug` stepper, editor debugging over DAP, `tur build --debug` under lldb/gdb, sanitizers for inline C, and `tur demangle`
+tags:
+  - debugging
+  - diagnostics
+  - dap
+  - lldb
+  - tur-debug
 ---
 
 # Debugging Turmeric Programs

@@ -2,6 +2,12 @@
 title: Using a Turmeric Library from CMake
 category: Package Management
 description: How to publish a Turmeric library for consumption by C and C++ projects via CMake or CPM using `tur emit-cmake`
+tags:
+  - cmake
+  - c-interop
+  - libraries
+  - publishing
+  - cpm
 ---
 
 # Using a Turmeric Library from CMake

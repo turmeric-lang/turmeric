@@ -2,6 +2,11 @@
 title: tur-watch Guide
 category: CLI Tools
 description: Cross-platform filesystem watching with debounce and coalescing for CLI tools
+tags:
+  - tur-watch
+  - filesystem-watching
+  - debounce
+  - cli
 ---
 
 # tur-watch Guide

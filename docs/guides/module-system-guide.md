@@ -2,6 +2,12 @@
 title: Module System Guide
 category: Language Basics
 description: Module system, namespacing, exports
+tags:
+  - modules
+  - imports
+  - exports
+  - namespaces
+  - circular-imports
 ---
 
 # Turmeric Module System Guide

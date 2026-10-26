@@ -2,6 +2,12 @@
 title: Zipper Guide
 category: Functional Patterns
 description: Generic zippers with stdlib/zip.tur -- a typed clojure.zip over any tree (ZipLoc), the Plated typeclass, and an element cursor over any container (ZipCursor).
+tags:
+  - zippers
+  - trees
+  - traversal
+  - plated
+  - cursors
 ---
 
 # Zipper Guide

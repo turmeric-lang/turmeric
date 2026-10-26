@@ -2,6 +2,10 @@
 title: Guides Index
 category: Getting Started
 description: Index and overview of Turmeric user-facing documentation, guides, and tutorials
+tags:
+  - index
+  - overview
+  - documentation
 ---
 
 # Turmeric Guides

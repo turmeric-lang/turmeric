@@ -2,6 +2,11 @@
 title: Offline Docs Guide
 category: CLI Tools
 description: How the guides and API reference reach you without a network -- the docs pack, Try Turmeric's in-app docs browser, and the `tur doc` / `tur docs` commands
+tags:
+  - offline-docs
+  - docs-pack
+  - tur-doc
+  - try-turmeric
 ---
 
 # Offline docs

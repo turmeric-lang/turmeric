@@ -2,6 +2,11 @@
 title: tur repl -- REPL Reference
 category: Getting Started
 description: Reference guide for the `tur repl` interactive read-eval-print loop, covering startup, expression evaluation, meta-commands, and configuration
+tags:
+  - repl
+  - reference
+  - meta-commands
+  - interactive
 ---
 
 # tur repl -- REPL Reference

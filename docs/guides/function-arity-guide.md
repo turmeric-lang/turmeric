@@ -2,6 +2,12 @@
 title: Function Arity Style Guide
 category: Language Basics
 description: When to use positional parameters, defstruct options, and variadic rest parameters -- plus the rules governing each
+tags:
+  - function-arity
+  - parameters
+  - defstruct
+  - variadic
+  - style
 ---
 
 # Function Arity Style Guide

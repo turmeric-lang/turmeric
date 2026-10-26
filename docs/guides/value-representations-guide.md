@@ -2,6 +2,12 @@
 title: Value Representations
 category: Compiler Internals
 description: Every representation a Turmeric value can travel in, the boundaries where the compiler must bridge between them, and the failure shapes -- cc errors, link errors, segfaults -- when a bridge is missing
+tags:
+  - value-representations
+  - compiler-internals
+  - abi
+  - boundaries
+  - boxing
 ---
 
 # Value Representations and Boundary Bridges (internals)

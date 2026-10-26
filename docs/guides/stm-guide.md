@@ -2,6 +2,12 @@
 title: STM Guide
 category: Concurrency and Async
 description: Software transactional memory -- API reference and mechanics
+tags:
+  - stm
+  - transactional-memory
+  - tvar
+  - concurrency
+  - retry
 ---
 
 # STM Guide
