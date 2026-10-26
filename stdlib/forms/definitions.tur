@@ -81,7 +81,7 @@
 ;;;                      letter in an annotation (`x : a`) is a type variable too.
 ;;;                      Note that an unknown type name is also taken as a type
 ;;;                      variable, with no warning
-;;;                      (docs/reported/unknown-type-annotation-becomes-implicit-tyvar.md).
+;;;                      (docs/archive/unknown-type-annotation-becomes-implicit-tyvar.md).
 ;;;   Class constraints  `(defn tell [^Describe a] [x : a] : cstr ...)` or
 ;;;                      `(defn tell [a] [(Describe a)] [x : a] ...)`; using a
 ;;;                      class method on an unconstrained variable is TUR-E0015.

@@ -5,7 +5,7 @@
 ;; caller holding an immutable borrow of a handle can unwrap and re-wrap it to
 ;; mint an ALIAS the uniqueness checker does not recognise as the same value,
 ;; and mutate through the alias inside a region that is supposed to forbid
-;; exactly that -- see docs/reported/frozen-region-aliasing-via-coercing-cast.md.
+;; exactly that -- see docs/archive/frozen-region-aliasing-via-coercing-cast.md.
 (defmodule main
   (import sealedlib/world :refer [W w-read])
   (defn main [] : int

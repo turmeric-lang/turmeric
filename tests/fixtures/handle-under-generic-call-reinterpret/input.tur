@@ -4,7 +4,7 @@
 ;; had no arm for it) nor decomposed it, so the whole function was evicted and
 ;; every `perform` under it was refused: "this effect operation has no lowering
 ;; here".  Found as the type fuzzer's fn_field_eff GEN_REJECT shape (2) in
-;; docs/reported/cps-evicts-handle-in-operand-positions.md.
+;; docs/archive/cps-evicts-handle-in-operand-positions.md.
 ;;
 ;;   - the generic call is the effectful fn field's ARGUMENT (delegatable once
 ;;     the reinterpret is: it wraps a pure call);

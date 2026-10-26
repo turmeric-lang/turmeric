@@ -7,7 +7,7 @@
 # int64 carrier for A/B measurement, which means nothing in the ordinary suite
 # ever compiles a recursive sum through the carrier any more.  A gate nobody
 # turns on decays to a gate nobody notices (the lesson of
-# docs/reported/sanitizer-gate-not-armed-in-ci.md); this harness keeps the
+# docs/archive/sanitizer-gate-not-armed-in-ci.md); this harness keeps the
 # carrier path green as the compiler moves, so the A/B stays a one-line
 # switch instead of a re-excavation.  (Before the flip it kept the by-value
 # path green the same way; the population below is unchanged.)

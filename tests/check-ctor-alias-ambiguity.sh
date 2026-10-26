@@ -17,7 +17,7 @@
 # calling `ctor_b_c` then reached the FIRST ADT's constructor with no diagnostic
 # at any layer -- and with both ADTs on the int64 carrier, C's type system could
 # not see it either.  The repro asked for a constructor at tag 0 and got tag 1.
-# See docs/reported/separator-fold-collides-emitted-c-names.md.
+# See docs/archive/separator-fold-collides-emitted-c-names.md.
 #
 # This is a harness rather than a fixture because the property is about what is
 # NOT in the emitted C, and pinning that with a whole-program expected.c

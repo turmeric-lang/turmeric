@@ -742,7 +742,7 @@ Each was reproduced against the compiler this guide describes and filed in
 [`docs/reported/`](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/README.md). When one is fixed and archived,
 update the passage above that describes it and drop it from this list.
 
-- [build-file-and-run-project-ignore-manifest-experiments](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/build-file-and-run-project-ignore-manifest-experiments.md) -- Some commands ignore the manifest's `:experiments`
+- [build-file-and-run-project-ignore-manifest-experiments](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/build-file-and-run-project-ignore-manifest-experiments.md) -- Some commands ignore the manifest's `:experiments`
 
 ## Maintenance
 

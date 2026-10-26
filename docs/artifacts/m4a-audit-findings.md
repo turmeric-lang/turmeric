@@ -160,7 +160,7 @@ spec-scan path locates the right plumbing point.
 ## Related
 
 - [m4-typeclass-per-method-abi-plan.md](m4-typeclass-per-method-abi-plan.md)
-- [../reported/m3-carrier-bridge-deletion-blocked-on-typeclass-abi.md](../reported/m3-carrier-bridge-deletion-blocked-on-typeclass-abi.md)
+- [../archive/history/m3-carrier-bridge-deletion-blocked-on-typeclass-abi.md](../archive/history/m3-carrier-bridge-deletion-blocked-on-typeclass-abi.md)
 - `src/compiler/emit_stmt.c:451` (dict-slot emit)
 - `src/compiler/emit_expr.c:1313` (EX_DICT)
 - `src/compiler/emit_expr.c:1749` (`(intptr_t)` cast at indirect-call dispatch)

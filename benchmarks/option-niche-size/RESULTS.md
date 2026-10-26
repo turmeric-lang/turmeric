@@ -196,7 +196,7 @@ such a number a fabrication:
   files using a handful of Options, which is that inflation visible.
 - **Container elements are already known to be at exact parity.** Both
   representations materialize the same carrier box at the erased boundary
-  ([filed](../../docs/reported/option-niche-container-elements-box-at-parity.md)),
+  ([filed](../../docs/archive/option-niche-container-elements-box-at-parity.md)),
   so the 8 bytes apply to direct positions only -- locals, params, returns,
   match, struct fields.
 
@@ -211,7 +211,7 @@ such a number a fabrication:
 - **`option-niche-crossings`'s DEFAULT emission does not compile**
   (`invalid initializer: tur_adt_Option__String __scrut_v = (__ps_266)`).
   That is a second instance of
-  [inline-c-carrier-producer-byval-container-element](../../docs/reported/inline-c-carrier-producer-byval-container-element.md)
+  [inline-c-carrier-producer-byval-container-element](../../docs/archive/inline-c-carrier-producer-byval-container-element.md)
   on a different crossing -- a match scrutinee rather than a `vec-of` element
   -- and it is invisible to CI because the fixture carries
   `flags: --enable=option-niche` and so is never built the other way.

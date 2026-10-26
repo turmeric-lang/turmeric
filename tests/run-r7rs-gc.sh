@@ -27,7 +27,7 @@
 #   4. Reclamation (Linux only, where `ulimit -v` binds): a loop that builds
 #      and drops a million small lists runs under a 256 MiB address-space
 #      limit.  With the collector it fits; the same program without it
-#      (429 MB peak, docs/reported/r7rs-heap-data-never-reclaimed.md) must
+#      (429 MB peak, docs/archive/r7rs-heap-data-never-reclaimed.md) must
 #      NOT fit, or the check proves nothing and fails.  A million guards and
 #      call/cc escapes must fit too (reclaim-escapes; 397 MB before nested
 #      CPS entries dropped their reap registrations).

@@ -816,7 +816,7 @@ Each was reproduced against the compiler this guide describes and filed in
 update the passage above that describes it and drop it from this list.
 
 - [region-bracket-blocks-effects](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/region-bracket-blocks-effects.md) -- (resolved 2026-10-18) A `perform` inside `with-region` / `bt-scope` could not reach an outer handler
-- [regions-off-source-runtime-link-failure](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/regions-off-source-runtime-link-failure.md) -- `TUR_REGIONS=0` fails to link when the runtime comes from source
+- [regions-off-source-runtime-link-failure](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/regions-off-source-runtime-link-failure.md) -- `TUR_REGIONS=0` fails to link when the runtime comes from source
 
 ## Maintenance
 

@@ -7,7 +7,7 @@
 ;; DECLINE are worth pinning as tightly as the shape that must accept.
 ;;
 ;; These still leak one box per widen -- that is the status quo the open report
-;; docs/reported/any-struct-box-leak-per-widen.md continues to cover, which is
+;; docs/archive/any-struct-box-leak-per-widen.md continues to cover, which is
 ;; why this fixture carries no requires.leak-check marker.  It asserts only that
 ;; the values are right, i.e. that nothing was freed or framed out from under a
 ;; callee that keeps it.

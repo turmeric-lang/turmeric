@@ -32,7 +32,7 @@
 ;; scrutinee against a PARAMETRIC ADT emits uncompilable C ("aggregate value
 ;; used where an integer was expected" -- the tagged aggregate is cast to a
 ;; pointer).  Filed as
-;; docs/reported/saffron-match-any-scrutinee-on-parametric-adt-emits-bad-c.md.
+;; docs/archive/saffron-match-any-scrutinee-on-parametric-adt-emits-bad-c.md.
 ;;
 ;; That report was first written as a `defgadt` bug and it is not one: a
 ;; parametric `defdata` fails identically and a non-parametric one works, so

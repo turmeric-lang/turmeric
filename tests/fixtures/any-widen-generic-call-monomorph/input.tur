@@ -30,7 +30,7 @@
 ;; while the compiled path answers "Option".  That divergence is pre-existing
 ;; and unrelated to monomorphization -- this fix only made the compiled side
 ;; start working, which is what exposed it.  Filed as
-;; docs/reported/interp-native-ctor-loses-adt-name.md; asserting the round trip
+;; docs/archive/interp-native-ctor-loses-adt-name.md; asserting the round trip
 ;; instead keeps this fixture about the thing it is pinning.
 (defn main [] : int
   (println (type-of (ret-pos)))

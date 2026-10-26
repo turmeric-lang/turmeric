@@ -756,7 +756,7 @@
    * That shipped green for a long time because developer machines accumulate a
    * C:\tmp; it only surfaced when CI ran the suite on a fresh runner whose
    * workspace is on D:.  See
-   * docs/reported/windows-hardcoded-tmp-resolves-to-drive-root.md. */
+   * docs/archive/windows-hardcoded-tmp-resolves-to-drive-root.md. */
 #ifdef _WIN32
   /* GetTempPathA is the documented source of a directory that EXISTS: it tries
    * TMP, then TEMP, then USERPROFILE, then the Windows directory, and always

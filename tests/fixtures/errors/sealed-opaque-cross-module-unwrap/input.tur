@@ -5,7 +5,7 @@
 ;; rather than merely hard to rebuild: once the raw carrier escapes, inline-C
 ;; anywhere can do what it likes with it. See docs/upcoming/sealed-opaque-plan.md
 ;; ("why both directions") and the motivating report
-;; docs/reported/frozen-region-aliasing-via-coercing-cast.md.
+;; docs/archive/frozen-region-aliasing-via-coercing-cast.md.
 (defmodule main
   (import sealedlib/world :refer [W w-new])
   (defn main [] : int

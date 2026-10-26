@@ -1238,7 +1238,7 @@ class Gen:
 
     def seam_session(self, leg):
         """Binary session: `send` parks the payload in a TurChannel, the peer
-        `recv`s it.  docs/reported/session-payloads-are-int64-only.md."""
+        `recv`s it.  docs/archive/session-payloads-are-int64-only.md."""
         tn, mk, read, exp = self.payload(leg, self._pk())
         leg.prelude.append(self.PTHREAD_PEER)
         s, r = self.name("s"), self.name("r")
@@ -1283,7 +1283,7 @@ class Gen:
 
     def seam_generator(self, leg):
         """`yield` parks the payload in the generator frame; `gen-next` reads it
-        back.  docs/reported/generator-yield-payload-is-int64-only.md."""
+        back.  docs/archive/generator-yield-payload-is-int64-only.md."""
         tn, mk, read, exp = self.payload(leg, self._pk())
         leg.prelude.append('(load "stdlib/gen.tur")')
         g, v = self.name("g"), self.name("v")
@@ -1297,7 +1297,7 @@ class Gen:
 
     def seam_await(self, leg):
         """`async` parks the thunk's result in a future slot; `await` reads it
-        back.  docs/reported/async-await-payload-is-int64-only.md."""
+        back.  docs/archive/async-await-payload-is-int64-only.md."""
         tn, mk, read, exp = self.payload(leg, self._pk())
         f, fut = self.name("fzc"), self.name("fut")
         leg.defs.append("(defn %s [] : %s %s)" % (f, tn, mk))

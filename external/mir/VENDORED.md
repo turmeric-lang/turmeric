@@ -274,7 +274,7 @@ full history mirrored there) plus three fixes on fix/make-one-ret-distinct-targe
     aarch64 the generator makes one whose args and results are all in
     registers the epilogue plus a jump (jmp *%r11 / br x16), and lowers any
     other to a call and a return, as the interpreter runs every one
-    (docs/reported/mir-interp-tail-calls-grow-the-stack.md).  c2mir makes
+    (docs/archive/mir-interp-tail-calls-grow-the-stack.md).  c2mir makes
     `__attribute__ ((musttail)) return f (...)` a TCALL when the call's
     results are exactly what the function returns, accepts
     `__attribute__ ((fallthrough));`, and defines __MIRC_MUSTTAIL__, which

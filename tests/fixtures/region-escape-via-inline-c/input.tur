@@ -3,7 +3,7 @@
 ;; compiler can hook.  Before the parameter note this was a SILENT WRONG ANSWER
 ;; on the default build -- `stash` below rewound its generation and `cell-get-v`
 ;; printed garbage, where TUR_REGIONS=0 printed 7
-;; (docs/reported/region-escape-through-unhooked-stores.md, class 1).
+;; (docs/archive/region-escape-through-unhooked-stores.md, class 1).
 ;;
 ;; The rule is at the callee, where every parameter is a plain C identifier:
 ;; a parameter whose type can BE region memory (a `:heap` node, or a by-value

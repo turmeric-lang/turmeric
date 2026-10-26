@@ -7,7 +7,7 @@ The compiler implements ~160 names itself: the reserved special forms
 (`reserved_special_forms_`, src/compiler/elab_call.c) and the builtin
 functions (`table_`, src/compiler/builtins.c).  None has a definition for a
 `;;;` docstring to sit on, so for a long time none had an API page or a
-`(doc ...)` entry (docs/reported/api-docs-miss-language-primitives.md).  They
+`(doc ...)` entry (docs/archive/api-docs-miss-language-primitives.md).  They
 are documented in stdlib/forms/ with doc-only declarations
 (`;;@form` / `;;@builtin`, read by tools/gendocs.py).
 

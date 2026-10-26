@@ -6,7 +6,7 @@
 ;; also meant `run-logic n` truncated the RESULT after running the whole search,
 ;; so even a finite version paid for every solution it threw away.
 ;;
-;; See docs/reported/logic-streams-are-strict.md.
+;; See docs/archive/logic-streams-are-strict.md.
 
 (load "stdlib/logic.tur")
 

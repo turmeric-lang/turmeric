@@ -6,7 +6,7 @@
 # add a `;;;` block over a `;;@form` / `;;@builtin` line in stdlib/forms/
 # (see the files there) and delete its line below.
 #
-# docs/reported/api-docs-miss-language-primitives.md tracks the work.
+# docs/archive/api-docs-miss-language-primitives.md tracks the work.
 #
 # The list is empty: all 163 reserved forms and builtins are documented.  A new
 # one needs a page entry, or a line here until it has one.

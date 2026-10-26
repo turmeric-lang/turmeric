@@ -15,7 +15,7 @@
 ;; rejects it with "incompatible types when returning type 'int64_t' but
 ;; 'tur_adt_Result__int__cstr' was expected".  Unwrapping at A and rebuilding
 ;; at the wrapper's own result type is what works, and is what this pins.
-;; See docs/reported/generic-wrapper-tail-forwarding-a-return-dispatch-method.md
+;; See docs/archive/generic-wrapper-tail-forwarding-a-return-dispatch-method.md
 ;;
 ;; Covers: primitive payload, cstr payload, defstruct payload, both Result
 ;; arms, and a macro-spliced call site.

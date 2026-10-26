@@ -94,7 +94,7 @@ stamp_write() {
 #
 # Writing once, at the end, with a `# complete:` header is what lets gendocs
 # tell "this run finished and its verdict is total" from "I have no data".
-# See docs/reported/docstrings-verified-table-zeroed-by-regen.md.
+# See docs/archive/docstrings-verified-table-zeroed-by-regen.md.
 VERIFIED_TMP="$(mktemp)"
 trap 'rm -f "$VERIFIED_TMP"' EXIT
 

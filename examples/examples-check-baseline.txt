@@ -4,7 +4,7 @@
 #
 # Added 2026-08-20 while resolving docs/reported/datalog-examples-do-not-compile.
 # Each needs its own fix; the open residue is tracked in
-# docs/reported/examples-tree-does-not-run.md.
+# docs/archive/examples-tree-does-not-run.md.
 #
 # The five datalog files and cli_args_demo left this list on 2026-08-21. Of
 # what remains, only ONE entry is example code being wrong -- the guestbook

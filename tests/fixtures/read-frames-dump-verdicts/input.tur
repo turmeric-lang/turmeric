@@ -7,7 +7,7 @@
 ;; UNVERIFIED is the right verdict for them -- their bodies are inline C, which
 ;; the pass cannot scan, so each frame stays a trusted claim rather than a
 ;; checked one.  That is the gap
-;; docs/reported/reads-frame-verification-ignores-a-callee-write-frame.md
+;; docs/archive/reads-frame-verification-ignores-a-callee-write-frame.md
 ;; records.
 ;;
 ;;   gen-at    VERIFIED    a direct raw load rooted at the framed parameter

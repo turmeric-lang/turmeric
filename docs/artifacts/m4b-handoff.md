@@ -122,7 +122,7 @@ The carrier-bridge call sites in `emit_expr.c` are then either:
 
 - [m4-typeclass-per-method-abi-plan.md](m4-typeclass-per-method-abi-plan.md)
 - [m4a-audit-findings.md](m4a-audit-findings.md)
-- [../reported/m3-carrier-bridge-deletion-blocked-on-typeclass-abi.md](../reported/m3-carrier-bridge-deletion-blocked-on-typeclass-abi.md)
+- [../archive/history/m3-carrier-bridge-deletion-blocked-on-typeclass-abi.md](../archive/history/m3-carrier-bridge-deletion-blocked-on-typeclass-abi.md)
 - `src/compiler/expr.h:407` — `FnDef.owner_instance`
 - `src/compiler/elab_typeclasses.c:2611` — backlink population
 - `src/compiler/emit_internal.h:107` — `EmitAbiSpecialization.typeclass_inst`

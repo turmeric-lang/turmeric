@@ -1,5 +1,5 @@
 /* ceiling.c -- price the fixes proposed in
- * docs/reported/multi-variant-adts-always-heap-allocate.md, before anyone
+ * docs/archive/multi-variant-adts-always-heap-allocate.md, before anyone
  * spends compiler time on them.
  *
  * RECONSTRUCTED 2026-08-25.  The original harness was written on 2026-08-22

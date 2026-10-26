@@ -18,7 +18,7 @@
 # LEAKS ARE NOT CHECKED here (detect_leaks=0), on purpose: a Scheme program's
 # pairs, vectors, strings and procedures are never freed -- the memory model
 # has no collector for them -- so every fixture leaks by design.  That is
-# docs/reported/r7rs-heap-data-never-reclaimed.md; the scratch leaks T8 found
+# docs/archive/r7rs-heap-data-never-reclaimed.md; the scratch leaks T8 found
 # are fixed, and the plan's T8 note tabulates what is freed and what is not.
 #
 # The interpreter side needs no harness of its own: `tur --interpret` is the

@@ -3,7 +3,7 @@
 ; box: the arm binder still holds it.  The value read through that binder
 ; after the match is the assertion; a premature free reads a released box.
 ; Not leak-checked: the kept box has no owner yet, by design (see
-; docs/reported/sum-payload-box-leaks-at-match.md).
+; docs/archive/sum-payload-box-leaks-at-match.md).
 
 (defstruct Er :copy [line : int col : int])
 (defopaque Doc :ptr<void> :non-null)
