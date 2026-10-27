@@ -252,7 +252,8 @@ that plan measured is a bonus, not the reason.
   including `mir-wasm.c`) and the code allocator the same way
   (`mir.c:731`, `mir-code-alloc-wasm.c`); `c2mir.c` does likewise at
   `:41`, `:369` and `:12749` for `c2mir/wasm32/`. No `sed` step: c2mp's
-  `scripts/emcc-setup.sh` is the pre-merge relic (section 6.1).
+  `scripts/emcc-setup.sh` was the pre-merge relic, deleted in c2mp#3
+  (section 6.1).
 - A `TUR_WASM_JIT` option (default ON when `TUR_WASM`) adds `jit_engine.c`,
   `turi/jit_ffi.c`, and the MIR TUs to the `tur_wasm` emcc command, with
   `TUR_HAVE_JIT=1`. Link flags added: `-sWASM_BIGINT`, and
@@ -514,7 +515,7 @@ the entry):
   6.0.10, the version turmeric's CI pins. Green on its first run.
 - Housekeeping: the fork's README no longer lists `-sWASM_BIGINT` as
   required (default in current Emscripten, deprecated in emcc 6). c2mp's
-  Justfile still passes it.
+  Justfile dropped it too (c2mp#3).
 
 One side finding: musl's `<math.h>` parses once the types are right (P1
 recorded it failing on `__ISREL_DEF`), but c2mir keeps unused `static
@@ -547,8 +548,8 @@ marked 2026-10-27 were re-checked when mir#15 merged:
 |---|---|
 | Does `external/mir/` match the fork? | Byte-identical to `master` at `fa8a5d69` (every file compared; `UPSTREAM` agrees). `tools/update-mir.sh` lists `mir-wasm.c` and `c2mir/wasm32` explicitly, so a re-sync keeps the target. **2026-10-27:** re-synced to `a6e75113` (mir#15; #13 and #14 were vendored on 2026-10-24); the sync changed only the five wasm32 files and `UPSTREAM`. |
 | Is the wasm work on a branch? | No. `wasm` (`7106386`, the original target with foreign calls) and `fix/wasm-interp-recursion` (`cfb17d8`: interpreted-to-interpreted calls, callbacks via `addFunction`, `%lld`, bundled headers dropped, implicit-declaration warning) are both ancestors of `master`; the second merged as fork PR #2 (`b7e72a9`). A first shallow check reported them 109 commits "ahead" -- that was a `--depth=1` fetch cutting the merge commit's parents, not divergence. |
-| What does c2mp pin? | `b7e72a9`, the PR #2 merge, in its `CMakeLists.txt`. That is **23 commits behind** `master` and a strict ancestor of it: this repo's pin is a superset of c2mp's. Its docs still cite `7106386` and `cfb17d85`. |
-| Does c2mp patch MIR? | Not any more. `scripts/emcc-setup.sh` (the `sed` patches, the stub `mir-wasm.c`, the types header) is unreferenced by its Justfile and CMake -- only `docs/wasm-ffi-notes.md` mentions it. |
+| What does c2mp pin? | `b7e72a9`, the PR #2 merge, in its `CMakeLists.txt`. That is **23 commits behind** `master` and a strict ancestor of it: this repo's pin is a superset of c2mp's. Its docs still cite `7106386` and `cfb17d85`. **2026-10-27:** `a6e75113`, the same commit this repo vendors (turmeric-lang/c2mp#3). |
+| Does c2mp patch MIR? | Not any more. `scripts/emcc-setup.sh` (the `sed` patches, the stub `mir-wasm.c`, the types header) is unreferenced by its Justfile and CMake -- only `docs/wasm-ffi-notes.md` mentions it. **2026-10-27:** deleted in c2mp#3. |
 | Does the fork's CI run the wasm target? | No. `.github/workflows/test.yml` is the four native legs; `wasm-tests/run.sh` (emcc + node, 4 cases) runs by hand only. **2026-10-27:** yes, the `wasm` job mir#15 added. |
 | Has upstream moved? | Yes: `vnmakarov/mir` `master` is at `861c295`, past the fork's base `a8ab7c3`. Not measured how far; the "point `update-mir.sh` back at upstream when it has every fix" note in `VENDORED.md` stays open. |
 | Stray branches | Merged and deletable: `__probe` (points at `b7e72a9`), `wasm`, `fix/wasm-interp-recursion`, `claude/aarch64-hfa-abi`, `claude/c2mir-rejects-uint128-hmemc3`, `feat/c2mir-macos-sdk-support`, `fix/llp64-uint-llong-conversion`, `fix/make-one-ret-distinct-targets`, `fix/pragma-pack-macro-arg`, `integration/pragma-pack-and-aarch64-hfa`, `jit/win64-wrapper-offsets`. Unmerged: `claude/ci-baseline-pre-mir10` (one CI-baseline commit). A session cannot delete remote branches (CLAUDE.md), so this is the owner's cleanup. **2026-10-27:** done; `master` is the only branch. |
@@ -556,11 +557,12 @@ marked 2026-10-27 were re-checked when mir#15 merged:
 So "reconcile the turmeric patches and the c2mp patches" reduced to three
 small actions, none of them a merge:
 
-1. **c2mp: open.** Bump `GIT_TAG` to `a6e75113`, delete
-   `scripts/emcc-setup.sh`, update the two doc citations, and drop
-   `-sWASM_BIGINT` from its Justfile. Its build already uses the fork's
-   `if(EMSCRIPTEN)` block, so nothing else changes; the new pin also gives it
-   the type fixes of section 6.
+1. **c2mp: done** in turmeric-lang/c2mp#3, merged 2026-10-27. Its
+   `GIT_TAG` is `a6e75113` (fetched from `turmeric-lang/mir`),
+   `scripts/emcc-setup.sh` is deleted, the stale doc citations are fixed, and
+   its Justfile no longer passes `-sWASM_BIGINT`. Its native REPL suite and
+   JS suite pass unchanged; `__attribute__ ((musttail))`, a syntax error on
+   the old pin, now runs.
 2. **Fork: done** in mir#15.
 3. **This repo: done.** `external/mir` is at `a6e75113`, and the spike's
    scratch patches and the `JIT_PRELUDE` workaround are gone.
