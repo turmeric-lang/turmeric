@@ -42,10 +42,10 @@ overloading the already-landed substrate plan.
 The substrate is now strong enough to express signatures like:
 
 ```turmeric
-(defn mk-box [A] [x :A] :(Box A)
+(defn mk-box [A] [x : A] : (Box A)
   (make-struct Box x))
 
-(defn get-box [A] [b :(Box A)] :A
+(defn get-box [A] [b : (Box A)] : A
   (.value b))
 ```
 
@@ -127,7 +127,7 @@ GS4 fixed scalar generic result crossings, but aggregate returns still have
 holes. A helper like:
 
 ```turmeric
-(defn id-box [A] [b :(Box2 A)] :(Box2 A)
+(defn id-box [A] [b : (Box2 A)] : (Box2 A)
   b)
 ```
 

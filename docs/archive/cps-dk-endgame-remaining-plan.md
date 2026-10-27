@@ -167,7 +167,7 @@ unhandled effects propagating outward (the base frame already carries
 **Measured root cause.** A *literal* top-level handle already DK-lowers:
 
 ```turmeric
-(defeffect Ask [] :int)
+(defeffect Ask [] : int)
 (handle (do (let [x (perform (Ask))] (println x)))
   (Ask [] k) (resume k 42))         ; => 0 perform sites under the flag
 ```
@@ -175,7 +175,7 @@ unhandled effects propagating outward (the base frame already carries
 A **macro-expanded** one does not:
 
 ```turmeric
-(defeffect Write [s :cstr] :nil)
+(defeffect Write [s : cstr] : nil)
 (defmacro with-write [body]
   (handle body (Write [s] k) (do (println s) (resume k nil))))
 (with-write (do (perform (Write "hello")) (perform (Write "world"))))

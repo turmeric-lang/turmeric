@@ -61,7 +61,7 @@ says the loss is in elaboration, not emit.
 
 ```turmeric
 (let [m0 : (Map int any) (map-new)  m1 (map-assoc m0 1 (:: 7.1 any))]
-  (println (map-has? m1 2))            ;; false
+  (println (map-has? m1 2))          ;; false
   (println (type-of (map-get m1 2))))  ;; compiled: Segmentation fault; interp: int
 ```
 

@@ -70,8 +70,8 @@ jumped into as if it were a fat box -> SIGSEGV.
 ;; carrier B = (fn [int] int): an environment-passing interpreter.
 (defn eval-alg [l : (ExprF (fn [int] int))] : (fn [int] int)
   (match l
-    (LitF n)   (fn [env : int] : int n)                      ;; captures n   -> fat box
-    (VarF i)   (fn [env : int] : int env)                    ;; captureless  -> THIN pointer
+    (LitF n)   (fn [env : int] : int n)       ;; captures n   -> fat box
+    (VarF i)   (fn [env : int] : int env)     ;; captureless  -> THIN pointer
     (AddF f g) (fn [env : int] : int (+ (f env) (g env)))))  ;; captures f g -> fat box
 
 (defn var [i : int] : Expr (Roll (VarF i)))

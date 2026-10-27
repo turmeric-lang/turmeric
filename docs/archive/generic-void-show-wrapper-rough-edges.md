@@ -47,7 +47,7 @@ wrapper) is fine -- it renders `[]`.  Workaround: ascribe the element type,
     (do
       (println (string/to-cstr c))
       (println (string/len c))
-      (show-line c)                                     ;; void, mid-do
+      (show-line c)                                    ;; void, mid-do
       (println (yn (eq? a (string/from-cstr "Hello")))) ;; typeclass dispatch after
       (println (yn (string/eq? a b)))
       0)))

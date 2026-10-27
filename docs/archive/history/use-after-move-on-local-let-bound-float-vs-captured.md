@@ -32,10 +32,10 @@ description: A `let`-bound `:float` used twice in a single `if` (once in the pre
 A symmetric hard-clip SF written naturally as
 
 ```turmeric
-(defn hard-clip [limit :float]
+(defn hard-clip [limit : float]
   (let [lv limit]                                  ;; outer (captured) let
     (fn [^fat sig : (fn [float] float)]
-      (fn [t :float] :float
+      (fn [t : float] : float
         (let [x  (sig t)
               nv (- 0.0 lv)]                       ;; inner (local) let
           (if (< x nv) nv                          ;; use #1, use #2
@@ -90,10 +90,10 @@ the local-let case appears to be a missed copy-type check.
 ## Reproducer
 
 ```turmeric
-(defn hard-clip [limit :float]
+(defn hard-clip [limit : float]
   (let [lv limit]
     (fn [^fat sig : (fn [float] float)]
-      (fn [t :float] :float
+      (fn [t : float] : float
         (let [x  (sig t)
               nv (- 0.0 lv)]
           (if (< x nv) nv

@@ -56,7 +56,7 @@ An intermediary `f` forced to fall back by a **capturing** non-tail cps->cps
 call (`(+ a (g))` captures `a`), between CPS performer `g` and CPS handler `run`:
 
 ```turmeric
-(defeffect Ask [] :int)
+(defeffect Ask [] : int)
 (defn g [] : int (+ 1 (perform (Ask))))     ; performer -> CPS-emitted (dk_perform)
 (defn f [a : int] : int (+ a (g)))          ; intermediary, capturing join -> falls back
 (defn run [] : int

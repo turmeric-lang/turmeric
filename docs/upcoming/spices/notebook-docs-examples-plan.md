@@ -205,7 +205,7 @@ Five example notebooks, each in `spices/notebook/examples/`:
 (import plot/style :refer [default-line-style default-plot-opts])
 (import notebook/image :refer [image-hook-record-path])
 
-(defn quadratic [x :float] :float (* x x))
+(defn quadratic [x : float] : float (* x x))
 
 (plot-write-png
   (vec-of (tick-grid)

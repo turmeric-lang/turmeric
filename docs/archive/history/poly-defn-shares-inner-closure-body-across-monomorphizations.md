@@ -62,11 +62,11 @@ This was surfaced by spike G2 of
 ```turmeric
 ;; tests/fixtures/signal-constant-poly/input.tur (now removed; repro lives here)
 
-(defn constant [A] [val :A] : ptr<void>
+(defn constant [A] [val : A] : ptr<void>
   (fn [t : float] : A val))
 
-(defn call-float [^fat f :(fn [:float] #{} :float) t : float] : float (f t))
-(defn call-int   [^fat f :(fn [:float] #{} :int)   t : float] : int   (f t))
+(defn call-float [^fat f : (fn [:float] #{} : float) t : float] : float (f t))
+(defn call-int   [^fat f : (fn [:float] #{} : int)   t : float] : int   (f t))
 
 (defn main [] : int
   (let [k440  (constant 440.0)

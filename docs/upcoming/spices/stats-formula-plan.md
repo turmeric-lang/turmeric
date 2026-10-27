@@ -138,8 +138,8 @@ turmeric-spices/spices/stats-formula/
 
 ;;; For identity terms that create computed columns:
 (defstruct identity-term
-  expr        :cstr   ;; the original expression inside I(...)
-  computed-col :int)  ;; new column handle (ownership: caller must free)
+  expr        :cstr  ;; the original expression inside I(...)
+  computed-col :int) ;; new column handle (ownership: caller must free)
 ```
 
 ---
@@ -363,7 +363,7 @@ use the formula parser to obtain column lists and pass them to existing function
 
 ;; Categorical predictor with automatic dummy coding
 (let [terms (formula-parse-terms f "mpg ~ cyl")]  ;; cyl is categorical
-  (ols-frame f ...))                              ;; internally creates dummy columns
+  (ols-frame f ...))  ;; internally creates dummy columns
 ```
 
 ### Extended tur-stats Functions (Optional Future Enhancement)

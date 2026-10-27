@@ -75,7 +75,7 @@ baseline still fails to compile (P2 below), so the fixture asserts the CPS value
 
 
 ```turmeric
-(defeffect Get [] :Pr)          ; error: defeffect: unknown return type 'Pr'
+(defeffect Get [] : Pr)          ; error: defeffect: unknown return type 'Pr'
 ```
 
 An effect's value type is restricted to the built-in/known set; a user struct is
@@ -199,7 +199,7 @@ analysis is kept for the record:
 
 
 ```turmeric
-(defeffect Put [p : Pr] :int)
+(defeffect Put [p : Pr] : int)
 (defn run [] : int (handle (use-put) (Put [p] k) (resume k (+ (.first p) (.second p)))))
 ;; error: no typeclass method found for 'first'   -- p's type is erased in the case
 ```

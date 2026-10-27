@@ -241,7 +241,7 @@ have been a standing red. That reason is gone.
 A consuming call inside a loop is still accepted:
 
 ```turmeric
-(while (< i 3) (f))             ;; accepted
+(while (< i 3) (f))          ;; accepted
 (while (< i 3) (bytes-free b))  ;; also accepted -- same, without the closure
 ```
 

@@ -104,8 +104,8 @@ and `match` binds its fields **by position or by name**:
 
 ```turmeric
 (match s
-  (Circle r)          (* 2.0 (* 3.14 r))      ; positional
-  (Rect :h hv :w wv)  (* 2.0 (+ wv hv))       ; by-name, reordered
+  (Circle r)          (* 2.0 (* 3.14 r))     ; positional
+  (Rect :h hv :w wv)  (* 2.0 (+ wv hv))      ; by-name, reordered
   (Square side)       (* 4.0 side))
 ```
 
@@ -243,8 +243,8 @@ through the matched ctor without the caller re-listing every field, and
 
 (defn grow [s : Shape] : Shape
   (match s
-    (Circle r) (with s [radius {r * 2.0}])    ; s narrowed to Circle for this arm
-    (Rect w h) (with s [w {w * 2.0}])))       ; s narrowed to Rect for this arm
+    (Circle r) (with s [radius {r * 2.0}])   ; s narrowed to Circle for this arm
+    (Rect w h) (with s [w {w * 2.0}])))      ; s narrowed to Rect for this arm
 ```
 
 - The scrutinee must be a **bare symbol** (`match s ...`), not a compound

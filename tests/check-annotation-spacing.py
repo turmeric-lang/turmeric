@@ -31,8 +31,8 @@ Usage: check-annotation-spacing.py [--fix] [--selftest] [path ...]
                                                    (default: docs/, README.md)
 `--fix` inserts the missing space in place (whitespace only).  `--selftest`
 first runs the checker and the rewriter over the samples at the bottom of this
-file.  Exit 1 when anything is, or is left, fused.  Not part of
-tests/check-docs-lint.sh until the docs have been brought into line.
+file.  Exit 1 when anything is, or is left, fused.  Part of
+tests/check-docs-lint.sh.
 """
 import importlib.util
 import re

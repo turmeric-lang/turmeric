@@ -141,7 +141,7 @@ names in the VALUE namespace, where a type annotation cannot see them.)
     (NCons _ tl) tl))
 
 (defn main [] : int
-  (println (nvec-head (NCons 7 (NNil))))                        ; 7
+  (println (nvec-head (NCons 7 (NNil))))            ; 7
   (println (nvec-head (nvec-tail (NCons 1 (NCons 2 (NNil))))))  ; 2
   ; A fresh constructor value bound by `let` is unique (used once) unless
   ; ascribed, so a value used three times is ascribed here.
@@ -465,8 +465,8 @@ value or a plain value through a union type:
     (n : int)       n))
 
 (defn main [] : int
-  (println (accept-either (IntTag)))    ; 0
-  (println (accept-either 42))          ; 42
+  (println (accept-either (IntTag)))   ; 0
+  (println (accept-either 42))         ; 42
   0)
 ```
 

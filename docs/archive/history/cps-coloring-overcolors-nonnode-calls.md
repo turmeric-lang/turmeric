@@ -42,7 +42,7 @@ not.
 `mkwid` is colored). Used non-tail across an effect it evicts the caller:
 
 ```turmeric
-(defeffect E [] :int)
+(defeffect E [] : int)
 (defn f [] : int
   (let [v (perform (E))]
     (let [w (mkwid v)]      ; non-tail cps->cps to a (needlessly) colored fn

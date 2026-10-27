@@ -261,7 +261,7 @@ min-capacity probe.
 The trade is that you commit to the capacity at construction:
 
 ```turmeric
-(sized-defworld      GameWorld          [Pos Vel Hp Dead])     ; polymorphic n
+(sized-defworld      GameWorld          [Pos Vel Hp Dead])  ; polymorphic n
 (sized-defworld-mono GameWorld (Static 64) [Pos Vel Hp Dead])  ; baked-in n
 ```
 

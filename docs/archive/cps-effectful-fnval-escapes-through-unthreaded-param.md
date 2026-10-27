@@ -11,7 +11,7 @@ in another.
 ## Repro
 
 ```turmeric
-(defeffect Ask [] :int)
+(defeffect Ask [] : int)
 (defn g [x : int] : int (+ x 1))
 (defn app [h : (fn [int] int) x : int] : int (h x))
 (defn main [] : int

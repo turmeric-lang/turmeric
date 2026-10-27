@@ -33,8 +33,8 @@ correct (they apply `f`); only the ANF/CPS IR is lossy.
 ## Minimal repro (IR level)
 
 ```turmeric
-(defn a [] : int (reset (shift (fn [v] v)     10)))    ; = 10
-(defn b [] : int (reset (shift (fn [v] (* 2 v)) 10)))  ; = 20 (direct-style)
+(defn a [] : int (reset (shift (fn [v] v)     10)))   ; = 10
+(defn b [] : int (reset (shift (fn [v] (* 2 v)) 10))) ; = 20 (direct-style)
 ```
 
 `tur check --dump-cps` shows the `shift` bodies of `a` and `b` as the same

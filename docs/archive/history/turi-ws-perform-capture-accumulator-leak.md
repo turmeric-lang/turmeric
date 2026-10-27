@@ -28,7 +28,7 @@ resumed continuation leaks its slice's accumulators.
 ## Minimal repro (leak detection on)
 
 ```turmeric
-(defeffect Ask [] :int)
+(defeffect Ask [] : int)
 (defn main [] : int
   (println (handle (+ 1 (perform (Ask))) (Ask [] k) (resume k 41)))  ; => 42
   0)
@@ -44,7 +44,7 @@ The leak is proportional to the number of captured/resumed performs, so a
 recursive-handler loop leaks O(N):
 
 ```turmeric
-(defn hr-rec [n :int] :int
+(defn hr-rec [n : int] : int
   (if (= n 0) 0 (handle (+ 1 (perform (Ask))) (Ask [] k) (resume k (hr-rec (- n 1))))))
 (hr-rec 200000)   ; ~12.8 MB leaked (400000 * 32-byte acc arrays)
 ```

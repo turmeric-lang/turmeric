@@ -177,15 +177,15 @@ Struct fields can use any numeric kind:
 ```
 ```sweet-exp
 defstruct Pixel
-  [r :uint8
-   g :uint8
-   b :uint8
-   a :uint8]
+  [r : uint8
+   g : uint8
+   b : uint8
+   a : uint8]
 
 defstruct Vec3f
-  [x :float32
-   y :float32
-   z :float32]
+  [x : float32
+   y : float32
+   z : float32]
 ```
 
 The generated C struct uses the corresponding `<stdint.h>` types

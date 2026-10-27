@@ -37,10 +37,10 @@ not a pointer-to-closure-box. The body produces a closure box
 Minimal:
 
 ```turmeric
-(defn make-id [] : (fn [:float] :float)
-  (fn [x :float] :float x))
+(defn make-id [] : (fn [:float] : float)
+  (fn [x : float] : float x))
 
-(defn main [] :int 0)
+(defn main [] : int 0)
 ```
 
 Emitted (excerpt from `tur emit-c`):

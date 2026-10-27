@@ -16,7 +16,7 @@ that waits for a choice nothing ever sends it.
     [left  (-> B C int)]
     [right (-> C B int)]))
 
-(defn f [^linear ch :(project Bad3 C)] : nil (close ch))
+(defn f [^linear ch : (project Bad3 C)] : nil (close ch))
 
 (defn main [] : int 0)
 ```

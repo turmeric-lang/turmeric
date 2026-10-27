@@ -572,8 +572,8 @@ allowlist now passes.
 ### Symptom
 
 ```turmeric
-(defn call2 [f :ptr<void> a :int b :int] :int (f a b))
-(defn add  [a :int b :int] :int (+ a b))
+(defn call2 [f : ptr<void> a : int b : int] : int (f a b))
+(defn add  [a : int b : int] : int (+ a b))
 (call2 add 10 20)   ; => Segmentation fault
 ```
 

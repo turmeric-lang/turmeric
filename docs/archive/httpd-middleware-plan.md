@@ -114,7 +114,7 @@ written** -- see Phase MW3 below.
 ;;;   next      -- downstream handler
 ;;;
 ;;; Since: Phase MW1 (pending)
-(defn mw-body-size [max-bytes :int next :int] :int ...)
+(defn mw-body-size [max-bytes : int next : int] : int ...)
 ```
 
 ### Panic-recovery middleware
@@ -126,15 +126,15 @@ written** -- see Phase MW3 below.
 ;;;   next -- downstream handler
 ;;;
 ;;; Since: Phase MW1 (pending)
-(defn mw-recover [next :int] :int ...)
+(defn mw-recover [next : int] : int ...)
 ```
 
 ### Rate-limit middleware
 
 ```turmeric
 (defstruct RateLimitOpts
-  [requests :int   ;; max requests per window
-   window-s :int   ;; window size in seconds
+  [requests : int   ;; max requests per window
+   window-s : int   ;; window size in seconds
   ])
 
 ;;; mw-rate-limit -- sliding-window IP-based rate limiter.
@@ -146,7 +146,7 @@ written** -- see Phase MW3 below.
 ;;;   next -- downstream handler
 ;;;
 ;;; Since: Phase MW2 (pending)
-(defn mw-rate-limit [opts :RateLimitOpts next :int] :int ...)
+(defn mw-rate-limit [opts : RateLimitOpts next : int] : int ...)
 ```
 
 ### Static-file middleware
@@ -162,7 +162,7 @@ written** -- see Phase MW3 below.
 ;;;   next     -- downstream handler (usually a router)
 ;;;
 ;;; Since: Phase MW2 (pending)
-(defn mw-static [root-dir :cstr next :int] :int ...)
+(defn mw-static [root-dir : cstr next : int] : int ...)
 ```
 
 ### Timeout middleware
@@ -179,7 +179,7 @@ written** -- see Phase MW3 below.
 ;;;   next        -- downstream handler
 ;;;
 ;;; Since: Phase MW2 (pending, depends on Track A)
-(defn mw-timeout [deadline-ms :int next :int] :int ...)
+(defn mw-timeout [deadline-ms : int next : int] : int ...)
 ```
 
 ### Request attributes
@@ -195,7 +195,7 @@ Added to `stdlib/httpd`:
 ;;;   val  -- attribute value (cstr)
 ;;;
 ;;; Since: Phase MW2 (pending)
-(defn httpd-set-attr! [conn :ptr<void> key :cstr val :cstr] :void ...)
+(defn httpd-set-attr! [conn : ptr<void> key : cstr val : cstr] : void ...)
 
 ;;; httpd-req-attr -- retrieve a previously set request attribute.
 ;;;
@@ -206,7 +206,7 @@ Added to `stdlib/httpd`:
 ;;;   key  -- attribute name
 ;;;
 ;;; Since: Phase MW2 (pending)
-(defn httpd-req-attr [conn :ptr<void> key :cstr] :cstr ...)
+(defn httpd-req-attr [conn : ptr<void> key : cstr] : cstr ...)
 ```
 
 Once shipped, update `mw-basic-auth` (already in tree) to call

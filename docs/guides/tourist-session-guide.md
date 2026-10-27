@@ -96,14 +96,14 @@ session TTL:
 
 ```turmeric
 (defstruct SessionConfig :copy
-  [cookie-name :cstr   ;; "tur_session"
-   path        :cstr   ;; "/"
-   domain      :cstr   ;; "" omits the Domain attribute
-   max-age     :int    ;; TTL in seconds (also store-side expiry hint)
-   secure?     :int    ;; 1 -> "; Secure"
-   http-only?  :int    ;; 1 -> "; HttpOnly"
-   same-site   :cstr   ;; "Strict" | "Lax" | "None"
-   rolling?    :int])  ;; 1 -> re-save + re-cookie every request
+  [cookie-name : cstr   ;; "tur_session"
+   path        : cstr   ;; "/"
+   domain      : cstr   ;; "" omits the Domain attribute
+   max-age     : int    ;; TTL in seconds (also store-side expiry hint)
+   secure?     : int    ;; 1 -> "; Secure"
+   http-only?  : int    ;; 1 -> "; HttpOnly"
+   same-site   : cstr   ;; "Strict" | "Lax" | "None"
+   rolling?    : int])  ;; 1 -> re-save + re-cookie every request
                        ;;      (sliding-window expiry)
 ```
 

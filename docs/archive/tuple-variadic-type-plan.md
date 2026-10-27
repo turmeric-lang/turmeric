@@ -108,7 +108,7 @@ landing:
 (tuple 1 "x" 3.14 :ok 42 #t)        ; arity > 5 now legal
 (let [[a b c d e f] (tuple 1 "x" 3.14 :ok 42 #t)] ...)
 
-(defn split [s :cstr] :(Tuple cstr cstr)
+(defn split [s : cstr] : (Tuple cstr cstr)
   ...)
 
 ;; Tuple3 / Tuple4 / Tuple5 from Option A become type aliases for

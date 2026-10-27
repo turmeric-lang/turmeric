@@ -146,8 +146,8 @@ from a captureless inner lambda:
   (fn [inp] (pfail-impl inp)))          ;; inner lambda captures nothing
 ```
 ```sweet-exp
-defn pfail [] ^fat :ptr<void>          ;; <- ^fat on the return
-  (fn [inp] pfail-impl(inp))           ;; inner lambda captures nothing
+defn pfail [] ^fat :ptr<void>         ;; <- ^fat on the return
+  (fn [inp] pfail-impl(inp))          ;; inner lambda captures nothing
 ```
 
 Without `^fat` on the return type, the inner `(fn ...)` lowers to a
@@ -171,12 +171,12 @@ There are two ways to spell a `^fat` *parameter*, and they differ in what
 they know about the closure's **result type**:
 
 ```turmeric
-(defn run-with [^fat g x : int] : int (g x))                              ;; bare
-(defn run-with [^fat g :(fn [float] #{} float) x : float] : float (g x))  ;; annotated
+(defn run-with [^fat g x : int] : int (g x))                     ;; bare
+(defn run-with [^fat g : (fn [float] #{} float) x : float] : float (g x))  ;; annotated
 ```
 ```sweet-exp
-defn run-with [^fat g x : int] : int g(x)                              ;; bare
-defn run-with [^fat g :(fn [float] #{} float) x : float] : float g(x)  ;; annotated
+defn run-with [^fat g x : int] : int g(x)                     ;; bare
+defn run-with [^fat g : (fn [float] #{} float) x : float] : float g(x)  ;; annotated
 ```
 
 Under the unified closure representation, every
@@ -206,11 +206,11 @@ result type, and the compiler dispatches through a typed thunk that uses
 the right register:
 
 ```turmeric
-(defn run-with [^fat g :(fn [float] #{} float) x : float] : float
+(defn run-with [^fat g : (fn [float] #{} float) x : float] : float
   (g x))                       ;; returns a real double
 ```
 ```sweet-exp
-defn run-with [^fat g :(fn [float] #{} float) x : float] : float
+defn run-with [^fat g : (fn [float] #{} float) x : float] : float
   g(x)                       ;; returns a real double
 ```
 

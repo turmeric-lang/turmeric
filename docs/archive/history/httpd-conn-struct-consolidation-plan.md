@@ -141,7 +141,7 @@ helper structs it depends on) to the `httpd/autolink-hint` block as
 once:
 
 ```turmeric
-(defn httpd/autolink-hint [] :int
+(defn httpd/autolink-hint [] : int
   ```c /* __tur_autolink__: -lturi -pthread */
   /* __tur_include__: typedef struct __HttpdHeader { char *name; char *value; struct __HttpdHeader *next; } HttpdHeader; */
   /* __tur_include__: typedef struct __HttpdAttr { char *key; char *value; struct __HttpdAttr *next; } HttpdAttr; */

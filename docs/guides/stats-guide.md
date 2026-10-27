@@ -393,8 +393,8 @@ OLS via normal equations solved by Cholesky factorization.
   ...)
 
 ;; Predictions.
-(predict fit (list new-x1 new-x2))              ; => column
-(predict-frame fit new-frame)                   ; => result<column>
+(predict fit (list new-x1 new-x2))    ; => column
+(predict-frame fit new-frame)         ; => result<column>
 
 ;; Diagnostics frame: fitted, residual, std-residual, leverage, cooks-d.
 (diagnostics fit)

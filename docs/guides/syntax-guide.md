@@ -157,7 +157,7 @@ annotated with `:type`:
 (square 9)    ; => 81
 ```
 ```sweet-exp
-defn square [x :int] :int
+defn square [x : int] : int
   {x * x}
 
 square(9)    ; => 81
@@ -179,7 +179,7 @@ let [x 10 y 20] {x + y}   ; => 30
   (if (< n 0) (- 0 n) n))
 ```
 ```sweet-exp
-defn abs [n :int] :int
+defn abs [n : int] : int
   if {n < 0}
     {0 - n}
     n
@@ -194,7 +194,7 @@ defn abs [n :int] :int
         else    0))
 ```
 ```sweet-exp
-defn sign [n :int] :int
+defn sign [n : int] : int
   cond
     {n > 0}
     1
@@ -230,7 +230,7 @@ when {x < 0}
   (add5 10))    ; => 15
 ```
 ```sweet-exp
-let [add5 (fn [x :int] :int {x + 5})]
+let [add5 (fn [x : int] : int {x + 5})]
   add5(10)    ; => 15
 ```
 
@@ -267,7 +267,7 @@ the parameter vector:
 (defn add [a : int b : int] : int (+ a b))
 ```
 ```sweet-exp
-defn add [a :int b :int] :int
+defn add [a : int b : int] : int
   {a + b}
 ```
 
@@ -341,7 +341,7 @@ Turmeric source follows Clojure-style indentation.
 `for`, `while`) use a fixed 2-space body indent regardless of column:
 
 ```turmeric no-check
-(defn greet [name :cstr] :void
+(defn greet [name : cstr] : void
   (println name))
 ```
 
@@ -366,7 +366,7 @@ written ` ```) ` -- so that Markdown renderers do not mistake it for the end of
 a surrounding documentation code fence:
 
 ```turmeric no-check
-(defn file-size [f] :int
+(defn file-size [f] : int
   ```c
   FILE* file = (FILE*)f;
   return (int)ftell(file);
@@ -396,12 +396,12 @@ Activate sweet-exp one of two ways:
 A complete runnable snippet opens with the directive:
 
 ```turmeric
-(defn main [] :int 0)
+(defn main [] : int 0)
 ```
 ```sweet-exp
 #lang sweet-exp
 
-defn main [] :int
+defn main [] : int
   0
 ```
 
@@ -429,7 +429,7 @@ given expression; they compose freely.
   (if (<= n 1) 1 (* n (factorial (- n 1)))))
 ```
 ```sweet-exp
-defn factorial [n :int] :int
+defn factorial [n : int] : int
   if {n <= 1}
     1
     {n * factorial({n - 1})}
@@ -663,8 +663,8 @@ dialects. (Lifted from the quickstart so it stays honest.)
   (println (add7 10)))   ; 17
 ```
 ```sweet-exp
-defn make-adder [n :int]
-  (fn [x :int] :int {x + n})
+defn make-adder [n : int]
+  (fn [x : int] : int {x + n})
 
 let [add3 make-adder(3)
      add7 make-adder(7)]
@@ -904,12 +904,12 @@ on the right:
 
 ```turmeric no-check
 ;; before
-(defn add [a :int b :int] :int
+(defn add [a : int b : int] : int
     (+ a
   b))
 
 ;; after `tur format`
-(defn add [a :int b :int] :int
+(defn add [a : int b : int] : int
   (+ a b))
 ```
 

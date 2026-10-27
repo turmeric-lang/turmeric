@@ -32,7 +32,7 @@ branch, and is unaffected.
   (D :int)
   (U))
 
-(defn d? [e : E x :int] :bool
+(defn d? [e : E x : int] : bool
   (match e
     (D y) (= x y)
     (U)   false))

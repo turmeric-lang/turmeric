@@ -300,7 +300,7 @@ the handler-body boundary.
 
 ```turmeric
 (load "stdlib/free.tur")
-(defn main [] :int
+(defn main [] : int
   (let [scale 3
         r     (unsafe (free-run (fn [inner] (* inner scale)) (free-lift 10)))]
     (println r))
@@ -319,7 +319,7 @@ inside is the current workaround:
 
 ```turmeric
 (let [scale  3
-      interp (fn [inner] (* inner scale))                ; closure built in normal scope
+      interp (fn [inner] (* inner scale))   ; closure built in normal scope
       r      (unsafe (free-run interp (free-lift 10)))]  ; only the call is unsafe
   ...)
 ```

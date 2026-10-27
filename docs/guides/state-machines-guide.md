@@ -49,7 +49,7 @@ with nested `match`. Guards (`when`) handle conditional transitions.
 defdata State (Idle) (Running :int) (Done)
 defdata Event (Start) (Tick :int) (Stop)
 
-defn transition [state :State event :Event] :State
+defn transition [state : State event : Event] : State
   match state
     (Idle)
     match event
@@ -80,8 +80,8 @@ transition logic pure. A `handle` block wires in the real implementation later,
 making the machine testable with mock handlers.
 
 ```turmeric
-(defeffect Emit [msg :cstr] :nil ^extends IO)
-(defeffect Store [key :cstr val :int] :nil ^extends IO)
+(defeffect Emit [msg : cstr] : nil ^extends IO)
+(defeffect Store [key : cstr val : int] : nil ^extends IO)
 
 (defn step [state : State event : Event] : State
   (match state
@@ -95,10 +95,10 @@ making the machine testable with mock handlers.
 ```
 
 ```sweet-exp
-defeffect Emit [msg :cstr] :nil ^extends IO
-defeffect Store [key :cstr val :int] :nil ^extends IO
+defeffect Emit [msg : cstr] : nil ^extends IO
+defeffect Store [key : cstr val : int] : nil ^extends IO
 
-defn step [state :State event :Event] :State
+defn step [state : State event : Event] : State
   match state
     (Running n)
     match event

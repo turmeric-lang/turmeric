@@ -116,7 +116,7 @@ tur build
 ;;;   (make-window 800 600 "My App")  ; => :window
 ;;;
 ;;; Since: v0.1.0
-(defn make-window [width :int height :int title :cstr] :window ...)
+(defn make-window [width : int height : int title : cstr] : window ...)
 
 ;;; with-window -- open a window for the duration of body, then destroy it.
 ;;;
@@ -134,24 +134,24 @@ tur build
 ;;; Since: v0.1.0
 (defmacro with-window [w width height title & body] ...)
 
-(defn window-should-close? [w :window] :bool ...)
-(defn poll-events          []          :void ...)
-(defn swap-buffers         [w :window] :void ...)
-(defn set-clear-color      [r :float g :float b :float a :float] :void ...)
-(defn clear                []          :void ...)
+(defn window-should-close? [w : window] : bool ...)
+(defn poll-events          []          : void ...)
+(defn swap-buffers         [w : window] : void ...)
+(defn set-clear-color      [r : float g : float b : float a : float] : void ...)
+(defn clear                []          : void ...)
 ```
 
 ### Buffers and Geometry (`opengl/buffers`)
 
 ```turmeric
 ;;; make-vao -- generate a Vertex Array Object.
-(defn make-vao [] :vao ...)
+(defn make-vao [] : vao ...)
 
 ;;; make-vbo -- generate a Vertex Buffer Object.
-(defn make-vbo [] :vbo ...)
+(defn make-vbo [] : vbo ...)
 
 ;;; make-ebo -- generate an Element Buffer Object (index buffer).
-(defn make-ebo [] :ebo ...)
+(defn make-ebo [] : ebo ...)
 
 ;;; upload-vertices -- upload a float array to the currently-bound VBO.
 ;;;
@@ -164,7 +164,7 @@ tur build
 ;;;   (upload-vertices verts (* 9 4) :static-draw)
 ;;;
 ;;; Since: v0.1.0
-(defn upload-vertices [data :ptr size :int usage :draw-usage] :void ...)
+(defn upload-vertices [data : ptr size : int usage : draw-usage] : void ...)
 
 ;;; vertex-attrib -- describe a vertex attribute layout.
 ;;;
@@ -180,8 +180,8 @@ tur build
 ;;;   (vertex-attrib 0 3 :float false (* 5 4) 0)
 ;;;
 ;;; Since: v0.1.0
-(defn vertex-attrib [index :int size :int type :attrib-type
-                     normalized :bool stride :int offset :int] :void ...)
+(defn vertex-attrib [index : int size : int type : attrib-type
+                     normalized : bool stride : int offset : int] : void ...)
 
 (defmacro with-vao [v & body] ...)
 ```
@@ -202,7 +202,7 @@ tur build
 ;;;   (compile-shader :vertex vert-src)  ; => :shader
 ;;;
 ;;; Since: v0.1.0
-(defn compile-shader [stage :shader-stage source :cstr] :shader ...)
+(defn compile-shader [stage : shader-stage source : cstr] : shader ...)
 
 ;;; shader-program -- link compiled shaders into a program.
 ;;;
@@ -217,41 +217,41 @@ tur build
 ;;;   (shader-program vs fs)  ; => :program
 ;;;
 ;;; Since: v0.1.0
-(defn shader-program [& shaders] :program ...)
+(defn shader-program [& shaders] : program ...)
 
-(defn use-program        [p :program]          :void ...)
+(defn use-program        [p : program]          : void ...)
 (defmacro with-program   [p & body]            ...)
 
-(defn set-uniform-int    [p :program name :cstr v :int]    :void ...)
-(defn set-uniform-float  [p :program name :cstr v :float]  :void ...)
-(defn set-uniform-vec2   [p :program name :cstr x :float y :float] :void ...)
-(defn set-uniform-vec3   [p :program name :cstr x :float y :float z :float] :void ...)
-(defn set-uniform-vec4   [p :program name :cstr x :float y :float z :float w :float] :void ...)
-(defn set-uniform-mat4   [p :program name :cstr mat :ptr]  :void ...)
+(defn set-uniform-int    [p : program name : cstr v : int]    : void ...)
+(defn set-uniform-float  [p : program name : cstr v : float]  : void ...)
+(defn set-uniform-vec2   [p : program name : cstr x : float y : float] : void ...)
+(defn set-uniform-vec3   [p : program name : cstr x : float y : float z : float] : void ...)
+(defn set-uniform-vec4   [p : program name : cstr x : float y : float z : float w : float] : void ...)
+(defn set-uniform-mat4   [p : program name : cstr mat : ptr]  : void ...)
 ```
 
 ### Textures (`opengl/textures`)
 
 ```turmeric
-(defn make-texture          []                             :texture ...)
-(defn bind-texture          [t :texture]                  :void    ...)
-(defn upload-texture-rgba   [data :ptr w :int h :int]     :void    ...)
-(defn set-texture-wrap      [s :wrap-mode t :wrap-mode]   :void    ...)
-(defn set-texture-filter    [min :filter-mode mag :filter-mode] :void ...)
-(defn generate-mipmaps      []                             :void    ...)
-(defn active-texture        [unit :int]                    :void    ...)
+(defn make-texture          []                             : texture ...)
+(defn bind-texture          [t : texture]                  : void    ...)
+(defn upload-texture-rgba   [data : ptr w : int h : int]     : void    ...)
+(defn set-texture-wrap      [s : wrap-mode t : wrap-mode]   : void    ...)
+(defn set-texture-filter    [min : filter-mode mag : filter-mode] : void ...)
+(defn generate-mipmaps      []                             : void    ...)
+(defn active-texture        [unit : int]                    : void    ...)
 ```
 
 ### Draw Calls (`opengl/draw`)
 
 ```turmeric
-(defn draw-arrays   [mode :draw-mode first :int count :int]          :void ...)
-(defn draw-elements [mode :draw-mode count :int type :index-type]    :void ...)
+(defn draw-arrays   [mode : draw-mode first : int count : int]          : void ...)
+(defn draw-elements [mode : draw-mode count : int type : index-type]    : void ...)
 
-(defn enable     [cap :gl-cap] :void ...)
-(defn disable    [cap :gl-cap] :void ...)
-(defn depth-test []             :void ...)   ; enables GL_DEPTH_TEST
-(defn blending   []             :void ...)   ; enables GL_BLEND with alpha
+(defn enable     [cap : gl-cap] : void ...)
+(defn disable    [cap : gl-cap] : void ...)
+(defn depth-test []             : void ...)   ; enables GL_DEPTH_TEST
+(defn blending   []             : void ...)   ; enables GL_BLEND with alpha
 ```
 
 ---
@@ -264,7 +264,7 @@ tur build
 (import opengl/window :refer [with-window window-should-close? poll-events
                                swap-buffers set-clear-color clear])
 
-(defn main [] :int
+(defn main [] : int
   (with-window [w 800 600 "Hello Triangle"]
     (set-clear-color 0.1 0.1 0.1 1.0)
     (loop-while (not (window-should-close? w))
@@ -286,7 +286,7 @@ tur build
                  0.5 -0.5 0.0
                  0.0  0.5 0.0]))
 
-(defn setup-triangle [] :vao
+(defn setup-triangle [] : vao
   (let [vao (make-vao)
         vbo (make-vbo)]
     (bind-vao vao)
@@ -306,21 +306,21 @@ tur build
 (import glsl/codegen  :refer [compile-glsl])
 (import opengl/shaders :refer [compile-shader shader-program])
 
-(defn triangle-vert [] :cstr
+(defn triangle-vert [] : cstr
   (compile-glsl
     (glsl-vertex-shader "330 core"
       :inputs [[aPos :vec3 0]]
       :main
       (glsl-set! gl-Position (vec4 aPos 1.0)))))
 
-(defn triangle-frag [] :cstr
+(defn triangle-frag [] : cstr
   (compile-glsl
     (glsl-fragment-shader "330 core"
       :outputs [[FragColor :vec4]]
       :main
       (glsl-set! FragColor (vec4 1.0 0.5 0.2 1.0)))))
 
-(defn make-triangle-program [] :program
+(defn make-triangle-program [] : program
   (shader-program
     (compile-shader :vertex   (triangle-vert))
     (compile-shader :fragment (triangle-frag))))
@@ -331,7 +331,7 @@ tur build
 ```turmeric
 (import opengl/draw :refer [draw-arrays depth-test])
 
-(defn main [] :int
+(defn main [] : int
   (with-window [w 800 600 "Hello Triangle"]
     (let [vao  (setup-triangle)
           prog (make-triangle-program)]
@@ -358,7 +358,7 @@ Building on the triangle, add a texture loaded from a file.
                                  generate-mipmaps active-texture])
 
 ;;; Upload raw RGBA pixel data (32x32 checkerboard)
-(defn checkerboard-texture [] :texture
+(defn checkerboard-texture [] : texture
   (let [t    (make-texture)
         size 32
         data (make-bytes (* size size 4))]
@@ -381,7 +381,7 @@ Building on the triangle, add a texture loaded from a file.
 Add a `TexCoord` attribute and pass `texture1` uniform:
 
 ```turmeric
-(defn quad-vert [] :cstr
+(defn quad-vert [] : cstr
   (compile-glsl
     (glsl-vertex-shader "330 core"
       :inputs  [[aPos :vec3 0] [aTexCoord :vec2 1]]
@@ -390,7 +390,7 @@ Add a `TexCoord` attribute and pass `texture1` uniform:
       (glsl-let [TexCoord :vec2 aTexCoord
                  gl-Position :vec4 (vec4 aPos 1.0)]))))
 
-(defn quad-frag [] :cstr
+(defn quad-frag [] : cstr
   (compile-glsl
     (glsl-fragment-shader "330 core"
       :inputs   [[TexCoord :vec2]]
@@ -462,7 +462,7 @@ examples/opengl-cube/
 (import glsl/builtins :refer [vec3 vec4 mat4])
 (import glsl/codegen  :refer [compile-glsl])
 
-(defn cube-vert-src [] :cstr
+(defn cube-vert-src [] : cstr
   (compile-glsl
     (glsl-vertex-shader "330 core"
       :inputs   [[aPos :vec3 0] [aNormal :vec3 1]]
@@ -474,7 +474,7 @@ examples/opengl-cube/
                  Normal  :vec3 (vec3 (* normal-matrix (vec4 aNormal 0.0)))
                  gl-Position :vec4 (* projection view (vec4 FragPos 1.0))]))))
 
-(defn cube-frag-src [] :cstr
+(defn cube-frag-src [] : cstr
   (compile-glsl
     (glsl-fragment-shader "330 core"
       :inputs  [[FragPos :vec3] [Normal :vec3]]
@@ -505,7 +505,7 @@ examples/opengl-cube/
 (import shaders :refer [cube-vert-src cube-frag-src])
 (import geometry :refer [cube-vertices cube-indices])
 
-(defn main [] :int
+(defn main [] : int
   (with-window [w 800 600 "Spinning Cube"]
     (depth-test)
     (let [vao  (make-vao)
@@ -603,7 +603,7 @@ Higher-level wrappers provide error checking and resource handle types:
 
 ```turmeric
 ;; src/shaders.tur
-(defn compile-shader [stage :shader-stage source :cstr] :shader
+(defn compile-shader [stage : shader-stage source : cstr] : shader
   (let [gl-stage (shader-stage->gl stage)
         id       (glCreateShader gl-stage)]
     (glShaderSource id 1 (ptr-to source) (nil-value))

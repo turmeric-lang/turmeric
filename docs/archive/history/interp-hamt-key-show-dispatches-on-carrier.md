@@ -36,8 +36,8 @@ Set/Map *HAMT-key* read diverges.
 ```turmeric
 (load "stdlib/typeclass.tur")
 (defn main [] : int
-  (println (show (set-of "x" "y")))                                  ; interp: pointers
-  (println (show (map-assoc (:: (map-new) (Map cstr int)) "k" 7)))   ; interp: pointer key
+  (println (show (set-of "x" "y")))                                 ; interp: pointers
+  (println (show (map-assoc (:: (map-new) (Map cstr int)) "k" 7)))  ; interp: pointer key
   0)
 ```
 

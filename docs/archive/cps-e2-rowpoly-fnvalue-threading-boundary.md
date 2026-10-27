@@ -51,7 +51,7 @@ reaches the handler.
 `effect-poly-infer` **aborts** with the relaxation.  Root cause, pinned:
 
 ```turmeric
-(defn apply [f :(fn [int] #fx{e} int) x : int] #fx{e} : int (f x))     ; HOF
+(defn apply [f : (fn [int] #fx{e} int) x : int] #fx{e} : int (f x))     ; HOF
 (defn apply-logged [x : int] #fx{Log} : int (apply (fn [v] (do (perform (Log "calling")) v)) x))
 (defn main [] : int (handle (do (apply-logged 5) 0) (Log [msg] k) (do (println msg) (resume k nil))))
 ```

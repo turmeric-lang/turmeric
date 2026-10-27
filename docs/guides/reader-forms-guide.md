@@ -69,16 +69,16 @@ Unlike `#| |#`, `#;` understands structure -- it always discards exactly one
 form, no matter how many lines it spans.
 
 ```turmeric no-check
-(println #;99 "ok")                   ; => ok
-(println #;"ignored" "ok")            ; => ok
+(println #;99 "ok")              ; => ok
+(println #;"ignored" "ok")       ; => ok
 (println #;(this is discarded) "ok")  ; => ok
-(println (+ 1 #;999 2))               ; => 3
+(println (+ 1 #;999 2))          ; => 3
 ```
 ```sweet-exp
-println(#;99 "ok")                   ; => ok
-println(#;"ignored" "ok")            ; => ok
+println(#;99 "ok")              ; => ok
+println(#;"ignored" "ok")       ; => ok
 println(#;(this is discarded) "ok")  ; => ok
-println(+(1 #;999 2))                ; => 3
+println(+(1 #;999 2))           ; => 3
 ```
 
 Datum comments compose: `#;#;1 2 3` discards `2` (the result that inner `#;1`
@@ -266,7 +266,7 @@ An ordered sequence of forms. The primary syntactic unit in Turmeric.
 ```sweet-exp
 println("hello")
 +(1 2 3)
-defn square [x :int] :int
+defn square [x : int] : int
   *(x x)
 ```
 
@@ -502,11 +502,11 @@ Attaches a compile-time attribute to the next definition.
 
 ```turmeric no-check
 #[no-unwind]
-(defn risky [] :int ...)
+(defn risky [] : int ...)
 ```
 ```sweet-exp
 #[no-unwind]
-defn risky [] :int
+defn risky [] : int
   ...
 ```
 
@@ -567,14 +567,14 @@ A triple-backtick block embeds raw C code inside a `defn` body. The closing
 ` ``` ` must be on the same line as its enclosing `)`.
 
 ```turmeric no-check
-(defn file-size [f] :int
+(defn file-size [f] : int
   ```c
   FILE* file = (FILE*)f;
   return (int)ftell(file);
   ```)
 ```
 ````sweet-exp
-defn file-size [f] :int
+defn file-size [f] : int
   ```c
   FILE* file = (FILE*)f;
   return (int)ftell(file);

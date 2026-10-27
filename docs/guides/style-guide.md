@@ -42,13 +42,13 @@ struct and pass a single options value:
   ...)
 ```
 ```sweet-exp
-defstruct CsvOpts [delim       :int   ;; field separator (e.g. 44 = ',')
-   quote       :int                   ;; quote char (e.g. 34 = '"')
-   has-header  :int                   ;; 1 = first row is header
-   infer-rows  :int                   ;; rows to sample for type inference
-   null-str    :cstr                  ;; string that represents NULL (e.g. "")
+defstruct CsvOpts [delim       : int   ;; field separator (e.g. 44 = ',')
+   quote       : int   ;; quote char (e.g. 34 = '"')
+   has-header  : int   ;; 1 = first row is header
+   infer-rows  : int   ;; rows to sample for type inference
+   null-str    : cstr  ;; string that represents NULL (e.g. "")
   ]
-defn read-csv [src :cstr opts :CsvOpts] :int
+defn read-csv [src : cstr opts : CsvOpts] : int
   ...
 ```
 
@@ -88,11 +88,11 @@ rest parameter:
   ;; rest is a cons-list of :cstr; walk it with head/tail helpers
   ...)
 
-(println-all "hello")              ;; rest = nil (0)
-(println-all "a" "b" "c")          ;; rest = cons("b", cons("c", 0))
+(println-all "hello")             ;; rest = nil (0)
+(println-all "a" "b" "c")         ;; rest = cons("b", cons("c", 0))
 ```
 ```sweet-exp
-defn println-all [first :cstr & rest :cstr] :void
+defn println-all [first : cstr & rest : cstr] : void
   println(first)
   ;; rest is a cons-list of :cstr; walk it with head/tail helpers
   ...
@@ -132,7 +132,7 @@ of `__tur_cons_cell { int64_t head; int64_t tail; }` cells, or `0`
   ```)
 ```
 ````sweet-exp
-defn cons-list-sum [lst :int] #{Unsafe} :int
+defn cons-list-sum [lst : int] #{Unsafe} : int
   ```c
   typedef struct { int64_t head; int64_t tail; } __tur_cons_cell;
   int64_t acc = 0;
@@ -165,21 +165,21 @@ Or use a pure tail-recursive helper:
     (list-sum-acc (cons-tail lst) (+ acc (cons-head lst)))))
 ```
 ````sweet-exp
-defn cons-head [lst :int] #{Unsafe} :int
+defn cons-head [lst : int] #{Unsafe} : int
   ```c
   typedef struct { int64_t head; int64_t tail; } __tur_cons_cell;
   __tur_cons_cell *p = (__tur_cons_cell *)(intptr_t)lst;
   return p ? p->head : 0;
   ```
 
-defn cons-tail [lst :int] #{Unsafe} :int
+defn cons-tail [lst : int] #{Unsafe} : int
   ```c
   typedef struct { int64_t head; int64_t tail; } __tur_cons_cell;
   __tur_cons_cell *p = (__tur_cons_cell *)(intptr_t)lst;
   return p ? p->tail : 0;
   ```
 
-defn list-sum-acc [lst :int acc :int] #{Unsafe} :int
+defn list-sum-acc [lst : int acc : int] #{Unsafe} : int
   if {lst = 0}
     acc
     list-sum-acc(cons-tail(lst) {acc + cons-head(lst)})
@@ -249,7 +249,7 @@ Quick reference:
 ;;;   (fn-name arg)  ; => expected result
 ;;;
 ;;; Since: Phase B1
-defn fn-name [param :int] :int
+defn fn-name [param : int] : int
   ...
 ```
 

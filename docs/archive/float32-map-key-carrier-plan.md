@@ -95,8 +95,8 @@
 GHE3's `-g` builders thread a key through the runtime content-equality layer:
 
 ```turmeric
-(defn map-assoc-g [^Hash K ^Eq K V] [m :int key :K val :V] :int
-  (map-assoc-eq m (hash key) key val (fn [a :K b :K] :bool (eq? a b))))
+(defn map-assoc-g [^Hash K ^Eq K V] [m : int key : K val : V] : int
+  (map-assoc-eq m (hash key) key val (fn [a : K b : K] : bool (eq? a b))))
 ```
 
 `map-assoc-eq` (`stdlib/map.tur`) and the runtime it calls
@@ -127,7 +127,7 @@ content comparison works. For `:float32` it breaks two independent ways:
 The hand-written `*-eq` layer fails identically with no generic dispatch:
 
 ```turmeric
-(defn f32eq [a :float32 b :float32] :bool ```c return a == b; ```)
+(defn f32eq [a : float32 b : float32] : bool ```c return a == b; ```)
 (map-get-eq (map-assoc-eq (map-new) (hash 1.5f32) 1.5f32 42 f32eq)
             (hash 1.5f32) 1.5f32 f32eq)        ; => 0, want 42
 ```

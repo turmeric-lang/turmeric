@@ -41,10 +41,10 @@ call is written with one argument missing.
 ```turmeric
 (load "stdlib/session.tur")
 
-(defn f [^linear ch :(Session Close) n :int] :nil
+(defn f [^linear ch : (Session Close) n : int] : nil
   (close ch))
 
-(defn main [] :int
+(defn main [] : int
   (let [[a b] (make-session (Send int Close))]
     ;; `a` is Session[Send int Close], NOT Session[Close].
     (let [g (f a)]      ; captured into a partial application -- ACCEPTED

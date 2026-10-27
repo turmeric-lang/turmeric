@@ -160,7 +160,7 @@ not have today. Naming them precisely keeps the plan honest:
    (defclass HasSchema a
      (schema-of [] : (Schema a)))     ; `a` appears only in the result
 
-   (defn decode [raw :ptr<void>] : (Result a (Vec SchemaError))
+   (defn decode [raw : ptr<void>] : (Result a (Vec SchemaError))
      ...)                              ; `a` appears only in the result
    ```
 
@@ -244,7 +244,7 @@ There is no `where` token today. Add it as the way to attach a class
 constraint to a `defn`:
 
 ```turmeric
-(defn decode [raw :ptr<void>] : (Result a (Vec SchemaError))
+(defn decode [raw : ptr<void>] : (Result a (Vec SchemaError))
   where (HasSchema a)
   ...)
 ```
@@ -360,11 +360,11 @@ With RT in place, SC5 is mostly stdlib in `stdlib/schema.tur`.
   (schema-of [_ : a] : int))      ; returns a schema value (see RT4 for the
                                   ; phantom-witness vs nullary choice)
 
-(defn decode [raw :ptr<void>] :int
+(defn decode [raw : ptr<void>] : int
   where (HasSchema a)
   (schema-decode (schema-of (the-witness a)) raw))
 
-(defn decode! [raw :ptr<void>] :int
+(defn decode! [raw : ptr<void>] : int
   where (HasSchema a)
   (schema-decode! (schema-of (the-witness a)) raw))
 ```

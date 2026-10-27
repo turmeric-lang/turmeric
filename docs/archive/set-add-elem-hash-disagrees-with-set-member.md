@@ -25,7 +25,7 @@ The same set built through the `set-add` macro is fine:
 
 ```turmeric
 (let [s (set-add (set-new) (hash (quote x)) (quote x))]
-  (println (set-count s))                                ;; 1
+  (println (set-count s))                              ;; 1
   (println (set-member? s (hash (quote x)) (quote x))))  ;; true
 ```
 

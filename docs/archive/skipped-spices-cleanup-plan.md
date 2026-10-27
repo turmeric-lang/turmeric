@@ -74,9 +74,9 @@ their own `ok`/`ok?`/`ok-val` collide.
 Example from `scscm/lexer.tur:53`:
 
 ```turmeric
-(defn ok [x :int] #{Unsafe} :ptr<void> ...)
-(defn ok? [r :ptr<void>] #{Unsafe} :bool ...)
-(defn ok-val [r :ptr<void>] #{Unsafe} :int ...)
+(defn ok [x : int] #{Unsafe} : ptr<void> ...)
+(defn ok? [r : ptr<void>] #{Unsafe} : bool ...)
+(defn ok-val [r : ptr<void>] #{Unsafe} : int ...)
 ```
 
 The lexer is implementing its *own* result type but reusing the
@@ -117,7 +117,7 @@ type checker.
 Example from `postgres/db.tur:170`:
 
 ```turmeric
-(defn db-connect [connstr :cstr] :ptr<void>
+(defn db-connect [connstr : cstr] : ptr<void>
   (let [raw (__pq-connect-raw connstr)]
     (if (!= raw 0) (__ok raw) (__err 0))))
 ```
@@ -176,10 +176,10 @@ etc.).
 Example from `raylib/camera.tur:36`:
 
 ```turmeric
-(defn camera-3d [px :float py :float pz :float
-                 tx :float ty :float tz :float
-                 ux :float uy :float uz :float
-                 fovy :float proj :int] :int
+(defn camera-3d [px : float py : float pz : float
+                 tx : float ty : float tz : float
+                 ux : float uy : float uz : float
+                 fovy : float proj : int] : int
   ```c
   ...
   cam->position = (Vector3){ (float)px, (float)py, (float)pz };
@@ -197,8 +197,8 @@ Two real options:
 
    ```turmeric
    (defstruct vec3 :x :float :y :float :z :float)
-   (defn camera-3d [pos :vec3 target :vec3 up :vec3
-                    fovy :float proj :int] :int
+   (defn camera-3d [pos : vec3 target : vec3 up : vec3
+                    fovy : float proj : int] : int
      ...)
    ```
 

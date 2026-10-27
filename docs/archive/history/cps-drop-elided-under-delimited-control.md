@@ -53,7 +53,7 @@ Leaks (effect present):
 
 ```turmeric
 (load "stdlib/vec.tur")
-(defeffect E [] :int)
+(defeffect E [] : int)
 (defn g [] : int (perform (E)))
 (defn mkvec [] : (Vec int)
   (let [n (handle (g) (E [] k) (resume k 3))]

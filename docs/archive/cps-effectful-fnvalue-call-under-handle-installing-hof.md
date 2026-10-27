@@ -51,8 +51,8 @@ effect is handled:
 
 ;; cps-backend-fn-param-effectful: f's effect ESCAPES to an OUTER handler (in main)
 (defn use-writer [f : (fn [cstr] #fx{Write} nil)] #fx{Write} : int
-  (let [n (handle (g) (E [] k) (resume k 5))]    ; handles a DIFFERENT effect (E) internally
-    (do (f "hi") n)))                            ; f "hi" performs Write -> escapes to main
+  (let [n (handle (g) (E [] k) (resume k 5))]   ; handles a DIFFERENT effect (E) internally
+    (do (f "hi") n)))                           ; f "hi" performs Write -> escapes to main
 ```
 
 ## Exact eviction reason (pinned)

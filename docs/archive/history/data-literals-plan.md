@@ -313,13 +313,13 @@ to lock in the behavior:
 ```turmeric
 #lang sweet-exp
 
-defn build-payload [name :cstr age :int] :ptr<void>
+defn build-payload [name : cstr age : int] : ptr<void>
   #map{:name name :age age :active 1}
 
-defn three-points [] :ptr<void>
+defn three-points [] : ptr<void>
   [make-point(0 0) make-point(1 1) origin]
 
-defn watched-tags [extra :Keyword] :ptr<void>
+defn watched-tags [extra : Keyword] : ptr<void>
   #set{:audit :auth extra}
 ```
 

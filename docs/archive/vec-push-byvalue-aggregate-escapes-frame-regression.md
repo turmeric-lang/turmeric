@@ -62,7 +62,7 @@ clobber the reclaimed stack, then read the elements back:
     (let [junk (clobber 4096 0)]           ;; overwrite build-vec's reclaimed frame
       (let [a (:: (vec-get vo 0) (Option int))
             b (:: (vec-get vo 1) (Option int))]
-        (println (if (.is-some a) (.value a) -1))     ;; wants 5, gets 1073741824
+        (println (if (.is-some a) (.value a) -1))   ;; wants 5, gets 1073741824
         (println (if (.is-some b) (.value b) -1)))))) ;; wants 99, gets 1073741824
 ```
 

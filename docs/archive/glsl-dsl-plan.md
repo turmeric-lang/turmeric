@@ -849,7 +849,7 @@ Then pass the compiled string to the `tur-opengl` spice's shader compiler:
 ```turmeric
 (import opengl/shaders :refer [shader-program])
 
-(defn my-program [] :uint
+(defn my-program [] : uint
   (shader-program
     (compile-glsl (my-vertex-shader))
     (compile-glsl (my-fragment-shader))))

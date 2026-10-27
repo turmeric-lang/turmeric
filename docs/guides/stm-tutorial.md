@@ -387,13 +387,13 @@ async
 ;; A TVar holding 1 (free) / 0 (held) as a simple gate
 def write-lock tvar/new(1)
 
-defn acquire-write [] :nil
+defn acquire-write [] : nil
   atomically
     stm
       check {tvar/read(write-lock) = 1}
       tvar/write(write-lock 0)
 
-defn release-write [] :nil
+defn release-write [] : nil
   atomically $ stm $ tvar/write write-lock 1
 ```
 

@@ -13,7 +13,7 @@ it reproduces identically on the compiler before that change.
 ## Repro
 
 ```turmeric
-(defeffect Ask [] :int)
+(defeffect Ask [] : int)
 (defn ask [] : int (perform (Ask)))
 (defn app1 [h : (fn [int] int) x : int] : int (h x))
 (defn adder [m : int] : (fn [int] int)

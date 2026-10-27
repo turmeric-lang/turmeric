@@ -160,8 +160,8 @@ err-context(r "prefix")  ;; prepend "prefix: " to the err string; ok passes thro
 ### Collection utilities
 
 ```turmeric
-(result-collect    vec)      ;; (vec result) -> result<vec, E>; first err wins
-(result-partition  vec)      ;; -> pair; separate ok and err elements
+(result-collect    vec)    ;; (vec result) -> result<vec, E>; first err wins
+(result-partition  vec)    ;; -> pair; separate ok and err elements
 (result-partition-ok  pair)  ;; -> vec of ok values from the pair
 (result-partition-err pair)  ;; -> vec of err values from the pair
 ```
@@ -224,8 +224,8 @@ early from the enclosing function. It is the ergonomic counterpart to manual
 ```sweet-exp
 let [__q expr]
   if err?(__q)
-      return(__q)        ;; propagate the err Result unchanged
-      ok-val(__q)        ;; otherwise yield the unwrapped ok value
+      return(__q)      ;; propagate the err Result unchanged
+      ok-val(__q)      ;; otherwise yield the unwrapped ok value
 ```
 
 The lowering routes through the `#fx{}`-safe stdlib helpers `__tur-q-is-err?`
@@ -442,7 +442,7 @@ aborting.
     (use (ok-val r))))
 ```
 ```sweet-exp
-let [r catch-unwind((fn [] :int risky()))]
+let [r catch-unwind((fn [] : int risky()))]
   if err?(r)
     recover()
     use(ok-val(r))
@@ -602,8 +602,8 @@ These are the underlying functions used by `must!` and `must-msg!`:
 (option-expect (none)    "want value")  ;; panic: want value
 ```
 ```sweet-exp
-option-must(some(42))                ;; => 42
-option-must(none())                  ;; panic: option-must: called on none
+option-must(some(42))               ;; => 42
+option-must(none())                 ;; panic: option-must: called on none
 option-expect(some(42) "want value") ;; => 42
 option-expect(none()   "want value") ;; panic: want value
 ```
@@ -714,12 +714,12 @@ Precondition check at function entry:
   ...)
 ```
 ```sweet-exp
-defn sqrt [n :int] :int
+defn sqrt [n : int] : int
   require!({n >= 0})
   ...
 ;; panics with "Precondition failed" if n < 0
 
-defn sqrt [n :int] :int
+defn sqrt [n : int] : int
   require-msg!({n >= 0} "sqrt: n must be non-negative")
   ...
 ```
@@ -736,7 +736,7 @@ Postcondition check before returning from a function:
 ;; panics with "Postcondition failed" if the result is somehow negative
 ```
 ```sweet-exp
-defn abs [n :int] :int
+defn abs [n : int] : int
   let [result (if {n < 0} {0 - n} n)]
     ensure!({result >= 0})
     result

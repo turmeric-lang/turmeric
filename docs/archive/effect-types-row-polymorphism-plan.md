@@ -230,7 +230,7 @@ ET2 must not start until HRT1 is landed.
 
 ```turmeric
 ;; A function polymorphic over its effect row
-(defn run-twice [f : (forall [e] (fn [] #{e} :int))] #{e} :int
+(defn run-twice [f : (forall [e] (fn [] #{e} : int))] #{e} : int
   (+ (f) (f)))
 
 ;; Effect-polymorphic map
@@ -239,10 +239,10 @@ ET2 must not start until HRT1 is landed.
 
 ;; Effect-polymorphic bracket (acquire / use / release)
 (defn with-resource
-  [acquire : (fn [] #{e} :R)
-   use     : (forall [e2] (fn [R] #{e e2} :A))
-   release : (fn [R] #{e} :unit)]
-  #{e} :A
+  [acquire : (fn [] #{e} : R)
+   use     : (forall [e2] (fn [R] #{e e2} : A))
+   release : (fn [R] #{e} : unit)]
+  #{e} : A
   ...)
 ```
 

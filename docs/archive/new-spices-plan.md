@@ -203,7 +203,7 @@ osc/bundle   -- timetag-stamped bundles
 (server-new-tcp "7770")
 (server-free s)
 (server-add-method s "/freq" ",f" handler-fn)  ;; register typed handler
-(server-recv s 100)                            ;; => :int (messages handled; 100ms timeout)
+(server-recv s 100)                     ;; => :int (messages handled; 100ms timeout)
 (server-recv-noblock s)
 
 ;; osc/client
@@ -314,7 +314,7 @@ Audio callback signature (called from RtAudio's internal thread):
 ;;;
 ;;; Returns:
 ;;;   0 to continue, 1 to drain and stop, 2 to abort.
-(defn my-callback [out :cstr in :cstr frames :int time :float status :int] :int
+(defn my-callback [out : cstr in : cstr frames : int time : float status : int] : int
   ...)
 ```
 

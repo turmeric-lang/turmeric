@@ -49,17 +49,17 @@ double -> int conversion).
 ## Repro
 
 ```turmeric
-(defn call-f [^fat f :(fn [:float] #{} :float) x :float] :float
+(defn call-f [^fat f : (fn [:float] #{} : float) x : float] : float
   (f x))
 
-(defn compose [^fat f :(fn [:float] #{} :float)
-               ^fat g :(fn [:float] #{} :float)] :ptr<void>
-  (fn [x :float] :float (f (g x))))   ;; captures f and g -> fat, :float result
+(defn compose [^fat f : (fn [:float] #{} : float)
+               ^fat g : (fn [:float] #{} : float)] : ptr<void>
+  (fn [x : float] : float (f (g x))))   ;; captures f and g -> fat, :float result
 
-(defn make-scale [k :float] :ptr<void> (fn [x :float] :float (* x k)))
-(defn make-add   [n :float] :ptr<void> (fn [x :float] :float (+ x n)))
+(defn make-scale [k : float] : ptr<void> (fn [x : float] : float (* x k)))
+(defn make-add   [n : float] : ptr<void> (fn [x : float] : float (+ x n)))
 
-(defn main [] :int
+(defn main [] : int
   (let [h (compose (make-scale 2.0) (make-add 1.0))]
     (println (call-f h 3.0)))   ;; (3 + 1) * 2 = 8
   0)

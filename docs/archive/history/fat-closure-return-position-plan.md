@@ -25,7 +25,7 @@ lambda is non-capturing and lowers to a bare C function pointer:
 
 ```turmeric
 ;; tests/fixtures/logic-fresh/input.tur:92
-(defn make-fresh-fn [] :ptr<void>
+(defn make-fresh-fn [] : ptr<void>
   (let [dummy 0]
     (fn [x] (let [_ dummy] (goal-for-term x)))))   ;; <-- capture-forcing dummy
 ```
@@ -35,11 +35,11 @@ protocol:
 
 ```turmeric
 ;; tests/fixtures/logic-fresh/input.tur:50,66-69,97
-(defn apply-fat [f arg] :int
+(defn apply-fat [f arg] : int
   ```c int64_t *fat = (int64_t*)(intptr_t)f;
   return TUR_APPLY1(fat, arg); ```)
 
-(defn fresh-impl [lf state] :int
+(defn fresh-impl [lf state] : int
   (let [nv  (term-var (lvar-next))
         lf2 lf]
     (apply-goal (apply-fat lf2 nv) state)))         ;; TUR_APPLY1 reads slot 0

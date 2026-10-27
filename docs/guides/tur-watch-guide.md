@@ -74,7 +74,7 @@ import watch/event :refer [watch-event-kind watch-event-path watch-event-free
                             watch-kind-write watch-kind-rename]
 import watch/opts :refer [default-watch-opts]
 import watch/watch :refer [watch-open-one watch-close watch-next]
-defn main [] :int
+defn main [] : int
   let [opts default-watch-opts()
        w    watch-open-one("notes.md" opts)]
     loop []
@@ -121,7 +121,7 @@ import watch/event :refer [watch-event-path watch-event-kind
                              watch-kind->cstr watch-event-free]
 import watch/opts :refer [watch-opts-make watch-opts-free]
 import watch/watch :refer [watch-open-tree watch-close watch-next]
-defn main [] :int
+defn main [] : int
   let [opts (watch-opts-make 1 150 1 0 1)  ;; recursive, 150 ms debounce
        w    (watch-open-tree "src/" opts)]
     watch-opts-free(opts)

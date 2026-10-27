@@ -247,7 +247,7 @@ The `fn` arguments are C function pointers. Use inline C to define them:
   ```)
 ```
 ````sweet-exp
-defn my-map-fn [] :ptr
+defn my-map-fn [] : ptr
   ```c
   void *double_val(void *val, void *ctx) {
       return (void*)((intptr_t)val * 2);

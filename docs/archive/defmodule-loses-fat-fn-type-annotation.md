@@ -47,7 +47,7 @@ turmeric-spices `signal` spice at `7ca0f3b` (post-rebuild).
 (defmodule signal/core
   (export constant time-signal sample ...)
 ...
-(defn sample [^fat sig : (fn [float] float) t :float] :float
+(defn sample [^fat sig : (fn [float] float) t : float] : float
   (sig t))
 )
 ```

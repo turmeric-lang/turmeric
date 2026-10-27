@@ -9,7 +9,7 @@ each of these failed on `main`:
 
 ```turmeric
 (defn ident [A] [a : A] : A a)
-(defn h [d : (fn [int] int)] : int ((ident d) 10))            ; A bound to ptr<void>: not callable
+(defn h [d : (fn [int] int)] : int ((ident d) 10))      ; A bound to ptr<void>: not callable
 (defn u [d : (fn [int] int)] : int ((unwrap-or (none) d) 5))  ; cc: aggregate used as integer
 (defn k [d : (fn [int] int) v : (Vec (fn [int] int))] : int
   (vec-push! v d) 1)                                    ; TUR-E0001: expected (fn ...), got ptr<void>

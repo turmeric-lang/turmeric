@@ -32,7 +32,7 @@ to `TY_INT` — both in parameter position and in return-type position:
 ```turmeric
 (defalias Sample :int)
 
-(defn make-sample [raw :Sample] :Sample
+(defn make-sample [raw : Sample] : Sample
   raw)
 ```
 
@@ -303,7 +303,7 @@ Example transformation:
 
 ; After — explicitly :Sample; typechecker accepts float literals that
 ; are bit-cast at the C level
-(defn make-voice [freq :Sample amp :Sample] :Sample ...)
+(defn make-voice [freq : Sample amp : Sample] : Sample ...)
 ```
 
 Run `tur check src/signal/synth.tur` after each batch of annotations and
@@ -332,8 +332,8 @@ Add `tests/fixtures/defalias/basic.tur`:
 
 ```turmeric
 (defalias Sample :int)
-(defn id-sample [x :Sample] :Sample x)
-(defn test [] :int
+(defn id-sample [x : Sample] : Sample x)
+(defn test [] : int
   (id-sample 42))
 ```
 
@@ -344,8 +344,8 @@ signal-spice symptom:
 
 ```turmeric
 (defalias Hz :float)
-(defn make-osc [freq :Hz] :Hz freq)
-(defn test [] :float
+(defn make-osc [freq : Hz] : Hz freq)
+(defn test [] : float
   (make-osc 440.0))
 ```
 
@@ -429,10 +429,10 @@ for a composite type at all** — see
 `defalias` now accepts any type expression the elaborator can resolve:
 
 ```turmeric
-(defalias Sample    :int)                            ; TA1, unchanged
-(defalias IntList   (Cons int))                      ; type application
-(defalias Point     P)                               ; struct / ADT name
-(defalias Backtrack (fn [] int))                     ; function type
+(defalias Sample    :int)                           ; TA1, unchanged
+(defalias IntList   (Cons int))                     ; type application
+(defalias Point     P)                              ; struct / ADT name
+(defalias Backtrack (fn [] int))                    ; function type
 (defalias NonZero   #refine{ q : int | (not= q 0) }) ; refinement
 ```
 

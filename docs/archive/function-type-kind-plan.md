@@ -59,11 +59,11 @@ Add `tests/fixtures/errors/defn-spaced-compound/` (or under a non-error
 path if the spaced form should succeed):
 
 ```turmeric
-(defn apply1 [f : (-> int int) x : int] :int
+(defn apply1 [f : (-> int int) x : int] : int
   (f x))
 
-(defn main [] :int
-  (apply1 (fn [x :int] :int (+ x 1)) 41))
+(defn main [] : int
+  (apply1 (fn [x : int] : int (+ x 1)) 41))
 ```
 
 `expected.stdout` is `42\n`.  This is the canonical reproducer for

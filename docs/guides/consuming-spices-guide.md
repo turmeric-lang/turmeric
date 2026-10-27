@@ -430,7 +430,7 @@ Spice names map directly to import paths. A spice named `geom` that exports
 (import geom/vector :refer [vector-2d cross-product])
 (import geom/matrix :as mat)
 
-(defn main [] :int
+(defn main [] : int
   (let [v (vector-2d 1.0 2.0)
         m (mat/mat4-identity)]
     (println v)
@@ -441,7 +441,7 @@ Spice names map directly to import paths. A spice named `geom` that exports
 import geom/vector :refer [vector-2d cross-product]
 import geom/matrix :as mat
 
-defn main [] :int
+defn main [] : int
   let [v (vector-2d 1.0 2.0)
        m mat/mat4-identity()]
     println(v)
@@ -558,7 +558,7 @@ wants the header can hoist `#include <raylib.h>` to file scope with a
 (extern-c BeginDrawing      [] :void)
 (extern-c EndDrawing        [] :void)
 
-(defn main [] :int
+(defn main [] : int
   (InitWindow 800 600 "Hello")
   (while (not (WindowShouldClose))
     (BeginDrawing)
@@ -574,7 +574,7 @@ extern-c WindowShouldClose [] :bool
 extern-c BeginDrawing      [] :void
 extern-c EndDrawing        [] :void
 
-defn main [] :int
+defn main [] : int
   InitWindow(800 600 "Hello")
   while not(WindowShouldClose())
     BeginDrawing()

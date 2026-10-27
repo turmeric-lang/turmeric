@@ -253,7 +253,7 @@ C body. All live in `signal/dsp.tur` unless noted.
 
 ```turmeric
 ;;; scale -- map x linearly from [in-lo, in-hi] to [out-lo, out-hi].
-(defn scale [x :float in-lo :float in-hi :float out-lo :float out-hi :float] :float
+(defn scale [x : float in-lo : float in-hi : float out-lo : float out-hi : float] : float
   ```c
   return out_lo + (x - in_lo) * (out_hi - out_lo) / (in_hi - in_lo);
   ```)
@@ -280,7 +280,7 @@ publishes everything under `signal/dsp`, so this is automatic).
 ;;;   q      :float -- resonance 0..1 (self-oscillates near 1.0)
 ;;;
 ;;; Returns: SF<Sample,Sample>.
-(defn ladder-lpf-4p [cutoff :float q :float] ...)
+(defn ladder-lpf-4p [cutoff : float q : float] ...)
 ```
 
 Same shape for `ladder-lpf-3p`. State is 4 (or 3) `double` cells per
@@ -317,7 +317,7 @@ callers override via a future `(with-sample-rate ...)` form. For now,
 ;;; Parameters:
 ;;;   bits      :float -- effective bit depth, 1.0..16.0 (non-integer OK)
 ;;;   downsample :int  -- hold each output sample for N input samples (>=1)
-(defn bitcrush [bits :float downsample :int] ...)
+(defn bitcrush [bits : float downsample : int] ...)
 ```
 
 State: a hold counter (`int`) and a held-sample (`double`).
@@ -339,10 +339,10 @@ Two flavors, both pure SFs (no state):
 
 ```turmeric
 ;;; saturate-tanh -- soft-clip via tanh(drive * x) / tanh(drive).
-(defn saturate-tanh [drive :float] ...)
+(defn saturate-tanh [drive : float] ...)
 
 ;;; saturate-cubic -- cheap polynomial soft clip: x - x^3/3, hard-clipped at +/- sqrt(3).
-(defn saturate-cubic [drive :float] ...)
+(defn saturate-cubic [drive : float] ...)
 ```
 
 `saturate-tanh` is the musical default; `saturate-cubic` is the cheap
@@ -354,15 +354,15 @@ discontinuous limiting.
 ```turmeric
 ;;; comb-ff -- feedforward comb: y[n] = x[n] + g * x[n - delay].
 ;;; comb-fb -- feedback comb:    y[n] = x[n] + g * y[n - delay].
-(defn comb-ff [delay-samples :int g :float] ...)
-(defn comb-fb [delay-samples :int g :float] ...)
+(defn comb-ff [delay-samples : int g : float] ...)
+(defn comb-fb [delay-samples : int g : float] ...)
 ```
 
 State: a `double*` ring buffer of `delay-samples` cells, plus a write
 index. New C helper:
 
 ```turmeric
-(defn __dsp_alloc_ring [n :int] :int
+(defn __dsp_alloc_ring [n : int] : int
   ```c
   size_t n_cells = (size_t)n + 1;             // index 0 holds write-head
   double *p = (double *)calloc(n_cells, sizeof(double));
@@ -375,7 +375,7 @@ This is the same primitive Karplus-Strong needs, so once `comb-fb` exists
 the `karplus-strong` stub becomes:
 
 ```turmeric
-(defn karplus-strong [freq :float decay :float noise-duration :float]
+(defn karplus-strong [freq : float decay : float noise-duration : float]
   (let [delay (:: (/ __signal-sr freq) :int)
         comb  (comb-fb delay decay)
         noise (noise-burst noise-duration)]   ; new helper: white noise gated
@@ -394,7 +394,7 @@ i.e. replacing the stub falls out of the comb work for free.
 ;;;   index :float -- fractional, wraps modulo length
 ;;;
 ;;; Returns: :float -- interpolated sample.
-(defn lut-read [table index :float] :float ...)
+(defn lut-read [table index : float] : float ...)
 ```
 
 Inline-C grabs the vec backing pointer and length, computes
@@ -411,7 +411,7 @@ With `lut-read` and the existing `__dsp_fmod`, the real wavetable osc is
 about five lines:
 
 ```turmeric
-(defn wavetable-osc [wavetable freq :float]
+(defn wavetable-osc [wavetable freq : float]
   (let [n (:: (vec-length wavetable) :float)]
     (fn [sig]
       (let [state (__dsp_alloc_state)]   ; phase, in samples
@@ -432,7 +432,7 @@ Then `sine-wavetable`, `square-wavetable`, `sawtooth-wavetable`,
 `triangle-wavetable` (new) become real table generators:
 
 ```turmeric
-(defn sine-wavetable [size :int]
+(defn sine-wavetable [size : int]
   (let [tbl    (vec-create size 0)
         ^mut i 0]
     (while (< i size)
@@ -450,7 +450,7 @@ with a real two-operator implementation:
 
 ```turmeric
 ;;; fm-voice -- two-operator FM with modulator envelope.
-(defn fm-voice [carrier-freq :float modulator-freq :float mod-index :float
+(defn fm-voice [carrier-freq : float modulator-freq : float mod-index : float
                 params gate-sig]
   (let [;; Modulator: sine, scaled by mod-index (the depth in Hz)
         mod-env  (adsr-gen params)
@@ -535,7 +535,7 @@ on a real consumer demands it.
 (defn fft-real [x] ...)
 
 ;;; window-hann -- Hann window of given size as a vec<Sample>.
-(defn window-hann [size :int] ...)
+(defn window-hann [size : int] ...)
 
 ;;; window-hamming
 ;;; window-blackman

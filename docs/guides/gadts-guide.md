@@ -302,9 +302,9 @@ A larger example combining a plain sum and an annotated one in one program:
     (Add l r) (+ (eval-expr l) (eval-expr r))))
 
 (defn main [] : int
-  (println (color-to-int (Red)))                 ; 1
+  (println (color-to-int (Red)))            ; 1
   (println (eval-expr (Add (Lit 10) (Lit 20))))  ; 30
-  (println (color-to-int (Green)))               ; 2
+  (println (color-to-int (Green)))          ; 2
   0)
 ```
 

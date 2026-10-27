@@ -9,8 +9,8 @@ fixed that one spelling. Filed 2026-10-13.
 ## Repro
 
 ```turmeric
-(defn h3 [k : zork] : int 1)                       ; lowercase, used once
-(defn h4 [k : Zork] : int 1)                       ; capitalized too
+(defn h3 [k : zork] : int 1)     ; lowercase, used once
+(defn h4 [k : Zork] : int 1)     ; capitalized too
 (defn main [] : nil (println (+ (h3 4) (h4 5))))   ; prints 2, no diagnostic
 ```
 

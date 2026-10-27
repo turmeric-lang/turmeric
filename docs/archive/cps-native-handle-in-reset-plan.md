@@ -96,7 +96,7 @@ direct-emitter receiver codegen -- out of this change's scope. The fixture
 ### Reduction A -- plain handle-in-reset (the SIMPLER oracle; build this first)
 
 ```turmeric
-(defeffect E [] :int)
+(defeffect E [] : int)
 (defn use-e [] : int (+ 1 (perform (E))))
 (defn wrap [] : int
   (reset (+ 100 (handle (use-e) (E [] k) (resume k 5)))))

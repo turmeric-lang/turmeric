@@ -45,7 +45,7 @@ is correct, because nothing knows when the continuation is dead. Found
 ## Repro
 
 ```turmeric
-(defeffect Ask [] :int)
+(defeffect Ask [] : int)
 (defn ask-loop [n : int acc : int] : int
   (if (= n 0) acc (ask-loop (- n 1) (+ acc (perform (Ask))))))
 (defn run [n : int] : int

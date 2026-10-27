@@ -49,8 +49,8 @@ return kind only) in the global scope before pass-2 elaborates any
 body. That is exactly why mutually recursive top-level functions work:
 
 ```turmeric
-(defn even? [n :int] :bool (if (= n 0) true  (odd?  (- n 1))))
-(defn odd?  [n :int] :bool (if (= n 0) false (even? (- n 1))))
+(defn even? [n : int] : bool (if (= n 0) true  (odd?  (- n 1))))
+(defn odd?  [n : int] : bool (if (= n 0) false (even? (- n 1))))
 ```
 
 Pass-1 registers `even?` and `odd?` as forward decls; pass-2 elaborates

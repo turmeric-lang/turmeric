@@ -16,11 +16,11 @@ Today, making a struct "inspectable" requires writing boilerplate by hand for
 every type:
 
 ```turmeric
-(defstruct Point [x :int y :int])
+(defstruct Point [x : int y : int])
 
 ;; Must be written manually today:
 (definstance Show [Point]
-  (show [p] :cstr
+  (show [p] : cstr
     ```c
     char *buf = malloc(64);
     snprintf(buf, 64, "Point { x = %ld, y = %ld }", p.x, p.y);
@@ -137,7 +137,7 @@ value:
 
 ```turmeric
 (definstance Show [int]
-  (show [x] :cstr
+  (show [x] : cstr
     ```c
     char *buf = malloc(32);
     snprintf(buf, 32, "%ld", (long)x);
@@ -145,7 +145,7 @@ value:
     ```))
 
 (definstance Show [float32]
-  (show [x] :cstr
+  (show [x] : cstr
     ```c
     char *buf = malloc(32);
     snprintf(buf, 32, "%f", (float)x);
@@ -153,7 +153,7 @@ value:
     ```))
 
 (definstance Show [bool]
-  (show [x] :cstr
+  (show [x] : cstr
     (if x "true" "false")))
 ```
 
@@ -203,7 +203,7 @@ takes the struct name followed by field descriptors. Each descriptor is either:
   expression, for aliasing or non-standard accessors.
 
 ```turmeric
-(defstruct Point :copy [x :int y :int])
+(defstruct Point :copy [x : int y : int])
 
 ;;; derive-show -- generate a Show instance for a struct.
 ;;;
@@ -238,7 +238,7 @@ The macro expands to a `definstance Show [TypeName]` whose body:
 ;; (derive-show Point x y)
 ;; expands to:
 (definstance Show [Point]
-  (show [p] :cstr
+  (show [p] : cstr
     (str-concat "Point { x = " (show (.x p))
       (str-concat ", y = " (show (.y p))
         " }"))))
@@ -246,7 +246,7 @@ The macro expands to a `definstance Show [TypeName]` whose body:
 ;; (derive-show MyStruct name [display-name .internal-label])
 ;; expands to:
 (definstance Show [MyStruct]
-  (show [p] :cstr
+  (show [p] : cstr
     (str-concat "MyStruct { name = " (show (.name p))
       (str-concat ", display-name = " (show (.internal-label p))
         " }"))))
@@ -288,7 +288,7 @@ manual C inline blocks where the recursive/pointer-chasing logic requires it.
 ```turmeric
 ;;; Show [Pair] -- show a Pair as "(a, b)".
 (definstance Show [Pair]
-  (show [p] :cstr
+  (show [p] : cstr
     (str-concat "(" (show (pair-first p))
       (str-concat ", " (show (pair-second p))
         ")"))))
@@ -299,7 +299,7 @@ manual C inline blocks where the recursive/pointer-chasing logic requires it.
 ```turmeric
 ;;; Show [Option] -- show an Option value.
 (definstance Show [Option]
-  (show [opt] :cstr
+  (show [opt] : cstr
     (if (none? opt)
       "none"
       (str-concat "some(" (show (unwrap opt)) ")"))))

@@ -111,7 +111,7 @@ The plaintext version:
 ```
 ```sweet-exp
 load("stdlib/httpd.tur")
-defn my-handler [conn :ptr<void>] :nil
+defn my-handler [conn : ptr<void>] : nil
   httpd-resp-status!(conn 200)
   httpd-resp-body!(conn "Hello over HTTP")
 let [h httpd-new(8080 my-handler)]
@@ -147,10 +147,10 @@ load("stdlib/httpd.tur")
 import tls/ctx :refer [tls-ctx-new tls-ctx-free
                        tls-ctx-load-cert-pem tls-ctx-load-key-pem]
 import tls/httpd :refer [tls-httpd-init]
-defn my-handler [conn :ptr<void>] :nil
+defn my-handler [conn : ptr<void>] : nil
   httpd-resp-status!(conn 200)
   httpd-resp-body!(conn "Hello over HTTPS")
-defn main [] :int
+defn main [] : int
   tls-httpd-init()
   ;; (a)
   let [ctx tls-ctx-new()]

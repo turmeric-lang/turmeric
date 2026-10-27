@@ -28,7 +28,7 @@ static int64_t __poly_905(void * __poly_env_906, int64_t __poly_x0_908) {
 
 ```turmeric
 (defclass Box [^w]
-  (boxmap [wa f :fn] : int))
+  (boxmap [wa f : fn] : int))
 
 (defn __id_new [x] : int
   ```c int64_t *p = malloc(sizeof(int64_t)); *p = x; return (int64_t)(intptr_t)p; ```)
@@ -42,7 +42,7 @@ static int64_t __poly_905(void * __poly_env_906, int64_t __poly_x0_908) {
 
 (defn main [] : int
   (let [w       (__id_new 42)
-        adder10 (make-adder 10)]                ;; capturing closure VALUE bound to a local
+        adder10 (make-adder 10)]      ;; capturing closure VALUE bound to a local
     (println (__id_get (.boxmap w adder10))))   ;; expect 52
   0)
 ```

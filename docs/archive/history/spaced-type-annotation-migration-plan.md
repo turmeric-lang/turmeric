@@ -6,7 +6,7 @@ Turmeric currently writes type annotations as **fused** `name:type` (e.g. `(defn
 
 ```turmeric
 ;; current (fused)
-(defn classify [x :float] :cstr ...)
+(defn classify [x : float] : cstr ...)
 
 ;; target (spaced)
 (defn classify [x : float] : cstr ...)

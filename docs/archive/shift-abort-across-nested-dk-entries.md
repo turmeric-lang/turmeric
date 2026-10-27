@@ -41,8 +41,8 @@ chain than the one the delimiter lives on.
 (defeffect Tick [] : nil)
 (def gv (:: (vec-new) (Vec int)))
 (defn h [] : int (+ 1 (shift (fn [v : int] (* 2 v)) 3)))
-(defn b [v : (Vec int)] : int (+ 100 (h)))           ; evicted: a second entry for h
-(defn a [] : int                                     ; CPS: the first entry
+(defn b [v : (Vec int)] : int (+ 100 (h)))          ; evicted: a second entry for h
+(defn a [] : int                                    ; CPS: the first entry
   (handle (do (perform (Tick)) (+ 1000 (b gv)))
     (Tick [] k) (resume k nil)))
 (defn run [v : (Vec int)] : int                      ; evicted: a direct reset

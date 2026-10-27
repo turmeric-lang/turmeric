@@ -58,10 +58,10 @@ defensive renames in plot-v0.3.0):
 
 ```turmeric
 ;; spices/plot/src/plot/decor.tur
-(defn __auto-bound [] :float ```c return 0.0 / 0.0; ```)
+(defn __auto-bound [] : float ```c return 0.0 / 0.0; ```)
 
 ;; spices/plot/src/plot/interval.tur
-(defn __auto-bound [] :float ```c return 0.0 / 0.0; ```)
+(defn __auto-bound [] : float ```c return 0.0 / 0.0; ```)
 ```
 
 Build any test file that imports both `plot/decor` and `plot/interval`:

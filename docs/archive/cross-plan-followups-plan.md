@@ -98,7 +98,7 @@ a function return or parameter type is the compound annotation form,
 e.g.
 
 ```turmeric
-(defn make [] :(exists [a] [(Show a)] a)
+(defn make [] : (exists [a] [(Show a)] a)
   (pack 1 (exists [a] [(Show a)] a)))
 ```
 

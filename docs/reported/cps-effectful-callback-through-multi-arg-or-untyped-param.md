@@ -94,7 +94,7 @@ Four shapes, all through an un-annotated (empty-row) fn parameter:
 ## Repro
 
 ```turmeric
-(defeffect Ask [] :int)
+(defeffect Ask [] : int)
 (defn app2 [h : (fn [int int] int) x : int] : int (h x x))
 (defn main [] : int
   (println (handle (app2 (fn [x : int y : int] : int (+ x y (perform (Ask)))) 1)

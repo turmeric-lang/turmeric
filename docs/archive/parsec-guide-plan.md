@@ -483,7 +483,7 @@ A step-by-step beginner introduction, each step runnable on its own.
     v (value-p)
     (pure (cons k v))))
 
-(defn main [] :int
+(defn main [] : int
   (let [r (run-parser-full (pair-p) "width=800")]
     (println (cons-first r))   ;; => "width"
     (println (cons-second r))) ;; => "800"

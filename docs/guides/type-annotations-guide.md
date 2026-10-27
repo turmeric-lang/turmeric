@@ -26,7 +26,7 @@ name is required when the type is a symbol (not fused to a keyword):
 (defn greet [s : cstr]      : nil ...)
 
 ;; The old fused-keyword style is still accepted for primitives
-(defn add [a :int b :int] :int ...)
+(defn add [a : int b : int] : int ...)
 ```
 
 ```sweet-exp
@@ -36,7 +36,7 @@ defn ok? [r : ptr<void>]   : bool ...
 defn greet [s : cstr]      : nil ...
 
 ;; The old fused-keyword style is still accepted for primitives
-defn add [a :int b :int] :int ...
+defn add [a : int b : int] : int ...
 ```
 
 New code should prefer the spaced form (`: int`) because it composes cleanly
@@ -180,12 +180,12 @@ defn fmap [^f x : (^f a)  fn : (-> a b)] : (^f b) ...
 `|` is a valid symbol character, enabling Haskell- and Arrows-style operators:
 
 ```turmeric
-(defn ||| [a : arr  b : arr] : arr ...)   ;; parallel composition
+(defn ||| [a : arr  b : arr] : arr ...)  ;; parallel composition
 (defn |>  [x : a   f : (-> a b)] : b ...) ;; pipe
 ```
 
 ```sweet-exp
-defn ||| [a : arr  b : arr] : arr ...   ;; parallel composition
+defn ||| [a : arr  b : arr] : arr ...  ;; parallel composition
 defn |>  [x : a   f : (-> a b)] : b ... ;; pipe
 ```
 

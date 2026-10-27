@@ -280,9 +280,9 @@ group:
     0))
 ```
 ```sweet-exp
-defn run [] :int
-  letrec [even? (fn [n :int] :bool if({n = 0} true  odd?({n - 1})))
-          odd?  (fn [n :int] :bool if({n = 0} false even?({n - 1})))]
+defn run [] : int
+  letrec [even? (fn [n : int] : bool if({n = 0} true  odd?({n - 1})))
+          odd?  (fn [n : int] : bool if({n = 0} false even?({n - 1})))]
     println $ if(even?(10) "even" "odd")
     0
 ```
@@ -365,7 +365,7 @@ Write `(let loop [bindings...] body...)` to both introduce a local function
       (loop (- i 1) (+ acc i)))))
 ```
 ```sweet-exp
-defn sum [n :int] :int
+defn sum [n : int] : int
   let loop [i n acc 0]
     if {i = 0}
       acc

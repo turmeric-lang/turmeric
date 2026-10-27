@@ -168,7 +168,7 @@ conditional:
 ;; mark-multiples and count-primes-loop stay as pure Turmeric tail recursion.
 ;; The sieve is a vec<:int> of 0/1 flags.
 
-(defn count-primes [limit :int] :int
+(defn count-primes [limit : int] : int
   (let [s (vec/new (+ limit 1) 0)]
     (count-primes-loop s 2 limit 0)))
 ```

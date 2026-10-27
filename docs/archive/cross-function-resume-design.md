@@ -30,7 +30,7 @@ continuations**, on both paths (compiled `dk_invoke`; interpreter fibers).
 Verified:
 
 ```turmeric
-(defeffect Yield [] :int)
+(defeffect Yield [] : int)
 (defn producer [] : int (+ 100 (perform (Yield))))   ; performs cross-function
 (defn run [] : int
   (* 10 (handle (producer) (Yield [] k) (resume k 5))))  ; handler resumes k

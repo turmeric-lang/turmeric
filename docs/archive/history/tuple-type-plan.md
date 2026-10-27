@@ -158,7 +158,7 @@ at runtime.
 ### Function returns
 
 ```turmeric
-(defn split [s :cstr] :(Tuple2 cstr cstr)
+(defn split [s : cstr] : (Tuple2 cstr cstr)
   ...)
 
 (let [[before after] (split "foo:bar")]

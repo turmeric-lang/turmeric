@@ -38,7 +38,7 @@ number *live* at once.
 ## Minimal repro
 
 ```turmeric
-(defn a-rec [n :int] :int
+(defn a-rec [n : int] : int
   (if (= n 0) 0 (+ 1 (await (async (fn [] : int (a-rec (- n 1))))))))
 (defn main [] : int (println (a-rec 8000)) 0)
 ```
@@ -63,7 +63,7 @@ on the *sequential* shape, where each `async` settles fully before the next is
 spawned:
 
 ```turmeric
-(defn loop-async [n :int acc :int] :int
+(defn loop-async [n : int acc : int] : int
   (if (= n 0)
     acc
     (loop-async (- n 1) (+ acc (await (async (fn [] : int 1)))))))

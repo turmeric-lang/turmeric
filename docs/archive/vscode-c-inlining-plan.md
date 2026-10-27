@@ -33,7 +33,7 @@ keywords, string literals, preprocessor directives, comments) is absent entirely
 A C-inlining block looks like:
 
 ```turmeric
-(defn file-size [f] :int
+(defn file-size [f] : int
   ```c
   FILE* file = (FILE*)f;
   fseek(file, 0, SEEK_END);
@@ -143,7 +143,7 @@ by `)` on the same line**, which is the standard convention. An alternative
 style where `)` goes on its own line:
 
 ```turmeric
-(defn foo [x] :int
+(defn foo [x] : int
   ```c
   return (int)x * 2;
 ```
@@ -192,7 +192,7 @@ the collision entirely:
 **Option B -- Sigil block: `@c{ ... }`**
 
 ```turmeric
-(defn foo [x] :int
+(defn foo [x] : int
   @c{
     return (int)x * 2;
   })
@@ -206,7 +206,7 @@ the collision entirely:
 **Option C -- `(c! ...)` special form with a raw-string argument**
 
 ```turmeric
-(defn foo [x] :int
+(defn foo [x] : int
   (c! #|
     return (int)x * 2;
   |#))

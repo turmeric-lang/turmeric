@@ -125,9 +125,9 @@ interact. Explicit opt-in is safer.
     :cmake-version "3.0"             ;; NEW: optional minimum version
     :targets       ["MbedTLS::mbedtls"
                     "MbedTLS::mbedx509"
-                    "MbedTLS::mbedcrypto"]                  ;; existing
-    :url           "https://github.com/Mbed-TLS/mbedtls"    ;; existing -- fallback
-    :ref           "v3.6.2"                                 ;; existing -- fallback
+                    "MbedTLS::mbedcrypto"]  ;; existing
+    :url           "https://github.com/Mbed-TLS/mbedtls"  ;; existing -- fallback
+    :ref           "v3.6.2"                 ;; existing -- fallback
     :options       #{:ENABLE_PROGRAMS "OFF"
                     :USE_STATIC_MBEDTLS_LIBRARY "ON"}
   }

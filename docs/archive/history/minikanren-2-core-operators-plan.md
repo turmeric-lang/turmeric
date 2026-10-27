@@ -90,8 +90,8 @@ defn == [u v]
 
 Demonstrate:
 ```turmeric
-(run 1 (q) (== q 3))                       ; => (3)
-(run 1 (q) (== 4 3))                       ; => ()
+(run 1 (q) (== q 3))        ; => (3)
+(run 1 (q) (== 4 3))        ; => ()
 (run 1 (x) (fresh (y) (== x y) (== y 7)))  ; => (7)
 ```
 ```sweet-exp

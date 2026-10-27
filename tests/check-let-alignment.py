@@ -36,8 +36,9 @@ comment after code form a run, and a run's comments start in one column:
     (println (color-to-int (Red)))                 ; 1
     (println (eval-expr (Add (Lit 10) (Lit 20))))  ; 30
 
-That column is the one most of the run's lines already use, when every line's
-code ends left of it, else the column of the longest code line's comment.  A
+That column is the one most of the run's lines already use (the leftmost on a
+tie).  A line whose code reaches that column is exempt and keeps its comment
+after its code, so one long line does not push the rest of the run right.  A
 comment-only line right of the code above it continues its comment; any
 other line (blank, code with no comment, a full-line comment elsewhere) ends
 the run.  Strings (multi-line ones too), `#\\;`, a `#;` datum comment,
@@ -488,15 +489,15 @@ def comment_runs(lines):
 
 def comment_target(run):
     """The column a run's comments belong in: the one most of its lines already
-    use (the rightmost on a tie), when every line's code ends left of it;
-    otherwise the column of the longest code line's own comment."""
-    code = [m for m in run if m[1] is not None]
-    cols = [m[2] for m in code]
-    common = max(set(cols), key=lambda c: (cols.count(c), c))
-    if all(m[1] < common for m in code):
-        return common
-    longest = max(m[1] for m in code)
-    return max(m[2] for m in code if m[1] == longest)
+    use, the leftmost on a tie.  A line whose code reaches that column is
+    exempt (see `overflows`): one long line does not push the others right."""
+    cols = [m[2] for m in run if m[1] is not None]
+    return max(set(cols), key=lambda c: (cols.count(c), -c))
+
+
+def overflows(code_end, target):
+    """A line too long for the run's column keeps its comment after its code."""
+    return code_end is not None and code_end >= target
 
 
 def comment_problems(lines):
@@ -506,7 +507,8 @@ def comment_problems(lines):
         target = comment_target(run)
         ref = next(m for m in run if m[2] == target)
         for li, code_end, col in run:
-            if col != target and code_end is not None:
+            if col != target and code_end is not None \
+                    and not overflows(code_end, target):
                 d = ref[0] - li
                 where = f"{abs(d)} line{'s' * (abs(d) != 1)} {'below' if d > 0 else 'above'}"
                 out.append((li, f"trailing comment starts at column {col + 1}, but "
@@ -524,8 +526,9 @@ def fix_comments(lines):
             if code_end is None:
                 lines[li] = shift(lines[li], delta)
                 continue
-            delta = target - col
-            lines[li] = lines[li][:code_end] + " " * (target - code_end) + lines[li][col:]
+            delta = 0 if overflows(code_end, target) else target - col
+            if delta:
+                lines[li] = lines[li][:code_end] + " " * (target - code_end) + lines[li][col:]
 
 
 # -- driver ------------------------------------------------------------------
@@ -639,21 +642,23 @@ SELFTEST = [
      None,
      []),
     # Trailing comments: a line whose code runs past the column the others
-    # share sets the column; a comment-only continuation stays with its line.
+    # share keeps its comment after its code; a line that fits is moved.
     ("(defn main [] : int\n"
      "  (println (color-to-int (Red)))            ; 1\n"
      "  (println (eval-expr (Add (Lit 10) (Lit 20))))  ; 30\n"
      "                                                 ; (10 + 20)\n"
+     "  (println (color-to-int (Blue)))          ; 3\n"
      "  (println (color-to-int (Green)))          ; 2\n"
      "  0)",
      "(defn main [] : int\n"
-     "  (println (color-to-int (Red)))                 ; 1\n"
+     "  (println (color-to-int (Red)))            ; 1\n"
      "  (println (eval-expr (Add (Lit 10) (Lit 20))))  ; 30\n"
      "                                                 ; (10 + 20)\n"
-     "  (println (color-to-int (Green)))               ; 2\n"
+     "  (println (color-to-int (Blue)))           ; 3\n"
+     "  (println (color-to-int (Green)))          ; 2\n"
      "  0)",
-     ["trailing comment starts at column 45, but the one 1 line below starts "
-      "at column 50"]),
+     ["trailing comment starts at column 44, but the one 3 lines above starts "
+      "at column 45"]),
     # The column most lines use wins when every line's code fits left of it.
     ("(a)      ; x\n"
      "(bb)     ; y\n"

@@ -102,18 +102,18 @@ matching the `png` spice's pattern.
 ;;;
 ;;; Errors:
 ;;;   Returns NULL on allocation failure or zlib internal error.
-(defn gzip-encode [data :ptr<void> data-len :int] :ptr<void> ...)
+(defn gzip-encode [data : ptr<void> data-len : int] : ptr<void> ...)
 
 ;;; gzip-decode -- gzip-decompress to a new buffer.
 ;;;
 ;;; Accepts the standard gzip wrapper (magic bytes 1F 8B).  Use
 ;;; `inflate-raw` for raw deflate streams.
-(defn gzip-decode [data :ptr<void> data-len :int] :ptr<void> ...)
+(defn gzip-decode [data : ptr<void> data-len : int] : ptr<void> ...)
 
 ;;; gzip-buf-data / gzip-buf-len -- accessors for the result buffer.
-(defn gzip-buf-data [b :ptr<void>] :ptr<void> ...)
-(defn gzip-buf-len  [b :ptr<void>] :int       ...)
-(defn gzip-buf-free [b :ptr<void>] :nil       ...)
+(defn gzip-buf-data [b : ptr<void>] : ptr<void> ...)
+(defn gzip-buf-len  [b : ptr<void>] : int       ...)
+(defn gzip-buf-free [b : ptr<void>] : nil       ...)
 ```
 
 The GzipBuf wrapper keeps `data + len` in one allocation so the caller
@@ -192,10 +192,10 @@ guide, prefer the canonical form.
 ;;;   (compose-middleware base mw-log (mw-compress-with 256))
 ;;;
 ;;; Since: Phase H8 (M6)
-(defn mw-compress-with [min-bytes :int next :int] :ptr<void> ...)
+(defn mw-compress-with [min-bytes : int next : int] : ptr<void> ...)
 
 ;;; mw-compress -- defaults wrapper (256-byte threshold).
-(defn mw-compress [next :int] :ptr<void>
+(defn mw-compress [next : int] : ptr<void>
   (mw-compress-with 256 next))
 ```
 

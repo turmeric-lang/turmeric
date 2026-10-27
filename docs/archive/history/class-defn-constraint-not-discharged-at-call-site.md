@@ -79,8 +79,8 @@ site. Calling such a defn at a type with no instance is not a compile error.
   (flag-of w))
 
 (defn main [] : int
-  (let [bad (:: 7 :HandleNoInst)]    ;; HandleNoInst has NO HasFlag instance
-    (show-it bad)))                  ;; expected: call-site constraint error
+  (let [bad (:: 7 :HandleNoInst)]   ;; HandleNoInst has NO HasFlag instance
+    (show-it bad)))                 ;; expected: call-site constraint error
 ```
 
 ```

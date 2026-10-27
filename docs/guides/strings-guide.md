@@ -80,7 +80,7 @@ big-bang `cstr -> String` sweep: most `cstr` sites are borrowed literals where
   (let [k (make-key)
         m (map-assoc (:: (map-new) (Map String int)) k 42)]
     (do
-      (string/release k)                      ;; drop the SOURCE key
+      (string/release k)                    ;; drop the SOURCE key
       (let [probe (string/from-cstr "alpha")] ;; independent, equal key
         (do
           (println (map-get m probe))       ;; => 42  (map owns its own copy)

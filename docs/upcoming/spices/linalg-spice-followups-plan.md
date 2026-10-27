@@ -120,12 +120,12 @@ near-sparse systems where forming and factoring the full matrix is impractical.
   converged  :int)     ;; 1 if residual < tol, 0 otherwise
 
 ;; Conjugate gradient -- A must be SPD; fastest for large SPD systems.
-(cg A b opts)                              ;; => iter-result
-(cg-free r)                                ;; => :void
+(cg A b opts)                             ;; => iter-result
+(cg-free r)                               ;; => :void
 
 ;; BiCGSTAB -- A must be square and non-singular; works for non-symmetric A.
-(bicgstab A b opts)                        ;; => iter-result
-(bicgstab-free r)                          ;; => :void
+(bicgstab A b opts)                       ;; => iter-result
+(bicgstab-free r)                         ;; => :void
 
 ;; Diagonal (Jacobi) preconditioner; returns a vec of reciprocal diagonal entries.
 ;; Pass to the solver via a future preconditioned variant (v0.3 scope).

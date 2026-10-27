@@ -211,8 +211,8 @@ defalias Attribute cstr)
 (defstruct IndexedDatabase
   [datums : (Vector Datum)
    next_tx : int64
-   eavt_index : (Map (Pair Entity Attribute) (Vector Datum))              ;; Entity -> Attr -> [Datum]
-   aev_index : (Map Attribute (Map Entity (Vector Datum)))                ;; Attr -> Entity -> [Datum]
+   eavt_index : (Map (Pair Entity Attribute) (Vector Datum))  ;; Entity -> Attr -> [Datum]
+   aev_index : (Map Attribute (Map Entity (Vector Datum)))    ;; Attr -> Entity -> [Datum]
    vae_index : (Map Value (Map Attribute (Map Entity (Vector Datum))))])  ;; Value -> Attr -> Entity -> [Datum]
 ```
 

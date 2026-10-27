@@ -59,15 +59,15 @@ other:
 
 ```turmeric
 ;; n == 0, capturing -> segfault
-(defn invoke0 [f :ptr<void>] :int (f))
-(defn make-k [n :int] :ptr<void> (fn [] :int n))      ;; captures n -> fat box
+(defn invoke0 [f : ptr<void>] : int (f))
+(defn make-k [n : int] : ptr<void> (fn [] : int n))      ;; captures n -> fat box
 
 ;; n > 0, captureless -> segfault
-(defn invoke1 [f :ptr<void> x :int] :int (f x))
+(defn invoke1 [f : ptr<void> x : int] : int (f x))
 ;; (invoke1 (fn [x :int] :int (+ x 1)) 5)  -- bare fn pointer, fat dispatch crashes
 
-(defn main [] :int
-  (println (invoke0 (fn [] :int 7)))         ;; captureless n0 -> 7  (works)
+(defn main [] : int
+  (println (invoke0 (fn [] : int 7)))        ;; captureless n0 -> 7  (works)
   (println (invoke1 (make-k 0)))             ;; (n/a; illustrative)
   0)
 ```

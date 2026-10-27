@@ -832,8 +832,8 @@ The separator can also be any non-comment, non-blank, non-definition form
 - **Type annotations take a space after the colon**: `[x : int] : int`, never
   `[x :int] :int`. Both read the same, but this is the spelling the stdlib and
   the generated API reference use. `python3 tests/check-annotation-spacing.py
-  [--fix]` finds (and rewrites) the fused form in the docs' snippets; it is not
-  yet part of Docs lint.
+  [--fix]` finds (and rewrites) the fused form in the docs' snippets; it is
+  part of Docs lint, so CI and the pre-push hook run it.
 - A non-`;;;` line resets the docstring buffer; the `;;;` block must be
   immediately above the definition it documents
 - Prose paragraphs render too: before the first section under the summary,

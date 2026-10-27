@@ -165,9 +165,9 @@ follow in later phases.
 (type-timestamp) ;; => :int  8   (Arrow "tsu:", microseconds since epoch, UTC)
 (type-null)      ;; => :int  9   (Arrow "n", all-null sentinel)
 
-(type-name t)      ;; => :cstr  e.g. (type-int32) => "int32"
+(type-name t)    ;; => :cstr  e.g. (type-int32) => "int32"
 (type-arrow-fmt t) ;; => :cstr  e.g. (type-int32) => "i"
-(type-size t)      ;; => :int   byte size of one element (0 for variable-length)
+(type-size t)    ;; => :int   byte size of one element (0 for variable-length)
 ```
 
 ---

@@ -14,15 +14,15 @@ the fold_stmt_is_risky escaping-mutable exclusion is lifted.
 ## The program
 
 ```turmeric
-(defeffect Ask [] :int)
+(defeffect Ask [] : int)
 (defn compute [] : int (let [x (perform (Ask))] (* x 2)))
 
 (let [^mut k-store 0]                          ; a mutable in the enclosing scope
   (let [first-result (handle (compute)
                        (Ask [] k) (do (set! k-store k) 0))]   ; STORE k, return 0
-    (println first-result)                                    ; => 0
-    (let [second-result (resume k-store 5)]                   ; RESUME the stored k, AFTER the handle
-      (println second-result))))                              ; => 10  (5 * 2)
+    (println first-result)                      ; => 0
+    (let [second-result (resume k-store 5)]     ; RESUME the stored k, AFTER the handle
+      (println second-result))))                ; => 10  (5 * 2)
 ```
 
 The handler does not resume inline; it stores its continuation `k` into the

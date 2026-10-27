@@ -25,9 +25,9 @@ nominal type, emitting `TUR-E0001` on a mismatch.
 
 ```turmeric
 (defopaque A :int)
-(defn two [x :A y :A] :int ```c return (int64_t)(x + y); ```)
-(defn mk-a [] :A ```c return 1; ```)
-(defn main [] :int
+(defn two [x : A y : A] : int ```c return (int64_t)(x + y); ```)
+(defn mk-a [] : A ```c return 1; ```)
+(defn main [] : int
   (let [f (two 5)]      ; provide a bare int where x:A is expected
     (f (mk-a))))
 ```
@@ -41,8 +41,8 @@ $ tur check repro.tur ; echo $?
 
 ```turmeric
 (defopaque A :int)
-(defn one [x :A] :int ```c return (int64_t)x; ```)
-(defn main [] :int (one 5))   ; => TUR-E0001 "expected A, got int"
+(defn one [x : A] : int ```c return (int64_t)x; ```)
+(defn main [] : int (one 5))   ; => TUR-E0001 "expected A, got int"
 ```
 
 So the hole is specifically the **captured (already-provided) arguments of an

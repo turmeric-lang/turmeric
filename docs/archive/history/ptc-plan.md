@@ -260,7 +260,7 @@ rather than bare `TY_STRUCT`.
 ;; tests/fixtures/ptc4-basic/input.tur
 
 (defclass Printable [a]
-  (to-int [x] :int))
+  (to-int [x] : int))
 
 (definstance Printable [int]
   (to-int [x] x))
@@ -268,7 +268,7 @@ rather than bare `TY_STRUCT`.
 ;; A simple wrapper struct with one type param.
 (defstruct Box [A] (val :int))
 
-(defn box-new [v :int] :int
+(defn box-new [v : int] : int
   ```c
   int64_t *b = malloc(sizeof(int64_t));
   *b = v;
@@ -277,7 +277,7 @@ rather than bare `TY_STRUCT`.
 
 ;; Constrained instance: Printable[Box[A]] given Printable[A]
 (definstance Printable [Box] [(Printable A)]
-  (to-int [b] :int
+  (to-int [b] : int
     ```c
     return *(int64_t*)(intptr_t)b;
     ```))

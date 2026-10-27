@@ -673,13 +673,13 @@ than one `Applicative` instance in scope they are ambiguous unless the context
 pins the type:
 
 ```turmeric no-check
-(pure 42)                               ;; ambiguous
-(:: (pure 42) (Option int))             ;; OK -- ascribed
+(pure 42)                        ;; ambiguous
+(:: (pure 42) (Option int))      ;; OK -- ascribed
 (defn mk [] : (Option int) (pure 42))   ;; OK -- return type pins it
 ```
 ```sweet-exp
-pure(42)                             ;; ambiguous
-(:: pure(42) (Option int))           ;; OK -- ascribed
+pure(42)                        ;; ambiguous
+(:: pure(42) (Option int))      ;; OK -- ascribed
 defn mk [] : (Option int) pure(42)   ;; OK -- return type pins it
 ```
 

@@ -332,11 +332,11 @@ tidal/render    -- render pattern to scscm Pbind text or raw sclang
 ;; Query: evaluate pattern at a given cycle number, return event list
 (pattern-events p :int cycle :int)    ;; => event-list :int (cons of events)
 
-(pattern-fast p :int n :float) :int        ;; speed up by factor n
-(pattern-slow p :int n :float) :int        ;; slow down by factor n
-(pattern-stack p1 :int p2 :int) :int       ;; overlay (union of events from both)
-(pattern-cat p1 :int p2 :int) :int         ;; concatenate end-to-end
-(pattern-rev p :int) :int                  ;; reverse event order within cycle
+(pattern-fast p :int n :float) :int   ;; speed up by factor n
+(pattern-slow p :int n :float) :int   ;; slow down by factor n
+(pattern-stack p1 :int p2 :int) :int  ;; overlay (union of events from both)
+(pattern-cat p1 :int p2 :int) :int    ;; concatenate end-to-end
+(pattern-rev p :int) :int             ;; reverse event order within cycle
 (pattern-every n :int f :int p :int) :int  ;; apply combinator f every nth cycle
 (pattern-degrade p :int prob :float) :int  ;; randomly drop events with prob
 (pattern-free p :int) :void

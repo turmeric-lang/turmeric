@@ -71,7 +71,7 @@ takes the fat-dispatch path and works. Silent miscompile, not a diagnostic.
 (defopaque Box [A] :ptr<void>)
 (defn apply-box [b : (Box int)] : int ((:: b (fn [int] int)) 10))
 (defn mk [cap : int] : (Box int)
-  (:: (let [c cap] (fn [x] (+ x c))) :Box))        ; fat closure (captures c)
+  (:: (let [c cap] (fn [x] (+ x c))) :Box))   ; fat closure (captures c)
 (defn main [] : int (println (apply-box (mk 5))))  ; want 15
 ```
 

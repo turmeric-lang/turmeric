@@ -875,6 +875,14 @@ add_test(
   COMMAND python3 tests/check-let-alignment.py --selftest
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# Type annotations in the docs' Turmeric snippets are spelled `[x : int] : int`
+# (CLAUDE.md, "Docstring Standard").  --selftest first: the --fix rewriter must
+# stay whitespace-only and leave keywords alone.
+add_test(
+  NAME tur_annotation_spacing_lint
+  COMMAND python3 tests/check-annotation-spacing.py --selftest
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
 # src/driver/driver.h and commands.h are sectioned by defining file; each
 # section may declare only what its file defines (main-c-split-plan).  The
 # section grouping in emit_internal.h drifted until most of its prototypes sat

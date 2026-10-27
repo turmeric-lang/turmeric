@@ -15,7 +15,7 @@ item 4.  Pre-existing; the direct emitter and the CPS backend both show it.
 (defstruct PE :copy [run : (fn [int] int)])
 (defn inc [v : int] : int (+ 1 v))
 (defn main [] : int
-  (println (.run (make-struct PE inc) 1))              ; leaks 24 bytes
+  (println (.run (make-struct PE inc) 1))          ; leaks 24 bytes
   (let [p (make-struct PE inc)] (println (.run p 2)))  ; freed
   0)
 ```

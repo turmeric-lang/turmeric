@@ -43,10 +43,10 @@ The container layer is **type-erased to `:int`**. The parameterized struct
 exists but is decorative:
 
 ```turmeric
-(defstruct Map [K V] (hamt :ptr<void>))                    ; stdlib/map.tur:14 -- has K, V
-(defn map-new []            :int  ...)                     ; ...but every op is :int
-(defn map-assoc [K V] [m :int key :int val :V] :int ...)   ; key is :int!
-(defn map-get   [V]   [m :int key :int dflt :V] :V  ...)
+(defstruct Map [K V] (hamt :ptr<void>))     ; stdlib/map.tur:14 -- has K, V
+(defn map-new []            : int  ...)     ; ...but every op is :int
+(defn map-assoc [K V] [m : int key : int val : V] : int ...)   ; key is :int!
+(defn map-get   [V]   [m : int key : int dflt : V] : V  ...)
 ```
 
 Three concrete symptoms fall out of this:
