@@ -154,10 +154,18 @@ Three sites. Each reuses machinery that exists today.
 crossing exactly like a direct call. Each argument becomes an obligation
 against `T.p_i`, recorded through the same path as `refine_note_call_site`
 (`src/compiler/elab_fns.c:4488`), but reading the predicates off the binding's
-*type* instead of off a `defn`'s parameter list. Reporting is the
-`runtime_guarded` policy (`refine_collect.h`, `RefineObligation`): an error
-only on a closed refutation (`(f 10 0)`), otherwise `TUR-W0372` and a runtime
-check.
+*type* instead of off a `defn`'s parameter list. Reporting is **lenient on
+severity, loud on visibility** (open question 5): an error only on a closed
+refutation (`(f 10 0)`); otherwise `TUR-W0372`, **always**, and a runtime
+check. This is *not* the direct-call `runtime_guarded` policy, which is silent
+when undecided. That silence is justified for a direct call only because no
+check is added there (the callee's entry check runs regardless). Here an
+undecided argument *adds* a check, and code on a hot path must hear about it.
+Neither stock policy fits (the own-claim path would make an open
+counterexample a `TUR-E0371` error), so it is a `quiet` obligation worded by
+its caller, as `rt_decide_variance` already does for instances: closed
+refutation is `TUR-E0371`, and anything else is `TUR-W0372` (an error under
+`--strict-refine`).
 
 That runtime check has to be **new**, emitted at the indirect call site. The
 real function's entry check only enforces `S.p_i`, which may be weaker than
@@ -367,8 +375,12 @@ Pick one with numbers, not by default.
    refutation). The alternative is to treat it like a function's own return
    refinement -- the HOF's author wrote the function type, so the HOF owes the
    proof, and an open counterexample is a `TUR-E0371` error. Lenient matches
-   direct calls; strict matches who made the promise. **Leaning lenient**
-   (2026-10-27). Prior art splits along one line: whether the language has a
+   direct calls; strict matches who made the promise. **Resolved 2026-10-27:
+   lenient on severity, loud on visibility** (D4a). An undecided argument
+   compiles with a runtime check but always warns, because unlike a direct
+   call it adds a check that performance-sensitive code needs to know about.
+   Turning that warning into an error *where the code asks for it* is
+   `docs/upcoming/strict-refine-scopes-plan.md` (planning stage). Prior art splits along one line: whether the language has a
    runtime fallback. Fully static systems (Liquid Haskell, F*, Dafny) reject
    any unproved obligation, because there is nothing else to fall back on.
    Systems with a runtime fallback -- hybrid type checking (Flanagan 2006) and
