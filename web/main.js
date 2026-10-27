@@ -2148,6 +2148,10 @@ function configureMonaco() {
                 // colon and the name are both type, the gap between them not.
                 [new RegExp('(:)([ \\t]+)([a-zA-Z_][a-zA-Z0-9_\\-?!/]*(?:' + GENERIC_ARGS + ')?)'),
                     ['type', '', 'type']],
+                // A colon that stands alone is the annotation separator whatever
+                // follows it -- `x : (w a)`, `g : (fn [int] int)` -- so it takes
+                // the type colour too, and every separator in a signature matches.
+                [/:(?=[ \t]|$)/, 'type'],
                 // A generic type name on its own, `ptr<void>` or
                 // `option<ptr<int>>`, as in a function type `(fn [ptr<void>] nil)`.
                 // A lone `<` (less-than) never reaches here: it needs a name
