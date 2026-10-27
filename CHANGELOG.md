@@ -2,6 +2,26 @@
 
 All notable changes to Turmeric are documented here.
 
+## [0.71.2] -- 2026-10-27
+
+### Changed
+
+- **Generated API signatures spell annotations with spaces.** `gendocs` now
+  renders `(f [x : int] : int)` instead of the fused `(f [x :int] :int)`,
+  matching how the stdlib sources and guides spell them.
+
+### Fixed
+
+- **The highlighter colors types, kinds, modifiers and builtins apart.** A
+  `^name` is read by what it means: modifiers like `^mut` are teal, kinds like
+  `^f` and constraints like `^Eq` share the type violet, and extern-c types like
+  `^int` are types. Builtins such as `println` and `map` get their own
+  periwinkle instead of keyword gold, and the spaced `name : cstr` spelling
+  colors the type and colon in both the docs and the Try Turmeric editor.
+- **A standalone annotation colon is always colored.** `x : (w a)` and `g : (fn
+  [int] int)` left the colon uncolored when the type was not a plain name; every
+  annotation colon now takes the type color.
+
 ## [0.71.1] -- 2026-10-26
 
 ### Added
