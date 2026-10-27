@@ -65,6 +65,13 @@ test.describe('docs highlighter', () => {
         expect(types.every(t => !/^</.test(t))).toBe(true);
     });
 
+    test('a standalone colon is a type token whatever follows it', async ({ page }) => {
+        const src = '(defn each [x : (w a) g : (fn [int] int) n : int] : (Option a) x)';
+        const toks = await tokens(page, src);
+        const colons = toks.filter(([c, t]) => c === 'hl-type' && t === ':');
+        expect(colons.length).toBe((src.match(/ : /g) || []).length);
+    });
+
     test('builtins are periwinkle, keywords stay gold, less-than is not a type', async ({ page }) => {
         const toks = await tokens(page, '(defn f [a b] (println (map g (< a b))))');
         const cls = (text) => toks.find(([, t]) => t === text)?.[0];

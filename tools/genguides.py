@@ -1108,6 +1108,10 @@ GUIDE_JS_CORE = '''\
           out+='<span class="hl-type">:</span>'+esc(code.slice(i+1,sj))
               +'<span class="hl-type">'+esc(code.slice(sj,tj))+'</span>'; i=tj; continue;
         }
+        // A colon that stands alone is the annotation separator whatever
+        // follows it -- `x : (w a)`, `g : (fn [int] int)` -- so it is a type
+        // token too, and every separator in a signature matches.
+        out+='<span class="hl-type">:</span>'; i++; continue;
       }
       // R7RS number: one match for the whole grammar (SCM_NUM), gated on a
       // plausible first character and on a delimiter after the match, so the
