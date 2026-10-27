@@ -1297,7 +1297,9 @@ CSS = """\
   --syn-cmt:       #48433D;
   --syn-type:      #7AC4B8;
   --syn-num:       #A8C98A;
-  --syn-ann:       #C4A0E8;   /* ^annotations: the palette's keywordOperator purple */
+  --syn-ann:       #7AC4B8;   /* ^modifiers (^mut, ^fat): teal */
+  --syn-kind:      #C4A0E8;   /* types, kinds (^f) and constraints (^Eq): violet */
+  --syn-builtin:   #8AB0E8;   /* println, map, apply ...: periwinkle */
   --syn-br1:       #EFA030;   /* rainbow brackets, by depth: the */
   --syn-br2:       #D7C94A;   /* RAINBOW_BRACKETS Monaco gets in */
   --syn-br3:       #A8C98A;   /* web/main.js, from trowel's */
@@ -1351,7 +1353,9 @@ CSS = """\
   --syn-cmt:       #A39682;
   --syn-type:      #127065;
   --syn-num:       #456F20;
-  --syn-ann:       #7748AE;
+  --syn-ann:       #127065;
+  --syn-kind:      #7748AE;
+  --syn-builtin:   #3B63B0;
   --syn-br1:       #B5650A;
   --syn-br2:       #8A7800;
   --syn-br3:       #4E7F24;

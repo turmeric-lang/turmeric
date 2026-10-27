@@ -708,11 +708,39 @@ GUIDE_JS_CORE = '''\
     'if','cond','when','unless','do','begin','and','or','not','else',
     'fn','lambda','async','await','match','case',
     'quote','quasiquote','unquote','for','while','loop','do-m',
-    'set!','try','catch','finally','with','use',
+    'set!','finally','with','use',
     'import','export','module','require','provide',
     'cons','car','cdr','nil-value','some','none','ok','err',
-    'map','filter','reduce','apply','return','yield','raise','throw',
+    'return','yield',
     'coerce','cast','type-of','any',
+  ]);
+
+  // Builtins: the editor's keyword.operator set (web/main.js), set apart from
+  // the keywords so `println` and `map` do not share a colour with types and
+  // kinds. Turmeric only; the Racket and Scheme specs have no such set.
+  var BUILTIN = new Set([
+    'println','print','read','eval','apply','map','filter','reduce','fold',
+    'rc/of','rc/clone','rc/drop','rc/strong-count',
+    'defeffect','perform','handle','resume','cont',
+    'try','catch','throw','raise',
+  ]);
+
+  // What a `^name` is, as the elaborator reads it (Try Turmeric's editor does
+  // the same): a modifier from a closed list, an extern-c C type, or else a
+  // kind (`^f`, `^^f`, `^&r`) or a typeclass constraint (`^Eq`). CARET_MODIFIERS
+  // is the sym_caret_* table in src/compiler/elab_core.c plus `^tailcall`; a
+  // name missing from it reads as a kind, which is also what the compiler does
+  // with an unrecognised `^name`.
+  var CARET_MODIFIERS = new Set([
+    'mut','private','persistent','linear','unique','affine','relevant',
+    'atomic','thread-local','deferred-init','borrow','fat','extends',
+    'capability','multishot','deprecated','reflect','construct','byval',
+    'non-exhaustive','tailcall',
+  ]);
+  var CARET_C_TYPES = new Set([
+    'int','float','bool','char','cstr','void','nil','size','usize','isize',
+    'ssize','float32','float64','int8','int16','int32','int64','uint8',
+    'uint16','uint32','uint64','i8','i16','i32','i64','u8','u16',
   ]);
 
   // ---- Racket ------------------------------------------------------------
@@ -1067,6 +1095,20 @@ GUIDE_JS_CORE = '''\
         j=typeArgsEnd(code,j);
         out+='<span class="hl-type">'+esc(code.slice(i,j))+'</span>'; i=j; continue;
       }
+      // The same annotation spelled with a space after the colon, as the
+      // stdlib writes it: `[name : cstr] : void`. The colon and the name are
+      // both type, the gap between them is not.
+      if(spec.colonType&&c===':'&&(code[i+1]===' '||code[i+1]==='\\t')){
+        var sj=i+1;
+        while(sj<n&&(code[sj]===' '||code[sj]==='\\t'))sj++;
+        if(sj<n&&/[a-zA-Z_]/.test(code[sj])){
+          var tj=sj;
+          while(tj<n&&/[a-zA-Z0-9_\\-?!\\/]/.test(code[tj]))tj++;
+          tj=typeArgsEnd(code,tj);
+          out+='<span class="hl-type">:</span>'+esc(code.slice(i+1,sj))
+              +'<span class="hl-type">'+esc(code.slice(sj,tj))+'</span>'; i=tj; continue;
+        }
+      }
       // R7RS number: one match for the whole grammar (SCM_NUM), gated on a
       // plausible first character and on a delimiter after the match, so the
       // bare `+` and `-` of `(+ i 1)` stay procedures.
@@ -1093,12 +1135,20 @@ GUIDE_JS_CORE = '''\
         if(spec.caretAnn&&sym.length>1&&sym[0]==='^'){
           // `^mut`, `^fat`, `^state/GameState`, `^&cols`: the reader takes a
           // `^` as the start of a metadata symbol (reader.c), so the caret is
-          // part of the name and the whole symbol is one annotation token.
-          out+='<span class="hl-ann">'+esc(sym)+'</span>';
+          // part of the name and the whole symbol is one token. The name says
+          // which colour: a modifier is hl-ann, an extern-c C type (`^int`,
+          // `^ptr<void>`) is hl-type, and anything else is a kind or a
+          // typeclass constraint, hl-kind.
+          var cname=sym.slice(1), ccls='hl-kind';
+          if(CARET_MODIFIERS.has(cname)) ccls='hl-ann';
+          else if(CARET_C_TYPES.has(cname)||(/^ptr</.test(cname)&&isGenericType(cname))) ccls='hl-type';
+          out+='<span class="'+ccls+'">'+esc(sym)+'</span>';
         } else if(spec.colonType&&isGenericType(sym)){
           out+='<span class="hl-type">'+esc(sym)+'</span>';
         } else if(spec.lit.has(sym)){
           out+='<span class="hl-number">'+esc(sym)+'</span>';
+        } else if(spec.builtin&&spec.builtin.has(sym)){
+          out+='<span class="hl-builtin">'+esc(sym)+'</span>';
         } else if(spec.kw.has(sym)){
           out+='<span class="hl-keyword">'+esc(sym)+'</span>';
         } else {
@@ -1119,6 +1169,7 @@ GUIDE_JS_CORE = '''\
   // charLit: Turmeric reads `#\\A` too (reader.c), and the rainbow needs the
   // `(` of `(pchar #\\()` to be a character, not an opener.
   var TUR_SPEC = { kw:KW,     lit:TUR_LIT, inlineC:true,  colonType:true,  caretAnn:true,
+                   builtin:BUILTIN,
                    blockComment:false, hashKeyword:false,
                    datumComment:false, charLit:true,  hashVector:false,
                    schemeNum:false };
@@ -1354,7 +1405,7 @@ GUIDE_JS_CORE = '''\
   }
 
   var api = { highlightGuideCode: highlightGuideCode, initSyntaxToggles: initSyntaxToggles,
-              renderMermaid: renderMermaid };
+              renderMermaid: renderMermaid, hl: hl };
   if (typeof window !== 'undefined') window.turmericGuide = api;
 })();'''
 
@@ -1391,11 +1442,13 @@ GUIDE_PAGE_SCRIPTS = {
 HL_CSS = '''\
     .hl-comment { color:var(--syn-cmt, #48433D); font-style:italic; }
     .hl-lang    { color:var(--syn-cmt, #48433D); }
-    .hl-ann     { color:var(--syn-ann, #C4A0E8); }
+    .hl-ann     { color:var(--syn-ann, #7AC4B8); }
+    .hl-kind    { color:var(--syn-kind, #C4A0E8); }
+    .hl-builtin { color:var(--syn-builtin, #8AB0E8); }
     .hl-string  { color:var(--syn-str, #D9735A); }
     .hl-number  { color:var(--syn-num, #A8C98A); }
     .hl-keyword { color:var(--syn-kw, #EFA030); font-weight:bold; }
-    .hl-type    { color:var(--syn-type, #7AC4B8); }
+    .hl-type    { color:var(--syn-kind, #C4A0E8); }
     .hl-br1     { color:var(--syn-br1, #EFA030); }
     .hl-br2     { color:var(--syn-br2, #D7C94A); }
     .hl-br3     { color:var(--syn-br3, #A8C98A); }

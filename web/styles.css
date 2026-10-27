@@ -72,7 +72,9 @@
     --syn-type: #7AC4B8;
     --syn-num:  #A8C98A;
     --syn-fn:   #C4A0E8;
-    --syn-ann:  #C4A0E8;
+    --syn-ann:  #7AC4B8;
+    --syn-kind: #C4A0E8;
+    --syn-builtin: #8AB0E8;
     --syn-punc: #6A5F58;
 
     /* Spacing */
