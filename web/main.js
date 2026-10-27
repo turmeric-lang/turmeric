@@ -2098,6 +2098,25 @@ function configureMonaco() {
     // (`ptr<ptr<ptr<void>>>`) -- a regex cannot count, so the depth is fixed.
     const GENERIC_ARGS = '<(?:[^\\s<>()\\[\\]{}",;]|<(?:[^\\s<>()\\[\\]{}",;]|<[^\\s<>()\\[\\]{}",;]*>)*>)*>';
 
+    // The `^` modifiers the elaborator recognises (the sym_caret_* table in
+    // src/compiler/elab_core.c, plus `^tailcall`). Keep the two in step: a name
+    // missing here is coloured as a kind, which is what the compiler also
+    // takes an unrecognised `^name` to be.
+    const CARET_MODIFIERS = [
+        'mut', 'private', 'persistent', 'linear', 'unique', 'affine', 'relevant',
+        'atomic', 'thread-local', 'deferred-init', 'borrow', 'fat', 'extends',
+        'capability', 'multishot', 'deprecated', 'reflect', 'construct', 'byval',
+        'non-exhaustive', 'tailcall',
+    ].join('|');
+
+    // The C types an extern-c parameter may be written with, `^int`.
+    const CARET_C_TYPES = [
+        'int', 'float', 'bool', 'char', 'cstr', 'void', 'nil', 'size', 'usize',
+        'isize', 'ssize', 'float32', 'float64', 'int8', 'int16', 'int32', 'int64',
+        'uint8', 'uint16', 'uint32', 'uint64', 'i8', 'i16', 'i32', 'i64', 'u8',
+        'u16',
+    ].join('|');
+
     // Define syntax highlighting rules
     monaco.languages.setMonarchTokensProvider('turmeric', {
         tokenizer: {
@@ -2108,10 +2127,18 @@ function configureMonaco() {
                 // Strings
                 [/"([^"\\]|\\.)*"/, 'string'],
                 
-                // ^annotation (^fat, ^mut, ^state/GameState, ^&cols). The reader
-                // takes a ^ as the start of a metadata symbol, so the caret is
-                // part of the name and the whole symbol is one token.
-                [/\^[^\s()\[\]{}",;'`]+/, 'annotation'],
+                // A `^` starts a metadata symbol in the reader, so the caret is
+                // part of the name and the whole symbol is one token. What it
+                // MEANS is decided by the name, as the elaborator does:
+                //  - a closed list of modifiers (CARET_MODIFIERS) -> 'annotation'
+                //  - an extern-c parameter's C type, `^int` / `^ptr<void>` -> 'type'
+                //  - anything else is a kind (`^f`, `^^f`, `^&r`) or a typeclass
+                //    constraint (`^Eq`) -> 'kind'; the compiler too reads an
+                //    unrecognised `^name` as a higher-kinded type parameter.
+                [new RegExp('\\^(?:' + CARET_MODIFIERS + ')(?!' + SYM_CONT + ')'), 'annotation'],
+                [new RegExp('\\^(?:' + CARET_C_TYPES + ')(?!' + SYM_CONT + ')'), 'type'],
+                [new RegExp('\\^ptr' + GENERIC_ARGS), 'type'],
+                [/\^[^\s()\[\]{}",;'`]+/, 'kind'],
 
                 // A type annotation, `:int` or `:ptr<void>`: the colon and any
                 // generic arguments belong to the name, so it is one token.
@@ -2314,16 +2341,18 @@ const MONACO_THEMES = {
     dark: {
         base: 'vs-dark',
         rules: [
-            // Dark Spice Market syntax colors — keywords (amber), types and
-            // annotations (violet), builtins (violet), strings (coral),
-            // comments (dark italic), numbers (sage green) per design-notes.md
+            // Dark Spice Market syntax colors — keywords (amber), types, kinds
+            // and constraints (violet), modifiers (teal), builtins
+            // (periwinkle), strings (coral), comments (dark italic), numbers
+            // (sage green) per design-notes.md
             { token: 'comment',          foreground: '48433D', fontStyle: 'italic' },
             { token: 'string',           foreground: 'D9735A' },
             { token: 'number',           foreground: 'A8C98A' },
             { token: 'number.float',     foreground: 'A8C98A' },
             { token: 'keyword',          foreground: 'EFA030', fontStyle: 'bold' },
-            { token: 'keyword.operator', foreground: 'C4A0E8' },
-            { token: 'annotation',       foreground: 'C4A0E8' },
+            { token: 'keyword.operator', foreground: '8AB0E8' },
+            { token: 'annotation',       foreground: '7AC4B8' },
+            { token: 'kind',             foreground: 'C4A0E8' },
             { token: 'type',             foreground: 'C4A0E8' },
             { token: 'operator',         foreground: '6A5F58' },
             { token: 'delimiter',        foreground: '5A5448' },
@@ -2405,8 +2434,9 @@ const MONACO_THEMES = {
             { token: 'number',           foreground: '456F20' },
             { token: 'number.float',     foreground: '456F20' },
             { token: 'keyword',          foreground: '965500', fontStyle: 'bold' },
-            { token: 'keyword.operator', foreground: '7748AE' },
-            { token: 'annotation',       foreground: '7748AE' },
+            { token: 'keyword.operator', foreground: '3B63B0' },
+            { token: 'annotation',       foreground: '127065' },
+            { token: 'kind',             foreground: '7748AE' },
             { token: 'type',             foreground: '7748AE' },
             { token: 'operator',         foreground: '8A7D6C' },
             { token: 'delimiter',        foreground: '9F927F' },

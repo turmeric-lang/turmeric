@@ -7,8 +7,9 @@
     "string": "D9735A",
     "number": "A8C98A",
     "keyword": "EFA030",
-    "keywordOperator": "C4A0E8",
-    "annotation": "C4A0E8",
+    "keywordOperator": "8AB0E8",
+    "annotation": "7AC4B8",
+    "kind": "C4A0E8",
     "type": "C4A0E8",
     "operator": "6A5F58",
     "delimiter": "5A5448"
@@ -20,8 +21,9 @@
     "string": "AE3C26",
     "number": "456F20",
     "keyword": "965500",
-    "keywordOperator": "7748AE",
-    "annotation": "7748AE",
+    "keywordOperator": "3B63B0",
+    "annotation": "127065",
+    "kind": "7748AE",
     "type": "7748AE",
     "operator": "8A7D6C",
     "delimiter": "9F927F"
