@@ -2892,6 +2892,8 @@ static const char *rt_variance_reason(const RefineObligation *vob) {
  * not attached: their hint proposes a hypothesis to DECLARE on the subject,
  * which reads as "narrow the class" -- not advice anyone should take here. */
 static void rt_report_variance_unknown(Span loc, const char *note,
+                                       const char *fmt, ...) TUR_PRINTF_FMT(3, 4);
+static void rt_report_variance_unknown(Span loc, const char *note,
                                        const char *fmt, ...) {
     char claim[512];
     va_list ap;
