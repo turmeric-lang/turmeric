@@ -12,7 +12,6 @@
     "test:prod": "playwright test --config playwright.config.prod.js"
   },
   "dependencies": {
-    "@fontsource/cormorant-garamond": "^5.3.0",
     "@fontsource/dm-sans": "^5.3.0",
     "@fontsource/iosevka": "^5.3.0",
     "@fontsource/space-grotesk": "^5.3.0",
