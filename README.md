@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/turmeric-lang/turmeric/actions/workflows/ci.yml/badge.svg)](https://github.com/turmeric-lang/turmeric/actions/workflows/ci.yml)
 
-**Latest release:** `v0.71.1` -- Heap frames are now the default for `#lang r7rs` recursion, `^borrow` function types and other fixes unblock C-wrapping spices, and the docs gain tag browsing and full syntax highlighting.
+**Latest release:** `v0.71.2` -- Generated API signatures now spell annotations with spaces, and the docs and editor highlighter colors types, kinds, modifiers and builtins apart.
 
 ## What
 
