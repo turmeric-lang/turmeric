@@ -1,8 +1,10 @@
 # Plan: Refinements in Function Types (Contravariant Subtyping)
 
-> **Status:** DRAFT (2026-10-27). Nothing implemented. Would ship behind
-> `--enable=refined-fn-types` until graduation, per the experimental-features
-> rule in CLAUDE.md.
+> **Status:** DRAFT (2026-10-27), lower priority -- not blocked, but not on
+> the v1 critical path (open question 6). Nothing from F0-F5 is implemented.
+> The instance-path warning from open question 2 has landed on its own. Would
+> ship behind `--enable=refined-fn-types` until graduation, per the
+> experimental-features rule in CLAUDE.md.
 > **Type:** Compiler / Type System (refinement types)
 > **Predecessors:** `docs/archive/refinement-types-plan.md` ("Indirect calls",
 > 2026-07-24 -- the function-typed parameter case was left open there)
@@ -350,18 +352,35 @@ Pick one with numbers, not by default.
    paths, `--strict-refine` makes it an error, and the probe is counted as a
    real obligation rather than under `templates_tried`. The `TUR-E0374`
    explain text and the guide's "an undecidable pair keeps the runtime check"
-   change with it. This is a behaviour change for existing refined typeclass
-   methods, so it lands in F3 as its own commit with its own fixture.
+   change with it. **Landed 2026-10-27, ahead of this plan** (it needs
+   nothing else from it): `rt_decide_variance` in
+   `src/compiler/elab_typeclasses.c`, pinned by
+   `refine-instance-variance-unknown` and
+   `errors/refine-instance-variance-unknown-strict`. F3 extracts that helper
+   rather than writing a new one.
 3. Named parameters in function types (D3): which spelling, and is there
-   demand beyond `(> r x)`-style result bounds?
-4. F4: wrapper or keep the check -- decided by measurement.
+   demand beyond `(> r x)`-style result bounds? **Deferred** (2026-10-27).
+4. F4: wrapper or keep the check. **Decided by measurement** (2026-10-27),
+   as F4 says.
 5. **D4a reporting policy.** An argument at a call through `f` is reported
    with the lenient `runtime_guarded` policy (error only on a closed
    refutation). The alternative is to treat it like a function's own return
    refinement -- the HOF's author wrote the function type, so the HOF owes the
    proof, and an open counterexample is a `TUR-E0371` error. Lenient matches
-   direct calls; strict matches who made the promise.
-6. **Demand and priority.** The one consumer that has looked at this,
+   direct calls; strict matches who made the promise. **Leaning lenient**
+   (2026-10-27). Prior art splits along one line: whether the language has a
+   runtime fallback. Fully static systems (Liquid Haskell, F*, Dafny) reject
+   any unproved obligation, because there is nothing else to fall back on.
+   Systems with a runtime fallback -- hybrid type checking (Flanagan 2006) and
+   Sage, gradual refinement types (Lehmann and Tanter 2017), Racket's
+   higher-order contracts, Ada/SPARK -- reject only what is provably wrong and
+   insert a check for the rest, with full proof as an opt-in mode. Turmeric is
+   in the second group, and its default plus `--strict-refine` already has
+   that shape. One idea to take from Racket regardless: the failure message of
+   the call-site check should blame the caller of `f` (the HOF body that broke
+   `f`'s type), not `f`.
+6. **Demand and priority.** *Noted 2026-10-27: not blocked, lower priority;
+   planning continues.* The one consumer that has looked at this,
    `ecs-refinement-typed-apis-plan.md`, lists refined function types as out of
    scope because it does not need them. Before F1 starts, name a first
    consumer (a stdlib HOF, a spice API, a scheduler holding function values)
