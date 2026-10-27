@@ -330,9 +330,14 @@ Pick one with numbers, not by default.
 1. A lint (not an error) for a refined function passed into an unrefined
    function-typed slot. It would point at the slot that could carry the
    refinement. Useful, or noise?
-2. Should the parameter direction's `UNKNOWN` be silent rather than
-   `TUR-W0372`, given the real function's entry check fully covers it?
-   `TUR-E0374` is silent there today.
+2. ~~Should the parameter direction's `UNKNOWN` be silent rather than
+   `TUR-W0372`?~~ **Resolved 2026-10-27: warn.** The real function's entry
+   check keeps it sound, but a silent "couldn't tell" leaves a runtime panic
+   with no compile-time signal. That includes under `--strict-refine`, which
+   never sees the obligation today because the instance path decides it as a
+   `speculative` probe (`refine_discharge.c:512` returns before any
+   reporting). Whether the extracted F3 helper should also start warning on
+   the *instance* path (`TUR-E0374`'s undecided pairs) is a separate call.
 3. Named parameters in function types (D3): which spelling, and is there
    demand beyond `(> r x)`-style result bounds?
 4. F4: wrapper or keep the check -- decided by measurement.
