@@ -1,0 +1,4 @@
+;; caret-type-attributes-plan P0: "exactly once" and "at most once" contradict.
+(defopaque ^linear ^affine Tok : int)
+
+(defn main [] : int 0)

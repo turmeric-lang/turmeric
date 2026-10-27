@@ -661,31 +661,125 @@ static Form *defstruct_flatten_grouped_field_vec(Elab *e, const Form *fields_vec
     return form_vec(e->arena, fields_vec->span, flat, flat_n);
 }
 
+/* caret-type-attributes-plan P0.  The leading `^attr`s of a defopaque /
+ * defstruct / defdata / defgadt: `(defstruct ^copy ^heap Name ...)`.  They sit
+ * before the name, as on `defn` and `def`, and mean what the trailing keyword
+ * of the same name means (`:copy`, `:linear`, ...).  Both spellings are read
+ * until the keyword one is retired (plan P3/P4); the keyword loops in the
+ * three elab_* functions fill the same TypeDeclAttrs.
+ *
+ * Returns the index of the name form (== call->as.list.len when the form is
+ * nothing but attributes, which the caller reports as a missing name). */
+uint32_t elab_type_decl_name_index(const Form *call) {
+    uint32_t i = 1;
+    while (i < call->as.list.len) {
+        const Form *it = call->as.list.items[i];
+        if (it->tag != F_SYM || it->as.sym->len < 2 || it->as.sym->name[0] != '^') break;
+        i++;
+    }
+    return i;
+}
+
+/* Reads the leading `^attr`s into `out` (zeroed first) and the name index into
+ * `*name_idx`.  `allowed` is the mask of TDA_* bits valid on this form.
+ * Returns false after a diagnostic on an attribute that is unknown, not valid
+ * on this form, or contradicts another (^linear / ^affine, ^copy / ^move). */
+bool elab_type_decl_attrs(Elab *e, const Form *call, const char *form_name,
+                          unsigned allowed, TypeDeclAttrs *out, uint32_t *name_idx) {
+    static const struct { unsigned bit; const char *spell; } ATTRS[] = {
+        { TDA_COPY, "^copy" },     { TDA_MOVE, "^move" },
+        { TDA_LINEAR, "^linear" }, { TDA_AFFINE, "^affine" },
+        { TDA_HEAP, "^heap" },     { TDA_SEALED, "^sealed" },
+        { TDA_NON_NULL, "^non-null" }, { TDA_NO_AUTO_CTOR, "^no-auto-ctor" },
+    };
+    const size_t n_attrs = sizeof ATTRS / sizeof ATTRS[0];
+    memset(out, 0, sizeof(*out));
+    uint32_t ni = elab_type_decl_name_index(call);
+    unsigned seen = 0;
+    for (uint32_t i = 1; i < ni; i++) {
+        const Form *a = call->as.list.items[i];
+        unsigned bit = 0;
+        for (size_t k = 0; k < n_attrs; k++)
+            if (strcmp(a->as.sym->name, ATTRS[k].spell) == 0) { bit = ATTRS[k].bit; break; }
+        if (!bit || !(allowed & bit)) {
+            char expected[160];
+            size_t off = 0;
+            unsigned listed = 0;
+            for (size_t k = 0; k < n_attrs; k++) {
+                if (!(allowed & ATTRS[k].bit)) continue;
+                off += (size_t)snprintf(expected + off, sizeof expected - off, "%s%s",
+                                        listed++ ? ", " : "", ATTRS[k].spell);
+                if (off >= sizeof expected) { off = sizeof expected - 1; break; }
+            }
+            diag_emit(DIAG_ERROR, a->span,
+                      "%s: %s is not an attribute of %s -- expected %s",
+                      form_name, a->as.sym->name, form_name, expected);
+            return false;
+        }
+        seen |= bit;
+    }
+    if ((seen & TDA_LINEAR) && (seen & TDA_AFFINE)) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "%s: ^linear and ^affine are mutually exclusive "
+                  "(exactly-once vs at-most-once)", form_name);
+        return false;
+    }
+    if ((seen & TDA_COPY) && (seen & TDA_MOVE)) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "%s: ^copy and ^move are mutually exclusive", form_name);
+        return false;
+    }
+    (void)e;
+    out->copy = seen & TDA_COPY;
+    out->move = seen & TDA_MOVE;
+    out->linear = seen & TDA_LINEAR;
+    out->affine = seen & TDA_AFFINE;
+    out->heap = seen & TDA_HEAP;
+    out->sealed = seen & TDA_SEALED;
+    out->non_null = seen & TDA_NON_NULL;
+    out->no_auto_ctor = seen & TDA_NO_AUTO_CTOR;
+    *name_idx = ni;
+    return true;
+}
+
 Expr *elab_defstruct(Elab *e, const Form *call) {
     if (call->as.list.len < 2) {
         diag_emit(DIAG_ERROR, call->span,
-                  "defstruct requires a name and field list: (defstruct Name [:copy] [f1 : T1 ...])");
+                  "defstruct requires a name and field list: (defstruct [^copy] Name [f1 : T1 ...])");
         return NULL;
     }
-    
-    Form *name_form = call->as.list.items[1];
+
+    TypeDeclAttrs attrs;
+    uint32_t name_idx;
+    if (!elab_type_decl_attrs(e, call, "defstruct",
+                              TDA_COPY | TDA_MOVE | TDA_LINEAR | TDA_AFFINE | TDA_HEAP |
+                              TDA_NO_AUTO_CTOR, &attrs, &name_idx))
+        return NULL;
+    if (name_idx >= call->as.list.len) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "defstruct requires a name and field list: (defstruct [^copy] Name [f1 : T1 ...])");
+        return NULL;
+    }
+    Form *name_form = call->as.list.items[name_idx];
     if (name_form->tag != F_SYM) {
         diag_emit(DIAG_ERROR, name_form->span,
                   "defstruct name must be a symbol");
         return NULL;
     }
     const Symbol *name = name_form->as.sym;
-    
-    /* Check for optional leading :copy / :move / :linear / :heap annotations.
+
+    /* Check for optional leading :copy / :move / :linear / :affine / :heap
+     * annotations (the pre-caret spelling of the ^attrs read above).
      * A loop (rather than a single check at index 2) lets :heap combine with the
      * substructural keyword in any order, while remaining backward-compatible
      * with the single-keyword form (the `else break` preserves the old
      * "unrecognised keyword -> fall through to fields/type-params" behaviour). */
-    bool is_copy = false;
-    bool is_linear = false;
-    bool is_heap = false;
-    bool no_auto_ctor = false; /* CTOR-V0 */
-    uint32_t fields_start_idx = 2;
+    bool is_copy = attrs.copy;
+    bool is_linear = attrs.linear;
+    bool is_affine = attrs.affine;
+    bool is_heap = attrs.heap;
+    bool no_auto_ctor = attrs.no_auto_ctor; /* CTOR-V0 */
+    uint32_t fields_start_idx = name_idx + 1;
 
     while (fields_start_idx < call->as.list.len) {
         Form *kw_form = call->as.list.items[fields_start_idx];
@@ -697,6 +791,10 @@ Expr *elab_defstruct(Elab *e, const Form *call) {
         } else if (kw_form->as.sym == e->kw_linear) {
             /* LT4: :linear structs are exactly-once (CK_LINEAR). */
             is_linear = true;
+        } else if (kw_form->as.sym == e->kw_affine) {
+            /* at-most-once (CK_UNIQUE), as on a defopaque / defdata: this arm was
+             * missing, so `:affine` ended the loop and was read as a field. */
+            is_affine = true;
         } else if (kw_form->as.sym == e->kw_heap) {
             /* end-to-end-monomorphization: typed-pointer ABI (Vec/Map/Set/...). */
             is_heap = true;
@@ -708,7 +806,13 @@ Expr *elab_defstruct(Elab *e, const Form *call) {
         }
         fields_start_idx++;
     }
-    
+    if (is_linear && is_affine) {
+        diag_emit(DIAG_ERROR, name_form->span,
+                  "defstruct: '%s' cannot be both linear and affine -- \"exactly "
+                  "once\" and \"at most once\" are contradictory", name->name);
+        return NULL;
+    }
+
     /* Phase TM0: optional type-parameter vector [K V ...] before field definitions.
      * If the next form is a vector containing only symbols (no keyword annotations),
      * treat it as a type-param list; field defs then come as separate list forms.
@@ -892,28 +996,31 @@ Expr *elab_defstruct(Elab *e, const Form *call) {
         /* Constructor variant form: (Name <field-vec>) */
         Form *ctor_items[2] = { name_form, field_vec };
         Form *ctor_form = form_list(e->arena, call->span, ctor_items, 2);
-        /* (defdata Name [:copy] [:heap] [type-params] (Name <field-vec>)) --
-         * defdata's argument order is name, optional :copy/:move/:heap keywords,
-         * optional type-param vec, then the constructor(s).  Seam 3: a :heap
-         * struct lowers to a :heap record defadt (typed-pointer ABI). */
-        Form *dd_items[8];
+        /* (defdata [^copy] [^heap] Name [type-params] (Name <field-vec>)) --
+         * defdata's argument order is optional ^attrs, the name, optional
+         * type-param vec, then the constructor(s).  Seam 3: a ^heap struct
+         * lowers to a ^heap record defadt (typed-pointer ABI).  The attributes
+         * are forwarded in the caret spelling, so elab_defdata's keyword loop is
+         * not what a defstruct depends on. */
+        Form *dd_items[12];
         uint32_t ddn = 0;
         dd_items[ddn++] = form_sym(e->arena, name_form->span, e->sym_defdata);
-        dd_items[ddn++] = name_form;
         if (is_copy)
-            dd_items[ddn++] = form_keyword(e->arena, name_form->span, e->kw_copy);
+            dd_items[ddn++] = form_sym(e->arena, name_form->span, e->sym_caret_copy);
         if (is_heap)
-            dd_items[ddn++] = form_keyword(e->arena, name_form->span, e->kw_heap);
-        /* structdef-retirement slice 4: forward `:linear` so the lowered ADT type
+            dd_items[ddn++] = form_sym(e->arena, name_form->span, e->sym_caret_heap);
+        /* structdef-retirement slice 4: forward ^linear so the lowered ADT type
          * carries CK_LINEAR and the exactly-once enforcement propagates. */
         if (is_linear)
-            dd_items[ddn++] = form_keyword(e->arena, name_form->span, e->kw_linear);
-        /* structdef-retirement slice 2: forward `:no-auto-ctor` so elab_defdata
+            dd_items[ddn++] = form_sym(e->arena, name_form->span, e->sym_caret_linear);
+        if (is_affine)
+            dd_items[ddn++] = form_sym(e->arena, name_form->span, e->sym_caret_affine);
+        /* structdef-retirement slice 2: forward ^no-auto-ctor so elab_defdata
          * suppresses the value-namespace constructor (the `(Name ...)` call form
          * stays rejected; construction is via make-struct). */
         if (no_auto_ctor)
-            dd_items[ddn++] = form_keyword(e->arena, name_form->span,
-                                           e->kw_no_auto_ctor);
+            dd_items[ddn++] = form_sym(e->arena, name_form->span, e->sym_caret_no_auto_ctor);
+        dd_items[ddn++] = name_form;
         if (type_param_vec_form)
             dd_items[ddn++] = type_param_vec_form;  /* original [A B ...] vec, kinds intact */
         dd_items[ddn++] = ctor_form;
@@ -946,12 +1053,18 @@ Expr *elab_defstruct(Elab *e, const Form *call) {
  * of kind '* -> *' (etc.) so it can be spelled `(Name A)` in annotations and
  * track an element/index type at the type level. */
 Expr *elab_defopaque(Elab *e, const Form *call) {
-    if (call->as.list.len < 3) {
+    TypeDeclAttrs attrs;
+    uint32_t name_idx;
+    if (!elab_type_decl_attrs(e, call, "defopaque",
+                              TDA_LINEAR | TDA_AFFINE | TDA_SEALED | TDA_NON_NULL,
+                              &attrs, &name_idx))
+        return NULL;
+    if (call->as.list.len < name_idx + 2) {
         diag_emit(DIAG_ERROR, call->span,
-                  "defopaque requires a name and base type: (defopaque Name :int)");
+                  "defopaque requires a name and base type: (defopaque [^linear] Name :int)");
         return NULL;
     }
-    Form *name_form = call->as.list.items[1];
+    Form *name_form = call->as.list.items[name_idx];
     if (name_form->tag != F_SYM) {
         diag_emit(DIAG_ERROR, name_form->span, "defopaque name must be a symbol");
         return NULL;
@@ -968,9 +1081,9 @@ Expr *elab_defopaque(Elab *e, const Form *call) {
      * Stored on the StructDef as phantoms; the carrier stays int64_t. */
     const char **type_params_arr = NULL;
     uint8_t n_type_params_v = 0;
-    uint32_t base_idx = 2;
-    if (call->as.list.items[2]->tag == F_VEC) {
-        Form *tp_form = call->as.list.items[2];
+    uint32_t base_idx = name_idx + 1;
+    if (call->as.list.items[base_idx]->tag == F_VEC) {
+        Form *tp_form = call->as.list.items[base_idx];
         n_type_params_v = (uint8_t)tp_form->as.list.len;
         if (n_type_params_v == 0) {
             diag_emit(DIAG_ERROR, tp_form->span,
@@ -988,7 +1101,7 @@ Expr *elab_defopaque(Elab *e, const Form *call) {
             }
             type_params_arr[pi] = pf->as.sym->name;
         }
-        base_idx = 3;
+        base_idx = name_idx + 2;
         /* With a type-param vector consumed, the base type is mandatory. */
         if (call->as.list.len < base_idx + 1) {
             diag_emit(DIAG_ERROR, call->span,
@@ -1003,10 +1116,10 @@ Expr *elab_defopaque(Elab *e, const Form *call) {
      * governs `::` visibility, not how many times the value may be used), so
      * the slot now takes a SET.  :linear and :affine remain mutually exclusive
      * -- "exactly once" and "at most once" are contradictory claims. */
-    bool opaque_linear = false;
-    bool opaque_affine = false;
-    bool opaque_sealed = false;
-    bool opaque_non_null = false;
+    bool opaque_linear = attrs.linear;
+    bool opaque_affine = attrs.affine;
+    bool opaque_sealed = attrs.sealed;
+    bool opaque_non_null = attrs.non_null;
     for (uint32_t ai = base_idx + 1; ai < call->as.list.len; ai++) {
         Form *attr = call->as.list.items[ai];
         if (attr->tag == F_KEYWORD && attr->as.sym == e->kw_linear) {
@@ -1019,8 +1132,8 @@ Expr *elab_defopaque(Elab *e, const Form *call) {
             opaque_non_null = true;
         } else {
             diag_emit(DIAG_ERROR, attr->span,
-                      "defopaque: unexpected attribute -- expected :linear, "
-                      ":affine, :sealed or :non-null");
+                      "defopaque: unexpected attribute -- expected ^linear, "
+                      "^affine, ^sealed or ^non-null before the name");
             return NULL;
         }
     }
@@ -1755,7 +1868,13 @@ static bool adt_ctor_split_result(Elab *e, const char *kw, const Form *ctor_form
  */
 static Expr *elab_adt_def(Elab *e, const Form *call, bool spelled_defgadt) {
     const char *kw = spelled_defgadt ? "defgadt" : "defdata";
-    if (call->as.list.len < 3) {
+    TypeDeclAttrs attrs;
+    uint32_t name_idx;
+    if (!elab_type_decl_attrs(e, call, kw,
+                              TDA_COPY | TDA_MOVE | TDA_LINEAR | TDA_AFFINE | TDA_HEAP |
+                              TDA_NO_AUTO_CTOR, &attrs, &name_idx))
+        return NULL;
+    if (call->as.list.len < name_idx + 2) {
         if (spelled_defgadt)
             diag_emit(DIAG_ERROR, call->span,
                       "defgadt requires a name, type-params, and constructors: "
@@ -1767,7 +1886,7 @@ static Expr *elab_adt_def(Elab *e, const Form *call, bool spelled_defgadt) {
         return NULL;
     }
 
-    Form *name_form = call->as.list.items[1];
+    Form *name_form = call->as.list.items[name_idx];
     if (name_form->tag != F_SYM) {
         diag_emit(DIAG_ERROR, name_form->span, "%s name must be a symbol", kw);
         return NULL;
@@ -1779,13 +1898,13 @@ static Expr *elab_adt_def(Elab *e, const Form *call, bool spelled_defgadt) {
      * order (defdata wrote the keywords first, defgadt the vector).
      * CONV-S1 seam 3: :heap marks a typed-pointer record ADT (the analogue of a
      * :heap struct -- Vec/Map/Set), set by a lowered `:heap` defstruct. */
-    bool is_copy = false;
-    bool is_heap = false;
-    bool is_linear = false;     /* structdef-retirement slice 4 (LT4) */
-    bool is_affine = false;     /* at-most-once (CK_UNIQUE), as on a defopaque */
-    bool no_auto_ctor = false;  /* structdef-retirement slice 2 (CTOR-V0) */
+    bool is_copy = attrs.copy;
+    bool is_heap = attrs.heap;
+    bool is_linear = attrs.linear;     /* structdef-retirement slice 4 (LT4) */
+    bool is_affine = attrs.affine;     /* at-most-once (CK_UNIQUE), as on a defopaque */
+    bool no_auto_ctor = attrs.no_auto_ctor;  /* structdef-retirement slice 2 (CTOR-V0) */
     Form *tp_form = NULL;
-    uint32_t ctors_start_idx = 2;
+    uint32_t ctors_start_idx = name_idx + 1;
     while (ctors_start_idx < call->as.list.len) {
         Form *hf = call->as.list.items[ctors_start_idx];
         if (hf->tag == F_VEC && !tp_form) {
@@ -1813,7 +1932,7 @@ static Expr *elab_adt_def(Elab *e, const Form *call, bool spelled_defgadt) {
     }
     if (is_linear && is_affine) {
         diag_emit(DIAG_ERROR, name_form->span,
-                  "%s: '%s' cannot be both :linear and :affine -- \"exactly "
+                  "%s: '%s' cannot be both linear and affine -- \"exactly "
                   "once\" and \"at most once\" are contradictory", kw, name->name);
         return NULL;
     }

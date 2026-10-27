@@ -1,0 +1,5 @@
+;; caret-type-attributes-plan P0: an unknown ^attr on a type declaration names
+;; the attributes the form takes.
+(defstruct ^bogus Point [x : int])
+
+(defn main [] : int 0)

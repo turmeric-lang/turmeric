@@ -1428,7 +1428,10 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
                 bool is_linear_attr = false;
                 if (is_exists_form && cursor < form->as.list.len) {
                     Form *maybe_attr = form->as.list.items[cursor];
-                    if (maybe_attr->tag == F_KEYWORD && maybe_attr->as.sym == e->kw_linear) {
+                    /* `^linear` is the same flag in the attribute spelling every
+                     * other declaration takes (caret-type-attributes-plan P0). */
+                    if ((maybe_attr->tag == F_KEYWORD && maybe_attr->as.sym == e->kw_linear) ||
+                        (maybe_attr->tag == F_SYM && maybe_attr->as.sym == e->sym_caret_linear)) {
                         is_linear_attr = true;
                         cursor++;
                     }

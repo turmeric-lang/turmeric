@@ -1,10 +1,11 @@
 # Plan: spell type-declaration flags as `^attr`, not `:keyword`
 
-> **Status:** DESIGN SETTLED, 2026-10-27; nothing implemented. The three open
-> questions are decided (see "Decisions"): attributes go before the name,
-> `^move` stays, and `^heap` moves with the rest. P0 is next. A spelling change
-> only: every form here means exactly what it means today, and the checker's
-> rules for linear, affine, copy and heap values do not move.
+> **Status:** P0 IMPLEMENTED 2026-10-27; P1 is next. The three open questions
+> are decided (see "Decisions"): attributes go before the name, `^move` stays,
+> and `^heap` moves with the rest. Both spellings are accepted today; the
+> keyword one is not yet warned about (P3). A spelling change only: every form
+> here means exactly what it means today, and the checker's rules for linear,
+> affine, copy and heap values do not move.
 
 ## The problem
 
@@ -144,6 +145,37 @@ the experiment rule in CLAUDE.md is for. If review disagrees, an
   `errors/caret-type-attrs-unknown` pin the diagnostics.
 - `caret-type-attrs-defstruct-affine` pins the gap fixed above.
 - `caret-exists-linear` pins the type form.
+
+#### As implemented (2026-10-27)
+
+- `elab_type_decl_name_index` and `elab_type_decl_attrs` are in
+  `src/compiler/elab_structs.c`, declared in `elab_internal.h` with a
+  `TypeDeclAttrs` struct and `TDA_*` mask bits. Each form passes the mask of
+  attributes it takes, so `defstruct ^sealed` and `defopaque ^heap` are errors
+  that list what the form does take. The mutual exclusions (`^linear` with
+  `^affine`, `^copy` with `^move`) are checked there.
+- `elab_defstruct`, `elab_adt_def` (`defdata` / `defgadt`) and `elab_defopaque`
+  read their name at the returned index and start from the parsed flags. Their
+  keyword loops are unchanged apart from `defstruct` gaining `:affine`, and set
+  the same variables.
+- `defstruct` lowers to `defdata` by building a caret-first form, so every
+  `defstruct` now goes through the new parser.
+- The forward-type pre-pass in `elab_toplevel.c` finds the name (and a
+  `defopaque`'s phantom arity) past the attributes.
+- Two sites on the plan's list needed no change: `scheme_lower.c`'s
+  `stdlib_names_of` already skips a `^` before the name, and
+  `elab_hoist_nested_type_def` takes the elaborated expression, not the form.
+- `exists` accepts `^linear` beside `:linear`.
+- Verified: 8 new fixtures (5 of them `errors/`); the full `tests/run.sh`
+  (4183 passed, 0 failed); the interpreter harness on the new fixtures
+  (`caret-exists-linear` is skipped there, as it holds user inline-C). The
+  emitted C for `^non-null`, `^no-auto-ctor` and `^move ^heap` is identical to
+  the keyword spelling's.
+- Not verified: that `defstruct :affine` failed before this change. That claim
+  comes from reading the old loop; no pre-change build was run. The fixture
+  passes with both spellings now.
+- Diagnostics still say `:non-null` and `:linear` where they mention a keyword
+  (for example the "requires a pointer base type" message). P3 rewords them.
 
 ### P1 -- tools that read declarations
 

@@ -527,6 +527,15 @@ typedef struct Elab {
     /* Sum-types T6: `(match ^non-exhaustive x ...)`, and `NonExhaustive`
      * for the deprecated `(match #fx{NonExhaustive} x ...)` (TUR-D0004). */
     const Symbol *sym_caret_non_exhaustive;
+    /* caret-type-attributes-plan P0: the flags of a defopaque / defstruct /
+     * defdata / defgadt, written before the name: `(defstruct ^copy Point ...)`.
+     * ^linear and ^affine are interned above with the binding annotations. */
+    const Symbol *sym_caret_copy;
+    const Symbol *sym_caret_move;
+    const Symbol *sym_caret_heap;
+    const Symbol *sym_caret_sealed;
+    const Symbol *sym_caret_non_null;
+    const Symbol *sym_caret_no_auto_ctor;
     const Symbol *sym_non_exhaustive_legacy;
     const Symbol *sym_panic_payload_type;
     const Symbol *sym_panic_payload_value;
@@ -2375,6 +2384,20 @@ Binding *elab_lookup_sym(Elab *e, const Symbol *sym, Span span, bool *had_error)
 
 /* elab_structs.c */
 void elab_add_forward_type(Elab *e, const Symbol *sym);
+/* caret-type-attributes-plan P0: the `^attr` flags of a defopaque / defstruct /
+ * defdata / defgadt, written before the name.  TDA_* are the bits a form passes
+ * as its `allowed` mask. */
+enum {
+    TDA_COPY = 1u << 0, TDA_MOVE = 1u << 1, TDA_LINEAR = 1u << 2, TDA_AFFINE = 1u << 3,
+    TDA_HEAP = 1u << 4, TDA_SEALED = 1u << 5, TDA_NON_NULL = 1u << 6,
+    TDA_NO_AUTO_CTOR = 1u << 7,
+};
+typedef struct TypeDeclAttrs {
+    bool copy, move, linear, affine, heap, sealed, non_null, no_auto_ctor;
+} TypeDeclAttrs;
+uint32_t elab_type_decl_name_index(const Form *call);
+bool elab_type_decl_attrs(Elab *e, const Form *call, const char *form_name,
+                          unsigned allowed, TypeDeclAttrs *out, uint32_t *name_idx);
 Expr *elab_defstruct(Elab *e, const Form *call);
 Expr *elab_defopaque(Elab *e, const Form *call);
 void elab_register_adt_def(Elab *e, AdtDef *def);
