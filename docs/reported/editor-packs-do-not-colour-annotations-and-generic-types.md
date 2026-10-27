@@ -30,9 +30,9 @@ implemented in `tools/genguides.py` (the docs) and `web/main.js` (Monaco):
   coloured with `<void>` trailing in the default colour.
 - **Builtins** (`println`, `map`, `apply`, ...: `keywordOperator`) are periwinkle
   (`#8AB0E8` / `#3B63B0`), so they no longer share a colour with types and kinds.
-- Since 2026-10-27 this is the palette in `web/editor-palette.json` and Try
-  Turmeric. The docs pages (`tools/genguides.py`) and the four packs
-  have not moved: the docs still paint types teal and every `^name` violet.
+- Since 2026-10-27 this is the palette in `web/editor-palette.json`, Try
+  Turmeric's editor and the docs pages (`tools/genguides.py`, `hl-ann` /
+  `hl-kind` / `hl-type` / `hl-builtin`). The four packs have not moved.
 - `<`, `<=`, `char<?` and `string->cstr` are not generics and stay as they were.
 
 ## What each pack does today
@@ -41,8 +41,8 @@ Read from a shallow clone of each repo on 2026-10-26.
 
 | Pack | `^name` colour | `^name` matches | `:type` | bare `ptr<void>` |
 | --- | --- | --- | --- | --- |
-| Try Turmeric (Monaco) | violet | reader's symbol set | one token, generics included | one token |
-| docs (`genguides.py`) | violet | reader's symbol set | one token | one token |
+| Try Turmeric (Monaco) | modifier teal, kind / constraint violet | reader's symbol set | one token, generics included, spaced form too | one token |
+| docs (`genguides.py`) | modifier teal, kind / constraint violet | reader's symbol set | one token, spaced form too | one token |
 | **vim-turmeric** | **teal** (`turmericAttr` links `StorageClass`, which `colors/*.vim` sets to the `Type` teal, so an annotation reads as a type) | `\^[a-z][a-z0-9-]*` | `:` + name incl. `<>`, but only after whitespace or `[` | not matched |
 | **vscode-turmeric** | **gold, bold** (`storage.modifier.turmeric` is the keyword colour in both themes) | `\^[a-z][a-z0-9-]*` | `type-annotation` rule includes `<>`; same whitespace/`[` lookbehind | not matched |
 | **turmeric-mode** (Emacs) | violet (`font-lock-preprocessor-face`) -- already right | `\^[a-zA-Z][a-zA-Z0-9_-]*` | **keyword literal**: `:name` (generics and all) is `font-lock-constant-face`, sage; only `defdata`/`defstruct` names and a type-keyword list get `font-lock-type-face` | not matched |
