@@ -16,10 +16,13 @@ implemented in `tools/genguides.py` (the docs) and `web/main.js` (Monaco):
   (`#C4A0E8` dark, `#7748AE` light). The reader takes a `^` as the start of a
   metadata symbol (`src/compiler/reader.c`), so the name is any symbol:
   `^mut`, `^fat`, `^Monoid`, `^state/GameState`, `^&cols`, `^f`, `^^f`.
-- **A type is one teal token, generic arguments included** (`type`, `#7AC4B8` /
-  `#127065`): `:int`, `:ptr<void>`, `:option<ptr<int>>`, and a bare
-  `ptr<void>` as in `(fn [ptr<void>] nil)`. Not `ptr` in teal with `<void>`
-  trailing in the default colour.
+- **A type is one token, generic arguments included** (`type`): `:int`,
+  `:ptr<void>`, `:option<ptr<int>>`, a bare `ptr<void>` as in
+  `(fn [ptr<void>] nil)`, and the spaced `name : cstr` / `] : void`. Not `ptr`
+  coloured with `<void>` trailing in the default colour. Since 2026-10-27 the
+  palette's `type` is the annotation violet (`#C4A0E8` / `#7748AE`) in Try
+  Turmeric's editor and `web/editor-palette.json`; the docs pages
+  (`--syn-type`) are still teal, and the packs have not moved.
 - `<`, `<=`, `char<?` and `string->cstr` are not generics and stay as they were.
 
 ## What each pack does today

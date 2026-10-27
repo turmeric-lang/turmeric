@@ -2116,6 +2116,11 @@ function configureMonaco() {
                 // A type annotation, `:int` or `:ptr<void>`: the colon and any
                 // generic arguments belong to the name, so it is one token.
                 [new RegExp(':[a-zA-Z_][a-zA-Z0-9_\\-?!]*(?:' + GENERIC_ARGS + ')?'), 'type'],
+                // The same annotation spelled the way the stdlib writes it,
+                // with a space after the colon: `[name : cstr] : void`. The
+                // colon and the name are both type, the gap between them not.
+                [new RegExp('(:)([ \\t]+)([a-zA-Z_][a-zA-Z0-9_\\-?!/]*(?:' + GENERIC_ARGS + ')?)'),
+                    ['type', '', 'type']],
                 // A generic type name on its own, `ptr<void>` or
                 // `option<ptr<int>>`, as in a function type `(fn [ptr<void>] nil)`.
                 // A lone `<` (less-than) never reaches here: it needs a name
@@ -2309,9 +2314,9 @@ const MONACO_THEMES = {
     dark: {
         base: 'vs-dark',
         rules: [
-            // Dark Spice Market syntax colors — keywords (amber), types (teal),
-            // builtins (violet), strings (coral), comments (dark italic),
-            // numbers (sage green) per design-notes.md
+            // Dark Spice Market syntax colors — keywords (amber), types and
+            // annotations (violet), builtins (violet), strings (coral),
+            // comments (dark italic), numbers (sage green) per design-notes.md
             { token: 'comment',          foreground: '48433D', fontStyle: 'italic' },
             { token: 'string',           foreground: 'D9735A' },
             { token: 'number',           foreground: 'A8C98A' },
@@ -2319,7 +2324,7 @@ const MONACO_THEMES = {
             { token: 'keyword',          foreground: 'EFA030', fontStyle: 'bold' },
             { token: 'keyword.operator', foreground: 'C4A0E8' },
             { token: 'annotation',       foreground: 'C4A0E8' },
-            { token: 'type',             foreground: '7AC4B8' },
+            { token: 'type',             foreground: 'C4A0E8' },
             { token: 'operator',         foreground: '6A5F58' },
             { token: 'delimiter',        foreground: '5A5448' },
             { token: 'identifier',       foreground: 'EAE0D2' },
@@ -2402,7 +2407,7 @@ const MONACO_THEMES = {
             { token: 'keyword',          foreground: '965500', fontStyle: 'bold' },
             { token: 'keyword.operator', foreground: '7748AE' },
             { token: 'annotation',       foreground: '7748AE' },
-            { token: 'type',             foreground: '127065' },
+            { token: 'type',             foreground: '7748AE' },
             { token: 'operator',         foreground: '8A7D6C' },
             { token: 'delimiter',        foreground: '9F927F' },
             { token: 'identifier',       foreground: '2A2016' },
