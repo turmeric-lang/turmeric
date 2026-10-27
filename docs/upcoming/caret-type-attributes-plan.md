@@ -1,8 +1,10 @@
 # Plan: spell type-declaration flags as `^attr`, not `:keyword`
 
-> **Status:** DRAFT, 2026-10-27. Nothing implemented. A spelling change only:
-> every form here means exactly what it means today, and the checker's rules
-> for linear, affine, copy and heap values do not move.
+> **Status:** DESIGN SETTLED, 2026-10-27; nothing implemented. The three open
+> questions are decided (see "Decisions"): attributes go before the name,
+> `^move` stays, and `^heap` moves with the rest. P0 is next. A spelling change
+> only: every form here means exactly what it means today, and the checker's
+> rules for linear, affine, copy and heap values do not move.
 
 ## The problem
 
@@ -93,7 +95,8 @@ keyword means today. The mutual exclusions carry over: `^linear` with
 
 The alternative is to keep the slot and change only the sigil, as in
 `(defopaque Chan : ptr<void> ^linear)`. That is the cheaper migration, since no
-tool that finds a declaration's name has to change. It was rejected because
+tool that finds a declaration's name has to change. It was rejected
+(2026-10-27) because
 `defstruct` and `defdata` put their flags next to the type-parameter vector,
 so the kind collision above would be one typo away, and because it keeps the
 type declarations unlike every other definition. `defeffect`'s trailing
@@ -222,17 +225,16 @@ the `^` form, because the declaration's arity no longer fits.
 - **Inline-C and `extern-c` C types such as `^int`.** They are already `^`, and
   their meaning (a C type) is separate.
 
-## Open questions
+## Decisions (2026-10-27)
 
-1. **Pre-name or trailing?** This plan recommends pre-name, for the reasons
-   above. Trailing is cheaper. Decide before P0, because the tooling work in P1
-   only exists under pre-name.
-2. **Should `^copy` / `^move` be attributes at all, or the absence of
-   `^linear` / `^affine`?** `:move` is the default and is written about 65
-   times. Dropping `^move` would leave one fewer word to learn. Keeping it lets
-   a declaration state its kind explicitly, as the guides do in their tables.
-   Recommendation: keep `^move` for one release, then decide from use.
-3. **Is `^heap` a substructural attribute?** No, it is about representation,
-   but it is still a valueless flag on the declaration, so the rule puts it on
-   `^`. Recorded so that nobody reads the change as "substructural keywords
-   only".
+1. **The attributes go before the name.** The trailing slot was rejected for
+   the reasons in "Why before the name". So the name-finding helper and the
+   tooling work in P1 are in scope.
+2. **`^move` stays.** It is the default, so writing it is optional, but a
+   declaration can still state its kind explicitly, as the guides' tables do.
+   It is a full member of the set, not a deprecated alias: the P3 warning
+   rewrites `:move` to `^move` and does not drop it.
+3. **`^heap` moves with the rest.** It is about representation, not about how
+   often a value is used, but it is a flag with no value on the declaration, so
+   the rule puts it on `^`. The change covers every flag on a type
+   declaration, not only the substructural ones.
