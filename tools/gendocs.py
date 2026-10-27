@@ -2156,14 +2156,14 @@ def _prose_html(text, indent='  '):
 
 
 def _method_signature(method):
-    """`(extract [wa] :int)` -- a class method, spelled like a defn signature."""
+    """`(extract [wa] : int)` -- a class method, spelled like a defn signature."""
     param_str = ' '.join(
-        (f"& {p}" + t[3:] if t.startswith('...') else f"{p} {t}") if t else p
+        (f"& {p}" + t[3:] if t.startswith('...') else f"{p} {_spaced_ann(t)}") if t else p
         for p, t in method['params']
     )
     sig = f"({method['name']} [{param_str}]"
     if method.get('return_type'):
-        sig += f" {method['return_type']}"
+        sig += f" {_spaced_ann(method['return_type'])}"
     return sig + ")"
 
 
@@ -2253,6 +2253,15 @@ def _html_footer():
 """
 
 
+def _spaced_ann(t):
+    """`:int` -> `: int` -- a type annotation as the style guide spells it
+    (CLAUDE.md, the stdlib sources).  The parser stores every annotation
+    fused; a type with no leading colon (`ptr<Foo>`) is left alone."""
+    if t and t[0] == ':' and not t.startswith('::'):
+        return ': ' + t[1:]
+    return t
+
+
 def _render_signature(defn):
     kind = defn['kind']
     name = defn['name']
@@ -2286,7 +2295,7 @@ def _render_signature(defn):
                 for p, t in params)
             return f"(defstruct {name}{ann_str} [{tp_str}]{fields})"
         param_str = ' '.join(
-            f"{p} {t}" if t else p
+            f"{p} {_spaced_ann(t)}" if t else p
             for p, t in params
         )
         return f"(defstruct {name}{ann_str} [{param_str}])"
@@ -2312,14 +2321,14 @@ def _render_signature(defn):
         return sig + ")"
 
     param_str = ' '.join(
-        (f"& {p}" + t[3:] if t.startswith('...') else f"{p} {t}") if t else p
+        (f"& {p}" + t[3:] if t.startswith('...') else f"{p} {_spaced_ann(t)}") if t else p
         for p, t in params
     )
     sig = f"({name}"
     if params:
         sig += f" [{param_str}]"
     if ret:
-        sig += f" {ret}"
+        sig += f" {_spaced_ann(ret)}"
     sig += ")"
     return sig
 
