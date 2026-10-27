@@ -25,6 +25,7 @@ MONACO_TOKENS = {
     "keyword": "keyword",
     "keywordOperator": "keyword.operator",
     "annotation": "annotation",
+    "kind": "kind",
     "type": "type",
     "operator": "operator",
     "delimiter": "delimiter",

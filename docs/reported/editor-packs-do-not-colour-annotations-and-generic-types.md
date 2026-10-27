@@ -12,14 +12,27 @@ own repos, so the work is theirs; this report is the index of what to change.
 Set by `web/editor-palette.json` (the one written-down copy of the palette) and
 implemented in `tools/genguides.py` (the docs) and `web/main.js` (Monaco):
 
-- **`^annotation` is one token, caret included, in the `keywordOperator` violet**
-  (`#C4A0E8` dark, `#7748AE` light). The reader takes a `^` as the start of a
-  metadata symbol (`src/compiler/reader.c`), so the name is any symbol:
-  `^mut`, `^fat`, `^Monoid`, `^state/GameState`, `^&cols`, `^f`, `^^f`.
-- **A type is one teal token, generic arguments included** (`type`, `#7AC4B8` /
-  `#127065`): `:int`, `:ptr<void>`, `:option<ptr<int>>`, and a bare
-  `ptr<void>` as in `(fn [ptr<void>] nil)`. Not `ptr` in teal with `<void>`
-  trailing in the default colour.
+- **A `^name` is one token, caret included, coloured by what it means.** The
+  reader takes a `^` as the start of a metadata symbol (`src/compiler/reader.c`),
+  so the name is any symbol; the elaborator then reads it one of four ways, and
+  Try Turmeric's editor follows it (`CARET_MODIFIERS` in `web/main.js`):
+  - a **modifier** from the closed list the elaborator interns (`^mut`, `^fat`,
+    `^linear`, `^borrow`, ... -- the `sym_caret_*` table in
+    `src/compiler/elab_core.c`, plus `^tailcall`): palette `annotation`, teal
+    (`#7AC4B8` dark, `#127065` light);
+  - a **kind** (`^f`, `^^f`, `^&cols`, `^w`) or a typeclass **constraint**
+    (`^Monoid`, `^Eq`): palette `kind`, violet (`#C4A0E8` / `#7748AE`). Any
+    `^name` that is not a modifier is a kind, as in the compiler;
+  - an **extern-c C type** (`^int`, `^ptr<void>`): palette `type`, violet.
+- **A type is one token, generic arguments included** (`type`, the same violet
+  as `kind`): `:int`, `:ptr<void>`, `:option<ptr<int>>`, a bare `ptr<void>` as in
+  `(fn [ptr<void>] nil)`, and the spaced `name : cstr` / `] : void`. Not `ptr`
+  coloured with `<void>` trailing in the default colour.
+- **Builtins** (`println`, `map`, `apply`, ...: `keywordOperator`) are periwinkle
+  (`#8AB0E8` / `#3B63B0`), so they no longer share a colour with types and kinds.
+- Since 2026-10-27 this is the palette in `web/editor-palette.json` and Try
+  Turmeric. The docs pages (`tools/genguides.py`) and the four packs
+  have not moved: the docs still paint types teal and every `^name` violet.
 - `<`, `<=`, `char<?` and `string->cstr` are not generics and stay as they were.
 
 ## What each pack does today
@@ -103,5 +116,6 @@ one colour:
 (< 0 1) (<= 0 1) (char<? a b) (string->cstr s)   ; the last four are not generics
 ```
 
-`^borrow`, `^fat`, `^linear`, `^state/GameState`, `^&cols`, `^Monoid` and `^mut`
-should be violet; `:ptr<Counter>`, `ptr<void>` and `:option<ptr<void>>` teal.
+`^borrow`, `^fat`, `^linear` and `^mut` should be the modifier colour (teal);
+`^state/GameState`, `^&cols`, `^Monoid`, `:ptr<Counter>`, `ptr<void>` and
+`:option<ptr<void>>` the type/kind colour (violet).
