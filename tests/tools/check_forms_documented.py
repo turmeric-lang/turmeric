@@ -134,9 +134,9 @@ for ok, what in [
     (mod['docstring'] is not None, "the module docstring is promoted"),
     (set(defs) == {'ptr-add', 'not=', 'unsafe', 'handle'},
      f"declared names: {sorted(defs)}"),
-    (_render_signature(defs['ptr-add']) == '(ptr-add [p :ptr<void> n :int] :ptr<void>)',
+    (_render_signature(defs['ptr-add']) == '(ptr-add [p : ptr<void> n : int] : ptr<void>)',
      f"builtin signature: {_render_signature(defs['ptr-add'])!r}"),
-    (_render_signature(defs['not=']) == '(not= [a :int b :int] :bool)',
+    (_render_signature(defs['not=']) == '(not= [a : int b : int] : bool)',
      "a name outside the defn pattern is kept whole"),
     (_render_signature(defs['unsafe']) == '(unsafe body ...)\n(unsafe [Eff ...] body ...)',
      "consecutive shapes of one form join"),
@@ -146,7 +146,7 @@ for ok, what in [
      ['(unsafe body ...)', '(unsafe [Eff ...] body ...)'],
      "the doc-lookup entry carries the syntax"),
     (_build_doc_entry(defs['ptr-add']).split('\n')[2:5] ==
-     ['(ptr-add [p :ptr<void> n :int] :ptr<void>)', '', 'The offset is in bytes.'],
+     ['(ptr-add [p : ptr<void> n : int] : ptr<void>)', '', 'The offset is in bytes.'],
      "the doc-lookup entry carries the prose under the signature"),
 ]:
     if not ok:

@@ -336,9 +336,9 @@ for ok, what in [
      "a blank line ends the module docstring before the class's own block"),
     (shape.get('kind') == 'defclass' and shape.get('exported'),
      "the class is found and public despite the export list"),
-    (_class_method_rows(shape) == [('(area [s] :float)', 'the area of `s`')],
+    (_class_method_rows(shape) == [('(area [s] : float)', 'the area of `s`')],
      f"method rows: {_class_method_rows(shape) if shape else None!r}"),
-    ('<dt><code>(area [s] :float)</code></dt>' in card, "the card lists the method signature"),
+    ('<dt><code>(area [s] : float)</code></dt>' in card, "the card lists the method signature"),
     ('the area of <code>s</code>' in card, "the card carries the method description"),
     ('href="#Shape_Sq_"' in card, "the card links the instance in its own module"),
 ]:
@@ -355,7 +355,7 @@ with tempfile.TemporaryDirectory() as td:
 entries = {e['name']: e for e in collect_doc_entries([mod])}
 for ok, what in [
     ('{"Shape", "Shape -- things with an area.' in table, "doc-lookup Shape is the class"),
-    ('(area [s] :float) -- the area of `s`' in table, "the class entry lists its methods"),
+    ('(area [s] : float) -- the area of `s`' in table, "the class entry lists its methods"),
     (entries.get('Shape', {}).get('kind') == 'defclass', "doc-names Shape is the class"),
     (entries.get('area', {}).get('kind') == 'method', "an unclaimed method name is a key"),
 ]:
