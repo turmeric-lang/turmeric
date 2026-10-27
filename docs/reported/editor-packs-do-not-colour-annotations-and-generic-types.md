@@ -12,14 +12,27 @@ own repos, so the work is theirs; this report is the index of what to change.
 Set by `web/editor-palette.json` (the one written-down copy of the palette) and
 implemented in `tools/genguides.py` (the docs) and `web/main.js` (Monaco):
 
-- **`^annotation` is one token, caret included, in the `keywordOperator` violet**
-  (`#C4A0E8` dark, `#7748AE` light). The reader takes a `^` as the start of a
-  metadata symbol (`src/compiler/reader.c`), so the name is any symbol:
-  `^mut`, `^fat`, `^Monoid`, `^state/GameState`, `^&cols`, `^f`, `^^f`.
-- **A type is one teal token, generic arguments included** (`type`, `#7AC4B8` /
-  `#127065`): `:int`, `:ptr<void>`, `:option<ptr<int>>`, and a bare
-  `ptr<void>` as in `(fn [ptr<void>] nil)`. Not `ptr` in teal with `<void>`
-  trailing in the default colour.
+- **A `^name` is one token, caret included, coloured by what it means.** The
+  reader takes a `^` as the start of a metadata symbol (`src/compiler/reader.c`),
+  so the name is any symbol; the elaborator then reads it one of four ways, and
+  Try Turmeric's editor follows it (`CARET_MODIFIERS` in `web/main.js`):
+  - a **modifier** from the closed list the elaborator interns (`^mut`, `^fat`,
+    `^linear`, `^borrow`, ... -- the `sym_caret_*` table in
+    `src/compiler/elab_core.c`, plus `^tailcall`): palette `annotation`, teal
+    (`#7AC4B8` dark, `#127065` light);
+  - a **kind** (`^f`, `^^f`, `^&cols`, `^w`) or a typeclass **constraint**
+    (`^Monoid`, `^Eq`): palette `kind`, violet (`#C4A0E8` / `#7748AE`). Any
+    `^name` that is not a modifier is a kind, as in the compiler;
+  - an **extern-c C type** (`^int`, `^ptr<void>`): palette `type`, violet.
+- **A type is one token, generic arguments included** (`type`, the same violet
+  as `kind`): `:int`, `:ptr<void>`, `:option<ptr<int>>`, a bare `ptr<void>` as in
+  `(fn [ptr<void>] nil)`, and the spaced `name : cstr` / `] : void`. Not `ptr`
+  coloured with `<void>` trailing in the default colour.
+- **Builtins** (`println`, `map`, `apply`, ...: `keywordOperator`) are periwinkle
+  (`#8AB0E8` / `#3B63B0`), so they no longer share a colour with types and kinds.
+- Since 2026-10-27 this is the palette in `web/editor-palette.json`, Try
+  Turmeric's editor and the docs pages (`tools/genguides.py`, `hl-ann` /
+  `hl-kind` / `hl-type` / `hl-builtin`). The four packs have not moved.
 - `<`, `<=`, `char<?` and `string->cstr` are not generics and stay as they were.
 
 ## What each pack does today
@@ -28,8 +41,8 @@ Read from a shallow clone of each repo on 2026-10-26.
 
 | Pack | `^name` colour | `^name` matches | `:type` | bare `ptr<void>` |
 | --- | --- | --- | --- | --- |
-| Try Turmeric (Monaco) | violet | reader's symbol set | one token, generics included | one token |
-| docs (`genguides.py`) | violet | reader's symbol set | one token | one token |
+| Try Turmeric (Monaco) | modifier teal, kind / constraint violet | reader's symbol set | one token, generics included, spaced form too | one token |
+| docs (`genguides.py`) | modifier teal, kind / constraint violet | reader's symbol set | one token, spaced form too | one token |
 | **vim-turmeric** | **teal** (`turmericAttr` links `StorageClass`, which `colors/*.vim` sets to the `Type` teal, so an annotation reads as a type) | `\^[a-z][a-z0-9-]*` | `:` + name incl. `<>`, but only after whitespace or `[` | not matched |
 | **vscode-turmeric** | **gold, bold** (`storage.modifier.turmeric` is the keyword colour in both themes) | `\^[a-z][a-z0-9-]*` | `type-annotation` rule includes `<>`; same whitespace/`[` lookbehind | not matched |
 | **turmeric-mode** (Emacs) | violet (`font-lock-preprocessor-face`) -- already right | `\^[a-zA-Z][a-zA-Z0-9_-]*` | **keyword literal**: `:name` (generics and all) is `font-lock-constant-face`, sage; only `defdata`/`defstruct` names and a type-keyword list get `font-lock-type-face` | not matched |
@@ -96,12 +109,13 @@ In each editor, open this snippet and confirm the whole of each marked token is
 one colour:
 
 ```turmeric
-(defn bump [^borrow c :ptr<Counter> by :int] :int c)
-(defn apply-to [^fat f :(fn [ptr<void>] nil) ^linear h :option<ptr<void>>] :nil nil)
-(defn step [^state/GameState s ^&cols c ^Monoid m] :int s)
+(defn bump [^borrow c : ptr<Counter> by : int] : int c)
+(defn apply-to [^fat f : (fn [ptr<void>] nil) ^linear h : option<ptr<void>>] : nil nil)
+(defn step [^state/GameState s ^&cols c ^Monoid m] : int s)
 (def ^mut total 0)
 (< 0 1) (<= 0 1) (char<? a b) (string->cstr s)   ; the last four are not generics
 ```
 
-`^borrow`, `^fat`, `^linear`, `^state/GameState`, `^&cols`, `^Monoid` and `^mut`
-should be violet; `:ptr<Counter>`, `ptr<void>` and `:option<ptr<void>>` teal.
+`^borrow`, `^fat`, `^linear` and `^mut` should be the modifier colour (teal);
+`^state/GameState`, `^&cols`, `^Monoid`, `:ptr<Counter>`, `ptr<void>` and
+`:option<ptr<void>>` the type/kind colour (violet).

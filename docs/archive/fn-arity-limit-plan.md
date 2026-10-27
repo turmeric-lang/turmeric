@@ -203,7 +203,7 @@ illegible; the language just lets you write it.
 ### Option B: Variadic rest parameters
 
 ```turmeric
-(defn foo [a :int b :int & rest :int] :int
+(defn foo [a : int b : int & rest : int] : int
   ;; rest is a cons-list of int values
   ...)
 ```
@@ -258,13 +258,13 @@ arity is statically known, which is the common case).
 
 ```turmeric
 (defstruct CsvOpts
-  [delim       :int
-   quote       :int
-   has-header  :int
-   infer-rows  :int
-   null-str    :cstr])
+  [delim       : int
+   quote       : int
+   has-header  : int
+   infer-rows  : int
+   null-str    : cstr])
 
-(defn read-csv-string [src :cstr opts :CsvOpts] :int
+(defn read-csv-string [src : cstr opts : CsvOpts] : int
   (let [d (CsvOpts.delim opts)
         q (CsvOpts.quote opts)
         ...]))
@@ -273,8 +273,8 @@ arity is statically known, which is the common case).
 Optionally add struct destructuring in arg lists (Clojure-style):
 
 ```turmeric
-(defn read-csv-string [src :cstr
-                       {:keys [delim quote has-header] :as opts} :CsvOpts] :int
+(defn read-csv-string [src : cstr
+                       {:keys [delim quote has-header] :as opts} :CsvOpts] : int
   ...)
 ```
 
@@ -485,7 +485,7 @@ everything," some of those rules need a rewrite.
 ```turmeric
 ;; --- variadic defn ---
 
-(defn println-all [first :cstr & rest :cstr] :void
+(defn println-all [first : cstr & rest : cstr] : void
   (println first)
   (for [s rest]
     (println s)))
@@ -495,8 +495,8 @@ everything," some of those rules need a rewrite.
 
 ;; --- variadic with arity > 8 ---
 
-(defn long-print [a :cstr b :cstr c :cstr d :cstr e :cstr f :cstr
-                  g :cstr h :cstr & rest :cstr] :void
+(defn long-print [a : cstr b : cstr c : cstr d : cstr e : cstr f : cstr
+                  g : cstr h : cstr & rest : cstr] : void
   ...)
 
 (long-print "1" "2" "3" "4" "5" "6" "7" "8" "9" "10")

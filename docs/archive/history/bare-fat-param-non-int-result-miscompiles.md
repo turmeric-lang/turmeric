@@ -44,9 +44,9 @@ the wrong value flows on.
 ## Repro
 
 ```turmeric
-(defn run-with [^fat g x :float] :float (g x))         ;; bare ^fat
-(defn make-scale [k :float] :ptr<void> (fn [x :float] :float (* x k)))
-(defn main [] :int
+(defn run-with [^fat g x : float] : float (g x))         ;; bare ^fat
+(defn make-scale [k : float] : ptr<void> (fn [x : float] : float (* x k)))
+(defn main [] : int
   (println (run-with (make-scale 2.0) 3.5))            ;; expect 7.0
   0)
 ```
@@ -55,7 +55,7 @@ Prints `4.61957e+18` (garbage), not `7`.
 The **annotated** form is correct:
 
 ```turmeric
-(defn run-with [^fat g :(fn [:float] #{} :float) x :float] :float (g x))
+(defn run-with [^fat g : (fn [:float] #{} : float) x : float] : float (g x))
 ;; (run-with (make-scale 2.0) 3.5) => 7
 ```
 

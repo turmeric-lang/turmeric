@@ -207,7 +207,7 @@ linalg/src/linalg/vec.tur:13:3: error: defstruct field list must be a vector [f1
 The struct fields are written as plain S-expressions instead of a vector
 literal. Change to bracket syntax:
 ```turmeric
-(defstruct vec [len :int  data :ptr<float64>])
+(defstruct vec [len : int  data : ptr<float64>])
 ```
 
 **B3c. `vec-new` name conflicts with stdlib:**

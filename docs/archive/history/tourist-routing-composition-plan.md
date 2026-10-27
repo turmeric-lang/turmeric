@@ -105,12 +105,12 @@ Matching rules:
 (import tourist/routing  :refer [url-map!])
 (import tourist/helpers  :refer [text])
 
-(defn api-routes [] :int
+(defn api-routes [] : int
   (url-map!
     "/users" (get! "/" (fn [ctx] (text "users list")))
     "/items" (get! "/" (fn [ctx] (text "items list")))))
 
-(defn main [] :int
+(defn main [] : int
   (let [s (tourist 3000
             (url-map!
               "/api" (api-routes)
@@ -125,12 +125,12 @@ import tourist/dsl      :refer [get!]
 import tourist/routing  :refer [url-map!]
 import tourist/helpers  :refer [text]
 
-defn api-routes [] :int
+defn api-routes [] : int
   url-map!
     "/users" get! "/" fn [ctx] text("users list")
     "/items" get! "/" fn [ctx] text("items list")
 
-defn main [] :int
+defn main [] : int
   let [s tourist(3000
            url-map!
              "/api" api-routes()

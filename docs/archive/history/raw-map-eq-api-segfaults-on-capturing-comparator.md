@@ -66,7 +66,7 @@ expects.
 
 ```turmeric
 (defn map-assoc-eq [K V]
-  [m (Map K V) h :int key :K val :V keyeq]      ; <-- keyeq is UNTYPED
+  [m (Map K V) h : int key : K val : V keyeq]      ; <-- keyeq is UNTYPED
   : (Map K V)
   ```c
   ...

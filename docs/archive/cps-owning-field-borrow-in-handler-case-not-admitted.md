@@ -36,7 +36,7 @@ the ORTHOGONAL CPS-backend admission gap the same shape exposes).
 
 ```turmeric
 (defstruct Own [r : rc<int> tag : int])
-(defeffect E [] :int)
+(defeffect E [] : int)
 (defn g [] : int (perform (E)))
 (defn f [] : int
   (let [o (make-struct Own :r (rc/of 7) :tag 9)]

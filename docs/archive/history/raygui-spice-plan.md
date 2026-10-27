@@ -74,10 +74,10 @@ local `Rect` struct when the raylib spice does not yet export one:
 ;;;
 ;;; Since: Phase 1
 (defstruct Rect
-  [x      :float
-   y      :float
-   width  :float
-   height :float])
+  [x      : float
+   y      : float
+   width  : float
+   height : float])
 ```
 
 All control functions take a `Rect` as their first argument. A short
@@ -90,7 +90,7 @@ constructor alias is provided:
 ;;;   (rect 10.0 10.0 120.0 30.0)  ; => Rect
 ;;;
 ;;; Since: Phase 1
-(defn rect [x :float y :float w :float h :float] :Rect
+(defn rect [x : float y : float w : float h : float] : Rect
   (Rect x y w h))
 ```
 
@@ -110,7 +110,7 @@ import raylib/color :refer [raywhite]
 import raygui/core     :refer [gui-set-style]
 import raygui/controls :refer [gui-button gui-slider gui-check-box gui-label]
 
-defn main [] :int
+defn main [] : int
   init-window(800 600 "raygui demo")
   set-target-fps(60)
   let [checked 0
@@ -287,7 +287,7 @@ helper for drawing icons directly.
 ;;;   color     -- packed RGBA color
 ;;;
 ;;; Since: Phase 3
-(defn gui-draw-icon [icon-id :int x :int y :int pixel-size :int color :int] :void
+(defn gui-draw-icon [icon-id : int x : int y : int pixel-size : int color : int] : void
   ```c
   GuiDrawIcon(icon_id, x, y, pixel_size, (Color){ color & 0xFF,
               (color >> 8) & 0xFF, (color >> 16) & 0xFF, (color >> 24) & 0xFF });
@@ -410,7 +410,7 @@ lifetime and must free it when the widget is no longer used.
 ;;;   Opaque :int handle; pass to gui-text-box and free with free-text-buf.
 ;;;
 ;;; Since: Phase 1
-(defn make-text-buf [capacity :int] #{Unsafe} :int
+(defn make-text-buf [capacity : int] #{Unsafe} : int
   ```c
   char *buf = (char *)calloc(capacity, 1);
   return (int64_t)(intptr_t)buf;
@@ -419,7 +419,7 @@ lifetime and must free it when the widget is no longer used.
 ;;; free-text-buf -- release a buffer allocated by make-text-buf.
 ;;;
 ;;; Since: Phase 1
-(defn free-text-buf [buf :int] #{Unsafe} :void
+(defn free-text-buf [buf : int] #{Unsafe} : void
   ```c
   free((void *)(intptr_t)buf);
   ```)
@@ -427,7 +427,7 @@ lifetime and must free it when the widget is no longer used.
 ;;; text-buf->cstr -- read current contents of a text buffer as :cstr.
 ;;;
 ;;; Since: Phase 1
-(defn text-buf->cstr [buf :int] #{Unsafe} :cstr
+(defn text-buf->cstr [buf : int] #{Unsafe} : cstr
   ```c
   return (int64_t)(intptr_t)(const char *)(intptr_t)buf;
   ```)
@@ -598,11 +598,11 @@ import raygui/layout   :refer [gui-scroll-panel gui-panel]
 import raygui/rect     :refer [rect]
 
 defstruct Props
-  [speed   :float
-   gravity :float
-   debug   :int]
+  [speed   : float
+   gravity : float
+   debug   : int]
 
-defn draw-props [p :Props panel :Rect] :Props
+defn draw-props [p : Props panel : Rect] : Props
   ;; Controls inside a scroll panel area
   let [speed2   gui-slider(rect(+(Rect-x panel) 80.0)
                                +(Rect-y panel) 120.0 20.0)
@@ -615,7 +615,7 @@ defn draw-props [p :Props panel :Rect] :Props
                               "Debug" (Props-debug p))]
     Props(speed2 gravity2 debug2)
 
-defn main [] :int
+defn main [] : int
   init-window(800 600 "Inspector")
   set-target-fps(60)
   let [props  Props(5.0 -9.8 0)

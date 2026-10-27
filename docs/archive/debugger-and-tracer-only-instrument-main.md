@@ -36,9 +36,9 @@ Two files differing only in whether the body sits inside `main`.
 ```turmeric
 #lang turmeric
 
-(defeffect Ask [] :int)
+(defeffect Ask [] : int)
 
-(defn use-ask [] :int
+(defn use-ask [] : int
   (+ 1 (perform (Ask))))
 
 (println (handle (use-ask)

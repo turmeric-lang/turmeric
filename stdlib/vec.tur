@@ -525,7 +525,7 @@
 ;;; Parameters:
 ;;;   v1     -- first Vec[A]
 ;;;   v2     -- second Vec[A]
-;;;   cmp-fn -- comparator fn [a :A b :A] :bool, receiving raw slot words
+;;;   cmp-fn -- comparator fn [a : A b : A] : bool, receiving raw slot words
 ;;;
 ;;; Returns:
 ;;;   true if both vecs have the same length and all element pairs satisfy cmp-fn.

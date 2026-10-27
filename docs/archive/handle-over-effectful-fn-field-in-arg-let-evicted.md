@@ -8,7 +8,7 @@ the `fn_field_eff` crossing.
 ## Repro
 
 ```turmeric
-(defeffect Ef [x :int] :int)
+(defeffect Ef [x : int] : int)
 (defstruct FE :copy [run : (fn [int] int) #fx{Ef}])
 (defn fe [v : int] : int (perform (Ef v)))
 (defn main [] : int

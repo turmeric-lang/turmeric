@@ -48,15 +48,15 @@ A module is a single `.tur` file with a `defmodule` form at the top:
 defmodule geom/vector
   export Point make-vector vector-x vector-y magnitude
 
-  defn make-vector [x :int y :int] :ptr
+  defn make-vector [x : int y : int] : ptr
     (...)
 
-  defn vector-x [^Point p] :int
+  defn vector-x [^Point p] : int
     .x(p)
-  defn vector-y [^Point p] :int
+  defn vector-y [^Point p] : int
     .y(p)
 
-  defn magnitude [^Point p] :int
+  defn magnitude [^Point p] : int
     (...)
 ```
 
@@ -132,7 +132,7 @@ defmodule app
   import geom/vector :as v
   import math :refer [sqrt abs]
 
-  defn main [] :int
+  defn main [] : int
     let [p v/make-vector(3 4)]
       println(v/magnitude(p))
       0
@@ -192,11 +192,11 @@ listed in `(export ...)` are visible to other modules.
 defmodule list-utils
   export map filter
 
-  defn map [f xs] :ptr (...)
-  defn filter [pred xs] :ptr (...)
+  defn map [f xs] : ptr (...)
+  defn filter [pred xs] : ptr (...)
 
   ;; private helper -- only visible inside list-utils
-  defn -fold [f acc xs] :ptr (...)
+  defn -fold [f acc xs] : ptr (...)
 ```
 
 ### Visibility rules
@@ -314,7 +314,7 @@ defmodule logger
 
   defer println("shutting down logger")
 
-  defn log [msg] :int (...)
+  defn log [msg] : int (...)
 ```
 
 Ordering: module defers fire in LIFO order (last-defined fires first), matching
@@ -508,8 +508,8 @@ or use `(export-as "...")` to override the C name explicitly.
 (defmodule math
   (export sqrt square)
 
-  (defn sqrt [x :int] :int (...))
-  (defn square [x :int] :int (* x x)))
+  (defn sqrt [x : int] : int (...))
+  (defn square [x : int] : int (* x x)))
 
 ;; src/geom/vector.tur
 (defmodule geom/vector
@@ -518,9 +518,9 @@ or use `(export-as "...")` to override the C name explicitly.
 
   (defstruct Point [x : int y : int])
 
-  (defn make-vector [x :int y :int] :ptr (Point x y))
+  (defn make-vector [x : int y : int] : ptr (Point x y))
 
-  (defn magnitude [^Point p] :int
+  (defn magnitude [^Point p] : int
     (m/sqrt (+ (m/square (.x p))
                (m/square (.y p))))))
 
@@ -528,7 +528,7 @@ or use `(export-as "...")` to override the C name explicitly.
 (defmodule app
   (import geom/vector :refer [make-vector magnitude])
 
-  (defn main [] :int
+  (defn main [] : int
     (let [p (make-vector 3 4)]
       (println (magnitude p))   ;; 5
       0)))
@@ -539,8 +539,8 @@ or use `(export-as "...")` to override the C name explicitly.
 defmodule math
   export sqrt square
 
-  defn sqrt [x :int] :int (...)
-  defn square [x :int] :int
+  defn sqrt [x : int] : int (...)
+  defn square [x : int] : int
     {x * x}
 
 ;; src/geom/vector.tur
@@ -550,17 +550,17 @@ defmodule geom/vector
 
   defstruct Point [x : int y : int]
 
-  defn make-vector [x :int y :int] :ptr
+  defn make-vector [x : int y : int] : ptr
     Point(x y)
 
-  defn magnitude [^Point p] :int
+  defn magnitude [^Point p] : int
     m/sqrt({m/square(.x(p)) + m/square(.y(p))})
 
 ;; src/app.tur
 defmodule app
   import geom/vector :refer [make-vector magnitude]
 
-  defn main [] :int
+  defn main [] : int
     let [p make-vector(3 4)]
       println(magnitude(p))   ;; 5
       0

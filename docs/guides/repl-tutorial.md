@@ -152,7 +152,7 @@ Type this:
 (defn square [x : int] : int (* x x))
 ```
 ```sweet-exp
-defn square [x :int] :int
+defn square [x : int] : int
   {x * x}
 ```
 
@@ -196,7 +196,7 @@ Type this:
   (if (< n 0) (- 0 n) n))
 ```
 ```sweet-exp
-defn abs [n :int] :int
+defn abs [n : int] : int
   if {n < 0}
     {0 - n}
     n
@@ -227,7 +227,7 @@ Now try a multi-branch form:
     else    0))
 ```
 ```sweet-exp
-defn sign [n :int] :int
+defn sign [n : int] : int
   cond
     {n > 0}
     1
@@ -271,7 +271,7 @@ Type this:
   (if (<= n 1) 1 (* n (factorial (- n 1)))))
 ```
 ```sweet-exp
-defn factorial [n :int] :int
+defn factorial [n : int] : int
   if {n <= 1}
     1
     {n * factorial({n - 1})}
@@ -449,7 +449,7 @@ Now define a division function that never crashes:
   (if (= b 0) (none) (some (/ a b))))
 ```
 ```sweet-exp
-defn safe-div [a :int b :int]
+defn safe-div [a : int b : int]
   if {b = 0}
     none()
     some({a / b})
@@ -730,7 +730,7 @@ Type this:
   (add5 10))
 ```
 ```sweet-exp
-let [add5 (fn [x :int] :int {x + 5})]
+let [add5 (fn [x : int] : int {x + 5})]
   add5(10)
 ```
 
@@ -746,8 +746,8 @@ Then define a function that returns a closure:
 (defn make-adder [n : int] (fn [x : int] : int (+ x n)))
 ```
 ```sweet-exp
-defn make-adder [n :int]
-  (fn [x :int] :int {x + n})
+defn make-adder [n : int]
+  (fn [x : int] : int {x + n})
 ```
 
 ```turmeric
@@ -785,7 +785,7 @@ Type this:
 (defn apply-twice [f x : int] : int (f (f x)))
 ```
 ```sweet-exp
-defn apply-twice [f x :int] :int
+defn apply-twice [f x : int] : int
   f(f(x))
 ```
 
@@ -793,7 +793,7 @@ defn apply-twice [f x :int] :int
 (apply-twice (fn [x : int] : int (* x 2)) 3)
 ```
 ```sweet-exp
-apply-twice((fn [x :int] :int {x * 2}) 3)
+apply-twice((fn [x : int] : int {x * 2}) 3)
 ```
 
 Expected output:
@@ -823,7 +823,7 @@ Type this:
 (defstruct Point [x : int y : int])
 ```
 ```sweet-exp
-defstruct Point [x :int y :int]
+defstruct Point [x : int y : int]
 ```
 
 Then construct an instance and read its fields:
@@ -870,10 +870,10 @@ happens without a handler.
 Type this:
 
 ```turmeric
-(defeffect Log [msg :cstr] :void)
+(defeffect Log [msg : cstr] : void)
 ```
 ```sweet-exp
-defeffect Log [msg :cstr] :void
+defeffect Log [msg : cstr] : void
 ```
 
 Then define a function that performs it:
@@ -884,7 +884,7 @@ Then define a function that performs it:
   (perform (Log "done")))
 ```
 ```sweet-exp
-defn do-work [] :void
+defn do-work [] : void
   perform(Log("starting"))
   perform(Log("done"))
 ```
@@ -995,10 +995,10 @@ value supplied by the handler.
 Type this:
 
 ```turmeric
-(defeffect Ask [] :int)
+(defeffect Ask [] : int)
 ```
 ```sweet-exp
-defeffect Ask [] :int
+defeffect Ask [] : int
 ```
 
 ```turmeric
@@ -1006,7 +1006,7 @@ defeffect Ask [] :int
   (+ 1 (perform (Ask))))
 ```
 ```sweet-exp
-defn use-ask [] :int
+defn use-ask [] : int
   {1 + perform(Ask())}
 ```
 
@@ -1050,7 +1050,7 @@ directory:
   (println (str-concat "Hello, " (str-concat name "!"))))
 ```
 ```sweet-exp
-defn greet [name :cstr] :void
+defn greet [name : cstr] : void
   println $ str-concat "Hello, " str-concat(name "!")
 ```
 

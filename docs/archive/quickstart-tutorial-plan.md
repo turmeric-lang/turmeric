@@ -454,7 +454,7 @@ Instruction: save the following to `hello.tur`:
   (println (str-concat "Hello, " (str-concat name "!"))))
 ```
 ```sweet-exp
-defn greet [name :cstr] :void
+defn greet [name : cstr] : void
   println(str-concat("Hello, " str-concat(name "!")))
 ```
 

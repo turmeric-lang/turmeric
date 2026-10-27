@@ -175,7 +175,7 @@ that).
 
 ```sweet-exp
 let [v sized-vec-of-3(10 20 30)]
-  println(sized-vec-len(v))       ; => 3
+  println(sized-vec-len(v))      ; => 3
   println(sized-vec-get(v 1))    ; => 20
 ```
 
@@ -201,7 +201,7 @@ let [v  sized-vec-of-2(1 2)
 Five predicates compare two `Size` expressions at runtime:
 
 ```turmeric
-(size-eq? (size-static 4) (size-add (size-static 2) (size-static 2)))   ; => true
+(size-eq? (size-static 4) (size-add (size-static 2) (size-static 2)))    ; => true
 (size-lt? (size-static 3) (size-static 4))                               ; => true
 (size-le? (size-static 4) (size-static 4))                               ; => true
 (size-gt? (size-static 5) (size-static 3))                               ; => true
@@ -209,7 +209,7 @@ Five predicates compare two `Size` expressions at runtime:
 ```
 
 ```sweet-exp
-size-eq?(size-static(4) size-add(size-static(2) size-static(2)))   ; => true
+size-eq?(size-static(4) size-add(size-static(2) size-static(2)))    ; => true
 size-lt?(size-static(3) size-static(4))                             ; => true
 size-le?(size-static(4) size-static(4))                             ; => true
 size-gt?(size-static(5) size-static(3))                             ; => true
@@ -483,7 +483,7 @@ let [b unsafe(sized-buf-new-zeroed(4))]
   unsafe(sized-buf-set!(b 1 20))
   unsafe(sized-buf-set!(b 2 30))
   unsafe(sized-buf-set!(b 3 40))
-  println(unsafe(sized-buf-get(b 2)))    ; => 30
+  println(unsafe(sized-buf-get(b 2)))     ; => 30
   println(unsafe(sized-buf-sum(b)))       ; => 100
   println(unsafe(sized-buf-min(b)))       ; => 10
   println(unsafe(sized-buf-max(b)))       ; => 40
@@ -550,7 +550,7 @@ the buffer is reclaimed automatically when the enclosing function returns.
 ```
 
 ```sweet-exp
-defn fill-and-sum [b] :int
+defn fill-and-sum [b] : int
   unsafe(sized-buf-set!(b 0 10))
   unsafe(sized-buf-set!(b 1 20))
   unsafe(sized-buf-set!(b 2 30))
@@ -673,7 +673,7 @@ let [m unsafe(sized-matrix-new-zeroed(3 4))]
   ; Bulk operations
   println(unsafe(sized-matrix-row-sum(m 0)))    ; => 3  (1+2+0+0)
   println(unsafe(sized-matrix-col-sum(m 0)))    ; => 6  (1+5+0)
-  println(unsafe(sized-matrix-total-sum(m)))      ; => 8
+  println(unsafe(sized-matrix-total-sum(m)))    ; => 8
 
   ; Shape assertion (panics if shape does not match)
   unsafe(sized-matrix-assert-shape!(m (Static 3) (Static 4)))
@@ -830,19 +830,19 @@ pointers, providing type-safe size information without any runtime cost.
 
 ````sweet-exp
 ; Wrapper that reports the byte size of a point struct via an inline-C accessor.
-defn ffi-point-size [] #{Unsafe} :Size
+defn ffi-point-size [] #{Unsafe} : Size
   ```c
   return ctor_Static(sizeof(struct { int64_t x; int64_t y; }));
   ```
 
 ; Wrapper that reports the element count for a fixed-size C array.
-defn ffi-array-size [] #{Unsafe} :Size
+defn ffi-array-size [] #{Unsafe} : Size
   ```c
   return ctor_Static(16);
   ```
 
 ; Wrapper that reports the field count of a struct.
-defn ffi-struct-field-count [] #{Unsafe} :Size
+defn ffi-struct-field-count [] #{Unsafe} : Size
   ```c
   return ctor_Static(3);
   ```

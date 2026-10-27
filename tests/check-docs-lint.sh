@@ -14,7 +14,8 @@ cd "$(dirname "$0")/.."
 fail=0
 for check in tests/check-reported-index.sh tests/check-r7rs-srfi-sync.sh \
              tests/check-running-tests-guide.sh tests/check-driver-headers.py \
-             tests/check-src-doc-citations.sh tests/check-let-alignment.py; do
+             tests/check-src-doc-citations.sh tests/check-let-alignment.py \
+             tests/check-annotation-spacing.py; do
     case "$check" in
         *.py) python3 "$check" || fail=1 ;;
         *)    bash "$check" || fail=1 ;;

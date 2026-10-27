@@ -3,9 +3,10 @@
 ;; way the solver CANNOT SEE.
 ;;
 ;; `(>= (* r r) (* r 2))` is nonlinear, so `instance |- class` abstracts to an
-;; uninterpreted term and answers unknown. No `TUR-E0374` fires -- the variance
-;; check reports only on a refutation. But r = -5 satisfies the instance's
-;; promise (25 >= -10) and violates the class's (-5 >= 0 is false).
+;; uninterpreted term and answers unknown. No `TUR-E0374` fires -- that needs a
+;; refutation -- but the undecided pair is `TUR-W0372` (it used to report
+;; nothing). And r = -5 satisfies the instance's promise (25 >= -10) and
+;; violates the class's (-5 >= 0 is false).
 ;;
 ;; Meanwhile the caller's obligation IS discharged, from the class promise, and
 ;; its check is elided. If nothing enforced the class promise on the instance,

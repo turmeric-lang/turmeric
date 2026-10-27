@@ -289,7 +289,7 @@ be decomposed.
 function, stdlib instance methods included. For this program:
 
 ```turmeric
-(defeffect Ask [] :int)
+(defeffect Ask [] : int)
 
 (defn use-ask [] : int
   (+ 1 (:: (perform (Ask)) :int)))

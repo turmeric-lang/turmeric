@@ -50,9 +50,9 @@ There is no boxing overhead for scalars declared with concrete types:
 ```
 
 ```sweet-exp
-defn square [x] :int
+defn square [x] : int
   {x * x}
-defn hyp [a b] :float
+defn hyp [a b] : float
   sqrt({{a * a} + {b * b}})
 ```
 
@@ -82,14 +82,14 @@ Iterative is faster for large N because it avoids stack growth:
 
 ```sweet-exp
 ; iterative -- O(n) time, O(1) space (self-tail-call -> loop; see below)
-defn fib-iter [n] :int
+defn fib-iter [n] : int
   let loop [i n a 0 b 1]
     if {i = 0}
       a
       loop({i - 1} b {a + b})
 
 ; recursive -- O(2^n) time, avoid for n > ~30
-defn fib-rec [n] :int
+defn fib-rec [n] : int
   if {n < 2}
     n
     {fib-rec({n - 1}) + fib-rec({n - 2})}
@@ -117,13 +117,13 @@ example, both of these are lowered to a loop:
 
 ```turmeric no-check
 ; self-recursive defn -- tail call in the `if` else-branch
-(defn count-down [n :int acc :int] :int
+(defn count-down [n : int acc : int] : int
   (if (= n 0)
     acc
     (count-down (- n 1) (+ acc 1))))
 
 ; named-let -- the (loop ...) call is the self-tail-call
-(defn sum-to [n :int] :int
+(defn sum-to [n : int] : int
   (let loop [i   :int 0
              acc :int 0]
     (if (>= i n)
@@ -132,13 +132,13 @@ example, both of these are lowered to a loop:
 ```
 ```sweet-exp
 ; self-recursive defn -- tail call in the `if` else-branch
-defn count-down [n :int acc :int] :int
+defn count-down [n : int acc : int] : int
   if {n = 0}
     acc
     count-down({n - 1} {acc + 1})
 
 ; named-let -- the (loop ...) call is the self-tail-call
-defn sum-to [n :int] :int
+defn sum-to [n : int] : int
   let loop [i   :int 0
              acc :int 0]
     if {i >= n}
@@ -159,8 +159,8 @@ fused into one C function with a dispatch loop, so the cycle runs in constant
 stack at any optimization level:
 
 ```turmeric no-check
-(defn is-even? [n :int] :bool (if (= n 0) true  ^tailcall (is-odd?  (- n 1))))
-(defn is-odd?  [n :int] :bool (if (= n 0) false ^tailcall (is-even? (- n 1))))
+(defn is-even? [n : int] : bool (if (= n 0) true  ^tailcall (is-odd?  (- n 1))))
+(defn is-odd?  [n : int] : bool (if (= n 0) false ^tailcall (is-even? (- n 1))))
 ```
 
 Each member keeps its own C function as a thin wrapper, so calls from outside
@@ -232,12 +232,12 @@ cannot place in tail position is then `TUR-E0716` at compile time, naming the
 reason, instead of a stack overflow at an unpredictable depth later.
 
 ```turmeric no-check
-(defn count-down [n :int acc :int] :int
+(defn count-down [n : int acc : int] : int
   (if (= n 0)
     acc
     ^tailcall (count-down (- n 1) (+ acc 1))))   ; ok -- becomes a backedge
 
-(defn not-tail [n :int] :int
+(defn not-tail [n : int] : int
   (if (= n 0)
     0
     (+ 1 ^tailcall (not-tail (- n 1)))))          ; TUR-E0716: argument position
@@ -608,15 +608,15 @@ separating coordinate vectors into dedicated `vec`s if profiling reveals cache
 pressure:
 
 ```turmeric
-(defstruct body [x :float y :float z :float
-                 vx :float vy :float vz :float
-                 mass :float])
+(defstruct body [x : float y : float z : float
+                 vx : float vy : float vz : float
+                 mass : float])
 ```
 
 ```sweet-exp
-defstruct body [x :float y :float z :float
-                vx :float vy :float vz :float
-                mass :float]
+defstruct body [x : float y : float z : float
+                vx : float vy : float vz : float
+                mass : float]
 ```
 
 ### Ray tracing
@@ -626,12 +626,12 @@ concretely (`float`) so the elaborator does not insert tag checks in the inner
 loop:
 
 ```turmeric
-(defn dot [ax ay az bx by bz] :float
+(defn dot [ax ay az bx by bz] : float
   (+ (* ax bx) (+ (* ay by) (* az bz))))
 ```
 
 ```sweet-exp
-defn dot [ax ay az bx by bz] :float
+defn dot [ax ay az bx by bz] : float
   {{ax * bx} + {{ay * by} + {az * bz}}}
 ```
 

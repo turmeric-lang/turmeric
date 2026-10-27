@@ -190,10 +190,10 @@ Change stdlib constructor functions to declare a more specific return type:
 
 ```turmeric
 ;; Before:
-(defn pair-new [a b] #{Unsafe} :int ...)
+(defn pair-new [a b] #{Unsafe} : int ...)
 
 ;; After (using ptr<Pair> or a named opaque type alias):
-(defn pair-new [a b] #{Unsafe} :ptr<Pair> ...)
+(defn pair-new [a b] #{Unsafe} : ptr<Pair> ...)
 ```
 
 If `ptr<Pair>` is not a first-class type in Turmeric's type system today, an
@@ -201,7 +201,7 @@ alternative is to introduce a lightweight **opaque newtype** mechanism:
 
 ```turmeric
 (defopaque PairPtr :int)
-(defn pair-new [a b] #{Unsafe} :PairPtr ...)
+(defn pair-new [a b] #{Unsafe} : PairPtr ...)
 ```
 
 With this, `turi_eval_typed` would produce type tag `"PairPtr"` (or `"Pair"`),

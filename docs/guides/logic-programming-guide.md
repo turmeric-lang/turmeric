@@ -633,7 +633,7 @@ succeed()              ; always succeeds, one solution
 fail()                 ; always fails, zero solutions
 conjoined(g1 g2)       ; both goals must hold
 disjoined(g1 g2)       ; either goal may hold
-fresh((fn [x] goal))    ; introduce a new logic variable
+fresh((fn [x] goal))   ; introduce a new logic variable
 ```
 
 ### Running a query

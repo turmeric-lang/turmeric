@@ -105,29 +105,29 @@ load("stdlib/async_socket.tur")
 load("stdlib/scheduler.tur")
 load("stdlib/fiber.tur")
 load("stdlib/env.tur")
-defn cstr-length [s :cstr] :int
+defn cstr-length [s : cstr] : int
   ```c
   return (int64_t)strlen(s);
   ```
-defn http-ok [body :cstr len :int] :cstr
+defn http-ok [body : cstr len : int] : cstr
   str-concat("HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nConnection: close\r\nContent-Length: " str-concat(int->str(len) str-concat("\r\n\r\n" body)))
-defn handle-client [fd :Fd] :nil
+defn handle-client [fd : Fd] : nil
   async-socket-recv(fd 4096)
   let [body "Hello from Turmeric!\n"
        resp (http-ok body 21)]
     async-socket-send(fd resp cstr-length(resp))
   async-socket-close(fd)
-defn accept-loop [listen-fd :Fd sched :ptr<void>] :nil
+defn accept-loop [listen-fd : Fd sched : ptr<void>] : nil
   let [client-fd (async-socket-accept listen-fd)
-       f         (fiber-new (fn [] :nil (handle-client client-fd)) 0)]
+       f         (fiber-new (fn [] : nil (handle-client client-fd)) 0)]
     scheduler-spawn(sched f)
   accept-loop(listen-fd sched)
-defn main [] :int
+defn main [] : int
   let [port-str (env/get-raw "PORT")
        port     (if (= port-str 0) 8080 (cstr->parse-int (:: port-str :cstr)))
        sched    (scheduler-new)
        fd       (async-socket-listen port 128)
-       accepter (fiber-new (fn [] :nil (accept-loop fd sched)) 0)]
+       accepter (fiber-new (fn [] : nil (accept-loop fd sched)) 0)]
     println(str-concat("Listening on :" int->str(port)))
     scheduler-spawn(sched accepter)
     scheduler-run-to-completion(sched)
@@ -337,7 +337,7 @@ interpreter on each incoming request:
 ;; The Worker calls:
 ;;   turi_wasm_eval("(handle-request request-body)")
 ;; after loading the stdlib definitions below.
-defn handle-request [body:cstr] :cstr
+defn handle-request [body:cstr] : cstr
   str-concat("Hello from Turmeric! You sent: " body)
 ```
 
@@ -468,9 +468,9 @@ layer.
 ;;
 ;; All logic must be pure computation -- no sockets, threads, or filesystem.
 import "stdlib/str.tur"
-defn greet [name :cstr] :cstr
+defn greet [name : cstr] : cstr
   str-concat("Hello, " str-concat(name "!"))
-defn tur-handle [method :cstr path :cstr body :cstr] :cstr
+defn tur-handle [method : cstr path : cstr body : cstr] : cstr
   greet(if({cstr-length(body) = 0} "world" body))
 ```
 

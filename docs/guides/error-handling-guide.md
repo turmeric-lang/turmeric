@@ -224,7 +224,7 @@ early from the enclosing function. It is the ergonomic counterpart to manual
 ```sweet-exp
 let [__q expr]
   if err?(__q)
-      return(__q)        ;; propagate the err Result unchanged
+      return(__q)      ;; propagate the err Result unchanged
       ok-val(__q)      ;; otherwise yield the unwrapped ok value
 ```
 
@@ -442,7 +442,7 @@ aborting.
     (use (ok-val r))))
 ```
 ```sweet-exp
-let [r catch-unwind((fn [] :int risky()))]
+let [r catch-unwind((fn [] : int risky()))]
   if err?(r)
     recover()
     use(ok-val(r))
@@ -714,12 +714,12 @@ Precondition check at function entry:
   ...)
 ```
 ```sweet-exp
-defn sqrt [n :int] :int
+defn sqrt [n : int] : int
   require!({n >= 0})
   ...
 ;; panics with "Precondition failed" if n < 0
 
-defn sqrt [n :int] :int
+defn sqrt [n : int] : int
   require-msg!({n >= 0} "sqrt: n must be non-negative")
   ...
 ```
@@ -736,7 +736,7 @@ Postcondition check before returning from a function:
 ;; panics with "Postcondition failed" if the result is somehow negative
 ```
 ```sweet-exp
-defn abs [n :int] :int
+defn abs [n : int] : int
   let [result (if {n < 0} {0 - n} n)]
     ensure!({result >= 0})
     result

@@ -21,7 +21,7 @@ SIGSEGV -- `await` just yields a non-int value.
 ## Minimal repro (interpreter)
 
 ```turmeric
-(defn a-rec [n :int] :int
+(defn a-rec [n : int] : int
   (if (= n 0) 0 (+ 1 (await (async (fn [] : int (a-rec (- n 1))))))))
 (defn main [] : int (println (a-rec 500)) 0)
 ```

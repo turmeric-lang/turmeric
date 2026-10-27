@@ -185,9 +185,9 @@ Before formatting:
 ```
 
 ```sweet-exp
-defn add [x :int y :int] :int
+defn add [x : int y : int] : int
   {x + y}
-defn factorial [n :int] :int
+defn factorial [n : int] : int
   if {n <= 1}
     1
     {n * factorial({n - 1})}
@@ -207,9 +207,9 @@ After `tur format` (a sweet-exp file is kept as written -- see
 ```
 
 ```sweet-exp
-defn add [x :int y :int] :int
+defn add [x : int y : int] : int
   {x + y}
-defn factorial [n :int] :int
+defn factorial [n : int] : int
   if {n <= 1}
     1
     {n * factorial({n - 1})}

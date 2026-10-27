@@ -202,7 +202,7 @@ index. Always check the result if the mark could be stale:
 ```sweet-exp
 let [m bt-mark()]
   bt-set!(c 2)
-  println(if(bt-undo-to!(m) 1 0))   ; 1 -- works
+  println(if(bt-undo-to!(m) 1 0))  ; 1 -- works
   println(if(bt-undo-to!(m) 1 0))  ; 0 -- refused, and changed nothing
 ```
 

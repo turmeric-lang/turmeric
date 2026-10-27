@@ -21,7 +21,7 @@ typeclasses, ownership, and the effects system.
 ```
 
 ```sweet-exp
-defstruct Name [field1 :type1 field2 :type2 ...]
+defstruct Name [field1 : type1 field2 : type2 ...]
 ```
 
 Fields are listed as alternating name/type pairs inside the vector literal.
@@ -34,9 +34,9 @@ All field names must be distinct.
 ```
 
 ```sweet-exp
-defstruct Point [x :int y :int]
-defstruct Pixel [r :uint8 g :uint8 b :uint8 a :uint8]
-defstruct Vec2  [x :float32 y :float32]
+defstruct Point [x : int y : int]
+defstruct Pixel [r : uint8 g : uint8 b : uint8 a : uint8]
+defstruct Vec2  [x : float32 y : float32]
 ```
 
 A `defstruct` at file scope registers the type immediately so that later
@@ -62,9 +62,9 @@ Every struct has a **copy kind** that governs how the value can be used:
 ```
 
 ```sweet-exp
-defstruct Point   :copy   [x :int y :int]      ; freely copyable
-defstruct Packet  :move   [ptr :ptr<void>]      ; ownership transferred on use
-defstruct Socket  :linear [fd :int]             ; must be consumed exactly once
+defstruct Point   :copy   [x : int y : int]      ; freely copyable
+defstruct Packet  :move   [ptr : ptr<void>]      ; ownership transferred on use
+defstruct Socket  :linear [fd : int]             ; must be consumed exactly once
 ```
 
 Omitting the annotation is the same as `:move`:
@@ -74,7 +74,7 @@ Omitting the annotation is the same as `:move`:
 ```
 
 ```sweet-exp
-defstruct Pair [first :int second :int]   ; move-only by default
+defstruct Pair [first : int second : int]   ; move-only by default
 ```
 
 The compiler enforces that a `:copy` struct's fields are all themselves
@@ -164,7 +164,7 @@ in the order they appear in `defstruct`.
 ```
 
 ```sweet-exp
-defstruct Point :copy [x :int y :int]
+defstruct Point :copy [x : int y : int]
 
 let [p make-struct(Point 3 4)]
   ...
@@ -178,7 +178,7 @@ let [p make-struct(Point 3 4)]
 ```
 
 ```sweet-exp
-defstruct Pixel [r :uint8 g :uint8 b :uint8 a :uint8]
+defstruct Pixel [r : uint8 g : uint8 b : uint8 a : uint8]
 
 let [px make-struct(Pixel 255u8 128u8 64u8 255u8)]
   ...
@@ -299,7 +299,7 @@ Use `.fieldname` to read a field from a struct value:
 ```
 
 ```sweet-exp
-defstruct Point :copy [x :int y :int]
+defstruct Point :copy [x : int y : int]
 
 let [p make-struct(Point 3 4)]
   println(.x(p))    ; 3
@@ -315,7 +315,7 @@ The `.fieldname` form is also valid for arithmetic:
 ```
 
 ```sweet-exp
-defn distance-sq [p] :int
+defn distance-sq [p] : int
   {{.x(p) * .x(p)} + {.y(p) * .y(p)}}
 ```
 
@@ -363,7 +363,7 @@ moving the struct:
 ```
 
 ```sweet-exp
-defstruct Point :copy [x :int y :int]
+defstruct Point :copy [x : int y : int]
 
 let [p  make-struct(Point 3 4)
      rx &(.x p)]
@@ -395,14 +395,14 @@ moved. A second extraction from the same binding is a use-after-move error
 ```
 
 ```sweet-exp
-defstruct PtrBox :move [ptr :lref<int>]
+defstruct PtrBox :move [ptr : lref<int>]
 
 ;; OK: single extraction
 let [b make-struct(PtrBox lref/new(42))]
   println(deref(.ptr(b)))
 
 ;; ERROR TUR-E0005: second extraction of a moved struct
-defstruct Box :move [val :lref<int>]
+defstruct Box :move [val : lref<int>]
 let [b make-struct(Box lref/new(42))
      x .val(b)
      y .val(b)]   ; use-after-move
@@ -425,7 +425,7 @@ wrapper manages drop glue automatically when the count reaches zero.
 ```
 
 ```sweet-exp
-defstruct Wrapper :move [val :rc<int>]
+defstruct Wrapper :move [val : rc<int>]
 
 let [inner rc/of(10)
      w     rc/of(make-struct(Wrapper inner))]
@@ -444,7 +444,7 @@ drop glue to decrement those inner counts:
 ```
 
 ```sweet-exp
-defstruct Node :move [val :rc<int>]
+defstruct Node :move [val : rc<int>]
 
 let [inner rc/of(42)
      outer rc/of(make-struct(Node inner))]
@@ -475,10 +475,10 @@ notation.
 ```
 
 ```sweet-exp
-defstruct Pair [first :int second :int]
+defstruct Pair [first : int second : int]
 
 definstance Clone [Pair]
-  clone [x] :int
+  clone [x] : int
     ```c
     struct { int64_t first; int64_t second; } *dst = malloc(sizeof(Pair));
     dst->first = x.first;
@@ -533,10 +533,10 @@ the `String`, hold it and release when done:
 `(let [s (show p)] (do ... (string/to-cstr s) ... (string/release s)))`.
 
 ```sweet-exp
-defstruct Point :copy [x :int y :int]
+defstruct Point :copy [x : int y : int]
 
 definstance Show [Point]
-  show [__p] :cstr
+  show [__p] : cstr
     ```c
     int nx = snprintf(NULL, 0, "%lld", (long long)__p.x);
     int ny = snprintf(NULL, 0, "%lld", (long long)__p.y);
@@ -574,7 +574,7 @@ or non-default accessor.
 ```
 
 ```sweet-exp
-defstruct Point :copy [x :int y :int]
+defstruct Point :copy [x : int y : int]
 derive-show    Point x y
 derive-debug   Point x y
 derive-display Point x y
@@ -695,7 +695,7 @@ to declare the effect row the stored function may perform. Calling the field
 propagates that effect row to the enclosing function.
 
 ```turmeric
-(defeffect Emit [s :cstr] :nil)
+(defeffect Emit [s : cstr] : nil)
 
 (defstruct Emitter :copy [run : fn #{Emit}])
 
@@ -707,11 +707,11 @@ propagates that effect row to the enclosing function.
 ```
 
 ```sweet-exp
-defeffect Emit [s :cstr] :nil
+defeffect Emit [s : cstr] : nil
 
-defstruct Emitter :copy [run :fn #{Emit}]
+defstruct Emitter :copy [run : fn #{Emit}]
 
-defn main [] :int
+defn main [] : int
   let [em make-struct(Emitter (fn [s] perform(Emit(s))))]
     (handle
       (do (.run em "hello") 0)
@@ -740,7 +740,7 @@ were locally defined.
 ;; geom module defines Point
 defmodule app
   import geom :refer [Point]
-  defn main [] :int
+  defn main [] : int
     let [p make-struct(Point 3 4)]
       println({.x(p) + .y(p)})
       0
@@ -777,7 +777,7 @@ Follow the `;;;` convention immediately above the `defstruct` form:
 ;;;   make-struct(Point 3 4)  ; => Point with x=3, y=4
 ;;;
 ;;; Since: Phase B1
-defstruct Point :copy [x :int y :int]
+defstruct Point :copy [x : int y : int]
 ```
 
 See the [docstring standard in CLAUDE.md](https://github.com/turmeric-lang/turmeric/blob/main/CLAUDE.md) for the full

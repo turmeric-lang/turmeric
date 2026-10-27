@@ -42,7 +42,7 @@ field address-preservingly. It does **not** hold for the *named-function*
 (load "stdlib/json.tur")
 (load "stdlib/schema.tur")
 
-(defn call-ff [^fat f :(fn [:float] #{} :float) x : float] : float
+(defn call-ff [^fat f : (fn [:float] #{} : float) x : float] : float
   (f x))
 
 (defstruct BoxW [A] (raw :int))

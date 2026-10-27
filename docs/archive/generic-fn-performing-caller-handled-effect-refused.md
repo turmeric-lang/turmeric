@@ -64,7 +64,7 @@ This is the example
 gives as "verified sound" (`direct == cps == 10`):
 
 ```turmeric
-(defeffect A [] :int)
+(defeffect A [] : int)
 (defn emit-twice [T] [x : T] : int { (perform (A)) + (perform (A)) })
 (defn run [] : int (handle (emit-twice 0) (A [] k) (resume k 5)))
 (defn main [] : nil (println (run)))

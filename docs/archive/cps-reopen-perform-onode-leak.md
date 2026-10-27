@@ -50,8 +50,8 @@ the number of re-opened performs executed.
 
 ```turmeric
 ;; N re-opened Log performs; the Log case re-opens Write to the outer handler.
-(defeffect Log [msg :cstr] :nil)
-(defeffect Write [msg :cstr] :nil)
+(defeffect Log [msg : cstr] : nil)
+(defeffect Write [msg : cstr] : nil)
 (defn main [] : int
   (handle
     (handle

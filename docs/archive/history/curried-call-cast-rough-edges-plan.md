@@ -32,10 +32,10 @@ the language otherwise reads as valid.
 ### Issue A -- PAP env init missing `(intptr_t)` cast on a bare-defn capture
 
 ```turmeric
-(defn callback [u :cstr p :cstr] :int 1)
-(defn use-fn [realm :cstr verifier :int next :int] :int next)
+(defn callback [u : cstr p : cstr] : int 1)
+(defn use-fn [realm : cstr verifier : int next : int] : int next)
 
-(defn main [] :int
+(defn main [] : int
   (let [p (use-fn "x" callback)]    ;; partial application captures callback
     (p 0))
   0)
@@ -59,7 +59,7 @@ struct's `int64_t` field without an intermediate `(intptr_t)` cast.
 ### Issue B -- Let-bound closure call missing cast for `void *` -> `int64_t`
 
 ```turmeric
-(defn print-int [v :int] :nil
+(defn print-int [v : int] : nil
   ```c printf("v=%d\n", (int)v); ```)
 
 (defn main [] :int
@@ -68,7 +68,7 @@ struct's `int64_t` field without an intermediate `(intptr_t)` cast.
                (let [_t _tag]
                  (print-int (+ n _t))
                  ```c return NULL; ```))
-        base (fn [c :ptr<void>] :nil
+        base (fn [c : ptr<void>] : nil
                (let [_t _tag]
                  ```c (void)c; ```))
         r    (wrap base)]          ;; void* base -> int n

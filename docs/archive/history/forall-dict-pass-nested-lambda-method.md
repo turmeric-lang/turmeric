@@ -64,7 +64,7 @@ into the mapper as an ordinary captured value:
 ```turmeric
 (defn show-lens [^f a] [^Functor f ^Show a g : (-> a (f a)) s : a] : (f cstr)
   (let [tag (show s)]                          ; `show` in the body -- supported
-    (fmap (g s) (fn [x : a] : cstr tag))))      ; mapper captures `tag`, no dispatch
+    (fmap (g s) (fn [x : a] : cstr tag))))     ; mapper captures `tag`, no dispatch
 ```
 
 This is the form exercised by the positive fixture

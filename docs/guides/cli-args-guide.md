@@ -51,7 +51,7 @@ to recover the element's `:cstr` type:
 load("stdlib/list.tur")
 load("stdlib/str-build.tur")
 
-defn main [] :int
+defn main [] : int
   println $ str-concat "arg 0: " (:: list-head(*args*) :cstr)
   println $ str-concat "arg 1: " (:: list-head(list-tail(*args*)) :cstr)
   0
@@ -73,7 +73,7 @@ defn main [] :int
 ;; Walk all arguments
 load("stdlib/list.tur")
 
-defn print-args [args :int] :void
+defn print-args [args : int] : void
   when not({args = 0})
     do
       println (:: list-head(args) :cstr)
@@ -99,7 +99,7 @@ load("stdlib/list.tur")
 load("stdlib/str.tur")
 load("stdlib/str-build.tur")
 
-defn main [] :int
+defn main [] : int
   let [n cstr->parse-int(list-head(*args*))]
     println $ str-concat "count: " int->str(n)
     0
@@ -155,7 +155,7 @@ Two conventions to know:
                    (args/spec-prog "mytool")
                    (args/spec-flag "--verbose")
                    (args/spec-option "--input"  "string" (none))       ; required
-                   (args/spec-option "--count"  "int"    (some "1"))    ; default 1
+                   (args/spec-option "--count"  "int"    (some "1"))   ; default 1
                    (args/spec-option "--output" "string" (some "out.txt")))
         result (args/parse spec *args*)]
     (if (args/error? result)
@@ -171,12 +171,12 @@ Two conventions to know:
         0))))
 ```
 ```sweet-exp
-defn main [] :int
+defn main [] : int
   let [spec   (-> (args/spec-new)
                    (args/spec-prog "mytool")
                    (args/spec-flag "--verbose")
                    (args/spec-option "--input"  "string" (none))       ; required
-                   (args/spec-option "--count"  "int"    (some "1"))    ; default 1
+                   (args/spec-option "--count"  "int"    (some "1"))   ; default 1
                    (args/spec-option "--output" "string" (some "out.txt")))
        result (args/parse spec *args*)]
     if args/error?(result)
@@ -315,7 +315,7 @@ flags, options, and nested subcommands:
               1))))))
 ```
 ```sweet-exp
-defn main [] :int
+defn main [] : int
   let [build-spec (-> (args/spec-new)
                        (args/spec-flag "--release")
                        (args/spec-option "--output" "string" (some "a.out")))

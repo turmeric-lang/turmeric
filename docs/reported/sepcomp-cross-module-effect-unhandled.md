@@ -41,7 +41,7 @@ separately):
 ;; effects/ask.tur
 (defmodule effects/ask
   (export ask-effect)
-  (defeffect Ask [] :int)
+  (defeffect Ask [] : int)
   (defn ask-effect [] : int
     (perform (Ask))))
 ```

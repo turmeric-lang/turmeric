@@ -17,7 +17,7 @@
 that directory that actually changed. From `spices/watch/src/watch/watch.tur`:
 
 ```turmeric
-(defn __watch-next-tree [watcher :int timeout-ms :int] #{Unsafe} :int
+(defn __watch-next-tree [watcher : int timeout-ms : int] #{Unsafe} : int
   (let [idx (__watcher-tree-poll-fired watcher timeout-ms)]
     ...
     (watch-event-make (__watcher-tree-root watcher) dir dir

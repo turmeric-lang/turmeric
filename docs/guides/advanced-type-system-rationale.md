@@ -209,13 +209,10 @@ separate features but modes of the existing continuation representation.
 ```sweet-exp
 ;; Union: a value that may be int, cstr, or bool.
 defn print-any [x : (int | cstr | bool)] : nil
-  match x
-    (i : int)
-    println(i)
-    (s : cstr)
-    println(s)
-    (b : bool)
-    println $ if b "true" "false"
+  (match x
+    (i : int)  (println i)
+    (s : cstr) (println s)
+    (b : bool) (println (if b "true" "false")))
 ;; Intersection: an int that also has a Serializable instance.
 defn log-and-save [x : (int & Serializable)] : nil ...
 ```
@@ -261,8 +258,8 @@ as type-level compile-time integers.
 
 ```turmeric
 ;; Matrix multiplication: dimensions must be compatible.
-(defn mat-mul [a :(Matrix m n float)
-               b :(Matrix n p float)] :(Matrix m p float)
+(defn mat-mul [a : (Matrix m n float)
+               b : (Matrix n p float)] : (Matrix m p float)
   ...)
 
 ;; Compile-time error if you pass incompatible shapes:
@@ -307,17 +304,17 @@ Contract types attach runtime-checked predicates to types and
 function boundaries.
 
 ```turmeric no-check
-(defn vec-get [v :(vec a)
-               i :#refine{ j :int | (and (>= j 0) (< j (vec/len v))) }] :a
+(defn vec-get [v : (vec a)
+               i : #refine{ j : int | (and (>= j 0) (< j (vec/len v))) }] : a
   (vec/get-unsafe v i))
 
-(defn sqrt [x :#refine{ y :double | (>= y 0) }] :double ...)
+(defn sqrt [x : #refine{ y : double | (>= y 0) }] : double ...)
 ```
 ```sweet-exp
 defn vec-get [v : (vec a)
-              i : #refine{ j :int | (and (>= j 0) (< j (vec/len v))) }] :a
+              i : #refine{ j : int | (and (>= j 0) (< j (vec/len v))) }] : a
   vec/get-unsafe(v i)
-defn sqrt [x : #refine{ y :double | (>= y 0) }] :double
+defn sqrt [x : #refine{ y : double | (>= y 0) }] : double
   ...
 ```
 
@@ -484,13 +481,31 @@ it prove that `(>= (+ x 1) 0)` holds? The assumption at the time was that this
 means an SMT solver -- Z3 or equivalent -- integrated into the elaborator, and
 so a hard external dependency on the compiler's critical path.
 
-| Phase | Status after v4 |
-|---|---|
-| Syntax (`#refine{ x : T \| p }`) | Done -- Contract Types use the same syntax |
-| Subtyping (`T { p }` is a subtype of `T`) | Structural part done via union/intersection; entailment layer still needed |
-| Runtime check insertion | Done -- Contract Types already do this |
-| FFI boundary annotation | Done -- Contract Types CT4 covers this |
-| Predicate propagation + SMT | The gap |
+| Phase | Status after v4 (at deferral) | Status now |
+|---|---|---|
+| Syntax (`#refine{ x : T \| p }`) | Done -- Contract Types use the same syntax | Same syntax, shared |
+| Subtyping | Half done: a refined value could already be used as its base type (`#refine{ x : T \| p }` is a subtype of `T`). Checking one refinement against another (`p` implies `q`) needed a prover | Done for values: the solver proves `p` implies `q` wherever a value crosses into a refined type. Open for function types: see below |
+| Runtime check insertion | Done -- Contract Types already do this | Unchanged; proved checks are now elided |
+| FFI boundary annotation | Done -- Contract Types CT4 covers this | Unchanged |
+| Predicate propagation + SMT | The gap | Done -- the in-house solver chain described below |
+
+At deferral, the subtyping row had two halves. The first was dropping a
+refinement: a non-negative `int` is an `int`, so a refined value can always
+go where its base type is expected. That needs no reasoning about the
+predicate, and the subtype relation (`type_is_subtype`,
+`src/compiler/types.c`) already handled it. The second was comparing two
+refinements. Passing an `x > 0` value where `2x > 0` is required means proving
+that one predicate implies the other. That is *entailment*: the missing
+prover, and the same gap the last row names.
+
+One subtyping case is still open: **function types.** A `(fn ...)` type cannot
+carry a refinement today (`TUR-E0378`). So there is no check that a function
+passed into a slot of refined function type accepts at least the arguments
+the slot promises (parameters are *contravariant*) and delivers at least the
+result the slot promises (the result is *covariant*). The compiler runs
+exactly that check between a typeclass instance and its class signature
+(`TUR-E0374`); extending it to function values is planned in
+[refined-function-types-plan](https://github.com/turmeric-lang/turmeric/blob/main/docs/upcoming/refined-function-types-plan.md).
 
 So the gap was well-defined and separable from the rest of the type system.
 What made it look expensive was the solver.

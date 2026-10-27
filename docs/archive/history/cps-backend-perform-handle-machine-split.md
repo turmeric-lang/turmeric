@@ -33,7 +33,7 @@ Handler forced onto the fallback path by a capture in its case body, performer
 stays CPS-emittable:
 
 ```turmeric
-(defeffect E [] :int)
+(defeffect E [] : int)
 (defn f [] : int (perform (E)))            ; simple -> CPS-emitted (dk_perform)
 (defn run [x : int] : int
   (handle (f)

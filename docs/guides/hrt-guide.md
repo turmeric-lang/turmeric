@@ -24,7 +24,7 @@ A **rank-2 type** introduces a `forall` *inside* a function argument. The classi
 
 ```sweet-exp
 ; apply-poly works for any type -- the callee instantiates `a`
-defn apply-poly [f (forall [a] (-> a a)) x :int] :int
+defn apply-poly [f (forall [a] (-> a a)) x : int] : int
   f(x)
 ```
 
@@ -45,7 +45,7 @@ Annotate a parameter with a `forall` type by placing the type form immediately a
 ```
 
 ```sweet-exp
-defn my-fn [f (forall [a] (-> a a)) x :int] :int
+defn my-fn [f (forall [a] (-> a a)) x : int] : int
   f(x)
 ```
 
@@ -59,7 +59,7 @@ The `forall` type must appear as a parenthesized form `(forall [...] ...)` direc
 ```
 
 ```sweet-exp
-defn swap-apply [f (forall [a b] (-> a b a)) x :int y :int] :int
+defn swap-apply [f (forall [a b] (-> a b a)) x : int y : int] : int
   f(x y)
 ```
 
@@ -80,9 +80,9 @@ parameter or un-annotated:
 ```
 
 ```sweet-exp
-defn id [A] [x :A] :A x
+defn id [A] [x : A] : A x
 defn id-word [x] x
-defn inc [x :int] :int {x + 1}
+defn inc [x : int] : int {x + 1}
 
 apply-poly(id 7)               ; => 7
 apply-poly(inc 7)              ; error[TUR-E0001]: rank-2 argument 'inc' is not generic
@@ -159,10 +159,10 @@ Apply a single function uniformly over data, without fixing its type:
 ```
 
 ```sweet-exp
-defn apply-to-both [f (forall [a] (-> a a)) x :int y :int] :int
+defn apply-to-both [f (forall [a] (-> a a)) x : int y : int] : int
   {f(x) + f(y)}
 
-defn inc [x :int] :int
+defn inc [x : int] : int
   {x + 1}
 
 ; `inc` is int-only and apply-to-both uses it only at int, so it is ascribed
@@ -185,7 +185,7 @@ Apply a polymorphic function n times -- the essence of Church numerals:
 ```
 
 ```sweet-exp
-defn church-apply [f (forall [a] (-> a a)) n :int x :int] :int
+defn church-apply [f (forall [a] (-> a a)) n : int x : int] : int
   if {n <= 0}
     x
     church-apply(f {n - 1} f(x))
@@ -209,7 +209,7 @@ Thread a value through a sequence of polymorphic transforms:
 ```
 
 ```sweet-exp
-defn pipe2 [f (forall [a] (-> a a)) g (forall [a] (-> a a)) x :int] :int
+defn pipe2 [f (forall [a] (-> a a)) g (forall [a] (-> a a)) x : int] : int
   g(f(x))
 
 pipe2((:: inc (forall [a] (-> a a))) (:: double-it (forall [a] (-> a a))) 3)
@@ -232,12 +232,12 @@ You can bind a poly fn to a local name and use it multiple times:
 ```
 
 ```sweet-exp
-defn apply-poly [f (forall [a] (-> a a)) x :int] :int
+defn apply-poly [f (forall [a] (-> a a)) x : int] : int
   f(x)
 
-defn id [A] [x :A] :A x
+defn id [A] [x : A] : A x
 
-defn use-poly-id [] :int
+defn use-poly-id [] : int
   let [f id]  ; f is a poly fn alias for id
     {apply-poly(f 10) + apply-poly(f 20)}
 ```
@@ -257,10 +257,10 @@ Pass a received poly fn parameter to another function expecting a poly fn:
 ```
 
 ```sweet-exp
-defn apply-once [f (forall [a] (-> a a)) x :int] :int
+defn apply-once [f (forall [a] (-> a a)) x : int] : int
   f(x)
 
-defn apply-twice [f (forall [a] (-> a a)) x :int] :int
+defn apply-twice [f (forall [a] (-> a a)) x : int] : int
   apply-once(f apply-once(f x))  ; f forwarded directly
 ```
 
@@ -278,7 +278,7 @@ Define typeclass methods that accept polymorphic function arguments:
   (transform [f x] (f x)))
 
 ; Call with a generic function, or ascribe an int-only one
-(.transform id 5)                               ; => 5
+(.transform id 5)                              ; => 5
 (.transform (:: inc (forall [a] (-> a a))) 5)  ; => 6
 ```
 
@@ -290,7 +290,7 @@ definstance Transform []
   transform([f x] f(x))
 
 ; Call with a generic function, or ascribe an int-only one
-.transform(id 5)                               ; => 5
+.transform(id 5)                              ; => 5
 .transform((:: inc (forall [a] (-> a a))) 5)  ; => 6
 ```
 
@@ -304,7 +304,7 @@ A function whose parameter is itself rank-2 -- it accepts a "polymorphic functio
 ```
 
 ```sweet-exp
-defn with-poly-id [h (forall [a] (-> (forall [b] (-> b b)) a))] :int
+defn with-poly-id [h (forall [a] (-> (forall [b] (-> b b)) a))] : int
   h(id)
 ```
 
@@ -349,7 +349,7 @@ You must annotate rank-2 parameters explicitly in `defn`. The compiler does not 
 defn apply [f x]  ; NOT rank-2
 
 ; With annotation, it's a proper rank-2 function
-defn apply [f (forall [a] (-> a a)) x :int] :int  ; rank-2
+defn apply [f (forall [a] (-> a a)) x : int] : int  ; rank-2
   f(x)
 ```
 

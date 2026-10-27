@@ -270,7 +270,7 @@ what it needs from siblings:
 ;; src/mylib/types.tur
 (defmodule mylib/types
   (export Widget WidgetResult)
-  (defstruct Widget [value :int])
+  (defstruct Widget [value : int])
   ...)
 ```
 
@@ -280,8 +280,8 @@ what it needs from siblings:
   (export make-widget widget-value)
   (import mylib/types :refer [Widget WidgetResult])
 
-  (defn make-widget [v :int] :Widget ...)
-  (defn widget-value [w :Widget] :int ...))
+  (defn make-widget [v : int] : Widget ...)
+  (defn widget-value [w : Widget] : int ...))
 ```
 
 `tur check`, `tur emit-c`, and `tur build` all resolve intra-spice imports
@@ -296,12 +296,12 @@ in isolation without imports:
 ```turmeric
 ;; src/mylib/io.tur -- ANTI-PATTERN
 ;; Stub copy of make-widget from core.tur; real body is return NULL.
-(defn make-widget [v :int] #fx{Unsafe} :Widget
+(defn make-widget [v : int] #fx{Unsafe} : Widget
   ```c
   return NULL;
   ```)
 
-(defn read-widget [path :cstr] :Widget ...)  ;; real implementation
+(defn read-widget [path : cstr] : Widget ...)  ;; real implementation
 ```
 
 This pattern fails in three ways:
@@ -540,7 +540,7 @@ Use `include-c` to pull in the C header and `extern-c` to declare symbols:
 (extern-c sqlite3_exec   [:ptr :cstr :ptr :ptr :ptr] :int)
 (extern-c sqlite3_errmsg [:ptr] :cstr)
 
-(defn db-open [path :cstr] (result :ptr)
+(defn db-open [path : cstr] (result :ptr)
   (let [db-ptr (make-ptr)
         rc     (sqlite3_open path db-ptr)]
     (if (= rc 0)
@@ -557,7 +557,7 @@ extern-c sqlite3_close  [:ptr]       :int
 extern-c sqlite3_exec   [:ptr :cstr :ptr :ptr :ptr] :int
 extern-c sqlite3_errmsg [:ptr] :cstr
 
-defn db-open [path :cstr] (result :ptr)
+defn db-open [path : cstr] (result :ptr)
   let [db-ptr (make-ptr)
        rc     (sqlite3_open path db-ptr)]
     if {rc = 0}
@@ -580,9 +580,9 @@ against the upstream header stays reviewable in one place:
 
 ```turmeric no-check
 ;; sqlite3.h result codes the API surface uses (keep next to the externs).
-(defn SQLITE-OK   [] :int 0)
-(defn SQLITE-ROW  [] :int 100)
-(defn SQLITE-DONE [] :int 101)
+(defn SQLITE-OK   [] : int 0)
+(defn SQLITE-ROW  [] : int 100)
+(defn SQLITE-DONE [] : int 101)
 ```
 
 Exported like any other defn, these are callable from consumers and from
@@ -594,7 +594,7 @@ reviewable diff instead of a scavenger hunt through call sites.
 When a binding is simpler to write directly in C, use an inline-C block:
 
 ```turmeric
-(defn db-last-insert-rowid [db :ptr] :int
+(defn db-last-insert-rowid [db : ptr] : int
   ```c
   return (int)sqlite3_last_insert_rowid((sqlite3*)db);
   ```)
@@ -929,7 +929,7 @@ definition. The standard format (from CLAUDE.md):
 ;;;     (err m) (do (println "failed:") (println m)))
 ;;;
 ;;; Since: Phase P2
-(defn db-open [path :cstr] (result :ptr)
+(defn db-open [path : cstr] (result :ptr)
   ...)
 ```
 
@@ -995,7 +995,7 @@ instead of an untyped `:int`:
 (defopaque Route :int)
 
 ;; Each rest arg must be a Route; a raw :int or a different opaque is rejected.
-(defn launch [& routes :Route] :ptr<void>
+(defn launch [& routes : Route] : ptr<void>
   ...)
 ```
 
@@ -1410,10 +1410,10 @@ abstractions in your spice:
 
 ```turmeric
 ;; Wrong (TUR-D0001):
-(defn map-fn [^fat g :(fn [:int] :int) n :int] :int (g n))
+(defn map-fn [^fat g : (fn [:int] : int) n : int] : int (g n))
 
 ;; Right:
-(defn map-fn [^fat g :(fn [int] int) n :int] :int (g n))
+(defn map-fn [^fat g : (fn [int] int) n : int] : int (g n))
 ```
 
 The structural `name : type` colon (the one separating a parameter name from

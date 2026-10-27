@@ -94,7 +94,7 @@ Affine multi-use (issue 1) is fully unblocked by let-bound int coercion
   (vec-push! v 1) (vec-push! v 2)
   (let [vi (:: v :int)]
     (println (vec-len vi))   ; 2
-    (println (vec-len vi))))  ; 2, no use-after-move
+    (println (vec-len vi)))) ; 2, no use-after-move
 ```
 
 The real remaining blocker is **issue 2**: a poly-defn recursive

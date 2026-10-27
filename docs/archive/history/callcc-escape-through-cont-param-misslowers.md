@@ -33,16 +33,16 @@ nested closure that captures `k`).
 
 ```turmeric
 ;; Correct (k captured lexically): escapes past the +1 frames -> 104
-(defn ok [] :int
+(defn ok [] : int
   (+ 5 (call/cc (fn [k]
-    (letrec [loop (fn [n :int] :int
+    (letrec [loop (fn [n : int] : int
                     (if (= n 0) (k 99) (+ 1 (loop (- n 1)))))]
       (loop 3000))))))            ;; => 104  (5 + 99)
 
 ;; Wrong (k passed through a :cont param): no escape, +1 frames accumulate
-(defn deep [k :cont n :int] :int
+(defn deep [k : cont n : int] : int
   (if (= n 0) (k 99) (+ 1 (deep k (- n 1)))))
-(defn bad [] :int
+(defn bad [] : int
   (+ 5 (call/cc (fn [k] (deep k 3000)))))   ;; => 3104  (5 + 99 + 3000), expected 104
 ```
 

@@ -362,7 +362,7 @@
 ;;;   The value of the last body form.
 ;;;
 ;;; Example:
-;;;   (defdynamic *depth* :int 0)
+;;;   (defdynamic *depth* : int 0)
 ;;;   (defn show [] : int *depth*)
 ;;;   (binding [*depth* 5] (show))  ; prints 5; outside, (show) is 0
 ;;@form (binding [*var* value ...] body ...)

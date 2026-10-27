@@ -47,7 +47,7 @@ Found 2026-10-09 while fixing
 ## Repro (still refused)
 
 ```turmeric
-(defeffect Ask [] :int)
+(defeffect Ask [] : int)
 (defn app [h : (fn [int] #fx{Ask} int) x : int] #fx{Ask} : int (h x))
 (defn v2 [m : int] : int
   (let [f (fn [n : int] : int (+ m n (perform (Ask))))

@@ -73,20 +73,20 @@ A minimal repro (run with `build/tur` 0.18.0):
 
 ```turmeric
 (defn apply-sf
-  [^fat sf  :(fn [:ptr<void>] #{} :ptr<void>)
-   ^fat sig :(fn [:float]     #{} :float)] :ptr<void>
+  [^fat sf  : (fn [:ptr<void>] #{} : ptr<void>)
+   ^fat sig : (fn [:float]     #{} : float)] : ptr<void>
   (sf sig))
 
 (defn chain-loop
-  [effects :int
-   ^fat sig :(fn [:float] #{} :float)
-   i :int n :int] :ptr<void>
+  [effects : int
+   ^fat sig : (fn [:float] #{} : float)
+   i : int n : int] : ptr<void>
   (if (>= i n)
     sig
     (chain-loop effects (apply-sf (vec-get effects i) sig) (+ i 1) n)))
 
 (defn effects-chain
-  [effects :int ^fat input :(fn [:float] #{} :float)] :ptr<void>
+  [effects : int ^fat input : (fn [:float] #{} : float)] : ptr<void>
   (chain-loop effects input 0 (vec-len effects)))
 ```
 
@@ -107,7 +107,7 @@ closure shape, and the readback is rejected as `:int` even though
 Adding a let-binding with `^fat`:
 
 ```turmeric
-(let [^fat out :(fn [:float] #{} :float) (effects-chain v sig)]
+(let [^fat out :(fn [:float] #{} : float) (effects-chain v sig)]
   (out 1.0))
 ```
 

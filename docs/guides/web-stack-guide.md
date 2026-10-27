@@ -109,9 +109,9 @@ request handle and returns a response handle.
 import httpd/server :refer [server-start server-stop]
 import httpd/request :refer [req-path]
 import httpd/response :refer [resp-ok]
-defn handler [req :int] :int
+defn handler [req : int] : int
   resp-ok("text/plain" str-concat("You requested: " req-path(req)))
-defn main [] :int
+defn main [] : int
   let [s (server-start 8080 handler)]
     ;; run until killed
     server-stop(s)
@@ -211,7 +211,7 @@ with-header(resp-ok("text/plain" "Not found") "x-reason" "missing")
 ```sweet-exp
 import template/render :refer [render]
 import template/env :refer [env-new env-set env-free]
-defn greet [name :cstr] :String
+defn greet [name : cstr] : String
   let [e (env-new)]
     env-set(e "name" name)
     let [out (render "Hello, <%= name %>!" e)]
@@ -243,7 +243,7 @@ releases once with `string/release`, with no raw `free` to forget. See
 (env-free env)                      ;; release the Env
 ```
 ```sweet-exp
-env-new()                           ;; create an Env handle
+env-new()                          ;; create an Env handle
 env-set(env "key" "value")         ;; bind a scalar string
 env-set-list(env "items" lst)      ;; bind a cons list of cstr values
 env-free(env)                      ;; release the Env
@@ -321,7 +321,7 @@ import tourist/app :refer [tourist]
 import tourist/dsl :refer [get! post!]
 import tourist/helpers :refer [text html]
 import tourist/param :refer [capture param]
-defn main [] :int
+defn main [] : int
   let [s (tourist 3000
             (get! "/hello/:name"
               (fn [ctx]
@@ -461,7 +461,7 @@ function receives a request and returns `option<:int>`:
 ```sweet-exp
 import tourist/middleware :refer [use!]
 import stdlib/option :refer [none-value some]
-defn auth-mw [ctx :int] :int
+defn auth-mw [ctx : int] : int
   if {req-header(ctx "x-api-key") = 0}
     some(status(401 text("Unauthorized")))
     none-value()
@@ -573,11 +573,11 @@ import tourist/dsl :refer [get!]
 import tourist/helpers :refer [html]
 import template/render :refer [render]
 import template/env :refer [env-new env-set env-free]
-defn render-view [name :cstr env :int] :cstr
+defn render-view [name : cstr env : int] : cstr
   let [out (render name env)]
     env-free(env)
     out
-defn main [] :int
+defn main [] : int
   let [s (tourist 3000
             (get! "/hello/:name"
               (fn [ctx]

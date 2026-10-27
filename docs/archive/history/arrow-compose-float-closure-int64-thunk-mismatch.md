@@ -64,7 +64,7 @@ to match," which the project treats as a bug, not a non-issue.
 (load "stdlib/arrow.tur")
 (defn make-scale [k : float] : ptr<void> (fn [x : float] : float (* x k)))
 (defn make-add   [n : float] : ptr<void> (fn [x : float] : float (+ x n)))
-(defn call-f [^fat f :(fn [:float] #{} :float) x : float] : float (f x))
+(defn call-f [^fat f : (fn [:float] #{} : float) x : float] : float (f x))
 (defn main [] : int
   ;; (3.0 + 0.0) * 0.5 = 1.5
   (println (call-f (>>> (make-add 0.0) (make-scale 0.5)) 3.0))

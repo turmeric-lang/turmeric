@@ -14,7 +14,7 @@ effect-through-fn-value shape from source; pre-existing, orthogonal to E7).
 ## Minimal repro
 
 ```turmeric
-(defeffect Ask [] :int)
+(defeffect Ask [] : int)
 (defn apply-cb [f : (-> int int) x : int] : int (f x))
 (defn cb [x : int] : int (+ x (perform (Ask))))
 (defn run [] : int

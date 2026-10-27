@@ -542,7 +542,7 @@ The fixture `errors/gadt-refine-escape` expects a GADT skolem-escape
 diagnostic but the compiler accepts the program without error.
 
 ```turmeric
-(defn my-unbox [b] :int
+(defn my-unbox [b] : int
   (match b
     (MkBox x) x))   ;; x has type 'a' (skolem), expected to escape
 ```
@@ -578,7 +578,7 @@ variable annotation `^f` is used in `defn` parameters, but the compiler
 accepts the program silently.
 
 ```turmeric
-(defn map [^f a x] :a
+(defn map [^f a x] : a
   x)
 ```
 
@@ -865,11 +865,11 @@ Any Turmeric function that receives a function argument typed `:ptr<void>`
 and then calls it with two arguments segfaults at runtime:
 
 ```turmeric
-(defn call2 [f :ptr<void> a :int b :int] :int (f a b))
+(defn call2 [f : ptr<void> a : int b : int] : int (f a b))
 
-(defn add [a :int b :int] :int (+ a b))
+(defn add [a : int b : int] : int (+ a b))
 
-(defn main [] :int
+(defn main [] : int
   (println (call2 add 10 20))   ; => Segmentation fault
   0)
 ```
@@ -878,7 +878,7 @@ Single-argument `:ptr<void>` calls work correctly when `f` is a partial
 application closure (e.g. `(mul 2)`):
 
 ```turmeric
-(defn call1 [f :ptr<void> x :int] :int (f x))
+(defn call1 [f : ptr<void> x : int] : int (f x))
 (println (call1 (mul 2) 5))   ; => 10  (correct)
 ```
 

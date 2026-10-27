@@ -46,7 +46,7 @@ Survey: across `stdlib/` and `tests/` there is exactly **one** site
 using type-annotated macro params -- `stdlib/future.tur:132`:
 
 ```turmeric
-(defmacro promise-pair [cell :ptr<void>]
+(defmacro promise-pair [cell : ptr<void>]
   (list (promise-of-cell cell) (future-of-cell cell)))
 ```
 

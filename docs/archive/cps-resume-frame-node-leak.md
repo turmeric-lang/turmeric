@@ -32,7 +32,7 @@ such a perform.
 ## Minimal repro
 
 ```turmeric
-(defeffect E [] :int)
+(defeffect E [] : int)
 (defn g [] : int
   (let [a (perform (E))]
     (let [b (perform (E))]     ; nested control op in the continuation of the first perform

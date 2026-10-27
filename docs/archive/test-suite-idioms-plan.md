@@ -300,7 +300,7 @@ the handler-body boundary.
 
 ```turmeric
 (load "stdlib/free.tur")
-(defn main [] :int
+(defn main [] : int
   (let [scale 3
         r     (unsafe (free-run (fn [inner] (* inner scale)) (free-lift 10)))]
     (println r))

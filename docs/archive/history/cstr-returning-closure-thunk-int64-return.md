@@ -43,7 +43,7 @@ are typed correctly; only the function's return type is wrong.
 ## Repro
 
 ```turmeric
-(defn call-s [f :ptr<void> s :cstr] :cstr
+(defn call-s [f : ptr<void> s : cstr] : cstr
   ```c return TUR_APPLY1_T(char *, char *, f, s); ```)
 
 (defn make-pick [n :int] :ptr<void>

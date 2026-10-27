@@ -475,7 +475,7 @@ scope, because it would put the tree on the region-hook list.
 
 ;; content
 (defn set-attr!     [el : Node name : cstr value : cstr] : (Result unit EditError)
-(defn remove-attr!  [el : Node name : cstr] : bool             ;; true when it existed
+(defn remove-attr!  [el : Node name : cstr] : bool                 ;; true when it existed
 (defn set-text!     [n : Node s : cstr] : (Result unit EditError)  ;; textContent=
 (defn set-value!    [n : Node s : cstr] : (Result unit EditError)  ;; text/comment/PI data
 (defn rename!       [el : Node name : cstr] : (Result unit EditError)

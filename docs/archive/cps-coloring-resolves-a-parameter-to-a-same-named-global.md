@@ -13,7 +13,7 @@ compiled.
 ## Repro
 
 ```turmeric
-(defeffect Ask [] :int)
+(defeffect Ask [] : int)
 (defn f [x : int] : int (+ x 1))
 (defn app [f : (fn [int] int) x : int] : int (f x))
 (defn main [] : int

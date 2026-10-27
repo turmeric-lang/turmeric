@@ -152,17 +152,17 @@
 
 ;;; defopaque -- declare a newtype.
 ;;;
-;;; `(defopaque Fd :int)` makes `Fd` a type with exactly the representation of its
+;;; `(defopaque Fd : int)` makes `Fd` a type with exactly the representation of its
 ;;; base and no operations: it does not unify with `int` or with another opaque
 ;;; of the same base (`expected Fd, got int`; `expected Fd, got Pid`), and
 ;;; `(+ (:: 1 Fd) 1)` is a type error. Cross the boundary with `::`, `(:: n Fd)`
 ;;; to wrap and `(:: fd :int)` to unwrap, which costs nothing. Use it for handles
 ;;; and branded ids. The base is `:int`, `:ptr<void>` or `:ptr`; `:linear` or
 ;;; `:affine` after it makes the value exactly-once or at-most-once, so
-;;; `(defopaque Tok :int :linear)` must be consumed. A phantom type parameter goes
-;;; before the base: `(defopaque Tagged [A] :int)` is written `(Tagged int)`.
+;;; `(defopaque Tok : int :linear)` must be consumed. A phantom type parameter goes
+;;; before the base: `(defopaque Tagged [A] : int)` is written `(Tagged int)`.
 ;;;
-;;; A float base works: `(defopaque Celsius :float)` is an `int64_t` handle
+;;; A float base works: `(defopaque Celsius : float)` is an `int64_t` handle
 ;;; holding the float's bits, and `::` to or from it reinterprets them, so
 ;;; `(:: (:: 21.5 Celsius) :float)` is 21.5. An unknown base such as `:string`
 ;;; is an error.
@@ -174,7 +174,7 @@
 ;;;   marks  -- optional: `:linear` or `:affine`
 ;;;
 ;;; Example:
-;;;   (defopaque Fd :int)
+;;;   (defopaque Fd : int)
 ;;;   (defn fd-num [fd : Fd] : int (:: fd :int))
 ;;;   (fd-num (:: 3 Fd))  ; => 3
 ;;@form (defopaque Name base)

@@ -82,7 +82,7 @@ You can annotate parameters and returns with it:
   (sym->str tag))
 ```
 ```sweet-exp
-defn label [tag :Sym] :cstr
+defn label [tag : Sym] : cstr
   sym->str(tag)
 ```
 

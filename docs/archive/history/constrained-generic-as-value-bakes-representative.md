@@ -65,7 +65,7 @@ backends also *disagree*.
 (definstance Size [int] (size [x] -1))          ; carrier representative
 (defstruct Box [n : int])
 (definstance Size [Box] (size [x : Box] 7))     ; pure-Turmeric, distinct answer
-(defn count-it [^Size A] [x :A] :int (size x))  ; generic-dict driver
+(defn count-it [^Size A] [x : A] : int (size x))  ; generic-dict driver
 ```
 
 Status as of the 2026-06-15 partial fix (was: both indirect rows `-1` on

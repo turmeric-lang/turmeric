@@ -92,7 +92,7 @@ the same five-line dispatch:
 ;; Each list cell holds a *fat closure value* (already-allocated { thunk,
 ;; env } record), carried as :int. We want to apply it to one int arg.
 
-(defn apply-mw [^fat mw : (fn [int] :ptr<void>) cur : int] : int
+(defn apply-mw [^fat mw : (fn [int] : ptr<void>) cur : int] : int
   (mw cur))
 
 (defn fold [base : int mws : int] : int
@@ -100,7 +100,7 @@ the same five-line dispatch:
     base
     ;; list-head is :int; ascribe it to the closure's fn type so apply-mw's
     ;; ^fat parameter will dispatch it.
-    (apply-mw (:: (list-head mws) (fn [int] :ptr<void>))
+    (apply-mw (:: (list-head mws) (fn [int] : ptr<void>))
               (fold base (list-tail mws)))))
 ```
 

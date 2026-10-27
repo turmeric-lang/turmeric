@@ -83,7 +83,7 @@ sync/async server distinction.
 A `mw-basic-auth` verifier that captures nothing:
 
 ```turmeric
-verify (fn [u :cstr p :cstr] :int
+verify (fn [u : cstr p : cstr] : int
          (if (= 1 (cstr-eq-const-time u "admin"))
            (cstr-eq-const-time p "s3cret")
            0))
@@ -111,7 +111,7 @@ verifier that *captures* an outer binding:
 
 ```turmeric
 _tag   "secret"
-verify (fn [u :cstr p :cstr] :int
+verify (fn [u : cstr p : cstr] : int
          (let [_t _tag]                      ; <-- forces a real fat closure
            (if (= 1 (cstr-eq-const-time u "admin"))
              (cstr-eq-const-time p "s3cret")

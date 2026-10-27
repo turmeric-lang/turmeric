@@ -52,10 +52,10 @@ of reporting.
 ### (A) annotated form rejects an inline capturing lambda
 
 ```turmeric
-(defn run-with [^fat g :(fn [:int] #{} :int) x :int] :int (g x))
-(defn main [] :int
+(defn run-with [^fat g : (fn [:int] #{} : int) x : int] : int (g x))
+(defn main [] : int
   (let [n 10]
-    (println (run-with (fn [x :int] :int (+ x n)) 5)))   ;; captures n
+    (println (run-with (fn [x : int] : int (+ x n)) 5)))   ;; captures n
   0)
 ```
 ```
@@ -65,9 +65,9 @@ error: ... (rejected at the (fn [x :int] :int (+ x n)) argument)
 ### (B) annotated form rejects a capturing closure via a variable
 
 ```turmeric
-(defn run-with [^fat g :(fn [:int] #{} :int) x :int] :int (g x))
-(defn make-adder [n :int] :ptr<void> (fn [x :int] :int (+ x n)))
-(defn main [] :int
+(defn run-with [^fat g : (fn [:int] #{} : int) x : int] : int (g x))
+(defn make-adder [n : int] : ptr<void> (fn [x : int] : int (+ x n)))
+(defn main [] : int
   (let [f (make-adder 10)]
     (println (run-with f 5)))    ;; f : :ptr<void> -- does not unify with :(fn ...)
   0)
@@ -79,9 +79,9 @@ error: ... (rejected at the f argument)
 ### (C) bare form accepts the closure but is not callable
 
 ```turmeric
-(defn run-with [^fat g x :int] :int (g x))   ;; g : :ptr<void>
-(defn make-adder [n :int] :ptr<void> (fn [x :int] :int (+ x n)))
-(defn main [] :int
+(defn run-with [^fat g x : int] : int (g x))   ;; g : :ptr<void>
+(defn make-adder [n : int] : ptr<void> (fn [x : int] : int (+ x n)))
+(defn main [] : int
   (let [f (make-adder 10)]
     (println (run-with f 5)))
   0)
@@ -95,9 +95,9 @@ error: 'g' is not a function or continuation
 ### (D) what actually works -- captureless lambda + annotated form
 
 ```turmeric
-(defn run-with [^fat g :(fn [:int] #{} :int) x :int] :int (g x))
-(defn main [] :int
-  (println (run-with (fn [x :int] :int (+ x 1)) 5))   ;; => 6
+(defn run-with [^fat g : (fn [:int] #{} : int) x : int] : int (g x))
+(defn main [] : int
+  (println (run-with (fn [x : int] : int (+ x 1)) 5))   ;; => 6
   0)
 ```
 

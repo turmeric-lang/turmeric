@@ -54,7 +54,7 @@ resolution: 2026-06-11. All three items now fixed.
 The ECS plan describes typeclass-bounded systems with the syntax
 
 ```turmeric
-(defn integrate [W] [(HasPos W) (HasVel W)] [w : W dt : float] :void
+(defn integrate [W] [(HasPos W) (HasVel W)] [w : W dt : float] : void
   ...)
 ```
 

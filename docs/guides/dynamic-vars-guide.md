@@ -154,10 +154,10 @@ affect any other thread's view of the var.
 ```sweet-exp
 defdynamic *locale* :cstr "en-US"
 
-defn show-locale [] :int
+defn show-locale [] : int
   println(*locale*)
 
-defn use-fr [] :int
+defn use-fr [] : int
   binding [*locale* "fr-FR"]
     show-locale()   ; show-locale sees "fr-FR" from its callsite
   0
@@ -193,7 +193,7 @@ snapshot of the parent's current binding frame:
 (defn main [] : int
   (binding [*request-id* "req-1"]
     (let [t (spawn-conveying (fn [] (println *request-id*)))]
-      (set! *request-id* "req-2")   ; parent changes its own binding
+      (set! *request-id* "req-2")    ; parent changes its own binding
       (thread-join t)                ; child printed "req-1" (snapshot)
       (println *request-id*)))       ; prints "req-2"
   0)
@@ -204,12 +204,12 @@ load("stdlib/dynvar.tur")
 
 defdynamic *request-id* :cstr "none"
 
-defn thread-join [t :ptr<void>] :nil ...  ; see stdlib/thread.tur
+defn thread-join [t : ptr<void>] : nil ...  ; see stdlib/thread.tur
 
-defn main [] :int
+defn main [] : int
   binding [*request-id* "req-1"]
     let [t (spawn-conveying (fn [] println(*request-id*)))]
-      set!(*request-id* "req-2")   ; parent changes its own binding
+      set!(*request-id* "req-2")    ; parent changes its own binding
       thread-join(t)                ; child printed "req-1" (snapshot)
       println(*request-id*)         ; prints "req-2"
   0
@@ -272,12 +272,12 @@ overridden, never intercepted) or an interceptable operation.
 ;; Dynamic var: zero call-site annotation; no boundary handler required
 defdynamic *log-level* :int 1
 
-defn log-info [msg :cstr] :int
+defn log-info [msg : cstr] : int
   if {*log-level* >= 1}
     println(msg)
     0
 
-defn process [] :int
+defn process [] : int
   log-info("processing")
   42
 
@@ -306,7 +306,7 @@ binding [*log-level* 0]   ; one override, deep stack covered automatically
 ```sweet-exp
 defeffect DbEffect query([sql :str] :str)
 
-defn run-tests [] :unit
+defn run-tests [] : unit
   (handle
     (assert! {(query "SELECT 1") = "1"})
     [(DbEffect.query sql k) (resume k (mock-db-exec sql))])
@@ -345,12 +345,12 @@ bodies and `perform` may appear inside `binding` bodies without interaction.
 ```sweet-exp
 defdynamic *log-level* :int 1
 
-defn log-debug [msg :cstr] :int
+defn log-debug [msg : cstr] : int
   if {*log-level* = 0}
     println(msg)
     0
 
-defn run-verbose [thunk] :int
+defn run-verbose [thunk] : int
   binding [*log-level* 0]
     thunk()
 ```
@@ -372,10 +372,10 @@ defn run-verbose [thunk] :int
 ```sweet-exp
 defdynamic *db* :int 0   ; :int as a stand-in for a connection handle
 
-defn query [sql :cstr] :int
+defn query [sql : cstr] : int
   *db*
 
-defn run-tests [] :int
+defn run-tests [] : int
   binding [*db* 42]   ; inject test connection
     println(query("SELECT 1"))
   0
@@ -399,11 +399,11 @@ defn run-tests [] :int
 ```sweet-exp
 load("stdlib/dynvar.tur")   ; provides *current-module*
 
-defn log [msg :cstr] :int
+defn log [msg : cstr] : int
   println(*current-module*)
   println(msg)
 
-defn start-auth-module [] :int
+defn start-auth-module [] : int
   binding [*current-module* "auth"]
     log("starting")
   0

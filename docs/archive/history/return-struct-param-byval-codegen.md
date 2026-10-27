@@ -29,7 +29,7 @@ by value" is wrong).
 (defn pick [a : B4 b : B4] : B4
   (if (is-z a) b                                      ;; returning param b
     (if (is-z b) a                                    ;; returning param a
-      (make-struct B4 (.a a) (.b b) (.c a) (.d b)))))  ;; this branch is fine
+      (make-struct B4 (.a a) (.b b) (.c a) (.d b))))) ;; this branch is fine
 ;; tur run =>
 ;;   cc: error: incompatible types when assigning to type 'B4' from type 'const B4 *'
 ;;     B4 __t42; ... __t42 = b;   // b is `const B4 *`; assigns pointer -> value

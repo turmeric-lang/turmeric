@@ -55,7 +55,7 @@ not affected.
   (fmap [c f] (__fmap_vec c f)))
 
 ;; Returns an option, but the return type annotation is :int.
-(defn mk [] :int (__opt_some 42))
+(defn mk [] : int (__opt_some 42))
 
 ;; obj has type TY_INT at this call site.
 ;; First-match picks Functor[option] -- happens to be correct here only

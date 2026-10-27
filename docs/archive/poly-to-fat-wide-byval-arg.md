@@ -25,7 +25,7 @@ The shim agreed with neither of the other two.
 `Tuple3 int int int` is 24 bytes, so `sum3` takes `const T *`.
 
 ```turmeric
-(defn call-t3 [^fat f :(fn [(Tuple3 int int int)] #fx{} int)
+(defn call-t3 [^fat f : (fn [(Tuple3 int int int)] #fx{} int)
                x : (Tuple3 int int int)] : int
   (f x))
 
@@ -56,7 +56,7 @@ not.
 ## Repro B -- undefined behaviour that returned the right answer
 
 ```turmeric
-(defn call-tf [^fat f :(fn [(Tuple2 float float)] #fx{} float)
+(defn call-tf [^fat f : (fn [(Tuple2 float float)] #fx{} float)
                x : (Tuple2 float float)] : float
   (f x))
 ```

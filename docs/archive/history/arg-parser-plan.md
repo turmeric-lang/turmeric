@@ -11,14 +11,14 @@ The [CLI Arguments plan](cli-arguments-plan.md) introduces raw argument passing 
 ### 1. API Design
 - Provide a `parse-args` function that takes a specification and the raw `*args*` list:
   ```turmeric
-  (defn parse-args [spec args] :map
+  (defn parse-args [spec args] : map
     "Parses CLI arguments according to the given spec.")
   ```
 
 - **Spec Format**:
   ```turmeric
   {:flags       ["--verbose" "--help"]          ; boolean flags
-   :options     {"--input"  :string               ; bare keyword = required, no default
+   :options     {"--input"  :string             ; bare keyword = required, no default
                 "--count"  {:type :int    :default 1}
                 "--output" {:type :string :default "out.txt"}}
    :args        [:string :string]                 ; positional args

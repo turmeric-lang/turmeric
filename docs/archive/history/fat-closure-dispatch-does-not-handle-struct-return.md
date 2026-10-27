@@ -27,14 +27,14 @@ This was surfaced by spike G4 of
   (fn [x : float] : float (* x k)))
 
 (defn pair-signals
-  [^fat sa :(fn [:float] #{} :float)
-   ^fat sb :(fn [:float] #{} :float)] : ptr<void>
+  [^fat sa : (fn [:float] #{} : float)
+   ^fat sb : (fn [:float] #{} : float)] : ptr<void>
   (let [av sa bv sb]
     (fn [t : float] : (Pair float float)
       (make-struct Pair (av t) (bv t)))))
 
 (defn call-pair
-  [^fat f :(fn [:float] #{} :(Pair float float)) t : float] : (Pair float float)
+  [^fat f : (fn [:float] #{} : (Pair float float)) t : float] : (Pair float float)
   (f t))
 
 (defn main [] : int

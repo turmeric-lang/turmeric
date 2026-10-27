@@ -473,7 +473,7 @@
 ;;;   m2      -- second MutableMap[K V]
 ;;;   i       -- current slot index (start at 0)
 ;;;   cap     -- slot bound (mutmap-cap m1)
-;;;   val-cmp -- value comparator fn [a :V b :V] :bool
+;;;   val-cmp -- value comparator fn [a : V b : V] : bool
 ;;;
 ;;; Returns:
 ;;;   true iff every live entry of m1[i..cap) is present in m2 with an
@@ -511,7 +511,7 @@
 ;;; Parameters:
 ;;;   m1     -- MutableMap[K V]
 ;;;   m2     -- MutableMap[K V]
-;;;   val-cmp -- comparator fn [a :int b :int] :bool for values
+;;;   val-cmp -- comparator fn [a : int b : int] : bool for values
 ;;;
 ;;; Returns:
 ;;;   true iff m1 and m2 have the same set of (key, value) pairs.

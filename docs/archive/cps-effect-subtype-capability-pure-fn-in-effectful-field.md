@@ -29,7 +29,7 @@ class: effect *subtyping* (a pure value `#fx{}` satisfies an effectful field `#f
 ## The fixture
 
 ```turmeric
-(defeffect Write [s :cstr] :nil)
+(defeffect Write [s : cstr] : nil)
 (defstruct Action :copy [run : fn #fx{Write}])   ; capability field DECLARED effectful
 
 (defn pure-greet [msg : cstr]                     ; but the value stored is PURE

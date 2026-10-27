@@ -38,7 +38,7 @@ fallback before the capture machinery runs.
 ## Minimal repro
 
 ```turmeric
-(defeffect E [] :int)
+(defeffect E [] : int)
 (defn g [] : int (perform (E)))
 (defn f [] : int
   (let [r (rc/of 5)]

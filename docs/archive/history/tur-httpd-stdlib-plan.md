@@ -35,7 +35,7 @@ The listener thread runs a `tur/reactor` loop:
 ```turmeric
 (import reactor)
 
-(defn httpd-listener [listen-fd :int stop-ch :ptr<void>] :nil
+(defn httpd-listener [listen-fd : int stop-ch : ptr<void>] : nil
   (let [r (reactor-new)]
     ;; Accept loop: each ready event calls accept() and hands the
     ;; socket to the worker pool.
@@ -89,33 +89,33 @@ The listener's `reactor-add-chan` source fires on the next poll, calls
 
 ```turmeric
 ;; Create an httpd instance.
-(defn httpd-new [port :int handler :fn<Request :nil>] :Httpd ...)
+(defn httpd-new [port : int handler : fn<Request :nil>] : Httpd ...)
 
 ;; Start listening. Blocks until httpd-stop is called.
-(defn httpd-run [h :Httpd] :nil ...)
+(defn httpd-run [h : Httpd] : nil ...)
 
 ;; Ask httpd-run to return after the current request batch.
 ;; Thread-safe (delegates to reactor-stop on the listener reactor).
-(defn httpd-stop [h :Httpd] :nil ...)
+(defn httpd-stop [h : Httpd] : nil ...)
 
 ;; Free all resources.
-(defn httpd-free [h :Httpd] :nil ...)
+(defn httpd-free [h : Httpd] : nil ...)
 ```
 
 ### Request and Response types
 
 ```turmeric
 (defstruct Request
-  [method  :cstr
-   path    :cstr
-   version :cstr
-   headers :ptr<void>   ;; vec of (name, value) pairs
-   body    :cstr])
+  [method  : cstr
+   path    : cstr
+   version : cstr
+   headers : ptr<void>   ;; vec of (name, value) pairs
+   body    : cstr])
 
 (defstruct Response
-  [status  :int
-   headers :ptr<void>   ;; vec of (name, value) pairs
-   body    :cstr])
+  [status  : int
+   headers : ptr<void>   ;; vec of (name, value) pairs
+   body    : cstr])
 ```
 
 ---

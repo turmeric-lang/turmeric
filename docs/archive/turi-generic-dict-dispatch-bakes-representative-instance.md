@@ -66,7 +66,7 @@ exercise is unaffected.
     return tur_hamt_count(m->hamt);
     ```))
 
-(defn count-it [^Size A] [x :A] :int (size x))   ; generic-dict driver
+(defn count-it [^Size A] [x : A] : int (size x))   ; generic-dict driver
 
 (defn main [] : int
   (let [m0 (:: (map-new) (Map cstr int))

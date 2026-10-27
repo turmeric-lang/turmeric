@@ -74,9 +74,9 @@ captured outer parameter.
 ```turmeric
 (defn make-sf-no-call []
   (fn [^fat sig : (fn [float] float)]
-    (fn [t :float] :float 0.0)))
+    (fn [t : float] : float 0.0)))
 
-(defn drive-a [^fat input : (fn [float] float)] :float
+(defn drive-a [^fat input : (fn [float] float)] : float
   (let [sf  (make-sf-no-call)
         out (sf input)]
     (out 0.0)))
@@ -87,9 +87,9 @@ captured outer parameter.
 ```turmeric
 (defn make-sf-with-call []
   (fn [^fat sig : (fn [float] float)]
-    (fn [t :float] :float (sig t))))
+    (fn [t : float] : float (sig t))))
 
-(defn drive-b [^fat input : (fn [float] float)] :float
+(defn drive-b [^fat input : (fn [float] float)] : float
   (let [sf  (make-sf-with-call)
         out (sf input)]
     (out 0.0)))

@@ -82,7 +82,7 @@ which is most fallible resource code:
   (if (= h 0)
     (err "allocation failed")
     (let [_  (compute-into (scratch-ptr h))
-          r  (wrap (scratch-ptr h) n)      ;; the Result
+          r  (wrap (scratch-ptr h) n)     ;; the Result
           _2 (scratch-free h)]            ;; cleanup AFTER producing it
       r)))
 ```

@@ -38,7 +38,7 @@ compiled binary, and the `--interpret` path was deliberately made to match it
 `tests/fixtures/multishot-handler/input.tur`:
 
 ```turmeric
-(defeffect Ask [] :int)
+(defeffect Ask [] : int)
 (defn main [] : int
   (let [r (handle (perform (Ask))
             (Ask [] ^multishot k)

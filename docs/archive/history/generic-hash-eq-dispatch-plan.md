@@ -413,8 +413,8 @@ With GHE0--GHE2 in place, `stdlib/map.tur` now carries (inline constraint form
 `[^Hash K ^Eq K V]`, which is how the codebase spells constrained generics):
 
 ```turmeric
-(defn map-assoc-g [^Hash K ^Eq K V] [m :int key :K val :V] :int
-  (map-assoc-eq m (hash key) key val (fn [a :K b :K] :bool (eq? a b))))
+(defn map-assoc-g [^Hash K ^Eq K V] [m : int key : K val : V] : int
+  (map-assoc-eq m (hash key) key val (fn [a : K b : K] : bool (eq? a b))))
 ```
 
 plus `map-get-g` / `map-has-g?` / `map-dissoc-g`. The inline comparator

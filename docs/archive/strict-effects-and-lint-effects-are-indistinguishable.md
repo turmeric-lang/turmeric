@@ -43,7 +43,7 @@ flags are the same flag.
 ## Minimal repro
 
 ```turmeric
-(defeffect Bang [] :nil)
+(defeffect Bang [] : nil)
 (defn boom [] : int (do (perform (Bang)) 0))
 (defn main [] : int 0)
 ```

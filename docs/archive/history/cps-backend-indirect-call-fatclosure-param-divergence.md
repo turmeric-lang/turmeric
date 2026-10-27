@@ -31,7 +31,7 @@ because the CPS backend and the direct emitter disagree on how a fn-value
 ## Minimal repro (with indirect-call delegation enabled; reverted)
 
 ```turmeric
-(defeffect E [] :int)
+(defeffect E [] : int)
 (defn g [] : int (perform (E)))
 (defn dbl [n : int] : int (* n 2))
 (defn f [fnv : (fn [int] int)] : int

@@ -286,7 +286,7 @@
 ;;;               return the effect of the whole new container -- e.g. an
 ;;;               Option of a list that is none if any element gave none.
 ;;;
-;;; The v1 signature is the simplified `traverse [ta fn] :int` (the Haskell
+;;; The v1 signature is the simplified `traverse [ta fn] : int` (the Haskell
 ;;; one is `Applicative f => (a -> f b) -> t a -> f (t b)`), and the stdlib
 ;;; ships no instance yet.
 ;;;

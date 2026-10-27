@@ -9,7 +9,7 @@ parameter directly avoids it. Found 2026-10-07 while fixing
 ## Repro
 
 ```turmeric
-(defeffect Ask [] :int)
+(defeffect Ask [] : int)
 (defn via-let [g : (fn [int] int) x : int] : int
   (let [f g]
     (f x)))

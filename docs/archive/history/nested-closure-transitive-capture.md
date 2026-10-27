@@ -32,10 +32,10 @@ frame, which the middle closure never captured.
 ## Minimal repro
 
 ```turmeric
-(defn adder [n :int] : (fn [:int] (fn [:int] :int))
-  (fn [x :int] : (fn [:int] :int)
-    (fn [y :int] :int (+ (+ x y) n))))   ;; inner reads x (parent) AND n (grandparent)
-(defn main [] :int 0)
+(defn adder [n : int] : (fn [:int] (fn [:int] : int))
+  (fn [x : int] : (fn [:int] : int)
+    (fn [y : int] : int (+ (+ x y) n))))   ;; inner reads x (parent) AND n (grandparent)
+(defn main [] : int 0)
 ```
 
 ```sh

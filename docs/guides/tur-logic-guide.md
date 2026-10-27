@@ -539,7 +539,7 @@ For relations that revisit the same subgoal, add a memo table keyed on
 ;; memo-table: map from (goal-name x subs-hash) -> result-list
 ;; Use tur/hamt for the persistent map.
 import tur/hamt :refer [hamt-empty hamt-insert hamt-lookup]
-defn tabled [name goal-fn args subs] :int
+defn tabled [name goal-fn args subs] : int
   let [key  (hash-key name args subs)
        memo (hamt-lookup *memo-table* key)]
     if option-some?(memo)

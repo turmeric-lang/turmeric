@@ -30,8 +30,8 @@ the emission does not yet support the interior perform (a bounded probe miscompi
 ## Minimal repro
 
 ```turmeric
-(defeffect Log [msg :cstr] :nil)
-(defeffect Write [msg :cstr] :nil)
+(defeffect Log [msg : cstr] : nil)
+(defeffect Write [msg : cstr] : nil)
 (defn main [] : int
   (handle                                         ; outer: handles Write
     (handle                                       ; inner: handles Log

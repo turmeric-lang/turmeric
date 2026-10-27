@@ -95,7 +95,7 @@ parameter:
   ;; rest is a cons-list of :cstr; walk it with head/tail helpers
   ...)
 
-(println-all "hello")          ;; rest = nil
+(println-all "hello")         ;; rest = nil
 (println-all "a" "b" "c")     ;; rest = cons("b", cons("c", 0))
 ```
 ```sweet-exp

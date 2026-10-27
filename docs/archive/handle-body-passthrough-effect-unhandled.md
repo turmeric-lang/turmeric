@@ -21,8 +21,8 @@ reference semantics disagree with the expected result too.
 ## Minimal repro
 
 ```turmeric
-(defeffect A [] :int)
-(defeffect B [] :int)
+(defeffect A [] : int)
+(defeffect B [] : int)
 
 ;; mixer handles A locally; it performs B, which must reach main's B handler.
 (defn mixer [] #fx{B} : int

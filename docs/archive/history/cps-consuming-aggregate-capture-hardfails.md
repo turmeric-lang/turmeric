@@ -70,7 +70,7 @@ rejected up front with TUR-E0107 (see "The consuming variant" above).
 
 ```turmeric
 (defstruct Own [r : rc<int> tag : int])
-(defeffect E [] :int)
+(defeffect E [] : int)
 (defn g [] : int (let [a (perform (E))] (let [b (perform (E))] (+ a b))))
 (defn f [] : int
   (let [o (make-struct Own :r (rc/of 7) :tag 9)]

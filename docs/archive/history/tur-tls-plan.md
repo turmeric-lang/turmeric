@@ -197,36 +197,36 @@ than a TCP reset.
 ```turmeric
 ;; -- tls/ctx -----------------------------------------------------------------
 
-(defn tls-ctx-new [] :ptr<void>)
+(defn tls-ctx-new [] : ptr<void>)
 ;;   New mbedTLS server context with TLS 1.2+ defaults.
 
-(defn tls-ctx-free [ctx :ptr<void>] :nil)
+(defn tls-ctx-free [ctx : ptr<void>] : nil)
 
-(defn tls-ctx-load-cert-pem [ctx :ptr<void> path :cstr] :int)
+(defn tls-ctx-load-cert-pem [ctx : ptr<void> path : cstr] : int)
 ;;   Load a PEM cert chain.  Returns 0 on success.
 
-(defn tls-ctx-load-key-pem [ctx :ptr<void> path :cstr] :int)
+(defn tls-ctx-load-key-pem [ctx : ptr<void> path : cstr] : int)
 ;;   Load a PEM private key.  Returns 0 on success.
 
-(defn tls-ctx-set-ciphers [ctx :ptr<void> spec :cstr] :int)
+(defn tls-ctx-set-ciphers [ctx : ptr<void> spec : cstr] : int)
 ;;   Restrict ciphersuites by ASCII spec; "" keeps mbedTLS defaults.
 
 ;; -- tls/conn ----------------------------------------------------------------
 
-(defn tls-wrap-fd [ctx :ptr<void> fd :int] :ptr<void>)
+(defn tls-wrap-fd [ctx : ptr<void> fd : int] : ptr<void>)
 ;;   Allocate a tls_conn_t bound to fd.  Does NOT block.
 
-(defn tls-handshake [conn :ptr<void>] :int)
+(defn tls-handshake [conn : ptr<void>] : int)
 ;;   Drive the handshake to completion.  Returns 0 on success.
 
-(defn tls-read  [conn :ptr<void> buf :ptr<void> len :int] :int)
-(defn tls-write [conn :ptr<void> buf :ptr<void> len :int] :int)
+(defn tls-read  [conn : ptr<void> buf : ptr<void> len : int] : int)
+(defn tls-write [conn : ptr<void> buf : ptr<void> len : int] : int)
 ;;   Same semantics as recv/send: bytes transferred or -1 on error.
 
-(defn tls-shutdown [conn :ptr<void>] :nil)
+(defn tls-shutdown [conn : ptr<void>] : nil)
 ;;   Send close_notify (best-effort) before closing the fd.
 
-(defn tls-free [conn :ptr<void>] :nil)
+(defn tls-free [conn : ptr<void>] : nil)
 ```
 
 ### Self-signed cert helper (test-only)

@@ -189,13 +189,13 @@ A defer fires at the end of a transaction, after commit or abort. Register them 
 ```
 
 ````sweet-exp
-defn register-commit-defer [env-ptr fn-ptr] :void
+defn register-commit-defer [env-ptr fn-ptr] : void
   ```c
   STM_Transaction *tx = tur_stm_current_tx();
   tur_stm_defer_on_commit(tx, (stm_defer_fn_t)fn_ptr, env_ptr);
   ```
 
-defn register-abort-defer [env-ptr fn-ptr] :void
+defn register-abort-defer [env-ptr fn-ptr] : void
   ```c
   STM_Transaction *tx = tur_stm_current_tx();
   tur_stm_defer_on_abort(tx, (stm_defer_fn_t)fn_ptr, env_ptr);
@@ -244,7 +244,7 @@ Up to 32 defers per transaction; exceeding this panics.
 
 ```sweet-exp
 ;; An empty slot is represented as null (sketch)
-defn tmvar/new [] :ptr
+defn tmvar/new [] : ptr
   tvar/new(ptr/null())
 
 defn tmvar/take [mv]
@@ -283,7 +283,7 @@ defn tmvar/put [mv val]
 
 ```sweet-exp
 ;; Backed by a TVar holding a list (sketch)
-defn tchan/new [] :ptr
+defn tchan/new [] : ptr
   tvar/new('())
 
 defn tchan/write [ch val]

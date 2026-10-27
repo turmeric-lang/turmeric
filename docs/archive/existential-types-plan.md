@@ -42,7 +42,7 @@ convert in both directions:
   ...)
 
 ;; Pack any SizedVec back into a Vec (existential introduction):
-(defn vec-of-sized [sv :SizedVec[n A]] :Vec[A]
+(defn vec-of-sized [sv : SizedVec[n A]] : Vec[A]
   (pack sv as Vec[A]))
 ```
 

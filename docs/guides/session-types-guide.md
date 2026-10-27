@@ -142,7 +142,7 @@ loop iteration:
 
 ```turmeric
 ;; Server: repeat (recv int, send int) until client closes
-(defn echo-server [^linear ch :(Session (Rec self (Branch (Recv int (Send int self)) Close)))] : nil
+(defn echo-server [^linear ch : (Session (Rec self (Branch (Recv int (Send int self)) Close)))] : nil
   (match (offer ch)
     (Left ch)
       (let [[n ch] (recv ch)
@@ -154,7 +154,7 @@ loop iteration:
 
 ```sweet-exp
 ;; Server: repeat (recv int, send int) until client closes
-defn echo-server [^linear ch :(Session (Rec self (Branch (Recv int (Send int self)) Close)))] :nil
+defn echo-server [^linear ch : (Session (Rec self (Branch (Recv int (Send int self)) Close)))] : nil
   match offer(ch)
     (Left ch)
     let [[n ch] recv(ch)
@@ -226,9 +226,9 @@ perform effects while holding a linear channel, as long as the channel is
 consumed exactly once along every code path:
 
 ```turmeric
-(defeffect Log [msg :cstr] :nil)
+(defeffect Log [msg : cstr] : nil)
 
-(defn logged-send [^linear ch :(Session (Send int Close)) val : int] : int
+(defn logged-send [^linear ch : (Session (Send int Close)) val : int] : int
   (perform (Log "before send"))
   (let [ch (send ch val)]
     (close ch)
@@ -236,9 +236,9 @@ consumed exactly once along every code path:
 ```
 
 ```sweet-exp
-defeffect Log [msg :cstr] :nil
+defeffect Log [msg : cstr] : nil
 
-defn logged-send [^linear ch :(Session (Send int Close)) val :int] :int
+defn logged-send [^linear ch : (Session (Send int Close)) val : int] : int
   perform(Log("before send"))
   let [ch send(ch val)]
     close(ch)
@@ -361,13 +361,13 @@ Full two-role ping example:
   (-> A B int)
   (-> B A int))
 
-(defn role-a [^linear ch :(Role Ping A)] : nil
+(defn role-a [^linear ch : (Role Ping A)] : nil
   (let [ch     (send-to ch B 42)
         [v ch] (recv-from ch B)]
     (println v)
     (close ch)))
 
-(defn role-b [^linear ch :(Role Ping B)] : nil
+(defn role-b [^linear ch : (Role Ping B)] : nil
   (let [[v ch] (recv-from ch A)
         ch     (send-to ch A v)]
     (close ch)))
@@ -385,18 +385,18 @@ defprotocol Ping [A B]
   (-> A B int)
   (-> B A int)
 
-defn role-a [^linear ch :(Role Ping A)] :nil
+defn role-a [^linear ch : (Role Ping A)] : nil
   let [ch     send-to(ch B 42)
        [v ch] recv-from(ch B)]
     println(v)
     close(ch)
 
-defn role-b [^linear ch :(Role Ping B)] :nil
+defn role-b [^linear ch : (Role Ping B)] : nil
   let [[v ch] recv-from(ch A)
        ch     send-to(ch A v)]
     close(ch)
 
-defn main [] :int
+defn main [] : int
   let [[ra rb] make-protocol(Ping)
        t       session-spawn((fn [] role-b(rb)))]
     role-a(ra)
@@ -429,7 +429,7 @@ defprotocol Pipeline [A B C]
   (-> A B int)   ; A sends to B
   (-> B C int)   ; B forwards to C
 
-defn main [] :int
+defn main [] : int
   let [[ra rb rc] make-protocol(Pipeline)
        ta         session-spawn((fn [] role-a(ra)))
        tb         session-spawn((fn [] role-b(rb)))]
@@ -470,7 +470,7 @@ part of the protocol -- the receiver supplies it, in milliseconds, at the op.
 value and the endpoint at `ok`, `Right` for the endpoint at `expired`:
 
 ```turmeric
-(defn relay-b [^linear ch :(Role Relay B)] : nil
+(defn relay-b [^linear ch : (Role Relay B)] : nil
   (match (recv-timeout-from ch A 500)
     (Left pair)
       (let [[v ch] pair]
@@ -480,7 +480,7 @@ value and the endpoint at `ok`, `Right` for the endpoint at `expired`:
 ```
 
 ```sweet-exp
-defn relay-b [^linear ch :(Role Relay B)] :nil
+defn relay-b [^linear ch : (Role Relay B)] : nil
   match recv-timeout-from(ch A 500)
     (Left pair)
     let [[v ch] pair]

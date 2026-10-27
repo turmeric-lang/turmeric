@@ -112,7 +112,7 @@ surrounding form decides whether it is read as a binding spec or a value.
 (def v [1 2 3])                           ; [1 2 3] is a vec literal
 ```
 ```sweet-exp
-defn add [x :int y :int] :int
+defn add [x : int y : int] : int
   {x + y}
 ; [x :int y :int] is a param list
 let [a 1 b 2]
@@ -209,7 +209,7 @@ exactly as `vec-of` reports one at `vec-push!`. A set of mixed values is spelled
 
 ```turmeric no-check
 (set-of (:: 1 any) (:: "two" any) (:: 7.1 any) (:: "two" any))  ; => (Set any), 3 members
-(set-member? s (hash 1) 1)                                       ; => true
+(set-member? s (hash 1) 1)                                      ; => true
 ```
 
 In a `#lang saffron` file the literal does this widen itself, so
@@ -397,14 +397,14 @@ and curly-infix arithmetic:
 ```turmeric no-check
 #lang sweet-exp
 
-(defn build [] :int
+(defn build [] : int
   (let [m #map{:a 1 :b 2}]
     map-count(m)))
 ```
 ```sweet-exp
 #lang sweet-exp
 
-defn build [] :int
+defn build [] : int
   let [m #map{:a 1 :b 2}]
     map-count(m)
 ```

@@ -42,7 +42,7 @@ The fn-type codemod rewrites the redundant leading colon on inner
 parameter/result types of an `(fn ...)` type:
 
 ```turmeric
-(defn either-map [^fat f : (fn [int] :int) e : int] : int ...)
+(defn either-map [^fat f : (fn [int] : int) e : int] : int ...)
 ;; ->
 (defn either-map [^fat f : (fn [int] int) e : int] : int ...)
 ```

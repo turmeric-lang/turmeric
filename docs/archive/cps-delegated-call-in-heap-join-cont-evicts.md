@@ -28,7 +28,7 @@ reified continuation contains a *delegated (direct-emitted) user-function call*
 ## Minimal repro
 
 ```turmeric
-(defeffect Write [msg :cstr] :nil)
+(defeffect Write [msg : cstr] : nil)
 (defn greet [name : cstr] #fx{Write} : nil (perform (Write name)))
 (defn add-int [x : int y : int] : int (+ x y))          ; a PURE user fn
 (defn main [] : int

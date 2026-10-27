@@ -37,7 +37,7 @@ Every function-applying helper in `stdlib/arrow.tur` invokes its callable
 argument as a **bare** function pointer with no environment slot:
 
 ```turmeric
-(defn __arrow_call1 [f x] :int
+(defn __arrow_call1 [f x] : int
   ```c return ((int64_t(*)(int64_t))(intptr_t)f)(x); ```)
 ```
 
@@ -60,12 +60,12 @@ Minimal reproduction of the exact cast `__arrow_call1` uses, applied to a
 capturing closure (`make-add` closes over `n`):
 
 ```turmeric
-(defn thin-call [f x] :int                       ;; == __arrow_call1
+(defn thin-call [f x] : int                       ;; == __arrow_call1
   ```c return ((int64_t(*)(int64_t))(intptr_t)f)(x); ```)
 (defn fat-call [f x] :int                        ;; correct fat dispatch
   ```c return TUR_APPLY1(f, x); ```)
-(defn make-add [n :int] :ptr<void> (fn [x :int] :int (+ x n)))
-(defn main [] :int
+(defn make-add [n : int] : ptr<void> (fn [x : int] : int (+ x n)))
+(defn main [] : int
   (let [f (make-add 100)]
     (println (fat-call f 5))     ;; => 105
     (println (thin-call f 5)))   ;; => Segmentation fault

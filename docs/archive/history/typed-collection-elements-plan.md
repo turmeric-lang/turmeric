@@ -41,8 +41,8 @@
 declare their element parameters as a literal `:int`:
 
 ```turmeric
-(defn vec-push! [v :int val :int] :nil ...)        ; stdlib/vec.tur:85
-(defn map-assoc [m :int key :int val :int] :int ...) ; stdlib/map.tur:64
+(defn vec-push! [v : int val : int] : nil ...)        ; stdlib/vec.tur:85
+(defn map-assoc [m : int key : int val : int] : int ...) ; stdlib/map.tur:64
 ```
 
 The `Vec [A]` (`vec.tur:12`) and `Map [K V]` (`map.tur:14`) type parameters
@@ -79,8 +79,8 @@ gain. Reproduce with `./build/tur run <file>`.
    carrier round-trips losslessly:
 
    ```turmeric
-   (defn vec-push-f! [v :int x :float] :nil (vec-push! v (:: x :int)))
-   (defn vec-get-f  [v :int i :int] :float (:: (vec-get v i) :float))
+   (defn vec-push-f! [v : int x : float] : nil (vec-push! v (:: x :int)))
+   (defn vec-get-f  [v : int i : int] : float (:: (vec-get v i) :float))
    ;; prints 1.5, 2.25 correctly
    ```
 
@@ -90,7 +90,7 @@ gain. Reproduce with `./build/tur run <file>`.
 2. **A bare tyvar into an `:int` param is rejected.**
 
    ```turmeric
-   (defn vpush! [A] [v :int x :A] :nil (vec-push! v x))
+   (defn vpush! [A] [v : int x : A] : nil (vec-push! v x))
    ;; TUR-E0001: function 'vec-push!' arg 2: expected int, got tyvar
    ```
 
@@ -121,7 +121,7 @@ gain. Reproduce with `./build/tur run <file>`.
    compiler change**:
 
    ```turmeric
-   (defn box-push! [A] [v :int x :A] :nil
+   (defn box-push! [A] [v : int x : A] : nil
      ```c ... vec->data[vec->len++] = x; ```)   ; emitted as (int64_t v, int64_t x)
    (box-push! vf 1.5)
    ;; emits: box_push_(vf, ((union { double s; int64_t d; }){.s = 1.5}).d)
@@ -239,10 +239,10 @@ unchanged.
   writing to the `int64_t` buffer):
 
   ```turmeric
-  (defn vec-push! [A] [v :int val :A] :nil ...)   ; body unchanged
-  (defn vec-get  [A] [v :int i :int]  :A   ...)   ; body unchanged
-  (defn vec-set! [A] [v :int i :int val :A] :void ...)
-  (defn vec-pop! [A] [v :int] :A ...)
+  (defn vec-push! [A] [v : int val : A] : nil ...)   ; body unchanged
+  (defn vec-get  [A] [v : int i : int]  : A   ...)   ; body unchanged
+  (defn vec-set! [A] [v : int i : int val : A] : void ...)
+  (defn vec-pop! [A] [v : int] : A ...)
   ```
 
   No `*-raw` split is needed -- the inline-C function *is* the carrier
@@ -302,8 +302,8 @@ element.
   unchanged:
 
   ```turmeric
-  (defn map-assoc [K V] [m :int key :K val :V] :int ...)
-  (defn map-get   [K V] [m :int h :int key :K] :V ...)
+  (defn map-assoc [K V] [m : int key : K val : V] : int ...)
+  (defn map-get   [K V] [m : int h : int key : K] : V ...)
   ```
 
 - Values bridge through the carrier-generic pattern exactly like Vec

@@ -8,7 +8,7 @@ for `any-struct-box-leak-per-widen`.
 ## Repro
 
 ```turmeric
-(defeffect Ask [] :int)
+(defeffect Ask [] : int)
 
 (defn with-any [v : any] : int (perform (Ask)))
 

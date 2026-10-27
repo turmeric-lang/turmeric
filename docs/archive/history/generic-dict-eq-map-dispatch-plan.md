@@ -34,7 +34,7 @@ extending the **dispatch-site synthesis** (`try_synth_recursive_eq` in
 The generic-dict path defeats that synthesis. In
 
 ```turmeric
-(defn eq2 [^Eq A] [a :A b :A] :bool (eq? a b))
+(defn eq2 [^Eq A] [a : A b : A] : bool (eq? a b))
 ```
 
 the body `(eq? a b)` is elaborated **once**, with `a : A` a *type variable*. The

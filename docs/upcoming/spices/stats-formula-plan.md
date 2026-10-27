@@ -138,7 +138,7 @@ turmeric-spices/spices/stats-formula/
 
 ;;; For identity terms that create computed columns:
 (defstruct identity-term
-  expr        :cstr   ;; the original expression inside I(...)
+  expr        :cstr  ;; the original expression inside I(...)
   computed-col :int) ;; new column handle (ownership: caller must free)
 ```
 
@@ -152,7 +152,7 @@ AST node types for formula terms:
 
 ```turmeric
 (defenum FormulaNodeTag
-  FORM_RESPONSE    ;; LHS of ~
+  FORM_RESPONSE   ;; LHS of ~
   FORM_PREDICTOR  ;; atomic predictor (column name)
   FORM_SUM        ;; A + B (list of terms)
   FORM_INTERACT   ;; A * B (interaction)

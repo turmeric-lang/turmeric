@@ -27,7 +27,7 @@ Three core primitives:
 
 ```turmeric
 ;; Declare an effect
-(defeffect Read [] :str)
+(defeffect Read [] : str)
 
 ;; Perform the effect
 (def name (perform (Read)))
@@ -40,7 +40,7 @@ Three core primitives:
 ```
 ```sweet-exp
 ;; Declare an effect
-defeffect Read [] :str
+defeffect Read [] : str
 
 ;; Perform the effect
 def name perform(Read())
@@ -269,7 +269,7 @@ as an exception handler ([async-await-guide](async-await-guide.md)).
   (println (handle (two-asks) (Ask [] k) (resume k 1)))          ; 11
   ;; shallow: it answers the first; the second reaches the outer handle
   (println (handle (handle-shallow (two-asks) (Ask [] k) (resume k 1))
-             (Ask [] k) (resume k 2)))                            ; 21
+             (Ask [] k) (resume k 2)))                           ; 21
   (println (try-with (two-asks) (Ask [] k) (resume k 4)))        ; 44
   0)
 ```
@@ -317,8 +317,8 @@ handler that declares it (`compose-handlers` does the same for handler values;
 see the next section):
 
 ```turmeric
-(defeffect Log [msg :cstr] :nil)
-(defeffect Counter [] :int)
+(defeffect Log [msg : cstr] : nil)
+(defeffect Counter [] : int)
 
 (handle
   (handle
@@ -328,8 +328,8 @@ see the next section):
 ;; prints "tick", evaluates to 42
 ```
 ```sweet-exp
-defeffect Log [msg :cstr] :nil
-defeffect Counter [] :int
+defeffect Log [msg : cstr] : nil
+defeffect Counter [] : int
 
 (handle
   (handle
@@ -354,8 +354,8 @@ and compose two of them.
   `(compose-handlers h1 h2)`; `h1` is the **outer** handler.
 
 ```turmeric
-(defeffect Log [msg :cstr] :nil)
-(defeffect Counter [] :int)
+(defeffect Log [msg : cstr] : nil)
+(defeffect Counter [] : int)
 
 ;; compose-handlers builds one handler value over both effects (h1 = Counter is
 ;; the outer handler).  Applying it is identical to the nested handle above.
@@ -367,8 +367,8 @@ and compose two of them.
 ;; prints "tick", evaluates to 42
 ```
 ```sweet-exp
-defeffect Log [msg :cstr] :nil
-defeffect Counter [] :int
+defeffect Log [msg : cstr] : nil
+defeffect Counter [] : int
 
 ;; compose-handlers builds one handler value over both effects (h1 = Counter is
 ;; the outer handler).  Applying it is identical to the nested handle above.
@@ -423,7 +423,7 @@ Implement generators, early returns, or custom exception handling:
 
 ```turmeric
 ;; Generator: yield values one at a time
-(defeffect Yield [v :int] :nil)
+(defeffect Yield [v : int] : nil)
 
 (handle
   (do
@@ -433,7 +433,7 @@ Implement generators, early returns, or custom exception handling:
 ```
 ```sweet-exp
 ;; Generator: yield values one at a time
-defeffect Yield [v :int] :nil
+defeffect Yield [v : int] : nil
 
 (handle
   (do
@@ -447,7 +447,7 @@ defeffect Yield [v :int] :nil
 Mock I/O operations in tests:
 
 ```turmeric
-(defeffect ReadFile [path :cstr] :str)
+(defeffect ReadFile [path : cstr] : str)
 
 ;; Production
 (handle code
@@ -458,7 +458,7 @@ Mock I/O operations in tests:
   (ReadFile [path] k) (resume k "mock data"))
 ```
 ```sweet-exp
-defeffect ReadFile [path :cstr] :str
+defeffect ReadFile [path : cstr] : str
 
 ;; Production
 (handle code
@@ -474,7 +474,7 @@ defeffect ReadFile [path :cstr] :str
 Automatic conflict resolution (see [STM Tutorial](stm-tutorial.md)):
 
 ```turmeric
-(defeffect Retry [] :nil)
+(defeffect Retry [] : nil)
 
 (handle
   (fn []
@@ -484,7 +484,7 @@ Automatic conflict resolution (see [STM Tutorial](stm-tutorial.md)):
   (Retry [] k) (resume k nil))
 ```
 ```sweet-exp
-defeffect Retry [] :nil
+defeffect Retry [] : nil
 
 (handle
   (fn []
@@ -513,20 +513,20 @@ An effect row appears between the parameter list and the return type:
   (+ a b))
 
 ;; Row-polymorphic: propagates the row of the function argument
-(defn run-twice [f :(fn [] #fx{e} int)] #fx{e} : int
+(defn run-twice [f : (fn [] #fx{e} int)] #fx{e} : int
   (+ (f) (f)))
 ```
 ```sweet-exp
 ;; Annotated: may perform the Write effect
-defn log-msg [msg :cstr] #fx{Write} :nil
+defn log-msg [msg : cstr] #fx{Write} : nil
   perform(Write(msg))
 
 ;; Pure: performs no effects
-defn add [a :int b :int] #fx{} :int
+defn add [a : int b : int] #fx{} : int
   {a + b}
 
 ;; Row-polymorphic: propagates the row of the function argument
-defn run-twice [f :(fn [] #fx{e} int)] #fx{e} :int
+defn run-twice [f : (fn [] #fx{e} int)] #fx{e} : int
   {f() + f()}
 ```
 
@@ -550,10 +550,10 @@ row to add (`add #fx{Bt} after its parameter vector`).
 Effects can be declared `^private` to prevent leakage outside their defining module:
 
 ```turmeric
-(defeffect ^private InternalLog [msg :cstr] :nil)
+(defeffect ^private InternalLog [msg : cstr] : nil)
 ```
 ```sweet-exp
-defeffect ^private InternalLog [msg :cstr] :nil
+defeffect ^private InternalLog [msg : cstr] : nil
 ```
 
 A `^private` effect cannot be `perform`ed or `handle`d outside the module that declares it.
@@ -584,12 +584,12 @@ opening a socket, reading the clock). To bring those under effect-row
 discipline, declare a **capability effect** with `^capability`:
 
 ```turmeric
-(defeffect IO [] :nil ^capability)
-(defeffect FS [] :nil ^extends IO ^capability)
+(defeffect IO [] : nil ^capability)
+(defeffect FS [] : nil ^extends IO ^capability)
 ```
 ```sweet-exp
-defeffect IO [] :nil ^capability
-defeffect FS [] :nil ^extends IO ^capability
+defeffect IO [] : nil ^capability
+defeffect FS [] : nil ^extends IO ^capability
 ```
 
 A capability effect is a coarse *authority* tag rather than something you

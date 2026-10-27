@@ -1,7 +1,9 @@
 // Try Turmeric editor: syntax highlighting of annotations and types.
 //
-// The docs pages colour `^annotations` purple and a type -- `:ptr<void>`, with
-// its generic arguments -- as one teal token, and the editor does the same.
+// A `^name` is read by what it means. Kinds (`^f`, `^^f`, `^&r`) and typeclass
+// constraints (`^Monoid`) share the type violet -- a type, `:ptr<void>` with
+// its generic arguments or `: cstr` with a space, is one token -- while the
+// closed list of modifiers (`^mut`, `^fat`) is teal and builtins are periwinkle.
 // The expected colours are read from web/editor-palette.json, the one place the
 // token colours are written down, so the test holds in either theme and fails
 // if the editor and the palette drift apart. (tests/check-editor-palette.py
@@ -22,17 +24,21 @@ const rgb = (hex) => {
 
 const SOURCE = [
     '(defn f [x :ptr<void> ^fat g :(fn [ptr<void>] nil)] :option<ptr<int>> x)',
-    '(defn step [^state/GameState s ^&cols c ^f m] :ptr<ptr<ptr<void>>> s)',
+    '(defn step [^state/GameState s ^&cols c ^f m ^^g n ^Monoid k] :ptr<ptr<ptr<void>>> s)',
+    '(extern-c sqrt [^float ^ptr<void>] :float)',
     'def ^mut counter 0',
     '(< a b) ; a ^note and a :type in a comment',
     '"a ^str :int ptr<void>"',
+    '(defn hello [name : cstr] : void)',
+    '(defn pick [m : option<ptr<int>>] : int m)',
+    '(defn each [x : (w a) g : (fn [int] int)] : (Option a) x)',
 ].join('\n');
 
 for (const scheme of ['dark', 'light']) {
 test.describe(`editor highlighting (${scheme})`, () => {
     test.use({ colorScheme: scheme });
 
-    test('annotations are purple and types are teal, each one token', async ({ page }) => {
+    test('modifiers are teal; kinds, constraints and types are violet; each one token', async ({ page }) => {
         await page.goto('/try/');
         await page.waitForFunction(() => !!window.turmericApp && !!window._turiEditor,
                                    null, { timeout: 30_000 });
@@ -56,14 +62,38 @@ test.describe(`editor highlighting (${scheme})`, () => {
             return hit ? hit[1] : undefined;
         };
 
-        // One token, caret and all: the whole symbol, in the annotation colour.
-        for (const ann of ['^fat', '^state/GameState', '^&cols', '^f', '^mut']) {
-            expect(colourOf(ann), `${ann} is one annotation token`).toBe(rgb(colours.annotation));
+        // One token, caret and all. A modifier from the closed list is teal ...
+        for (const ann of ['^fat', '^mut']) {
+            expect(colourOf(ann), `${ann} is one modifier token`).toBe(rgb(colours.annotation));
+        }
+        // ... a kind or a constraint is the type violet, whatever follows the caret.
+        for (const kind of ['^state/GameState', '^&cols', '^f', '^^g', '^Monoid']) {
+            expect(colourOf(kind), `${kind} is one kind token`).toBe(rgb(colours.kind));
+        }
+        // An extern-c parameter's C type is a type.
+        for (const t of ['^float', '^ptr<void>']) {
+            expect(colourOf(t), `${t} is a type token`).toBe(rgb(colours.type));
         }
         // One token, generic arguments and all: the whole type, in the type colour.
         for (const type of [':ptr<void>', 'ptr<void>', ':option<ptr<int>>', ':ptr<ptr<ptr<void>>>']) {
             expect(colourOf(type), `${type} is one type token`).toBe(rgb(colours.type));
         }
+
+        // The spaced spelling, `name : cstr` and `] : void`: the type name is
+        // a type token even though the colon stands apart from it.
+        for (const type of ['cstr', 'void', 'option<ptr<int>>']) {
+            expect(colourOf(type), `${type} after a spaced colon is a type token`).toBe(rgb(colours.type));
+        }
+
+        // A colon that stands alone is a type token whatever follows it: a name,
+        // as in `name : cstr`, or a parenthesised type, as in `x : (w a)`. Every
+        // separator in the source must match, not just those before a name.
+        // An uncoloured colon merges into the plain span beside it, so it is not
+        // a token of its own: the count is what shows one was missed.
+        const colons = spans.filter(([t]) => t === ':');
+        expect(colons.length, 'every standalone colon is its own type token')
+            .toBe((SOURCE.match(/ : /g) || []).length);
+        for (const [, colour] of colons) expect(colour).toBe(rgb(colours.type));
 
         // What did not change: less-than is still an operator, and a `^` or `:`
         // inside a comment or a string stays that comment or string.

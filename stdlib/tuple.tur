@@ -426,8 +426,8 @@
 ;;; Parameters:
 ;;;   t1     -- first Tuple2[A B]
 ;;;   t2     -- second Tuple2[A B]
-;;;   e1-cmp -- comparator for the first element  (fn [a b] :bool)
-;;;   e2-cmp -- comparator for the second element (fn [a b] :bool)
+;;;   e1-cmp -- comparator for the first element  (fn [a b] : bool)
+;;;   e2-cmp -- comparator for the second element (fn [a b] : bool)
 ;;;
 ;;; Returns:
 ;;;   true if both elements are equal under their comparators.

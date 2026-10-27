@@ -107,9 +107,9 @@ Current behavior:
 Observed syntax matrix:
 
 ```turmeric
-(defn id [a x :a] : a x)   ; works
 (defn id [a x : a] : a x)  ; works
-(defn id [a x : a] :a x)   ; fails today
+(defn id [a x : a] : a x)  ; works
+(defn id [a x : a] : a x)  ; fails today
 (defn id [A] [x : A] : A x); fails today
 ```
 
@@ -174,17 +174,17 @@ Add an explicit type-parameter vector immediately after the function
 name:
 
 ```turmeric
-(defn tcons [A] [h :A t :(Option (Cons A))] :(Cons A)
+(defn tcons [A] [h : A t : (Option (Cons A))] : (Cons A)
   ...)
 
-(defn thead [A] [xs :(Cons A)] :A
+(defn thead [A] [xs : (Cons A)] : A
   ...)
 ```
 
 Anonymous `fn` should get the analogous form:
 
 ```turmeric
-(fn [A] [x :A] :A x)
+(fn [A] [x : A] : A x)
 ```
 
 Compatibility / normalization rule:
@@ -193,16 +193,16 @@ Compatibility / normalization rule:
   spellings should work:
 
   ```turmeric
-  (defn id [A] [x :A] :A x)
+  (defn id [A] [x : A] : A x)
   (defn id [A] [x : A] : A x)
   ```
 
 - Existing implicit generic `defn` forms should also accept both:
 
   ```turmeric
-  (defn id [a x :a] : a x)
   (defn id [a x : a] : a x)
-  (defn id [a x :a] :a x)
+  (defn id [a x : a] : a x)
+  (defn id [a x : a] : a x)
   ```
 
 Rationale:
@@ -355,8 +355,8 @@ preserve the same type parameters as parameterized structs.
 **Surface syntax.**
 
 ```turmeric
-(defn id [A] [x :A] :A x)
-(fn [A] [x :A] :A x)
+(defn id [A] [x : A] : A x)
+(fn [A] [x : A] : A x)
 ```
 
 **Compiler changes.**

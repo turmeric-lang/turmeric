@@ -34,6 +34,12 @@ sentence above does not cover them. If you touch this file, check
 `ls docs/reported/` against it -- an index that silently omits a quarter of the
 directory is worse for triage than no index.
 
+## Found adding the instance-variance warning (filed 2026-10-27)
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [positive-fixture-expected-diag-ignored](positive-fixture-expected-diag-ignored.md) | low-medium (test rot) | `run.sh` reads `expected.diag` only for `errors/` fixtures, so five happy-path fixtures pin nothing. Two pins have drifted: `gadt-struct-namespace-prefer`'s warning was reworded, and `warn-no-entry-point-near-miss`'s `TUR-W0624` no longer fires at all |
+
 ## Found fixing the wasm32 MIR target's types (filed 2026-10-27)
 
 | Report | Severity | One line |

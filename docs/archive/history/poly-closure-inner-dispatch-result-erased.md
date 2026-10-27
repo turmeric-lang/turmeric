@@ -30,7 +30,7 @@ It works end-to-end for a **dispatch-free** inner body -- one that returns a
 captured value directly:
 
 ```turmeric
-(defn constant [A] [val :A] : ptr<void>
+(defn constant [A] [val : A] : ptr<void>
   (fn [t : float] : A val))      ; inner body is just `val`
 ```
 
@@ -44,7 +44,7 @@ It does **not** work when the inner body **fat-dispatches a captured closure**:
 
 ```turmeric
 (defn >>> [A B C]
-  [^fat f :(fn [A] B) ^fat g :(fn [B] C)] : ptr<void>
+  [^fat f : (fn [A] B) ^fat g : (fn [B] C)] : ptr<void>
   (let [fv f gv g] (fn [x : A] : C (gv (fv x)))))   ; inner body dispatches fv, gv
 ```
 
@@ -78,9 +78,9 @@ than a type substitution.
 ## Minimal repro
 
 ```turmeric
-(defn cmp [A B C] [^fat f :(fn [A] #{} B) ^fat g :(fn [B] #{} C)] : ptr<void>
+(defn cmp [A B C] [^fat f : (fn [A] #{} B) ^fat g : (fn [B] #{} C)] : ptr<void>
   (let [fv f gv g] (fn [x : A] : C (gv (fv x)))))
-(defn call-float [^fat f :(fn [float] #{} float) x : float] : float (f x))
+(defn call-float [^fat f : (fn [float] #{} float) x : float] : float (f x))
 (defn fadd  [x : float] : float (+ x 0.25))
 (defn fhalf [x : float] : float (* x 0.5))
 (defn main [] : int

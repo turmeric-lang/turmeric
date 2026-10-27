@@ -46,7 +46,7 @@ than a clean limitation.
 (load "stdlib/schema.tur")
 
 ;; binary ^fat sink
-(defn call2 [^fat f :(fn [:int :int] #{} :int) a : int b : int] : int
+(defn call2 [^fat f : (fn [:int :int] #{} : int) a : int b : int] : int
   (f a b))
 
 (defstruct BoxW [A] (raw :int))

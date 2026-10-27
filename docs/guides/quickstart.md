@@ -62,7 +62,7 @@ a value followed by a newline:
 (not true)                     ; => false
 ```
 ```sweet-exp
-println("Hello, Turmeric!")   ; prints: Hello, Turmeric!
+println("Hello, Turmeric!")    ; prints: Hello, Turmeric!
 {1 = 1}                        ; => true
 not(true)                      ; => false
 ```
@@ -99,7 +99,7 @@ annotated with `:type`:
 (square 9)    ; => 81
 ```
 ```sweet-exp
-defn square [x :int] :int
+defn square [x : int] : int
   {x * x}
 
 square(9)    ; => 81
@@ -125,7 +125,7 @@ evaluating.
 (abs  5)    ; => 5
 ```
 ```sweet-exp
-defn abs [n :int] :int
+defn abs [n : int] : int
   if {n < 0}
     {0 - n}
     n
@@ -149,7 +149,7 @@ abs(5)     ; => 5
 (sign  0)    ; => 0
 ```
 ```sweet-exp
-defn sign [n :int] :int
+defn sign [n : int] : int
   cond
     {n > 0}
     1
@@ -192,7 +192,7 @@ macro (see Collections below):
 (factorial 10)    ; => 3628800
 ```
 ```sweet-exp
-defn factorial [n :int] :int
+defn factorial [n : int] : int
   if {n <= 1}
     1
     {n * factorial({n - 1})}
@@ -242,12 +242,12 @@ might not produce a value:
 (unwrap-or (safe-div 10 0) -1)  ; => -1
 ```
 ```sweet-exp
-defn safe-div [a :int b :int]
+defn safe-div [a : int b : int]
   if {b = 0}
     none()
     some({a / b})
 
-unwrap $ safe-div 10 2            ; => 5
+unwrap $ safe-div 10 2           ; => 5
 unwrap-or(safe-div(10 0) -1)     ; => -1
 ```
 
@@ -400,7 +400,7 @@ let [squares vec-new()
   (add5 10))    ; => 15
 ```
 ```sweet-exp
-let [add5 (fn [x :int] :int {x + 5})]
+let [add5 (fn [x : int] : int {x + 5})]
   add5(10)    ; => 15
 ```
 
@@ -416,8 +416,8 @@ captured environment:
   (println (add7 10)))   ; 17
 ```
 ```sweet-exp
-defn make-adder [n :int]
-  (fn [x :int] :int {x + n})
+defn make-adder [n : int]
+  (fn [x : int] : int {x + n})
 
 let [add3 make-adder(3)
      add7 make-adder(7)]
@@ -435,10 +435,10 @@ Functions are first-class values. Pass them to other functions:
 (apply-twice (fn [x : int] : int (* x 2)) 3)    ; => 12
 ```
 ```sweet-exp
-defn apply-twice [f x :int] :int
+defn apply-twice [f x : int] : int
   f(f(x))
 
-apply-twice((fn [x :int] :int {x * 2}) 3)    ; => 12
+apply-twice((fn [x : int] : int {x * 2}) 3)    ; => 12
 ```
 
 `apply-twice` is not special -- it is just a function whose first parameter
@@ -459,7 +459,7 @@ name; field accessors are generated as `StructName-fieldname`:
   (println (.y p)))   ; 4
 ```
 ```sweet-exp
-defstruct Point [x :int y :int]
+defstruct Point [x : int y : int]
 
 let [p Point(3 4)]
   println(.x(p))    ; 3
@@ -480,9 +480,9 @@ A complete example combining struct and function:
 (area (Rect 6 7))    ; => 42
 ```
 ```sweet-exp
-defstruct Rect [width :int height :int]
+defstruct Rect [width : int height : int]
 
-defn area [r] :int
+defn area [r] : int
   {Rect-width(r) * Rect-height(r)}
 
 area(Rect(6 7))    ; => 42
@@ -501,10 +501,10 @@ a *handler* installed by the caller decides what to do.
 `defeffect` declares a named effect:
 
 ```turmeric
-(defeffect Log [msg :cstr] :void)
+(defeffect Log [msg : cstr] : void)
 ```
 ```sweet-exp
-defeffect Log [msg :cstr] :void
+defeffect Log [msg : cstr] : void
 ```
 
 `perform` raises the effect and suspends until a handler responds:
@@ -515,7 +515,7 @@ defeffect Log [msg :cstr] :void
   (perform (Log "done")))
 ```
 ```sweet-exp
-defn do-work [] :void
+defn do-work [] : void
   perform(Log("starting"))
   perform(Log("done"))
 ```
@@ -584,7 +584,7 @@ When an effect's return type is not `:void`, the `perform` expression
 evaluates to whatever the handler passes to `resume`:
 
 ```turmeric
-(defeffect Ask [] :int)
+(defeffect Ask [] : int)
 
 (defn use-ask [] : int
   (+ 1 (perform (Ask))))
@@ -594,9 +594,9 @@ evaluates to whatever the handler passes to `resume`:
 ; => 42
 ```
 ```sweet-exp
-defeffect Ask [] :int
+defeffect Ask [] : int
 
-defn use-ask [] :int
+defn use-ask [] : int
   {1 + perform(Ask())}
 
 (handle (use-ask)
@@ -621,7 +621,7 @@ Write Turmeric code to a `.tur` file and load it into any REPL session with
 ```
 ```sweet-exp
 ; hello.tur
-defn greet [name :cstr] :void
+defn greet [name : cstr] : void
   println $ str-concat "Hello, " str-concat(name "!")
 ```
 

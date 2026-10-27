@@ -43,14 +43,14 @@ heap allocation.
 ```
 
 ```sweet-exp
-defn integers-from [start :int] : (Generator :int)
+defn integers-from [start : int] : (Generator :int)
   gen []
     let [^mut i start]
       while true
         yield i
         set! i {i + 1}
 
-defn range-gen [lo :int hi :int] : (Generator :int)
+defn range-gen [lo : int hi : int] : (Generator :int)
   gen []
     let [^mut i lo]
       while {i < hi}
@@ -392,7 +392,7 @@ seq/flatten(seq-from-vec([seq/range(0 2) seq/range(5 7)]))
 (seq/for-each println (seq/range 0 3)) ; prints 0 1 2
 
 ;; short-circuit consumers
-(seq/any? even? (seq/range 1 10))      ; => true (stops at 2)
+(seq/any? even? (seq/range 1 10))     ; => true (stops at 2)
 (seq/all? even? (seq/range 0 6 2))    ; => true  (checks 0 2 4)
 (seq/find even? (seq/range 1 10))     ; => (some 2)
 (seq/find-index even? (seq/range 1 10)) ; => (some 1)

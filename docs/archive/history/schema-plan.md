@@ -128,7 +128,7 @@ instance. The generic `decode` then dispatches on the target type, so
 callers do not have to thread a schema value around by hand:
 
 ```turmeric
-(defstruct User [name :cstr  age :int])
+(defstruct User [name : cstr  age : int])
 
 (definstance HasSchema User
   (schema-of [_]
@@ -216,9 +216,9 @@ combinator hierarchy applies. After SC7, schemas compose with the rest of
 
 ```turmeric
 (defstruct SchemaError
-  [path    :cstr    ;; dot-separated field path, e.g. "user.address.zip"
-   message :cstr    ;; human-readable: "expected :cstr, got :int"
-   value   :ptr<void>])  ;; the offending value
+  [path    : cstr    ;; dot-separated field path, e.g. "user.address.zip"
+   message : cstr    ;; human-readable: "expected :cstr, got :int"
+   value   : ptr<void>])  ;; the offending value
 ```
 
 ### Named schemas and recursive schemas
@@ -372,11 +372,11 @@ dispatch on the result type:
 (defclass HasSchema a
   [schema-of : (-> :unit Schema)])
 
-(defn decode [raw :ptr<void>] : (Result a (Vec SchemaError))
+(defn decode [raw : ptr<void>] : (Result a (Vec SchemaError))
   where (HasSchema a)
   (schema-decode (schema-of (the a)) raw))
 
-(defn decode! [raw :ptr<void>] : a
+(defn decode! [raw : ptr<void>] : a
   where (HasSchema a)
   (schema-decode! (schema-of (the a)) raw))
 ```

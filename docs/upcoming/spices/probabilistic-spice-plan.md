@@ -309,7 +309,7 @@ is associative, commutative, idempotent, and the all-zero register set is
 (defn cms-add!       [c : CountMin data : int len : int] : nil ...) ;; ++d cells
 (defn cms-estimate   [c : CountMin data : int len : int] : int ...) ;; min over d rows
 (defn cms-merge      [a : CountMin b : CountMin] : CountMin ...)    ;; pointwise +
-(defn cms-inner-product [a : CountMin b : CountMin] : float ...)   ;; self-join size
+(defn cms-inner-product [a : CountMin b : CountMin] : float ...)    ;; self-join size
 
 (definstance JoinSemilattice [CountMin]
   (join [x y] (cms-merge x y)))

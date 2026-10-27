@@ -135,7 +135,7 @@ A field list mixes `:cstr` keys with schema pointers, which a homogeneous
 ;; => ok
 ```
 ```sweet-exp
-defn user-schema [] :int
+defn user-schema [] : int
   schema/field(schema/field(schema/object-new() "name" schema/str()) "age" schema/int())
 schema-decode(user-schema() json/decode("{\"name\": \"alice\", \"age\": 30}"))
 ;; => ok
@@ -192,9 +192,9 @@ a dot-separated path (`address.zip`) or an array index (`children[0].value`):
 ;; address.zip: expected :cstr, got :int
 ```
 ```sweet-exp
-defn address-schema [] :int
+defn address-schema [] : int
   schema/field(schema/field(schema/object-new() "city" schema/str()) "zip" schema/str())
-defn user-schema [] :int
+defn user-schema [] : int
   schema/field(schema/field(schema/object-new() "name" schema/str()) "address" address-schema())
 let [r (schema-decode (user-schema)
           (json/decode
@@ -229,7 +229,7 @@ memoized:
 ;; => ok, validated to arbitrary depth
 ```
 ```sweet-exp
-defn tree-schema [] :int
+defn tree-schema [] : int
   schema/rec((fn [self] schema/field(schema/field(schema/object-new() "value" schema/int()) "children" schema/array(self))))
 schema-decode(tree-schema() json/decode("{\"value\": 1, \"children\": [{\"value\": 2, \"children\": []}]}"))
 ;; => ok, validated to arbitrary depth
@@ -277,8 +277,8 @@ binding), not from any argument.
 ```sweet-exp
 load("stdlib/json.tur")
 load("stdlib/schema.tur")
-defstruct User :copy [name :cstr age :int]
-defn user-schema [] :int
+defstruct User :copy [name : cstr age : int]
+defn user-schema [] : int
   schema/field(schema/field(schema/object-new() "name" schema/str()) "age" schema/int())
 definstance HasSchema [User] decode!([node] let([v (schema-decode! (user-schema) node)] make-struct(User json/get-string(json/get!(v "name")) json/get-int(json/get!(v "age")))))
 ;; The ascription drives instance selection; decode! returns a real User.
@@ -310,11 +310,11 @@ error (`no instance 'HasSchema T'`).
 `:cstr` to a typed value:
 
 ```turmeric no-check
-(defn parse-user [body :cstr] :User
+(defn parse-user [body : cstr] : User
   #json-str<User>(body))
 ```
 ```sweet-exp
-defn parse-user [body :cstr] :User
+defn parse-user [body : cstr] : User
   #json-str<User>(body)
 ```
 
@@ -327,7 +327,7 @@ also wraps its node tree in `(:: node T)`.
 Add a `?` and a schema violation becomes a value instead of a process death:
 
 ```turmeric no-check
-(defn try-user [body :cstr] :(Result User int)
+(defn try-user [body : cstr] : (Result User int)
   #json-str?<User>(body))
 
 ;; (ok? r) -- decoded; (ok-val r) is the User
@@ -357,10 +357,10 @@ reader macro to branch on. Two consequences worth knowing:
 The same family over a path instead of a string:
 
 ```turmeric no-check
-(defn load-config [] :Config
+(defn load-config [] : Config
   #json-file<Config>("config.json"))
 
-(defn try-load-config [] :(Result Config int)
+(defn try-load-config [] : (Result Config int)
   #json-file?<Config>("config.json"))
 ```
 
@@ -407,7 +407,7 @@ once.
                 (json/decode "{\"n\": 21}"))
 ```
 ```sweet-exp
-defn double-it [x :int] :int
+defn double-it [x : int] : int
   {x * 2}
 ;; pure(double-it) <*> field-of("n", int)  -- on {"n":21} => 42
 schema-decode!(schema/ap(schema/always(double-it) schema/field-of("n" schema/int())) json/decode("{\"n\": 21}"))
@@ -464,7 +464,7 @@ the identity (the value *is* the schema pointer). Build a struct field by field:
 ```
 ```sweet-exp
 ;; ->User is a curried constructor: name -> (age -> boxed User)
-defn user-schema [] :int
+defn user-schema [] : int
   let [name-s (:: (make-struct Schema (schema/field-of "name" (schema/str))) (Schema int))
        age-s  (:: (make-struct Schema (schema/field-of "age"  (schema/int))) (Schema int))]
     .raw(ap(fmap(name-s ->User) age-s))

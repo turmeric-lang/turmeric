@@ -14,7 +14,7 @@ Turmeric currently rejects direct application of a captureless anonymous
 lambda:
 
 ```turmeric
-((fn [x] :int (+ x 1)) 3)
+((fn [x] : int (+ x 1)) 3)
 ```
 
 with:
@@ -334,12 +334,12 @@ Regression areas to rerun:
 Manual smoke:
 
 ```turmeric
-((fn [x] :int (+ x 1)) 3)
+((fn [x] : int (+ x 1)) 3)
 
 (let [y 2]
-  ((fn [x] :int (+ x y)) 3))
+  ((fn [x] : int (+ x y)) 3))
 
-(let [f (fn [x] :int (+ x 10))]
+(let [f (fn [x] : int (+ x 10))]
   ((if true f f) 1))
 ```
 

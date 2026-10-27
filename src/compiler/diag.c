@@ -1974,7 +1974,17 @@ static const DiagExplanation diag_explanations_[] = {
       "      the condition;\n"
       "    - rebinds, in a body `let`, a name that is already in scope.\n"
       "  The post-loop fact `p AND (not c)` is only offered once BOTH\n"
-      "  obligations are proved.\n",
+      "  obligations are proved.\n"
+      "\n"
+      "Typeclass instances (\"could not decide whether instance method ...\"):\n"
+      "  The compiler could neither prove nor refute that an instance agrees\n"
+      "  with its class signature (see TUR-E0374): that it demands no more of\n"
+      "  a parameter than the class promises, or delivers the result the class\n"
+      "  promises.  A generic caller is checked against the CLASS predicate,\n"
+      "  so an undecided parameter pair can still end in the instance's entry\n"
+      "  check panicking on a value the class admits.  Restate the instance's\n"
+      "  predicate so it visibly follows from the class's, or drop it and\n"
+      "  inherit the class's.\n",
     },
     /* Retired, but `tur explain` accepts the I prefix, so say what it was. */
     { TUR_I0379_REFINE_ORACLE_MISMATCH,
@@ -2297,8 +2307,9 @@ static const DiagExplanation diag_explanations_[] = {
       "Either widen the instance to match the class, or narrow the class\n"
       "signature so every caller knows the stronger requirement.\n"
       "\n"
-      "Only reported when the compiler can PROVE the instance is stronger; an\n"
-      "undecidable pair is left to the runtime check.\n",
+      "Reported when the compiler finds a value the class admits and the\n"
+      "instance rejects.  A pair it can neither prove nor refute is TUR-W0372\n"
+      "(an error under --strict-refine) and keeps the runtime check.\n",
     },
     { TUR_E0151_RELEVANT_DROPPED,
       "TUR-E0151: Relevant value dropped without being used\n"

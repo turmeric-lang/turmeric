@@ -373,7 +373,7 @@ spices/raylib/src/
 (import raylib/input  :refer [get-mouse-position])
 (import raylib/color  :refer [raywhite red])
 
-(defn main [] :int
+(defn main [] : int
   (init-window 800 600 "Hello Raylib")
   (set-target-fps 60)
   (while (not (window-should-close))

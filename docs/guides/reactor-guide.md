@@ -47,10 +47,10 @@ runs *outside* the fiber scheduler, or for dedicated non-fiber threads.
 ```sweet-exp
 load "stdlib/reactor.tur"
 
-defn main [] :int
+defn main [] : int
   let [r reactor-new()]
     reactor-add-timer r 0
-      (fn [id user] :nil
+      (fn [id user] : nil
         (println "hello from timer"))
       nil
     reactor-run r
@@ -92,7 +92,7 @@ This is the pattern used by the `tur/httpd` listener thread.
 load "stdlib/reactor.tur"
 
 ;; accept-loop is a plain OS thread entry point -- no fibers required.
-defn start-listener [listen-fd :int ^borrow stop-ch :(Chan int)] :nil
+defn start-listener [listen-fd : int ^borrow stop-ch : (Chan int)] : nil
   let [r reactor-new()]
     ;; Accept connections: each READ event means accept() will not block.
     reactor-add-fd r listen-fd READ
@@ -103,7 +103,7 @@ defn start-listener [listen-fd :int ^borrow stop-ch :(Chan int)] :nil
       nil
     ;; Shutdown: one value on stop-ch ends the loop (one-shot).
     reactor-add-chan r stop-ch
-      (fn [id v user] :nil
+      (fn [id v user] : nil
         (reactor-stop r))
       nil
     ;; Block until stopped.
@@ -145,13 +145,13 @@ load "stdlib/reactor.tur"
 load "stdlib/chan.tur"
 
 ;; In the reactor thread:
-defn run-with-stop [^borrow stop-ch :(Chan int)] :nil
+defn run-with-stop [^borrow stop-ch : (Chan int)] : nil
   let [r reactor-new()]
     ;; ... register fd sources, timers, etc. ...
 
     ;; Register one-shot shutdown watcher.
     reactor-add-chan r stop-ch
-      (fn [id v user] :nil
+      (fn [id v user] : nil
         (reactor-stop r))
       nil
 
@@ -159,7 +159,7 @@ defn run-with-stop [^borrow stop-ch :(Chan int)] :nil
     reactor-free r
 
 ;; From any other thread (safe because reactor-wake is thread-safe):
-defn request-shutdown [^borrow stop-ch :(Chan int) ^borrow r :Reactor] :nil
+defn request-shutdown [^borrow stop-ch : (Chan int) ^borrow r : Reactor] : nil
   chan-send stop-ch 1
   reactor-wake r
 ```
@@ -178,9 +178,9 @@ persistent channel watcher, re-register from inside the callback:
 ```
 
 ```sweet-exp
-defn watch-chan-loop [^borrow r :Reactor ^borrow ch :(Chan int)] :nil
+defn watch-chan-loop [^borrow r : Reactor ^borrow ch : (Chan int)] : nil
   reactor-add-chan r ch
-    (fn [id v user] :nil
+    (fn [id v user] : nil
       (handle-message v)
       ;; Re-register to watch the next value.
       (watch-chan-loop r ch))
@@ -361,7 +361,7 @@ Programs that load `stdlib/reactor.tur` must link against `libturi`:
 ````sweet-exp
 ;; The autolink hint is included when you load "stdlib/reactor.tur".
 ;; For standalone files that only declare the tur_reactor_* externs, add:
-defn reactor-link [] :int
+defn reactor-link [] : int
   ```c /* __tur_autolink__: -lturi */
   return 0;
   ```

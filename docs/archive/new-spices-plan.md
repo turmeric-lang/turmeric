@@ -314,7 +314,7 @@ Audio callback signature (called from RtAudio's internal thread):
 ;;;
 ;;; Returns:
 ;;;   0 to continue, 1 to drain and stop, 2 to abort.
-(defn my-callback [out :cstr in :cstr frames :int time :float status :int] :int
+(defn my-callback [out : cstr in : cstr frames : int time : float status : int] : int
   ...)
 ```
 

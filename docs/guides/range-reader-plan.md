@@ -272,7 +272,7 @@ runtime.
 ```turmeric
 #r{0 <= n < len}        ; => (closed-open-range 0 len)
 #r{lo <= n <= hi}       ; => (closed-range lo hi)
-#r{(- hi 1) > n >= 0}  ; => (closed-open-range 0 (- hi 1))
+#r{(- hi 1) > n >= 0}   ; => (closed-open-range 0 (- hi 1))
 ```
 ```sweet-exp
 #r{0 <= n < len}         ; => closed-open-range(0 len)
@@ -343,17 +343,17 @@ Mirror of `stdlib/range.tur` using `float64` bounds.  The internal
 ```
 ```sweet-exp
 ;; float-range constructors (same shape as stdlib/range.tur)
-defn float-closed-range [lo :float hi :float] :int ...
-defn float-open-range [lo :float hi :float] :int ...
-defn float-closed-open-range [lo :float hi :float] :int ...
-defn float-open-closed-range [lo :float hi :float] :int ...
-defn float-at-least-range [lo :float] :int ...
-defn float-greater-than-range [lo :float] :int ...
-defn float-at-most-range [hi :float] :int ...
-defn float-less-than-range [hi :float] :int ...
-defn float-singleton-range [v :float] :int ...
-defn float-unbounded-range [] :int ...
-defn float-range-contains? [r :int v :float] :bool ...
+defn float-closed-range [lo : float hi : float] : int ...
+defn float-open-range [lo : float hi : float] : int ...
+defn float-closed-open-range [lo : float hi : float] : int ...
+defn float-open-closed-range [lo : float hi : float] : int ...
+defn float-at-least-range [lo : float] : int ...
+defn float-greater-than-range [lo : float] : int ...
+defn float-at-most-range [hi : float] : int ...
+defn float-less-than-range [hi : float] : int ...
+defn float-singleton-range [v : float] : int ...
+defn float-unbounded-range [] : int ...
+defn float-range-contains? [r : int v : float] : bool ...
 ```
 
 The reader selects float constructors when any bound token is a `F_FLOAT`
@@ -411,13 +411,13 @@ type.  In that case it defaults to the integer constructor family and emits a
 
 ```turmeric no-check
 ;; Index bounds check with expression upper bound
-(defn safe-get [v :int i :int] :int
+(defn safe-get [v : int i : int] : int
   (require! (range-contains? #r{0 <= i < (vec-len v)} i)
             "index out of bounds")
   (vec-get v i))
 
 ;; Contract type
-(defn classify-score [score : { s : :int | (range-contains? #r{1 <= s <= 5} s) }] :cstr
+(defn classify-score [score : { s : :int | (range-contains? #r{1 <= s <= 5} s) }] : cstr
   (cond
     ((= score 5) "excellent")
     ((= score 4) "good")
@@ -428,7 +428,7 @@ type.  In that case it defaults to the integer constructor family and emits a
   (println i))
 
 ;; Float range membership test
-(defn unit-clamp [x :float] :float
+(defn unit-clamp [x : float] : float
   (if (float-range-contains? #r{0.0 <= x <= 1.0} x) x
       (if (< x 0.0) 0.0 1.0)))
 
@@ -438,13 +438,13 @@ type.  In that case it defaults to the integer constructor family and emits a
 ```
 ```sweet-exp
 ;; Index bounds check with expression upper bound
-defn safe-get [v :int i :int] :int
+defn safe-get [v : int i : int] : int
   require!(range-contains?(#r{0 <= i < vec-len(v)} i)
            "index out of bounds")
   vec-get(v i)
 
 ;; Contract type
-defn classify-score [score : { s : :int | range-contains?(#r{1 <= s <= 5} s) }] :cstr
+defn classify-score [score : { s : :int | range-contains?(#r{1 <= s <= 5} s) }] : cstr
   cond
     {score = 5} "excellent"
     {score = 4} "good"
@@ -455,7 +455,7 @@ for i seq/from-range(#r{0 <= i < 10})
   println(i)
 
 ;; Float range membership test
-defn unit-clamp [x :float] :float
+defn unit-clamp [x : float] : float
   if float-range-contains?(#r{0.0 <= x <= 1.0} x)
     x
     if {x < 0.0}

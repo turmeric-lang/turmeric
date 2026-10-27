@@ -79,7 +79,7 @@ For `--lib`, `src/main.tur` is replaced by `src/<name>.tur` containing a
 ```turmeric
 ;;; my-app -- entry point.
 ;;
-(defn main [] :int
+(defn main [] : int
   (println "Hello from my-app!")
   0)
 ```
@@ -87,7 +87,7 @@ For `--lib`, `src/main.tur` is replaced by `src/<name>.tur` containing a
 ```sweet-exp
 ;;; my-app -- entry point.
 ;;
-defn main [] :int
+defn main [] : int
   println("Hello from my-app!")
   0
 ```

@@ -34,12 +34,12 @@ fixtures -- see the pitfall below.  Reverted, then re-landed narrowly (above).
 ## The shape
 
 ```turmeric
-(defeffect Write [s :cstr] :nil)
-(defeffect Other [] :int)
+(defeffect Write [s : cstr] : nil)
+(defeffect Other [] : int)
 (defn do-work [] #fx{Other} : int
   (with-handler
     (handler (Write [s] k) (do (println s) (resume k nil)))   ; discharges Write
-    (do (perform (Write "inner")) (perform (Other)))))         ; Other is LEFTOVER
+    (do (perform (Write "inner")) (perform (Other)))))        ; Other is LEFTOVER
 (defn main [] : int
   (handle (do-work)
     (Other [] k) (do (resume k 7) 0)))

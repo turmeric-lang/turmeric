@@ -513,12 +513,14 @@ test.describe('docs pane', () => {
 
         // `^fat` is one annotation token, caret included, and `ptr<void>` is
         // one type token, angle brackets included -- not a name with a plain
-        // `<void>` trailing it.
+        // `<void>` trailing it.  The generator spells an annotation spaced
+        // (`p : ptr<void>`), so the colon is its own token and the type
+        // carries none.
         const sigPre = page.locator('#mw-compress-with pre.def-signature');
         await expect(sigPre.locator('.hl-ann')).toHaveText(['^fat']);
         const types = await sigPre.locator('.hl-type').allTextContents();
-        expect(types).toContain(':ptr<void>');
-        expect(types.some(t => t === 'ptr<void>')).toBe(true);
+        expect(types).toContain('ptr<void>');
+        expect(types.some(t => t === ':ptr<void>')).toBe(false);
         expect(types.every(t => !/^</.test(t))).toBe(true);   // never a stranded <void>
 
         const prose = page.locator('#docs-article pre.def-prose-code code.language-turmeric');

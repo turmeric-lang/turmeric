@@ -35,7 +35,7 @@ path.
 ## Minimal repro
 
 ```turmeric
-(defeffect Sample [] :float)
+(defeffect Sample [] : float)
 (defn run [] : float
   (handle (perform (Sample))
     (Sample [] k) (resume k 7.1)))

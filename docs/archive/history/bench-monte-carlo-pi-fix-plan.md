@@ -41,7 +41,7 @@ In `benchmarks/numerical/turmeric/monte_carlo_pi.tur`, replace the current
 `:void` function that calls `printf("%.6f\n", ...)` directly:
 
 ```turmeric
-(defn estimate-pi [iters :int] :void
+(defn estimate-pi [iters : int] : void
   ```c
   uint64_t state = 6364136223846793005ULL;
   #define LCG_NEXT() ({ state = state * 6364136223846793005ULL + 1442695040888963407ULL; \

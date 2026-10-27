@@ -68,7 +68,7 @@ the list with `mplus`/`mreturn` (see `ints-upto` below).
 
 ```sweet-exp
 ;; All integers in [lo, hi) as alternatives
-defn ints-upto [lo :int hi :int] :int
+defn ints-upto [lo : int hi : int] : int
   if {lo >= hi}
     mzero()
     mplus(mreturn(lo) ints-upto({lo + 1} hi))
@@ -165,11 +165,11 @@ runtime dispatch when the stdlib is extended to check this constant.
 
 ```sweet-exp
 ;; Count solutions to N-Queens for N=6 using backtrack-do
-defn safe? [col row packed n] :bool
+defn safe? [col row packed n] : bool
   ;; check if placing at col,row is safe given previous placements in packed
   ...
 
-defn queens [n] :int
+defn queens [n] : int
   let [result mreturn(0)  ;; start with empty board (encoded as 0)
        board  mbind(result
                     (fn [packed]
@@ -189,7 +189,7 @@ The backtracking monad can be combined with algebraic effects. Effects run
 outside the monad boundary and the results are wrapped with `mreturn`:
 
 ```turmeric
-(defeffect Choose [a :int b :int] :int)
+(defeffect Choose [a : int b : int] : int)
 
 (defn make-choice [] : int
   (let [x (perform (Choose 10 20))]
@@ -203,9 +203,9 @@ outside the monad boundary and the results are wrapped with `mreturn`:
 ```
 
 ```sweet-exp
-defeffect Choose [a :int b :int] :int
+defeffect Choose [a : int b : int] : int
 
-defn make-choice [] :int
+defn make-choice [] : int
   let [x perform(Choose(10 20))]
     mreturn({x * 2})
 

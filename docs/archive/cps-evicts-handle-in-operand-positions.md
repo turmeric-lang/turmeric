@@ -140,7 +140,7 @@ a let-bound one is freed.  Filed as
 No seed reproduces it any more, but the shape does, in five lines:
 
 ```turmeric
-(defeffect E [x : int] :int)
+(defeffect E [x : int] : int)
 (defn gapp [B] [f : (fn [B] B #fx{E}) v : B] : B (f v))
 (defn eff [x : int] : int (perform (E x)))
 (defn main [] : int
