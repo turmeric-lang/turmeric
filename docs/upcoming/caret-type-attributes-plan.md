@@ -1,6 +1,6 @@
 # Plan: spell type-declaration flags as `^attr`, not `:keyword`
 
-> **Status:** P0 IMPLEMENTED 2026-10-27; P1 is next. The three open questions
+> **Status:** P0 and P1 IMPLEMENTED 2026-10-27; P2 is next. The three open questions
 > are decided (see "Decisions"): attributes go before the name, `^move` stays,
 > and `^heap` moves with the rest. Both spellings are accepted today; the
 > keyword one is not yet warned about (P3). A spelling change only: every form
@@ -195,6 +195,48 @@ flags. Each has to skip or understand the leading `^` attributes:
   until it is added.
 - The editor-packs report gains a line: the new attributes join each pack's
   modifier set.
+
+#### As implemented (2026-10-27)
+
+- **`tools/gendocs.py`.** `_parse_def_line` reads the `^attrs` before the name
+  of a `defopaque` / `defstruct` / `defdata` / `defgadt` into `lead_attrs`, so
+  the name is the symbol after them (it was `^copy`). The signature is shown as
+  written: a leading `^` flag renders before the name and a trailing keyword
+  where it was written, so the existing keyword pages do not change. The
+  linear / affine badge reads both spellings through `_decl_flags`. The
+  `defstruct` and `defdata` keyword scans also learned `:affine` / `:linear`,
+  which they had missed. Regenerating `stdlib/docstrings.tur` and the API pages
+  from the current stdlib gives byte-identical output. Pinned in
+  `tests/tools/check_gendocs_parse.py` (6 renderings, 10 flag cases).
+- **`src/lsp/lsp_docs.c`** keyed an entry by `^copy` for
+  `(defstruct ^copy Point ...)`, and did the same for `(defn ^construct some
+  ...)` before this plan. It now steps over the `^attrs`, and over the message
+  of a `^deprecated`, and it also scans `defopaque` and `defgadt`. Pinned in
+  `tests/lsp/docscanner_test.c`.
+- **`src/turi/repl.c`** `detect_type_form` named a struct `^copy` in the
+  REPL's `#<struct-type ...>` line; it now skips the attributes. Checked by
+  hand in `tur repl`; there is no REPL harness to pin it in.
+- **`tools/check_turi_native_parity.py`**'s name regex skips the attributes.
+  (It still reads a `^deprecated "msg"` defn's name as the message; that
+  predates the plan and the script is informational.)
+- **No change needed:** `src/compiler/fmt.c` already keeps the attributes on
+  the head line, identically to the keyword spelling (`tur fmt` on both,
+  `tur_fmt_tests` passes); `src/cli/lsp_lite.c` holds a list of builtin names,
+  not declarations; `src/turi/docstrings.c:242` is a `defstruct` signature
+  string, which P2 rewrites with the other docs.
+- **Highlighters.** `CARET_MODIFIERS` in `web/main.js` and in
+  `tools/genguides.py` gained `copy`, `move`, `heap`, `sealed`, `non-null` and
+  `no-auto-ctor`. Checked: the docs highlighter run in Chromium colours all
+  eight flags `hl-ann` and a kind in the type-parameter vector `hl-kind`; the
+  regex `main.js` builds from the list matches them and not `^copyx`. Cases
+  were added to `web/tests/docs-highlight.spec.js` and
+  `web/tests/editor-highlight.spec.js`.
+- **Not run:** the two Playwright specs themselves. `web/node_modules` is not
+  installed in this environment, and `editor-highlight.spec.js` also needs the
+  dev server and the wasm build. The Monaco editor's colouring of the new
+  names is therefore checked through its regex only.
+- The editor-packs report notes the new names. None of the four packs keeps a
+  closed modifier list, so they need nothing for these names.
 
 ### P2 -- migrate the tree
 

@@ -736,6 +736,9 @@ GUIDE_JS_CORE = '''\
     'atomic','thread-local','deferred-init','borrow','fat','extends',
     'capability','multishot','deprecated','reflect','construct','byval',
     'non-exhaustive','tailcall',
+    // The flags of a defopaque / defstruct / defdata / defgadt, written before
+    // the name (caret-type-attributes-plan); `linear` and `affine` are above.
+    'copy','move','heap','sealed','non-null','no-auto-ctor',
   ]);
   var CARET_C_TYPES = new Set([
     'int','float','bool','char','cstr','void','nil','size','usize','isize',

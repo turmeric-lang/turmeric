@@ -94,7 +94,7 @@ def interpreter_prelude():
 
 # Top-level definer forms whose name becomes a public stdlib binding.
 _DEFINER = re.compile(
-    r"^\(\s*(?:defn|defmacro|defstruct|definstance|defopaque|def)\s+([^\s\[\(\]]+)"
+    r"^\(\s*(?:defn|defmacro|defstruct|definstance|defopaque|def)\s+(?:\^[\w-]+\s+)*([^\s\[\(\]^][^\s\[\(\]]*)"
 )
 
 

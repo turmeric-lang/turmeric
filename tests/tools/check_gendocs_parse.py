@@ -407,6 +407,19 @@ LOSSY_CASES = [
      '(defopaque Chan [A] : ptr<void> :linear)'),
     ('defopaque', '(defopaque String :ptr<void> :non-null)',
      '(defopaque String : ptr<void> :non-null)'),
+    # caret-type-attributes-plan: the flags before the name are part of the
+    # declaration as written, and the name is the symbol after them.
+    ('defstruct', '(defstruct ^copy ^heap Pair [A B] (fst A) (snd B))',
+     '(defstruct ^copy ^heap Pair [A B] (fst A) (snd B))'),
+    ('defstruct', '(defstruct ^linear Socket [fd : int])',
+     '(defstruct ^linear Socket [fd : int])'),
+    ('defdata', '(defdata ^copy Either [L R] (Left L) (Right R))',
+     '(defdata ^copy Either [L R] (Left L) (Right R))'),
+    ('defgadt', '(defgadt ^copy Nat [] (Zero : (Nat)) (Succ (Nat) : (Nat)))',
+     '(defgadt ^copy Nat (Zero : (Nat)) (Succ (Nat) : (Nat)))'),
+    ('defopaque', '(defopaque ^linear TmpFile :int)', '(defopaque ^linear TmpFile : int)'),
+    ('defopaque', '(defopaque ^affine ^sealed Chan [A] :ptr<void>)',
+     '(defopaque ^affine ^sealed Chan [A] : ptr<void>)'),
     # A rest parameter's element type is spaced like any other annotation.
     ('defn', '(defn v [first : cstr & rest :cstr] : void first)',
      '(v [first : cstr & rest : cstr] : void)'),
@@ -417,6 +430,28 @@ for kind, text, want in LOSSY_CASES:
     if got != want:
         fails += 1
         print(f"FAIL gendocs-render: {text}\n     got {got!r}, want {want!r}")
+
+# The flags of a declaration are read from either spelling: the linear / affine
+# badge on its card must not depend on which one the source used.
+from gendocs import _decl_flags  # noqa: E402
+
+for kind, text, want_name, want_flags in [
+    ('defstruct', '(defstruct ^linear Socket [fd : int])', 'Socket', {'linear'}),
+    ('defstruct', '(defstruct Socket :linear [fd : int])', 'Socket', {'linear'}),
+    ('defstruct', '(defstruct ^affine Lease [secs : int])', 'Lease', {'affine'}),
+    ('defstruct', '(defstruct Lease :affine [secs : int])', 'Lease', {'affine'}),
+    ('defopaque', '(defopaque ^linear Tok :int)', 'Tok', {'linear'}),
+    ('defopaque', '(defopaque Tok :int :linear)', 'Tok', {'linear'}),
+    ('defopaque', '(defopaque ^affine ^sealed Fut :ptr<void>)', 'Fut', {'affine', 'sealed'}),
+    ('defdata', '(defdata ^linear Job (Job int))', 'Job', {'linear'}),
+    ('defdata', '(defdata Job :linear (Job int))', 'Job', {'linear'}),
+    ('defstruct', '(defstruct ^copy ^heap Cell [n : int])', 'Cell', {'copy', 'heap'}),
+]:
+    name, params, ret, extra = _parse_def_line(kind, text)
+    flags = _decl_flags({'kind': kind, 'name': name, **extra})
+    if (name, flags) != (want_name, want_flags):
+        fails += 1
+        print(f"FAIL gendocs-flags: {text}: got {(name, flags)!r}, want {(want_name, want_flags)!r}")
 
 for kind, text, want_name, want_ret in [
     ('defn', '(defn char=? [a : Char b : Char] : bool (= a b))', 'char=?', ':bool'),

@@ -24,6 +24,16 @@ implemented in `tools/genguides.py` (the docs) and `web/main.js` (Monaco):
     (`^Monoid`, `^Eq`): palette `kind`, violet (`#C4A0E8` / `#7748AE`). Any
     `^name` that is not a modifier is a kind, as in the compiler;
   - an **extern-c C type** (`^int`, `^ptr<void>`): palette `type`, violet.
+  - Since 2026-10-27 the modifier list also holds the flags of a type
+    declaration, which are written before the name:
+    `(defstruct ^copy ^heap Cell ...)`, `(defopaque ^linear ^sealed Tok ...)`.
+    The new names are `^copy`, `^move`, `^heap`, `^sealed`, `^non-null` and
+    `^no-auto-ctor` (`^linear` and `^affine` were already there). None of the
+    four packs keeps a closed list today (each colours every `^name` one way,
+    see the table below), so these names need nothing of them beyond the
+    fixes below; once a pack splits modifiers from kinds, the new names belong
+    on the modifier side. See
+    [caret-type-attributes-plan](../upcoming/caret-type-attributes-plan.md).
 - **A type is one token, generic arguments included** (`type`, the same violet
   as `kind`): `:int`, `:ptr<void>`, `:option<ptr<int>>`, a bare `ptr<void>` as in
   `(fn [ptr<void>] nil)`, and the spaced `name : cstr` / `] : void`. Not `ptr`

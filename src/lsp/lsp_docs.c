@@ -1,5 +1,6 @@
 #include "lsp_docs.h"
 
+#include <stdbool.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -98,6 +99,8 @@ void lsp_scan_docs(const char *text, size_t len, LspDocTable *out) {
                 { "definstance", 11 },
                 { "def",         3 },
                 { "defdata",     7 },
+                { "defgadt",     7 },
+                { "defopaque",   9 },
                 { NULL, 0 },
             };
 
@@ -113,8 +116,27 @@ void lsp_scan_docs(const char *text, size_t len, LspDocTable *out) {
             }
 
             if (name_start) {
-                while (name_start < lend && (*name_start == ' ' || *name_start == '\t'))
-                    name_start++;
+                /* Step over the `^attr`s that precede the name --
+                 * `(defstruct ^copy Point ...)`, `(defn ^construct some ...)` --
+                 * and the message a `^deprecated` takes.  Without this the
+                 * entry was keyed `^copy`. */
+                for (;;) {
+                    while (name_start < lend && (*name_start == ' ' || *name_start == '\t'))
+                        name_start++;
+                    if (name_start >= lend || *name_start != '^') break;
+                    bool deprecated = (size_t)(lend - name_start) >= 11 &&
+                                      memcmp(name_start, "^deprecated", 11) == 0;
+                    while (name_start < lend && *name_start != ' ' && *name_start != '\t')
+                        name_start++;
+                    if (!deprecated) continue;
+                    while (name_start < lend && (*name_start == ' ' || *name_start == '\t'))
+                        name_start++;
+                    if (name_start < lend && *name_start == '"') {
+                        name_start++;
+                        while (name_start < lend && *name_start != '"') name_start++;
+                        if (name_start < lend) name_start++;
+                    }
+                }
                 const char *name_end = name_start;
                 while (name_end < lend && *name_end != ' ' && *name_end != '\t' &&
                        *name_end != ')' && *name_end != '[')
