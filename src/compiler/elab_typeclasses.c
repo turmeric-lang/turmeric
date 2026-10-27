@@ -1,8 +1,8 @@
 /* elab_typeclasses.c -- typeclass declarations, instances, and method-call dispatch. */
 #include "elab_internal.h"
+#include <stdarg.h>
 #include "lang_dialects.h"   /* saffron-lang-plan S4: lang_span_is_dynamic */
 #include "refine_discharge.h"     /* RT1: instance/class refinement variance */
-#include "refine_solver.h"        /* RT1: refine_model_search, for the variance witness */
 #include "forms.h"
 #include "mangle.h"
 #include "prof.h"   /* --timings: the typeclass zone */
@@ -2859,6 +2859,51 @@ static bool constraint_named_type(Elab *e, const Symbol *kw, Type *out) {
     return false;
 }
 
+/* RT1 VARIANCE: decide one instance-versus-class variance obligation.
+ *
+ * Decided as a `quiet` obligation, not a speculative probe: it is a real
+ * question about the program, so it is counted, memoized and shown by
+ * --dump-refine=json like any other, while its headline stays ours -- a
+ * refutation is a declaration-versus-declaration TUR-E0374, not a TUR-E0371
+ * about a value.  `runtime_guarded` is off because any witness is a defect
+ * here: the class admits a value the instance rejects (or the instance may
+ * return one the class rules out), whether or not the goal is ground.
+ *
+ * An UNDECIDED pair used to report nothing, which left a generic caller to
+ * find the disagreement as an entry-check panic and let --strict-refine pass a
+ * program it could not discharge.  It is TUR-W0372 now (rt_report_variance_
+ * unknown), an error under --strict-refine. */
+typedef enum { RV_PROVED, RV_REFUTED, RV_UNKNOWN } RtVariance;
+
+static RtVariance rt_decide_variance(Elab *e, RefineObligation *vob) {
+    vob->quiet = true;
+    vob->runtime_guarded = false;
+    if (refine_discharge_one(vob, e->arena)) return RV_PROVED;
+    return vob->refuted ? RV_REFUTED : RV_UNKNOWN;
+}
+
+static const char *rt_variance_reason(const RefineObligation *vob) {
+    return vob->unknown_reason ? vob->unknown_reason : "the solver returned unknown";
+}
+
+/* `fmt` words the claim that could not be decided ("instance method 'm'
+ * demands no more of ..."); it is prefixed with "could not decide whether".
+ * `note` says what the undecided pair costs.  The generic obligation notes are
+ * not attached: their hint proposes a hypothesis to DECLARE on the subject,
+ * which reads as "narrow the class" -- not advice anyone should take here. */
+static void rt_report_variance_unknown(Span loc, const char *note,
+                                       const char *fmt, ...) {
+    char claim[512];
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(claim, sizeof(claim), fmt, ap);
+    va_end(ap);
+    diag_emit_with_code(g_strict_refine ? DIAG_ERROR : DIAG_WARNING, loc,
+                        TUR_W0372_REFINE_UNKNOWN,
+                        "could not decide whether %s", claim);
+    diag_emit(DIAG_NOTE, loc, "%s", note);
+}
+
 /* Elaborate (definstance ClassName [type-args...] (method1 [args...] body...) ...)
  *
  * Defines an instance of a typeclass for concrete types.
@@ -5054,8 +5099,8 @@ static Expr *elab_definstance_inner(Elab *e, const Form *call) {
          * class parameter with NO refinement promises nothing, so any instance
          * refinement on it is a strengthening unless the predicate is a
          * tautology -- and asking the solver is exactly how to tell those
-         * apart.  Reported only on a REFUTATION; an undecidable pair keeps the
-         * runtime check, as everywhere else. */
+         * apart.  A REFUTATION is TUR-E0374; an undecidable pair is TUR-W0372
+         * (rt_decide_variance), and keeps the runtime check. */
         if (n_m_ct_preds > 0) {
             for (uint32_t _ci = 0; _ci < n_m_ct_preds; _ci++) {
                 uint32_t _pi = m_ct_param_idx[_ci];
@@ -5095,13 +5140,21 @@ static Expr *elab_definstance_inner(Elab *e, const Form *call) {
                     impl_form->span, venv,
                     arena_strdup(e->arena, what, strlen(what)), NULL);
                 if (!vob) continue;
-                /* Decide it silently, then ask separately for a witness.  The
-                 * ordinary reporting path is wrong for this obligation: its
-                 * failure is a declaration-vs-declaration inconsistency with
-                 * its own diagnostic, not a `TUR-E0371` about a value. */
-                vob->speculative = true;
-                bool ok = refine_discharge_one(vob, e->arena);
-                if (!ok && vob->vc && refine_model_search(vob->vc, e->arena)) {
+                RtVariance vv = rt_decide_variance(e, vob);
+                if (vv == RV_UNKNOWN) {
+                    rt_report_variance_unknown(impl_form->span,
+                        "a generic caller is checked against the class "
+                        "predicate, so this method's entry check can still "
+                        "reject a value the class admits; restate the "
+                        "predicate so it visibly follows from the class's, "
+                        "or drop it to inherit the class's",
+                        "instance method '%s' demands no more of parameter "
+                        "'%s' than the '%s' class signature promises (%s); "
+                        "the method's entry check is kept",
+                        tc->methods[i].name ? tc->methods[i].name->name : "?",
+                        pname, tc->name ? tc->name->name : "?",
+                        rt_variance_reason(vob));
+                } else if (vv == RV_REFUTED) {
                     diag_emit_with_code(DIAG_ERROR, impl_form->span,
                         TUR_E0374_REFINE_INSTANCE_STRONGER,
                         "instance method '%s' demands more of parameter '%s' "
@@ -5148,10 +5201,19 @@ static Expr *elab_definstance_inner(Elab *e, const Form *call) {
                 impl_form->span, venv,
                 arena_strdup(e->arena, what, strlen(what)), NULL);
             if (vob) {
-                vob->speculative = true;
-                bool ok = refine_discharge_one(vob, e->arena);
-                ret_variance_proved = ok;
-                if (!ok && vob->vc && refine_model_search(vob->vc, e->arena)) {
+                RtVariance vv = rt_decide_variance(e, vob);
+                ret_variance_proved = (vv == RV_PROVED);
+                if (vv == RV_UNKNOWN) {
+                    rt_report_variance_unknown(impl_form->span,
+                        "callers rely on the class's result predicate, so it is "
+                        "checked at run time alongside this method's own",
+                        "instance method '%s' delivers the result the '%s' "
+                        "class signature promises (%s); the class's result "
+                        "check is kept",
+                        tc->methods[i].name ? tc->methods[i].name->name : "?",
+                        tc->name ? tc->name->name : "?",
+                        rt_variance_reason(vob));
+                } else if (vv == RV_REFUTED) {
                     diag_emit_with_code(DIAG_ERROR, impl_form->span,
                         TUR_E0374_REFINE_INSTANCE_STRONGER,
                         "instance method '%s' promises less about its result "

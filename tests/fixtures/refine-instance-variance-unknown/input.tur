@@ -1,0 +1,30 @@
+;; RT1 variance: an instance-versus-class pair the solver can neither prove nor
+;; refute is TUR-W0372, in both directions.  It used to report nothing, so a
+;; generic caller met the disagreement as an entry-check panic and
+;; --strict-refine passed a program it could not discharge (the strict twin is
+;; errors/refine-instance-variance-unknown-strict).
+;;
+;; `(* v v)` is nonlinear, so the solver treats it as uninterpreted: it cannot
+;; prove `v >= 0 |- v*v >= v`, and the counterexample search finds none (the
+;; implication holds for every int).
+(defclass Scaler [a]
+  (scale-by [self : a, k : #refine{ v : int | (>= v 0) }] : int))
+
+;; Parameter direction: class_pred(k) |- instance_pred(k) is undecided.
+(definstance Scaler [int]
+  (scale-by [self : int, k : #refine{ v : int | (>= (* v v) v) }] : int
+    (* self k)))
+
+(defclass Boxed [a]
+  (unbox [self : a, k : int] : #refine{ r : int | (>= r 0) }))
+
+;; Result direction: instance_pred(r) |- class_pred(r) is undecided, so the
+;; class's result check is kept beside the instance's own.
+(definstance Boxed [int]
+  (unbox [self : int, k : int] : #refine{ r : int | (>= (* r r) r) }
+    (* self self)))
+
+(defn main [] : int
+  (println (.scale-by 3 4))
+  (println (.unbox 3 4))
+  0)

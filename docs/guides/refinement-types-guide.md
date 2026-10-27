@@ -255,8 +255,12 @@ entitled to pass:
 
 A class parameter with no refinement promises nothing, so *any* instance
 refinement on it is a strengthening. The check is `class_pred |- instance_pred`
-through the same solver seam, and it reports only on a refutation -- an
-undecidable pair keeps the runtime check.
+through the same solver seam. A refutation is `TUR-E0374`. A pair the solver
+can neither prove nor refute is `TUR-W0372` ("could not decide whether
+instance method ... demands no more of parameter ..."), an error under
+`--strict-refine`, and keeps the runtime check. It is worth fixing: a generic
+caller is checked against the class predicate, so the instance's entry check
+can still panic on a value the class admits.
 
 A method's **result** refinement varies the other way. A parameter refinement
 is something the method *demands*, so an instance may demand less. A result
@@ -297,8 +301,8 @@ true of every instance:
 An instance that restates a predicate the solver cannot prove implies the
 class's gets the class predicate checked alongside its own ("Class result
 contract violated"). That is what keeps the propagation honest: the variance
-check reports only on a refutation, so an *undecidable* pair emits no error,
-and without the extra check a caller would be relying on a promise nothing
+check cannot settle an *undecidable* pair (it reports `TUR-W0372`, not an
+error), and without the extra check a caller would be relying on a promise nothing
 enforced. Under `--no-contracts` nothing enforces it either, so nothing is
 propagated.
 
