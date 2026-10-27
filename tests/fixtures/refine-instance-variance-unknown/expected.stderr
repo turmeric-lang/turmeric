@@ -1,0 +1,3 @@
+TUR-W0372
+could not decide whether instance method 'scale-by' demands no more of parameter 'k' than the 'Scaler' class signature promises
+could not decide whether instance method 'unbox' delivers the result the 'Boxed' class signature promises
