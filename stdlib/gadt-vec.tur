@@ -117,7 +117,7 @@
 ;;;   A new (GVec int) with f applied to each element.
 ;;;
 ;;; Example:
-;;;   (defn mul [a :int b :int] :int (* a b))
+;;;   (defn mul [a : int b : int] : int (* a b))
 ;;;   (gvec-sum (gvmap (mul 2) (gvec-cons 1 (gvec-cons 2 (gvec-nil)))))  ; => 6
 ;;;
 ;;; Since: Phase G4
@@ -139,7 +139,7 @@
 ;;;   A (GVec int) of combined values; stops at the shorter input.
 ;;;
 ;;; Example:
-;;;   (defn add [a :int b :int] :int (+ a b))
+;;;   (defn add [a : int b : int] : int (+ a b))
 ;;;   (gvec-sum (gvzip-with add
 ;;;               (gvec-cons 1 (gvec-cons 2 (gvec-nil)))
 ;;;               (gvec-cons 10 (gvec-cons 20 (gvec-nil)))))  ; => 33

@@ -735,7 +735,7 @@
 ;;; Parameters:
 ;;;   m1      -- first Map[K V]
 ;;;   m2      -- second Map[K V]
-;;;   val-cmp -- comparator fn [a :int b :int] :bool applied to each value pair
+;;;   val-cmp -- comparator fn [a : int b : int] : bool applied to each value pair
 ;;;
 ;;; Returns:
 ;;;   true if both maps have identical keys and all corresponding values satisfy val-cmp.
@@ -777,7 +777,7 @@
 ;;; Parameters:
 ;;;   m1      -- first Map[K V]
 ;;;   m2      -- second Map[K V]
-;;;   val-cmp -- comparator fn [a :int b :int] :bool applied to each value pair
+;;;   val-cmp -- comparator fn [a : int b : int] : bool applied to each value pair
 ;;;
 ;;; Returns:
 ;;;   true if both maps have identical keys and all corresponding values satisfy val-cmp.
@@ -894,7 +894,7 @@
 ;;;   iter    -- hamt/iter-alloc-allocated handle scanning m1
 ;;;   m2-hamt -- raw HAMT pointer of the second map (from map-hamt)
 ;;;   keyeq   -- stamped key comparator (from hamt/keyeq on m1's hamt)
-;;;   val-cmp -- value comparator fn [a :V b :V] :bool
+;;;   val-cmp -- value comparator fn [a : V b : V] : bool
 ;;;
 ;;; Returns:
 ;;;   true iff every entry of m1 is present in m2 under keyeq with an

@@ -148,7 +148,7 @@
 
 ;;; defdynamic -- define a variable whose value depends on the caller.
 ;;;
-;;; `(defdynamic *level* :int 1)` declares a dynamic variable with a fixed type and
+;;; `(defdynamic *level* : int 1)` declares a dynamic variable with a fixed type and
 ;;; a root value. Reading `*level*` anywhere gives the value set by the nearest
 ;;; enclosing `binding` in the current thread, however far up the call chain it
 ;;; is, or the root value if there is none. That passes a log level, locale or
@@ -168,7 +168,7 @@
 ;;;   root -- the value outside any `binding`
 ;;;
 ;;; Example:
-;;;   (defdynamic *level* :int 1)
+;;;   (defdynamic *level* : int 1)
 ;;;   (defn level-plus [n : int] : int (+ *level* n))
 ;;;   (println (level-plus 1))  ; prints 2
 ;;;   (println (binding [*level* 3] (level-plus 1)))  ; prints 4

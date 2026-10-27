@@ -162,8 +162,8 @@
 ;;; Parameters:
 ;;;   r1      -- first Result[A B]
 ;;;   r2      -- second Result[A B]
-;;;   ok-cmp  -- comparator for ok values fn [a :int b :int] :bool
-;;;   err-cmp -- comparator for err values fn [a :int b :int] :bool
+;;;   ok-cmp  -- comparator for ok values fn [a : int b : int] : bool
+;;;   err-cmp -- comparator for err values fn [a : int b : int] : bool
 ;;;
 ;;; Returns:
 ;;;   true if both ok with equal ok values, or both err with equal err values.

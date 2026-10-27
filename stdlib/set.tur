@@ -371,7 +371,7 @@
 ;;; Parameters:
 ;;;   a       -- Set[A]
 ;;;   b       -- Set[A]
-;;;   cmp-fn  -- comparator fn [a :int b :int] :bool applied to element pairs
+;;;   cmp-fn  -- comparator fn [a : int b : int] : bool applied to element pairs
 ;;;
 ;;; Returns:
 ;;;   true iff both sets have the same count and every element of `a`
