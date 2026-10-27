@@ -2162,7 +2162,7 @@ def _prose_html(text, indent='  '):
 def _method_signature(method):
     """`(extract [wa] : int)` -- a class method, spelled like a defn signature."""
     param_str = ' '.join(
-        (f"& {p}" + t[3:] if t.startswith('...') else f"{p} {_spaced_ann(t)}") if t else p
+        (_rest_param(p, t) if t.startswith('...') else f"{p} {_spaced_ann(t)}") if t else p
         for p, t in method['params']
     )
     sig = f"({method['name']} [{param_str}]"
@@ -2266,6 +2266,34 @@ def _spaced_ann(t):
     return t
 
 
+def _rest_param(name, t):
+    """`& args :cstr` -> `& args : cstr` -- a rest parameter as the style guide
+    spells it.  `t` is the '...' marker `_with_type` leaves, followed by the
+    element type when one was written."""
+    elem = t[3:].strip()
+    return f"& {name} {_spaced_ann(elem)}" if elem else f"& {name}"
+
+
+def _spaced_decl(kind, decl):
+    """A declaration shown as written, with its type annotation spaced.
+
+    The parser reads `(defopaque Uid :int)` and `(defopaque Uid : int)` alike,
+    but the API pages spell every other annotation `: T`.  Only the one slot
+    that holds a type is touched; a `:linear` / `:affine` discipline keyword,
+    a `^extends` marker and a `:key` in a `def` initialiser are not types."""
+    if kind == 'defopaque':
+        # (defopaque Name [T ...] :base [:linear|:affine])
+        return re.sub(r'(?<=\s):(?!linear\b|affine\b)(?=[A-Za-z(])', ': ', decl, count=1)
+    if kind == 'defdynamic':
+        # (defdynamic *name* :T init)
+        return re.sub(r'^(\(defdynamic\s+\S+\s+):(?=[A-Za-z(])', r'\1: ', decl)
+    if kind == 'defeffect':
+        # (defeffect Name [p :T ...] :result ^extends X ^capability): the
+        # markers are `^`-prefixed, so every `:T` is a parameter or result type.
+        return re.sub(r'(?<=\s):(?=[A-Za-z(])', ': ', decl)
+    return decl
+
+
 def _render_signature(defn):
     kind = defn['kind']
     name = defn['name']
@@ -2283,7 +2311,7 @@ def _render_signature(defn):
     # A declaration shown as written: deftype / defdynamic / def / defalias,
     # and the defeffect / defopaque headers, which have no body to omit.
     if defn.get('decl'):
-        return defn['decl']
+        return _spaced_decl(kind, defn['decl'])
 
     if kind == 'defstruct':
         # LT4: include :linear / :copy / :move annotation if present
@@ -2325,7 +2353,7 @@ def _render_signature(defn):
         return sig + ")"
 
     param_str = ' '.join(
-        (f"& {p}" + t[3:] if t.startswith('...') else f"{p} {_spaced_ann(t)}") if t else p
+        (_rest_param(p, t) if t.startswith('...') else f"{p} {_spaced_ann(t)}") if t else p
         for p, t in params
     )
     sig = f"({name}"

@@ -170,7 +170,7 @@
 ;;; Parameters:
 ;;;   o1     -- first Option[A]
 ;;;   o2     -- second Option[A]
-;;;   cmp-fn -- comparator fn [a :int b :int] :bool
+;;;   cmp-fn -- comparator fn [a : int b : int] : bool
 ;;;
 ;;; Returns:
 ;;;   true if both none, or both some with equal values.

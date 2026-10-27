@@ -27,8 +27,14 @@ capitalised name or a `(...)` type.  With a body after it, the word can only
 be the return type (`] :a`, `] :double`), whatever it is.
 This is a spacing check, not a parser.
 
-Usage: check-annotation-spacing.py [--fix] [--selftest] [path ...]
-                                                   (default: docs/, README.md)
+The stdlib's `;;;` doc comments are checked the same way (the API reference
+renders them as code): the comment marker is blanked and the text scanned like
+source, so `;;;   (fn [id :int] :nil ...)` is flagged.  Only the comment lines
+are read -- the stdlib's own code still carries fused annotations the check
+does not touch.  `--docstrings path ...` does that for the given paths.
+
+Usage: check-annotation-spacing.py [--fix] [--selftest] [--docstrings] [path ...]
+                                       (default: docs/, README.md, stdlib's `;;;`)
 `--fix` inserts the missing space in place (whitespace only).  `--selftest`
 first runs the checker and the rewriter over the samples at the bottom of this
 file.  Exit 1 when anything is, or is left, fused.  Part of
@@ -41,6 +47,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_PATHS = ["docs", "README.md"]
+DOCSTRING_PATHS = ["stdlib"]
+# Generated from the `;;;` blocks by gendocs.py --emit-tur; fixed at the source.
+DOCSTRING_SKIP = {"docstrings.tur"}
 
 # Reuse the fence / tokenizer / path helpers of the sibling check.
 _spec = importlib.util.spec_from_file_location(
@@ -226,9 +235,33 @@ def check_text(text, fix):
     return report, ("\n".join(lines) if fix and report else None)
 
 
-def check_file(path, fix):
+def doc_view(lines):
+    """`lines` with every non-`;;;` line emptied and the `;;;` marker blanked to
+    the same width, so a hit's column is the column in the real line.  The
+    fence lines of a doc example are emptied too."""
+    view = []
+    for l in lines:
+        if not l.lstrip().startswith(";;;"):
+            view.append("")
+            continue
+        l = re.sub(r"^(\s*);;;", lambda m: m.group(1) + "   ", l)
+        # A doc fence is not an inline-C block, which the scan would skip.
+        view.append("" if l.strip().startswith("```") else l)
+    return view
+
+
+def check_file(path, fix, docstrings=False):
     text = path.read_text(encoding="utf-8")
-    if path.suffix == ".md":
+    if docstrings:
+        lines = text.split("\n")
+        hits = sorted(set(scan(doc_view(lines))))
+        report = [(li + 1, f"`{_frag(lines[li], col)}` -- write "
+                   f"`: {_frag(lines[li], col)[1:]}`") for li, col in hits]
+        new = None
+        if fix and hits:
+            fix_lines(lines, hits)
+            new = "\n".join(lines)
+    elif path.suffix == ".md":
         report, new = check_text(text, fix)
     else:
         lines = text.split("\n")
@@ -300,6 +333,19 @@ def selftest():
         if again:
             print(f"FAIL check-annotation-spacing selftest {n}: not idempotent {again}")
             bad += 1
+    # A `;;;` doc comment: scanned like source, fenced examples included, and
+    # prose without a form head left alone.
+    doc = [";;; cb -- closure: (fn [id :int] :nil)",
+           ";;; Example:",
+           ";;; ```turmeric",
+           ";;;   (defn f [x :int] :int x)",
+           ";;; ```",
+           "(defn g [y :int] :int y)",
+           ";;; the keyword :done is not a type"]
+    got = sorted(set(scan(doc_view(doc))))
+    if [li for li, _ in got] != [0, 0, 3, 3]:
+        print(f"FAIL check-annotation-spacing selftest docstring: hits {got}")
+        bad += 1
     if bad:
         return 1
     print(f"PASS check-annotation-spacing selftest ({len(SELFTEST)} samples)")
@@ -310,9 +356,11 @@ def main(argv):
     fix = "--fix" in argv
     if "--selftest" in argv and selftest():
         return 1
-    argv = [a for a in argv if a not in ("--fix", "--selftest")]
+    only_docstrings = "--docstrings" in argv
+    argv = [a for a in argv if a not in ("--fix", "--selftest", "--docstrings")]
     paths = []
-    for arg in argv or DEFAULT_PATHS:
+    doc_paths = set()
+    for arg in argv or (DOCSTRING_PATHS if only_docstrings else DEFAULT_PATHS):
         p = Path(arg)
         if not p.is_absolute():
             p = ROOT / p
@@ -327,13 +375,22 @@ def main(argv):
         else:
             print(f"FAIL check-annotation-spacing: no such path {arg}")
             return 1
+    if only_docstrings:
+        doc_paths = {f for f in paths if f.name not in DOCSTRING_SKIP}
+        paths = sorted(doc_paths)
+    elif not argv:
+        # Default run: the stdlib's doc comments as well.
+        for f in sorted((ROOT / DOCSTRING_PATHS[0]).rglob("*.tur")):
+            if f.name not in DOCSTRING_SKIP:
+                doc_paths.add(f)
+                paths.append(f)
     nfail, nfixed = 0, 0
     for path in paths:
         try:
             rel = path.relative_to(ROOT)
         except ValueError:
             rel = path
-        report, rewritten = check_file(path, fix)
+        report, rewritten = check_file(path, fix, path in doc_paths)
         if rewritten:
             nfixed += 1
             print(f"fixed check-annotation-spacing: {rel}")

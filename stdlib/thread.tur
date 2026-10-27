@@ -251,7 +251,7 @@
 ;;;   :void (never returns if the thread has been cancelled)
 ;;;
 ;;; Example:
-;;;   (defn crunch [n] :int
+;;;   (defn crunch [n] : int
 ;;;     (let [i 0]
 ;;;       (while (< i n)
 ;;;         (yield-point)

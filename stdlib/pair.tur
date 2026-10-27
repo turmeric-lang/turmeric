@@ -85,8 +85,8 @@
 ;;; Parameters:
 ;;;   p1      -- first Pair[A B]
 ;;;   p2      -- second Pair[A B]
-;;;   fst-cmp -- comparator for first element fn [a :int b :int] :bool
-;;;   snd-cmp -- comparator for second element fn [a :int b :int] :bool
+;;;   fst-cmp -- comparator for first element fn [a : int b : int] : bool
+;;;   snd-cmp -- comparator for second element fn [a : int b : int] : bool
 ;;;
 ;;; Returns:
 ;;;   true if both first and second elements are equal under their comparators.

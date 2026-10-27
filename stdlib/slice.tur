@@ -97,7 +97,7 @@
 ;;; Parameters:
 ;;;   s1     -- first Slice[A]
 ;;;   s2     -- second Slice[A]
-;;;   cmp-fn -- comparator fn [a :int b :int] :bool
+;;;   cmp-fn -- comparator fn [a : int b : int] : bool
 ;;;
 ;;; Returns:
 ;;;   true if same length and all element pairs satisfy cmp-fn.

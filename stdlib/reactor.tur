@@ -183,7 +183,7 @@
 ;;;   r         -- reactor handle
 ;;;   fd        -- file descriptor to watch (must already be open)
 ;;;   events    -- bitmask of event types to watch: READ | WRITE
-;;;   cb        -- closure: (fn [id :int events :int user :ptr<void>] :nil)
+;;;   cb        -- closure: (fn [id : int events : int user : ptr<void>] : nil)
 ;;;   user-data -- opaque value forwarded to cb as its third argument
 ;;;
 ;;; Returns:
@@ -273,7 +273,7 @@
 ;;; Parameters:
 ;;;   r         -- reactor handle
 ;;;   delay-ms  -- milliseconds until the timer fires (>= 0)
-;;;   cb        -- closure: (fn [id :int user :ptr<void>] :nil)
+;;;   cb        -- closure: (fn [id : int user : ptr<void>] : nil)
 ;;;   user-data -- opaque value forwarded to cb as its second argument
 ;;;
 ;;; Returns:
@@ -281,7 +281,7 @@
 ;;;
 ;;; Example:
 ;;;   (reactor-add-timer r 500
-;;;     (fn [id user] :nil (println "fired"))
+;;;     (fn [id user] : nil (println "fired"))
 ;;;     nil)
 ;;;
 ;;; Since: Phase R4
@@ -306,7 +306,7 @@
 ;;;   r           -- reactor handle
 ;;;   first-ms    -- delay before the first fire in milliseconds
 ;;;   interval-ms -- period between subsequent fires in milliseconds
-;;;   cb          -- closure: (fn [id :int user :ptr<void>] :nil)
+;;;   cb          -- closure: (fn [id : int user : ptr<void>] : nil)
 ;;;   user-data   -- opaque value forwarded to cb
 ;;;
 ;;; Returns:
@@ -314,7 +314,7 @@
 ;;;
 ;;; Example:
 ;;;   (reactor-add-interval r 0 1000
-;;;     (fn [id user] :nil (println "tick"))
+;;;     (fn [id user] : nil (println "tick"))
 ;;;     nil)
 ;;;
 ;;; Since: Phase R4
@@ -345,7 +345,7 @@
 ;;; Parameters:
 ;;;   r         -- reactor handle
 ;;;   signum    -- OS signal number (e.g. 2 for SIGINT)
-;;;   cb        -- closure: (fn [id :int signum :int user :ptr<void>] :nil)
+;;;   cb        -- closure: (fn [id : int signum : int user : ptr<void>] : nil)
 ;;;   user-data -- opaque value forwarded to cb
 ;;;
 ;;; Returns:
@@ -353,7 +353,7 @@
 ;;;
 ;;; Example:
 ;;;   (reactor-add-signal r 2
-;;;     (fn [id sig user] :nil (println "got SIGINT"))
+;;;     (fn [id sig user] : nil (println "got SIGINT"))
 ;;;     nil)
 ;;;
 ;;; Since: Phase R5
@@ -397,7 +397,7 @@
 ;;; Parameters:
 ;;;   r         -- reactor handle
 ;;;   ch        -- the channel to watch (borrowed; an AsyncChan takes reactor-add-async-chan)
-;;;   cb        -- closure: (fn [id :int value :int user :ptr<void>] :nil)
+;;;   cb        -- closure: (fn [id : int value : int user : ptr<void>] : nil)
 ;;;   user-data -- opaque value forwarded to cb
 ;;;
 ;;; Returns:
@@ -405,7 +405,7 @@
 ;;;
 ;;; Example:
 ;;;   (reactor-add-chan r stop-chan
-;;;     (fn [id v user] :nil (reactor-stop r))
+;;;     (fn [id v user] : nil (reactor-stop r))
 ;;;     nil)
 ;;;
 ;;; Since: Phase R6
@@ -441,7 +441,7 @@
 ;;; Parameters:
 ;;;   r         -- reactor handle
 ;;;   ch        -- the channel to watch (borrowed)
-;;;   cb        -- closure: (fn [id :int value :int user :ptr<void>] :nil)
+;;;   cb        -- closure: (fn [id : int value : int user : ptr<void>] : nil)
 ;;;   user-data -- opaque value forwarded to cb
 ;;;
 ;;; Returns:
@@ -449,7 +449,7 @@
 ;;;
 ;;; Example:
 ;;;   (reactor-add-async-chan r jobs
-;;;     (fn [id job user] :nil (run-job job))
+;;;     (fn [id job user] : nil (run-job job))
 ;;;     nil)
 ;;;
 ;;; Since: Phase R6
@@ -627,7 +627,7 @@
 ;;;
 ;;; Parameters:
 ;;;   g         -- group handle
-;;;   body      -- closure: (fn [user :ptr<void>] :nil)
+;;;   body      -- closure: (fn [user : ptr<void>] : nil)
 ;;;   user-data -- opaque value forwarded to body as its only argument
 ;;;
 ;;; Returns:
@@ -635,7 +635,7 @@
 ;;;
 ;;; Example:
 ;;;   (local-spawn g
-;;;     (fn [user] :nil (println "hello from a fiber"))
+;;;     (fn [user] : nil (println "hello from a fiber"))
 ;;;     nil)
 ;;;
 ;;; Since: Phase F3
@@ -668,7 +668,7 @@
 ;;;   int -- number of fibers that ran to completion, or -1 on re-entry/error
 ;;;
 ;;; Example:
-;;;   (local-spawn g (fn [u] :nil (println "hi")) nil)
+;;;   (local-spawn g (fn [u] : nil (println "hi")) nil)
 ;;;   (reactor-run-fibers g)  ; => 1
 ;;;
 ;;; Since: Phase F3

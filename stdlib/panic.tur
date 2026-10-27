@@ -8,7 +8,7 @@
 ;;;
 ;;; Typical use:
 ;;; ```turmeric
-;;;   (let [r (catch-unwind (fn [] :int (risky)))]
+;;;   (let [r (catch-unwind (fn [] : int (risky)))]
 ;;;     (if (err? r)
 ;;;       (println (panic-message (result-panic r)))
 ;;;       (use (ok-val r))))
@@ -33,7 +33,7 @@
 ;;;   The opaque Panic handle from the err slot (0 when r is ok).
 ;;;
 ;;; Example:
-;;;   (let [r (catch-unwind (fn [] :int (panic "boom")))]
+;;;   (let [r (catch-unwind (fn [] : int (panic "boom")))]
 ;;;     (panic-message (result-panic r)))  ; => "boom"
 ;;;
 ;;; Since: Phase R2

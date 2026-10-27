@@ -199,7 +199,7 @@
 ;;; Parameters:
 ;;;   l1     -- first List[A]
 ;;;   l2     -- second List[A]
-;;;   cmp-fn -- comparator fn [a :int b :int] :bool
+;;;   cmp-fn -- comparator fn [a : int b : int] : bool
 ;;;
 ;;; Returns:
 ;;;   true if both lists have the same elements in the same order.

@@ -3,7 +3,7 @@
 ;;; Generalises stdlib/vec-existential.tur (which hard-wires SizedVec)
 ;;; to any phantom-indexed sized handle declared as
 ;;; ```turmeric
-;;;     (defopaque SizedThing [n] :int)
+;;;     (defopaque SizedThing [n] : int)
 ;;; ```
 ;;; or as a sized defdata/defstruct of the same shape. Validated against
 ;;; both `(SizedVec n int)` (defdata head, bare-nominal call sites) and

@@ -28,7 +28,7 @@
 ;;;   nil
 ;;;
 ;;; Example:
-;;;   (defeffect Write [s :cstr] :nil ^extends IO)
+;;;   (defeffect Write [s : cstr] : nil ^extends IO)
 ;;;
 ;;; Since: ET4
 (defeffect IO [] :nil ^capability)

@@ -444,7 +444,7 @@
 ;;;   The integer value returned by f.
 ;;;
 ;;; Example:
-;;;   (defn sum-init-buf [b] :int
+;;;   (defn sum-init-buf [b] : int
 ;;;     (sized-buf-set! (:: b :SizedBuf) 0 10)
 ;;;     (sized-buf-sum  (:: b :SizedBuf)))
 ;;;   (sized-buf-with-stack 3 sum-init-buf)

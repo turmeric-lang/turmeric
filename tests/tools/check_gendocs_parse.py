@@ -394,12 +394,23 @@ LOSSY_CASES = [
      '(defdata Fr :heap [T] (Nil) (Frame T T))'),
     ('defgadt', '(defgadt Nat [] (Zero : (Nat)) (Succ (Nat) : (Nat)))',
      '(defgadt Nat (Zero : (Nat)) (Succ (Nat) : (Nat)))'),
+    # The declarations shown as written have their type annotation spaced
+    # (`: nil`, `: int`); a `:linear` / `:non-null` modifier and a `^` marker
+    # are not types and stay as they are.
     ('defeffect', '(defeffect FS [] :nil ^extends IO ^capability)',
-     '(defeffect FS [] :nil ^extends IO ^capability)'),
+     '(defeffect FS [] : nil ^extends IO ^capability)'),
     ('defeffect', '(defeffect Fail [msg :cstr] :nil)',
-     '(defeffect Fail [msg :cstr] :nil)'),
-    ('defopaque', '(defopaque ArgSpec :int)', '(defopaque ArgSpec :int)'),
-    ('defopaque', '(defopaque TmpFile :int :linear)', '(defopaque TmpFile :int :linear)'),
+     '(defeffect Fail [msg : cstr] : nil)'),
+    ('defopaque', '(defopaque ArgSpec :int)', '(defopaque ArgSpec : int)'),
+    ('defopaque', '(defopaque TmpFile :int :linear)', '(defopaque TmpFile : int :linear)'),
+    ('defopaque', '(defopaque Chan [A] :ptr<void> :linear)',
+     '(defopaque Chan [A] : ptr<void> :linear)'),
+    ('defopaque', '(defopaque String :ptr<void> :non-null)',
+     '(defopaque String : ptr<void> :non-null)'),
+    # A rest parameter's element type is spaced like any other annotation.
+    ('defn', '(defn v [first : cstr & rest :cstr] : void first)',
+     '(v [first : cstr & rest : cstr] : void)'),
+    ('defn', '(defn w [& xs] : void 0)', '(w [& xs] : void)'),
 ]
 for kind, text, want in LOSSY_CASES:
     got = _sig(kind, text)
@@ -450,7 +461,7 @@ for ok, what in [
     (ddefs.get('Nat', {}).get('docstring') is not None, "deftype keeps its docstring"),
     (_render_signature(ddefs.get('*log-level*', {'kind': 'defdynamic', 'name': '', 'params': [],
                                                   'return_type': None})) ==
-     '(defdynamic *log-level* :int 1)', "defdynamic renders with its type and default"),
+     '(defdynamic *log-level* : int 1)', "defdynamic renders with its type and default"),
     (ddefs.get('PI', {}).get('kind') == 'def'
      and _render_signature(ddefs['PI']) == '(def PI 3.141592653589793)', "def renders its value"),
     (ddefs.get('counter', {}).get('kind') == 'def', "a ^mut marker does not become the name"),

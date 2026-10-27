@@ -1141,7 +1141,7 @@
 ;;; Parameters:
 ;;;   port    -- TCP port to listen on (0 = kernel-assigned)
 ;;;   workers -- number of worker threads in the pool (must be > 0)
-;;;   handler -- fat closure: (fn [conn :ptr<void>] :nil)
+;;;   handler -- fat closure: (fn [conn : ptr<void>] : nil)
 ;;;
 ;;; Returns:
 ;;;   ptr<void> -- opaque Httpd handle, or nil on error
@@ -1254,7 +1254,7 @@
 ;;; Parameters:
 ;;;   port        -- TCP port to listen on (0 = kernel-assigned)
 ;;;   workers     -- number of worker threads in the pool (must be > 0)
-;;;   handler     -- fat closure: (fn [conn :ptr<void>] :nil)
+;;;   handler     -- fat closure: (fn [conn : ptr<void>] : nil)
 ;;;   max-pending -- queued-connection cap (0 = unlimited; httpd-new-pool
 ;;;                  uses 512)
 ;;;
@@ -1304,13 +1304,13 @@
 ;;;
 ;;; Parameters:
 ;;;   port    -- TCP port to listen on (0 = kernel-assigned)
-;;;   handler -- fat closure: (fn [conn :ptr<void>] :nil)
+;;;   handler -- fat closure: (fn [conn : ptr<void>] : nil)
 ;;;
 ;;; Returns:
 ;;;   ptr<void> -- opaque Httpd handle, or nil on error
 ;;;
 ;;; Example:
-;;;   (let [h (httpd-new 0 (fn [conn :ptr<void>] :nil
+;;;   (let [h (httpd-new 0 (fn [conn : ptr<void>] : nil
 ;;;                          (httpd-resp-status! conn 200)
 ;;;                          (httpd-resp-body! conn "OK")))]
 ;;;     (httpd-run h)
@@ -1338,7 +1338,7 @@
 ;;; Parameters:
 ;;;   port    -- TCP port to listen on (0 = kernel-assigned)
 ;;;   workers -- number of worker threads (must be > 0)
-;;;   handler -- fat closure: (fn [conn :ptr<void>] :nil)
+;;;   handler -- fat closure: (fn [conn : ptr<void>] : nil)
 ;;;   ctx     -- TLS context handle from tls-ctx-new with cert + key loaded
 ;;;
 ;;; Returns:
@@ -3209,7 +3209,7 @@
 ;;;
 ;;; `realm` is the value placed in the `WWW-Authenticate: Basic
 ;;; realm="..."` challenge.  `verifier` is a closure of type
-;;; `(fn [user :cstr pass :cstr] :int)` returning 1 to authorise and
+;;; `(fn [user : cstr pass : cstr] : int)` returning 1 to authorise and
 ;;; 0 to reject.  Use `cstr-eq-const-time` in the verifier body for the
 ;;; password check.  The `verifier` parameter is `^fat`, so a bare
 ;;; non-capturing verifier is auto-shimmed into a fat closure -- it need
@@ -3221,7 +3221,7 @@
 ;;; Example:
 ;;;   ;; Compare BOTH fields every time and combine the results: returning
 ;;;   ;; early on a wrong username tells a caller which usernames exist.
-;;;   (let [verify (fn [u :cstr p :cstr] :int   ; captures nothing -- fine
+;;;   (let [verify (fn [u : cstr p : cstr] : int   ; captures nothing -- fine
 ;;;                  (let [u-ok (cstr-eq-const-time u "admin")
 ;;;                        p-ok (cstr-eq-const-time p "s3cret")]
 ;;;                    (* u-ok p-ok)))
@@ -3861,7 +3861,7 @@
 ;;;
 ;;; Parameters:
 ;;;   port    -- TCP port to listen on (0 = kernel-assigned)
-;;;   handler -- fat closure: (fn [conn :ptr<void>] :nil)
+;;;   handler -- fat closure: (fn [conn : ptr<void>] : nil)
 ;;;
 ;;; Returns:
 ;;;   ptr<void> -- HttpdAsync handle (or NULL on error)
@@ -4179,7 +4179,7 @@
 ;;;   r       -- router handle
 ;;;   method  -- HTTP method ("GET", "POST", etc.)
 ;;;   pattern -- path pattern (e.g. "/users/:id")
-;;;   handler -- fat closure: (fn [conn :ptr<void>] :nil)
+;;;   handler -- fat closure: (fn [conn : ptr<void>] : nil)
 ;;;
 ;;; Since: Phase H6
 
@@ -4401,7 +4401,7 @@
 ;;; defroute -- macro sugar for (router-add router method pattern handler).
 ;;;
 ;;; Example:
-;;;   (defroute r "GET" "/" (fn [c :ptr<void>] :nil ...))
+;;;   (defroute r "GET" "/" (fn [c : ptr<void>] : nil ...))
 ;;;
 ;;; Since: Phase H6
 
@@ -4494,7 +4494,7 @@
 ;;;   handlers passed to httpd-new / httpd-new-pool.
 ;;;
 ;;; Example:
-;;;   (let [base     (fn [c :ptr<void>] :nil
+;;;   (let [base     (fn [c : ptr<void>] : nil
 ;;;                    (httpd-resp-status! c 200)
 ;;;                    (httpd-resp-body!   c "hi"))
 ;;;         composed (mw-log base)]
@@ -4572,7 +4572,7 @@
 ;;;
 ;;; Parameters:
 ;;;   base -- base handler closure (:int)
-;;;   mws  -- variadic middleware closures (each `(fn [next :int] :int)`),
+;;;   mws  -- variadic middleware closures (each `(fn [next : int] : int)`),
 ;;;           applied right-to-left so the leftmost ends up outermost.
 ;;;
 ;;; Returns:
@@ -4592,7 +4592,7 @@
 ;;; post-hook runs last.
 ;;;
 ;;; Each `mw_i` is either a name callable with one argument -- typically a
-;;; defn like `mw-log` (shape `(defn mw-log [next :int] ... (fn [c] ...))`)
+;;; defn like `mw-log` (shape `(defn mw-log [next : int] ... (fn [c] ...))`)
 ;;; -- or a call form missing its last argument, like `(mw-cors-opts opts)`,
 ;;; which gets the wrapped downstream handler appended as that argument:
 ;;; `(compose-middleware base (mw-cors-opts o) (mw-rate-limit r))` is
@@ -4727,7 +4727,7 @@
 ;;; httpd-mw-apply -- internal: apply one fat-closure middleware to a handler.
 ;;;
 ;;; The middleware is a fat closure of shape
-;;; (fn [next :int] :ptr<void> ...); this performs a single fat-closure
+;;; (fn [next : int] : ptr<void> ...); this performs a single fat-closure
 ;;; dispatch -- the same ascription idiom as httpd-call -- and returns the
 ;;; wrapped handler. It holds no cons-layout knowledge; the list walk lives
 ;;; in httpd-mw-fold. The caller guards against a null mw.
@@ -4747,7 +4747,7 @@
   (:: ((:: mw (fn [int] ptr<void>)) cur) :int))
 ;;; httpd-mw-fold -- internal: right-fold a cons-list of fat-closure
 ;;; middlewares over a base handler. Each cell holds a fat closure value of
-;;; shape (fn [next :int] :ptr<void> ...). Applied right-to-left so the list
+;;; shape (fn [next : int] : ptr<void> ...). Applied right-to-left so the list
 ;;; head becomes the outermost wrapper. Null cells are skipped. Unbounded --
 ;;; the walk recurses over the cons-list abstraction (list-head/list-tail),
 ;;; so there is no fixed element cap.
@@ -4855,7 +4855,7 @@
 ;;; Apply order matches `compose-middleware`: leftmost = outermost.
 ;;;
 ;;; Each rest argument must be a *fat closure value* of shape
-;;; `(fn [next :int] :ptr<void> ...)` -- i.e. a closure that captures at
+;;; `(fn [next : int] : ptr<void> ...)` -- i.e. a closure that captures at
 ;;; least one variable. A bare top-level defn name is NOT a fat closure;
 ;;; passing one will compile (thanks to the
 ;;; docs/archive/history/variadic-rest-closure-cast-plan.md fix) but the fat-
@@ -4863,7 +4863,7 @@
 ;;; BUS-faults. Bridge a bare defn through a let-captured `fn` literal:
 ;;; ```turmeric
 ;;;   (let [_ 0
-;;;         mw-log-val (fn [n :int] :ptr<void> (mw-log n))
+;;;         mw-log-val (fn [n : int] : ptr<void> (mw-log n))
 ;;;         _ 0]
 ;;;     (compose-middleware-of base mw-log-val ...))
 ;;; ```
@@ -5902,7 +5902,7 @@
 ;;;   A wrapped handler closure (:ptr<void>).
 ;;;
 ;;; Example:
-;;;   (let [base     (fn [c :ptr<void>] :nil (panic "boom"))
+;;;   (let [base     (fn [c : ptr<void>] : nil (panic "boom"))
 ;;;         composed (compose-middleware base mw-recover)]
 ;;;     (httpd-new 0 composed))
 ;;;   ; => client sees "500 Internal Server Error"; the server stays up
