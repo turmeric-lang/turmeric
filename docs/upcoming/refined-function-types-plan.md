@@ -336,8 +336,13 @@ Pick one with numbers, not by default.
    with no compile-time signal. That includes under `--strict-refine`, which
    never sees the obligation today because the instance path decides it as a
    `speculative` probe (`refine_discharge.c:512` returns before any
-   reporting). Whether the extracted F3 helper should also start warning on
-   the *instance* path (`TUR-E0374`'s undecided pairs) is a separate call.
+   reporting). **The instance path warns too** (decided the same day): the
+   F3 helper reports an undecided parameter pair as `TUR-W0372` on both
+   paths, `--strict-refine` makes it an error, and the probe is counted as a
+   real obligation rather than under `templates_tried`. The `TUR-E0374`
+   explain text and the guide's "an undecidable pair keeps the runtime check"
+   change with it. This is a behaviour change for existing refined typeclass
+   methods, so it lands in F3 as its own commit with its own fixture.
 3. Named parameters in function types (D3): which spelling, and is there
    demand beyond `(> r x)`-style result bounds?
 4. F4: wrapper or keep the check -- decided by measurement.
