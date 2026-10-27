@@ -44,8 +44,8 @@ builtins (`ptr-deref`, `raw-malloc`, ...).
 ```turmeric
 (defn main [] : int
   (unsafe
-    (let [h (dlopen "libm.so.6")          ;; ptr<void> library handle
-          p (dlsym h "cbrt")]             ;; ptr<void> function address
+    (let [h (dlopen "libm.so.6")                         ;; ptr<void> library handle
+          p (dlsym h "cbrt")]                            ;; ptr<void> function address
       (println (call-ptr p [:float -> :float] 27.0))))   ;; => 3
   0)
 ```

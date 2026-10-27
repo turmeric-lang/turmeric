@@ -213,8 +213,8 @@ input, so on ambiguous grammars put the branch you prefer first.
   (if (some? (parse-first (sign-of-number) s)) "has minus" "no minus"))
 
 (defn main [] : int
-  (println (describe "-42"))                                      ; has minus
-  (println (describe "42"))                                       ; no minus
+  (println (describe "-42"))                                       ; has minus
+  (println (describe "42"))                                        ; no minus
   (show-line (unwrap (parse-first (sign-of-number) "-42")))        ; #\-
   (show-line (unwrap-or (parse-first (sign-of-number) "42") #\+))  ; #\+
   0)

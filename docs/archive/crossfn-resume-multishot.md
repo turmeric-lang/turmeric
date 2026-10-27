@@ -29,7 +29,7 @@ receiver's `(k v)` lowers to the one-shot effect-resume path
 ```turmeric
 ;; receiver resumes k twice: (k 1) + (k 2)
 (defn inner [] : int (shift (fn [k : cont] : int (+ (k 1) (k 2))) 0))
-(defn outer [] : int (reset (+ 10 (inner))))   ; k = (+ 10 [])
+(defn outer [] : int (reset (+ 10 (inner))))    ; k = (+ 10 [])
 (defn main [] : int (println (outer)) 0)        ; want (10+1)+(10+2)=23
 ```
 

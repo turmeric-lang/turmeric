@@ -439,9 +439,9 @@ and `notebook/eval` unchanged.
 
 ;;; tui-opts -- options for notebook/tui.
 (defstruct tui-opts
-  color           :int  ;; 0 = monochrome, 1 = 256-color (default)
-  cell-width      :int  ;; 0 = auto from terminal, else fixed
-  scrollback      :int  ;; lines of output to keep per cell (default 1000)
+  color           :int    ;; 0 = monochrome, 1 = 256-color (default)
+  cell-width      :int    ;; 0 = auto from terminal, else fixed
+  scrollback      :int    ;; lines of output to keep per cell (default 1000)
   keybindings-file :cstr) ;; 0 = built-in defaults
 
 (default-tui-opts)

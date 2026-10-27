@@ -279,7 +279,7 @@ Define typeclass methods that accept polymorphic function arguments:
 
 ; Call with a generic function, or ascribe an int-only one
 (.transform id 5)                               ; => 5
-(.transform (:: inc (forall [a] (-> a a))) 5)  ; => 6
+(.transform (:: inc (forall [a] (-> a a))) 5)   ; => 6
 ```
 
 ```sweet-exp
@@ -291,7 +291,7 @@ definstance Transform []
 
 ; Call with a generic function, or ascribe an int-only one
 .transform(id 5)                               ; => 5
-.transform((:: inc (forall [a] (-> a a))) 5)  ; => 6
+.transform((:: inc (forall [a] (-> a a))) 5)   ; => 6
 ```
 
 ### Pattern 7: Rank-3 types

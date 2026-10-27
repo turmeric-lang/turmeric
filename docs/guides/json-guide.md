@@ -79,12 +79,12 @@ panics on a missing key.)
 Index into arrays with `json/array-get` / `json/array-len`:
 
 ```turmeric no-check
-(json/array-len #json([10, "x", true]))                    ; => 3
+(json/array-len #json([10, "x", true]))                     ; => 3
 (json/get-int    (json/array-get #json([10, "x", true]) 0)) ; => 10
 (json/get-string (json/array-get #json([10, "x", true]) 1)) ; => "x"
 ```
 ```sweet-exp
-json/array-len(#json([10, "x", true]))                      ; => 3
+json/array-len(#json([10, "x", true]))                     ; => 3
 json/get-int(json/array-get(#json([10, "x", true]) 0))     ; => 10
 json/get-string(json/array-get(#json([10, "x", true]) 1))  ; => "x"
 ```

@@ -115,10 +115,10 @@ complications.
 `tests/fixtures/shift-crossfn-resume-works`:
 
 ```turmeric
-(defn inner  [] : int (shift (fn [k : cont] (k 1)) 0))                       ; resuming, no capture
+(defn inner  [] : int (shift (fn [k : cont] (k 1)) 0))                      ; resuming, no capture
 (defn twice  [] : int (shift (fn [k : cont] (+ (k 1) (k 2))) 0))            ; multi-shot, no capture
 (defn thrice [] : int (shift (fn [k : cont] (+ (+ (k 1) (k 2)) (k 3))) 0))  ; multi-shot, no capture
-(defn step   [base] : int (shift (fn [k : cont] (k base)) 0))              ; resuming, CAPTURES base
+(defn step   [base] : int (shift (fn [k : cont] (k base)) 0))               ; resuming, CAPTURES base
 (defn run    [] : int ... asserts direct == cps == 11 / 105 / 23 / 306 ...)
 ```
 

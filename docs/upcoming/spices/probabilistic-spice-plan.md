@@ -239,8 +239,8 @@ power of two for this, and the doc page should say so). For non-power-of-two
 (defn bloom-free     [bf : Bloom] : void ...)
 (defn bloom-insert!  [bf : Bloom data : int len : int] : nil ...)  ;; set k bits
 (defn bloom-maybe?   [bf : Bloom data : int len : int] : bool ...) ;; all k bits set?
-(defn bloom-count     [bf : Bloom] : int ...)             ;; popcount of the bit array
-(defn bloom-merge     [a : Bloom b : Bloom] : Bloom ...)  ;; bit-OR into a new filter
+(defn bloom-count     [bf : Bloom] : int ...)                      ;; popcount of the bit array
+(defn bloom-merge     [a : Bloom b : Bloom] : Bloom ...)           ;; bit-OR into a new filter
 
 (definstance JoinSemilattice [Bloom]
   (join [x y] (bloom-merge x y)))
@@ -273,8 +273,8 @@ convenience, the `m`/`k` one is what `bottom` and `merge` require to match.
 (defn hll-new      [p : int] : Hll ...)            ;; m = 2^p registers, init 0
 (defn hll-free      [h : Hll] : void ...)
 (defn hll-add!      [h : Hll data : int len : int] : nil ...) ;; hash, split, update register by max
-(defn hll-cardinality [h : Hll] : float ...)       ;; the estimate, with bias correction
-(defn hll-merge     [a : Hll b : Hll] : Hll ...)   ;; pointwise max
+(defn hll-cardinality [h : Hll] : float ...)                  ;; the estimate, with bias correction
+(defn hll-merge     [a : Hll b : Hll] : Hll ...)              ;; pointwise max
 
 (definstance JoinSemilattice [Hll]
   (join [x y] (hll-merge x y)))
@@ -309,7 +309,7 @@ is associative, commutative, idempotent, and the all-zero register set is
 (defn cms-add!       [c : CountMin data : int len : int] : nil ...) ;; ++d cells
 (defn cms-estimate   [c : CountMin data : int len : int] : int ...) ;; min over d rows
 (defn cms-merge      [a : CountMin b : CountMin] : CountMin ...)    ;; pointwise +
-(defn cms-inner-product [a : CountMin b : CountMin] : float ...)   ;; self-join size
+(defn cms-inner-product [a : CountMin b : CountMin] : float ...)    ;; self-join size
 
 (definstance JoinSemilattice [CountMin]
   (join [x y] (cms-merge x y)))

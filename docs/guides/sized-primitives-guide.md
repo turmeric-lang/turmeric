@@ -117,7 +117,7 @@ numeric kind. Both operands must have the same kind:
 ```
 ```sweet-exp
 {10i8 + 20i8}       ; int8 + int8   -> int8
-mod(100u32 7u32)   ; uint32 mod uint32 -> uint32
+mod(100u32 7u32)    ; uint32 mod uint32 -> uint32
 {1i32 < 2i32}       ; int32 < int32  -> bool
 {42u8 = 42u8}       ; uint8 = uint8  -> bool
 {1.5f32 + 2.5f32}   ; float32 + float32 -> float32
@@ -209,7 +209,7 @@ have the same kind, and the result has that kind -- no round-trip through
 bit-and(0xF0u8 0x0Fu8)          ; uint8 & uint8 -> 0u8
 bit-or(65280u16 255u16)         ; uint16 -> 65535u16
 bit-shl(1u8 3u8)                ; uint8 -> 8u8
-{bit-and(100u16 255u16) + 1u16}  ; result is uint16, usable in uint16 ops
+{bit-and(100u16 255u16) + 1u16} ; result is uint16, usable in uint16 ops
 ```
 
 `bit-shr` on an unsigned kind is a logical shift (0-fills the high bits).

@@ -254,9 +254,9 @@ UTC):
   (defn main [] : int
     (let [now (time/now-ms)
           utc (time/utc-parts now)
-          loc (time/local-parts now)]       ; the process's time zone (TZ)
-      (println (time/format-iso8601 utc))   ; 2026-10-21T09:30:00.123Z
-      (println (time/format-iso8601 loc))   ; 2026-10-21T11:30:00.123+02:00
+          loc (time/local-parts now)]             ; the process's time zone (TZ)
+      (println (time/format-iso8601 utc))         ; 2026-10-21T09:30:00.123Z
+      (println (time/format-iso8601 loc))         ; 2026-10-21T11:30:00.123+02:00
       (println (= (time/datetime->ms loc) now)))  ; true
     (match (time/parse-iso8601 "2026-10-21T11:30:00+02:00")
       (Some dt) (println (.hour dt))        ; 11

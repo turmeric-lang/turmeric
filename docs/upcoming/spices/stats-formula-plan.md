@@ -139,7 +139,7 @@ turmeric-spices/spices/stats-formula/
 ;;; For identity terms that create computed columns:
 (defstruct identity-term
   expr        :cstr   ;; the original expression inside I(...)
-  computed-col :int) ;; new column handle (ownership: caller must free)
+  computed-col :int)  ;; new column handle (ownership: caller must free)
 ```
 
 ---
@@ -152,7 +152,7 @@ AST node types for formula terms:
 
 ```turmeric
 (defenum FormulaNodeTag
-  FORM_RESPONSE    ;; LHS of ~
+  FORM_RESPONSE   ;; LHS of ~
   FORM_PREDICTOR  ;; atomic predictor (column name)
   FORM_SUM        ;; A + B (list of terms)
   FORM_INTERACT   ;; A * B (interaction)
@@ -363,7 +363,7 @@ use the formula parser to obtain column lists and pass them to existing function
 
 ;; Categorical predictor with automatic dummy coding
 (let [terms (formula-parse-terms f "mpg ~ cyl")]  ;; cyl is categorical
-  (ols-frame f ...))  ;; internally creates dummy columns
+  (ols-frame f ...))                              ;; internally creates dummy columns
 ```
 
 ### Extended tur-stats Functions (Optional Future Enhancement)

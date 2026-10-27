@@ -142,10 +142,10 @@ the listening socket and join the pool threads.
 ### Request accessors
 
 ```turmeric
-(req-method  req)       ;; "GET", "POST", "PUT", "DELETE", ...
-(req-path    req)       ;; "/users/42"
-(req-query   req)       ;; "page=1&limit=10"  (raw query string)
-(req-body    req)       ;; request body as cstr (may be "")
+(req-method  req)              ;; "GET", "POST", "PUT", "DELETE", ...
+(req-path    req)              ;; "/users/42"
+(req-query   req)              ;; "page=1&limit=10"  (raw query string)
+(req-body    req)              ;; request body as cstr (may be "")
 (req-header  req "x-api-key")  ;; value of a header, or 0 if absent
 ```
 ```sweet-exp
@@ -243,7 +243,7 @@ releases once with `string/release`, with no raw `free` to forget. See
 (env-free env)                      ;; release the Env
 ```
 ```sweet-exp
-env-new()                           ;; create an Env handle
+env-new()                          ;; create an Env handle
 env-set(env "key" "value")         ;; bind a scalar string
 env-set-list(env "items" lst)      ;; bind a cons list of cstr values
 env-free(env)                      ;; release the Env

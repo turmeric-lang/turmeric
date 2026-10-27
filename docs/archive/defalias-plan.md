@@ -429,10 +429,10 @@ for a composite type at all** — see
 `defalias` now accepts any type expression the elaborator can resolve:
 
 ```turmeric
-(defalias Sample    :int)                           ; TA1, unchanged
-(defalias IntList   (Cons int))                     ; type application
-(defalias Point     P)                              ; struct / ADT name
-(defalias Backtrack (fn [] int))                    ; function type
+(defalias Sample    :int)                            ; TA1, unchanged
+(defalias IntList   (Cons int))                      ; type application
+(defalias Point     P)                               ; struct / ADT name
+(defalias Backtrack (fn [] int))                     ; function type
 (defalias NonZero   #refine{ q : int | (not= q 0) }) ; refinement
 ```
 

@@ -17,7 +17,7 @@ The [CLI Arguments plan](cli-arguments-plan.md) introduces raw argument passing 
 
 - **Spec Format**:
   ```turmeric
-  {:flags       ["--verbose" "--help"]          ; boolean flags
+  {:flags       ["--verbose" "--help"]            ; boolean flags
    :options     {"--input"  :string               ; bare keyword = required, no default
                 "--count"  {:type :int    :default 1}
                 "--output" {:type :string :default "out.txt"}}

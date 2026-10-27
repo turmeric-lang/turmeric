@@ -39,8 +39,8 @@ that holds only if a boundary exists:
 ```turmeric
 (defn main [] : int
   (let [r (catch-panic-of :int (fn [] : int (panic "s")))]   ; payload is a cstr
-    (println (ok? r))      ; true -- the panic was swallowed
-    (println "after")      ; reached
+    (println (ok? r))                                        ; true -- the panic was swallowed
+    (println "after")                                        ; reached
     0))
 ```
 

@@ -47,7 +47,7 @@ was verified:
 
 ```turmeric
 (defeffect A [] :int)
-(defn emit-twice [T] [x : T] : int { (perform (A)) + (perform (A)) })  ; generic -> fiber monomorph
+(defn emit-twice [T] [x : T] : int { (perform (A)) + (perform (A)) })   ; generic -> fiber monomorph
 (defn run [] : int (handle (emit-twice 0) (A [] k) (resume k 5)))       ; concrete handler
 ```
 

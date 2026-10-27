@@ -216,8 +216,8 @@ combinator hierarchy applies. After SC7, schemas compose with the rest of
 
 ```turmeric
 (defstruct SchemaError
-  [path    :cstr    ;; dot-separated field path, e.g. "user.address.zip"
-   message :cstr    ;; human-readable: "expected :cstr, got :int"
+  [path    :cstr         ;; dot-separated field path, e.g. "user.address.zip"
+   message :cstr         ;; human-readable: "expected :cstr, got :int"
    value   :ptr<void>])  ;; the offending value
 ```
 

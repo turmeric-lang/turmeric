@@ -272,7 +272,7 @@ runtime.
 ```turmeric
 #r{0 <= n < len}        ; => (closed-open-range 0 len)
 #r{lo <= n <= hi}       ; => (closed-range lo hi)
-#r{(- hi 1) > n >= 0}  ; => (closed-open-range 0 (- hi 1))
+#r{(- hi 1) > n >= 0}   ; => (closed-open-range 0 (- hi 1))
 ```
 ```sweet-exp
 #r{0 <= n < len}         ; => closed-open-range(0 len)

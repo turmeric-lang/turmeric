@@ -317,16 +317,16 @@ Use `bind` directly to chain monadic operations:
 
 ```turmeric
 ;; Sequence two Option computations
-(let [step1  (__bind_option (__opt_some 3) (fn [x] (__opt_some (* x 2))))  ;; step1 = some 6
+(let [step1  (__bind_option (__opt_some 3) (fn [x] (__opt_some (* x 2))))   ;; step1 = some 6
       result (__bind_option step1 (fn [y] (__opt_some (+ y 1))))]           ;; result = some 7
-  (println (__opt_unwrap result)))  ;; 7
+  (println (__opt_unwrap result)))                                          ;; 7
 ```
 
 ```sweet-exp
 ;; Sequence two Option computations
 let [step1  __bind_option(__opt_some(3) (fn [x] __opt_some({x * 2})))  ;; step1 = some 6
      result __bind_option(step1 (fn [y] __opt_some({y + 1})))]         ;; result = some 7
-  println(__opt_unwrap(result))  ;; 7
+  println(__opt_unwrap(result))                                        ;; 7
 ```
 
 ## do-m Notation

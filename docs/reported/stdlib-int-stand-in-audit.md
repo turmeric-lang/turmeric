@@ -61,8 +61,8 @@ but every one of these passes `tur check` with exit 0 into `(defn sink [^fat
 handler : int] : int handler)`:
 
 ```turmeric
-(sink (fn [a : cstr b : cstr c : cstr] : cstr a))   ; 3 args, all wrong types
-(sink (fn [] : float 7.25))                          ; nullary, float result
+(sink (fn [a : cstr b : cstr c : cstr] : cstr a))     ; 3 args, all wrong types
+(sink (fn [] : float 7.25))                           ; nullary, float result
 (sink (fn [a : int b : int c : int d : int] : int a)) ; 4 args
 ```
 

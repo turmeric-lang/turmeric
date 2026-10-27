@@ -203,7 +203,7 @@ defimage-finalize-hook flush-log
     0
 
 defn main [] :int
-  image/register-reload-hook!(reopen-log)   ; install BOTH hooks at the top
+  image/register-reload-hook!(reopen-log)     ; install BOTH hooks at the top
   image/register-finalize-hook!(flush-log)    ; of main -- see the note below
   with-image-cache-after-init("/var/cache/app.img" expensive-init main-loop)
 ```

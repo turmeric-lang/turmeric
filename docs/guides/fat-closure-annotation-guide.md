@@ -147,7 +147,7 @@ from a captureless inner lambda:
 ```
 ```sweet-exp
 defn pfail [] ^fat :ptr<void>          ;; <- ^fat on the return
-  (fn [inp] pfail-impl(inp))          ;; inner lambda captures nothing
+  (fn [inp] pfail-impl(inp))           ;; inner lambda captures nothing
 ```
 
 Without `^fat` on the return type, the inner `(fn ...)` lowers to a
@@ -171,11 +171,11 @@ There are two ways to spell a `^fat` *parameter*, and they differ in what
 they know about the closure's **result type**:
 
 ```turmeric
-(defn run-with [^fat g x : int] : int (g x))                     ;; bare
+(defn run-with [^fat g x : int] : int (g x))                              ;; bare
 (defn run-with [^fat g :(fn [float] #{} float) x : float] : float (g x))  ;; annotated
 ```
 ```sweet-exp
-defn run-with [^fat g x : int] : int g(x)                     ;; bare
+defn run-with [^fat g x : int] : int g(x)                              ;; bare
 defn run-with [^fat g :(fn [float] #{} float) x : float] : float g(x)  ;; annotated
 ```
 

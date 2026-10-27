@@ -43,9 +43,9 @@ cloneable handle, resumed with the explicit `tur_cloneable_cont_resume` /
 sugar does not exist yet; `(k 1)` errors with "not a function or continuation").
 
 ```turmeric
-(defn step [k] : int                                   ; k : cloneable-cont handle
+(defn step [k] : int                                             ; k : cloneable-cont handle
   (+ (tur_cloneable_cont_resume (tur_cloneable_cont_clone k) 1)  ; resume once
-     (tur_cloneable_cont_resume k 2)))                 ; resume again (multi-shot)
+     (tur_cloneable_cont_resume k 2)))                           ; resume again (multi-shot)
 
 (k-reset (+ 10 (k-shift step 0)))   ; context (+ 10 []): (10+1) + (10+2) = 23
 ```

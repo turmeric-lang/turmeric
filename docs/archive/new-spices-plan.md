@@ -203,7 +203,7 @@ osc/bundle   -- timetag-stamped bundles
 (server-new-tcp "7770")
 (server-free s)
 (server-add-method s "/freq" ",f" handler-fn)  ;; register typed handler
-(server-recv s 100)                     ;; => :int (messages handled; 100ms timeout)
+(server-recv s 100)                            ;; => :int (messages handled; 100ms timeout)
 (server-recv-noblock s)
 
 ;; osc/client

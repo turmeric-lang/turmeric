@@ -350,7 +350,7 @@ discarded proof attempt and never a wrong answer. A function whose result
 genuinely satisfies none of them simply gets nothing:
 
 ```turmeric
-(defn lower [x : Pos] : int (- x 5))   ; can be negative -- nothing inferred
+(defn lower [x : Pos] : int (- x 5))           ; can be negative -- nothing inferred
 (defn use [p : Pos] : int (twice (lower p)))   ; correctly stays undischarged
 ```
 

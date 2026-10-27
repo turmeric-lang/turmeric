@@ -45,10 +45,10 @@ than `vec-pop!`.
 (defstruct Point :copy [x : int y : int])
 (defn main [] : int
   (let [v (vec-of (Point 1 2) (Point 3 4) (Point 5 6))]
-    (vec-set! v 0 (Point 9 9))   ;; old box at data[0] freed
-    (vec-drop-last! v)           ;; (Point 5 6) box freed
+    (vec-set! v 0 (Point 9 9))                      ;; old box at data[0] freed
+    (vec-drop-last! v)                              ;; (Point 5 6) box freed
     (println (show (.x (:: (vec-get v 0) Point))))  ;; 9
-    (vec-free v)                 ;; remaining boxes freed
+    (vec-free v)                                    ;; remaining boxes freed
     0))
 ```
 

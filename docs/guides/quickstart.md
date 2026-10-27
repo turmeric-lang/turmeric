@@ -62,7 +62,7 @@ a value followed by a newline:
 (not true)                     ; => false
 ```
 ```sweet-exp
-println("Hello, Turmeric!")   ; prints: Hello, Turmeric!
+println("Hello, Turmeric!")    ; prints: Hello, Turmeric!
 {1 = 1}                        ; => true
 not(true)                      ; => false
 ```
@@ -248,7 +248,7 @@ defn safe-div [a :int b :int]
     some({a / b})
 
 unwrap $ safe-div 10 2            ; => 5
-unwrap-or(safe-div(10 0) -1)     ; => -1
+unwrap-or(safe-div(10 0) -1)      ; => -1
 ```
 
 ### `Result`: success or failure
@@ -256,8 +256,8 @@ unwrap-or(safe-div(10 0) -1)     ; => -1
 `ok` wraps a success value; `err` wraps an error value:
 
 ```turmeric
-(ok? (ok 100))               ; => true
-(err? (ok 100))              ; => false
+(ok? (ok 100))                   ; => true
+(err? (ok 100))                  ; => false
 (result-unwrap-or (err 0) -1)    ; => -1
 ```
 ```sweet-exp

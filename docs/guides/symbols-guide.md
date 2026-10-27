@@ -175,9 +175,9 @@ at runtime (deserialization, REPL tools), load the opt-in module:
 ```turmeric
 (load "stdlib/sym-dynamic.tur")
 
-(eq? :hello (str->sym "hello"))   ; => true  (same pointer as the literal)
+(eq? :hello (str->sym "hello"))     ; => true  (same pointer as the literal)
 (eq? (str->sym "x") (str->sym "x")) ; => true  (stable; one record allocated)
-(sym->str (str->sym "round"))     ; => "round"
+(sym->str (str->sym "round"))       ; => "round"
 ```
 ```sweet-exp
 load("stdlib/sym-dynamic.tur")

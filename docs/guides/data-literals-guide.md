@@ -108,8 +108,8 @@ surrounding form decides whether it is read as a binding spec or a value.
 
 ```turmeric
 (defn add [x : int y : int] : int (+ x y))   ; [x :int y :int] is a param list
-(let [a 1 b 2] (+ a b))                   ; [a 1 b 2] is a binding vector
-(def v [1 2 3])                           ; [1 2 3] is a vec literal
+(let [a 1 b 2] (+ a b))                      ; [a 1 b 2] is a binding vector
+(def v [1 2 3])                              ; [1 2 3] is a vec literal
 ```
 ```sweet-exp
 defn add [x :int y :int] :int
@@ -208,7 +208,7 @@ exactly as `vec-of` reports one at `vec-push!`. A set of mixed values is spelled
 `7.1` compares by value like a bare `7.1`, and a bare `1` finds the boxed `1`:
 
 ```turmeric no-check
-(set-of (:: 1 any) (:: "two" any) (:: 7.1 any) (:: "two" any))  ; => (Set any), 3 members
+(set-of (:: 1 any) (:: "two" any) (:: 7.1 any) (:: "two" any))   ; => (Set any), 3 members
 (set-member? s (hash 1) 1)                                       ; => true
 ```
 

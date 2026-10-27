@@ -41,10 +41,10 @@ builtin row -- `Rational`, `Complex`, your own -- `+ - * /` fall back to its
 
 ```turmeric
 (defn main [] : int
-  (println (+ 1 2 3))          ; 6
-  (println (- 10 3 2))         ; 5  -- (10 - 3) - 2
-  (println (- 7.1))            ; -7.1
-  (println (/ 7.5 2.0))        ; 3.75
+  (println (+ 1 2 3))               ; 6
+  (println (- 10 3 2))              ; 5  -- (10 - 3) - 2
+  (println (- 7.1))                 ; -7.1
+  (println (/ 7.5 2.0))             ; 3.75
   (println (and (< 1 2) (< 2 3)))   ; true
   0)
 ```
@@ -53,10 +53,10 @@ builtin row -- `Rational`, `Complex`, your own -- `+ - * /` fall back to its
 #lang sweet-exp
 
 defn main [] : int
-  println(+(1 2 3))          ; 6
-  println(-(10 3 2))         ; 5  -- (10 - 3) - 2
-  println(-(7.1))            ; -7.1
-  println({7.5 / 2.0})       ; 3.75
+  println(+(1 2 3))               ; 6
+  println(-(10 3 2))              ; 5  -- (10 - 3) - 2
+  println(-(7.1))                 ; -7.1
+  println({7.5 / 2.0})            ; 3.75
   println(and({1 < 2} {2 < 3}))   ; true
   0
 ```

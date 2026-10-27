@@ -70,7 +70,7 @@ ABI specializer's per-nominal-type specs and turi on the gde_* heuristics.
 (defclass P [a] (pv [x : a] : int))
 (definstance P [int]  (pv [x] 1))
 (definstance P [cstr] (pv [x] 2))
-(defn f1 [^P a] [x : a] : int (pv x))   ;; fd->constraints.n_constraints == 0
+(defn f1 [^P a] [x : a] : int (pv x))      ;; fd->constraints.n_constraints == 0
 (defn f2 [A] [(P A)] [x : A] : int (pv x)) ;; == 1
 ```
 

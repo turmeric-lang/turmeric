@@ -43,10 +43,10 @@ struct and pass a single options value:
 ```
 ```sweet-exp
 defstruct CsvOpts [delim       :int   ;; field separator (e.g. 44 = ',')
-   quote       :int   ;; quote char (e.g. 34 = '"')
-   has-header  :int   ;; 1 = first row is header
-   infer-rows  :int   ;; rows to sample for type inference
-   null-str    :cstr  ;; string that represents NULL (e.g. "")
+   quote       :int                   ;; quote char (e.g. 34 = '"')
+   has-header  :int                   ;; 1 = first row is header
+   infer-rows  :int                   ;; rows to sample for type inference
+   null-str    :cstr                  ;; string that represents NULL (e.g. "")
   ]
 defn read-csv [src :cstr opts :CsvOpts] :int
   ...
@@ -89,7 +89,7 @@ rest parameter:
   ...)
 
 (println-all "hello")              ;; rest = nil (0)
-(println-all "a" "b" "c")         ;; rest = cons("b", cons("c", 0))
+(println-all "a" "b" "c")          ;; rest = cons("b", cons("c", 0))
 ```
 ```sweet-exp
 defn println-all [first :cstr & rest :cstr] :void

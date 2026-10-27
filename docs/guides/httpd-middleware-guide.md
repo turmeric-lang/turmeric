@@ -592,13 +592,13 @@ same keep-alive connection.
 
 ```turmeric
 (httpd-set-attr! c "user" "alice")
-(let [u (httpd-req-attr c "user")] ...)   ; => "alice"
+(let [u (httpd-req-attr c "user")] ...)    ; => "alice"
 (let [x (httpd-req-attr c "missing")] ...) ; => ""
 ```
 
 ```sweet-exp
 httpd-set-attr!(c "user" "alice")
-let [u httpd-req-attr(c "user")] ...   ; => "alice"
+let [u httpd-req-attr(c "user")] ...    ; => "alice"
 let [x httpd-req-attr(c "missing")] ... ; => ""
 ```
 

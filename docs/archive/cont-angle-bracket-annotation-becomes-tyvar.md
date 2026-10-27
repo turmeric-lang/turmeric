@@ -56,7 +56,7 @@ This is the same defect as
 ## Repro
 
 ```turmeric
-(defn helper [k : cont<int>] : int (+ k 1))   ; TUR-E0006: "first arg type tyvar"
+(defn helper [k : cont<int>] : int (+ k 1))  ; TUR-E0006: "first arg type tyvar"
 (defn h2 [k : cont<cstr>] : cstr k)          ; accepted: a tyvar returns as cstr
 (defn h3 [k : effect-cont<int>] : int 1)     ; accepted, also a tyvar
 ```

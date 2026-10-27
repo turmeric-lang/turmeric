@@ -42,7 +42,7 @@ static int64_t __poly_905(void * __poly_env_906, int64_t __poly_x0_908) {
 
 (defn main [] : int
   (let [w       (__id_new 42)
-        adder10 (make-adder 10)]      ;; capturing closure VALUE bound to a local
+        adder10 (make-adder 10)]                ;; capturing closure VALUE bound to a local
     (println (__id_get (.boxmap w adder10))))   ;; expect 52
   0)
 ```

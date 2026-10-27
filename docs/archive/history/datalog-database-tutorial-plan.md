@@ -211,8 +211,8 @@ defalias Attribute cstr)
 (defstruct IndexedDatabase
   [datums : (Vector Datum)
    next_tx : int64
-   eavt_index : (Map (Pair Entity Attribute) (Vector Datum))  ;; Entity -> Attr -> [Datum]
-   aev_index : (Map Attribute (Map Entity (Vector Datum)))     ;; Attr -> Entity -> [Datum]
+   eavt_index : (Map (Pair Entity Attribute) (Vector Datum))              ;; Entity -> Attr -> [Datum]
+   aev_index : (Map Attribute (Map Entity (Vector Datum)))                ;; Attr -> Entity -> [Datum]
    vae_index : (Map Value (Map Attribute (Map Entity (Vector Datum))))])  ;; Value -> Attr -> Entity -> [Datum]
 ```
 
@@ -1269,7 +1269,7 @@ A query is a map with three keys:
 ```turmeric
 (defalias FindClause
   (variant
-    FIND_VAR   cstr            ;; ?e, ?name, ...
+    FIND_VAR   cstr                          ;; ?e, ?name, ...
     FIND_PULL  (Pair cstr (list Attribute))  ;; (pull ?e [:user/name :user/email])
     FIND_AGG   (Pair AggFn cstr)))           ;; (count ?e), (distinct ?v)
 

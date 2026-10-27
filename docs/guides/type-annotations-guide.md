@@ -180,12 +180,12 @@ defn fmap [^f x : (^f a)  fn : (-> a b)] : (^f b) ...
 `|` is a valid symbol character, enabling Haskell- and Arrows-style operators:
 
 ```turmeric
-(defn ||| [a : arr  b : arr] : arr ...)  ;; parallel composition
+(defn ||| [a : arr  b : arr] : arr ...)   ;; parallel composition
 (defn |>  [x : a   f : (-> a b)] : b ...) ;; pipe
 ```
 
 ```sweet-exp
-defn ||| [a : arr  b : arr] : arr ...  ;; parallel composition
+defn ||| [a : arr  b : arr] : arr ...   ;; parallel composition
 defn |>  [x : a   f : (-> a b)] : b ... ;; pipe
 ```
 

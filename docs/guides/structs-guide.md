@@ -62,7 +62,7 @@ Every struct has a **copy kind** that governs how the value can be used:
 ```
 
 ```sweet-exp
-defstruct Point   :copy   [x :int y :int]      ; freely copyable
+defstruct Point   :copy   [x :int y :int]       ; freely copyable
 defstruct Packet  :move   [ptr :ptr<void>]      ; ownership transferred on use
 defstruct Socket  :linear [fd :int]             ; must be consumed exactly once
 ```
@@ -232,7 +232,7 @@ Keyword order is free; the elaborator reorders into declared-field order:
 ```turmeric
 (defstruct Person :copy [name : cstr age : int])
 
-(Person :name "Bob" :age 40)            ; auto-bound ctor, keyword form
+(Person :name "Bob" :age 40)             ; auto-bound ctor, keyword form
 (make-struct Person :age 40 :name "Bob") ; make-struct, reversed order
 ```
 

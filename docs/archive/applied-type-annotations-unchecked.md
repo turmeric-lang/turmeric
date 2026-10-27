@@ -7,11 +7,11 @@ Where the value reached a scalar slot it was a box's address:
 (defn f [o : int] : int o)
 (f (some 7.1))                              ; printed 140721223092080, both engines
 
-(defn h [x : float] : cstr (some x))        ; type-checked; cc then refused it
+(defn h [x : float] : cstr (some x))            ; type-checked; cc then refused it
 (defn opt-carrier [o : (Option int)] : int o)   ; "accepted" -- until called
-(let [o : (Option int) (some 7.1)] ...)     ; `o` silently an (Option float)
-(let [o : (Vec int) (some 1)] ...)          ; accepted
-(defn k [] : (Option int) 7)                ; accepted
+(let [o : (Option int) (some 7.1)] ...)         ; `o` silently an (Option float)
+(let [o : (Vec int) (some 1)] ...)              ; accepted
+(defn k [] : (Option int) 7)                    ; accepted
 ```
 
 Found 2026-10-01 while widening the type fuzzer's rank-2 class crossing to a

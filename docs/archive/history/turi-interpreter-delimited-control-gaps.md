@@ -44,7 +44,7 @@ interpreter-side hole in delimited control.
 (defn main [] : int
   (let [r (handle (perform (Ask))
             (Ask [] ^multishot k)
-              (+ (resume k 10) (resume k 20)))]   ; resumes k twice
+              (+ (resume k 10) (resume k 20)))]    ; resumes k twice
     (println r))                                   ; expected 20
   0)
 ```
@@ -68,7 +68,7 @@ report needs (`tur_continuation_snapshot`).
 (defn compute [] : int (let [x (perform (Ask))] (* x 2)))
 (let [^mut k-store 0]
   (let [first-result (handle (compute) (Ask [] k) (do (set! k-store k) 0))]
-    (println first-result)                 ; 0
+    (println first-result)                  ; 0
     (let [second-result (resume k-store 5)] ; resume AFTER handle returned
       (println second-result))))            ; expected 10
 ```

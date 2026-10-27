@@ -30,12 +30,26 @@ bindings, and comments and blank lines between bindings are ignored.  A
 sketch in a plan, an unfinished repro): this is an alignment check, not a
 parser.
 
+Trailing comments are checked too.  Consecutive lines that each end in a `;`
+comment after code form a run, and a run's comments start in one column:
+
+    (println (color-to-int (Red)))                 ; 1
+    (println (eval-expr (Add (Lit 10) (Lit 20))))  ; 30
+
+That column is the one most of the run's lines already use, when every line's
+code ends left of it, else the column of the longest code line's comment.  A
+comment-only line right of the code above it continues its comment; any
+other line (blank, code with no comment, a full-line comment elsewhere) ends
+the run.  Strings (multi-line ones too), `#\\;`, a `#;` datum comment,
+`#| ... |#` and inline C are not comments.
+
 Usage: check-let-alignment.py [--fix] [--selftest] [path ...]
                                                    (default: docs/, README.md)
 A .md path is scanned for fenced snippets; a .tur / .tur.sweet path is scanned
 whole.  `--fix` rewrites the misaligned vectors in place (whitespace only:
 names are moved under the first binding's, values padded to one column, a
-multi-line value's continuation lines moved with it) and reports what it
+multi-line value's continuation lines moved with it; a comment moved to its
+run's column by changing only the blanks before its `;`) and reports what it
 could not fix.  `--selftest` first runs the checker and the rewriter over the
 samples at the bottom of this file (the rewriter once mangled a vector whose
 two bindings shared a line).  Exit 1 when anything is, or is left,
@@ -67,7 +81,10 @@ class Problem(Exception):
 def fenced_snippets(text):
     """Yield (start_line_idx, end_line_idx, lines) for each Turmeric fence in a
     Markdown text; the indices are into text.split("\\n") and cover the body.
-    A fence inside a list item is de-indented by the fence line's indent."""
+    A fence inside a list item is de-indented by the fence line's indent.
+    As in CommonMark, a closing fence is indented at most three columns past
+    the opening one's: the indented ``` that closes an inline-C block inside
+    a sweet-exp `defn` is part of the snippet, not its end."""
     lines = text.split("\n")
     i = 0
     while i < len(lines):
@@ -80,7 +97,9 @@ def fenced_snippets(text):
         i += 1
         while i < len(lines):
             s = lines[i].strip()
-            if s.startswith(fence[0] * len(fence)) and s.strip(fence[0]) == "":
+            lead = len(lines[i]) - len(lines[i].lstrip(" "))
+            if s.startswith(fence[0] * len(fence)) and s.strip(fence[0]) == "" \
+                    and lead <= len(indent) + 3:
                 break
             i += 1
         if lang in SNIPPET_LANGS:
@@ -94,7 +113,7 @@ def inline_c_mask(lines):
     its braces and semicolons are C, not Turmeric, and the fence line too."""
     mask, in_c = [], False
     for l in lines:
-        s = l.strip()
+        s = l.strip().replace("\u200b", "")
         if not in_c and s.startswith("```"):
             in_c = True
             mask.append(True)
@@ -122,6 +141,15 @@ def tokenize(lines, mask):
                 ci += 1
             elif c == ";":
                 break
+            elif line.startswith("#;", ci):
+                yield "#;", li, ci, ci + 2   # datum comment: not a line comment
+                ci += 2
+            elif line.startswith("#\\", ci) and ci + 2 < n:
+                j = ci + 3                # `#\;`, `#\(`, `#\space`
+                while j < n and line[j] not in " \t;\"()[]{}":
+                    j += 1
+                yield line[ci:j], li, ci, j
+                ci = j
             elif c in OPEN or c in CLOSE:
                 yield c, li, ci, ci + 1
                 ci += 1
@@ -290,7 +318,7 @@ def check_snippet(lines):
     report = []
     for head, li, pairs in vectors(lines):
         report += problems(pairs, head)
-    return report
+    return sorted(report + comment_problems(lines))
 
 
 # -- fixing ------------------------------------------------------------------
@@ -355,7 +383,149 @@ def fix_snippet(lines):
                 break           # columns moved: re-tokenize before the next one
         if not changed:
             break
+    fix_comments(lines)         # last: realigning values moves comments
     return check_snippet(lines)
+
+
+# -- trailing comments ---------------------------------------------------------
+
+def trailing_comment(line):
+    """(code_end, col) for a line whose `;` comment starts at `col`: code_end
+    is the end of the code before it, or None for a comment-only line.  None
+    when the line has no comment.  Strings, `#\\;`, a `#;` datum comment and a
+    one-line ```c ...``` span are not comments."""
+    i, n, code_end = 0, len(line), None
+    while i < n:
+        c = line[i]
+        if c == ";":
+            return code_end, i
+        if c == '"':
+            i += 1
+            while i < n and line[i] != '"':
+                i += 2 if line[i] == "\\" else 1
+            i += 1
+        elif line.startswith("#\\", i):
+            i += 3
+        elif line.startswith("#;", i):
+            i += 2                      # datum comment: the datum is code
+        elif line.startswith("```", i):
+            close = line.find("```", i + 3)
+            if close < 0:
+                return None
+            i = close + 3
+        elif c in " \t":
+            i += 1
+            continue
+        else:
+            i += 1
+        code_end = min(i, n)
+    return None
+
+
+def multiline_mask(lines, skip):
+    """True for each line that is in, or touches, a `#| ... |#` block comment
+    (they nest) or a string that spans lines (a `#dedent` block): its `;` is
+    text, not a trailing comment.  Lines in `skip` (inline C) are not read."""
+    mask, depth, quote = [], 0, None
+    for li, line in enumerate(lines):
+        if skip[li]:
+            mask.append(True)
+            continue
+        touched, i, n = depth > 0 or quote is not None, 0, len(line)
+        while i < n:
+            if quote:
+                if line[i] == "\\":
+                    i += 2
+                elif line.startswith(quote, i):
+                    quote, i = None, i + len(quote)
+                else:
+                    i += 1
+            elif depth:
+                if line.startswith("#|", i):
+                    depth, i = depth + 1, i + 2
+                elif line.startswith("|#", i):
+                    depth, i = depth - 1, i + 2
+                else:
+                    i += 1
+            elif line.startswith("#|", i):
+                depth, touched, i = 1, True, i + 2
+            elif line[i] == '"':
+                quote = '"""' if line.startswith('"""', i) else '"'
+                i += len(quote)
+            elif line.startswith("#\\", i):
+                i += 3
+            elif line[i] == ";":
+                break
+            else:
+                i += 1
+        mask.append(touched or depth > 0 or quote is not None)
+    return mask
+
+
+def comment_runs(lines):
+    """Runs of consecutive lines that each end in a comment after code, as
+    [(line_idx, code_end, col)].  A comment-only line whose `;` sits right of
+    the code above it continues that line's comment (code_end None) and moves
+    with it; any other line ends the run."""
+    mask = multiline_mask(lines, inline_c_mask(lines))
+    runs, run = [], []
+    for li, line in enumerate(lines):
+        tc = None if mask[li] else trailing_comment(line)
+        if tc and tc[0] is not None:
+            run.append((li, tc[0], tc[1]))
+            continue
+        if tc and run and tc[0] is None and run[-1][1] is not None \
+                and tc[1] > run[-1][1]:
+            run.append((li, None, tc[1]))
+            continue
+        if sum(1 for m in run if m[1] is not None) > 1:
+            runs.append(run)
+        run = []
+    if sum(1 for m in run if m[1] is not None) > 1:
+        runs.append(run)
+    return runs
+
+
+def comment_target(run):
+    """The column a run's comments belong in: the one most of its lines already
+    use (the rightmost on a tie), when every line's code ends left of it;
+    otherwise the column of the longest code line's own comment."""
+    code = [m for m in run if m[1] is not None]
+    cols = [m[2] for m in code]
+    common = max(set(cols), key=lambda c: (cols.count(c), c))
+    if all(m[1] < common for m in code):
+        return common
+    longest = max(m[1] for m in code)
+    return max(m[2] for m in code if m[1] == longest)
+
+
+def comment_problems(lines):
+    """[(line_idx, message)] for every trailing comment out of its run's column."""
+    out = []
+    for run in comment_runs(lines):
+        target = comment_target(run)
+        ref = next(m for m in run if m[2] == target)
+        for li, code_end, col in run:
+            if col != target and code_end is not None:
+                d = ref[0] - li
+                where = f"{abs(d)} line{'s' * (abs(d) != 1)} {'below' if d > 0 else 'above'}"
+                out.append((li, f"trailing comment starts at column {col + 1}, but "
+                            f"the one {where} starts at column {target + 1}; "
+                            "line up the comments of consecutive lines"))
+    return out
+
+
+def fix_comments(lines):
+    """Move each misaligned run's comments to its column (whitespace only); a
+    continuation line moves as far as the comment it continues."""
+    for run in comment_runs(lines):
+        target, delta = comment_target(run), 0
+        for li, code_end, col in run:
+            if code_end is None:
+                lines[li] = shift(lines[li], delta)
+                continue
+            delta = target - col
+            lines[li] = lines[li][:code_end] + " " * (target - code_end) + lines[li][col:]
 
 
 # -- driver ------------------------------------------------------------------
@@ -468,6 +638,56 @@ SELFTEST = [
      "  x)",
      None,
      []),
+    # Trailing comments: a line whose code runs past the column the others
+    # share sets the column; a comment-only continuation stays with its line.
+    ("(defn main [] : int\n"
+     "  (println (color-to-int (Red)))            ; 1\n"
+     "  (println (eval-expr (Add (Lit 10) (Lit 20))))  ; 30\n"
+     "                                                 ; (10 + 20)\n"
+     "  (println (color-to-int (Green)))          ; 2\n"
+     "  0)",
+     "(defn main [] : int\n"
+     "  (println (color-to-int (Red)))                 ; 1\n"
+     "  (println (eval-expr (Add (Lit 10) (Lit 20))))  ; 30\n"
+     "                                                 ; (10 + 20)\n"
+     "  (println (color-to-int (Green)))               ; 2\n"
+     "  0)",
+     ["trailing comment starts at column 45, but the one 1 line below starts "
+      "at column 50"]),
+    # The column most lines use wins when every line's code fits left of it.
+    ("(a)      ; x\n"
+     "(bb)     ; y\n"
+     "(ccc)  ; z",
+     "(a)      ; x\n"
+     "(bb)     ; y\n"
+     "(ccc)    ; z",
+     ["trailing comment starts at column 8"]),
+    # A continuation moves with the comment it continues.
+    ("(a)     ; x\n"
+     "(bb)   ; y\n"
+     "         ; y, indented\n"
+     "(c)     ; z",
+     "(a)     ; x\n"
+     "(bb)    ; y\n"
+     "          ; y, indented\n"
+     "(c)     ; z",
+     ["trailing comment starts at column 8"]),
+    # Not comments: a `;` in a string, `#\;`, a `#;` datum comment, one-line
+    # inline C, a block comment; blank lines and full-line comments end a run.
+    ("(println \"a;b\")                      ; s\n"
+     "(f #\\; #;99 1)                       ; c\n"
+     "(defn g [] : int ```c return 0; ```) ; c\n"
+     "\n"
+     "(h)  ; x\n"
+     ";; heading\n"
+     "(hh)   ; y\n"
+     "#| (k) ; not a comment\n"
+     "   (kk)  ; nor this |#\n"
+     "(println #dedent\"\"\"\n"
+     "    return 0;\n"
+     "    x = 1;  \"\"\")",
+     None,
+     []),
 ]
 
 
@@ -521,7 +741,7 @@ def main(argv):
         else:
             print(f"FAIL check-let-alignment: no such path {arg}")
             return 1
-    nfail, nfixed = 0, 0
+    nfail, ncomment, nfixed = 0, 0, 0
     for path in paths:
         try:
             rel = path.relative_to(ROOT)
@@ -533,11 +753,18 @@ def main(argv):
             print(f"fixed check-let-alignment: {rel}")
         for line, msg in report:
             print(f"FAIL check-let-alignment: {rel}:{line}: {msg}")
-            nfail += 1
+            if msg.startswith("trailing comment"):
+                ncomment += 1
+            else:
+                nfail += 1
+    hint = "" if fix else ", or run this script with --fix"
+    if ncomment:
+        print(f"  {ncomment} misaligned trailing comment(s); line up the comments "
+              f"of consecutive lines{hint}.")
     if nfail:
         print(f"  {nfail} misaligned binding vector(s); see CLAUDE.md "
-              "\"Binding vectors -- align bindings under each other\""
-              + ("" if fix else ", or run this script with --fix") + ".")
+              f"\"Binding vectors -- align bindings under each other\"{hint}.")
+    if nfail or ncomment:
         return 1
     print(f"PASS check-let-alignment ({len(paths)} files"
           + (f", {nfixed} rewritten" if fix else "") + ")")

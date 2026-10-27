@@ -80,7 +80,7 @@ big-bang `cstr -> String` sweep: most `cstr` sites are borrowed literals where
   (let [k (make-key)
         m (map-assoc (:: (map-new) (Map String int)) k 42)]
     (do
-      (string/release k)                    ;; drop the SOURCE key
+      (string/release k)                      ;; drop the SOURCE key
       (let [probe (string/from-cstr "alpha")] ;; independent, equal key
         (do
           (println (map-get m probe))       ;; => 42  (map owns its own copy)
@@ -308,7 +308,7 @@ can neither be freed nor mutated underneath the slice.
   (string/release s)                 ;; parent kept alive by the slice
   (slice/byte-at w 0)                ;; 119 ('w'); bounds-checked, -1 out of range
   (slice/sub w 0 3)                  ;; "wor" -- O(1), views the same parent
-  (slice/to-string w))              ;; materialize an owned String only when needed
+  (slice/to-string w))               ;; materialize an owned String only when needed
 ```
 
 Surface: `string/slice` / `string/slice-cstr` (construct), `slice/sub` (O(1)

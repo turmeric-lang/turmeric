@@ -46,7 +46,7 @@ defn main [] : int
   let [px point-x()
        p  make-struct(Point :x 3 :y 9)]
     println(view(px p))                                     ; 3
-    println(.x(set(px 42 p)))                              ; 42
+    println(.x(set(px 42 p)))                               ; 42
     println(.x(over(px (fn [v : int] : int {v * 10}) p)))   ; 30
   0
 ```

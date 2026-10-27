@@ -29,7 +29,7 @@ but never called, so the field's control block and payload leak.
 ```turmeric
 (defstruct Own [r : rc<int> tag : int])
 (defn f [] : int
-  (let [o (make-struct Own :r (rc/of 7) :tag 9)]   ; o owns an rc<int>
+  (let [o (make-struct Own :r (rc/of 7) :tag 9)]    ; o owns an rc<int>
     (.tag o)))                                      ; o does not escape
 (defn main [] : int (println (f)) 0)
 ```

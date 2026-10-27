@@ -98,7 +98,7 @@ compile-time error.
 (defn bad [] : unit
   (let [x 42
         y x]       ;; alias created
-    (modify x)))  ;; ERROR TUR-E0200: 'x' is not unique (aliased by 'y')
+    (modify x)))   ;; ERROR TUR-E0200: 'x' is not unique (aliased by 'y')
 ```
 
 ```sweet-exp

@@ -181,7 +181,7 @@ consuming nothing -- when it did not. Read the result with `some?`,
 produces, without changing what `p` reads:
 
 ```turmeric
-(fmap (satisfy digit?) char->digit)          ; (Parser int)
+(fmap (satisfy digit?) char->digit)           ; (Parser int)
 (fmap (many1 (satisfy alpha?)) list->string)  ; (Parser String)
 ```
 

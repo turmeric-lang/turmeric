@@ -160,8 +160,8 @@ err-context(r "prefix")  ;; prepend "prefix: " to the err string; ok passes thro
 ### Collection utilities
 
 ```turmeric
-(result-collect    vec)    ;; (vec result) -> result<vec, E>; first err wins
-(result-partition  vec)    ;; -> pair; separate ok and err elements
+(result-collect    vec)      ;; (vec result) -> result<vec, E>; first err wins
+(result-partition  vec)      ;; -> pair; separate ok and err elements
 (result-partition-ok  pair)  ;; -> vec of ok values from the pair
 (result-partition-err pair)  ;; -> vec of err values from the pair
 ```
@@ -225,7 +225,7 @@ early from the enclosing function. It is the ergonomic counterpart to manual
 let [__q expr]
   if err?(__q)
       return(__q)        ;; propagate the err Result unchanged
-      ok-val(__q)      ;; otherwise yield the unwrapped ok value
+      ok-val(__q)        ;; otherwise yield the unwrapped ok value
 ```
 
 The lowering routes through the `#fx{}`-safe stdlib helpers `__tur-q-is-err?`
@@ -602,8 +602,8 @@ These are the underlying functions used by `must!` and `must-msg!`:
 (option-expect (none)    "want value")  ;; panic: want value
 ```
 ```sweet-exp
-option-must(some(42))               ;; => 42
-option-must(none())                 ;; panic: option-must: called on none
+option-must(some(42))                ;; => 42
+option-must(none())                  ;; panic: option-must: called on none
 option-expect(some(42) "want value") ;; => 42
 option-expect(none()   "want value") ;; panic: want value
 ```

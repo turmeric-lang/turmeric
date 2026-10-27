@@ -981,7 +981,7 @@ type -- the Haskell `type Storage c = ...` / Rust `type Item;` pattern:
 ```sweet-exp
 defclass Container [t]
   (type Elem : Type)               ;; associated type member
-  (make-empty [self : t] : int)   ;; ordinary value method
+  (make-empty [self : t] : int)    ;; ordinary value method
 
 definstance Container [(Vec int)]
   (type Elem = int)                ;; per-instance binding

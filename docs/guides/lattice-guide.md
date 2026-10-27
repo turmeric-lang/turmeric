@@ -182,9 +182,9 @@ algebra.
 ## Folding with `mconcat`
 
 ```turmeric
-(mconcat (vec-of (:: 1 Sum) (:: 2 Sum) (:: 3 Sum)))          ; => Sum 6
+(mconcat (vec-of (:: 1 Sum) (:: 2 Sum) (:: 3 Sum)))             ; => Sum 6
 (mconcat (vec-of (:: 2 Product) (:: 3 Product) (:: 4 Product))) ; => Product 24
-(mconcat (:: (vec-of) (Vec Sum)))                            ; => Sum 0
+(mconcat (:: (vec-of) (Vec Sum)))                               ; => Sum 0
 ```
 ```sweet-exp
 mconcat $ vec-of((:: 1 Sum) (:: 2 Sum) (:: 3 Sum))

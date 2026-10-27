@@ -319,7 +319,7 @@ inside is the current workaround:
 
 ```turmeric
 (let [scale  3
-      interp (fn [inner] (* inner scale))   ; closure built in normal scope
+      interp (fn [inner] (* inner scale))                ; closure built in normal scope
       r      (unsafe (free-run interp (free-lift 10)))]  ; only the call is unsafe
   ...)
 ```

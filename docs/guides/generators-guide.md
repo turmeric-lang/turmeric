@@ -392,9 +392,9 @@ seq/flatten(seq-from-vec([seq/range(0 2) seq/range(5 7)]))
 (seq/for-each println (seq/range 0 3)) ; prints 0 1 2
 
 ;; short-circuit consumers
-(seq/any? even? (seq/range 1 10))      ; => true (stops at 2)
-(seq/all? even? (seq/range 0 6 2))    ; => true  (checks 0 2 4)
-(seq/find even? (seq/range 1 10))     ; => (some 2)
+(seq/any? even? (seq/range 1 10))       ; => true (stops at 2)
+(seq/all? even? (seq/range 0 6 2))      ; => true  (checks 0 2 4)
+(seq/find even? (seq/range 1 10))       ; => (some 2)
 (seq/find-index even? (seq/range 1 10)) ; => (some 1)
 ```
 
@@ -452,14 +452,14 @@ integer ranges can be converted to `Seq`.
 ### Predicates
 
 ```turmeric
-(range-contains? (closed-range 1 10) 5)     ; => true
-(range-contains? (open-range   1 10) 10)    ; => false
-(range-encloses? (closed-range 0 10) (closed-range 2 8))  ; => true
-(range-overlaps? (closed-range 0 5)  (closed-range 3 8))  ; => true
+(range-contains? (closed-range 1 10) 5)                        ; => true
+(range-contains? (open-range   1 10) 10)                       ; => false
+(range-encloses? (closed-range 0 10) (closed-range 2 8))       ; => true
+(range-overlaps? (closed-range 0 5)  (closed-range 3 8))       ; => true
 (range-connected? (closed-open-range 0 5) (closed-range 5 10)) ; => true
-(empty-range? (open-range 5 5))             ; => true
-(singleton-range? (closed-range 7 7))       ; => true
-(bounded-range? (at-least-range 0))         ; => false
+(empty-range? (open-range 5 5))                                ; => true
+(singleton-range? (closed-range 7 7))                          ; => true
+(bounded-range? (at-least-range 0))                            ; => false
 ```
 
 ### Set operations

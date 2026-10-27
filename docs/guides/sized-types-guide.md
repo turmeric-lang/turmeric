@@ -176,7 +176,7 @@ that).
 ```sweet-exp
 let [v sized-vec-of-3(10 20 30)]
   println(sized-vec-len(v))       ; => 3
-  println(sized-vec-get(v 1))    ; => 20
+  println(sized-vec-get(v 1))     ; => 20
 ```
 
 `sized-vec-push` prepends an element and returns a new `SizedVec` whose size
@@ -201,7 +201,7 @@ let [v  sized-vec-of-2(1 2)
 Five predicates compare two `Size` expressions at runtime:
 
 ```turmeric
-(size-eq? (size-static 4) (size-add (size-static 2) (size-static 2)))   ; => true
+(size-eq? (size-static 4) (size-add (size-static 2) (size-static 2)))    ; => true
 (size-lt? (size-static 3) (size-static 4))                               ; => true
 (size-le? (size-static 4) (size-static 4))                               ; => true
 (size-gt? (size-static 5) (size-static 3))                               ; => true
@@ -209,7 +209,7 @@ Five predicates compare two `Size` expressions at runtime:
 ```
 
 ```sweet-exp
-size-eq?(size-static(4) size-add(size-static(2) size-static(2)))   ; => true
+size-eq?(size-static(4) size-add(size-static(2) size-static(2)))    ; => true
 size-lt?(size-static(3) size-static(4))                             ; => true
 size-le?(size-static(4) size-static(4))                             ; => true
 size-gt?(size-static(5) size-static(3))                             ; => true
@@ -310,7 +310,7 @@ parameter and field types:
 ; both parameters share `n`; a 2-vs-3 call is a COMPILE-TIME TUR-E0260:
 (defn pairwise-sum [xs : (SizedVec n) ys : (SizedVec n)] : int ...)
 
-(pairwise-sum (SVCons 1 (SVCons 2 (SVNil)))            ; n := 2
+(pairwise-sum (SVCons 1 (SVCons 2 (SVNil)))                 ; n := 2
               (SVCons 10 (SVCons 20 (SVCons 30 (SVNil)))))  ; n := 3 -> TUR-E0260
 ```
 
@@ -483,7 +483,7 @@ let [b unsafe(sized-buf-new-zeroed(4))]
   unsafe(sized-buf-set!(b 1 20))
   unsafe(sized-buf-set!(b 2 30))
   unsafe(sized-buf-set!(b 3 40))
-  println(unsafe(sized-buf-get(b 2)))    ; => 30
+  println(unsafe(sized-buf-get(b 2)))     ; => 30
   println(unsafe(sized-buf-sum(b)))       ; => 100
   println(unsafe(sized-buf-min(b)))       ; => 10
   println(unsafe(sized-buf-max(b)))       ; => 40
@@ -634,8 +634,8 @@ All operations require `#fx{Unsafe}`.
 
 (let [m (unsafe (sized-matrix-new-zeroed 3 4))]
   ; Shape
-  (println (unsafe (sized-matrix-rows m)))    ; => 3
-  (println (unsafe (sized-matrix-cols m)))    ; => 4
+  (println (unsafe (sized-matrix-rows m)))               ; => 3
+  (println (unsafe (sized-matrix-cols m)))               ; => 4
   (println (size-eval (unsafe (sized-matrix-size m))))   ; => 12
 
   ; Element access
@@ -660,8 +660,8 @@ import stdlib/sized-matrix
 
 let [m unsafe(sized-matrix-new-zeroed(3 4))]
   ; Shape
-  println(unsafe(sized-matrix-rows(m)))    ; => 3
-  println(unsafe(sized-matrix-cols(m)))    ; => 4
+  println(unsafe(sized-matrix-rows(m)))              ; => 3
+  println(unsafe(sized-matrix-cols(m)))              ; => 4
   println(size-eval(unsafe(sized-matrix-size(m))))   ; => 12
 
   ; Element access
@@ -673,7 +673,7 @@ let [m unsafe(sized-matrix-new-zeroed(3 4))]
   ; Bulk operations
   println(unsafe(sized-matrix-row-sum(m 0)))    ; => 3  (1+2+0+0)
   println(unsafe(sized-matrix-col-sum(m 0)))    ; => 6  (1+5+0)
-  println(unsafe(sized-matrix-total-sum(m)))      ; => 8
+  println(unsafe(sized-matrix-total-sum(m)))    ; => 8
 
   ; Shape assertion (panics if shape does not match)
   unsafe(sized-matrix-assert-shape!(m (Static 3) (Static 4)))

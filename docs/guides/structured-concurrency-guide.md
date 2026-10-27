@@ -235,7 +235,7 @@ returns a `Result` whose `err?` is true:
       f (future-handle p)]
   (promise-fail p 1)          ; settle with error code 1
   (let [result (future-get f)]
-    (println (err? result))   ; => true
+    (println (err? result))    ; => true
     (println (err-val result)) ; => 1
     (future-free f)))
 ```

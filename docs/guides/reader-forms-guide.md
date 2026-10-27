@@ -69,16 +69,16 @@ Unlike `#| |#`, `#;` understands structure -- it always discards exactly one
 form, no matter how many lines it spans.
 
 ```turmeric no-check
-(println #;99 "ok")              ; => ok
-(println #;"ignored" "ok")       ; => ok
+(println #;99 "ok")                   ; => ok
+(println #;"ignored" "ok")            ; => ok
 (println #;(this is discarded) "ok")  ; => ok
-(println (+ 1 #;999 2))          ; => 3
+(println (+ 1 #;999 2))               ; => 3
 ```
 ```sweet-exp
-println(#;99 "ok")              ; => ok
-println(#;"ignored" "ok")       ; => ok
+println(#;99 "ok")                   ; => ok
+println(#;"ignored" "ok")            ; => ok
 println(#;(this is discarded) "ok")  ; => ok
-println(+(1 #;999 2))          ; => 3
+println(+(1 #;999 2))                ; => 3
 ```
 
 Datum comments compose: `#;#;1 2 3` discards `2` (the result that inner `#;1`

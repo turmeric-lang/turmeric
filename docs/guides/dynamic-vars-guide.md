@@ -193,7 +193,7 @@ snapshot of the parent's current binding frame:
 (defn main [] : int
   (binding [*request-id* "req-1"]
     (let [t (spawn-conveying (fn [] (println *request-id*)))]
-      (set! *request-id* "req-2")   ; parent changes its own binding
+      (set! *request-id* "req-2")    ; parent changes its own binding
       (thread-join t)                ; child printed "req-1" (snapshot)
       (println *request-id*)))       ; prints "req-2"
   0)
@@ -209,7 +209,7 @@ defn thread-join [t :ptr<void>] :nil ...  ; see stdlib/thread.tur
 defn main [] :int
   binding [*request-id* "req-1"]
     let [t (spawn-conveying (fn [] println(*request-id*)))]
-      set!(*request-id* "req-2")   ; parent changes its own binding
+      set!(*request-id* "req-2")    ; parent changes its own binding
       thread-join(t)                ; child printed "req-1" (snapshot)
       println(*request-id*)         ; prints "req-2"
   0

@@ -41,7 +41,7 @@
 declare their element parameters as a literal `:int`:
 
 ```turmeric
-(defn vec-push! [v :int val :int] :nil ...)        ; stdlib/vec.tur:85
+(defn vec-push! [v :int val :int] :nil ...)          ; stdlib/vec.tur:85
 (defn map-assoc [m :int key :int val :int] :int ...) ; stdlib/map.tur:64
 ```
 

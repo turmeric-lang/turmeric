@@ -270,7 +270,7 @@ as an exception handler ([async-await-guide](async-await-guide.md)).
   ;; shallow: it answers the first; the second reaches the outer handle
   (println (handle (handle-shallow (two-asks) (Ask [] k) (resume k 1))
              (Ask [] k) (resume k 2)))                            ; 21
-  (println (try-with (two-asks) (Ask [] k) (resume k 4)))        ; 44
+  (println (try-with (two-asks) (Ask [] k) (resume k 4)))         ; 44
   0)
 ```
 ```sweet-exp

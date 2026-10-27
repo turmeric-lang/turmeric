@@ -1327,7 +1327,8 @@ the value:
 `python3 tests/check-let-alignment.py` (part of Docs lint, so CI and the
 pre-push hook run it) checks every `let`/`let*`/`letrec`/`loop` vector in the
 docs' ```` ```turmeric ```` and ```` ```sweet-exp ```` snippets against these
-three rules; `--fix` realigns what it flags, whitespace only. Point it at a
+three rules, and checks that trailing `;` comments on consecutive lines start
+in one column; `--fix` realigns what it flags, whitespace only. Point it at a
 `.tur` file or a directory to check code the same way.
 
 ### Nesting -- rules compose

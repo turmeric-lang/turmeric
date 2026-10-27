@@ -154,7 +154,7 @@ Two conventions to know:
   (let [spec   (-> (args/spec-new)
                    (args/spec-prog "mytool")
                    (args/spec-flag "--verbose")
-                   (args/spec-option "--input"  "string" (none))       ; required
+                   (args/spec-option "--input"  "string" (none))        ; required
                    (args/spec-option "--count"  "int"    (some "1"))    ; default 1
                    (args/spec-option "--output" "string" (some "out.txt")))
         result (args/parse spec *args*)]
@@ -175,7 +175,7 @@ defn main [] :int
   let [spec   (-> (args/spec-new)
                    (args/spec-prog "mytool")
                    (args/spec-flag "--verbose")
-                   (args/spec-option "--input"  "string" (none))       ; required
+                   (args/spec-option "--input"  "string" (none))        ; required
                    (args/spec-option "--count"  "int"    (some "1"))    ; default 1
                    (args/spec-option "--output" "string" (some "out.txt")))
        result (args/parse spec *args*)]
