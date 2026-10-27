@@ -171,7 +171,8 @@ reach `f` really delivers `T.r`. The static check at (c) cannot always prove
 that, and it cannot see values that arrive through erased (`:int`, `Any`) or
 C-side paths. So **v1 checks the result at the indirect call site** and then
 assumes it: a post-call contract check, never elided in v1. F4 revisits
-elision.
+elision. Under `--no-contracts` there is no such check, so `T.r` is **not**
+assumed either -- the same rule the class-result propagation already follows.
 
 **(c) Coercion sites -- the contravariant check proper.**
 Wherever a function value of type `S` flows into a slot of refined function
@@ -306,6 +307,12 @@ Pick one with numbers, not by default.
 - `diag.c`: update the `TUR-E0378` explain text, which today says this is the
   open gap.
 - `advanced-type-system-rationale.md`: the "Subtyping" row moves to done.
+- The opt-in lint `--warn-unrefined-fn-slot` (open question 1): at a D4c
+  coercion site whose target position is unrefined (the D2 skip), warn when
+  the function value's own parameter in that position is refined, naming the
+  slot whose type could carry it. A diagnostic-strictness knob, so no
+  `EXPERIMENTS[]` row. It lands here rather than earlier because its advice
+  ("refine the slot's type") is only actionable once F1-F3 ship.
 - Then graduate: drop the gate and move this plan to `docs/archive/`.
 
 ## Risks
@@ -327,9 +334,11 @@ Pick one with numbers, not by default.
 
 ## Open questions
 
-1. A lint (not an error) for a refined function passed into an unrefined
-   function-typed slot. It would point at the slot that could carry the
-   refinement. Useful, or noise?
+1. ~~A lint for a refined function passed into an unrefined function-typed
+   slot?~~ **Resolved 2026-10-27: opt-in flag.** `--warn-unrefined-fn-slot`,
+   off by default like `--warn-unused-result`, added in F5 (see there). Only
+   the parameter direction is linted; a refined *result* going into an
+   unrefined slot is just lost information, not a possible panic.
 2. ~~Should the parameter direction's `UNKNOWN` be silent rather than
    `TUR-W0372`?~~ **Resolved 2026-10-27: warn.** The real function's entry
    check keeps it sound, but a silent "couldn't tell" leaves a runtime panic
@@ -346,3 +355,16 @@ Pick one with numbers, not by default.
 3. Named parameters in function types (D3): which spelling, and is there
    demand beyond `(> r x)`-style result bounds?
 4. F4: wrapper or keep the check -- decided by measurement.
+5. **D4a reporting policy.** An argument at a call through `f` is reported
+   with the lenient `runtime_guarded` policy (error only on a closed
+   refutation). The alternative is to treat it like a function's own return
+   refinement -- the HOF's author wrote the function type, so the HOF owes the
+   proof, and an open counterexample is a `TUR-E0371` error. Lenient matches
+   direct calls; strict matches who made the promise.
+6. **Demand and priority.** The one consumer that has looked at this,
+   `ecs-refinement-typed-apis-plan.md`, lists refined function types as out of
+   scope because it does not need them. Before F1 starts, name a first
+   consumer (a stdlib HOF, a spice API, a scheduler holding function values)
+   and decide whether this belongs on the v1 track or after it. The
+   instance-path warning from question 2 does not depend on the rest and could
+   land on its own first.
