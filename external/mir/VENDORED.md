@@ -297,4 +297,21 @@ full history mirrored there) plus three fixes on fix/make-one-ret-distinct-targe
     where bend is a no-op, a tail-calling function's allocas stay until the
     chain returns.  run-jit.sh's jit-musttail-8mib-interp checks it; covered
     by c-tests/new/musttail-deep.c under -ei there.
+
+  c3afad7 (merged as a6e75113, turmeric-lang/mir#15) -- the wasm32 target,
+    which only the browser JIT builds (docs/upcoming/wasm-jit-plan.md
+    section 6), disagreed with clang about basic types, so musl's own headers
+    did not parse: __PTRDIFF_TYPE__ and intptr_t/uintptr_t/ptrdiff_t were int
+    where clang says long, so size_t, which musl derives from
+    __PTRDIFF_TYPE__, came out as two types; __WCHAR_TYPE__, __WINT_TYPE__
+    and the fast/least type macros were missing, so the parse derailed on
+    every later use of wchar_t; __builtin_va_list was undefined, so
+    <stdio.h> failed; int_fast16_t was int where clang says short.  The one
+    placeholder hard register was named NULL, which hard_reg_name_init
+    strlen()s -- a segfault in MIR_init under -sSAFE_HEAP.  The spike had
+    carried all four as scratch patches.  The fork's wasm-tests/run.sh, broken
+    since the bundled libc headers were dropped, now parses Emscripten's
+    sysroot under -sSAFE_HEAP and checks the types through _Generic, and a
+    `wasm` job (emsdk 6.0.10, as turmeric's CI) runs it.  Native targets
+    compile none of these files.
 ```

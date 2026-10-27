@@ -1,6 +1,10 @@
 # Plan: the JIT engine in the browser (c2mir + MIR on wasm32)
 
-> **Status:** Draft, 2026-10-23. Investigation only; nothing built.
+> **Status:** P0 and P1 done 2026-10-23; the section 6 fork fixes merged
+> 2026-10-27 as turmeric-lang/mir#15 and are vendored (`a6e75113`), so the
+> spike builds `external/mir` with no scratch patches. Next: P2 (`tur_front`).
+> The engine itself lives only in `tools/wasm-jit-spike/`; nothing in
+> `tur_wasm` or on the page yet.
 > **P0 run 2026-10-23** (section 7): the corpus under `TUR_JIT_GEN=interp`
 > on a Release build is 3853/113/70; every interpreter-only failure is in
 > one of three families (threads 82, continuations 10, deep recursion 2),
@@ -18,8 +22,8 @@
 > the engine linked into a copy of the REPL module with a generated
 > symbol table runs the inline-C program on the page -- a compiled turn
 > costs 288 ms in steady state, c2mir on wasm is no slower than native.
-> Four fork bugs found (section 6); `setjmp` (5.6) and module size are
-> what P3 starts with.
+> Four fork bugs found (section 6, fixed in mir#15); `setjmp` (5.6) and
+> module size are what P3 starts with.
 > **Type:** JIT engine (`src/jit_engine.c`, `external/mir/`), web build
 > (`src/CMakeLists.txt` `tur_wasm`, `src/web/wasm_glue.c`), driver split
 > (`src/driver/pipeline.c`), emitter (one knob, section 5.6).
@@ -67,7 +71,7 @@ the tree-walker, which stays the fallback and the LSP's engine.
 Everything in this table is measured in `turmeric-lang/c2mp`'s
 `docs/limitations.md` and `docs/wasm-ffi-notes.md` (2026-08-26, fork
 `cfb17d85`; later work merged to the fork's master, which
-`external/mir/UPSTREAM` pins at `fa8a5d69`). Read it as "known to work",
+`external/mir/UPSTREAM` pins at `a6e75113`). Read it as "known to work",
 not "known to work for us" -- section 5 is the delta.
 
 | Fact | Where it lives now | What it means here |
@@ -468,71 +472,98 @@ the reference for the parts C2 has not specified, and its measured cost
 
 ## 6. Fork changes (one PR, batched)
 
-The MIR-fork rule in CLAUDE.md allows one open PR at a time, so everything
-below rides together once P1 has the list:
+The MIR-fork rule in CLAUDE.md allows one open PR at a time, so fixes ride
+together. The first batch, everything P1 found, merged on 2026-10-27 as
+**turmeric-lang/mir#15** (`a6e75113`, vendored the same day; VENDORED.md has
+the entry):
 
 - **`mir-wasm.c` declares one hard register with a `NULL` name**
   (`target_hard_reg_names[] = {NULL}`, `MAX_HARD_REG 0`), and `_MIR_init`
   hashes every hard-register name, so it runs `strlen (NULL)`. Address 0
   reads as an empty string in a plain wasm module, which is why the fork's
   test and c2mp never saw it; under `-sSAFE_HEAP=1` it is a segfault at
-  init. Found 2026-10-23; the spike patches a scratch copy to `{"wasm_hr0"}`.
+  init. Found 2026-10-23. **Fixed:** named `"wasm_hr0"`.
 - **The wasm32 target's basic types disagree with clang's.**
   `mirc_wasm32_emscripten.h` predefines `__PTRDIFF_TYPE__ int`, and its
   `stdint.h`/`stddef.h` make `intptr_t`, `uintptr_t` and `ptrdiff_t` `int`;
   clang on wasm32 uses `long` for all four (`emcc -dM`), and musl derives
   `_Addr`, hence `size_t`, from `__PTRDIFF_TYPE__`, so `size_t` arrived as
   two different types ("repeated declaration size_t"). Found 2026-10-23
-  in P1; the engine build patches a scratch copy.
+  in P1. **Fixed:** all four are `long`, and `int_fast16_t`/`uint_fast16_t`,
+  which were `int` where clang says `short`, follow clang too.
 - **The wasm32 target lacks the compiler-provided type macros musl
   typedefs from**: `__WCHAR_TYPE__`, `__WINT_TYPE__` and the sixteen
   `__INT_FAST*`/`__INT_LEAST*`/`__UINT_*` ones. `bits/alltypes.h`'s
   `typedef __WCHAR_TYPE__ wchar_t;` then fails and every later declaration
   naming `wchar_t` (`mbtowc` in `stdlib.h`) derails the parser, which
   surfaced as a syntax error on an unrelated `static inline` function
-  hundreds of lines later. The engine build takes the 21 values from
-  `emcc -dM`.
-- **`wasm-tests/run.sh` is stale**: after `12ee70c` dropped the bundled libc
-  headers, three of its four cases fail with `error in opening file
-  stdio.h`. It needs an `include_dirs` entry and a header to serve, like
-  the spike's `hdr/`.
-- A wasm CI leg running that test (6.1).
+  hundreds of lines later. **Fixed:** the target predefines them with
+  `emcc -dM`'s values.
+- **`__builtin_va_list` was undefined**, which `bits/alltypes.h` typedefs
+  `va_list` and `__isoc_va_list` from, so `<stdio.h>` did not parse; P1
+  worked around it in `JIT_PRELUDE`. **Fixed:** the target typedefs it as
+  `void *[1]` and its `<stdarg.h>`'s `va_list` is that type. The prelude's
+  other two musl defines, `__restrict` and `__inline`, were never needed:
+  c2mir has both as keywords. The whole `__EMSCRIPTEN__` block is gone.
+- **`wasm-tests/run.sh` was stale**: after `12ee70c` dropped the bundled libc
+  headers, every case that includes one failed with `error in opening file
+  stdio.h`. **Fixed:** it serves c2mir Emscripten's own musl sysroot
+  (`-sNODERAWFS`), builds under `-sSAFE_HEAP`, and checks each type above
+  through `_Generic`; reverting any one fix turns it red.
+- **A wasm CI leg** (6.1): the fork's `test.yml` gains a `wasm` job on emsdk
+  6.0.10, the version turmeric's CI pins. Green on its first run.
+- Housekeeping: the fork's README no longer lists `-sWASM_BIGINT` as
+  required (default in current Emscripten, deprecated in emcc 6). c2mp's
+  Justfile still passes it.
+
+One side finding: musl's `<math.h>` parses once the types are right (P1
+recorded it failing on `__ISREL_DEF`), but c2mir keeps unused `static
+inline` functions, so a unit that includes it imports `__fpclassify`,
+`__fpclassifyf` and `__fpclassifyl` whether it calls them or not. The 5.3
+symbol table needs those three if a pruned unit ever keeps `math.h`.
+
+Still to batch into the next fork PR:
+
 - Exact-signature stub registry in `mir-wasm.c` (5.5).
-- Whatever P1 finds in `wasm_ff_dispatch` for our carrier-word signatures
+- Whatever P3 finds in `wasm_ff_dispatch` for our carrier-word signatures
   (`int64_t` everywhere, by-value aggregates through `BLK`).
 - If 5.8's option 3 is taken, the interpreter frame change.
-- Housekeeping: emcc 6.0 reports `-sWASM_BIGINT` as deprecated and always
-  on; the fork's README and c2mp's Justfile still pass it.
+- c2mir applies the integer promotions to a `_Generic` controlling
+  expression, on every target: `_Generic ((short) 0, short: 1, int: 2)` is
+  2 where C11 says 1. Found writing mir#15's test, which goes through
+  pointer types instead. The emitter never writes `_Generic`, so only user
+  inline C over a sub-`int` type sees it
+  ([c2mir-generic-promotes-controlling-expression](../reported/c2mir-generic-promotes-controlling-expression.md)).
 
 Nothing in this plan edits `external/mir/` by hand; the sync is
 `tools/update-mir.sh` after the fork PR merges.
 
 ### 6.1 Fork state, verified 2026-10-23
 
-Checked against a clone of `turmeric-lang/mir` and `git ls-remote`:
+Checked against a clone of `turmeric-lang/mir` and `git ls-remote`. Rows
+marked 2026-10-27 were re-checked when mir#15 merged:
 
 | Question | Answer |
 |---|---|
-| Does `external/mir/` match the fork? | Byte-identical to `master` at `fa8a5d69` (every file compared; `UPSTREAM` agrees). `tools/update-mir.sh` lists `mir-wasm.c` and `c2mir/wasm32` explicitly, so a re-sync keeps the target. |
+| Does `external/mir/` match the fork? | Byte-identical to `master` at `fa8a5d69` (every file compared; `UPSTREAM` agrees). `tools/update-mir.sh` lists `mir-wasm.c` and `c2mir/wasm32` explicitly, so a re-sync keeps the target. **2026-10-27:** re-synced to `a6e75113` (mir#15; #13 and #14 were vendored on 2026-10-24); the sync changed only the five wasm32 files and `UPSTREAM`. |
 | Is the wasm work on a branch? | No. `wasm` (`7106386`, the original target with foreign calls) and `fix/wasm-interp-recursion` (`cfb17d8`: interpreted-to-interpreted calls, callbacks via `addFunction`, `%lld`, bundled headers dropped, implicit-declaration warning) are both ancestors of `master`; the second merged as fork PR #2 (`b7e72a9`). A first shallow check reported them 109 commits "ahead" -- that was a `--depth=1` fetch cutting the merge commit's parents, not divergence. |
 | What does c2mp pin? | `b7e72a9`, the PR #2 merge, in its `CMakeLists.txt`. That is **23 commits behind** `master` and a strict ancestor of it: this repo's pin is a superset of c2mp's. Its docs still cite `7106386` and `cfb17d85`. |
 | Does c2mp patch MIR? | Not any more. `scripts/emcc-setup.sh` (the `sed` patches, the stub `mir-wasm.c`, the types header) is unreferenced by its Justfile and CMake -- only `docs/wasm-ffi-notes.md` mentions it. |
-| Does the fork's CI run the wasm target? | No. `.github/workflows/test.yml` is the four native legs; `wasm-tests/run.sh` (emcc + node, 4 cases) runs by hand only. |
+| Does the fork's CI run the wasm target? | No. `.github/workflows/test.yml` is the four native legs; `wasm-tests/run.sh` (emcc + node, 4 cases) runs by hand only. **2026-10-27:** yes, the `wasm` job mir#15 added. |
 | Has upstream moved? | Yes: `vnmakarov/mir` `master` is at `861c295`, past the fork's base `a8ab7c3`. Not measured how far; the "point `update-mir.sh` back at upstream when it has every fix" note in `VENDORED.md` stays open. |
-| Stray branches | Merged and deletable: `__probe` (points at `b7e72a9`), `wasm`, `fix/wasm-interp-recursion`, `claude/aarch64-hfa-abi`, `claude/c2mir-rejects-uint128-hmemc3`, `feat/c2mir-macos-sdk-support`, `fix/llp64-uint-llong-conversion`, `fix/make-one-ret-distinct-targets`, `fix/pragma-pack-macro-arg`, `integration/pragma-pack-and-aarch64-hfa`, `jit/win64-wrapper-offsets`. Unmerged: `claude/ci-baseline-pre-mir10` (one CI-baseline commit). A session cannot delete remote branches (CLAUDE.md), so this is the owner's cleanup. |
+| Stray branches | Merged and deletable: `__probe` (points at `b7e72a9`), `wasm`, `fix/wasm-interp-recursion`, `claude/aarch64-hfa-abi`, `claude/c2mir-rejects-uint128-hmemc3`, `feat/c2mir-macos-sdk-support`, `fix/llp64-uint-llong-conversion`, `fix/make-one-ret-distinct-targets`, `fix/pragma-pack-macro-arg`, `integration/pragma-pack-and-aarch64-hfa`, `jit/win64-wrapper-offsets`. Unmerged: `claude/ci-baseline-pre-mir10` (one CI-baseline commit). A session cannot delete remote branches (CLAUDE.md), so this is the owner's cleanup. **2026-10-27:** done; `master` is the only branch. |
 
-So "reconcile the turmeric patches and the c2mp patches" reduces to three
+So "reconcile the turmeric patches and the c2mp patches" reduced to three
 small actions, none of them a merge:
 
-1. **c2mp:** bump `GIT_TAG` to `fa8a5d69` (or whatever `master` is when the
-   fork PR of section 6 lands), delete `scripts/emcc-setup.sh`, and update
-   the two doc citations. Its build already uses the fork's `if(EMSCRIPTEN)`
-   block, so nothing else changes.
-2. **Fork:** add a wasm leg to `test.yml` (emsdk + node, running
-   `wasm-tests/run.sh`), so the target both repos depend on is covered by
-   the same CI that gates every other fork PR. This rides the section 6 PR,
-   or precedes it as its own one-at-a-time PR.
-3. **This repo:** nothing. The pin is current.
+1. **c2mp: open.** Bump `GIT_TAG` to `a6e75113`, delete
+   `scripts/emcc-setup.sh`, update the two doc citations, and drop
+   `-sWASM_BIGINT` from its Justfile. Its build already uses the fork's
+   `if(EMSCRIPTEN)` block, so nothing else changes; the new pin also gives it
+   the type fixes of section 6.
+2. **Fork: done** in mir#15.
+3. **This repo: done.** `external/mir` is at `a6e75113`, and the spike's
+   scratch patches and the `JIT_PRELUDE` workaround are gone.
 
 ## 7. Phases
 
@@ -624,9 +655,10 @@ a 422 KB full unit, and the retry path was never needed for these three.
   table; interpreter mode is forced; `main` is entered through
   `MIR_interp_arr`, because on wasm an interpreted function's `addr` is a
   thunk slot only `wasm_ff_dispatch` can call, so `box.fn (...)` traps with
-  `table index is out of bounds`; a `TUR_JIT_DUMP_FULL` dump of the exact
-  text c2mir receives; and five lines of musl compatibility in
-  `JIT_PRELUDE` (5.4). The native build is untouched and still runs.
+  `table index is out of bounds`; and a `TUR_JIT_DUMP_FULL` dump of the
+  exact text c2mir receives. P1 also put five lines of musl compatibility
+  in `JIT_PRELUDE`; mir#15 made them redundant and they are gone (section
+  6). The native build is untouched and still runs.
 - **The glue** (`engine/wasm_jit_glue.c`): `cmd_jit`'s sequence minus the
   command line, with `g_interpret_mode` saved and cleared around the
   emitter exactly as `repl_jit_build` does -- the module's `turi_env_new`
@@ -644,12 +676,15 @@ a 422 KB full unit, and the retry path was never needed for these three.
   missing import. The table TU reads the region as the hosted externs
   (`TUR_RT_SPLIT_HOSTED`), so every address is taken at its declared type.
 - **Headers** (5.4, decided): musl's sysroot headers, embedded at
-  `/sysinclude`, with five prelude defines (`__restrict`, `__inline`,
-  `__inline__`, and `__builtin_va_list` as c2mir's own `void *[1]`) and
-  the fork fixes below. Fourteen headers parse; `math.h` does not
-  (`__ISREL_DEF` over `__builtin_isless`) and the pruned unit never
-  includes it.
-- **Three more fork fixes** (section 6).
+  `/sysinclude`. P1 needed five prelude defines and scratch patches to
+  parse them; since mir#15 the vendored target parses them as they are.
+  Fourteen headers parse. P1 recorded `math.h` failing (`__ISREL_DEF` over
+  `__builtin_isless`); with the type fixes it parses, at the cost of three
+  `__fpclassify*` imports (section 6). The pruned unit never includes it.
+- **Three more fork fixes** (section 6), merged with the first as mir#15.
+  Re-checked on 2026-10-27 against the vendored `a6e75113` with every patch
+  and the prelude block removed: `cmix` prints 97, `hello` and `loop` run,
+  and `eff` stops where it did (below).
 - **Left out of the link:** `web/wasm_lsp.c` (its own `tur_collect_symbols`
   collides with the driver's now that `pipeline.c` is linked),
   `driver/cmd_run.c`, `cmd_misc.c` and `worker.c` (they include
@@ -744,7 +779,9 @@ precede them.
 5. **Two sources of truth for headers** if 5.4 picks generation.
 6. **Emscripten pinning.** c2mp pins by Justfile; our CI's "Set up
    Emscripten" step should pin the same major so the trampoline ABI
-   (`wasmTable`, `addFunction`) does not move under both repos.
+   (`wasmTable`, `addFunction`) does not move under both repos. Our CI pins
+   6.0.10, and since mir#15 the fork's `wasm` job pins the same, so a bump
+   is a diff in both rather than a red run in one.
 7. **Threads.** The `tur_wasm` module is `-pthread`; the engine runs on the
    eval worker only. `spawn` in JIT'd code falls back.
 

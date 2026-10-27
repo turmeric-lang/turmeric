@@ -7,15 +7,14 @@
 # which shows a longjmp issued through that trampoline unwinding back to a
 # direct setjmp in a compiled frame (the host-owned landing of plan 5.6).
 #
-# Needs emcc (emsdk) and node on PATH.  Never edits external/mir: the one
-# patch it needs (a NULL hard-register name that _MIR_init strlen()s) is
-# applied to a scratch copy under build/ until the fork carries the fix.
+# Needs emcc (emsdk) and node on PATH.  Builds external/mir as it stands: the
+# NULL hard-register name this once patched in a scratch copy is fixed in the
+# fork since turmeric-lang/mir#15.
 set -e
 cd "$(dirname "$0")"
 ROOT=../..
-rm -rf build && mkdir -p build && cp -r "$ROOT/external/mir" build/mir
-sed -i.bak 's/target_hard_reg_names\[\] = {NULL}/target_hard_reg_names[] = {"wasm_hr0"}/' build/mir/mir-wasm.c
-M=build/mir
+rm -rf build && mkdir -p build
+M=$ROOT/external/mir
 COMMON="-I$M -I$M/c2mir spike.c $M/mir.c $M/c2mir/c2mir.c --embed-file hdr@/hdr \
   -sMODULARIZE -sEXPORT_NAME=Spike -sALLOW_TABLE_GROWTH -sALLOW_MEMORY_GROWTH \
   -sINITIAL_MEMORY=128mb -sSTACK_SIZE=16mb \

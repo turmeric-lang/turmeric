@@ -19,6 +19,7 @@ module, generating the import table from the runtime's declarations region
 (`engine/gen-symtab.py`). It needs a configured `build-wasm/` (its `tur_wasm`
 command line is copied), emcc and node. `node engine/run.js engine/tests/cmix.tur`
 runs the plan's inline-C program through it; flags are documented in
-`engine/run.js`. MIR is patched in a scratch copy under `engine/build/mir`
-with the fork fixes the plan's section 6 lists; `external/mir` is never
-edited. The plan's P1 section has the numbers and what is left.
+`engine/run.js`. Both scripts build `external/mir` as it stands: the fork
+fixes the plan's section 6 lists, which they used to patch into a scratch
+copy, are vendored since turmeric-lang/mir#15. The plan's P1 section has the
+numbers and what is left.

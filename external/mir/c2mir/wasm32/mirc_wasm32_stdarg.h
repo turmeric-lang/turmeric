@@ -8,7 +8,7 @@ static char stdarg_str[]
   = "#ifndef __STDARG_H\n"
     "#define __STDARG_H\n"
     "\n"
-    "typedef void *va_list[1];\n"
+    "typedef __builtin_va_list va_list;\n"
     "\n"
     "#define va_start(ap, param) __builtin_va_start (ap)\n"
     "#define va_arg(ap, type) __builtin_va_arg(ap, (type *) 0)\n"

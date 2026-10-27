@@ -34,6 +34,12 @@ sentence above does not cover them. If you touch this file, check
 `ls docs/reported/` against it -- an index that silently omits a quarter of the
 directory is worse for triage than no index.
 
+## Found fixing the wasm32 MIR target's types (filed 2026-10-27)
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [c2mir-generic-promotes-controlling-expression](c2mir-generic-promotes-controlling-expression.md) | low (user inline C only) | c2mir applies the integer promotions to a `_Generic` controlling expression on every target, so `_Generic ((short) 0, short: 1, int: 2)` is 2 where C11 and gcc/clang say 1. The emitter never writes `_Generic`. Fix rides the next turmeric-lang/mir PR. |
+
 ## Found extending the highlighting in Try Turmeric and the docs (filed 2026-10-26)
 
 | Report | Severity | One line |
