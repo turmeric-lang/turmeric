@@ -1155,7 +1155,8 @@ anyway.
 
   Closing the gap needs refinements to be part of function types, with the
   contravariant subtyping check that implies -- a type-system change the
-  prototype excludes.
+  prototype excludes. The design is drafted in
+  [refined-function-types-plan](https://github.com/turmeric-lang/turmeric/blob/main/docs/upcoming/refined-function-types-plan.md).
 
 - **[by design] An instance that explicitly demands less is checked against its own,
   weaker, predicate at a statically-resolved site** -- deliberately, since it
