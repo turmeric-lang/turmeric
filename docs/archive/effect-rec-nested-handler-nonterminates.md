@@ -55,8 +55,8 @@ The full probe drives 1,000,000 iterations, but the non-termination reproduces
 with any depth. Reduced to `N = 3`:
 
 ```turmeric
-(defeffect Outer [] :int)
-(defeffect Tick [] :int)
+(defeffect Outer [] : int)
+(defeffect Tick [] : int)
 
 (defn tick-loop [n : int acc : int] : int
   (if (= n 0) acc (tick-loop (- n 1) (+ acc (perform (Tick))))))

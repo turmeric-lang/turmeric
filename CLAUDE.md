@@ -832,8 +832,8 @@ The separator can also be any non-comment, non-blank, non-definition form
 - **Type annotations take a space after the colon**: `[x : int] : int`, never
   `[x :int] :int`. Both read the same, but this is the spelling the stdlib and
   the generated API reference use. `python3 tests/check-annotation-spacing.py
-  [--fix]` finds (and rewrites) the fused form in the docs' snippets; it is not
-  yet part of Docs lint.
+  [--fix]` finds (and rewrites) the fused form in the docs' snippets; it is
+  part of Docs lint, so CI and the pre-push hook run it.
 - A non-`;;;` line resets the docstring buffer; the `;;;` block must be
   immediately above the definition it documents
 - Prose paragraphs render too: before the first section under the summary,
@@ -1327,7 +1327,8 @@ the value:
 `python3 tests/check-let-alignment.py` (part of Docs lint, so CI and the
 pre-push hook run it) checks every `let`/`let*`/`letrec`/`loop` vector in the
 docs' ```` ```turmeric ```` and ```` ```sweet-exp ```` snippets against these
-three rules; `--fix` realigns what it flags, whitespace only. Point it at a
+three rules, and checks that trailing `;` comments on consecutive lines start
+in one column; `--fix` realigns what it flags, whitespace only. Point it at a
 `.tur` file or a directory to check code the same way.
 
 ### Nesting -- rules compose

@@ -28,7 +28,7 @@ shape, so the enclosing function evicts as `BODY-STRUCT-OR-TAINT`.
 ## Minimal repro
 
 ```turmeric
-(defeffect Counter [] :int)
+(defeffect Counter [] : int)
 (defn counted-sum [n : int] : int (+ (perform (Counter)) n))
 (defn main [] : int
   (handle

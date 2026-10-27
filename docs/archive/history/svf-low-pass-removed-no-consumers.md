@@ -12,7 +12,7 @@ description: Paper-trail entry. The pre-rebuild `tur-signal` spice exposed `svf-
 The pre-rebuild `tur-signal` spice's `src/signal/synth.tur` defined
 
 ```turmeric
-(defn svf-low-pass [freq :float q :float]
+(defn svf-low-pass [freq : float q : float]
   ;; ... promising a state-variable-filter low-pass with resonance ...
   ;; ... internally just (low-pass alpha-from-freq), q discarded.
   )

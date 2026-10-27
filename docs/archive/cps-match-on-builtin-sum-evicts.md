@@ -14,7 +14,7 @@ performs or calls a colored function. `tur --interpret` ran it. A numeric
 ## Repro
 
 ```turmeric
-(defeffect Ask [] :int)
+(defeffect Ask [] : int)
 (defn m1 [o : (Option int)] : int (match o (Some v) (+ v (perform (Ask))) (None) 0))
 (defn m4 [n : int] : int (match n 1 (perform (Ask)) _ 5))
 (defn c1 [] : float (+ 0.5 (as float (perform (Ask)))))

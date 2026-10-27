@@ -113,7 +113,7 @@ operation:
 ;;;     (join-thread t))
 ;;;
 ;;; Since: Phase TC0
-(defn cancel-thread [t] :void ...)
+(defn cancel-thread [t] : void ...)
 
 ;;; cancelled? -- return true if the current thread has been cancelled.
 ;;;
@@ -124,7 +124,7 @@ operation:
 ;;;   (when (cancelled?) (cleanup-and-return))
 ;;;
 ;;; Since: Phase TC0
-(defn cancelled? [] :bool ...)
+(defn cancelled? [] : bool ...)
 ```
 
 ---

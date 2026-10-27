@@ -10,7 +10,7 @@ suite green (2203/0).
 ## The shape
 
 ```turmeric
-(defeffect Emit [s :cstr] :nil)
+(defeffect Emit [s : cstr] : nil)
 (defstruct Emitter :copy [run : fn #fx{Emit}])      ; effectful capability field
 (defn main [] : int
   (let [em (make-struct Emitter (fn [s] (perform (Emit s))))]

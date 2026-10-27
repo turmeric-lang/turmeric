@@ -169,7 +169,7 @@ Wrap each test in a `(defmodule <spice>/tests/<name> ... (defn main [] :int
     (it "creates a surface with the requested dimensions"
       ...))
 
-  (defn main [] :int
+  (defn main [] : int
     (run-all)
     0))
 ```

@@ -33,9 +33,9 @@ This is a three-layer bug; this plan fixes all three.
 (defopaque Route :int)
 (defopaque Middleware :int)
 
-(defn route!  [] :Route       0)   ;; pretend constructor
-(defn make-mw [] :Middleware  0)
-(defn server  [port :int & items :Route] :int 0)
+(defn route!  [] : Route       0)   ;; pretend constructor
+(defn make-mw [] : Middleware  0)
+(defn server  [port : int & items : Route] : int 0)
 
 (server 3000 (route!) (make-mw) 42)   ;; SHOULD error: items 2 and 3
                                       ;; are not :Route
@@ -204,9 +204,9 @@ variadic call to 'server': rest arg 2 has wrong type
 And the `tourist` API can finally be written as it should be:
 
 ```turmeric
-(defn tourist [port :int
-               mws    :list<Middleware>
-               routes :list<Route>] :ptr<void>
+(defn tourist [port : int
+               mws    : list<Middleware>
+               routes : list<Route>] : ptr<void>
   ...)
 ```
 

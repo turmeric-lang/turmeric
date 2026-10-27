@@ -272,7 +272,7 @@ gives the same clear message as `#;)`.
   out an entire top-level `defn`.
 
   ```turmeric
-  #;(defn unused [] :int 42)
+  #;(defn unused [] : int 42)
   (println "ok")
   ```
 

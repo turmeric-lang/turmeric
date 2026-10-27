@@ -261,8 +261,8 @@ unchanged because the fallback ABI is unchanged.
 **Acceptance test.**  Add `tests/fixtures/typed-slots/float-closure.tur`:
 
 ```turmeric
-(defn make-add [a :float] (fn [b :float] :float {a + b}))
-(defn test [] :float ((make-add 1.5) 2.25))   ; => 3.75
+(defn make-add [a : float] (fn [b : float] : float {a + b}))
+(defn test [] : float ((make-add 1.5) 2.25))   ; => 3.75
 ```
 
 `tur emit-c` on this fixture must show a `double(*)(void*, double)`
@@ -373,9 +373,9 @@ per-instance flag if necessary.
     ```))))
 
   ; after
-  (defn sine [freq :float phase :float]
+  (defn sine [freq : float phase : float]
     (let [fv freq pv phase]
-      (fn [sig] (fn [t :float] :float
+      (fn [sig] (fn [t : float] : float
         {sin({2.0 * 3.14159265358979323846 * fv * t} + pv)}))))
   ```
 - Delete `requires.typecheck-skip` (when present) and confirm CI is

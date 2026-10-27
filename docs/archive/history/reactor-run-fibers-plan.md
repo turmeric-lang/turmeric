@@ -83,11 +83,11 @@ existing reactor surface.
 ```turmeric
 ;; Create a fiber group bound to `r`. The group borrows `r`; do not free
 ;; the reactor while the group is alive.
-(defn local-fiber-group-new [r :Reactor] :LocalFiberGroup ...)
+(defn local-fiber-group-new [r : Reactor] : LocalFiberGroup ...)
 
 ;; Free the group. Any fiber still parked is cancelled (its park source
 ;; is removed from the reactor and the fiber's stack is unwound).
-(defn local-fiber-group-free [g :LocalFiberGroup] :nil ...)
+(defn local-fiber-group-free [g : LocalFiberGroup] : nil ...)
 ```
 
 ### Spawning and running
@@ -96,15 +96,15 @@ existing reactor surface.
 ;; Spawn a fiber into the group. Returns a fiber id (>= 0), -1 on error.
 ;; The fiber starts on the next `reactor-run-fibers` tick.
 (defn local-spawn
-  [g :LocalFiberGroup
-   body :fn<:ptr<void> :nil>
-   user-data :ptr<void>] :int ...)
+  [g : LocalFiberGroup
+   body : fn<:ptr<void> :nil>
+   user-data : ptr<void>] : int ...)
 
 ;; Drive the reactor and pump the group's ready-queue until either:
 ;;   - the group is empty AND the reactor has no remaining sources, or
 ;;   - `reactor-stop` is called on the bound reactor.
 ;; Returns the number of fibers that ran to completion.
-(defn reactor-run-fibers [g :LocalFiberGroup] :int ...)
+(defn reactor-run-fibers [g : LocalFiberGroup] : int ...)
 ```
 
 ### Park / unpark bridge
@@ -122,18 +122,18 @@ that local-group-aware I/O wrappers call:
 ;; Must be called from inside a `local-spawn`ed fiber. Outside of one
 ;; (e.g. from a bare callback), returns -1 and leaves the caller running.
 (defn local-park-fd
-  [g :LocalFiberGroup
-   fd :int
-   events :int
-   timeout-ms :int] :int ...)
+  [g : LocalFiberGroup
+   fd : int
+   events : int
+   timeout-ms : int] : int ...)
 ```
 
 The channel analogue uses the R6 channel bridge:
 
 ```turmeric
 (defn local-park-chan
-  [g :LocalFiberGroup
-   ch :Chan<:int>] :int ...)
+  [g : LocalFiberGroup
+   ch : Chan<:int>] : int ...)
 ```
 
 These two are enough to retarget `async-socket-*`, `async-file-*`, and

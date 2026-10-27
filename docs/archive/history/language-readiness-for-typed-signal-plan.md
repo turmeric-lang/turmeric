@@ -226,7 +226,7 @@ no longer exists.
 **Question**: Can a polymorphic constructor
 
 ```turmeric
-(defn constant [A] [val :A] : (Signal A) (fn [_t] val))
+(defn constant [A] [val : A] : (Signal A) (fn [_t] val))
 ```
 
 be defined when `Signal A` is itself a function-typed alias? Specifically:

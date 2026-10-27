@@ -104,7 +104,7 @@ the `->` spelling.
 
 ```turmeric
 ;; legacy keyword (fn ...) form -- same failure
-(defn curried [f : (fn [:int] (fn [:int] :int))] : int
+(defn curried [f : (fn [:int] (fn [:int] : int))] : int
   ((f 1) 2))
 ```
 

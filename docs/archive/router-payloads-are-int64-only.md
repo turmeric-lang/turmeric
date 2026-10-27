@@ -40,12 +40,12 @@ one (`tests/fixtures/session-mp-three-role/input.tur`), elided here.
   (-> A B float)
   (-> B C float))
 
-(defn role-a [^linear ch :(Role Pipeline A)] : nil
+(defn role-a [^linear ch : (Role Pipeline A)] : nil
   (let [ch (send-to ch B 7.25)] (close ch)))
-(defn role-b [^linear ch :(Role Pipeline B)] : nil
+(defn role-b [^linear ch : (Role Pipeline B)] : nil
   (let [[v ch] (recv-from ch A)]
     (let [ch (send-to ch C v)] (close ch))))
-(defn role-c [^linear ch :(Role Pipeline C)] : nil
+(defn role-c [^linear ch : (Role Pipeline C)] : nil
   (let [[v ch] (recv-from ch B)] (println v) (close ch)))
 ```
 

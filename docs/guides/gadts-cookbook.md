@@ -39,7 +39,7 @@ the result type, so the interpreter is total and type-safe.
 (defn main [] : int
   ; (2 + (IsZero 0)) -- only valid at type (Expr ???) mismatch, caught statically
   (println (eval-expr (IntLit 42)))                          ; 42
-  (println (eval-expr (Add (IntLit 3) (IntLit 4))))         ; 7
+  (println (eval-expr (Add (IntLit 3) (IntLit 4))))          ; 7
   (println (eval-expr (IsZero (IntLit 0))))                  ; 1
   (println (eval-expr (IsZero (Add (IntLit 1) (IntLit 0))))) ; 0
   0)
@@ -54,7 +54,7 @@ defdata Expr [a]
   (IsZero  (Expr int)            : (Expr bool))
 
 ; The interpreter returns int -- the type parameter 'a' is refined per arm.
-defn eval-expr [e] :int
+defn eval-expr [e] : int
   match e
     (IntLit  n)
     n
@@ -65,7 +65,7 @@ defn eval-expr [e] :int
     (IsZero  n)
     if({eval-expr(n) = 0} 1 0)
 
-defn main [] :int
+defn main [] : int
   ; (2 + (IsZero 0)) -- only valid at type (Expr ???) mismatch, caught statically
   println(eval-expr((IntLit 42)))
   println(eval-expr(Add((IntLit 3) (IntLit 4))))
@@ -149,7 +149,7 @@ names in the VALUE namespace, where a type annotation cannot see them.)
               (NVec (Succ (Succ (Succ Zero)))))]
     (println (nvec-len v))              ; 3
     (println (nvec-head v))             ; 1
-    (println (nvec-head (nvec-tail v)))  ; 2
+    (println (nvec-head (nvec-tail v))) ; 2
     ; (nvec-head (NNil))  ; TUR-E0001: expected (NVec (Succ n)), got (NVec Zero)
     )
   0)
@@ -167,7 +167,7 @@ defdata NVec [n]
   (NCons int (NVec n) : (NVec (Succ n)))
 
 ; Length: the index is unknown here, so both arms are required.
-defn nvec-len [v] :int
+defn nvec-len [v] : int
   match v
     (NNil)
     0
@@ -176,7 +176,7 @@ defn nvec-len [v] :int
 
 ; Head is only callable on non-empty vectors: no NNil arm, and the
 ; return type is int, not (Option int).
-defn nvec-head [n] [v : (NVec (Succ n))] :int
+defn nvec-head [n] [v : (NVec (Succ n))] : int
   match v
     (NCons x _)
     x
@@ -187,7 +187,7 @@ defn nvec-tail [n] [v : (NVec (Succ n))] : (NVec n)
     (NCons _ tl)
     tl
 
-defn main [] :int
+defn main [] : int
   println(nvec-head((NCons 7 (NNil))))
   println(nvec-head(nvec-tail((NCons 1 (NCons 2 (NNil))))))
   ; Ascribed because the value is used three times (a fresh constructor value
@@ -249,7 +249,7 @@ defdata Fmt2 [a b]
   (FIntBool : (Fmt2 int bool))
 
 ; A printf that is safe for exactly the arguments the format specifies.
-defn sprintf2 [fmt a b] :int
+defn sprintf2 [fmt a b] : int
   match fmt
     (FIntInt)
     do
@@ -262,7 +262,7 @@ defn sprintf2 [fmt a b] :int
       if(b println(1) println(0))
       0
 
-defn main [] :int
+defn main [] : int
   ; Both arguments are correct -- compiles fine.
   sprintf2((FIntInt)  42  99)
   sprintf2((FIntBool) 10  true)
@@ -342,14 +342,14 @@ defn trans [a b c] [ab : (Equal a b) bc : (Equal b c)] : (Equal a c)
 
 ; coerce checks that x has the proof's left type and hands x back at the
 ; proof's right type: nothing is converted and no code is emitted.
-defn use-eq [eq : (Equal int int) x : int] :int
+defn use-eq [eq : (Equal int int) x : int] : int
   {coerce(eq x) + 1}
 
 ; With a type-variable right side, the result is that variable.
 defn conv [a b] [eq : (Equal a b) x : a] : b
   coerce(eq x)
 
-defn main [] :int
+defn main [] : int
   ; Refl at int = int; an unequal pair is a TUR-E0001 here.
   let [proof (:: (Refl) (Equal int int))]
     println(use-eq(proof 41))
@@ -419,20 +419,20 @@ defdata TypeBox [a]
 
 ; A (TypeBox int) cannot be a MkBoolBox, so that arm is left out -- and
 ; (open-int-box (MkBoolBox true)) is a TUR-E0001 at the call.
-defn open-int-box [box : (TypeBox int)] :int
+defn open-int-box [box : (TypeBox int)] : int
   match box
     (MkBox n)
     n
 
 ; A box whose index the function does not fix needs every arm.
-defn box-weight [a] [box : (TypeBox a)] :int
+defn box-weight [a] [box : (TypeBox a)] : int
   match box
     (MkBox n)
     n
     (MkBoolBox b)
     if b 1 0
 
-defn main [] :int
+defn main [] : int
   println(open-int-box(MkBox(99)))
   println(box-weight(MkBoolBox(true)))
   println(box-weight(MkBox(7)))
@@ -466,7 +466,7 @@ value or a plain value through a union type:
 
 (defn main [] : int
   (println (accept-either (IntTag)))   ; 0
-  (println (accept-either 42))          ; 42
+  (println (accept-either 42))         ; 42
   0)
 ```
 
@@ -477,7 +477,7 @@ defdata Tag [a]
   (BoolTag : (Tag bool))
 
 ; default-value uses the tag to produce a zero value.
-defn default-value [t] :int
+defn default-value [t] : int
   match t
     (IntTag)
     0
@@ -485,14 +485,14 @@ defn default-value [t] :int
     0
 
 ; A function accepting either an Int tag or a plain int through a union.
-defn accept-either [x : ((Tag int) | int)] :int
+defn accept-either [x : ((Tag int) | int)] : int
   match x
     (v : (Tag int))
     default-value(v)
     (n : int)
     n
 
-defn main [] :int
+defn main [] : int
   println(accept-either((IntTag)))
   println(accept-either(42))
   0

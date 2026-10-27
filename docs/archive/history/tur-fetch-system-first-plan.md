@@ -127,7 +127,7 @@ interact. Explicit opt-in is safer.
                     "MbedTLS::mbedx509"
                     "MbedTLS::mbedcrypto"]  ;; existing
     :url           "https://github.com/Mbed-TLS/mbedtls"  ;; existing -- fallback
-    :ref           "v3.6.2"                                 ;; existing -- fallback
+    :ref           "v3.6.2"                 ;; existing -- fallback
     :options       #{:ENABLE_PROGRAMS "OFF"
                     :USE_STATIC_MBEDTLS_LIBRARY "ON"}
   }

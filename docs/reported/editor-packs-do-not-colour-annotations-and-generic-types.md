@@ -109,9 +109,9 @@ In each editor, open this snippet and confirm the whole of each marked token is
 one colour:
 
 ```turmeric
-(defn bump [^borrow c :ptr<Counter> by :int] :int c)
-(defn apply-to [^fat f :(fn [ptr<void>] nil) ^linear h :option<ptr<void>>] :nil nil)
-(defn step [^state/GameState s ^&cols c ^Monoid m] :int s)
+(defn bump [^borrow c : ptr<Counter> by : int] : int c)
+(defn apply-to [^fat f : (fn [ptr<void>] nil) ^linear h : option<ptr<void>>] : nil nil)
+(defn step [^state/GameState s ^&cols c ^Monoid m] : int s)
 (def ^mut total 0)
 (< 0 1) (<= 0 1) (char<? a b) (string->cstr s)   ; the last four are not generics
 ```

@@ -42,7 +42,7 @@ Before reaching for GADTs, get comfortable with plain sum types. Turmeric's
 ```sweet-exp
 defdata Color :copy (Red) (Green) (Blue)
 
-defn color-to-int [c] :int
+defn color-to-int [c] : int
   match c
     (Red)
     1
@@ -70,7 +70,7 @@ defdata Option [a]
   (None)
   (Some a)
 
-defn option-or [opt default] :int
+defn option-or [opt default] : int
   match opt
     (None)
     default
@@ -99,7 +99,7 @@ defdata Shape
   (Circle int)
   (Rect   int int)
 
-defn area [s] :int
+defn area [s] : int
   match s
     (Circle r)
     {r * r}
@@ -146,7 +146,7 @@ Evaluation is written the same as for a plain ADT:
 ```
 
 ```sweet-exp
-defn eval-expr [e] :int
+defn eval-expr [e] : int
   match e
     (Lit n)
     n
@@ -269,7 +269,7 @@ A function dispatching on the tag can return `a` without a cast:
 ```
 
 ```sweet-exp
-defn default-value [t] :int
+defn default-value [t] : int
   match t
     (IntTag)
     0
@@ -315,7 +315,7 @@ defdata Expr [a]
   (Lit int         : (Expr int))
   (Add (Expr int) (Expr int) : (Expr int))
 
-defn color-to-int [c] :int
+defn color-to-int [c] : int
   match c
     (Red)
     1
@@ -324,14 +324,14 @@ defn color-to-int [c] :int
     (Blue)
     3
 
-defn eval-expr [e] :int
+defn eval-expr [e] : int
   match e
     (Lit n)
     n
     (Add l r)
     {eval-expr(l) + eval-expr(r)}
 
-defn main [] :int
+defn main [] : int
   println(color-to-int((Red)))
   println(eval-expr(Add((Lit 10) (Lit 20))))
   println(color-to-int((Green)))
@@ -367,7 +367,7 @@ defdata Expr [a]
   (Add (Expr int) (Expr int)       : (Expr int))
   (Mul (Expr int) (Expr int)       : (Expr int))
 
-defn eval-expr [e] :int
+defn eval-expr [e] : int
   match e
     (Lit n)
     n
@@ -376,7 +376,7 @@ defn eval-expr [e] :int
     (Mul l r)
     {eval-expr(l) * eval-expr(r)}
 
-defn main [] :int
+defn main [] : int
   ; (2 + (3 * 4)) = 14
   let [e Add((Lit 2) Mul((Lit 3) (Lit 4)))]
     println(eval-expr(e))
@@ -404,14 +404,14 @@ type** cannot be the value, so it needs no arm. Over the refined `Expr` of
 ```
 
 ```sweet-exp
-defn eval-int [e : (Expr int)] :int
+defn eval-int [e : (Expr int)] : int
   match e
     (Lit n)
     n
     (If c t f)
     if(eval-bool(c) eval-int(t) eval-int(f))
 
-defn eval-bool [e : (Expr bool)] :bool
+defn eval-bool [e : (Expr bool)] : bool
   match e
     (BLit b)
     b
@@ -468,7 +468,7 @@ code:
 ```sweet-exp
 load "stdlib/equal.tur"
 
-defn main [] :int
+defn main [] : int
   let [proof (:: (Refl) (Equal int int))]
     println(coerce(proof 42))
     0
@@ -522,7 +522,7 @@ They work in both plain ADT and GADT matches:
 ```sweet-exp
 defdata Sign (Pos int) (Neg int) (Zero)
 
-defn classify [s] :int
+defn classify [s] : int
   match s
     (Pos n)
     when
@@ -594,7 +594,7 @@ Union types and GADTs are independent features that can be used together.
 ```
 
 ```sweet-exp
-defn describe [x : (int | bool)] :int
+defn describe [x : (int | bool)] : int
   match x
     (n : int)
     do
@@ -632,7 +632,7 @@ the tag-dispatched call automatically:
 
 ```sweet-exp
 defclass Show [a]
-  show [x] :cstr
+  show [x] : cstr
 
 definstance Show [int]
   show [x] "an-int"
@@ -640,7 +640,7 @@ definstance Show [int]
 definstance Show [bool]
   show [x] "a-bool"
 
-defn print-any [x : (int | bool)] :int
+defn print-any [x : (int | bool)] : int
   println(.show(x))
   0
 ```
@@ -666,11 +666,11 @@ boxed into `any` carry a runtime tag so their type can be recovered:
 ```
 
 ```sweet-exp
-defn consume [x : any] :int
+defn consume [x : any] : int
   println(type-of(x))   ; prints "int", "bool", "cstr", etc.
   0
 
-defn main [] :int
+defn main [] : int
   consume(42)      ; prints "int"
   consume(true)    ; prints "bool"
   consume("hello") ; prints "cstr"
@@ -688,7 +688,7 @@ as type `T`; the runtime tag is **checked**, and a mismatch panics:
 ```
 
 ```sweet-exp
-defn print-as-int [x : any] :int
+defn print-as-int [x : any] : int
   println(cast(x int))
   0
 ```
@@ -832,7 +832,7 @@ defdata Expr [a]
   (Mul (Expr int) (Expr int)       : (Expr int))
 
 ; Pattern match -- exhaustiveness checked, guards optional
-defn eval-expr [e] :int
+defn eval-expr [e] : int
   match e
     (Lit n)
     n
@@ -849,7 +849,7 @@ defdata Equal [a b]
 coerce((Refl) some-value)
 
 ; Union type dispatch
-defn describe [x : (int | bool)] :int
+defn describe [x : (int | bool)] : int
   match x
     (n : int)
     0
@@ -857,7 +857,7 @@ defn describe [x : (int | bool)] :int
     1
 
 ; Gradual typing
-defn show-type [x : any] :int
+defn show-type [x : any] : int
   println(type-of(x))
   0
 ```

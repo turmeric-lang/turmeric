@@ -182,7 +182,7 @@ produces, without changing what `p` reads:
 
 ```turmeric
 (fmap (satisfy digit?) char->digit)          ; (Parser int)
-(fmap (many1 (satisfy alpha?)) list->string)  ; (Parser String)
+(fmap (many1 (satisfy alpha?)) list->string) ; (Parser String)
 ```
 
 Transform inside the parser rather than after running it: `nat-p` as a

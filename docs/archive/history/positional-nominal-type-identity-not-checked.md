@@ -24,9 +24,9 @@ newtypes converts handle-confusion runtime bugs into compile errors.
 ```turmeric
 (defopaque A :int)
 (defopaque B :ptr<void>)
-(defn take-a [x :A] :int ```c return (int64_t)x; ```)
-(defn mk-b   []     :B   ```c return 0; ```)
-(defn main   []     :int (take-a (mk-b)))   ; passes :B where :A expected
+(defn take-a [x : A] : int ```c return (int64_t)x; ```)
+(defn mk-b   []     : B   ```c return 0; ```)
+(defn main   []     : int (take-a (mk-b)))   ; passes :B where :A expected
 ```
 
 ```sh
@@ -40,10 +40,10 @@ and are still interchangeable.
 ### B. Two distinct structs are interchangeable positionally (wrong)
 
 ```turmeric
-(defstruct P [x :int])
-(defstruct Q [y :int])
-(defn take-p [p :P] :int 0)
-(defn main   []     :int (take-p (make-struct Q 5)))   ; :Q where :P expected
+(defstruct P [x : int])
+(defstruct Q [y : int])
+(defn take-p [p : P] : int 0)
+(defn main   []     : int (take-p (make-struct Q 5)))   ; :Q where :P expected
 ```
 
 ```sh
@@ -57,8 +57,8 @@ $ tur check repro.tur ; echo $?
 
   ```turmeric
   (defopaque A :int)
-  (defn take-a [x :A] :int ```c return (int64_t)x; ```)
-  (defn main [] :int (take-a 5))     ; => TUR-E0001 "expected <struct>, got int"
+  (defn take-a [x : A] : int ```c return (int64_t)x; ```)
+  (defn main [] : int (take-a 5))     ; => TUR-E0001 "expected <struct>, got int"
   ```
 
 - **Variadic `& rest :T` DOES enforce nominal identity** (see

@@ -7,7 +7,7 @@ output `52`.  The value-position nested handle no longer rides the fiber.
 ## The shape
 
 ```turmeric
-(defeffect Val [] :int)
+(defeffect Val [] : int)
 (defn get-val [] : int (perform (Val)))
 (println (handle
   (+ (get-val)                       ; operand 0 -- outer handler resumes 10

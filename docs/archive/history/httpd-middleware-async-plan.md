@@ -110,8 +110,8 @@ Pure H7 wrapper, needs nothing beyond existing accessors -- ship first as
 the reference middleware.
 
 ```turmeric
-(defn mw-log [next :int] :int
-  (fn [c :ptr<void>] :nil
+(defn mw-log [next : int] : int
+  (fn [c : ptr<void>] : nil
     (let [start (mono-ms)]
       (httpd-call next c)
       (println (str-concat (httpd-req-method c)
@@ -298,7 +298,7 @@ with A2 because the fiber substrate already exists.
   synchronously:
 
   ```turmeric
-  (defn handler [c :ptr<void>] :nil
+  (defn handler [c : ptr<void>] : nil
     (let [row (await (db-query c "SELECT ..."))]   ;; suspends, frees the thread
       (httpd-resp-body! c (render row))))
   ```

@@ -14,20 +14,25 @@ a place where an annotation can only be one:
     `defeffect` or `defstruct`:  `[x :int]`  ->  `[x : int]`
   - the return type after that vector (past an `#fx{...}` row):
     `] :int`  ->  `] : int`
+  - the same two places in a method of a `defclass` / `definstance` body:
+    `(show [x] :cstr)`  ->  `(show [x] : cstr)`
+  - the binder of a refinement:  `#refine{ j :int | ...}`  ->  `#refine{ j : int | ...}`
 
 Not touched: keywords (`#map{:a 1}`, `(get m :k)`), prose and inline-code
 spans outside a fence, a defstruct's `(field :T)` groups, and a `] :word` whose
 word is not recognisably a type (a lambda returning `:done` is a keyword, not
-an annotation) -- the return position only counts a primitive (`int`, `bool`,
-`cstr`, ...), a `ptr<..>`-style generic, a capitalised name or a `(...)` type.
+an annotation) -- when nothing follows it, the return position only counts a
+primitive (`int`, `bool`, `cstr`, ...), a `ptr<..>`-style generic, a
+capitalised name or a `(...)` type.  With a body after it, the word can only
+be the return type (`] :a`, `] :double`), whatever it is.
 This is a spacing check, not a parser.
 
 Usage: check-annotation-spacing.py [--fix] [--selftest] [path ...]
                                                    (default: docs/, README.md)
 `--fix` inserts the missing space in place (whitespace only).  `--selftest`
 first runs the checker and the rewriter over the samples at the bottom of this
-file.  Exit 1 when anything is, or is left, fused.  Not part of
-tests/check-docs-lint.sh until the docs have been brought into line.
+file.  Exit 1 when anything is, or is left, fused.  Part of
+tests/check-docs-lint.sh.
 """
 import importlib.util
 import re
@@ -83,6 +88,14 @@ def group_end(toks, i):
     return _cla.group_end(toks, i)
 
 
+def extent_end(toks, i):
+    """group_end, or the end of the snippet when the group never closes."""
+    try:
+        return group_end(toks, i)
+    except _cla.Problem:
+        return len(toks)
+
+
 def scan(lines):
     """[(line_idx, col)] -- where a space belongs after a fused colon.  A
     snippet the grammar cannot read (a sketch) yields what was found so far."""
@@ -94,12 +107,63 @@ def scan(lines):
     return sorted(set(hits))
 
 
+def form_extent(toks, lines, i):
+    """(paren_end, indent) of the form headed by toks[i]: the index just past
+    its close when written `(head ...)`, else None and the indentation of the
+    head's line (a sweet-exp form ends where a later line is not indented
+    past it)."""
+    if i > 0 and toks[i - 1][0] == "(":
+        return extent_end(toks, i - 1), None
+    line = lines[toks[i][1]]
+    return None, len(line) - len(line.lstrip())
+
+
+def body_follows(toks, k, extent):
+    """Whether another form of the same definition follows toks[k]."""
+    end, indent = extent
+    if end is not None:
+        return k + 1 < end - 1
+    return k + 1 < len(toks) and (toks[k + 1][1] == toks[k][1]
+                                  or toks[k + 1][2] > indent)
+
+
+def method_heads(toks, lines):
+    """Indices of the method names in `defclass` / `definstance` bodies --
+    `(show [x] : cstr)`, sweet-exp `show [x] : cstr` -- which carry a
+    parameter vector and a return type the way a `defn` does."""
+    out, n = [], len(toks)
+    for i, (tok, _, _, _) in enumerate(toks):
+        if tok not in ("defclass", "definstance"):
+            continue
+        end, indent = form_extent(toks, lines, i)
+        k = i + 1
+        while k < n and toks[k][0] != "[":
+            k += 1
+        k = extent_end(toks, k) if k < n else n     # the class's own vector
+        while k < (end if end is not None else n):
+            t, li, col, _ = toks[k]
+            if end is None and col <= indent and li != toks[i][1]:
+                break
+            starts = toks[k - 1][0] == "(" or \
+                lines[li][:col].strip() == ""
+            if starts and t not in OPEN and t not in CLOSE and k + 1 < n \
+                    and toks[k + 1][0] == "[":
+                out.append(k)
+            k += 1
+    return out
+
+
 def _scan(lines, hits):
     mask = _cla.inline_c_mask(lines)
     toks = list(_cla.tokenize(lines, mask))
     n = len(toks)
+    methods = set(method_heads(toks, lines))
     for i, (tok, _, _, _) in enumerate(toks):
-        if tok not in HEADS:
+        if tok in ("#refine", ":#refine") and i + 3 < n \
+                and toks[i + 1][0] == "{" and fused_at(toks, i + 3) \
+                and not toks[i + 2][0].startswith((":", "#")):
+            hits.append((toks[i + 3][1], toks[i + 3][2]))   # `#refine{ j :int |`
+        if tok not in HEADS and i not in methods:
             continue
         j = i + 1
         while j < n and toks[j][0] not in OPEN and toks[j][0] not in CLOSE \
@@ -121,13 +185,17 @@ def _scan(lines, hits):
                     hits.append((toks[k + 1][1], toks[k + 1][2]))
             saw_vector = True
             j = end
-        if not (saw_vector and HEADS[tok]):
+        if not (saw_vector and HEADS.get(tok, True)):
             continue
         while j < n and toks[j][0].startswith("#") and j + 1 < n \
                 and toks[j + 1][0] == "{":
             j = group_end(toks, j + 1)    # `#fx{Unsafe}`
+        # A fused word with a body after it can only be the return type
+        # (`] :a`, `] :double`); one that ends the form may be the keyword
+        # the body returns (`(fn [] :done)`), so it must look like a type.
         if j < n and fused_at(toks, j) and (
-                toks[j][0] == ":" or type_like_return(toks[j][0])):
+                toks[j][0] == ":" or type_like_return(toks[j][0])
+                or body_follows(toks, j, form_extent(toks, lines, i))):
             hits.append((toks[j][1], toks[j][2]))
 
 
@@ -191,6 +259,22 @@ SELFTEST = [
     # Keywords are not annotations.
     ("(def m #map{:name name :age 3})\n(get m :key)\n(fn [] :done)", None),
     ("(defn k [] :done)", None),
+    # A body after the return word makes it a type, whatever its spelling.
+    ("(defn vec-get [v :(vec a)\n"
+     "               i :#refine{ j :int | (>= j 0) }] :a\n"
+     "  (get v i))\n"
+     "(defn sqrt [x : double] :double ...)",
+     "(defn vec-get [v : (vec a)\n"
+     "               i : #refine{ j : int | (>= j 0) }] : a\n"
+     "  (get v i))\n"
+     "(defn sqrt [x : double] : double ...)"),
+    ("defn main [] :elem\n  0\ndefn k [] :done\ndef x 1",
+     "defn main [] : elem\n  0\ndefn k [] :done\ndef x 1"),
+    # Typeclass methods, both spellings; the class's own vector is not one.
+    ("(defclass Show [a]\n  (show [x] :cstr))\n"
+     "definstance Show [int]\n  show [x :int] :cstr\n    \"i\"",
+     "(defclass Show [a]\n  (show [x] : cstr))\n"
+     "definstance Show [int]\n  show [x : int] : cstr\n    \"i\""),
     # A function type has no names to annotate; inline C is C.
     ("(defn ap [f : (fn [int] int)] : int\n  ```c\n  return a ? b :c;\n  ```)",
      None),

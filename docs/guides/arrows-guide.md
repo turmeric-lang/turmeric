@@ -223,7 +223,7 @@ With only the `(->)` instance in scope, a bare `(ident)` resolves uniquely:
 (defn add1 [x : int] : int (+ x 1))
 
 (defn main [] : int
-  (let [i (ident)] (println (i 41)))        ; identity arrow      => 41
+  (let [i (ident)] (println (i 41)))              ; identity arrow      => 41
   (let [h (comp (ident) add1)] (println (h 41)))  ; left identity  => 42
   (let [h (comp add1 (ident))] (println (h 41)))  ; right identity => 42
   0)

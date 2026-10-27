@@ -367,7 +367,7 @@ double-panic guard" claim becomes true. Add a fixture
 ;;;     (if (err? r) (println "caught") (println "ok")))
 ;;;
 ;;; Since: Phase R2
-(defn catch-unwind [thunk :int] :Panic ...)  ;; err slot carries :Panic, not raw ptr
+(defn catch-unwind [thunk : int] : Panic ...)  ;; err slot carries :Panic, not raw ptr
 
 ;;; catch-panic-of -- like catch-unwind, but only catches panics whose
 ;;; payload downcasts to the given type tag; re-raises other panic types.
@@ -377,18 +377,18 @@ double-panic guard" claim becomes true. Add a fixture
 ;;;   thunk    -- (fn [] :int)
 ;;;
 ;;; Since: Phase R2
-(defn catch-panic-of [type-tag :int thunk :int] :Panic ...)
+(defn catch-panic-of [type-tag : int thunk : int] : Panic ...)
 
 ;;; panic-payload-message -- read the message string out of a caught payload.
 ;;;
 ;;; Since: Phase R2
-(defn panic-payload-message [p :Panic] :cstr ...)
+(defn panic-payload-message [p : Panic] : cstr ...)
 
 ;;; panic-payload-file -- source file of the panic call site.
-(defn panic-payload-file [p :Panic] :cstr ...)
+(defn panic-payload-file [p : Panic] : cstr ...)
 
 ;;; panic-payload-line -- source line of the panic call site.
-(defn panic-payload-line [p :Panic] :int ...)
+(defn panic-payload-line [p : Panic] : int ...)
 ```
 
 ### Tests

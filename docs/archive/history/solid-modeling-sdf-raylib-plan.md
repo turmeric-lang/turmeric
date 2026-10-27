@@ -114,14 +114,14 @@ that uploads the custom result as a 3D texture).
 ;;; constructor arity; only the slots named in the docstring per tag are
 ;;; meaningful.
 (defstruct SdfExpr
-  [tag    :int        ;; one of SDF_SPHERE, SDF_BOX, ... below
-   v0     :vec3       ;; center / lo / axis / ...
-   v1     :vec3       ;; hi / direction / ...
-   s0     :float      ;; radius / thickness / blend-k / ...
-   s1     :float      ;; secondary scalar
-   left   :SdfExpr    ;; sub-expression (or sentinel for leaves)
-   right  :SdfExpr    ;; sub-expression (or sentinel for leaves)
-   custom :fn         ;; only used by SDF_CUSTOM; nil otherwise
+  [tag    : int        ;; one of SDF_SPHERE, SDF_BOX, ... below
+   v0     : vec3       ;; center / lo / axis / ...
+   v1     : vec3       ;; hi / direction / ...
+   s0     : float      ;; radius / thickness / blend-k / ...
+   s1     : float      ;; secondary scalar
+   left   : SdfExpr    ;; sub-expression (or sentinel for leaves)
+   right  : SdfExpr    ;; sub-expression (or sentinel for leaves)
+   custom : fn         ;; only used by SDF_CUSTOM; nil otherwise
    ])
 
 ;; Tag constants (kept tight so a single switch dispatches in both
@@ -144,21 +144,21 @@ Primitives are smart constructors over this struct:
 
 ```turmeric
 ;;; sdf-sphere -- signed distance to a sphere centred at `center`.
-(defn sdf-sphere [center :vec3 r :float] :SdfExpr
+(defn sdf-sphere [center : vec3 r : float] : SdfExpr
   (sdf-leaf SDF_SPHERE center (vec3 0.0 0.0 0.0) r 0.0))
 
 ;;; sdf-box -- AABB from `lo` to `hi`.
-(defn sdf-box [lo :vec3 hi :vec3] :SdfExpr
+(defn sdf-box [lo : vec3 hi : vec3] : SdfExpr
   (sdf-leaf SDF_BOX lo hi 0.0 0.0))
 
 ;;; sdf-cylinder -- infinite cylinder along +Z, projected radius `r`.
-(defn sdf-cylinder [center :vec3 r :float] :SdfExpr
+(defn sdf-cylinder [center : vec3 r : float] : SdfExpr
   (sdf-leaf SDF_CYLINDER center (vec3 0.0 0.0 1.0) r 0.0))
 
 ;;; sdf-custom -- escape hatch for SDFs that cannot be expressed in the
 ;;; AST. The closure is :vec3 -> :float. GLSL emission for a subtree
 ;;; containing SDF_CUSTOM falls back to a CPU evaluator (see Layer 4).
-(defn sdf-custom [f :fn] :SdfExpr
+(defn sdf-custom [f : fn] : SdfExpr
   (sdf-leaf-fn SDF_CUSTOM f))
 ```
 
@@ -166,27 +166,27 @@ Primitives are smart constructors over this struct:
 
 ```turmeric
 ;;; sdf-union -- union (min) of two SDFs.
-(defn sdf-union [a :SdfExpr b :SdfExpr] :SdfExpr
+(defn sdf-union [a : SdfExpr b : SdfExpr] : SdfExpr
   (sdf-node SDF_UNION a b 0.0 0.0))
 
 ;;; sdf-intersection -- intersection (max).
-(defn sdf-intersection [a :SdfExpr b :SdfExpr] :SdfExpr
+(defn sdf-intersection [a : SdfExpr b : SdfExpr] : SdfExpr
   (sdf-node SDF_INTERSECT a b 0.0 0.0))
 
 ;;; sdf-difference -- a minus b.
-(defn sdf-difference [a :SdfExpr b :SdfExpr] :SdfExpr
+(defn sdf-difference [a : SdfExpr b : SdfExpr] : SdfExpr
   (sdf-node SDF_DIFFERENCE a b 0.0 0.0))
 
 ;;; sdf-smooth-union -- soft min with blend parameter k (Quilez).
-(defn sdf-smooth-union [a :SdfExpr b :SdfExpr k :float] :SdfExpr
+(defn sdf-smooth-union [a : SdfExpr b : SdfExpr k : float] : SdfExpr
   (sdf-node SDF_SMOOTH_UNION a b k 0.0))
 
 ;;; sdf-offset -- expand (d>0) or shrink (d<0) by a constant amount.
-(defn sdf-offset [a :SdfExpr d :float] :SdfExpr
+(defn sdf-offset [a : SdfExpr d : float] : SdfExpr
   (sdf-unary SDF_OFFSET a d 0.0))
 
 ;;; sdf-shell -- keep only a `thickness`-wide shell around the surface.
-(defn sdf-shell [a :SdfExpr thickness :float] :SdfExpr
+(defn sdf-shell [a : SdfExpr thickness : float] : SdfExpr
   (sdf-unary SDF_SHELL a thickness 0.0))
 ```
 
@@ -196,7 +196,7 @@ The CPU evaluator is derived once and shared:
 ;;; sdf-eval -- evaluate an SdfExpr at a point.
 ;;; Single dispatch on `tag`; the structure of the recursion is mirrored
 ;;; exactly by sdf->glsl so the two interpreters stay in sync.
-(defn sdf-eval [e :SdfExpr p :vec3] :float
+(defn sdf-eval [e : SdfExpr p : vec3] : float
   (cond
     (= (SdfExpr-tag e) SDF_SPHERE)
       (- (vec3-length (vec3-sub p (SdfExpr-v0 e))) (SdfExpr-s0 e))
@@ -227,26 +227,26 @@ result should be shaded when this subtree is the closest:
 ```turmeric
 ;;; Surface -- material attribution attached to an SdfExpr subtree.
 (defstruct Surface
-  [color    :vec3       ;; RGB in [0,1]
-   objectId :int        ;; >= 0; -1 reserved for "background"
-   metadata :int        ;; HAMT pointer for UV transform, BSDF params, etc.
+  [color    : vec3       ;; RGB in [0,1]
+   objectId : int        ;; >= 0; -1 reserved for "background"
+   metadata : int        ;; HAMT pointer for UV transform, BSDF params, etc.
    ])
 
 ;;; ColoredSDF -- an SDF paired with its surface attribution.
 (defstruct ColoredSDF
-  [sdf     :SdfExpr
-   surface :Surface
+  [sdf     : SdfExpr
+   surface : Surface
    ])
 
 ;;; colored-sphere -- sphere primitive with a fixed surface.
-(defn colored-sphere [center :vec3 r :float color :vec3 objectId :int] :ColoredSDF
+(defn colored-sphere [center : vec3 r : float color : vec3 objectId : int] : ColoredSDF
   (ColoredSDF (sdf-sphere center r)
               (Surface color objectId 0)))
 
 ;;; colored-union -- the colour of the union at a point is the colour of
 ;;; whichever child SDF is closest. Mesh extraction reads this attribution
 ;;; via sdf-attribute below.
-(defn colored-union [a :ColoredSDF b :ColoredSDF] :ColoredSDF
+(defn colored-union [a : ColoredSDF b : ColoredSDF] : ColoredSDF
   (ColoredSDF (sdf-union (ColoredSDF-sdf a) (ColoredSDF-sdf b))
               ;; The combined surface is "either a or b"; the picker is
               ;; deferred until query time.
@@ -254,7 +254,7 @@ result should be shaded when this subtree is the closest:
 
 ;;; sdf-attribute -- given a colored scene tree, return the Surface of
 ;;; whichever leaf is closest to `p`. Used by CPU mesh extraction.
-(defn sdf-attribute [scene :ColoredSDF p :vec3] :Surface
+(defn sdf-attribute [scene : ColoredSDF p : vec3] : Surface
   ;; Walk the tree, tracking the (distance, surface) of the winning leaf
   ;; through unions / intersections / differences.
   (sdf-attribute-walk scene p))
@@ -280,7 +280,7 @@ closures required.
 ;;;
 ;;; Returns a complete fragment of GLSL ready to be `#include`d into the
 ;;; raymarching shader; see Layer 5 for the host shader.
-(defn sdf->glsl [scene :ColoredSDF] :cstr
+(defn sdf->glsl [scene : ColoredSDF] : cstr
   (let [leaves   (collect-leaves scene)        ;; (vec ColoredSDF)
         prim-src (str-join "\n" (map emit-leaf-glsl leaves))
         scene-fn (emit-tree-glsl (ColoredSDF-sdf scene) leaves)]
@@ -296,7 +296,7 @@ closures required.
 ;;; Example output for a sphere at (0,0,2) radius 1.5:
 ;;;
 ;;;   float sdf3(vec3 p) { return length(p - vec3(0.0,0.0,2.0)) - 1.5; }
-(defn emit-leaf-glsl [leaf :ColoredSDF] :cstr ...)
+(defn emit-leaf-glsl [leaf : ColoredSDF] : cstr ...)
 
 ;;; emit-tree-glsl -- emit the body of sceneSDF as a fold over the AST.
 ;;;
@@ -309,7 +309,7 @@ closures required.
 ;;;     else         { d = dR; objId = iR; col = cR; } }
 ;;;
 ;;; so colour and object ID follow whichever child won the min.
-(defn emit-tree-glsl [e :SdfExpr leaves :vec] :cstr ...)
+(defn emit-tree-glsl [e : SdfExpr leaves : vec] : cstr ...)
 ```
 
 #### Handling `SDF_CUSTOM` nodes
@@ -437,7 +437,7 @@ the full conventions.
 ;;; The GLSL source is compiled once up front; uniforms are pushed each
 ;;; frame. Camera/orbit input is handled by raylib's built-in helpers
 ;;; (not shown).
-(defn sdf-render-window [scene :ColoredSDF width :int height :int title :cstr] :void
+(defn sdf-render-window [scene : ColoredSDF width : int height : int title : cstr] : void
   (do
     (InitWindow width height title)
     (let [glsl-src     (sdf->glsl scene)
@@ -476,15 +476,15 @@ Notes:
 
 ```turmeric
 (defstruct Mesh
-  [vertices   :(vec vec3)   ;; Position
-   normals    :(vec vec3)   ;; Optional
-   colors     :(vec vec3)   ;; Per-vertex color
-   texcoords  :(vec vec2)   ;; Optional
-   indices    :(vec int)    ;; Triangle indices
+  [vertices   : (vec vec3)   ;; Position
+   normals    : (vec vec3)   ;; Optional
+   colors     : (vec vec3)   ;; Per-vertex color
+   texcoords  : (vec vec2)   ;; Optional
+   indices    : (vec int)    ;; Triangle indices
    ])
 
 ;;; extract-mesh-from-sdf -- run dual contouring on GPU results.
-(defn extract-mesh-from-sdf [sdf-texture :int resolution :vec3 bounds :bounds] :Mesh
+(defn extract-mesh-from-sdf [sdf-texture : int resolution : vec3 bounds : bounds] : Mesh
   ;; Run compute shader for dual contouring
   ;; Download results to CPU
   ;; Build Mesh struct with per-vertex colors from objectId
@@ -492,16 +492,16 @@ Notes:
 
 ;;; export-stl -- export mesh to STL (monochrome).
 ;;; Note: STL doesn't support colors; use OBJ or glTF instead.
-(defn export-stl [mesh :Mesh path :cstr] :void ...)
+(defn export-stl [mesh : Mesh path : cstr] : void ...)
 
 ;;; export-obj -- export colored mesh to OBJ + MTL.
-(defn export-obj [mesh :Mesh path :cstr] :void
+(defn export-obj [mesh : Mesh path : cstr] : void
   ;; OBJ format supports per-face material groups
   ;; Generate MTL file with one material per objectId
   ...)
 
 ;;; export-gltf -- export to glTF for modern pipelines.
-(defn export-gltf [mesh :Mesh path :cstr] :void
+(defn export-gltf [mesh : Mesh path : cstr] : void
   ;; glTF supports per-vertex colors and materials
   ...)
 ```
@@ -671,7 +671,7 @@ The spice manifest lives in `../turmeric-spices/spices/sdf-raylib/build.tur`:
                           colored-union colored-difference])
 (import export :refer [export-obj])
 
-(defn make-scene [] :ColoredSDF
+(defn make-scene [] : ColoredSDF
   (let [red-sphere (colored-sphere (vec3 0.0 0.0 2.0)  1.5
                                     (vec3 1.0 0.0 0.0) 1)
         green-box  (colored-box    (vec3 -1.0 -1.0 0.0) (vec3 1.0 1.0 1.0)
@@ -684,7 +684,7 @@ The spice manifest lives in `../turmeric-spices/spices/sdf-raylib/build.tur`:
                                   blue-cyl)]
     combined))
 
-(defn main [] :int
+(defn main [] : int
   (let [scene (make-scene)
         mesh  (extract-mesh-from-sdf scene [256 256 256] [[-5 -5 -5] [5 5 5]])]
     (export-obj mesh "output.obj")

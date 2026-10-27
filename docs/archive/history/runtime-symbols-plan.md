@@ -204,12 +204,12 @@ under `-Xsymbols` it now type-checks as `:Sym`.
 Two new instances are needed:
 
 ```turmeric
-(definstance Hash [Sym] (hash [x] :int
+(definstance Hash [Sym] (hash [x] : int
   ```c
   return (int64_t)((const struct __tur_sym *)x)->hash;
   ```))
 
-(definstance Eq [Sym] (eq? [x y] :bool
+(definstance Eq [Sym] (eq? [x y] : bool
   ```c
   return (int64_t)(x == y);
   ```))

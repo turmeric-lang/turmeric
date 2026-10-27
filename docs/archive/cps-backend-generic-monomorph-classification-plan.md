@@ -46,9 +46,9 @@ performer and its handler are never split across the DK and fiber machines. This
 was verified:
 
 ```turmeric
-(defeffect A [] :int)
+(defeffect A [] : int)
 (defn emit-twice [T] [x : T] : int { (perform (A)) + (perform (A)) })  ; generic -> fiber monomorph
-(defn run [] : int (handle (emit-twice 0) (A [] k) (resume k 5)))       ; concrete handler
+(defn run [] : int (handle (emit-twice 0) (A [] k) (resume k 5)))      ; concrete handler
 ```
 
 `run` is evicted from CPS (effect A tainted by the fiber monomorph) and the whole

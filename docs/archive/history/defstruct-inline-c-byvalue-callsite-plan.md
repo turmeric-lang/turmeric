@@ -26,13 +26,13 @@ A defn whose body is inline-C and whose parameter is a defstruct larger than
 
 ```turmeric
 (defstruct CookieOpts
-  [name :cstr value :cstr path :cstr domain :cstr
-   max-age :int secure :int http-only :int same-site :cstr])    ; 64 bytes
+  [name : cstr value : cstr path : cstr domain : cstr
+   max-age : int secure : int http-only : int same-site : cstr])    ; 64 bytes
 
-(defn cookie [name :cstr value :cstr] :CookieOpts
+(defn cookie [name : cstr value : cstr] : CookieOpts
   (make-struct CookieOpts name value "/" "" -1 0 1 "Lax"))
 
-(defn httpd-set-cookie! [conn :ptr<void> opts :CookieOpts] :nil
+(defn httpd-set-cookie! [conn : ptr<void> opts : CookieOpts] : nil
   ```c
   /* opts.field access -- by-value semantics inside inline-C */
   fprintf(stdout, "%s=%s\n", opts.name, opts.value);
@@ -216,19 +216,19 @@ tests/fixtures/defstruct-inline-c-byvalue/
 
 ```turmeric
 (defstruct Big
-  [a :cstr b :cstr c :cstr d :cstr
-   e :int  f :int  g :int  h :cstr])    ; >16 bytes
+  [a : cstr b : cstr c : cstr d : cstr
+   e : int  f : int  g : int  h : cstr])    ; >16 bytes
 
-(defn mk [] :Big
+(defn mk [] : Big
   (make-struct Big "a" "b" "c" "d" 1 2 3 "h"))
 
-(defn use-it [x :Big] :nil
+(defn use-it [x : Big] : nil
   ```c
   fprintf(stdout, "%s %d\n", x.a, (int)x.e);
   fflush(stdout);
   ```)
 
-(defn main [] :int
+(defn main [] : int
   (use-it (mk))
   0)
 ```

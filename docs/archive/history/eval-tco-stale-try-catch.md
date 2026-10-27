@@ -17,7 +17,7 @@ Test 17 ("tin", driver-coverage: control operator inside a `try` body) in
 `tests/turi/eval-tco.tur` exercised the `try`/`catch` special form:
 
 ```turmeric
-(reset (+ 1 (try (shift (fn [v :int] (tin (- n 1))) 0) (catch [e] 0))))
+(reset (+ 1 (try (shift (fn [v : int] (tin (- n 1))) 0) (catch [e] 0))))
 ```
 
 The `try`/`catch` special form no longer exists in the language (only

@@ -36,7 +36,7 @@ nothing to do with the dialect.
 Three defns, one parser:
 
 ```turmeric
-(defn g [a :int b :int] :int (+ a b))       ;; FUSED   -- correct
+(defn g [a : int b : int] : int (+ a b))    ;; FUSED   -- correct
 (defn g [a : int b : int] : int (+ a b))    ;; SPACED  -- wrong
 (defn g [a b] (+ a b))                      ;; untyped -- correct
 ```

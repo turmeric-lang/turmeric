@@ -71,7 +71,7 @@ definitions for this purpose.
 (defmodule tur/list
   (export cons head tail ...))
 
-(defstruct Cons [value :int next :int])
+(defstruct Cons [value : int next : int])
 ```
 
 ### Format rules

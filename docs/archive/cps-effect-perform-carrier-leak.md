@@ -79,7 +79,7 @@ mallocs a carrier and hands it through the int64 ABI, then never reclaims it:
 Multi-arg array (`cps-backend-multiarg-effect`, `-float`):
 
 ```turmeric
-(defeffect Sum3 [a :int b :int c :int] :int)
+(defeffect Sum3 [a : int b : int c : int] : int)
 (defn add3 [base : int] : int
   (handle
     {(perform (Sum3 1 2 3)) + base}
@@ -93,7 +93,7 @@ Tier-C value box (`cps-backend-tierc-effect`, `-arg`):
 
 ```turmeric
 (defstruct Pr [first : int second : int])
-(defeffect Get [] :Pr)
+(defeffect Get [] : Pr)
 (defn use-get [] : Pr (perform (Get)))
 (defn run [] : Pr
   (handle (use-get) (Get [] k) (resume k (make-struct Pr :first 32 :second 10))))

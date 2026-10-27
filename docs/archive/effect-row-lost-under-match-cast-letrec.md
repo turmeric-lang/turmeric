@@ -24,7 +24,7 @@ inferred `#{}`.
 ## Repro
 
 ```turmeric
-(defeffect Ask [] :int)
+(defeffect Ask [] : int)
 (defn m1 [o : (Option int)] : int (match o (Some v) (+ v (perform (Ask))) (None) 0))
 (defn c1 [] : float (as float (perform (Ask))))
 (defn main [] : int

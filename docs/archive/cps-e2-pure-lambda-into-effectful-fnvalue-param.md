@@ -29,8 +29,8 @@ EFFECTFUL fn-value is expected.
 ## The shape (pinned)
 
 ```turmeric
-(defeffect Write [msg :cstr] :nil)
-(defn run-twice [f :(fn [] #fx{Write} nil)] #fx{Write} : nil (do (f) (f)))
+(defeffect Write [msg : cstr] : nil)
+(defn run-twice [f : (fn [] #fx{Write} nil)] #fx{Write} : nil (do (f) (f)))
 (defn main [] : int
   (handle (do (run-twice (fn [] (println "ok"))) 0)          ; PURE lambda, no perform
     (Write [msg] k) (do (println msg) (resume k 0))))

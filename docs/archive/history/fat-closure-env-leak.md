@@ -18,7 +18,7 @@ compiled with `-fsanitize=address` + `detect_leaks=1`.
 ## Minimal repro
 
 ```turmeric
-(defeffect Ask [] :int)
+(defeffect Ask [] : int)
 
 ;; The handler body constructs a local closure `f` that captures `base`.
 (defn run [base : int] : int

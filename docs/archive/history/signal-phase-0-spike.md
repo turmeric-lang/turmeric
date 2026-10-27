@@ -87,7 +87,7 @@ C function with `double` return -- but `fn` closures cannot.
 `stdlib/arrow.tur:84` defines:
 
 ```turmeric
-(defn __arrow_call1 [f x] :int
+(defn __arrow_call1 [f x] : int
   ```c return ((int64_t(*)(int64_t))(intptr_t)f)(x);
   ```)
 ```
@@ -115,7 +115,7 @@ hard-coded `int64_t` from layer 1.
 `signal/src/signal/dsp.tur:104-118` (`low-pass`) is representative:
 
 ```turmeric
-(defn low-pass [alpha :float]
+(defn low-pass [alpha : float]
   (let [av alpha]
     (fn [sig]
       (let [sv    sig

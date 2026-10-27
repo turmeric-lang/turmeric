@@ -154,7 +154,7 @@ sequencing. Tackle them before the type-variant work.
 
   ```turmeric
   (defn run [q : (Query #row{Pos Vel} #row{Pos})] : int ...)  ; positional, ECS
-  (def schema : #row{:name :str :age :int})                    ; labeled, frame
+  (def schema : #row{:name :str :age :int})                   ; labeled, frame
   ```
 
   **Rejected alternatives:**

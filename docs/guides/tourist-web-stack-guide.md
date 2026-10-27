@@ -319,7 +319,7 @@ import session/mw :refer [session-mw]
 import session/config :refer [default-session-config]
 import session/memory-store :refer [memory-store-new]
 
-defn main [] :int
+defn main [] : int
   tls-httpd-init()
   let [tls-ctx tls-ctx-new()]
     tls-ctx-load-cert-pem(tls-ctx "/tmp/tls-smoke-test/test-cert.pem")

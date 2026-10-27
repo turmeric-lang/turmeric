@@ -45,7 +45,7 @@ that emits W0033, so the coloring fix does not address it.
 ## Minimal repro
 
 ```turmeric
-(defeffect Ask [] :int)
+(defeffect Ask [] : int)
 
 (defn use-ask [] : int
   (+ 1 (:: (perform (Ask)) :int)))   ;; the ONLY perform is inside the ascription

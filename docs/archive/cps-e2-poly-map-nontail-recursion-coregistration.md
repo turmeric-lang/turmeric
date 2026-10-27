@@ -39,7 +39,7 @@ fiber.
 ## The shape
 
 ```turmeric
-(defn map-list [n : int f :(fn [int] #fx{e} int)] #fx{e} : int
+(defn map-list [n : int f : (fn [int] #fx{e} int)] #fx{e} : int
   (if (> n 0)
     (+ (f n) (map-list (- n 1) f))       ; NON-TAIL (f n) AND non-tail recursion passing f
     0))

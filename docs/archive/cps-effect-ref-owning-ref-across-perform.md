@@ -35,7 +35,7 @@ continuation path handles it.
 ## The shape
 
 ```turmeric
-(defeffect GetBase [] :int)
+(defeffect GetBase [] : int)
 (defn sum-with-base [] : int
   (let [base (ref 100)]                       ; owning ref<int>, auto-drop at let exit
     (+ (deref base) (perform (GetBase)))))    ; deref in operand 0, perform in operand 1

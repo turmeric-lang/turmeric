@@ -389,7 +389,7 @@ you `tur fetch`) and:
   the trust policy at the call site:
 
   ```turmeric
-  (ws-connect "wss://example.com/feed")                      ;; system CA store (default)
+  (ws-connect "wss://example.com/feed")                       ;; system CA store (default)
   (ws-connect-with-ca "wss://localhost:8443/socket" ca-path)  ;; a caller-supplied CA bundle
   (ws-connect-insecure "wss://localhost:8443/socket")         ;; UNSAFE: skip verification (dev only)
   ```

@@ -67,25 +67,25 @@ A `Map[K V]` type where:
 (defstruct Map [K V]
   (hamt :ptr<void>))   ; opaque HAMT node
 
-(defn tmap-new [] :Map[K V]
+(defn tmap-new [] : Map[K V]
   ...)
 
-(defn tmap-assoc [m :Map[K V] key :K val :V] :Map[K V]
+(defn tmap-assoc [m : Map[K V] key : K val : V] : Map[K V]
   ...)
 
-(defn tmap-dissoc [m :Map[K V] key :K] :Map[K V]
+(defn tmap-dissoc [m : Map[K V] key : K] : Map[K V]
   ...)
 
-(defn tmap-get [m :Map[K V] key :K] :Option[V]
+(defn tmap-get [m : Map[K V] key : K] : Option[V]
   ...)
 
-(defn tmap-has? [m :Map[K V] key :K] :bool
+(defn tmap-has? [m : Map[K V] key : K] : bool
   ...)
 
-(defn tmap-count [m :Map[K V]] :int
+(defn tmap-count [m : Map[K V]] : int
   ...)
 
-(defn tmap-merge [a :Map[K V] b :Map[K V]] :Map[K V]
+(defn tmap-merge [a : Map[K V] b : Map[K V]] : Map[K V]
   ...)
 ```
 
@@ -142,11 +142,11 @@ Replace the `int64_t`-only vector with a parameterized growable array.
   (len   :int)
   (cap   :int))
 
-(defn tvec-new    []                 :Vec[A])
-(defn tvec-push!  [v :Vec[A] x :A]  :void)
-(defn tvec-get    [v :Vec[A] i :int] :A)
-(defn tvec-len    [v :Vec[A]]        :int)
-(defn tvec-pop!   [v :Vec[A]]        :Option[A])
+(defn tvec-new    []                 : Vec[A])
+(defn tvec-push!  [v : Vec[A] x : A]  : void)
+(defn tvec-get    [v : Vec[A] i : int] : A)
+(defn tvec-len    [v : Vec[A]]        : int)
+(defn tvec-pop!   [v : Vec[A]]        : Option[A])
 ```
 
 | ID | Task | Status |
@@ -169,10 +169,10 @@ typed wrapper casts at boundaries.
 
 (deftype List [A] = Option[Cons[A]])
 
-(defn tcons  [h :A t :List[A]] :List[A])
-(defn thead  [l :List[A]]      :Option[A])
-(defn ttail  [l :List[A]]      :List[A])
-(defn tnil   []                :List[A])
+(defn tcons  [h : A t : List[A]] : List[A])
+(defn thead  [l : List[A]]      : Option[A])
+(defn ttail  [l : List[A]]      : List[A])
+(defn tnil   []                : List[A])
 ```
 
 | ID | Task | Status |
@@ -191,9 +191,9 @@ A borrowed, bounds-checked view into a contiguous region of `A`.
   (ptr :ptr<A>)
   (len :int))
 
-(defn tslice-new [data :ptr<A> len :int] :Slice[A])
-(defn tslice-get [s :Slice[A] i :int]   :A)
-(defn tslice-len [s :Slice[A]]          :int)
+(defn tslice-new [data : ptr<A> len : int] : Slice[A])
+(defn tslice-get [s : Slice[A] i : int]   : A)
+(defn tslice-len [s : Slice[A]]          : int)
 ```
 
 | ID | Task | Status |
@@ -211,11 +211,11 @@ Already used above; make it first-class:
   (is-some :bool)
   (value   :A))
 
-(defn some   [x :A]      :Option[A])
-(defn none   []          :Option[A])
-(defn some?  [o :Option[A]] :bool)
-(defn unwrap [o :Option[A]] :A)   ; panics on None
-(defn unwrap-or [o :Option[A] default :A] :A)
+(defn some   [x : A]      : Option[A])
+(defn none   []          : Option[A])
+(defn some?  [o : Option[A]] : bool)
+(defn unwrap [o : Option[A]] : A)   ; panics on None
+(defn unwrap-or [o : Option[A] default : A] : A)
 ```
 
 | ID | Task | Status |
@@ -234,11 +234,11 @@ Already used above; make it first-class:
   (ok-val  :A)
   (err-val :B))
 
-(defn ok        [x :A]       :Result[A B])
-(defn err       [e :B]       :Result[A B])
-(defn ok?       [r :Result[A B]] :bool)
-(defn unwrap-ok [r :Result[A B]] :A)
-(defn unwrap-err [r :Result[A B]] :B)
+(defn ok        [x : A]       : Result[A B])
+(defn err       [e : B]       : Result[A B])
+(defn ok?       [r : Result[A B]] : bool)
+(defn unwrap-ok [r : Result[A B]] : A)
+(defn unwrap-err [r : Result[A B]] : B)
 ```
 
 | ID | Task | Status |
@@ -256,9 +256,9 @@ Already used above; make it first-class:
   (fst :A)
   (snd :B))
 
-(defn pair    [a :A b :B] :Pair[A B])
-(defn pair-fst [p :Pair[A B]] :A)
-(defn pair-snd [p :Pair[A B]] :B)
+(defn pair    [a : A b : B] : Pair[A B])
+(defn pair-fst [p : Pair[A B]] : A)
+(defn pair-snd [p : Pair[A B]] : B)
 ```
 
 | ID | Task | Status |
@@ -283,9 +283,9 @@ A 2D row-major grid parameterized over element type.
   (cx     :int)
   (cy     :int))
 
-(defn tgrid-new [width :int height :int] :Grid[A])
-(defn tgrid-get [g :Grid[A] x :int y :int] :A)
-(defn tgrid-set! [g :Grid[A] x :int y :int v :A] :void)
+(defn tgrid-new [width : int height : int] : Grid[A])
+(defn tgrid-get [g : Grid[A] x : int y : int] : A)
+(defn tgrid-set! [g : Grid[A] x : int y : int v : A] : void)
 ```
 
 | ID | Task | Status |
@@ -305,9 +305,9 @@ A 1D list zipper with typed focus and neighbor arrays.
   (focus     :A)
   (right     :Slice[A]))
 
-(defn tzipper-new  [left :Slice[A] focus :A right :Slice[A]] :Zipper[A])
-(defn tzipper-move-left  [z :Zipper[A]] :Option[Zipper[A]])
-(defn tzipper-move-right [z :Zipper[A]] :Option[Zipper[A]])
+(defn tzipper-new  [left : Slice[A] focus : A right : Slice[A]] : Zipper[A])
+(defn tzipper-move-left  [z : Zipper[A]] : Option[Zipper[A]])
+(defn tzipper-move-right [z : Zipper[A]] : Option[Zipper[A]])
 ```
 
 | ID | Task | Status |
@@ -326,15 +326,15 @@ Does not exist at all today.
 (defstruct Set [A]
   (hamt :ptr<void>))
 
-(defn tset-new    []               :Set[A])
-(defn tset-add    [s :Set[A] x :A] :Set[A])
-(defn tset-remove [s :Set[A] x :A] :Set[A])
-(defn tset-member? [s :Set[A] x :A] :bool)
-(defn tset-count  [s :Set[A]]     :int)
-(defn tset-union  [a :Set[A] b :Set[A]] :Set[A])
-(defn tset-intersect [a :Set[A] b :Set[A]] :Set[A])
-(defn tset-diff   [a :Set[A] b :Set[A]] :Set[A])
-(defn tset-eq?    [a :Set[A] b :Set[A]] :bool)
+(defn tset-new    []               : Set[A])
+(defn tset-add    [s : Set[A] x : A] : Set[A])
+(defn tset-remove [s : Set[A] x : A] : Set[A])
+(defn tset-member? [s : Set[A] x : A] : bool)
+(defn tset-count  [s : Set[A]]     : int)
+(defn tset-union  [a : Set[A] b : Set[A]] : Set[A])
+(defn tset-intersect [a : Set[A] b : Set[A]] : Set[A])
+(defn tset-diff   [a : Set[A] b : Set[A]] : Set[A])
+(defn tset-eq?    [a : Set[A] b : Set[A]] : bool)
 ```
 
 | ID | Task | Status |

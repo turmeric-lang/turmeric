@@ -31,7 +31,7 @@ Use `;;;` (triple-semicolon) as the doc-comment marker, distinct from `;;` (regu
 ;;;   (cons 1 (cons 2 (nil-value)))  ; => (1 2)
 ;;;
 ;;; Since: Phase B1
-(defn cons [value next] :int
+(defn cons [value next] : int
   ...)
 ```
 
@@ -239,7 +239,7 @@ At doc-generation time, `gendocs.py --emit-tur` writes `stdlib/docstrings.tur`:
     "head" "head -- get the first element of a list.\n\n...")
   ...)
 
-(defn doc-lookup [name :cstr] :cstr
+(defn doc-lookup [name : cstr] : cstr
   (hamt-get doc-table name))
 )
 ```

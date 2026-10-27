@@ -67,7 +67,7 @@ The archived reports `turi-async-fiber-stack-never-reclaimed` and
 `turi-async-await-deep-recursion-garbage` both use
 
 ```turmeric
-(defn a-rec [n :int] :int
+(defn a-rec [n : int] : int
   (if (= n 0) 0 (+ 1 (await (async (fn [] : int (a-rec (- n 1))))))))
 ```
 

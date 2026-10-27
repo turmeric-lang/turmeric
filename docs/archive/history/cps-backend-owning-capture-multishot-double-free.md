@@ -42,7 +42,7 @@ double-free on the second shot.
 ## Minimal repro (conceptual -- currently falls back, so it is correct today)
 
 ```turmeric
-(defeffect E [] :int)
+(defeffect E [] : int)
 (defn g [] : int (perform (E)))
 (defn f [] : int
   (let [r (rc/of 5)]

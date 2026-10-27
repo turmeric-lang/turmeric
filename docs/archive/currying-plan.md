@@ -283,7 +283,7 @@ For CY3, the goal is narrower:
 ;;;
 ;;; Since: CY3
 (defmacro curry [f]
-  `(fn [a] :... (fn [b] :... (~f a b))))
+  `(fn [a] : ... (fn [b] : ... (~f a b))))
 ```
 
 (The `:...` return-type placeholders are resolved by the elaborator from `f`'s

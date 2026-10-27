@@ -58,7 +58,7 @@ which admitted every colored receiver and leaf that no effect escapes.
 
 ```turmeric
 (load "stdlib/serial.tur")
-(defeffect Ask [] :int)
+(defeffect Ask [] : int)
 (defn page [env : cstr hole : int] : int (+ hole 1))
 (defn asks [] : int (+ (perform (Ask)) 1))
 (defn recv-e [k : serial-cont] : int (k (asks)))       ; Ask escapes recv-e

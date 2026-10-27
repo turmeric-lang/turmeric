@@ -62,7 +62,7 @@ The simplest effect takes no parameters and returns nothing useful. It is a sign
 
 ```turmeric
 ;; Declare an effect that signals "I want to emit a line of output."
-(defeffect Emit [] :nil)
+(defeffect Emit [] : nil)
 
 ;; A function that emits twice.
 (defn greet [] : nil
@@ -76,10 +76,10 @@ The simplest effect takes no parameters and returns nothing useful. It is a sign
 ```
 ```sweet-exp
 ;; Declare an effect that signals "I want to emit a line of output."
-defeffect Emit [] :nil
+defeffect Emit [] : nil
 
 ;; A function that emits twice.
-defn greet [] :nil
+defn greet [] : nil
   do
     perform(Emit())
     perform(Emit())
@@ -131,9 +131,9 @@ Effects can carry data to the handler. Declare typed parameters just like functi
 
 ```turmeric
 ;; An effect that asks the handler to double a value.
-(defeffect Double [x :int] :int)
+(defeffect Double [x : int] : int)
 
-(defn use-double [n :int] :int
+(defn use-double [n : int] : int
   (perform (Double n)))
 
 (println (handle (use-double 21)
@@ -142,9 +142,9 @@ Effects can carry data to the handler. Declare typed parameters just like functi
 ```
 ```sweet-exp
 ;; An effect that asks the handler to double a value.
-defeffect Double [x :int] :int
+defeffect Double [x : int] : int
 
-defn use-double [n :int] :int
+defn use-double [n : int] : int
   perform(Double(n))
 
 println
@@ -162,8 +162,8 @@ The handler pattern `(Double [x] k)` binds `x` to the argument supplied by the p
 A single `handle` block can match several different effects.
 
 ```turmeric
-(defeffect Ask  []       :int)
-(defeffect Tell [x :int] :nil)
+(defeffect Ask  []       : int)
+(defeffect Tell [x : int] : nil)
 
 ;; Performs both effects: asks for a number, then tells the result.
 (defn use-both [] : int
@@ -178,11 +178,11 @@ A single `handle` block can match several different effects.
 ; returns: 42
 ```
 ```sweet-exp
-defeffect Ask  []       :int
-defeffect Tell [x :int] :nil
+defeffect Ask  []       : int
+defeffect Tell [x : int] : nil
 
 ;; Performs both effects: asks for a number, then tells the result.
-defn use-both [] :int
+defn use-both [] : int
   let [result {1 + perform(Ask())}]
     perform(Tell(result))
     result
@@ -200,8 +200,8 @@ Handlers are tried in order. Each clause is independent; unhandled effects bubbl
 Multiple effects can also carry different result transforms:
 
 ```turmeric
-(defeffect Add [x :int] :int)
-(defeffect Mul [x :int] :int)
+(defeffect Add [x : int] : int)
+(defeffect Mul [x : int] : int)
 
 (defn compute [] : int
   (* (perform (Add 3)) (perform (Mul 4))))
@@ -212,10 +212,10 @@ Multiple effects can also carry different result transforms:
 ; => 104
 ```
 ```sweet-exp
-defeffect Add [x :int] :int
-defeffect Mul [x :int] :int
+defeffect Add [x : int] : int
+defeffect Mul [x : int] : int
 
-defn compute [] :int
+defn compute [] : int
   {perform(Add(3)) * perform(Mul(4))}
 
 println
@@ -232,7 +232,7 @@ println
 Handlers nest lexically. The innermost matching handler wins.
 
 ```turmeric
-(defeffect Val [] :int)
+(defeffect Val [] : int)
 
 (defn get-val [] : int
   (perform (Val)))
@@ -246,9 +246,9 @@ Handlers nest lexically. The innermost matching handler wins.
 ; => 52  (10 + 42)
 ```
 ```sweet-exp
-defeffect Val [] :int
+defeffect Val [] : int
 
-defn get-val [] :int
+defn get-val [] : int
   perform(Val())
 
 ;; Outer handler supplies 10; inner overrides with 42 for its scope.
@@ -270,7 +270,7 @@ Use this to test functions under different conditions without changing the funct
 Each `perform` is an independent suspension. The handler is re-entered for every perform, and each invocation gets its own fresh `k`.
 
 ```turmeric
-(defeffect Choose [n :int] :int)
+(defeffect Choose [n : int] : int)
 
 ;; Calls Choose twice sequentially.
 (defn pick-two [] : int
@@ -283,10 +283,10 @@ Each `perform` is an independent suspension. The handler is re-entered for every
 ; => 30
 ```
 ```sweet-exp
-defeffect Choose [n :int] :int
+defeffect Choose [n : int] : int
 
 ;; Calls Choose twice sequentially.
-defn pick-two [] :int
+defn pick-two [] : int
   {perform(Choose(1)) + perform(Choose(2))}
 
 println
@@ -311,7 +311,7 @@ times. Each `resume` runs the rest of the body again from the `perform`, with
 that answer, and returns what that run produced:
 
 ```turmeric
-(defeffect Pick [] :int)
+(defeffect Pick [] : int)
 
 ;; One perform, resumed twice: the rest of the body runs once per answer.
 (defn plus-one [] : int
@@ -324,10 +324,10 @@ that answer, and returns what that run produced:
 ; => 32
 ```
 ```sweet-exp
-defeffect Pick [] :int
+defeffect Pick [] : int
 
 ;; One perform, resumed twice: the rest of the body runs once per answer.
-defn plus-one [] :int
+defn plus-one [] : int
   {1 + perform(Pick())}
 
 println
@@ -356,7 +356,7 @@ has larger examples.
 `defer` cleanup runs correctly even when `perform` is inside the same `do` block. The continuation is resumed before deferred forms unwind.
 
 ```turmeric
-(defeffect Ask [] :int)
+(defeffect Ask [] : int)
 
 (defn deferred-ask [] : int
   (do
@@ -369,9 +369,9 @@ has larger examples.
 ; prints: 42
 ```
 ```sweet-exp
-defeffect Ask [] :int
+defeffect Ask [] : int
 
-defn deferred-ask [] :int
+defn deferred-ask [] : int
   do
     defer(println("cleanup"))
     perform(Ask())
@@ -393,7 +393,7 @@ Borrows and reference-counted values that are live at the point of `perform` rem
 
 ```turmeric
 ;; Refs are live during perform.
-(defeffect GetBase [] :int)
+(defeffect GetBase [] : int)
 
 (defn sum-with-base [] : int
   (let [base (ref 100)]
@@ -405,9 +405,9 @@ Borrows and reference-counted values that are live at the point of `perform` rem
 ```
 ```sweet-exp
 ;; Refs are live during perform.
-defeffect GetBase [] :int
+defeffect GetBase [] : int
 
-defn sum-with-base [] :int
+defn sum-with-base [] : int
   let [base ref(100)]
     {deref(base) + perform(GetBase())}
 
@@ -419,7 +419,7 @@ println
 
 ```turmeric
 ;; RC values are live during perform; no leaks.
-(defeffect GetCount [] :int)
+(defeffect GetCount [] : int)
 
 (defn use-rc [] : int
   (let [r (rc/of 42)]
@@ -431,9 +431,9 @@ println
 ```
 ```sweet-exp
 ;; RC values are live during perform; no leaks.
-defeffect GetCount [] :int
+defeffect GetCount [] : int
 
-defn use-rc [] :int
+defn use-rc [] : int
   let [r rc/of(42)]
     {0 + perform(GetCount())}
 
@@ -452,7 +452,7 @@ The borrow checker enforces that no borrow escapes its declared scope, even thro
 Handlers that are used in many places can be packaged as macros for a cleaner call site.
 
 ```turmeric
-(defeffect Write [s :cstr] :nil)
+(defeffect Write [s : cstr] : nil)
 
 ;; Package the handler as a macro so callers don't repeat boilerplate.
 (defmacro with-write [body]
@@ -468,7 +468,7 @@ Handlers that are used in many places can be packaged as macros for a cleaner ca
 ; world
 ```
 ```sweet-exp
-defeffect Write [s :cstr] :nil
+defeffect Write [s : cstr] : nil
 
 ;; Package the handler as a macro so callers don't repeat boilerplate.
 defmacro with-write [body]
@@ -494,7 +494,7 @@ An effect handler can abort the computation (not resume) and panic instead.
 `stdlib/effects.tur` ships this pattern as `with-fail-panic`:
 
 ```turmeric
-(defeffect Fail [msg :cstr] :nil)
+(defeffect Fail [msg : cstr] : nil)
 
 (defmacro with-fail-panic [body]
   (handle body
@@ -509,7 +509,7 @@ An effect handler can abort the computation (not resume) and panic instead.
 ; panic: something went wrong
 ```
 ```sweet-exp
-defeffect Fail [msg :cstr] :nil
+defeffect Fail [msg : cstr] : nil
 
 defmacro with-fail-panic [body]
   (handle body
@@ -533,7 +533,7 @@ Not calling `resume` at all is valid -- the computation past the `perform` is si
 `(cont? k)` returns `true` if the continuation has not been consumed. For a plain `k` the static one-shot check already guarantees that before the first `resume`, so this is mostly useful for defensive assertions. A `^multishot` `k` is never used up, so `cont?` stays `true` after a resume.
 
 ```turmeric
-(defeffect Ask [] :int)
+(defeffect Ask [] : int)
 
 (defn ask-with-check [] : int
   (perform (Ask)))
@@ -547,9 +547,9 @@ Not calling `resume` at all is valid -- the computation past the `perform` is si
 ; 42
 ```
 ```sweet-exp
-defeffect Ask [] :int
+defeffect Ask [] : int
 
-defn ask-with-check [] :int
+defn ask-with-check [] : int
   perform(Ask())
 
 println
@@ -570,8 +570,8 @@ println
 Replace real I/O with a test double by swapping the handler. The business logic never changes.
 
 ```turmeric
-(defeffect Read  []        :int)
-(defeffect Write [s :cstr] :nil)
+(defeffect Read  []        : int)
+(defeffect Write [s : cstr] : nil)
 
 ;; Pure business logic -- no I/O primitives.
 (defn echo-doubled [] : int
@@ -600,11 +600,11 @@ Replace real I/O with a test double by swapping the handler. The business logic 
 ; => 42
 ```
 ```sweet-exp
-defeffect Read  []        :int
-defeffect Write [s :cstr] :nil
+defeffect Read  []        : int
+defeffect Write [s : cstr] : nil
 
 ;; Pure business logic -- no I/O primitives.
-defn echo-doubled [] :int
+defn echo-doubled [] : int
   let [n perform(Read())]
     perform(Write(int->str({n * 2})))
     0
@@ -639,7 +639,7 @@ The function `echo-doubled` is completely isolated from I/O. Swapping the handle
 Define a `Log` effect with levels. Wire it to a real logger in production, suppress it in benchmarks, and capture it in tests.
 
 ```turmeric
-(defeffect Log [level :cstr msg :cstr] :nil)
+(defeffect Log [level : cstr msg : cstr] : nil)
 
 ;; Business logic
 (defn process [x : int] : int
@@ -673,10 +673,10 @@ Define a `Log` effect with levels. Wire it to a real logger in production, suppr
 ; 42
 ```
 ```sweet-exp
-defeffect Log [level :cstr msg :cstr] :nil
+defeffect Log [level : cstr msg : cstr] : nil
 
 ;; Business logic
-defn process [x :int] :int
+defn process [x : int] : int
   perform $ Log "info" "starting"
   let [result {x * 2}]
     perform $ Log "info" "done"

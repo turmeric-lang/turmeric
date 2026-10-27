@@ -115,10 +115,10 @@ public Turmeric API one-to-one. This keeps the audit surface small.
 ```turmeric
 ;; Create a reactor for the current thread.
 ;; Backend is chosen at C compile time (epoll / kqueue / select fallback).
-(defn reactor-new [] :Reactor ...)
+(defn reactor-new [] : Reactor ...)
 
 ;; Free a reactor; unregisters everything still attached.
-(defn reactor-free [r :Reactor] :nil ...)
+(defn reactor-free [r : Reactor] : nil ...)
 ```
 
 ### Source registration
@@ -132,29 +132,29 @@ callers don't have to track FD-vs-timer-vs-channel separately.
 ;; `cb` is called with (id, events, user-data) each time the fd is ready.
 ;; Events are level-triggered to match epoll's default and kqueue.
 (defn reactor-add-fd
-  [r  :Reactor
-   fd :int
-   events :int                       ;; READ | WRITE bitmask
-   cb :fn<:int :int :ptr<void> :nil>
-   user-data :ptr<void>] :int ...)
+  [r  : Reactor
+   fd : int
+   events : int                       ;; READ | WRITE bitmask
+   cb : fn<:int :int :ptr<void> :nil>
+   user-data : ptr<void>] : int ...)
 
-(defn reactor-modify-fd [r :Reactor id :int new-events :int] :int ...)
-(defn reactor-remove   [r :Reactor id :int] :int ...)
+(defn reactor-modify-fd [r : Reactor id : int new-events : int] : int ...)
+(defn reactor-remove   [r : Reactor id : int] : int ...)
 
 ;; One-shot timer; fires once at now+ms.
 (defn reactor-add-timer
-  [r :Reactor
-   ms :int
-   cb :fn<:int :ptr<void> :nil>
-   user-data :ptr<void>] :int ...)
+  [r : Reactor
+   ms : int
+   cb : fn<:int :ptr<void> :nil>
+   user-data : ptr<void>] : int ...)
 
 ;; Repeating timer; fires every `interval-ms`, first fire at +`first-ms`.
 (defn reactor-add-interval
-  [r :Reactor
-   first-ms :int
-   interval-ms :int
-   cb :fn<:int :ptr<void> :nil>
-   user-data :ptr<void>] :int ...)
+  [r : Reactor
+   first-ms : int
+   interval-ms : int
+   cb : fn<:int :ptr<void> :nil>
+   user-data : ptr<void>] : int ...)
 
 ;; Watch an OS signal. Returns a source id (>= 0), -1 on error.
 ;; `cb` is called with (id, signum, user-data) when the signal fires.
@@ -162,10 +162,10 @@ callers don't have to track FD-vs-timer-vs-channel separately.
 ;; The signal is blocked from normal delivery while registered -- unregister
 ;; to restore default disposition. Not supported on WASM (returns -1).
 (defn reactor-add-signal
-  [r  :Reactor
-   signum :int
-   cb :fn<:int :int :ptr<void> :nil>
-   user-data :ptr<void>] :int ...)
+  [r  : Reactor
+   signum : int
+   cb : fn<:int :int :ptr<void> :nil>
+   user-data : ptr<void>] : int ...)
 ```
 
 ### Running
@@ -174,18 +174,18 @@ callers don't have to track FD-vs-timer-vs-channel separately.
 ;; Block up to `timeout-ms` (-1 = forever, 0 = non-blocking poll).
 ;; Dispatches every ready callback before returning.
 ;; Returns the number of callbacks dispatched.
-(defn reactor-poll [r :Reactor timeout-ms :int] :int ...)
+(defn reactor-poll [r : Reactor timeout-ms : int] : int ...)
 
 ;; Run until `reactor-stop` is called or no sources remain.
-(defn reactor-run [r :Reactor] :nil ...)
+(defn reactor-run [r : Reactor] : nil ...)
 
 ;; Ask reactor-run to return after the current dispatch round.
 ;; Safe to call from a callback or from another thread.
-(defn reactor-stop [r :Reactor] :nil ...)
+(defn reactor-stop [r : Reactor] : nil ...)
 
 ;; Wake a reactor blocked in poll/run from another thread.
 ;; Implemented via the existing `IOBackend::wake` (eventfd / kqueue user event).
-(defn reactor-wake [r :Reactor] :nil ...)
+(defn reactor-wake [r : Reactor] : nil ...)
 ```
 
 ### Channel bridge
@@ -200,10 +200,10 @@ channel" expressible in pure Turmeric:
 ;; from the callback. Internally, this uses the existing chan waiter
 ;; mechanism + a per-reactor eventfd / self-pipe.
 (defn reactor-add-chan
-  [r :Reactor
-   ch :Chan<:int>
-   cb :fn<:int :int :ptr<void> :nil>      ;; (id, value, user)
-   user-data :ptr<void>] :int ...)
+  [r : Reactor
+   ch : Chan<:int>
+   cb : fn<:int :int :ptr<void> :nil>      ;; (id, value, user)
+   user-data : ptr<void>] : int ...)
 ```
 
 The channel bridge implementation is the *only* substantive new C code

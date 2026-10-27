@@ -41,7 +41,7 @@ wrapping the control op, coloring misses it upstream of the IR.
 ## Minimal repro
 
 ```turmeric
-(defeffect Ask [] :int)
+(defeffect Ask [] : int)
 (defn use-ask [] : int
   (+ 1 (:: (perform (Ask)) :int)))   ; perform only reachable through the ascription
 (defn run [] : int

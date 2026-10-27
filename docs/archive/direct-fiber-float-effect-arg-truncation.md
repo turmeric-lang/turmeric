@@ -34,7 +34,7 @@ divergence was noticed.
 ## Minimal repro
 
 ```turmeric
-(defeffect One [a :float] :float)
+(defeffect One [a : float] : float)
 (defn f [] : float
   (handle
     (perform (One 7.1))

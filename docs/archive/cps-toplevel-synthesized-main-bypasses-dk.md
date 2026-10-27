@@ -112,8 +112,8 @@ DK-lowers fully.
 
 ```turmeric
 ;; p4 -- TOP-LEVEL expr form (== tests/fixtures/effect-handler): compute SIG-TAINT, 3 fiber-performs
-(defeffect Add [x :int] :int)
-(defeffect Mul [x :int] :int)
+(defeffect Add [x : int] : int)
+(defeffect Mul [x : int] : int)
 (defn compute [] : int (* (perform (Add 3)) (perform (Mul 4))))
 (println (handle (compute)
   (Add [x] k) (resume k (+ x 10))

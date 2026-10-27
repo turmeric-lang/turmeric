@@ -209,13 +209,10 @@ separate features but modes of the existing continuation representation.
 ```sweet-exp
 ;; Union: a value that may be int, cstr, or bool.
 defn print-any [x : (int | cstr | bool)] : nil
-  match x
-    (i : int)
-    println(i)
-    (s : cstr)
-    println(s)
-    (b : bool)
-    println $ if b "true" "false"
+  (match x
+    (i : int)  (println i)
+    (s : cstr) (println s)
+    (b : bool) (println (if b "true" "false")))
 ;; Intersection: an int that also has a Serializable instance.
 defn log-and-save [x : (int & Serializable)] : nil ...
 ```
@@ -261,8 +258,8 @@ as type-level compile-time integers.
 
 ```turmeric
 ;; Matrix multiplication: dimensions must be compatible.
-(defn mat-mul [a :(Matrix m n float)
-               b :(Matrix n p float)] :(Matrix m p float)
+(defn mat-mul [a : (Matrix m n float)
+               b : (Matrix n p float)] : (Matrix m p float)
   ...)
 
 ;; Compile-time error if you pass incompatible shapes:
@@ -307,17 +304,17 @@ Contract types attach runtime-checked predicates to types and
 function boundaries.
 
 ```turmeric no-check
-(defn vec-get [v :(vec a)
-               i :#refine{ j :int | (and (>= j 0) (< j (vec/len v))) }] :a
+(defn vec-get [v : (vec a)
+               i : #refine{ j : int | (and (>= j 0) (< j (vec/len v))) }] : a
   (vec/get-unsafe v i))
 
-(defn sqrt [x :#refine{ y :double | (>= y 0) }] :double ...)
+(defn sqrt [x : #refine{ y : double | (>= y 0) }] : double ...)
 ```
 ```sweet-exp
 defn vec-get [v : (vec a)
-              i : #refine{ j :int | (and (>= j 0) (< j (vec/len v))) }] :a
+              i : #refine{ j : int | (and (>= j 0) (< j (vec/len v))) }] : a
   vec/get-unsafe(v i)
-defn sqrt [x : #refine{ y :double | (>= y 0) }] :double
+defn sqrt [x : #refine{ y : double | (>= y 0) }] : double
   ...
 ```
 

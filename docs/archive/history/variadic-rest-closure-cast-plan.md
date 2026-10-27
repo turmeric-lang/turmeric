@@ -27,10 +27,10 @@ compile with `-Wint-conversion`. Concretely, a defn whose rest type is a
 type variable bound to a callable type:
 
 ```turmeric
-(defn compose [A] [base :int & xs :A] :int ...)
+(defn compose [A] [base : int & xs : A] : int ...)
 
-(defn mw-outer [n :int] :ptr<void> ...)
-(defn mw-inner [n :int] :ptr<void> ...)
+(defn mw-outer [n : int] : ptr<void> ...)
+(defn mw-inner [n : int] : ptr<void> ...)
 
 (compose base mw-outer mw-inner)   ;; rest args 1, 2 are bare defn names
 ```
@@ -184,10 +184,10 @@ tests/fixtures/variadic-rest-closure/
 `input.tur`:
 
 ```turmeric
-(defn callable-a [n :int] :int (+ n 1))
-(defn callable-b [n :int] :int (* n 2))
+(defn callable-a [n : int] : int (+ n 1))
+(defn callable-b [n : int] : int (* n 2))
 
-(defn first-of [A] [& xs :A] :A
+(defn first-of [A] [& xs : A] : A
   ;; Pull the head out of the rest list via the documented cons-cell shape.
   ```c
   typedef struct { int64_t head; int64_t tail; } __tur_cons_cell;
@@ -195,7 +195,7 @@ tests/fixtures/variadic-rest-closure/
   return p ? p->head : 0LL;
   ```)
 
-(defn main [] :int
+(defn main [] : int
   ;; Before the fix: clang rejects with -Wint-conversion here.
   (let [fns (first-of callable-a callable-b)]
     (println "ok"))
@@ -231,7 +231,7 @@ Once V1 lands, `compose-middleware` in `stdlib/httpd.tur` can move from
 macro to defn:
 
 ```turmeric
-(defn compose-middleware [A] [base :int & mws :A] :int
+(defn compose-middleware [A] [base : int & mws : A] : int
   (httpd-mw-fold base mws))
 ```
 

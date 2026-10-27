@@ -166,7 +166,7 @@ open row.
 - [ ] Example:
   ```turmeric
   ;; run-twice propagates the row of f to its caller
-  (defn run-twice [f :(fn [] #{e} :int)] #{e} :int
+  (defn run-twice [f : (fn [] #{e} : int)] #{e} : int
     (+ (f) (f)))
 
   ;; Inferred row of the call below is #{Ask}
@@ -289,7 +289,7 @@ wiring this into the function-type subtype check in `src/types.c`.
   on the field type:
   ```turmeric
   (defstruct Runner
-    [run : (fn [] #{e} :nil)])
+    [run : (fn [] #{e} : nil)])
   ```
 - [ ] A `Runner` constructed with a concrete `run` function binds `e` to that
   function's row.

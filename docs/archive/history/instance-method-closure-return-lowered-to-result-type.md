@@ -55,16 +55,16 @@ Minimal (`:float`-returning closure -> hard error):
 
 ```turmeric
 (defclass HasArr [a]
-  (arr-of [self] : (fn [:float] :float)))
+  (arr-of [self] : (fn [:float] : float)))
 
 (defstruct ArrW [a]
   (raw :int))
 
 (definstance HasArr [ArrW]
   (arr-of [self]
-    (fn [x :float] :float x)))
+    (fn [x : float] : float x)))
 
-(defn main [] :int
+(defn main [] : int
   (let [w (:: (make-struct ArrW 0) (ArrW int))
         g (.arr-of w)]
     0))

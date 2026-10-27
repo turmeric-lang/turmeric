@@ -22,8 +22,8 @@ and it makes already-dense fat-closure type signatures harder to read:
 ```turmeric
 ;; current
 (defn compose
-  [^fat f :(fn [:float] #{} :float)
-   ^fat g :(fn [:float] #{} :float)] : ptr<void>
+  [^fat f : (fn [:float] #{} : float)
+   ^fat g : (fn [:float] #{} : float)] : ptr<void>
   ...)
 
 ;; target
@@ -119,7 +119,7 @@ their leading `:`.
 The parser accepts **both** forms during the transition:
 
 ```turmeric
-(fn [:float] :float)         ;; legacy -- accepted
+(fn [:float] : float)        ;; legacy -- accepted
 (fn [float]  float)          ;; new    -- accepted
 (fn [:float]  float)         ;; mixed  -- accepted (lenient)
 ```
@@ -150,7 +150,7 @@ this plan does not touch them.
 
 ```turmeric
 ;; before
-(fn [:int] (fn [:int] :int))
+(fn [:int] (fn [:int] : int))
 
 ;; after
 (fn [int] (fn [int] int))
@@ -286,7 +286,7 @@ wrapper, look up the type). This means three forms are all accepted in
 Phase 1+2:
 
 ```turmeric
-(fn [:float] :float)         ;; legacy
+(fn [:float] : float)        ;; legacy
 (fn [: float] : float)       ;; spaced-but-still-redundant -- accepted, but discouraged
 (fn [float] float)           ;; target
 ```

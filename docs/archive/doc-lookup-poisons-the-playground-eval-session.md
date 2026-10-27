@@ -122,9 +122,9 @@ after it, the identical program never runs again in that session.
 **B -- `defeffect` is not re-runnable (defect 3), no doc lookup involved:**
 
 ```turmeric
-(defeffect Ask [] :int)
+(defeffect Ask [] : int)
 
-(defn use-ask [] :int
+(defn use-ask [] : int
   (+ 1 (perform (Ask))))
 
 (println (handle (use-ask)

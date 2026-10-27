@@ -150,10 +150,10 @@ differs.
 ```
 ```sweet-exp
 ;; The expression has f's codomain type (here :bool), exactly like shift.
-defn is-zero [n :int] :bool
+defn is-zero [n : int] : bool
   reset
     (shift0
-      (fn [v :int]
+      (fn [v : int]
         {v = 0})
       n)
 ```
@@ -211,7 +211,7 @@ Reach for `escape` when you want to bail out of deep recursion with a value and
 ```
 ```sweet-exp
 ;; exit produces the value at the escape site, abandoning the rest.
-defn first-negative [xs :list<int>] :int
+defn first-negative [xs : list<int>] : int
   escape
     (fn [exit]
       (for [x xs]

@@ -291,8 +291,8 @@ After this lands:
   the param-locals rule (lines around the header banner).
 - Rewrite `pfail` and `item` to drop the sentinel wrapper:
   ```turmeric
-  (defn pfail [] :ptr<void> (fn [inp] (mzero)))
-  (defn item [] :ptr<void> (fn [inp] (item-impl inp)))
+  (defn pfail [] : ptr<void> (fn [inp] (mzero)))
+  (defn item [] : ptr<void> (fn [inp] (item-impl inp)))
   ```
 - Regenerate `tests/fixtures/parsec-*/expected.c` snapshots per the
   fixture-snapshot rule in `CLAUDE.md`. Verify `bash tests/run.sh`

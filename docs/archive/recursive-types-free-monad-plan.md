@@ -31,10 +31,10 @@ Every Turmeric struct or variant today must be defined in terms of already-known
 
 ```turmeric
 ;; A tree where each node may have many children -- currently rejected
-(defstruct Tree [value :int children :int])  ; "children" would need to be (list Tree)
+(defstruct Tree [value : int children : int])  ; "children" would need to be (list Tree)
 
 ;; A type-level fixed-point combinator -- currently rejected
-(defstruct Fix [unfix :int])  ; "unfix" would need to be (^f (Fix ^f))
+(defstruct Fix [unfix : int])  ; "unfix" would need to be (^f (Fix ^f))
 
 ;; The Free monad -- currently rejected
 ;; Free f a = Pure a | Free (f (Free f a))
@@ -70,7 +70,7 @@ The Free monad is the motivating "proof of concept" for this plan. Once recursiv
 `bind` for `Free f a` recurses on the structure:
 
 ```turmeric
-(defn free-bind [ma :int fn :int] :int
+(defn free-bind [ma : int fn : int] : int
   (match-free ma
     (pure-free v)   (fn v)
     (suspend   s)   (suspend (fmap s (fn [inner] (free-bind inner fn))))))
@@ -88,7 +88,7 @@ A recursive type is any `defstruct` or `defdata` whose fields (or variant payloa
 
 ```turmeric
 ;; Direct recursion
-(defstruct ListNode [head :int tail :int])   ; tail :: option ListNode
+(defstruct ListNode [head : int tail : int])   ; tail :: option ListNode
 
 ;; Recursion under a functor argument (HKT)
 (defdata Free [^f a]
@@ -96,7 +96,7 @@ A recursive type is any `defstruct` or `defdata` whose fields (or variant payloa
   (suspend   [step  :int]))                  ; step :: f (Free f a)
 
 ;; Mutual recursion
-(defstruct Expr [node :int])                 ; node :: ExprNode
+(defstruct Expr [node : int])                 ; node :: ExprNode
 (defdata ExprNode
   (lit  [n :int])
   (add  [l :int r :int])                     ; l, r :: Expr
@@ -245,7 +245,7 @@ Approach A is the right fit for Turmeric. The runtime representation is already 
 ;;;   (roll (__opt_some (roll (__opt_none))))
 ;;;
 ;;; Since: Phase RF2
-(defn roll [layer :int] :int ...)
+(defn roll [layer : int] : int ...)
 
 ;;; unroll -- unwrap one layer of Fix.
 ;;;
@@ -259,7 +259,7 @@ Approach A is the right fit for Turmeric. The runtime representation is already 
 ;;;   (unroll (roll (__opt_some (roll (__opt_none)))))
 ;;;
 ;;; Since: Phase RF2
-(defn unroll [fix :int] :int ...)
+(defn unroll [fix : int] : int ...)
 
 ;;; cata -- catamorphism: fold a Fix value using an algebra.
 ;;;
@@ -274,7 +274,7 @@ Approach A is the right fit for Turmeric. The runtime representation is already 
 ;;;   (cata (fn [node] (match-expr node ...)) expr-tree)
 ;;;
 ;;; Since: Phase RF2
-(defn cata [alg :int fix :int] :int ...)
+(defn cata [alg : int fix : int] : int ...)
 ```
 
 **Tasks:**
@@ -318,7 +318,7 @@ Approach A is the right fit for Turmeric. The runtime representation is already 
 ;;;   (free-pure 42)  ; => (pure-free 42)
 ;;;
 ;;; Since: Phase RF3
-(defn free-pure [x :int] :int ...)
+(defn free-pure [x : int] : int ...)
 
 ;;; free-lift -- lift one layer of f into Free.
 ;;;
@@ -332,7 +332,7 @@ Approach A is the right fit for Turmeric. The runtime representation is already 
 ;;;   (free-lift (__opt_some 5))
 ;;;
 ;;; Since: Phase RF3
-(defn free-lift [fx :int] :int ...)
+(defn free-lift [fx : int] : int ...)
 
 ;;; free-bind -- monadic bind for Free.
 ;;;
@@ -347,7 +347,7 @@ Approach A is the right fit for Turmeric. The runtime representation is already 
 ;;;   (free-bind (free-pure 3) (fn [x] (free-pure (* x 2))))  ; => (pure-free 6)
 ;;;
 ;;; Since: Phase RF3
-(defn free-bind [ma :int fn :int] :int ...)
+(defn free-bind [ma : int fn : int] : int ...)
 
 ;;; free-fmap -- functor map for Free.
 ;;;
@@ -359,7 +359,7 @@ Approach A is the right fit for Turmeric. The runtime representation is already 
 ;;;   A new Free value with fn applied to all pure leaves.
 ;;;
 ;;; Since: Phase RF3
-(defn free-fmap [free :int fn :int] :int ...)
+(defn free-fmap [free : int fn : int] : int ...)
 
 ;;; free-run -- interpret a Free computation with a natural transformation.
 ;;;
@@ -374,7 +374,7 @@ Approach A is the right fit for Turmeric. The runtime representation is already 
 ;;;   (free-run option-interp my-program)
 ;;;
 ;;; Since: Phase RF3
-(defn free-run [interp :int free :int] :int ...)
+(defn free-run [interp : int free : int] : int ...)
 
 ;; Typeclass instances
 (definstance Functor [Free]

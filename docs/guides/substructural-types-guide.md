@@ -296,7 +296,7 @@ must explicitly consume the ref.
 ```
 
 ```sweet-exp
-defn consume [r :ref] :int
+defn consume [r : ref] : int
   drop!(r)
   0
 ```

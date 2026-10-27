@@ -23,7 +23,7 @@ is a genuine migration target, unlike the `Unsafe`-marker or session-thread case
 ## The fixture
 
 ```turmeric
-(defeffect Ask [] :int)
+(defeffect Ask [] : int)
 (defn run [] : int
   (let [^mut i     0
         ^mut total 0]

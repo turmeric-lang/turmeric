@@ -331,21 +331,21 @@ import session/mw       :refer [session-mw dev-session-config]
 import session/memory-store :refer [memory-store-new]
 import session/ctx      :refer [session-get session-set! session-destroy!]
 
-defn login-handler [ctx :int] :int
+defn login-handler [ctx : int] : int
   session-set!(ctx "user_id" "42")
   redirect("/dashboard")
 
-defn dashboard-handler [ctx :int] :int
+defn dashboard-handler [ctx : int] : int
   let [uid session-get(ctx "user_id")]
     if ok?(uid)
       text(str-concat("Hello, user " ok-val(uid)))
       redirect("/login")
 
-defn logout-handler [ctx :int] :int
+defn logout-handler [ctx : int] : int
   session-destroy!(ctx)
   redirect("/login")
 
-defn main [] :int
+defn main [] : int
   let [store memory-store-new()
        s     tourist(3000
                use! session-mw(store dev-session-config)

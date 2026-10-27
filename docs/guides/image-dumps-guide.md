@@ -97,12 +97,12 @@ exactly the code a warm start skips.
 (defimage-global greeting :cstr  "cold")
 (defimage-global ratio    :float 1.5)
 
-(defn do-init [] :int
+(defn do-init [] : int
   (set! counter 42)                       ; written on the cold start only ...
   (set! ratio 7.1)
   0)
 
-(defn main [] :int
+(defn main [] : int
   (image/track-globals! counter greeting ratio)   ; at the TOP of main
   (with-image-cache-after-init "/var/cache/app.img" do-init do-loop))
   ;; ... and a warm start's do-loop sees counter = 42, ratio = 7.1
@@ -112,12 +112,12 @@ defimage-global counter  :int   0       ; T must have a Serializable instance
 defimage-global greeting :cstr  "cold"
 defimage-global ratio    :float 1.5
 
-defn do-init [] :int
+defn do-init [] : int
   set!(counter 42)                       ; written on the cold start only ...
   set!(ratio 7.1)
   0
 
-defn main [] :int
+defn main [] : int
   image/track-globals!(counter greeting ratio)   ; at the TOP of main
   with-image-cache-after-init("/var/cache/app.img" do-init do-loop)
   ;; ... and a warm start's do-loop sees counter = 42, ratio = 7.1
@@ -186,7 +186,7 @@ for you at the right point.
 (defimage-finalize-hook flush-log
   (do (flush-the-log!) 0))
 
-(defn main [] :int
+(defn main [] : int
   (image/register-reload-hook!   reopen-log)   ; install BOTH hooks at the top
   (image/register-finalize-hook! flush-log)    ; of main -- see the note below
   (with-image-cache-after-init "/var/cache/app.img" expensive-init main-loop))
@@ -202,9 +202,9 @@ defimage-finalize-hook flush-log
     flush-the-log!()
     0
 
-defn main [] :int
+defn main [] : int
   image/register-reload-hook!(reopen-log)   ; install BOTH hooks at the top
-  image/register-finalize-hook!(flush-log)    ; of main -- see the note below
+  image/register-finalize-hook!(flush-log)  ; of main -- see the note below
   with-image-cache-after-init("/var/cache/app.img" expensive-init main-loop)
 ```
 
@@ -227,15 +227,15 @@ resume.
 (load "stdlib/image.tur")
 (load "stdlib/image_hooks.tur")
 
-(defn do-init [] :int
+(defn do-init [] : int
   (image-hooks/track-file! "/var/run/app.sock" "r+")   ; declare what to reopen
   0)
 
-(defn do-loop [] :int
+(defn do-loop [] : int
   (let [h (image-hooks/slot-handle 0)]                 ; live FILE* after resume
     (read-through h)))
 
-(defn main [] :int
+(defn main [] : int
   (image-hooks/use-reopen-tracked!)   ; reload hook: reopen every tracked file
   (image-hooks/use-flush-stdio!)      ; finalize hook: fflush stdout/stderr
   (with-image-cache-after-init "/var/cache/app.img" do-init do-loop))
@@ -244,15 +244,15 @@ resume.
 load "stdlib/image.tur"
 load "stdlib/image_hooks.tur"
 
-defn do-init [] :int
+defn do-init [] : int
   image-hooks/track-file!("/var/run/app.sock" "r+")   ; declare what to reopen
   0
 
-defn do-loop [] :int
+defn do-loop [] : int
   let [h image-hooks/slot-handle(0)]                 ; live FILE* after resume
     read-through(h)
 
-defn main [] :int
+defn main [] : int
   image-hooks/use-reopen-tracked!()   ; reload hook: reopen every tracked file
   image-hooks/use-flush-stdio!()      ; finalize hook: fflush stdout/stderr
   with-image-cache-after-init("/var/cache/app.img" do-init do-loop)

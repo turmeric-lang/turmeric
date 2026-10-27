@@ -25,7 +25,7 @@ bails to the direct emitter -- it is not a Copy capture.)
 ## Remaining repro (handler case)
 
 ```turmeric
-(defeffect E [] :int)
+(defeffect E [] : int)
 (defn g [] : int (perform (E)))
 (defn f [n : int] : int
   (handle (g) (E [] k) (resume k (+ 1 (escape (fn [j] (j n)))))))

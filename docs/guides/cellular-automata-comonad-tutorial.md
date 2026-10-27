@@ -50,9 +50,9 @@ Turmeric declares typeclasses with `defclass`. Higher-kinded type constructor pa
 
 ```sweet-exp
 defclass Comonad [^w]
-  extract   [wa]     :int
-  extend    [wa fn]  :int
-  duplicate [wa]     :int
+  extract   [wa]     : int
+  extend    [wa fn]  : int
+  duplicate [wa]     : int
 ```
 
 This comonad library represents its container values as `int64_t` heap handles, so every method returns `:int`. The `fn` argument to `extend` is a Turmeric closure: `(fn [wa] ...)`.
@@ -86,7 +86,7 @@ The Comonad instance for Zipper:
 ### 1D XOR automaton
 
 ```turmeric
-(defn ca-rule [z] :int
+(defn ca-rule [z] : int
   ```c
   typedef struct { int64_t *left; size_t left_len; int64_t focus; int64_t *right; size_t right_len; } Zip;
   Zip *p = (Zip *)(intptr_t)z;
@@ -95,7 +95,7 @@ The Comonad instance for Zipper:
   return (l + p->focus + r) & 1;   /* XOR of three neighbours */
   ```)
 
-(defn main [] :int
+(defn main [] : int
   (let [arr (zap-array 9)]
     (zap-set arr 4 1)
     (let [z0 (zipper-from-array arr 9 4)]
@@ -108,7 +108,7 @@ The Comonad instance for Zipper:
 ```
 
 ````sweet-exp
-defn ca-rule [z] :int
+defn ca-rule [z] : int
   ```c
   typedef struct { int64_t *left; size_t left_len; int64_t focus; int64_t *right; size_t right_len; } Zip;
   Zip *p = (Zip *)(intptr_t)z;
@@ -117,7 +117,7 @@ defn ca-rule [z] :int
   return (l + p->focus + r) & 1;   /* XOR of three neighbours */
   ```
 
-defn main [] :int
+defn main [] : int
   let [arr zap-array(9)]
     zap-set(arr 4 1)
     let [z0 zipper-from-array(arr 9 4)]
@@ -158,50 +158,50 @@ Index formula: `data[y * width + x]`.
 
 ```turmeric
 ;; Allocate a zero-filled grid; focus starts at (0, 0).
-(defn grid-new [width height] :int ...)
+(defn grid-new [width height] : int ...)
 
 ;; Get / set a value by (x, y); out-of-bounds returns 0 / is a no-op.
-(defn grid-get [g x y] :int ...)
-(defn grid-set [g x y val] :int ...)
+(defn grid-get [g x y] : int ...)
+(defn grid-set [g x y val] : int ...)
 
 ;; Return the value at the current focus.
-(defn grid-focus [g] :int ...)
+(defn grid-focus [g] : int ...)
 
 ;; Deep-copy the grid (new data array, same cx/cy).
-(defn grid-clone [g] :int ...)
+(defn grid-clone [g] : int ...)
 
 ;; Count live Moore 8-neighbours at (cx, cy).
-(defn grid-count-neighbors [g] :int ...)
+(defn grid-count-neighbors [g] : int ...)
 
 ;; Print '#' / '.' ASCII, one row per line.
-(defn grid-print [g] :int ...)
+(defn grid-print [g] : int ...)
 ```
 
 ```sweet-exp
 ;; Allocate a zero-filled grid; focus starts at (0, 0).
-defn grid-new [width height] :int ...
+defn grid-new [width height] : int ...
 
 ;; Get / set a value by (x, y); out-of-bounds returns 0 / is a no-op.
-defn grid-get [g x y] :int ...
-defn grid-set [g x y val] :int ...
+defn grid-get [g x y] : int ...
+defn grid-set [g x y val] : int ...
 
 ;; Return the value at the current focus.
-defn grid-focus [g] :int ...
+defn grid-focus [g] : int ...
 
 ;; Deep-copy the grid (new data array, same cx/cy).
-defn grid-clone [g] :int ...
+defn grid-clone [g] : int ...
 
 ;; Count live Moore 8-neighbours at (cx, cy).
-defn grid-count-neighbors [g] :int ...
+defn grid-count-neighbors [g] : int ...
 
 ;; Print '#' / '.' ASCII, one row per line.
-defn grid-print [g] :int ...
+defn grid-print [g] : int ...
 ```
 
 ### The Comonad instance
 
 ```turmeric
-(defn __gridctx_extend [g fn] :int
+(defn __gridctx_extend [g fn] : int
   ```c
   typedef struct { int64_t *data; int64_t width; int64_t height; int64_t cx; int64_t cy; } GCtx;
   GCtx *src = (GCtx *)(intptr_t)g;
@@ -228,7 +228,7 @@ defn grid-print [g] :int ...
 ```
 
 ````sweet-exp
-defn __gridctx_extend [g fn] :int
+defn __gridctx_extend [g fn] : int
   ```c
   typedef struct { int64_t *data; int64_t width; int64_t height; int64_t cx; int64_t cy; } GCtx;
   GCtx *src = (GCtx *)(intptr_t)g;
@@ -265,7 +265,7 @@ The full implementation lives in [`stdlib/grid.tur`](https://github.com/turmeric
 The Game of Life rule is a pure function from a focused grid to the next cell state:
 
 ```turmeric
-(defn conway-rule [g] :int
+(defn conway-rule [g] : int
   ```c
   typedef struct { int64_t *data; int64_t width; int64_t height; int64_t cx; int64_t cy; } GCtx;
   GCtx *p = (GCtx *)(intptr_t)g;
@@ -288,7 +288,7 @@ The Game of Life rule is a pure function from a focused grid to the next cell st
 ```
 
 ````sweet-exp
-defn conway-rule [g] :int
+defn conway-rule [g] : int
   ```c
   typedef struct { int64_t *data; int64_t width; int64_t height; int64_t cx; int64_t cy; } GCtx;
   GCtx *p = (GCtx *)(intptr_t)g;

@@ -50,7 +50,7 @@ Expected:
 
 (defn scale-2 [x : float] : float (* x 2.0))
 (defn add-1   [x : float] : float (+ x 1.0))
-(defn call-f [^fat f :(fn [:float] #{} :float) x : float] : float (f x))
+(defn call-f [^fat f : (fn [:float] #{} : float) x : float] : float (f x))
 
 (defn main [] : int
   (let [h1 (>>> add-1 scale-2)]
@@ -65,7 +65,7 @@ Expected:
 
 ```turmeric
 (defn >>> [A B C]
-  [^fat f :(fn [A] #{} B) ^fat g :(fn [B] #{} C)] : ptr<void>
+  [^fat f : (fn [A] #{} B) ^fat g : (fn [B] #{} C)] : ptr<void>
   (let [fv f gv g] (fn [x : A] : C (gv (fv x)))))
 ```
 

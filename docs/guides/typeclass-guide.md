@@ -36,7 +36,7 @@ A typeclass declares an interface consisting of one or more method signatures.
 ```
 ```sweet-exp
 defclass Eq [a]
-  eq? [x y] :bool
+  eq? [x y] : bool
 ```
 
 For classes with multiple methods, declare them sequentially within the `defclass` body:
@@ -48,8 +48,8 @@ For classes with multiple methods, declare them sequentially within the `defclas
 ```
 ```sweet-exp
 defclass Ord [a]
-  lt? [x y] :bool
-  gt? [x y] :bool
+  lt? [x y] : bool
+  gt? [x y] : bool
 ```
 
 Typeclasses can also abstract over **type constructors** (such as `Vec`, `Option`, or user-defined containers) instead of plain types. These are called Higher-Kinded Typeclasses. The compiler uses specific annotations to distinguish their kinds:
@@ -63,7 +63,7 @@ Typeclasses can also abstract over **type constructors** (such as `Vec`, `Option
 ```
 ```sweet-exp
 defclass Functor [^f]
-  fmap [container g] :int
+  fmap [container g] : int
 ```
 
 ---
@@ -99,7 +99,7 @@ You can also use inline C blocks within instance methods to write high-performan
 ```
 ```sweet-exp
 definstance Eq [cstr]
-  eq? [x y] :bool
+  eq? [x y] : bool
     ```c
     if (x == NULL && y == NULL) return true;
     if (x == NULL || y == NULL) return false;
@@ -348,10 +348,10 @@ methods:
     (combine (combine (combine e x) y) z)))
 ```
 ```sweet-exp
-defn double-up [^Monoid A] [x : A] :A
+defn double-up [^Monoid A] [x : A] : A
   combine(x x)
 
-defn fold3 [^Monoid A] [x : A y : A z : A] :A
+defn fold3 [^Monoid A] [x : A y : A z : A] : A
   let [e : A mempty()]
     combine(combine(combine(e x) y) z)
 ```
@@ -389,7 +389,7 @@ defclass BoundedJoinSemilattice [a]
 
 defclass Sized [s e]
   [(Get2 s e)]
-  sz-len [^borrow self : s v : e] :int
+  sz-len [^borrow self : s v : e] : int
 ```
 
 The fundep clause follows the vector (fundeps are written in s-expression
@@ -476,7 +476,7 @@ In a `defclass` body, declare the associated type with `: Type`:
 ```sweet-exp
 defclass Container [t]
   type Elem :Type
-  make-empty [self : t] :int
+  make-empty [self : t] : int
 ```
 
 In a `definstance` body, bind it to a concrete type:
@@ -549,7 +549,7 @@ When a typeclass method uses an associated type in its signature (either as a pa
 ```sweet-exp
 defclass StorageOps [S]
   type Elem :Type
-  sop-get [^borrow s : S idx : int] :Elem
+  sop-get [^borrow s : S idx : int] : Elem
 
 ;; The compiler automatically knows that `sop-get` returns `Pos`
 definstance StorageOps [(Dense Pos)]
@@ -624,8 +624,8 @@ To declare a default body, simply provide forms after the return type in the `de
 ```
 ```sweet-exp
 defclass Ord [a]
-  lt? [x y] :bool
-  lte? [x y] :bool
+  lt? [x y] : bool
+  lte? [x y] : bool
     {.lt?(x y) or {x = y}}
 ```
 

@@ -51,7 +51,7 @@ Current: the entire multiply-add loop is inline-C.
 Replace with a tail-recursive loop using native Turmeric arithmetic:
 
 ```turmeric
-(defn int-arith-loop [i :int a :int b :int n :int] :int
+(defn int-arith-loop [i : int a : int b : int n : int] : int
   (if (>= i n)
     (bit-xor a b)
     (int-arith-loop (+ i 1)
@@ -75,7 +75,7 @@ itself becomes a tail-recursive accumulator:
 ```turmeric
 (extern-c sqrt [x :float] :float)
 
-(defn float-arith-loop [i :int a :float b :float n :int] :float
+(defn float-arith-loop [i : int a : float b : float n : int] : float
   (if (>= i n)
     (+ a b)
     (float-arith-loop (+ i 1)
@@ -97,12 +97,12 @@ Replace entirely using `stdlib/list.tur`:
 ```turmeric
 (include "stdlib/list.tur")
 
-(defn build-list [i :int n :int acc] :int
+(defn build-list [i : int n : int acc] : int
   (if (>= i n)
     acc
     (build-list (+ i 1) n (cons i acc))))
 
-(defn sum-list [lst acc :int] :int
+(defn sum-list [lst acc : int] : int
   (if (list-nil? lst)
     acc
     (sum-list (tail lst) (+ acc (head lst)))))
@@ -130,14 +130,14 @@ native boxing exists yet.  Alternatively, use `hamt/hash-str` with
 (include "stdlib/hamt.tur")
 
 ;; Insert i -> i*2 for i in [0, n)
-(defn insert-loop [m i :int n :int] :ptr<void>
+(defn insert-loop [m i : int n : int] : ptr<void>
   (if (>= i n)
     m
     (insert-loop (hamt/set m (hamt/hash-int i) (box-int i) (box-int (* i 2)))
                  (+ i 1) n)))
 
 ;; Sum all values
-(defn lookup-loop [m i :int n :int acc :int] :int
+(defn lookup-loop [m i : int n : int acc : int] : int
   (if (>= i n)
     acc
     (let [v (hamt/get m (hamt/hash-int i) (box-int i))]
@@ -163,7 +163,7 @@ Plan:
 - The PRNG loop can be a tail-recursive LCG using native integer arithmetic.
 
 ```turmeric
-(defn fill-vec [v i :int n :int state :int] :int
+(defn fill-vec [v i : int n : int state : int] : int
   (if (>= i n)
     state
     (let [next-state (+ (* state 6364136223846793005) 1442695040888963407)]
@@ -182,12 +182,12 @@ The outer and inner loops become Turmeric tail-recursive loops using the `for`
 macro (from `stdlib/macros.tur`):
 
 ```turmeric
-(defn mark-multiples [sieve i :int j :int limit :int] :nil
+(defn mark-multiples [sieve i : int j : int limit : int] : nil
   (when (<= j limit)
     (vec-set! sieve j 1)
     (mark-multiples sieve i (+ j i) limit)))
 
-(defn count-loop [sieve i :int limit :int count :int] :int
+(defn count-loop [sieve i : int limit : int count : int] : int
   (if (> i limit)
     count
     (if (= (vec-get sieve i) 0)
@@ -207,14 +207,14 @@ Current: LCG macro and double arithmetic, all inline-C.
 Replace with a tail-recursive LCG + native arithmetic loop:
 
 ```turmeric
-(defn lcg-next [state :int] :int
+(defn lcg-next [state : int] : int
   (+ (* state 6364136223846793005) 1442695040888963407))
 
-(defn int->unit-float [bits :int] :float
+(defn int->unit-float [bits : int] : float
   ;; shift right 11 bits, divide by 2^53
   (/ (float (bit-shr bits 11)) 9007199254740992.0))
 
-(defn mc-loop [i :int n :int state :int inside :int] :int
+(defn mc-loop [i : int n : int state : int inside : int] : int
   (if (>= i n)
     inside
     (let [s1 (lcg-next state)
@@ -272,11 +272,11 @@ Example for `file_read.tur`:
 ```turmeric
 (include "stdlib/io.tur")
 
-(defn write-n-bytes [path :cstr n :int] :nil
+(defn write-n-bytes [path : cstr n : int] : nil
   ;; build an n-byte buffer inline-C (only the buffer fill needs C)
   ...)
 
-(defn read-and-count [path :cstr] :int
+(defn read-and-count [path : cstr] : int
   (let [fh (file-open path "rb")]
     (if (not (file-handle-ok? fh))
       -1
@@ -323,7 +323,7 @@ Replace with a channel-based ring:
 
 ;; Each worker reads from its input channel, decrements the token,
 ;; writes to the next channel.  When token reaches 0, stops.
-(defn ring-worker-fn [args :ptr<void>] :ptr<void>
+(defn ring-worker-fn [args : ptr<void>] : ptr<void>
   ...)
 ```
 

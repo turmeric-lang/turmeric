@@ -32,9 +32,9 @@ Every middleware in this guide has the shape
 ```
 
 ```sweet-exp
-defn mw-foo [next :int] :ptr<void>
+defn mw-foo [next : int] : ptr<void>
   let [_n next ...]
-    (fn [c :ptr<void>] :nil
+    (fn [c : ptr<void>] : nil
       ;; pre-processing here ...
       httpd-call(_n c)
       ;; post-processing here ...
@@ -278,12 +278,12 @@ section for the full surface.
 ```
 
 ```sweet-exp
-let [verify   (fn [u :cstr p :cstr] :int
+let [verify   (fn [u : cstr p : cstr] : int
                 (let [_t "_force-fat-closure"]
                   (if {1 = (cstr-eq-const-time u "admin")}
                     (cstr-eq-const-time p "s3cret")
                     0)))
-     base     (fn [c :ptr<void>] :nil
+     base     (fn [c : ptr<void>] : nil
                 (let [u (httpd-req-attr c "user")]
                   (httpd-resp-status! c 200)
                   (httpd-resp-body!   c u)))
@@ -319,7 +319,7 @@ spice import -- from an installed toolchain too.
 ```sweet-exp
 import httpd-compress :refer [mw-compress]
 
-let [base     (fn [c :ptr<void>] :nil
+let [base     (fn [c : ptr<void>] : nil
                  httpd-resp-status!(c 200)
                  httpd-resp-body!(c large-html))
      composed compose-middleware(base mw-log mw-compress)]
@@ -365,7 +365,7 @@ Error` instead of a dropped connection.
 ```
 
 ```sweet-exp
-let [base     (fn [c :ptr<void>] :nil
+let [base     (fn [c : ptr<void>] : nil
                  httpd-resp-body!(c render-page(c)))
      composed compose-middleware(base mw-recover mw-log)]
   httpd-new(0 composed)
@@ -409,7 +409,7 @@ file, a structured logger, a buffer a test reads:
 ```
 
 ```sweet-exp
-let [sink     (fn [line :cstr] :nil eprintln(line))
+let [sink     (fn [line : cstr] : nil eprintln(line))
      composed compose-middleware(base mw-log-to(sink))]
   httpd-new(0 composed)
 ```
@@ -480,7 +480,7 @@ the middleware:
 ```
 
 ```sweet-exp
-let [handler (fn [c :ptr<void>] :nil
+let [handler (fn [c : ptr<void>] : nil
                (let [id httpd-req-id(c)]
                  (when some?(id) log-with-id(unwrap(id)))))]
   httpd-new(0 mw-request-id(handler))
@@ -649,11 +649,11 @@ fat-shaped (which the `httpd-call` dispatcher requires):
 ```
 
 ```sweet-exp
-defn mw-add-header [name :cstr value :cstr next :int] :ptr<void>
+defn mw-add-header [name : cstr value : cstr next : int] : ptr<void>
   let [_n next
        _k name
        _v value]
-    (fn [c :ptr<void>] :nil
+    (fn [c : ptr<void>] : nil
       httpd-call(_n c)
       httpd-resp-header!(c _k _v))
 ```
@@ -672,9 +672,9 @@ Short-circuit by *not* calling `(httpd-call _n c)`:
 ```
 
 ```sweet-exp
-defn mw-require-https [next :int] :ptr<void>
+defn mw-require-https [next : int] : ptr<void>
   let [_n next]
-    (fn [c :ptr<void>] :nil
+    (fn [c : ptr<void>] : nil
       (if {1 = httpd-req-header?(c "X-Forwarded-Proto")}
         httpd-call(_n c)
         (do
@@ -701,9 +701,9 @@ Use request attrs to thread context downstream:
 ```
 
 ```sweet-exp
-defn mw-tenant [next :int] :ptr<void>
+defn mw-tenant [next : int] : ptr<void>
   let [_n next]
-    (fn [c :ptr<void>] :nil
+    (fn [c : ptr<void>] : nil
       (let [t httpd-req-header(c "X-Tenant")]
         httpd-set-attr!(c "tenant" t)
         httpd-call(_n c)

@@ -228,7 +228,7 @@ schema from a `tur/schema` library) and emits a typed struct constructor call.
 For example:
 
 ```turmeric
-(defstruct Point [x :float y :float])
+(defstruct Point [x : float y : float])
 
 (def p #json<Point>({"x": 1.5, "y": 2.0}))
 ;; elaborates to: (Point 1.5 2.0)

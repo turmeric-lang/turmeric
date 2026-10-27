@@ -44,14 +44,14 @@ Typeclasses can be parameterised over type constructors using the `^f` or `^^f` 
 
 ```sweet-exp
 defclass Functor [^f]
-  fmap [container fn] :int
+  fmap [container fn] : int
 
 defclass Monad [^m]
-  bind [ma fn] :int
+  bind [ma fn] : int
 
 defclass Foldable [^t]
-  fold-left  [container acc fn] :int
-  fold-right [container acc fn] :int
+  fold-left  [container acc fn] : int
+  fold-right [container acc fn] : int
 ```
 
 The `^f` parameter means "f has kind `* -> *`".
@@ -78,7 +78,7 @@ definstance Functor [int]
 
 ```sweet-exp
 defclass Bifunctor [^^f]
-  bimap [container fn-left fn-right] :int
+  bimap [container fn-left fn-right] : int
 ```
 
 The `^^f` parameter means "f has kind `* -> * -> *`".
@@ -205,7 +205,7 @@ exactly the drift the helpers exist to prevent. (Built-in containers such as
 ```
 
 ```sweet-exp
-defn __opt_some [x] :int
+defn __opt_some [x] : int
   ```c return tur_box_some(x); ```
 
 defn __opt_none [] :int
@@ -230,14 +230,14 @@ Implement `fmap` and `bind` using inline C to call the closure function pointer:
 ```
 
 ````sweet-exp
-defn __fmap_option [container fn] :int
+defn __fmap_option [container fn] : int
   ```c
   if (!tur_is_some(container)) return TUR_NONE;
   return tur_box_some(
       ((int64_t(*)(int64_t))(intptr_t)fn)(tur_opt_value(container)));
   ```
 
-defn __bind_option [ma fn] :int
+defn __bind_option [ma fn] : int
   ```c
   if (!tur_is_some(ma)) return TUR_NONE;
   return ((int64_t(*)(int64_t))(intptr_t)fn)(tur_opt_value(ma));
@@ -287,16 +287,16 @@ The standard library (`stdlib/typeclass.tur`) provides:
 
 ```sweet-exp
 defclass Functor [^f]
-  fmap [container fn] :int
+  fmap [container fn] : int
 
-defn id [x] :int x
-defn times2 [x] :int {x * 2}
-defn inc [x] :int {x + 1}
+defn id [x] : int x
+defn times2 [x] : int {x * 2}
+defn inc [x] : int {x + 1}
 
 definstance Functor [option]
   fmap [container fn] __fmap_option(container fn)
 
-defn main [] :int
+defn main [] : int
   do
     ;; Identity law: fmap id x = x
     let [opt    __opt_some(42)
@@ -326,7 +326,7 @@ Use `bind` directly to chain monadic operations:
 ;; Sequence two Option computations
 let [step1  __bind_option(__opt_some(3) (fn [x] __opt_some({x * 2})))  ;; step1 = some 6
      result __bind_option(step1 (fn [y] __opt_some({y + 1})))]         ;; result = some 7
-  println(__opt_unwrap(result))  ;; 7
+  println(__opt_unwrap(result))                                        ;; 7
 ```
 
 ## do-m Notation
@@ -445,7 +445,7 @@ Named functions (non-closures) also work unchanged:
 ```
 
 ```sweet-exp
-defn double [x] :int {x * 2}
+defn double [x] : int {x * 2}
 
 let [opt    __opt_some(7)
      result .fmap(opt double)]
@@ -479,7 +479,7 @@ let [factor 3
 
 ```sweet-exp
 defclass Bifunctor [^^f]
-  bimap [container fn-left fn-right] :int
+  bimap [container fn-left fn-right] : int
 
 definstance Bifunctor [pair]
   bimap [container fn-left fn-right]
@@ -739,7 +739,7 @@ defdata IntList
   (Cons :int :IntList)
   (Nil)
 
-defn sum [lst :int] :int
+defn sum [lst : int] : int
   match lst
     (Cons h t)
     {h + sum(t)}
@@ -765,7 +765,7 @@ defdata Expr
   (Lit :int)
   (Add :Expr :Expr)
 
-defn eval-expr [e :int] :int
+defn eval-expr [e : int] : int
   match e
     (Lit n)
     n
@@ -797,7 +797,7 @@ defdata NatF [^f]
   (ZeroF)
   (SuccF :int)
 
-defn to-nat [n :int] :int
+defn to-nat [n : int] : int
   if {n = 0}
     roll(ZeroF())
     roll(SuccF(to-nat({n - 1})))
@@ -842,17 +842,17 @@ defdata CalcOp
   (CalcMul :int :int)
 
 ;; Lift operations into Free
-defn calc-add [a :int b :int] :int free-lift(CalcAdd(a b))
+defn calc-add [a : int b : int] : int free-lift(CalcAdd(a b))
 
 ;; Interpret with free-run
-defn run-op [op :int] :int
+defn run-op [op : int] : int
   match op
     (CalcAdd a b)
     {a + b}
     (CalcMul a b)
     {a * b}
 
-defn main [] :int
+defn main [] : int
   let [prog calc-add(3 4)]
     println(free-run((fn [op] let([_ prog] run-op(op))) prog))
     0

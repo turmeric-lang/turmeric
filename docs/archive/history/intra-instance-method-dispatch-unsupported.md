@@ -33,13 +33,13 @@ still being elaborated.
 
 ```turmeric
 (defclass HasN [a]
-  (base  [self n :int] :int)
-  (twice [self n :int] :int))
+  (base  [self n : int] : int)
+  (twice [self n : int] : int))
 (defstruct ArrW [a] (raw :int))
 (definstance HasN [ArrW]
-  (base  [self n :int] (+ n 1))
-  (twice [self n :int] (.base self (* n 2))))   ;; <- error here
-(defn main [] :int
+  (base  [self n : int] (+ n 1))
+  (twice [self n : int] (.base self (* n 2))))   ;; <- error here
+(defn main [] : int
   (let [w (:: (make-struct ArrW 0) (ArrW int))]
     (println (.base w 41)))   ;; this form is FINE from outside
   0)

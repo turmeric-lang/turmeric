@@ -13,7 +13,7 @@ parameter (`f`) in a helper/handler scope where it was never declared.
 ## Minimal repro
 
 ```turmeric
-(defeffect E [] :int)
+(defeffect E [] : int)
 (defn run-with [f : (fn [] #fx{E} int)] : int
   (handle (f)
     (E [] k) (resume k 5)))

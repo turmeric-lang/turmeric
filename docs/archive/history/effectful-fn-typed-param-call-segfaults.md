@@ -41,7 +41,7 @@ and all.
 ## Repro
 
 ```turmeric
-(defeffect Log [n :int] :nil)
+(defeffect Log [n : int] : nil)
 
 (defn use-fn [^fat lg : (fn [int] #fx{Log} nil) n : int] #fx{Log} : int
   (do (lg n) 0))

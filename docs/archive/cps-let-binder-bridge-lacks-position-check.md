@@ -79,7 +79,7 @@ Recorded so the next person does not repeat them:
 
 ```turmeric
 ; CPS path taken, binder is the carrier -- gate inert, output correct.
-(defeffect Ask [] :int)
+(defeffect Ask [] : int)
 (defn go [take-ok : bool] : int
   (let [r (if take-ok (mk-ok 7) (mk-err 11))]
     (+ (perform (Ask)) (if (ok? r) 100 200))))

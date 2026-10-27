@@ -29,8 +29,8 @@ Minimal project-mode tree:
 ```turmeric
 (defmodule foo/box
   (export Box make-box)
-  (defstruct Box [x :float y :float])
-  (defn make-box [a :float b :float] :int
+  (defstruct Box [x : float y : float])
+  (defn make-box [a : float b : float] : int
     ```c
     typedef struct { double x; double y; } Box_;
     Box_ *p = malloc(sizeof(*p));

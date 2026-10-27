@@ -155,7 +155,7 @@ component generates a `HasComponent` class (`HasPos`, `HasVel`, ...).
 that wants polymorphism states it via class constraints:
 
 ```turmeric
-defn integrate [W] [(HasPos W) (HasVel W)] [w : W dt : float] :void
+defn integrate [W] [(HasPos W) (HasVel W)] [w : W dt : float] : void
   ...
 ```
 
