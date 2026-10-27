@@ -31,6 +31,7 @@ const SOURCE = [
     '"a ^str :int ptr<void>"',
     '(defn hello [name : cstr] : void)',
     '(defn pick [m : option<ptr<int>>] : int m)',
+    '(defn each [x : (w a) g : (fn [int] int)] : (Option a) x)',
 ].join('\n');
 
 for (const scheme of ['dark', 'light']) {
@@ -83,6 +84,16 @@ test.describe(`editor highlighting (${scheme})`, () => {
         for (const type of ['cstr', 'void', 'option<ptr<int>>']) {
             expect(colourOf(type), `${type} after a spaced colon is a type token`).toBe(rgb(colours.type));
         }
+
+        // A colon that stands alone is a type token whatever follows it: a name,
+        // as in `name : cstr`, or a parenthesised type, as in `x : (w a)`. Every
+        // separator in the source must match, not just those before a name.
+        // An uncoloured colon merges into the plain span beside it, so it is not
+        // a token of its own: the count is what shows one was missed.
+        const colons = spans.filter(([t]) => t === ':');
+        expect(colons.length, 'every standalone colon is its own type token')
+            .toBe((SOURCE.match(/ : /g) || []).length);
+        for (const [, colour] of colons) expect(colour).toBe(rgb(colours.type));
 
         // What did not change: less-than is still an operator, and a `^` or `:`
         // inside a comment or a string stays that comment or string.
