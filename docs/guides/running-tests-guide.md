@@ -98,7 +98,7 @@ fails if those do not add up.
 ### `tests/run-jit-wasm.sh`
 
 Needs the module built (`cmake --build build-wasm --target tur_wasm_jit`, see
-[tools/wasm-jit/README.md](../../tools/wasm-jit/README.md)). Takes
+`tools/wasm-jit/README.md`). Takes
 `TUR_TEST_FILTER`, `TUR_TEST_SHARD`, `TUR_TEST_JOBS` and `TUR_TEST_LIST=1`, as in
 `tests/run.sh`. `TUR_WASM_JIT_MODULE` names the module's directory (default
 `build-wasm/wasm-jit`). `TUR_JIT_WASM_RESULTS=<dir>` keeps each fixture's result,
