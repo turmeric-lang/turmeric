@@ -308,6 +308,7 @@ Everything after `--` is the program's. The source is read the way
 | Source | What `tur x` does |
 | --- | --- |
 | an installed name | runs the binary `tur install` built; never builds |
+| `<spice>/<bin>` (an installed spice) | runs that spice's binary, linked or shadowed -- the same as `tur <spice>/<bin>` (a directory of that name stays a path) |
 | a path (has a `/`, or starts with `.` or `~`) | builds the `:bin` into `<checkout>/build/`, where `tur install` puts it, and again whenever a file under the checkout is newer than the binary |
 | a URL (`--ref`, `--subdir`) | fetches into the script-dep cache and builds the `:bin` there once |
 
@@ -328,6 +329,55 @@ and remembered; `--refresh` resolves it again (an older tree stays until
 nothing added to the project-less search path. It also ignores any
 `build.tur` in the current directory -- inside a project or outside one it
 means the same thing.
+
+## Two installed spices may ship one command name
+
+A spice's `:bin` names start with `tur-`, and `tur foo` runs `tur-foo` from
+`PATH` (as `git foo` runs `git-foo`). Two installed spices can both ship
+`tur-foo`; both stay usable:
+
+- **The bare name has one holder.** `tur-foo` on `PATH`, and `tur foo`, run the
+  spice that was installed first, until you move it.
+- **`tur <spice>/<bin>` always runs that spice's binary**, whichever spice
+  holds the bare name: `tur beta/foo -- args` (or `tur x beta/foo -- args`). The
+  spice may be named with or without its `tur-` prefix, and so may the bin.
+  Use it in a script to pin which tool you mean.
+- **Installing the second provider succeeds with a warning.** Its binary is
+  built but not linked, and its library modules are importable as usual:
+
+  ```text
+  tur install: warning: 'tur-foo' is already provided by installed spice 'alpha';
+    beta's copy is installed but not linked. Run it as `tur beta/foo`,
+    or make it the default with `tur install --link beta/foo`.
+  ```
+
+`tur install --link beta/foo` moves the bare name to beta's build. It neither
+fetches nor rebuilds, and prints whose it was; `tur install --link beta` moves
+every name beta declares. On a source (`tur install --link <url>` or
+`tur install --link ./beta --path`) it installs and takes every name.
+`--force` takes them too, but `--link` never overwrites a file `tur` did not
+install -- a `tur-foo` of your own in `~/.local/bin/` still needs `--force`.
+
+`tur list` shows who holds what -- `tur-foo (shadowed by alpha; tur beta/foo)`
+-- and `tur list --json` gives each spice a `"bins"` list of
+`{"name", "linked", "held_by"}`.
+
+`tur uninstall alpha` removes `tur-foo` only if alpha holds it, and then
+promotes nothing: you chose which tool `tur-foo` meant, and uninstall cannot
+know which of the remaining providers you would pick. It says what is left:
+
+```text
+tur uninstall: note: 'tur-foo' is now unlinked; beta still provides it.
+  Run it as `tur beta/foo`, or make it the default with
+  `tur install --link beta/foo`.
+```
+
+A name nobody holds is free: the next `tur install` of a spice that declares it
+takes it. A spice already installed shadowed stays shadowed (an upgrade or
+reinstall never changes who holds a name); becoming the holder takes `--link`.
+
+`<spice>@<version>/<bin>` is reserved for picking among versions installed side
+by side, which is not supported yet; `tur beta@0.2.0/foo` says so.
 
 ---
 
@@ -701,6 +751,8 @@ tur cache clean [--older-than <days>]
 tur x <url> [--ref <ref>] [--subdir <dir>] [--bin <name>] [-- <args...>]
 tur x <path> [-- <args...>]
 tur x <installed-name> [-- <args...>]
+tur <spice>/<bin> [<args...>]          # an installed spice's binary, linked or not
+tur install --link <spice>[/<bin>]     # make it the one `tur-<bin>` runs
 ```
 
 ---

@@ -31,6 +31,7 @@ static int x_usage(FILE *o, int rc) {
     fprintf(o,
         "usage:\n"
         "  tur x <name>  [--bin <b>] [-- <args...>]   an installed spice's binary\n"
+        "  tur x <name>/<bin> [-- <args...>]          the same; also `tur <name>/<bin>`\n"
         "  tur x <path>  [--bin <b>] [-- <args...>]   a local checkout, built in place\n"
         "  tur x <url> [--ref <ref>] [--subdir <dir>] [--bin <b>] [-- <args...>]\n"
         "                                             fetched and built into a cache\n"
@@ -109,23 +110,30 @@ static time_t x_newest_source(const char *dir, int depth) {
     return newest;
 }
 
-/* Pick the :bin to run.  Returns its index, or -1 after printing why. */
-static int x_pick_bin(const PkgManifest *m, const char *want, const char *what) {
+/* Pick the :bin to run.  Returns its index, or -1 after printing why.  A
+ * wanted name may leave off its `tur-` prefix (`foo` is `tur-foo`), as the
+ * qualified form `tur <spice>/foo` does. */
+static int x_pick_bin(const char *who, const PkgManifest *m, const char *want,
+                      const char *what) {
     if (m->n_bins == 0) {
-        fprintf(stderr, "tur x: %s declares no :bin entries; there is nothing "
-                        "to run\n", what);
+        fprintf(stderr, "%s: %s declares no :bin entries; there is nothing "
+                        "to run\n", who, what);
         return -1;
     }
     if (want) {
         for (int i = 0; i < m->n_bins; i++)
             if (strcmp(m->bin_names[i], want) == 0) return i;
-        fprintf(stderr, "tur x: %s has no :bin named '%s'; it declares:\n",
-                what, want);
+        for (int i = 0; i < m->n_bins; i++)
+            if (strncmp(m->bin_names[i], "tur-", 4) == 0 &&
+                strcmp(m->bin_names[i] + 4, want) == 0)
+                return i;
+        fprintf(stderr, "%s: %s has no :bin named '%s'; it declares:\n",
+                who, what, want);
     } else if (m->n_bins == 1) {
         return 0;
     } else {
-        fprintf(stderr, "tur x: %s declares several binaries; pick one with "
-                        "--bin:\n", what);
+        fprintf(stderr, "%s: %s declares several binaries; pick one with "
+                        "--bin:\n", who, what);
     }
     for (int i = 0; i < m->n_bins; i++)
         fprintf(stderr, "  %s\n", m->bin_names[i]);
@@ -144,6 +152,93 @@ static bool x_read_manifest(const char *dir, PkgManifest *m) {
         return false;
     }
     return true;
+}
+
+/* An installed spice's built binary: `<src_dir>/build/<bin>`, what `tur
+ * install` built and links (or, shadowed, leaves unlinked).  Never builds.
+ * The spice is named as `tur install` / `tur list` show it, with or without
+ * its `tur-` prefix.  Returns 0 with `exe` filled, -1 when no installed spice
+ * has that name (nothing printed: the callers word that differently), or 1/2
+ * after printing why. */
+static int x_installed_exe(const char *who, const char *spice, const char *bin,
+                           char *exe, size_t cap) {
+    char state_path[4096];
+    if (!tur_global_state_path(state_path, sizeof(state_path))) return -1;
+    TurState state;
+    tur_state_read(state_path, &state);
+    TurStateEntry *e = tur_state_find_spice(&state, spice);
+    char root[4096];
+    char name[256];
+    snprintf(name, sizeof(name), "%s", e && e->name ? e->name : spice);
+    bool have = e && tur_state_entry_src_dir(e, root, sizeof(root));
+    tur_state_free(&state);
+    if (!have) return -1;
+    PkgManifest m;
+    if (!x_read_manifest(root, &m)) return 1;
+    char what[300];
+    snprintf(what, sizeof(what), "installed spice '%s'", name);
+    int bi = x_pick_bin(who, &m, bin, what);
+    if (bi < 0) { pkg_manifest_free(&m); return 2; }
+    snprintf(exe, cap, "%s/build/%s", root, m.bin_names[bi]);
+    struct stat st;
+#ifdef _WIN32
+    if (stat(exe, &st) != 0) {
+        char alt[4096];
+        snprintf(alt, sizeof(alt), "%s.exe", exe);
+        if (stat(alt, &st) == 0) snprintf(exe, cap, "%s", alt);
+    }
+#endif
+    if (stat(exe, &st) != 0) {
+        fprintf(stderr, "%s: the installed '%s' has no built %s at %s "
+                        "-- `tur upgrade %s` rebuilds it\n",
+                who, name, m.bin_names[bi], exe, name);
+        pkg_manifest_free(&m);
+        return 1;
+    }
+    pkg_manifest_free(&m);
+    return 0;
+}
+
+bool drv_qualified_bin_shaped(const char *w) {
+    const char *slash = w ? strchr(w, '/') : NULL;
+    if (!slash || slash == w || !slash[1] || strchr(slash + 1, '/')) return false;
+    for (const char *p = w; *p; p++) {
+        if (p == slash) continue;
+        unsigned char c = (unsigned char)*p;
+        /* `@` and `.` only on the spice side, for D7's `beta@0.2.0/foo`,
+         * which drv_run_qualified_bin then turns away by name. */
+        bool spice_side = p < slash;
+        if (!(isalnum(c) || c == '-' || c == '_' ||
+              (spice_side && (c == '@' || c == '.'))))
+            return false;
+    }
+    return w[0] != '.';
+}
+
+int drv_run_qualified_bin(const char *who, const char *word,
+                          char **prog_argv, int prog_argc) {
+    const char *slash = strchr(word, '/');
+    char spice[256];
+    snprintf(spice, sizeof(spice), "%.*s", (int)(slash - word), word);
+    const char *bin = slash + 1;
+    if (strchr(spice, '@')) {
+        fprintf(stderr, "%s: '%s': versioned selection (<spice>@<version>/<bin>) "
+                        "is not supported yet\n", who, word);
+        return 2;
+    }
+    if (strchr(spice, '.')) {
+        fprintf(stderr, "%s: '%s' is not <spice>/<bin>\n", who, word);
+        return 2;
+    }
+    char exe[4096];
+    int rc = x_installed_exe(who, spice, bin, exe, sizeof(exe));
+    if (rc < 0) {
+        fprintf(stderr, "%s: no installed spice named '%s' (`tur list` shows "
+                        "them)\n", who, spice);
+        return 1;
+    }
+    if (rc > 0) return rc;
+    return drv_exec_program(exe, prog_argv, prog_argc);
 }
 
 static bool x_mkdir(const char *p) {
@@ -196,6 +291,19 @@ int cmd_x(int argc, char **argv) {
     char **prog_argv = dd < argc ? argv + dd + 1 : NULL;
     int    prog_argc = dd < argc ? argc - dd - 1 : 0;
 
+    /* namespaced-spice-binaries D3: `tur x beta/foo` is `tur beta/foo` --
+     * unless a directory of that name is here, which stays a path. */
+    struct stat qst;
+    if (!x_is_url(source) && drv_qualified_bin_shaped(source) &&
+        stat(source, &qst) != 0) {
+        if (bin) {
+            fprintf(stderr, "tur x: '%s' already names its binary; drop --bin\n",
+                    source);
+            return 2;
+        }
+        return drv_run_qualified_bin("tur x", source, prog_argv, prog_argc);
+    }
+
     bool is_url = x_is_url(source);
     if (!is_url && (ref || subdir)) {
         fprintf(stderr, "tur x: --ref and --subdir name a commit of a URL; "
@@ -214,7 +322,7 @@ int cmd_x(int argc, char **argv) {
                                     refresh, offline, root, sizeof(root)) != 1)
             return 1;
         if (!x_read_manifest(root, &m)) return 1;
-        int bi = x_pick_bin(&m, bin, source);
+        int bi = x_pick_bin("tur x", &m, bin, source);
         if (bi < 0) { pkg_manifest_free(&m); return 2; }
         /* Built once per entry, then immutable.  The build lands under a
          * private name first, so a concurrent first run never execs half a
@@ -261,7 +369,7 @@ int cmd_x(int argc, char **argv) {
             return 1;
         }
         if (!x_read_manifest(root, &m)) return 1;
-        int bi = x_pick_bin(&m, bin, root);
+        int bi = x_pick_bin("tur x", &m, bin, root);
         if (bi < 0) { pkg_manifest_free(&m); return 2; }
         char bindir[4096];
         snprintf(bindir, sizeof(bindir), "%s/build", root);
@@ -288,24 +396,15 @@ int cmd_x(int argc, char **argv) {
         }
     } else {
         /* An installed name: exec what `tur install` built; never build. */
-        if (!tur_installed_spice_dir(source, root, sizeof(root), NULL, NULL)) {
+        int rc = x_installed_exe("tur x", source, bin, exe, sizeof(exe));
+        if (rc < 0) {
             fprintf(stderr,
                     "tur x: no installed spice named '%s' -- give a path "
                     "(./%s) or a URL, or `tur install` it\n", source, source);
             return 1;
         }
-        if (!x_read_manifest(root, &m)) return 1;
-        int bi = x_pick_bin(&m, bin, source);
-        if (bi < 0) { pkg_manifest_free(&m); return 2; }
-        snprintf(exe, sizeof(exe), "%s/build/%s", root, m.bin_names[bi]);
-        struct stat st;
-        if (stat(exe, &st) != 0) {
-            fprintf(stderr, "tur x: the installed '%s' has no built %s at %s "
-                            "-- `tur upgrade %s` rebuilds it\n",
-                    source, m.bin_names[bi], exe, source);
-            pkg_manifest_free(&m);
-            return 1;
-        }
+        if (rc > 0) return rc;
+        return drv_exec_program(exe, prog_argv, prog_argc);
     }
     pkg_manifest_free(&m);
     return drv_exec_program(exe, prog_argv, prog_argc);

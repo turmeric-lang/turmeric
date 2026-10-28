@@ -1,17 +1,18 @@
 # Plan: Namespaced spice binaries -- `tur <spice>/<bin>`, and a bin-name collision that installs with a warning
 
-> **Status:** Draft, 2026-10-24. Nothing built. D2 (install with a warning)
-> and D4's spelling (`tur install --link`, not `tur link`) decided 2026-10-24,
-> as is D5's "uninstalling the holder leaves the name unlinked".
+> **Status:** Implemented 2026-10-28 (NB0-NB4 in one change; see "As built"
+> at the end). D2 (install with a warning) and D4's spelling
+> (`tur install --link`, not `tur link`) decided 2026-10-24, as is D5's
+> "uninstalling the holder leaves the name unlinked".
 > **Type:** Tooling / CLI (`src/compiler/install.c`, `src/compiler/global.c`,
 > `src/compiler/spice_search.c`, `src/driver/cli.c`, `src/driver/cmd_x.c`).
-> **Builds on:** [global-spice-install-plan](../archive/global-spice-install-plan.md)
+> **Builds on:** [global-spice-install-plan](global-spice-install-plan.md)
 > (`tur install`, `:bin`, the `tur <name>` fallthrough),
-> [installed-spice-libraries-plan](../archive/installed-spice-libraries-plan.md)
+> [installed-spice-libraries-plan](installed-spice-libraries-plan.md)
 > (D5's install layout, D6's module-conflict check) and
-> [project-less-tools-plan](../archive/project-less-tools-plan.md) (PT3's
+> [project-less-tools-plan](project-less-tools-plan.md) (PT3's
 > `tur x`).
-> **Absorbs:** [installed-bin-entry-modules-still-importable](../reported/installed-bin-entry-modules-still-importable.md)
+> **Absorbs:** [installed-bin-entry-modules-still-importable](installed-bin-entry-modules-still-importable.md)
 > (NB0 below).
 
 ## Goal
@@ -218,3 +219,38 @@ All in `tests/run-install.sh`, under a throwaway `TUR_HOME`:
 None at the time of writing. The three design calls (install with a warning,
 `--link` on `install`, and uninstall leaving the name unlinked) were made
 2026-10-24.
+
+## As built (2026-10-28)
+
+All five stages landed together. Where the code differs from the text above:
+
+- **D1.** `TurStateEntry.bin_linked` runs parallel to `bin`;
+  `tur_state_bin_holder` answers "who holds `tur-foo`".
+  `inst_plan_bin` (`install.c`, replacing `inst_check_bin_target`) asks the
+  registry first on every platform; the symlink checks remain only for a file
+  no entry claims (an own link whose registry row was lost still installs).
+- **D3.** The `<spice>/<bin>` dispatch sits in `main.c`, after the script check
+  and before `drv_script_word_shaped`'s "no such file" error, not in
+  `drv_try_external_subcommand` -- every word containing `/` is script-shaped,
+  so the fallthrough was never reached. An existing file named `alpha/foo`
+  stays a script. `tur x` treats `<spice>/<bin>` the same unless a directory of
+  that name exists, which stays a path. Both share `drv_run_qualified_bin` /
+  `x_installed_exe` in `cmd_x.c`, which also back `tur x <name> --bin <b>`; `--bin`
+  now accepts the bin without its `tur-` prefix.
+- **D4.** `--link` is a boolean flag on `tur install`. When its argument names
+  an installed spice (`beta` or `beta/foo`, without `--path`), it only moves
+  names; otherwise the argument is a source, installed with every name taken.
+  `tur list --json` keeps the old `"bin"` string list and adds
+  `"bins": [{"name", "linked", "held_by"}]`.
+- **D5.** A reinstall (`tur install` of an already-installed spice) keeps
+  flags like an upgrade does. `tur upgrade` no longer passes `--force`
+  internally; it sets `InstallSpec.upgrade`, which keeps module conflicts
+  warn-only as before. A bin the manifest no longer declares has its link
+  removed if the spice held it.
+- **D6 / NB0.** The search path hides entry files per include dir
+  (`spice_search_module_hidden`), for installed spices, their dependencies,
+  a project's `:spices` deps and its workspace siblings. The corpus check found
+  nothing importing a project's own entry module (`(import main)` appears
+  nowhere), so the project's own `src/` is left as it was.
+
+Tests: `tests/run-install.sh` 65-73.

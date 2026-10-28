@@ -87,7 +87,7 @@ directory is worse for triage than no index.
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [installed-bin-entry-modules-still-importable](installed-bin-entry-modules-still-importable.md) | low-medium (silent wrong resolution) | The conflict check skips `:bin` entry files, but `spice_search` still puts them on the path, so a project-less `(import main)` picks the first installed tool's entry and hides the rest. A bin-name collision between `--path` installs is also refused as "not owned by tur" |
+| ~~[installed-bin-entry-modules-still-importable](../archive/installed-bin-entry-modules-still-importable.md)~~ | low-medium (silent wrong resolution) | **RESOLVED 2026-10-28** (archived): NB0 of namespaced-spice-binaries-plan hides `:bin` entry files from the search path and asks the registry first. Original: The conflict check skips `:bin` entry files, but `spice_search` still puts them on the path, so a project-less `(import main)` picks the first installed tool's entry and hides the rest. A bin-name collision between `--path` installs is also refused as "not owned by tur" |
 
 ## Found checking two agent claims: wasm stack depth, diag file 0 (filed 2026-10-24)
 

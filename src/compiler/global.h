@@ -72,6 +72,11 @@ typedef struct TurStateEntry {
     char  *resolved;      /* resolved git SHA; NULL for --path */
     char  *version;       /* version string from build.tur :version */
     char **bin;           /* binary names this spice provides */
+    /* namespaced-spice-binaries D1: parallel to `bin` -- whether this spice
+     * holds the bare name (bin_dir/<bin> is its link).  A shadowed bin is
+     * built but reachable only as `tur <spice>/<bin>`.  An old registry's
+     * plain string list reads as all-linked. */
+    bool  *bin_linked;
     int    n_bin;
     char  *installed_at;  /* ISO-8601 timestamp */
     char  *built_with;    /* tur version used at install time */
@@ -110,6 +115,24 @@ TurStateEntry *tur_state_upsert(TurState *st, const char *name);
 /* Remove an entry by name. Returns true if an entry was removed. */
 bool tur_state_remove(TurState *st, const char *name);
 
+/* namespaced-spice-binaries D3: find an installed spice the way a user names
+ * it -- exactly, else with its `tur-` prefix dropped or added. */
+TurStateEntry *tur_state_find_spice(TurState *st, const char *name);
+
+/* Append a bin (with its D1 flag) to an entry. */
+void tur_state_entry_add_bin(TurStateEntry *e, const char *bin, bool linked);
+
+/* The index of `bin` in an entry's list, or -1. */
+int tur_state_entry_bin_index(const TurStateEntry *e, const char *bin);
+
+/* D1: the entry that holds the bare name `bin` (its :linked flag is set),
+ * skipping the entry named `except` (may be NULL).  NULL when nobody does. */
+TurStateEntry *tur_state_bin_holder(TurState *st, const char *bin,
+                                    const char *except);
+
+/* `tur-foo` -> `foo`: the short spelling `tur <spice>/<bin>` takes. */
+const char *tur_bin_short_name(const char *bin);
+
 /* installed-spice-libraries D5: the directory holding an entry's build.tur.
  * Prefers the recorded `:src-dir` / `:dir`; for an entry that predates them,
  * a --path install is its `:path` and a git install is reconstructed as
@@ -139,6 +162,12 @@ bool tur_installed_spice_dir(const char *name, char *out, size_t out_sz,
  * strings, freed with tur_spice_modules_free. */
 int  tur_spice_modules(const char *spice_dir, char ***out);
 void tur_spice_modules_free(char **mods, int n);
+
+/* namespaced-spice-binaries D6: the modules a spice's `:bin` entry files
+ * would be imported as (`src/main.tur` -> `main`) -- exactly the set
+ * tur_spice_modules leaves out, so the conflict check and the search path
+ * cannot disagree.  Same ownership as tur_spice_modules; unsorted. */
+int  tur_spice_bin_modules(const char *spice_dir, char ***out);
 
 /* ------------------------------------------------------------------ */
 /* script-spice-deps-plan SD1: the script-dep cache                    */

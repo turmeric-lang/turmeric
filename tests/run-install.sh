@@ -1010,6 +1010,145 @@ else
     bad "tur x <installed name> execs without building" "rc=$rc out: $out"
 fi
 
+# ------------------------------------------------------------------ #
+# namespaced-spice-binaries: two spices that ship one bin name        #
+# ------------------------------------------------------------------ #
+NBHOME="$WORK/nb-home"
+nb() { TUR_HOME="$NBHOME" "$TUR_ABS" "$@"; }
+for n in first second third; do
+    mkdir -p "$WORK/nb-$n/src"
+    cat > "$WORK/nb-$n/build.tur" <<NBEOF
+(defpackage $n :name "$n" :version "0.1.0" :bin #{"tur-foo" "src/main.tur"})
+NBEOF
+    cat > "$WORK/nb-$n/src/main.tur" <<NBEOF
+(defmodule main (export $n-only)
+  (defn $n-only [] : int 7)
+  (defn main [] : int (println "foo from $n") 0))
+NBEOF
+done
+NBFOO="$NBHOME/bin/$(binfile tur-foo)"
+
+# 65. D2: the second provider installs, shadowed, with a warning naming the
+#     holder; the bare name keeps running the first.
+nb install "$WORK/nb-first" --path >/dev/null 2>&1
+out="$(nb install "$WORK/nb-second" --path 2>&1)"; rc=$?
+if [ "$rc" -eq 0 ] &&
+   echo "$out" | grep -q "'tur-foo' is already provided by installed spice 'first'" &&
+   echo "$out" | grep -q 'tur second/foo' &&
+   [ "$("$NBFOO" 2>&1)" = "foo from first" ]; then
+    ok "a bin-name collision installs shadowed, with a warning"
+else
+    bad "a bin-name collision installs shadowed, with a warning" "rc=$rc out: $out"
+fi
+
+# 66. D3: the qualified form reaches either provider, linked or not.
+o1="$(nb second/foo 2>&1)"; o2="$(nb first/foo 2>&1)"; o3="$(nb x second/foo 2>&1)"
+o4="$(nb tur-second/tur-foo 2>&1)"
+if [ "$o1" = "foo from second" ] && [ "$o2" = "foo from first" ] &&
+   [ "$o3" = "foo from second" ] && [ "$o4" = "foo from second" ]; then
+    ok "tur <spice>/<bin> and tur x <spice>/<bin>"
+else
+    bad "tur <spice>/<bin> and tur x <spice>/<bin>" "$o1 | $o2 | $o3 | $o4"
+fi
+
+# 67. D3: an unknown spice, an unknown bin, and the reserved @version.
+o1="$(nb nosuch/foo 2>&1)"; r1=$?
+o2="$(nb first/nosuch 2>&1)"; r2=$?
+o3="$(nb first@1/foo 2>&1)"; r3=$?
+if [ "$r1" -ne 0 ] && echo "$o1" | grep -q "no installed spice named 'nosuch'" &&
+   [ "$r2" -ne 0 ] && echo "$o2" | grep -q "has no :bin named 'nosuch'" &&
+   echo "$o2" | grep -q "tur-foo" &&
+   [ "$r3" -ne 0 ] && echo "$o3" | grep -q "versioned selection"; then
+    ok "tur <spice>/<bin> errors"
+else
+    bad "tur <spice>/<bin> errors" "$r1 $o1 | $r2 $o2 | $r3 $o3"
+fi
+
+# 68. D4: tur list marks the shadowed bin, and --json carries the flags.
+out="$(nb list 2>&1)"
+json="$(nb --json list 2>&1)"
+if echo "$out" | grep -q "tur-foo (shadowed by first; tur second/foo)" &&
+   echo "$json" | grep -q '"bins": \[{"name": "tur-foo", "linked": true}\]' &&
+   echo "$json" | grep -q '"linked": false, "held_by": "first"'; then
+    ok "tur list shows who holds a bin name"
+else
+    bad "tur list shows who holds a bin name" "$out $json"
+fi
+
+# 69. D4: --link moves the name without fetching or building.
+out="$(nb install --link second/foo 2>&1)"; rc=$?
+if [ "$rc" -eq 0 ] && ! echo "$out" | grep -q building &&
+   echo "$out" | grep -q "was first's" &&
+   [ "$("$NBFOO" 2>&1)" = "foo from second" ] &&
+   nb --json list | grep -q '"linked": false, "held_by": "second"'; then
+    ok "tur install --link <spice>/<bin> swaps the holder"
+else
+    bad "tur install --link <spice>/<bin> swaps the holder" "rc=$rc out: $out"
+fi
+
+# 70. D5: an upgrade keeps each flag -- the shadowed first stays shadowed.
+nb upgrade first >/dev/null 2>&1
+if [ "$("$NBFOO" 2>&1)" = "foo from second" ] &&
+   grep -q '"first".*:linked false' "$NBHOME/state.tur"; then
+    ok "upgrade keeps a bin's :linked flag"
+else
+    bad "upgrade keeps a bin's :linked flag" "$(cat "$NBHOME/state.tur")"
+fi
+
+# 71. D5: uninstalling the holder unlinks the name and promotes nothing; a
+#     new provider then takes it; uninstalling a shadowed one leaves it.
+out="$(nb uninstall second 2>&1)"
+if [ ! -e "$NBFOO" ] && echo "$out" | grep -q "'tur-foo' is now unlinked; first still provides it" &&
+   [ "$(nb first/foo 2>&1)" = "foo from first" ]; then
+    ok "uninstalling the holder leaves the name unlinked"
+else
+    bad "uninstalling the holder leaves the name unlinked" "$out"
+fi
+nb install "$WORK/nb-third" --path >/dev/null 2>&1
+nb uninstall first >/dev/null 2>&1
+if [ "$("$NBFOO" 2>&1)" = "foo from third" ]; then
+    ok "a freed name goes to the next install; a shadowed uninstall leaves it"
+else
+    bad "a freed name goes to the next install; a shadowed uninstall leaves it" \
+        "$(ls -la "$NBHOME/bin")"
+fi
+
+# 72. NB0 (D6): a :bin entry file is not a module -- with two tools keeping
+#     theirs at src/main.tur, a manifest-less `(import main)` finds neither.
+nb install "$WORK/nb-second" --path >/dev/null 2>&1
+mkdir -p "$WORK/nb-user"
+cat > "$WORK/nb-user/script.tur" <<'NBEOF'
+(defmodule user/script (import main :refer [third-only])
+  (defn main [] : int (third-only)))
+NBEOF
+out="$(cd "$WORK/nb-user" && nb check script.tur 2>&1)"; rc=$?
+if [ "$rc" -ne 0 ] && echo "$out" | grep -q "module 'main' not found" &&
+   echo "$out" | grep -q "a :bin entry, not a module"; then
+    ok "an installed tool's :bin entry is not importable"
+else
+    bad "an installed tool's :bin entry is not importable" "rc=$rc out: $out"
+fi
+
+# 73. D1: a registry written before :linked (a plain string list) reads as
+#     all-linked; --link still refuses a file no installed spice claims.
+sed 's/#{:name \("tur-foo"\) :linked true}/\1/' "$NBHOME/state.tur" > "$NBHOME/state.old" &&
+    mv "$NBHOME/state.old" "$NBHOME/state.tur"
+if grep -q ':bin \["tur-foo"\]' "$NBHOME/state.tur" &&
+   nb --json list | grep -q '"name": "third"' &&
+   nb --json list | grep -q '"bins": \[{"name": "tur-foo", "linked": true}\]'; then
+    ok "an old :bin string list reads as linked"
+else
+    bad "an old :bin string list reads as linked" "$(cat "$NBHOME/state.tur")"
+fi
+nb uninstall third >/dev/null 2>&1
+echo "#!/bin/sh" > "$NBFOO"; chmod +x "$NBFOO"
+out="$(nb install --link second/foo 2>&1)"; rc=$?
+if [ "$rc" -ne 0 ] && echo "$out" | grep -q "not owned by tur"; then
+    ok "--link never overwrites a file tur did not install"
+else
+    bad "--link never overwrites a file tur did not install" "rc=$rc out: $out"
+fi
+
 echo
 echo "install summary: $PASS passed, $FAIL failed"
 if [ "$FAIL" -ne 0 ]; then

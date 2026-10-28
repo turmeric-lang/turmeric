@@ -633,6 +633,8 @@ int turi_env_attach_spice_for_module(TuriEnv *env, const char *module_name,
     for (int i = -1; i < env->n_include_dirs; i++) {
         const char *dir = i < 0 ? base : env->include_dirs[i];
         if (!dir) continue;
+        /* namespaced-spice-binaries D6: a :bin entry is not a module. */
+        if (i >= 0 && spice_search_module_hidden(dir, module_name)) continue;
         int n = snprintf(path, sizeof path, "%s/%s.tur", dir, module_name);
         if (n <= 0 || (size_t)n >= sizeof path) continue;
         FILE *f = fopen(path, "rb");

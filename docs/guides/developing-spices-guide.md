@@ -1297,8 +1297,12 @@ records it in the registry, `state.tur`. What it then provides depends on the
 spice:
 
 - **A spice with `:bin` entries** is a tool: each binary is built and linked
-  into `~/.local/bin/` as `tur-<cmd>` (and reachable as `tur <cmd>`). It is a
-  library too -- its modules are importable like any other installed spice's.
+  into `~/.local/bin/` as `tur-<cmd>` (and reachable as `tur <cmd>`), and is
+  always reachable as `tur <spice>/<cmd>`. When another installed spice already
+  holds `tur-<cmd>`, the binary is built but not linked (see
+  [Two installed spices may ship one command name](consuming-spices-guide.md#two-installed-spices-may-ship-one-command-name)).
+  It is a library too -- its modules are importable like any other installed
+  spice's, except the `:bin` entry files themselves.
 - **A spice with no `:bin` but a `src/`** is a library-only install: nothing is
   built and nothing lands in `~/.local/bin/`. `tur install` prints
   `[library]`, and `tur list` marks it the same way (`--json` reports
@@ -1333,7 +1337,10 @@ Outside a project every installed spice's `src/` is searched (see
 [Using spices without a project](consuming-spices-guide.md#using-spices-without-a-project)),
 so the installed set behaves like one namespace. A module path is the path of a
 `.tur` file under `src/` without the extension (`json/decode`); a `:bin`
-entrypoint does not count, since nobody imports a tool's `main`. If a module
+entrypoint does not count -- it is a program, not a module, so it is not
+importable either: `(import main)` never resolves to a tool's entry file, and
+the same holds for a `:spices` dependency's entry inside a project. Keep a
+tool's importable logic in a library module its `main.tur` calls. If a module
 the new spice provides already comes from another installed spice,
 `tur install` refuses and names both:
 
@@ -1343,6 +1350,10 @@ tur install: error: module 'json/decode' is already provided by installed spice 
 
 `--force` installs it anyway with a warning; the spice whose name sorts first
 then wins. Dependencies are not checked -- they are per-spice and versioned.
+
+Binaries are different: a command has a qualified form to fall back on, so a
+second spice shipping `tur-foo` installs with a warning instead of failing.
+See [consuming-spices-guide](consuming-spices-guide.md#two-installed-spices-may-ship-one-command-name).
 
 ### Using an installed spice from a project
 

@@ -190,18 +190,25 @@ static char *gs_form_str_dup(const Form *f) {
     return gs_ss_dup(f->as.s);
 }
 
-static void gs_parse_str_vec(const Form *f, char ***out, int *n_out) {
-    *out = NULL;
-    *n_out = 0;
-    if (!f) return;
-    if (f->tag != F_VEC && f->tag != F_LIST) return;
+/* namespaced-spice-binaries D1: `:bin` is a vector of
+ * `#{:name "tur-foo" :linked true}` maps.  A registry written before the flag
+ * holds plain strings, and every one of those was linked. */
+static void gs_parse_bins(const Form *f, TurStateEntry *e) {
+    if (!f || (f->tag != F_VEC && f->tag != F_LIST)) return;
     const FormList *fl = &f->as.list;
-    if (fl->len == 0) return;
-    *out = (char **)malloc(fl->len * sizeof(char *));
-    if (!*out) return;
     for (uint32_t i = 0; i < fl->len; i++) {
-        if (fl->items[i]->tag == F_STR)
-            (*out)[(*n_out)++] = gs_ss_dup(fl->items[i]->as.s);
+        const Form *it = fl->items[i];
+        if (it->tag == F_STR) {
+            char *nm = gs_ss_dup(it->as.s);
+            if (nm) { tur_state_entry_add_bin(e, nm, true); free(nm); }
+        } else if (it->tag == F_MAP) {
+            char *nm = gs_form_str_dup(gs_map_get_kw(it, "name"));
+            if (!nm) continue;
+            const Form *lf = gs_map_get_kw(it, "linked");
+            bool linked = !(lf && lf->tag == F_BOOL && !lf->as.b);
+            tur_state_entry_add_bin(e, nm, linked);
+            free(nm);
+        }
     }
 }
 
@@ -320,8 +327,7 @@ static bool tur_state_read_clean(const char *path, TurState *out) {
                 e->built_with   = gs_form_str_dup(gs_map_get_kw(ef, "built-with"));
                 e->dir          = gs_form_str_dup(gs_map_get_kw(ef, "dir"));
                 e->src_dir      = gs_form_str_dup(gs_map_get_kw(ef, "src-dir"));
-                gs_parse_str_vec(gs_map_get_kw(ef, "bin"),
-                                 &e->bin, &e->n_bin);
+                gs_parse_bins(gs_map_get_kw(ef, "bin"), e);
             }
         }
     }
@@ -387,7 +393,10 @@ bool tur_state_write(const char *path, const TurState *st) {
             fprintf(f, ":bin [");
             for (int j = 0; j < e->n_bin; j++) {
                 if (j) fprintf(f, " ");
+                fprintf(f, "#{:name ");
                 state_put_str(f, e->bin[j]);
+                fprintf(f, " :linked %s}",
+                        !e->bin_linked || e->bin_linked[j] ? "true" : "false");
             }
             fprintf(f, "] ");
         }
@@ -418,6 +427,7 @@ static void gs_entry_free(TurStateEntry *e) {
     free(e->src_dir);
     for (int j = 0; j < e->n_bin; j++) free(e->bin[j]);
     free(e->bin);
+    free(e->bin_linked);
     memset(e, 0, sizeof(*e));
 }
 
@@ -451,7 +461,9 @@ TurStateEntry *tur_state_upsert(TurState *st, const char *name) {
         free(e->src_dir);      e->src_dir = NULL;
         for (int j = 0; j < e->n_bin; j++) free(e->bin[j]);
         free(e->bin);
+        free(e->bin_linked);
         e->bin = NULL;
+        e->bin_linked = NULL;
         e->n_bin = 0;
         return e;
     }
@@ -475,6 +487,50 @@ bool tur_state_remove(TurState *st, const char *name) {
         }
     }
     return false;
+}
+
+TurStateEntry *tur_state_find_spice(TurState *st, const char *name) {
+    if (!name || !*name) return NULL;
+    TurStateEntry *e = tur_state_find(st, name);
+    if (e) return e;
+    if (strncmp(name, "tur-", 4) == 0 && name[4])
+        return tur_state_find(st, name + 4);
+    char pref[512];
+    snprintf(pref, sizeof(pref), "tur-%s", name);
+    return tur_state_find(st, pref);
+}
+
+void tur_state_entry_add_bin(TurStateEntry *e, const char *bin, bool linked) {
+    char **nb = (char **)realloc(e->bin, (size_t)(e->n_bin + 1) * sizeof(char *));
+    if (!nb) return;
+    e->bin = nb;
+    bool *nl = (bool *)realloc(e->bin_linked, (size_t)(e->n_bin + 1) * sizeof(bool));
+    if (!nl) return;
+    e->bin_linked = nl;
+    e->bin[e->n_bin] = tur_strdup(bin);
+    e->bin_linked[e->n_bin] = linked;
+    e->n_bin++;
+}
+
+int tur_state_entry_bin_index(const TurStateEntry *e, const char *bin) {
+    for (int j = 0; e && bin && j < e->n_bin; j++)
+        if (e->bin[j] && strcmp(e->bin[j], bin) == 0) return j;
+    return -1;
+}
+
+TurStateEntry *tur_state_bin_holder(TurState *st, const char *bin,
+                                    const char *except) {
+    for (int i = 0; i < st->n_entries; i++) {
+        TurStateEntry *e = &st->entries[i];
+        if (except && e->name && strcmp(e->name, except) == 0) continue;
+        int j = tur_state_entry_bin_index(e, bin);
+        if (j >= 0 && (!e->bin_linked || e->bin_linked[j])) return e;
+    }
+    return NULL;
+}
+
+const char *tur_bin_short_name(const char *bin) {
+    return bin && strncmp(bin, "tur-", 4) == 0 && bin[4] ? bin + 4 : bin;
 }
 
 static bool gs_is_dir(const char *p) {
@@ -618,6 +674,25 @@ static bool gs_bin_module(const char *bin_path, char *out, size_t cap) {
     return true;
 }
 
+int tur_spice_bin_modules(const char *spice_dir, char ***out) {
+    *out = NULL;
+    if (!spice_dir) return 0;
+    char mp[4096];
+    if (!pkg_resolve_manifest_path(spice_dir, mp, sizeof(mp))) return 0;
+    PkgManifest m;
+    memset(&m, 0, sizeof(m));
+    int n = 0, cap = 0;
+    if (pkg_manifest_read(mp, &m)) {
+        for (int b = 0; b < m.n_bins; b++) {
+            char bm[4096];
+            if (m.bin_paths[b] && gs_bin_module(m.bin_paths[b], bm, sizeof(bm)))
+                gs_push_mod(out, &n, &cap, bm);
+        }
+    }
+    pkg_manifest_free(&m);
+    return n;
+}
+
 int tur_spice_modules(const char *spice_dir, char ***out) {
     *out = NULL;
     if (!spice_dir) return 0;
@@ -628,25 +703,20 @@ int tur_spice_modules(const char *spice_dir, char ***out) {
 
     /* A :bin entrypoint is a program, not a library module: nobody imports
      * a tool's `main`, and counting it would make every two tools that keep
-     * their entry at src/main.tur "provide the same module". */
-    char mp[4096];
-    PkgManifest m;
-    memset(&m, 0, sizeof(m));
-    if (pkg_resolve_manifest_path(spice_dir, mp, sizeof(mp)) &&
-        pkg_manifest_read(mp, &m)) {
-        for (int b = 0; b < m.n_bins; b++) {
-            char bm[4096];
-            if (!m.bin_paths[b] || !gs_bin_module(m.bin_paths[b], bm, sizeof(bm)))
-                continue;
-            for (int i = 0; i < n; i++) {
-                if (strcmp((*out)[i], bm) != 0) continue;
-                free((*out)[i]);
-                (*out)[i] = (*out)[--n];
-                break;
-            }
+     * their entry at src/main.tur "provide the same module".  The search
+     * path hides the same set (spice_search, D6 of
+     * namespaced-spice-binaries-plan). */
+    char **bins = NULL;
+    int n_bins = tur_spice_bin_modules(spice_dir, &bins);
+    for (int b = 0; b < n_bins; b++) {
+        for (int i = 0; i < n; i++) {
+            if (strcmp((*out)[i], bins[b]) != 0) continue;
+            free((*out)[i]);
+            (*out)[i] = (*out)[--n];
+            break;
         }
     }
-    pkg_manifest_free(&m);
+    tur_spice_modules_free(bins, n_bins);
     if (n > 1) qsort(*out, (size_t)n, sizeof(char *), gs_cmp_str);
     return n;
 }
