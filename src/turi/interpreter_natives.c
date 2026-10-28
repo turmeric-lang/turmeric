@@ -7217,8 +7217,14 @@ static Form *sx_arg(TuriValue *a, uint32_t n, uint32_t i) {
     return a[i].as_syntax;
 }
 
+/* The forms whose payload is a list of items.  The brace data literals
+ * (`#map{...}`, `#set{...}`, and the `#fx{...}` / bare `#{...}` map) carry the
+ * same payload as F_LIST, so syntax-len / -nth / -first / -rest read their
+ * items too: a macro taking `#map{:k v ...}` walks it as k, v, ... */
 static bool sx_is_seq(const Form *f) {
-    return f && (f->tag == F_LIST || f->tag == F_VEC);
+    return f && (f->tag == F_LIST || f->tag == F_VEC || f->tag == F_MAP ||
+                 f->tag == F_SET || f->tag == F_MAP_LITERAL ||
+                 f->tag == F_SET_LITERAL);
 }
 
 static TuriValue native_read_string(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {

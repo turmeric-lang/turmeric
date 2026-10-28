@@ -1,6 +1,14 @@
 # Plan: XML/HTML spice follow-ups -- markup literals, CSS selectors, hiccup
 
-> Status: not started. Planned 2026-10-11 (A, C) and 2026-10-16 (D) as
+> Status: in progress (2026-10-28). C1-C4 implemented (`dom/select`, branch
+> `claude/ecstatic-cori-ikodwq` in turmeric-spices); A1-A2 implemented
+> (`dom/holes`, `dom/markupc`, tur-html `html/markup`, tur-xml `xml/markup`,
+> branch `claude/ecstatic-cori-ikodwq-markup`); D1 implemented (tur-html
+> `html/hiccup`, branch `claude/ecstatic-cori-ikodwq-hiccup`). A3-A6, D1b-D3
+> not started. What changed against the plan while building it is under
+> "Implementation notes (2026-10-28)" at the end. The compiler fixes A and D
+> needed are on turmeric's `claude/ecstatic-cori-ikodwq`.
+> Planned 2026-10-11 (A, C) and 2026-10-16 (D) as
 > follow-ups to [xml-html-parsers-plan](../../archive/xml-html-parsers-plan.md), which shipped
 > `tur-xml`, `tur-html` and `tur-dom-core` and is archived with its follow-up
 > B (the editable tree, turmeric-spices #106). Split out 2026-10-25; the
@@ -767,3 +775,68 @@ cannot do that (they go through `read-string`).
   archived plan's [Outcome](../../archive/xml-html-parsers-plan.md#outcome-2026-10-10): every `:heap`
   constructor call allocates a node nothing frees, so rendering an `Html` tree per request needs a `with-region`
   bracket around it, or a string mode that does not materialize the tree.
+
+## Implementation notes (2026-10-28)
+
+What building C, A1-A2 and D1 changed against the text above.
+
+**C (selectors).**
+
+- `select` is a reserved form (channel `select`), so the query is
+  `select-all`; the rest of the API is as sketched. `query` and `query-one`
+  are as planned.
+- `:has()` shipped with C1-C3 rather than as a later phase: its budget is a
+  million candidate tests per query. Past it the `:has()` answers false,
+  `selector-gave-up?` reports it, and `query` / `query-one` return an Err
+  rather than a short answer.
+- The selector source follows CSS Syntax at end of input: an unclosed
+  string, attribute selector or function is closed there (`[a="b` is valid),
+  as browsers do.
+- Conformance: the WPT `dom/nodes/selectors.js` table (BSD-3, vendored with
+  its commit) runs in the document, detached-element and in-document-element
+  contexts over WPT's HTML and XHTML documents; the rows that use a rejected
+  pseudo-class (`:link`, `:target`, the UI states, `:lang`, pseudo-elements)
+  must be compile errors. The differential fuzz builds random selector ASTs,
+  renders them for the engine and evaluates them with a naive Turmeric
+  matcher over random `dom/edit` trees. css-select / nwsapi tables were not
+  needed.
+
+**A (markup literals).**
+
+- String mode builds no tree: the macro emits one template string (static
+  markup with an inline marker per hole) and the hole values; rendering is
+  concatenation. The first render of each literal parses it once with the
+  real parser and checks every hole landed in the slot the macro predicted
+  (cached per literal, keyed by the template's address).
+- `Fragment` holds its rendered markup (malloc'd); `fragment-free` releases
+  it. `html->string` borrows it.
+- Two holes the plan's list missed are compile errors too: a hole right
+  after a `<` (`<${x}>` -- the static `<` and the escaped value would still
+  print a tag), and a hole inside `<textarea>` / `<title>` / `<noscript>`
+  (raw text in the tokenizer's terms).
+- A `raw-html` value that the serializer cannot write back as parsed (a
+  `<plaintext>`, a comment or raw text that would end early) panics rather
+  than unbalance the literal; dom/edit's `turdom_check_subtree` decides.
+- The literal syntax is only available in a file read after `html/markup`
+  is loaded; a file can use it itself through
+  `#use-reader-macros "<path>/html/markup.tur"`, or call `html*` directly.
+- Three compiler problems had to be fixed first (turmeric branch
+  `claude/ecstatic-cori-ikodwq`):
+  [macro-env-force-loads-driver-used-modules](../../archive/macro-env-force-loads-driver-used-modules.md)
+  (no `defmacro*` compiled in turmeric-spices at all); re-registering an
+  identical reader macro (`#use-reader-macros` plus the import) was an
+  error; and `tur fmt` printed a user reader macro's expansion instead of
+  the invocation and deleted `#use-reader-macros` lines -- which, with
+  spices CI running `tur fmt --check`, would have rewritten every literal.
+
+**D (hiccup).**
+
+- D1 lives in tur-html (`html/hiccup`, macro-time `html/hiccupc`), not
+  `dom/hiccup`: rendering a `raw-html` hole needs lexbor, and so does
+  `ToChild Html`. D2's `hiccup->xml-string` will need the types moved down
+  to dom-core with the renderer taking the raw fixer as an argument (as
+  `render-template` already does for A).
+- `HText` holds a `cstr`, not a `String`.
+- Literal attribute values are written as given (not scheme-checked),
+  matching `#html{...}`'s static text; values in holes go through
+  `to-attr` / `to-url-attr` and `srcset-check`.
