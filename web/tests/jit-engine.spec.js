@@ -94,8 +94,9 @@ test.describe('The Compile engine', () => {
 
         await pickEngine(page, 'compile');
         await clearConsole(page);
-        // The exit is never taken; without one MIR's inliner asserts instead
-        // (docs/reported/mir-inliner-asserts-on-function-with-no-return.md).
+        // The exit is never taken; it dates from when MIR's inliner asserted
+        // on a function without one
+        // (docs/archive/mir-inliner-asserts-on-function-with-no-return.md).
         // Clicked, not awaited through runCode(): a runaway run settles only
         // when something stops it.
         await page.evaluate((c) => window._turiEditor.setValue(c),

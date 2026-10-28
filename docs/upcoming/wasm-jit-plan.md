@@ -1016,8 +1016,8 @@ Found on the way:
   functions are in the import table now.
 - **A function that only loops** -- `(defn spin [n : int] : int (spin (+ n
   1)))` -- trips an assertion in MIR's inliner, natively as well
-  ([mir-inliner-asserts-on-function-with-no-return](../reported/mir-inliner-asserts-on-function-with-no-return.md)).
-  It belongs in the next fork PR.
+  ([mir-inliner-asserts-on-function-with-no-return](../archive/mir-inliner-asserts-on-function-with-no-return.md)).
+  Fixed in P5 by turmeric-lang/mir#17.
 
 ### P5 -- stubs and `setjmp`
 

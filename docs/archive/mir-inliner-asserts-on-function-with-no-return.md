@@ -1,5 +1,10 @@
 # MIR's inliner asserts on a Turmeric function that loops forever with no exit
 
+**Resolved 2026-10-28** by turmeric-lang/mir#17 (vendored as `9859f851`):
+the inliner no longer inlines a function with no `[J]RET` (`func_ret_p`).
+The standalone repro is `c-tests/new/inline-no-return.c` in the fork, and
+`spin` below now loops, natively and in the browser module.
+
 **Severity:** low-medium. `tur jit` aborts the whole process (and the
 browser JIT module traps) instead of running the program, on a function
 whose only path is an endless self tail call. A program that means to loop
