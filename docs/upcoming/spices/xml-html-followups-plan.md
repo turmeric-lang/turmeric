@@ -3,9 +3,13 @@
 > Status: in progress (2026-10-28). Done: C1-C4 (`dom/select`; turmeric-spices
 > branch `claude/ecstatic-cori-ikodwq`), A1-A2 (`dom/holes`, `dom/markupc`,
 > tur-html `html/markup`, tur-xml `xml/markup`), A3-A4 (`html->dom`,
-> `#html-live{...}` and `tpl-update!`) and D1 (tur-html `html/hiccup`), all on
-> turmeric-spices branch `claude/ecstatic-cori-ikodwq-markup`, since D1
-> builds on A2's hole classes. Not started: A5, A6, D1b, D2, D3. What changed against the plan while
+> `#html-live{...}` and `tpl-update!`) and D1-D3 (tur-html `html/hiccup`:
+> the macro, result-position rewriting, `hiccup->dom` / `hiccup->xml-string`
+> / `hiccup->xml-dom`, `node->hiccup`), all on turmeric-spices branch
+> `claude/ecstatic-cori-ikodwq-markup`, since D builds on A2's hole classes.
+> Not started: A5, A6, and D2's `RenderHtml` (tourist has no `html-response`
+> yet).
+> What changed against the plan while
 > building it is under "Implementation notes (2026-10-28)" at the end. The
 > compiler fixes A and D needed are on turmeric's
 > `claude/ecstatic-cori-ikodwq`; the spices markup branch's CI builds against
@@ -668,7 +672,7 @@ and raw-text bodies, so the conversion uses the trusted constructors.
 |---|---|---|
 | D1 | `dom/hiccup`: `Html`, `Tag`, `AttrName`, `Attr`, `RawBody` and their checking constructors; the `hiccup` macro (keyword and string names, `#id.class` shorthand, `#map{}` attributes, `:attrs*`, holes through `ToChild` / `ToAttr` / `ToUrlAttr`); `hiccup->string` | A compile-error table: an invalid literal name, a computed tag, children under a void element, a dynamic value under `on*` / `style` / `srcdoc`, a dynamic `<script>` / `<style>` body, a second `id`, a bare `{...}` attribute map, and each D-2 nesting case. The checking constructors refuse bad names, the code-bearing names and the raw-text tags. A2's escaping and URL tables, applied to hiccup. Once A2 exists, `hiccup` and `#html{}` render byte-identical output for a shared corpus |
 | D1b | Result-position rewriting (D-1): markup vectors in the result positions of `if`, `when`, `unless`, `cond`, `do`, `let`, `match`, `for`, and an inline one-parameter `fn` passed to `list-map`, become `Html`; missing `else` branches become an empty `Html`; an inline `list-map` becomes a `list-foldl` straight into `Html`; a vector headed by a known element name outside a result position is a compile error saying to wrap it in `(hiccup ...)`. Best after `macro-time-forward-reference-typed-int` is fixed, so the walker can be ordinary mutually recursive functions; otherwise it ships as the single self-recursive walker the prototype used | One fixture per form in the result-position table, with markup in every branch and a missing `else` where the form allows one. Keyword-headed vectors that are type syntax or option lists (`(fn [:int] :int)`, `:only [:encode]`) inside a hiccup argument are neither rewritten nor reported. A vector in a `let` binding's value or an unknown call's argument gives the "wrap in `(hiccup ...)`" error. A type error inside a rewritten branch points at the user's line |
-| D2 | `hiccup->dom` (needs B1-B2), `hiccup->xml-string`, `ToChild Html` and `HFragment`, `RenderHtml` for `html-response` | For parser-stable trees (D-2), `html-parse-fragment` with context `template` of `hiccup->string h` is `dom-equal?` to `hiccup->dom h`; the same through expat for the XML flavour |
+| D2 | `hiccup->dom` (needs B1-B2), `hiccup->xml-string`, `ToChild Html` and `HFragment`, `RenderHtml` for `html-response` (`RenderHtml` not done: tourist has no `html-response` yet to take it) | For parser-stable trees (D-2), `html-parse-fragment` with context `template` of `hiccup->string h` is `dom-equal?` to `hiccup->dom h`; the same through expat for the XML flavour |
 | D3 | `node->hiccup` | `hiccup->dom (node->hiccup n)` is `dom-equal?` to `n` for every element of both corpora; the guide shows a transform (add `rel="noopener"` to every external `<a>`) |
 
 ### Open questions
@@ -869,3 +873,41 @@ What building C, A1-A2 and D1 changed against the text above.
 - Literal attribute values are written as given (not scheme-checked),
   matching `#html{...}`'s static text; values in holes go through
   `to-attr` / `to-url-attr` and `srcset-check`.
+- **D1b-D3 (2026-10-28).** The opaque types are `HTag`, `HAttr`,
+  `HAttrName`, `HRawBody` (and D2's `HCommentBody`, `HCdataBody`,
+  `HPiBody`): a type name is global, and tur-dom-core's SAX `Attr` and ecs's
+  `Tag` were taken
+  ([module-type-names-collide-across-modules](../../reported/module-type-names-collide-across-modules.md)).
+- Content holes go through a new `ToHtml` class rather than `ToChild`, so a
+  nested `Html` stays a tree (through `ToChild` it would be flattened to
+  markup); `ToHtml` has `ToChild`'s instances plus `Html`, `Node` and
+  `Child`, so any `ToChild` type goes in as `(to-child x)`.
+- The D1b walker is ordinary mutually recursive functions (the forward
+  reference fix holds). `for` is expanded by the walker into nested
+  `match`es over `Option`, not through the `for` macro: its `.pure` looks
+  for an instance on the body's type when that is concrete, and takes the
+  monad only from a `defn`'s return type
+  ([for-comprehension-pure-picks-the-payload-type](../../reported/for-comprehension-pure-picks-the-payload-type.md)).
+  An inline `fn` given to `list-map` needs a typed parameter. tur-html
+  cannot load `stdlib/list-typed.tur` today (its `String` collides with
+  dom/ownstr's), so the test supplies `list-foldl`.
+- `HComment`, `HCdata` and `HPi` were added so `node->hiccup` loses
+  nothing; HTML has no CDATA or PIs, so `hiccup->string` writes CDATA as
+  text and leaves a PI out. `hiccup->xml-string` writes a `raw-html` child
+  or a spliced `#html{...}` by parsing it with lexbor in its parent and
+  converting with `node->hiccup` -- no expat needed in tur-html.
+- `hiccup->dom` follows the HTML tree builder's namespace rules (`svg`,
+  `math`, the integration points, foreign attributes such as `xlink:href`).
+  `node->hiccup` pins each element to the namespace it was in (a marker in
+  the tag; an XML element carries its URI, an attribute its namespace), so
+  an element converted on its own rebuilds in place. `hiccup->xml-dom`
+  otherwise resolves prefixes through the tree's `xmlns` attributes and puts
+  declarations first, as expat does.
+- D3's gate holds for every element of the 54 html5lib files except those
+  holding what dom/edit refuses to rebuild (a `<plaintext>`, raw text
+  holding its end tag or `<!--`, a comment holding `<!--` or `-->`):
+  about 470 of 8300, ancestors included. `hiccup->dom` panics on those.
+  The XML corpus is ten documents in the test (namespaces, redeclared
+  prefixes, `xml:` attributes, entities, CDATA, PIs); tur-html takes
+  tur-xml as an optional, test-only dependency for it and for D2's expat
+  gate.

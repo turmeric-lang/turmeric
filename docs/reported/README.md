@@ -3437,6 +3437,9 @@ the `__int128` work only surfaced them.  Both resolved the same day.
 | Report | Severity | One line |
 | --- | --- | --- |
 | [qualified-adt-constructor-mistyped-as-argument](qualified-adt-constructor-mistyped-as-argument.md) | low | `(lib/shapes/Square 4)` passed to a function types as an anonymous `<adt>` and is refused (TUR-E0001); the unqualified constructor and qualified function calls work. tur-html's `hiccup` expands to wrapper functions to avoid it |
+| [module-type-names-collide-across-modules](module-type-names-collide-across-modules.md) | medium | Types are bound by bare name program-wide: two modules that each define `Attr` cannot both load (`defopaque: 'Attr' is already defined`), and a module type sharing a `load`ed type's name fails only at its export check. No program using tur-dom-core can load `stdlib/list-typed.tur` (`String`); tur-html's hiccup types are `H`-prefixed because of it |
+| [generic-callee-tyvar-captured-by-caller](generic-callee-tyvar-captured-by-caller.md) | medium | In `(defn f [A] [xs : (Cons A)] : (Cons int) (if (tnil? xs) (tnil) ...))` the `(tnil)` specializes at `(Cons A)` with the caller's `A`, so the C returns a `Cons__cstr *` from a `Cons__int *` function (an error on gcc 14 / clang 15+); an ascription does not help, renaming the variable does |
+| [for-comprehension-pure-picks-the-payload-type](for-comprehension-pure-picks-the-payload-type.md) | low-medium | `(for [x (some 3)] (P x))` in a `(Option Pt)` defn looks for `Applicative [Pt]`: `.pure` dispatches on a concrete payload type. And a `for` outside a defn's return position (an argument, an annotated `let`) is ambiguous |
 
 ## Filing conventions
 
