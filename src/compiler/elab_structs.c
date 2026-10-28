@@ -742,10 +742,13 @@ bool elab_type_decl_attrs(Elab *e, const Form *call, const char *form_name,
     return true;
 }
 
-/* caret-type-attributes-plan P3.  The trailing-keyword spelling of a flag
- * (`:copy` after the name) is deprecated (TUR-D0007).  A declaration's keyword
- * loop collects the keywords it accepted here, and kw_flag_warn names them all
- * in one warning. */
+/* caret-type-attributes-plan P4.  The trailing-keyword spelling of a flag
+ * (`:copy` after the name) is no longer accepted (TUR-E0717).  A declaration's
+ * keyword loop collects the keywords it meets here, and kw_flag_error names them
+ * all in one error.  The loops still apply the flags they read, so after the
+ * error the declaration elaborates as though it had been written with the
+ * attributes: one diagnostic, and no cascade of "unknown type" errors at every
+ * use. */
 typedef struct {
     const Form *first;     /* the first keyword, where the warning points */
     char kw[96];           /* ":copy :heap" */
@@ -773,13 +776,13 @@ static void kw_flag_note(KwFlagNote *n, const Elab *e, const Form *kw_form, unsi
     snprintf(n->caret + b, sizeof n->caret - b, "%s^%s", b ? " " : "", kw_form->as.sym->name);
 }
 
-static void kw_flag_warn(const Elab *e, const char *form_name, const KwFlagNote *n) {
+static void kw_flag_error(const Elab *e, const char *form_name, const KwFlagNote *n) {
     (void)e;
     if (!n->first) return;
-    diag_emit_with_code(elab_deprecation_level(), n->first->span,
-                        TUR_D0007_TYPE_DECL_KEYWORD_FLAG,
-                        "'%s': the trailing flag %s is deprecated; write %s before "
-                        "the name: (%s %s Name ...)",
+    diag_emit_with_code(DIAG_ERROR, n->first->span,
+                        TUR_E0717_TYPE_DECL_KEYWORD_FLAG,
+                        "'%s': the trailing flag %s is no longer accepted; write %s "
+                        "before the name: (%s %s Name ...)",
                         form_name, n->kw, n->caret, form_name, n->caret);
 }
 
@@ -850,7 +853,7 @@ Expr *elab_defstruct(Elab *e, const Form *call) {
         }
         fields_start_idx++;
     }
-    kw_flag_warn(e, "defstruct", &kw_note);
+    kw_flag_error(e, "defstruct", &kw_note);
     if (is_linear && is_affine) {
         diag_emit(DIAG_ERROR, name_form->span,
                   "defstruct: '%s' cannot be both linear and affine -- \"exactly "
@@ -1184,7 +1187,7 @@ Expr *elab_defopaque(Elab *e, const Form *call) {
             return NULL;
         }
     }
-    kw_flag_warn(e, "defopaque", &kw_note);
+    kw_flag_error(e, "defopaque", &kw_note);
     if (opaque_linear && opaque_affine) {
         diag_emit(DIAG_ERROR, call->span,
                   "defopaque: ^linear and ^affine are mutually exclusive "
@@ -1981,7 +1984,7 @@ static Expr *elab_adt_def(Elab *e, const Form *call, bool spelled_defgadt) {
         else break;
         ctors_start_idx++;
     }
-    kw_flag_warn(e, kw, &kw_note);
+    kw_flag_error(e, kw, &kw_note);
     if (is_linear && is_affine) {
         diag_emit(DIAG_ERROR, name_form->span,
                   "%s: '%s' cannot be both linear and affine -- \"exactly "

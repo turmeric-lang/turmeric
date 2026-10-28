@@ -1431,9 +1431,9 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
                     /* `^linear` is the same flag in the attribute spelling every
                      * other declaration takes (caret-type-attributes-plan P0). */
                     if (maybe_attr->tag == F_KEYWORD && maybe_attr->as.sym == e->kw_linear)
-                        diag_emit_with_code(elab_deprecation_level(), maybe_attr->span,
-                                            TUR_D0007_TYPE_DECL_KEYWORD_FLAG,
-                                            "'exists': the flag :linear is deprecated; "
+                        diag_emit_with_code(DIAG_ERROR, maybe_attr->span,
+                                            TUR_E0717_TYPE_DECL_KEYWORD_FLAG,
+                                            "'exists': the flag :linear is no longer accepted; "
                                             "write ^linear: (exists ^linear [a] ...)");
                     if ((maybe_attr->tag == F_KEYWORD && maybe_attr->as.sym == e->kw_linear) ||
                         (maybe_attr->tag == F_SYM && maybe_attr->as.sym == e->sym_caret_linear)) {

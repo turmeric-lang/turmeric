@@ -196,8 +196,8 @@ The head takes the same attributes as any `defdata` -- `^copy`, `^move`,
 `^linear`, `^affine`, `^heap` and `^no-auto-ctor` -- written before the name,
 ahead of the type-parameter vector: `(defdata ^copy Tag [a] ...)`. (`^linear`
 with `^affine` is an error, and so is `^copy` with `^move`. The older trailing
-`:copy` keyword, before or after the vector, still compiles but warns with
-`TUR-D0007`; `tur fmt` rewrites it.) Without `^copy`, values follow move semantics (using one twice is a
+`:copy` keyword, before or after the vector, is an error, `TUR-E0717`; `tur fmt`
+rewrites it.) Without `^copy`, values follow move semantics (using one twice is a
 `TUR-E0005` use-after-move); with it, they are plain, freely-readable values
 -- use it when the constructors carry only copyable payloads:
 

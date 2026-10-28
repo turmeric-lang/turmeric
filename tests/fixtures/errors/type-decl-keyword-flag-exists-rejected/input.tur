@@ -1,5 +1,5 @@
-;; caret-type-attributes-plan P3: `(exists :linear ...)` is the old spelling of
-;; `(exists ^linear ...)` (see caret-exists-linear); it still works and warns.
+;; caret-type-attributes-plan P4: `(exists :linear ...)` is no longer accepted
+;; (TUR-E0717); write `(exists ^linear ...)` (see caret-exists-linear).
 (defclass Show [a]
   (show [x] : cstr))
 

@@ -76,8 +76,7 @@ Opaques are *not* for:
 
 The optional attributes go before the name, as on `defn` and `def`, and are a
 *set*. (The older spelling, trailing keywords after the representation
-type such as `:linear`, still compiles but warns with `TUR-D0007`; `tur fmt`
-rewrites it.) `^linear` and `^affine`
+type such as `:linear`, is an error, `TUR-E0717`; `tur fmt` rewrites it.) `^linear` and `^affine`
 promote the newtype to a substructural handle -- without either, the
 opaque is freely copyable (`is_copy = true`); with one it becomes a
 resource the checker tracks for single use. The two are mutually
