@@ -38,6 +38,7 @@ directory is worse for triage than no index.
 
 | Report | Severity | One line |
 | --- | --- | --- |
+| [syntax-gensym-not-fresh-against-program-names](syntax-gensym-not-fresh-against-program-names.md) | medium-low (silent capture) | `syntax-gensym` in a `defmacro*` is fresh only against the macro-time env's symbols, so it can return `tmp_0` while the call site binds `tmp_0`, and the expansion captures it; the template `(gensym)` checks the program's names and does not |
 | [affine-let-init-yielding-moved-local-skips-scope-drop](affine-let-init-yielding-moved-local-skips-scope-drop.md) | medium-low (leak) | `(let [a (let [t (mk)] t)] ...)` with an `^affine` Drop opaque never drops `a`; the same value bound through a call is dropped. Hid in the `-of` macros of `numvec.tur` until `run-leak-check.sh` ran |
 
 ## Found landing refined-function-types-plan F1 (filed 2026-10-28)

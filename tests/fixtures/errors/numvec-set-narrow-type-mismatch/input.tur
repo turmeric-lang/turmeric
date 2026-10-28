@@ -1,7 +1,6 @@
-;; numvec-set-narrow-type-mismatch: the narrow setters are macros (an inline-C
-;; function with a narrow parameter warns TUR-W0037) that pass the stored value
-;; through a typed widening function first, so an `int` is still refused for a
-;; U8Vec element rather than being truncated to a byte on the way in.
+;; numvec-set-narrow-type-mismatch: `u8vec-set!` takes a `uint8`, so an `int`
+;; is refused for a U8Vec element rather than being truncated to a byte on the
+;; way in.
 (load "stdlib/numvec.tur")
 
 (defn main [] : int

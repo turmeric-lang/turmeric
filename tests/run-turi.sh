@@ -233,9 +233,9 @@ fixture_has_inline_c() {
             # stdlib/string-ffi.tur).
             stdlib/re.tur) continue ;;
             # Every inline-C body of the typed numeric arrays has a native twin
-            # (NUMVEC_NATIVES in interpreter_natives.c): __<p>-{new,free,copy}-raw
-            # and the public <p>-{len,ref,set!} (<p>-set-w__ for the narrow
-            # element types).  Add a body without a twin and this line is wrong.
+            # of the same name (NUMVEC_NATIVES in interpreter_natives.c):
+            # <p>-{new,free,copy,len,ref,set!}.  Add a body without a twin and
+            # this line is wrong.
             stdlib/numvec.tur) continue ;;
         esac
         grep -q '```c' "$loaded" 2>/dev/null && return 0

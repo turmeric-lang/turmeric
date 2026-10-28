@@ -1,9 +1,8 @@
 ;; numvec-new-negative-length-panics: a negative length is refused with a
 ;; panic rather than wrapping into a huge allocation under a recorded length
-;; (the bug class security-audit WP5 closed for sized-buf-new).  The message
-;; site is not pinned (no expected.stderr): `f64vec-new` is a Turmeric wrapper
-;; over an inline-C allocator, so the compiled engine names the line inside
-;; stdlib/numvec.tur while turi names the caller's.
+;; (the bug class security-audit WP5 closed for sized-buf-new).  `f64vec-new`
+;; is an inline-C body itself, not a wrapper over one, so the panic names the
+;; caller's line on every engine.
 (load "stdlib/numvec.tur")
 
 (defn main [] : int

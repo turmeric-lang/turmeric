@@ -383,7 +383,13 @@ typedef enum TuriHandleKind {
     TURI_HK_IDENTITY,   /* int64_t[1] {value} -- the Identity comonad cell */
     TURI_HK_PAIR,       /* WkTuple2 {e1, e2} -- the env-pair comonad cell */
     TURI_HK_SIZEDBUF,   /* TuriSizedBufRep {len, data} -- sized-buf */
-    TURI_HK_NUMVEC,     /* TuriNumVecRep {len, data, raw} -- numvec.tur (F64Vec, ...) */
+    /* TuriNumVecRep {len, data, raw} -- numvec.tur, one kind per element width
+     * so an F64Vec handle is refused where a U8Vec is expected */
+    TURI_HK_F64VEC,
+    TURI_HK_F32VEC,
+    TURI_HK_I64VEC,
+    TURI_HK_I32VEC,
+    TURI_HK_U8VEC,
     TURI_HK_MOCKTIME,   /* int64_t[1] {now_ms} -- Mock-Time */
     TURI_HK_TASKGROUP,  /* WkTaskGroup* -- structured-concurrency task group */
     TURI_HK_GEN,        /* TuriGen* -- the word behind a TURI_GEN generator */

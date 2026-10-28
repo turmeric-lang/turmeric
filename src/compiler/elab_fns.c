@@ -14506,8 +14506,12 @@ Expr *elab_defn(Elab *e, const Form *call) {
     /* Phase C: warn (or error under --Werror=inline-c-narrow-params) when a
      * narrow-width parameter reaches an inline-C body.  The C code sees the
      * parameter at its narrow C type (e.g. int16_t), not int64_t, which
-     * surprises callers that wrote the body expecting the carrier width. */
-    if (body && body->kind == EX_INLINE_C) {
+     * surprises callers that wrote the body expecting the carrier width.
+     * A stdlib body is exempt: the warning is advice to the body's author,
+     * and it would print on every program that loads the module, where the
+     * reader cannot act on it (stdlib/numvec.tur stores float32 / int32 /
+     * uint8 elements through narrow parameters on purpose). */
+    if (body && body->kind == EX_INLINE_C && !diag_file_is_stdlib(body->span.file_id)) {
         for (uint32_t _ci = 0; _ci < n_params; _ci++) {
             TypeKind k = param_kinds[_ci];
             bool is_narrow = (k == TY_INT8  || k == TY_INT16  || k == TY_INT32 ||

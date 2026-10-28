@@ -1,7 +1,7 @@
-;; numvec-set-out-of-bounds-panics: the narrow-typed setters are macros (an
-;; inline-C function with a narrow parameter warns TUR-W0037), and a macro
-;; expands at the call, so the panic still names the caller's line.  A
-;; negative index is out of bounds like a too-large one.
+;; numvec-set-out-of-bounds-panics: a narrow-typed setter is an inline-C body
+;; with a `uint8` parameter (TUR-W0037 exempts the stdlib), so its panic names
+;; the caller's line like the others.  A negative index is out of bounds like
+;; a too-large one.
 (load "stdlib/numvec.tur")
 
 (defn main [] : int

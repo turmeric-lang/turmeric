@@ -1,7 +1,7 @@
 # SIMD and vectorization -- typed numeric arrays, then explicit vector types
 
 > **Status: N0 LANDED 2026-10-28** (`stdlib/numvec.tur`, section 3 N0 "As built");
-> N1, N2, S0 and S1 not started. Proposed 2026-10-24.** Written in response to
+> N1, N2, S0 and S1 not started. Proposed 2026-10-24. Written in response to
 > "are (1) SIMD functions for manual calling and (2) vectorization
 > optimizations, likely in MIR, useful or viable for Turmeric?", with Racket's
 > `flvector` raised as a related idea. Short answer: (1) yes, as an
@@ -202,25 +202,33 @@ worth having:
   accessor is never bound, so never freed (`(f64vec-len (f64vec-new 4 0.0))`
   leaks), and a closure cannot capture an array it also uses. The module
   header says to bind before passing.
-- **`len` / `ref` / `set!` are inline-C themselves**, not wrappers over a raw
-  body, so an out-of-bounds panic names the caller's line on every engine
-  (`numvec-ref-out-of-bounds-panics`). `new` is a wrapper, so its range panic
-  names the line in `numvec.tur` when compiled and the caller's under turi
-  (that fixture pins no `expected.stderr`).
-- **`f32vec-set!`, `i32vec-set!`, `u8vec-set!` are macros.** An inline-C
-  function with a narrow parameter draws TUR-W0037 on every compile that loads
-  it; the macro passes the value through a typed `P-widen__` function (so an
-  `int` is still refused, not truncated) into a wide-typed inline-C body.
-- **`P-of` is a macro** (`numvec-count__` / `numvec-fill__`), and wraps its
-  `let` in `P-id__`: see
+- **Every op that touches the header is an inline-C body of its own** --
+  `new`, `free`, `copy`, `len`, `ref`, `set!` -- never a Turmeric wrapper over
+  a raw body, so a panic (an index out of range, a negative length) names the
+  caller's line on every engine, and `(u8vec-set! a)` curries like any
+  function. The narrow element types take narrow parameters (`init :
+  float32`, `x : uint8`), which drew TUR-W0037 on every program loading the
+  module; the warning now exempts stdlib bodies (advice to a body's author,
+  not to its users).
+- **`P-of` is a template macro over one procedural macro.** `P-of` mints the
+  array's binder with `(gensym)` -- fresh against the program's names -- and
+  hands it to `numvec-of__`, a `defmacro*` that counts the elements and emits
+  one flat `(let [v (new n zero)] (do (set! v 0 x0) ... v))`. A per-element
+  template recursion stops at the 256-deep expansion limit, and
+  `syntax-gensym` is fresh only against the macro-time env
+  ([syntax-gensym-not-fresh-against-program-names](../reported/syntax-gensym-not-fresh-against-program-names.md)).
+  The `let` is wrapped in `P-id__`: see
   [affine-let-init-yielding-moved-local-skips-scope-drop](../reported/affine-let-init-yielding-moved-local-skips-scope-drop.md).
 - **`P-show` returns an owned `String`** `"#f64vec[1.5 2.5]"`; there is no
   `Show` instance because `show` would consume an affine array.
-- **turi** has natives for every inline-C body (`NUMVEC_NATIVES`,
-  `TURI_HK_NUMVEC`, rows in `native_caps.c`), so the whole module runs under
-  `--interpret` without the inline-C JIT, and `tests/run-turi.sh` lists it as
-  fully native-backed. Fixtures: `numvec-*` and `errors/numvec-*`; all pass
-  under `run.sh`, `run-turi.sh`, `run-jit.sh`, and `run-leak-check.sh`.
+- **turi** has natives for every inline-C body (`NUMVEC_NATIVES`, rows in
+  `native_caps.c`), so the whole module runs under `--interpret` without the
+  inline-C JIT, and `tests/run-turi.sh` lists it as fully native-backed. Each
+  element type has its own handle kind (`TURI_HK_F64VEC`, ...), so a sandboxed
+  program cannot re-type a `U8Vec` handle as an `I64Vec` and index it at the
+  wrong stride (`tests/turi/sandbox-eval.c`, `forgery/numvec-width`).
+  Fixtures: `numvec-*` and `errors/numvec-*`; all pass under `run.sh`,
+  `run-turi.sh`, `run-jit.sh`, and `run-leak-check.sh`.
 
 ### 3.1 N0's type shape -- generic or five types (prototyped 2026-10-24)
 

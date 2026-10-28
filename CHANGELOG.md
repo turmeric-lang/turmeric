@@ -20,6 +20,9 @@ All notable changes to Turmeric are documented here.
 
 ### Changed
 
+- **TUR-W0037 (narrow parameter reaches an inline-C body) no longer fires on
+  stdlib code.** It is advice to a body's author, and printed on every program
+  that loaded such a module, where nobody could act on it.
 - **A bin-name collision no longer fails `tur install`.** When another
   installed spice already provides `tur-foo`, the new spice installs with a
   warning: its `tur-foo` is built but not linked, and its modules are

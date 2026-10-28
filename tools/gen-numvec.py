@@ -8,31 +8,32 @@ the module is generated from one template.  Edit the template here, then:
     python3 tools/gen-numvec.py > stdlib/numvec.tur
 
 `python3 tools/gen-numvec.py --check` exits 1 if stdlib/numvec.tur is stale.
-The interpreter twins of the `__<p>-*-raw` bodies are in
-src/turi/interpreter_natives.c (NUMVEC_NATIVES); keep both in step.
+Every inline-C body -- `<p>-new`, `-free`, `-copy`, `-len`, `-ref`, `-set!` --
+has an interpreter twin of the same name in src/turi/interpreter_natives.c
+(NUMVEC_NATIVES) and rows in src/turi/native_caps.c; keep all three in step.
 """
 import os
 import sys
 
-# name, Type, elem (public), C element, raw "wide" param type, widen expr,
-# narrow-back (raw ref already returns the narrow type), blurb
+# p: prefix, T: type, E: element type, C: C element, zero: a literal of E,
+# zm: the same zero as a macro-time `list` form, ex/exs: docstring examples.
 TYPES = [
-    dict(p="f64vec", T="F64Vec", E="float", C="double", W="float",
-         widen="{x}", zero="0.0", ex=("1.5", "2.5"), exs="7.1",
+    dict(p="f64vec", T="F64Vec", E="float", C="double",
+         zero="0.0", zm="0.0", ex=("1.5", "2.5"), exs="7.1",
          what="64-bit floats"),
-    dict(p="f32vec", T="F32Vec", E="float32", C="float", W="float",
-         widen="(as float {x})", zero="(as float32 0.0)",
+    dict(p="f32vec", T="F32Vec", E="float32", C="float",
+         zero="(as float32 0.0)", zm="(list as float32 0.0)",
          ex=("(:: 1.5 float32)", "(:: 2.5 float32)"), exs="(:: 3.25 float32)",
          what="32-bit floats"),
-    dict(p="i64vec", T="I64Vec", E="int", C="int64_t", W="int",
-         widen="{x}", zero="0", ex=("1", "2"), exs="7",
+    dict(p="i64vec", T="I64Vec", E="int", C="int64_t",
+         zero="0", zm="0", ex=("1", "2"), exs="7",
          what="64-bit integers"),
-    dict(p="i32vec", T="I32Vec", E="int32", C="int32_t", W="int",
-         widen="(as int {x})", zero="(as int32 0)",
+    dict(p="i32vec", T="I32Vec", E="int32", C="int32_t",
+         zero="(as int32 0)", zm="(list as int32 0)",
          ex=("(as int32 1)", "(as int32 2)"), exs="(as int32 7)",
          what="32-bit integers"),
-    dict(p="u8vec", T="U8Vec", E="uint8", C="uint8_t", W="int",
-         widen="(as int {x})", zero="(as uint8 0)",
+    dict(p="u8vec", T="U8Vec", E="uint8", C="uint8_t",
+         zero="(as uint8 0)", zm="(list as uint8 0)",
          ex=("(as uint8 1)", "(as uint8 2)"), exs="(as uint8 200)",
          what="bytes"),
 ]
@@ -87,20 +88,27 @@ HDR = """;;; tur/numvec -- typed numeric arrays: F64Vec, F32Vec, I64Vec, I32Vec,
 ;;; Since: Phase N0 (simd-and-vectorization-plan)
 (load "stdlib/typeclass.tur")
 
-;;; numvec-count__ -- internal: the number of arguments, as a `+` chain.
+;;; numvec-of__ -- internal: the flat body of every `P-of`.
+;;;
+;;; `(numvec-of__ id new set! zero v x0 x1 ...)` expands to
+;;; `(id (let [v (new n zero)] (do (set! v 0 x0) (set! v 1 x1) ... v)))`.  A
+;;; procedural macro, so it counts its arguments and emits one flat body: a
+;;; template macro recurses once per element and stops at the 256-deep
+;;; expansion limit.  `v` comes from the caller, minted there with `(gensym)`,
+;;; which is fresh against the program's own names (`syntax-gensym` here is
+;;; fresh only against the macro-time env's).
 
-(defmacro numvec-count__ [& xs]
-  (if (empty? xs)
-    0
-    (list + 1 (list numvec-count__ ~@(rest xs)))))
-;;; numvec-fill__ -- internal: store xs at i, i+1, ... with `setter`, yield v.
-
-(defmacro numvec-fill__ [setter v i & xs]
-  (if (empty? xs)
-    v
-    (list do
-      (list setter v i (first xs))
-      (list numvec-fill__ setter v (list + i 1) ~@(rest xs)))))
+(defmacro* numvec-of__ [id new setter zero v & xs]
+  (let [n (syntax-len xs)]
+    (letrec [sets (fn [i : int acc : Syntax] : Syntax
+                    (if (< i 0)
+                      acc
+                      (sets (- i 1)
+                            (syntax-cons `(~setter ~v ~(int->syntax i) ~(syntax-nth xs i)) acc))))]
+      (let [mk   `(~new ~(int->syntax n) ~zero)
+            bind (syntax-vec v mk)
+            body (syntax-cons (sym->syntax "do") (sets (- n 1) (syntax-list v)))]
+        `(~id (let ~bind ~body))))))
 """
 
 TEMPLATE = r""";; ===== {T}: {what} =====
@@ -112,53 +120,11 @@ TEMPLATE = r""";; ===== {T}: {what} =====
 ;;;
 ;;; Since: Phase N0
 (defopaque ^affine {T} :int)
-;; --- raw layer (private): allocation.  turi has native twins. ---
-
-(defn __{p}-new-raw [n : int init : {W}]
-  #fx{{Unsafe}}
-  : int
-  ```c
-  /* the data block is 32-byte aligned; n * sizeof wrapped for a huge n would
-     leave a tiny block under a huge recorded len, so the bound is explicit. */
-  if (n < 0 || (uint64_t)n > (SIZE_MAX - 64) / sizeof({C})) {{
-    tur_panic("{p}-new: length out of range");
-    return 0;
-  }}
-  struct {{ int64_t len; {C} *data; void *raw; }} *b = malloc(sizeof(*b));
-  if (!b) {{ fprintf(stderr, "{p}-new: out of memory\n"); abort(); }}
-  b->len = n;
-  b->raw = malloc((size_t)n * sizeof({C}) + 32);
-  if (!b->raw) {{ fprintf(stderr, "{p}-new: out of memory\n"); abort(); }}
-  b->data = ({C} *)(((uintptr_t)b->raw + 31) & ~(uintptr_t)31);
-  for (int64_t i = 0; i < n; i++) b->data[i] = ({C})init;
-  return (int64_t)(intptr_t)b;
-  ```)
-
-(defn __{p}-free-raw [b : int]
-  #fx{{Unsafe}}
-  : nil
-  ```c
-  struct {{ int64_t len; {C} *data; void *raw; }} *v = (void*)(intptr_t)b;
-  if (v) {{ free(v->raw); free(v); }}
-  ```)
-
-(defn __{p}-copy-raw [b : int]
-  #fx{{Unsafe}}
-  : int
-  ```c
-  struct {{ int64_t len; {C} *data; void *raw; }} *v = (void*)(intptr_t)b;
-  struct {{ int64_t len; {C} *data; void *raw; }} *c = malloc(sizeof(*c));
-  if (!c) {{ fprintf(stderr, "{p}-copy: out of memory\n"); abort(); }}
-  c->len = v->len;
-  c->raw = malloc((size_t)v->len * sizeof({C}) + 32);
-  if (!c->raw) {{ fprintf(stderr, "{p}-copy: out of memory\n"); abort(); }}
-  c->data = ({C} *)(((uintptr_t)c->raw + 31) & ~(uintptr_t)31);
-  if (v->len > 0) memcpy(c->data, v->data, (size_t)v->len * sizeof({C}));
-  return (int64_t)(intptr_t)c;
-  ```)
-;; --- public surface.  len / ref / set! are inline-C themselves, not wrappers
-;; over a raw body, so a panic is reported at the CALLER's line (as vec-get's
-;; is) and so turi's natives are keyed by the public names. ---
+;; Every operation that touches the header is an inline-C body of its own,
+;; never a Turmeric wrapper over a raw one, so a panic is reported at the
+;; CALLER's line (as vec-get's is) and turi's natives are keyed by the public
+;; names.  An element store writes a number, never a pointer, so the setter
+;; carries no TUR_REGION_NOTE (CLAUDE.md, "Region Store Hooks").
 ;;; {p}-new -- allocate a {T} of n elements, every one init.
 ;;;
 ;;; Parameters:
@@ -174,8 +140,25 @@ TEMPLATE = r""";; ===== {T}: {what} =====
 ;;;
 ;;; Since: Phase N0
 
-(defn {p}-new [n : int init : {E}] : {T}
-  (:: (unsafe (__{p}-new-raw n {init_w})) :{T}))
+(defn {p}-new [n : int init : {E}]
+  #fx{{}}
+  : {T}
+  ```c
+  /* the data block is 32-byte aligned; n * sizeof wrapped for a huge n would
+     leave a tiny block under a huge recorded len, so the bound is explicit. */
+  if (n < 0 || (uint64_t)n > (SIZE_MAX - 64) / sizeof({C})) {{
+    tur_panic("{p}-new: length out of range");
+    return 0;
+  }}
+  struct {{ int64_t len; {C} *data; void *raw; }} *b = malloc(sizeof(*b));
+  if (!b) {{ fprintf(stderr, "{p}-new: out of memory\n"); abort(); }}
+  b->len = n;
+  b->raw = malloc((size_t)n * sizeof({C}) + 32);
+  if (!b->raw) {{ fprintf(stderr, "{p}-new: out of memory\n"); abort(); }}
+  b->data = ({C} *)(((uintptr_t)b->raw + 31) & ~(uintptr_t)31);
+  for (int64_t i = 0; i < n; i++) b->data[i] = init;
+  return (int64_t)(intptr_t)b;
+  ```)
 ;;; {p}-id__ -- internal: hand the array straight back.
 ;;;
 ;;; `{p}-of` wraps its `let` in this so the binding that receives the result is
@@ -198,9 +181,8 @@ TEMPLATE = r""";; ===== {T}: {what} =====
 ;;; Since: Phase N0
 
 (defmacro {p}-of [& xs]
-  (list {p}-id__
-        (list let `[__nv ({p}-new (numvec-count__ ~@xs) {zero})]
-          (list numvec-fill__ {p}-set! __nv 0 ~@xs))))
+  (let [v (gensym "nv")]
+    (list numvec-of__ {p}-id__ {p}-new {p}-set! {zm} v ~@xs)))
 ;;; {p}-free -- release a {T} now, consuming it.
 ;;;
 ;;; Rarely needed: a let-bound {T} is freed at scope exit.  Call it to
@@ -214,8 +196,13 @@ TEMPLATE = r""";; ===== {T}: {what} =====
 ;;;
 ;;; Since: Phase N0
 
-(defn {p}-free [v : {T}] : nil
-  (unsafe (__{p}-free-raw (:: v :int))))
+(defn {p}-free [v : {T}]
+  #fx{{}}
+  : nil
+  ```c
+  struct {{ int64_t len; {C} *data; void *raw; }} *a = (void*)(intptr_t)v;
+  if (a) {{ free(a->raw); free(a); }}
+  ```)
 ;;; Drop [{T}] -- free the array when a bound {T} dies unmoved.
 
 (definstance Drop [{T}] (drop [x] : void ({p}-free x)))
@@ -278,7 +265,16 @@ TEMPLATE = r""";; ===== {T}: {what} =====
 ;;;
 ;;; Since: Phase N0
 
-{set_def};;; {p}-copy -- a fresh {T} with the same elements.
+(defn {p}-set! [^borrow v : {T} i : int x : {E}]
+  #fx{{}}
+  #writes v
+  : nil
+  ```c
+  struct {{ int64_t len; {C} *data; void *raw; }} *a = (void*)(intptr_t)v;
+  if (i >= 0 && i < a->len) {{ a->data[i] = x; return; }}
+  tur_panic("{p}-set!: index out of bounds");
+  ```)
+;;; {p}-copy -- a fresh {T} with the same elements.
 ;;;
 ;;; Parameters:
 ;;;   v -- the array (borrowed)
@@ -291,8 +287,20 @@ TEMPLATE = r""";; ===== {T}: {what} =====
 ;;;
 ;;; Since: Phase N0
 
-(defn {p}-copy [^borrow v : {T}] : {T}
-  (:: (unsafe (__{p}-copy-raw (:: v :int))) :{T}))
+(defn {p}-copy [^borrow v : {T}]
+  #fx{{}}
+  : {T}
+  ```c
+  struct {{ int64_t len; {C} *data; void *raw; }} *a = (void*)(intptr_t)v;
+  struct {{ int64_t len; {C} *data; void *raw; }} *c = malloc(sizeof(*c));
+  if (!c) {{ fprintf(stderr, "{p}-copy: out of memory\n"); abort(); }}
+  c->len = a->len;
+  c->raw = malloc((size_t)a->len * sizeof({C}) + 32);
+  if (!c->raw) {{ fprintf(stderr, "{p}-copy: out of memory\n"); abort(); }}
+  c->data = ({C} *)(((uintptr_t)c->raw + 31) & ~(uintptr_t)31);
+  if (a->len > 0) memcpy(c->data, a->data, (size_t)a->len * sizeof({C}));
+  return (int64_t)(intptr_t)c;
+  ```)
 ;;; {p}->vec-go__ -- internal: push v[i..n) onto out.
 
 (defn {p}->vec-go__ [^borrow v : {T} out : (Vec {E}) i : int n : int] : (Vec {E})
@@ -379,89 +387,15 @@ TEMPLATE = r""";; ===== {T}: {what} =====
 """
 
 
-SET_FN = """(defn {p}-set! [^borrow v : {T} i : int x : {E}]
-  #fx{{}}
-  #writes v
-  : nil
-  ```c
-  struct {{ int64_t len; {C} *data; void *raw; }} *a = (void*)(intptr_t)v;
-  /* a number, never a pointer: no TUR_REGION_NOTE (Region Store Hooks). */
-  if (i >= 0 && i < a->len) {{ a->data[i] = x; return; }}
-  tur_panic("{p}-set!: index out of bounds");
-  ```)
-"""
-
-# A narrow-typed parameter of an inline-C defn draws TUR-W0037 (the body sees
-# `float` / `int32_t` / `uint8_t`, not int64_t), on every compile that loads the
-# module.  So a narrow type's setter is a macro: the inline-C body takes the
-# wide type, and the macro passes the argument through a typed widening
-# function first, so `(f32vec-set! v 0 5)` is still a type error.  The macro expands at the
-# caller's site, which keeps the out-of-bounds panic on the caller's line.
-SET_MACRO = """;;; {p}-widen__ -- internal: an element as the wide type the inline-C setter takes.
-;;;
-;;; A typed function, so the call checks x against {E} exactly as any call
-;;; does: an `int` variable is refused, not truncated on the way in.
-
-(defn {p}-widen__ [x : {E}] : {W} {widen_x})
-
-(defn {p}-set-w__ [^borrow v : {T} i : int x : {W}]
-  #fx{{}}
-  #writes v
-  : nil
-  ```c
-  struct {{ int64_t len; {C} *data; void *raw; }} *a = (void*)(intptr_t)v;
-  /* a number, never a pointer: no TUR_REGION_NOTE (Region Store Hooks). */
-  if (i >= 0 && i < a->len) {{ a->data[i] = ({C})x; return; }}
-  tur_panic("{p}-set!: index out of bounds");
-  ```)
-;;; {p}-set! -- store x at index i (bounds-checked).  A macro: see below.
-;;;
-;;; Parameters:
-;;;   v -- the array (borrowed)
-;;;   i -- zero-based index; outside [0, len) panics
-;;;   x -- the new element, of type {E}
-;;;
-;;; Note: a macro rather than a function, because an inline-C function with a
-;;; {E} parameter warns (TUR-W0037).  It checks x against {E} (through
-;;; {p}-widen__) and expands at the call, so a panic names the caller's line.
-;;;
-;;; Example:
-;;;   ({p}-set! v 0 {exs})
-;;;
-;;; Since: Phase N0
-
-(defmacro {p}-set! [v i x]
-  (list {p}-set-w__ v i (list {p}-widen__ x)))
-"""
-
-
 def render():
     out = [HDR]
     for t in TYPES:
         d = dict(t)
         d["e0"], d["e1"] = t["ex"]
-        d["init_w"] = t["widen"].format(x="init")
-        d["x_w"] = t["widen"].format(x="x")
         d["s0"], d["s1"] = {
             "f64vec": ("1.5", "2.5"), "f32vec": ("1.5", "2.5"),
             "i64vec": ("1", "2"), "i32vec": ("1", "2"),
             "u8vec": ("1", "2")}[t["p"]]
-        narrow = t["E"] in ("float32", "int32", "uint8")
-        set_doc = """;;; {p}-set! -- store x at index i (bounds-checked).
-;;;
-;;; Parameters:
-;;;   v -- the array (borrowed)
-;;;   i -- zero-based index; outside [0, len) panics
-;;;   x -- the new element
-;;;
-;;; Example:
-;;;   ({p}-set! v 0 {exs})
-;;;
-;;; Since: Phase N0
-
-""".format(**d)
-        d["widen_x"] = t["widen"].format(x="x")
-        d["set_def"] = (SET_MACRO if narrow else set_doc + SET_FN).format(**d)
         out.append(TEMPLATE.format(**d))
     return "".join(out)
 

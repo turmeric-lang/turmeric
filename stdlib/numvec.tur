@@ -48,20 +48,27 @@
 ;;; Since: Phase N0 (simd-and-vectorization-plan)
 (load "stdlib/typeclass.tur")
 
-;;; numvec-count__ -- internal: the number of arguments, as a `+` chain.
+;;; numvec-of__ -- internal: the flat body of every `P-of`.
+;;;
+;;; `(numvec-of__ id new set! zero v x0 x1 ...)` expands to
+;;; `(id (let [v (new n zero)] (do (set! v 0 x0) (set! v 1 x1) ... v)))`.  A
+;;; procedural macro, so it counts its arguments and emits one flat body: a
+;;; template macro recurses once per element and stops at the 256-deep
+;;; expansion limit.  `v` comes from the caller, minted there with `(gensym)`,
+;;; which is fresh against the program's own names (`syntax-gensym` here is
+;;; fresh only against the macro-time env's).
 
-(defmacro numvec-count__ [& xs]
-  (if (empty? xs)
-    0
-    (list + 1 (list numvec-count__ ~@(rest xs)))))
-;;; numvec-fill__ -- internal: store xs at i, i+1, ... with `setter`, yield v.
-
-(defmacro numvec-fill__ [setter v i & xs]
-  (if (empty? xs)
-    v
-    (list do
-      (list setter v i (first xs))
-      (list numvec-fill__ setter v (list + i 1) ~@(rest xs)))))
+(defmacro* numvec-of__ [id new setter zero v & xs]
+  (let [n (syntax-len xs)]
+    (letrec [sets (fn [i : int acc : Syntax] : Syntax
+                    (if (< i 0)
+                      acc
+                      (sets (- i 1)
+                            (syntax-cons `(~setter ~v ~(int->syntax i) ~(syntax-nth xs i)) acc))))]
+      (let [mk   `(~new ~(int->syntax n) ~zero)
+            bind (syntax-vec v mk)
+            body (syntax-cons (sym->syntax "do") (sets (- n 1) (syntax-list v)))]
+        `(~id (let ~bind ~body))))))
 ;; ===== F64Vec: 64-bit floats =====
 ;;; F64Vec -- a fixed-length, unboxed array of 64-bit floats (float).
 ;;;
@@ -71,53 +78,11 @@
 ;;;
 ;;; Since: Phase N0
 (defopaque ^affine F64Vec :int)
-;; --- raw layer (private): allocation.  turi has native twins. ---
-
-(defn __f64vec-new-raw [n : int init : float]
-  #fx{Unsafe}
-  : int
-  ```c
-  /* the data block is 32-byte aligned; n * sizeof wrapped for a huge n would
-     leave a tiny block under a huge recorded len, so the bound is explicit. */
-  if (n < 0 || (uint64_t)n > (SIZE_MAX - 64) / sizeof(double)) {
-    tur_panic("f64vec-new: length out of range");
-    return 0;
-  }
-  struct { int64_t len; double *data; void *raw; } *b = malloc(sizeof(*b));
-  if (!b) { fprintf(stderr, "f64vec-new: out of memory\n"); abort(); }
-  b->len = n;
-  b->raw = malloc((size_t)n * sizeof(double) + 32);
-  if (!b->raw) { fprintf(stderr, "f64vec-new: out of memory\n"); abort(); }
-  b->data = (double *)(((uintptr_t)b->raw + 31) & ~(uintptr_t)31);
-  for (int64_t i = 0; i < n; i++) b->data[i] = (double)init;
-  return (int64_t)(intptr_t)b;
-  ```)
-
-(defn __f64vec-free-raw [b : int]
-  #fx{Unsafe}
-  : nil
-  ```c
-  struct { int64_t len; double *data; void *raw; } *v = (void*)(intptr_t)b;
-  if (v) { free(v->raw); free(v); }
-  ```)
-
-(defn __f64vec-copy-raw [b : int]
-  #fx{Unsafe}
-  : int
-  ```c
-  struct { int64_t len; double *data; void *raw; } *v = (void*)(intptr_t)b;
-  struct { int64_t len; double *data; void *raw; } *c = malloc(sizeof(*c));
-  if (!c) { fprintf(stderr, "f64vec-copy: out of memory\n"); abort(); }
-  c->len = v->len;
-  c->raw = malloc((size_t)v->len * sizeof(double) + 32);
-  if (!c->raw) { fprintf(stderr, "f64vec-copy: out of memory\n"); abort(); }
-  c->data = (double *)(((uintptr_t)c->raw + 31) & ~(uintptr_t)31);
-  if (v->len > 0) memcpy(c->data, v->data, (size_t)v->len * sizeof(double));
-  return (int64_t)(intptr_t)c;
-  ```)
-;; --- public surface.  len / ref / set! are inline-C themselves, not wrappers
-;; over a raw body, so a panic is reported at the CALLER's line (as vec-get's
-;; is) and so turi's natives are keyed by the public names. ---
+;; Every operation that touches the header is an inline-C body of its own,
+;; never a Turmeric wrapper over a raw one, so a panic is reported at the
+;; CALLER's line (as vec-get's is) and turi's natives are keyed by the public
+;; names.  An element store writes a number, never a pointer, so the setter
+;; carries no TUR_REGION_NOTE (CLAUDE.md, "Region Store Hooks").
 ;;; f64vec-new -- allocate a F64Vec of n elements, every one init.
 ;;;
 ;;; Parameters:
@@ -133,8 +98,25 @@
 ;;;
 ;;; Since: Phase N0
 
-(defn f64vec-new [n : int init : float] : F64Vec
-  (:: (unsafe (__f64vec-new-raw n init)) :F64Vec))
+(defn f64vec-new [n : int init : float]
+  #fx{}
+  : F64Vec
+  ```c
+  /* the data block is 32-byte aligned; n * sizeof wrapped for a huge n would
+     leave a tiny block under a huge recorded len, so the bound is explicit. */
+  if (n < 0 || (uint64_t)n > (SIZE_MAX - 64) / sizeof(double)) {
+    tur_panic("f64vec-new: length out of range");
+    return 0;
+  }
+  struct { int64_t len; double *data; void *raw; } *b = malloc(sizeof(*b));
+  if (!b) { fprintf(stderr, "f64vec-new: out of memory\n"); abort(); }
+  b->len = n;
+  b->raw = malloc((size_t)n * sizeof(double) + 32);
+  if (!b->raw) { fprintf(stderr, "f64vec-new: out of memory\n"); abort(); }
+  b->data = (double *)(((uintptr_t)b->raw + 31) & ~(uintptr_t)31);
+  for (int64_t i = 0; i < n; i++) b->data[i] = init;
+  return (int64_t)(intptr_t)b;
+  ```)
 ;;; f64vec-id__ -- internal: hand the array straight back.
 ;;;
 ;;; `f64vec-of` wraps its `let` in this so the binding that receives the result is
@@ -157,9 +139,8 @@
 ;;; Since: Phase N0
 
 (defmacro f64vec-of [& xs]
-  (list f64vec-id__
-        (list let `[__nv (f64vec-new (numvec-count__ ~@xs) 0.0)]
-          (list numvec-fill__ f64vec-set! __nv 0 ~@xs))))
+  (let [v (gensym "nv")]
+    (list numvec-of__ f64vec-id__ f64vec-new f64vec-set! 0.0 v ~@xs)))
 ;;; f64vec-free -- release a F64Vec now, consuming it.
 ;;;
 ;;; Rarely needed: a let-bound F64Vec is freed at scope exit.  Call it to
@@ -173,8 +154,13 @@
 ;;;
 ;;; Since: Phase N0
 
-(defn f64vec-free [v : F64Vec] : nil
-  (unsafe (__f64vec-free-raw (:: v :int))))
+(defn f64vec-free [v : F64Vec]
+  #fx{}
+  : nil
+  ```c
+  struct { int64_t len; double *data; void *raw; } *a = (void*)(intptr_t)v;
+  if (a) { free(a->raw); free(a); }
+  ```)
 ;;; Drop [F64Vec] -- free the array when a bound F64Vec dies unmoved.
 
 (definstance Drop [F64Vec] (drop [x] : void (f64vec-free x)))
@@ -237,25 +223,12 @@
 ;;;
 ;;; Since: Phase N0
 
-;;; f64vec-set! -- store x at index i (bounds-checked).
-;;;
-;;; Parameters:
-;;;   v -- the array (borrowed)
-;;;   i -- zero-based index; outside [0, len) panics
-;;;   x -- the new element
-;;;
-;;; Example:
-;;;   (f64vec-set! v 0 7.1)
-;;;
-;;; Since: Phase N0
-
 (defn f64vec-set! [^borrow v : F64Vec i : int x : float]
   #fx{}
   #writes v
   : nil
   ```c
   struct { int64_t len; double *data; void *raw; } *a = (void*)(intptr_t)v;
-  /* a number, never a pointer: no TUR_REGION_NOTE (Region Store Hooks). */
   if (i >= 0 && i < a->len) { a->data[i] = x; return; }
   tur_panic("f64vec-set!: index out of bounds");
   ```)
@@ -272,8 +245,20 @@
 ;;;
 ;;; Since: Phase N0
 
-(defn f64vec-copy [^borrow v : F64Vec] : F64Vec
-  (:: (unsafe (__f64vec-copy-raw (:: v :int))) :F64Vec))
+(defn f64vec-copy [^borrow v : F64Vec]
+  #fx{}
+  : F64Vec
+  ```c
+  struct { int64_t len; double *data; void *raw; } *a = (void*)(intptr_t)v;
+  struct { int64_t len; double *data; void *raw; } *c = malloc(sizeof(*c));
+  if (!c) { fprintf(stderr, "f64vec-copy: out of memory\n"); abort(); }
+  c->len = a->len;
+  c->raw = malloc((size_t)a->len * sizeof(double) + 32);
+  if (!c->raw) { fprintf(stderr, "f64vec-copy: out of memory\n"); abort(); }
+  c->data = (double *)(((uintptr_t)c->raw + 31) & ~(uintptr_t)31);
+  if (a->len > 0) memcpy(c->data, a->data, (size_t)a->len * sizeof(double));
+  return (int64_t)(intptr_t)c;
+  ```)
 ;;; f64vec->vec-go__ -- internal: push v[i..n) onto out.
 
 (defn f64vec->vec-go__ [^borrow v : F64Vec out : (Vec float) i : int n : int] : (Vec float)
@@ -366,53 +351,11 @@
 ;;;
 ;;; Since: Phase N0
 (defopaque ^affine F32Vec :int)
-;; --- raw layer (private): allocation.  turi has native twins. ---
-
-(defn __f32vec-new-raw [n : int init : float]
-  #fx{Unsafe}
-  : int
-  ```c
-  /* the data block is 32-byte aligned; n * sizeof wrapped for a huge n would
-     leave a tiny block under a huge recorded len, so the bound is explicit. */
-  if (n < 0 || (uint64_t)n > (SIZE_MAX - 64) / sizeof(float)) {
-    tur_panic("f32vec-new: length out of range");
-    return 0;
-  }
-  struct { int64_t len; float *data; void *raw; } *b = malloc(sizeof(*b));
-  if (!b) { fprintf(stderr, "f32vec-new: out of memory\n"); abort(); }
-  b->len = n;
-  b->raw = malloc((size_t)n * sizeof(float) + 32);
-  if (!b->raw) { fprintf(stderr, "f32vec-new: out of memory\n"); abort(); }
-  b->data = (float *)(((uintptr_t)b->raw + 31) & ~(uintptr_t)31);
-  for (int64_t i = 0; i < n; i++) b->data[i] = (float)init;
-  return (int64_t)(intptr_t)b;
-  ```)
-
-(defn __f32vec-free-raw [b : int]
-  #fx{Unsafe}
-  : nil
-  ```c
-  struct { int64_t len; float *data; void *raw; } *v = (void*)(intptr_t)b;
-  if (v) { free(v->raw); free(v); }
-  ```)
-
-(defn __f32vec-copy-raw [b : int]
-  #fx{Unsafe}
-  : int
-  ```c
-  struct { int64_t len; float *data; void *raw; } *v = (void*)(intptr_t)b;
-  struct { int64_t len; float *data; void *raw; } *c = malloc(sizeof(*c));
-  if (!c) { fprintf(stderr, "f32vec-copy: out of memory\n"); abort(); }
-  c->len = v->len;
-  c->raw = malloc((size_t)v->len * sizeof(float) + 32);
-  if (!c->raw) { fprintf(stderr, "f32vec-copy: out of memory\n"); abort(); }
-  c->data = (float *)(((uintptr_t)c->raw + 31) & ~(uintptr_t)31);
-  if (v->len > 0) memcpy(c->data, v->data, (size_t)v->len * sizeof(float));
-  return (int64_t)(intptr_t)c;
-  ```)
-;; --- public surface.  len / ref / set! are inline-C themselves, not wrappers
-;; over a raw body, so a panic is reported at the CALLER's line (as vec-get's
-;; is) and so turi's natives are keyed by the public names. ---
+;; Every operation that touches the header is an inline-C body of its own,
+;; never a Turmeric wrapper over a raw one, so a panic is reported at the
+;; CALLER's line (as vec-get's is) and turi's natives are keyed by the public
+;; names.  An element store writes a number, never a pointer, so the setter
+;; carries no TUR_REGION_NOTE (CLAUDE.md, "Region Store Hooks").
 ;;; f32vec-new -- allocate a F32Vec of n elements, every one init.
 ;;;
 ;;; Parameters:
@@ -428,8 +371,25 @@
 ;;;
 ;;; Since: Phase N0
 
-(defn f32vec-new [n : int init : float32] : F32Vec
-  (:: (unsafe (__f32vec-new-raw n (as float init))) :F32Vec))
+(defn f32vec-new [n : int init : float32]
+  #fx{}
+  : F32Vec
+  ```c
+  /* the data block is 32-byte aligned; n * sizeof wrapped for a huge n would
+     leave a tiny block under a huge recorded len, so the bound is explicit. */
+  if (n < 0 || (uint64_t)n > (SIZE_MAX - 64) / sizeof(float)) {
+    tur_panic("f32vec-new: length out of range");
+    return 0;
+  }
+  struct { int64_t len; float *data; void *raw; } *b = malloc(sizeof(*b));
+  if (!b) { fprintf(stderr, "f32vec-new: out of memory\n"); abort(); }
+  b->len = n;
+  b->raw = malloc((size_t)n * sizeof(float) + 32);
+  if (!b->raw) { fprintf(stderr, "f32vec-new: out of memory\n"); abort(); }
+  b->data = (float *)(((uintptr_t)b->raw + 31) & ~(uintptr_t)31);
+  for (int64_t i = 0; i < n; i++) b->data[i] = init;
+  return (int64_t)(intptr_t)b;
+  ```)
 ;;; f32vec-id__ -- internal: hand the array straight back.
 ;;;
 ;;; `f32vec-of` wraps its `let` in this so the binding that receives the result is
@@ -452,9 +412,8 @@
 ;;; Since: Phase N0
 
 (defmacro f32vec-of [& xs]
-  (list f32vec-id__
-        (list let `[__nv (f32vec-new (numvec-count__ ~@xs) (as float32 0.0))]
-          (list numvec-fill__ f32vec-set! __nv 0 ~@xs))))
+  (let [v (gensym "nv")]
+    (list numvec-of__ f32vec-id__ f32vec-new f32vec-set! (list as float32 0.0) v ~@xs)))
 ;;; f32vec-free -- release a F32Vec now, consuming it.
 ;;;
 ;;; Rarely needed: a let-bound F32Vec is freed at scope exit.  Call it to
@@ -468,8 +427,13 @@
 ;;;
 ;;; Since: Phase N0
 
-(defn f32vec-free [v : F32Vec] : nil
-  (unsafe (__f32vec-free-raw (:: v :int))))
+(defn f32vec-free [v : F32Vec]
+  #fx{}
+  : nil
+  ```c
+  struct { int64_t len; float *data; void *raw; } *a = (void*)(intptr_t)v;
+  if (a) { free(a->raw); free(a); }
+  ```)
 ;;; Drop [F32Vec] -- free the array when a bound F32Vec dies unmoved.
 
 (definstance Drop [F32Vec] (drop [x] : void (f32vec-free x)))
@@ -532,41 +496,15 @@
 ;;;
 ;;; Since: Phase N0
 
-;;; f32vec-widen__ -- internal: an element as the wide type the inline-C setter takes.
-;;;
-;;; A typed function, so the call checks x against float32 exactly as any call
-;;; does: an `int` variable is refused, not truncated on the way in.
-
-(defn f32vec-widen__ [x : float32] : float (as float x))
-
-(defn f32vec-set-w__ [^borrow v : F32Vec i : int x : float]
+(defn f32vec-set! [^borrow v : F32Vec i : int x : float32]
   #fx{}
   #writes v
   : nil
   ```c
   struct { int64_t len; float *data; void *raw; } *a = (void*)(intptr_t)v;
-  /* a number, never a pointer: no TUR_REGION_NOTE (Region Store Hooks). */
-  if (i >= 0 && i < a->len) { a->data[i] = (float)x; return; }
+  if (i >= 0 && i < a->len) { a->data[i] = x; return; }
   tur_panic("f32vec-set!: index out of bounds");
   ```)
-;;; f32vec-set! -- store x at index i (bounds-checked).  A macro: see below.
-;;;
-;;; Parameters:
-;;;   v -- the array (borrowed)
-;;;   i -- zero-based index; outside [0, len) panics
-;;;   x -- the new element, of type float32
-;;;
-;;; Note: a macro rather than a function, because an inline-C function with a
-;;; float32 parameter warns (TUR-W0037).  It checks x against float32 (through
-;;; f32vec-widen__) and expands at the call, so a panic names the caller's line.
-;;;
-;;; Example:
-;;;   (f32vec-set! v 0 (:: 3.25 float32))
-;;;
-;;; Since: Phase N0
-
-(defmacro f32vec-set! [v i x]
-  (list f32vec-set-w__ v i (list f32vec-widen__ x)))
 ;;; f32vec-copy -- a fresh F32Vec with the same elements.
 ;;;
 ;;; Parameters:
@@ -580,8 +518,20 @@
 ;;;
 ;;; Since: Phase N0
 
-(defn f32vec-copy [^borrow v : F32Vec] : F32Vec
-  (:: (unsafe (__f32vec-copy-raw (:: v :int))) :F32Vec))
+(defn f32vec-copy [^borrow v : F32Vec]
+  #fx{}
+  : F32Vec
+  ```c
+  struct { int64_t len; float *data; void *raw; } *a = (void*)(intptr_t)v;
+  struct { int64_t len; float *data; void *raw; } *c = malloc(sizeof(*c));
+  if (!c) { fprintf(stderr, "f32vec-copy: out of memory\n"); abort(); }
+  c->len = a->len;
+  c->raw = malloc((size_t)a->len * sizeof(float) + 32);
+  if (!c->raw) { fprintf(stderr, "f32vec-copy: out of memory\n"); abort(); }
+  c->data = (float *)(((uintptr_t)c->raw + 31) & ~(uintptr_t)31);
+  if (a->len > 0) memcpy(c->data, a->data, (size_t)a->len * sizeof(float));
+  return (int64_t)(intptr_t)c;
+  ```)
 ;;; f32vec->vec-go__ -- internal: push v[i..n) onto out.
 
 (defn f32vec->vec-go__ [^borrow v : F32Vec out : (Vec float32) i : int n : int] : (Vec float32)
@@ -674,53 +624,11 @@
 ;;;
 ;;; Since: Phase N0
 (defopaque ^affine I64Vec :int)
-;; --- raw layer (private): allocation.  turi has native twins. ---
-
-(defn __i64vec-new-raw [n : int init : int]
-  #fx{Unsafe}
-  : int
-  ```c
-  /* the data block is 32-byte aligned; n * sizeof wrapped for a huge n would
-     leave a tiny block under a huge recorded len, so the bound is explicit. */
-  if (n < 0 || (uint64_t)n > (SIZE_MAX - 64) / sizeof(int64_t)) {
-    tur_panic("i64vec-new: length out of range");
-    return 0;
-  }
-  struct { int64_t len; int64_t *data; void *raw; } *b = malloc(sizeof(*b));
-  if (!b) { fprintf(stderr, "i64vec-new: out of memory\n"); abort(); }
-  b->len = n;
-  b->raw = malloc((size_t)n * sizeof(int64_t) + 32);
-  if (!b->raw) { fprintf(stderr, "i64vec-new: out of memory\n"); abort(); }
-  b->data = (int64_t *)(((uintptr_t)b->raw + 31) & ~(uintptr_t)31);
-  for (int64_t i = 0; i < n; i++) b->data[i] = (int64_t)init;
-  return (int64_t)(intptr_t)b;
-  ```)
-
-(defn __i64vec-free-raw [b : int]
-  #fx{Unsafe}
-  : nil
-  ```c
-  struct { int64_t len; int64_t *data; void *raw; } *v = (void*)(intptr_t)b;
-  if (v) { free(v->raw); free(v); }
-  ```)
-
-(defn __i64vec-copy-raw [b : int]
-  #fx{Unsafe}
-  : int
-  ```c
-  struct { int64_t len; int64_t *data; void *raw; } *v = (void*)(intptr_t)b;
-  struct { int64_t len; int64_t *data; void *raw; } *c = malloc(sizeof(*c));
-  if (!c) { fprintf(stderr, "i64vec-copy: out of memory\n"); abort(); }
-  c->len = v->len;
-  c->raw = malloc((size_t)v->len * sizeof(int64_t) + 32);
-  if (!c->raw) { fprintf(stderr, "i64vec-copy: out of memory\n"); abort(); }
-  c->data = (int64_t *)(((uintptr_t)c->raw + 31) & ~(uintptr_t)31);
-  if (v->len > 0) memcpy(c->data, v->data, (size_t)v->len * sizeof(int64_t));
-  return (int64_t)(intptr_t)c;
-  ```)
-;; --- public surface.  len / ref / set! are inline-C themselves, not wrappers
-;; over a raw body, so a panic is reported at the CALLER's line (as vec-get's
-;; is) and so turi's natives are keyed by the public names. ---
+;; Every operation that touches the header is an inline-C body of its own,
+;; never a Turmeric wrapper over a raw one, so a panic is reported at the
+;; CALLER's line (as vec-get's is) and turi's natives are keyed by the public
+;; names.  An element store writes a number, never a pointer, so the setter
+;; carries no TUR_REGION_NOTE (CLAUDE.md, "Region Store Hooks").
 ;;; i64vec-new -- allocate a I64Vec of n elements, every one init.
 ;;;
 ;;; Parameters:
@@ -736,8 +644,25 @@
 ;;;
 ;;; Since: Phase N0
 
-(defn i64vec-new [n : int init : int] : I64Vec
-  (:: (unsafe (__i64vec-new-raw n init)) :I64Vec))
+(defn i64vec-new [n : int init : int]
+  #fx{}
+  : I64Vec
+  ```c
+  /* the data block is 32-byte aligned; n * sizeof wrapped for a huge n would
+     leave a tiny block under a huge recorded len, so the bound is explicit. */
+  if (n < 0 || (uint64_t)n > (SIZE_MAX - 64) / sizeof(int64_t)) {
+    tur_panic("i64vec-new: length out of range");
+    return 0;
+  }
+  struct { int64_t len; int64_t *data; void *raw; } *b = malloc(sizeof(*b));
+  if (!b) { fprintf(stderr, "i64vec-new: out of memory\n"); abort(); }
+  b->len = n;
+  b->raw = malloc((size_t)n * sizeof(int64_t) + 32);
+  if (!b->raw) { fprintf(stderr, "i64vec-new: out of memory\n"); abort(); }
+  b->data = (int64_t *)(((uintptr_t)b->raw + 31) & ~(uintptr_t)31);
+  for (int64_t i = 0; i < n; i++) b->data[i] = init;
+  return (int64_t)(intptr_t)b;
+  ```)
 ;;; i64vec-id__ -- internal: hand the array straight back.
 ;;;
 ;;; `i64vec-of` wraps its `let` in this so the binding that receives the result is
@@ -760,9 +685,8 @@
 ;;; Since: Phase N0
 
 (defmacro i64vec-of [& xs]
-  (list i64vec-id__
-        (list let `[__nv (i64vec-new (numvec-count__ ~@xs) 0)]
-          (list numvec-fill__ i64vec-set! __nv 0 ~@xs))))
+  (let [v (gensym "nv")]
+    (list numvec-of__ i64vec-id__ i64vec-new i64vec-set! 0 v ~@xs)))
 ;;; i64vec-free -- release a I64Vec now, consuming it.
 ;;;
 ;;; Rarely needed: a let-bound I64Vec is freed at scope exit.  Call it to
@@ -776,8 +700,13 @@
 ;;;
 ;;; Since: Phase N0
 
-(defn i64vec-free [v : I64Vec] : nil
-  (unsafe (__i64vec-free-raw (:: v :int))))
+(defn i64vec-free [v : I64Vec]
+  #fx{}
+  : nil
+  ```c
+  struct { int64_t len; int64_t *data; void *raw; } *a = (void*)(intptr_t)v;
+  if (a) { free(a->raw); free(a); }
+  ```)
 ;;; Drop [I64Vec] -- free the array when a bound I64Vec dies unmoved.
 
 (definstance Drop [I64Vec] (drop [x] : void (i64vec-free x)))
@@ -840,25 +769,12 @@
 ;;;
 ;;; Since: Phase N0
 
-;;; i64vec-set! -- store x at index i (bounds-checked).
-;;;
-;;; Parameters:
-;;;   v -- the array (borrowed)
-;;;   i -- zero-based index; outside [0, len) panics
-;;;   x -- the new element
-;;;
-;;; Example:
-;;;   (i64vec-set! v 0 7)
-;;;
-;;; Since: Phase N0
-
 (defn i64vec-set! [^borrow v : I64Vec i : int x : int]
   #fx{}
   #writes v
   : nil
   ```c
   struct { int64_t len; int64_t *data; void *raw; } *a = (void*)(intptr_t)v;
-  /* a number, never a pointer: no TUR_REGION_NOTE (Region Store Hooks). */
   if (i >= 0 && i < a->len) { a->data[i] = x; return; }
   tur_panic("i64vec-set!: index out of bounds");
   ```)
@@ -875,8 +791,20 @@
 ;;;
 ;;; Since: Phase N0
 
-(defn i64vec-copy [^borrow v : I64Vec] : I64Vec
-  (:: (unsafe (__i64vec-copy-raw (:: v :int))) :I64Vec))
+(defn i64vec-copy [^borrow v : I64Vec]
+  #fx{}
+  : I64Vec
+  ```c
+  struct { int64_t len; int64_t *data; void *raw; } *a = (void*)(intptr_t)v;
+  struct { int64_t len; int64_t *data; void *raw; } *c = malloc(sizeof(*c));
+  if (!c) { fprintf(stderr, "i64vec-copy: out of memory\n"); abort(); }
+  c->len = a->len;
+  c->raw = malloc((size_t)a->len * sizeof(int64_t) + 32);
+  if (!c->raw) { fprintf(stderr, "i64vec-copy: out of memory\n"); abort(); }
+  c->data = (int64_t *)(((uintptr_t)c->raw + 31) & ~(uintptr_t)31);
+  if (a->len > 0) memcpy(c->data, a->data, (size_t)a->len * sizeof(int64_t));
+  return (int64_t)(intptr_t)c;
+  ```)
 ;;; i64vec->vec-go__ -- internal: push v[i..n) onto out.
 
 (defn i64vec->vec-go__ [^borrow v : I64Vec out : (Vec int) i : int n : int] : (Vec int)
@@ -969,53 +897,11 @@
 ;;;
 ;;; Since: Phase N0
 (defopaque ^affine I32Vec :int)
-;; --- raw layer (private): allocation.  turi has native twins. ---
-
-(defn __i32vec-new-raw [n : int init : int]
-  #fx{Unsafe}
-  : int
-  ```c
-  /* the data block is 32-byte aligned; n * sizeof wrapped for a huge n would
-     leave a tiny block under a huge recorded len, so the bound is explicit. */
-  if (n < 0 || (uint64_t)n > (SIZE_MAX - 64) / sizeof(int32_t)) {
-    tur_panic("i32vec-new: length out of range");
-    return 0;
-  }
-  struct { int64_t len; int32_t *data; void *raw; } *b = malloc(sizeof(*b));
-  if (!b) { fprintf(stderr, "i32vec-new: out of memory\n"); abort(); }
-  b->len = n;
-  b->raw = malloc((size_t)n * sizeof(int32_t) + 32);
-  if (!b->raw) { fprintf(stderr, "i32vec-new: out of memory\n"); abort(); }
-  b->data = (int32_t *)(((uintptr_t)b->raw + 31) & ~(uintptr_t)31);
-  for (int64_t i = 0; i < n; i++) b->data[i] = (int32_t)init;
-  return (int64_t)(intptr_t)b;
-  ```)
-
-(defn __i32vec-free-raw [b : int]
-  #fx{Unsafe}
-  : nil
-  ```c
-  struct { int64_t len; int32_t *data; void *raw; } *v = (void*)(intptr_t)b;
-  if (v) { free(v->raw); free(v); }
-  ```)
-
-(defn __i32vec-copy-raw [b : int]
-  #fx{Unsafe}
-  : int
-  ```c
-  struct { int64_t len; int32_t *data; void *raw; } *v = (void*)(intptr_t)b;
-  struct { int64_t len; int32_t *data; void *raw; } *c = malloc(sizeof(*c));
-  if (!c) { fprintf(stderr, "i32vec-copy: out of memory\n"); abort(); }
-  c->len = v->len;
-  c->raw = malloc((size_t)v->len * sizeof(int32_t) + 32);
-  if (!c->raw) { fprintf(stderr, "i32vec-copy: out of memory\n"); abort(); }
-  c->data = (int32_t *)(((uintptr_t)c->raw + 31) & ~(uintptr_t)31);
-  if (v->len > 0) memcpy(c->data, v->data, (size_t)v->len * sizeof(int32_t));
-  return (int64_t)(intptr_t)c;
-  ```)
-;; --- public surface.  len / ref / set! are inline-C themselves, not wrappers
-;; over a raw body, so a panic is reported at the CALLER's line (as vec-get's
-;; is) and so turi's natives are keyed by the public names. ---
+;; Every operation that touches the header is an inline-C body of its own,
+;; never a Turmeric wrapper over a raw one, so a panic is reported at the
+;; CALLER's line (as vec-get's is) and turi's natives are keyed by the public
+;; names.  An element store writes a number, never a pointer, so the setter
+;; carries no TUR_REGION_NOTE (CLAUDE.md, "Region Store Hooks").
 ;;; i32vec-new -- allocate a I32Vec of n elements, every one init.
 ;;;
 ;;; Parameters:
@@ -1031,8 +917,25 @@
 ;;;
 ;;; Since: Phase N0
 
-(defn i32vec-new [n : int init : int32] : I32Vec
-  (:: (unsafe (__i32vec-new-raw n (as int init))) :I32Vec))
+(defn i32vec-new [n : int init : int32]
+  #fx{}
+  : I32Vec
+  ```c
+  /* the data block is 32-byte aligned; n * sizeof wrapped for a huge n would
+     leave a tiny block under a huge recorded len, so the bound is explicit. */
+  if (n < 0 || (uint64_t)n > (SIZE_MAX - 64) / sizeof(int32_t)) {
+    tur_panic("i32vec-new: length out of range");
+    return 0;
+  }
+  struct { int64_t len; int32_t *data; void *raw; } *b = malloc(sizeof(*b));
+  if (!b) { fprintf(stderr, "i32vec-new: out of memory\n"); abort(); }
+  b->len = n;
+  b->raw = malloc((size_t)n * sizeof(int32_t) + 32);
+  if (!b->raw) { fprintf(stderr, "i32vec-new: out of memory\n"); abort(); }
+  b->data = (int32_t *)(((uintptr_t)b->raw + 31) & ~(uintptr_t)31);
+  for (int64_t i = 0; i < n; i++) b->data[i] = init;
+  return (int64_t)(intptr_t)b;
+  ```)
 ;;; i32vec-id__ -- internal: hand the array straight back.
 ;;;
 ;;; `i32vec-of` wraps its `let` in this so the binding that receives the result is
@@ -1055,9 +958,8 @@
 ;;; Since: Phase N0
 
 (defmacro i32vec-of [& xs]
-  (list i32vec-id__
-        (list let `[__nv (i32vec-new (numvec-count__ ~@xs) (as int32 0))]
-          (list numvec-fill__ i32vec-set! __nv 0 ~@xs))))
+  (let [v (gensym "nv")]
+    (list numvec-of__ i32vec-id__ i32vec-new i32vec-set! (list as int32 0) v ~@xs)))
 ;;; i32vec-free -- release a I32Vec now, consuming it.
 ;;;
 ;;; Rarely needed: a let-bound I32Vec is freed at scope exit.  Call it to
@@ -1071,8 +973,13 @@
 ;;;
 ;;; Since: Phase N0
 
-(defn i32vec-free [v : I32Vec] : nil
-  (unsafe (__i32vec-free-raw (:: v :int))))
+(defn i32vec-free [v : I32Vec]
+  #fx{}
+  : nil
+  ```c
+  struct { int64_t len; int32_t *data; void *raw; } *a = (void*)(intptr_t)v;
+  if (a) { free(a->raw); free(a); }
+  ```)
 ;;; Drop [I32Vec] -- free the array when a bound I32Vec dies unmoved.
 
 (definstance Drop [I32Vec] (drop [x] : void (i32vec-free x)))
@@ -1135,41 +1042,15 @@
 ;;;
 ;;; Since: Phase N0
 
-;;; i32vec-widen__ -- internal: an element as the wide type the inline-C setter takes.
-;;;
-;;; A typed function, so the call checks x against int32 exactly as any call
-;;; does: an `int` variable is refused, not truncated on the way in.
-
-(defn i32vec-widen__ [x : int32] : int (as int x))
-
-(defn i32vec-set-w__ [^borrow v : I32Vec i : int x : int]
+(defn i32vec-set! [^borrow v : I32Vec i : int x : int32]
   #fx{}
   #writes v
   : nil
   ```c
   struct { int64_t len; int32_t *data; void *raw; } *a = (void*)(intptr_t)v;
-  /* a number, never a pointer: no TUR_REGION_NOTE (Region Store Hooks). */
-  if (i >= 0 && i < a->len) { a->data[i] = (int32_t)x; return; }
+  if (i >= 0 && i < a->len) { a->data[i] = x; return; }
   tur_panic("i32vec-set!: index out of bounds");
   ```)
-;;; i32vec-set! -- store x at index i (bounds-checked).  A macro: see below.
-;;;
-;;; Parameters:
-;;;   v -- the array (borrowed)
-;;;   i -- zero-based index; outside [0, len) panics
-;;;   x -- the new element, of type int32
-;;;
-;;; Note: a macro rather than a function, because an inline-C function with a
-;;; int32 parameter warns (TUR-W0037).  It checks x against int32 (through
-;;; i32vec-widen__) and expands at the call, so a panic names the caller's line.
-;;;
-;;; Example:
-;;;   (i32vec-set! v 0 (as int32 7))
-;;;
-;;; Since: Phase N0
-
-(defmacro i32vec-set! [v i x]
-  (list i32vec-set-w__ v i (list i32vec-widen__ x)))
 ;;; i32vec-copy -- a fresh I32Vec with the same elements.
 ;;;
 ;;; Parameters:
@@ -1183,8 +1064,20 @@
 ;;;
 ;;; Since: Phase N0
 
-(defn i32vec-copy [^borrow v : I32Vec] : I32Vec
-  (:: (unsafe (__i32vec-copy-raw (:: v :int))) :I32Vec))
+(defn i32vec-copy [^borrow v : I32Vec]
+  #fx{}
+  : I32Vec
+  ```c
+  struct { int64_t len; int32_t *data; void *raw; } *a = (void*)(intptr_t)v;
+  struct { int64_t len; int32_t *data; void *raw; } *c = malloc(sizeof(*c));
+  if (!c) { fprintf(stderr, "i32vec-copy: out of memory\n"); abort(); }
+  c->len = a->len;
+  c->raw = malloc((size_t)a->len * sizeof(int32_t) + 32);
+  if (!c->raw) { fprintf(stderr, "i32vec-copy: out of memory\n"); abort(); }
+  c->data = (int32_t *)(((uintptr_t)c->raw + 31) & ~(uintptr_t)31);
+  if (a->len > 0) memcpy(c->data, a->data, (size_t)a->len * sizeof(int32_t));
+  return (int64_t)(intptr_t)c;
+  ```)
 ;;; i32vec->vec-go__ -- internal: push v[i..n) onto out.
 
 (defn i32vec->vec-go__ [^borrow v : I32Vec out : (Vec int32) i : int n : int] : (Vec int32)
@@ -1277,53 +1170,11 @@
 ;;;
 ;;; Since: Phase N0
 (defopaque ^affine U8Vec :int)
-;; --- raw layer (private): allocation.  turi has native twins. ---
-
-(defn __u8vec-new-raw [n : int init : int]
-  #fx{Unsafe}
-  : int
-  ```c
-  /* the data block is 32-byte aligned; n * sizeof wrapped for a huge n would
-     leave a tiny block under a huge recorded len, so the bound is explicit. */
-  if (n < 0 || (uint64_t)n > (SIZE_MAX - 64) / sizeof(uint8_t)) {
-    tur_panic("u8vec-new: length out of range");
-    return 0;
-  }
-  struct { int64_t len; uint8_t *data; void *raw; } *b = malloc(sizeof(*b));
-  if (!b) { fprintf(stderr, "u8vec-new: out of memory\n"); abort(); }
-  b->len = n;
-  b->raw = malloc((size_t)n * sizeof(uint8_t) + 32);
-  if (!b->raw) { fprintf(stderr, "u8vec-new: out of memory\n"); abort(); }
-  b->data = (uint8_t *)(((uintptr_t)b->raw + 31) & ~(uintptr_t)31);
-  for (int64_t i = 0; i < n; i++) b->data[i] = (uint8_t)init;
-  return (int64_t)(intptr_t)b;
-  ```)
-
-(defn __u8vec-free-raw [b : int]
-  #fx{Unsafe}
-  : nil
-  ```c
-  struct { int64_t len; uint8_t *data; void *raw; } *v = (void*)(intptr_t)b;
-  if (v) { free(v->raw); free(v); }
-  ```)
-
-(defn __u8vec-copy-raw [b : int]
-  #fx{Unsafe}
-  : int
-  ```c
-  struct { int64_t len; uint8_t *data; void *raw; } *v = (void*)(intptr_t)b;
-  struct { int64_t len; uint8_t *data; void *raw; } *c = malloc(sizeof(*c));
-  if (!c) { fprintf(stderr, "u8vec-copy: out of memory\n"); abort(); }
-  c->len = v->len;
-  c->raw = malloc((size_t)v->len * sizeof(uint8_t) + 32);
-  if (!c->raw) { fprintf(stderr, "u8vec-copy: out of memory\n"); abort(); }
-  c->data = (uint8_t *)(((uintptr_t)c->raw + 31) & ~(uintptr_t)31);
-  if (v->len > 0) memcpy(c->data, v->data, (size_t)v->len * sizeof(uint8_t));
-  return (int64_t)(intptr_t)c;
-  ```)
-;; --- public surface.  len / ref / set! are inline-C themselves, not wrappers
-;; over a raw body, so a panic is reported at the CALLER's line (as vec-get's
-;; is) and so turi's natives are keyed by the public names. ---
+;; Every operation that touches the header is an inline-C body of its own,
+;; never a Turmeric wrapper over a raw one, so a panic is reported at the
+;; CALLER's line (as vec-get's is) and turi's natives are keyed by the public
+;; names.  An element store writes a number, never a pointer, so the setter
+;; carries no TUR_REGION_NOTE (CLAUDE.md, "Region Store Hooks").
 ;;; u8vec-new -- allocate a U8Vec of n elements, every one init.
 ;;;
 ;;; Parameters:
@@ -1339,8 +1190,25 @@
 ;;;
 ;;; Since: Phase N0
 
-(defn u8vec-new [n : int init : uint8] : U8Vec
-  (:: (unsafe (__u8vec-new-raw n (as int init))) :U8Vec))
+(defn u8vec-new [n : int init : uint8]
+  #fx{}
+  : U8Vec
+  ```c
+  /* the data block is 32-byte aligned; n * sizeof wrapped for a huge n would
+     leave a tiny block under a huge recorded len, so the bound is explicit. */
+  if (n < 0 || (uint64_t)n > (SIZE_MAX - 64) / sizeof(uint8_t)) {
+    tur_panic("u8vec-new: length out of range");
+    return 0;
+  }
+  struct { int64_t len; uint8_t *data; void *raw; } *b = malloc(sizeof(*b));
+  if (!b) { fprintf(stderr, "u8vec-new: out of memory\n"); abort(); }
+  b->len = n;
+  b->raw = malloc((size_t)n * sizeof(uint8_t) + 32);
+  if (!b->raw) { fprintf(stderr, "u8vec-new: out of memory\n"); abort(); }
+  b->data = (uint8_t *)(((uintptr_t)b->raw + 31) & ~(uintptr_t)31);
+  for (int64_t i = 0; i < n; i++) b->data[i] = init;
+  return (int64_t)(intptr_t)b;
+  ```)
 ;;; u8vec-id__ -- internal: hand the array straight back.
 ;;;
 ;;; `u8vec-of` wraps its `let` in this so the binding that receives the result is
@@ -1363,9 +1231,8 @@
 ;;; Since: Phase N0
 
 (defmacro u8vec-of [& xs]
-  (list u8vec-id__
-        (list let `[__nv (u8vec-new (numvec-count__ ~@xs) (as uint8 0))]
-          (list numvec-fill__ u8vec-set! __nv 0 ~@xs))))
+  (let [v (gensym "nv")]
+    (list numvec-of__ u8vec-id__ u8vec-new u8vec-set! (list as uint8 0) v ~@xs)))
 ;;; u8vec-free -- release a U8Vec now, consuming it.
 ;;;
 ;;; Rarely needed: a let-bound U8Vec is freed at scope exit.  Call it to
@@ -1379,8 +1246,13 @@
 ;;;
 ;;; Since: Phase N0
 
-(defn u8vec-free [v : U8Vec] : nil
-  (unsafe (__u8vec-free-raw (:: v :int))))
+(defn u8vec-free [v : U8Vec]
+  #fx{}
+  : nil
+  ```c
+  struct { int64_t len; uint8_t *data; void *raw; } *a = (void*)(intptr_t)v;
+  if (a) { free(a->raw); free(a); }
+  ```)
 ;;; Drop [U8Vec] -- free the array when a bound U8Vec dies unmoved.
 
 (definstance Drop [U8Vec] (drop [x] : void (u8vec-free x)))
@@ -1443,41 +1315,15 @@
 ;;;
 ;;; Since: Phase N0
 
-;;; u8vec-widen__ -- internal: an element as the wide type the inline-C setter takes.
-;;;
-;;; A typed function, so the call checks x against uint8 exactly as any call
-;;; does: an `int` variable is refused, not truncated on the way in.
-
-(defn u8vec-widen__ [x : uint8] : int (as int x))
-
-(defn u8vec-set-w__ [^borrow v : U8Vec i : int x : int]
+(defn u8vec-set! [^borrow v : U8Vec i : int x : uint8]
   #fx{}
   #writes v
   : nil
   ```c
   struct { int64_t len; uint8_t *data; void *raw; } *a = (void*)(intptr_t)v;
-  /* a number, never a pointer: no TUR_REGION_NOTE (Region Store Hooks). */
-  if (i >= 0 && i < a->len) { a->data[i] = (uint8_t)x; return; }
+  if (i >= 0 && i < a->len) { a->data[i] = x; return; }
   tur_panic("u8vec-set!: index out of bounds");
   ```)
-;;; u8vec-set! -- store x at index i (bounds-checked).  A macro: see below.
-;;;
-;;; Parameters:
-;;;   v -- the array (borrowed)
-;;;   i -- zero-based index; outside [0, len) panics
-;;;   x -- the new element, of type uint8
-;;;
-;;; Note: a macro rather than a function, because an inline-C function with a
-;;; uint8 parameter warns (TUR-W0037).  It checks x against uint8 (through
-;;; u8vec-widen__) and expands at the call, so a panic names the caller's line.
-;;;
-;;; Example:
-;;;   (u8vec-set! v 0 (as uint8 200))
-;;;
-;;; Since: Phase N0
-
-(defmacro u8vec-set! [v i x]
-  (list u8vec-set-w__ v i (list u8vec-widen__ x)))
 ;;; u8vec-copy -- a fresh U8Vec with the same elements.
 ;;;
 ;;; Parameters:
@@ -1491,8 +1337,20 @@
 ;;;
 ;;; Since: Phase N0
 
-(defn u8vec-copy [^borrow v : U8Vec] : U8Vec
-  (:: (unsafe (__u8vec-copy-raw (:: v :int))) :U8Vec))
+(defn u8vec-copy [^borrow v : U8Vec]
+  #fx{}
+  : U8Vec
+  ```c
+  struct { int64_t len; uint8_t *data; void *raw; } *a = (void*)(intptr_t)v;
+  struct { int64_t len; uint8_t *data; void *raw; } *c = malloc(sizeof(*c));
+  if (!c) { fprintf(stderr, "u8vec-copy: out of memory\n"); abort(); }
+  c->len = a->len;
+  c->raw = malloc((size_t)a->len * sizeof(uint8_t) + 32);
+  if (!c->raw) { fprintf(stderr, "u8vec-copy: out of memory\n"); abort(); }
+  c->data = (uint8_t *)(((uintptr_t)c->raw + 31) & ~(uintptr_t)31);
+  if (a->len > 0) memcpy(c->data, a->data, (size_t)a->len * sizeof(uint8_t));
+  return (int64_t)(intptr_t)c;
+  ```)
 ;;; u8vec->vec-go__ -- internal: push v[i..n) onto out.
 
 (defn u8vec->vec-go__ [^borrow v : U8Vec out : (Vec uint8) i : int n : int] : (Vec uint8)
