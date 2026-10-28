@@ -1,0 +1,12 @@
+;; xml-html-followups-plan A5: forms read out of a string literal with
+;; read-string-at carry the position of their text in this file, so a type
+;; error in a `${...}`-style hole points at the hole -- here at the "x" on
+;; line 11, past the literal's escaped quote -- not at "<read-string>".
+(defmodule prog
+  (defmacro* hole [lit]
+    (let [s (syntax->str lit)]
+      (read-string-at (cstr-sub s 2 (- (cstr-len s) 1)) lit 2)))
+  (defn main [] : int
+    (println
+      (hole "${(+ 1 \"x\")}"))
+    0))

@@ -7,8 +7,9 @@
 > the macro, result-position rewriting, `hiccup->dom` / `hiccup->xml-string`
 > / `hiccup->xml-dom`, `node->hiccup`), all on turmeric-spices branch
 > `claude/ecstatic-cori-ikodwq-markup`, since D builds on A2's hole classes.
-> Not started: A5, A6, and D2's `RenderHtml` (tourist has no `html-response`
-> yet).
+> D2's `RenderHtml` and tourist's `html-response` (A-3) are on the same
+> branch; A5 (`read-string-at`) is on turmeric's `claude/ecstatic-cori-ikodwq`.
+> Not started: A6.
 > What changed against the plan while
 > building it is under "Implementation notes (2026-10-28)" at the end. The
 > compiler fixes A and D needed are on turmeric's
@@ -672,7 +673,7 @@ and raw-text bodies, so the conversion uses the trusted constructors.
 |---|---|---|
 | D1 | `dom/hiccup`: `Html`, `Tag`, `AttrName`, `Attr`, `RawBody` and their checking constructors; the `hiccup` macro (keyword and string names, `#id.class` shorthand, `#map{}` attributes, `:attrs*`, holes through `ToChild` / `ToAttr` / `ToUrlAttr`); `hiccup->string` | A compile-error table: an invalid literal name, a computed tag, children under a void element, a dynamic value under `on*` / `style` / `srcdoc`, a dynamic `<script>` / `<style>` body, a second `id`, a bare `{...}` attribute map, and each D-2 nesting case. The checking constructors refuse bad names, the code-bearing names and the raw-text tags. A2's escaping and URL tables, applied to hiccup. Once A2 exists, `hiccup` and `#html{}` render byte-identical output for a shared corpus |
 | D1b | Result-position rewriting (D-1): markup vectors in the result positions of `if`, `when`, `unless`, `cond`, `do`, `let`, `match`, `for`, and an inline one-parameter `fn` passed to `list-map`, become `Html`; missing `else` branches become an empty `Html`; an inline `list-map` becomes a `list-foldl` straight into `Html`; a vector headed by a known element name outside a result position is a compile error saying to wrap it in `(hiccup ...)`. Best after `macro-time-forward-reference-typed-int` is fixed, so the walker can be ordinary mutually recursive functions; otherwise it ships as the single self-recursive walker the prototype used | One fixture per form in the result-position table, with markup in every branch and a missing `else` where the form allows one. Keyword-headed vectors that are type syntax or option lists (`(fn [:int] :int)`, `:only [:encode]`) inside a hiccup argument are neither rewritten nor reported. A vector in a `let` binding's value or an unknown call's argument gives the "wrap in `(hiccup ...)`" error. A type error inside a rewritten branch points at the user's line |
-| D2 | `hiccup->dom` (needs B1-B2), `hiccup->xml-string`, `ToChild Html` and `HFragment`, `RenderHtml` for `html-response` (`RenderHtml` not done: tourist has no `html-response` yet to take it) | For parser-stable trees (D-2), `html-parse-fragment` with context `template` of `hiccup->string h` is `dom-equal?` to `hiccup->dom h`; the same through expat for the XML flavour |
+| D2 | `hiccup->dom` (needs B1-B2), `hiccup->xml-string`, `ToChild Html` and `HFragment`, `RenderHtml` for `html-response` (done: dom/holes' `RenderHtml`, tourist/markup's `html-response`) | For parser-stable trees (D-2), `html-parse-fragment` with context `template` of `hiccup->string h` is `dom-equal?` to `hiccup->dom h`; the same through expat for the XML flavour |
 | D3 | `node->hiccup` | `hiccup->dom (node->hiccup n)` is `dom-equal?` to `n` for every element of both corpora; the guide shows a transform (add `rel="noopener"` to every external `<a>`) |
 
 ### Open questions
@@ -903,6 +904,23 @@ What building C, A1-A2 and D1 changed against the text above.
   an element converted on its own rebuilds in place. `hiccup->xml-dom`
   otherwise resolves prefixes through the tree's `xmlns` attributes and puts
   declarations first, as expat does.
+- `RenderHtml` lives in dom-core's `dom/holes` (its method gives owned
+  markup), with instances for `Fragment` there and for `Html` and `LiveHtml`
+  in tur-html, so tourist needs only tur-dom-core for the class.
+  `tourist/markup`'s `html-response` sits behind optional tur-dom-core and
+  tur-html dependencies, as `tourist/template` does behind tur-template. Its
+  test reads the Response directly: tourist's HTTP client loads
+  `json/ownstr`, whose `String` collides with `dom/ownstr`'s.
+- **A5.** `read-string-at` (a macro-time native beside `read-string`):
+  `(read-string-at text lit k)` reads text that starts at byte `k` of the
+  string literal `lit`'s value and moves every form's span to that text's
+  place in the user's file, replaying the literal's escapes (a raw reader
+  macro's `\x`, a `"..."` literal's simple escapes); where it cannot (the
+  source is not registered, a `\x..` escape comes first), every form takes
+  the literal's span. `dom/markupc` reads holes with it, so a type error in
+  a hole of `#html{...}`, `#xml{...}` or a direct `html*` / `xml*` call
+  points at the hole. Pinned by `tests/fixtures/errors/read-string-at-hole-position`
+  and the spices' error tables.
 - D3's gate holds for every element of the 54 html5lib files except those
   holding what dom/edit refuses to rebuild (a `<plaintext>`, raw text
   holding its end tag or `<!--`, a comment holding `<!--` or `-->`):
