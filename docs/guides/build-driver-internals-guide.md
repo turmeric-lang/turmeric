@@ -343,7 +343,7 @@ happens in the split shape is therefore slow, never wrong.
    `tur build` compiles and the C `tur emit-c` prints: `emit-c` keeps a
    self-contained preamble, `build` may declare runtime pieces an archive
    supplies.
-2. `collect_used_attr_modules` force-loads `#[used]` modules from the `-I`
+2. `collect_used_attr_modules` force-loads `^used` modules from the `-I`
    dirs, so a symbol only C reaches is still emitted.
 3. `compile_to_c`, with `g_split_lib_sink`/`g_split_imp_sink` set unless the
    target is wasm or `--runtime=split`.
@@ -438,7 +438,7 @@ names: that file is post-swap and post-hoist, unlike `tur emit-c` output.
 5. Builds the include path: user `-I` first, then
    `resolve_project_include_dirs` (own `src/` plus each `:spices` dep's).
 6. **Single-main fast path:** an executable with exactly one `main` and no
-   non-entry `#[used]` module is built as a **single file**:
+   non-entry `^used` module is built as a **single file**:
    `cmd_build(entry, ...)`, output `<build-dir>/bin/<:name>`. This is the
    whole-program route, carrying the full runtime in one unit.
 7. Otherwise, separate compilation: dep modules are added to the build set

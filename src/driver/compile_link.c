@@ -105,7 +105,7 @@ int cmd_compile(const char *input, const char *out_obj,
                 const char **include_dirs, int n_include_dirs,
                 const char **reader_macro_paths,
                 int n_reader_macro_paths) {
-    /* Frontend: lower to C, force-loading any #[used] sibling modules just as
+    /* Frontend: lower to C, force-loading any ^used sibling modules just as
      * cmd_build does (single-file whole-program TU). */
     Buf csrc;
     buf_init(&csrc);

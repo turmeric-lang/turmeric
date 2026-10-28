@@ -1,0 +1,12 @@
+;; defn: #[no-unwind], #[used] and (export-as "c") become ^attrs, in place.
+(defn ^no-unwind a [] : int 1)
+(defn ^used b [] : int 2)
+(defn ^no-unwind ^used c [] : int 3)
+(defn ^export-as "my_d" d [] : int 4)
+(defn ^no-unwind ^export-as "my_e" ^deprecated "old" e [] : int 5)
+(defn ^deprecated "old" ^export-as "my_f" f [] : int 6)
+(defn plain [] : int 7)
+;; Already migrated: left alone.
+(defn ^no-unwind ^used ^export-as "my_g" g [] : int 8)
+;; Not a declaration head: a comment, a string and a call are untouched.
+(println "(defn #[no-unwind] x [] : int 0)")

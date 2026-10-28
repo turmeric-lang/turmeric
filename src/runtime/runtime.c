@@ -296,9 +296,9 @@ void tur_panic(const char *msg) {
     abort();
 }
 
-/* Phase R5: Panic strategy - ABORT variant for #[no-unwind] */
+/* Phase R5: Panic strategy - ABORT variant for ^no-unwind */
 void tur_panic_abort(const char *msg) {
-    /* Abort immediately without unwinding - used for #[no-unwind] functions */
+    /* Abort immediately without unwinding - used for ^no-unwind functions */
     fprintf(stderr, "panic (no unwind): %s\n", msg ? msg : "(no message)");
     abort();
 }

@@ -888,6 +888,36 @@ else
     fi
 fi
 
+# caret-type-attributes-plan P5: the same two builds with `^used`, the attribute
+# spelling of #[used].  The driver finds a retained module by scanning its text
+# (file_has_used_attr), so it has to know both spellings.
+CUSEDPROJ="$WORK/caret-used-attr"
+mkdir -p "$CUSEDPROJ/src/app"
+cp "$USEDPROJ/build.tur" "$CUSEDPROJ/build.tur"
+sed 's/#\[used\]/^used/g' "$USEDPROJ/src/app/a.tur" > "$CUSEDPROJ/src/app/a.tur"
+cp "$USEDPROJ/src/app/main.tur" "$CUSEDPROJ/src/app/main.tur"
+if grep -q '#\[used\]' "$CUSEDPROJ/src/app/a.tur" || ! grep -q '\^used' "$CUSEDPROJ/src/app/a.tur"; then
+    fail "build-project-caret-used-attr" "test setup: the project does not use ^used"
+else
+    cu_out=$(cd "$WORK" && "$TUR" build "$CUSEDPROJ" -o "$WORK/cusedbin" 2>&1)
+    cu_rc=$?
+    if [ $cu_rc -eq 0 ]; then "$WORK/cusedbin"; cu_run=$?; else cu_run=-1; fi
+    if [ "$cu_rc" -eq 0 ] && [ "$cu_run" -eq 42 ]; then
+        pass "build-project-caret-used-attr"
+    else
+        fail "build-project-caret-used-attr" "build exit=$cu_rc run exit=$cu_run: $cu_out"
+    fi
+    cw_out=$(cd "$WORK" && "$TUR" build "$CUSEDPROJ/src/app/main.tur" \
+                -I "$CUSEDPROJ/src" -o "$WORK/cusedwpbin" 2>&1)
+    cw_rc=$?
+    if [ $cw_rc -eq 0 ]; then "$WORK/cusedwpbin"; cw_run=$?; else cw_run=-1; fi
+    if [ "$cw_rc" -eq 0 ] && [ "$cw_run" -eq 42 ]; then
+        pass "build-file-caret-used-attr-whole-program"
+    else
+        fail "build-file-caret-used-attr-whole-program" "build exit=$cw_rc run exit=$cw_run: $cw_out"
+    fi
+fi
+
 # exports-map-syntax-tighten-plan: a manifest that uses `:exports #fx{...}`
 # (an effect-row literal) instead of a map must be rejected at parse time with
 # TUR-E0620, not silently accepted with an empty exports list.  Before the fix

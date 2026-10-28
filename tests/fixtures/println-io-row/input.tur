@@ -10,7 +10,7 @@
 ;;     IO in the body's row is a tag, not a perform -- it must not make the
 ;;     clause look reachable.
 
-(defeffect Write [s :cstr] :nil ^extends IO)
+(defeffect ^extends IO Write [s :cstr] :nil)
 
 (defn plain [] : int
   (do (println "plain") 1))

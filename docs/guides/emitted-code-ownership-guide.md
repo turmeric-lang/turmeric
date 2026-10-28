@@ -158,7 +158,7 @@ anything. A value is owned when it is:
 
 Everything starts assumed. A function is knocked out of `owned` when its
 address is taken (`EX_VAR` of the function), and never gets it when it is
-external: an instance method, a C export, a `#[used]` defn, a lifted lambda,
+external: an instance method, a C export, a `^used` defn, a lifted lambda,
 `main`, or an exported function under separate compilation. If the fixed point
 does not settle in 64 rounds, nothing is claimed. The walk enumerates operands
 through `cps_visit_children`, so a new expression kind is not silently

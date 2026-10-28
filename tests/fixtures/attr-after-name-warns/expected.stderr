@@ -1,0 +1,5 @@
+warning [TUR-D0008]: defeffect: the trailing ^capability is deprecated; write ^capability before the name
+warning [TUR-D0008]: defeffect: the trailing ^extends Disk is deprecated; write ^extends Disk before the name
+warning [TUR-D0008]: defn: #[no-unwind] is deprecated; write ^no-unwind
+warning [TUR-D0008]: defn: #[used] is deprecated; write ^used
+warning [TUR-D0008]: defn: (export-as "attrs_second") is deprecated; write ^export-as "attrs_second"

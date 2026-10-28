@@ -510,11 +510,16 @@ typedef struct Elab {
     const Symbol *sym_catch_panic_of;
     /* Phase R5: no-unwind attribute */
     const Symbol *sym_no_unwind_attr;
-    /* #[used] attribute: retain a defn with external C linkage (see
+    /* ^used attribute: retain a defn with external C linkage (see
      * Binding.retain_c_linkage). */
     const Symbol *sym_used_attr;
     /* Phase M6: (export-as "c_name") attribute for explicit C symbol naming */
     const Symbol *sym_export_as_attr;
+    /* caret-type-attributes-plan P5: the `^attr` spellings of the three above,
+     * `^no-unwind`, `^used` and `^export-as "c_name"`. */
+    const Symbol *sym_caret_no_unwind;
+    const Symbol *sym_caret_used;
+    const Symbol *sym_caret_export_as;
     /* M2a (end-to-end-monomorphization-plan): `^construct` on a polymorphic
      * stdlib constructor defn, `(defn ^construct some ...)`.  Picked up with
      * the other pre-name attributes in elab_defn.  (Was `^construct`,

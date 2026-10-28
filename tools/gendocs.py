@@ -1075,7 +1075,8 @@ def _parse_def_line(kind, text):
     # (caret-type-attributes-plan); they are kept apart so the signature is
     # shown as written.
     if kind == 'defeffect':
-        caret_prefix = r'(?:\^\w+\s+)?'
+        # ^private, ^capability and `^extends Parent`, in any order
+        caret_prefix = r'(?:\^(?:extends\s+[\w/\-]+|[\w-]+)\s+)*'
     elif kind == 'defn':
         caret_prefix = r'(?:\^[\w-]+\s+(?:"[^"]*"\s+)?)*'
     elif kind in TYPE_DECL_KINDS:
@@ -1149,9 +1150,9 @@ def _parse_def_line(kind, text):
         extra['decl'] = _balanced_form(text)
         return name, [], None, extra
     if kind == 'defeffect':
-        # `(defeffect FS [] :nil ^extends IO ^capability)`: the keyword, the
-        # `^extends` / `^capability` markers and the result type all belong
-        # to the card, and the defn renderer dropped them.
+        # `(defeffect ^capability ^extends IO FS [] :nil)`: the `^extends` /
+        # `^capability` markers, the name and the result type all belong to
+        # the card, and the defn renderer dropped them.
         extra['decl'] = _balanced_form(text)
 
     # Extract params bracket (nesting-aware: `(fn [int] int)` as a field
@@ -2306,8 +2307,8 @@ def _spaced_decl(kind, decl):
 
     The parser reads `(defopaque Uid :int)` and `(defopaque Uid : int)` alike,
     but the API pages spell every other annotation `: T`.  Only the one slot
-    that holds a type is touched; a `:linear` / `:affine` discipline keyword,
-    a `^extends` marker and a `:key` in a `def` initialiser are not types."""
+    that holds a type is touched; a `:linear` / `:affine` discipline keyword
+    and a `:key` in a `def` initialiser are not types."""
     if kind == 'defopaque':
         # (defopaque Name [T ...] :base [:linear|:affine])
         return re.sub(r'(?<=\s):(?!linear\b|affine\b)(?=[A-Za-z(])', ': ', decl, count=1)

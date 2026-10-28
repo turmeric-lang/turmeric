@@ -271,7 +271,7 @@ program that does not need it takes no extra work.
 | 8. `defmodule` position | A `defmodule` must be the first form of its source file | inline |
 | 9. Pass 2 | Elaborate each form; defer and retry some (below) | `tl_elab_slot`, `tl_flush` |
 | 10. Drain | Retry the deferred forms | `fwd_gen_order_drain` |
-| 11. Whole-unit checks | Instance-less retries, superclass resolution, cross-function `reset` wrapping, `#[used]` module force-loads, the lazy `^fat` sweep | `elab_noinst_retry`, `elab_typeclass_superclasses_finish`, `elab_wrap_resets_for_crossfn_resume`, `elab_force_load_module`, `elab_sweep_bare_fat_lazy` |
+| 11. Whole-unit checks | Instance-less retries, superclass resolution, cross-function `reset` wrapping, `^used` module force-loads, the lazy `^fat` sweep | `elab_noinst_retry`, `elab_typeclass_superclasses_finish`, `elab_wrap_resets_for_crossfn_resume`, `elab_force_load_module`, `elab_sweep_bare_fat_lazy` |
 | 12. Prepend | `file_scope_defs` go in front of the program items | inline |
 | 13. Unit diagnostics | Exported C-name collisions, TUR-W0039 (free `defn` shares a class method's name) | inline |
 | 14. Refinement | Write and read frames, `^reflect` sites, call-site crossings, discharge | `wf_resolve_write_frames`, `refine_resolve_call_sites`, `refine_discharge_all` |

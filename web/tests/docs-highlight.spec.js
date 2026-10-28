@@ -65,6 +65,17 @@ test.describe('docs highlighter', () => {
         expect(cls('^f')).toBe('hl-kind');
     });
 
+    test('the pre-name attributes of a defn and a defeffect are modifiers', async ({ page }) => {
+        // caret-type-attributes-plan P5: `^no-unwind`, `^used` and `^export-as`
+        // before a defn's name; `^capability` and `^extends` before an effect's.
+        const toks = await tokens(page,
+            '(defn ^no-unwind ^used ^export-as "c_f" f [] : int 1)\n'
+            + '(defeffect ^capability ^extends IO FS [] : nil)');
+        const cls = (text) => toks.find(([, t]) => t === text)?.[0];
+        for (const attr of ['^no-unwind', '^used', '^export-as', '^capability', '^extends'])
+            expect(cls(attr), `${attr} is a modifier`).toBe('hl-ann');
+    });
+
     test('a type is one token, fused or spaced', async ({ page }) => {
         const toks = await tokens(page,
             '(defn hello [name : cstr] : void (println name))\n'

@@ -440,6 +440,7 @@ const char *diag_code_to_string(DiagCode code) {
         case TUR_D0004_NONEXHAUSTIVE_FX_MARKER:   return "TUR-D0004";
         case TUR_D0005_DEFGADT:                   return "TUR-D0005";
         case TUR_D0006_LET_STAR:                  return "TUR-D0006";
+        case TUR_D0008_ATTR_AFTER_NAME:           return "TUR-D0008";
         /* XF: experimental-flag mechanism */
         case TUR_E0310_UNKNOWN_EXPERIMENT:        return "TUR-E0310";
         case TUR_E0311_UNKNOWN_ENGINE:            return "TUR-E0311";
@@ -649,6 +650,7 @@ DiagCode diag_code_from_string(const char *s) {
     if (strcmp(s, "TUR-D0004") == 0) return TUR_D0004_NONEXHAUSTIVE_FX_MARKER;
     if (strcmp(s, "TUR-D0005") == 0) return TUR_D0005_DEFGADT;
     if (strcmp(s, "TUR-D0006") == 0) return TUR_D0006_LET_STAR;
+    if (strcmp(s, "TUR-D0008") == 0) return TUR_D0008_ATTR_AFTER_NAME;
     /* XF: experimental-flag mechanism */
     if (strcmp(s, "TUR-E0310") == 0) return TUR_E0310_UNKNOWN_EXPERIMENT;
     if (strcmp(s, "TUR-E0311") == 0) return TUR_E0311_UNKNOWN_ENGINE;
@@ -2883,6 +2885,34 @@ static const DiagExplanation diag_explanations_[] = {
       "sequential, as the Scheme report specifies.  The old spelling still\n"
       "compiles; under --Werror=deprecated it is an error.  It is removed in a\n"
       "future major release.\n",
+    },
+    /* caret-type-attributes-plan P5 */
+    { TUR_D0008_ATTR_AFTER_NAME,
+      "TUR-D0008: write the attribute before the name, as `^attr`\n"
+      "\n"
+      "Attributes go in front of what they mark, the way `^private` and\n"
+      "`^deprecated` do.  Three declarations had an earlier spelling:\n"
+      "\n"
+      "  - `defeffect` took `^extends Parent` and `^capability` after its result\n"
+      "    type.\n"
+      "  - `defn` took `#[no-unwind]` and `#[used]` before the name, in a\n"
+      "    spelling of their own.\n"
+      "  - `defn` took `(export-as \"c_name\")` before the name, as a list.\n"
+      "\n"
+      "Examples triggering this warning:\n"
+      "  (defeffect FS [] :nil ^extends IO ^capability)\n"
+      "  (defn #[no-unwind] #[used] handler [] : int 0)\n"
+      "  (defn (export-as \"my_c_name\") helper [] : int 0)\n"
+      "\n"
+      "Fix: spell each as a `^attr`, in front of the name:\n"
+      "  (defeffect ^capability ^extends IO FS [] : nil)\n"
+      "  (defn ^no-unwind ^used handler [] : int 0)\n"
+      "  (defn ^export-as \"my_c_name\" helper [] : int 0)\n"
+      "\n"
+      "`tur fmt` makes the change in a file, and so does\n"
+      "tools/caret-type-attrs-rewrite.py in a tree.  The old spelling still\n"
+      "compiles and means the same; under --Werror=deprecated it is an error.\n"
+      "It is removed in a future release.\n",
     },
     /* XF (experimental-flag-mechanism-plan): unknown --enable= name */
     { TUR_E0310_UNKNOWN_EXPERIMENT,

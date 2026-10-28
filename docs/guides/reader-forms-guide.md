@@ -498,7 +498,10 @@ Forms beginning with `#` followed by a specific character.
 
 ### Attribute -- `#[...]`
 
-Attaches a compile-time attribute to the next definition.
+Attaches a compile-time attribute to the next definition. `#[no-unwind]` and
+`#[used]` are deprecated (TUR-D0008): write them as `^no-unwind` and `^used`,
+among the other attributes before a `defn`'s name. The `#[...]` reader form
+itself still reads.
 
 ```turmeric no-check
 #[no-unwind]

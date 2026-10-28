@@ -1,0 +1,10 @@
+;; caret-type-attributes-plan P5: under --Werror=deprecated the earlier
+;; spellings are errors (TUR-D0008).
+(defeffect Disk [] : nil ^capability)
+(defeffect Write [s : cstr] : nil ^extends Disk)
+(defn #[no-unwind] first [x : int] : int {x + 1})
+(defn (export-as "attrs_second") second [x : int] : int {x * 2})
+
+(defn main [] : int
+  (println (first 1))
+  0)

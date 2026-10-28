@@ -4,8 +4,8 @@
 ;; callee's declared row into the caller's inferred row, so the pure caller's
 ;; inferred {FS} is not a subset of its declared {} and TUR-E0009 fires.
 
-(defeffect IO [] :nil ^capability)
-(defeffect FS [] :nil ^extends IO ^capability)
+(defeffect ^capability IO [] :nil)
+(defeffect ^capability ^extends IO FS [] :nil)
 
 ;; A capability-tagged file reader (stands in for fs/read-text).
 (defn file-read [path : cstr] #fx{FS} : cstr

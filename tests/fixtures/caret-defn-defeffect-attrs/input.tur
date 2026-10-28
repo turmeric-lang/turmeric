@@ -1,0 +1,25 @@
+;; caret-type-attributes-plan P5: a defeffect's ^capability / ^extends Parent
+;; and a defn's ^no-unwind / ^used / ^export-as "c_name" are attributes before
+;; the name, in any order, alongside ^private and ^deprecated.
+(defeffect ^capability Disk [] : nil)
+(defeffect ^capability ^extends Disk Cache [] : nil)
+(defeffect ^extends Disk Write [s : cstr] : nil)
+(defeffect ^private ^extends Disk Quiet [] : nil)
+
+(defn ^no-unwind abort-free [x : int] : int {x + 1})
+(defn ^used keep-me [x : int] : int {x * 2})
+(defn ^export-as "attrs_exported" exported [x : int] : int {x * x})
+(defn ^no-unwind ^used ^export-as "attrs_all" all-three [x : int] : int {x - 1})
+(defn ^export-as "attrs_old" ^deprecated "use exported" aged [x : int] : int {x + 100})
+
+(defn log-it [s : cstr] #fx{Write} : nil
+  (perform (Write s)))
+
+(defn main [] : int
+  (println (abort-free 1))
+  (println (keep-me 4))
+  (println (exported 5))
+  (println (all-three 10))
+  (println (handle (do (log-it "hello") 7)
+    (Write [s] k) (do (println s) (resume k nil))))
+  0)

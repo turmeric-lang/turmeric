@@ -128,7 +128,7 @@ void                  ls2_resolver_ctx_set(const Ls2ResolverCtx *ctx);
 const Ls2ResolverCtx *ls2_resolver_ctx_active(void);
 
 /* used-attr-whole-program: per-compile list of module names to force-load
- * during whole-program elaboration so a `#[used]` defn reached only via a raw
+ * during whole-program elaboration so a `^used` defn reached only via a raw
  * mangled C symbol (no `(import)`) is still emitted.  Set by the driver's
  * compile_to_c around the elaborate_program call and cleared after; NULL/0
  * elsewhere (REPL, eval, separate compilation), where the force-load is inert.

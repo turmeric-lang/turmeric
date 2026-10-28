@@ -739,6 +739,8 @@ GUIDE_JS_CORE = '''\
     // The flags of a defopaque / defstruct / defdata / defgadt, written before
     // the name (caret-type-attributes-plan); `linear` and `affine` are above.
     'copy','move','heap','sealed','non-null','no-auto-ctor',
+    // A defn's pre-name attributes (caret-type-attributes-plan P5).
+    'no-unwind','used','export-as',
   ]);
   var CARET_C_TYPES = new Set([
     'int','float','bool','char','cstr','void','nil','size','usize','isize',

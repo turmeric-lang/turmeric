@@ -397,8 +397,8 @@ LOSSY_CASES = [
     # The declarations shown as written have their type annotation spaced
     # (`: nil`, `: int`); a `:linear` / `:non-null` modifier and a `^` marker
     # are not types and stay as they are.
-    ('defeffect', '(defeffect FS [] :nil ^extends IO ^capability)',
-     '(defeffect FS [] : nil ^extends IO ^capability)'),
+    ('defeffect', '(defeffect ^capability ^extends IO FS [] :nil)',
+     '(defeffect ^capability ^extends IO FS [] : nil)'),
     ('defeffect', '(defeffect Fail [msg :cstr] :nil)',
      '(defeffect Fail [msg : cstr] : nil)'),
     ('defopaque', '(defopaque ArgSpec :int)', '(defopaque ArgSpec : int)'),
@@ -457,6 +457,10 @@ for kind, text, want_name, want_ret in [
     ('defn', '(defn char=? [a : Char b : Char] : bool (= a b))', 'char=?', ':bool'),
     ('defn', '(defn r7rs-string<=? [a : cstr b : cstr] : bool 1)', 'r7rs-string<=?', ':bool'),
     ('defeffect', '(defeffect Fail [msg :cstr] :nil)', 'Fail', ':nil'),
+    # The attributes before the name, `^extends Parent` among them.
+    ('defeffect', '(defeffect ^capability ^extends IO FS [] :nil)', 'FS', ':nil'),
+    ('defeffect', '(defeffect ^private ^extends IO Hidden [] :nil)', 'Hidden', ':nil'),
+    ('defn', '(defn ^no-unwind ^export-as "c_f" f [] : int 1)', 'f', ':int'),
 ]:
     name, _, ret, _ = _parse_def_line(kind, text)
     if (name, ret) != (want_name, want_ret):

@@ -715,10 +715,7 @@
 ;;;   (fs/glob-free paths)
 ;;;
 ;;; Since: Phase B2
-(defn ^deprecated "use fs/paths-free"
-  fs/glob-free
-  [v : (Vec cstr)]
-  : void
+(defn ^deprecated "use fs/paths-free" fs/glob-free [v : (Vec cstr)] : void
   (fs/paths-free v))
 ;;; fs/tmpfile -- create a unique temporary file in the system temp directory.
 ;;;

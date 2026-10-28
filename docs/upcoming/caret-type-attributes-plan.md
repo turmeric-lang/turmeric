@@ -455,8 +455,9 @@ the `^` form, because the declaration's arity no longer fits.
 
 ## Attributes beyond the type declarations (proposed P5)
 
-> Status: survey and proposal, 2026-10-28; nothing decided. The decisions
-> below P4 cover the type declarations only.
+> Status: decided 2026-10-28 (items 1-3 below; 4 stays as it is) and
+> implemented as P5, warning stage. The decisions above P4 cover the type
+> declarations only.
 
 The rule this plan adopts -- `^name` is an attribute and goes before what it
 marks -- has a few exceptions outside the four type declarations. A survey of
@@ -514,14 +515,52 @@ Each is independent: P5 can take 1 alone. The P0 machinery (an interned
 symbol per attribute, a shared name-index helper, the P1 tools, the P2
 rewrite tool, the P3 warning) applies to each without new design.
 
-### Open questions for P5
+### Decisions for P5 (2026-10-28)
 
-1. Move `defeffect`'s `^extends` / `^capability` before the name?
-   (Recommended: yes.)
-2. Fold `#[no-unwind]` / `#[used]` into `^no-unwind` / `^used`?
-   (Recommended: yes.)
-3. `(export-as "c")` -> `^export-as "c"`? (Recommended: optional, low value.)
-4. Leave `import`'s `:for-macros` as a keyword? (Recommended: leave it.)
+1. Move `defeffect`'s `^extends` / `^capability` before the name: **yes.**
+2. Fold `#[no-unwind]` / `#[used]` into `^no-unwind` / `^used`: **yes.**
+3. `(export-as "c")` -> `^export-as "c"`: **yes**, for uniformity.
+4. Leave `import`'s `:for-macros` as a keyword: **yes, leave it.**
+
+### P5 as implemented
+
+Same sequence as P0-P4: both spellings read, the old one warns, a later change
+makes it an error. This section covers the first two stages; the error is a
+separate change that has to wait until the spices have been migrated.
+
+- **Elaborator.** `elab_defeffect` reads `^private`, `^capability` and
+  `^extends Parent` in any order before the name (`^extends` twice is an error);
+  it still reads the two that trail the result type. `elab_defn` reads
+  `^no-unwind`, `^used` and `^export-as "c_name"` in the loop that already took
+  `^construct`, `^byval`, `^deprecated` and `^reflect`, in any order, and still
+  reads `#[no-unwind]`, `#[used]` and `(export-as "c_name")` in that loop too
+  (they used to be read in a fixed order ahead of the `^attr`s). The name-index
+  scans (`elab_defn_name_index`, `fgo_defn_name`, the `main` detection)
+  know `^export-as` takes a string, as `^deprecated` does.
+- **The driver's text scan.** `file_has_used_attr` (`src/driver/project.c`)
+  decides from the file's text whether a module carries `#[used]`, which
+  disqualifies the single-main shortcut and force-loads the module in a
+  whole-program build. It now finds `^used` too; without that a migrated
+  project would link-fail where the old spelling built.
+- **TUR-D0008** (`ATTR_AFTER_NAME`) is the warning, one per attribute, at
+  `elab_deprecation_level()`; an error under `--Werror=deprecated`.
+- **`tur fmt`** migrates the old spellings: the `#[...]` swaps and the
+  `(export-as ...)` list become `^` attributes in place; a defeffect's trailing
+  attributes move to `^capability ^extends Parent` before the name, after any
+  `^private`. A `defeffect` or an `export-as` with a comment in its source is
+  left as written. `fmt` also learned that a `defn`'s name sits past its
+  pre-name attributes: a long `(defn ^deprecated "msg" name [params] : ret ...)`
+  used to keep the name on a line of its own, and `stdlib/fs.tur`, `net.tur` and
+  `io.tur` were formatted that way; they are reformatted now, which also lets
+  `gendocs` see their deprecated functions.
+- **Tools.** `tools/caret-type-attrs-rewrite.py` handles `defeffect` and `defn`
+  (corpus cases 12-14); `gendocs.py` reads `^extends Parent` before an effect's
+  name; the LSP docscanner skips the C name an `^export-as` takes; the
+  highlighters know `no-unwind`, `used` and `export-as`.
+- **Migrated:** `stdlib/effects.tur`, `stdlib/trail.tur`, nine fixtures, and the
+  guides' examples and prose. `emit-c` over every fixture input, example and
+  benchmark is identical before and after, apart from the `stdlib/fs.tur` panic
+  line numbers that moved with its reformat.
 
 ## Out of scope
 
@@ -536,7 +575,7 @@ rewrite tool, the P3 warning) applies to each without new design.
 - **Attributes on other forms** -- `defeffect`'s trailing `^extends` /
   `^capability`, and `defn`'s `#[no-unwind]` / `#[used]` / `(export-as ...)` --
   are not part of P0-P4. They are surveyed in "Attributes beyond the type
-  declarations" below, which proposes a P5 for them.
+  declarations" above, where they are decided and implemented as P5.
 - **Inline-C and `extern-c` C types such as `^int`.** They are already `^`, and
   their meaning (a C type) is separate.
 
