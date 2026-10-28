@@ -183,47 +183,6 @@ section {
   font-weight: 300;
 }
 
-/* ── BENCHMARKS ────────────────────────── */
-.bench-section {
-  max-width: 1100px;
-  margin: 0 auto;
-  padding: 100px 48px;
-}
-
-.bench-grid {
-  display: grid;
-  grid-template-columns: repeat(3,1fr);
-  gap: 48px;
-  margin-top: 48px;
-}
-
-.bench-card {
-  min-width: 0;
-}
-
-.bench-metric {
-  font-family: 'Space Grotesk', sans-serif;
-  font-size: 56px;
-  font-weight: 300;
-  color: var(--gold-bright);
-  line-height: 1;
-  letter-spacing: -0.02em;
-  margin-bottom: 8px;
-}
-
-.bench-unit { font-size: 20px; color: var(--gold-dim); }
-.bench-label { font-size: 14px; color: var(--text-sec); font-weight: 300; margin-bottom: 16px; }
-
-.bench-bar-wrap { height: 3px; background: var(--border-mid); border-radius: 2px; overflow: hidden; }
-
-.bench-bar {
-  height: 100%;
-  background: var(--gold-fill);
-  border-radius: 2px;
-}
-
-.bench-compare { margin-top: 10px; font-size: 12px; color: var(--text-dim); font-family: 'Iosevka', monospace; }
-
 /* ── GETTING STARTED ───────────────────── */
 .started-section {
   max-width: 1100px;
@@ -383,9 +342,6 @@ section {
 
   .split-section { padding: 60px 24px; }
 
-  .bench-section { padding: 60px 24px; }
-  .bench-grid { grid-template-columns: 1fr; gap: 40px; }
-
   .started-section { padding: 60px 24px; }
   .started-grid { grid-template-columns: 1fr; gap: 40px; }
 
@@ -399,6 +355,5 @@ section {
   .hero { padding: 90px 16px 48px; }
 
   .feature-grid { padding: 24px 16px 48px; grid-template-columns: 1fr; }
-  .bench-section { padding: 48px 16px; }
   .started-section { padding: 48px 16px; }
 }

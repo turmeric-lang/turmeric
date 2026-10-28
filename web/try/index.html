@@ -78,11 +78,6 @@
                                     <path d="M13 3a9 9 0 0 0-9 9H1l3.9 3.9.1.2L9 12H6a7 7 0 1 1 2.1 5l-1.4 1.4A9 9 0 1 0 13 3zm-1 5v5l4.3 2.5.7-1.2-3.5-2.1V8H12z"/>
                                 </svg>
                             </button>
-                            <button class="btn btn-icon" id="solve-btn" title="Fill in the answer for this step" aria-label="Solve this" style="display: none;">
-                                <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
-                                    <path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/>
-                                </svg>
-                            </button>
                             <!-- Back from a go-to-definition jump. Hidden
                                  until there is somewhere to go back to --
                                  Monaco standalone ships no navigation history,
@@ -228,7 +223,6 @@
                                     </svg>
                                 </button>
                                 <div class="more-menu" id="more-menu" role="menu" hidden>
-                                    <button class="more-item" role="menuitem" data-cmd="solve-btn" data-show-when="solve">Solve this</button>
                                     <button class="more-item" role="menuitem" data-cmd="clear-btn">Clear</button>
                                     <button class="more-item" role="menuitem" data-cmd="format-btn">Format</button>
                                     <button class="more-item" role="menuitem" data-cmd="share-btn">Share</button>
@@ -282,10 +276,6 @@
                                 </div>
                             </div>
                         </div>
-                    </div>
-                    <div class="tutorial-bar" id="tutorial-bar" style="display: none;">
-                        <span class="tutorial-bar-step" id="tutorial-bar-step"></span>
-                        <span class="tutorial-bar-desc" id="tutorial-bar-desc"></span>
                     </div>
                     <div class="editor-wrapper">
                         <div id="editor" class="monaco-editor"></div>
@@ -521,42 +511,6 @@
                 </div>
             </div>
 
-            <!-- Tutorial Overlay (hidden by default) -->
-            <div id="tutorial-overlay" class="overlay" style="display: none;">
-                <div class="overlay-content">
-                    <div class="overlay-header">
-                        <h2>Tutorials</h2>
-                        <button class="btn-close" id="tutorial-close">&times;</button>
-                    </div>
-                    <div class="tutorial-list" id="tutorial-list">
-                        <div class="tutorial-card">
-                            <h3>Basics</h3>
-                            <p>Learn the fundamentals of Turmeric syntax</p>
-                            <button class="btn btn-primary" data-tutorial="basics">Start</button>
-                        </div>
-                        <div class="tutorial-card">
-                            <h3>Data Structures</h3>
-                            <p>Work with vectors, structs, and pattern matching</p>
-                            <button class="btn btn-primary" data-tutorial="data-structures">Start</button>
-                        </div>
-                        <div class="tutorial-card">
-                            <h3>Type System</h3>
-                            <p>Understand type annotations and inference</p>
-                            <button class="btn btn-primary" data-tutorial="type-system">Start</button>
-                        </div>
-                        <div class="tutorial-card">
-                            <h3>Functions</h3>
-                            <p>Closures, recursion, and higher-order functions</p>
-                            <button class="btn btn-primary" data-tutorial="functions">Start</button>
-                        </div>
-                        <div class="tutorial-card">
-                            <h3>Effects</h3>
-                            <p>Algebraic effects and handlers</p>
-                            <button class="btn btn-primary" data-tutorial="effects">Start</button>
-                        </div>
-                    </div>
-                </div>
-            </div>
 
             <!-- Loading Overlay -->
             <div id="loading-overlay" class="overlay loading" style="display: none;">

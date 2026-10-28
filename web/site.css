@@ -86,7 +86,6 @@ body.page-ci nav {
 
 .nav-logo img { filter: var(--logo-filter); }
 
-
 .nav-links {
   display: flex;
   align-items: center;
@@ -381,20 +380,6 @@ body.page-ci nav {
   font-size: 13px;
   line-height: 1.75;
   overflow-x: auto;
-}
-
-/* ── FEATURE BADGE ─────────────────────── */
-.feat-badge {
-  display: inline-block;
-  margin-top: 16px;
-  font-family: 'Iosevka', monospace;
-  font-size: 10px;
-  color: var(--gold-dim);
-  background: var(--gold-subtle);
-  border: 1px solid var(--gold-line);
-  border-radius: 4px;
-  padding: 2px 8px;
-  letter-spacing: 0.04em;
 }
 
 /* ── CTA ───────────────────────────────── */

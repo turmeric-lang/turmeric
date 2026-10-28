@@ -3,7 +3,6 @@
  * Main JavaScript file for the Turmeric WASM REPL
  */
 
-import { TUTORIAL_STEPS } from './tutorials.js';
 import { createLspClient } from './lsp-client.js';
 import { encodeShareCode, decodeShareCode } from './share-codec.js';
 
@@ -1195,20 +1194,6 @@ function escapeAttr(text) {
     return escapeHtml(text);
 }
 
-
-/**
- * Format a console line with prompt and result
- */
-function formatConsoleLine(input, result, isError = false) {
-    const prompt = '<span class="console-prompt">></span>';
-    const escapedInput = escapeHtml(input);
-    const escapedResult = escapeHtml(result);
-    
-    if (isError) {
-        return `${prompt} <span class="console-error">${escapedInput}\n${escapedResult}</span>`;
-    }
-    return `${prompt} ${escapedInput}\n<span class="console-result">${escapedResult}</span>`;
-}
 
 /**
  * Append text to the console
@@ -4093,9 +4078,6 @@ function initEventListeners() {
     // Language picker (dialect radio group + layer checkboxes)
     initLangPicker();
 
-    // Solve button
-    document.getElementById('solve-btn')?.addEventListener('click', solveStep);
-
     // Mobile overflow menu (⋯) — forwards each menu item to the underlying
     // button or the examples <select>, so the existing wiring stays the
     // single source of truth.
@@ -4112,12 +4094,6 @@ function initEventListeners() {
             moreBtn.setAttribute('aria-expanded', 'false');
         };
         const openMenu = () => {
-            // Mirror visibility of the Solve menu item to the original button.
-            const solveItem = moreMenu.querySelector('[data-cmd="solve-btn"]');
-            const solveBtn = document.getElementById('solve-btn');
-            if (solveItem && solveBtn) {
-                solveItem.hidden = solveBtn.style.display === 'none';
-            }
             // The minimap row's label *is* its state, so it has to be right
             // before the menu is painted, not after the click that changes it.
             syncMinimapMenuItem();
@@ -4170,11 +4146,6 @@ function initEventListeners() {
         });
     }
 
-    // Tutorial close button
-    document.getElementById('tutorial-close')?.addEventListener('click', () => {
-        document.getElementById('tutorial-overlay')?.style.setProperty('display', 'none');
-    });
-    
     // Window resize
     window.addEventListener('resize', () => {
         if (editor) {
@@ -4864,84 +4835,6 @@ function showIosA2hsHint() {
     };
     hint.querySelector('#ios-a2hs-close').addEventListener('click', dismiss);
     setTimeout(dismiss, 12000);
-}
-
-// ============================================================================
-// Tutorial System
-// ============================================================================
-
-// Tutorial state
-let currentTutorial = null;
-let currentStep = 0;
-
-
-/**
- * Load the given step of a tutorial into the editor and update the tutorial bar.
- */
-function loadStep(tutorialId, stepIndex) {
-    const steps = TUTORIAL_STEPS[tutorialId];
-    if (!steps || stepIndex >= steps.length) return;
-
-    const step = steps[stepIndex];
-    if (editor) {
-        editor.setValue(step.starter);
-    }
-
-    // Update tutorial info bar
-    const bar = document.getElementById('tutorial-bar');
-    const stepEl = document.getElementById('tutorial-bar-step');
-    const descEl = document.getElementById('tutorial-bar-desc');
-    const solveBtn = document.getElementById('solve-btn');
-
-    if (bar) bar.style.display = 'flex';
-    if (stepEl) stepEl.textContent = `${step.title} (${stepIndex + 1}/${steps.length})`;
-    if (descEl) descEl.textContent = step.description;
-    if (solveBtn) solveBtn.style.display = '';
-}
-
-/**
- * Fill in the answer for the current tutorial step without running it.
- */
-function solveStep() {
-    if (!currentTutorial) return;
-
-    const steps = TUTORIAL_STEPS[currentTutorial];
-    if (!steps) return;
-
-    const step = steps[currentStep];
-    if (!step) return;
-
-    if (editor) {
-        editor.setValue(step.answer);
-        showStatus('Answer filled in -- click Run to execute', 'success');
-    }
-}
-
-/**
- * Start a tutorial
- */
-async function startTutorial(tutorialId) {
-    // Hide tutorial overlay
-    document.getElementById('tutorial-overlay')?.style.setProperty('display', 'none');
-
-    currentTutorial = tutorialId;
-    currentStep = 0;
-
-    const steps = TUTORIAL_STEPS[tutorialId];
-    if (steps && steps.length > 0) {
-        showStatus(`Starting tutorial: ${tutorialId}`, 'success');
-        loadStep(tutorialId, 0);
-    }
-}
-
-/**
- * Show tutorial overlay
- */
-function showTutorialOverlay() {
-    const overlay = document.getElementById('tutorial-overlay');
-    if (overlay) {
-        overlay.style.display = 'flex';
-    }
 }
 
 // ============================================================================

@@ -98,17 +98,6 @@
 
     --bg-input: rgba(255, 255, 255, 0.06);
 
-    /* ANSI 7 and 9-15: the console's white and bright colors. 0-6 and 8 are
-       the semantic tokens above, so they follow the theme already. */
-    --ansi-7:  #d4d4d4;
-    --ansi-9:  #ff8870;
-    --ansi-10: #b8e0a0;
-    --ansi-11: #ffd43b;
-    --ansi-12: #339af0;
-    --ansi-13: #e59ef0;
-    --ansi-14: #39c5cf;
-    --ansi-15: #ffffff;
-
     /* Fonts */
     --font-family:  'DM Sans', sans-serif;
     --font-mono:    'Iosevka', 'SF Mono', 'Fira Code', monospace;
@@ -164,15 +153,6 @@
     --backdrop-loading: rgba(251, 248, 242, 0.92);
 
     --bg-input: #FFFFFF;
-
-    --ansi-7:  #6E604F;
-    --ansi-9:  #BE3E28;
-    --ansi-10: #3B7619;
-    --ansi-11: #8A5F00;
-    --ansi-12: #1F63B0;
-    --ansi-13: #923799;
-    --ansi-14: #0B7480;
-    --ansi-15: #2A2016;
 }
 
 /* The installed app draws under the status bar and the home indicator
@@ -254,95 +234,6 @@ pre {
     border-radius: var(--radius-md);
     overflow-x: auto;
     color: var(--text-primary);
-}
-
-/* ==========================================================================
- * Header
- * ========================================================================== */
-
-.header {
-    height: 54px;
-    background: var(--bg-surface);
-    border-bottom: 1px solid var(--border);
-    position: sticky;
-    top: 0;
-    z-index: 100;
-    flex-shrink: 0;
-}
-
-.header-content {
-    height: 100%;
-    display: flex;
-    align-items: center;
-    padding: 0 20px;
-    gap: 16px;
-}
-
-/* Logo */
-.logo a {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    text-decoration: none;
-}
-
-.logo-sub {
-    font-size: 10px;
-    color: var(--text-dim);
-    letter-spacing: 0.07em;
-    text-transform: uppercase;
-    font-weight: 400;
-    margin-left: 2px;
-    align-self: flex-end;
-    margin-bottom: 2px;
-}
-
-/* Nav separator */
-.nav-sep {
-    width: 1px;
-    height: 22px;
-    background: var(--border-mid);
-    margin: 0 4px;
-}
-
-/* Nav */
-.nav {
-    display: flex;
-    gap: 2px;
-}
-
-.nav-link {
-    font-size: 13px;
-    color: var(--text-sec);
-    text-decoration: none;
-    padding: 5px 10px;
-    border-radius: 5px;
-    font-weight: 400;
-}
-
-.nav-link:hover {
-    color: var(--text-primary);
-    background: var(--bg-hover);
-}
-
-.nav-link.active {
-    color: var(--gold-bright);
-    font-weight: 500;
-}
-
-.nav-link.external::after {
-    content: '↗';
-    font-size: 0.75em;
-    margin-left: 3px;
-    opacity: 0.6;
-}
-
-/* Header right slot */
-.header-right {
-    margin-left: auto;
-    display: flex;
-    align-items: center;
-    gap: 6px;
 }
 
 /* ==========================================================================
@@ -522,30 +413,6 @@ body.split-dragging * {
 .editor-actions[data-dragging="1"] { cursor: grabbing; }
 .editor-tabs[data-dragging="1"] *,
 .editor-actions[data-dragging="1"] * { pointer-events: none; }
-
-.tutorial-bar {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    padding: 6px 12px;
-    background: color-mix(in srgb, var(--gold) 10%, var(--bg-panel));
-    border-bottom: 1px solid color-mix(in srgb, var(--gold) 30%, var(--border));
-    font-size: 12px;
-    flex-shrink: 0;
-    flex-wrap: wrap;
-}
-
-.tutorial-bar-step {
-    font-family: var(--font-mono);
-    font-weight: 600;
-    color: var(--gold);
-    white-space: nowrap;
-}
-
-.tutorial-bar-desc {
-    color: var(--text-sec);
-    flex: 1;
-}
 
 .tab-button {
     font-family: var(--font-mono);
@@ -871,12 +738,6 @@ body.split-dragging * {
     margin: 0;
 }
 
-.console-line {
-    display: flex;
-    gap: var(--spacing-sm);
-    margin-bottom: 1px;
-}
-
 .console-prompt {
     color: var(--gold);
     user-select: none;
@@ -884,7 +745,6 @@ body.split-dragging * {
 
 .console-result  { color: var(--console-result); }
 .console-error   { color: var(--console-error); }
-.console-warning { color: var(--console-warning); }
 
 #console-loading {
     position: absolute;
@@ -1309,32 +1169,6 @@ body.split-dragging * {
     font-size: 11px;
 }
 
-/* Primary / Run button */
-.btn-primary,
-.btn-run {
-    background: var(--gold-fill);
-    border-color: var(--gold-fill);
-    color: var(--on-gold);
-    font-weight: 500;
-    gap: 7px;
-}
-
-.btn-primary:hover,
-.btn-run:hover {
-    background: var(--gold-fill-hover);
-    border-color: var(--gold-fill-hover);
-    color: var(--on-gold);
-}
-
-.run-tri {
-    width: 0;
-    height: 0;
-    border-style: solid;
-    border-width: 4px 0 4px 6px;
-    border-color: transparent transparent transparent var(--on-gold);
-    flex-shrink: 0;
-}
-
 /* Select */
 .select {
     font-family: var(--font-family);
@@ -1407,78 +1241,9 @@ body.split-dragging * {
     background: var(--backdrop-loading);
 }
 
-.overlay-content {
-    background: var(--bg-panel);
-    border: 1px solid var(--border-mid);
-    border-radius: var(--radius-lg);
-    box-shadow: var(--shadow-lg);
-    width: 90%;
-    max-width: 800px;
-    /* 90vh, but never taller than the overlay's own content box -- which is
-       now the viewport minus the safe-area insets. A flex item centered in a
-       box it overflows loses its top edge off the top of the screen, which is
-       the same failure as the docs topbar, one level in. */
-    max-height: min(90vh, 100%);
-    overflow-y: auto;
-    animation: slideIn 0.18s ease-out;
-}
-
 @keyframes slideIn {
     from { opacity: 0; transform: translateY(12px); }
     to   { opacity: 1; transform: translateY(0); }
-}
-
-.overlay-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    padding: var(--spacing-lg);
-    border-bottom: 1px solid var(--border);
-}
-
-.overlay-header h2 {
-    font-family: var(--font-family);
-    font-size: 20px;
-    font-weight: 500;
-    color: var(--gold-bright);
-    letter-spacing: 0.01em;
-}
-
-.tutorial-list {
-    padding: var(--spacing-lg);
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
-    gap: var(--spacing-md);
-}
-
-.tutorial-card {
-    background: var(--bg-surface);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-md);
-    padding: var(--spacing-md);
-}
-
-.tutorial-card:hover {
-    border-color: var(--border-str);
-}
-
-.tutorial-card h3 {
-    font-size: 13px;
-    font-weight: 500;
-    color: var(--text-primary);
-    margin-bottom: var(--spacing-xs);
-}
-
-.tutorial-card p {
-    color: var(--text-sec);
-    font-size: 12px;
-    margin-bottom: var(--spacing-md);
-    line-height: 1.5;
-}
-
-.tutorial-card .btn {
-    width: 100%;
-    justify-content: center;
 }
 
 .loading-content {
@@ -1558,111 +1323,6 @@ body.split-dragging * {
 .footer-content a:hover {
     color: var(--gold-bright);
 }
-
-/* ==========================================================================
- * Tutorial Panel
- * ========================================================================== */
-
-.tutorial-panel {
-    flex-direction: column;  /* display:flex set inline */
-    flex-shrink: 0;
-    border-bottom: 1px solid var(--border-mid);
-    background: var(--bg-panel);
-    font-size: 12px;
-    font-family: var(--font-family);
-}
-
-.tp-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    padding: 8px 14px 0;
-}
-
-.tp-meta { display: flex; align-items: center; gap: 6px; }
-.tp-category { color: var(--gold-bright); font-size: 11px; font-weight: 500; letter-spacing: 0.04em; text-transform: uppercase; }
-.tp-sep { color: var(--text-dim); }
-.tp-progress-label { color: var(--text-dim); font-size: 11px; }
-
-.tp-body { padding: 6px 14px 8px; }
-.tp-step-title { color: var(--text-primary); font-weight: 500; margin-bottom: 3px; font-size: 12.5px; }
-.tp-instruction { color: var(--text-sec); line-height: 1.5; }
-
-.tp-hint {
-    margin-top: 5px;
-    padding: 4px 8px;
-    background: var(--gold-glow);
-    border-left: 2px solid var(--gold-dim);
-    color: var(--gold-bright);
-    font-family: var(--font-mono);
-    font-size: 11px;
-    border-radius: 0 3px 3px 0;
-    white-space: pre;
-}
-
-.tp-feedback { margin-top: 5px; font-size: 11.5px; min-height: 16px; }
-.tp-feedback-success { color: var(--success-color); }
-.tp-feedback-error { color: var(--text-sec); }
-
-.tp-footer {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    padding: 0 14px 8px;
-}
-
-.tp-progress-track {
-    flex: 1;
-    height: 3px;
-    background: var(--border-mid);
-    border-radius: 2px;
-    overflow: hidden;
-}
-.tp-progress-bar {
-    height: 100%;
-    background: var(--gold-fill);
-    border-radius: 2px;
-    width: 0%;
-}
-
-.tp-actions { display: flex; gap: 4px; flex-shrink: 0; }
-
-/* console comment line style (used for tutorial dividers) */
-.console-line-comment { color: var(--text-dim); font-style: italic; }
-
-/* Tutorial overlay progress badge */
-.tp-badge {
-    font-size: 10px;
-    color: var(--success-color);
-    margin-top: 4px;
-    min-height: 14px;
-}
-
-/* ==========================================================================
- * ANSI Color Support
- * ========================================================================== */
-
-.ansi-0  { color: var(--console-text); }
-.ansi-1  { color: var(--console-error); }
-.ansi-2  { color: var(--success-color); }
-.ansi-3  { color: var(--warning-color); }
-.ansi-4  { color: var(--info-color); }
-.ansi-5  { color: var(--syn-fn); }
-.ansi-6  { color: var(--syn-type); }
-.ansi-7  { color: var(--ansi-7); }
-.ansi-8  { color: var(--text-dim); }
-.ansi-9  { color: var(--ansi-9); }
-.ansi-10 { color: var(--ansi-10); }
-.ansi-11 { color: var(--ansi-11); }
-.ansi-12 { color: var(--ansi-12); }
-.ansi-13 { color: var(--ansi-13); }
-.ansi-14 { color: var(--ansi-14); }
-.ansi-15 { color: var(--ansi-15); }
-
-.ansi-bold      { font-weight: bold; }
-.ansi-dim       { opacity: 0.5; }
-.ansi-italic    { font-style: italic; }
-.ansi-underline { text-decoration: underline; }
 
 /* ==========================================================================
  * Scrollbars (global)
@@ -2022,9 +1682,8 @@ html.pwa {
     padding: 6px 12px 2px;
 }
 @media (max-width: 600px) {
-    /* Collapse Solve/Clear/Format/Share/Examples into the ⋯ menu so
+    /* Collapse Clear/Format/Share/Examples into the ⋯ menu so
        the tab bar has room for tabs. Run stays visible. */
-    .editor-actions > #solve-btn,
     .editor-actions > #clear-btn,
     .editor-actions > #format-btn,
     .editor-actions > #share-btn,
@@ -2070,24 +1729,6 @@ html.pwa {
     #repl-input .monaco-editor .view-line,
     #repl-input.repl-input-empty::after { font-size: 16px !important; }
     #repl-input { height: 26px; }
-}
-
-@media (max-width: 768px) {
-    .header-content {
-        padding: 0 14px;
-        gap: 10px;
-    }
-
-    .nav-sep { display: none; }
-
-    .nav {
-        gap: 0;
-    }
-
-    .logo-sub { display: none; }
-
-    /* Collapse button labels, keep icons */
-    .btn-label { display: none; }
 }
 
 /* ==========================================================================
@@ -2563,7 +2204,7 @@ html.pwa {
  * ========================================================================== */
 
 @media print {
-    .header, .footer, .editor-actions, .console-actions { display: none; }
+    .footer, .editor-actions, .console-actions { display: none; }
     .repl-container { display: block; }
     .editor-pane, .console-pane { break-inside: avoid; }
 }
