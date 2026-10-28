@@ -733,7 +733,18 @@ static uint32_t defn_params_index(const Form *f) {
      * `^export-as "c_name"`, `^deprecated "msg"` (caret-type-attributes-plan
      * P5) -- so every index below is relative to it. */
     uint32_t nm = 1;
-    while (nm < n && is_caret_attr(it[nm])) {
+    for (;;) {
+        /* The deprecated `(export-as "c_name")` list and `#[used]` spellings
+         * still read, and still sit before the name. */
+        if (nm < n && it[nm]->tag == F_LIST && it[nm]->as.list.len == 2) {
+            const Symbol *h = list_head_sym(it[nm]);
+            if (h && sym_eq(h, "export-as")) { nm++; continue; }
+        }
+        if (nm < n && it[nm]->tag == F_SYM && sym_is_hash_attr(it[nm]->as.sym)) {
+            nm++;
+            continue;
+        }
+        if (!(nm < n && is_caret_attr(it[nm]))) break;
         bool takes_str = sym_eq(it[nm]->as.sym, "^deprecated") ||
                          sym_eq(it[nm]->as.sym, "^export-as");
         nm++;
