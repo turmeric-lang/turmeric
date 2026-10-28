@@ -42,7 +42,7 @@
 
 
 (defn level3 [m : int] : int (+ m (sum-values 0 300 0)))
-(defn (export-as "lvl2_export") level2 [m : int] : int (* 2 (level3 (+ m 1))))
+(defn ^export-as "lvl2_export" level2 [m : int] : int (* 2 (level3 (+ m 1))))
 (defn body [] : int (+ 7 (level2 1)))
 (defn drive [f : ptr<void>] : int
   (while (pending? f)

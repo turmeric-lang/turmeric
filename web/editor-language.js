@@ -42,6 +42,9 @@ export function configureMonaco() {
         // before the name (caret-type-attributes-plan); `linear` and `affine`
         // above are the same words.
         'copy', 'move', 'heap', 'sealed', 'non-null', 'no-auto-ctor',
+        // A defn's pre-name attributes (caret-type-attributes-plan P5); `extends`
+        // and `capability` are above.
+        'no-unwind', 'used', 'export-as',
     ].join('|');
 
     // The C types an extern-c parameter may be written with, `^int`.

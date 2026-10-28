@@ -579,7 +579,7 @@ typedef struct EmitCtx {
     /* Phase 19: Buffer for effect handler functions that must be emitted just
      * before the enclosing function definition (never inside a function body). */
     Buf *pending_handler_fns;
-    /* Phase R5: true when currently emitting a #[no-unwind] function body;
+    /* Phase R5: true when currently emitting a ^no-unwind function body;
      * causes EX_PANIC/EX_PANIC_WITH to emit tur_panic_abort instead of
      * tur_panic so that no setjmp/longjmp unwinding is attempted. */
     bool no_unwind;

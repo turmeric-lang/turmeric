@@ -11,15 +11,9 @@ the test programs include; on wasm the embedder serves libc headers),
 `drive.js` (depth and cost measurements), `mini.js` (small calls against the
 assertions build), `sjlj.c` (the host-owned setjmp landing, no MIR).
 
-## `engine/` -- P1: the engine inside a copy of the REPL module
+## `engine/` -- P1, superseded
 
-`engine/build.sh` compiles the stock `tur_wasm` source list plus the driver's
-front half, `jit_engine.c`, `turi/jit_ffi.c`, MIR and a glue entry into one
-module, generating the import table from the runtime's declarations region
-(`engine/gen-symtab.py`). It needs a configured `build-wasm/` (its `tur_wasm`
-command line is copied), emcc and node. `node engine/run.js engine/tests/cmix.tur`
-runs the plan's inline-C program through it; flags are documented in
-`engine/run.js`. Both scripts build `external/mir` as it stands: the fork
-fixes the plan's section 6 lists, which they used to patch into a scratch
-copy, are vendored since turmeric-lang/mir#15. The plan's P1 section has the
-numbers and what is left.
+P1's `engine/` (the engine linked into a copy of the REPL module by hand) was
+replaced in P3 by the real build: the `tur_wasm_jit` CMake target and
+[`tools/wasm-jit/`](../wasm-jit/README.md).  Its four programs live on as
+`tools/wasm-jit/smoke/`; the plan's P1 section keeps its measurements.

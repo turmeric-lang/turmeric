@@ -48,7 +48,7 @@ shared runtime TU is in the
    one `main` is whole-program too.
 5. Separate compilation runs only for `tur build --shared`, a bare directory
    without `build.tur`, a project with zero or several `main`s or a non-entry
-   `#[used]` module, and `tur emit-c --output-dir`. There each module is
+   `^used` module, and `tur emit-c --output-dir`. There each module is
    elaborated on its own, and its imports become `#include "<mod>.h"`.
 6. Across TUs, the rule is **one owner, external linkage; everyone else
    declares or keeps a `static` copy**. Stdlib code is always a per-TU
@@ -83,7 +83,7 @@ shared runtime TU is in the
 | Stdlib autoload | Every compile | Forms of 34 stdlib files are prepended ahead of the entry file | n/a (once per compile) |
 | `(load "path")` | Top level, or directly in a `defmodule` body | The file's forms are spliced in place, before elaboration | Load-visited set, by canonical path |
 | `(import m ...)` | In a `defmodule` header (top level only in REPL sessions) | `m`'s file is read, its loads expanded, its forms elaborated into the global scope | `loaded_modules` registry, by module name |
-| `#[used]` force-load | Whole-program builds | `elab_force_load_module` loads a module no import reaches | Same registry; a no-op under separate compilation |
+| `^used` force-load | Whole-program builds | `elab_force_load_module` loads a module no import reaches | Same registry; a no-op under separate compilation |
 
 ### `load` is a preprocessor
 
@@ -307,8 +307,8 @@ a load a no-op.
 | Command | Shape | Driver |
 |---|---|---|
 | `tur build <file>`, `tur run <file>`, `tur emit-c <file>` | Whole-program, one TU | `compile_to_c` -> `emit_program` |
-| `tur build <dir>` with `build.tur`, exactly one `main`, no `#[used]` outside the entry | Whole-program, one TU | `cmd_build_project` -> `cmd_build` |
-| `tur build <dir>` with `build.tur`: `--shared`, zero or several `main`s, or a non-entry `#[used]` file | Separate | `cmd_build_project` -> `cmd_build_multi_files` |
+| `tur build <dir>` with `build.tur`, exactly one `main`, no `^used` outside the entry | Whole-program, one TU | `cmd_build_project` -> `cmd_build` |
+| `tur build <dir>` with `build.tur`: `--shared`, zero or several `main`s, or a non-entry `^used` file | Separate | `cmd_build_project` -> `cmd_build_multi_files` |
 | `tur build <dir>` without `build.tur` | Separate | `cmd_build_multi` -> `cmd_build_multi_files` |
 | `tur emit-c --output-dir <dir> a.tur b.tur ...` | Separate, emit only | `cmd_emit_c_to_dir` |
 | `tur emit-h <file>` | One header, first pass only | `compile_to_h` |
@@ -318,9 +318,9 @@ runtime and sees every function at once, which separate compilation cannot.
 Anything that only works whole-program -- see [Known gaps](#known-gaps) --
 therefore works in most project builds and breaks under `--shared`.
 
-`#[used]` disqualifies the shortcut because a module reached only through a
+`^used` disqualifies the shortcut because a module reached only through a
 raw C symbol is not in the entry's import closure (`file_has_used_attr`). On
-the whole-program file path, `cmd_build` instead force-loads `#[used]` modules
+the whole-program file path, `cmd_build` instead force-loads `^used` modules
 found on the `-I` dirs.
 
 ### The two-pass driver
@@ -412,7 +412,7 @@ In order, with `separate_compilation` true:
 |---|---|---|
 | Exported `defn` | external definition | prototype via the header |
 | Private `defn` | `static` | nothing |
-| `#[used]` defn (`retain_c_linkage`) | external | nothing (reached by raw C name) |
+| `^used` defn (`retain_c_linkage`) | external | nothing (reached by raw C name) |
 | User module's instance method | external (`emit_inst_method_wants_external`) | prototype via the header |
 | Stdlib `defn`, stdlib or stdlib-loaded instance | `static` copy | its own `static` copy |
 | Spec clone of a user generic | external, prototype in the owner's header | call sites renamed (borrow) |

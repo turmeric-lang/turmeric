@@ -9953,42 +9953,17 @@ Expr *elab_defn(Elab *e, const Form *call) {
      * elaborated since the last defn may be what a pending forward decl's
      * return was waiting on; settle those before this body calls them. */
     if (e->fwd_pending_results) elab_fwd_refresh_pending(e);
-    /* Phase R5: Check for #[no-unwind] attribute before name.
-     * #[used]: retain with external C linkage (see Binding.retain_c_linkage).
-     * Both are bare-symbol attributes and may appear in either order. */
+    /* The pre-name attributes of a defn are all `^attr`s, in any order:
+     * ^no-unwind (Phase R5), ^used (retain with external C linkage, see
+     * Binding.retain_c_linkage) and ^export-as "c_name" (Phase M6) among them.
+     * The earlier spellings -- the bare #[no-unwind] / #[used] symbols and the
+     * list (export-as "c_name") -- are still read in the same loop and are
+     * deprecated (caret-type-attributes-plan P5, TUR-D0008). */
     uint32_t name_idx = 1;  /* index of name in items (after 'defn') */
     bool no_unwind = false;
     bool retain_c_linkage = false;
-    Form *name_f = call->as.list.items[name_idx];
-    while (name_f->tag == F_SYM &&
-           (name_f->as.sym == e->sym_no_unwind_attr ||
-            name_f->as.sym == e->sym_used_attr)) {
-        if (name_f->as.sym == e->sym_no_unwind_attr) no_unwind = true;
-        else retain_c_linkage = true;
-        name_idx++;
-        name_f = call->as.list.items[name_idx];
-    }
-
-    /* Phase M6: Check for (export-as "c_name") attribute before name.
-     * Syntax: (defn (export-as "c_name") fname [...] :ret body...)
-     * The attribute is a list whose head is the symbol export-as. */
     const char *c_export_name = NULL;
-    if (name_f->tag == F_LIST && name_f->as.list.len == 2 &&
-        name_f->as.list.items[0]->tag == F_SYM &&
-        name_f->as.list.items[0]->as.sym == e->sym_export_as_attr) {
-        Form *cname_arg = name_f->as.list.items[1];
-        if (cname_arg->tag != F_STR) {
-            diag_emit(DIAG_ERROR, name_f->span,
-                      "^:export-as argument must be a string literal: (export-as \"c_name\")");
-            return NULL;
-        }
-        char *cname_buf = (char *)arena_alloc(e->arena, cname_arg->as.s.len + 1);
-        memcpy(cname_buf, cname_arg->as.s.p, cname_arg->as.s.len);
-        cname_buf[cname_arg->as.s.len] = '\0';
-        c_export_name = cname_buf;
-        name_idx++;
-        name_f = call->as.list.items[name_idx];
-    }
+    Form *name_f = call->as.list.items[name_idx];
 
     /* F4 (cross-plan-followups): ^deprecated attribute before name.
      * Syntax: (defn ^deprecated "message" name [...] :ret body...)
@@ -10013,9 +9988,64 @@ Expr *elab_defn(Elab *e, const Form *call) {
     bool defn_has_byval_attr = false;
     /* The pre-name attributes, in any order. */
     for (;;) {
+        if (name_f->tag == F_LIST && name_f->as.list.len == 2 &&
+            name_f->as.list.items[0]->tag == F_SYM &&
+            name_f->as.list.items[0]->as.sym == e->sym_export_as_attr) {
+            /* (export-as "c_name"): the earlier spelling of ^export-as "c_name" */
+            Form *cname_arg = name_f->as.list.items[1];
+            if (cname_arg->tag != F_STR || c_export_name) {
+                diag_emit(DIAG_ERROR, name_f->span,
+                          c_export_name ? "export-as given twice"
+                                        : "^:export-as argument must be a string literal: (export-as \"c_name\")");
+                return NULL;
+            }
+            char *cname_buf = (char *)arena_alloc(e->arena, cname_arg->as.s.len + 1);
+            memcpy(cname_buf, cname_arg->as.s.p, cname_arg->as.s.len);
+            cname_buf[cname_arg->as.s.len] = '\0';
+            c_export_name = cname_buf;
+            diag_emit_with_code(elab_deprecation_level(), name_f->span,
+                                TUR_D0008_ATTR_AFTER_NAME,
+                                "defn: (export-as \"%s\") is deprecated; "
+                                "write ^export-as \"%s\"", cname_buf, cname_buf);
+            name_idx++;
+            if (name_idx >= call->as.list.len) {
+                diag_emit(DIAG_ERROR, name_f->span,
+                          "export-as must be followed by the function name");
+                return NULL;
+            }
+            name_f = call->as.list.items[name_idx];
+            continue;
+        }
         if (name_f->tag != F_SYM) break;
         const Symbol *as = name_f->as.sym;
-        if (as == e->sym_caret_reflect && !is_reflect_attr) {
+        if (as == e->sym_no_unwind_attr || as == e->sym_used_attr) {
+            /* #[no-unwind] / #[used]: the earlier spelling of ^no-unwind / ^used */
+            if (as == e->sym_no_unwind_attr) no_unwind = true;
+            else retain_c_linkage = true;
+            diag_emit_with_code(elab_deprecation_level(), name_f->span,
+                                TUR_D0008_ATTR_AFTER_NAME,
+                                "defn: #[%s] is deprecated; write ^%s",
+                                as->name + 1, as->name + 1);
+        } else if (as == e->sym_caret_no_unwind) {
+            no_unwind = true;
+        } else if (as == e->sym_caret_used) {
+            retain_c_linkage = true;
+        } else if (as == e->sym_caret_export_as) {
+            if (c_export_name || name_idx + 1 >= call->as.list.len ||
+                call->as.list.items[name_idx + 1]->tag != F_STR) {
+                diag_emit(DIAG_ERROR, name_f->span,
+                          c_export_name ? "^export-as given twice"
+                                        : "^export-as must be followed by a string literal: "
+                                          "^export-as \"c_name\"");
+                return NULL;
+            }
+            Form *cname_arg = call->as.list.items[name_idx + 1];
+            char *cname_buf = (char *)arena_alloc(e->arena, cname_arg->as.s.len + 1);
+            memcpy(cname_buf, cname_arg->as.s.p, cname_arg->as.s.len);
+            cname_buf[cname_arg->as.s.len] = '\0';
+            c_export_name = cname_buf;
+            name_idx++;   /* the string; the common increment below takes the attr */
+        } else if (as == e->sym_caret_reflect && !is_reflect_attr) {
             is_reflect_attr = true;
             reflect_annot   = name_f;
         } else if (as == e->sym_caret_construct && !defn_has_construct_attr) {
@@ -10053,8 +10083,8 @@ Expr *elab_defn(Elab *e, const Form *call) {
              * named `^contruct` and the real name became its parameters. */
             diag_emit(DIAG_ERROR, name_f->span,
                       "defn: '%s' is not an attribute a defn takes before its name "
-                      "(those are ^construct, ^byval, ^deprecated, ^reflect, each "
-                      "at most once)", as->name);
+                      "(those are ^construct, ^byval, ^deprecated, ^reflect, "
+                      "^no-unwind, ^used and ^export-as, each at most once)", as->name);
             return NULL;
         } else {
             break;
@@ -10074,7 +10104,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
         is_reflect_attr = false;
     }
 
-    /* Minimum: (defn name []) or (defn #[no-unwind] name []) */
+    /* Minimum: (defn name []) or (defn ^no-unwind name []) */
     if (name_idx + 2 >= call->as.list.len) {  /* need name, params, body */
         diag_emit(DIAG_ERROR, call->span,
                   "defn requires (defn name [params...] body...)");
@@ -14105,9 +14135,9 @@ Expr *elab_defn(Elab *e, const Form *call) {
         b->refine_return_var  = rt_inferred_var;
     }
 
-    /* Phase R5: Store #[no-unwind] attribute on the binding */
+    /* Phase R5: Store ^no-unwind attribute on the binding */
     b->no_unwind = no_unwind;
-    /* #[used]: retain with external C linkage under separate compilation */
+    /* ^used: retain with external C linkage under separate compilation */
     b->retain_c_linkage = retain_c_linkage;
     /* closure-drop-glue S1c (non-retaining fn-param inference): a fn-typed / ^fat
      * parameter that the body only CALLS -- never lets escape as a value -- does

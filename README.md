@@ -439,7 +439,7 @@ element type is itself `Eq`:
 
 ; Effect hierarchy: Write ^extends IO; #{Write} satisfies #{IO}
 (defeffect IO [] :nil)
-(defeffect Log [s :cstr] :nil ^extends IO)
+(defeffect ^extends IO Log [s :cstr] :nil)
 
 (defn log-message [] #{IO} : nil
   (perform (Log "hello")))

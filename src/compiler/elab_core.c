@@ -2734,10 +2734,13 @@ void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     e->sym_panic_payload_type = intern_cstr(st, "panic-payload-type");
     /* Phase R5: no-unwind attribute */
     e->sym_no_unwind_attr = intern_cstr(st, "#no-unwind");
-    /* #[used] attribute: retain a defn with external C linkage */
+    /* ^used attribute: retain a defn with external C linkage */
     e->sym_used_attr = intern_cstr(st, "#used");
     /* Phase M6: (export-as "c_name") attribute head symbol */
     e->sym_export_as_attr = intern_cstr(st, "export-as");
+    e->sym_caret_no_unwind = intern_cstr(st, "^no-unwind");
+    e->sym_caret_used      = intern_cstr(st, "^used");
+    e->sym_caret_export_as = intern_cstr(st, "^export-as");
     /* M2a: `^construct` polymorphic-constructor synthesis marker, and M5
      * residual-straddle: `^byval` prefer-byvalue-spec marker.  Both used to
      * be spelled inside the effect row (^construct / ^byval);
@@ -3066,8 +3069,8 @@ Binding *binding_new(Elab *e, const Symbol *name, Type type,
     b->widen_fn_alias = NULL;
     b->is_moved = false;  /* Phase 5: move semantics */
     b->moved_at = SPAN_UNKNOWN;
-    b->no_unwind = false;  /* Phase R5: #[no-unwind] attribute */
-    b->retain_c_linkage = false;  /* #[used] attribute */
+    b->no_unwind = false;  /* Phase R5: ^no-unwind attribute */
+    b->retain_c_linkage = false;  /* ^used attribute */
     b->is_exported = false;
     b->defining_module_name = e->current_module_name;
     b->c_export_name = NULL;  /* Phase M6: ^:export-as C name */

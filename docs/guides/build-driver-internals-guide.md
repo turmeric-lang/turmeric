@@ -64,7 +64,8 @@ side of the commands covered here is in
 | `src/driver/cli.c` | The command table, the global-flag table and its parser, `--timings`, the environment switches, `tur --help` and the per-command usage text, `-I` parsing, the external-command fallback |
 | `src/driver/paths.c` | Reading files, the executable's path, the stdlib root, `#lang` detection, `cc_system` |
 | `src/driver/spice.c` | Manifest and spice discovery: reader macros, experiments, the `:spices` include walk, `.tur` collection, engine selection |
-| `src/driver/pipeline.c` | `core_passes[]` and the pass runner, the three compile entry points, the stdlib and project prelude, the split switches, `tur_check_only` / `tur_collect_symbols` |
+| `src/driver/pipeline.c` | `core_passes[]` and the pass runner, the three compile entry points, the stdlib and project prelude, the split switches |
+| `src/driver/lsp_backend.c` | `tur_check_only` / `tur_collect_symbols`, the LSP and MCP analysis backend over `compile_to_c` (the browser module has its own in `web/wasm_lsp.c`) |
 | `src/driver/cc.c` | `#include` hoisting, autolink markers and flags, the runtime library and its mode, `drv_link_command_run`, the stable temp paths |
 | `src/driver/preamble_split.c` | The prelude pieces and their cache, the r7rs library-unit cache, the preamble swap (`jit_try_split_preamble`), `tur emit-rt-split` |
 | `src/driver/cmd_emit.c` | `emit-c`, `emit-h`, `check`, `expand`, `audit-spans`; the build-directory ladder |
@@ -343,7 +344,7 @@ happens in the split shape is therefore slow, never wrong.
    `tur build` compiles and the C `tur emit-c` prints: `emit-c` keeps a
    self-contained preamble, `build` may declare runtime pieces an archive
    supplies.
-2. `collect_used_attr_modules` force-loads `#[used]` modules from the `-I`
+2. `collect_used_attr_modules` force-loads `^used` modules from the `-I`
    dirs, so a symbol only C reaches is still emitted.
 3. `compile_to_c`, with `g_split_lib_sink`/`g_split_imp_sink` set unless the
    target is wasm or `--runtime=split`.
@@ -438,7 +439,7 @@ names: that file is post-swap and post-hoist, unlike `tur emit-c` output.
 5. Builds the include path: user `-I` first, then
    `resolve_project_include_dirs` (own `src/` plus each `:spices` dep's).
 6. **Single-main fast path:** an executable with exactly one `main` and no
-   non-entry `#[used]` module is built as a **single file**:
+   non-entry `^used` module is built as a **single file**:
    `cmd_build(entry, ...)`, output `<build-dir>/bin/<:name>`. This is the
    whole-program route, carrying the full runtime in one unit.
 7. Otherwise, separate compilation: dep modules are added to the build set

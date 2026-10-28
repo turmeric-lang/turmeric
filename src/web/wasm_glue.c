@@ -31,6 +31,7 @@
 #include "reader.h"
 #include "runtime/experiments.h"
 #include "runtime/globals.h"   /* r7rs-lang-plan R9: g_lang_prelude */
+#include "source_literal.h"  /* tur_source_literal_escape */
 #include "symbols.h"
 #include "turi/preload.h"
 #include "turi/docstrings.h"
@@ -375,6 +376,78 @@ int turi_wasm_eval_ex(const char *input, char **out_result, char **out_error) {
     turi_value_repr(buf, sizeof(buf), result);
     *out_result = turi_wasm_strdup(buf);
     return 0;
+}
+
+/* Run the program in the file at `path` the way `tur --interpret` does
+ * (cmd_interpret_main, src/driver/cmd_eval.c), on a fresh environment:
+ * `(load "path")`, then `main` if the file defines one, then the pending
+ * defers.  Returns the exit status: main's int result, or 1 when loading or
+ * main reported an error (printed to stderr).  The browser JIT's fallback
+ * (web/wasm_jit_glue.c): a program, unlike a REPL line, runs its main. */
+int turi_wasm_run_program(const char *path) {
+    if (turi_wasm_init() != 0) return 1;
+    turi_wasm_reset();
+    if (!g_env || !path) return 1;
+    /* The program's #lang picks the session's language first, as the page
+     * does before an Interpret run: a language with its own prelude (r7rs) or
+     * stdlib (saffron) needs the session built for it, and `load` alone only
+     * switches the reader.  No #lang is turmeric -- a reset keeps the previous
+     * program's language, which must not leak into this one. */
+    {
+        char lang[128] = "turmeric";
+        FILE *f = fopen(path, "rb");
+        char head[160];
+        if (f) {
+            size_t n = fread(head, 1, sizeof head - 1, f);
+            fclose(f);
+            head[n] = '\0';
+            if (strncmp(head, "#lang ", 6) == 0) {
+                size_t len = strcspn(head + 6, "\r\n");
+                while (len > 0 && (head[6 + len - 1] == ' ' || head[6 + len - 1] == '\t')) len--;
+                if (len > 0 && len < sizeof lang) {
+                    memcpy(lang, head + 6, len);
+                    lang[len] = '\0';
+                }
+            }
+        }
+        if (turi_wasm_set_lang(lang) != 0) {
+            fprintf(stderr, "tur: unknown #lang '%s'\n", lang);
+            wasm_flush_program_output();
+            return 1;
+        }
+    }
+    char epath[8200];
+    if (!tur_source_literal_escape(path, epath, sizeof epath)) return 1;
+    char load_form[8300];
+    snprintf(load_form, sizeof load_form, "(load \"%s\")", epath);
+    int rc = 0;
+    TuriValue result = turi_eval(g_env, load_form);
+    if (turi_is_error(result)) {
+        const char *msg = turi_error_message(result);
+        /* parse and elaboration errors were printed by the diagnostic system */
+        if (msg && strcmp(msg, "parse error") != 0 && strcmp(msg, "elaboration error") != 0)
+            fprintf(stderr, "tur: %s\n", msg);
+        rc = 1;
+    } else {
+        TuriValue main_fn = turi_env_get(g_env, "main");
+        if (main_fn.tag == TURI_CLOSURE) {
+            TuriValue r = turi_call(g_env, main_fn, NULL, 0);
+            if (r.tag == TURI_ERROR) {
+                const char *msg = turi_error_message(r);
+                if (msg && strcmp(msg, "parse error") != 0 && strcmp(msg, "elaboration error") != 0)
+                    fprintf(stderr, "tur: %s\n", msg);
+                rc = 1;
+            } else if (r.tag == TURI_THROW) {
+                fprintf(stderr, "tur: uncaught exception\n");
+                rc = 1;
+            } else if (r.tag == TURI_INT) {
+                rc = (int)r.as_int;
+            }
+        }
+        turi_run_pending_defers(g_env);
+    }
+    wasm_flush_program_output();
+    return rc;
 }
 
 /* Free a string allocated by turi_wasm_eval or turi_wasm_eval_ex. */

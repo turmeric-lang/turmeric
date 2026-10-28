@@ -307,7 +307,7 @@ typedef enum DiagCode {
      * boxes.  Erased parameters there have no decidable convention. */
     TUR_E0715_NICHE_ELEMENT_ERASED_COMPARATOR,
     /* Deprecation band (TUR-D####): syntax slated for removal, or already
-     * removed.  D0002-D0006 are emitted at elab_deprecation_level()
+     * removed.  D0002-D0008 are emitted at elab_deprecation_level()
      * (elab_internal.h): a warning, promoted to an error under
      * --Werror=deprecated.  D0001 is the exception, below. */
     /* fn-type-bare-identifier-plan: a leading colon on a type inside a
@@ -335,6 +335,11 @@ typedef enum DiagCode {
      * Turmeric dialects; `let` already binds sequentially.  Never emitted for
      * a `#lang r7rs` source, whose `let*` is the spec's. */
     TUR_D0006_LET_STAR,
+    /* caret-type-attributes-plan P5: the attributes of a defeffect that used to
+     * trail its signature (^extends Parent, ^capability), and a defn's
+     * #[no-unwind] / #[used] / (export-as "c") flags, are `^attr`s before the
+     * name; the earlier spellings are deprecated. */
+    TUR_D0008_ATTR_AFTER_NAME,
     /* XF (experimental-flag-mechanism-plan): the `--enable=<name>` surface.
      * E0310 fires at CLI/manifest parse on an unknown experiment name;
      * W0060/W0061 fire once per compile at the first use site of an enabled

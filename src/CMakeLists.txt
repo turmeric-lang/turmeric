@@ -526,7 +526,6 @@ target_compile_definitions(tur_core PRIVATE TUR_VERSION="${_TUR_VERSION_STR}")
 # tests/check-driver-headers.py checks each header section against the
 # file it names.
 set(TUR_DRIVER_SOURCES
-  driver/cc.c
   driver/cli.c
   driver/cmd_build.c
   driver/cmd_emit.c
@@ -537,14 +536,67 @@ set(TUR_DRIVER_SOURCES
   driver/cmd_x.c
   driver/compile_link.c
   driver/jit.c
+  driver/lsp_backend.c
+  driver/project.c
+  driver/worker.c
+)
+
+# tur_front (wasm-jit-plan P2): the in-memory front half of the driver --
+# read, elaborate, run the passes, emit C, hoist and scan the include and
+# autolink markers, split the preamble -- as an OBJECT library, so a host
+# with no command line can compile Turmeric to C.  These five files reach
+# nothing else in the driver: tur_front_link_unit links them with tur_core
+# alone and fails if one of them grows a reference to cli.c, a cmd_*.c, or
+# anything else that drags the command table in.  They still call system()
+# through cc_system for the prelude and library caches; a host without a
+# toolchain declines those paths at run time.
+set(TUR_FRONT_SOURCES
+  driver/cc.c
   driver/paths.c
   driver/pipeline.c
   driver/preamble_split.c
-  driver/project.c
   driver/spice.c
-  driver/worker.c
 )
-add_executable(tur main.c lsp/mcp.c ${TUR_DRIVER_SOURCES} $<TARGET_OBJECTS:tur_core>)
+add_library(tur_front OBJECT ${TUR_FRONT_SOURCES})
+target_include_directories(tur_front PRIVATE ${TUR_INCLUDE_DIRS})
+target_compile_definitions(tur_front PRIVATE TUR_VERSION="${_TUR_VERSION_STR}")
+target_compile_options(tur_front PRIVATE
+    -Wall -Wextra ${TUR_WERROR} ${TUR_FORMAT_WARNINGS} -Wno-unused-parameter ${TUR_CSTD} -pedantic
+    $<$<C_COMPILER_ID:GNU>:-Wno-format-truncation>
+    $<$<CONFIG:Debug>:   -Og -g ${TUR_ASAN_FLAGS} -DTUR_DEBUG=1>
+    $<$<CONFIG:Release>: -O2 -DNDEBUG>
+    $<$<CONFIG:TSan>:    -O1 -g -fsanitize=thread>
+    -pthread
+)
+
+add_executable(tur main.c lsp/mcp.c ${TUR_DRIVER_SOURCES}
+               $<TARGET_OBJECTS:tur_front> $<TARGET_OBJECTS:tur_core>)
+
+# The boundary check for tur_front: linked from tur_front and tur_core only
+# (tests/driver/front_link_test.c says why).
+add_executable(tur_front_link_unit
+    ${CMAKE_SOURCE_DIR}/tests/driver/front_link_test.c
+    $<TARGET_OBJECTS:tur_front>
+    $<TARGET_OBJECTS:tur_core>
+)
+target_include_directories(tur_front_link_unit PRIVATE ${TUR_INCLUDE_DIRS})
+target_compile_options(tur_front_link_unit PRIVATE
+    -Wall -Wextra ${TUR_WERROR} -Wno-unused-parameter ${TUR_CSTD}
+    -pthread
+    $<$<CONFIG:Debug>:   -Og -g ${TUR_ASAN_FLAGS} -DTUR_DEBUG=1>
+    $<$<CONFIG:Release>: -O2 -DNDEBUG>
+)
+target_link_options(tur_front_link_unit PRIVATE
+    -pthread
+    $<$<CONFIG:Debug>:   ${TUR_ASAN_FLAGS}>
+)
+target_link_libraries(tur_front_link_unit PRIVATE m ${CMAKE_DL_LIBS})
+if(HAVE_EDITLINE)
+    target_link_libraries(tur_front_link_unit PRIVATE ${LIBEDIT_LIB})
+endif()
+set_target_properties(tur_front_link_unit PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
+)
 
 # J1 (jit-engine-plan): the in-process MIR JIT engine behind `tur jit`.
 # Only under -DTUR_JIT=ON: vendors MIR (cmake/mir.cmake, included by the
@@ -2047,6 +2099,52 @@ if(TUR_WASM)
                 ${CMAKE_SOURCE_DIR}/web/public/turmeric.wasm
             COMMENT "Copying WASM module to web/public"
         )
+
+        # wasm-jit-plan P3: the browser JIT, turmeric-jit.{js,wasm} -- the
+        # stock module's sources plus the driver's front half (tur_front),
+        # the MIR engine in interpreter mode, and an import table generated
+        # from the runtime's declarations region.  A second module, not a
+        # bigger tur_wasm: only a page that asks for the Compile engine loads
+        # it.  tools/wasm-jit/build-module.sh does the work (objects through a
+        # generated Makefile, the table, the embedded headers, the link).
+        option(TUR_WASM_JIT "Build the browser JIT module (turmeric-jit.wasm)" ON)
+        if(TUR_WASM_JIT)
+            # TUR_MIR_SOURCE_DIR, as for the native JIT (cmake/mir.cmake): a
+            # checkout of the fork, to try a MIR change on wasm before it is
+            # merged and synced.
+            set(TUR_MIR_SOURCE_DIR "${CMAKE_SOURCE_DIR}/external/mir"
+                CACHE PATH "MIR source tree for the JIT engine (default: the vendored copy)")
+            set(_jit_list "")
+            foreach(_s ${WASM_SOURCES} ${TUR_FRONT_SOURCES})
+                if(_s MATCHES "\\.c$")
+                    if(IS_ABSOLUTE "${_s}")
+                        string(APPEND _jit_list "rt ${_s}\n")
+                    else()
+                        string(APPEND _jit_list "rt ${CMAKE_CURRENT_SOURCE_DIR}/${_s}\n")
+                    endif()
+                endif()
+            endforeach()
+            foreach(_s jit_engine.c turi/jit_ffi.c web/wasm_jit_glue.c)
+                string(APPEND _jit_list "engine ${CMAKE_CURRENT_SOURCE_DIR}/${_s}\n")
+            endforeach()
+            foreach(_s mir.c c2mir/c2mir.c)
+                string(APPEND _jit_list "mir ${TUR_MIR_SOURCE_DIR}/${_s}\n")
+            endforeach()
+            string(APPEND _jit_list "mir ${CMAKE_CURRENT_SOURCE_DIR}/web/wasm_jit_stubs.c\n")
+            file(WRITE ${CMAKE_BINARY_DIR}/wasm-jit/sources.txt "${_jit_list}")
+
+            add_custom_target(tur_wasm_jit
+                COMMAND bash ${CMAKE_SOURCE_DIR}/tools/wasm-jit/build-module.sh
+                        ${CMAKE_BINARY_DIR}/wasm-jit
+                        ${CMAKE_BINARY_DIR}/wasm-jit/sources.txt
+                        ${_TUR_VERSION_STR}
+                        ${TUR_MIR_SOURCE_DIR}
+                WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+                DEPENDS ${TUR_REGION_EMBED_C}
+                COMMENT "Building the Turmeric browser JIT module (turmeric-jit.wasm)"
+                VERBATIM
+            )
+        endif()
     endif()
 endif()
 

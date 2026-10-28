@@ -86,7 +86,7 @@
 ;;; `:refer [(effect Write)]`. `(export-from other name ...)` re-exports names that
 ;;; `other`, which must already be imported, exports; it emits no wrapper, so the
 ;;; consumer calls the original directly. A name that two exported symbols turn
-;;; into the same C name is reported with both. C names, and `(export-as "c_name")`
+;;; into the same C name is reported with both. C names, and `^export-as "c_name"`
 ;;; to choose one, are in module-system-guide.
 ;;;
 ;;; Parameters:

@@ -5,8 +5,8 @@
 ;; inferred row.  A correctly-tagged caller (#{FS}) type-checks and runs; an
 ;; un-annotated caller is unconstrained.
 
-(defeffect IO [] :nil ^capability)
-(defeffect FS [] :nil ^extends IO ^capability)
+(defeffect ^capability IO [] :nil)
+(defeffect ^capability ^extends IO FS [] :nil)
 
 ;; Capability-tagged leaf (inline-C body never performs FS; no W0031).
 (defn slurp [path : cstr] #fx{FS} : int

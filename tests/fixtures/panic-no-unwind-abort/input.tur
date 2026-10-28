@@ -1,6 +1,6 @@
 ;; Phase R5: #[no-unwind] function that actually panics must call abort().
 ;; The process exits non-zero and stderr contains "panic (no unwind):".
-(defn #[no-unwind] abort-op [x] :int
+(defn ^no-unwind abort-op [x] :int
   (do
     (panic "no-unwind triggered")
     x))

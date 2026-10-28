@@ -1,6 +1,6 @@
 /* project.c -- directory builds: `tur build <dir>` with a build.tur
  * (cmd_build_project) or without one (cmd_build_multi), both by separate
- * compilation, one module per file; module names, and the `#[used]` module
+ * compilation, one module per file; module names, and the `^used` module
  * scan.
  *
  * Part of the compiler driver (src/driver/); driver.h says how the files
@@ -143,7 +143,7 @@ static bool file_has_main_defn(const char *path) {
     return found;
 }
 
-/* Return true if `path` carries a `#[used]` attribute -- a defn explicitly
+/* Return true if `path` carries a `^used` (or the earlier `#[used]`) attribute -- a defn explicitly
  * retained with external C linkage because it is reached only through its
  * mangled C symbol (cross-module inline-C bridge or by-address C-ABI callback).
  * The reader admits whitespace between `#[` and the name, so accept that too.
@@ -158,6 +158,14 @@ static bool file_has_used_attr(const char *path) {
     if (drv_read_entire_file_quiet(path, &src, &len) != 0) return false;
     bool found = false;
     for (size_t i = 0; i + 6 < len && !found; i++) {
+        /* `^used`, the attribute spelling (caret-type-attributes-plan P5): a
+         * token of its own, so not `^used-by` or `x^used`. */
+        if (src[i] == '^' && strncmp(src + i + 1, "used", 4) == 0 &&
+            (i == 0 || strchr(" \t\r\n(", src[i - 1]) != NULL) &&
+            strchr(" \t\r\n)", src[i + 5]) != NULL) {
+            found = true;
+            break;
+        }
         if (src[i] != '#' || src[i + 1] != '[') continue;
         size_t j = i + 2;
         while (j < len && (src[j] == ' ' || src[j] == '\t')) j++;
@@ -171,15 +179,15 @@ static bool file_has_used_attr(const char *path) {
 }
 
 /* used-attr-whole-program: scan each -I module-search dir for `.tur` modules
- * that carry a #[used] attribute and return their slash-separated module names
+ * that carry a ^used attribute and return their slash-separated module names
  * (path relative to the include dir, sans ".tur").  cmd_build force-loads
- * these on the single-file/whole-program path so a #[used] defn reached only
+ * these on the single-file/whole-program path so a ^used defn reached only
  * via a raw mangled C symbol (no `(import)`) is still emitted -- the same
  * retention `tur build <project>` gets from its separate-compilation fallback.
  *
  * The entry file's own module is excluded (it is elaborated as the program's
  * top-level forms; force-loading it as a module would double-define it).
- * #[used] is rare, so the common case is a cheap read-and-no-match per `.tur`
+ * ^used is rare, so the common case is a cheap read-and-no-match per `.tur`
  * file; realpath is only paid for the few files that actually match.
  * Heap array; free via free_tur_files. */
 char **collect_used_attr_modules(const char *entry_path,
@@ -1178,7 +1186,7 @@ int cmd_build_project(const char *root_in, const char *out_path,
         for (int i = 0; i < n_files; i++) {
             if (file_has_main_defn(tur_files[i])) { entry = tur_files[i]; n_main++; }
         }
-        /* #[used] disqualifies the shortcut: a non-entry module retained for C
+        /* ^used disqualifies the shortcut: a non-entry module retained for C
          * linkage (raw-extern bridge / by-address callback) is, by construction,
          * NOT in the entry's Turmeric import closure, so whole-program inlining
          * would drop it and its mangled symbol would dangle.  Fall through to

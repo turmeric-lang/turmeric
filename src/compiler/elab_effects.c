@@ -1452,15 +1452,37 @@ Expr *elab_defeffect(Elab *e, const Form *call) {
         return NULL;
     }
 
-    /* Phase P19-6: Parse optional ^private visibility annotation */
+    /* The attributes before the name, in any order: ^private (Phase P19-6),
+     * ^capability (stdlib-effect-rows) and ^extends Parent (ET4).  The last two
+     * used to trail the signature; that spelling is still read below and is
+     * deprecated (caret-type-attributes-plan P5, TUR-D0008). */
     bool is_private = false;
+    bool is_capability = false;
+    const Symbol *parent_name = NULL;
     uint32_t name_idx = 1;  /* index of the effect name form */
-    if (call->as.list.len >= 5) {
-        Form *maybe_private = call->as.list.items[1];
-        if (maybe_private->tag == F_SYM
-            && maybe_private->as.sym == e->sym_caret_private) {
+    for (;;) {
+        /* leave room for the name, the parameter list and the result type */
+        if (name_idx + 3 >= (uint32_t)call->as.list.len) break;
+        Form *af = call->as.list.items[name_idx];
+        if (af->tag != F_SYM) break;
+        if (af->as.sym == e->sym_caret_private) {
             is_private = true;
-            name_idx = 2;
+            name_idx++;
+        } else if (af->as.sym == e->sym_caret_capability) {
+            is_capability = true;
+            name_idx++;
+        } else if (af->as.sym == e->sym_caret_extends) {
+            Form *pf = call->as.list.items[name_idx + 1];
+            if (pf->tag != F_SYM || parent_name) {
+                diag_emit(DIAG_ERROR, pf->tag != F_SYM ? pf->span : af->span,
+                          parent_name ? "defeffect: ^extends given twice"
+                                      : "defeffect: expected effect name after ^extends");
+                return NULL;
+            }
+            parent_name = pf->as.sym;
+            name_idx += 2;
+        } else {
+            break;
         }
     }
 
@@ -1643,16 +1665,20 @@ Expr *elab_defeffect(Elab *e, const Form *call) {
         return NULL;
     }
     
-    /* ET4: Parse optional ^extends ParentName after the return type.
-     * stdlib-effect-rows: also parse the standalone ^capability flag, which may
-     * appear anywhere among the trailing attributes (it takes no argument). */
-    const Symbol *parent_name = NULL;
-    bool is_capability = false;
-    uint32_t extends_start = name_idx + 3; /* items after (defeffect [^private] Name [params] :ret) */
+    /* The earlier spelling: ^extends ParentName and ^capability after the
+     * return type, the standalone ^capability anywhere among them.  Still
+     * accepted, and deprecated (TUR-D0008). */
+    const Form *trailing_first = NULL;
+    char trailing_old[96] = "", trailing_new[96] = "";
+    uint32_t extends_start = name_idx + 3; /* items after (defeffect [attrs] Name [params] :ret) */
     for (uint32_t xi = extends_start; xi < (uint32_t)call->as.list.len; xi++) {
         Form *f = call->as.list.items[xi];
         if (f->tag == F_SYM && f->as.sym == e->sym_caret_capability) {
             is_capability = true;
+            if (!trailing_first) trailing_first = f;
+            snprintf(trailing_old + strlen(trailing_old),
+                     sizeof trailing_old - strlen(trailing_old), "%s^capability",
+                     *trailing_old ? " " : "");
             continue;
         }
         if (f->tag == F_SYM && f->as.sym == e->sym_caret_extends) {
@@ -1668,8 +1694,24 @@ Expr *elab_defeffect(Elab *e, const Form *call) {
                 return NULL;
             }
             parent_name = pname_f->as.sym;
+            if (!trailing_first) trailing_first = f;
+            snprintf(trailing_old + strlen(trailing_old),
+                     sizeof trailing_old - strlen(trailing_old), "%s^extends %s",
+                     *trailing_old ? " " : "", pname_f->as.sym->name);
             xi++; /* consume the parent name */
         }
+    }
+    if (trailing_first) {
+        snprintf(trailing_new, sizeof trailing_new, "%s%s%s%s",
+                 is_capability ? "^capability" : "",
+                 is_capability && parent_name ? " " : "",
+                 parent_name ? "^extends " : "",
+                 parent_name ? parent_name->name : "");
+        diag_emit_with_code(elab_deprecation_level(), trailing_first->span,
+                            TUR_D0008_ATTR_AFTER_NAME,
+                            "defeffect: the trailing %s is deprecated; write %s "
+                            "before the name: (defeffect %s %s ...)",
+                            trailing_old, trailing_new, trailing_new, name->name);
     }
 
     if (declaring_builtin_cap) {
@@ -1679,9 +1721,9 @@ Expr *elab_defeffect(Elab *e, const Form *call) {
         if (n_params != 0 || result_type != TY_NIL || !is_capability ||
             !parent_ok || is_private) {
             char want[96];
-            snprintf(want, sizeof(want), "(defeffect %s [] :nil%s%s ^capability)",
-                     name->name, builtin_cap_parent ? " ^extends " : "",
-                     builtin_cap_parent ? builtin_cap_parent : "");
+            snprintf(want, sizeof(want), "(defeffect ^capability%s%s %s [] :nil)",
+                     builtin_cap_parent ? " ^extends " : "",
+                     builtin_cap_parent ? builtin_cap_parent : "", name->name);
             diag_emit(DIAG_ERROR, name_f->span,
                       "defeffect: '%s' is a compiler-known capability effect; "
                       "a declaration of it must match the built-in exactly, "

@@ -238,22 +238,31 @@ jobs:
       # which is the whole point of setting it.  Empty for every other part.
       TUR_TEST_SHARD: ${{ matrix.gsm_shard }}
       # The matrix's own cell slice.  gsm1/gsm2 take it from the matrix.  The
-      # macOS `aux` part takes 1/4 -- per-PR macOS runs a quarter of the cells
+      # macOS `r7rs` part takes 1/4 -- per-PR macOS runs a quarter of the cells
       # and the nightly arm64 leg runs them all, which keeps arm64 coverage of
       # an ABI-sensitive bug class without adding a macOS job (see the matrix
       # `exclude` comment).  A quarter is an unbiased 25% sample of every
       # producer x sink x type, and this family's regressions hit whole rows or
       # columns rather than isolated cells, so a quarter catches them on the PR.
-      TUR_GSM_SHARD: ${{ matrix.gsm_shard || (startsWith(matrix.os, 'macos') && matrix.part == 'aux' && '1/4') || '' }}
+      # It runs in `r7rs`, not `aux`, because that macOS job finished its
+      # ctest step in 4 min while aux ran this quarter alone for 9 min after
+      # its ~160 parallel suites (tests/ctest-parts.py has the numbers).
+      TUR_GSM_SHARD: ${{ matrix.gsm_shard || (startsWith(matrix.os, 'macos') && matrix.part == 'r7rs' && '1/4') || '' }}
       # Same shape, same reason, for the interpreter pass over the fixture
-      # corpus: 283s on macOS and -- with the matrix sharded -- the last
-      # RUN_SERIAL barrier left in `aux`.  The compiled path already runs the
+      # corpus: 283s on macOS and -- with the matrix moved to `r7rs` -- the
+      # last RUN_SERIAL barrier left in `aux`.  The compiled path already runs the
       # same corpus in full on both legs, so a second macOS engine pass over all
       # of it is the lowest-value serial time in the job.  A quarter per PR, all
       # of it on the nightly arm64 leg.  run-turi.sh reads THIS variable and
       # deliberately ignores TUR_TEST_SHARD (tests/run-shard-partition.sh
       # asserts that), so sampling it cannot touch the 160 other aux suites.
       TUR_TURI_SHARD: ${{ (startsWith(matrix.os, 'macos') && matrix.part == 'aux') && '1/4' || '' }}
+      # And for tur_span_coverage, which then set the length of aux's parallel
+      # phase on macOS (431s of it, the longest suite there).  It elaborates
+      # every fixture and never runs one; Linux audits all of them per PR, the
+      # nightly arm64 leg all of them on arm64.  tests/check-span-coverage.sh
+      # reads only this variable, like run-turi.sh above.
+      TUR_SPAN_SHARD: ${{ (startsWith(matrix.os, 'macos') && matrix.part == 'aux') && '1/4' || '' }}
     strategy:
       fail-fast: false
       matrix:
@@ -273,7 +282,7 @@ jobs:
           # move on Linux, where jobs are free and immediate, and the wrong one
           # on macOS, where a fourth job queues behind the first three and
           # leaves total occupancy unchanged.  macOS gets LESS WORK instead
-          # (TUR_GSM_SHARD on its aux step, below).
+          # (TUR_GSM_SHARD on its r7rs step, TUR_TURI_SHARD on its aux step).
           - os: macos-latest
             part: fconv
           - os: macos-latest
@@ -655,6 +664,10 @@ jobs:
         # same substring rather than listing names -- see the complement note
         # in the job comment.
         #
+        # On macOS this part also runs a quarter of tur_generic_spec_matrix
+        # (TUR_GSM_SHARD, job env above): it is RUN_SERIAL, and this job had
+        # the room that `aux` did not.  Linux runs the matrix in gsm1/gsm2.
+        #
         # No Emscripten step gates on this part: tur_refine_wasm is an `aux`
         # suite, and emsdk setup costs about 100 s.
         run: |
@@ -732,22 +745,27 @@ jobs:
           # glob matches nothing -- a ctest step that died before writing -- the
           # literal pattern is passed, the collector warns once, and the
           # empty-file check below reports it.
-          # The macOS aux part runs a QUARTER of tur_generic_spec_matrix beside
-          # 160 suites that run whole, so the shard belongs to that one row and
-          # not to the job.  $TUR_TEST_SHARD would tag all 161; leaving it off
-          # entirely would drop the matrix's series ~4x with nothing in the data
-          # explaining it.  --suite-shard labels exactly the row that sliced.
+          # The macOS r7rs part runs a QUARTER of tur_generic_spec_matrix beside
+          # suites that run whole, and the macOS aux part a quarter each of
+          # turi_fixture_tests and tur_span_coverage beside 160 others, so each
+          # shard belongs to that one row and not to the job.  $TUR_TEST_SHARD
+          # would tag all of
+          # them; leaving it off entirely would drop each series ~4x with
+          # nothing in the data explaining it.  --suite-shard labels exactly the row that sliced.
           # A plain string, not an array: macOS ships bash 3.2, where an empty
           # "${arr[@]}" is an unbound-variable error the moment anything turns
           # on `set -u`.  Deliberately UNQUOTED below so it splits into two
           # arguments -- the value is a suite name and an i/N, so it carries no
           # spaces and no glob characters.
           suite_shard=
-          if [ "${{ matrix.part }}" = aux ] && [ -n "${TUR_GSM_SHARD:-}" ]; then
+          if [ "${{ matrix.part }}" = r7rs ] && [ -n "${TUR_GSM_SHARD:-}" ]; then
             suite_shard="--suite-shard tur_generic_spec_matrix=$TUR_GSM_SHARD"
           fi
           if [ "${{ matrix.part }}" = aux ] && [ -n "${TUR_TURI_SHARD:-}" ]; then
             suite_shard="$suite_shard --suite-shard turi_fixture_tests=$TUR_TURI_SHARD"
+          fi
+          if [ "${{ matrix.part }}" = aux ] && [ -n "${TUR_SPAN_SHARD:-}" ]; then
+            suite_shard="$suite_shard --suite-shard tur_span_coverage=$TUR_SPAN_SHARD"
           fi
           python3 tools/ci/collect-suite-timings.py --build-dir build \
             $suite_shard build/results-*.xml > timings.jsonl || true

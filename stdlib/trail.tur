@@ -65,7 +65,7 @@
 ;;;   (defn bind-var [c : BtCell v : int] #fx{Bt} : bool (bt-set! c v))
 ;;;
 ;;; Since: SX1 (checked since 2026-09-05)
-(defeffect Bt [] :nil ^capability)
+(defeffect ^capability Bt [] :nil)
 
 ;;; Mark -- an opaque handle to a trail level.
 ;;;

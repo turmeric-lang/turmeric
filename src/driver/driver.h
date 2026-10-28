@@ -156,6 +156,7 @@ int drv_read_entire_file(const char *path, char **out, size_t *out_len);
 int drv_is_directory(const char *path);
 
 /* == driver/spice.c ======================================================== */
+extern bool g_no_auto_spice;
 extern bool g_user_config_experiments_done;
 const char *drv_resolve_engine(const char *input_or_root,
                                const char *cli_flag);
@@ -188,6 +189,8 @@ void resolve_project_include_dirs(const char *dir,
                                   const char ***out_dirs, int *out_n);
 
 /* == driver/pipeline.c ===================================================== */
+extern bool g_no_auto_stdlib;
+extern const char *g_logical_entry_path;
 extern bool g_dump_kinds;
 extern bool g_audit_spans;
 extern int g_audit_span_holes;
@@ -294,8 +297,6 @@ extern const TuriInlineCJitHook g_repl_inline_c_jit_hook;
 #endif
 
 /* == driver/cli.c ========================================================== */
-extern bool g_no_auto_spice;
-extern bool g_no_auto_stdlib;
 extern bool g_no_abi_cache;
 int drv_usage_error(int (*usage)(void));
 bool is_known_deprecated_x_flag(const char *s);
