@@ -13,9 +13,15 @@ cmake -S . -B build-wasm -DTUR_WASM=ON      # emcc on PATH (the emsdk environmen
 cmake --build build-wasm --target tur_wasm_jit
 ```
 
-The output is `build-wasm/wasm-jit/turmeric-jit.{js,wasm}`.  It is a second
-module beside the playground's `turmeric.{js,wasm}`, not a replacement: the
-page loads it only for the Compile engine.  `-DTUR_WASM_JIT=OFF` leaves it out.
+The output is `build-wasm/wasm-jit/turmeric-jit.{js,wasm}`, copied to
+`web/public/` beside the playground's `turmeric.{js,wasm}`.  It is a second
+module, not a replacement: the page loads it only for the Compile engine
+(`web/public/jit-worker.js`).  `-DTUR_WASM_JIT=OFF` leaves it out.
+
+Neither module embeds the stdlib.  Both link the loader of one package,
+`stdlib.data` (CMake's `tur_stdlib_pkg`, wasm-jit-plan 5.11), which fetches it
+from beside the module's script and mounts it at `/stdlib`.  The build copies
+it into `build-wasm/wasm-jit/` too, so `run.js` finds it there under node.
 
 | File | Role |
 |---|---|

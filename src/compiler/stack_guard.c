@@ -131,16 +131,24 @@ static TUR_THREAD_LOCAL bool tls_on_big_stack;
 static TUR_THREAD_LOCAL uintptr_t tls_big_hi;   /* an address, not a pointer to deref */
 static TUR_THREAD_LOCAL size_t tls_big_size;
 
+/* The WebAssembly arm of tur_run_on_big_stack (below) runs on the caller's
+ * stack and uses none of these helpers. */
+#if defined(__EMSCRIPTEN__)
+#define TUR_UNUSED_IN_WASM __attribute__((unused))
+#else
+#define TUR_UNUSED_IN_WASM
+#endif
+
 static size_t tur_emit_stack_bytes(void);
 
-static void tur_big_stack_mark(size_t size) {
+static TUR_UNUSED_IN_WASM void tur_big_stack_mark(size_t size) {
     volatile char here = 0;
     tls_big_hi = (uintptr_t)&here;
     tls_big_size = size;
     tls_on_big_stack = true;
 }
 
-static bool tur_on_big_stack_now(void) {
+static TUR_UNUSED_IN_WASM bool tur_on_big_stack_now(void) {
     if (!tls_on_big_stack) return false;
     volatile char here = 0;
     uintptr_t sp = (uintptr_t)&here;
@@ -154,7 +162,7 @@ typedef struct { int (*fn)(void *); void *arg; int rc; } TurBigStackJob;
  * 8192 keeps a typo from asking for a reservation the address space cannot
  * satisfy.  The fixture suite uses the low end deliberately, to drive the
  * headroom guard on a stack small enough to exhaust. */
-static size_t tur_emit_stack_bytes(void) {
+static TUR_UNUSED_IN_WASM size_t tur_emit_stack_bytes(void) {
     size_t mb = TUR_STACK_MB_DEFAULT;
     const char *env = getenv("TUR_STACK_MB");
     if (env && *env) {
@@ -169,7 +177,20 @@ static size_t tur_emit_stack_bytes(void) {
     return mb * (size_t)1024 * 1024;
 }
 
-#if defined(_WIN32)
+#if defined(__EMSCRIPTEN__)
+
+/* WebAssembly: run on the caller's stack.  A pthread here starts only once
+ * the creating worker yields to its event loop, so creating one and joining
+ * it at once deadlocks the browser: the Try Turmeric page's Compile engine
+ * (wasm-jit-plan P4) hung in compile_to_c's first emit, while node -- which
+ * starts the thread regardless -- ran it.  The modules link a 16 MiB stack
+ * (-sSTACK_SIZE), which is what the emitter gets instead. */
+int tur_run_on_big_stack(int (*fn)(void *), void *arg) {
+    if (!fn) return -1;
+    return fn(arg);
+}
+
+#elif defined(_WIN32)
 
 static DWORD WINAPI tur_big_stack_thunk(LPVOID p) {
     TurBigStackJob *job = (TurBigStackJob *)p;

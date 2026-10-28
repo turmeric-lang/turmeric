@@ -51,6 +51,13 @@ const PRECACHE_URLS = [
     '/site.js',
     '/turmeric.js',
     '/turmeric.wasm',
+    // The stdlib both modules fetch at boot (wasm-jit-plan 5.11). It used to be
+    // embedded in turmeric.wasm, so precaching the module precached it; now it
+    // is its own file, and an offline boot with the module but not this would
+    // fail at the first (load ...).  The browser JIT module itself is NOT here:
+    // it is 5 MB the page loads only when someone picks the Compile engine,
+    // and the runtime cache keeps it once they have.
+    '/stdlib.data',
     // The REPL's own workers. Nothing else names them -- they are constructed
     // from a string literal in eval-client.js / lsp-client.js, so precacheShellAssets,
     // which mines the shell's markup, cannot see them. Without these two rows
@@ -60,6 +67,10 @@ const PRECACHE_URLS = [
     // WebKit breaks; see fetchFromNetwork below.
     '/eval-worker.js',
     '/lsp-worker.js',
+    // The Compile engine's worker (wasm-jit-plan P4): a few KB, precached so an
+    // offline Compile that already has the JIT module in the runtime cache
+    // does not stop at its worker script.
+    '/jit-worker.js',
     '/doc-names.json',
     '/favicon.svg',
     '/logo.svg',

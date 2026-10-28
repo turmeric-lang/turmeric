@@ -130,11 +130,20 @@
                                         aria-controls="lang-menu"
                                         title="Language dialect" aria-label="Language">
                                     <span id="lang-btn-label">s-expr</span>
+                                    <!-- Shown while Run uses the Compile engine
+                                         (engine.js), so the choice is visible
+                                         without opening the popover. -->
+                                    <span class="lang-chip engine-chip" id="engine-chip" hidden>compile</span>
                                 </button>
                                 <div class="more-menu lang-menu" id="lang-menu" role="menu" hidden>
                                     <div class="more-label">Dialect</div>
                                     <div id="lang-bases" role="radiogroup" aria-label="Dialect"></div>
                                     <div class="lang-menu-footer">Switching resets the REPL environment</div>
+                                    <!-- Which engine Run uses (wasm-jit-plan P4):
+                                         rendered by initEnginePicker() in
+                                         engine.js. -->
+                                    <div class="more-label engine-label">Engine</div>
+                                    <div id="lang-engines" role="radiogroup" aria-label="Engine"></div>
                                 </div>
                             </div>
                             <!-- Examples: a hamburger button that opens a popover of
@@ -160,6 +169,7 @@
                                     <button class="more-item" role="menuitem" data-example="adt">Pattern Matching</button>
                                     <button class="more-item" role="menuitem" data-example="result">Option &amp; Result</button>
                                     <button class="more-item" role="menuitem" data-example="literals">Data Literals</button>
+                                    <button class="more-item" role="menuitem" data-example="inline-c">Inline C (Compile)</button>
                                     <div class="more-label">Saffron</div>
                                     <button class="more-item" role="menuitem" data-example="saffron">Dynamic Basics</button>
                                     <button class="more-item" role="menuitem" data-example="saffron-hof">Higher-order Functions</button>
@@ -263,6 +273,7 @@
                                     <button class="more-item" role="menuitem" data-example="adt">Pattern Matching</button>
                                     <button class="more-item" role="menuitem" data-example="result">Option &amp; Result</button>
                                     <button class="more-item" role="menuitem" data-example="literals">Data Literals</button>
+                                    <button class="more-item" role="menuitem" data-example="inline-c">Inline C (Compile)</button>
                                     <div class="more-label">Saffron</div>
                                     <button class="more-item" role="menuitem" data-example="saffron">Dynamic Basics</button>
                                     <button class="more-item" role="menuitem" data-example="saffron-hof">Higher-order Functions</button>

@@ -1,16 +1,16 @@
 # Plan: the JIT engine in the browser (c2mir + MIR on wasm32)
 
-> **Status:** P0 to P3 done 2026-10-28. The engine builds from CMake as a
-> second module, `turmeric-jit.{js,wasm}` (9.5 MB, `tur_wasm_jit`), and
-> `tests/run-jit-wasm.sh` runs the corpus through it against
-> `tests/jit-wasm-baseline.txt`: 1,915 fixtures compiled, 643 fell back to the
-> interpreter with the right answer, 374 failed, 236 skipped (section 7, P3).
-> The gate passes: every Try Turmeric example compiles or falls back with a
-> reason. It took a fork change -- an interpreted function's address is a
-> real wasm table entry -- which merged as turmeric-lang/mir#16 and is
-> vendored (`f887547f`). Next: P4, which also moves the stdlib into one
-> package both modules share (5.11); P5's `setjmp` and Asyncify are most of
-> what still falls back or fails.
+> **Status:** P0 to P4 done 2026-10-28. Try Turmeric has a Compile engine
+> (the language menu's Engine section): Run compiles the program to C and
+> runs it on MIR's interpreter in the page, so inline C works there. It is a
+> second module, `turmeric-jit.{js,wasm}` (5.3 MB, `tur_wasm_jit`), loaded on
+> first use; both modules read the stdlib from one shared `stdlib.data`
+> (5.11). `tests/run-jit-wasm.sh` runs the corpus through it against
+> `tests/jit-wasm-baseline.txt`: 1,915 fixtures compiled, 643 fell back to
+> the interpreter with the right answer, 374 failed, 236 skipped (section 7,
+> P3). Every Try Turmeric example compiles or falls back with a reason.
+> Next: P5 -- `setjmp` and Asyncify are most of what still falls back or
+> fails.
 > **P0 run 2026-10-23** (section 7): the corpus under `TUR_JIT_GEN=interp`
 > on a Release build is 3853/113/70; every interpreter-only failure is in
 > one of three families (threads 82, continuations 10, deep recursion 2),
@@ -281,9 +281,10 @@ As built in P3 (2026-10-28). The design originally added the engine to the
 - `turi_wasm_jit_run(src, args)` (`src/web/wasm_jit_glue.c`) answers with the
   engine line as JSON:
   `{"engine":"compiled"|"interpreted"|"error","exit":N,"reason":...}`.
-- Size, measured: 9.54 MB (2.94 MB gzipped). Of that, 3.67 MB is code and
-  5.86 MB is data, and 4.30 MB of the data is the embedded stdlib. The stock
-  module embeds the same stdlib, which is what 5.11 is about.
+- Size, measured: 9.54 MB (2.94 MB gzipped) at P3. Of that, 3.67 MB was code
+  and 5.86 MB data, and 4.30 MB of the data was the embedded stdlib. Since P4
+  the stdlib is a package both modules share (5.11), and the module is
+  5.27 MB (1.84 MB gzipped).
 
 ### 5.2 The front half moves into a library
 
@@ -524,7 +525,13 @@ the reference for the parts C2 has not specified, and its measured cost
 
 ### 5.11 The stdlib as one package both modules share
 
-Looked into 2026-10-28, prototyped on the JIT module; P4 builds it.
+Looked into 2026-10-28, prototyped on the JIT module, and built in P4
+(`tur_stdlib_pkg` in `src/CMakeLists.txt`). As built: `turmeric.wasm` went
+from 6.85 MB to 2.57 MB (0.96 MB gzipped), `turmeric-jit.wasm` from 9.54 MB to
+5.27 MB (1.84 MB gzipped), and `stdlib.data` is 4.31 MB (1.10 MB gzipped).
+Both links also need `-sFORCE_FILESYSTEM`, for the FS calls the loader
+makes. The loader returns early in a pthread worker, so the pool does not
+fetch it again.
 
 **The problem.** Both modules embed `stdlib/` (`--embed-file stdlib@/stdlib`)
 in their wasm data segment. It is 4.30 MB of the JIT module's 9.54 MB and of
@@ -955,12 +962,62 @@ address, which mir#16 made a table entry.
   line's `front_ms` and `compile_ms`). The page shows these numbers. Cutting
   them for short programs is P6's business (C1's images), not P3's.
 
-### P4 -- the page
+### P4 -- the page: DONE 2026-10-28
 
-The engine toggle, the console's engine line, `RangeError` as a stack
-overflow message, Stop still working (worker teardown), a fresh module
-instance after a trap (5.8), and the shared stdlib package (5.11). Playwright
-covers one inline-C example end to end.
+As built:
+
+- **The engine choice** is a second section of the language popover,
+  `Engine`: Interpret (the default) or Compile, each with a one-line note
+  on what it trades (session and depth against inline C). The language
+  button carries a `compile` chip while Compile is on. The choice is kept in
+  localStorage (`web/engine.js`). The toolbar did not grow, which keeps the
+  action row's overflow behaviour (`toolbar-overflow.spec.js`) as it was.
+- **The worker.** `web/public/jit-worker.js` loads `/turmeric-jit.js` on the
+  first Compile (`web/jit-client.js`), runs `turi_wasm_jit_run`, and posts
+  the program's output as lines, the way `eval-worker.js` does.
+- **Each Run is a whole program**, `main` included, as `tur run` does. It
+  leaves the interpreter's session alone.
+- **The engine line.** After the output comes `compiled -- front, c2mir,
+  run` timings, or `interpreted (the compiler fell back)`, under the glue's
+  own fallback notice (5.7).
+- **Stop and the watchdog** cover Compile runs (`stopRun` in
+  `web/session.js`). Stopping one terminates only the JIT worker: no session
+  is lost, and the interpreter's prompt keeps its definitions.
+- **A trap retires the instance (5.8).** A JS exception out of the module --
+  a wasm trap, or the JS stack limit's `RangeError` -- is answered with
+  `trapped`. The page prints it (`stack overflow: recursion too deep` for
+  the `RangeError`, matching the native line) and terminates the worker. The
+  next Run boots a fresh instance.
+- **An inline-C example** joins the Examples menu. Under Interpret, the
+  interpreter's refusal now carries a pointer to Compile.
+- **The shared stdlib package** (5.11). The service worker precaches
+  `stdlib.data` and `jit-worker.js`. It does not precache the JIT module,
+  which only Compile users fetch; the runtime cache keeps it once they have.
+  CI, the deploy and `tur run wasm` build both modules.
+- **Tests.** `web/tests/jit-engine.spec.js` (on CI's blocking desktop list)
+  covers the inline-C example picked through the menus and kept across a
+  reload, the interpreter's refusal and its pointer, a stack overflow
+  followed by a fresh instance, and Stop on a runaway compiled program with
+  the interpreter's session intact. `tools/wasm-jit/check-examples.sh` now
+  passes all 19 examples.
+
+Found on the way:
+
+- **The emitter deadlocked in the browser.** `compile_to_c` runs the emitter
+  through `tur_run_on_big_stack` (`src/compiler/stack_guard.c`), which
+  creates a pthread with a big stack and joins it. A browser worker cannot
+  start that thread until it yields to its event loop, so the join waited
+  forever. Node starts it regardless, which is why P3's node harness never
+  saw it. On Emscripten the job now runs on the caller's stack, the module's
+  16 MiB. Any other create-then-join in code the page reaches would hang the
+  same way, so it is worth a look whenever the page hangs where node does not.
+- **`math.h` in inline C fell back** on `import of undefined item
+  __fpclassifyl`, which section 6 had predicted. All three `__fpclassify*`
+  functions are in the import table now.
+- **A function that only loops** -- `(defn spin [n : int] : int (spin (+ n
+  1)))` -- trips an assertion in MIR's inliner, natively as well
+  ([mir-inliner-asserts-on-function-with-no-return](../reported/mir-inliner-asserts-on-function-with-no-return.md)).
+  It belongs in the next fork PR.
 
 ### P5 -- stubs and `setjmp`
 

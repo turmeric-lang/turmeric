@@ -11,6 +11,9 @@ A web-based REPL for the [Turmeric programming language](https://github.com/turm
 - **Language picker** - Dialect radio group + `#lang` layer toggles that edit
   the `#lang` line in place (the buffer stays the source of truth); options
   are rendered from the runtime's registry export, never hardcoded in JS
+- **Two engines** - Interpret (the default: a REPL session) or Compile, which
+  compiles the program to C and runs it on MIR's interpreter in the page, so
+  inline C works; picked in the language menu's Engine section
 - **URL Sharing** - Share your code via compressed URL hash
 - **Editor intelligence** - Diagnostics, completion, hover, signature help,
   go-to-definition, and document symbols, served by the real `tur lsp` running
@@ -165,6 +168,8 @@ web/
 │                       #   creates the editor, wires the controls
 ├── eval-client.js      # the eval Worker: its state, send(), the router
 ├── session.js          # Run, Format, the Run queue, :reset, Stop (W-3)
+├── engine.js           # which engine Run uses: Interpret or Compile
+├── jit-client.js       # the Compile engine's Worker (started on first use)
 ├── tabs.js             # the tab set, its models, the tab bar, jump-back
 ├── repl.js             # the prompt and its `:` commands
 ├── lsp.js, lsp-ref.js  # booting the language server; its client
@@ -187,7 +192,10 @@ web/
 ├── vite.config.js      # Vite build configuration
 └── public/
     ├── turmeric.js      # Compiled WASM module (generated)
+    ├── turmeric-jit.js  # The browser JIT module, for Compile (generated)
+    ├── stdlib.data      # The stdlib package both modules load (generated)
     ├── eval-worker.js   # Worker hosting the interpreter
+    ├── jit-worker.js    # Worker hosting the browser JIT (Compile)
     └── lsp-worker.js    # Worker hosting the language server
 ```
 
@@ -296,6 +304,34 @@ until the next Run. `:reset` rebuilds the environment from scratch.
 The native checks for this are `tur_wasm_glue_session_unit`,
 `tur_session_redefinition` and `tur_session_failure_recovery`; the page-level
 ones are in `tests/run-session.spec.js`.
+
+### The Compile engine
+
+Picking **Compile** in the language menu's Engine section sends Run to a
+second Worker, `public/jit-worker.js`, which loads the browser JIT module
+(`turmeric-jit.{js,wasm}`, built by the `tur_wasm_jit` target): the program is
+compiled to C the way `tur jit` compiles it, c2mir compiles that, and MIR's
+interpreter runs it. Inline C therefore works, which the interpreter refuses.
+The design is [wasm-jit-plan](../docs/upcoming/wasm-jit-plan.md); the module
+and its tools are in `tools/wasm-jit/`.
+
+- The module is fetched on the first Compile, not at boot. Both modules read
+  the stdlib from `stdlib.data`, which the service worker precaches, so the
+  first Compile downloads only the module itself.
+- Each Run compiles and runs the whole buffer, `main` included, as `tur run`
+  does. It does not touch the interpreter's session: the prompt keeps what it
+  had, and what the program defines is not callable there.
+- After the output comes the engine line: `compiled -- front, c2mir, run`
+  timings, or `interpreted (the compiler fell back)` when the module refused
+  the program (an import it lacks, a `setjmp` landing, a thread) and ran it on
+  its own interpreter instead. The reason is printed above it.
+- Stop and the watchdog cover Compile runs too; stopping one loses nothing,
+  since the Compile engine keeps no session. A trap -- including a stack
+  overflow, which the browser's stack limit reaches at about 1,700
+  interpreted frames -- retires the module instance, and the next Run boots a
+  fresh one.
+
+`tests/jit-engine.spec.js` drives all of this in the page.
 
 ### Language server
 
