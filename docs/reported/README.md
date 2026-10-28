@@ -56,7 +56,7 @@ directory is worse for triage than no index.
 | Report | Severity | One line |
 | --- | --- | --- |
 | [mir-inliner-asserts-on-function-with-no-return](mir-inliner-asserts-on-function-with-no-return.md) | low-medium (`tur jit`, browser JIT) | A function whose only path is an endless self tail call -- `(defn spin [n : int] : int (spin (+ n 1)))` -- makes MIR's `process_inlines` assert (`mir.c:4210`) and abort the process, where `tur run` just loops. The emitted function has no `ret`. Fix belongs in the fork's inliner |
-| [ilp32-word-slots-truncate-64-bit-carriers](ilp32-word-slots-truncate-64-bit-carriers.md) | high (wasm JIT, `tur build --target wasm`) | On wasm32, carriers kept in `intptr_t`/`void *` slots (the CPS backend's `DK` slots, `tur_hamt_get`'s values) or declared at the wrong width (`tur_hamt_count`) lose their top 32 bits. Doubles and large ints come back wrong with no diagnostic: 44 corpus fixtures printed a wrong answer, and more once mir#16 let former traps run to the end |
+| [ilp32-word-slots-truncate-64-bit-carriers](ilp32-word-slots-truncate-64-bit-carriers.md) | high (wasm JIT, `tur build --target wasm`) | On wasm32, carriers kept in `intptr_t`/`void *` slots (`tur_hamt_get`'s values; the CPS backend's `DK` slots were fixed in P5) or declared at the wrong width (`tur_hamt_count`) lose their top 32 bits. Doubles and large ints come back wrong with no diagnostic: 44 corpus fixtures printed a wrong answer, and more once mir#16 let former traps run to the end |
 
 ## Found adding the instance-variance warning (filed 2026-10-27)
 

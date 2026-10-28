@@ -26,16 +26,31 @@ it into `build-wasm/wasm-jit/` too, so `run.js` finds it there under node.
 | File | Role |
 |---|---|
 | `build-module.sh` | what the target runs: objects through a generated Makefile (`-MMD`, so a rebuild recompiles only what changed), the import table, the embedded headers, the link |
-| `gen-symtab.py` | the import table that stands in for `dlsym` (plan 5.3): the runtime's declarations region, `hamt.h`, the TLS accessors and a libc list at their real types, and the rest of the resident runtime at the wasm signatures its objects record |
+| `gen-symtab.py` | the import table that stands in for `dlsym` (plan 5.3): the runtime's declarations region, `hamt.h`, the TLS accessors and a libc list at their real types, and the rest of the resident runtime at the wasm signatures its objects record; with `--stubs`, one exact-signature call stub per wasm signature the runtime defines plus every small libc shape (plan 5.5), which `tur_jit_execute` registers with MIR so a call into the runtime skips the JS trampoline |
 | `headers.txt` | the system headers c2mir may open, embedded at `/sysinclude` as their closure inside Emscripten's musl (plan 5.4) |
 | `stdatomic.h` | C11 atomics for c2mir, embedded beside them: musl has none, and on this single-threaded engine each operation is a plain access (its header says why that is sound here only) |
 | `run.js` | runs one program through the module under node, as the page will; `--dump-c FILE` writes the text c2mir was handed |
 | `check-examples.sh` | P3's gate: every Try Turmeric example compiles or falls back, and none differs from `tur interpret` |
-| `smoke/` | four programs from P1: inline C (`cmix`), effects (`eff`, which still needs P5's `setjmp` landing), a loop and hello |
+| `smoke/` | four programs from P1: inline C (`cmix`), effects (`eff`, which runs since P5's `setjmp`), a loop and hello |
 
 The sources that are not scripts live in `src/`: `src/web/wasm_jit_glue.c`
 (`turi_wasm_jit_run`, the page's entry point) and `src/web/wasm_jit_stubs.c`
 (MIR's generator and ucontext, which the module links and never reaches).
+
+### `setjmp` and call stubs (P5)
+
+emcc refuses any indirect use of `setjmp`, so the import table cannot carry
+it.  `jit_import_resolver` resolves it to a stand-in instead, MIR replaces
+that with its own marker, and the interpreter calls `setjmp` by name in the
+frame of the function that asked (turmeric-lang/mir, `wasm-tests/README.md`
+"setjmp").  `longjmp` is an ordinary import.  The effect and panic landings and
+the DK root entry need nothing else.
+
+A call stub turns a call into the runtime from a JS round trip into a direct
+`call_indirect`, so it is strict where the trampoline was lenient: a program
+whose C declares a function at a different type than it has (an undeclared
+`sqrt`, implicitly `int sqrt()`) traps with `function signature mismatch`
+rather than computing garbage.  Natively the same program is already wrong.
 
 ## Run a program
 
