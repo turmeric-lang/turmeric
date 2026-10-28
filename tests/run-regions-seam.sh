@@ -103,7 +103,9 @@ fi
 #   bracket whose inline-C sees only scalars still rewinds), and
 #   region-escape-via-callcc (r7rs-lang-plan T8: a Scheme continuation's
 #   stack image, which also exercises the variadic dynamic call's rest
-#   packing on this arm -- it called an undeclared region allocator).
+#   packing on this arm -- it called an undeclared region allocator), and
+#   region-escape-via-numvec-store (an erased node stored into an I64Vec,
+#   whose setter has no note of its own: the erasure note covers it).
 # The panic jam (region-escape-through-unhooked-stores item 3): a generation a
 # panic strands is retired by its bracket and by the catch boundary; with
 # regions off there is nothing to strand and the depth reads 0 all the same:
@@ -130,6 +132,7 @@ region-escape-via-store
 region-escape-via-erasure
 region-escape-via-inline-c
 region-escape-via-callcc
+region-escape-via-numvec-store
 region-catch-retires-stranded-generation
 heap-phantom-generic-dead-base-ctor
 "

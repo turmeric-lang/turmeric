@@ -198,10 +198,16 @@ worth having:
   which Windows lacks); `free` is given `raw`.
 - **Ownership is real drop glue.** Each type is `defopaque ^affine` with a
   `Drop` instance, so a let-bound array is freed at scope exit and the
-  accessors take `^borrow`. The cost: a temporary passed straight to an
-  accessor is never bound, so never freed (`(f64vec-len (f64vec-new 4 0.0))`
-  leaks), and a closure cannot capture an array it also uses. The module
-  header says to bind before passing.
+  accessors take `^borrow`. Two compiler fixes came with it: a temporary
+  passed straight to a `^borrow` parameter is now freed after the call when
+  the call returns a scalar and no earlier argument has an effect
+  (`borrowed-drop-temporary-released`; `(f64vec-len (f64vec-new 4 0.0))` used
+  to leak), and a closure capturing a `^borrow` parameter no longer frees it
+  (`closure-borrowed-drop-capture-not-dropped`). What remains, by design:
+  a temporary handed to a non-scalar-returning call (`P-copy`, `P-show`) is
+  not freed -- its result might point into it -- so the module header says
+  to bind it first; and a closure capturing an OWNED array takes it over, so
+  the scope cannot also use it.
 - **Every op that touches the header is an inline-C body of its own** --
   `new`, `free`, `copy`, `len`, `ref`, `set!` -- never a Turmeric wrapper over
   a raw body, so a panic (an index out of range, a negative length) names the
@@ -217,8 +223,9 @@ worth having:
   template recursion stops at the 256-deep expansion limit, and
   `syntax-gensym` is fresh only against the macro-time env
   ([syntax-gensym-not-fresh-against-program-names](../reported/syntax-gensym-not-fresh-against-program-names.md)).
-  The `let` is wrapped in `P-id__`: see
-  [affine-let-init-yielding-moved-local-skips-scope-drop](../reported/affine-let-init-yielding-moved-local-skips-scope-drop.md).
+  A binding initialised by that `let` was at first never dropped; the
+  compiler now drops it
+  ([affine-let-init-yielding-moved-local-skips-scope-drop](../archive/affine-let-init-yielding-moved-local-skips-scope-drop.md)).
 - **`P-show` returns an owned `String`** `"#f64vec[1.5 2.5]"`; there is no
   `Show` instance because `show` would consume an affine array.
 - **turi** has natives for every inline-C body (`NUMVEC_NATIVES`, rows in

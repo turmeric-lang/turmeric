@@ -33,9 +33,15 @@
 ;;; passing it to a consumer) hands that duty on.  The accessors take it
 ;;; `^borrow`.  `P-free` consumes an array early.
 ;;;
-;;; Bind an array before passing it on.  A temporary handed straight to an
-;;; accessor -- `(f64vec-len (f64vec-new 4 0.0))` -- is never bound, so no scope
-;;; frees it: write `(let [v (f64vec-new 4 0.0)] (f64vec-len v))`.
+;;; A temporary handed straight to an accessor that returns a number --
+;;; `(f64vec-len (f64vec-new 4 0.0))` -- is freed after the call.  One handed to
+;;; anything else (`P-copy`, `P->vec`, `P-show`, or after an argument with side
+;;; effects) has no owner and is not freed, so bind it first:
+;;; `(let [v (f64vec-new 4 0.0)] (f64vec-show v))`.
+;;;
+;;; A closure that captures an array the enclosing scope OWNS takes it over
+;;; (the scope can no longer use it, and the closure frees it); one that
+;;; captures a `^borrow` parameter borrows it, and frees nothing.
 ;;;
 ;;; Length is fixed at construction.  Growth stays `Vec`'s job; `P->vec` and
 ;;; `vec->P` convert.  An index outside `[0, len)` panics, at the caller's
@@ -50,15 +56,15 @@
 
 ;;; numvec-of__ -- internal: the flat body of every `P-of`.
 ;;;
-;;; `(numvec-of__ id new set! zero v x0 x1 ...)` expands to
-;;; `(id (let [v (new n zero)] (do (set! v 0 x0) (set! v 1 x1) ... v)))`.  A
+;;; `(numvec-of__ new set! zero v x0 x1 ...)` expands to
+;;; `(let [v (new n zero)] (do (set! v 0 x0) (set! v 1 x1) ... v))`.  A
 ;;; procedural macro, so it counts its arguments and emits one flat body: a
 ;;; template macro recurses once per element and stops at the 256-deep
 ;;; expansion limit.  `v` comes from the caller, minted there with `(gensym)`,
 ;;; which is fresh against the program's own names (`syntax-gensym` here is
 ;;; fresh only against the macro-time env's).
 
-(defmacro* numvec-of__ [id new setter zero v & xs]
+(defmacro* numvec-of__ [new setter zero v & xs]
   (let [n (syntax-len xs)]
     (letrec [sets (fn [i : int acc : Syntax] : Syntax
                     (if (< i 0)
@@ -68,7 +74,7 @@
       (let [mk   `(~new ~(int->syntax n) ~zero)
             bind (syntax-vec v mk)
             body (syntax-cons (sym->syntax "do") (sets (- n 1) (syntax-list v)))]
-        `(~id (let ~bind ~body))))))
+        `(let ~bind ~body)))))
 ;; ===== F64Vec: 64-bit floats =====
 ;;; F64Vec -- a fixed-length, unboxed array of 64-bit floats (float).
 ;;;
@@ -117,13 +123,6 @@
   for (int64_t i = 0; i < n; i++) b->data[i] = init;
   return (int64_t)(intptr_t)b;
   ```)
-;;; f64vec-id__ -- internal: hand the array straight back.
-;;;
-;;; `f64vec-of` wraps its `let` in this so the binding that receives the result is
-;;; seen to be initialised by a call, and owns it: a `let` that yields a moved
-;;; local is read as "moved during init", and the scope-exit Drop is skipped.
-
-(defn f64vec-id__ [v : F64Vec] : F64Vec v)
 ;;; f64vec-of -- a F64Vec holding the given elements, in order.
 ;;;
 ;;; Parameters:
@@ -140,7 +139,7 @@
 
 (defmacro f64vec-of [& xs]
   (let [v (gensym "nv")]
-    (list numvec-of__ f64vec-id__ f64vec-new f64vec-set! 0.0 v ~@xs)))
+    (list numvec-of__ f64vec-new f64vec-set! 0.0 v ~@xs)))
 ;;; f64vec-free -- release a F64Vec now, consuming it.
 ;;;
 ;;; Rarely needed: a let-bound F64Vec is freed at scope exit.  Call it to
@@ -390,13 +389,6 @@
   for (int64_t i = 0; i < n; i++) b->data[i] = init;
   return (int64_t)(intptr_t)b;
   ```)
-;;; f32vec-id__ -- internal: hand the array straight back.
-;;;
-;;; `f32vec-of` wraps its `let` in this so the binding that receives the result is
-;;; seen to be initialised by a call, and owns it: a `let` that yields a moved
-;;; local is read as "moved during init", and the scope-exit Drop is skipped.
-
-(defn f32vec-id__ [v : F32Vec] : F32Vec v)
 ;;; f32vec-of -- a F32Vec holding the given elements, in order.
 ;;;
 ;;; Parameters:
@@ -413,7 +405,7 @@
 
 (defmacro f32vec-of [& xs]
   (let [v (gensym "nv")]
-    (list numvec-of__ f32vec-id__ f32vec-new f32vec-set! (list as float32 0.0) v ~@xs)))
+    (list numvec-of__ f32vec-new f32vec-set! (list as float32 0.0) v ~@xs)))
 ;;; f32vec-free -- release a F32Vec now, consuming it.
 ;;;
 ;;; Rarely needed: a let-bound F32Vec is freed at scope exit.  Call it to
@@ -663,13 +655,6 @@
   for (int64_t i = 0; i < n; i++) b->data[i] = init;
   return (int64_t)(intptr_t)b;
   ```)
-;;; i64vec-id__ -- internal: hand the array straight back.
-;;;
-;;; `i64vec-of` wraps its `let` in this so the binding that receives the result is
-;;; seen to be initialised by a call, and owns it: a `let` that yields a moved
-;;; local is read as "moved during init", and the scope-exit Drop is skipped.
-
-(defn i64vec-id__ [v : I64Vec] : I64Vec v)
 ;;; i64vec-of -- a I64Vec holding the given elements, in order.
 ;;;
 ;;; Parameters:
@@ -686,7 +671,7 @@
 
 (defmacro i64vec-of [& xs]
   (let [v (gensym "nv")]
-    (list numvec-of__ i64vec-id__ i64vec-new i64vec-set! 0 v ~@xs)))
+    (list numvec-of__ i64vec-new i64vec-set! 0 v ~@xs)))
 ;;; i64vec-free -- release a I64Vec now, consuming it.
 ;;;
 ;;; Rarely needed: a let-bound I64Vec is freed at scope exit.  Call it to
@@ -936,13 +921,6 @@
   for (int64_t i = 0; i < n; i++) b->data[i] = init;
   return (int64_t)(intptr_t)b;
   ```)
-;;; i32vec-id__ -- internal: hand the array straight back.
-;;;
-;;; `i32vec-of` wraps its `let` in this so the binding that receives the result is
-;;; seen to be initialised by a call, and owns it: a `let` that yields a moved
-;;; local is read as "moved during init", and the scope-exit Drop is skipped.
-
-(defn i32vec-id__ [v : I32Vec] : I32Vec v)
 ;;; i32vec-of -- a I32Vec holding the given elements, in order.
 ;;;
 ;;; Parameters:
@@ -959,7 +937,7 @@
 
 (defmacro i32vec-of [& xs]
   (let [v (gensym "nv")]
-    (list numvec-of__ i32vec-id__ i32vec-new i32vec-set! (list as int32 0) v ~@xs)))
+    (list numvec-of__ i32vec-new i32vec-set! (list as int32 0) v ~@xs)))
 ;;; i32vec-free -- release a I32Vec now, consuming it.
 ;;;
 ;;; Rarely needed: a let-bound I32Vec is freed at scope exit.  Call it to
@@ -1209,13 +1187,6 @@
   for (int64_t i = 0; i < n; i++) b->data[i] = init;
   return (int64_t)(intptr_t)b;
   ```)
-;;; u8vec-id__ -- internal: hand the array straight back.
-;;;
-;;; `u8vec-of` wraps its `let` in this so the binding that receives the result is
-;;; seen to be initialised by a call, and owns it: a `let` that yields a moved
-;;; local is read as "moved during init", and the scope-exit Drop is skipped.
-
-(defn u8vec-id__ [v : U8Vec] : U8Vec v)
 ;;; u8vec-of -- a U8Vec holding the given elements, in order.
 ;;;
 ;;; Parameters:
@@ -1232,7 +1203,7 @@
 
 (defmacro u8vec-of [& xs]
   (let [v (gensym "nv")]
-    (list numvec-of__ u8vec-id__ u8vec-new u8vec-set! (list as uint8 0) v ~@xs)))
+    (list numvec-of__ u8vec-new u8vec-set! (list as uint8 0) v ~@xs)))
 ;;; u8vec-free -- release a U8Vec now, consuming it.
 ;;;
 ;;; Rarely needed: a let-bound U8Vec is freed at scope exit.  Call it to

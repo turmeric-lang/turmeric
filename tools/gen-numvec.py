@@ -73,9 +73,15 @@ HDR = """;;; tur/numvec -- typed numeric arrays: F64Vec, F32Vec, I64Vec, I32Vec,
 ;;; passing it to a consumer) hands that duty on.  The accessors take it
 ;;; `^borrow`.  `P-free` consumes an array early.
 ;;;
-;;; Bind an array before passing it on.  A temporary handed straight to an
-;;; accessor -- `(f64vec-len (f64vec-new 4 0.0))` -- is never bound, so no scope
-;;; frees it: write `(let [v (f64vec-new 4 0.0)] (f64vec-len v))`.
+;;; A temporary handed straight to an accessor that returns a number --
+;;; `(f64vec-len (f64vec-new 4 0.0))` -- is freed after the call.  One handed to
+;;; anything else (`P-copy`, `P->vec`, `P-show`, or after an argument with side
+;;; effects) has no owner and is not freed, so bind it first:
+;;; `(let [v (f64vec-new 4 0.0)] (f64vec-show v))`.
+;;;
+;;; A closure that captures an array the enclosing scope OWNS takes it over
+;;; (the scope can no longer use it, and the closure frees it); one that
+;;; captures a `^borrow` parameter borrows it, and frees nothing.
 ;;;
 ;;; Length is fixed at construction.  Growth stays `Vec`'s job; `P->vec` and
 ;;; `vec->P` convert.  An index outside `[0, len)` panics, at the caller's
@@ -90,15 +96,15 @@ HDR = """;;; tur/numvec -- typed numeric arrays: F64Vec, F32Vec, I64Vec, I32Vec,
 
 ;;; numvec-of__ -- internal: the flat body of every `P-of`.
 ;;;
-;;; `(numvec-of__ id new set! zero v x0 x1 ...)` expands to
-;;; `(id (let [v (new n zero)] (do (set! v 0 x0) (set! v 1 x1) ... v)))`.  A
+;;; `(numvec-of__ new set! zero v x0 x1 ...)` expands to
+;;; `(let [v (new n zero)] (do (set! v 0 x0) (set! v 1 x1) ... v))`.  A
 ;;; procedural macro, so it counts its arguments and emits one flat body: a
 ;;; template macro recurses once per element and stops at the 256-deep
 ;;; expansion limit.  `v` comes from the caller, minted there with `(gensym)`,
 ;;; which is fresh against the program's own names (`syntax-gensym` here is
 ;;; fresh only against the macro-time env's).
 
-(defmacro* numvec-of__ [id new setter zero v & xs]
+(defmacro* numvec-of__ [new setter zero v & xs]
   (let [n (syntax-len xs)]
     (letrec [sets (fn [i : int acc : Syntax] : Syntax
                     (if (< i 0)
@@ -108,7 +114,7 @@ HDR = """;;; tur/numvec -- typed numeric arrays: F64Vec, F32Vec, I64Vec, I32Vec,
       (let [mk   `(~new ~(int->syntax n) ~zero)
             bind (syntax-vec v mk)
             body (syntax-cons (sym->syntax "do") (sets (- n 1) (syntax-list v)))]
-        `(~id (let ~bind ~body))))))
+        `(let ~bind ~body)))))
 """
 
 TEMPLATE = r""";; ===== {T}: {what} =====
@@ -159,13 +165,6 @@ TEMPLATE = r""";; ===== {T}: {what} =====
   for (int64_t i = 0; i < n; i++) b->data[i] = init;
   return (int64_t)(intptr_t)b;
   ```)
-;;; {p}-id__ -- internal: hand the array straight back.
-;;;
-;;; `{p}-of` wraps its `let` in this so the binding that receives the result is
-;;; seen to be initialised by a call, and owns it: a `let` that yields a moved
-;;; local is read as "moved during init", and the scope-exit Drop is skipped.
-
-(defn {p}-id__ [v : {T}] : {T} v)
 ;;; {p}-of -- a {T} holding the given elements, in order.
 ;;;
 ;;; Parameters:
@@ -182,7 +181,7 @@ TEMPLATE = r""";; ===== {T}: {what} =====
 
 (defmacro {p}-of [& xs]
   (let [v (gensym "nv")]
-    (list numvec-of__ {p}-id__ {p}-new {p}-set! {zm} v ~@xs)))
+    (list numvec-of__ {p}-new {p}-set! {zm} v ~@xs)))
 ;;; {p}-free -- release a {T} now, consuming it.
 ;;;
 ;;; Rarely needed: a let-bound {T} is freed at scope exit.  Call it to

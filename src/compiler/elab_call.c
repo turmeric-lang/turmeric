@@ -3012,6 +3012,64 @@ static Binding *hoist_fresh_closure(Elab *e, Expr **slot, Span span, HoistList *
     return cb;
 }
 
+/* A scalar result cannot point into a borrowed argument, so the argument may
+ * die as soon as the call returns. */
+static bool type_kind_is_plain_scalar(TypeKind k) {
+    switch (k) {
+    case TY_NIL: case TY_BOOL: case TY_INT: case TY_FLOAT:
+    case TY_INT8: case TY_INT16: case TY_INT32: case TY_INT64:
+    case TY_UINT8: case TY_UINT16: case TY_UINT32: case TY_UINT64:
+    case TY_FLOAT32: case TY_FLOAT64:
+        return true;
+    default:
+        return false;
+    }
+}
+
+/* Evaluating it has no effect, so a later argument may be hoisted past it. */
+static bool arg_is_effect_free(const Expr *a) {
+    while (a && a->kind == EX_ASCRIBE) a = a->as.ascribe_.inner;
+    if (!a) return true;
+    switch (a->kind) {
+    case EX_VAR: case EX_NIL_LIT: case EX_BOOL_LIT: case EX_INT_LIT:
+    case EX_FLOAT_LIT: case EX_CSTR_LIT:
+        return true;
+    default:
+        return false;
+    }
+}
+
+/* borrowed-temporary-never-dropped: a fresh move-only Drop value (a
+ * `defopaque ^affine` with a Drop instance -- stdlib/numvec.tur's arrays,
+ * httpd's Handler) passed straight to a `^borrow` parameter has no owner: the
+ * callee only borrows it and no binding holds it, so `(f64vec-len (f64vec-new
+ * 4 0.0))` leaked the array.  Bind it to a `__borrowd` temp and release it
+ * after the call -- but only where that is plainly safe: the call's result is
+ * a scalar (so it cannot point into the temp), and every argument before it is
+ * effect-free (so hoisting it does not reorder evaluation).  Anything else
+ * keeps the old behaviour, a leak rather than a dangling borrow. */
+static Binding *hoist_borrowed_drop_temp(Elab *e, Expr **slot, Span span,
+                                         HoistList *hl) {
+    Expr *a = *slot;
+    char nm[48];
+    snprintf(nm, sizeof nm, "__borrowd_%u", elab_fresh_id(e));
+    const Symbol *sym = symtab_intern(e->st, strslice(nm, (uint32_t)strlen(nm)));
+    Binding *tb = binding_new(e, sym, a->type, false, false, span);
+    if (hl->n == hl->cap) {
+        uint32_t nc = hl->cap ? hl->cap * 2 : 4;
+        LetBinding *nv = (LetBinding *)arena_alloc(e->arena, nc * sizeof(LetBinding));
+        if (hl->n) memcpy(nv, hl->v, hl->n * sizeof(LetBinding));
+        hl->v = nv; hl->cap = nc;
+    }
+    hl->v[hl->n].binding = tb;
+    hl->v[hl->n].init = a;
+    hl->n++;
+    Expr *v = expr_new(e->arena, EX_VAR, a->type, span);
+    v->as.var.binding = tb;
+    *slot = v;
+    return tb;
+}
+
 static Expr *hoist_borrowed_closure_args(Elab *e, Expr *call, Span span) {
     if (!call || call->kind != EX_CALL) return call;
     const Binding *fb = call->as.call_.fn_binding;
@@ -3019,18 +3077,47 @@ static Expr *hoist_borrowed_closure_args(Elab *e, Expr *call, Span span) {
     Expr **args = call->as.call_.args;
     uint32_t n_args = call->as.call_.n_args;
     HoistList hl = { NULL, 0, 0 };
+    /* the borrowed Drop temps and their instances, released after the call */
+    Binding *drop_tmp[8];
+    struct TypeClassInstance *drop_inst[8];
+    uint32_t n_drop = 0;
+    bool prefix_effect_free = true;
+    bool scalar_result = type_kind_is_plain_scalar(call->type.kind);
     for (uint32_t i = 0; i < n_args && i < fb->type.as.fn.arity; i++) {
         Expr **slot = &args[i];
         HOIST_PEEL_SLOT(slot);
-        if (!arg_is_freeable_closure_source(fb, i, *slot))
-            continue;
-        (void)hoist_fresh_closure(e, slot, span, &hl);
+        if (arg_is_freeable_closure_source(fb, i, *slot)) {
+            (void)hoist_fresh_closure(e, slot, span, &hl);
+        } else if (scalar_result && prefix_effect_free && n_drop < 8 &&
+                   FN_ARG_FLAG(fb->type.as.fn, i, FA_BORROW)) {
+            struct TypeClassInstance *di =
+                elab_fresh_sole_owner_drop_inst(e, &(*slot)->type, *slot);
+            if (di) {
+                drop_tmp[n_drop] = hoist_borrowed_drop_temp(e, slot, span, &hl);
+                drop_inst[n_drop++] = di;
+            }
+        }
+        if (!arg_is_effect_free(args[i])) prefix_effect_free = false;
     }
     if (hl.n == 0) return call;
+    Expr *body = call;
+    if (n_drop > 0) {
+        /* The drop glue trails the call, as elab_let places it: the block's
+         * value is the call's, and the defers fire as it closes. */
+        body = expr_new(e->arena, EX_DO, call->type, span);
+        body->as.do_.n = 1 + n_drop;
+        body->as.do_.items = (Expr **)arena_alloc(e->arena,
+                                                  (1 + n_drop) * sizeof(Expr *));
+        body->as.do_.items[0] = call;
+        for (uint32_t k = 0; k < n_drop; k++)
+            body->as.do_.items[1 + k] =
+                elab_drop_glue_defer(e, drop_tmp[k], drop_inst[k], span);
+        body->as.do_.tail_drop_hoist = false;
+    }
     Expr *let = expr_new(e->arena, EX_LET, call->type, span);
     let->as.let_.bindings = hl.v;
     let->as.let_.n = hl.n;
-    let->as.let_.body = call;
+    let->as.let_.body = body;
     return let;
 }
 #undef HOIST_PEEL_SLOT

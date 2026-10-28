@@ -36,6 +36,17 @@ All notable changes to Turmeric are documented here.
 
 ### Fixed
 
+- **A closure no longer frees a `^borrow` parameter it captures.** For a
+  move-only type with a `Drop` instance (a numeric array, httpd's `Handler`),
+  the closure's drop glue released every such capture, so a closure over a
+  borrowed value freed the caller's value each time it died.
+- **A move-only `Drop` value bound through a block is dropped.**
+  `(let [a (let [t (mk)] t)] ...)` and `(let [a (do ... (mk))] ...)` never
+  dropped `a`; only a bare call initialiser was recognised.
+- **A temporary passed straight to a `^borrow` parameter is freed.**
+  `(f64vec-len (f64vec-new 4 0.0))` leaked the array. It is now released after
+  the call when the call returns a scalar and no earlier argument has a side
+  effect; otherwise it is left as before.
 - **A tool's `:bin` entry file is no longer importable.** Outside a project,
   `(import main)` silently resolved to the first installed tool's
   `src/main.tur`; inside a project, to a `:spices` dependency's. An entry file

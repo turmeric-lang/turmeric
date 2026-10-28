@@ -1,6 +1,14 @@
 # A `let` bound to a `let` that yields a moved affine local is never dropped
 
-**Severity: medium-low (a leak, one allocation per evaluation; a workaround exists).**
+**Resolved 2026-10-28.** `binding_closure_drop_inst` (`src/compiler/elab_forms.c`)
+now asks `init_yields_fresh_owner`, which accepts a call or a `let` / `do`
+block yielding a fresh local of its own scope (skipping the drop glue the
+inner `let` appends for its other locals). Fixture:
+`tests/fixtures/affine-let-block-init-dropped`, which also covers a `do`
+initialiser ending in a call -- it leaked the same way. `stdlib/numvec.tur`'s
+`P-id__` shim is gone.
+
+**Severity (when open): medium-low (a leak, one allocation per evaluation).**
 
 Found 2026-10-28 while landing phase N0 of
 [simd-and-vectorization-plan](../upcoming/simd-and-vectorization-plan.md)
@@ -56,7 +64,7 @@ local is moved, moved during init, or consumed" rule in
 initialiser that is a `let`/`do` block ending in a bare local of the inner
 scope should count as a fresh owned value, as a call result does.
 
-## Workaround in tree
+## Workaround (removed with the fix)
 
-`stdlib/numvec.tur` wraps the macro's `let` in an identity call
-(`f64vec-id__`), which makes the initialiser a call.
+`stdlib/numvec.tur` wrapped the macro's `let` in an identity call
+(`f64vec-id__`), which made the initialiser a call.

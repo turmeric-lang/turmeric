@@ -2299,6 +2299,13 @@ Expr *elab_unsafe(Elab *e, const Form *call);
 Expr *elab_tailcall(Elab *e, const Form *call);
 
 /* elab_forms.c */
+/* The Drop instance of a move-only (Drop, no Clone) opaque `t` when `init`
+ * yields a fresh value of it, else NULL; and the `(defer (<Drop.drop> b))`
+ * drop glue that releases such a local at scope exit. */
+struct TypeClassInstance *elab_fresh_sole_owner_drop_inst(Elab *e, const Type *t,
+                                                          const Expr *init);
+Expr *elab_drop_glue_defer(Elab *e, Binding *b, struct TypeClassInstance *di,
+                           Span span);
 Form *splice_internal_defines(Elab *e, Form **items, uint32_t n, Span span);
 Expr *elab_let(Elab *e, const Form *call);
 /* compiled-closure-copies-a-captured-mut: the `(.v <cell>)` read a use of a

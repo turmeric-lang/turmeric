@@ -534,17 +534,61 @@ Form *splice_internal_defines(Elab *e, Form **items, uint32_t n, Span span) {
  * a Handler handed to a consumer (server constructor / httpd-call) that moves it is
  * NOT double-dropped.  Returns the resolved Drop instance (for the method binding)
  * or NULL when the binding is not a closure-drop opaque. */
-static struct TypeClassInstance *binding_closure_drop_inst(Elab *e, Binding *b,
-                                                           Expr *init) {
-    if (!b || !init) return NULL;
+/* Does `init` yield a value nobody else owns -- a call's result, or a block
+ * (`let` / `do`) whose value is a local of its own scope that was itself
+ * initialised that way?  The inner scope does not drop a local it hands out as
+ * its value, so the binding that receives it is its owner, as it is of a
+ * call's result.  `(let [a (let [t (mk)] t)] ...)` is the block shape a macro
+ * that fills a value before returning it expands to (stdlib/numvec.tur's
+ * `-of`); requiring a bare call left `a` undropped
+ * (affine-let-init-yielding-moved-local-skips-scope-drop).  A local bound to
+ * an outer variable is not fresh, and neither is anything else: those keep
+ * their owner where it is. */
+static bool init_yields_fresh_owner(const Expr *init, const LetBinding *locals,
+                                    uint32_t n_locals, uint32_t depth) {
+    if (!init || depth > 32) return false;
+    while (init && init->kind == EX_ASCRIBE) init = init->as.ascribe_.inner;
+    if (!init) return false;
+    switch (init->kind) {
+    case EX_CALL:
+        return true;
+    case EX_DO: {
+        /* The block's value is its last item before the drop glue a let
+         * appends for its other locals (`(defer (<Drop.drop> u))`). */
+        uint32_t n = init->as.do_.n;
+        while (n > 0 && init->as.do_.items[n - 1] &&
+               init->as.do_.items[n - 1]->kind == EX_DEFER &&
+               init->as.do_.items[n - 1]->as.defer_.is_drop_glue)
+            n--;
+        return n > 0 && init_yields_fresh_owner(init->as.do_.items[n - 1],
+                                                locals, n_locals, depth + 1);
+    }
+    case EX_LET:
+        /* The body sees this let's bindings; an outer block's do not reach
+         * past it, so they are dropped from the set rather than merged. */
+        return init_yields_fresh_owner(init->as.let_.body, init->as.let_.bindings,
+                                       init->as.let_.n, depth + 1);
+    case EX_VAR:
+        for (uint32_t i = 0; i < n_locals; i++)
+            if (locals[i].binding && locals[i].binding == init->as.var.binding)
+                return init_yields_fresh_owner(locals[i].init, NULL, 0, depth + 1);
+        return false;
+    default:
+        return false;
+    }
+}
+
+/* The Drop instance of a move-only (Drop, no Clone) opaque `t` when `init`
+ * yields a fresh value of it -- the value the receiver then solely owns and
+ * must drop -- else NULL. */
+struct TypeClassInstance *elab_fresh_sole_owner_drop_inst(Elab *e, const Type *t,
+                                                          const Expr *init) {
+    if (!t || !init) return NULL;
     /* opaque ADT newtype only */
-    if (b->type.kind != TY_ADT || !b->type.as.adt_.def ||
-        !b->type.as.adt_.def->is_opaque)
+    if (t->kind != TY_ADT || !t->as.adt_.def || !t->as.adt_.def->is_opaque)
         return NULL;
-    /* fresh-producing call initializer (peel ascriptions) */
-    const Expr *pinit = init;
-    while (pinit && pinit->kind == EX_ASCRIBE) pinit = pinit->as.ascribe_.inner;
-    if (!pinit || pinit->kind != EX_CALL) return NULL;
+    /* fresh-producing initializer: a call, or a block yielding a fresh local */
+    if (!init_yields_fresh_owner(init, NULL, 0, 0)) return NULL;
     /* Drop instance present, Clone instance absent (move-only sole owner) */
     const Symbol *drop_name  = intern_cstr(e->st, "Drop");
     const Symbol *clone_name = intern_cstr(e->st, "Clone");
@@ -552,14 +596,51 @@ static struct TypeClassInstance *binding_closure_drop_inst(Elab *e, Binding *b,
     TypeClass *clone_tc = typeclass_env_lookup_typeclass(&e->typeclass_env, clone_name);
     if (!drop_tc) return NULL;
     struct TypeClassInstance *di =
-        typeclass_env_lookup_instance(&e->typeclass_env, drop_tc, &b->type, 1);
+        typeclass_env_lookup_instance(&e->typeclass_env, drop_tc, (Type *)t, 1);
     if (!di || di->n_method_impls == 0 || !di->method_impls[0] ||
         !di->method_impls[0]->binding)
         return NULL;
     if (clone_tc &&
-        typeclass_env_lookup_instance(&e->typeclass_env, clone_tc, &b->type, 1))
+        typeclass_env_lookup_instance(&e->typeclass_env, clone_tc, (Type *)t, 1))
         return NULL;   /* Clone == shared refcount owner; not a sole-owner drop */
     return di;
+}
+
+static struct TypeClassInstance *binding_closure_drop_inst(Elab *e, Binding *b,
+                                                           Expr *init) {
+    return b ? elab_fresh_sole_owner_drop_inst(e, &b->type, init) : NULL;
+}
+
+/* `(defer (<Drop.drop> b))`, flagged drop glue: the scope-exit release of a
+ * move-only Drop opaque local, through its instance's method. */
+Expr *elab_drop_glue_defer(Elab *e, Binding *b, struct TypeClassInstance *di,
+                           Span span) {
+    Binding *dm = di->method_impls[0]->binding;
+    Expr *var_expr = expr_new(e->arena, EX_VAR, b->type, span);
+    var_expr->as.var.binding = b;
+
+    Expr *drop_call = expr_new(e->arena, EX_CALL, TYPE_NIL, span);
+    drop_call->as.call_.fn_binding = dm;
+    drop_call->as.call_.n_args = 1;
+    drop_call->as.call_.args = (Expr **)arena_alloc(e->arena, sizeof(Expr *));
+    drop_call->as.call_.args[0] = var_expr;
+
+    Expr *defer_expr = expr_new(e->arena, EX_DEFER, TYPE_NIL, span);
+    defer_expr->as.defer_.body = drop_call;
+    uint32_t n_free = 0;
+    Binding **free_vars = collect_free_vars(drop_call, NULL, 0, NULL, 0, &n_free);
+    Binding **captures = NULL;
+    uint8_t n_captures = 0;
+    if (n_free > 0) {
+        captures = (Binding **)arena_alloc(e->arena, n_free * sizeof(Binding *));
+        memcpy(captures, free_vars, n_free * sizeof(Binding *));
+        n_captures = (uint8_t)n_free;
+    }
+    free(free_vars);
+    defer_expr->as.defer_.captures = captures;
+    defer_expr->as.defer_.n_captures = n_captures;
+    defer_expr->as.defer_.is_drop_glue = true;
+    return defer_expr;
 }
 
 /* ---- special forms ---- */
@@ -2284,37 +2365,8 @@ Expr *elab_let(Elab *e, const Form *call) {
                         if (di && !binding_moved_during_init[k] &&
                             !binds[k].binding->is_moved &&
                             !is_binding_consumed(body, binds[k].binding)) {
-                            Binding *dm = di->method_impls[0]->binding;
-                            Expr *var_expr = expr_new(e->arena, EX_VAR,
-                                                      binds[k].binding->type, call->span);
-                            var_expr->as.var.binding = binds[k].binding;
-
-                            Expr *drop_call = expr_new(e->arena, EX_CALL, TYPE_NIL, call->span);
-                            drop_call->as.call_.fn_binding = dm;
-                            drop_call->as.call_.n_args = 1;
-                            drop_call->as.call_.args =
-                                (Expr **)arena_alloc(e->arena, sizeof(Expr *));
-                            drop_call->as.call_.args[0] = var_expr;
-
-                            Expr *defer_expr = expr_new(e->arena, EX_DEFER, TYPE_NIL, call->span);
-                            defer_expr->as.defer_.body = drop_call;
-                            uint32_t n_free = 0;
-                            Binding **free_vars =
-                                collect_free_vars(drop_call, NULL, 0, NULL, 0, &n_free);
-                            Binding **captures = NULL;
-                            uint8_t n_captures = 0;
-                            if (n_free > 0) {
-                                captures = (Binding **)arena_alloc(
-                                    e->arena, n_free * sizeof(Binding *));
-                                memcpy(captures, free_vars, n_free * sizeof(Binding *));
-                                n_captures = (uint8_t)n_free;
-                            }
-                            free(free_vars);
-                            defer_expr->as.defer_.captures = captures;
-                            defer_expr->as.defer_.n_captures = n_captures;
-                            defer_expr->as.defer_.is_drop_glue = true;
-
-                            new_items[defer_idx++] = defer_expr;
+                            new_items[defer_idx++] =
+                                elab_drop_glue_defer(e, binds[k].binding, di, call->span);
                         }
                     }
                 }

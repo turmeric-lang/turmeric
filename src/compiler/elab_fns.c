@@ -15935,6 +15935,12 @@ static Expr *elab_fn_impl(Elab *e, const Form *call) {
                  * nothing releases).  Moving makes the closure the SOLE owner -- the
                  * drop-glue releases it exactly once via the Drop instance, and a
                  * second capture is a compile-time use-after-move. */
+                /* A `^borrow` parameter is not this scope's to give away: the
+                 * caller owns it and drops it.  Capturing it is a borrow too, so
+                 * the env neither moves it in nor drops it -- dropping it freed
+                 * the caller's value under it, once per closure (fixture
+                 * closure-borrowed-drop-capture-not-dropped). */
+                if (cap->is_borrow) continue;
                 struct TypeClassInstance *di = drop_tc
                     ? typeclass_env_lookup_instance(&e->typeclass_env, drop_tc, &cap->type, 1)
                     : NULL;
