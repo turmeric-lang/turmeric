@@ -3,7 +3,6 @@
  * Main JavaScript file for the Turmeric WASM REPL
  */
 
-import { encodeShareCode, decodeShareCode } from './share-codec.js';
 import { isTutorialMode, debounce, resetWorkspace } from './storage.js';
 import { EXAMPLES } from './examples.js';
 import { escapeHtml } from './html.js';
@@ -12,7 +11,6 @@ import { syncMinimapMenuItem, toggleMinimap, initMinimap } from './minimap.js';
 import { initSplitHandle } from './split-handle.js';
 import { initInstallAffordances } from './pwa-install.js';
 import { initSymbolsMenu } from './outline.js';
-import { setHashParam, getHashParam } from './hash-params.js';
 import { docsPaneState, loadDocsIndex, showDocsPage, openDocsPane, closeDocsPane, docsPaneIsOpen, initDocsPane, syncDocsPaneFromHash } from './docs-pane.js';
 import { configureTrace, traceState, traceCode, traceClose, traceSeek, traceInstallHandlers, traceInstallGutterHandler } from './trace.js';
 import { monacoThemeName } from './editor-theme.js';
@@ -30,6 +28,8 @@ import { hydrateConsole, appendToConsole, clearConsole, copyConsole } from './co
 import { buildProjectEntries, downloadProject, parseProjectZip, loadProjectFromBytes, loadProjectFromFile, openProjectFile, initProjectDrop } from './project.js';
 import { replSessionAccept, replSessionReset, promptSetEnabled, initReplInput, configureRepl } from './repl.js';
 import { startLspClient } from './lsp.js';
+import { CONFIG } from './config.js';
+import { updateUrlHash, loadFromUrlHash, shareCode } from './share.js';
 
 // ============================================================================
 // WASM Module State
@@ -52,52 +52,6 @@ let isExecuting = false;
 // Modules split out of this file read the editor through these getters.
 provideEditor(() => editor, () => monaco);
 configureRepl({ executeCode, resetWasm });
-
-// ============================================================================
-// Configuration
-// ============================================================================
-
-const CONFIG = {
-    DEFAULT_CODE: `#lang turmeric/sweet
-
-println "Hello, Turmeric!"
-`,
-    // How long one request may keep the eval Worker busy before the watchdog
-    // stops it and starts a fresh session (security-audit-plan W-3). Generous,
-    // because a playground program that legitimately computes for a while is
-    // not the problem; a program that never returns is.
-    EXECUTION_TIMEOUT: 30000,
-    MAX_OUTPUT_LENGTH: 10000,
-};
-
-/**
- * Update URL hash with current code
- */
-let urlHashSeq = 0;
-async function updateUrlHash() {
-    if (!editor) return;
-    // Encoding is async; a slower, older encode must not land after a newer one.
-    const seq = ++urlHashSeq;
-    const encoded = await encodeShareCode(editor.getValue());
-    if (encoded && seq === urlHashSeq) {
-        // Merge rather than assign: the docs pane keeps a `doc=` key in the
-        // same hash, and clobbering it would close the pane mid-read.
-        setHashParam('code', encoded);
-    }
-}
-
-/**
- * Load code from URL hash
- */
-async function loadFromUrlHash() {
-    const encoded = getHashParam('code');
-    if (encoded) {
-        const code = await decodeShareCode(encoded);
-        if (code && editor && code !== editor.getValue()) {
-            editor.setValue(code);
-        }
-    }
-}
 
 // ============================================================================
 // WASM Module Loading
@@ -813,30 +767,6 @@ function loadExample(name) {
         }
         updateUrlHash();
         showStatus(`Loaded example: ${name}`, 'success');
-    }
-}
-
-/**
- * Share the current code
- */
-async function shareCode() {
-    if (!editor) return;
-    
-    const code = editor.getValue();
-    const encoded = await encodeShareCode(code);
-    
-    if (encoded) {
-        const url = `${window.location.origin}${window.location.pathname}#code=${encoded}`;
-        
-        // Copy to clipboard
-        navigator.clipboard.writeText(url).then(() => {
-            showStatus('URL copied to clipboard!', 'success');
-        }).catch(() => {
-            // Fallback: show the URL
-            prompt('Copy this URL:', url);
-        });
-    } else {
-        showStatus('Failed to encode code', 'error');
     }
 }
 
