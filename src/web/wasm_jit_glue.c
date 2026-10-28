@@ -50,9 +50,10 @@
 #include "runtime/globals.h"   /* g_interpret_mode */
 #include "wasm_glue.h"
 
-/* Where c2mir finds headers: the musl subset and hamt.h the module embeds
- * (tools/wasm-jit/headers.txt), mounted at these paths. */
-static const char *const k_include_dirs[] = { "/sysinclude", "/src/runtime" };
+/* Where c2mir finds headers: the musl subset (tools/wasm-jit/headers.txt and
+ * its stdatomic.h), runtime/hamt.h and turi/r7rs_embed.h, as the module
+ * embeds them. */
+static const char *const k_include_dirs[] = { "/sysinclude", "/src/runtime", "/src" };
 
 static double glue_now_ms(void) {
 #ifdef __EMSCRIPTEN__

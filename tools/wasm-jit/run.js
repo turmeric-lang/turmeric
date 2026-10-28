@@ -3,7 +3,7 @@
 // (wasm-jit-plan P3).
 //
 //   node tools/wasm-jit/run.js [--module DIR] [--result FILE] [--repeat N]
-//                              program.tur [arg ...]
+//                              [--dump-c FILE] program.tur [arg ...]
 //
 // The program's stdout and stderr bytes go to this process's stdout and
 // stderr unchanged; its stdin is this process's stdin.  The module's answer
@@ -14,7 +14,8 @@
 // --module defaults to build-wasm/wasm-jit (the tur_wasm_jit target's output).
 // --repeat runs the same program N times in one module instance, which is how
 // the page reuses it; every run's answer is reported, the last one decides
-// the exit status.
+// the exit status.  --dump-c writes the text c2mir was handed (prelude and
+// all), where a <tur-jit>:LINE diagnostic points.
 'use strict';
 const fs = require('fs');
 const path = require('path');
@@ -23,15 +24,17 @@ const argv = process.argv.slice(2);
 let moduleDir = path.resolve(__dirname, '../../build-wasm/wasm-jit');
 let resultFile = null;
 let repeat = 1;
+let dumpC = null;
 while (argv.length && argv[0].startsWith('--')) {
   const flag = argv.shift();
   if (flag === '--module') moduleDir = path.resolve(argv.shift());
   else if (flag === '--result') resultFile = argv.shift();
   else if (flag === '--repeat') repeat = parseInt(argv.shift(), 10);
+  else if (flag === '--dump-c') dumpC = argv.shift();
   else { console.error(`run.js: unknown flag ${flag}`); process.exit(2); }
 }
 if (!argv.length) {
-  console.error('usage: node run.js [--module DIR] [--result FILE] [--repeat N] program.tur [arg ...]');
+  console.error('usage: node run.js [--module DIR] [--result FILE] [--repeat N] [--dump-c FILE] program.tur [arg ...]');
   process.exit(2);
 }
 const programPath = argv.shift();
@@ -69,6 +72,7 @@ factory({
   locateFile: (p) => path.join(moduleDir, p),
   preRun: [(mod) => {
     mod.ENV.TUR_STDLIB_DIR = '/stdlib';
+    if (dumpC) mod.ENV.TUR_JIT_DUMP_FULL = '/tmp/tur-jit-full.c';
     mod.FS.init(
       () => (stdinPos < stdinBytes.length ? stdinBytes[stdinPos++] : null),
       (c) => out.put(c),
@@ -93,6 +97,9 @@ factory({
     }
     out.flush();
     err.flush();
+    if (dumpC) {
+      try { fs.writeFileSync(dumpC, mod.FS.readFile('/tmp/tur-jit-full.c')); } catch (e) { /* never reached c2mir */ }
+    }
     const line = JSON.stringify(answer);
     if (resultFile) fs.appendFileSync(resultFile, line + '\n');
     else fs.writeSync(2, `tur-wasm-jit: ${line}\n`);

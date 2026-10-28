@@ -225,6 +225,51 @@ static const char JIT_PRELUDE[] =
   "#define TARGET_RT_LITTLE_ENDIAN 1\n"
   "#define TARGET_RT_MAC_MACHO 1\n"
   "#endif\n"
+#ifdef __EMSCRIPTEN__
+  /* The browser engine (wasm-jit-plan P3) is the one place the fake
+   * non-atomic lowerings the comment above refuses are sound: it refuses
+   * every way a program starts a thread (JIT_WASM_REFUSED below), so the
+   * program runs on one thread, where an atomic operation is the operation
+   * and no other thread can observe the difference.  The fallback here is the
+   * interpreter, not cc, so refusing them would cost the 300-odd fixtures whose
+   * stdlib inline C uses them their compiled run.  tools/wasm-jit/stdatomic.h
+   * is the C11 spelling of the same thing, and thread-local storage is plain
+   * static storage for the same reason.
+   *
+   * c2mir reserves `typeof` but never parses it, so the macros that return
+   * the old value hold it in a long long.  GCC defines these builtins on
+   * integers and pointers only, and every integer up to 64 bits survives the
+   * round trip; the corpus applies them to integers alone. */
+  "#define __thread\n"
+  "#define _Thread_local\n"
+  "#define __ATOMIC_RELAXED 0\n"
+  "#define __ATOMIC_CONSUME 1\n"
+  "#define __ATOMIC_ACQUIRE 2\n"
+  "#define __ATOMIC_RELEASE 3\n"
+  "#define __ATOMIC_ACQ_REL 4\n"
+  "#define __ATOMIC_SEQ_CST 5\n"
+  "#define __atomic_load_n(p, o) (*(p))\n"
+  "#define __atomic_store_n(p, v, o) ((void) (*(p) = (v)))\n"
+  "#define __atomic_add_fetch(p, v, o) (*(p) += (v))\n"
+  "#define __atomic_sub_fetch(p, v, o) (*(p) -= (v))\n"
+  "#define __atomic_fetch_add(p, v, o)"
+  " ({ long long __tur_o = *(p); *(p) += (v); __tur_o; })\n"
+  "#define __atomic_fetch_sub(p, v, o)"
+  " ({ long long __tur_o = *(p); *(p) -= (v); __tur_o; })\n"
+  "#define __atomic_exchange_n(p, v, o)"
+  " ({ long long __tur_o = *(p); *(p) = (v); __tur_o; })\n"
+  "#define __atomic_compare_exchange_n(p, e, d, w, s, f)"
+  " ({ int __tur_ok = *(p) == *(e); if (__tur_ok) *(p) = (d); else *(e) = *(p); __tur_ok; })\n"
+  "#define __atomic_thread_fence(o) ((void) 0)\n"
+  "#define __atomic_signal_fence(o) ((void) 0)\n"
+  "#define __sync_fetch_and_add(p, v) __atomic_fetch_add (p, v, 5)\n"
+  "#define __sync_fetch_and_sub(p, v) __atomic_fetch_sub (p, v, 5)\n"
+  "#define __sync_add_and_fetch(p, v) (*(p) += (v))\n"
+  "#define __sync_sub_and_fetch(p, v) (*(p) -= (v))\n"
+  "#define __sync_bool_compare_and_swap(p, o, n)"
+  " ({ int __tur_ok = *(p) == (o); if (__tur_ok) *(p) = (n); __tur_ok; })\n"
+  "#define __sync_synchronize() ((void) 0)\n"
+#endif
   "double __builtin_pow (double, double);\n"
   "double __builtin_sqrt (double);\n"
   "double __builtin_ceil (double);\n"

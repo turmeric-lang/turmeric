@@ -18,9 +18,10 @@
 #   2. generate the import table (gen-symtab.py) from the runtime's
 #      declarations region and what the objects define, and compile it;
 #   3. collect the headers c2mir may open: the musl closure of
-#      tools/wasm-jit/headers.txt, and runtime/hamt.h;
+#      tools/wasm-jit/headers.txt, tools/wasm-jit/stdatomic.h, runtime/hamt.h
+#      and turi/r7rs_embed.h;
 #   4. link, embedding the stdlib at /stdlib and the headers at /sysinclude
-#      and /src/runtime.
+#      and /src.
 set -euo pipefail
 
 OUT=$1
@@ -119,7 +120,7 @@ done
 # --- 3. headers --------------------------------------------------------------
 HDR=$OUT/hdr
 rm -rf "$HDR"
-mkdir -p "$HDR/sysinclude" "$HDR/src/runtime"
+mkdir -p "$HDR/sysinclude" "$HDR/src/runtime" "$HDR/src/turi"
 grep -v '^\s*#' "$HERE/headers.txt" | grep -v '^\s*$' | sed 's/.*/#include <&>/' > "$OUT/headers-probe.c"
 emcc -M -nostdinc -isystem "$SYSINC" -D_GNU_SOURCE "$OUT/headers-probe.c" -o "$OUT/headers.d"
 tr ' \\' '\n\n' < "$OUT/headers.d" | grep "^$SYSINC/" | sort -u | while read -r h; do
@@ -128,6 +129,11 @@ tr ' \\' '\n\n' < "$OUT/headers.d" | grep "^$SYSINC/" | sort -u | while read -r 
   cp "$h" "$HDR/sysinclude/$rel"
 done
 cp "$ROOT/src/runtime/hamt.h" "$HDR/src/runtime/hamt.h"
+# What musl's sysroot lacks: stdatomic.h is the compiler's header, not libc's
+# (this one is single-threaded, see its header), and the #lang r7rs eval
+# twins include turi/r7rs_embed.h from stdlib/r7rs/eval.tur.
+cp "$HERE/stdatomic.h" "$HDR/sysinclude/stdatomic.h"
+cp "$ROOT/src/turi/r7rs_embed.h" "$HDR/src/turi/r7rs_embed.h"
 
 # --- 4. link -----------------------------------------------------------------
 EXPORTS=_turi_wasm_init,_turi_wasm_reset,_turi_wasm_eval,_turi_wasm_eval_ex,_turi_wasm_free_string,_turi_wasm_version,_turi_wasm_jit_run,_malloc,_free

@@ -561,8 +561,19 @@ symbol table needs those three if a pruned unit ever keeps `math.h`.
 Still to batch into the next fork PR:
 
 - Exact-signature stub registry in `mir-wasm.c` (5.5).
-- Whatever P3 finds in `wasm_ff_dispatch` for our carrier-word signatures
-  (`int64_t` everywhere, by-value aggregates through `BLK`).
+- **Thunks as real table entries** (found in P3, the largest failure family:
+  [wasm-mir-thunk-address-is-not-callable-by-host-code](../reported/wasm-mir-thunk-address-is-not-callable-by-host-code.md)).
+  A thunk address is a slot in a memory array, so host C that
+  `call_indirect`s it traps with `table index is out of bounds`.
+  `wasm_ff_dispatch` substitutes a real entry only for an i32 call argument.
+  An address stored in a closure, a `DK` frame or a callback slot, or passed as
+  an `int64_t` carrier, reaches host code raw. `_MIR_get_thunk` should reserve
+  a table slot, and `_MIR_redirect_thunk` should fill it.
+- **`MIR_gen` and ucontext stubs.** `mir-wasm.c` defines no `MIR_gen_init`,
+  `MIR_gen_set_optimize_level` or `MIR_gen`, and Emscripten declares
+  `getcontext`/`makecontext`/`swapcontext` without defining them. Every
+  embedder links its own aborting stubs (`src/web/wasm_jit_stubs.c`), and
+  the fork should carry them instead.
 - If 5.8's option 3 is taken, the interpreter frame change.
 - c2mir applies the integer promotions to a `_Generic` controlling
   expression, on every target: `_Generic ((short) 0, short: 1, int: 2)` is
@@ -750,7 +761,7 @@ a 422 KB full unit, and the retry path was never needed for these three.
 - **Bare-module scale**: the loop's first run is 3x its steady state
   while V8 tiers the interpreter up, as in the bare spike.
 
-### P2 -- `tur_front`
+### P2 -- `tur_front`: DONE 2026-10-28
 
 The driver split of 5.2, landed on its own: `tur` links the same objects
 and `tests/check-driver-headers.py` passes. No wasm in this PR.

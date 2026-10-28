@@ -36,6 +36,7 @@ Two rules hold for every command below:
 | `tests/run.sh` | Every fixture under `tests/fixtures/`, compiled to a native binary through `cc` | The main suite |
 | `tests/run-turi.sh` | The same fixtures under `tur --interpret` | Interpreter changes |
 | `tests/run-jit.sh` | The same fixtures through `tur jit` (MIR) | JIT changes |
+| `tests/run-jit-wasm.sh` | The same fixtures through the browser JIT module (`turmeric-jit.wasm`, under node), checked against a baseline of which fall back | wasm JIT changes (wasm-jit-plan) |
 | `tests/check-*.sh` | One invariant each (a lint, a sync check, a ratchet) | Usually as named by a CI failure |
 | `tests/run-*.sh` (others) | One focused harness each (r7rs conformance, leak gates, debugger, ...) | Usually as named by a CI failure |
 | `ctest --test-dir build` | Every harness above, each registered as one ctest target | What CI actually runs |
@@ -93,6 +94,18 @@ fails if those do not add up.
 
 `TUR_TEST_FILTER` (or `JIT_FILTER`, which wins), `TUR_TEST_SHARD`, and
 `TUR_TEST_LIST=1` (list only), as in `tests/run.sh`.
+
+### `tests/run-jit-wasm.sh`
+
+Needs the module built (`cmake --build build-wasm --target tur_wasm_jit`, see
+[tools/wasm-jit/README.md](../../tools/wasm-jit/README.md)). Takes
+`TUR_TEST_FILTER`, `TUR_TEST_SHARD`, `TUR_TEST_JOBS` and `TUR_TEST_LIST=1`, as in
+`tests/run.sh`. `TUR_WASM_JIT_MODULE` names the module's directory (default
+`build-wasm/wasm-jit`). `TUR_JIT_WASM_RESULTS=<dir>` keeps each fixture's result,
+so a full run can be split into shards that each fit the 12-minute budget and
+then summed. `TUR_JIT_WASM_BASELINE_UPDATE=1` rewrites
+`tests/jit-wasm-baseline.txt` (refused in a sharded run). The header of the
+script has the details.
 
 ### `tests/run-markdown-spec.sh`
 
