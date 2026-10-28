@@ -56,6 +56,7 @@ directory is worse for triage than no index.
 | Report | Severity | One line |
 | --- | --- | --- |
 | [ilp32-word-slots-truncate-64-bit-carriers](ilp32-word-slots-truncate-64-bit-carriers.md) | high (wasm JIT, `tur build --target wasm`) | On wasm32, carriers kept in `intptr_t`/`void *` slots (`tur_hamt_get`'s values; the CPS backend's `DK` slots were fixed in P5) or declared at the wrong width (`tur_hamt_count`) lose their top 32 bits. Doubles and large ints come back wrong with no diagnostic: 44 corpus fixtures printed a wrong answer, and more once mir#16 let former traps run to the end |
+| [wasm-jit-comparator-result-varies-between-runs](wasm-jit-comparator-result-varies-between-runs.md) | medium (browser JIT) | `typed/list-concat` and `eq-carrier-capturing-comparator` print `false` for `true` on some runs of one module instance and not others (`run.js --repeat 4`); native is right. Present on `main` before P5; not the DK word, the call stubs, `setjmp` or the register fix |
 
 ## Found adding the instance-variance warning (filed 2026-10-27)
 

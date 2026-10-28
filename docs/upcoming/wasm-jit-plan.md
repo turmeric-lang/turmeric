@@ -1,16 +1,18 @@
 # Plan: the JIT engine in the browser (c2mir + MIR on wasm32)
 
-> **Status:** P0 to P4 done 2026-10-28. Try Turmeric has a Compile engine
+> **Status:** P0 to P5 done 2026-10-28. Try Turmeric has a Compile engine
 > (the language menu's Engine section): Run compiles the program to C and
 > runs it on MIR's interpreter in the page, so inline C works there. It is a
 > second module, `turmeric-jit.{js,wasm}` (5.3 MB, `tur_wasm_jit`), loaded on
 > first use; both modules read the stdlib from one shared `stdlib.data`
-> (5.11). `tests/run-jit-wasm.sh` runs the corpus through it against
-> `tests/jit-wasm-baseline.txt`: 1,915 fixtures compiled, 643 fell back to
-> the interpreter with the right answer, 374 failed, 236 skipped (section 7,
-> P3). Every Try Turmeric example compiles or falls back with a reason.
-> Next: P5 -- `setjmp` and Asyncify are most of what still falls back or
-> fails.
+> (5.11). P5 made `setjmp` work (the interpreter calls it in its own frame,
+> turmeric-lang/mir#17), gave the runtime's calls exact-signature stubs, and
+> widened the DK machine's word to 64 bits on wasm32 (`tur_dkw`).
+> `tests/run-jit-wasm.sh` against `tests/jit-wasm-baseline.txt`: 2,488
+> fixtures compiled, 191 fell back right, 254 failed, 241 skipped (section
+> 7, P5). Every Try Turmeric example compiles or falls back with a reason.
+> Next: P6 (the REPL session); Asyncify (49 fixtures) and the threads family
+> (260, a fallback by design) are most of what is left.
 > **P0 run 2026-10-23** (section 7): the corpus under `TUR_JIT_GEN=interp`
 > on a Release build is 3853/113/70; every interpreter-only failure is in
 > one of three families (threads 82, continuations 10, deep recursion 2),
@@ -378,6 +380,9 @@ the problem for most programs.
 
 ### 5.5 Foreign calls: exact-signature stubs for the runtime
 
+> **Done, P5:** `gen-symtab.py --stubs` and `MIR_wasm_register_ff_stub`
+> (turmeric-lang/mir#17). See P5.
+
 Under T1 every call from the program half into the runtime half is a foreign
 call, and `mir-wasm.c` makes each one a JS round trip with BigInt
 conversions. For a tree-walker replacement that is the hot path, not the
@@ -401,6 +406,9 @@ different problem. This is a fork change (`mir-wasm.c` gains a stub
 registry), so it rides one fork PR with anything else P1 finds.
 
 ### 5.6 `setjmp` in the program half
+
+> **Done differently, P5:** no emitter knob -- the interpreter calls `setjmp`
+> itself in `eval`'s frame on wasm (turmeric-lang/mir#17). See P5.
 
 The emitter puts `setjmp` landings **in the program half**: effect handler
 escapes (`emit_effects.c`, `tur_handler_node { jmp_buf buf; ... }` in the
@@ -1023,6 +1031,57 @@ Found on the way:
 
 5.5 (fork PR, then sync) and 5.6 (emitter knob). Re-run P3's harness; the
 baseline file should shrink, and that shrink is the test.
+
+**Done 2026-10-28.** The baseline went from 1,017 lines to 445:
+
+| | P3 | P5 |
+|---|---|---|
+| compiled | 1,915 | 2,488 |
+| interpreted, right answer | 643 | 191 |
+| failed | 374 | 254 |
+| skipped | 236 | 241 |
+
+Gate (`check-examples.sh`): all 19 examples right, 11 compiled (`effects`
+and `inline-c` among them) and 8 falling back on threads.
+
+What it took, and how it differs from 5.6 as written:
+
+- **`setjmp` without an emitter knob.** The plan's `tur_rt_try` outlining
+  was not needed. The fork's interpreter already runs `setjmp` in `eval`'s
+  own frame natively (`func_addr == setjmp_addr`); on wasm, where its address
+  cannot be taken, `eval` now calls `setjmp` by name, `jit_import_resolver`
+  hands MIR a stand-in for the import, and `MIR_load_external` swaps in a
+  marker (turmeric-lang/mir#17, `INTERP_SETJMP`). `longjmp` goes through the
+  FFI as before. Measured: no loop slowdown -- the module already used
+  Emscripten's SjLj for `jit_engine.c`'s own landings.
+- **5.5's stubs.** `gen-symtab.py --stubs` writes one per wasm signature among
+  the runtime objects' functions plus every small libc shape (196); the fork's
+  `MIR_wasm_register_ff_stub` takes them. A loop of libm calls runs 2-3x
+  faster. A stub's `call_indirect` is checked where the JS trampoline coerced,
+  so a C function declared at the wrong type now traps (`function signature
+  mismatch`) instead of computing garbage: the five `reactor-fd-*` /
+  `reactor-signal-*` rows moved from a BigInt error to that trap.
+- **A 64-bit DK word.** With `setjmp` working, the CPS backend's programs
+  reached the engine and printed wrong floats: the DK machine carried values
+  as `intptr_t`, 32 bits here (shape 1 of
+  [ilp32-word-slots-truncate-64-bit-carriers](../reported/ilp32-word-slots-truncate-64-bit-carriers.md)).
+  `tur_dkw` is `int64_t` where `intptr_t` is narrower and `intptr_t`
+  elsewhere, so native output is unchanged.
+- **Two fork bugs on the way.** An address stored into an 8-byte interpreter
+  register through `void **` left the upper half stale, and c2mir's
+  `(long long) f` read it whole, so the CPS registry missed (fixed in mir#17).
+  The inliner's assert on a function with no return (found in P4) rides the
+  same PR.
+
+What is left in the baseline, by reason (a fixture counts once):
+
+| Family | Fixtures | Owner |
+|---|---|---|
+| The program starts threads (refused by design) | 190 fell back right; 70 fell back and the interpreter got it wrong too | stays a fallback (risk 7) |
+| Wrong answer on the compiled path | 56 | shapes 2-3 of the ILP32 report (HAMT/vec `void *` values, wrong-width `extern-c`); P0's continuations family, wrong under `TUR_JIT_GEN=interp` natively too (`direct-shift-outside-lexical-reset`, `shift0-receiver-runs-outside-its-reset`); [wasm-jit-comparator-result-varies-between-runs](../reported/wasm-jit-comparator-result-varies-between-runs.md) |
+| Asyncify: `emscripten_fiber_swap` | 49 | unowned; the stubs remove one JS frame per runtime call, the trampoline's interp entries remain |
+| Other traps: `Aborted()` (26), signature mismatch (16), `exit` reaching JS (12), JS stack (8, deep recursion such as `escape-deep-capture`), out-of-bounds (2), `unwind` (2) | 66 | unsorted |
+| Imports with no host (`fork`, `socket`, `popen`, ...) | 13 | stay fallbacks |
 
 ### P6 -- REPL session
 
