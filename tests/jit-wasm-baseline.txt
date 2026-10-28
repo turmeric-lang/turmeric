@@ -6,40 +6,21 @@
 # line FAILs the run; a better one is reported so the line can go.
 # Regenerate from an unsharded, unfiltered run:
 #   TUR_JIT_WASM_BASELINE_UPDATE=1 bash tests/run-jit-wasm.sh
-adt-name-apostrophe-monomorph-mangle fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
 all-any-fn-param interpreted  # import of undefined item setjmp
 annotated-fat-lambda-param interpreted  # import of undefined item setjmp
-any-closure-roundtrip fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
-any-fn-signature-discriminates fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
 any-value-call interpreted  # import of undefined item setjmp
 any-widen-frame-box-dyn-call-operand interpreted  # import of undefined item setjmp
 any-widen-frame-box-past-dyn-call interpreted  # import of undefined item setjmp
 any-widen-fresh-payload-aliases interpreted  # import of undefined item setjmp
 any-widen-of-a-borrowed-local interpreted  # import of undefined item setjmp
 any-widen-retaining-callee fail  # stdout mismatch on the error path: the module threw: Aborted(Please compile your program with async support in order to use asynchronous operations like emscripten_fiber_swap). Build with -sASSERTIONS for more info.
-args-evaluated-left-to-right fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
 args-evaluated-left-to-right-effect-unit fail  # stdout mismatch on the error path: the module threw: Aborted(Please compile your program with async support in order to use asynchronous operations like emscripten_fiber_swap). Build with -sASSERTIONS for more info.
 args-option-implicit fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
 arrow-compose-float interpreted  # import of undefined item setjmp
-arrow-generic-closure-direct-call fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
-arrow-instance-apply fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
-arrow-instance-arr-identity fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
-arrow-instance-basic fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
-arrow-instance-choice fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
-arrow-instance-in-constrained-generic fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
-arrow-instance-loop-nonrecursive fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
-arrow-instance-nullary fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
-arrow-instance-stdlib-basic fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
-arrow-instance-typed-compose fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
-arrow-instance-vs-bare fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
-arrow-loop-delay fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
-arrow-loop-fix fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
-arrow-loop-lazy-feedback fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
-arrow-struct-typed-arrow fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
 ascribe-fat-closure-call interpreted  # import of undefined item setjmp
 async-await-basic fail  # stdout mismatch on the error path: the module threw: Aborted(Please compile your program with async support in order to use asynchronous operations like emscripten_fiber_swap). Build with -sASSERTIONS for more info.
 async-await-channel fail  # stdout mismatch on the error path: the module threw: Aborted(). Build with -sASSERTIONS for more info.
-async-await-payload-types fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
+async-await-payload-types fail  # stdout mismatch on the compiled path
 async-capturing-body-env-dropped fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
 async-capturing-closure fail  # stdout mismatch on the error path: the module threw: Aborted(Please compile your program with async support in order to use asynchronous operations like emscripten_fiber_swap). Build with -sASSERTIONS for more info.
 async-echo-server fail  # stdout mismatch on the interpreted path: import of undefined item socket
@@ -48,7 +29,6 @@ async-error fail  # stdout mismatch on the error path: the module threw: Aborted
 async-file fail  # stdout mismatch on the interpreted path: the program starts threads (tur_timer_wheel_new), which this engine cannot run
 async-let-bound-body-env-dropped fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
 async-let-bound-body-env-dropped-cps fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
-async-let-bound-body-env-kept fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
 async-on-thread-body-env-dropped fail  # stdout mismatch on the error path: the module threw: Aborted(Please compile your program with async support in order to use asynchronous operations like emscripten_fiber_swap). Build with -sASSERTIONS for more info.
 async-panic-rejects-future fail  # stdout mismatch on the error path: the module threw: Aborted(Please compile your program with async support in order to use asynchronous operations like emscripten_fiber_swap). Build with -sASSERTIONS for more info.
 async-park-reaped-after-settle fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
@@ -65,10 +45,7 @@ await-in-struct-capturing-async-body fail  # stdout mismatch on the interpreted 
 await-through-constrained-rank2-value fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
 await-through-fn-value fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
 await-through-rank2-param fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
-backtrack-bind fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
-backtrack-fresh fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
 backtrack-integration-effects interpreted  # import of undefined item setjmp
-backtrack-mbind-captureless-lambda fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
 bare-fat-float-result interpreted  # import of undefined item setjmp
 bare-fat-float-result-dedup interpreted  # import of undefined item setjmp
 bare-fat-int-and-float-combinator interpreted  # import of undefined item setjmp
@@ -78,9 +55,6 @@ bare-fat-let-float-binding interpreted  # import of undefined item setjmp
 bare-fat-nontail-float-noannot interpreted  # import of undefined item setjmp
 bare-fat-nontail-int-roundtrip interpreted  # import of undefined item setjmp
 barrier-rendezvous fail  # stdout mismatch on the interpreted path: the program starts threads (pthread_create), which this engine cannot run
-borrow-closure fail  # exited 1 (expected 0) on the error path: the module threw: table index is out of bounds
-boxed-fn-typed-closure-return fail  # exited 1 (expected 0) on the error path: the module threw: table index is out of bounds
-bt-scope-panic-undo fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
 byval-spine-drop-refused-nonscalar-param interpreted  # import of undefined item setjmp
 call-cc-star interpreted  # import of undefined item setjmp
 callcc-in-fiber fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
@@ -93,14 +67,6 @@ cancel-cooperative fail  # stdout mismatch on the interpreted path: the program 
 cancel-guard-typed-closures fail  # stdout mismatch on the error path: the module threw: Aborted(Please compile your program with async support in order to use asynchronous operations like emscripten_fiber_swap). Build with -sASSERTIONS for more info.
 cancel-select fail  # stdout mismatch on the interpreted path: the program starts threads (pthread_create), which this engine cannot run
 capability-effect-poly interpreted  # import of undefined item setjmp
-captureless-autobox fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
-capturing-closure-struct-field fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
-catch-box-user-sink-confines fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
-catch-unwind-aggregate-thunk fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
-catch-unwind-branch-result-return fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
-catch-unwind-byvalue-result-return fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
-catch-unwind-ok-val-extract fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
-category-instance-basic fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
 cfnptr-vs-boxed-monomorph-split interpreted  # import of undefined item setjmp
 childhandle-linear fail  # stdout mismatch on the interpreted path: import of undefined item fork
 class-var-applied-result-in-constrained-generic interpreted  # import of undefined item setjmp
@@ -118,38 +84,24 @@ cloneable-owning-borrow-capture interpreted  # import of undefined item setjmp
 cloneable-rc interpreted  # import of undefined item setjmp
 cloneable-ref interpreted  # import of undefined item setjmp
 cloneable-shift-receiver-cont-freed interpreted  # import of undefined item setjmp
-closure-call fail  # exited 1 (expected 0) on the error path: the module threw: table index is out of bounds
 closure-calls-let-bound-lambda interpreted  # import of undefined item setjmp
-closure-capture-linear-read-only fail  # exited 1 (expected 0) on the error path: the module threw: table index is out of bounds
 closure-captured-mut-opaque fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
 closure-captured-mut-shared interpreted  # import of undefined item setjmp
-closure-captures-closure-binding fail  # exited 1 (expected 0) on the error path: the module threw: table index is out of bounds
 closure-captures-under-every-form fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
 closure-combinator-env-released fail  # stdout mismatch on the error path: the module threw: Aborted(Please compile your program with async support in order to use asynchronous operations like emscripten_fiber_swap). Build with -sASSERTIONS for more info.
-closure-drop-glue-fat-capture fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
-closure-drop-glue-fatshim fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
-closure-drop-glue-model-r fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
-closure-drop-glue-rc-capture fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
 closure-env-free-fresh-returning-call interpreted  # import of undefined item setjmp
 closure-env-free-nonretain-fatparam interpreted  # import of undefined item setjmp
-closure-env-free-with-owning-sibling fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
-closure-field-drop-glue-defdata fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
-closure-field-drop-glue-rc-struct fail  # exited 1 (expected 0) on the error path: the module threw: table index is out of bounds
 closure-let-in-self-tail-loop interpreted  # import of undefined item setjmp
-closure-multi-capture fail  # exited 1 (expected 0) on the error path: the module threw: table index is out of bounds
-closure-multi-capture-ref fail  # exited 1 (expected 0) on the error path: the module threw: table index is out of bounds
 closure-slot-ptr-void-fn-word interpreted  # import of undefined item setjmp
 closure-slot-ptr-void-param-sinks fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
-closure-thunk-arg-cast fail  # exited 1 (expected 0) on the error path: the module threw: table index is out of bounds
 colored-generic-erased-carrier-param interpreted  # import of undefined item setjmp
 comonad-capturing-closure interpreted  # import of undefined item setjmp
 comonad-extend-witness interpreted  # import of undefined item setjmp
-comparator-float-elements-word-adapter fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
+comparator-float-elements-word-adapter fail  # stdout mismatch on the compiled path
 constrained-defn-cons-return-monomorphize fail  # stdout mismatch on the compiled path
 constrained-generic-instance-inheritance interpreted  # import of undefined item setjmp
 constrained-generic-relay-word-temp-return interpreted  # import of undefined item setjmp
-constrained-instance-closure-element-dispatch fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
-constrained-instance-dispatch-nested-parametric-element fail  # stdout mismatch on the error path: the module threw: memory access out of bounds
+constrained-instance-dispatch-nested-parametric-element fail  # stdout mismatch on the compiled path
 constrained-instance-element-dispatch fail  # stdout mismatch on the compiled path
 cont-flavors interpreted  # import of undefined item setjmp
 cont-pred-every-flavor interpreted  # import of undefined item setjmp
@@ -161,13 +113,11 @@ continuation-callcc interpreted  # import of undefined item setjmp
 continuation-escape interpreted  # import of undefined item setjmp
 continuation-escape-fn interpreted  # import of undefined item setjmp
 conv-adt-record-fn-field-call interpreted  # import of undefined item setjmp
-conv-adt-record-typed-fn-field-call fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
 conv-defstruct-fn-field-lowering interpreted  # import of undefined item setjmp
 conv-defstruct-option-fn-element fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
 conv-defstruct-option-hkt-instance-bodies fail  # stdout mismatch on the error path: the module threw: null function or function signature mismatch
 conv-defstruct-result-struct-field-typedef-order fail  # stdout mismatch on the compiled path
 conv-defstruct-return-bridge-inline-c fail  # stdout mismatch on the compiled path
-conv-defstruct-typed-fn-field-lowering fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
 cps-backend-capture-borrow interpreted  # import of undefined item setjmp
 cps-backend-capture-fnvalue interpreted  # import of undefined item setjmp
 cps-backend-capture-handle interpreted  # import of undefined item setjmp
@@ -244,7 +194,6 @@ cps-oracle-callcc-native interpreted  # import of undefined item setjmp
 cps-oracle-cloneable-closure-recv interpreted  # import of undefined item setjmp
 cps-oracle-cloneable-closure-shape2 interpreted  # import of undefined item setjmp
 cps-oracle-cloneable-multi-resume interpreted  # import of undefined item setjmp
-cps-oracle-cloneable-native-shape1 fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
 cps-oracle-cloneable-native-shape2-if interpreted  # import of undefined item setjmp
 cps-oracle-cloneable-native-shape2-let interpreted  # import of undefined item setjmp
 cps-oracle-cloneable-native-shape2-var interpreted  # import of undefined item setjmp
@@ -267,11 +216,8 @@ cps-oracle-reset-nested-siblings interpreted  # import of undefined item setjmp
 cps-oracle-reset-shift interpreted  # import of undefined item setjmp
 cps-oracle-serial-callframe-2arg interpreted  # import of undefined item setjmp
 cps-oracle-serial-closure-recv interpreted  # import of undefined item setjmp
-cps-oracle-serial-native-callframe fail  # stdout mismatch on the error path: the module threw: Aborted(). Build with -sASSERTIONS for more info.
-cps-oracle-serial-native-doprelude fail  # stdout mismatch on the error path: the module threw: Aborted(). Build with -sASSERTIONS for more info.
 cps-oracle-serial-native-letif interpreted  # import of undefined item setjmp
 cps-oracle-serial-passthrough interpreted  # import of undefined item setjmp
-cps-oracle-serial-placement fail  # stdout mismatch on the error path: the module threw: Aborted(). Build with -sASSERTIONS for more info.
 cps-oracle-shift-capture-body interpreted  # import of undefined item setjmp
 cps-oracle-shift-under-handle interpreted  # import of undefined item setjmp
 cps-pap-inline-ignores-wrapper-arguments interpreted  # import of undefined item setjmp
@@ -299,41 +245,27 @@ cps-tramp-resume-reopen interpreted  # import of undefined item setjmp
 cps-two-resets-with-capture interpreted  # import of undefined item setjmp
 cps-typed-pointer-into-carrier-slot interpreted  # import of undefined item setjmp
 cps-unused-hof-does-not-taint interpreted  # import of undefined item setjmp
-cps-while-owning-invariant fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
 cps-wide-adt-handle-call-arg fail  # stdout mismatch on the compiled path
 cps-wide-adt-param-perform interpreted  # import of undefined item setjmp
-cross-function-resume-via-effect fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
-curried-call-pap-cast fail  # exited 1 (expected 0) on the error path: the module threw: table index is out of bounds
 curried-fn-typed-param-application interpreted  # import of undefined item setjmp
 currying-effect-partial fail  # stdout mismatch on the error path: the module threw: Aborted(Please compile your program with async support in order to use asynchronous operations like emscripten_fiber_swap). Build with -sASSERTIONS for more info.
-currying-over-apply fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
-currying-partial-basic fail  # exited 1 (expected 0) on the error path: the module threw: table index is out of bounds
-currying-partial-chain fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
-currying-partial-struct-capture fail  # exited 1 (expected 0) on the error path: the module threw: table index is out of bounds
 currying-point-free interpreted  # import of undefined item setjmp
 currying-rank2-partial interpreted  # import of undefined item setjmp
 data-literal-typed-empty fail  # stdout mismatch on the error path: the module threw: null function or function signature mismatch
 defalias-composite interpreted  # import of undefined item setjmp
-defalias-struct-field fail  # exited 1 (expected 0) on the error path: the module threw: table index is out of bounds
 defdynamic-option-convey fail  # stdout mismatch on the interpreted path: the program starts threads (pthread_create), which this engine cannot run
 defer-abortive-handler-no-inline-c interpreted  # import of undefined item setjmp
-defer-block-scope fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
 defer-cps-abortive-handler fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
 defer-cps-caught-panic fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
-defer-early-return fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
-defer-generic-hof-caught-panic fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
-defer-tail-scope-order fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
 define-in-fn interpreted  # import of undefined item setjmp
 defmodule-fat-fn-param-export interpreted  # import of undefined item setjmp
 defmodule-pap-forward-ref-fat-fn interpreted  # import of undefined item setjmp
 defn-spaced-compound interpreted  # import of undefined item setjmp
-defstruct-field-arrow fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
 defstruct-field-handler interpreted  # import of undefined item setjmp
 defstruct-field-handler-multi interpreted  # import of undefined item setjmp
 defstruct-field-session fail  # stdout mismatch on the error path: the module threw: Aborted(Please compile your program with async support in order to use asynchronous operations like emscripten_fiber_swap). Build with -sASSERTIONS for more info.
 defstruct-field-session-project fail  # stdout mismatch on the error path: the module threw: Aborted(Please compile your program with async support in order to use asynchronous operations like emscripten_fiber_swap). Build with -sASSERTIONS for more info.
 defstruct-field-session-role fail  # stdout mismatch on the error path: the module threw: Aborted(Please compile your program with async support in order to use asynchronous operations like emscripten_fiber_swap). Build with -sASSERTIONS for more info.
-defstruct-fn-field-single-arg fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
 delimited-control-guide-examples interpreted  # import of undefined item setjmp
 direct-fiber-effect-float-arg fail  # stdout mismatch on the compiled path
 direct-fiber-effect-float-result fail  # stdout mismatch on the compiled path
@@ -370,7 +302,6 @@ effect-do-union interpreted  # import of undefined item setjmp
 effect-error-codes interpreted  # import of undefined item setjmp
 effect-fat-callback-capturing interpreted  # import of undefined item setjmp
 effect-flag-off interpreted  # import of undefined item setjmp
-effect-fn-payload fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
 effect-fn-payload-capturing fail  # stdout mismatch on the error path: the module threw: Aborted(Please compile your program with async support in order to use asynchronous operations like emscripten_fiber_swap). Build with -sASSERTIONS for more info.
 effect-fn-type-annot interpreted  # import of undefined item setjmp
 effect-handle-reduce interpreted  # import of undefined item setjmp
@@ -463,7 +394,6 @@ fat-let-of-thin-fn interpreted  # import of undefined item setjmp
 fat-param-capturing-closure interpreted  # import of undefined item setjmp
 fat-param-direct-call fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
 fat-param-nullary-closure fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
-fat-shim fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
 fat-shim-arg-to-mutual-pair-freed interpreted  # import of undefined item setjmp
 fh-compose-handlers interpreted  # import of undefined item setjmp
 fh-discharge-row interpreted  # import of undefined item setjmp
@@ -482,15 +412,10 @@ fn-arg-any-result-bridge interpreted  # import of undefined item setjmp
 fn-arg-let-bound-noncapturing interpreted  # import of undefined item setjmp
 fn-arity-100-param fail  # stdout mismatch on the error path: the module threw: Program terminated with exit(1)
 fn-arity-20-fnvalue interpreted  # import of undefined item setjmp
-fn-arity-20-partial fail  # exited 1 (expected 0) on the error path: the module threw: table index is out of bounds
-fn-cell-capturing-closure fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
 fn-field-typed-float interpreted  # import of undefined item setjmp
 fn-first-class-application interpreted  # import of undefined item setjmp
-fn-first-class-application-deferred fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
 fn-first-class-application-typed interpreted  # import of undefined item setjmp
 fn-param-closure-typed-result-shim interpreted  # import of undefined item setjmp
-fn-param-stored-in-struct-field fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
-fn-param-through-type-variable-slot fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
 fn-type-bare-identifier interpreted  # import of undefined item setjmp
 fn-type-borrow-param interpreted  # import of undefined item setjmp
 fn-type-constraint interpreted  # import of undefined item setjmp
@@ -498,18 +423,13 @@ fn-type-curried interpreted  # import of undefined item setjmp
 fn-type-neoteric interpreted  # import of undefined item setjmp
 fn-type-shorthand interpreted  # import of undefined item setjmp
 fn-type-spaced interpreted  # import of undefined item setjmp
-fn-typed-match-arm-capture fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
-fn-typed-return-thin-closure fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
-fn-typed-tyvar-capturing-closure fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
 fn-value-at-tyvar-slot-static-box interpreted  # import of undefined item setjmp
 fn-value-call-join-reclaimed interpreted  # import of undefined item setjmp
-fn-value-carrier-fat-seams fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
 fn-value-fat-normalized-params interpreted  # import of undefined item setjmp
 fn-value-fat-normalized-tyvar-params interpreted  # import of undefined item setjmp
 fn-value-matrix-ok-rows interpreted  # import of undefined item setjmp
 fn-value-static-fatbox interpreted  # import of undefined item setjmp
 fn-void-annotation-discards-value interpreted  # import of undefined item setjmp
-for-comprehension-stdlib-option fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
 forall-dict-byvalue-receiver interpreted  # import of undefined item setjmp
 forall-dict-float-result interpreted  # import of undefined item setjmp
 forall-dict-fmap interpreted  # import of undefined item setjmp
@@ -518,9 +438,6 @@ forall-dict-show fail  # stdout mismatch on the interpreted path: import of unde
 forall-dict-two-scalar fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
 forward-call-generic-callee interpreted  # import of undefined item setjmp
 forward-call-generic-callee-in-module interpreted  # import of undefined item setjmp
-free-interpreter fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
-free-lift-bind fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
-free-pure fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
 fs-interp-basics interpreted  # import of undefined item fnmatch
 fs-process-typed-errors fail  # stdout mismatch on the interpreted path: import of undefined item popen
 fs-stream-walk fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
@@ -530,14 +447,11 @@ gadt-stdlib-vec-stdlib interpreted  # import of undefined item setjmp
 gc-registry-growth fail  # stdout mismatch on the error path: the module threw: Maximum call stack size exceeded
 gde-generic-dict-eq-map fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
 gde7-generic-dict-coerced-fn-arg interpreted  # import of undefined item setjmp
-gen-unwrap-exhausted fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
 generic-call-result-binds-from-expected interpreted  # import of undefined item setjmp
 generic-closure-float-fn-callback interpreted  # import of undefined item setjmp
 generic-compose-int interpreted  # import of undefined item setjmp
 generic-fn-element-word-pointer-crossings interpreted  # import of undefined item setjmp
-generic-fn-field-call-heap-sum-result fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
 generic-forward-nullary-arg-tyvar-name interpreted  # import of undefined item setjmp
-generic-hkt-lambda-tyvar-param fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
 generic-hof-effectful-callback fail  # stdout mismatch on the error path: the module threw: Aborted(Please compile your program with async support in order to use asynchronous operations like emscripten_fiber_swap). Build with -sASSERTIONS for more info.
 generic-hof-effectful-callback-scalar interpreted  # import of undefined item setjmp
 generic-hof-unannotated-fat-param-mixed fail  # stdout mismatch on the error path: the module threw: Aborted(Please compile your program with async support in order to use asynchronous operations like emscripten_fiber_swap). Build with -sASSERTIONS for more info.
@@ -551,7 +465,6 @@ generic-spec-carrier-crossings-5 fail  # stdout mismatch on the error path: the 
 generic-wrapper-over-return-dispatch-method fail  # stdout mismatch on the compiled path
 generic-wrapper-tail-forwards-return-dispatch fail  # stdout mismatch on the compiled path
 ghe3-generic-map-key fail  # stdout mismatch on the error path: the module threw: null function or function signature mismatch
-global-def-read-by-lifted-lambda fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
 global-fn-value-def interpreted  # import of undefined item setjmp
 gmk-map-literal-cstr-key fail  # stdout mismatch on the error path: the module threw: null function or function signature mismatch
 handle-beside-applied-lambda-generic interpreted  # import of undefined item setjmp
@@ -565,21 +478,11 @@ handle-sequential-widened-closure fail  # stdout mismatch on the error path: the
 handle-under-generic-call-reinterpret fail  # stdout mismatch on the error path: the module threw: Aborted(Please compile your program with async support in order to use asynchronous operations like emscripten_fiber_swap). Build with -sASSERTIONS for more info.
 handle-under-match-in-main interpreted  # import of undefined item setjmp
 heap-adt-arg-to-closure-call interpreted  # import of undefined item setjmp
-heap-adt-arg-to-known-closure fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
-heap-sum-let-binding-typed-pointer fail  # exited 1 (expected 0) on the error path: the module threw: table index is out of bounds
 hkt-ap-fn-in-container fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
-hkt-ap-partial-head fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
-hkt-ap-result-instance fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
-hkt-carrier-result-payload-types fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
-hkt-cata-captureless-fn-carrier-arm fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
-hkt-cata-fn-arg-carrier fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
 hkt-constrained-continuation-dict interpreted  # import of undefined item setjmp
-hkt-constrained-curried-binary-head fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
 hkt-constrained-middle-vector-dict interpreted  # import of undefined item setjmp
 hkt-constrained-pure-two-instances interpreted  # import of undefined item setjmp
-hkt-fmap-match-scrutinee fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
 hkt-fmap-rc-result-droppable fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
-hkt-instance-closure-to-fat fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
 hkt-instance-rc-construct-result fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
 hkt-rank2-forall-pure-two-instances interpreted  # import of undefined item setjmp
 hkt-rank2-result-only-pin interpreted  # import of undefined item setjmp
@@ -595,7 +498,6 @@ hrt-hkt-option-instantiation interpreted  # import of undefined item setjmp
 hrt-impred-closure interpreted  # import of undefined item setjmp
 hrt-impred-let interpreted  # import of undefined item setjmp
 hrt-impred-reuse interpreted  # import of undefined item setjmp
-hrt-nested-lambda-enclosing-kind fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
 hrt-poly-call-cstr-result interpreted  # import of undefined item setjmp
 hrt-rank2-aggregate-arg interpreted  # import of undefined item setjmp
 hrt-rank2-annotation interpreted  # import of undefined item setjmp
@@ -663,50 +565,25 @@ jit-ffi-call-ptr fail  # stdout mismatch on the interpreted path: import of unde
 jit-ffi-call-ptr-struct fail  # stdout mismatch on the error path: the module threw: Aborted(Please compile your program with async support in order to use asynchronous operations like emscripten_fiber_swap). Build with -sASSERTIONS for more info.
 jit-ffi-callback-ptr fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
 json-decode-hostile-input fail  # stdout mismatch on the error path: the module threw: Maximum call stack size exceeded
-kebab-case-capture fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
-kleisli-arrow-instance fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
-lambda-call-head/capturing fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
-lambda-nil-return-honoured fail  # exited 1 (expected 0) on the error path: the module threw: table index is out of bounds
 lambda-thin-fn-result-read-as-fat interpreted  # import of undefined item setjmp
 let-alias-of-fat-fn-param interpreted  # import of undefined item setjmp
 let-alias-of-fn-param-call interpreted  # import of undefined item setjmp
-let-ending-in-panic-aggregate-return fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
-let-star fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
-let-tail-noncapturing-lambda-fat-temp fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
 letrec-lifted-lambda-frame interpreted  # import of undefined item setjmp
-letrec-mutual-capturing-closures fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
-letrec-mutual-capturing-envs-freed fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
-letrec-open-existential-env-leak fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
 letrec-self-in-nested-closure fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
-letrec-self-recursive-carrier-float-return fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
-letrec-self-recursive-carrier-struct-return fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
-letrec-self-recursive-carrier-vec-return fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
-letrec-self-recursive-closure fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
-letrec-sibling-closure-capture fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
-letrec-struct-arg-leak fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
 linear-effect-handler interpreted  # import of undefined item setjmp
 linear-fn-type interpreted  # import of undefined item setjmp
-list-byvalue-adt-elements fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
+list-byvalue-adt-elements fail  # stdout mismatch on the compiled path
 list-helpers-wide-head-element interpreted  # import of undefined item setjmp
 load-inside-defmodule-injects-names interpreted  # import of undefined item setjmp
-local-struct-fnfield-drop fail  # exited 1 (expected 0) on the error path: the module threw: table index is out of bounds
 loop-invariant-declines interpreted  # import of undefined item setjmp
-macro-arg-not-ct-evaluated fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
 macro-typed-inline-lambda-arg interpreted  # import of undefined item setjmp
-make-struct-parametric-fn-field-infer fail  # exited 1 (expected 42) on the error path: the module threw: table index is out of bounds
 map-get-miss-on-any-value-is-nil interpreted  # import of undefined item setjmp
 map-literal-frees-intermediates fail  # stdout mismatch on the error path: the module threw: null function or function signature mismatch
 map-multiword-struct-key interpreted  # import of undefined item setjmp
 map-typed-consumer interpreted  # import of undefined item setjmp
-markdown-blocks fail  # stdout mismatch on the error path: the module threw: Program terminated with exit(1)
-markdown-gfm fail  # stdout mismatch on the error path: the module threw: Program terminated with exit(1)
 markdown-headings interpreted  # import of undefined item setjmp
-markdown-inlines fail  # stdout mismatch on the error path: the module threw: Program terminated with exit(1)
-markdown-math fail  # stdout mismatch on the error path: the module threw: Program terminated with exit(1)
-match-fn-result-thin-arm-first fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
 multishot-continuation-borrow-after-perform interpreted  # import of undefined item setjmp
 multishot-copy-capture interpreted  # import of undefined item setjmp
-multishot-effect-cont-kv-sugar fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
 multishot-handler interpreted  # import of undefined item setjmp
 multishot-snapshot interpreted  # import of undefined item setjmp
 mut-cell-freed-at-scope-exit interpreted  # import of undefined item setjmp
@@ -716,38 +593,24 @@ nested-construct-byvalue-decode fail  # stdout mismatch on the compiled path
 net-blocking-tcp fail  # stdout mismatch on the interpreted path: import of undefined item socket
 never-call-panic-propagates interpreted  # import of undefined item setjmp
 niche-elem-comparator-conventions fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
-nil-arg-to-ptr-param fail  # exited 1 (expected 0) on the error path: the module threw: table index is out of bounds
 nil-call-panic-propagates interpreted  # import of undefined item setjmp
 nil-closure-into-erased-result interpreted  # import of undefined item setjmp
-opaque-fn-carrier-dispatch fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
 option-construct-byvalue-return-spec interpreted  # import of undefined item setjmp
 option-consumers-byvalue-arg interpreted  # import of undefined item setjmp
 option-map-byvalue-result-into-carrier-consumer-let-inside-arg interpreted  # import of undefined item setjmp
 option-map-capturing-closure interpreted  # import of undefined item setjmp
 option-map-generic-partial interpreted  # import of undefined item setjmp
 option-map-literal-none-unannotated-lambda interpreted  # import of undefined item setjmp
-option-niche-crossings fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
-option-niche-vec-closure-cmp fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
+option-niche-vec-closure-cmp fail  # stdout mismatch on the compiled path
 os-misc-surface fail  # stdout mismatch on the interpreted path: import of undefined item getgid
 p19-8-fiber-effect-chain fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
 pair-signals-typed interpreted  # import of undefined item setjmp
-panic-catch-panic-of fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
-panic-catch-unwind-basic fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
-panic-catch-unwind-captures fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
-panic-catch-unwind-caught fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
-panic-catch-unwind-defer fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
-panic-catch-unwind-nested fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
-panic-catch-unwind-signal fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
-panic-defer fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
-panic-in-handler fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
-panic-payload-accessors fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
-panic-payload-forms fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
-panic-ref fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
-panic-reset-clears fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
+panic-catch-unwind-signal fail  # stdout mismatch on the error path: the module threw: Maximum call stack size exceeded
+panic-payload-accessors fail  # stdout mismatch on the compiled path
+panic-payload-forms fail  # stdout mismatch on the compiled path
 panic-site-through-poly-fn-value fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
 panic-site-through-stdlib-hof fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
-panic-with-catch-of fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
-panic-with-source-location fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
+panic-with-source-location fail  # stdout mismatch on the compiled path
 parsec-generic-do-m-binder fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
 parsec-guide-parse-first-fails interpreted  # import of undefined item setjmp
 parsec-guide-patterns fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
@@ -768,7 +631,6 @@ phase-f-poly-concrete-unsigned interpreted  # import of undefined item setjmp
 poly-closure-compose-float interpreted  # import of undefined item setjmp
 poly-closure-result-tyvar-float interpreted  # import of undefined item setjmp
 poly-fat-float-closure-eqmap fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
-poly-fn-typeclass-capturing-closure fail  # exited 1 (expected 0) on the error path: the module threw: table index is out of bounds
 poly-hof-constrained-arg-spec interpreted  # import of undefined item setjmp
 poly-hof-reversed-order-primitive-pin interpreted  # import of undefined item setjmp
 poly-to-fat-bare-fat-sink interpreted  # import of undefined item setjmp
@@ -891,8 +753,6 @@ r7rs-vector-index-error interpreted  # import of undefined item setjmp
 r7rs-write-labels interpreted  # import of undefined item setjmp
 rank2-argument-generic fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
 rank2-class-result-word-converted interpreted  # import of undefined item setjmp
-rc-auto-drop-closure-capture fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
-rc-elision-negative-closure-capture fail  # exited 1 (expected 0) on the error path: the module threw: table index is out of bounds
 re-string fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
 reactor-captureless-callbacks fail  # stdout mismatch on the compiled path
 reactor-chan-typed fail  # stdout mismatch on the compiled path
@@ -909,25 +769,18 @@ reactor-fibers-park-fd fail  # stdout mismatch on the compiled path
 reactor-fibers-smoke fail  # stdout mismatch on the compiled path
 reactor-fibers-stop-mid-run fail  # stdout mismatch on the compiled path
 reactor-signal-process-directed fail  # stdout mismatch on the error path: the module threw: Cannot convert a BigInt value to a number
-ref-auto-drop-early-return fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
-ref-in-closure fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
 refine-early-return-contracts interpreted  # import of undefined item setjmp
 region-bracket-effect-reaches-outer-handler interpreted  # import of undefined item setjmp
-region-catch-retires-stranded-generation fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
 region-escape-via-erasure fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
 region-escape-via-inline-c fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
 region-escape-via-main-loop fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
 region-escape-via-store fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
-region-escape-via-store-future fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
 region-retired-index-owns fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
-region-scope-escape-refused fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
 region-scope-value-survives interpreted  # import of undefined item setjmp
 region-scope-void-body interpreted  # import of undefined item setjmp
 region-with-region interpreted  # import of undefined item setjmp
 reset-shift-in-evicted-function interpreted  # import of undefined item setjmp
 result-bridge-tail-call-to-inline-c fail  # stdout mismatch on the compiled path
-result-monad-nested-bind-typed-boundary fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
-resume-fn-payload-case-own-k fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
 resume-handler-k-outside-its-case interpreted  # import of undefined item setjmp
 resume-typed-as-handle-result fail  # stdout mismatch on the compiled path
 return-dispatched-sum-mint-constrained-instance fail  # stdout mismatch on the compiled path
@@ -1024,19 +877,8 @@ saffron-while-any-condition interpreted  # import of undefined item setjmp
 schan-worker-pool fail  # stdout mismatch on the interpreted path: the program starts threads (pthread_create), which this engine cannot run
 scheduler-basic fail  # stdout mismatch on the error path: the module threw: Aborted(). Build with -sASSERTIONS for more info.
 scheduler-io-park fail  # stdout mismatch on the error path: the module threw: Aborted(). Build with -sASSERTIONS for more info.
-schema-applicative-user fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
-schema-decode-array fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
 schema-decode-union fail  # stdout mismatch on the compiled path
-schema-functor-transform fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
-schema-hkt-functor fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
 schema-reader-json-file fail  # stdout mismatch on the error path: the module threw: Aborted(). Build with -sASSERTIONS for more info.
-schema-reader-json-str-result fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
-seq-combine-chain fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
-seq-combine-zip-with fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
-seq-consume-foldl fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
-seq-consume-reduce fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
-seq-pipeline-foldl fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
-seq-transform-chain fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
 serial-cont-receiver-chain-freed interpreted  # import of undefined item setjmp
 serial-cont-roundtrip-freed fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
 serial-context-call1 interpreted  # import of undefined item setjmp
@@ -1103,9 +945,6 @@ sf-vec-of interpreted  # import of undefined item setjmp
 shallow-clause-handle-around-resume interpreted  # import of undefined item setjmp
 shift-abort-across-nested-dk-entries fail  # stdout mismatch on the error path: the module threw: Aborted(Please compile your program with async support in order to use asynchronous operations like emscripten_fiber_swap). Build with -sASSERTIONS for more info.
 shift-abort-crossfn interpreted  # import of undefined item setjmp
-shift-crossfn-resume-named-fn fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
-shift-crossfn-resume-nested-reset fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
-shift-crossfn-resume-works fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
 shift-in-callee-delimited-by-direct-reset interpreted  # import of undefined item setjmp
 shift-receiver-multishot-effect-cont interpreted  # import of undefined item setjmp
 shift-receiver-panic-passes-inner-catch interpreted  # import of undefined item setjmp
@@ -1121,43 +960,30 @@ signal-handle-poll fail  # stdout mismatch on the interpreted path: import of un
 single-body-effect-handlers interpreted  # import of undefined item setjmp
 sized-int-arith-wraps interpreted  # import of undefined item setjmp
 spec-selected-by-result-type-direct interpreted  # import of undefined item setjmp
-stackless-catch-unwind-byref-aggregate-group-bail fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
-stackless-catch-unwind-byref-aggregate-reader-panic fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
-stackless-catch-unwind-outer-catch fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
+stackless-catch-unwind-byref-aggregate-group-bail fail  # stdout mismatch on the error path: the module threw: Maximum call stack size exceeded
 stdlib-applicative-entails-functor interpreted  # import of undefined item setjmp
-stdlib-arrow fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
-stdlib-arrow-generic-entails-category fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
 stdlib-effects-annotated interpreted  # import of undefined item setjmp
-stdlib-lens-record-field fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
 stdlib-test-runner-callback interpreted  # import of undefined item setjmp
 stm-retry-wakeup fail  # stdout mismatch on the interpreted path: the program starts threads (pthread_create), which this engine cannot run
 stm-stress fail  # stdout mismatch on the interpreted path: the program starts threads (pthread_create), which this engine cannot run
 string-trim-transform interpreted  # import of undefined item setjmp
-struct-curry-ctor fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
 struct-param-closure-env-freed interpreted  # import of undefined item setjmp
-struct-returning-fn-as-value fail  # exited 1 (expected 0) on the error path: the module threw: table index is out of bounds
 struct-temporary-fn-field-released interpreted  # import of undefined item setjmp
 subword-payload-box-read-at-wrong-offset interpreted  # import of undefined item setjmp
 sum-closure-payload-dict-dispatch interpreted  # import of undefined item setjmp
-sum-closure-payload-dict-dispatch-kept fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
 sum-closure-payload-dropped interpreted  # import of undefined item setjmp
 sum-closure-payload-dropped-cps fail  # stdout mismatch on the error path: the module threw: Aborted(Please compile your program with async support in order to use asynchronous operations like emscripten_fiber_swap). Build with -sASSERTIONS for more info.
 sum-closure-payload-kept interpreted  # import of undefined item setjmp
 sum-closure-payload-unwrap-dropped interpreted  # import of undefined item setjmp
-sum-either-functor-instance fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
 sum-passthrough-param-not-dropped interpreted  # import of undefined item setjmp
 sum-payload-drop-dictionary-dispatch fail  # stdout mismatch on the compiled path
 sx1-bt-row-checked interpreted  # import of undefined item setjmp
 tail-call-inline-c-carrier-bridge fail  # stdout mismatch on the compiled path
-tailcall-drop-glue-panic fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
 tailcall-dyn-leak interpreted  # import of undefined item setjmp
-tailcall-mutual-panic fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
 taskgroup-async fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
 taskgroup-timeout fail  # stdout mismatch on the interpreted path: the program starts threads (pthread_create), which this engine cannot run
 tce3-map-cstr-val fail  # stdout mismatch on the compiled path
 tce4-map-cstr-key fail  # stdout mismatch on the error path: the module threw: null function or function signature mismatch
-tco-named-let-capture-deep fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
-tco-tail-call-panic-propagates fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
 term-raw-cooked-roundtrip fail  # stdout mismatch on the interpreted path: import of undefined item fork
 thread-local-basic fail  # stdout mismatch on the interpreted path: the program starts threads (pthread_create), which this engine cannot run
 threads-effects-tail-resume fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
@@ -1171,40 +997,21 @@ turi-fiber-defer-resume-from-clause-scope fail  # stdout mismatch on the error p
 turi-hof-effectful-callback-no-w0033 fail  # stdout mismatch on the error path: the module threw: Aborted(Please compile your program with async support in order to use asynchronous operations like emscripten_fiber_swap). Build with -sASSERTIONS for more info.
 turi-option-result-map-deep-recursion interpreted  # import of undefined item setjmp
 tvar-float-payload-value-converted fail  # stdout mismatch on the compiled path
-typeclass-constraint-tyvar-via-fn-param fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
 typeclass-effect-row-caller interpreted  # import of undefined item setjmp
-typeclass-method-defn-coexist fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
 typeclass-unsafe-passbyptr-struct-arg fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
 typed-signal-smoke interpreted  # import of undefined item setjmp
-typed-slots/float-closure fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
 typed-slots/fmap-float-list fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
 typed/list-macro fail  # stdout mismatch on the compiled path
 typed/option-basic interpreted  # import of undefined item setjmp
 typed/result-basic interpreted  # import of undefined item setjmp
 typed/vec-basic fail  # stdout mismatch on the compiled path
-unique-consume fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
-unsafe-closure-capture fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
-use-after-move-float-let-vs-captured fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
-van-laarhoven-lens-compose fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
-van-laarhoven-lens-concrete fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
-van-laarhoven-lens-delegate fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
-van-laarhoven-lens-generic fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
 van-laarhoven-lens-show fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
 van-laarhoven-lens-show-capture fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
 van-laarhoven-lens-show-deep fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
-van-laarhoven-lens-show-direct-apply fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
 van-laarhoven-lens-show-mapper fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
 van-laarhoven-lens-show-rank fail  # stdout mismatch on the interpreted path: import of undefined item setjmp
-van-laarhoven-lens-wide-capture fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
-van-laarhoven-lens-wide-compose fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
-van-laarhoven-lens-wide-functor-show fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
-van-laarhoven-lens-wide-generic fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
-van-laarhoven-lens-wide-identity fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
-van-laarhoven-lens-wide-mixed fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
-van-laarhoven-lens-wide-mono fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
 vec-captureless-fat-closure-readback interpreted  # import of undefined item setjmp
 vec-get-closure interpreted  # import of undefined item setjmp
-vec-index-out-of-bounds-panics fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
 vec-of-tvec-eq fail  # stdout mismatch on the compiled path
 vec-of-tvec-eq-manual fail  # stdout mismatch on the compiled path
 vec-typed-fat-closure-readback interpreted  # import of undefined item setjmp
@@ -1214,12 +1021,5 @@ weak-upgrade-after-drop fail  # stdout mismatch on the error path: the module th
 weak-upgrade-option fail  # stdout mismatch on the error path: the module threw: memory access out of bounds
 with-handler-literal-lowers-as-handle interpreted  # import of undefined item setjmp
 with-handler-value interpreted  # import of undefined item setjmp
-witness-dispatch-fn-arg fail  # exited 1 (expected 0) on the error path: the module threw: table index is out of bounds
 workflow-roundtrip interpreted  # import of undefined item setjmp
 workstealing-balance fail  # stdout mismatch on the interpreted path: the program starts threads (pthread_create), which this engine cannot run
-zip-cursor-tree fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
-zip-edit-all-ast fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
-zip-edit-root fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
-zip-find-next fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
-zip-next-walk fail  # stdout mismatch on the error path: the module threw: table index is out of bounds
-zip-plated fail  # stdout mismatch on the error path: the module threw: table index is out of bounds

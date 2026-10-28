@@ -1,17 +1,16 @@
 # Plan: the JIT engine in the browser (c2mir + MIR on wasm32)
 
-> **Status:** P0, P1 and P2 done; P3 done 2026-10-28 except its gate,
-> which needs one fork change (below). The engine builds from CMake as a
+> **Status:** P0 to P3 done 2026-10-28. The engine builds from CMake as a
 > second module, `turmeric-jit.{js,wasm}` (9.5 MB, `tur_wasm_jit`), and
 > `tests/run-jit-wasm.sh` runs the corpus through it against
-> `tests/jit-wasm-baseline.txt`: 1,712 fixtures compiled, 643 fell back to the
-> interpreter with the right answer, 574 failed, 236 skipped (section 7, P3).
-> **The gate fails on one example**: `closure` traps, because host C cannot
-> call a function MIR interprets once its address is stored
-> ([wasm-mir-thunk-address-is-not-callable-by-host-code](../archive/wasm-mir-thunk-address-is-not-callable-by-host-code.md)).
-> The fix is a turmeric-lang/mir change: thunks as real table entries. It is
-> first in section 6's next fork PR. Next: that fork PR, then P4, which
-> also moves the stdlib into one package both modules share (5.11).
+> `tests/jit-wasm-baseline.txt`: 1,915 fixtures compiled, 643 fell back to the
+> interpreter with the right answer, 374 failed, 236 skipped (section 7, P3).
+> The gate passes: every Try Turmeric example compiles or falls back with a
+> reason. It took a fork change -- an interpreted function's address is a
+> real wasm table entry -- which merged as turmeric-lang/mir#16 and is
+> vendored (`f887547f`). Next: P4, which also moves the stdlib into one
+> package both modules share (5.11); P5's `setjmp` and Asyncify are most of
+> what still falls back or fails.
 > **P0 run 2026-10-23** (section 7): the corpus under `TUR_JIT_GEN=interp`
 > on a Release build is 3853/113/70; every interpreter-only failure is in
 > one of three families (threads 82, continuations 10, deep recursion 2),
@@ -266,13 +265,14 @@ As built in P3 (2026-10-28). The design originally added the engine to the
   glue; the engine (`jit_engine.c`, `turi/jit_ffi.c`,
   `src/web/wasm_jit_glue.c`); and MIR's `mir.c` and `c2mir/c2mir.c`, with no
   `mir-gen.c`. The script then generates the import table (5.3), collects the
-  headers (5.4) and links.
+  headers (5.4) and links. `-DTUR_MIR_SOURCE_DIR=<checkout>` builds it against
+  a fork checkout, as for the native JIT, to try a MIR change on wasm first.
 - `mir.c` and `c2mir.c` select the wasm32 target on `__EMSCRIPTEN__` by
   themselves (verified 2026-10-23: `mir.c:6996` and `:731`, `c2mir.c:41`,
-  `:369` and `:12749`), so there is no `sed` step. `mir-wasm.c` defines no
+  `:369` and `:12749`), so there is no `sed` step. `mir-wasm.c` defined no
   `MIR_gen*`, and Emscripten declares ucontext without defining it, so
-  `src/web/wasm_jit_stubs.c` stubs both to abort loudly. That belongs in the
-  fork (section 6).
+  `src/web/wasm_jit_stubs.c` stubbed both to abort loudly. The fork defines
+  the `MIR_gen*` ones since mir#16 (section 6); ucontext stays here.
 - `jit_engine.c`'s `__EMSCRIPTEN__` arm stays small. It has no `dlopen`
   autolink (a marker is a link error that names the library), runs `main` on
   the calling thread, refuses thread creation (`JIT_WASM_REFUSED`), owns the
@@ -651,29 +651,43 @@ inline` functions, so a unit that includes it imports `__fpclassify`,
 `__fpclassifyf` and `__fpclassifyl` whether it calls them or not. The 5.3
 symbol table needs those three if a pruned unit ever keeps `math.h`.
 
-Still to batch into the next fork PR:
+The second batch, what P3 found, merged on 2026-10-28 as
+**turmeric-lang/mir#16** (`f887547f`, vendored the same day):
 
-- Exact-signature stub registry in `mir-wasm.c` (5.5).
 - **Thunks as real table entries** (found in P3, the largest failure family:
   [wasm-mir-thunk-address-is-not-callable-by-host-code](../archive/wasm-mir-thunk-address-is-not-callable-by-host-code.md)).
   A thunk address is a slot in a memory array, so host C that
   `call_indirect`s it traps with `table index is out of bounds`.
   `wasm_ff_dispatch` substitutes a real entry only for an i32 call argument.
   An address stored in a closure, a `DK` frame or a callback slot, or passed as
-  an `int64_t` carrier, reaches host code raw. `_MIR_get_thunk` should reserve
-  a table slot, and `_MIR_redirect_thunk` should fill it.
-- **`MIR_gen` and ucontext stubs.** `mir-wasm.c` defines no `MIR_gen_init`,
-  `MIR_gen_set_optimize_level` or `MIR_gen`, and Emscripten declares
-  `getcontext`/`makecontext`/`swapcontext` without defining them. Every
-  embedder links its own aborting stubs (`src/web/wasm_jit_stubs.c`), and
-  the fork should carry them instead.
-- If 5.8's option 3 is taken, the interpreter frame change.
-- c2mir applies the integer promotions to a `_Generic` controlling
-  expression, on every target: `_Generic ((short) 0, short: 1, int: 2)` is
-  2 where C11 says 1. Found writing mir#15's test, which goes through
-  pointer types instead. The emitter never writes `_Generic`, so only user
-  inline C over a sub-`int` type sees it
+  an `int64_t` carrier, reaches host code raw. **Fixed:** `_MIR_get_thunk`
+  grows the table by one entry and `_MIR_redirect_thunk` fills it, with the
+  native target's entry or a JS trampoline into the interpreter, so the
+  address is a function pointer. The trampoline module is compiled once per
+  signature; steady-state compile time did not move.
+- **Contexts that let go** (found measuring P3): `_MIR_get_ff_call` appended a
+  signature per call, so one module ran out of its 100 on the 26th run of the
+  same program, and thunks were never released. **Fixed:** signatures are
+  interned across contexts and `MIR_finish` frees a context's thunks. The page
+  runs program after program in one module, so this was a P4 blocker in
+  waiting.
+- **`MIR_gen` stubs.** `mir-wasm.c` defined no `MIR_gen_init`,
+  `MIR_gen_set_optimize_level` or `MIR_gen`, so every embedder carried its
+  own. **Fixed:** the fork defines them. `src/web/wasm_jit_stubs.c` keeps only
+  the ucontext stubs, which are Emscripten's gap, not MIR's.
+- **c2mir, every target:** a `_Generic` controlling expression was
+  integer-promoted, so `_Generic ((short) 0, short: 1, int: 2)` was 2
   ([c2mir-generic-promotes-controlling-expression](../archive/c2mir-generic-promotes-controlling-expression.md)).
+  **Fixed**, and with it a bug the promotion hid: a character constant was
+  typed `char`, so `sizeof ('a')` was 1. `tests/run-jit.sh` is unchanged by
+  both (4,040 passed, 0 failed).
+- Build requirements shrank to `-sALLOW_TABLE_GROWTH`: the JS runtime
+  pieces come in through `EM_JS_DEPS`.
+
+Still to batch into the next fork PR:
+
+- Exact-signature stub registry in `mir-wasm.c` (5.5).
+- If 5.8's option 3 is taken, the interpreter frame change.
 
 Nothing in this plan edits `external/mir/` by hand; the sync is
 `tools/update-mir.sh` after the fork PR merges.
@@ -865,7 +879,7 @@ Scoped 2026-10-28 (5.2): a `tur_front` OBJECT library of `pipeline.c`,
 `tur_check_only` moved to `driver/lsp_backend.c`; and
 `tur_front_link_unit` guarding the boundary.
 
-### P3 -- the engine in the wasm build: DONE 2026-10-28, gate open
+### P3 -- the engine in the wasm build: DONE 2026-10-28
 
 5.1, 5.3, 5.4 and `turi_wasm_jit_run`, as built (5.1). `tests/run-jit-wasm.sh`
 runs every fixture through the module under node and ratchets against
@@ -874,26 +888,30 @@ runs every fixture through the module under node and ratchets against
 answer) or `fail`. A worse outcome than the baseline fails the run, and a
 better one is reported so its line can go.
 
-**The corpus, 2026-10-28** (emcc 6.0.13, node 22, three resumable shards):
+**The corpus** (emcc 6.0.13, node 22, resumable shards). First run against
+the vendored `a6e75113`, then against `f887547f` (mir#16):
 
-| Outcome | Fixtures |
-|---|---|
-| compiled | 1,712 |
-| interpreted, right answer | 643 |
-| failed | 574 |
-| skipped (markers, `flags` files, multi-file fixtures) | 236 |
+| Outcome | `a6e75113` | `f887547f` (the baseline) |
+|---|---|---|
+| compiled | 1,712 | 1,915 |
+| interpreted, right answer | 643 | 643 |
+| failed | 574 | 374 |
+| skipped (markers, `flags` files, multi-file fixtures) | 236 | 236 |
 
-What the fallbacks and failures are, by reason (a fixture counts once):
+What the fallbacks and failures are now, by reason (a fixture counts once):
 
 | Family | Fixtures | Owner |
 |---|---|---|
 | `setjmp` not importable (the effect and panic landings) | 642 fell back right; 98 fell back and the interpreter got it wrong too | P5 (5.6) |
-| `table index is out of bounds`: an interpreted function's address called by host C | 202 | next fork PR ([report](../archive/wasm-mir-thunk-address-is-not-callable-by-host-code.md)) |
 | Asyncify: `emscripten_fiber_swap` in a module built without it | 106 | P5 (5.5) |
 | The program starts threads (refused by design) | 60 | stays a fallback (risk 7) |
-| Wrong answer on the compiled path: 64-bit carriers in pointer-width slots | 44 | [report](../reported/ilp32-word-slots-truncate-64-bit-carriers.md); `tur build --target wasm` has it too |
-| Other traps: `exit` reaching the JS caller (17), `Aborted()` (13), null function (12), BigInt conversion (5), out-of-bounds memory (4), JS stack (2) | 53 | unsorted; the `exit` ones mean some path to `exit` misses 5.7's landing |
+| Wrong answer on the compiled path | 52 | 44 are 64-bit carriers in pointer-width slots ([report](../reported/ilp32-word-slots-truncate-64-bit-carriers.md); `tur build --target wasm` has it too); the 8 that mir#16 let run to the end are the same family plus panic locations that name the module's `main.tur` where the fixture expects `input.tur` |
+| Other traps: `exit` reaching the JS caller (13), null function (12), `Aborted()` (10), BigInt conversion (5), JS stack (4), out-of-bounds memory (3) | 47 | unsorted; the `exit` ones mean some path to `exit` misses 5.7's landing |
 | Imports the module has no host for (`fork`, `socket`, `popen`, `symlink`, `getgid`, `fnmatch`) | 12 | stay fallbacks |
+
+The `table index is out of bounds` family -- 202 fixtures against
+`a6e75113`, an interpreted function's address called by host C -- is gone
+([resolved report](../archive/wasm-mir-thunk-address-is-not-callable-by-host-code.md)).
 
 The in-module interpreter got the 98 "got it wrong too" fixtures wrong as
 well. P3 did not sort them. P0's native families (threads, continuations,
@@ -914,23 +932,20 @@ or r7rs program fell back into a Turmeric session and failed. Rerunning the
 back right and 4 compile.
 
 **The gate** (`bash tools/wasm-jit/check-examples.sh`: every Try Turmeric
-example compiles or falls back, and none is wrong). 17 of the 18 examples
-pass: 8 compiled, 9 fell back on `setjmp`. **`closure` traps**: its
-`TUR_CLOSURE_DROP` calls the resident `tur_closure_drop`, which calls the
-closure's drop function through a pointer the program stored, and that
-pointer is a thunk address. This is the 202-fixture family above. Nothing in
-this repo can fix it, because the thunk layout is `mir-wasm.c`'s. The gate
-closes with the fork PR, and P4 must not offer the Compile engine before then.
+example compiles or falls back, and none is wrong). **Passes** on `f887547f`:
+all 18 examples, 9 compiled and 9 falling back on `setjmp`. Against
+`a6e75113` it was 17: `closure` trapped, because the resident
+`tur_closure_drop` called the closure's drop function through a stored thunk
+address, which mir#16 made a table entry.
 
 **What P3 leaves:**
 
-- For the fork PR (section 6): thunks as table entries, the `MIR_gen` stubs,
-  and the `_Generic` fix. Then re-run the harness: the 202 should move to
-  `compiled` or into another family.
 - For P5: `setjmp` (740) and Asyncify (106) are 846 fixtures between them,
   by far the largest share of what is left.
 - For P4: 5.11, and the page's handling of a trap (5.8). After a trap the
-  module instance is not reusable, so the page reloads it.
+  module instance is not reusable, so the page reloads it. A page that does
+  not trap can keep one instance: since mir#16 a module runs program after
+  program without exhausting MIR's pools.
 - The full-unit retry (TUR-W0071) is still not wired on wasm. The glue takes
   the split TU or falls back. `stdatomic.h` was what made the retry fail in
   P1, and it now resolves, so wiring the retry is possible if a family needs
@@ -945,8 +960,7 @@ closes with the fork PR, and P4 must not offer the Compile engine before then.
 The engine toggle, the console's engine line, `RangeError` as a stack
 overflow message, Stop still working (worker teardown), a fresh module
 instance after a trap (5.8), and the shared stdlib package (5.11). Playwright
-covers one inline-C example end to end. Waits on the fork PR that closes P3's
-gate.
+covers one inline-C example end to end.
 
 ### P5 -- stubs and `setjmp`
 
