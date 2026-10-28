@@ -284,6 +284,41 @@ hoist, split, prune) that `tur` and `libturi_wasm` both consume, leaving
 the move is checkable. This is the one change that touches the native `tur`
 and it is a move, not a rewrite.
 
+**Measured 2026-10-28: no file needs splitting.** An `nm` walk over the
+native driver objects found that `pipeline.c` and `preamble_split.c` reach
+four other driver files directly -- `cc.c` (three flags and
+`locate_runtime_lib`; the hoist, quoting and temp-path helpers), `paths.c`
+(file reads, the stdlib root, `cc_system`), `spice.c` (spice and
+reader-macro discovery) -- and those reach each other and nothing more.
+What dragged the whole driver in was two flags defined in `cli.c`,
+`g_no_auto_stdlib` and `g_no_auto_spice`: `cli.c` is the command table, so
+one `bool` pulled every `cmd_*.c` along. With the flags defined beside their
+readers (`pipeline.c`, `spice.c`), the closure is exactly those five files
+plus `tur_core`. A program linked from them alone emitted C byte-identical
+to `tur emit-c` on 119 sampled fixtures, and all five compile warning-free
+under emcc with `tur_wasm`'s flags. So `tur_front` takes `cc.c` whole; its
+link and autolink code is dead weight on the page, not a blocker.
+
+Two things the plan did not foresee:
+
+- **`tur_core` depends on its host for `tur_collect_symbols`.** `lsp/lsp.c`
+  (in `tur_core`) calls it; `tur` supplies the driver's, the browser module
+  `web/wasm_lsp.c`'s cheaper elaboration-only one, and each `tur_core` unit
+  test a stub. The driver's lived in `pipeline.c`, which is why P1 had to
+  leave `wasm_lsp.c` out. P2 moves it and `tur_check_only` to
+  `driver/lsp_backend.c`, which stays in `tur`, so `tur_front` carries no
+  LSP entry point and the module keeps its own.
+- **The boundary needs a guard, not only the header check.**
+  `check-driver-headers.py` checks which file declares what, not what a file
+  references, so one new `cli.c` reference would silently re-close the
+  front half over the whole driver. `tur_front_link_unit` links `tur_front`
+  and `tur_core` alone and compiles two fixtures; a reference across the
+  line fails its link with the symbol named (checked by adding one).
+
+`tur_front` still calls `system()` through `cc_system`, for the prelude and
+library caches. Emscripten's `system()` returns -1, so P3's glue keeps the
+runtime host-resident and declines those paths, as P1's glue already does.
+
 ### 5.3 Symbols: a generated table instead of `dlsym`
 
 `jit_import_resolver` keeps `JIT_SHIMS[]` first. Its `dlsym` tail becomes,
@@ -719,6 +754,12 @@ a 422 KB full unit, and the retry path was never needed for these three.
 
 The driver split of 5.2, landed on its own: `tur` links the same objects
 and `tests/check-driver-headers.py` passes. No wasm in this PR.
+
+Scoped 2026-10-28 (5.2): a `tur_front` OBJECT library of `pipeline.c`,
+`preamble_split.c`, `cc.c`, `paths.c` and `spice.c` as they are; the two
+`cli.c` flags defined beside their readers; `tur_collect_symbols` and
+`tur_check_only` moved to `driver/lsp_backend.c`; and
+`tur_front_link_unit` guarding the boundary.
 
 ### P3 -- the engine in `tur_wasm`
 

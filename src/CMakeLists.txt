@@ -526,7 +526,6 @@ target_compile_definitions(tur_core PRIVATE TUR_VERSION="${_TUR_VERSION_STR}")
 # tests/check-driver-headers.py checks each header section against the
 # file it names.
 set(TUR_DRIVER_SOURCES
-  driver/cc.c
   driver/cli.c
   driver/cmd_build.c
   driver/cmd_emit.c
@@ -537,14 +536,67 @@ set(TUR_DRIVER_SOURCES
   driver/cmd_x.c
   driver/compile_link.c
   driver/jit.c
+  driver/lsp_backend.c
+  driver/project.c
+  driver/worker.c
+)
+
+# tur_front (wasm-jit-plan P2): the in-memory front half of the driver --
+# read, elaborate, run the passes, emit C, hoist and scan the include and
+# autolink markers, split the preamble -- as an OBJECT library, so a host
+# with no command line can compile Turmeric to C.  These five files reach
+# nothing else in the driver: tur_front_link_unit links them with tur_core
+# alone and fails if one of them grows a reference to cli.c, a cmd_*.c, or
+# anything else that drags the command table in.  They still call system()
+# through cc_system for the prelude and library caches; a host without a
+# toolchain declines those paths at run time.
+set(TUR_FRONT_SOURCES
+  driver/cc.c
   driver/paths.c
   driver/pipeline.c
   driver/preamble_split.c
-  driver/project.c
   driver/spice.c
-  driver/worker.c
 )
-add_executable(tur main.c lsp/mcp.c ${TUR_DRIVER_SOURCES} $<TARGET_OBJECTS:tur_core>)
+add_library(tur_front OBJECT ${TUR_FRONT_SOURCES})
+target_include_directories(tur_front PRIVATE ${TUR_INCLUDE_DIRS})
+target_compile_definitions(tur_front PRIVATE TUR_VERSION="${_TUR_VERSION_STR}")
+target_compile_options(tur_front PRIVATE
+    -Wall -Wextra ${TUR_WERROR} ${TUR_FORMAT_WARNINGS} -Wno-unused-parameter ${TUR_CSTD} -pedantic
+    $<$<C_COMPILER_ID:GNU>:-Wno-format-truncation>
+    $<$<CONFIG:Debug>:   -Og -g ${TUR_ASAN_FLAGS} -DTUR_DEBUG=1>
+    $<$<CONFIG:Release>: -O2 -DNDEBUG>
+    $<$<CONFIG:TSan>:    -O1 -g -fsanitize=thread>
+    -pthread
+)
+
+add_executable(tur main.c lsp/mcp.c ${TUR_DRIVER_SOURCES}
+               $<TARGET_OBJECTS:tur_front> $<TARGET_OBJECTS:tur_core>)
+
+# The boundary check for tur_front: linked from tur_front and tur_core only
+# (tests/driver/front_link_test.c says why).
+add_executable(tur_front_link_unit
+    ${CMAKE_SOURCE_DIR}/tests/driver/front_link_test.c
+    $<TARGET_OBJECTS:tur_front>
+    $<TARGET_OBJECTS:tur_core>
+)
+target_include_directories(tur_front_link_unit PRIVATE ${TUR_INCLUDE_DIRS})
+target_compile_options(tur_front_link_unit PRIVATE
+    -Wall -Wextra ${TUR_WERROR} -Wno-unused-parameter ${TUR_CSTD}
+    -pthread
+    $<$<CONFIG:Debug>:   -Og -g ${TUR_ASAN_FLAGS} -DTUR_DEBUG=1>
+    $<$<CONFIG:Release>: -O2 -DNDEBUG>
+)
+target_link_options(tur_front_link_unit PRIVATE
+    -pthread
+    $<$<CONFIG:Debug>:   ${TUR_ASAN_FLAGS}>
+)
+target_link_libraries(tur_front_link_unit PRIVATE m ${CMAKE_DL_LIBS})
+if(HAVE_EDITLINE)
+    target_link_libraries(tur_front_link_unit PRIVATE ${LIBEDIT_LIB})
+endif()
+set_target_properties(tur_front_link_unit PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
+)
 
 # J1 (jit-engine-plan): the in-process MIR JIT engine behind `tur jit`.
 # Only under -DTUR_JIT=ON: vendors MIR (cmake/mir.cmake, included by the
