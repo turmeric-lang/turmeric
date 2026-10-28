@@ -3432,6 +3432,12 @@ the `__int128` work only surfaced them.  Both resolved the same day.
 | ~~[c2mir-bool-conversion-truncates](../archive/c2mir-bool-conversion-truncates.md)~~ | medium-high | **RESOLVED 2026-10-10** (archived): conversion to `_Bool` now compares with zero at every conversion site (`gen_conv_if`/`gen_to_bool`), after `++`/`--`/compound assignment, in the constant folder, and into a `_Bool` bit-field (turmeric-lang/mir#8).  Pinned by `tests/fixtures/jit-inline-c-bool-conversion` |
 | ~~[mir-x86-64-long-double-union-pun](../archive/mir-x86-64-long-double-union-pun.md)~~ | medium | **RESOLVED 2026-10-10** (archived): not the generator -- c2mir tagged an element of a union's array member with its element type's alias instead of the union's, so MIR-gen let the read see memory from before the store.  `N_IND` keeps the union alias (turmeric-lang/mir#9); c2mir.c's long double literals are back.  Pinned by `tests/fixtures/jit-inline-c-union-array-pun` |
 
+## Found building the XML/HTML follow-ups (filed 2026-10-28)
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [qualified-adt-constructor-mistyped-as-argument](qualified-adt-constructor-mistyped-as-argument.md) | low | `(lib/shapes/Square 4)` passed to a function types as an anonymous `<adt>` and is refused (TUR-E0001); the unqualified constructor and qualified function calls work. tur-html's `hiccup` expands to wrapper functions to avoid it |
+
 ## Filing conventions
 
 - One defect per file. If you find yourself writing a second report against a

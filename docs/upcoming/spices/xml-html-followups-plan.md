@@ -1,13 +1,15 @@
 # Plan: XML/HTML spice follow-ups -- markup literals, CSS selectors, hiccup
 
-> Status: in progress (2026-10-28). C1-C4 implemented (`dom/select`, branch
-> `claude/ecstatic-cori-ikodwq` in turmeric-spices); A1-A2 implemented
-> (`dom/holes`, `dom/markupc`, tur-html `html/markup`, tur-xml `xml/markup`,
-> branch `claude/ecstatic-cori-ikodwq-markup`); D1 implemented (tur-html
-> `html/hiccup`, branch `claude/ecstatic-cori-ikodwq-hiccup`). A3-A6, D1b-D3
-> not started. What changed against the plan while building it is under
-> "Implementation notes (2026-10-28)" at the end. The compiler fixes A and D
-> needed are on turmeric's `claude/ecstatic-cori-ikodwq`.
+> Status: in progress (2026-10-28). Done: C1-C4 (`dom/select`; turmeric-spices
+> branch `claude/ecstatic-cori-ikodwq`), A1-A2 (`dom/holes`, `dom/markupc`,
+> tur-html `html/markup`, tur-xml `xml/markup`) and D1 (tur-html
+> `html/hiccup`), the latter two together on turmeric-spices branch
+> `claude/ecstatic-cori-ikodwq-markup`, since D1 builds on A2's hole classes.
+> Not started: A3-A6, D1b, D2, D3. What changed against the plan while
+> building it is under "Implementation notes (2026-10-28)" at the end. The
+> compiler fixes A and D needed are on turmeric's
+> `claude/ecstatic-cori-ikodwq`; the spices markup branch's CI builds against
+> turmeric `main`, so it goes green once those land.
 > Planned 2026-10-11 (A, C) and 2026-10-16 (D) as
 > follow-ups to [xml-html-parsers-plan](../../archive/xml-html-parsers-plan.md), which shipped
 > `tur-xml`, `tur-html` and `tur-dom-core` and is archived with its follow-up
@@ -820,20 +822,31 @@ What building C, A1-A2 and D1 changed against the text above.
 - The literal syntax is only available in a file read after `html/markup`
   is loaded; a file can use it itself through
   `#use-reader-macros "<path>/html/markup.tur"`, or call `html*` directly.
-- Three compiler problems had to be fixed first (turmeric branch
+- A macro-time-only module (`dom/markupc`, `html/hiccupc`) cannot be
+  `tur check`ed on its own -- it calls the `syntax-*` natives -- so it
+  carries a `;; tur-check: macro-time` header line and the spices CI's check
+  stage skips it; it is compiled through every module that imports it.
+- Four compiler problems had to be fixed first (turmeric branch
   `claude/ecstatic-cori-ikodwq`):
   [macro-env-force-loads-driver-used-modules](../../archive/macro-env-force-loads-driver-used-modules.md)
   (no `defmacro*` compiled in turmeric-spices at all); re-registering an
   identical reader macro (`#use-reader-macros` plus the import) was an
-  error; and `tur fmt` printed a user reader macro's expansion instead of
-  the invocation and deleted `#use-reader-macros` lines -- which, with
-  spices CI running `tur fmt --check`, would have rewritten every literal.
+  error; `tur fmt` printed a user reader macro's expansion instead of the
+  invocation and deleted `#use-reader-macros` lines -- which, with spices CI
+  running `tur fmt --check`, would have rewritten every literal; and
+  `syntax-len` / `syntax-nth` saw no items in a `#map{...}` literal, which
+  hiccup's attribute maps need.
 
 **D (hiccup).**
 
 - D1 lives in tur-html (`html/hiccup`, macro-time `html/hiccupc`), not
   `dom/hiccup`: rendering a `raw-html` hole needs lexbor, and so does
-  `ToChild Html`. D2's `hiccup->xml-string` will need the types moved down
+  `ToChild Html`. The expansion calls wrapper functions (`mk-elem`, ...)
+  rather than the qualified constructors, which mistype as arguments
+  ([qualified-adt-constructor-mistyped-as-argument](../../reported/qualified-adt-constructor-mistyped-as-argument.md)).
+- `ToChild` gained one constrained instance for `(Cons T)` (and `Child` a
+  `ChildList` case) in place of per-type list instances: an instance for
+  `(Cons Html)` in `html/hiccup` would be an orphan. D2's `hiccup->xml-string` will need the types moved down
   to dom-core with the renderer taking the raw fixer as an argument (as
   `render-template` already does for A).
 - `HText` holds a `cstr`, not a `String`.
