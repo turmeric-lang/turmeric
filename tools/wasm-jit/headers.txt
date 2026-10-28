@@ -1,0 +1,64 @@
+# tools/wasm-jit/headers.txt -- the system headers the browser JIT module
+# embeds for c2mir (wasm-jit-plan 5.4).  One name per line; '#' starts a
+# comment.  build-module.sh embeds the transitive closure of these inside
+# Emscripten's musl sysroot (emcc -M -nostdinc against it), at /sysinclude.
+#
+# The list is every C11 standard header, plus every POSIX header the emitted
+# C of the fixture corpus includes (2026-10-28: an `emit-c` over all of
+# tests/fixtures/, Windows and Apple headers left out -- they sit under
+# #ifdef).  c2mir supplies its own stdbool, stdint, stddef, stdarg, limits,
+# float, iso646, stdalign and stdnoreturn and reads those first; listing them
+# costs nothing.  A program that includes a header missing here fails to
+# compile with c2mir's "error in opening file", and the page falls back to the
+# interpreter; add the header here when that is a header a program should have.
+arpa/inet.h
+assert.h
+complex.h
+ctype.h
+dirent.h
+dlfcn.h
+errno.h
+fcntl.h
+fenv.h
+float.h
+fnmatch.h
+inttypes.h
+iso646.h
+limits.h
+locale.h
+malloc.h
+math.h
+netdb.h
+netinet/in.h
+poll.h
+pthread.h
+sanitizer/asan_interface.h
+sched.h
+semaphore.h
+setjmp.h
+signal.h
+stdalign.h
+stdarg.h
+stdbool.h
+stddef.h
+stdint.h
+stdio.h
+stdlib.h
+stdnoreturn.h
+string.h
+sys/epoll.h
+sys/ioctl.h
+sys/mman.h
+sys/select.h
+sys/socket.h
+sys/stat.h
+sys/wait.h
+termios.h
+tgmath.h
+threads.h
+time.h
+uchar.h
+ucontext.h
+unistd.h
+wchar.h
+wctype.h

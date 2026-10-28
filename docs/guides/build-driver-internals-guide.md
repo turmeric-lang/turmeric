@@ -64,7 +64,8 @@ side of the commands covered here is in
 | `src/driver/cli.c` | The command table, the global-flag table and its parser, `--timings`, the environment switches, `tur --help` and the per-command usage text, `-I` parsing, the external-command fallback |
 | `src/driver/paths.c` | Reading files, the executable's path, the stdlib root, `#lang` detection, `cc_system` |
 | `src/driver/spice.c` | Manifest and spice discovery: reader macros, experiments, the `:spices` include walk, `.tur` collection, engine selection |
-| `src/driver/pipeline.c` | `core_passes[]` and the pass runner, the three compile entry points, the stdlib and project prelude, the split switches, `tur_check_only` / `tur_collect_symbols` |
+| `src/driver/pipeline.c` | `core_passes[]` and the pass runner, the three compile entry points, the stdlib and project prelude, the split switches |
+| `src/driver/lsp_backend.c` | `tur_check_only` / `tur_collect_symbols`, the LSP and MCP analysis backend over `compile_to_c` (the browser module has its own in `web/wasm_lsp.c`) |
 | `src/driver/cc.c` | `#include` hoisting, autolink markers and flags, the runtime library and its mode, `drv_link_command_run`, the stable temp paths |
 | `src/driver/preamble_split.c` | The prelude pieces and their cache, the r7rs library-unit cache, the preamble swap (`jit_try_split_preamble`), `tur emit-rt-split` |
 | `src/driver/cmd_emit.c` | `emit-c`, `emit-h`, `check`, `expand`, `audit-spans`; the build-directory ladder |

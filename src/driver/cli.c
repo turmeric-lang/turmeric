@@ -387,18 +387,6 @@ int usage_explain(void) {
     return 0;
 }
 
-/* SC4: --no-auto-spice disables the per-file subcommand walk-up that
- * adds the enclosing spice's `src/` to the include path.  Inspected by
- * auto_append_spice_includes(). */
-bool g_no_auto_spice = false;
-
-/* --no-auto-stdlib (tur check only): suffix-skip -- when the file being
- * checked IS one of the auto-loaded stdlib files, skip auto-loading it
- * and all subsequent stdlib files.  Earlier entries still load so the
- * file's transitive dependencies resolve.  This prevents duplicate-
- * definition errors when type-checking auto-loaded stdlib files in isolation. */
-bool g_no_auto_stdlib = false;
-
 /* J6: --no-abi-cache (or TUR_NO_ABI_CACHE=1) disables the persistent
  * cross-module ABI specialization cache under <build-root>/.tur-abi-cache/.
  * The cache is a build-time optimization; disabling it must always still
