@@ -35,7 +35,7 @@
 ;;; point (an interior-mutable node); `^no-auto-ctor` stops the name being bound as
 ;;; a constructor when it is already a value elsewhere (use `make-struct`). The
 ;;; older spelling, a keyword after the name as in `(defstruct Point :copy [..])`,
-;;; still compiles but warns (TUR-D0007); `tur fmt` rewrites it. Type
+;;; is an error (TUR-E0717); `tur fmt` rewrites it. Type
 ;;; parameters go in a vector before the fields, `(defstruct Duo [A B] [fst : A snd :
 ;;; B])`. A struct is passed to a function by value, so a callee that changes its
 ;;; parameter changes its own copy. Field types are checked at construction
@@ -92,7 +92,7 @@
 ;;; vector, `(defdata Tree [a] (Leaf) (Node (Tree a) a (Tree a)))`, and `^copy`
 ;;; or `^move` (the default) goes before the name, `(defdata ^copy Shape ..)`;
 ;;; `^linear`, `^affine` and `^heap` go there too. (The older keyword spelling
-;;; after the name, `:copy`, still compiles but warns, TUR-D0007.) Constructors are ordinary
+;;; after the name, `:copy`, is an error, TUR-E0717.) Constructors are ordinary
 ;;; functions, `(Circle 2)`, and `match` takes a value apart: leaving a constructor
 ;;; out of a `match` is the error `match: non-exhaustive patterns`, which names the
 ;;; constructor, unless the `match` is marked `^non-exhaustive`.

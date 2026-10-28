@@ -410,7 +410,7 @@ fi
 
 # ---------------------------------------------------------------------------
 # caret-type-attributes-plan P3: `tur fmt` moves a declaration's flag keywords
-# to `^attr`s before the name (the compiler warns, TUR-D0007).  A declaration
+# to `^attr`s before the name (the compiler rejects them, TUR-E0717).  A declaration
 # whose source holds a comment is left as written, since the printer re-emits
 # comments from the gaps between neighbouring forms; and --check reports a file
 # still on the old spelling.
