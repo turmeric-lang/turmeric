@@ -2,15 +2,10 @@
  * CSS Variables — Dark Spice Market
  * ========================================================================== */
 
-@import '@fontsource/iosevka/400.css';
-@import '@fontsource/iosevka/500.css';
-@import '@fontsource/cormorant-garamond/400.css';
-@import '@fontsource/cormorant-garamond/500.css';
-@import '@fontsource/cormorant-garamond/600.css';
-@import '@fontsource/cormorant-garamond/400-italic.css';
-@import '@fontsource/dm-sans/300.css';
-@import '@fontsource/dm-sans/400.css';
-@import '@fontsource/dm-sans/500.css';
+@import '@fontsource/iosevka/latin-400.css';
+@import '@fontsource/dm-sans/latin-300.css';
+@import '@fontsource/dm-sans/latin-400.css';
+@import '@fontsource/dm-sans/latin-500.css';
 
 :root {
     /* Background layers */
@@ -116,7 +111,6 @@
 
     /* Fonts */
     --font-family:  'DM Sans', sans-serif;
-    --font-serif:   'Cormorant Garamond', Georgia, serif;
     --font-mono:    'Iosevka', 'SF Mono', 'Fira Code', monospace;
     --font-size-sm: 12px;
     --font-size-md: 13px;
@@ -290,31 +284,6 @@ pre {
     align-items: center;
     gap: 10px;
     text-decoration: none;
-}
-
-.logo-mark {
-    width: 30px;
-    height: 30px;
-    background: var(--gold-fill);
-    border-radius: 7px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-family: var(--font-serif);
-    font-size: 19px;
-    font-weight: 600;
-    color: var(--on-gold);
-    letter-spacing: -0.02em;
-    flex-shrink: 0;
-}
-
-.logo-text {
-    font-family: var(--font-serif);
-    font-size: 23px;
-    font-weight: 500;
-    color: var(--gold-bright);
-    letter-spacing: 0.01em;
-    line-height: 1;
 }
 
 .logo-sub {
@@ -1468,7 +1437,7 @@ body.split-dragging * {
 }
 
 .overlay-header h2 {
-    font-family: var(--font-serif);
+    font-family: var(--font-family);
     font-size: 20px;
     font-weight: 500;
     color: var(--gold-bright);

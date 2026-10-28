@@ -7,6 +7,7 @@ import { resolve } from 'path';
 import { readFileSync, existsSync, writeFileSync } from 'fs';
 import { execSync } from 'child_process';
 import { CONTENT_SECURITY_POLICY } from './csp.js';
+import { woff2Only } from './font-trim.js';
 
 const turmericVersion = readFileSync(resolve(__dirname, '../VERSION'), 'utf-8').trim();
 
@@ -232,5 +233,5 @@ export default defineConfig({
   preview: {
     headers: SERVER_HEADERS,
   },
-  plugins: [injectVersion(), injectSwVersion(), swKillSwitch(), stampCsp(), cloudflare(cloudflareOptions)],
+  plugins: [injectVersion(), woff2Only(), injectSwVersion(), swKillSwitch(), stampCsp(), cloudflare(cloudflareOptions)],
 });
