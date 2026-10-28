@@ -424,14 +424,14 @@ static char *slot_store(EmitCtx *ctx, TypeKind k, const Type *t, const char *e) 
     if (slot_box_ty(t)) {
         const char *cty = emit_type_c_name(ctx, *(Type *)t);
         buf_printf(&b,
-            "(intptr_t)({ %s *__bx = (%s *)malloc(sizeof(%s)); *__bx = (%s); __bx; })",
+            "(tur_dkw)({ %s *__bx = (%s *)malloc(sizeof(%s)); *__bx = (%s); __bx; })",
             cty, cty, cty, e);
     } else if (k == TY_FLOAT || k == TY_FLOAT64)
-        buf_printf(&b, "(intptr_t)((union { double d; int64_t i; }){ .d = (%s) }).i", e);
+        buf_printf(&b, "(tur_dkw)((union { double d; int64_t i; }){ .d = (%s) }).i", e);
     else if (k == TY_FLOAT32)
-        buf_printf(&b, "(intptr_t)(uint32_t)((union { float f; uint32_t u; }){ .f = (%s) }).u", e);
+        buf_printf(&b, "(tur_dkw)(uint32_t)((union { float f; uint32_t u; }){ .f = (%s) }).u", e);
     else
-        buf_printf(&b, "(intptr_t)(%s)", e);
+        buf_printf(&b, "(tur_dkw)(%s)", e);
     buf_putc(&b, '\0');
     char *s = strdup(b.data); buf_free(&b); return s;
 }
@@ -486,7 +486,7 @@ static char *slot_store_reap(EmitCtx *ctx, TypeKind k, const Type *t, const char
         const char *ect = emit_localvar_lookup_ctype(e);
         if (ect && strcmp(ect, "int64_t") == 0) {
             Buf b; buf_init(&b);
-            buf_printf(&b, "(intptr_t)(%s)", e);
+            buf_printf(&b, "(tur_dkw)(%s)", e);
             buf_putc(&b, '\0');
             char *s = strdup(b.data); buf_free(&b);
             return s;
@@ -8264,7 +8264,8 @@ static bool shift_reach_visit(const Expr *e, void *ud) {
 static int cps_reset_landing_open(CE *ce, const Binding *callee) {
     const char *rt = ce->ctx->current_fn_ret_ctype;
     if (!g_pend_k_ok || !ce->cur_k || !rt ||
-        (strcmp(rt, "int64_t") != 0 && strcmp(rt, "intptr_t") != 0))
+        (strcmp(rt, "int64_t") != 0 && strcmp(rt, "intptr_t") != 0
+         && strcmp(rt, "tur_dkw") != 0))
         return -1;
     if (!callee || !g_prog || !fn_may_reach_base_shift(fd_for_binding(g_prog, callee)))
         return -1;
@@ -8512,7 +8513,7 @@ static const char *e2a_lookup_key(char *out, size_t cap,
     if (fn && fn->is_fat)
         snprintf(out, cap, "((int64_t *)(intptr_t)(%s))[1]", callee);
     else
-        snprintf(out, cap, "(intptr_t)%s", callee);
+        snprintf(out, cap, "(tur_dkw)%s", callee);
     return out;
 }
 
@@ -8672,7 +8673,7 @@ static char *e2a_fallback_stmt(CE *ce, const Type *sig, const CAtom *args, uint3
         bool ak_flt = ak == TY_FLOAT || ak == TY_FLOAT64 || ak == TY_FLOAT32;
         buf_printf(&ps, ", %s", pc);
         if (pc[pL - 1] == '*')
-            buf_printf(&av, ", (%s)(intptr_t)(%s)", pc, a);
+            buf_printf(&av, ", (%s)(tur_dkw)(%s)", pc, a);
         else if (strcmp(pc, "double") == 0 || strcmp(pc, "float") == 0) {
             if (ak_flt) buf_printf(&av, ", (%s)(%s)", pc, a);
             else {
@@ -8702,7 +8703,7 @@ static char *e2a_fallback_stmt(CE *ce, const Type *sig, const CAtom *args, uint3
         buf_printf(&out, "%s;", sited ? sited : vc.data);
         free(sited);
         buf_free(&vc);
-        buf_printf(&out, " return dk_run(%s, (intptr_t)0);", thread);
+        buf_printf(&out, " return dk_run(%s, (tur_dkw)0);", thread);
     } else {
         const char *rc = thunk_result_slot_c_name(*rt);
         Buf cl; buf_init(&cl);
@@ -8719,11 +8720,11 @@ static char *e2a_fallback_stmt(CE *ce, const Type *sig, const CAtom *args, uint3
         size_t rL = strlen(rc);
         if (rt->kind == TY_FLOAT || rt->kind == TY_FLOAT64 || rt->kind == TY_FLOAT32) {
             char *w = cps_ir_fncps_word_of(rt->kind, cl.data);
-            buf_printf(&out, "return dk_run(%s, (intptr_t)(%s));", thread, w); free(w);
+            buf_printf(&out, "return dk_run(%s, (tur_dkw)(%s));", thread, w); free(w);
         } else if (rc[rL - 1] == '*')
-            buf_printf(&out, "return dk_run(%s, (intptr_t)(%s));", thread, cl.data);
+            buf_printf(&out, "return dk_run(%s, (tur_dkw)(%s));", thread, cl.data);
         else
-            buf_printf(&out, "return dk_run(%s, (intptr_t)(int64_t)(%s));", thread, cl.data);
+            buf_printf(&out, "return dk_run(%s, (tur_dkw)(int64_t)(%s));", thread, cl.data);
         buf_free(&cl);
     }
     buf_putc(&out, '\0');
@@ -8812,7 +8813,7 @@ static void fncps_direct_call(CE *ce, Buf *out, const char *pf, char *const *arg
             buf_printf(&av, ", (int64_t)(%s)", args[i]);
         } else if (pc[pL - 1] == '*') {
             buf_printf(&ps, ", %s", pc);
-            buf_printf(&av, ", (%s)(intptr_t)(%s)", pc, args[i]);
+            buf_printf(&av, ", (%s)(tur_dkw)(%s)", pc, args[i]);
         } else {
             buf_printf(&ps, ", %s", pc);
             buf_printf(&av, ", (%s)(%s)", pc, args[i]);
@@ -9304,7 +9305,7 @@ static char *atoms_csv_call_typed_offs(CE *ce, const CAtom *args, uint32_t n,
         else if (param_is_voidp)
             buf_printf(&b, "(void *)(intptr_t)%s", a);  /* int64 carrier -> void*: bridge */
         else if (param_is_ptr)
-            buf_printf(&b, "(%s)(intptr_t)%s", pty, a);
+            buf_printf(&b, "(%s)(tur_dkw)%s", pty, a);
         else if ((param_is_i64 || !pty) && !arg_is_plain_int)
             buf_printf(&b, "(int64_t)(intptr_t)%s", a);
         else
@@ -9373,7 +9374,8 @@ static bool cty_is_ptr(const char *cty) {
     return cty && *cty && cty[strlen(cty) - 1] == '*';
 }
 static bool cty_is_int_word(const char *cty) {
-    return cty && (strcmp(cty, "int64_t") == 0 || strcmp(cty, "intptr_t") == 0);
+    return cty && (strcmp(cty, "int64_t") == 0 || strcmp(cty, "intptr_t") == 0
+                   || strcmp(cty, "tur_dkw") == 0);
 }
 static bool cty_word_straddle(const char *a, const char *b) {
     return (cty_is_ptr(a) && cty_is_int_word(b)) || (cty_is_int_word(a) && cty_is_ptr(b));
@@ -9666,7 +9668,7 @@ static void emit_term_inner(CE *ce, const CTerm *t) {
                 ce_line(ce, "%s = (%s)malloc(sizeof(%s)); *%s = %s;",
                         bn, byref_cell_ptr_ctype(ce->ctx, cb),
                         byref_cell_ctype(ce->ctx, cb), bn, v);
-                ce_line(ce, "__dk_reap_ptr((intptr_t)%s);", bn);
+                ce_line(ce, "__dk_reap_ptr((tur_dkw)%s);", bn);
             } else if (t->as.letval.x.ty == TY_FN && t->as.letval.v.kind == CA_VAR
                        && t->as.letval.v.var && t->as.letval.v.var->is_global) {
                 /* A thin fn local (letval_thin_fn_local_ok) is an int64 slot
@@ -9694,7 +9696,7 @@ static void emit_term_inner(CE *ce, const CTerm *t) {
                  * __dk_resume_word does (cont-query-on-wrapped-handler-k-reads-
                  * past-wrapper).  The k atom is `int64_t` or `DK *` depending on
                  * the case; `(intptr_t)` normalizes both. */
-                ce_line(ce, "%s = __dk_cont_live_word((intptr_t)(%s));", bn, n ? as[0] : "0");
+                ce_line(ce, "%s = __dk_cont_live_word((tur_dkw)(%s));", bn, n ? as[0] : "0");
             } else if (is_println_shape(sp->shape)) {
                 emit_println(ce, sp, n ? as[0] : "0");
                 ce_line(ce, "%s = 0;", bn);  /* nil result */
@@ -9799,7 +9801,7 @@ static void emit_term_inner(CE *ce, const CTerm *t) {
                 bool bct_i64 = bct && strcmp(bct, "int64_t") == 0;
                 if (bct_i64 && rct_mc && strncmp(rct_mc, "tur_adt_", 8) == 0 &&
                     !strchr(rct_mc, '*'))
-                    ce_line(ce, "%s = __dk_reap_ptr((intptr_t)({ %s *__bx = (%s *)malloc(sizeof(%s)); *__bx = %s(%s); __bx; })); /* cps->direct */",
+                    ce_line(ce, "%s = __dk_reap_ptr((tur_dkw)({ %s *__bx = (%s *)malloc(sizeof(%s)); *__bx = %s(%s); __bx; })); /* cps->direct */",
                             bn, rct_mc, rct_mc, rct_mc, fn, argv);
                 else if (bct_i64 && rct_mc &&
                          (strcmp(rct_mc, "double") == 0 || strcmp(rct_mc, "float") == 0)) {
@@ -9814,7 +9816,7 @@ static void emit_term_inner(CE *ce, const CTerm *t) {
                     ce_line(ce, "%s = %s; /* cps->direct */", bn, br);
                     free(br);
                 } else if (bct_bridgeable)
-                    ce_line(ce, "%s = (%s)(intptr_t)%s(%s); /* cps->direct */", bn, bct, fn, argv);
+                    ce_line(ce, "%s = (%s)(tur_dkw)%s(%s); /* cps->direct */", bn, bct, fn, argv);
                 else
                     ce_line(ce, "%s = %s(%s); /* cps->direct */", bn, fn, argv);
             } else {
@@ -10090,7 +10092,7 @@ static void emit_term_inner(CE *ce, const CTerm *t) {
                     /* The arguments are computed (they may call a closure
                      * below); the closures this turn bound are dead now. */
                     for (uint32_t i = 0; i < ce->n_loop_reaps; i++)
-                        ce_line(ce, "    __dk_reap_closure_now((intptr_t)%s);",
+                        ce_line(ce, "    __dk_reap_closure_now((tur_dkw)%s);",
                                 ce->loop_reaps[i]);
                     for (uint32_t i = 0; i < t->as.tailcall.n; i++) {
                         char *pn = name_for_binding(ce->ctx, sfd->params[i]);
@@ -10145,18 +10147,18 @@ static void emit_term_inner(CE *ce, const CTerm *t) {
                         for (uint32_t i = 0; i < n; i++)
                             buf_printf(h, " %s a%u;", emit_param_ctype(ce->ctx, bfd, i), i);
                         buf_printf(h, " } %s_env;\n", bname);
-                        buf_printf(h, "static intptr_t %s(intptr_t env, intptr_t v, DK *__kont) {\n"
+                        buf_printf(h, "static tur_dkw %s(tur_dkw env, tur_dkw v, DK *__kont) {\n"
                                       "    %s_env *a = (%s_env *)(intptr_t)env; (void)v;\n",
                                    bname, bname, bname);
                         for (uint32_t i = 0; i < n; i++)
                             buf_printf(h, "    %s a%u = a->a%u;\n", emit_param_ctype(ce->ctx, bfd, i), i, i);
                         buf_puts(h, "    DK *nd = a->node; free(a); free(nd);\n");
-                        buf_printf(h, "    return (intptr_t)%s__cps(", fn);
+                        buf_printf(h, "    return (tur_dkw)%s__cps(", fn);
                         for (uint32_t i = 0; i < n; i++) buf_printf(h, "a%u, ", i);
                         buf_puts(h, "__kont); /* cps->cps, bounced */\n}\n");
                         ce_line(ce, "if (__dk_tail_deep()) {   /* cps->cps tail call on a deep stack: bounce to the driver */");
                         ce_line(ce, "    %s_env *__tb = (%s_env *)malloc(sizeof *__tb);", bname, bname);
-                        ce_line(ce, "    __tb->node = dk_frame_resume(%s, (intptr_t)__tb, __kont);", bname);
+                        ce_line(ce, "    __tb->node = dk_frame_resume(%s, (tur_dkw)__tb, __kont);", bname);
                         for (uint32_t i = 0; i < n; i++) {
                             size_t from = arg_offs[i];
                             size_t to = (i + 1 < n) ? arg_offs[i + 1] - 2 : strlen(argv_t);
@@ -10284,7 +10286,7 @@ static void emit_term_inner(CE *ce, const CTerm *t) {
                     if (rgn_id >= 0) {
                         bool notable = drt && (strchr(drt, '*') != NULL ||
                                                strcmp(drt, "int64_t") == 0 ||
-                                               strcmp(drt, "intptr_t") == 0);
+                                               strcmp(drt, "intptr_t") == 0 || strcmp(drt, "tur_dkw") == 0);
                         if (rgn_reclaim && notable)
                             ce_line(ce, "tur_region_note_escape((const void *)(intptr_t)%s); "
                                         "(void)tur_region_pop_checked(__tur_rgn_%d);", tmp, rgn_id);
@@ -10327,7 +10329,7 @@ static void emit_term_inner(CE *ce, const CTerm *t) {
                     if (cty_is_byval_agg(drt) && !cty_is_byval_agg(slot_cty)) {
                         Buf bx; buf_init(&bx);
                         buf_printf(&bx,
-                            "(int64_t)__dk_reap_ptr((intptr_t)({ %s *__bx = "
+                            "(int64_t)__dk_reap_ptr((tur_dkw)({ %s *__bx = "
                             "(%s *)malloc(sizeof(%s)); *__bx = %s; __bx; }))",
                             drt, drt, drt, tmp);
                         buf_putc(&bx, '\0');
@@ -10351,7 +10353,7 @@ static void emit_term_inner(CE *ce, const CTerm *t) {
                          * reverse).  A bare assignment is -Wint-conversion, a
                          * hard error on macOS clang; bridge through intptr_t. */
                         Buf bv; buf_init(&bv);
-                        buf_printf(&bv, "(%s)(intptr_t)%s", slot_cty, tmp);
+                        buf_printf(&bv, "(%s)(tur_dkw)%s", slot_cty, tmp);
                         buf_putc(&bv, '\0');
                         emit_deliver(ce, &t->as.tailcall.kont, bv.data);
                         buf_free(&bv);
@@ -10798,7 +10800,7 @@ static void emit_letraw(CE *ce, const CTerm *t) {
                 free(br);
                 bridged_ok = true;
             } else if (rc && strncmp(rc, "tur_adt_", 8) == 0 && !strchr(rc, '*')) {
-                ce_line(ce, "%s = __dk_reap_ptr((intptr_t)({ %s *__bx = (%s *)malloc(sizeof(%s)); *__bx = (%s); __bx; }));",
+                ce_line(ce, "%s = __dk_reap_ptr((tur_dkw)({ %s *__bx = (%s *)malloc(sizeof(%s)); *__bx = (%s); __bx; }));",
                         bn, rc, rc, rc, rhs);
                 bridged_ok = true;
             } else if (rc && strlen(rc) >= 1 && rc[strlen(rc) - 1] == '*') {
@@ -10823,7 +10825,7 @@ static void emit_letraw(CE *ce, const CTerm *t) {
             size_t bL = strlen(bct);
             const char *rc = emit_localvar_lookup_ctype(rhs);
             if (bL >= 1 && bct[bL - 1] == '*' && rc && strcmp(rc, "int64_t") == 0) {
-                ce_line(ce, "%s = (%s)(intptr_t)(%s);", bn, bct, rhs);
+                ce_line(ce, "%s = (%s)(tur_dkw)(%s);", bn, bct, rhs);
                 bridged_ok = true;
             }
         }
@@ -10844,7 +10846,7 @@ static void emit_letraw(CE *ce, const CTerm *t) {
          * so reap it as a headered closure (kind 2 -> TUR_CLOSURE_DROP: recovers
          * the header, walks owning captures, frees the base) rather than a bare
          * interior free. */
-        ce_line(ce, "__dk_reap_closure((intptr_t)%s);", bn);
+        ce_line(ce, "__dk_reap_closure((tur_dkw)%s);", bn);
         if (t->as.letraw.reap_at_backedge && ce->self_out && ce->out == ce->self_out &&
             ce->n_loop_reaps < sizeof ce->loop_reaps / sizeof ce->loop_reaps[0]) {
             ce->loop_reaps[ce->n_loop_reaps++] = strdup(bn);
@@ -10868,7 +10870,7 @@ static void emit_letraw(CE *ce, const CTerm *t) {
         !ce->shift_mode && !ce->ret_mode && !ce->handler_case_mode) {
         ensure_saffron_dyn_runtime(ce->ctx);   /* declares tur_tb_root */
         ce_line(ce, "if ((void *)__kont != tur_tb_root) "
-                    "__dk_reap_closure((intptr_t)TUR_UNTAG(%s));", bn);
+                    "__dk_reap_closure((tur_dkw)TUR_UNTAG(%s));", bn);
     }
     emit_letraw_fnfield_reap(ce, t, bn);
     /* The constructor spelling of the CT_LETCALL's sum-closure reap. */
@@ -10909,7 +10911,7 @@ static void emit_letraw_fnfield_reap(CE *ce, const CTerm *t, const char *bn) {
             !ft->as.fn.boxed)
             continue;
         char *mp = adt_field_member_path(def, ctor, fi);
-        ce_line(ce, "__dk_reap_closure((intptr_t)(%s).%s);", bn, mp);
+        ce_line(ce, "__dk_reap_closure((tur_dkw)(%s).%s);", bn, mp);
         free(mp);
     }
 }
@@ -11566,7 +11568,7 @@ static void emit_lifted(CE *ce, const char *name, LHMode mode,
         /* Every capture is a local now; nothing below reads the env. */
         if (join_release) {
             indent_buf(&tmp, 4);
-            buf_puts(&tmp, "__dk_join_release_env((intptr_t)__cap);\n");
+            buf_puts(&tmp, "__dk_join_release_env((tur_dkw)__cap);\n");
         }
     }
 
@@ -11659,7 +11661,7 @@ static void emit_lifted(CE *ce, const char *name, LHMode mode,
                 indent_buf(&tmp, 4);
                 buf_printf(&tmp, "__dk_reap_keep(%s_kenv);\n", kn);
                 indent_buf(&tmp, 4);
-                buf_printf(&tmp, "__dk_reap_ptr((intptr_t)%s);\n", kn);
+                buf_printf(&tmp, "__dk_reap_ptr((tur_dkw)%s);\n", kn);
                 /* P3.d (escaping-fat-closure-env free, scoped to __Shift): the
                  * receiver -- the effect argument `arg` -- is the shift's
                  * `(fn [k] ...)`, which the __Shift desugar ALWAYS boxes into a
@@ -11681,7 +11683,7 @@ static void emit_lifted(CE *ce, const char *name, LHMode mode,
                  * also closing the "owning capture leaks" caveat above -- frees
                  * the base). */
                 indent_buf(&tmp, 4);
-                buf_puts(&tmp, "__dk_reap_closure((intptr_t)arg);\n");
+                buf_puts(&tmp, "__dk_reap_closure((tur_dkw)arg);\n");
             } else {
                 /* Bind `k` as the int64_t word its Binding is typed as -- not
                  * `DK *`.  Every read site casts (`dk_invoke((DK *)(k), ...)`,
@@ -11730,7 +11732,7 @@ static void emit_lifted(CE *ce, const char *name, LHMode mode,
     bool have_unw = false;
     if (pend_frame && cps_pend_any_firable()) {
         have_unw = true;
-        buf_printf(&unw, "static void %s_unw(intptr_t __lh_env) {\n", name);
+        buf_printf(&unw, "static void %s_unw(tur_dkw __lh_env) {\n", name);
         if (has_caps) {
             buf_printf(&unw, "    %s_env *__cap = (%s_env *)(intptr_t)__lh_env;\n", name, name);
             for (int i = 0; i < caps->n; i++) {
@@ -11776,23 +11778,23 @@ static void emit_lifted(CE *ce, const char *name, LHMode mode,
 
     switch (mode) {
         case LH_SHIFT_BODY:
-            buf_printf(ce->helpers, "static intptr_t %s(intptr_t __lh_env, DK *subk) {\n", name);
+            buf_printf(ce->helpers, "static tur_dkw %s(tur_dkw __lh_env, DK *subk) {\n", name);
             if (has_caps) buf_puts(ce->helpers, "    (void)subk;\n");
             else          buf_puts(ce->helpers, "    (void)__lh_env; (void)subk;\n");
             break;
         case LH_HANDLER_CASE:
-            buf_printf(ce->helpers, "static intptr_t %s(intptr_t __lh_env, intptr_t arg, DK *subk) {\n", name);
+            buf_printf(ce->helpers, "static tur_dkw %s(tur_dkw __lh_env, tur_dkw arg, DK *subk) {\n", name);
             if (has_caps) buf_puts(ce->helpers, "    (void)arg; (void)subk;\n");
             else          buf_puts(ce->helpers, "    (void)__lh_env; (void)arg; (void)subk;\n");
             break;
         case LH_PERFORM_CONT:
-            buf_printf(ce->helpers, "static intptr_t %s(intptr_t __lh_env, intptr_t %s__slot) {\n", name, xname);
+            buf_printf(ce->helpers, "static tur_dkw %s(tur_dkw __lh_env, tur_dkw %s__slot) {\n", name, xname);
             if (!has_caps) buf_puts(ce->helpers, "    (void)__lh_env;\n");
             break;
         case LH_RESUME_CONT:
             /* Track A: a resume-frame.  __kont is the run-time downstream chain
              * (a DKResumeFrame parameter, not the env); caps (if any) ride env. */
-            buf_printf(ce->helpers, "static intptr_t %s(intptr_t __lh_env, intptr_t %s__slot, DK *__kont) {\n", name, xname);
+            buf_printf(ce->helpers, "static tur_dkw %s(tur_dkw __lh_env, tur_dkw %s__slot, DK *__kont) {\n", name, xname);
             if (!has_caps) buf_puts(ce->helpers, "    (void)__lh_env;\n");
             break;
     }
@@ -11917,10 +11919,10 @@ static void emit_heap_join(CE *ce, const CTerm *t) {
             ? call->as.tailcall.call_expr->type.kind : TY_INT;
         if (drk == TY_FLOAT || drk == TY_FLOAT64 || drk == TY_FLOAT32) {
             char *dw = cps_ir_fncps_word_of(drk, dc);
-            ce_line(ce, "return dk_run(%s, (intptr_t)(%s));", frame, dw);
+            ce_line(ce, "return dk_run(%s, (tur_dkw)(%s));", frame, dw);
             free(dw);
         } else {
-            ce_line(ce, "return dk_run(%s, (intptr_t)(%s));", frame, dc);
+            ce_line(ce, "return dk_run(%s, (tur_dkw)(%s));", frame, dc);
         }
         free(dc);
         free(pf); fncps_args_free(av, na);
@@ -12243,18 +12245,18 @@ static void emit_continue(CE *ce, const CTerm *t) {
         for (uint32_t i = 0; i < n; i++)
             buf_printf(h, " %s a%u;", ce->cur_loop_ctypes[i], i);
         buf_printf(h, " } %s_env;\n", bname);
-        buf_printf(h, "static intptr_t %s(intptr_t env, intptr_t v, DK *__kont) {\n"
+        buf_printf(h, "static tur_dkw %s(tur_dkw env, tur_dkw v, DK *__kont) {\n"
                       "    %s_env *a = (%s_env *)(intptr_t)env; (void)v;\n",
                    bname, bname, bname);
         for (uint32_t i = 0; i < n; i++)
             buf_printf(h, "    %s a%u = a->a%u;\n", ce->cur_loop_ctypes[i], i, i);
         buf_puts(h, "    DK *nd = a->node; free(a); free(nd);\n");
-        buf_printf(h, "    return (intptr_t)%s__cps(", lname);
+        buf_printf(h, "    return (tur_dkw)%s__cps(", lname);
         for (uint32_t i = 0; i < n; i++) buf_printf(h, "a%u, ", i);
         buf_puts(h, "__kont); /* cps-while back-edge, bounced */\n}\n");
         ce_line(ce, "if (__dk_tail_deep()) {   /* cps-while back-edge on a deep stack: bounce to the driver */");
         ce_line(ce, "    %s_env *__tb = (%s_env *)malloc(sizeof *__tb);", bname, bname);
-        ce_line(ce, "    __tb->node = dk_frame_resume(%s, (intptr_t)__tb, __kont);", bname);
+        ce_line(ce, "    __tb->node = dk_frame_resume(%s, (tur_dkw)__tb, __kont);", bname);
         for (uint32_t i = 0; i < nc; i++) {
             char *a = atom_str(ce, &t->as.cont_.args[i]);
             ce_line(ce, "    __tb->a%u = %s;", i, a);
@@ -12309,8 +12311,8 @@ static char *emit_cont_env_impl(CE *ce, const char *hname, const CapSet *caps, b
     /* The env struct outlives its DK frame (shared read-only across multi-shot
      * resumes) and is never freed at a call site; reap it at the outermost entry
      * boundary (docs/archive/cps-delimited-dk-node-leak.md). */
-    if (reap) ce_line(ce, "__dk_reap_ptr((intptr_t)%s);", envv);
-    Buf b; buf_init(&b); buf_printf(&b, "(intptr_t)%s", envv); buf_putc(&b, '\0');
+    if (reap) ce_line(ce, "__dk_reap_ptr((tur_dkw)%s);", envv);
+    Buf b; buf_init(&b); buf_printf(&b, "(tur_dkw)%s", envv); buf_putc(&b, '\0');
     char *s = strdup(b.data); buf_free(&b); return s;
 }
 
@@ -12896,15 +12898,15 @@ static void emit_cl_shift_bodyfn(CE *ce, const char *bodyfn, const CTerm *t,
             /* serial-cont-chain-never-freed: the receiver kept nothing of
              * `k` (serial_recv_confines_k), so its chain dies here. */
             buf_printf(ce->helpers,
-                "static intptr_t %s(intptr_t env, DK *subk) {\n%s"
-                "    intptr_t __r = (intptr_t)%s((void *)env, (%s)(intptr_t)%s);\n"
+                "static tur_dkw %s(tur_dkw env, DK *subk) {\n%s"
+                "    tur_dkw __r = (tur_dkw)%s((void *)env, (%s)(tur_dkw)%s);\n"
                 "    if (!tur_async_suspended) %s\n"
                 "    return __r;\n}\n",
                 bodyfn, cont_setup, thunk_name, kty, cont_arg, free_stmt);
         else
             buf_printf(ce->helpers,
-                "static intptr_t %s(intptr_t env, DK *subk) {\n%s"
-                "    return (intptr_t)%s((void *)env, (%s)(intptr_t)%s);\n}\n",
+                "static tur_dkw %s(tur_dkw env, DK *subk) {\n%s"
+                "    return (tur_dkw)%s((void *)env, (%s)(tur_dkw)%s);\n}\n",
                 bodyfn, cont_setup, thunk_name, kty, cont_arg);
         free(thunk_name);
     } else {
@@ -12944,22 +12946,22 @@ static void emit_cl_shift_bodyfn(CE *ce, const char *bodyfn, const CTerm *t,
         if (!rty) rty = "int64_t";
         Buf rc; buf_init(&rc);
         Buf call; buf_init(&call);
-        buf_printf(&call, "((%s (*)(%s))(intptr_t)env)((%s)(intptr_t)%s)",
+        buf_printf(&call, "((%s (*)(%s))(intptr_t)env)((%s)(tur_dkw)%s)",
                    rty, kty, kty, cont_arg);
         buf_putc(&call, '\0');
         emit_scalar_word_conv(&rc, rty, "int64_t", call.data);
         buf_putc(&rc, '\0');
         if (free_stmt)
             buf_printf(ce->helpers,
-                "static intptr_t %s(intptr_t env, DK *subk) {\n%s"
-                "    intptr_t __r = (intptr_t)%s;\n"
+                "static tur_dkw %s(tur_dkw env, DK *subk) {\n%s"
+                "    tur_dkw __r = (tur_dkw)%s;\n"
                 "    if (!tur_async_suspended) %s\n"
                 "    return __r;\n}\n",
                 bodyfn, cont_setup, rc.data, free_stmt);
         else
             buf_printf(ce->helpers,
-                "static intptr_t %s(intptr_t env, DK *subk) {\n%s"
-                "    return (intptr_t)%s;\n}\n",
+                "static tur_dkw %s(tur_dkw env, DK *subk) {\n%s"
+                "    return (tur_dkw)%s;\n}\n",
                 bodyfn, cont_setup, rc.data);
         buf_free(&rc);
         buf_free(&call);
@@ -13038,12 +13040,12 @@ static void emit_serial_outward_call(CE *ce, const CTerm *t, int id, const char 
         const char *envty = lfd->closure && lfd->n_params > 1
                           ? emit_param_ctype(ce->ctx, (FnDef *)lfd, 0) : NULL;
         if (envty)
-            ce_line(ce, "return %s__cps((%s)(intptr_t)(%s), (%s)(intptr_t)%s,"
+            ce_line(ce, "return %s__cps((%s)(tur_dkw)(%s), (%s)(tur_dkw)%s,"
                         " %s__dk_reap_node(dk_frame_resume(%s, %s, %s))%s);"
                         " /* serial reset: outward closure receiver */",
                     thunk, envty, fval, kty, kchain, uw, jname, envexpr, ce->cur_k, uwc);
         else
-            ce_line(ce, "return %s__cps((%s)(intptr_t)%s,"
+            ce_line(ce, "return %s__cps((%s)(tur_dkw)%s,"
                         " %s__dk_reap_node(dk_frame_resume(%s, %s, %s))%s);"
                         " /* serial reset: outward closure receiver */",
                     thunk, kty, kchain, uw, jname, envexpr, ce->cur_k, uwc);
@@ -13051,7 +13053,7 @@ static void emit_serial_outward_call(CE *ce, const CTerm *t, int id, const char 
         free(fval);
     } else {
         char *fn = callee_name(t->as.cloneable.receiver);
-        ce_line(ce, "return %s__cps((%s)(intptr_t)%s, %s__dk_reap_node(dk_frame_resume(%s, %s, %s))%s);"
+        ce_line(ce, "return %s__cps((%s)(tur_dkw)%s, %s__dk_reap_node(dk_frame_resume(%s, %s, %s))%s);"
                     " /* serial reset: outward receiver */",
                 fn, kty, kchain, uw, jname, envexpr, ce->cur_k, uwc);
         free(fn);
@@ -13212,7 +13214,7 @@ static void emit_cloneable(CE *ce, const CTerm *t) {
             const char *side;
             if (fr->ignore_value && ar == 0) {
                 buf_printf(ce->helpers,
-                    "static intptr_t %s_skcall%d_%u(intptr_t env, intptr_t value) { (void)env; (void)value; return (intptr_t)%s(); }\n",
+                    "static tur_dkw %s_skcall%d_%u(tur_dkw env, tur_dkw value) { (void)env; (void)value; return (tur_dkw)%s(); }\n",
                     ce->fn_cn, id, i, cfn);
                 side = "$0";
             } else if (env1) {
@@ -13230,7 +13232,7 @@ static void emit_cloneable(CE *ce, const CTerm *t) {
                 char esc[192];
                 cc_cast_for_param(ce, fr->call_fn, 0, esc, sizeof esc);
                 buf_printf(ce->helpers,
-                    "static intptr_t %s_skcall%d_%u(intptr_t env, intptr_t value) { (void)value; return (intptr_t)%s(%senv); }\n",
+                    "static tur_dkw %s_skcall%d_%u(tur_dkw env, tur_dkw value) { (void)value; return (tur_dkw)%s(%senv); }\n",
                     ce->fn_cn, id, i, cfn, ekc == 1 ? ecast : esc);
                 side = "$E";
             } else if (two_arg) {
@@ -13240,7 +13242,7 @@ static void emit_cloneable(CE *ce, const CTerm *t) {
                 cc_cast_for_param(ce, fr->call_fn, 0, sc0, sizeof sc0);
                 cc_cast_for_param(ce, fr->call_fn, 1, sc1, sizeof sc1);
                 buf_printf(ce->helpers,
-                    "static intptr_t %s_skcall%d_%u(intptr_t env, intptr_t value) { return (intptr_t)%s(%s%s, %s%s); }\n",
+                    "static tur_dkw %s_skcall%d_%u(tur_dkw env, tur_dkw value) { return (tur_dkw)%s(%s%s, %s%s); }\n",
                     ce->fn_cn, id, i, cfn,
                     sc0, a0, sc1, a1);
                 side = fr->hole_left ? "$2L" : "$2R";
@@ -13248,7 +13250,7 @@ static void emit_cloneable(CE *ce, const CTerm *t) {
                 char sc0[192];
                 cc_cast_for_param(ce, fr->call_fn, 0, sc0, sizeof sc0);
                 buf_printf(ce->helpers,
-                    "static intptr_t %s_skcall%d_%u(intptr_t env, intptr_t value) { (void)env; return (intptr_t)%s(%svalue); }\n",
+                    "static tur_dkw %s_skcall%d_%u(tur_dkw env, tur_dkw value) { (void)env; return (tur_dkw)%s(%svalue); }\n",
                     ce->fn_cn, id, i, cfn, sc0);
                 side = "$L";
             }
@@ -13322,7 +13324,7 @@ static void emit_cloneable(CE *ce, const CTerm *t) {
                 if (has_env)
                     opv = fr->env_expr ? emit_cloneable_direct(ce, fr->env_expr)
                                        : atom_str(ce, &fr->operand);
-                ce_line(ce, "%s = dk_frame(%s_skcall%d_%u, (intptr_t)(%s), %s);",
+                ce_line(ce, "%s = dk_frame(%s_skcall%d_%u, (tur_dkw)(%s), %s);",
                         dv, ce->fn_cn, id, i, opv ? opv : "0", dv);
                 free(opv);
             } else {
@@ -13331,7 +13333,7 @@ static void emit_cloneable(CE *ce, const CTerm *t) {
                  * frame env, serialized inline by the shared marshaler. */
                 char *opv = fr->env_expr ? emit_cloneable_direct(ce, fr->env_expr)
                                          : atom_str(ce, &fr->operand);
-                ce_line(ce, "%s = dk_frame(__sk_frame_for_tag(%d), (intptr_t)(%s), %s);",
+                ce_line(ce, "%s = dk_frame(__sk_frame_for_tag(%d), (tur_dkw)(%s), %s);",
                         dv, sk_tag_for_frame(fr), opv, dv);
                 free(opv);
             }
@@ -13351,7 +13353,7 @@ static void emit_cloneable(CE *ce, const CTerm *t) {
             return;
         }
         char *senv = emit_cl_shift_env(ce, t, rfn);
-        ce_line(ce, "%s = dk_shift(1, %s, (intptr_t)(%s), %s);", dv, bodyfn, senv, dv);
+        ce_line(ce, "%s = dk_shift(1, %s, (tur_dkw)(%s), %s);", dv, bodyfn, senv, dv);
         ce_line(ce, "%s = (%s)dk_run(%s, 0);", xn,
                 binder_ctype_full(ce->ctx, t->as.cloneable.x.ty, t->as.cloneable.x.type), dv);
         ce_line(ce, "dk_free(%s);", dv);
@@ -13376,7 +13378,7 @@ static void emit_cloneable(CE *ce, const CTerm *t) {
                 if (fr->ignore_value)
                     /* 0-arg ignore-value tail: run f() regardless of resume value. */
                     buf_printf(ce->helpers,
-                        "static intptr_t %s(intptr_t env, intptr_t value) { (void)env; (void)value; return (intptr_t)%s(); }\n",
+                        "static tur_dkw %s(tur_dkw env, tur_dkw value) { (void)env; (void)value; return (tur_dkw)%s(); }\n",
                         ctxfn, cfn);
                 else if (two_arg) {
                     /* 2-arg call: apply f to (value, env) in source order (env =
@@ -13411,7 +13413,7 @@ static void emit_cloneable(CE *ce, const CTerm *t) {
                         cc_cast_for_param(ce, fr->call_fn, 1, c1, sizeof c1);
                     }
                     buf_printf(ce->helpers,
-                        "static intptr_t %s(intptr_t env, intptr_t value) { return (intptr_t)%s(%s%s, %s%s); }\n",
+                        "static tur_dkw %s(tur_dkw env, tur_dkw value) { return (tur_dkw)%s(%s%s, %s%s); }\n",
                         ctxfn, cfn, c0, a0, c1, a1);
                     /* E3a: a CONSUMING rc frame drops its rc arg once per call, so
                      * a multi-shot resume needs its own +1.  Emit the env_clone glue
@@ -13420,7 +13422,7 @@ static void emit_cloneable(CE *ce, const CTerm *t) {
                      * released once by the owner's scope-exit drop). */
                     if (cloneable_frame_consumes_rc(fr))
                         buf_printf(ce->helpers,
-                            "static intptr_t %s_envclone(intptr_t e) { "
+                            "static tur_dkw %s_envclone(tur_dkw e) { "
                             "rc_strong_increment((RcControlBlock *)(intptr_t)e); return e; }\n",
                             ctxfn);
                     else if (cloneable_frame_consumes_carrier(fr)) {
@@ -13468,9 +13470,9 @@ static void emit_cloneable(CE *ce, const CTerm *t) {
                         }
                         buf_putc(&incs, '\0');
                         buf_printf(ce->helpers,
-                            "static intptr_t %s_envclone(intptr_t e) { "
+                            "static tur_dkw %s_envclone(tur_dkw e) { "
                             "%s *__c = (%s *)malloc(sizeof(%s)); "
-                            "*__c = *(%s *)(intptr_t)e; %sreturn (intptr_t)__c; }\n",
+                            "*__c = *(%s *)(intptr_t)e; %sreturn (tur_dkw)__c; }\n",
                             ctxfn, hdr, hdr, hdr, hdr, incs.data ? incs.data : "");
                         buf_free(&incs);
                     }
@@ -13500,7 +13502,7 @@ static void emit_cloneable(CE *ce, const CTerm *t) {
                         }
                         buf_putc(&incs, '\0');
                         buf_printf(ce->helpers,
-                            "static intptr_t %s_envclone(intptr_t e) { %sreturn e; }\n",
+                            "static tur_dkw %s_envclone(tur_dkw e) { %sreturn e; }\n",
                             ctxfn, incs.data ? incs.data : "");
                         buf_free(&incs);
                     }
@@ -13509,13 +13511,13 @@ static void emit_cloneable(CE *ce, const CTerm *t) {
                     char sc0[192];
                     cc_cast_for_param(ce, fr->call_fn, 0, sc0, sizeof sc0);
                     buf_printf(ce->helpers,
-                        "static intptr_t %s(intptr_t env, intptr_t value) { (void)env; return (intptr_t)%s(%svalue); }\n",
+                        "static tur_dkw %s(tur_dkw env, tur_dkw value) { (void)env; return (tur_dkw)%s(%svalue); }\n",
                         ctxfn, cfn, sc0);
                 }
                 free(cfn);
             } else {
                 buf_printf(ce->helpers,
-                    "static intptr_t %s(intptr_t env, intptr_t value) { return %s; }\n",
+                    "static tur_dkw %s(tur_dkw env, tur_dkw value) { return %s; }\n",
                     ctxfn, cloneable_frame_expr(fr->op, fr->hole_left));
             }
         }
@@ -13564,14 +13566,14 @@ static void emit_cloneable(CE *ce, const CTerm *t) {
              * A borrow / scalar / aggregate frame stays a plain dk_frame. */
             if (cloneable_frame_consumes_rc(fr) || cloneable_frame_consumes_carrier(fr)
                 || cloneable_frame_consumes_aggregate(fr))
-                ce_line(ce, "%s = dk_frame_owning(%s, (intptr_t)(%s), %s_envclone, 0, %s);",
+                ce_line(ce, "%s = dk_frame_owning(%s, (tur_dkw)(%s), %s_envclone, 0, %s);",
                         dv, ctxfn, opv, ctxfn, dv);
             else
-                ce_line(ce, "%s = dk_frame(%s, (intptr_t)(%s), %s);", dv, ctxfn, opv, dv);
+                ce_line(ce, "%s = dk_frame(%s, (tur_dkw)(%s), %s);", dv, ctxfn, opv, dv);
             free(opv);
         }
         char *senv = emit_cl_shift_env(ce, t, rfn);
-        ce_line(ce, "%s = dk_shift(1, %s, (intptr_t)(%s), %s);", dv, bodyfn, senv, dv);
+        ce_line(ce, "%s = dk_shift(1, %s, (tur_dkw)(%s), %s);", dv, bodyfn, senv, dv);
         ce_line(ce, "%s = (%s)dk_run(%s, 0);", xn,
                 binder_ctype_full(ce->ctx, t->as.cloneable.x.ty, t->as.cloneable.x.type), dv);
         ce_line(ce, "dk_free(%s);", dv);
@@ -13929,7 +13931,7 @@ static void emit_perform(CE *ce, const CTerm *t) {
          * slot_load(consume=false) and shared read-only across a multi-shot
          * resume, so it is never freed at a load site; reap it at the outermost
          * entry boundary (docs/archive/cps-effect-perform-carrier-leak.md). */
-        ce_line(ce, "__dk_reap_ptr((intptr_t)%s);", av);
+        ce_line(ce, "__dk_reap_ptr((tur_dkw)%s);", av);
         for (uint32_t i = 0; i < t->as.perform.n; i++) {
             char *ai = atom_str(ce, &t->as.perform.args[i]);
             char *si = slot_store_reap(ce->ctx, t->as.perform.args[i].ty,
@@ -13938,7 +13940,7 @@ static void emit_perform(CE *ce, const CTerm *t) {
             free(si); free(ai);
         }
         Buf sb; buf_init(&sb);
-        buf_printf(&sb, "(intptr_t)%s", av);
+        buf_printf(&sb, "(tur_dkw)%s", av);
         buf_putc(&sb, '\0');
         sa = strdup(sb.data); buf_free(&sb);
     } else {
@@ -13990,7 +13992,7 @@ static void emit_perform(CE *ce, const CTerm *t) {
             }
             /* Shared read-only across multi-shot resumes; reaped at the outermost
              * entry boundary (docs/archive/cps-delimited-dk-node-leak.md). */
-            ce_line(ce, "__dk_reap_ptr((intptr_t)%s);", envv);
+            ce_line(ce, "__dk_reap_ptr((tur_dkw)%s);", envv);
             /* The perform continuation frame is spliced onto cur_k; dk_perform
              * copies the captured range and never frees the node we hand it, so it
              * must be reclaimed single-node (dk_free would walk into cur_k).  A
@@ -14001,7 +14003,7 @@ static void emit_perform(CE *ce, const CTerm *t) {
              * boundary (__dk_reap_node: kind=0, a bare free that does not walk into
              * cur_k) -- reached on both the normal-return and the tail-resume-yield
              * paths -- exactly like the Track-B resume-frame sibling below. */
-            ce_line(ce, "return dk_perform(%d, %s, %s, %s__dk_reap_node(dk_env_sized(dk_frame_join(%s, (intptr_t)%s, %s), sizeof(%s_env)))%s);",
+            ce_line(ce, "return dk_perform(%d, %s, %s, %s__dk_reap_node(dk_env_sized(dk_frame_join(%s, (tur_dkw)%s, %s), sizeof(%s_env)))%s);",
                     tag, en, sa, uw, pname, envv, ce->cur_k, pname, uwc);
         } else {
             ce_line(ce, "return dk_perform(%d, %s, %s, %s__dk_reap_node(dk_frame_join(%s, 0, %s))%s);",
@@ -14107,9 +14109,9 @@ static void emit_await(CE *ce, const CTerm *t) {
     if (await_cont_trivial(t)) {
         ce_line(ce, "if (__tur_await_ready((void *)(%s))) return dk_run(%s, __tur_await_value((void *)(%s)));",
                 fsa, ce->cur_k, fsa);
-        ce_line(ce, "DK *__aws = __dk_reap_node(dk_shift(DK_ROOT_TAG, __tur_await_body, (intptr_t)%s, %s));",
+        ce_line(ce, "DK *__aws = __dk_reap_node(dk_shift(DK_ROOT_TAG, __tur_await_body, (tur_dkw)%s, %s));",
                 fsa, ce->cur_k);
-        ce_line(ce, "intptr_t __awq = dk_run(__aws, 0);");
+        ce_line(ce, "tur_dkw __awq = dk_run(__aws, 0);");
         ce_line(ce, "__dk_await_release(__aws, NULL, __tur_future_pending((void *)(%s)));", fsa);
         ce_line(ce, "return __awq;");
     } else if (perform_body_ok(t->as.await.body)) {
@@ -14143,24 +14145,24 @@ static void emit_await(CE *ce, const CTerm *t) {
                 free(fe);
                 free(cn);
             }
-            ce_line(ce, "__dk_reap_ptr((intptr_t)%s);", envv);
+            ce_line(ce, "__dk_reap_ptr((tur_dkw)%s);", envv);
         }
         ce_line(ce, "if (__awok) {");
-        ce_line(ce, "    intptr_t __awr = %s((intptr_t)%s, __tur_await_value((void *)(%s)));",
+        ce_line(ce, "    tur_dkw __awr = %s((tur_dkw)%s, __tur_await_value((void *)(%s)));",
                 pname, envv, fsa);
         ce_line(ce, "    if (tur_panicking) { DKCaught __pcc = __dk_panic_catch(%s); "
                     "if (__pcc.k) return dk_run(__pcc.k, __pcc.err); return 0; }", ce->cur_k);
         ce_line(ce, "    return dk_run(%s, __awr);", ce->cur_k);
         ce_line(ce, "}");
         if (caps)
-            ce_line(ce, "DK *__awf = %s__dk_reap_node(dk_env_sized(dk_frame(%s, (intptr_t)%s, %s), sizeof(%s_env)))%s;",
+            ce_line(ce, "DK *__awf = %s__dk_reap_node(dk_env_sized(dk_frame(%s, (tur_dkw)%s, %s), sizeof(%s_env)))%s;",
                     uw, pname, envv, ce->cur_k, pname, uwc);
         else
-            ce_line(ce, "DK *__awf = %s__dk_reap_node(dk_frame(%s, (intptr_t)%s, %s))%s;",
+            ce_line(ce, "DK *__awf = %s__dk_reap_node(dk_frame(%s, (tur_dkw)%s, %s))%s;",
                     uw, pname, envv, ce->cur_k, uwc);
-        ce_line(ce, "DK *__aws = __dk_reap_node(dk_shift(DK_ROOT_TAG, __tur_await_body, (intptr_t)%s, __awf));",
+        ce_line(ce, "DK *__aws = __dk_reap_node(dk_shift(DK_ROOT_TAG, __tur_await_body, (tur_dkw)%s, __awf));",
                 fsa);
-        ce_line(ce, "intptr_t __awq = dk_run(__aws, 0);");
+        ce_line(ce, "tur_dkw __awq = dk_run(__aws, 0);");
         ce_line(ce, "__dk_await_release(__aws, __awf, __tur_future_pending((void *)(%s)));", fsa);
         ce_line(ce, "return __awq;");
     } else {
@@ -14203,9 +14205,9 @@ static void emit_await(CE *ce, const CTerm *t) {
         else
             ce_line(ce, "DK *__awf = %s__dk_reap_node(dk_frame_resume_borrow(%s, %s, %s))%s;",
                     uw, aname, envexpr, ce->cur_k, uwc);
-        ce_line(ce, "DK *__aws = __dk_reap_node(dk_shift(DK_ROOT_TAG, __tur_await_body, (intptr_t)%s, __awf));",
+        ce_line(ce, "DK *__aws = __dk_reap_node(dk_shift(DK_ROOT_TAG, __tur_await_body, (tur_dkw)%s, __awf));",
                 fsa);
-        ce_line(ce, "intptr_t __awq = dk_run(__aws, 0);");
+        ce_line(ce, "tur_dkw __awq = dk_run(__aws, 0);");
         ce_line(ce, "__dk_await_release(__aws, __awf, __tur_future_pending((void *)(%s)));", fsa);
         ce_line(ce, "return __awq;");
         free(envexpr);
@@ -14240,7 +14242,7 @@ static void emit_resume(CE *ce, const CTerm *t) {
         }
         buf_putc(&site, '"'); buf_putc(&site, '\0');
         Buf inv; buf_init(&inv);
-        buf_printf(&inv, "__dk_discontinue((DK *)(%s), %d, (intptr_t)(%s), %s, %u)",
+        buf_printf(&inv, "__dk_discontinue((DK *)(%s), %d, (tur_dkw)(%s), %s, %u)",
                    kk, t->as.resume.raise_type, sv, site.data, sp.line);
         buf_putc(&inv, '\0');
         char *ld = slot_load(ce->ctx, t->as.resume.x.ty, t->as.resume.x.type, inv.data, false);
@@ -14267,7 +14269,7 @@ static void emit_resume(CE *ce, const CTerm *t) {
         && t->as.resume.k.var->cont_is_wrapper) {
         char *sv = slot_store_reap(ce->ctx, t->as.resume.v.ty, t->as.resume.v.type, vv);
         Buf inv; buf_init(&inv);
-        buf_printf(&inv, "__dk_resume_word((intptr_t)(%s), %s)", kk, sv);
+        buf_printf(&inv, "__dk_resume_word((tur_dkw)(%s), %s)", kk, sv);
         buf_putc(&inv, '\0');
         char *ld = slot_load(ce->ctx, t->as.resume.x.ty, t->as.resume.x.type, inv.data, false);
         char *bn = cvar_cname(ce, t->as.resume.x);
@@ -14932,7 +14934,7 @@ static bool ctype_is_scalar(const char *c) {
     if (c[L - 1] == '*') return true;
     static const char *const k[] = {
         "int64_t", "double", "float", "bool", "int8_t", "int16_t", "int32_t",
-        "uint8_t", "uint16_t", "uint32_t", "uint64_t", "intptr_t",
+        "uint8_t", "uint16_t", "uint32_t", "uint64_t", "tur_dkw",
     };
     for (size_t i = 0; i < sizeof k / sizeof k[0]; i++)
         if (strcmp(c, k[i]) == 0) return true;
@@ -15900,7 +15902,7 @@ entry_wrapper_done:
                 if (keep)
                     buf_printf(file, "a%u, ", i);
                 else if (pc[pL - 1] == '*')
-                    buf_printf(file, "(%s)(intptr_t)a%u, ", pc, i);
+                    buf_printf(file, "(%s)(tur_dkw)a%u, ", pc, i);
                 else
                     buf_printf(file, "(%s)a%u, ", pc, i);
             }
@@ -15908,7 +15910,7 @@ entry_wrapper_done:
         }
         buf_printf(file,
             "static void __tur_e2reg_%s(void) {\n"
-            "    __tur_cps_register((intptr_t)%s, (__tur_cps_fn)%s%s);\n"
+            "    __tur_cps_register((tur_dkw)%s, (__tur_cps_fn)%s%s);\n"
             "}\n", cn, cn, cn, (e2_ok && e2_adapt) ? "__e2w" : "__cps");
         /* S1b: the direct->CPS registry must be populated before a threaded
          * call site looks up its CPS variant.  A dropped constructor here was

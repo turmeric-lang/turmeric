@@ -132,8 +132,17 @@ __thread void *tur_tls_dk_driver = 0;
 void **tur_tls_dk_driver_ptr (void) { return &tur_tls_dk_driver; }
 __thread void *tur_tls_dk_resume_chain = 0;
 void **tur_tls_dk_resume_chain_ptr (void) { return &tur_tls_dk_resume_chain; }
-__thread intptr_t tur_tls_dk_resume_val = 0;
-intptr_t *tur_tls_dk_resume_val_ptr (void) { return &tur_tls_dk_resume_val; }
+/* The DK machine's word, as emit_tur_jmp_buf_prelude defines it: int64_t
+ * where intptr_t is narrower (wasm32), intptr_t elsewhere.  Spelled by that
+ * name because tools/gen-runtime-split.py copies this storage's declaration
+ * into the emitted program, which has the typedef. */
+#if INTPTR_MAX < INT64_MAX
+typedef int64_t tur_dkw;
+#else
+typedef intptr_t tur_dkw;
+#endif
+__thread tur_dkw tur_tls_dk_resume_val = 0;
+tur_dkw *tur_tls_dk_resume_val_ptr (void) { return &tur_tls_dk_resume_val; }
 __thread void *tur_tls_dk_pend_perform = 0;
 void **tur_tls_dk_pend_perform_ptr (void) { return &tur_tls_dk_pend_perform; }
 
