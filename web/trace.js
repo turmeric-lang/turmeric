@@ -12,21 +12,25 @@
 import { STORAGE_KEYS, safeWrite } from './storage.js';
 import { escapeHtml } from './html.js';
 import { getEditor, getMonaco } from './editor-ref.js';
+import { WASM_STATE, wasmState, hasWorker, send } from './eval-client.js';
+import { consoleLog, setConsoleLog, appendToConsole } from './console.js';
+import { showStatus, updateExecTime } from './status.js';
+import { parseLangDirective } from './lang-picker.js';
 
-// What the timeline borrows from main.js, which owns the eval worker and the
-// REPL session. Set by configureTrace() at load.
+// What the timeline borrows from main.js, which owns the REPL session and the
+// Run rule. Set by configureTrace() at load.
 let deps = {
-    isReady: () => false,                        // the session can take a call
-    workerCall: () => Promise.resolve(null),     // one trace-* request
     resetSession: () => Promise.resolve(false),  // a fresh env to record in
-    getConsoleLog: () => [],
-    setConsoleLog: () => {},
-    showStatus: () => {},
-    appendToConsole: () => {},
-    updateExecTime: () => {},
-    parseLangDirective: () => ({ lang: null }),
-    definesMainEntry: () => false,
+    definesMainEntry: () => false,               // Run's "has a main" test
 };
+
+/** One trace-* request to the eval Worker; null when the session is not up. */
+function traceWorkerCall(message) {
+    if (!hasWorker() || wasmState() !== WASM_STATE.READY) return Promise.resolve(null);
+    return new Promise((resolve, reject) => {
+        send(message, { resolve, reject });
+    });
+}
 
 /** Hand the timeline what it borrows from main.js. Called once, at load. */
 export function configureTrace(d) {
@@ -66,20 +70,20 @@ export const traceState = {
  * Record the editor's program and open the timeline.
  */
 export async function traceCode() {
-    if (!deps.isReady()) {
-        deps.showStatus('WASM not ready', 'error');
+    if (wasmState() !== WASM_STATE.READY) {
+        showStatus('WASM not ready', 'error');
         return;
     }
     const code = getEditor().getValue();
     if (!code.trim()) {
-        deps.appendToConsole('<span class="console-error">Error: No code to trace</span>');
+        appendToConsole('<span class="console-error">Error: No code to trace</span>');
         return;
     }
 
-    deps.showStatus('Recording...', 'info');
+    showStatus('Recording...', 'info');
     if (!await deps.resetSession()) {
-        deps.appendToConsole('<span class="console-error">Trace failed: could not reset the session</span>');
-        deps.showStatus('Trace failed', 'error');
+        appendToConsole('<span class="console-error">Trace failed: could not reset the session</span>');
+        showStatus('Trace failed', 'error');
         return;
     }
 
@@ -87,14 +91,14 @@ export async function traceCode() {
     // Forwarded for the same reason Run forwards it: turi_eval_typed strips an
     // inline #lang itself, but set_lang is what puts the session in the
     // program's base dialect.
-    const { lang } = deps.parseLangDirective(code);
+    const { lang } = parseLangDirective(code);
 
     // hasMain is the page's existing Run rule, not a second one: a program with
     // a top-level `main` loads its forms and then runs `(main)`, and the
     // recording covers the run rather than the definitions.
     // A stopped recording (the watchdog, or Stop) rejects; report it the way
     // any other failed recording is reported.
-    const res = await deps.workerCall({
+    const res = await traceWorkerCall({
         type: 'trace-run',
         input: code,
         maxSteps: TRACE_MAX_STEPS,
@@ -106,17 +110,17 @@ export async function traceCode() {
         const why = res && res.steps === -2
             ? 'this program declares a main entry point but did not define one'
             : (res && res.error) || 'the program did not load';
-        deps.appendToConsole(`<span class="console-error">Trace failed: ${escapeHtml(why)}</span>`);
-        deps.showStatus('Trace failed', 'error');
+        appendToConsole(`<span class="console-error">Trace failed: ${escapeHtml(why)}</span>`);
+        showStatus('Trace failed', 'error');
         return;
     }
     if (res.steps === 0) {
-        deps.appendToConsole('<span class="console-error">Trace recorded nothing -- the program ran no interpreted steps.</span>');
-        deps.showStatus('Ready', 'success');
+        appendToConsole('<span class="console-error">Trace recorded nothing -- the program ran no interpreted steps.</span>');
+        showStatus('Ready', 'success');
         return;
     }
 
-    deps.updateExecTime(performance.now() - started);
+    updateExecTime(performance.now() - started);
     traceState.stats = res.stats || null;
     traceState.steps = res.steps;
     traceState.baseLine = (res.stats && res.stats.baseLine) || 1;
@@ -134,7 +138,7 @@ function traceOpen() {
         // what the OUTPUT records exist for.
         const consoleEl = document.getElementById('console');
         traceState.savedConsoleHTML = consoleEl ? consoleEl.innerHTML : '';
-        traceState.savedConsoleLog = deps.getConsoleLog().slice();
+        traceState.savedConsoleLog = consoleLog.slice();
     }
     traceState.active = true;
     panel.hidden = false;
@@ -179,7 +183,7 @@ export function traceClose() {
             consoleEl.scrollTop = consoleEl.scrollHeight;
         }
         if (traceState.savedConsoleLog) {
-            deps.setConsoleLog(traceState.savedConsoleLog);
+            setConsoleLog(traceState.savedConsoleLog);
             safeWrite(STORAGE_KEYS.consol, traceState.savedConsoleLog);
         }
     }
@@ -189,7 +193,7 @@ export function traceClose() {
     traceState.frames = [];
     // Hand the megabyte back rather than letting it sit in WASM memory for the
     // rest of the session.
-    deps.workerCall({ type: 'trace-release' });
+    traceWorkerCall({ type: 'trace-release' });
 }
 
 /**
@@ -205,7 +209,7 @@ export async function traceSeek(index) {
         return;
     }
     traceState.seekPending = true;
-    const state = await deps.workerCall({
+    const state = await traceWorkerCall({
         type: 'trace-seek',
         index: target,
         // At the last step, ask for every OUTPUT record rather than the ones
@@ -354,7 +358,7 @@ function traceHighlight(line, frame) {
 async function traceJumpToLine(editorLine, dir) {
     if (!traceState.active) return;
     const absolute = editorLine + traceState.baseLine - 1;
-    const found = await deps.workerCall({
+    const found = await traceWorkerCall({
         type: 'trace-find-line',
         dir,
         file: '',          // "" matches any file; the tab is the only source here
@@ -362,16 +366,16 @@ async function traceJumpToLine(editorLine, dir) {
     });
     if (!found) return;
     if (!found.hit) {
-        deps.showStatus(`No ${dir > 0 ? 'later' : 'earlier'} step on line ${editorLine}`, 'info');
+        showStatus(`No ${dir > 0 ? 'later' : 'earlier'} step on line ${editorLine}`, 'info');
         return;
     }
     await traceSeek(found.index);
 }
 
 async function traceDownload() {
-    const buf = await deps.workerCall({ type: 'trace-download' });
+    const buf = await traceWorkerCall({ type: 'trace-download' });
     if (!buf) {
-        deps.showStatus('Nothing to download', 'error');
+        showStatus('Nothing to download', 'error');
         return;
     }
     const blob = new Blob([buf], { type: 'application/octet-stream' });

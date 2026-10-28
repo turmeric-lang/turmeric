@@ -5,17 +5,16 @@
 
 import { createLspClient } from './lsp-client.js';
 import { encodeShareCode, decodeShareCode } from './share-codec.js';
-import { STORAGE_KEYS, safeRead, safeWrite, isTutorialMode, debounce, resetWorkspace } from './storage.js';
+import { STORAGE_KEYS, safeWrite, isTutorialMode, debounce, resetWorkspace } from './storage.js';
 import { EXAMPLES } from './examples.js';
 import { escapeHtml } from './html.js';
-import { consoleRuns, renderConsoleRuns } from './console-runs.js';
 import { provideEditor } from './editor-ref.js';
 import { syncMinimapMenuItem, toggleMinimap, initMinimap } from './minimap.js';
 import { initSplitHandle } from './split-handle.js';
 import { initInstallAffordances } from './pwa-install.js';
 import { initSymbolsMenu } from './outline.js';
 import { setHashParam, getHashParam } from './hash-params.js';
-import { configureDocsPane, docsPaneState, loadDocsIndex, docsEntryFor, parseDocsRef, showDocsPage, openDocsPane, closeDocsPane, docsPaneIsOpen, initDocsPane, syncDocsPaneFromHash } from './docs-pane.js';
+import { docsPaneState, loadDocsIndex, docsEntryFor, parseDocsRef, showDocsPage, openDocsPane, closeDocsPane, docsPaneIsOpen, initDocsPane, syncDocsPaneFromHash } from './docs-pane.js';
 import { configureTrace, traceState, traceCode, traceClose, traceSeek, traceInstallHandlers, traceInstallGutterHandler } from './trace.js';
 import { monacoThemeName } from './editor-theme.js';
 import { configureMonaco } from './editor-language.js';
@@ -27,6 +26,8 @@ import { parseLangDirective, fetchLangRegistry, reconcileLangPicker, initLangPic
 import { refreshBuildStamp, forceUpdatePWA } from './pwa-update.js';
 import { docNames, fetchDocNames, wasmDocLookup, wasmTypeOf, wasmExplain, showDocPanel, hideDocPanel, maybeShowDoc } from './doc-panel.js';
 import { tabs, activeId, lastRunByTab, genTabId, tabsSnapshot, persistTabs, currentTab, ensureModel, captureActiveTabState, switchTab, createTab, closeTab, sanitizeTabName, renameTab, applyReadOnlyState, openReadOnlyTab, jumpStack, pushJumpOrigin, jumpBack, renderJumpBack, ensureAllTabModels, notifyTabsChanged, renderTabs, hydrateTabs, configureTabs, useTutorialTab, replaceTabs } from './tabs.js';
+import { showStatus, updateCursorPosition, updateExecTime } from './status.js';
+import { hydrateConsole, appendToConsole, clearConsole, copyConsole } from './console.js';
 
 // ============================================================================
 // WASM Module State
@@ -68,35 +69,6 @@ println "Hello, Turmeric!"
     EXECUTION_TIMEOUT: 30000,
     MAX_OUTPUT_LENGTH: 10000,
 };
-
-// ============================================================================
-// Local State Persistence
-// ============================================================================
-
-const MAX_CONSOLE_LINES = 200;
-
-let consoleLog = [];
-
-// The console transcript is stored as data; see console-runs.js.
-
-function hydrateConsole() {
-    // The HTML-era transcript is dropped, not rendered: there is no safe way
-    // to read markup back, and a console history is not worth a parser.
-    try { localStorage.removeItem(STORAGE_KEYS.legacyConsole); } catch {}
-    const saved = safeRead(STORAGE_KEYS.consol);
-    if (!Array.isArray(saved) || saved.length === 0) return;
-    const consoleEl = document.getElementById('console');
-    if (!consoleEl) return;
-    const lines = saved.filter(Array.isArray).slice(-MAX_CONSOLE_LINES);
-    if (lines.length === 0) return;
-    consoleEl.textContent = '';
-    for (const line of lines) {
-        renderConsoleRuns(line, consoleEl);
-        consoleEl.appendChild(document.createElement('br'));
-    }
-    consoleLog = lines;
-    consoleEl.scrollTop = consoleEl.scrollHeight;
-}
 
 // ============================================================================
 // Language server (try-turmeric-lsp-plan)
@@ -209,108 +181,6 @@ function startLspClient() {
         if (ok) notifyTabsChanged();
         return ok;
     });
-}
-
-// ============================================================================
-// Utility Functions
-// ============================================================================
-
-/**
- * Append text to the console
- */
-function appendToConsole(html) {
-    // `html` is this file's own markup, with every dynamic part escaped at the
-    // call site. It is parsed once, into a template, so the line that is shown
-    // and the record that is persisted (consoleRuns) are the same nodes.
-    const consoleEl = document.getElementById('console');
-    const tpl = document.createElement('template');
-    tpl.innerHTML = html;
-    const runs = consoleRuns(tpl.content.childNodes);
-    consoleEl.appendChild(tpl.content);
-    consoleEl.appendChild(document.createElement('br'));
-    consoleEl.scrollTop = consoleEl.scrollHeight;
-    consoleLog.push(runs);
-    if (consoleLog.length > MAX_CONSOLE_LINES) {
-        consoleLog.splice(0, consoleLog.length - MAX_CONSOLE_LINES);
-    }
-    schedulePersistConsole();
-}
-
-const schedulePersistConsole = debounce(() => {
-    safeWrite(STORAGE_KEYS.consol, consoleLog);
-}, 500);
-
-/**
- * Clear the console
- */
-function clearConsole() {
-    const consoleEl = document.getElementById('console');
-    consoleEl.innerHTML = '';
-    consoleLog = [];
-    safeWrite(STORAGE_KEYS.consol, []);
-}
-
-/**
- * Copy console content to clipboard
- */
-async function copyConsole() {
-    const consoleEl = document.getElementById('console');
-    const text = consoleEl.textContent;
-    try {
-        await navigator.clipboard.writeText(text);
-        showStatus('Console copied to clipboard!', 'success');
-    } catch (e) {
-        showStatus('Failed to copy console', 'error');
-    }
-}
-
-/**
- * Show status message
- */
-function showStatus(message, type = 'info') {
-    const statusEl = document.getElementById('wasm-status-text');
-    const dotEl = document.querySelector('.dot');
-    
-    statusEl.textContent = message;
-    
-    if (dotEl) {
-        dotEl.className = 'dot';
-        if (type === 'success') dotEl.classList.add('online');
-        else if (type === 'error') dotEl.classList.add('offline');
-        else dotEl.classList.add('loading');
-    }
-    
-    // Reset after a delay
-    setTimeout(() => {
-        if (wasmState() === WASM_STATE.READY) {
-            statusEl.textContent = 'Ready';
-            if (dotEl) {
-                dotEl.className = 'dot online';
-            }
-        }
-    }, 3000);
-}
-
-/**
- * Update cursor position display
- */
-function updateCursorPosition() {
-    if (!editor) return;
-    const cursor = editor.getPosition();
-    const posEl = document.getElementById('cursor-pos');
-    if (posEl) {
-        posEl.textContent = `Line ${cursor.lineNumber}, Column ${cursor.column}`;
-    }
-}
-
-/**
- * Update execution time display
- */
-function updateExecTime(timeMs) {
-    const timeEl = document.getElementById('exec-time');
-    if (timeEl) {
-        timeEl.textContent = timeMs < 1 ? 'Ready' : `${timeMs.toFixed(0)}ms`;
-    }
 }
 
 /**
@@ -1905,7 +1775,7 @@ function initEventListeners() {
 
     // REPL input
     initReplInput();
-    initConsoleHover({ getDocNames: () => docNames, wasmDocLookup });
+    initConsoleHover();
 
     // Horizontal drag-to-scroll on the editor header (mobile / narrow widths)
     initHScrollDrag();
@@ -2103,13 +1973,6 @@ async function dispatchReplMetaCommand(line) {
     }
 }
 
-configureDocsPane({
-    showStatus,
-    getDocNames: () => docNames,
-    fetchDocNames,
-    wasmDocLookup,
-    showDocPanel,
-});
 document.addEventListener('DOMContentLoaded', initDocsPane);
 
 // Export for debugging
@@ -2139,15 +2002,7 @@ window.turmericApp = {
     })
 };
 
-// The trace timeline (trace.js) asks the worker for each trace-* request
-// through this, and resets the session for a recording through traceResetEnv.
-function traceWorkerCall(message) {
-    if (!hasWorker() || wasmState() !== WASM_STATE.READY) return Promise.resolve(null);
-    return new Promise((resolve, reject) => {
-        send(message, { resolve, reject });
-    });
-}
-
+// The trace timeline (trace.js) resets the session for a recording through this.
 /**
  * Reset the interpreter env for a recording, without the console-clearing and
  * status message the user-facing `:reset` does.
@@ -2176,15 +2031,7 @@ function traceResetEnv() {
 }
 
 configureTrace({
-    isReady: () => wasmState() === WASM_STATE.READY,
-    workerCall: traceWorkerCall,
     resetSession: traceResetEnv,
-    getConsoleLog: () => consoleLog,
-    setConsoleLog: (log) => { consoleLog = log; },
-    showStatus,
-    appendToConsole,
-    updateExecTime,
-    parseLangDirective,
     definesMainEntry,
 });
 

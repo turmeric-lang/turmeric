@@ -14,22 +14,8 @@ import { STORAGE_KEYS, safeRead, safeWrite, debounce, hasUrlHashCode, isTutorial
 import { escapeHtml, escapeAttr } from './html.js';
 import { setHashParam, getHashParam } from './hash-params.js';
 import { getEditor } from './editor-ref.js';
-
-// What the docs pane borrows from main.js: the status line and the doc panel
-// (D5), which share the documented-names list with the pane's search. Set by
-// configureDocsPane() before anything here runs.
-let deps = {
-    showStatus: () => {},
-    getDocNames: () => [],
-    fetchDocNames: () => {},
-    wasmDocLookup: () => Promise.resolve(null),
-    showDocPanel: () => {},
-};
-
-/** Hand the pane what it borrows from main.js. Called once, at load. */
-export function configureDocsPane(d) {
-    deps = d;
-}
+import { showStatus } from './status.js';
+import { docNames, fetchDocNames, wasmDocLookup, showDocPanel } from './doc-panel.js';
 
 /** Where the pane is, for window.turmericApp.getState(). */
 export function docsPaneState() {
@@ -468,7 +454,7 @@ function renderDocsSearch(query) {
         .sort((a, b) => b.score - a.score)
         .slice(0, 40);
 
-    const symbols = (deps.getDocNames() || [])
+    const symbols = (docNames || [])
         .filter(d => d.name.toLowerCase().includes(q))
         .slice(0, 25);
 
@@ -625,7 +611,7 @@ function loadSnippetIntoEditor(source) {
     editor.setValue(source.replace(/\s+$/, '') + '\n');
     closeDocsPane();
     editor.focus();
-    deps.showStatus('Snippet loaded into the editor', 'info');
+    showStatus('Snippet loaded into the editor', 'info');
 }
 
 /**
@@ -675,7 +661,7 @@ export function openDocsPane(refWithAnchor) {
 
     // The symbol half of the pane's search comes from doc-names.json; make
     // sure it is on its way even if the WASM boot has not got there yet.
-    deps.fetchDocNames();
+    fetchDocNames();
 
     loadDocsIndex().then(index => {
         const version = document.getElementById('docs-version');
@@ -782,9 +768,9 @@ function initDocsLinkInterception() {
         if (link.dataset.docSymbol) {
             e.preventDefault();
             const name = link.dataset.docSymbol;
-            const entry = (deps.getDocNames() || []).find(d => d.name === name) || null;
+            const entry = (docNames || []).find(d => d.name === name) || null;
             closeDocsPane();
-            deps.wasmDocLookup(name).then(text => deps.showDocPanel(name, text, entry));
+            wasmDocLookup(name).then(text => showDocPanel(name, text, entry));
             return;
         }
 
