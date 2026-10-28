@@ -1,0 +1,51 @@
+;; numvec-drop-no-leak: every numeric array is `^affine` with a Drop instance,
+;; so the scope that binds one frees its header and data block exactly once --
+;; on the plain path, for an early `-free`, when it is moved out of a function
+;; (returned), and for the temporaries that `-of`, `-copy` and the Vec
+;; conversions mint.  tests/run-leak-check.sh runs this under LeakSanitizer
+;; (requires.leak-check); the printed totals prove the arrays were really live.
+(load "stdlib/numvec.tur")
+
+;; the scope that binds `a` owns it; nothing else frees it
+(defn plain [] : float
+  (let [a (f64vec-new 1000 7.1)]
+    (f64vec-ref a 999)))
+
+;; consumed early: the explicit free replaces the scope-exit drop
+(defn early [] : int
+  (let [a (u8vec-new 4096 (as uint8 3))
+        n (u8vec-len a)]
+    (u8vec-free a)
+    n))
+
+;; moved out: the caller inherits the duty
+(defn make [] : I32Vec
+  (let [a (i32vec-of (as int32 4) (as int32 5) (as int32 6))]
+    a))
+
+(defn use-made [] : int
+  (let [a (make)]
+    (as int (i32vec-ref a 2))))
+
+;; copies and conversions mint independent arrays, each dropped on its own
+(defn copies [] : float
+  (let [a (f32vec-of (:: 1.5 float32) (:: 3.25 float32))
+        b (f32vec-copy a)
+        v (f32vec->vec b)
+        c (vec->f32vec v)]
+    (vec-free v)
+    (as float (f32vec-ref c 1))))
+
+(defn loop-n [n : int acc : int] : int
+  (if (= n 0)
+    acc
+    (loop-n {n - 1} {acc + (use-made)})))
+
+(defn main [] : int
+  (println (plain))
+  (println (early))
+  (println (use-made))
+  (println (copies))
+  ;; a loop that makes and drops 200 arrays
+  (println (loop-n 200 0))
+  0)

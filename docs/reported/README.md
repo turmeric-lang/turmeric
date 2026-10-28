@@ -34,6 +34,12 @@ sentence above does not cover them. If you touch this file, check
 `ls docs/reported/` against it -- an index that silently omits a quarter of the
 directory is worse for triage than no index.
 
+## Found landing simd-and-vectorization-plan N0 (filed 2026-10-28)
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [affine-let-init-yielding-moved-local-skips-scope-drop](affine-let-init-yielding-moved-local-skips-scope-drop.md) | medium-low (leak) | `(let [a (let [t (mk)] t)] ...)` with an `^affine` Drop opaque never drops `a`; the same value bound through a call is dropped. Hid in the `-of` macros of `numvec.tur` until `run-leak-check.sh` ran |
+
 ## Found landing refined-function-types-plan F1 (filed 2026-10-28)
 
 | Report | Severity | One line |

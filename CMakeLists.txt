@@ -890,6 +890,13 @@ add_test(
   COMMAND python3 tests/check-annotation-spacing.py --selftest
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# stdlib/numvec.tur is generated (five element types over one template); a hand
+# edit to it, or to the template without a regenerate, would drift the two.
+add_test(
+  NAME tur_numvec_generated
+  COMMAND python3 tools/gen-numvec.py --check
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
 # src/driver/driver.h and commands.h are sectioned by defining file; each
 # section may declare only what its file defines (main-c-split-plan).  The
 # section grouping in emit_internal.h drifted until most of its prototypes sat

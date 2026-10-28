@@ -4,6 +4,20 @@ All notable changes to Turmeric are documented here.
 
 ## [Unreleased]
 
+### Added
+
+- **Typed numeric arrays: `F64Vec`, `F32Vec`, `I64Vec`, `I32Vec`, `U8Vec`**
+  (`(load "stdlib/numvec.tur")`; phase N0 of
+  `docs/upcoming/simd-and-vectorization-plan.md`). Fixed-length, unboxed,
+  32-byte-aligned arrays of one real element width -- a `U8Vec` is a byte a
+  slot, not a word -- in the manner of Racket's `flvector`. Each has
+  `P-new`, `P-of`, `P-len`, `P-ref`, `P-set!`, `P-copy`, `P->vec`, `vec->P`
+  and `P-show` (`P` is `f64vec`, `f32vec`, `i64vec`, `i32vec`, `u8vec`).
+  An array is `^affine` with a `Drop` instance: a let-bound one is freed at
+  scope exit, and the accessors borrow it. An out-of-range index panics at the
+  caller's line on every engine, and the interpreter has native twins of every
+  body.
+
 ### Changed
 
 - **A bin-name collision no longer fails `tur install`.** When another

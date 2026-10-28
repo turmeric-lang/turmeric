@@ -1,0 +1,8 @@
+;; numvec-element-type-mismatch: each array type has its own element type; a
+;; whole number is not a float, so it cannot go into an F64Vec.
+(load "stdlib/numvec.tur")
+
+(defn main [] : int
+  (let [a (f64vec-new 4 7.1)]
+    (f64vec-set! a 0 5)
+    0))

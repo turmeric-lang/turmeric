@@ -1,0 +1,12 @@
+;; numvec-ref-out-of-bounds-panics: an index outside [0, len) panics at the
+;; CALLER's line, on both engines -- `f64vec-ref` is an inline-C body itself,
+;; not a wrapper over a raw one, so the site is the user's call and not a line
+;; in stdlib/numvec.tur (the way vec-get's is, panic-location-names-the-runtime).
+(load "stdlib/numvec.tur")
+
+(defn main [] : int
+  (let [a (f64vec-of 1.5 2.5 7.1)]
+    (println (f64vec-ref a 2))
+    (println (f64vec-ref a 3))
+    (println "unreachable")
+    0))

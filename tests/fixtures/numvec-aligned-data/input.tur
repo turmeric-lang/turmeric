@@ -1,0 +1,69 @@
+;; numvec-aligned-data: the data block of every numeric array is 32-byte
+;; aligned, so an aligned SIMD load is legal on it and gcc can skip its
+;; peeling prologue -- for every element type and for lengths that are not a
+;; multiple of the alignment.  The check reads the header
+;; { int64_t len; T *data; void *raw; } with inline-C.
+(load "stdlib/numvec.tur")
+
+(defn aligned-f64? [^borrow v : F64Vec] : int
+  ```c
+  struct { int64_t len; void *data; void *raw; } *h = (void*)(intptr_t)v;
+  return (((uintptr_t)h->data) & 31) == 0 ? 1 : 0;
+  ```)
+
+(defn check-f64 [n : int] : int
+  (let [a (f64vec-new n 7.1)]
+    (aligned-f64? a)))
+
+(defn aligned-f32? [^borrow v : F32Vec] : int
+  ```c
+  struct { int64_t len; void *data; void *raw; } *h = (void*)(intptr_t)v;
+  return (((uintptr_t)h->data) & 31) == 0 ? 1 : 0;
+  ```)
+
+(defn check-f32 [n : int] : int
+  (let [a (f32vec-new n (:: 3.25 float32))]
+    (aligned-f32? a)))
+
+(defn aligned-i64? [^borrow v : I64Vec] : int
+  ```c
+  struct { int64_t len; void *data; void *raw; } *h = (void*)(intptr_t)v;
+  return (((uintptr_t)h->data) & 31) == 0 ? 1 : 0;
+  ```)
+
+(defn check-i64 [n : int] : int
+  (let [a (i64vec-new n 1)]
+    (aligned-i64? a)))
+
+(defn aligned-i32? [^borrow v : I32Vec] : int
+  ```c
+  struct { int64_t len; void *data; void *raw; } *h = (void*)(intptr_t)v;
+  return (((uintptr_t)h->data) & 31) == 0 ? 1 : 0;
+  ```)
+
+(defn check-i32 [n : int] : int
+  (let [a (i32vec-new n (as int32 1))]
+    (aligned-i32? a)))
+
+(defn aligned-u8? [^borrow v : U8Vec] : int
+  ```c
+  struct { int64_t len; void *data; void *raw; } *h = (void*)(intptr_t)v;
+  return (((uintptr_t)h->data) & 31) == 0 ? 1 : 0;
+  ```)
+
+(defn check-u8 [n : int] : int
+  (let [a (u8vec-new n (as uint8 1))]
+    (aligned-u8? a)))
+
+(defn all-aligned [n : int] : int
+  (* (* (check-f64 n) (check-f32 n))
+     (* (* (check-i64 n) (check-i32 n)) (check-u8 n))))
+
+(defn main [] : int
+  (println (all-aligned 0))
+  (println (all-aligned 1))
+  (println (all-aligned 3))
+  (println (all-aligned 7))
+  (println (all-aligned 33))
+  (println (all-aligned 1000))
+  0)
