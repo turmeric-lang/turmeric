@@ -59,7 +59,7 @@
   /* Syntax highlight */
   --syn-kw:        #EFA030;
   --syn-str:       #D9735A;
-  --syn-cmt:       #3E3B35;
+  --syn-cmt:       #48433D;   /* = editor-palette.json dark.comment */
   --syn-type:      #7AC4B8;
   --syn-num:       #A8C98A;
   --syn-fn:        #C4A0E8;
@@ -69,7 +69,7 @@
   --syn-punc:      #5A5448;
   --syn-br1:       #EFA030;   /* rainbow brackets, by depth: the */
   --syn-br2:       #D7C94A;   /* RAINBOW_BRACKETS Monaco gets in */
-  --syn-br3:       #A8C98A;   /* web/main.js, from trowel's */
+  --syn-br3:       #A8C98A;   /* web/editor-theme.js, from trowel's */
   --syn-br4:       #7AC4B8;   /* turmeric-dark theme */
   --syn-br5:       #8AB0E8;
   --syn-br6:       #C4A0E8;

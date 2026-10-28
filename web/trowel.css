@@ -1,0 +1,198 @@
+/* ==========================================================================
+ * trowel.css — Trowel-page styles for turmeric-lang.com/trowel/
+ * ========================================================================== */
+
+/* The section type scale the home page uses (home.css); Trowel shares the
+   home page's features and getting-started layout, so it matches. */
+.section-title { font-size: clamp(36px, 4vw, 54px); }
+.section-desc { max-width: 540px; font-size: 16px; }
+.cta-title { font-size: clamp(36px, 4vw, 56px); }
+
+/* ── PAGE-SPECIFIC: TROWEL ─────────────── */
+
+/* Split hero -- copy on the left, portrait product shot on the right */
+.trowel-hero {
+  position: relative;
+  overflow: hidden;
+  padding: 150px 48px 90px;
+}
+.trowel-hero-inner {
+  max-width: 1160px;
+  margin: 0 auto;
+  display: grid;
+  grid-template-columns: 1.05fr 0.95fr;
+  gap: 64px;
+  align-items: center;
+  position: relative;
+  z-index: 1;
+}
+.trowel-hero-copy { max-width: 560px; }
+
+.trowel-hero h1 {
+  font-family: 'Space Grotesk', sans-serif;
+  font-size: clamp(38px, 5.2vw, 66px);
+  line-height: 1.08;
+  font-weight: 400;
+  letter-spacing: -0.03em;
+  color: var(--text-primary);
+  margin: 18px 0 16px;
+}
+.trowel-hero h1 em { font-style: italic; color: var(--gold-bright); }
+
+.trowel-hero .hero-desc {
+  font-size: 17px;
+  color: var(--text-sec);
+  line-height: 1.7;
+  font-weight: 300;
+  margin: 0 0 32px;
+  text-align: left;
+}
+
+.trowel-hero .hero-actions {
+  margin-bottom: 22px;
+  justify-content: flex-start;
+  flex-wrap: wrap;
+}
+
+.trowel-hero .install-hint { justify-content: flex-start; }
+
+/* Portrait product shot -- sizing only; the shadow and the spotlight that
+   separates the window from the page come from .product-shot in site.css. */
+.trowel-shot {
+  justify-self: center;
+  max-width: 460px;
+  width: 100%;
+}
+
+/* ── DOWNLOAD / PLATFORMS ──────────────── */
+.download-section {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 100px 48px 40px;
+}
+
+.dl-grid {
+  margin-top: 48px;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 48px;
+}
+
+.dl-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+.dl-card.soon { opacity: 0.62; }
+
+.dl-os {
+  font-family: 'Space Grotesk', sans-serif;
+  font-size: 21px;
+  font-weight: 500;
+  color: var(--text-primary);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.dl-glyph { font-size: 20px; opacity: 0.85; }
+.dl-note { font-size: 13.5px; color: var(--text-sec); font-weight: 300; line-height: 1.6; flex: 1; }
+
+.dl-tag {
+  align-self: flex-start;
+  font-family: 'Iosevka', monospace;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--gold-dim);
+  background: var(--gold-subtle);
+  border: 1px solid var(--gold-line);
+  border-radius: 5px;
+  padding: 3px 9px;
+}
+.dl-tag.pending { color: var(--text-dim); background: transparent; border-color: var(--border-mid); }
+
+.dl-btn {
+  align-self: flex-start;
+  margin-top: 6px;
+  font-family: 'Space Grotesk', sans-serif;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--on-gold);
+  background: var(--gold-fill);
+  border: 1px solid var(--gold-fill);
+  border-radius: 8px;
+  padding: 9px 18px;
+  text-decoration: none;
+}
+.dl-btn:hover { background: var(--gold-fill-hover); transform: translateY(-1px); }
+.dl-btn.disabled { pointer-events: none; color: var(--text-dim); background: transparent; border-color: var(--border-mid); }
+
+.dl-brew {
+  margin-top: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  font-size: 13px;
+  color: var(--text-dim);
+  flex-wrap: wrap;
+}
+
+/* ── TWO-UP: RUN+REPL / NATIVE+THEMED ──── */
+/* Two text columns side by side (code snippets removed). */
+.trowel-duo {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 96px 48px;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 80px;
+  align-items: start;
+}
+
+/* Credit line above the footer */
+.trowel-credit {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 0 48px 40px;
+  text-align: center;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+.trowel-credit a { color: var(--gold); text-decoration: none; }
+.trowel-credit a:hover { text-decoration: underline; }
+
+/* ── RESPONSIVE: TROWEL ────────────────── */
+@media (max-width: 900px) {
+  .trowel-hero { padding: 120px 24px 60px; }
+  .trowel-hero-inner {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 36px;
+    text-align: center;
+  }
+  .trowel-hero .hero-desc { text-align: center; }
+  .trowel-hero .hero-actions { justify-content: center; }
+  .trowel-hero .install-hint { justify-content: center; }
+  /* Heading, then the screenshot, then the rest of the copy: the copy box
+     dissolves so its children order against the shot as flex items. */
+  .trowel-hero-copy { display: contents; }
+  .trowel-hero h1 { order: 1; margin: 18px 0 0; }
+  .trowel-shot { order: 2; max-width: 400px; }
+  .trowel-hero .hero-desc { order: 3; max-width: 620px; margin: 0 auto; }
+  .trowel-hero .hero-actions { order: 4; }
+  .trowel-hero .install-hint { order: 5; }
+
+  .trowel-duo { grid-template-columns: 1fr; gap: 44px; padding: 60px 24px; }
+
+  .download-section { padding: 60px 24px 24px; }
+  .dl-grid { grid-template-columns: 1fr; gap: 40px; }
+  .trowel-credit { padding: 0 24px 32px; }
+}
+
+@media (max-width: 480px) {
+  .trowel-hero { padding: 100px 16px 48px; }
+  .download-section { padding: 48px 16px 16px; }
+}

@@ -1,76 +1,23 @@
 /* ==========================================================================
- * CSS Variables — Dark Spice Market
+ * styles.css — the Try page (/try/). Loaded after site.css, so the palette
+ * (surfaces, borders, text, gold, --syn-*) comes from vars.css; this file
+ * only adds the tokens the playground needs on top of it.
  * ========================================================================== */
 
-@import '@fontsource/iosevka/latin-400.css';
-@import '@fontsource/dm-sans/latin-300.css';
-@import '@fontsource/dm-sans/latin-400.css';
-@import '@fontsource/dm-sans/latin-500.css';
-
 :root {
-    /* Background layers */
-    --bg-base:     #0C0A08;
-    --bg-surface:  #131109;
-    --bg-panel:    #181512;
-    --bg-hover:    #1F1C18;
-
-    /* Borders */
-    --border:      #252119;
-    --border-mid:  #302B24;
-    --border-str:  #3E3830;
-
-    /* Gold accent */
-    --gold:        #D48B1C;
-    --gold-bright: #EFA030;
-    --gold-dim:    #7A5010;
+    /* Gold accent glow */
     --gold-glow:   rgba(212, 139, 28, 0.12);
 
-    /* Text */
-    --text-primary: #EAE0D2;
-    --text-sec:     #88796C;
-    --text-dim:     #453F39;
-
-    /* Semantic aliases (used by shared markup) */
-    --bg-primary:     var(--bg-base);
-    --bg-secondary:   var(--bg-surface);
-    --bg-tertiary:    var(--bg-panel);
-    --text-secondary: var(--text-sec);
-    --text-muted:     var(--text-dim);
-    --border-color:   var(--border);
-    --accent-color:   var(--gold);
-    --accent-hover:   var(--gold-bright);
+    /* Status colors (the console, the minimap, diagnostics) */
     --success-color:  #A8C98A;
     --error-color:    #D9735A;
     --warning-color:  #EFA030;
     --info-color:     #7AC4B8;
 
-    /* Editor */
-    --editor-bg:           var(--bg-base);
-    --editor-text:         var(--text-primary);
-    --editor-line-numbers: var(--text-dim);
-    --editor-cursor:       var(--gold);
-    --editor-selection:    rgba(212, 139, 28, 0.15);
-
     /* Console */
-    --console-bg:      var(--bg-base);
-    --console-pre-bg:  var(--bg-surface);
     --console-text:    var(--text-primary);
-    --console-prompt:  var(--gold);
-    --console-result:  #A8C98A;
-    --console-error:   #D9735A;
-    --console-warning: #EFA030;
-
-    /* Syntax */
-    --syn-kw:   #EFA030;
-    --syn-str:  #D9735A;
-    --syn-cmt:  #48433D;
-    --syn-type: #7AC4B8;
-    --syn-num:  #A8C98A;
-    --syn-fn:   #C4A0E8;
-    --syn-ann:  #7AC4B8;
-    --syn-kind: #C4A0E8;
-    --syn-builtin: #8AB0E8;
-    --syn-punc: #6A5F58;
+    --console-result:  var(--success-color);
+    --console-error:   var(--error-color);
 
     /* Spacing */
     --spacing-xs: 4px;
@@ -85,8 +32,6 @@
     --radius-lg: 8px;
 
     /* Shadows */
-    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
-    --shadow-md: 0 2px 6px rgba(0, 0, 0, 0.5);
     --shadow-lg: 0 4px 16px rgba(0, 0, 0, 0.6);
     /* Floating popups (menus, hover cards): same ink, each its own offset. */
     --shadow-ink: rgba(0, 0, 0, 0.35);
@@ -98,23 +43,11 @@
 
     --bg-input: rgba(255, 255, 255, 0.06);
 
-    /* ANSI 7 and 9-15: the console's white and bright colors. 0-6 and 8 are
-       the semantic tokens above, so they follow the theme already. */
-    --ansi-7:  #d4d4d4;
-    --ansi-9:  #ff8870;
-    --ansi-10: #b8e0a0;
-    --ansi-11: #ffd43b;
-    --ansi-12: #339af0;
-    --ansi-13: #e59ef0;
-    --ansi-14: #39c5cf;
-    --ansi-15: #ffffff;
-
     /* Fonts */
     --font-family:  'DM Sans', sans-serif;
     --font-mono:    'Iosevka', 'SF Mono', 'Fira Code', monospace;
     --font-size-sm: 12px;
     --font-size-md: 13px;
-    --font-size-lg: 15px;
 
     /* Safe-area insets, as tokens rather than raw env().
      *
@@ -135,10 +68,8 @@
     --safe-left:   0px;
 }
 
-/* Light theme -- the Try page's own tokens. The shared names (surfaces, gold,
- * text, --syn-*) are overridden by vars.css's :root[data-theme="light"],
- * which outranks this file's dark :root on specificity, so only the tokens
- * this file adds are re-stepped here. Same rules as vars.css: every text ink
+/* Light theme -- the Try page's own tokens, re-stepped. The shared palette's
+ * light values come from vars.css. Same rules as vars.css: every text ink
  * clears 4.5:1 on --bg-base and --bg-surface. */
 :root[data-theme="light"] {
     --gold-glow:       rgba(148, 86, 2, 0.12);
@@ -148,14 +79,6 @@
     --warning-color:   #965500;
     --info-color:      #127065;
 
-    --editor-selection: rgba(148, 86, 2, 0.16);
-
-    --console-result:  #456F20;
-    --console-error:   #AE3C26;
-    --console-warning: #965500;
-
-    --shadow-sm: 0 1px 2px rgba(60, 40, 15, 0.10);
-    --shadow-md: 0 2px 6px rgba(60, 40, 15, 0.12);
     --shadow-lg: 0 4px 16px rgba(60, 40, 15, 0.16);
     --shadow-ink: rgba(60, 40, 15, 0.14);
 
@@ -164,15 +87,6 @@
     --backdrop-loading: rgba(251, 248, 242, 0.92);
 
     --bg-input: #FFFFFF;
-
-    --ansi-7:  #6E604F;
-    --ansi-9:  #BE3E28;
-    --ansi-10: #3B7619;
-    --ansi-11: #8A5F00;
-    --ansi-12: #1F63B0;
-    --ansi-13: #923799;
-    --ansi-14: #0B7480;
-    --ansi-15: #2A2016;
 }
 
 /* The installed app draws under the status bar and the home indicator
@@ -257,95 +171,6 @@ pre {
 }
 
 /* ==========================================================================
- * Header
- * ========================================================================== */
-
-.header {
-    height: 54px;
-    background: var(--bg-surface);
-    border-bottom: 1px solid var(--border);
-    position: sticky;
-    top: 0;
-    z-index: 100;
-    flex-shrink: 0;
-}
-
-.header-content {
-    height: 100%;
-    display: flex;
-    align-items: center;
-    padding: 0 20px;
-    gap: 16px;
-}
-
-/* Logo */
-.logo a {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    text-decoration: none;
-}
-
-.logo-sub {
-    font-size: 10px;
-    color: var(--text-dim);
-    letter-spacing: 0.07em;
-    text-transform: uppercase;
-    font-weight: 400;
-    margin-left: 2px;
-    align-self: flex-end;
-    margin-bottom: 2px;
-}
-
-/* Nav separator */
-.nav-sep {
-    width: 1px;
-    height: 22px;
-    background: var(--border-mid);
-    margin: 0 4px;
-}
-
-/* Nav */
-.nav {
-    display: flex;
-    gap: 2px;
-}
-
-.nav-link {
-    font-size: 13px;
-    color: var(--text-sec);
-    text-decoration: none;
-    padding: 5px 10px;
-    border-radius: 5px;
-    font-weight: 400;
-}
-
-.nav-link:hover {
-    color: var(--text-primary);
-    background: var(--bg-hover);
-}
-
-.nav-link.active {
-    color: var(--gold-bright);
-    font-weight: 500;
-}
-
-.nav-link.external::after {
-    content: '↗';
-    font-size: 0.75em;
-    margin-left: 3px;
-    opacity: 0.6;
-}
-
-/* Header right slot */
-.header-right {
-    margin-left: auto;
-    display: flex;
-    align-items: center;
-    gap: 6px;
-}
-
-/* ==========================================================================
  * Main Layout
  * ========================================================================== */
 
@@ -400,7 +225,7 @@ pre {
 .split-handle:hover,
 .split-handle.is-dragging,
 .split-handle:focus-visible {
-    background: var(--gold, #d4a83b);
+    background: var(--gold);
     outline: none;
 }
 
@@ -522,30 +347,6 @@ body.split-dragging * {
 .editor-actions[data-dragging="1"] { cursor: grabbing; }
 .editor-tabs[data-dragging="1"] *,
 .editor-actions[data-dragging="1"] * { pointer-events: none; }
-
-.tutorial-bar {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    padding: 6px 12px;
-    background: color-mix(in srgb, var(--gold) 10%, var(--bg-panel));
-    border-bottom: 1px solid color-mix(in srgb, var(--gold) 30%, var(--border));
-    font-size: 12px;
-    flex-shrink: 0;
-    flex-wrap: wrap;
-}
-
-.tutorial-bar-step {
-    font-family: var(--font-mono);
-    font-weight: 600;
-    color: var(--gold);
-    white-space: nowrap;
-}
-
-.tutorial-bar-desc {
-    color: var(--text-sec);
-    flex: 1;
-}
 
 .tab-button {
     font-family: var(--font-mono);
@@ -871,12 +672,6 @@ body.split-dragging * {
     margin: 0;
 }
 
-.console-line {
-    display: flex;
-    gap: var(--spacing-sm);
-    margin-bottom: 1px;
-}
-
 .console-prompt {
     color: var(--gold);
     user-select: none;
@@ -884,7 +679,6 @@ body.split-dragging * {
 
 .console-result  { color: var(--console-result); }
 .console-error   { color: var(--console-error); }
-.console-warning { color: var(--console-warning); }
 
 #console-loading {
     position: absolute;
@@ -1309,32 +1103,6 @@ body.split-dragging * {
     font-size: 11px;
 }
 
-/* Primary / Run button */
-.btn-primary,
-.btn-run {
-    background: var(--gold-fill);
-    border-color: var(--gold-fill);
-    color: var(--on-gold);
-    font-weight: 500;
-    gap: 7px;
-}
-
-.btn-primary:hover,
-.btn-run:hover {
-    background: var(--gold-fill-hover);
-    border-color: var(--gold-fill-hover);
-    color: var(--on-gold);
-}
-
-.run-tri {
-    width: 0;
-    height: 0;
-    border-style: solid;
-    border-width: 4px 0 4px 6px;
-    border-color: transparent transparent transparent var(--on-gold);
-    flex-shrink: 0;
-}
-
 /* Select */
 .select {
     font-family: var(--font-family);
@@ -1348,7 +1116,7 @@ body.split-dragging * {
     appearance: none;
     -webkit-appearance: none;
     -moz-appearance: none;
-    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='%2388796C'%3E%3Cpath d='M7 10l5 5 5-5z'/%3E%3C/svg%3E");
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='%238A7D6E'%3E%3Cpath d='M7 10l5 5 5-5z'/%3E%3C/svg%3E");
     background-repeat: no-repeat;
     background-position: right 6px center;
     outline: none;
@@ -1407,78 +1175,9 @@ body.split-dragging * {
     background: var(--backdrop-loading);
 }
 
-.overlay-content {
-    background: var(--bg-panel);
-    border: 1px solid var(--border-mid);
-    border-radius: var(--radius-lg);
-    box-shadow: var(--shadow-lg);
-    width: 90%;
-    max-width: 800px;
-    /* 90vh, but never taller than the overlay's own content box -- which is
-       now the viewport minus the safe-area insets. A flex item centered in a
-       box it overflows loses its top edge off the top of the screen, which is
-       the same failure as the docs topbar, one level in. */
-    max-height: min(90vh, 100%);
-    overflow-y: auto;
-    animation: slideIn 0.18s ease-out;
-}
-
 @keyframes slideIn {
     from { opacity: 0; transform: translateY(12px); }
     to   { opacity: 1; transform: translateY(0); }
-}
-
-.overlay-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    padding: var(--spacing-lg);
-    border-bottom: 1px solid var(--border);
-}
-
-.overlay-header h2 {
-    font-family: var(--font-family);
-    font-size: 20px;
-    font-weight: 500;
-    color: var(--gold-bright);
-    letter-spacing: 0.01em;
-}
-
-.tutorial-list {
-    padding: var(--spacing-lg);
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
-    gap: var(--spacing-md);
-}
-
-.tutorial-card {
-    background: var(--bg-surface);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-md);
-    padding: var(--spacing-md);
-}
-
-.tutorial-card:hover {
-    border-color: var(--border-str);
-}
-
-.tutorial-card h3 {
-    font-size: 13px;
-    font-weight: 500;
-    color: var(--text-primary);
-    margin-bottom: var(--spacing-xs);
-}
-
-.tutorial-card p {
-    color: var(--text-sec);
-    font-size: 12px;
-    margin-bottom: var(--spacing-md);
-    line-height: 1.5;
-}
-
-.tutorial-card .btn {
-    width: 100%;
-    justify-content: center;
 }
 
 .loading-content {
@@ -1558,111 +1257,6 @@ body.split-dragging * {
 .footer-content a:hover {
     color: var(--gold-bright);
 }
-
-/* ==========================================================================
- * Tutorial Panel
- * ========================================================================== */
-
-.tutorial-panel {
-    flex-direction: column;  /* display:flex set inline */
-    flex-shrink: 0;
-    border-bottom: 1px solid var(--border-mid);
-    background: var(--bg-panel);
-    font-size: 12px;
-    font-family: var(--font-family);
-}
-
-.tp-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    padding: 8px 14px 0;
-}
-
-.tp-meta { display: flex; align-items: center; gap: 6px; }
-.tp-category { color: var(--gold-bright); font-size: 11px; font-weight: 500; letter-spacing: 0.04em; text-transform: uppercase; }
-.tp-sep { color: var(--text-dim); }
-.tp-progress-label { color: var(--text-dim); font-size: 11px; }
-
-.tp-body { padding: 6px 14px 8px; }
-.tp-step-title { color: var(--text-primary); font-weight: 500; margin-bottom: 3px; font-size: 12.5px; }
-.tp-instruction { color: var(--text-sec); line-height: 1.5; }
-
-.tp-hint {
-    margin-top: 5px;
-    padding: 4px 8px;
-    background: var(--gold-glow);
-    border-left: 2px solid var(--gold-dim);
-    color: var(--gold-bright);
-    font-family: var(--font-mono);
-    font-size: 11px;
-    border-radius: 0 3px 3px 0;
-    white-space: pre;
-}
-
-.tp-feedback { margin-top: 5px; font-size: 11.5px; min-height: 16px; }
-.tp-feedback-success { color: var(--success-color); }
-.tp-feedback-error { color: var(--text-sec); }
-
-.tp-footer {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    padding: 0 14px 8px;
-}
-
-.tp-progress-track {
-    flex: 1;
-    height: 3px;
-    background: var(--border-mid);
-    border-radius: 2px;
-    overflow: hidden;
-}
-.tp-progress-bar {
-    height: 100%;
-    background: var(--gold-fill);
-    border-radius: 2px;
-    width: 0%;
-}
-
-.tp-actions { display: flex; gap: 4px; flex-shrink: 0; }
-
-/* console comment line style (used for tutorial dividers) */
-.console-line-comment { color: var(--text-dim); font-style: italic; }
-
-/* Tutorial overlay progress badge */
-.tp-badge {
-    font-size: 10px;
-    color: var(--success-color);
-    margin-top: 4px;
-    min-height: 14px;
-}
-
-/* ==========================================================================
- * ANSI Color Support
- * ========================================================================== */
-
-.ansi-0  { color: var(--console-text); }
-.ansi-1  { color: var(--console-error); }
-.ansi-2  { color: var(--success-color); }
-.ansi-3  { color: var(--warning-color); }
-.ansi-4  { color: var(--info-color); }
-.ansi-5  { color: var(--syn-fn); }
-.ansi-6  { color: var(--syn-type); }
-.ansi-7  { color: var(--ansi-7); }
-.ansi-8  { color: var(--text-dim); }
-.ansi-9  { color: var(--ansi-9); }
-.ansi-10 { color: var(--ansi-10); }
-.ansi-11 { color: var(--ansi-11); }
-.ansi-12 { color: var(--ansi-12); }
-.ansi-13 { color: var(--ansi-13); }
-.ansi-14 { color: var(--ansi-14); }
-.ansi-15 { color: var(--ansi-15); }
-
-.ansi-bold      { font-weight: bold; }
-.ansi-dim       { opacity: 0.5; }
-.ansi-italic    { font-style: italic; }
-.ansi-underline { text-decoration: underline; }
 
 /* ==========================================================================
  * Scrollbars (global)
@@ -2022,9 +1616,8 @@ html.pwa {
     padding: 6px 12px 2px;
 }
 @media (max-width: 600px) {
-    /* Collapse Solve/Clear/Format/Share/Examples into the ⋯ menu so
+    /* Collapse Clear/Format/Share/Examples into the ⋯ menu so
        the tab bar has room for tabs. Run stays visible. */
-    .editor-actions > #solve-btn,
     .editor-actions > #clear-btn,
     .editor-actions > #format-btn,
     .editor-actions > #share-btn,
@@ -2070,24 +1663,6 @@ html.pwa {
     #repl-input .monaco-editor .view-line,
     #repl-input.repl-input-empty::after { font-size: 16px !important; }
     #repl-input { height: 26px; }
-}
-
-@media (max-width: 768px) {
-    .header-content {
-        padding: 0 14px;
-        gap: 10px;
-    }
-
-    .nav-sep { display: none; }
-
-    .nav {
-        gap: 0;
-    }
-
-    .logo-sub { display: none; }
-
-    /* Collapse button labels, keep icons */
-    .btn-label { display: none; }
 }
 
 /* ==========================================================================
@@ -2563,7 +2138,7 @@ html.pwa {
  * ========================================================================== */
 
 @media print {
-    .header, .footer, .editor-actions, .console-actions { display: none; }
+    .footer, .editor-actions, .console-actions { display: none; }
     .repl-container { display: block; }
     .editor-pane, .console-pane { break-inside: avoid; }
 }
@@ -2576,8 +2151,8 @@ html.pwa {
  * ------------------------------------------------------------------------- */
 
 .trace-panel {
-    border-bottom: 1px solid var(--border-color);
-    background: var(--bg-secondary);
+    border-bottom: 1px solid var(--border);
+    background: var(--bg-surface);
     font-size: 12px;
     flex: 0 0 auto;
 }
@@ -2592,18 +2167,18 @@ html.pwa {
 .trace-slider {
     flex: 1 1 auto;
     min-width: 80px;
-    accent-color: var(--accent-color);
+    accent-color: var(--gold);
     cursor: pointer;
 }
 
 .trace-pos {
-    color: var(--text-secondary);
+    color: var(--text-sec);
     font-variant-numeric: tabular-nums;
     white-space: nowrap;
 }
 
 .trace-site {
-    color: var(--accent-color);
+    color: var(--gold);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -2612,21 +2187,21 @@ html.pwa {
 
 .trace-banner {
     padding: 4px 10px 6px;
-    color: var(--text-secondary);
-    border-top: 1px solid var(--border-color);
+    color: var(--text-sec);
+    border-top: 1px solid var(--border);
 }
 
 .trace-frames-row {
     display: flex;
     gap: 1px;
-    background: var(--border-color);
-    border-top: 1px solid var(--border-color);
+    background: var(--border);
+    border-top: 1px solid var(--border);
     max-height: 140px;
 }
 
 .trace-frames,
 .trace-locals {
-    background: var(--bg-secondary);
+    background: var(--bg-surface);
     overflow-y: auto;
     padding: 4px 0;
 }
@@ -2648,11 +2223,11 @@ html.pwa {
     cursor: pointer;
 }
 
-.trace-frame:hover  { background: var(--bg-tertiary); }
-.trace-frame.active { background: var(--bg-tertiary); color: var(--accent-color); }
+.trace-frame:hover  { background: var(--bg-panel); }
+.trace-frame.active { background: var(--bg-panel); color: var(--gold); }
 
 .trace-frame-fn   { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.trace-frame-line { color: var(--text-muted); white-space: nowrap; }
+.trace-frame-line { color: var(--text-dim); white-space: nowrap; }
 
 .trace-local {
     display: flex;
@@ -2660,7 +2235,7 @@ html.pwa {
     padding: 3px 10px;
 }
 
-.trace-local-name { color: var(--accent-color); flex: 0 0 auto; }
+.trace-local-name { color: var(--gold); flex: 0 0 auto; }
 .trace-local-val  {
     color: var(--text-primary);
     overflow: hidden;
@@ -2670,7 +2245,7 @@ html.pwa {
 
 .trace-empty {
     padding: 3px 10px;
-    color: var(--text-muted);
+    color: var(--text-dim);
     font-style: italic;
 }
 
@@ -2682,7 +2257,7 @@ html.pwa {
 }
 
 .trace-current-marker {
-    background: var(--accent-color);
+    background: var(--gold);
     width: 3px !important;
     margin-left: 2px;
 }
@@ -2694,5 +2269,5 @@ html.pwa {
  * reads where the two overlap. */
 .trace-current-expr {
     background: var(--gold-glow);
-    border-bottom: 1px solid var(--accent-color);
+    border-bottom: 1px solid var(--gold);
 }

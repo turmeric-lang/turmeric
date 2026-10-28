@@ -77,12 +77,7 @@
 }
 
 /* Override site.css .section-title — roadmap uses a smaller heading */
-.section-title {
-  font-family: 'Space Grotesk', sans-serif;
-  font-size: 26px;
-  font-weight: 400;
-  color: var(--text-primary);
-}
+.section-title { font-size: 26px; }
 
 .section-badge {
   font-size: 11px;

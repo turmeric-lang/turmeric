@@ -715,7 +715,7 @@ GUIDE_JS_CORE = '''\
     'coerce','cast','type-of','any',
   ]);
 
-  // Builtins: the editor's keyword.operator set (web/main.js), set apart from
+  // Builtins: the editor's keyword.operator set (web/editor-language.js), set apart from
   // the keywords so `println` and `map` do not share a colour with types and
   // kinds. Turmeric only; the Racket and Scheme specs have no such set.
   var BUILTIN = new Set([
@@ -1443,7 +1443,7 @@ GUIDE_PAGE_SCRIPTS = {
 #
 # The fallbacks are the dark theme's values; the --syn-* tokens themselves live
 # in web/vars.css (Try Turmeric's docs pane) and gendocs.CSS (every generated
-# page), both themes. The --syn-br* rainbow is the one web/main.js gives
+# page), both themes. The --syn-br* rainbow is the one web/editor-theme.js gives
 # Monaco (RAINBOW_BRACKETS), itself taken from trowel's turmeric-dark theme --
 # keep the three in step.
 HL_CSS = '''\
@@ -1882,7 +1882,7 @@ def _fmt_desc(text: str) -> str:
 
 # Rows per page of the Recently Added / Recently Updated tabs. Ten, the length
 # each list had before it had pages, and the length of the matching sections
-# in Try Turmeric's docs pane (DOCS_RECENT_COUNT in web/main.js).
+# in Try Turmeric's docs pane (DOCS_RECENT_COUNT in web/docs-pane.js).
 RECENT_PAGE_SIZE = 10
 
 
