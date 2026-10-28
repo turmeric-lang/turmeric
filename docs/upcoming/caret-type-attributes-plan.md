@@ -351,6 +351,76 @@ command. The warning lives for at least one minor release.
 Remove the keyword loops. A trailing `:linear` is then an error that names
 the `^` form, because the declaration's arity no longer fits.
 
+## Attributes beyond the type declarations (proposed P5)
+
+> Status: survey and proposal, 2026-10-28; nothing decided. The decisions
+> below P4 cover the type declarations only.
+
+The rule this plan adopts -- `^name` is an attribute and goes before what it
+marks -- has a few exceptions outside the four type declarations. A survey of
+`stdlib/`, `tests/fixtures/`, `examples/`, `benchmarks/` and `tools/` (every
+`^` symbol and flag keyword that is a direct child of a definition-like form,
+and its position relative to the name), plus the elaborator's own lists:
+
+### Not following the rule
+
+| Form | Today | Where it is read | Uses |
+| --- | --- | --- | --- |
+| `defeffect` | `^extends Parent` and `^capability` **after** the signature: `(defeffect FS [] :nil ^extends IO ^capability)`. `^private` already goes before the name. | `src/compiler/elab_effects.c:1646` (scan from `name_idx + 3`) | 10 each, all in `stdlib/effects.tur` |
+| `defn` | `#[no-unwind]` and `#[used]`: before the name, but a third spelling for a flag with no value. | `elab_fns.c:9250`, `elab_toplevel.c:2453`, `:2773` | 2 fixtures (`panic-no-unwind*`) |
+| `defn` | `(export-as "c_name")`: before the name, but a list where every other pre-name attribute with an argument is `^attr arg` (`^deprecated "msg"`). | `elab_fns.c:9264`, `elab_toplevel.c:2462`, `:2779` | 3 fixtures, one of them an `errors/` case |
+| `import` | `:for-macros`, a keyword with no value. | the import parser | 5 |
+
+### Already following it
+
+These looked like candidates in the survey, but each leads the thing it marks,
+which is the rule:
+
+- `^tailcall` before a call: `(if c acc ^tailcall (f x))`.
+- `^fat` before a return type, `(defn pfail-raw [] ^fat :ptr<void> ...)`, and
+  `^linear` before a `defdynamic`'s type, `(defdynamic *r* ^linear :int 0)`
+  (refused, `errors/dynvar-linear-type`). Both qualify the type that follows,
+  as `: ^linear Chan` does.
+- A handler case's `(Eff [p] ^linear k)` / `^multishot k`: before the
+  continuation it marks.
+- `(match ^non-exhaustive x ...)`, and the binding annotations (`^mut`,
+  `^borrow`, `^fat`, `^linear`, ...) before the name they bind.
+- Keywords with a value stay keywords: `defn`'s `:pre` / `:post` contracts,
+  `import`'s `:as` / `:refer`, `defpackage`'s keys.
+
+### Proposal
+
+1. **`defeffect`: move `^extends Parent` and `^capability` before the name**,
+   beside `^private`: `(defeffect ^capability ^extends IO FS [] : nil)`. This
+   is the one real trailing case. `^extends` takes an argument, so the
+   name-finding has to skip `^extends X` the way `elab_defn_name_index` skips
+   `^deprecated "msg"`; `tools/gendocs.py`'s `defeffect` pattern (one optional
+   `^\w+` before the name) and its `_spaced_decl` would follow. The migration
+   is 20 sites in one file, which the P2 tool can learn, and both spellings can
+   be read for a release as in P0-P4.
+2. **`defn`: spell `#[no-unwind]` and `#[used]` as `^no-unwind` and `^used`.**
+   Same meaning, same place, one sigil for a flag. Two fixtures to move.
+3. **`defn`: spell `(export-as "c_name")` as `^export-as "c_name"`**, the
+   shape `^deprecated "msg"` already has. Lower value than 1 and 2: the list
+   form is unambiguous today, and the change is only for uniformity.
+4. **`import ... :for-macros`: leave it.** `import` is a directive, not a
+   declaration, its other options are keywords with values, and a lone
+   `^for-macros` among `:as` and `:refer` would make that form inconsistent
+   instead.
+
+Each is independent: P5 can take 1 alone. The P0 machinery (an interned
+symbol per attribute, a shared name-index helper, the P1 tools, the P2
+rewrite tool, the P3 warning) applies to each without new design.
+
+### Open questions for P5
+
+1. Move `defeffect`'s `^extends` / `^capability` before the name?
+   (Recommended: yes.)
+2. Fold `#[no-unwind]` / `#[used]` into `^no-unwind` / `^used`?
+   (Recommended: yes.)
+3. `(export-as "c")` -> `^export-as "c"`? (Recommended: optional, low value.)
+4. Leave `import`'s `:for-macros` as a keyword? (Recommended: leave it.)
+
 ## Out of scope
 
 - **Any change to what the attributes mean.** That includes how an `^affine`
@@ -361,8 +431,10 @@ the `^` form, because the declaration's arity no longer fits.
   follow-ups if P0 surfaces them.
 - **Keywords that carry a value**: `:refer [...]`, manifest keys such as
   `:spices` and `:build-dir`, map literals, `:as`. Those are named arguments.
-- **`defeffect`'s trailing `^extends` / `^capability`**, which are already
-  `^`.
+- **Attributes on other forms** -- `defeffect`'s trailing `^extends` /
+  `^capability`, and `defn`'s `#[no-unwind]` / `#[used]` / `(export-as ...)` --
+  are not part of P0-P4. They are surveyed in "Attributes beyond the type
+  declarations" below, which proposes a P5 for them.
 - **Inline-C and `extern-c` C types such as `^int`.** They are already `^`, and
   their meaning (a C type) is separate.
 
