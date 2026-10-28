@@ -1,0 +1,2 @@
+TUR-E0371
+argument 2 of the call through 'f' in 'apply2' violates the refinement its function type places on it

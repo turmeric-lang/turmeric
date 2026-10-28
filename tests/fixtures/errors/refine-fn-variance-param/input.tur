@@ -1,0 +1,25 @@
+;; refined-function-types-plan F3: a function that demands MORE of a parameter
+;; than the function type it meets allows -- row 2 of the plan's table -- is
+;; TUR-E0386 at every coercion site: a call argument, a lambda argument, an
+;; annotated `let`, a `def`, a `defn` result, a constructor argument and a
+;; `set!` into a field.  `-1` is non-zero but not positive.
+(defn pos-param [x : #refine{ v : int | (> v 0) }] : int x)
+(defn plain [x : int] : int x)
+
+(defn take-nz [f : (fn [#refine{ v : int | (not= v 0) }] int)] : int (f -1))
+(defstruct Holder [f : (fn [#refine{ v : int | (not= v 0) }] int)])
+
+(def g : (fn [#refine{ v : int | (not= v 0) }] int) pos-param)
+
+(defn make [] : (fn [#refine{ v : int | (not= v 0) }] int)
+  pos-param)
+
+(defn main [] : int
+  (println (take-nz pos-param))
+  (println (take-nz (fn [x : #refine{ v : int | (> v 0) }] : int x)))
+  (let [h : (fn [#refine{ v : int | (not= v 0) }] int) pos-param]
+    (println (h 1)))
+  (let [^mut s (Holder pos-param)]
+    (set! (.f s) pos-param)
+    (println ((.f s) 1)))
+  0)

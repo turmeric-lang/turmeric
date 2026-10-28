@@ -478,6 +478,21 @@ static const ExperimentDescriptor EXPERIMENTS[] = {
       "0.71.0",                  /* expires_at -- advisory; never blocks a release */
       XF_LIFECYCLE_BETA,
       &g_opt_quote_data },
+    /* refined-fn-types (refined-function-types-plan): a `(fn ...)` type may
+     * carry `#refine{...}` on its parameters and result.  A call through a
+     * binding of such a type is a checked crossing (arguments checked at the
+     * call, the result checked after it), and a function value flowing into
+     * such a slot is checked contravariantly against it.  Gate off, the
+     * annotation stays TUR-E0378.  Prototype: no first consumer is named yet
+     * (the plan's open question 6), and F4's result-check elision waits on a
+     * measurement. */
+    { "refined-fn-types",
+      "a `(fn ...)` type may carry refinements, checked at calls through it and where a function value meets it",
+      "docs/upcoming/refined-function-types-plan.md",
+      "0.72.0",                  /* introduced */
+      "0.76.0",                  /* expires_at -- advisory; never blocks a release */
+      XF_LIFECYCLE_PROTOTYPE,
+      &g_opt_refined_fn_types },
     /* r7rs-segmented-stack GRADUATED 2026-10-25, in the 0.71 line (introduced
      * 0.70.0, beta 2026-10-24, advisory expires_at 0.71.0; graduation approved
      * by the plan's owner 2026-10-24).  Every compiled `#lang r7rs` procedure

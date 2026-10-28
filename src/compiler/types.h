@@ -817,6 +817,26 @@ typedef struct Type {
              * defstruct phantom indices).  NULL when no return annotation
              * was recorded. */
             const struct Form *result_type_form;
+            /* refined-function-types-plan D1 (--enable=refined-fn-types): the
+             * refinements a `(fn [#refine{...}] #refine{...})` type writes on
+             * its parameters and its result -- predicate plus bound-variable
+             * name, NULL where a position is unrefined.  `param_refine_preds`
+             * and `param_refine_vars` are arena arrays of length `arity`, both
+             * NULL when no parameter is refined.
+             *
+             * SIDE-CAR, ERASED FOR IDENTITY: type_eq, unification, mangling,
+             * C typedef naming and the ABI cache never read these, so two
+             * function types differing only in refinements are one type to
+             * everything except the refinement checker -- the split
+             * TY_CONTRACT already lives with.  Read them only through
+             * type_fn_refinements_of() (types.c), the one accessor that says
+             * "this function type is refined"; nothing else may branch on
+             * them, which is what keeps a refinement from changing a typedef
+             * name or an overload pick. */
+            const struct Form **param_refine_preds;
+            const char        **param_refine_vars;
+            const struct Form  *result_refine_pred;
+            const char         *result_refine_var;
         } fn;
         /* Phase 5: ref<T> stores the inner type T */
         struct {
@@ -1518,7 +1538,25 @@ static inline Type type_fn(const TypeKind arg_kinds[], uint32_t arity, TypeKind 
     t.as.fn.rest_borrow = false; /* closure-drop-glue: ^borrow rest, default off */
     t.as.fn.param_type_forms = NULL; /* sized-types-cross-param-unification: filled by defn elab */
     t.as.fn.result_type_form = NULL; /* SZ8 non-GADT: filled by defn elab when a return ann was recorded */
+    t.as.fn.param_refine_preds = NULL; /* refined-fn-types D1: unrefined by default */
+    t.as.fn.param_refine_vars  = NULL;
+    t.as.fn.result_refine_pred = NULL;
+    t.as.fn.result_refine_var  = NULL;
     return t;
+}
+
+/* refined-function-types-plan D1: the one reader of a function type's
+ * side-car refinements.  True when `t` is a TY_FN with a refined parameter or
+ * result; the arrays may then be read directly.  Identity code (type_eq,
+ * unification, mangling, typedef naming) never calls this -- see the field
+ * comment in `as.fn`. */
+static inline bool type_fn_refinements_of(const Type *t) {
+    if (!t || t->kind != TY_FN) return false;
+    if (t->as.fn.result_refine_pred) return true;
+    if (!t->as.fn.param_refine_preds) return false;
+    for (uint32_t i = 0; i < t->as.fn.arity; i++)
+        if (t->as.fn.param_refine_preds[i]) return true;
+    return false;
 }
 
 /* Phase 12: Borrow type constructors */

@@ -31,6 +31,7 @@ extern uint32_t g_unsafe_block_count;
 extern uint32_t g_unsafe_total_lines;
 /* Phase R6: Result/panic linting flags */
 extern bool g_warn_unused_result;
+extern bool g_warn_unrefined_fn_slot;
 /* F4 (cross-plan-followups): --Werror=deprecated promotes ^deprecated
  * warnings to errors so a clean build can gate against new uses.  What it
  * covers is listed at its definition (globals.c). */
@@ -235,6 +236,15 @@ typedef struct Elab {
     /* quote-list-data-plan: the dynamic `(println g)` fallback of the Datum
      * println rewrite (elab_try_println_datum), which must not rewrite again. */
     Form        *println_datum_fallback;
+    /* refined-function-types-plan F2: the inner `(f t1 t2)` call a refined
+     * call-through-binding wrapper (rt_elab_refined_fn_call) elaborates, which
+     * must not be wrapped again. */
+    Form        *rf_inner_call;
+    /* refined-function-types-plan F3: (value form, target type) pairs the
+     * coercion check has already decided, so a form elaborated twice (a
+     * retry, a specialization) reports once.  Flat pairs, linear scan. */
+    const void **rf_seen;
+    uint32_t     n_rf_seen, cap_rf_seen;
     bool         ids_stdlib;
     /* r7rs-imported-libraries-recompiled-every-build: the same for a library
      * the program imports from the stdlib (diag_file_is_imported_stdlib) --
@@ -1464,6 +1474,20 @@ typedef struct RefineCallSite {
      * the call precedes is elaborated after it. */
     const Binding **global_args;
     uint32_t        n_global_args;
+    /* refined-function-types-plan F2 (D4a): non-NULL when this is a call
+     * THROUGH a binding of refined function type -- `(f 10 x)` with
+     * `f : (fn [int #refine{...}] int)`.  The predicates are read off this
+     * type rather than off the callee's (empty) defn arrays, the obligation is
+     * decided quietly and worded by the resolver (closed refutation TUR-E0371,
+     * anything else TUR-W0372), and a proof elides the call-site argument
+     * checks recorded in `fn_checks` -- one list per elaboration of the form,
+     * each `n` long, indexed by argument, NULL where nothing was checked. */
+    const Type    *fn_type;
+    struct RtFnCheckList {
+        Expr                 **checks;
+        uint32_t               n;
+        struct RtFnCheckList  *next;
+    } *fn_checks;
     Span           loc;
 } RefineCallSite;
 
@@ -1473,6 +1497,73 @@ typedef struct RefineCallSite {
  * hypotheses over the range its body produced. */
 uint32_t refine_note_call_site(Elab *e, const Binding *callee,
                                const Form *call_form, uint32_t arg_offset);
+
+/* refined-function-types-plan F2: elaborate `(f a ...)` where `f` is a binding
+ * of refined function type.  Arguments at refined positions are checked at the
+ * call (the check is elided when the deferred crossing proves it), the result
+ * is checked after it, and the crossing is recorded for the static verdict.
+ * Returns NULL when the call is not one it handles (arity mismatch), leaving
+ * the ordinary path to elaborate it. */
+Expr *rt_elab_refined_fn_call(Elab *e, Form *call, Binding *fb);
+/* The same for a call whose head is an EXPRESSION already bound to `fb`
+ * (elab_call_head_expr): `call` is spelled through `fb`, `site` is the form the
+ * program wrote (the crossing is keyed on it, so its path conditions are
+ * found) and `display` is how diagnostics name the head. */
+Expr *rt_elab_refined_fn_call_at(Elab *e, Form *call, Binding *fb,
+                                 const Form *site, const char *display);
+
+/* RT1 VARIANCE: decide `hyp(subj) |- goal(subj)` over a fresh `subj` of kind
+ * `kind` -- the one question both the instance-versus-class check (TUR-E0374)
+ * and the refined function-type coercion check (TUR-E0386/E0387) ask.  `hyp`
+ * may be NULL (it promises nothing).
+ *
+ * Decided as a `quiet` obligation, not a speculative probe: it is a real
+ * question about the program, so it is counted, memoized and shown by
+ * --dump-refine=json like any other, while its headline stays the caller's --
+ * a refutation is a declaration-versus-declaration error, not a TUR-E0371
+ * about a value.  `runtime_guarded` is off because any witness is a defect
+ * here.  An UNDECIDED pair is TUR-W0372 (rt_report_variance_unknown), an error
+ * under --strict-refine.  `*out` receives the obligation (NULL when none could
+ * be built, in which case the verdict is RV_UNKNOWN). */
+typedef enum { RV_PROVED, RV_REFUTED, RV_UNKNOWN } RtVariance;
+RtVariance rt_decide_entailment(Elab *e, const struct Form *hyp, const char *hyp_var,
+                                const struct Form *goal, const char *goal_var,
+                                const char *subj, TypeKind kind, const char *type_nm,
+                                Span loc, const char *what,
+                                struct RefineObligation **out);
+const char *rt_variance_reason(const struct RefineObligation *vob);
+/* `fmt` words the claim that could not be decided; it is prefixed with "could
+ * not decide whether".  `note` says what the undecided pair costs. */
+void rt_report_variance_unknown(Span loc, const char *note, const char *fmt, ...)
+    TUR_PRINTF_FMT(3, 4);
+
+/* refined-function-types-plan F3 (D4c): a function value -- written as
+ * `value_form` -- meets a slot of function type `target` (a call argument, an
+ * annotated `let`).  For each position `target` refines, run the variance
+ * check against what the value is known to accept and deliver: parameters
+ * contravariant (`T.p |- S.p`, refuted is TUR-E0386), the result covariant
+ * (`S.r |- T.r`, refuted is TUR-E0387), undecided TUR-W0372.  A position the
+ * target leaves unrefined is not checked (D2) -- but under
+ * --warn-unrefined-fn-slot a refined parameter going into one is TUR-W0388.
+ * `slot` words where the value went ("argument 1 of 'apply2'"). */
+void rt_check_fn_coercion(Elab *e, const struct Form *value_form,
+                          const Type *target, Span loc, const char *slot);
+/* The same at a `defn` whose declared result is a function type: every value
+ * the body's tail can return (through `if` / `do` / `let`). */
+void rt_check_fn_return_tail(Elab *e, const struct Form *tail, const Type *T,
+                             const char *fn_name);
+
+/* refined-function-types-plan: the refined function type a binding holds a
+ * value at, or NULL.  A plain `(fn ...)` parameter rides the typed `:fn`
+ * carrier, whose binding type is `ptr<void>` and whose signature -- refinements
+ * included -- is `poly_type`; every other function-typed binding keeps it in
+ * `type`.  Ask this rather than either field. */
+static inline const Type *rt_binding_refined_fn_type(const Binding *b) {
+    if (!b) return NULL;
+    if (type_fn_refinements_of(&b->type)) return &b->type;
+    if (b->is_poly_fn && type_fn_refinements_of(b->poly_type)) return b->poly_type;
+    return NULL;
+}
 
 /* WF2 (checked-write-frames-plan): one `#writes`-annotated function, recorded
  * during elaboration and verified AFTER it (wf_resolve_write_frames).  The

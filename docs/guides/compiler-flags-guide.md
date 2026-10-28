@@ -116,6 +116,17 @@ Warns when a `result`-shaped (`ptr<void>`) value is computed in statement
 position and discarded. Silence with `ignore!`, a `let` binding, or by
 using the value (e.g. the `?` operator). Off by default.
 
+### `--warn-unrefined-fn-slot`
+
+Emits `TUR-W0388` where a function whose parameter carries a refinement flows
+into a `(fn ...)`-typed slot -- a call argument, an annotated `let` or `def`, a
+`defn` result, a field -- that leaves that parameter unrefined. Allowed (an
+unrefined slot is not checked, and the function's own entry check still runs),
+but a bad argument is then found only at run time. Writing the refinement on
+the slot's type under `--enable=refined-fn-types` moves the check to the calls
+through it. Only the parameter direction is linted. Off by default; see
+[refined-function-types-plan](https://github.com/turmeric-lang/turmeric/blob/main/docs/upcoming/refined-function-types-plan.md).
+
 ### `--lint-panic` (R6b)
 
 Emits `TUR-W0038` at panic call sites (`panic`/`tur_panic`, the contract

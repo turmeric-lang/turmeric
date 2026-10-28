@@ -1,0 +1,32 @@
+;; refined-function-types-plan F2: calls through a binding of refined function
+;; type that the solver PROVES.  Built with --strict-refine, so any undecided
+;; obligation would fail the build.
+;;
+;; 1. An argument proved from the caller's own refinement: `x : Pos` entails
+;;    `(not= v 0)`, so the call-site check is elided (expected.c has no check
+;;    for `apply-pos`).
+;; 2. A RESULT refinement used as a hypothesis: `(g x)` is checked after the
+;;    call to satisfy `(> r 0)`, and is then assumed to -- which is what proves
+;;    `safe-div`'s crossing on `d`.
+;; 3. The same through an annotated `let` and a `def`.
+(defn safe-div [a : int b : #refine{ v : int | (not= v 0) }] : int (/ a b))
+(defn pos-of [x : int] : #refine{ r : int | (> r 0) }
+  (if (> x 0) x (- 1 x)))
+
+(defn apply-pos [f : (fn [int #refine{ v : int | (not= v 0) }] int)
+                 x : #refine{ v : int | (> v 0) }] : int
+  (f 10 x))
+
+(defn div-by [g : (fn [int] #refine{ r : int | (> r 0) }) x : int] : int
+  (let [d (g x)]
+    (safe-div 100 d)))
+
+(def div-at : (fn [int #refine{ v : int | (> v 0) }] int) safe-div)
+
+(defn main [] : int
+  (println (apply-pos safe-div 2))
+  (println (div-by pos-of 3))
+  (let [h : (fn [int #refine{ v : int | (> v 0) }] int) safe-div]
+    (println (h 9 3)))
+  (println (div-at 8 4))
+  0)

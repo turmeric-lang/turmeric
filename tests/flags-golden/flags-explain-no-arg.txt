@@ -95,6 +95,7 @@ global flags:
                                    (TUR_NO_GLOBAL_SPICES=1; implied by --no-auto-spice)
   --warn-unused-result             warn on discarded result values (Phase R6)
   --no-warn-unused-result          disable --warn-unused-result (Phase R6)
+  --warn-unrefined-fn-slot         warn when a refined function goes into an unrefined fn-typed slot (TUR-W0388)
   --lint-panic                     lint panic/must! usage (Phase R6)
   --no-contracts                   strip contract checks; predicates not evaluated (Phase C2)
   --dump-sizes                     print inferred size index per sized-GADT constructor (SZ8)

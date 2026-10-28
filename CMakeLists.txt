@@ -568,6 +568,13 @@ add_test(
   COMMAND bash tests/check-monomorph-name-collision.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# refined-function-types-plan F1: refinements in `(fn ...)` types are erased for
+# type identity, so with contracts off the emitted C must not change.
+add_test(
+  NAME tur_refined_fn_types_erased
+  COMMAND bash tests/check-refined-fn-types-erased.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
 # user-defn-named-div-collides-with-libc: tur_name_collides_libc() bsearches
 # libc_names[], so the table's sort order is a correctness precondition -- one
 # entry out of place makes bsearch quietly miss names and the symptom is a cc
