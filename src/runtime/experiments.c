@@ -493,6 +493,18 @@ static const ExperimentDescriptor EXPERIMENTS[] = {
       "0.76.0",                  /* expires_at -- advisory; never blocks a release */
       XF_LIFECYCLE_PROTOTYPE,
       &g_opt_refined_fn_types },
+    /* compiled-repl (aot-compiled-repl-plan C2): a REPL turn runs as a
+     * compiled program -- the session's definition table plus the turn --
+     * instead of being evaluated.  Prototype at step 1: every turn re-runs
+     * every initializer (no host slots yet), types other than scalars print
+     * as #<Type>, and only `tur repl` on a JIT build has the hook. */
+    { "compiled-repl",
+      "REPL turns run as compiled programs (the session's definitions plus the turn) instead of being interpreted",
+      "docs/upcoming/aot-compiled-repl-plan.md",
+      "0.72.0",                  /* introduced */
+      "0.78.0",                  /* expires_at -- advisory; never blocks a release */
+      XF_LIFECYCLE_PROTOTYPE,
+      &g_opt_compiled_repl },
     /* r7rs-segmented-stack GRADUATED 2026-10-25, in the 0.71 line (introduced
      * 0.70.0, beta 2026-10-24, advisory expires_at 0.71.0; graduation approved
      * by the plan's owner 2026-10-24).  Every compiled `#lang r7rs` procedure

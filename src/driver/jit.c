@@ -944,6 +944,116 @@ static int repl_inline_c_jit_build(const char *name, const char *src,
 const TuriInlineCJitHook g_repl_inline_c_jit_hook = {
     repl_inline_c_jit_build, repl_jit_hook_sym,
 };
+
+/* aot-compiled-repl-plan C2 (--enable=compiled-repl): compile one REPL turn's
+ * program -- the session's definition table plus a `main` that runs the turn
+ * and prints its result (turi/compiled_turn.c builds it) -- and run it, as
+ * cmd_jit runs a file: the split and the prune, then tur_jit_execute, with
+ * the full-preamble retry.  It runs in the middle of a turn, so it puts back
+ * what compile_to_c resets, as repl_inline_c_jit_build_here does.  Nothing
+ * stays resident: step 1 of C2 recompiles and reruns every definition each
+ * turn. */
+static int repl_compiled_turn_here(const char *src, size_t len, int *out_rc) {
+    *out_rc = 0;
+    const char *tmp = getenv("TMPDIR");
+    if (!tmp || !*tmp) tmp = getenv("TEMP");
+    if (!tmp || !*tmp) tmp = getenv("TMP");
+    if (!tmp || !*tmp) tmp = "/tmp";
+    char path[4300];
+    snprintf(path, sizeof path, "%s/tur-repl-turn-XXXXXX.tur", tmp);
+    int fd = mkstemps(path, 4);
+    if (fd < 0) {
+        fprintf(stderr, "tur: compiled-repl: cannot create %s: %s\n", path, strerror(errno));
+        return -1;
+    }
+    FILE *f = fdopen(fd, "w");
+    bool wrote = f && fwrite(src, 1, len, f) == len;
+    if (f) fclose(f); else close(fd);
+    if (!wrote) {
+        fprintf(stderr, "tur: compiled-repl: cannot write %s\n", path);
+        unlink(path);
+        return -1;
+    }
+
+    size_t cap = diag_files_capacity();
+    const SourceFile **saved_files =
+        (const SourceFile **)calloc(cap ? cap : 1, sizeof *saved_files);
+    if (!saved_files) { unlink(path); return -1; }
+    size_t n_saved = diag_files_save(saved_files, cap);
+    bool had_error = diag_had_error();
+
+    bool saved_efl = g_emit_for_link;
+    bool saved_interp = g_interpret_mode;
+    Buf csrc;
+    buf_init(&csrc);
+    g_emit_for_link = true;
+    g_interpret_mode = false;
+    int rc = compile_to_c(path, &csrc, NULL, 0, NULL, 0);
+    g_interpret_mode = saved_interp;
+    g_emit_for_link = saved_efl;
+    unlink(path);
+
+    if (rc == 0) {
+        hoist_tur_include_directives(&csrc);
+        Buf autolink, reduced;
+        buf_init(&autolink);
+        buf_init(&reduced);
+        JitPruneStats ps;
+        memset(&ps, 0, sizeof ps);
+        bool reduced_used = jit_try_split_preamble(&csrc, &reduced);
+        if (reduced_used) {
+            (void)jit_prune_split_source(&reduced, &ps);
+        } else {
+            buf_write(&reduced, csrc.data, csrc.len);
+            reduced_used = jit_prune_full_source(&reduced, &ps);
+        }
+        static char inc0[4096], inc1[4096], inc2[4096];
+        const char *incs[3];
+        int n_incs = jit_sdk_include_dirs(inc0, sizeof inc0, inc1, sizeof inc1,
+                                          inc2, sizeof inc2, incs);
+        char *argv[] = { (char *)"repl", NULL };
+        bool was_quiet = tur_jit_set_quiet_warnings(true);
+        if (!scan_autolink_markers(&csrc, &autolink)) {
+            rc = -1;
+        } else {
+            const char *al = autolink.len ? autolink.data : NULL;
+            int jrc = reduced_used
+                ? tur_jit_execute(reduced.data, reduced.len, al, incs, n_incs, 1, argv, out_rc)
+                : tur_jit_execute(csrc.data, csrc.len, al, incs, n_incs, 1, argv, out_rc);
+            if (reduced_used && (jrc == TUR_JIT_ERR_COMPILE || jrc == TUR_JIT_ERR_LINK))
+                jrc = tur_jit_execute(csrc.data, csrc.len, al, incs, n_incs, 1, argv, out_rc);
+            if (jrc != TUR_JIT_OK) rc = -1;
+        }
+        tur_jit_set_quiet_warnings(was_quiet);
+        buf_free(&reduced);
+        buf_free(&autolink);
+    }
+    buf_free(&csrc);
+
+    diag_reset();
+    diag_files_replace(saved_files, n_saved);
+    free(saved_files);
+    if (had_error) diag_force_had_error();
+    return rc == 0 ? 0 : -1;
+}
+
+typedef struct {
+    const char *src;
+    size_t len;
+    int *out_rc;
+} ReplCompiledTurnJob;
+
+static int repl_compiled_turn_job(void *p) {
+    ReplCompiledTurnJob *j = (ReplCompiledTurnJob *)p;
+    return repl_compiled_turn_here(j->src, j->len, j->out_rc);
+}
+
+static int repl_compiled_turn_run(const char *src, size_t len, int *out_rc) {
+    ReplCompiledTurnJob j = { src, len, out_rc };
+    return tur_run_on_big_stack(repl_compiled_turn_job, &j);
+}
+
+const TuriCompiledTurnHook g_repl_compiled_turn_hook = { repl_compiled_turn_run };
 #else /* !TUR_HAVE_JIT */
 
 int cmd_jit(int argc, char **argv) {

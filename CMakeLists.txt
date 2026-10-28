@@ -1762,6 +1762,16 @@ if(TUR_JIT)
     WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
   )
   set_tests_properties(tur_repl_jit_inline_c PROPERTIES TIMEOUT 300)
+  # aot-compiled-repl-plan C2, step 1 (--enable=compiled-repl): REPL turns run
+  # as compiled programs; the script diffs a transcript against the
+  # interpreter's and pins step 1's documented differences.
+  add_test(
+    NAME tur_repl_compiled
+    COMMAND ${CMAKE_COMMAND} -E env TUR=$<TARGET_FILE:tur>
+            bash tests/turi/repl-compiled.sh
+    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+  )
+  set_tests_properties(tur_repl_compiled PROPERTIES TIMEOUT 300)
   # J3 (jit-engine-plan section 5): the full fixture corpus through
   # `tur jit`.  RUN_SERIAL like the other whole-corpus
   # harnesses -- it fans out across nproc internally.  TUR is pinned to

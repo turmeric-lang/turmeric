@@ -544,6 +544,18 @@ typedef struct TuriEnv {
      * returns the value it bound, but its value is unspecified in R7RS, so
      * the R7RS prompt echoes nothing for it, as chibi and Racket do. */
     bool         last_result_is_def;
+    /* aot-compiled-repl-plan C2 (--enable=compiled-repl): this session's turns
+     * run as compiled programs instead of being evaluated (turi/compiled_turn.c).
+     * Set by the REPL once its preload is done, so only the user's turns
+     * compile.  `compiled_defs` is the definition table -- the latest source
+     * of each top-level definition, in first-definition order, and the
+     * imports -- that every turn's program is built from.  A compiled turn
+     * prints its own `=> ...` line and sets `last_turn_printed`, so the REPL
+     * does not print the (nil) result again. */
+    bool         compiled_repl;
+    struct TuriCompiledDef *compiled_defs;
+    uint32_t     n_compiled_defs, cap_compiled_defs;
+    bool         last_turn_printed;
     /* RM Q#5: session-scoped reader-macro registry. Persists across REPL
      * turns so `(reader-macros/define ...)` on one line is visible to the
      * reader on the next. Allocated from sym_arena; entries' templates

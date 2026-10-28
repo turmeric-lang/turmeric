@@ -6,7 +6,10 @@
 > C1, and **graduated 2026-10-17** (0.65 line, past its advisory `expires_at`
 > of 0.65.0): on by default on every `TUR_JIT` build, with
 > `TUR_REPL_JIT_INLINE_C=0` as the off switch. C2 was investigated 2026-10-02 and
-> again 2026-10-04 (findings under C2) and is not started. **Rewritten 2026-09-29.** The 2026-06-28 draft (in
+> again 2026-10-04 (findings under C2); **its step 1 landed 2026-10-28** behind
+> `--enable=compiled-repl` (prototype): every turn compiles the session's
+> definition table plus the turn, with per-program globals (C2, "Step 1, as
+> built"). **Rewritten 2026-09-29.** The 2026-06-28 draft (in
 > git history) proposed compiling each prompt form with a `cc` subprocess into
 > a `.so` and `dlopen`ing it. It predates the in-process MIR JIT (graduated
 > 0.34.0). The JIT and the spice REPL now provide most of the machinery the
@@ -523,6 +526,72 @@ of the globals rather than the slots, and the two states would drift apart. A
 - `:run` / `:reload` feed a file's forms through the same turn path.
 
 A loaded spice (RP3) is out of scope for C2; see C3.
+
+#### Step 1, as built (2026-10-28)
+
+Behind `--enable=compiled-repl` (prototype, introduced 0.72.0). The
+recommendation's first item: the step-7 branch and the definition table, with
+per-program globals.
+
+- **Where.** `src/turi/compiled_turn.{h,c}` (engine-free, `tur_core`) owns the
+  definition table and builds the program; the compile-and-run is a host hook,
+  `g_repl_compiled_turn_hook` (`src/driver/jit.c`), installed by `tur`'s
+  `main.c` on a `TUR_HAVE_JIT` build. `repl_fresh_env` turns the session's
+  `compiled_repl` on after the preload, so the stdlib stays the
+  interpreter's; `#lang`s other than `turmeric`, and the sweet/neoteric
+  readers, stay interpreted.
+- **The turn.** Step 7 of `turi_eval_impl` calls `turi_compiled_turn_run`
+  instead of `eval_toplevel_guarded`; its result feeds step 8 unchanged, so the
+  session commits a turn only when its program compiled and exited 0.
+- **The table.** Each new form is a definition (keyed `defn f`, `def x`,
+  `defstruct Pt`..., `definstance Show Pt`; `define` is `def`), an import
+  (`import`/`load`/`require`/`use`, kept in order, deduplicated by text), or
+  an expression. A definition replaces its entry in place. The table changes
+  only when the turn ran.
+- **The program.** The imports, five inline-C printers, the table, and
+  `(defn main [] : int <turn> 0)`. `main` runs the turn's expressions and
+  prints the last as the REPL would: `%lld`, `%g`, a quoted string,
+  `true`/`false`, `nil` for a unit result, `#<fn>` for a function value, a
+  defn as `#<fn f>`, a def as its value. A type definition prints nothing and
+  the REPL shows its `#<struct-type Pt>` sentinel itself. The host runs it as
+  `tur jit` runs a file (split, prune, `tur_jit_execute`, the full-preamble
+  retry) and keeps nothing resident.
+- **Tests.** `tests/turi/repl-compiled.sh` (ctest `tur_repl_compiled`): a
+  transcript of scalars, definitions and a redefinition prints the same
+  `=>` lines compiled and interpreted; inline-C defns compile with the turn;
+  a turn that fails to elaborate, or to compile, leaves the table as it was;
+  step 1's differences are pinned; without the flag nothing changes.
+
+**Differences from the interpreter, step 1:**
+
+- Every initializer re-runs each turn, so a mutation of a global lasts one
+  turn: `(def ^mut n 5)`, then `(bump)` twice prints `6`, `6` (interpreted:
+  `6`, `7`). Step 2's slots fix it, and a `def` whose initializer has an
+  effect repeats that effect every turn until then.
+- A value with no scalar printer prints `#<Type>` -- `#<Pt>`, `#<(Vec int)>`
+  -- where the interpreter uses its `Show` instance or its struct repr (the
+  plan's turn-entry printer, point 8).
+- A name only the interpreter's natives answer (it warns `unknown name ...;
+  will runtime-dispatch` and finds a native) is an error in the compiled
+  program, as it would be under `tur run`. The turn fails and the session
+  carries on.
+- A panic or a non-zero exit fails the turn (`the turn's program exited
+  non-zero`).
+
+**Cost.** Release, x86-64 Linux, 4 cores: a session of N one-line defns, then
+ten expression turns calling the last one, every turn compiled.
+
+| N | turns | compiled, total | per turn | interpreted, total |
+| --- | --- | --- | --- | --- |
+| 1 | 11 | 1.5 s | ~136 ms | 0.02 s |
+| 50 | 60 | 8.0 s | ~134 ms | 0.03 s |
+| 200 | 210 | 27.1 s | ~129 ms | 0.03 s |
+
+Flat in the session's size, as the 2026-10-04 look predicted: the prune keeps
+only what `main` reaches, so the fixed c2mir floor is the cost. That is
+inside the 200 ms budget here; on arm64 macOS the floor alone was ~245 ms, so
+C4 item 2 still decides that platform. Nothing stays resident, so step 1 has
+no image-memory question; step 2's slots bring it back.
 
 #### Investigation (2026-10-02)
 
