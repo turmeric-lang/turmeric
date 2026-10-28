@@ -472,7 +472,7 @@ rm -f "$OLD_F" "$NEW_F"
 # caret-type-attributes-plan P5: a defeffect's trailing `^extends Parent` /
 # `^capability` move before the name, a defn's `#[no-unwind]` / `#[used]` /
 # `(export-as "c")` become `^no-unwind` / `^used` / `^export-as "c"` (the
-# compiler warns, TUR-D0008).  A defeffect with a comment in it is left alone.
+# compiler rejects the old spelling, TUR-E0718).  A defeffect with a comment in it is left alone.
 # ---------------------------------------------------------------------------
 NAME="fmt-migrates-defeffect-and-defn-attributes"
 P5_IN='(defeffect FS [] :nil ^extends IO ^capability)

@@ -1,5 +1,0 @@
-TUR-D0008
-defeffect: the trailing ^capability is deprecated; write ^capability before the name: (defeffect ^capability Disk ...)
-defeffect: the trailing ^extends Disk is deprecated; write ^extends Disk before the name: (defeffect ^extends Disk Write ...)
-defn: #[no-unwind] is deprecated; write ^no-unwind
-defn: (export-as "attrs_second") is deprecated; write ^export-as "attrs_second"

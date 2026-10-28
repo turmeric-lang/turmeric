@@ -455,9 +455,9 @@ the `^` form, because the declaration's arity no longer fits.
 
 ## Attributes beyond the type declarations (proposed P5)
 
-> Status: decided 2026-10-28 (items 1-3 below; 4 stays as it is) and
-> implemented as P5, warning stage. The decisions above P4 cover the type
-> declarations only.
+> Status: decided 2026-10-28 (items 1-3 below; 4 stays as it is);
+> implemented as P5, through the hard error (TUR-E0718). The decisions above
+> P4 cover the type declarations only.
 
 The rule this plan adopts -- `^name` is an attribute and goes before what it
 marks -- has a few exceptions outside the four type declarations. A survey of
@@ -525,8 +525,9 @@ rewrite tool, the P3 warning) applies to each without new design.
 ### P5 as implemented
 
 Same sequence as P0-P4: both spellings read, the old one warns, a later change
-makes it an error. This section covers the first two stages; the error is a
-separate change that has to wait until the spices have been migrated.
+makes it an error. The warning (TUR-D0008) shipped first; the spices were
+migrated by `tur fmt` in turmeric-spices#120, and the error followed as its own
+change (below).
 
 - **Elaborator.** `elab_defeffect` reads `^private`, `^capability` and
   `^extends Parent` in any order before the name (`^extends` twice is an error);
@@ -542,8 +543,9 @@ separate change that has to wait until the spices have been migrated.
   disqualifies the single-main shortcut and force-loads the module in a
   whole-program build. It now finds `^used` too; without that a migrated
   project would link-fail where the old spelling built.
-- **TUR-D0008** (`ATTR_AFTER_NAME`) is the warning, one per attribute, at
-  `elab_deprecation_level()`; an error under `--Werror=deprecated`.
+- **TUR-E0718** (`ATTR_AFTER_NAME`) is the error, one per attribute. It
+  replaces the warning stage's TUR-D0008, which is gone. The attribute is still
+  applied after the error is reported, so one mistake does not cascade.
 - **`tur fmt`** migrates the old spellings: the `#[...]` swaps and the
   `(export-as ...)` list become `^` attributes in place; a defeffect's trailing
   attributes move to `^capability ^extends Parent` before the name, after any
