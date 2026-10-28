@@ -20,10 +20,10 @@
 
 (defeffect Tick [] int)
 
-(defdata R :heap :copy (Lf int) (Br (Cons R)))
-(defdata Fr :heap :copy [T] (Nil) (Frame (Cons T) T))
-(defstruct Box :heap :copy [T] (v T))
-(defstruct Zip :heap :copy [T] (fr (Fr T)))
+(defdata ^heap ^copy R (Lf int) (Br (Cons R)))
+(defdata ^heap ^copy Fr [T] (Nil) (Frame (Cons T) T))
+(defstruct ^heap ^copy Box [T] (v T))
+(defstruct ^heap ^copy Zip [T] (fr (Fr T)))
 
 (defn val [r : R] : int
   (match r

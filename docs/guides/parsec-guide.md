@@ -227,10 +227,10 @@ a `String`).
 
 A parser's value travels through the library as one machine word. These
 result types are exact: `int`, `bool`, `Char`, `String`, `(List A)`, an
-`(Option A)` built by `optional`, and any `:heap` struct:
+`(Option A)` built by `optional`, and any `^heap` struct:
 
 ```turmeric
-(defstruct Setting :heap [key : String value : String])
+(defstruct ^heap Setting [key : String value : String])
 
 (defn setting-p [] : (Parser Setting)
   (do-m k (key-p) _ (pchar #\=) v (value-p) (pure (Setting k v))))
@@ -240,7 +240,7 @@ A **by-value** aggregate handed to `pure` -- `(pure (pair a b))`, a plain
 `defstruct`, an `Option` you built yourself -- works too. It is wider than
 the word, so it is copied to the heap on the way in (the parser keeps it
 until it runs). That copy is not reclaimed today, so a parser that `pure`s a
-by-value value allocates once per run; a `:heap` record does not. (Before
+by-value value allocates once per run; a `^heap` record does not. (Before
 2026-10-11 the value was passed as the address of a temporary that was gone
 by the time the parser ran, and read back garbage:
 [docs/archive/byvalue-aggregate-erased-to-dangling-stack-address.md](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/byvalue-aggregate-erased-to-dangling-stack-address.md).)

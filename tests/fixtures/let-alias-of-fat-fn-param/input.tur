@@ -25,8 +25,8 @@
 ;; result is a by-value aggregate.  Both `defstruct` and `:copy defdata`
 ;; results failed, so this is not a defstruct-lowering question.
 
-(defstruct Pair2 :copy [a : int b : int])
-(defdata P2d :copy (P2d :int :int))
+(defstruct ^copy Pair2 [a : int b : int])
+(defdata ^copy P2d (P2d :int :int))
 
 (defn mk [n : int] : (fn [int] Pair2)
   (fn [x : int] : Pair2 (make-struct Pair2 :a n :b x)))

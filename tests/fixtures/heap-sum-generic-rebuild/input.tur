@@ -13,8 +13,8 @@
 ;; slots: `(Nil)` with nothing pinning `T`, and `(One 7.1)` of a two-parameter
 ;; sum that fixes only `A`.
 (defstruct Pt [x : float y : float])
-(defdata Fr :heap [T] (Nil) (Frame T T))
-(defdata Two :heap [A B] (None2) (One A) (Both A B))
+(defdata ^heap Fr [T] (Nil) (Frame T T))
+(defdata ^heap Two [A B] (None2) (One A) (Both A B))
 
 (defn bump [T] [f : (Fr T)] : (Fr T)
   (match f

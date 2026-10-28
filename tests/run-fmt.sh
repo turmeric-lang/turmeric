@@ -382,6 +382,33 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# caret-type-attributes-plan: the flags of a defopaque / defstruct / defdata /
+# defgadt are `^attr`s before the name, and the attributes and the name are the
+# header together.  A declaration too long for one line used to put the first
+# attribute on the head line and the NAME on a line of its own:
+#     (defdata ^copy
+#       MdKind
+#       (MdKDocument) ...
+# The keyword spelling must lay out as it always did.
+# ---------------------------------------------------------------------------
+NAME="fmt-type-decl-attrs-stay-with-name"
+ATTR_LONG='(defdata ^copy ^heap Tokenizer-State-With-A-Long-Name (TokenStart :int :int) (TokenEnd :int :int) (TokenError :cstr))'
+ACTUAL=$(printf '%s\n' "$ATTR_LONG" | "$TUR" fmt --stdin 2>/dev/null)
+ROUNDTRIP=$(printf '%s\n' "$ACTUAL" | "$TUR" fmt --stdin 2>/dev/null)
+KW_LONG='(defdata Tokenizer-State-With-A-Long-Name :copy (TokenStart :int :int) (TokenEnd :int :int) (TokenError :cstr))'
+KW_ACTUAL=$(printf '%s\n' "$KW_LONG" | "$TUR" fmt --stdin 2>/dev/null)
+OPQ=$(printf '%s\n' '(defopaque ^linear ^sealed A-Very-Long-Opaque-Handle-Type-Name-For-A-Resource :ptr<void>)' | "$TUR" fmt --stdin 2>/dev/null)
+if printf '%s\n' "$ACTUAL" | head -1 | grep -qxF "(defdata ^copy ^heap Tokenizer-State-With-A-Long-Name" \
+   && printf '%s\n' "$ACTUAL" | sed -n 2p | grep -qE "^  \(TokenStart" \
+   && printf '%s\n' "$KW_ACTUAL" | head -1 | grep -qxF "(defdata Tokenizer-State-With-A-Long-Name" \
+   && printf '%s\n' "$OPQ" | head -1 | grep -qxF "(defopaque ^linear ^sealed A-Very-Long-Opaque-Handle-Type-Name-For-A-Resource" \
+   && [ "$ACTUAL" = "$ROUNDTRIP" ]; then
+    pass "$NAME"
+else
+    fail "$NAME" "attributes split from the name or not idempotent; got: $ACTUAL // $OPQ"
+fi
+
+# ---------------------------------------------------------------------------
 # FT7: bootstrap -- every hand-authored stdlib file is already self-formatted.
 # docstrings.tur is excluded: it is an auto-generated artifact (gendocs.py
 # --emit-tur) whose inline-C literal bodies the formatter does not round-trip,

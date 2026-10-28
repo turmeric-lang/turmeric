@@ -263,7 +263,7 @@
 
 ;;; R7rsEnvironment -- an environment specifier: the import sets evaluated
 ;;; code sees, written.
-(defstruct R7rsEnvironment :heap [sets : cstr])
+(defstruct ^heap R7rsEnvironment [sets : cstr])
 (defn r7rs-environment?__ [x] : bool (is? x R7rsEnvironment))
 (defn r7rs-environment-sets__ [e : R7rsEnvironment] : cstr (.sets e))
 

@@ -3,7 +3,7 @@
 ; a let, or applied immediately) and the struct result keeps its type so a
 ; following field access resolves.
 
-(defstruct Person :copy [name : cstr age : int])
+(defstruct ^copy Person [name : cstr age : int])
 
 (defn main [] : int
   (let [f      (fn [a : int] : Person (make-struct Person "Bob" a))

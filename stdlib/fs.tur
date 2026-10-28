@@ -40,7 +40,7 @@
 
 (defopaque StatInfo :int)
 
-(defopaque TmpFile :int :linear)
+(defopaque ^linear TmpFile :int)
 ;;; fs/stat -- return file metadata for a path.
 ;;;
 ;;; Parameters:
@@ -176,11 +176,11 @@
 ;;; owning group, or everyone else.
 ;;;
 ;;; Since: stdlib-os-surface P3
-(defdata PermClass :copy (PermUser) (PermGroup) (PermOther))
+(defdata ^copy PermClass (PermUser) (PermGroup) (PermOther))
 ;;; Perm -- one permission: read, write or execute (search, on a directory).
 ;;;
 ;;; Since: stdlib-os-surface P3
-(defdata Perm :copy (PermRead) (PermWrite) (PermExec))
+(defdata ^copy Perm (PermRead) (PermWrite) (PermExec))
 ;;; mode/of-bits -- a Mode from st_mode-style permission bits.
 ;;;
 ;;; Parameters:
@@ -344,7 +344,7 @@
 ;;; KindOther covers devices, FIFOs and sockets.
 ;;;
 ;;; Since: stdlib-os-surface P3
-(defdata FileKind :copy (KindFile) (KindDir) (KindSymlink) (KindOther))
+(defdata ^copy FileKind (KindFile) (KindDir) (KindSymlink) (KindOther))
 ;;; fs/stat-kind-code -- 0 file, 1 dir, 2 symlink, 3 other (internal).
 (defn fs/stat-kind-code [s : StatInfo] : int
   ```c

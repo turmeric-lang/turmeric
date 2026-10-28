@@ -39,11 +39,11 @@ surprise.
 ### Any type may be bound at module level
 
 There is no restriction on the *type* of a global. In particular, a value whose
-type comes from `defopaque` -- including one declared `:linear` -- is an
+type comes from `defopaque` -- including one declared `^linear` -- is an
 ordinary global:
 
 ```turmeric
-(def hub-mutex (mutex-new))     ; Mutex is (defopaque Mutex :ptr<void> :linear)
+(def hub-mutex (mutex-new))     ; Mutex is (defopaque ^linear Mutex :ptr<void>)
 
 (defn broadcast [msg : cstr] : nil
   (mutex-lock hub-mutex)

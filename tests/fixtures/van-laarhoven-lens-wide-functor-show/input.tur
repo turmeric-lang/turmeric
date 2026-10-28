@@ -8,7 +8,7 @@
 ;; (Path A), which threads every constraint dict.  Exercised at BOTH `Show int`
 ;; and `Show bool` so the threaded dict must dispatch per instance.  No inline-C,
 ;; so this runs under the interpreter harness too.
-(defstruct Identity :copy [a] (wrapped : a))
+(defstruct ^copy Identity [a] (wrapped : a))
 (defn mk-id  [A] [x : A]            : (Identity A) (make-struct Identity :wrapped x))
 (defn run-id [A] [i : (Identity A)] : A            (.wrapped i))
 (definstance Functor [Identity]

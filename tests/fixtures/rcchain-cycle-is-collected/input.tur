@@ -17,7 +17,7 @@
 ; finding: the walker was never the missing piece.
 (load "stdlib/rcchain.tur")
 
-(defstruct N :move [kids : rc<RcChain>])
+(defstruct ^move N [kids : rc<RcChain>])
 
 (defn nil-n [] : rc<N>
   (:: 0 rc<N>))

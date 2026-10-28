@@ -60,17 +60,18 @@ inseparable, so the type checker forces you to handle every case.
 ## Declaring a sum: `defdata`
 
 ```turmeric
-(defdata Either :copy [L R]
+(defdata ^copy Either [L R]
   (Left L)
   (Right R))
 ```
 
 - **Name** -- the type constructor (`Either`).
-- **`:copy` / `:move`** (optional) -- value discipline. `:copy` makes a value
+- **`^copy` / `^move`** (optional) -- value discipline. `^copy` makes a value
   freely reusable (right for immutable, resource-free sums like `Either`);
-  the default `:move` enforces single-use ownership; `:linear` (exactly once)
-  and `:affine` (at most once) are the substructural ones. Put it after the
-  name, before or after the type-parameter vector.
+  the default `^move` enforces single-use ownership; `^linear` (exactly once)
+  and `^affine` (at most once) are the substructural ones. Write it before the
+  name, as on `defn` and `def`: `(defdata ^copy Either [L R] ...)`. (The older
+  spelling, a `:copy` keyword after the name, is still read.)
 - **Type parameters** `[L R]` (optional) -- a parametric sum. Each constructor
   may use these in its payload types.
 - **Constructors** `(Left L) (Right R)` -- one parenthesised arm each. A
@@ -86,7 +87,7 @@ payloads -- the same `[name : type ...]` shape `defstruct` uses. This is the
 sum-of-records form (Rust's `enum Foo { Bar { x: int, y: int } }`):
 
 ```turmeric
-(defdata Shape :copy
+(defdata ^copy Shape
   (Circle [radius : float])
   (Rect   [w : float h : float])
   (Square [side : float]))
@@ -114,7 +115,7 @@ each variant commits to a single style. A positional variant still uses
 keyword payload types (`(Circle :float)`); a record variant uses the bare
 struct field syntax (`[radius : float]`).
 
-`:copy` traverses every variant: a `:copy` sum whose payload includes an
+`^copy` traverses every variant: a `^copy` sum whose payload includes an
 owning pointer (`rc<T>`, `ref<T>`, `weak<T>`) is rejected, naming the
 offending field and variant -- the same rule `defstruct :copy` enforces,
 lifted across the sum.
@@ -237,7 +238,7 @@ through the matched ctor without the caller re-listing every field, and
 `(.field s)` reads the variant's field directly:
 
 ```turmeric
-(defdata Shape :copy
+(defdata ^copy Shape
   (Circle [radius : float])
   (Rect   [w : float h : float]))
 
@@ -249,7 +250,7 @@ through the matched ctor without the caller re-listing every field, and
 
 - The scrutinee must be a **bare symbol** (`match s ...`), not a compound
   expression. Compound scrutinees have no name to narrow.
-- The ADT (and the matched variant) must be `:copy`. Move-only ADTs still
+- The ADT (and the matched variant) must be `^copy`. Move-only ADTs still
   reject at TUR-E0296.
 - The matched variant must be **record-style**. Narrowing to a positional
   variant rejects with a message pointing at the missing field names.

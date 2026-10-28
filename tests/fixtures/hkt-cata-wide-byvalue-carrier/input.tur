@@ -15,8 +15,8 @@
 ;; a shallow tree would pass by leaf-child luck even with a mis-decoded element.
 (load "stdlib/typeclass-functor.tur")
 
-(defdata ExprF :copy [a] (LitF :int) (AddF a a))
-(defdata Expr  :copy (Roll :int (ExprF Expr)))
+(defdata ^copy ExprF [a] (LitF :int) (AddF a a))
+(defdata ^copy Expr (Roll :int (ExprF Expr)))
 
 (definstance Functor [ExprF]
   (fmap [c g]

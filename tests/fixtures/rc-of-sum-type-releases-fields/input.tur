@@ -17,7 +17,7 @@
 ; matched no case.  Same double-indirection shape as the `:heap` + rc<T> bug
 ; (docs/archive/gc-heap-struct-rc-not-a-control-block.md).  The boxing adopts
 ; the ctor's pointer directly now.
-(defstruct S :move [next : rc<S>])
+(defstruct ^move S [next : rc<S>])
 
 (defn null-rc-s [] : ptr<void>
   ```c

@@ -15,7 +15,7 @@
 ;; carrier cast.  The pack site bridges the erased positions through their bits
 ;; (`__tur_fltcarrier_*`).  VALUES are asserted, including a negative with a
 ;; fractional part.  No inline C.
-(defstruct Identity :copy [a] (wrapped : a))
+(defstruct ^copy Identity [a] (wrapped : a))
 (defn mk-id  [A] [x : A]            : (Identity A) (make-struct Identity :wrapped x))
 (defn run-id [A] [i : (Identity A)] : A            (.wrapped i))
 (definstance Functor [Identity]

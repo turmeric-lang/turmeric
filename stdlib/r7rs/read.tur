@@ -23,9 +23,9 @@
 ;;; R7rsRd -- one `read` call's state: the port (whose fold-case flag the
 ;;; `#!` directives set) and the datum labels seen so far, as a list of
 ;;; `(n . R7rsLabelRef)`.
-(defstruct R7rsRd :heap [port : any labels : any])
+(defstruct ^heap R7rsRd [port : any labels : any])
 ;;; R7rsLabelRef -- label n: a placeholder until its datum is complete.
-(defstruct R7rsLabelRef :heap [n : int done : bool value : any])
+(defstruct ^heap R7rsLabelRef [n : int done : bool value : any])
 (defn r7rs-rd-port__ [st : R7rsRd] : any (.port st))
 (defn r7rs-rd-fold?__ [st] : bool (r7rs-port-fold__ (r7rs-rd-port__ st)))
 (defn r7rs-rd-set-fold__ [st v : bool] : nil (r7rs-port-set-fold__ (r7rs-rd-port__ st) v))
@@ -378,7 +378,7 @@
 
 ;;; R7rsBridgeRaised -- internal (T4): an object raised on one side of the
 ;;; eval bridge, caught there to be raised again on the other.
-(defstruct R7rsBridgeRaised :heap [obj : any])
+(defstruct ^heap R7rsBridgeRaised [obj : any])
 (defn r7rs-bridge-raised__ [obj] : any (R7rsBridgeRaised obj))
 (defn r7rs-bridge-raised?__ [x] : bool (is? x R7rsBridgeRaised))
 (defn r7rs-bridge-raised-obj__ [x : R7rsBridgeRaised] : any (.obj x))

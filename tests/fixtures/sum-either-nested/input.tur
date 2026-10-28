@@ -1,10 +1,10 @@
 ; Sum-types plan T8.3: an Either whose Right arm carries an Opt sum; decompose
 ; through the nested sum with a two-level match (Either int (Opt cstr)-shaped).
-(defdata Opt :copy
+(defdata ^copy Opt
   (Nada)
   (Just :int))
 
-(defdata Either :copy [L R]
+(defdata ^copy Either [L R]
   (Left L)
   (Right R))
 

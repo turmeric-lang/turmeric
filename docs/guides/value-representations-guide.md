@@ -45,11 +45,11 @@ float bit-reinterpret note below).
    or `aggregate value used where an integer was expected` going the other
    way.
 
-3. **Heap pointer** -- `:heap` structs and parametric heap containers
+3. **Heap pointer** -- `^heap` structs and parametric heap containers
    (`Option`, `Vec`, `Cons`). The carrier bits ARE the pointer, so the
    erasure round trip is lossless. This is why `Option` escaped the `bind`
    miscompile while by-value `Result` did not
-   (`result-monad-bind-typed-boundary-miscompiles`), and why `:heap` was
+   (`result-monad-bind-typed-boundary-miscompiles`), and why `^heap` was
    the workaround for the by-value Vec-element shape
    (`vec-byvalue-struct-element-invalid-c`, resolved by increment 3).
 

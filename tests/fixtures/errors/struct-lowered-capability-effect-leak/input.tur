@@ -11,7 +11,7 @@
 
 (defeffect Emit [s :cstr] :nil)
 
-(defstruct Emitter :copy [run : fn #fx{Emit}])
+(defstruct ^copy Emitter [run : fn #fx{Emit}])
 
 (defn leak [em : Emitter] #fx{} : int
   (do (.run em "boom") 0))

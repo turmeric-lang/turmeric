@@ -5,7 +5,7 @@
 ;; ADT, a boxed sum, a `:heap` struct, and an rc made from a ref.
 
 (defstruct Pt [x : int y : float])
-(defstruct H :heap [tag : int w : float])
+(defstruct ^heap H [tag : int w : float])
 (defdata Shape (Circle float) (Sq int int))
 
 (defn zero? [r : rc<int>] : bool

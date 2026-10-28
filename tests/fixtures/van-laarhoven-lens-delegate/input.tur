@@ -32,7 +32,7 @@
 (definstance Functor [Identity]
   (fmap [i g] (mk-id (g (run-id i)))))
 
-(defstruct Point :copy :heap [x : int y : int])
+(defstruct ^copy ^heap Point [x : int y : int])
 
 (defn point-x [^f] [^Functor f g : (-> int (f int)) s : Point] : (f Point)
   (fmap (g (.x s))

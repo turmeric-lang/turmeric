@@ -3,7 +3,7 @@
 ;; attribute parser the keyword ended defstruct's flag loop and was read as part
 ;; of the field list.  An affine value may be used once, or not at all.
 (defstruct ^affine Lease [secs : int])
-(defstruct Grant :affine [secs : int])
+(defstruct ^affine Grant [secs : int])
 
 (defn lease-secs [l : Lease] : int (.secs l))
 (defn grant-secs [g : Grant] : int (.secs g))

@@ -22,7 +22,7 @@
 ;; Value ADT
 ;; ============================================================
 
-(defdata Value :copy
+(defdata ^copy Value
   (LongVal :int)
   (StrVal :cstr)
   (EntityVal :int))
@@ -31,7 +31,7 @@
 ;; Datum
 ;; ============================================================
 
-(defstruct Datum :copy
+(defstruct ^copy Datum
   [entity : int
    attr   : cstr
    value  : Value
@@ -76,7 +76,7 @@
 ;;   Wild -- matches anything; binds nothing
 ;; ============================================================
 
-(defdata Term :copy
+(defdata ^copy Term
   (Var :cstr)
   (Lit :Value)
   (Wild))
@@ -92,7 +92,7 @@
 ;; which reclaims them in one step.
 ;; ============================================================
 
-(defdata Binding :copy
+(defdata ^copy Binding
   (Empty)
   (Bound :cstr :Value :Binding))
 
@@ -133,7 +133,7 @@
 ;; Pattern clause: (entity-term, attr-term, value-term)
 ;; ============================================================
 
-(defstruct Pattern :copy
+(defstruct ^copy Pattern
   [e : Term
    a : Term
    v : Term])

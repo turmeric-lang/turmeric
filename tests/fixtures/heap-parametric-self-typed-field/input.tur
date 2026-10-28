@@ -8,7 +8,7 @@
 ;; (carrier vs heap-ptr), then emit `tur_adt_Node__int * next;` inside the
 ;; typedef that introduces the name, then heap-use-after-free the ctor
 ;; signature table when a generic `push` was instantiated.
-(defstruct Node :heap [A] (val A) (next (Node A)))
+(defstruct ^heap Node [A] (val A) (next (Node A)))
 
 (defn node-nil? [A] [n : (Node A)] : bool (= (:: n int) 0))
 

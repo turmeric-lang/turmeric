@@ -7,7 +7,7 @@
 (load "stdlib/string.tur")
 
 (defopaque Key :int)
-(defstruct Node :copy [key : Key weight : int depth : int])
+(defstruct ^copy Node [key : Key weight : int depth : int])
 (defstruct Person [name : String age : int])
 (defstruct Team [lead : Person size : int])
 

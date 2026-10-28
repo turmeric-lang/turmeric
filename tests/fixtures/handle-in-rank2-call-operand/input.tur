@@ -18,7 +18,7 @@
 (defn idf [a] [x : a] : a x)
 
 (defeffect Ec [x :cstr] :cstr)
-(defstruct FC :copy [run : (fn [cstr] cstr) #fx{Ec}])
+(defstruct ^copy FC [run : (fn [cstr] cstr) #fx{Ec}])
 (defn fc [v : cstr] : cstr (perform (Ec v)))
 
 (defn ru [l (forall [a] [(R a)] (-> a a)) v : cstr] : cstr (l v))

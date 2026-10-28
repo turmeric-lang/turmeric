@@ -13,7 +13,7 @@
 ;
 ; Each case prints live rc blocks after the binding's scope has closed.
 ; 0 means every reference was accounted for.
-(defstruct Node :move [next : rc<Node>])
+(defstruct ^move Node [next : rc<Node>])
 
 (defn null-rc-node [] : ptr<void>
   ```c

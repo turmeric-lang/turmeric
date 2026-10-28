@@ -20,7 +20,7 @@
 ;;
 ;; stdlib-int-stand-in-audit S2: the handle also carries a PHANTOM element type
 ;; A, so the cell's payload is typed at the signature while the storage stays
-;; int64-carried -- the `Vec` shape (`(defstruct Vec :heap [A] ...)` with
+;; int64-carried -- the `Vec` shape (`(defstruct ^heap Vec [A] ...)` with
 ;; `val :A` over an int64 buffer), and the same shape `(defopaque List [A] :int)`
 ;; already uses. The payload was `:int`, so a `float` could not be stored at all
 ;; and a by-value aggregate type-checked and then failed in cc.

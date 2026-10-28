@@ -1,6 +1,6 @@
 ;; GAP 3 / TUR-E0295: the reverse -- reinterpreting an int carrier as a by-value
 ;; aggregate has no sound lowering either (a segfault compiled / "no arm matched"
 ;; under --interpret); it must be diagnosed.
-(defdata Pair :copy (Pair :int :int))
+(defdata ^copy Pair (Pair :int :int))
 (defn from-int [h : int] : Pair (:: h :Pair))
 (defn main [] : int (match (from-int 0) (Pair a b) (println a)))

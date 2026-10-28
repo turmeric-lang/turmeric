@@ -11,7 +11,7 @@
 ;; drop_glue is shallow there, so a clean deep clone is not expressible without
 ;; also deepening the base drop.)
 
-(defstruct H4 :heap [p : ref<int> tag : int])
+(defstruct ^heap H4 [p : ref<int> tag : int])
 
 (defn k-identity [k] : int k)
 

@@ -95,7 +95,7 @@ The `SessionConfig` struct controls both the cookie attributes and the
 session TTL:
 
 ```turmeric
-(defstruct SessionConfig :copy
+(defstruct ^copy SessionConfig
   [cookie-name : cstr   ;; "tur_session"
    path        : cstr   ;; "/"
    domain      : cstr   ;; "" omits the Domain attribute

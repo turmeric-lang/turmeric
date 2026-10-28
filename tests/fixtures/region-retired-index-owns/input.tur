@@ -13,7 +13,7 @@
 ;; The node words are `:int` on purpose: erasing is what makes the bracket
 ;; retire, exactly as in region-with-region.
 
-(defdata Link :heap (Link [v : int nxt : int]))
+(defdata ^heap Link (Link [v : int nxt : int]))
 
 (defn keep [n : int] : int
   (with-region (fn [] (:: (Link n 0) :int))))

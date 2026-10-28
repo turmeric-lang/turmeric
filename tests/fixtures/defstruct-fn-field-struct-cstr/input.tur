@@ -5,8 +5,8 @@
 ;; such a field must bridge the int64_t carrier to the typed C function
 ;; pointer with an (intptr_t) cast instead of warning/erroring under
 ;; -Wint-conversion.
-(defstruct Person :copy [name : cstr age : int])
-(defstruct Lens :copy
+(defstruct ^copy Person [name : cstr age : int])
+(defstruct ^copy Lens
   [get (fn [Person] cstr)
    put (fn [Person cstr] Person)])
 

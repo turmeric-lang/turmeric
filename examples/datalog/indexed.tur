@@ -17,7 +17,7 @@
 ;; Value ADT
 ;; ============================================================
 
-(defdata Value :copy
+(defdata ^copy Value
   (LongVal :int)
   (StrVal :cstr)
   (EntityVal :int))
@@ -26,7 +26,7 @@
 ;; Datum
 ;; ============================================================
 
-(defstruct Datum :copy
+(defstruct ^copy Datum
   [entity : int
    attr   : cstr
    value  : Value
@@ -75,12 +75,12 @@
 ;; integers from then on.
 ;; ============================================================
 
-(defstruct IdxEntry :copy
+(defstruct ^copy IdxEntry
   [entity : int    ;; the datum's entity
    attr   : int    ;; the datum's attr-id
    pos    : int])  ;; the datum's index in the log
 
-(defstruct EavtIdx :copy
+(defstruct ^copy EavtIdx
   [names   : (Vec cstr)              ;; attr-id -> attribute name
    buckets : (Vec (Vec IdxEntry))])  ;; 64 buckets of entries
 
@@ -154,7 +154,7 @@
 ;; The log and its index, kept in step: every assert goes to both.
 ;; ============================================================
 
-(defstruct Idb :copy
+(defstruct ^copy Idb
   [db  : Db
    idx : EavtIdx])
 

@@ -2,7 +2,7 @@
 ;; set!-on-rc-Struct-field, exercising the RCK_STRUCT walker.
 ;;
 ;; Builds a self-referential cycle s1 <-> s2 over a single struct shape
-;; (defstruct S :move [next :rc<S>]).  The forward edge is wired in at
+;; (defstruct ^move S [next :rc<S>]).  The forward edge is wired in at
 ;; make-struct time via rc/clone; the back-edge is installed with
 ;; (set! (.next s1) (rc/clone s2)).  After the install both nodes have
 ;; strong_count = 2 (1 from the let binding + 1 from the other node).
@@ -31,7 +31,7 @@
 ;; rather than a live cycle: each node drops to strong=1, held only by the
 ;; other.  (tests/fixtures/gc-live-cycle-survives covers the opposite
 ;; direction, where an external root must keep the cycle alive.)
-(defstruct S :move [next : rc<S>])
+(defstruct ^move S [next : rc<S>])
 
 ;; Initial sentinel for S.next at construction time -- the back-edge is
 ;; installed by the set! below.

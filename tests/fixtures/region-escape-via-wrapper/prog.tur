@@ -21,8 +21,8 @@
 (load "stdlib/sized.tur")
 (load "stdlib/sized-buf.tur")
 
-(defdata Link :heap (Link [v : int nxt : int]))
-(defdata Tree :heap (Leaf [v : int]) (Node [l : Tree r : Tree]))
+(defdata ^heap Link (Link [v : int nxt : int]))
+(defdata ^heap Tree (Leaf [v : int]) (Node [l : Tree r : Tree]))
 
 (defn link-v [l : Link] : int
   (match l (Link a b) a))

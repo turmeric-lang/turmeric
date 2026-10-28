@@ -1,7 +1,6 @@
 ;; :copy opts a type with annotated constructors out of affine move tracking, so its values can be
 ;; read repeatedly (e.g. shared range bounds).
-(defdata Bound [A]
-  :copy
+(defdata ^copy Bound [A]
   (Inclusive int : (Bound int))
   (Exclusive int : (Bound int))
   (Unbounded  : (Bound int)))

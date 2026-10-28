@@ -3,7 +3,7 @@
 ;; element-aware typed walker `tlength`.
 ;;
 ;; Gap G4 (docs/archive/history/heap-cons-byvalue-aggregate-head-breaks-int-carrier-list-helpers.md):
-;; `Cons` is `(defstruct Cons :heap [A] (head A) (tail :int))`. The generic
+;; `Cons` is `(defstruct ^heap Cons [A] (head A) (tail :int))`. The generic
 ;; int-carrier list helpers (`list-length`, `list-head`, ...) walk the chain as a
 ;; fixed `struct { int64_t head; int64_t tail; }`. When A is a by-value aggregate
 ;; (`Option__int`), the real cell is `Cons__Option__int { Option__int head;

@@ -2,7 +2,7 @@
 ;; round-tripping a runtime :cstr to a typed User struct.  -Xschema-reader
 ;; auto-loads json.tur + schema.tur and enables the reader family.
 
-(defstruct User :copy [name : cstr age : int])
+(defstruct ^copy User [name : cstr age : int])
 
 (defn user-schema [] : int
   (schema/field

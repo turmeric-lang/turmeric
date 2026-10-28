@@ -1,6 +1,6 @@
 ;; Probe: can a non-null cstr reach the niche through a defopaque newtype?
 ;; Shape copied from env/get, which already tests the raw pointer against 0.
-(defopaque Cstr! :ptr<void> :non-null)
+(defopaque ^non-null Cstr! :ptr<void>)
 
 (defn getenv-raw [name : cstr] : int
   ```c

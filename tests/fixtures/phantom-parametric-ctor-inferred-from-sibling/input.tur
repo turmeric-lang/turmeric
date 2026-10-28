@@ -16,7 +16,7 @@
 ;; no ctor -- which is why this looked like it worked everywhere else.
 
 (defopaque G :int)
-(defstruct P :heap [V] [e : int f : int])
+(defstruct ^heap P [V] [e : int f : int])
 
 (defn p-new [V] [] : (P V) (P 0 0))
 (defn p-put [V] [^borrow m : (P V) v : V] : (P V) (P (:: v int) 0))

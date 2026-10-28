@@ -3,7 +3,7 @@
 ;; 6.5 (4619004367821864960), and an effectful one segfaulted.  Storing a
 ;; float-signature function there is rejected, as the `:fn` parameter carrier
 ;; already rejects it.
-(defstruct Box1 :copy [app : fn])
+(defstruct ^copy Box1 [app : fn])
 (defn twice [v : float] : float (* v 2.0))
 (defn main [] : int
   (let [t (make-struct Box1 twice)]

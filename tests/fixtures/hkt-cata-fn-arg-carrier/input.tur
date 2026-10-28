@@ -19,8 +19,8 @@
 
 (load "stdlib/typeclass-functor.tur")
 
-(defdata ExprF :copy [a] (LitF :int) (AddF a a))
-(defdata Expr  :copy (Roll (ExprF Expr)))
+(defdata ^copy ExprF [a] (LitF :int) (AddF a a))
+(defdata ^copy Expr (Roll (ExprF Expr)))
 
 (definstance Functor [ExprF]
   (fmap [c g]

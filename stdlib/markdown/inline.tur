@@ -19,8 +19,7 @@
 ;; ---- Types ---------------------------------------------------------------------
 ;;; MdDelim -- a run of * or _ on the delimiter stack: its byte, how many are left and were there, its text inline, its neighbours, and whether it can open or close emphasis.
 
-(defstruct MdDelim
-  :copy
+(defstruct ^copy MdDelim
   [cc : int
    count : int
    orig : int
@@ -31,8 +30,7 @@
    can-close : bool])
 ;;; MdBracket -- a [ or ![ on the bracket stack: its text inline, the bracket and delimiter below it, where its [ is, and its state.
 
-(defstruct MdBracket
-  :copy
+(defstruct ^copy MdBracket
   [node : int
    prev : int
    prev-delim : int
@@ -1012,14 +1010,13 @@
                                                                   (- from 1)))))))
 ;;; MdMailScan -- internal: postprocess_text's walk left from an @: how many bytes it took, and whether a mailto: or xmpp: it passed means no mailto: is added (auto false) and a / may follow the domain (xmpp).
 
-(defstruct MdMailScan :copy [rw : int auto : bool xmpp : bool])
+(defstruct ^copy MdMailScan [rw : int auto : bool xmpp : bool])
 ;;; MdMailEnd -- internal: postprocess_text's walk right from an @: the length it took, the dots it has passed, and whether it stopped at another @.
 
-(defstruct MdMailEnd :copy [le : int np : int at : bool])
+(defstruct ^copy MdMailEnd [le : int np : int at : bool])
 ;;; MdMailHit -- internal: an email address postprocess_text found -- the bytes [a, b), and whether to add mailto: -- or, when found is false, where to look for the next @.
 
-(defstruct MdMailHit
-  :copy
+(defstruct ^copy MdMailHit
   [found : bool a : int b : int auto : bool next : int])
 ;;; md/-mail-local? -- internal: can byte c come before the @ of an email address: a letter, a digit, or one of . + - _?
 

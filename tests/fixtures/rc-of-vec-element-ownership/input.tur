@@ -16,7 +16,7 @@
 ;; Every assertion below is a strong count, because that is the thing that has
 ;; to balance -- printing the elements back would pass just as well with the
 ;; counts wrong.
-(defstruct S :move [tag : int])
+(defstruct ^move S [tag : int])
 
 (defn main [] : int
   (let [a (rc/of (make-struct S 1))

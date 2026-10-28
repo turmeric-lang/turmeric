@@ -18,7 +18,7 @@
 ;; negative control cannot live here -- its caller keeps the box
 ;; (conservatively), which LeakSanitizer reports.
 
-(defdata Value :copy
+(defdata ^copy Value
   (LongVal :int)
   (StrVal :cstr))
 

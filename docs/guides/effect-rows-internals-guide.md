@@ -212,7 +212,7 @@ Two details:
   e0014.tur:5:5: error [TUR-E0014]: captured binding 'foo' does not implement Clone (required by cloneable-shift)
   ```
 
-  An owning one-word handle (`rc<T>`, a `:heap` ADT or struct) or an owning
+  An owning one-word handle (`rc<T>`, a `^heap` ADT or struct) or an owning
   single-constructor by-value product is admitted without `Clone`
   (`owning_multishot_admissible`); `TY_NIL`, `TY_FN` and cloneable
   continuations are always admitted.

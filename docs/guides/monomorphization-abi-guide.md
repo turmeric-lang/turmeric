@@ -173,7 +173,7 @@ load-bearing in a way that no method-level fix can address:
    continuation case rides the bridge.
 
 Vec and MutableMap elements do not ride the carrier: Vec uses the
-`:heap` typed-pointer ABI, MutableMap is typed as the honest
+`^heap` typed-pointer ABI, MutableMap is typed as the honest
 `(MutableMap K V)`, and the Vec inline-C producers are monomorphized
 to typed pointers.
 

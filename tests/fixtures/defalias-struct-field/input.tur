@@ -13,11 +13,11 @@
 (defalias Ints (Vec int))
 (defalias N int)
 (defalias F float)
-(defstruct P :copy [x : float y : float])
+(defstruct ^copy P [x : float y : float])
 (defalias Pt P)
 (defalias Op (fn [int] int))
 
-(defstruct S :copy [xs : Ints n : N f : F p : Pt])
+(defstruct ^copy S [xs : Ints n : N f : F p : Pt])
 (defstruct H [op : Op])
 
 (defn main [] : int

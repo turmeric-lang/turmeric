@@ -51,7 +51,7 @@ TMP="$1"
 TUR="${TUR:-./build/tur}"
 
 cat > "$TMP/in.tur" <<'EOF'
-(defdata Link :heap (Link [v : int nxt : int]))
+(defdata ^heap Link (Link [v : int nxt : int]))
 (defn build [n : int acc : int] : int
   (if (<= n 0) acc (build (- n 1) (:: (Link n acc) :int))))
 (defn chain-sum [c : int] : int

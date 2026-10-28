@@ -32,7 +32,7 @@ first one that fits, not the most general one.
 |---|---|---|
 | A collection or tree read from several places, updated by producing a new version | **Persistent-immutable** -- `hamt`, `map`, `set`, `list`, `string` | Sharing is structural and refcounted at the C layer. An immutable DAG has no mutable back-edges, so no cycle can form. |
 | A buffer one piece of code mutates and nobody else holds | **By-value / single-owner mutable** -- `vec`, `mutmap`, `grid`, `ref`, `sized-*` | The owner owns the one buffer it mutates. No shared handles, so no back-pointers into shared nodes. |
-| An external resource with exactly-once teardown -- a socket, channel, task group, file | **Linear / affine opaque handle** -- `(defopaque H :linear)` / `:affine` | Single ownership and exactly-once teardown enforced by the type checker. This is the deliberate alternative to refcounting. |
+| An external resource with exactly-once teardown -- a socket, channel, task group, file | **Linear / affine opaque handle** -- `(defopaque ^linear H ...)` / `^affine` | Single ownership and exactly-once teardown enforced by the type checker. This is the deliberate alternative to refcounting. |
 | Genuinely shared: several live owners, none of which is "the" owner, and the last one out must clean up | **`rc<T>`** | Runtime refcount. Prompt, deterministic release when the last strong handle goes. |
 | A back-edge, parent pointer, or observer inside an `rc<T>` graph | **`weak<T>`** ([stdlib/weak.tur](https://github.com/turmeric-lang/turmeric/blob/main/stdlib/weak.tur)) | Holds no strong count, so it cannot close a cycle. The forward edges alone decide the lifetime. |
 
@@ -81,7 +81,7 @@ cheaper:
   other observes. That is `rc<T>` one way and `weak<T>` the other, not `rc<T>`
   both ways.
 - **Is it a resource rather than a value?** A socket or a task group wants
-  exactly-once teardown, which is what `:linear` / `:affine` gives you. A
+  exactly-once teardown, which is what `^linear` / `^affine` gives you. A
   refcount gets you teardown at an unpredictable last-drop instead.
 
 If none of those apply, you have genuine shared ownership -- use `rc<T>`, and
@@ -136,7 +136,7 @@ deterministically, with the collector off.
 
 ;; parent --.child--> child   (strong: the parent owns the child)
 ;; child  --.parent-> parent  (weak:   the back-edge owns nothing)
-(defstruct Node :move [tag : int child : rc<Node> parent : weak<Node>])
+(defstruct ^move Node [tag : int child : rc<Node> parent : weak<Node>])
 
 (defn build-pair [] : int
   (let [child  (rc/of (make-struct Node 2 (null-child) (null-parent)))
@@ -149,7 +149,7 @@ load "stdlib/weak.tur"
 
 ;; parent --.child--> child   (strong: the parent owns the child)
 ;; child  --.parent-> parent  (weak:   the back-edge owns nothing)
-defstruct Node :move [tag : int child : rc<Node> parent : weak<Node>]
+defstruct ^move Node [tag : int child : rc<Node> parent : weak<Node>]
 
 defn build-pair [] : int
   let [child  rc/of(make-struct(Node 2 null-child() null-parent()))

@@ -26,7 +26,7 @@
 ;;   TNil        -- the empty term
 ;; :copy -- a Term handle is an immutable tagged value with no owned resources,
 ;; so it is freely copyable (like Option/Either).
-(defdata Term :copy (TInt :int) (TVar :int) (TPair :Term :Term) (TNil))
+(defdata ^copy Term (TInt :int) (TVar :int) (TPair :Term :Term) (TNil))
 ;; Substitution / search state: a persistent association list from var-id to
 ;; Term, whose base node carries the next unused fresh-variable id.
 ;;   SNil next              -- the empty substitution; next = fresh-var counter
@@ -34,15 +34,15 @@
 ;; Prepending bindings preserves the base SNil, so the fresh counter rides along
 ;; through unification for free.
 
-(defdata Subst :copy (SNil :int) (SBind :int :Term :Subst))
+(defdata ^copy Subst (SNil :int) (SBind :int :Term :Subst))
 ;; UnifyResult: the tagged outcome of unification -- UFail on mismatch, or
 ;; UOk carrying the extended substitution. Replaces the old -1 sentinel.
 
-(defdata UnifyResult :copy (UFail) (UOk :Subst))
+(defdata ^copy UnifyResult (UFail) (UOk :Subst))
 ;; Lookup: the tagged outcome of a substitution lookup -- LMissing when the
 ;; variable is unbound, or LFound carrying the bound term.
 
-(defdata Lookup :copy (LMissing) (LFound :Term))
+(defdata ^copy Lookup (LMissing) (LFound :Term))
 ;; Stream: the solution stream (list / backtracking monad) of search states.
 ;;   StNil             -- no solutions
 ;;   StCons subst rest -- one solution substitution, followed by the rest
@@ -51,7 +51,7 @@
 ;;                        solution instead of the whole search space, and what
 ;;                        lets a recursive relation terminate at all.
 
-(defdata Stream :copy (StNil) (StCons :Subst :Stream) (StInc (fn [] Stream)))
+(defdata ^copy Stream (StNil) (StCons :Subst :Stream) (StInc (fn [] Stream)))
 
 ;; The thunk field is declared with its real type, `(fn [] Stream)`.
 ;;

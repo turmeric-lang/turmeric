@@ -16,7 +16,7 @@
 ;; See docs/archive/generic-spec-carrier-crossings.md.
 
 (defstruct Pt [x : int y : float])
-(defstruct Hp :heap [x : int y : float])
+(defstruct ^heap Hp [x : int y : float])
 
 (defn via-vec [A] [v : (Vec A)] : A
   (let [w (vec-new)] (vec-push! w (vec-get v 0)) (vec-get w 0)))

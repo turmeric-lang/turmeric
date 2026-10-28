@@ -9,9 +9,9 @@
 ;; `bump-box` is the original shape (the sum inside a `:heap` struct, so the
 ;; enclosing generic was cloned even before heap-sum-generic-never-specialized
 ;; was fixed); `bump` is the same rebuild with the sum as the parameter itself.
-(defdata R :heap :copy (Lf int) (Br (Cons R)))
-(defdata Fr :heap :copy [T] (Nil) (Frame (Cons T) T))
-(defstruct Box :heap :copy [T] (fr (Fr T)))
+(defdata ^heap ^copy R (Lf int) (Br (Cons R)))
+(defdata ^heap ^copy Fr [T] (Nil) (Frame (Cons T) T))
+(defstruct ^heap ^copy Box [T] (fr (Fr T)))
 
 (defn val [r : R] : int
   (match r

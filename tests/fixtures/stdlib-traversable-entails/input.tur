@@ -5,7 +5,7 @@
 (load "stdlib/typeclass.tur")
 
 ;; Traversable entails Functor and Foldable.
-(defdata Pair2 :copy [A] (Pair2 A A))
+(defdata ^copy Pair2 [A] (Pair2 A A))
 (definstance Functor [Pair2]
   (fmap [c g] (match c (Pair2 x y) (Pair2 (g x) (g y)))))
 (definstance Foldable [Pair2]

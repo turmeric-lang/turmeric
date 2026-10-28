@@ -1,5 +1,5 @@
 ;; CTOR-V0: :no-auto-ctor opts out of the auto-bound constructor, so the
 ;; `(Point ...)` call form is not routed to construction (use make-struct).
-(defstruct Point :copy :no-auto-ctor [x : int y : int])
+(defstruct ^copy ^no-auto-ctor Point [x : int y : int])
 (defn main [] : int
   (let [p (Point 1 2)] 0))

@@ -8,8 +8,8 @@
 ; is the discriminating probe (a shallow one passes by leaf-child luck).
 (load "stdlib/typeclass-functor.tur")
 
-(defdata ReF :copy [a] (EmptyF) (LitF :int) (AltF a a) (StarF a))
-(defdata Re  :copy (Roll (ReF Re)))
+(defdata ^copy ReF [a] (EmptyF) (LitF :int) (AltF a a) (StarF a))
+(defdata ^copy Re (Roll (ReF Re)))
 
 (definstance Functor [ReF]
   (fmap [c g]

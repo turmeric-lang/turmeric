@@ -10,7 +10,7 @@
 ;;   ARGUMENTS. Two `(Box (tick) 3)` applications are not the same value, so
 ;;   they must not unify through the axiom. This is the congruence miscompile
 ;;   this feature has hit three times, reached through a fourth door.
-(defdata Box :copy (Box [width : int height : int]))
+(defdata ^copy Box (Box [width : int height : int]))
 
 (defn tick [] : int
   ```c

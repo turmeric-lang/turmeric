@@ -1,0 +1,7 @@
+(defopaque Chan :ptr<void> :linear)
+(defopaque Fut : ptr<void> :affine :sealed)
+(defopaque Tagged [A] :int :affine)
+(defopaque Phantom [A B] : int :linear :sealed)
+(defopaque Handle :ptr<void> :non-null)
+(defopaque Uid :int)
+(defopaque Spaced : int)

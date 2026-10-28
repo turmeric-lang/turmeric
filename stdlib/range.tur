@@ -52,7 +52,7 @@
 ;;;
 ;;; Since: LZ4 (sum form: range-gadt-typeclass-migration-plan B1)
 
-(defdata Bound :copy (Inclusive int) (Exclusive int) (Unbounded))
+(defdata ^copy Bound (Inclusive int) (Exclusive int) (Unbounded))
 ;;; range-bound-new -- build a Bound with given inclusivity and value.
 ;;;
 ;;; Parameters:
@@ -230,7 +230,7 @@
 ;;;
 ;;; Since: LZ4 (a typed record: adt-gadt-unification-plan slice 3)
 
-(defstruct Range :copy [lower : Bound upper : Bound])
+(defstruct ^copy Range [lower : Bound upper : Bound])
 ;;; range-new -- build a Range from lower and upper Bound endpoints.
 ;;;
 ;;; Parameters:

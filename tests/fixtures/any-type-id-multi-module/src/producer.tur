@@ -13,7 +13,7 @@
   ;; row must say NOT boxed.  When the two TUs disagreed about which id was
   ;; which, main's drop read Beta's boxed flag for a HeapThing handle and
   ;; free()d memory this module owns.
-  (defstruct HeapThing :heap [x : int])
+  (defstruct ^heap HeapThing [x : int])
 
   (defn seed [] : any (make-struct Alpha 1))
   (defn make-beta [] : any (make-struct Beta 7))

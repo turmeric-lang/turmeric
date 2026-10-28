@@ -67,7 +67,7 @@ Out of scope, with where to go instead:
 
 | File | Role |
 |---|---|
-| `src/compiler/elab_structs.c` | Sets `AdtDef.needs_drop_glue` and `CtorField.drop_inner_def` per field (`:copy` / `:heap` exclusions) |
+| `src/compiler/elab_structs.c` | Sets `AdtDef.needs_drop_glue` and `CtorField.drop_inner_def` per field (`^copy` / `^heap` exclusions) |
 | `src/compiler/elab_forms.c` | `elab_let`'s auto-drop passes: injected `defer`s for `ref`/`rc`/Drop-opaque locals and rc/ref fields; the `drops_fn_fields` and `drops_local_owned` flags. Predicates `elab_byval_drop_adt`, `elab_byval_localowned_adt`, `localowned_binding_is_confined`, `elab_own_byval_copy` |
 | `src/compiler/elab_core.c` | Move tracking: `binding_mark_moved`, `binding_mark_lent`, `is_binding_consumed`, `is_field_consumed` |
 | `src/compiler/elab_call.c` | Lends at call sites (`binding_mark_lent`); `hoist_borrowed_closure_args` (the `__borrowc_N` let) |
@@ -223,14 +223,14 @@ field is:
 |---|---|
 | `rc<T>`, `ref<T>`, `weak<T>` | always |
 | boxed fn (`(fn [...] R)`, arity 0..4) | always (the field owns a fat handle) |
-| a nested by-value product that itself needs drop glue | non-parametric, non-`:heap` inner (`drop_inner_def = inner`) |
-| a direct self-reference (`tl : Lst`) | type not `:copy`, not `:heap` (`drop_inner_def = def`) |
-| `any` | type not `:copy`, not `:heap` |
+| a nested by-value product that itself needs drop glue | non-parametric, non-`^heap` inner (`drop_inner_def = inner`) |
+| a direct self-reference (`tl : Lst`) | type not `^copy`, not `^heap` (`drop_inner_def = def`) |
+| `any` | type not `^copy`, not `^heap` |
 
 `needs_drop_glue` makes the type **move-only**. That is the soundness line
-for `:copy`: under `:copy`, `(let [t (Cons 3 (Nil)) a (Cons 1 t) b (Cons 2
+for `^copy`: under `^copy`, `(let [t (Cons 3 (Nil)) a (Cons 1 t) b (Cons 2
 t)] ...)` compiles and two boxes carry the same tail pointer, so a per-spine
-free would free it twice. `:copy` recursive types therefore get no glue and
+free would free it twice. `^copy` recursive types therefore get no glue and
 leak per value; the answer for them is a region bracket.
 
 ### What gets emitted
@@ -291,7 +291,7 @@ A node is allocated with `tur_region_alloc_or_malloc` and released with
 `region_free_fn()`, which is `tur_region_free` by default and `free` under
 `TUR_REGIONS=0`. `tur_region_free` refuses region memory (a process-wide
 registry says who owns a word), so drop glue is safe to run on a node built
-inside a bracket. A `:heap` node has no glue at all: outside a region it lives
+inside a bracket. A `^heap` node has no glue at all: outside a region it lives
 until exit; inside one it goes at the rewind. See
 [regions-internals-guide.md](regions-internals-guide.md).
 
@@ -428,8 +428,8 @@ could be wrong.
 | a closure that escapes (returned, stored, captured, passed to a retaining param) | `closure_binding_escapes` | the env |
 | a spine copied out of a shared view | provenance | the copy's boxes stay the source's |
 | a `match` arm with a guard, or emitted on the tail path | own-discharge | the moved-from box |
-| a `:copy` recursive ADT | no glue by design | every link (use `with-region`) |
-| a `:heap` node outside a region | no glue by design | every node |
+| a `^copy` recursive ADT | no glue by design | every link (use `with-region`) |
+| a `^heap` node outside a region | no glue by design | every node |
 | a `weak<T>` local | no auto-drop | its weak count (`weak/drop` it) |
 
 ---
@@ -581,7 +581,7 @@ leaked:
 
 | Top frame / allocation | What it is |
 |---|---|
-| `tur_region_alloc_or_malloc` beside `*__tN = (...)` | a recursive-field box or a `:heap` node |
+| `tur_region_alloc_or_malloc` beside `*__tN = (...)` | a recursive-field box or a `^heap` node |
 | `malloc(sizeof(void *) + sizeof(struct __env_N))` | a closure env |
 | `tur_box_*`, `tur_some_ptr`, a `some__spec__...` | an Option/Result box |
 | `rc_cb_alloc*` | an rc control block -- but see the rc note above |
@@ -667,7 +667,7 @@ Each rule above was added by one report. The ones that explain *why* a rule
 has the shape it has:
 
 - [byvalue-recursive-adt-boxes-are-never-freed](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/byvalue-recursive-adt-boxes-are-never-freed.md) --
-  spine drops, the `:copy` line, lends, own-discharge, provenance.
+  spine drops, the `^copy` line, lends, own-discharge, provenance.
 - [closure-drop-glue-plan](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/closure-drop-glue-plan.md) -- the env
   header, `TUR_CLOSURE_DROP`, non-retaining fn params.
 - [any-struct-box-leak-per-widen](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/any-struct-box-leak-per-widen.md)

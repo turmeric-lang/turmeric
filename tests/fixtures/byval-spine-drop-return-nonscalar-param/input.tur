@@ -6,7 +6,7 @@
 ;; is now read off the exits themselves: each `return`'s value, and each
 ;; self-call's arguments, must reach nothing the let built.
 (defdata Rec [] (RCons [hd : int tl : Rec]) (RNil))
-(defstruct Cfg :copy [name : cstr k : int])
+(defstruct ^copy Cfg [name : cstr k : int])
 
 ;; a number out of the spine
 (defn once [i : int cfg : Cfg] : int

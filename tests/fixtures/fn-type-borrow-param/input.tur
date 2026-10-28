@@ -8,7 +8,7 @@
 ;; Before the fix `^borrow` was read as a type parameter named `borrow`, so
 ;; the type had two parameters and nothing matched it.
 
-(defopaque Handle :int :linear)
+(defopaque ^linear Handle :int)
 
 (defn handle-open [n : int] : Handle ```c return n; ```)
 (defn handle-close [h : Handle] : nil ```c (void)h; ```)

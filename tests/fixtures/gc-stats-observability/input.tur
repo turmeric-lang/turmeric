@@ -13,7 +13,7 @@
 ;   freed        >  0   (the cycles were reclaimed)
 ;   live-blocks  == 0   (nothing survived)
 ;   high-water   >  0   (candidates really were buffered)
-(defstruct S :move [next : rc<S>])
+(defstruct ^move S [next : rc<S>])
 
 (defn null-rc-s [] : ptr<void>
   ```c

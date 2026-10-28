@@ -11,7 +11,7 @@
 ;; let-bound one, a factory call passed directly and let-bound, and the `int`
 ;; parameter twin.
 
-(defstruct D :copy [e : int x : int])
+(defstruct ^copy D [e : int x : int])
 
 (defn count-if [n : int pred : (fn [D] bool)] : int
   (let [^mut i 0 ^mut c 0]

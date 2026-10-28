@@ -1,7 +1,7 @@
 ; Phase G0: Copy-able ADT -- :copy annotation allows the ADT to be
 ; duplicated rather than moved when assigned or passed as an argument.
 
-(defdata Color :copy
+(defdata ^copy Color
   (Red)
   (Green)
   (Blue))

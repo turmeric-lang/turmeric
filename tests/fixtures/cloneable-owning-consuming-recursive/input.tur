@@ -14,7 +14,7 @@
 ;; (Restricted to rc/weak owning fields -- a ref/lref or nested aggregate field
 ;; would need a genuinely recursive value clone, not an incref, and is rejected.)
 
-(defstruct H2 :heap [r : rc<int> tag : int])
+(defstruct ^heap H2 [r : rc<int> tag : int])
 
 (defn k-identity [k] : int k)
 

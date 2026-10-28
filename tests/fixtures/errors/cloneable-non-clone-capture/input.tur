@@ -9,7 +9,7 @@
   (clone [x] x))
 
 ;; Foo: a struct with no Clone instance
-(defstruct Foo :copy [x : int])
+(defstruct ^copy Foo [x : int])
 
 (defn k-discard [k] : int 0)
 

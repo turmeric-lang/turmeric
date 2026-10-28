@@ -402,7 +402,7 @@ static int __tur_io_fs_list(const char* path, void* entries_v, int max_entries, 
 ;;; opaque says the same thing and rides a Result payload as one word.)
 ;;;
 ;;; Since: LT4
-(defopaque FileHandle :ptr<void> :linear)
+(defopaque ^linear FileHandle :ptr<void>)
 ;;; file-open -- open a file and return a move-only FileHandle.
 ;;;
 ;;; Parameters:
@@ -541,7 +541,7 @@ static int __tur_io_fs_list(const char* path, void* entries_v, int max_entries, 
 ;;; union rather than an int whence, so a caller cannot pass a stray integer.
 ;;;
 ;;; Since: stdlib-os-surface P0
-(defdata SeekFrom :copy (SeekStart) (SeekCurrent) (SeekEnd))
+(defdata ^copy SeekFrom (SeekStart) (SeekCurrent) (SeekEnd))
 ;;; seek-from->whence -- the C whence constant for a SeekFrom.
 (defn seek-from->whence [w : SeekFrom] : int
   (match w (SeekStart) 0 (SeekCurrent) 1 (SeekEnd) 2))

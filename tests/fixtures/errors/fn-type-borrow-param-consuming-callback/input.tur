@@ -2,7 +2,7 @@
 ;; slot the type borrows -- the caller still owns the handle and closes it,
 ;; so accepting this would close it twice.
 
-(defopaque Handle :int :linear)
+(defopaque ^linear Handle :int)
 
 (defn handle-open [n : int] : Handle ```c return n; ```)
 (defn handle-close [h : Handle] : nil ```c (void)h; ```)

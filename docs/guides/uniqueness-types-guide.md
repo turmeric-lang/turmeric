@@ -130,7 +130,7 @@ moved in, and the parameter is mutable inside the body.
 > mutation being visible.
 >
 > To let a callee mutate a value the caller can observe, use `rc<T>` (shared,
-> reference-counted) or a `:heap` struct (interior-mutable by declaration).
+> reference-counted) or a `^heap` struct (interior-mutable by declaration).
 > A `&Struct` receiver is rejected outright: `set! (.field s)` requires a
 > struct or an `rc<Struct>`.
 

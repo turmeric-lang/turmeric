@@ -15,7 +15,7 @@
 
 (defdata Pt (Pt [x : float y : float]))
 
-(defdata Shape :copy
+(defdata ^copy Shape
   (Circle [radius : int])
   (Rect   [w : int h : int])
   (Dot    [p : Pt])

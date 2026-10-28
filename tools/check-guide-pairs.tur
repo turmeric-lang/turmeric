@@ -149,7 +149,7 @@
       in-c)))
 
 ;; ---- Blocks --------------------------------------------------------------------
-(defdata Lang :copy (LangTurmeric) (LangSweet) (LangLisp) (LangOther))
+(defdata ^copy Lang (LangTurmeric) (LangSweet) (LangLisp) (LangOther))
 
 (defn lang-of [w : String] : Lang
   (if (str-is? w "turmeric")
@@ -167,8 +167,7 @@
 ;; A code block as the checks see it.  bare: nothing in the info string past
 ;; the language.  paired: the next block in its container is a bare
 ;; ```sweet-exp block, which is then the next Fence of the list.
-(defstruct Fence
-  :copy
+(defstruct ^copy Fence
   [id : MdBlockId
    lang : Lang
    bare : bool
@@ -257,8 +256,7 @@
 ;; ---- Running tur ---------------------------------------------------------------
 ;; tur: the binary, when there is one.  dir: a scratch directory of this
 ;; run's, holding the pair files and, in manifest/, one manifest at a time.
-(defstruct Ctx
-  :copy
+(defstruct ^copy Ctx
   [tur : (Option cstr) dir : cstr verbose : bool strict : bool])
 
 (defn scratch [ctx : Ctx name : cstr] : String (string/of (.dir ctx) "/" name))
@@ -362,8 +360,7 @@
       r)))
 
 ;; ---- One file ------------------------------------------------------------------
-(defstruct Tally
-  :copy
+(defstruct ^copy Tally
   [pairs : int
    ok : int
    failed : int

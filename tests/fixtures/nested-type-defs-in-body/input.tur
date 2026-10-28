@@ -3,7 +3,7 @@
 ;; scope; the C type and constructors were never emitted (compiled: implicit
 ;; declaration of ctor_Point_Point).
 (defn area [] : int
-  (defstruct Rect :copy [w : int h : int])
+  (defstruct ^copy Rect [w : int h : int])
   (let [r (Rect 3 4)]
     {(.w r) * (.h r)}))
 (defn describe [] : int

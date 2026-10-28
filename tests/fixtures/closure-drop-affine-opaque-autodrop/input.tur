@@ -23,7 +23,7 @@
   return f;
   ```)
 
-(defopaque Widget :int :affine)
+(defopaque ^affine Widget :int)
 
 (defn widget-alloc [] : int
   ```c

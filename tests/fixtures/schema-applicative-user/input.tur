@@ -8,7 +8,7 @@
 (load "stdlib/json.tur")
 (load "stdlib/schema.tur")
 
-(defstruct User :copy [name : cstr age : int])
+(defstruct ^copy User [name : cstr age : int])
 
 ;; name arrives as the int-carried cstr pointer the decoder yields for schema/str.
 (defn box-user [name : int age : int] : int

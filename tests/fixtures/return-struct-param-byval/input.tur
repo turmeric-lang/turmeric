@@ -2,7 +2,7 @@
 ;; struct *parameter* by value.  A >=3-field struct is passed as `const T *`;
 ;; returning the param directly (or as an if-branch result) must copy it out
 ;; (deref), not assign the pointer to a by-value temp / return slot.
-(defstruct B4 :copy [a : int b : int c : int d : int])
+(defstruct ^copy B4 [a : int b : int c : int d : int])
 
 (defn ident [x : B4] : B4 x)                       ;; direct param return
 

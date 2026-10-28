@@ -6,7 +6,7 @@
 ;; runtime.  The re-opened Write reaches the handler and prints once.
 
 (defeffect Write [s :cstr] :nil)
-(defstruct Action :copy [run : fn #fx{Write}])
+(defstruct ^copy Action [run : fn #fx{Write}])
 
 (defn eff-greet [msg : cstr] #fx{Write}
   (perform (Write msg)))

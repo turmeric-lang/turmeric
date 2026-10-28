@@ -30,14 +30,14 @@ The first design decision is how to represent typed values. The tutorial uses a
 tagged union (algebraic data type) with three variants:
 
 ```turmeric
-(defdata Value :copy
+(defdata ^copy Value
   (LongVal :int)      ;; 64-bit integer
   (StrVal :cstr)      ;; string
   (EntityVal :int))   ;; reference to another entity
 ```
 
 ```sweet-exp
-defdata Value :copy
+defdata ^copy Value
   (LongVal :int)      ; 64-bit integer
   (StrVal :cstr)      ; string
   (EntityVal :int)    ; reference to another entity
@@ -47,7 +47,7 @@ defdata Value :copy
 `StrVal` holds a string.
 `EntityVal` holds an entity ID, enabling typed cross-entity references.
 
-**Why `:copy`.** A `defdata` value moves by default: binding one and then using
+**Why `^copy`.** A `defdata` value moves by default: binding one and then using
 it twice is an error.
 
 ```
@@ -58,7 +58,7 @@ unique values may be used at most once
 That is the right default for an ADT that owns something. A fact, though, is
 immutable: a `Value` is read, compared and printed, never consumed, and the
 query code below reads the same datum more than once (test it against a
-predicate, *then* keep it). `:copy` says so. If you leave it off, the checker
+predicate, *then* keep it). `^copy` says so. If you leave it off, the checker
 names the binding and the second use, so the fix is never a puzzle.
 
 Values are built with their constructors directly -- `(LongVal 30)`,
@@ -92,7 +92,7 @@ A datum is one fact -- an entity, an attribute, a value and the transaction
 that recorded it. A struct says exactly that:
 
 ```turmeric
-(defstruct Datum :copy
+(defstruct ^copy Datum
   [entity : int     ;; the object the fact is about
    attr   : cstr    ;; the property, e.g. ":user/name"
    value  : Value   ;; the payload
@@ -100,7 +100,7 @@ that recorded it. A struct says exactly that:
 ```
 
 ```sweet-exp
-defstruct Datum :copy
+defstruct ^copy Datum
   [entity : int     ; the object the fact is about
    attr   : cstr    ; the property, e.g. ":user/name"
    value  : Value   ; the payload
@@ -108,7 +108,7 @@ defstruct Datum :copy
 ```
 
 `(Datum 1 ":user/name" (StrVal "Alice") 1)` builds one, and `(.entity d)`,
-`(.attr d)`, `(.value d)` and `(.tx d)` read its fields. It is `:copy` for the
+`(.attr d)`, `(.value d)` and `(.tx d)` read its fields. It is `^copy` for the
 same reason `Value` is: facts are never mutated, only read.
 
 ---
@@ -328,7 +328,7 @@ alice@example.com
 
 The database and every query result are `Vec`s, and the demo frees each one
 with `vec-free` when it is done with it. The datums and values inside are
-plain `:copy` data with nothing of their own to free.
+plain `^copy` data with nothing of their own to free.
 
 The predicate closures are freed too. A plain predicate passed straight to
 `db-q` is freed when the query returns, and so is the closure a combinator

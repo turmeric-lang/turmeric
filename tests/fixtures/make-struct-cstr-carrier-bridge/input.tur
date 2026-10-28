@@ -8,7 +8,7 @@
 ;; implicit pointer->integer conversion that clang flags with -Wint-conversion.
 ;; See docs/archive/history/make-struct-cstr-into-carrier-field-no-bridge-cast.md.
 
-(defstruct Box :heap [A] (val :A) (tag :int))
+(defstruct ^heap Box [A] (val :A) (tag :int))
 
 (defn main [] : int
   (let [bc (:: (make-struct Box :val "hello" :tag 9) (Box cstr))]

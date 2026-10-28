@@ -12,6 +12,6 @@
     ```))
 
 (defn main [] : int
-  (let [e (pack 7 (exists :linear [a] [(Show a)] a))]
+  (let [e (pack 7 (exists ^linear [a] [(Show a)] a))]
     (println "never opened"))
   0)

@@ -6,7 +6,7 @@
 
 (deftype Logger (fn [cstr] #fx{Log}  nil))
 
-(defstruct App :copy [run : fn #fx{Log}])
+(defstruct ^copy App [run : fn #fx{Log}])
 
 (defn main [] : int
   (let [app (make-struct App (fn [msg : cstr] (perform (Log msg))))]

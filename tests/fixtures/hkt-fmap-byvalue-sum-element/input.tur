@@ -8,7 +8,7 @@
 ; site, build `ctor_*__<elem>` under the active element binding) fixes it.
 (load "stdlib/typeclass-functor.tur")
 
-(defdata ReF :copy [a] (EmptyF) (LitF :int) (AltF a a) (StarF a))
+(defdata ^copy ReF [a] (EmptyF) (LitF :int) (AltF a a) (StarF a))
 
 (definstance Functor [ReF]
   (fmap [c g]

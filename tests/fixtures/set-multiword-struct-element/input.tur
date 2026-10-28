@@ -9,7 +9,7 @@
 ;; Runs on both paths (whitelisted in tests/run-turi.sh TURI_INLINEC_RUN).
 (load "stdlib/typeclass.tur")
 
-(defstruct Point :copy [x : int y : int])
+(defstruct ^copy Point [x : int y : int])
 
 (definstance Hash [Point]
   (hash [p] : int

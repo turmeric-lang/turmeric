@@ -2,7 +2,7 @@
 (defclass MyShow [a]
   (show [x] : cstr))
 
-(defstruct MyPair :copy [first : int second : int])
+(defstruct ^copy MyPair [first : int second : int])
 
 (definstance MyShow [MyPair]
   (show [x] : cstr

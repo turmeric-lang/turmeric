@@ -11,7 +11,7 @@
 ;; The map/hamt side has no such accounting, so it still rejects: an unconverted
 ;; rc would put a control-block pointer in a slot the collection does not own,
 ;; which is a leak or a double-free depending on which side drops it.
-(defstruct S :move [tag : int])
+(defstruct ^move S [tag : int])
 
 (defn main [] : int
   (let [a (rc/of (make-struct S 1))

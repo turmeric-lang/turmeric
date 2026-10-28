@@ -173,7 +173,7 @@ Individual values inside an arena are never freed one at a time.
 **Region-allocated values.** The third reclamation mode, on by default since
 2026-09-05 (see the
 [regions plan](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/regions-plan.md)).
-A `:heap` `defdata` node -- a list cell, a tree node, the per-link box of a
+A `^heap` `defdata` node -- a list cell, a tree node, the per-link box of a
 recursive sum -- has no unique owner by construction, so neither RC nor a
 scope-exit drop can free it. A **region** does not ask who owns the node; it
 asks *when the whole generation dies*. Two brackets declare that: `with-region`
@@ -220,7 +220,7 @@ An **inline-C body is opaque**, so a node handed to one may be retained past
 the call with no store the compiler can hook. That is covered at the callee,
 where every parameter is a plain C identifier: a parameter whose type can *be*
 region memory is noted at body entry. The filter is narrow on purpose -- a
-`:heap` node, or a by-value aggregate holding one, and never a scalar, a
+`^heap` node, or a by-value aggregate holding one, and never a scalar, a
 `cstr`, a `ptr<void>`, an opaque newtype (`defopaque BtCell :ptr` is a C-made
 handle) or a malloc-backed collection handle. So `(defn f [l : Link] ...)`
 with a hand-written body retires the generation, while the far more common
@@ -230,10 +230,10 @@ tree changed when this landed.
 Two things sat outside the note, both closed and recorded in
 `docs/archive/region-escape-through-unhooked-stores.md`: an `extern-c`
 function, which has no emitted body to put the note in (unreachable -- the
-extern-c boundary refuses a `:heap` node and any record holding one), and a
+extern-c boundary refuses a `^heap` node and any record holding one), and a
 stdlib primitive that stores a word arriving as an *erased* `:int` rather than
 a typed node (noted at the erasure, and by hand in each such primitive).
-Prefer the typed style (`nxt : Link`, `(Vec Link)`, a `:copy` sum) over
+Prefer the typed style (`nxt : Link`, `(Vec Link)`, a `^copy` sum) over
 erasing to `:int`: a typed value is refused by the result walk where it must
 be, keeps its rewinds where it can, and never takes the erasure note.
 
@@ -272,9 +272,9 @@ a by-value C struct and allocates nothing. Two kinds of `defdata` do:
   those boxes are freed: the type gets drop glue, and the compiler frees a
   spine at its owning local's scope exit, after a lend to a non-retaining
   callee, or inside a consuming callee. The shapes that still leak are under
-  "Known gaps" below. Declared `:copy`, the type gets no drop glue and leaks
+  "Known gaps" below. Declared `^copy`, the type gets no drop glue and leaks
   its links by design; build such values inside `with-region`.
-- A **`:heap`** type's `ctor_*` `malloc`s a node that is never auto-freed
+- A **`^heap`** type's `ctor_*` `malloc`s a node that is never auto-freed
   outside a region -- matching it and consuming the payload does not drop it.
   Opt into managed lifetime with `rc<T>` or a `with-region` bracket, or use
   the substructural (`^linear`/`^unique`) path.
@@ -320,7 +320,7 @@ collection of `rc<T>` the collector can trace, stdlib has two**, both opt-in:
 - `stdlib/rcchain.tur` -- a chain of rc cells, pure Turmeric:
 
   ```turmeric
-  (defstruct RcChain :move [A] [item : rc<A> next : rc<RcChain>])
+  (defstruct ^move RcChain [A] [item : rc<A> next : rc<RcChain>])
   ```
 
   Nothing in the compiler or runtime knows about it -- both fields are ordinary
@@ -379,7 +379,7 @@ via three strategies:
   `sized-*`. Each owns the one buffer it mutates; there are no shared handles and
   no back-pointers written into shared nodes.
 - **Linear / affine opaque handles** -- `chan`, `future`, `taskgroup`, `mutex`,
-  `reactor`, `net`, ... are `defopaque ... :linear` / `:affine`. Single ownership
+  `reactor`, `net`, ... are `defopaque ^linear ...` / `^affine`. Single ownership
   and exactly-once teardown are the deliberate alternative to refcounting.
 
 **Relative to Rust, the stdlib is already at or beyond the ideal.** Rust's rule
@@ -586,7 +586,7 @@ For historical context:
 
 - `docs/archive/history/existential-gc-plan.md` — original EXG1 RC-for-existentials plan.
 - `docs/archive/existential-gc-followup-plan.md` -- EXG4/5/6 (cross-scope
-  ownership, cycle visibility, `:linear`).
+  ownership, cycle visibility, `^linear`).
 - `docs/archive/history/end-to-end-monomorphization-plan.md` — the longer-term
   ABI direction; the current hybrid carrier/by-value boxing is the seam RC
   and GC sit on.
@@ -739,17 +739,17 @@ dialect fixture under frequent collections, plus bounded-memory loops).
   leaks is a consuming callee reached from a borrow and a container's
   elements; see `docs/reported/byvalue-recursive-shared-copies-leak.md`.
   One shape still leaks by design rather than by accident:
-  - A **`:copy` recursive ADT** -- `Term`, `Subst`, `Stream` in
+  - A **`^copy` recursive ADT** -- `Term`, `Subst`, `Stream` in
     `stdlib/logic.tur`, the `Regex` family -- is never freed per value. This
     is a contract, not a gap: drop glue makes a type move-only, and that move
     discipline is the single-owner guarantee a per-chain free depends on
-    (measured: under `:copy`, `(let [t (Cons 3 (Nil)) a (Cons 1 t) b (Cons 2
+    (measured: under `^copy`, `(let [t (Cons 3 (Nil)) a (Cons 1 t) b (Cons 2
     t)] ...)` emits two boxes carrying the SAME tail pointer, so a per-chain
-    free would free it twice). The answer for `:copy` is the region bracket:
+    free would free it twice). The answer for `^copy` is the region bracket:
     inside `with-region` the whole spine is reclaimed on rewind (R4 of the
     regions plan routed exactly this allocation site there; the 3-cell repro
     wrapped in `(with-region (fn [] : int ...))` reports zero leaks). Build
-    `:copy` recursive structures inside a region, or accept process-lifetime
+    `^copy` recursive structures inside a region, or accept process-lifetime
     retention.
 - A **by-value struct with an `rc` field** (`(defstruct S [r : rc<int> n :
   int])`) releases each rc field when a local of it leaves scope, so a copy

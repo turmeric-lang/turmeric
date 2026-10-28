@@ -1,6 +1,6 @@
 ;; LT4: lref<int> as a field in a non-:copy (:move) struct.
 ;; Demonstrates that lref<T> fields are permitted in :move structs,
 ;; and that the field can be accessed and dereffed as a linear pointer.
-(defstruct PtrBox :move [ptr : lref<int>])
+(defstruct ^move PtrBox [ptr : lref<int>])
 (let [b (make-struct PtrBox (lref/new 42))]
   (println (deref (.ptr b))))

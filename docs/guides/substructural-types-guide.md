@@ -58,7 +58,7 @@ times a value is *used*, not where it may live, so a top-level `def` holding
 one is fine:
 
 ```turmeric
-(def hub-mutex (mutex-new))   ; Mutex is (defopaque Mutex :ptr<void> :linear)
+(def hub-mutex (mutex-new))   ; Mutex is (defopaque ^linear Mutex :ptr<void>)
 ```
 
 The initializer produces the value once, at static-init, and it lives for the
@@ -138,6 +138,39 @@ let [^relevant msg "important event"]
 ```
 
 ---
+
+## On a type declaration
+
+The same words attach to a type. Written before the name of a `defopaque`,
+`defstruct`, `defdata` or `defgadt`, `^linear` or `^affine` makes *every* value
+of the type exactly-once or at-most-once, so a binding of that type is checked
+without repeating the annotation:
+
+```turmeric
+(defopaque ^linear FileHandle :ptr<void>)
+(defstruct ^affine Lease [secs : int])
+(defdata ^linear Job (Job int))
+```
+
+```sweet-exp
+defopaque ^linear FileHandle :ptr<void>
+defstruct ^affine Lease [secs : int]
+defdata ^linear Job
+  Job(int)
+```
+
+On a binding, `^linear` marks that one binding; on a declaration it marks the
+type, which is the same discipline with a wider reach. The other flags of a
+declaration are written the same way: `^copy` and `^move` (the copy kind of a
+struct or sum), `^heap` (keep the value behind a pointer), `^no-auto-ctor`,
+and, for an opaque, `^sealed` and `^non-null`. `^linear` with `^affine` is an
+error, and so is `^copy` with `^move`. See [Opaques](opaques-guide.md),
+[Structs](structs-guide.md), [Sum Types](sum-types-guide.md) and
+[GADTs](gadts-guide.md) for each form.
+
+The older spelling, a keyword such as `:linear` after the name (after the
+representation type, for a `defopaque`), is still read.
+`tools/caret-type-attrs-rewrite.py` moves a file from one to the other.
 
 ## Borrowing a linear handle: `^borrow` parameters
 

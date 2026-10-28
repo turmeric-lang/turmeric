@@ -9,7 +9,7 @@
 (load "stdlib/zip.tur")
 
 ;; A variable is named by a small id: 0 is x, 1 is y.
-(defdata Ast :heap :copy (Num int) (Var int) (Add (Cons Ast)) (Mul (Cons Ast)))
+(defdata ^heap ^copy Ast (Num int) (Var int) (Add (Cons Ast)) (Mul (Cons Ast)))
 
 (defn var-name [v : int] : cstr (if (= v 0) "x" "y"))
 

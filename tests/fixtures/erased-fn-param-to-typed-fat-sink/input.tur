@@ -10,7 +10,7 @@
 ;; slot 1 as a native double thunk and the sink saw 0.  A named fn and a
 ;; capturing lambda both cross; a per-spec instance clone (concrete receiver,
 ;; native box) keeps the plain typed shim.
-(defstruct Identity :copy [a] (wrapped : a))
+(defstruct ^copy Identity [a] (wrapped : a))
 (defn mk-id  [A] [x : A]            : (Identity A) (make-struct Identity :wrapped x))
 (defn run-id [A] [i : (Identity A)] : A            (.wrapped i))
 (defn call-ff [^fat f :(fn [float] #fx{} float) x : float] : float (f x))

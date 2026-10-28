@@ -9,7 +9,7 @@
 ;; monomorph-name sites too, matching mangle_field_name / adt_byval_c_name, so
 ;; the monomorph typedef, its ctor, and every reference agree on `tur_adt_Lens_`
 ;; and the emitted C compiles.
-(defstruct Lens' :copy [S A] (get (fn [S] A)) (put (fn [S A] S)))
+(defstruct ^copy Lens' [S A] (get (fn [S] A)) (put (fn [S A] S)))
 
 (defn main [] : int
   (let [l (make-struct Lens'

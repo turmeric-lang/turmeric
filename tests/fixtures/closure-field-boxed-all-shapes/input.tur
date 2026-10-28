@@ -14,11 +14,11 @@
 ;; Each value below both stores a CAPTURING closure and forces it.
 
 ;; defdata, arity 0 (thunk field)
-(defdata L :copy (LNil) (LThunk (fn [] int)))
+(defdata ^copy L (LNil) (LThunk (fn [] int)))
 (defn lforce [l : L] : int (match l (LThunk th) (th) _ -1))
 
 ;; defdata, arity 1
-(defdata M :copy (MNil) (MStep (fn [int] int)))
+(defdata ^copy M (MNil) (MStep (fn [int] int)))
 (defn mforce [m : M x : int] : int (match m (MStep f) (f x) _ -1))
 
 ;; defstruct, arity 0 (thunk field)

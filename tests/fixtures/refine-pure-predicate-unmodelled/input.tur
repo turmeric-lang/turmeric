@@ -17,7 +17,7 @@
 ;;
 ;; So this compiles and runs, while its refinement still falls back to a
 ;; runtime check rather than being proved from an unmodelled body.
-(defdata Shape :copy
+(defdata ^copy Shape
   (Circle [r : int])
   (Square [s : int]))
 

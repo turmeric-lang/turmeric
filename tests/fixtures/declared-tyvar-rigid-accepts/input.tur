@@ -23,7 +23,7 @@
 (defn relay3 [A] [a : A] : A (id2 a))
 (defn pick [A] [a : A c : bool] : A (if c a (panic "no")))
 (defn opt2 [A] [a : A c : bool] : (Option A) (if c (some a) (none)))
-(defdata Bx :copy [X] (Mk X))
+(defdata ^copy Bx [X] (Mk X))
 (defn boxed [A] [a : A] : (Bx A) (Mk a))
 (defn go5 [A] [n : int a : A] : A (if (= n 0) a (go5 (- n 1) a)))
 (defn relay [X] [x : X] : X (id x))

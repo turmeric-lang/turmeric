@@ -1,6 +1,6 @@
 ;; qa -- a private zero-argument __error with a struct result (see input.tur).
 (defmodule qa (export qa-run PE)
-  (defstruct PE :copy [code : int line : int])
+  (defstruct ^copy PE [code : int line : int])
   (defn __error [] : PE (PE 1 2))
   (defn __wrap [ok : bool] : (Result int PE) (if ok (Ok 5) (Err (__error))))
   (defn qa-run [ok : bool] : int (match (__wrap ok) (Ok n) n (Err e) (.code e))))

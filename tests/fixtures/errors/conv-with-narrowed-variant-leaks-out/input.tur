@@ -2,7 +2,7 @@
 ;; the arm body.  After the `match` completes, the scrutinee is the full ADT
 ;; again, so a later `(with s [...])` outside any arm is still rejected -- the
 ;; narrowing must not leak past the arm.
-(defdata Shape :copy
+(defdata ^copy Shape
   (Circle [radius : int])
   (Rect   [w : int h : int]))
 

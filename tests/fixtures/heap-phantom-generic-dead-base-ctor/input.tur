@@ -3,7 +3,7 @@
 ;; called tur_region_alloc_or_malloc unconditionally -- undeclared under
 ;; TUR_REGIONS=0, an error on gcc 14+ / clang 16+.  tests/run-regions-seam.sh
 ;; runs this with regions off.
-(defstruct PBox :heap [V] [a : int b : int])
+(defstruct ^heap PBox [V] [a : int b : int])
 
 (defn pbox-new [V] [a : int b : int] : (PBox V)
   (PBox a b))

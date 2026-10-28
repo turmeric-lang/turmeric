@@ -1,5 +1,5 @@
 ;; GAP 3 / TUR-E0295: a non-recursive by-value ADT product has no int64 handle,
 ;; so `(:: agg :int)` cannot be reinterpreted -- it must be diagnosed, not
 ;; miscompiled (a cc error compiled / a garbage handle under --interpret).
-(defdata Pair :copy (Pair :int :int))
+(defdata ^copy Pair (Pair :int :int))
 (defn main [] : int (println (:: (Pair 3 4) :int)))

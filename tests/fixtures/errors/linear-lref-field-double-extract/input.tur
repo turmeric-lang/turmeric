@@ -4,7 +4,7 @@
 ;; of the struct, marking b as moved.  The second (.val b) is a use-after-move.
 ;;
 ;; Expected error: TUR-E0005 (use of moved value 'b')
-(defstruct Box :move [val : lref<int>])
+(defstruct ^move Box [val : lref<int>])
 (let [b (make-struct Box (lref/new 42))]
   (let [x (.val b)]
     (let [y (.val b)]

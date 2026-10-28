@@ -5,7 +5,7 @@
 (load "stdlib/str-build.tur")
 (load "stdlib/zip.tur")
 
-(defstruct Pt :copy [x : float y : float])
+(defstruct ^copy Pt [x : float y : float])
 
 (defn leaf [A] [x : A] : (Rose A) (zip/rose x (tnil)))
 (defn node2 [A] [x : A a : (Rose A) b : (Rose A)] : (Rose A)

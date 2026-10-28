@@ -9,7 +9,7 @@
 ;; through the ordinary macro path unchanged.
 ;;
 ;; The ASCRIPTION on each tail is HISTORICAL and kept here to show it still
-;; works.  `Cons` used to be `(defstruct Cons :heap [A] (head A) (tail :int))`
+;; works.  `Cons` used to be `(defstruct ^heap Cons [A] (head A) (tail :int))`
 ;; -- the TAIL was an erased carrier -- so `.tail` handed back an `:int` and
 ;; the element type was gone one step in; `(:: (.tail l) (Cons any))`
 ;; recovered it.  The tail is the recursive occurrence `(Cons A)` now (M7 of

@@ -12,7 +12,7 @@
 ;; once by its P5b-threaded scope-exit drop.  Every allocation malloc'd once,
 ;; freed once.  LeakSanitizer-clean.
 
-(defstruct H :heap [tag : int tag2 : int])
+(defstruct ^heap H [tag : int tag2 : int])
 
 (defn k-identity [k] : int k)
 

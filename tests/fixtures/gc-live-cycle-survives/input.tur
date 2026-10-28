@@ -11,7 +11,7 @@
 ; Asserts both halves of the correctness statement:
 ;   - roots live  -> cycle survives collection AND stays usable afterwards
 ;   - roots gone  -> the same shape is reclaimed
-(defstruct S :move [next : rc<S> tag : int])
+(defstruct ^move S [next : rc<S> tag : int])
 
 (defn nullp [] : ptr<void>
   ```c

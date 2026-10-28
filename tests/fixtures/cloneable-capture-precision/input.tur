@@ -21,13 +21,13 @@
   (clone [x : a] : a))
 
 ;; CloneToken: a wrapper with a Clone instance.
-(defstruct CloneToken :copy [tag : int])
+(defstruct ^copy CloneToken [tag : int])
 
 (definstance Clone [CloneToken]
   (clone [t : CloneToken] : CloneToken t))
 
 ;; NoToken: no Clone instance.
-(defstruct NoToken :copy [tag : int])
+(defstruct ^copy NoToken [tag : int])
 
 (defn k-identity [k] : int k)
 

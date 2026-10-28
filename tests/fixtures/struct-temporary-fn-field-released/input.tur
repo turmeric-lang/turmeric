@@ -16,7 +16,7 @@
 ;; each boxed field to the entry boundary's reap.  `via-ctor`, `via-let` and
 ;; `via-rest` (a field call that is NOT the tail) exercise that path.
 
-(defstruct PE :copy [run : (fn [int] int) tag : int])
+(defstruct ^copy PE [run : (fn [int] int) tag : int])
 
 (defn inc [v : int] : int (+ 1 v))
 (defn dbl [v : int] : int (* 2 v))

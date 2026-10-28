@@ -20,7 +20,7 @@
 ; restores the precondition the assertion was always assuming, by leaving one
 ; weak-observed block (strong_count 0, weak_count 1) in the buffer.  That is
 ; what a zombie IS, and reclaiming it is the only thing the sweep exists for.
-(defstruct Holder :move [inner : rc<int>])
+(defstruct ^move Holder [inner : rc<int>])
 
 (defclass Show [a]
   (show [x] : cstr))

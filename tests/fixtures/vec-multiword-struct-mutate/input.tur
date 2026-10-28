@@ -16,7 +16,7 @@
 ;; field reads and Show agree bit-for-bit with the compiled path.
 (load "stdlib/typeclass.tur")
 
-(defstruct Point :copy [x : int y : int])
+(defstruct ^copy Point [x : int y : int])
 
 (definstance Show [Point]
   (show [p]

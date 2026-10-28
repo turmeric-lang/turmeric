@@ -5,8 +5,8 @@
 ;; `T`-typed temp keeps the erased carrier spelling by design; the shadow check
 ;; resolved it through the spec and misread the erasure.  It is the shape of
 ;; every zip/up and zip/root over a user AST.
-(defdata Tree :heap :copy (Leaf int) (Node (Cons Tree)))
-(defstruct Ops :heap :copy [T] (mk (fn [T (Cons T)] T)) (id (fn [T] T)))
+(defdata ^heap ^copy Tree (Leaf int) (Node (Cons Tree)))
+(defstruct ^heap ^copy Ops [T] (mk (fn [T (Cons T)] T)) (id (fn [T] T)))
 
 (defn call-mk [T] [o : (Ops T) n : T ks : (Cons T)] : T ((.mk o) n ks))
 (defn call-id [T] [o : (Ops T) n : T] : T ((.id o) n))

@@ -1,0 +1,6 @@
+(defmacro def-point [name]
+  `(defstruct ^copy ~name [x : int y : int]))
+(defmacro def-handle [name]
+  `(defopaque ^linear ~name :ptr<void>))
+(defmacro def-both [name & fields]
+  `(defdata ^copy ~name (~name ~@fields)))

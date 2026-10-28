@@ -6,7 +6,7 @@
 ;; memory.  Every value is read AFTER the pop, and TUR_REGIONS=0 must print
 ;; the same lines (tests/run-regions-seam.sh).
 
-(defdata Link :heap (Link [v : int nxt : int]))
+(defdata ^heap Link (Link [v : int nxt : int]))
 
 (defn link-v [l : Link] : int
   (match l (Link a b) a))
@@ -71,7 +71,7 @@
 ;;     is `(set! (.a p) v)` on a struct of `any` fields).  The node arrives
 ;;     erased to `any`, so the field-store note is what stands between the
 ;;     `cast` below and reclaimed memory.
-(defstruct AnyCell :heap [a : any])
+(defstruct ^heap AnyCell [a : any])
 (defn store-field-any [c : any n : int] : int
   (with-region (fn [] (let [p (cast c AnyCell)]
                         (set! (.a p) (:: (Link (* 7 n) 0) any))

@@ -2,7 +2,7 @@
 ; produced by a constructor in an if/cond/match arm whose merge temp is by-value.
 ; Previously the ctor arm (and a match-valued arm) were deref-unboxed as an int
 ; handle -- "aggregate value used where an integer was expected".
-(defdata Box :copy (Boxed :int) (Empty))
+(defdata ^copy Box (Boxed :int) (Empty))
 (defdata Wrap (MkWrap :Box :int))          ; single ctor, heap ADT field
 (defdata Sel  (SelA :int) (SelB :int))
 

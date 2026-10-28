@@ -5,7 +5,7 @@
 ;; spurious "match: arm types incompatible -- expected int, got adt".
 ;; See docs/archive/history/logic-port-language-gaps.md GAP 2.
 
-(defdata T :copy (A :int) (B :T))
+(defdata ^copy T (A :int) (B :T))
 
 ;; f is declared BEFORE g and calls g in one match arm.
 (defn f [x : T] : T
@@ -16,7 +16,7 @@
 (defn g [n : int] : T (A (+ n 1)))
 
 ;; Also exercise a struct return forward reference.
-(defstruct P :copy [x :int y :int])
+(defstruct ^copy P [x :int y :int])
 (defn use-p [n : int] : P (mk-p n))
 (defn mk-p [n : int] : P (make-struct P :x n :y (+ n 1)))
 

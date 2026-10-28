@@ -18,9 +18,9 @@
 ;; a direct match, a `^mut` rebinding, a tail-recursive loop, a float element
 ;; with a fractional part, and a nested application.
 
-(defdata R :heap (Lf int) (Br int))
-(defdata Fr :heap [T] (Nil) (Frame T T))
-(defstruct Holder :heap [fr : (Fr int)])
+(defdata ^heap R (Lf int) (Br int))
+(defdata ^heap Fr [T] (Nil) (Frame T T))
+(defstruct ^heap Holder [fr : (Fr int)])
 
 (defn val [r : R] : int
   (match r

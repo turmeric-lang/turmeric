@@ -2,8 +2,8 @@
 ;; (`tur_adt_<Name>__<args> *`) to a heap-allocated header -- the ADT analogue
 ;; of a :heap struct's `Name *`.  The ctor mallocs the header and returns the
 ;; pointer; field access derefs through `->`.  Flag-independent (a hand-written
-;; `(defdata X :heap ...)` lowers this way regardless of the experiment).
-(defdata HCell :heap [A] (HCell [fst : A snd : int]))
+;; `(defdata ^heap X ...)` lowers this way regardless of the experiment).
+(defdata ^heap HCell [A] (HCell [fst : A snd : int]))
 
 (defn mk [A] [x : A] : (HCell A) (HCell x 7))
 (defn getf [A] [c : (HCell A)] : A   (.fst c))

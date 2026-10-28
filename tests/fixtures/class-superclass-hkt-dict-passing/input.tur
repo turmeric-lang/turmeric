@@ -17,7 +17,7 @@
 (definstance MyAp [Option] (mypure [x] (some x)))
 (definstance MyAlt [Option] (myalt [x y] (match x (Some v) x (None) y)))
 
-(defdata Tally :copy [A] (Tally A int))
+(defdata ^copy Tally [A] (Tally A int))
 (definstance MyAp [Tally] (mypure [x] (Tally x 0)))
 (definstance MyAlt [Tally]
   (myalt [x y] (match x (Tally v n) (if (> n 0) x y))))

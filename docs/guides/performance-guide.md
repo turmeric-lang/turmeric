@@ -198,7 +198,7 @@ are left as ordinary recursive calls -- correct, but not stack-optimized:
   parameters -- a backedge cannot reassign them;
 - a call under a `let` that binds a function value -- the whole `let` is off
   the tail path, whether or not the binding is live at the call.  A `let` that
-  binds a carrier-ABI value (a `Vec`, a list, a `:heap` struct, a by-value
+  binds a carrier-ABI value (a `Vec`, a list, a `^heap` struct, a by-value
   recursive ADT) **is** in the tail grammar;
 - a call under a `let` whose binding is released when the `let` ends (a
   by-value recursive spine it owns, a `^mut` cell a closure captured, a caught
@@ -516,7 +516,7 @@ See [threading-guide.md](threading-guide.md) and [stm-guide.md](stm-guide.md).
 Plain Turmeric has no always-on tracing collector. Memory is managed in
 layers -- the stack and plain `malloc`/`free` with compiler-emitted drops,
 bump arenas, reference counting for `rc<T>`, and a Bacon-Rajan cycle
-collector on top of RC that is off by default -- and a `:heap` node is
+collector on top of RC that is off by default -- and a `^heap` node is
 reclaimed by a region when a `with-region` or `bt-scope` bracket can prove
 nothing escapes it. The gc guide's
 [The layers, at a glance](gc-guide.md#the-layers-at-a-glance) and

@@ -5,8 +5,8 @@
 ;; the TUR-E0295 diagnostic recommends, and it runs identically compiled and
 ;; under --interpret.
 
-(defdata IntPair :copy (IntPair :int :int))
-(defstruct Vec3 :copy [x :int y :int z :int])
+(defdata ^copy IntPair (IntPair :int :int))
+(defstruct ^copy Vec3 [x :int y :int z :int])
 
 ;; A generic carrier: the erased handle rides through as `any`.
 (defn thread [h : any] : any h)

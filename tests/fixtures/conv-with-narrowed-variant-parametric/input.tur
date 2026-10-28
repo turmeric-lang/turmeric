@@ -2,7 +2,7 @@
 ;; so `with` on a `(Box int)` scrutinee narrowed to the `Just` record variant
 ;; infers the field type through the narrowing and reconstructs a `(Box int)`.
 
-(defdata Box :copy [T]
+(defdata ^copy Box [T]
   (Just [val : T])
   (Empty))
 

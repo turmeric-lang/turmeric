@@ -1120,6 +1120,19 @@ static void fmt_definstance(FmtState *s, const Form *f) {
     fs_putc(s, ')');
 }
 
+/* `^copy`, `^linear`, ...: a symbol that starts with a caret. */
+static bool is_caret_attr(const Form *f) {
+    return f->tag == F_SYM && f->as.sym->len > 1 && f->as.sym->name[0] == '^';
+}
+
+/* defopaque / defstruct / defdata / defgadt: the forms whose flags go before
+ * the name. */
+static bool is_type_decl_head(const Form *f) {
+    const Symbol *h = list_head_sym(f);
+    return h && (sym_eq(h, "defopaque") || sym_eq(h, "defstruct") ||
+                 sym_eq(h, "defdata")   || sym_eq(h, "defgadt"));
+}
+
 /* Generic function call:
  *   (f a b c)          — if inline fits
  *   (f a               — if not: head+first-arg on same line,
@@ -1138,6 +1151,16 @@ static void fmt_call(FmtState *s, const Form *f) {
      * first arg -- which is where a `#;` datum comment on the first argument
      * lives, and where it used to be deleted. */
     uint32_t on_first_line = (n > 2) ? 2 : n;
+    /* A type declaration's flags are `^attr`s before its name --
+     * `(defstruct ^copy ^heap Point` -- so the attributes and the name are the
+     * header together (caret-type-attributes-plan).  Without this the first
+     * attribute counted as "the first argument" and the name was moved to a
+     * line of its own. */
+    if (is_type_decl_head(f)) {
+        uint32_t name_at = 1;
+        while (name_at < n && is_caret_attr(f->as.list.items[name_at])) name_at++;
+        on_first_line = (name_at + 1 < n) ? name_at + 1 : n;
+    }
     uint32_t prev_end = 0;
     for (uint32_t i = 0; i < on_first_line; i++) {
         const Form *cur = f->as.list.items[i];

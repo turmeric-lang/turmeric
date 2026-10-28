@@ -5,7 +5,7 @@
 (defeffect Write [s :cstr] :nil)
 
 ;; Capability struct: the `run` field is declared to potentially Write.
-(defstruct Action :copy [run : fn #fx{Write}])
+(defstruct ^copy Action [run : fn #fx{Write}])
 
 ;; Pure action: does not perform Write, but satisfies the #{Write} field.
 (defn pure-greet [msg : cstr]

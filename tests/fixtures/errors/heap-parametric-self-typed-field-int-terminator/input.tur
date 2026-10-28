@@ -3,7 +3,7 @@
 ;; erased carrier spelling of the field's `:heap` app on one side and a real
 ;; int on the other.  It now names the field's full type.  The typed
 ;; terminator is `(:: 0 (Node int))`.
-(defstruct Node :heap [A] (val A) (next (Node A)))
+(defstruct ^heap Node [A] (val A) (next (Node A)))
 (defn main [] : int
   (let [n (make-struct Node 8 0)]
     (println (.val n)))

@@ -6,7 +6,7 @@
 ;; accept exactly one keyword; :sealed is orthogonal to the substructural
 ;; discipline (it governs `::` visibility, not use count), so the slot takes a
 ;; set. See docs/upcoming/sealed-opaque-plan.md.
-(defopaque Box :int :affine :sealed)
+(defopaque ^affine ^sealed Box :int)
 
 (defn box-alloc [] #fx{} : int
   ```c return (int64_t)(intptr_t)calloc(2, sizeof(int64_t)); ```)

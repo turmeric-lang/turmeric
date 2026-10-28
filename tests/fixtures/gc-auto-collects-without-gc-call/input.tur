@@ -16,7 +16,7 @@
 ; call form.  What did NOT change is that AUTO is opt-in -- the (gc-auto!)
 ; below is still what turns it on, and a program without that call gets the
 ; pure-RC path.  `cycle-gc-graduated-enable-noop` pins the flag-compat shim.
-(defstruct S :move [next : rc<S>])
+(defstruct ^move S [next : rc<S>])
 
 (defn null-rc-s [] : ptr<void>
   ```c

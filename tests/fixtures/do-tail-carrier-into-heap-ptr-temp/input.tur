@@ -22,8 +22,8 @@
 ;; keeps both. `tests/run.sh`'s emitted-C pointer/integer ratchet greps each
 ;; fixture's build stderr for exactly this warning, so with the shape present
 ;; the regression is now caught on Linux too, not only where cc promotes it.
-(defdata Link :heap (Link [v : int nxt : int]))
-(defdata TL :heap (TNil) (TCons :int :TL))
+(defdata ^heap Link (Link [v : int nxt : int]))
+(defdata ^heap TL (TNil) (TCons :int :TL))
 
 (defn build [n : int acc : int] : int
   (if (<= n 0) acc (build (- n 1) (:: (Link n acc) :int))))

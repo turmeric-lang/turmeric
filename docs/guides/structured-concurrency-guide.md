@@ -41,7 +41,7 @@ syntax builds on futures; this guide covers the lower-level API.
 | `task-group-cancel-reason` | `[^borrow g] -> int` | Why the group was cancelled |
 | `task-group-free` | `[g : TaskGroup] -> nil` | Destroy the group |
 
-`TaskGroup` is `:linear`: it owns a heap-allocated `TaskGroupBlock`
+`TaskGroup` is `^linear`: it owns a heap-allocated `TaskGroupBlock`
 (mutex + condvar) that must be freed exactly once with `task-group-free`.
 All accessors declare their group parameter `^borrow`, so a group may be
 spawned into, waited on, and cancelled any number of times without
@@ -173,8 +173,8 @@ let [h task-group-spawn(my-group (fn [] compute-result()))]
 | `future-free` | `[f : Future] -> nil` | Free the future's reference |
 | `promise-free` | `[p : Promise] -> nil` | Free the promise's reference |
 
-`Promise` is `:linear` (must be settled or freed exactly once). `Future`
-is `:affine` (may be dropped, but not used after `future-free`). Both
+`Promise` is `^linear` (must be settled or freed exactly once). `Future`
+is `^affine` (may be dropped, but not used after `future-free`). Both
 share a `FutureCell` with a reference count, so the two aliases can be
 freed independently -- whichever drop takes the count to 0 tears the cell
 down. The refcount uses atomic operations, so a Promise fulfilled on one
@@ -311,5 +311,5 @@ semantics.
   [channels-and-select-guide.md](channels-and-select-guide.md).
 - **Thread pools** -- for bounded OS-thread fan-out, see
   [thread-pool-guide.md](thread-pool-guide.md).
-- **Substructural types** -- `:linear` and `:affine` disciplines are
+- **Substructural types** -- `^linear` and `^affine` disciplines are
   covered in [substructural-types-guide.md](substructural-types-guide.md).

@@ -19,7 +19,7 @@
 ;;; lock).  Every MutexGuard must be explicitly consumed via mutex-guard-unlock.
 ;;;
 ;;; Since: LT4
-(defstruct MutexGuard :linear [mutex : ptr<void>])
+(defstruct ^linear MutexGuard [mutex : ptr<void>])
 ;;; mutex-guard-lock -- lock a mutex and return a MutexGuard RAII token.
 ;;;
 ;;; Parameters:

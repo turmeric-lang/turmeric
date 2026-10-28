@@ -3,7 +3,7 @@
 ;; constructor stays suppressed -- the `(Point ...)` call form is rejected (see the
 ;; errors/struct-no-auto-ctor-rejects-call negative fixture).  Construction goes
 ;; through `make-struct`, and field access reads back through the lowered aggregate.
-(defstruct Point :copy :no-auto-ctor [x : int y : int])
+(defstruct ^copy ^no-auto-ctor Point [x : int y : int])
 
 (defn manhattan [p : Point] : int
   {(.x p) + (.y p)})

@@ -5,7 +5,7 @@
 ;; error under clang).  The direct call keys its bridge on the two emitted
 ;; spellings now -- the thunk's recorded slot and the argument's own.
 
-(defdata E :heap :copy (A int) (B))
+(defdata ^heap ^copy E (A int) (B))
 
 (defn val [e : E] : int (match e (A n) n (B) 0))
 

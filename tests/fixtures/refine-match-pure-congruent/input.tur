@@ -18,7 +18,7 @@
 ;; reported `0 proven, 1 unknown` and kept a runtime check. The sibling fixture
 ;; refine-match-impure-arm pins the other side: one impure arm and it stays
 ;; unknown.
-(defdata Color :copy (Red) (Green) (Blue))
+(defdata ^copy Color (Red) (Green) (Blue))
 
 (defn rank [c : Color] : int
   (match c (Red) 0 (Green) 1 (Blue) 2))

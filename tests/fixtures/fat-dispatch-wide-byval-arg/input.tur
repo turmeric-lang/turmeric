@@ -23,7 +23,7 @@
 ;; rather than dodged.  This fixture stays on the `^fat` sink, which is what it
 ;; is actually about.
 
-(defdata P :copy (P [a : int b : int c : int]))
+(defdata ^copy P (P [a : int b : int c : int]))
 
 (defn sum-p [p : P] : int (match p (P a b c) (+ a (+ b c))))
 

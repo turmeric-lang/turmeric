@@ -217,7 +217,7 @@
   ;;   (load "stdlib/str-build.tur")
   ;;   (defclass Show [a] (show [x] : cstr))
   ;;   (definstance Show [int] (show [x] : cstr (int->str x)))
-  ;;   (defstruct Point :copy [x : int y : int])
+  ;;   (defstruct ^copy Point [x : int y : int])
   ;;   (derive-show-cstr Point x y)         ; => Show[Point] "Point { x = .., y = .. }"
   ;;
   ;; The stdlib `Show` returns an owned `String` (since show-owned-result-plan

@@ -7,7 +7,7 @@
 ;; never passed: `'n' undeclared` in the emitted C.
 (defeffect Log [x : int] : nil)
 (defopaque Raw :int)
-(defstruct H :copy [raw : Raw handler : (fn [int] int)])
+(defstruct ^copy H [raw : Raw handler : (fn [int] int)])
 
 (defn raw-of [h : H] : int (:: (.raw h) int))
 

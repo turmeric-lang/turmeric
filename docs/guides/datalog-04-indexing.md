@@ -43,29 +43,29 @@ The index itself is a table of attribute names and a fixed table of 64
 buckets, each a `Vec` of entries:
 
 ```turmeric
-(defstruct IdxEntry :copy
+(defstruct ^copy IdxEntry
   [entity : int    ;; the datum's entity
    attr   : int    ;; the datum's attr-id
    pos    : int])  ;; the datum's index in the log
 
-(defstruct EavtIdx :copy
+(defstruct ^copy EavtIdx
   [names   : (Vec cstr)              ;; attr-id -> attribute name
    buckets : (Vec (Vec IdxEntry))])  ;; 64 buckets of entries
 ```
 
 ```sweet-exp
-defstruct IdxEntry :copy
+defstruct ^copy IdxEntry
   [entity : int    ; the datum's entity
    attr   : int    ; the datum's attr-id
    pos    : int]   ; the datum's index in the log
 
-defstruct EavtIdx :copy
+defstruct ^copy EavtIdx
   [names   : (Vec cstr)              ; attr-id -> attribute name
    buckets : (Vec (Vec IdxEntry))]   ; 64 buckets of entries
 ```
 
 Storing the log position rather than a copy of the datum keeps an entry three
-words, whatever a datum holds. `EavtIdx` is `:copy` because it is a pair of
+words, whatever a datum holds. `EavtIdx` is `^copy` because it is a pair of
 handles: copying it copies the handles, not the tables, so every copy sees the
 same index.
 
@@ -219,7 +219,7 @@ O(1) in practice.
 The indexed database is the log and its index, kept in step:
 
 ```turmeric
-(defstruct Idb :copy
+(defstruct ^copy Idb
   [db  : Db
    idx : EavtIdx])
 
@@ -228,7 +228,7 @@ The indexed database is the log and its index, kept in step:
 ```
 
 ```sweet-exp
-defstruct Idb :copy
+defstruct ^copy Idb
   [db  : Db
    idx : EavtIdx]
 

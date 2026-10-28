@@ -4,7 +4,7 @@
 ;; the element type, not on the int64 carrier representative.
 ;;
 ;; Root cause (docs/archive/history/heap-struct-field-extraction-collapses-to-carrier.md):
-;; `Cons` is `:heap` (`(defstruct Cons :heap [A] (head A) (tail :int))`), so a
+;; `Cons` is `:heap` (`(defstruct ^heap Cons [A] (head A) (tail :int))`), so a
 ;; `(Cons A)` is carried as the int64 pointer regardless of `A`.  In the body of
 ;; `(definstance Enc [Cons] [(Enc A)] (enc [xs] (enc (.head xs))))` the receiver
 ;; `(.head xs)` was erased to that carrier:

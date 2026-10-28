@@ -1,6 +1,6 @@
 ; Sum-types plan T8.1: declare Either, construct Left and Right, print the
 ; discriminant of each.
-(defdata Either :copy [L R]
+(defdata ^copy Either [L R]
   (Left L)
   (Right R))
 

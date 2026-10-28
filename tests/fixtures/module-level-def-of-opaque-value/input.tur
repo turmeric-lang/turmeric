@@ -21,7 +21,7 @@
 ;;
 ;; Regression for docs/archive/module-level-def-with-linear-init-emits-no-global.md
 (defopaque Handle :int)
-(defopaque Token :ptr<void> :linear)
+(defopaque ^linear Token :ptr<void>)
 
 (defn make-handle [] : Handle
   ```c

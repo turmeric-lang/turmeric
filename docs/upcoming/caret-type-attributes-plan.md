@@ -1,6 +1,6 @@
 # Plan: spell type-declaration flags as `^attr`, not `:keyword`
 
-> **Status:** P0 and P1 IMPLEMENTED 2026-10-27; P2 is next. The three open questions
+> **Status:** P0, P1 and P2 IMPLEMENTED (2026-10-27, 2026-10-28); P3 is next. The three open questions
 > are decided (see "Decisions"): attributes go before the name, `^move` stays,
 > and `^heap` moves with the rest. Both spellings are accepted today; the
 > keyword one is not yet warned about (P3). A spelling change only: every form
@@ -219,11 +219,19 @@ flags. Each has to skip or understand the leading `^` attributes:
 - **`tools/check_turi_native_parity.py`**'s name regex skips the attributes.
   (It still reads a `^deprecated "msg"` defn's name as the message; that
   predates the plan and the script is informational.)
-- **No change needed:** `src/compiler/fmt.c` already keeps the attributes on
-  the head line, identically to the keyword spelling (`tur fmt` on both,
-  `tur_fmt_tests` passes); `src/cli/lsp_lite.c` holds a list of builtin names,
+- **`src/compiler/fmt.c` needed a fix, found in P2.** P1 first recorded it as
+  needing none: the check used declarations that fit on one line. A
+  declaration too long for one line is laid out by the generic call printer,
+  which puts the head and its *first argument* on the opening line, so the
+  first attribute took that place and the name moved to a line of its own
+  (`(defdata ^copy` / `  MdKind` / `  (MdKDocument)`). `tur_fmt_tests` caught it
+  as `fmt-bootstrap-stdlib` once the stdlib was migrated. `fmt_call` now treats
+  the leading `^attr`s and the name of a `defopaque` / `defstruct` / `defdata` /
+  `defgadt` as the header; a form without attributes lays out as before.
+  Pinned by `fmt-type-decl-attrs-stay-with-name` in `tests/run-fmt.sh`.
+- **No change needed:** `src/cli/lsp_lite.c` holds a list of builtin names,
   not declarations; `src/turi/docstrings.c:242` is a `defstruct` signature
-  string, which P2 rewrites with the other docs.
+  string with no flag in it.
 - **Highlighters.** `CARET_MODIFIERS` in `web/main.js` and in
   `tools/genguides.py` gained `copy`, `move`, `heap`, `sealed`, `non-null` and
   `no-auto-ctor`. Checked: the docs highlighter run in Chromium colours all
@@ -270,6 +278,65 @@ Update these by hand:
   substructural guide gains a short section that says one spelling now covers
   bindings and types;
 - `turmeric-spices`, separately, once P3 ships a release that warns.
+
+#### As implemented (2026-10-28)
+
+- **The tool** is `tools/caret-type-attrs-rewrite.py`. It reuses the
+  tokenizer of `spaced-types-rewrite.py`, which keeps every byte of trivia, and
+  edits tokens in place: each flag keyword of a `defopaque` / `defstruct` /
+  `defdata` / `defgadt` becomes a `^attr` before the name (after any already
+  there), and `(exists :linear ...)` becomes `(exists ^linear ...)`. A flag
+  that stood alone on its line takes the line with it. It reads `.tur`,
+  `.tur.sweet` (a head at the start of a line) and `.md` (the `turmeric` and
+  `sweet-exp` fences, with their inline-C blocks, and `(def...)` code spans).
+  `--write`, `--dry-run` and `--check`; a second run changes nothing. Eleven
+  cases in `tests/codemod/caret-type-attrs/`, run by
+  `tests/codemod/run-caret-type-attrs.sh`: each form, a phantom-parameter
+  `defopaque` in fused and spaced form, flags on either side of a vector,
+  macro templates (`~name`), a name ending in `'`, flags on their own lines,
+  a half-migrated form, sweet-exp, Markdown, and text that must not move.
+- **Applied to** `stdlib/`, `tests/fixtures/`, `docs/guides/`, `examples/`,
+  `benchmarks/` and `tools/check-guide-pairs.tur`: 425 files. Left alone on
+  purpose: `docs/archive/`, `CHANGELOG.md`, the two older codemod corpora,
+  `docs/reported/` (its repros show the spelling they were filed with) and the
+  other open plans.
+- **Checked, not assumed.** Every changed file differs from its original only
+  in flag tokens, and no flag was lost or duplicated (strip every `:flag` and
+  `^flag` from both versions and compare). `tur emit-c` of all 3,239 fixture
+  inputs, examples and benchmarks, before and after: identical except 12
+  files whose only difference is a source-line constant, because joining a
+  multi-line declaration moved lines in `stdlib/zip.tur` and the markdown
+  modules (`tur_panic_at_site("zip.tur", 215 -> 209`). No snapshot needed
+  regenerating; `tests/run.sh` and `tests/run-turi.sh` pass.
+- **By hand (about 60 files):** the 20 comment and heredoc lines the tool does
+  not see; the programs embedded in strings in `tests/*.py`, `tests/*.sh`,
+  `tests/turi/*.c`, `web/main.js` and `tutorials/eavt.yaml` (14 sites, each an
+  exact replacement); `stdlib/forms/datatypes.tur` (the `defstruct`,
+  `make-struct`, `defdata` and `defopaque` reference text and `;;@form` lines,
+  so `stdlib/docstrings.tur` changed in 7 entries); and the guides' prose. A
+  mechanical pass turned 157 backticked mentions such as `` `:heap` node `` into
+  `` `^heap` node `` (reviewed line by line; `package-manager-internals-guide`,
+  where `:heap` is a manifest value, and `developing-spices-guide`, which
+  quotes an old compiler error, were skipped); the sentences about *where* the
+  flag goes (`sum-types`, `gadts`, `introducing-saffron`, `opaques`, `structs`)
+  and the `r7rs-implementation-guide` table were reworded. The substructural
+  guide has its new section, "On a type declaration".
+- **Left for P3**, because they quote compiler text: the two
+  `errors/conv-with-copy-error-on-*` fixtures and their `expected.diag`; the
+  diagnostics and comments in `src/compiler/` that spell a keyword; and
+  `tests/tools/check_gendocs_parse.py`, which tests the keyword spelling on
+  purpose.
+- **Run after the change:** `tests/run.sh` (4183 passed, 0 failed),
+  `tests/run-turi.sh` (3103 passed, 0 failed, 1015 skipped), the Docs lint
+  script, the guide-pair checker (980 pairs), the spaced-types check, and the
+  ctest targets for the formatter, gendocs, the LSP scanner, the flag, project
+  and representation harnesses, and the type, region, refinement and Saffron
+  fuzzers.
+- **Not done:** `turmeric-spices` (another repo); the Playwright specs (see
+  P1); and `tur_generic_spec_matrix`, which does not finish inside the 12-minute
+  cap even when it runs alone, so there is no result to report. The one line
+  of it that changed, `(defstruct ^heap MxH [...])`, was checked on its own:
+  the emitted C is identical to the keyword spelling's.
 
 ### P3 -- warn on the keyword spelling
 

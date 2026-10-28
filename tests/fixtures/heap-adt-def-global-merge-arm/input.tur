@@ -4,7 +4,7 @@
 ;; the word to the pointer with no cast: -Wint-conversion, a hard error under
 ;; clang and gcc 14 (gcc 13 warns, which the run.sh ratchet fails on).
 
-(defdata K :heap :copy (A) (B))
+(defdata ^heap ^copy K (A) (B))
 (def a-node (A))
 (def b-node (B))
 

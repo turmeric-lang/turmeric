@@ -16,7 +16,7 @@
 ;;; (compiled-closure-copies-a-captured-mut). Not for direct use.
 ;;;
 ;;; Since: v0.56
-(defstruct TurMutCell :heap [A] (v A))
+(defstruct ^heap TurMutCell [A] (v A))
 ;;; Pair -- parameterized two-element tuple with element types A and B.
 ;;;
 ;;; Since: Phase TC1

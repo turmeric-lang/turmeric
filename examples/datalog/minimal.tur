@@ -24,7 +24,7 @@
 
 ;; `:copy` because a fact is immutable: a Value is read, compared and printed,
 ;; never consumed, so every use may copy it.
-(defdata Value :copy
+(defdata ^copy Value
   (LongVal :int)      ;; 64-bit integer
   (StrVal :cstr)      ;; string
   (EntityVal :int))   ;; reference to another entity
@@ -33,7 +33,7 @@
 ;; Datum -- a single immutable EAV-T fact
 ;; ============================================================
 
-(defstruct Datum :copy
+(defstruct ^copy Datum
   [entity : int     ;; the object the fact is about
    attr   : cstr    ;; the property, e.g. ":user/name"
    value  : Value   ;; the payload

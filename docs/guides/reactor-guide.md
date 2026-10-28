@@ -286,7 +286,7 @@ tracked separately in
 
 | Function | Returns | Notes |
 |---|---|---|
-| `local-fiber-group-new` | `LocalFiberGroup` | Create a fiber group bound to a reactor. One group per reactor; not thread-safe. The handle is `:linear`, like the `Reactor`. |
+| `local-fiber-group-new` | `LocalFiberGroup` | Create a fiber group bound to a reactor. One group per reactor; not thread-safe. The handle is `^linear`, like the `Reactor`. |
 | `local-fiber-group-free` | nil | Free the group, its one consumer; cancels any still-parked fiber (source removed, stack freed). |
 | `local-spawn` | fiber-id / -1 | Spawn a fiber `(fn [user :ptr<void>] :nil)`; runs on the next pump tick. |
 | `reactor-run-fibers` | #completed / -1 | Pump the group until empty + no sources, or `reactor-stop`. -1 if re-entered. |

@@ -105,7 +105,7 @@ defn sum-squares [a : int b : int] : int
 println $ sum-squares 3 4
 `,
     'adt': `;; Algebraic data types and pattern matching
-(defdata Shape :copy
+(defdata ^copy Shape
   (Circle :float)
   (Rect   :float :float))
 
@@ -167,7 +167,7 @@ println $ sum-squares 3 4
 `,
     'saffron-adt': `#lang saffron
 ;; Saffron ADTs: annotate the data's shape, leave the code dynamic
-(defdata Shape :copy
+(defdata ^copy Shape
   (Circle :float)
   (Rect   :float :float))
 

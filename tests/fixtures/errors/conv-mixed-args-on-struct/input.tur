@@ -1,4 +1,4 @@
 ;; CONV-S6: TUR-E0299 on a `defstruct` names the "struct" surface.
-(defstruct Person :copy [name : cstr age : int])
+(defstruct ^copy Person [name : cstr age : int])
 (defn main [] : int
   (let [p (Person "Bob" :age 40)] 0))

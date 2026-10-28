@@ -6,7 +6,7 @@
 ;; semantics, NOT a by-value header copy).  Two element types prove per-element
 ;; monomorphization (same layout; only the C pointer's type label differs).
 ;; This is the proxy for vec-new/.len/.data/vec-push! before the real Vec flip.
-(defstruct Box :heap [A] (val :A) (tag :int))
+(defstruct ^heap Box [A] (val :A) (tag :int))
 
 ;; mutate through the typed pointer in a callee (interior mutability -- no ^mut)
 (defn bump-int [b : (Box int)] : nil

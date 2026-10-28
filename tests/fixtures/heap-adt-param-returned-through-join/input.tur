@@ -6,7 +6,7 @@
 ;; the if/match joins asked only the table.  Both ask the function's recorded
 ;; signature for a parameter now.
 
-(defdata E :heap :copy (A int) (B))
+(defdata ^heap ^copy E (A int) (B))
 
 (defn val [e : E] : int (match e (A n) n (B) 0))
 

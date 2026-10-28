@@ -14,7 +14,7 @@
 ;; The VALUES are asserted, with a negative int8 (sign extension must hold) and
 ;; an int32 with non-zero high bytes (a byte-punned read cannot be right by
 ;; accident).  No inline C.
-(defstruct Identity :copy [a] (wrapped : a))
+(defstruct ^copy Identity [a] (wrapped : a))
 (defn mk-id  [A] [x : A]            : (Identity A) (make-struct Identity :wrapped x))
 (defn run-id [A] [i : (Identity A)] : A            (.wrapped i))
 (definstance Functor [Identity]

@@ -17,7 +17,7 @@
 (defclass MyAp [^f] (mypure [x : a] : (f a)))
 (defclass MyAlt [^f] [(MyAp f)] (myalt [x : (f a) y : (f a)] : (f a)))
 
-(defdata Tally :copy [A] (Tally A int))
+(defdata ^copy Tally [A] (Tally A int))
 (definstance MyAp [Tally] (mypure [x] (Tally x 0)))
 (definstance MyAlt [Tally]
   (myalt [x y] (match x (Tally v n) (if (> n 0) x y))))
@@ -28,7 +28,7 @@
 (defclass MyMap [^f] (mymap [c : (f a) g : (fn [a] b)] : (f b)))
 (defclass MyFold [^f] (myfold [c : (f a) init : b g : (fn [b a] b)] : b))
 
-(defdata Pair2 :copy [A] (Pair2 A A))
+(defdata ^copy Pair2 [A] (Pair2 A A))
 (definstance MyMap [Pair2]
   (mymap [c g] (match c (Pair2 x y) (Pair2 (g x) (g y)))))
 (definstance MyFold [Pair2]
