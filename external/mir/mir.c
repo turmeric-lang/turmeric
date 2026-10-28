@@ -4599,7 +4599,16 @@ static void code_init (MIR_context_t ctx) {
   }
 }
 
+#if defined(__wasm32__) || defined(__EMSCRIPTEN__)
+static void wasm_context_finish (MIR_context_t ctx); /* mir-wasm.c */
+#endif
+
 static void code_finish (MIR_context_t ctx) {
+#if defined(__wasm32__) || defined(__EMSCRIPTEN__)
+  /* The wasm target's thunks are function table entries, not code: release
+     this context's so another context can reuse them. */
+  wasm_context_finish (ctx);
+#endif
   while (VARR_LENGTH (code_holder_t, code_holders) != 0) {
     code_holder_t ch = VARR_POP (code_holder_t, code_holders);
     if (code_reserve_start != NULL && ch.start >= code_reserve_start

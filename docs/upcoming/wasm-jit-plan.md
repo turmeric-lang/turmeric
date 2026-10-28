@@ -8,7 +8,7 @@
 > interpreter with the right answer, 574 failed, 236 skipped (section 7, P3).
 > **The gate fails on one example**: `closure` traps, because host C cannot
 > call a function MIR interprets once its address is stored
-> ([wasm-mir-thunk-address-is-not-callable-by-host-code](../reported/wasm-mir-thunk-address-is-not-callable-by-host-code.md)).
+> ([wasm-mir-thunk-address-is-not-callable-by-host-code](../archive/wasm-mir-thunk-address-is-not-callable-by-host-code.md)).
 > The fix is a turmeric-lang/mir change: thunks as real table entries. It is
 > first in section 6's next fork PR. Next: that fork PR, then P4, which
 > also moves the stdlib into one package both modules share (5.11).
@@ -655,7 +655,7 @@ Still to batch into the next fork PR:
 
 - Exact-signature stub registry in `mir-wasm.c` (5.5).
 - **Thunks as real table entries** (found in P3, the largest failure family:
-  [wasm-mir-thunk-address-is-not-callable-by-host-code](../reported/wasm-mir-thunk-address-is-not-callable-by-host-code.md)).
+  [wasm-mir-thunk-address-is-not-callable-by-host-code](../archive/wasm-mir-thunk-address-is-not-callable-by-host-code.md)).
   A thunk address is a slot in a memory array, so host C that
   `call_indirect`s it traps with `table index is out of bounds`.
   `wasm_ff_dispatch` substitutes a real entry only for an i32 call argument.
@@ -673,7 +673,7 @@ Still to batch into the next fork PR:
   2 where C11 says 1. Found writing mir#15's test, which goes through
   pointer types instead. The emitter never writes `_Generic`, so only user
   inline C over a sub-`int` type sees it
-  ([c2mir-generic-promotes-controlling-expression](../reported/c2mir-generic-promotes-controlling-expression.md)).
+  ([c2mir-generic-promotes-controlling-expression](../archive/c2mir-generic-promotes-controlling-expression.md)).
 
 Nothing in this plan edits `external/mir/` by hand; the sync is
 `tools/update-mir.sh` after the fork PR merges.
@@ -888,7 +888,7 @@ What the fallbacks and failures are, by reason (a fixture counts once):
 | Family | Fixtures | Owner |
 |---|---|---|
 | `setjmp` not importable (the effect and panic landings) | 642 fell back right; 98 fell back and the interpreter got it wrong too | P5 (5.6) |
-| `table index is out of bounds`: an interpreted function's address called by host C | 202 | next fork PR ([report](../reported/wasm-mir-thunk-address-is-not-callable-by-host-code.md)) |
+| `table index is out of bounds`: an interpreted function's address called by host C | 202 | next fork PR ([report](../archive/wasm-mir-thunk-address-is-not-callable-by-host-code.md)) |
 | Asyncify: `emscripten_fiber_swap` in a module built without it | 106 | P5 (5.5) |
 | The program starts threads (refused by design) | 60 | stays a fallback (risk 7) |
 | Wrong answer on the compiled path: 64-bit carriers in pointer-width slots | 44 | [report](../reported/ilp32-word-slots-truncate-64-bit-carriers.md); `tur build --target wasm` has it too |

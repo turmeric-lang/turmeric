@@ -9129,12 +9129,13 @@ static void check (c2m_ctx_t c2m_ctx, node_t r, node_t context) {
     e->c.d_val = r->u.ld;
     break;
   case N_CH:
-    e = create_basic_type_expr (c2m_ctx, r, TP_CHAR);
+    /* An integer character constant has type int (C11 6.4.4.4p10), holding
+       the char value converted: sizeof ('a') is sizeof (int), and '\xff' is
+       -1 where char is signed.  It was typed char, which _Generic's integer
+       promotion used to hide. */
+    e = create_basic_type_expr (c2m_ctx, r, TP_INT);
     e->const_p = TRUE;
-    if (char_is_signed_p ())
-      e->c.i_val = r->u.ch;
-    else
-      e->c.u_val = r->u.ch;
+    e->c.i_val = char_is_signed_p () ? (signed char) r->u.ch : (unsigned char) r->u.ch;
     break;
   case N_CH16:
   case N_CH32:
@@ -10013,8 +10014,11 @@ static void check (c2m_ctx_t c2m_ctx, node_t r, node_t context) {
     op1 = NL_HEAD (r->u.ops);
     check (c2m_ctx, op1, r);
     e1 = op1->attr;
-    t = *e1->type;
-    if (integer_type_p (&t)) t = integer_promotion (&t);
+    /* Lvalue conversion only (C11 6.5.1.1p2, C17 DR 481): an array or a
+       function decays to a pointer and top-level qualifiers drop, but the
+       integer promotions do not happen -- (short) 0 selects short, not int. */
+    t = *adjust_type (c2m_ctx, e1->type);
+    clear_type_qual (&t.type_qual);
     list = NL_NEXT (op1);
     for (ga = NL_HEAD (list->u.ops); ga != NULL; ga = NL_NEXT (ga)) {
       assert (ga->code == N_GENERIC_ASSOC);

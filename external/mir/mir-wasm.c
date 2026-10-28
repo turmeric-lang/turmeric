@@ -18,9 +18,15 @@
    call_indirect is strictly type-checked and would otherwise require one
    pre-generated C stub per signature (~4^nargs of them).
 
+   A MIR function's address is a wasm table entry as well (see "Function
+   thunks"), so native code can call an interpreted function through a
+   pointer however it got the pointer.
+
    Build requirements:
-     -sWASM_BIGINT                              (i64 <-> BigInt)
-     -sEXPORTED_RUNTIME_METHODS=wasmTable,UTF8ToString
+     -sALLOW_TABLE_GROWTH                       (one table entry per function)
+     -sWASM_BIGINT on an older Emscripten       (i64 <-> BigInt; the default now)
+   The JS runtime pieces used here are pulled in with EM_JS_DEPS, so nothing
+   has to be listed in EXPORTED_RUNTIME_METHODS.
 */
 
 #include "mir.h"
@@ -130,16 +136,28 @@ EM_JS (void, mir_wasm_js_call,
 /* Function thunks                                                   */
 /* ---------------------------------------------------------------- */
 
-/* Every MIR function gets an address from _MIR_get_thunk, and MIR_link then
-   points that address at an interpreter shim (via MIR_set_interp_interface)
-   or at undefined_interface.  On a native target a thunk is a few bytes of
-   patchable machine code and the redirect rewrites a jump; wasm cannot
-   generate code, so a thunk here is a slot in a table and the redirect
-   rewrites the slot.
+/* Every MIR function gets an address from _MIR_get_thunk when its module is
+   loaded, and MIR_link later points that address at an interpreter shim (via
+   MIR_set_interp_interface) or at undefined_interface.  On a native target a
+   thunk is a few bytes of patchable machine code and the redirect rewrites a
+   jump.  wasm cannot generate code, so here a thunk is an entry in the wasm
+   function table: its address IS the table index, reserved at load, and the
+   redirect fills the entry once the target -- and so the signature -- is
+   known.
 
-   Calls out of interpreted code all funnel through wasm_ff_dispatch, which
-   recognises a thunk address and re-enters the interpreter directly rather
-   than trying to call it as a wasm function.
+   That makes a thunk address an ordinary wasm function pointer, callable by
+   anything: interpreted code, and also native code that does a genuine
+   call_indirect on it -- qsort's comparator, a callback the host runtime
+   stored in a struct, a function value passed as a 64-bit integer.  An
+   earlier version made a thunk a slot in a C array, callable only through
+   wasm_ff_dispatch, and substituted a real table entry when the address was
+   passed as a 32-bit argument of a native call.  Every other way the address
+   reached native code -- stored in memory first, or passed as an i64 --
+   trapped with "table index is out of bounds".
+
+   Calls out of interpreted code still funnel through wasm_ff_dispatch, which
+   recognises a thunk address and re-enters the interpreter directly instead
+   of going through the table and JavaScript.
 
    This is load-bearing for ordinary recursion, not just for exotic cases.
    While _MIR_get_thunk returned one shared do-nothing stub for every
@@ -147,68 +165,158 @@ EM_JS (void, mir_wasm_js_call,
    code to another interpreted function invoked that empty stub and silently
    produced 0.  Shallow calls appeared to work only because MIR's inliner had
    already replaced them; the bug surfaced as "recursion returns a wrong
-   answer past ~15 frames", which is simply where the inliner gave up. */
+   answer past ~15 frames", which is simply where the inliner gave up.
+
+   Thunks belong to their context: MIR_finish releases them (wasm_context_finish,
+   called from code_finish), empties their table entries and reuses them, so a
+   page that runs many programs in one module does not run out. */
 
 #define WASM_MAX_THUNKS 8192
 
 typedef enum {
-  WASM_THUNK_UNSET,
+  WASM_THUNK_FREE,   /* released with its context; the table entry is null */
+  WASM_THUNK_UNSET,  /* reserved, not yet redirected */
   WASM_THUNK_NATIVE, /* redirected at a real wasm function pointer */
   WASM_THUNK_INTERP, /* redirected at an interpreted MIR function */
 } wasm_thunk_kind_t;
 
 typedef struct {
   wasm_thunk_kind_t kind;
-  void *target;        /* WASM_THUNK_NATIVE */
-  MIR_context_t ctx;   /* WASM_THUNK_INTERP */
-  MIR_item_t func_item;
-  uint32_t fn_ptr;     /* lazily created wasm table entry; 0 = none yet */
+  uint32_t index;     /* the thunk's wasm table index, which is its address */
+  void *target;       /* WASM_THUNK_NATIVE */
+  MIR_context_t ctx;  /* the owner; kept for a native redirect too, so errors have one */
+  MIR_item_t func_item; /* WASM_THUNK_INTERP */
 } wasm_thunk_t;
 
+/* In ascending table index, always: a new thunk takes the next index the
+   table grows to, and a reused one keeps its own.  So an address is found by
+   binary search. */
 static wasm_thunk_t wasm_thunks[WASM_MAX_THUNKS];
 static size_t wasm_thunks_num;
+static uint32_t wasm_thunks_free[WASM_MAX_THUNKS]; /* positions in wasm_thunks */
+static size_t wasm_thunks_free_num;
+
+/* What _MIR_get_interp_shim returns: never called, only handed to
+   _MIR_redirect_thunk, so it needs no table entry. */
+typedef struct {
+  MIR_context_t ctx; /* NULL when free */
+  MIR_item_t func_item;
+} wasm_shim_t;
+
+static wasm_shim_t wasm_shims[WASM_MAX_THUNKS];
+static size_t wasm_shims_num;
+static uint32_t wasm_shims_free[WASM_MAX_THUNKS];
+static size_t wasm_shims_free_num;
+
+EM_JS_DEPS (mir_wasm_thunks, "$wasmTable,$UTF8ToString,$stackSave,$stackAlloc,$stackRestore");
+
+/* Grow the table by one null entry and return its index. */
+EM_JS (uint32_t, mir_wasm_table_reserve, (void), { return wasmTable.grow (1); });
+
+/* Make entry DST call what entry SRC calls; SRC 0 empties DST. */
+EM_JS (void, mir_wasm_table_copy, (uint32_t dst, uint32_t src),
+       { wasmTable.set (dst, src ? wasmTable.get (src) : null); });
 
 static wasm_thunk_t *wasm_thunk_alloc (MIR_context_t ctx) {
   wasm_thunk_t *t;
 
-  if (wasm_thunks_num >= WASM_MAX_THUNKS) {
+  if (wasm_thunks_free_num > 0) {
+    t = &wasm_thunks[wasm_thunks_free[--wasm_thunks_free_num]];
+  } else if (wasm_thunks_num >= WASM_MAX_THUNKS) {
     MIR_get_error_func (ctx) (MIR_alloc_error, "wasm32: too many function thunks");
     return NULL;
+  } else {
+    uint32_t index = mir_wasm_table_reserve ();
+
+    /* The table only grows (Emscripten's addFunction appends too, and reuses
+       only what removeFunction freed), so indices arrive in ascending order. */
+    if (wasm_thunks_num > 0 && index <= wasm_thunks[wasm_thunks_num - 1].index) {
+      MIR_get_error_func (ctx) (MIR_alloc_error, "wasm32: function table shrank under MIR");
+      return NULL;
+    }
+    t = &wasm_thunks[wasm_thunks_num++];
+    t->index = index;
   }
-  t = &wasm_thunks[wasm_thunks_num++];
   t->kind = WASM_THUNK_UNSET;
   t->target = NULL;
-  t->ctx = ctx; /* kept even for a native redirect, so errors have a context */
+  t->ctx = ctx;
   t->func_item = NULL;
-  t->fn_ptr = 0;
   return t;
 }
 
 /* NULL unless ADDR is one of ours.  Any other pointer -- a libc function, a
    symbol from MIR_load_external -- has to fall through to the JS call. */
 static wasm_thunk_t *wasm_thunk_of (void *addr) {
+  uint32_t index = (uint32_t) (uintptr_t) addr;
+  size_t lo = 0, hi = wasm_thunks_num;
+
+  if (wasm_thunks_num == 0 || index < wasm_thunks[0].index
+      || index > wasm_thunks[wasm_thunks_num - 1].index)
+    return NULL;
+  while (lo < hi) {
+    size_t mid = lo + (hi - lo) / 2;
+
+    if (wasm_thunks[mid].index == index) return &wasm_thunks[mid];
+    if (wasm_thunks[mid].index < index)
+      lo = mid + 1;
+    else
+      hi = mid;
+  }
+  return NULL;
+}
+
+static wasm_shim_t *wasm_shim_alloc (MIR_context_t ctx) {
+  wasm_shim_t *s;
+
+  if (wasm_shims_free_num > 0) {
+    s = &wasm_shims[wasm_shims_free[--wasm_shims_free_num]];
+  } else if (wasm_shims_num >= WASM_MAX_THUNKS) {
+    MIR_get_error_func (ctx) (MIR_alloc_error, "wasm32: too many interpreter shims");
+    return NULL;
+  } else {
+    s = &wasm_shims[wasm_shims_num++];
+  }
+  s->ctx = ctx;
+  s->func_item = NULL;
+  return s;
+}
+
+static wasm_shim_t *wasm_shim_of (void *addr) {
   size_t off;
 
-  if ((char *) addr < (char *) wasm_thunks
-      || (char *) addr >= (char *) (wasm_thunks + WASM_MAX_THUNKS))
+  if ((char *) addr < (char *) wasm_shims || (char *) addr >= (char *) (wasm_shims + wasm_shims_num))
     return NULL;
-  off = (size_t) ((char *) addr - (char *) wasm_thunks);
-  if (off % sizeof (wasm_thunk_t) != 0) return NULL; /* interior pointer: not a thunk */
-  return (wasm_thunk_t *) addr;
+  off = (size_t) ((char *) addr - (char *) wasm_shims);
+  if (off % sizeof (wasm_shim_t) != 0) return NULL; /* interior pointer */
+  return ((wasm_shim_t *) addr)->ctx == NULL ? NULL : (wasm_shim_t *) addr;
+}
+
+/* Called from code_finish: CTX's thunks and shims become reusable, and its
+   table entries are emptied, so a stale function pointer into a finished
+   context traps as a null call instead of running freed code. */
+static void wasm_context_finish (MIR_context_t ctx) {
+  for (size_t i = 0; i < wasm_thunks_num; i++) {
+    wasm_thunk_t *t = &wasm_thunks[i];
+
+    if (t->kind == WASM_THUNK_FREE || t->ctx != ctx) continue;
+    mir_wasm_table_copy (t->index, 0);
+    t->kind = WASM_THUNK_FREE;
+    t->ctx = NULL;
+    t->func_item = NULL;
+    t->target = NULL;
+    wasm_thunks_free[wasm_thunks_free_num++] = (uint32_t) i;
+  }
+  for (size_t i = 0; i < wasm_shims_num; i++) {
+    if (wasm_shims[i].ctx != ctx) continue;
+    wasm_shims[i].ctx = NULL;
+    wasm_shims[i].func_item = NULL;
+    wasm_shims_free[wasm_shims_free_num++] = (uint32_t) i;
+  }
 }
 
 /* ---------------------------------------------------------------- */
-/* Interpreted functions as real wasm function pointers              */
+/* An interpreted function's table entry                             */
 /* ---------------------------------------------------------------- */
-
-/* A thunk is a table slot, which is all interpreted->interpreted calls need,
-   but it is not something a *native* callee can call: qsort does a genuine
-   call_indirect on whatever pointer it was handed.  So when an interpreted
-   function's address is about to cross into native code, give it a real entry
-   in the wasm table that trampolines back into the interpreter.
-
-   Created on demand and cached, because most functions never escape and each
-   entry costs a table slot and a JS closure. */
 
 /* How an argument has to be widened into its 8-byte MIR_val_t slot.  The wasm
    signature cannot express this: it only says i32, while the interpreter reads
@@ -232,27 +340,37 @@ static char wasm_marshal_code (MIR_type_t t) {
 }
 
 /* Called from the JS trampoline below with a buffer laid out the way
-   wasm_ff_dispatch lays one out: results first, then arguments. */
-EMSCRIPTEN_KEEPALIVE void mir_wasm_interp_entry (uint32_t slot, MIR_val_t *ras) {
+   wasm_ff_dispatch lays one out: results first, then arguments.  POS is the
+   thunk's position in wasm_thunks. */
+EMSCRIPTEN_KEEPALIVE void mir_wasm_interp_entry (uint32_t pos, MIR_val_t *ras) {
   wasm_thunk_t *t;
   MIR_func_t func;
 
-  if (slot >= wasm_thunks_num) return;
-  t = &wasm_thunks[slot];
+  if (pos >= wasm_thunks_num) return;
+  t = &wasm_thunks[pos];
   if (t->kind != WASM_THUNK_INTERP) return;
   func = t->func_item->u.func;
   MIR_interp_arr (t->ctx, t->func_item, ras, func->nargs, ras + func->nres);
 }
 
-/* WSIG is the wasm signature addFunction needs (result first).  MSIG says how
+/* Fill table entry DST with a wasm function of signature WSIG (result first)
+   that trampolines into the interpreter for the thunk at POS.  MSIG says how
    to widen each argument.  STRIDE is sizeof (MIR_val_t), which is *not* 8: the
    union carries a host long double, and Emscripten's is 128-bit, so the slots
    are 16 bytes apart.  Getting that wrong reads every argument one slot low.
 
+   A table entry has to be a wasm function, so the JS closure is wrapped in a
+   one-import module exporting it at WSIG -- what Emscripten's addFunction does,
+   except that the compiled module is kept per signature and only instantiated
+   per thunk, which costs a fraction of a compile.  Every function a program
+   defines gets one at link time, so that difference is the link's.
+
    The buffer is stack-allocated per call, so a comparator invoked repeatedly --
    or recursively -- never shares it. */
-EM_JS (int, mir_wasm_add_interp_entry,
-       (uint32_t slot, const char *wsig, const char *msig, uint32_t nres, uint32_t stride), {
+EM_JS (void, mir_wasm_set_interp_entry,
+       (uint32_t dst, uint32_t pos, const char *wsig, const char *msig, uint32_t nres,
+        uint32_t stride),
+       {
          var ws = UTF8ToString (wsig), ms = UTF8ToString (msig);
          var f = function () {
            var sp = stackSave ();
@@ -270,7 +388,7 @@ EM_JS (int, mir_wasm_add_interp_entry,
                default: HEAP64[off >> 3] = BigInt (arguments[i] | 0); break;    /* i */
                }
              }
-             _mir_wasm_interp_entry (slot, buf);
+             _mir_wasm_interp_entry (pos, buf);
              if (nres == 0) return;
              switch (ws.charCodeAt (0)) {
              case 106: return HEAP64[buf >> 3];
@@ -282,23 +400,36 @@ EM_JS (int, mir_wasm_add_interp_entry,
              stackRestore (sp);
            }
          };
-         return addFunction (f, ws);
+         var cache = Module["mirWasmEntryModules"] || (Module["mirWasmEntryModules"] = {});
+         var mod = cache[ws];
+         if (!mod) {
+           var code = {105 : 0x7f, 106 : 0x7e, 102 : 0x7d, 100 : 0x7c}; /* i j f d */
+           var params = [], results = [];
+           for (var k = 1; k < ws.length; k++) params.push (code[ws.charCodeAt (k)]);
+           if (ws.charCodeAt (0) != 118) results.push (code[ws.charCodeAt (0)]); /* 'v' */
+           var type = [ 0x01, 0x60, params.length ].concat (params, [results.length], results);
+           mod = cache[ws] = new WebAssembly.Module (Uint8Array.from ([].concat (
+             [ 0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00 ], /* magic, version */
+             [ 0x01, type.length ], type,                       /* type section: 1 entry */
+             [ 0x02, 0x07, 0x01, 0x01, 0x65, 0x01, 0x66, 0x00, 0x00 ], /* import "e" "f" */
+             [ 0x07, 0x05, 0x01, 0x01, 0x66, 0x00, 0x00 ]))); /* export "f" */
+         }
+         wasmTable.set (dst, new WebAssembly.Instance (mod, {e : {f : f}}).exports.f);
        });
 
-static uint32_t wasm_thunk_fn_ptr (wasm_thunk_t *t) {
+/* Give an interpreted thunk its table entry.  A function the JS trampoline
+   cannot express -- variadic, more than one result, too many arguments -- gets
+   none: interpreted code still calls it (wasm_ff_dispatch never goes through
+   the table), and native code calling it traps on a null entry. */
+static void wasm_thunk_set_interp_entry (wasm_thunk_t *t) {
   char wsig[WASM_FF_MAX_ARGS + 2], msig[WASM_FF_MAX_ARGS + 1];
-  MIR_func_t func;
+  MIR_func_t func = t->func_item->u.func;
   MIR_var_t *vars;
-  size_t i, n;
+  size_t i, n = func->nargs;
 
-  if (t->fn_ptr != 0) return t->fn_ptr;
-  func = t->func_item->u.func;
-  n = func->nargs;
   if (func->vararg_p || func->nres > 1 || n > WASM_FF_MAX_ARGS) {
-    MIR_get_error_func (t->ctx) (MIR_call_op_error,
-                                 "wasm32: cannot pass %s to native code as a function pointer",
-                                 func->name);
-    return 0;
+    mir_wasm_table_copy (t->index, 0);
+    return;
   }
   wsig[0] = func->nres == 0 ? WASM_TC_VOID : wasm_type_code (func->res_types[0]);
   vars = VARR_ADDR (MIR_var_t, func->vars);
@@ -307,10 +438,8 @@ static uint32_t wasm_thunk_fn_ptr (wasm_thunk_t *t) {
     msig[i] = wasm_marshal_code (vars[i].type);
   }
   wsig[n + 1] = msig[n] = '\0';
-  t->fn_ptr = (uint32_t) mir_wasm_add_interp_entry ((uint32_t) (t - wasm_thunks), wsig, msig,
-                                                    (uint32_t) func->nres,
-                                                    (uint32_t) sizeof (MIR_val_t));
-  return t->fn_ptr;
+  mir_wasm_set_interp_entry (t->index, (uint32_t) (t - wasm_thunks), wsig, msig,
+                             (uint32_t) func->nres, (uint32_t) sizeof (MIR_val_t));
 }
 
 static void wasm_ff_dispatch (int sig_index, void *addr, void *res_and_args) {
@@ -393,16 +522,6 @@ static void wasm_ff_dispatch (int sig_index, void *addr, void *res_and_args) {
     switch (codes[ncall]) {
     case WASM_TC_I32: {
       uint32_t v = (uint32_t) args[i].u;
-      /* An interpreted function's address crossing into native code: hand over
-         a real table entry instead of the thunk slot, which is not callable.
-         wasm32 is ILP32, so a pointer and an int are the same wasm type and a
-         plain integer that happens to equal a live thunk's address would be
-         substituted too -- it has to be slot-aligned, in range, and an
-         interpreted thunk, which makes that vanishingly unlikely. */
-      wasm_thunk_t *arg_thunk = wasm_thunk_of ((void *) (uintptr_t) v);
-
-      if (arg_thunk != NULL && arg_thunk->kind == WASM_THUNK_INTERP)
-        v = wasm_thunk_fn_ptr (arg_thunk);
       memcpy (slot, &v, 4);
       break;
     }
@@ -513,10 +632,21 @@ void *_MIR_get_ff_call (MIR_context_t ctx, size_t nres, MIR_type_t *res_types, s
                               "wasm32: multiple return values are not supported");
   if (nargs > WASM_FF_MAX_ARGS)
     MIR_get_error_func (ctx) (MIR_call_op_error, "wasm32: too many arguments in a foreign call");
+  /* Interned: every context asks again for the signatures it calls through,
+     so a page running one program after another in the same module used to
+     exhaust the pool after a couple of dozen runs. */
+  for (int k = 0; k < wasm_ff_sigs_num; k++) {
+    sig = &wasm_ff_sigs[k];
+    if (sig->nres != nres || sig->nargs != nargs || sig->nfixed != arg_vars_num
+        || sig->res_code != (nres == 0 ? WASM_TC_VOID : wasm_type_code (res_types[0])))
+      continue;
+    for (i = 0; i < nargs && sig->arg_types[i] == arg_descs[i].type; i++)
+      ;
+    if (i == nargs) return (void *) wasm_ff_stubs[k];
+  }
   if (wasm_ff_sigs_num >= WASM_FF_MAX_SIGS)
     MIR_get_error_func (ctx) (MIR_call_op_error,
                               "wasm32: too many distinct foreign call signatures");
-
   sig = &wasm_ff_sigs[wasm_ff_sigs_num];
   sig->used = 1;
   sig->nres = nres;
@@ -534,15 +664,11 @@ void *_MIR_get_ff_call (MIR_context_t ctx, size_t nres, MIR_type_t *res_types, s
 /* ---------------------------------------------------------------- */
 
 /* _MIR_get_thunk / _MIR_redirect_thunk / _MIR_get_interp_shim are implemented
-   against the thunk table above, which is what makes interpreted code able to
-   call interpreted code.
+   against the thunk entries above, which is what makes interpreted code able
+   to call interpreted code, and native code able to call it too.
 
    _MIR_get_wrapper and the lazy-generation hooks remain inert: those exist for
-   the code generator, which this target does not have.  Handing a *native*
-   callee a pointer to an interpreted function (qsort's comparator, say) is
-   still unsupported -- a thunk is a table slot, not a wasm function pointer,
-   so it cannot be called through wasmTable.  That needs Emscripten's
-   addFunction to append a real table entry at runtime. */
+   the code generator, which this target does not have. */
 
 static void *bstart_func (void) {
   static char buf[16];
@@ -586,11 +712,14 @@ void va_start_interp_builtin (MIR_context_t ctx MIR_UNUSED, void *p, void *a) {
 
 void va_end_interp_builtin (MIR_context_t ctx MIR_UNUSED, void *p MIR_UNUSED) {}
 
-/* A thunk is a table slot rather than patchable code; see "Function thunks"
-   above.  The pointer handed back is therefore not a callable wasm function
-   pointer -- it is only ever meaningful to wasm_ff_dispatch, which is where
-   every call out of interpreted code goes. */
-void *_MIR_get_thunk (MIR_context_t ctx) { return wasm_thunk_alloc (ctx); }
+/* A thunk is a wasm table entry rather than patchable code; see "Function
+   thunks" above.  Its address is the entry's index, a real function pointer
+   once _MIR_redirect_thunk has filled it. */
+void *_MIR_get_thunk (MIR_context_t ctx) {
+  wasm_thunk_t *t = wasm_thunk_alloc (ctx);
+
+  return t == NULL ? NULL : (void *) (uintptr_t) t->index;
+}
 
 void *_MIR_get_thunk_addr (MIR_context_t ctx MIR_UNUSED, void *thunk) {
   wasm_thunk_t *t = wasm_thunk_of (thunk);
@@ -600,14 +729,27 @@ void *_MIR_get_thunk_addr (MIR_context_t ctx MIR_UNUSED, void *thunk) {
 }
 
 void _MIR_redirect_thunk (MIR_context_t ctx MIR_UNUSED, void *thunk, void *to) {
-  wasm_thunk_t *t = wasm_thunk_of (thunk), *src = wasm_thunk_of (to);
+  wasm_thunk_t *t = wasm_thunk_of (thunk), *src;
+  wasm_shim_t *shim;
 
   if (t == NULL) return;
-  if (src != NULL) { /* pointing one thunk at another, i.e. at an interp shim */
-    *t = *src;
-  } else {
+  if ((shim = wasm_shim_of (to)) != NULL) { /* at an interpreted function */
+    t->kind = WASM_THUNK_INTERP;
+    t->target = NULL;
+    t->ctx = shim->ctx;
+    t->func_item = shim->func_item;
+    wasm_thunk_set_interp_entry (t);
+  } else if ((src = wasm_thunk_of (to)) != NULL) { /* at another thunk */
+    t->kind = src->kind;
+    t->target = src->target;
+    t->ctx = src->ctx;
+    t->func_item = src->func_item;
+    mir_wasm_table_copy (t->index, src->index);
+  } else { /* at a native function, e.g. undefined_interface */
     t->kind = WASM_THUNK_NATIVE;
     t->target = to;
+    t->func_item = NULL;
+    mir_wasm_table_copy (t->index, (uint32_t) (uintptr_t) to);
   }
 }
 
@@ -617,13 +759,11 @@ void _MIR_redirect_thunk (MIR_context_t ctx MIR_UNUSED, void *thunk, void *to) {
    MIR_val_t, so it calls the equivalent MIR_interp_arr directly and the
    handler is not needed. */
 void *_MIR_get_interp_shim (MIR_context_t ctx, MIR_item_t func_item, void *handler MIR_UNUSED) {
-  wasm_thunk_t *t = wasm_thunk_alloc (ctx);
+  wasm_shim_t *s = wasm_shim_alloc (ctx);
 
-  if (t == NULL) return NULL;
-  t->kind = WASM_THUNK_INTERP;
-  t->ctx = ctx;
-  t->func_item = func_item;
-  return t;
+  if (s == NULL) return NULL;
+  s->func_item = func_item;
+  return s;
 }
 
 static void wrapper_func (void) {}
@@ -634,8 +774,17 @@ void *_MIR_get_wrapper (MIR_context_t ctx MIR_UNUSED, MIR_item_t called_func MIR
 static char wrapper_end_buf[16];
 void *_MIR_get_wrapper_end (MIR_context_t ctx MIR_UNUSED) { return wrapper_end_buf; }
 
-/* Code generator entry points referenced by c2mir-driver.c.  There is no
-   generator on this target; interpreter mode only. */
+/* Code generator entry points, which embedders reference on paths interpreter
+   mode never takes (c2mir-driver.c among them).  There is no generator on this
+   target; interpreter mode only.  The ones that would produce code report it
+   through the error function rather than returning something plausible. */
+void MIR_gen_init (MIR_context_t ctx MIR_UNUSED) {}
+void MIR_gen_set_optimize_level (MIR_context_t ctx MIR_UNUSED, unsigned int level MIR_UNUSED) {}
+void *MIR_gen (MIR_context_t ctx, MIR_item_t func_item MIR_UNUSED) {
+  MIR_get_error_func (ctx) (MIR_call_op_error,
+                            "wasm32: there is no code generator; use the interpreter");
+  return NULL;
+}
 void MIR_gen_set_debug_file (MIR_context_t ctx MIR_UNUSED, const char *file MIR_UNUSED) {}
 void MIR_gen_set_debug_level (MIR_context_t ctx MIR_UNUSED, int level MIR_UNUSED) {}
 void MIR_set_gen_interface (MIR_context_t ctx MIR_UNUSED, void *gen_interface MIR_UNUSED) {}

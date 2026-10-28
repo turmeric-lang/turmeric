@@ -1,5 +1,12 @@
 # c2mir promotes a `_Generic` controlling expression, so a sub-int type selects `int`
 
+> **Resolved 2026-10-28** by turmeric-lang/mir#16 (`f887547f`, vendored the
+> same day): the controlling expression gets lvalue conversion only. The fix
+> exposed a second c2mir bug the promotion had hidden -- a character constant
+> was typed `char`, so `sizeof ('a')` was 1 -- fixed in the same PR.
+> `c-tests/new/generic-no-promotion.c` covers both; gcc and clang agree with
+> its `.expect`.
+
 **Severity:** low. Wrong answer with no diagnostic, but turmeric's emitter never
 writes `_Generic` (`src/compiler/mangle.c` only lists it as a reserved word), so
 only user inline C that switches on `char`, `short` or a bit-field type sees it,
