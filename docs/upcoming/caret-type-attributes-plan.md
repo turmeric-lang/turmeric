@@ -1,6 +1,6 @@
 # Plan: spell type-declaration flags as `^attr`, not `:keyword`
 
-> **Status:** P0, P1, P2 and P3 IMPLEMENTED (2026-10-27, 2026-10-28); P4 waits for a release that carries P3. The three open questions
+> **Status:** P0-P4 IMPLEMENTED (2026-10-27, 2026-10-28). P4 is a separate commit and should merge only after the spices have migrated; see its "As implemented" section. The three open questions
 > are decided (see "Decisions"): attributes go before the name, `^move` stays,
 > and `^heap` moves with the rest. Both spellings are accepted today; the
 > keyword one is not yet warned about (P3). A spelling change only: every form
@@ -412,6 +412,46 @@ command. The warning lives for at least one minor release.
 
 Remove the keyword loops. A trailing `:linear` is then an error that names
 the `^` form, because the declaration's arity no longer fits.
+
+#### As implemented (2026-10-28)
+
+- **`TUR-E0717` replaces the warning.** The keyword spelling is a hard error
+  that names every flag and the fix: `'defstruct': the trailing flag :copy
+  :heap is no longer accepted; write ^copy ^heap before the name: (defstruct
+  ^copy ^heap Name ...)`. One error per declaration, plus one for an `exists`
+  `:linear`. `tur explain TUR-E0717` has the long form. `TUR-D0007` is gone
+  altogether (enum, name maps, explain text): it was added in P3 and never
+  appeared in a release, so there is nothing to keep it for.
+- **The loops are not literally removed.** They are what spots a flag keyword,
+  and after reporting it they still apply the flag, so the declaration
+  elaborates as though it had been written correctly. The alternative (stop at
+  the error and define nothing) buries a mistake in a cascade of "unknown
+  type" errors at every use of the type. The keyword is still *read*; it no
+  longer *compiles*. If the loops should go for tidiness, a later change can
+  turn them into a bare "is this a flag keyword" test.
+- `tur fmt` still migrates the old spelling: it works on the parsed forms, not
+  the elaborated program, so it is the fix for the error. So do
+  `tools/caret-type-attrs-rewrite.py` and the gendocs and LSP readers, which
+  are text tools.
+- **Fixtures:** the two `*-warns` fixtures are deleted; `errors/type-decl-keyword-
+  flag-rejected` and `errors/type-decl-keyword-flag-exists-rejected` pin the
+  error. The guides, the forms reference and the generated `docstrings.tur`
+  (two entries) say "is an error".
+- **Checked:** `tur emit-c` over every fixture, example and benchmark input
+  reports `TUR-E0717` for none and generates the same C as before;
+  `tests/run.sh` (4185 passed, 0 failed) and `tests/run-turi.sh` (3105 passed,
+  0 failed, 1015 skipped).
+- **What it breaks, measured on `turmeric-spices` (898 files, this compiler):**
+  the *unmigrated* spices report `TUR-E0717` in 364 files, and 293 files that
+  compiled before now fail. The *migrated* spices (the 78-file change prepared
+  after P3) report none and fail nowhere new. The spices' CI builds turmeric
+  `main` at one pinned commit, so **the spices change has to merge before this
+  one reaches `main`, or at the same time** -- the opposite of the order P0-P3
+  need (they need this repo first, because older compilers read `^copy` as the
+  type's name). Both constraints hold only in this order: the turmeric PR
+  with P0-P3, then the spices PR, then a second turmeric PR with P4. P4 is its
+  own commit so that it can be split off the branch before the first PR is
+  opened (`git cherry-pick` it onto a fresh branch from `main` later).
 
 ## Attributes beyond the type declarations (proposed P5)
 

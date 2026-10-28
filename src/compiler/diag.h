@@ -307,7 +307,7 @@ typedef enum DiagCode {
      * boxes.  Erased parameters there have no decidable convention. */
     TUR_E0715_NICHE_ELEMENT_ERASED_COMPARATOR,
     /* Deprecation band (TUR-D####): syntax slated for removal, or already
-     * removed.  D0002-D0007 are emitted at elab_deprecation_level()
+     * removed.  D0002-D0006 are emitted at elab_deprecation_level()
      * (elab_internal.h): a warning, promoted to an error under
      * --Werror=deprecated.  D0001 is the exception, below. */
     /* fn-type-bare-identifier-plan: a leading colon on a type inside a
@@ -335,10 +335,6 @@ typedef enum DiagCode {
      * Turmeric dialects; `let` already binds sequentially.  Never emitted for
      * a `#lang r7rs` source, whose `let*` is the spec's. */
     TUR_D0006_LET_STAR,
-    /* caret-type-attributes-plan P3: the flags of a defopaque / defstruct /
-     * defdata / defgadt, and `exists`'s `:linear`, are `^attr`s before the
-     * name; the trailing `:keyword` spelling is deprecated. */
-    TUR_D0007_TYPE_DECL_KEYWORD_FLAG,
     /* XF (experimental-flag-mechanism-plan): the `--enable=<name>` surface.
      * E0310 fires at CLI/manifest parse on an unknown experiment name;
      * W0060/W0061 fire once per compile at the first use site of an enabled
@@ -533,6 +529,10 @@ typedef enum DiagCode {
      * becomes a compile-time conversation.  The message always names the
      * specific reason the call could not be one. */
     TUR_E0716_TAILCALL_NOT_TAIL,
+    /* caret-type-attributes-plan P4: the flags of a defopaque / defstruct /
+     * defdata / defgadt, and `exists`'s `:linear`, are `^attr`s before the
+     * name; a trailing `:keyword` flag is no longer accepted. */
+    TUR_E0717_TYPE_DECL_KEYWORD_FLAG,
 } DiagCode;
 
 typedef enum DiagLevel {

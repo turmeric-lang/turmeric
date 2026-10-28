@@ -1,0 +1,10 @@
+;; caret-type-attributes-plan P4: a flag written as a keyword after the name
+;; (`:copy`) is no longer accepted (TUR-E0717) -- the flags are `^attr`s before
+;; it.  Each form is reported once, naming every flag it spells the old way.
+(defstruct Point :copy :heap [x : int y : int])
+(defopaque Chan :ptr<void> :linear :sealed)
+(defdata Shape :copy (Circle int) (Square int))
+
+(defn main [] : int
+  (println (.x (Point 1 2)))
+  0)

@@ -440,7 +440,6 @@ const char *diag_code_to_string(DiagCode code) {
         case TUR_D0004_NONEXHAUSTIVE_FX_MARKER:   return "TUR-D0004";
         case TUR_D0005_DEFGADT:                   return "TUR-D0005";
         case TUR_D0006_LET_STAR:                  return "TUR-D0006";
-        case TUR_D0007_TYPE_DECL_KEYWORD_FLAG:    return "TUR-D0007";
         /* XF: experimental-flag mechanism */
         case TUR_E0310_UNKNOWN_EXPERIMENT:        return "TUR-E0310";
         case TUR_E0311_UNKNOWN_ENGINE:            return "TUR-E0311";
@@ -464,6 +463,7 @@ const char *diag_code_to_string(DiagCode code) {
         case TUR_W0706_IMAGE_GLOBAL_UNREGISTERED:  return "TUR-W0706";
         case TUR_E0332_SWEET_DOLLAR_IN_BRACKETS:   return "TUR-E0332";
         case TUR_E0716_TAILCALL_NOT_TAIL:          return "TUR-E0716";
+        case TUR_E0717_TYPE_DECL_KEYWORD_FLAG:     return "TUR-E0717";
         case TUR_E0400_CONTRACT_VIOLATED:          return "TUR-E0400";
         case TUR_E0401_POSTCOND_VIOLATED:          return "TUR-E0401";
         /* No `default:` -- a member added to the enum without a case is a
@@ -649,7 +649,6 @@ DiagCode diag_code_from_string(const char *s) {
     if (strcmp(s, "TUR-D0004") == 0) return TUR_D0004_NONEXHAUSTIVE_FX_MARKER;
     if (strcmp(s, "TUR-D0005") == 0) return TUR_D0005_DEFGADT;
     if (strcmp(s, "TUR-D0006") == 0) return TUR_D0006_LET_STAR;
-    if (strcmp(s, "TUR-D0007") == 0) return TUR_D0007_TYPE_DECL_KEYWORD_FLAG;
     /* XF: experimental-flag mechanism */
     if (strcmp(s, "TUR-E0310") == 0) return TUR_E0310_UNKNOWN_EXPERIMENT;
     if (strcmp(s, "TUR-E0311") == 0) return TUR_E0311_UNKNOWN_ENGINE;
@@ -673,6 +672,7 @@ DiagCode diag_code_from_string(const char *s) {
     if (strcmp(s, "TUR-W0706") == 0) return TUR_W0706_IMAGE_GLOBAL_UNREGISTERED;
     if (strcmp(s, "TUR-E0332") == 0) return TUR_E0332_SWEET_DOLLAR_IN_BRACKETS;
     if (strcmp(s, "TUR-E0716") == 0) return TUR_E0716_TAILCALL_NOT_TAIL;
+    if (strcmp(s, "TUR-E0717") == 0) return TUR_E0717_TYPE_DECL_KEYWORD_FLAG;
     if (strcmp(s, "TUR-E0400") == 0) return TUR_E0400_CONTRACT_VIOLATED;
     if (strcmp(s, "TUR-E0401") == 0) return TUR_E0401_POSTCOND_VIOLATED;
     return DIAG_CODE_NONE;
@@ -2884,35 +2884,6 @@ static const DiagExplanation diag_explanations_[] = {
       "compiles; under --Werror=deprecated it is an error.  It is removed in a\n"
       "future major release.\n",
     },
-    /* caret-type-attributes-plan P3 */
-    { TUR_D0007_TYPE_DECL_KEYWORD_FLAG,
-      "TUR-D0007: a type declaration's flag is an attribute before the name;\n"
-      "write `^copy`, not a trailing `:copy`\n"
-      "\n"
-      "`defopaque`, `defstruct`, `defdata` and `defgadt` take their flags the way\n"
-      "`defn` and `def` take theirs: as `^attr`s before the name.  The flags are\n"
-      "`^copy`, `^move`, `^linear`, `^affine`, `^heap`, `^no-auto-ctor` and, for a\n"
-      "`defopaque`, `^sealed` and `^non-null`.  The same goes for the `:linear` of\n"
-      "an `exists` type.  A keyword after the name, or after a `defopaque`'s\n"
-      "representation type, was the earlier spelling of the same flag.\n"
-      "\n"
-      "Examples triggering this warning:\n"
-      "  (defstruct Point :copy [x : int y : int])\n"
-      "  (defopaque Chan :ptr<void> :linear)\n"
-      "  (defdata Tree :heap [a] (Leaf) (Node (Tree a) a (Tree a)))\n"
-      "  (exists :linear [a] a)\n"
-      "\n"
-      "Fix: move each flag in front of the name and spell it with a caret:\n"
-      "  (defstruct ^copy Point [x : int y : int])\n"
-      "  (defopaque ^linear Chan :ptr<void>)\n"
-      "  (defdata ^heap Tree [a] (Leaf) (Node (Tree a) a (Tree a)))\n"
-      "  (exists ^linear [a] a)\n"
-      "\n"
-      "`tur fmt` makes the change in a file, and so does\n"
-      "tools/caret-type-attrs-rewrite.py in a tree.  The old spelling still\n"
-      "compiles and means the same; under --Werror=deprecated it is an error.\n"
-      "It is removed in a future release.\n",
-    },
     /* XF (experimental-flag-mechanism-plan): unknown --enable= name */
     { TUR_E0310_UNKNOWN_EXPERIMENT,
       "TUR-E0310: unknown experiment\n"
@@ -3453,6 +3424,37 @@ static const DiagExplanation diag_explanations_[] = {
       "\n"
       "Removing the annotation always silences the error.  It does not make the\n"
       "call a tail call; it only stops asking.\n",
+    },
+    /* caret-type-attributes-plan P4 */
+    { TUR_E0717_TYPE_DECL_KEYWORD_FLAG,
+      "TUR-E0717: a type declaration's flag is an attribute before the name;\n"
+      "write `^copy`, not a trailing `:copy`\n"
+      "\n"
+      "`defopaque`, `defstruct`, `defdata` and `defgadt` take their flags the way\n"
+      "`defn` and `def` take theirs: as `^attr`s before the name.  The flags are\n"
+      "`^copy`, `^move`, `^linear`, `^affine`, `^heap`, `^no-auto-ctor` and, for a\n"
+      "`defopaque`, `^sealed` and `^non-null`.  The same goes for the `:linear` of\n"
+      "an `exists` type.  A keyword after the name, or after a `defopaque`'s\n"
+      "representation type, was the earlier spelling of the same flag; it is no\n"
+      "longer accepted.\n"
+      "\n"
+      "Examples triggering this error:\n"
+      "  (defstruct Point :copy [x : int y : int])\n"
+      "  (defopaque Chan :ptr<void> :linear)\n"
+      "  (defdata Tree :heap [a] (Leaf) (Node (Tree a) a (Tree a)))\n"
+      "  (exists :linear [a] a)\n"
+      "\n"
+      "Fix: move each flag in front of the name and spell it with a caret:\n"
+      "  (defstruct ^copy Point [x : int y : int])\n"
+      "  (defopaque ^linear Chan :ptr<void>)\n"
+      "  (defdata ^heap Tree [a] (Leaf) (Node (Tree a) a (Tree a)))\n"
+      "  (exists ^linear [a] a)\n"
+      "\n"
+      "`tur fmt` makes the change in a file, and so does\n"
+      "tools/caret-type-attrs-rewrite.py in a tree.  The compiler reports the\n"
+      "error once per declaration and goes on as though the flag had been written\n"
+      "correctly, so one mistake does not bury the rest of the file in follow-on\n"
+      "errors.\n",
     },
     { TUR_E0006_OPERATOR_LOOKUP_FAILED,
       "TUR-E0006: Operator lookup failed\n"
