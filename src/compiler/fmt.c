@@ -238,6 +238,12 @@ static bool fmt_frame_annot(Buf *b, const Form *f) {
     return true;
 }
 
+/* `#used`, `#no-unwind`: the symbol the reader makes of an attribute
+ * `#[used]` (reader.c read_attribute). */
+static bool sym_is_hash_attr(const Symbol *sym) {
+    return sym->len > 1 && sym->name[0] == '#';
+}
+
 static void fmt_form_flat(Buf *b, const Form *f) {
     switch (f->tag) {
         case F_NIL:   buf_puts(b, "nil"); break;
@@ -247,6 +253,15 @@ static void fmt_form_flat(Buf *b, const Form *f) {
         case F_STR:   print_str_escaped_b(b, f->as.s,
                                           (f->lit_spell & LIT_SPELL_HIGH_ESC) != 0); break;
         case F_SYM:
+            /* The reader folds an attribute `#[used]` into the symbol
+             * `#used`; spell it back, or the output is not source. */
+            if (sym_is_hash_attr(f->as.sym)) {
+                buf_putc(b, '#');
+                buf_putc(b, '[');
+                buf_write(b, f->as.sym->name + 1, f->as.sym->len - 1);
+                buf_putc(b, ']');
+                break;
+            }
             buf_write(b, f->as.sym->name, f->as.sym->len);
             break;
         case F_KEYWORD:
@@ -709,18 +724,19 @@ static void fmt_param_vec(FmtState *s, const Form *vec) {
  * params assumed at index 2, the real parameter vector and the return
  * annotation of a `(defn f [A] [params] : ret ...)` fell past the header and
  * were laid out as body forms, one per line. */
-static uint32_t defn_params_index(const Form *f) {
+static uint32_t defn_params_index(const Form *f, uint32_t name_idx) {
     uint32_t n = f->as.list.len;
     Form *const *it = f->as.list.items;
+    uint32_t p = name_idx + 1;        /* where the params sit with no type vector */
 
-    if (!(n > 3 && it[2]->tag == F_VEC && it[3]->tag == F_VEC))
-        return 2;                     /* no type-parameter vector */
+    if (!(n > p + 1 && it[p]->tag == F_VEC && it[p + 1]->tag == F_VEC))
+        return p;                     /* no type-parameter vector */
 
-    /* items[2] is the type-parameter vector; params are at 3 unless a
+    /* items[p] is the type-parameter vector; params are at p + 1 unless a
      * constraint vector sits between them. A constraint vector is non-empty
      * and every element is `(ClassName TyVar ...)`. */
-    if (n > 4 && it[4]->tag == F_VEC) {
-        const Form *maybe = it[3];
+    if (n > p + 2 && it[p + 2]->tag == F_VEC) {
+        const Form *maybe = it[p + 1];
         bool looks_like_constraints = (maybe->as.list.len > 0);
         for (uint32_t i = 0; looks_like_constraints && i < maybe->as.list.len; i++) {
             const Form *cf = maybe->as.list.items[i];
@@ -728,9 +744,30 @@ static uint32_t defn_params_index(const Form *f) {
                 cf->as.list.items[0]->tag != F_SYM)
                 looks_like_constraints = false;
         }
-        if (looks_like_constraints) return 4;
+        if (looks_like_constraints) return p + 2;
     }
-    return 3;
+    return p + 1;
+}
+
+/* Index of a defn's name: the `#[used]` / `#[no-unwind]` attributes (read as
+ * `#used`) and a `(export-as "c_name")` list may precede it, as in
+ * elab_fns.c.  Taking index 1 for the name made
+ * `(defn #[used] (export-as "x") f [a] : T ...)` read the attribute as the name
+ * and lay the real header out one item per line.  The `^attr` spellings are
+ * left alone: stdlib's `^deprecated "msg"` layout is established. */
+static uint32_t defn_name_index(const Form *f) {
+    uint32_t n = f->as.list.len;
+    uint32_t i = 1;
+    while (i + 1 < n) {
+        const Form *it = f->as.list.items[i];
+        if (it->tag == F_SYM && sym_is_hash_attr(it->as.sym)) { i++; continue; }
+        if (it->tag == F_LIST && it->as.list.len == 2) {
+            const Symbol *h = list_head_sym(it);
+            if (h && sym_eq(h, "export-as")) { i++; continue; }
+        }
+        break;
+    }
+    return i;
 }
 
 /* fmt-drops-comments-in-handle-and-binding-modifier-gaps: emit header items
@@ -769,7 +806,7 @@ static void fmt_defn(FmtState *s, const Form *f) {
 
     /* Header items: defn/defmacro, name, any type-parameter and constraint
      * vectors, params, optional :ret keyword or type annotation */
-    uint32_t params_idx = defn_params_index(f);
+    uint32_t params_idx = defn_params_index(f, defn_name_index(f));
     uint32_t header_end = params_idx + 1;
     if (n > header_end && (f->as.list.items[header_end]->tag == F_KEYWORD
                         || f->as.list.items[header_end]->tag == F_TYPE_ANN))
@@ -1422,6 +1459,13 @@ static void fmt_form(FmtState *s, const Form *f) {
         }
         case F_STR:   fmt_emit_inline(s, f);                           break;
         case F_SYM:
+            if (sym_is_hash_attr(f->as.sym)) {
+                fs_putc(s, '#');
+                fs_putc(s, '[');
+                fs_write(s, f->as.sym->name + 1, f->as.sym->len - 1);
+                fs_putc(s, ']');
+                break;
+            }
             fs_write(s, f->as.sym->name, f->as.sym->len);
             break;
         case F_KEYWORD:

@@ -822,6 +822,39 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# An attribute `#[used]` reads as the symbol `#used`; the printer must spell it
+# back, and a defn's header must lay out around it and `(export-as ...)`.
+# ---------------------------------------------------------------------------
+NAME="fmt-hash-attribute-roundtrips"
+INPUT='(defn #[used] (export-as "c_name") f [x : int] : int x)'
+OUT=$(printf '%s\n' "$INPUT" | "$TUR" fmt --stdin 2>&1)
+EXPECTED='(defn #[used] (export-as "c_name") f [x : int] : int x)'
+if [ "$OUT" = "$EXPECTED" ]; then
+    pass "$NAME"
+else
+    fail "$NAME" "expected '$EXPECTED', got '$OUT'"
+fi
+
+# ---------------------------------------------------------------------------
+# A directory walk passes over `*.html.tur` template inputs (not Turmeric); a
+# file named explicitly is still formatted.
+# ---------------------------------------------------------------------------
+NAME="fmt-walk-skips-html-templates"
+TMPDIR_T=$(mktemp -d)
+printf '<h1><%%= title %%></h1>\n' > "$TMPDIR_T/page.html.tur"
+printf '(defn   f [] : int 1)\n' > "$TMPDIR_T/ok.tur"
+"$TUR" fmt --check "$TMPDIR_T" > /dev/null 2>&1
+RC_DIR=$?
+"$TUR" fmt --check "$TMPDIR_T/page.html.tur" > /dev/null 2>&1
+RC_FILE=$?
+if [ "$RC_DIR" -eq 1 ] && [ "$RC_FILE" -ne 0 ]; then
+    pass "$NAME"
+else
+    fail "$NAME" "expected walk exit 1 (ok.tur would change) and explicit file to fail on its markup, got $RC_DIR / $RC_FILE"
+fi
+rm -rf "$TMPDIR_T"
+
+# ---------------------------------------------------------------------------
 # Summary
 # ---------------------------------------------------------------------------
 echo

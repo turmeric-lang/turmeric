@@ -46,6 +46,10 @@ tur format --lang sweet < buffer.tur.sweet
 
 Prefer `tur fmt`, which has the same `--lang` and also formats in place.
 
+`tur fmt` on a directory skips `build/`, `.git/`, the `.tur*-cache` directories
+and `*.html.tur` files -- the template spice's markup inputs, which are not
+Turmeric source. A file named on the command line is formatted regardless.
+
 The `--check` flag is useful in CI:
 
 ```sh

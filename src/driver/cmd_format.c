@@ -420,6 +420,14 @@ static bool fmt_is_tur_file(const char *name) {
     return false;
 }
 
+/* `page.html.tur`: a template-spice input, markup with `<% ... %>` tags that
+ * is not Turmeric source.  Only a directory walk passes it over; a file named
+ * on the command line is still formatted, as asked. */
+static bool fmt_is_template_file(const char *name) {
+    size_t n = strlen(name);
+    return n >= 9 && strcmp(name + n - 9, ".html.tur") == 0;
+}
+
 
 /* Core: read src, parse, format, return formatted Buf.
  * Returns 0 on success with *out populated, -1 on error.
@@ -594,7 +602,8 @@ static int fmt_walk(const char *path, ReaderType force_lang, FmtMode mode,
          * to carry -- a verbatim copy of both branches below -- is gone. */
         if (tur_dirent_is_dir(path, ent)) {
             changed += fmt_walk(child, force_lang, mode, err_count);
-        } else if (tur_dirent_is_reg(path, ent) && fmt_is_tur_file(ent->d_name)) {
+        } else if (tur_dirent_is_reg(path, ent) && fmt_is_tur_file(ent->d_name)
+                   && !fmt_is_template_file(ent->d_name)) {
             int r = fmt_process_file(child, force_lang, mode);
             if (r < 0) (*err_count)++;
             else if (r > 0) changed++;
@@ -616,6 +625,7 @@ static int usage_fmt(void) {
         "\n"
         "  Paths may be files or directories.  Defaults to current directory.\n"
         "  Skips:  build/  .git/  .tur-cache/  .turnb-cache/  .tur-repl-cache/\n"
+        "          *.html.tur template inputs (when walking a directory)\n"
         "\n"
         "  Dialects for --lang:  turmeric (default)  sweet-exp  curly-infix  neoteric  r7rs\n"
         "  r7rs/sweet, or any base `tur dialects` lists (e.g. saffron, saffron/sweet),\n"
