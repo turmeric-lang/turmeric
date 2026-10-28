@@ -34,6 +34,17 @@ sentence above does not cover them. If you touch this file, check
 `ls docs/reported/` against it -- an index that silently omits a quarter of the
 directory is worse for triage than no index.
 
+## Found by the refined-fn-types optimization scan (filed 2026-10-28)
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [call-through-fn-param-skips-argument-checks](call-through-fn-param-skips-argument-checks.md) | high (silent wrong value) | A call through a plain `(fn [...] R)` parameter checks neither argument types nor arity: `(f 7)` at `(fn [float] float)` prints `1.97626e-323` compiled and a different garbage integer interpreted, and `(f 1 2)` is accepted. `elab_poly_call` never compares the arguments with `poly_type`. Every other spelling of the call is checked |
+| [effect-row-check-skips-let-bound-fn-values](effect-row-check-skips-let-bound-fn-values.md) | medium | A function that performs `IO` passes into a `#fx{}` parameter through `(let [h noisy] ...)`, plain or annotated; passed by name it is `TUR-E0009`. Also why a `#fx{}` parameter cannot be used to skip CPS colouring (R-1) |
+| [fn-param-not-forwardable-to-effect-rowed-param](fn-param-not-forwardable-to-effect-rowed-param.md) | medium-low | A plain `(fn [int] int)` parameter cannot be passed to a parameter typed with any effect row, `#fx{e}` included: `expected (fn [int] : int), got ptr<void>`. The carrier and nominal representations are never bridged in that direction |
+| [turi-contract-check-is-a-full-native-call](turi-contract-check-is-a-full-native-call.md) | low (performance) | Under `tur --interpret` every contract check is a full native call (+0.29 us, about three times an `if` + `panic`), which roughly doubles a tight loop with a check in it |
+| [cps-fn-unreached-rescans-all-inline-c](cps-fn-unreached-rescans-all-inline-c.md) | low (compile time) | `fn_unreached` byte-scans all of the program's inline C, stdlib included, once per unreferenced coloured user function: about 0.5 ms each, and 42--55% of `emit-c` on a generated program with hundreds of them. No measurable effect on the corpus |
+| [float-conversion-check-ignores-fixture-flags](float-conversion-check-ignores-fixture-flags.md) | low (test coverage) | `check-emitted-float-conversions.py` ignores `flags`: 15 experiment-gated fixtures are silently never checked (all four refined-fn-types ones among them), and the rest are linted under flags they do not run with |
+
 ## Found landing refined-function-types-plan F1 (filed 2026-10-28)
 
 | Report | Severity | One line |
