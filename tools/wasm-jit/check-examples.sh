@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # tools/wasm-jit/check-examples.sh -- wasm-jit-plan P3's gate: every Try
-# Turmeric example (web/main.js EXAMPLES) runs on the browser JIT module and
+# Turmeric example (web/examples.js EXAMPLES) runs on the browser JIT module and
 # either compiles or falls back loudly, and none gives a wrong answer.
 #
 # "Right" is what `tur interpret` prints for the same text run as a program:
@@ -28,14 +28,21 @@ export ASAN_OPTIONS="${ASAN_OPTIONS:-detect_leaks=0}"
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/tur-examples.XXXXXX")"
 trap 'rm -rf "$WORK"' EXIT
+# web/examples.js (export const EXAMPLES = {...}), read as an object literal
+# rather than imported, so the check needs no bundler.
 node -e '
 const fs = require("fs");
-const s = fs.readFileSync("web/main.js", "utf8");
-const a = s.indexOf("const EXAMPLES = {");
+const s = fs.readFileSync("web/examples.js", "utf8");
+const a = s.indexOf("export const EXAMPLES = {");
+if (a < 0) { console.error("check-examples: no EXAMPLES in web/examples.js"); process.exit(2); }
 const b = s.indexOf("\n};", a);
-const EX = eval("(" + s.slice(a + "const EXAMPLES = ".length, b + 2) + ")");
+const EX = eval("(" + s.slice(a + "export const EXAMPLES = ".length, b + 2) + ")");
 for (const [k, v] of Object.entries(EX)) fs.writeFileSync(process.argv[1] + "/" + k + ".tur", v + "\n");
-' "$WORK"
+' "$WORK" || exit 2
+# An empty set would pass vacuously -- which is how a move of EXAMPLES out of
+# web/main.js once left this reporting "all right" over nothing.
+n=$(ls "$WORK"/*.tur 2>/dev/null | wc -l)
+[ "$n" -gt 0 ] || { echo "check-examples: extracted no examples" >&2; exit 2; }
 
 wrong=0
 for f in "$WORK"/*.tur; do

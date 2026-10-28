@@ -314,4 +314,22 @@ full history mirrored there) plus three fixes on fix/make-one-ret-distinct-targe
     sysroot under -sSAFE_HEAP and checks the types through _Generic, and a
     `wasm` job (emsdk 6.0.10, as turmeric's CI) runs it.  Native targets
     compile none of these files.
+
+  636b551 (merged as f887547f, turmeric-lang/mir#16) -- wasm32: a MIR
+    function's thunk was a slot in a C array, callable only through
+    wasm_ff_dispatch, so host C that call_indirect'ed an interpreted
+    function's address trapped with "table index is out of bounds" unless the
+    address had crossed as an i32 call argument -- 202 corpus programs in the
+    browser JIT, and Try Turmeric's closure example
+    (docs/archive/wasm-mir-thunk-address-is-not-callable-by-host-code.md).
+    A thunk is now a wasm table entry, filled at redirect with a native
+    entry or a JS trampoline into the interpreter.  ff-call signatures are
+    interned across contexts and MIR_finish releases a context's thunks, so
+    one module runs program after program (the signature pool ran out on the
+    26th).  MIR_gen_init, MIR_gen_set_optimize_level and MIR_gen are
+    defined, replacing the browser module's own stubs.  c2mir, every target:
+    a _Generic controlling expression gets lvalue conversion only, not the
+    integer promotions (docs/archive/c2mir-generic-promotes-controlling-expression.md),
+    and a character constant is an int, so sizeof ('a') is sizeof (int).
+    Covered by wasm-tests/ffi-test.c and c-tests/new/generic-no-promotion.c.
 ```

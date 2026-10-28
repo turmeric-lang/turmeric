@@ -1,5 +1,12 @@
 # On wasm, an interpreted function's address is not callable once it is stored
 
+> **Resolved 2026-10-28** by turmeric-lang/mir#16 (`f887547f`, vendored the
+> same day): a thunk is a wasm table entry, filled at redirect. Against the
+> module built from the fork, `tests/run-jit-wasm.sh` has no `table index is
+> out of bounds` row (202 before), and Try Turmeric's `closure` example
+> compiles. Covered in the fork by `wasm-tests/ffi-test.c` (native code calling
+> an interpreted function through memory and as a `long long`).
+
 **Severity:** high for the wasm JIT (wasm-jit-plan P3). It is the largest
 failure family in the first corpus run through the browser JIT module: 202
 fixtures trap with `table index is out of bounds`, and the trap leaves the

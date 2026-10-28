@@ -61,6 +61,13 @@ If you find a resolved report sitting in `docs/reported/` (or a stray
 `docs/reported/history/`), relocate it to `docs/archive/` (or
 `docs/archive/history/`); do not duplicate an already-archived report.
 
+## Opening a PR means watching it -- STRICT RULE
+
+When you are asked to open a PR -- here or in turmeric-lang/mir -- opening it
+includes watching it: subscribe to its activity right away and drive it to
+green (fix CI failures, answer review comments) until it merges or closes.
+Do not stop at "PR opened", and do not ask whether to watch it.
+
 ## Pull Requests -- Merged Branches Are Deleted -- STRICT RULE
 
 **Deleting a PR's branch when it merges is the default workflow**, here and in
