@@ -1632,10 +1632,7 @@ Expr *elab_let(Elab *e, const Form *call) {
         if (let_init_expected && type_fn_refinements_of(let_init_expected) &&
             b->type.kind == TY_FN &&
             b->type.as.fn.arity == let_init_expected->as.fn.arity) {
-            b->type.as.fn.param_refine_preds = let_init_expected->as.fn.param_refine_preds;
-            b->type.as.fn.param_refine_vars  = let_init_expected->as.fn.param_refine_vars;
-            b->type.as.fn.result_refine_pred = let_init_expected->as.fn.result_refine_pred;
-            b->type.as.fn.result_refine_var  = let_init_expected->as.fn.result_refine_var;
+            b->type.as.fn.refine = let_init_expected->as.fn.refine;
         }
         /* borrow-checks-gaps: a binding that holds a borrow remembers the
          * place, so an assignment to it is refused while `b` is live

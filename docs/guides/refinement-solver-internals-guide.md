@@ -91,7 +91,7 @@ An obligation is created at each point a value crosses **into** a refined type.
   **call through a binding of refined function type** -- `(f 10 x)` with
   `f : (fn [int #refine{...}] int)`. Recorded by `rt_elab_refined_fn_call`
   (`elab_fns.c`) as a `RefineCallSite` whose `fn_type` is set, so the
-  predicates come from the type (`TY_FN`'s side-car `param_refine_preds`)
+  predicates come from the type (`TY_FN`'s side-car `refine`, an `FnRefinements`)
   rather than from a `defn`'s arrays. Decided by
   `rt_resolve_fn_type_crossing`: `quiet`, a closed refutation is `TUR-E0371`
   and anything else `TUR-W0372`, always -- the call gained its own runtime check,

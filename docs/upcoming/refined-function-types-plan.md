@@ -410,10 +410,14 @@ except the lint.
   because F2 landed with it: `errors/refine-hof-param-crossing` (a closed
   refutation through `f` is `TUR-E0371`). `errors/refine-in-fn-type` is
   unchanged and still green with the gate off.
-- **F1.** `TY_FN` carries `param_refine_preds` / `param_refine_vars` /
-  `result_refine_pred` / `result_refine_var` (`types.h`), read only through
-  `type_fn_refinements_of` and, for a binding, `rt_binding_refined_fn_type`
-  (`elab_internal.h`) -- a plain `(fn ...)` parameter rides the typed `:fn`
+- **F1.** `TY_FN` carries one `refine` pointer to an `FnRefinements`
+  (`types.h`: per-parameter predicates and variables, result predicate and
+  variable), read only through `type_fn_refinements_of`, the `type_fn_*`
+  accessors and, for a binding, `rt_binding_refined_fn_type`
+  (`elab_internal.h`). One pointer, not four inline fields, and `rest_kind`
+  narrowed to `uint8_t` so the small fields pack: `sizeof(Type)` stays at 128
+  bytes. At 160 the auxiliary CI leg's `tur_turi_callcc_reclaim` failed
+  ([turi-callcc-reclaim-depends-on-type-size](../reported/turi-callcc-reclaim-depends-on-type-size.md)) -- a plain `(fn ...)` parameter rides the typed `:fn`
   carrier, so its signature is `poly_type`, not `type`. There is one parser for
   `(fn ...)` types (`type_expr_from_form`; `fn_type_from_form_impl` routes the
   head there), so one site fills them: `fn_type_slot_contract` in

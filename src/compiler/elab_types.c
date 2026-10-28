@@ -1975,20 +1975,25 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
             fn_t->as.fn.cfnptr = is_cfnptr;
             /* refined-fn-types D1: the side-car refinements.  Set last, on the
              * finished type, so nothing above can branch on them. */
-            if (any_refined_arg) {
-                const Form **pp = (const Form **)arena_alloc(e->arena,
-                                                             n_fn_args * sizeof(Form *));
-                const char **pv = (const char **)arena_alloc(e->arena,
-                                                             n_fn_args * sizeof(char *));
-                for (uint32_t i = 0; i < n_fn_args; i++) {
-                    pp[i] = i < MAX_FN_ARITY ? fn_arg_pred[i] : NULL;
-                    pv[i] = i < MAX_FN_ARITY ? fn_arg_pvar[i] : NULL;
+            if (any_refined_arg || fn_ret_pred) {
+                FnRefinements *fr = (FnRefinements *)arena_alloc(e->arena, sizeof(*fr));
+                memset(fr, 0, sizeof(*fr));
+                if (any_refined_arg) {
+                    const Form **pp = (const Form **)arena_alloc(e->arena,
+                                                                 n_fn_args * sizeof(Form *));
+                    const char **pv = (const char **)arena_alloc(e->arena,
+                                                                 n_fn_args * sizeof(char *));
+                    for (uint32_t i = 0; i < n_fn_args; i++) {
+                        pp[i] = i < MAX_FN_ARITY ? fn_arg_pred[i] : NULL;
+                        pv[i] = i < MAX_FN_ARITY ? fn_arg_pvar[i] : NULL;
+                    }
+                    fr->param_preds = pp;
+                    fr->param_vars  = pv;
                 }
-                fn_t->as.fn.param_refine_preds = pp;
-                fn_t->as.fn.param_refine_vars  = pv;
+                fr->result_pred = fn_ret_pred;
+                fr->result_var  = fn_ret_pvar;
+                fn_t->as.fn.refine = fr;
             }
-            fn_t->as.fn.result_refine_pred = fn_ret_pred;
-            fn_t->as.fn.result_refine_var  = fn_ret_pvar;
             return fn_t;
         }
 

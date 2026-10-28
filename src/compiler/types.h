@@ -678,6 +678,18 @@ static inline CopyKind typekind_default_copy_kind(TypeKind k) {
 #define MAX_TYPE_LIFETIMES 4
 
 /* Type uses a union to store either a simple kind or function info. */
+/* refined-function-types-plan D1: a function type's refinements, hung off
+ * `as.fn.refine`.  Arena-allocated and immutable once built, so by-value Type
+ * copies share it.  `param_preds` / `param_vars` have `arity` entries (NULL
+ * where a parameter is unrefined), or are NULL when none is. */
+struct Form;
+typedef struct FnRefinements {
+    const struct Form **param_preds;
+    const char        **param_vars;
+    const struct Form  *result_pred;
+    const char         *result_var;
+} FnRefinements;
+
 typedef struct Type {
     TypeKind kind;
     /* Phase 11: Copy/Move trait */
@@ -757,12 +769,11 @@ typedef struct Type {
             bool result_fat;
             /* AR6: variadic rest-param support (& rest :type) */
             bool is_variadic;                  /* true if this fn has a & rest parameter */
-            TypeKind rest_kind;                /* type of the rest cons-list elements (fast-path) */
-            /* Typed variadic rest: full Type for the rest element when it is a
-             * user-defined type (opaque / struct / ADT / type application).
-             * NULL for primitive rest (`& rest :int`, etc.), in which case the
-             * fast-path TypeKind comparison on rest_kind is used. */
-            struct Type *rest_full_type;
+            /* type of the rest cons-list elements (fast-path), a TypeKind.
+             * uint8_t, like arg_kinds, so it packs beside the flags below
+             * instead of costing a padded word (TypeKind has < 256
+             * enumerators). */
+            uint8_t rest_kind;
             /* closure-drop-glue (mw-compose-of): the `& rest` parameter carries a
              * `^borrow` annotation -- the callee invokes/reads each rest element
              * but does not store or return it, so a fresh uniquely-owned closure
@@ -799,6 +810,13 @@ typedef struct Type {
              * captureless fn IS a bare code pointer at the C ABI).  See
              * docs/archive/history/typed-c-abi-function-pointers.md. */
             bool cfnptr;
+            /* Typed variadic rest: full Type for the rest element when it is a
+             * user-defined type (opaque / struct / ADT / type application).
+             * NULL for primitive rest (`& rest :int`, etc.), in which case the
+             * fast-path TypeKind comparison on rest_kind is used.  Declared
+             * after the one-byte fields so they pack together: sizeof(Type)
+             * is a stack cost (see `refine`). */
+            struct Type *rest_full_type;
             /* sized-types-cross-param-unification: per-parameter raw type
              * annotation Form*, retained so call-site elaboration can
              * re-extract the size-index template (e.g. `(SizedVec n)`)
@@ -819,24 +837,21 @@ typedef struct Type {
             const struct Form *result_type_form;
             /* refined-function-types-plan D1 (--enable=refined-fn-types): the
              * refinements a `(fn [#refine{...}] #refine{...})` type writes on
-             * its parameters and its result -- predicate plus bound-variable
-             * name, NULL where a position is unrefined.  `param_refine_preds`
-             * and `param_refine_vars` are arena arrays of length `arity`, both
-             * NULL when no parameter is refined.
+             * its parameters and its result, out of line (struct FnRefinements
+             * below), NULL when the type is unrefined.  One pointer rather
+             * than four inline fields: sizeof(Type) is a stack cost wherever a
+             * Type is held by value, and every `tur --interpret` call/cc
+             * image copies those frames (tur_turi_callcc_reclaim measures it).
              *
              * SIDE-CAR, ERASED FOR IDENTITY: type_eq, unification, mangling,
-             * C typedef naming and the ABI cache never read these, so two
+             * C typedef naming and the ABI cache never read it, so two
              * function types differing only in refinements are one type to
              * everything except the refinement checker -- the split
-             * TY_CONTRACT already lives with.  Read them only through
-             * type_fn_refinements_of() (types.c), the one accessor that says
-             * "this function type is refined"; nothing else may branch on
-             * them, which is what keeps a refinement from changing a typedef
-             * name or an overload pick. */
-            const struct Form **param_refine_preds;
-            const char        **param_refine_vars;
-            const struct Form  *result_refine_pred;
-            const char         *result_refine_var;
+             * TY_CONTRACT already lives with.  Read it only through
+             * type_fn_refinements_of() and the type_fn_* accessors below;
+             * nothing else may branch on it, which is what keeps a refinement
+             * from changing a typedef name or an overload pick. */
+            const struct FnRefinements *refine;
         } fn;
         /* Phase 5: ref<T> stores the inner type T */
         struct {
@@ -1538,10 +1553,7 @@ static inline Type type_fn(const TypeKind arg_kinds[], uint32_t arity, TypeKind 
     t.as.fn.rest_borrow = false; /* closure-drop-glue: ^borrow rest, default off */
     t.as.fn.param_type_forms = NULL; /* sized-types-cross-param-unification: filled by defn elab */
     t.as.fn.result_type_form = NULL; /* SZ8 non-GADT: filled by defn elab when a return ann was recorded */
-    t.as.fn.param_refine_preds = NULL; /* refined-fn-types D1: unrefined by default */
-    t.as.fn.param_refine_vars  = NULL;
-    t.as.fn.result_refine_pred = NULL;
-    t.as.fn.result_refine_var  = NULL;
+    t.as.fn.refine = NULL; /* refined-fn-types D1: unrefined by default */
     return t;
 }
 
@@ -1551,12 +1563,26 @@ static inline Type type_fn(const TypeKind arg_kinds[], uint32_t arity, TypeKind 
  * unification, mangling, typedef naming) never calls this -- see the field
  * comment in `as.fn`. */
 static inline bool type_fn_refinements_of(const Type *t) {
-    if (!t || t->kind != TY_FN) return false;
-    if (t->as.fn.result_refine_pred) return true;
-    if (!t->as.fn.param_refine_preds) return false;
+    if (!t || t->kind != TY_FN || !t->as.fn.refine) return false;
+    if (t->as.fn.refine->result_pred) return true;
+    if (!t->as.fn.refine->param_preds) return false;
     for (uint32_t i = 0; i < t->as.fn.arity; i++)
-        if (t->as.fn.param_refine_preds[i]) return true;
+        if (t->as.fn.refine->param_preds[i]) return true;
     return false;
+}
+
+/* The pieces, NULL where absent (any of them may be, on any TY_FN). */
+static inline const struct Form **type_fn_param_preds(const Type *t) {
+    return (t && t->kind == TY_FN && t->as.fn.refine) ? t->as.fn.refine->param_preds : NULL;
+}
+static inline const char **type_fn_param_vars(const Type *t) {
+    return (t && t->kind == TY_FN && t->as.fn.refine) ? t->as.fn.refine->param_vars : NULL;
+}
+static inline const struct Form *type_fn_result_pred(const Type *t) {
+    return (t && t->kind == TY_FN && t->as.fn.refine) ? t->as.fn.refine->result_pred : NULL;
+}
+static inline const char *type_fn_result_var(const Type *t) {
+    return (t && t->kind == TY_FN && t->as.fn.refine) ? t->as.fn.refine->result_var : NULL;
 }
 
 /* Phase 12: Borrow type constructors */

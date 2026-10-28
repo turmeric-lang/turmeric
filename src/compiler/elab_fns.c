@@ -2050,8 +2050,8 @@ static bool rt_resolve_fn_with_locals(void *ud, const char *name, RefineFnInfo *
         /* Code that runs: two calls are two values, never congruent. */
         out->pure     = false;
         out->ret_sort = rt_sort_of_kind(ft->as.fn.result_kind);
-        out->ret_pred = ft->as.fn.result_refine_pred;
-        out->ret_var  = ft->as.fn.result_refine_var;
+        out->ret_pred = type_fn_result_pred(ft);
+        out->ret_var  = type_fn_result_var(ft);
         return true;
     }
     return rt_resolve_fn(L->e, name, out);
@@ -2103,7 +2103,7 @@ static void rt_env_add_local_fns(Elab *e, RefineEnv *env, Binding **params,
     uint32_t n = 0;
     for (uint32_t i = 0; i < n_params; i++) {
         const Type *ft = rt_binding_refined_fn_type(params[i]);
-        if (ft && ft->as.fn.result_refine_pred && params[i]->name &&
+        if (ft && type_fn_result_pred(ft) && params[i]->name &&
             !params[i]->is_mut &&
             !rt_form_binds_name(whole_body, params[i]->name->name, 0))
             n++;
@@ -2116,7 +2116,7 @@ static void rt_env_add_local_fns(Elab *e, RefineEnv *env, Binding **params,
     L->n     = 0;
     for (uint32_t i = 0; i < n_params; i++) {
         const Type *ft = rt_binding_refined_fn_type(params[i]);
-        if (!(ft && ft->as.fn.result_refine_pred && params[i]->name &&
+        if (!(ft && type_fn_result_pred(ft) && params[i]->name &&
               !params[i]->is_mut &&
               !rt_form_binds_name(whole_body, params[i]->name->name, 0)))
             continue;
@@ -4777,8 +4777,8 @@ Expr *rt_elab_refined_fn_call_at(Elab *e, Form *call, Binding *fb,
      * function's own entry checks still run. */
     if (n_args != ft->as.fn.arity || ft->as.fn.is_variadic) return NULL;
 
-    const Form **preds = ft->as.fn.param_refine_preds;
-    const char **pvars = ft->as.fn.param_refine_vars;
+    const Form **preds = type_fn_param_preds(ft);
+    const char **pvars = type_fn_param_vars(ft);
     Binding *check_fn = scope_lookup(&e->global, e->sym_tur_contract_check);
     bool emit = check_fn && rt_contracts_emitted();
     const char *fname = display ? display : (fb->name ? fb->name->name : "?");
@@ -4898,12 +4898,12 @@ Expr *rt_elab_refined_fn_call_at(Elab *e, Form *call, Binding *fb,
         callx = elab_form(e, inner);
         e->rf_inner_call = saved;
     }
-    if (callx && ft->as.fn.result_refine_pred) {
+    if (callx && type_fn_result_pred(ft)) {
         char whatbuf[160];
         snprintf(whatbuf, sizeof whatbuf,
                  "Result contract violated by the call through '%s'", fname);
-        callx = rt_wrap_return_check(e, callx, check_fn, ft->as.fn.result_refine_pred,
-                                     ft->as.fn.result_refine_var, whatbuf, subject, sp);
+        callx = rt_wrap_return_check(e, callx, check_fn, type_fn_result_pred(ft),
+                                     type_fn_result_var(ft), whatbuf, subject, sp);
     }
     e->scope = s.parent;
     scope_free(&s);
@@ -7841,11 +7841,11 @@ static void rt_fn_shape_of_binding(const Binding *b, RtFnShape *S) {
         }
         const Type *ft = rt_binding_refined_fn_type(b);
         if (ft) {
-            S->p  = ft->as.fn.param_refine_preds;
-            S->pv = ft->as.fn.param_refine_vars;
-            S->n  = ft->as.fn.param_refine_preds ? ft->as.fn.arity : 0;
-            S->r  = ft->as.fn.result_refine_pred;
-            S->rv = ft->as.fn.result_refine_var;
+            S->p  = type_fn_param_preds(ft);
+            S->pv = type_fn_param_vars(ft);
+            S->n  = type_fn_param_preds(ft) ? ft->as.fn.arity : 0;
+            S->r  = type_fn_result_pred(ft);
+            S->rv = type_fn_result_var(ft);
             return;
         }
         b = b->source_binding;
@@ -7858,8 +7858,8 @@ static void rt_check_fn_shape(Elab *e, const RtFnShape *S, const Type *T,
     bool quoted = S->name != NULL;
     uint32_t arity = T->as.fn.arity;
     for (uint32_t i = 0; i < arity; i++) {
-        const Form *tp = T->as.fn.param_refine_preds ? T->as.fn.param_refine_preds[i] : NULL;
-        const char *tv = T->as.fn.param_refine_vars ? T->as.fn.param_refine_vars[i] : NULL;
+        const Form *tp = type_fn_param_preds(T) ? type_fn_param_preds(T)[i] : NULL;
+        const char *tv = type_fn_param_vars(T) ? type_fn_param_vars(T)[i] : NULL;
         const Form *sp = (S->p && i < S->n) ? S->p[i] : NULL;
         const char *sv = (S->pv && i < S->n) ? S->pv[i] : NULL;
         if (!sp) continue;                 /* accepts anything: holds */
@@ -7900,7 +7900,7 @@ static void rt_check_fn_shape(Elab *e, const RtFnShape *S, const Type *T,
             quoted ? "'" : "", vn, quoted ? "'" : "", i + 1, slot,
             rt_variance_reason(ob));
     }
-    const Form *tr = T->as.fn.result_refine_pred;
+    const Form *tr = type_fn_result_pred(T);
     if (!tr) return;
     if (S->r == tr) return;
     char what[224];
@@ -7916,8 +7916,8 @@ static void rt_check_fn_shape(Elab *e, const RtFnShape *S, const Type *T,
     }
     RefineObligation *ob = NULL;
     TypeKind rk = T->as.fn.result_kind;
-    RtVariance vv = rt_decide_entailment(e, S->r, S->rv, tr, T->as.fn.result_refine_var,
-                                         T->as.fn.result_refine_var ? T->as.fn.result_refine_var
+    RtVariance vv = rt_decide_entailment(e, S->r, S->rv, tr, type_fn_result_var(T),
+                                         type_fn_result_var(T) ? type_fn_result_var(T)
                                                                     : (S->rv ? S->rv : "r"),
                                          rk, type_name(type_simple(rk, CK_COPY)),
                                          loc, what, &ob);
@@ -8052,7 +8052,7 @@ static void rt_check_lambda_coercion(Elab *e, const Binding *lam, const Type *ta
 static void rt_resolve_fn_type_crossing(Elab *e, RefineCallSite *cs) {
     const Type *ft = cs->fn_type;
     const Form *cf = cs->call_form;
-    if (!ft || !cf || cf->tag != F_LIST || !ft->as.fn.param_refine_preds) return;
+    if (!ft || !cf || cf->tag != F_LIST || !type_fn_param_preds(ft)) return;
     uint32_t n_args = cf->as.list.len > cs->arg_offset
                     ? cf->as.list.len - cs->arg_offset : 0;
     const char *cname = cs->callee_display ? cs->callee_display : "?";
@@ -8077,7 +8077,7 @@ static void rt_resolve_fn_type_crossing(Elab *e, RefineCallSite *cs) {
     }
 
     for (uint32_t p = 0; p < ft->as.fn.arity && p < n_args; p++) {
-        const Form *pred = ft->as.fn.param_refine_preds[p];
+        const Form *pred = type_fn_param_preds(ft)[p];
         if (!pred) continue;
         const Form *arg = cf->as.list.items[cs->arg_offset + p];
         TypeKind pk = ft->as.fn.arg_kinds ? (TypeKind)ft->as.fn.arg_kinds[p] : TY_INT;
@@ -8090,7 +8090,7 @@ static void rt_resolve_fn_type_crossing(Elab *e, RefineCallSite *cs) {
                      p + 1, cname);
         const char *what_owned = arena_strdup(e->arena, what, strlen(what));
         RefineObligation *ob = refine_collect_obligation(
-            &e->refine_obs, pred, ft->as.fn.param_refine_vars[p], arg,
+            &e->refine_obs, pred, type_fn_param_vars(ft)[p], arg,
             rt_sort_of_kind(pk), type_name(type_simple(pk, CK_COPY)),
             cs->loc, env, what_owned, cs->caller_name);
         if (!ob) continue;
