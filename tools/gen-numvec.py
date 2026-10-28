@@ -77,7 +77,8 @@ HDR = """;;; tur/numvec -- typed numeric arrays: F64Vec, F32Vec, I64Vec, I32Vec,
 ;;; `(f64vec-len (f64vec-new 4 0.0))` -- is freed after the call.  One handed to
 ;;; anything else (`P-copy`, `P->vec`, `P-show`, or after an argument with side
 ;;; effects) has no owner and is not freed, so bind it first:
-;;; `(let [v (f64vec-new 4 0.0)] (f64vec-show v))`.
+;;; `(let [v (f64vec-new 4 0.0)] (f64vec-show v))`
+;;; (docs/reported/borrowed-drop-temporary-leaks-outside-the-hoist.md).
 ;;;
 ;;; A closure that captures an array the enclosing scope OWNS takes it over
 ;;; (the scope can no longer use it, and the closure frees it); one that

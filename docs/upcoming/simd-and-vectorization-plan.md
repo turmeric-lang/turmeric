@@ -206,8 +206,11 @@ worth having:
   (`closure-borrowed-drop-capture-not-dropped`). What remains, by design:
   a temporary handed to a non-scalar-returning call (`P-copy`, `P-show`) is
   not freed -- its result might point into it -- so the module header says
-  to bind it first; and a closure capturing an OWNED array takes it over, so
-  the scope cannot also use it.
+  to bind it first
+  ([borrowed-drop-temporary-leaks-outside-the-hoist](../reported/borrowed-drop-temporary-leaks-outside-the-hoist.md));
+  a closure capturing an OWNED array takes it over, so the scope cannot also
+  use it; and partially applying a setter spends the array
+  ([partial-application-of-borrow-param-consumes-affine-arg](../reported/partial-application-of-borrow-param-consumes-affine-arg.md)).
 - **Every op that touches the header is an inline-C body of its own** --
   `new`, `free`, `copy`, `len`, `ref`, `set!` -- never a Turmeric wrapper over
   a raw body, so a panic (an index out of range, a negative length) names the

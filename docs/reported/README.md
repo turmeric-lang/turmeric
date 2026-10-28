@@ -38,6 +38,8 @@ directory is worse for triage than no index.
 
 | Report | Severity | One line |
 | --- | --- | --- |
+| [borrowed-drop-temporary-leaks-outside-the-hoist](borrowed-drop-temporary-leaks-outside-the-hoist.md) | low (leak) | A fresh move-only Drop value passed straight to a `^borrow` parameter is freed after the call only when the call returns a scalar and no earlier argument has an effect; `(f64vec-show (f64vec-new 4 7.1))` and `(peek2 (g) (mk))` still leak it |
+| [partial-application-of-borrow-param-consumes-affine-arg](partial-application-of-borrow-param-consumes-affine-arg.md) | low (refusal) | `(u8vec-set! a)` spends affine `a` (TUR-E0150 on its next use) though a saturated call into the same `^borrow` slot does not: `elab_partial_apply` has no use rollback, and adding one needs a non-escape check on the closure |
 | [syntax-gensym-not-fresh-against-program-names](syntax-gensym-not-fresh-against-program-names.md) | medium-low (silent capture) | `syntax-gensym` in a `defmacro*` is fresh only against the macro-time env's symbols, so it can return `tmp_0` while the call site binds `tmp_0`, and the expansion captures it; the template `(gensym)` checks the program's names and does not |
 
 ## Found landing refined-function-types-plan F1 (filed 2026-10-28)
