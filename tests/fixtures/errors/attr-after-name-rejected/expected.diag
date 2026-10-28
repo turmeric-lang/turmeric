@@ -1,0 +1,6 @@
+TUR-E0718
+defeffect: the trailing ^capability is no longer accepted; write ^capability before the name: (defeffect ^capability Disk ...)
+defeffect: the trailing ^extends Disk is no longer accepted; write ^extends Disk before the name: (defeffect ^extends Disk Write ...)
+defn: #[no-unwind] is no longer accepted; write ^no-unwind
+defn: #[used] is no longer accepted; write ^used
+defn: (export-as "attrs_second") is no longer accepted; write ^export-as "attrs_second"

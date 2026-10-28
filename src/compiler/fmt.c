@@ -2047,8 +2047,8 @@ int fmt_print(Buf *buf, Form **forms, uint32_t count, FmtOptions opts) {
  *   (defopaque Chan :ptr<void> :linear)    -> (defopaque ^linear Chan :ptr<void>)
  *   (exists :linear [a] a)                 -> (exists ^linear [a] a)
  *
- * The compiler rejects the keyword spelling (TUR-E0717) and warns about the
- * attribute ones below (TUR-D0008); this is the
+ * The compiler rejects the keyword spelling (TUR-E0717) and the
+ * attribute ones below (TUR-E0718); this is the
  * one-command fix for a file.  It edits the parsed forms before they are
  * printed, so the layout is the formatter's own.  A declaration whose source
  * holds a comment is left as written: the printer re-emits comments from the

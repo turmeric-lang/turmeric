@@ -1454,8 +1454,9 @@ Expr *elab_defeffect(Elab *e, const Form *call) {
 
     /* The attributes before the name, in any order: ^private (Phase P19-6),
      * ^capability (stdlib-effect-rows) and ^extends Parent (ET4).  The last two
-     * used to trail the signature; that spelling is still read below and is
-     * deprecated (caret-type-attributes-plan P5, TUR-D0008). */
+     * used to trail the signature; that spelling is still read below, to keep
+     * the declaration elaborating, and is an error (caret-type-attributes-plan
+     * P5, TUR-E0718). */
     bool is_private = false;
     bool is_capability = false;
     const Symbol *parent_name = NULL;
@@ -1667,7 +1668,8 @@ Expr *elab_defeffect(Elab *e, const Form *call) {
     
     /* The earlier spelling: ^extends ParentName and ^capability after the
      * return type, the standalone ^capability anywhere among them.  Still
-     * accepted, and deprecated (TUR-D0008). */
+     * reported (TUR-E0718) and applied anyway, so the declaration elaborates
+     * as though it had been written with the attributes before the name. */
     const Form *trailing_first = NULL;
     char trailing_old[96] = "", trailing_new[96] = "";
     uint32_t extends_start = name_idx + 3; /* items after (defeffect [attrs] Name [params] :ret) */
@@ -1707,9 +1709,9 @@ Expr *elab_defeffect(Elab *e, const Form *call) {
                  is_capability && parent_name ? " " : "",
                  parent_name ? "^extends " : "",
                  parent_name ? parent_name->name : "");
-        diag_emit_with_code(elab_deprecation_level(), trailing_first->span,
-                            TUR_D0008_ATTR_AFTER_NAME,
-                            "defeffect: the trailing %s is deprecated; write %s "
+        diag_emit_with_code(DIAG_ERROR, trailing_first->span,
+                            TUR_E0718_ATTR_AFTER_NAME,
+                            "defeffect: the trailing %s is no longer accepted; write %s "
                             "before the name: (defeffect %s %s ...)",
                             trailing_old, trailing_new, trailing_new, name->name);
     }

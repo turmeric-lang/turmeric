@@ -9958,7 +9958,9 @@ Expr *elab_defn(Elab *e, const Form *call) {
      * Binding.retain_c_linkage) and ^export-as "c_name" (Phase M6) among them.
      * The earlier spellings -- the bare #[no-unwind] / #[used] symbols and the
      * list (export-as "c_name") -- are still read in the same loop and are
-     * deprecated (caret-type-attributes-plan P5, TUR-D0008). */
+     * an error (caret-type-attributes-plan P5, TUR-E0718).  The error is reported
+     * once per attribute and the attribute is applied anyway, so one mistake
+     * does not cascade. */
     uint32_t name_idx = 1;  /* index of name in items (after 'defn') */
     bool no_unwind = false;
     bool retain_c_linkage = false;
@@ -10003,9 +10005,9 @@ Expr *elab_defn(Elab *e, const Form *call) {
             memcpy(cname_buf, cname_arg->as.s.p, cname_arg->as.s.len);
             cname_buf[cname_arg->as.s.len] = '\0';
             c_export_name = cname_buf;
-            diag_emit_with_code(elab_deprecation_level(), name_f->span,
-                                TUR_D0008_ATTR_AFTER_NAME,
-                                "defn: (export-as \"%s\") is deprecated; "
+            diag_emit_with_code(DIAG_ERROR, name_f->span,
+                                TUR_E0718_ATTR_AFTER_NAME,
+                                "defn: (export-as \"%s\") is no longer accepted; "
                                 "write ^export-as \"%s\"", cname_buf, cname_buf);
             name_idx++;
             if (name_idx >= call->as.list.len) {
@@ -10022,9 +10024,9 @@ Expr *elab_defn(Elab *e, const Form *call) {
             /* #[no-unwind] / #[used]: the earlier spelling of ^no-unwind / ^used */
             if (as == e->sym_no_unwind_attr) no_unwind = true;
             else retain_c_linkage = true;
-            diag_emit_with_code(elab_deprecation_level(), name_f->span,
-                                TUR_D0008_ATTR_AFTER_NAME,
-                                "defn: #[%s] is deprecated; write ^%s",
+            diag_emit_with_code(DIAG_ERROR, name_f->span,
+                                TUR_E0718_ATTR_AFTER_NAME,
+                                "defn: #[%s] is no longer accepted; write ^%s",
                                 as->name + 1, as->name + 1);
         } else if (as == e->sym_caret_no_unwind) {
             no_unwind = true;
