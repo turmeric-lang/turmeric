@@ -332,7 +332,7 @@ self.addEventListener('message', function (e) {
         }
 
         // performance-audit-plan WP5: what a cold start costs, stage by stage.
-        // Durations in ms, posted with 'ready' and published by main.js as
+        // Durations in ms, posted with 'ready' and published by eval-client.js as
         // window._turiBoot (tests/web-perf.spec.js reads it).
         const bootT0 = performance.now();
         importScripts('/turmeric.js');
