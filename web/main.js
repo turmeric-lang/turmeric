@@ -22,30 +22,22 @@ import { configureMonaco } from './editor-language.js';
 import { buildZip, MAX_ZIP_BYTES, readStoreZip } from './zip.js';
 import { initHScrollDrag } from './hscroll-drag.js';
 import { initConsoleHover } from './console-hover.js';
+import { configureEvalClient, WASM_STATE, wasmState, setWasmState, hasWorker, startEvalWorker, send, terminateWorker, pendingStats } from './eval-client.js';
+import { parseLangDirective, fetchLangRegistry, reconcileLangPicker, initLangPicker } from './lang-picker.js';
 
 // ============================================================================
 // WASM Module State
 // ============================================================================
 
-const WASM_STATE = {
-    INITIALIZING: 'initializing',
-    LOADING: 'loading',
-    READY: 'ready',
-    ERROR: 'error'
-};
-
-let wasmState = WASM_STATE.INITIALIZING;
-let evalWorker = null;
-let evalCallId = 0;
-// Every request awaiting the eval Worker, by id. Adding one arms the watchdog
-// (see stopEvalWorker), so no call site has to remember to.
-const pendingCalls = new (class extends Map {
-    set(id, call) {
-        super.set(id, call);
-        armEvalWatchdog();
-        return this;
-    }
-})();
+// The eval Worker, its state and its outstanding requests live in
+// eval-client.js; these are its hooks back into the console and the Run queue.
+configureEvalClient({
+    onPrint: (text) => appendToConsole(`<span class="console-output">${escapeHtml(text)}</span>`),
+    onPrintErr: (text) => appendToConsole(`<span class="console-error">${escapeHtml(text)}</span>`),
+    onEvalTime: (ms) => updateExecTime(ms),
+    nextEval: () => processQueue(),
+    onPending: () => armEvalWatchdog(),
+});
 let editor = null;
 let monaco = null;
 let consoleOutput = [];
@@ -879,7 +871,7 @@ function showStatus(message, type = 'info') {
     
     // Reset after a delay
     setTimeout(() => {
-        if (wasmState === WASM_STATE.READY) {
+        if (wasmState() === WASM_STATE.READY) {
             statusEl.textContent = 'Ready';
             if (dotEl) {
                 dotEl.className = 'dot online';
@@ -944,105 +936,14 @@ async function loadFromUrlHash() {
 // ============================================================================
 
 /**
- * Start a fresh eval Worker and resolve once its wasm module is ready.
- *
- * Used at boot and again by stopEvalWorker, which is why it does nothing but
- * the worker: the one-time steps (doc names, the #lang registry, a share
- * link's code) stay in initWasm.
- */
-function startEvalWorker() {
-    return new Promise((resolve, reject) => {
-        const worker = new Worker('/eval-worker.js');
-        evalWorker = worker;
-
-        worker.addEventListener('message', (e) => {
-            // A stopped worker's last words -- a result or a print already in
-            // flight when it was terminated -- belong to a session that no
-            // longer exists.
-            if (worker !== evalWorker) return;
-            const msg = e.data;
-
-            if (msg.type === 'ready') {
-                if (msg.boot) {
-                    window._turiBoot = Object.assign(window._turiBoot || {}, msg.boot,
-                                                     { workerReadyAt: performance.now() });
-                }
-                resolve();
-                return;
-            }
-            if (msg.type === 'init-error') {
-                reject(new Error(msg.error));
-                return;
-            }
-
-            // Console output forwarded from WASM print/printErr callbacks.
-            if (msg.type === 'print') {
-                appendToConsole(`<span class="console-output">${escapeHtml(msg.text)}</span>`);
-                return;
-            }
-            if (msg.type === 'printErr') {
-                appendToConsole(`<span class="console-error">${escapeHtml(msg.text)}</span>`);
-                return;
-            }
-
-            // Resolve pending call promises (eval, format, doc, reset).
-            const pending = pendingCalls.get(msg.id);
-            if (!pending) return;
-            pendingCalls.delete(msg.id);
-
-            if (msg.type === 'eval-result') {
-                const execTime = performance.now() - pending.startTime;
-                updateExecTime(execTime);
-                const isError = msg.result.startsWith('Error:') || msg.result.includes('error');
-                pending.resolve({ result: msg.result, isError, execTime });
-                setTimeout(processQueue, 0);
-            } else if (msg.type === 'format-result') {
-                pending.resolve(msg.result);
-            } else if (msg.type === 'doc-result') {
-                pending.resolve(msg.result);
-            } else if (msg.type === 'type-of-result') {
-                pending.resolve(msg.result);
-            } else if (msg.type === 'explain-result') {
-                pending.resolve(msg.result);
-            } else if (msg.type === 'lang-registry-result') {
-                pending.resolve(msg.result);
-            } else if (msg.type === 'trace-run-result') {
-                pending.resolve({ steps: msg.steps, stats: msg.stats, error: msg.error });
-            } else if (msg.type === 'trace-state') {
-                pending.resolve(msg.state);
-            } else if (msg.type === 'trace-sites') {
-                pending.resolve(msg.sites);
-            } else if (msg.type === 'trace-found') {
-                pending.resolve(msg.found);
-            } else if (msg.type === 'trace-bytes') {
-                pending.resolve(msg.bytes);
-            } else if (msg.type === 'trace-released') {
-                pending.resolve();
-            } else if (msg.type === 'reset-done') {
-                pending.resolve();
-            } else if (msg.type === 'error') {
-                pending.reject(new Error(msg.error));
-                if (pending.isEval) setTimeout(processQueue, 0);
-            }
-        });
-
-        worker.addEventListener('error', (e) => {
-            reject(new Error(String(e.message || e)));
-        });
-
-        worker.postMessage({ type: 'init' });
-    });
-}
-
-/**
  * Initialize the WASM module via the eval Worker.
  * All WASM calls (eval, format, doc lookup, reset) run inside the Worker so
  * that Atomics.wait is permitted and blocking select cannot freeze the tab.
  */
 async function initWasm() {
-    if (wasmState !== WASM_STATE.INITIALIZING) return;
+    if (wasmState() !== WASM_STATE.INITIALIZING) return;
 
-    wasmState = WASM_STATE.LOADING;
+    setWasmState(WASM_STATE.LOADING);
     // performance-audit-plan WP5: boot marks, ms since navigation start. The
     // worker adds its own stage times on 'ready' (startEvalWorker).
     window._turiBoot = Object.assign(window._turiBoot || {}, { initWasmAt: performance.now() });
@@ -1056,7 +957,7 @@ async function initWasm() {
         await startEvalWorker();
 
         console.log('Turmeric WASM runtime initialized');
-        wasmState = WASM_STATE.READY;
+        setWasmState(WASM_STATE.READY);
 
         promptSetEnabled(true);
 
@@ -1070,7 +971,7 @@ async function initWasm() {
 
     } catch (error) {
         console.error('Failed to initialize WASM:', error);
-        wasmState = WASM_STATE.ERROR;
+        setWasmState(WASM_STATE.ERROR);
         if (loadingOverlay) loadingOverlay.style.display = 'none';
 
         if (error.message === 'shared-array-buffer-unavailable') {
@@ -1087,391 +988,6 @@ async function initWasm() {
             appendToConsole('<span class="console-error">Error: Failed to load WASM module. Please refresh the page.</span>');
         }
     }
-}
-
-/**
- * Strip a leading #lang directive from code and return the detected language
- * plus the remaining source.  The #lang line must be the first non-blank
- * line (leading spaces/tabs are allowed but not newlines).
- *
- * Returns { lang: string|null, body: string, line: string|null }
- *   lang   -- the base dialect name (e.g. "turmeric/sweet") or null if no
- *             directive found
- *   body   -- source text with the #lang line removed
- *   line   -- the full directive line text (no trailing newline), or null
- *
- * `#lang` takes a base and nothing else, so a trailing token is malformed
- * input from the editor buffer rather than a second axis.  The whole line is
- * still PARSED (so `body` stays correct and a pasted file does not choke the
- * playground); the wasm side rejects the directive with a status message.
- */
-function parseLangDirective(code) {
-    const m = code.match(/^[ \t]*#lang[ \t]+([^\r\n]*?)[ \t]*(\r?\n|$)/);
-    if (!m) return { lang: null, body: code, line: null };
-    const toks = m[1].split(/[ \t]+/).filter(Boolean);
-    if (!toks.length) return { lang: null, body: code, line: null };
-    return {
-        lang: toks[0],
-        body: code.slice(m[0].length),
-        line: m[0].replace(/\r?\n$/, ''),
-    };
-}
-
-// ============================================================================
-// Language picker (try-turmeric-lang-toggle-plan)
-//
-// A dialect radio group that edits the #lang line in place.  The #lang line
-// in the buffer stays the source of truth: the picker is a text edit, not a
-// hidden mode, and everything round-trips -- paste a file with a #lang header
-// and the picker updates; flip the picker and the header updates.  Nothing is
-// stored in UI state that is not also in the source.
-//
-// One control, because `#lang` has one axis: the layer checkboxes that used
-// to sit beside the radios are gone with the axis itself.  A registry object
-// from a cached older wasm build may still carry a stale `layers` key; it is
-// simply never read, which is what ignoring an unknown key already does --
-// the point is not to assert against it.
-// ============================================================================
-
-// Fallback for older deployed WASM builds that don't export
-// _turi_wasm_lang_registry.
-//
-// Deliberately still the four Turmeric bases: a build old enough to be
-// missing the registry export is also old enough to reject `#lang saffron`
-// outright, so offering the Saffron bases here would hand that build a base
-// it cannot read.  A current build never uses this list.
-const LANG_REGISTRY_FALLBACK = {
-    bases: [
-        { name: 'turmeric',             label: 'S-expression',     language: 'turmeric', reader: 's-expr' },
-        { name: 'turmeric/curly-infix', label: 'Curly-infix',      language: 'turmeric', reader: 'curly-infix' },
-        { name: 'turmeric/neoteric',    label: 'Neoteric',         language: 'turmeric', reader: 'neoteric' },
-        { name: 'turmeric/sweet',       label: 'Sweet-expression', language: 'turmeric', reader: 'sweet' },
-    ],
-};
-
-const LANG_DEFAULT_BASE = 'turmeric';
-
-// The readers the picker offers.  Curly-infix and neoteric are deliberately
-// left out: `{a + b}` is enabled in EVERY dialect and neoteric `f(x)` is one of
-// sweet-exp's three tools, so a file almost never wants either as its whole
-// reader -- listing them made four Turmeric rows out of two real choices.  Both
-// remain spellable in a `#lang` line, and a buffer that names one still gets its
-// row (renderLangMenu's `keep`).
-const LANG_READERS_SHOWN = ['s-expr', 'sweet', 'scheme'];
-
-// Heading per language.  `r7rs` is the base token and the EXPERIMENTS[] name,
-// but "Scheme" is what the language is called.
-const LANG_GROUP_NAMES = {
-    turmeric: 'Turmeric',
-    saffron:  'Saffron',
-    r7rs:     'Scheme',
-};
-
-function langGroupName(lang) {
-    return LANG_GROUP_NAMES[lang] ||
-        `${lang.charAt(0).toUpperCase()}${lang.slice(1)}`;
-}
-
-// The reader half of a base.  Registry rows carry it; derive it from the base
-// token for an older cached WASM whose registry JSON predates the key.
-function baseReader(b) {
-    if (b.reader) return b.reader;
-    const slash = b.name.indexOf('/');
-    if (slash >= 0) return b.name.slice(slash + 1);
-    return b.name === 'r7rs' ? 'scheme' : 's-expr';
-}
-
-// The language half of a base token: `saffron/sweet` -> `saffron`, and a bare
-// base names its own language (`r7rs`).
-function baseLanguage(name) {
-    const slash = name.indexOf('/');
-    return slash >= 0 ? name.slice(0, slash) : name;
-}
-
-// Registry fetched from the WASM module (null until it arrives).
-let langRegistry = null;
-
-function langMenuRegistry() {
-    return langRegistry || LANG_REGISTRY_FALLBACK;
-}
-
-// The legacy alias is accepted on input but never generated; normalize it so
-// the picker treats `#lang sweet-exp` as the turmeric/sweet selection.
-function normalizeLangBase(name) {
-    return name === 'sweet-exp' ? 'turmeric/sweet' : name;
-}
-
-// Short dialect tag for the header button (the full labels live in the
-// popover, from the registry).
-function baseShortLabel(base) {
-    switch (base) {
-        case 'turmeric':             return 's-expr';
-        case 'turmeric/curly-infix': return 'curly';
-        case 'turmeric/neoteric':    return 'neoteric';
-        case 'turmeric/sweet':       return 'sweet';
-        // The language is the interesting half of a Saffron base -- the
-        // reader is what the Turmeric rows already say.
-        case 'saffron':              return 'saffron';
-        case 'saffron/curly-infix':  return 'saffron curly';
-        case 'saffron/neoteric':     return 'saffron neoteric';
-        case 'saffron/sweet':        return 'saffron sweet';
-        // r7rs brings its own readers, so the base token says it all.
-        case 'r7rs':                 return 'r7rs';
-        case 'r7rs/sweet':           return 'r7rs sweet';
-        default:                     return base || 's-expr';
-    }
-}
-
-/**
- * Fetch the #lang registry (the base dialects) from the WASM module and
- * re-render the picker.  No-op fallback when the export is absent.
- */
-function fetchLangRegistry() {
-    if (wasmState !== WASM_STATE.READY) return Promise.resolve();
-    return new Promise((resolve) => {
-        const id = ++evalCallId;
-        pendingCalls.set(id, {
-            resolve,
-            reject: () => resolve(null),
-            startTime: performance.now(),
-            isEval: false,
-        });
-        evalWorker.postMessage({ type: 'lang-registry', id });
-    }).then((json) => {
-        if (!json) return;
-        try {
-            const parsed = JSON.parse(json);
-            if (parsed && Array.isArray(parsed.bases)) {
-                langRegistry = parsed;
-                renderLangMenu();
-            }
-        } catch (err) {
-            console.error('Bad lang registry JSON:', err);
-        }
-    });
-}
-
-/**
- * The active tab's current selection, read from line 1 of its model.  The
- * picker is per-tab: dialect is per-file in Turmeric, so nothing about it is
- * persisted outside the tab's own text.
- */
-function currentLangSelection() {
-    const model = editor && editor.getModel();
-    if (!model) return { base: LANG_DEFAULT_BASE };
-    const parsed = parseLangDirective(model.getLineContent(1));
-    if (parsed.lang === null) return { base: LANG_DEFAULT_BASE };
-    return { base: normalizeLangBase(parsed.lang) };
-}
-
-// Tracks models whose #lang insert also added the blank separator line, so
-// removal only eats a blank line this code created (never one the user
-// typed).  WeakMap so disposed models don't pin the flag.
-const langInsertAddedBlank = new WeakMap();
-
-/**
- * The single writer of the #lang line (§3.4 of the plan).  All paths go
- * through one pushEditOperations call, so one Ctrl+Z undoes a language
- * switch.
- *
- * - No #lang line + default selection: write nothing (don't decorate a
- *   plain file with a redundant header).
- * - No #lang line + non-default selection: insert `#lang ...` as line 1,
- *   followed by a blank line.
- * - Has a #lang line: replace exactly that line, preserving everything
- *   after it.
- * - Selection returns to the default: remove the line (and the blank line
- *   after it if the insert above added one).
- */
-function setLangDirective(model, { base }) {
-    if (!model || !monaco) return;
-    const parsed = parseLangDirective(model.getLineContent(1));
-    const isDefault = base === LANG_DEFAULT_BASE;
-    const directive = `#lang ${base}`;
-
-    let edits;
-    if (parsed.lang === null) {
-        if (isDefault) return;
-        edits = [{ range: new monaco.Range(1, 1, 1, 1), text: directive + '\n\n' }];
-        langInsertAddedBlank.set(model, true);
-    } else if (isDefault) {
-        const lineCount = model.getLineCount();
-        const removeBlank = langInsertAddedBlank.get(model) === true &&
-                            lineCount >= 2 &&
-                            model.getLineContent(2).trim() === '';
-        const lastRemoved = removeBlank ? 2 : 1;
-        const range = lineCount > lastRemoved
-            ? new monaco.Range(1, 1, lastRemoved + 1, 1)
-            : new monaco.Range(1, 1, lineCount, model.getLineMaxColumn(lineCount));
-        edits = [{ range, text: '' }];
-        langInsertAddedBlank.delete(model);
-    } else {
-        if (parsed.line === directive) return;   // nothing to do
-        edits = [{
-            range: new monaco.Range(1, 1, 1, model.getLineMaxColumn(1)),
-            text: directive,
-        }];
-    }
-    // Delimit the undo stack on both sides so the switch is exactly one
-    // Ctrl+Z -- neither merged with preceding typing nor split in two.
-    model.pushStackElement();
-    model.pushEditOperations([], edits, () => null);
-    model.pushStackElement();
-}
-
-/**
- * Render the popover's radio group from the registry.  The form of the
- * control mirrors the form of the syntax: one mutually exclusive base, and
- * nothing else.
- */
-function renderLangMenu(rebuilt) {
-    const basesEl = document.getElementById('lang-bases');
-    if (!basesEl) return;
-    const reg = langMenuRegistry();
-
-    // A base names a (language, reader) PAIR, so the two axes become the two
-    // levels of the list: a heading per LANGUAGE, and one row per READER under
-    // it.  A flat list had to repeat the language in every row name
-    // ("Saffron -- Sweet-expression"), which read as eight unrelated dialects
-    // rather than two languages with the same choice of syntax.
-    //
-    // A row is labelled by the `#lang` line it writes, and nothing else.  The
-    // prose reader name ("Sweet-expression") was a second vocabulary for the
-    // token sitting right beside it, and the token is the thing the user ends
-    // up typing and reading at the top of the file.
-    //
-    // Only the readers people actually pick per file get a row -- see
-    // LANG_READERS_SHOWN.  The one exception is the base the buffer already
-    // names: hiding that would leave the picker silently unchecked and make a
-    // switch look like a no-op.
-    const keep = currentLangSelection().base;
-    const rows = reg.bases.filter(b =>
-        LANG_READERS_SHOWN.includes(baseReader(b)) || b.name === keep);
-    // The buffer can name a base this registry does not list at all: the
-    // fallback list is Turmeric-only, and it is what the picker renders from
-    // until the WASM registry arrives.  Synthesize the row rather than leave
-    // the picker contradicting line 1 of the file.
-    if (keep && !rows.some(b => b.name === keep)) {
-        rows.push({ name: keep, label: keep, language: baseLanguage(keep) });
-    }
-
-    // Group in registry order, which is the order `tur dialects` prints.
-    const groups = [];
-    rows.forEach(b => {
-        const lang = b.language || 'turmeric';
-        let g = groups.find(x => x.lang === lang);
-        if (!g) groups.push(g = { lang, rows: [] });
-        g.rows.push(b);
-    });
-
-    basesEl.innerHTML = groups.map(g => `
-        <div class="lang-group" role="group" aria-label="${escapeAttr(langGroupName(g.lang))}">
-            <div class="lang-group-name">${escapeHtml(langGroupName(g.lang))}</div>
-            ${g.rows.map(b => `
-            <label class="lang-row" title="#lang ${escapeAttr(b.name)}">
-                <input type="radio" name="lang-base" value="${escapeAttr(b.name)}">
-                <span class="lang-row-name">#lang ${escapeHtml(b.name)}</span>${
-                    b.experiment
-                        ? '<span class="lang-chip">experimental</span>'
-                        : ''
-                }
-            </label>`).join('')}
-        </div>`).join('');
-
-    basesEl.querySelectorAll('input[type=radio]').forEach(r =>
-        r.addEventListener('change', onLangControlChange));
-
-    reconcileLangPicker(!!rebuilt);
-}
-
-/** A picker control changed: write the new selection into the buffer. */
-function onLangControlChange() {
-    const model = editor && editor.getModel();
-    if (!model) return;
-    const checkedBase = document.querySelector('#lang-bases input[type=radio]:checked');
-    const base = checkedBase ? checkedBase.value : LANG_DEFAULT_BASE;
-    setLangDirective(model, { base });
-    reconcileLangPicker();
-}
-
-/**
- * Reconcile the picker with the active tab's line 1.  Called on model
- * content change (typing the header by hand and using the picker are the
- * same operation) and on tab switch (the picker follows the tab).
- */
-function reconcileLangPicker(rebuilt) {
-    const sel = currentLangSelection();
-    const btnLabel = document.getElementById('lang-btn-label');
-    if (btnLabel) btnLabel.textContent = baseShortLabel(sel.base);
-    const radios = document.querySelectorAll('#lang-bases input[type=radio]');
-    let found = false;
-    radios.forEach(r => {
-        r.checked = (r.value === sel.base);
-        if (r.checked) found = true;
-    });
-    // The rendered rows stop matching the selection in two ways, and both are
-    // the hidden bases (curly-infix / neoteric): the buffer names one and it
-    // has no row yet, or it has moved off one whose row is still sitting there.
-    // renderLangMenu always produces a row for the current base and only for
-    // the current base, so this settles in one pass -- `rebuilt` is a stop, not
-    // a retry budget.
-    const stale = Array.from(radios).some(r =>
-        r.value !== sel.base && !LANG_READERS_SHOWN.includes(baseReader({ name: r.value })));
-    if ((!found || stale) && radios.length && !rebuilt) renderLangMenu(true);
-}
-
-/**
- * Wire the header button + popover.  Mirrors the Examples popover: reparent
- * to <body> to escape ancestor overflow/stacking contexts, anchor with
- * position:fixed, close on outside-click / Escape.
- */
-function initLangPicker() {
-    const langBtn = document.getElementById('lang-btn');
-    const langMenu = document.getElementById('lang-menu');
-    if (!langBtn || !langMenu) return;
-    if (langMenu.parentElement !== document.body) {
-        document.body.appendChild(langMenu);
-    }
-    const closeLang = () => {
-        langMenu.hidden = true;
-        langBtn.setAttribute('aria-expanded', 'false');
-    };
-    const openLangAt = (anchor) => {
-        langMenu.hidden = false;
-        langBtn.setAttribute('aria-expanded', 'true');
-        const r = anchor.getBoundingClientRect();
-        langMenu.style.top = `${r.bottom + 4}px`;
-        langMenu.style.right = `${Math.max(4, window.innerWidth - r.right)}px`;
-        reconcileLangPicker();
-    };
-    langBtn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        langMenu.hidden ? openLangAt(langBtn) : closeLang();
-    });
-    document.addEventListener('click', (e) => {
-        if (!langMenu.hidden && !langMenu.contains(e.target) && e.target !== langBtn) {
-            closeLang();
-        }
-    });
-    document.addEventListener('keydown', (e) => {
-        if (e.key === 'Escape' && !langMenu.hidden) closeLang();
-    });
-    // Mobile: the "Language..." item in the ⋯ overflow opens the same
-    // popover, anchored to the overflow button.  stopPropagation so the
-    // click never reaches the document-level outside-click closer (which
-    // would immediately re-hide the menu); that also bypasses the overflow
-    // menu's own close-on-click delegate, so close it here.
-    const moreBtn = document.getElementById('more-btn');
-    document.querySelectorAll('[data-action="language"]').forEach(item => {
-        item.addEventListener('click', (e) => {
-            e.stopPropagation();
-            const moreMenu = document.getElementById('more-menu');
-            if (moreMenu) moreMenu.hidden = true;
-            moreBtn?.setAttribute('aria-expanded', 'false');
-            openLangAt(moreBtn || langBtn);
-        });
-    });
-    renderLangMenu();
 }
 
 /**
@@ -1499,7 +1015,7 @@ function processQueue() {
 
     const { code, quiet, resolve, reject } = executionQueue.shift();
 
-    if (wasmState !== WASM_STATE.READY) {
+    if (wasmState() !== WASM_STATE.READY) {
         reject(new Error('WASM not ready'));
         updateExecTime(0);
         setTimeout(processQueue, 0);
@@ -1515,9 +1031,7 @@ function processQueue() {
     if (lang !== null) currentLangMode = lang;
     const langDirective = lang;
 
-    const id = ++evalCallId;
-    pendingCalls.set(id, { resolve, reject, startTime: performance.now(), isEval: true });
-    evalWorker.postMessage({ type: 'eval', id, input: code, lang: langDirective, quiet });
+    send({ type: 'eval', input: code, lang: langDirective, quiet }, { resolve, reject, isEval: true });
 }
 
 // ============================================================================
@@ -1551,7 +1065,8 @@ function armEvalWatchdog() {
 function evalWatchdogTick() {
     const panel = document.getElementById('console-loading');
     const stopBtn = document.getElementById('stop-btn');
-    if (pendingCalls.size === 0) {
+    const { count, oldestStart } = pendingStats();
+    if (count === 0) {
         clearInterval(evalWatchdogTimer);
         evalWatchdogTimer = null;
         if (stopBtn) stopBtn.hidden = true;
@@ -1560,9 +1075,7 @@ function evalWatchdogTick() {
         evalWatchdogShowedPanel = false;
         return;
     }
-    let oldest = Infinity;
-    for (const call of pendingCalls.values()) oldest = Math.min(oldest, call.startTime);
-    const age = performance.now() - oldest;
+    const age = performance.now() - oldestStart;
     if (age >= CONFIG.EXECUTION_TIMEOUT) {
         stopEvalWorker(`Stopped: still running after ${CONFIG.EXECUTION_TIMEOUT / 1000} s`);
     } else if (age >= EVAL_STOP_OFFER_MS) {
@@ -1580,15 +1093,12 @@ function evalWatchdogTick() {
  * `reason`, which is what the console shows for the Run that was stopped.
  */
 function stopEvalWorker(reason) {
-    if (!evalWorker || evalStopping) return;
+    if (!hasWorker() || evalStopping) return;
     evalStopping = true;
-    evalWorker.terminate();
-    evalWorker = null;
-    wasmState = WASM_STATE.LOADING;
+    const owed = terminateWorker();
+    setWasmState(WASM_STATE.LOADING);
     promptSetEnabled(false);
 
-    const owed = [...pendingCalls.values()];
-    pendingCalls.clear();
     const queued = executionQueue.splice(0);
     isExecuting = false;
 
@@ -1604,13 +1114,13 @@ function stopEvalWorker(reason) {
     showStatus('Restarting...', 'info');
 
     startEvalWorker().then(() => {
-        wasmState = WASM_STATE.READY;
+        setWasmState(WASM_STATE.READY);
         promptSetEnabled(true);
         appendToConsole('<span class="console-output">Started a fresh session '
                         + '-- definitions from earlier runs are gone.</span>');
         showStatus('Ready', 'success');
     }, (e) => {
-        wasmState = WASM_STATE.ERROR;
+        setWasmState(WASM_STATE.ERROR);
         console.error('Failed to restart the WASM worker:', e);
         showStatus('Failed to load WASM', 'error');
         appendToConsole('<span class="console-error">Error: could not restart the '
@@ -1624,10 +1134,9 @@ function stopEvalWorker(reason) {
  * Reset the WASM environment via the eval Worker.
  */
 function resetWasm() {
-    if (wasmState !== WASM_STATE.READY) return;
+    if (wasmState() !== WASM_STATE.READY) return;
 
-    const id = ++evalCallId;
-    pendingCalls.set(id, {
+    send({ type: 'reset' }, {
         resolve: () => {
             currentLangMode = 'turmeric'; // turi_env_new() always starts in default mode
             /* The session forgot everything it had accepted, so the prompt's
@@ -1639,10 +1148,7 @@ function resetWasm() {
             showStatus('Environment reset', 'success');
         },
         reject:  (err) => { console.error('Reset error:', err); showStatus('Failed to reset', 'error'); },
-        startTime: performance.now(),
-        isEval: false,
     });
-    evalWorker.postMessage({ type: 'reset', id });
 }
 
 /**
@@ -2026,7 +1532,7 @@ function definesMainEntry(code) {
  * Run the current editor contents
  */
 async function runCode() {
-    if (wasmState !== WASM_STATE.READY) {
+    if (wasmState() !== WASM_STATE.READY) {
         showStatus('WASM not ready', 'error');
         return;
     }
@@ -2105,14 +1611,10 @@ async function rewindSessionForRun(tabId, code) {
  */
 function rewindWasm() {
     return new Promise((resolve) => {
-        const id = ++evalCallId;
-        pendingCalls.set(id, {
+        send({ type: 'rewind' }, {
             resolve: () => resolve(true),
             reject: () => resolve(false),
-            startTime: performance.now(),
-            isEval: false,
         });
-        evalWorker.postMessage({ type: 'rewind', id });
     });
 }
 
@@ -2120,7 +1622,7 @@ function rewindWasm() {
  * Format the editor contents via the eval Worker.
  */
 async function formatCode() {
-    if (wasmState !== WASM_STATE.READY) {
+    if (wasmState() !== WASM_STATE.READY) {
         showStatus('WASM not ready', 'error');
         return;
     }
@@ -2129,9 +1631,7 @@ async function formatCode() {
 
     try {
         const formatted = await new Promise((resolve, reject) => {
-            const id = ++evalCallId;
-            pendingCalls.set(id, { resolve, reject, startTime: performance.now(), isEval: false });
-            evalWorker.postMessage({ type: 'format', id, input: code });
+            send({ type: 'format', input: code }, { resolve, reject });
         });
         editor.setValue(formatted);
         showStatus('Formatted', 'success');
@@ -2562,7 +2062,7 @@ function promptSetEnabled(on) {
 
 async function promptSubmit() {
     const code = promptValue().trim();
-    if (!code || wasmState !== WASM_STATE.READY) return;
+    if (!code || wasmState() !== WASM_STATE.READY) return;
 
     replHistory.unshift(code);
     replHistoryIndex = -1;
@@ -2638,7 +2138,7 @@ function initReplInput() {
         },
         overflowWidgetsDomNode: overlay,
         fixedOverflowWidgets: true,
-        readOnly: wasmState !== WASM_STATE.READY,
+        readOnly: wasmState() !== WASM_STATE.READY,
         quickSuggestions: { other: true, comments: false, strings: false },
         suggestOnTriggerCharacters: true,
         acceptSuggestionOnEnter: 'on',
@@ -2646,7 +2146,7 @@ function initReplInput() {
         parameterHints: { enabled: true },
     });
 
-    host.classList.toggle('repl-input-disabled', wasmState !== WASM_STATE.READY);
+    host.classList.toggle('repl-input-disabled', wasmState() !== WASM_STATE.READY);
     host.classList.add('repl-input-empty');
 
     const model = promptEditor.getModel();
@@ -3466,16 +2966,12 @@ function initDocSearch() {
  * Returns a Promise resolving to the doc string, or null if not found.
  */
 function wasmDocLookup(name) {
-    if (!evalWorker || wasmState !== WASM_STATE.READY) return Promise.resolve(null);
+    if (!hasWorker() || wasmState() !== WASM_STATE.READY) return Promise.resolve(null);
     return new Promise((resolve) => {
-        const id = ++evalCallId;
-        pendingCalls.set(id, {
+        send({ type: 'doc', name }, {
             resolve,
             reject: () => resolve(null),
-            startTime: performance.now(),
-            isEval: false,
         });
-        evalWorker.postMessage({ type: 'doc', id, name });
     });
 }
 
@@ -3483,16 +2979,12 @@ function wasmDocLookup(name) {
  * Look up type for `expr` via the eval Worker.
  */
 function wasmTypeOf(expr) {
-    if (!evalWorker || wasmState !== WASM_STATE.READY) return Promise.resolve('');
+    if (!hasWorker() || wasmState() !== WASM_STATE.READY) return Promise.resolve('');
     return new Promise((resolve) => {
-        const id = ++evalCallId;
-        pendingCalls.set(id, {
+        send({ type: 'type-of', expr }, {
             resolve,
             reject: (err) => resolve(`error: ${err.message}`),
-            startTime: performance.now(),
-            isEval: false,
         });
-        evalWorker.postMessage({ type: 'type-of', id, expr });
     });
 }
 
@@ -3500,16 +2992,12 @@ function wasmTypeOf(expr) {
  * Get detailed explanation for `code` via the eval Worker.
  */
 function wasmExplain(code) {
-    if (!evalWorker || wasmState !== WASM_STATE.READY) return Promise.resolve('');
+    if (!hasWorker() || wasmState() !== WASM_STATE.READY) return Promise.resolve('');
     return new Promise((resolve) => {
-        const id = ++evalCallId;
-        pendingCalls.set(id, {
+        send({ type: 'explain', code }, {
             resolve,
             reject: (err) => resolve(`Error: ${err.message}`),
-            startTime: performance.now(),
-            isEval: false,
         });
-        evalWorker.postMessage({ type: 'explain', id, code });
     });
 }
 
@@ -3734,9 +3222,9 @@ window.turmericApp = {
     showDocsPage,
     loadDocsIndex,
     getState: () => ({
-        wasmState,
+        wasmState: wasmState(),
         hasEditor: !!editor,
-        hasWasm: !!evalWorker && wasmState === WASM_STATE.READY,
+        hasWasm: hasWorker() && wasmState() === WASM_STATE.READY,
         docsOpen: docsPaneIsOpen(),
         docsRef: docsPaneState().ref,
         docsGuideView: docsPaneState().guideView,
@@ -3746,16 +3234,9 @@ window.turmericApp = {
 // The trace timeline (trace.js) asks the worker for each trace-* request
 // through this, and resets the session for a recording through traceResetEnv.
 function traceWorkerCall(message) {
-    if (!evalWorker || wasmState !== WASM_STATE.READY) return Promise.resolve(null);
+    if (!hasWorker() || wasmState() !== WASM_STATE.READY) return Promise.resolve(null);
     return new Promise((resolve, reject) => {
-        const id = ++evalCallId;
-        pendingCalls.set(id, {
-            resolve,
-            reject,
-            startTime: performance.now(),
-            isEval: false,
-        });
-        evalWorker.postMessage({ ...message, id });
+        send(message, { resolve, reject });
     });
 }
 
@@ -3773,8 +3254,7 @@ function traceWorkerCall(message) {
  */
 function traceResetEnv() {
     return new Promise((resolve) => {
-        const id = ++evalCallId;
-        pendingCalls.set(id, {
+        send({ type: 'reset' }, {
             resolve: () => {
                 currentLangMode = 'turmeric';  // turi_env_new() starts in default mode
                 // The session forgot what it had accepted, so the prompt's
@@ -3784,15 +3264,12 @@ function traceResetEnv() {
                 resolve(true);
             },
             reject: () => resolve(false),
-            startTime: performance.now(),
-            isEval: false,
         });
-        evalWorker.postMessage({ type: 'reset', id });
     });
 }
 
 configureTrace({
-    isReady: () => wasmState === WASM_STATE.READY,
+    isReady: () => wasmState() === WASM_STATE.READY,
     workerCall: traceWorkerCall,
     resetSession: traceResetEnv,
     setLangMode: (lang) => { currentLangMode = lang; },
