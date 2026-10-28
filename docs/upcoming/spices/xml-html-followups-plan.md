@@ -2,10 +2,10 @@
 
 > Status: in progress (2026-10-28). Done: C1-C4 (`dom/select`; turmeric-spices
 > branch `claude/ecstatic-cori-ikodwq`), A1-A2 (`dom/holes`, `dom/markupc`,
-> tur-html `html/markup`, tur-xml `xml/markup`) and D1 (tur-html
-> `html/hiccup`), the latter two together on turmeric-spices branch
-> `claude/ecstatic-cori-ikodwq-markup`, since D1 builds on A2's hole classes.
-> Not started: A3-A6, D1b, D2, D3. What changed against the plan while
+> tur-html `html/markup`, tur-xml `xml/markup`), A3-A4 (`html->dom`,
+> `#html-live{...}` and `tpl-update!`) and D1 (tur-html `html/hiccup`), all on
+> turmeric-spices branch `claude/ecstatic-cori-ikodwq-markup`, since D1
+> builds on A2's hole classes. Not started: A5, A6, D1b, D2, D3. What changed against the plan while
 > building it is under "Implementation notes (2026-10-28)" at the end. The
 > compiler fixes A and D needed are on turmeric's
 > `claude/ecstatic-cori-ikodwq`; the spices markup branch's CI builds against
@@ -836,6 +836,22 @@ What building C, A1-A2 and D1 changed against the text above.
   running `tur fmt --check`, would have rewritten every literal; and
   `syntax-len` / `syntax-nth` saw no items in a `#map{...}` literal, which
   hiccup's attribute maps need.
+
+- **Tree mode is split from string mode (decided 2026-10-28).** A
+  `Fragment` is its rendered markup, so it cannot be cloned-and-patched the
+  way step 3 above describes. A3's `html->dom` parses the markup instead (in
+  the same `template` context the literal was checked in), and its gate is
+  restated: the tree serializes to `html->string`'s markup except where the
+  HTML parser normalizes (a table's `<tbody>`, `checked=""`). A4 is a
+  separate literal, `#html-live{...}` / `html-live*`: each evaluation is a
+  `LiveHtml` snapshot of the hole values; `live-mount` builds the tree once,
+  replacing each content hole's marker with an empty text anchor and
+  grouping attribute holes by element and attribute; `tpl-update!` patches
+  only the holes whose values changed and returns the number of patches.
+  Only code that asks for a live literal pays for a tree.
+- An expansion may only name helpers in the macro's own module (`mk-*` in
+  `html/markup`, `xml/markup`, `html/hiccup`): a module-qualified name
+  resolves only for a module the using file imports itself.
 
 **D (hiccup).**
 
