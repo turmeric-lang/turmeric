@@ -155,19 +155,6 @@ static const char JIT_PRELUDE[] =
    * r7rs-gc experiment) switches its collector off, since a JIT'd
    * program's globals are not in the data segment it scans. */
   "#define TUR_JIT_ENGINE 1\n"
-#if defined(__EMSCRIPTEN__)
-  /* wasm-jit-plan 5.4: the program half reads musl's headers out of MEMFS,
-   * and c2mir lacks three spellings they use on every line: the __restrict
-   * qualifier, __inline, and the compiler-provided __builtin_va_list that
-   * bits/alltypes.h typedefs va_list from.  c2mir's own <stdarg.h> makes
-   * va_list `void *[1]`, so the builtin is given that same type and the two
-   * typedefs agree. */
-  "typedef void *__tur_c2mir_va_list[1];\n"
-  "#define __builtin_va_list __tur_c2mir_va_list\n"
-  "#define __restrict restrict\n"
-  "#define __inline inline\n"
-  "#define __inline__ inline\n"
-#endif
   /* The HOST's sanitizer state, passed into the program because the program
    * cannot see it: c2mir defines neither `__SANITIZE_ADDRESS__` nor
    * `__has_feature`, so inline C compiled here has no way to tell that the

@@ -16,35 +16,10 @@ MK=$ROOT/build-wasm/src/CMakeFiles/tur_wasm.dir/build.make
 [ -f "$MK" ] || { echo "configure build-wasm first: cmake -S $ROOT -B $ROOT/build-wasm -DTUR_WASM=ON" >&2; exit 2; }
 mkdir -p "$B/obj" "$B/hdr"
 
-# --- MIR: a scratch copy with the fork fixes this spike found (never edit
-# external/mir by hand; these ride the next fork PR, wasm-jit-plan section 6):
-#   - a NULL hard-register name that _MIR_init strlen()s;
-#   - the wasm32 target's ptrdiff_t/intptr_t/__PTRDIFF_TYPE__ are `int` where
-#     clang's wasm32 (and therefore musl's headers, which derive _Addr from
-#     __PTRDIFF_TYPE__) use `long`, so size_t came out as two different types.
-rm -rf "$B/mir" && cp -r "$ROOT/external/mir" "$B/mir"
-sed -i 's/target_hard_reg_names\[\] = {NULL}/target_hard_reg_names[] = {"wasm_hr0"}/' "$B/mir/mir-wasm.c"
-sed -i 's/#define __PTRDIFF_TYPE__ int/#define __PTRDIFF_TYPE__ long/' "$B/mir/c2mir/wasm32/mirc_wasm32_emscripten.h"
-sed -i 's/typedef int intptr_t;/typedef long intptr_t;/; s/typedef unsigned int uintptr_t;/typedef unsigned long uintptr_t;/' "$B/mir/c2mir/wasm32/mirc_wasm32_stdint.h"
-sed -i 's/typedef int ptrdiff_t;/typedef long ptrdiff_t;/' "$B/mir/c2mir/wasm32/mirc_wasm32_stddef.h"
-#   - the predefined-macro set lacks the compiler-provided type macros musl's
-#     bits/alltypes.h typedefs from (__WCHAR_TYPE__, the _FAST/_LEAST family):
-#     `typedef __WCHAR_TYPE__ wchar_t;` then fails and every later declaration
-#     naming wchar_t derails the parser.  Take clang's own values.
-echo | emcc -dM -E - > "$B/clang-macros.txt"
-python3 - "$B/mir/c2mir/wasm32/mirc_wasm32_emscripten.h" "$B/clang-macros.txt" <<'PY'
-import re, sys
-h, m = sys.argv[1:3]
-src = open(h).read()
-have = set(re.findall(r'"#define (__[A-Z0-9_]+_TYPE__) ', src))
-add = [(k, v) for k, v in re.findall(r'^#define (__[A-Z0-9_]+_TYPE__) (.*)$', open(m).read(), re.M) if k not in have]
-anchor = '    "#define __UINTMAX_TYPE__ unsigned long long\\n"\n'
-assert anchor in src, 'anchor line moved'
-src = src.replace(anchor, anchor + ''.join('    "#define %s %s\\n"\n' % (k, v) for k, v in add))
-open(h, 'w').write(src)
-print('type macros added from clang: %d' % len(add))
-PY
-MIR=$B/mir
+# --- MIR: the vendored copy as it stands.  The four wasm32 fixes this spike
+# found (wasm-jit-plan section 6) are in it since turmeric-lang/mir#15, so
+# there is no scratch copy to patch any more.
+MIR=$ROOT/external/mir
 
 # --- sources: the stock tur_wasm list (relative to src/) ...
 CMD=$(grep -o "emcc .*" "$MK" | head -1)

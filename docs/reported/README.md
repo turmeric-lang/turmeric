@@ -40,6 +40,12 @@ directory is worse for triage than no index.
 | --- | --- | --- |
 | [positive-fixture-expected-diag-ignored](positive-fixture-expected-diag-ignored.md) | low-medium (test rot) | `run.sh` reads `expected.diag` only for `errors/` fixtures, so five happy-path fixtures pin nothing. Two pins have drifted: `gadt-struct-namespace-prefer`'s warning was reworded, and `warn-no-entry-point-near-miss`'s `TUR-W0624` no longer fires at all |
 
+## Found fixing the wasm32 MIR target's types (filed 2026-10-27)
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [c2mir-generic-promotes-controlling-expression](c2mir-generic-promotes-controlling-expression.md) | low (user inline C only) | c2mir applies the integer promotions to a `_Generic` controlling expression on every target, so `_Generic ((short) 0, short: 1, int: 2)` is 2 where C11 and gcc/clang say 1. The emitter never writes `_Generic`. Fix rides the next turmeric-lang/mir PR. |
+
 ## Found extending the highlighting in Try Turmeric and the docs (filed 2026-10-26)
 
 | Report | Severity | One line |

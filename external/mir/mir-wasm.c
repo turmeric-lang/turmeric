@@ -32,7 +32,12 @@
 #define MIR_DIRECT_DISPATCH 0
 #define MAX_HARD_REG 0
 
-static const char *const target_hard_reg_names[] = {NULL};
+/* wasm has no hard registers, but MAX_HARD_REG 0 still declares one, and
+   hard_reg_name_init hashes every name with strlen.  A NULL entry reads as ""
+   only because address 0 is mapped in a plain wasm module; under -sSAFE_HEAP
+   it is a segfault in MIR_init.  Nothing can bind to this name: the type
+   check below refuses every type. */
+static const char *const target_hard_reg_names[] = {"wasm_hr0"};
 
 static inline int target_hard_reg_type_ok_p (MIR_reg_t hard_reg MIR_UNUSED,
                                              MIR_type_t type MIR_UNUSED) {

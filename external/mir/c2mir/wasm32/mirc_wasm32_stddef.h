@@ -7,7 +7,7 @@ static char stddef_str[]
   = "#ifndef __STDDEF_H\n"
     "#define __STDDEF_H\n"
     "\n"
-    "typedef int ptrdiff_t;\n"
+    "typedef long ptrdiff_t;\n"
     "typedef unsigned long size_t;\n"
     "typedef double max_align_t;\n"
     "typedef int wchar_t;\n"
