@@ -4709,8 +4709,10 @@ uint32_t refine_note_call_site(Elab *e, const Binding *callee,
  * be weaker than the one the type states.  So the type's refinement gets a
  * runtime check of its own, AT THE CALL -- otherwise a refinement written in a
  * type would have no runtime meaning.  The deferred crossing elides it when it
- * proves the argument.  The result is checked after the call (never elided in
- * v1 -- see the plan's F4) and is what lets the type's result refinement be
+ * proves the argument.  The result is checked after the call, always -- the
+ * plan's F4 measured that check as noise next to the call and kept it rather
+ * than wrapping unproved coercions -- and is what lets the type's result
+ * refinement be
  * assumed about the call's value (rt_resolve_fn_with_locals).
  *
  * The rewrite, keyed on the call FORM before any of the lowering paths (bare,
