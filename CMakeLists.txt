@@ -1646,13 +1646,13 @@ add_test(
 )
 set_tests_properties(tur_turi_pool_sweep PROPERTIES TIMEOUT 720 DEPENDS tur)
 # The editor palette contract: web/editor-palette.json against the Monaco theme
-# in web/main.js.  The Vim, Emacs and VS Code packs live in their own repos
+# in web/editor-theme.js.  The Vim, Emacs and VS Code packs live in their own repos
 # (vim-turmeric, turmeric-mode, vscode-turmeric), whose CI runs the same script
 # against this file.
 add_test(
   NAME tur_editor_palette
   COMMAND python3 tests/check-editor-palette.py web/editor-palette.json
-          --main-js web/main.js
+          --monaco-theme web/editor-theme.js
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
 # RP4: integration test for the FFI binding layer. Builds a fixture

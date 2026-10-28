@@ -1330,7 +1330,7 @@ CSS = """\
   --syn-builtin:   #8AB0E8;   /* println, map, apply ...: periwinkle */
   --syn-br1:       #EFA030;   /* rainbow brackets, by depth: the */
   --syn-br2:       #D7C94A;   /* RAINBOW_BRACKETS Monaco gets in */
-  --syn-br3:       #A8C98A;   /* web/main.js, from trowel's */
+  --syn-br3:       #A8C98A;   /* web/editor-theme.js, from trowel's */
   --syn-br4:       #7AC4B8;   /* turmeric-dark theme */
   --syn-br5:       #8AB0E8;
   --syn-br6:       #C4A0E8;

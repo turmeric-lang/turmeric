@@ -10,12 +10,12 @@ own repos, so the work is theirs; this report is the index of what to change.
 ## The target
 
 Set by `web/editor-palette.json` (the one written-down copy of the palette) and
-implemented in `tools/genguides.py` (the docs) and `web/main.js` (Monaco):
+implemented in `tools/genguides.py` (the docs) and `web/editor-language.js` (Monaco):
 
 - **A `^name` is one token, caret included, coloured by what it means.** The
   reader takes a `^` as the start of a metadata symbol (`src/compiler/reader.c`),
   so the name is any symbol; the elaborator then reads it one of four ways, and
-  Try Turmeric's editor follows it (`CARET_MODIFIERS` in `web/main.js`):
+  Try Turmeric's editor follows it (`CARET_MODIFIERS` in `web/editor-language.js`):
   - a **modifier** from the closed list the elaborator interns (`^mut`, `^fat`,
     `^linear`, `^borrow`, ... -- the `sym_caret_*` table in
     `src/compiler/elab_core.c`, plus `^tailcall`): palette `annotation`, teal

@@ -154,12 +154,28 @@ name.
 
 ```
 web/
-├── index.html          # Main HTML page
-├── main.js             # Main JavaScript with WASM integration
-├── styles.css          # Styling
+├── index.html, tour/, trowel/, roadmap.html, ci/   # the site's pages
+├── try/index.html      # Try Turmeric (the playground)
+├── vars.css            # the palette: every color token, both themes
+├── site.css            # shared chrome and page components; imports vars.css
+├── home.css, tour.css, trowel.css, roadmap.css, ci-metrics.css  # one per page
+├── styles.css          # the playground's own layout and tokens
+├── site.js             # <site-nav>, <site-footer>, <site-sidebar>, Prism
+├── main.js             # the playground: startup, eval worker, tabs, REPL,
+│                       #   language server, language picker, doc panel
+├── storage.js          # localStorage helpers, STORAGE_KEYS
+├── editor-ref.js       # the live Monaco editor, for the modules below
+├── editor-language.js  # the Turmeric language and tokenizer for Monaco
+├── editor-theme.js     # Monaco themes (checked against editor-palette.json)
+├── docs-pane.js        # the in-app docs browser
+├── trace.js            # the time-travel timeline
+├── outline.js, minimap.js, split-handle.js, hscroll-drag.js,
+│   console-hover.js, pwa-install.js   # one playground feature each
+├── examples.js, zip.js, console-runs.js, hash-params.js, html.js,
+│   share-codec.js      # data and helpers with no DOM state of their own
+├── lsp-client.js       # Monaco adapter for the language server
 ├── package.json        # Node dependencies
 ├── vite.config.js      # Vite build configuration
-├── lsp-client.js       # Monaco adapter for the language server
 └── public/
     ├── turmeric.js      # Compiled WASM module (generated)
     ├── eval-worker.js   # Worker hosting the interpreter

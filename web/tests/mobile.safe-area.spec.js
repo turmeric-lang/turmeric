@@ -148,28 +148,28 @@ test.describe('PWA safe-area insets', () => {
         await applyInsets(page);
 
         // The docs pane is a full-bleed sheet and handles the insets on its
-        // bars; the tutorial and loading overlays are centered dialogs and are
-        // covered by .overlay's own padding. Force one open with content tall
-        // enough to want the whole screen -- a flex item centered in a box it
-        // overflows loses its top edge off-screen, which is the docs-topbar
-        // failure one level in.
-        const top = await page.evaluate(async (t) => {
-            const overlay = document.getElementById('tutorial-overlay');
+        // bars; the loading overlay is a centered dialog and is covered by
+        // .overlay's own padding. Measure both: the padding has to reserve the
+        // insets (position:fixed does not inherit the shell's), and the
+        // centered content has to land inside it.
+        const box = await page.evaluate(async () => {
+            const overlay = document.getElementById('loading-overlay');
             overlay.style.display = 'flex';
-            const content = overlay.querySelector('.overlay-content');
-            const filler = document.createElement('div');
-            filler.style.height = '2000px';
-            content.appendChild(filler);
-            await Promise.all(content.getAnimations().map(a => a.finished.catch(() => {})));
+            const content = overlay.querySelector('.loading-content');
             await new Promise(requestAnimationFrame);
-            const box = content.getBoundingClientRect();
-            filler.remove();
+            const cs = getComputedStyle(overlay);
+            const r = content.getBoundingClientRect();
             overlay.style.display = 'none';
-            return { top: box.top, bottom: box.bottom, viewport: window.innerHeight, t };
-        }, SAFE_TOP);
+            return {
+                padTop: parseFloat(cs.paddingTop), padBottom: parseFloat(cs.paddingBottom),
+                top: r.top, bottom: r.bottom, viewport: window.innerHeight,
+            };
+        });
 
-        expect(top.top).toBeGreaterThanOrEqual(SAFE_TOP);
-        expect(top.bottom).toBeLessThanOrEqual(top.viewport - SAFE_BOTTOM);
+        expect(box.padTop).toBeGreaterThanOrEqual(SAFE_TOP);
+        expect(box.padBottom).toBeGreaterThanOrEqual(SAFE_BOTTOM);
+        expect(box.top).toBeGreaterThanOrEqual(SAFE_TOP);
+        expect(box.bottom).toBeLessThanOrEqual(box.viewport - SAFE_BOTTOM);
     });
 
     test('the installed shell is pinned to the viewport, not sized from 100dvh',

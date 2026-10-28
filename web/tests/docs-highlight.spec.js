@@ -2,7 +2,7 @@
 //
 // The docs pages and Try Turmeric's docs pane colour code with the highlighter
 // in tools/genguides.py, and it reads a `^name` and a type the way the editor
-// (web/main.js, tests/editor-highlight.spec.js) does: a modifier from the closed
+// (web/editor-language.js, tests/editor-highlight.spec.js) does: a modifier from the closed
 // list is hl-ann (teal), a kind, a constraint and a type are violet, an extern-c
 // C type is a type, and a builtin is hl-builtin (periwinkle).
 //

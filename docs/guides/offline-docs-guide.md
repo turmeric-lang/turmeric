@@ -312,7 +312,7 @@ the spices repository.
 | `tools/genpack.py` | merge, check, budget |
 | `tools/check-pack-spices.py` | refuse to deploy a pack with no spice pages |
 | `web/public/sw.js` | precache and serve the pack offline |
-| `web/main.js` | the docs pane (search `In-app docs browser`) |
+| `web/docs-pane.js` | the docs pane |
 | `web/tests/docs-pane.spec.js` | pane behaviour |
 | `web/tests/docs-offline.spec.js` | the offline guarantee |
 | `tests/run-tur-docs.sh` | `tur doc` and `tur docs` |
