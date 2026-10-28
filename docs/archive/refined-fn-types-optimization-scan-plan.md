@@ -1,7 +1,7 @@
 # Plan: Optimization scan of calls through function values and their checks
 
-> **Status:** TODO (noted 2026-10-28). Nothing scanned yet. A follow-up to
-> [refined-function-types-plan](refined-function-types-plan.md)'s F4, which
+> **Status:** DONE (scanned 2026-10-28); see "Outcome" below. A follow-up to
+> [refined-function-types-plan](../upcoming/refined-function-types-plan.md)'s F4, which
 > measured the call-site checks and kept them. Off the v1 critical path.
 > **Type:** Performance / investigation
 > **Output:** a `docs/reported/<slug>.md` per finding worth fixing (with a row
@@ -83,3 +83,50 @@ filing.
 Each candidate above has either a filed report or a one-line "measured, nothing
 worth fixing" entry under it, plus anything else the scan turns up. Then move
 this file to `docs/archive/`.
+
+## Outcome (2026-10-28)
+
+Every candidate has a verdict, and the scan found four things outside its
+list. Six reports filed, indexed under "Found by the refined-fn-types
+optimization scan" in `docs/reported/README.md`.
+
+1. **CPS colouring of a `#fx{}` parameter.** Confirmed: a parameter typed
+   `(fn [int] #fx{} int)` is coloured by the indirect rule alone
+   (`TUR_CPS_CENSUS=1`: `colored indirect`). Not filed as an optimization,
+   because uncolouring it is unsound today: a function that performs `IO`
+   reaches a `#fx{}` slot through a `let`
+   ([effect-row-check-skips-let-bound-fn-values](../reported/effect-row-check-skips-let-bound-fn-values.md)).
+   That is the precondition R-1's fix already names. Found next to it:
+   [fn-param-not-forwardable-to-effect-rowed-param](../reported/fn-param-not-forwardable-to-effect-rowed-param.md).
+2. **The interpreter's contract-check cost.** Filed:
+   [turi-contract-check-is-a-full-native-call](../reported/turi-contract-check-is-a-full-native-call.md).
+   A check costs a full native call (+0.21 us, +0.29 us for the `-at` form)
+   against +0.10 us for an inline `if` + `panic`.
+3. **Compile-time cost of the refinement work.** Measured, nothing worth
+   fixing. On generated programs with 250 and 1,000 higher-order functions:
+   - refining their function types costs about 1.4x the unrefined compile;
+   - the `refine` phase (x3.8) and elaboration (x3.6) grow linearly for 4x
+     the input;
+   - no part of the refinement work is quadratic: the coercion dedup,
+     `rt_decide_entailment`'s fresh environments and `rt_form_binds_name`
+     never showed in a profile.
+   The superlinear-looking emission time came from two other places. One is
+   [cps-fn-unreached-rescans-all-inline-c](../reported/cps-fn-unreached-rescans-all-inline-c.md)
+   (filed, low: about 0.5 ms per unreferenced coloured function, invisible on
+   the corpus). The rest is cache effects: instruction counts grow linearly.
+4. **The call-site wrapper's temporaries.** Measured, nothing worth fixing. A
+   temporary is typed like the argument and adds no conversion or box. The
+   only difference in the emitted C is the check itself. Probing it found a
+   much larger bug in the unrefined path:
+   [call-through-fn-param-skips-argument-checks](../reported/call-through-fn-param-skips-argument-checks.md)
+   (high). A call through a plain function-typed parameter checks neither
+   argument types nor arity. The refined path rejects such a call only by
+   accident, with a misleading `TUR-E0042`.
+
+Also found while checking candidate 4:
+[float-conversion-check-ignores-fixture-flags](../reported/float-conversion-check-ignores-fixture-flags.md).
+The float-conversion mechanism check never sees an experiment-gated fixture,
+the refined-fn-types ones included.
+
+Archived 2026-10-28.
+
