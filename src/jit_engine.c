@@ -727,9 +727,19 @@ static bool jit_wasm_refuses (const char *name) {
 }
 #endif
 
+#ifdef __EMSCRIPTEN__
+/* wasm-jit-plan 5.6: setjmp's address cannot be taken on this target (emcc
+ * refuses any indirect use of it), so the import resolves to this stand-in;
+ * MIR_load_external swaps it for its own marker, and the interpreter calls
+ * setjmp directly, in the frame of the function that asked for it. */
+static char jit_wasm_setjmp_import;
+#endif
+
 static void *jit_import_resolver (const char *name) {
 #ifdef __EMSCRIPTEN__
   if (jit_wasm_refuses (name)) return NULL;
+  if (strcmp (name, "setjmp") == 0 || strcmp (name, "_setjmp") == 0)
+    return &jit_wasm_setjmp_import;
 #endif
   for (size_t i = 0; i < sizeof JIT_SHIMS / sizeof JIT_SHIMS[0]; i++)
     if (strcmp (name, JIT_SHIMS[i].name) == 0) return JIT_SHIMS[i].addr;
@@ -1191,6 +1201,20 @@ static int jit_compile_and_link (const char *csrc, size_t csrc_len,
   g_src_pos = 0;
 
   jit_timing_begin ();
+#ifdef __EMSCRIPTEN__
+  /* wasm-jit-plan 5.5: the program half's calls into the runtime take exact
+   * call_indirect stubs rather than MIR's JS trampoline (generated with the
+   * import table, tools/wasm-jit/gen-symtab.py --stubs).  The registry is
+   * the module's, so once is enough. */
+  {
+    extern void tur_wasm_jit_register_stubs (void);
+    static bool stubs_registered;
+    if (!stubs_registered) {
+      tur_wasm_jit_register_stubs ();
+      stubs_registered = true;
+    }
+  }
+#endif
   MIR_context_t ctx = MIR_init ();
   MIR_set_error_func (ctx, jit_mir_error);
   g_jit_err_active = 1;

@@ -112,10 +112,12 @@ for _attempt in 1 2 3 4 5 6 7 8; do
   python3 "$HERE/gen-symtab.py" "$DECLS" "$OUT/nm.txt" "$SYMTAB" "$OUT/exclude.txt" \
     --header "runtime/hamt.h=$ROOT/src/runtime/hamt.h" \
     --accessors "$ROOT/src/runtime/tur_tls.c" \
-    --wasm-objects "$OUT/runtime-objects.txt" "$OUT/tur_wasm_jit_symtab_rt.c"
+    --wasm-objects "$OUT/runtime-objects.txt" "$OUT/tur_wasm_jit_symtab_rt.c" \
+    --stubs "$OUT/tur_wasm_jit_stubs.c"
   # shellcheck disable=SC2086
   if emcc -c "$SYMTAB" -o "$OUT/symtab.o" $RT_FLAGS -w 2> "$OUT/symtab-cc.log" \
-     && emcc -c "$OUT/tur_wasm_jit_symtab_rt.c" -o "$OUT/symtab_rt.o" -O2 -w 2>> "$OUT/symtab-cc.log"; then
+     && emcc -c "$OUT/tur_wasm_jit_symtab_rt.c" -o "$OUT/symtab_rt.o" -O2 -w 2>> "$OUT/symtab-cc.log" \
+     && emcc -c "$OUT/tur_wasm_jit_stubs.c" -o "$OUT/stubs.o" -O2 -w 2>> "$OUT/symtab-cc.log"; then
     symtab_ok=1
     break
   fi
@@ -145,7 +147,7 @@ cp "$ROOT/src/turi/r7rs_embed.h" "$HDR/src/turi/r7rs_embed.h"
 # --- 4. link -----------------------------------------------------------------
 EXPORTS=_turi_wasm_init,_turi_wasm_reset,_turi_wasm_eval,_turi_wasm_eval_ex,_turi_wasm_free_string,_turi_wasm_version,_turi_wasm_jit_run,_malloc,_free
 METHODS=stringToUTF8,UTF8ToString,lengthBytesUTF8,ccall,cwrap,FS,ENV,wasmTable,addFunction,stackAlloc,stackSave,stackRestore
-emcc "$OUT"/obj/*.o "$OUT/symtab.o" "$OUT/symtab_rt.o" -o "$OUT/turmeric-jit.js" \
+emcc "$OUT"/obj/*.o "$OUT/symtab.o" "$OUT/symtab_rt.o" "$OUT/stubs.o" -o "$OUT/turmeric-jit.js" \
   --pre-js "$PKG/stdlib.data.js" -sFORCE_FILESYSTEM=1 \
   --embed-file "$HDR/sysinclude@/sysinclude" \
   --embed-file "$HDR/src@/src" \
