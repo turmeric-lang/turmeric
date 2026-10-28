@@ -272,6 +272,70 @@ else
     fail "TUR_TEST_SHARD=1/4 changed run-turi.sh's selection; it must only honor TUR_TURI_SHARD"
 fi
 
+# ---------------------------------------------------------------------------
+# And for tests/check-span-coverage.sh, sharded by TUR_SPAN_SHARD.  Its own
+# enumeration answers through TUR_SPAN_LIST=1, which needs no built `tur`.
+span_list() {
+    local out="$1"; shift
+    if env "$@" TUR_SPAN_LIST=1 bash tests/check-span-coverage.sh > "$out" 2> "$out.err"; then
+        return 0
+    fi
+    echo "FAIL run-shard-partition -- check-span-coverage.sh exited non-zero while listing"
+    echo "  env: $*"
+    head -6 "$out.err" 2>/dev/null | sed 's/^/    /'
+    exit 1
+}
+
+span_partition() {
+    local n="$1"
+    local full="$WORK/span-full"
+    span_list "$full"
+    sort "$full" -o "$full"
+    local total; total=$(wc -l < "$full" | tr -d ' ')
+    if [ "$total" -lt 2 ]; then
+        fail "span N=$n: enumerated $total fixtures; nothing to partition"
+        return
+    fi
+    : > "$WORK/span-union"
+    local i
+    for i in $(seq 1 "$n"); do
+        span_list "$WORK/span-$n-$i" "TUR_SPAN_SHARD=$i/$n"
+        cat "$WORK/span-$n-$i" >> "$WORK/span-union"
+    done
+    sort "$WORK/span-union" -o "$WORK/span-union"
+    local dupes missing extra
+    dupes=$(uniq -d < "$WORK/span-union")
+    missing=$(comm -23 "$full" "$WORK/span-union")
+    extra=$(comm -13 "$full" "$WORK/span-union")
+    if [ -n "$dupes" ]; then
+        fail "span N=$n: $(printf '%s\n' "$dupes" | wc -l | tr -d ' ') fixture(s) in more than one shard"
+        printf '%s\n' "$dupes" | head -5 | sed 's/^/    - /'
+    fi
+    if [ -n "$missing" ]; then
+        fail "span N=$n: $(printf '%s\n' "$missing" | wc -l | tr -d ' ') fixture(s) in NO shard"
+        printf '%s\n' "$missing" | head -5 | sed 's/^/    - /'
+    fi
+    if [ -n "$extra" ]; then
+        fail "span N=$n: $(printf '%s\n' "$extra" | wc -l | tr -d ' ') fixture(s) in a shard but not in the full run"
+    fi
+    if [ -z "$dupes" ] && [ -z "$missing" ] && [ -z "$extra" ]; then
+        note "  ok  span N=$n -- $total fixtures partitioned across $n shard(s)"
+    fi
+}
+
+echo
+note "check-span-coverage.sh shard partition (TUR_SPAN_SHARD, disjoint + complete):"
+for n in 1 2 3 4 7; do span_partition "$n"; done
+
+note "check-span-coverage.sh ignores TUR_TEST_SHARD and TUR_TURI_SHARD:"
+span_list "$WORK/span-whole"
+span_list "$WORK/span-foreign" "TUR_TEST_SHARD=1/4" "TUR_TURI_SHARD=1/4"
+if diff -q <(sort "$WORK/span-whole") <(sort "$WORK/span-foreign") >/dev/null; then
+    note "  ok  both left all $(wc -l < "$WORK/span-whole" | tr -d ' ') fixtures in the audit"
+else
+    fail "another harness's shard variable changed check-span-coverage.sh's selection; it must only honor TUR_SPAN_SHARD"
+fi
+
 echo
 if [ "$FAIL" -ne 0 ]; then
     echo "shard partition summary: $FAIL check(s) failed"

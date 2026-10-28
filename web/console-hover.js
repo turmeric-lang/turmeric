@@ -1,6 +1,5 @@
 // console-hover.js -- W3, doc hover in the console transcript.
 //
-//
 // This needs no markup at all, which is the whole reason it is cheap.
 // appendToConsole inserts HTML it built itself and console lines are ordinary
 // text nodes, so caretPositionFromPoint lands on the right node without a span
@@ -13,14 +12,8 @@
 // program that printed the word "println" is a lie about what that text is.
 
 import { debounce } from './storage.js';
+import { docNames, wasmDocLookup } from './doc-panel.js';
 
-// The documented names and the doc lookup, from main.js. Set by
-// initConsoleHover().
-let deps = { getDocNames: () => [], wasmDocLookup: () => Promise.resolve(null) };
-
-/**
- * REPL input at the bottom of the console
- */
 const CONSOLE_IDENT = /[A-Za-z0-9\-?!*/><+=_]/;
 
 /** The identifier under `offset` in `text`, or ''. Same character class the
@@ -70,9 +63,7 @@ function caretAt(x, y) {
     return null;
 }
 
-/** Wire the transcript hover. `getDocNames` and `wasmDocLookup` come from main.js. */
-export function initConsoleHover({ getDocNames, wasmDocLookup }) {
-    deps = { getDocNames, wasmDocLookup };
+export function initConsoleHover() {
     const consoleEl = document.getElementById('console');
     if (!consoleEl) return;
 
@@ -99,9 +90,9 @@ export function initConsoleHover({ getDocNames, wasmDocLookup }) {
         const mine = ++token;
 
         let summary = null;
-        const entry = (deps.getDocNames() || []).find(d => d.name === name);
+        const entry = (docNames || []).find(d => d.name === name);
         if (entry && entry.summary) summary = entry.summary;
-        else summary = await deps.wasmDocLookup(name).catch(() => null);
+        else summary = await wasmDocLookup(name).catch(() => null);
         // A later hover already won; do not paint over it.
         if (mine !== token) return;
         if (!summary) { hide(); return; }

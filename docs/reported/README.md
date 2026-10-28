@@ -34,6 +34,12 @@ sentence above does not cover them. If you touch this file, check
 `ls docs/reported/` against it -- an index that silently omits a quarter of the
 directory is worse for triage than no index.
 
+## Found landing refined-function-types-plan F1 (filed 2026-10-28)
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [turi-callcc-reclaim-depends-on-type-size](turi-callcc-reclaim-depends-on-type-size.md) | low-medium (test fragility) | `tur_turi_callcc_reclaim` failed (+51 MB stored-continuation growth, bound 28) when only `sizeof(Type)` grew 128 -> 160 bytes, and passed again at 128. The sweep freed fewer images, which looks like a stale conservative stack root; unconfirmed |
+
 ## Found running the corpus through the browser JIT module (filed 2026-10-28)
 
 | Report | Severity | One line |
@@ -94,7 +100,7 @@ directory is worse for triage than no index.
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [installed-bin-entry-modules-still-importable](installed-bin-entry-modules-still-importable.md) | low-medium (silent wrong resolution) | The conflict check skips `:bin` entry files, but `spice_search` still puts them on the path, so a project-less `(import main)` picks the first installed tool's entry and hides the rest. A bin-name collision between `--path` installs is also refused as "not owned by tur" |
+| ~~[installed-bin-entry-modules-still-importable](../archive/installed-bin-entry-modules-still-importable.md)~~ | low-medium (silent wrong resolution) | **RESOLVED 2026-10-28** (archived): NB0 of namespaced-spice-binaries-plan hides `:bin` entry files from the search path and asks the registry first. Original: The conflict check skips `:bin` entry files, but `spice_search` still puts them on the path, so a project-less `(import main)` picks the first installed tool's entry and hides the rest. A bin-name collision between `--path` installs is also refused as "not owned by tur" |
 
 ## Found checking two agent claims: wasm stack depth, diag file 0 (filed 2026-10-24)
 

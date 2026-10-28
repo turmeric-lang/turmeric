@@ -1,0 +1,31 @@
+;; refined-function-types-plan F3: the contravariant check where a function
+;; value meets a refined function type -- the coercions that HOLD, plus the
+;; ones the plan keeps silent.  Built with --strict-refine, so any undecided
+;; pair would fail the build; unexpected.stderr pins that nothing reports.
+;;
+;; Row 1 of the plan's table: a function that accepts MORE than the type
+;; requires (`NonZero` where the slot promises `Pos`).  Row 3: a function that
+;; delivers MORE than the type requires (`Pos` where the slot wants `NonZero`).
+;; D2: an UNREFINED slot is not checked at all, even for a refined function --
+;; its own entry check is the guard, exactly as before the plan.
+(defn nz-param [x : #refine{ v : int | (not= v 0) }] : int (* x 3))
+(defn pos-result [x : int] : #refine{ r : int | (> r 0) }
+  (if (> x 0) x (- 1 x)))
+(defn plain [x : int] : int x)
+
+(defn take-pos-param [f : (fn [#refine{ v : int | (> v 0) }] int)] : int (f 2))
+(defn take-nz-result [f : (fn [int] #refine{ r : int | (not= r 0) })] : int (f -4))
+(defn take-any [f : (fn [int] int)] : int (f 7))
+(defstruct Holder [f : (fn [#refine{ v : int | (> v 0) }] int)])
+
+(defn pick [b : bool] : (fn [#refine{ v : int | (> v 0) }] int)
+  (if b nz-param plain))
+
+(defn main [] : int
+  (println (take-pos-param nz-param))                                  ; row 1
+  (println (take-nz-result pos-result))                                ; row 3
+  (println (take-any nz-param))                                        ; D2
+  (println (take-pos-param (fn [x : #refine{ v : int | (>= v 0) }] : int x)))
+  (println ((.f (Holder nz-param)) 5))
+  (println ((pick true) 1))
+  0)

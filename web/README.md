@@ -161,18 +161,27 @@ web/
 ├── home.css, tour.css, trowel.css, roadmap.css, ci-metrics.css  # one per page
 ├── styles.css          # the playground's own layout and tokens
 ├── site.js             # <site-nav>, <site-footer>, <site-sidebar>, Prism
-├── main.js             # the playground: startup, eval worker, tabs, REPL,
-│                       #   language server, language picker, doc panel
-├── storage.js          # localStorage helpers, STORAGE_KEYS
+├── main.js             # the playground's entry point: boots the Worker,
+│                       #   creates the editor, wires the controls
+├── eval-client.js      # the eval Worker: its state, send(), the router
+├── session.js          # Run, Format, the Run queue, :reset, Stop (W-3)
+├── tabs.js             # the tab set, its models, the tab bar, jump-back
+├── repl.js             # the prompt and its `:` commands
+├── lsp.js, lsp-ref.js  # booting the language server; its client
 ├── editor-ref.js       # the live Monaco editor, for the modules below
 ├── editor-language.js  # the Turmeric language and tokenizer for Monaco
 ├── editor-theme.js     # Monaco themes (checked against editor-palette.json)
+├── lang-picker.js      # the #lang picker, parseLangDirective()
 ├── docs-pane.js        # the in-app docs browser
+├── doc-panel.js        # the doc panel and the doc / type-of lookups
 ├── trace.js            # the time-travel timeline
+├── project.js          # Download / Open a project (.zip)
+├── console.js, status.js  # the console transcript; the status bar
+├── share.js, pwa-update.js, pwa-install.js  # share links; the service worker
 ├── outline.js, minimap.js, split-handle.js, hscroll-drag.js,
-│   console-hover.js, pwa-install.js   # one playground feature each
-├── examples.js, zip.js, console-runs.js, hash-params.js, html.js,
-│   share-codec.js      # data and helpers with no DOM state of their own
+│   console-hover.js    # one playground feature each
+├── config.js, storage.js, examples.js, zip.js, console-runs.js,
+│   hash-params.js, html.js, share-codec.js  # settings, data, helpers
 ├── lsp-client.js       # Monaco adapter for the language server
 ├── package.json        # Node dependencies
 ├── vite.config.js      # Vite build configuration
@@ -184,7 +193,7 @@ web/
 
 ## Configuration
 
-The web REPL can be configured via the `CONFIG` object in `main.js`:
+The web REPL can be configured via the `CONFIG` object in `config.js`:
 
 ```javascript
 const CONFIG = {
@@ -197,7 +206,7 @@ const CONFIG = {
 `EXECUTION_TIMEOUT` is how long one request may keep the eval worker busy. A
 **Stop** button appears after a second; at the limit the page stops the worker
 itself. Either way the worker is terminated and a fresh one booted, so the
-session's definitions are lost (`stopEvalWorker` in `main.js`).
+session's definitions are lost (`stopEvalWorker` in `session.js`).
 
 ## Content-Security-Policy
 

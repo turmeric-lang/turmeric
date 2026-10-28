@@ -7,7 +7,7 @@ async function gotoTry(page) {
     await page.waitForFunction(() => !!window._turiTabs);
 }
 
-// Minimal store-only ZIP reader. Mirrors the writer in main.js -- we only
+// Minimal store-only ZIP reader. Mirrors the writer in zip.js -- we only
 // support entries with method 0 (store), which is everything our writer
 // produces. Returns { [path]: Uint8Array }.
 function readStoreZip(bytes) {

@@ -673,7 +673,7 @@ Type *rc_family_type_from_keyword_name(Elab *e, const char *name, uint32_t len,
 /* Peel a contract written in TYPE-ARGUMENT position -- `(Box #refine{...})`.
  *
  * This is the fifth annotation site to need a peel (the comment above
- * reject_fn_type_contract counts the first four).  Storing the TY_CONTRACT node
+ * fn_type_slot_contract counts the first four).  Storing the TY_CONTRACT node
  * whole is what the old behavior did, and nothing between here and codegen
  * peeled it, so the payload a `match` arm binds stayed contract-typed and every
  * ordinary use of it failed: operator lookup (TUR-E0006), overload resolution,
@@ -707,10 +707,108 @@ Type *rt_peel_type_arg_contract(Type *arg_type, Span at) {
     return peeled;
 }
 
-static void reject_fn_type_contract(Elab *e, Type *t, const Form *slot,
-                                    const char *what) {
-    (void)e;
-    if (!t || t->kind != TY_CONTRACT || !slot) return;
+/* refined-function-types-plan D3: a refinement inside a `(fn ...)` type may
+ * mention only its OWN bound variable.  The type's parameters are unnamed, so
+ * there is nothing else of the function it could name; a symbol that is
+ * neither the variable nor a global is a sibling parameter or a local of the
+ * enclosing definition -- a dependent refinement, which needs named parameters
+ * in function types (deferred).  Rejected rather than accepted, because the
+ * type escapes the scope that gives the name its meaning.
+ *
+ * Heads are callees (`(> v 0)`) and are not checked; `let` binders inside the
+ * predicate are its own names.  Returns the first offending symbol, or NULL. */
+static const Form *fn_refine_foreign_sym(Elab *e, const Form *f, const char *var,
+                                         const Symbol **bound, uint32_t n_bound,
+                                         uint32_t depth) {
+    if (!f || depth > 64) return NULL;
+    if (f->tag == F_SYM && f->as.sym && f->as.sym->name) {
+        const char *nm = f->as.sym->name;
+        if (var && strcmp(nm, var) == 0) return NULL;
+        if (strcmp(nm, "true") == 0 || strcmp(nm, "false") == 0 ||
+            strcmp(nm, "nil") == 0) return NULL;
+        for (uint32_t i = 0; i < n_bound; i++) if (bound[i] == f->as.sym) return NULL;
+        const Binding *b = scope_lookup(e->scope, f->as.sym);
+        if (b && b->is_global) return NULL;
+        return f;
+    }
+    if (f->tag == F_TYPE_ANN && f->as.list.len > 0)
+        return fn_refine_foreign_sym(e, f->as.list.items[0], var, bound, n_bound,
+                                     depth + 1);
+    if (f->tag != F_LIST && f->tag != F_VEC) return NULL;
+    const Symbol *nb[32];
+    uint32_t nn = n_bound < 24 ? n_bound : 24;
+    for (uint32_t i = 0; i < nn; i++) nb[i] = bound[i];
+    uint32_t first = 0;
+    if (f->tag == F_LIST && f->as.list.len > 0) {
+        const Form *h = f->as.list.items[0];
+        first = 1;
+        if (h->tag == F_SYM && h->as.sym && h->as.sym->name &&
+            (strcmp(h->as.sym->name, "let") == 0 ||
+             strcmp(h->as.sym->name, "let*") == 0) &&
+            f->as.list.len > 1 && f->as.list.items[1]->tag == F_VEC) {
+            const Form *bv = f->as.list.items[1];
+            for (uint32_t i = 0; i + 1 < bv->as.list.len; i += 2) {
+                const Form *bn = bv->as.list.items[i];
+                if (bn->tag == F_SYM && nn < 32) nb[nn++] = bn->as.sym;
+                const Form *bad = fn_refine_foreign_sym(e, bv->as.list.items[i + 1],
+                                                        var, nb, nn, depth + 1);
+                if (bad) return bad;
+            }
+            first = 2;
+        }
+    }
+    for (uint32_t i = first; i < f->as.list.len; i++) {
+        const Form *bad = fn_refine_foreign_sym(e, f->as.list.items[i], var, nb, nn,
+                                                depth + 1);
+        if (bad) return bad;
+    }
+    return NULL;
+}
+
+/* A refinement written on a slot of a `(fn ...)` / `(c-fn ...)` type.
+ *
+ * Gate off (and always for `c-fn`, which has no Turmeric entry checks to fall
+ * back on -- plan D6): TUR-E0378, recovering to the base type.
+ *
+ * Gate on (`--enable=refined-fn-types`): the contract is PEELED to its base
+ * type, which is what the type system sees, and the predicate is handed back
+ * in `*out_pred` / `*out_var` to ride on the TY_FN as a side-car (plan D1).
+ * Returns true exactly when it recorded one. */
+static bool fn_type_slot_contract(Elab *e, Type *t, const Form *slot,
+                                  const char *what, bool is_cfnptr,
+                                  const Form **out_pred, const char **out_var) {
+    if (!t || t->kind != TY_CONTRACT || !slot) return false;
+    if (g_opt_refined_fn_types && !is_cfnptr && t->as.contract_.base_type) {
+        const Form *pred = t->as.contract_.predicate;
+        const char *var  = t->as.contract_.var_name;
+        const Form *bad  = fn_refine_foreign_sym(e, pred, var, NULL, 0, 0);
+        if (bad) {
+            diag_emit_with_code(DIAG_ERROR, bad->span, TUR_E0378_REFINE_IN_FN_TYPE,
+                                "a refinement on the %s of a (fn ...) type can "
+                                "mention only its own variable '%s', not '%s'",
+                                what, var ? var : "?", bad->as.sym->name);
+            diag_emit(DIAG_NOTE, slot->span,
+                      "the parameters of a function type are unnamed, so a "
+                      "refinement that depends on another value needs named "
+                      "parameters in function types, which are not supported "
+                      "yet (refined-function-types-plan D3)");
+            *t = *t->as.contract_.base_type;
+            return false;
+        }
+        experiment_warn_if_used("refined-fn-types");
+        *out_pred = pred;
+        *out_var  = var;
+        *t = *t->as.contract_.base_type;
+        return true;
+    }
+    if (is_cfnptr) {
+        diag_emit_with_code(DIAG_ERROR, slot->span, TUR_E0378_REFINE_IN_FN_TYPE,
+                            "a refinement cannot be written on the %s of a "
+                            "(c-fn ...) type; a bare C function pointer has no "
+                            "entry checks to enforce it", what);
+        if (t->as.contract_.base_type) *t = *t->as.contract_.base_type;
+        return false;
+    }
     diag_emit_with_code(DIAG_ERROR, slot->span, TUR_E0378_REFINE_IN_FN_TYPE,
                         "a refinement cannot be written on the %s of a "
                         "(fn ...) type; function types do not carry "
@@ -719,13 +817,15 @@ static void reject_fn_type_contract(Elab *e, Type *t, const Form *slot,
               "a function value with refined parameters can still be passed "
               "and called -- its own entry checks run -- but the refinement "
               "is not visible through the function type, so the call is "
-              "checked at run time rather than statically");
+              "checked at run time rather than statically; "
+              "--enable=refined-fn-types lets the type carry it");
     /* Recover to the BASE type.  The compile already fails on the error above,
      * so this cannot make a bad program compile; what it prevents is the
      * cascade -- a surviving TY_CONTRACT makes every use of the value report
      * `expected { _ : ? | ... }, got int`, which is the confusing message this
      * diagnostic exists to replace, not to accompany. */
     if (t->as.contract_.base_type) *t = *t->as.contract_.base_type;
+    return false;
 }
 
 static void reject_fn_type_colon(Elab *e, const Form *slot) {
@@ -1735,6 +1835,13 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
             memset(fn_arg_full, 0, sizeof(fn_arg_full));
             memset(fn_arg_borrow, 0, sizeof(fn_arg_borrow));
             uint32_t vec_i = 0;
+            /* refined-fn-types D1: per-slot predicates, filled by
+             * fn_type_slot_contract when the gate is on. */
+            const Form *fn_arg_pred[MAX_FN_ARITY];
+            const char *fn_arg_pvar[MAX_FN_ARITY];
+            bool any_refined_arg = false;
+            memset(fn_arg_pred, 0, sizeof(fn_arg_pred));
+            memset(fn_arg_pvar, 0, sizeof(fn_arg_pvar));
             for (uint32_t pi2 = 0; pi2 < n_fn_args && pi2 < MAX_FN_ARITY; pi2++) {
                 while (params_vec->as.list.items[vec_i]->tag == F_SYM &&
                        params_vec->as.list.items[vec_i]->as.sym == e->sym_caret_borrow) {
@@ -1746,8 +1853,9 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
                 reject_fn_type_colon(e, slot_form);
                 Type *at = type_expr_from_form(e, slot_form,
                                                rec_name, type_params, type_param_kinds, n_type_params);
-                reject_fn_type_contract(e, at, slot_form,
-                                        "parameter");
+                if (fn_type_slot_contract(e, at, slot_form, "parameter", is_cfnptr,
+                                          &fn_arg_pred[pi2], &fn_arg_pvar[pi2]))
+                    any_refined_arg = true;
                 fn_arg_full[pi2] = at;
                 /* Type variables map to the int64 carrier kind; use TY_INT so
                  * the fn's result_kind/arg_kinds stay consistent with the ->
@@ -1796,7 +1904,10 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
             reject_fn_type_colon(e, form->as.list.items[idx]);
             Type *ret_t = type_expr_from_form(e, form->as.list.items[idx],
                                                rec_name, type_params, type_param_kinds, n_type_params);
-            reject_fn_type_contract(e, ret_t, form->as.list.items[idx], "result");
+            const Form *fn_ret_pred = NULL;
+            const char *fn_ret_pvar = NULL;
+            (void)fn_type_slot_contract(e, ret_t, form->as.list.items[idx], "result",
+                                        is_cfnptr, &fn_ret_pred, &fn_ret_pvar);
             /* The return type is the LAST element.  Anything after it used to be
              * dropped without a word -- notably an effect row written after the
              * result, `(fn [B] B #fx{E})`, which then typed the parameter as
@@ -1862,6 +1973,27 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
             /* typed-c-abi-function-pointers: a (c-fn ...) is a bare C function
              * pointer, never a closure box. */
             fn_t->as.fn.cfnptr = is_cfnptr;
+            /* refined-fn-types D1: the side-car refinements.  Set last, on the
+             * finished type, so nothing above can branch on them. */
+            if (any_refined_arg || fn_ret_pred) {
+                FnRefinements *fr = (FnRefinements *)arena_alloc(e->arena, sizeof(*fr));
+                memset(fr, 0, sizeof(*fr));
+                if (any_refined_arg) {
+                    const Form **pp = (const Form **)arena_alloc(e->arena,
+                                                                 n_fn_args * sizeof(Form *));
+                    const char **pv = (const char **)arena_alloc(e->arena,
+                                                                 n_fn_args * sizeof(char *));
+                    for (uint32_t i = 0; i < n_fn_args; i++) {
+                        pp[i] = i < MAX_FN_ARITY ? fn_arg_pred[i] : NULL;
+                        pv[i] = i < MAX_FN_ARITY ? fn_arg_pvar[i] : NULL;
+                    }
+                    fr->param_preds = pp;
+                    fr->param_vars  = pv;
+                }
+                fr->result_pred = fn_ret_pred;
+                fr->result_var  = fn_ret_pvar;
+                fn_t->as.fn.refine = fr;
+            }
             return fn_t;
         }
 

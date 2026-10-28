@@ -484,7 +484,7 @@ so a hard external dependency on the compiler's critical path.
 | Phase | Status after v4 (at deferral) | Status now |
 |---|---|---|
 | Syntax (`#refine{ x : T \| p }`) | Done -- Contract Types use the same syntax | Same syntax, shared |
-| Subtyping | Half done: a refined value could already be used as its base type (`#refine{ x : T \| p }` is a subtype of `T`). Checking one refinement against another (`p` implies `q`) needed a prover | Done for values: the solver proves `p` implies `q` wherever a value crosses into a refined type. Open for function types: see below |
+| Subtyping | Half done: a refined value could already be used as its base type (`#refine{ x : T \| p }` is a subtype of `T`). Checking one refinement against another (`p` implies `q`) needed a prover | Done for values: the solver proves `p` implies `q` wherever a value crosses into a refined type. Function types: prototype behind `--enable=refined-fn-types`, see below |
 | Runtime check insertion | Done -- Contract Types already do this | Unchanged; proved checks are now elided |
 | FFI boundary annotation | Done -- Contract Types CT4 covers this | Unchanged |
 | Predicate propagation + SMT | The gap | Done -- the in-house solver chain described below |
@@ -498,14 +498,16 @@ refinements. Passing an `x > 0` value where `2x > 0` is required means proving
 that one predicate implies the other. That is *entailment*: the missing
 prover, and the same gap the last row names.
 
-One subtyping case is still open: **function types.** A `(fn ...)` type cannot
-carry a refinement today (`TUR-E0378`). So there is no check that a function
-passed into a slot of refined function type accepts at least the arguments
-the slot promises (parameters are *contravariant*) and delivers at least the
-result the slot promises (the result is *covariant*). The compiler runs
-exactly that check between a typeclass instance and its class signature
-(`TUR-E0374`); extending it to function values is planned in
-[refined-function-types-plan](https://github.com/turmeric-lang/turmeric/blob/main/docs/upcoming/refined-function-types-plan.md).
+One subtyping case is still behind a gate: **function types.** By default a
+`(fn ...)` type cannot carry a refinement (`TUR-E0378`). With
+`--enable=refined-fn-types` it can, and a function passed into a slot of
+refined function type is checked to accept at least the arguments the slot
+promises (parameters are *contravariant*, `TUR-E0386`) and to deliver at least
+the result the slot promises (the result is *covariant*, `TUR-E0387`). It is
+the check the compiler already ran between a typeclass instance and its class
+signature (`TUR-E0374`), lifted into one helper both use. See
+[refined-function-types-plan](https://github.com/turmeric-lang/turmeric/blob/main/docs/upcoming/refined-function-types-plan.md)
+for what remains before it graduates.
 
 So the gap was well-defined and separable from the rest of the type system.
 What made it look expensive was the solver.

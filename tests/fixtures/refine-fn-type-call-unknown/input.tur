@@ -1,0 +1,19 @@
+;; refined-function-types-plan F2: an argument at a call through a refined
+;; function type that the solver cannot decide.  Unlike a direct call -- where
+;; the callee's own entry check is the guard and an undecided argument is
+;; silent -- this call ADDS a check, so it always reports TUR-W0372 ("lenient
+;; on severity, loud on visibility", open question 5).
+;;
+;; The added check is what gives the type's refinement a run-time meaning:
+;; `loose` itself accepts zero, so without it `(apply-any loose 0)` would pass
+;; a zero the type forbids.  The panic names the call -- the holder of `f` that
+;; broke `f`'s type -- not `loose`.
+(defn loose [a : int b : int] : int (+ a b))
+
+(defn apply-any [f : (fn [int #refine{ v : int | (not= v 0) }] int) x : int] : int
+  (f 10 (+ x 0)))
+
+(defn main [] : int
+  (println (apply-any loose 3))
+  (println (apply-any loose 0))
+  0)

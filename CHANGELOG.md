@@ -2,6 +2,29 @@
 
 All notable changes to Turmeric are documented here.
 
+## [Unreleased]
+
+### Changed
+
+- **A bin-name collision no longer fails `tur install`.** When another
+  installed spice already provides `tur-foo`, the new spice installs with a
+  warning: its `tur-foo` is built but not linked, and its modules are
+  importable as usual. `tur <spice>/<bin>` (and `tur x <spice>/<bin>`) runs a
+  given spice's binary whichever spice holds the bare name, and
+  `tur install --link <spice>/<bin>` moves the bare name without rebuilding.
+  `tur uninstall` of the holder leaves the name unlinked rather than promoting
+  another provider. `state.tur` records each bin's `:linked` flag; an older
+  registry reads as all-linked. `tur list` marks a shadowed bin, and
+  `tur list --json` adds a `"bins"` list with the flags.
+
+### Fixed
+
+- **A tool's `:bin` entry file is no longer importable.** Outside a project,
+  `(import main)` silently resolved to the first installed tool's
+  `src/main.tur`; inside a project, to a `:spices` dependency's. An entry file
+  is a program, so it now reports `module 'main' not found`, matching the
+  install-time module conflict check that already skipped it.
+
 ## [0.71.2] -- 2026-10-27
 
 ### Changed

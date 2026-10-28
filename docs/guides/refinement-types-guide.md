@@ -1136,20 +1136,21 @@ anyway.
 - **[by design] A callee's entry check is never elided.** See above -- the call-site layer
   reports, it does not remove the callee's guard. Whole-program elision is a
   separate piece of work with real soundness preconditions.
-- **[prototype] Higher-order callees are not checked.** A function-typed parameter carries no refinements in its type, so
+- **[prototype] Higher-order callees are checked only behind `--enable=refined-fn-types`.**
+  By default a function-typed parameter carries no refinements in its type, so
   `(defn apply2 [f : (fn [int int] int) ...])` cannot know what `f`'s arguments
   must satisfy, and neither can a call to `apply2`. Passing a refined function
   as a value is legal and the callee's own entry checks still run, so nothing
   unsound follows -- only the static crossing is lost.
 
-  What *does* work, and is worth knowing before assuming the limit is wider
-  than it is: a direct call, a call through an alias of a global
+  What *does* work without the gate, and is worth knowing before assuming the
+  limit is wider than it is: a direct call, a call through an alias of a global
   (`(let [g safe-div] (g 10 0))`), and a call to a lambda with refined
   parameters are all checked. The gap is specifically a value reached through a
-  function-typed parameter.
+  function-typed binding.
 
-  Writing the refinement into the function type is **rejected** with
-  `TUR-E0378`, not ignored:
+  Without the gate, writing the refinement into the function type is
+  **rejected** with `TUR-E0378`, not ignored:
 
   ```turmeric
   (defn apply2 [f : (fn [int #refine{ v : int | (not= v 0) }] int)] : int ...)
@@ -1157,10 +1158,39 @@ anyway.
   ;; (fn ...) type; function types do not carry refinements
   ```
 
-  Closing the gap needs refinements to be part of function types, with the
-  contravariant subtyping check that implies -- a type-system change the
-  prototype excludes. The design is drafted in
-  [refined-function-types-plan](https://github.com/turmeric-lang/turmeric/blob/main/docs/upcoming/refined-function-types-plan.md).
+  With `--enable=refined-fn-types` (prototype,
+  [refined-function-types-plan](https://github.com/turmeric-lang/turmeric/blob/main/docs/upcoming/refined-function-types-plan.md))
+  the same type is accepted, and it is checked in both directions:
+
+  - **A call through it** -- `(f 10 x)` -- is a crossing. A closed refutation
+    (`(f 10 0)`) is `TUR-E0371`; anything else that is not proved is
+    `TUR-W0372`, always, because the call gains a check of its own: the real
+    function's entry check enforces *its* refinement, which may be weaker than
+    the type's. The check is elided when the argument is proved, and its panic
+    names the call ("Contract violated by argument 2 of the call through
+    'f'"), not the function behind `f`. A result refinement is checked after
+    every such call and is then a hypothesis about the call's value -- under
+    `--no-contracts` neither happens.
+  - **A function value meeting the type** -- a call argument, a lambda, an
+    annotated `let` or `def`, a `defn` result, a constructor argument or a
+    `set!` into a field -- is checked contravariantly: parameters
+    `T.p |- S.p` (refuted: `TUR-E0386`), the result `S.r |- T.r` (refuted:
+    `TUR-E0387`), undecided `TUR-W0372`. A position the type leaves unrefined
+    is not checked at all, so existing higher-order APIs keep accepting refined
+    functions; `--warn-unrefined-fn-slot` (`TUR-W0388`) points those out.
+
+  ```turmeric
+  (defn pos-param [x : #refine{ v : int | (> v 0) }] : int x)
+  (defn apply-nz [f : (fn [#refine{ v : int | (not= v 0) }] int)] : int (f -1))
+  (apply-nz pos-param)   ; TUR-E0386: -1 is non-zero but not positive
+  ```
+
+  Still out of scope with the gate on: a refinement that mentions anything but
+  its own variable (the type's parameters are unnamed, so a dependent
+  refinement is `TUR-E0378`); `(c-fn ...)` types, which have no entry checks to
+  fall back on (`TUR-E0378`); function types in type-argument position
+  (`TUR-W0380`); and partial or over-application through a refined binding,
+  which is left to the function's own entry checks.
 
 - **[by design] An instance that explicitly demands less is checked against its own,
   weaker, predicate at a statically-resolved site** -- deliberately, since it

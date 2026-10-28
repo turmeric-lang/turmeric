@@ -114,6 +114,10 @@ static int tur_main_inner(int argc, char **argv) {
     /* script-spice-deps-plan SD-D6: `tur report.tur a b` runs the script --
      * after the built-ins (which always win), before `tur-<cmd>` lookup. */
     if (drv_is_script_word(argv[1])) return drv_run_script(argc, argv);
+    /* namespaced-spice-binaries D3: `tur alpha/foo` is installed spice
+     * alpha's tur-foo.  An existing file of that name stays a script. */
+    if (drv_qualified_bin_shaped(argv[1]))
+        return drv_run_qualified_bin("tur", argv[1], argv + 2, argc - 2);
     if (drv_script_word_shaped(argv[1])) {
         fprintf(stderr, "tur: no such file '%s' (and no command of that name). "
                         "See 'tur --help'.\n", argv[1]);

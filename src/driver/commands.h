@@ -67,6 +67,12 @@ int drv_run_program(const char *engine, const char *entry,
 
 /* == driver/cmd_x.c ======================================================== */
 int cmd_x(int argc, char **argv);
+/* namespaced-spice-binaries D3: `<spice>/<bin>` -- one `/`, a name on each
+ * side -- runs that installed spice's binary whether or not it holds the
+ * bare name.  `tur <spice>/<bin>` and `tur x <spice>/<bin>` share it. */
+bool drv_qualified_bin_shaped(const char *w);
+int  drv_run_qualified_bin(const char *who, const char *word,
+                           char **prog_argv, int prog_argc);
 
 /* == driver/jit.c ========================================================== */
 int cmd_jit(int argc, char **argv);

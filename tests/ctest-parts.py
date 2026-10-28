@@ -75,14 +75,24 @@ PARTS = {
     },
     "macos": {
         "fixtures": ("include", r"^tur_tests$"),
-        "r7rs":     ("include", r"r7rs"),
-        # tur_generic_spec_matrix and turi_fixture_tests stay INSIDE aux here,
-        # each running one quarter of its work (TUR_GSM_SHARD / TUR_TURI_SHARD),
-        # so macOS keeps arm64 coverage of both without a fourth macOS job
-        # queueing behind the first three.  The other three quarters are the
-        # nightly's job.  tur_shard_partition is excluded outright -- see
+        # tur_generic_spec_matrix rides in the r7rs job here, at one quarter of
+        # its cells (TUR_GSM_SHARD), and turi_fixture_tests stays in aux at one
+        # quarter (TUR_TURI_SHARD), so macOS keeps arm64 coverage of both
+        # without a fourth macOS job queueing behind the first three.  The
+        # other three quarters are the nightly's job.
+        #
+        # Why r7rs and not aux: both are RUN_SERIAL, so inside aux they were a
+        # chain run after the ~160 parallel suites.  Measured on 2026-10-28
+        # (run 40638769775): aux's ctest step took 1329 s, which was the
+        # parallel phase (649 s), then the matrix quarter alone (559 s), then
+        # the turi quarter alone (115 s).  The r7rs job's ctest step took
+        # 240 s.  Running the matrix in r7rs brings the two jobs to roughly
+        # 765 s and 800 s instead of 1329 s and 240 s.
+        "r7rs":     ("include", r"r7rs|^tur_generic_spec_matrix$"),
+        # tur_span_coverage also runs a quarter here (TUR_SPAN_SHARD); see
+        # SAMPLED.  tur_shard_partition is excluded outright -- see
         # LEG_INVARIANT, it cannot answer differently here.
-        "aux":      ("exclude", r"^tur_tests$|r7rs|^tur_emitted_float_conversions$|^tur_shard_partition$|^tur_jit_fixture_tests$|^tur_repl_spice_jit$"),
+        "aux":      ("exclude", r"^tur_tests$|r7rs|^tur_generic_spec_matrix$|^tur_emitted_float_conversions$|^tur_shard_partition$|^tur_jit_fixture_tests$|^tur_repl_spice_jit$"),
     },
 }
 
@@ -113,17 +123,27 @@ SAMPLED = {
             "4066 cells that each compile and RUN a program, and the bug class "
             "is ABI-sensitive, so arm64 coverage is load-bearing -- but a "
             "fourth macOS job would queue 40+ min behind the first three.  A "
-            "quarter per PR, all of it nightly.",
+            "quarter per PR, in the r7rs part, and all of it nightly.",
         ),
         "turi_fixture_tests": (
             "1/4",
             "the fixture corpus through the tree-walking interpreter: 283s on "
-            "macOS and, with the matrix sharded, the last RUN_SERIAL barrier in "
-            "the aux part.  It executes programs, so arm64 is worth sampling "
+            "macOS and, with the matrix moved to the r7rs part, the last "
+            "RUN_SERIAL barrier in the aux part.  It executes programs, so arm64 is worth sampling "
             "rather than dropping -- but the compiled path already runs the same "
             "corpus in full on both legs, so the marginal per-PR value of a "
             "second macOS engine pass over it is low.  A quarter per PR, all of "
             "it nightly.",
+        ),
+        "tur_span_coverage": (
+            "1/4",
+            "`tur audit-spans` over every fixture: 431s on macOS on 2026-10-28, "
+            "the longest suite in the aux part's parallel phase once the matrix "
+            "moved to r7rs, so it set that phase's length.  It elaborates and "
+            "never compiles or runs, so the platform can only reach it through "
+            "platform-conditional source -- not enough to call it LEG_INVARIANT, "
+            "little enough that a quarter per PR is a fair sample.  Linux runs "
+            "it in full per PR; all of it nightly on arm64.",
         ),
     },
     "linux": {},
@@ -198,6 +218,7 @@ CI_WORKFLOW = os.path.join(".github", "workflows", "ci.yml")
 SAMPLE_VARS = {
     "tur_generic_spec_matrix": "TUR_GSM_SHARD",
     "turi_fixture_tests": "TUR_TURI_SHARD",
+    "tur_span_coverage": "TUR_SPAN_SHARD",
 }
 
 

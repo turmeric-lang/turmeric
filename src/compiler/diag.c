@@ -407,6 +407,9 @@ const char *diag_code_to_string(DiagCode code) {
         case TUR_W0383_READS_FRAME_OMITS_MUTABLE:  return "TUR-W0383";
         case TUR_E0384_REFLECT_NOT_TOTAL:          return "TUR-E0384";
         case TUR_W0385_REFLECT_FUEL_EXHAUSTED:     return "TUR-W0385";
+        case TUR_E0386_REFINE_FN_PARAM_STRONGER:   return "TUR-E0386";
+        case TUR_E0387_REFINE_FN_RESULT_WEAKER:    return "TUR-E0387";
+        case TUR_W0388_REFINE_UNREFINED_FN_SLOT:   return "TUR-W0388";
         case TUR_E0390_CLASS_SUPERCLASS_PREAMBLE:         return "TUR-E0390";
         case TUR_E0391_CLASS_SUPERCLASS_UNRESOLVED:       return "TUR-E0391";
         case TUR_E0392_CLASS_SUPERCLASS_CYCLE:            return "TUR-E0392";
@@ -617,6 +620,9 @@ DiagCode diag_code_from_string(const char *s) {
     if (strcmp(s, "TUR-W0383") == 0) return TUR_W0383_READS_FRAME_OMITS_MUTABLE;
     if (strcmp(s, "TUR-E0384") == 0) return TUR_E0384_REFLECT_NOT_TOTAL;
     if (strcmp(s, "TUR-W0385") == 0) return TUR_W0385_REFLECT_FUEL_EXHAUSTED;
+    if (strcmp(s, "TUR-E0386") == 0) return TUR_E0386_REFINE_FN_PARAM_STRONGER;
+    if (strcmp(s, "TUR-E0387") == 0) return TUR_E0387_REFINE_FN_RESULT_WEAKER;
+    if (strcmp(s, "TUR-W0388") == 0) return TUR_W0388_REFINE_UNREFINED_FN_SLOT;
     if (strcmp(s, "TUR-E0390") == 0) return TUR_E0390_CLASS_SUPERCLASS_PREAMBLE;
     if (strcmp(s, "TUR-E0391") == 0) return TUR_E0391_CLASS_SUPERCLASS_UNRESOLVED;
     if (strcmp(s, "TUR-E0392") == 0) return TUR_E0392_CLASS_SUPERCLASS_CYCLE;
@@ -2016,10 +2022,18 @@ static const DiagExplanation diag_explanations_[] = {
       "    (defn apply1 [f : (fn [int int] int) x : int] : int (f 10 x))\n"
       "    (apply1 safe-div 0)   ; allowed; caught at run time, not compile time\n"
       "\n"
-      "Closing that gap needs refinements to be part of function types, with\n"
-      "the contravariant subtyping check that implies. Until then, options are\n"
-      "to take the value at a named type with a `defn` wrapper that carries the\n"
-      "refinement, or to accept the runtime check.\n" },
+      "--enable=refined-fn-types (prototype) lets a `(fn ...)` type carry\n"
+      "refinements: a call through such a type is checked at the call, and a\n"
+      "function value meeting it is checked contravariantly (TUR-E0386,\n"
+      "TUR-E0387).  Without it, take the value at a named type with a `defn`\n"
+      "wrapper that carries the refinement, or accept the runtime check.\n"
+      "\n"
+      "With the gate on, this code still rejects two shapes: a refinement in a\n"
+      "`(c-fn ...)` type, a bare C function pointer with no entry checks to fall\n"
+      "back on; and a refinement that mentions anything but its own variable,\n"
+      "such as a sibling parameter of the enclosing `defn` -- a function type's\n"
+      "parameters are unnamed, so that needs named parameters in function\n"
+      "types, which are not supported yet.\n" },
     { TUR_W0377_REFINE_INSTANCE_LENIENCY,
       "TUR-W0377: Call relies on instance-specific leniency\n"
       "\n"
@@ -2217,6 +2231,55 @@ static const DiagExplanation diag_explanations_[] = {
       "literal against `(> (len v) 9)` with fuel 8.  Raise the fuel, or restate\n"
       "the argument so fewer steps are needed.  Under --strict-refine this is an\n"
       "error.  Behind `--enable=reflected-measures`.\n" },
+    { TUR_E0386_REFINE_FN_PARAM_STRONGER,
+      "TUR-E0386: Function demands more of a parameter than its function type allows\n"
+      "\n"
+      "A function value flowed into a slot whose `(fn ...)` type refines one of\n"
+      "its parameters (behind --enable=refined-fn-types), and the function's own\n"
+      "refinement on that parameter is STRICTER than the type's.  Whoever holds\n"
+      "the value at the slot's type promises only the type's refinement, so the\n"
+      "function could be handed an argument it rejects.  Parameters are\n"
+      "contravariant: the function must accept at least what the type admits.\n"
+      "\n"
+      "    (defn pos-only [x : #refine{ v : int | (> v 0) }] : int x)\n"
+      "    (defn apply-nz [f : (fn [#refine{ v : int | (not= v 0) }] int)] : int\n"
+      "      (f -1))\n"
+      "    (apply-nz pos-only)   ; TUR-E0386: -1 is non-zero but not positive\n"
+      "\n"
+      "The message names a witness.  Fix it by weakening the function's\n"
+      "refinement, or strengthening the slot's.  A function that accepts MORE\n"
+      "than the type requires is fine.  When the solver can neither prove nor\n"
+      "refute the pair, the report is TUR-W0372 and the function's own entry\n"
+      "check is the guard.  The typeclass analogue is TUR-E0374.\n" },
+    { TUR_E0387_REFINE_FN_RESULT_WEAKER,
+      "TUR-E0387: Function promises less about its result than its function type requires\n"
+      "\n"
+      "A function value flowed into a slot whose `(fn ...)` type refines its\n"
+      "result (behind --enable=refined-fn-types), and the function's own result\n"
+      "refinement does not deliver it.  Whoever calls through the slot relies on\n"
+      "the type's result refinement.  Results are covariant: the function must\n"
+      "deliver at least what the type promises.\n"
+      "\n"
+      "    (defn nz [x : int] : #refine{ r : int | (not= r 0) } ...)\n"
+      "    (defn use [g : (fn [int] #refine{ r : int | (> r 0) })] : int (g 1))\n"
+      "    (use nz)   ; TUR-E0387: nz may return -1\n"
+      "\n"
+      "When the pair is undecided -- including every function with no result\n"
+      "refinement of its own -- the report is TUR-W0372 and the call through\n"
+      "the slot checks the result at run time.\n" },
+    { TUR_W0388_REFINE_UNREFINED_FN_SLOT,
+      "TUR-W0388: Refined function passed into an unrefined function slot\n"
+      "\n"
+      "Opt-in lint, enabled by --warn-unrefined-fn-slot.  A function whose\n"
+      "parameter carries a refinement flowed into a `(fn ...)`-typed slot that\n"
+      "leaves that parameter unrefined.  That is allowed -- an unrefined slot is\n"
+      "not checked (refined-function-types-plan D2), and the function's own\n"
+      "entry check still runs -- but a bad argument is then found at run time,\n"
+      "inside the function, and nothing at compile time looks at what the\n"
+      "holder of the slot passes.  Writing the refinement on the slot's type\n"
+      "(--enable=refined-fn-types) moves that check to the calls through it.\n"
+      "Only the parameter direction is linted: a refined result going into an\n"
+      "unrefined slot loses information but cannot panic.\n" },
     /* class-superclasses (docs/archive/typeclass-superclasses-plan.md) */
     { TUR_E0390_CLASS_SUPERCLASS_PREAMBLE,
       "TUR-E0390: Malformed `defclass` superclass preamble\n"

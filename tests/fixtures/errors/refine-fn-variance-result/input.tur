@@ -1,0 +1,10 @@
+;; refined-function-types-plan F3: a function that promises LESS about its
+;; result than the function type it meets requires -- row 4 of the plan's
+;; table -- is TUR-E0387.  `nz-result` may return -1, which is non-zero but not
+;; positive.
+(defn nz-result [x : int] : #refine{ r : int | (not= r 0) }
+  (if (= x 0) 1 x))
+
+(defn take-pos [f : (fn [int] #refine{ r : int | (> r 0) })] : int (f 1))
+
+(defn main [] : int (println (take-pos nz-result)) 0)

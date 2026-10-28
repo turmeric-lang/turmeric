@@ -2027,6 +2027,106 @@ static bool rt_param_rebound(const Elab *e, const Binding *p, const Form *body,
     return body && rt_form_borrows_name(e, body, p->name->name, 0);
 }
 
+/* refined-function-types-plan F2 (D4b): a function's parameters of refined
+ * function type, for the encoder.  A call through one, `(f 10 x)`, is checked
+ * against the type's result refinement right after it returns
+ * (rt_elab_refined_fn_call), so its value satisfies that refinement and may be
+ * ASSUMED to -- the same deal the class-result propagation makes.  The
+ * encoder resolves calls by name, through the global scope only, so these are
+ * answered first. */
+typedef struct RtLocalFns {
+    Elab          *e;
+    const char   **names;
+    const Type   **types;
+    uint32_t       n;
+} RtLocalFns;
+
+static bool rt_resolve_fn_with_locals(void *ud, const char *name, RefineFnInfo *out) {
+    RtLocalFns *L = (RtLocalFns *)ud;
+    for (uint32_t i = 0; name && i < L->n; i++) {
+        if (strcmp(L->names[i], name) != 0) continue;
+        const Type *ft = L->types[i];
+        memset(out, 0, sizeof(*out));
+        /* Code that runs: two calls are two values, never congruent. */
+        out->pure     = false;
+        out->ret_sort = rt_sort_of_kind(ft->as.fn.result_kind);
+        out->ret_pred = type_fn_result_pred(ft);
+        out->ret_var  = type_fn_result_var(ft);
+        return true;
+    }
+    return rt_resolve_fn(L->e, name, out);
+}
+
+/* Does `f` bind `name` anywhere -- a binding or parameter vector, or a
+ * `match` pattern?  Conservative: any vector mentioning the name counts. */
+static bool rt_form_binds_name(const Form *f, const char *name, uint32_t depth) {
+    if (!f || depth > 128) return false;
+    if (f->tag == F_SYM) return false;
+    if (f->tag == F_VEC) {
+        for (uint32_t i = 0; i < f->as.list.len; i++) {
+            const Form *x = f->as.list.items[i];
+            if (x->tag == F_SYM && x->as.sym && x->as.sym->name &&
+                strcmp(x->as.sym->name, name) == 0) return true;
+            if (rt_form_binds_name(x, name, depth + 1)) return true;
+        }
+        return false;
+    }
+    if (f->tag != F_LIST && f->tag != F_TYPE_ANN) return false;
+    bool is_match = f->tag == F_LIST && f->as.list.len > 2 &&
+                    f->as.list.items[0]->tag == F_SYM && f->as.list.items[0]->as.sym &&
+                    strcmp(f->as.list.items[0]->as.sym->name, "match") == 0;
+    for (uint32_t i = 0; i < f->as.list.len; i++) {
+        const Form *x = f->as.list.items[i];
+        if (is_match && i >= 2 && (i % 2) == 0 && x->tag != F_LIST &&
+            x->tag == F_SYM && x->as.sym && strcmp(x->as.sym->name, name) == 0)
+            return true;
+        if (is_match && i >= 2 && (i % 2) == 0 && x->tag == F_LIST) {
+            for (uint32_t j = 0; j < x->as.list.len; j++) {
+                const Form *y = x->as.list.items[j];
+                if (y->tag == F_SYM && y->as.sym && strcmp(y->as.sym->name, name) == 0)
+                    return true;
+            }
+        }
+        if (rt_form_binds_name(x, name, depth + 1)) return true;
+    }
+    return false;
+}
+
+/* Install rt_resolve_fn_with_locals on `env` when some parameter holds a
+ * function at a type with a result refinement that something enforces: the
+ * call-site result check, so not under --no-contracts.  A parameter the body
+ * rebinds (or a `^mut` one) is left out -- its name may then denote a function
+ * the type says nothing about. */
+static void rt_env_add_local_fns(Elab *e, RefineEnv *env, Binding **params,
+                                 uint32_t n_params, const Form *whole_body) {
+    if (!rt_contracts_emitted()) return;
+    uint32_t n = 0;
+    for (uint32_t i = 0; i < n_params; i++) {
+        const Type *ft = rt_binding_refined_fn_type(params[i]);
+        if (ft && type_fn_result_pred(ft) && params[i]->name &&
+            !params[i]->is_mut &&
+            !rt_form_binds_name(whole_body, params[i]->name->name, 0))
+            n++;
+    }
+    if (!n) return;
+    RtLocalFns *L = (RtLocalFns *)arena_alloc(e->arena, sizeof(*L));
+    L->e     = e;
+    L->names = (const char **)arena_alloc(e->arena, n * sizeof(char *));
+    L->types = (const Type **)arena_alloc(e->arena, n * sizeof(Type *));
+    L->n     = 0;
+    for (uint32_t i = 0; i < n_params; i++) {
+        const Type *ft = rt_binding_refined_fn_type(params[i]);
+        if (!(ft && type_fn_result_pred(ft) && params[i]->name &&
+              !params[i]->is_mut &&
+              !rt_form_binds_name(whole_body, params[i]->name->name, 0)))
+            continue;
+        L->names[L->n] = params[i]->name->name;
+        L->types[L->n] = ft;
+        L->n++;
+    }
+    refine_env_set_resolver(env, rt_resolve_fn_with_locals, L);
+}
+
 /* Build the hypothesis environment visible at a function's return point. */
 static RefineEnv *rt_build_env(Elab *e, Binding **params, uint32_t n_params,
                                const Form **ct_param_preds,
@@ -2038,6 +2138,7 @@ static RefineEnv *rt_build_env(Elab *e, Binding **params, uint32_t n_params,
     if (dropped) *dropped = false;
     RefineEnv *env = refine_env_new(e->arena);
     refine_env_set_resolver(env, rt_resolve_fn, e);
+    rt_env_add_local_fns(e, env, params, n_params, whole_body);
     for (uint32_t i = 0; i < n_params; i++) {
         if (!params[i] || !params[i]->name) continue;
         refine_env_declare(env, params[i]->name->name,
@@ -4581,6 +4682,8 @@ uint32_t refine_note_call_site(Elab *e, const Binding *callee,
     }
     cs->global_args   = NULL;
     cs->n_global_args = 0;
+    cs->fn_type       = NULL;   /* refined-fn-types F2: set by rt_elab_refined_fn_call */
+    cs->fn_checks     = NULL;
     if (call_form->tag == F_LIST) {
         const Binding *globals[RT_GLOBAL_ARGS_MAX];
         uint32_t ng = 0;
@@ -4594,6 +4697,236 @@ uint32_t refine_note_call_site(Elab *e, const Binding *callee,
     }
     cs->loc         = call_form->span;
     return e->n_refine_call_sites;
+}
+
+/* ------------------------------------------------------------------------- *
+ * refined-function-types-plan F2: calls THROUGH a binding of refined function
+ * type (D4a / D4b).
+ *
+ * `(f 10 x)` with `f : (fn [int #refine{ v : int | (not= v 0) }] int)` is a
+ * crossing like a direct call, with one difference that drives everything
+ * here: the real function's entry check enforces ITS OWN refinement, which may
+ * be weaker than the one the type states.  So the type's refinement gets a
+ * runtime check of its own, AT THE CALL -- otherwise a refinement written in a
+ * type would have no runtime meaning.  The deferred crossing elides it when it
+ * proves the argument.  The result is checked after the call (never elided in
+ * v1 -- see the plan's F4) and is what lets the type's result refinement be
+ * assumed about the call's value (rt_resolve_fn_with_locals).
+ *
+ * The rewrite, keyed on the call FORM before any of the lowering paths (bare,
+ * fat `{thunk, env}`, EX_FN_TO_FAT) split it:
+ *
+ *     (let [t2 <arg2>]                 ; only non-trivial refined arguments
+ *       (tur-contract-check-at p[t2/v] "..." "<file>" <line>)
+ *       (let [r (f a1 t2)]             ; only with a result refinement
+ *         (tur-contract-check-at q[r/r] ...)
+ *         r))
+ *
+ * A symbol or literal argument is used in place: reading it twice is reading
+ * the same value.  A non-trivial argument is evaluated once into a temporary,
+ * and so is every non-trivial argument before it, so the order the arguments
+ * are evaluated in is unchanged.  The check's panic names the CALL -- the
+ * holder of `f` that broke `f`'s type (open question 5's Racket note) -- not
+ * the function behind `f`.
+ * ------------------------------------------------------------------------- */
+
+static bool rf_arg_is_trivial(const Form *a) {
+    if (!a) return false;
+    switch (a->tag) {
+        case F_SYM: case F_INT: case F_FLOAT: case F_BOOL: case F_STR: case F_KEYWORD:
+            return true;
+        default:
+            return false;
+    }
+}
+
+/* Record (or find) the crossing for this call form and attach this
+ * elaboration's checks to it. */
+static void rf_note_crossing(Elab *e, Binding *fb, const Form *call,
+                             const char *display, Expr **checks, uint32_t n) {
+    (void)refine_note_call_site(e, fb, call, 1);
+    for (uint32_t i = e->n_refine_call_sites; i-- > 0; ) {
+        RefineCallSite *cs = &e->refine_call_sites[i];
+        if (cs->callee != fb || cs->call_form != call) continue;
+        cs->fn_type = rt_binding_refined_fn_type(fb);
+        if (display) cs->callee_display = display;
+        if (checks) {
+            struct RtFnCheckList *l = (struct RtFnCheckList *)arena_alloc(
+                e->arena, sizeof(*l));
+            l->checks = checks;
+            l->n      = n;
+            l->next   = cs->fn_checks;
+            cs->fn_checks = l;
+        }
+        return;
+    }
+}
+
+Expr *rt_elab_refined_fn_call(Elab *e, Form *call, Binding *fb) {
+    return rt_elab_refined_fn_call_at(e, call, fb, call, NULL);
+}
+
+Expr *rt_elab_refined_fn_call_at(Elab *e, Form *call, Binding *fb,
+                                 const Form *site, const char *display) {
+    if (!e || !call || !fb || call == e->rf_inner_call) return NULL;
+    const Type *ft = rt_binding_refined_fn_type(fb);
+    if (!ft || call->tag != F_LIST) return NULL;
+    uint32_t n_args = call->as.list.len - 1;
+    /* Partial and over-application are left to the ordinary path: the
+     * refinements belong to the saturated call, which happens elsewhere.  The
+     * function's own entry checks still run. */
+    if (n_args != ft->as.fn.arity || ft->as.fn.is_variadic) return NULL;
+
+    const Form **preds = type_fn_param_preds(ft);
+    const char **pvars = type_fn_param_vars(ft);
+    Binding *check_fn = scope_lookup(&e->global, e->sym_tur_contract_check);
+    bool emit = check_fn && rt_contracts_emitted();
+    const char *fname = display ? display : (fb->name ? fb->name->name : "?");
+    const char *subject = e->current_fn_name ? e->current_fn_name->name : NULL;
+    Span sp = call->span;
+
+    if (!emit) {
+        /* No runtime checks: the crossing is still decided statically (a
+         * closed refutation is still an error), and the result refinement is
+         * NOT assumed -- nothing enforces it. */
+        rf_note_crossing(e, fb, site, display, NULL, 0);
+        Form *saved = e->rf_inner_call;
+        e->rf_inner_call = call;
+        Expr *x = elab_form(e, call);
+        e->rf_inner_call = saved;
+        return x;
+    }
+
+    /* The last argument that needs a temporary fixes how many leading
+     * non-trivial arguments must be hoisted with it. */
+    int32_t last_temp = -1;
+    for (uint32_t i = 0; i < n_args; i++)
+        if (preds && preds[i] && !rf_arg_is_trivial(call->as.list.items[i + 1]))
+            last_temp = (int32_t)i;
+
+    Scope s;
+    scope_init(&s, e->scope);
+    e->scope = &s;
+
+    Form **items = (Form **)arena_alloc(e->arena, (n_args + 1) * sizeof(Form *));
+    items[0] = call->as.list.items[0];
+    LetBinding *lbs = (LetBinding *)arena_alloc(e->arena,
+                                                (n_args ? n_args : 1) * sizeof(LetBinding));
+    uint32_t nlb = 0;
+    Binding **temp = (Binding **)arena_alloc(e->arena,
+                                             (n_args ? n_args : 1) * sizeof(Binding *));
+    bool failed = false;
+    for (uint32_t i = 0; i < n_args; i++) {
+        Form *a = call->as.list.items[i + 1];
+        temp[i] = NULL;
+        items[i + 1] = a;
+        if ((int32_t)i > last_temp || rf_arg_is_trivial(a)) continue;
+        Expr *init = elab_form(e, a);
+        if (!init) { failed = true; break; }
+        char nm[40];
+        snprintf(nm, sizeof nm, "__rfarg_%u", elab_fresh_id(e));
+        const Symbol *ts = symtab_intern(e->st, strslice(nm, (uint32_t)strlen(nm)));
+        Binding *tb = binding_new(e, ts, init->type, false, false, a->span);
+        scope_add(e->scope, tb);
+        lbs[nlb].binding = tb;
+        lbs[nlb].init    = init;
+        nlb++;
+        temp[i] = tb;
+        items[i + 1] = form_sym(e->arena, a->span, ts);
+    }
+
+    Expr **checks = (Expr **)arena_alloc(e->arena,
+                                         (n_args ? n_args : 1) * sizeof(Expr *));
+    uint32_t n_checks = 0;
+    Expr **do_items = (Expr **)arena_alloc(e->arena, (n_args + 1) * sizeof(Expr *));
+    for (uint32_t i = 0; !failed && i < n_args; i++) {
+        checks[i] = NULL;
+        if (!preds || !preds[i]) continue;
+        Expr *subj;
+        if (temp[i]) {
+            subj = expr_new(e->arena, EX_VAR, temp[i]->type, call->as.list.items[i + 1]->span);
+            subj->as.var.binding = temp[i];
+        } else {
+            subj = elab_form(e, call->as.list.items[i + 1]);
+            if (!subj) { failed = true; break; }
+        }
+        /* The predicate's own variable, bound to the argument in a scope of
+         * its own so it never leaks to the call. */
+        Scope ps;
+        scope_init(&ps, e->scope);
+        e->scope = &ps;
+        Binding *vb = NULL;
+        if (pvars && pvars[i]) {
+            const Symbol *vs = symtab_intern(e->st, strslice(pvars[i],
+                                                             (uint32_t)strlen(pvars[i])));
+            vb = binding_new(e, vs, subj->type, false, false, sp);
+            scope_add(e->scope, vb);
+        }
+        Expr *pred_e = elab_form(e, (Form *)preds[i]);
+        e->scope = ps.parent;
+        scope_free(&ps);
+        if (!pred_e) { failed = true; break; }
+        rt_diag_impure_pred(e, pred_e, sp);
+        pred_e = elab_saffron_truthy(e, pred_e, sp);
+        Expr *ck_body = pred_e;
+        if (vb) {
+            LetBinding *lb = (LetBinding *)arena_alloc(e->arena, sizeof(LetBinding));
+            lb->binding = vb;
+            lb->init    = subj;
+            Expr *let_e = expr_new(e->arena, EX_LET, pred_e->type, sp);
+            let_e->as.let_.bindings = lb;
+            let_e->as.let_.n        = 1;
+            let_e->as.let_.body     = pred_e;
+            ck_body = let_e;
+        }
+        char whatbuf[160];
+        snprintf(whatbuf, sizeof whatbuf,
+                 "Contract violated by argument %u of the call through '%s'",
+                 i + 1, fname);
+        const char *m = rt_contract_message(e, whatbuf, subject, preds[i]);
+        Expr *ck = rt_contract_check_call(e, check_fn, ck_body, m, sp, sp);
+        if (!ck) continue;
+        checks[i] = ck;
+        do_items[n_checks++] = ck;
+    }
+
+    Expr *callx = NULL;
+    if (!failed) {
+        Form *inner = form_list(e->arena, sp, items, n_args + 1);
+        Form *saved = e->rf_inner_call;
+        e->rf_inner_call = inner;
+        callx = elab_form(e, inner);
+        e->rf_inner_call = saved;
+    }
+    if (callx && type_fn_result_pred(ft)) {
+        char whatbuf[160];
+        snprintf(whatbuf, sizeof whatbuf,
+                 "Result contract violated by the call through '%s'", fname);
+        callx = rt_wrap_return_check(e, callx, check_fn, type_fn_result_pred(ft),
+                                     type_fn_result_var(ft), whatbuf, subject, sp);
+    }
+    e->scope = s.parent;
+    scope_free(&s);
+    if (!callx) return NULL;
+
+    rf_note_crossing(e, fb, site, display, checks, n_args);
+
+    Expr *body = callx;
+    if (n_checks) {
+        do_items[n_checks] = callx;
+        Expr *d = expr_new(e->arena, EX_DO, callx->type, sp);
+        d->as.do_.items = do_items;
+        d->as.do_.n     = n_checks + 1;
+        body = d;
+    }
+    if (nlb) {
+        Expr *let_e = expr_new(e->arena, EX_LET, body->type, sp);
+        let_e->as.let_.bindings = lbs;
+        let_e->as.let_.n        = nlb;
+        let_e->as.let_.body     = body;
+        body = let_e;
+    }
+    return body;
 }
 
 void refine_note_macro_expansion(Elab *e, const Form *call,
@@ -7424,6 +7757,380 @@ static void rt_report_shadowed_crossing(Elab *e, RefineCallSite *cs,
     }
 }
 
+/* ------------------------------------------------------------------------- *
+ * RT1 VARIANCE, shared by the instance-versus-class check (elab_typeclasses.c)
+ * and the refined function-type coercion check below.  See the declaration in
+ * elab_internal.h.
+ * ------------------------------------------------------------------------- */
+RtVariance rt_decide_entailment(Elab *e, const Form *hyp, const char *hyp_var,
+                                const Form *goal, const char *goal_var,
+                                const char *subj, TypeKind kind, const char *type_nm,
+                                Span loc, const char *what, RefineObligation **out) {
+    if (out) *out = NULL;
+    RefineEnv *venv = refine_env_new(e->arena);
+    refine_env_set_resolver(venv, rt_refine_resolver(e), e);
+    refine_env_declare(venv, subj, rt_sort_of_kind(kind));
+    if (hyp) refine_env_push(venv, hyp, hyp_var, subj);
+    Form *sf = form_sym(e->arena, loc,
+                        symtab_intern(e->st, strslice(subj, (uint32_t)strlen(subj))));
+    RefineObligation *vob = refine_collect_obligation(
+        &e->refine_obs, goal, goal_var, sf, rt_sort_of_kind(kind), type_nm, loc,
+        venv, arena_strdup(e->arena, what, strlen(what)), NULL);
+    if (out) *out = vob;
+    if (!vob) return RV_UNKNOWN;
+    vob->quiet = true;
+    vob->runtime_guarded = false;
+    if (refine_discharge_one(vob, e->arena)) return RV_PROVED;
+    return vob->refuted ? RV_REFUTED : RV_UNKNOWN;
+}
+
+const char *rt_variance_reason(const RefineObligation *vob) {
+    return (vob && vob->unknown_reason) ? vob->unknown_reason
+                                        : "the solver returned unknown";
+}
+
+/* The generic obligation notes are not attached: their hint proposes a
+ * hypothesis to DECLARE on the subject, which reads as "narrow the class" --
+ * not advice anyone should take here. */
+void rt_report_variance_unknown(Span loc, const char *note, const char *fmt, ...) {
+    char claim[512];
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(claim, sizeof(claim), fmt, ap);
+    va_end(ap);
+    diag_emit_with_code(g_strict_refine ? DIAG_ERROR : DIAG_WARNING, loc,
+                        TUR_W0372_REFINE_UNKNOWN,
+                        "could not decide whether %s", claim);
+    diag_emit(DIAG_NOTE, loc, "%s", note);
+}
+
+/* ------------------------------------------------------------------------- *
+ * refined-function-types-plan F3 (D4c): a function value meets a refined
+ * function type.
+ *
+ * What the value is known to accept and deliver -- its "shape" `S` -- comes
+ * from where it was defined: a `defn` or lambda publishes its parameter and
+ * result refinements on its binding (the same arrays a direct call reads); a
+ * value already held at a refined function type has them on the type; a
+ * let-bound alias of a global defers to the global.  Anything else (an
+ * `extern-c`, a value read back from an erased slot) is unknown: it accepts
+ * everything as far as anyone knows, so the parameter direction holds, and it
+ * promises nothing, so a refined result is undecided -- the call-site result
+ * check (F2) is the guard.
+ * ------------------------------------------------------------------------- */
+typedef struct RtFnShape {
+    const Form **p;     /* parameter predicates (n), or NULL */
+    const char **pv;
+    uint32_t     n;
+    const Form  *r;     /* result predicate, or NULL */
+    const char  *rv;
+    const char  *name;  /* for diagnostics */
+} RtFnShape;
+
+static void rt_fn_shape_of_binding(const Binding *b, RtFnShape *S) {
+    memset(S, 0, sizeof(*S));
+    for (int hops = 0; b && hops < 8; hops++) {
+        if (!S->name && b->name) S->name = b->name->name;
+        if (b->refine_param_preds || b->refine_return_pred) {
+            S->p  = b->refine_param_preds;
+            S->pv = b->refine_param_vars;
+            S->n  = b->refine_param_preds ? b->n_refine_params : 0;
+            S->r  = b->refine_return_pred;
+            S->rv = b->refine_return_var;
+            return;
+        }
+        const Type *ft = rt_binding_refined_fn_type(b);
+        if (ft) {
+            S->p  = type_fn_param_preds(ft);
+            S->pv = type_fn_param_vars(ft);
+            S->n  = type_fn_param_preds(ft) ? ft->as.fn.arity : 0;
+            S->r  = type_fn_result_pred(ft);
+            S->rv = type_fn_result_var(ft);
+            return;
+        }
+        b = b->source_binding;
+    }
+}
+
+static void rt_check_fn_shape(Elab *e, const RtFnShape *S, const Type *T,
+                              Span loc, const char *slot) {
+    const char *vn = S->name ? S->name : "the function";
+    bool quoted = S->name != NULL;
+    uint32_t arity = T->as.fn.arity;
+    for (uint32_t i = 0; i < arity; i++) {
+        const Form *tp = type_fn_param_preds(T) ? type_fn_param_preds(T)[i] : NULL;
+        const char *tv = type_fn_param_vars(T) ? type_fn_param_vars(T)[i] : NULL;
+        const Form *sp = (S->p && i < S->n) ? S->p[i] : NULL;
+        const char *sv = (S->pv && i < S->n) ? S->pv[i] : NULL;
+        if (!sp) continue;                 /* accepts anything: holds */
+        if (!tp) {
+            /* D2: an unrefined position is not checked.  The opt-in lint says
+             * where a refinement could have been written. */
+            if (g_warn_unrefined_fn_slot)
+                diag_emit_with_code(DIAG_WARNING, loc, TUR_W0388_REFINE_UNREFINED_FN_SLOT,
+                    "%s%s%s refines its parameter %u, but %s leaves that "
+                    "parameter unrefined, so a bad argument is found only at "
+                    "run time, by the function's own entry check",
+                    quoted ? "'" : "", vn, quoted ? "'" : "", i + 1, slot);
+            continue;
+        }
+        if (tp == sp) continue;            /* the same predicate: holds */
+        TypeKind k = T->as.fn.arg_kinds ? (TypeKind)T->as.fn.arg_kinds[i] : TY_INT;
+        /* The witness is named after the slot's own variable (`v = -2`). */
+        const char *subj = tv ? tv : (sv ? sv : "v");
+        char what[224];
+        snprintf(what, sizeof what, "parameter %u of %s%s%s at %s", i + 1,
+                 quoted ? "'" : "", vn, quoted ? "'" : "", slot);
+        RefineObligation *ob = NULL;
+        RtVariance vv = rt_decide_entailment(e, tp, tv, sp, sv, subj, k,
+                                             type_name(type_simple(k, CK_COPY)),
+                                             loc, what, &ob);
+        if (vv == RV_PROVED) continue;
+        if (vv == RV_REFUTED) {
+            diag_emit_with_code(DIAG_ERROR, loc, TUR_E0386_REFINE_FN_PARAM_STRONGER,
+                "%s%s%s demands more of parameter %u than %s allows",
+                quoted ? "'" : "", vn, quoted ? "'" : "", i + 1, slot);
+            if (ob) refine_emit_obligation_notes(ob, e->arena, true, false);
+            continue;
+        }
+        rt_report_variance_unknown(loc,
+            "a value the function type admits may still be rejected by the "
+            "function's own entry check at run time",
+            "%s%s%s demands no more of parameter %u than %s allows (%s)",
+            quoted ? "'" : "", vn, quoted ? "'" : "", i + 1, slot,
+            rt_variance_reason(ob));
+    }
+    const Form *tr = type_fn_result_pred(T);
+    if (!tr) return;
+    if (S->r == tr) return;
+    char what[224];
+    snprintf(what, sizeof what, "the result of %s%s%s at %s",
+             quoted ? "'" : "", vn, quoted ? "'" : "", slot);
+    if (!S->r) {
+        rt_report_variance_unknown(loc,
+            "every call through the function type checks its result at run time",
+            "%s%s%s delivers the result %s requires (it states no result "
+            "refinement of its own)",
+            quoted ? "'" : "", vn, quoted ? "'" : "", slot);
+        return;
+    }
+    RefineObligation *ob = NULL;
+    TypeKind rk = T->as.fn.result_kind;
+    RtVariance vv = rt_decide_entailment(e, S->r, S->rv, tr, type_fn_result_var(T),
+                                         type_fn_result_var(T) ? type_fn_result_var(T)
+                                                                    : (S->rv ? S->rv : "r"),
+                                         rk, type_name(type_simple(rk, CK_COPY)),
+                                         loc, what, &ob);
+    if (vv == RV_PROVED) return;
+    if (vv == RV_REFUTED) {
+        diag_emit_with_code(DIAG_ERROR, loc, TUR_E0387_REFINE_FN_RESULT_WEAKER,
+            "%s%s%s promises less about its result than %s requires",
+            quoted ? "'" : "", vn, quoted ? "'" : "", slot);
+        if (ob) refine_emit_obligation_notes(ob, e->arena, true, false);
+        return;
+    }
+    rt_report_variance_unknown(loc,
+        "every call through the function type checks its result at run time",
+        "%s%s%s delivers the result %s requires (%s)",
+        quoted ? "'" : "", vn, quoted ? "'" : "", slot, rt_variance_reason(ob));
+}
+
+/* Is the check worth running for this target at all? */
+static bool rt_fn_coercion_wanted(const Type *T) {
+    if (!T || T->kind != TY_FN || T->as.fn.cfnptr) return false;
+    /* The lint is a strictness knob, not part of the experiment: with the gate
+     * off no slot is refined, so it fires wherever a refined function goes. */
+    if (g_warn_unrefined_fn_slot) return true;
+    return g_opt_refined_fn_types && type_fn_refinements_of(T);
+}
+
+/* True the first time this (form, target) pair is seen. */
+static bool rt_fn_coercion_first(Elab *e, const void *form, const Type *T) {
+    for (uint32_t i = 0; i + 1 < e->n_rf_seen; i += 2)
+        if (e->rf_seen[i] == form && e->rf_seen[i + 1] == T) return false;
+    if (e->n_rf_seen + 2 > e->cap_rf_seen) {
+        uint32_t nc = e->cap_rf_seen ? e->cap_rf_seen * 2 : 32;
+        const void **nb = (const void **)arena_alloc(e->arena, nc * sizeof(void *));
+        if (e->n_rf_seen) memcpy(nb, e->rf_seen, e->n_rf_seen * sizeof(void *));
+        e->rf_seen = nb;
+        e->cap_rf_seen = nc;
+    }
+    e->rf_seen[e->n_rf_seen++] = form;
+    e->rf_seen[e->n_rf_seen++] = T;
+    return true;
+}
+
+void rt_check_fn_coercion(Elab *e, const Form *value_form, const Type *target,
+                          Span loc, const char *slot) {
+    if (!e || !value_form || !rt_fn_coercion_wanted(target)) return;
+    while (value_form->tag == F_TYPE_ANN && value_form->as.list.len > 0)
+        value_form = value_form->as.list.items[0];
+    /* A lambda literal is checked where it is elaborated, against the
+     * expected type its slot pushes (rt_check_lambda_coercion). */
+    if (value_form->tag == F_LIST && value_form->as.list.len > 0 &&
+        value_form->as.list.items[0]->tag == F_SYM &&
+        value_form->as.list.items[0]->as.sym == e->sym_fn)
+        return;
+    if (!rt_fn_coercion_first(e, value_form, target)) return;
+    RtFnShape S;
+    memset(&S, 0, sizeof(S));
+    if (value_form->tag == F_SYM) {
+        const Binding *b = scope_lookup(e->scope, value_form->as.sym);
+        if (!b) return;   /* unbound: its own diagnostic */
+        rt_fn_shape_of_binding(b, &S);
+        if (!S.name && value_form->as.sym) S.name = value_form->as.sym->name;
+    }
+    rt_check_fn_shape(e, &S, target, loc, slot);
+}
+
+/* The values a body can return, syntactically: a symbol in tail position,
+ * through `if` arms and the last form of `do` / `let`.  A name a `let` on the
+ * way binds is skipped -- its scope is gone by the time this runs, so looking
+ * it up would find whatever it shadowed. */
+static void rt_check_fn_tail_walk(Elab *e, const Form *f, const Type *T,
+                                  const char *slot, const Symbol **bound,
+                                  uint32_t n_bound, uint32_t depth) {
+    if (!f || depth > 32) return;
+    if (f->tag == F_SYM) {
+        for (uint32_t i = 0; i < n_bound; i++) if (bound[i] == f->as.sym) return;
+        rt_check_fn_coercion(e, f, T, f->span, slot);
+        return;
+    }
+    if (f->tag != F_LIST || f->as.list.len == 0 ||
+        f->as.list.items[0]->tag != F_SYM || !f->as.list.items[0]->as.sym)
+        return;
+    const char *h = f->as.list.items[0]->as.sym->name;
+    uint32_t len = f->as.list.len;
+    if (strcmp(h, "if") == 0) {
+        for (uint32_t i = 2; i < len && i < 4; i++)
+            rt_check_fn_tail_walk(e, f->as.list.items[i], T, slot, bound, n_bound, depth + 1);
+    } else if (strcmp(h, "do") == 0 && len > 1) {
+        rt_check_fn_tail_walk(e, f->as.list.items[len - 1], T, slot, bound, n_bound, depth + 1);
+    } else if ((strcmp(h, "let") == 0 || strcmp(h, "let*") == 0) && len > 2 &&
+               f->as.list.items[1]->tag == F_VEC) {
+        const Form *bv = f->as.list.items[1];
+        const Symbol *nb[48];
+        uint32_t nn = n_bound < 32 ? n_bound : 32;
+        for (uint32_t i = 0; i < nn; i++) nb[i] = bound[i];
+        for (uint32_t i = 0; i < bv->as.list.len && nn < 48; i++)
+            if (bv->as.list.items[i]->tag == F_SYM) nb[nn++] = bv->as.list.items[i]->as.sym;
+        rt_check_fn_tail_walk(e, f->as.list.items[len - 1], T, slot, nb, nn, depth + 1);
+    }
+}
+
+void rt_check_fn_return_tail(Elab *e, const Form *tail, const Type *T,
+                             const char *fn_name) {
+    if (!rt_fn_coercion_wanted(T)) return;
+    char slot[192];
+    snprintf(slot, sizeof slot, "the declared result type of '%s'",
+             fn_name ? fn_name : "?");
+    rt_check_fn_tail_walk(e, tail, T, slot, NULL, 0, 0);
+}
+
+/* A lambda elaborated against an expected function type: its own binding
+ * carries its parameter refinements (and, when it states one, its result's). */
+static void rt_check_lambda_coercion(Elab *e, const Binding *lam, const Type *target,
+                                     Span loc) {
+    if (!rt_fn_coercion_wanted(target) || !lam) return;
+    if (!rt_fn_coercion_first(e, lam, target)) return;
+    RtFnShape S;
+    rt_fn_shape_of_binding(lam, &S);
+    S.name = NULL;   /* "anonymous function", not its lifted thunk's name */
+    rt_check_fn_shape(e, &S, target, loc, "the function type expected here");
+}
+
+/* refined-function-types-plan F2 (D4a): decide a call through a binding of
+ * refined function type.  The policy is the plan's "lenient on severity, loud
+ * on visibility": a CLOSED refutation (`(f 10 0)`) is TUR-E0371; anything else
+ * that is not proved -- an open counterexample included -- is TUR-W0372 (an
+ * error under --strict-refine), ALWAYS, because unlike a direct call the
+ * undecided argument costs a check this call added.  Neither stock policy fits
+ * (`runtime_guarded` is silent when undecided; the own-claim policy errors on
+ * an open counterexample), so the obligation is quiet and worded here, as
+ * rt_decide_variance does for instances.  A proof elides the call-site check
+ * -- unless the predicate is impure, whose check is observable. */
+static void rt_resolve_fn_type_crossing(Elab *e, RefineCallSite *cs) {
+    const Type *ft = cs->fn_type;
+    const Form *cf = cs->call_form;
+    if (!ft || !cf || cf->tag != F_LIST || !type_fn_param_preds(ft)) return;
+    uint32_t n_args = cf->as.list.len > cs->arg_offset
+                    ? cf->as.list.len - cs->arg_offset : 0;
+    const char *cname = cs->callee_display ? cs->callee_display : "?";
+
+    bool cs_skip = false;
+    RefineHyp *cs_saved = rt_push_cs_path_conds(e, cs, &cs_skip);
+    /* A binder on the path shadows a name the facts are about: decide with
+     * the caller's sorts and none of its facts, like a direct crossing. */
+    RefineEnv *env = cs->env;
+    if (cs_skip && cs->env) {
+        env = (RefineEnv *)arena_alloc(e->arena, sizeof(*env));
+        *env = *cs->env;
+        env->head = NULL;
+    }
+    for (uint32_t gi = 0; !cs_skip && cs->env && gi < cs->n_global_args; gi++) {
+        const Binding *g = cs->global_args[gi];
+        if (!g->refine_def_init || g->is_mut || !g->name) continue;
+        refine_env_push(cs->env,
+                        rt_form_eq(e, cf->span, form_sym(e->arena, cf->span, g->name),
+                                   g->refine_def_init),
+                        NULL, NULL);
+    }
+
+    for (uint32_t p = 0; p < ft->as.fn.arity && p < n_args; p++) {
+        const Form *pred = type_fn_param_preds(ft)[p];
+        if (!pred) continue;
+        const Form *arg = cf->as.list.items[cs->arg_offset + p];
+        TypeKind pk = ft->as.fn.arg_kinds ? (TypeKind)ft->as.fn.arg_kinds[p] : TY_INT;
+        char what[192];
+        if (cs->caller_name)
+            snprintf(what, sizeof(what), "argument %u of the call through '%s' in '%s'",
+                     p + 1, cname, cs->caller_name);
+        else
+            snprintf(what, sizeof(what), "argument %u of the call through '%s'",
+                     p + 1, cname);
+        const char *what_owned = arena_strdup(e->arena, what, strlen(what));
+        RefineObligation *ob = refine_collect_obligation(
+            &e->refine_obs, pred, type_fn_param_vars(ft)[p], arg,
+            rt_sort_of_kind(pk), type_name(type_simple(pk, CK_COPY)),
+            cs->loc, env, what_owned, cs->caller_name);
+        if (!ob) continue;
+        refine_obligation_set_frozen(ob, cs->frozen_names, cs->n_frozen);
+        ob->quiet = true;
+        ob->runtime_guarded = false;
+        bool checked = false;
+        for (struct RtFnCheckList *l = cs->fn_checks; l; l = l->next)
+            if (p < l->n && l->checks[p]) checked = true;
+        if (refine_discharge_one(ob, e->arena)) {
+            if (!rt_pred_is_impure(e, pred))
+                for (struct RtFnCheckList *l = cs->fn_checks; l; l = l->next)
+                    if (p < l->n && l->checks[p])
+                        *l->checks[p] = *e_nil(e, l->checks[p]->span);
+            continue;
+        }
+        if (ob->refuted && ob->refuted_closed) {
+            diag_emit_with_code(DIAG_ERROR, ob->loc, TUR_E0371_REFINE_NOT_PROVED,
+                                "%s violates the refinement its function type "
+                                "places on it", what);
+            refine_emit_obligation_notes(ob, e->arena, true, true);
+            continue;
+        }
+        const char *why = ob->refuted
+            ? "a counterexample exists for some inputs"
+            : (ob->unknown_reason ? ob->unknown_reason : "the solver returned unknown");
+        if (cs_skip)
+            why = "a binder on the path to this call shadows a refined name, so "
+                  "its facts are not used";
+        diag_emit_with_code(g_strict_refine ? DIAG_ERROR : DIAG_WARNING, ob->loc,
+                            TUR_W0372_REFINE_UNKNOWN,
+                            "could not prove that %s satisfies the refinement its "
+                            "function type places on it (%s); %s", what, why,
+                            checked ? "a runtime check is kept at the call"
+                                    : "contracts are off, so it is not checked");
+        if (ob->vc) refine_emit_obligation_notes(ob, e->arena, ob->refuted, false);
+    }
+    if (cs->env) cs->env->head = cs_saved;
+}
+
 void refine_resolve_call_sites(Elab *e) {
     if (!e) return;
     rt_body_writes_reset();
@@ -7462,6 +8169,13 @@ void refine_resolve_call_sites(Elab *e) {
          i < e->n_refine_call_sites; i++) {
         RefineCallSite *cs = &e->refine_call_sites[i];
         const Binding *callee = cs->callee;
+        /* refined-fn-types F2: a call through a refined function-typed
+         * binding is decided by its own resolver -- different predicates
+         * (the type's), a different policy, and checks to elide. */
+        if (cs->fn_type) {
+            rt_resolve_fn_type_crossing(e, cs);
+            continue;
+        }
         /* A crossing is worth walking when EITHER side has a predicate.  An
          * instance that explicitly demands nothing publishes no arrays of its
          * own, and that is exactly the shape TUR-W0377 exists to lint. */
@@ -12161,6 +12875,13 @@ Expr *elab_defn(Elab *e, const Form *call) {
         }
     }
     e->expected_type = prev_body_expected;
+    /* refined-function-types-plan F3 (D4c): a `defn` whose declared result is
+     * a refined function type -- each value it can return is a coercion site.
+     * (A lambda in tail position was checked against `body_expected` as it was
+     * elaborated.) */
+    if (body_expected && body_expected->kind == TY_FN && n_body > 0)
+        rt_check_fn_return_tail(e, call->as.list.items[body_start + n_body - 1],
+                                body_expected, name_f->as.sym->name);
     if (fn_declared_unsafe) e->unsafe_depth--;
     e->fn_body_depth--;
     e->n_sig_tyvars = saved_n_sig_tyvars;
@@ -13880,6 +14601,9 @@ static Expr *elab_fn_impl(Elab *e, const Form *call) {
     /* H10 x call/cc: consumed here so only the immediate receiver sees it. */
     bool is_callcc_receiver = e->in_callcc_receiver;
     e->in_callcc_receiver = false;
+    /* refined-function-types-plan F3: the function type this lambda is
+     * passed at, captured before the body's elaboration repoints it. */
+    const Type *rf_expected = e->expected_type;
     /* Minimum: (fn [params...] body...) */
     if (call->as.list.len < 3) {
         diag_emit(DIAG_ERROR, call->span,
@@ -14954,6 +15678,7 @@ static Expr *elab_fn_impl(Elab *e, const Form *call) {
         b->refine_param_names = rn;
         b->n_refine_params    = n_params;
     }
+    rt_check_lambda_coercion(e, b, rf_expected, call->span);
     b->closure_return_dispatches = expr_closure_return_dispatches(body);
     b->closure_return_dispatches_untyped = expr_closure_return_dispatches_untyped(body);
     /* lambda-thin-fn-result-read-as-fat: fn-value-fat-normalization stage 2
@@ -15899,6 +16624,11 @@ Expr *elab_def(Elab *e, const Form *call) {
     Expr *init = elab_form(e, init_f);
     e->expected_type = saved_expected;
     if (!init) return NULL;
+    /* refined-function-types-plan F3 (D4c): a `def` at a refined function
+     * type is a coercion site, like an annotated `let`. */
+    if (declared_type)
+        rt_check_fn_coercion(e, init_f, declared_type, init_f->span,
+                             "its declared type");
 
     if (declared_type) {
         /* any-coercion-not-driven-by-expected-type: a `: any` declaration is a

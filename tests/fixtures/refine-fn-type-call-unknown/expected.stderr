@@ -1,0 +1,4 @@
+TUR-W0372
+could not prove that argument 2 of the call through 'f' in 'apply-any' satisfies the refinement its function type places on it
+a runtime check is kept at the call
+panic at input.tur:14: Contract violated by argument 2 of the call through 'f' in apply-any: (not= v 0)

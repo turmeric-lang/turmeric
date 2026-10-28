@@ -125,8 +125,7 @@ test.describe('Try Turmeric smoke tests', () => {
             }
             // `location.reload` / `location.replace` are non-configurable in
             // current Chromium, so they cannot be stubbed; the app goes through
-            // hardReload / hardNavigate, which defer to these hooks when a test
-            // installs one.
+            // hardNavigate, which defers to this hook when a test installs one.
             window.__turiReload = () => { window.__reloaded = true; };
             window.__navigatedTo = null;
             window.__turiNavigate = (url) => { window.__navigatedTo = url; };

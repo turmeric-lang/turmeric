@@ -1386,6 +1386,13 @@ Expr *elab_let(Elab *e, const Form *call) {
         }
         Expr *init = elab_form(e, init_form);
         e->expected_type = prev_expected;
+        /* refined-function-types-plan F3 (D4c): an annotated `let` is a
+         * coercion site -- a function value bound at a refined function type
+         * is checked against it (a lambda literal was, just now, against the
+         * expected type pushed above). */
+        if (init && let_init_expected)
+            rt_check_fn_coercion(e, init_form, let_init_expected, init_form->span,
+                                 "its declared type");
         /* A projection the annotation reduced hinted this init alone
          * (associated-type-unusable-nullary-and-generic, half 1). */
         e->assoc_hint_valid = false;
@@ -1618,6 +1625,15 @@ Expr *elab_let(Elab *e, const Form *call) {
         init = let_bridge_sig_tyvar_result(e, init);
 
         Binding *b = binding_new(e, name, init->type, is_mut, false, name_span);
+        /* refined-function-types-plan D1: a binding annotated at a refined
+         * function type holds the value AT that type, so calls through it are
+         * checked against the annotation (rt_elab_refined_fn_call).  Only the
+         * side-car moves; the type the value has is untouched. */
+        if (let_init_expected && type_fn_refinements_of(let_init_expected) &&
+            b->type.kind == TY_FN &&
+            b->type.as.fn.arity == let_init_expected->as.fn.arity) {
+            b->type.as.fn.refine = let_init_expected->as.fn.refine;
+        }
         /* borrow-checks-gaps: a binding that holds a borrow remembers the
          * place, so an assignment to it is refused while `b` is live
          * (elab_borrow_check_write, from elab_set / elab_set_field). */
@@ -4525,8 +4541,22 @@ static Expr *elab_set_field(Elab *e, const Form *call, Form *target) {
                           symtab_intern(e->st, strslice("any", 3)));
         value_form = form_list(e->arena, value_form->span, asc, 3);
     }
+    /* refined-function-types-plan F3 (D4c): a store into a field of refined
+     * function type is a coercion site.  A lambda value is checked as it is
+     * elaborated, against the field type pushed as its expected type -- pushed
+     * only under the gate, so nothing else about this store changes. */
+    bool rf_field = g_opt_refined_fn_types && type_fn_refinements_of(&expected_field);
+    Type *rf_saved_expected = e->expected_type;
+    if (rf_field) e->expected_type = &expected_field;
     Expr *value = elab_form(e, value_form);
+    e->expected_type = rf_saved_expected;
     if (!value) return NULL;
+    if (expected_field.kind == TY_FN) {
+        char slot[160];
+        snprintf(slot, sizeof slot, "the function type of field '%s'", fname);
+        rt_check_fn_coercion(e, call->as.list.items[2], &expected_field,
+                             call->as.list.items[2]->span, slot);
+    }
     if (value->type.kind != TY_PTR_VOID && !type_eq(value->type, expected_field)) {
         diag_emit(DIAG_ERROR, value->span,
                   "set! (.%s ...): value type %s does not match field type %s",

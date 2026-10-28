@@ -13,9 +13,8 @@
 // also the only one of the two that is discoverable.
 
 import { getEditor } from './editor-ref.js';
-
-// Supplied by initSymbolsMenu(): main.js owns the tabs and the language server.
-let deps = { currentTab: () => null, getLspClient: () => null };
+import { currentTab } from './tabs.js';
+import { lspClient } from './lsp-ref.js';
 
 // What to call each SymbolKind out loud. c2mp's KIND_LABEL (symbols.js:752)
 // is the phrasing being copied: what you would say about the entry, not the
@@ -138,9 +137,7 @@ function renderSymbolsMenu(list, symbols, state) {
 
 let closeSymbolsMenu = () => {};
 
-/** Wire up the Symbols button. `currentTab` and `getLspClient` come from main.js. */
-export function initSymbolsMenu({ currentTab, getLspClient }) {
-    deps = { currentTab, getLspClient };
+export function initSymbolsMenu() {
     const btn = document.getElementById('symbols-btn');
     const menu = document.getElementById('symbols-menu');
     const list = document.getElementById('symbols-list');
@@ -175,7 +172,6 @@ export function initSymbolsMenu({ currentTab, getLspClient }) {
         // Filled on open, never kept in sync. c2mp's reason (main.js:427)
         // holds exactly: the buffer changes on every keystroke and this list
         // is read once in a while.
-        const lspClient = deps.getLspClient();
         if (!lspClient || !lspClient.isAvailable()) {
             renderSymbolsMenu(list, [], 'unavailable');
             return;
@@ -184,7 +180,7 @@ export function initSymbolsMenu({ currentTab, getLspClient }) {
         // concerned (see getTabs in startLspClient), so documentSymbol would
         // come back empty -- and "Nothing defined yet" about list.tur is a
         // false statement, not a degraded one.
-        const active = deps.currentTab();
+        const active = currentTab();
         if (active && active.readOnly) {
             renderSymbolsMenu(list, [], 'read-only');
             return;

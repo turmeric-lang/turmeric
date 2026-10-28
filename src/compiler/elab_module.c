@@ -878,8 +878,13 @@ static ElabModule *elab_load_module_impl(Elab *e, const Symbol *name, Span impor
                 char inc_path[4096];
                 int iplen = snprintf(inc_path, sizeof(inc_path), "%s/%s.tur",
                                      e->module_include_dirs[ii], name->name);
+                /* namespaced-spice-binaries D6: a dependency's or installed
+                 * spice's :bin entry file is a program, never a module. */
+                bool hidden_entry = spice_search_module_hidden(
+                    e->module_include_dirs[ii], name->name);
                 if (iplen > 0 && (size_t)iplen < sizeof(inc_path)) {
-                    if (module_read_named(e->module_include_dirs[ii], name->name, inc_path,
+                    if (!hidden_entry &&
+                        module_read_named(e->module_include_dirs[ii], name->name, inc_path,
                                           sizeof(inc_path), &iplen, &src_raw, &src_len) == 0) {
                         memcpy(path_buf, inc_path, (size_t)iplen + 1);
                         plen = iplen;
@@ -893,10 +898,16 @@ static ElabModule *elab_load_module_impl(Elab *e, const Symbol *name, Span impor
                         if (spice && n_installed_listed >= 4) {
                             n_installed_hidden++;
                         } else if (alen < (int)sizeof(attempted) - 256) {
+                            const char *why = hidden_entry
+                                ? "; a :bin entry, not a module" : "";
                             int iw = spice
                                 ? snprintf(attempted + alen, sizeof(attempted) - (size_t)alen,
-                                           "    %s    (installed spice %s%s)\n", inc_path,
-                                           spice, is_dep ? ", dependency" : "")
+                                           "    %s    (installed spice %s%s%s)\n", inc_path,
+                                           spice, is_dep ? ", dependency" : "", why)
+                                : hidden_entry
+                                ? snprintf(attempted + alen, sizeof(attempted) - (size_t)alen,
+                                           "    %s    (-I %s; a :bin entry, not a module)\n",
+                                           inc_path, e->module_include_dirs[ii])
                                 : snprintf(attempted + alen, sizeof(attempted) - (size_t)alen,
                                            "    %s    (-I %s)\n", inc_path,
                                            e->module_include_dirs[ii]);

@@ -2859,52 +2859,10 @@ static bool constraint_named_type(Elab *e, const Symbol *kw, Type *out) {
     return false;
 }
 
-/* RT1 VARIANCE: decide one instance-versus-class variance obligation.
- *
- * Decided as a `quiet` obligation, not a speculative probe: it is a real
- * question about the program, so it is counted, memoized and shown by
- * --dump-refine=json like any other, while its headline stays ours -- a
- * refutation is a declaration-versus-declaration TUR-E0374, not a TUR-E0371
- * about a value.  `runtime_guarded` is off because any witness is a defect
- * here: the class admits a value the instance rejects (or the instance may
- * return one the class rules out), whether or not the goal is ground.
- *
- * An UNDECIDED pair used to report nothing, which left a generic caller to
- * find the disagreement as an entry-check panic and let --strict-refine pass a
- * program it could not discharge.  It is TUR-W0372 now (rt_report_variance_
- * unknown), an error under --strict-refine. */
-typedef enum { RV_PROVED, RV_REFUTED, RV_UNKNOWN } RtVariance;
-
-static RtVariance rt_decide_variance(Elab *e, RefineObligation *vob) {
-    vob->quiet = true;
-    vob->runtime_guarded = false;
-    if (refine_discharge_one(vob, e->arena)) return RV_PROVED;
-    return vob->refuted ? RV_REFUTED : RV_UNKNOWN;
-}
-
-static const char *rt_variance_reason(const RefineObligation *vob) {
-    return vob->unknown_reason ? vob->unknown_reason : "the solver returned unknown";
-}
-
-/* `fmt` words the claim that could not be decided ("instance method 'm'
- * demands no more of ..."); it is prefixed with "could not decide whether".
- * `note` says what the undecided pair costs.  The generic obligation notes are
- * not attached: their hint proposes a hypothesis to DECLARE on the subject,
- * which reads as "narrow the class" -- not advice anyone should take here. */
-static void rt_report_variance_unknown(Span loc, const char *note,
-                                       const char *fmt, ...) TUR_PRINTF_FMT(3, 4);
-static void rt_report_variance_unknown(Span loc, const char *note,
-                                       const char *fmt, ...) {
-    char claim[512];
-    va_list ap;
-    va_start(ap, fmt);
-    vsnprintf(claim, sizeof(claim), fmt, ap);
-    va_end(ap);
-    diag_emit_with_code(g_strict_refine ? DIAG_ERROR : DIAG_WARNING, loc,
-                        TUR_W0372_REFINE_UNKNOWN,
-                        "could not decide whether %s", claim);
-    diag_emit(DIAG_NOTE, loc, "%s", note);
-}
+/* RT1 VARIANCE: rt_decide_entailment, rt_variance_reason and
+ * rt_report_variance_unknown live in elab_fns.c, shared with the refined
+ * function-type coercion check (refined-function-types-plan F3), which asks
+ * the same question with a function type in the class's place. */
 
 /* Elaborate (definstance ClassName [type-args...] (method1 [args...] body...) ...)
  *
@@ -5122,27 +5080,16 @@ static Expr *elab_definstance_inner(Elab *e, const Form *call) {
                  * solver entirely for them. */
                 if (cls_pred == m_ct_preds[_ci]) continue;
 
-                RefineEnv *venv = refine_env_new(e->arena);
-                refine_env_set_resolver(venv, rt_refine_resolver(e), e);
-                refine_env_declare(venv, pname,
-                                   rt_sort_of_kind(method_params[_pi]->type.kind));
-                if (cls_pred) refine_env_push(venv, cls_pred, cls_var, pname);
-
-                Form *subj = form_sym(e->arena, impl_form->span,
-                                      symtab_intern(e->st,
-                                          strslice(pname, (uint32_t)strlen(pname))));
                 char what[192];
                 snprintf(what, sizeof(what),
                          "parameter '%s' of instance method '%s'", pname,
                          tc->methods[i].name ? tc->methods[i].name->name : "?");
-                RefineObligation *vob = refine_collect_obligation(
-                    &e->refine_obs, m_ct_preds[_ci], m_ct_vars[_ci], subj,
-                    rt_sort_of_kind(method_params[_pi]->type.kind),
-                    type_name(method_params[_pi]->type),
-                    impl_form->span, venv,
-                    arena_strdup(e->arena, what, strlen(what)), NULL);
+                RefineObligation *vob = NULL;
+                RtVariance vv = rt_decide_entailment(
+                    e, cls_pred, cls_var, m_ct_preds[_ci], m_ct_vars[_ci], pname,
+                    method_params[_pi]->type.kind, type_name(method_params[_pi]->type),
+                    impl_form->span, what, &vob);
                 if (!vob) continue;
-                RtVariance vv = rt_decide_variance(e, vob);
                 if (vv == RV_UNKNOWN) {
                     rt_report_variance_unknown(impl_form->span,
                         "a generic caller is checked against the class "
@@ -5186,24 +5133,15 @@ static Expr *elab_definstance_inner(Elab *e, const Form *call) {
             impl_ret_pred != m_class_ret_pred) {
             const char *rvar = impl_ret_var ? impl_ret_var
                              : (m_class_ret_var ? m_class_ret_var : "r");
-            RefineEnv *venv = refine_env_new(e->arena);
-            refine_env_set_resolver(venv, rt_refine_resolver(e), e);
-            refine_env_declare(venv, rvar, rt_sort_of_kind(return_type.kind));
-            refine_env_push(venv, impl_ret_pred, impl_ret_var, rvar);
-
-            Form *subj = form_sym(e->arena, impl_form->span,
-                                  symtab_intern(e->st,
-                                      strslice(rvar, (uint32_t)strlen(rvar))));
             char what[192];
             snprintf(what, sizeof(what), "the result of instance method '%s'",
                      tc->methods[i].name ? tc->methods[i].name->name : "?");
-            RefineObligation *vob = refine_collect_obligation(
-                &e->refine_obs, m_class_ret_pred, m_class_ret_var, subj,
-                rt_sort_of_kind(return_type.kind), type_name(return_type),
-                impl_form->span, venv,
-                arena_strdup(e->arena, what, strlen(what)), NULL);
+            RefineObligation *vob = NULL;
+            RtVariance vv = rt_decide_entailment(
+                e, impl_ret_pred, impl_ret_var, m_class_ret_pred, m_class_ret_var,
+                rvar, return_type.kind, type_name(return_type), impl_form->span,
+                what, &vob);
             if (vob) {
-                RtVariance vv = rt_decide_variance(e, vob);
                 ret_variance_proved = (vv == RV_PROVED);
                 if (vv == RV_UNKNOWN) {
                     rt_report_variance_unknown(impl_form->span,

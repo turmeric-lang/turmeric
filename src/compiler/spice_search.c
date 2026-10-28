@@ -138,11 +138,82 @@ static bool ss_is_dir(const char *p) {
     return stat(p, &st) == 0 && S_ISDIR(st.st_mode);
 }
 
+/* namespaced-spice-binaries D6: a spice's `:bin` entry files are programs,
+ * never library modules, so the search path hides them -- the same set
+ * tur_spice_modules leaves out of the conflict check.  Keyed, like the
+ * installed-slot table below, by the exact directory string appended, and
+ * process-wide because the elaborator asks after the search path is built. */
+typedef struct {
+    char  *dir;
+    char **mods;
+    int    n;
+} HiddenEntries;
+
+static HiddenEntries *g_hidden;
+static int            g_n_hidden, g_cap_hidden;
+
+/* `dir` is a dependency's or an installed spice's src/: record the modules
+ * its spice's :bin entries name.  A dir that is not a `src/` (a dep with no
+ * src/ directory) has nothing a `src/...` :bin path could name. */
+static void ss_hide_entry_modules(const char *dir) {
+    size_t dl = strlen(dir);
+    while (dl > 0 && (dir[dl - 1] == '/' || dir[dl - 1] == '\\')) dl--;
+    if (dl < 4 || memcmp(dir + dl - 3, "src", 3) != 0 ||
+        (dir[dl - 4] != '/' && dir[dl - 4] != '\\'))
+        return;
+    for (int i = 0; i < g_n_hidden; i++)
+        if (strcmp(g_hidden[i].dir, dir) == 0) return;
+    char spice_dir[4096];
+    if (dl - 4 >= sizeof(spice_dir)) return;
+    memcpy(spice_dir, dir, dl - 4);
+    spice_dir[dl - 4] = '\0';
+    if (!spice_dir[0]) return;
+    char **mods = NULL;
+    int n = tur_spice_bin_modules(spice_dir, &mods);
+    if (n == 0) return;
+    if (g_n_hidden >= g_cap_hidden) {
+        int nc = g_cap_hidden ? g_cap_hidden * 2 : 8;
+        HiddenEntries *nh = (HiddenEntries *)realloc(g_hidden,
+                                                     (size_t)nc * sizeof(*nh));
+        if (!nh) { tur_spice_modules_free(mods, n); return; }
+        g_hidden = nh; g_cap_hidden = nc;
+    }
+    char *copy = strdup(dir);
+    if (!copy) { tur_spice_modules_free(mods, n); return; }
+    g_hidden[g_n_hidden].dir  = copy;
+    g_hidden[g_n_hidden].mods = mods;
+    g_hidden[g_n_hidden].n    = n;
+    g_n_hidden++;
+}
+
+bool spice_search_module_hidden(const char *dir, const char *module) {
+    if (!dir || !module) return false;
+    for (int i = 0; i < g_n_hidden; i++) {
+        if (strcmp(g_hidden[i].dir, dir) != 0) continue;
+        for (int j = 0; j < g_hidden[i].n; j++)
+            if (strcmp(g_hidden[i].mods[j], module) == 0) return true;
+        return false;
+    }
+    return false;
+}
+
+/* A dependency's (or installed spice's) directory: on the path, with its
+ * :bin entry files hidden.  The project's own src/ goes through ss_add_own,
+ * which hides nothing. */
 static int ss_add(const char *dir, const char *producer,
                   char ***inc, int *n_inc, char ***owned, int *n_owned,
                   const SpiceSearchHooks *hooks) {
     if (ss_append_owned(dir, inc, n_inc, owned, n_owned) != 0) return -1;
+    ss_hide_entry_modules(dir);
     if (hooks && hooks->on_add) hooks->on_add(hooks->ud, *n_inc, dir, producer);
+    return 0;
+}
+
+static int ss_add_own(const char *dir,
+                      char ***inc, int *n_inc, char ***owned, int *n_owned,
+                      const SpiceSearchHooks *hooks) {
+    if (ss_append_owned(dir, inc, n_inc, owned, n_owned) != 0) return -1;
+    if (hooks && hooks->on_add) hooks->on_add(hooks->ud, *n_inc, dir, NULL);
     return 0;
 }
 
@@ -726,7 +797,7 @@ int spice_search_append(const char *input,
     char own_src[4096];
     int n = snprintf(own_src, sizeof(own_src), "%s/src", root);
     if (n > 0 && (size_t)n < sizeof(own_src) && ss_is_dir(own_src)) {
-        if (ss_add(own_src, NULL, inc, n_inc, owned, n_owned, hooks) != 0) rc = -1;
+        if (ss_add_own(own_src, inc, n_inc, owned, n_owned, hooks) != 0) rc = -1;
     }
 
     /* SC5: parse the manifest and append the src/ of every `:spices` dep

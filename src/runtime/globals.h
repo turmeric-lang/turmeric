@@ -18,6 +18,7 @@ extern bool g_panic_abort;
 
 /* Phase R6: result/panic linting */
 extern bool g_warn_unused_result;
+extern bool g_warn_unrefined_fn_slot; /* refined-function-types-plan F5: --warn-unrefined-fn-slot (TUR-W0388) */
 extern bool g_lint_panic;
 
 /* Phase C2: --no-contracts (strip contract checks at elaboration) */
@@ -424,6 +425,7 @@ extern bool g_opt_reflected_measures;
 extern bool g_opt_discontinue;
 extern bool g_opt_script_deps;  /* script-spice-deps-plan: --enable=script-deps */
 extern bool g_opt_quote_data;   /* quote-list-data-plan: --enable=quote-data */
+extern bool g_opt_refined_fn_types; /* refined-function-types-plan: --enable=refined-fn-types */
 /* quote-list-data-plan: load stdlib/datum.tur in THIS compile -- the flag is on
  * and the entry program quotes a list (tur_quote_data_wanted_forms / _source),
  * or the entry point loads it eagerly (project mode, the REPL).  Recomputed per

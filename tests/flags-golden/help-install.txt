@@ -1,5 +1,11 @@
 usage:
-  tur install <url> [--ref <ref>] [--subdir <path>] [--name <name>] [--force]
-  tur install <path> --path [--name <name>] [--force]
+  tur install <url> [--ref <ref>] [--subdir <path>] [--name <name>] [--force] [--link]
+  tur install <path> --path [--name <name>] [--force] [--link]
+  tur install --link <spice>[/<bin>]
   tur install --print-path-snippet
+
+  --force   take every bin name the spice declares, overwriting any file
+  --link    take every bin name from other installed spices (never a
+            file tur did not install); given an installed <spice>/<bin>
+            it only moves that one name, without fetching or building
 [exit 1]

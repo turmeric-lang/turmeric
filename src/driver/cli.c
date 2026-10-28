@@ -702,6 +702,7 @@ static const GlobalFlag GLOBAL_FLAGS[] = {
     /* Phase R6: the last of the two wins. */
     { "--warn-unused-result", NULL, GF_SCAN, &g_warn_unused_result, true, NULL, NULL },
     { "--no-warn-unused-result", NULL, GF_SCAN, &g_warn_unused_result, false, NULL, NULL },
+    { "--warn-unrefined-fn-slot", NULL, GF_SCAN, &g_warn_unrefined_fn_slot, true, NULL, NULL },
     /* F4: what it promotes is listed at g_werror_deprecated (globals.c). */
     { "--Werror=deprecated", "-Werror=deprecated", GF_SCAN,
       &g_werror_deprecated, true, NULL, NULL },
@@ -1254,7 +1255,9 @@ int drv_usage(void) {
         "emit-c flags:\n"
         "  tur emit-c <file>                 compile a .tur file to C (stdout)\n"
         "  tur emit-c --output-dir <dir> <files...>  compile each .tur to <dir>/<mod>.h + .c\n"
-        "\n"
+        "\n");
+    /* Split in two: one literal past 4095 bytes is -Woverlength-strings. */
+    fprintf(stderr,
         "global flags:\n"
         "  --enable=<name>[,<name>...]      turn on an experimental feature; see 'tur experiments'\n"
         "  --macro-caps=io                  grant macro-time (defmacro*) code I/O; default deny\n"
@@ -1291,6 +1294,7 @@ int drv_usage(void) {
         "                                   (TUR_NO_GLOBAL_SPICES=1; implied by --no-auto-spice)\n"
         "  --warn-unused-result             warn on discarded result values (Phase R6)\n"
         "  --no-warn-unused-result          disable --warn-unused-result (Phase R6)\n"
+        "  --warn-unrefined-fn-slot         warn when a refined function goes into an unrefined fn-typed slot (TUR-W0388)\n"
         "  --lint-panic                     lint panic/must! usage (Phase R6)\n"
         "  --no-contracts                   strip contract checks; predicates not evaluated (Phase C2)\n"
         "  --dump-sizes                     print inferred size index per sized-GADT constructor (SZ8)\n"

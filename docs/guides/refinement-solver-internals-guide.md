@@ -87,6 +87,26 @@ An obligation is created at each point a value crosses **into** a refined type.
   the argument form; the callee's *other* parameter names are substituted by
   the actual arguments in their slots, so a predicate that mentions a sibling
   parameter is checked against real values).
+- behind `--enable=refined-fn-types` (refined-function-types-plan F2): a
+  **call through a binding of refined function type** -- `(f 10 x)` with
+  `f : (fn [int #refine{...}] int)`. Recorded by `rt_elab_refined_fn_call`
+  (`elab_fns.c`) as a `RefineCallSite` whose `fn_type` is set, so the
+  predicates come from the type (`TY_FN`'s side-car `refine`, an `FnRefinements`)
+  rather than from a `defn`'s arrays. Decided by
+  `rt_resolve_fn_type_crossing`: `quiet`, a closed refutation is `TUR-E0371`
+  and anything else `TUR-W0372`, always -- the call gained its own runtime check,
+  whose slot (`fn_checks`) a proof overwrites with nil, as a loop invariant's
+  is. The type's result refinement is checked after the call and is a
+  hypothesis about the call's value (`rt_resolve_fn_with_locals`, installed on
+  the caller's env by `rt_build_env`), unless `--no-contracts`;
+- behind the same gate (F3): a **function value meeting a refined function
+  type** -- a call argument, a lambda (against the expected type its slot
+  pushes), an annotated `let` or `def`, a `defn` result, a constructor
+  argument, a `set!` into a field. `rt_check_fn_coercion` runs the RT1
+  variance check per position the target refines, through
+  `rt_decide_entailment` -- the helper the typeclass instance check
+  (`TUR-E0374`) uses too: parameters `T.p |- S.p` (refuted `TUR-E0386`), the
+  result `S.r |- T.r` (refuted `TUR-E0387`), undecided `TUR-W0372`.
 
 Hypotheses -- the facts assumed true at the crossing -- come from:
 
@@ -610,7 +630,10 @@ Registered in `diag.c` / `diag.h` (the `RT3` block, `diag.c:241`):
 | `TUR-E0375` | error | an effectful predicate where a pure one is required |
 | `TUR-E0376` | error | refinement over a type parameter (a refinement alias with type parameters is rejected at `elab_types.c` with a plain diagnostic) |
 | `TUR-W0377` | warn | instance-leniency note (paired with the class-method checks) |
-| `TUR-E0378` | error | refinement appears inside a function type |
+| `TUR-E0378` | error | refinement appears inside a function type (gate off; with `--enable=refined-fn-types`, only in a `(c-fn ...)` type or when it mentions anything but its own variable) |
+| `TUR-E0386` | error | `--enable=refined-fn-types`: a function demands more of a parameter than the refined function type it meets allows |
+| `TUR-E0387` | error | `--enable=refined-fn-types`: a function promises less about its result than the refined function type it meets requires |
+| `TUR-W0388` | warn | `--warn-unrefined-fn-slot` (opt-in): a refined function went into a function-typed slot that leaves that parameter unrefined |
 | `TUR-I0379` | internal | **RETIRED in 0.32.5**, never emitted: reported a Z3-oracle mismatch back when a dev build could link one. Code reserved, not reused |
 | `TUR-W0063` | warn | a lingering enable of a GRADUATED experiment; accepted, no effect. Not `refined` any more -- its shim was retired in 0.38.0 |
 | `TUR-W0064` | warn | a lingering GRADUATED `#lang` layer token; accepted, no effect. `GRADUATED_LAYERS[]` is empty since 0.38.0 |
