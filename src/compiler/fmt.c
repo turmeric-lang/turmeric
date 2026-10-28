@@ -238,6 +238,12 @@ static bool fmt_frame_annot(Buf *b, const Form *f) {
     return true;
 }
 
+/* `#used`, `#no-unwind`: the symbol the reader makes of an attribute
+ * `#[used]` (reader.c read_attribute). */
+static bool sym_is_hash_attr(const Symbol *sym) {
+    return sym->len > 1 && sym->name[0] == '#';
+}
+
 static void fmt_form_flat(Buf *b, const Form *f) {
     switch (f->tag) {
         case F_NIL:   buf_puts(b, "nil"); break;
@@ -247,6 +253,15 @@ static void fmt_form_flat(Buf *b, const Form *f) {
         case F_STR:   print_str_escaped_b(b, f->as.s,
                                           (f->lit_spell & LIT_SPELL_HIGH_ESC) != 0); break;
         case F_SYM:
+            /* The reader folds an attribute `#[used]` into the symbol
+             * `#used`; spell it back, or the output is not source. */
+            if (sym_is_hash_attr(f->as.sym)) {
+                buf_putc(b, '#');
+                buf_putc(b, '[');
+                buf_write(b, f->as.sym->name + 1, f->as.sym->len - 1);
+                buf_putc(b, ']');
+                break;
+            }
             buf_write(b, f->as.sym->name, f->as.sym->len);
             break;
         case F_KEYWORD:
@@ -718,7 +733,18 @@ static uint32_t defn_params_index(const Form *f) {
      * `^export-as "c_name"`, `^deprecated "msg"` (caret-type-attributes-plan
      * P5) -- so every index below is relative to it. */
     uint32_t nm = 1;
-    while (nm < n && is_caret_attr(it[nm])) {
+    for (;;) {
+        /* The deprecated `(export-as "c_name")` list and `#[used]` spellings
+         * still read, and still sit before the name. */
+        if (nm < n && it[nm]->tag == F_LIST && it[nm]->as.list.len == 2) {
+            const Symbol *h = list_head_sym(it[nm]);
+            if (h && sym_eq(h, "export-as")) { nm++; continue; }
+        }
+        if (nm < n && it[nm]->tag == F_SYM && sym_is_hash_attr(it[nm]->as.sym)) {
+            nm++;
+            continue;
+        }
+        if (!(nm < n && is_caret_attr(it[nm]))) break;
         bool takes_str = sym_eq(it[nm]->as.sym, "^deprecated") ||
                          sym_eq(it[nm]->as.sym, "^export-as");
         nm++;
@@ -1458,6 +1484,13 @@ static void fmt_form(FmtState *s, const Form *f) {
         }
         case F_STR:   fmt_emit_inline(s, f);                           break;
         case F_SYM:
+            if (sym_is_hash_attr(f->as.sym)) {
+                fs_putc(s, '#');
+                fs_putc(s, '[');
+                fs_write(s, f->as.sym->name + 1, f->as.sym->len - 1);
+                fs_putc(s, ']');
+                break;
+            }
             fs_write(s, f->as.sym->name, f->as.sym->len);
             break;
         case F_KEYWORD:
