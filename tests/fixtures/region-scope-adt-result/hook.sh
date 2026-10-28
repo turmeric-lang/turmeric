@@ -40,14 +40,14 @@ TUR="${TUR:-./build/tur}"
 cat > "$TMP/in.tur" <<'EOF'
 (load "stdlib/trail.tur")
 
-(defdata Link :heap (Link [v : int nxt : int]))
+(defdata ^heap Link (Link [v : int nxt : int]))
 (defdata RPair (RIP :int :int))
 (defdata Color (Red) (Green) (Blue))
 
 ;; Mutually recursive, and NEITHER def is self-recursive -- so the walk's
 ;; is_self_recursive guard does not see it.
-(defdata MB :copy (MBnil) (MBcons :int :MA))
-(defdata MA :copy (MAnil) (MAcons :int :MB))
+(defdata ^copy MB (MBnil) (MBcons :int :MA))
+(defdata ^copy MA (MAnil) (MAcons :int :MB))
 
 (defn build [n : int acc : int] : int
   (if (<= n 0) acc (build (- n 1) (:: (Link n acc) :int))))

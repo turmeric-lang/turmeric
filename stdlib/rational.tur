@@ -26,7 +26,7 @@
 ;;;
 ;;; Since: Phase N1
 
-(defdata ArithError :copy (DivByZero) (Overflow))
+(defdata ^copy ArithError (DivByZero) (Overflow))
 ;;; Rational -- an exact num/den pair over int64.
 ;;;
 ;;; Invariant (maintained by every constructor in this module):
@@ -39,7 +39,7 @@
 ;;;
 ;;; Since: Phase N1
 
-(defstruct Rational :copy [num : int den : int])
+(defstruct ^copy Rational [num : int den : int])
 ;; -- integer helpers ---------------------------------------------------------
 ;;; int/abs -- absolute value of an int.
 ;;;

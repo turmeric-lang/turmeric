@@ -27,7 +27,7 @@
 ;; Barrier wraps its :ptr<void> with a nominally distinct type, so it cannot be
 ;; passed where a Mutex or CondVar belongs. :linear because a barrier owns a
 ;; mutex and a condvar and must be torn down exactly once.
-(defopaque Barrier :ptr<void> :linear)
+(defopaque ^linear Barrier :ptr<void>)
 ;;; barrier/autolink-hint -- hoist the TurBarrier layout to file scope.
 ;;;
 ;;; Declared ONCE here rather than repeated in each inline-C body below: a

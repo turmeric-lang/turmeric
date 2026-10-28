@@ -29,9 +29,9 @@
 ;; pointer (tur_string_from_bytes mallocs unconditionally; no producer returns
 ;; 0).  This is what makes (Option String) eligible for the option-niche
 ;; representation; the niche Some ctor enforces it at construction.
-(defopaque String :ptr<void> :non-null)
+(defopaque ^non-null String :ptr<void>)
 
-(defopaque StringBuilder :ptr<void> :non-null)
+(defopaque ^non-null StringBuilder :ptr<void>)
 ;; ---- Runtime primitives (src/runtime/tur_string.c) -------------------------
 ;; Declared raw (:ptr / :cstr / :int / :bool); the public ops below wrap them
 ;; with the String / StringBuilder newtypes.  The interpreter registers a native

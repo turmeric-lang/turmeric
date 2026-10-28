@@ -22,7 +22,7 @@
 (definstance Functor [(Const r)]
   (fmap [c g] (mk-const (get-const c))))
 
-(defstruct Point :copy :heap [x : int y : int])
+(defstruct ^copy ^heap Point [x : int y : int])
 
 (defn point-x [^f] [^Functor f g : (-> int (f int)) s : Point] : (f Point)
   ;; h : int -> (f int) -- the return annotation names the enclosing rank-2 `f`.

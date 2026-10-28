@@ -6,7 +6,7 @@
 ; -- because emit_dyn_field's candidate scan skipped any ADT with type
 ; parameters (a generic ADT has one monomorph per instantiation, and their
 ; field offsets differ) and, separately, any `:heap` ADT. `Cons` is both:
-; `(defstruct Cons :heap [A] (head A) (tail :int))`. So no cons list and no
+; `(defstruct ^heap Cons [A] (head A) (tail :int))`. So no cons list and no
 ; user generic struct could be read through an `any` parameter, while the
 ; interpreter -- which inspects the value -- answered fine.
 ;

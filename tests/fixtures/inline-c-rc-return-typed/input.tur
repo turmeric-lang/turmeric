@@ -21,8 +21,8 @@
 ; This fixture asserts refcounts rather than just "it compiles", because the
 ; interesting failure mode of a wrong return lowering is a handle that survives
 ; the type checker and then miscounts.
-(defstruct S :move [tag : int])
-(defstruct Chain :move [item : rc<S> next : rc<Chain>])
+(defstruct ^move S [tag : int])
+(defstruct ^move Chain [item : rc<S> next : rc<Chain>])
 
 (defn chain-nil [] : rc<Chain>
   ```c

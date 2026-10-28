@@ -28,7 +28,7 @@
 ;; parameter ^borrow, so locking and unlocking repeatedly reads the handle
 ;; without consuming it; only mutex-free consumes. Locking a freed Mutex is a
 ;; TUR-E0101. See docs/archive/history/stdlib-linear-handle-borrows.md.
-(defopaque Mutex :ptr<void> :linear)
+(defopaque ^linear Mutex :ptr<void>)
 ;;; mutex-new -- allocate and initialise a new POSIX mutex.
 ;;;
 ;;; Returns:

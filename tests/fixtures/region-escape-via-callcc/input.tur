@@ -14,8 +14,8 @@
 
 (defmodule main
   (import ccreg :refer [capture! resume!])
-  (defdata Link :heap (Link [v : int nxt : int]))
-  (defdata TL :heap (TNil) (TCons :int :TL))
+  (defdata ^heap Link (Link [v : int nxt : int]))
+  (defdata ^heap TL (TNil) (TCons :int :TL))
   (defn tbuild [n : int acc : TL] : TL
     (if (<= n 0) acc (tbuild (- n 1) (TCons 99 acc))))
   (defn tsum [t : TL] : int

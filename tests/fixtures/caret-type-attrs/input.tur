@@ -1,0 +1,54 @@
+;; caret-type-attributes-plan P0: the flags of a type declaration are `^attrs`
+;; before the name, as on `defn` and `def`.  Every declaration form takes them,
+;; they combine in any order, and the discipline they name is enforced exactly
+;; as the trailing keyword spelling enforces it.
+(defstruct ^copy Point [x : int y : int])
+(defstruct ^move Packet [id : int])
+(defstruct ^linear Socket [fd : int])
+(defstruct ^heap ^linear Conn [fd : int])
+(defstruct ^copy Pair2 [A B] (a A) (b B))
+
+(defopaque ^linear Tok : int)
+(defopaque ^affine Lease : int)
+(defopaque ^sealed Ticket : int)
+(defopaque ^linear ^sealed Key : int)
+(defopaque ^affine Tagged [A] : int)
+(defopaque ^non-null NnHandle :ptr<void>)
+
+(defstruct ^no-auto-ctor Hidden [n : int])
+(defdata ^move ^heap Cell (Cell int))
+
+(defdata ^copy Shape (Circle int) (Square int))
+(defdata ^linear Job (Job int))
+(defdata ^linear Wrap [A] (Wrap A))
+(defgadt ^copy Expr [T]
+  (IntE int : (Expr int))
+  (BoolE bool : (Expr bool)))
+
+(defn eval-int [e : (Expr int)] : int
+  (match e
+    (IntE n) n))
+
+(defn area [s : Shape] : int
+  (match s
+    (Circle r) (* r r)
+    (Square w) (* w w)))
+
+(defn socket-fd [s : Socket] : int (.fd s))
+(defn conn-fd [c : Conn] : int (.fd c))
+(defn run-job [j : Job] : int
+  (match j
+    (Job n) n))
+
+(defn main [] : int
+  (let [p (Point 3 4)]
+    (println (+ (.x p) (.y p))))
+  (println (.id (Packet 9)))
+  (println (socket-fd (make-struct Socket 7)))
+  (println (conn-fd (make-struct Conn 8)))
+  (println (area (Circle 5)))
+  (println (area (Square 3)))
+  (println (run-job (Job 11)))
+  (println (eval-int (IntE 13)))
+  (println (.n (make-struct Hidden 5)))
+  0)

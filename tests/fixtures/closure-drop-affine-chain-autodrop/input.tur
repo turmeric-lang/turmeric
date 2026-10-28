@@ -19,7 +19,7 @@
   return g_fr;
   ```)
 
-(defopaque Chain :int :affine)
+(defopaque ^affine Chain :int)
 
 (defn cell-cons [head : int tail : int] : int
   ```c

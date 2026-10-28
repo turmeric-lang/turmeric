@@ -1,0 +1,18 @@
+;; caret-type-attributes-plan P0: `defstruct` takes `^affine` (and the trailing
+;; `:affine`), as `defopaque` and `defdata` already did.  Before the shared
+;; attribute parser the keyword ended defstruct's flag loop and was read as part
+;; of the field list.  An affine value may be used once, or not at all.
+(defstruct ^affine Lease [secs : int])
+(defstruct ^affine Grant [secs : int])
+
+(defn lease-secs [l : Lease] : int (.secs l))
+(defn grant-secs [g : Grant] : int (.secs g))
+
+(defn main [] : int
+  (let [l (make-struct Lease 30)]
+    (println (lease-secs l)))
+  (let [g (make-struct Grant 60)]
+    (println (grant-secs g)))
+  (let [unused (make-struct Lease 99)]
+    0)
+  0)

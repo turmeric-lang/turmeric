@@ -5,8 +5,8 @@
 ;; __env_N__spec__int64_t (thin __fn vs fat tur_thunk __fn) and redefine
 ;; each other.  Expect: 7 (3+4 applied to env 0), then 2 (leaf count).
 (load "stdlib/typeclass-functor.tur")
-(defdata ExprF :copy [a] (LitF :int) (AddF a a))
-(defdata Expr  :copy (Roll (ExprF Expr)))
+(defdata ^copy ExprF [a] (LitF :int) (AddF a a))
+(defdata ^copy Expr (Roll (ExprF Expr)))
 (definstance Functor [ExprF]
   (fmap [c g]
     (match c

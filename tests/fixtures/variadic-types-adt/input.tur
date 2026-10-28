@@ -1,6 +1,6 @@
 ;; variadic-types-adt -- :Color rest (ADT) accepts Color constructor values.
 
-(defdata Color :copy (Red) (Green) (Blue))
+(defdata ^copy Color (Red) (Green) (Blue))
 
 (defn cons-list-len [lst : int] #fx{Unsafe} : int
   ```c

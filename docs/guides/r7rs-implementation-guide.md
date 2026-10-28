@@ -164,7 +164,7 @@ The core rewrites (the authoritative list is `scheme_lower.h`):
 | internal `define`s | `letrec` / `let`, R7RS `letrec*` order |
 | `quote` / `quasiquote` | runtime builders (`r7rs-list`, `r7rs-cons`, `r7rs-vector`, `r7rs-append2__`) |
 | `guard`, `parameterize`, `delay`, `delay-force` | calls into the prelude (`lower_guard`, ...) |
-| `define-record-type` | a `defstruct R7rsRec_<name> :heap`, lifted to top level |
+| `define-record-type` | a `defstruct ^heap R7rsRec_<name>`, lifted to top level |
 
 Things the lowering does beyond the table:
 
@@ -260,28 +260,28 @@ Saffron's; see [value representations](value-representations-guide.md) for
 the boundary rules.
 
 The prelude's predicates are functions on purpose. An inline `(is? x T)`
-narrows `x` to `T`, and a narrowed `:heap` struct is a unique value, so a
+narrows `x` to `T`, and a narrowed `^heap` struct is a unique value, so a
 second use would be TUR-E0201; a call leaves `x` an `any`.
 
 ### Scheme types
 
 | Scheme | Representation (`stdlib/r7rs/prelude.tur`) |
 |---|---|
-| pair | `R7rsPair :heap [a d]` (not `car`/`cdr`, which would meet the stdlib's `car` in `.field` lookup) |
+| pair | `^heap R7rsPair [a d]` (not `car`/`cdr`, which would meet the stdlib's `car` in `.field` lookup) |
 | `()` | `R7rsNull`, one value `r7rs-null-value__`; an unset dynamic slot (all zero) also reads as `()` |
 | boolean | Turmeric `bool` |
 | char | `R7rsChar`, a `defopaque` over the code point, so `char?` and `integer?` are disjoint |
-| string | a `cstr` (literals, and strings from `symbol->string`, `number->string`, `read`, Turmeric) or an `R7rsString :heap [cps : (Vec int)]` (strings a procedure newly allocates); `string-set!` on a `cstr` is a named error |
+| string | a `cstr` (literals, and strings from `symbol->string`, `number->string`, `read`, Turmeric) or an `^heap R7rsString [cps : (Vec int)]` (strings a procedure newly allocates); `string-set!` on a `cstr` is a named error |
 | symbol | `Sym` (`stdlib/sym.tur`); `string->symbol` interns through `stdlib/sym-dynamic.tur`. A quoted symbol is a keyword record (`__tur_sym_...`) |
 | vector | `(Vec any)` |
-| bytevector | `R7rsBytevector :heap [bytes : (Vec int)]` |
+| bytevector | `^heap R7rsBytevector [bytes : (Vec int)]` |
 | eof | `R7rsEof`, one value |
 | multiple values | `R7rsValues [items]` over a Scheme list; `(values x)` is `x` |
-| error object | `R7rsError :heap [message irritants kind]` (kind: 0 raise, 1 file, 2 read) |
-| record | `R7rsRec_<name> :heap` |
+| error object | `^heap R7rsError [message irritants kind]` (kind: 0 raise, 1 file, 2 read) |
+| record | `^heap R7rsRec_<name>` |
 | parameter, promise | `R7rsParam`, `R7rsPromise` over `R7rsPBox` |
-| port | `R7rsPort :heap`, over an opaque `R7rsIo` C buffer |
-| boxed `set!` variable | `R7rsBox :heap [v]` |
+| port | `^heap R7rsPort`, over an opaque `R7rsIo` C buffer |
+| boxed `set!` variable | `^heap R7rsBox [v]` |
 
 Wherever an `any` is unboxed to a `cstr` (a Scheme call passing a string to
 a Turmeric `cstr` parameter, or Turmeric code casting a Scheme result), the
@@ -294,10 +294,10 @@ elaborator calls the prelude's `r7rs-str__`
 | Kind | Representation |
 |---|---|
 | exact integer in int64 | `int` |
-| exact integer outside int64 | `R7rsBig :heap [digits : cstr]`; `r7rs-big-norm__` is the only constructor, so a bignum never holds a value an `int` could |
-| exact rational | `R7rsRatio :heap [num den]` |
+| exact integer outside int64 | `^heap R7rsBig [digits : cstr]`; `r7rs-big-norm__` is the only constructor, so a bignum never holds a value an `int` could |
+| exact rational | `^heap R7rsRatio [num den]` |
 | inexact real | `float` (double) |
-| complex | `R7rsComplex :heap [re im]` |
+| complex | `^heap R7rsComplex [re im]` |
 
 Exactness is the representation. `r7rs-add2__` and friends take the int64
 path for two ints and check for overflow, falling into the bignum core
@@ -529,7 +529,7 @@ saves and restores that state
 
 ## The collector (`r7gc.c`)
 
-A Scheme value is a `:heap` box, and Turmeric's memory model never frees
+A Scheme value is a `^heap` box, and Turmeric's memory model never frees
 those, so without a collector a Scheme program only grows. `r7gc.c` is a
 conservative, non-moving mark-sweep collector in the Boehm style. The
 `r7rs-gc` experiment graduated on 2026-09-25 and the collector is now on by

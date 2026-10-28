@@ -26,7 +26,7 @@
 (defn fwd [A] [g : (fn [A] int) y : A] : int (apply1 g y))
 
 ;; A tyvar-sig param stored into a fat struct field, then called back out.
-(defstruct BoxF :copy [A] (call (fn [A] int)))
+(defstruct ^copy BoxF [A] (call (fn [A] int)))
 (defn mk-box [A] [g : (fn [A] int)] : (BoxF A) (make-struct BoxF :call g))
 (defn run-box [A] [b : (BoxF A) x : A] : int ((.call b) x))
 

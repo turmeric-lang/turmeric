@@ -10,7 +10,7 @@
 ;; just the build -- the failure class this family ships hides behind casts cc
 ;; cannot see through.
 
-(defdata Opt2 :copy [a] (Nah) (Yep a))
+(defdata ^copy Opt2 [a] (Nah) (Yep a))
 
 (defn get-or [o : (Opt2 int) d : int] : int
   (match o

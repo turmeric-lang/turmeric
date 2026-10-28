@@ -3,7 +3,7 @@
 ;; is closed by the boundary itself: a `:heap` node cannot cross it by type,
 ;; and neither can a record that holds one (extern_c_aggregate_ok).  A node
 ;; reaches foreign code only through an erasing ascription, which is noted.
-(defdata Link :heap (Link [v : int nxt : int]))
+(defdata ^heap Link (Link [v : int nxt : int]))
 (defstruct Holder [n : Link k : int])
 
 (extern-c keep_node [slot : ptr<void> n : Link] :void)

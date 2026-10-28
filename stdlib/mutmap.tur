@@ -27,7 +27,7 @@
 ;;; MutableMap -- parameterized in-place hash table with key K, value V.
 ;;;
 ;;; Since: Phase F5 (cross-plan-followups)
-(defstruct MutableMap :heap [K V] (storage :ptr<void>))
+(defstruct ^heap MutableMap [K V] (storage :ptr<void>))
 ;;; mutmap-new -- create a new empty MutableMap[K V] with default
 ;;; initial capacity (16 slots).
 ;;;

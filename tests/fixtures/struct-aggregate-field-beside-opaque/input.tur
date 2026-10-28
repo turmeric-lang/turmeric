@@ -6,12 +6,12 @@
 ;; structure".  Field order, `:copy`, and `:non-null` on the opaque do not matter.
 
 (defopaque S :ptr<void>)
-(defopaque T :ptr<void> :non-null)
-(defstruct Pos :copy [line : int col : int])
+(defopaque ^non-null T :ptr<void>)
+(defstruct ^copy Pos [line : int col : int])
 (defdata K (Ka int) (Kb int int))
-(defstruct Er :copy [msg : S pos : Pos])
+(defstruct ^copy Er [msg : S pos : Pos])
 (defstruct Er2 [pos : Pos msg : T])
-(defstruct Er3 :copy [msg : S kind : K])
+(defstruct ^copy Er3 [msg : S kind : K])
 (defn __s [] : ptr<void>
   ```c
   return (void*)"x";

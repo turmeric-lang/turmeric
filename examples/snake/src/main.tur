@@ -61,7 +61,7 @@
 ;;   dir      — current direction (DIR_* constant)
 ;;   tick-ms  — accumulated milliseconds since last movement step
 ;; ============================================================
-(defstruct GameState :copy
+(defstruct ^copy GameState
   [running : int
    dir     : int
    tick-ms : int])

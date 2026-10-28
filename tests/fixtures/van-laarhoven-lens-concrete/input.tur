@@ -13,7 +13,7 @@
 ;; result positions of the lens -- the MB4 "can Const/Identity flow?" gate.
 ;; A functor wider than one int64 word is still the mode-B "No-go" -- see
 ;; docs/archive/history/van-laarhoven-functor-must-be-int-carrier.md for the tracked
-;; restriction and the concrete repro (swap in `(defstruct Identity :copy [A]
+;; restriction and the concrete repro (swap in `(defstruct ^copy Identity [A]
 ;; ...)` and codegen produces bad C).
 ;;
 ;; NOTE: view/set/over here are written per-focus (concrete `S`/`A`).  A fully
@@ -35,7 +35,7 @@
 (definstance Functor [Identity]
   (fmap [i g] (mk-id (g (run-id i)))))
 
-(defstruct Point :copy :heap [x : int y : int])
+(defstruct ^copy ^heap Point [x : int y : int])
 
 ;; A concrete lens focusing Point.x, polymorphic over the functor f.
 (defn point-x [^f] [^Functor f g : (-> int (f int)) s : Point] : (f Point)

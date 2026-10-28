@@ -2,7 +2,7 @@
 (defclass MyShow [a]
   (show [x] : cstr))
 
-(defstruct HCons :copy [value : int next : int])
+(defstruct ^copy HCons [value : int next : int])
 
 (definstance MyShow [HCons]
   (show [x] : cstr

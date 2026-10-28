@@ -5,8 +5,8 @@
 ; Not leak-checked: the kept box has no owner yet, by design (see
 ; docs/archive/sum-payload-box-leaks-at-match.md).
 
-(defstruct Er :copy [line : int col : int])
-(defopaque Doc :ptr<void> :non-null)
+(defstruct ^copy Er [line : int col : int])
+(defopaque ^non-null Doc :ptr<void>)
 
 (defn parse [i : int] : (Result Doc Er)
   (Err (Er i 7)))

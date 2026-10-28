@@ -1,6 +1,6 @@
 ; Sum-types plan T8.7: construct a sum value in Turmeric, destructure it in an
 ; inline-C block via the documented tur_adt_Either layout, return to Turmeric.
-(defdata Either :copy [L R]
+(defdata ^copy Either [L R]
   (Left L)
   (Right R))
 

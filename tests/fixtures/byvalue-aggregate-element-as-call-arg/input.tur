@@ -9,15 +9,15 @@
 ;; aggregates are passed by pointer and never hit it; they are here as the
 ;; control.  See docs/archive/byvalue-sum-from-vec-get-bridged-twice.md.
 
-(defdata E :copy
+(defdata ^copy E
   (D :int)
   (U))
 
-(defdata F :copy
+(defdata ^copy F
   (Fv :float)
   (Fn))
 
-(defdata W :copy
+(defdata ^copy W
   (Wv :int :int)
   (Wn))
 

@@ -19,9 +19,9 @@
 ;; The float instance is there so the shim table has a primitive row beside the
 ;; aggregate ones -- 7.1 rather than a whole number, since an `any` holds a
 ;; double's BIT PATTERN and a converting arm would print a wrong number here.
-(defdata Shape :copy (Circle :float) (Rect :float :float))
-(defdata Wrap  :copy (One :int))
-(defdata Flag  :copy (Yes) (No))
+(defdata ^copy Shape (Circle :float) (Rect :float :float))
+(defdata ^copy Wrap (One :int))
+(defdata ^copy Flag (Yes) (No))
 
 (defclass Describe [a] (label [x] : cstr))
 

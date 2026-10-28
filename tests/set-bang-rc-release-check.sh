@@ -16,7 +16,7 @@ TUR=./build/tur
 CC_FLAGS="-O2 -std=c99 -Wall -fno-strict-aliasing -fsanitize=address -g"
 pass=0; fail=0
 
-prelude='(defstruct Node :move [next : rc<Node>])
+prelude='(defstruct ^move Node [next : rc<Node>])
 (defn null-rc-node [] : ptr<void>
   ```c
   return NULL;

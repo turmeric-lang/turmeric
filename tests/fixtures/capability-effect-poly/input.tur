@@ -13,7 +13,7 @@
 ;; Capability struct with an effect-annotated function field.
 ;; :copy means passing it doesn't consume (move) the value.
 ;; print-line carries #{Write}: callers of this field inherit the Write effect.
-(defstruct Printer :copy [print-line : fn #fx{Write}])
+(defstruct ^copy Printer [print-line : fn #fx{Write}])
 
 ;; A named function to use as the print-line implementation.
 ;; It performs Write, matching the #{Write} annotation on the field.

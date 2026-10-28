@@ -24,7 +24,7 @@
 ; only from within the candidate subgraph falls to a zero trial count and is
 ; collected. This builds many two-node cycles, collecting after each, and
 ; asserts the heap does not grow.
-(defstruct S :move [next : rc<S>])
+(defstruct ^move S [next : rc<S>])
 
 (defn null-rc-s [] : ptr<void>
   ```c

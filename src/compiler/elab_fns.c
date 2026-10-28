@@ -11303,7 +11303,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
                      * the value (direct pack, let-tail, conditional). */
                     if (ann->kind == TY_EXISTS && ann->as.forall_.is_linear) {
                         diag_emit(DIAG_ERROR, ret_f->span,
-                                  "defn: a :linear existential cannot escape "
+                                  "defn: a ^linear existential cannot escape "
                                   "its packing scope -- it must be opened in "
                                   "the same scope that packed it (no return, "
                                   "no struct/collection storage)");

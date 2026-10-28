@@ -3,7 +3,7 @@
 ; (see errors/sum-either-nonexhaustive); with it the program compiles and runs.
 ; The deprecated #fx{NonExhaustive} spelling is pinned by
 ; sum-either-nonexhaustive-legacy-marker.
-(defdata Either :copy [L R]
+(defdata ^copy Either [L R]
   (Left L)
   (Right R))
 

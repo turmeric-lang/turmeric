@@ -9,12 +9,12 @@
 ;; so the whole chain is box-free -- no `emit_agg_box` / `dict_clone`.  The
 ;; expected.c snapshot pins that transitive chain.
 
-(defstruct Identity :copy [A] (wrapped : A) (tag : int))
+(defstruct ^copy Identity [A] (wrapped : A) (tag : int))
 (defn mk-id  [A] [x : A]            : (Identity A) (make-struct Identity :wrapped x :tag 0))
 (defn run-id [A] [i : (Identity A)] : A            (.wrapped i))
 (definstance Functor [Identity]
   (fmap [i g] (mk-id (g (run-id i)))))
-(defstruct Point :copy :heap [x : int y : int])
+(defstruct ^copy ^heap Point [x : int y : int])
 (defn point-x [^f] [^Functor f g : (-> int (f int)) s : Point] : (f Point)
   (fmap (g (.x s)) (fn [nx : int] : Point (make-struct Point :x nx :y (.y s)))))
 (defn point-y [^f] [^Functor f g : (-> int (f int)) s : Point] : (f Point)

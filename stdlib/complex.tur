@@ -30,7 +30,7 @@
 ;;;
 ;;; Since: Phase N2
 
-(defstruct Complex :copy [re : float im : float])
+(defstruct ^copy Complex [re : float im : float])
 ;; -- construction ------------------------------------------------------------
 ;;; complex/of -- build the complex number re + im*i.
 ;;;

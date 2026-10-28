@@ -13,7 +13,7 @@
 (defstruct Lens [S A]
   (get (fn [S] A))
   (put (fn [S A] S)))
-(defstruct Person :copy [name : cstr age : int])
+(defstruct ^copy Person [name : cstr age : int])
 (defn name-get [p : Person] : cstr (.name p))
 (defn name-put [p : Person n : cstr] : Person
   (make-struct Person n (.age p)))

@@ -6,7 +6,7 @@
 (load "stdlib/json.tur")
 (load "stdlib/schema.tur")
 
-(defstruct User :copy [name : cstr age : int])
+(defstruct ^copy User [name : cstr age : int])
 
 (defn user-schema [] : int
   (schema/field

@@ -51,23 +51,28 @@ Every struct has a **copy kind** that governs how the value can be used:
 
 | Annotation | Meaning |
 |------------|---------|
-| `:copy`    | Bitwise-copyable; can be freely duplicated (all fields must be copy types) |
-| `:move`    | Move-only (default when no annotation is given) |
-| `:linear`  | Exactly-once consumed; must be used exactly once |
+| `^copy`    | Bitwise-copyable; can be freely duplicated (all fields must be copy types) |
+| `^move`    | Move-only (default when no annotation is given) |
+| `^linear`  | Exactly-once consumed; must be used exactly once |
+| `^affine`  | At-most-once: may be dropped, but never used twice |
+
+Write the annotation before the name, as on `defn` and `def`. (The older
+spelling, a keyword after the name such as `:copy`, still compiles but warns
+with `TUR-D0007`; `tur fmt` rewrites it.)
 
 ```turmeric
-(defstruct Point   :copy   [x : int y : int])      ; freely copyable
-(defstruct Packet  :move   [ptr : ptr<void>])      ; ownership transferred on use
-(defstruct Socket  :linear [fd : int])             ; must be consumed exactly once
+(defstruct ^copy Point    [x : int y : int])  ; freely copyable
+(defstruct ^move Packet   [ptr : ptr<void>])  ; ownership transferred on use
+(defstruct ^linear Socket [fd : int])         ; must be consumed exactly once
 ```
 
 ```sweet-exp
-defstruct Point   :copy   [x : int y : int]      ; freely copyable
-defstruct Packet  :move   [ptr : ptr<void>]      ; ownership transferred on use
-defstruct Socket  :linear [fd : int]             ; must be consumed exactly once
+defstruct ^copy Point    [x : int y : int]  ; freely copyable
+defstruct ^move Packet   [ptr : ptr<void>]  ; ownership transferred on use
+defstruct ^linear Socket [fd : int]         ; must be consumed exactly once
 ```
 
-Omitting the annotation is the same as `:move`:
+Omitting the annotation is the same as `^move`:
 
 ```turmeric
 (defstruct Pair [first : int second : int])   ; move-only by default
@@ -77,9 +82,9 @@ Omitting the annotation is the same as `:move`:
 defstruct Pair [first : int second : int]   ; move-only by default
 ```
 
-The compiler enforces that a `:copy` struct's fields are all themselves
+The compiler enforces that a `^copy` struct's fields are all themselves
 copy-compatible types. Using a non-copy field (such as `:ref<int>`) in a
-`:copy` struct is a compile error.
+`^copy` struct is a compile error.
 
 ### Structs are passed by value
 
@@ -120,7 +125,7 @@ sharing is part of its meaning:
 | you want | use |
 |---|---|
 | shared, reference-counted mutation | `rc<T>` -- see [Reference-counted structs](#reference-counted-structs) |
-| interior mutability by declaration | a `:heap` struct |
+| interior mutability by declaration | a `^heap` struct |
 | to return the new value instead | an ordinary return, which is usually clearest |
 
 A `&Struct` receiver is rejected outright -- `set! (.field s)` requires a struct
@@ -157,14 +162,14 @@ Use `make-struct` to construct a struct value. Fields are supplied positionally
 in the order they appear in `defstruct`.
 
 ```turmeric
-(defstruct Point :copy [x : int y : int])
+(defstruct ^copy Point [x : int y : int])
 
 (let [p (make-struct Point 3 4)]
   ...)
 ```
 
 ```sweet-exp
-defstruct Point :copy [x : int y : int]
+defstruct ^copy Point [x : int y : int]
 
 let [p make-struct(Point 3 4)]
   ...
@@ -193,14 +198,14 @@ Every `defstruct` also binds the struct name as a **constructor function** in
 the value namespace, so you can drop the `make-struct` keyword entirely:
 
 ```turmeric
-(defstruct Point :copy [x : int y : int])
+(defstruct ^copy Point [x : int y : int])
 
 (let [p (Point 3 4)]          ; identical to (make-struct Point 3 4)
   ...)
 ```
 
 ```sweet-exp
-defstruct Point :copy [x : int y : int]
+defstruct ^copy Point [x : int y : int]
 
 let [p Point(3 4)]
   ...
@@ -209,11 +214,11 @@ let [p Point(3 4)]
 The struct name lives in the *type* namespace and the constructor in the
 *value* namespace, so `Point` still works as a type annotation (`p : Point`)
 with no conflict. If the struct name is already bound as a value elsewhere,
-opt out with `:no-auto-ctor`; construction then goes only through
+opt out with `^no-auto-ctor`; construction then goes only through
 `make-struct`:
 
 ```turmeric
-(defstruct Point :copy :no-auto-ctor [x : int y : int])
+(defstruct ^copy ^no-auto-ctor Point [x : int y : int])
 ;; (Point 3 4) is now an error; use (make-struct Point 3 4)
 ```
 
@@ -230,14 +235,14 @@ Both `make-struct` and the auto-bound constructor accept `:field value` pairs.
 Keyword order is free; the elaborator reorders into declared-field order:
 
 ```turmeric
-(defstruct Person :copy [name : cstr age : int])
+(defstruct ^copy Person [name : cstr age : int])
 
 (Person :name "Bob" :age 40)            ; auto-bound ctor, keyword form
 (make-struct Person :age 40 :name "Bob") ; make-struct, reversed order
 ```
 
 ```sweet-exp
-defstruct Person :copy [name : cstr age : int]
+defstruct ^copy Person [name : cstr age : int]
 
 Person(:name "Bob" :age 40)             ; auto-bound ctor, keyword form
 make-struct(Person :age 40 :name "Bob") ; make-struct, reversed order
@@ -257,11 +262,11 @@ one call (`TUR-E0299`). Use one form or the other.
 ### Functional update with `with`
 
 `with` returns a **new** struct value with some fields overridden and the rest
-copied from a source value. It is only valid on `:copy` structs (copying the
+copied from a source value. It is only valid on `^copy` structs (copying the
 unchanged fields out of a move-only source would consume it):
 
 ```turmeric
-(defstruct Person :copy [name : cstr age : int active : int])
+(defstruct ^copy Person [name : cstr age : int active : int])
 
 (let [p (Person "Bob" 40 1)
       q (with p [name "Alice"])        ; => Person "Alice" 40 1
@@ -270,7 +275,7 @@ unchanged fields out of a move-only source would consume it):
 ```
 
 ```sweet-exp
-defstruct Person :copy [name : cstr age : int active : int]
+defstruct ^copy Person [name : cstr age : int active : int]
 
 let [p Person("Bob" 40 1)
      q with(p [name "Alice"])          ; => Person "Alice" 40 1
@@ -281,7 +286,7 @@ let [p Person("Bob" 40 1)
 `with` lowers to a constructor call that takes the listed fields from the
 override list and every other field from the source, so override values are
 type-checked exactly as the constructor would check them. Applying `with` to a
-non-`:copy` struct is rejected (`TUR-E0296`), as are unknown (`TUR-E0297`) and
+non-`^copy` struct is rejected (`TUR-E0296`), as are unknown (`TUR-E0297`) and
 duplicate (`TUR-E0298`) override fields.
 
 ---
@@ -291,7 +296,7 @@ duplicate (`TUR-E0298`) override fields.
 Use `.fieldname` to read a field from a struct value:
 
 ```turmeric
-(defstruct Point :copy [x : int y : int])
+(defstruct ^copy Point [x : int y : int])
 
 (let [p (make-struct Point 3 4)]
   (println (.x p))    ; 3
@@ -299,7 +304,7 @@ Use `.fieldname` to read a field from a struct value:
 ```
 
 ```sweet-exp
-defstruct Point :copy [x : int y : int]
+defstruct ^copy Point [x : int y : int]
 
 let [p make-struct(Point 3 4)]
   println(.x(p))    ; 3
@@ -326,7 +331,7 @@ apart too -- the sole pattern names the struct and binds its fields. A
 single-variant match is trivially exhaustive (no catch-all needed):
 
 ```turmeric
-(defstruct Person :copy [name : cstr age : int])
+(defstruct ^copy Person [name : cstr age : int])
 
 (let [p (make-struct Person "Ada" 36)]
   (match p
@@ -355,7 +360,7 @@ Prefix `.fieldname` with `&` to take an immutable borrow of a field without
 moving the struct:
 
 ```turmeric
-(defstruct Point :copy [x : int y : int])
+(defstruct ^copy Point [x : int y : int])
 
 (let [p  (make-struct Point 3 4)
       rx &(.x p)]
@@ -363,7 +368,7 @@ moving the struct:
 ```
 
 ```sweet-exp
-defstruct Point :copy [x : int y : int]
+defstruct ^copy Point [x : int y : int]
 
 let [p  make-struct(Point 3 4)
      rx &(.x p)]
@@ -374,20 +379,20 @@ let [p  make-struct(Point 3 4)
 
 ## Linear fields (`lref<T>`)
 
-A `:move` struct may contain `:lref<T>` fields. Extracting such a field
+A `^move` struct may contain `:lref<T>` fields. Extracting such a field
 transfers linear ownership out of the struct and marks the struct binding as
 moved. A second extraction from the same binding is a use-after-move error
 (`TUR-E0005`).
 
 ```turmeric
-(defstruct PtrBox :move [ptr : lref<int>])
+(defstruct ^move PtrBox [ptr : lref<int>])
 
 ;; OK: single extraction
 (let [b (make-struct PtrBox (lref/new 42))]
   (println (deref (.ptr b))))
 
 ;; ERROR TUR-E0005: second extraction of a moved struct
-(defstruct Box :move [val : lref<int>])
+(defstruct ^move Box [val : lref<int>])
 (let [b (make-struct Box (lref/new 42))
       x (.val b)
       y (.val b)]   ; use-after-move
@@ -395,14 +400,14 @@ moved. A second extraction from the same binding is a use-after-move error
 ```
 
 ```sweet-exp
-defstruct PtrBox :move [ptr : lref<int>]
+defstruct ^move PtrBox [ptr : lref<int>]
 
 ;; OK: single extraction
 let [b make-struct(PtrBox lref/new(42))]
   println(deref(.ptr(b)))
 
 ;; ERROR TUR-E0005: second extraction of a moved struct
-defstruct Box :move [val : lref<int>]
+defstruct ^move Box [val : lref<int>]
 let [b make-struct(Box lref/new(42))
      x .val(b)
      y .val(b)]   ; use-after-move
@@ -417,7 +422,7 @@ Wrap a struct in `rc/of` to heap-allocate it with reference counting. The RC
 wrapper manages drop glue automatically when the count reaches zero.
 
 ```turmeric
-(defstruct Wrapper :move [val : rc<int>])
+(defstruct ^move Wrapper [val : rc<int>])
 
 (let [inner (rc/of 10)
       w     (rc/of (make-struct Wrapper inner))]
@@ -425,7 +430,7 @@ wrapper manages drop glue automatically when the count reaches zero.
 ```
 
 ```sweet-exp
-defstruct Wrapper :move [val : rc<int>]
+defstruct ^move Wrapper [val : rc<int>]
 
 let [inner rc/of(10)
      w     rc/of(make-struct(Wrapper inner))]
@@ -436,7 +441,7 @@ If the struct itself contains `:rc<T>` fields, the compiler generates nested
 drop glue to decrement those inner counts:
 
 ```turmeric
-(defstruct Node :move [val : rc<int>])
+(defstruct ^move Node [val : rc<int>])
 
 (let [inner (rc/of 42)
       outer (rc/of (make-struct Node inner))]
@@ -444,7 +449,7 @@ drop glue to decrement those inner counts:
 ```
 
 ```sweet-exp
-defstruct Node :move [val : rc<int>]
+defstruct ^move Node [val : rc<int>]
 
 let [inner rc/of(42)
      outer rc/of(make-struct(Node inner))]
@@ -510,7 +515,7 @@ generates exactly this.
 ```turmeric
 (load "stdlib/typeclass.tur")
 
-(defstruct Point :copy [x : int y : int])
+(defstruct ^copy Point [x : int y : int])
 
 (definstance Show [Point]
   (show [__p]
@@ -533,7 +538,7 @@ the `String`, hold it and release when done:
 `(let [s (show p)] (do ... (string/to-cstr s) ... (string/release s)))`.
 
 ```sweet-exp
-defstruct Point :copy [x : int y : int]
+defstruct ^copy Point [x : int y : int]
 
 definstance Show [Point]
   show [__p] : cstr
@@ -562,7 +567,7 @@ accessor `(.x s)` -- or a `[label .accessor]` pair to use a different label
 or non-default accessor.
 
 ```turmeric
-(defstruct Point :copy [x : int y : int])
+(defstruct ^copy Point [x : int y : int])
 (derive-show    Point x y)
 (derive-debug   Point x y)
 (derive-display Point x y)
@@ -574,7 +579,7 @@ or non-default accessor.
 ```
 
 ```sweet-exp
-defstruct Point :copy [x : int y : int]
+defstruct ^copy Point [x : int y : int]
 derive-show    Point x y
 derive-debug   Point x y
 derive-display Point x y
@@ -617,7 +622,7 @@ symbols and the `[label .accessor]` alias form -- are the same for both derivers
 ```turmeric
 (load "stdlib/typeclass.tur")
 
-(defstruct Point :copy [x : int y : int])
+(defstruct ^copy Point [x : int y : int])
 (derive-show Point x y)
 
 (let [p (make-struct Point 3 4)]
@@ -643,7 +648,7 @@ interpreter natives, so a program built on it runs on both the compiled and
 (defclass Show [a] (show [x] : cstr))
 (definstance Show [int] (show [x] : cstr (int->str x)))
 
-(defstruct Point :copy [x : int y : int])
+(defstruct ^copy Point [x : int y : int])
 (derive-show-cstr Point x y)
 
 (let [p (make-struct Point 3 4)]
@@ -697,7 +702,7 @@ propagates that effect row to the enclosing function.
 ```turmeric
 (defeffect Emit [s : cstr] : nil)
 
-(defstruct Emitter :copy [run : fn #{Emit}])
+(defstruct ^copy Emitter [run : fn #{Emit}])
 
 (defn main [] : int
   (let [em (make-struct Emitter (fn [s] (perform (Emit s))))]
@@ -709,7 +714,7 @@ propagates that effect row to the enclosing function.
 ```sweet-exp
 defeffect Emit [s : cstr] : nil
 
-defstruct Emitter :copy [run : fn #{Emit}]
+defstruct ^copy Emitter [run : fn #{Emit}]
 
 defn main [] : int
   let [em make-struct(Emitter (fn [s] perform(Emit(s))))]
@@ -763,7 +768,7 @@ Follow the `;;;` convention immediately above the `defstruct` form:
 ;;;   (make-struct Point 3 4)  ; => Point with x=3, y=4
 ;;;
 ;;; Since: Phase B1
-(defstruct Point :copy [x : int y : int])
+(defstruct ^copy Point [x : int y : int])
 ```
 
 ```sweet-exp
@@ -777,7 +782,7 @@ Follow the `;;;` convention immediately above the `defstruct` form:
 ;;;   make-struct(Point 3 4)  ; => Point with x=3, y=4
 ;;;
 ;;; Since: Phase B1
-defstruct Point :copy [x : int y : int]
+defstruct ^copy Point [x : int y : int]
 ```
 
 See the [docstring standard in CLAUDE.md](https://github.com/turmeric-lang/turmeric/blob/main/CLAUDE.md) for the full
@@ -821,7 +826,7 @@ A matrix wrapper, before and after:
 
 ### Reading and mutating through a borrow
 
-A struct that owns a `(Vec float)` (or any non-`:copy` field) is move-only, so a
+A struct that owns a `(Vec float)` (or any non-`^copy` field) is move-only, so a
 plain `(defn mat-get [m : mat ...] ...)` *consumes* `m` and a second call trips
 `TUR-E0005` use-after-move. Take the receiver by borrow with the `^borrow`
 parameter annotation -- **not** a `&mat` / `^&mat` type spelling -- and `.field`
@@ -847,7 +852,7 @@ ownership, so the same `m` can be read and mutated repeatedly.
 | `TUR-E0005` | Use-after-move: reading a field from a struct that was already moved (or extracting a linear field twice). For a move-only struct, take the receiver `^borrow` (see [Migrating legacy `:int`-pointer struct code](#migrating-legacy-int-pointer-struct-code)) |
 | `unknown function or operator 'sizeof'` / `'float64*'` / `'<Struct>-<field>'` | A legacy `:int`-pointer form; see the migration table above |
 | Field count mismatch | `make-struct` given fewer or more arguments than the struct has fields |
-| `:copy` constraint violation | A `:copy` struct contains a field type that is not copy-compatible (e.g. `:ref<int>`) |
+| `^copy` constraint violation | A `^copy` struct contains a field type that is not copy-compatible (e.g. `:ref<int>`) |
 
 ---
 

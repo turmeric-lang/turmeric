@@ -4,10 +4,10 @@
 ;; the compiled path (sibling derive-show-string fixture).
 (load "stdlib/string-slice.tur")
 
-(defstruct Inner :copy [n : int])
+(defstruct ^copy Inner [n : int])
 (derive-show Inner n)
 
-(defstruct Outer :copy [a : int inner : Inner label : cstr])
+(defstruct ^copy Outer [a : int inner : Inner label : cstr])
 (derive-show Outer a inner label)
 
 (defn emit [s : String] : void

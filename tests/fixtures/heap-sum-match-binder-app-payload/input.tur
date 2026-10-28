@@ -20,9 +20,9 @@
 ;; recursive call.  Four element types -- a `:heap` sum, int, float (with a
 ;; fractional part) and cstr -- each get their own clone.
 
-(defdata R :heap :copy (Lf int) (Br (Cons R)))
-(defdata Fr :heap :copy [T] (Nil) (Frame (Cons T) T))
-(defstruct Box :heap :copy [T] (fr (Fr T)))
+(defdata ^heap ^copy R (Lf int) (Br (Cons R)))
+(defdata ^heap ^copy Fr [T] (Nil) (Frame (Cons T) T))
+(defstruct ^heap ^copy Box [T] (fr (Fr T)))
 
 (defn val [r : R] : int
   (match r

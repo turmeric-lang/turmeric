@@ -13,7 +13,7 @@
 ;   - an out-of-range rcvec-get is a null handle: inert to drop.
 (load "stdlib/rcvec.tur")
 
-(defstruct S :move [tag : int])
+(defstruct ^move S [tag : int])
 
 (defn main [] : int
   (let [a (rc/of (make-struct S 7))]

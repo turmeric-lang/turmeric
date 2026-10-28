@@ -2,7 +2,7 @@
 ;; `(Rect w h)` binds positionally; `(Rect :h hv :w wv)` binds by field name
 ;; (order free).  Both forms coexist across arms.
 
-(defdata Shape :copy
+(defdata ^copy Shape
   (Circle [radius : float])
   (Rect   [w : float h : float]))
 

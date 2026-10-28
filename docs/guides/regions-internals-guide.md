@@ -9,7 +9,7 @@ tags:
 
 # Regions (RM3) internals
 
-This guide is for contributors who touch anything that allocates a `:heap`
+This guide is for contributors who touch anything that allocates a `^heap`
 node, stores a word into memory, erases a type to `:int`, or brackets a call
 with `with-region` / `bt-scope`. It is also the explanatory home for the
 CLAUDE.md rule **"Region Store Hooks"**: CLAUDE.md keeps the rule, and this
@@ -27,7 +27,7 @@ The design history is the archived
 > the embedded runtime sources (`region.h`, `arena.{h,c}`, `region.c`,
 > `r7gc.c`) are pasted into emitted programs with their comments stripped, so
 > a comment edit there no longer touches the `expected.c` snapshots or the
-> split hash, and the three `:heap` constructor emitters share one body,
+> split hash, and the three `^heap` constructor emitters share one body,
 > `emit_heap_ctor_body`
 > ([stale-comments-regions](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/stale-comments-regions.md),
 > resolved 2026-10-22).
@@ -37,7 +37,7 @@ The design history is the archived
 ## The short version
 
 1. **A generation is an `Arena`.** `tur_region_push` opens one on a
-   per-thread stack. While it is the innermost open generation, every `:heap`
+   per-thread stack. While it is the innermost open generation, every `^heap`
    ADT node the program constructs is bump-allocated in it
    (`tur_region_alloc_or_malloc`). Outside any generation the same call is
    `malloc`.
@@ -156,12 +156,12 @@ through `types.c:region_alloc_fn()`, which answers `malloc` when
 
 | Site | Allocates |
 |---|---|
-| `emit_module.c:emit_adt_typedef_and_ctors` | The base ctor of a `:heap` ADT |
-| `types.c:emit_registered_adt_app_rec` | The monomorph ctor of a parametric `:heap` ADT (`ctor_Cons_Cons__int`) |
+| `emit_module.c:emit_adt_typedef_and_ctors` | The base ctor of a `^heap` ADT |
+| `types.c:emit_registered_adt_app_rec` | The monomorph ctor of a parametric `^heap` ADT (`ctor_Cons_Cons__int`) |
 | `emit_module.c:emit_program_inner` | The third, early-file copy of the heap ctor emitter |
 | `emit_expr.c:emit_value_dispatch` | The SR4 per-link box for a recursive ctor field |
 | `emit_module.c:ensure_saffron_dyn_runtime` | The dynamic-call rest-list cells |
-| `emit_module.c:emit_flush_dead_base_ctor_traps` | The base ctor of a phantom-only parametric `:heap` ADT (ungated until 2026-10-17: [dead-base-ctor-ignores-regions-off](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/dead-base-ctor-ignores-regions-off.md)) |
+| `emit_module.c:emit_flush_dead_base_ctor_traps` | The base ctor of a phantom-only parametric `^heap` ADT (ungated until 2026-10-17: [dead-base-ctor-ignores-regions-off](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/dead-base-ctor-ignores-regions-off.md)) |
 
 The ctor emitters carry comments saying they mirror each other: a change to
 one belongs in all three. The free side mirrors the allocation side.
@@ -220,11 +220,11 @@ whenever it cannot prove no.
 |---|---|---|
 | `int`/`bool`/`float` family, `nil`, `never` | pass | No pointer |
 | `cstr` | pass | No path routes a char buffer through a generation |
-| Non-`:heap` ADT whose fields are scalar keywords | pass | `region_field_form_is_scalar` reads the declared form |
-| Non-`:heap` ADT whose field has a recorded `full_type` that passes | pass | Walked recursively (an enum, a by-value sum of scalars) |
+| Non-`^heap` ADT whose fields are scalar keywords | pass | `region_field_form_is_scalar` reads the declared form |
+| Non-`^heap` ADT whose field has a recorded `full_type` that passes | pass | Walked recursively (an enum, a by-value sum of scalars) |
 | `(Vec T)`, `(Map K V)`, `(Set T)`, `(MutableMap K V)` | pass iff the element types pass | `region_def_is_malloc_collection`: storage is stdlib `malloc` |
 | Other parametric monomorph (`(Pair int int)`, `(Option int)`) | pass iff its substituted field types pass | `substitute_adt_app_type_owned` |
-| Any `:heap` ADT | refuse | It is the node |
+| Any `^heap` ADT | refuse | It is the node |
 | Self- or mutually-recursive ADT | refuse | NULL `full_type` with a non-scalar form, or the def is already on the walk path |
 | Pointer, ref, `rc`, closure, `any`, union, type variable, existential, `TY_STRUCT` | refuse | The `default:` arm |
 
@@ -373,7 +373,7 @@ and `hamt.c:tur_hamt_transient_set`.
 | `set-field!` | `emit_stmt.c:emit_set_field_stmt` |
 | Closure env fill, per captured field | `emit_expr.c:emit_value_dispatch` |
 | `rc/of` payload | `emit_expr.c:emit_value_dispatch` |
-| Fields of a malloc'd (non-`:heap`) ctor box | `emit_module.c:emit_adt_typedef_and_ctors`, `types.c:emit_registered_adt_app_rec`, `emit_module.c:emit_program_inner` |
+| Fields of a malloc'd (non-`^heap`) ctor box | `emit_module.c:emit_adt_typedef_and_ctors`, `types.c:emit_registered_adt_app_rec`, `emit_module.c:emit_program_inner` |
 
 **Emitter boxes** (`TUR_REGION_NOTE_WORDS` over a fresh malloc'd box that no
 store hook will see): `emit_agg_box` (container element and field boxes);
@@ -459,7 +459,7 @@ identifier. `emit_fn_def_body` notes a parameter when
 
 | Parameter type | Noted? |
 |---|---|
-| `:heap` ADT (a node) | yes |
+| `^heap` ADT (a node) | yes |
 | By-value aggregate the static walk refuses (it may hold a node) | yes |
 | Scalar, `cstr`, `ptr<void>`, type variable, function | no |
 | `defopaque` newtype (C-made handle) | no |
@@ -479,7 +479,7 @@ upstream:
    `:int` parameter, the elaborator wraps it in an `EX_ASCRIBE` to `:int`,
    which the emitter then notes:
    - for an inline-C callee, any ADT, application or struct argument;
-   - for a Turmeric-bodied callee, only a `:heap` node word
+   - for a Turmeric-bodied callee, only a `^heap` node word
      (`call_arg_is_region_node_word`), and never for a constructor. A
      constructor's box is either routed into the same generation or notes
      its own fields, so noting there retired every typed tree.
@@ -647,7 +647,7 @@ The ctest fuzz run is smoke size (`REGIONS_FUZZ_N=12`). For a session, run
 | `region-catch-retires-stranded-generation` | Panic through a bracket; catch boundaries retire |
 | `region-shutdown-order` | Shutdown registered before module defers; flag-off emits no region symbol |
 | `region-retired-index-owns` | `tur_region_owns` through the retired-address index after 2000 retires |
-| `errors/extern-c-refuses-region-node` | A `:heap` node cannot cross an `extern-c` boundary (it has no body to note in) |
+| `errors/extern-c-refuses-region-node` | A `^heap` node cannot cross an `extern-c` boundary (it has no body to note in) |
 | `errors/saffron-region-bracket-refused` | TUR-E0312 for `with-region` in Saffron |
 
 ---
@@ -657,7 +657,7 @@ The ctest fuzz run is smoke size (`REGIONS_FUZZ_N=12`). For a session, run
 A typed spine, one bracket with a scalar result and one returning the spine:
 
 ```turmeric
-(defdata TL :heap (TNil) (TCons :int :TL))
+(defdata ^heap TL (TNil) (TCons :int :TL))
 (defn tbuild [n : int acc : TL] : TL
   (if (<= n 0) acc (tbuild (- n 1) (TCons n acc))))
 (defn tsum [t : TL] : int
@@ -715,7 +715,7 @@ static int64_t tur_u_round__cps(int64_t n, DK *__kont) {
 The closure env is a plain `malloc`, never region memory, and the captured
 `n` is a scalar: nothing is flagged, and the pop rewinds.
 
-`keep` returns `TL`, a `:heap` ADT. The walk refuses at compile time, so the
+`keep` returns `TL`, a `^heap` ADT. The walk refuses at compile time, so the
 emitter does not even ask the runtime:
 
 ```c
@@ -733,7 +733,7 @@ Now a store. The bracket's result is `int`, so the walk passes, but the body
 pushes a node into a vector created outside:
 
 ```turmeric
-(defdata Link :heap (Link [v : int nxt : int]))
+(defdata ^heap Link (Link [v : int nxt : int]))
 (defn stash [out : (Vec Link) n : int] : int
   (with-region (fn [] : int
     (do (vec-push! out (Link n 0)) n))))

@@ -6,10 +6,10 @@
 ;; alias form.
 (load "stdlib/string-slice.tur")
 
-(defstruct Inner :copy [n : int])
+(defstruct ^copy Inner [n : int])
 (derive-show Inner n)
 
-(defstruct Outer :copy [a : int inner : Inner label : cstr])
+(defstruct ^copy Outer [a : int inner : Inner label : cstr])
 (derive-show Outer a inner label)
 
 (defstruct Named [title : cstr internal-label : cstr count : int])

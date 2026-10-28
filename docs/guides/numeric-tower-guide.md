@@ -16,7 +16,7 @@ Turmeric ships two numeric types above the machine primitives:
 | `Rational` | [`stdlib/rational.tur`](https://github.com/turmeric-lang/turmeric/blob/main/stdlib/rational.tur) | `num`/`den` pair over `int` (int64), always normalized | `#rat{3/4}` |
 | `Complex` | [`stdlib/complex.tur`](https://github.com/turmeric-lang/turmeric/blob/main/stdlib/complex.tur) | `re`/`im` pair over `float` (double) | `#cx{3.25 -1.5}` |
 
-Both are `:copy` single-variant record products, so each lowers to a 16-byte C
+Both are `^copy` single-variant record products, so each lowers to a 16-byte C
 struct of two `int64_t` / two `double`. Neither carries an owning field, so
 neither has drop glue and neither interacts with the rc/ref/borrow machinery at
 all.
@@ -40,7 +40,7 @@ So when **no builtin row matches the argument types**, the call falls back to
 these two types: any user numeric type with a `Num` instance gets the operators.
 
 ```turmeric no-check
-(defstruct V2 :copy [x : float y : float])
+(defstruct ^copy V2 [x : float y : float])
 
 (definstance Num [V2]
   (add [a b] (V2 (+ (.x a) (.x b)) (+ (.y a) (.y b))))

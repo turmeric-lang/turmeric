@@ -33,8 +33,7 @@
 ;;;     _ 0)                        ; => 3
 ;;;
 ;;; Since: quote-list-data-plan
-(defdata Datum
-  :copy
+(defdata ^copy Datum
   (DSym Sym)
   (DInt int)
   (DFloat float)

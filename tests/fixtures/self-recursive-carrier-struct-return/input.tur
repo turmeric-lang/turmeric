@@ -4,7 +4,7 @@
 ;; at its declared return (Box), not the carrier `int`.  Before the fix the
 ;; recursive arm of the `if` was typed `int`, giving a spurious branch mismatch
 ;; (then=Box else=int).
-(defstruct Box :copy [lo : int  hi : int])
+(defstruct ^copy Box [lo : int  hi : int])
 
 (defn go [n : int  i : int  acc : Box] : Box
   (if (>= i n)

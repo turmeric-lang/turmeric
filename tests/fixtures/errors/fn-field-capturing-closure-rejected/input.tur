@@ -3,7 +3,7 @@
 ;; stays on the thin function-pointer path and the force jumps into the env
 ;; block as code.  The store is now rejected at elaboration.
 ;; See docs/archive/closure-in-defdata-field.md.
-(defdata S :copy (SNil) (SInc :fn))
+(defdata ^copy S (SNil) (SInc :fn))
 
 (defn main [] : int
   (let [n 7]

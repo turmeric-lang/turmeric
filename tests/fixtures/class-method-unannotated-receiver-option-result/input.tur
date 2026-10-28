@@ -2,7 +2,7 @@
 ;; receiver is written without a type, `[r]`, and whose result is a ground
 ;; application, `(Option int)`, types its call from the declaration -- the
 ;; same as `[r : a]` does -- so the result can go where an Option is expected.
-(defstruct Pt :copy [x : int])
+(defstruct ^copy Pt [x : int])
 (defclass K [a]
   (cats [r] : (Option int))
   (tag [r] : (Result cstr int))

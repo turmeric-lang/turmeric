@@ -1,8 +1,7 @@
 ;; range-gadt-typeclass-migration-plan A1: annotated constructors + GADT pattern matching
 ;; must work with NO -Xgadt flag (the flag graduated to default-on, and is now
 ;; a deprecated no-op). This fixture deliberately carries no `flags` file.
-(defdata Bound [A]
-  :copy
+(defdata ^copy Bound [A]
   (Inclusive int : (Bound int))
   (Exclusive int : (Bound int))
   (Unbounded     : (Bound int)))

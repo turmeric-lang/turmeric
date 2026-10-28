@@ -13,7 +13,7 @@
 ;; shape of Turmeric code happens to free.  In benchmarks/audit/corpus.txt, so
 ;; remeasure.sh covers it.
 
-(defdata Link :heap (Link [v : int nxt : int]))
+(defdata ^heap Link (Link [v : int nxt : int]))
 
 (defn build [n : int acc : int] : int
   (if (<= n 0)

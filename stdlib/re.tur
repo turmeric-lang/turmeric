@@ -43,10 +43,9 @@
 (load "stdlib/string-ffi.tur")
 ;; ================= AST =================
 
-(defdata RxCls :copy (RxClsNil) (RxClsRange :int :int :RxCls))
+(defdata ^copy RxCls (RxClsNil) (RxClsRange :int :int :RxCls))
 
-(defdata Regex
-  :copy
+(defdata ^copy Regex
   (RChar :int)
   (RAny)
   (RClass :bool :RxCls)
@@ -61,7 +60,7 @@
   (RBegin)
   (REnd))
 
-(defdata RxPos :copy (RxNil) (RxCons :int :RxPos))
+(defdata ^copy RxPos (RxNil) (RxCons :int :RxPos))
 ;; RxPair / RxParse are single-constructor records: a positional pair and a
 ;; (parsed-Regex, next-position) parse result.
 

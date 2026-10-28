@@ -13,7 +13,7 @@
 ;;     at an int, in a tail and in a `let`.
 
 (defeffect Ec [x :cstr] :cstr)
-(defstruct FC :copy [run : (fn [cstr] cstr) #fx{Ec}])
+(defstruct ^copy FC [run : (fn [cstr] cstr) #fx{Ec}])
 (defn fc [v : cstr] : cstr (perform (Ec v)))
 (defeffect Ei [x :int] :int)
 (defn fi [v : int] : int (perform (Ei v)))

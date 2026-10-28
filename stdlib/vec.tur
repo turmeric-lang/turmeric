@@ -9,7 +9,7 @@
 ;;; Vec -- parameterized growable array with element type A.
 ;;;
 ;;; Since: Phase TC1
-(defstruct Vec :heap [A] (data :ptr<void>) (len :int) (cap :int))
+(defstruct ^heap Vec [A] (data :ptr<void>) (len :int) (cap :int))
 ;;; vec-new -- allocate a new empty Vec[A].
 ;;;
 ;;; Returns:

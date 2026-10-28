@@ -1,0 +1,3 @@
+(defstruct ^copy Lens' [S A] (get (fn [S] A)) (put (fn [S A] S)))
+(defdata ^heap Tree' (Leaf') (Node' int))
+(defopaque ^linear Id' :int)

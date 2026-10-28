@@ -1,4 +1,4 @@
-(defopaque Cstr! :ptr<void> :non-null)
+(defopaque ^non-null Cstr! :ptr<void>)
 
 (defn getenv-raw [name : cstr] : int
   ```c

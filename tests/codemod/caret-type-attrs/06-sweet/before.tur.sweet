@@ -1,0 +1,14 @@
+#lang sweet-exp
+
+defstruct Point :copy [x : int y : int]
+
+defopaque Chan :ptr<void> :linear
+
+defdata Shape :copy
+  Circle(int)
+  Square(int)
+
+defn main [] : int
+  let [p Point(1 2)]
+    println(.x(p))
+  0

@@ -2747,6 +2747,13 @@ void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     /* W0: `(match ^non-exhaustive x ...)`, and the deprecated spelling it
      * replaces, `(match #fx{NonExhaustive} x ...)` (TUR-D0004). */
     e->sym_caret_non_exhaustive = intern_cstr(st, "^non-exhaustive");
+    /* caret-type-attributes-plan P0 */
+    e->sym_caret_copy         = intern_cstr(st, "^copy");
+    e->sym_caret_move         = intern_cstr(st, "^move");
+    e->sym_caret_heap         = intern_cstr(st, "^heap");
+    e->sym_caret_sealed       = intern_cstr(st, "^sealed");
+    e->sym_caret_non_null     = intern_cstr(st, "^non-null");
+    e->sym_caret_no_auto_ctor = intern_cstr(st, "^no-auto-ctor");
     e->sym_non_exhaustive_legacy = intern_cstr(st, "NonExhaustive");
     e->sym_panic_payload_value = intern_cstr(st, "panic-payload-value");
     e->sym_panic_payload_file = intern_cstr(st, "panic-payload-file");

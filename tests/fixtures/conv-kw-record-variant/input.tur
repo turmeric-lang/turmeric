@@ -2,7 +2,7 @@
 ;; variant works identically to keyword construction for a struct -- order is
 ;; free and every field must be supplied exactly once.
 
-(defdata Point :copy
+(defdata ^copy Point
   (Point [x : int y : int z : int]))
 
 (defn sum3 [p] : int

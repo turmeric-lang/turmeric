@@ -12,7 +12,7 @@
 ; Every other GC fixture uses :move structs, which is why this shape went
 ; uncovered. Asserts both halves: no leak for the acyclic case (the drop-glue
 ; bug), and collection of a :heap cycle (the walker + control-block bug).
-(defstruct H :heap [next : rc<H>])
+(defstruct ^heap H [next : rc<H>])
 
 (defn nullp [] : ptr<void>
   ```c

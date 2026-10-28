@@ -1,7 +1,7 @@
 #lang saffron
 ;; saffron-dynamic-surface-pass M7: walking a cons list through an `any`.
 ;;
-;; `Cons` is `(defstruct Cons :heap [A] (head A) (tail (Cons A)))` now -- the
+;; `Cons` is `(defstruct ^heap Cons [A] (head A) (tail (Cons A)))` now -- the
 ;; tail is the recursive occurrence, a typed pointer, not an erased `:int` --
 ;; so `.tail` hands back a `(Cons A)` and the element type survives each
 ;; step.  Three reads that used to fail:

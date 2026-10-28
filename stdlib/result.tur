@@ -17,7 +17,7 @@
 ;;; Result -- parameterized result type with ok type A and err type B.
 ;;;
 ;;; Since: Phase TC1
-(defdata Result :copy [A B] (Ok A) (Err B))
+(defdata ^copy Result [A B] (Ok A) (Err B))
 ;;; ok -- wrap a success value of type A in a Result[A B].
 ;;;
 ;;; Parameters:

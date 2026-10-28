@@ -351,7 +351,7 @@ static void check_handle_forgery_refused(void) {
      * it), a field read through a bare-int receiver, and a cstr -- which needs
      * no type variable at all, `(:: 4096 cstr)` elaborates. */
     turi_eval(env, "(defstruct SbxPoint [x : int y : int])");
-    turi_eval(env, "(defstruct SbxHeap :heap [x : int y : int])");
+    turi_eval(env, "(defstruct ^heap SbxHeap [x : int y : int])");
     expect_forgery_refused(env, "forgery/struct-retag",
                            "(.x (:: (mk-forged 4096) SbxPoint))");
     expect_forgery_refused(env, "forgery/field-read-bare-int",

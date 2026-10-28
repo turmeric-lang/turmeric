@@ -2,7 +2,7 @@
 ;; struct *parameter* directly.  A struct whose fields sum to > 16 bytes is
 ;; passed as `const T *`; binding it to a let variable declared by value must
 ;; dereference (`T g = *t;`), not assign the pointer to a by-value temp.
-(defstruct Triple :copy [a : int b : int c : int])  ;; 24 bytes -> by-pointer
+(defstruct ^copy Triple [a : int b : int c : int])  ;; 24 bytes -> by-pointer
 
 (defn f [t : Triple] : int
   (let [g t]                                          ;; direct pbp-param bind

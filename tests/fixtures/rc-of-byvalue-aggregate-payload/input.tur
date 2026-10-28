@@ -28,7 +28,7 @@
 (load "stdlib/rc.tur")
 
 (defstruct Rat [n : int d : int])
-(defdata Plain :copy (PA :int) (PB :int))
+(defdata ^copy Plain (PA :int) (PB :int))
 
 ;;; tag-of -- read the first field of a carrier, which for a by-value sum is its
 ;;; tag.  Deliberately raw: it asserts what the CARRIER is, which is the thing

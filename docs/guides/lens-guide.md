@@ -17,7 +17,7 @@ rebuild-the-whole boilerplate at every use site. Turmeric ships lenses in
 ```turmeric
 (load "stdlib/lens.tur")
 
-(defstruct Point :copy :heap [x : int y : int])
+(defstruct ^copy ^heap Point [x : int y : int])
 
 (defn point-x [] : (Lens Point int)
   (lens
@@ -35,7 +35,7 @@ rebuild-the-whole boilerplate at every use site. Turmeric ships lenses in
 ```sweet-exp
 load "stdlib/lens.tur"
 
-defstruct Point :copy :heap [x : int y : int]
+defstruct ^copy ^heap Point [x : int y : int]
 
 defn point-x [] : (Lens Point int)
   lens
@@ -65,10 +65,10 @@ is `set l (f (view l s)) s`.
 
 ## Value semantics
 
-A `Lens` is `:copy`, so a single lens value can be `view`/`set`/`over`'d
-repeatedly. The whole `S` a lens focuses is usually a `:copy` struct too, so it
+A `Lens` is `^copy`, so a single lens value can be `view`/`set`/`over`'d
+repeatedly. The whole `S` a lens focuses is usually a `^copy` struct too, so it
 can be reused across calls; if the setter rebuilds the record (the common case),
-make it `:copy :heap` so it is pointer-carried and cheap to thread. A move-only
+make it `^copy ^heap` so it is pointer-carried and cheap to thread. A move-only
 `S` can still be used, but only linearly (each whole consumed once).
 
 ## Which encoding does the stdlib use?
@@ -78,10 +78,10 @@ plain record holding two functions -- a getter `(fn [S] A)` and a setter
 `(fn [A S] S)`:
 
 ```turmeric
-(defstruct Lens :copy [S A] (lget (fn [S] A)) (lput (fn [A S] S)))
+(defstruct ^copy Lens [S A] (lget (fn [S] A)) (lput (fn [A S] S)))
 ```
 ```sweet-exp
-defstruct Lens :copy [S A] (lget (fn [S] A)) (lput (fn [A S] S))
+defstruct ^copy Lens [S A] (lget (fn [S] A)) (lput (fn [A S] S))
 ```
 
 `view`, `set`, and `over` just project those two fields and call them. There is
@@ -139,7 +139,7 @@ defn line-start-x [] : (Lens Line int)
          :end   .end(l)))
 ```
 
-where the whole types (`Line`, `Point`) are `:copy` so `l`/`s` can be used more
+where the whole types (`Line`, `Point`) are `^copy` so `l`/`s` can be used more
 than once.
 
 The van Laarhoven form composes freely (`l1 . l2` is just function composition);
@@ -154,11 +154,11 @@ does not thread a functor and can ignore it.
 A van Laarhoven lens threads `(f a)` through a one-int64 poly carrier. Two shapes
 of functor work through that carrier:
 
-- **Carrier-compatible functors** -- an opaque or `:heap` type whose `(f a)`
+- **Carrier-compatible functors** -- an opaque or `^heap` type whose `(f a)`
   fits in one int64 word (e.g. `(defopaque Const [r a] :int)`,
   `(defopaque Identity [a] :int)`). These ride the carrier directly at no
   runtime cost beyond the dict dispatch.
-- **Wide by-value functors** -- a `:copy` struct or flat-product ADT whose
+- **Wide by-value functors** -- a `^copy` struct or flat-product ADT whose
   `(f a)` is wider than one word. Codegen boxes the aggregate into the carrier at
   each lens crossing and unboxes it on the other side. `view`/`set`/`over`,
   generic focus inference, and composition all thread through unchanged; the box

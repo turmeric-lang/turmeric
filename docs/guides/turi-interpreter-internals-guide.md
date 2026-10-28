@@ -283,7 +283,7 @@ struct TuriStruct {
   `type-of`/`is?`/`cast` can name a type the bare word cannot.
 - **By-value parameters are copied.** `turi_copy_byvalue_struct_arg` copies
   a struct argument as it is bound, recursing through by-value fields and
-  stopping at `__rc`, `:heap` and non-struct values. It skips the copy when
+  stopping at `__rc`, `^heap` and non-struct values. It skips the copy when
   no write can be observed: the type's `AdtDef.field_written` is unset
   ([turi-immutable-struct-args-copied-per-call](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/turi-immutable-struct-args-copied-per-call.md)).
 

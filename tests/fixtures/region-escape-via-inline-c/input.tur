@@ -17,7 +17,7 @@
 ;; Every value is read AFTER the pop, and TUR_REGIONS=0 must print the same
 ;; lines (tests/run-regions-seam.sh).
 
-(defdata Link :heap (Link [v : int nxt : int]))
+(defdata ^heap Link (Link [v : int nxt : int]))
 
 (defn cell-new [] : ptr<void>
   ```c
@@ -47,7 +47,7 @@
 ;; A TYPED chain, walked in Turmeric.  Case 2 must not erase anything: an
 ;; `(:: (Link ..) :int)` would fire the ERASURE note and retire the generation
 ;; for a different reason, which would make the rewind assertion vacuous.
-(defdata TL :heap (TNil) (TCons :int :TL))
+(defdata ^heap TL (TNil) (TCons :int :TL))
 (defn tbuild [n : int acc : TL] : TL
   (if (<= n 0) acc (tbuild (- n 1) (TCons n acc))))
 (defn tsum [t : TL] : int

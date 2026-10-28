@@ -19,7 +19,7 @@
 ;;; Cons -- parameterized cons cell with typed head and tail.
 ;;;
 ;;; Since: Phase TC1
-(defstruct Cons :heap [A] (head A) (tail (Cons A)))
+(defstruct ^heap Cons [A] (head A) (tail (Cons A)))
 ;;; tcons -- prepend a value to a typed list.
 ;;;
 ;;; Element-generic: the head slot specializes to A's concrete C layout, so a

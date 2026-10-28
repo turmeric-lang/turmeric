@@ -14,7 +14,7 @@
   ```c
   return *(int64_t *)h;
   ```)
-(defstruct Box :heap [open : bool h : Hnd])
+(defstruct ^heap Box [open : bool h : Hnd])
 (defn close! [b : Box] : nil (set! (.open b) false))
 (defn is-open [b : Box] : bool (.open b))
 (defn box-handle [b : Box] : Hnd (.h b))

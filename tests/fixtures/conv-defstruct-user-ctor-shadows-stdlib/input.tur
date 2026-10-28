@@ -1,5 +1,5 @@
 ;; conv-defstruct-user-ctor-shadows-stdlib -- with --enable=defstruct-as-defadt
-;; the stdlib `(defstruct Cons :heap [A] ...)` list cell lowers to a parametric
+;; the stdlib `(defstruct ^heap Cons [A] ...)` list cell lowers to a parametric
 ;; `:heap` record ADT whose constructor is `ctor_Cons`.  A user `(defdata List
 ;; (Cons :int :List))` declares its OWN `Cons` constructor.  Two crossings are
 ;; exercised:

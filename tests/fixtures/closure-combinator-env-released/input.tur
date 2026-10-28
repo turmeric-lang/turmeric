@@ -6,7 +6,7 @@
 ;; alike.  The combinator is now a fresh-closure factory too (its closure
 ;; captures only a closure PARAMETER, which its env holds without owning), and
 ;; the closure passed there is hoisted with it, so both die at the call.
-(defstruct D :copy [e : int x : int])
+(defstruct ^copy D [e : int x : int])
 (defeffect Tick [] : nil)
 (defn count-if [n : int pred : (fn [D] bool)] : int
   (let [^mut i 0 ^mut c 0]

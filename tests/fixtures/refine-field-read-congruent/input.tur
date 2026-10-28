@@ -12,7 +12,7 @@
 ;; Note this does NOT make `width-of` interchangeable with `.width`: they are
 ;; two different uninterpreted symbols and nothing unfolds one into the other.
 ;; Congruence is about repeated occurrences of the SAME call.
-(defdata Box :copy (Box [width : int height : int]))
+(defdata ^copy Box (Box [width : int height : int]))
 
 (defn width-of [b : Box] : int (.width b))
 

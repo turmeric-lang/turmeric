@@ -12,8 +12,8 @@
 ;;     carrier and the ctor call casts it with `(int64_t)(intptr_t)` (no
 ;;     -Wint-conversion).
 ;; Behaviour is identical flag off (struct path) and on (ADT path).
-(defstruct Big :heap [x : int y : int z : int])
-(defstruct Pt  :copy :heap [x : int y : int])
+(defstruct ^heap Big [x : int y : int z : int])
+(defstruct ^copy ^heap Pt [x : int y : int])
 (defstruct Holder [tag : int big : Big])
 
 (defn bsum [g : Big] : int (+ (.x g) (+ (.y g) (.z g))))

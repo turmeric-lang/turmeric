@@ -24,8 +24,8 @@
 ;; case for the frame-callback store, this fixture is not one yet.
 
 (defmodule main
-  (defdata Link :heap (Link [v : int nxt : int]))
-  (defdata TL :heap (TNil) (TCons :int :TL))
+  (defdata ^heap Link (Link [v : int nxt : int]))
+  (defdata ^heap TL (TNil) (TCons :int :TL))
 
   (defn tbuild [n : int acc : TL] : TL
     (if (<= n 0) acc (tbuild (- n 1) (TCons 99 acc))))

@@ -39,10 +39,10 @@
 ; reclaims this exact shape to 0 live.  The plain-Vec arm here keeps pinning
 ; what the UNOWNED buffer costs; see
 ; docs/archive/history/collections-cannot-hold-rc-values.md.
-(defstruct D :move [peer : rc<D>])
-(defstruct Cell  :move [item : rc<CNode> next : rc<Cell>])
-(defstruct CNode :move [kids : rc<Cell>])
-(defstruct N :move [kids : (Vec rc<N>)])
+(defstruct ^move D [peer : rc<D>])
+(defstruct ^move Cell [item : rc<CNode> next : rc<Cell>])
+(defstruct ^move CNode [kids : rc<Cell>])
+(defstruct ^move N [kids : (Vec rc<N>)])
 
 (defn null-rc-d [] : ptr<void>
   ```c

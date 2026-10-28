@@ -37,7 +37,7 @@
 ;; marshalled buffers -- they are a separate, return-type-polymorphic surface
 ;; that is not part of the owned-buffer resource discipline.
 
-(defopaque Bytes :ptr<void> :linear)
+(defopaque ^linear Bytes :ptr<void>)
 ;; Allocate a fresh bytes value of `n` bytes (zeroed).
 ;;; bytes-alloc -- allocate a zeroed length-prefixed byte buffer of n bytes.
 ;;;

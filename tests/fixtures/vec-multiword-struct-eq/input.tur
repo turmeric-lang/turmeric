@@ -13,7 +13,7 @@
 ;; comparison agrees with the compiled path.
 (load "stdlib/typeclass.tur")
 
-(defstruct Point :copy [x : int y : int])
+(defstruct ^copy Point [x : int y : int])
 
 (definstance Eq [Point]
   (eq? [a b] (and (= (.x a) (.x b)) (= (.y a) (.y b)))))

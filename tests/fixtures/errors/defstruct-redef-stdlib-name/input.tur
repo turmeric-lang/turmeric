@@ -9,6 +9,6 @@
 ;; DS4-2 rejects the redefinition at elaboration time when the stub
 ;; has already been filled (n_fields > 0), so the user gets a
 ;; clear diagnostic instead of a cc invocation failure.
-(defstruct Cons :move [x : int])
+(defstruct ^move Cons [x : int])
 
 (defn main [] : int 0)

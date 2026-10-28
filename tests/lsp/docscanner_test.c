@@ -216,9 +216,47 @@ static void test_multiple_defs(void) {
  * main
  * --------------------------------------------------------------------- */
 
+/* -------------------------------------------------------------------------
+ * Test: ^attrs before the name (caret-type-attributes-plan)
+ * --------------------------------------------------------------------- */
+
+static void test_attrs_before_name(void) {
+    const char *src =
+        ";;; Point -- a copyable point.\n"
+        "(defstruct ^copy Point [x : int y : int])\n"
+        ";;; Tok -- an exactly-once token.\n"
+        "(defopaque ^linear ^sealed Tok : int)\n"
+        ";;; Shape -- circles and squares.\n"
+        "(defdata ^copy Shape (Circle int) (Square int))\n"
+        ";;; Nat -- naturals.\n"
+        "(defgadt ^copy Nat [] (Zero : (Nat)))\n"
+        ";;; some -- wraps a value.\n"
+        "(defn ^construct some [A] [x : A] : (Option A) x)\n"
+        ";;; old -- going away.\n"
+        "(defn ^deprecated \"use new\" old [] : int 0)\n";
+    LspDocTable t;
+    lsp_doc_table_init(&t);
+    lsp_scan_docs(src, strlen(src), &t);
+
+    char out[512];
+    CHECK(lookup(&t, "Point", out, sizeof(out)) == 1, "defstruct ^copy: keyed by the name");
+    CHECK(strstr(out, "a copyable point") != NULL, "defstruct ^copy: content");
+    CHECK(lookup(&t, "Tok", out, sizeof(out)) == 1, "defopaque ^linear ^sealed: keyed by the name");
+    CHECK(lookup(&t, "Shape", out, sizeof(out)) == 1, "defdata ^copy: keyed by the name");
+    CHECK(lookup(&t, "Nat", out, sizeof(out)) == 1, "defgadt ^copy: keyed by the name");
+    CHECK(lookup(&t, "some", out, sizeof(out)) == 1, "defn ^construct: keyed by the name");
+    CHECK(lookup(&t, "old", out, sizeof(out)) == 1, "defn ^deprecated \"msg\": keyed by the name");
+    CHECK(lookup(&t, "^copy", out, sizeof(out)) == 0, "no entry is keyed by an attribute");
+    CHECK(lookup(&t, "^linear", out, sizeof(out)) == 0, "no entry is keyed by ^linear");
+    CHECK(lookup(&t, "^construct", out, sizeof(out)) == 0, "no entry is keyed by ^construct");
+
+    lsp_doc_table_free(&t);
+}
+
 int main(void) {
     printf("Running docscanner tests...\n");
 
+    test_attrs_before_name();
     test_no_docstring();
     test_single_line_docstring();
     test_multi_section_docstring();

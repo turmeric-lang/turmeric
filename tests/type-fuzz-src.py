@@ -658,7 +658,7 @@ class Gen:
         # known invalid-C shape (see known_bug_slug).
         bn = "FzB%d%d" % (self.i, self.n_names)
         self.n_names += 1
-        leg.defs.append("(defstruct %s :heap [a : %s])" % (bn, ty))
+        leg.defs.append("(defstruct ^heap %s [a : %s])" % (bn, ty))
         tn = "(Vec %s)" % bn
         w, u = self.name("hw"), self.name("hu")
         leg.defs.append(
@@ -944,7 +944,7 @@ class Gen:
         capturing lambda, which a typed field boxes fat.
         """
         st, f = self.name("FzFF"), self.name("ff")
-        leg.defs.append("(defstruct %s :copy [app : (fn [%s] %s)])" % (st, tn, tn))
+        leg.defs.append("(defstruct ^copy %s [app : (fn [%s] %s)])" % (st, tn, tn))
         if self.rng.random() < 0.5:
             leg.defs.append("(defn %s [v : %s] : %s v)" % (f, tn, tn))
             fnv = f
@@ -962,7 +962,7 @@ class Gen:
         field's fat box."""
         ef, st, f = self.name("FzEf"), self.name("FzFE"), self.name("fe")
         leg.defs.append("(defeffect %s [x :%s] :%s)" % (ef, tn, tn))
-        leg.defs.append("(defstruct %s :copy [run : (fn [%s] %s) #fx{%s}])"
+        leg.defs.append("(defstruct ^copy %s [run : (fn [%s] %s) #fx{%s}])"
                         % (st, tn, tn, ef))
         leg.defs.append("(defn %s [v : %s] : %s (perform (%s v)))" % (f, tn, tn, ef))
         return ("(handle (.run (make-struct %s %s) %s)\n    (%s [x] k) (resume k x))"

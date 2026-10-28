@@ -23,7 +23,7 @@
 ;;; a (Result Socket IoError) as one word.
 ;;;
 ;;; Since: LT4
-(defopaque Socket :int :linear)
+(defopaque ^linear Socket :int)
 ;; ---- File-descriptor handle newtype (stdlib-opaque-handle-types-plan, I/O sweep) ----
 ;; socket-fd hands back the underlying descriptor as a shared Fd handle (from
 ;; tur/fd) so it composes with the async-socket-* operations -- e.g.

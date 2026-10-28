@@ -4,6 +4,6 @@
 ;; DS4-1 the message said "non-copy compound type" with no type info,
 ;; which was less helpful for compound annotations than the
 ;; corresponding simple-keyword path that already printed e.g. ":rc<int>".
-(defstruct Bad :copy [r (lref int)])
+(defstruct ^copy Bad [r (lref int)])
 
 (defn main [] : int 0)

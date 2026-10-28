@@ -13,7 +13,7 @@
 ;; resume -- the same is_ref save/restore BR1 shipped, unchanged.  Native (a
 ;; non-flat recursion) SIGSEGVs deep; the stackless lowering runs flat.
 ;; step(w, n) = n + (second field of w).
-(defdata Box :copy [A] (MkBox A A A))
+(defdata ^copy Box [A] (MkBox A A A))
 
 (defn step [w : (Box int) n : int] : int
   (if (= n 0)

@@ -4636,7 +4636,7 @@
 ;;;
 ;;; Since: automatic R3a (closure-drop-glue)
 
-(defopaque Handler :int :affine)
+(defopaque ^affine Handler :int)
 ;;; httpd-handler-drop -- internal: reclaim a composed Handler onion.
 ;;;
 ;;; Routes to `TUR_CLOSURE_DROP`, which recovers the env's drop-glue header and
@@ -4702,7 +4702,7 @@
 ;;;
 ;;; Since: automatic R3a (closure-drop-glue)
 
-(defopaque ClosureChain :int :affine)
+(defopaque ^affine ClosureChain :int)
 ;;; httpd-chain-drop -- internal: reclaim a ClosureChain (drop each head factory
 ;;; via TUR_CLOSURE_DROP + free each spine cell).  Consumes its affine argument;
 ;;; it is the Drop instance's method, normally invoked by the scope-exit auto-drop.

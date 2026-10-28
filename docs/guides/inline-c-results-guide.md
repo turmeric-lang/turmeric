@@ -96,7 +96,7 @@ the handle, err carries an integer status code.
 ```turmeric
 ;; A linear opaque over the C library handle -- consumed exactly once by
 ;; midi-in-close. See opaques-guide.md for the :linear discipline.
-(defopaque MidiIn :ptr<void> :linear)
+(defopaque ^linear MidiIn :ptr<void>)
 
 ;; midi-in-open : port -> (Result MidiIn int)
 ;;   ok  = the live RtMidiInPtr, built with tur_ok_ptr (no hand cast)
@@ -274,7 +274,7 @@ one this guide recommends, so an older compiler will still reject it. See
 ## See also
 
 - [opaques-guide.md](opaques-guide.md) -- the `defopaque` handles these
-  constructors hand back, and the `:linear` / `:affine` discipline.
+  constructors hand back, and the `^linear` / `^affine` discipline.
 - [c-integration-guide.md](c-integration-guide.md) -- inline-C blocks, the
   `int64_t` carrier, and the FFI boundary in full.
 - [error-handling-guide.md](error-handling-guide.md) -- `Result` / `Option`

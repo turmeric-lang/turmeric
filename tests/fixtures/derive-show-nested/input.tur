@@ -23,7 +23,7 @@
   return (const char *)(intptr_t)out;
   ```)
 
-(defstruct Triple :copy [a : int b : int c : int])
+(defstruct ^copy Triple [a : int b : int c : int])
 (derive-show-cstr Triple a b c)
 
 (defn main [] : int

@@ -31,7 +31,7 @@
 ;; the C ABI.  process/spawn answers (Result ChildHandle IoError), so a
 ;; ChildHandle always names a real child.
 
-(defopaque ChildHandle :int :linear)
+(defopaque ^linear ChildHandle :int)
 ;; stdlib-effect-rows: every process/* entry point touches OS process state, so
 ;; each carries the #{Proc} capability tag.  Callers that opt into effect-row
 ;; checking (by annotating their own row) must declare #{Proc} to use them.
@@ -96,7 +96,7 @@
 ;;; than a raw signal number, so call sites say what they send.
 ;;;
 ;;; Since: stdlib-os-surface P0
-(defdata Signal :copy (SigTerm) (SigKill) (SigInt) (SigHup) (SigOther int))
+(defdata ^copy Signal (SigTerm) (SigKill) (SigInt) (SigHup) (SigOther int))
 ;;; signal->number -- the platform signal number for a Signal (POSIX values).
 (defn signal->number [s : Signal] : int
   (match s (SigTerm) 15 (SigKill) 9 (SigInt) 2 (SigHup) 1 (SigOther n) n))
@@ -115,7 +115,7 @@
 ;;; Exited.
 ;;;
 ;;; Since: stdlib-os-surface P1
-(defdata ExitStatus :copy (Exited int) (Signaled Signal))
+(defdata ^copy ExitStatus (Exited int) (Signaled Signal))
 ;;; exit-status/success? -- true for (Exited 0).
 ;;;
 ;;; Parameters:

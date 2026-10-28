@@ -12,8 +12,8 @@
 ;; the `:heap` struct were already served; they stay here as the control.
 
 (defdata Lst [] (Cons [hd : int tl : Lst]) (Nil))
-(defdata HBox :heap [A] (HBox [val : A nxt : int]))
-(defstruct HP :heap [x : int y : int])
+(defdata ^heap HBox [A] (HBox [val : A nxt : int]))
+(defstruct ^heap HP [x : int y : int])
 
 ;; a Vec bound in the let, read by the next iteration's argument
 (defn count-vec [n : int acc : int] : int

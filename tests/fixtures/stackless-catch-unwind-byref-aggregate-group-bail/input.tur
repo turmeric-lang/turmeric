@@ -9,7 +9,7 @@
 ;; this program BAILS TO NATIVE: it compiles and runs correctly, just not
 ;; trampolined.  A small depth keeps the native recursion within the stack.
 ;; Widening the group path is a separate follow-up (aggregate-followups plan).
-(defdata Wide :copy (MkWide int int int int))
+(defdata ^copy Wide (MkWide int int int int))
 
 (defn ping [w : Wide n : int] : int
   (if (= n 0)

@@ -19,7 +19,7 @@
 ; ~100k blocks, and every link's drop glue pushes its child and re-enters the
 ; drain.  A regression in either shows up here as a crash or a timeout rather
 ; than as a wrong number.
-(defstruct Node :move [next : rc<Node>])
+(defstruct ^move Node [next : rc<Node>])
 
 (defn null-rc-node [] : ptr<void>
   ```c

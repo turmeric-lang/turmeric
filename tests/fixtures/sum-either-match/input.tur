@@ -1,5 +1,5 @@
 ; Sum-types plan T8.2: match over both arms with payload extraction.
-(defdata Either :copy [L R]
+(defdata ^copy Either [L R]
   (Left L)
   (Right R))
 

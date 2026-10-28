@@ -35,10 +35,10 @@ it is a **heap block** with exactly one of these ways to be reclaimed:
 2. **An explicit free** that you write: `vec-free`, `mutmap-free`,
    `map-free`, `string/release`, and the `free` of a `cstr` that a stdlib
    function returned.
-3. **A region.** `with-region` (or `bt-scope`) rewinds every `:heap` node
+3. **A region.** `with-region` (or `bt-scope`) rewinds every `^heap` node
    allocated inside it in one step, if the compiler can prove nothing escapes.
-4. **Never, by design.** A `:heap` node allocated outside a region and a
-   `:copy` recursive value live until the process exits.
+4. **Never, by design.** A `^heap` node allocated outside a region and a
+   `^copy` recursive value live until the process exits.
 
 Most memory problems come from a value you assumed was in group 1 being in
 group 2 or 4.
@@ -93,7 +93,7 @@ runtime or the codegen changes; re-run the harness before you lean on one.
 | `:int`, `:float`, `:bool`, `:cstr` literal | 0 | 0 | -- (stack or static) |
 | By-value `defstruct` (`(defstruct P [x : int y : int z : int])`), passed and returned | 0 | 0 | -- (copied by value) |
 | `Option`/`Result` of a scalar, constructed and matched | 0 | 0 | -- (by value) |
-| `:heap` `defstruct` / `defdata` node (3 ints) | 24 B (40 B peak with malloc overhead) | 1 | a region, otherwise never |
+| `^heap` `defstruct` / `defdata` node (3 ints) | 24 B (40 B peak with malloc overhead) | 1 | a region, otherwise never |
 | By-value recursive `defdata` link (`(ICons [hd : int tl : IL])`) | 24 B | 1 | scope exit, in the shapes [gc-guide.md](gc-guide.md#known-gaps) lists; a region |
 | stdlib `(Cons int)` cell (`tcons-of`) | 16 B (24 B peak) | 1 | a region, otherwise never |
 | `Vec int` slot | 8 B, doubling from 4 (~19 B peak, ~26 B traffic incl. growth copies) | amortised 0 | `vec-free` |
@@ -119,7 +119,7 @@ A few rows need more than a cell.
 
 ### By-value data is free
 
-A `defstruct` without `:heap`, an `Option`, a `Result` and a non-recursive
+A `defstruct` without `^heap`, an `Option`, a `Result` and a non-recursive
 `defdata` are C structs. They are passed, returned and matched by value, and
 they never touch the heap:
 
@@ -143,12 +143,12 @@ copy every time it is passed, which matters for speed (see
 [performance-guide.md](performance-guide.md#memory-and-allocation)) but not
 for memory.
 
-### `:heap` nodes live until a region ends or the process does
+### `^heap` nodes live until a region ends or the process does
 
-`:heap` on a `defstruct` or `defdata` makes each value a malloc'd node shared
+`^heap` on a `defstruct` or `defdata` makes each value a malloc'd node shared
 by pointer. Nothing frees such a node one at a time: a persistent structure's
 nodes have no single owner, so neither a refcount nor a scope-exit drop can
-know when the last reference goes. The stdlib's `(Cons A)` list is `:heap`.
+know when the last reference goes. The stdlib's `(Cons A)` list is `^heap`.
 
 Outside a region, every node you allocate stays allocated until exit
 (measured: 24 B per 3-int node, all of it reported lost). Inside a
@@ -283,8 +283,8 @@ does not change any of this.
 | `Vec`, `MutableMap`, `Map`, `Set` | you call `vec-free` / `mutmap-free` / `map-free` | leaked |
 | `String` | its count reaches 0 via `string/release` | leaked |
 | a `cstr` returned by a stdlib function | you `free` it (or adopt it into a `String`) | leaked |
-| a `:heap` node | its region rewinds | leaked |
-| a `:copy` recursive `defdata` value | its region rewinds | leaked |
+| a `^heap` node | its region rewinds | leaked |
+| a `^copy` recursive `defdata` value | its region rewinds | leaked |
 | anything a region retires | process exit | -- |
 
 "Leaked" here means "kept until the process exits". For a short-lived
@@ -298,8 +298,8 @@ loop many times, it is the bug.
 ### 1. Prefer by-value data
 
 The cheapest heap block is the one you never allocate. A `defstruct` without
-`:heap`, an `Option`, a `Result` and a non-recursive `defdata` are free.
-Reach for `:heap` only when you need sharing by pointer or a recursive
+`^heap`, an `Option`, a `Result` and a non-recursive `defdata` are free.
+Reach for `^heap` only when you need sharing by pointer or a recursive
 shape.
 
 ### 2. Pick the container by its per-entry cost
@@ -317,8 +317,8 @@ For a `Vec` of wide structs, two cheaper layouts avoid the per-element box:
 - **Structure of arrays.** Keep one `Vec` per field (`xs`, `ys`, `zs`)
   instead of one `Vec` of `P`. Each element is then 8 bytes in a slot, with
   no box.
-- **`:heap` elements inside a region.** If the `Vec` and its elements all die
-  together, allocate the elements as `:heap` nodes inside a `with-region` and
+- **`^heap` elements inside a region.** If the `Vec` and its elements all die
+  together, allocate the elements as `^heap` nodes inside a `with-region` and
   let the region reclaim them.
 
 For many small flags, `stdlib/sized-bits.tur`'s `SizedBitVec` stores one bit
@@ -357,13 +357,13 @@ altogether (`hamt/transient`, `hamt/transient-set!`, `hamt/persistent!`; see
 
 ### 4. Bracket allocation-heavy phases in `with-region`
 
-A region is the only way to reclaim `:heap` nodes, and the cheapest way to
+A region is the only way to reclaim `^heap` nodes, and the cheapest way to
 reclaim any batch of them: the nodes cost no malloc each, and the whole
 generation is reclaimed in one step. Put work that builds a temporary
 structure and returns a small answer inside `with-region`:
 
 ```turmeric
-(defdata Tree :heap (Leaf) (Node [l : Tree v : int r : Tree]))
+(defdata ^heap Tree (Leaf) (Node [l : Tree v : int r : Tree]))
 
 (defn build [lo : int hi : int] : Tree
   (if (> lo hi)
@@ -518,7 +518,7 @@ slot is invisible to it; use `RcVec` or `RcChain` for those. See
    cost, not a leak.
 2. **Find leaks.** `valgrind --leak-check=full ./prog` names the allocation
    site of every lost block. In Turmeric's emitted C, the site names the
-   feature: `ctor_*` is a `:heap` constructor, `rc_cb_alloc*` is an `rc`, a
+   feature: `ctor_*` is a `^heap` constructor, `rc_cb_alloc*` is an `rc`, a
    `__env_N` block is a closure, `dk_frame*` is a continuation frame,
    `tur_hamt*` is a map.
 3. **Check regions.** `TUR_REGION_STATS=1 ./prog` prints pushes, rewinds and
@@ -556,12 +556,12 @@ frees applies to them. `TUR_GC_STATS=1` prints what that collector did. See
 
 ## Checklist
 
-- [ ] Data that has one owner is by value, not `:heap` and not `rc`.
+- [ ] Data that has one owner is by value, not `^heap` and not `rc`.
 - [ ] Every `Vec`, `MutableMap` and `Map` has a matching free, including
       each dropped version of a persistent map.
 - [ ] A `Vec` of wide structs is either structure-of-arrays or lives in a
       region.
-- [ ] Temporary `:heap` structures are built inside `with-region`, and
+- [ ] Temporary `^heap` structures are built inside `with-region`, and
       `TUR_REGION_STATS=1` shows them rewinding.
 - [ ] Strings built in a loop use a `StringBuilder`.
 - [ ] Long-running loops that call function values or perform effects are

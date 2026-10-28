@@ -6,9 +6,9 @@
 ; KEPT (pushed to `store`, returned by a stashing producer) must still read
 ; back intact -- under ASan a premature free is a use-after-free.
 
-(defstruct Er :copy [line : int col : int])
-(defstruct Pt :copy [x : int y : int])
-(defopaque Doc :ptr<void> :non-null)
+(defstruct ^copy Er [line : int col : int])
+(defstruct ^copy Pt [x : int y : int])
+(defopaque ^non-null Doc :ptr<void>)
 
 (def store (:: (vec-new) (Vec (Result Doc Er))))
 

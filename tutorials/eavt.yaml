@@ -11,10 +11,10 @@ steps:
     title: The Value ADT
     instruction: |
       Every fact stores a typed value. Define the Value ADT with three variants.
-      `:copy` because a fact is immutable: its value is read and compared,
+      `^copy` because a fact is immutable: its value is read and compared,
       never consumed.
-        (defdata Value :copy (LongVal :int) (StrVal :cstr) (EntityVal :int))
-    expected: "(defdata Value :copy (LongVal :int) (StrVal :cstr) (EntityVal :int))"
+        (defdata ^copy Value (LongVal :int) (StrVal :cstr) (EntityVal :int))
+    expected: "(defdata ^copy Value (LongVal :int) (StrVal :cstr) (EntityVal :int))"
     hints:
       - "Use defdata to define a tagged union."
       - "LongVal holds integers, StrVal holds strings, EntityVal holds entity IDs."
@@ -60,8 +60,8 @@ steps:
     instruction: |
       A datum is one fact: an entity, an attribute, a value and the
       transaction that recorded it. Define it as a struct:
-        (defstruct Datum :copy [entity : int attr : cstr value : Value tx : int])
-    expected: "(defstruct Datum :copy [entity : int attr : cstr value : Value tx : int])"
+        (defstruct ^copy Datum [entity : int attr : cstr value : Value tx : int])
+    expected: "(defstruct ^copy Datum [entity : int attr : cstr value : Value tx : int])"
     hints:
       - "A struct names each field and its type."
       - "Read a field with (.entity d), (.attr d), (.value d) or (.tx d)."

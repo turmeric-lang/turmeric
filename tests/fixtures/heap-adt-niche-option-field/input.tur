@@ -6,8 +6,8 @@
 ;; while `(None)` stored the bare NULL, so reading it back was a NULL
 ;; dereference.  emit_type_is_byvalue_adt now says a niche option is a word.
 
-(defopaque S :ptr<void> :non-null)
-(defdata Ev :heap :copy (A int) (C S (Option S)))
+(defopaque ^non-null S :ptr<void>)
+(defdata ^heap ^copy Ev (A int) (C S (Option S)))
 (defn __raw [] : ptr<void>
   ```c
   return (void *)"hello";

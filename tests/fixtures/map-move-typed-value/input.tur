@@ -28,7 +28,7 @@
 ;; The assertions cover both sides of the boxing decision, because the failure
 ;; mode of a botched peel is silent -- the query would fold to 0 and a wide
 ;; value would be stored unboxed rather than heap-boxed.
-(defstruct Wide :move [x : int y : int z : int])
+(defstruct ^move Wide [x : int y : int z : int])
 
 (defn main [] : int
   ;; wide, move-typed value -> heap-boxed (flag bit 1 set)

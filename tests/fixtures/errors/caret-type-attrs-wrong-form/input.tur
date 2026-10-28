@@ -1,0 +1,4 @@
+;; caret-type-attributes-plan P0: ^sealed governs `::`, so only defopaque takes it.
+(defstruct ^sealed Point [x : int])
+
+(defn main [] : int 0)

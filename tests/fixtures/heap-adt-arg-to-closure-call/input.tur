@@ -5,7 +5,7 @@
 ;; the argument's TYPE how it was spelled (the word); it asks what the local
 ;; was declared as now.  Not cross-module after all: one file reproduces it.
 
-(defdata Ev :heap :copy (A int) (B int int))
+(defdata ^heap ^copy Ev (A int) (B int int))
 (defn mk [x : int] : Ev (B x x))
 
 (defn call [h : (fn [Ev] int) x : int] : int

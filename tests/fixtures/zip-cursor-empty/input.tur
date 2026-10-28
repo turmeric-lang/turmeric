@@ -3,7 +3,7 @@
 ;; nothing -- and a one-element cursor has no next or previous element.
 (load "stdlib/zip.tur")
 
-(defdata Bag :heap :copy (Empty) (Holds (Cons int)))
+(defdata ^heap ^copy Bag (Empty) (Holds (Cons int)))
 
 (defn bag-trav [] : (Traversal Bag int)
   (zip/traversal (fn [b : Bag] : (Cons int) (match b (Empty) (tnil) (Holds xs) xs))

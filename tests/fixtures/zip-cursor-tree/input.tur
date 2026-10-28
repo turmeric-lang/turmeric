@@ -6,10 +6,10 @@
 ;; does the same over float labels.
 (load "stdlib/zip.tur")
 
-(defdata Bin :heap :copy (Tip) (Br Bin int Bin))
+(defdata ^heap ^copy Bin (Tip) (Br Bin int Bin))
 
 ;; fill's state: the rebuilt subtree and the values it did not use
-(defstruct BFill :heap :copy [t : Bin rest : (Cons int)])
+(defstruct ^heap ^copy BFill [t : Bin rest : (Cons int)])
 
 (defn bin-parts [b : Bin acc : (Cons int)] : (Cons int)
   (match b

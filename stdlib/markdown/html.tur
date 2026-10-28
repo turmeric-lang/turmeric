@@ -19,17 +19,17 @@
 ;;; tags (title, textarea, style, xmp, iframe, noembed, noframes, script,
 ;;; plaintext).  MdRawEscape writes all raw HTML as text.
 
-(defdata MdRawHtml :copy (MdRawPass) (MdRawTagFilter) (MdRawEscape))
+(defdata ^copy MdRawHtml (MdRawPass) (MdRawTagFilter) (MdRawEscape))
 ;;; MdSlugMode -- whether markdown/render-html gives each heading an id, and by which rule.
 ;;;
 ;;; MdNoIds writes none, as the CommonMark spec and cmark-gfm do.  MdSlugPython
 ;;; is python-markdown's toc extension and MdSlugGitHub GitHub's
 ;;; (stdlib/markdown/slug.tur has both rules).
 
-(defdata MdSlugMode :copy (MdNoIds) (MdSlugPython) (MdSlugGitHub))
+(defdata ^copy MdSlugMode (MdNoIds) (MdSlugPython) (MdSlugGitHub))
 ;;; MdHtmlOpts -- options for markdown/render-html: what to do with raw HTML, and how to give headings ids.
 
-(defstruct MdHtmlOpts :copy [raw-html : MdRawHtml heading-ids : MdSlugMode])
+(defstruct ^copy MdHtmlOpts [raw-html : MdRawHtml heading-ids : MdSlugMode])
 ;;; MdRen -- internal: renderer state: whether the output ends with a line feed, the headings' ids, and the next one to write.
 
 (defstruct MdRen [nl : bool ids : (Vec String) next : int])

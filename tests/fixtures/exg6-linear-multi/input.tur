@@ -14,7 +14,7 @@
     ```))
 
 (defn show-one [n : int] : nil
-  (let [e (pack n (exists :linear [a] [(Show a)] a))]
+  (let [e (pack n (exists ^linear [a] [(Show a)] a))]
     (open e [_ v]
       (println (.show v)))))
 

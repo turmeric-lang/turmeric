@@ -33,7 +33,7 @@
   return buf;
   ```)
 
-(defstruct Handle :linear [ptr : ptr<void>])
+(defstruct ^linear Handle [ptr : ptr<void>])
 
 (defn h-open [path : cstr mode : cstr] : Handle
   ```c Handle h; h.ptr = (void*)fopen(path, mode); return h; ```)

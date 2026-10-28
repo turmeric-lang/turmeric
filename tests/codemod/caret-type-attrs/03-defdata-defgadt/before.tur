@@ -1,0 +1,8 @@
+(defdata Shape :copy (Circle int) (Square int))
+(defdata Tree [a] :heap (Leaf) (Node (Tree a) a (Tree a)))
+(defdata Wrap :linear [A] (Wrap A))
+(defdata Job :move :no-auto-ctor (Job int))
+(defgadt Expr [T] :copy
+  (IntE int : (Expr int))
+  (BoolE bool : (Expr bool)))
+(defdata Plain (A) (B))

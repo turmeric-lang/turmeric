@@ -33,7 +33,7 @@ TMP="$1"
 TUR="${TUR:-./build/tur}"
 
 cat > "$TMP/in.tur" <<'EOF'
-(defdata Link :heap (Link [v : int nxt : int]))
+(defdata ^heap Link (Link [v : int nxt : int]))
 ;; The result IS a node, so the walk refuses and the bracket RETIRES: the node
 ;; escapes into a retired generation that only shutdown may free.
 (defn mk [n : int] : Link

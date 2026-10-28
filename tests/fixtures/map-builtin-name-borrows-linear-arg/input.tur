@@ -7,7 +7,7 @@
 ;; them again.  The discarded first pass spent the linear handle, so the next
 ;; use of it was "linear value 'h' used after being consumed" (TUR-E0101).
 
-(defopaque Store :int :linear)
+(defopaque ^linear Store :int)
 
 (defn store-open [] : Store ```c return 40; ```)
 (defn store-close [s : Store] : nil ```c (void)s; ```)

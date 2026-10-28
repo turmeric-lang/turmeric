@@ -1,5 +1,5 @@
 ; `:affine` on a defdata with annotated constructors: at most one use.
-(defdata Tik [a] :affine
+(defdata ^affine Tik [a]
   (ITik int : (Tik int))
   (NoTik))
 (defn spend [t : Tik] : int

@@ -7,7 +7,7 @@
 ;; worked.  Each operand shape is pushed inline here and read back; the
 ;; fixture is leak-checked, since the double box also leaked its outer cell.
 
-(defstruct N :copy [a : int b : int c : int])
+(defstruct ^copy N [a : int b : int c : int])
 
 (defn new-ns [] : (Vec N) (vec-new))
 (defn mk-n [x : int] : N (N x (* 2 x) (* 3 x)))

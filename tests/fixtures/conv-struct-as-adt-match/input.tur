@@ -3,8 +3,8 @@
 ;; is the struct name; binding works positionally, by name, and with `_` to
 ;; ignore a field.  Single-variant matches are trivially exhaustive.
 
-(defstruct Person :copy [name : cstr age : int])
-(defstruct Triple :copy [a : int b : int c : int])
+(defstruct ^copy Person [name : cstr age : int])
+(defstruct ^copy Triple [a : int b : int c : int])
 
 (defn show-person [p : Person] : int
   (match p

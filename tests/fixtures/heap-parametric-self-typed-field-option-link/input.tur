@@ -5,7 +5,7 @@
 ;; body before Option was complete (`unknown type name
 ;; 'tur_adt_Option__Node__int'`); a dependency held by pointer now gets a
 ;; forward `typedef struct X X;` instead, so Option finishes first.
-(defstruct Node :heap [A] (val A) (next (Option (Node A))))
+(defstruct ^heap Node [A] (val A) (next (Option (Node A))))
 
 (defn main [] : int
   (let [m (make-struct Node 8 (:: (none) (Option (Node int))))

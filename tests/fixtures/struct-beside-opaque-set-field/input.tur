@@ -5,9 +5,9 @@
 ;; record is copied first so its copies keep their values.
 
 (defopaque S :ptr<void>)
-(defstruct Pos :copy [line : int col : int])
+(defstruct ^copy Pos [line : int col : int])
 (defstruct R [msg : S n : int])
-(defstruct Rc :copy [msg : S n : int pos : Pos])
+(defstruct ^copy Rc [msg : S n : int pos : Pos])
 (defn __s [] : ptr<void>
   ```c
   return (void*)"x";

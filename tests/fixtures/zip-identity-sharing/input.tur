@@ -7,7 +7,7 @@
 (load "stdlib/zip.tur")
 
 ;; A minimal rose-like tree: a leaf holds an int, a node holds its children.
-(defdata Tree :heap :copy (Leaf int) (Node (Cons Tree)))
+(defdata ^heap ^copy Tree (Leaf int) (Node (Cons Tree)))
 
 (defn tree-ops [] : (ZipOps Tree)
   (zip/ops (fn [t : Tree] : bool (match t (Leaf _) false (Node _) true))

@@ -3,7 +3,7 @@
 ;; phantom T parameter previously caused the :linear qualifier to be
 ;; silently dropped at the TY_APP node, so a double-consume compiled
 ;; cleanly.  See docs/archive/history/parametric-linear-opaque-not-enforced.md.
-(defopaque Token [T] :int :linear)
+(defopaque ^linear Token [T] :int)
 
 (defn make-token [T]
   [n : int]

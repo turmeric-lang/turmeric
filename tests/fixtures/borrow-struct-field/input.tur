@@ -1,6 +1,6 @@
 ;; Phase 12: Struct field access via (.field s) and field borrowing via (& (.field s))
 
-(defstruct Point :copy [x : int y : int])
+(defstruct ^copy Point [x : int y : int])
 
 (defn main [] : int
   (let [p (make-struct Point 3 4)]

@@ -16,7 +16,7 @@
 ;; namespace, so an arm's `r` would otherwise silently inherit an outer `r`'s
 ;; hypotheses -- the same class of bug as the shadowed `let`, and unsound
 ;; rather than merely imprecise.
-(defdata Color :copy (Red) (Green) (Blue))
+(defdata ^copy Color (Red) (Green) (Blue))
 
 (defn rank [c : Color] : #refine{ r : int | (>= r 0) }
   (match c (Red) 0 (Green) 1 (Blue) 2))

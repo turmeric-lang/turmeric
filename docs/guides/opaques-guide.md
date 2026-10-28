@@ -18,10 +18,10 @@ between, say, a file descriptor and the byte count you were about to pass
 where the fd belongs, without paying for a struct.
 
 ```turmeric
-(defopaque Fd     :int)
-(defopaque Pid    :int)
-(defopaque Chan   :ptr<void> :linear)
-(defopaque Future :ptr<void> :affine)
+(defopaque Fd             :int)
+(defopaque Pid            :int)
+(defopaque ^linear Chan   :ptr<void>)
+(defopaque ^affine Future :ptr<void>)
 ```
 
 The representation type is one of:
@@ -50,9 +50,9 @@ casts to/from the real pointer type internally).
    export `(defopaque Token :int)` and never reveal whether the token is
    an array index, a hash, or a serial number. The consumer sees only the
    accessor functions you choose to export.
-4. **Attaching a substructural discipline.** Adding `:linear` or
-   `:affine` makes the handle *exactly-once* or *at-most-once* -- the checker enforces that a
-   `Chan :linear` is consumed by exactly one `chan-free` call, ruling
+4. **Attaching a substructural discipline.** Adding `^linear` or
+   `^affine` makes the handle *exactly-once* or *at-most-once* -- the checker enforces that a
+   `^linear Chan` is consumed by exactly one `chan-free` call, ruling
    out leaks and double-frees.
 
 Opaques are *not* for:
@@ -68,19 +68,22 @@ Opaques are *not* for:
 
 ```
 (defopaque Name :rep-type)
-(defopaque Name :rep-type :linear)
-(defopaque Name :rep-type :affine)
-(defopaque Name :rep-type :sealed)          ; see below
-(defopaque Name :rep-type :affine :sealed)  ; attributes compose
+(defopaque ^linear Name :rep-type)
+(defopaque ^affine Name :rep-type)
+(defopaque ^sealed Name :rep-type)          ; see below
+(defopaque ^affine ^sealed Name :rep-type)  ; attributes compose
 ```
 
-The optional trailing keywords are a *set*. `:linear` and `:affine`
+The optional attributes go before the name, as on `defn` and `def`, and are a
+*set*. (The older spelling, trailing keywords after the representation
+type such as `:linear`, still compiles but warns with `TUR-D0007`; `tur fmt`
+rewrites it.) `^linear` and `^affine`
 promote the newtype to a substructural handle -- without either, the
 opaque is freely copyable (`is_copy = true`); with one it becomes a
 resource the checker tracks for single use. The two are mutually
 exclusive ("exactly once" and "at most once" are contradictory claims).
 
-`:sealed` is orthogonal to those: it governs *who may use `::` on the
+`^sealed` is orthogonal to those: it governs *who may use `::` on the
 type*, not how many times a value may be used, so it composes with
 either. See [Sealing an opaque](#sealing-an-opaque-sealed) below.
 
@@ -118,7 +121,7 @@ an opaque and its representation. It compiles to nothing at the C level
 The same pattern works for `:ptr<void>` opaques:
 
 ```turmeric
-(defopaque Chan :ptr<void> :linear)
+(defopaque ^linear Chan :ptr<void>)
 
 ;; Inside an inline-C body the C type is int64_t; cast as you would
 ;; any other handle:
@@ -149,9 +152,9 @@ Conventions worth following:
   POSIX fds), expose a `name-valid?` predicate instead of forcing
   callers to compare integers.
 
-## Sealing an opaque: `:sealed`
+## Sealing an opaque: `^sealed`
 
-> `:sealed` enforces unconditionally. `--enable=sealed-opaque` (the retired
+> `^sealed` enforces unconditionally. `--enable=sealed-opaque` (the retired
 > experiment gate) was a warning-only no-op through 0.37.0 and is a hard
 > `TUR-E0310` from 0.38.0 -- a `build.tur` still naming it needs the flag
 > removed. See
@@ -175,7 +178,7 @@ Mutating the borrowed `w` directly is correctly rejected. Mutating the
 alias is not -- so a uniqueness-based argument ("no second mutable
 handle can exist here") does not survive one `::`.
 
-`:sealed` closes that. Inside the declaring module `::` behaves as
+`^sealed` closes that. Inside the declaring module `::` behaves as
 always; outside it, both directions are `TUR-E0302`:
 
 | use site | `(:: n H)` | `(:: h :int)` |
@@ -187,7 +190,7 @@ Sealing the *unwrap* direction as well as fabrication is what makes the
 representation genuinely private rather than merely awkward to rebuild:
 once the raw carrier escapes, inline-C can do anything with it.
 
-**What `:sealed` does not claim.** It is a compile-time discipline over
+**What `^sealed` does not claim.** It is a compile-time discipline over
 the `::` surface, not a capability and not a runtime protection.
 inline-C in any module can still cast an `int64_t` to whatever it likes.
 So sealing raises an aliasing bypass from "one `::` away, in ordinary
@@ -223,7 +226,7 @@ block.
 ```
 
 ```turmeric
-(defopaque Reactor :ptr<void> :linear)
+(defopaque ^linear Reactor :ptr<void>)
 
 (defn reactor-new [] : Reactor
   ```c
@@ -245,12 +248,12 @@ pattern.
 
 ## Substructural opaques
 
-Adding `:linear` or `:affine` flips two checker bits on the underlying
+Adding `^linear` or `^affine` flips two checker bits on the underlying
 `StructDef` (`is_copy = false`, `is_linear` / `is_affine = true`):
 
-- A `:linear` handle must be consumed exactly once. Letting it go out of
+- A `^linear` handle must be consumed exactly once. Letting it go out of
   scope or copying it is `TUR-E0100`; using it twice is `TUR-E0101`.
-- A `:affine` handle must be consumed at most once -- dropping it is
+- A `^affine` handle must be consumed at most once -- dropping it is
   fine, double-use is not.
 - Multi-read operations annotate their handle parameter with `^borrow`
   so they observe the handle without consuming it. Only the
@@ -297,9 +300,9 @@ type level without storing it.
 | Module | Opaque | Shape |
 |---|---|---|
 | [`stdlib/fd.tur`](https://github.com/turmeric-lang/turmeric/blob/main/stdlib/fd.tur) | `Fd` | `:int` -- POSIX file descriptor, `-1` is the error sentinel |
-| [`stdlib/process.tur`](https://github.com/turmeric-lang/turmeric/blob/main/stdlib/process.tur) | `Pid`, `ChildHandle` | `:int` (one `:linear`) -- OS process ids |
-| [`stdlib/chan.tur`](https://github.com/turmeric-lang/turmeric/blob/main/stdlib/chan.tur) | `Chan`, `AsyncChan` | `:ptr<void> :linear` -- channel control blocks |
-| [`stdlib/future.tur`](https://github.com/turmeric-lang/turmeric/blob/main/stdlib/future.tur) | `Promise`, `Future` | `:ptr<void>` with `:linear` / `:affine` -- write end vs read end of the same `FutureCell` |
+| [`stdlib/process.tur`](https://github.com/turmeric-lang/turmeric/blob/main/stdlib/process.tur) | `Pid`, `ChildHandle` | `:int` (one `^linear`) -- OS process ids |
+| [`stdlib/chan.tur`](https://github.com/turmeric-lang/turmeric/blob/main/stdlib/chan.tur) | `Chan`, `AsyncChan` | `^linear` over `:ptr<void>` -- channel control blocks |
+| [`stdlib/future.tur`](https://github.com/turmeric-lang/turmeric/blob/main/stdlib/future.tur) | `Promise`, `Future` | `:ptr<void>` with `^linear` / `^affine` -- write end vs read end of the same `FutureCell` |
 | [`stdlib/threadpool.tur`](https://github.com/turmeric-lang/turmeric/blob/main/stdlib/threadpool.tur) | `WorkQueueHandle`, `ThreadPoolHandle`, `DynThreadPoolHandle`, `FutureHandle` | `:ptr<void>` -- static and dynamic pools have distinct block layouts and are nominally distinct |
 | [`stdlib/thread.tur`](https://github.com/turmeric-lang/turmeric/blob/main/stdlib/thread.tur) | `ThreadHandle` | `:ptr<void>` -- returned by `thread-spawn-fn`; `thread-join` / `-detach` / `cancel-thread` take it |
 | [`stdlib/fiber.tur`](https://github.com/turmeric-lang/turmeric/blob/main/stdlib/fiber.tur) | `FiberHandle` | `:ptr<void>` -- consumed by `fiber-resume` / `-free` / scheduler unpark |
@@ -310,7 +313,7 @@ type level without storing it.
 | [`stdlib/stm.tur`](https://github.com/turmeric-lang/turmeric/blob/main/stdlib/stm.tur) | `TVar` | `:ptr` -- transactional-variable handle, distinct from the boxed `:ptr` values it holds |
 | [`stdlib/timer.tur`](https://github.com/turmeric-lang/turmeric/blob/main/stdlib/timer.tur) | `TimerId` | `:int` -- branded handle returned by `reactor-add-timer` |
 | [`stdlib/fs.tur`](https://github.com/turmeric-lang/turmeric/blob/main/stdlib/fs.tur) | `StatInfo`, `TmpFile` | `:int` -- stat block vs temp-file handle; cannot be transposed |
-| [`stdlib/io.tur`](https://github.com/turmeric-lang/turmeric/blob/main/stdlib/io.tur) | `FileHandle`, `FileStream`, `DirListing`, `FileSystem` | `:ptr<void>` -- `FileHandle` is `:linear`; `FileStream` wraps `FILE*` |
+| [`stdlib/io.tur`](https://github.com/turmeric-lang/turmeric/blob/main/stdlib/io.tur) | `FileHandle`, `FileStream`, `DirListing`, `FileSystem` | `:ptr<void>` -- `FileHandle` is `^linear`; `FileStream` wraps `FILE*` |
 | [`stdlib/ref.tur`](https://github.com/turmeric-lang/turmeric/blob/main/stdlib/ref.tur) | `RefHandle` | `:int` -- heap pointer from `ref-new`, distinct from the `Ref` struct |
 
 Read those modules for the full pattern: a `defopaque` declaration
@@ -323,7 +326,7 @@ substructural).
 - [structs-guide.md](structs-guide.md) -- when you need named fields,
   not just a wrapper.
 - [substructural-types-guide.md](substructural-types-guide.md) -- the
-  `:linear` / `:affine` discipline in depth.
+  `^linear` / `^affine` discipline in depth.
 - [uniqueness-types-guide.md](uniqueness-types-guide.md) -- `^unique`,
   an orthogonal ownership story.
 - [c-integration-guide.md](c-integration-guide.md) -- inline-C blocks,

@@ -9,8 +9,8 @@
 ;; closures `box-trav` builds construct `:heap` values, so a call left on the
 ;; base generic aborted at runtime ("a call reached the dead base generic
 ;; path").
-(defstruct Trav :copy [S A] (parts (fn [S] (Cons A))) (fill (fn [S (Cons A)] S)))
-(defstruct Box :heap :copy [A] (v A))
+(defstruct ^copy Trav [S A] (parts (fn [S] (Cons A))) (fill (fn [S (Cons A)] S)))
+(defstruct ^heap ^copy Box [A] (v A))
 
 (defn box-trav [A] [] : (Trav (Box A) A)
   (make-struct Trav

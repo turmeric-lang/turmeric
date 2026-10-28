@@ -765,7 +765,7 @@ when you build or rewrite nodes.
 
 **Regions.** No `Expr` field is region-specific. The elaborator's part is
 one rewrite: a typed node passed to an inline-C callee's erased `:int`
-parameter (or, for a Turmeric-bodied callee, a `:heap` node) is wrapped in an
+parameter (or, for a Turmeric-bodied callee, a `^heap` node) is wrapped in an
 `EX_ASCRIBE` to `TYPE_INT`, so the emitter's ascription arm notes the word.
 Constructors are exempt. See `elab_call_fn_inner` near
 `call_arg_is_region_node_word`,

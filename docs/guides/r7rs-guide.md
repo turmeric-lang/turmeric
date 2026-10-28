@@ -612,7 +612,7 @@ collection runs when 8 MiB, or twice the live size, has been allocated since
 the last one; `TUR_GC_TORTURE=N` collects every N allocations, for shaking
 out a missing root. `TUR_R7RS_GC=0 tur build prog.tur`, or `tur --no-r7rs-gc
 build prog.tur`, builds without the collector; the data then stays
-allocated until the process exits, the way a Turmeric `:heap` box does.
+allocated until the process exits, the way a Turmeric `^heap` box does.
 
 **Threads** run in parallel under the collector, and their memory is
 reclaimed too. A program starts them with SRFI 18 (`(import (srfi 18))`,

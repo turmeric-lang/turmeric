@@ -22,7 +22,7 @@
     return (const char *)buf;
     ```))
 
-(defstruct B :move
+(defstruct ^move B
   [p (exists [a] [(Show a)] a)])
 
 (defn main [] : int

@@ -9,7 +9,7 @@
 ;; sums WITH an owning field already did. Carries requires.leak-check, so this
 ;; is verified under LeakSanitizer rather than by reading the output.
 ;; See docs/archive/rc-of-adt-leaks-the-payload.md.
-(defdata Plain :copy (PA :int) (PB :int))
+(defdata ^copy Plain (PA :int) (PB :int))
 
 (defn main [] : int
   (let [r (rc/of (PA 7))]

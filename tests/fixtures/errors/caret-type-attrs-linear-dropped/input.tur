@@ -1,0 +1,8 @@
+;; caret-type-attributes-plan P0: a `^linear` struct is exactly-once, so
+;; dropping it is the same error the `:linear` keyword gives.
+(defstruct ^linear Socket [fd : int])
+
+(defn main [] : int
+  (let [s (make-struct Socket 1)]
+    0)
+  0)

@@ -40,9 +40,7 @@
 ;;; one with `zip/ops`.  `:heap :copy`, so a location carries it as one word.
 ;;;
 ;;; Since: generic-zipper-plan ZP1
-(defstruct ZipOps
-  :heap
-  :copy
+(defstruct ^heap ^copy ZipOps
   [T]
   (branch? (fn [T] bool))
   (children (fn [T] (Cons T)))
@@ -56,9 +54,7 @@
 ;;; this frame was edited -- `zip/up` rebuilds the parent only then.
 ;;;
 ;;; Since: generic-zipper-plan ZP1
-(defstruct ZipFrame
-  :heap
-  :copy
+(defstruct ^heap ^copy ZipFrame
   [T]
   (lefts (Cons T))
   (pnode T)
@@ -71,9 +67,7 @@
 ;;; `end` is Clojure's `:end` marker, set by `zip/next` past the last node.
 ;;;
 ;;; Since: generic-zipper-plan ZP1
-(defstruct ZipLoc
-  :heap
-  :copy
+(defstruct ^heap ^copy ZipLoc
   [T]
   (node T)
   (path (ZipFrame T))
@@ -138,7 +132,7 @@
 ;;;   A (ZipOps T) for `zip/zipper`.
 ;;;
 ;;; Example:
-;;;   (defdata Tree :heap :copy (Leaf int) (Node (Cons Tree)))
+;;;   (defdata ^heap ^copy Tree (Leaf int) (Node (Cons Tree)))
 ;;;   (def tree-ops
 ;;;     (zip/ops (fn [t : Tree] : bool (match t (Leaf _) false (Node _) true))
 ;;;              (fn [t : Tree] : (Cons Tree) (match t (Leaf _) (tnil) (Node cs) cs))
@@ -764,7 +758,7 @@
 ;;; O(1).  Build one with `zip/rose` or `make-struct`.
 ;;;
 ;;; Since: generic-zipper-plan ZP2
-(defstruct Rose :heap :copy [A] (label A) (kids (Cons (Rose A))))
+(defstruct ^heap ^copy Rose [A] (label A) (kids (Cons (Rose A))))
 
 ;;; zip/rose -- build a rose tree node.
 ;;;
@@ -900,9 +894,7 @@
 ;;; `:heap :copy`, so a cursor carries it as one word.
 ;;;
 ;;; Since: generic-zipper-plan ZP4
-(defstruct Traversal
-  :heap
-  :copy
+(defstruct ^heap ^copy Traversal
   [S A]
   (parts (fn [S] (Cons A)))
   (fill (fn [S (Cons A)] S)))
@@ -913,9 +905,7 @@
 ;;; (nearest first), `rights` those after it (in order).
 ;;;
 ;;; Since: generic-zipper-plan ZP4
-(defstruct ZipCursor
-  :heap
-  :copy
+(defstruct ^heap ^copy ZipCursor
   [S A]
   (shape S)
   (lefts (Cons A))
@@ -1130,7 +1120,7 @@
         (zip/-forest-labels (.kids r) (zip/-forest-labels (ttail ks) acc))))))
 
 ;;; ZipFill -- internal: a rebuilt forest and the labels it did not use.
-(defstruct ZipFill :heap :copy [A] (built (Cons (Rose A))) (rest (Cons A)))
+(defstruct ^heap ^copy ZipFill [A] (built (Cons (Rose A))) (rest (Cons A)))
 
 ;;; zip/-fill-forest -- internal: relabel a forest in pre-order from xs.
 ;;;

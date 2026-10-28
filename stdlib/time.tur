@@ -433,8 +433,7 @@
   ;;; instant.
   ;;;
   ;;; Since: stdlib-os-surface P3
-  (defstruct DateTime
-    :copy
+  (defstruct ^copy DateTime
     [year : int
      month : int
      day : int

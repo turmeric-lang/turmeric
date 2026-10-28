@@ -14,7 +14,7 @@
 ; the blind spot said could not be traced, traced.
 (load "stdlib/rcvec.tur")
 
-(defstruct N :move [kids : rc<RcVec>])
+(defstruct ^move N [kids : rc<RcVec>])
 
 (defn build [] : int
   (let [v (rcvec-new)]

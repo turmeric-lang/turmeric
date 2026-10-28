@@ -1,0 +1,8 @@
+;; caret-type-attributes-plan P0: an `^affine` struct may not be used twice.
+(defstruct ^affine Lease [secs : int])
+
+(defn lease-secs [l : Lease] : int (.secs l))
+
+(defn main [] : int
+  (let [l (make-struct Lease 30)]
+    (+ (lease-secs l) (lease-secs l))))

@@ -7,7 +7,7 @@
 ;; (tnil)))` emitted an unspecialized `tnil()` and cast `(Cons (R int))` to
 ;; `tur_adt_Cons__int *` -- the callee's `A` read through the caller's spec.
 ;; Each body below is instantiated at int and at float.
-(defstruct R :heap :copy [A] (label A) (kids (Cons (R A))))
+(defstruct ^heap ^copy R [A] (label A) (kids (Cons (R A))))
 
 (defn lf [A] [x : A] : (R A) (make-struct R :label x :kids (tnil)))
 (defn node2 [A] [x : A a : (R A) b : (R A)] : (R A)

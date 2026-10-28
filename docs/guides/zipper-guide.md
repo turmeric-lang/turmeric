@@ -70,7 +70,7 @@ three `clojure.zip/zipper` takes:
 (load "stdlib/zip.tur")
 
 ;; A leaf holds an int; a node holds its children.
-(defdata Tree :heap :copy (Leaf int) (Node (Cons Tree)))
+(defdata ^heap ^copy Tree (Leaf int) (Node (Cons Tree)))
 
 (defn tree-ops [] : (ZipOps Tree)
   (zip/ops (fn [t : Tree] : bool (match t (Leaf _) false (Node _) true))
@@ -103,8 +103,8 @@ three `clojure.zip/zipper` takes:
   0)
 ```
 
-The node type must be a `:heap :copy` type (a `defdata` or a `defstruct`): the
-zipper keeps the same node in several locations at once, which a `:move` type
+The node type must be a `^heap ^copy` type (a `defdata` or a `defstruct`): the
+zipper keeps the same node in several locations at once, which a `^move` type
 forbids. A tree whose nodes are of different types is navigated as one sum
 type -- an AST whose nodes are one `defdata` -- exactly as with Haskell's
 Uniplate.
@@ -183,7 +183,7 @@ and the rebuild. This fold replaces every closed subtree -- one with no
 variables -- by its value. Top-down, the largest closed subtrees fold first:
 
 ```turmeric
-(defdata Ast :heap :copy (Num int) (Var int) (Add (Cons Ast)) (Mul (Cons Ast)))
+(defdata ^heap ^copy Ast (Num int) (Var int) (Add (Cons Ast)) (Mul (Cons Ast)))
 
 ;; ast-ops: Add and Mul are branches; make-node keeps the operator.
 ;; closed? and value are ordinary recursive functions.
@@ -208,7 +208,7 @@ The full program is
 typed counterpart of Clojure's `seq-zip`):
 
 ```turmeric
-(defstruct Rose :heap :copy [A] (label A) (kids (Cons (Rose A))))
+(defstruct ^heap ^copy Rose [A] (label A) (kids (Cons (Rose A))))
 ```
 
 `zip/rose` builds a node and `zip/rose-zip` opens a zipper on one. Every rose
@@ -318,7 +318,7 @@ own.
 
 ## Memory
 
-Locations, path frames and rebuilt nodes are `:heap` values, like `(Cons A)`
+Locations, path frames and rebuilt nodes are `^heap` values, like `(Cons A)`
 cells. There is no `zip/free`, and none is needed:
 
 - **Outside a region**, they live until the process exits.

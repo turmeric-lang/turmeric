@@ -1,4 +1,4 @@
-(defstruct Point :copy [x : int y : int])
+(defstruct ^copy Point [x : int y : int])
 
 (defn main [] : int
   (println 0)

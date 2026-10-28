@@ -4,7 +4,7 @@
 ;; `forall f. Functor f => ...` form is deferred).
 (load "stdlib/lens.tur")
 
-(defstruct Point :copy :heap [x : int y : int])
+(defstruct ^copy ^heap Point [x : int y : int])
 
 ;; A field lens for Point.x
 (defn point-x [] : (Lens Point int)

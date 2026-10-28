@@ -28,7 +28,7 @@
 ;; and it explains it.
 (defeffect Log [msg : cstr] : nil)
 
-(defstruct App :copy [run : fn #fx{Log}])
+(defstruct ^copy App [run : fn #fx{Log}])
 
 (defn main [] : int
   (let [app (make-struct App (fn [msg] (perform (Log msg))))]

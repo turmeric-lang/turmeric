@@ -68,9 +68,9 @@
 ;; a future can be polled and cancelled freely; only future-free consumes. The
 ;; refcount decrement uses the __atomic builtins, so a Promise fulfilled on one
 ;; thread and a Future freed on another tear the cell down race-free.
-(defopaque Promise :ptr<void> :linear)
+(defopaque ^linear Promise :ptr<void>)
 
-(defopaque Future :ptr<void> :affine)
+(defopaque ^affine Future :ptr<void>)
 ;; ---- Shared FutureCell type and helpers ----
 ;; Allocate a new FutureCell (shared by Promise and Future)
 ;;; future-cell-new -- allocate and initialise a shared FutureCell (mutex, condvar, unset).

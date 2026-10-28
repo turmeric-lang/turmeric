@@ -1,0 +1,2 @@
+^bogus is not an attribute of defstruct
+expected ^copy, ^move, ^linear, ^affine, ^heap, ^no-auto-ctor
