@@ -33,11 +33,12 @@ across shards without checking.
 
 `--suite-shard SUITE=i/N` is for the case that reading cannot express: one suite
 in the job sliced its own work while the rest of the job ran whole.  The macOS
-`aux` part is exactly that -- it runs a quarter of tur_generic_spec_matrix
-(TUR_GSM_SHARD) alongside 160 suites that run in full -- so $TUR_TEST_SHARD
-there would label all 160 as replicas of a slice they never ran, while leaving
-it untagged makes the matrix's series drop ~4x with nothing in the data saying
-why.  The flag tags that one row and leaves the others alone.
+`aux` part is exactly that -- it runs a quarter of turi_fixture_tests
+(TUR_TURI_SHARD) alongside 160 suites that run in full, as the macOS `r7rs`
+part does with a quarter of tur_generic_spec_matrix (TUR_GSM_SHARD) -- so
+$TUR_TEST_SHARD there would label all 160 as replicas of a slice they never
+ran, while leaving it untagged makes the sliced series drop ~4x with nothing in
+the data saying why.  The flag tags that one row and leaves the others alone.
 
 Usage:
     collect-suite-timings.py results-main.xml results-aux.xml > timings.jsonl

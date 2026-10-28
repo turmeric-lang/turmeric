@@ -7,7 +7,7 @@ name: Nightly arm64
 # measured over two runs on 2026-10-01, every ubuntu and Windows job in a run
 # starts at t+0 while the five macOS jobs start at t+40..t+80 min and never more
 # than 2-3 at once.  So per-PR macOS runs one quarter of the generic-spec matrix
-# (TUR_GSM_SHARD=1/4, inside its `aux` part) and skips the float-conversion lint
+# (TUR_GSM_SHARD=1/4, inside its `r7rs` part) and skips the float-conversion lint
 # entirely.  Both of those gaps close here, nightly, off the critical path.
 #
 # What each leg is actually for:
