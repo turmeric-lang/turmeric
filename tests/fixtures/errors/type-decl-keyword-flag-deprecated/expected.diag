@@ -1,0 +1,4 @@
+TUR-D0007
+'defstruct': the trailing flag :copy :heap is deprecated; write ^copy ^heap before the name
+'defopaque': the trailing flag :linear :sealed is deprecated; write ^linear ^sealed before the name
+'defdata': the trailing flag :copy is deprecated; write ^copy before the name

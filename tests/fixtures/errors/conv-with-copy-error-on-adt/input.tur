@@ -1,5 +1,5 @@
 ;; CONV-S6: TUR-E0296 on a move-only single-variant `defdata` names the "variant"
-;; surface and suggests the `(defdata ... :copy ...)` fix.
+;; surface and suggests the `(defdata ^copy ...)` fix.
 (defdata Acct (Acct [balance : int]))
 (defn main [] : int
   (let [a (Acct 100)

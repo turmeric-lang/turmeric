@@ -71,7 +71,8 @@ inseparable, so the type checker forces you to handle every case.
   the default `^move` enforces single-use ownership; `^linear` (exactly once)
   and `^affine` (at most once) are the substructural ones. Write it before the
   name, as on `defn` and `def`: `(defdata ^copy Either [L R] ...)`. (The older
-  spelling, a `:copy` keyword after the name, is still read.)
+  spelling, a `:copy` keyword after the name, still compiles but warns with
+  `TUR-D0007`; `tur fmt` rewrites it.)
 - **Type parameters** `[L R]` (optional) -- a parametric sum. Each constructor
   may use these in its payload types.
 - **Constructors** `(Left L) (Right R)` -- one parenthesised arm each. A

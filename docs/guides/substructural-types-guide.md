@@ -169,7 +169,9 @@ error, and so is `^copy` with `^move`. See [Opaques](opaques-guide.md),
 [GADTs](gadts-guide.md) for each form.
 
 The older spelling, a keyword such as `:linear` after the name (after the
-representation type, for a `defopaque`), is still read.
+representation type, for a `defopaque`), still compiles but warns with
+`TUR-D0007` (an error under `--Werror=deprecated`; `tur explain TUR-D0007`).
+`tur fmt` rewrites it.
 `tools/caret-type-attrs-rewrite.py` moves a file from one to the other.
 
 ## Borrowing a linear handle: `^borrow` parameters

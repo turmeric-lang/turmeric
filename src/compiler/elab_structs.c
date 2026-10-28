@@ -742,6 +742,47 @@ bool elab_type_decl_attrs(Elab *e, const Form *call, const char *form_name,
     return true;
 }
 
+/* caret-type-attributes-plan P3.  The trailing-keyword spelling of a flag
+ * (`:copy` after the name) is deprecated (TUR-D0007).  A declaration's keyword
+ * loop collects the keywords it accepted here, and kw_flag_warn names them all
+ * in one warning. */
+typedef struct {
+    const Form *first;     /* the first keyword, where the warning points */
+    char kw[96];           /* ":copy :heap" */
+    char caret[96];        /* "^copy ^heap" */
+} KwFlagNote;
+
+static unsigned kw_flag_bit(const Elab *e, const Symbol *k) {
+    if (k == e->kw_copy)         return TDA_COPY;
+    if (k == e->kw_move)         return TDA_MOVE;
+    if (k == e->kw_linear)       return TDA_LINEAR;
+    if (k == e->kw_affine)       return TDA_AFFINE;
+    if (k == e->kw_heap)         return TDA_HEAP;
+    if (k == e->kw_sealed)       return TDA_SEALED;
+    if (k == e->kw_non_null)     return TDA_NON_NULL;
+    if (k == e->kw_no_auto_ctor) return TDA_NO_AUTO_CTOR;
+    return 0;
+}
+
+/* Record `kw_form` if it is a flag keyword in `allowed`. */
+static void kw_flag_note(KwFlagNote *n, const Elab *e, const Form *kw_form, unsigned allowed) {
+    if (kw_form->tag != F_KEYWORD || !(kw_flag_bit(e, kw_form->as.sym) & allowed)) return;
+    if (!n->first) n->first = kw_form;
+    size_t a = strlen(n->kw), b = strlen(n->caret);
+    snprintf(n->kw + a, sizeof n->kw - a, "%s:%s", a ? " " : "", kw_form->as.sym->name);
+    snprintf(n->caret + b, sizeof n->caret - b, "%s^%s", b ? " " : "", kw_form->as.sym->name);
+}
+
+static void kw_flag_warn(const Elab *e, const char *form_name, const KwFlagNote *n) {
+    (void)e;
+    if (!n->first) return;
+    diag_emit_with_code(elab_deprecation_level(), n->first->span,
+                        TUR_D0007_TYPE_DECL_KEYWORD_FLAG,
+                        "'%s': the trailing flag %s is deprecated; write %s before "
+                        "the name: (%s %s Name ...)",
+                        form_name, n->kw, n->caret, form_name, n->caret);
+}
+
 Expr *elab_defstruct(Elab *e, const Form *call) {
     if (call->as.list.len < 2) {
         diag_emit(DIAG_ERROR, call->span,
@@ -781,9 +822,12 @@ Expr *elab_defstruct(Elab *e, const Form *call) {
     bool no_auto_ctor = attrs.no_auto_ctor; /* CTOR-V0 */
     uint32_t fields_start_idx = name_idx + 1;
 
+    KwFlagNote kw_note = {0};
     while (fields_start_idx < call->as.list.len) {
         Form *kw_form = call->as.list.items[fields_start_idx];
         if (kw_form->tag != F_KEYWORD) break;
+        kw_flag_note(&kw_note, e, kw_form, TDA_COPY | TDA_MOVE | TDA_LINEAR | TDA_AFFINE |
+                                           TDA_HEAP | TDA_NO_AUTO_CTOR);
         if (kw_form->as.sym == e->kw_copy) {
             is_copy = true;
         } else if (kw_form->as.sym == e->kw_move) {
@@ -806,6 +850,7 @@ Expr *elab_defstruct(Elab *e, const Form *call) {
         }
         fields_start_idx++;
     }
+    kw_flag_warn(e, "defstruct", &kw_note);
     if (is_linear && is_affine) {
         diag_emit(DIAG_ERROR, name_form->span,
                   "defstruct: '%s' cannot be both linear and affine -- \"exactly "
@@ -1120,8 +1165,10 @@ Expr *elab_defopaque(Elab *e, const Form *call) {
     bool opaque_affine = attrs.affine;
     bool opaque_sealed = attrs.sealed;
     bool opaque_non_null = attrs.non_null;
+    KwFlagNote kw_note = {0};
     for (uint32_t ai = base_idx + 1; ai < call->as.list.len; ai++) {
         Form *attr = call->as.list.items[ai];
+        kw_flag_note(&kw_note, e, attr, TDA_LINEAR | TDA_AFFINE | TDA_SEALED | TDA_NON_NULL);
         if (attr->tag == F_KEYWORD && attr->as.sym == e->kw_linear) {
             opaque_linear = true;
         } else if (attr->tag == F_KEYWORD && attr->as.sym == e->kw_affine) {
@@ -1137,9 +1184,10 @@ Expr *elab_defopaque(Elab *e, const Form *call) {
             return NULL;
         }
     }
+    kw_flag_warn(e, "defopaque", &kw_note);
     if (opaque_linear && opaque_affine) {
         diag_emit(DIAG_ERROR, call->span,
-                  "defopaque: :linear and :affine are mutually exclusive "
+                  "defopaque: ^linear and ^affine are mutually exclusive "
                   "(exactly-once vs at-most-once)");
         return NULL;
     }
@@ -1227,7 +1275,7 @@ Expr *elab_defopaque(Elab *e, const Form *call) {
      * is taken for it. */
     if (opaque_non_null && !base_is_ptr_keyword) {
         diag_emit(DIAG_ERROR, call->span,
-                  "defopaque: :non-null requires a pointer base type "
+                  "defopaque: ^non-null requires a pointer base type "
                   "(:ptr or :ptr<...>) -- it declares that the handle's valid "
                   "values exclude the null pointer");
         return NULL;
@@ -1905,6 +1953,7 @@ static Expr *elab_adt_def(Elab *e, const Form *call, bool spelled_defgadt) {
     bool no_auto_ctor = attrs.no_auto_ctor;  /* structdef-retirement slice 2 (CTOR-V0) */
     Form *tp_form = NULL;
     uint32_t ctors_start_idx = name_idx + 1;
+    KwFlagNote kw_note = {0};
     while (ctors_start_idx < call->as.list.len) {
         Form *hf = call->as.list.items[ctors_start_idx];
         if (hf->tag == F_VEC && !tp_form) {
@@ -1914,6 +1963,8 @@ static Expr *elab_adt_def(Elab *e, const Form *call, bool spelled_defgadt) {
         }
         if (hf->tag != F_KEYWORD) break;
         const Symbol *k = hf->as.sym;
+        kw_flag_note(&kw_note, e, hf, TDA_COPY | TDA_MOVE | TDA_LINEAR | TDA_AFFINE |
+                                      TDA_HEAP | TDA_NO_AUTO_CTOR);
         if (k == e->kw_copy) is_copy = true;
         else if (k == e->kw_move) is_copy = false;
         /* structdef-retirement slice 4: a lowered `:linear` defstruct (exactly-once)
@@ -1930,6 +1981,7 @@ static Expr *elab_adt_def(Elab *e, const Form *call, bool spelled_defgadt) {
         else break;
         ctors_start_idx++;
     }
+    kw_flag_warn(e, kw, &kw_note);
     if (is_linear && is_affine) {
         diag_emit(DIAG_ERROR, name_form->span,
                   "%s: '%s' cannot be both linear and affine -- \"exactly "
@@ -2416,19 +2468,19 @@ static Expr *elab_adt_def(Elab *e, const Form *call, bool spelled_defgadt) {
                     diag_emit_with_code(DIAG_ERROR, field_type_forms[fi]->span,
                                         TUR_E0102_LINEAR_COPY,
                                         "cannot copy linear field '%s' -- "
-                                        "linear values cannot appear in :copy structs",
+                                        "linear values cannot appear in ^copy structs",
                                         ctor->fields[fi].name);
                     goto data_ctor_parse_error;
                 }
                 const char *fdesc = ctor->fields[fi].name;
                 if (fdesc) {
                     diag_emit(DIAG_ERROR, field_type_forms[fi]->span,
-                              "%s: :copy type '%s' cannot contain non-copy "
+                              "%s: ^copy type '%s' cannot contain non-copy "
                               "field '%s' of variant '%s'",
                               kw, def->name, fdesc, ctor->name);
                 } else {
                     diag_emit(DIAG_ERROR, field_type_forms[fi]->span,
-                              "%s: :copy type '%s' cannot contain non-copy "
+                              "%s: ^copy type '%s' cannot contain non-copy "
                               "field %u of variant '%s'",
                               kw, def->name, fi, ctor->name);
                 }
@@ -5507,9 +5559,9 @@ static Expr *elab_with_record_adt(Elab *e, const Form *call,
     if (!ctor->adt->is_copy) {
         bool is_struct = conv_surface_is_struct(ctor->adt);
         diag_emit(DIAG_ERROR, call->span,
-                  "TUR-E0296: with requires a :copy %s -- '%s' is move-only, "
+                  "TUR-E0296: with requires a ^copy %s -- '%s' is move-only, "
                   "so copying its unchanged fields out of the source would "
-                  "consume it. Declare it `(%s %s :copy ...)` to use with.",
+                  "consume it. Declare it `(%s ^copy %s ...)` to use with.",
                   is_struct ? "struct" : "variant", ctor->adt->name,
                   is_struct ? "defstruct" : "defdata", ctor->adt->name);
         return NULL;

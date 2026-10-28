@@ -1430,6 +1430,11 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
                     Form *maybe_attr = form->as.list.items[cursor];
                     /* `^linear` is the same flag in the attribute spelling every
                      * other declaration takes (caret-type-attributes-plan P0). */
+                    if (maybe_attr->tag == F_KEYWORD && maybe_attr->as.sym == e->kw_linear)
+                        diag_emit_with_code(elab_deprecation_level(), maybe_attr->span,
+                                            TUR_D0007_TYPE_DECL_KEYWORD_FLAG,
+                                            "'exists': the flag :linear is deprecated; "
+                                            "write ^linear: (exists ^linear [a] ...)");
                     if ((maybe_attr->tag == F_KEYWORD && maybe_attr->as.sym == e->kw_linear) ||
                         (maybe_attr->tag == F_SYM && maybe_attr->as.sym == e->sym_caret_linear)) {
                         is_linear_attr = true;
@@ -3057,7 +3062,7 @@ static bool ascribe_check_non_null_zero(const Form *call,
     if (!v || v->kind != EX_INT_LIT || v->as.i != 0) return false;
     diag_emit_with_code(
         DIAG_ERROR, call->span, TUR_E0303_NON_NULL_OPAQUE_ZERO,
-        "cannot ascribe the literal 0 into '%s' -- its :non-null declaration "
+        "cannot ascribe the literal 0 into '%s' -- its ^non-null declaration "
         "says the handle's valid values exclude the null pointer. Express "
         "absence as (none) / option<%s>, or build the value through '%s's "
         "real constructors",

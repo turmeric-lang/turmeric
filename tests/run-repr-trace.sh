@@ -166,7 +166,7 @@ fi
 # means a field decision drifted from the protocol -- triage against
 # docs/archive/repr-decision-function-plan.md.
 cat > "$tmp/shadow-fields.tur" <<'EOF'
-(defstruct FdPoint :heap [x : int y : int])
+(defstruct ^heap FdPoint [x : int y : int])
 (defstruct FdFlat [a : int b : int])
 (defstruct FdOwn [r : rc<int> tag : int])
 (defstruct FdInline [i : FdFlat n : int])

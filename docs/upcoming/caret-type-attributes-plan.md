@@ -1,6 +1,6 @@
 # Plan: spell type-declaration flags as `^attr`, not `:keyword`
 
-> **Status:** P0, P1 and P2 IMPLEMENTED (2026-10-27, 2026-10-28); P3 is next. The three open questions
+> **Status:** P0, P1, P2 and P3 IMPLEMENTED (2026-10-27, 2026-10-28); P4 waits for a release that carries P3. The three open questions
 > are decided (see "Decisions"): attributes go before the name, `^move` stays,
 > and `^heap` moves with the rest. Both spellings are accepted today; the
 > keyword one is not yet warned about (P3). A spelling change only: every form
@@ -345,6 +345,68 @@ A new `TUR-W` warning on a trailing flag keyword on `defopaque`, `defstruct`,
 "write `(defopaque ^linear Chan ...)`". `tur fmt`, which formats in place,
 learns the same rewrite as the P2 tool, so a user's own code migrates with one
 command. The warning lives for at least one minor release.
+
+#### As implemented (2026-10-28)
+
+- **The code is `TUR-D0007`**, in the deprecation band beside `TUR-D0005`
+  (`defgadt`) and `TUR-D0006` (`let*`), not a `TUR-W`: it is emitted at
+  `elab_deprecation_level()`, so it is a warning and an error under
+  `--Werror=deprecated`, and `tur explain TUR-D0007` has the long form.
+  One warning per declaration, at its first trailing flag, naming all of them:
+  `'defstruct': the trailing flag :copy :heap is deprecated; write ^copy ^heap
+  before the name: (defstruct ^copy ^heap Name ...)`. The three keyword loops
+  (`elab_defstruct`, `elab_adt_def`, `elab_defopaque`) collect what they accept
+  and warn after the loop; the `exists` type form warns on its `:linear`. A
+  `defstruct` lowers to `defdata` in the attribute spelling (P0), so it does not
+  warn twice.
+- **`tur fmt` migrates it.** A pass over the parsed forms, before they are
+  printed, moves the flag keywords of a `defopaque` / `defstruct` / `defdata` /
+  `defgadt` to `^attr`s before the name (after any already there) and turns
+  `(exists :linear ...)` into `(exists ^linear ...)`; it sees through a macro
+  template's `~name`. A declaration whose source holds a comment (`;` or `#|`)
+  is left as written, because the printer re-emits comments from the gaps
+  between neighbouring forms and reordering the forms around one would put it
+  in the wrong place; the compiler still warns about it, and
+  `tools/caret-type-attrs-rewrite.py` handles it. Sweet-exp and r7rs files are
+  not reprinted by `tur fmt`, so they are not touched. `tur fmt --check` now
+  reports a file still on the old spelling. Three cases in `tests/run-fmt.sh`.
+- **A generator was still emitting the old spelling.** Twenty-two r7rs
+  fixtures warned: `define-record-type` lowers (`scheme_lower.c`) to
+  `(defstruct R7rsRec_<name> :heap [...])`. It now emits `^heap` before the
+  name. Found by running `tur emit-c` over every fixture, example and
+  benchmark and listing the stderr that names `TUR-D0007`; the count is now 0.
+- **Diagnostics reworded** to the attribute spelling: the `tur explain` texts
+  that show a declaration (`TUR-E0296` `with`, the `^non-null` and `^sealed`
+  entries, the `^copy` capture advice), and the messages for `with` on a
+  non-copy type, a `^non-null` opaque on a non-pointer base, a `^copy` type
+  holding a non-copy field, and a `^linear` existential escaping. Six
+  `expected.diag` files follow. The sentence in the `^sealed` entry about
+  what version 0.34.0 did with `:sealed` keeps the keyword, since it describes
+  that release.
+- **One message deliberately not reworded.** The runtime panic
+  `... :non-null declaration was violated (a null here ...)` is a string in
+  the preamble of every emitted C file, so changing it moves the codegen
+  snapshot of every fixture, and two fixtures pin it in `expected.stderr`.
+  One word does not justify that regeneration; it can ride the next change that
+  moves the preamble.
+- **Fixtures:** `type-decl-keyword-flag-warns` and
+  `type-decl-keyword-flag-exists-warns` (the old spelling still compiles, runs,
+  and warns, pinned in `expected.stderr` on both engines) and
+  `errors/type-decl-keyword-flag-deprecated` (`--Werror=deprecated`).
+- **Test scripts with embedded programs.** Two still used the old spelling and
+  now failed or warned: `tests/run-repr-trace.sh` counts any stderr as "did not
+  compile", and `tests/regions-fuzz-src.py` had one `Link` declaration the P2
+  pass missed. Both are migrated. `tests/run-fmt.sh`, `tests/tools/
+  check_gendocs_parse.py` and the codemod corpora keep the old spelling on
+  purpose.
+- **Run:** `tests/run.sh` (4186 passed, 0 failed) and `tests/run-turi.sh`
+  (3105 passed, 0 failed, 1016 skipped); the fmt, gendocs, LSP, flags, project,
+  representation and fuzzer ctest targets; the Docs lint, the guide-pair checker
+  and the codemod runner.
+- **Not done / for the release:** `turmeric-spices` is another repository and
+  will see the warning on every declaration it still writes the old way; `tur
+  fmt` is the migration for it. P4 should wait until a release carrying P3 has
+  shipped.
 
 ### P4 -- drop the keyword spelling
 

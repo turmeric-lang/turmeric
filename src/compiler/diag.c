@@ -440,6 +440,7 @@ const char *diag_code_to_string(DiagCode code) {
         case TUR_D0004_NONEXHAUSTIVE_FX_MARKER:   return "TUR-D0004";
         case TUR_D0005_DEFGADT:                   return "TUR-D0005";
         case TUR_D0006_LET_STAR:                  return "TUR-D0006";
+        case TUR_D0007_TYPE_DECL_KEYWORD_FLAG:    return "TUR-D0007";
         /* XF: experimental-flag mechanism */
         case TUR_E0310_UNKNOWN_EXPERIMENT:        return "TUR-E0310";
         case TUR_E0311_UNKNOWN_ENGINE:            return "TUR-E0311";
@@ -648,6 +649,7 @@ DiagCode diag_code_from_string(const char *s) {
     if (strcmp(s, "TUR-D0004") == 0) return TUR_D0004_NONEXHAUSTIVE_FX_MARKER;
     if (strcmp(s, "TUR-D0005") == 0) return TUR_D0005_DEFGADT;
     if (strcmp(s, "TUR-D0006") == 0) return TUR_D0006_LET_STAR;
+    if (strcmp(s, "TUR-D0007") == 0) return TUR_D0007_TYPE_DECL_KEYWORD_FLAG;
     /* XF: experimental-flag mechanism */
     if (strcmp(s, "TUR-E0310") == 0) return TUR_E0310_UNKNOWN_EXPERIMENT;
     if (strcmp(s, "TUR-E0311") == 0) return TUR_E0311_UNKNOWN_ENGINE;
@@ -1625,7 +1627,7 @@ static const DiagExplanation diag_explanations_[] = {
       "field unset.  Every field must be supplied.\n"
       "\n"
       "Example (defstruct surface):\n"
-      "  (defstruct Person :copy [name : cstr age : int])\n"
+      "  (defstruct ^copy Person [name : cstr age : int])\n"
       "  (Person :name \"Bob\")   ; error: missing field 'age' in struct 'Person'\n"
       "\n"
       "Example (defdata surface):\n"
@@ -1642,7 +1644,7 @@ static const DiagExplanation diag_explanations_[] = {
       "given at most once.\n"
       "\n"
       "Example (defstruct surface):\n"
-      "  (defstruct Person :copy [name : cstr age : int])\n"
+      "  (defstruct ^copy Person [name : cstr age : int])\n"
       "  (Person :name \"Bob\" :age 40 :age 41)\n"
       "  ; error: duplicate field 'age' in struct 'Person' construction\n"
       "\n"
@@ -1661,7 +1663,7 @@ static const DiagExplanation diag_explanations_[] = {
       "not declare.\n"
       "\n"
       "Example (defstruct surface):\n"
-      "  (defstruct Person :copy [name : cstr age : int])\n"
+      "  (defstruct ^copy Person [name : cstr age : int])\n"
       "  (Person :name \"Bob\" :years 40)\n"
       "  ; error: unknown field 'years' on struct 'Person'\n"
       "\n"
@@ -1682,7 +1684,7 @@ static const DiagExplanation diag_explanations_[] = {
       "miscompile -- a stray cc error one way, a segfault the other.\n"
       "\n"
       "Example:\n"
-      "  (defdata Pair :copy (Pair :int :int))\n"
+      "  (defdata ^copy Pair (Pair :int :int))\n"
       "  (:: (Pair 3 4) :int)   ; error: cannot reinterpret by-value 'Pair' as int\n"
       "  (:: h :Pair)           ; error: cannot reinterpret int as by-value 'Pair'\n"
       "\n"
@@ -1699,9 +1701,9 @@ static const DiagExplanation diag_explanations_[] = {
       "docs/archive/byvalue-adt-int-cast-plan.md.\n",
     },
     { TUR_E0303_NON_NULL_OPAQUE_ZERO,
-      "TUR-E0303: Cannot ascribe the literal 0 into a :non-null opaque\n"
+      "TUR-E0303: Cannot ascribe the literal 0 into a ^non-null opaque\n"
       "\n"
-      "`(defopaque String :ptr<void> :non-null)` is the type author's claim\n"
+      "`(defopaque ^non-null String :ptr<void>)` is the type author's claim\n"
       "that the handle's valid values exclude the null pointer -- no producer\n"
       "returns 0.  Ascribing the literal 0 into such a type is a provable\n"
       "violation of that claim, so it is rejected at compile time:\n"
@@ -1710,7 +1712,7 @@ static const DiagExplanation diag_explanations_[] = {
       "  (:: (:: 0 :ptr<void>) String)  ; error -- peeled through the relabel\n"
       "\n"
       "Why this matters: by default (the Option niche), an `(Option T)` over a\n"
-      ":non-null T is carried AS the payload pointer with `(none)` as NULL.  A\n"
+      "^non-null T is carried AS the payload pointer with `(none)` as NULL.  A\n"
       "null smuggled into T makes `(some x)` and `(none)` the same value.  The\n"
       "niche `Some` constructor also checks at runtime (a null there aborts\n"
       "with a message naming the type) for the paths elaboration cannot see --\n"
@@ -1719,19 +1721,19 @@ static const DiagExplanation diag_explanations_[] = {
       "\n"
       "Fix: express absence as `(none)` / `option<T>`, or construct the value\n"
       "through the type's real constructors.  If the type genuinely has a null\n"
-      "state, its declaration should not say :non-null.\n",
+      "state, its declaration should not say ^non-null.\n",
     },
     { TUR_E0302_SEALED_OPAQUE_CAST,
       "TUR-E0302: Cannot cast across a sealed opaque's representation boundary\n"
       "\n"
-      "`(defopaque H :int :sealed)` declares that H's representation is private\n"
+      "`(defopaque ^sealed H :int)` declares that H's representation is private\n"
       "to the module that defines it.  Outside that module, `::` refuses BOTH\n"
       "directions: you can neither unwrap an H to its representation nor build\n"
       "an H from one.\n"
       "\n"
       "Example:\n"
       "  ;; in module ecs/refined-world\n"
-      "  (defopaque RGWorld :int :sealed)\n"
+      "  (defopaque ^sealed RGWorld :int)\n"
       "\n"
       "  ;; in some other module\n"
       "  (:: w :int)         ; error: cannot unwrap sealed 'RGWorld'\n"
@@ -1755,7 +1757,7 @@ static const DiagExplanation diag_explanations_[] = {
       "docs/archive/sealed-opaque-plan.md.\n",
     },
     { TUR_E0296_WITH_NOT_COPY,
-      "TUR-E0296: `with` requires a :copy type\n"
+      "TUR-E0296: `with` requires a ^copy type\n"
       "\n"
       "The functional-update form `with` copies the source's unchanged fields\n"
       "into the new value.  On a move-only (non-:copy) type that copy would\n"
@@ -1764,16 +1766,16 @@ static const DiagExplanation diag_explanations_[] = {
       "Example (defstruct surface):\n"
       "  (defstruct Acct [balance : int])\n"
       "  (with a [balance 50])\n"
-      "  ; error: with requires a :copy struct -- 'Acct' is move-only;\n"
-      "  ;        declare it `(defstruct Acct :copy ...)` to use with.\n"
+      "  ; error: with requires a ^copy struct -- 'Acct' is move-only;\n"
+      "  ;        declare it `(defstruct ^copy Acct ...)` to use with.\n"
       "\n"
       "Example (defdata surface):\n"
       "  (defdata Acct (Acct [balance : int]))\n"
       "  (with a [balance 50])\n"
-      "  ; error: with requires a :copy variant -- 'Acct' is move-only;\n"
-      "  ;        declare it `(defdata Acct :copy ...)` to use with.\n"
+      "  ; error: with requires a ^copy variant -- 'Acct' is move-only;\n"
+      "  ;        declare it `(defdata ^copy Acct ...)` to use with.\n"
       "\n"
-      "Add the :copy annotation to the declaration.\n",
+      "Add the ^copy annotation to the declaration.\n",
     },
     { TUR_E0297_WITH_UNKNOWN_FIELD,
       "TUR-E0297: `with` override names an unknown field\n"
@@ -1782,12 +1784,12 @@ static const DiagExplanation diag_explanations_[] = {
       "declare.\n"
       "\n"
       "Example (defstruct surface):\n"
-      "  (defstruct Point :copy [x : int y : int])\n"
+      "  (defstruct ^copy Point [x : int y : int])\n"
       "  (with p [z 3])\n"
       "  ; error: with: unknown field 'z' on struct 'Point'\n"
       "\n"
       "Example (defdata surface):\n"
-      "  (defdata Point :copy (Point [x : int y : int]))\n"
+      "  (defdata ^copy Point (Point [x : int y : int]))\n"
       "  (with p [z 3])\n"
       "  ; error: with: unknown field 'z' on variant 'Point' of type 'Point'\n"
       "\n"
@@ -1800,7 +1802,7 @@ static const DiagExplanation diag_explanations_[] = {
       "overridden field may appear at most once.\n"
       "\n"
       "Example:\n"
-      "  (defstruct Point :copy [x : int y : int])\n"
+      "  (defstruct ^copy Point [x : int y : int])\n"
       "  (with p [x 1 x 2])   ; error: with duplicate override field 'x'\n"
       "\n"
       "Remove the redundant override.\n",
@@ -1812,7 +1814,7 @@ static const DiagExplanation diag_explanations_[] = {
       "keyword (:field value) arguments.  Choose one style for the whole call.\n"
       "\n"
       "Example (defstruct surface):\n"
-      "  (defstruct Person :copy [name : cstr age : int])\n"
+      "  (defstruct ^copy Person [name : cstr age : int])\n"
       "  (Person \"Bob\" :age 40)\n"
       "  ; error: struct 'Person' construction: cannot mix positional and\n"
       "  ;        keyword arguments\n"
@@ -2427,8 +2429,8 @@ static const DiagExplanation diag_explanations_[] = {
       "       (handle (perform (Ask))\n"
       "         (Ask [] ^multishot k) (resume k x)))  ; OK: int is CK_COPY\n"
       "\n"
-      "  2. If the struct is `:copy`, the capture is allowed:\n"
-      "     (defstruct CopyData :copy [x :int])\n",
+      "  2. If the struct is `^copy`, the capture is allowed:\n"
+      "     (defstruct ^copy CopyData [x :int])\n",
     },
     { TUR_E0501_MULTISHOT_ANN_OUTSIDE_HANDLER,
       "TUR-E0501: ^multishot annotation outside a handler continuation\n"
@@ -2882,6 +2884,35 @@ static const DiagExplanation diag_explanations_[] = {
       "compiles; under --Werror=deprecated it is an error.  It is removed in a\n"
       "future major release.\n",
     },
+    /* caret-type-attributes-plan P3 */
+    { TUR_D0007_TYPE_DECL_KEYWORD_FLAG,
+      "TUR-D0007: a type declaration's flag is an attribute before the name;\n"
+      "write `^copy`, not a trailing `:copy`\n"
+      "\n"
+      "`defopaque`, `defstruct`, `defdata` and `defgadt` take their flags the way\n"
+      "`defn` and `def` take theirs: as `^attr`s before the name.  The flags are\n"
+      "`^copy`, `^move`, `^linear`, `^affine`, `^heap`, `^no-auto-ctor` and, for a\n"
+      "`defopaque`, `^sealed` and `^non-null`.  The same goes for the `:linear` of\n"
+      "an `exists` type.  A keyword after the name, or after a `defopaque`'s\n"
+      "representation type, was the earlier spelling of the same flag.\n"
+      "\n"
+      "Examples triggering this warning:\n"
+      "  (defstruct Point :copy [x : int y : int])\n"
+      "  (defopaque Chan :ptr<void> :linear)\n"
+      "  (defdata Tree :heap [a] (Leaf) (Node (Tree a) a (Tree a)))\n"
+      "  (exists :linear [a] a)\n"
+      "\n"
+      "Fix: move each flag in front of the name and spell it with a caret:\n"
+      "  (defstruct ^copy Point [x : int y : int])\n"
+      "  (defopaque ^linear Chan :ptr<void>)\n"
+      "  (defdata ^heap Tree [a] (Leaf) (Node (Tree a) a (Tree a)))\n"
+      "  (exists ^linear [a] a)\n"
+      "\n"
+      "`tur fmt` makes the change in a file, and so does\n"
+      "tools/caret-type-attrs-rewrite.py in a tree.  The old spelling still\n"
+      "compiles and means the same; under --Werror=deprecated it is an error.\n"
+      "It is removed in a future release.\n",
+    },
     /* XF (experimental-flag-mechanism-plan): unknown --enable= name */
     { TUR_E0310_UNKNOWN_EXPERIMENT,
       "TUR-E0310: unknown experiment\n"
@@ -3285,7 +3316,7 @@ static const DiagExplanation diag_explanations_[] = {
       "real type-erasure bug.\n"
       "\n"
       "  3. aggregate-vs-scalar: a by-value record ADT (a real `tur_adt_S` C\n"
-      "     struct) or a `:heap` ADT application (a typed pointer to one) on one\n"
+      "     struct) or a `^heap` ADT application (a typed pointer to one) on one\n"
       "     side, and a concrete scalar on the other.  This case is NOT limited to\n"
       "     a committed position: the tolerances above exist because both sides are\n"
       "     `int64_t` in the emitted C, and an aggregate is not, so no amount of\n"

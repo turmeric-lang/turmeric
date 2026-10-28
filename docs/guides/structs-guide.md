@@ -57,7 +57,8 @@ Every struct has a **copy kind** that governs how the value can be used:
 | `^affine`  | At-most-once: may be dropped, but never used twice |
 
 Write the annotation before the name, as on `defn` and `def`. (The older
-spelling, a keyword after the name such as `:copy`, is still read.)
+spelling, a keyword after the name such as `:copy`, still compiles but warns
+with `TUR-D0007`; `tur fmt` rewrites it.)
 
 ```turmeric
 (defstruct ^copy Point    [x : int y : int])  ; freely copyable

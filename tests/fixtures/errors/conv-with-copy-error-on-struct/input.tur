@@ -1,5 +1,5 @@
 ;; CONV-S6: TUR-E0296 on a move-only `defstruct` names the "struct" surface and
-;; suggests the `(defstruct ... :copy ...)` fix.
+;; suggests the `(defstruct ^copy ...)` fix.
 (defstruct Acct [balance : int])
 (defn main [] : int
   (let [a (make-struct Acct 100)
