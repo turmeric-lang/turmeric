@@ -3,13 +3,15 @@
 # turmeric-jit.{js,wasm} (wasm-jit-plan P3).  Run by the tur_wasm_jit CMake
 # target; it can be run by hand with the same arguments.
 #
-#   build-module.sh OUT_DIR SOURCES_FILE VERSION
+#   build-module.sh OUT_DIR SOURCES_FILE VERSION [MIR_DIR]
 #
 # SOURCES_FILE lists one source per line as "<group> <path>", paths absolute:
 #   rt      the stock module's sources (tur_core and the web glue) and tur_front
 #   engine  jit_engine.c, turi/jit_ffi.c and the JIT glue: rt flags plus
 #           TUR_HAVE_JIT and MIR's include dirs
 #   mir     MIR's translation units, with MIR's own flags
+# MIR_DIR is the MIR tree those come from and whose headers the engine
+# includes: external/mir unless CMake's TUR_MIR_SOURCE_DIR says otherwise.
 # Needs emcc and em-config on PATH (the emsdk environment), python3 and make.
 #
 # Four steps:
@@ -29,7 +31,7 @@ SOURCES=$2
 VERSION=$3
 HERE=$(cd "$(dirname "$0")" && pwd)
 ROOT=$(cd "$HERE/../.." && pwd)
-MIR=$ROOT/external/mir
+MIR=${4:-$ROOT/external/mir}
 JOBS=${TUR_WASM_JIT_JOBS:-$(nproc 2>/dev/null || echo 4)}
 
 command -v emcc >/dev/null || { echo "build-module.sh: emcc is not on PATH" >&2; exit 2; }

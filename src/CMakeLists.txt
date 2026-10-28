@@ -2109,6 +2109,11 @@ if(TUR_WASM)
         # generated Makefile, the table, the embedded headers, the link).
         option(TUR_WASM_JIT "Build the browser JIT module (turmeric-jit.wasm)" ON)
         if(TUR_WASM_JIT)
+            # TUR_MIR_SOURCE_DIR, as for the native JIT (cmake/mir.cmake): a
+            # checkout of the fork, to try a MIR change on wasm before it is
+            # merged and synced.
+            set(TUR_MIR_SOURCE_DIR "${CMAKE_SOURCE_DIR}/external/mir"
+                CACHE PATH "MIR source tree for the JIT engine (default: the vendored copy)")
             set(_jit_list "")
             foreach(_s ${WASM_SOURCES} ${TUR_FRONT_SOURCES})
                 if(_s MATCHES "\\.c$")
@@ -2123,7 +2128,7 @@ if(TUR_WASM)
                 string(APPEND _jit_list "engine ${CMAKE_CURRENT_SOURCE_DIR}/${_s}\n")
             endforeach()
             foreach(_s mir.c c2mir/c2mir.c)
-                string(APPEND _jit_list "mir ${CMAKE_SOURCE_DIR}/external/mir/${_s}\n")
+                string(APPEND _jit_list "mir ${TUR_MIR_SOURCE_DIR}/${_s}\n")
             endforeach()
             string(APPEND _jit_list "mir ${CMAKE_CURRENT_SOURCE_DIR}/web/wasm_jit_stubs.c\n")
             file(WRITE ${CMAKE_BINARY_DIR}/wasm-jit/sources.txt "${_jit_list}")
@@ -2133,6 +2138,7 @@ if(TUR_WASM)
                         ${CMAKE_BINARY_DIR}/wasm-jit
                         ${CMAKE_BINARY_DIR}/wasm-jit/sources.txt
                         ${_TUR_VERSION_STR}
+                        ${TUR_MIR_SOURCE_DIR}
                 WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
                 DEPENDS ${TUR_REGION_EMBED_C}
                 COMMENT "Building the Turmeric browser JIT module (turmeric-jit.wasm)"
