@@ -189,7 +189,7 @@ flags. Each has to skip or understand the leading `^` attributes:
   for the signature strings.
 - `src/compiler/fmt.c`. It must keep the attributes on the head line, and must
   not reflow them under the name.
-- `web/main.js` `CARET_MODIFIERS` and the matching list in
+- `web/editor-language.js` `CARET_MODIFIERS` and the matching list in
   `tools/genguides.py`. **These lists are required, not cosmetic.** Any `^name`
   not on them is coloured as a kind, so `^copy` would read as a type variable
   until it is added.
@@ -232,7 +232,7 @@ flags. Each has to skip or understand the leading `^` attributes:
 - **No change needed:** `src/cli/lsp_lite.c` holds a list of builtin names,
   not declarations; `src/turi/docstrings.c:242` is a `defstruct` signature
   string with no flag in it.
-- **Highlighters.** `CARET_MODIFIERS` in `web/main.js` and in
+- **Highlighters.** `CARET_MODIFIERS` in `web/editor-language.js` and in
   `tools/genguides.py` gained `copy`, `move`, `heap`, `sealed`, `non-null` and
   `no-auto-ctor`. Checked: the docs highlighter run in Chromium colours all
   eight flags `hl-ann` and a kind in the type-parameter vector `hl-kind`; the
