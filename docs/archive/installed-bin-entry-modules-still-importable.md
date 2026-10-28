@@ -1,8 +1,13 @@
 # An installed tool's `:bin` entry file is skipped by the conflict check but is still importable, so `(import main)` silently picks one tool
 
 **Severity:** low-medium (silent wrong resolution). Filed 2026-10-24.
-Scheduled as NB0 of
-[namespaced-spice-binaries-plan](../upcoming/namespaced-spice-binaries-plan.md).
+**RESOLVED 2026-10-28** as NB0 of
+[namespaced-spice-binaries-plan](namespaced-spice-binaries-plan.md): the search
+path hides every dependency's and installed spice's `:bin` entry files
+(`spice_search_module_hidden`, derived from the same `tur_spice_bin_modules`
+set the conflict check skips), and the bin check asks the registry first, so a
+collision names the holder. A collision between installed spices now installs
+shadowed instead of refusing (D2). Pinned by `tests/run-install.sh` 65 and 72.
 
 installed-spice-libraries D6 refuses to install a spice whose modules collide
 with another installed spice's, because outside a project every installed

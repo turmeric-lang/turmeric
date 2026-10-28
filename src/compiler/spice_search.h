@@ -100,6 +100,11 @@ int spice_search_installed_names(char ***out_names, char ***out_dirs);
  *   - spice_search_used_installed_roots: the roots marked so far, for the
  *     link step -- only spices a program imports contribute link inputs. */
 const char *spice_search_installed_slot(const char *dir, bool *out_is_dep);
+/* namespaced-spice-binaries D6: is `<dir>/<module>.tur` a `:bin` entry file
+ * of the dependency or installed spice whose src/ `dir` is?  Those are
+ * programs, not modules, and resolve as `module not found`.  `dir` is the
+ * include dir exactly as appended; the project's own src/ hides nothing. */
+bool        spice_search_module_hidden(const char *dir, const char *module);
 void        spice_search_note_import_dir(const char *dir);
 int         spice_search_used_installed_roots(const char *const **out);
 

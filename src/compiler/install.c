@@ -225,45 +225,51 @@ bool pkg_rm_rf(const char *path) {
     return inst_rm_tree(path);
 }
 
-/* Walk the bin_dir/<name>:
- *   - returns true if it's missing, or if it's a symlink pointing into the
- *     spices/ tree (i.e. owned by an earlier tur install), or if force is
- *     set. Otherwise prints a diagnostic and returns false. */
-static bool inst_check_bin_target(const char *target, const char *bin_name,
-                                   const char *install_name,
-                                   const TurState *state,
-                                   const char *spices_dir,
-                                   const char *self_install_dir,
-                                   bool force) {
+/* What installing one :bin does to bin_dir/<bin>. */
+typedef enum {
+    BIN_LINK,     /* place (or replace) the link: the bare name is ours */
+    BIN_SHADOW,   /* build it, but leave bin_dir alone: `tur <spice>/<bin>` */
+    BIN_REFUSE,   /* a file tur did not install is in the way (reported) */
+} BinPlan;
+
+/* namespaced-spice-binaries D1/D2: decide what installing `bin_name` as part
+ * of spice `install_name` does to `target` (bin_dir/<bin>).
+ *
+ * The registry answers first, on every platform: it records which installed
+ * spice holds each bare name (`:linked`), which a symlink's target cannot say
+ * for a --path install (it points into the user's checkout) and a Windows
+ * copy cannot say at all.
+ *   - another spice holds it: shadow (D2), or with `take` (--force, --link)
+ *     link over it and report the holder in *out_holder;
+ *   - this spice already has it: keep its flag (an upgrade or reinstall
+ *     never changes who holds a name, D5), unless `take`;
+ *   - nobody tur installed claims it: link it if the path is free, else it
+ *     is the user's own file, which only --force overwrites. */
+static BinPlan inst_plan_bin(const char *verb, const char *target,
+                             const char *bin_name, const char *install_name,
+                             TurState *state, const char *spices_dir,
+                             const char *self_install_dir,
+                             bool take, bool force, const char **out_holder) {
+    *out_holder = NULL;
+    TurStateEntry *self = tur_state_find(state, install_name);
+    int own = tur_state_entry_bin_index(self, bin_name);
+    bool own_linked = own >= 0 && (!self->bin_linked || self->bin_linked[own]);
+    TurStateEntry *holder = tur_state_bin_holder(state, bin_name, install_name);
+    if (holder) {
+        *out_holder = holder->name;
+        return take ? BIN_LINK : BIN_SHADOW;
+    }
+    if (own_linked) return BIN_LINK;
+    if (own >= 0 && !take) return BIN_SHADOW;
+
     struct stat st;
     if (lstat(target, &st) != 0) {
-        if (errno == ENOENT) return true;
-        fprintf(stderr, "tur install: cannot stat '%s': %s\n",
-                target, strerror(errno));
-        return false;
+        if (errno == ENOENT) return BIN_LINK;
+        fprintf(stderr, "tur %s: cannot stat '%s': %s\n",
+                verb, target, strerror(errno));
+        return BIN_REFUSE;
     }
-    if (force) return true;
-
-    /* Where a symlink is not available the file cannot say who put it there,
-     * so ask the registry, which is the actual record of what tur installed.
-     * (S_ISLNK is a compile-time 0 on Windows -- platform_fs.h.) */
-    if (!S_ISLNK(st.st_mode) && state != NULL) {
-        for (int i = 0; i < state->n_entries; i++) {
-            const TurStateEntry *se = &state->entries[i];
-            for (int j = 0; j < se->n_bin; j++) {
-                if (strcmp(se->bin[j], bin_name) != 0) continue;
-                if (install_name && strcmp(se->name, install_name) == 0)
-                    return true;   /* our own previous install */
-                fprintf(stderr,
-                    "tur install: '%s' is already provided by installed spice "
-                    "'%s'.\n"
-                    "  Run `tur uninstall %s` first, or pass --force.\n",
-                    target, se->name, se->name);
-                return false;
-            }
-        }
-    }
-
+    if (force) return BIN_LINK;
     if (S_ISLNK(st.st_mode)) {
         char buf[4096];
         ssize_t n = readlink(target, buf, sizeof(buf) - 1);
@@ -271,21 +277,26 @@ static bool inst_check_bin_target(const char *target, const char *bin_name,
             buf[n] = '\0';
             if (self_install_dir && strncmp(buf, self_install_dir,
                                             strlen(self_install_dir)) == 0)
-                return true; /* overwriting our own previous install */
+                return BIN_LINK; /* our own earlier install, registry lost */
             if (strncmp(buf, spices_dir, strlen(spices_dir)) == 0) {
                 fprintf(stderr,
-                    "tur install: '%s' is already provided by another "
-                    "installed spice (-> %s).\n"
-                    "  Run `tur uninstall` first, or pass --force.\n",
-                    target, buf);
-                return false;
+                    "tur %s: '%s' links into %s (-> %s), but no installed "
+                    "spice claims it.\n"
+                    "  Remove it, or pass --force.\n",
+                    verb, target, spices_dir, buf);
+                return BIN_REFUSE;
             }
         }
     }
     fprintf(stderr,
-        "tur install: refusing to overwrite existing '%s' "
-        "(not owned by tur). Use --force to override.\n", target);
-    return false;
+        "tur %s: refusing to overwrite existing '%s' "
+        "(not owned by tur). Use --force to override.\n", verb, target);
+    return BIN_REFUSE;
+}
+
+/* `tur <spice>/<bin>`'s spelling of a bin, for the messages below. */
+static void inst_qualified(const char *spice, const char *bin, char *out, size_t cap) {
+    snprintf(out, cap, "%s/%s", spice, tur_bin_short_name(bin));
 }
 
 /* The FILE NAME a :bin entry takes inside bin_dir.
@@ -390,9 +401,15 @@ static bool inst_place_bin(const char *src, const char *target) {
 static int install_usage(void) {
     fprintf(stderr,
         "usage:\n"
-        "  tur install <url> [--ref <ref>] [--subdir <path>] [--name <name>] [--force]\n"
-        "  tur install <path> --path [--name <name>] [--force]\n"
-        "  tur install --print-path-snippet\n");
+        "  tur install <url> [--ref <ref>] [--subdir <path>] [--name <name>] [--force] [--link]\n"
+        "  tur install <path> --path [--name <name>] [--force] [--link]\n"
+        "  tur install --link <spice>[/<bin>]\n"
+        "  tur install --print-path-snippet\n"
+        "\n"
+        "  --force   take every bin name the spice declares, overwriting any file\n"
+        "  --link    take every bin name from other installed spices (never a\n"
+        "            file tur did not install); given an installed <spice>/<bin>\n"
+        "            it only moves that one name, without fetching or building\n");
     return 1;
 }
 
@@ -426,6 +443,8 @@ typedef struct InstallSpec {
     const char *install_dir;  /* upgrade: the recorded :dir to fetch into */
     bool        is_path;
     bool        force;
+    bool        link_all;     /* --link: take every bin name (D4) */
+    bool        upgrade;      /* `tur upgrade`: module conflicts only warn */
     const char *verb;         /* "install" or "upgrade" — used in messages */
 } InstallSpec;
 
@@ -751,32 +770,54 @@ static int do_install_spec(const InstallSpec *spec) {
     /* ---------------------------------------------------------------- */
     TurState pre_state;
     tur_state_read(state_path, &pre_state);
-    for (int i = 0; i < m.n_bins; i++) {
+    /* D2: per bin, link it or leave it shadowed; `displaced` names the spice
+     * a taken name came from (--force / --link). */
+    BinPlan *plans = m.n_bins ? (BinPlan *)calloc((size_t)m.n_bins, sizeof(BinPlan)) : NULL;
+    char **displaced = m.n_bins ? (char **)calloc((size_t)m.n_bins, sizeof(char *)) : NULL;
+    char **holders   = m.n_bins ? (char **)calloc((size_t)m.n_bins, sizeof(char *)) : NULL;
+    bool refused = m.n_bins && (!plans || !displaced || !holders);
+    for (int i = 0; i < m.n_bins && !refused; i++) {
         char binfile[4096], target[4096];
         inst_bin_name(m.bin_names[i], binfile, sizeof(binfile));
         snprintf(target, sizeof(target), "%s/%s", bin_dir, binfile);
-        if (!inst_check_bin_target(target, m.bin_names[i], install_name,
-                                    &pre_state, spices_dir,
-                                    install_dir[0] ? install_dir : src_dir,
-                                    force)) {
-            tur_state_free(&pre_state);
-            pkg_manifest_free(&m);
-            free(resolved_sha);
-            return 1;
-        }
+        const char *holder = NULL;
+        plans[i] = inst_plan_bin(verb, target, m.bin_names[i], install_name,
+                                 &pre_state, spices_dir,
+                                 install_dir[0] ? install_dir : src_dir,
+                                 force || spec->link_all, force, &holder);
+        if (plans[i] == BIN_REFUSE) refused = true;
+        else if (holder && plans[i] == BIN_LINK) displaced[i] = tur_strdup(holder);
+        else if (holder) holders[i] = tur_strdup(holder);
     }
-    char **mods = NULL;
-    int n_mods = tur_spice_modules(src_dir, &mods);
-    int n_mod_conflicts = inst_check_module_conflicts(verb, install_name, src_dir,
+    /* An upgrade drops the bins the manifest no longer declares: the bare
+     * name goes only if this spice held it (D5). */
+    char **dropped = NULL;
+    int n_dropped = 0;
+    TurStateEntry *prev = tur_state_find(&pre_state, install_name);
+    for (int j = 0; prev && j < prev->n_bin && !refused; j++) {
+        bool kept = false;
+        for (int i = 0; i < m.n_bins && !kept; i++)
+            kept = strcmp(prev->bin[j], m.bin_names[i]) == 0;
+        if (kept || (prev->bin_linked && !prev->bin_linked[j])) continue;
+        char **nd = (char **)realloc(dropped, (size_t)(n_dropped + 1) * sizeof(char *));
+        if (!nd) continue;
+        dropped = nd;
+        dropped[n_dropped++] = tur_strdup(prev->bin[j]);
+    }
+    int n_mod_conflicts = 0;
+    if (!refused) {
+        char **mods = NULL;
+        int n_mods = tur_spice_modules(src_dir, &mods);
+        n_mod_conflicts = inst_check_module_conflicts(verb, install_name, src_dir,
                                                       mods, n_mods, &pre_state,
-                                                      force);
-    tur_spice_modules_free(mods, n_mods);
-    tur_state_free(&pre_state);
-    if (n_mod_conflicts > 0) {
-        pkg_manifest_free(&m);
-        free(resolved_sha);
-        return 1;
+                                                      force || spec->upgrade);
+        tur_spice_modules_free(mods, n_mods);
     }
+    tur_state_free(&pre_state);
+    int rc = 1;
+    TurState state;
+    memset(&state, 0, sizeof(state));
+    if (refused || n_mod_conflicts > 0) goto done;
 
     char self_exe[4096];
     inst_self_exe(self_exe, sizeof(self_exe));
@@ -784,23 +825,17 @@ static int do_install_spec(const InstallSpec *spec) {
     /* ---------------------------------------------------------------- */
     /* 4. Set the root up as a fetched project (D4).                    */
     /* ---------------------------------------------------------------- */
-    if (!inst_fetch_root(verb, self_exe, src_dir, &m)) {
-        pkg_manifest_free(&m);
-        free(resolved_sha);
-        return 1;
-    }
+    if (!inst_fetch_root(verb, self_exe, src_dir, &m)) goto done;
 
     /* ---------------------------------------------------------------- */
-    /* 5. Build each declared binary.                                   */
-    /*    Output goes to <src_dir>/build/<bin_name>.                    */
+    /* 5. Build each declared binary -- a shadowed one too: it runs as  */
+    /*    `tur <spice>/<bin>`.  Output goes to <src_dir>/build/<bin>.   */
     /* ---------------------------------------------------------------- */
     char build_out_dir[4096];
     snprintf(build_out_dir, sizeof(build_out_dir), "%s/build", src_dir);
     if (m.n_bins > 0 && !inst_mkdirp(build_out_dir)) {
         fprintf(stderr, "tur %s: cannot create '%s'\n", verb, build_out_dir);
-        pkg_manifest_free(&m);
-        free(resolved_sha);
-        return 1;
+        goto done;
     }
 
     for (int i = 0; i < m.n_bins; i++) {
@@ -810,17 +845,15 @@ static int do_install_spec(const InstallSpec *spec) {
         char who[64];
         snprintf(who, sizeof(who), "tur %s", verb);
         if (!pkg_build_spice_bin(who, src_dir, &m, m.bin_names[i],
-                                 m.bin_paths[i], bin_out)) {
-            pkg_manifest_free(&m);
-            free(resolved_sha);
-            return 1;
-        }
+                                 m.bin_paths[i], bin_out))
+            goto done;
     }
 
     /* ---------------------------------------------------------------- */
-    /* 6. Symlink each binary into bin_dir.                             */
+    /* 6. Link each binary this spice holds into bin_dir.               */
     /* ---------------------------------------------------------------- */
     for (int i = 0; i < m.n_bins; i++) {
+        if (plans[i] != BIN_LINK) continue;
         char binfile[4096], target[4096], source[4096];
         inst_bin_name(m.bin_names[i], binfile, sizeof(binfile));
         snprintf(target, sizeof(target), "%s/%s", bin_dir, binfile);
@@ -829,25 +862,26 @@ static int do_install_spec(const InstallSpec *spec) {
          * platform suffix. */
         snprintf(source, sizeof(source), "%s/%s",
                  build_out_dir, m.bin_names[i]);
-        if (!inst_place_bin(source, target)) {
-            pkg_manifest_free(&m);
-            free(resolved_sha);
-            return 1;
-        }
+        if (!inst_place_bin(source, target)) goto done;
+    }
+    for (int k = 0; k < n_dropped; k++) {
+        char binfile[4096], target[4096];
+        inst_bin_name(dropped[k], binfile, sizeof(binfile));
+        snprintf(target, sizeof(target), "%s/%s", bin_dir, binfile);
+        struct stat dst;
+        if (lstat(target, &dst) == 0 && unlink(target) == 0)
+            fprintf(stderr, "tur %s: removed %s (no longer declared)\n",
+                    verb, target);
     }
 
     /* ---------------------------------------------------------------- */
     /* 7. Update state.tur                                              */
     /* ---------------------------------------------------------------- */
-    TurState state;
     tur_state_read(state_path, &state);
     TurStateEntry *e = tur_state_upsert(&state, install_name);
     if (!e) {
         fprintf(stderr, "tur %s: oom updating state.tur\n", verb);
-        tur_state_free(&state);
-        pkg_manifest_free(&m);
-        free(resolved_sha);
-        return 1;
+        goto done;
     }
     if (is_path)        e->path     = tur_strdup(src_dir);
     if (src && !is_path)e->url      = tur_strdup(src);
@@ -866,17 +900,17 @@ static int do_install_spec(const InstallSpec *spec) {
 #ifdef TUR_VERSION
     e->built_with = tur_strdup(TUR_VERSION);
 #endif
-    e->n_bin = m.n_bins;
-    e->bin   = m.n_bins > 0 ? (char **)malloc(m.n_bins * sizeof(char *)) : NULL;
     for (int i = 0; i < m.n_bins; i++)
-        e->bin[i] = tur_strdup(m.bin_names[i]);
-
-    if (!tur_state_write(state_path, &state)) {
-        tur_state_free(&state);
-        pkg_manifest_free(&m);
-        free(resolved_sha);
-        return 1;
+        tur_state_entry_add_bin(e, m.bin_names[i], plans[i] == BIN_LINK);
+    /* A name taken from another spice leaves that spice shadowed. */
+    for (int i = 0; i < m.n_bins; i++) {
+        if (!displaced[i]) continue;
+        TurStateEntry *h = tur_state_find(&state, displaced[i]);
+        int j = tur_state_entry_bin_index(h, m.bin_names[i]);
+        if (j >= 0 && h->bin_linked) h->bin_linked[j] = false;
     }
+
+    if (!tur_state_write(state_path, &state)) goto done;
 
     /* ---------------------------------------------------------------- */
     /* Output + PATH-check                                              */
@@ -886,10 +920,38 @@ static int do_install_spec(const InstallSpec *spec) {
     if (m.version) fprintf(stderr, " (%s)", m.version);
     if (m.n_bins == 0) fprintf(stderr, " [library]");
     fprintf(stderr, "\n");
+    int n_linked = 0;
     for (int i = 0; i < m.n_bins; i++) {
+        if (plans[i] != BIN_LINK) continue;
+        n_linked++;
         char binfile[4096];
         inst_bin_name(m.bin_names[i], binfile, sizeof(binfile));
-        fprintf(stderr, "  %s/%s\n", bin_dir, binfile);
+        fprintf(stderr, "  %s/%s", bin_dir, binfile);
+        if (displaced[i]) {
+            char q[512];
+            inst_qualified(displaced[i], m.bin_names[i], q, sizeof(q));
+            fprintf(stderr, "  (taken from '%s'; `tur %s` still runs theirs)",
+                    displaced[i], q);
+        }
+        fprintf(stderr, "\n");
+    }
+    /* D2: one warning per shadowed bin. */
+    for (int i = 0; i < m.n_bins; i++) {
+        if (plans[i] != BIN_SHADOW) continue;
+        char q[512];
+        inst_qualified(install_name, m.bin_names[i], q, sizeof(q));
+        if (holders[i])
+            fprintf(stderr,
+                "tur %s: warning: '%s' is already provided by installed spice '%s';\n"
+                "  %s's copy is installed but not linked. Run it as `tur %s`,\n"
+                "  or make it the default with `tur install --link %s`.\n",
+                verb, m.bin_names[i], holders[i], install_name, q, q);
+        else
+            fprintf(stderr,
+                "tur %s: note: %s's '%s' is installed but not linked.\n"
+                "  Run it as `tur %s`, or make it the default with "
+                "`tur install --link %s`.\n",
+                verb, install_name, m.bin_names[i], q, q);
     }
     if (m.n_bins == 0) {
         fprintf(stderr, "  modules: %s/src\n"
@@ -897,18 +959,133 @@ static int do_install_spec(const InstallSpec *spec) {
                 src_dir);
     }
 
-    if (m.n_bins > 0 && !tur_global_bin_on_path(bin_dir)) {
+    if (n_linked > 0 && !tur_global_bin_on_path(bin_dir)) {
         fprintf(stderr,
             "\nNote: %s is not on $PATH.\n"
             "  bash/zsh: export PATH=\"%s:$PATH\"\n"
             "  fish:     set -gx PATH %s $PATH\n",
             bin_dir, bin_dir, bin_dir);
     }
+    rc = 0;
 
+done:
+    for (int k = 0; k < m.n_bins; k++) {
+        if (displaced) free(displaced[k]);
+        if (holders)   free(holders[k]);
+    }
+    for (int k = 0; k < n_dropped; k++) free(dropped[k]);
+    free(plans);
+    free(displaced);
+    free(holders);
+    free(dropped);
     tur_state_free(&state);
     pkg_manifest_free(&m);
     free(resolved_sha);
-    return 0;
+    return rc;
+}
+
+/* namespaced-spice-binaries D4: `tur install --link <spice>[/<bin>]` for an
+ * INSTALLED spice -- point bin_dir/<bin> at its build and flip the registry
+ * flags.  No fetch, no build.  Without `/<bin>` every bin name the spice
+ * declares moves.  Like --link on a source install it takes names from other
+ * installed spices only: a file no installed spice claims is the user's own
+ * and is left alone. */
+static int inst_link_move(TurState *state, TurStateEntry *e, const char *bin,
+                          const char *state_path) {
+    char bin_dir[4096];
+    if (!tur_global_bin_dir(bin_dir, sizeof(bin_dir))) return 1;
+    if (e->n_bin == 0) {
+        fprintf(stderr, "tur install: installed spice '%s' provides no binaries; "
+                        "there is nothing to link\n", e->name);
+        return 1;
+    }
+    int only = -1;
+    if (bin) {
+        char want[512];
+        if (strncmp(bin, "tur-", 4) == 0) snprintf(want, sizeof(want), "%s", bin);
+        else                              snprintf(want, sizeof(want), "tur-%s", bin);
+        only = tur_state_entry_bin_index(e, want);
+        if (only < 0) {
+            fprintf(stderr, "tur install: installed spice '%s' has no binary '%s'; "
+                            "it provides:\n", e->name, want);
+            for (int j = 0; j < e->n_bin; j++)
+                fprintf(stderr, "  %s\n", e->bin[j]);
+            return 1;
+        }
+    }
+    char src_dir[4096];
+    if (!tur_state_entry_src_dir(e, src_dir, sizeof(src_dir))) {
+        fprintf(stderr, "tur install: the source tree of '%s' is missing (%s) -- "
+                        "re-run `tur install`\n", e->name, src_dir);
+        return 1;
+    }
+    int failures = 0;
+    for (int j = 0; j < e->n_bin; j++) {
+        if (only >= 0 && j != only) continue;
+        const char *b = e->bin[j];
+        char binfile[4096], target[4096], source[4096];
+        inst_bin_name(b, binfile, sizeof(binfile));
+        snprintf(target, sizeof(target), "%s/%s", bin_dir, binfile);
+        snprintf(source, sizeof(source), "%s/build/%s", src_dir, b);
+        struct stat st;
+        bool linked = !e->bin_linked || e->bin_linked[j];
+        if (linked && lstat(target, &st) == 0) {
+            fprintf(stderr, "tur install: '%s' already runs %s's\n", b, e->name);
+            continue;
+        }
+        TurStateEntry *holder = tur_state_bin_holder(state, b, e->name);
+        if (!holder && !linked && lstat(target, &st) == 0) {
+            fprintf(stderr,
+                "tur install: refusing to overwrite existing '%s' (not owned by "
+                "tur). Remove it first.\n", target);
+            failures++;
+            continue;
+        }
+        if (stat(source, &st) != 0) {
+            fprintf(stderr, "tur install: the installed '%s' has no built %s at %s "
+                            "-- `tur upgrade %s` rebuilds it\n",
+                    e->name, b, source, e->name);
+            failures++;
+            continue;
+        }
+        if (!inst_place_bin(source, target)) { failures++; continue; }
+        if (e->bin_linked) e->bin_linked[j] = true;
+        if (holder) {
+            int hj = tur_state_entry_bin_index(holder, b);
+            if (hj >= 0 && holder->bin_linked) holder->bin_linked[hj] = false;
+            char q[512];
+            inst_qualified(holder->name, b, q, sizeof(q));
+            fprintf(stderr, "tur install: '%s' now runs %s's (was %s's; "
+                            "`tur %s` still runs that one)\n",
+                    b, e->name, holder->name, q);
+        } else {
+            fprintf(stderr, "tur install: '%s' now runs %s's\n", b, e->name);
+        }
+    }
+    if (!tur_state_write(state_path, state)) return 1;
+    return failures == 0 ? 0 : 1;
+}
+
+/* `beta` or `beta/foo` naming an installed spice: the move-only form of
+ * --link.  Returns -1 when `arg` names no installed spice (it is a source). */
+static int inst_try_link_installed(const char *arg) {
+    char name[512];
+    snprintf(name, sizeof(name), "%s", arg);
+    char *slash = strchr(name, '/');
+    const char *bin = NULL;
+    if (slash) {
+        if (strchr(slash + 1, '/') || !slash[1] || slash == name) return -1;
+        *slash = '\0';
+        bin = slash + 1;
+    }
+    char state_path[4096];
+    if (!tur_global_state_path(state_path, sizeof(state_path))) return -1;
+    TurState state;
+    tur_state_read(state_path, &state);
+    TurStateEntry *e = tur_state_find_spice(&state, name);
+    int rc = e ? inst_link_move(&state, e, bin, state_path) : -1;
+    tur_state_free(&state);
+    return rc;
 }
 
 /* Thin argv parser; builds an InstallSpec and runs the pipeline. */
@@ -930,6 +1107,7 @@ int cmd_pkg_install(int argc, char **argv) {
         else if (strcmp(argv[i], "--name")   == 0 && i + 1 < argc) spec.name_alias = argv[++i];
         else if (strcmp(argv[i], "--path")   == 0) spec.is_path = true;
         else if (strcmp(argv[i], "--force")  == 0) spec.force   = true;
+        else if (strcmp(argv[i], "--link")   == 0) spec.link_all = true;
         else if (argv[i][0] != '-') {
             if (spec.src) {
                 fprintf(stderr, "tur install: unexpected argument '%s'\n", argv[i]);
@@ -942,6 +1120,23 @@ int cmd_pkg_install(int argc, char **argv) {
         }
     }
     if (!spec.src) return install_usage();
+    /* D4: `--link` on something already installed only moves names.  A
+     * --path argument is always a source; a URL never names an install. */
+    if (spec.link_all && !spec.is_path && !spec.ref && !spec.subdir &&
+        !spec.name_alias && !strstr(spec.src, "://") &&
+        strncmp(spec.src, "git@", 4) != 0) {
+        int rc = inst_try_link_installed(spec.src);
+        if (rc >= 0) return rc;
+        struct stat sst;
+        if (strchr(spec.src, '/') && !strchr(spec.src, '.') &&
+            !strchr(strchr(spec.src, '/') + 1, '/') && stat(spec.src, &sst) != 0) {
+            char nm[512];
+            snprintf(nm, sizeof(nm), "%.*s",
+                     (int)(strchr(spec.src, '/') - spec.src), spec.src);
+            fprintf(stderr, "tur install: no installed spice named '%s'\n", nm);
+            return 1;
+        }
+    }
     return do_install_spec(&spec);
 }
 
@@ -1008,13 +1203,18 @@ int cmd_pkg_uninstall(int argc, char **argv) {
         return 1;
     }
 
-    /* Remove bin_dir/<name> for each bin we own.  The symlink check below is
-     * defensive, not the ownership decision -- we are already inside
-     * `if (e)`, so the registry has said this spice owns these names.  Where a
-     * symlink was not available the entry is a copy (inst_place_bin), which
-     * readlink cannot vouch for, so a plain file at a path the registry claims
-     * is removed too. */
+    /* Remove bin_dir/<name> for each bin this spice HOLDS (D1's :linked; a
+     * shadowed bin's name belongs to another spice).  The symlink check below
+     * is defensive, not the ownership decision -- the registry has said this
+     * spice owns these names.  Where a symlink was not available the entry is
+     * a copy (inst_place_bin), which readlink cannot vouch for, so a plain
+     * file at a path the registry claims is removed too.
+     *
+     * namespaced-spice-binaries D5: nothing is promoted into a freed name.
+     * The user chose which tool it meant; uninstall cannot know which of the
+     * remaining providers they would pick, so it says what is left. */
     for (int i = 0; i < e->n_bin; i++) {
+        if (e->bin_linked && !e->bin_linked[i]) continue;
         char binfile[4096], target[4096];
         inst_bin_name(e->bin[i], binfile, sizeof(binfile));
         snprintf(target, sizeof(target), "%s/%s", bin_dir, binfile);
@@ -1036,8 +1236,19 @@ int cmd_pkg_uninstall(int argc, char **argv) {
         if (unlink(target) != 0) {
             fprintf(stderr, "tur uninstall: cannot remove '%s': %s\n",
                     target, strerror(errno));
-        } else {
-            fprintf(stderr, "tur uninstall: removed %s\n", target);
+            continue;
+        }
+        fprintf(stderr, "tur uninstall: removed %s\n", target);
+        for (int k = 0; k < state.n_entries; k++) {
+            const TurStateEntry *o = &state.entries[k];
+            if (o == e || tur_state_entry_bin_index(o, e->bin[i]) < 0) continue;
+            char q[512];
+            inst_qualified(o->name, e->bin[i], q, sizeof(q));
+            fprintf(stderr,
+                "tur uninstall: note: '%s' is now unlinked; %s still provides it.\n"
+                "  Run it as `tur %s`, or make it the default with\n"
+                "  `tur install --link %s`.\n",
+                e->bin[i], o->name, q, q);
         }
     }
 
@@ -1243,6 +1454,24 @@ static void list_print_json(const TurState *state,
             buf_putc(&b, '"');
         }
         buf_puts(&b, "],\n");
+        /* namespaced-spice-binaries D4: who holds each bare name. */
+        buf_puts(&b, "      \"bins\": [");
+        for (int j = 0; j < e->n_bin; j++) {
+            bool linked = !e->bin_linked || e->bin_linked[j];
+            if (j) buf_putc(&b, ',');
+            buf_puts(&b, "{\"name\": \"");
+            inst_json_str(&b, e->bin[j]);
+            buf_printf(&b, "\", \"linked\": %s", linked ? "true" : "false");
+            const TurStateEntry *h = linked ? NULL
+                : tur_state_bin_holder((TurState *)state, e->bin[j], e->name);
+            if (h) {
+                buf_puts(&b, ", \"held_by\": \"");
+                inst_json_str(&b, h->name);
+                buf_putc(&b, '"');
+            }
+            buf_putc(&b, '}');
+        }
+        buf_puts(&b, "],\n");
         /* installed-spice-libraries IL1: a "tool" has :bin entries (and is
          * a library too -- its modules are importable); a "library" has
          * modules only. */
@@ -1408,9 +1637,32 @@ int cmd_pkg_list(int argc, char **argv) {
         char prefix_cont[256];
         snprintf(prefix_cont, sizeof(prefix_cont),
                  "%s\xe2\x94\x82                ", bar);
-        if (e->n_bin > 0)
-            list_print_wrapped(prefix1, prefix_cont, e->bin, e->n_bin);
-        else
+        if (e->n_bin > 0) {
+            /* D4: a shadowed bin says whose the bare name is and how to
+             * reach this one. */
+            char **shown = (char **)calloc((size_t)e->n_bin, sizeof(char *));
+            for (int j = 0; shown && j < e->n_bin; j++) {
+                if (!e->bin_linked || e->bin_linked[j]) {
+                    shown[j] = tur_strdup(e->bin[j]);
+                    continue;
+                }
+                const TurStateEntry *h =
+                    tur_state_bin_holder(&state, e->bin[j], e->name);
+                char q[512], line[1024];
+                inst_qualified(e->name, e->bin[j], q, sizeof(q));
+                if (h)
+                    snprintf(line, sizeof(line), "%s (shadowed by %s; tur %s)",
+                             e->bin[j], h->name, q);
+                else
+                    snprintf(line, sizeof(line), "%s (unlinked; tur %s)",
+                             e->bin[j], q);
+                shown[j] = tur_strdup(line);
+            }
+            list_print_wrapped(prefix1, prefix_cont,
+                               shown ? shown : e->bin, e->n_bin);
+            for (int j = 0; shown && j < e->n_bin; j++) free(shown[j]);
+            free(shown);
+        } else
             printf("%s(library -- no binaries)\n", prefix1);
 
         /* exports line(s) */
@@ -1618,7 +1870,10 @@ int cmd_pkg_upgrade(int argc, char **argv) {
     for (int i = 0; i < n_targets; i++) {
         InstallSpec spec = {0};
         spec.verb       = "upgrade";
-        spec.force      = true; /* upgrade always replaces its own symlinks */
+        /* D5: an upgrade replaces the links this spice holds and keeps
+         * every bin's :linked flag (inst_plan_bin); it never takes a name.
+         * Module conflicts only warn, as they always have here. */
+        spec.upgrade    = true;
         (void)force;
         spec.name_alias = snaps[i].name;
         spec.subdir     = snaps[i].subdir;
