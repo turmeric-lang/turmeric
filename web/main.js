@@ -19,6 +19,9 @@ import { configureDocsPane, docsPaneState, loadDocsIndex, docsEntryFor, parseDoc
 import { configureTrace, traceState, traceCode, traceClose, traceSeek, traceInstallHandlers, traceInstallGutterHandler } from './trace.js';
 import { monacoThemeName } from './editor-theme.js';
 import { configureMonaco } from './editor-language.js';
+import { buildZip, MAX_ZIP_BYTES, readStoreZip } from './zip.js';
+import { initHScrollDrag } from './hscroll-drag.js';
+import { initConsoleHover } from './console-hover.js';
 
 // ============================================================================
 // WASM Module State
@@ -2164,104 +2167,6 @@ function loadExample(name) {
 // Project download (Phase 2 of try-turmeric-multi-tab-and-projects-plan)
 // ============================================================================
 
-// CRC-32 table (one-time init), used by both the local headers and the
-// central directory for store-only entries.
-const CRC32_TABLE = (() => {
-    const t = new Uint32Array(256);
-    for (let n = 0; n < 256; n++) {
-        let c = n;
-        for (let k = 0; k < 8; k++) c = (c & 1) ? (0xedb88320 ^ (c >>> 1)) : (c >>> 1);
-        t[n] = c >>> 0;
-    }
-    return t;
-})();
-
-function crc32(bytes) {
-    let c = 0xffffffff;
-    for (let i = 0; i < bytes.length; i++) {
-        c = CRC32_TABLE[(c ^ bytes[i]) & 0xff] ^ (c >>> 8);
-    }
-    return (c ^ 0xffffffff) >>> 0;
-}
-
-// Hand-rolled store-only ZIP writer. No deflate -- text files compress
-// poorly, the dep surface stays flat, and Phase 3's unzipper can do the
-// same. Each entry is `{ path: string, content: string }`. Returns a Blob.
-function buildZip(entries) {
-    const enc = new TextEncoder();
-    const localChunks = [];      // bytes for the local file part
-    const centralChunks = [];    // bytes for the central directory part
-    let offset = 0;
-
-    for (const entry of entries) {
-        const nameBytes = enc.encode(entry.path);
-        const dataBytes = enc.encode(entry.content);
-        const c = crc32(dataBytes);
-        const size = dataBytes.length;
-
-        // Local file header (PK\x03\x04). All multi-byte fields little-endian.
-        const local = new Uint8Array(30 + nameBytes.length);
-        const lv = new DataView(local.buffer);
-        lv.setUint32(0,  0x04034b50, true);   // signature
-        lv.setUint16(4,  20,         true);   // version needed
-        lv.setUint16(6,  0,          true);   // flags
-        lv.setUint16(8,  0,          true);   // method: 0 = store
-        lv.setUint16(10, 0,          true);   // mod time (unset)
-        lv.setUint16(12, 0x21,       true);   // mod date (jan 1 1980)
-        lv.setUint32(14, c,          true);   // crc-32
-        lv.setUint32(18, size,       true);   // compressed size
-        lv.setUint32(22, size,       true);   // uncompressed size
-        lv.setUint16(26, nameBytes.length, true);
-        lv.setUint16(28, 0,          true);   // extra field length
-        local.set(nameBytes, 30);
-
-        localChunks.push(local, dataBytes);
-
-        // Central directory entry (PK\x01\x02).
-        const central = new Uint8Array(46 + nameBytes.length);
-        const cv = new DataView(central.buffer);
-        cv.setUint32(0,  0x02014b50, true);
-        cv.setUint16(4,  20,         true);   // version made by
-        cv.setUint16(6,  20,         true);   // version needed
-        cv.setUint16(8,  0,          true);
-        cv.setUint16(10, 0,          true);
-        cv.setUint16(12, 0,          true);
-        cv.setUint16(14, 0x21,       true);
-        cv.setUint32(16, c,          true);
-        cv.setUint32(20, size,       true);
-        cv.setUint32(24, size,       true);
-        cv.setUint16(28, nameBytes.length, true);
-        cv.setUint16(30, 0,          true);   // extra field length
-        cv.setUint16(32, 0,          true);   // comment length
-        cv.setUint16(34, 0,          true);   // disk number
-        cv.setUint16(36, 0,          true);   // internal attrs
-        cv.setUint32(38, 0,          true);   // external attrs
-        cv.setUint32(42, offset,     true);   // local header offset
-        central.set(nameBytes, 46);
-        centralChunks.push(central);
-
-        offset += local.length + dataBytes.length;
-    }
-
-    const localSize   = localChunks.reduce((s, a) => s + a.length, 0);
-    const centralSize = centralChunks.reduce((s, a) => s + a.length, 0);
-
-    // End of central directory record (PK\x05\x06).
-    const eocd = new Uint8Array(22);
-    const ev = new DataView(eocd.buffer);
-    ev.setUint32(0,  0x06054b50,     true);
-    ev.setUint16(4,  0,              true);   // disk
-    ev.setUint16(6,  0,              true);
-    ev.setUint16(8,  entries.length, true);
-    ev.setUint16(10, entries.length, true);
-    ev.setUint32(12, centralSize,    true);
-    ev.setUint32(16, localSize,      true);
-    ev.setUint16(20, 0,              true);   // comment length
-
-    return new Blob([...localChunks, ...centralChunks, eocd],
-                    { type: 'application/zip' });
-}
-
 // Slugify a tab name into something tur build will accept as a source
 // filename. Strips path separators and shell-unfriendly characters,
 // guarantees the .tur extension, and disambiguates collisions.
@@ -2346,58 +2251,6 @@ function downloadProject() {
 // ============================================================================
 // Project load (Phase 3 of try-turmeric-multi-tab-and-projects-plan)
 // ============================================================================
-
-const MAX_ZIP_BYTES   = 5  * 1024 * 1024;   // user-facing size guard
-const PARSE_ZIP_LIMIT = 50 * 1024 * 1024;   // safety belt against OOM
-
-// Store-only ZIP reader. Mirrors buildZip(): we only accept method 0
-// because that's all we write. Anything else throws and the caller
-// surfaces a toast. Returns `{ [path]: Uint8Array }`.
-function readStoreZip(bytes) {
-    if (bytes.length > PARSE_ZIP_LIMIT) {
-        throw new Error('ZIP exceeds parse limit');
-    }
-    if (bytes.length < 22 ||
-        bytes[0] !== 0x50 || bytes[1] !== 0x4b ||
-        bytes[2] !== 0x03 || bytes[3] !== 0x04) {
-        throw new Error('Not a ZIP file (bad magic bytes)');
-    }
-    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-    // Scan back from the end for the EOCD signature 0x06054b50.
-    let eocd = -1;
-    for (let i = bytes.length - 22; i >= 0 && i > bytes.length - 65557; i--) {
-        if (view.getUint32(i, true) === 0x06054b50) { eocd = i; break; }
-    }
-    if (eocd < 0) throw new Error('EOCD not found -- truncated or not a ZIP');
-    const total    = view.getUint16(eocd + 10, true);
-    const cdSize   = view.getUint32(eocd + 12, true);
-    const cdOffset = view.getUint32(eocd + 16, true);
-    const dec = new TextDecoder('utf-8');
-    const out = {};
-    let p = cdOffset;
-    for (let i = 0; i < total; i++) {
-        if (view.getUint32(p, true) !== 0x02014b50) {
-            throw new Error(`Bad central directory entry at byte ${p}`);
-        }
-        const method   = view.getUint16(p + 10, true);
-        const compSize = view.getUint32(p + 20, true);
-        const nameLen  = view.getUint16(p + 28, true);
-        const extraLen = view.getUint16(p + 30, true);
-        const cmtLen   = view.getUint16(p + 32, true);
-        const localOff = view.getUint32(p + 42, true);
-        const name = dec.decode(bytes.subarray(p + 46, p + 46 + nameLen));
-        if (method !== 0) {
-            throw new Error(`Unsupported compression method ${method} for ${name}`);
-        }
-        const lNameLen  = view.getUint16(localOff + 26, true);
-        const lExtraLen = view.getUint16(localOff + 28, true);
-        const dataOff = localOff + 30 + lNameLen + lExtraLen;
-        out[name] = bytes.subarray(dataOff, dataOff + compSize);
-        p += 46 + nameLen + extraLen + cmtLen;
-    }
-    if (p - cdOffset !== cdSize) throw new Error('Central directory size mismatch');
-    return out;
-}
 
 // Take the raw entry map and shape it into a Tab[] (no Monaco models yet --
 // those get created when the project actually applies). Returns
@@ -2626,131 +2479,6 @@ async function shareCode() {
     } else {
         showStatus('Failed to encode code', 'error');
     }
-}
-
-/**
- * REPL input at the bottom of the console
- */
-/* ---------------------------------------------------------------------------
- * W3: hover in the transcript
- *
- * This needs no markup at all, which is the whole reason it is cheap.
- * appendToConsole inserts HTML it built itself and console lines are ordinary
- * text nodes, so caretPositionFromPoint lands on the right node without a span
- * around every identifier. Wrapping them would put an escaping surface exactly
- * where "interpreted stdout stays inert" lives.
- *
- * WHICH lines answer is a judgement, not a capability. The echoed `turi> ...`
- * lines and error lines do; program stdout does not. Text a program happened
- * to print is not a symbol reference, and a hover card about `println` over a
- * program that printed the word "println" is a lie about what that text is.
- * ------------------------------------------------------------------------ */
-
-const CONSOLE_IDENT = /[A-Za-z0-9\-?!*/><+=_]/;
-
-/** The identifier under `offset` in `text`, or ''. Same character class the
- *  server's occurrence scanner uses, so a hover lands on what a hover means. */
-function identifierAt(text, offset) {
-    if (!text || offset < 0 || offset > text.length) return '';
-    let i = offset;
-    if ((i >= text.length || !CONSOLE_IDENT.test(text[i])) &&
-        i > 0 && CONSOLE_IDENT.test(text[i - 1])) i--;
-    if (i >= text.length || !CONSOLE_IDENT.test(text[i])) return '';
-    let start = i, end = i;
-    while (start > 0 && CONSOLE_IDENT.test(text[start - 1])) start--;
-    while (end < text.length && CONSOLE_IDENT.test(text[end])) end++;
-    const word = text.slice(start, end);
-    // A bare number is not a symbol; neither is a lone operator run that the
-    // index has never heard of, but that one the lookup answers for itself.
-    return /^[0-9]+$/.test(word) ? '' : word;
-}
-
-/** Does this text node belong to a line a hover may answer on? */
-function consoleLineAnswers(node) {
-    if (!node) return false;
-    const parent = node.parentElement;
-    if (!parent) return false;
-    // An error line: the whole span carries the class.
-    if (parent.classList && parent.classList.contains('console-error')) return true;
-    // An echoed prompt line: `<span class="console-prompt">turi&gt;</span> code`,
-    // so the code is a bare text node sitting right after that span.
-    let prev = node.previousSibling;
-    while (prev && prev.nodeType === Node.TEXT_NODE && !prev.data.trim()) {
-        prev = prev.previousSibling;
-    }
-    return !!(prev && prev.nodeType === Node.ELEMENT_NODE &&
-              prev.classList && prev.classList.contains('console-prompt'));
-}
-
-/** The (node, offset) under a viewport point, across the two browser spellings. */
-function caretAt(x, y) {
-    if (document.caretPositionFromPoint) {
-        const p = document.caretPositionFromPoint(x, y);
-        return p ? { node: p.offsetNode, offset: p.offset } : null;
-    }
-    if (document.caretRangeFromPoint) {
-        const r = document.caretRangeFromPoint(x, y);
-        return r ? { node: r.startContainer, offset: r.startOffset } : null;
-    }
-    return null;
-}
-
-function initConsoleHover() {
-    const consoleEl = document.getElementById('console');
-    if (!consoleEl) return;
-
-    let card = document.getElementById('console-hover-card');
-    if (!card) {
-        card = document.createElement('div');
-        card.id = 'console-hover-card';
-        card.className = 'console-hover-card';
-        card.hidden = true;
-        document.body.appendChild(card);
-    }
-
-    let shownFor = null;
-    let token = 0;
-
-    function hide() {
-        shownFor = null;
-        card.hidden = true;
-    }
-
-    async function show(name, x, y) {
-        if (name === shownFor) return;
-        shownFor = name;
-        const mine = ++token;
-
-        let summary = null;
-        const entry = (docNames || []).find(d => d.name === name);
-        if (entry && entry.summary) summary = entry.summary;
-        else summary = await wasmDocLookup(name).catch(() => null);
-        // A later hover already won; do not paint over it.
-        if (mine !== token) return;
-        if (!summary) { hide(); return; }
-
-        card.textContent = summary;
-        card.hidden = false;
-        // Place above the cursor when there is room, below when there is not.
-        const rect = card.getBoundingClientRect();
-        const top = (y - rect.height - 10 > 8) ? y - rect.height - 10 : y + 16;
-        card.style.left = Math.max(8, Math.min(x, window.innerWidth - rect.width - 8)) + 'px';
-        card.style.top = top + 'px';
-    }
-
-    const onMove = debounce((x, y) => {
-        const caret = caretAt(x, y);
-        if (!caret || caret.node.nodeType !== Node.TEXT_NODE) { hide(); return; }
-        if (!consoleEl.contains(caret.node)) { hide(); return; }
-        if (!consoleLineAnswers(caret.node)) { hide(); return; }
-        const name = identifierAt(caret.node.data, caret.offset);
-        if (!name) { hide(); return; }
-        show(name, x, y);
-    }, 120);
-
-    consoleEl.addEventListener('mousemove', (e) => onMove(e.clientX, e.clientY));
-    consoleEl.addEventListener('mouseleave', hide);
-    consoleEl.addEventListener('scroll', hide);
 }
 
 /* ---------------------------------------------------------------------------
@@ -3285,7 +3013,7 @@ function initEventListeners() {
 
     // REPL input
     initReplInput();
-    initConsoleHover();
+    initConsoleHover({ getDocNames: () => docNames, wasmDocLookup });
 
     // Horizontal drag-to-scroll on the editor header (mobile / narrow widths)
     initHScrollDrag();
@@ -3299,94 +3027,6 @@ function initEventListeners() {
 
     // PWA install affordances
     initInstallAffordances();
-}
-
-function initHScrollDrag() {
-    const rows = document.querySelectorAll('.editor-tabs, .editor-actions');
-    rows.forEach(initHScrollDragRow);
-}
-
-function initHScrollDragRow(el) {
-    if (!el) return;
-
-    const updateOverflow = () => {
-        el.classList.toggle('has-overflow', el.scrollWidth > el.clientWidth + 1);
-    };
-    updateOverflow();
-    if (typeof ResizeObserver !== 'undefined') {
-        // The row's own box never changes when a button appears -- its width
-        // comes from the pane -- so observing only `el` misses the overflow
-        // that Solve or Back-from-definition unhiding creates. Watch the
-        // children too, and re-attach as the child list changes (tabs are
-        // re-rendered wholesale by renderTabs()).
-        const ro = new ResizeObserver(updateOverflow);
-        const observeChildren = () => {
-            ro.disconnect();
-            ro.observe(el);
-            for (const child of el.children) ro.observe(child);
-        };
-        observeChildren();
-        if (typeof MutationObserver !== 'undefined') {
-            new MutationObserver(() => {
-                observeChildren();
-                updateOverflow();
-            }).observe(el, { childList: true, attributes: true, subtree: true,
-                             attributeFilter: ['hidden', 'style'] });
-        }
-    }
-    window.addEventListener('resize', updateOverflow);
-
-    let startX = 0;
-    let startScroll = 0;
-    let dragging = false;
-    let pointerId = null;
-
-    const isInteractive = (target) => {
-        return !!target.closest('button, select, input, a, [role="button"]');
-    };
-
-    el.addEventListener('pointerdown', (e) => {
-        if (isInteractive(e.target)) return;
-        startX = e.clientX;
-        startScroll = el.scrollLeft;
-        pointerId = e.pointerId;
-        dragging = false;
-        try { el.setPointerCapture(pointerId); } catch {}
-    });
-
-    el.addEventListener('pointermove', (e) => {
-        if (pointerId !== e.pointerId) return;
-        const dx = e.clientX - startX;
-        if (!dragging && Math.abs(dx) > 6) {
-            dragging = true;
-            el.dataset.dragging = '1';
-        }
-        if (dragging) {
-            el.scrollLeft = startScroll - dx;
-            e.preventDefault();
-        }
-    });
-
-    const endDrag = (e) => {
-        if (pointerId !== null) {
-            try { el.releasePointerCapture(pointerId); } catch {}
-        }
-        pointerId = null;
-        if (dragging) {
-            const swallow = (ev) => {
-                ev.stopPropagation();
-                ev.preventDefault();
-            };
-            el.addEventListener('click', swallow, { capture: true, once: true });
-            setTimeout(() => { delete el.dataset.dragging; }, 0);
-        }
-        dragging = false;
-    };
-    el.addEventListener('pointerup', endDrag);
-    el.addEventListener('pointercancel', endDrag);
-
-    // Tab-button click handlers (switch + scroll-into-view) are attached by
-    // renderTabs() in the multi-tab state module.
 }
 
 // ============================================================================
